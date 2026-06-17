@@ -9,34 +9,74 @@
 - **铁律二:工作台必须同时服务多角色**(PM/QA、工程师、资产 owner),不是单角色工具。
 
 ## 仓库结构
+
+### 当前主版本(中文极简 · v2)
 ```
-sinan-control-plane-v1.html          # v1 作战室(监督视图,工程负责人视角)——起点参考
-sinan-loop-workbench-queue-v1.html   # 决策队列首屏(刃A 锚屏,工程师默认家)
-sinan-loop-workbench-v1.html         # 编排台 + 虚拟办公室
-sinan-loop-workbench-metrics-v1.html # 度量看板(PM/QA)
-sinan-loop-workbench-assets-v1.html  # 资产库 五元组 + Promotion 评审
-sinan-workbench-design/              # 设计文档(对抗设计全过程)
-├── README.md        # 设计包前门索引 —— 先读这里
-├── DESIGN.md        # 唯一权威最终设计
+📌 sinan-workbench-cn-v2.html        # 新·全 5 屏工作台(中文·大白话·零黑话·minimalist-ui)
+   ├── 概览 · 谁需要你 → 什么在自主跑(汇总) → 最近动态
+   ├── Loop 详情 · 它做什么 / 走到哪 / 参与的智能体 / 需要你的地方
+   ├── 智能体 · 1,284 个按职能+模型汇总(不平铺)
+   ├── 概况 · 本周平静视图:自主闭环/你介入/问题趋势/返工率
+   └── 资产库 · Loop 蓝图 / 智能体配置 / 技能库
+
+sinan-workbench-design/redesign-contract.md  # 重设计验收尺 + 黑话→白话词表
+```
+
+### 历史参考(v1 + 对抗过程)
+```
+sinan-control-plane-v1.html          # v1 作战室(监督视图)——历史参考
+sinan-loop-workbench-queue-v1.html   # 决策队列首屏(v1)——历史参考
+sinan-loop-workbench-v1.html         # 编排台 + 虚拟办公室(v1)——历史参考
+sinan-loop-workbench-metrics-v1.html # 度量看板(v1)——历史参考
+sinan-loop-workbench-assets-v1.html  # 资产库(v1)——历史参考
+sinan-workbench-minimal-v1.html      # 英文极简样板(v1)——历史参考
+
+sinan-workbench-design/              # 设计文档 · 对抗设计全过程 · 读这些理解决策
+├── README.md        # 设计包前门索引
+├── DESIGN.md        # 唯一权威设计(v2,四轮收敛 + §4.9 BT3 补丁)
+├── implementation-gate.md  # go/no-go 闸门(M0a/M0b + 硬前置)
+├── R3-VERDICT.md    # R3 关键产出 · 安全/人因/治理 P0 增补
 ├── 00-brief.md      # 三 agent 共享 ground truth
 ├── pm-spec.md       # PM 全文(R1)
 ├── ux-spec.md       # 设计全文(R1)
 ├── blueteam-r1.md   # 蓝军 R1(5×P0)
-├── blueteam-r2.md   # 全新独立蓝军终审:「半活」
-├── decision-log.md  # 逐条裁决(R-1~R-8)
-├── rule-governance-spec.md  # 复利机规则治理专题(R3)
-├── security-redteam.md      # 信任边界/注入/滥用威胁建模(R3)
-├── cost-redteam.md         # 单位经济学(R3)
+├── blueteam-r2.md   # 独立蓝军终审 R2
+├── blueteam-r4.md   # 独立蓝军终审 R4
+├── decision-log.md  # 逐条裁决(R1~R4)
+├── rule-governance-spec.md
+├── security-redteam.md
+├── cost-redteam.md
 └── premortem-human-factors.md
 ```
 
 ## 怎么读
-- **想要结论** → [`sinan-workbench-design/README.md`](sinan-workbench-design/README.md) → [`DESIGN.md`](sinan-workbench-design/DESIGN.md) §0 定位 + §13 终审与未决风险。
-- **想看界面** → 直接浏览器打开上面 4 个 `sinan-loop-workbench-*.html` mockup。
-- **想看怎么吵出来的** → `blueteam-r1.md` → `blueteam-r2.md` → `decision-log.md`。
+
+**🟢 快速上手(2min)**
+1. 在浏览器打开 `sinan-workbench-cn-v2.html`——中文、大白话、五屏完整工作台
+2. 点顶部导航:概览 → Loop详情 → 智能体 → 概况 → 资产库
+
+**🟡 理解设计决策(30min)**
+- [`sinan-workbench-design/README.md`](sinan-workbench-design/README.md) → [`DESIGN.md`](sinan-workbench-design/DESIGN.md) §0 定位
+- [`redesign-contract.md`](sinan-workbench-design/redesign-contract.md)——重设计验收标准 + 黑话清单
+
+**🔴 深入对抗过程(2h)**
+- 对抗史:R1/R2/R4 蓝军终审 → `decision-log.md`
+- 风险单:R-9(安全 P0 注入链)详见 [`R3-VERDICT.md`](sinan-workbench-design/R3-VERDICT.md)
 
 ## 当前裁定
-**「半活」** —— 刃A 路由侧已活;刃B 复利机待 R3 收口。详见 [`decision-log.md`](sinan-workbench-design/decision-log.md)。
+
+**v2 UI 重设计已完成** ✅
+- 新:5 屏工作台,中文极简,零术语黑话
+- 验收:通过设计闸 Gatekeeper 两轮复检(PROCEED → SHIP)
+- 风格:对标 Claude Code / Cloud Cowork / Workbody,克制单色 + 大汇总
+
+**工程侧风险** 🔴
+- 见 [`R3-VERDICT.md`](sinan-workbench-design/R3-VERDICT.md):R-9 安全 P0(注入链)、R-10 人因 P0 等待实现前硬闸
+
+## 进度
+- **R1→R4 四轮对抗设计已完成** + R3 关键产出(trustTier / 人因 / 治理)
+- **UI 重设计 v2 已完成** · 中文极简 · 零黑话 · Gatekeeper 二度通过
+- **下一步** → 工程侧补 R-9/R-10 的硬前置方案再进实现
 
 ## License
 [Apache-2.0](LICENSE)

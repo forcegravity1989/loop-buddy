@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>司南 · Loop 工作台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Noto+Serif+SC:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F7F6F3; --surface:#FFFFFF; --surface-2:#FBFBFA;
+    --ink:#2F3437; --ink-strong:#1A1A1A; --muted:#787774; --faint:#9B9A97;
+    --border:#EAEAEA; --border-2:rgba(0,0,0,0.06);
+    --green-bg:#EDF3EC; --green-tx:#346538;
+    --yellow-bg:#FBF3DB; --yellow-tx:#956400;
+    --red-bg:#FDEBEC; --red-tx:#9F2F2D;
+    --blue-bg:#E9F2FA; --blue-tx:#1F6C9F;
+    --btn:#111111; --btn-hover:#333333;
+    --serif:'Newsreader','Songti SC','Noto Serif SC',serif;
+    --sans:'PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif;
+    --mono:'JetBrains Mono','SF Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;min-height:100vh;position:relative;}
+  .ambient{position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:radial-gradient(620px 480px at 80% -8%, rgba(193,138,44,0.04), transparent 70%),
+               radial-gradient(560px 420px at 6% 110%, rgba(31,108,159,0.03), transparent 70%);}
+  ::selection{background:#1A1A1A;color:#F7F6F3;}
+  a{color:inherit;text-decoration:none;} button{font-family:inherit;cursor:pointer;}
+  :focus-visible{outline:1.5px solid var(--ink-strong);outline-offset:2px;border-radius:4px;}
+
+  header{position:sticky;top:0;z-index:50;background:rgba(247,246,243,0.82);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);}
+  .hwrap{max-width:1080px;margin:0 auto;padding:13px 28px;display:flex;align-items:center;gap:28px;}
+  .mark{display:flex;align-items:baseline;gap:9px;}
+  .mark .cn{font-family:var(--serif);font-weight:600;font-size:21px;color:var(--ink-strong);line-height:1;}
+  .mark .en{font-family:var(--mono);font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--faint);}
+  nav{display:flex;gap:2px;}
+  nav a{font-size:14px;color:var(--muted);padding:6px 12px;border-radius:7px;transition:color .15s,background .15s;}
+  nav a:hover{color:var(--ink);background:rgba(0,0,0,0.035);}
+  nav a.on{color:var(--ink-strong);background:rgba(0,0,0,0.05);font-weight:500;}
+  .hright{margin-left:auto;display:flex;align-items:center;gap:13px;}
+  .cmd{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--faint);border:1px solid var(--border);border-radius:7px;padding:5px 10px;background:var(--surface);}
+  .cmd kbd{font-family:var(--mono);font-size:10.5px;color:var(--muted);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 5px;}
+  .ava{width:30px;height:30px;border-radius:7px;background:var(--ink-strong);color:#F7F6F3;display:grid;place-items:center;font-family:var(--serif);font-weight:500;font-size:14px;}
+
+  main{max-width:1080px;margin:0 auto;padding:60px 28px 96px;position:relative;z-index:1;}
+  .view{display:none;} .view.on{display:block;}
+  .reveal{opacity:0;transform:translateY(12px);}
+  .reveal.in{opacity:1;transform:none;transition:opacity .6s cubic-bezier(.16,1,.3,1),transform .6s cubic-bezier(.16,1,.3,1);}
+
+  .greet h1{font-family:var(--serif);font-weight:500;font-size:38px;line-height:1.15;letter-spacing:-0.01em;color:var(--ink-strong);margin:0 0 12px;}
+  .greet p{font-size:16.5px;color:var(--muted);margin:0;max-width:40ch;}
+  .greet p b{color:var(--ink);font-weight:500;}
+  .pulse{margin-top:22px;display:flex;align-items:center;font-family:var(--mono);font-size:12px;color:var(--muted);flex-wrap:wrap;}
+  .pulse .it{display:flex;align-items:baseline;gap:6px;padding:0 18px;border-left:1px solid var(--border);}
+  .pulse .it:first-child{padding-left:0;border-left:0;}
+  .pulse .it b{color:var(--ink-strong);font-weight:500;font-size:14px;}
+  .pulse .it.alert b{color:var(--red-tx);}
+
+  section.block{margin-top:54px;}
+  .lbl{display:flex;align-items:center;gap:12px;margin-bottom:18px;}
+  .lbl h2{font-family:var(--sans);font-size:13px;letter-spacing:0.04em;color:var(--muted);font-weight:500;margin:0;}
+  .lbl .ct{font-family:var(--mono);font-size:11px;color:var(--ink-strong);background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:1px 7px;}
+  .lbl .ln{flex:1;height:1px;background:var(--border);}
+
+  .needs{display:flex;flex-direction:column;gap:12px;}
+  .item{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 24px;display:grid;grid-template-columns:auto 1fr auto;gap:18px;align-items:center;transition:box-shadow .2s,border-color .2s;}
+  .item:hover{box-shadow:0 2px 8px rgba(0,0,0,0.04);border-color:#E2E2E0;}
+  .dot{width:9px;height:9px;border-radius:50%;}
+  .dot.red{background:#C0584C;box-shadow:0 0 0 4px var(--red-bg);}
+  .dot.yellow{background:#C9A227;box-shadow:0 0 0 4px var(--yellow-bg);}
+  .dot.green{background:#5E8C63;box-shadow:0 0 0 4px var(--green-bg);}
+  .body .t{font-size:16px;font-weight:500;color:var(--ink-strong);}
+  .body .why{font-size:14px;color:var(--muted);margin-top:3px;}
+  .body .meta{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;}
+  .tag{font-family:var(--sans);font-size:11.5px;padding:3px 10px;border-radius:9999px;white-space:nowrap;font-weight:500;}
+  .tag.red{background:var(--red-bg);color:var(--red-tx);}
+  .tag.yellow{background:var(--yellow-bg);color:var(--yellow-tx);}
+  .tag.green{background:var(--green-bg);color:var(--green-tx);}
+  .tag.blue{background:var(--blue-bg);color:var(--blue-tx);}
+  .act{display:flex;align-items:center;gap:8px;}
+  .btn{font-size:13.5px;font-weight:500;border-radius:6px;padding:8px 15px;border:1px solid transparent;transition:background .15s,transform .08s,border-color .15s;white-space:nowrap;}
+  .btn.primary{background:var(--btn);color:#fff;} .btn.primary:hover{background:var(--btn-hover);}
+  .btn:active{transform:scale(.98);}
+  .btn.ghost{background:transparent;color:var(--muted);border-color:var(--border);} .btn.ghost:hover{color:var(--ink);border-color:var(--border-2);}
+
+  .run{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+  .grp{display:grid;grid-template-columns:1fr auto auto auto;gap:20px;align-items:center;padding:18px 24px;border-top:1px solid var(--border);transition:background .15s;cursor:pointer;}
+  .grp:first-child{border-top:0;} .grp:hover{background:var(--surface-2);}
+  .grp .gn{font-size:15.5px;color:var(--ink-strong);font-weight:500;}
+  .grp .gn small{display:block;font-weight:400;font-size:13px;color:var(--muted);margin-top:1px;}
+  .grp .cnt{font-family:var(--mono);font-size:13px;color:var(--ink);} .grp .cnt span{color:var(--faint);}
+  .chev{color:var(--faint);display:flex;}
+
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:48px;}
+  .feed{display:flex;flex-direction:column;}
+  .ev{display:grid;grid-template-columns:62px 1fr;gap:16px;padding:13px 4px;border-bottom:1px solid var(--border);align-items:baseline;}
+  .ev:last-child{border-bottom:0;}
+  .ev .tm{font-family:var(--mono);font-size:12px;color:var(--faint);}
+  .ev .tx{font-size:14.5px;color:var(--ink);}
+  .ev .tx b{font-family:var(--mono);font-size:12.5px;font-weight:500;color:var(--muted);}
+  .ev .tx em{font-style:normal;color:var(--red-tx);}
+
+  /* ---- Loop 详情 ---- */
+  .crumb{font-size:13px;color:var(--muted);margin-bottom:20px;}
+  .crumb a:hover{color:var(--ink);} .crumb span{color:var(--faint);margin:0 7px;}
+  .lphead{display:flex;align-items:flex-start;gap:20px;margin-bottom:8px;}
+  .lphead h1{font-family:var(--serif);font-weight:500;font-size:30px;line-height:1.2;letter-spacing:-0.01em;color:var(--ink-strong);margin:0;}
+  .lphead .st{margin-left:auto;flex-shrink:0;}
+  .lpmeta{font-family:var(--mono);font-size:12px;color:var(--faint);display:flex;gap:16px;flex-wrap:wrap;margin-bottom:38px;}
+  .lpmeta b{color:var(--muted);font-weight:400;}
+
+  .steps{display:flex;align-items:flex-start;margin:6px 0 4px;}
+  .step{flex:1;display:flex;flex-direction:column;align-items:center;gap:9px;position:relative;text-align:center;}
+  .step::before{content:"";position:absolute;top:9px;left:-50%;width:100%;height:1.5px;background:var(--border);}
+  .step:first-child::before{display:none;}
+  .step.done::before{background:#B6CDB8;}
+  .step .nd{width:19px;height:19px;border-radius:50%;background:var(--surface);border:1.5px solid var(--border);display:grid;place-items:center;position:relative;z-index:1;}
+  .step.done .nd{background:#5E8C63;border-color:#5E8C63;}
+  .step.now .nd{background:#C0584C;border-color:#C0584C;box-shadow:0 0 0 4px var(--red-bg);}
+  .step .nd svg{display:block;}
+  .step .nm{font-size:12.5px;color:var(--muted);} .step.done .nm{color:var(--ink);} .step.now .nm{color:var(--red-tx);font-weight:500;}
+
+  .detail-grid{display:grid;grid-template-columns:1fr 320px;gap:32px;margin-top:44px;align-items:start;}
+  .agents{display:flex;flex-direction:column;}
+  .ag{display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;padding:15px 2px;border-bottom:1px solid var(--border);}
+  .ag:last-child{border-bottom:0;}
+  .ag .an{font-size:15px;color:var(--ink-strong);font-weight:500;}
+  .ag .ad{font-size:13.5px;color:var(--muted);margin-top:1px;}
+  .ag .am{font-family:var(--mono);font-size:11px;color:var(--faint);text-align:right;}
+  .ag .am .mdl{display:inline-block;margin-top:3px;padding:1px 6px;border:1px solid var(--border);border-radius:4px;}
+
+  .side{display:flex;flex-direction:column;gap:18px;position:sticky;top:84px;}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;}
+  .panel.ask{border-color:#EBD3CF;background:#FDF6F4;}
+  .panel h3{font-family:var(--sans);font-size:13px;color:var(--muted);font-weight:500;margin:0 0 12px;}
+  .panel .ask-why{font-size:15px;color:var(--ink-strong);line-height:1.6;margin-bottom:18px;}
+  .panel .acts{display:flex;flex-direction:column;gap:8px;}
+  .panel .acts .row{display:flex;gap:8px;} .panel .acts .row .btn{flex:1;text-align:center;}
+  .panel .acts .btn{width:100%;text-align:center;}
+  .mini-feed .ev{grid-template-columns:48px 1fr;gap:12px;padding:9px 0;font-size:13px;}
+  .mini-feed .ev .tx{font-size:13px;}
+
+  .stub{text-align:center;padding:80px 24px;}
+  .stub .s1{font-family:var(--serif);font-size:24px;color:var(--ink-strong);margin-bottom:8px;}
+  .stub .s2{font-size:14.5px;color:var(--muted);}
+
+  footer{max-width:1080px;margin:0 auto;padding:0 28px 70px;position:relative;z-index:1;}
+  footer p{font-size:13px;color:var(--faint);max-width:62ch;line-height:1.7;border-top:1px solid var(--border);padding-top:22px;}
+
+  /* 概况 */
+  .stats4{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;}
+  .statc{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px 22px;}
+  .statc .sv{font-family:var(--mono);font-size:30px;font-weight:500;color:var(--ink-strong);line-height:1;letter-spacing:-0.01em;}
+  .statc .sv .arr{font-size:14px;margin-left:5px;} .arr.good{color:var(--green-tx);} .arr.bad{color:var(--red-tx);}
+  .statc .sn{font-family:var(--serif);font-size:16px;color:var(--ink-strong);margin-top:14px;}
+  .statc .snote{font-size:13px;color:var(--muted);margin-top:3px;line-height:1.5;}
+  .trend{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px 24px;margin-top:14px;}
+  .trend .th{font-size:13px;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:16px;}
+  .trend .th b{color:var(--green-tx);font-weight:500;}
+  /* 资产库 子标签 */
+  .subtabs{display:flex;gap:2px;margin-bottom:22px;}
+  .subtabs a{font-size:14px;color:var(--muted);padding:6px 13px;border-radius:7px;cursor:pointer;transition:all .15s;}
+  .subtabs a:hover{color:var(--ink);background:rgba(0,0,0,0.035);}
+  .subtabs a.on{color:var(--ink-strong);background:rgba(0,0,0,0.05);font-weight:500;}
+  .sublist{display:none;} .sublist.on{display:block;}
+
+  @media(max-width:760px){
+    main{padding:40px 20px 64px;} .hwrap{padding:12px 20px;gap:14px;flex-wrap:wrap;}
+    nav{order:3;width:100%;overflow:auto;} .cmd{display:none;}
+    .greet h1{font-size:30px;} .twocol{grid-template-columns:1fr;gap:36px;}
+    .item{grid-template-columns:auto 1fr;} .item .act{grid-column:2;justify-content:flex-start;}
+    .grp{grid-template-columns:1fr auto;} .grp .cnt,.grp .chev{display:none;}
+    .detail-grid{grid-template-columns:1fr;} .side{position:static;} .steps{overflow:auto;}
+  }
+  @media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;}}
+</style>
+</head>
+<body>
+<div class="ambient"></div>
+
+<header>
+  <div class="hwrap">
+    <div class="mark"><span class="cn">司南</span><span class="en">Loop</span></div>
+    <nav id="nav">
+      <a class="on" data-view="home">概览</a>
+      <a data-view="detail">Loop 详情</a>
+      <a data-view="agents">智能体</a>
+      <a data-view="metrics">概况</a>
+      <a data-view="library">资产库</a>
+    </nav>
+    <div class="hright"><span class="cmd">搜索 <kbd>⌘K</kbd></span><div class="ava">林</div></div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============ 概览 ============ -->
+  <div class="view on" id="home">
+    <div class="greet reveal">
+      <h1>下午好,林。</h1>
+      <p>有 <b>5 个 Loop</b> 需要你处理。其余 <b>312 个</b>在自主运行,没有出问题。</p>
+      <div class="pulse">
+        <span class="it"><b>1,284</b> 个智能体</span>
+        <span class="it"><b>312</b> 运行中</span>
+        <span class="it alert"><b>5</b> 待你处理</span>
+        <span class="it"><b>0</b> 异常</span>
+      </div>
+    </div>
+
+    <section class="block reveal">
+      <div class="lbl"><h2>待你处理</h2><span class="ct">5</span><span class="ln"></span></div>
+      <div class="needs">
+        <div class="item" data-goto="detail" style="cursor:pointer">
+          <span class="dot red"></span>
+          <div class="body">
+            <div class="t">批准一个改到登录的修复</div>
+            <div class="why">修复已就绪、测试也通过了,但它动了登录流程——这类改动智能体不会自己合并。</div>
+            <div class="meta"><span>修复 #4821</span><span>已等 14 分钟</span></div>
+          </div>
+          <div class="act"><span class="tag red">待批准</span><button class="btn primary">查看</button></div>
+        </div>
+        <div class="item">
+          <span class="dot red"></span>
+          <div class="body">
+            <div class="t">两个智能体对缓存修法有分歧</div>
+            <div class="why">它们给了两种不同的改法,自己定不下来,需要你来拍板方向。</div>
+            <div class="meta"><span>评审 #4760</span><span>已等 22 分钟</span></div>
+          </div>
+          <div class="act"><span class="tag red">待裁决</span><button class="btn primary">对比</button></div>
+        </div>
+        <div class="item">
+          <span class="dot yellow"></span>
+          <div class="body">
+            <div class="t">一个版本可以发布了</div>
+            <div class="why">该过的都过了。它要发到 3 个代码仓,所以由人来点这一下。</div>
+            <div class="meta"><span>发布 · v2.4</span><span>已就绪</span></div>
+          </div>
+          <div class="act"><span class="tag yellow">待确认</span><button class="btn primary">批准发布</button></div>
+        </div>
+        <div class="item">
+          <span class="dot yellow"></span>
+          <div class="body">
+            <div class="t">一个 Loop 卡住了——连不上测试环境</div>
+            <div class="why">智能体跑不了测试,就停下来等,没有瞎猜。多半是环境问题。</div>
+            <div class="meta"><span>修复 #4799</span><span>已暂停 6 分钟</span></div>
+          </div>
+          <div class="act"><button class="btn ghost">稍后</button><button class="btn primary">去看看</button></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block reveal">
+      <div class="lbl"><h2>自主运行中</h2><span class="ct">312</span><span class="ln"></span></div>
+      <div class="run">
+        <div class="grp">
+          <div class="gn">修复上报的问题<small>来自用户上报和自动分拣</small></div>
+          <span class="cnt">287 <span>个</span></span><span class="tag green">正常</span>
+          <span class="chev"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </div>
+        <div class="grp">
+          <div class="gn">分拣新上报<small>判断是真问题、重复,还是噪音</small></div>
+          <span class="cnt">18 <span>个</span></span><span class="tag green">正常</span>
+          <span class="chev"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </div>
+        <div class="grp">
+          <div class="gn">盯竞品动态<small>把发现的东西整理成值得做的需求</small></div>
+          <span class="cnt">7 <span>个</span></span><span class="tag green">正常</span>
+          <span class="chev"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="block reveal">
+      <div class="lbl"><h2>最近动态</h2><span class="ln"></span></div>
+      <div class="feed">
+        <div class="ev"><span class="tm">14:22</span><span class="tx"><b>修复 #4821</b> 请你帮忙——<em>改到了登录</em></span></div>
+        <div class="ev"><span class="tm">14:18</span><span class="tx"><b>修复 #4830</b> 修好了一个分页 bug 并自己合并了</span></div>
+        <div class="ev"><span class="tm">14:11</span><span class="tx"><b>分拣</b> 整理了 6 条新上报——4 条是真问题,2 条重复</span></div>
+        <div class="ev"><span class="tm">14:03</span><span class="tx"><b>竞品扫描</b> 找到 2 个值得做的需求</span></div>
+        <div class="ev"><span class="tm">13:58</span><span class="tx"><b>修复 #4812</b> 给一个导出乱码问题开了修复</span></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ Loop 详情(方向 A) ============ -->
+  <div class="view" id="detail">
+    <div class="crumb reveal"><a data-view="home">概览</a><span>/</span>Loop 详情</div>
+    <div class="lphead reveal">
+      <h1>修复:登录后会话会丢失</h1>
+      <span class="st"><span class="tag red">待你批准合并</span></span>
+    </div>
+    <div class="lpmeta reveal"><span>修复 #4821</span><span>来源 <b>用户上报</b></span><span>已用时 <b>14分22秒</b></span><span>用的模型 <b>Opus</b></span></div>
+
+    <section class="block reveal" style="margin-top:8px;">
+      <div class="lbl"><h2>它走到哪一步了</h2><span class="ln"></span></div>
+      <div class="steps">
+        <div class="step done"><span class="nd"><svg width="9" height="9" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.2 2.3L9.5 3.7" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="nm">受理</span></div>
+        <div class="step done"><span class="nd"><svg width="9" height="9" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.2 2.3L9.5 3.7" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="nm">复现</span></div>
+        <div class="step done"><span class="nd"><svg width="9" height="9" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.2 2.3L9.5 3.7" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="nm">定位</span></div>
+        <div class="step done"><span class="nd"><svg width="9" height="9" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.2 2.3L9.5 3.7" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="nm">修复</span></div>
+        <div class="step done"><span class="nd"><svg width="9" height="9" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.2 2.3L9.5 3.7" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="nm">自测</span></div>
+        <div class="step now"><span class="nd"></span><span class="nm">评审 · 待你</span></div>
+        <div class="step"><span class="nd"></span><span class="nm">合并</span></div>
+      </div>
+    </section>
+
+    <div class="detail-grid">
+      <div class="reveal">
+        <div class="lbl"><h2>参与的智能体</h2><span class="ln"></span></div>
+        <div class="agents">
+          <div class="ag"><span class="dot green"></span><div><div class="an">主控</div><div class="ad">安排各步顺序,现在停在评审、等你点头</div></div><div class="am">编排<span class="mdl">Opus</span></div></div>
+          <div class="ag"><span class="dot green"></span><div><div class="an">受理</div><div class="ad">接下 #4821,判断是真实的登录 bug</div></div><div class="am">已完成<span class="mdl">Haiku</span></div></div>
+          <div class="ag"><span class="dot green"></span><div><div class="an">复现</div><div class="ad">重现了问题,并写了一条会失败的测试做验收标准</div></div><div class="am">已完成<span class="mdl">Medium</span></div></div>
+          <div class="ag"><span class="dot green"></span><div><div class="an">开发</div><div class="ad">写好修复,刚才那条测试已转绿,提交了改动</div></div><div class="am">已完成<span class="mdl">Opus</span></div></div>
+          <div class="ag"><span class="dot red"></span><div><div class="an">评审</div><div class="ad">发现改动碰到了登录,超出能自动合并的范围,请你定夺</div></div><div class="am">等你<span class="mdl">Opus</span></div></div>
+        </div>
+      </div>
+
+      <aside class="side reveal">
+        <div class="panel ask">
+          <h3>需要你的地方</h3>
+          <div class="ask-why">修复已就绪、测试也过了。但它改动了<b>登录流程</b>——这类敏感改动,得有人看一眼再合并。</div>
+          <div class="acts">
+            <button class="btn primary">查看改动并批准</button>
+            <div class="row"><button class="btn ghost">退回重做</button><button class="btn ghost">我来接手</button></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>它做了什么</h3>
+          <div class="feed mini-feed">
+            <div class="ev"><span class="tm">14:22</span><span class="tx">评审请你定夺</span></div>
+            <div class="ev"><span class="tm">14:18</span><span class="tx">提交修复,测试转绿</span></div>
+            <div class="ev"><span class="tm">14:09</span><span class="tx">复现成功,写了验收测试</span></div>
+            <div class="ev"><span class="tm">14:08</span><span class="tx">受理 #4821</span></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- 待评审通过后展开的模块 -->
+  <!-- ============ 智能体 ============ -->
+  <div class="view" id="agents">
+    <div class="greet reveal" style="margin-bottom:8px;">
+      <h1>智能体</h1>
+      <p>共 <b>1,284 个</b>智能体在岗,按它们干的活分组看。一个 Loop 由几个智能体配合完成。</p>
+    </div>
+    <section class="block reveal">
+      <div class="lbl"><h2>按职能分组</h2><span class="ln"></span></div>
+      <div class="run">
+        <div class="grp"><div class="gn">修复<small>读懂问题、写补丁、跑测试,把 bug 改好</small></div><span class="cnt">512 <span>个</span></span><span class="tag green">正常</span></div>
+        <div class="grp"><div class="gn">主控<small>给每个 Loop 安排步骤先后</small></div><span class="cnt">312 <span>个</span></span><span class="tag green">正常</span></div>
+        <div class="grp"><div class="gn">复现<small>把问题重现出来,顺手写一条验收测试</small></div><span class="cnt">180 <span>个</span></span><span class="tag green">正常</span></div>
+        <div class="grp"><div class="gn">评审<small>检查改动质量,拿不准就请人定夺</small></div><span class="cnt">140 <span>个</span></span><span class="tag yellow">3 个在等你</span></div>
+        <div class="grp"><div class="gn">分拣<small>判断上报是真问题、重复,还是噪音</small></div><span class="cnt">120 <span>个</span></span><span class="tag green">正常</span></div>
+        <div class="grp"><div class="gn">盯竞品<small>盯行业动态,整理成值得做的需求</small></div><span class="cnt">20 <span>个</span></span><span class="tag green">正常</span></div>
+      </div>
+    </section>
+    <section class="block reveal">
+      <div class="lbl"><h2>用的模型</h2><span class="ln"></span></div>
+      <div class="run">
+        <div class="grp"><div class="gn">Opus<small>难的活:写复杂修复、做评审定夺</small></div><span class="cnt">520 <span>个</span></span><span class="tag blue">高配</span></div>
+        <div class="grp"><div class="gn">Medium<small>常规活:复现、普通修复</small></div><span class="cnt">610 <span>个</span></span><span class="tag green">够用</span></div>
+        <div class="grp"><div class="gn">Haiku<small>轻活:分拣、打标</small></div><span class="cnt">154 <span>个</span></span><span class="tag green">够用</span></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ 概况(本周) ============ -->
+  <div class="view" id="metrics">
+    <div class="greet reveal" style="margin-bottom:8px;">
+      <h1>本周概况</h1>
+      <p>一眼看清四件事:做了多少、你管了多少、问题在变多还是变少、修得稳不稳。</p>
+    </div>
+    <section class="block reveal" style="margin-top:34px;">
+      <div class="stats4">
+        <div class="statc"><div class="sv">486</div><div class="sn">自主闭环</div><div class="snote">智能体自己修好并合并的问题</div></div>
+        <div class="statc"><div class="sv">31</div><div class="sn">你介入</div><div class="snote">多是登录、发布这类要点头的事</div></div>
+        <div class="statc"><div class="sv">−12<span class="arr good">↓</span></div><div class="sn">开放问题趋势</div><div class="snote">每天净减少——问题在变少(好)</div></div>
+        <div class="statc"><div class="sv">4%<span class="arr good">↓</span></div><div class="sn">合并后返工率</div><div class="snote">合并之后基本不用返工</div></div>
+      </div>
+      <div class="trend">
+        <div class="th"><span>开放问题 · 近 8 周</span><span><b>在稳步下降</b></span></div>
+        <svg width="100%" height="64" viewBox="0 0 600 64" preserveAspectRatio="none"><polyline points="0,12 85,17 170,16 255,26 340,32 425,40 510,46 600,52" fill="none" stroke="#5E8C63" stroke-width="1.6"/></svg>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ 资产库 ============ -->
+  <div class="view" id="library">
+    <div class="greet reveal" style="margin-bottom:8px;">
+      <h1>资产库</h1>
+      <p>可复用的"生产资料":Loop 的模板、智能体的设定、能力技能。改这里会影响所有在跑的 Loop。</p>
+    </div>
+    <div class="subtabs reveal" id="subtabs">
+      <a class="on" data-sub="bp">Loop 蓝图</a><a data-sub="cfg">智能体配置</a><a data-sub="sk">技能库</a>
+    </div>
+    <div class="sublist on" id="bp">
+      <div class="run">
+        <div class="grp"><div class="gn">修复问题(标准)<small>受理 → 复现 → 定位 → 修复 → 自测 → 评审 → 合并</small></div><span class="cnt">被 920 个 Loop 用</span><span class="tag green">在用</span></div>
+        <div class="grp"><div class="gn">分拣上报<small>判断真问题 / 重复 / 噪音,再决定要不要派去修</small></div><span class="cnt">被 86 个用</span><span class="tag green">在用</span></div>
+        <div class="grp"><div class="gn">盯竞品出需求<small>抓动态 → 整理 → 产出值得做的需求草案</small></div><span class="cnt">被 7 个用</span><span class="tag yellow">试运行</span></div>
+      </div>
+    </div>
+    <div class="sublist" id="cfg">
+      <div class="run">
+        <div class="grp"><div class="gn">开发 · 设定<small>怎么写修复、什么能自动做、什么必须请人</small></div><span class="cnt">2 天前更新</span><span class="tag green">在用</span></div>
+        <div class="grp"><div class="gn">评审 · 设定<small>检查哪些点、碰到什么必须请你定夺</small></div><span class="cnt">5 天前更新</span><span class="tag green">在用</span></div>
+        <div class="grp"><div class="gn">分拣 · 设定<small>怎么判重复、怎么打标</small></div><span class="cnt">1 周前更新</span><span class="tag green">在用</span></div>
+      </div>
+    </div>
+    <div class="sublist" id="sk">
+      <div class="run">
+        <div class="grp"><div class="gn">提交并发起合并<small>把改动整理成一次干净的提交</small></div><span class="cnt">被 41 个设定引用</span><span class="tag green">在用</span></div>
+        <div class="grp"><div class="gn">跑测试并读结果<small>自动跑测试、看哪条挂了</small></div><span class="cnt">被 63 个引用</span><span class="tag green">在用</span></div>
+        <div class="grp"><div class="gn">导出报表<small>把数据整理成表格</small></div><span class="cnt">被 12 个引用</span><span class="tag yellow">试运行</span></div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer><p>重设计 v2 · 中文 · 大白话替代黑话。一套安静的工作台:谁需要你、什么在跑、刚发生了什么。成千上万的智能体被汇总,不平铺。规则、卡点、路由这些内部概念只在工程文档里,不上界面。</p></footer>
+
+<script>
+  const nav=document.getElementById('nav');
+  function show(v){
+    document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id===v));
+    nav.querySelectorAll('a').forEach(a=>a.classList.toggle('on',a.dataset.view===v));
+    window.scrollTo({top:0,behavior:'instant'});
+    runReveal();
+  }
+  nav.addEventListener('click',e=>{const a=e.target.closest('a[data-view]');if(a){show(a.dataset.view);}});
+  document.addEventListener('click',e=>{const g=e.target.closest('[data-goto],[data-view]:not(nav a)');if(g&&g.dataset.goto){show(g.dataset.goto);}else if(g&&g.dataset.view&&!g.closest('#nav')){show(g.dataset.view);}});
+  document.addEventListener('click',e=>{const s=e.target.closest('.subtabs a[data-sub]');if(!s)return;const v=s.closest('.view');v.querySelectorAll('.subtabs a').forEach(a=>a.classList.toggle('on',a===s));v.querySelectorAll('.sublist').forEach(l=>l.classList.toggle('on',l.id===s.dataset.sub));});
+
+  let io;
+  function runReveal(){
+    if(io)io.disconnect();
+    io=new IntersectionObserver((es)=>{es.forEach((e,i)=>{if(e.isIntersecting){e.target.style.transitionDelay=(i*55)+'ms';e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:0.06});
+    document.querySelectorAll('.view.on .reveal').forEach(el=>{el.classList.remove('in');io.observe(el);});
+  }
+  runReveal();
+</script>
+</body>
+</html>
