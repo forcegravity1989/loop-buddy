@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>司南 · 资产库 五元组 + Promotion 评审(资产 owner)— 设计稿 v1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1C1813; --ink-2:#28221A;
+    --rice:#EEE6D2; --paper:#FAF5E9; --paper-2:#F4ECDA;
+    --cinnabar:#C23A22; --cinnabar-bright:#DA5639;
+    --celadon:#5E7D6C; --celadon-bright:#6E9A82;
+    --ochre:#C18A2C; --muted:#7A6C57; --muted-2:#9A8B72;
+    --hairline:#DAD0B7; --hairline-2:#C9BC9D;
+    --f-display:'Fraunces','Noto Serif SC',serif;
+    --f-serif:'Noto Serif SC',serif;
+    --f-cn:'Noto Sans SC',system-ui,-apple-system,sans-serif;
+    --f-mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular',monospace;
+    --r:10px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{background:var(--rice);color:var(--ink);font-family:var(--f-cn);font-weight:400;-webkit-font-smoothing:antialiased;line-height:1.5;min-height:100vh;position:relative;}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;opacity:.05;mix-blend-mode:multiply;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+  ::selection{background:var(--cinnabar);color:var(--paper);}
+  button{font-family:inherit;cursor:pointer;}
+  .app{display:grid;grid-template-columns:248px 1fr;min-height:100vh;}
+
+  .rail{background:var(--ink);color:var(--rice);padding:26px 20px 24px;display:flex;flex-direction:column;gap:24px;position:sticky;top:0;height:100vh;border-right:1px solid #000;}
+  .brand{display:flex;align-items:baseline;gap:10px;}
+  .brand .glyph{font-family:var(--f-serif);font-weight:700;font-size:30px;color:var(--cinnabar-bright);line-height:1;}
+  .brand .name{font-family:var(--f-display);font-weight:600;font-size:21px;letter-spacing:.3px;}
+  .brand .en{font-family:var(--f-mono);font-size:9.5px;letter-spacing:2px;color:var(--muted-2);text-transform:uppercase;margin-top:5px;}
+  .nav-group{display:flex;flex-direction:column;gap:2px;}
+  .nav-label{font-family:var(--f-mono);font-size:9.5px;letter-spacing:1.6px;text-transform:uppercase;color:var(--muted-2);margin:0 0 9px 4px;}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:7px;color:#D9CFB9;font-size:13.5px;text-decoration:none;transition:.15s;}
+  .nav-item .ix{font-family:var(--f-mono);font-size:11px;color:var(--muted-2);width:16px;text-align:center;}
+  .nav-item:hover{background:rgba(255,255,255,.05);color:#fff;}
+  .nav-item.on{background:var(--cinnabar);color:#fff;}
+  .nav-item.on .ix{color:rgba(255,255,255,.7);}
+  .nav-item .ct{margin-left:auto;font-family:var(--f-mono);font-size:10px;color:var(--muted-2);}
+  .nav-item.on .ct{color:rgba(255,255,255,.75);}
+  .nav-item .dot{margin-left:auto;width:6px;height:6px;border-radius:50%;}
+  .dot.need{background:var(--cinnabar);box-shadow:0 0 0 3px rgba(194,58,34,.2);}
+  .rail-foot{margin-top:auto;border-top:1px solid #34291d;padding-top:14px;}
+  .rail-foot .who{display:flex;align-items:center;gap:9px;}
+  .rail-foot .ava{width:30px;height:30px;border-radius:50%;background:var(--ochre);color:#fff;display:grid;place-items:center;font-family:var(--f-serif);font-weight:600;font-size:13px;}
+  .rail-foot .meta{font-size:12px;line-height:1.3;}
+  .rail-foot .meta b{font-weight:500;color:var(--rice);}
+  .rail-foot .meta span{color:var(--muted-2);font-size:11px;}
+
+  .main{min-width:0;padding:0 0 50px;}
+  .topbar{display:flex;align-items:center;gap:20px;padding:18px 30px 16px;border-bottom:1px solid var(--hairline);position:sticky;top:0;z-index:40;background:linear-gradient(var(--rice),var(--rice) 80%,rgba(238,230,210,.85));backdrop-filter:blur(2px);}
+  .topbar h1{font-family:var(--f-display);font-weight:500;font-size:21px;margin:0;letter-spacing:.2px;}
+  .topbar h1 small{font-family:var(--f-mono);font-size:10px;color:var(--muted);letter-spacing:1px;margin-left:10px;}
+  .topbar .spacer{flex:1;}
+  .lens{display:inline-flex;background:var(--paper-2);border:1px solid var(--hairline-2);border-radius:999px;padding:3px;gap:2px;}
+  .lens button{border:0;background:transparent;color:var(--muted);font-size:12.5px;font-weight:500;padding:6px 13px;border-radius:999px;display:flex;align-items:center;gap:6px;}
+  .lens button.on{background:var(--ink);color:var(--rice);box-shadow:0 1px 3px rgba(0,0,0,.18);}
+  .date{font-family:var(--f-mono);font-size:11.5px;color:var(--muted);}
+
+  /* context / breadcrumb bar */
+  .ctx{display:flex;align-items:center;gap:14px;padding:12px 30px;border-bottom:1px solid var(--hairline);background:var(--paper);}
+  .ctx .crumb{font-family:var(--f-mono);font-size:12px;color:var(--muted);}
+  .ctx .crumb b{color:var(--ink);font-weight:600;}
+  .ctx .crumb span{color:var(--cinnabar);}
+  .ctx .ver{font-family:var(--f-mono);font-size:11px;background:var(--paper-2);border:1px solid var(--hairline-2);border-radius:6px;padding:3px 9px;color:var(--ink-2);}
+  .ctx .tag{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.5px;padding:2px 8px;border-radius:5px;}
+  .tag.active{background:rgba(94,125,108,.16);color:#3f5a4d;}
+  .ctx .warn{margin-left:auto;font-family:var(--f-mono);font-size:10.5px;color:#8a6113;background:rgba(193,138,44,.14);border:1px solid rgba(193,138,44,.35);border-radius:6px;padding:4px 10px;}
+
+  .work{display:grid;grid-template-columns:1fr 360px;gap:0;align-items:start;}
+
+  /* —— 五元组编辑器 —— */
+  .editor{padding:20px 26px 0;display:flex;flex-direction:column;gap:14px;border-right:1px solid var(--hairline);min-height:calc(100vh - 150px);}
+  .ed-h{display:flex;align-items:baseline;gap:10px;}
+  .ed-h h2{font-family:var(--f-display);font-weight:600;font-size:16px;margin:0;}
+  .ed-h .sub{font-size:12px;color:var(--muted);}
+  .ed-h .note{margin-left:auto;font-family:var(--f-mono);font-size:10px;color:var(--muted-2);}
+
+  .penta{display:flex;flex-direction:column;gap:11px;}
+  .dim{background:var(--paper);border:1px solid var(--hairline);border-radius:var(--r);overflow:hidden;}
+  .dim .dh{display:flex;align-items:center;gap:11px;padding:11px 14px;border-bottom:1px solid var(--hairline);}
+  .dim .dh .ix{width:22px;height:22px;border-radius:6px;background:var(--ink);color:var(--rice);display:grid;place-items:center;font-family:var(--f-mono);font-size:11px;font-weight:600;}
+  .dim .dh .t{font-family:var(--f-serif);font-weight:600;font-size:14px;}
+  .dim .dh .en{font-family:var(--f-mono);font-size:9px;letter-spacing:1px;color:var(--muted-2);text-transform:uppercase;}
+  .dim .dh .eff{margin-left:auto;font-family:var(--f-mono);font-size:9.5px;color:var(--muted);max-width:280px;text-align:right;}
+  .dim .dh .eff b{color:var(--cinnabar);font-weight:500;}
+  .dim .db{padding:13px 14px;}
+
+  /* MD editor block */
+  .md{background:#211b14;border-radius:8px;padding:12px 14px;font-family:var(--f-mono);font-size:11.5px;line-height:1.7;color:#D9CFB9;overflow:auto;}
+  .md .ln{color:#5a4d3a;user-select:none;margin-right:12px;}
+  .md .k{color:var(--cinnabar-bright);}
+  .md .s{color:var(--celadon-bright);}
+  .md .c{color:#7a6c57;}
+
+  .chips{display:flex;flex-wrap:wrap;gap:7px;}
+  .chip{font-family:var(--f-mono);font-size:11.5px;padding:4px 10px;border-radius:6px;background:var(--paper-2);color:var(--ink-2);border:1px solid var(--hairline);}
+  .chip.lock{border-style:dashed;color:var(--muted);}
+  .chip.lock::before{content:"🔒 ";font-size:9px;}
+  .chip.ok::before{content:"✓ ";color:var(--celadon);font-size:10px;}
+  .mdl{font-family:var(--f-mono);font-size:12px;padding:4px 11px;border-radius:6px;background:var(--paper-2);border:1px solid var(--hairline);}
+  .mdl.opus{color:var(--cinnabar);border-color:rgba(194,58,34,.3);}
+  .seg{display:inline-flex;gap:0;border:1px solid var(--hairline-2);border-radius:7px;overflow:hidden;}
+  .seg span{font-family:var(--f-mono);font-size:11px;padding:5px 11px;color:var(--muted);border-right:1px solid var(--hairline);}
+  .seg span:last-child{border-right:0;}
+  .seg span.on{background:var(--cinnabar);color:#fff;}
+  .gateline{display:flex;align-items:center;gap:10px;font-size:12.5px;}
+  .gateline .gk{font-family:var(--f-mono);font-size:10px;padding:2px 8px;border-radius:5px;background:rgba(194,58,34,.12);color:var(--cinnabar);}
+  .gateline .crit{font-family:var(--f-mono);font-size:11.5px;color:var(--ink-2);}
+
+  /* —— RIGHT: governance + promotion —— */
+  .gov{padding:20px 22px 30px;display:flex;flex-direction:column;gap:16px;position:sticky;top:150px;}
+  .card{background:var(--paper);border:1px solid var(--hairline);border-radius:var(--r);padding:15px 16px;}
+  .card h3{font-family:var(--f-display);font-weight:600;font-size:13.5px;margin:0 0 12px;display:flex;align-items:center;justify-content:space-between;}
+  .card h3 .pill{font-family:var(--f-mono);font-size:9px;letter-spacing:.5px;padding:1px 7px;border-radius:5px;background:var(--paper-2);border:1px solid var(--hairline);color:var(--muted);text-transform:uppercase;}
+
+  .impact .ir{display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;border-top:1px solid var(--hairline);font-size:12.5px;}
+  .impact .ir:first-of-type{border-top:0;}
+  .impact .ik{color:var(--muted);}
+  .impact .iv{font-family:var(--f-mono);font-weight:500;}
+  .impact .iv.warn{color:var(--ochre);} .impact .iv.good{color:var(--celadon);} .impact .iv.hot{color:var(--cinnabar);}
+  .prov{font-family:var(--f-mono);font-size:10.5px;color:var(--muted);line-height:1.6;border-top:1px solid var(--hairline);padding-top:10px;margin-top:4px;}
+  .prov b{color:var(--ink-2);font-weight:500;}
+  .acts{display:flex;gap:7px;margin-top:12px;}
+  .btn{flex:1;border:1px solid var(--hairline-2);background:var(--paper-2);color:var(--ink);font-size:12px;font-weight:500;padding:7px 9px;border-radius:7px;text-align:center;}
+  .btn:hover{border-color:var(--ink);}
+  .btn.primary{background:var(--cinnabar);border-color:var(--cinnabar);color:#fff;}
+  .btn.ghost{background:transparent;}
+
+  /* promotion review (刃B 治理) */
+  .promo h3 .pill{background:rgba(194,58,34,.12);color:var(--cinnabar);border-color:rgba(194,58,34,.3);}
+  .prule{border:1px solid var(--hairline);border-radius:9px;padding:12px 13px;display:flex;flex-direction:column;gap:9px;border-left:3px solid var(--ochre);margin-bottom:10px;background:var(--paper);}
+  .prule:last-child{margin-bottom:0;}
+  .prule .pr1{display:flex;align-items:center;gap:8px;}
+  .prule .pn{font-family:var(--f-mono);font-size:12px;font-weight:600;}
+  .prule .kind{margin-left:auto;font-family:var(--f-mono);font-size:8.5px;letter-spacing:.5px;padding:2px 7px;border-radius:5px;background:var(--paper-2);border:1px solid var(--hairline);color:var(--muted);text-transform:uppercase;}
+  .prule .src{font-size:11px;color:var(--muted);}
+  .prule .src b{color:var(--ink-2);font-weight:500;}
+  .prule .grid2{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+  .prule .mc{background:var(--paper-2);border-radius:6px;padding:6px 9px;}
+  .prule .mc .mk{font-size:9.5px;color:var(--muted);}
+  .prule .mc .mv{font-family:var(--f-mono);font-size:12px;font-weight:600;}
+  .prule .mc .mv.good{color:var(--celadon);} .prule .mc .mv.warn{color:var(--ochre);}
+  .prule .chk{display:flex;align-items:center;gap:7px;font-size:11px;font-family:var(--f-mono);}
+  .prule .chk i{width:7px;height:7px;border-radius:50%;}
+  .chk.ok i{background:var(--celadon);} .chk.ok{color:#3f5a4d;}
+  .chk.conflict i{background:var(--ochre);} .chk.conflict{color:#8a6113;}
+  .prule .four{display:flex;align-items:center;gap:6px;font-family:var(--f-mono);font-size:10px;color:var(--muted);}
+  .prule .four .dots{display:flex;gap:3px;}
+  .prule .four .dots i{width:8px;height:8px;border-radius:50%;background:var(--paper-2);border:1px solid var(--hairline-2);}
+  .prule .four .dots i.f{background:var(--celadon);border-color:var(--celadon);}
+  .prule .pacts{display:flex;gap:6px;}
+  .prule .pacts .btn{font-size:11px;padding:6px 8px;}
+
+  .failsafe{font-family:var(--f-mono);font-size:10px;color:var(--muted);background:var(--paper-2);border:1px dashed var(--hairline-2);border-radius:7px;padding:8px 10px;line-height:1.5;}
+  .failsafe b{color:var(--cinnabar);font-weight:500;}
+
+  .foot{padding:22px 30px 0;border-top:1px solid var(--hairline);margin-top:8px;}
+  .foot p{font-family:var(--f-mono);font-size:10.5px;color:var(--muted-2);max-width:880px;line-height:1.7;margin:0;}
+  .foot p b{color:var(--muted);font-weight:500;}
+
+  @media(max-width:1080px){
+    .app{grid-template-columns:1fr;}
+    .rail{position:static;height:auto;flex-direction:row;flex-wrap:wrap;gap:16px 26px;align-items:center;}
+    .rail .nav-group{flex-direction:row;flex-wrap:wrap;gap:4px;} .rail .nav-label{display:none;} .rail-foot{margin:0 0 0 auto;border:0;padding:0;}
+    .work{grid-template-columns:1fr;} .editor{border-right:0;border-bottom:1px solid var(--hairline);min-height:0;} .gov{position:static;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="rail">
+    <div class="brand"><div class="glyph">司</div><div><div class="name">司南</div><div class="en">Loop Workbench</div></div></div>
+    <nav class="nav-group">
+      <p class="nav-label">执行</p>
+      <a class="nav-item" href="#"><span class="ix">◎</span>编排台 Symphony<span class="dot need"></span></a>
+      <a class="nav-item" href="#"><span class="ix">⬡</span>虚拟办公室<span class="ct">312</span></a>
+      <a class="nav-item" href="#"><span class="ix">⤴</span>复利 · 规则账本<span class="ct">23</span></a>
+      <a class="nav-item" href="#"><span class="ix">⤵</span>Issue 派发<span class="ct">47</span></a>
+      <a class="nav-item" href="#"><span class="ix">▤</span>度量看板</a>
+    </nav>
+    <nav class="nav-group">
+      <p class="nav-label">资产库 · 共享底座</p>
+      <a class="nav-item" href="#">Loop 蓝图<span class="ct">9</span></a>
+      <a class="nav-item on" href="#"><span class="ix">⌘</span>Agent · MD<span class="ct">38</span></a>
+      <a class="nav-item" href="#">Skill Hub<span class="ct">214</span></a>
+      <a class="nav-item" href="#">模型 / MaaS<span class="ct">6</span></a>
+    </nav>
+    <div class="rail-foot"><div class="who"><div class="ava">M</div><div class="meta"><b>Mei · Platform</b><br><span>资产 owner · 资产镜</span></div></div></div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <h1>资产库 · 配置面<small>ASSET LIBRARY</small></h1>
+      <div class="spacer"></div>
+      <div class="lens" role="tablist">
+        <button><span>◑</span>监督镜</button>
+        <button><span>◐</span>执行镜</button>
+        <button class="on"><span>◔</span>资产镜</button>
+      </div>
+      <div class="date">2026 · 06 · 17 周三</div>
+    </div>
+
+    <div class="ctx">
+      <span class="crumb">Loop 蓝图 <b>code-fix-v3</b> › Agent · <span>reviewer</span></span>
+      <span class="ver">v3.4.1</span>
+      <span class="tag active">active</span>
+      <span class="warn">⚠ 改基线 = 改宪法 · 影响全体在跑实例 · 发布需四眼</span>
+    </div>
+
+    <div class="work">
+
+      <!-- 五元组编辑器 -->
+      <section class="editor">
+        <div class="ed-h">
+          <h2>配置五元组</h2>
+          <span class="sub">"只改 MD" 是抽象泄漏 —— 行为由这 5 项共同决定</span>
+          <span class="note">改哪项 → 改什么行为 ↘</span>
+        </div>
+
+        <div class="penta">
+          <!-- ① MD -->
+          <div class="dim">
+            <div class="dh"><span class="ix">①</span><div><div class="t">Agent.md</div><div class="en">PROMPT / 角色定义</div></div><span class="eff">改这项 → 改 <b>判断口径与产出风格</b></span></div>
+            <div class="db">
+              <div class="md"><span class="ln">1</span><span class="c"># reviewer · 评审 Agent</span><br><span class="ln">2</span><span class="k">职责</span>:对修复补丁做静态审查 + 风险研判<br><span class="ln">3</span><span class="k">升级触发</span>:改动触及 <span class="s">受保护边界</span> 即升级人工<br><span class="ln">4</span><span class="k">边界</span>:鉴权/支付/对外发布 一律不自动放行<br><span class="ln">5</span><span class="c"># ……（共 42 行,点击展开编辑）</span></div>
+            </div>
+          </div>
+          <!-- ② 模型 -->
+          <div class="dim">
+            <div class="dh"><span class="ix">②</span><div><div class="t">模型绑定</div><div class="en">MODEL BINDING</div></div><span class="eff">改这项 → 改 <b>能力上限与成本</b></span></div>
+            <div class="db" style="display:flex;align-items:center;gap:12px;">
+              <span class="mdl opus">Opus</span>
+              <span class="seg"><span>fixed</span><span class="on">auto-by-complexity</span></span>
+              <span style="font-family:var(--f-mono);font-size:10.5px;color:var(--muted);">复杂度 ≥ L4 → Opus · 否则 Medium</span>
+            </div>
+          </div>
+          <!-- ③ Skills -->
+          <div class="dim">
+            <div class="dh"><span class="ix">③</span><div><div class="t">Skills</div><div class="en">SKILL HUB 引用</div></div><span class="eff">改这项 → 改 <b>可调用工具集</b></span></div>
+            <div class="db"><div class="chips">
+              <span class="chip ok">static-analysis</span><span class="chip ok">diff-risk-scan</span><span class="chip ok">auth-boundary-detect</span><span class="chip">test-impact-map</span><span class="chip lock">prod-deploy</span>
+            </div></div>
+          </div>
+          <!-- ④ 权限 -->
+          <div class="dim">
+            <div class="dh"><span class="ix">④</span><div><div class="t">权限边界</div><div class="en">PERMISSION SCOPE</div></div><span class="eff">改这项 → 改 <b>能自动接受 vs 需解锁</b></span></div>
+            <div class="db"><div class="chips">
+              <span class="chip ok">修 lint/类型</span><span class="chip ok">补单测</span><span class="chip ok">重构 papercut</span>
+              <span class="chip lock">核心鉴权</span><span class="chip lock">支付逻辑</span><span class="chip lock">对外发布</span><span class="chip lock">推 main</span>
+            </div></div>
+          </div>
+          <!-- ⑤ Gate -->
+          <div class="dim">
+            <div class="dh"><span class="ix">⑤</span><div><div class="t">验收门 Gate</div><div class="en">ACCEPTANCE GATE</div></div><span class="eff">改这项 → 改 <b>能否自动闭环</b></span></div>
+            <div class="db" style="display:flex;flex-direction:column;gap:9px;">
+              <div class="gateline"><span class="gk">machine</span><span class="crit">失败用例转绿 + 静态审查 0 高危项 → 自动通过</span></div>
+              <div class="gateline"><span class="gk" style="background:rgba(193,138,44,.16);color:#8a6113;">hybrid</span><span class="crit">触及受保护边界 → 强制升级人工(见 ④)</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 右栏:版本治理 + Promotion 评审 -->
+      <aside class="gov">
+
+        <div class="card impact">
+          <h3>变更影响 + 版本治理<span class="pill">base+override</span></h3>
+          <div class="ir"><span class="ik">影响在跑实例</span><span class="iv hot">412 个 loop</span></div>
+          <div class="ir"><span class="ik">历史合入率基线</span><span class="iv">71.2%</span></div>
+          <div class="ir"><span class="ik">合入后回滚率</span><span class="iv good">4.1%</span></div>
+          <div class="ir"><span class="ik">override 层</span><span class="iv">3 处 · 待 promote</span></div>
+          <div class="prov">v3.4.1 · <b>Mei</b> 改于 14:02<br>原因:<b>收紧 auth 边界检测</b> · <a href="#" style="color:var(--cinnabar)">看 diff</a><br>provenance:每个在跑 agent 可答"我跑的哪版"</div>
+          <div class="acts">
+            <button class="btn">灰度 canary</button>
+            <button class="btn ghost">回滚上一版</button>
+          </div>
+        </div>
+
+        <div class="card promo">
+          <h3>Promotion 评审 · 刃B 治理<span class="pill">四眼 · 宪法级</span></h3>
+
+          <div class="prule">
+            <div class="pr1"><span class="pn">auth-mw-autoapprove</span><span class="kind">auto-approve</span></div>
+            <div class="src">源自 <b>Wei</b> 对 #4821 鉴权合入的裁决 · 高 VaR → 须四眼</div>
+            <div class="grid2">
+              <div class="mc"><div class="mk">shadow 精度(下游回滚)</div><div class="mv good">96% · n=312</div></div>
+              <div class="mc"><div class="mk">置信下界 95%</div><div class="mv good">93.1%</div></div>
+            </div>
+            <div class="chk conflict"><i></i>与 auth-broad-rule 范围重叠 · 本规则 specificity 更窄 → 取本规则</div>
+            <div class="four">四眼复核 <span class="dots"><i class="f"></i><i></i></span> 1/2 · 待 Mei 复核</div>
+            <div class="pacts"><button class="btn primary">批准提升</button><button class="btn">先 canary</button><button class="btn ghost">打回</button></div>
+          </div>
+
+          <div class="prule" style="border-left-color:var(--celadon);">
+            <div class="pr1"><span class="pn">csv-encoding-gate</span><span class="kind">gate</span></div>
+            <div class="src">把"导出编码"人工验收 → 可机检 Gate · 结构性</div>
+            <div class="grid2">
+              <div class="mc"><div class="mk">shadow 精度(下游)</div><div class="mv good">99% · n=88</div></div>
+              <div class="mc"><div class="mk">置信下界</div><div class="mv good">97.4%</div></div>
+            </div>
+            <div class="chk ok"><i></i>无冲突 · 新增独立 gate</div>
+            <div class="four">四眼复核 <span class="dots"><i class="f"></i><i class="f"></i></span> 2/2 · 就绪</div>
+            <div class="pacts"><button class="btn primary">批准提升 → active</button><button class="btn ghost">打回</button></div>
+          </div>
+
+          <div class="failsafe"><b>Fail-safe 不变式:</b>规则只能降低人工负载;任何冲突/歧义 <b>默认回退升级人工</b>。auto-approve 绝不覆盖一个本应 escalate 的信号。低危规则走 shadow 自动毕业(不占此队列);仅结构性/高 VaR 进此处人评审。</div>
+        </div>
+
+      </aside>
+    </div>
+
+    <div class="foot">
+      <p>设计稿 v1 · 司南 Loop 工作台 · <b>资产库 · 配置五元组 + Promotion 评审(资产 owner · 资产镜)。</b>左:把"只改 MD"的抽象泄漏摊开为 MD+模型+Skills+权限+Gate 五元组,每项标注"改它改什么行为"。右:版本治理(base+override · provenance · 影响面 · 灰度/回滚)+ <b>刃B 的治理面</b> —— Promotion 评审落地 §4.6 三条硬前置:① 仅结构性/高 VaR 规则进人评审(低危自动毕业,人评审压在稀疏集→不重蹈 O(n));② 冲突按 specificity 裁决 + fail-safe 回退升级;③ 精度真值挂下游回滚率 + 置信下界。这是第三块角色屏,三角色(工程师/PM/资产 owner)就齐了。</p>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

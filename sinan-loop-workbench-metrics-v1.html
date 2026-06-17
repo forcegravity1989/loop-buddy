@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>司南 · 度量看板(PM/QA)— 设计稿 v1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1C1813; --ink-2:#28221A;
+    --rice:#EEE6D2; --paper:#FAF5E9; --paper-2:#F4ECDA;
+    --cinnabar:#C23A22; --cinnabar-bright:#DA5639;
+    --celadon:#5E7D6C; --celadon-bright:#6E9A82;
+    --ochre:#C18A2C; --muted:#7A6C57; --muted-2:#9A8B72;
+    --hairline:#DAD0B7; --hairline-2:#C9BC9D;
+    --f-display:'Fraunces','Noto Serif SC',serif;
+    --f-serif:'Noto Serif SC',serif;
+    --f-cn:'Noto Sans SC',system-ui,-apple-system,sans-serif;
+    --f-mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular',monospace;
+    --r:10px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{background:var(--rice);color:var(--ink);font-family:var(--f-cn);font-weight:400;-webkit-font-smoothing:antialiased;line-height:1.5;min-height:100vh;position:relative;}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;opacity:.05;mix-blend-mode:multiply;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+  ::selection{background:var(--cinnabar);color:var(--paper);}
+  button{font-family:inherit;cursor:pointer;}
+  .app{display:grid;grid-template-columns:248px 1fr;min-height:100vh;}
+
+  /* rail */
+  .rail{background:var(--ink);color:var(--rice);padding:26px 20px 24px;display:flex;flex-direction:column;gap:24px;position:sticky;top:0;height:100vh;border-right:1px solid #000;}
+  .brand{display:flex;align-items:baseline;gap:10px;}
+  .brand .glyph{font-family:var(--f-serif);font-weight:700;font-size:30px;color:var(--cinnabar-bright);line-height:1;}
+  .brand .name{font-family:var(--f-display);font-weight:600;font-size:21px;letter-spacing:.3px;}
+  .brand .en{font-family:var(--f-mono);font-size:9.5px;letter-spacing:2px;color:var(--muted-2);text-transform:uppercase;margin-top:5px;}
+  .nav-group{display:flex;flex-direction:column;gap:2px;}
+  .nav-label{font-family:var(--f-mono);font-size:9.5px;letter-spacing:1.6px;text-transform:uppercase;color:var(--muted-2);margin:0 0 9px 4px;}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:7px;color:#D9CFB9;font-size:13.5px;text-decoration:none;transition:background .15s,color .15s;}
+  .nav-item .ix{font-family:var(--f-mono);font-size:11px;color:var(--muted-2);width:16px;text-align:center;}
+  .nav-item:hover{background:rgba(255,255,255,.05);color:#fff;}
+  .nav-item.on{background:var(--cinnabar);color:#fff;}
+  .nav-item.on .ix{color:rgba(255,255,255,.7);}
+  .nav-item .ct{margin-left:auto;font-family:var(--f-mono);font-size:10px;color:var(--muted-2);}
+  .nav-item.on .ct{color:rgba(255,255,255,.75);}
+  .nav-item .dot{margin-left:auto;width:6px;height:6px;border-radius:50%;}
+  .dot.live{background:var(--celadon);box-shadow:0 0 0 3px rgba(94,125,108,.22);}
+  .dot.need{background:var(--cinnabar);box-shadow:0 0 0 3px rgba(194,58,34,.2);}
+  .rail-foot{margin-top:auto;border-top:1px solid #34291d;padding-top:14px;}
+  .rail-foot .who{display:flex;align-items:center;gap:9px;}
+  .rail-foot .ava{width:30px;height:30px;border-radius:50%;background:var(--celadon);color:#fff;display:grid;place-items:center;font-family:var(--f-serif);font-weight:600;font-size:13px;}
+  .rail-foot .meta{font-size:12px;line-height:1.3;}
+  .rail-foot .meta b{font-weight:500;color:var(--rice);}
+  .rail-foot .meta span{color:var(--muted-2);font-size:11px;}
+
+  /* main */
+  .main{min-width:0;padding:0 0 50px;}
+  .topbar{display:flex;align-items:center;gap:20px;padding:18px 32px 16px;border-bottom:1px solid var(--hairline);position:sticky;top:0;z-index:40;background:linear-gradient(var(--rice),var(--rice) 80%,rgba(238,230,210,.85));backdrop-filter:blur(2px);}
+  .topbar h1{font-family:var(--f-display);font-weight:500;font-size:21px;margin:0;letter-spacing:.2px;}
+  .topbar h1 small{font-family:var(--f-mono);font-size:10px;color:var(--muted);letter-spacing:1px;margin-left:10px;}
+  .topbar .spacer{flex:1;}
+  .lens{display:inline-flex;background:var(--paper-2);border:1px solid var(--hairline-2);border-radius:999px;padding:3px;gap:2px;}
+  .lens button{border:0;background:transparent;color:var(--muted);font-size:12.5px;font-weight:500;padding:6px 13px;border-radius:999px;display:flex;align-items:center;gap:6px;transition:all .18s;}
+  .lens button.on{background:var(--ink);color:var(--rice);box-shadow:0 1px 3px rgba(0,0,0,.18);}
+  .date{font-family:var(--f-mono);font-size:11.5px;color:var(--muted);}
+
+  .wrap{padding:22px 32px 0;display:flex;flex-direction:column;gap:22px;}
+  .section-h{display:flex;align-items:baseline;gap:12px;margin-bottom:-4px;}
+  .section-h h2{font-family:var(--f-display);font-weight:600;font-size:16px;margin:0;}
+  .section-h .sub{font-size:12px;color:var(--muted);}
+  .section-h .badge{margin-left:auto;font-family:var(--f-mono);font-size:10px;color:var(--celadon);display:flex;align-items:center;gap:6px;}
+  .section-h .badge i{width:6px;height:6px;border-radius:50%;background:var(--celadon);}
+
+  /* hero: health + queue flow */
+  .hero{display:grid;grid-template-columns:1.15fr 1fr;gap:20px;}
+  .card{background:var(--paper);border:1px solid var(--hairline);border-radius:var(--r);}
+  .eyebrow{font-family:var(--f-mono);font-size:9.5px;letter-spacing:2px;color:var(--muted-2);text-transform:uppercase;}
+
+  .health{background:var(--ink);color:var(--rice);padding:20px 22px;display:flex;flex-direction:column;gap:14px;position:relative;overflow:hidden;}
+  .health .eyebrow{color:var(--muted-2);}
+  .health .lamp-row{display:flex;align-items:center;gap:16px;}
+  .health .lamp{display:flex;gap:7px;}
+  .health .lamp i{width:14px;height:14px;border-radius:50%;background:#3a2f21;}
+  .health .lamp i.on.green{background:var(--celadon-bright);box-shadow:0 0 0 4px rgba(110,154,130,.25);}
+  .health .verdict{font-family:var(--f-display);font-weight:600;font-size:30px;line-height:1;}
+  .health .verdict span{font-size:13px;color:var(--celadon-bright);font-family:var(--f-mono);font-weight:500;margin-left:6px;}
+  .health .northstar{display:flex;align-items:flex-end;gap:18px;border-top:1px solid #34291d;padding-top:14px;}
+  .health .ns-main .k{font-size:11.5px;color:#CFC4AC;}
+  .health .ns-main .v{font-family:var(--f-display);font-weight:600;font-size:38px;line-height:1;letter-spacing:-.5px;}
+  .health .ns-main .v u{text-decoration:none;font-size:18px;color:var(--cinnabar-bright);}
+  .health .ns-note{font-family:var(--f-mono);font-size:10.5px;color:var(--muted-2);line-height:1.6;}
+  .health .ns-note b{color:#CFC4AC;font-weight:500;}
+  .health .guards{margin-left:auto;text-align:right;}
+  .health .guards .g{font-family:var(--f-mono);font-size:11px;color:var(--celadon-bright);}
+  .health .guards .g s{text-decoration:none;color:var(--muted-2);}
+
+  .qflow{padding:18px 20px;display:flex;flex-direction:column;gap:14px;}
+  .qflow .eyebrow{display:flex;align-items:center;justify-content:space-between;}
+  .qflow .conv{font-family:var(--f-mono);font-size:10px;color:var(--celadon);}
+  .qflow .rates{display:flex;gap:0;}
+  .qflow .rate{flex:1;display:flex;flex-direction:column;gap:2px;padding-right:14px;border-right:1px solid var(--hairline);}
+  .qflow .rate + .rate{padding-left:14px;}
+  .qflow .rate:last-child{border-right:0;padding-right:0;}
+  .qflow .rate .k{font-size:11px;color:var(--muted);}
+  .qflow .rate .v{font-family:var(--f-display);font-weight:600;font-size:24px;line-height:1;}
+  .qflow .rate .v u{text-decoration:none;font-family:var(--f-mono);font-size:11px;color:var(--muted);}
+  .qflow .rate .v.good{color:var(--celadon);}
+  .qflow .backlog{display:flex;flex-direction:column;gap:7px;border-top:1px solid var(--hairline);padding-top:12px;}
+  .qflow .backlog .bk-h{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);}
+  .qflow .backlog .bars{display:flex;gap:5px;height:9px;}
+  .qflow .backlog .bars i{border-radius:2px;height:100%;}
+  .qflow .legend{display:flex;gap:14px;font-family:var(--f-mono);font-size:9.5px;color:var(--muted);}
+  .qflow .legend i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:4px;vertical-align:middle;}
+
+  /* throughput ↔ guardrail wall */
+  .wall{display:flex;flex-direction:column;gap:12px;}
+  .wrow{background:var(--paper);border:1px solid var(--hairline);border-radius:var(--r);padding:0;display:grid;grid-template-columns:280px 44px 1fr;align-items:stretch;overflow:hidden;}
+  .wrow .tput{padding:15px 18px;display:flex;flex-direction:column;gap:5px;border-right:1px solid var(--hairline);}
+  .wrow .tput .k{font-size:12px;color:var(--muted);}
+  .wrow .tput .v{font-family:var(--f-display);font-weight:600;font-size:30px;line-height:1;letter-spacing:-.5px;}
+  .wrow .tput .v u{text-decoration:none;font-family:var(--f-mono);font-size:13px;color:var(--muted);}
+  .wrow .tput .tr{font-family:var(--f-mono);font-size:11px;color:var(--celadon);}
+  .wrow .vs{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;background:var(--paper-2);color:var(--muted-2);}
+  .wrow .vs .lk{font-size:16px;}
+  .wrow .vs .lb{font-family:var(--f-mono);font-size:7.5px;letter-spacing:.5px;writing-mode:vertical-rl;text-orientation:upright;}
+  .wrow .guards{padding:13px 16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+  .guard{flex:1;min-width:150px;border:1px solid var(--hairline);border-radius:8px;padding:9px 11px;display:flex;flex-direction:column;gap:3px;background:var(--paper);}
+  .guard.ok{border-left:3px solid var(--celadon);}
+  .guard.warn{border-left:3px solid var(--ochre);background:#faf4e6;}
+  .guard.bad{border-left:3px solid var(--cinnabar);background:#fbf1ea;}
+  .guard .gk{font-size:11px;color:var(--muted);display:flex;justify-content:space-between;gap:8px;}
+  .guard .gk em{font-style:normal;font-family:var(--f-mono);font-size:9px;color:var(--muted-2);}
+  .guard .gv{font-family:var(--f-mono);font-weight:600;font-size:16px;}
+  .guard.ok .gv{color:var(--celadon);} .guard.warn .gv{color:var(--ochre);} .guard.bad .gv{color:var(--cinnabar);}
+  .guard .gt{font-family:var(--f-mono);font-size:9px;color:var(--muted-2);}
+
+  /* compounding (刃B) */
+  .blade{display:grid;grid-template-columns:300px 1fr;gap:20px;align-items:stretch;}
+  .lever{background:var(--paper);border:1px solid var(--hairline);border-radius:var(--r);padding:18px 20px;display:flex;flex-direction:column;gap:10px;border-top:3px solid var(--cinnabar);}
+  .lever .big{font-family:var(--f-display);font-weight:600;font-size:46px;line-height:.95;letter-spacing:-1px;}
+  .lever .big span{font-size:22px;color:var(--cinnabar);}
+  .lever .cap{font-size:12px;color:var(--ink-2);}
+  .lever .cap b{font-weight:500;}
+  .lever .curve{margin-top:auto;border-top:1px solid var(--hairline);padding-top:12px;}
+  .lever .curve .cl{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);font-family:var(--f-mono);margin-bottom:6px;}
+  .lever .curve .cl b{color:var(--celadon);}
+
+  .ledger{background:var(--paper);border:1px solid var(--hairline);border-radius:var(--r);padding:16px 18px;display:flex;flex-direction:column;gap:11px;}
+  .ledger .lh{display:flex;align-items:baseline;justify-content:space-between;}
+  .ledger .lh h3{font-family:var(--f-display);font-weight:600;font-size:14px;margin:0;}
+  .ledger .lh .meta{font-family:var(--f-mono);font-size:10.5px;color:var(--muted);}
+  .ledger .lh .meta b{color:var(--celadon);font-weight:600;}
+  .rule{display:grid;grid-template-columns:1fr auto auto auto;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--hairline);}
+  .rule:first-of-type{border-top:0;}
+  .rule .rn{display:flex;flex-direction:column;gap:1px;min-width:0;}
+  .rule .rn b{font-family:var(--f-mono);font-size:12px;font-weight:600;}
+  .rule .rn span{font-size:10.5px;color:var(--muted);}
+  .rule .kind{font-family:var(--f-mono);font-size:9px;letter-spacing:.5px;padding:2px 7px;border-radius:5px;background:var(--paper-2);border:1px solid var(--hairline);color:var(--muted);text-transform:uppercase;}
+  .rule .cov{font-family:var(--f-mono);font-size:11px;color:var(--ink-2);text-align:right;}
+  .rule .cov span{color:var(--muted);font-size:9.5px;}
+  .rule .st{font-family:var(--f-mono);font-size:9.5px;padding:2px 8px;border-radius:5px;white-space:nowrap;}
+  .st.active{background:rgba(94,125,108,.16);color:#3f5a4d;}
+  .st.canary{background:rgba(193,138,44,.16);color:#8a6113;}
+
+  /* bottom: constrained autonomy + tiers */
+  .bottom{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+  .pair{background:var(--paper);border:1px solid var(--hairline);border-radius:var(--r);padding:16px 18px;display:flex;gap:18px;}
+  .pair .col{flex:1;display:flex;flex-direction:column;gap:5px;}
+  .pair .col + .col{border-left:1px solid var(--hairline);padding-left:18px;}
+  .pair .col .k{font-size:11.5px;color:var(--muted);}
+  .pair .col .v{font-family:var(--f-display);font-weight:600;font-size:30px;line-height:1;}
+  .pair .col .v u{text-decoration:none;font-family:var(--f-mono);font-size:12px;}
+  .pair .col .v u.ok{color:var(--celadon);} .pair .col .v u.warn{color:var(--ochre);}
+  .pair .col .note{font-family:var(--f-mono);font-size:10px;color:var(--muted-2);line-height:1.5;}
+
+  .tiers{background:var(--paper);border:1px solid var(--hairline);border-radius:var(--r);padding:16px 18px;display:flex;flex-direction:column;gap:11px;}
+  .tiers .k{font-size:11.5px;color:var(--muted);}
+  .tiers .bars{display:flex;gap:14px;}
+  .tiers .b{flex:1;display:flex;flex-direction:column;gap:6px;}
+  .tiers .b .name{font-family:var(--f-mono);font-size:9.5px;color:var(--muted);}
+  .tiers .b .track{height:7px;background:var(--paper-2);border-radius:4px;overflow:hidden;}
+  .tiers .b .fill{height:100%;border-radius:4px;}
+  .tiers .b .pct{font-family:var(--f-display);font-weight:600;font-size:18px;}
+
+  .foot{padding:22px 32px 0;border-top:1px solid var(--hairline);margin-top:14px;}
+  .foot p{font-family:var(--f-mono);font-size:10.5px;color:var(--muted-2);max-width:920px;line-height:1.7;margin:0;}
+  .foot p b{color:var(--muted);font-weight:500;}
+
+  @media(max-width:1080px){
+    .app{grid-template-columns:1fr;}
+    .rail{position:static;height:auto;flex-direction:row;flex-wrap:wrap;gap:16px 26px;align-items:center;}
+    .rail .nav-group{flex-direction:row;flex-wrap:wrap;gap:4px;} .rail .nav-label{display:none;} .rail-foot{margin:0 0 0 auto;border:0;padding:0;}
+    .hero,.blade,.bottom{grid-template-columns:1fr;}
+    .wrow{grid-template-columns:1fr;} .wrow .tput{border-right:0;border-bottom:1px solid var(--hairline);} .wrow .vs{display:none;}
+  }
+  @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="rail">
+    <div class="brand"><div class="glyph">司</div><div><div class="name">司南</div><div class="en">Loop Workbench</div></div></div>
+    <nav class="nav-group">
+      <p class="nav-label">执行</p>
+      <a class="nav-item" href="#"><span class="ix">◎</span>编排台 Symphony<span class="dot need"></span></a>
+      <a class="nav-item" href="#"><span class="ix">⬡</span>虚拟办公室<span class="ct">312</span></a>
+      <a class="nav-item" href="#"><span class="ix">⤴</span>复利 · 规则账本<span class="ct">23</span></a>
+      <a class="nav-item" href="#"><span class="ix">⤵</span>Issue 派发<span class="ct">47</span></a>
+      <a class="nav-item on" href="#"><span class="ix">▤</span>度量看板</a>
+    </nav>
+    <nav class="nav-group">
+      <p class="nav-label">资产库 · 共享底座</p>
+      <a class="nav-item" href="#">Loop 蓝图<span class="ct">9</span></a>
+      <a class="nav-item" href="#">Agent · MD<span class="ct">38</span></a>
+      <a class="nav-item" href="#">Skill Hub<span class="ct">214</span></a>
+      <a class="nav-item" href="#">模型 / MaaS<span class="ct">6</span></a>
+    </nav>
+    <div class="rail-foot"><div class="who"><div class="ava">L</div><div class="meta"><b>Lin · QA Lead</b><br><span>质量负责人 · 监督镜</span></div></div></div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <h1>度量看板<small>METRICS COCKPIT</small></h1>
+      <div class="spacer"></div>
+      <div class="lens" role="tablist">
+        <button class="on"><span>◑</span>监督镜</button>
+        <button><span>◐</span>执行镜</button>
+        <button><span>◔</span>资产镜</button>
+      </div>
+      <div class="date">2026 · 06 · 17 周三</div>
+    </div>
+
+    <div class="wrap">
+
+      <!-- HERO: composite health + queue flow -->
+      <section class="hero">
+        <div class="card health">
+          <div class="eyebrow">复合健康 · 吞吐 × 质量 / COMPOSITE HEALTH</div>
+          <div class="lamp-row">
+            <div class="lamp"><i class="on green"></i><i></i><i></i></div>
+            <div class="verdict">健康<span>HEALTHY</span></div>
+          </div>
+          <div class="northstar">
+            <div class="ns-main">
+              <div class="k">北极星 · 受质量约束的自主率</div>
+              <div class="v">68.2<u>%</u></div>
+            </div>
+            <div class="ns-note">裸自主率 <b>73.4%</b><br>− false-autonomy 漏报扣减 <b>5.2pt</b></div>
+            <div class="guards">
+              <div class="g">护栏 <b style="color:var(--celadon-bright)">5/5</b> 未破阈</div>
+              <div class="g"><s>护栏破阈 = 一票否决</s></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card qflow">
+          <div class="eyebrow">决策队列 · 流量(排队论)/ QUEUE FLOW<span class="conv">▼ 净增 &lt;0 · 收敛中</span></div>
+          <div class="rates">
+            <div class="rate"><div class="k">流入</div><div class="v">12<u>/h</u></div></div>
+            <div class="rate"><div class="k">消化</div><div class="v">15<u>/h</u></div></div>
+            <div class="rate"><div class="k">净增</div><div class="v good">−3<u>/h</u></div></div>
+            <div class="rate"><div class="k">最老等待</div><div class="v">14<u>m</u></div></div>
+          </div>
+          <div class="backlog">
+            <div class="bk-h"><span>积压 25 · 按 value-at-risk 分布</span><span style="font-family:var(--f-mono)">VaR ▰</span></div>
+            <div class="bars">
+              <i style="flex:2;background:var(--cinnabar)"></i><i style="flex:5;background:var(--ochre)"></i><i style="flex:18;background:var(--celadon)"></i>
+            </div>
+            <div class="legend"><span><i style="background:var(--cinnabar)"></i>高危 2(逐条)</span><span><i style="background:var(--ochre)"></i>中 5</span><span><i style="background:var(--celadon)"></i>低 18(可批量)</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- THROUGHPUT ↔ GUARDRAIL WALL -->
+      <div>
+        <div class="section-h">
+          <h2>吞吐 ↔ 护栏 对照墙</h2>
+          <span class="sub">指标即奖励函数 · 任何吞吐都禁止单独展示 · 护栏破红阈 = 系统判不健康</span>
+          <span class="badge"><i></i>全部护栏在安全区</span>
+        </div>
+        <div class="wall" style="margin-top:12px;">
+
+          <div class="wrow">
+            <div class="tput"><div class="k">AI 提单接收率</div><div class="v">87.3<u>%</u></div><div class="tr">↑ 4.1 环比</div></div>
+            <div class="vs"><span class="lk">↔</span><span class="lb">护栏</span></div>
+            <div class="guards">
+              <div class="guard ok"><div class="gk">non-issue+dup 占比 <em>压分母?</em></div><div class="gv">9.1%</div><div class="gt">red 阈 ≥ 18% · 安全</div></div>
+              <div class="guard ok"><div class="gk">误判翻案率 <em>挑安全单?</em></div><div class="gv">3.2%</div><div class="gt">red 阈 ≥ 8% · 安全</div></div>
+            </div>
+          </div>
+
+          <div class="wrow">
+            <div class="tput"><div class="k">AI 解单合入率</div><div class="v">71.2<u>%</u></div><div class="tr">↑ 2.8 环比</div></div>
+            <div class="vs"><span class="lk">↔</span><span class="lb">护栏</span></div>
+            <div class="guards">
+              <div class="guard ok"><div class="gk">合入后 14d 回滚率 <em>合低质?</em></div><div class="gv">4.1%</div><div class="gt">red 阈 ≥ 8%</div></div>
+              <div class="guard warn"><div class="gk">AI-MR 人工改写率 <em>自主实为人擦?</em></div><div class="gv">18%</div><div class="gt">red 阈 ≥ 25% · 逼近黄区</div></div>
+              <div class="guard ok"><div class="gk">reopen 率 <em>假闭环?</em></div><div class="gv">5.2%</div><div class="gt">red 阈 ≥ 6%</div></div>
+            </div>
+          </div>
+
+          <div class="wrow">
+            <div class="tput"><div class="k">净 Issue 趋势</div><div class="v">−12<u>/日</u></div><div class="tr">日下降 · healthy 方向</div></div>
+            <div class="vs"><span class="lk">↔</span><span class="lb">护栏</span></div>
+            <div class="guards">
+              <div class="guard ok"><div class="gk">关成 non-issue 占比 <em>关单刷净值?</em></div><div class="gv">稳定</div><div class="gt">未见异常抬升</div></div>
+              <div class="guard ok"><div class="gk">产品停滞探针 <em>雷达也↓?</em></div><div class="gv">正常</div><div class="gt">竞品雷达提单未塌方</div></div>
+              <div class="guard ok"><div class="gk">复审抽样命中率 <em>橡皮图章?</em></div><div class="gv">6.4%</div><div class="gt">red 阈 ≥ 10%</div></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 刃B · COMPOUNDING -->
+      <div>
+        <div class="section-h">
+          <h2>刃B · 判断力复利</h2>
+          <span class="sub">每次人工决策 → 固化成规则 → 自动解决未来同类 · 把人工负载从 O(n) 弯折</span>
+          <span class="badge"><i></i>复利曲线下行 · 健康</span>
+        </div>
+        <div class="blade" style="margin-top:12px;">
+          <div class="lever">
+            <div class="eyebrow">决策杠杆 / DECISION LEVERAGE</div>
+            <div class="big">×6.3</div>
+            <div class="cap">每次人工决策平均消除 <b>6.3 次</b>未来同类介入。</div>
+            <div class="curve">
+              <div class="cl"><span>人工决策 / 千 loop</span><span><b>↓ 41%</b> 近 8 周</span></div>
+              <svg width="100%" height="34" viewBox="0 0 240 34" preserveAspectRatio="none">
+                <polyline points="0,6 34,9 68,11 102,16 136,19 170,24 204,27 240,29" fill="none" stroke="#5E7D6C" stroke-width="2"/>
+                <polyline points="0,6 34,9 68,11 102,16 136,19 170,24 204,27 240,29" fill="none" stroke="#5E7D6C" stroke-width="6" stroke-opacity="0.12"/>
+              </svg>
+            </div>
+          </div>
+
+          <div class="ledger">
+            <div class="lh"><h3>规则账本 · 由决策固化</h3><div class="meta">active <b>23</b> · 覆盖率 <b>38%</b> · 本周省下 <b>1,240</b> 次人工</div></div>
+            <div class="rule">
+              <div class="rn"><b>auth-mw-autoapprove</b><span>源自 Wei 对 #4821 鉴权合入的裁决 · shadow 一致率达标</span></div>
+              <span class="kind">auto-approve</span>
+              <div class="cov">312 <span>命中</span><br>精度 96%</div>
+              <span class="st active">active</span>
+            </div>
+            <div class="rule">
+              <div class="rn"><b>csv-encoding-gate</b><span>把"导出编码"人工验收固化为可机检 Gate</span></div>
+              <span class="kind">gate</span>
+              <div class="cov">88 <span>命中</span><br>精度 99%</div>
+              <span class="st active">active</span>
+            </div>
+            <div class="rule">
+              <div class="rn"><b>pagination-fix-skill</b><span>重复分页修法 → 抽成 Skill,蓝图引用</span></div>
+              <span class="kind">skill</span>
+              <div class="cov">— <span>影子</span><br>精度 91%</div>
+              <span class="st canary">canary</span>
+            </div>
+            <div class="rule">
+              <div class="rn"><b>medium→opus · schema 类</b><span>该类 medium 反复被改写 → 升模型档</span></div>
+              <span class="kind">model</span>
+              <div class="cov">41 <span>命中</span><br>精度 94%</div>
+              <span class="st active">active</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BOTTOM: constrained autonomy + complexity tiers -->
+      <section class="bottom">
+        <div class="pair">
+          <div class="col">
+            <div class="k">受质量约束的自主率</div>
+            <div class="v">68.2<u class="ok">%</u></div>
+            <div class="note">= 裸自主率 73.4% 经 false-autonomy 与回滚率扣减后的"真自主"。北极星只认这个。</div>
+          </div>
+          <div class="col">
+            <div class="k">false-autonomy 漏报率</div>
+            <div class="v">7.1<u class="warn">%</u></div>
+            <div class="note">事后抽审中"该升级却自闭环"的比例。red 阈 ≥ 10%;越低,自主率越可信。</div>
+          </div>
+        </div>
+        <div class="tiers">
+          <div class="k">分复杂度闭环率 · 越难越靠人(合理)</div>
+          <div class="bars">
+            <div class="b"><span class="name">L1–L2 基础</span><div class="track"><div class="fill" style="width:91%;background:var(--celadon)"></div></div><span class="pct">91%</span></div>
+            <div class="b"><span class="name">L3 中等</span><div class="track"><div class="fill" style="width:74%;background:var(--ochre)"></div></div><span class="pct">74%</span></div>
+            <div class="b"><span class="name">L4–L5 专家</span><div class="track"><div class="fill" style="width:38%;background:var(--cinnabar)"></div></div><span class="pct">38%</span></div>
+          </div>
+        </div>
+      </section>
+
+      <div class="foot">
+        <p>设计稿 v1 · 司南 Loop 工作台 · <b>度量看板(PM/QA 角色 · 监督镜)。</b>本屏落地蓝军三条裁决:① 指标即奖励函数 → 任何吞吐都与护栏成对、护栏破阈一票否决;② false-autonomy 约束自主率,北极星不认裸自主;③ 刃B 复利曲线 + 规则账本把"人工判断→可复用资产"显性化、可量化。队列流量头把"人是瓶颈"从隐性变显性。与 v1 作战室共享同一 ID 与状态机,此处是高分辨率原图。</p>
+      </div>
+
+    </div>
+  </div>
+</div>
+</body>
+</html>
