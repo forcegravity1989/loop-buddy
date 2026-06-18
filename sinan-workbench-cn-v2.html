@@ -167,6 +167,20 @@
   .subtabs a.on{color:var(--ink-strong);background:rgba(0,0,0,0.05);font-weight:500;}
   .sublist{display:none;} .sublist.on{display:block;}
 
+  /* 项目健康 · 引领/滞后指标 */
+  .health{display:flex;align-items:center;gap:24px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 24px;flex-wrap:wrap;}
+  .health .overall{display:flex;align-items:center;gap:13px;padding-right:24px;border-right:1px solid var(--border);}
+  .health .bigdot{width:13px;height:13px;border-radius:50%;background:#5E8C63;box-shadow:0 0 0 5px var(--green-bg);flex-shrink:0;}
+  .health .overall .hd{font-size:12.5px;color:var(--muted);}
+  .health .overall .hv{font-family:var(--serif);font-size:21px;color:var(--ink-strong);font-weight:500;line-height:1.15;}
+  .health .dims{display:flex;gap:26px;flex-wrap:wrap;}
+  .health .dim{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink-strong);}
+  .health .dim small{color:var(--muted);font-size:13px;font-weight:400;}
+  .mdesc{font-size:13.5px;color:var(--muted);margin:-6px 0 16px;max-width:60ch;}
+  .mdesc b{color:var(--ink);font-weight:500;}
+  .statc .drives{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:13px;border-top:1px solid var(--border);padding-top:10px;}
+  .statc .drives b{color:var(--blue-tx);font-weight:500;}
+
   @media(max-width:760px){
     main{padding:40px 20px 64px;} .hwrap{padding:12px 20px;gap:14px;flex-wrap:wrap;}
     nav{order:3;width:100%;overflow:auto;} .cmd{display:none;}
@@ -188,7 +202,7 @@
       <a class="on" data-view="home">概览</a>
       <a data-view="detail">Loop 详情</a>
       <a data-view="agents">智能体</a>
-      <a data-view="metrics">概况</a>
+      <a data-view="metrics">项目</a>
       <a data-view="library">资产库</a>
     </nav>
     <div class="hright"><span class="cmd">搜索 <kbd>⌘K</kbd></span><div class="ava">林</div></div>
@@ -369,18 +383,45 @@
     </section>
   </div>
 
-  <!-- ============ 概况(本周) ============ -->
+  <!-- ============ 项目（健康 · 引领/滞后） ============ -->
   <div class="view" id="metrics">
     <div class="greet reveal" style="margin-bottom:8px;">
-      <h1>本周概况</h1>
-      <p>一眼看清四件事:做了多少、你管了多少、问题在变多还是变少、修得稳不稳。</p>
+      <h1>项目健康</h1>
+      <p>一眼看清三件事:项目现在<b>稳不稳</b>、哪些<b>先行指标</b>该现在拨、哪些<b>结果</b>在兑现。</p>
     </div>
-    <section class="block reveal" style="margin-top:34px;">
+
+    <section class="block reveal" style="margin-top:30px;">
+      <div class="lbl"><h2>项目健康度</h2><span class="ln"></span></div>
+      <div class="health">
+        <div class="overall"><span class="bigdot"></span><div><div class="hd">总体</div><div class="hv">健康</div></div></div>
+        <div class="dims">
+          <div class="dim"><span class="dot green"></span>交付速度 <small>正常</small></div>
+          <div class="dim"><span class="dot green"></span>质量 <small>稳</small></div>
+          <div class="dim"><span class="dot green"></span>自主程度 <small>78%</small></div>
+          <div class="dim"><span class="dot yellow"></span>人力负荷 <small>偏紧</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block reveal">
+      <div class="lbl"><h2>引领性指标</h2><span class="ln"></span></div>
+      <p class="mdesc">能提前预警、你<b>现在就能拨动</b>的杠杆——它们是「因」。盯住它们,下面的结果才会跟着动。</p>
       <div class="stats4">
-        <div class="statc"><div class="sv">486</div><div class="sn">自主闭环</div><div class="snote">智能体自己修好并合并的问题</div></div>
-        <div class="statc"><div class="sv">31</div><div class="sn">你介入</div><div class="snote">多是登录、发布这类要点头的事</div></div>
-        <div class="statc"><div class="sv">−12<span class="arr good">↓</span></div><div class="sn">开放问题趋势</div><div class="snote">每天净减少——问题在变少(好)</div></div>
+        <div class="statc"><div class="sv">11<span style="font-size:15px">分</span><span class="arr good">↓</span></div><div class="sn">待你处理 · 队列时长</div><div class="snote">你清得越快,Loop 越快往下走</div><div class="drives">→ 驱动 <b>自主闭环率</b></div></div>
+        <div class="statc"><div class="sv">0.6<span class="arr good">↓</span></div><div class="sn">每个 Loop 平均介入次数</div><div class="snote">介入越少,越接近真自主</div><div class="drives">→ 驱动 <b>自主闭环率</b></div></div>
+        <div class="statc"><div class="sv">2.1%<span class="arr bad">↑</span></div><div class="sn">卡住率</div><div class="snote">卡住的 Loop 占比,越低越好</div><div class="drives">→ 驱动 <b>解决时长</b></div></div>
+        <div class="statc"><div class="sv">3<span style="font-size:15px">/周</span></div><div class="sn">新模式认证速度</div><div class="snote">每认证一类,以后同类自动放行</div><div class="drives">→ 驱动 <b>人力负荷</b></div></div>
+      </div>
+    </section>
+
+    <section class="block reveal">
+      <div class="lbl"><h2>滞后性指标</h2><span class="ln"></span></div>
+      <p class="mdesc">最终的<b>结果记分牌</b>——发生了才知道,改不动了只能看。它们是「果」。</p>
+      <div class="stats4">
+        <div class="statc"><div class="sv">78%<span class="arr good">↑</span></div><div class="sn">自主闭环率</div><div class="snote">Loop 自己干完并合并的占比 · 本月最高</div></div>
         <div class="statc"><div class="sv">4%<span class="arr good">↓</span></div><div class="sn">合并后返工率</div><div class="snote">合并之后基本不用返工</div></div>
+        <div class="statc"><div class="sv">3.2<span style="font-size:15px">h</span><span class="arr good">↓</span></div><div class="sn">上报 → 解决时长</div><div class="snote">从用户上报到修好,越来越快</div></div>
+        <div class="statc"><div class="sv">−12<span class="arr good">↓</span></div><div class="sn">开放问题净变化 / 周</div><div class="snote">每周净减少——问题在变少</div></div>
       </div>
       <div class="trend">
         <div class="th"><span>开放问题 · 近 8 周</span><span><b>在稳步下降</b></span></div>
