@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sinan · Loops</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F7F6F3; --surface:#FFFFFF; --surface-2:#FBFBFA;
+    --ink:#2F3437; --ink-strong:#1A1A1A; --muted:#787774; --faint:#9B9A97;
+    --border:#EAEAEA; --border-2:rgba(0,0,0,0.06);
+    --green-bg:#EDF3EC; --green-tx:#346538;
+    --yellow-bg:#FBF3DB; --yellow-tx:#956400;
+    --red-bg:#FDEBEC; --red-tx:#9F2F2D;
+    --blue-bg:#E1F3FE; --blue-tx:#1F6C9F;
+    --btn:#111111; --btn-hover:#333333;
+    --serif:'Newsreader',Georgia,'Times New Roman',serif;
+    --sans:'SF Pro Display','Helvetica Neue','Switzer',system-ui,-apple-system,sans-serif;
+    --mono:'JetBrains Mono','SF Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;
+    letter-spacing:-0.005em;min-height:100vh;position:relative;
+  }
+  /* ultra-subtle ambient warmth — depth without breaking the calm */
+  .ambient{position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:radial-gradient(620px 480px at 78% -8%, rgba(193,138,44,0.04), transparent 70%),
+               radial-gradient(560px 420px at 8% 108%, rgba(31,108,159,0.03), transparent 70%);}
+  ::selection{background:#1A1A1A;color:#F7F6F3;}
+  a{color:inherit;text-decoration:none;}
+  button{font-family:inherit;cursor:pointer;}
+  :focus-visible{outline:1.5px solid var(--ink-strong);outline-offset:2px;border-radius:4px;}
+
+  /* ---------- header ---------- */
+  header{
+    position:sticky;top:0;z-index:50;
+    background:rgba(247,246,243,0.82);backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--border);
+  }
+  .hwrap{max-width:1080px;margin:0 auto;padding:14px 28px;display:flex;align-items:center;gap:30px;}
+  .mark{display:flex;align-items:baseline;gap:9px;}
+  .mark .cn{font-family:var(--serif);font-weight:600;font-size:20px;color:var(--ink-strong);line-height:1;}
+  .mark .en{font-family:var(--mono);font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--faint);}
+  nav{display:flex;gap:4px;}
+  nav a{font-size:13.5px;color:var(--muted);padding:6px 11px;border-radius:6px;transition:color .15s,background .15s;}
+  nav a:hover{color:var(--ink);background:rgba(0,0,0,0.035);}
+  nav a.on{color:var(--ink-strong);background:rgba(0,0,0,0.05);font-weight:500;}
+  .hright{margin-left:auto;display:flex;align-items:center;gap:14px;}
+  .cmd{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--faint);border:1px solid var(--border);border-radius:7px;padding:5px 9px;background:var(--surface);}
+  .cmd kbd{font-family:var(--mono);font-size:10.5px;color:var(--muted);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 5px;}
+  .ava{width:30px;height:30px;border-radius:7px;background:var(--ink-strong);color:#F7F6F3;display:grid;place-items:center;font-family:var(--serif);font-weight:500;font-size:14px;}
+
+  /* ---------- layout ---------- */
+  main{max-width:1080px;margin:0 auto;padding:64px 28px 96px;position:relative;z-index:1;}
+  .reveal{opacity:0;transform:translateY(12px);}
+  .reveal.in{opacity:1;transform:none;transition:opacity .6s cubic-bezier(.16,1,.3,1),transform .6s cubic-bezier(.16,1,.3,1);}
+
+  /* greeting */
+  .greet h1{font-family:var(--serif);font-weight:500;font-size:40px;line-height:1.1;letter-spacing:-0.025em;color:var(--ink-strong);margin:0 0 12px;}
+  .greet p{font-size:16.5px;color:var(--muted);margin:0;max-width:46ch;}
+  .greet p b{color:var(--ink);font-weight:500;}
+  .pulse{margin-top:22px;display:flex;align-items:center;gap:0;font-family:var(--mono);font-size:12px;color:var(--muted);flex-wrap:wrap;}
+  .pulse .it{display:flex;align-items:baseline;gap:6px;padding:0 18px;border-left:1px solid var(--border);}
+  .pulse .it:first-child{padding-left:0;border-left:0;}
+  .pulse .it b{color:var(--ink-strong);font-weight:500;font-size:13px;}
+  .pulse .it.alert b{color:var(--red-tx);}
+
+  section.block{margin-top:56px;}
+  .lbl{display:flex;align-items:center;gap:12px;margin-bottom:18px;}
+  .lbl h2{font-family:var(--mono);font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:var(--muted);font-weight:500;margin:0;}
+  .lbl .ct{font-family:var(--mono);font-size:11px;color:var(--ink-strong);background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:1px 7px;}
+  .lbl .ln{flex:1;height:1px;background:var(--border);}
+
+  /* needs-you cards */
+  .needs{display:flex;flex-direction:column;gap:12px;}
+  .item{
+    background:var(--surface);border:1px solid var(--border);border-radius:12px;
+    padding:22px 24px;display:grid;grid-template-columns:auto 1fr auto;gap:18px;align-items:center;
+    transition:box-shadow .2s,border-color .2s,transform .2s;
+  }
+  .item:hover{box-shadow:0 2px 8px rgba(0,0,0,0.04);border-color:#E0E0DE;}
+  .dot{width:9px;height:9px;border-radius:50%;margin-top:2px;}
+  .dot.red{background:#C66;box-shadow:0 0 0 4px var(--red-bg);}
+  .dot.yellow{background:#C9A227;box-shadow:0 0 0 4px var(--yellow-bg);}
+  .body .t{font-size:15.5px;font-weight:500;color:var(--ink-strong);letter-spacing:-0.01em;}
+  .body .why{font-size:14px;color:var(--muted);margin-top:3px;}
+  .body .meta{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:7px;display:flex;gap:14px;}
+  .tag{font-family:var(--mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 9px;border-radius:9999px;white-space:nowrap;}
+  .tag.red{background:var(--red-bg);color:var(--red-tx);}
+  .tag.yellow{background:var(--yellow-bg);color:var(--yellow-tx);}
+  .tag.blue{background:var(--blue-bg);color:var(--blue-tx);}
+  .act{display:flex;align-items:center;gap:8px;}
+  .btn{font-size:13.5px;font-weight:500;border-radius:6px;padding:8px 16px;border:1px solid transparent;transition:background .15s,transform .08s,border-color .15s;}
+  .btn.primary{background:var(--btn);color:#fff;}
+  .btn.primary:hover{background:var(--btn-hover);}
+  .btn:active{transform:scale(.98);}
+  .btn.ghost{background:transparent;color:var(--muted);border-color:var(--border);}
+  .btn.ghost:hover{color:var(--ink);border-color:var(--border-2);}
+
+  /* running rollup */
+  .run{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+  .grp{display:grid;grid-template-columns:1fr auto auto auto;gap:20px;align-items:center;padding:18px 24px;border-top:1px solid var(--border);transition:background .15s;cursor:pointer;}
+  .grp:first-child{border-top:0;}
+  .grp:hover{background:var(--surface-2);}
+  .grp .gn{font-size:15px;color:var(--ink-strong);font-weight:500;}
+  .grp .gn small{display:block;font-weight:400;font-size:13px;color:var(--muted);margin-top:1px;letter-spacing:0;}
+  .grp .cnt{font-family:var(--mono);font-size:13px;color:var(--ink);}
+  .grp .cnt span{color:var(--faint);}
+  .chev{color:var(--faint);display:flex;}
+
+  /* activity */
+  .feed{display:flex;flex-direction:column;}
+  .ev{display:grid;grid-template-columns:64px 1fr;gap:18px;padding:14px 4px;border-bottom:1px solid var(--border);align-items:baseline;}
+  .ev:last-child{border-bottom:0;}
+  .ev .tm{font-family:var(--mono);font-size:12px;color:var(--faint);}
+  .ev .tx{font-size:14.5px;color:var(--ink);}
+  .ev .tx b{font-family:var(--mono);font-size:12.5px;font-weight:500;color:var(--muted);}
+  .ev .tx em{font-style:normal;color:var(--red-tx);}
+
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:48px;}
+  footer{max-width:1080px;margin:0 auto;padding:0 28px 70px;position:relative;z-index:1;}
+  footer p{font-size:13px;color:var(--faint);max-width:60ch;line-height:1.7;border-top:1px solid var(--border);padding-top:22px;}
+
+  @media(max-width:760px){
+    main{padding:40px 20px 64px;} .hwrap{padding:12px 20px;gap:16px;}
+    nav,.cmd{display:none;} .greet h1{font-size:32px;}
+    .item{grid-template-columns:auto 1fr;} .item .act{grid-column:2;justify-content:flex-start;}
+    .twocol{grid-template-columns:1fr;gap:40px;}
+    .grp{grid-template-columns:1fr auto;}
+    .grp .cnt,.grp .chev{display:none;}
+  }
+  @media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;}}
+</style>
+</head>
+<body>
+<div class="ambient"></div>
+
+<header>
+  <div class="hwrap">
+    <div class="mark"><span class="cn">司南</span><span class="en">Sinan</span></div>
+    <nav>
+      <a class="on" href="#">Loops</a>
+      <a href="#">Agents</a>
+      <a href="#">Activity</a>
+      <a href="#">Library</a>
+    </nav>
+    <div class="hright">
+      <span class="cmd">Search <kbd>⌘K</kbd></span>
+      <div class="ava">L</div>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- greeting + quiet overview -->
+  <div class="greet reveal">
+    <h1>Good afternoon, Lin.</h1>
+    <p><b>5 loops</b> need your input. The other <b>312</b> are running on their own, and nothing is broken.</p>
+    <div class="pulse">
+      <span class="it"><b>1,284</b> agents</span>
+      <span class="it"><b>312</b> running</span>
+      <span class="it alert"><b>5</b> need you</span>
+      <span class="it"><b>0</b> errors</span>
+    </div>
+  </div>
+
+  <!-- NEEDS YOU -->
+  <section class="block reveal">
+    <div class="lbl"><h2>Needs you</h2><span class="ct">5</span><span class="ln"></span></div>
+    <div class="needs">
+
+      <div class="item">
+        <span class="dot red"></span>
+        <div class="body">
+          <div class="t">Approve a fix to the login flow</div>
+          <div class="why">The fix is ready and tested, but it changes login — agents don't merge that on their own.</div>
+          <div class="meta"><span>fix #4821</span><span>waiting 14m</span></div>
+        </div>
+        <div class="act"><span class="tag red">Approve</span><button class="btn primary">Review</button></div>
+      </div>
+
+      <div class="item">
+        <span class="dot red"></span>
+        <div class="body">
+          <div class="t">Two agents disagree on a caching fix</div>
+          <div class="why">They proposed different approaches and couldn't settle it. You decide the direction.</div>
+          <div class="meta"><span>review #4760</span><span>waiting 22m</span></div>
+        </div>
+        <div class="act"><span class="tag red">Decide</span><button class="btn primary">Compare</button></div>
+      </div>
+
+      <div class="item">
+        <span class="dot yellow"></span>
+        <div class="body">
+          <div class="t">A release is ready to ship</div>
+          <div class="why">Everything passed. It goes out to 3 repositories, so a person signs off.</div>
+          <div class="meta"><span>release · v2.4</span><span>ready</span></div>
+        </div>
+        <div class="act"><span class="tag yellow">Confirm</span><button class="btn primary">Approve</button></div>
+      </div>
+
+      <div class="item">
+        <span class="dot yellow"></span>
+        <div class="body">
+          <div class="t">A loop is stuck — test server is unreachable</div>
+          <div class="why">The agent can't run tests and paused itself instead of guessing. Likely an environment issue.</div>
+          <div class="meta"><span>fix #4799</span><span>paused 6m</span></div>
+        </div>
+        <div class="act"><button class="btn ghost">Snooze</button><button class="btn primary">Look</button></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- RUNNING -->
+  <section class="block reveal">
+    <div class="lbl"><h2>Running on their own</h2><span class="ct">312</span><span class="ln"></span></div>
+    <div class="run">
+      <div class="grp">
+        <div class="gn">Fixing reported bugs<small>From user reports and triage</small></div>
+        <span class="cnt">287 <span>loops</span></span>
+        <span class="tag blue">Healthy</span>
+        <span class="chev"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      </div>
+      <div class="grp">
+        <div class="gn">Sorting new reports<small>Deciding what's a real bug, a duplicate, or noise</small></div>
+        <span class="cnt">18 <span>loops</span></span>
+        <span class="tag blue">Healthy</span>
+        <span class="chev"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      </div>
+      <div class="grp">
+        <div class="gn">Scanning competitors<small>Turning what it finds into ideas worth filing</small></div>
+        <span class="cnt">7 <span>loops</span></span>
+        <span class="tag blue">Healthy</span>
+        <span class="chev"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ACTIVITY + A QUIET HEALTH NOTE -->
+  <section class="block reveal">
+    <div class="twocol">
+      <div>
+        <div class="lbl"><h2>Recent activity</h2><span class="ln"></span></div>
+        <div class="feed">
+          <div class="ev"><span class="tm">14:22</span><span class="tx"><b>fix #4821</b> asked for your help — <em>touches login</em></span></div>
+          <div class="ev"><span class="tm">14:18</span><span class="tx"><b>fix #4830</b> fixed a pagination bug and merged it</span></div>
+          <div class="ev"><span class="tm">14:11</span><span class="tx"><b>triage</b> sorted 6 new reports — 4 real, 2 duplicates</span></div>
+          <div class="ev"><span class="tm">14:03</span><span class="tx"><b>scan</b> found 2 ideas worth filing</span></div>
+          <div class="ev"><span class="tm">13:58</span><span class="tx"><b>fix #4812</b> opened a fix for a CSV export bug</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="lbl"><h2>This week</h2><span class="ln"></span></div>
+        <div class="feed">
+          <div class="ev"><span class="tm">Fixed</span><span class="tx"><b>486</b> bugs closed on their own</span></div>
+          <div class="ev"><span class="tm">You</span><span class="tx">Stepped in <b>31</b> times — mostly logins &amp; releases</span></div>
+          <div class="ev"><span class="tm">Trend</span><span class="tx">Open bugs are going down, week over week</span></div>
+          <div class="ev"><span class="tm">Quality</span><span class="tx">Of fixes that merged, <b>4%</b> needed a redo</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>Redesign v2 — plain language over jargon. One calm home: what needs you, what's running, what just happened. The thousands of agents are summarized, not listed. Internal concepts (rules, gates, routing) live in the engineering docs, not on screen.</p>
+</footer>
+
+<script>
+  const io = new IntersectionObserver((entries)=>{
+    entries.forEach((e,i)=>{ if(e.isIntersecting){ e.target.style.transitionDelay=(i*60)+'ms'; e.target.classList.add('in'); io.unobserve(e.target);} });
+  },{threshold:0.08});
+  document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>
