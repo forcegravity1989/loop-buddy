@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Builders' Workbench</title>
+<style>
+  :root{
+    --paper:#F1EFE7; --paper-2:#F6F4EC; --surface:#FCFBF7; --surface-2:#FFFFFF;
+    --ink:#1A1A17; --ink-2:#6C6A61; --ink-3:#9C9A8E;
+    --line:#E4E0D4; --line-2:#D8D3C4;
+    --clay:#CC785C; --clay-deep:#A9512F; --clay-soft:#EFDCD1;
+    --ok:#477A53; --ok-soft:#E2ECE2; --warn:#B0792B; --warn-soft:#F2E8CF; --risk:#AF4736; --risk-soft:#F2DCD5;
+    --r:13px; --r-sm:9px; --r-xs:6px;
+    --serif:"Tiempos Headline","Iowan Old Style",Georgia,"Songti SC",serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Inter,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;height:100vh;overflow:hidden;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .shell{display:flex;flex-direction:column;height:100vh}
+  /* top bar */
+  .bar{height:58px;flex:none;display:flex;align-items:center;gap:18px;padding:0 22px;border-bottom:1px solid var(--line);background:var(--surface)}
+  .wordmark{font-family:var(--serif);font-size:18px;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
+  .wordmark .d{width:9px;height:9px;border-radius:50%;background:var(--clay)}
+  .wordmark b{font-weight:600}
+  .grow{flex:1}
+  .seg{display:flex;background:var(--paper-2);border:1px solid var(--line);border-radius:9px;padding:3px}
+  .seg button{border:none;background:none;font-family:var(--sans);font-size:13px;color:var(--ink-2);padding:6px 14px;border-radius:7px;cursor:pointer;font-weight:500}
+  .seg button.on{background:var(--surface-2);color:var(--ink);box-shadow:0 1px 2px rgba(60,50,30,.07)}
+  .ex{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--ink-2);cursor:pointer;user-select:none;border:1px solid var(--line);border-radius:20px;padding:6px 12px}
+  .ex.on{border-color:var(--clay);color:var(--clay-deep);background:var(--clay-soft)}
+  .ex .sw{width:30px;height:17px;border-radius:9px;background:var(--line-2);position:relative;transition:.15s}
+  .ex.on .sw{background:var(--clay)}
+  .ex .sw i{position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;transition:.15s}
+  .ex.on .sw i{left:15px}
+  .live{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ink-3)}
+  .live .p{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:pulse 2.2s infinite}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+  /* three-pane */
+  .app{flex:1;display:grid;grid-template-columns:250px 1fr 320px;min-height:0}
+  .rail,.main,.aside{overflow:auto;min-height:0}
+  .rail{border-right:1px solid var(--line);background:var(--paper-2);padding:16px 12px}
+  .aside{border-left:1px solid var(--line);background:var(--surface);padding:18px 16px}
+  .main{padding:26px 30px 60px}
+  /* rail */
+  .rail .h{display:flex;align-items:baseline;justify-content:space-between;padding:4px 8px 12px;color:var(--ink-3);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:600}
+  .counts{display:flex;gap:6px;padding:0 6px 12px}
+  .cpill{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:7px 2px}
+  .cpill .n{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+  .cpill .l{font-size:10px;color:var(--ink-3)}
+  .cpill.red .n{color:var(--risk)} .cpill.amber .n{color:var(--warn)} .cpill.green .n{color:var(--ok)}
+  .pitem{display:flex;gap:10px;align-items:flex-start;padding:10px 10px;border-radius:10px;cursor:pointer;margin-bottom:2px}
+  .pitem:hover{background:var(--surface)}
+  .pitem.sel{background:var(--clay-soft)}
+  .pitem.sel .pn{color:var(--clay-deep)}
+  .pitem .dot{width:9px;height:9px;border-radius:50%;margin-top:5px;flex:none}
+  .pitem .pn{font-weight:600;font-size:13.5px;line-height:1.35}
+  .pitem .pm{font-size:11.5px;color:var(--ink-3);margin-top:1px}
+  .dot.green{background:var(--ok)} .dot.amber{background:var(--warn)} .dot.red{background:var(--risk)}
+  /* overview grid */
+  .ov-h{font-family:var(--serif);font-size:24px;font-weight:500;letter-spacing:-.01em;margin:0 0 3px}
+  .ov-sub{color:var(--ink-2);font-size:13.5px;margin:0 0 20px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:13px}
+  .pcard{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--line-2);border-radius:var(--r);padding:15px 16px;cursor:pointer;transition:.12s}
+  .pcard:hover{border-color:var(--clay);transform:translateY(-1px)}
+  .pcard.green{border-left-color:var(--ok)} .pcard.amber{border-left-color:var(--warn)} .pcard.red{border-left-color:var(--risk)}
+  .pcard .top{display:flex;align-items:center;gap:8px}
+  .pcard .nm{font-weight:650;font-size:14.5px}
+  .pcard .ns{font-size:12px;color:var(--ink-2);margin-top:8px}
+  .pcard .ns b{color:var(--ink);font-weight:600}
+  .pcard .ph{font-size:11px;color:var(--ink-3);margin-top:3px}
+  .bar2{height:5px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:11px}
+  .bar2 i{display:block;height:100%;background:var(--clay)}
+  .flags{display:flex;gap:5px;flex-wrap:wrap;margin-top:10px}
+  .badge{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:20px}
+  .b-green{background:var(--ok-soft);color:var(--ok)} .b-amber{background:var(--warn-soft);color:var(--warn)} .b-red{background:var(--risk-soft);color:var(--risk)} .b-soft{background:var(--paper-2);color:var(--ink-2);border:1px solid var(--line)}
+  /* project detail */
+  .back{display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);font-size:13px;cursor:pointer;border:none;background:none;padding:0;margin-bottom:16px;font-family:var(--sans)}
+  .back:hover{color:var(--clay-deep)}
+  .phead{display:flex;align-items:flex-start;gap:12px;margin-bottom:4px}
+  .phead h2{font-family:var(--serif);font-weight:500;font-size:26px;letter-spacing:-.01em;margin:0}
+  .phead .sp{flex:1}
+  .pmeta{color:var(--ink-2);font-size:13px;margin-bottom:22px}
+  .pmeta b{color:var(--ink);font-weight:600}
+  /* PMBOK rail */
+  .label{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:600;margin:24px 0 10px}
+  .phaserail{display:flex;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--surface)}
+  .phaserail .seg2{flex:1;padding:12px 12px 11px;border-right:1px solid var(--line);position:relative}
+  .phaserail .seg2:last-child{border-right:none}
+  .phaserail .seg2 .zh{font-weight:650;font-size:13.5px}
+  .phaserail .seg2 .en{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);margin-top:1px}
+  .phaserail .seg2 .nt{font-size:10.5px;margin-top:7px;color:var(--ink-3)}
+  .phaserail .seg2.done{background:var(--paper-2)} .phaserail .seg2.done .zh{color:var(--ink-2)}
+  .phaserail .seg2.cur{background:var(--clay-soft)} .phaserail .seg2.cur .zh{color:var(--clay-deep)}
+  .phaserail .seg2.free .nt{color:var(--ok);font-weight:600}
+  /* control points grouped by phase */
+  .cpgroup{margin-top:6px}
+  .cpgroup .gh{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-3);margin:16px 0 7px}
+  .cpgroup .gh .gl{font-weight:650;color:var(--ink-2)}
+  .cprow{display:flex;gap:13px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px 15px;margin-bottom:8px}
+  .cprow .ic{width:24px;height:24px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff}
+  .s-done{background:var(--ok)} .s-active{background:var(--clay)} .s-alert{background:var(--risk)} .s-warn{background:var(--warn)}
+  .s-ok{background:var(--surface-2);border:1.5px solid var(--ok);color:var(--ok)} .s-pending{background:var(--surface-2);border:1.5px solid var(--line-2);color:var(--ink-3)}
+  .cprow .bd{flex:1}
+  .cprow .nm{font-weight:650;font-size:14px;display:flex;align-items:center;gap:8px}
+  .cprow .ds{font-size:13px;color:var(--ink-2);margin-top:3px}
+  .freebox{background:var(--ok-soft);border:1px dashed var(--ok);border-radius:var(--r-sm);padding:13px 15px;color:var(--ok);font-size:13px;margin-bottom:8px}
+  .freebox b{font-weight:700}
+  /* indicators */
+  .inds{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px}
+  .indbox{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px 15px}
+  .indbox h5{margin:0 0 9px;font-size:12.5px;display:flex;align-items:center;gap:7px;color:var(--ink)}
+  .indbox h5 .d{width:8px;height:8px;border-radius:50%}
+  .kv{display:flex;justify-content:space-between;font-size:13px;padding:4px 0;color:var(--ink-2)}
+  .kv b{font-weight:650;font-variant-numeric:tabular-nums}
+  .up{color:var(--ok)} .down{color:var(--risk)} .flat{color:var(--ink-3)}
+  /* aside attention feed */
+  .aside .ah{font-family:var(--serif);font-size:16px;margin:2px 0 3px}
+  .aside .asub{font-size:12px;color:var(--ink-3);margin-bottom:16px;line-height:1.5}
+  .feed .it{border-top:1px solid var(--line);padding:13px 0}
+  .feed .it:first-child{border-top:none}
+  .feed .it .r1{display:flex;align-items:center;gap:8px}
+  .feed .it .sev{width:8px;height:8px;border-radius:50%;flex:none}
+  .feed .it .pj{font-weight:650;font-size:13px}
+  .feed .it .cp{font-size:11px;color:var(--ink-3);margin-left:auto}
+  .feed .it .tx{font-size:12.5px;color:var(--ink-2);margin-top:5px;line-height:1.5}
+  .feed .empty{color:var(--ok);font-size:13px;padding:14px 0}
+  .srcnote{margin-top:20px;padding-top:14px;border-top:1px dashed var(--line);font-size:11.5px;color:var(--ink-3);line-height:1.6}
+  .srcnote b{color:var(--ink-2)}
+  @media(max-width:980px){ body{overflow:auto;height:auto} .shell{height:auto} .app{grid-template-columns:1fr} .rail,.aside{border:none;border-bottom:1px solid var(--line)} }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="bar">
+    <div class="wordmark"><span class="d"></span>Builders' <b>Workbench</b></div>
+    <div class="grow"></div>
+    <div class="seg" id="seg">
+      <button data-v="overview" class="on">组合概览</button>
+      <button data-v="project">单项目</button>
+    </div>
+    <div class="ex" id="ex"><span class="sw"><i></i></span>按异常管理</div>
+    <div class="live"><span class="p"></span>实时汇聚中</div>
+  </header>
+
+  <div class="app">
+    <aside class="rail">
+      <div class="h"><span>项目</span><span id="railCount"></span></div>
+      <div class="counts" id="counts"></div>
+      <div id="railList"></div>
+    </aside>
+
+    <main class="main" id="main"></main>
+
+    <aside class="aside">
+      <div class="ah">工作台在替你盯着</div>
+      <div class="asub">项目经理的活已并入系统。绿色隐身，只有红/黄才出声。</div>
+      <div class="feed" id="feed"></div>
+      <div class="srcnote">数据自动汇聚：<b>git / PR</b> · <b>CI / eval</b> · <b>埋点 / 数仓</b> · <b>竞品监控</b>。无需任何人填表或开状态会。</div>
+    </aside>
+  </div>
+</div>
+
+<script>
+const PHASES=[{zh:"启动",en:"Initiating"},{zh:"规划",en:"Planning"},{zh:"执行",en:"Executing"},{zh:"监控",en:"Monitoring"},{zh:"收尾",en:"Closing"}];
+const CP=[
+  {name:"北极星与意图对齐",phase:0,tag:"北极星指标"},
+  {name:"竞品与基线扫描",phase:0,tag:"竞品对比"},
+  {name:"需求导入与优先级",phase:1,tag:"需求导入"},
+  {name:"实时进度信号",phase:3,tag:"进度跟踪"},
+  {name:"质量与评估门",phase:3,tag:""},
+  {name:"滞后指标回收",phase:4,tag:"滞后性指标"}
+];
+const HMAP={green:"健康",amber:"需关注",red:"需立即处理"};
+const SYM={done:["s-done","✓"],active:["s-active","→"],alert:["s-alert","!"],warn:["s-warn","!"],ok:["s-ok","✓"],pending:["s-pending","·"]};
+const PROJECTS=[
+  {id:"p1",name:"内联评估面板",owner:"美 (Mei)",ns:"周活跃 Builder 数",health:"green",phase:2,progress:72,flags:[],
+   cps:["done","done","done","ok","pending","pending"],
+   detail:["已对齐：服务周活跃 Builder 数，成功标准含 eval ≥ 90%","对手暂无实质动作","队列 4 项 · WIP 2/3，按北极星打分","最近活动 6 小时前 · 无停滞","待上线前触发评估门","上线后第 2 周回收留存"],
+   leading:[["激活率","61%","up"],["周期时间","3.1 天","up"],["eval 通过率","94%","up"]], lagging:[["周留存","待回收","flat"]]},
+  {id:"p2",name:"Agent 记忆 v2",owner:"Karan",ns:"周活跃 Builder 数",health:"amber",phase:2,progress:45,flags:["进度停滞 4 天"],
+   cps:["done","done","done","alert","pending","pending"],
+   detail:["已对齐","对手暂无实质动作","队列 3 项 · WIP 1/3","已停滞 4 天 · 无新提交 / PR —— 自动告警","评估门未触发","未上线"],
+   leading:[["上线首周使用","—","flat"],["周期时间","停滞 4 天","down"],["eval 通过率","88%","up"]], lagging:[["周留存","待回收","flat"]]},
+  {id:"p3",name:"竞品对标：Cursor 能力差距",owner:"Lin",ns:"（未对齐）",health:"red",phase:0,progress:12,flags:["北极星未对齐","竞品有实质动作"],
+   cps:["alert","alert","pending","pending","pending","pending"],
+   detail:["北极星未声明 —— 先对齐再投入","监测到对手上周发布同类能力 —— 主动告警","队列未建立","仅零星探索提交","评估门未触发","未上线"],
+   leading:[["—","—","flat"]], lagging:[["—","—","flat"]]},
+  {id:"p4",name:"定价实验",owner:"Sofia",ns:"净收入留存 (NRR)",health:"green",phase:4,progress:100,flags:[],
+   cps:["done","done","done","done","done","active"],
+   detail:["已对齐：NRR","竞品定价已基线","队列已清空","已交付 · 信号正常","评估门通过 · 已上线","正在回收滞后指标（NRR / 流失），观察期 4 周"],
+   leading:[["实验显著性","p<0.05","up"],["升级点击率","+18%","up"]], lagging:[["净收入留存","回收中 · 第 2 周","flat"],["流失率","待观察","flat"]]},
+  {id:"p5",name:"新手引导改版",owner:"Tom",ns:"首值时间 (TTFV)",health:"amber",phase:1,progress:35,flags:["范围蔓延 · WIP 超限"],
+   cps:["done","done","alert","pending","pending","pending"],
+   detail:["已对齐：TTFV","对手已基线","队列 7 项 · WIP 4/3 超限 —— 范围蔓延告警","待进入执行","评估门未触发","未上线"],
+   leading:[["首值时间","目标 -30%","up"],["上线首周使用","—","flat"]], lagging:[["周留存","待回收","flat"]]},
+  {id:"p6",name:"安全评估套件",owner:"Ana",ns:"高风险拦截率",health:"green",phase:3,progress:88,flags:[],
+   cps:["done","done","done","ok","active","pending"],
+   detail:["已对齐：高风险拦截率","对手已基线","队列 2 项 · WIP 1/3","活动正常","自动 eval 通过，待 1 次关键人工评审","上线后回收误报相关滞后指标"],
+   leading:[["拦截率","99.2%","up"],["eval 通过率","97%","up"]], lagging:[["误报投诉","待回收","flat"]]}
+];
+
+let view="overview", currentId="p1", exceptionOnly=false;
+
+function railProjects(){ return exceptionOnly?PROJECTS.filter(p=>p.health!=="green"):PROJECTS; }
+
+function renderRail(){
+  const c={green:0,amber:0,red:0}; PROJECTS.forEach(p=>c[p.health]++);
+  document.getElementById("counts").innerHTML=
+    `<div class="cpill red"><span class="n">${c.red}</span><span class="l">立即处理</span></div>
+     <div class="cpill amber"><span class="n">${c.amber}</span><span class="l">需关注</span></div>
+     <div class="cpill green"><span class="n">${c.green}</span><span class="l">健康</span></div>`;
+  const list=railProjects().sort((a,b)=>({red:0,amber:1,green:2}[a.health]-{red:0,amber:1,green:2}[b.health]));
+  document.getElementById("railCount").textContent=list.length;
+  document.getElementById("railList").innerHTML=list.map(p=>
+    `<div class="pitem ${p.id===currentId&&view==='project'?'sel':''}" onclick="open_('${p.id}')">
+       <span class="dot ${p.health}"></span>
+       <div><div class="pn">${p.name}</div><div class="pm">${p.owner} · ${PHASES[p.phase].zh}</div></div>
+     </div>`).join("");
+}
+
+function pcard(p){
+  const fl=p.flags.map(f=>`<span class="badge ${p.health==='red'?'b-red':'b-amber'}">${f}</span>`).join("");
+  return `<div class="pcard ${p.health}" onclick="open_('${p.id}')">
+    <div class="top"><span class="dot ${p.health}"></span><span class="nm">${p.name}</span>
+      <span class="badge b-${p.health}" style="margin-left:auto">${HMAP[p.health]}</span></div>
+    <div class="ns">北极星：<b>${p.ns}</b></div>
+    <div class="ph">${PHASES[p.phase].zh} · ${PHASES[p.phase].en} · 进度 ${p.progress}%</div>
+    <div class="bar2"><i style="width:${p.progress}%"></i></div>
+    ${fl?`<div class="flags">${fl}</div>`:""}
+  </div>`;
+}
+
+function renderOverview(){
+  const list=railProjects().sort((a,b)=>({red:0,amber:1,green:2}[a.health]-{red:0,amber:1,green:2}[b.health]));
+  document.getElementById("main").innerHTML=
+    `<h2 class="ov-h">组合概览</h2>
+     <p class="ov-sub">${exceptionOnly?'按异常管理 · 仅显示红 / 黄项目':'按健康度排序 · 红 / 黄置顶'}。点任意项目进入它的经典生命周期。</p>
+     <div class="grid">${list.map(pcard).join("")||'<div class="ov-sub">没有需要关注的项目 —— 全部健康。</div>'}</div>`;
+}
+
+function renderProject(){
+  const p=PROJECTS.find(x=>x.id===currentId)||PROJECTS[0];
+  const rail=PHASES.map((ph,i)=>{
+    const cls=i<p.phase?"done":(i===p.phase?"cur":"");
+    const free=i===2?" free":"";
+    const nt=i===2?'<div class="nt">放开构建 · 无门</div>':`<div class="nt">${CP.filter(c=>c.phase===i).length?CP.filter(c=>c.phase===i).length+' 个控制点':'—'}</div>`;
+    return `<div class="seg2 ${cls}${free}"><div class="zh">${ph.zh}</div><div class="en">${ph.en}</div>${nt}</div>`;
+  }).join("");
+
+  let groups="";
+  PHASES.forEach((ph,pi)=>{
+    const idxs=CP.map((c,gi)=>({c,gi})).filter(o=>o.c.phase===pi);
+    if(pi===2){ groups+=`<div class="cpgroup"><div class="gh"><span class="gl">执行 · Executing</span></div>
+       <div class="freebox"><b>执行阶段无控制点</b> —— 把 Builder 放开去构建，工作台只在停滞时才出声。</div></div>`; return; }
+    if(!idxs.length) return;
+    const rows=idxs.map(({c,gi})=>{
+      const st=p.cps[gi], [scls,sym]=SYM[st];
+      const tag=c.tag?`<span class="badge b-soft">${c.tag}</span>`:"";
+      return `<div class="cprow"><div class="ic ${scls}">${sym}</div>
+        <div class="bd"><div class="nm">${gi+1}. ${c.name} ${tag}</div><div class="ds">${p.detail[gi]}</div></div></div>`;
+    }).join("");
+    groups+=`<div class="cpgroup"><div class="gh"><span class="gl">${ph.zh} · ${ph.en}</span></div>${rows}</div>`;
+  });
+
+  const lead=p.leading.map(([k,v,t])=>`<div class="kv"><span>${k}</span><b class="${t}">${v}</b></div>`).join("");
+  const lag=p.lagging.map(([k,v,t])=>`<div class="kv"><span>${k}</span><b class="${t}">${v}</b></div>`).join("");
+
+  document.getElementById("main").innerHTML=
+    `<button class="back" onclick="toOverview()">‹ 组合概览</button>
+     <div class="phead"><h2>${p.name}</h2><div class="sp"></div><span class="badge b-${p.health}">${HMAP[p.health]}</span></div>
+     <div class="pmeta">${p.owner} · 北极星：<b>${p.ns}</b> · 进度 <b>${p.progress}%</b> · 当前 <b>${PHASES[p.phase].zh}</b></div>
+     <div class="label">经典生命周期（PMBOK 过程组）</div>
+     <div class="phaserail">${rail}</div>
+     <div class="label">控制点 · 挂在经典流程上</div>
+     ${groups}
+     <div class="label">指标</div>
+     <div class="inds">
+       <div class="indbox"><h5><span class="d" style="background:var(--clay)"></span>先行指标 · 在途纠偏</h5>${lead}</div>
+       <div class="indbox"><h5><span class="d" style="background:var(--warn)"></span>滞后指标 · 事后验证</h5>${lag}</div>
+     </div>`;
+}
+
+function renderFeed(){
+  const items=[];
+  PROJECTS.forEach(p=>p.cps.forEach((s,i)=>{ if(s==="alert"||s==="warn") items.push({p,i,s}); }));
+  items.sort((a,b)=>(a.s==="alert"?0:1)-(b.s==="alert"?0:1));
+  document.getElementById("feed").innerHTML = items.length? items.map(a=>
+    `<div class="it"><div class="r1"><span class="sev" style="background:${a.s==='alert'?'var(--risk)':'var(--warn)'}"></span>
+       <span class="pj">${a.p.name}</span><span class="cp">${CP[a.i].name}</span></div>
+     <div class="tx">${a.p.detail[a.i]}</div></div>`).join("")
+    : `<div class="empty">✓ 暂无告警 —— 所有项目健康，放手让 Builder 构建。</div>`;
+}
+
+function renderMain(){ view==="project"?renderProject():renderOverview(); }
+function renderAll(){ renderRail(); renderMain(); renderFeed(); syncSeg(); }
+function open_(id){ currentId=id; view="project"; renderAll(); }
+function toOverview(){ view="overview"; renderAll(); }
+function syncSeg(){ [...document.querySelectorAll("#seg button")].forEach(b=>b.classList.toggle("on",b.dataset.v===view)); }
+
+document.getElementById("seg").addEventListener("click",e=>{
+  if(!e.target.dataset.v) return;
+  view=e.target.dataset.v; if(view==="project"&&!currentId) currentId=PROJECTS[0].id; renderAll();
+});
+document.getElementById("ex").addEventListener("click",function(){
+  exceptionOnly=!exceptionOnly; this.classList.toggle("on",exceptionOnly); renderAll();
+});
+
+renderAll();
+</script>
+</body>
+</html>
