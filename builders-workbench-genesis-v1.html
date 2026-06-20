@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Builders' Workbench · 接入家底</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F1EFE7; --paper-2:#F6F4EC; --surface:#FCFBF7; --surface-2:#FFFFFF;
+    --ink:#1A1A17; --ink-2:#6C6A61; --ink-3:#9C9A8E;
+    --line:#E4E0D4; --line-2:#D8D3C4;
+    --clay:#CC785C; --clay-deep:#A9512F; --clay-soft:#EFDCD1;
+    --ok:#477A53; --ok-soft:#E2ECE2; --warn:#B0792B; --warn-soft:#F2E8CF; --risk:#AF4736;
+    --blue:#3E6B8C; --blue-soft:#E2EBF0;
+    --r:13px; --r-sm:9px; --r-xs:6px;
+    --serif:"Tiempos Headline","Iowan Old Style",Georgia,"Songti SC",serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB",Inter,sans-serif;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;height:100vh;overflow:hidden;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  button{font-family:inherit;cursor:pointer}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .shell{display:flex;flex-direction:column;height:100vh}
+
+  /* top bar + stepper */
+  .bar{height:58px;flex:none;display:flex;align-items:center;gap:20px;padding:0 22px;border-bottom:1px solid var(--line);background:var(--surface)}
+  .wordmark{font-family:var(--serif);font-size:18px;letter-spacing:-.01em;display:flex;align-items:center;gap:9px;white-space:nowrap}
+  .wordmark .d{width:9px;height:9px;border-radius:50%;background:var(--clay)}
+  .wordmark b{font-weight:600}
+  .stepper{display:flex;align-items:center;gap:7px;margin:0 auto}
+  .stepper .st{display:flex;align-items:center;gap:8px;color:var(--ink-3);font-size:13px}
+  .stepper .st .sn{width:21px;height:21px;border-radius:50%;border:1.5px solid var(--line-2);display:grid;place-items:center;font-size:12px;font-weight:600;font-family:var(--mono)}
+  .stepper .st.on{color:var(--ink)} .stepper .st.on .sn{background:var(--clay);border-color:var(--clay);color:#fff}
+  .stepper .st.done{color:var(--ink-2)} .stepper .st.done .sn{background:var(--ok);border-color:var(--ok);color:#fff}
+  .stepper .dash{width:26px;height:1.5px;background:var(--line-2)}
+  .skip{font-size:12.5px;color:var(--ink-3);border:1px solid var(--line);border-radius:8px;padding:6px 12px;background:transparent}
+  .skip:hover{color:var(--ink-2);border-color:var(--line-2)}
+
+  /* three-pane */
+  .app{flex:1;display:grid;grid-template-columns:264px 1fr 340px;min-height:0}
+  .rail,.main,.aside{overflow:auto;min-height:0}
+  .rail{border-right:1px solid var(--line);background:var(--paper-2);padding:20px 16px}
+  .aside{border-left:1px solid var(--line);background:var(--surface);padding:0}
+  .main{padding:38px 46px 60px}
+  .main .inner{max-width:680px}
+
+  /* rail · 你的家底 (grows) */
+  .rh{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:700;margin:2px 4px 14px}
+  .invempty{color:var(--ink-3);font-size:13px;background:var(--surface);border:1px dashed var(--line-2);border-radius:var(--r);padding:18px 16px;text-align:center;line-height:1.6}
+  .invgrp{margin-bottom:16px}
+  .invgrp .ig{display:flex;align-items:baseline;gap:7px;font-size:12px;color:var(--ink-2);font-weight:600;margin:0 4px 7px}
+  .invgrp .ig .c{font-family:var(--mono);color:var(--clay-deep)}
+  .invchip{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:4px 9px;font-size:11.5px;color:var(--ink-2);margin:0 4px 4px 0}
+  .invchip .d{width:6px;height:6px;border-radius:50%;background:var(--clay)}
+  .railcard{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--ok);border-radius:var(--r);padding:12px 14px;margin-top:6px}
+  .railcard .rt{font-weight:650;font-size:13.5px} .railcard .rs{font-size:11.5px;color:var(--ink-3);margin-top:3px}
+
+  /* main shared */
+  .eyebrow{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--clay-deep);font-weight:700;margin-bottom:10px}
+  h1.big{font-family:var(--serif);font-size:32px;font-weight:500;letter-spacing:-.015em;margin:0 0 10px;line-height:1.15}
+  .lead{font-size:15.5px;color:var(--ink-2);margin:0 0 26px;line-height:1.6}
+  .lead b{color:var(--ink);font-weight:600}
+
+  .scanbox{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:26px;text-align:center}
+  .scanbox .si{width:52px;height:52px;border-radius:14px;background:var(--clay-soft);color:var(--clay-deep);display:grid;place-items:center;margin:0 auto 16px;font-size:24px}
+  .scanbox .sh{font-family:var(--serif);font-size:19px;margin-bottom:6px}
+  .scanbox .ss{font-size:13.5px;color:var(--ink-2);margin-bottom:20px;line-height:1.6}
+  .scanbox .path{font-family:var(--mono);font-size:12px;color:var(--ink-3);background:var(--paper-2);border:1px solid var(--line);border-radius:7px;padding:4px 9px;display:inline-block;margin:0 3px}
+  .orline{display:flex;align-items:center;gap:12px;color:var(--ink-3);font-size:12px;margin:18px 0}
+  .orline .l{flex:1;height:1px;background:var(--line)}
+  .impopts{display:flex;gap:10px;justify-content:center}
+  .impopt{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);padding:11px 15px;font-size:13px;color:var(--ink-2);display:flex;align-items:center;gap:8px}
+  .impopt:hover{border-color:var(--clay);color:var(--ink)}
+
+  .scanning{text-align:center;padding:40px 0}
+  .spin{width:34px;height:34px;border:3px solid var(--clay-soft);border-top-color:var(--clay);border-radius:50%;margin:0 auto 16px;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .scanning .stx{font-size:14px;color:var(--ink-2)} .scanning .stx .num{color:var(--clay-deep)}
+
+  .found{display:flex;align-items:center;gap:10px;background:var(--ok-soft);border:1px solid var(--ok);border-radius:var(--r-sm);padding:11px 15px;font-size:13.5px;color:var(--ok);margin-bottom:20px}
+  .found b{font-weight:700}
+  .capgrp{margin-bottom:18px}
+  .capgrp .ch{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+  .capgrp .ch .ct{font-weight:650;font-size:14.5px}
+  .capgrp .ch .cc{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+  .capgrp .ch .all{margin-left:auto;font-size:12px;color:var(--clay-deep);cursor:pointer}
+  .caplist{display:flex;flex-wrap:wrap;gap:8px}
+  .cap{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:var(--surface);cursor:pointer;transition:.1s;font-size:13px}
+  .cap:hover{border-color:var(--line-2)}
+  .cap.on{border-color:var(--clay);background:var(--clay-soft)}
+  .cap .ck{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--line-2);display:grid;place-items:center;font-size:10px;color:#fff;flex:none}
+  .cap.on .ck{background:var(--clay);border-color:var(--clay)}
+  .cap .cn{font-weight:550} .cap .cd{color:var(--ink-3);font-size:11.5px}
+  .capmore{font-size:12.5px;color:var(--ink-3);padding:6px 2px}
+
+  /* forms (project) */
+  .field{margin-bottom:20px}
+  .field label{display:block;font-size:13px;font-weight:600;margin-bottom:7px}
+  .field label .opt{color:var(--ink-3);font-weight:400;font-size:12px;margin-left:6px}
+  .field input,.field textarea{width:100%;border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 14px;font-family:var(--sans);font-size:14px;background:var(--surface-2);color:var(--ink)}
+  .field input:focus,.field textarea:focus{outline:none;border-color:var(--clay)}
+  .field .hint{font-size:12px;color:var(--ink-3);margin-top:6px;line-height:1.5}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+  .chip{font-size:12px;color:var(--ink-2);border:1px solid var(--line);border-radius:20px;padding:4px 11px;background:var(--surface)}
+  .chip:hover{border-color:var(--clay);color:var(--clay-deep)}
+
+  /* workflow create (chat) */
+  .bub{max-width:90%;font-size:14px;line-height:1.6;margin-bottom:13px}
+  .bub.c{background:var(--surface);border:1px solid var(--line);padding:13px 16px;border-radius:14px 14px 14px 4px}
+  .bub.c .who{font-size:11px;color:var(--ink-3);font-weight:600;margin-bottom:5px;letter-spacing:.04em}
+  .bub.c b{font-weight:650} .bub.c .reuse{color:var(--clay-deep);font-weight:600}
+  .bub.u{background:var(--clay);color:#fff;padding:11px 15px;border-radius:14px 14px 4px 14px;margin-left:auto}
+  .gstart{border:1px solid var(--line);background:var(--surface);border-radius:11px;padding:13px 15px;cursor:pointer;margin-bottom:9px}
+  .gstart:hover{border-color:var(--clay);transform:translateY(-1px)}
+  .gstart .gt{font-weight:600;font-size:13.5px} .gstart .gs{font-size:12px;color:var(--ink-3);margin-top:3px}
+  .composer{margin-top:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:12px 14px}
+  .composer .ci{font-size:13.5px;color:var(--ink-3)}
+  .composer .cap2{font-size:11.5px;color:var(--ink-3);margin-top:9px;border-top:1px solid var(--line);padding-top:9px}
+  .composer .cap2 b{color:var(--clay-deep);font-family:var(--mono);font-weight:500}
+
+  /* done */
+  .done{text-align:center;padding:30px 0}
+  .done .di{width:58px;height:58px;border-radius:50%;background:var(--ok-soft);color:var(--ok);display:grid;place-items:center;margin:0 auto 18px;font-size:28px}
+  .done h1{font-family:var(--serif);font-size:28px;font-weight:500;margin:0 0 10px}
+  .done .ds{font-size:14.5px;color:var(--ink-2);margin-bottom:24px}
+  .summ{display:flex;gap:12px;justify-content:center;margin-bottom:28px}
+  .summ .sc{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:14px 20px;min-width:108px}
+  .summ .sc .sv{font-family:var(--mono);font-size:24px;font-weight:600;color:var(--clay-deep)}
+  .summ .sc .sl{font-size:12px;color:var(--ink-3);margin-top:4px}
+
+  /* buttons */
+  .actions{margin-top:28px;display:flex;align-items:center;gap:12px}
+  .btn{font-size:14px;font-weight:600;border-radius:9px;padding:11px 20px;border:1px solid transparent;transition:.12s}
+  .btn.primary{background:var(--clay);color:#fff} .btn.primary:hover{background:var(--clay-deep)}
+  .btn.primary:disabled{background:var(--line-2);color:var(--ink-3);cursor:not-allowed}
+  .btn.dark{background:var(--ink);color:var(--paper)} .btn.dark:hover{background:#000}
+  .btn.ghost{background:transparent;color:var(--ink-2);border-color:var(--line)} .btn.ghost:hover{color:var(--ink);border-color:var(--line-2)}
+  .btn.sm{padding:8px 14px;font-size:13px}
+  .btn .ar{margin-left:7px}
+
+  /* aside · Claude assistant */
+  .ax{padding:22px 18px}
+  .axh{display:flex;align-items:center;gap:10px;padding:15px 18px;border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0}
+  .axh .cl{width:28px;height:28px;border-radius:8px;background:var(--clay);color:#fff;display:grid;place-items:center;font-family:var(--serif);font-size:15px}
+  .axh .ct{font-size:13px;font-weight:600} .axh .cs{font-size:11px;color:var(--ink-3)}
+  .guide{font-size:13.5px;color:var(--ink-2);line-height:1.65;margin-bottom:16px}
+  .guide b{color:var(--ink);font-weight:600}
+  .axlabel{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:700;margin:18px 0 9px}
+  .prevcard{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:14px 15px}
+  .prevcard.clay{border-left:3px solid var(--clay)} .prevcard.ok{border-left:3px solid var(--ok)}
+  .prevcard .pt{font-weight:650;font-size:14px} .prevcard .pl{font-size:12px;color:var(--ink-3);margin-top:2px}
+  .prevcard .pkv{font-size:12.5px;color:var(--ink-2);margin-top:9px;line-height:1.6}
+  .prevcard .pkv .k{color:var(--ink-3)}
+  .miniphase{display:flex;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;margin-top:10px}
+  .miniphase .mp{flex:1;padding:6px 4px;text-align:center;font-size:10px;color:var(--ink-3);border-right:1px solid var(--line)}
+  .miniphase .mp:last-child{border:none} .miniphase .mp.done{background:var(--paper-2);color:var(--ink-2)} .miniphase .mp.free{color:var(--ok);font-weight:600}
+  .reusetag{display:inline-block;font-size:11px;color:var(--clay-deep);background:var(--clay-soft);border-radius:6px;padding:2px 7px;margin:3px 4px 0 0}
+  .ghelp{font-size:12px;color:var(--ink-3);line-height:1.6;border-top:1px dashed var(--line);margin-top:18px;padding-top:14px}
+
+  @media(max-width:1000px){ body{overflow:auto;height:auto} .shell{height:auto} .app{grid-template-columns:1fr} .rail,.aside{border:none;border-bottom:1px solid var(--line)} .main{padding:28px 22px} .stepper .st .stt{display:none} }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="bar">
+    <div class="wordmark"><span class="d"></span>Builders' <b>Workbench</b></div>
+    <div class="stepper" id="stepper"></div>
+    <button class="skip" onclick="jump(4)">稍后再说</button>
+  </header>
+  <div class="app">
+    <aside class="rail" id="rail"></aside>
+    <main class="main"><div class="inner" id="main"></div></main>
+    <aside class="aside" id="aside"></aside>
+  </div>
+</div>
+
+<script>
+/* ============ data:本地扫描到的家底 ============ */
+const CAPS={
+  skills:{label:"Skills · 能力",total:52,items:[
+    {n:"竞品雷达",d:"抓对手动态"},{n:"变更摘要",d:"changelog 归纳"},{n:"失败测试定位",d:"定位红测试"},
+    {n:"契约测试校验",d:"接口契约"},{n:"部署健康检查",d:"上线后探活"},{n:"情绪分类",d:"评论正负面"},
+    {n:"邮件起草",d:"生成文案"},{n:"代金券发放",d:"对外·花钱"},{n:"导出报表",d:"数据成表"},
+    {n:"北极星打分",d:"需求优先级"},{n:"去重分拣",d:"真问题/重复"},{n:"选择器修复",d:"按文本匹配"}
+  ]},
+  plugins:{label:"Plugins · 工具箱",total:3,items:[
+    {n:"问题处理工具箱",d:"受理→修复→评审"},{n:"运维工具箱",d:"部署→探活→回滚"},{n:"集成构建工具箱",d:"契约→构建→发布"}
+  ]},
+  agents:{label:"Agents · 配方",total:8,items:[
+    {n:"主控",d:"编排各步"},{n:"受理",d:"判真伪"},{n:"复现",d:"写验收测试"},{n:"开发",d:"写修复"},
+    {n:"评审",d:"质量+定夺"},{n:"分拣",d:"打标"},{n:"监测",d:"常驻巡检"},{n:"起草",d:"产出草案"}
+  ]}
+};
+Object.values(CAPS).forEach(g=>g.items.forEach(it=>it.on=true));
+
+/* ============ state ============ */
+let step=1, scanning=false, scanned=false;
+let project={name:"",intent:"",ns:""};
+let wfStage=0, wfKind=null;
+const $=id=>document.getElementById(id);
+
+/* selected counts */
+function selCount(k){return CAPS[k].items.filter(i=>i.on).length + (CAPS[k].total-CAPS[k].items.length)}
+function selTotal(){return selCount("skills")+selCount("plugins")+selCount("agents")}
+
+/* ============ stepper ============ */
+function renderStepper(){
+  const labels=["接入家底","建项目","建 workflow"];
+  $("stepper").innerHTML=labels.map((l,idx)=>{
+    const n=idx+1, cls=step>n?"done":(step===n?"on":"");
+    const dash=idx<2?`<span class="dash"></span>`:"";
+    return `<span class="st ${cls}"><span class="sn">${step>n?'✓':n}</span><span class="stt">${l}</span></span>${dash}`;
+  }).join("");
+}
+
+/* ============ rail · 家底 grows ============ */
+function renderRail(){
+  let html=`<div class="rh">你的家底</div>`;
+  if(!scanned){
+    html+=`<div class="invempty">还没接入能力。<br>workflow 是用这些料拼出来的 —— 先把料备齐。</div>`;
+  }else{
+    ["skills","plugins","agents"].forEach(k=>{
+      const g=CAPS[k];
+      const chips=g.items.filter(i=>i.on).slice(0,6).map(i=>`<span class="invchip"><span class="d"></span>${i.n}</span>`).join("");
+      const extra=selCount(k)-g.items.filter(i=>i.on).slice(0,6).length;
+      html+=`<div class="invgrp"><div class="ig">${g.label.split(" ")[0]} <span class="c">${selCount(k)}</span></div><div>${chips}${extra>0?`<span class="invchip">+${extra}</span>`:''}</div></div>`;
+    });
+  }
+  if(step>=3&&project.name){
+    html+=`<div class="rh" style="margin-top:20px">项目</div><div class="railcard"><div class="rt">${project.name}</div><div class="rs">${project.ns?'北极星 '+project.ns:'意图已声明'}</div></div>`;
+  }
+  if(step>=4){
+    html+=`<div class="rh" style="margin-top:20px">workflow</div><div class="railcard"><div class="rt">${wfKind==='high'?'负面评论安抚':'竞品 changelog 监测'}</div><div class="rs">已上线 · 第一条</div></div>`;
+  }
+  $("rail").innerHTML=html;
+}
+
+/* ============ main router ============ */
+function renderMain(){
+  if(step===1)return renderStep1();
+  if(step===2)return renderStep2();
+  if(step===3)return renderStep3();
+  return renderDone();
+}
+
+/* ---- step 1: 接入家底 ---- */
+function renderStep1(){
+  if(scanning){
+    $("main").innerHTML=`<div class="eyebrow">第一步 · 接入家底</div>
+      <h1 class="big">正在识别你已有的能力…</h1>
+      <div class="scanning"><div class="spin"></div><div class="stx">扫描 <span class="num">~/.claude</span> 与当前项目 · 已发现 <span class="num" id="liveN">0</span> 项</div></div>`;
+    let n=0;const tgt=63;const t=setInterval(()=>{n+=Math.ceil(tgt/14);if(n>=tgt){n=tgt;clearInterval(t)}const el=$("liveN");if(el)el.textContent=n;},80);
+    setTimeout(()=>{scanning=false;scanned=true;render()},1500);
+    return;
+  }
+  if(!scanned){
+    $("main").innerHTML=`<div class="eyebrow">第一步 · 接入家底</div>
+      <h1 class="big">先把你已有的<br>skills 和 agents 接进来。</h1>
+      <p class="lead">workflow 不是凭空造的 —— 它是用<b>你的能力</b>拼出来的。先识别你本地已有的家底,后面建 workflow 时 Claude 直接复用,不重复造。</p>
+      <div class="scanbox">
+        <div class="si">⌖</div>
+        <div class="sh">识别本地能力</div>
+        <div class="ss">扫描 <span class="path">~/.claude</span> 和 <span class="path">当前项目</span>,自动识别已有的 skills / plugins / agents。</div>
+        <button class="btn primary" onclick="startScan()">扫描识别 <span class="ar">→</span></button>
+        <div class="orline"><span class="l"></span>或<span class="l"></span></div>
+        <div class="impopts">
+          <button class="impopt" onclick="startScan()">⎘ 连接仓库</button>
+          <button class="impopt" onclick="startScan()">⤓ 拖入 .md / 配置文件</button>
+        </div>
+      </div>`;
+    return;
+  }
+  // scanned → curate
+  const grp=k=>{const g=CAPS[k];
+    const items=g.items.map((it,i)=>`<div class="cap ${it.on?'on':''}" onclick="toggleCap('${k}',${i})"><span class="ck">${it.on?'✓':''}</span><span><span class="cn">${it.n}</span> <span class="cd">${it.d}</span></span></div>`).join("");
+    const more=g.total-g.items.length;
+    return `<div class="capgrp"><div class="ch"><span class="ct">${g.label}</span><span class="cc">已选 ${selCount(k)}/${g.total}</span><span class="all" onclick="allCap('${k}',event)">全选/全不选</span></div>
+      <div class="caplist">${items}</div>${more>0?`<div class="capmore">+ 另 ${more} 个同类已识别,默认接入(可在工作台再细调)</div>`:''}</div>`;
+  };
+  $("main").innerHTML=`<div class="eyebrow">第一步 · 接入家底</div>
+    <h1 class="big">识别到你的能力。挑要接入的。</h1>
+    <div class="found">✓ 在 <b>~/.claude</b> 与项目里识别到 <b>${CAPS.skills.total}</b> 个 skill · <b>${CAPS.plugins.total}</b> 个 plugin · <b>${CAPS.agents.total}</b> 个 agent。</div>
+    ${grp("skills")}${grp("plugins")}${grp("agents")}
+    <div class="actions"><button class="btn primary" onclick="jump(2)">接入选中的 <span class="num" id="selN">${selTotal()}</span> 项 <span class="ar">→</span></button>
+      <button class="btn ghost" onclick="startScan()">重新扫描</button></div>`;
+}
+function startScan(){scanning=true;render()}
+function toggleCap(k,i){CAPS[k].items[i].on=!CAPS[k].items[i].on;render()}
+function allCap(k,e){e.stopPropagation();const g=CAPS[k];const any=g.items.some(i=>!i.on);g.items.forEach(i=>i.on=any);render()}
+
+/* ---- step 2: 建项目 ---- */
+function renderStep2(){
+  $("main").innerHTML=`<div class="eyebrow">第二步 · 建项目</div>
+    <h1 class="big">你在做什么产品?</h1>
+    <p class="lead">项目是组织的脊柱 —— 一切 workflow 都挂在某个产品下。先来一页纸意图(framework 的 <b>CP1 · 北极星与意图对齐</b>),别写重型 PRD。</p>
+    <div class="field"><label>产品名</label>
+      <input id="pn" placeholder="例:定价实验" value="${project.name}" oninput="project.name=this.value;syncStep2()">
+      <div class="chips"><span class="chip" onclick="fillProj('定价实验','给试用用户做分层定价,提升付费转化','净收入留存 (NRR)')">定价实验</span>
+        <span class="chip" onclick="fillProj('新手引导改版','缩短新用户到达首个价值的时间','')">新手引导改版</span>
+        <span class="chip" onclick="fillProj('内联评估面板','让 Builder 在编辑器里直接看 eval','周活跃 Builder 数')">内联评估面板</span></div></div>
+    <div class="field"><label>一句话意图</label>
+      <textarea id="pi" rows="2" placeholder="这个产品要解决什么问题、为谁" oninput="project.intent=this.value;syncStep2()">${project.intent}</textarea>
+      <div class="hint">问题 + 目标用户 + 成功标准。不对齐不开工。</div></div>
+    <div class="field"><label>北极星<span class="opt">· 可选,也可稍后由「引导建立指标」帮你定</span></label>
+      <input id="pns" placeholder="例:净收入留存 (NRR)" value="${project.ns}" oninput="project.ns=this.value;syncStep2()">
+      <div class="hint">一个真正重要的结果指标(滞后)。没想好就留空,建完项目后 Claude 会引导你找。</div></div>
+    <div class="actions"><button class="btn primary" id="p2btn" ${project.name.trim()?'':'disabled'} onclick="jump(3)">创建项目 <span class="ar">→</span></button>
+      <button class="btn ghost" onclick="jump(1)">‹ 返回家底</button></div>`;
+}
+function fillProj(n,i,ns){project.name=n;project.intent=i;project.ns=ns;render()}
+function syncStep2(){const b=$("p2btn");if(b)b.disabled=!project.name.trim();renderRail()}
+
+/* ---- step 3: 建第一条 workflow ---- */
+function renderStep3(){
+  let body=`<div class="eyebrow">第三步 · 建第一条 workflow</div>
+    <h1 class="big">给「${project.name}」拼第一条 workflow。</h1>
+    <p class="lead">用大白话说你想自动化什么。Claude 会从<b>你刚接入的家底</b>里挑能力拼出来 —— 你只管认它的验收标准。</p>`;
+  if(wfStage===0){
+    body+=`<div class="gstart" onclick="pickWf('low')"><div class="gt">◷ 每天扫竞品 changelog,有实质动作就浮草案给我</div><div class="gs">低风险样例 · 只读 / 可逆 / 不花钱</div></div>
+      <div class="gstart" onclick="pickWf('high')"><div class="gt">✉ 给负面评论的用户发安抚邮件 + 退 $5 代金券</div><div class="gs">高风险样例 · 对外发送 + 花钱</div></div>
+      <div class="composer"><div class="ci">用大白话说你想自动化什么…</div><div class="cap2">可 @ 你接入的能力:<b>${selCount('skills')} skills</b> · <b>${selCount('plugins')} plugins</b> · <b>${selCount('agents')} agents</b></div></div>`;
+  }else{
+    const low=wfKind==="low";
+    const goal=low?"每天早上把竞品 changelog 扒一遍,有实质动作就拟个应对草案给我":"给负面评论的用户发条安抚邮件,并退 $5 代金券";
+    body+=`<div class="bub c"><div class="who">CLAUDE</div>用大白话说你想自动化什么。</div><div class="bub u">${goal}</div>`;
+    body+=low
+      ? `<div class="bub c"><div class="who">CLAUDE</div>拼好了(见右栏草案)。我复用了你接入的 <span class="reuse">竞品雷达</span> 和 <span class="reuse">变更摘要</span> 两个 skill,配 <span class="reuse">起草</span> agent。它是<b>监测器</b> —— 常驻、不终止,只在有实质动作时投喂草案。<br><br>它<b>只读、不花钱</b>,所以无需认证,可直接开跑。</div>`
+      : `<div class="bub c"><div class="who">CLAUDE</div>拼好了(见右栏草案)。我复用了你接入的 <span class="reuse">情绪分类</span>、<span class="reuse">邮件起草</span>、<span class="reuse">代金券发放</span>。它是<b>执行器</b>。但我识别到<b style="color:var(--risk)">副作用:对外发邮件 + 花钱</b> —— 这类上线前要你认证一次验收标准。</div>`;
+    body+=`<div class="actions">${low
+      ? `<button class="btn primary" onclick="jump(4)">开跑并完成 <span class="ar">→</span></button>`
+      : `<button class="btn primary" onclick="jump(4)">认证验收标准并开跑 <span class="ar">→</span></button>`}
+      <button class="btn ghost" onclick="wfStage=0;wfKind=null;render()">重选</button></div>`;
+  }
+  $("main").innerHTML=body;
+}
+function pickWf(k){wfKind=k;wfStage=1;render()}
+
+/* ---- done ---- */
+function renderDone(){
+  $("main").innerHTML=`<div class="done">
+    <div class="di">✓</div>
+    <h1>工作台已就绪。</h1>
+    <div class="ds">第一步走通了:家底接入 → 项目建立 → 第一条 workflow 上线。剩下的,让舰队自己跑。</div>
+    <div class="summ">
+      <div class="sc"><div class="sv">${selTotal()}</div><div class="sl">接入能力</div></div>
+      <div class="sc"><div class="sv">1</div><div class="sl">项目</div></div>
+      <div class="sc"><div class="sv">1</div><div class="sl">workflow</div></div>
+    </div>
+    <div class="actions" style="justify-content:center">
+      <button class="btn dark" onclick="enterWorkbench()">进入工作台 <span class="ar">→</span></button>
+      <button class="btn ghost" onclick="step=3;wfStage=0;wfKind=null;render()">再建一条 workflow</button>
+    </div></div>`;
+}
+function enterWorkbench(){
+  // 衔接到主工作台原型(同目录)
+  window.location.href="builders-workbench-opc-v1.html";
+}
+
+/* ============ aside · Claude 助手 ============ */
+function renderAside(){
+  let guide="",prev="",help="";
+  if(step===1){
+    guide=scanned
+      ? `识别到了。<b>挑你这个产品用得上的</b>就行,不必全接 —— 多的随时能在工作台补。<br><br>我已经默认勾上常用的;像 <b>代金券发放</b> 这种带对外/花钱副作用的,接入后用到时我会让你过一道闸。`
+      : `欢迎。第一步很简单:<b>先把你已有的能力接进来</b>。<br><br>我会扫你本地的 <b>~/.claude</b> 和当前项目,识别出 skills / plugins / agents。你不用从零教我 —— 你攒过的家底,直接变成造 workflow 的料。`;
+    if(scanned)prev=`<div class="axlabel">即将接入</div><div class="prevcard ok"><div class="pkv"><span class="k">Skills</span> ${selCount('skills')} · <span class="k">Plugins</span> ${selCount('plugins')} · <span class="k">Agents</span> ${selCount('agents')}</div></div>`;
+    help=`为什么先接家底?<br>因为 workflow = 你的能力 + 目标 + 验收标准。料齐了,后面一句话就能拼出 workflow。`;
+  }else if(step===2){
+    guide=`接入了 <b>${selTotal()}</b> 项能力。现在给它们一个<b>归属</b> —— 一个产品。<br><br>不用写长文档,一句话意图就够。北极星没想好可以留空,建完我直接引导你把引领/滞后指标找出来。`;
+    prev=`<div class="axlabel">项目预览</div><div class="prevcard clay"><div class="pt">${project.name||'（未命名）'}</div><div class="pl">${project.ns?'北极星 · '+project.ns:'北极星 · 待建立'}</div><div class="pkv">${project.intent||'<span class="k">意图待填…</span>'}</div></div>`;
+    help=`项目是脊柱:一切 workflow 都挂在产品下,不存在“无主的 workflow”。`;
+  }else if(step===3){
+    guide=wfStage===0
+      ? `最后一步,见证家底变成 workflow。<br><br>说个目标,我从你接入的 <b>${selTotal()}</b> 项能力里挑合适的拼出来 —— 你会看到草案里标着“复用了你的 XX skill”。`
+      : (wfKind==="low"
+        ? `这条只读、不花钱,所以<b>无需认证、直接开跑</b> —— 跟你手写 /loop 一样快,但它天生挂在项目下、可被后续复利。`
+        : `这条带副作用,所以创建的收口是<b>认证验收标准</b>。认一次,以后同类自动放行 —— 这是手写脚本攒不出的复利资产。`);
+    if(wfStage===1){
+      const low=wfKind==="low";
+      const reuse=(low?["竞品雷达","变更摘要","起草"]:["情绪分类","邮件起草","代金券发放"]).map(s=>`<span class="reusetag">复用 · ${s}</span>`).join("");
+      prev=`<div class="axlabel">Claude 拼的草案</div>
+        <div class="prevcard clay"><div class="pt">${low?'竞品 changelog 监测':'负面评论安抚'}</div>
+          <div class="pl">${low?'监测器 · 常驻不终止':'执行器 · 跑到验收自停'}</div>
+          <div class="miniphase">${["启动","规划","执行","监控","收尾"].map((p,i)=>`<div class="mp ${i<2?'done':''}${i===2?' free':''}">${p}</div>`).join("")}</div>
+          <div class="pkv" style="margin-top:11px"><span class="k">来自你的家底:</span><br>${reuse}</div>
+          ${low?'':'<div class="pkv" style="color:var(--risk);margin-top:8px">● 副作用:对外发送 + 花钱 → 需认证</div>'}</div>`;
+    }
+    help=`workflow = 你接入的能力 + 这个目标 + 验收标准。三者齐了就能自主跑。`;
+  }else{
+    guide=`漂亮。你刚走完了从<b>零</b>到<b>一条自主 workflow</b> 的完整一步。<br><br>进入工作台后:需要你的事会浮进收件箱,其余自己跑;想再加 workflow,随时一句话。`;
+    help=`接下来不用学新东西 —— 同样一句话,就能造第二条、第三条。`;
+  }
+  $("aside").innerHTML=`<div class="axh"><div class="cl">C</div><div><div class="ct">Claude</div><div class="cs">陪你走第一步</div></div></div>
+    <div class="ax"><div class="guide">${guide}</div>${prev}<div class="ghelp">${help}</div></div>`;
+}
+
+/* ============ nav + render ============ */
+function jump(n){step=n;if(n!==3){/*keep*/}window.scrollTo&&window.scrollTo(0,0);render()}
+function render(){renderStepper();renderRail();renderMain();renderAside();
+  const s=$("selN");if(s)s.textContent=selTotal();}
+render();
+</script>
+</body>
+</html>

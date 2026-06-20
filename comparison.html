@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>流程方法论充分对比 · Builders' Workbench</title>
+<style>
+  :root{
+    --paper:#F1EFE7; --surface:#FCFBF7; --surface-2:#FFFFFF;
+    --ink:#1A1A17; --ink-2:#6C6A61; --ink-3:#9C9A8E;
+    --line:#E4E0D4; --line-2:#D8D3C4;
+    --clay:#CC785C; --clay-deep:#A9512F; --clay-soft:#EFDCD1;
+    --ok:#477A53; --ok-soft:#E2ECE2; --warn:#B0792B; --warn-soft:#F2E8CF; --risk:#AF4736; --risk-soft:#F2DCD5;
+    --r:14px; --r-sm:10px;
+    --serif:"Tiempos Headline","Iowan Old Style",Georgia,"Songti SC",serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Inter,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.64;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1000px;margin:0 auto;padding:56px 28px 120px}
+  .kick{color:var(--clay);font-size:12px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;margin-bottom:14px}
+  h1{font-family:var(--serif);font-weight:500;font-size:40px;line-height:1.12;letter-spacing:-.02em;margin:0 0 18px}
+  .lede{font-size:18px;color:var(--ink-2);max-width:680px;margin:0 0 8px}
+  .rule{height:1px;background:var(--line);margin:40px 0}
+  h2{font-family:var(--serif);font-weight:500;font-size:26px;letter-spacing:-.01em;margin:0 0 6px;display:flex;align-items:baseline;gap:14px}
+  h2 .n{font-size:14px;color:var(--clay);font-family:var(--sans);font-weight:600}
+  .sub{color:var(--ink-2);margin:0 0 22px;font-size:15px}
+  p{margin:0 0 14px} strong{font-weight:650} .em{color:var(--clay-deep);font-weight:650}
+  /* two poles */
+  .poles{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0}
+  .pole{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px}
+  .pole .t{font-weight:700;font-size:15px;margin-bottom:5px}
+  .pole.heavy .t{color:var(--ink-2)} .pole.lean .t{color:var(--clay-deep)}
+  .pole p{margin:0;font-size:13.5px;color:var(--ink-2)}
+  /* map */
+  .mapbox{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px 18px;margin:18px 0}
+  .mapbox svg{display:block;width:100%;height:auto}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:10px;padding-top:14px;border-top:1px solid var(--line);font-size:12.5px}
+  .lg{display:flex;align-items:center;gap:7px;color:var(--ink-2)}
+  .lg .sw{width:16px;height:16px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;color:#fff;font-size:9px;font-weight:700}
+  .lg .ring{box-shadow:0 0 0 2px var(--clay-deep) inset;background:var(--clay-deep)!important}
+  .lgrow{display:flex;flex-wrap:wrap;gap:5px 16px}
+  .lghdr{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:600;width:100%;margin-top:6px}
+  /* matrix */
+  .mxwrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);margin:18px 0;-webkit-overflow-scrolling:touch}
+  table.mx{border-collapse:collapse;min-width:1240px;font-size:12.5px;line-height:1.5}
+  table.mx th,table.mx td{padding:11px 13px;border-bottom:1px solid var(--line);border-right:1px solid var(--line);text-align:left;vertical-align:top}
+  table.mx thead th{position:sticky;top:0;background:var(--paper);z-index:3;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);font-weight:600;border-bottom-color:var(--line-2)}
+  table.mx td:first-child,table.mx th:first-child{position:sticky;left:0;background:var(--surface);z-index:2;font-weight:650;min-width:118px;font-size:13px}
+  table.mx thead th:first-child{z-index:4;background:var(--paper)}
+  table.mx td:last-child,table.mx th:last-child{border-right:none}
+  tr.camp td{background:var(--clay-soft);color:var(--clay-deep);font-weight:700;font-size:12px;letter-spacing:.03em;position:sticky;left:0}
+  td.take{color:var(--clay-deep);font-weight:600}
+  .dotc{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  /* synthesis */
+  .syn{display:grid;gap:10px;margin:18px 0}
+  .synrow{display:grid;grid-template-columns:150px 1fr;gap:16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px 16px}
+  .synrow .cp{font-weight:700;color:var(--clay-deep);font-size:13.5px}
+  .synrow .src{font-size:13.5px;color:var(--ink-2)} .synrow .src b{color:var(--ink);font-weight:600}
+  .callout{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--clay);border-radius:var(--r-sm);padding:14px 16px;font-size:13.5px;color:var(--ink-2);margin:16px 0}
+  .callout.warn{border-left-color:var(--warn)}
+  ul.notes{margin:14px 0;padding-left:0;list-style:none}
+  ul.notes li{position:relative;padding:9px 0 9px 22px;border-top:1px solid var(--line);font-size:13.5px;color:var(--ink-2)}
+  ul.notes li:first-child{border-top:none}
+  ul.notes li::before{content:"";position:absolute;left:2px;top:16px;width:6px;height:6px;border-radius:50%;background:var(--clay)}
+  ul.notes li b{color:var(--ink);font-weight:650}
+  footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px;line-height:1.6}
+  @media(max-width:760px){ .poles{grid-template-columns:1fr} h1{font-size:31px} .synrow{grid-template-columns:1fr;gap:5px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kick">Builders' Workbench · 参照谱系</div>
+  <h1>流程方法论<br>充分对比</h1>
+  <p class="lede">"以流程著名"分两派：把流程做到极致，和把删流程做到极致。两端都靠纪律，方向相反。</p>
+  <p class="lede" style="font-size:15px;color:var(--ink-3)">下图把 12 家标杆 + 我们的 Workbench 放在同一坐标系，再用一张矩阵逐维度拆解，最后说清我们到底借了谁的哪一条。</p>
+
+  <div class="poles">
+    <div class="pole heavy"><div class="t">重流程 · 纪律派</div><p>华为(IPD)、丰田(TPS)、GE(六西格玛)、Stage-Gate。研究"纪律"看他们：门控、评审、可复制。</p></div>
+    <div class="pole lean"><div class="t">删流程 · Owner 派</div><p>SpaceX(算法)、亚马逊(机制)、苹果(DRI)、奈飞、Google(OKR)。离 AI 原生最近：删、点名 owner、给上下文。</p></div>
+  </div>
+
+  <div class="rule"></div>
+
+  <section>
+    <h2><span class="n">01</span>二维定位图</h2>
+    <p class="sub">横轴：流程的轻重（删 ↔ 门控）。纵轴：角色的宽窄（专精分工 ↔ 端到端 owner）。</p>
+    <div class="mapbox">
+      <svg viewBox="0 0 720 452" role="img" aria-label="流程方法论二维定位散点图">
+        <line x1="70" y1="380" x2="680" y2="380" style="stroke:var(--line-2);stroke-width:1"/>
+        <line x1="70" y1="40" x2="70" y2="380" style="stroke:var(--line-2);stroke-width:1"/>
+        <line x1="375" y1="40" x2="375" y2="380" style="stroke:var(--line);stroke-width:1;stroke-dasharray:4 5"/>
+        <line x1="70" y1="210" x2="680" y2="210" style="stroke:var(--line);stroke-width:1;stroke-dasharray:4 5"/>
+        <text x="76" y="30" style="fill:var(--ink-3);font-size:11px;font-family:var(--sans)">角色宽 · 端到端 owner ↑</text>
+        <text x="76" y="400" style="fill:var(--ink-3);font-size:11px;font-family:var(--sans)">专精分工 ↓</text>
+        <text x="76" y="420" style="fill:var(--ink-3);font-size:11px;font-family:var(--sans)">← 流程轻 / 删</text>
+        <text x="680" y="420" text-anchor="end" style="fill:var(--ink-3);font-size:11px;font-family:var(--sans)">门控 / 流程重 →</text>
+
+        <g style="font-family:var(--sans)">
+          <circle cx="637" cy="319" r="11" style="fill:var(--ink-2)"/><text x="637" y="323" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:700">1</text>
+          <circle cx="485" cy="237" r="11" style="fill:var(--ink-2)"/><text x="485" y="241" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:700">2</text>
+          <circle cx="589" cy="295" r="11" style="fill:var(--ink-2)"/><text x="589" y="299" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:700">3</text>
+          <circle cx="607" cy="262" r="11" style="fill:var(--ink-2)"/><text x="607" y="266" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:700">4</text>
+          <circle cx="277" cy="108" r="11" style="fill:var(--warn)"/><text x="277" y="112" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:700">5</text>
+          <circle cx="351" cy="135" r="11" style="fill:var(--warn)"/><text x="351" y="139" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:700">6</text>
+          <circle cx="424" cy="156" r="11" style="fill:var(--warn)"/><text x="424" y="160" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:700">7</text>
+          <circle cx="253" cy="128" r="11" style="fill:var(--warn)"/><text x="253" y="132" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:700">8</text>
+          <circle cx="395" cy="190" r="11" style="fill:var(--warn)"/><text x="395" y="194" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:700">9</text>
+          <circle cx="222" cy="160" r="11" style="fill:var(--clay)"/><text x="222" y="164" text-anchor="middle" style="fill:#fff;font-size:11px;font-weight:700">10</text>
+          <circle cx="206" cy="120" r="11" style="fill:var(--clay)"/><text x="206" y="124" text-anchor="middle" style="fill:#fff;font-size:11px;font-weight:700">11</text>
+          <circle cx="140" cy="76" r="11" style="fill:var(--clay)"/><text x="140" y="80" text-anchor="middle" style="fill:#fff;font-size:11px;font-weight:700">12</text>
+          <circle cx="172" cy="104" r="15" style="fill:none;stroke:var(--clay-deep);stroke-width:2"/>
+          <circle cx="172" cy="104" r="10" style="fill:var(--clay-deep)"/><text x="172" y="108" text-anchor="middle" style="fill:#fff;font-size:9px;font-weight:700">WB</text>
+        </g>
+      </svg>
+      <div class="legend">
+        <div class="lghdr">重流程 · 纪律派</div>
+        <div class="lgrow">
+          <span class="lg"><span class="sw" style="background:var(--ink-2)">1</span>华为 IPD</span>
+          <span class="lg"><span class="sw" style="background:var(--ink-2)">2</span>丰田 TPS</span>
+          <span class="lg"><span class="sw" style="background:var(--ink-2)">3</span>GE 六西格玛</span>
+          <span class="lg"><span class="sw" style="background:var(--ink-2)">4</span>Stage-Gate</span>
+        </div>
+        <div class="lghdr">删流程 · Owner 派</div>
+        <div class="lgrow">
+          <span class="lg"><span class="sw" style="background:var(--warn)">5</span>SpaceX</span>
+          <span class="lg"><span class="sw" style="background:var(--warn)">6</span>亚马逊</span>
+          <span class="lg"><span class="sw" style="background:var(--warn)">7</span>苹果</span>
+          <span class="lg"><span class="sw" style="background:var(--warn)">8</span>奈飞</span>
+          <span class="lg"><span class="sw" style="background:var(--warn)">9</span>Google OKR</span>
+        </div>
+        <div class="lghdr">AI 原生 · 我们</div>
+        <div class="lgrow">
+          <span class="lg"><span class="sw" style="background:var(--clay)">10</span>Anthropic</span>
+          <span class="lg"><span class="sw" style="background:var(--clay)">11</span>OpenAI</span>
+          <span class="lg"><span class="sw" style="background:var(--clay)">12</span>Cursor</span>
+          <span class="lg"><span class="sw ring">WB</span><b style="color:var(--clay-deep)">Builders' Workbench</b></span>
+        </div>
+      </div>
+    </div>
+    <div class="callout"><strong>读图：</strong>右下角是<span class="em">华为/GE</span>（重流程 + 专精分工）；左上角是 <span class="em">Cursor</span>（近乎无流程 + 端到端 owner）。我们的 <span class="em">Workbench（WB）</span>落在左上区——靠近 Cursor/SpaceX/亚马逊，但<strong>不像 Cursor 那样近乎无门</strong>，仍保留 PMBOK 骨架。</div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>逐维度对比矩阵</h2>
+    <p class="sub">同一套维度量 12 家。横向可滚动。最后一列是"给 Workbench 的一条"。</p>
+    <div class="mxwrap">
+      <table class="mx">
+        <thead><tr>
+          <th>企业</th><th>招牌方法论</th><th>角色 / 团队</th><th>决策与门控</th><th>信息流转</th><th>节奏 / 迭代</th><th>质量与指标</th><th>给 Workbench 的一条</th>
+        </tr></thead>
+        <tbody>
+          <tr class="camp"><td colspan="8"><span class="dotc" style="background:var(--ink-2)"></span>重流程 · 纪律派</td></tr>
+          <tr><td>华为</td><td>IPD 集成产品开发（IBM 引进，"先僵化后优化"）</td><td>重量级 PDT 跨职能团队，角色专精</td><td>DCP 投资决策点 + TR 技术评审"分离"，多道阶段门</td><td>结构化文档 + 评审会，流程驱动</td><td>长周期、阶段推进</td><td>评审门把关、流程合规度</td><td class="take">把"投资门"和"技术门"拆开 → CP1 vs CP5</td></tr>
+          <tr><td>丰田</td><td>精益 / TPS（Lean 之源）：JIT、自働化、kaizen</td><td>现场团队、尊重人、多能工</td><td>andon 拉绳即时停线、A3 一页纸、现地现物</td><td>可视化看板 + 现场，少文档</td><td>持续流 + 持续改善</td><td>内建质量(jidoka)、5 Why、稼动率</td><td class="take">andon = 停滞自动告警(CP4)；A3 = 一页纸意图(CP1)</td></tr>
+          <tr><td>GE</td><td>六西格玛(DMAIC) + Work-Out</td><td>黑带/绿带认证体系，专精</td><td>DMAIC 阶段门、数据闸门</td><td>统计报表 + 评审</td><td>项目制、偏重</td><td>缺陷率(σ)、统计过程控制</td><td class="take">用数据设门(CP5/CP6)，但别过度官僚</td></tr>
+          <tr><td>Stage-Gate</td><td>阶段门（Robert Cooper），新品开发规范</td><td>门控人(gatekeepers) + 项目组</td><td>每阶段 Go/Kill 门</td><td>门控交付物文档</td><td>串行阶段</td><td>每道门的通过标准</td><td class="take">"门"的学术原型——我们把它从 5+ 砍到 1–2 道(CP5)</td></tr>
+
+          <tr class="camp"><td colspan="8"><span class="dotc" style="background:var(--warn)"></span>删流程 · Owner 派</td></tr>
+          <tr><td>SpaceX</td><td>"算法"五步：质疑需求→删→简化→提速→自动化（删在最前）</td><td>工程师 owner，"每条需求挂人名、不挂部门"，扁平</td><td>第一性原理质疑，少门，靠快速试错</td><td>直接、工程化，反官僚</td><td>极快迭代，造-测-炸-修</td><td>大量实测、冗余、快速失败</td><td class="take">先删再优化 + 需求挂人名 → CP3 + Builder owner</td></tr>
+          <tr><td>亚马逊</td><td>Working Backwards(PR/FAQ)、6 页备忘录、机制(mechanisms)</td><td>two-pizza、single-threaded owner</td><td>叙事评审、bar raiser(招聘门)</td><td>6 页备忘录禁 PPT、静默阅读</td><td>高自治小团队、长期主义</td><td>可控的"输入型指标"、WBR 周评</td><td class="take">先写"成功长什么样"(CP1) + 输入 = 先行指标(CP4)</td></tr>
+          <tr><td>苹果</td><td>DRI 唯一责任人、功能型组织</td><td>每件事一个名字负责，强专精 + 强协同</td><td>高层品味把关、强保密</td><td>紧耦合小圈层</td><td>少而精、长打磨</td><td>极高品味门</td><td class="take">DRI = Builder ownership + 1 次关键品味评审(CP5)</td></tr>
+          <tr><td>奈飞</td><td>自由与责任、context not control、keeper test</td><td>高人才密度、senior-only、少流程</td><td>给上下文不给管控、分散决策</td><td>透明、备忘录文化</td><td>高自治、快</td><td>靠人才密度而非流程</td><td class="take">context-not-control = 按异常管理(CP7)</td></tr>
+          <tr><td>Google</td><td>OKR（Grove 发明、Doerr 带进 Google）、launch &amp; iterate</td><td>工程主导、相对扁平</td><td>目标对齐、季度节奏</td><td>OKR 公开透明</td><td>季度 OKR + 快速发布</td><td>O 定方向、KR 量化（含先行/滞后）</td><td class="take">OKR = 北极星 + 关键结果(CP1)</td></tr>
+
+          <tr class="camp"><td colspan="8"><span class="dotc" style="background:var(--clay)"></span>AI 原生</td></tr>
+          <tr><td>Anthropic</td><td>写作/文档驱动、eval/安全驱动、dogfood</td><td>小团队、研究-产品融合</td><td>设计文档/RFC、eval 门</td><td>文档替代会议 + 自动工具</td><td>快但重判断</td><td>eval、安全评估</td><td class="take">eval 当质量门(CP5) + 文档 = 轻量意图(CP1)</td></tr>
+          <tr><td>OpenAI</td><td>小型突击队、先发布再迭代、自下而上</td><td>小队、扁平</td><td>轻门、快速发布</td><td>直接、研究产品融合</td><td>极快发布迭代</td><td>实测 + 用户反馈</td><td class="take">自下而上提案 + WIP 聚焦(CP3)</td></tr>
+          <tr><td>Cursor</td><td>极小团队撬动高产出、重度 dogfood</td><td>工程师端到端 owner、角色极少</td><td>近乎无门、靠 owner 判断</td><td>自动/工具、极少协调</td><td>高频发布</td><td>dogfood + 真实使用</td><td class="take">端到端 owner 的极致 = Builder 模型 + 信息自动汇聚(CP4)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:13px;color:var(--ink-3)">注：AI 原生三家为公开模式的概括（非内部 playbook）；其余为成熟管理文献内容。均凭知识整理，非实时检索。</p>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>我们借了谁的哪一条</h2>
+    <p class="sub">Workbench 不是发明新方法，而是把各家最锋利的一条收进控制点。</p>
+    <div class="syn">
+      <div class="synrow"><div class="cp">CP1 北极星 / 意图</div><div class="src">亚马逊 <b>Working Backwards</b>（先写成功的样子）+ Google <b>OKR</b> + 华为 <b>投资决策门</b> + Anthropic <b>文档</b></div></div>
+      <div class="synrow"><div class="cp">CP3 需求 / 优先级</div><div class="src">SpaceX <b>质疑并删需求 + 挂人名</b> + OpenAI <b>自下而上</b> + WIP 聚焦</div></div>
+      <div class="synrow"><div class="cp">CP4 进度信号</div><div class="src">丰田 <b>andon 停线</b> + 亚马逊 <b>输入型指标</b> + Cursor <b>信息自动汇聚</b></div></div>
+      <div class="synrow"><div class="cp">CP5 质量门</div><div class="src">华为 <b>技术评审门</b> + Stage-Gate（砍到 1–2 道）+ GE <b>数据门</b> + 苹果 <b>品味</b> + Anthropic <b>eval</b></div></div>
+      <div class="synrow"><div class="cp">CP6 滞后回收</div><div class="src">亚马逊 <b>WBR 周评</b> + GE <b>DMAIC 的 Measure</b></div></div>
+      <div class="synrow"><div class="cp">CP7 组合 / 异常</div><div class="src">奈飞 <b>context not control</b> + 丰田 <b>可视化管理</b></div></div>
+      <div class="synrow"><div class="cp">Builder = owner</div><div class="src">SpaceX <b>需求挂人名</b> + 苹果 <b>DRI</b> + 亚马逊 <b>single-threaded owner</b> + Cursor <b>端到端</b></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>适用域与提醒</h2>
+    <p class="sub">不是"删流程"永远对——它有前提。</p>
+    <ul class="notes">
+      <li><b>重流程适合：</b>高确定性、强合规、硬件/电信/制药、错误代价极高、超大规模协同。华为/GE/Stage-Gate 在这些场景是对的。</li>
+      <li><b>SpaceX 虽"删流程"，但它是高风险硬件</b>——靠"大量实测 + 冗余 + 快速失败"补，不是裸奔。删的是<strong>官僚</strong>，不是<strong>验证</strong>。</li>
+      <li><b>AI 原生删流程的两个前提：</b>① 高人才密度；② 执行成本与信息成本被 AI 打平。缺这两条硬删流程会塌。</li>
+      <li><b>Spotify 的 squads/tribes 模型</b>很出名，但 Spotify 自己都承认那是理想模型、未真正落地——引用要打折，故未列入主表。</li>
+    </ul>
+    <div class="callout warn">一句话定位：<span class="em">Workbench = 删流程派的姿态 + 重流程派的骨架</span>。删掉协调税与官僚，保留 PMBOK 五过程组与少数锋利的门。</div>
+  </section>
+
+  <footer>
+    Builders' Workbench · 流程方法论充分对比 · 配套：<b>summary.html</b>（框架总结）、<b>workbench.html</b>（Cowork 形态台面）、<b>framework.md</b>（完整文档）。<br>
+    资料为成熟管理文献与公开模式概括，凭知识整理；联网检索恢复后可补可核实链接。
+  </footer>
+</div>
+</body>
+</html>

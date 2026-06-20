@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>从传统项目管理到 AI 原生 · Builders' Workbench</title>
+<style>
+  :root{
+    --paper:#F1EFE7; --surface:#FCFBF7; --surface-2:#FFFFFF;
+    --ink:#1A1A17; --ink-2:#6C6A61; --ink-3:#9C9A8E;
+    --line:#E4E0D4; --line-2:#D8D3C4;
+    --clay:#CC785C; --clay-deep:#A9512F; --clay-soft:#EFDCD1;
+    --ok:#477A53; --ok-soft:#E2ECE2; --warn:#B0792B; --warn-soft:#F0E7CE; --risk:#AF4736; --risk-soft:#F1DBD4;
+    --r:14px; --r-sm:10px;
+    --serif:"Tiempos Headline","Iowan Old Style",Georgia,"Songti SC",serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Inter,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.64;-webkit-font-smoothing:antialiased}
+  .layout{max-width:1120px;margin:0 auto;padding:0 28px;display:grid;grid-template-columns:212px 1fr;gap:48px}
+  /* TOC */
+  nav.toc{position:sticky;top:0;align-self:start;height:100vh;padding-top:54px;font-size:13px}
+  nav.toc .brand{font-family:var(--serif);font-size:17px;letter-spacing:-.01em;margin-bottom:4px}
+  nav.toc .brand b{color:var(--clay);font-weight:600}
+  nav.toc .kicker{color:var(--ink-3);font-size:11px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:24px}
+  nav.toc a{display:block;color:var(--ink-2);text-decoration:none;padding:6px 0;border-left:2px solid transparent;padding-left:12px;margin-left:-2px;transition:.15s}
+  nav.toc a:hover{color:var(--ink);border-color:var(--clay-soft)}
+  nav.toc a .num{color:var(--ink-3);font-variant-numeric:tabular-nums;margin-right:8px}
+  main{padding:54px 0 120px;max-width:760px}
+  /* hero */
+  .kick{color:var(--clay);font-size:12px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;margin-bottom:14px}
+  h1{font-family:var(--serif);font-weight:500;font-size:42px;line-height:1.12;letter-spacing:-.02em;margin:0 0 18px}
+  .lede{font-size:18px;color:var(--ink-2);line-height:1.6;margin:0 0 10px;max-width:640px}
+  .rule{height:1px;background:var(--line);margin:42px 0}
+  section{scroll-margin-top:40px}
+  h2{font-family:var(--serif);font-weight:500;font-size:27px;letter-spacing:-.01em;margin:0 0 6px;display:flex;align-items:baseline;gap:14px}
+  h2 .n{font-size:14px;color:var(--clay);font-family:var(--sans);font-weight:600;font-variant-numeric:tabular-nums}
+  .sub{color:var(--ink-2);margin:0 0 22px;font-size:15px}
+  h3{font-size:15px;font-weight:650;margin:26px 0 10px;letter-spacing:-.01em}
+  p{margin:0 0 14px}
+  strong{font-weight:650}
+  .em{color:var(--clay-deep);font-weight:650}
+  /* cards */
+  .cards{display:grid;gap:12px;margin:18px 0}
+  .g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:repeat(2,1fr)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px 18px 16px}
+  .card h4{margin:0 0 6px;font-size:14.5px;font-weight:650}
+  .card p{margin:0;font-size:13.5px;color:var(--ink-2);line-height:1.55}
+  .tax{font-family:var(--serif);font-size:13px;color:var(--clay);letter-spacing:.04em;margin-bottom:8px}
+  /* PMBOK strip */
+  .flow{display:flex;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin:18px 0}
+  .flow .ph{flex:1;padding:16px 14px;border-right:1px solid var(--line);background:var(--surface)}
+  .flow .ph:last-child{border-right:none}
+  .flow .ph .zh{font-weight:650;font-size:14.5px}
+  .flow .ph .en{color:var(--ink-3);font-size:11px;letter-spacing:.06em;text-transform:uppercase;margin-top:2px}
+  .flow .ph .tag{margin-top:9px;font-size:11.5px;color:var(--ink-2)}
+  .flow .ph.hot{background:var(--clay-soft)}
+  .flow .ph.hot .zh{color:var(--clay-deep)}
+  .flow .ph.free{background:var(--ok-soft)}
+  .callout{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--clay);border-radius:var(--r-sm);padding:14px 16px;font-size:13.5px;color:var(--ink-2);margin:16px 0}
+  /* table */
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px}
+  th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:600;border-bottom-color:var(--line-2)}
+  td b{font-weight:650}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:20px;white-space:nowrap}
+  .p-cut{background:var(--risk-soft);color:var(--risk)} .p-keep{background:var(--ok-soft);color:var(--ok)} .p-up{background:var(--clay-soft);color:var(--clay-deep)} .p-tr{background:var(--warn-soft);color:var(--warn)}
+  /* control points */
+  .cp{display:grid;grid-template-columns:38px 1fr;gap:16px;padding:18px 0;border-top:1px solid var(--line)}
+  .cp:first-of-type{border-top:none}
+  .cp .num{font-family:var(--serif);font-size:24px;color:var(--clay);line-height:1}
+  .cp h4{margin:0 0 3px;font-size:16px;font-weight:650}
+  .cp .grp{font-size:11.5px;color:var(--ink-3);letter-spacing:.04em;margin-bottom:9px}
+  .cp .lines{font-size:13.5px;color:var(--ink-2);line-height:1.6}
+  .cp .lines b{color:var(--ink);font-weight:600}
+  .cp .meta{margin-top:9px;display:flex;gap:7px;flex-wrap:wrap}
+  .tg{font-size:11px;font-weight:600;padding:3px 9px;border-radius:6px;background:var(--surface);border:1px solid var(--line-2);color:var(--ink-2)}
+  .tg.req{border-color:var(--clay-soft);color:var(--clay-deep);background:var(--clay-soft)}
+  ol.principles{margin:14px 0;padding-left:0;counter-reset:p;list-style:none}
+  ol.principles li{counter-increment:p;position:relative;padding:11px 0 11px 40px;border-top:1px solid var(--line);font-size:14.5px}
+  ol.principles li:first-child{border-top:none}
+  ol.principles li::before{content:counter(p);position:absolute;left:0;top:11px;width:24px;height:24px;border-radius:50%;background:var(--clay-soft);color:var(--clay-deep);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;font-family:var(--sans)}
+  ol.principles li b{font-weight:650}
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px;line-height:1.6}
+  @media(max-width:880px){ .layout{grid-template-columns:1fr;gap:0} nav.toc{display:none} .cards.g3,.cards.g2{grid-template-columns:1fr} .flow{flex-direction:column} .flow .ph{border-right:none;border-bottom:1px solid var(--line)} h1{font-size:33px} }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <div class="brand">Builders' <b>Workbench</b></div>
+    <div class="kicker">管理框架 · 总结</div>
+    <a href="#s1"><span class="num">01</span>第一性原理</a>
+    <a href="#s2"><span class="num">02</span>经典流程做骨架</a>
+    <a href="#s3"><span class="num">03</span>两个结构性变化</a>
+    <a href="#s4"><span class="num">04</span>变化总表</a>
+    <a href="#s5"><span class="num">05</span>新的控制点</a>
+    <a href="#s6"><span class="num">06</span>先行 vs 滞后</a>
+    <a href="#s7"><span class="num">07</span>设计原则</a>
+  </nav>
+
+  <main>
+    <div class="kick">Builders' Workbench</div>
+    <h1>从传统项目管理<br>到 AI 原生</h1>
+    <p class="lede">不是为了限制 Builders，而是用更少、更锋利的控制点，辅助每个项目健康地走完生命周期。</p>
+    <p class="lede" style="font-size:15px;color:var(--ink-3)">保留项目管理的经典骨架，砍掉为「执行慢、信息靠人问」而生的协调税。</p>
+
+    <div class="rule"></div>
+
+    <section id="s1">
+      <h2><span class="n">01</span>第一性原理</h2>
+      <p class="sub">传统 PM 的厚重不是目的，而是在为三种成本买单。看清它们，才知道哪些能被 AI 打掉。</p>
+      <div class="cards g3">
+        <div class="card"><div class="tax">Information</div><h4>信息传递税</h4><p>分工导致层层交接，每次交接都要文档、评审、签字来防失真。</p></div>
+        <div class="card"><div class="tax">Coordination</div><h4>协调税</h4><p>多人做相互依赖的模块，于是要排期、站会、状态汇报来同步。</p></div>
+        <div class="card"><div class="tax">Verification</div><h4>验证成本</h4><p>执行慢、返工贵，于是设独立 QA 和一堆阶段门来提前拦截。</p></div>
+      </div>
+      <p>一句话：传统 PM 的厚重 = <span class="em">「执行成本高 + 信息靠人问」</span>这两个前提的产物。AI 恰好同时打掉了这两个前提——这是一切变化的根源。</p>
+    </section>
+
+    <section id="s2">
+      <h2><span class="n">02</span>经典流程做骨架</h2>
+      <p class="sub">骨架不丢：仍是 PMBOK 五大过程组。变的是每个阶段的「重量」——尤其「执行」对 Builder 完全放开。</p>
+      <div class="flow">
+        <div class="ph hot"><div class="zh">启动</div><div class="en">Initiating</div><div class="tag">意图 + 竞品</div></div>
+        <div class="ph hot"><div class="zh">规划</div><div class="en">Planning</div><div class="tag">需求 + 优先级</div></div>
+        <div class="ph free"><div class="zh">执行</div><div class="en">Executing</div><div class="tag">放开构建 · 无门</div></div>
+        <div class="ph hot"><div class="zh">监控</div><div class="en">Monitoring</div><div class="tag">进度 + 质量门</div></div>
+        <div class="ph"><div class="zh">收尾</div><div class="en">Closing</div><div class="tag">滞后指标回收</div></div>
+      </div>
+      <div class="callout"><strong>关键洞察：</strong>AI 原生 PM 把工作量集中在<span class="em">「监控与控制」</span>（且大多自动化），而把<span class="em">「执行」</span>留给 Builder——执行阶段没有控制点，这正是"辅助而非限制"的落点。</div>
+    </section>
+
+    <section id="s3">
+      <h2><span class="n">03</span>两个结构性变化</h2>
+      <p class="sub">先看成本结构怎么变，角色与流程的增删就是自然结果。</p>
+      <div class="cards g2">
+        <div class="card"><h4>A · 执行成本 → 趋近 0</h4><p>一个 Builder + AI 横跨设计/编码/测试/取数/文档。单人职责边界变大，交接骤减——"翻译/交接"型角色失去存在理由。</p></div>
+        <div class="card"><h4>B · 信息获取成本 → 趋近 0</h4><p>状态、上下文、文档不再靠"找人问"，被工具自动汇聚。项目经理的大部分工作正是这条信息税，最先被系统吸收。</p></div>
+      </div>
+      <h3>前沿公司的公开可见模式</h3>
+      <p style="font-size:13.5px;color:var(--ink-2)"><strong>Anthropic</strong> 文档/写作驱动、小团队、eval/安全驱动、重度 dogfood 自家工具。<strong>OpenAI</strong> 小型突击队、先发布再迭代、自下而上。<strong>Cursor</strong> 极小团队撬动高产出、工程师端到端 owner、高频发布。<strong>通行趋势</strong>：PM 从"写规格+协调"转向"定方向+品味+eval+判断"。</p>
+      <div class="callout" style="border-left-color:var(--warn)">来源为公开演讲/报道的概括，<strong>非内部 playbook</strong>；联网恢复后可换成带链接的可核实版本。</div>
+    </section>
+
+    <section id="s4">
+      <h2><span class="n">04</span>变化总表</h2>
+      <p class="sub">角色约 8 → 3，流程约 10 → 精简主干。</p>
+      <h3>角色</h3>
+      <table>
+        <tr><th>传统角色</th><th>去向</th><th>归并到</th></tr>
+        <tr><td>项目经理 / PMO / Scrum Master</td><td><span class="pill p-cut">B 掉</span></td><td>变成 workbench 系统本身</td></tr>
+        <tr><td>产品经理</td><td><span class="pill p-up">升维</span></td><td>方向官（方向/品味/eval/优先级）</td></tr>
+        <tr><td>技术负责人 / 架构师</td><td><span class="pill p-tr">并入</span></td><td>Builder；跨域架构按需顾问</td></tr>
+        <tr><td>设计师 / 数据分析师</td><td><span class="pill p-tr">部分并入</span></td><td>Builder 自助；高端能力按需专家</td></tr>
+        <tr><td>开发工程师</td><td><span class="pill p-up">转型</span></td><td><b>Builder（端到端 owner）</b></td></tr>
+        <tr><td>测试 / QA</td><td><span class="pill p-tr">转型</span></td><td>eval/自动化；高风险面保留专家</td></tr>
+      </table>
+      <p style="font-size:13.5px"><strong>→ 三个核心角色：</strong>① Builder（端到端 owner）｜② 方向官｜③ 按需专家池。</p>
+      <h3>流程</h3>
+      <table>
+        <tr><th>传统流程</th><th>去向</th></tr>
+        <tr><td>立项 / PRD</td><td><span class="pill p-tr">转型</span> 一页纸意图（北极星 + 成功标准 + eval）</td></tr>
+        <tr><td>计划与排期（WBS/甘特）</td><td><span class="pill p-cut">B 掉</span> 短周期 + 实时信号</td></tr>
+        <tr><td>独立测试 / QA 周期</td><td><span class="pill p-tr">转型</span> 持续自动评估</td></tr>
+        <tr><td>多道评审门</td><td><span class="pill p-tr">精简</span> 少而锋利的门</td></tr>
+        <tr><td>状态汇报 / 站会</td><td><span class="pill p-cut">B 掉</span> workbench 自动汇聚</td></tr>
+        <tr><td>竞品调研 / 复盘</td><td><span class="pill p-keep">保留强化</span> 常态化 + 滞后指标闭环</td></tr>
+      </table>
+    </section>
+
+    <section id="s5">
+      <h2><span class="n">05</span>新的控制点</h2>
+      <p class="sub">管理的抓手不是"流程"而是 6 + 1 个控制点。每个都满足：自动优先、按异常管理、对应一种"会杀死项目的死法"。你点名的五要素已全部嵌入（<span class="tg req" style="display:inline">橙标</span>）。</p>
+
+      <div class="cp"><div class="num">1</div><div><h4>北极星与意图对齐</h4><div class="grp">过程组 · 启动 Initiating</div><div class="lines">拦的死法：<b>方向漂移 / 做了没人要的东西</b>。立项即声明问题、北极星、成功标准；不对齐不开工。取代厚重 PRD。</div><div class="meta"><span class="tg req">北极星指标</span><span class="tg">先行锚点</span></div></div></div>
+
+      <div class="cp"><div class="num">2</div><div><h4>竞品与基线扫描</h4><div class="grp">过程组 · 启动 Initiating</div><div class="lines">拦的死法：<b>被对手拉开身位而不自知</b>。AI 持续监控，对手有实质动作主动告警——常态化，非一次性阶段。</div><div class="meta"><span class="tg req">竞品对比</span><span class="tg">先行 · 常态</span></div></div></div>
+
+      <div class="cp"><div class="num">3</div><div><h4>需求导入与优先级</h4><div class="grp">过程组 · 规划 Planning</div><div class="lines">拦的死法：<b>什么都做、什么都做不完</b>。诉求进单一队列、按北极星打分，设 WIP 上限。</div><div class="meta"><span class="tg req">需求导入</span><span class="tg">先行 · 自动</span></div></div></div>
+
+      <div class="cp"><div class="num">4</div><div><h4>实时进度信号</h4><div class="grp">过程组 · 监控 Monitoring</div><div class="lines">拦的死法：<b>悄无声息地停滞</b>。从 git/PR/任务/预览自动汇聚，停滞、老化、范围蔓延自动告警。<b>这是替代项目经理的关键件。</b></div><div class="meta"><span class="tg req">进度跟踪</span><span class="tg">先行 · 自动</span></div></div></div>
+
+      <div class="cp"><div class="num">5</div><div><h4>质量与评估门</h4><div class="grp">过程组 · 监控 Monitoring</div><div class="lines">拦的死法：<b>质量 / 安全回退</b>。eval + 自动测试 + 安全检查，外加 1 次关键人工评审。砍掉 QA 周期与橡皮图章。</div><div class="meta"><span class="tg">门 · 人工 + 自动</span></div></div></div>
+
+      <div class="cp"><div class="num">6</div><div><h4>滞后指标回收</h4><div class="grp">过程组 · 收尾 Closing</div><div class="lines">拦的死法：<b>上线即遗忘</b>。回看留存/收入/满意度是否真的变好（周级别）。闭环。</div><div class="meta"><span class="tg req">滞后性指标</span><span class="tg">滞后 · 验证</span></div></div></div>
+
+      <div class="cp"><div class="num">+</div><div><h4>组合健康度（贯穿）</h4><div class="grp">leadership 视图</div><div class="lines">跨所有项目只看红/黄，<b>按异常管理</b>——既保留监督，又不加协调税。</div><div class="meta"><span class="tg">贯穿全程</span></div></div></div>
+    </section>
+
+    <section id="s6">
+      <h2><span class="n">06</span>先行 vs 滞后</h2>
+      <p class="sub">用先行指标在途纠偏，用滞后指标事后验证真相。</p>
+      <table>
+        <tr><th></th><th>先行指标 leading</th><th>滞后指标 lagging</th></tr>
+        <tr><td><b>作用</b></td><td>在途纠偏（快反馈）</td><td>事后验证（慢反馈）</td></tr>
+        <tr><td><b>例子</b></td><td>激活率、首值时间、eval 通过率、周期时间</td><td>留存、净收入留存、NPS、流失率</td></tr>
+        <tr><td><b>控制点</b></td><td>CP 1–4</td><td>CP 6</td></tr>
+      </table>
+      <p style="font-size:13.5px;color:var(--ink-2)">北极星通常是偏先行的"唯一重要指标"，但必须用滞后指标兜底校验，避免"北极星涨了、生意没变好"。</p>
+    </section>
+
+    <section id="s7">
+      <h2><span class="n">07</span>设计原则</h2>
+      <p class="sub">六条原则，防止它退化成换皮官僚。</p>
+      <ol class="principles">
+        <li><b>自动优先</b>——能从系统拿到的，绝不让人填表/开会。</li>
+        <li><b>按异常管理</b>——健康项目对管理者隐身。</li>
+        <li><b>轻量意图 &gt; 重型文档</b>——一页纸 + 原型 + eval。</li>
+        <li><b>少而锋利的人工门</b>——全程 1–2 个真评审。</li>
+        <li><b>度量内建</b>——上线前就埋好指标。</li>
+        <li><b>每个控制点对应一种死法</b>——拦不住具体风险就不加。</li>
+      </ol>
+    </section>
+
+    <footer>
+      Builders' Workbench · 项目管理框架总结 · 配套：<b>workbench.html</b>（Cowork 形态项目台）、<b>framework.md</b>（完整文档）。<br>
+      第 03 节的公司做法为公开模式概括，非内部 playbook。
+    </footer>
+  </main>
+</div>
+</body>
+</html>
