@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Builders' Workbench · OPC</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F1EFE7; --paper-2:#F6F4EC; --surface:#FCFBF7; --surface-2:#FFFFFF;
+    --ink:#1A1A17; --ink-2:#6C6A61; --ink-3:#9C9A8E;
+    --line:#E4E0D4; --line-2:#D8D3C4;
+    --clay:#CC785C; --clay-deep:#A9512F; --clay-soft:#EFDCD1;
+    --ok:#477A53; --ok-soft:#E2ECE2; --warn:#B0792B; --warn-soft:#F2E8CF; --risk:#AF4736; --risk-soft:#F2DCD5;
+    --blue:#3E6B8C; --blue-soft:#E2EBF0; --slate:#7B8794; --slate-soft:#E9ECEF;
+    --r:13px; --r-sm:9px; --r-xs:6px;
+    --serif:"Tiempos Headline","Iowan Old Style",Georgia,"Songti SC",serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Inter,sans-serif;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;height:100vh;overflow:hidden;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  button{font-family:inherit}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .shell{display:flex;flex-direction:column;height:100vh}
+
+  /* ===== top bar ===== */
+  .bar{height:58px;flex:none;display:flex;align-items:center;gap:16px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--surface)}
+  .wordmark{font-family:var(--serif);font-size:18px;letter-spacing:-.01em;display:flex;align-items:center;gap:9px;white-space:nowrap}
+  .wordmark .d{width:9px;height:9px;border-radius:50%;background:var(--clay)}
+  .wordmark b{font-weight:600}
+  .wordmark .opc{font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.12em;margin-left:2px}
+  .routebadge{display:flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:9px;background:var(--paper-2);overflow:hidden;cursor:pointer}
+  .routebadge .lab{font-size:11px;color:var(--ink-3);padding:0 10px;white-space:nowrap}
+  .routebadge .seg{display:flex;align-items:center;gap:5px;padding:6px 11px;border-left:1px solid var(--line);font-size:12px;color:var(--ink-2)}
+  .routebadge .seg .n{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600;font-size:13px}
+  .routebadge .seg.cert .n{color:var(--clay-deep)} .routebadge .seg.appr .n{color:var(--warn)} .routebadge .seg.err .n{color:var(--risk)}
+  .routebadge:hover{border-color:var(--clay)}
+  .grow{flex:1}
+  .seg-nav{display:flex;background:var(--paper-2);border:1px solid var(--line);border-radius:9px;padding:3px}
+  .seg-nav button{border:none;background:none;font-size:13px;color:var(--ink-2);padding:6px 13px;border-radius:7px;cursor:pointer;font-weight:500}
+  .seg-nav button.on{background:var(--surface-2);color:var(--ink);box-shadow:0 1px 2px rgba(60,50,30,.07)}
+  .newbtn{display:flex;align-items:center;gap:7px;border:1px solid var(--clay);color:var(--clay-deep);background:var(--surface-2);border-radius:8px;padding:7px 13px;font-size:13px;font-weight:600;cursor:pointer}
+  .newbtn:hover{background:var(--clay-soft)}
+  .newbtn .pl{font-size:15px;line-height:1}
+  .kbd{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--ink-3);border:1px solid var(--line);border-radius:7px;padding:5px 9px;background:var(--paper-2);cursor:pointer}
+  .kbd b{font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+  .ex{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2);cursor:pointer;user-select:none;border:1px solid var(--line);border-radius:20px;padding:5px 11px}
+  .ex.on{border-color:var(--clay);color:var(--clay-deep);background:var(--clay-soft)}
+  .ex .sw{width:28px;height:16px;border-radius:9px;background:var(--line-2);position:relative;transition:.15s}
+  .ex.on .sw{background:var(--clay)}
+  .ex .sw i{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:.15s}
+  .ex.on .sw i{left:14px}
+  .live{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+  .live .p{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:pulse 2.2s infinite}
+  .live .num{font-size:11.5px}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+  .ava{width:30px;height:30px;border-radius:8px;background:var(--ink);color:var(--paper);display:grid;place-items:center;font-family:var(--serif);font-size:14px}
+
+  /* ===== three-pane ===== */
+  .app{flex:1;display:grid;grid-template-columns:248px 1fr 332px;min-height:0;position:relative}
+  .rail,.main,.aside{overflow:auto;min-height:0}
+  .rail{border-right:1px solid var(--line);background:var(--paper-2);padding:14px 11px}
+  .aside{border-left:1px solid var(--line);background:var(--surface);padding:0}
+  .main{padding:22px 28px 60px}
+
+  /* ===== rail · product spine ===== */
+  .rail .rh{display:flex;align-items:baseline;justify-content:space-between;padding:4px 8px 10px;color:var(--ink-3);font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:600}
+  .xrow{display:flex;gap:9px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 11px;cursor:pointer;margin-bottom:12px}
+  .xrow:hover{border-color:var(--clay)}
+  .xrow .xi{width:26px;height:26px;border-radius:7px;background:var(--clay-soft);color:var(--clay-deep);display:grid;place-items:center;font-size:13px;flex:none}
+  .xrow .xt{font-size:12.5px;font-weight:600;line-height:1.3}
+  .xrow .xs{font-size:11px;color:var(--ink-3)}
+  .prow{display:flex;gap:10px;align-items:flex-start;padding:9px 9px;border-radius:10px;cursor:pointer;margin-bottom:2px}
+  .prow:hover{background:var(--surface)}
+  .prow.sel{background:var(--clay-soft)}
+  .prow.sel .pn{color:var(--clay-deep)}
+  .prow .dot{width:9px;height:9px;border-radius:50%;margin-top:5px;flex:none}
+  .prow .pn{font-weight:600;font-size:13.5px;line-height:1.3}
+  .prow .pm{font-size:11px;color:var(--ink-3);margin-top:2px}
+  .prow .pm .num{font-size:11px}
+  .dot.green{background:var(--ok)} .dot.amber{background:var(--warn)} .dot.red{background:var(--risk)}
+  .railadd{margin-top:10px;padding:9px;text-align:center;color:var(--ink-3);font-size:12.5px;border:1px dashed var(--line-2);border-radius:9px;cursor:pointer}
+  .railadd:hover{color:var(--clay-deep);border-color:var(--clay)}
+
+  /* ===== main · inbox ===== */
+  .mhead{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+  .mhead h1{font-family:var(--serif);font-size:23px;font-weight:500;letter-spacing:-.01em;margin:0}
+  .mhead .hb{font-size:12px;font-weight:600;padding:2px 9px;border-radius:20px}
+  .b-green{background:var(--ok-soft);color:var(--ok)} .b-amber{background:var(--warn-soft);color:var(--warn)} .b-red{background:var(--risk-soft);color:var(--risk)} .b-soft{background:var(--paper-2);color:var(--ink-2);border:1px solid var(--line)} .b-clay{background:var(--clay-soft);color:var(--clay-deep)} .b-blue{background:var(--blue-soft);color:var(--blue)}
+  .msub{color:var(--ink-2);font-size:13px;margin:2px 0 20px}
+  .msub b{color:var(--ink);font-weight:600}
+  .msub .lnk{color:var(--clay-deep);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+
+  .inbox{display:flex;flex-direction:column;gap:10px}
+  .icard{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--line-2);border-radius:var(--r);padding:14px 16px;cursor:pointer;transition:.12s}
+  .icard:hover{border-color:var(--clay);transform:translateY(-1px)}
+  .icard.sel{border-color:var(--clay);box-shadow:0 0 0 2px var(--clay-soft)}
+  .icard.t-cert{border-left-color:var(--clay)} .icard.t-side{border-left-color:var(--warn)} .icard.t-fail{border-left-color:var(--risk)} .icard.t-stuck{border-left-color:var(--slate)} .icard.t-sys{border-left-color:var(--ink-3);border-style:dashed;background:var(--paper-2)}
+  .icard .ir1{display:flex;align-items:center;gap:9px}
+  .icard .itag{font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px}
+  .icard .it{font-weight:650;font-size:14.5px;flex:1}
+  .icard .iwhy{font-size:13px;color:var(--ink-2);margin-top:6px;line-height:1.5}
+  .icard .imeta{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-top:9px;display:flex;gap:13px}
+  .icard .drawer{max-height:0;overflow:hidden;transition:max-height .25s ease}
+  .icard.sel .drawer{max-height:260px;margin-top:12px}
+  .drawer .dwrap{border-top:1px solid var(--line);padding-top:12px}
+  .clusterbar{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-2);background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 11px;margin-top:9px}
+  .clusterbar .cl-main{color:var(--risk);font-weight:600}
+  .gotorun{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--clay-deep);font-weight:600;cursor:pointer;margin-top:10px}
+  .gotorun:hover{text-decoration:underline;text-underline-offset:2px}
+
+  .empty{text-align:center;padding:70px 20px;color:var(--ok)}
+  .empty .ei{width:46px;height:46px;border-radius:50%;background:var(--ok-soft);color:var(--ok);display:grid;place-items:center;margin:0 auto 16px;font-size:22px}
+  .empty .et{font-family:var(--serif);font-size:20px;color:var(--ink);margin-bottom:6px}
+  .empty .es{font-size:13.5px;color:var(--ink-2)}
+  .autoclosed{margin-top:18px;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);overflow:hidden}
+  .autoclosed .ach{display:flex;align-items:center;gap:8px;padding:12px 15px;cursor:pointer;font-size:13px;color:var(--ink-2)}
+  .autoclosed .ach b{color:var(--ink);font-weight:600}
+  .autoclosed .acbody{display:none;border-top:1px solid var(--line);padding:6px 15px 12px}
+  .autoclosed.open .acbody{display:block}
+  .acline{font-size:12.5px;color:var(--ink-3);padding:7px 0;border-bottom:1px solid var(--line);display:flex;gap:10px}
+  .acline:last-child{border:none} .acline .ok{color:var(--ok)}
+
+  /* ===== creation · chat ===== */
+  .chat{display:flex;flex-direction:column;height:100%}
+  .crumb{font-size:12.5px;color:var(--ink-3);margin-bottom:16px}
+  .crumb b{color:var(--clay-deep);font-weight:600}
+  .bubbles{display:flex;flex-direction:column;gap:14px;flex:1}
+  .bub{max-width:88%;font-size:14px;line-height:1.6}
+  .bub.u{align-self:flex-end;background:var(--clay);color:#fff;padding:11px 15px;border-radius:14px 14px 4px 14px}
+  .bub.c{align-self:flex-start;background:var(--surface);border:1px solid var(--line);padding:13px 16px;border-radius:14px 14px 14px 4px}
+  .bub.c .who{font-size:11px;color:var(--ink-3);font-weight:600;margin-bottom:5px;letter-spacing:.04em}
+  .bub.c b{color:var(--ink);font-weight:650}
+  .bub.c .pit{color:var(--risk);font-weight:600}
+  .starters{display:flex;flex-direction:column;gap:9px;margin-top:6px}
+  .starter{border:1px solid var(--line);background:var(--surface);border-radius:11px;padding:13px 15px;cursor:pointer;transition:.12s}
+  .starter:hover{border-color:var(--clay);transform:translateY(-1px)}
+  .starter .stt{font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:8px}
+  .starter .sts{font-size:12px;color:var(--ink-3);margin-top:4px}
+  .composer{margin-top:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:12px 14px}
+  .composer .ci{font-size:13.5px;color:var(--ink-3)}
+  .composer .cap{font-size:11.5px;color:var(--ink-3);margin-top:9px;border-top:1px solid var(--line);padding-top:9px}
+  .composer .cap b{color:var(--clay-deep);font-family:var(--mono);font-weight:500}
+  .runrow{margin-top:18px;display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px}
+  .runrow.low{background:var(--ok-soft);border:1px solid var(--ok)}
+  .runrow .rr-t{flex:1;font-size:13px;color:var(--ok)}
+  .runrow .rr-t b{font-weight:700}
+
+  /* ===== buttons ===== */
+  .btn{font-size:13px;font-weight:600;border-radius:8px;padding:9px 15px;border:1px solid transparent;cursor:pointer;transition:.12s;white-space:nowrap}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{background:var(--clay);color:#fff} .btn.primary:hover{background:var(--clay-deep)}
+  .btn.primary:disabled{background:var(--line-2);color:var(--ink-3);cursor:not-allowed;transform:none}
+  .btn.dark{background:var(--ink);color:var(--paper)} .btn.dark:hover{background:#000}
+  .btn.ghost{background:transparent;color:var(--ink-2);border-color:var(--line)} .btn.ghost:hover{color:var(--ink);border-color:var(--line-2)}
+  .btn.ok{background:var(--ok);color:#fff} .btn.ok:hover{filter:brightness(1.05)}
+  .btn.kill{background:var(--risk-soft);color:var(--risk);border-color:var(--risk)} .btn.kill:hover{background:var(--risk);color:#fff}
+  .btn.sm{padding:6px 11px;font-size:12px}
+
+  /* ===== aside states ===== */
+  .ax{padding:18px 16px}
+  .ax-head{font-size:11px;letter-spacing:.07em;text-transform:uppercase;font-weight:700;color:var(--ink-3);padding:13px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface);z-index:2}
+  .ax-head.create{background:var(--clay-soft);color:var(--clay-deep);border-bottom-color:var(--clay)}
+  .ax-head.decide{background:var(--paper-2);color:var(--ink-2)}
+  .ax .lever{margin-bottom:18px}
+  .healthline{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--r);background:var(--paper-2);margin-bottom:8px}
+  .healthline .hl-d{width:11px;height:11px;border-radius:50%;flex:none}
+  .healthline .hl-t{font-family:var(--serif);font-size:17px}
+  .healthline .hl-s{font-size:11.5px;color:var(--ink-3)}
+  .ax .axlabel{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:700;margin:18px 0 9px}
+  .leverbox{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);padding:12px 14px;margin-bottom:8px}
+  .leverbox .lv1{display:flex;align-items:baseline;justify-content:space-between}
+  .leverbox .lv1 .k{font-size:12.5px;color:var(--ink-2);font-weight:600}
+  .leverbox .lv1 .v{font-family:var(--mono);font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+  .leverbox .v .ar{font-size:11px} .ar.good{color:var(--ok)} .ar.bad{color:var(--risk)}
+  .leverbox .lv2{font-size:11.5px;color:var(--ink-3);margin-top:4px}
+  .leverbox .lv2 .drv{color:var(--blue);font-weight:600}
+
+  .dctx{font-size:13px}
+  .dctx .dterm{font-weight:650;font-size:14px;margin-bottom:4px}
+  .dctx .dwhat{background:var(--risk-soft);border:1px solid var(--risk);border-radius:var(--r-sm);padding:11px 13px;color:var(--ink);font-size:12.5px;line-height:1.6;margin-bottom:12px}
+  .dctx .dwhat.warn{background:var(--warn-soft);border-color:var(--warn)}
+  .dctx .dwhat b{color:var(--clay-deep)}
+  .acc{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);padding:11px 13px;margin-bottom:12px}
+  .acc .acl{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px}
+  .acc .acc-c{font-family:var(--mono);font-size:12px;color:var(--ink);line-height:1.7}
+  .pitbox{background:var(--warn-soft);border-left:3px solid var(--warn);border-radius:var(--r-xs);padding:10px 12px;font-size:12.5px;color:var(--ink);margin-bottom:12px;line-height:1.55}
+  .pitbox b{color:var(--warn)}
+  .difftoggle{font-size:12.5px;color:var(--clay-deep);cursor:pointer;font-weight:600;display:flex;align-items:center;gap:6px;padding:9px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-bottom:11px}
+  .difbody{display:none;font-family:var(--mono);font-size:11.5px;line-height:1.7;background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r-xs);padding:11px;margin-bottom:11px;white-space:pre-wrap}
+  .difbody.open{display:block}
+  .difbody .add{color:var(--ok)} .difbody .del{color:var(--risk)}
+  .reason{width:100%;border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;font-family:var(--sans);font-size:13px;resize:vertical;min-height:54px;background:var(--surface-2);margin-bottom:11px}
+  .reason:focus{outline:none;border-color:var(--clay)}
+  .gateacts{display:flex;flex-direction:column;gap:8px}
+  .gateacts .row{display:flex;gap:8px}.gateacts .row .btn{flex:1;text-align:center}
+  .gatenote{font-size:11.5px;color:var(--ink-3);margin-top:9px;line-height:1.5}
+  .killrow{margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
+
+  /* ===== fleet / detail / board / flywheel ===== */
+  .label{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:700;margin:22px 0 10px}
+  .label:first-child{margin-top:4px}
+  .wfgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(244px,1fr));gap:12px}
+  .wfcard{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--line-2);border-radius:var(--r);padding:14px 15px;cursor:pointer;transition:.12s}
+  .wfcard:hover{border-color:var(--clay);transform:translateY(-1px)}
+  .wfcard.green{border-left-color:var(--ok)} .wfcard.amber{border-left-color:var(--warn)} .wfcard.red{border-left-color:var(--risk)}
+  .wfcard .wn{font-weight:650;font-size:14px;display:flex;align-items:center;gap:7px}
+  .wfcard .wk{font-size:11px;font-weight:600;padding:1px 7px;border-radius:20px;margin-left:auto}
+  .wfcard .ws{font-size:12px;color:var(--ink-2);margin-top:8px}
+  .wfcard .agg{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);margin-top:7px}
+  .wfcard .agg .run{color:var(--ok)} .wfcard .agg .stk{color:var(--warn)} .wfcard .agg .fl{color:var(--risk)}
+  .wfcard .chain{display:flex;flex-wrap:wrap;align-items:center;gap:3px 2px;margin-top:9px;padding-top:9px;border-top:1px dashed var(--line)}
+  .wfcard .openrun{font-size:11.5px;color:var(--clay-deep);font-weight:600;margin-top:9px;display:flex;align-items:center;gap:5px}
+  .skillchip{font-family:var(--mono);font-size:10.5px;color:var(--ink-2);background:var(--paper-2);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+  .skillchip.paid{color:var(--warn);border-color:var(--warn-soft);background:var(--warn-soft)}
+  .chain .arr2{color:var(--ink-3);font-size:10px;margin:0 1px}
+  @keyframes mfade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .main.fadein{animation:mfade .3s cubic-bezier(.16,1,.3,1)}
+  @media(prefers-reduced-motion:reduce){.main.fadein{animation:none}}
+
+  .back{display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);font-size:13px;cursor:pointer;border:none;background:none;padding:0;margin-bottom:14px}
+  .back:hover{color:var(--clay-deep)}
+  .phead{display:flex;align-items:flex-start;gap:12px;margin-bottom:4px}
+  .phead h2{font-family:var(--serif);font-weight:500;font-size:25px;letter-spacing:-.01em;margin:0}
+  .pmeta{color:var(--ink-2);font-size:13px;margin-bottom:6px}
+  .pmeta b{color:var(--ink);font-weight:600}
+  .phaserail{display:flex;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--surface)}
+  .phaserail .seg2{flex:1;padding:11px 12px;border-right:1px solid var(--line);position:relative}
+  .phaserail .seg2:last-child{border-right:none}
+  .phaserail .seg2 .zh{font-weight:650;font-size:13px}
+  .phaserail .seg2 .en{font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);margin-top:1px}
+  .phaserail .seg2 .nt{font-size:10px;margin-top:6px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .phaserail .seg2.done{background:var(--paper-2)} .phaserail .seg2.done .zh{color:var(--ink-2)}
+  .phaserail .seg2.cur{background:var(--clay-soft)} .phaserail .seg2.cur .zh{color:var(--clay-deep)}
+  .phaserail .seg2.free .nt{color:var(--ok);font-weight:600}
+  .phaserail .seg2 .livedot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--clay);margin-left:6px;vertical-align:middle;animation:pulse 1.5s infinite}
+  .phaserail.mini .seg2{padding:8px 9px} .phaserail.mini .seg2 .zh{font-size:11.5px} .phaserail.mini .seg2 .en{display:none} .phaserail.mini .seg2 .nt{margin-top:3px;font-size:9px}
+  .cprow{display:flex;gap:12px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:8px}
+  .cprow .ic{width:23px;height:23px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff}
+  .s-done{background:var(--ok)} .s-active{background:var(--clay)} .s-alert{background:var(--risk)} .s-warn{background:var(--warn)}
+  .s-ok{background:var(--surface-2);border:1.5px solid var(--ok);color:var(--ok)} .s-pending{background:var(--surface-2);border:1.5px solid var(--line-2);color:var(--ink-3)}
+  .cprow .nm{font-weight:650;font-size:13.5px;display:flex;align-items:center;gap:8px}
+  .cprow .ds{font-size:12.5px;color:var(--ink-2);margin-top:3px}
+  .aggbox{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);overflow:hidden}
+  .aggbox .agh{display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer}
+  .aggbox .agh .at{font-weight:650;font-size:13.5px}
+  .aggbox .agh .anum{font-family:var(--mono);font-size:12.5px;color:var(--ink-3);display:flex;gap:12px;margin-left:auto}
+  .aggbox .agh .anum .run{color:var(--ok)} .aggbox .agh .anum .stk{color:var(--warn)} .aggbox .agh .anum .fl{color:var(--risk)}
+  .aggbox .agbody{display:none;border-top:1px solid var(--line);padding:6px 16px 13px}
+  .aggbox.open .agbody{display:block}
+  .agbody .jumpbtn{margin:11px 0 4px}
+  .agli{display:flex;gap:10px;font-family:var(--mono);font-size:12px;color:var(--ink-2);padding:7px 0;border-bottom:1px solid var(--line)}
+  .agli:last-child{border:none}
+
+  .scoreboard{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+  .scard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 17px}
+  .scard .sv{font-family:var(--mono);font-size:27px;font-weight:600;font-variant-numeric:tabular-nums}
+  .scard .sv .ar{font-size:13px} .scard .sn{font-size:13.5px;font-weight:600;margin-top:9px} .scard .ss{font-size:12px;color:var(--ink-3);margin-top:2px}
+  .scard svg{margin-top:10px;display:block}
+
+  .fwtop{background:var(--clay-soft);border:1px solid var(--clay);border-radius:var(--r);padding:16px 18px;margin-bottom:16px;display:flex;align-items:center;gap:18px}
+  .fwtop .big{font-family:var(--mono);font-size:30px;font-weight:700;color:var(--clay-deep);font-variant-numeric:tabular-nums;line-height:1}
+  .fwtop .biglab{font-size:12.5px;color:var(--clay-deep)}
+  .fwtop .saying{font-family:var(--serif);font-size:16px;color:var(--clay-deep);margin-left:auto;text-align:right;max-width:40%}
+  .fwrule{display:grid;grid-template-columns:1fr auto auto auto auto;gap:16px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px 16px;margin-bottom:8px}
+  .fwrule .frn{font-weight:650;font-size:13.5px}
+  .fwrule .frs{font-size:11.5px;color:var(--ink-3);margin-top:2px}
+  .fwrule .frm{font-family:var(--mono);font-size:12px;text-align:center}
+  .fwrule .frm .ml{font-size:10px;color:var(--ink-3);display:block}
+  .fwrule .decay{font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px}
+
+  .srcnote{margin-top:22px;padding-top:14px;border-top:1px dashed var(--line);font-size:11.5px;color:var(--ink-3);line-height:1.6}
+  .srcnote b{color:var(--ink-2)}
+  .pendtag{font-size:10px;font-weight:600;color:var(--ink-3);border:1px solid var(--line-2);border-radius:5px;padding:1px 6px;margin-left:6px}
+
+  /* ===== BOARD · 左因 → 中桥 → 右果 ===== */
+  .prodhead{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 17px;margin-bottom:14px}
+  .prodhead .ph-n{font-family:var(--serif);font-size:20px}
+  .prodhead .ph-cap{font-size:12px;font-weight:600;padding:2px 9px;border-radius:20px}
+  .prodhead .ph-edit{margin-left:auto;font-size:12px;font-weight:600;color:var(--ink-2);border:1px solid var(--line);border-radius:7px;padding:6px 11px;cursor:pointer;background:var(--surface-2)}
+  .prodhead .ph-edit:hover{border-color:var(--clay);color:var(--clay-deep)}
+  .goalbar{display:flex;align-items:flex-start;gap:12px;background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r);padding:13px 17px;margin-bottom:8px}
+  .goalbar .gb-tag{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:600;border:1px solid var(--line-2);border-radius:5px;padding:3px 7px;flex:none;margin-top:3px}
+  .goalbar .gb-ns{font-family:var(--serif);font-size:18px;line-height:1.35}
+  .goalbar .gb-read{font-size:12px;color:var(--ink-3);margin-top:3px}
+  .cause3{display:grid;grid-template-columns:1fr 64px 1fr;align-items:stretch;gap:0;margin-top:14px}
+  .cause3 .colhead{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);font-weight:700;margin-bottom:9px}
+  .cause3 .colhead .sub{display:block;text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:500;font-size:11px;margin-top:2px}
+  .c-left,.c-right{display:flex;flex-direction:column;gap:10px}
+  .leadcard{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--clay);border-radius:0 9px 9px 0;padding:13px 15px}
+  .leadcard .lc-v{font-family:var(--mono);font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:6px}
+  .leadcard .lc-v .ar{font-size:13px}
+  .leadcard .lc-k{font-size:13px;font-weight:650;margin-top:6px}
+  .leadcard .lc-why{font-size:11.5px;color:var(--ink-3);margin-top:3px}
+  .ar.good{color:var(--ok)} .ar.bad{color:var(--risk)}
+  .c-bridge{position:relative;display:flex;align-items:center;justify-content:center}
+  .c-bridge .vline{position:absolute;top:34px;bottom:6px;left:50%;width:0;border-left:1px dashed var(--line-2)}
+  .c-bridge .drv{position:relative;z-index:1;font-size:11px;font-weight:600;padding:4px 9px;border-radius:20px;white-space:nowrap;text-align:center}
+  .resultcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:13px 15px}
+  .resultcard.pend{border-style:dashed}
+  .resultcard .rc-v{font-family:var(--mono);font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ok)}
+  .resultcard.pend .rc-v{font-size:16px;color:var(--ink-3)}
+  .resultcard .rc-k{font-size:13px;font-weight:650;margin-top:6px}
+  .resultcard .rc-s{font-size:11.5px;color:var(--ink-3);margin-top:3px}
+  .resultcard svg{margin-top:9px;display:block}
+
+  /* ===== RUN · live workflow run view ===== */
+  .runwrap{display:flex;flex-direction:column;gap:0}
+  .runtop{display:flex;align-items:flex-start;gap:12px;margin-bottom:4px}
+  .runtop h2{font-family:var(--serif);font-weight:500;font-size:24px;letter-spacing:-.01em;margin:0}
+  .runbody{display:grid;grid-template-columns:1fr 300px;gap:16px;margin-top:14px;align-items:start}
+  @media(max-width:1240px){.runbody{grid-template-columns:1fr}}
+  .runcanvas{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:8px 6px;overflow:auto}
+  .runcanvas .canvashint{font-size:11px;color:var(--ink-3);padding:6px 10px 2px;display:flex;align-items:center;gap:8px}
+  .runsvg{display:block;width:100%;height:auto}
+  /* svg node visual states reuse tokens */
+  .rn-box{fill:var(--surface-2);stroke:var(--line-2);stroke-width:1.5}
+  .rn-queued .rn-box{fill:var(--paper-2);stroke:var(--line-2)}
+  .rn-running .rn-box{fill:var(--clay-soft);stroke:var(--clay);stroke-width:2}
+  .rn-done .rn-box{fill:var(--ok-soft);stroke:var(--ok);stroke-width:1.5}
+  .rn-warn .rn-box{fill:var(--warn-soft);stroke:var(--warn);stroke-width:2}
+  .rn-risk .rn-box{fill:var(--risk-soft);stroke:var(--risk);stroke-width:2}
+  .rn-monitor .rn-box{fill:var(--surface);stroke:var(--slate);stroke-width:1.5;stroke-dasharray:1 0}
+  .rn-barrier .rn-box{fill:var(--paper-2);stroke:var(--ink-3)}
+  .rn-label{font-family:var(--sans);font-size:11.5px;font-weight:600;fill:var(--ink)}
+  .rn-sub{font-family:var(--mono);font-size:9px;fill:var(--ink-3)}
+  .rn-state{font-family:var(--mono);font-size:8.5px;font-weight:600}
+  .rn-state.running{fill:var(--clay-deep)} .rn-state.done{fill:var(--ok)} .rn-state.warn{fill:var(--warn)} .rn-state.risk{fill:var(--risk)} .rn-state.queued{fill:var(--ink-3)} .rn-state.monitor{fill:var(--slate)}
+  .rn-gateicon{font-family:var(--sans);font-size:11px;font-weight:700}
+  .rn-hit{font-family:var(--mono);font-size:8.5px;fill:var(--clay-deep)}
+  .rn-pulse{animation:nodepulse 1.6s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+  @keyframes nodepulse{0%,100%{opacity:1}50%{opacity:.55}}
+  .rn-livedot{fill:var(--clay)}
+  .rn-livedot.on{animation:pulse 1.4s infinite}
+  .edge{fill:none;stroke:var(--line-2);stroke-width:1.5}
+  .edge.flow{stroke:var(--clay);stroke-width:1.8;stroke-dasharray:5 4;animation:dashmove 1s linear infinite}
+  .edge.done{stroke:var(--ok);stroke-width:1.5}
+  @keyframes dashmove{to{stroke-dashoffset:-18}}
+  .lane-label{font-family:var(--mono);font-size:9px;font-weight:600;fill:var(--ink-3);letter-spacing:.04em}
+  .lane-bg{fill:var(--paper-2);opacity:.45}
+  .rn-node{cursor:pointer}
+  .rn-node:hover .rn-box{stroke-width:2.4}
+  @media(prefers-reduced-motion:reduce){.rn-pulse,.edge.flow,.rn-livedot.on,.phaserail .seg2 .livedot{animation:none!important}}
+
+  /* journal stream (right column of run body) */
+  .journal{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;position:sticky;top:0}
+  .journal .jhead{font-size:11px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;color:var(--ink-3);padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .budget{padding:11px 14px;border-bottom:1px solid var(--line);background:var(--paper-2)}
+  .budget .blab{font-size:11px;color:var(--ink-3);display:flex;justify-content:space-between;margin-bottom:6px}
+  .budget .blab b{color:var(--ink);font-family:var(--mono);font-weight:600}
+  .budget .btrack{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+  .budget .bfill{height:100%;background:var(--clay);border-radius:3px;transition:width .5s ease}
+  .jfeed{max-height:520px;overflow:auto;padding:4px 0}
+  .jrow{display:flex;gap:9px;padding:9px 14px;border-bottom:1px solid var(--line);font-size:12px;animation:jin .3s ease}
+  .jrow:last-child{border:none}
+  @keyframes jin{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:none}}
+  @media(prefers-reduced-motion:reduce){.jrow{animation:none}}
+  .jrow .jt{font-family:var(--mono);font-size:10px;color:var(--ink-3);flex:none;width:46px;padding-top:1px}
+  .jrow .jmain{flex:1;line-height:1.45}
+  .jrow .jmark{font-weight:600;margin-right:5px}
+  .jrow.start .jmark{color:var(--clay-deep)} .jrow.result .jmark{color:var(--ok)}
+  .jrow .jid{font-family:var(--mono);font-size:9px;color:var(--ink-3);margin-top:3px}
+  .jrow .jbadge{display:inline-block;font-size:9.5px;font-weight:600;padding:1px 6px;border-radius:10px;margin-left:5px}
+  .jbadge.cache{background:var(--slate-soft);color:var(--slate)}
+  .jbadge.struct{background:var(--ok-soft);color:var(--ok)}
+
+  /* run drilldown aside */
+  .nodedetail .ndsub{background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;font-size:12.5px;color:var(--ink);margin-bottom:13px;line-height:1.5}
+  .nodedetail .ndsub.ok{background:var(--ok-soft);border-color:var(--ok)}
+  .nodedetail .ndsub.warn{background:var(--warn-soft);border-color:var(--warn)}
+  .nodedetail .ndsub.risk{background:var(--risk-soft);border-color:var(--risk)}
+  .nodedetail .ndskills{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:13px}
+  .nodedetail .promptbox{font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--ink-2);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-xs);padding:10px 12px;margin-bottom:13px}
+  .nodedetail .met2{display:flex;gap:18px;font-family:var(--mono);font-size:12px;color:var(--ink-2);margin-bottom:14px}
+  .nodedetail .met2 .ml{font-size:10px;color:var(--ink-3);display:block}
+
+  /* toast + palette */
+  .toast{position:fixed;bottom:24px;right:24px;background:var(--ink);color:var(--paper);border-radius:10px;padding:13px 18px;display:flex;align-items:center;gap:11px;font-size:13.5px;box-shadow:0 8px 28px rgba(40,30,15,.22);transform:translateY(140%);transition:transform .35s cubic-bezier(.16,1,.3,1);z-index:90;max-width:380px}
+  .toast.show{transform:none}
+  .toast .ti{color:var(--ok);font-size:16px}
+  .toast b{color:#fff}
+  .palette{position:fixed;inset:0;background:rgba(30,24,14,.18);display:none;align-items:flex-start;justify-content:center;padding-top:14vh;z-index:80}
+  .palette.show{display:flex}
+  .palette .pbox{width:520px;max-width:92vw;background:var(--surface-2);border:1px solid var(--line);border-radius:14px;box-shadow:0 20px 60px rgba(40,30,15,.25);overflow:hidden}
+  .palette .pin{padding:15px 18px;border-bottom:1px solid var(--line);font-size:15px;color:var(--ink-3)}
+  .palette .pin b{color:var(--ink);font-family:var(--mono);font-size:13px}
+  .palette .popt{padding:12px 18px;font-size:13.5px;cursor:pointer;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
+  .palette .popt:hover{background:var(--clay-soft)}
+  .palette .popt .pk{font-size:11px;color:var(--ink-3)}
+
+  .narrator{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(22px);opacity:0;transition:.3s cubic-bezier(.16,1,.3,1);background:var(--ink);color:var(--paper);padding:13px 22px;border-radius:11px;font-size:13.5px;max-width:700px;box-shadow:0 10px 32px rgba(40,30,15,.28);z-index:95;text-align:center;line-height:1.5;pointer-events:none}
+  .narrator.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .narrator .ns{font-family:var(--mono);font-size:11px;color:var(--clay-soft);margin-right:9px}
+  @media(max-width:1080px){ .app{grid-template-columns:210px 1fr 300px} }
+  @media(max-width:900px){ body{overflow:auto;height:auto} .shell{height:auto} .app{grid-template-columns:1fr} .rail,.aside{border:none;border-bottom:1px solid var(--line)} .bar{flex-wrap:wrap;height:auto;padding:10px 14px;gap:10px} .kbd,.live{display:none} .cause3{grid-template-columns:1fr}.c-bridge{padding:6px 0}.c-bridge .vline{display:none} }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="bar">
+    <div class="wordmark"><span class="d"></span>Builders' <b>Workbench</b><span class="opc">OPC</span></div>
+    <div class="grow"></div>
+    <div class="seg-nav" id="segnav">
+      <button data-v="inbox" class="on">待办</button>
+      <button data-v="fleet">流水线</button>
+      <button data-v="run">运行</button>
+      <button data-v="board">项目</button>
+      <button data-v="flywheel">放行规则</button>
+    </div>
+    <button class="newbtn" onclick="startCreate()"><span class="pl">+</span>新建流水线</button>
+    <div class="kbd" onclick="openPalette()"><b>⌘K</b></div>
+    <div class="ava">梅</div>
+  </header>
+
+  <div class="app">
+    <aside class="rail">
+      <div class="rh"><span>产品</span><span class="num" id="railCount"></span></div>
+      <div class="xrow" onclick="openCrossProduct()">
+        <div class="xi">!</div>
+        <div><div class="xt">跨全部产品 · 最需要你</div><div class="xs">2 待定标准 · 2 待批 · 2 异常</div></div>
+      </div>
+      <div id="railList"></div>
+      <div class="railadd">+ 新建产品</div>
+    </aside>
+
+    <main class="main" id="main"></main>
+
+    <aside class="aside" id="aside"></aside>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span class="ti">✓</span><span id="toastText"></span></div>
+<div class="palette" id="palette" onclick="if(event.target.id==='palette')closePalette()">
+  <div class="pbox">
+    <div class="pin">用一句人话直达 —— 例:<b>拼一条每天扫竞品的流水线</b></div>
+    <div class="popt" onclick="closePalette();startCreate('low')"><span>＋ 新建:每天扫竞品 changelog,有动作就浮草案</span><span class="pk" style="margin-left:auto">创建 · 低风险</span></div>
+    <div class="popt" onclick="closePalette();startCreate('high')"><span>＋ 新建:给负面评论用户发安抚邮件 + 退代金券</span><span class="pk" style="margin-left:auto">创建 · 高风险</span></div>
+    <div class="popt" onclick="closePalette();go('inbox')"><span>↳ 看所有等我定标准 / 待批的事</span><span class="pk" style="margin-left:auto">待你处理</span></div>
+    <div class="popt" onclick="closePalette();openRun('wf-poster')"><span>▷ 看「海报工厂」这条活体运行</span><span class="pk" style="margin-left:auto">运行</span></div>
+    <div class="popt" onclick="closePalette();go('flywheel')"><span>↻ 管理已认可的自动放行规则</span><span class="pk" style="margin-left:auto">自动放行规则</span></div>
+    <div class="popt" onclick="closePalette();runDemo()"><span>▶ 跑一遍自动演示</span><span class="pk" style="margin-left:auto">看演示</span></div>
+  </div>
+</div>
+
+<script>
+/* ============ data ============ */
+const PHASES=[{zh:"启动",en:"Initiating"},{zh:"规划",en:"Planning"},{zh:"执行",en:"Executing"},{zh:"监控",en:"Monitoring"},{zh:"收尾",en:"Closing"}];
+const HMAP={green:"健康",amber:"需关注",red:"需立即处理"};
+
+const PRODUCTS=[
+  {id:"delivery",name:"客户交付",health:"amber",agents:24,ns:"高分成品按时交付",set:true,
+   leading:[["评审首轮过率","82%","good","首轮 ≥8,预示返工少","返工率"],
+            ["平均迭代轮次","1.3","good","重跑越少越顺","交付周期"],
+            ["动真格卡口待批时长","9 分","good","你批得越快,出门越快","交付周期"]],
+   lagging:[{k:"合并后返工率",v:"6%",s:"成品交付后返工占比 · 在降",pts:"0,15 40,13 80,12 120,10 160,9 200,8"},
+            {k:"按时交付率",v:"待接入",s:"接项目排期后回收",pending:true}]},
+  {id:"growth",name:"增长 · 洞察",health:"green",agents:8,ns:"（待建立）",set:false,
+   leading:[],lagging:[]}
+];
+
+/* inbox cards keyed by product */
+const INBOX={
+  delivery:[
+    {id:"cert",type:"cert",tag:["b-clay","待定标准"],t:"落地页自动重跑 · design-review 9.2 通过",wf:"wf-landing",
+     why:"刚跑完的落地页过了评审。认一次「≥8 且二次无新问题」为合格线,以后同类落地页自动放行,不再逐条问你。",
+     meta:["来自真跑","已等 3 分钟"],
+     acceptance:"design-review 各维度 ≥ 8、无未解决问题;二次评审无新必改项;文案真实非占位;沿用 paper / clay / Tiempos 配色。",
+     pit:"我担心『≥8 分』在不同页型上松紧不一。反例:纯文字页易拿高分、富交互页偏低。建议合格线绑定『二次评审无新必改项』,而非只看分数。"},
+    {id:"poster",type:"side",tag:["b-amber","待批 · 花钱"],t:"海报工厂 · 将调用付费生成主视觉",wf:"wf-poster",
+     why:"creative-director → copywriting 已就绪。下一步要调 imagegen + fal-upscale(付费 API)出图并放大。",
+     meta:["花钱 · 不可逆","已等 7 分钟"],risk:"high",
+     what:"调用 <b>imagegen</b>(OpenAI 图像 API)生成海报主视觉,再 <b>fal-upscale</b>(fal.ai)放大到交付分辨率。",
+     diff:"+ 生成:4 张候选主视觉(竖版 1080×1920)\n+ 放大:选定稿 → 2x 交付分辨率\n  计费:imagegen $0.04×4 + fal-upscale $0.12×1\n  不可逆:已生成的计费不退"},
+    {id:"reel",type:"side",tag:["b-amber","待批 · 花钱"],t:"讲解短片 · 将调用 speech 合成旁白",wf:"wf-reel",
+     why:"脚本已定。下一步调 speech(付费)把旁白合出来,再交给 remotion 渲染。",
+     meta:["花钱 · 可重来","已等 14 分钟"],risk:"low",
+     what:"调用 <b>speech</b>(OpenAI TTS)合成约 90 秒旁白音轨。预计 ≈ $0.3,可逆(音频可重生成)。",
+     diff:"+ 合成:旁白音轨(约 90s · voice=alloy)\n  计费:speech ≈ $0.3\n  低危:不对外、可重来"},
+    {id:"deck",type:"fail",tag:["b-red","校验失败"],t:"Deck 流水线 · 保真审计发现 3 处漂移",wf:"wf-deck",
+     why:"pptx-html-fidelity-audit 把导出的 PPTX 和源 HTML 比对,发现 3 处漂移 —— 合格线没过,自动重跑停下等你。",
+     meta:["收口卡口拦下","已等 11 分钟"],
+     cause:"导出的 .pptx 与源 HTML 有 3 处漂移:① 页脚文字溢出 ② 一处斜体丢失 ③ 第 7 页内容被裁。多为 python-pptx 版式换算误差,改模板边距即可。"}
+  ],
+  growth:[
+    {id:"gsys",type:"sys",tag:["b-soft","系统自检"],t:"竞品广告值守 · 6 小时无新产出",wf:"wf-adwatch",
+     why:"这条长期值守 6h 没投喂任何新发现 —— 可能对手没动,也可能它哑了。空 ≠ 死,所以单独报警。",
+     meta:["长期值守静默","已 6h 10m"],
+     cause:"agent-browser 最近一次成功访问在 6h 前;之后疑似目标站改版导致抓取为空。建议重启并校验选择器。"},
+    {id:"gcert",type:"cert",tag:["b-clay","待定标准"],t:"研究→卡片摘要 · 新规则待认可",wf:"wf-digest",
+     why:"这条长期值守想自动把每批研究产出小红书卡。认一次「每条结论可溯源」为合格线,以后自动出卡。",
+     meta:["创建即定标准","已等 20 分钟"],
+     acceptance:"卡片每条结论都能追溯到该批素材里的具体来源;无臆造;敏感数据不外露。",
+     pit:"我担心『可溯源』被宽松判定。反例:把『用户普遍反映』当结论却无具体引用。建议每条结论附至少 1 条原文引用锚点。"}
+  ]
+};
+const AUTOCLOSED={delivery:["海报工厂 ×3 · 命中『海报类·评审≥8』· 自动放行","Deck ×2 · 命中『deck类·保真零漂移』· 自动放行"],growth:["研究摘要 ×4 · 命中已认可规则 · 自动出卡","竞品对标卡 ×6 · 去重后自动放行"]};
+
+/* ---- run graphs: derived from each workflow's real skill chain ----
+   node states: queued / running / done / warn(stuck) / risk(fail)
+   kind: agent | gate | loop | barrier | monitor
+   x,y are svg coords; phase = lane index. animate=true workflow drives a live fake journal. */
+const FLEET={
+  delivery:{exec:[
+      {id:"wf-landing",name:"落地页",health:"green",ns:"评审 9.2 过卡口 · 待认可为规则",skills:["reference-design-contract","copywriting","design-taste-frontend","design-review"],agg:[4,0,0],
+        graph:{phases:["规划","执行","验收"],
+          nodes:[
+            {id:"n1",label:"对齐目标与基线",phase:0,state:"done",kind:"agent",skills:["reference-design-contract"],x:90,y:70,prompt:"读品牌资产 + 竞品基线,产出设计约束契约"},
+            {id:"n2",label:"写文案",phase:1,state:"done",kind:"agent",skills:["copywriting"],x:270,y:70,prompt:"按契约写首屏文案,真实非占位"},
+            {id:"n3",label:"做页面",phase:1,state:"done",kind:"agent",skills:["design-taste-frontend"],x:270,y:150,prompt:"按契约出 HTML,沿用 paper/clay/Tiempos 配色"},
+            {id:"n4",label:"过评审(验收)",phase:2,state:"done",kind:"loop",skills:["design-review"],x:470,y:110,round:2,prompt:"design-review 各维度评分,<8 则打回重跑"}
+          ],
+          edges:[["n1","n2","done"],["n1","n3","done"],["n2","n4","done"],["n3","n4","done"]]}},
+      {id:"wf-poster",name:"海报工厂",health:"amber",ns:"待你批 · 动真格卡口停在付费生成",skills:["creative-director","copywriting","imagegen","poster-hero","fal-upscale","plan-design-review"],agg:[2,0,0],animate:true,
+        graph:{phases:["规划","执行","验收"],
+          nodes:[
+            {id:"p1",label:"定创意方向",phase:0,state:"done",kind:"agent",skills:["creative-director"],x:80,y:80,prompt:"产出 3 个海报创意方向 + 主标语候选"},
+            {id:"p2",label:"写主标语",phase:0,state:"done",kind:"agent",skills:["copywriting"],x:80,y:170,prompt:"按选定方向写主视觉文案"},
+            {id:"pg",label:"动真格卡口 · 付费出图",phase:1,state:"warn",kind:"gate",skills:["imagegen","fal-upscale"],x:280,y:125,paid:true,hits:7,prompt:"调 imagegen 生成 4 张主视觉、fal-upscale 放大;花钱·不可逆,人批前不放行"},
+            {id:"p3",label:"排海报版式",phase:1,state:"queued",kind:"agent",skills:["poster-hero"],x:470,y:125,prompt:"把选定主视觉排成竖版海报"},
+            {id:"p4",label:"过评审(验收)",phase:2,state:"queued",kind:"loop",skills:["plan-design-review"],x:640,y:125,round:0,prompt:"plan-design-review 打分 + 文案逐字核对"}
+          ],
+          edges:[["p1","pg","done"],["p2","pg","done"],["pg","p3","queued"],["p3","p4","queued"]]}},
+      {id:"wf-deck",name:"Deck 流水线",health:"amber",ns:"保真审计发现 3 处漂移",skills:["theme-factory","deck-swiss-international","pptx","pptx-html-fidelity-audit"],agg:[0,1,0],
+        graph:{phases:["规划","执行","验收"],
+          nodes:[
+            {id:"d1",label:"定主题配色",phase:0,state:"done",kind:"agent",skills:["theme-factory"],x:90,y:110,prompt:"生成 deck 主题令牌"},
+            {id:"d2",label:"排版成片",phase:1,state:"done",kind:"agent",skills:["deck-swiss-international","pptx"],x:280,y:110,prompt:"按瑞士网格排版,导出 PPTX"},
+            {id:"d3",label:"保真审计(验收)",phase:2,state:"risk",kind:"loop",skills:["pptx-html-fidelity-audit"],x:480,y:110,round:1,prompt:"比对导出 PPTX 与源 HTML,发现 3 处漂移,合格线未过"}
+          ],
+          edges:[["d1","d2","done"],["d2","d3","done"]]}},
+      {id:"wf-reel",name:"讲解短片",health:"amber",ns:"待你批 · 动真格卡口停在 speech 付费",skills:["copywriting","speech","remotion","frame-logo-outro"],agg:[1,0,0],
+        graph:{phases:["规划","执行","收尾"],
+          nodes:[
+            {id:"r1",label:"写脚本",phase:0,state:"done",kind:"agent",skills:["copywriting"],x:90,y:110,prompt:"写约 90 秒讲解脚本"},
+            {id:"rg",label:"动真格卡口 · 付费配音",phase:1,state:"warn",kind:"gate",skills:["speech"],x:290,y:110,paid:true,hits:0,prompt:"调 speech 合成旁白(花钱·可重来),人批前不放行"},
+            {id:"r2",label:"渲染成片",phase:1,state:"queued",kind:"agent",skills:["remotion"],x:480,y:110,prompt:"remotion 把音轨与画面合成视频"},
+            {id:"r3",label:"加片尾(收口)",phase:2,state:"queued",kind:"agent",skills:["frame-logo-outro"],x:650,y:110,prompt:"拼品牌片尾,输出交付文件"}
+          ],
+          edges:[["r1","rg","done"],["rg","r2","queued"],["r2","r3","queued"]]}}
+    ],mon:[]},
+  growth:{exec:[],mon:[
+      {id:"wf-adwatch",name:"竞品广告值守",health:"red",ns:"常驻 · 6h 无产出(疑似哑)",skills:["agent-browser","full-page-screenshot","competitive-ads-extractor","ad-creative","social-x-post-card"],feed:"投喂 0",
+        graph:{phases:["执行","监控"],
+          nodes:[
+            {id:"a1",label:"常驻盯竞品页",phase:0,state:"monitor",kind:"monitor",skills:["agent-browser","full-page-screenshot"],x:120,y:110,feed:0,prompt:"常驻访问竞品广告库;6h 无新抓取,疑似目标站改版"},
+            {id:"a2",label:"抽广告→出卡",phase:1,state:"queued",kind:"agent",skills:["competitive-ads-extractor","ad-creative","social-x-post-card"],x:360,y:110,prompt:"有新广告时抽取要点并产出对标卡"}
+          ],
+          edges:[["a1","a2","queued"]]}},
+      {id:"wf-digest",name:"研究→卡片摘要",health:"green",ns:"常驻 · 本周投喂 4",skills:["research-decision-room","data-report","card-xiaohongshu"],feed:"投喂 4",
+        graph:{phases:["执行","收尾"],
+          nodes:[
+            {id:"g1",label:"常驻收研究素材",phase:0,state:"monitor",kind:"monitor",skills:["research-decision-room"],x:120,y:110,feed:4,prompt:"常驻汇集研究产出,本周投喂 4 批"},
+            {id:"g2",label:"做成小红书卡",phase:1,state:"done",kind:"agent",skills:["data-report","card-xiaohongshu"],x:360,y:110,prompt:"每条结论附原文引用,产出卡片"}
+          ],
+          edges:[["g1","g2","done"]]}}
+    ]}
+};
+
+/* fake journal events for the animated workflow (wf-poster).
+   timestamps are hardcoded, never current time; no randomness. */
+const RUN_JOURNAL={
+  "wf-poster":[
+    {kind:"started",t:"14:02",node:"p1",text:"定创意方向 · creative-director 开跑",sha:"a1f3"},
+    {kind:"result", t:"14:03",node:"p1",text:"产出 3 个海报创意方向",sha:"a1f3",struct:true},
+    {kind:"started",t:"14:03",node:"p2",text:"写主标语 · copywriting 开跑",sha:"7c20"},
+    {kind:"result", t:"14:04",node:"p2",text:"主标语定稿 · 命中已认可文案模式",sha:"7c20",cache:true},
+    {kind:"started",t:"14:04",node:"pg",text:"动真格卡口 · 将调 imagegen + fal-upscale(付费)",sha:"e9b8"},
+    {kind:"gatehold",t:"14:04",node:"pg",text:"花钱·不可逆 · 停在待批,人批前不放行",sha:"e9b8"}
+  ]
+};
+const RUN_BUDGET={"wf-poster":{used:0.18,cap:6.0,note:"本条运行已花 · 付费卡口批准后才会续增"}};
+
+/* flywheel */
+let FW_AUTOPASS=38, FW_HOURS=6.5;
+const FW_RULES=[
+  {n:"海报类 · plan-design-review ≥8 + 文案逐字一致",cover:5,prec:"96%",week:12,decay:["b-green","稳定"]},
+  {n:"Deck 类 · pptx-html 保真零漂移",cover:4,prec:"99%",week:9,decay:["b-green","稳定"]},
+  {n:"研究摘要类 · 每条结论可溯源",cover:3,prec:"95%",week:14,decay:["b-amber","再 2 次强制复检"]},
+  {n:"竞品对标类 · 去重后才出卡",cover:2,prec:"97%",week:3,decay:["b-green","稳定"]},
+  {n:"落地页类 · design-review ≥8 + 二次无新问题",cover:1,prec:"待观察",week:0,decay:["b-amber","新认可 · 观察期"]}
+];
+
+/* ============ state ============ */
+let view="inbox", curProd="delivery", mode="normal", sel=null, exceptionOnly=false, detailWf=null;
+let diffOpen=false, reasonText="", createKind=null, createStage=0;
+let setupStage=0, setupNS="";
+let runWf=null, runNodeSel=null, runTimer=null, runShown=0;
+
+/* ============ helpers ============ */
+const $=id=>document.getElementById(id);
+function prod(){return PRODUCTS.find(p=>p.id===curProd)}
+function needCount(pid){return (INBOX[pid]||[]).filter(c=>c.type!=="sys").length}
+function toast(html){const t=$("toast");$("toastText").innerHTML=html;t.classList.add("show");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("show"),3400)}
+function go(v){view=v;mode="normal";sel=null;detailWf=null;if(v!=="run"){stopRun();}render();fadeMain()}
+function fadeMain(){const m=$("main");if(!m)return;m.classList.remove("fadein");void m.offsetWidth;m.classList.add("fadein")}
+function openPalette(){$("palette").classList.add("show")}
+function closePalette(){$("palette").classList.remove("show")}
+function openCrossProduct(){curProd="delivery";go("inbox");toast("跨产品合并队列 · 已聚焦最需要你的产品 <b>客户交付</b>")}
+function findWf(id){for(const pid in FLEET){const f=FLEET[pid];const w=[...(f.exec||[]),...(f.mon||[])].find(x=>x.id===id);if(w)return{w,pid}}return null}
+
+/* ============ rail ============ */
+function renderRail(){
+  const list=PRODUCTS
+    .slice().sort((a,b)=>({red:0,amber:1,green:2}[a.health]-{red:0,amber:1,green:2}[b.health]));
+  $("railCount").textContent=list.length;
+  $("railList").innerHTML=list.map(p=>{
+    const nc=needCount(p.id);
+    const meta=nc>0?`<span class="num">${nc}</span> 待你 · <span class="num">${p.agents}</span> 分身`
+                   :`全自动 · <span class="num">${p.agents}</span> 分身`;
+    return `<div class="prow ${p.id===curProd?'sel':''}" onclick="selProd('${p.id}')">
+      <span class="dot ${p.health}"></span>
+      <div><div class="pn">${p.name}</div><div class="pm">${meta}</div></div></div>`;
+  }).join("");
+}
+function selProd(id){curProd=id;view="inbox";mode="normal";sel=null;detailWf=null;stopRun();render();fadeMain()}
+
+/* ============ main router ============ */
+function renderMain(){
+  if(mode==="create"){renderCreate();return}
+  if(mode==="setup"){renderSetup();return}
+  if(view==="inbox")return renderInbox();
+  if(view==="fleet")return detailWf?renderDetail():renderFleet();
+  if(view==="run")return renderRun();
+  if(view==="board")return renderBoard();
+  if(view==="flywheel")return renderFlywheel();
+}
+
+/* ---- inbox ---- */
+function renderInbox(){
+  const p=prod(), cards=INBOX[p.id]||[], real=cards.filter(c=>c.type!=="sys");
+  if(real.length===0){
+    $("main").innerHTML=`
+      <div class="mhead"><h1>${p.name}</h1><span class="hb b-green">健康</span></div>
+      <p class="msub">待你处理 · 只浮出需要你的事;其余在自己跑。</p>
+      <div class="empty">
+        <div class="ei">✓</div>
+        <div class="et">没有需要你的事 —— 你的流水线在自己跑。</div>
+        <div class="es">空 = 健康。底下 <span class="num">${p.agents}</span> 个分身仍在 24/7 运转,与你此刻的注意力无关。</div>
+      </div>
+      ${autoclosedBlock(p.id)}`;
+    return;
+  }
+  const html=cards.map(c=>icard(c)).join("");
+  $("main").innerHTML=`
+    <div class="mhead"><h1>${p.name}</h1><span class="hb b-${p.health}">${HMAP[p.health]}</span></div>
+    <p class="msub">今天浮出 <b>${real.length}</b> 件 · 已自动闭环 <b>${AUTOCLOSED[p.id]?.length||0}</b> 件<span class="lnk" onclick="toggleAuto(event)">（查看）</span>。绿色不出声,只装需要你拨的事。</p>
+    <div class="inbox">${html}</div>
+    ${autoclosedBlock(p.id)}`;
+}
+function icard(c){
+  const seen=sel===c.id;
+  return `<div class="icard t-${c.type} ${seen?'sel':''}" onclick="selCard('${c.id}')">
+    <div class="ir1"><span class="itag ${c.tag[0]}">${c.tag[1]}</span><span class="it">${c.t}</span></div>
+    <div class="iwhy">${c.why}</div>
+    <div class="imeta">${c.meta.map(m=>`<span>${m}</span>`).join("")}</div>
+    ${c.wf&&seen?`<div class="gotorun" onclick="event.stopPropagation();openRun('${c.wf}')">▷ 在「运行」面看这条活体运行 →</div>`:''}
+  </div>`;
+}
+function toggleAuto(e){e.stopPropagation();const el=document.querySelector(".autoclosed");if(el)el.classList.toggle("open")}
+function autoclosedBlock(pid){
+  const a=AUTOCLOSED[pid]||[];if(!a.length)return"";
+  return `<div class="autoclosed"><div class="ach" onclick="toggleAuto(event)">↻ <b>今日已自动闭环 ${a.length} 件</b> · 系统替你扛着的部分（点开）</div>
+    <div class="acbody">${a.map(x=>`<div class="acline"><span class="ok">✓</span><span>${x}</span></div>`).join("")}</div></div>`;
+}
+function selCard(id){sel=(sel===id?null:id);diffOpen=false;reasonText="";render()}
+
+/* ---- fleet ---- */
+function renderFleet(){
+  const p=prod(), f=FLEET[p.id];
+  const chips=w=>(w.skills||[]).map((s,i)=>`<span class="skillchip">${s}</span>${i<w.skills.length-1?'<span class="arr2">›</span>':''}`).join("");
+  const aggText=a=>{const r=a[0],s=a[1],f=a[2];if(!s&&!f)return `<span class="run">${r} 个在跑 · 全绿</span>`;const t=[`<span class="run">跑着 ${r}</span>`];if(s)t.push(`<span class="stk">卡住 ${s}</span>`);if(f)t.push(`<span class="fl">失败 ${f}</span>`);return t.join(" · ");};
+  const wf=w=>`<div class="wfcard ${w.health}" onclick="openRun('${w.id}',event)">
+    <div class="wn">${w.name}<span class="wk b-${w.health}">${HMAP[w.health]}</span></div>
+    <div class="ws">${w.ns}</div>
+    ${w.skills?`<div class="chain">${chips(w)}</div>`:''}
+    ${w.agg?`<div class="agg">${aggText(w.agg)}</div>`:`<div class="agg">${w.feed} · 常驻不终止</div>`}
+    <div class="openrun">▷ 点开看这条运行</div>
+  </div>`;
+  const sec=(label,arr)=>arr&&arr.length?`<div class="label">${label}</div><div class="wfgrid">${arr.map(wf).join("")}</div>`:'';
+  $("main").innerHTML=`
+    <div class="mhead"><h1>${p.name} · 全部流水线</h1></div>
+    <p class="msub">每条流水线下方是它复用的<b>真实 skill 链</b>(来自你的 156 个资产);分身只以聚合数字出现,想看个体须钻取。<b>点任一条进「运行」面看它的活体运行。</b></p>
+    ${sec("一次性任务 · 跑完就停(跑到验收自停)",f.exec)}
+    ${sec("长期值守 · 一直盯着(常驻不终止,不计入待办)",f.mon)}`;
+}
+function openDetail(id,e){if(e)e.stopPropagation();detailWf=id;view="fleet";mode="normal";sel=null;render()}
+
+/* ---- workflow detail (kept as drill-down from run) ---- */
+function renderDetail(){
+  const f=FLEET[curProd]||{exec:[],mon:[]};
+  const w=[...(f.exec||[]),...(f.mon||[])].find(x=>x.id===detailWf);
+  if(!w){detailWf=null;return renderFleet();}
+  const skills=w.skills||[];
+  const rail=skills.map((s,i)=>{
+    const last=i===skills.length-1;
+    const cls=(w.health!=='green'&&last)?'cur':'done';
+    return `<div class="seg2 ${cls}"><div class="zh">${s}</div><div class="nt">${last?'验收/收口':'阶段 '+(i+1)}</div></div>`;
+  }).join("");
+  const isMon=!w.agg;
+  const bad=isMon?0:(w.agg[1]+w.agg[2]);
+  const aggBox=isMon
+    ? `<div class="aggbox"><div class="agh"><span class="at">${w.name} · 长期值守(常驻)</span><span class="anum"><span>${w.feed}</span><span>不计入待办</span></span></div></div>`
+    : `<div class="aggbox" id="agg"><div class="agh" onclick="document.getElementById('agg').classList.toggle('open')">
+        <span class="at">${w.name} · 分身</span>
+        <span class="anum"><span class="run">跑着 ${w.agg[0]}</span><span class="stk">卡住 ${w.agg[1]}</span><span class="fl">失败 ${w.agg[2]}</span></span></div>
+        <div class="agbody"><div style="font-size:12.5px;color:var(--ink-2);padding-top:9px">默认按 跑着 / 卡住 / 失败 分桶,绝不平铺。${bad?'点下面一键跳到出事的个体。':'目前没有出事的分身。'}</div>
+        ${bad?`<div class="jumpbtn"><button class="btn ghost sm" onclick="toast('已定位到出事的分身 · 可单独查看 / 重跑')">跳到出事的 ${bad} 个 →</button></div>`:''}</div></div>`;
+  const need=w.health==='green'
+    ? `<div class="dwhat" style="background:var(--ok-soft);border-color:var(--ok)">健康 · 这条流水线在自己跑,暂不需要你。</div>`
+    : `<div class="dwhat warn">它卡在卡口前 —— 回待你处理那条卡(定标准 / 批花钱 / 修漂移),不在这页直接动手。</div>`;
+  $("main").innerHTML=`
+    <button class="back" onclick="openRun('${w.id}')">‹ 回运行视图</button>
+    <div class="phead"><h2>${w.name}</h2><span class="hb b-${w.health}" style="margin-left:auto">${HMAP[w.health]}</span></div>
+    <div class="pmeta">${isMon?'长期值守 · 常驻不终止':'一次性任务 · 跑到验收自停'} · ${w.ns}</div>
+    <div class="label">固定流水线 · 复用的真实 skill 链</div>
+    <div class="phaserail">${rail}</div>
+    <div class="label">分身 · 聚合不平铺</div>
+    ${aggBox}
+    <div class="label">需要你的地方</div>${need}`;
+}
+function backFleet(){detailWf=null;render()}
+
+/* ============ RUN · live workflow run view ============ */
+function openRun(id,e){if(e)e.stopPropagation();const hit=findWf(id);if(!hit){toast('没找到这条流水线');return}curProd=hit.pid;runWf=id;runNodeSel=null;view="run";mode="normal";sel=null;detailWf=null;stopRun();render();fadeMain();startRunAnim();}
+function stopRun(){if(runTimer){clearTimeout(runTimer);runTimer=null}runShown=0}
+function startRunAnim(){
+  const hit=findWf(runWf);if(!hit||!hit.w.animate)return;
+  const ev=RUN_JOURNAL[runWf]||[];
+  runShown=0;
+  const tick=()=>{
+    if(runShown>=ev.length){runTimer=null;return}
+    runShown++;
+    paintJournal();
+    runTimer=setTimeout(tick,runShown<ev.length?1300:0);
+  };
+  // seed first two instantly, then stream
+  runShown=2;paintJournal();
+  runTimer=setTimeout(tick,1300);
+}
+function paintJournal(){
+  const feed=$("jfeed");if(!feed)return;
+  const ev=(RUN_JOURNAL[runWf]||[]).slice(0,runShown);
+  feed.innerHTML=ev.slice().reverse().map(jrowHtml).join("")||`<div style="padding:14px;color:var(--ink-3);font-size:12px">这条全绿 · 暂无活动事件</div>`;
+}
+function jrowHtml(e){
+  const isStart=e.kind==="started"||e.kind==="gatehold";
+  const mark=e.kind==="result"?"✓完成":(e.kind==="gatehold"?"⏸停在待批":"◷开始");
+  const cls=e.kind==="result"?"result":"start";
+  const badges=(e.cache?'<span class="jbadge cache">自动重用·缓存命中</span>':'')+(e.struct?'<span class="jbadge struct">结构化产出 ✓</span>':'');
+  return `<div class="jrow ${cls}">
+    <span class="jt">${e.t}</span>
+    <div class="jmain"><span class="jmark">${mark}</span>${e.text}${badges}<div class="jid">v2:${e.sha}</div></div>
+  </div>`;
+}
+function renderRun(){
+  const hit=findWf(runWf);
+  if(!hit){runWf="wf-poster";return renderRun();}
+  const w=hit.w, g=w.graph;
+  const isMon=!w.agg;
+  // phase rail (top)
+  const curPhase=runCurPhase(g);
+  const railSubs=["阶段1 / 规划","阶段2 / 执行","阶段3 / 验收·收口"];
+  const rail=g.phases.map((ph,i)=>{
+    const cls=i<curPhase?'done':(i===curPhase?'cur':'');
+    const live=(i===curPhase&&hasRunning(g))?'<span class="livedot"></span>':'';
+    const sub=ph==="监控"?'阶段 · 常驻':(i===g.phases.length-1?'验收 · 收口':(i===0?'阶段 · 起步':'阶段 · 推进'));
+    return `<div class="seg2 ${cls}"><div class="zh">${ph}${live}</div><div class="nt">${sub}</div></div>`;
+  }).join("");
+  // aggregate buckets (multi-instance, three buckets only)
+  const aggLine=isMon
+    ? `<span class="num" style="color:var(--slate)">常驻 · ${w.feed} · 不计入待办</span>`
+    : `<span class="num"><span style="color:var(--ok)">跑着 ${w.agg[0]}</span> · <span style="color:var(--warn)">卡住 ${w.agg[1]}</span> · <span style="color:var(--risk)">失败 ${w.agg[2]}</span></span>`;
+  const svg=runGraphSVG(g);
+  const budget=RUN_BUDGET[runWf];
+  $("main").innerHTML=`
+    <div class="runwrap">
+      <button class="back" onclick="go('fleet')">‹ ${prod().name} · 全部流水线</button>
+      <div class="runtop">
+        <div><h2>${w.name}</h2>
+          <div class="pmeta">${isMon?'长期值守 · 一直盯着(常驻不终止)':'一次性任务 · 跑完就停(跑到验收自停)'} · ${w.ns}</div></div>
+        <span class="hb b-${w.health}" style="margin-left:auto;margin-top:4px">${HMAP[w.health]}</span>
+      </div>
+      <div class="phaserail">${rail}</div>
+      <div style="font-size:11.5px;color:var(--ink-3);margin-top:7px">多个分身在跑时只显示三桶,绝不平铺 ▸ ${aggLine}</div>
+
+      <div class="runbody">
+        <div class="runcanvas">
+          <div class="canvashint">▷ 这是只读运行图(不是可编辑画布)· 节点=一次调用,点开看它真调了什么</div>
+          ${svg}
+        </div>
+        <div class="journal">
+          <div class="jhead">运行日志 · journal（倒序）</div>
+          ${budget?`<div class="budget"><div class="blab"><span>本条运行预算</span><span><b>$${budget.used.toFixed(2)}</b> / $${budget.cap.toFixed(2)}</span></div>
+            <div class="btrack"><div class="bfill" style="width:${Math.max(3,budget.used/budget.cap*100)}%"></div></div>
+            <div style="font-size:10.5px;color:var(--ink-3);margin-top:6px">${budget.note}</div></div>`:''}
+          <div class="jfeed" id="jfeed"></div>
+        </div>
+      </div>
+    </div>`;
+  paintJournal();
+}
+function runCurPhase(g){
+  // current phase = first phase that still has a running/queued/warn/risk node; else last
+  for(let i=0;i<g.phases.length;i++){
+    if(g.nodes.some(n=>n.phase===i&&(n.state==="running"||n.state==="warn"||n.state==="risk"||n.state==="queued"||n.state==="monitor")))return i;
+  }
+  return g.phases.length-1;
+}
+function hasRunning(g){return g.nodes.some(n=>n.state==="running"||n.state==="warn"||n.state==="risk"||n.state==="monitor")}
+
+/* build the read-only run graph SVG */
+function runGraphSVG(g){
+  const W=760, laneH=210, padTop=26;
+  const lanes=g.phases.length;
+  const H=padTop+lanes*0+ (Math.max(...g.nodes.map(n=>n.y))+90);
+  // lane separators (vertical) by phase x-bands -- we instead group by phase via x position; draw lane labels at top
+  // compute phase x centers from nodes
+  const phaseX={};
+  g.phases.forEach((ph,i)=>{const ns=g.nodes.filter(n=>n.phase===i);phaseX[i]=ns.length?ns.reduce((a,n)=>a+n.x,0)/ns.length:80+i*200;});
+  // edges
+  const nodeById=Object.fromEntries(g.nodes.map(n=>[n.id,n]));
+  const NW=128, NH=52;
+  const edges=g.edges.map(([a,b,st])=>{
+    const na=nodeById[a], nb=nodeById[b];if(!na||!nb)return"";
+    const x1=na.x+NW/2, y1=na.y, x2=nb.x-NW/2, y2=nb.y;
+    const mx=(x1+x2)/2;
+    const d=`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+    let cls="edge";
+    if(st==="done")cls="edge done";
+    else if(na.state==="running")cls="edge flow";
+    else if(st==="queued")cls="edge";
+    return `<path class="${cls}" d="${d}" marker-end="url(#arr)"/>`;
+  }).join("");
+  // lane band backgrounds + labels
+  const minX=Math.min(...g.nodes.map(n=>n.x))-NW/2-14;
+  const bands=g.phases.map((ph,i)=>{
+    const ns=g.nodes.filter(n=>n.phase===i);if(!ns.length)return"";
+    const cx=phaseX[i];
+    return `<text class="lane-label" x="${cx}" y="16" text-anchor="middle">${ph.toUpperCase()}</text>`;
+  }).join("");
+  const nodes=g.nodes.map(n=>nodeSVG(n)).join("");
+  return `<svg class="runsvg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="运行有向图">
+    <defs>
+      <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M0,0 L7,3 L0,6 Z" fill="var(--line-2)"/>
+      </marker>
+    </defs>
+    ${bands}
+    ${edges}
+    ${nodes}
+  </svg>`;
+}
+function nodeSVG(n){
+  const NW=128, NH=52;
+  const x=n.x-NW/2, y=n.y-NH/2;
+  const stateCls={running:"rn-running",done:"rn-done",warn:"rn-warn",risk:"rn-risk",queued:"rn-queued",monitor:"rn-monitor"}[n.state]||"rn-box";
+  const stateTxt={running:"跑着",done:"完成",warn:"卡住·待你",risk:"失败",queued:"排队",monitor:"常驻"}[n.state]||"";
+  const stateColor={running:"running",done:"done",warn:"warn",risk:"risk",queued:"queued",monitor:"monitor"}[n.state]||"queued";
+  const pulse=(n.state==="running"||n.state==="warn"||n.state==="risk")?"rn-pulse":"";
+  const sel=runNodeSel===n.id;
+  // gate / loop / monitor adornments
+  let badge="";
+  if(n.kind==="gate"){badge=`<text class="rn-gateicon" x="${n.x}" y="${y-6}" text-anchor="middle" fill="${n.paid?'var(--warn)':'var(--clay-deep)'}">${n.paid?'⊘ 动真格卡口':'◇ 定标准卡口'}</text>`;}
+  if(n.kind==="loop"){badge=`<text class="rn-sub" x="${n.x}" y="${y-6}" text-anchor="middle" fill="var(--ink-3)">↻ 自动重跑 · 第 ${n.round||0} 轮</text>`;}
+  if(n.kind==="monitor"){badge=`<text class="rn-sub" x="${n.x}" y="${y-6}" text-anchor="middle" fill="var(--slate)">�people 常驻 · 投喂 ${n.feed} · 不计入待办</text>`;}
+  // hits ledger beside paid gate
+  const hits=(n.kind==="gate"&&n.hits)?`<text class="rn-hit" x="${n.x+NW/2+6}" y="${n.y+2}" text-anchor="start">命中已认证模式\n自动放行 ×${n.hits}</text>`:"";
+  const hitsTspan=(n.kind==="gate"&&n.hits)?`<text class="rn-hit" x="${n.x+NW/2+8}" y="${n.y-3}" text-anchor="start"><tspan x="${n.x+NW/2+8}">命中已认证模式</tspan><tspan x="${n.x+NW/2+8}" dy="11">自动放行 ×${n.hits}</tspan></text>`:"";
+  // self-loop arc for loop node (round>0 shows the execute->verify loop)
+  const loopArc=(n.kind==="loop")?`<path class="edge ${n.state==='done'?'done':''}" d="M ${n.x-NW/2-2} ${n.y+NH/2-6} C ${n.x-NW/2-34} ${n.y+34}, ${n.x-6} ${n.y+40}, ${n.x-6} ${n.y+NH/2+2}" marker-end="url(#arr)"/>`:"";
+  const livedot=(n.state==="running"||(n.kind==="gate"&&n.state==="warn"))?`<circle class="rn-livedot on" cx="${n.x+NW/2-9}" cy="${y+9}" r="3.5"/>`:"";
+  return `<g class="rn-node ${stateCls} ${pulse}" onclick="selRunNode('${n.id}')">
+    ${badge}${hitsTspan}${loopArc}
+    <rect class="rn-box" x="${x}" y="${y}" width="${NW}" height="${NH}" rx="9" ${sel?'stroke-width="2.6"':''}></rect>
+    ${livedot}
+    <text class="rn-label" x="${n.x}" y="${n.y-2}" text-anchor="middle">${fitLabel(n.label)}</text>
+    <text class="rn-state ${stateColor}" x="${n.x}" y="${n.y+15}" text-anchor="middle">${stateTxt}${n.state==='done'&&n.kind==='loop'?' · 过卡口自停':''}</text>
+  </g>`;
+}
+function fitLabel(s){return s.length>9?s.slice(0,9):s}
+function selRunNode(id){runNodeSel=(runNodeSel===id?null:id);renderAside();
+  // re-stroke selected without full main rerender (keep animation): just repaint nodes
+  const hit=findWf(runWf);if(hit){const sv=document.querySelector(".runcanvas .runsvg");if(sv){sv.outerHTML=runGraphSVG(hit.w.graph);}}
+}
+
+/* ---- board (左因 → 中桥 → 右果) ---- */
+function renderBoard(){
+  const p=prod();
+  if(!p.set){
+    $("main").innerHTML=`
+      <div class="mhead"><h1>${p.name} · 项目</h1></div>
+      <p class="msub">项目管理只需看清两类:<b>先行指标(因)</b> 和 <b>结果指标(果)</b>。这个产品还没建立。</p>
+      <div class="empty">
+        <div class="ei" style="background:var(--clay-soft);color:var(--clay-deep)">◎</div>
+        <div class="et">还没建立 ${p.name} 的指标</div>
+        <div class="es">最难的是『找到对的指标』。让 Claude 引导你:先定最终目标(果),再倒推出能预测它、你能拨的先行指标(因)。</div>
+        <div style="margin-top:20px"><button class="btn primary" onclick="startSetup()">和 Claude 一起建立指标 →</button></div>
+      </div>`;
+    return;
+  }
+  // left causes
+  const lead=p.leading.map(([k,v,ar,why,drv])=>`
+    <div class="leadcard">
+      <div class="lc-v">${v||'·'}<span class="ar ${ar||'good'}">${ar==='bad'?'↑':'↓'}</span></div>
+      <div class="lc-k">${k}</div>
+      <div class="lc-why">${why}</div>
+    </div>
+    <div class="c-bridge"><span class="b-blue drv">驱动 →</span></div>`).join("");
+  // right results -- align count to leads by padding result list across rows; here we lay results in their own column
+  const lag=p.lagging.map(b=>b.pending
+    ? `<div class="resultcard pend"><div class="rc-v">待接入 <span class="pendtag">数据源未接</span></div><div class="rc-k">${b.k}</div><div class="rc-s">${b.s}</div></div>`
+    : `<div class="resultcard"><div class="rc-v">${b.v}</div><div class="rc-k">${b.k}</div><div class="rc-s">${b.s}</div>${b.pts?`<svg width="200" height="36" viewBox="0 0 200 38" preserveAspectRatio="none"><polyline points="${b.pts}" fill="none" stroke="var(--ok)" stroke-width="1.5"/></svg>`:''}</div>`).join("");
+  $("main").innerHTML=`
+    <div class="prodhead">
+      <span class="dot ${p.health}" style="width:11px;height:11px;border-radius:50%"></span>
+      <span class="ph-n">${p.name}</span>
+      <span class="ph-cap b-${p.health}">${HMAP[p.health]}</span>
+      <span class="ph-edit" onclick="startSetup()">重新建立 / 调整</span>
+    </div>
+    <div class="goalbar">
+      <span class="gb-tag">最终目标</span>
+      <div><div class="gb-ns">${p.ns}</div>
+        <div class="gb-read">读法:盯住左边的因,右边的果才会动。</div></div>
+    </div>
+    <div class="cause3">
+      <div class="c-left">
+        <div class="colhead">先行 · 因<span class="sub">快 · 你今天能拨</span></div>
+        ${lead.replace(/<div class="c-bridge">[\s\S]*?<\/div>\s*$/,'') }
+      </div>
+      <div class="c-bridgecol" style="display:flex;flex-direction:column;justify-content:center;align-items:center;position:relative">
+        <div class="vline" style="position:absolute;top:34px;bottom:6px;left:50%;border-left:1px dashed var(--line-2)"></div>
+        ${p.leading.map(()=>`<span class="b-blue drv" style="position:relative;z-index:1;font-size:11px;font-weight:600;padding:4px 9px;border-radius:20px;margin:14px 0;white-space:nowrap">驱动 →</span>`).join("")}
+      </div>
+      <div class="c-right">
+        <div class="colhead">结果 · 果<span class="sub">慢 · 事后才验真</span></div>
+        ${lag}
+      </div>
+    </div>
+    <div class="srcnote">最终目标:<b>${p.ns}</b>。结果口径自动汇聚自 <b>埋点/数仓 · CI/eval · git/PR</b>;未接入诚实标「待接入」,绝不编造。</div>`;
+}
+
+/* ---- flywheel (自动放行规则) ---- */
+function renderFlywheel(){
+  const rules=FW_RULES.map(r=>`<div class="fwrule">
+    <div><div class="frn">${r.n}</div><div class="frs">已认可规则 · 覆盖 ${r.cover} 条流水线</div></div>
+    <div class="frm">${r.prec}<span class="ml">精度</span></div>
+    <div class="frm"><span class="num">${r.week}</span><span class="ml">本周放行</span></div>
+    <span class="decay ${r.decay[0]}">${r.decay[1]}</span>
+    <button class="btn ghost sm" onclick="toast('已回看该规则本周放行明细 · 可逐条审计/撤销/回滚')">回看/回滚</button>
+  </div>`).join("");
+  $("main").innerHTML=`
+    <div class="mhead"><h1>自动放行规则</h1></div>
+    <p class="msub">你信任过的判断,正替你自动放行同类流水线 —— 越攒越省。</p>
+    <div class="fwtop">
+      <div><div class="big" id="fwBig">${FW_AUTOPASS}</div><div class="biglab">本周自动放行 · 省下 ~<span id="fwHours">${FW_HOURS}</span>h</div></div>
+      <div style="border-left:1px solid var(--clay);padding-left:18px"><div class="big" style="font-size:22px">${FW_RULES.length}</div><div class="biglab">已认可规则</div></div>
+      <div class="saying">越攒越省:一次判断,复利到未来成百次同类放行。</div>
+    </div>
+    <div class="label">已认可规则 · 可治理资产</div>${rules}
+    <div class="srcnote"><b>信心衰减</b>:每条规则自动放行 N 次或命中边界(新 skill / 新动真格类型 / 异常率上升)后强制复检一次 —— 一次坏认可不会永久给未来成百分身开绿灯。</div>`;
+  // count up animation on entering flywheel
+  const big=$("fwBig");if(big){const target=FW_AUTOPASS;countUp(big,Math.max(0,target-8),target);}
+}
+
+/* ============ aside ============ */
+function renderAside(){
+  if(mode==="create")return renderAsideCreate();
+  if(mode==="setup")return renderAsideSetup();
+  if(view==="run")return renderAsideRun();
+  if(view==="inbox"&&sel)return renderAsideDecision();
+  if(view==="board")return renderAsideBoard();
+  return renderAsideLevers();
+}
+
+/* ---- aside: run node drilldown ---- */
+function renderAsideRun(){
+  const hit=findWf(runWf);if(!hit){$("aside").innerHTML="";return}
+  const g=hit.w.graph;
+  if(!runNodeSel){
+    $("aside").innerHTML=`<div class="ax-head">这条运行</div><div class="ax">
+      <div class="healthline"><span class="hl-d dot ${hit.w.health}"></span>
+        <div><div class="hl-t">${HMAP[hit.w.health]}</div><div class="hl-s">${hit.w.name} · ${hit.w.animate?'活体运行中':'静止 · 全绿'}</div></div></div>
+      <div class="lv2" style="padding:6px 2px;font-size:12.5px;color:var(--ink-2)">点中间运行图里任一节点 —— 这里滑出它真调了什么、停在哪、要不要你。只有跑着的节点和活动边在脉动,其余静止。</div>
+    </div>`;return;
+  }
+  const n=g.nodes.find(x=>x.id===runNodeSel);if(!n){runNodeSel=null;return renderAsideRun()}
+  const sub={
+    done:`这步已完成 · 产出已交给下一步。`,
+    running:`这步在自己跑,暂不需要你。`,
+    queued:`排队中 · 等上游过了才轮到它。`,
+    monitor:`常驻值守 · 投喂 ${n.feed} · 不计入待办,绝不报红。`,
+    warn:n.kind==="gate"?(n.paid?`动真格卡口:它要花钱/对外/不可逆,人批前不放行。`:`定标准卡口:认一次合格线即可。`):`卡住了 · 在等你拨一下。`,
+    risk:`失败 · 合格线没过,自动重跑停下等你。`
+  }[n.state]||"";
+  const subCls={done:'ok',running:'',queued:'',monitor:'',warn:'warn',risk:'risk'}[n.state]||"";
+  const chips=(n.skills||[]).map(s=>`<span class="skillchip ${(s.match(/^(fal-|sora|imagegen|speech)/))?'paid':''}">${s}</span>`).join("");
+  const kindLab={agent:"一次 agent 调用",gate:(n.paid?"动真格卡口(花钱·对外·不可逆)":"定标准卡口(认一次合格线)"),loop:"自动重跑(不达标就再来一遍)",barrier:"等齐汇合点",monitor:"长期值守 · 常驻节点"}[n.kind];
+  const bad=n.state==="warn"||n.state==="risk";
+  const acts=bad
+    ? `<div class="gateacts">
+        <button class="btn primary" onclick="toast('已跳到出事的环节 · 可单独查看 / 重跑(占位)')">跳到出事的处</button>
+        <button class="btn ghost" onclick="toast('已从这一步发起重跑(占位)· 自动重跑接手')">从这一步重跑</button>
+       </div>`
+    : (n.state==="monitor"
+        ? `<div class="ndsub ok">常驻 · 投喂 ${n.feed} · 不计入待办。空 ≠ 死,真哑了会单独报警。</div>`
+        : `<div class="ndsub ${n.state==='done'?'ok':''}">这步在自己跑,暂不需要你。</div>`);
+  const hitled=(n.kind==="gate"&&n.hits)?`<div class="acc"><div class="acl">这道卡口的放行账本</div><div class="acc-c" style="color:var(--clay-deep)">命中已认证模式 · 自动放行 ×${n.hits}<br><span style="color:var(--ink-3)">越攒越省 · 仍每批二次确认花钱动作</span></div></div>`:'';
+  $("aside").innerHTML=`<div class="ax-head decide">拍板前先看这些</div><div class="ax dctx nodedetail">
+    <div class="dterm">${n.label}</div>
+    <div class="ndsub ${subCls}">${sub}</div>
+    <div class="axlabel" style="margin-top:0">它真调的 skill 链</div>
+    <div class="ndskills">${chips||'<span style="color:var(--ink-3);font-size:12px">无外部 skill</span>'}</div>
+    <div style="font-size:12px;color:var(--ink-3);margin-bottom:11px">类型:<b style="color:var(--ink-2)">${kindLab}</b></div>
+    <div class="axlabel" style="margin-top:0">prompt 摘要</div>
+    <div class="promptbox">${n.prompt||'—'}</div>
+    ${hitled}
+    <div class="met2"><span><span class="ml">耗时(二级)</span>${n.state==='done'?'0:48':(n.state==='running'?'进行中':(n.state==='queued'?'—':'已停 7 分'))}</span>
+      <span><span class="ml">token(二级)</span>${n.state==='done'?'12.4k':(n.state==='queued'?'—':'4.1k')}</span></div>
+    ${acts}
+  </div>`;
+}
+
+function renderAsideBoard(){
+  const p=prod();
+  if(!p.set)return renderAsideLevers();
+  // pick the sharpest lever to pull from leading indicators
+  // heuristic: the gate-wait-time lever is today's fastest knob
+  const sharp=p.leading.find(l=>l[0].indexOf("卡口")>=0)||p.leading[0];
+  const sk=sharp?sharp[0]:"";
+  const sv=sharp?sharp[1]:"";
+  const advice = sk.indexOf("卡口")>=0
+    ? `付费卡口待批偏高(<b>${sv}</b>)→ 今天最快能拨的旋钮:把待批清掉,成品就能更快出门。`
+    : `<b>${sk}</b> 当前 <b>${sv}</b> —— 这是今天最该盯、也最拨得动的一条。`;
+  $("aside").innerHTML=`<div class="ax-head">先拨哪个旋钮</div><div class="ax">
+    <div class="healthline"><span class="hl-d dot ${p.health}"></span>
+      <div><div class="hl-t">${HMAP[p.health]}</div><div class="hl-s">${p.name} · 最终目标 ${p.ns}</div></div></div>
+    <div class="leverbox" style="border-left:3px solid var(--clay)">
+      <div class="lv1"><span class="k">最锐利的一条建议</span></div>
+      <div class="lv2" style="margin-top:6px;color:var(--ink-2);font-size:12.5px;line-height:1.5">${advice}</div>
+    </div>
+    <button class="btn primary" style="width:100%;margin-top:4px" onclick="go('inbox')">去待你处理 · 清掉待批 →</button>
+    <button class="btn ghost" style="width:100%;margin-top:8px" onclick="openRun('wf-poster')">看卡住的那条流水线 →</button>
+    <div class="lv2" style="padding:10px 2px 0;font-size:11.5px">右栏只挑当下最该拨的一条,不复述全部指标 —— 全部因→果在主区。</div>
+  </div>`;
+}
+function renderAsideLevers(){
+  const p=prod();
+  if(!p.set){
+    $("aside").innerHTML=`<div class="ax-head">本产品 · 指标</div><div class="ax">
+      <div class="healthline"><span class="hl-d dot ${p.health}"></span>
+        <div><div class="hl-t">${HMAP[p.health]}</div><div class="hl-s">${p.name} · ${p.agents} 分身在跑</div></div></div>
+      <div class="leverbox" style="border-style:dashed;text-align:center;cursor:pointer" onclick="startSetup()">
+        <div style="font-size:13px;color:var(--clay-deep);font-weight:600">＋ 还没建立指标</div>
+        <div class="lv2" style="margin-top:5px">让 Claude 引导你找到先行 / 结果指标 →</div></div>
+    </div>`;return;
+  }
+  const levers=p.leading.map(([k,v,ar,why,drv])=>`<div class="leverbox">
+    <div class="lv1"><span class="k">${k}</span><span class="v">${v}</span></div>
+    <div class="lv2">${why} <span class="drv">→ 驱动 ${drv}</span></div></div>`).join("");
+  const lagSummary=p.lagging.map(b=>`${b.k.replace(/\s*\(.*\)/,'')} ${b.pending?'待接入':b.v}`).join(" · ");
+  $("aside").innerHTML=`<div class="ax-head">本产品 · 你能拨的杠杆</div><div class="ax">
+    <div class="healthline"><span class="hl-d dot ${p.health}"></span>
+      <div><div class="hl-t">${HMAP[p.health]}</div><div class="hl-s">${p.name} · 最终目标 ${p.ns}</div></div></div>
+    <div class="axlabel">先行指标 · 因(快,你能拨)</div>${levers}
+    <div class="axlabel">结果 · 果(慢)</div>
+    <div class="leverbox" style="cursor:pointer" onclick="go('board')"><div class="lv1"><span class="k">结果记分牌</span><span class="lv2" style="margin:0;color:var(--clay-deep);font-weight:600">项目 ›</span></div>
+      <div class="lv2">${lagSummary} —— 退到项目按需回看</div></div>
+  </div>`;
+}
+function renderAsideDecision(){
+  const c=(INBOX[curProd]||[]).find(x=>x.id===sel);if(!c)return renderAsideLevers();
+  let body="";
+  if(c.type==="side"){body=gateSide(c)}
+  else if(c.type==="cert"){body=gateCert(c)}
+  else if(c.type==="fail"){body=gateFail(c)}
+  else if(c.type==="stuck"){body=gateStuck(c)}
+  else if(c.type==="sys"){body=gateSys(c)}
+  $("aside").innerHTML=`<div class="ax-head decide">拍板前先看这些</div><div class="ax dctx">${body}</div>`;
+}
+function gateSide(c){
+  const high=c.risk==="high";
+  const enabled=high?(diffOpen&&reasonText.trim().length>0):true;
+  return `<div class="dterm">${c.t}</div>
+    <div class="dwhat warn"><b>将干什么</b><br>${c.what||c.why}</div>
+    ${c.diff?`<div class="difftoggle" onclick="diffOpen=!diffOpen;render()">${diffOpen?'▾':'▸'} 展开明细${high?'（高危:不看不让批）':''}</div>
+    <div class="difbody ${diffOpen?'open':''}">${c.diff.replace(/\n/g,'<br>')}</div>`:''}
+    ${high?`<textarea class="reason" placeholder="放行理由（必填,防橡皮图章）" oninput="reasonText=this.value">${reasonText}</textarea>`:''}
+    <div class="gateacts">
+      <button class="btn primary" ${enabled?'':'disabled'} onclick="approveSide('once')">批这一次</button>
+      <button class="btn dark" ${enabled?'':'disabled'} onclick="approveSide('class')">批这一类（写进自动放行规则）</button>
+    </div>
+    <div class="gatenote">${high?'摩擦与风险成正比:高危必须先展开明细 + 填理由才解锁。':'低危:可一键放行,或批这一类攒成规则。'}花钱 / 不可逆即便命中规则仍每批二次确认。</div>
+    ${c.wf?`<div style="margin-top:11px"><button class="btn ghost sm" style="width:100%" onclick="openRun('${c.wf}')">▷ 在「运行」面看这条停在哪 →</button></div>`:''}
+    <div class="killrow"><button class="btn kill" style="width:100%" onclick="killWf('${c.t}')">⛔ 急停整条流水线</button></div>`;
+}
+function gateCert(c){
+  return `<div class="dterm">${c.t}</div>
+    <div class="acc"><div class="acl">合格线(认了就是标准)</div><div class="acc-c">${(c.acceptance||c.why).replace(/\n/g,'<br>')}</div></div>
+    ${c.pit?`<div class="pitbox"><b>它主动唱反调</b><br>${c.pit}</div>`:''}
+    <div style="font-size:12.5px;color:var(--ink-2);margin-bottom:12px">你只判一件事:这条合格线够不够 <b>充分 + 客观 + 抗漂移</b>。认了,它成为一类可自动放行的规则。</div>
+    <div class="gateacts">
+      <button class="btn primary" onclick="doCertify()">认可为可复用合格线</button>
+      <div class="row"><button class="btn ghost" onclick="toast('已退回 · 让它重拟合格线')">退回重拟</button><button class="btn ghost" onclick="sel=null;render()">稍后</button></div>
+    </div>
+    ${c.wf?`<div style="margin-top:11px"><button class="btn ghost sm" style="width:100%" onclick="openRun('${c.wf}')">▷ 在「运行」面看这条 →</button></div>`:''}`;
+}
+function gateFail(c){
+  return `<div class="dterm">${c.t}</div>
+    <div class="dwhat warn"><b>根因(已聚合)</b><br>${c.cause||c.why}</div>
+    <div style="font-size:12.5px;color:var(--ink-2);margin-bottom:12px">说一句改法,自动重跑改完再来;或进运行图看出事的代表。</div>
+    <div class="gateacts">
+      <button class="btn primary" onclick="processCard('${c.id}','已下发改法 · 自动重跑中')">下发改法并重跑</button>
+      <button class="btn ghost" onclick="openRun('${c.wf}')">在运行图里定位 ›</button>
+    </div>`;
+}
+function gateStuck(c){
+  return `<div class="dterm">${c.t}</div>
+    <div class="dwhat warn"><b>它为什么停</b><br>${c.cause||c.why}</div>
+    <div class="gateacts"><button class="btn primary" onclick="processCard('${c.id}','已处理 · 流水线自动续跑')">处理并续跑</button>
+      <button class="btn ghost" onclick="sel=null;render()">稍后</button></div>`;
+}
+function gateSys(c){
+  return `<div class="dterm">${c.t} · 空 ≠ 死</div>
+    <div class="dwhat"><b>异常</b><br>${c.cause||c.why}</div>
+    <div style="font-size:12.5px;color:var(--ink-2);margin-bottom:12px">绿色隐身的设定下,这种静默必须单独报警,否则『坏了』和『没事』长一样。</div>
+    <div class="gateacts"><button class="btn primary" onclick="processCard('${c.id}','已重启 · 恢复产出后自动消除自检卡')">重启长期值守</button>
+      <button class="btn ghost" onclick="sel=null;render()">稍后</button></div>`;
+}
+
+/* ---- aside: create draft ---- */
+function renderAsideCreate(){
+  if(createStage===0){$("aside").innerHTML=`<div class="ax-head create">Claude 拼的草案</div><div class="ax"><div style="color:var(--ink-3);font-size:13px;padding:20px 4px;text-align:center">说一句目标,这里实时长出流水线草案。</div></div>`;return}
+  const low=createKind==="low";
+  const miniRail=PHASES.map((ph,i)=>`<div class="seg2 ${i<2?'done':''}${i===2?' free':''}"><div class="zh">${ph.zh}</div><div class="nt">${i===2?'放开':'·'}</div></div>`).join("");
+  const skills=low
+    ? `<div class="agli"><span>竞品雷达</span><span>skill · 复用</span></div><div class="agli"><span>变更摘要</span><span>skill · 复用</span></div><div class="agli"><span>草案起草</span><span>分身 · Opus</span></div>`
+    : `<div class="agli"><span>情绪分类</span><span>skill · 复用</span></div><div class="agli"><span>邮件起草</span><span>分身 · Opus</span></div><div class="agli"><span>代金券发放</span><span>plugin · 对外</span></div>`;
+  const side=low
+    ? `<div class="acc"><div class="acl">动真格识别</div><div class="acc-c" style="color:var(--ok)">无 · 只读 / 可逆 / 不花钱</div></div>`
+    : `<div class="acc" style="border-color:var(--risk)"><div class="acl" style="color:var(--risk)">动真格识别(标红)</div><div class="acc-c"><span style="color:var(--risk)">● 对外发送邮件</span><br><span style="color:var(--risk)">● 花钱:代金券 ≤ $5/笔</span></div></div>`;
+  const kind=low?`<span style="color:var(--ok);font-weight:600">长期值守 · 一直盯着</span>`:`<span style="color:var(--clay-deep);font-weight:600">一次性任务 · 跑完就停</span>`;
+  $("aside").innerHTML=`<div class="ax-head create">Claude 拼的草案</div><div class="ax">
+    <div class="axlabel">生命周期（只读 · 非可编辑画布）</div>
+    <div class="phaserail mini">${miniRail}</div>
+    <div class="axlabel">命中的能力 <span style="text-transform:none;color:var(--ink-3);font-weight:400">（点『为什么是它』可追问）</span></div>
+    <div style="border:1px solid var(--line);border-radius:var(--r-sm);padding:4px 13px;background:var(--surface)">${skills}</div>
+    <div style="margin:10px 0 4px">判定:${kind}</div>
+    ${side}
+    <div class="acc"><div class="acl">Claude 起草的合格线</div><div class="acc-c">${low?'有实质竞品动作时才产出草案;无动作不打扰':'仅命中明确质量投诉 · 单笔 ≤ $5 · 不含承诺赔付措辞'}</div></div>
+  </div>`;
+}
+
+/* ============ create flow (the soul: two paths) ============ */
+function startCreate(kind){
+  mode="create";view="inbox";sel=null;detailWf=null;createKind=null;createStage=0;stopRun();render();
+  if(kind)setTimeout(()=>pickStarter(kind),120);
+}
+function renderCreate(){
+  $("main").innerHTML=`<div class="chat">
+    <div class="crumb">新建流水线 · 归属:<b>${prod().name}</b>（天生有主）</div>
+    <div class="bubbles" id="bubbles"></div>
+    <div id="createTail"></div>
+  </div>`;
+  drawCreate();
+}
+function drawCreate(){
+  const b=$("bubbles"), tail=$("createTail");
+  if(createStage===0){
+    b.innerHTML=`<div class="bub c"><div class="who">CLAUDE</div>用大白话说你想自动化什么。我用你的家底(~50 skills · 3 plugins · 分身配方)拼一条流水线草案给你,你只管认它的合格线。</div>`;
+    tail.innerHTML=`<div class="starters">
+      <div class="starter" onclick="pickStarter('low')"><div class="stt">◷ 每天扫竞品 changelog,有实质动作就浮个草案给我</div><div class="sts">低风险样例 · 只读 / 可逆 / 不花钱</div></div>
+      <div class="starter" onclick="pickStarter('high')"><div class="stt">✉ 给负面评论的用户发安抚邮件 + 退 $5 代金券</div><div class="sts">高风险样例 · 对外发送 + 花钱 + 不可逆</div></div>
+    </div>
+    <div class="composer"><div class="ci">用大白话说你想自动化什么…</div><div class="cap">可拖入或 @ 你的能力:<b>~50 skills</b> · <b>3 plugins</b> · <b>分身配方</b></div></div>`;
+    return;
+  }
+  const low=createKind==="low";
+  const goal=low?"每天早上把竞品 changelog 扒一遍,有实质动作就拟个应对草案给我":"给负面评论的用户发条安抚邮件,并退 $5 代金券";
+  let bub=`<div class="bub c"><div class="who">CLAUDE</div>用大白话说你想自动化什么。</div><div class="bub u">${goal}</div>`;
+  if(low){
+    bub+=`<div class="bub c"><div class="who">CLAUDE</div>拼好了(见右栏草案)。我复用了 <b>竞品雷达</b> 和 <b>变更摘要</b> 两个 skill,配一个起草分身。它是<b>长期值守</b>——常驻、不终止,只在有实质动作时投喂草案给你。<br><br>它<b>只读、可逆、不花钱</b>,所以不需要定标准 —— 你可以一句话直接开跑,和手写自动重跑一样爽。</div>`;
+  }else{
+    bub+=`<div class="bub c"><div class="who">CLAUDE</div>拼好了(见右栏草案)。它是<b>一次性任务</b>。但我识别到两个<span class="pit">动真格动作:对外发邮件 + 花钱(代金券)</span>,这类必须你先定合格线。<br><br>我起草了标准,也<b>主动唱个反调</b>:我担心『负面』判定会漂移 —— 反例:用户只是吐槽天气、或反讽好评。建议收紧到『明确质量投诉』。这条够不够,你定。</div>`;
+  }
+  b.innerHTML=bub;
+  if(low){
+    tail.innerHTML=`<div class="runrow low"><div class="rr-t"><b>无需定标准</b> · 只读/可逆/不花钱的流水线直接开跑</div>
+      <button class="btn ok" onclick="runLow()">开跑</button>
+      <button class="btn ghost sm" onclick="toast('已打开生成的流水线定义(YAML)· 可 grep / git / 改并发')">查看 YAML</button></div>`;
+  }else{
+    if(createStage===1){
+      tail.innerHTML=`<div class="runrow" style="background:var(--clay-soft);border:1px solid var(--clay)">
+        <div class="rr-t" style="color:var(--clay-deep)"><b>含动真格动作 · 必须先定标准</b> —— 在右栏『拍板前先看这些』不会弹,这次创建态收口在这里:先判合格线。</div>
+        <button class="btn primary" onclick="certHigh()">定合格线</button></div>
+      <div style="font-size:12px;color:var(--ink-3);margin-top:9px"><button class="btn ghost sm" onclick="toast('已打开生成的流水线定义(YAML)· 可 grep / git / 改重试策略')">查看 / 编辑 YAML（逃生舱）</button></div>`;
+    }else if(createStage===2){
+      tail.innerHTML=`<div class="bub c" style="max-width:100%;margin-bottom:14px"><div class="who">CLAUDE · 试运行</div>已在沙箱跑一次(不真的发):<br>· 将发给 <b>37</b> 人(命中『明确质量投诉』)<br>· 将花费 <b>$185</b>(37 × $5)<br>· 0 人误命中(收紧标准后)</div>
+        <div class="runrow" style="background:var(--ok-soft);border:1px solid var(--ok)"><div class="rr-t" style="color:var(--ok)">dry-run 通过 · 确认后开跑并接入自动放行规则</div>
+        <button class="btn ok" onclick="runHigh()">确认开跑</button></div>`;
+    }
+  }
+}
+function pickStarter(kind){createKind=kind;createStage=1;render()}
+function runLow(){
+  mode="normal";const pn=prod()?prod().name:"";toast("✓ <b>竞品 changelog 值守</b> 已上线 · 落进 "+pn+" · 零定标准,一句话就跑");
+  const mon=(FLEET[curProd]&&FLEET[curProd].mon)||[];
+  if(!mon.find(m=>m.id==="wf-chg"))mon.unshift({id:"wf-chg",name:"竞品 changelog 值守",health:"green",ns:"常驻 · 投喂 0(刚上线)",feed:"投喂 0",skills:["agent-browser","competitive-ads-extractor","social-x-post-card"],
+    graph:{phases:["执行","监控"],nodes:[
+      {id:"c1",label:"常驻盯 changelog",phase:0,state:"monitor",kind:"monitor",skills:["agent-browser"],x:120,y:110,feed:0,prompt:"常驻访问竞品 changelog,刚上线投喂 0"},
+      {id:"c2",label:"出对标卡",phase:1,state:"queued",kind:"agent",skills:["competitive-ads-extractor","social-x-post-card"],x:360,y:110,prompt:"有实质动作时产出对标草案"}
+    ],edges:[["c1","c2","queued"]]}});
+  render();
+}
+function certHigh(){createStage=2;toast("✓ 已定标准 · 合格线收紧为『明确质量投诉』· 记成一类规则");render()}
+function runHigh(){
+  mode="normal";
+  FW_RULES.push({n:"安抚类 · 命中质量投诉 + 券 ≤ $5",cover:1,prec:"待观察",week:0,decay:["b-amber","花钱 · 每批二次确认"]});
+  toast("✓ <b>负面评论安抚</b> 已上线 · 接入自动放行规则(花钱类仍每批二次确认 + 单批限额)");
+  render();
+}
+
+/* ============ 引导建立指标 (find & establish leading/lagging) ============ */
+function startSetup(){mode="setup";view="board";sel=null;detailWf=null;setupStage=0;setupNS="";stopRun();render()}
+function renderSetup(){
+  $("main").innerHTML=`<div class="chat">
+    <div class="crumb">建立指标 · 产品:<b>${prod().name}</b></div>
+    <div class="bubbles" id="bubbles"></div>
+    <div id="setupTail"></div></div>`;
+  drawSetup();
+}
+function drawSetup(){
+  const b=$("bubbles"), tail=$("setupTail");
+  if(setupStage===0){
+    b.innerHTML=`<div class="bub c"><div class="who">CLAUDE</div>建指标前先问一句:这个产品<b>成了</b>,什么结果会变好?那就是你的<b>最终目标(结果指标 · 慢)</b>。我据它帮你倒推出能<b>提前预警、你能直接拨</b>的<b>先行指标(因 · 快)</b> —— 那才是你每天真正该盯的。</div>`;
+    tail.innerHTML=`<div class="starters">
+      <div class="starter" onclick="pickNS('新用户首周留存')"><div class="stt">◎ 新用户首周留存</div><div class="sts">推荐 · 这个产品最该改善的结果</div></div>
+      <div class="starter" onclick="pickNS('30 天留存')"><div class="stt">◷ 30 天留存</div><div class="sts">更长期,但反馈更慢</div></div>
+      <div class="starter" onclick="pickNS('激活率')"><div class="stt">⚡ 激活率</div><div class="sts">其实偏先行 —— 适合当先行指标,而非最终目标</div></div>
+    </div>
+    <div class="composer"><div class="ci">或用大白话描述你想改善的结果…</div><div class="cap">Claude 会帮你判断它是<b>最终目标(果)</b>还是<b>先行(因)</b></div></div>`;
+    return;
+  }
+  let bub=`<div class="bub c"><div class="who">CLAUDE</div>这个产品成了,什么会变好?</div><div class="bub u">${setupNS}</div>`;
+  bub+=`<div class="bub c"><div class="who">CLAUDE</div>好。那<b>结果指标(果)</b>就定了:<b>${setupNS}</b> + 30 天留存兜底。但它慢、且当下改不动 —— 等你看到留存掉,已经晚了。<br><br>真正每天要盯的,是能<b>预测</b>它的<b>先行指标(因)</b>。对这个产品,我找了三个和留存有<b>真实因果</b>、且你能直接拨的 👇</div>`;
+  if(setupStage>=2){
+    bub+=`<div class="bub c"><div class="who">CLAUDE · 建议的先行指标</div>· <b>首值时间 TTFV</b> —— 越快达到首个价值,越可能留下<br>· <b>引导完成率</b> —— 走完引导的人,留存显著更高<br>· <b>激活率(首日关键动作)</b> —— 首日动起来的人才会回来<br><br>每个都不是凑数,是真能驱动留存的杠杆。这套行吗?</div>`;
+  }
+  b.innerHTML=bub;
+  if(setupStage===1){
+    tail.innerHTML=`<div class="runrow" style="background:var(--clay-soft);border:1px solid var(--clay)"><div class="rr-t" style="color:var(--clay-deep)">下一步:让我帮你找能<b>预测</b>它的先行指标</div><button class="btn primary" onclick="setupStage=2;render()">找先行指标 →</button></div>`;
+  }else{
+    tail.innerHTML=`<div class="runrow low"><div class="rr-t"><b>就这套</b> · 先行(因)→ 驱动 → 结果(果),关系清晰可盯</div>
+      <button class="btn ok" onclick="finishSetup()">建立这套指标</button>
+      <button class="btn ghost sm" onclick="toast('可在对话里说『把激活率换成首日留存』来微调')">微调</button></div>`;
+  }
+}
+function pickNS(ns){setupNS=ns;setupStage=1;render()}
+function finishSetup(){
+  const p=prod();p.set=true;p.ns=setupNS;
+  p.leading=[["首值时间 TTFV","2.4 天","good","越快达到首个价值越可能留下",setupNS],
+             ["引导完成率","68%","good","走完引导的人留存显著更高",setupNS],
+             ["激活率(首日)","54%","good","首日完成关键动作",setupNS]];
+  p.lagging=[{k:setupNS,v:"待接入",s:"最终目标 · 接埋点后回收",pending:true},
+             {k:"30 天留存",v:"待接入",s:"兜底结果指标",pending:true}];
+  mode="normal";view="board";
+  toast("✓ 已建立 <b>"+p.name+"</b> 的指标 · 先行(因)→ 结果(果)");
+  render();
+}
+function renderAsideSetup(){
+  const ns=setupNS||"（待定）";
+  const lag=setupStage>=1
+    ? `<div class="leverbox"><div class="lv1"><span class="k">${ns}</span><span class="lv2" style="margin:0">最终目标</span></div></div>
+       <div class="leverbox"><div class="lv1"><span class="k">30 天留存</span><span class="lv2" style="margin:0">兜底</span></div></div>`
+    : `<div style="color:var(--ink-3);font-size:12.5px;padding:8px 2px">先选一个最终目标…</div>`;
+  const lead=setupStage>=2
+    ? ["首值时间 TTFV","引导完成率","激活率(首日)"].map(k=>`<div class="leverbox"><div class="lv1"><span class="k">${k}</span><span class="v">·</span></div><div class="lv2"><span class="drv">→ 驱动 ${ns}</span></div></div>`).join("")
+    : `<div style="color:var(--ink-3);font-size:12.5px;padding:8px 2px">定了最终目标后,这里长出能预测它的先行指标…</div>`;
+  $("aside").innerHTML=`<div class="ax-head create">正在建立的指标</div><div class="ax">
+    <div class="axlabel">结果指标 · 果(慢)</div>${lag}
+    <div class="axlabel">先行指标 · 因(快,你能拨)</div>${lead}</div>`;
+}
+
+/* ============ gate actions ============ */
+function processCard(id,msg){
+  INBOX[curProd]=(INBOX[curProd]||[]).filter(c=>c.id!==id);sel=null;
+  if(needCount(curProd)===0){const p=prod();if(p)p.health="green"}
+  if(msg)toast(msg);render();
+}
+function approveSide(kind){
+  const id=sel;
+  if(kind==="class"){bumpFlywheel();processCard(id,"✓ 已批准并写进自动放行规则 · 同类以后自动放行(花钱/对外仍每批二次确认)")}
+  else{processCard(id,"✓ 已批准这一次 · 执行中")}
+}
+function doCertify(){const id=sel;bumpFlywheel();processCard(id,"✓ 已认可 · 已加入自动放行规则 · 同类以后自动放行,不再逐条问你")}
+function killWf(name){processCard(sel,"⛔ 已急停 "+name+" · 所有分身已冻结")}
+function bumpFlywheel(){
+  FW_AUTOPASS+=1;FW_HOURS=Math.round((FW_HOURS+0.1)*10)/10;
+  const big=$("fwBig");if(big)countUp(big,FW_AUTOPASS-1,FW_AUTOPASS);
+  const hr=$("fwHours");if(hr)hr.textContent=FW_HOURS;
+}
+function countUp(el,from,to){let s=null;const dur=600;function step(t){if(!s)s=t;const p=Math.min((t-s)/dur,1);el.textContent=Math.round(from+(to-from)*p);if(p<1)requestAnimationFrame(step)}requestAnimationFrame(step)}
+
+/* ============ render ============ */
+function render(){
+  renderRail();renderMain();renderAside();
+  [...document.querySelectorAll("#segnav button")].forEach(b=>b.classList.toggle("on",b.dataset.v===view&&mode!=="create"&&mode!=="setup"));
+}
+/* ============ 自动演示 ============ */
+let demoRunning=false;
+function runDemo(){
+  if(demoRunning)return; demoRunning=true;
+  const btn=$("demoBtn"); if(btn)btn.textContent="演示中…";
+  let nar=$("narrator");
+  if(!nar){nar=document.createElement("div");nar.id="narrator";nar.className="narrator";document.body.appendChild(nar)}
+  nar.classList.add("show");
+  const steps=[
+    ["演示 · 客户交付产品的下午。待你处理只浮出需要你的事,其余在自己跑。",()=>{selProd("delivery");go("inbox")},2600],
+    ["① 动真格卡口 —— 选中「海报工厂」卡(将调 imagegen+fal 付费),右栏原地处理。",()=>{selCard("poster")},2900],
+    ["进「运行」面看这条活体运行:运行图动起来,动真格卡口正停在待批。",()=>{openRun("wf-poster")},3600],
+    ["回待你处理,把它批掉 —— 高危(花钱·不可逆):不展开明细、不填理由,『批准』锁死。",()=>{go("inbox");selCard("poster");diffOpen=true;render()},3000],
+    ["展开明细 + 填放行理由 → 解锁。",()=>{reasonText="本周客户海报排期已确认,预算在控";render()},2600],
+    ["点『批这一类』→ 写进自动放行规则。一次判断被复利,而且复利看得见。",()=>{approveSide("class")},2900],
+    ["② 落地页那条:刚真跑完、9.2 过评审 —— 选「落地页」定标准卡。",()=>{selCard("cert")},2900],
+    ["认一次『≥8 且二次无新问题』为合格线 → 同类落地页以后自动放行。",()=>{doCertify()},3000],
+    ["③ 创建的灵魂 · 低风险一句话就跑。",()=>{startCreate("low")},2600],
+    ["只读 / 可逆 / 不花钱 → 零定标准,和手写自动重跑一样爽。",()=>{runLow()},3200],
+    ["④ 高风险才停下来定标准 + dry-run。",()=>{startCreate("high")},2600],
+    ["动真格标红 + Claude 主动唱反调 → 强制先定标准。",()=>{certHigh()},2800],
+    ["dry-run 看清再开跑、接自动放行规则(花钱仍每批二次确认)。",()=>{runHigh()},3000],
+    ["⑤ 看『自动放行规则』:大数字累计,越攒越省。",()=>{go("flywheel")},3000],
+    ["⑥ 项目管理 = 引导建立指标。选『增长 · 洞察』(未建立),和 Claude 一起建。",()=>{selProd("growth");startSetup()},2800],
+    ["先定最终目标(果):新用户首周留存。",()=>{pickNS("新用户首周留存")},2800],
+    ["再倒推出能预测它、你能拨的先行指标(因)。",()=>{setupStage=2;render()},3000],
+    ["建立 → 先行(因)→ 驱动 → 结果(果),并以左因→中桥→右果呈现。这就是 PM 的全部。",()=>{finishSetup()},3400],
+    ["演示完毕。刷新页面可重置,自己再走一遍。",()=>{selProd("delivery");go("inbox")},2400],
+  ];
+  let i=0;
+  (function tick(){
+    if(i>=steps.length){nar.classList.remove("show");demoRunning=false;if(btn)btn.textContent="▶ 看演示";return}
+    const [cap,fn,wait]=steps[i++];
+    nar.innerHTML=`<span class="ns">${i}/${steps.length}</span>${cap}`;
+    try{fn()}catch(e){}
+    setTimeout(tick,wait);
+  })();
+}
+
+$("segnav").addEventListener("click",e=>{if(e.target.dataset.v)go(e.target.dataset.v)});
+/* 「按异常管理」开关已移除 —— 绿色隐身由 rail 的 红→黄→绿 排序 + 空态承载,不另起全局模式 */
+document.addEventListener("keydown",e=>{if((e.metaKey||e.ctrlKey)&&e.key==="k"){e.preventDefault();openPalette()}if(e.key==="Escape")closePalette()});
+render();
+</script>
+</body>
+</html>
