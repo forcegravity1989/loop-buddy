@@ -11,6 +11,7 @@
 | 文件 | 是什么 |
 |---|---|
 | [`framework.md`](framework.md) | 世界观:传统 PM → AI 原生 PM,6+1 控制点,先行/滞后指标 |
+| [`claude-workflow-standard.md`](claude-workflow-standard.md) | **Workflow 标准实现方案**:Claude Workflow 工具的执行模型 / API / 标准骨架(我们 Loop 的底层引擎,跨 4 次真跑实测) |
 | [`workbench.html`](workbench.html) | 原始设计系统 · 组合概览/单项目(clay/Tiempos/暖纸,三栏) |
 | [`summary.html`](summary.html) · [`comparison.html`](comparison.html) | 早期说明 / 对比稿 |
 | [`builders-workbench-opc-v1.html`](builders-workbench-opc-v1.html) | **主原型** · OPC 工作台:收件箱(两道闸)/ 舰队(真实 skill 链)/ 看板(引领→滞后)/ 飞轮。数据已接真实的 6 条 Loop + 156 skill |
