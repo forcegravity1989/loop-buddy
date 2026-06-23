@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{background:#EFEBE2;font-family:'Noto Sans SC',-apple-system,sans-serif;color:#23211C;-webkit-font-smoothing:antialiased;}
+  ::selection{background:#E7CFC4;}
+  input,textarea{font-family:inherit;}
+  textarea{resize:none;}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-thumb{background:#D8D1C2;border-radius:6px;border:3px solid #EFEBE2;}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#EFEBE2;">
+
+  <!-- ===== TOP BAR ===== -->
+  <div style="position:sticky;top:0;z-index:50;background:rgba(239,235,226,0.88);backdrop-filter:blur(12px);border-bottom:1px solid #E2DCCF;">
+    <div style="max-width:1180px;margin:0 auto;padding:14px 40px;display:flex;align-items:center;gap:24px;">
+      <div style="display:flex;align-items:center;gap:11px;flex:none;">
+        <div style="width:26px;height:26px;border-radius:6px;background:#C5654A;display:flex;align-items:center;justify-content:center;color:#fff;font:700 13px/1 'JetBrains Mono',monospace;">B</div>
+        <div style="font:600 14px/1.2 'Noto Sans SC';letter-spacing:.01em;">Builders 工作台</div>
+        <div style="width:1px;height:16px;background:#D8D1C2;"></div>
+        <div style="font:400 13px/1.2 'Noto Sans SC';color:#8C867A;">OPC 项目管理向导</div>
+      </div>
+      <div style="flex:1;display:flex;align-items:center;gap:0;overflow-x:auto;justify-content:flex-end;">
+        <sc-for list="{{ steps }}" as="st" hint-placeholder-count="8">
+          <div onClick="{{ st.onClick }}" style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:none;padding:4px 10px;">
+            <div style="width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:600 10px/1 'JetBrains Mono',monospace;background:{{ st.dotBg }};color:{{ st.dotColor }};border:{{ st.dotBorder }};">{{ st.num }}</div>
+            <div style="font:500 12px/1 'Noto Sans SC';color:{{ st.labelColor }};white-space:nowrap;">{{ st.label }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== STEP 0 · INTRO ===== -->
+  <sc-if value="{{ isStep0 }}" hint-placeholder-val="{{ true }}">
+  <div style="max-width:1000px;margin:0 auto;padding:72px 40px 96px;">
+    <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.2em;text-transform:uppercase;color:#C5654A;margin-bottom:22px;">从零开始 · 不是看板，是方法</div>
+    <h1 style="font:600 46px/1.18 'Noto Serif SC',serif;margin:0 0 24px;letter-spacing:-.01em;max-width:18em;">用 AI 时代的方式，<br>一步步把一个项目的管理体系搭起来</h1>
+    <p style="font:400 18px/1.85 'Noto Sans SC';color:#57534A;max-width:42em;margin:0 0 14px;">我们会以一个真实样板项目 —— <b style="color:#23211C;font-weight:600;">「模型 API 服务 · 运维运营看板」</b> —— 从头走一遍：竞品对比 → 需求导入 → 洞察 → 北极星 → 引领 / 滞后指标 → 原型 → 进度管理。每一步都先讲「为什么」，再动手做。走完，你就拥有了一套可复制的项目管理方法，而不只是一块看板。</p>
+
+    <!-- comparison -->
+    <div style="margin-top:56px;display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid #E2DCCF;border-radius:6px;overflow:hidden;background:#FBFAF6;">
+      <div style="padding:32px 34px;border-right:1px solid #E2DCCF;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#A19B8D;margin-bottom:18px;">传统项目管理 · 示意 ~10 流程 / 5 角色</div>
+        <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:10px;">角色</div>
+        <div style="font:400 14px/1.9 'Noto Sans SC';color:#8C867A;margin-bottom:22px;">产品经理 · 项目经理 · 技术负责人 · 设计师 · 测试 QA<br><span style="font-size:12.5px;color:#A19B8D;">信息要靠这些角色之间反复开会、人工汇报才能流动。</span></div>
+        <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:12px;">流程</div>
+        <div style="display:flex;flex-direction:column;gap:9px;">
+          <div style="font:400 14px/1.4 'Noto Sans SC';color:#57534A;">① 需求收集</div>
+          <div style="font:400 14px/1.4 'Noto Sans SC';color:#B6AE9E;text-decoration:line-through;">② 撰写 10 页 PRD</div>
+          <div style="font:400 14px/1.4 'Noto Sans SC';color:#B6AE9E;text-decoration:line-through;">③ 层层需求评审</div>
+          <div style="font:400 14px/1.4 'Noto Sans SC';color:#B6AE9E;text-decoration:line-through;">④ 排期 · 甘特图</div>
+          <div style="font:400 14px/1.4 'Noto Sans SC';color:#57534A;">⑤ 设计交付</div>
+          <div style="font:400 14px/1.4 'Noto Sans SC';color:#57534A;">⑥ 人工逐行开发</div>
+          <div style="font:400 14px/1.4 'Noto Sans SC';color:#57534A;">⑦ 测试 QA</div>
+          <div style="font:400 14px/1.4 'Noto Sans SC';color:#57534A;">⑧ 发布</div>
+          <div style="font:400 14px/1.4 'Noto Sans SC';color:#B6AE9E;text-decoration:line-through;">⑨ 状态周会 · 口头汇报</div>
+          <div style="font:400 14px/1.4 'Noto Sans SC';color:#57534A;">⑩ 复盘</div>
+        </div>
+      </div>
+      <div style="padding:32px 34px;background:#F7F2EC;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#C5654A;margin-bottom:18px;">AI 时代 · Builders 模式</div>
+        <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:10px;">角色收敛</div>
+        <div style="font:400 14px/1.9 'Noto Sans SC';color:#57534A;margin-bottom:22px;"><b style="font-weight:600;color:#23211C;">1 个 Builder（系统设计者，端到端 own）+ Agent Loop。</b><br><span style="font-size:12.5px;color:#8C867A;">每个人职责范围更大；OpenAI 把团队当「分形小创业公司」，Cursor 50 人没有专职 PM。</span></div>
+        <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:12px;">流程精简（被划掉的，靠 agent 与真实数据替代）</div>
+        <div style="display:flex;flex-direction:column;gap:11px;">
+          <div style="font:400 14px/1.5 'Noto Sans SC';color:#23211C;">② ③ PRD + 评审 <span style="color:#C5654A;">→ 原型即规格</span></div>
+          <div style="font:400 14px/1.5 'Noto Sans SC';color:#23211C;">④ 甘特图 <span style="color:#C5654A;">→ 每周可验证增量（≤90 天视野）</span></div>
+          <div style="font:400 14px/1.5 'Noto Sans SC';color:#23211C;">⑥ 人工实现 <span style="color:#C5654A;">→ agent loop 产出 80%，人审 20%</span></div>
+          <div style="font:400 14px/1.5 'Noto Sans SC';color:#23211C;">⑨ 状态周会 <span style="color:#C5654A;">→ 真实 telemetry，难造假</span></div>
+          <div style="height:1px;background:#E2DCCF;margin:6px 0;"></div>
+          <div style="font:400 13.5px/1.5 'Noto Sans SC';color:#8C867A;">保留并强化 → 竞品对标 · 北极星对齐 · 引领 / 滞后指标 · 原型 · 复盘</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- control points -->
+    <div style="margin-top:52px;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#A19B8D;margin-bottom:18px;">新管理方式下的 4 个控制点 · 辅助，不限制</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:6px;padding:22px 24px;">
+          <div style="font:700 18px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:12px;">01</div>
+          <div style="font:600 16px/1.4 'Noto Serif SC',serif;margin-bottom:8px;">知道对标谁</div>
+          <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#8C867A;">每个项目都有明确的竞品与差距，否则不进入开发。</div>
+        </div>
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:6px;padding:22px 24px;">
+          <div style="font:700 18px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:12px;">02</div>
+          <div style="font:600 16px/1.4 'Noto Serif SC',serif;margin-bottom:8px;">每周在正常演进</div>
+          <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#8C867A;">健康信号来自真实数据，不靠口头汇报，一眼可判断。</div>
+        </div>
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:6px;padding:22px 24px;">
+          <div style="font:700 18px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:12px;">03</div>
+          <div style="font:600 16px/1.4 'Noto Serif SC',serif;margin-bottom:8px;">让 agent loop 干活</div>
+          <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#8C867A;">人只在质量门 / 验收处介入，不微管理；验收信号必须足够可信。</div>
+        </div>
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:6px;padding:22px 24px;">
+          <div style="font:700 18px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:12px;">04</div>
+          <div style="font:600 16px/1.4 'Noto Serif SC',serif;margin-bottom:8px;">目标清晰且难造假</div>
+          <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#8C867A;">北极星唯一；引领指标可控、可被真实统计。</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:48px;display:flex;align-items:center;gap:18px;">
+      <button onClick="{{ start }}" style="background:#C5654A;color:#fff;border:none;border-radius:6px;padding:15px 30px;font:600 15px/1 'Noto Sans SC';cursor:pointer;letter-spacing:.02em;">开始创建项目体系 →</button>
+      <span style="font:400 13.5px/1 'Noto Sans SC';color:#A19B8D;">约 8 步 · 全程以样板项目示范</span>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== STEP 1 · 竞品对比 ===== -->
+  <sc-if value="{{ isStep1 }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1180px;margin:0 auto;padding:56px 40px 110px;display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:start;">
+    <div style="position:sticky;top:96px;">
+      <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#C5654A;margin-bottom:14px;">步骤 01 · 竞品对比</div>
+      <h2 style="font:600 30px/1.3 'Noto Serif SC',serif;margin:0 0 18px;">先回答「对标谁」</h2>
+      <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;margin:0 0 16px;">在写一行代码之前，先知道这个项目要对标谁、差距在哪。AI 时代信息获取几乎零成本——你不需要市场团队花数周访谈，自己用 agent 几小时就能扫描公开资料、提炼对比维度。</p>
+      <div style="border-left:2px solid #D8D1C2;padding:4px 0 4px 16px;margin:22px 0;">
+        <div style="font:500 12px/1.5 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:6px;">传统 → AI</div>
+        <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#57534A;">市场 / 产品经理花数周访谈整理 → Builder 自己用 agent 扫描、提炼差距矩阵。</div>
+      </div>
+      <div style="background:#F2E4DD;border-radius:6px;padding:16px 18px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#B0503A;margin-bottom:8px;">控制点</div>
+        <div style="font:500 14px/1.6 'Noto Sans SC';color:#7A3D2D;">项目必须明确对标对象与差距，「缺口」就是你的差异化机会。</div>
+      </div>
+    </div>
+
+    <div>
+      <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:16px;">为样板项目自动生成的竞品矩阵 · <span style="color:#C5654A;">●</span> 强 &nbsp;<span style="color:#B5862F;">◐</span> 部分 &nbsp;<span style="color:#C2BBAB;">○</span> 无</div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;overflow:hidden;">
+        <table style="width:100%;border-collapse:collapse;font:400 13.5px/1.4 'Noto Sans SC';">
+          <thead>
+            <tr style="background:#F3EEE6;">
+              <th style="text-align:left;padding:14px 18px;font-weight:600;color:#57534A;">产品</th>
+              <th style="padding:14px 10px;font-weight:600;color:#57534A;">实时延迟</th>
+              <th style="padding:14px 10px;font-weight:600;color:#57534A;">成本归因</th>
+              <th style="padding:14px 10px;font-weight:600;color:#57534A;">模型质量 Eval</th>
+              <th style="padding:14px 10px;font-weight:600;color:#57534A;">告警自动化</th>
+              <th style="padding:14px 14px;font-weight:600;color:#57534A;">上手成本</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-top:1px solid #EBE5D9;"><td style="padding:13px 18px;font-weight:500;">Datadog</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#C2BBAB;">○</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#8C867A;">高</td></tr>
+            <tr style="border-top:1px solid #EBE5D9;"><td style="padding:13px 18px;font-weight:500;">Grafana Cloud</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#C2BBAB;">○</td><td style="text-align:center;color:#C2BBAB;">○</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#8C867A;">中</td></tr>
+            <tr style="border-top:1px solid #EBE5D9;"><td style="padding:13px 18px;font-weight:500;">Helicone</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#8C867A;">低</td></tr>
+            <tr style="border-top:1px solid #EBE5D9;"><td style="padding:13px 18px;font-weight:500;">Langfuse</td><td style="text-align:center;color:#C2BBAB;">○</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#C2BBAB;">○</td><td style="text-align:center;color:#8C867A;">中</td></tr>
+            <tr style="border-top:1px solid #EBE5D9;"><td style="padding:13px 18px;font-weight:500;">自建 Prometheus + Grafana</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#C2BBAB;">○</td><td style="text-align:center;color:#C2BBAB;">○</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#8C867A;">高</td></tr>
+            <tr style="border-top:2px solid #E2C9BF;background:#F7EDE7;"><td style="padding:14px 18px;font-weight:700;color:#C5654A;">本项目 · 目标</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#C5654A;font-weight:600;">低</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:6px;padding:18px 20px;">
+          <div style="font:500 12px/1 'Noto Sans SC';color:#8C867A;margin-bottom:8px;">主要对标对象</div>
+          <div style="font:600 15px/1.5 'Noto Sans SC';color:#23211C;">{{ benchmark }}</div>
+        </div>
+        <div style="background:#F7EDE7;border:1px solid #E6D2C8;border-radius:6px;padding:18px 20px;">
+          <div style="font:500 12px/1 'Noto Sans SC';color:#B0503A;margin-bottom:8px;">缺口 = 差异化机会</div>
+          <div style="font:500 14px/1.6 'Noto Sans SC';color:#7A3D2D;">{{ opportunity }}</div>
+        </div>
+      </div>
+
+      <div style="margin-top:36px;display:flex;align-items:center;gap:14px;">
+        <button onClick="{{ prev }}" style="background:transparent;color:#57534A;border:1px solid #D8D1C2;border-radius:6px;padding:13px 22px;font:500 14px/1 'Noto Sans SC';cursor:pointer;">← 上一步</button>
+        <button onClick="{{ confirm }}" style="background:#23211C;color:#fff;border:none;border-radius:6px;padding:13px 26px;font:600 14px/1 'Noto Sans SC';cursor:pointer;">确认对标对象，继续 →</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== STEP 2 · 需求导入 ===== -->
+  <sc-if value="{{ isStep2 }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1180px;margin:0 auto;padding:56px 40px 110px;display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:start;">
+    <div style="position:sticky;top:96px;">
+      <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#C5654A;margin-bottom:14px;">步骤 02 · 需求导入</div>
+      <h2 style="font:600 30px/1.3 'Noto Serif SC',serif;margin:0 0 18px;">把需求收敛成「问题」</h2>
+      <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;margin:0 0 16px;">不写 10 页 PRD。Anthropic 的做法是「原型即规格」——需求以一句问题陈述 + 几条用户故事的轻量形式导入，足够让 agent 直接开始做原型。</p>
+      <div style="border-left:2px solid #D8D1C2;padding:4px 0 4px 16px;margin:22px 0;">
+        <div style="font:500 12px/1.5 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:6px;">传统 → AI</div>
+        <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#57534A;">10 页 PRD + 层层评审 → 一句问题陈述 + 用户故事 + 一个可验证的验收信号。</div>
+      </div>
+      <div style="background:#F2E4DD;border-radius:6px;padding:16px 18px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#B0503A;margin-bottom:8px;">控制点</div>
+        <div style="font:500 14px/1.6 'Noto Sans SC';color:#7A3D2D;">需求收敛为「可被验证的问题」，而不是一张功能清单。</div>
+      </div>
+    </div>
+
+    <div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:26px 28px;">
+        <div style="font:500 12px/1 'Noto Sans SC';color:#8C867A;margin-bottom:10px;">问题陈述 · 一句话</div>
+        <textarea readonly style="width:100%;height:78px;border:none;background:transparent;font:400 16px/1.7 'Noto Serif SC',serif;color:#23211C;outline:none;">值班工程师要跨 4 个工具，才能判断服务是否健康、异常在哪、花了多少钱；定位一次异常平均要 38 分钟。</textarea>
+        <div style="height:1px;background:#EBE5D9;margin:18px 0;"></div>
+        <div style="font:500 12px/1 'Noto Sans SC';color:#8C867A;margin-bottom:14px;">用户故事</div>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div style="display:flex;gap:12px;align-items:flex-start;"><div style="width:20px;height:20px;border-radius:5px;background:#F2E4DD;color:#C5654A;font:600 11px/20px 'JetBrains Mono',monospace;text-align:center;flex:none;">1</div><div style="font:400 14.5px/1.7 'Noto Sans SC';color:#3A3833;">作为<b>值班工程师</b>，我希望<b>在一个视图里看到可用性 / 延迟 / 成本 / 进行中事故</b>，以便<b>不再切 4 个工具</b>。</div></div>
+          <div style="display:flex;gap:12px;align-items:flex-start;"><div style="width:20px;height:20px;border-radius:5px;background:#F2E4DD;color:#C5654A;font:600 11px/20px 'JetBrains Mono',monospace;text-align:center;flex:none;">2</div><div style="font:400 14.5px/1.7 'Noto Sans SC';color:#3A3833;">作为<b>值班工程师</b>，我希望<b>异常发生时拿到 agent 给的根因建议</b>，以便<b>更快定位</b>。</div></div>
+          <div style="display:flex;gap:12px;align-items:flex-start;"><div style="width:20px;height:20px;border-radius:5px;background:#F2E4DD;color:#C5654A;font:600 11px/20px 'JetBrains Mono',monospace;text-align:center;flex:none;">3</div><div style="font:400 14.5px/1.7 'Noto Sans SC';color:#3A3833;">作为<b>负责人</b>，我希望<b>看到成本按模型 / 租户归因</b>，以便<b>判断哪个用法在烧钱</b>。</div></div>
+        </div>
+        <div style="height:1px;background:#EBE5D9;margin:18px 0;"></div>
+        <div style="display:flex;align-items:center;gap:10px;background:#F7EDE7;border-radius:6px;padding:14px 16px;">
+          <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#B0503A;">验收信号</div>
+          <div style="font:500 14px/1.5 'Noto Sans SC';color:#7A3D2D;">值班工程师能在单个视图、15 分钟内定位一次异常的根因。</div>
+        </div>
+      </div>
+      <div style="margin-top:36px;display:flex;align-items:center;gap:14px;">
+        <button onClick="{{ prev }}" style="background:transparent;color:#57534A;border:1px solid #D8D1C2;border-radius:6px;padding:13px 22px;font:500 14px/1 'Noto Sans SC';cursor:pointer;">← 上一步</button>
+        <button onClick="{{ confirm }}" style="background:#23211C;color:#fff;border:none;border-radius:6px;padding:13px 26px;font:600 14px/1 'Noto Sans SC';cursor:pointer;">确认需求，继续 →</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== STEP 3 · 洞察报告 ===== -->
+  <sc-if value="{{ isStep3 }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1180px;margin:0 auto;padding:56px 40px 110px;display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:start;">
+    <div style="position:sticky;top:96px;">
+      <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#C5654A;margin-bottom:14px;">步骤 03 · 洞察报告</div>
+      <h2 style="font:600 30px/1.3 'Noto Serif SC',serif;margin:0 0 18px;">提炼一个可被证伪的判断</h2>
+      <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;margin:0 0 16px;">把竞品与需求合成一个「洞察」：我们到底在解决什么本质问题、为什么是现在。洞察必须是一个判断（可能错），而不是一句正确的废话。</p>
+      <div style="border-left:2px solid #D8D1C2;padding:4px 0 4px 16px;margin:22px 0;">
+        <div style="font:500 12px/1.5 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:6px;">传统 → AI</div>
+        <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#57534A;">厚厚的市场调研报告 → 一张可证伪的洞察卡 + 风险假设清单。</div>
+      </div>
+      <div style="background:#F2E4DD;border-radius:6px;padding:16px 18px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#B0503A;margin-bottom:8px;">控制点</div>
+        <div style="font:500 14px/1.6 'Noto Sans SC';color:#7A3D2D;">每个项目都有一个明确、可被证伪的核心假设。</div>
+      </div>
+    </div>
+
+    <div>
+      <div style="background:#23211C;border-radius:8px;padding:30px 32px;color:#F3EEE6;margin-bottom:16px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#E0A78F;margin-bottom:14px;">核心洞察</div>
+        <div style="font:500 22px/1.6 'Noto Serif SC',serif;">运维的痛点不是「缺数据」，而是数据散落在 4 个工具里、且缺少按<b style="color:#E8C3B3;">模型 / 租户</b>的成本与质量归因。把它们收进一个值班视图，定位时间能从 38 分钟压到 15 分钟以内。</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:6px;padding:20px 22px;">
+          <div style="font:500 12px/1 'Noto Sans SC';color:#5F7355;margin-bottom:10px;">机会</div>
+          <div style="font:400 14px/1.7 'Noto Sans SC';color:#3A3833;">现有工具要么只懂基础设施、要么只懂 LLM 调用，没人把两者放进同一个值班视图。这正是缺口。</div>
+        </div>
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:6px;padding:20px 22px;">
+          <div style="font:500 12px/1 'Noto Sans SC';color:#B5862F;margin-bottom:10px;">风险假设 · 待证伪</div>
+          <div style="font:400 14px/1.7 'Noto Sans SC';color:#3A3833;">假设「单视图 + 根因建议」真能缩短定位时间；若 agent 根因建议命中率太低，洞察不成立。</div>
+        </div>
+      </div>
+      <div style="margin-top:36px;display:flex;align-items:center;gap:14px;">
+        <button onClick="{{ prev }}" style="background:transparent;color:#57534A;border:1px solid #D8D1C2;border-radius:6px;padding:13px 22px;font:500 14px/1 'Noto Sans SC';cursor:pointer;">← 上一步</button>
+        <button onClick="{{ confirm }}" style="background:#23211C;color:#fff;border:none;border-radius:6px;padding:13px 26px;font:600 14px/1 'Noto Sans SC';cursor:pointer;">确认洞察，继续 →</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== STEP 4 · 北极星 ===== -->
+  <sc-if value="{{ isStep4 }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1180px;margin:0 auto;padding:56px 40px 110px;display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:start;">
+    <div style="position:sticky;top:96px;">
+      <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#C5654A;margin-bottom:14px;">步骤 04 · 北极星指标</div>
+      <h2 style="font:600 30px/1.3 'Noto Serif SC',serif;margin:0 0 18px;">一个项目，只能有一个北极星</h2>
+      <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;margin:0 0 16px;">北极星是全队对齐的那一颗——OpenAI 用「这件事让我们更接近 AGI 吗」来取舍。它必须是用户价值导向、唯一、可量化，且<b>从真实数据计算、难以人为修饰</b>。</p>
+      <div style="border-left:2px solid #D8D1C2;padding:4px 0 4px 16px;margin:22px 0;">
+        <div style="font:500 12px/1.5 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:6px;">传统 → AI</div>
+        <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#57534A;">一堆 KPI 各自为政 → 一个北极星统领，其余指标都为它服务。</div>
+      </div>
+      <div style="background:#F2E4DD;border-radius:6px;padding:16px 18px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#B0503A;margin-bottom:8px;">控制点</div>
+        <div style="font:500 14px/1.6 'Noto Sans SC';color:#7A3D2D;">有且仅有一个北极星；它衡量「用户得到的价值」，不是产出量。</div>
+      </div>
+    </div>
+
+    <div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:30px 32px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#C5654A;margin-bottom:18px;">本项目北极星</div>
+        <input value="{{ northStar }}" onChange="{{ onNS }}" style="width:100%;border:none;background:transparent;font:600 28px/1.4 'Noto Serif SC',serif;color:#23211C;padding:0 0 10px;outline:none;border-bottom:2px solid #E2C9BF;" />
+        <div style="font:500 12px/1 'Noto Sans SC';color:#8C867A;margin:22px 0 8px;">为什么它是个好北极星（可编辑）</div>
+        <textarea value="{{ nsDef }}" onChange="{{ onNSDef }}" style="width:100%;height:56px;border:1px solid #E2DCCF;border-radius:6px;background:#fff;font:400 14px/1.7 'Noto Sans SC';color:#3A3833;padding:12px 14px;outline:none;"></textarea>
+        <div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap;">
+          <div style="background:#E7EDE2;color:#4A5E42;border-radius:20px;padding:7px 14px;font:500 12.5px/1 'Noto Sans SC';">✓ 用户价值导向</div>
+          <div style="background:#E7EDE2;color:#4A5E42;border-radius:20px;padding:7px 14px;font:500 12.5px/1 'Noto Sans SC';">✓ 唯一</div>
+          <div style="background:#E7EDE2;color:#4A5E42;border-radius:20px;padding:7px 14px;font:500 12.5px/1 'Noto Sans SC';">✓ 可量化</div>
+          <div style="background:#E7EDE2;color:#4A5E42;border-radius:20px;padding:7px 14px;font:500 12.5px/1 'Noto Sans SC';">✓ 从真实日志算 · 难造假</div>
+        </div>
+      </div>
+      <div style="margin-top:36px;display:flex;align-items:center;gap:14px;">
+        <button onClick="{{ prev }}" style="background:transparent;color:#57534A;border:1px solid #D8D1C2;border-radius:6px;padding:13px 22px;font:500 14px/1 'Noto Sans SC';cursor:pointer;">← 上一步</button>
+        <button onClick="{{ confirm }}" style="background:#23211C;color:#fff;border:none;border-radius:6px;padding:13px 26px;font:600 14px/1 'Noto Sans SC';cursor:pointer;">确认北极星，继续 →</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== STEP 5 · 引领指标 ===== -->
+  <sc-if value="{{ isStep5 }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1180px;margin:0 auto;padding:56px 40px 110px;display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:start;">
+    <div style="position:sticky;top:96px;">
+      <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#C5654A;margin-bottom:14px;">步骤 05 · 引领性指标</div>
+      <h2 style="font:600 30px/1.3 'Noto Serif SC',serif;margin:0 0 18px;">本周我能控制的先行动作</h2>
+      <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;margin:0 0 16px;">北极星是结果，引领指标是你<b>本周能主动推动</b>的先行动作。这是 AI 时代每周演进的抓手——每周设一次目标，让 agent loop 去推进。</p>
+      <div style="border-left:2px solid #D8D1C2;padding:4px 0 4px 16px;margin:22px 0;">
+        <div style="font:500 12px/1.5 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:6px;">三条铁律</div>
+        <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#57534A;"><b>可控</b>（你本周推得动）· <b>可统计</b>（系统自动出数）· <b>难造假</b>（来源是真实日志，不是手填）。</div>
+      </div>
+      <div style="background:#F2E4DD;border-radius:6px;padding:16px 18px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#B0503A;margin-bottom:8px;">控制点</div>
+        <div style="font:500 14px/1.6 'Noto Sans SC';color:#7A3D2D;">引领指标必须同时满足「可控 / 可统计 / 难造假」，否则不要它。</div>
+      </div>
+    </div>
+
+    <div>
+      <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:16px;">本周引领指标 · 目标可编辑</div>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <sc-for list="{{ leading }}" as="it" hint-placeholder-count="3">
+          <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:20px 24px;display:grid;grid-template-columns:1fr auto;gap:20px;align-items:center;">
+            <div>
+              <div style="font:600 16px/1.4 'Noto Sans SC';color:#23211C;margin-bottom:6px;">{{ it.name }}</div>
+              <div style="font:400 13px/1.6 'Noto Sans SC';color:#8C867A;margin-bottom:10px;">{{ it.def }}</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <span style="background:#EEF0EA;color:#5F7355;border-radius:5px;padding:4px 9px;font:500 11.5px/1 'Noto Sans SC';">来源 · {{ it.source }}</span>
+                <span style="background:#F2E4DD;color:#B0503A;border-radius:5px;padding:4px 9px;font:500 11.5px/1 'Noto Sans SC';">{{ it.ok }}</span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:16px;flex:none;">
+              <div style="text-align:right;">
+                <div style="font:500 11px/1 'Noto Sans SC';color:#A19B8D;margin-bottom:5px;">本周</div>
+                <div style="font:500 18px/1 'JetBrains Mono',monospace;color:#8C867A;">{{ it.cur }}</div>
+              </div>
+              <div style="font:400 16px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</div>
+              <div style="text-align:right;">
+                <div style="font:500 11px/1 'Noto Sans SC';color:#C5654A;margin-bottom:5px;">目标</div>
+                <input value="{{ it.target }}" onChange="{{ it.onTarget }}" style="width:64px;border:none;border-bottom:1px dashed #C5654A;background:transparent;font:700 18px/1 'JetBrains Mono',monospace;color:#C5654A;text-align:right;outline:none;padding:0 0 2px;" />
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="margin-top:36px;display:flex;align-items:center;gap:14px;">
+        <button onClick="{{ prev }}" style="background:transparent;color:#57534A;border:1px solid #D8D1C2;border-radius:6px;padding:13px 22px;font:500 14px/1 'Noto Sans SC';cursor:pointer;">← 上一步</button>
+        <button onClick="{{ confirm }}" style="background:#23211C;color:#fff;border:none;border-radius:6px;padding:13px 26px;font:600 14px/1 'Noto Sans SC';cursor:pointer;">确认引领指标，继续 →</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== STEP 6 · 滞后指标 ===== -->
+  <sc-if value="{{ isStep6 }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1180px;margin:0 auto;padding:56px 40px 110px;display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:start;">
+    <div style="position:sticky;top:96px;">
+      <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#C5654A;margin-bottom:14px;">步骤 06 · 滞后性指标</div>
+      <h2 style="font:600 30px/1.3 'Noto Serif SC',serif;margin:0 0 18px;">用来验证，不用来下周度命令</h2>
+      <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;margin:0 0 16px;">滞后指标反映结果，验证你的引领指标是否真的有效，但你无法直接操控它。它会滞后几周才动——所以它是「验收」，不是「本周行动目标」。</p>
+      <div style="border-left:2px solid #D8D1C2;padding:4px 0 4px 16px;margin:22px 0;">
+        <div style="font:500 12px/1.5 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:6px;">因果链</div>
+        <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#57534A;">引领指标 <b style="color:#C5654A;">驱动</b> 北极星，滞后指标 <b style="color:#5F7355;">验证</b> 是否真的发生。</div>
+      </div>
+      <div style="background:#F2E4DD;border-radius:6px;padding:16px 18px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#B0503A;margin-bottom:8px;">控制点</div>
+        <div style="font:500 14px/1.6 'Noto Sans SC';color:#7A3D2D;">滞后指标只用于验证；若它不动，回头质疑引领指标选错了。</div>
+      </div>
+    </div>
+
+    <div>
+      <div style="background:#F7F2EC;border:1px solid #E2DCCF;border-radius:8px;padding:18px 22px;margin-bottom:18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <span style="background:#fff;border:1px solid #E6D2C8;color:#C5654A;border-radius:6px;padding:8px 14px;font:600 13px/1 'Noto Sans SC';">引领指标</span>
+        <span style="font:400 16px/1 'JetBrains Mono',monospace;color:#C5654A;">→ 驱动 →</span>
+        <span style="background:#23211C;color:#fff;border-radius:6px;padding:8px 14px;font:600 13px/1 'Noto Sans SC';">北极星</span>
+        <span style="font:400 16px/1 'JetBrains Mono',monospace;color:#5F7355;">→ 体现为 →</span>
+        <span style="background:#fff;border:1px solid #CFD8C8;color:#5F7355;border-radius:6px;padding:8px 14px;font:600 13px/1 'Noto Sans SC';">滞后指标</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <sc-for list="{{ lagging }}" as="it" hint-placeholder-count="4">
+          <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:20px 22px;">
+            <div style="font:600 15px/1.4 'Noto Sans SC';color:#23211C;margin-bottom:5px;">{{ it.name }}</div>
+            <div style="font:400 12.5px/1.6 'Noto Sans SC';color:#A19B8D;margin-bottom:16px;">{{ it.def }}</div>
+            <div style="display:flex;align-items:baseline;gap:12px;">
+              <div><div style="font:500 11px/1 'Noto Sans SC';color:#A19B8D;margin-bottom:5px;">当前</div><div style="font:500 22px/1 'JetBrains Mono',monospace;color:#8C867A;">{{ it.cur }}</div></div>
+              <div style="font:400 15px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</div>
+              <div><div style="font:500 11px/1 'Noto Sans SC';color:#5F7355;margin-bottom:5px;">目标</div><input value="{{ it.target }}" onChange="{{ it.onTarget }}" style="width:88px;border:none;border-bottom:1px dashed #5F7355;background:transparent;font:700 22px/1 'JetBrains Mono',monospace;color:#5F7355;outline:none;padding:0 0 2px;" /></div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="margin-top:36px;display:flex;align-items:center;gap:14px;">
+        <button onClick="{{ prev }}" style="background:transparent;color:#57534A;border:1px solid #D8D1C2;border-radius:6px;padding:13px 22px;font:500 14px/1 'Noto Sans SC';cursor:pointer;">← 上一步</button>
+        <button onClick="{{ confirm }}" style="background:#23211C;color:#fff;border:none;border-radius:6px;padding:13px 26px;font:600 14px/1 'Noto Sans SC';cursor:pointer;">确认滞后指标，继续 →</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== STEP 7 · 原型 ===== -->
+  <sc-if value="{{ isStep7 }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1180px;margin:0 auto;padding:56px 40px 110px;display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:start;">
+    <div style="position:sticky;top:96px;">
+      <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#C5654A;margin-bottom:14px;">步骤 07 · 原型创建</div>
+      <h2 style="font:600 30px/1.3 'Noto Serif SC',serif;margin:0 0 18px;">原型即规格，agent 产出 80%</h2>
+      <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;margin:0 0 16px;">不靠文档对齐，直接做可点击原型、内部 dogfood。让 agent loop 跑出 80% 的初稿，你只审最后 20%——保持干净的 git checkpoint，随时可回退。</p>
+      <div style="border-left:2px solid #D8D1C2;padding:4px 0 4px 16px;margin:22px 0;">
+        <div style="font:500 12px/1.5 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:6px;">传统 → AI</div>
+        <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#57534A;">设计稿评审数轮才开发 → agent 几小时出可点击原型，用真实使用代替评审。</div>
+      </div>
+      <div style="background:#F2E4DD;border-radius:6px;padding:16px 18px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#B0503A;margin-bottom:8px;">控制点</div>
+        <div style="font:500 14px/1.6 'Noto Sans SC';color:#7A3D2D;">用原型而非文档对齐；人只在关键逻辑 / 验收处介入。</div>
+      </div>
+    </div>
+
+    <div>
+      <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:14px;display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5F7355;"></span>原型初稿 · 由 agent loop 生成，人审关键逻辑</div>
+      <!-- mini dashboard prototype -->
+      <div style="background:#23211C;border-radius:10px;padding:22px;box-shadow:0 8px 30px rgba(35,33,28,.14);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+          <div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:#7FA56F;box-shadow:0 0 0 3px rgba(127,165,111,.2);"></div><div style="font:600 14px/1 'Noto Sans SC';color:#F3EEE6;">模型 API 服务 · 运营总览</div></div>
+          <div style="font:400 11px/1 'JetBrains Mono',monospace;color:#8C867A;">实时 · 30s 刷新</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;">
+          <div style="background:#2D2A24;border-radius:8px;padding:16px;"><div style="font:400 11px/1 'Noto Sans SC';color:#9A9388;margin-bottom:10px;">有效可用性</div><div style="font:700 24px/1 'JetBrains Mono',monospace;color:#7FA56F;">99.4%</div></div>
+          <div style="background:#2D2A24;border-radius:8px;padding:16px;"><div style="font:400 11px/1 'Noto Sans SC';color:#9A9388;margin-bottom:10px;">P95 延迟</div><div style="font:700 24px/1 'JetBrains Mono',monospace;color:#F3EEE6;">842<span style="font-size:13px;color:#9A9388;">ms</span></div></div>
+          <div style="background:#2D2A24;border-radius:8px;padding:16px;"><div style="font:400 11px/1 'Noto Sans SC';color:#9A9388;margin-bottom:10px;">每千次成本</div><div style="font:700 24px/1 'JetBrains Mono',monospace;color:#F3EEE6;">¥2.30</div></div>
+          <div style="background:#3A2A24;border-radius:8px;padding:16px;"><div style="font:400 11px/1 'Noto Sans SC';color:#E0A78F;margin-bottom:10px;">进行中事故</div><div style="font:700 24px/1 'JetBrains Mono',monospace;color:#E08B6F;">1</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:12px;">
+          <div style="background:#2D2A24;border-radius:8px;padding:16px;">
+            <div style="font:400 11px/1 'Noto Sans SC';color:#9A9388;margin-bottom:14px;">调用量 · 24h</div>
+            <div style="display:flex;align-items:flex-end;gap:5px;height:64px;">
+              <div style="flex:1;height:38%;background:#4A453C;border-radius:3px 3px 0 0;"></div>
+              <div style="flex:1;height:52%;background:#4A453C;border-radius:3px 3px 0 0;"></div>
+              <div style="flex:1;height:46%;background:#4A453C;border-radius:3px 3px 0 0;"></div>
+              <div style="flex:1;height:68%;background:#4A453C;border-radius:3px 3px 0 0;"></div>
+              <div style="flex:1;height:82%;background:#6E8A60;border-radius:3px 3px 0 0;"></div>
+              <div style="flex:1;height:74%;background:#4A453C;border-radius:3px 3px 0 0;"></div>
+              <div style="flex:1;height:90%;background:#C5654A;border-radius:3px 3px 0 0;"></div>
+              <div style="flex:1;height:60%;background:#4A453C;border-radius:3px 3px 0 0;"></div>
+            </div>
+          </div>
+          <div style="background:#2D2A24;border-radius:8px;padding:16px;">
+            <div style="font:400 11px/1 'Noto Sans SC';color:#9A9388;margin-bottom:12px;">成本归因 · 按模型</div>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <div style="display:flex;align-items:center;gap:8px;"><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#C9C2B6;width:64px;">opus</div><div style="flex:1;height:7px;background:#3A372F;border-radius:4px;overflow:hidden;"><div style="width:62%;height:100%;background:#C5654A;"></div></div></div>
+              <div style="display:flex;align-items:center;gap:8px;"><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#C9C2B6;width:64px;">sonnet</div><div style="flex:1;height:7px;background:#3A372F;border-radius:4px;overflow:hidden;"><div style="width:30%;height:100%;background:#7FA56F;"></div></div></div>
+              <div style="display:flex;align-items:center;gap:8px;"><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#C9C2B6;width:64px;">haiku</div><div style="flex:1;height:7px;background:#3A372F;border-radius:4px;overflow:hidden;"><div style="width:12%;height:100%;background:#B5862F;"></div></div></div>
+            </div>
+            <div style="margin-top:14px;padding-top:12px;border-top:1px solid #3A372F;font:400 11px/1.5 'Noto Sans SC';color:#E0A78F;">⚑ agent 根因建议：opus 流量异常集中于租户 #A12</div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:16px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:16px 20px;display:flex;align-items:center;gap:14px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#5F7355;">人审清单</div>
+        <div style="font:400 13.5px/1.6 'Noto Sans SC';color:#57534A;">✓ 可用性算法口径 &nbsp;·&nbsp; ✓ 成本归因取数 &nbsp;·&nbsp; ◻ 根因建议的误报阈值（待你确认）</div>
+      </div>
+      <div style="margin-top:36px;display:flex;align-items:center;gap:14px;">
+        <button onClick="{{ prev }}" style="background:transparent;color:#57534A;border:1px solid #D8D1C2;border-radius:6px;padding:13px 22px;font:500 14px/1 'Noto Sans SC';cursor:pointer;">← 上一步</button>
+        <button onClick="{{ confirm }}" style="background:#23211C;color:#fff;border:none;border-radius:6px;padding:13px 26px;font:600 14px/1 'Noto Sans SC';cursor:pointer;">确认原型，继续 →</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== STEP 8 · 进度管理 ===== -->
+  <sc-if value="{{ isStep8 }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1180px;margin:0 auto;padding:56px 40px 110px;display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:start;">
+    <div style="position:sticky;top:96px;">
+      <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#C5654A;margin-bottom:14px;">步骤 08 · 过程 / 进度管理</div>
+      <h2 style="font:600 30px/1.3 'Noto Serif SC',serif;margin:0 0 18px;">每周可验证地演进</h2>
+      <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;margin:0 0 16px;">不是甘特图和状态周会，而是一个固定的周节奏 + 一个来自真实数据的健康信号。Cursor 当天就 ship，Anthropic 视野不超过 90 天、按周循环。</p>
+      <div style="border-left:2px solid #D8D1C2;padding:4px 0 4px 16px;margin:22px 0;">
+        <div style="font:500 12px/1.5 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:6px;">传统 → AI</div>
+        <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#57534A;">甘特图 + 口头状态周会（易造假）→ 周度 shippable 增量 + 真实 telemetry。</div>
+      </div>
+      <div style="background:#F2E4DD;border-radius:6px;padding:16px 18px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#B0503A;margin-bottom:8px;">控制点</div>
+        <div style="font:500 14px/1.6 'Noto Sans SC';color:#7A3D2D;">每周演进由真实数据验证；人只在验收 / 质量门介入，不微管理 agent。</div>
+      </div>
+    </div>
+
+    <div>
+      <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:14px;">本周节奏 · 一个可复制的循环</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px;">
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:20px;"><div style="font:600 12px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:10px;">周一</div><div style="font:600 15px/1.4 'Noto Sans SC';margin-bottom:6px;">定引领目标</div><div style="font:400 13px/1.6 'Noto Sans SC';color:#8C867A;">从引领指标里选本周要推动的 1–2 个，写下目标值。</div></div>
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:20px;"><div style="font:600 12px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:10px;">周中</div><div style="font:600 15px/1.4 'Noto Sans SC';margin-bottom:6px;">agent loop 推进</div><div style="font:400 13px/1.6 'Noto Sans SC';color:#8C867A;">放手让 agent 跑，人只审关键逻辑与验收信号。</div></div>
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:20px;"><div style="font:600 12px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:10px;">周五</div><div style="font:600 15px/1.4 'Noto Sans SC';margin-bottom:6px;">看真实数据复盘</div><div style="font:400 13px/1.6 'Noto Sans SC';color:#8C867A;">引领指标达成了吗？北极星在动吗？据此更新健康信号。</div></div>
+      </div>
+
+      <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:14px;">本周健康信号 · 基于真实数据，一眼判断是否正常演进</div>
+      <div style="display:flex;gap:12px;margin-bottom:18px;">
+        <div onClick="{{ setSignalGreen }}" style="flex:1;cursor:pointer;border-radius:8px;padding:18px 20px;border:2px solid {{ greenBorder }};background:{{ greenBg }};"><div style="display:flex;align-items:center;gap:9px;"><div style="width:11px;height:11px;border-radius:50%;background:#5F7355;"></div><div style="font:600 15px/1 'Noto Sans SC';color:#4A5E42;">正常演进</div></div></div>
+        <div onClick="{{ setSignalAmber }}" style="flex:1;cursor:pointer;border-radius:8px;padding:18px 20px;border:2px solid {{ amberBorder }};background:{{ amberBg }};"><div style="display:flex;align-items:center;gap:9px;"><div style="width:11px;height:11px;border-radius:50%;background:#B5862F;"></div><div style="font:600 15px/1 'Noto Sans SC';color:#8A6720;">需要关注</div></div></div>
+        <div onClick="{{ setSignalRed }}" style="flex:1;cursor:pointer;border-radius:8px;padding:18px 20px;border:2px solid {{ redBorder }};background:{{ redBg }};"><div style="display:flex;align-items:center;gap:9px;"><div style="width:11px;height:11px;border-radius:50%;background:#B0503A;"></div><div style="font:600 15px/1 'Noto Sans SC';color:#8A3D2A;">阻塞</div></div></div>
+      </div>
+      <div style="background:{{ sigMeta.bg }};border-radius:8px;padding:16px 20px;font:500 14px/1.6 'Noto Sans SC';color:#3A3833;">{{ sigMeta.desc }}</div>
+
+      <div style="margin-top:36px;display:flex;align-items:center;gap:14px;">
+        <button onClick="{{ prev }}" style="background:transparent;color:#57534A;border:1px solid #D8D1C2;border-radius:6px;padding:13px 22px;font:500 14px/1 'Noto Sans SC';cursor:pointer;">← 上一步</button>
+        <button onClick="{{ confirm }}" style="background:#C5654A;color:#fff;border:none;border-radius:6px;padding:13px 26px;font:600 14px/1 'Noto Sans SC';cursor:pointer;">完成，生成项目看板 →</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== STEP 9 · FINAL BOARD ===== -->
+  <sc-if value="{{ isStep9 }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1180px;margin:0 auto;padding:56px 40px 110px;">
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:8px;flex-wrap:wrap;">
+      <div>
+        <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#C5654A;margin-bottom:14px;">完成 · OPC 项目看板</div>
+        <h1 style="font:600 38px/1.2 'Noto Serif SC',serif;margin:0;">{{ projectName }}</h1>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;background:{{ sigMeta.bg }};border-radius:24px;padding:9px 18px;"><div style="width:10px;height:10px;border-radius:50%;background:{{ sigMeta.color }};"></div><div style="font:600 13px/1 'Noto Sans SC';color:{{ sigMeta.color }};">本周 · {{ sigMeta.label }}</div></div>
+    </div>
+    <p style="font:400 15px/1.7 'Noto Sans SC';color:#8C867A;margin:0 0 32px;">你刚刚从零搭出了一套项目管理体系——下面每一块都来自前面的步骤，可点回去修改。</p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+      <!-- 对标 -->
+      <div onClick="{{ goStep1 }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:24px 26px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:14px;">对标 · 机会</div>
+        <div style="font:600 17px/1.5 'Noto Sans SC';color:#23211C;margin-bottom:10px;">{{ benchmark }}</div>
+        <div style="font:400 13.5px/1.6 'Noto Sans SC';color:#8C867A;">{{ opportunity }}</div>
+      </div>
+      <!-- 北极星 -->
+      <div onClick="{{ goStep4 }}" style="cursor:pointer;background:#23211C;border-radius:10px;padding:24px 26px;color:#F3EEE6;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#E0A78F;margin-bottom:14px;">北极星</div>
+        <div style="font:600 20px/1.4 'Noto Serif SC',serif;">{{ northStar }}</div>
+      </div>
+      <!-- 引领 -->
+      <div onClick="{{ goStep5 }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:24px 26px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#C5654A;margin-bottom:16px;">引领指标 · 本周抓手</div>
+        <div style="display:flex;flex-direction:column;gap:11px;">
+          <sc-for list="{{ leading }}" as="it" hint-placeholder-count="3">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+              <div style="font:400 13.5px/1.4 'Noto Sans SC';color:#3A3833;">{{ it.name }}</div>
+              <div style="font:500 13px/1 'JetBrains Mono',monospace;color:#8C867A;white-space:nowrap;">{{ it.cur }} <span style="color:#C2BBAB;">→</span> <b style="color:#C5654A;">{{ it.target }}</b></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <!-- 滞后 -->
+      <div onClick="{{ goStep6 }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:24px 26px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#5F7355;margin-bottom:16px;">滞后指标 · 验证结果</div>
+        <div style="display:flex;flex-direction:column;gap:11px;">
+          <sc-for list="{{ lagging }}" as="it" hint-placeholder-count="4">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+              <div style="font:400 13.5px/1.4 'Noto Sans SC';color:#3A3833;">{{ it.name }}</div>
+              <div style="font:500 13px/1 'JetBrains Mono',monospace;color:#8C867A;white-space:nowrap;">{{ it.cur }} <span style="color:#C2BBAB;">→</span> <b style="color:#5F7355;">{{ it.target }}</b></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <!-- 节奏 + 原型 row -->
+    <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-top:16px;">
+      <div onClick="{{ goStep8 }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:24px 26px;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:16px;">周节奏</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font:500 13.5px/1 'Noto Sans SC';color:#3A3833;">
+          <span style="background:#F2E4DD;color:#B0503A;border-radius:6px;padding:7px 12px;">周一 定引领目标</span>
+          <span style="color:#C2BBAB;">→</span>
+          <span style="background:#F2E4DD;color:#B0503A;border-radius:6px;padding:7px 12px;">周中 agent loop 推进</span>
+          <span style="color:#C2BBAB;">→</span>
+          <span style="background:#F2E4DD;color:#B0503A;border-radius:6px;padding:7px 12px;">周五 真实数据复盘</span>
+        </div>
+      </div>
+      <div onClick="{{ goStep7 }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:24px 26px;display:flex;flex-direction:column;justify-content:center;">
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:12px;">原型</div>
+        <div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:#5F7355;"></div><div style="font:500 14px/1.4 'Noto Sans SC';color:#3A3833;">可点击初稿 · agent 产出 80%，人审 20%</div></div>
+      </div>
+    </div>
+
+    <div style="margin-top:40px;display:flex;align-items:center;gap:14px;">
+      <button onClick="{{ goStep0 }}" style="background:transparent;color:#57534A;border:1px solid #D8D1C2;border-radius:6px;padding:13px 22px;font:500 14px/1 'Noto Sans SC';cursor:pointer;">↺ 回顾方法</button>
+      <button onClick="{{ prev }}" style="background:#23211C;color:#fff;border:none;border-radius:6px;padding:13px 26px;font:600 14px/1 'Noto Sans SC';cursor:pointer;">← 调整上一步</button>
+    </div>
+  </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    step: 0,
+    completed: {},
+    projectName: '模型 API 服务 · 运维运营看板',
+    benchmark: 'Datadog · Helicone · Langfuse',
+    opportunity: '把基础设施监控与 LLM 调用的成本 / 质量归因，合并到同一个值班视图。',
+    northStar: '服务有效可用性 99.9%',
+    nsDef: '用户可成功调用的请求时间占比，从真实网关日志计算，难以人为修饰。',
+    weeklySignal: 'green',
+    leading: [
+      { name: '关键指标告警覆盖率', def: '已配置自动告警的关键指标 / 全部关键指标', cur: '60%', target: '85%', source: '监控系统自动统计', ok: '可控 · 难造假' },
+      { name: '根因建议采纳率', def: 'agent 给出的根因建议被值班采纳的比例', cur: '41%', target: '70%', source: '事故复盘自动记录', ok: '可控 · 难造假' },
+      { name: '延迟回归每日运行率', def: '每日自动跑 P95 延迟回归的天数 / 7', cur: '5/7', target: '7/7', source: 'CI 流水线记录', ok: '可控 · 难造假' },
+    ],
+    lagging: [
+      { name: '月度有效可用性', def: '北极星的直接结果', cur: '99.4%', target: '99.9%' },
+      { name: '平均故障定位时间', def: '告警到定位根因的中位时间', cur: '38min', target: '<15min' },
+      { name: '用户主动上报事故数', def: '每月由用户先于监控发现的事故', cur: '6/月', target: '≤1/月' },
+      { name: '每千次调用成本', def: '按真实账单 / 调用量计算', cur: '¥2.30', target: '¥1.80' },
+    ],
+  };
+
+  go(n) {
+    const s = Math.max(0, Math.min(9, n));
+    this.setState({ step: s });
+    if (typeof window !== 'undefined') window.scrollTo(0, 0);
+  }
+  next() { this.go(this.state.step + 1); }
+  prev() { this.go(this.state.step - 1); }
+  confirm() {
+    const c = { ...this.state.completed, [this.state.step]: true };
+    this.setState({ completed: c });
+    this.go(this.state.step + 1);
+  }
+
+  renderVals() {
+    const labels = ['竞品对比', '需求导入', '洞察报告', '北极星指标', '引领指标', '滞后指标', '原型创建', '进度管理'];
+    const step = this.state.step;
+    const completed = this.state.completed;
+
+    const steps = labels.map((label, i) => {
+      const n = i + 1;
+      const status = completed[n] ? 'done' : (step === n ? 'current' : 'todo');
+      return {
+        n, num: (n < 10 ? '0' + n : '' + n), label, status,
+        onClick: () => this.go(n),
+        dotBg: status === 'done' ? '#C5654A' : (status === 'current' ? '#23211C' : '#FBFAF6'),
+        dotColor: (status === 'done' || status === 'current') ? '#FFFFFF' : '#8C867A',
+        dotBorder: status === 'todo' ? '1px solid #D8D1C2' : '1px solid transparent',
+        labelColor: status === 'todo' ? '#A19B8D' : '#23211C',
+      };
+    });
+
+    const leading = this.state.leading.map((it, i) => ({
+      ...it,
+      onTarget: (e) => {
+        const a = [...this.state.leading];
+        a[i] = { ...a[i], target: e.target.value };
+        this.setState({ leading: a });
+      },
+    }));
+    const lagging = this.state.lagging.map((it, i) => ({
+      ...it,
+      onTarget: (e) => {
+        const a = [...this.state.lagging];
+        a[i] = { ...a[i], target: e.target.value };
+        this.setState({ lagging: a });
+      },
+    }));
+
+    const sig = this.state.weeklySignal;
+    const sigMeta = sig === 'green'
+      ? { label: '正常演进', color: '#5F7355', bg: '#E7EDE2', desc: '本周引领指标按计划推进，可以继续放手让 agent loop 执行。' }
+      : sig === 'amber'
+        ? { label: '需要关注', color: '#B5862F', bg: '#F5ECD6', desc: '部分引领指标落后，本周内需要人为介入一个控制点。' }
+        : { label: '阻塞', color: '#B0503A', bg: '#F3E0DA', desc: '引领指标停滞，触发复盘：是目标定错了，还是 agent loop 卡住了？' };
+
+    const sb = (v) => sig === v;
+    return {
+      step,
+      isStep0: step === 0, isStep1: step === 1, isStep2: step === 2, isStep3: step === 3,
+      isStep4: step === 4, isStep5: step === 5, isStep6: step === 6, isStep7: step === 7,
+      isStep8: step === 8, isStep9: step === 9,
+      steps,
+      goTo: (n) => this.go(n), next: () => this.next(), prev: () => this.prev(), confirm: () => this.confirm(),
+      start: () => this.go(1),
+      goStep0: () => this.go(0), goStep1: () => this.go(1), goStep4: () => this.go(4),
+      goStep5: () => this.go(5), goStep6: () => this.go(6), goStep7: () => this.go(7), goStep8: () => this.go(8),
+      projectName: this.state.projectName,
+      benchmark: this.state.benchmark,
+      opportunity: this.state.opportunity,
+      northStar: this.state.northStar,
+      onNS: (e) => this.setState({ northStar: e.target.value }),
+      nsDef: this.state.nsDef,
+      onNSDef: (e) => this.setState({ nsDef: e.target.value }),
+      leading, lagging,
+      weeklySignal: sig, sigMeta,
+      setSignalGreen: () => this.setState({ weeklySignal: 'green' }),
+      setSignalAmber: () => this.setState({ weeklySignal: 'amber' }),
+      setSignalRed: () => this.setState({ weeklySignal: 'red' }),
+      greenBorder: sb('green') ? '#5F7355' : '#E2DCCF', greenBg: sb('green') ? '#E7EDE2' : '#FBFAF6',
+      amberBorder: sb('amber') ? '#B5862F' : '#E2DCCF', amberBg: sb('amber') ? '#F5ECD6' : '#FBFAF6',
+      redBorder: sb('red') ? '#B0503A' : '#E2DCCF', redBg: sb('red') ? '#F3E0DA' : '#FBFAF6',
+    };
+  }
+}
+</script>
+</body>
+</html>
