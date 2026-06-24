@@ -23,7 +23,18 @@
 </style>
 </helmet>
 
+<template id="__bundler_thumbnail" data-bg-color="#EFEBE2">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#EFEBE2"/>
+    <rect x="430" y="300" width="120" height="120" rx="26" fill="#C5654A"/>
+    <text x="490" y="388" font-family="monospace" font-size="74" font-weight="700" fill="#FFFFFF" text-anchor="middle">B</text>
+    <text x="585" y="385" font-family="serif" font-size="60" font-weight="600" fill="#23211C">工作台</text>
+    <rect x="430" y="470" width="340" height="10" rx="5" fill="#D8D1C2"/>
+  </svg>
+</template>
 <div style="min-height:100vh;background:#EFEBE2;">
+
+  <sc-if value="{{ isWizard }}" hint-placeholder-val="{{ true }}">
 
   <!-- ===== TOP BAR ===== -->
   <div style="position:sticky;top:0;z-index:50;background:rgba(239,235,226,0.88);backdrop-filter:blur(12px);border-bottom:1px solid #E2DCCF;">
@@ -510,86 +521,369 @@
   </div>
   </sc-if>
 
-  <!-- ===== STEP 9 · FINAL BOARD ===== -->
-  <sc-if value="{{ isStep9 }}" hint-placeholder-val="{{ false }}">
-  <div style="max-width:1180px;margin:0 auto;padding:56px 40px 110px;">
-    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:8px;flex-wrap:wrap;">
-      <div>
-        <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#C5654A;margin-bottom:14px;">完成 · OPC 项目看板</div>
-        <h1 style="font:600 38px/1.2 'Noto Serif SC',serif;margin:0;">{{ projectName }}</h1>
-      </div>
-      <div style="display:flex;align-items:center;gap:10px;background:{{ sigMeta.bg }};border-radius:24px;padding:9px 18px;"><div style="width:10px;height:10px;border-radius:50%;background:{{ sigMeta.color }};"></div><div style="font:600 13px/1 'Noto Sans SC';color:{{ sigMeta.color }};">本周 · {{ sigMeta.label }}</div></div>
-    </div>
-    <p style="font:400 15px/1.7 'Noto Sans SC';color:#8C867A;margin:0 0 32px;">你刚刚从零搭出了一套项目管理体系——下面每一块都来自前面的步骤，可点回去修改。</p>
+  </sc-if>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-      <!-- 对标 -->
-      <div onClick="{{ goStep1 }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:24px 26px;">
-        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:14px;">对标 · 机会</div>
-        <div style="font:600 17px/1.5 'Noto Sans SC';color:#23211C;margin-bottom:10px;">{{ benchmark }}</div>
-        <div style="font:400 13.5px/1.6 'Noto Sans SC';color:#8C867A;">{{ opportunity }}</div>
-      </div>
-      <!-- 北极星 -->
-      <div onClick="{{ goStep4 }}" style="cursor:pointer;background:#23211C;border-radius:10px;padding:24px 26px;color:#F3EEE6;">
-        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#E0A78F;margin-bottom:14px;">北极星</div>
-        <div style="font:600 20px/1.4 'Noto Serif SC',serif;">{{ northStar }}</div>
-      </div>
-      <!-- 引领 -->
-      <div onClick="{{ goStep5 }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:24px 26px;">
-        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#C5654A;margin-bottom:16px;">引领指标 · 本周抓手</div>
-        <div style="display:flex;flex-direction:column;gap:11px;">
-          <sc-for list="{{ leading }}" as="it" hint-placeholder-count="3">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-              <div style="font:400 13.5px/1.4 'Noto Sans SC';color:#3A3833;">{{ it.name }}</div>
-              <div style="font:500 13px/1 'JetBrains Mono',monospace;color:#8C867A;white-space:nowrap;">{{ it.cur }} <span style="color:#C2BBAB;">→</span> <b style="color:#C5654A;">{{ it.target }}</b></div>
-            </div>
-          </sc-for>
-        </div>
-      </div>
-      <!-- 滞后 -->
-      <div onClick="{{ goStep6 }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:24px 26px;">
-        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#5F7355;margin-bottom:16px;">滞后指标 · 验证结果</div>
-        <div style="display:flex;flex-direction:column;gap:11px;">
-          <sc-for list="{{ lagging }}" as="it" hint-placeholder-count="4">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-              <div style="font:400 13.5px/1.4 'Noto Sans SC';color:#3A3833;">{{ it.name }}</div>
-              <div style="font:500 13px/1 'JetBrains Mono',monospace;color:#8C867A;white-space:nowrap;">{{ it.cur }} <span style="color:#C2BBAB;">→</span> <b style="color:#5F7355;">{{ it.target }}</b></div>
-            </div>
-          </sc-for>
-        </div>
-      </div>
+  <!-- ===== PROJECTS HOME ===== -->
+  <sc-if value="{{ isProjects }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1080px;margin:0 auto;padding:60px 40px 100px;">
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:46px;">
+      <div style="width:30px;height:30px;border-radius:7px;background:#C5654A;display:flex;align-items:center;justify-content:center;color:#fff;font:700 15px/1 'JetBrains Mono',monospace;">B</div>
+      <div style="font:600 16px/1.2 'Noto Sans SC';">Builders 工作台</div>
+      <div style="width:1px;height:16px;background:#D8D1C2;"></div>
+      <div style="font:400 14px/1.2 'Noto Sans SC';color:#8C867A;">项目管理体系 · 多项目</div>
     </div>
 
-    <!-- 节奏 + 原型 row -->
-    <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-top:16px;">
-      <div onClick="{{ goStep8 }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:24px 26px;">
-        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:16px;">周节奏</div>
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font:500 13.5px/1 'Noto Sans SC';color:#3A3833;">
-          <span style="background:#F2E4DD;color:#B0503A;border-radius:6px;padding:7px 12px;">周一 定引领目标</span>
-          <span style="color:#C2BBAB;">→</span>
-          <span style="background:#F2E4DD;color:#B0503A;border-radius:6px;padding:7px 12px;">周中 agent loop 推进</span>
-          <span style="color:#C2BBAB;">→</span>
-          <span style="background:#F2E4DD;color:#B0503A;border-radius:6px;padding:7px 12px;">周五 真实数据复盘</span>
-        </div>
-      </div>
-      <div onClick="{{ goStep7 }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:24px 26px;display:flex;flex-direction:column;justify-content:center;">
-        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:12px;">原型</div>
-        <div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:#5F7355;"></div><div style="font:500 14px/1.4 'Noto Sans SC';color:#3A3833;">可点击初稿 · agent 产出 80%，人审 20%</div></div>
-      </div>
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
+      <h1 style="font:600 40px/1.2 'Noto Serif SC',serif;margin:0;">我的项目</h1>
+      <div style="font:400 13.5px/1.6 'Noto Sans SC';color:#A19B8D;">工作台管理 N 个项目 · 每个项目有独立进度</div>
     </div>
+    <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;max-width:50em;margin:0 0 38px;">每个项目都从 0→1 的冷启动向导建立体系，成熟后进入运营态。进入任意项目，<b style="color:#23211C;">左侧是会话 / 环节历史，中央是该环节的产物画布、对话或观测看板</b> —— 万变不离其宗。</p>
 
-    <div style="margin-top:40px;display:flex;align-items:center;gap:14px;">
-      <button onClick="{{ goStep0 }}" style="background:transparent;color:#57534A;border:1px solid #D8D1C2;border-radius:6px;padding:13px 22px;font:500 14px/1 'Noto Sans SC';cursor:pointer;">↺ 回顾方法</button>
-      <button onClick="{{ prev }}" style="background:#23211C;color:#fff;border:none;border-radius:6px;padding:13px 26px;font:600 14px/1 'Noto Sans SC';cursor:pointer;">← 调整上一步</button>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;">
+      <sc-for list="{{ projectRows }}" as="p" hint-placeholder-count="3">
+        <div onClick="{{ p.onClick }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:24px 26px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+            <span style="font:500 11px/1 'Noto Sans SC';background:{{ p.phaseBg }};color:{{ p.phaseColor }};border-radius:6px;padding:5px 10px;">{{ p.phaseLabel }}</span>
+            <div style="width:9px;height:9px;border-radius:50%;background:{{ p.sig }};"></div>
+          </div>
+          <div style="font:600 19px/1.35 'Noto Serif SC',serif;color:#23211C;margin-bottom:9px;">{{ p.name }}</div>
+          <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#8C867A;margin-bottom:22px;min-height:46px;">{{ p.desc }}</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span style="font:500 12px/1 'Noto Sans SC';color:#A19B8D;">{{ p.meta }}</span>
+            <span style="font:600 13px/1 'JetBrains Mono',monospace;color:{{ p.progColor }};">{{ p.progLabel }}</span>
+          </div>
+          <div style="height:6px;background:#EBE5D9;border-radius:3px;overflow:hidden;"><div style="width:{{ p.progWidth }};height:100%;background:{{ p.progColor }};"></div></div>
+        </div>
+      </sc-for>
+      <div onClick="{{ newProject }}" style="cursor:pointer;border:1.5px dashed #CFC7B6;border-radius:12px;padding:24px 26px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:200px;">
+        <div style="width:44px;height:44px;border-radius:50%;border:1.5px solid #CFC7B6;display:flex;align-items:center;justify-content:center;font:300 28px/1 'Noto Sans SC';color:#A19B8D;margin-bottom:13px;">+</div>
+        <div style="font:600 15px/1 'Noto Sans SC';color:#57534A;margin-bottom:6px;">新建项目</div>
+        <div style="font:400 12.5px/1 'Noto Sans SC';color:#A19B8D;">走一遍 0→1 冷启动向导</div>
+      </div>
     </div>
   </div>
   </sc-if>
 
+  <!-- ===== APP SHELL (operating view) ===== -->
+  <sc-if value="{{ isApp }}" hint-placeholder-val="{{ false }}">
+  <div style="height:100vh;display:flex;flex-direction:column;background:#EFEBE2;">
+
+    <!-- app top bar -->
+    <div style="flex:none;background:rgba(239,235,226,0.92);backdrop-filter:blur(12px);border-bottom:1px solid #E2DCCF;padding:11px 22px;display:flex;align-items:center;gap:15px;">
+      <div onClick="{{ backToProjects }}" style="cursor:pointer;display:flex;align-items:center;gap:9px;">
+        <div style="width:26px;height:26px;border-radius:6px;background:#C5654A;display:flex;align-items:center;justify-content:center;color:#fff;font:700 13px/1 'JetBrains Mono',monospace;">B</div>
+        <span style="font:500 13px/1 'Noto Sans SC';color:#8C867A;">← 全部项目</span>
+      </div>
+      <div style="width:1px;height:16px;background:#D8D1C2;"></div>
+      <div style="font:600 15px/1.2 'Noto Sans SC';color:#23211C;">{{ appProjName }}</div>
+      <span style="font:500 11px/1 'Noto Sans SC';background:#E7EDE2;color:#4A5E42;border-radius:5px;padding:4px 9px;">{{ appProjPhase }}</span>
+    </div>
+
+    <!-- shell body -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- LEFT SIDEBAR · history / nav -->
+      <div style="width:282px;flex:none;background:#F4F0E7;border-right:1px solid #E2DCCF;display:flex;flex-direction:column;min-height:0;">
+        <div onClick="{{ showOverview }}" style="cursor:pointer;margin:14px 14px 0;padding:12px 14px;border-radius:8px;background:{{ ovNavBg }};display:flex;align-items:center;gap:10px;">
+          <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C5654A;">◎</div>
+          <div style="font:600 14px/1.2 'Noto Sans SC';color:{{ ovNavColor }};">项目总览 · 进度管理</div>
+        </div>
+        <div style="height:1px;background:#E2DCCF;margin:12px 18px;"></div>
+
+        <sc-if value="{{ appIsOverview }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;padding:0 14px 16px;overflow-y:auto;">
+          <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;margin:6px 6px 10px;">8 个环节 · 点击进入</div>
+          <sc-for list="{{ appNav }}" as="e" hint-placeholder-count="8">
+            <div onClick="{{ e.onClick }}" style="cursor:pointer;padding:10px 12px;border-radius:7px;display:flex;align-items:center;gap:10px;border:1px solid {{ e.bdr }};background:{{ e.bg }};margin-bottom:3px;">
+              <div style="font:700 11px/1 'JetBrains Mono',monospace;color:#C2BBAB;width:18px;flex:none;">{{ e.num }}</div>
+              <div style="width:7px;height:7px;border-radius:50%;background:{{ e.sig }};flex:none;"></div>
+              <div style="font:{{ e.weight }} 13.5px/1.3 'Noto Sans SC';color:{{ e.nameColor }};">{{ e.name }}</div>
+            </div>
+          </sc-for>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ appIsEnv }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;padding:0 14px 16px;overflow-y:auto;">
+          <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#5F7355;margin:6px 6px 9px;">观测 Loop · 持续</div>
+          <div onClick="{{ wsRoutine.onClick }}" style="cursor:pointer;border-radius:8px;padding:11px 13px;margin-bottom:16px;border:1px solid {{ wsRoutine.bdr }};background:{{ wsRoutine.bg }};">
+            <div style="display:flex;align-items:center;gap:7px;"><div style="width:7px;height:7px;border-radius:50%;background:{{ wsRoutine.signalColor }};box-shadow:0 0 0 3px {{ wsRoutine.shadow }};flex:none;"></div><div style="font:600 13px/1.2 'Noto Sans SC';color:#23211C;">观测看板 · Routines</div></div>
+          </div>
+          <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#C5654A;margin:0 6px 9px;">优化 Loop · 进行中</div>
+          <sc-if value="{{ wsHasOptimize }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:16px;">
+            <sc-for list="{{ wsOptimize }}" as="o" hint-placeholder-count="2">
+              <div onClick="{{ o.onClick }}" style="cursor:pointer;border-radius:8px;padding:11px 13px;border:1px solid {{ o.bdr }};background:{{ o.bg }};">
+                <div style="font:600 12.5px/1.3 'Noto Sans SC';color:#23211C;margin-bottom:4px;">{{ o.title }}</div>
+                <div style="font:400 11px/1.4 'Noto Sans SC';color:#8C867A;">{{ o.snippet }}</div>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+          <sc-if value="{{ wsNoOptimize }}" hint-placeholder-val="{{ false }}">
+          <div style="font:400 11.5px/1.5 'Noto Sans SC';color:#B6AE9E;margin-bottom:16px;padding:9px 11px;border:1px dashed #E2DCCF;border-radius:8px;">暂无优化会话。观测到问题时在看板里发起。</div>
+          </sc-if>
+          <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;margin:0 6px 9px;">创建 Loop · 已归档</div>
+          <div style="display:flex;flex-direction:column;gap:7px;">
+            <sc-for list="{{ wsCreate }}" as="c" hint-placeholder-count="1">
+              <div onClick="{{ c.onClick }}" style="cursor:pointer;border-radius:8px;padding:11px 13px;border:1px solid {{ c.bdr }};background:{{ c.bg }};">
+                <div style="font:600 12.5px/1.3 'Noto Sans SC';color:#23211C;margin-bottom:4px;">{{ c.title }}</div>
+                <div style="font:400 11px/1.4 'Noto Sans SC';color:#8C867A;">{{ c.snippet }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+
+      <!-- CENTRAL · morphing main -->
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;">
+
+        <!-- OVERVIEW central -->
+        <sc-if value="{{ appIsOverview }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;overflow-y:auto;padding:34px 40px;">
+          <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#C5654A;margin-bottom:12px;">运营态 · 进度管理</div>
+          <h1 style="font:600 30px/1.25 'Noto Serif SC',serif;margin:0 0 8px;">{{ appProjName }}</h1>
+          <p style="font:400 14.5px/1.8 'Noto Sans SC';color:#57534A;max-width:54em;margin:0 0 26px;">每个环节都不是一次性完成，而是三个持续运行的 loop：<b style="color:#B0503A;">创建</b>（会话产出）→ <b style="color:#5F7355;">观测看板</b>（Routines 持续监测）→ <b style="color:#8A6720;">优化</b>（据观测提新需求，回到创建）。底层 loop 由 Claude Code Workflows 驱动。</p>
+
+          <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:22px 26px;margin-bottom:16px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;">
+              <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;">项目总进度 · 8 个环节</div>
+              <div style="font:700 22px/1 'JetBrains Mono',monospace;color:#23211C;">{{ opOverall }}<span style="font-size:14px;color:#A19B8D;">%</span></div>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <sc-for list="{{ opBars }}" as="b" hint-placeholder-count="8">
+                <div style="flex:1;height:8px;background:#EBE5D9;border-radius:4px;overflow:hidden;"><div style="width:{{ b.w }};height:100%;background:{{ b.color }};"></div></div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:28px;">
+            <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:16px 20px;"><div style="font:400 12px/1 'Noto Sans SC';color:#8C867A;margin-bottom:9px;">创建 Loop · 累计会话</div><div style="font:700 22px/1 'JetBrains Mono',monospace;color:#23211C;">{{ opCreateTotal }}</div></div>
+            <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:16px 20px;"><div style="font:400 12px/1 'Noto Sans SC';color:#8C867A;margin-bottom:9px;">观测看板 · 运行中</div><div style="font:700 22px/1 'JetBrains Mono',monospace;color:#5F7355;">{{ opRoutines }}</div></div>
+            <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:8px;padding:16px 20px;"><div style="font:400 12px/1 'Noto Sans SC';color:#8C867A;margin-bottom:9px;">优化 Loop · 进行中</div><div style="font:700 22px/1 'JetBrains Mono',monospace;color:#C5654A;">{{ opOptOpen }}</div></div>
+          </div>
+
+          <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:13px;">各环节进度 · 点击进入环节（管理该环节的三个 loop）</div>
+          <div style="display:flex;flex-direction:column;gap:11px;">
+            <sc-for list="{{ opRows }}" as="r" hint-placeholder-count="8">
+              <div onClick="{{ r.onClick }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:16px 20px;display:grid;grid-template-columns:210px 140px 1fr 22px;gap:20px;align-items:center;">
+                <div style="display:flex;align-items:center;gap:11px;">
+                  <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">{{ r.num }}</div>
+                  <div>
+                    <div style="font:600 14.5px/1.3 'Noto Sans SC';color:#23211C;margin-bottom:6px;">{{ r.name }}</div>
+                    <span style="display:inline-block;font:500 11px/1 'Noto Sans SC';background:{{ r.phaseBg }};color:{{ r.phaseColor }};border-radius:5px;padding:4px 8px;">{{ r.phase }}</span>
+                  </div>
+                </div>
+                <div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><span style="font:500 11px/1 'Noto Sans SC';color:#A19B8D;">进度</span><span style="font:600 12px/1 'JetBrains Mono',monospace;color:{{ r.progColor }};">{{ r.progLabel }}</span></div>
+                  <div style="height:6px;background:#EBE5D9;border-radius:3px;overflow:hidden;"><div style="width:{{ r.progWidth }};height:100%;background:{{ r.progColor }};"></div></div>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px;">
+                  <div style="background:#fff;border:1px solid #ECE6DA;border-radius:6px;padding:7px 10px;"><div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#A19B8D;margin-bottom:5px;">创建</div><div style="font:500 11.5px/1.3 'Noto Sans SC';color:#57534A;">{{ r.createLabel }}</div></div>
+                  <div style="background:#fff;border:1px solid #ECE6DA;border-radius:6px;padding:7px 10px;"><div style="display:flex;align-items:center;gap:5px;margin-bottom:5px;"><div style="width:6px;height:6px;border-radius:50%;background:{{ r.obsColor }};"></div><div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#A19B8D;">观测</div></div><div style="font:500 11.5px/1.3 'Noto Sans SC';color:#57534A;">{{ r.obsLabel }}</div></div>
+                  <div style="background:#fff;border:1px solid #ECE6DA;border-radius:6px;padding:7px 10px;"><div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#A19B8D;margin-bottom:5px;">优化</div><div style="font:500 11.5px/1.3 'Noto Sans SC';color:{{ r.optColor }};">{{ r.optLabel }}</div></div>
+                </div>
+                <div style="font:400 17px/1 'JetBrains Mono',monospace;color:#C2BBAB;text-align:right;">→</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ENV central -->
+        <sc-if value="{{ appIsEnv }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:none;padding:15px 28px;border-bottom:1px solid #E2DCCF;display:flex;align-items:center;gap:14px;">
+          <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">{{ wsStageNum }}</div>
+          <div style="font:600 18px/1.2 'Noto Serif SC',serif;">{{ wsStageName }}</div>
+          <div style="margin-left:auto;display:flex;background:#EBE5D9;border-radius:9px;padding:3px;gap:2px;">
+            <div onClick="{{ setModeArtifact }}" style="cursor:pointer;border-radius:7px;padding:8px 15px;font:600 12.5px/1 'Noto Sans SC';background:{{ tArtBg }};color:{{ tArtColor }};">产物画布</div>
+            <div onClick="{{ setModeChat }}" style="cursor:pointer;border-radius:7px;padding:8px 15px;font:600 12.5px/1 'Noto Sans SC';background:{{ tChatBg }};color:{{ tChatColor }};">会话</div>
+            <div onClick="{{ setModeObserve }}" style="cursor:pointer;border-radius:7px;padding:8px 15px;font:600 12.5px/1 'Noto Sans SC';background:{{ tObsBg }};color:{{ tObsColor }};">观测看板</div>
+          </div>
+        </div>
+
+        <!-- ARTIFACT (产物画布) -->
+        <sc-if value="{{ modeIsArtifact }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;overflow:auto;background-color:#ECE6DB;background-image:radial-gradient(#D6CFBF 1px,transparent 1px);background-size:22px 22px;padding:34px;">
+
+          <sc-if value="{{ artIsApp }}" hint-placeholder-val="{{ true }}">
+          <div style="max-width:860px;margin:0 auto;border-radius:12px;overflow:hidden;box-shadow:0 14px 44px rgba(35,33,28,.18);border:1px solid #D6CFBF;">
+            <div style="background:#E4DED2;padding:10px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #D6CFBF;">
+              <div style="width:11px;height:11px;border-radius:50%;background:#D98A72;"></div>
+              <div style="width:11px;height:11px;border-radius:50%;background:#D9B96A;"></div>
+              <div style="width:11px;height:11px;border-radius:50%;background:#A7C08A;"></div>
+              <div style="flex:1;margin-left:8px;background:#F4F0E7;border-radius:6px;padding:6px 12px;font:400 11.5px/1 'JetBrains Mono',monospace;color:#8C867A;">ops.internal / oncall-overview</div>
+            </div>
+            <div style="background:#23211C;padding:24px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+                <div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:#7FA56F;box-shadow:0 0 0 3px rgba(127,165,111,.2);"></div><div style="font:600 14px/1 'Noto Sans SC';color:#F3EEE6;">模型 API 服务 · 运营总览</div></div>
+                <div style="font:400 11px/1 'JetBrains Mono',monospace;color:#8C867A;">实时 · 30s 刷新</div>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;">
+                <div style="background:#2D2A24;border-radius:8px;padding:16px;"><div style="font:400 11px/1 'Noto Sans SC';color:#9A9388;margin-bottom:10px;">有效可用性</div><div style="font:700 24px/1 'JetBrains Mono',monospace;color:#7FA56F;">99.4%</div></div>
+                <div style="background:#2D2A24;border-radius:8px;padding:16px;"><div style="font:400 11px/1 'Noto Sans SC';color:#9A9388;margin-bottom:10px;">P95 延迟</div><div style="font:700 24px/1 'JetBrains Mono',monospace;color:#F3EEE6;">842<span style="font-size:13px;color:#9A9388;">ms</span></div></div>
+                <div style="background:#2D2A24;border-radius:8px;padding:16px;"><div style="font:400 11px/1 'Noto Sans SC';color:#9A9388;margin-bottom:10px;">每千次成本</div><div style="font:700 24px/1 'JetBrains Mono',monospace;color:#F3EEE6;">¥2.30</div></div>
+                <div style="background:#3A2A24;border-radius:8px;padding:16px;"><div style="font:400 11px/1 'Noto Sans SC';color:#E0A78F;margin-bottom:10px;">进行中事故</div><div style="font:700 24px/1 'JetBrains Mono',monospace;color:#E08B6F;">1</div></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:12px;">
+                <div style="background:#2D2A24;border-radius:8px;padding:16px;">
+                  <div style="font:400 11px/1 'Noto Sans SC';color:#9A9388;margin-bottom:14px;">调用量 · 24h</div>
+                  <div style="display:flex;align-items:flex-end;gap:5px;height:60px;">
+                    <div style="flex:1;height:38%;background:#4A453C;border-radius:3px 3px 0 0;"></div><div style="flex:1;height:52%;background:#4A453C;border-radius:3px 3px 0 0;"></div><div style="flex:1;height:46%;background:#4A453C;border-radius:3px 3px 0 0;"></div><div style="flex:1;height:68%;background:#4A453C;border-radius:3px 3px 0 0;"></div><div style="flex:1;height:82%;background:#6E8A60;border-radius:3px 3px 0 0;"></div><div style="flex:1;height:74%;background:#4A453C;border-radius:3px 3px 0 0;"></div><div style="flex:1;height:90%;background:#C5654A;border-radius:3px 3px 0 0;"></div><div style="flex:1;height:60%;background:#4A453C;border-radius:3px 3px 0 0;"></div>
+                  </div>
+                </div>
+                <div style="background:#2D2A24;border-radius:8px;padding:16px;">
+                  <div style="font:400 11px/1 'Noto Sans SC';color:#9A9388;margin-bottom:12px;">成本归因 · 按模型</div>
+                  <div style="display:flex;flex-direction:column;gap:9px;">
+                    <div style="display:flex;align-items:center;gap:8px;"><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#C9C2B6;width:56px;">opus</div><div style="flex:1;height:7px;background:#3A372F;border-radius:4px;overflow:hidden;"><div style="width:62%;height:100%;background:#C5654A;"></div></div></div>
+                    <div style="display:flex;align-items:center;gap:8px;"><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#C9C2B6;width:56px;">sonnet</div><div style="flex:1;height:7px;background:#3A372F;border-radius:4px;overflow:hidden;"><div style="width:30%;height:100%;background:#7FA56F;"></div></div></div>
+                    <div style="display:flex;align-items:center;gap:8px;"><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#C9C2B6;width:56px;">haiku</div><div style="flex:1;height:7px;background:#3A372F;border-radius:4px;overflow:hidden;"><div style="width:12%;height:100%;background:#B5862F;"></div></div></div>
+                  </div>
+                  <div style="margin-top:13px;padding-top:11px;border-top:1px solid #3A372F;font:400 11px/1.5 'Noto Sans SC';color:#E0A78F;">⚑ 根因建议：opus 流量集中于租户 #A12</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style="max-width:860px;margin:16px auto 0;font:400 12.5px/1.6 'Noto Sans SC';color:#8C867A;text-align:center;">产物 = 可点击网页应用 · agent loop 产出 80% 初稿，人审关键逻辑</div>
+          </sc-if>
+
+          <sc-if value="{{ artIsMatrix }}" hint-placeholder-val="{{ false }}">
+          <div style="max-width:820px;margin:0 auto;background:#FBFAF6;border:1px solid #D6CFBF;border-radius:10px;overflow:hidden;box-shadow:0 10px 32px rgba(35,33,28,.12);">
+            <div style="padding:16px 20px;border-bottom:1px solid #EBE5D9;font:600 14px/1 'Noto Sans SC';color:#23211C;">竞品差距矩阵 · <span style="color:#C5654A;">●</span> 强 <span style="color:#B5862F;">◐</span> 部分 <span style="color:#C2BBAB;">○</span> 无</div>
+            <table style="width:100%;border-collapse:collapse;font:400 13px/1.4 'Noto Sans SC';">
+              <thead><tr style="background:#F3EEE6;"><th style="text-align:left;padding:12px 18px;font-weight:600;color:#57534A;">产品</th><th style="padding:12px 8px;font-weight:600;color:#57534A;">延迟</th><th style="padding:12px 8px;font-weight:600;color:#57534A;">成本归因</th><th style="padding:12px 8px;font-weight:600;color:#57534A;">质量Eval</th><th style="padding:12px 8px;font-weight:600;color:#57534A;">告警</th></tr></thead>
+              <tbody>
+                <tr style="border-top:1px solid #EBE5D9;"><td style="padding:12px 18px;font-weight:500;">Datadog</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#C2BBAB;">○</td><td style="text-align:center;color:#C5654A;">●</td></tr>
+                <tr style="border-top:1px solid #EBE5D9;"><td style="padding:12px 18px;font-weight:500;">Helicone</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#B5862F;">◐</td></tr>
+                <tr style="border-top:1px solid #EBE5D9;"><td style="padding:12px 18px;font-weight:500;">Langfuse</td><td style="text-align:center;color:#C2BBAB;">○</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#C2BBAB;">○</td></tr>
+                <tr style="border-top:2px solid #E2C9BF;background:#F7EDE7;"><td style="padding:13px 18px;font-weight:700;color:#C5654A;">本项目 · 目标</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#C5654A;">●</td><td style="text-align:center;color:#B5862F;">◐</td><td style="text-align:center;color:#C5654A;">●</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div style="max-width:820px;margin:16px auto 0;font:400 12.5px/1.6 'Noto Sans SC';color:#8C867A;text-align:center;">产物 = 数据矩阵 · 缺口（成本归因 + 同视图）就是差异化机会</div>
+          </sc-if>
+
+          <sc-if value="{{ artIsCard }}" hint-placeholder-val="{{ false }}">
+          <div style="max-width:680px;margin:0 auto;background:#FBFAF6;border:1px solid #D6CFBF;border-radius:10px;padding:34px 38px;box-shadow:0 10px 32px rgba(35,33,28,.12);">
+            <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#C5654A;margin-bottom:16px;">{{ artKindLabel }}</div>
+            <div style="font:600 22px/1.4 'Noto Serif SC',serif;color:#23211C;margin-bottom:20px;">{{ wsOwns }}</div>
+            <div style="display:flex;flex-direction:column;gap:11px;">
+              <div style="height:11px;border-radius:6px;background:#EBE5D9;width:100%;"></div>
+              <div style="height:11px;border-radius:6px;background:#EBE5D9;width:92%;"></div>
+              <div style="height:11px;border-radius:6px;background:#EBE5D9;width:78%;"></div>
+              <div style="height:11px;border-radius:6px;background:#EFE6DC;width:96%;margin-top:8px;"></div>
+              <div style="height:11px;border-radius:6px;background:#EFE6DC;width:64%;"></div>
+            </div>
+          </div>
+          <div style="max-width:680px;margin:16px auto 0;font:400 12.5px/1.6 'Noto Sans SC';color:#8C867A;text-align:center;">产物 = 文档 / 卡片 · 本环节的输出件，可在会话里继续打磨</div>
+          </sc-if>
+
+        </div>
+        </sc-if>
+
+        <!-- CHAT (会话) -->
+        <sc-if value="{{ modeIsChat }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0;background:#F7F3EB;">
+          <div style="flex:none;padding:14px 28px;border-bottom:1px solid #EBE5D9;display:flex;align-items:center;justify-content:space-between;">
+            <div style="font:600 14px/1.3 'Noto Sans SC';">{{ wsTitle }}</div>
+            <span style="font:500 11px/1 'Noto Sans SC';background:#F2E4DD;color:#B0503A;border-radius:5px;padding:4px 9px;">{{ wsStatus }}</span>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:24px 28px;display:flex;flex-direction:column;gap:16px;">
+            <sc-for list="{{ wsMessages }}" as="m" hint-placeholder-count="3">
+              <div style="display:flex;justify-content:{{ m.rowJustify }};">
+                <div style="max-width:74%;">
+                  <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:{{ m.labelColor }};margin-bottom:6px;">{{ m.label }}</div>
+                  <div style="background:{{ m.bubbleBg }};color:{{ m.bubbleColor }};border:{{ m.bubbleBorder }};border-radius:10px;padding:12px 15px;font:400 14px/1.65 'Noto Sans SC';">{{ m.text }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="flex:none;padding:14px 28px;border-top:1px solid #EBE5D9;display:flex;gap:10px;align-items:flex-end;">
+            <textarea value="{{ composerText }}" onChange="{{ onComposer }}" placeholder="描述新需求或问题，触发一次创建 / 优化循环…" style="flex:1;height:46px;border:1px solid #E2DCCF;border-radius:8px;background:#fff;padding:13px 14px;font:400 13.5px/1.4 'Noto Sans SC';color:#23211C;outline:none;"></textarea>
+            <button onClick="{{ sendMsg }}" style="background:#C5654A;color:#fff;border:none;border-radius:8px;padding:13px 20px;font:600 13px/1 'Noto Sans SC';cursor:pointer;flex:none;">发送</button>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- OBSERVE (观测看板) -->
+        <sc-if value="{{ modeIsObserve }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;overflow-y:auto;padding:28px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap;">
+            <div style="width:9px;height:9px;border-radius:50%;background:{{ wsSignalColor }};box-shadow:0 0 0 4px {{ wsSignalShadow }};"></div>
+            <div style="font:600 15px/1.2 'Noto Sans SC';">观测看板 · Routines 持续运行</div>
+            <span style="font:500 11px/1 'JetBrains Mono',monospace;background:#fff;border:1px solid #E2DCCF;color:#8C867A;border-radius:5px;padding:5px 10px;margin-left:auto;">调度 · {{ wsSchedule }}</span>
+          </div>
+
+          <div style="font:500 12px/1 'Noto Sans SC';color:#8C867A;margin-bottom:9px;">监测对象（看板的指标来源）</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:22px;">
+            <sc-for list="{{ wsWatches }}" as="w" hint-placeholder-count="3">
+              <span style="background:#fff;border:1px solid #E6E0D3;border-radius:6px;padding:6px 11px;font:500 12px/1 'Noto Sans SC';color:#57534A;">{{ w.name }}</span>
+            </sc-for>
+          </div>
+
+          <div style="font:500 12px/1 'Noto Sans SC';color:#8C867A;margin-bottom:8px;">实时观测流 · 这是「观测」这个 Loop 的过程</div>
+          <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:6px 20px;margin-bottom:22px;">
+            <sc-for list="{{ wsFeed }}" as="f" hint-placeholder-count="3">
+              <div style="display:flex;gap:12px;padding:13px 0;border-bottom:1px solid #EFEAE0;">
+                <div style="width:8px;height:8px;border-radius:50%;background:{{ f.dot }};margin-top:5px;flex:none;"></div>
+                <div style="flex:1;"><div style="font:400 13.5px/1.5 'Noto Sans SC';color:#3A3833;">{{ f.text }}</div></div>
+                <div style="font:400 11px/1.5 'JetBrains Mono',monospace;color:#A19B8D;flex:none;white-space:nowrap;">{{ f.time }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="background:#23211C;border-radius:10px;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+            <div style="font:400 13px/1.6 'Noto Sans SC';color:#C9C2B6;max-width:34em;">观测到问题或想到新需求？发起一个优化会话 —— 回到创建 loop，闭环。</div>
+            <button onClick="{{ startOptimizeFromRoutine }}" style="background:#C5654A;color:#fff;border:none;border-radius:8px;padding:12px 18px;font:600 13px/1 'Noto Sans SC';cursor:pointer;flex:none;">观测 → 起优化会话 →</button>
+          </div>
+        </div>
+        </sc-if>
+        </sc-if>
+      </div>
+
+      <!-- RIGHT RAIL · env context -->
+      <sc-if value="{{ appIsEnv }}" hint-placeholder-val="{{ false }}">
+      <div style="width:266px;flex:none;background:#F4F0E7;border-left:1px solid #E2DCCF;padding:20px;overflow-y:auto;">
+        <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;margin-bottom:14px;">本环节</div>
+        <div style="margin-bottom:18px;">
+          <div style="font:500 11px/1 'Noto Sans SC';color:#8C867A;margin-bottom:7px;">产物</div>
+          <div style="font:600 14px/1.5 'Noto Sans SC';color:#23211C;">{{ wsOwns }}</div>
+        </div>
+        <div style="margin-bottom:18px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font:500 11px/1 'Noto Sans SC';color:#8C867A;">环节进度</span><span style="font:600 12px/1 'JetBrains Mono',monospace;color:#C5654A;">{{ wsProgress }}%</span></div>
+          <div style="height:6px;background:#EBE5D9;border-radius:3px;overflow:hidden;"><div style="width:{{ wsProgWidth }};height:100%;background:#C5654A;"></div></div>
+        </div>
+        <div style="background:#fff;border:1px solid #E6E0D3;border-radius:8px;padding:14px 16px;margin-bottom:14px;">
+          <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#5F7355;margin-bottom:8px;">验收信号</div>
+          <div style="font:500 13px/1.6 'Noto Sans SC';color:#3A3833;">{{ wsAccept }}</div>
+        </div>
+        <div style="background:#F2E4DD;border-radius:8px;padding:14px 16px;">
+          <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#B0503A;margin-bottom:8px;">控制点</div>
+          <div style="font:500 13px/1.6 'Noto Sans SC';color:#7A3D2D;">{{ wsControl }}</div>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+  </div>
+  </sc-if>
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
   state = {
+    view: 'projects',
+    appSection: 'overview',
+    viewMode: 'artifact',
+    activeProjectId: 'p1',
+    projects: [
+      { id:'p1', name:'模型 API 服务 · 运维运营看板', kind:'看板 / 网页应用',
+        desc:'把基础设施监控与 LLM 调用的成本 / 质量归因合并到一个值班视图。', phase:'运营中', signal:'amber', progress:88, envCount:8 },
+      { id:'p2', name:'内部知识库 · RAG 助手', kind:'对话应用',
+        desc:'让全员用自然语言检索公司文档，替代散落在多个网盘里的搜索。', phase:'冷启动中', signal:'green', progress:55, coldStep:5 },
+      { id:'p3', name:'增长落地页 · A/B 实验台', kind:'Design / 无限画布',
+        desc:'营销落地页的多版本设计与转化实验，设计稿即原型。', phase:'冷启动中', signal:'green', progress:25, coldStep:2 },
+    ],
     step: 0,
     completed: {},
     projectName: '模型 API 服务 · 运维运营看板',
@@ -609,19 +903,247 @@ class Component extends DCLogic {
       { name: '用户主动上报事故数', def: '每月由用户先于监控发现的事故', cur: '6/月', target: '≤1/月' },
       { name: '每千次调用成本', def: '按真实账单 / 调用量计算', cur: '¥2.30', target: '¥1.80' },
     ],
+    activeStage: 7,
+    activeSessionId: null,
+    composerText: '',
+    opStages: [
+      { n:1, name:'竞品对比', phase:'已定稿', progress:100,
+        owns:'竞品差距矩阵', accept:'明确对标对象与缺口', control:'项目必须有对标对象，否则不进入开发',
+        routine:{ schedule:'每周一 09:00', signal:'green', watches:['竞品 changelog','定价页变更'],
+          feed:[ {t:'本周一',l:'info',x:'Helicone 新增 prompt 版本对比，未触及我们的成本归因缺口'},
+                 {t:'上周一',l:'info',x:'5 个竞品均无「基础设施 + LLM 同视图」能力，缺口仍在'} ] },
+        create:[ {id:'s1-c0',title:'生成竞品差距矩阵',status:'已归档',snippet:'扫描 5 个竞品输出差距矩阵',
+          msgs:[ {r:'b',x:'扫描 Datadog / Grafana / Helicone / Langfuse，按 实时延迟 / 成本归因 / 质量Eval / 告警 四个维度做对比矩阵。'},
+                 {r:'a',x:'已抓取四家公开文档与定价页，生成矩阵。最大缺口集中在「按模型 / 租户的成本归因」，仅 Helicone 部分支持。'},
+                 {r:'b',x:'把「自建 Prometheus + Grafana」也加进去当一行。'},
+                 {r:'a',x:'已补充：上手成本 = 高，成本归因 = 无。矩阵共 6 行，已写入本环节产物。'} ]} ],
+        optimize:[] },
+      { n:2, name:'需求导入', phase:'已定稿', progress:100,
+        owns:'问题陈述 + 用户故事 + 验收信号', accept:'需求收敛为可被验证的问题', control:'需求是问题，不是功能清单',
+        routine:{ schedule:'每周', signal:'green', watches:['新增用户故事','用户反馈'],
+          feed:[ {t:'本周',l:'info',x:'新增 1 条用户故事（导出周报），已排入待评估'} ] },
+        create:[ {id:'s2-c0',title:'收敛问题陈述与用户故事',status:'已归档',snippet:'一句问题 + 3 条故事 + 验收信号',
+          msgs:[ {r:'b',x:'把需求收敛成一句问题陈述 + 3 条用户故事 + 一个验收信号，不要写 PRD。'},
+                 {r:'a',x:'已生成：问题 = 值班跨 4 工具、定位均 38min；3 条用户故事；验收信号 = 单视图 15min 内定位根因。'} ]} ],
+        optimize:[] },
+      { n:3, name:'洞察报告', phase:'监测中', progress:100,
+        owns:'可证伪的核心洞察卡', accept:'有明确、可被证伪的核心假设', control:'洞察是判断，可能错',
+        routine:{ schedule:'每日', signal:'amber', watches:['风险假设是否被证伪'],
+          feed:[ {t:'今日',l:'warn',x:'根因建议命中率 41%，逼近「洞察不成立」阈值（<40%），需关注'},
+                 {t:'3 天前',l:'info',x:'单视图假设暂未被证伪'} ] },
+        create:[ {id:'s3-c0',title:'提炼核心洞察卡',status:'已归档',snippet:'合成竞品+需求为一个判断',
+          msgs:[ {r:'b',x:'把竞品 + 需求合成一个可证伪的洞察，并列出风险假设。'},
+                 {r:'a',x:'洞察 = 痛点不是缺数据，而是数据散落 + 缺归因；风险假设 = 单视图 + 根因建议能否真把 38min 压到 15min。'} ]} ],
+        optimize:[] },
+      { n:4, name:'北极星指标', phase:'已定稿', progress:100,
+        owns:'唯一北极星 · 有效可用性 99.9%', accept:'有且仅有一个北极星', control:'北极星唯一、衡量用户价值、难造假',
+        routine:{ schedule:'每日', signal:'green', watches:['有效可用性（真实网关日志）'],
+          feed:[ {t:'今日',l:'info',x:'有效可用性 99.4%，从真实网关日志计算'} ] },
+        create:[ {id:'s4-c0',title:'定义唯一北极星',status:'已归档',snippet:'用户价值导向、难造假',
+          msgs:[ {r:'b',x:'定一个唯一、用户价值导向、难造假的北极星。'},
+                 {r:'a',x:'北极星 = 服务有效可用性 99.9%，从真实网关日志算，难以人为修饰。'} ]} ],
+        optimize:[] },
+      { n:5, name:'引领指标', phase:'迭代中', progress:78,
+        owns:'三条引领指标 · 本周抓手', accept:'可控 / 可统计 / 难造假', control:'三者必须同时满足，否则不要它',
+        routine:{ schedule:'每日', signal:'green', watches:['告警覆盖率','根因采纳率','延迟回归运行率'],
+          feed:[ {t:'今日',l:'info',x:'告警覆盖率 60%，落后目标 85%'},
+                 {t:'今日',l:'info',x:'根因建议采纳率 41% → 目标 70%'} ] },
+        create:[ {id:'s5-c0',title:'定义三条引领指标',status:'已归档',snippet:'均来自系统自动统计',
+          msgs:[ {r:'b',x:'选 3 个可控 / 可统计 / 难造假的引领指标。'},
+                 {r:'a',x:'告警覆盖率、根因建议采纳率、延迟回归每日运行率，均由系统自动统计、来源真实日志。'} ]} ],
+        optimize:[ {id:'s5-o0',title:'推动告警覆盖率到 85%',status:'进行中',snippet:'11 个关键指标未配告警',
+          msgs:[ {r:'b',x:'告警覆盖率 60%，本周要推到 85%。先找出没配告警的关键指标。'},
+                 {r:'a',x:'已识别 11 个未配告警的关键指标，按影响排序，生成默认告警模板。前 3 个高优先级待你审。'},
+                 {r:'b',x:'前 3 个直接套模板上线，其余我明天看。'},
+                 {r:'a',x:'已上线 3 个，覆盖率升到 71%。其余 8 个草稿已备好。'} ]} ] },
+      { n:6, name:'滞后指标', phase:'监测中', progress:92,
+        owns:'四项滞后验证指标', accept:'仅用于验证引领是否有效', control:'滞后不动时，回头质疑引领选错了',
+        routine:{ schedule:'每周', signal:'amber', watches:['平均定位时间','月度可用性'],
+          feed:[ {t:'本周',l:'warn',x:'平均定位时间 38min，仍未下降，引领指标尚未生效'},
+                 {t:'上周',l:'info',x:'月度有效可用性 99.4%'} ] },
+        create:[ {id:'s6-c0',title:'定义滞后验证指标',status:'已归档',snippet:'结果指标，无法直接操控',
+          msgs:[ {r:'b',x:'定滞后指标，只用于验证引领是否有效。'},
+                 {r:'a',x:'月度有效可用性、平均故障定位时间、用户主动上报事故数、每千次成本，共四项。'} ]} ],
+        optimize:[] },
+      { n:7, name:'原型创建', phase:'迭代中', progress:72,
+        owns:'可点击值班总览原型', accept:'用原型而非文档对齐', control:'人只在关键逻辑 / 验收处介入',
+        routine:{ schedule:'每 30s', signal:'amber', watches:['有效可用性','P95 延迟','进行中事故','成本'],
+          feed:[ {t:'2min 前',l:'warn',x:'P95 延迟 842ms，较昨日 +6%'},
+                 {t:'14min 前',l:'warn',x:'opus 调用集中度告警：租户 #A12 占 54%'},
+                 {t:'1h 前',l:'info',x:'有效可用性 99.4%，正常'} ] },
+        create:[ {id:'s7-c0',title:'生成值班总览原型 v1',status:'已归档',snippet:'agent 产出 80% 初稿',
+          msgs:[ {r:'b',x:'按需求做一个可点击的值班总览：可用性 / 延迟 / 成本 / 进行中事故 + 成本按模型归因。'},
+                 {r:'a',x:'已生成原型 v1，80% 初稿：四个 KPI + 调用量图 + 成本归因条 + 一条 agent 根因建议。git checkpoint 已打。'},
+                 {r:'b',x:'可用性算法口径和成本取数我审过了，OK。'} ]} ],
+        optimize:[ {id:'s7-o0',title:'根因建议误报率偏高',status:'进行中',snippet:'加置信度阈值',
+          msgs:[ {r:'b',x:'根因建议命中率只有 41%，误报太多。先加一个置信度阈值，<0.6 不展示。'},
+                 {r:'a',x:'已加阈值开关。回放上周 12 起事故：展示量 −38%，命中率升到 63%。'},
+                 {r:'b',x:'把阈值做成可配置，默认 0.6。'},
+                 {r:'a',x:'已改为可配置，默认 0.6，已写入设置页。'} ]},
+          {id:'s7-o1',title:'新需求：成本按租户下钻',status:'进行中',snippet:'opus 集中在 #A12',
+          msgs:[ {r:'b',x:'成本归因要能按租户下钻——值班发现 opus 流量集中在某个租户。'},
+                 {r:'a',x:'已加租户维度。#A12 占 opus 调用 54%，已在成本卡片加下钻入口。'},
+                 {r:'b',x:'下钻里再加一个「按用法分类」，下周看。'} ]} ] },
+      { n:8, name:'进度管理', phase:'持续运行', progress:60,
+        owns:'周节奏 + 三态健康信号', accept:'每周演进由真实数据验证', control:'人只在验收 / 质量门介入，不微管理',
+        routine:{ schedule:'每日 + 每周五复盘', signal:'green', watches:['引领指标达成','北极星位移'],
+          feed:[ {t:'本周五',l:'info',x:'引领指标 2/3 达成，北极星 99.4%→99.5%，判定：正常演进'},
+                 {t:'本周一',l:'info',x:'已设定本周引领目标：告警覆盖率 85%'} ] },
+        create:[ {id:'s8-c0',title:'搭建周节奏与健康信号',status:'已归档',snippet:'信号来自真实 telemetry',
+          msgs:[ {r:'b',x:'建立周一定目标、周中 agent loop 推进、周五看真实数据复盘的节奏，配一个三态健康信号。'},
+                 {r:'a',x:'已搭好周节奏与三态信号（正常 / 关注 / 阻塞），信号来自真实 telemetry，难造假。'} ]} ],
+        optimize:[] },
+    ],
   };
 
+  scrollTop() { if (typeof window !== 'undefined') window.scrollTo(0, 0); }
   go(n) {
-    const s = Math.max(0, Math.min(9, n));
+    const s = Math.max(0, Math.min(8, n));
     this.setState({ step: s });
-    if (typeof window !== 'undefined') window.scrollTo(0, 0);
+    this.scrollTop();
   }
   next() { this.go(this.state.step + 1); }
   prev() { this.go(this.state.step - 1); }
   confirm() {
     const c = { ...this.state.completed, [this.state.step]: true };
+    if (this.state.step === 8) { this.setState({ completed: c, view: 'app', appSection: 'overview' }); this.scrollTop(); return; }
     this.setState({ completed: c });
     this.go(this.state.step + 1);
+  }
+
+  openProject(id) {
+    const p = this.state.projects.find(x => x.id === id); if (!p) return;
+    if (p.phase === '冷启动中') this.setState({ view: 'wizard', activeProjectId: id, step: p.coldStep || 0 });
+    else this.setState({ view: 'app', activeProjectId: id, appSection: 'overview' });
+    this.scrollTop();
+  }
+  newProject() { this.setState({ view: 'wizard', step: 0 }); this.scrollTop(); }
+  backToProjects() { this.setState({ view: 'projects' }); this.scrollTop(); }
+  showOverview() { this.setState({ appSection: 'overview' }); this.scrollTop(); }
+  enterEnv(n) { this.setState({ view: 'app', appSection: 'env', activeStage: n, viewMode: 'artifact', activeSessionId: null }); this.scrollTop(); }
+  setMode(m) { this.setState({ viewMode: m }); }
+  clickRoutine() { this.setState({ viewMode: 'observe' }); }
+  selectSession(id) { this.setState({ activeSessionId: id, composerText: '', viewMode: 'chat' }); }
+  sendMsg() {
+    const t = (this.state.composerText || '').trim(); if (!t) return;
+    const id = this.state.activeSessionId; if (!id || id.indexOf('-routine') >= 0) return;
+    const reply = '已收到，已在本环节的 Claude Code Workflow 中排入创建 / 优化循环，产出后回到这里等你验收。';
+    const upd = (arr) => arr.map(x => x.id === id ? { ...x, msgs: [...x.msgs, { r: 'b', x: t }, { r: 'a', x: reply }] } : x);
+    const stages = this.state.opStages.map(s => s.n !== this.state.activeStage ? s : { ...s, optimize: upd(s.optimize), create: upd(s.create) });
+    this.setState({ opStages: stages, composerText: '' });
+  }
+  startOptimizeFromRoutine() {
+    const n = this.state.activeStage; const newId = 's' + n + '-opt-' + Date.now();
+    const stages = this.state.opStages.map(s => s.n !== n ? s : { ...s, optimize: [...s.optimize, { id: newId, title: '新优化会话 · 来自观测', status: '进行中', snippet: '由 Routines 触发', msgs: [{ r: 'a', x: '已根据最近一条观测信号开启优化会话。请在下方描述要解决的问题或新需求，我会在创建 / 优化循环里推进。' }] }] });
+    this.setState({ opStages: stages, activeSessionId: newId, viewMode: 'chat' });
+  }
+
+  buildApp() {
+    const st = this.state;
+    const sigColor = (s) => s === 'green' ? '#5F7355' : (s === 'amber' ? '#B5862F' : '#B0503A');
+    const phaseStyle = (p) => p === '已定稿' ? { bg: '#E7EDE2', color: '#4A5E42' }
+      : p === '迭代中' ? { bg: '#F2E4DD', color: '#B0503A' }
+      : p === '监测中' ? { bg: '#F5ECD6', color: '#8A6720' }
+      : { bg: '#EDE8DE', color: '#6B6557' };
+
+    // ---- projects home ----
+    const projPhase = (p) => p === '运营中' ? { bg: '#E7EDE2', color: '#4A5E42' }
+      : p === '冷启动中' ? { bg: '#F2E4DD', color: '#B0503A' } : { bg: '#EDE8DE', color: '#6B6557' };
+    const projectRows = st.projects.map(p => {
+      const ps = projPhase(p.phase);
+      return { onClick: () => this.openProject(p.id), name: p.name, desc: p.desc, kind: p.kind,
+        phaseLabel: p.phase, phaseBg: ps.bg, phaseColor: ps.color,
+        sig: sigColor(p.signal), progLabel: p.progress + '%', progWidth: p.progress + '%',
+        progColor: p.progress >= 100 ? '#5F7355' : '#C5654A',
+        meta: p.phase === '冷启动中' ? ('冷启动向导 · 第 ' + p.coldStep + '/8 步') : (p.envCount + ' 个环节 · ' + p.kind) };
+    });
+
+    // ---- sample project stages ----
+    const stages = st.opStages;
+    const opBars = stages.map(s => ({ w: s.progress + '%', color: s.progress >= 100 ? '#7FA56F' : '#C5654A' }));
+    const opOverall = Math.round(stages.reduce((a, s) => a + s.progress, 0) / stages.length);
+    const opCreateTotal = stages.reduce((a, s) => a + s.create.length, 0);
+    const opRoutines = stages.length;
+    const opOptOpen = stages.reduce((a, s) => a + s.optimize.length, 0);
+    const opRows = stages.map(s => {
+      const ps = phaseStyle(s.phase); const optN = s.optimize.length;
+      return { onClick: () => this.enterEnv(s.n),
+        num: (s.n < 10 ? '0' + s.n : '' + s.n), name: s.name, phase: s.phase, phaseBg: ps.bg, phaseColor: ps.color,
+        progLabel: s.progress + '%', progWidth: s.progress + '%', progColor: s.progress >= 100 ? '#5F7355' : '#C5654A',
+        createLabel: s.create.length + ' 会话 · 已归档',
+        obsColor: sigColor(s.routine.signal), obsLabel: '运行中 · ' + s.routine.schedule,
+        optLabel: optN > 0 ? optN + ' 个进行中' : '无', optColor: optN > 0 ? '#C5654A' : '#A19B8D' };
+    });
+
+    // ---- sidebar env nav (overview) ----
+    const appNav = stages.map(s => {
+      const active = st.appSection === 'env' && st.activeStage === s.n;
+      return { onClick: () => this.enterEnv(s.n), num: (s.n < 10 ? '0' + s.n : '' + s.n), name: s.name,
+        sig: sigColor(s.routine.signal),
+        bg: active ? '#F1ECE3' : 'transparent', bdr: active ? '#E2DCCF' : 'transparent',
+        nameColor: active ? '#23211C' : '#57534A', weight: active ? '600' : '500' };
+    });
+
+    // ---- active env ----
+    const stage = stages.find(s => s.n === st.activeStage) || stages[0];
+    const activeId = st.activeSessionId;
+    const rc = sigColor(stage.routine.signal);
+    const inChat = st.viewMode === 'chat';
+
+    const wsRoutine = { onClick: () => this.clickRoutine(), signalColor: rc, shadow: rc + '22',
+      bdr: st.viewMode === 'observe' ? '#5F7355' : '#E6E0D3', bg: st.viewMode === 'observe' ? '#EEF2E9' : '#fff' };
+    const wsOptimize = stage.optimize.map(o => ({ onClick: () => this.selectSession(o.id), title: o.title, snippet: o.snippet,
+      bdr: (inChat && activeId === o.id) ? '#C5654A' : '#E6E0D3', bg: (inChat && activeId === o.id) ? '#F7EDE7' : '#fff' }));
+    const wsCreate = stage.create.map(c => ({ onClick: () => this.selectSession(c.id), title: c.title, snippet: c.snippet,
+      bdr: (inChat && activeId === c.id) ? '#23211C' : '#E6E0D3', bg: (inChat && activeId === c.id) ? '#F1ECE3' : '#fff' }));
+
+    let wsMessages = [], wsTitle = '选择左侧的一个会话', wsStatus = '';
+    const sess = [...stage.optimize, ...stage.create].find(x => x.id === activeId)
+      || stage.optimize[0] || stage.create[0];
+    if (sess) {
+      wsTitle = sess.title; wsStatus = sess.status || '';
+      wsMessages = sess.msgs.map((m, i) => ({ key: i, text: m.x, rowJustify: m.r === 'b' ? 'flex-end' : 'flex-start',
+        bubbleBg: m.r === 'b' ? '#23211C' : '#fff', bubbleColor: m.r === 'b' ? '#F3EEE6' : '#3A3833',
+        bubbleBorder: m.r === 'b' ? 'none' : '1px solid #E6E0D3',
+        label: m.r === 'b' ? 'Builder' : 'AGENT · Claude Code Workflow', labelColor: m.r === 'b' ? '#A19B8D' : '#C5654A' }));
+    }
+    const wsFeed = stage.routine.feed.map((f, i) => ({ key: i, time: f.t, text: f.x,
+      dot: f.l === 'warn' ? '#B5862F' : (f.l === 'err' ? '#B0503A' : '#7FA56F') }));
+    const wsWatches = stage.routine.watches.map((w, i) => ({ key: i, name: w }));
+
+    const tab = (on) => ({ bg: on ? '#23211C' : 'transparent', color: on ? '#F3EEE6' : '#8C867A' });
+    const tArt = tab(st.viewMode === 'artifact'), tChat = tab(st.viewMode === 'chat'), tObs = tab(st.viewMode === 'observe');
+    const kind = stage.n === 1 ? 'matrix' : (stage.n === 7 ? 'app' : 'card');
+    const proj = st.projects.find(p => p.id === st.activeProjectId) || st.projects[0];
+
+    return {
+      isProjects: st.view === 'projects', isWizard: st.view === 'wizard', isApp: st.view === 'app',
+      projectRows, newProject: () => this.newProject(),
+      appProjName: proj.name, appProjPhase: proj.phase,
+      backToProjects: () => this.backToProjects(),
+      appIsOverview: st.appSection === 'overview', appIsEnv: st.appSection === 'env',
+      showOverview: () => this.showOverview(), appNav,
+      ovNavBg: st.appSection === 'overview' ? '#F1ECE3' : 'transparent',
+      ovNavColor: st.appSection === 'overview' ? '#23211C' : '#57534A',
+      opBars, opRows, opOverall, opCreateTotal, opRoutines, opOptOpen,
+      wsStageNum: (stage.n < 10 ? '0' + stage.n : '' + stage.n), wsStageName: stage.name,
+      wsRoutine, wsOptimize, wsCreate,
+      wsHasOptimize: stage.optimize.length > 0, wsNoOptimize: stage.optimize.length === 0,
+      modeIsChat: st.viewMode === 'chat', modeIsArtifact: st.viewMode === 'artifact', modeIsObserve: st.viewMode === 'observe',
+      setModeChat: () => this.setMode('chat'), setModeArtifact: () => this.setMode('artifact'), setModeObserve: () => this.setMode('observe'),
+      tArtBg: tArt.bg, tArtColor: tArt.color, tChatBg: tChat.bg, tChatColor: tChat.color, tObsBg: tObs.bg, tObsColor: tObs.color,
+      wsTitle, wsStatus, wsMessages,
+      composerText: st.composerText,
+      onComposer: (e) => this.setState({ composerText: e.target.value }),
+      sendMsg: () => this.sendMsg(),
+      wsSignalColor: rc, wsSignalShadow: rc + '22', wsSchedule: stage.routine.schedule,
+      wsFeed, wsWatches,
+      startOptimizeFromRoutine: () => this.startOptimizeFromRoutine(),
+      artIsApp: kind === 'app', artIsMatrix: kind === 'matrix', artIsCard: kind === 'card',
+      artKindLabel: kind === 'app' ? '网页应用 · Web App' : (kind === 'matrix' ? '数据矩阵 · Table' : '文档产物 · Doc'),
+      wsOwns: stage.owns, wsAccept: stage.accept, wsControl: stage.control,
+      wsProgress: stage.progress, wsProgWidth: stage.progress + '%',
+    };
   }
 
   renderVals() {
@@ -669,9 +1191,10 @@ class Component extends DCLogic {
     const sb = (v) => sig === v;
     return {
       step,
+      ...this.buildApp(),
       isStep0: step === 0, isStep1: step === 1, isStep2: step === 2, isStep3: step === 3,
       isStep4: step === 4, isStep5: step === 5, isStep6: step === 6, isStep7: step === 7,
-      isStep8: step === 8, isStep9: step === 9,
+      isStep8: step === 8,
       steps,
       goTo: (n) => this.go(n), next: () => this.next(), prev: () => this.prev(), confirm: () => this.confirm(),
       start: () => this.go(1),
