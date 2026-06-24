@@ -579,6 +579,25 @@
       <span style="font:500 11px/1 'Noto Sans SC';background:#E7EDE2;color:#4A5E42;border-radius:5px;padding:4px 9px;">{{ appProjPhase }}</span>
     </div>
 
+    <!-- STAGE AXIS · horizontal (above toolbar) -->
+    <div style="flex:none;background:#EFEBE2;border-bottom:1px solid #E2DCCF;padding:8px 22px;display:flex;align-items:center;gap:8px;overflow-x:auto;">
+      <div onClick="{{ showOverview }}" style="cursor:pointer;flex:none;padding:7px 12px;border-radius:7px;background:{{ allScopeBg }};display:flex;align-items:center;gap:7px;">
+        <div style="font:700 12px/1 'JetBrains Mono',monospace;color:#C5654A;">◎</div>
+        <div style="font:600 12.5px/1 'Noto Sans SC';color:{{ allScopeColor }};white-space:nowrap;">全部环节 · 总览</div>
+      </div>
+      <div style="width:1px;height:20px;background:#D8D1C2;flex:none;"></div>
+      <sc-for list="{{ stageNav }}" as="e" hint-placeholder-count="8">
+        <div onClick="{{ e.onClick }}" style="cursor:pointer;flex:none;padding:7px 11px;border-radius:7px;display:flex;align-items:center;gap:7px;border:1px solid {{ e.bdr }};background:{{ e.bg }};">
+          <div style="font:700 10px/1 'JetBrains Mono',monospace;color:#C2BBAB;">{{ e.num }}</div>
+          <div style="width:6px;height:6px;border-radius:50%;background:{{ e.sig }};"></div>
+          <div style="font:{{ e.weight }} 12.5px/1 'Noto Sans SC';color:{{ e.nameColor }};white-space:nowrap;">{{ e.name }}</div>
+          <sc-if value="{{ e.hasBadge }}" hint-placeholder-val="{{ false }}">
+            <div style="font:600 9px/1 'JetBrains Mono',monospace;color:#B0503A;background:#F2E4DD;border-radius:5px;padding:2px 5px;">{{ e.badge }}</div>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+
     <!-- FIXED TOOLBAR · panels (always visible) -->
     <div style="flex:none;background:#F4F0E7;border-bottom:1px solid #E2DCCF;padding:0 22px;display:flex;align-items:center;gap:16px;height:46px;">
       <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;flex:none;">查看范围</div>
@@ -597,25 +616,13 @@
     <!-- shell body -->
     <div style="flex:1;display:flex;min-height:0;">
 
-      <!-- LEFT SIDEBAR · stage-scope selector (persistent) -->
-      <div style="width:262px;flex:none;background:#F4F0E7;border-right:1px solid #E2DCCF;display:flex;flex-direction:column;min-height:0;">
-        <div onClick="{{ showOverview }}" style="cursor:pointer;margin:14px 14px 0;padding:12px 14px;border-radius:8px;background:{{ allScopeBg }};display:flex;align-items:center;gap:10px;">
-          <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C5654A;">◎</div>
-          <div style="font:600 14px/1.2 'Noto Sans SC';color:{{ allScopeColor }};">全部环节 · 总览</div>
+      <!-- LEFT SIDEBAR · placeholder (任务历史 —— plan 2) -->
+      <div style="width:204px;flex:none;background:#F4F0E7;border-right:1px solid #E2DCCF;display:flex;flex-direction:column;min-height:0;">
+        <div style="padding:14px 14px 10px;">
+          <div style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;">任务历史记录</div>
         </div>
-        <div style="height:1px;background:#E2DCCF;margin:12px 18px;"></div>
-        <div style="flex:1;padding:0 14px 16px;overflow-y:auto;">
-          <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;margin:6px 6px 10px;">8 个环节 · 单环节视角</div>
-          <sc-for list="{{ stageNav }}" as="e" hint-placeholder-count="8">
-            <div onClick="{{ e.onClick }}" style="cursor:pointer;padding:10px 12px;border-radius:7px;display:flex;align-items:center;gap:10px;border:1px solid {{ e.bdr }};background:{{ e.bg }};margin-bottom:3px;">
-              <div style="font:700 11px/1 'JetBrains Mono',monospace;color:#C2BBAB;width:18px;flex:none;">{{ e.num }}</div>
-              <div style="width:7px;height:7px;border-radius:50%;background:{{ e.sig }};flex:none;"></div>
-              <div style="flex:1;min-width:0;font:{{ e.weight }} 13.5px/1.3 'Noto Sans SC';color:{{ e.nameColor }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ e.name }}</div>
-              <sc-if value="{{ e.hasBadge }}" hint-placeholder-val="{{ false }}">
-                <div style="flex:none;font:600 10px/1 'JetBrains Mono',monospace;color:#B0503A;background:#F2E4DD;border-radius:5px;padding:3px 6px;">{{ e.badge }}</div>
-              </sc-if>
-            </div>
-          </sc-for>
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:0 18px;text-align:center;">
+          <div style="font:400 12px/1.7 'Noto Sans SC';color:#B3AC9D;">选中上方环节后，<br>这里展示该环节每个任务的历史记录</div>
         </div>
       </div>
 
