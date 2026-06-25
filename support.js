@@ -151,6 +151,7 @@
     const React = getReact();
     const rootName = rootNameForDocument(doc, location);
     runtime.markFetched(rootName);
+    runtime.setRootName(rootName);
     runtime.adoptParsed(rootName, parsed);
     fetch(location.href).then((res) => res.ok ? res.text() : "").then((t) => {
       const raw = t ? parseDcText(t) : null;
@@ -365,7 +366,7 @@
   }
 
   // src/compile.ts
-  function collectProps(node, isComponent, host) {
+  function collectProps(node, kind, host) {
     const propGetters = [];
     const pseudoClasses = [];
     let hintSize = null;
@@ -382,8 +383,9 @@
         pseudoClasses.push(host.pseudoClass(key.slice(6), value));
         continue;
       }
-      if (isComponent) {
-        if (key.includes("-")) key = kebabToCamel(key);
+      if (kind !== "dom") {
+        if (key.includes("-") && !(kind === "x-import" && (key.startsWith("aria-") || key.startsWith("data-"))))
+          key = kebabToCamel(key);
       } else {
         if (key === "class") key = "className";
         else if (key === "for") key = "htmlFor";
@@ -554,7 +556,7 @@
     const styleRaw = el.getAttribute("style");
     el.removeAttribute("style");
     const styleGet = styleRaw != null ? compileAttr(styleRaw) : null;
-    const { propGetters, hintSize } = collectProps(el, true, host);
+    const { propGetters, hintSize } = collectProps(el, "dc-import", host);
     const kids = walkChildren(el, host);
     return (vals, ctx, key) => {
       const props = {
@@ -563,7 +565,14 @@
         __tplId: tplId,
         __hostStyle: styleGet ? hostPositionStyle(styleGet(vals)) : void 0
       };
-      for (const [k, g] of propGetters) props[k] = g(vals);
+      for (const [k, g] of propGetters) {
+        const v = g(vals);
+        if (k === "dcProps") {
+          if (v && typeof v === "object") Object.assign(props, v);
+          continue;
+        }
+        props[k] = v;
+      }
       if (kids.length) props.children = kids.map((b, j) => b(vals, ctx, j));
       return h(host.component(name), props);
     };
@@ -582,7 +591,7 @@
     el.removeAttribute("style");
     const styleGet = styleRaw != null ? compileAttr(styleRaw) : null;
     const wrap = tplId != null || styleGet != null;
-    const { propGetters, hintSize } = collectProps(el, true, host);
+    const { propGetters, hintSize } = collectProps(el, "x-import", host);
     const hasContent = el.children.length > 0 || !!(el.textContent || "").trim();
     const kids = hasContent ? walkChildren(el, host) : [];
     const urlBindable = url.includes("{{");
@@ -616,11 +625,15 @@
       const props = wrapper ? {} : { key };
       let unresolvedHole = false;
       for (const [k, g] of propGetters) {
-        if (k === "component" || k === "componentFromGlobalScope" || k === "name" || k === "from" || k === "src" || k === "import") {
+        if (k === "component" || k === "componentFromGlobalScope" || k === "from") {
           continue;
         }
         const v = g(vals);
         if (v === void 0) unresolvedHole = true;
+        if (k === "dcProps") {
+          if (v && typeof v === "object") Object.assign(props, v);
+          continue;
+        }
         props[k] = v;
       }
       if (unresolvedHole && ctx?.__htmlStreamingNow) {
@@ -639,7 +652,7 @@
   function walkElement(el, host) {
     const realTag = RAW_UNWRAP[el.localName] || el.localName;
     const tplId = el.getAttribute("data-dc-tpl");
-    const { propGetters, pseudoClasses } = collectProps(el, false, host);
+    const { propGetters, pseudoClasses } = collectProps(el, "dom", host);
     const kids = walkChildren(el, host);
     return (vals, ctx, key) => {
       const props = { key, "data-dc-tpl": tplId };
@@ -904,7 +917,7 @@
             { ...hostBase, className: cls + " sc-has-error" },
             h(
               "div",
-              { className: "sc-logic-error" },
+              { className: "sc-logic-error", "data-omelette-chrome": "" },
               this.__name + ": " + this.state.__err
             ),
             h(Placeholder, {
@@ -937,7 +950,11 @@
         return h(
           "div",
           { ...hostBase, className: cls + (renderErr ? " sc-has-error" : "") },
-          renderErr && h("div", { className: "sc-logic-error" }, renderErr),
+          renderErr && h(
+            "div",
+            { className: "sc-logic-error", "data-omelette-chrome": "" },
+            renderErr
+          ),
           h(
             AncestorContext.Provider,
             { value: [...chain, this.__name] },
@@ -1167,9 +1184,40 @@
   );
 
   // src/helmet.ts
+  var DESIGN_DOC_MODE_RE = /<meta\b[^>]*\bname\s*=\s*["']design_doc_mode["'][^>]*\b(?:content|value)\s*=\s*["'](\w+)["']/i;
+  var CANVAS_BG = "#f0eee9";
   function createHelmetManager(doc, isStreaming) {
     const mounted = /* @__PURE__ */ new Set();
     const live = /* @__PURE__ */ new Map();
+    let designDocMode = null;
+    let canvasStyleEl = null;
+    function postDesignMode(mode) {
+      if (window.parent === window) return;
+      try {
+        window.parent.postMessage({ type: "__dc_design_mode", mode }, "*");
+      } catch {
+      }
+    }
+    function setDesignDocMode(mode) {
+      if (mode === designDocMode) return;
+      designDocMode = mode;
+      postDesignMode(mode);
+      if (mode === "canvas") {
+        doc.documentElement.setAttribute("data-dc-canvas", "");
+        canvasStyleEl = doc.createElement("style");
+        canvasStyleEl.setAttribute("data-dc-canvas", "");
+        canvasStyleEl.textContent = `html,body{background:${CANVAS_BG}}#dc-root>.sc-host{position:relative}`;
+        doc.head.appendChild(canvasStyleEl);
+      } else {
+        doc.documentElement.removeAttribute("data-dc-canvas");
+        canvasStyleEl?.remove();
+        canvasStyleEl = null;
+      }
+    }
+    window.addEventListener("message", (e) => {
+      if (!designDocMode || (e.data && e.data.type) !== "__dc_probe") return;
+      postDesignMode(designDocMode);
+    });
     function compile(node) {
       const raw = [...node.children];
       const helmetClosed = node.nextSibling != null || node.parentNode?.nextSibling != null;
@@ -1222,7 +1270,7 @@
         return null;
       };
     }
-    return { compile };
+    return { compile, setDesignDocMode };
   }
 
   // src/pseudo.ts
@@ -1337,9 +1385,14 @@
         )
       );
     }
+    let rootName = null;
     function updateHtml(name, html) {
       const r = registry.get(name);
       r.html = html;
+      if (name === rootName) {
+        const mode = DESIGN_DOC_MODE_RE.exec(html)?.[1] ?? null;
+        if (mode || !r.htmlStreaming) helmet.setDesignDocMode(mode);
+      }
       try {
         r.tpl = compileTemplate(html, host);
       } catch (e) {
@@ -1422,6 +1475,9 @@
       dcUpdate,
       setProps,
       adoptParsed,
+      setRootName: (name) => {
+        rootName = name;
+      },
       markFetched: (name) => {
         registry.get(name).fetched = true;
       },
