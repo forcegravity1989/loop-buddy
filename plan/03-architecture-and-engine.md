@@ -63,9 +63,11 @@ builders-workbench/                 (Cargo workspace root)
 pub struct ProjectId(Uuid);
 // 同法:WorkflowId / SessionId / MetricId / RoutineId
 
-// ---------- 三态信号(对照原型 signal: 'green'|'amber'|'red') ----------
+// ---------- 信号(原型只有三态;新增 Unknown 表「无数据」,绝不让缺数据默认成绿) ----------
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum Signal { Green, Amber, Red }
+pub enum Signal { Green, Amber, Red, Unknown }
+// ★ Signal 不可在 bw-core::derive 之外构造:用封口 newtype Derived<Signal>(私有字段 + mod sealed),
+//   唯一构造者是 L2 evaluate_metric() 与 L4/L6 reduce_worst_of()。详见 §2.5。
 
 // ---------- 指标分型(原型 leading[] / lagging[]) ----------
 #[derive(Clone, Serialize, Deserialize)]
@@ -205,11 +207,11 @@ pub struct Project {
 pub enum ProjectPhase { Running, ColdStart }
 
 impl Project {
-    /// signal 永远 derive,不可直接 set
+    /// signal 永远 derive,不可直接 set —— 与 L4/L6 同款 worst-of 归约(含 Unknown 档)
     pub fn derive_signal(&self) -> Signal {
-        if self.stages.iter().any(|s| s.routine.signal == Signal::Red) { Signal::Red }
-        else if self.stages.iter().any(|s| s.routine.signal == Signal::Amber) { Signal::Amber }
-        else { Signal::Green }
+        // 任一 Red→Red;否则任一 Amber→Amber;
+        // 否则(有 Unknown 且零 Green)→Unknown;否则→Green。详见 §2.5。
+        reduce_worst_of(self.stages.iter().map(|s| s.routine.signal))
     }
 }
 
@@ -226,6 +228,53 @@ pub struct HubCard {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum HubKind { Workflow, Skill, Agent }
 ```
+
+---
+
+## 2.5 度量派生链(metric → signal → health)
+
+> 这是原计划**最薄的一环**。原型里每个 `signal`/`hit`/`weeklySignal` 都是**手写字面量**(HTML 2287/2228/3272-3274),`sigColor` 只把已定信号映射成颜色 —— 即「值→信号」根本没建。下面建全它,并把「signal 永远 derive」从口号变成**编译期保证**。
+
+### 六层链(自底向上)
+
+| 层 | 输入 | 规则 | 存/派生 |
+|---|---|---|---|
+| **L0 Observation** 原始事件 | `MetricSource`(SourceKind: GatewayLog/Ci/GitPr/Telemetry/Connector/**Manual**) | 纯摄入,append-only,永不改。Connector 失败**不写**观测(沉默≠绿,下游可检测为 stale)。**值唯一的诞生地** —— 没有 Observation 就建不出值(Manual 是显式来源,不是「无来源」) | stored-source |
+| **L1 MeasuredValue** 归一标量 | 最新 Observation + `MetricShape`(Percent/Count/Ratio/DurationMs/RawNumber) | 确定性解析:出 `f64 + unit + as_of + SourceKind`。`5/7`→0.71 且留 (5,7) 供显示;`842ms`→ms。最新观测比 cadence 窗口旧 → `stale=true`;无观测 → `Missing` | derived-cached(键=metric_id,新观测即失效) |
+| **L2 值-比-目标**(★缺失层 / 产品核心) | MeasuredValue + 解析后 `Target`(comparator∈{≥≤<>=}+阈值+amber 带,或定性 {清零/全覆盖/↑/跟踪}) | 确定性阈值函数(见下)→ `MetricEvaluation{signal,hit,distance}`。`hit=(signal==Green)`。Missing/不可解析定性 → **Unknown**(灰,**绝不绿**)。Manual 照常 derive,但带 `provenance=Manual` | derived(纯函数) |
+| **L3 StageMetric.signal** 单 KPI | L2 的 MetricEvaluation | 透传。今天持久化的 `stage_metric.signal` → 改为 `Derived<Signal>` **写穿缓存**。失效:新观测 / 改 target / 改 MetricShape | derived-cached |
+| **L4 Routine.signal** 环节级 | 该 Routine watches 的所有 StageMetric.signal | **worst-of**:任一 Red→Red;否则任一 Amber→Amber;否则(有 Unknown 且零 Green)→Unknown(没绿指标+缺数据≠健康);否则→Green | derived-cached |
+| **L5 OpStage health** 侧栏/环节轴 | Routine.signal(L4) + phase(正交元数据) | `health()=routine.signal` 直给点色(对原型 2671/2720)。phase 只驱动徽章色,**不是** health。overview-attention:health≠Green 或有进行中 session 才浮出 | derived(selector 纯投影) |
+| **L6 Project.signal + 周健康** 项目卡 | 7 个 OpStage 的 routine.signal | 与 L4 同款 worst-of(含 Unknown)= 现有 `derive_signal()` 扩 Unknown。`weekly_signal` = 周五边界对 derive 的快照,落 `weekly_review`;用户那一下点击 → 可审计 **override 标注**(记原因,绝不静默盖红),非真相源 | derived-cached |
+
+### 阈值模型(L2 细则)
+
+- **解析**:`≥/>/≤/</=` 前缀数值 → `Target::Threshold{cmp,value,unit}`;≥/> = HigherIsBetter,≤/< = LowerIsBetter,= = Exact。裸 `100%`/`7/7` → 隐式下限(≥)。定性:`清零`→DriveToZero、`全覆盖`→FullCoverage、`↑`→DirectionUp(无固定阈值,Green iff WoW 末>前,否则 Amber,**单凭方向永不 Red**)、`跟踪`→TrackOnly ⇒ **Unknown**。
+- **判定**(HigherIsBetter,目标 T,amber 带 β 默认 0.10·T 可每指标覆盖):`value≥T`→Green;`T·(1−β)≤value<T`→Amber;`value<T·(1−β)`→Red。LowerIsBetter 镜像;Exact 同值→Green、±容差→Amber。**β 带是每指标存储配置(默认 10%),诚实可调,非魔法。**
+- **退化**:`Missing`→Unknown(灰,标「无数据」);`stale=true`→**signal 封顶 Amber** + 标「数据过期」(新鲜的绿不许盖死掉的源);不可解析 target→Unknown + 编辑器 lint(不静默)。
+- **∴ `Signal` 必须加第四态 `Unknown`** —— 三态无法诚实表达「无数据」,而那正是「绝不编造」的要害。
+
+### derive/persist 矛盾的消解 = derived-cached(非 stored-source)
+
+signal 概念上永远是 (MeasuredValue, Target) 的纯函数,但每帧重算整条 L0→L6 浪费,且 signal 列对廉价读/排序/历史有用。故 **signal 列降级为写穿缓存**,只由 `bw-store::recompute_signals(project_id)` 这唯一路径写,**没有任何 setter**。
+
+- **失效触发**:① 新 Observation → 该 StageMetric(L2/L3)→ Routine(L4)→ Project(L6);② 改 target/amber_band;③ 改 MetricShape;④ Manual `UpsertManualValue`;⑤ 周复盘边界(仅快照)。
+- **类型层强制**:缓存列 NULLABLE + `derived_rev/derived_at`;NULL 或 rev 过期 → 读时**惰性重算**,绝不把缓存当权威。
+- **封口 `Derived<Signal>`**:阈值/归约函数收进 `bw-core::derive`,`Signal` 经 `Derived<T>`(私有字段 + `mod sealed`)暴露,**唯一构造者**是 `evaluate_metric()` 与 `reduce_worst_of()`。外部能 `.get()` 读,**不能** `Derived::new(Signal::Green)`。→「健康永远 derive、绝不手设」成**编译期保证**。
+- **删 `SetWeeklySignal`**,换 `AnnotateWeeklyReview{human_override:Option<Signal>, reason:String}`;override 单列存,UI 必须 derived 与 override **并显**;MVP 里 override 只能更悲观,更乐观必须带原因。
+
+### MVP 怎么落(无 Connector)
+
+首个桌面构建**没有 Connector**。最简诚实派生:① 向导(步 4/5/7)与环节面板里,用户把当前值录成 **Manual 来源 Observation**(`SourceKind::Manual`)—— 真数据,只是手填;② 信号**仍**由 L2 全程 derive,**应用从不问用户选绿黄红,绝不存引擎没算的信号**;③ 每个 Manual 指标常驻 `手填 · 未接入度量源` + `as_of`,过期可见衰减(stale→amber 封顶);④ `weekly_signal` = derive 快照,人工 override 记原因。
+
+→ **诚实的那条线**:标注的是**值的来源**(Manual),而**健康本身仍 derive**,从不让用户编造健康。L0→L6 链与类型在接 Connector 时**一字不改** —— 只把 L0 产出者从「Manual 命令」换成 `Connector::pull()`(Tier D)。这正是纵切先证脊椎要的:**派生缝先在 Manual 数据上证透**。
+
+### 开放设计问题(P0 拍板)
+
+- amber 带:扁平 10% 对 `99.9%` 可用率是错的(会让 ≥89.9% 都绿)→ 需 `amber_band: enum{RelPct(f32), AbsPoints(f32)}` 每指标。
+- `↑` 方向目标能否永不 Red?走平 N 周该不该升级 Amber→Red?
+- `Routine.watches`→StageMetric 用名字串还是 metric_id FK?建议 FK(改名安全)。
+- 一窗口多观测聚合(latest/mean/min/max/p95)?延迟用 p95、可用率用 min、计数用 latest → 需每指标 `aggregation` 列(MVP 预留,Tier D 实现)。
 
 ---
 
@@ -318,21 +367,42 @@ impl App {
 ## 5. 持久化(本地优先)
 
 `bw-store`,**SQLite via `sqlx`**(编译期校验 SQL + 异步;桌面单文件 `workbench.db`)。
+**所有 `signal`/`hit` 列均为写穿缓存**(NULLABLE,只由 `recompute_signals` 写,带 `derived_rev/derived_at`);指标值的真相源是 append-only 的 `observation` 表(§2.5)。
 
 ```sql
 -- 项目
-project(id, name, kind, desc, phase, cold_step, north_star, ns_def, weekly_signal,
+project(id, name, kind, desc, phase, cold_step, north_star, ns_def,
+        weekly_signal TEXT NULL,           -- 派生缓存;权威 = weekly_review 周快照
+        signal_derived_rev INT NULL, signal_derived_at TIMESTAMP NULL,
         created_at, updated_at)
 
--- 指标
+-- 指标(hit 是派生缓存:NULLABLE,只由 recompute 写;值的真相在 observation)
 metric(id, project_id FK, role TEXT['leading'|'lagging'], name, def,
-       current_val, target, source_kind, source_note, hit BOOL,
+       current_val, current_source_kind, current_as_of, current_stale BOOL DEFAULT 0,
+       target_cmp, target_value REAL NULL, target_unit,
+       target_amber_band REAL DEFAULT 0.10, target_qual,
+       hit BOOL NULL, signal_derived_rev INT NULL,
        last_target, driver, pos INT)  -- pos 保序
 
--- 控制点环节
+-- 控制点环节(无持久 health 列;health = routine.signal 的纯投影 L5)
 op_stage(id, project_id FK, n INT, phase, progress, trend JSON,
          method JSON, owns, accept, control)
-stage_metric(id, stage_id FK, name, val, unit, target, trend JSON, signal)
+stage_metric(id, stage_id FK, name, trend JSON,
+             value_magnitude REAL NULL, value_unit, value_ratio_num INT NULL, value_ratio_den INT NULL,
+             value_as_of, value_source_kind NOT NULL, value_stale BOOL DEFAULT 0,
+             target_kind['threshold'|'qualitative'], target_cmp, target_value REAL NULL,
+             target_unit, target_amber_band REAL DEFAULT 0.10, target_qual,
+             display_val, display_target,                    -- 保 UI 原样,免重解析
+             signal TEXT NULL CHECK(signal IN('green','amber','red','unknown') OR signal IS NULL),
+             signal_derived_rev INT NULL, signal_derived_at TIMESTAMP NULL)  -- signal = 写穿缓存
+
+-- 指标值的唯一来源(append-only,enforce「度量内建」;Manual 也落这,source_kind='manual')
+observation(id, metric_id FK, ts TIMESTAMP, source_kind TEXT NOT NULL, raw JSON,
+            source_run_id TEXT NULL, created_at)   -- INDEX(metric_id, ts DESC)
+
+-- 周复盘快照 + 人工 override(替代原型手设 weeklySignal;override 与 derived 分列,并显可审计)
+weekly_review(id, project_id FK, week_of DATE, derived_signal TEXT NOT NULL,
+              human_override TEXT NULL, override_reason TEXT NULL, created_at)
 
 -- 工作流
 workflow(id, project_id FK NULL, kind, name, prompt, goal,
@@ -413,9 +483,12 @@ pub enum RunEvent {
 }
 ```
 
-**真实执行(`bw-providers`)**:`AnthropicExecutor` 实现 `Executor::run_phase` —— 用 `reqwest` 调 Anthropic Messages API 或起 **Claude Code 子进程**让子 agent 真能用 Skill/Read/Bash/MCP。
+**真实执行 = 同事团队(经 `Executor` trait 接入,不在我们交付内)**:`AnthropicExecutor`(`reqwest` 调 Anthropic Messages API 或起 **Claude Code 子进程**让子 agent 真用 Skill/Read/Bash/MCP)**由同事实现 —— 我们不写它**。我们聚焦创建 + 管理。
 
-**分期接法**:Phase 0/1 注入 `MockExecutor`(产确定性假产出);Phase 2 换 `AnthropicExecutor`,UI 与引擎结构零改动 —— 这正是 `Executor` trait 的价值。
+**∴ `Executor` 是跨团队接口,按契约管理**:
+- 我们交付 `Executor` trait + `PhaseNode`/`PhaseOutput`/`RunEvent` 类型 + **`MockExecutor` 参考实现** + **一致性测试套件**;同事的真实现照此契约编码、过同一套测试即可热插拔。
+- **契约在 P1 冻结**并版本化,好让两队并行;改契约 = 跨队事件,不可单方改。
+- 我们全程跑在 MockExecutor 上 —— UI 与引擎结构对真假实现零改动。这正是 `Executor` trait 的价值,如今它还是一条**团队缝**。
 
 ---
 
@@ -432,6 +505,8 @@ pub enum RunEvent {
 ---
 
 ## 8. 分阶段落地
+
+> **路线图已迁至 [`00 §7`](00-PLAN.md) + [`04`](04-effort-and-mvp.md)**:反转为 **P0 基座 → P1 架构脊椎(headless 证透)→ P2 纵切 UI(证 Event→Signal 桥)→ P3 铺屏**,之后 Tier B–E 加法叠加。MVP 单人 ≈ 67–122 天(M1 走通脊椎)/ ~100–190 天(M2 保真)。下表是**原四阶段**,保留作能力映射参考 —— 注意原 Phase 0「先还原所有屏幕」已被反转,且原 Phase 2/3 的真执行/Connector/Web 现为 Tier C/D/E。
 
 | 阶段 | 内容 | 可验收产物 | 主要风险 |
 |---|---|---|---|

@@ -1,6 +1,6 @@
 # Builders' Workbench · Rust 跨平台 UI 选型评估
 
-> 目标:把现有 React 风格的复杂前端原型(`Builders工作台-项目管理向导.dc.html`)重写成 **Rust** 应用。**桌面优先(macOS + Windows),Web 次之**,尽量单一代码库多端复用。
+> 目标:把现有 React 风格的复杂前端原型(`Builders工作台-项目管理向导.dc.html`)重写成**原生桌面应用(Rust)**。**桌面唯一(macOS + Windows);Web 是「以后也许」,绝不驱动任何 MVP 决策。** 真实诉求:一个**比 Electron 更快更轻**的桌面应用(复用系统 WebView,不打包 Chromium)。
 >
 > 调研口径:2026-06-26 联网核实(crates.io API / GitHub Releases API / 官方文档原文)。WebSearch/WebFetch 当时后端不可用,改用 `curl` 直取权威端点的原始数据,版本号与能力均为实测,非凭记忆。
 
@@ -8,7 +8,7 @@
 
 ## 0. 结论先行(TL;DR)
 
-- **首选:Dioxus 0.7(desktop = `wry` webview;web = WASM/DOM),配合 Tailwind + RSX。** 一句话理由:**它是唯一能同时满足「前端也是 Rust(RSX,JSX 心智)」+「桌面/Web 全用浏览器级 HTML/CSS 引擎,设计 100% 可还原」+「一套代码出桌面和 Web」的方案**——你现有 1600+ 条内联 CSS、暖纸 clay 色板、中文衬线混排、SVG sparkline 几乎可平移。
+- **首选(确认):Dioxus 0.7 桌面(desktop = `wry` webview),RSX + Tailwind。** 一句话理由:**系统 WebView 既让它在冷启动/内存/包体上打败 Electron(复用 OS 浏览器内核,不打包 Chromium,见 §1.5),又是真 CSS 引擎,让你 1619 条内联 CSS、暖纸 clay 色板、中文衬线混排、SVG sparkline 近乎平移;同时 RSX 是 Rust 里的 JSX,贴合 dc-runtime 的 React 心智,迁移成本最低。**(「一套 RSX 同出桌面+Web」在桌面唯一后降级为**未来红利**,不再是首选理由 —— 决策改由「迁移贴合度 + DX + 无 IPC 边界」支撑。)
 - **次选:Tauri v2 + Leptos(或 Yew)。** 当 Dioxus 的某个坑(见 §6)挡路时,退到「Tauri 管壳与签名分发 + Rust 的 Web 框架(Leptos/Yew)写前端」。前端仍是 Rust、仍跑在 WebView 里,设计还原度一样满分;代价是桌面/Web 不像 Dioxus 那样天然同构,且多一层 Tauri IPC。
 - **不选(对本原型):Slint、egui/eframe。** 它们是**非 HTML/CSS 的自绘 UI**,要把暖纸色板、精细圆角阴影、中文混排、文档式富排版逐像素重建为另一套 DSL(Slint 的 `.slint`)或 immediate-mode 代码(egui),迁移成本极高且设计上限受限——与「设计感极强 + 文档式富 UI」正面冲突。
 - **对「Tauri 前端非 Rust」这一张力的裁决:** Tauri **官方定位就是「前端 JS、逻辑 Rust」**,违背你「语言用 Rust」的硬约束。**但这不是非 Tauri 不可**——把渲染层换成 **Dioxus(RSX 即 Rust)** 或在 Tauri 壳里塞 **Leptos/Yew(Rust→WASM)**,即可让**前端也是 Rust**,同时保住 WebView 的设计还原度。故裁决为:**不接受"裸 Tauri + JS 前端",接受"Rust 前端(Dioxus / Leptos / Yew)+ WebView 内核"。**
@@ -29,6 +29,22 @@
 | 体量 | HTML ≈ 3283 行;`support.js` ≈ 1595 行 | 是「文档式富 UI / dashboard」,不是游戏或工具条——**正是 immediate-mode(egui)最不擅长、Web 内核最擅长的形态** |
 
 **一句话:这是一套"用内联 CSS 手工调出来的、文档式、中文优先、带实时矢量图"的设计稿。能不能低成本迁移,等价于问"目标栈是不是真 CSS 引擎"。**
+
+---
+
+## 1.5 为什么 WebView 比 Electron 更适合(Rust 的真实理由)
+
+> 用户选 Rust 不是为了「用 Rust」,而是要一个**比 Electron 更快更轻**的桌面应用。关键洞察:**Rust + 系统 WebView 已经满足这个诉求** —— 复用 OS 自带浏览器内核,不像 Electron 每个应用各自打包整个 Chromium。下表为**量级估计,非本文实测**。
+
+| 维度 | Electron | Rust + 系统 WebView | 倍率 / 说明 |
+|---|---|---|---|
+| **冷启动**(到首次可交互) | ~600ms–2.0s(起 Chromium+Node+V8+渲染进程树) | ~150–600ms(原生二进制 attach 已驻留的 OS WebView) | **~2–4× 更快**,最被用户感知。Win10 首次 WebView2 预热会偏高 |
+| **空闲内存**(单窗口) | ~120–300MB+(各自一份 Chromium,跨应用不共享) | ~40–120MB(OS WebView 共享 + Rust 堆小,少一个 Node/V8) | **~2–3× 更轻**。全 11 panel 同挂会缩小差距 → 懒挂面板 |
+| **安装/下载包体** | ~85–200MB 装机(~50–90MB 压缩;Chromium+Node+ICU 全打包) | mac ~8–25MB(系统 WKWebView,零运行时);Win 类同(WebView2:Win11 自带 / Win10 Evergreen 引导) | **~5–15× 更小**,最戏剧的差距。CJK 字体两边都 +~10–20MB |
+| **构建/CI 复杂度** | npm/node + electron-builder + node-gyp 原生重建;模板海量 | cargo + `dx bundle`(复用 Tauri 打包);签名/公证与 Electron **同等**,无 node-gyp | **大致打平**。签名是真成本,但平台强制、非栈强制 |
+| **安全更新面** | **你背 Chromium CVE 跑步机**:每个 Chromium/V8/Node 安全版都逼你重发,否则用户跑漏洞浏览器 | OS 厂商补 WKWebView / WebView2(Evergreen 自动更新),**浏览器内核 CVE 不在你盘里** | **Rust 持久大胜** —— 单人开发者最大经常性安全负担直接消失 |
+
+> **净结论**:WebView 已拿走「打败 Electron」**~90%** 的收益。Slint/egui 无-WebView 自绘只能再挤最后 ~10%(再省点内存、再压点冷启动),代价是把整套 CSS 设计系统逐像素重画 —— 对本原型不划算(§4 理由五)。唯一 Electron 反占优之处:它自带 Chromium,Win10 缺 WebView2 时不白屏;对策见 §7.3 的 Evergreen 引导。若「打败 Electron」要成为对外承诺,可花 1–2 天做个真 benchmark spike(量 Phase-0 切片 vs 一个平凡 Electron 对照),而非把上表当事实发布。
 
 ---
 
@@ -151,7 +167,9 @@ Dioxus 比 Tauri 年轻、API 仍在 0.x 演进(0.8-alpha 在路上)。但兜底
 ### 7.4 自动更新
 - Dioxus/Tauri 生态可用 **updater 插件**(签名校验 + 版本清单 `latest.json`);需用私钥签更新包、客户端内置公钥校验,防止投毒。CI 出包后把签名产物推到对象存储 + 更新清单端点。
 
-### 7.5 Web 部署(第二优先级)
+### 7.5 Web 部署(**已降级:以后也许,非 MVP**)
+
+> 桌面唯一后,Web 整块移出 MVP,省下 ~12–26 人天(WASM 包体工程 / SSR+瘦后端 / CJK subset+FOUT / provider 代理服务 / IndexedDB adapter)。**留口零成本**:内核保持零-UI + WASM 可编译(CI `wasm32` check),Store trait 可换实现,每表留 `updated_at + rev/SyncCursor` → 未来回归无需迁移 schema。下列细节留待「重启 Web 时」参考。
 - **同一份 RSX** `dx bundle --platform web`(或 `dx serve --platform web` 本地),产物是 `wasm` + JS 胶水 + `assets/`,作为**静态站**部署到任意 CDN/静态托管。
 - **坑**:① **WASM 包体**——开 `--release`、`wasm-opt`、Dioxus 的 **WASM-Split/懒加载** 压首包;② 服务端必须发 `application/wasm` MIME + 合理缓存;③ **CJK 字体**(Noto Serif/Sans SC)体积大,**务必子集化(subset)+ `font-display: swap`**,否则首屏白字;④ 若用 SSR/hydration,需要一个 Rust 服务端(Axum),纯静态则用 CSR 即可;⑤ SVG sparkline 在 Web/桌面同构,无需两套绘制代码。
 
