@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Builder 工作台 · MVP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Noto+Serif+SC:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F7F6F3; --surface:#FFFFFF; --surface-2:#FBFBFA;
+    --ink:#2F3437; --ink-strong:#1A1A1A; --muted:#787774; --faint:#9B9A97;
+    --border:#EAEAEA; --border-2:rgba(0,0,0,0.06);
+    --green-bg:#EDF3EC; --green-tx:#346538;
+    --yellow-bg:#FBF3DB; --yellow-tx:#956400;
+    --red-bg:#FDEBEC; --red-tx:#9F2F2D;
+    --blue-bg:#E9F2FA; --blue-tx:#1F6C9F;
+    --btn:#111111; --btn-hover:#333333;
+    --serif:'Newsreader','Songti SC','Noto Serif SC',serif;
+    --sans:'PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif;
+    --mono:'JetBrains Mono','SF Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;min-height:100vh;position:relative;}
+  .ambient{position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:radial-gradient(620px 480px at 82% -10%, rgba(193,138,44,0.045), transparent 70%),
+               radial-gradient(560px 420px at 4% 112%, rgba(31,108,159,0.03), transparent 70%);}
+  ::selection{background:#1A1A1A;color:#F7F6F3;}
+  a{color:inherit;text-decoration:none;} button{font-family:inherit;cursor:pointer;}
+  :focus-visible{outline:1.5px solid var(--ink-strong);outline-offset:2px;border-radius:4px;}
+
+  header{position:sticky;top:0;z-index:50;background:rgba(247,246,243,0.82);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);}
+  .hwrap{max-width:1000px;margin:0 auto;padding:13px 28px;display:flex;align-items:center;gap:28px;}
+  .mark{display:flex;align-items:baseline;gap:9px;}
+  .mark .cn{font-family:var(--serif);font-weight:600;font-size:20px;color:var(--ink-strong);line-height:1;}
+  .mark .en{font-family:var(--mono);font-size:10px;letter-spacing:0.13em;text-transform:uppercase;color:var(--faint);}
+  nav{display:flex;gap:2px;}
+  nav a{font-size:14px;color:var(--muted);padding:6px 12px;border-radius:7px;transition:color .15s,background .15s;}
+  nav a:hover{color:var(--ink);background:rgba(0,0,0,0.035);}
+  nav a.on{color:var(--ink-strong);background:rgba(0,0,0,0.05);font-weight:500;}
+  .hright{margin-left:auto;display:flex;align-items:center;gap:13px;}
+  .cmd{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--faint);border:1px solid var(--border);border-radius:7px;padding:5px 10px;background:var(--surface);}
+  .cmd kbd{font-family:var(--mono);font-size:10.5px;color:var(--muted);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 5px;}
+  .ava{width:30px;height:30px;border-radius:7px;background:var(--ink-strong);color:#F7F6F3;display:grid;place-items:center;font-family:var(--serif);font-weight:500;font-size:14px;}
+
+  main{max-width:1000px;margin:0 auto;padding:60px 28px 96px;position:relative;z-index:1;}
+  .view{display:none;} .view.on{display:block;}
+  .reveal{opacity:0;transform:translateY(12px);}
+  .reveal.in{opacity:1;transform:none;transition:opacity .6s cubic-bezier(.16,1,.3,1),transform .6s cubic-bezier(.16,1,.3,1);}
+
+  .greet h1{font-family:var(--serif);font-weight:500;font-size:36px;line-height:1.15;letter-spacing:-0.01em;color:var(--ink-strong);margin:0 0 12px;}
+  .greet p{font-size:16.5px;color:var(--muted);margin:0;max-width:44ch;}
+  .greet p b{color:var(--ink);font-weight:500;}
+  .pulse{margin-top:22px;display:flex;align-items:center;font-family:var(--mono);font-size:12px;color:var(--muted);flex-wrap:wrap;}
+  .pulse .it{display:flex;align-items:baseline;gap:6px;padding:0 16px;border-left:1px solid var(--border);}
+  .pulse .it:first-child{padding-left:0;border-left:0;}
+  .pulse .it b{color:var(--ink-strong);font-weight:500;font-size:13px;}
+  .pulse .it.alert b{color:var(--red-tx);} .pulse .it.good b{color:var(--green-tx);}
+
+  section.block{margin-top:52px;}
+  .lbl{display:flex;align-items:center;gap:12px;margin-bottom:18px;}
+  .lbl h2{font-family:var(--sans);font-size:13px;letter-spacing:0.04em;color:var(--muted);font-weight:500;margin:0;}
+  .lbl .ct{font-family:var(--mono);font-size:11px;color:var(--ink-strong);background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:1px 7px;}
+  .lbl .ln{flex:1;height:1px;background:var(--border);}
+
+  .needs{display:flex;flex-direction:column;gap:12px;}
+  .item{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 24px;display:grid;grid-template-columns:auto 1fr auto;gap:18px;align-items:center;transition:box-shadow .2s,border-color .2s;}
+  .item.click{cursor:pointer;} .item:hover{box-shadow:0 2px 8px rgba(0,0,0,0.04);border-color:#E2E2E0;}
+  .dot{width:9px;height:9px;border-radius:50%;}
+  .dot.red{background:#C0584C;box-shadow:0 0 0 4px var(--red-bg);}
+  .dot.yellow{background:#C9A227;box-shadow:0 0 0 4px var(--yellow-bg);}
+  .dot.blue{background:#3E83B0;box-shadow:0 0 0 4px var(--blue-bg);}
+  .dot.green{background:#5E8C63;box-shadow:0 0 0 4px var(--green-bg);}
+  .body .t{font-size:16px;font-weight:500;color:var(--ink-strong);}
+  .body .why{font-size:14px;color:var(--muted);margin-top:3px;}
+  .body .meta{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;}
+  .tag{font-family:var(--sans);font-size:11.5px;padding:3px 10px;border-radius:9999px;white-space:nowrap;font-weight:500;}
+  .tag.red{background:var(--red-bg);color:var(--red-tx);}
+  .tag.yellow{background:var(--yellow-bg);color:var(--yellow-tx);}
+  .tag.green{background:var(--green-bg);color:var(--green-tx);}
+  .tag.blue{background:var(--blue-bg);color:var(--blue-tx);}
+  .act{display:flex;align-items:center;gap:8px;}
+  .btn{font-size:13.5px;font-weight:500;border-radius:6px;padding:8px 15px;border:1px solid transparent;transition:background .15s,transform .08s,border-color .15s;white-space:nowrap;}
+  .btn.primary{background:var(--btn);color:#fff;} .btn.primary:hover{background:var(--btn-hover);}
+  .btn:active{transform:scale(.98);}
+  .btn.ghost{background:transparent;color:var(--muted);border-color:var(--border);} .btn.ghost:hover{color:var(--ink);border-color:var(--border-2);}
+  .btn.danger{background:transparent;color:var(--red-tx);border-color:#EBD3CF;} .btn.danger:hover{background:var(--red-bg);}
+
+  .run{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+  .grp{display:grid;grid-template-columns:1fr auto auto;gap:18px;align-items:center;padding:17px 24px;border-top:1px solid var(--border);}
+  .grp:first-child{border-top:0;}
+  .grp .gn{font-size:15.5px;color:var(--ink-strong);font-weight:500;}
+  .grp .gn small{display:block;font-weight:400;font-size:13px;color:var(--muted);margin-top:1px;}
+  .grp .cnt{font-family:var(--mono);font-size:13px;color:var(--ink);} .grp .cnt span{color:var(--faint);}
+
+  /* 详情通用 */
+  .crumb{font-size:13px;color:var(--muted);margin-bottom:20px;}
+  .crumb a:hover{color:var(--ink);} .crumb span{color:var(--faint);margin:0 7px;}
+  .dhead h1{font-family:var(--serif);font-weight:500;font-size:30px;line-height:1.2;letter-spacing:-0.01em;color:var(--ink-strong);margin:0 0 10px;}
+  .dhead p{font-size:16px;color:var(--muted);margin:0 0 6px;max-width:54ch;}
+  .dmeta{font-family:var(--mono);font-size:12px;color:var(--faint);display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;}
+  .dmeta b{color:var(--muted);font-weight:400;}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;margin-top:18px;}
+  .card h3{font-family:var(--sans);font-size:13px;color:var(--muted);font-weight:500;margin:0 0 14px;letter-spacing:0.02em;}
+  .crit{font-family:var(--mono);font-size:13.5px;color:var(--ink-strong);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px 16px;line-height:1.7;}
+  .crit .ok{color:var(--green-tx);}
+
+  /* 飞轮高亮卡 */
+  .fly{background:#FBFBFA;border:1px solid #E3E8E3;border-radius:12px;padding:22px 24px;margin-top:18px;}
+  .fly.match{background:#F1F6F1;border-color:#CFE0D0;}
+  .fly .ft{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:500;color:var(--ink-strong);margin-bottom:8px;}
+  .fly .ico{width:20px;height:20px;display:grid;place-items:center;border-radius:50%;flex-shrink:0;}
+  .fly.match .ico{background:#5E8C63;} .fly .ico svg{display:block;}
+  .fly.new .ico{background:var(--blue-bg);}
+  .fly .pat{font-family:var(--mono);font-size:12.5px;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:2px 8px;display:inline-block;}
+  .fly .desc{font-size:14px;color:var(--muted);margin-top:6px;line-height:1.6;}
+  .prompt{margin-top:16px;padding:14px 16px;background:var(--surface);border:1px dashed var(--border);border-radius:8px;}
+  .prompt .ph{font-size:12.5px;color:var(--faint);margin-bottom:6px;}
+  .prompt ul{margin:0;padding-left:18px;font-size:14px;color:var(--ink);} .prompt li{margin:2px 0;}
+
+  .actions{display:flex;gap:10px;margin-top:22px;flex-wrap:wrap;}
+  .note{font-size:13px;color:var(--faint);margin-top:16px;border-top:1px solid var(--border);padding-top:14px;display:flex;align-items:baseline;gap:8px;}
+  .note b{color:var(--green-tx);font-weight:500;font-family:var(--mono);font-size:12px;}
+
+  .warn{background:var(--yellow-bg);border:1px solid #ECD9A6;border-radius:10px;padding:16px 18px;margin-top:18px;font-size:14px;color:#7a5400;line-height:1.6;}
+  .warn b{color:var(--yellow-tx);}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:8px 18px;font-size:14.5px;margin-top:4px;}
+  .kv dt{color:var(--muted);} .kv dd{margin:0;color:var(--ink-strong);} .kv dd b{font-family:var(--mono);font-size:13px;}
+
+  /* 认证策略库 */
+  .pol{display:grid;grid-template-columns:1fr auto auto;gap:18px;align-items:center;padding:17px 24px;border-top:1px solid var(--border);}
+  .pol:first-child{border-top:0;}
+  .pol .pn{font-size:15px;color:var(--ink-strong);font-weight:500;}
+  .pol .pn code{font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:400;display:block;margin-top:3px;}
+  .pol .pc{font-family:var(--mono);font-size:12.5px;color:var(--green-tx);}
+  .pol .pa{display:flex;gap:7px;}
+  .pol .mini{font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:3px 9px;background:transparent;transition:.15s;}
+  .pol .mini:hover{color:var(--ink);border-color:var(--border-2);}
+
+  footer{max-width:1000px;margin:0 auto;padding:0 28px 70px;position:relative;z-index:1;}
+  footer p{font-size:13px;color:var(--faint);max-width:64ch;line-height:1.7;border-top:1px solid var(--border);padding-top:22px;}
+
+  @media(max-width:740px){
+    main{padding:40px 20px 64px;} .hwrap{padding:12px 20px;gap:14px;flex-wrap:wrap;}
+    nav{order:3;width:100%;} .cmd{display:none;} .greet h1{font-size:30px;}
+    .item{grid-template-columns:auto 1fr;} .item .act{grid-column:2;justify-content:flex-start;}
+    .grp,.pol{grid-template-columns:1fr auto;}
+  }
+  @media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;}}
+</style>
+</head>
+<body>
+<div class="ambient"></div>
+
+<header>
+  <div class="hwrap">
+    <div class="mark"><span class="cn">Builder</span><span class="en">工作台 · MVP</span></div>
+    <nav id="nav">
+      <a class="on" data-view="home">待办</a>
+      <a data-view="policy">认证策略</a>
+    </nav>
+    <div class="hright"><span class="cmd">搜索 <kbd>⌘K</kbd></span><div class="ava">林</div></div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============ 待办（路由） ============ -->
+  <div class="view on" id="home">
+    <div class="greet reveal">
+      <h1>Builder,有 3 件事需要你。</h1>
+      <p>其余 <b>5 个 Loop</b> 在自主跑——只有<b>过不了闸</b>的才会找你。</p>
+      <div class="pulse">
+        <span class="it"><b>8</b> 个 Loop</span>
+        <span class="it"><b>5</b> 自主跑</span>
+        <span class="it alert"><b>3</b> 待你</span>
+        <span class="it good"><b>142</b> 本周自动放行</span>
+      </div>
+    </div>
+
+    <section class="block reveal">
+      <div class="lbl"><h2>待你处理</h2><span class="ct">3</span><span class="ln"></span></div>
+      <div class="needs">
+        <div class="item click" data-goto="certify">
+          <span class="dot blue"></span>
+          <div class="body">
+            <div class="t">认证一条新的验收标准</div>
+            <div class="why">一个修复 Loop 说它干完了,但它的「干完算数」标准是个<b>新模式</b>——认证后,以后同类自动放行。</div>
+            <div class="meta"><span>修复 #4821 · 登录后会话丢失</span><span>等你 8 分钟</span></div>
+          </div>
+          <div class="act"><span class="tag blue">需认证</span><button class="btn primary">去认证</button></div>
+        </div>
+        <div class="item click" data-goto="approve">
+          <span class="dot yellow"></span>
+          <div class="body">
+            <div class="t">批准一个对外动作</div>
+            <div class="why">运营 Loop 想给 12,847 个用户发召回推送——对外、不可撤回,按规矩得你点头。</div>
+            <div class="meta"><span>运营 · 7日留存目标</span><span>等你 3 分钟</span></div>
+          </div>
+          <div class="act"><span class="tag yellow">需审批</span><button class="btn primary">查看</button></div>
+        </div>
+        <div class="item">
+          <span class="dot red"></span>
+          <div class="body">
+            <div class="t">一个 Loop 验收没过</div>
+            <div class="why">修复 #4830 改了三轮,验收测试还是红的。它停下来等你,没有硬交。</div>
+            <div class="meta"><span>修复 #4830 · 导出乱码</span><span>失败 3 次</span></div>
+          </div>
+          <div class="act"><button class="btn ghost">稍后</button><button class="btn primary">去看</button></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block reveal">
+      <div class="lbl"><h2>我的 Loop</h2><span class="ct">8</span><span class="ln"></span></div>
+      <div class="run">
+        <div class="grp"><div class="gn">问题处理<small>修上报的 bug:复现→修→自测→评审→合并</small></div><span class="cnt">3 个 · 自主</span><span class="tag green">正常</span></div>
+        <div class="grp"><div class="gn">问题运维<small>盯告警,把指标拉回 SLO</small></div><span class="cnt">2 个 · 自主</span><span class="tag green">正常</span></div>
+        <div class="grp"><div class="gn">集成构建<small>按契约把系统接通,契约测试转绿</small></div><span class="cnt">1 个 · 新建中</span><span class="tag yellow">建第 3 类</span></div>
+      </div>
+      <div class="note"><b>MVP</b><span>这一版只跑闭合任务的 Loop(能写出客观验收标准的)。开放环节(洞察/运营)的常驻监测,等信任原子验过再加。</span></div>
+    </section>
+  </div>
+
+  <!-- ============ 认证验收（主屏 · 飞轮） ============ -->
+  <div class="view" id="certify">
+    <div class="crumb reveal"><a data-view="home">待办</a><span>/</span>认证验收标准</div>
+    <div class="dhead reveal">
+      <h1>这个 Loop 说它干完了。它算不算干完,你来定标准。</h1>
+      <p>在它<b>自动合并</b>之前,你只需认证一件事:它的「干完算数」标准,够不够硬。机器能查标准有没有达到,但<b>标准够不够硬,只有你能判</b>。</p>
+      <div class="dmeta"><span>修复 #4821 · 登录后会话丢失</span><span>来源 <b>用户上报</b></span><span>已用时 <b>11分</b></span></div>
+    </div>
+
+    <div class="card reveal">
+      <h3>它打算用这条标准验收自己</h3>
+      <div class="crit">验收标准 = 复现时写的失败测试 <span style="color:var(--blue-tx)">test_session_persists_after_login</span> <span class="ok">已转绿 ✓</span> &nbsp;+&nbsp; 独立评审 <span class="ok">通过 ✓</span></div>
+    </div>
+
+    <!-- 飞轮：这条属于新模式 -->
+    <div class="fly new reveal">
+      <div class="ft"><span class="ico"><svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 2.5v7M2.5 6h7" stroke="#1F6C9F" stroke-width="1.5" stroke-linecap="round"/></svg></span>这是一类<strong>新模式</strong>,你还没认证过</div>
+      <div>模式:<span class="pat">修复类 · 失败测试转绿 + 独立评审</span></div>
+      <div class="desc">认证它之后,以后<b>所有命中这个模式</b>的修复 Loop 会<b>自动放行,不再来打扰你</b>——你这一次判断,被复利成一条策略。</div>
+      <div class="prompt">
+        <div class="ph">认证前,替它想想这条标准的暗坑(机器想不到的):</div>
+        <ul>
+          <li>只测了正常登录,异常 / 并发会话 会不会也丢?</li>
+          <li>token 刷新那条路径,这测试覆盖了吗?</li>
+        </ul>
+      </div>
+      <div class="actions">
+        <button class="btn primary">认证为可信模式 · 以后同类自动放行</button>
+        <button class="btn ghost">只信这一次</button>
+        <button class="btn danger">打回 · 标准不够硬,要补测试</button>
+      </div>
+      <div class="note"><b>↻ 飞轮</b><span>上一个修复 #4820 命中了你已认证的模式,刚刚自动放行了,没来打扰你。你认证过的模式越多,要你亲自认证的就越少。</span></div>
+    </div>
+  </div>
+
+  <!-- ============ 对外动作审批 ============ -->
+  <div class="view" id="approve">
+    <div class="crumb reveal"><a data-view="home">待办</a><span>/</span>对外动作审批</div>
+    <div class="dhead reveal">
+      <h1>批准一个对外动作:运营 Loop 想发推送。</h1>
+      <p>这是<b>对外、不可撤回</b>的动作——Loop 自己不发,按规矩交给你点头。</p>
+      <div class="dmeta"><span>运营 Loop · #op-12</span><span>目标 <b>7 日留存 → 40%</b></span></div>
+    </div>
+
+    <div class="card reveal">
+      <h3>它想做什么</h3>
+      <dl class="kv">
+        <dt>动作</dt><dd>给 <b>12,847</b> 个 7 日未活跃用户发召回推送</dd>
+        <dt>理由</dt><dd>为达成它的 Goal「7 日留存 → 40%」</dd>
+        <dt>爆炸半径</dt><dd><b>12.8k</b> 个真实用户 · 发出即不可撤回</dd>
+      </dl>
+    </div>
+
+    <div class="warn reveal">
+      <b>替它想一想:</b>它为了达标,选了「高频推送」这条最直接的路。短期留存会上去——但会不会<b>透支用户长期信任</b>?达标的<b>方式</b>对不对,正是它判不了、要你判的。
+    </div>
+
+    <div class="actions reveal">
+      <button class="btn primary">批准发送</button>
+      <button class="btn ghost">拒绝 · 换个不打扰用户的办法</button>
+      <button class="btn danger">急停这个 Loop</button>
+    </div>
+  </div>
+
+  <!-- ============ 认证策略库（飞轮的家底） ============ -->
+  <div class="view" id="policy">
+    <div class="greet reveal" style="margin-bottom:8px;">
+      <h1>认证策略</h1>
+      <p>你信任过的标准,正在<b>替你自动放行</b>。这是你的判断攒下来的家底。</p>
+      <div class="pulse">
+        <span class="it"><b>7</b> 类已认证模式</span>
+        <span class="it good"><b>142</b> 本周自动放行</span>
+        <span class="it"><b>142</b> 次认证被省下</span>
+      </div>
+    </div>
+    <section class="block reveal">
+      <div class="lbl"><h2>已信任的标准模式</h2><span class="ln"></span></div>
+      <div class="run">
+        <div class="pol"><div class="pn">修复类 · 失败测试转绿 + 独立评审<code>fix · failing-test→green + independent-review</code></div><span class="pc">放行 89 次</span><div class="pa"><button class="mini">收紧</button><button class="mini">暂停</button></div></div>
+        <div class="pol"><div class="pn">集成类 · 契约测试通过 + 未碰生产凭证<code>integration · contract-test pass + no-prod-secret</code></div><span class="pc">放行 31 次</span><div class="pa"><button class="mini">收紧</button><button class="mini">暂停</button></div></div>
+        <div class="pol"><div class="pn">运维类 · 指标回到 SLO 且稳定 10 分钟<code>ops · metric≤SLO for 10m</code></div><span class="pc">放行 22 次</span><div class="pa"><button class="mini">收紧</button><button class="mini">暂停</button></div></div>
+      </div>
+      <div class="note"><b>↻ 飞轮</b><span>每认证一类新模式,要你亲自认证的就少一类。这正是「把 Plugin 实践沉淀成 Loop」的真身——沉淀的不是模板,是你的<b>认证判断</b>。</span></div>
+    </section>
+  </div>
+
+</main>
+
+<footer><p>MVP · 信任原子 · 两道闸(验收认证 + 对外审批)+ 认证策略飞轮,在闭合 Loop 上走通。先证它挡得住「自信翻车」、且认证策略复利让同类近乎免认证;满地图 / 开放环节 Goal 工厂 / 工厂全壳,等这块砖砌稳再长。</p></footer>
+
+<script>
+  const nav=document.getElementById('nav');
+  function show(v){
+    document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id===v));
+    nav.querySelectorAll('a').forEach(a=>a.classList.toggle('on',a.dataset.view===v));
+    window.scrollTo({top:0,behavior:'instant'});
+    runReveal();
+  }
+  nav.addEventListener('click',e=>{const a=e.target.closest('a[data-view]');if(a)show(a.dataset.view);});
+  document.addEventListener('click',e=>{const g=e.target.closest('[data-goto]');if(g)show(g.dataset.goto);});
+
+  let io;
+  function runReveal(){
+    if(io)io.disconnect();
+    io=new IntersectionObserver((es)=>{es.forEach((e,i)=>{if(e.isIntersecting){e.target.style.transitionDelay=(i*55)+'ms';e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:0.06});
+    document.querySelectorAll('.view.on .reveal').forEach(el=>{el.classList.remove('in');io.observe(el);});
+  }
+  runReveal();
+</script>
+</body>
+</html>
