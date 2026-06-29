@@ -1,7 +1,8 @@
 //! The eight wizard step bodies (prototype rows 110–625). Presentational steps
 //! (0/1/2/6) render static warmth; input steps (3/4/5/7) bind editable fields to
-//! the parent's [`WizState`] signal. Each ends with the shared [`StepFooter`]
-//! (step 0 supplies its own clay CTA in-body).
+//! the parent's [`WizState`] signal. The shared next/back controls live in the
+//! parent's pinned frame footer, not in these bodies (step 0 supplies its own
+//! clay CTA in-body).
 //!
 //! Styling mirrors `screens/projects.rs`: `theme::` consts + inline `style:`.
 //! A few prototype-specific hexes that aren't in the token set (warm accent
@@ -11,10 +12,15 @@
 
 // `bw_core::Signal` (the derived health enum) is aliased so the bare `Signal<T>`
 // always means the Dioxus reactive signal.
+use bw_app::Command;
+use bw_core::model::{LoopConfig, Maturity, Role, StageKind, WorkflowKind, WorkflowSpec};
 use bw_core::Signal as HealthSignal;
+use bw_core::{SessionId, WorkflowId};
+use bw_store::SessionKind;
 use dioxus::prelude::*;
 
-use super::{StepFooter, WizState};
+use super::WizState;
+use crate::bridge::{CommandBus, SessionMsgVM, ViewModel};
 use crate::theme;
 
 // ── shared little building blocks ────────────────────────────────────────────
@@ -50,10 +56,35 @@ fn ControlPoint(text: String) -> Element {
     }
 }
 
+/// A collapsed-by-default 「为什么」 drawer: demotes a step's method teaching out
+/// of the always-on rail so the action stays above the fold (plan: 保留但降级).
+/// Click the summary to expand; default closed.
+#[component]
+fn Disclosure(summary: String, children: Element) -> Element {
+    let mut open = use_signal(|| false);
+    let chevron = if open() { "收起 ▴" } else { "▾" };
+    rsx! {
+        div { style: "margin:2px 0 16px;",
+            button {
+                onclick: move |_| open.with_mut(|o| *o = !*o),
+                style: "display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;\
+                        background:{theme::CARD_BG};border:1px solid {theme::BORDER};\
+                        border-radius:{theme::RADIUS_SM};padding:11px 13px;cursor:pointer;text-align:left;\
+                        color:{theme::INK_2};",
+                span { style: "font:500 12.5px/1.3 {theme::FONT_SANS};", "{summary}" }
+                span { style: "font:500 11px/1 {theme::FONT_MONO};color:{theme::INK_3};", "{chevron}" }
+            }
+            if open() {
+                div { style: "padding:14px 2px 0;", {children} }
+            }
+        }
+    }
+}
+
 /// The two-column shell (340px sticky rail + content) shared by steps 1–7.
-const TWO_COL: &str = "max-width:1180px;margin:0 auto;padding:56px 40px 110px;display:grid;\
+const TWO_COL: &str = "max-width:1180px;margin:0 auto;padding:48px 40px 56px;display:grid;\
                        grid-template-columns:340px 1fr;gap:56px;align-items:start;";
-const STICKY: &str = "position:sticky;top:96px;";
+const STICKY: &str = "position:sticky;top:24px;";
 
 // ════════════════════════════════════════════════════════════════════════════
 // STEP 0 · 引子
@@ -253,335 +284,287 @@ fn ReplaceLine(keep: String, to: String) -> Element {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// STEP 1 · 竞品洞察 (presentational)
+// STEP 1 · 竞品洞察 (workflow-driven: this control point's session IS the deliverable)
 // ════════════════════════════════════════════════════════════════════════════
 
-/// One competitor matrix row. `marks` are the five dimension cells (●/◐/○ + the
-/// 上手成本 text); rendered centered.
-#[component]
-fn MatrixRow(
-    name: String,
-    c1: String,
-    c2: String,
-    c3: String,
-    c4: String,
-    cost: String,
-    highlight: bool,
-) -> Element {
-    let (row_style, name_style) = if highlight {
-        (
-            "border-top:2px solid #E2C9BF;background:#F7EDE7;".to_string(),
-            format!("padding:14px 18px;font-weight:700;color:{};", theme::CLAY),
-        )
-    } else {
-        (
-            format!("border-top:1px solid {};", theme::PROGRESS_TRACK),
-            "padding:13px 18px;font-weight:500;".to_string(),
-        )
-    };
-    rsx! {
-        tr { style: "{row_style}",
-            td { style: "{name_style}", "{name}" }
-            td { style: "text-align:center;", dangerous_inner_html: "{c1}" }
-            td { style: "text-align:center;", dangerous_inner_html: "{c2}" }
-            td { style: "text-align:center;", dangerous_inner_html: "{c3}" }
-            td { style: "text-align:center;", dangerous_inner_html: "{c4}" }
-            td { style: "text-align:center;color:{theme::INK_3};", "{cost}" }
-        }
+/// The WorkflowHub-recommended 竞品洞察 workflow seeded for this control point
+/// (`WorkflowKind::Static` → 成熟 · v3 · 复用 12 次). Its `phases` drive the
+/// executor: each completed phase appends one Agent message to the session
+/// transcript. With the MockExecutor that text is a canned stub; the real
+/// per-phase content arrives when the colleague team's executor swaps in.
+fn competitor_insight_workflow() -> WorkflowSpec {
+    WorkflowSpec {
+        id: WorkflowId::new(),
+        name: "竞品洞察工作流".into(),
+        kind: WorkflowKind::Static {
+            maturity: Maturity::Mature,
+            version: 3,
+            uses: 12,
+            scope: "竞品洞察".into(),
+        },
+        prompt: "界定 → 采集 → 结构化 → 分析 → 洞察".into(),
+        goal: "产出可证伪的竞品洞察(证据 → 发现 → 洞察)".into(),
+        stage_ref: Some(1),
+        phases: CI_PHASES.iter().map(|p| (*p).into()).collect(),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        loop_config: LoopConfig {
+            retries: 1,
+            max_iter: 3,
+        },
     }
 }
 
-/// An 观察 → 含义 finding card (step 1).
-#[component]
-fn FindingRow(observe: String, mean: String) -> Element {
-    rsx! {
-        div {
-            style: "background:{theme::CARD_BG};border:1px solid {theme::BORDER};border-radius:8px;\
-                    padding:14px 18px;display:grid;grid-template-columns:1fr auto 1.1fr;gap:14px;align-items:center;",
-            div {
-                div { style: "font:600 9px/1 {theme::FONT_MONO};letter-spacing:.08em;color:{theme::PLACEHOLDER};margin-bottom:5px;", "观察" }
-                div { style: "font:400 13.5px/1.55 {theme::FONT_SANS};color:#3A3833;", "{observe}" }
-            }
-            div { style: "font:400 16px/1 {theme::FONT_MONO};color:{theme::CLAY};", "→" }
-            div {
-                div { style: "font:600 9px/1 {theme::FONT_MONO};letter-spacing:.08em;color:#B0503A;margin-bottom:5px;", "含义" }
-                div { style: "font:500 13.5px/1.55 {theme::FONT_SANS};color:{theme::INK};", "{mean}" }
-            }
-        }
-    }
-}
+/// The five control-point phases — the strip shown in the picker (upcoming) and
+/// the canvas (done), and the source of the workflow's `phases` above.
+const CI_PHASES: [&str; 5] = ["界定", "采集", "结构化", "分析", "洞察"];
 
+/// Step 1 · 竞品洞察. The teaching rail demotes its method into a [`Disclosure`];
+/// the content column is no longer a static essay but the **workflow session**
+/// itself — picked from WorkflowHub (or 自建), run on demand, its transcript the
+/// deliverable. Reads `active_session` / `session_msgs` from the [`ViewModel`].
 #[component]
 pub fn Step1Insight() -> Element {
-    // Presentational: a throwaway state to satisfy the shared footer (never read).
-    let footer_state = use_signal(WizState::seed);
-    // ●=clay, ◐=amber, ○=mute — encoded as small html spans for the matrix.
-    let dot_full = "<span style=\"color:#C5654A\">●</span>";
-    let dot_half = "<span style=\"color:#B5862F\">◐</span>";
-    let dot_none = "<span style=\"color:#C2BBAB\">○</span>";
+    let vm = use_context::<Signal<ViewModel>>();
+    let v = vm();
+    let session = v.active_session;
+    let msgs = v.session_msgs;
 
     rsx! {
-        div { style: "{TWO_COL}",
-            // ── sticky left rail ────────────────────────────────────────────
-            div { style: "{STICKY}",
+        // Full-height step: teaching rail (left) + session canvas (right). The
+        // canvas transcript is the ONLY inner scroll — the step fills the frame
+        // body exactly, so the page never grows (plan: 不滑屏 + 会话即交付).
+        div {
+            style: "height:100%;max-width:1180px;margin:0 auto;padding:22px 40px;display:grid;\
+                    grid-template-columns:316px 1fr;gap:36px;align-items:stretch;min-height:0;",
+
+            // ── teaching rail (identity stays; method folds into a drawer) ──────
+            div {
+                style: "min-height:0;overflow-y:auto;display:flex;flex-direction:column;",
                 Eyebrow { text: "步骤 01 · 竞品洞察" }
                 h2 {
-                    style: "font:600 30px/1.3 {theme::FONT_SERIF};margin:0 0 18px;",
+                    style: "font:600 27px/1.32 {theme::FONT_SERIF};margin:0 0 14px;",
                     "从证据,"
                     br {}
                     "一步步爬到判断"
                 }
-                p {
-                    style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
-                    "竞品分析不是「采集 → 报告」两步,而是一条 "
-                    b { style: "color:{theme::INK};font-weight:600;", "证据 → 发现 → 洞察" }
-                    " 的链条。先共情收集证据,再结构化摆事实,"
-                    b { style: "color:{theme::INK};font-weight:600;", "追问「所以呢」提炼发现" }
-                    ",最后收敛成可证伪的判断。洞察是被推导出来的,不是被宣布的。"
-                }
-                div {
-                    style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:22px 0;",
-                    div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "传统 → AI" }
+                Disclosure { summary: "为什么这么做 · 方法讲解",
+                    p {
+                        style: "font:400 14px/1.8 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 14px;",
+                        "竞品分析是一条 "
+                        b { style: "color:{theme::INK};font-weight:600;", "证据 → 发现 → 洞察" }
+                        " 的链条:先共情采集证据,再结构化摆事实,追问「所以呢」提炼发现,最后收敛成可证伪的判断。洞察是被推导出来的,不是被宣布的。"
+                    }
                     div {
-                        style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};",
-                        "市场团队数周访谈 + 厚报告 → Builder 用 agent 跑通采集与结构化,人只在「发现 → 洞察」这一跳介入。"
+                        style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;",
+                        div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "传统 → AI" }
+                        div {
+                            style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};",
+                            "市场团队数周访谈 + 厚报告 → Builder 用 agent 跑通采集与结构化,人只在「发现 → 洞察」这一跳介入。"
+                        }
                     }
                 }
-                // GATE red card
+                // The key human-intervention constraint stays pinned (short).
                 div {
-                    style: "background:#F2E4DD;border-radius:{theme::RADIUS_SM};padding:16px 18px;",
+                    style: "background:#F2E4DD;border-radius:{theme::RADIUS_SM};padding:15px 17px;margin-top:auto;",
                     div {
                         style: "font:600 11px/1 {theme::FONT_MONO};letter-spacing:.12em;text-transform:uppercase;\
                                 color:#B0503A;margin-bottom:8px;",
                         "GATE · 人工介入点"
                     }
                     div {
-                        style: "font:500 14px/1.6 {theme::FONT_SANS};color:#7A3D2D;",
-                        "发现 → 洞察 判断密度最高、最易翻车,由人把关;采集与结构化交给 agent。"
+                        style: "font:500 13.5px/1.6 {theme::FONT_SANS};color:#7A3D2D;",
+                        "「发现 → 洞察」由你把关;采集与结构化交给 agent。"
                     }
                 }
             }
 
-            // ── content ─────────────────────────────────────────────────────
-            div {
-                // flow bar 界定→采集→结构化→分析→GATE→洞察
-                div {
-                    style: "background:{theme::CARD_BG};border:1px solid {theme::BORDER};border-radius:10px;\
-                            padding:16px 18px;margin-bottom:26px;",
-                    div {
-                        style: "display:flex;align-items:center;gap:0;",
-                        FlowStep { num: "01", label: "界定", emphasis: "" }
-                        FlowArrow {}
-                        FlowStep { num: "02", label: "采集", emphasis: "" }
-                        FlowArrow {}
-                        FlowStep { num: "03", label: "结构化", emphasis: "soft" }
-                        FlowArrow {}
-                        FlowStep { num: "04", label: "分析", emphasis: "warn" }
-                        // GATE pill + arrow
-                        div {
-                            style: "display:flex;flex-direction:column;align-items:center;padding:0 3px;",
-                            div {
-                                style: "font:600 7.5px/1.2 {theme::FONT_MONO};color:#fff;background:{theme::CLAY};\
-                                        border-radius:3px;padding:2px 4px;margin-bottom:2px;",
-                                "GATE"
-                            }
-                            div { style: "font:400 12px/1 {theme::FONT_MONO};color:#C2BBAB;", "→" }
-                        }
-                        FlowStep { num: "05", label: "洞察", emphasis: "dark" }
-                    }
-                    div {
-                        style: "display:flex;margin-top:10px;gap:6px;",
-                        div {
-                            style: "flex:3;font:500 9.5px/1.3 {theme::FONT_MONO};letter-spacing:.03em;color:{theme::PLACEHOLDER};\
-                                    text-align:center;background:{theme::CARD_BG_2};border-radius:4px;padding:4px 0;",
-                            "描述性 · 是什么 · agent 跑"
-                        }
-                        div {
-                            style: "flex:2;font:500 9.5px/1.3 {theme::FONT_MONO};letter-spacing:.03em;color:#B0503A;\
-                                    text-align:center;background:#F2E4DD;border-radius:4px;padding:4px 0;",
-                            "判断性 · 所以呢 · 人把关"
-                        }
-                    }
-                }
-
-                // structured · competitor matrix
-                div {
-                    style: "display:flex;align-items:baseline;gap:8px;margin-bottom:12px;",
-                    span { style: "font:700 11px/1 {theme::FONT_MONO};color:{theme::AGENT_PURPLE};", "03" }
-                    span { style: "font:600 15px/1 {theme::FONT_SERIF};color:{theme::INK};", "结构化 · 摆事实" }
-                    span { style: "font:400 12px/1 {theme::FONT_SANS};color:{theme::PLACEHOLDER};", "— 把零散观察整理成可比较的网格" }
-                }
-                div {
-                    style: "font:500 13px/1 {theme::FONT_SANS};color:{theme::INK_3};margin-bottom:16px;",
-                    "为样板项目自动生成的竞品矩阵 · "
-                    span { dangerous_inner_html: "{dot_full}" }
-                    " 强 "
-                    span { dangerous_inner_html: "{dot_half}" }
-                    " 部分 "
-                    span { dangerous_inner_html: "{dot_none}" }
-                    " 无"
-                }
-                div {
-                    style: "background:{theme::CARD_BG};border:1px solid {theme::BORDER};border-radius:8px;overflow:hidden;",
-                    table {
-                        style: "width:100%;border-collapse:collapse;font:400 13.5px/1.4 {theme::FONT_SANS};",
-                        thead {
-                            tr { style: "background:#F3EEE6;",
-                                th { style: "text-align:left;padding:14px 18px;font-weight:600;color:{theme::INK_2};", "产品" }
-                                th { style: "padding:14px 10px;font-weight:600;color:{theme::INK_2};", "实时延迟" }
-                                th { style: "padding:14px 10px;font-weight:600;color:{theme::INK_2};", "成本归因" }
-                                th { style: "padding:14px 10px;font-weight:600;color:{theme::INK_2};", "模型质量 Eval" }
-                                th { style: "padding:14px 10px;font-weight:600;color:{theme::INK_2};", "告警自动化" }
-                                th { style: "padding:14px 14px;font-weight:600;color:{theme::INK_2};", "上手成本" }
-                            }
-                        }
-                        tbody {
-                            MatrixRow { name: "Datadog", c1: dot_full, c2: dot_half, c3: dot_none, c4: dot_full, cost: "高", highlight: false }
-                            MatrixRow { name: "Grafana Cloud", c1: dot_full, c2: dot_none, c3: dot_none, c4: dot_half, cost: "中", highlight: false }
-                            MatrixRow { name: "Helicone", c1: dot_half, c2: dot_full, c3: dot_half, c4: dot_half, cost: "低", highlight: false }
-                            MatrixRow { name: "Langfuse", c1: dot_none, c2: dot_full, c3: dot_full, c4: dot_none, cost: "中", highlight: false }
-                            MatrixRow { name: "自建 Prometheus + Grafana", c1: dot_full, c2: dot_none, c3: dot_none, c4: dot_half, cost: "高", highlight: false }
-                            MatrixRow { name: "本项目 · 目标", c1: dot_full, c2: dot_full, c3: dot_half, c4: dot_full, cost: "低", highlight: true }
-                        }
-                    }
-                }
-
-                // benchmark + opportunity
-                div {
-                    style: "margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:14px;",
-                    div {
-                        style: "background:{theme::CARD_BG};border:1px solid {theme::BORDER};border-radius:{theme::RADIUS_SM};padding:18px 20px;",
-                        div { style: "font:500 12px/1 {theme::FONT_SANS};color:{theme::INK_3};margin-bottom:8px;", "主要对标对象" }
-                        div { style: "font:600 15px/1.5 {theme::FONT_SANS};color:{theme::INK};", "Datadog · Helicone · Langfuse" }
-                    }
-                    div {
-                        style: "background:#F7EDE7;border:1px solid #E6D2C8;border-radius:{theme::RADIUS_SM};padding:18px 20px;",
-                        div { style: "font:500 12px/1 {theme::FONT_SANS};color:#B0503A;margin-bottom:8px;", "缺口 = 差异化机会" }
-                        div { style: "font:500 14px/1.6 {theme::FONT_SANS};color:#7A3D2D;", "把基础设施监控与 LLM 调用的成本 / 质量归因,合并到同一个值班视图。" }
-                    }
-                }
-
-                // analysis · findings
-                div {
-                    style: "margin-top:40px;display:flex;align-items:baseline;gap:8px;margin-bottom:6px;",
-                    span { style: "font:700 11px/1 {theme::FONT_MONO};color:#B0503A;", "04" }
-                    span { style: "font:600 15px/1 {theme::FONT_SERIF};color:#7A3D2D;", "分析 · 找规律" }
-                    span {
-                        style: "font:600 10px/1.4 {theme::FONT_SANS};color:#fff;background:{theme::CLAY};border-radius:4px;padding:3px 7px;",
-                        "过去被压扁的台阶"
-                    }
-                }
-                div {
-                    style: "font:400 13px/1.7 {theme::FONT_SANS};color:{theme::INK_3};margin-bottom:16px;max-width:46em;",
-                    "对矩阵里每条对比追问「所以呢」。每条发现 = "
-                    b { style: "color:{theme::INK_2};font-weight:600;", "观察 → 含义" }
-                    ",这是从「是什么」跨到「所以呢」的关键一跳。"
-                }
-                div {
-                    style: "display:flex;flex-direction:column;gap:10px;",
-                    FindingRow { observe: "5 家竞品都把「基础设施监控」与「LLM 调用」分开看", mean: "结构性空白,不是单个功能缺失 —— 合并视图才是差异化主场" }
-                    FindingRow { observe: "成本归因仅 Helicone 部分支持,且不分模型 / 租户", mean: "「按模型 / 租户归因」是公认难点,谁先做透谁立壁垒" }
-                    FindingRow { observe: "Datadog / Grafana 上手成本高,Helicone 低但能力浅", mean: "「低上手 + 深能力」无人占据,是错位竞争窗口" }
-                    FindingRow { observe: "五家均无 agent 根因建议能力", mean: "趋势在「可观测 → 可行动」,但命中率是成败手,需自证" }
-                }
-
-                // GATE 1 divider
-                div {
-                    style: "margin-top:22px;display:flex;align-items:center;gap:12px;",
-                    div {
-                        style: "flex:none;display:flex;align-items:center;gap:7px;background:{theme::CLAY};color:#fff;\
-                                border-radius:{theme::RADIUS_SM};padding:7px 12px;",
-                        span { style: "font:600 10px/1 {theme::FONT_MONO};letter-spacing:.1em;", "GATE 1" }
-                        span { style: "font:500 11px/1 {theme::FONT_SANS};", "人工介入" }
-                    }
-                    div { style: "flex:1;height:0;border-top:1.5px dashed #D8B6A8;" }
-                    div { style: "flex:none;font:400 12px/1.5 {theme::FONT_SANS};color:{theme::INK_3};", "把发现连点成线,下判断" }
-                }
-
-                // insight · POV (dark card)
-                div {
-                    style: "margin-top:22px;display:flex;align-items:baseline;gap:8px;margin-bottom:12px;",
-                    span { style: "font:700 11px/1 {theme::FONT_MONO};color:{theme::CLAY};", "05" }
-                    span { style: "font:600 15px/1 {theme::FONT_SERIF};color:{theme::INK};", "洞察 · 下判断" }
-                    span { style: "font:400 12px/1 {theme::FONT_SANS};color:{theme::PLACEHOLDER};", "— 产物:可证伪的洞察报告,站在发现之上" }
-                }
-                div {
-                    style: "background:#23211C;border-radius:8px;padding:30px 32px;color:#F3EEE6;margin-bottom:16px;",
-                    div {
-                        style: "font:600 11px/1 {theme::FONT_MONO};letter-spacing:.16em;text-transform:uppercase;\
-                                color:#E0A78F;margin-bottom:14px;",
-                        "核心洞察 · POV"
-                    }
-                    div {
-                        style: "font:500 22px/1.6 {theme::FONT_SERIF};",
-                        "运维的痛点不是「缺数据」,而是数据散落在 4 个工具里、且缺少按"
-                        b { style: "color:#E8C3B3;", "模型 / 租户" }
-                        "的成本与质量归因。把它们收进一个值班视图,定位时间能从 38 分钟压到 15 分钟以内。"
-                    }
-                }
-                div {
-                    style: "display:grid;grid-template-columns:1fr 1fr;gap:14px;",
-                    div {
-                        style: "background:{theme::CARD_BG};border:1px solid {theme::BORDER};border-radius:{theme::RADIUS_SM};padding:20px 22px;",
-                        div { style: "font:500 12px/1 {theme::FONT_SANS};color:#5F7355;margin-bottom:10px;", "机会" }
-                        div { style: "font:400 14px/1.7 {theme::FONT_SANS};color:#3A3833;", "现有工具要么只懂基础设施、要么只懂 LLM 调用,没人把两者放进同一个值班视图。这正是缺口。" }
-                    }
-                    div {
-                        style: "background:{theme::CARD_BG};border:1px solid {theme::BORDER};border-radius:{theme::RADIUS_SM};padding:20px 22px;",
-                        div { style: "font:500 12px/1 {theme::FONT_SANS};color:#B5862F;margin-bottom:10px;", "风险假设 · 待证伪" }
-                        div { style: "font:400 14px/1.7 {theme::FONT_SANS};color:#3A3833;", "假设「单视图 + 根因建议」真能缩短定位时间;若 agent 根因建议命中率太低,洞察不成立。" }
-                    }
-                }
-
-                StepFooter { step: 1u8, state: footer_state }
+            // ── session canvas = this control point's deliverable ───────────────
+            match session {
+                Some(sess) => rsx! { SessionCanvas { session: sess, msgs } },
+                None => rsx! { WorkflowPicker {} },
             }
         }
     }
 }
 
-/// One node in the step-1 flow bar. `emphasis`: "" plain / "soft" / "warn" /
-/// "dark" map to the prototype's tints.
+/// Pre-run state: the recommended workflow + a source toggle + a 运行 button.
+/// Clicking 运行 starts the session and runs the workflow — explicit, not
+/// auto-run, so the builder confirms Hub-vs-自建 before anything executes.
 #[component]
-fn FlowStep(num: String, label: String, emphasis: String) -> Element {
-    let (wrap, num_c, label_c) = match emphasis.as_str() {
-        "soft" => (
-            "flex:1;text-align:center;background:#F4F0E7;border-radius:6px;padding:5px 2px;"
-                .to_string(),
-            theme::INK_3.to_string(),
-            theme::INK.to_string(),
+fn WorkflowPicker() -> Element {
+    let bus = use_context::<CommandBus>();
+    rsx! {
+        div {
+            style: "display:flex;flex-direction:column;min-height:0;background:{theme::CARD_BG};\
+                    border:1px solid {theme::BORDER};border-radius:10px;overflow:hidden;",
+
+            div {
+                style: "flex:none;padding:14px 18px;border-bottom:1px solid {theme::BORDER};\
+                        display:flex;align-items:center;justify-content:space-between;gap:10px;",
+                div { style: "font:600 15px/1.3 {theme::FONT_SERIF};", "竞品洞察工作流" }
+                div {
+                    style: "display:flex;gap:6px;flex:none;",
+                    span {
+                        style: "background:#F2E4DD;color:#B0503A;border:1px solid #E6D2C8;border-radius:6px;\
+                                padding:5px 10px;font:600 11.5px/1 {theme::FONT_SANS};",
+                        "WorkflowHub · 推荐"
+                    }
+                    span {
+                        style: "background:{theme::CARD_BG_2};color:{theme::INK_3};border:1px solid {theme::BORDER};\
+                                border-radius:6px;padding:5px 10px;font:500 11.5px/1 {theme::FONT_SANS};",
+                        "自建"
+                    }
+                }
+            }
+
+            div {
+                style: "flex:1;min-height:0;overflow-y:auto;padding:18px;",
+                div {
+                    style: "font:500 11px/1 {theme::FONT_MONO};color:{theme::INK_3};margin-bottom:14px;",
+                    "成熟 · v3 · 复用 12 次 · 来源 WorkflowHub"
+                }
+                div {
+                    style: "display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin-bottom:18px;",
+                    for (i , name) in CI_PHASES.iter().enumerate() {
+                        div {
+                            key: "{i}",
+                            style: "display:flex;align-items:center;gap:7px;",
+                            if i > 0 {
+                                span { style: "color:{theme::SCROLL_THUMB};", "›" }
+                            }
+                            span {
+                                style: "background:{theme::CARD_BG_2};border:1px solid {theme::BORDER};border-radius:6px;\
+                                        padding:6px 11px;font:500 12.5px/1 {theme::FONT_SANS};color:{theme::INK_2};",
+                                "{name}"
+                            }
+                        }
+                    }
+                }
+                div {
+                    style: "font:400 13px/1.7 {theme::FONT_SANS};color:{theme::INK_3};",
+                    "运行后,agent 按 5 个阶段推进,产物会落进下面这场会话 —— "
+                    b { style: "color:{theme::INK_2};font-weight:600;", "这场会话就是本环节的交付件" }
+                    "。需要时可在「发现 → 洞察」处接管。"
+                }
+            }
+
+            div {
+                style: "flex:none;padding:13px 18px;border-top:1px solid {theme::BORDER};\
+                        display:flex;align-items:center;justify-content:space-between;gap:12px;",
+                span { style: "font:400 12px/1 {theme::FONT_SANS};color:{theme::PLACEHOLDER};", "用 Hub 推荐工作流开跑,也可改为自建" }
+                button {
+                    onclick: move |_| {
+                        let sess = SessionId::new();
+                        bus.send(Command::StartSession {
+                            id: sess,
+                            stage_kind: Some(StageKind::CompetitorInsight),
+                            kind: SessionKind::Create,
+                            title: "竞品洞察 · 首轮".into(),
+                        });
+                        bus.send(Command::RunWorkflow {
+                            session: sess,
+                            spec: competitor_insight_workflow(),
+                        });
+                    },
+                    style: "background:{theme::CLAY};color:#fff;border:none;border-radius:{theme::RADIUS_SM};\
+                            padding:12px 22px;font:600 14px/1 {theme::FONT_SANS};cursor:pointer;",
+                    "运行工作流 →"
+                }
+            }
+        }
+    }
+}
+
+/// Post-run state: the workflow header + the transcript (the deliverable) + a
+/// reply box. Each phase output and builder reply is a persisted message read
+/// back through the [`ViewModel`].
+#[component]
+fn SessionCanvas(session: SessionId, msgs: Vec<SessionMsgVM>) -> Element {
+    let bus = use_context::<CommandBus>();
+    let mut draft = use_signal(String::new);
+    let dv = draft();
+
+    rsx! {
+        div {
+            style: "display:flex;flex-direction:column;min-height:0;background:{theme::CARD_BG};\
+                    border:1px solid {theme::BORDER};border-radius:10px;overflow:hidden;",
+
+            div {
+                style: "flex:none;padding:13px 18px;border-bottom:1px solid {theme::BORDER};",
+                div {
+                    style: "display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px;",
+                    div { style: "font:600 15px/1.3 {theme::FONT_SERIF};", "竞品洞察工作流" }
+                    span {
+                        style: "background:#F2E4DD;color:#B0503A;border:1px solid #E6D2C8;border-radius:6px;\
+                                padding:4px 9px;font:600 11px/1 {theme::FONT_SANS};",
+                        "WorkflowHub · 推荐"
+                    }
+                }
+                div {
+                    style: "display:flex;align-items:center;flex-wrap:wrap;gap:8px;",
+                    span { style: "font:500 10.5px/1 {theme::FONT_MONO};color:{theme::INK_3};", "成熟 · v3" }
+                    for (i , name) in CI_PHASES.iter().enumerate() {
+                        span { key: "{i}", style: "font:500 11px/1 {theme::FONT_SANS};color:#5F7355;", "✓ {name}" }
+                    }
+                }
+            }
+
+            div {
+                style: "flex:1;min-height:0;overflow-y:auto;padding:15px 16px;display:flex;\
+                        flex-direction:column;gap:11px;",
+                for (i , m) in msgs.iter().enumerate() {
+                    MsgBubble { key: "{i}", role: m.role, text: m.text.clone() }
+                }
+            }
+
+            div {
+                style: "flex:none;padding:11px 13px;border-top:1px solid {theme::BORDER};\
+                        display:flex;align-items:center;gap:9px;background:{theme::CARD_BG_2};",
+                input {
+                    value: "{dv}",
+                    oninput: move |e| draft.with_mut(|d| *d = e.value()),
+                    placeholder: "追问、补充证据,或在 GATE 处下判断…",
+                    style: "flex:1;background:#fff;border:1px solid {theme::BORDER_2};border-radius:8px;\
+                            padding:10px 13px;font:400 13px/1.3 {theme::FONT_SANS};color:{theme::INK};outline:none;",
+                }
+                button {
+                    onclick: move |_| {
+                        let text = draft();
+                        if !text.trim().is_empty() {
+                            bus.send(Command::SendSessionMessage { session, text });
+                            draft.with_mut(|d| d.clear());
+                        }
+                    },
+                    style: "flex:none;width:36px;height:36px;border-radius:8px;background:{theme::CLAY};\
+                            color:#fff;border:none;cursor:pointer;font:700 16px/1 {theme::FONT_MONO};",
+                    "↑"
+                }
+            }
+        }
+    }
+}
+
+/// One transcript bubble: Agent = left / white, Builder = right / dark ink.
+#[component]
+fn MsgBubble(role: Role, text: String) -> Element {
+    let style = match role {
+        Role::Agent => format!(
+            "max-width:86%;align-self:flex-start;background:#fff;border:1px solid {};\
+             border-radius:10px 10px 10px 3px;padding:10px 13px;font:400 12.5px/1.65 {};color:#3A3833;",
+            theme::BORDER, theme::FONT_SANS
         ),
-        "warn" => (
-            "flex:1;text-align:center;background:#F7EDE7;border-radius:6px;padding:5px 2px;"
-                .to_string(),
-            "#B0503A".to_string(),
-            "#B0503A".to_string(),
-        ),
-        "dark" => (
-            "flex:1;text-align:center;background:#23211C;border-radius:6px;padding:5px 2px;"
-                .to_string(),
-            "#E0A78F".to_string(),
-            "#F3EEE6".to_string(),
-        ),
-        _ => (
-            "flex:1;text-align:center;".to_string(),
-            theme::PLACEHOLDER.to_string(),
-            theme::INK_2.to_string(),
+        Role::Builder => format!(
+            "max-width:82%;align-self:flex-end;background:{};color:#F3EEE6;\
+             border-radius:10px 10px 3px 10px;padding:10px 13px;font:400 12.5px/1.65 {};",
+            theme::INK, theme::FONT_SANS
         ),
     };
     rsx! {
-        div { style: "{wrap}",
-            div { style: "font:600 9px/1 {theme::FONT_MONO};letter-spacing:.06em;color:{num_c};margin-bottom:5px;", "{num}" }
-            div { style: "font:600 12.5px/1.2 {theme::FONT_SANS};color:{label_c};", "{label}" }
-        }
+        div { style: "{style}", "{text}" }
     }
 }
 
-#[component]
-fn FlowArrow() -> Element {
-    rsx! {
-        div { style: "font:400 12px/1 {theme::FONT_MONO};color:#C2BBAB;padding:0 2px;", "→" }
-    }
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 // STEP 2 · 需求导入 (presentational)
@@ -589,7 +572,6 @@ fn FlowArrow() -> Element {
 
 #[component]
 pub fn Step2Requirement() -> Element {
-    let footer_state = use_signal(WizState::seed);
     let stories: [&str; 3] = [
         "作为值班工程师,我希望在一个视图里看到可用性 / 延迟 / 成本 / 进行中事故,以便不再切 4 个工具。",
         "作为值班工程师,我希望异常发生时拿到 agent 给的根因建议,以便更快定位。",
@@ -607,14 +589,16 @@ pub fn Step2Requirement() -> Element {
                     span { style: "font:400 11px/1 {theme::FONT_SANS};color:#7A3D2D;", "与竞品发现做 reconcile" }
                 }
                 h2 { style: "font:600 30px/1.3 {theme::FONT_SERIF};margin:0 0 18px;", "把需求收敛成「问题」" }
-                p {
-                    style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
-                    "不写 10 页 PRD。「原型即规格」——需求以一句问题陈述 + 几条用户故事的轻量形式导入,足够让 agent 直接开始做原型。"
-                }
-                div {
-                    style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:22px 0;",
-                    div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "传统 → AI" }
-                    div { style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};", "10 页 PRD + 层层评审 → 一句问题陈述 + 用户故事 + 一个可验证的验收信号。" }
+                Disclosure { summary: "为什么这么做 · 方法讲解",
+                    p {
+                        style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
+                        "不写 10 页 PRD。「原型即规格」——需求以一句问题陈述 + 几条用户故事的轻量形式导入,足够让 agent 直接开始做原型。"
+                    }
+                    div {
+                        style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:6px 0 0;",
+                        div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "传统 → AI" }
+                        div { style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};", "10 页 PRD + 层层评审 → 一句问题陈述 + 用户故事 + 一个可验证的验收信号。" }
+                    }
                 }
                 ControlPoint { text: "需求收敛为「可被验证的问题」,而不是一张功能清单。" }
             }
@@ -652,10 +636,7 @@ pub fn Step2Requirement() -> Element {
                         }
                         div { style: "font:500 14px/1.5 {theme::FONT_SANS};color:#7A3D2D;", "值班工程师能在单个视图、15 分钟内定位一次异常的根因。" }
                     }
-                }
-
-                StepFooter { step: 2u8, state: footer_state }
-            }
+                }            }
         }
     }
 }
@@ -671,16 +652,18 @@ pub fn Step3NorthStar(state: Signal<WizState>) -> Element {
             div { style: "{STICKY}",
                 Eyebrow { text: "步骤 03 · 北极星指标" }
                 h2 { style: "font:600 30px/1.3 {theme::FONT_SERIF};margin:0 0 18px;", "一个项目,只能有一个北极星" }
-                p {
-                    style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
-                    "北极星是全队对齐的那一颗——它必须是用户价值导向、唯一、可量化,且"
-                    b { style: "color:{theme::INK};", "从真实数据计算、难以人为修饰" }
-                    "。"
-                }
-                div {
-                    style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:22px 0;",
-                    div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "传统 → AI" }
-                    div { style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};", "一堆 KPI 各自为政 → 一个北极星统领,其余指标都为它服务。" }
+                Disclosure { summary: "为什么这么做 · 方法讲解",
+                    p {
+                        style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
+                        "北极星是全队对齐的那一颗——它必须是用户价值导向、唯一、可量化,且"
+                        b { style: "color:{theme::INK};", "从真实数据计算、难以人为修饰" }
+                        "。"
+                    }
+                    div {
+                        style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:6px 0 0;",
+                        div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "传统 → AI" }
+                        div { style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};", "一堆 KPI 各自为政 → 一个北极星统领,其余指标都为它服务。" }
+                    }
                 }
                 ControlPoint { text: "有且仅有一个北极星;它衡量「用户得到的价值」,不是产出量。" }
             }
@@ -716,10 +699,7 @@ pub fn Step3NorthStar(state: Signal<WizState>) -> Element {
                             }
                         }
                     }
-                }
-
-                StepFooter { step: 3u8, state }
-            }
+                }            }
         }
     }
 }
@@ -737,18 +717,20 @@ pub fn Step4Leading(state: Signal<WizState>) -> Element {
             div { style: "{STICKY}",
                 Eyebrow { text: "步骤 04 · 引领性指标" }
                 h2 { style: "font:600 30px/1.3 {theme::FONT_SERIF};margin:0 0 18px;", "本周我能控制的先行动作" }
-                p {
-                    style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
-                    "北极星是结果,引领指标是你"
-                    b { style: "color:{theme::INK};", "本周能主动推动" }
-                    "的先行动作。每周设一次目标,让 agent loop 去推进。"
-                }
-                div {
-                    style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:22px 0;",
-                    div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "三条铁律" }
+                Disclosure { summary: "为什么这么做 · 方法讲解",
+                    p {
+                        style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
+                        "北极星是结果,引领指标是你"
+                        b { style: "color:{theme::INK};", "本周能主动推动" }
+                        "的先行动作。每周设一次目标,让 agent loop 去推进。"
+                    }
                     div {
-                        style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};",
-                        b { "可控" } "(你本周推得动)· " b { "可统计" } "(系统自动出数)· " b { "难造假" } "(来源是真实日志,不是手填)。"
+                        style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:6px 0 0;",
+                        div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "三条铁律" }
+                        div {
+                            style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};",
+                            b { "可控" } "(你本周推得动)· " b { "可统计" } "(系统自动出数)· " b { "难造假" } "(来源是真实日志,不是手填)。"
+                        }
                     }
                 }
                 ControlPoint { text: "引领指标必须同时满足「可控 / 可统计 / 难造假」,否则不要它。" }
@@ -801,10 +783,7 @@ pub fn Step4Leading(state: Signal<WizState>) -> Element {
                             }
                         }
                     }
-                }
-
-                StepFooter { step: 4u8, state }
-            }
+                }            }
         }
     }
 }
@@ -822,16 +801,18 @@ pub fn Step5Lagging(state: Signal<WizState>) -> Element {
             div { style: "{STICKY}",
                 Eyebrow { text: "步骤 05 · 滞后性指标" }
                 h2 { style: "font:600 30px/1.3 {theme::FONT_SERIF};margin:0 0 18px;", "用来验证,不用来下周度命令" }
-                p {
-                    style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
-                    "滞后指标反映结果,验证你的引领指标是否真的有效,但你无法直接操控它。它是「验收」,不是「本周行动目标」。"
-                }
-                div {
-                    style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:22px 0;",
-                    div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "因果链" }
+                Disclosure { summary: "为什么这么做 · 方法讲解",
+                    p {
+                        style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
+                        "滞后指标反映结果,验证你的引领指标是否真的有效,但你无法直接操控它。它是「验收」,不是「本周行动目标」。"
+                    }
                     div {
-                        style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};",
-                        "引领指标 " b { style: "color:{theme::CLAY};", "驱动" } " 北极星,滞后指标 " b { style: "color:#5F7355;", "验证" } " 是否真的发生。"
+                        style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:6px 0 0;",
+                        div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "因果链" }
+                        div {
+                            style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};",
+                            "引领指标 " b { style: "color:{theme::CLAY};", "驱动" } " 北极星,滞后指标 " b { style: "color:#5F7355;", "验证" } " 是否真的发生。"
+                        }
                     }
                 }
                 ControlPoint { text: "滞后指标只用于验证;若它不动,回头质疑引领指标选错了。" }
@@ -886,10 +867,7 @@ pub fn Step5Lagging(state: Signal<WizState>) -> Element {
                             }
                         }
                     }
-                }
-
-                StepFooter { step: 5u8, state }
-            }
+                }            }
         }
     }
 }
@@ -900,7 +878,6 @@ pub fn Step5Lagging(state: Signal<WizState>) -> Element {
 
 #[component]
 pub fn Step6Prototype() -> Element {
-    let footer_state = use_signal(WizState::seed);
     // 24h call-volume bars (height%, color).
     let bars: [(&str, &str); 8] = [
         ("38%", "#4A453C"),
@@ -924,14 +901,16 @@ pub fn Step6Prototype() -> Element {
             div { style: "{STICKY}",
                 Eyebrow { text: "步骤 06 · 原型创建" }
                 h2 { style: "font:600 30px/1.3 {theme::FONT_SERIF};margin:0 0 18px;", "原型即规格,agent 产出 80%" }
-                p {
-                    style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
-                    "不靠文档对齐,直接做可点击原型、内部 dogfood。让 agent loop 跑出 80% 的初稿,你只审最后 20%——保持干净的 git checkpoint,随时可回退。"
-                }
-                div {
-                    style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:22px 0;",
-                    div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "传统 → AI" }
-                    div { style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};", "设计稿评审数轮才开发 → agent 几小时出可点击原型,用真实使用代替评审。" }
+                Disclosure { summary: "为什么这么做 · 方法讲解",
+                    p {
+                        style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
+                        "不靠文档对齐,直接做可点击原型、内部 dogfood。让 agent loop 跑出 80% 的初稿,你只审最后 20%——保持干净的 git checkpoint,随时可回退。"
+                    }
+                    div {
+                        style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:6px 0 0;",
+                        div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "传统 → AI" }
+                        div { style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};", "设计稿评审数轮才开发 → agent 几小时出可点击原型,用真实使用代替评审。" }
+                    }
                 }
                 ControlPoint { text: "用原型而非文档对齐;人只在关键逻辑 / 验收处介入。" }
             }
@@ -1012,10 +991,7 @@ pub fn Step6Prototype() -> Element {
                         style: "font:400 13.5px/1.6 {theme::FONT_SANS};color:{theme::INK_2};",
                         "✓ 可用性算法口径 · ✓ 成本归因取数 · ◻ 根因建议的误报阈值(待你确认)"
                     }
-                }
-
-                StepFooter { step: 6u8, state: footer_state }
-            }
+                }            }
         }
     }
 }
@@ -1100,25 +1076,27 @@ pub fn Step7Progress(state: Signal<WizState>) -> Element {
                     br {}
                     "每周还得定目标"
                 }
-                p {
-                    style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
-                    "进度看板是" b { style: "color:{theme::INK};", "客观观测" } "——它只告诉你「现在是多少」。但按周推进,还要主动回答看板答不了的问题:"
-                    b { style: "color:{theme::INK};", "根据上周的真实数据 + 本周要交付的特性,本周目标应该定成多少。" }
-                    "这一步是手动的,也是「计划」的核心。"
-                }
-                div {
-                    style: "background:{theme::CARD_BG};border:1px solid {theme::BORDER};border-radius:8px;padding:16px 18px;margin:18px 0;",
-                    div { style: "font:600 10px/1 {theme::FONT_MONO};letter-spacing:.12em;text-transform:uppercase;color:{theme::PLACEHOLDER};margin-bottom:9px;", "一个例子" }
-                    div {
-                        style: "font:400 13.5px/1.75 {theme::FONT_SANS};color:#3A3833;",
-                        "上周「服务停机」" b { style: "color:#B0503A;", "3 次" } "。本周上线了熔断与自动回滚,于是把本周目标从 3 次手动改为 "
-                        b { style: "color:#4A5E42;", "0 次" } "——目标的变化由数据和已交付的特性推导,而不是拍脑袋。"
+                Disclosure { summary: "为什么这么做 · 方法讲解",
+                    p {
+                        style: "font:400 15px/1.85 {theme::FONT_SANS};color:{theme::INK_2};margin:0 0 16px;",
+                        "进度看板是" b { style: "color:{theme::INK};", "客观观测" } "——它只告诉你「现在是多少」。但按周推进,还要主动回答看板答不了的问题:"
+                        b { style: "color:{theme::INK};", "根据上周的真实数据 + 本周要交付的特性,本周目标应该定成多少。" }
+                        "这一步是手动的,也是「计划」的核心。"
                     }
-                }
-                div {
-                    style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:22px 0;",
-                    div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "观测 ↔ 计划" }
-                    div { style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};", "看板回答「是多少」(观测);周一复盘回答「该是多少」(计划)。两者闭环,才不是只看不动的甘特图。" }
+                    div {
+                        style: "background:{theme::CARD_BG};border:1px solid {theme::BORDER};border-radius:8px;padding:16px 18px;margin:0 0 14px;",
+                        div { style: "font:600 10px/1 {theme::FONT_MONO};letter-spacing:.12em;text-transform:uppercase;color:{theme::PLACEHOLDER};margin-bottom:9px;", "一个例子" }
+                        div {
+                            style: "font:400 13.5px/1.75 {theme::FONT_SANS};color:#3A3833;",
+                            "上周「服务停机」" b { style: "color:#B0503A;", "3 次" } "。本周上线了熔断与自动回滚,于是把本周目标从 3 次手动改为 "
+                            b { style: "color:#4A5E42;", "0 次" } "——目标的变化由数据和已交付的特性推导,而不是拍脑袋。"
+                        }
+                    }
+                    div {
+                        style: "border-left:2px solid {theme::SCROLL_THUMB};padding:4px 0 4px 16px;margin:6px 0 0;",
+                        div { style: "font:500 12px/1.5 {theme::FONT_MONO};color:{theme::PLACEHOLDER};margin-bottom:6px;", "观测 ↔ 计划" }
+                        div { style: "font:400 13.5px/1.7 {theme::FONT_SANS};color:{theme::INK_2};", "看板回答「是多少」(观测);周一复盘回答「该是多少」(计划)。两者闭环,才不是只看不动的甘特图。" }
+                    }
                 }
                 ControlPoint { text: "每个本周目标都要挂一条依据(上周实际 + 本周交付的特性)。改目标可以,但必须说得出为什么。" }
             }
@@ -1191,10 +1169,7 @@ pub fn Step7Progress(state: Signal<WizState>) -> Element {
                 div {
                     style: "background:{sig_bg};border-radius:8px;padding:16px 20px;font:500 14px/1.6 {theme::FONT_SANS};color:#3A3833;",
                     "{sig_desc}"
-                }
-
-                StepFooter { step: 7u8, state }
-            }
+                }            }
         }
     }
 }

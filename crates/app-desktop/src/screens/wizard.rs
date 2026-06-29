@@ -179,18 +179,33 @@ pub fn WizardScreen() -> Element {
     let state = use_signal(WizState::seed);
 
     rsx! {
-        StepBar { step }
+        // Fixed app-frame (plan: 创建过程聚焦, 不滑屏). Three rows pinned to the
+        // viewport: the step bar (top), the bounded body — the ONLY scroll region,
+        // so overflow scrolls *inside* it and the bar + footer never leave view —
+        // and the pinned footer (steps 1–7; step 0 carries its own in-body CTA).
+        div {
+            style: "height:100vh;display:flex;flex-direction:column;overflow:hidden;",
+            StepBar { step }
 
-        // ── step body ──────────────────────────────────────────────────────
-        match step {
-            0 => rsx! { steps::Step0Intro {} },
-            1 => rsx! { steps::Step1Insight {} },
-            2 => rsx! { steps::Step2Requirement {} },
-            3 => rsx! { steps::Step3NorthStar { state } },
-            4 => rsx! { steps::Step4Leading { state } },
-            5 => rsx! { steps::Step5Lagging { state } },
-            6 => rsx! { steps::Step6Prototype {} },
-            _ => rsx! { steps::Step7Progress { state } },
+            // ── bounded step body (the only scrollable region) ──────────────
+            div {
+                style: "flex:1;min-height:0;overflow-y:auto;",
+                match step {
+                    0 => rsx! { steps::Step0Intro {} },
+                    1 => rsx! { steps::Step1Insight {} },
+                    2 => rsx! { steps::Step2Requirement {} },
+                    3 => rsx! { steps::Step3NorthStar { state } },
+                    4 => rsx! { steps::Step4Leading { state } },
+                    5 => rsx! { steps::Step5Lagging { state } },
+                    6 => rsx! { steps::Step6Prototype {} },
+                    _ => rsx! { steps::Step7Progress { state } },
+                }
+            }
+
+            // ── pinned footer (step 0's CTA lives in its own body) ──────────
+            if step >= 1 {
+                StepFooter { step, state }
+            }
         }
     }
 }
@@ -281,13 +296,15 @@ fn StepDot(idx: u8, current: u8, label: &'static str) -> Element {
     }
 }
 
-/// Per-step footer: ← 上一步 (hidden on step 0) + the next/confirm button.
-/// Steps 1–6 advance with `SetWizardStep { step + 1 }`; step 7's button runs the
-/// one-shot [`finish`] dispatch chain from `state`.
+/// The **pinned frame footer** (steps 1–7): ← 上一步 + the next/confirm button,
+/// held at the bottom of the [`WizardScreen`] app-frame so the body scrolls
+/// without the controls ever leaving the viewport. Step 0 carries its own in-body
+/// CTA, so the frame only mounts this for `step >= 1` — which makes the `step - 1`
+/// below always safe.
 ///
-/// `state` is read **only** on step 7 (the `finish` chain). Presentational steps
-/// (1/2/6) pass a throwaway local signal — harmless, since their button only
-/// dispatches a step bump and never touches `state`.
+/// Steps 1–6 advance with `SetWizardStep { step + 1 }`; step 7's button runs the
+/// one-shot [`finish`] dispatch chain from the frame-level `state` — the same
+/// signal the input steps mutate, so every edited metric is present at confirm.
 #[component]
 pub fn StepFooter(step: u8, state: Signal<WizState>) -> Element {
     let bus = use_context::<CommandBus>();
@@ -306,25 +323,30 @@ pub fn StepFooter(step: u8, state: Signal<WizState>) -> Element {
 
     rsx! {
         div {
-            style: "margin-top:36px;display:flex;align-items:center;gap:14px;",
-            button {
-                onclick: move |_| bus.send(Command::SetWizardStep { step: step - 1 }),
-                style: "background:transparent;color:{theme::INK_2};border:1px solid {theme::SCROLL_THUMB};\
-                        border-radius:{theme::RADIUS_SM};padding:13px 22px;\
-                        font:500 14px/1 {theme::FONT_SANS};cursor:pointer;",
-                "← 上一步"
-            }
-            button {
-                onclick: move |_| {
-                    if step >= 7 {
-                        finish(bus, state());
-                    } else {
-                        bus.send(Command::SetWizardStep { step: step + 1 });
-                    }
-                },
-                style: "background:{next_bg};color:#fff;border:none;border-radius:{theme::RADIUS_SM};\
-                        padding:13px 26px;font:600 14px/1 {theme::FONT_SANS};cursor:pointer;",
-                "{next_label}"
+            style: "flex:none;background:rgba(239,235,226,0.92);backdrop-filter:blur(12px);\
+                    border-top:1px solid {theme::BORDER};",
+            div {
+                style: "max-width:1180px;margin:0 auto;padding:14px 40px;display:flex;\
+                        align-items:center;justify-content:flex-end;gap:14px;",
+                button {
+                    onclick: move |_| bus.send(Command::SetWizardStep { step: step - 1 }),
+                    style: "background:transparent;color:{theme::INK_2};border:1px solid {theme::SCROLL_THUMB};\
+                            border-radius:{theme::RADIUS_SM};padding:13px 22px;\
+                            font:500 14px/1 {theme::FONT_SANS};cursor:pointer;",
+                    "← 上一步"
+                }
+                button {
+                    onclick: move |_| {
+                        if step >= 7 {
+                            finish(bus, state());
+                        } else {
+                            bus.send(Command::SetWizardStep { step: step + 1 });
+                        }
+                    },
+                    style: "background:{next_bg};color:#fff;border:none;border-radius:{theme::RADIUS_SM};\
+                            padding:13px 26px;font:600 14px/1 {theme::FONT_SANS};cursor:pointer;",
+                    "{next_label}"
+                }
             }
         }
     }

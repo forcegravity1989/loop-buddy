@@ -34,8 +34,8 @@ use bw_app::{App, Command, Panel, Scope, View};
 // module's `use dioxus::prelude::*` brings Dioxus's own `Signal<T>` into scope
 // (the VM signal), and a bare `Signal` import would shadow it. The bw-core
 // enum is referenced fully-qualified as `bw_core::Signal` below.
-use bw_core::model::{ProjectPhase, StageKind, StagePhase};
-use bw_core::ProjectId;
+use bw_core::model::{ProjectPhase, Role, StageKind, StagePhase};
+use bw_core::{ProjectId, SessionId};
 use bw_engine::{Engine, MockExecutor};
 use bw_store::{ProjectRow, SqliteStore};
 use dioxus::prelude::*;
@@ -146,6 +146,14 @@ pub struct OpsVM {
     pub active: Option<OpsStageVM>,
 }
 
+/// One message in the active session's transcript — the wizard's per-stage
+/// deliverable (P2-C). Mapped 1:1 from a store `MessageRow` for `active_session`.
+#[derive(Clone, PartialEq, Debug)]
+pub struct SessionMsgVM {
+    pub role: Role,
+    pub text: String,
+}
+
 /// The single render-ready state every screen reads from context. Extensible:
 /// P2-B/P2-C add wizard / ops fields here without touching the bridge plumbing.
 #[derive(Clone, PartialEq, Debug)]
@@ -155,8 +163,13 @@ pub struct ViewModel {
     pub scope: Scope,
     pub wizard_step: u8,
     pub active_project: Option<ProjectId>,
+    /// The session the wizard / ops view is currently driving, if any (P2-C).
+    pub active_session: Option<SessionId>,
     /// Render-ready project wall.
     pub projects: Vec<ProjectCardVM>,
+    /// `active_session`'s transcript — the workflow's phase outputs + the
+    /// builder's replies, oldest→newest. Empty when no session is active.
+    pub session_msgs: Vec<SessionMsgVM>,
     /// Render-ready operating view (empty unless `view == App`).
     pub ops: OpsVM,
 }
@@ -169,7 +182,9 @@ impl Default for ViewModel {
             scope: Scope::All,
             wizard_step: 0,
             active_project: None,
+            active_session: None,
             projects: Vec::new(),
+            session_msgs: Vec::new(),
             ops: OpsVM::default(),
         }
     }
@@ -190,18 +205,37 @@ pub type CommandBus = Coroutine<Command>;
 /// internal `refresh_projects` (e.g. `OpenProject`/`BackToProjects` don't).
 async fn rebuild_vm(app: &App<MockExecutor>, vm: &mut Signal<ViewModel>) {
     let s = app.snapshot();
+    let active_session = s.active_session;
     let mut next = ViewModel {
         view: s.view,
         panel: s.panel,
         scope: s.scope,
         wizard_step: s.wizard_step,
         active_project: s.active_project,
+        active_session,
         projects: Vec::new(),
+        session_msgs: Vec::new(),
         ops: OpsVM::default(),
     };
     match app.store().list_projects().await {
         Ok(rows) => next.projects = rows.iter().map(ProjectCardVM::from_row).collect(),
         Err(e) => eprintln!("list_projects: {e}"),
+    }
+    // The active session's transcript (the wizard's per-stage deliverable). One
+    // indexed read, only when a session exists — the wall/ops pay nothing for it.
+    if let Some(sess) = active_session {
+        match app.store().session_messages(sess).await {
+            Ok(rows) => {
+                next.session_msgs = rows
+                    .into_iter()
+                    .map(|m| SessionMsgVM {
+                        role: m.role,
+                        text: m.text,
+                    })
+                    .collect()
+            }
+            Err(e) => eprintln!("session_messages: {e}"),
+        }
     }
     // Operating view: only build the (potentially N+1-query) ops VM when we're
     // actually on the App screen with a project open. Otherwise it stays empty,
