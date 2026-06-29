@@ -115,6 +115,130 @@ async fn recompute_derives_and_persists_across_reopen() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// `stage_details` returns the 7 stages in `StageKind::ALL` order carrying the
+/// owns/accept/control persisted at materialize time, and `metric_trends`
+/// surfaces only the real persisted observations (two appended → two points,
+/// oldest→newest — never a fabricated multi-week series).
+#[tokio::test]
+async fn stage_details_and_metric_trend_are_read_from_real_rows() {
+    let path = tmp_db();
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    let project = ProjectId::new();
+    let metric = MetricId::new();
+
+    let store = SqliteStore::open(&path).await.unwrap();
+    store
+        .create_project(NewProject {
+            id: project,
+            name: "增长看板".into(),
+            kind: "看板 / 网页应用".into(),
+            desc: String::new(),
+        })
+        .await
+        .unwrap();
+    store
+        .upsert_metric(NewMetric {
+            id: metric,
+            project_id: project,
+            role: MetricRole::Leading,
+            stage_kind: Some(StageKind::Leading),
+            name: "每周有效对话数".into(),
+            def: String::new(),
+            target_raw: "≥5".into(),
+            amber: Default::default(),
+            last_target: String::new(),
+            driver: String::new(),
+            pos: 0,
+        })
+        .await
+        .unwrap();
+
+    // Two real observations, in time order. The display raws carry a unit suffix
+    // so we also prove the numeric-prefix parse ("6/7" → 6.0, "8" → 8.0).
+    store
+        .append_observation(metric, SourceKind::Manual, "6/7", now)
+        .await
+        .unwrap();
+    store
+        .append_observation(
+            metric,
+            SourceKind::Manual,
+            "8",
+            now + time::Duration::days(7),
+        )
+        .await
+        .unwrap();
+
+    // Materialize 7 stages, giving the Leading stage a distinct owns/accept/control
+    // so we can assert it round-trips (others left empty).
+    let stages: Vec<NewStage> = StageKind::ALL
+        .into_iter()
+        .map(|kind| {
+            let is_lead = kind == StageKind::Leading;
+            NewStage {
+                project_id: project,
+                kind,
+                phase: if is_lead {
+                    StagePhase::Iterating
+                } else {
+                    StagePhase::Running
+                },
+                progress: if is_lead { 40 } else { 0 },
+                schedule: Cadence::Weekly,
+                owns: if is_lead {
+                    "三条引领指标".into()
+                } else {
+                    String::new()
+                },
+                accept: if is_lead {
+                    "可控 / 可统计 / 难造假".into()
+                } else {
+                    String::new()
+                },
+                control: if is_lead {
+                    "三者同时满足".into()
+                } else {
+                    String::new()
+                },
+            }
+        })
+        .collect();
+    store.materialize_stages(stages).await.unwrap();
+    store.recompute_signals(project, now).await.unwrap();
+
+    // ── stage_details: 7 rows, canonical order, owns/accept/control preserved ──
+    let details = store.stage_details(project).await.unwrap();
+    assert_eq!(details.len(), 7);
+    let order: Vec<StageKind> = details.iter().map(|d| d.kind).collect();
+    assert_eq!(
+        order,
+        StageKind::ALL.to_vec(),
+        "returned in StageKind::ALL order"
+    );
+
+    let lead = details
+        .iter()
+        .find(|d| d.kind == StageKind::Leading)
+        .unwrap();
+    assert_eq!(lead.owns, "三条引领指标");
+    assert_eq!(lead.accept, "可控 / 可统计 / 难造假");
+    assert_eq!(lead.control, "三者同时满足");
+    assert_eq!(lead.progress, 40);
+    assert_eq!(lead.phase as u8, StagePhase::Iterating as u8);
+
+    // ── metric_trends: exactly the 2 real points, oldest→newest, no fabrication ──
+    let trends = store.metric_trends(project).await.unwrap();
+    let mt = trends.iter().find(|t| t.name == "每周有效对话数").unwrap();
+    assert_eq!(mt.stage_kind, Some(StageKind::Leading));
+    assert_eq!(
+        mt.trend,
+        vec![6.0_f32, 8.0_f32],
+        "two observations → two points, in order"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
 #[tokio::test]
 async fn missing_observation_is_unknown_not_green() {
     let path = tmp_db();

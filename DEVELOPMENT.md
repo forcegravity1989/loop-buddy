@@ -1,6 +1,6 @@
-# Builders' Workbench — 开发指南 (P0 + P1)
+# Builders' Workbench — 开发指南 (P0 + P1 + P2)
 
-Rust 桌面应用,按 [`plan/00-PLAN.md`](plan/00-PLAN.md) 路线图实现。当前进度:**P0 · 基座** 与 **P1 · 架构脊椎** 均已落地并通过出口测试。**M1(走通脊椎)核心已证**:架构、Command/Event、度量派生、本地持久化端到端跑通。
+Rust 桌面应用,按 [`plan/00-PLAN.md`](plan/00-PLAN.md) 路线图实现。当前进度:**P0 · 基座**、**P1 · 架构脊椎**、**P2 · 纵切 UI** 均已落地并通过出口测试。**M1(走通脊椎)已达成**:架构、Command/Event、度量派生、本地持久化、真 Dioxus 桌面 UI 端到端跑通。
 
 ## 工作区布局
 
@@ -10,8 +10,8 @@ crates/
   bw-engine/    ✅ Executor 契约 + MockExecutor + 一致性测试套件(P1)
   bw-store/     ✅ SQLite 持久化 + recompute_signals 唯一信号写入(P1)
   bw-app/       ✅ AppState + Command/Event 总线 + dispatch 用例 + subscribe(P1)
-  ui/           ◐  纯函数 selector 子集(signal_color/phase_style/sparkline/overview_attention…;buildApp 全量移植在 P2/P3)
-  app-desktop/  ◐  Dioxus 0.7 桌面壳(P0 = throwaway "hello signals" 爬坡;真壳 P2 起)
+  ui/           ◐  纯函数 selector 子集(signal_color/phase_style/sparkline/overview_attention…;buildApp 全量移植在 P3)
+  app-desktop/  ◐  Dioxus 0.7 真桌面壳(P2):Event→Signal 桥 + 项目墙 + 7步向导 + showProgStage;其余面板/Hub 在 P3
   app-web/      —  非成员,"以后也许" 留口(Tier E)
 ```
 
@@ -22,7 +22,7 @@ crates/
 ```bash
 cargo test                       # 内核 + selector + compile-fail doctests(默认成员)
 cargo test -p bw-core            # 只测派生链
-cargo run -p app-desktop         # 跑 Dioxus 爬坡 app(或 dx serve --package app-desktop)
+cargo run -p app-desktop         # 跑真桌面壳(或 dx serve --package app-desktop)
 
 # CI 同款门禁(本地可跑):
 cargo fmt --all --check
@@ -56,6 +56,15 @@ amber 带按指标可配 `RelPct | AbsPoints`:`99.9%` 可用率必须用 `AbsPoi
 - **值唯一诞生地 = append-only `observation`**;**信号唯一写入者 = `recompute_signals`**:[`bw-store`](crates/bw-store/src/sqlite.rs) 无 `set_signal`,所有 `signal/hit` 列只由 recompute 调 `bw_core::derive` 写。每表 `updated_at + rev` 留 sync 口。
 - **P1 出口闸门**:[`spine.rs`](crates/bw-app/tests/spine.rs) headless 集成测试 —— 建项目→7 步向导(录 Manual 值)→CompleteWizard→RunWorkflow(mock)→SendMessage→落 SQLite→**杀进程重开**,断言数据全在且每个持久化信号 == 独立 `bw_core` 重算(绝不编造)。
 
-## 下一步:P2 · 纵切 UI
+## P2 · 纵切 UI —— 已落地
 
-把真 Dioxus 窗口架到已证脊椎上,验证最险的 **Event→Signal 桥**:设计系统地基 + CJK 字体 `asset!()` bundle + 项目墙 + 完整 7 步向导 + 一个运营 panel-view(`showProgStage`)。出口:mac 上启动→建项目→走完向导录真值→落运营视图,每个信号点/sparkline 从录入值 derive;退出重开还原;Event↔Signal 桥无泄漏/无过度渲染。
+真 Dioxus 桌面壳架到脊椎上,最险的 **Event→Signal 桥**已证:
+
+- **桥**:单个 `use_coroutine` 独占 `App`(`!Sync` + `&mut dispatch`,绝不共享),命令进、`ViewModel`(`PartialEq` 防过度渲染)出 —— [`bridge.rs`](crates/app-desktop/src/bridge.rs)。DB 落 OS app-data 路径,退出重开还原。
+- **屏**:设计 token + 全局 CSS + 64px 图标栏([`theme.rs`](crates/app-desktop/src/theme.rs) / [`shell.rs`](crates/app-desktop/src/shell.rs) / [`icons.rs`](crates/app-desktop/src/icons.rs)) · 项目墙([`screens/projects.rs`](crates/app-desktop/src/screens/projects.rs)) · 7步向导([`screens/wizard.rs`](crates/app-desktop/src/screens/wizard.rs)) · `showProgStage`([`screens/ops.rs`](crates/app-desktop/src/screens/ops.rs))。
+- **store 读扩展**:`stage_details` + `metric_trends`(趋势只来自真实 observation,绝不编造)—— [`bw-store`](crates/bw-store/src/sqlite.rs)。
+- **P2 出口闸门**:[`p2_ops_slice.rs`](crates/bw-app/tests/p2_ops_slice.rs) headless —— 向导命令序列 → ops 三个读(stage_details/metric_trends/persisted_signals)全部从录入值 derive。真机启动冒烟通过(migrations + 初始 rebuild_vm + 持久化)。字体暂走系统 CJK 回退(真字体 bundle 待 P3)。
+
+## 下一步:P3 · 铺屏
+
+其余 10 个 panel-view + 9 个 Hub + chat + 可折叠 rail + 内联-CSS 保真调校 + 真字体 bundle。两个待拍板的产品判断:**无指标环节当前显绿**(应否改 `Unknown` 灰)、**owns/accept/control 的数据源**(向导未录,当前为空)。

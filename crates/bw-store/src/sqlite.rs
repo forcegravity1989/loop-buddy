@@ -4,9 +4,10 @@
 //! sidesteps `SQLITE_BUSY` without ceremony.
 
 use crate::{
-    cadence_text, parse_cadence, parse_sig, parse_stage_kind, sig_text, stage_kind_text,
-    MessageRow, MetricRole, MetricSignal, NewMetric, NewProject, NewSession, NewStage,
-    PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, StageSignal, Store, StoreError,
+    cadence_text, parse_cadence, parse_leading_f32, parse_sig, parse_stage_kind, sig_text,
+    stage_kind_text, MessageRow, MetricRole, MetricSignal, MetricTrend, NewMetric, NewProject,
+    NewSession, NewStage, PersistedSignals, ProjectRow, Result, SessionKind, SessionRow,
+    StageDetail, StageSignal, Store, StoreError,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -90,6 +91,14 @@ fn stage_phase_text(p: StagePhase) -> &'static str {
         StagePhase::Iterating => "iterating",
         StagePhase::Monitoring => "monitoring",
         StagePhase::Running => "running",
+    }
+}
+fn parse_stage_phase(s: &str) -> StagePhase {
+    match s {
+        "finalized" => StagePhase::Finalized,
+        "iterating" => StagePhase::Iterating,
+        "monitoring" => StagePhase::Monitoring,
+        _ => StagePhase::Running,
     }
 }
 fn role_text(r: Role) -> &'static str {
@@ -550,6 +559,79 @@ impl Store for SqliteStore {
             stages,
             metrics,
         })
+    }
+
+    async fn stage_details(&self, project: ProjectId) -> Result<Vec<StageDetail>> {
+        let rows = sqlx::query(
+            "SELECT kind, phase, progress, owns, accept, control
+             FROM op_stage WHERE project_id=?",
+        )
+        .bind(pid(project))
+        .fetch_all(&self.pool)
+        .await?;
+
+        // Index by kind so we can return them in the canonical StageKind::ALL
+        // order regardless of insertion order (mirrors the spine's expectation
+        // of 7 rows in control-point order).
+        let mut by_kind: HashMap<StageKind, StageDetail> = HashMap::new();
+        for r in rows {
+            let Some(kind) = parse_stage_kind(&r.get::<String, _>("kind")) else {
+                continue;
+            };
+            by_kind.insert(
+                kind,
+                StageDetail {
+                    kind,
+                    phase: parse_stage_phase(&r.get::<String, _>("phase")),
+                    progress: r.get::<i64, _>("progress").clamp(0, 100) as u8,
+                    owns: r.get("owns"),
+                    accept: r.get("accept"),
+                    control: r.get("control"),
+                },
+            );
+        }
+        Ok(StageKind::ALL
+            .into_iter()
+            .filter_map(|k| by_kind.remove(&k))
+            .collect())
+    }
+
+    async fn metric_trends(&self, project: ProjectId) -> Result<Vec<MetricTrend>> {
+        let metric_rows =
+            sqlx::query("SELECT id, name, stage_kind FROM metric WHERE project_id=? ORDER BY pos")
+                .bind(pid(project))
+                .fetch_all(&self.pool)
+                .await?;
+
+        let mut out = Vec::with_capacity(metric_rows.len());
+        for m in metric_rows {
+            let mid: String = m.get("id");
+            // Most-recent CAP observations, then reverse to oldest→newest so the
+            // sparkline reads left(old)→right(now). Only real persisted rows feed
+            // this — no synthetic backfill.
+            let obs = sqlx::query(
+                "SELECT raw FROM observation WHERE metric_id=? ORDER BY ts DESC, created_at DESC LIMIT ?",
+            )
+            .bind(&mid)
+            .bind(MetricTrend::CAP as i64)
+            .fetch_all(&self.pool)
+            .await?;
+            let mut trend: Vec<f32> = obs
+                .iter()
+                .rev()
+                .filter_map(|o| parse_leading_f32(&o.get::<String, _>("raw")))
+                .collect();
+            trend.shrink_to_fit();
+
+            out.push(MetricTrend {
+                name: m.get("name"),
+                stage_kind: m
+                    .get::<Option<String>, _>("stage_kind")
+                    .and_then(|s| parse_stage_kind(&s)),
+                trend,
+            });
+        }
+        Ok(out)
     }
 
     async fn list_sessions(&self, project_id: ProjectId) -> Result<Vec<SessionRow>> {

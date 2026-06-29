@@ -13,5 +13,21 @@ path = "src/main.rs"
 [dependencies]
 # Hard-pinned via the workspace (=0.7.9). `desktop` feature = wry WebView shell.
 dioxus = { workspace = true, features = ["desktop"] }
-bw-core = { workspace = true }
+# The spine: command-in / event-out brain + store + engine. The shell drives
+# these; the kernel crates themselves never see Dioxus (guard-kernel-ui-free).
+bw-app = { workspace = true }
+bw-store = { workspace = true }
+bw-engine = { workspace = true }
+# bw-core with `idgen` so the UI can mint a fresh `ProjectId::new()` for "新建项目".
+bw-core = { workspace = true, features = ["idgen"] }
 ui = { workspace = true }
+# Async runtime for the App-host coroutine (Dioxus desktop provides the reactor).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+time = { workspace = true }
+uuid = { workspace = true }
+# App-data dir for the persistent SQLite file (quit→reopen durability). Only used
+# here — never in a kernel crate.
+dirs = "5"
+# `StreamExt` for the App-host coroutine's `rx.next().await` (the documented
+# Dioxus `use_coroutine` idiom). Default features only — no executor pulled.
+futures-util = { version = "0.3", default-features = false }
