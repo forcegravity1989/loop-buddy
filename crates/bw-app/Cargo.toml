@@ -1,0 +1,21 @@
+[package]
+name = "bw-app"
+description = "Orchestration brain (UI-agnostic): AppState + Command/Event bus + use-case handlers. The shared 80% behind desktop and web."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bw-core = { workspace = true, features = ["idgen"] }
+bw-engine = { workspace = true }
+bw-store = { workspace = true }
+tokio = { workspace = true }
+time = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+bw-store = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+time = { workspace = true, features = ["std"] }

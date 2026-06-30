@@ -3,3 +3,10 @@
 node_modules/
 .vscode/
 .claude/
+
+# Rust
+/target/
+**/*.rs.bk
+# dx (Dioxus CLI) build output
+/dist/
+.dioxus/

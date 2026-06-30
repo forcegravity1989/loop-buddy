@@ -1,0 +1,15 @@
+[package]
+name = "bw-engine"
+description = "Workflow execution engine: WorkflowSpec → phase loop, the frozen Executor contract + a deterministic MockExecutor + a reusable consistency suite."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bw-core = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

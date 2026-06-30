@@ -1,0 +1,25 @@
+[package]
+name = "bw-core"
+description = "Builders' Workbench — UI-agnostic domain kernel: entities, invariants, and the metric→signal→health derivation chain."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["idgen"]
+# Native random id generation (uuid v4). Deliberately OFF for the wasm32
+# keepalive check so the kernel compiles to wasm without pulling getrandom's JS
+# backend. The pure domain + derivation logic — the part we keep alive for the
+# "以后也许的 Web" — needs no RNG; ids on the web come from the store/server.
+idgen = ["uuid/v4"]
+
+[dependencies]
+serde = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+time = { workspace = true }

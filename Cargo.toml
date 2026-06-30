@@ -1,0 +1,67 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bw-core",
+    "crates/bw-engine",
+    "crates/bw-store",
+    "crates/bw-app",
+    "crates/ui",
+    "crates/app-desktop",
+]
+# `default-members` = the headless kernel + shared UI selector. Routine
+# `cargo test` / `cargo check` therefore stay UI-free and fast — they never
+# pull the Dioxus/wry dependency tree. Build the desktop shell explicitly with
+# `cargo build -p app-desktop` (or `dx serve --package app-desktop`).
+#
+# `app-web` is intentionally NOT a member: it is the "以后也许的 Web" stub
+# (plan 04 §5). The architecture keeps the door open at zero cost (wasm32 CI
+# check + Store trait + sync columns), but it does not compile in the MVP.
+default-members = [
+    "crates/bw-core",
+    "crates/bw-engine",
+    "crates/bw-store",
+    "crates/bw-app",
+    "crates/ui",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+rust-version = "1.82"
+
+[workspace.dependencies]
+# --- Kernel deps (must stay wasm32-compilable: no async, no IO, no UI) ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", default-features = false, features = ["serde"] }
+time = { version = "0.3", default-features = false, features = ["serde"] }
+thiserror = "1"
+
+# --- Runtime deps (native shells: bw-engine / bw-store / bw-app). Not in the
+#     wasm32 keepalive set — the web swaps the Store impl + executor (Tier E). ---
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+async-trait = "0.1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+
+# --- Internal crates (path deps) ---
+# bw-core defaults to NO id-generation (no RNG) so pure consumers (ui) stay
+# wasm-clean; native crates that mint ids opt in with features = ["idgen"].
+bw-core = { path = "crates/bw-core", default-features = false }
+bw-engine = { path = "crates/bw-engine" }
+bw-store = { path = "crates/bw-store" }
+bw-app = { path = "crates/bw-app" }
+ui = { path = "crates/ui" }
+
+# --- UI stack: hard-pinned (plan 00 §8 risk-2). 0.8.0-alpha is on the way and
+#     would be a breaking change; views live only in app-desktop so a break is
+#     contained. Bump deliberately, never via `^`. ---
+dioxus = "=0.7.9"
+
+# Smaller / faster release binary for the desktop shell.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

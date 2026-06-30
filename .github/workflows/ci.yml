@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  kernel:
+    name: kernel + selectors (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # wasm32 for the "以后也许的 Web" keepalive; clippy/rustfmt for gates.
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # app-desktop needs system WebKit/GTK to build; the kernel job stays light
+      # and never compiles it. Desktop build/packaging is a separate matrix (Tier B).
+      - name: Clippy (default members)
+        run: cargo clippy --workspace --exclude app-desktop -- -D warnings
+
+      - name: Test (kernel + selectors + compile-fail doctests)
+        run: cargo test
+
+      - name: wasm32 keepalive (kernel + selectors compile to the web target)
+        run: |
+          cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features
+          cargo check -p ui --target wasm32-unknown-unknown
+
+      - name: Kernel stays UI-free
+        run: ./scripts/guard-kernel-ui-free.sh
