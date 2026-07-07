@@ -1,0 +1,22 @@
+[package]
+name = "bw-store"
+description = "Local-first persistence: a Store trait + SQLite (sqlx) impl. Append-only observations are the sole value source; recompute_signals is the sole signal writer."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bw-core = { workspace = true, features = ["idgen"] }
+sqlx = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true, features = ["std"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true }
+bw-core = { workspace = true }
+time = { workspace = true, features = ["std"] }
+uuid = { workspace = true, features = ["v4"] }

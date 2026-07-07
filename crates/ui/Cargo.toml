@@ -1,0 +1,12 @@
+[package]
+name = "ui"
+description = "Shared ViewModel + pure-function selectors (state → renderable DTO), the Rust port of the prototype buildApp() (filled in P1/P2)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Inherits the workspace default (no `idgen`/RNG) → `ui` stays wasm32-clean.
+bw-core = { workspace = true }
+serde = { workspace = true }
