@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{background:#EFEBE2;font-family:'Noto Sans SC',-apple-system,sans-serif;color:#23211C;-webkit-font-smoothing:antialiased;}
+  ::selection{background:#E7CFC4;}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-thumb{background:#D8D1C2;border-radius:6px;border:3px solid #EFEBE2;}
+</style>
+</helmet>
+
+<div style="max-width:1080px;margin:0 auto;padding:64px 40px 120px;">
+
+  <!-- ===== HERO ===== -->
+  <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.22em;text-transform:uppercase;color:#C5654A;margin-bottom:22px;">链路重构 · RESEARCH → INSIGHT</div>
+  <h1 style="font:600 42px/1.22 'Noto Serif SC',serif;margin:0 0 22px;letter-spacing:-.01em;max-width:17em;">让洞察「站在台阶上」，<br>而不是被「宣布」出来</h1>
+  <p style="font:400 17px/1.85 'Noto Sans SC';color:#57534A;max-width:40em;margin:0 0 30px;">竞品对比、需求导入、洞察报告三步读起来别扭，问题不在报告本身 —— 而在它脚下缺了一段「从事实到判断」的台阶。下面把这条被压扁的链条重新摊开，给出一套重构方案。</p>
+
+  <!-- spine: 证据 → 发现 → 洞察 -->
+  <div style="display:flex;align-items:stretch;gap:0;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;overflow:hidden;">
+    <div style="flex:1;padding:18px 22px;">
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.14em;color:#A19B8D;margin-bottom:7px;">事实层</div>
+      <div style="font:600 17px/1 'Noto Serif SC',serif;color:#23211C;">证据</div>
+    </div>
+    <div style="align-self:center;padding:0 6px;font:400 18px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</div>
+    <div style="flex:1;padding:18px 22px;background:#F7EDE7;border-left:1px solid #E6D2C8;border-right:1px solid #E6D2C8;">
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.14em;color:#B0503A;margin-bottom:7px;">规律层 · 缺失</div>
+      <div style="font:600 17px/1 'Noto Serif SC',serif;color:#B0503A;">发现</div>
+    </div>
+    <div style="align-self:center;padding:0 6px;font:400 18px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</div>
+    <div style="flex:1;padding:18px 22px;background:#23211C;">
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.14em;color:#E0A78F;margin-bottom:7px;">判断层</div>
+      <div style="font:600 17px/1 'Noto Serif SC',serif;color:#F3EEE6;">洞察</div>
+    </div>
+  </div>
+
+  <div style="height:1px;background:#E2DCCF;margin:56px 0;"></div>
+
+  <!-- ===== SECTION 1 · 诊断 ===== -->
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:18px;">
+    <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C5654A;">01</div>
+    <h2 style="font:600 27px/1.3 'Noto Serif SC',serif;margin:0;">诊断 · 一条被压扁的链条</h2>
+  </div>
+  <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 34px;">竞品分析不是一个动作，是一条容易被压扁的链条。现在的流程从「竞品对比」（约等于<b style="color:#23211C;font-weight:600;">采集</b>）直接跳到「洞察报告」（约等于<b style="color:#23211C;font-weight:600;">判断</b>），中间的结构化对比与关键发现没有留下可见台阶。读者看到结论，却看不到它怎么爬上来 —— 于是洞察像是被<b style="color:#B0503A;font-weight:600;">宣布</b>的，而不是被<b style="color:#B0503A;font-weight:600;">推导</b>出来的，自然觉得突兀。</p>
+
+  <!-- staircase -->
+  <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:38px 40px 30px;">
+    <div style="display:flex;align-items:flex-end;gap:0;">
+      <!-- 证据 -->
+      <div style="flex:1;min-height:128px;background:#fff;border:1px solid #E2DCCF;border-radius:9px;padding:18px 20px;display:flex;flex-direction:column;justify-content:flex-end;">
+        <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;color:#A19B8D;margin-bottom:9px;">第 1 级 · 证据</div>
+        <div style="font:600 16px/1.35 'Noto Serif SC',serif;color:#23211C;margin-bottom:6px;">摆事实</div>
+        <div style="font:400 12.5px/1.55 'Noto Sans SC';color:#8C867A;">竞品矩阵 · SWOT · 价格对比</div>
+        <div style="margin-top:11px;font:500 11px/1 'JetBrains Mono',monospace;color:#5F7355;">回答：是什么</div>
+      </div>
+      <div style="align-self:center;padding:0 4px;font:400 19px/1 'JetBrains Mono',monospace;color:#C2BBAB;margin-bottom:6px;">↗</div>
+      <!-- 发现 (missing) -->
+      <div style="flex:1;min-height:184px;background:#F7EDE7;border:1.5px dashed #C5654A;border-radius:9px;padding:18px 20px;display:flex;flex-direction:column;justify-content:flex-end;position:relative;">
+        <div style="position:absolute;top:14px;left:20px;right:20px;font:600 11px/1.5 'Noto Sans SC';color:#B0503A;">← 你现在缺的台阶</div>
+        <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;color:#B0503A;margin-bottom:9px;">第 2 级 · 发现</div>
+        <div style="font:600 16px/1.35 'Noto Serif SC',serif;color:#7A3D2D;margin-bottom:6px;">找规律</div>
+        <div style="font:400 12.5px/1.55 'Noto Sans SC';color:#9A6450;">关键发现清单 · 每条 = 观察 → 含义</div>
+        <div style="margin-top:11px;font:500 11px/1 'JetBrains Mono',monospace;color:#B0503A;">回答：所以呢</div>
+      </div>
+      <!-- GATE riser -->
+      <div style="align-self:center;display:flex;flex-direction:column;align-items:center;gap:6px;padding:0 4px;margin-bottom:30px;">
+        <div style="font:600 9px/1.3 'JetBrains Mono',monospace;letter-spacing:.08em;color:#fff;background:#C5654A;border-radius:5px;padding:5px 8px;text-align:center;white-space:nowrap;">GATE</div>
+        <div style="font:400 19px/1 'JetBrains Mono',monospace;color:#C2BBAB;">↗</div>
+      </div>
+      <!-- 洞察 -->
+      <div style="flex:1;min-height:228px;background:#23211C;border-radius:9px;padding:18px 20px;display:flex;flex-direction:column;justify-content:flex-end;">
+        <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;color:#E0A78F;margin-bottom:9px;">第 3 级 · 洞察</div>
+        <div style="font:600 16px/1.35 'Noto Serif SC',serif;color:#F3EEE6;margin-bottom:6px;">下判断</div>
+        <div style="font:400 12.5px/1.55 'Noto Sans SC';color:#C9BEB0;">洞察报告 —— 站在发现之上的<b style="color:#E8C3B3;font-weight:600;">产物</b></div>
+        <div style="margin-top:11px;font:500 11px/1 'JetBrains Mono',monospace;color:#E0A78F;">可一路回溯到证据</div>
+      </div>
+    </div>
+    <div style="margin-top:22px;padding-top:18px;border-top:1px solid #EBE5D9;font:400 13px/1.7 'Noto Sans SC';color:#8C867A;">补上中间这级，洞察就不再悬空：<b style="color:#57534A;">洞察 ← 发现 ← 矩阵 ← 证据</b>，读者能一路回溯，突兀感消失。</div>
+  </div>
+
+  <div style="height:1px;background:#E2DCCF;margin:56px 0;"></div>
+
+  <!-- ===== SECTION 2 · 重构 ===== -->
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:18px;">
+    <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C5654A;">02</div>
+    <h2 style="font:600 27px/1.3 'Noto Serif SC',serif;margin:0;">重构 · 把五级台阶摆出来</h2>
+  </div>
+  <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 30px;">一轮真正的竞品分析 = 五段动作。每段的产物正好是下一段的输入，天然适合做成 loop 里的<b style="color:#23211C;font-weight:600;">节点交接物</b>。第 4 级「分析」就是你被压扁掉的那层。</p>
+
+  <!-- side input callout -->
+  <div style="display:flex;justify-content:center;margin-bottom:14px;">
+    <div style="background:#F2E4DD;border:1px solid #E6D2C8;border-radius:8px;padding:11px 16px;max-width:440px;text-align:center;">
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#B0503A;margin-bottom:6px;">需求导入 · 侧输入流</div>
+      <div style="font:400 12.5px/1.5 'Noto Sans SC';color:#7A3D2D;">已有 backlog / 用户提报，在「分析」层与发现做 reconcile</div>
+      <div style="font:400 16px/1 'JetBrains Mono',monospace;color:#C5654A;margin-top:7px;">↓</div>
+    </div>
+  </div>
+
+  <!-- 5-node chain -->
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;align-items:stretch;">
+    <!-- 1 界定 -->
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:9px;padding:16px 15px;display:flex;flex-direction:column;">
+      <div style="font:700 11px/1 'JetBrains Mono',monospace;color:#B79A8C;margin-bottom:9px;">01</div>
+      <div style="font:600 16px/1.3 'Noto Serif SC',serif;margin-bottom:4px;">界定</div>
+      <div style="font:400 11px/1.5 'Noto Sans SC';color:#8C867A;margin-bottom:11px;">定边界</div>
+      <div style="font:400 12px/1.55 'Noto Sans SC';color:#57534A;flex:1;">决策问题 · 竞品分层 · 对比维度</div>
+      <div style="margin-top:11px;padding-top:9px;border-top:1px solid #EBE5D9;font:500 11px/1.4 'JetBrains Mono',monospace;color:#A19B8D;">产物 · 目标 + 清单</div>
+    </div>
+    <!-- 2 采集 -->
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:9px;padding:16px 15px;display:flex;flex-direction:column;">
+      <div style="font:700 11px/1 'JetBrains Mono',monospace;color:#B79A8C;margin-bottom:9px;">02</div>
+      <div style="font:600 16px/1.3 'Noto Serif SC',serif;margin-bottom:4px;">采集</div>
+      <div style="font:400 11px/1.5 'Noto Sans SC';color:#8C867A;margin-bottom:11px;">收证据</div>
+      <div style="font:400 12px/1.55 'Noto Sans SC';color:#57534A;flex:1;">功能走查 · 定价 · 评价 · changelog</div>
+      <div style="margin-top:11px;padding-top:9px;border-top:1px solid #EBE5D9;font:500 11px/1.4 'JetBrains Mono',monospace;color:#A19B8D;">产物 · 素材库</div>
+    </div>
+    <!-- 3 结构化 -->
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:9px;padding:16px 15px;display:flex;flex-direction:column;">
+      <div style="font:700 11px/1 'JetBrains Mono',monospace;color:#B79A8C;margin-bottom:9px;">03</div>
+      <div style="font:600 16px/1.3 'Noto Serif SC',serif;margin-bottom:4px;">结构化</div>
+      <div style="font:400 11px/1.5 'Noto Sans SC';color:#8C867A;margin-bottom:11px;">摆事实</div>
+      <div style="font:400 12px/1.55 'Noto Sans SC';color:#57534A;flex:1;">对比矩阵 · 象限图 · SWOT</div>
+      <div style="margin-top:11px;padding-top:9px;border-top:1px solid #EBE5D9;font:500 11px/1.4 'JetBrains Mono',monospace;color:#A19B8D;">产物 · 那张表</div>
+    </div>
+    <!-- 4 分析 (missing layer) -->
+    <div style="background:#F7EDE7;border:1.5px solid #C5654A;border-radius:9px;padding:16px 15px;display:flex;flex-direction:column;position:relative;">
+      <div style="position:absolute;top:-9px;left:13px;background:#C5654A;color:#fff;font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;border-radius:4px;padding:4px 7px;">你缺的层</div>
+      <div style="font:700 11px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:9px;">04</div>
+      <div style="font:600 16px/1.3 'Noto Serif SC',serif;color:#7A3D2D;margin-bottom:4px;">分析</div>
+      <div style="font:400 11px/1.5 'Noto Sans SC';color:#B0503A;margin-bottom:11px;">找规律</div>
+      <div style="font:400 12px/1.55 'Noto Sans SC';color:#7A3D2D;flex:1;">对每条问「所以呢」：门票 · 空白 · 谁强为何强 · 趋势 · 死胡同</div>
+      <div style="margin-top:11px;padding-top:9px;border-top:1px solid #E6D2C8;font:500 11px/1.4 'JetBrains Mono',monospace;color:#B0503A;">产物 · 关键发现</div>
+    </div>
+    <!-- 5 洞察 -->
+    <div style="background:#23211C;border-radius:9px;padding:16px 15px;display:flex;flex-direction:column;">
+      <div style="font:700 11px/1 'JetBrains Mono',monospace;color:#E0A78F;margin-bottom:9px;">05</div>
+      <div style="font:600 16px/1.3 'Noto Serif SC',serif;color:#F3EEE6;margin-bottom:4px;">洞察</div>
+      <div style="font:400 11px/1.5 'Noto Sans SC';color:#C9A892;margin-bottom:11px;">下判断</div>
+      <div style="font:400 12px/1.55 'Noto Sans SC';color:#C9BEB0;flex:1;">把发现连点成线，提炼少数指向行动的判断</div>
+      <div style="margin-top:11px;padding-top:9px;border-top:1px solid #3A3833;font:500 11px/1.4 'JetBrains Mono',monospace;color:#E0A78F;">产物 · 洞察报告</div>
+    </div>
+  </div>
+
+  <!-- descriptive vs judgemental bands -->
+  <div style="display:grid;grid-template-columns:3fr 2fr;gap:10px;margin-top:10px;">
+    <div style="background:#F4F0E7;border:1px solid #E6E0D3;border-radius:8px;padding:11px 16px;display:flex;align-items:center;gap:10px;">
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#8C867A;">描述性产物</div>
+      <div style="font:400 12.5px/1.4 'Noto Sans SC';color:#8C867A;">只回答「是什么」 · 可放心交给 agent 跑</div>
+    </div>
+    <div style="background:#F2E4DD;border:1px solid #E6D2C8;border-radius:8px;padding:11px 16px;display:flex;align-items:center;gap:10px;">
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#B0503A;">判断性产物</div>
+      <div style="font:400 12.5px/1.4 'Noto Sans SC';color:#7A3D2D;">回答「所以呢」 · GATE 守在这一跳</div>
+    </div>
+  </div>
+
+  <div style="margin-top:20px;background:#FBFAF6;border:1px solid #E2DCCF;border-left:3px solid #C5654A;border-radius:8px;padding:16px 20px;">
+    <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#C5654A;margin-bottom:8px;">GATE 落点</div>
+    <div style="font:400 14px/1.7 'Noto Sans SC';color:#57534A;"><b style="color:#23211C;font-weight:600;">「分析 → 洞察」之间</b>最该放人工介入 —— 从「发现」到「洞察」这一跳判断密度最高、最容易翻车，正好是 GATE1 那种「人介入」模式该守的位置。前三级（界定 / 采集 / 结构化）反而可以放心交给 agent。</div>
+  </div>
+
+  <div style="height:1px;background:#E2DCCF;margin:56px 0;"></div>
+
+  <!-- ===== SECTION 3 · 洞察报告新定位 ===== -->
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:18px;">
+    <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C5654A;">03</div>
+    <h2 style="font:600 27px/1.3 'Noto Serif SC',serif;margin:0;">洞察报告 = 产物，不是步骤</h2>
+  </div>
+  <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 30px;">它不该是下游一个独立环节，而是这条研究链<b style="color:#23211C;font-weight:600;">最顶端的产物</b>。两种用法，可以并存：</p>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    <!-- A -->
+    <div style="background:#FBFAF6;border:1.5px solid #C5654A;border-radius:11px;padding:24px 26px;position:relative;">
+      <div style="position:absolute;top:18px;right:22px;font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#fff;background:#C5654A;border-radius:5px;padding:5px 9px;">推荐</div>
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#C5654A;margin-bottom:12px;">方案 A</div>
+      <div style="font:600 19px/1.35 'Noto Serif SC',serif;margin:0 0 12px;">作为产物归档</div>
+      <div style="font:400 14px/1.8 'Noto Sans SC';color:#57534A;">挂在「分析 → 洞察」之后，作为研究链的终点产物。读者点开能一路回溯：<b style="color:#23211C;font-weight:600;">洞察 ← 发现 ← 矩阵 ← 证据</b>。不再是凭空一份报告，而是有据可查的判断。</div>
+      <div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:7px;">
+        <span style="background:#F2E4DD;color:#B0503A;border-radius:5px;padding:5px 10px;font:500 11px/1 'Noto Sans SC';">链路终点</span>
+        <span style="background:#F2E4DD;color:#B0503A;border-radius:5px;padding:5px 10px;font:500 11px/1 'Noto Sans SC';">可回溯</span>
+        <span style="background:#F2E4DD;color:#B0503A;border-radius:5px;padding:5px 10px;font:500 11px/1 'Noto Sans SC';">需求由此长出</span>
+      </div>
+    </div>
+    <!-- B -->
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:24px 26px;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#8C867A;margin-bottom:12px;">方案 B</div>
+      <div style="font:600 19px/1.35 'Noto Serif SC',serif;margin:0 0 12px;">作为版本比对能力</div>
+      <div style="font:400 14px/1.8 'Noto Sans SC';color:#57534A;">洞察每轮迭代都会被重新推导。让报告额外承担<b style="color:#23211C;font-weight:600;">跨版本比对</b>：v1 vs v2 的判断怎么演进、哪条假设被证伪、缺口窗口是否还在。把「洞察」从一次性文档变成一条<b style="color:#23211C;font-weight:600;">可追踪的判断线</b>。</div>
+      <div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:7px;">
+        <span style="background:#F4F0E7;color:#57534A;border-radius:5px;padding:5px 10px;font:500 11px/1 'Noto Sans SC';">v1 → v2 diff</span>
+        <span style="background:#F4F0E7;color:#57534A;border-radius:5px;padding:5px 10px;font:500 11px/1 'Noto Sans SC';">假设证伪追踪</span>
+        <span style="background:#F4F0E7;color:#57534A;border-radius:5px;padding:5px 10px;font:500 11px/1 'Noto Sans SC';">判断演进史</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:1px;background:#E2DCCF;margin:56px 0;"></div>
+
+  <!-- ===== SECTION 4 · 需求导入侧输入 ===== -->
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:18px;">
+    <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C5654A;">04</div>
+    <h2 style="font:600 27px/1.3 'Noto Serif SC',serif;margin:0;">需求导入 · 从主干挪到侧输入</h2>
+  </div>
+  <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 28px;">干净的链条里，需求是从洞察里长出来的（<b style="color:#23211C;font-weight:600;">洞察 → 需求</b>）。所以「需求导入」卡在「竞品」和「洞察」中间本身就是别扭点。两种解读，推荐<b style="color:#C5654A;font-weight:600;">侧输入</b>：</p>
+
+  <!-- mini diagram: trunk + side input -->
+  <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:34px 36px 30px;">
+    <!-- trunk -->
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span style="background:#fff;border:1px solid #E2DCCF;color:#23211C;border-radius:7px;padding:10px 16px;font:600 13px/1 'Noto Sans SC';">证据</span>
+      <span style="font:400 16px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <div style="position:relative;">
+        <span style="background:#F7EDE7;border:1.5px solid #C5654A;color:#7A3D2D;border-radius:7px;padding:10px 16px;font:600 13px/1 'Noto Sans SC';">发现 · 分析层</span>
+      </div>
+      <span style="font:400 16px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="background:#23211C;color:#F3EEE6;border-radius:7px;padding:10px 16px;font:600 13px/1 'Noto Sans SC';">洞察</span>
+      <span style="font:400 16px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="background:#fff;border:1px solid #E2DCCF;color:#23211C;border-radius:7px;padding:10px 16px;font:600 13px/1 'Noto Sans SC';">北极星</span>
+    </div>
+    <!-- side input riser, roughly under 发现 -->
+    <div style="display:flex;margin-top:4px;">
+      <div style="width:96px;"></div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
+        <div style="font:400 15px/1 'JetBrains Mono',monospace;color:#C5654A;transform:rotate(180deg);">↓</div>
+        <div style="background:#F2E4DD;border:1px solid #E6D2C8;border-radius:7px;padding:10px 15px;">
+          <div style="font:600 11px/1 'Noto Sans SC';color:#B0503A;margin-bottom:3px;">需求导入（侧输入）</div>
+          <div style="font:400 11.5px/1.5 'Noto Sans SC';color:#7A3D2D;">已有 backlog / 用户提报 · 与发现 reconcile</div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:24px;padding-top:18px;border-top:1px solid #EBE5D9;display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+      <div>
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5F7355;margin-bottom:7px;">解读一 · 独立输入流（推荐）</div>
+        <div style="font:400 13px/1.7 'Noto Sans SC';color:#57534A;">需求是另一条流，被拿来跟竞品发现做交叉验证。画成<b style="color:#23211C;font-weight:600;">侧输入</b>，在分析层汇入，而不是串在主干上。</div>
+      </div>
+      <div>
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#B5862F;margin-bottom:7px;">解读二 · 两步倒了</div>
+        <div style="font:400 13px/1.7 'Noto Sans SC';color:#57534A;">若需求确实由本轮研究产生，那顺序应是 <b style="color:#23211C;font-weight:600;">洞察 → 需求</b>，把「需求导入」整体挪到洞察之后。</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:1px;background:#E2DCCF;margin:56px 0;"></div>
+
+  <!-- ===== SECTION 5 · 环节序列 before/after ===== -->
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:18px;">
+    <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C5654A;">05</div>
+    <h2 style="font:600 27px/1.3 'Noto Serif SC',serif;margin:0;">映射到环节 · 新的序列</h2>
+  </div>
+  <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 30px;">五段 = 五个节点，每个节点的产物 = 下个节点的入参，断层就消失了。落到看板的顶部环节条上：</p>
+
+  <!-- BEFORE -->
+  <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:22px 24px;margin-bottom:14px;">
+    <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;margin-bottom:16px;">现在 · 顺序别扭</div>
+    <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+      <span style="display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #E2DCCF;border-radius:20px;padding:6px 13px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#EFE9DD;color:#8C867A;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">01</span><span style="font:500 12px/1 'Noto Sans SC';color:#57534A;">竞品对比</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="display:flex;align-items:center;gap:7px;background:#FBF1D8;border:1.5px dashed #C9A227;border-radius:20px;padding:6px 13px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#EAD6A0;color:#8A6A1A;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">02</span><span style="font:500 12px/1 'Noto Sans SC';color:#8A6A1A;">需求导入</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#B5862F;">别扭</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="display:flex;align-items:center;gap:7px;background:#FBF1D8;border:1.5px dashed #C9A227;border-radius:20px;padding:6px 13px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#EAD6A0;color:#8A6A1A;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">03</span><span style="font:500 12px/1 'Noto Sans SC';color:#8A6A1A;">洞察报告</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#B5862F;">悬空</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #E2DCCF;border-radius:20px;padding:6px 13px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#EFE9DD;color:#8C867A;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">04</span><span style="font:500 12px/1 'Noto Sans SC';color:#57534A;">北极星</span></span>
+      <span style="font:400 12px/1 'Noto Sans SC';color:#C2BBAB;">…</span>
+    </div>
+  </div>
+
+  <!-- AFTER -->
+  <div style="background:#23211C;border-radius:11px;padding:22px 24px;">
+    <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#E0A78F;margin-bottom:16px;">重构后 · 一条可回溯的链</div>
+    <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+      <span style="display:flex;align-items:center;gap:8px;background:#C5654A;border-radius:20px;padding:7px 15px 7px 8px;"><span style="width:20px;height:20px;border-radius:50%;background:#fff;color:#C5654A;font:700 9px/20px 'JetBrains Mono',monospace;text-align:center;">01</span><span style="font:600 12.5px/1 'Noto Sans SC';color:#fff;">竞品洞察</span><span style="font:400 10px/1 'Noto Sans SC';color:#F2D3C6;">证据→发现→洞察</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#6B655C;">→</span>
+      <span style="display:flex;align-items:center;gap:7px;background:#3A3833;border-radius:20px;padding:7px 14px 7px 8px;"><span style="width:20px;height:20px;border-radius:50%;background:#54504A;color:#E0D8CC;font:600 9px/20px 'JetBrains Mono',monospace;text-align:center;">02</span><span style="font:500 12px/1 'Noto Sans SC';color:#E0D8CC;">北极星</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#6B655C;">→</span>
+      <span style="display:flex;align-items:center;gap:7px;background:#3A3833;border-radius:20px;padding:7px 14px 7px 8px;"><span style="width:20px;height:20px;border-radius:50%;background:#54504A;color:#E0D8CC;font:600 9px/20px 'JetBrains Mono',monospace;text-align:center;">03</span><span style="font:500 12px/1 'Noto Sans SC';color:#E0D8CC;">引领指标</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#6B655C;">→</span>
+      <span style="display:flex;align-items:center;gap:7px;background:#3A3833;border-radius:20px;padding:7px 14px 7px 8px;"><span style="width:20px;height:20px;border-radius:50%;background:#54504A;color:#E0D8CC;font:600 9px/20px 'JetBrains Mono',monospace;text-align:center;">04</span><span style="font:500 12px/1 'Noto Sans SC';color:#E0D8CC;">滞后指标</span></span>
+      <span style="font:400 12px/1 'Noto Sans SC';color:#6B655C;">…</span>
+    </div>
+    <div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:8px;">
+      <span style="background:rgba(224,167,143,0.14);border:1px solid #5A463C;color:#E8C3B3;border-radius:6px;padding:6px 11px;font:400 11.5px/1.4 'Noto Sans SC';">「竞品洞察」内含五级台阶 · GATE 守在 发现→洞察</span>
+      <span style="background:rgba(224,167,143,0.14);border:1px solid #5A463C;color:#E8C3B3;border-radius:6px;padding:6px 11px;font:400 11.5px/1.4 'Noto Sans SC';">需求导入 = 侧输入，在分析层汇入</span>
+      <span style="background:rgba(224,167,143,0.14);border:1px solid #5A463C;color:#E8C3B3;border-radius:6px;padding:6px 11px;font:400 11.5px/1.4 'Noto Sans SC';">洞察报告 = 该环节的产物</span>
+    </div>
+  </div>
+
+  <!-- closer -->
+  <div style="margin-top:40px;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:11px;padding:28px 32px;display:flex;align-items:center;gap:20px;">
+    <div style="font:600 30px/1 'JetBrains Mono',monospace;color:#C5654A;flex:none;">“</div>
+    <div style="font:500 19px/1.6 'Noto Serif SC',serif;color:#7A3D2D;">你不缺一份更好的洞察报告 —— 你缺它脚下那两层（矩阵 + 发现）的<b style="color:#B0503A;">可见台阶</b>。</div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>
