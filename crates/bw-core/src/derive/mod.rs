@@ -22,7 +22,7 @@ mod sealed;
 mod target;
 
 pub use eval::{evaluate_metric, reduce_worst_of, MetricEvaluation};
-pub use measure::{measure, MeasuredValue, Measurement, MetricShape};
+pub use measure::{measure, parse_magnitude, MeasuredValue, Measurement, MetricShape};
 pub use sealed::Derived;
 pub use target::{
     parse_target, parse_target_with, AmberBand, Comparator, Target, TargetParseError,

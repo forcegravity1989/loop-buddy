@@ -15,7 +15,9 @@
 
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
-use bw_core::model::{Cadence, ProjectPhase, Role, Signal, SourceKind, StageKind, StagePhase};
+use bw_core::model::{
+    Cadence, ProjectPhase, Role, SessionStatus, Signal, SourceKind, StageKind, StagePhase,
+};
 use bw_core::{MetricId, ProjectId, SessionId};
 use time::OffsetDateTime;
 
@@ -103,6 +105,9 @@ pub struct ProjectRow {
     pub cold_step: Option<u8>,
     pub north_star: String,
     pub ns_def: String,
+    /// 对标竞品 / 机会缺口 — real wizard inputs (step 1 / 2).
+    pub benchmark: String,
+    pub opportunity: String,
     /// Cached derived signal (read-only; recompute is authoritative).
     pub signal: Option<Signal>,
     pub weekly_signal: Option<Signal>,
@@ -110,12 +115,45 @@ pub struct ProjectRow {
 
 #[derive(Clone, Debug)]
 pub struct MetricSignal {
+    pub id: MetricId,
     pub name: String,
+    pub role: MetricRole,
+    pub def: String,
     pub value_raw: String,
     pub target_raw: String,
+    pub last_target: String,
+    pub driver: String,
     pub stage_kind: Option<StageKind>,
+    /// Source of the latest observation (`None` = no observation yet).
+    pub source: Option<SourceKind>,
     pub signal: Option<Signal>,
     pub hit: Option<bool>,
+}
+
+/// One materialized control point, as the operating view reads it.
+#[derive(Clone, Debug)]
+pub struct StageRow {
+    pub kind: StageKind,
+    pub phase: StagePhase,
+    pub progress: u8,
+    /// History of hand-set progress values (progress is *plan* data, not a
+    /// signal — setting it by hand is legitimate; the history stays real).
+    pub trend: Vec<f32>,
+    pub schedule: Cadence,
+    pub owns: String,
+    pub accept: String,
+    pub control: String,
+    pub routine_signal: Option<Signal>,
+}
+
+/// One append-only observation, for trends (sparkline history) and the routine
+/// feed. Real recorded values only — the UI never invents a series.
+#[derive(Clone, Debug)]
+pub struct ObservationRow {
+    pub metric_id: MetricId,
+    pub ts: OffsetDateTime,
+    pub source: SourceKind,
+    pub raw: String,
 }
 
 #[derive(Clone, Debug)]
@@ -139,6 +177,8 @@ pub struct SessionRow {
     pub id: SessionId,
     pub title: String,
     pub kind: SessionKind,
+    pub stage_kind: Option<StageKind>,
+    pub status: SessionStatus,
 }
 
 #[derive(Clone, Debug)]
@@ -159,8 +199,20 @@ pub trait Store: Send + Sync {
         cold_step: Option<u8>,
     ) -> Result<()>;
     async fn set_north_star(&self, id: ProjectId, north_star: &str, ns_def: &str) -> Result<()>;
+    /// 对标竞品 + 机会缺口 (wizard step 1/2 real inputs).
+    async fn set_brief(&self, id: ProjectId, benchmark: &str, opportunity: &str) -> Result<()>;
 
     async fn upsert_metric(&self, m: NewMetric) -> Result<()>;
+    /// Week-plan edit (wizard step 7 / progress panel): update a metric's
+    /// target + this week's driver, keeping the previous target as `last_target`.
+    /// Touches no value and no signal — recompute re-derives against the new target.
+    async fn update_week_plan(
+        &self,
+        metric: MetricId,
+        new_target: &str,
+        last_target: &str,
+        driver: &str,
+    ) -> Result<()>;
     /// Append-only — the sole birthplace of a value.
     async fn append_observation(
         &self,
@@ -171,6 +223,15 @@ pub trait Store: Send + Sync {
     ) -> Result<()>;
 
     async fn materialize_stages(&self, stages: Vec<NewStage>) -> Result<()>;
+    /// 进度管理 lever: hand-set a stage's progress (plan data, NOT a signal —
+    /// signals stay derive-only). Appends the value to the stage's real
+    /// progress-trend history.
+    async fn set_stage_progress(
+        &self,
+        project_id: ProjectId,
+        kind: StageKind,
+        progress: u8,
+    ) -> Result<()>;
 
     async fn ensure_session(&self, s: NewSession) -> Result<()>;
     async fn append_message(&self, session_id: SessionId, role: Role, text: &str) -> Result<()>;
@@ -195,6 +256,11 @@ pub trait Store: Send + Sync {
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>>;
     async fn list_projects(&self) -> Result<Vec<ProjectRow>>;
     async fn persisted_signals(&self, id: ProjectId) -> Result<PersistedSignals>;
+    /// The seven materialized control points (empty while cold-starting).
+    async fn list_stages(&self, project_id: ProjectId) -> Result<Vec<StageRow>>;
+    /// All observations of a project's metrics, oldest first — the real series
+    /// behind sparklines and the routine feed.
+    async fn list_observations(&self, project_id: ProjectId) -> Result<Vec<ObservationRow>>;
     async fn list_sessions(&self, project_id: ProjectId) -> Result<Vec<SessionRow>>;
     async fn session_messages(&self, session_id: SessionId) -> Result<Vec<MessageRow>>;
 }
@@ -236,6 +302,22 @@ pub(crate) fn parse_stage_kind(s: &str) -> Option<StageKind> {
     StageKind::ALL
         .into_iter()
         .find(|k| stage_kind_text(*k) == s)
+}
+
+pub(crate) fn session_status_text(s: SessionStatus) -> &'static str {
+    match s {
+        SessionStatus::Active => "active",
+        SessionStatus::Archived => "archived",
+        SessionStatus::Done => "done",
+    }
+}
+
+pub(crate) fn parse_session_status(s: &str) -> SessionStatus {
+    match s {
+        "archived" => SessionStatus::Archived,
+        "done" => SessionStatus::Done,
+        _ => SessionStatus::Active,
+    }
 }
 
 pub(crate) fn cadence_text(c: &Cadence) -> String {

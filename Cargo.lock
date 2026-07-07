@@ -51,8 +51,13 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 name = "app-desktop"
 version = "0.0.0"
 dependencies = [
+ "bw-app",
  "bw-core",
+ "bw-engine",
+ "bw-store",
  "dioxus",
+ "time",
+ "tokio",
  "ui",
 ]
 
@@ -4847,6 +4852,7 @@ version = "0.0.0"
 dependencies = [
  "bw-core",
  "serde",
+ "time",
 ]
 
 [[package]]

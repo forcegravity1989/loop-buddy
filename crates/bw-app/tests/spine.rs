@@ -65,6 +65,7 @@ async fn full_spine_survives_kill_and_reopen() {
             id: project,
             name: "增长看板".into(),
             kind: "看板 / 网页应用".into(),
+            desc: "面向增长团队的实时看板".into(),
         })
         .await
         .unwrap();
@@ -84,6 +85,7 @@ async fn full_spine_survives_kill_and_reopen() {
         app.dispatch(Command::UpsertManualMetric {
             id: leading,
             name: "每周有效对话数".into(),
+            def: "7日窗口内 ≥2 轮的对话数".into(),
             role: MetricRole::Leading,
             stage_kind: Some(StageKind::Leading),
             target: "≥5".into(),

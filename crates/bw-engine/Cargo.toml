@@ -10,6 +10,9 @@ rust-version.workspace = true
 bw-core = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+# MockExecutor's optional simulated latency (tokio::time). bw-engine is a native
+# runtime crate (not in the wasm32 keepalive set), so this is consistent.
+tokio = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

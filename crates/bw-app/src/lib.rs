@@ -23,8 +23,9 @@ use time::OffsetDateTime;
 use tokio::sync::broadcast;
 
 /// Top-level workspace view (only meaningful for `hub == workspace`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum View {
+    #[default]
     Projects,
     Wizard,
     App,
@@ -49,10 +50,14 @@ pub enum Scope {
 
 /// UI → kernel intents.
 pub enum Command {
+    /// App start: load the project wall and re-derive every running project's
+    /// signals against the *current* clock (staleness must show on the wall).
+    Boot,
     CreateProject {
         id: ProjectId,
         name: String,
         kind: String,
+        desc: String,
     },
     SetWizardStep {
         step: u8,
@@ -61,16 +66,43 @@ pub enum Command {
         value: String,
         def: String,
     },
+    /// 对标竞品 + 机会缺口 (wizard steps 1/2 — the real inputs behind the
+    /// prototype's demo matrix).
+    UpdateBrief {
+        benchmark: String,
+        opportunity: String,
+    },
     /// Record a metric + its current value as an append-only Manual observation
-    /// (wizard steps 4/5/7). Signal is derived, never set here.
+    /// (wizard steps 4/5). Signal is derived, never set here.
     UpsertManualMetric {
         id: MetricId,
         name: String,
+        def: String,
         role: MetricRole,
         stage_kind: Option<StageKind>,
         target: String,
         amber: AmberBand,
         value: String,
+    },
+    /// Week-plan edit (step 7 / progress panel): new target + this week's
+    /// driver. No value is touched; recompute re-derives against the new target.
+    UpdateWeekPlan {
+        metric: MetricId,
+        new_target: String,
+        last_target: String,
+        driver: String,
+    },
+    /// The monitoring loop's heartbeat: a new Manual value is born as an
+    /// observation, then every signal is re-derived. Never sets a signal.
+    RecordObservation {
+        metric: MetricId,
+        value: String,
+    },
+    /// 进度管理 lever: hand-set plan progress for one stage (plan data, not a
+    /// signal — the derive chain is untouched).
+    SetStageProgress {
+        stage_kind: StageKind,
+        progress: u8,
     },
     CompleteWizard,
     StartSession {
@@ -95,6 +127,8 @@ pub enum Command {
     BackToProjects,
     SetPanel(Panel),
     SetScope(Scope),
+    /// Select (or clear) the chat-focused session in the operating view.
+    SelectSession(Option<SessionId>),
 }
 
 /// Kernel → UI facts (already happened).
@@ -114,6 +148,7 @@ pub enum Event {
         status: String,
     },
     WorkflowDone,
+    WorkflowFailed(String),
     WeeklyReviewAnnotated,
 }
 
@@ -206,13 +241,32 @@ impl<E: Executor> App<E> {
 
     pub async fn dispatch(&mut self, cmd: Command) -> Result<(), AppError> {
         match cmd {
-            Command::CreateProject { id, name, kind } => {
+            Command::Boot => {
+                // Staleness is clock-relative: what was green last week may be
+                // amber-capped today. Re-derive every running project on boot so
+                // the wall never shows a stale cache as fresh truth.
+                let projects = self.store.list_projects().await?;
+                for p in &projects {
+                    if p.phase == ProjectPhase::Running {
+                        self.store.recompute_signals(p.id, now()).await?;
+                    }
+                }
+                self.refresh_projects().await?;
+                self.emit(Event::ProjectsChanged);
+            }
+
+            Command::CreateProject {
+                id,
+                name,
+                kind,
+                desc,
+            } => {
                 self.store
                     .create_project(NewProject {
                         id,
                         name,
                         kind,
-                        desc: String::new(),
+                        desc,
                     })
                     .await?;
                 self.state.active_project = Some(id);
@@ -238,9 +292,19 @@ impl<E: Executor> App<E> {
                 self.emit(Event::ProjectUpdated(p));
             }
 
+            Command::UpdateBrief {
+                benchmark,
+                opportunity,
+            } => {
+                let p = self.active()?;
+                self.store.set_brief(p, &benchmark, &opportunity).await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
             Command::UpsertManualMetric {
                 id,
                 name,
+                def,
                 role,
                 stage_kind,
                 target,
@@ -248,6 +312,16 @@ impl<E: Executor> App<E> {
                 value,
             } => {
                 let p = self.active()?;
+                // Idempotency guard: re-confirming a wizard step must not mint a
+                // duplicate observation — only a *changed* value is a new fact.
+                let latest = self
+                    .store
+                    .persisted_signals(p)
+                    .await?
+                    .metrics
+                    .into_iter()
+                    .find(|m| m.id == id)
+                    .map(|m| m.value_raw);
                 self.store
                     .upsert_metric(NewMetric {
                         id,
@@ -255,7 +329,7 @@ impl<E: Executor> App<E> {
                         role,
                         stage_kind,
                         name,
-                        def: String::new(),
+                        def,
                         target_raw: target,
                         amber,
                         last_target: String::new(),
@@ -265,8 +339,51 @@ impl<E: Executor> App<E> {
                     .await?;
                 // The value is born as an explicit Manual observation; the signal
                 // it implies is computed later by recompute, never set here.
+                let value = value.trim();
+                if !value.is_empty() && latest.as_deref() != Some(value) {
+                    self.store
+                        .append_observation(id, SourceKind::Manual, value, now())
+                        .await?;
+                }
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::UpdateWeekPlan {
+                metric,
+                new_target,
+                last_target,
+                driver,
+            } => {
+                let p = self.active()?;
                 self.store
-                    .append_observation(id, SourceKind::Manual, &value, now())
+                    .update_week_plan(metric, &new_target, &last_target, &driver)
+                    .await?;
+                // The target moved ⇒ the same value may now mean a different
+                // signal. Re-derive; never patch by hand.
+                self.store.recompute_signals(p, now()).await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::RecordObservation { metric, value } => {
+                let p = self.active()?;
+                let value = value.trim();
+                if value.is_empty() {
+                    return Err(AppError::Invalid("观测值不能为空".into()));
+                }
+                self.store
+                    .append_observation(metric, SourceKind::Manual, value, now())
+                    .await?;
+                self.store.recompute_signals(p, now()).await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::SetStageProgress {
+                stage_kind,
+                progress,
+            } => {
+                let p = self.active()?;
+                self.store
+                    .set_stage_progress(p, stage_kind, progress)
                     .await?;
                 self.emit(Event::ProjectUpdated(p));
             }
@@ -311,40 +428,50 @@ impl<E: Executor> App<E> {
                     project: p,
                     workflow: spec.id,
                 };
-                let mut run_events = Vec::new();
-                self.engine
-                    .run_workflow(&spec, &ctx, |e| run_events.push(e))
-                    .await
-                    .map_err(|e| AppError::Engine(e.to_string()))?;
-
-                // Drain run events into persisted messages + app events (no async
-                // inside the engine callback).
-                for e in run_events {
-                    match e {
+                // Progress events are emitted LIVE from inside the engine
+                // callback (broadcast::send is sync), so a subscriber watches
+                // phases advance while the run is still going. Only persistence
+                // (async) is deferred to after the run.
+                let live = self.events.clone();
+                let mut completed: Vec<bw_engine::PhaseOutput> = Vec::new();
+                let run = self
+                    .engine
+                    .run_workflow(&spec, &ctx, |e| match e {
                         RunEvent::PhaseStarted { idx, name } => {
-                            self.emit(Event::WorkflowProgress {
+                            let _ = live.send(Event::WorkflowProgress {
                                 phase_idx: idx,
                                 status: format!("started:{name}"),
                             });
                         }
                         RunEvent::PhaseCompleted { idx, output } => {
-                            self.store
-                                .append_message(session, Role::Agent, &output.text)
-                                .await?;
-                            self.emit(Event::SessionMessageAdded {
-                                session,
-                                role: Role::Agent,
-                                text: output.text,
-                            });
-                            self.emit(Event::WorkflowProgress {
+                            let _ = live.send(Event::WorkflowProgress {
                                 phase_idx: idx,
                                 status: "completed".into(),
                             });
+                            completed.push(output);
                         }
-                        RunEvent::WorkflowDone { .. } => self.emit(Event::WorkflowDone),
-                        RunEvent::WorkflowFailed { error } => return Err(AppError::Engine(error)),
-                    }
+                        RunEvent::WorkflowDone { .. } => {
+                            let _ = live.send(Event::WorkflowDone);
+                        }
+                        RunEvent::WorkflowFailed { error } => {
+                            let _ = live.send(Event::WorkflowFailed(error));
+                        }
+                    })
+                    .await;
+
+                // Persist whatever phases completed, even on failure — the run
+                // history must not silently vanish.
+                for output in completed {
+                    self.store
+                        .append_message(session, Role::Agent, &output.text)
+                        .await?;
+                    self.emit(Event::SessionMessageAdded {
+                        session,
+                        role: Role::Agent,
+                        text: output.text,
+                    });
                 }
+                run.map_err(|e| AppError::Engine(e.to_string()))?;
             }
 
             Command::SendSessionMessage { session, text } => {
@@ -400,9 +527,18 @@ impl<E: Executor> App<E> {
                     .await?
                     .ok_or(AppError::NotFound)?;
                 self.state.active_project = Some(id);
+                self.state.active_session = None;
+                self.state.panel = Panel::Progress;
+                self.state.scope = Scope::All;
                 self.state.view = match proj.phase {
                     ProjectPhase::ColdStart => View::Wizard,
-                    ProjectPhase::Running => View::App,
+                    ProjectPhase::Running => {
+                        // Freshness is clock-relative — re-derive on open so a
+                        // value that went stale since last time shows as such.
+                        self.store.recompute_signals(id, now()).await?;
+                        self.refresh_projects().await?;
+                        View::App
+                    }
                 };
                 self.state.wizard_step = proj.cold_step.unwrap_or(0);
                 self.emit(Event::ViewChanged(self.state.view));
@@ -410,11 +546,15 @@ impl<E: Executor> App<E> {
 
             Command::BackToProjects => {
                 self.state.view = View::Projects;
+                self.state.active_project = None;
+                self.state.active_session = None;
+                self.refresh_projects().await?;
                 self.emit(Event::ViewChanged(View::Projects));
             }
 
             Command::SetPanel(p) => self.state.panel = p,
             Command::SetScope(s) => self.state.scope = s,
+            Command::SelectSession(s) => self.state.active_session = s,
         }
         Ok(())
     }

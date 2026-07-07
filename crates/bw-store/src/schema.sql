@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS project (
     cold_step          INTEGER,                  -- wizard step when cold-starting
     north_star         TEXT NOT NULL DEFAULT '',
     ns_def             TEXT NOT NULL DEFAULT '',
+    benchmark          TEXT NOT NULL DEFAULT '', -- 对标竞品(向导 step1 真输入)
+    opportunity        TEXT NOT NULL DEFAULT '', -- 机会缺口(向导 step2 真输入)
     signal             TEXT,                     -- derived cache (L6)
     weekly_signal      TEXT,                     -- derived snapshot
     signal_derived_rev INTEGER,

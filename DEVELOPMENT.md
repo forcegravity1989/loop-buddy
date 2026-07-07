@@ -1,61 +1,79 @@
-# Builders' Workbench — 开发指南 (P0 + P1)
+# Builders' Workbench — 开发指南 (P0 + P1 + P2)
 
-Rust 桌面应用,按 [`plan/00-PLAN.md`](plan/00-PLAN.md) 路线图实现。当前进度:**P0 · 基座** 与 **P1 · 架构脊椎** 均已落地并通过出口测试。**M1(走通脊椎)核心已证**:架构、Command/Event、度量派生、本地持久化端到端跑通。
+Rust 桌面应用,按 [`plan/00-PLAN.md`](plan/00-PLAN.md) 路线图实现。当前进度:**P0 · 基座**、**P1 · 架构脊椎**、**P2 · 纵切 UI(创建引导流 + 监控运行流)** 均已落地。真 Dioxus 桌面壳已架上已证脊椎;原型中的模拟项目**没有**被移植 —— 项目墙从空态开始,一切数据都由真实输入产生。
 
 ## 工作区布局
 
 ```
 crates/
-  bw-core/      ✅ 领域内核 + 度量派生链(P0 主交付)
-  bw-engine/    ✅ Executor 契约 + MockExecutor + 一致性测试套件(P1)
-  bw-store/     ✅ SQLite 持久化 + recompute_signals 唯一信号写入(P1)
-  bw-app/       ✅ AppState + Command/Event 总线 + dispatch 用例 + subscribe(P1)
-  ui/           ◐  纯函数 selector 子集(signal_color/phase_style/sparkline/overview_attention…;buildApp 全量移植在 P2/P3)
-  app-desktop/  ◐  Dioxus 0.7 桌面壳(P0 = throwaway "hello signals" 爬坡;真壳 P2 起)
+  bw-core/      ✅ 领域内核 + 度量派生链(P0)+ parse_magnitude(P2,趋势数值化)
+  bw-engine/    ✅ Executor 契约 + MockExecutor(P2:可配延迟,驱动实时进度流)
+  bw-store/     ✅ SQLite 持久化;P2 增读侧:list_stages / list_observations /
+                   metric 全字段;写侧:set_brief / update_week_plan / set_stage_progress
+  bw-app/       ✅ Command/Event 总线;P2 新命令:Boot / UpdateBrief / UpdateWeekPlan /
+                   RecordObservation / SetStageProgress / SelectSession;RunWorkflow 实时 emit
+  ui/           ✅ 纯函数 selector + P2 ViewModel 层(ui::vm:项目卡/环节轴/MetricVm/
+                   周计划/观测 feed/时间标签,全部单测)
+  app-desktop/  ✅ P2 真壳【Dioxus 0.7 desktop】:kernel 桥(独立 tokio 线程) +
+                   项目墙 / 8步向导 / 运营视图(进度·工作流·定时任务)
   app-web/      —  非成员,"以后也许" 留口(Tier E)
 ```
 
-`default-members` 只含无头内核 + ui,故日常 `cargo test` / `cargo check` **不编译 Dioxus**,快且稳。桌面壳需显式 `-p app-desktop`。
+`default-members` 只含无头内核 + ui,故日常 `cargo test` / `cargo check` **不编译 Dioxus**。桌面壳需显式 `-p app-desktop`。
 
 ## 常用命令
 
 ```bash
-cargo test                       # 内核 + selector + compile-fail doctests(默认成员)
-cargo test -p bw-core            # 只测派生链
-cargo run -p app-desktop         # 跑 Dioxus 爬坡 app(或 dx serve --package app-desktop)
+cargo test                       # 内核 + selector + vm + compile-fail doctests
+cargo test -p bw-app             # 脊椎(spine)+ 监控回路(monitor)集成测试
+cargo run -p app-desktop         # 启动桌面应用(BW_DB=path 可覆盖数据库位置)
 
 # CI 同款门禁(本地可跑):
 cargo fmt --all --check
 cargo clippy --workspace --exclude app-desktop -- -D warnings
-cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features   # Web 留口保活
-./scripts/guard-kernel-ui-free.sh                                             # 内核禁依赖 UI
+cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features
+cargo check -p ui --target wasm32-unknown-unknown
+./scripts/guard-kernel-ui-free.sh
 ```
 
-## P0 两条不可妥协 —— 已钉进类型
+## 两条不可妥协 —— 已钉进类型(P0 起不变)
 
-1. **UI 无关内核**(plan `00 §3`①):内核只依赖 `serde/time/uuid/thiserror`;`guard-kernel-ui-free.sh` 在 CI 拦截任何 dioxus/tauri/wry/leptos 渗入;wasm32 check 免费保活 Web。
-2. **健康永远 derive,绝不手设**(plan `§2.5`):`Signal{Green,Amber,Red,Unknown}` 只能经封口的 [`Derived<Signal>`](crates/bw-core/src/derive/sealed.rs) 进入缓存字段;`Derived::seal` 是 `pub(in crate::derive)`,**全 workspace 无法在 derive 外构造健康信号** —— 由 `sealed.rs` 上的两个 `compile_fail` doctest 在 `cargo test` 中证明。
+1. **UI 无关内核**:内核 crate 禁依赖 dioxus/tauri/wry/leptos(CI guard);wasm32 check 保活 Web 留口。
+2. **健康永远 derive**:`Signal` 只能经封口的 `Derived<Signal>` 进入缓存;store 无 `set_signal`;`recompute_signals` 是唯一信号写入者。
 
-## 度量派生链(L0→L6)落点
+## P2 · 两条真实流(本阶段主交付)
 
-| 层 | 实现 | 文件 |
+**创建引导流**(`view=wizard`,8 步全真输入 —— 原型连项目名都是写死的,这里不是):
+
+| 步 | 收集 | 落库命令 |
 |---|---|---|
-| L1 归一标量 + 过期 | `measure()` | [`derive/measure.rs`](crates/bw-core/src/derive/measure.rs) |
-| L2 目标 mini-DSL | `parse_target()`(`≥5 ≤24h <800 100% 7/7 清零 全覆盖 ↑ 跟踪`) | [`derive/target.rs`](crates/bw-core/src/derive/target.rs) |
-| L2 值-比-目标 | `evaluate_metric()`(Missing→Unknown;stale→Amber 封顶) | [`derive/eval.rs`](crates/bw-core/src/derive/eval.rs) |
-| L4/L6 worst-of | `reduce_worst_of()`(含 Unknown 档,空→Unknown) | [`derive/eval.rs`](crates/bw-core/src/derive/eval.rs) |
-| L5 环节 health | `OpStage::health()` 纯投影 | [`model.rs`](crates/bw-core/src/model.rs) |
-| L6 项目信号 | `Project::derive_signal()` | [`model.rs`](crates/bw-core/src/model.rs) |
+| 0 引子 | 项目名 / 类型 / 一句话描述 | `CreateProject` |
+| 1 竞品洞察 | 对标竞品名单 | `UpdateBrief` |
+| 2 差距分析 | 机会缺口 | `UpdateBrief` |
+| 3 北极星 | 指标 + 计算口径 | `UpdateNorthStar` |
+| 4 引领指标 | name/def/当前值/目标 ×n | `UpsertManualMetric`(值→Manual 观测) |
+| 5 滞后指标 | 同上 | `UpsertManualMetric` |
+| 6 原型即规格 | (方法论,无输入) | — |
+| 7 周计划+自评 | 本周目标/抓手;green/amber/red 自评 | `UpdateWeekPlan` → `CompleteWizard` → `AnnotateWeeklyReview` |
 
-amber 带按指标可配 `RelPct | AbsPoints`:`99.9%` 可用率必须用 `AbsPoints`,否则扁平 10% 会把 ~90% 误判为绿(`availability_band_needs_abs_points` 测试钉死此陷阱)。
+自评映射保持诚实:绿=不覆写;黄/红=更悲观 override 连理由入 `weekly_review` 审计。
+`UpsertManualMetric` 带幂等守卫:重复确认同一步不会刷重复观测,只有**变化的值**才是新事实。
 
-## P1 架构脊椎 —— 关键落点
+**监控运行流**(`view=app`):
 
-- **命令进、事件出**:[`bw-app`](crates/bw-app/src/lib.rs) `App::dispatch(Command)` / `subscribe()`(tokio broadcast)/ `snapshot()`。UI 永不直接碰 store/engine。
-- **Executor = 冻结的跨团队契约**:[`bw-engine`](crates/bw-engine/src/lib.rs) `Executor` trait + `MockExecutor` + [`contract::check`](crates/bw-engine/src/contract.rs) 一致性套件。同事的真实现过同一套测即可热插拔(Tier C),`App<E>` 泛型零改动。
-- **值唯一诞生地 = append-only `observation`**;**信号唯一写入者 = `recompute_signals`**:[`bw-store`](crates/bw-store/src/sqlite.rs) 无 `set_signal`,所有 `signal/hit` 列只由 recompute 调 `bw_core::derive` 写。每表 `updated_at + rev` 留 sync 口。
-- **P1 出口闸门**:[`spine.rs`](crates/bw-app/tests/spine.rs) headless 集成测试 —— 建项目→7 步向导(录 Manual 值)→CompleteWizard→RunWorkflow(mock)→SendMessage→落 SQLite→**杀进程重开**,断言数据全在且每个持久化信号 == 独立 `bw_core` 重算(绝不编造)。
+- **监控回路**:指标卡「记录本周值」→ `RecordObservation`(append-only)→ `recompute_signals` → 信号翻转沿 L2→L4→L6 上卷,项目墙圆点同步变色。sparkline/feed 全部来自真实观测史(`list_observations`),一个观测=一个点,绝不插值。
+- **运行回路**:环节「▶ 运行」→ `StartSession` + `RunWorkflow`(每环节内置标准工作流模板,方法论内容非模拟数据)→ MockExecutor(450ms/阶段)→ 进度事件**实时**流向 UI 横幅 → 产出落为会话消息,chat 可继续对话(mock 回复;真执行器=同事团队经 `Executor` trait 热插拔)。
+- **周期性诚实**:`Boot` 与 `OpenProject` 都对运营中项目重算信号 —— 过期观测按节奏窗口封顶 Amber,绝不把陈旧缓存当新鲜真相。
+- 环节进度是**计划数据**(非信号),`SetStageProgress` 手动维护并累计真实趋势史。
 
-## 下一步:P2 · 纵切 UI
+## P1 出口闸门(不变)+ P2 新增测试
 
-把真 Dioxus 窗口架到已证脊椎上,验证最险的 **Event→Signal 桥**:设计系统地基 + CJK 字体 `asset!()` bundle + 项目墙 + 完整 7 步向导 + 一个运营 panel-view(`showProgStage`)。出口:mac 上启动→建项目→走完向导录真值→落运营视图,每个信号点/sparkline 从录入值 derive;退出重开还原;Event↔Signal 桥无泄漏/无过度渲染。
+- [`spine.rs`](crates/bw-app/tests/spine.rs):建项目→向导→workflow→落库→杀进程重开,持久化信号==独立重算。
+- [`monitor.rs`](crates/bw-app/tests/monitor.rs)(P2):RecordObservation 翻转信号且上卷到项目级;UpdateWeekPlan 移动目标后重派生;运行进度事件先于持久化消息(证实时流);Boot 重算 + brief 持久化。
+- `ui::vm` 单测:趋势=观测史、无数据=Unknown 不冒充绿、feed 最新条回声当前信号、周计划只取引领指标。
+
+## 已知待办(P3 及以后)
+
+- 产物 / 版本面板、工作流库、9 个 Hub 全屏、右栏目录树 —— P3 铺屏(占位已注明,不放模拟数据)。
+- CJK 字体 `asset!()` 本地 bundle(当前用系统字族回退:Songti/PingFang 等)—— P3 保真税。
+- Connector/Cron 真喂指标 —— Tier D;签名/打包 —— Tier B。

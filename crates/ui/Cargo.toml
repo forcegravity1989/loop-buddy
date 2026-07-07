@@ -10,3 +10,5 @@ rust-version.workspace = true
 # Inherits the workspace default (no `idgen`/RNG) → `ui` stays wasm32-clean.
 bw-core = { workspace = true }
 serde = { workspace = true }
+# Same no-default-features config as bw-core (no std clock reads) — wasm32-clean.
+time = { workspace = true }

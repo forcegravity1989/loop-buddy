@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod vm;
+
 use bw_core::model::{Signal, StageKind, StagePhase};
 use serde::Serialize;
 

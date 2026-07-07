@@ -1,6 +1,6 @@
 [package]
 name = "app-desktop"
-description = "Desktop shell (Dioxus 0.7 / wry WebView). P0: the throwaway 'hello signals' ramp; P2 onward: the real shell."
+description = "Desktop shell (Dioxus 0.7 / wry WebView). P2: the real shell — project wall, creation wizard flow, operating/monitoring view on the proven spine."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -13,5 +13,10 @@ path = "src/main.rs"
 [dependencies]
 # Hard-pinned via the workspace (=0.7.9). `desktop` feature = wry WebView shell.
 dioxus = { workspace = true, features = ["desktop"] }
-bw-core = { workspace = true }
+bw-core = { workspace = true, features = ["idgen"] }
+bw-engine = { workspace = true }
+bw-store = { workspace = true }
+bw-app = { workspace = true }
 ui = { workspace = true }
+tokio = { workspace = true }
+time = { workspace = true, features = ["std"] }

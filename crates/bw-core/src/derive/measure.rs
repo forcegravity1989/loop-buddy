@@ -72,6 +72,13 @@ pub fn measure(
     }
 }
 
+/// Parse just the magnitude of a display value (`"60%"→60`, `"5/7"→0.714…`,
+/// `"842ms"→842`, `"8"→8`). For plotting real observation history as a trend —
+/// same normalization as [`measure`], no freshness context needed.
+pub fn parse_magnitude(raw: &str) -> Option<f64> {
+    parse_scalar(raw).map(|s| s.magnitude)
+}
+
 /// How long until a source of the given cadence is considered stale.
 fn cadence_window(c: &Cadence) -> Duration {
     match c {
