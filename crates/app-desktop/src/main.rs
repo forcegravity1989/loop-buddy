@@ -11,14 +11,13 @@ mod screens;
 mod templates;
 mod theme;
 
-use bw_app::{Command, View};
-use bw_core::ProjectId;
+use bw_app::View;
 use dioxus::prelude::*;
 use kernel::{RunVm, UiNote, Vm};
 use screens::chrome::{BootFrame, FatalFrame, Hub, HubStub, IconRail, Toast};
+use screens::create::Create;
 use screens::op::Op;
 use screens::wall::Wall;
-use screens::wizard::Wizard;
 use tokio::sync::broadcast::error::RecvError;
 
 fn main() {
@@ -97,27 +96,15 @@ fn Root() -> Element {
     let ink = theme::INK;
     let sans = theme::SANS;
 
-    let on_start = {
-        let kernel = kernel.clone();
-        move |(name, kind, desc): (String, String, String)| {
-            kernel.send(Command::CreateProject {
-                id: ProjectId::new(),
-                name,
-                kind,
-                desc,
-            });
-            kernel.send(Command::SetWizardStep { step: 1 });
-            creating.set(false);
-        }
-    };
-
-    let show_wizard = creating() || v.view == View::Wizard;
-    let wizard_vm = if v.view == View::Wizard {
-        v.wizard.clone()
-    } else {
-        None
-    };
-    let show_op = !show_wizard && v.view == View::App;
+    // `creating` is a one-shot local bridge for the gap between clicking "+
+    // 新建项目" and the kernel confirming `CreateProject`. Once the kernel
+    // catches up, drop the override so a later `BackToProjects`/
+    // `CompleteCreation` isn't stuck showing Create forever.
+    if creating() && v.view == View::Create {
+        creating.set(false);
+    }
+    let show_create = creating() || v.view == View::Create;
+    let show_op = !show_create && v.view == View::App;
 
     rsx! {
         GlobalChrome {}
@@ -132,10 +119,10 @@ fn Root() -> Element {
                     FatalFrame { msg: v.fatal.clone().unwrap_or_default() }
                 } else if hub() != Hub::Workspace {
                     HubStub { hub: hub() }
-                } else if show_wizard {
-                    Wizard {
-                        vm: wizard_vm,
-                        on_start,
+                } else if show_create {
+                    Create {
+                        vm: v.create.clone(),
+                        run: run(),
                         on_cancel: move |_| creating.set(false),
                     }
                 } else if show_op {

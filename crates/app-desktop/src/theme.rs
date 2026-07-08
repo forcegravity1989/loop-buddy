@@ -76,13 +76,6 @@ pub fn btn_primary() -> String {
     )
 }
 
-/// A quiet bordered button.
-pub fn btn_ghost() -> String {
-    format!(
-        "cursor:pointer;background:transparent;color:{INK_2};border:1px solid {BORDER_DEEP};border-radius:8px;padding:9px 18px;font-size:13px;"
-    )
-}
-
 /// Text input / textarea base.
 pub fn input() -> String {
     format!(

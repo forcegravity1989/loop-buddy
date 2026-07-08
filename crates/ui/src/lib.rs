@@ -7,7 +7,7 @@
 
 pub mod vm;
 
-use bw_core::model::{Signal, StageKind, StagePhase};
+use bw_core::model::{Signal, StageKind};
 use serde::Serialize;
 
 /// `sigColor(s)` → hex. The fourth state, `Unknown`, gets the warm-paper grey
@@ -21,14 +21,17 @@ pub fn signal_color(s: Signal) -> &'static str {
     }
 }
 
-/// `phaseStyle(p)` → (background, foreground) for the stage maturity badge
-/// (plan `§5`). Phase drives badge color only — **not** health (that's L5).
-pub fn phase_style(p: StagePhase) -> (&'static str, &'static str) {
-    match p {
-        StagePhase::Finalized => ("#E7EDE2", "#4A5E42"),
-        StagePhase::Iterating => ("#F2E4DD", "#B0503A"),
-        StagePhase::Monitoring => ("#F5ECD6", "#8A6720"),
-        StagePhase::Running => ("#EDE8DE", "#6B6557"),
+/// (background, foreground, border) tint for a stage's role chip, derived
+/// from its brand color (体系重构 v2 `capTint`/`capDark`/`capTintBd`). Replaces
+/// the old maturity-phase badge — a stage's badge is now its role, not a
+/// hand-tracked lifecycle state.
+pub fn stage_tint(kind: StageKind) -> (&'static str, &'static str, &'static str) {
+    match kind {
+        StageKind::Prototype => ("#F7EDE7", "#7A3D2D", "#E6D2C8"),
+        StageKind::Build => ("#F5ECD6", "#8A6720", "#E8D9B5"),
+        StageKind::Optimize => ("#F1F4EC", "#4A5E42", "#DCE5D2"),
+        StageKind::Growth => ("#E9F0F1", "#3E6167", "#D3E0E2"),
+        StageKind::Ops => ("#F5F1E8", "#6B655C", "#E6E0D3"),
     }
 }
 
@@ -220,22 +223,22 @@ mod tests {
     fn green_hides_only_trouble_speaks() {
         let stages = [
             StageAttention {
-                kind: StageKind::CompetitorInsight,
+                kind: StageKind::Prototype,
                 signal: Signal::Green,
                 active_sessions: 0,
             },
             StageAttention {
-                kind: StageKind::Leading,
+                kind: StageKind::Build,
                 signal: Signal::Amber,
                 active_sessions: 0,
             },
             StageAttention {
-                kind: StageKind::PrototypeCreate,
+                kind: StageKind::Optimize,
                 signal: Signal::Green,
                 active_sessions: 2,
             },
             StageAttention {
-                kind: StageKind::ProgressMgmt,
+                kind: StageKind::Ops,
                 signal: Signal::Unknown,
                 active_sessions: 0,
             },
@@ -246,6 +249,14 @@ mod tests {
         // amber + unknown surface as "needs watching"
         assert_eq!(a.watch.len(), 2);
         // the stage with an active session asks for you (even though it's green)
-        assert_eq!(a.needs_you, vec![StageKind::PrototypeCreate]);
+        assert_eq!(a.needs_you, vec![StageKind::Optimize]);
+    }
+
+    #[test]
+    fn stage_tint_covers_all_five() {
+        for k in StageKind::ALL {
+            let (bg, fg, bd) = stage_tint(k);
+            assert!(!bg.is_empty() && !fg.is_empty() && !bd.is_empty());
+        }
     }
 }

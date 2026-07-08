@@ -1,17 +1,22 @@
-//! `view=app` — the operating view: the real monitoring/run loop.
+//! `view=app` — the operating view: the real monitoring/run loop, now over
+//! the five stage=role=methodology stages (体系重构 v2).
 //!
 //! Everything rendered here traces back to persisted rows: signals from the
 //! derive cache, trends from observation history, feeds from real records,
-//! chat transcripts from the message table. The two live loops:
+//! chat transcripts from the message table, methodology text from
+//! `StageKind`'s own static metadata. The two live loops:
 //!
 //! * **监控**: 记录观测值 → RecordObservation → recompute → 信号翻转可见;
 //! * **运行**: 运行标准工作流 → MockExecutor 流式推进 → 阶段横幅实时更新 →
 //!   产出落为会话消息(同事团队的真执行器经同一 trait 热插拔)。
+//!
+//! Plus the handoff loop: 勾 DoD → 交棒(可带险,永不静默拦截)→ 下一段自动换装,
+//! `运维 → 原型` 回流闭环。
 
 use crate::kernel::{ChatVm, Kernel, OpVm, RunVm, StageVm};
 use crate::{templates, theme};
 use bw_app::{Command, Panel, Scope};
-use bw_core::model::{FeedLevel, Signal};
+use bw_core::model::{FeedLevel, Signal, StageKind};
 use bw_core::SessionId;
 use bw_store::SessionKind;
 use dioxus::prelude::*;
@@ -51,6 +56,8 @@ fn TopBar(op: OpVm) -> Element {
     let sig = ui::signal_color(op.project_signal);
     let dot = theme::dot(sig, 10);
     let chip = theme::chip("#E7EDE2", "#4A5E42");
+    let (role_bg, role_fg, _) = ui::stage_tint(op.active_stage);
+    let role_chip = theme::chip(role_bg, role_fg);
     rsx! {
         div {
             style: "display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid {border};flex:none;",
@@ -62,7 +69,8 @@ fn TopBar(op: OpVm) -> Element {
             span { style: "{dot}" }
             span { style: "font-family:{serif};font-size:17px;font-weight:600;", "{op.name}" }
             span { style: "{chip}", "运营中" }
-            span { style: "color:{ink3};font-size:12px;", "{op.kind}" }
+            span { style: "{role_chip}", "当前 {op.active_stage.role_short()}" }
+            span { style: "color:{ink3};font-size:12px;", "{op.kind} · {op.cycle.label()}" }
             if !op.north_star.is_empty() {
                 span {
                     style: "margin-left:auto;color:{ink3};font-size:12px;max-width:380px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
@@ -98,23 +106,33 @@ fn StageAxis(op: OpVm) -> Element {
                         k.send(Command::SetPanel(Panel::Progress));
                     }
                 },
-                "◎ 全部环节 · 总览"
+                "◎ 全部阶段 · 总览"
             }
             for item in op.nav.clone() {
                 {
                     let k = k.clone();
-                    let active = op.scope == Scope::Stage(item.n);
-                    let (bg, fg) = if active { (ink, "#FFF") } else { ("transparent", ink2) };
+                    let active = op.scope == Scope::Stage(item.kind);
+                    let is_hot = item.kind == op.active_stage;
+                    let (tint_bg, tint_fg, tint_bd) = ui::stage_tint(item.kind);
+                    let (bg, fg, bd) = if active {
+                        (tint_bg, tint_fg, item.color)
+                    } else {
+                        ("transparent", ink2, tint_bd)
+                    };
                     let color = ui::signal_color(item.signal);
                     let dot = theme::dot(color, 7);
-                    let n = item.n;
+                    let kind = item.kind;
                     rsx! {
                         button {
-                            key: "{n}",
-                            style: "cursor:pointer;border:1px solid {border};border-radius:8px;background:{bg};color:{fg};padding:6px 11px;font-size:12px;display:flex;align-items:center;gap:7px;white-space:nowrap;",
-                            onclick: move |_| k.send(Command::SetScope(Scope::Stage(n))),
+                            key: "{item.n}",
+                            title: "{item.role_short}",
+                            style: "cursor:pointer;border:1.4px solid {bd};border-radius:8px;background:{bg};color:{fg};padding:6px 11px;font-size:12px;display:flex;align-items:center;gap:7px;white-space:nowrap;",
+                            onclick: move |_| k.send(Command::SetScope(Scope::Stage(kind))),
                             span { style: "{dot}" }
-                            span { "{item.n:02} {item.label}" }
+                            span { "{item.n} {item.label}" }
+                            if is_hot {
+                                span { style: "font-size:9px;color:{item.color};", "●当前" }
+                            }
                             if item.active > 0 {
                                 span {
                                     style: "background:#C5654A;color:#FFF;border-radius:8px;font-size:10px;padding:0 5px;line-height:15px;",
@@ -208,7 +226,7 @@ fn HealthOverview(op: OpVm) -> Element {
                             style: "width:100%;text-align:left;background:{card_alt};border:1px solid #DBD4C5;border-radius:8px;padding:9px 10px;margin-bottom:7px;cursor:pointer;",
                             onclick: move |_| {
                                 if let Some(kind) = stage {
-                                    k.send(Command::SetScope(Scope::Stage(kind.index())));
+                                    k.send(Command::SetScope(Scope::Stage(kind)));
                                 }
                                 k.send(Command::SetPanel(Panel::Workflow));
                                 k.send(Command::SelectSession(Some(sid)));
@@ -221,20 +239,19 @@ fn HealthOverview(op: OpVm) -> Element {
             }
         }
         if !op.attention.watch.is_empty() {
-            div { style: "font-size:11px;color:{ink3};margin:8px 0 6px;", "环节信号 · 需关注" }
+            div { style: "font-size:11px;color:{ink3};margin:8px 0 6px;", "阶段信号 · 需关注" }
             for (kind, sig) in op.attention.watch.clone() {
                 {
                     let k = k.clone();
                     let color = ui::signal_color(sig);
                     let dot = theme::dot(color, 8);
-                    let n = kind.index();
                     let label = kind.label();
                     let sig_label = ui::vm::signal_label(sig);
                     rsx! {
                         button {
-                            key: "{n}",
+                            key: "{kind.index()}",
                             style: "width:100%;text-align:left;background:transparent;border:1px solid #ECE6DA;border-radius:8px;padding:8px 10px;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:8px;",
-                            onclick: move |_| k.send(Command::SetScope(Scope::Stage(n))),
+                            onclick: move |_| k.send(Command::SetScope(Scope::Stage(kind))),
                             span { style: "{dot}" }
                             span { style: "font-size:12.5px;", "{label}" }
                             span { style: "margin-left:auto;font-size:11px;color:{ink3};", "{sig_label}" }
@@ -245,7 +262,7 @@ fn HealthOverview(op: OpVm) -> Element {
         }
         div {
             style: "font-size:11px;color:{ink3};margin-top:12px;border-top:1px dashed #E2DCCF;padding-top:10px;",
-            "{op.attention.steady} 个环节平稳 · {op.archived} 条已归档"
+            "{op.attention.steady} 个阶段平稳 · {op.archived} 条已归档"
         }
     }
 }
@@ -254,23 +271,23 @@ fn HealthOverview(op: OpVm) -> Element {
 fn StageSessions(op: OpVm) -> Element {
     let ink3 = theme::INK_3;
     let agent = theme::AGENT;
-    let Scope::Stage(n) = op.scope else {
+    let Scope::Stage(kind) = op.scope else {
         return rsx! { span {} };
     };
     let active_id = op.chat.as_ref().map(|c| c.id);
     let mine: Vec<SessionCardVm> = op
         .sessions
         .iter()
-        .filter(|s| s.stage_kind.map(|x| x.index()) == Some(n))
+        .filter(|s| s.stage_kind == Some(kind))
         .cloned()
         .collect();
     let creates: Vec<SessionCardVm> = mine.iter().filter(|s| s.create).cloned().collect();
     let opts: Vec<SessionCardVm> = mine.iter().filter(|s| !s.create).cloned().collect();
     let empty = mine.is_empty();
     rsx! {
-        div { style: "font-size:11px;color:{ink3};letter-spacing:.06em;margin-bottom:8px;", "环节记录" }
+        div { style: "font-size:11px;color:{ink3};letter-spacing:.06em;margin-bottom:8px;", "阶段记录" }
         if empty {
-            div { style: "font-size:12px;color:{ink3};line-height:1.7;", "该环节暂无记录。到「工作流」面板运行一轮标准工作流,记录会出现在这里。" }
+            div { style: "font-size:12px;color:{ink3};line-height:1.7;", "该阶段暂无记录。到「工作流」面板运行一轮标准工作流,记录会出现在这里。" }
         }
         if !creates.is_empty() {
             div { style: "font-size:11px;color:{ink3};margin:6px 0;", "创建" }
@@ -312,12 +329,12 @@ fn SessionCard(s: SessionCardVm, selected: bool) -> Element {
 #[component]
 fn Center(op: OpVm, run: RunVm) -> Element {
     let stage = match op.scope {
-        Scope::Stage(n) => op.stages.iter().find(|s| s.n == n).cloned(),
+        Scope::Stage(kind) => op.stages.iter().find(|s| s.kind == kind).cloned(),
         Scope::All => None,
     };
     match (op.panel, stage) {
         (Panel::Progress, None) => rsx! { ProgressAll { op } },
-        (Panel::Progress, Some(s)) => rsx! { ProgressStage { s } },
+        (Panel::Progress, Some(s)) => rsx! { ProgressStage { op, s } },
         (Panel::Workflow, s) => rsx! { WorkflowPanel { op, stage: s, run } },
         (Panel::Routine, None) => rsx! { RoutineAll { op } },
         (Panel::Routine, Some(s)) => rsx! { RoutineStage { s } },
@@ -353,6 +370,7 @@ fn ProgressAll(op: OpVm) -> Element {
     let mono = theme::MONO;
     let bar_color = ui::progress_color(op.overall);
     let overall = op.overall;
+    let mix = op.cycle.mix();
     let stats = [
         ("工作流累计", op.stats.workflows_total),
         ("定时任务运行中", op.stats.routines_active),
@@ -366,10 +384,21 @@ fn ProgressAll(op: OpVm) -> Element {
                 span { style: "font-family:{mono};font-size:14px;", "{overall}%" }
             }
             div {
-                style: "height:8px;border-radius:4px;background:#E6E0D2;overflow:hidden;margin-bottom:6px;",
+                style: "height:8px;border-radius:4px;background:#E6E0D2;overflow:hidden;margin-bottom:10px;",
                 div { style: "height:100%;width:{overall}%;background:{bar_color};" }
             }
-            div { style: "font-size:11.5px;color:{ink3};", "各环节进度的平均值;环节进度在「进度 × 环节」里手动维护 —— 它是计划数据,不是信号。" }
+            div {
+                style: "display:flex;align-items:center;gap:8px;",
+                span { style: "font-size:11px;color:{ink3};", "{op.cycle.label()} 配比" }
+                div {
+                    style: "flex:1;display:flex;height:6px;border-radius:3px;overflow:hidden;max-width:220px;",
+                    for (i, sk) in StageKind::ALL.iter().enumerate() {
+                        span { key: "{i}", style: "width:{mix[i]}%;background:{sk.color()};", "" }
+                    }
+                }
+                span { style: "font-size:11px;color:{ink3};", "{op.cycle.main_loop_label()}" }
+            }
+            div { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "各阶段进度的平均值;阶段进度在「进度 × 阶段」里手动维护 —— 它是计划数据,不是信号。" }
         }
         div {
             style: "display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px;",
@@ -420,28 +449,30 @@ fn ProgressAll(op: OpVm) -> Element {
         }
         div {
             style: "{card} padding:20px 22px;",
-            div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:12px;", "环节" }
+            div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:12px;", "阶段" }
             for s in op.stages.clone() {
                 {
                     let k = k.clone();
                     let color = ui::signal_color(s.health);
                     let dot = theme::dot(color, 8);
-                    let (chip_bg, chip_fg) = s.phase_chip;
+                    let (chip_bg, chip_fg, _) = ui::stage_tint(s.kind);
                     let chip = theme::chip(chip_bg, chip_fg);
                     let bar = ui::progress_color(s.progress);
-                    let n = s.n;
+                    let kind = s.kind;
                     let progress = s.progress;
+                    let n = s.n;
+                    let role = s.detail.role;
                     rsx! {
                         button {
                             key: "{n}",
-                            style: "width:100%;display:grid;grid-template-columns:24px 1.4fr 110px 1fr 60px;gap:10px;align-items:center;background:transparent;border:none;border-bottom:1px dashed #ECE6DA;padding:10px 2px;cursor:pointer;text-align:left;",
+                            style: "width:100%;display:grid;grid-template-columns:24px 1.4fr 130px 1fr 60px;gap:10px;align-items:center;background:transparent;border:none;border-bottom:1px dashed #ECE6DA;padding:10px 2px;cursor:pointer;text-align:left;",
                             onclick: move |_| {
-                                k.send(Command::SetScope(Scope::Stage(n)));
+                                k.send(Command::SetScope(Scope::Stage(kind)));
                                 k.send(Command::SetPanel(Panel::Workflow));
                             },
                             span { style: "{dot}" }
-                            span { style: "font-size:13px;", "{s.n:02} {s.label}" }
-                            span { style: "{chip}", "{s.phase_label}" }
+                            span { style: "font-size:13px;", "{n} {kind.label()}" }
+                            span { style: "{chip}", "{role}" }
                             div {
                                 style: "height:5px;border-radius:3px;background:#E6E0D2;overflow:hidden;",
                                 div { style: "height:100%;width:{progress}%;background:{bar};" }
@@ -550,7 +581,142 @@ fn MetricCard(m: MetricVm) -> Element {
 }
 
 #[component]
-fn ProgressStage(s: StageVm) -> Element {
+fn StageDetailCard(op: OpVm, s: StageVm) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let serif = theme::SERIF;
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let d = s.detail.clone();
+    let (tint_bg, tint_fg, tint_bd) = ui::stage_tint(s.kind);
+    let is_active_stage = op.active_stage == s.kind;
+
+    let checked_all = d.dod_all_checked;
+    let unchecked_labels: Vec<&'static str> = d
+        .dod
+        .iter()
+        .filter(|x| !x.checked)
+        .map(|x| x.label)
+        .collect();
+    let kind = s.kind;
+    let handoff = {
+        let k = k.clone();
+        move |_| {
+            let risky = !checked_all;
+            let note = if risky {
+                format!("带险交棒 · 未勾:{}", unchecked_labels.join("、"))
+            } else {
+                "交棒清单已勾满".to_string()
+            };
+            k.send(Command::HandoffStage { risky, note });
+        }
+    };
+
+    rsx! {
+        div {
+            style: "{card} padding:20px 22px;margin-top:16px;",
+            div {
+                style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;",
+                span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{d.role}" }
+                span { style: "font-size:10.5px;background:{tint_bg};color:{tint_fg};border:1px solid {tint_bd};border-radius:5px;padding:3px 8px;", "方法论 · {d.methodology}" }
+                span { style: "margin-left:auto;font-family:{serif};font-size:15px;color:{d.color};", "{d.seek}" }
+                span { style: "font-size:10.5px;color:{ink3};", "{d.cycle_rhythm}" }
+            }
+            div { style: "font-size:10.5px;color:{ink3};margin-bottom:6px;", "核心问题" }
+            div { style: "font-family:{serif};font-size:14.5px;margin-bottom:14px;", "{d.core_question}" }
+
+            div { style: "font-size:10.5px;color:{ink3};margin-bottom:8px;", "方法循环" }
+            div {
+                style: "display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:16px;",
+                for (i, step) in d.method_loop.iter().enumerate() {
+                    {
+                        let is_last = i == d.method_loop.len() - 1;
+                        rsx! {
+                            span {
+                                key: "{i}",
+                                style: "background:{tint_bg};color:{tint_fg};border:1px solid {tint_bd};border-radius:6px;padding:6px 10px;font-size:12px;",
+                                "{step}"
+                            }
+                            if !is_last {
+                                span { style: "color:#C2BBAB;font-size:11px;", "→" }
+                            }
+                        }
+                    }
+                }
+                span { style: "color:{d.color};font-size:13px;", "↺" }
+            }
+
+            div {
+                style: "display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;",
+                div {
+                    div { style: "font-size:10.5px;color:{ink3};margin-bottom:8px;", "默认视图 · 引领焦点" }
+                    div { style: "font-size:12.5px;color:{ink2};margin-bottom:3px;", "{d.default_view}" }
+                    div { style: "font-size:12.5px;color:{ink2};", "{d.lead_focus}" }
+                }
+                div {
+                    div { style: "font-size:10.5px;color:{ink3};margin-bottom:8px;", "AI 编队" }
+                    for (name, def) in d.ai_crew.iter() {
+                        div { key: "{name}", style: "font-size:12px;color:{ink2};margin-bottom:3px;",
+                            span { style: "color:{d.color};font-weight:600;", "{name}" } " · {def}"
+                        }
+                    }
+                }
+            }
+
+            div {
+                style: "background:#23211C;border-radius:8px;padding:11px 14px;margin-bottom:16px;",
+                span { style: "font-size:9.5px;letter-spacing:.08em;color:#E0A78F;margin-right:8px;", "反模式" }
+                span { style: "font-size:11.5px;color:#C9BEB0;", "{d.anti_patterns}" }
+            }
+
+            div {
+                style: "border-left:3px solid {d.color};background:{tint_bg};border-radius:8px;padding:14px 16px;",
+                div {
+                    style: "display:flex;align-items:baseline;gap:10px;margin-bottom:10px;",
+                    span { style: "font-size:11px;letter-spacing:.06em;color:{tint_fg};font-weight:600;", "交棒清单 DoD" }
+                    span { style: "font-size:11px;color:{ink3};", "已交棒 {d.handoff_count} 次" }
+                }
+                for (i, item) in d.dod.iter().enumerate() {
+                    {
+                        let (box_bg, box_bd, mark) = if item.checked {
+                            (d.color, d.color, "✓")
+                        } else {
+                            ("transparent", "#CFC7B6", "")
+                        };
+                        let k = k.clone();
+                        rsx! {
+                            div {
+                                key: "{i}",
+                                onclick: move |_| k.send(Command::ToggleDod { stage_kind: kind, index: i }),
+                                style: "cursor:pointer;display:flex;align-items:center;gap:10px;padding:4px 0;",
+                                span { style: "width:16px;height:16px;border-radius:4px;border:1.5px solid {box_bd};background:{box_bg};color:#fff;font-size:10px;line-height:14px;text-align:center;flex:none;", "{mark}" }
+                                span { style: "font-size:13px;color:#3A3833;", "{item.label}" }
+                            }
+                        }
+                    }
+                }
+                if is_active_stage {
+                    div {
+                        style: "margin-top:14px;display:flex;align-items:center;gap:10px;",
+                        button {
+                            style: "cursor:pointer;background:{d.color};color:#fff;border:none;border-radius:7px;padding:9px 16px;font-size:12.5px;font-weight:600;",
+                            onclick: handoff,
+                            "{d.handoff_label}"
+                        }
+                        if !checked_all {
+                            span { style: "font-size:11px;color:#B0503A;", "未勾满也可交棒 · 将记「带险交棒」" }
+                        }
+                    }
+                } else {
+                    div { style: "margin-top:12px;font-size:11.5px;color:{ink3};", "当前主持:{op.active_stage.role_short()} —— 只能从当前阶段交棒" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ProgressStage(op: OpVm, s: StageVm) -> Element {
     let k = use_context::<Kernel>();
     let card = theme::card();
     let serif = theme::SERIF;
@@ -569,13 +735,8 @@ fn ProgressStage(s: StageVm) -> Element {
         WowDir::Down => "↓ 较上次回落",
         WowDir::Flat => "→ 持平",
     };
-    let (chip_bg, chip_fg) = s.phase_chip;
+    let (chip_bg, chip_fg, _) = ui::stage_tint(s.kind);
     let chip = theme::chip(chip_bg, chip_fg);
-    let meta = [
-        ("我负责什么", s.owns.clone()),
-        ("验收信号", s.accept.clone()),
-        ("控制点", s.control.clone()),
-    ];
     let set_progress = move |_| {
         if let Ok(v) = prog().trim().parse::<u8>() {
             k.send(Command::SetStageProgress {
@@ -587,16 +748,16 @@ fn ProgressStage(s: StageVm) -> Element {
     rsx! {
         div {
             style: "display:flex;align-items:center;gap:10px;margin-bottom:14px;",
-            span { style: "font-family:{serif};font-size:18px;font-weight:600;", "{s.n:02} {s.label}" }
-            span { style: "{chip}", "{s.phase_label}" }
-            span { style: "font-size:12px;color:{ink3};", "节奏 · {s.schedule_label}" }
+            span { style: "font-family:{serif};font-size:18px;font-weight:600;", "{s.n} {s.kind.label()}" }
+            span { style: "{chip}", "{s.kind.role_short()}" }
+            span { style: "font-size:12px;color:{ink3};", "体检节奏 · {s.schedule_label}" }
         }
         if empty {
             div {
                 style: "{card} padding:20px 22px;margin-bottom:16px;",
-                div { style: "font-weight:600;margin-bottom:6px;", "该环节还没有指标" }
+                div { style: "font-weight:600;margin-bottom:6px;", "该阶段还没有指标" }
                 p { style: "color:{ink2};font-size:13px;margin:0;line-height:1.7;",
-                    "回到向导第 4/5 步为它补上指标,或在此环节以外先运营 —— 无数据的环节读作「无数据」,绝不冒充绿色。"
+                    "在此阶段运行工作流或记录一条观测,即可开始追踪 —— 无数据的阶段读作「无数据」,绝不冒充绿色。"
                 }
             }
         } else {
@@ -604,22 +765,6 @@ fn ProgressStage(s: StageVm) -> Element {
                 style: "display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:16px;",
                 for m in s.metrics.clone() {
                     MetricCard { key: "{m.name}", m }
-                }
-            }
-        }
-        div {
-            style: "display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px;",
-            for (t, body) in meta {
-                {
-                    let text = if body.is_empty() { "—".to_string() } else { body };
-                    rsx! {
-                        div {
-                            key: "{t}",
-                            style: "{card} padding:14px 16px;",
-                            div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "{t}" }
-                            div { style: "font-size:12.5px;color:{ink2};line-height:1.7;", "{text}" }
-                        }
-                    }
                 }
             }
         }
@@ -647,6 +792,7 @@ fn ProgressStage(s: StageVm) -> Element {
                 span { style: "font-size:11.5px;color:{ink3};", "0–100;每次更新都会追加到趋势史" }
             }
         }
+        StageDetailCard { op, s }
     }
 }
 
@@ -660,9 +806,9 @@ fn WorkflowPanel(op: OpVm, stage: Option<StageVm>, run: RunVm) -> Element {
         None => rsx! {
             div {
                 style: "{card} padding:22px 24px;max-width:640px;",
-                div { style: "font-weight:600;margin-bottom:8px;", "工作流库(跨环节)属 P3" }
+                div { style: "font-weight:600;margin-bottom:8px;", "工作流库(跨阶段)属 P3" }
                 p { style: "color:{ink2};font-size:13px;line-height:1.8;margin:0;",
-                    "当前版本为每个环节内置一条标准工作流:选中环节轴上的任一控制点,即可运行并实时观察阶段推进;产出会作为会话消息入库。沉淀/复用型工作流库在 P3 铺屏时交付。"
+                    "当前版本为每个阶段内置一条标准工作流,直接来自其方法循环:选中阶段轴上的任一阶段,即可运行并实时观察阶段推进;产出会作为会话消息入库。沉淀/复用型工作流库在 P3 铺屏时交付。"
                 }
             }
         },
@@ -777,7 +923,7 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
                     }
                 }
             }
-            div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "阶段:{phases}" }
+            div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
             div { style: "font-size:12px;color:{ink3};", "验收:{goal} · loop ≤3 迭代" }
         }
         {chat_area}
@@ -868,7 +1014,7 @@ fn RoutineAll(op: OpVm) -> Element {
     rsx! {
         div {
             style: "{card} padding:20px 22px;",
-            div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:12px;", "定时任务(按环节)" }
+            div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:12px;", "定时任务(按阶段)" }
             for s in op.stages.clone() {
                 {
                     let color = ui::signal_color(s.health);
@@ -879,7 +1025,7 @@ fn RoutineAll(op: OpVm) -> Element {
                             key: "{s.n}",
                             style: "display:flex;align-items:center;gap:10px;border-bottom:1px dashed #ECE6DA;padding:9px 2px;",
                             span { style: "{dot}" }
-                            span { style: "font-size:13px;min-width:130px;", "{s.n:02} {s.label}" }
+                            span { style: "font-size:13px;min-width:130px;", "{s.n} {s.kind.label()}" }
                             span { style: "font-size:12px;color:{ink3};", "{s.schedule_label} · 盯 {watch_count} 项" }
                         }
                     }
@@ -896,7 +1042,6 @@ fn RoutineAll(op: OpVm) -> Element {
 fn RoutineStage(s: StageVm) -> Element {
     let card = theme::card();
     let serif = theme::SERIF;
-    let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
     let amber = ui::signal_color(Signal::Amber);
     let red = ui::signal_color(Signal::Red);
@@ -905,21 +1050,21 @@ fn RoutineStage(s: StageVm) -> Element {
     rsx! {
         div {
             style: "display:flex;align-items:center;gap:10px;margin-bottom:14px;",
-            span { style: "font-family:{serif};font-size:18px;font-weight:600;", "{s.n:02} {s.label} · 观测" }
+            span { style: "font-family:{serif};font-size:18px;font-weight:600;", "{s.n} {s.kind.label()} · 观测" }
             span { style: "font-size:12px;color:{ink3};", "节奏 · {s.schedule_label}" }
         }
         div {
             style: "{card} padding:18px 20px;margin-bottom:14px;",
             div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "监测项" }
             if watches.is_empty() {
-                span { style: "font-size:12.5px;color:{ink3};", "该环节没有指标可盯 —— 先在向导里补指标。" }
+                span { style: "font-size:12.5px;color:{ink3};", "该阶段没有指标可盯 —— 先运行一次工作流或记录一条观测。" }
             }
             div {
                 style: "display:flex;gap:8px;flex-wrap:wrap;",
                 for w in watches {
                     span {
                         key: "{w}",
-                        style: "border:1px solid #E2DCCF;border-radius:7px;padding:3px 10px;font-size:12px;color:{ink2};",
+                        style: "border:1px solid #E2DCCF;border-radius:7px;padding:3px 10px;font-size:12px;",
                         "{w}"
                     }
                 }
@@ -929,7 +1074,7 @@ fn RoutineStage(s: StageVm) -> Element {
             style: "{card} padding:18px 20px;",
             div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "观测流(真实记录,最新在前)" }
             if empty_feed {
-                span { style: "font-size:12.5px;color:{ink3};", "还没有观测记录。在「进度 × 本环节」的指标卡里记录本周值,这里会出现每一笔。" }
+                span { style: "font-size:12.5px;color:{ink3};", "还没有观测记录。在「进度 × 本阶段」的指标卡里记录本周值,这里会出现每一笔。" }
             }
             for (i, f) in s.feed.iter().enumerate() {
                 {

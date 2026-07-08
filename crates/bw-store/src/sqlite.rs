@@ -4,16 +4,17 @@
 //! sidesteps `SQLITE_BUSY` without ceremony.
 
 use crate::{
-    cadence_text, parse_cadence, parse_session_status, parse_sig, parse_stage_kind,
-    session_status_text, sig_text, stage_kind_text, MessageRow, MetricRole, MetricSignal,
-    NewMetric, NewProject, NewSession, NewStage, ObservationRow, PersistedSignals, ProjectRow,
-    Result, SessionKind, SessionRow, StageRow, StageSignal, Store, StoreError,
+    cadence_text, cycle_text, parse_cadence, parse_cycle, parse_session_status, parse_sig,
+    parse_stage_kind, session_status_text, sig_text, stage_kind_text, HandoffRow, MessageRow,
+    MetricRole, MetricSignal, NewMetric, NewProject, NewSession, NewStage, ObservationRow,
+    PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, StageRow, StageSignal, Store,
+    StoreError,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
     evaluate_metric, measure, parse_target_with, reduce_worst_of, AmberBand, Measurement,
 };
-use bw_core::model::{ProjectPhase, Role, Signal, SourceKind, StageKind, StagePhase};
+use bw_core::model::{ProjectCycle, ProjectPhase, Role, Signal, SourceKind, StageKind};
 use bw_core::{MetricId, ProjectId, SessionId};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
@@ -55,20 +56,6 @@ impl SqliteStore {
             }
             sqlx::query(stmt).execute(&pool).await?;
         }
-
-        // Additive migrations for databases created before a column existed.
-        // `CREATE TABLE IF NOT EXISTS` skips existing tables, so new columns
-        // must be back-filled; "duplicate column name" just means it's there.
-        for alter in [
-            "ALTER TABLE project ADD COLUMN benchmark TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE project ADD COLUMN opportunity TEXT NOT NULL DEFAULT ''",
-        ] {
-            if let Err(e) = sqlx::query(alter).execute(&pool).await {
-                if !e.to_string().contains("duplicate column name") {
-                    return Err(e.into());
-                }
-            }
-        }
         Ok(Self { pool })
     }
 }
@@ -97,22 +84,6 @@ fn parse_phase(s: &str) -> ProjectPhase {
     match s {
         "running" => ProjectPhase::Running,
         _ => ProjectPhase::ColdStart,
-    }
-}
-fn stage_phase_text(p: StagePhase) -> &'static str {
-    match p {
-        StagePhase::Finalized => "finalized",
-        StagePhase::Iterating => "iterating",
-        StagePhase::Monitoring => "monitoring",
-        StagePhase::Running => "running",
-    }
-}
-fn parse_stage_phase(s: &str) -> StagePhase {
-    match s {
-        "finalized" => StagePhase::Finalized,
-        "iterating" => StagePhase::Iterating,
-        "monitoring" => StagePhase::Monitoring,
-        _ => StagePhase::Running,
     }
 }
 fn role_text(r: Role) -> &'static str {
@@ -189,8 +160,8 @@ impl Store for SqliteStore {
     async fn create_project(&self, p: NewProject) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO project (id, name, kind, descr, phase, cold_step, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, 'cold_start', 0, ?, ?, 0)",
+            "INSERT INTO project (id, name, kind, descr, phase, cycle, active_stage, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, 'cold_start', 'explore', 'prototype', ?, ?, 0)",
         )
         .bind(pid(p.id))
         .bind(&p.name)
@@ -203,15 +174,19 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn set_project_phase(
-        &self,
-        id: ProjectId,
-        phase: ProjectPhase,
-        cold_step: Option<u8>,
-    ) -> Result<()> {
-        sqlx::query("UPDATE project SET phase=?, cold_step=?, updated_at=?, rev=rev+1 WHERE id=?")
+    async fn set_project_phase(&self, id: ProjectId, phase: ProjectPhase) -> Result<()> {
+        sqlx::query("UPDATE project SET phase=?, updated_at=?, rev=rev+1 WHERE id=?")
             .bind(phase_text(phase))
-            .bind(cold_step.map(|v| v as i64))
+            .bind(now_unix())
+            .bind(pid(id))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_project_cycle(&self, id: ProjectId, cycle: ProjectCycle) -> Result<()> {
+        sqlx::query("UPDATE project SET cycle=?, updated_at=?, rev=rev+1 WHERE id=?")
+            .bind(cycle_text(cycle))
             .bind(now_unix())
             .bind(pid(id))
             .execute(&self.pool)
@@ -324,22 +299,19 @@ impl Store for SqliteStore {
     async fn materialize_stages(&self, stages: Vec<NewStage>) -> Result<()> {
         let t = now_unix();
         for s in stages {
+            let dod = serde_json::to_string(&vec![false; s.kind.dod_items().len()])?;
             sqlx::query(
                 "INSERT INTO op_stage
-                    (id, project_id, kind, phase, progress, routine_schedule, owns, accept, control,
+                    (id, project_id, kind, progress, dod, routine_schedule,
                      created_at, updated_at, rev)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                 VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0)
                  ON CONFLICT(project_id, kind) DO NOTHING",
             )
             .bind(Uuid::new_v4().to_string())
             .bind(pid(s.project_id))
             .bind(stage_kind_text(s.kind))
-            .bind(stage_phase_text(s.phase))
-            .bind(s.progress as i64)
+            .bind(dod)
             .bind(cadence_text(&s.schedule))
-            .bind(&s.owns)
-            .bind(&s.accept)
-            .bind(&s.control)
             .bind(t)
             .bind(t)
             .execute(&self.pool)
@@ -370,6 +342,61 @@ impl Store for SqliteStore {
             .bind(serde_json::to_string(&trend)?)
             .bind(now_unix())
             .bind(&sid)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn toggle_dod(&self, project_id: ProjectId, kind: StageKind, index: usize) -> Result<()> {
+        let row = sqlx::query("SELECT id, dod FROM op_stage WHERE project_id=? AND kind=?")
+            .bind(pid(project_id))
+            .bind(stage_kind_text(kind))
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| StoreError::Other("stage not materialized".into()))?;
+        let sid: String = row.get("id");
+        let mut dod: Vec<bool> =
+            serde_json::from_str(&row.get::<String, _>("dod")).unwrap_or_default();
+        if let Some(v) = dod.get_mut(index) {
+            *v = !*v;
+        } else {
+            return Err(StoreError::Other(format!("dod index {index} out of range")));
+        }
+        sqlx::query("UPDATE op_stage SET dod=?, updated_at=?, rev=rev+1 WHERE id=?")
+            .bind(serde_json::to_string(&dod)?)
+            .bind(now_unix())
+            .bind(&sid)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn handoff_stage(
+        &self,
+        project_id: ProjectId,
+        from: StageKind,
+        to: StageKind,
+        risky: bool,
+        note: &str,
+        at: OffsetDateTime,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO handoff (id, project_id, from_stage, to_stage, risky, note, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(pid(project_id))
+        .bind(stage_kind_text(from))
+        .bind(stage_kind_text(to))
+        .bind(risky as i64)
+        .bind(note)
+        .bind(at.unix_timestamp())
+        .execute(&self.pool)
+        .await?;
+        sqlx::query("UPDATE project SET active_stage=?, updated_at=?, rev=rev+1 WHERE id=?")
+            .bind(stage_kind_text(to))
+            .bind(now_unix())
+            .bind(pid(project_id))
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -565,7 +592,7 @@ impl Store for SqliteStore {
 
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>> {
         let row = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cold_step, north_star, ns_def, benchmark, opportunity, signal, weekly_signal
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, signal, weekly_signal
              FROM project WHERE id=?",
         )
         .bind(pid(id))
@@ -576,7 +603,7 @@ impl Store for SqliteStore {
 
     async fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cold_step, north_star, ns_def, benchmark, opportunity, signal, weekly_signal
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, signal, weekly_signal
              FROM project ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -656,7 +683,7 @@ impl Store for SqliteStore {
 
     async fn list_stages(&self, project_id: ProjectId) -> Result<Vec<StageRow>> {
         let rows = sqlx::query(
-            "SELECT kind, phase, progress, trend, routine_schedule, owns, accept, control, routine_signal
+            "SELECT kind, progress, trend, dod, routine_schedule, routine_signal
              FROM op_stage WHERE project_id=?",
         )
         .bind(pid(project_id))
@@ -668,20 +695,17 @@ impl Store for SqliteStore {
                 let kind = parse_stage_kind(&r.get::<String, _>("kind"))?;
                 Some(StageRow {
                     kind,
-                    phase: parse_stage_phase(&r.get::<String, _>("phase")),
                     progress: r.get::<i64, _>("progress").clamp(0, 100) as u8,
                     trend: serde_json::from_str(&r.get::<String, _>("trend")).unwrap_or_default(),
+                    dod: serde_json::from_str(&r.get::<String, _>("dod")).unwrap_or_default(),
                     schedule: parse_cadence(&r.get::<String, _>("routine_schedule")),
-                    owns: r.get("owns"),
-                    accept: r.get("accept"),
-                    control: r.get("control"),
                     routine_signal: r
                         .get::<Option<String>, _>("routine_signal")
                         .and_then(|s| parse_sig(&s)),
                 })
             })
             .collect();
-        // Control-point order, not insertion order.
+        // Loop order, not insertion order.
         stages.sort_by_key(|s| s.kind.index());
         Ok(stages)
     }
@@ -707,6 +731,31 @@ impl Store for SqliteStore {
                 })
             })
             .collect()
+    }
+
+    async fn list_handoffs(&self, project_id: ProjectId) -> Result<Vec<HandoffRow>> {
+        let rows = sqlx::query(
+            "SELECT from_stage, to_stage, risky, note, created_at
+             FROM handoff WHERE project_id=? ORDER BY created_at DESC, rowid DESC",
+        )
+        .bind(pid(project_id))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                let from_stage = parse_stage_kind(&r.get::<String, _>("from_stage"))?;
+                let to_stage = parse_stage_kind(&r.get::<String, _>("to_stage"))?;
+                Some(HandoffRow {
+                    from_stage,
+                    to_stage,
+                    risky: r.get::<i64, _>("risky") != 0,
+                    note: r.get("note"),
+                    at: OffsetDateTime::from_unix_timestamp(r.get::<i64, _>("created_at"))
+                        .unwrap_or(OffsetDateTime::UNIX_EPOCH),
+                })
+            })
+            .collect())
     }
 
     async fn list_sessions(&self, project_id: ProjectId) -> Result<Vec<SessionRow>> {
@@ -749,13 +798,16 @@ impl Store for SqliteStore {
 
 fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
     let id = parse_uuid(&r.get::<String, _>("id"), ProjectId::from_uuid)?;
+    let active_stage =
+        parse_stage_kind(&r.get::<String, _>("active_stage")).unwrap_or(StageKind::Prototype);
     Ok(ProjectRow {
         id,
         name: r.get("name"),
         kind: r.get("kind"),
         desc: r.get("descr"),
         phase: parse_phase(&r.get::<String, _>("phase")),
-        cold_step: r.get::<Option<i64>, _>("cold_step").map(|v| v as u8),
+        cycle: parse_cycle(&r.get::<String, _>("cycle")),
+        active_stage,
         north_star: r.get("north_star"),
         ns_def: r.get("ns_def"),
         benchmark: r.get("benchmark"),

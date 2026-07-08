@@ -1,12 +1,15 @@
 //! `bw-store` — local-first persistence behind a [`Store`] trait.
 //!
-//! Two encoded invariants (plan `§2.5` / `§5`):
+//! Three encoded invariants (plan `§2.5` / `§5` + 体系重构 v2 `§07`):
 //! 1. **Values are born only as observations.** [`Store::append_observation`] is
 //!    append-only; there is no value setter elsewhere.
 //! 2. **Signals are written only by derive.** [`Store::recompute_signals`] is the
 //!    *sole* writer of every `signal` / `hit` column — the trait exposes no
 //!    `set_signal`. It reads observations + targets, calls `bw_core::derive`, and
 //!    writes the resulting cache.
+//! 3. **Stage transitions are born only as handoffs.** [`Store::handoff_stage`]
+//!    is append-only (audit log); `project.active_stage` is derived from the
+//!    latest entry, never set independently.
 //!
 //! The trait is the seam for Tier E: swap [`SqliteStore`] for an IndexedDB /
 //! remote adapter with no schema migration (`updated_at + rev` on every table).
@@ -16,7 +19,7 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    Cadence, ProjectPhase, Role, SessionStatus, Signal, SourceKind, StageKind, StagePhase,
+    Cadence, ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, SourceKind, StageKind,
 };
 use bw_core::{MetricId, ProjectId, SessionId};
 use time::OffsetDateTime;
@@ -76,12 +79,7 @@ pub struct NewMetric {
 pub struct NewStage {
     pub project_id: ProjectId,
     pub kind: StageKind,
-    pub phase: StagePhase,
-    pub progress: u8,
     pub schedule: Cadence,
-    pub owns: String,
-    pub accept: String,
-    pub control: String,
 }
 
 pub struct NewSession {
@@ -102,10 +100,11 @@ pub struct ProjectRow {
     pub kind: String,
     pub desc: String,
     pub phase: ProjectPhase,
-    pub cold_step: Option<u8>,
+    pub cycle: ProjectCycle,
+    pub active_stage: StageKind,
     pub north_star: String,
     pub ns_def: String,
-    /// 对标竞品 / 机会缺口 — real wizard inputs (step 1 / 2).
+    /// 对标竞品 / 机会缺口 — real creation-flow inputs.
     pub benchmark: String,
     pub opportunity: String,
     /// Cached derived signal (read-only; recompute is authoritative).
@@ -130,19 +129,17 @@ pub struct MetricSignal {
     pub hit: Option<bool>,
 }
 
-/// One materialized control point, as the operating view reads it.
+/// One materialized stage, as the operating view reads it.
 #[derive(Clone, Debug)]
 pub struct StageRow {
     pub kind: StageKind,
-    pub phase: StagePhase,
     pub progress: u8,
     /// History of hand-set progress values (progress is *plan* data, not a
     /// signal — setting it by hand is legitimate; the history stays real).
     pub trend: Vec<f32>,
+    /// Handoff/DoD checklist state, indexed like `StageKind::dod_items()`.
+    pub dod: Vec<bool>,
     pub schedule: Cadence,
-    pub owns: String,
-    pub accept: String,
-    pub control: String,
     pub routine_signal: Option<Signal>,
 }
 
@@ -154,6 +151,16 @@ pub struct ObservationRow {
     pub ts: OffsetDateTime,
     pub source: SourceKind,
     pub raw: String,
+}
+
+/// One audited stage transition, oldest-first-consumable.
+#[derive(Clone, Debug)]
+pub struct HandoffRow {
+    pub from_stage: StageKind,
+    pub to_stage: StageKind,
+    pub risky: bool,
+    pub note: String,
+    pub at: OffsetDateTime,
 }
 
 #[derive(Clone, Debug)]
@@ -192,20 +199,16 @@ pub struct MessageRow {
 #[async_trait]
 pub trait Store: Send + Sync {
     async fn create_project(&self, p: NewProject) -> Result<()>;
-    async fn set_project_phase(
-        &self,
-        id: ProjectId,
-        phase: ProjectPhase,
-        cold_step: Option<u8>,
-    ) -> Result<()>;
+    async fn set_project_phase(&self, id: ProjectId, phase: ProjectPhase) -> Result<()>;
+    async fn set_project_cycle(&self, id: ProjectId, cycle: ProjectCycle) -> Result<()>;
     async fn set_north_star(&self, id: ProjectId, north_star: &str, ns_def: &str) -> Result<()>;
-    /// 对标竞品 + 机会缺口 (wizard step 1/2 real inputs).
+    /// 对标竞品 + 机会缺口/三月成功标准 (creation-flow real inputs).
     async fn set_brief(&self, id: ProjectId, benchmark: &str, opportunity: &str) -> Result<()>;
 
     async fn upsert_metric(&self, m: NewMetric) -> Result<()>;
-    /// Week-plan edit (wizard step 7 / progress panel): update a metric's
-    /// target + this week's driver, keeping the previous target as `last_target`.
-    /// Touches no value and no signal — recompute re-derives against the new target.
+    /// Week-plan edit: update a metric's target + this week's driver, keeping
+    /// the previous target as `last_target`. Touches no value and no signal —
+    /// recompute re-derives against the new target.
     async fn update_week_plan(
         &self,
         metric: MetricId,
@@ -222,15 +225,30 @@ pub trait Store: Send + Sync {
         ts: OffsetDateTime,
     ) -> Result<()>;
 
+    /// Materializes all five stages at creation, `dod` all-unchecked.
     async fn materialize_stages(&self, stages: Vec<NewStage>) -> Result<()>;
-    /// 进度管理 lever: hand-set a stage's progress (plan data, NOT a signal —
-    /// signals stay derive-only). Appends the value to the stage's real
+    /// Hand-set plan progress for one stage (plan data, not a signal — the
+    /// derive chain is untouched). Appends the value to the stage's real
     /// progress-trend history.
     async fn set_stage_progress(
         &self,
         project_id: ProjectId,
         kind: StageKind,
         progress: u8,
+    ) -> Result<()>;
+    /// Flip one handoff/DoD checklist box for a stage.
+    async fn toggle_dod(&self, project_id: ProjectId, kind: StageKind, index: usize) -> Result<()>;
+    /// Append-only stage transition — the sole birthplace of `active_stage`.
+    /// `to == from.next()` normally; the caller decides `risky` (DoD not fully
+    /// checked) and supplies an audit `note`.
+    async fn handoff_stage(
+        &self,
+        project_id: ProjectId,
+        from: StageKind,
+        to: StageKind,
+        risky: bool,
+        note: &str,
+        at: OffsetDateTime,
     ) -> Result<()>;
 
     async fn ensure_session(&self, s: NewSession) -> Result<()>;
@@ -256,11 +274,13 @@ pub trait Store: Send + Sync {
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>>;
     async fn list_projects(&self) -> Result<Vec<ProjectRow>>;
     async fn persisted_signals(&self, id: ProjectId) -> Result<PersistedSignals>;
-    /// The seven materialized control points (empty while cold-starting).
+    /// The five materialized stages (empty while cold-starting).
     async fn list_stages(&self, project_id: ProjectId) -> Result<Vec<StageRow>>;
     /// All observations of a project's metrics, oldest first — the real series
     /// behind sparklines and the routine feed.
     async fn list_observations(&self, project_id: ProjectId) -> Result<Vec<ObservationRow>>;
+    /// Stage-transition audit log, newest first.
+    async fn list_handoffs(&self, project_id: ProjectId) -> Result<Vec<HandoffRow>>;
     async fn list_sessions(&self, project_id: ProjectId) -> Result<Vec<SessionRow>>;
     async fn session_messages(&self, session_id: SessionId) -> Result<Vec<MessageRow>>;
 }
@@ -288,13 +308,11 @@ pub(crate) fn parse_sig(s: &str) -> Option<Signal> {
 
 pub(crate) fn stage_kind_text(k: StageKind) -> &'static str {
     match k {
-        StageKind::CompetitorInsight => "competitor_insight",
-        StageKind::RequirementIntake => "requirement_intake",
-        StageKind::NorthStar => "north_star",
-        StageKind::Leading => "leading",
-        StageKind::Lagging => "lagging",
-        StageKind::PrototypeCreate => "prototype_create",
-        StageKind::ProgressMgmt => "progress_mgmt",
+        StageKind::Prototype => "prototype",
+        StageKind::Build => "build",
+        StageKind::Optimize => "optimize",
+        StageKind::Growth => "growth",
+        StageKind::Ops => "ops",
     }
 }
 
@@ -302,6 +320,22 @@ pub(crate) fn parse_stage_kind(s: &str) -> Option<StageKind> {
     StageKind::ALL
         .into_iter()
         .find(|k| stage_kind_text(*k) == s)
+}
+
+pub(crate) fn cycle_text(c: ProjectCycle) -> &'static str {
+    match c {
+        ProjectCycle::Explore => "explore",
+        ProjectCycle::Expand => "expand",
+        ProjectCycle::Mature => "mature",
+    }
+}
+
+pub(crate) fn parse_cycle(s: &str) -> ProjectCycle {
+    match s {
+        "expand" => ProjectCycle::Expand,
+        "mature" => ProjectCycle::Mature,
+        _ => ProjectCycle::Explore,
+    }
 }
 
 pub(crate) fn session_status_text(s: SessionStatus) -> &'static str {

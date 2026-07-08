@@ -1,6 +1,6 @@
 //! `view=projects` — the project wall. Starts EMPTY: the prototype's demo
 //! projects were simulated and are deliberately not ported. Every card here is
-//! a real project the user created through the wizard.
+//! a real project the user created through the creation flow.
 
 use crate::theme;
 use bw_app::Command;
@@ -27,7 +27,7 @@ pub fn Wall(projects: Vec<ProjectCardVm>, on_new: EventHandler<()>) -> Element {
             h1 { style: "font-family:{serif};font-weight:600;font-size:30px;margin:0 0 6px;", "我的项目" }
             p { style: "color:{ink2};font-size:13px;margin:0 0 30px;",
                 if empty {
-                    "还没有项目。产品的每个项目都从七个控制点的创建引导开始 —— 从右侧虚线卡起步。"
+                    "还没有项目。每个项目都从一句话意图开始,走完五段一环的创建引导 —— 从右侧虚线卡起步。"
                 } else {
                     "每张卡的信号都由指标观测值派生 —— 绿点从不手设。"
                 }
@@ -61,18 +61,20 @@ fn ProjectCard(card: ProjectCardVm) -> Element {
     let bar_color = ui::progress_color(card.progress);
     let progress = card.progress;
     let id = card.id;
+    let desc_preview: String = card.desc.chars().take(72).collect();
     rsx! {
         div {
             onclick: move |_| k.send(Command::OpenProject(id)),
             style: "{shell} padding:18px 20px;cursor:pointer;",
             div {
-                style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;",
+                style: "display:flex;align-items:center;gap:6px;margin-bottom:12px;",
                 span { style: "{chip}", "{card.phase_label}" }
-                span { style: "{dot}" }
+                span { style: "font-size:11px;color:{ink3};", "{card.cycle_label}" }
+                span { style: "margin-left:auto;{dot}" }
             }
             div { style: "font-family:{serif};font-size:19px;font-weight:600;margin-bottom:6px;", "{card.name}" }
-            if !card.desc.is_empty() {
-                div { style: "font-size:13px;color:{ink2};line-height:1.6;margin-bottom:10px;", "{card.desc}" }
+            if !desc_preview.is_empty() {
+                div { style: "font-size:13px;color:{ink2};line-height:1.6;margin-bottom:10px;", "{desc_preview}" }
             }
             div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "{card.meta}" }
             div {

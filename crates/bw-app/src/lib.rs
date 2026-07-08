@@ -11,7 +11,7 @@
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    Cadence, ProjectPhase, Role, Signal, SourceKind, StageKind, StagePhase, WorkflowSpec,
+    Cadence, ProjectCycle, ProjectPhase, Role, Signal, SourceKind, StageKind, WorkflowSpec,
 };
 use bw_core::{MetricId, ProjectId, SessionId};
 use bw_engine::{Engine, Executor, MockExecutor, RunCtx, RunEvent};
@@ -27,7 +27,8 @@ use tokio::sync::broadcast;
 pub enum View {
     #[default]
     Projects,
-    Wizard,
+    /// The creation card-flow (意图 → 快答 → 起草 → 审阅确认).
+    Create,
     App,
 }
 
@@ -41,11 +42,11 @@ pub enum Panel {
     Version,
 }
 
-/// Stage-axis selection: all stages or one control point (1..=7).
+/// Stage-axis selection: all stages or one of the five.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scope {
     All,
-    Stage(u8),
+    Stage(StageKind),
 }
 
 /// UI → kernel intents.
@@ -53,27 +54,31 @@ pub enum Command {
     /// App start: load the project wall and re-derive every running project's
     /// signals against the *current* clock (staleness must show on the wall).
     Boot,
+    /// Creation flow step 1 (意图): mints the project row immediately so the
+    /// rest of the flow (drafting run, resume-if-interrupted) has somewhere
+    /// real to attach to. `desc` carries the free-text brief.
     CreateProject {
         id: ProjectId,
         name: String,
         kind: String,
         desc: String,
     },
-    SetWizardStep {
-        step: u8,
+    /// Creation flow step 2 (快速问题 · 周期).
+    SetCycle {
+        cycle: ProjectCycle,
+    },
+    /// 对标竞品 + 三个月成功标准 (creation flow's free-text questions).
+    UpdateBrief {
+        benchmark: String,
+        opportunity: String,
     },
     UpdateNorthStar {
         value: String,
         def: String,
     },
-    /// 对标竞品 + 机会缺口 (wizard steps 1/2 — the real inputs behind the
-    /// prototype's demo matrix).
-    UpdateBrief {
-        benchmark: String,
-        opportunity: String,
-    },
     /// Record a metric + its current value as an append-only Manual observation
-    /// (wizard steps 4/5). Signal is derived, never set here.
+    /// (creation-flow review, or later while operating a stage). Signal is
+    /// derived, never set here.
     UpsertManualMetric {
         id: MetricId,
         name: String,
@@ -84,8 +89,8 @@ pub enum Command {
         amber: AmberBand,
         value: String,
     },
-    /// Week-plan edit (step 7 / progress panel): new target + this week's
-    /// driver. No value is touched; recompute re-derives against the new target.
+    /// Week-plan edit: new target + this week's driver. No value is touched;
+    /// recompute re-derives against the new target.
     UpdateWeekPlan {
         metric: MetricId,
         new_target: String,
@@ -98,13 +103,29 @@ pub enum Command {
         metric: MetricId,
         value: String,
     },
-    /// 进度管理 lever: hand-set plan progress for one stage (plan data, not a
-    /// signal — the derive chain is untouched).
+    /// Hand-set plan progress for one stage (plan data, not a signal — the
+    /// derive chain is untouched).
     SetStageProgress {
         stage_kind: StageKind,
         progress: u8,
     },
-    CompleteWizard,
+    /// Flip one handoff/DoD checklist box.
+    ToggleDod {
+        stage_kind: StageKind,
+        index: usize,
+    },
+    /// Advance the project's active stage (or reflux `Ops → Prototype`).
+    /// `risky` and `note` are the caller's honest account of the checklist
+    /// state — a handoff is never silently blocked on an unchecked box.
+    HandoffStage {
+        risky: bool,
+        note: String,
+    },
+    /// Confirms the creation-flow draft: materializes the five stages (each
+    /// on the chosen review cadence) and switches the project into `Running`.
+    CompleteCreation {
+        cadence: Cadence,
+    },
     StartSession {
         id: SessionId,
         stage_kind: Option<StageKind>,
@@ -136,7 +157,6 @@ pub enum Command {
 pub enum Event {
     ProjectsChanged,
     ProjectUpdated(ProjectId),
-    WizardStepChanged(u8),
     ViewChanged(View),
     SessionMessageAdded {
         session: SessionId,
@@ -150,6 +170,11 @@ pub enum Event {
     WorkflowDone,
     WorkflowFailed(String),
     WeeklyReviewAnnotated,
+    StageHandoff {
+        from: StageKind,
+        to: StageKind,
+        risky: bool,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -171,7 +196,6 @@ pub struct AppState {
     pub view: View,
     pub panel: Panel,
     pub scope: Scope,
-    pub wizard_step: u8,
     pub active_project: Option<ProjectId>,
     pub active_session: Option<SessionId>,
     pub projects: Vec<ProjectRow>,
@@ -183,7 +207,6 @@ impl Default for AppState {
             view: View::Projects,
             panel: Panel::Progress,
             scope: Scope::All,
-            wizard_step: 0,
             active_project: None,
             active_session: None,
             projects: Vec::new(),
@@ -270,25 +293,15 @@ impl<E: Executor> App<E> {
                     })
                     .await?;
                 self.state.active_project = Some(id);
-                self.state.view = View::Wizard;
-                self.state.wizard_step = 0;
+                self.state.view = View::Create;
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectsChanged);
-                self.emit(Event::ViewChanged(View::Wizard));
+                self.emit(Event::ViewChanged(View::Create));
             }
 
-            Command::SetWizardStep { step } => {
+            Command::SetCycle { cycle } => {
                 let p = self.active()?;
-                self.state.wizard_step = step;
-                self.store
-                    .set_project_phase(p, ProjectPhase::ColdStart, Some(step))
-                    .await?;
-                self.emit(Event::WizardStepChanged(step));
-            }
-
-            Command::UpdateNorthStar { value, def } => {
-                let p = self.active()?;
-                self.store.set_north_star(p, &value, &def).await?;
+                self.store.set_project_cycle(p, cycle).await?;
                 self.emit(Event::ProjectUpdated(p));
             }
 
@@ -298,6 +311,12 @@ impl<E: Executor> App<E> {
             } => {
                 let p = self.active()?;
                 self.store.set_brief(p, &benchmark, &opportunity).await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::UpdateNorthStar { value, def } => {
+                let p = self.active()?;
+                self.store.set_north_star(p, &value, &def).await?;
                 self.emit(Event::ProjectUpdated(p));
             }
 
@@ -312,7 +331,7 @@ impl<E: Executor> App<E> {
                 value,
             } => {
                 let p = self.active()?;
-                // Idempotency guard: re-confirming a wizard step must not mint a
+                // Idempotency guard: re-confirming a step must not mint a
                 // duplicate observation — only a *changed* value is a new fact.
                 let latest = self
                     .store
@@ -388,15 +407,35 @@ impl<E: Executor> App<E> {
                 self.emit(Event::ProjectUpdated(p));
             }
 
-            Command::CompleteWizard => {
+            Command::ToggleDod { stage_kind, index } => {
+                let p = self.active()?;
+                self.store.toggle_dod(p, stage_kind, index).await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::HandoffStage { risky, note } => {
+                let p = self.active()?;
+                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+                let from = proj.active_stage;
+                let to = from.next();
+                self.store
+                    .handoff_stage(p, from, to, risky, &note, now())
+                    .await?;
+                self.refresh_projects().await?;
+                self.emit(Event::StageHandoff { from, to, risky });
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::CompleteCreation { cadence } => {
                 let p = self.active()?;
                 self.store
-                    .set_project_phase(p, ProjectPhase::Running, None)
+                    .set_project_phase(p, ProjectPhase::Running)
                     .await?;
-                self.store.materialize_stages(seven_stages(p)).await?;
+                self.store
+                    .materialize_stages(five_stages(p, cadence))
+                    .await?;
                 self.store.recompute_signals(p, now()).await?;
                 self.state.view = View::App;
-                self.state.wizard_step = 7;
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectUpdated(p));
                 self.emit(Event::ViewChanged(View::App));
@@ -531,7 +570,7 @@ impl<E: Executor> App<E> {
                 self.state.panel = Panel::Progress;
                 self.state.scope = Scope::All;
                 self.state.view = match proj.phase {
-                    ProjectPhase::ColdStart => View::Wizard,
+                    ProjectPhase::ColdStart => View::Create,
                     ProjectPhase::Running => {
                         // Freshness is clock-relative — re-derive on open so a
                         // value that went stale since last time shows as such.
@@ -540,7 +579,6 @@ impl<E: Executor> App<E> {
                         View::App
                     }
                 };
-                self.state.wizard_step = proj.cold_step.unwrap_or(0);
                 self.emit(Event::ViewChanged(self.state.view));
             }
 
@@ -575,29 +613,16 @@ fn severity(s: Signal) -> u8 {
     }
 }
 
-/// Materialize the seven control points for a freshly completed project.
-fn seven_stages(project: ProjectId) -> Vec<NewStage> {
+/// Materialize the five stages for a freshly completed project, all on the
+/// chosen review cadence. `active_stage` is already `Prototype` from
+/// creation — every project's first lap starts there.
+fn five_stages(project: ProjectId, cadence: Cadence) -> Vec<NewStage> {
     StageKind::ALL
         .into_iter()
-        .map(|kind| {
-            let phase = match kind {
-                StageKind::CompetitorInsight
-                | StageKind::RequirementIntake
-                | StageKind::NorthStar => StagePhase::Finalized,
-                StageKind::Leading | StageKind::Lagging => StagePhase::Monitoring,
-                StageKind::PrototypeCreate => StagePhase::Iterating,
-                StageKind::ProgressMgmt => StagePhase::Running,
-            };
-            NewStage {
-                project_id: project,
-                kind,
-                phase,
-                progress: 0,
-                schedule: Cadence::Weekly,
-                owns: String::new(),
-                accept: String::new(),
-                control: String::new(),
-            }
+        .map(|kind| NewStage {
+            project_id: project,
+            kind,
+            schedule: cadence.clone(),
         })
         .collect()
 }

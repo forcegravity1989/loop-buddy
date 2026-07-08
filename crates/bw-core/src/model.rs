@@ -65,89 +65,278 @@ pub struct MetricSource {
     pub note: String,
 }
 
-/// Leading metric (controllable, hard-to-fake). Stores *inputs only*; `hit` and
-/// signal are derived on demand via [`crate::derive::evaluate_metric`] — never
-/// stored as a hand-set truth.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LeadingMetric {
-    pub name: String,
-    pub def: String,
-    pub current: String,
-    pub target: String,
-    pub source: MetricSource,
-    pub last_target: String,
-    /// This week's lever (prototype `weekPlan.driver`, editable).
-    pub driver: String,
-}
-
-/// Lagging metric (outcome we ultimately care about).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LaggingMetric {
-    pub name: String,
-    pub def: String,
-    pub current: String,
-    pub target: String,
-}
-
 // ─────────────────────────── op stages ───────────────────────────
 
-/// The seven control points, in order. The variant *is* the position — there is
-/// no way to construct an 8th stage or an out-of-range index.
+/// The five stages of the operating loop (体系重构 v2 · 阶段=角色=方法论):
+/// each stage is hosted by exactly one role, running exactly one methodology.
+/// The variant *is* the position — there is no way to construct a 6th stage or
+/// an out-of-range index. The loop closes: [`StageKind::next`] wraps
+/// `Ops → Prototype` (运维复盘回流原型 · 线闭成环).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageKind {
-    CompetitorInsight,
-    RequirementIntake,
-    NorthStar,
-    Leading,
-    Lagging,
-    PrototypeCreate,
-    ProgressMgmt,
+    /// 原型 · 原型师 · 假设驱动探索 · 求真
+    Prototype,
+    /// 构建 · 构建师 · 规格驱动交付 · 求成
+    Build,
+    /// 优化 · 优化师 · 度量驱动打磨 · 求简
+    Optimize,
+    /// 运营推广 · 运营推广师 · 增长实验 · 求增
+    Growth,
+    /// 运维 · 运维师 · 可靠性工程 SRE · 求稳
+    Ops,
 }
 
 impl StageKind {
-    /// All seven, in control-point order.
-    pub const ALL: [StageKind; 7] = [
-        StageKind::CompetitorInsight,
-        StageKind::RequirementIntake,
-        StageKind::NorthStar,
-        StageKind::Leading,
-        StageKind::Lagging,
-        StageKind::PrototypeCreate,
-        StageKind::ProgressMgmt,
+    /// All five, in loop order.
+    pub const ALL: [StageKind; 5] = [
+        StageKind::Prototype,
+        StageKind::Build,
+        StageKind::Optimize,
+        StageKind::Growth,
+        StageKind::Ops,
     ];
 
-    /// 1-based control-point number (1..=7).
+    /// 1-based stage number (1..=5).
     pub fn index(self) -> u8 {
         Self::ALL.iter().position(|&k| k == self).unwrap() as u8 + 1
     }
 
-    /// Chinese label used throughout the prototype.
-    pub fn label(self) -> &'static str {
+    /// The next stage in the loop. Wraps `Ops → Prototype` — the reflux that
+    /// closes the line into a ring (a [`Command::HandoffStage`] dispatched from
+    /// `Ops` is a *reflux*, not a dead end).
+    pub fn next(self) -> StageKind {
         match self {
-            StageKind::CompetitorInsight => "竞品洞察",
-            StageKind::RequirementIntake => "需求导入",
-            StageKind::NorthStar => "北极星指标",
-            StageKind::Leading => "引领指标",
-            StageKind::Lagging => "滞后指标",
-            StageKind::PrototypeCreate => "原型创建",
-            StageKind::ProgressMgmt => "进度管理",
+            StageKind::Prototype => StageKind::Build,
+            StageKind::Build => StageKind::Optimize,
+            StageKind::Optimize => StageKind::Growth,
+            StageKind::Growth => StageKind::Ops,
+            StageKind::Ops => StageKind::Prototype,
         }
     }
-}
 
-/// Maturity phase of a stage (drives a badge color, **not** health — L5).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StagePhase {
-    /// 已定稿
-    Finalized,
-    /// 迭代中
-    Iterating,
-    /// 监测中
-    Monitoring,
-    /// 持续运行
-    Running,
+    /// Stage name.
+    pub fn label(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "原型",
+            StageKind::Build => "构建",
+            StageKind::Optimize => "优化",
+            StageKind::Growth => "运营推广",
+            StageKind::Ops => "运维",
+        }
+    }
+
+    /// `"原型师 · Prototyper"` style full role label.
+    pub fn role(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "原型师 · Prototyper",
+            StageKind::Build => "构建师 · Builder",
+            StageKind::Optimize => "优化师 · Optimizer",
+            StageKind::Growth => "运营推广师 · Grower",
+            StageKind::Ops => "运维师 · Maintainer",
+        }
+    }
+
+    /// Bare role name (`"原型师"` etc.) — for chips.
+    pub fn role_short(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "原型师",
+            StageKind::Build => "构建师",
+            StageKind::Optimize => "优化师",
+            StageKind::Growth => "运营推广师",
+            StageKind::Ops => "运维师",
+        }
+    }
+
+    /// The stage's methodology name.
+    pub fn methodology(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "假设驱动探索",
+            StageKind::Build => "规格驱动交付",
+            StageKind::Optimize => "度量驱动打磨",
+            StageKind::Growth => "增长实验",
+            StageKind::Ops => "可靠性工程 SRE",
+        }
+    }
+
+    /// One-word motto (`"求真"` etc.) — what this stage optimizes for.
+    pub fn seek(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "求真",
+            StageKind::Build => "求成",
+            StageKind::Optimize => "求简",
+            StageKind::Growth => "求增",
+            StageKind::Ops => "求稳",
+        }
+    }
+
+    /// Brand color (hex).
+    pub fn color(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "#C5654A",
+            StageKind::Build => "#CC8B3C",
+            StageKind::Optimize => "#6E8C5A",
+            StageKind::Growth => "#4F7E86",
+            StageKind::Ops => "#8A8275",
+        }
+    }
+
+    /// Typical loop cadence, e.g. `"小时级 · 48h 一圈"`.
+    pub fn cycle_rhythm(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "小时级 · 48h 一圈",
+            StageKind::Build => "天级 · Spec → 合入",
+            StageKind::Optimize => "天—周级 · 基线 → 回归",
+            StageKind::Growth => "周级 · 实验批次",
+            StageKind::Ops => "持续 · 无终点",
+        }
+    }
+
+    /// The question this stage exists to answer.
+    pub fn core_question(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "这个问题真的存在、值得解吗？",
+            StageKind::Build => "怎么把验证过的原型，变成生产可用的系统？",
+            StageKind::Optimize => "系统扛得住被更多人用吗？哪些东西该删？",
+            StageKind::Growth => "增长卡在哪个环节？哪个实验能放大它？",
+            StageKind::Ops => "系统此刻健康吗？出了事多快能恢复？",
+        }
+    }
+
+    /// The repeating method loop, in order (the last step feeds back to the
+    /// first — rendered with a trailing `↺`).
+    pub fn method_loop(self) -> &'static [&'static str] {
+        match self {
+            StageKind::Prototype => &["证据", "洞察", "假设", "原型", "验证"],
+            StageKind::Build => &[
+                "规格 Spec",
+                "任务分解",
+                "Agent 并行实现",
+                "评审合入 · CI 门禁",
+            ],
+            StageKind::Optimize => &["基线测量", "瓶颈定位", "优化 / 删减", "回归验证"],
+            StageKind::Growth => &["漏斗诊断", "实验设计", "A/B 上线", "放大或废弃"],
+            StageKind::Ops => &["SLO / 错误预算", "监控告警", "事故响应", "复盘回灌"],
+        }
+    }
+
+    /// Handoff/DoD checklist items — checked state lives in [`OpStage::dod`],
+    /// same index. Not all boxes need to be checked to hand off (an
+    /// incomplete handoff is recorded as *risky*, never silently blocked).
+    pub fn dod_items(self) -> &'static [&'static str] {
+        match self {
+            StageKind::Prototype => &[
+                "原型经真实使用 · dogfood 验证",
+                "北极星草案已定",
+                "Spec 骨架已从原型固化",
+            ],
+            StageKind::Build => &[
+                "生产可用 v1 已部署",
+                "埋点齐全 · 北极星可采集",
+                "性能基线已测",
+            ],
+            StageKind::Optimize => &[
+                "性能 / 成本 / 体验预算全绿",
+                "债务台账已建 · 下线清单已执行",
+                "可扛 10× 流量的压测证据",
+            ],
+            StageKind::Growth => &[
+                "≥ 1 个可复制的增长循环",
+                "获客 / 渗透成本可归因",
+                "稳定流量下的 SLO 需求清单",
+            ],
+            StageKind::Ops => &[
+                "SLO / 错误预算持续达标",
+                "本轮事故已复盘",
+                "复盘洞察已回流原型段",
+            ],
+        }
+    }
+
+    /// `"→ 交棒 构建师"` style label for the handoff button. `Ops`'s handoff is
+    /// the reflux, phrased as a loop-back rather than a forward pass.
+    pub fn handoff_label(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "交棒给构建师 · 进入构建段 →",
+            StageKind::Build => "交棒给优化师 · 进入优化段 →",
+            StageKind::Optimize => "交棒给运营推广师 · 进入推广段 →",
+            StageKind::Growth => "交棒给运维师 · 进入运维段 →",
+            StageKind::Ops => "↩ 复盘回流 · 交棒原型师(新一环)",
+        }
+    }
+
+    /// Default workspace view when entering this stage.
+    pub fn default_view(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "洞察板（证据 → 发现 → 洞察）",
+            StageKind::Build => "任务树 + CI 状态",
+            StageKind::Optimize => "性能预算红绿灯",
+            StageKind::Growth => "漏斗 + 实验队列",
+            StageKind::Ops => "SLO 面板 + 值班台",
+        }
+    }
+
+    /// Leading-metric focus called out when entering this stage.
+    pub fn lead_focus(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "洞察密度 · 周验证假设数",
+            StageKind::Build => "CI 通过率 · 评审周转",
+            StageKind::Optimize => "预算达标率 · 债务燃尽",
+            StageKind::Growth => "周实验数 · 激活率",
+            StageKind::Ops => "错误预算余量 · MTTR",
+        }
+    }
+
+    /// Recommended AI crew: `(name, description)`, display-only (real
+    /// execution is the colleague team's `Executor`, Tier C).
+    pub fn ai_crew(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            StageKind::Prototype => &[
+                ("竞品分析 Agent", "强检索低臆测，结论必附来源"),
+                ("前端原型 Agent", "小时级产出可点原型"),
+                ("访谈纪要 skill", "录音 → 结构化发现"),
+            ],
+            StageKind::Build => &[
+                ("编码 Agent 车队", "按任务树并行实现"),
+                ("Code Review Agent", "合入前双审之一"),
+                ("测试生成 skill", "从验收标准长出用例"),
+            ],
+            StageKind::Optimize => &[
+                ("重构 Agent", "小步等价变换 + 回归护栏"),
+                ("性能剖析 skill", "火焰图 → 瓶颈榜"),
+                ("死代码扫描 skill", "生成下线候选"),
+            ],
+            StageKind::Growth => &[
+                ("增长分析 Agent", "漏斗分层归因，反对只看均值"),
+                ("文案多版本 skill", "一稿出 N 版投放素材"),
+                ("A/B 编排工作流", "上线 → 显著性判定全托管"),
+            ],
+            StageKind::Ops => &[
+                ("SRE Agent", "保守可控，改动必留回滚"),
+                ("告警模板 skill", "按指标类型生成规则"),
+                ("根因分析工作流", "事故 → 时间线 → 假因排序"),
+            ],
+        }
+    }
+
+    /// Common failure modes for this stage (display-only, warns against them).
+    pub fn anti_patterns(self) -> &'static str {
+        match self {
+            StageKind::Prototype => {
+                "先写 10 页 PRD 才动手 · 在原型上追求代码质量 · 没验证的想法直接进构建"
+            }
+            StageKind::Build => {
+                "边建边改方向（方向问题退回原型段）· 无验收标准的任务 · 人肉串行做 Agent 能并行的事"
+            }
+            StageKind::Optimize => {
+                "顺手加新功能 · 没有基线就动手 · 只优化不删减（代码量只增不减是警报）"
+            }
+            StageKind::Growth => {
+                "拍脑袋铺渠道不做实验 · 只看均值不看分层 · 实验冲击可靠性却不通知运维师"
+            }
+            StageKind::Ops => "只灭火不复盘 · 用增长节奏对待稳定性 · 告警噪声不治理（狼来了效应）",
+        }
+    }
 }
 
 /// One KPI under a stage. `signal` is the L3 write-through cache.
@@ -173,53 +362,20 @@ impl StageMetric {
     }
 }
 
-/// Evidence→finding→insight chain node (prototype `method.logic[]`).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MethodLogicNode {
-    pub k: String,
-    pub d: String,
-    pub c: String,
-}
-
-/// A metric row inside a stage's method panel.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MethodMetric {
-    pub name: String,
-    pub val: String,
-    pub unit: String,
-    pub target: String,
-    pub note: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FunnelStep {
-    pub label: String,
-    pub n: u32,
-}
-
-/// The method panel some stages carry (competitor insight has the full set).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StageMethod {
-    pub principle: String,
-    pub logic: Vec<MethodLogicNode>,
-    pub lead: Vec<MethodMetric>,
-    pub lag: Vec<MethodMetric>,
-    pub funnel: Vec<FunnelStep>,
-}
-
-/// One of the seven control points in a running project.
+/// One of the five stages in a running project. `kind`'s methodology metadata
+/// (core question, method loop, DoD item labels, AI crew, anti-patterns) is
+/// **static** (see `StageKind` methods) — only the dynamic operating facts
+/// live here.
 #[derive(Clone, Debug, Serialize)]
 pub struct OpStage {
     pub kind: StageKind,
-    pub phase: StagePhase,
     pub progress: u8,
     pub trend: Vec<f32>,
     pub metrics: Vec<StageMetric>,
     pub routine: Routine,
-    pub method: Option<StageMethod>,
-    pub owns: String,
-    pub accept: String,
-    pub control: String,
+    /// Handoff/DoD checklist state, same length + index as
+    /// [`StageKind::dod_items`]. A human check — never derived, never faked.
+    pub dod: Vec<bool>,
     pub create: Vec<Session>,
     pub optimize: Vec<Session>,
 }
@@ -370,7 +526,7 @@ pub struct WorkflowSpec {
     pub kind: WorkflowKind,
     pub prompt: String,
     pub goal: String,
-    /// Associated control point (1..=7), if any.
+    /// Associated stage (1..=5), if any.
     pub stage_ref: Option<u8>,
     pub phases: Vec<String>,
     pub agents: Vec<AgentRef>,
@@ -385,8 +541,58 @@ pub struct WorkflowSpec {
 pub enum ProjectPhase {
     /// 运营中
     Running,
-    /// 冷启动中
+    /// 冷启动中(创建流程未完成确认)
     ColdStart,
+}
+
+/// A project's declared lifecycle position — how it's expected to distribute
+/// effort across the five stages (体系重构 v2 `§06`). User-declared at
+/// creation (from the "项目处在什么周期" question), purely informational: it
+/// biases nothing in the derive chain, only the wall's mix-bar display.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectCycle {
+    /// 探索期 · 0→1 · 未达 PMF
+    Explore,
+    /// 扩张期 · 1→N · 增长
+    Expand,
+    /// 成熟期 · Sustain
+    Mature,
+}
+
+impl ProjectCycle {
+    pub fn label(self) -> &'static str {
+        match self {
+            ProjectCycle::Explore => "探索期",
+            ProjectCycle::Expand => "扩张期",
+            ProjectCycle::Mature => "成熟期",
+        }
+    }
+
+    pub fn sub_label(self) -> &'static str {
+        match self {
+            ProjectCycle::Explore => "0→1 · 未达 PMF",
+            ProjectCycle::Expand => "1→N · 增长",
+            ProjectCycle::Mature => "Sustain · 原「运维」期",
+        }
+    }
+
+    /// Percentage weight per [`StageKind::ALL`] stage, summing to 100.
+    pub fn mix(self) -> [u8; 5] {
+        match self {
+            ProjectCycle::Explore => [40, 30, 15, 10, 5],
+            ProjectCycle::Expand => [10, 25, 20, 30, 15],
+            ProjectCycle::Mature => [5, 10, 25, 25, 35],
+        }
+    }
+
+    pub fn main_loop_label(self) -> &'static str {
+        match self {
+            ProjectCycle::Explore => "主环 · 原型 ↔ 构建 来回",
+            ProjectCycle::Expand => "主环 · 构建 → 优化 → 推广",
+            ProjectCycle::Mature => "主环 · 优化 ↔ 运维 · 推广保温",
+        }
+    }
 }
 
 /// A product project. `signal` (L6) and `weekly_signal` are derived caches.
@@ -397,23 +603,22 @@ pub struct Project {
     pub kind: String,
     pub desc: String,
     pub phase: ProjectPhase,
+    pub cycle: ProjectCycle,
+    /// Which of the five stages is currently hosting the work.
+    pub active_stage: StageKind,
     /// L6 cache — only [`crate::derive::reduce_worst_of`] can fill it.
     pub signal: SignalCache,
     pub progress: u8,
     pub stages: Vec<OpStage>,
-    pub leading: Vec<LeadingMetric>,
-    pub lagging: Vec<LaggingMetric>,
     pub north_star: String,
     pub ns_def: String,
     /// Friday-boundary snapshot of the derived signal (audited override lives in
     /// `weekly_review`, not here).
     pub weekly_signal: SignalCache,
-    /// When cold-starting: the current wizard step (0..=7).
-    pub cold_step: Option<u8>,
 }
 
 impl Project {
-    /// **L6.** Project signal = worst-of its seven stages' routine signals.
+    /// **L6.** Project signal = worst-of its five stages' routine signals.
     /// Always derived (returns a sealed value); never hand-set.
     pub fn derive_signal(&self) -> Derived<Signal> {
         reduce_worst_of(self.stages.iter().map(|s| s.routine.signal()))
@@ -423,6 +628,20 @@ impl Project {
     pub fn signal(&self) -> Signal {
         cached(&self.signal)
     }
+}
+
+// ─────────────────────────── handoff ───────────────────────────
+
+/// One audited stage transition (体系重构 v2 `§07`①③): the DoD checklist for
+/// `from_stage` need not be fully checked to hand off — an incomplete one is
+/// simply recorded as `risky`, never silently blocked. `Ops → Prototype` is
+/// the reflux that closes the loop.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HandoffRecord {
+    pub from_stage: StageKind,
+    pub to_stage: StageKind,
+    pub risky: bool,
+    pub note: String,
 }
 
 // ───────────────────────────── hub ─────────────────────────────

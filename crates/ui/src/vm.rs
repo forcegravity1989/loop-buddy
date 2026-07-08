@@ -12,7 +12,7 @@
 use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAttention};
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
-    Cadence, FeedLevel, ProjectPhase, SessionStatus, Signal, SourceKind, StageKind, StagePhase,
+    Cadence, FeedLevel, ProjectCycle, ProjectPhase, SessionStatus, Signal, SourceKind, StageKind,
 };
 use bw_core::{MetricId, ProjectId, SessionId};
 use time::OffsetDateTime;
@@ -20,37 +20,6 @@ use time::OffsetDateTime;
 /// A cached signal read: cache miss = `Unknown`, never green.
 pub fn resolved(cache: Option<Signal>) -> Signal {
     cache.unwrap_or(Signal::Unknown)
-}
-
-// ───────────────────────── wizard steps ─────────────────────────
-
-/// The 8 wizard stops: step 0 引子 + the seven control points.
-pub const WIZARD_STEPS: [&str; 8] = [
-    "引子",
-    "竞品洞察",
-    "竞品差距分析",
-    "北极星指标",
-    "引领指标",
-    "滞后指标",
-    "原型创建",
-    "进度管理",
-];
-
-/// done / current / todo for a wizard step dot.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum StepState {
-    Done,
-    Current,
-    Todo,
-}
-
-pub fn step_state(step_idx: u8, current: u8) -> StepState {
-    use std::cmp::Ordering::*;
-    match step_idx.cmp(&current) {
-        Less => StepState::Done,
-        Equal => StepState::Current,
-        Greater => StepState::Todo,
-    }
 }
 
 // ───────────────────────── project wall ─────────────────────────
@@ -62,16 +31,17 @@ pub struct ProjectCardVm {
     pub kind: String,
     pub desc: String,
     pub running: bool,
-    /// 运营中 / 冷启动中
+    /// 运营中 / 创建中
     pub phase_label: &'static str,
     pub signal: Signal,
     pub progress: u8,
-    /// 冷启动:"第 N/7 步";运营:"7 个环节 · kind"
+    /// 创建中:desc 预览;运营中:"5 段 · kind · 当前 {active_stage}"
     pub meta: String,
+    pub cycle_label: &'static str,
 }
 
 /// Build one wall card. `stage_progresses` = the project's real stage progress
-/// values (empty while cold-starting → wizard-step progress instead).
+/// values (empty while cold-starting, before any stage is materialized).
 #[allow(clippy::too_many_arguments)]
 pub fn project_card(
     id: ProjectId,
@@ -79,7 +49,8 @@ pub fn project_card(
     kind: &str,
     desc: &str,
     phase: ProjectPhase,
-    cold_step: Option<u8>,
+    cycle: ProjectCycle,
+    active_stage: StageKind,
     signal: Option<Signal>,
     stage_progresses: &[u8],
 ) -> ProjectCardVm {
@@ -87,13 +58,19 @@ pub fn project_card(
     let progress = if running {
         crate::overall_progress(stage_progresses)
     } else {
-        // 8 stops (0..=7); progress toward completing step 7.
-        (u32::from(cold_step.unwrap_or(0).min(7)) * 100 / 7) as u8
+        0 // nothing materializes until creation is confirmed — no invented interim %
     };
     let meta = if running {
-        format!("{} 个环节 · {}", stage_progresses.len().max(7), kind)
+        format!(
+            "{} 段 · {} · 当前 {}",
+            stage_progresses.len().max(StageKind::ALL.len()),
+            kind,
+            active_stage.label()
+        )
+    } else if desc.is_empty() {
+        format!("创建中 · {kind}")
     } else {
-        format!("第 {}/7 步 · {}", cold_step.unwrap_or(0).min(7), kind)
+        desc.chars().take(40).collect::<String>()
     };
     ProjectCardVm {
         id,
@@ -101,10 +78,11 @@ pub fn project_card(
         kind: kind.into(),
         desc: desc.into(),
         running,
-        phase_label: if running { "运营中" } else { "冷启动中" },
+        phase_label: if running { "运营中" } else { "创建中" },
         signal: resolved(signal),
         progress,
         meta,
+        cycle_label: cycle.label(),
     }
 }
 
@@ -113,15 +91,17 @@ pub fn project_card(
 #[derive(Clone, PartialEq, Debug)]
 pub struct StageNavItemVm {
     pub kind: StageKind,
-    /// 1..=7, zero-padded label ("01".."07") is formatting-side.
+    /// 1..=5, zero-padded label ("01".."05") is formatting-side.
     pub n: u8,
     pub label: &'static str,
+    pub role_short: &'static str,
+    pub color: &'static str,
     pub signal: Signal,
     /// In-progress optimize/create sessions bound to this stage.
     pub active: u32,
 }
 
-/// The seven stage-axis buttons. `sessions` = (stage, is_active) pairs.
+/// The five stage-axis buttons. `sessions` = (stage, is_active) pairs.
 pub fn stage_nav(
     stages: &[(StageKind, Option<Signal>)],
     sessions: &[(Option<StageKind>, bool)],
@@ -142,6 +122,8 @@ pub fn stage_nav(
                 kind,
                 n: kind.index(),
                 label: kind.label(),
+                role_short: kind.role_short(),
+                color: kind.color(),
                 signal,
                 active,
             }
@@ -351,15 +333,6 @@ pub fn time_label(ts: OffsetDateTime, now: OffsetDateTime) -> String {
 
 // ───────────────────────── labels ─────────────────────────
 
-pub fn stage_phase_label(p: StagePhase) -> &'static str {
-    match p {
-        StagePhase::Finalized => "已定稿",
-        StagePhase::Iterating => "迭代中",
-        StagePhase::Monitoring => "监测中",
-        StagePhase::Running => "持续运行",
-    }
-}
-
 pub fn cadence_label(c: &Cadence) -> String {
     match c {
         Cadence::RealTime => "实时".into(),
@@ -393,23 +366,21 @@ pub fn signal_label(s: Signal) -> &'static str {
 pub struct StatCardsVm {
     /// 工作流累计 = create sessions ever run.
     pub workflows_total: u32,
-    /// 定时任务运行中 = stages under 监测中 / 持续运行.
+    /// 定时任务运行中 = materialized stages (each carries a standing routine
+    /// once the project is running).
     pub routines_active: u32,
     /// 优化中待验收 = active optimize sessions.
     pub optimizing: u32,
 }
 
 pub fn stat_cards(
-    stage_phases: &[StagePhase],
+    materialized_stage_count: usize,
     // (kind is create?, is_active)
     sessions: &[(bool, bool)],
 ) -> StatCardsVm {
     StatCardsVm {
         workflows_total: sessions.iter().filter(|(create, _)| *create).count() as u32,
-        routines_active: stage_phases
-            .iter()
-            .filter(|p| matches!(p, StagePhase::Monitoring | StagePhase::Running))
-            .count() as u32,
+        routines_active: materialized_stage_count as u32,
         optimizing: sessions
             .iter()
             .filter(|(create, live)| !*create && *live)
@@ -429,6 +400,77 @@ pub struct SessionCardVm {
     pub active: bool,
 }
 
+// ───────────────────────── stage detail (阶段舱) ─────────────────────────
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct DodItemVm {
+    pub label: &'static str,
+    pub checked: bool,
+}
+
+/// One stage's full detail card: static methodology metadata
+/// ([`StageKind`]'s own methods) assembled with the project's real DoD
+/// checklist state and handoff count. Everything textual here (core
+/// question, method loop, AI crew, anti-patterns) is universal methodology
+/// content, not project-specific fabrication.
+#[derive(Clone, PartialEq, Debug)]
+pub struct StageDetailVm {
+    pub kind: StageKind,
+    pub label: &'static str,
+    pub role: &'static str,
+    pub methodology: &'static str,
+    pub seek: &'static str,
+    pub color: &'static str,
+    pub cycle_rhythm: &'static str,
+    pub core_question: &'static str,
+    pub method_loop: Vec<&'static str>,
+    pub default_view: &'static str,
+    pub lead_focus: &'static str,
+    pub ai_crew: Vec<(&'static str, &'static str)>,
+    pub anti_patterns: &'static str,
+    pub dod: Vec<DodItemVm>,
+    pub dod_all_checked: bool,
+    pub handoff_label: &'static str,
+    /// How many times this project has passed through this stage (0 = never
+    /// yet handed off from here).
+    pub handoff_count: u32,
+}
+
+/// Assemble one stage's detail view. `dod_checked` is the project's real
+/// checklist state (same length/index as `kind.dod_items()`); `handoff_count`
+/// is how many entries this stage has as `from_stage` in the audit log.
+pub fn stage_detail(kind: StageKind, dod_checked: &[bool], handoff_count: u32) -> StageDetailVm {
+    let dod: Vec<DodItemVm> = kind
+        .dod_items()
+        .iter()
+        .enumerate()
+        .map(|(i, &label)| DodItemVm {
+            label,
+            checked: dod_checked.get(i).copied().unwrap_or(false),
+        })
+        .collect();
+    let dod_all_checked = !dod.is_empty() && dod.iter().all(|d| d.checked);
+    StageDetailVm {
+        kind,
+        label: kind.label(),
+        role: kind.role(),
+        methodology: kind.methodology(),
+        seek: kind.seek(),
+        color: kind.color(),
+        cycle_rhythm: kind.cycle_rhythm(),
+        core_question: kind.core_question(),
+        method_loop: kind.method_loop().to_vec(),
+        default_view: kind.default_view(),
+        lead_focus: kind.lead_focus(),
+        ai_crew: kind.ai_crew().to_vec(),
+        anti_patterns: kind.anti_patterns(),
+        dod,
+        dod_all_checked,
+        handoff_label: kind.handoff_label(),
+        handoff_count,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,21 +482,22 @@ mod tests {
 
     #[test]
     fn card_progress_is_real_not_invented() {
-        // Cold start: wizard-step fraction.
+        // Cold start: nothing materializes yet, no invented interim %.
         let c = project_card(
             ProjectId::nil(),
             "P",
             "看板",
             "",
             ProjectPhase::ColdStart,
-            Some(3),
+            ProjectCycle::Explore,
+            StageKind::Prototype,
             None,
             &[],
         );
-        assert_eq!(c.progress, 42); // 3/7
-        assert_eq!(c.phase_label, "冷启动中");
+        assert_eq!(c.progress, 0);
+        assert_eq!(c.phase_label, "创建中");
         assert_eq!(c.signal, Signal::Unknown); // no cache ⇒ Unknown, not green
-        assert!(c.meta.contains("第 3/7 步"));
+        assert!(c.meta.contains("创建中"));
 
         // Running: mean of REAL stage progresses (all zero for a fresh project).
         let r = project_card(
@@ -463,12 +506,14 @@ mod tests {
             "看板",
             "",
             ProjectPhase::Running,
-            None,
+            ProjectCycle::Explore,
+            StageKind::Build,
             Some(Signal::Green),
-            &[0, 0, 0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
         );
         assert_eq!(r.progress, 0);
-        assert!(r.meta.contains("7 个环节"));
+        assert!(r.meta.contains("5 段"));
+        assert!(r.meta.contains("构建")); // active_stage surfaces on the wall
     }
 
     #[test]
@@ -478,7 +523,7 @@ mod tests {
             "对话数",
             "",
             true,
-            Some(StageKind::Leading),
+            Some(StageKind::Prototype),
             "3",
             "≥5",
             "",
@@ -514,16 +559,18 @@ mod tests {
     }
 
     #[test]
-    fn stage_nav_covers_all_seven_in_order() {
+    fn stage_nav_covers_all_five_in_order() {
         let nav = stage_nav(
-            &[(StageKind::Leading, Some(Signal::Amber))],
-            &[(Some(StageKind::Leading), true), (None, true)],
+            &[(StageKind::Build, Some(Signal::Amber))],
+            &[(Some(StageKind::Build), true), (None, true)],
         );
-        assert_eq!(nav.len(), 7);
+        assert_eq!(nav.len(), 5);
         assert_eq!(nav[0].n, 1);
-        assert_eq!(nav[3].kind, StageKind::Leading);
-        assert_eq!(nav[3].signal, Signal::Amber);
-        assert_eq!(nav[3].active, 1);
+        assert_eq!(nav[0].kind, StageKind::Prototype);
+        assert_eq!(nav[1].kind, StageKind::Build);
+        assert_eq!(nav[1].signal, Signal::Amber);
+        assert_eq!(nav[1].active, 1);
+        assert_eq!(nav[1].role_short, "构建师");
         // Unmaterialized stages read Unknown, not green.
         assert_eq!(nav[0].signal, Signal::Unknown);
     }
@@ -611,23 +658,27 @@ mod tests {
     #[test]
     fn stat_cards_from_real_rows() {
         let s = stat_cards(
-            &[
-                StagePhase::Finalized,
-                StagePhase::Monitoring,
-                StagePhase::Running,
-            ],
+            5,
             &[(true, false), (true, true), (false, true), (false, false)],
         );
         assert_eq!(s.workflows_total, 2);
-        assert_eq!(s.routines_active, 2);
+        assert_eq!(s.routines_active, 5);
         assert_eq!(s.optimizing, 1);
     }
 
     #[test]
-    fn step_states() {
-        assert_eq!(step_state(0, 3), StepState::Done);
-        assert_eq!(step_state(3, 3), StepState::Current);
-        assert_eq!(step_state(7, 3), StepState::Todo);
-        assert_eq!(WIZARD_STEPS.len(), 8);
+    fn stage_detail_carries_real_dod_state() {
+        let d = stage_detail(StageKind::Prototype, &[true, false, false], 0);
+        assert_eq!(d.dod.len(), 3);
+        assert!(d.dod[0].checked);
+        assert!(!d.dod[1].checked);
+        assert!(!d.dod_all_checked);
+        assert_eq!(d.handoff_count, 0);
+        assert!(!d.method_loop.is_empty());
+        assert_eq!(d.ai_crew.len(), 3);
+
+        let clean = stage_detail(StageKind::Build, &[true, true, true], 2);
+        assert!(clean.dod_all_checked);
+        assert_eq!(clean.handoff_count, 2);
     }
 }

@@ -9,10 +9,11 @@
 //!
 //! The Vm is assembled from **store reads + `ui` pure builders** only. Nothing
 //! in here invents data: trends are observation history, signals come from the
-//! persisted derive cache (`None` ⇒ Unknown), feeds are real records.
+//! persisted derive cache (`None` ⇒ Unknown), feeds are real records, stage
+//! methodology text is `StageKind`'s own static metadata.
 
 use bw_app::{App, Command, Event, Panel, Scope, View};
-use bw_core::model::{ProjectPhase, Role, SessionStatus, Signal, StageKind};
+use bw_core::model::{ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, StageKind};
 use bw_core::{MetricId, SessionId};
 use bw_engine::{Engine, MockExecutor};
 use bw_store::{MetricRole, SqliteStore, Store};
@@ -23,8 +24,8 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
     attention_from_rows, cadence_label, metric_vm, observation_feed, project_card,
-    session_status_label, stage_nav, stage_phase_label, week_plan_rows, FeedItemVm, FeedSource,
-    MetricVm, ProjectCardVm, SessionCardVm, StageNavItemVm, WeekPlanRowVm,
+    session_status_label, stage_detail, stage_nav, week_plan_rows, FeedItemVm, FeedSource,
+    MetricVm, ProjectCardVm, SessionCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm,
 };
 use ui::{overall_progress, Attention};
 
@@ -38,40 +39,39 @@ pub struct Vm {
     pub fatal: Option<String>,
     pub view: View,
     pub projects: Vec<ProjectCardVm>,
-    pub wizard: Option<WizardVm>,
+    pub create: Option<CreateVm>,
     pub op: Option<OpVm>,
 }
 
+/// The creation flow's real, persisted-so-far draft (screen-local navigation
+/// state — which card is showing — lives in the screen, not here).
 #[derive(Clone, PartialEq)]
-pub struct WizardVm {
-    pub step: u8,
+pub struct CreateVm {
     pub name: String,
     pub kind: String,
+    /// The free-text brief (stored as the project's `desc`).
+    pub brief: String,
+    pub cycle: ProjectCycle,
     pub benchmark: String,
-    pub opportunity: String,
+    /// 三个月后怎样算成 (stored in the `opportunity` column).
+    pub win: String,
     pub north_star: String,
     pub ns_def: String,
     pub leading: Vec<MetricVm>,
     pub lagging: Vec<MetricVm>,
-    pub week_plan: Vec<WeekPlanRowVm>,
 }
 
 #[derive(Clone, PartialEq)]
 pub struct StageVm {
     pub kind: StageKind,
     pub n: u8,
-    pub label: &'static str,
-    pub phase_label: &'static str,
-    pub phase_chip: (&'static str, &'static str),
     pub progress: u8,
     pub trend: Vec<f32>,
     pub schedule_label: String,
-    pub owns: String,
-    pub accept: String,
-    pub control: String,
     pub health: Signal,
     pub metrics: Vec<MetricVm>,
     pub feed: Vec<FeedItemVm>,
+    pub detail: StageDetailVm,
 }
 
 #[derive(Clone, PartialEq)]
@@ -93,6 +93,8 @@ pub struct OpVm {
     pub name: String,
     pub kind: String,
     pub project_signal: Signal,
+    pub cycle: ProjectCycle,
+    pub active_stage: StageKind,
     pub north_star: String,
     pub ns_def: String,
     pub panel: Panel,
@@ -112,10 +114,20 @@ pub struct OpVm {
 /// Transient, non-persistent notices (live run progress, dispatch errors).
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiNote {
-    PhaseStarted { idx: usize, name: String },
-    PhaseCompleted { idx: usize },
+    PhaseStarted {
+        idx: usize,
+        name: String,
+    },
+    PhaseCompleted {
+        idx: usize,
+    },
     RunDone,
     RunFailed(String),
+    Handoff {
+        from: StageKind,
+        to: StageKind,
+        risky: bool,
+    },
     Error(String),
 }
 
@@ -150,7 +162,7 @@ impl RunVm {
                 self.running = false;
                 self.failed = Some(e.clone());
             }
-            UiNote::Error(_) => {}
+            UiNote::Handoff { .. } | UiNote::Error(_) => {}
         }
     }
 }
@@ -256,6 +268,9 @@ pub fn spawn() -> Kernel {
                             }
                             Event::WorkflowDone => UiNote::RunDone,
                             Event::WorkflowFailed(err) => UiNote::RunFailed(err),
+                            Event::StageHandoff { from, to, risky } => {
+                                UiNote::Handoff { from, to, risky }
+                            }
                             _ => continue,
                         };
                         let _ = fwd.send(note);
@@ -291,8 +306,8 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     let state = app.snapshot();
     let now = OffsetDateTime::now_utc();
 
-    // Project wall cards. Progress is real: wizard step while cold-starting,
-    // mean of hand-set stage progress once running.
+    // Project wall cards. Progress is real: 0 while cold-starting (nothing
+    // materializes until confirm), mean of hand-set stage progress once running.
     let mut cards = Vec::with_capacity(state.projects.len() + 1);
     for p in &state.projects {
         let stage_progresses: Vec<u8> = if p.phase == ProjectPhase::Running {
@@ -309,7 +324,8 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             &p.kind,
             &p.desc,
             p.phase,
-            p.cold_step,
+            p.cycle,
+            p.active_stage,
             p.signal,
             &stage_progresses,
         ));
@@ -320,7 +336,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         fatal: None,
         view: state.view,
         projects: cards,
-        wizard: None,
+        create: None,
         op: None,
     };
 
@@ -374,18 +390,18 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         .collect();
     let week_plan = week_plan_rows(&metrics);
 
-    if state.view == View::Wizard {
-        vm.wizard = Some(WizardVm {
-            step: state.wizard_step,
+    if state.view == View::Create {
+        vm.create = Some(CreateVm {
             name: row.name.clone(),
             kind: row.kind.clone(),
+            brief: row.desc.clone(),
+            cycle: row.cycle,
             benchmark: row.benchmark.clone(),
-            opportunity: row.opportunity.clone(),
+            win: row.opportunity.clone(),
             north_star: row.north_star.clone(),
             ns_def: row.ns_def.clone(),
             leading: metrics.iter().filter(|m| m.leading).cloned().collect(),
             lagging: metrics.iter().filter(|m| !m.leading).cloned().collect(),
-            week_plan,
         });
         return vm;
     }
@@ -397,6 +413,11 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // ── operating view ──
     let stages = store.list_stages(pid).await.unwrap_or_default();
     let sessions = store.list_sessions(pid).await.unwrap_or_default();
+    let handoffs = store.list_handoffs(pid).await.unwrap_or_default();
+    let mut handoff_count: HashMap<StageKind, u32> = HashMap::new();
+    for h in &handoffs {
+        *handoff_count.entry(h.from_stage).or_default() += 1;
+    }
 
     let stage_sigs: Vec<(StageKind, Option<Signal>)> =
         sigs.stages.iter().map(|s| (s.kind, s.routine)).collect();
@@ -441,15 +462,9 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         .map(|s| StageVm {
             kind: s.kind,
             n: s.kind.index(),
-            label: s.kind.label(),
-            phase_label: stage_phase_label(s.phase),
-            phase_chip: ui::phase_style(s.phase),
             progress: s.progress,
             trend: s.trend.clone(),
             schedule_label: cadence_label(&s.schedule),
-            owns: s.owns.clone(),
-            accept: s.accept.clone(),
-            control: s.control.clone(),
             health: ui::vm::resolved(
                 sigs.stages
                     .iter()
@@ -462,6 +477,11 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
                 .cloned()
                 .collect(),
             feed: feed_input(Some(s.kind)),
+            detail: stage_detail(
+                s.kind,
+                &s.dod,
+                handoff_count.get(&s.kind).copied().unwrap_or(0),
+            ),
         })
         .collect();
 
@@ -506,7 +526,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
 
     let overall = overall_progress(&stages.iter().map(|s| s.progress).collect::<Vec<_>>());
     let stats = ui::vm::stat_cards(
-        &stages.iter().map(|s| s.phase).collect::<Vec<_>>(),
+        stages.len(),
         &sessions
             .iter()
             .map(|s| {
@@ -522,6 +542,8 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         name: row.name.clone(),
         kind: row.kind.clone(),
         project_signal: ui::vm::resolved(sigs.project),
+        cycle: row.cycle,
+        active_stage: row.active_stage,
         north_star: row.north_star.clone(),
         ns_def: row.ns_def.clone(),
         panel: state.panel,

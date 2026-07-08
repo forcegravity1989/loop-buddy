@@ -282,7 +282,7 @@ fn worst_of_lattice() {
 #[test]
 fn cache_fields_only_fillable_via_derive() {
     use bw_core::model::{
-        Cadence, FeedItem, OpStage, Project, ProjectPhase, Routine, StageKind, StagePhase,
+        Cadence, FeedItem, OpStage, Project, ProjectCycle, ProjectPhase, Routine, StageKind,
     };
 
     // A routine whose L4 signal can ONLY be set from a derived value.
@@ -295,16 +295,12 @@ fn cache_fields_only_fillable_via_derive() {
     assert_eq!(routine.signal(), Signal::Red);
 
     let stage = OpStage {
-        kind: StageKind::ProgressMgmt,
-        phase: StagePhase::Running,
+        kind: StageKind::Ops,
         progress: 80,
         trend: vec![],
         metrics: vec![],
         routine,
-        method: None,
-        owns: String::new(),
-        accept: String::new(),
-        control: String::new(),
+        dod: vec![false, false, false],
         create: vec![],
         optimize: vec![],
     };
@@ -316,15 +312,14 @@ fn cache_fields_only_fillable_via_derive() {
         kind: "看板 / 网页应用".into(),
         desc: String::new(),
         phase: ProjectPhase::Running,
+        cycle: ProjectCycle::Explore,
+        active_stage: StageKind::Ops,
         signal: None, // cache miss
         progress: 80,
         stages: vec![stage],
-        leading: vec![],
-        lagging: vec![],
         north_star: String::new(),
         ns_def: String::new(),
         weekly_signal: None,
-        cold_step: None,
     };
     // L6: project rolls up to its worst stage; an empty cache reads Unknown.
     assert_eq!(project.signal(), Signal::Unknown);
@@ -345,8 +340,31 @@ fn signal_serializes_lowercase() {
 
 #[test]
 fn stage_kind_indices_and_labels() {
-    assert_eq!(bw_core::StageKind::CompetitorInsight.index(), 1);
-    assert_eq!(bw_core::StageKind::ProgressMgmt.index(), 7);
-    assert_eq!(bw_core::StageKind::NorthStar.label(), "北极星指标");
-    assert_eq!(bw_core::StageKind::ALL.len(), 7);
+    assert_eq!(bw_core::StageKind::Prototype.index(), 1);
+    assert_eq!(bw_core::StageKind::Ops.index(), 5);
+    assert_eq!(bw_core::StageKind::Prototype.label(), "原型");
+    assert_eq!(bw_core::StageKind::ALL.len(), 5);
+    // The loop closes: Ops hands back to Prototype (reflux), not off a cliff.
+    assert_eq!(
+        bw_core::StageKind::Ops.next(),
+        bw_core::StageKind::Prototype
+    );
+    for k in bw_core::StageKind::ALL {
+        assert_eq!(k.dod_items().len(), 3, "{k:?} should carry 3 DoD items");
+        assert_eq!(k.ai_crew().len(), 3, "{k:?} should carry 3 AI-crew entries");
+        assert!(!k.method_loop().is_empty());
+    }
+}
+
+#[test]
+fn project_cycle_mix_sums_to_100() {
+    use bw_core::model::ProjectCycle;
+    for c in [
+        ProjectCycle::Explore,
+        ProjectCycle::Expand,
+        ProjectCycle::Mature,
+    ] {
+        let sum: u16 = c.mix().iter().map(|&v| v as u16).sum();
+        assert_eq!(sum, 100, "{c:?} mix must sum to 100");
+    }
 }

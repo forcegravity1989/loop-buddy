@@ -1,16 +1,20 @@
-//! **P2 monitoring-loop test.** The operating view's heartbeat, headless:
+//! **Monitoring-loop test.** The operating view's heartbeat, headless:
 //!
 //!   RecordObservation → recompute → signal flips (derived, never set)
 //!   UpdateWeekPlan (target moves) → recompute → same value, new meaning
 //!   observation history accumulates append-only (the real sparkline series)
 //!   RunWorkflow emits progress LIVE (progress events precede persistence)
+//!   ToggleDod + HandoffStage → risky handoff still happens, just audited
+//!   Ops → Prototype reflux closes the loop
 //!
 //! Every assertion checks the persisted cache against an independent `bw_core`
 //! derive — the UI can only ever show what the chain computed.
 
 use bw_app::{App, Command, Event};
 use bw_core::derive::{evaluate_metric, measure, parse_target};
-use bw_core::model::{Cadence, LoopConfig, SourceKind, StageKind, WorkflowKind, WorkflowSpec};
+use bw_core::model::{
+    Cadence, LoopConfig, ProjectCycle, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+};
 use bw_core::{MetricId, ProjectId, SessionId, Signal, WorkflowId};
 use bw_engine::{Engine, MockExecutor};
 use bw_store::{MetricRole, SessionKind, SqliteStore, Store};
@@ -25,34 +29,43 @@ fn tmp_db() -> String {
         .into_owned()
 }
 
-async fn wizard_to_running(app: &mut App, project: ProjectId, metric: MetricId) {
+async fn creation_to_running(app: &mut App, project: ProjectId, metric: MetricId) {
     app.dispatch(Command::CreateProject {
         id: project,
         name: "增长看板".into(),
         kind: "看板 / 网页应用".into(),
-        desc: String::new(),
+        desc: "把 agent 会话里长出的工作流沉淀成可复用资产".into(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::SetCycle {
+        cycle: ProjectCycle::Explore,
     })
     .await
     .unwrap();
     app.dispatch(Command::UpdateBrief {
-        benchmark: "Linear\nHeight".into(),
-        opportunity: "深耕单人 Builder 的运营闭环".into(),
+        benchmark: "n8n\nDify".into(),
+        opportunity: "被持续复用".into(),
     })
     .await
     .unwrap();
     app.dispatch(Command::UpsertManualMetric {
         id: metric,
-        name: "每周有效对话数".into(),
-        def: "7日窗口内 ≥2 轮的对话数".into(),
+        name: "周复用次数".into(),
+        def: "非作者触发的工作流运行数".into(),
         role: MetricRole::Leading,
-        stage_kind: Some(StageKind::Leading),
+        stage_kind: Some(StageKind::Prototype),
         target: "≥5".into(),
         amber: Default::default(),
         value: "8".into(),
     })
     .await
     .unwrap();
-    app.dispatch(Command::CompleteWizard).await.unwrap();
+    app.dispatch(Command::CompleteCreation {
+        cadence: Cadence::Weekly,
+    })
+    .await
+    .unwrap();
 }
 
 /// Independent re-derive of a weekly Manual metric, same inputs as recompute.
@@ -74,9 +87,9 @@ async fn record_observation_rederives_never_sets() {
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
     let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
-    wizard_to_running(&mut app, project, metric).await;
+    creation_to_running(&mut app, project, metric).await;
 
-    // Wizard value 8 against ≥5 ⇒ green.
+    // Draft value 8 against ≥5 ⇒ green.
     let sigs = store.persisted_signals(project).await.unwrap();
     assert_eq!(sigs.metrics[0].signal, Some(Signal::Green));
     assert_eq!(sigs.project, Some(Signal::Green));
@@ -128,9 +141,9 @@ async fn week_plan_edit_moves_target_and_rederives() {
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
     let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
-    wizard_to_running(&mut app, project, metric).await;
+    creation_to_running(&mut app, project, metric).await;
 
-    // Step-7 style edit: raise this week's bar, keep last week's for the table.
+    // Progress-panel style edit: raise this week's bar, keep last week's for the table.
     app.dispatch(Command::UpdateWeekPlan {
         metric,
         new_target: "≥12".into(),
@@ -163,13 +176,13 @@ async fn run_progress_streams_before_persistence() {
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
     let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
     let mut rx = app.subscribe();
-    wizard_to_running(&mut app, project, metric).await;
+    creation_to_running(&mut app, project, metric).await;
 
     app.dispatch(Command::StartSession {
         id: session,
-        stage_kind: Some(StageKind::CompetitorInsight),
+        stage_kind: Some(StageKind::Prototype),
         kind: SessionKind::Create,
-        title: "竞品洞察 · 首轮".into(),
+        title: "原型 · 首轮".into(),
     })
     .await
     .unwrap();
@@ -177,15 +190,15 @@ async fn run_progress_streams_before_persistence() {
         session,
         spec: WorkflowSpec {
             id: WorkflowId::new(),
-            name: "竞品洞察工作流".into(),
+            name: "「原型」标准工作流".into(),
             kind: WorkflowKind::Dynamic {
-                origin: "环节".into(),
-                stage: "竞品洞察".into(),
+                origin: "阶段标准模板".into(),
+                stage: "原型".into(),
             },
-            prompt: "界定→采集→分析".into(),
-            goal: "产出竞品矩阵".into(),
+            prompt: "证据→洞察→假设".into(),
+            goal: "产出验证过的原型".into(),
             stage_ref: Some(1),
-            phases: vec!["界定".into(), "采集".into(), "分析".into()],
+            phases: vec!["证据".into(), "洞察".into(), "假设".into()],
             agents: vec![],
             skills: vec![],
             loop_config: LoopConfig {
@@ -240,6 +253,84 @@ async fn run_progress_streams_before_persistence() {
 }
 
 #[tokio::test]
+async fn dod_toggle_and_risky_handoff_then_reflux() {
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let metric = MetricId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
+    let mut rx = app.subscribe();
+    creation_to_running(&mut app, project, metric).await;
+
+    app.dispatch(Command::ToggleDod {
+        stage_kind: StageKind::Prototype,
+        index: 0,
+    })
+    .await
+    .unwrap();
+    let stages = store.list_stages(project).await.unwrap();
+    let proto = stages
+        .iter()
+        .find(|s| s.kind == StageKind::Prototype)
+        .unwrap();
+    assert!(proto.dod[0]);
+
+    // Hand off without checking the rest — allowed, marked risky.
+    app.dispatch(Command::HandoffStage {
+        risky: true,
+        note: "性能基线未测 · 带险交棒".into(),
+    })
+    .await
+    .unwrap();
+    let proj = store.get_project(project).await.unwrap().unwrap();
+    assert_eq!(proj.active_stage, StageKind::Build);
+
+    // Walk the rest of the loop back to Ops, then reflux to Prototype.
+    for _ in 0..3 {
+        app.dispatch(Command::HandoffStage {
+            risky: false,
+            note: "干净交棒".into(),
+        })
+        .await
+        .unwrap();
+    }
+    let proj = store.get_project(project).await.unwrap().unwrap();
+    assert_eq!(proj.active_stage, StageKind::Ops);
+
+    app.dispatch(Command::HandoffStage {
+        risky: false,
+        note: "复盘洞察已回流原型段".into(),
+    })
+    .await
+    .unwrap();
+    let proj = store.get_project(project).await.unwrap().unwrap();
+    assert_eq!(proj.active_stage, StageKind::Prototype, "the loop closes");
+
+    let handoffs = store.list_handoffs(project).await.unwrap();
+    assert_eq!(handoffs.len(), 5);
+    assert!(handoffs.iter().any(|h| h.risky));
+
+    let mut events = Vec::new();
+    loop {
+        match rx.try_recv() {
+            Ok(e) => events.push(e),
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            Err(TryRecvError::Lagged(_)) => continue,
+        }
+    }
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::StageHandoff { .. }))
+            .count(),
+        5
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
 async fn boot_lists_and_rederives_running_projects() {
     let path = tmp_db();
     let project = ProjectId::new();
@@ -248,7 +339,7 @@ async fn boot_lists_and_rederives_running_projects() {
     {
         let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
         let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
-        wizard_to_running(&mut app, project, metric).await;
+        creation_to_running(&mut app, project, metric).await;
     }
 
     // Fresh process: Boot loads the wall and re-derives against the current clock.
@@ -259,7 +350,7 @@ async fn boot_lists_and_rederives_running_projects() {
     let projects = &app.snapshot().projects;
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].name, "增长看板");
-    assert_eq!(projects[0].benchmark, "Linear\nHeight");
+    assert_eq!(projects[0].benchmark, "n8n\nDify");
     assert_eq!(projects[0].signal, Some(derive_now("8", "≥5")));
 
     let _ = std::fs::remove_file(&path);
