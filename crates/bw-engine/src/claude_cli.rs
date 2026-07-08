@@ -258,4 +258,21 @@ mod tests {
         let err = executor.run_phase(&node(vec![], vec![]), &ctx).await;
         assert!(err.is_err());
     }
+
+    /// A real `claude -p --output-format json` response, captured live from a
+    /// sandboxed invocation with no valid bearer token (2026-07-08). Confirms
+    /// `CliResult` parses this exact shape and surfaces the failure — proof
+    /// our parsing/error path is correct even though this sandbox cannot
+    /// complete a successful call to verify the happy path.
+    #[test]
+    fn parses_a_real_captured_auth_failure_response() {
+        let raw = r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"duration_ms":1382,"duration_api_ms":0,"num_turns":1,"result":"Failed to authenticate. API Error: 401 Invalid bearer token","stop_reason":"stop_sequence","session_id":"ff1edc6e-d74d-4ac3-a919-a969df7d63f9","total_cost_usd":0,"usage":{"input_tokens":0},"permission_denials":[],"terminal_reason":"completed","uuid":"a9a14a85-b613-4b97-b0cb-75c1e46e55a0"}"#;
+        let parsed: CliResult = serde_json::from_str(raw).expect("real CLI JSON must parse");
+        assert!(parsed.is_error);
+        assert_eq!(
+            parsed.result,
+            "Failed to authenticate. API Error: 401 Invalid bearer token"
+        );
+        assert!(parsed.permission_denials.is_empty());
+    }
 }
