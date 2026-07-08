@@ -107,6 +107,12 @@ pub struct ProjectRow {
     /// 对标竞品 / 机会缺口 — real creation-flow inputs.
     pub benchmark: String,
     pub opportunity: String,
+    /// Real-executor target directory. Empty = unconfigured — the project
+    /// only ever runs on `MockExecutor`, regardless of `allow_commands`.
+    pub workspace_path: String,
+    /// Whether the real executor may also run shell commands (Bash), not
+    /// just edit files. Meaningless while `workspace_path` is empty.
+    pub allow_commands: bool,
     /// Cached derived signal (read-only; recompute is authoritative).
     pub signal: Option<Signal>,
     pub weekly_signal: Option<Signal>,
@@ -204,6 +210,10 @@ pub trait Store: Send + Sync {
     async fn set_north_star(&self, id: ProjectId, north_star: &str, ns_def: &str) -> Result<()>;
     /// 对标竞品 + 机会缺口/三月成功标准 (creation-flow real inputs).
     async fn set_brief(&self, id: ProjectId, benchmark: &str, opportunity: &str) -> Result<()>;
+    /// Configure the real-executor target directory + whether it may also run
+    /// shell commands. Empty `path` clears configuration (reverts to
+    /// Mock-only). Does not touch any signal or observation.
+    async fn set_workspace(&self, id: ProjectId, path: &str, allow_commands: bool) -> Result<()>;
 
     async fn upsert_metric(&self, m: NewMetric) -> Result<()>;
     /// Week-plan edit: update a metric's target + this week's driver, keeping

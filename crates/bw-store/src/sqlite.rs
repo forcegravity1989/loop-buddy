@@ -220,6 +220,19 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn set_workspace(&self, id: ProjectId, path: &str, allow_commands: bool) -> Result<()> {
+        sqlx::query(
+            "UPDATE project SET workspace_path=?, allow_commands=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(path)
+        .bind(allow_commands as i64)
+        .bind(now_unix())
+        .bind(pid(id))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn upsert_metric(&self, m: NewMetric) -> Result<()> {
         let (ak, av) = amber_parts(m.amber);
         let t = now_unix();
@@ -592,7 +605,7 @@ impl Store for SqliteStore {
 
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>> {
         let row = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, signal, weekly_signal
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal
              FROM project WHERE id=?",
         )
         .bind(pid(id))
@@ -603,7 +616,7 @@ impl Store for SqliteStore {
 
     async fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, signal, weekly_signal
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal
              FROM project ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -812,6 +825,8 @@ fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
         ns_def: r.get("ns_def"),
         benchmark: r.get("benchmark"),
         opportunity: r.get("opportunity"),
+        workspace_path: r.get("workspace_path"),
+        allow_commands: r.get::<i64, _>("allow_commands") != 0,
         signal: r
             .get::<Option<String>, _>("signal")
             .and_then(|s| parse_sig(&s)),

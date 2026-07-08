@@ -16,7 +16,7 @@ use bw_core::model::{
     Cadence, LoopConfig, ProjectCycle, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{MetricId, ProjectId, SessionId, Signal, WorkflowId};
-use bw_engine::{Engine, MockExecutor};
+use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{MetricRole, SessionKind, SqliteStore, Store};
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -86,7 +86,11 @@ async fn record_observation_rederives_never_sets() {
     let metric = MetricId::new();
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
-    let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
     creation_to_running(&mut app, project, metric).await;
 
     // Draft value 8 against ≥5 ⇒ green.
@@ -140,7 +144,11 @@ async fn week_plan_edit_moves_target_and_rederives() {
     let metric = MetricId::new();
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
-    let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
     creation_to_running(&mut app, project, metric).await;
 
     // Progress-panel style edit: raise this week's bar, keep last week's for the table.
@@ -174,7 +182,11 @@ async fn run_progress_streams_before_persistence() {
     let session = SessionId::new();
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
-    let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
     let mut rx = app.subscribe();
     creation_to_running(&mut app, project, metric).await;
 
@@ -259,7 +271,11 @@ async fn dod_toggle_and_risky_handoff_then_reflux() {
     let metric = MetricId::new();
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
-    let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
     let mut rx = app.subscribe();
     creation_to_running(&mut app, project, metric).await;
 
@@ -338,13 +354,21 @@ async fn boot_lists_and_rederives_running_projects() {
 
     {
         let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
-        let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
+        let mut app = App::new(
+            store.clone(),
+            Engine::new(Arc::new(MockExecutor::new())),
+            ClaudeCliConfig::default(),
+        );
         creation_to_running(&mut app, project, metric).await;
     }
 
     // Fresh process: Boot loads the wall and re-derives against the current clock.
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
-    let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
     app.dispatch(Command::Boot).await.unwrap();
 
     let projects = &app.snapshot().projects;

@@ -16,7 +16,7 @@ use bw_core::model::{
     Cadence, LoopConfig, ProjectCycle, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{MetricId, ProjectId, SessionId, Signal, WorkflowId};
-use bw_engine::{Engine, MockExecutor};
+use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{MetricRole, SessionKind, SqliteStore, Store};
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -62,7 +62,11 @@ async fn full_spine_survives_kill_and_reopen() {
     // ── phase 1: live app, full flow ───────────────────────────────────────
     {
         let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
-        let mut app = App::new(store.clone(), Engine::new(MockExecutor::new()));
+        let mut app = App::new(
+            store.clone(),
+            Engine::new(Arc::new(MockExecutor::new())),
+            ClaudeCliConfig::default(),
+        );
         let mut rx = app.subscribe();
 
         app.dispatch(Command::CreateProject {

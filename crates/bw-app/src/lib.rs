@@ -3,9 +3,13 @@
 //! Command in, event out, single subscribable state. The UI never touches the
 //! store or engine directly: it [`dispatch`](App::dispatch)es a [`Command`],
 //! reads [`snapshot`](App::snapshot), and reacts to the [`Event`] stream from
-//! [`subscribe`](App::subscribe). `App` is generic over the [`Executor`], so the
-//! colleague team's real backend hot-swaps for [`MockExecutor`] with zero changes
-//! here (Tier C).
+//! [`subscribe`](App::subscribe). `App` holds one long-lived Mock [`Engine`]
+//! (every project without a configured `workspace_path` runs on it, byte-for-
+//! byte today's behavior) plus a process-wide [`ClaudeCliConfig`].
+//! [`Command::RunWorkflow`] builds a fresh, one-shot real [`Engine`] around a
+//! [`ClaudeCliExecutor`] per call for any project that HAS configured a
+//! workspace — `workspace_path`/`allow_commands` are per-project runtime data
+//! read from the store, not something fixed at [`App::new`] time.
 
 #![forbid(unsafe_code)]
 
@@ -14,10 +18,11 @@ use bw_core::model::{
     Cadence, ProjectCycle, ProjectPhase, Role, Signal, SourceKind, StageKind, WorkflowSpec,
 };
 use bw_core::{MetricId, ProjectId, SessionId};
-use bw_engine::{Engine, Executor, MockExecutor, RunCtx, RunEvent};
+use bw_engine::{ClaudeCliConfig, ClaudeCliExecutor, Engine, RunCtx, RunEvent};
 use bw_store::{
     MetricRole, NewMetric, NewProject, NewSession, NewStage, ProjectRow, SessionKind, Store,
 };
+use std::path::PathBuf;
 use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
@@ -126,6 +131,14 @@ pub enum Command {
     CompleteCreation {
         cadence: Cadence,
     },
+    /// Configure (or, with an empty `path`, clear) the real-executor target
+    /// directory + whether it may also run shell commands. `path` must be a
+    /// real, existing directory unless empty — a bad path fails fast here
+    /// rather than surfacing only when a workflow is next run.
+    SetWorkspace {
+        path: String,
+        allow_commands: bool,
+    },
     StartSession {
         id: SessionId,
         stage_kind: Option<StageKind>,
@@ -215,19 +228,21 @@ impl Default for AppState {
 }
 
 /// The orchestration brain.
-pub struct App<E: Executor = MockExecutor> {
+pub struct App {
     store: Arc<dyn Store>,
-    engine: Engine<E>,
+    mock_engine: Engine,
+    claude_config: ClaudeCliConfig,
     state: AppState,
     events: broadcast::Sender<Event>,
 }
 
-impl<E: Executor> App<E> {
-    pub fn new(store: Arc<dyn Store>, engine: Engine<E>) -> Self {
+impl App {
+    pub fn new(store: Arc<dyn Store>, mock_engine: Engine, claude_config: ClaudeCliConfig) -> Self {
         let (tx, _rx) = broadcast::channel(256);
         Self {
             store,
-            engine,
+            mock_engine,
+            claude_config,
             state: AppState::default(),
             events: tx,
         }
@@ -441,6 +456,20 @@ impl<E: Executor> App<E> {
                 self.emit(Event::ViewChanged(View::App));
             }
 
+            Command::SetWorkspace {
+                path,
+                allow_commands,
+            } => {
+                let p = self.active()?;
+                let trimmed = path.trim();
+                if !trimmed.is_empty() && !std::path::Path::new(trimmed).is_dir() {
+                    return Err(AppError::Invalid(format!("工作目录不存在:{trimmed}")));
+                }
+                self.store.set_workspace(p, trimmed, allow_commands).await?;
+                self.refresh_projects().await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
             Command::StartSession {
                 id,
                 stage_kind,
@@ -463,18 +492,37 @@ impl<E: Executor> App<E> {
 
             Command::RunWorkflow { session, spec } => {
                 let p = self.active()?;
+                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
                 let ctx = RunCtx {
                     project: p,
                     workflow: spec.id,
                 };
+
+                // `workspace_path` is per-project runtime data, not something
+                // baked into a long-lived Engine at App::new time: unconfigured
+                // projects keep running on the shared Mock engine (byte-for-
+                // byte today's behavior, zero regression); a configured one
+                // gets a fresh, one-shot real executor built just for this call.
+                let fresh_engine;
+                let engine: &Engine = if proj.workspace_path.trim().is_empty() {
+                    &self.mock_engine
+                } else {
+                    let executor = ClaudeCliExecutor::new(
+                        self.claude_config.clone(),
+                        PathBuf::from(proj.workspace_path.trim()),
+                        proj.allow_commands,
+                    );
+                    fresh_engine = Engine::new(Arc::new(executor));
+                    &fresh_engine
+                };
+
                 // Progress events are emitted LIVE from inside the engine
                 // callback (broadcast::send is sync), so a subscriber watches
                 // phases advance while the run is still going. Only persistence
                 // (async) is deferred to after the run.
                 let live = self.events.clone();
                 let mut completed: Vec<bw_engine::PhaseOutput> = Vec::new();
-                let run = self
-                    .engine
+                let run = engine
                     .run_workflow(&spec, &ctx, |e| match e {
                         RunEvent::PhaseStarted { idx, name } => {
                             let _ = live.send(Event::WorkflowProgress {

@@ -1,6 +1,8 @@
 //! `Engine::run_workflow` drives a spec's phases through the MockExecutor and
 //! emits the expected event sequence.
 
+use std::sync::Arc;
+
 use bw_core::model::{LoopConfig, WorkflowKind, WorkflowSpec};
 use bw_core::WorkflowId;
 use bw_engine::{Engine, MockExecutor, RunCtx, RunEvent};
@@ -28,7 +30,7 @@ fn spec(phases: &[&str]) -> WorkflowSpec {
 
 #[tokio::test]
 async fn runs_all_phases_in_order_with_events() {
-    let engine = Engine::new(MockExecutor::new());
+    let engine = Engine::new(Arc::new(MockExecutor::new()));
     let ctx = RunCtx {
         project: bw_core::ProjectId::nil(),
         workflow: WorkflowId::nil(),
@@ -66,7 +68,7 @@ async fn runs_all_phases_in_order_with_events() {
 
 #[tokio::test]
 async fn empty_workflow_still_reports_done() {
-    let engine = Engine::new(MockExecutor::new());
+    let engine = Engine::new(Arc::new(MockExecutor::new()));
     let ctx = RunCtx {
         project: bw_core::ProjectId::nil(),
         workflow: WorkflowId::nil(),

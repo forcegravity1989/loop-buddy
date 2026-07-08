@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS project (
     ns_def             TEXT NOT NULL DEFAULT '',
     benchmark          TEXT NOT NULL DEFAULT '', -- 对标竞品(创建流程真输入)
     opportunity        TEXT NOT NULL DEFAULT '', -- 机会缺口/三月成功标准(创建流程真输入)
+    workspace_path     TEXT NOT NULL DEFAULT '', -- 真执行器目标目录;空=未配置,只跑 Mock
+    allow_commands     INTEGER NOT NULL DEFAULT 0, -- 真执行器是否额外放行 Bash(不只编辑文件)
     signal             TEXT,                     -- derived cache (L6)
     weekly_signal      TEXT,                     -- derived snapshot
     signal_derived_rev INTEGER,

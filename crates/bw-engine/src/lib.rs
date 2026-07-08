@@ -9,13 +9,17 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use bw_core::model::{AgentRef, SkillRef, WorkflowSpec};
 use bw_core::{ProjectId, WorkflowId};
 
+pub mod claude_cli;
 pub mod contract;
 mod mock;
 
+pub use claude_cli::{ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
 pub use mock::MockExecutor;
 
 /// One executable phase, built from a [`WorkflowSpec`] phase.
@@ -75,12 +79,18 @@ pub struct RunSummary {
 }
 
 /// Drives a [`WorkflowSpec`] through its phases using one [`Executor`].
-pub struct Engine<E: Executor> {
-    executor: E,
+///
+/// Holds a type-erased `Arc<dyn Executor>` (not generic) so the caller can
+/// pick a backend per call — e.g. `bw-app` builds a fresh [`Engine`] around a
+/// [`ClaudeCliExecutor`] for a configured project, and reuses one long-lived
+/// [`Engine`] around [`MockExecutor`] otherwise. `#[async_trait]`'s expansion
+/// already boxes the futures, so `Executor` is dyn-safe with no wrapper enum.
+pub struct Engine {
+    executor: Arc<dyn Executor>,
 }
 
-impl<E: Executor> Engine<E> {
-    pub fn new(executor: E) -> Self {
+impl Engine {
+    pub fn new(executor: Arc<dyn Executor>) -> Self {
         Self { executor }
     }
 

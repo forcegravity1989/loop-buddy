@@ -15,7 +15,7 @@
 use bw_app::{App, Command, Event, Panel, Scope, View};
 use bw_core::model::{ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, StageKind};
 use bw_core::{MetricId, SessionId};
-use bw_engine::{Engine, MockExecutor};
+use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{MetricRole, SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -97,6 +97,10 @@ pub struct OpVm {
     pub active_stage: StageKind,
     pub north_star: String,
     pub ns_def: String,
+    /// Real-executor target directory. Empty = unconfigured — this project
+    /// only ever runs `RunWorkflow` on `MockExecutor`.
+    pub workspace_path: String,
+    pub allow_commands: bool,
     pub panel: Panel,
     pub scope: Scope,
     pub nav: Vec<StageNavItemVm>,
@@ -214,6 +218,22 @@ fn db_path() -> String {
     }
 }
 
+/// Process-wide `ClaudeCliExecutor` config, env-override-else-default (same
+/// pattern as [`db_path`]). Per-project data (`workspace_path`/
+/// `allow_commands`) lives in the store instead — see `Command::SetWorkspace`.
+fn claude_config_from_env() -> ClaudeCliConfig {
+    let mut config = ClaudeCliConfig::default();
+    if let Ok(bin) = std::env::var("BW_CLAUDE_BIN") {
+        config.binary = Some(bin);
+    }
+    if let Ok(cap) = std::env::var("BW_CLAUDE_MAX_BUDGET_USD") {
+        if let Ok(v) = cap.parse() {
+            config.max_budget_usd = v;
+        }
+    }
+    config
+}
+
 /// Spawn the kernel thread. Returns immediately; the first real [`Vm`] arrives
 /// on the watch channel once `Boot` has run.
 pub fn spawn() -> Kernel {
@@ -242,11 +262,17 @@ pub fn spawn() -> Kernel {
                     }
                 };
                 // MockExecutor with visible latency: the run flow must *stream*
-                // in the UI (per-phase), not land as one burst. Swapped for the
-                // colleague team's real executor via the same trait (Tier C).
+                // in the UI (per-phase), not land as one burst. This is the
+                // shared, long-lived engine every project without a configured
+                // workspace_path runs on; a configured project instead gets a
+                // fresh ClaudeCliExecutor built per-call inside bw-app's
+                // RunWorkflow dispatch.
                 let mut app = App::new(
                     store.clone(),
-                    Engine::new(MockExecutor::with_delay(Duration::from_millis(450))),
+                    Engine::new(Arc::new(MockExecutor::with_delay(Duration::from_millis(
+                        450,
+                    )))),
+                    claude_config_from_env(),
                 );
 
                 // Live event → transient note forwarding. Runs concurrently with
@@ -546,6 +572,8 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         active_stage: row.active_stage,
         north_star: row.north_star.clone(),
         ns_def: row.ns_def.clone(),
+        workspace_path: row.workspace_path.clone(),
+        allow_commands: row.allow_commands,
         panel: state.panel,
         scope: state.scope,
         nav: stage_nav(&stage_sigs, &session_flags),

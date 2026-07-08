@@ -360,6 +360,101 @@ fn P3Stub(what: &'static str) -> Element {
 
 // ── progress · all ──
 
+/// Real-executor workspace config — a persistent strip at the top of
+/// 「进度 · 全部」. Unconfigured (empty `workspace_path`) shows a plain
+/// "未配置" state (every run stays on `MockExecutor`); configured shows the
+/// path + permission tier with a "修改" button. Not part of the creation
+/// flow — the target directory is a post-creation, advanced, optional
+/// capability.
+#[component]
+fn WorkspaceConfig(op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+    let clay = theme::CLAY;
+    let input_style = theme::input();
+
+    let mut editing = use_signal(|| false);
+    let mut path = use_signal(|| op.workspace_path.clone());
+    let mut allow = use_signal(|| op.allow_commands);
+    let configured = !op.workspace_path.trim().is_empty();
+
+    if !editing() {
+        let path0 = op.workspace_path.clone();
+        let allow0 = op.allow_commands;
+        let btn_label = if configured { "修改" } else { "配置" };
+        let permission_label = if op.allow_commands {
+            "可运行命令"
+        } else {
+            "仅编辑文件"
+        };
+        rsx! {
+            div {
+                style: "{card} padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px;",
+                span { style: "font-size:12px;color:{ink3};flex:none;", "真执行工作目录" }
+                if configured {
+                    span {
+                        style: "font-family:{mono};font-size:12.5px;color:{ink2};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                        "{op.workspace_path}"
+                    }
+                    span { style: "font-size:11px;color:{ink3};flex:none;", "{permission_label}" }
+                } else {
+                    span { style: "font-size:12.5px;color:{ink3};flex:1;", "未配置 —— 「▶ 运行」目前始终为模拟执行" }
+                }
+                button {
+                    style: "cursor:pointer;background:transparent;color:{clay};border:1px solid {clay};border-radius:7px;padding:5px 12px;font-size:12px;flex:none;",
+                    onclick: move |_| {
+                        path.set(path0.clone());
+                        allow.set(allow0);
+                        editing.set(true);
+                    },
+                    "{btn_label}"
+                }
+            }
+        }
+    } else {
+        rsx! {
+            div {
+                style: "{card} padding:14px 18px;margin-bottom:16px;",
+                div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "配置后「▶ 运行」将真正读写这个目录下的文件 —— 路径必须已存在" }
+                input {
+                    style: "{input_style} width:100%;padding:6px 9px;font-size:12px;margin-bottom:8px;",
+                    placeholder: "例如 /Users/you/projects/my-app(留空 = 清空配置,只跑模拟)",
+                    value: "{path}",
+                    oninput: move |e| path.set(e.value()),
+                }
+                button {
+                    style: "cursor:pointer;background:transparent;border:none;padding:0;margin-bottom:10px;font-size:12px;color:{ink2};display:flex;align-items:center;gap:6px;",
+                    onclick: move |_| allow.set(!allow()),
+                    span { if allow() { "☑" } else { "☐" } }
+                    "允许运行命令(不只编辑文件)"
+                }
+                div {
+                    style: "display:flex;gap:8px;",
+                    button {
+                        style: "cursor:pointer;background:{clay};color:#FFF;border:none;border-radius:7px;padding:6px 14px;font-size:12px;",
+                        onclick: move |_| {
+                            k.send(Command::SetWorkspace {
+                                path: path(),
+                                allow_commands: allow(),
+                            });
+                            editing.set(false);
+                        },
+                        "保存"
+                    }
+                    button {
+                        style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid #E2DCCF;border-radius:7px;padding:6px 14px;font-size:12px;",
+                        onclick: move |_| editing.set(false),
+                        "取消"
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn ProgressAll(op: OpVm) -> Element {
     let k = use_context::<Kernel>();
@@ -377,6 +472,7 @@ fn ProgressAll(op: OpVm) -> Element {
         ("优化中待验收", op.stats.optimizing),
     ];
     rsx! {
+        WorkspaceConfig { op: op.clone() }
         div {
             style: "{card} padding:20px 22px;margin-bottom:16px;",
             div { style: "display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;",
@@ -922,6 +1018,9 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
                         }
                     }
                 }
+            }
+            if op.workspace_path.trim().is_empty() {
+                div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "当前未配置工作目录 → 本轮仍为模拟执行" }
             }
             div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
             div { style: "font-size:12px;color:{ink3};", "验收:{goal} · loop ≤3 迭代" }
