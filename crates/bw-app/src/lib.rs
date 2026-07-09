@@ -210,6 +210,10 @@ pub enum Command {
         reason: String,
     },
     OpenProject(ProjectId),
+    /// Delete a project and everything scoped to it. The CRUD-completeness
+    /// counterpart to `CreateProject` — irreversible; the UI is responsible
+    /// for confirming with the user before dispatching this.
+    DeleteProject(ProjectId),
     BackToProjects,
     SetPanel(Panel),
     SetScope(Scope),
@@ -446,6 +450,9 @@ impl App {
                     }
                 }
                 self.refresh_projects().await?;
+                // Real OMC/ECC catalog, not fabricated sample data — a no-op
+                // once the hub tables are non-empty (checked inside).
+                bw_store::seed_hub_if_empty(self.store.as_ref()).await?;
                 self.refresh_workflow_specs().await?;
                 self.refresh_skills().await?;
                 self.refresh_agents().await?;
@@ -858,6 +865,18 @@ impl App {
                     }
                 };
                 self.emit(Event::ViewChanged(self.state.view));
+            }
+
+            Command::DeleteProject(id) => {
+                self.store.delete_project(id).await?;
+                if self.state.active_project == Some(id) {
+                    self.state.active_project = None;
+                    self.state.active_session = None;
+                    self.state.view = View::Projects;
+                    self.emit(Event::ViewChanged(View::Projects));
+                }
+                self.refresh_projects().await?;
+                self.emit(Event::ProjectsChanged);
             }
 
             Command::BackToProjects => {

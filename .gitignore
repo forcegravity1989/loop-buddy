@@ -10,3 +10,7 @@ node_modules/
 # dx (Dioxus CLI) build output
 /dist/
 .dioxus/
+
+# Generated demo databases (regenerate via `cargo run -p bw-app --example
+# seed_demo -- <path>` — not source, don't commit binary DB files).
+/demo-data/

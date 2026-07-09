@@ -62,15 +62,32 @@ fn ProjectCard(card: ProjectCardVm) -> Element {
     let progress = card.progress;
     let id = card.id;
     let desc_preview: String = card.desc.chars().take(72).collect();
+    let mut confirming_delete = use_signal(|| false);
     rsx! {
         div {
-            onclick: move |_| k.send(Command::OpenProject(id)),
+            onclick: {
+                let k = k.clone();
+                move |_| {
+                    if !confirming_delete() {
+                        k.send(Command::OpenProject(id));
+                    }
+                }
+            },
             style: "{shell} padding:18px 20px;cursor:pointer;",
             div {
                 style: "display:flex;align-items:center;gap:6px;margin-bottom:12px;",
                 span { style: "{chip}", "{card.phase_label}" }
                 span { style: "font-size:11px;color:{ink3};", "{card.cycle_label}" }
                 span { style: "margin-left:auto;{dot}" }
+                button {
+                    title: "删除项目",
+                    style: "background:transparent;border:none;color:{ink3};cursor:pointer;font-size:14px;padding:0 0 0 8px;line-height:1;",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        confirming_delete.set(true);
+                    },
+                    "×"
+                }
             }
             div { style: "font-family:{serif};font-size:19px;font-weight:600;margin-bottom:6px;", "{card.name}" }
             if !desc_preview.is_empty() {
@@ -80,6 +97,31 @@ fn ProjectCard(card: ProjectCardVm) -> Element {
             div {
                 style: "height:6px;border-radius:3px;background:#E6E0D2;overflow:hidden;",
                 div { style: "height:100%;width:{progress}%;background:{bar_color};border-radius:3px;" }
+            }
+            if confirming_delete() {
+                div {
+                    style: "margin-top:12px;padding-top:12px;border-top:1px dashed {ink3};display:flex;align-items:center;gap:8px;",
+                    span { style: "font-size:11.5px;color:{ink3};flex:1;", "删除后不可恢复" }
+                    button {
+                        style: "cursor:pointer;background:{theme::ALERT_DEEP};color:#FFF;border:none;border-radius:6px;padding:5px 11px;font-size:11.5px;",
+                        onclick: {
+                            let k = k.clone();
+                            move |e| {
+                                e.stop_propagation();
+                                k.send(Command::DeleteProject(id));
+                            }
+                        },
+                        "确认删除"
+                    }
+                    button {
+                        style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid {ink3};border-radius:6px;padding:5px 11px;font-size:11.5px;",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            confirming_delete.set(false);
+                        },
+                        "取消"
+                    }
+                }
             }
         }
     }

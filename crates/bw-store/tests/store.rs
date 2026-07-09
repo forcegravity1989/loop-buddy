@@ -474,3 +474,87 @@ async fn agent_create_list_get_roundtrip() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn delete_project_removes_everything_scoped_to_it() {
+    let path = tmp_db();
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    let project = ProjectId::new();
+    let metric = MetricId::new();
+
+    let store = SqliteStore::open(&path).await.unwrap();
+    store
+        .create_project(NewProject {
+            id: project,
+            name: "待删除".into(),
+            kind: "y".into(),
+            desc: String::new(),
+        })
+        .await
+        .unwrap();
+    store
+        .upsert_metric(NewMetric {
+            id: metric,
+            project_id: project,
+            role: MetricRole::Leading,
+            stage_kind: Some(StageKind::Prototype),
+            name: "m".into(),
+            def: String::new(),
+            target_raw: "≥5".into(),
+            amber: Default::default(),
+            last_target: String::new(),
+            driver: String::new(),
+            pos: 0,
+        })
+        .await
+        .unwrap();
+    store
+        .append_observation(metric, SourceKind::Manual, "8", now)
+        .await
+        .unwrap();
+    store.materialize_stages(all_five(project)).await.unwrap();
+    let session = bw_core::SessionId::new();
+    store
+        .ensure_session(bw_store::NewSession {
+            id: session,
+            project_id: project,
+            stage_kind: Some(StageKind::Prototype),
+            kind: bw_store::SessionKind::Create,
+            title: "s".into(),
+            snippet: String::new(),
+        })
+        .await
+        .unwrap();
+    store
+        .append_message(session, bw_core::model::Role::Builder, "hi")
+        .await
+        .unwrap();
+    store
+        .handoff_stage(
+            project,
+            StageKind::Prototype,
+            StageKind::Build,
+            false,
+            "n",
+            now,
+        )
+        .await
+        .unwrap();
+
+    store.delete_project(project).await.unwrap();
+
+    assert!(store.get_project(project).await.unwrap().is_none());
+    assert!(store.list_observations(project).await.unwrap().is_empty());
+    assert!(store.list_stages(project).await.unwrap().is_empty());
+    assert!(store.list_sessions(project).await.unwrap().is_empty());
+    assert!(store.session_messages(session).await.unwrap().is_empty());
+    assert!(store.list_handoffs(project).await.unwrap().is_empty());
+    assert!(!store
+        .list_projects()
+        .await
+        .unwrap()
+        .iter()
+        .any(|p| p.id == project));
+
+    let _ = std::fs::remove_file(&path);
+}

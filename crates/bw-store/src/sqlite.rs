@@ -179,6 +179,53 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn delete_project(&self, id: ProjectId) -> Result<()> {
+        let p = pid(id);
+        let mut tx = self.pool.begin().await?;
+        // Children-of-children first, then direct project_id children, then
+        // the project row itself — explicit order (not ON DELETE CASCADE) so
+        // this works the same regardless of which schema.sql version created
+        // the on-disk file.
+        sqlx::query(
+            "DELETE FROM observation WHERE metric_id IN (SELECT id FROM metric WHERE project_id=?)",
+        )
+        .bind(&p)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "DELETE FROM message WHERE session_id IN (SELECT id FROM session WHERE project_id=?)",
+        )
+        .bind(&p)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM metric WHERE project_id=?")
+            .bind(&p)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM op_stage WHERE project_id=?")
+            .bind(&p)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM session WHERE project_id=?")
+            .bind(&p)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM weekly_review WHERE project_id=?")
+            .bind(&p)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM handoff WHERE project_id=?")
+            .bind(&p)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM project WHERE id=?")
+            .bind(&p)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn set_project_phase(&self, id: ProjectId, phase: ProjectPhase) -> Result<()> {
         sqlx::query("UPDATE project SET phase=?, updated_at=?, rev=rev+1 WHERE id=?")
             .bind(phase_text(phase))

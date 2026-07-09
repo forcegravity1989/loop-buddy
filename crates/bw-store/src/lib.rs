@@ -29,6 +29,9 @@ use time::OffsetDateTime;
 mod sqlite;
 pub use sqlite::SqliteStore;
 
+pub mod seed;
+pub use seed::seed_hub_if_empty;
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error(transparent)]
@@ -241,6 +244,12 @@ pub struct MessageRow {
 #[async_trait]
 pub trait Store: Send + Sync {
     async fn create_project(&self, p: NewProject) -> Result<()>;
+    /// Delete a project and everything scoped to it (metrics + their
+    /// observations, stages, sessions + their messages, weekly reviews,
+    /// handoffs) — the CRUD-completeness counterpart to `create_project`, for
+    /// after-the-fact editing/correction. Irreversible; the caller is
+    /// responsible for any user-facing confirmation.
+    async fn delete_project(&self, id: ProjectId) -> Result<()>;
     async fn set_project_phase(&self, id: ProjectId, phase: ProjectPhase) -> Result<()>;
     async fn set_project_cycle(&self, id: ProjectId, cycle: ProjectCycle) -> Result<()>;
     async fn set_north_star(&self, id: ProjectId, north_star: &str, ns_def: &str) -> Result<()>;
