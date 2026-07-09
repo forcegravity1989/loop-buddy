@@ -15,15 +15,19 @@
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    stage_workflow, AgentCard, AgentRef, Cadence, HubSource, LibSource, LoopConfig, Maturity,
-    ProjectCycle, ProjectPhase, Role, Signal, SkillCard, SkillRef, SourceKind, StageKind,
-    WorkflowKind, WorkflowSpec,
+    stage_workflow, AgentCard, AgentRef, Cadence, Connector, CronTask, HubSource, KnowledgeSource,
+    LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, Signal, SkillCard, SkillRef,
+    SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
-use bw_core::{AgentId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
-use bw_engine::{ClaudeCliConfig, ClaudeCliExecutor, Engine, RunCtx, RunEvent};
+use bw_core::{
+    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
+    WorkflowId,
+};
+use bw_engine::{ClaudeCliConfig, ClaudeCliExecutor, Engine, PermissionMode, RunCtx, RunEvent};
 use bw_store::{
-    MetricRole, NewAgent, NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec,
-    ProjectRow, SessionKind, Store,
+    GlobalHandoffRow, MetricRole, NewAgent, NewConnector, NewCronTask, NewKnowledgeSource,
+    NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec, ProjectRow,
+    SessionKind, Store,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -142,6 +146,16 @@ pub enum Command {
         path: String,
         allow_commands: bool,
     },
+    /// Replace the process-wide `ClaudeCliConfig` outright (Settings hub).
+    /// In-memory only — same persistence tier it already had (env-var-seeded
+    /// once at boot); this just makes it editable for the rest of the
+    /// process's lifetime instead of frozen.
+    SetClaudeConfig {
+        binary: Option<String>,
+        max_budget_usd: f64,
+        default_mode: PermissionMode,
+        commands_mode: PermissionMode,
+    },
     StartSession {
         id: SessionId,
         stage_kind: Option<StageKind>,
@@ -201,6 +215,25 @@ pub enum Command {
         skills: Vec<String>,
         model: String,
     },
+    CreateCronTask {
+        id: CronTaskId,
+        name: String,
+        target: String,
+        schedule: Cadence,
+        project_id: Option<ProjectId>,
+    },
+    CreateConnector {
+        id: ConnectorId,
+        name: String,
+        kind: String,
+        scope: String,
+    },
+    CreateKnowledgeSource {
+        id: KnowledgeSourceId,
+        name: String,
+        kind: String,
+        used_by: String,
+    },
     SendSessionMessage {
         session: SessionId,
         text: String,
@@ -247,6 +280,11 @@ pub enum Event {
     WorkflowSpecsChanged,
     SkillsChanged,
     AgentsChanged,
+    CronTasksChanged,
+    ConnectorsChanged,
+    KnowledgeSourcesChanged,
+    ActivityChanged,
+    ClaudeConfigChanged,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -275,6 +313,17 @@ pub struct AppState {
     pub workflow_specs: Vec<WorkflowSpec>,
     pub skills: Vec<SkillCard>,
     pub agents: Vec<AgentCard>,
+    pub cron_tasks: Vec<CronTask>,
+    pub connectors: Vec<Connector>,
+    pub knowledge_sources: Vec<KnowledgeSource>,
+    /// Activity feed — derived from `handoff` (+ `project` join), never
+    /// written to directly. See `Store::list_recent_handoffs`.
+    pub recent_activity: Vec<GlobalHandoffRow>,
+    /// Process-wide `ClaudeCliExecutor` config (Settings hub). Seeded once
+    /// from env vars at boot (`App::new`'s caller decides that), editable
+    /// afterward via `Command::SetClaudeConfig` — in memory only, same
+    /// persistence tier it already had.
+    pub claude_config: ClaudeCliConfig,
 }
 
 impl Default for AppState {
@@ -289,6 +338,11 @@ impl Default for AppState {
             workflow_specs: Vec::new(),
             skills: Vec::new(),
             agents: Vec::new(),
+            cron_tasks: Vec::new(),
+            connectors: Vec::new(),
+            knowledge_sources: Vec::new(),
+            recent_activity: Vec::new(),
+            claude_config: ClaudeCliConfig::default(),
         }
     }
 }
@@ -297,7 +351,6 @@ impl Default for AppState {
 pub struct App {
     store: Arc<dyn Store>,
     mock_engine: Engine,
-    claude_config: ClaudeCliConfig,
     state: AppState,
     events: broadcast::Sender<Event>,
 }
@@ -308,8 +361,10 @@ impl App {
         Self {
             store,
             mock_engine,
-            claude_config,
-            state: AppState::default(),
+            state: AppState {
+                claude_config,
+                ..AppState::default()
+            },
             events: tx,
         }
     }
@@ -358,6 +413,26 @@ impl App {
         Ok(())
     }
 
+    async fn refresh_cron_tasks(&mut self) -> Result<(), AppError> {
+        self.state.cron_tasks = self.store.list_cron_tasks().await?;
+        Ok(())
+    }
+
+    async fn refresh_connectors(&mut self) -> Result<(), AppError> {
+        self.state.connectors = self.store.list_connectors().await?;
+        Ok(())
+    }
+
+    async fn refresh_knowledge_sources(&mut self) -> Result<(), AppError> {
+        self.state.knowledge_sources = self.store.list_knowledge_sources().await?;
+        Ok(())
+    }
+
+    async fn refresh_activity(&mut self) -> Result<(), AppError> {
+        self.state.recent_activity = self.store.list_recent_handoffs(50).await?;
+        Ok(())
+    }
+
     /// Shared by `Command::RunWorkflow` and `Command::RunHubWorkflow` — the
     /// latter differs only in how `spec` was obtained (a hub lookup + a
     /// `uses` bump) and looks identical once it has one.
@@ -383,7 +458,7 @@ impl App {
             &self.mock_engine
         } else {
             let executor = ClaudeCliExecutor::new(
-                self.claude_config.clone(),
+                self.state.claude_config.clone(),
                 PathBuf::from(proj.workspace_path.trim()),
                 proj.allow_commands,
             );
@@ -456,6 +531,10 @@ impl App {
                 self.refresh_workflow_specs().await?;
                 self.refresh_skills().await?;
                 self.refresh_agents().await?;
+                self.refresh_cron_tasks().await?;
+                self.refresh_connectors().await?;
+                self.refresh_knowledge_sources().await?;
+                self.refresh_activity().await?;
                 self.emit(Event::ProjectsChanged);
             }
 
@@ -603,8 +682,10 @@ impl App {
                     .handoff_stage(p, from, to, risky, &note, now())
                     .await?;
                 self.refresh_projects().await?;
+                self.refresh_activity().await?;
                 self.emit(Event::StageHandoff { from, to, risky });
                 self.emit(Event::ProjectUpdated(p));
+                self.emit(Event::ActivityChanged);
             }
 
             Command::CompleteCreation { cadence } => {
@@ -634,6 +715,24 @@ impl App {
                 self.store.set_workspace(p, trimmed, allow_commands).await?;
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::SetClaudeConfig {
+                binary,
+                max_budget_usd,
+                default_mode,
+                commands_mode,
+            } => {
+                if max_budget_usd <= 0.0 {
+                    return Err(AppError::Invalid("预算上限必须大于 0".into()));
+                }
+                self.state.claude_config = ClaudeCliConfig {
+                    binary,
+                    max_budget_usd,
+                    default_mode,
+                    commands_mode,
+                };
+                self.emit(Event::ClaudeConfigChanged);
             }
 
             Command::StartSession {
@@ -796,6 +895,71 @@ impl App {
                     .await?;
                 self.refresh_agents().await?;
                 self.emit(Event::AgentsChanged);
+            }
+
+            Command::CreateCronTask {
+                id,
+                name,
+                target,
+                schedule,
+                project_id,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .create_cron_task(NewCronTask {
+                        id,
+                        name,
+                        target,
+                        schedule,
+                        project_id,
+                    })
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+            }
+
+            Command::CreateConnector {
+                id,
+                name,
+                kind,
+                scope,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .create_connector(NewConnector {
+                        id,
+                        name,
+                        kind,
+                        scope,
+                    })
+                    .await?;
+                self.refresh_connectors().await?;
+                self.emit(Event::ConnectorsChanged);
+            }
+
+            Command::CreateKnowledgeSource {
+                id,
+                name,
+                kind,
+                used_by,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .create_knowledge_source(NewKnowledgeSource {
+                        id,
+                        name,
+                        kind,
+                        used_by,
+                    })
+                    .await?;
+                self.refresh_knowledge_sources().await?;
+                self.emit(Event::KnowledgeSourcesChanged);
             }
 
             Command::SendSessionMessage { session, text } => {

@@ -4,23 +4,27 @@
 //! sidesteps `SQLITE_BUSY` without ceremony.
 
 use crate::{
-    cadence_text, cycle_text, lib_source_text, maturity_text, parse_cadence, parse_cycle,
-    parse_lib_source, parse_maturity, parse_session_status, parse_sig, parse_stage_kind,
-    session_status_text, sig_text, stage_kind_text, HandoffRow, MessageRow, MetricRole,
-    MetricSignal, NewAgent, NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec,
-    ObservationRow, PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, StageRow,
-    StageSignal, Store, StoreError,
+    cadence_text, cycle_text, lib_source_text, maturity_text, parse_cadence,
+    parse_connector_status, parse_cron_status, parse_cycle, parse_lib_source, parse_maturity,
+    parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
+    stage_kind_text, GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal, NewAgent,
+    NewConnector, NewCronTask, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
+    NewStage, NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectRow, Result, SessionKind,
+    SessionRow, StageRow, StageSignal, Store, StoreError,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
     evaluate_metric, measure, parse_target_with, reduce_worst_of, AmberBand, Measurement,
 };
 use bw_core::model::{
-    AgentCard, AgentRef, AgentSkillTag, HubSource, LoopConfig, Maturity, ProjectCycle,
-    ProjectPhase, Role, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind,
-    WorkflowSpec,
+    AgentCard, AgentRef, AgentSkillTag, Connector, CronTask, HubSource, KnowledgeSource,
+    LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, Signal, SkillCard, SkillRef,
+    SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
-use bw_core::{AgentId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
+use bw_core::{
+    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
+    WorkflowId,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
@@ -823,6 +827,37 @@ impl Store for SqliteStore {
             .collect())
     }
 
+    async fn list_recent_handoffs(&self, limit: u32) -> Result<Vec<GlobalHandoffRow>> {
+        let rows = sqlx::query(
+            "SELECT h.from_stage, h.to_stage, h.risky, h.note, h.created_at,
+                    p.id AS project_id, p.name AS project_name
+             FROM handoff h JOIN project p ON p.id = h.project_id
+             ORDER BY h.created_at DESC, h.rowid DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                let from_stage = parse_stage_kind(&r.get::<String, _>("from_stage"))?;
+                let to_stage = parse_stage_kind(&r.get::<String, _>("to_stage"))?;
+                let project_id =
+                    parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid).ok()?;
+                Some(GlobalHandoffRow {
+                    project_id,
+                    project_name: r.get("project_name"),
+                    from_stage,
+                    to_stage,
+                    risky: r.get::<i64, _>("risky") != 0,
+                    note: r.get("note"),
+                    at: OffsetDateTime::from_unix_timestamp(r.get::<i64, _>("created_at"))
+                        .unwrap_or(OffsetDateTime::UNIX_EPOCH),
+                })
+            })
+            .collect())
+    }
+
     async fn list_sessions(&self, project_id: ProjectId) -> Result<Vec<SessionRow>> {
         let rows = sqlx::query(
             "SELECT id, title, kind, stage_kind, status FROM session WHERE project_id=? ORDER BY created_at",
@@ -1044,6 +1079,86 @@ impl Store for SqliteStore {
         .await?;
         row.map(agent_row).transpose()
     }
+
+    async fn create_cron_task(&self, c: NewCronTask) -> Result<()> {
+        let t = now_unix();
+        sqlx::query(
+            "INSERT INTO cron_task (id, name, target, schedule, project_id, status, last_run, next_run, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, 'normal', '', '', ?, ?, 0)",
+        )
+        .bind(c.id.uuid().to_string())
+        .bind(&c.name)
+        .bind(&c.target)
+        .bind(cadence_text(&c.schedule))
+        .bind(c.project_id.map(pid))
+        .bind(t)
+        .bind(t)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_cron_tasks(&self) -> Result<Vec<CronTask>> {
+        let rows = sqlx::query(
+            "SELECT id, name, target, schedule, project_id, status, last_run, next_run
+             FROM cron_task ORDER BY created_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(cron_task_row).collect()
+    }
+
+    async fn create_connector(&self, c: NewConnector) -> Result<()> {
+        let t = now_unix();
+        sqlx::query(
+            "INSERT INTO connector (id, name, kind, status, last_sync, scope, created_at, updated_at, rev)
+             VALUES (?, ?, ?, 'disconnected', '', ?, ?, ?, 0)",
+        )
+        .bind(c.id.uuid().to_string())
+        .bind(&c.name)
+        .bind(&c.kind)
+        .bind(&c.scope)
+        .bind(t)
+        .bind(t)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_connectors(&self) -> Result<Vec<Connector>> {
+        let rows = sqlx::query(
+            "SELECT id, name, kind, status, last_sync, scope FROM connector ORDER BY created_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(connector_row).collect()
+    }
+
+    async fn create_knowledge_source(&self, k: NewKnowledgeSource) -> Result<()> {
+        let t = now_unix();
+        sqlx::query(
+            "INSERT INTO knowledge_source (id, name, kind, chunks, updated_label, used_by, created_at, updated_at, rev)
+             VALUES (?, ?, ?, 0, '', ?, ?, ?, 0)",
+        )
+        .bind(k.id.uuid().to_string())
+        .bind(&k.name)
+        .bind(&k.kind)
+        .bind(&k.used_by)
+        .bind(t)
+        .bind(t)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_knowledge_sources(&self) -> Result<Vec<KnowledgeSource>> {
+        let rows = sqlx::query(
+            "SELECT id, name, kind, chunks, updated_label, used_by FROM knowledge_source ORDER BY created_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(knowledge_source_row).collect()
+    }
 }
 
 fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
@@ -1124,5 +1239,47 @@ fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
         model: r.get("model"),
         runs: r.get::<i64, _>("runs") as u32,
         win_rate: r.get("win_rate"),
+    })
+}
+
+fn cron_task_row(r: sqlx::sqlite::SqliteRow) -> Result<CronTask> {
+    let id = parse_uuid(&r.get::<String, _>("id"), CronTaskId::from_uuid)?;
+    let project_id = r
+        .get::<Option<String>, _>("project_id")
+        .map(|s| parse_uuid(&s, ProjectId::from_uuid))
+        .transpose()?;
+    Ok(CronTask {
+        id,
+        name: r.get("name"),
+        target: r.get("target"),
+        schedule: parse_cadence(&r.get::<String, _>("schedule")),
+        project_id,
+        status: parse_cron_status(&r.get::<String, _>("status")),
+        last_run: r.get("last_run"),
+        next_run: r.get("next_run"),
+    })
+}
+
+fn connector_row(r: sqlx::sqlite::SqliteRow) -> Result<Connector> {
+    let id = parse_uuid(&r.get::<String, _>("id"), ConnectorId::from_uuid)?;
+    Ok(Connector {
+        id,
+        name: r.get("name"),
+        kind: r.get("kind"),
+        status: parse_connector_status(&r.get::<String, _>("status")),
+        last_sync: r.get("last_sync"),
+        scope: r.get("scope"),
+    })
+}
+
+fn knowledge_source_row(r: sqlx::sqlite::SqliteRow) -> Result<KnowledgeSource> {
+    let id = parse_uuid(&r.get::<String, _>("id"), KnowledgeSourceId::from_uuid)?;
+    Ok(KnowledgeSource {
+        id,
+        name: r.get("name"),
+        kind: r.get("kind"),
+        chunks: r.get::<i64, _>("chunks") as u32,
+        updated_label: r.get("updated_label"),
+        used_by: r.get("used_by"),
     })
 }

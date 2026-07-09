@@ -14,10 +14,16 @@ use bw_app::View;
 use bw_core::model::HubKind;
 use dioxus::prelude::*;
 use kernel::{RunVm, UiNote, Vm};
+use screens::activity_hub::ActivityHub;
 use screens::agent_hub::AgentHub;
-use screens::chrome::{BootFrame, FatalFrame, Hub, HubStub, IconRail, Toast};
+use screens::chrome::{BootFrame, FatalFrame, Hub, IconRail, Toast};
+use screens::connector_hub::ConnectorHub;
 use screens::create::Create;
+use screens::cron_hub::CronHub;
+use screens::knowledge_hub::KnowledgeHub;
+use screens::notify_hub::NotifyHub;
 use screens::op::Op;
+use screens::settings_hub::SettingsHub;
 use screens::skill_hub::SkillHub;
 use screens::wall::Wall;
 use screens::workflow_hub::WorkflowHub;
@@ -126,8 +132,18 @@ fn Root() -> Element {
                     SkillHub { hub: v.hub.clone() }
                 } else if hub() == Hub::Agent {
                     AgentHub { hub: v.hub.clone() }
-                } else if hub() != Hub::Workspace {
-                    HubStub { hub: hub() }
+                } else if hub() == Hub::Cron {
+                    CronHub { hub: v.hub.clone() }
+                } else if hub() == Hub::Connector {
+                    ConnectorHub { hub: v.hub.clone() }
+                } else if hub() == Hub::Knowledge {
+                    KnowledgeHub { hub: v.hub.clone() }
+                } else if hub() == Hub::Activity {
+                    ActivityHub { hub: v.hub.clone() }
+                } else if hub() == Hub::Notify {
+                    NotifyHub { hub: v.hub.clone() }
+                } else if hub() == Hub::Settings {
+                    SettingsHub { settings: v.settings.clone() }
                 } else if show_create {
                     Create {
                         vm: v.create.clone(),

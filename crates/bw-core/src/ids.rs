@@ -72,3 +72,15 @@ id_newtype!(
     /// Stable identity of a [`crate::model::AgentCard`].
     AgentId
 );
+id_newtype!(
+    /// Stable identity of a [`crate::model::CronTask`].
+    CronTaskId
+);
+id_newtype!(
+    /// Stable identity of a [`crate::model::Connector`].
+    ConnectorId
+);
+id_newtype!(
+    /// Stable identity of a [`crate::model::KnowledgeSource`].
+    KnowledgeSourceId
+);

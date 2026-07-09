@@ -19,11 +19,14 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    AgentCard, AgentRef, Cadence, HubSource, LibSource, LoopConfig, Maturity, ProjectCycle,
-    ProjectPhase, Role, SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind,
-    WorkflowKind, WorkflowSpec,
+    AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, HubSource,
+    KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role,
+    SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
-use bw_core::{AgentId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
+use bw_core::{
+    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
+    WorkflowId,
+};
 use time::OffsetDateTime;
 
 mod sqlite;
@@ -130,6 +133,28 @@ pub struct NewAgent {
     pub model: String,
 }
 
+pub struct NewCronTask {
+    pub id: CronTaskId,
+    pub name: String,
+    pub target: String,
+    pub schedule: Cadence,
+    pub project_id: Option<ProjectId>,
+}
+
+pub struct NewConnector {
+    pub id: ConnectorId,
+    pub name: String,
+    pub kind: String,
+    pub scope: String,
+}
+
+pub struct NewKnowledgeSource {
+    pub id: KnowledgeSourceId,
+    pub name: String,
+    pub kind: String,
+    pub used_by: String,
+}
+
 // ───────────────────────────── read DTOs ─────────────────────────────
 
 #[derive(Clone, Debug)]
@@ -201,6 +226,21 @@ pub struct ObservationRow {
 /// One audited stage transition, oldest-first-consumable.
 #[derive(Clone, Debug)]
 pub struct HandoffRow {
+    pub from_stage: StageKind,
+    pub to_stage: StageKind,
+    pub risky: bool,
+    pub note: String,
+    pub at: OffsetDateTime,
+}
+
+/// A handoff joined with its project's name — the real, cross-project audit
+/// feed behind Activity Hub. Not a new table: `handoff` is already the
+/// append-only birthplace of every stage transition (§ module doc invariant
+/// 3); this just reads it globally instead of per-project.
+#[derive(Clone, Debug)]
+pub struct GlobalHandoffRow {
+    pub project_id: ProjectId,
+    pub project_name: String,
     pub from_stage: StageKind,
     pub to_stage: StageKind,
     pub risky: bool,
@@ -336,6 +376,9 @@ pub trait Store: Send + Sync {
     async fn list_observations(&self, project_id: ProjectId) -> Result<Vec<ObservationRow>>;
     /// Stage-transition audit log, newest first.
     async fn list_handoffs(&self, project_id: ProjectId) -> Result<Vec<HandoffRow>>;
+    /// Cross-project stage-transition audit log, newest first, capped at
+    /// `limit` — the real feed behind Activity Hub.
+    async fn list_recent_handoffs(&self, limit: u32) -> Result<Vec<GlobalHandoffRow>>;
     async fn list_sessions(&self, project_id: ProjectId) -> Result<Vec<SessionRow>>;
     async fn session_messages(&self, session_id: SessionId) -> Result<Vec<MessageRow>>;
 
@@ -365,6 +408,15 @@ pub trait Store: Send + Sync {
     async fn create_agent(&self, a: NewAgent) -> Result<()>;
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>>;
+
+    async fn create_cron_task(&self, c: NewCronTask) -> Result<()>;
+    async fn list_cron_tasks(&self) -> Result<Vec<CronTask>>;
+
+    async fn create_connector(&self, c: NewConnector) -> Result<()>;
+    async fn list_connectors(&self) -> Result<Vec<Connector>>;
+
+    async fn create_knowledge_source(&self, k: NewKnowledgeSource) -> Result<()>;
+    async fn list_knowledge_sources(&self) -> Result<Vec<KnowledgeSource>>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────
@@ -484,5 +536,23 @@ pub(crate) fn parse_lib_source(s: &str) -> LibSource {
     match s {
         "official" => LibSource::Official,
         _ => LibSource::SelfBuilt,
+    }
+}
+
+pub(crate) fn parse_cron_status(s: &str) -> CronStatus {
+    match s {
+        "running" => CronStatus::Running,
+        "failed" => CronStatus::Failed,
+        "paused" => CronStatus::Paused,
+        _ => CronStatus::Normal,
+    }
+}
+
+pub(crate) fn parse_connector_status(s: &str) -> ConnectorStatus {
+    match s {
+        "connected" => ConnectorStatus::Connected,
+        "syncing" => ConnectorStatus::Syncing,
+        "error" => ConnectorStatus::Error,
+        _ => ConnectorStatus::Disconnected,
     }
 }

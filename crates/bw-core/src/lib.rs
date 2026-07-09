@@ -21,5 +21,8 @@ pub mod derive;
 pub mod ids;
 pub mod model;
 
-pub use ids::{AgentId, MetricId, ProjectId, RoutineId, SessionId, SkillId, WorkflowId};
+pub use ids::{
+    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, RoutineId, SessionId,
+    SkillId, WorkflowId,
+};
 pub use model::*;

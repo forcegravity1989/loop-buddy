@@ -185,3 +185,43 @@ CREATE TABLE IF NOT EXISTS agent (
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0
 );
+
+-- Global, except project_id which is nullable (NULL = 全部项目/all projects) —
+-- the one hub entity that legitimately optionally scopes to a project.
+CREATE TABLE IF NOT EXISTS cron_task (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    target      TEXT NOT NULL DEFAULT '',
+    schedule    TEXT NOT NULL DEFAULT 'weekly', -- Cadence text (reuses cadence_text/parse_cadence)
+    project_id  TEXT REFERENCES project(id),
+    status      TEXT NOT NULL DEFAULT 'normal',
+    last_run    TEXT NOT NULL DEFAULT '',
+    next_run    TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS connector (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'disconnected',
+    last_sync   TEXT NOT NULL DEFAULT '',
+    scope       TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_source (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    kind          TEXT NOT NULL DEFAULT '',
+    chunks        INTEGER NOT NULL DEFAULT 0,
+    updated_label TEXT NOT NULL DEFAULT '',
+    used_by       TEXT NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    rev           INTEGER NOT NULL DEFAULT 0
+);

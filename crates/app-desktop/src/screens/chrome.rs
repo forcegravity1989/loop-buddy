@@ -117,30 +117,6 @@ fn RailIcon(hub: Hub, current: Hub, on_pick: EventHandler<Hub>) -> Element {
     }
 }
 
-/// Honest placeholder for hubs that belong to the P3 breadth pass — no mock
-/// lists pretending to be data.
-#[component]
-pub fn HubStub(hub: Hub) -> Element {
-    let card = theme::card();
-    let serif = theme::SERIF;
-    let ink2 = theme::INK_2;
-    let ink3 = theme::INK_3;
-    let name = hub.label();
-    rsx! {
-        div {
-            style: "display:flex;align-items:center;justify-content:center;height:100%;",
-            div {
-                style: "{card} padding:34px 44px;max-width:460px;text-align:center;",
-                div { style: "font-family:{serif};font-size:22px;font-weight:600;margin-bottom:10px;", "{name}" }
-                p { style: "color:{ink2};font-size:13px;line-height:1.7;margin:0;",
-                    "该库属于 P3 · 铺屏阶段的交付范围。当前版本聚焦创建引导流与监控运行流,不展示任何模拟数据。"
-                }
-                p { style: "color:{ink3};font-size:12px;margin:12px 0 0;", "回到工作台继续 →" }
-            }
-        }
-    }
-}
-
 #[component]
 pub fn BootFrame() -> Element {
     let ink3 = theme::INK_3;

@@ -12,10 +12,14 @@
 use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAttention};
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
-    AgentCard, Cadence, FeedLevel, HubCard, HubKind, Maturity, ProjectCycle, ProjectPhase,
-    SessionStatus, Signal, SkillCard, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    AgentCard, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, FeedLevel, HubCard,
+    HubKind, KnowledgeSource, Maturity, ProjectCycle, ProjectPhase, SessionStatus, Signal,
+    SkillCard, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
-use bw_core::{AgentId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
+use bw_core::{
+    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
+    WorkflowId,
+};
 use time::OffsetDateTime;
 
 /// A cached signal read: cache miss = `Unknown`, never green.
@@ -713,6 +717,272 @@ pub fn hub_overview(
     ]
 }
 
+// ───────────────────────── cron / connector / knowledge hub ─────────────────────────
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct CronRowVm {
+    pub id: CronTaskId,
+    pub name: String,
+    pub target: String,
+    pub schedule_label: String,
+    /// "全部项目" when `project_id` is `None`, else the resolved project name
+    /// (falls back to a short id-derived label if the project can't be found —
+    /// never silently drops the scoping fact).
+    pub project_label: String,
+    pub status_label: &'static str,
+    pub last_run: String,
+    pub next_run: String,
+}
+
+/// `project_names` resolves `CronTask.project_id` to a display name — pass
+/// the real project rows' `(id, name)` pairs, not a hand-maintained lookup.
+pub fn cron_row(c: &CronTask, project_names: &[(ProjectId, String)]) -> CronRowVm {
+    let project_label = match c.project_id {
+        None => "全部项目".to_string(),
+        Some(pid) => project_names
+            .iter()
+            .find(|(id, _)| *id == pid)
+            .map(|(_, name)| name.clone())
+            .unwrap_or_else(|| "(项目已删除)".to_string()),
+    };
+    CronRowVm {
+        id: c.id,
+        name: c.name.clone(),
+        target: c.target.clone(),
+        schedule_label: cadence_label(&c.schedule),
+        project_label,
+        status_label: c.status.label(),
+        last_run: c.last_run.clone(),
+        next_run: c.next_run.clone(),
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct ConnectorCardVm {
+    pub id: ConnectorId,
+    pub name: String,
+    pub initial: String,
+    pub kind: String,
+    pub status_label: &'static str,
+    pub last_sync: String,
+    pub scope: String,
+}
+
+pub fn connector_card(c: &Connector) -> ConnectorCardVm {
+    ConnectorCardVm {
+        id: c.id,
+        name: c.name.clone(),
+        initial: c
+            .name
+            .chars()
+            .next()
+            .map(|ch| ch.to_string())
+            .unwrap_or_default(),
+        kind: c.kind.clone(),
+        status_label: c.status.label(),
+        last_sync: c.last_sync.clone(),
+        scope: c.scope.clone(),
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct KnowledgeRowVm {
+    pub id: KnowledgeSourceId,
+    pub name: String,
+    pub kind: String,
+    /// Pre-formatted, e.g. `"1.2k 片段"`.
+    pub chunks_label: String,
+    pub updated_label: String,
+    pub used_by: String,
+}
+
+pub fn knowledge_row(k: &KnowledgeSource) -> KnowledgeRowVm {
+    let chunks_label = if k.chunks >= 1000 {
+        format!("{:.1}k 片段", k.chunks as f32 / 1000.0)
+    } else {
+        format!("{} 片段", k.chunks)
+    };
+    KnowledgeRowVm {
+        id: k.id,
+        name: k.name.clone(),
+        kind: k.kind.clone(),
+        chunks_label,
+        updated_label: k.updated_label.clone(),
+        used_by: k.used_by.clone(),
+    }
+}
+
+// ───────────────────────── activity hub ─────────────────────────
+
+/// Input to [`activity_row`] — one `handoff` row already joined with its
+/// project's name. `bw-store`'s `GlobalHandoffRow` is the real source (a
+/// `handoff` + `project` join); `ui` can't depend on `bw-store` (must stay
+/// wasm32-clean), so `app-desktop` re-packs the fields here, mirroring the
+/// `FeedSource` pattern above.
+#[derive(Clone, Debug)]
+pub struct ActivitySource {
+    pub project_id: ProjectId,
+    pub project_name: String,
+    pub from_stage: StageKind,
+    pub to_stage: StageKind,
+    pub risky: bool,
+    pub note: String,
+    pub at: OffsetDateTime,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct ActivityRowVm {
+    pub project_id: ProjectId,
+    pub project_name: String,
+    pub from_label: &'static str,
+    pub to_label: &'static str,
+    pub risky: bool,
+    pub note: String,
+    pub time_label: String,
+}
+
+/// One real stage handoff → one activity line. No invented events: every row
+/// traces back to an actual `handoff_stage` call (see `Command::HandoffStage`).
+pub fn activity_row(a: &ActivitySource, now: OffsetDateTime) -> ActivityRowVm {
+    ActivityRowVm {
+        project_id: a.project_id,
+        project_name: a.project_name.clone(),
+        from_label: a.from_stage.label(),
+        to_label: a.to_stage.label(),
+        risky: a.risky,
+        note: a.note.clone(),
+        time_label: time_label(a.at, now),
+    }
+}
+
+// ───────────────────────── notify hub ─────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NotifyLevel {
+    Alert,
+    Done,
+}
+
+impl NotifyLevel {
+    pub fn label(self) -> &'static str {
+        match self {
+            NotifyLevel::Alert => "告警",
+            NotifyLevel::Done => "已完成",
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct NotifyItemVm {
+    pub level: NotifyLevel,
+    pub title: String,
+    pub detail: String,
+    pub time_label: String,
+}
+
+/// The notify feed has no table of its own — every row is a real status
+/// that already flipped somewhere else in the hub library (a failed cron
+/// task, an errored connector, a risky or clean stage handoff). Nothing
+/// here is hand-authored, so there's no "mark as read": the item disappears
+/// once the underlying status changes, same as the badge counts elsewhere.
+pub fn notify_feed(
+    cron_tasks: &[CronTask],
+    connectors: &[Connector],
+    activity: &[ActivityRowVm],
+) -> Vec<NotifyItemVm> {
+    let mut items = Vec::new();
+    for c in cron_tasks {
+        if c.status == CronStatus::Failed {
+            items.push(NotifyItemVm {
+                level: NotifyLevel::Alert,
+                title: format!("定时任务「{}」失败", c.name),
+                detail: format!("目标：{} · 上次运行 {}", c.target, c.last_run),
+                time_label: c.last_run.clone(),
+            });
+        }
+    }
+    for c in connectors {
+        if c.status == ConnectorStatus::Error {
+            items.push(NotifyItemVm {
+                level: NotifyLevel::Alert,
+                title: format!("连接器「{}」异常", c.name),
+                detail: format!("{} · 上次同步 {}", c.kind, c.last_sync),
+                time_label: c.last_sync.clone(),
+            });
+        }
+    }
+    for a in activity {
+        if a.risky {
+            let detail = if a.note.is_empty() {
+                format!("{} → {}", a.from_label, a.to_label)
+            } else {
+                format!("{} → {} · {}", a.from_label, a.to_label, a.note)
+            };
+            items.push(NotifyItemVm {
+                level: NotifyLevel::Alert,
+                title: format!("{} 风险交接", a.project_name),
+                detail,
+                time_label: a.time_label.clone(),
+            });
+        } else {
+            items.push(NotifyItemVm {
+                level: NotifyLevel::Done,
+                title: format!("{} 交接完成", a.project_name),
+                detail: format!("{} → {}", a.from_label, a.to_label),
+                time_label: a.time_label.clone(),
+            });
+        }
+    }
+    items
+}
+
+// ───────────────────────── settings hub ─────────────────────────
+
+/// The real, process-wide `ClaudeCliExecutor` config — `ui` can't depend on
+/// `bw-engine` (must stay wasm32-clean), so `app-desktop` unpacks
+/// `ClaudeCliConfig`/`PermissionMode` into primitives before calling
+/// [`settings_vm`]. No new table: this mirrors how the value already lived
+/// only in memory (env-var-seeded at boot), just now editable at runtime via
+/// `Command::SetClaudeConfig` instead of frozen for the process's lifetime.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct SettingsVm {
+    /// Raw text for the edit field — empty means "resolve from PATH".
+    pub binary_raw: String,
+    /// Display copy for the read-only summary row.
+    pub binary_label: String,
+    pub max_budget_usd: f64,
+    pub max_budget_label: String,
+    /// `true` iff the mode used when a project has NOT opted into command
+    /// execution is `BypassPermissions` — off by default and flagged in the
+    /// UI, never silently defaulted on.
+    pub bypass_default: bool,
+    /// Same, for the mode used when a project HAS opted into command
+    /// execution (`allow_commands = true`).
+    pub bypass_commands: bool,
+}
+
+pub fn settings_vm(
+    binary: Option<&str>,
+    max_budget_usd: f64,
+    bypass_default: bool,
+    bypass_commands: bool,
+) -> SettingsVm {
+    let binary_raw = binary.unwrap_or_default().to_string();
+    let binary_label = if binary_raw.trim().is_empty() {
+        "自动从 PATH 解析".to_string()
+    } else {
+        binary_raw.clone()
+    };
+    SettingsVm {
+        binary_raw,
+        binary_label,
+        max_budget_usd,
+        max_budget_label: format!("${max_budget_usd:.2}"),
+        bypass_default,
+        bypass_commands,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1081,5 +1351,117 @@ mod tests {
         assert_eq!(cards[0].items.len(), 4, "sample list caps at 4 items");
         assert_eq!(cards[1].id, HubKind::Skill);
         assert_eq!(cards[2].id, HubKind::Agent);
+    }
+
+    #[test]
+    fn activity_row_labels_stages_and_carries_risky_flag() {
+        let row = activity_row(
+            &ActivitySource {
+                project_id: ProjectId::nil(),
+                project_name: "智能客服知识库".into(),
+                from_stage: StageKind::Prototype,
+                to_stage: StageKind::Build,
+                risky: true,
+                note: "赶工期，测试覆盖不足".into(),
+                at: t0(),
+            },
+            t0() + Duration::minutes(5),
+        );
+        assert_eq!(row.project_name, "智能客服知识库");
+        assert_eq!(row.from_label, StageKind::Prototype.label());
+        assert_eq!(row.to_label, StageKind::Build.label());
+        assert!(row.risky);
+        assert_eq!(row.time_label, "5分钟前");
+    }
+
+    #[test]
+    fn notify_feed_surfaces_only_flipped_signals() {
+        let cron_tasks = vec![
+            CronTask {
+                id: CronTaskId::nil(),
+                name: "夜间索引".into(),
+                target: "knowledge-sync".into(),
+                schedule: Cadence::Daily,
+                project_id: None,
+                status: CronStatus::Failed,
+                last_run: "1h 前".into(),
+                next_run: "-".into(),
+            },
+            CronTask {
+                id: CronTaskId::nil(),
+                name: "健康扫描".into(),
+                target: "health-check".into(),
+                schedule: Cadence::Daily,
+                project_id: None,
+                status: CronStatus::Normal,
+                last_run: "10min 前".into(),
+                next_run: "今晚".into(),
+            },
+        ];
+        let connectors = vec![Connector {
+            id: ConnectorId::nil(),
+            name: "飞书云文档".into(),
+            kind: "知识库".into(),
+            status: ConnectorStatus::Error,
+            last_sync: "2h 前".into(),
+            scope: "全部项目".into(),
+        }];
+        let activity = vec![
+            activity_row(
+                &ActivitySource {
+                    project_id: ProjectId::nil(),
+                    project_name: "P1".into(),
+                    from_stage: StageKind::Prototype,
+                    to_stage: StageKind::Build,
+                    risky: true,
+                    note: "".into(),
+                    at: t0(),
+                },
+                t0(),
+            ),
+            activity_row(
+                &ActivitySource {
+                    project_id: ProjectId::nil(),
+                    project_name: "P2".into(),
+                    from_stage: StageKind::Build,
+                    to_stage: StageKind::Optimize,
+                    risky: false,
+                    note: "".into(),
+                    at: t0(),
+                },
+                t0(),
+            ),
+        ];
+        let items = notify_feed(&cron_tasks, &connectors, &activity);
+        // 1 failed cron + 1 errored connector + 1 risky handoff = 3 alerts;
+        // the normal cron contributes nothing, the clean handoff contributes
+        // exactly 1 "done" entry.
+        let alerts = items
+            .iter()
+            .filter(|i| i.level == NotifyLevel::Alert)
+            .count();
+        let done = items
+            .iter()
+            .filter(|i| i.level == NotifyLevel::Done)
+            .count();
+        assert_eq!(alerts, 3);
+        assert_eq!(done, 1);
+        assert!(items.iter().any(|i| i.title.contains("夜间索引")));
+        assert!(items.iter().any(|i| i.title.contains("飞书云文档")));
+    }
+
+    #[test]
+    fn settings_vm_labels_unconfigured_binary_and_formats_budget() {
+        let auto = settings_vm(None, 0.5, false, false);
+        assert_eq!(auto.binary_label, "自动从 PATH 解析");
+        assert_eq!(auto.binary_raw, "");
+        assert_eq!(auto.max_budget_label, "$0.50");
+        assert!(!auto.bypass_default);
+        assert!(!auto.bypass_commands);
+
+        let custom = settings_vm(Some("/usr/local/bin/claude"), 2.0, true, false);
+        assert_eq!(custom.binary_label, "/usr/local/bin/claude");
+        assert_eq!(custom.max_budget_label, "$2.00");
+        assert!(custom.bypass_default);
     }
 }

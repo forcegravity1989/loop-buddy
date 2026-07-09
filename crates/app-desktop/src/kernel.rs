@@ -15,7 +15,7 @@
 use bw_app::{App, Command, Event, Panel, Scope, View};
 use bw_core::model::{HubCard, ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, StageKind};
 use bw_core::{MetricId, SessionId};
-use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
+use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
 use bw_store::{MetricRole, SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,10 +23,12 @@ use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
-    agent_card, attention_from_rows, cadence_label, hub_overview, metric_vm, observation_feed,
-    project_card, session_status_label, skill_card, stage_detail, stage_nav, week_plan_rows,
-    workflow_hub_row, AgentCardVm, FeedItemVm, FeedSource, MetricVm, ProjectCardVm, SessionCardVm,
-    SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm, WorkflowHubRowVm,
+    activity_row, agent_card, attention_from_rows, cadence_label, connector_card, cron_row,
+    hub_overview, knowledge_row, metric_vm, notify_feed, observation_feed, project_card,
+    session_status_label, settings_vm, skill_card, stage_detail, stage_nav, week_plan_rows,
+    workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm, ConnectorCardVm, CronRowVm,
+    FeedItemVm, FeedSource, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm, SessionCardVm,
+    SettingsVm, SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm, WorkflowHubRowVm,
 };
 use ui::{overall_progress, Attention};
 
@@ -45,6 +47,8 @@ pub struct Vm {
     /// Hub library — global, built unconditionally (no active project
     /// required), unlike `create`/`op`.
     pub hub: HubVm,
+    /// The real, editable `ClaudeCliConfig` (Settings hub) — also global.
+    pub settings: SettingsVm,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -57,6 +61,14 @@ pub struct HubVm {
     pub skills: Vec<SkillCardVm>,
     pub agents: Vec<AgentCardVm>,
     pub overview: Vec<HubCard>,
+    pub cron_tasks: Vec<CronRowVm>,
+    pub connectors: Vec<ConnectorCardVm>,
+    pub knowledge_sources: Vec<KnowledgeRowVm>,
+    /// Cross-project audit feed — real `handoff` rows, newest first.
+    pub activity: Vec<ActivityRowVm>,
+    /// Derived from flipped signals already visible above (no table of its
+    /// own) — failed cron tasks, errored connectors, risky/clean handoffs.
+    pub notifications: Vec<NotifyItemVm>,
 }
 
 /// The creation flow's real, persisted-so-far draft (screen-local navigation
@@ -388,6 +400,39 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         .collect();
     let skills: Vec<SkillCardVm> = state.skills.iter().map(skill_card).collect();
     let agents: Vec<AgentCardVm> = state.agents.iter().map(agent_card).collect();
+    let project_names: Vec<(bw_core::ProjectId, String)> = state
+        .projects
+        .iter()
+        .map(|p| (p.id, p.name.clone()))
+        .collect();
+    let cron_tasks: Vec<CronRowVm> = state
+        .cron_tasks
+        .iter()
+        .map(|c| cron_row(c, &project_names))
+        .collect();
+    let connectors: Vec<ConnectorCardVm> = state.connectors.iter().map(connector_card).collect();
+    let knowledge_sources: Vec<KnowledgeRowVm> =
+        state.knowledge_sources.iter().map(knowledge_row).collect();
+    let activity: Vec<ActivityRowVm> = state
+        .recent_activity
+        .iter()
+        .map(|g| {
+            activity_row(
+                &ActivitySource {
+                    project_id: g.project_id,
+                    project_name: g.project_name.clone(),
+                    from_stage: g.from_stage,
+                    to_stage: g.to_stage,
+                    risky: g.risky,
+                    note: g.note.clone(),
+                    at: g.at,
+                },
+                now,
+            )
+        })
+        .collect();
+    let notifications: Vec<NotifyItemVm> =
+        notify_feed(&state.cron_tasks, &state.connectors, &activity);
     let hub = HubVm {
         overview: hub_overview(
             workflows.len(),
@@ -400,7 +445,18 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         workflows,
         skills,
         agents,
+        cron_tasks,
+        connectors,
+        knowledge_sources,
+        activity,
+        notifications,
     };
+    let settings = settings_vm(
+        state.claude_config.binary.as_deref(),
+        state.claude_config.max_budget_usd,
+        state.claude_config.default_mode == PermissionMode::BypassPermissions,
+        state.claude_config.commands_mode == PermissionMode::BypassPermissions,
+    );
 
     let mut vm = Vm {
         ready: true,
@@ -410,6 +466,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         create: None,
         op: None,
         hub: hub.clone(),
+        settings,
     };
 
     let Some(pid) = state.active_project else {

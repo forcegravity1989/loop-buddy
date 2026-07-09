@@ -558,3 +558,84 @@ async fn delete_project_removes_everything_scoped_to_it() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn list_recent_handoffs_joins_project_name_newest_first_and_respects_limit() {
+    let path = tmp_db();
+    let t0 = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    let a = ProjectId::new();
+    let b = ProjectId::new();
+
+    let store = SqliteStore::open(&path).await.unwrap();
+    store
+        .create_project(NewProject {
+            id: a,
+            name: "项目 A".into(),
+            kind: "y".into(),
+            desc: String::new(),
+        })
+        .await
+        .unwrap();
+    store
+        .create_project(NewProject {
+            id: b,
+            name: "项目 B".into(),
+            kind: "y".into(),
+            desc: String::new(),
+        })
+        .await
+        .unwrap();
+    store.materialize_stages(all_five(a)).await.unwrap();
+    store.materialize_stages(all_five(b)).await.unwrap();
+
+    // A hands off first (t0), then B (t0+1, risky), then A again (t0+2 —
+    // the newest of all three, and the second time A appears).
+    store
+        .handoff_stage(a, StageKind::Prototype, StageKind::Build, false, "A1", t0)
+        .await
+        .unwrap();
+    store
+        .handoff_stage(
+            b,
+            StageKind::Prototype,
+            StageKind::Build,
+            true,
+            "B1 险",
+            t0 + time::Duration::seconds(1),
+        )
+        .await
+        .unwrap();
+    store
+        .handoff_stage(
+            a,
+            StageKind::Build,
+            StageKind::Optimize,
+            false,
+            "A2",
+            t0 + time::Duration::seconds(2),
+        )
+        .await
+        .unwrap();
+
+    let all = store.list_recent_handoffs(10).await.unwrap();
+    assert_eq!(all.len(), 3);
+    // Newest first, across both projects — the join resolves the real name,
+    // not just the id.
+    assert_eq!(all[0].project_name, "项目 A");
+    assert_eq!(all[0].note, "A2");
+    assert_eq!(all[0].from_stage, StageKind::Build);
+    assert_eq!(all[0].to_stage, StageKind::Optimize);
+    assert!(!all[0].risky);
+    assert_eq!(all[1].project_name, "项目 B");
+    assert_eq!(all[1].note, "B1 险");
+    assert!(all[1].risky);
+    assert_eq!(all[2].project_name, "项目 A");
+    assert_eq!(all[2].note, "A1");
+
+    let capped = store.list_recent_handoffs(2).await.unwrap();
+    assert_eq!(capped.len(), 2, "limit is respected");
+    assert_eq!(capped[0].note, "A2");
+    assert_eq!(capped[1].note, "B1 险");
+
+    let _ = std::fs::remove_file(&path);
+}

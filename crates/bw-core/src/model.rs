@@ -11,7 +11,9 @@
 //! `serde`-round-trippable.
 
 use crate::derive::{reduce_worst_of, AmberBand, Derived};
-use crate::ids::{AgentId, ProjectId, SessionId, SkillId, WorkflowId};
+use crate::ids::{
+    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, ProjectId, SessionId, SkillId, WorkflowId,
+};
 use serde::{Deserialize, Serialize};
 
 /// Health signal. The prototype had three states; `Unknown` is the honesty
@@ -687,6 +689,90 @@ pub struct AgentCard {
     /// Adoption rate as a pre-formatted display string (e.g. `"94%"`) —
     /// matches how metric values are stored as display strings elsewhere.
     pub win_rate: String,
+}
+
+// ─────────────────────────── cron / connector / knowledge hub ───────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CronStatus {
+    Running,
+    Normal,
+    Failed,
+    Paused,
+}
+
+impl CronStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            CronStatus::Running => "运行中",
+            CronStatus::Normal => "正常",
+            CronStatus::Failed => "失败",
+            CronStatus::Paused => "暂停",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CronTask {
+    pub id: CronTaskId,
+    pub name: String,
+    /// What it runs — free text (e.g. a workflow/routine name); not a hard FK
+    /// since a cron target may be a hub workflow, a connector sync, or
+    /// something outside this app entirely.
+    pub target: String,
+    pub schedule: Cadence,
+    /// `None` = 全部项目 (all projects), matching the prototype's own
+    /// "全部项目" catch-all option.
+    pub project_id: Option<ProjectId>,
+    pub status: CronStatus,
+    pub last_run: String,
+    pub next_run: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorStatus {
+    Connected,
+    Syncing,
+    Error,
+    Disconnected,
+}
+
+impl ConnectorStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            ConnectorStatus::Connected => "已连接",
+            ConnectorStatus::Syncing => "同步中",
+            ConnectorStatus::Error => "异常",
+            ConnectorStatus::Disconnected => "未连接",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Connector {
+    pub id: ConnectorId,
+    pub name: String,
+    /// e.g. 可观测性/数据库/代码仓库 — free text, this app has no fixed
+    /// connector-type taxonomy yet (Tier D territory).
+    pub kind: String,
+    pub status: ConnectorStatus,
+    pub last_sync: String,
+    pub scope: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KnowledgeSource {
+    pub id: KnowledgeSourceId,
+    pub name: String,
+    /// e.g. Notion/Markdown/OpenAPI — free text source format.
+    pub kind: String,
+    pub chunks: u32,
+    pub updated_label: String,
+    /// Which agent (by name) consumes this source — free text, matching the
+    /// prototype's own by-name (not by-id) reference.
+    pub used_by: String,
 }
 
 // ─────────────────────────── project ───────────────────────────
