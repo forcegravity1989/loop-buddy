@@ -25,10 +25,11 @@ use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
     activity_row, agent_card, attention_from_rows, cadence_label, connector_card, cron_row,
     hub_overview, knowledge_row, metric_vm, notify_feed, observation_feed, project_card,
-    session_status_label, settings_vm, skill_card, stage_detail, stage_nav, week_plan_rows,
-    workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm, ConnectorCardVm, CronRowVm,
-    FeedItemVm, FeedSource, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm, SessionCardVm,
-    SettingsVm, SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm, WorkflowHubRowVm,
+    session_status_label, settings_vm, skill_card, stage_detail, stage_nav, version_log_vm,
+    week_plan_rows, workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm, ConnectorCardVm,
+    CronRowVm, FeedItemVm, FeedSource, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm,
+    SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm,
+    WorkflowHubRowVm,
 };
 use ui::{overall_progress, Attention};
 
@@ -145,6 +146,10 @@ pub struct OpVm {
     /// panel — same data as the top-level `Vm.hub`, just also reachable from
     /// deep inside `Op`'s component tree without re-prop-drilling `Vm` itself.
     pub hub: HubVm,
+    /// Real `git log` for this project's `workspace_path` (Version panel).
+    /// `NotLoaded` until `Command::LoadVersionLog` is dispatched at least
+    /// once for this specific project.
+    pub version_log: ui::vm::VersionLogVm,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -653,6 +658,25 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         None => None,
     };
 
+    let version_log = version_log_vm(state.version_log.as_ref().and_then(|(vpid, result)| {
+        (*vpid == pid).then(|| {
+            result
+                .as_ref()
+                .map(|commits| {
+                    commits
+                        .iter()
+                        .map(|c| ui::vm::CommitSource {
+                            short_hash: c.short_hash.clone(),
+                            author: c.author.clone(),
+                            date: c.date.clone(),
+                            subject: c.subject.clone(),
+                        })
+                        .collect()
+                })
+                .map_err(|e| e.clone())
+        })
+    }));
+
     let overall = overall_progress(&stages.iter().map(|s| s.progress).collect::<Vec<_>>());
     let stats = ui::vm::stat_cards(
         stages.len(),
@@ -693,6 +717,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         sessions: session_cards,
         chat,
         hub,
+        version_log,
     });
     vm
 }

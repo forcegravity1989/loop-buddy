@@ -21,7 +21,7 @@ use bw_core::model::{stage_workflow, FeedLevel, HubKind, HubSource, Signal, Stag
 use bw_core::{SessionId, WorkflowId};
 use bw_store::SessionKind;
 use dioxus::prelude::*;
-use ui::vm::{MetricVm, SessionCardVm};
+use ui::vm::{MetricVm, SessionCardVm, VersionLogVm};
 use ui::{sparkline_path, SparkPath, WowDir};
 
 #[component]
@@ -339,21 +339,100 @@ fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
         (Panel::Workflow, s) => rsx! { WorkflowPanel { op, stage: s, run, on_pick_hub } },
         (Panel::Routine, None) => rsx! { RoutineAll { op } },
         (Panel::Routine, Some(s)) => rsx! { RoutineStage { s } },
-        (Panel::Artifact, _) => rsx! { P3Stub { what: "产物画廊 / 产物画布" } },
-        (Panel::Version, _) => rsx! { P3Stub { what: "版本 · commit 时间线与 issues" } },
+        (Panel::Artifact, _) => rsx! { ArtifactPanel {} },
+        (Panel::Version, _) => rsx! { VersionPanel { op } },
     }
 }
 
+/// Deliberately still a stub — not "not built yet," but assessed and left
+/// this way. The prototype's "产物画廊/产物画布" is rich structured content
+/// (a clickable web app, a data matrix, a document) fabricated from a
+/// commit-id hash; this app has no matching real concept (`session`s are
+/// plain text transcripts, nothing structured is ever produced or stored).
+/// Unlike Version — where "real git commits" was an unambiguous, already-
+/// available honest data source — there's no equally clean real source
+/// here yet. Repurposing something adjacent (e.g. "recently changed files
+/// under `workspace_path`") would be a materially weaker echo of what this
+/// panel promises, likely to read as broken rather than honest. Revisit
+/// once sessions can produce a real structured output.
 #[component]
-fn P3Stub(what: &'static str) -> Element {
+fn ArtifactPanel() -> Element {
     let card = theme::card();
     let ink2 = theme::INK_2;
     rsx! {
         div {
             style: "{card} padding:26px 30px;max-width:560px;",
-            div { style: "font-weight:600;margin-bottom:8px;", "{what}" }
+            div { style: "font-weight:600;margin-bottom:8px;", "产物画廊 / 产物画布" }
             p { style: "color:{ink2};font-size:13px;line-height:1.7;margin:0;",
-                "属于 P3 · 铺屏阶段。这里将展示真实产物与版本记录 —— 不放模拟数据。"
+                "还没有真实数据源:会话目前只产出纯文本,没有结构化产物这个存量。等会话能真正产出可展示的结构化输出后再做,不提前拼一个半假的版本。"
+            }
+        }
+    }
+}
+
+/// Real `git log` on the project's `workspace_path` — no fabricated
+/// commits/PRs/issues (unlike the prototype's hash-derived fake GitHub
+/// view): a project with no configured workdir, or one that isn't a git
+/// repo, says so plainly instead of inventing a history for it.
+#[component]
+fn VersionPanel(op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+    let clay = theme::CLAY;
+    let configured = !op.workspace_path.trim().is_empty();
+
+    rsx! {
+        div {
+            style: "max-width:760px;",
+            div {
+                style: "{card} padding:14px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px;",
+                span { style: "font-size:12px;color:{ink3};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                    if configured {
+                        "真实 git log · {op.workspace_path}"
+                    } else {
+                        "未配置真执行工作目录 —— 没有可读取的 git 仓库"
+                    }
+                }
+                button {
+                    style: "cursor:pointer;background:transparent;color:{clay};border:1px solid {clay};border-radius:7px;padding:6px 14px;font-size:12px;flex:none;",
+                    onclick: move |_| k.send(Command::LoadVersionLog),
+                    "刷新提交记录"
+                }
+            }
+            match &op.version_log {
+                VersionLogVm::NotLoaded => rsx! {
+                    div { style: "{card} padding:26px 30px;color:{ink2};font-size:13px;line-height:1.7;",
+                        "还没有加载过 —— 点上面的「刷新提交记录」读取真实 git log。"
+                    }
+                },
+                VersionLogVm::Unavailable(msg) => rsx! {
+                    div { style: "{card} padding:26px 30px;color:{ink2};font-size:13px;line-height:1.7;", "{msg}" }
+                },
+                VersionLogVm::Commits(commits) if commits.is_empty() => rsx! {
+                    div { style: "{card} padding:26px 30px;color:{ink2};font-size:13px;line-height:1.7;",
+                        "这个仓库还没有任何提交。"
+                    }
+                },
+                VersionLogVm::Commits(commits) => rsx! {
+                    div {
+                        for c in commits.clone() {
+                            div {
+                                key: "{c.short_hash}",
+                                style: "{card} padding:11px 18px;margin-bottom:6px;display:flex;align-items:center;gap:14px;",
+                                span { style: "font-family:{mono};font-size:11.5px;color:{ink3};flex:none;", "{c.short_hash}" }
+                                span {
+                                    style: "flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                                    "{c.subject}"
+                                }
+                                span { style: "font-size:11.5px;color:{ink2};flex:none;", "{c.author}" }
+                                span { style: "font-size:11px;color:{ink3};flex:none;font-family:{mono};", "{c.date_label}" }
+                            }
+                        }
+                    }
+                },
             }
         }
     }

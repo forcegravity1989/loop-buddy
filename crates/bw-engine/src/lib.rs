@@ -17,9 +17,11 @@ use bw_core::{ProjectId, WorkflowId};
 
 pub mod claude_cli;
 pub mod contract;
+pub mod git_log;
 mod mock;
 
 pub use claude_cli::{ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
+pub use git_log::{read_commits, GitCommit, GitLogError};
 pub use mock::MockExecutor;
 
 /// One executable phase, built from a [`WorkflowSpec`] phase.

@@ -23,7 +23,9 @@ use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
     WorkflowId,
 };
-use bw_engine::{ClaudeCliConfig, ClaudeCliExecutor, Engine, PermissionMode, RunCtx, RunEvent};
+use bw_engine::{
+    ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit, PermissionMode, RunCtx, RunEvent,
+};
 use bw_store::{
     GlobalHandoffRow, MetricRole, NewAgent, NewConnector, NewCronTask, NewKnowledgeSource,
     NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec, ProjectRow,
@@ -156,6 +158,11 @@ pub enum Command {
         default_mode: PermissionMode,
         commands_mode: PermissionMode,
     },
+    /// Real `git log` on the active project's `workspace_path` (Version
+    /// panel). Explicit, user-triggered — never fetched eagerly on `Boot`,
+    /// since it's per-project, potentially slow, and most projects have no
+    /// `workspace_path` configured at all.
+    LoadVersionLog,
     StartSession {
         id: SessionId,
         stage_kind: Option<StageKind>,
@@ -285,6 +292,7 @@ pub enum Event {
     KnowledgeSourcesChanged,
     ActivityChanged,
     ClaudeConfigChanged,
+    VersionLogChanged,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -324,6 +332,12 @@ pub struct AppState {
     /// afterward via `Command::SetClaudeConfig` — in memory only, same
     /// persistence tier it already had.
     pub claude_config: ClaudeCliConfig,
+    /// Last real `git log` fetch (Version panel), tagged with which project
+    /// it's for so a stale result from a previously-open project is never
+    /// shown against the wrong one. `None` until `Command::LoadVersionLog`
+    /// runs at least once — never eagerly fetched (per-project, potentially
+    /// slow, and most projects have no `workspace_path` at all).
+    pub version_log: Option<(ProjectId, Result<Vec<GitCommit>, String>)>,
 }
 
 impl Default for AppState {
@@ -343,6 +357,7 @@ impl Default for AppState {
             knowledge_sources: Vec::new(),
             recent_activity: Vec::new(),
             claude_config: ClaudeCliConfig::default(),
+            version_log: None,
         }
     }
 }
@@ -733,6 +748,16 @@ impl App {
                     commands_mode,
                 };
                 self.emit(Event::ClaudeConfigChanged);
+            }
+
+            Command::LoadVersionLog => {
+                let p = self.active()?;
+                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+                let result = bw_engine::read_commits(&proj.workspace_path, 30)
+                    .await
+                    .map_err(|e| e.to_string());
+                self.state.version_log = Some((p, result));
+                self.emit(Event::VersionLogChanged);
             }
 
             Command::StartSession {

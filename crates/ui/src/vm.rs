@@ -983,6 +983,64 @@ pub fn settings_vm(
     }
 }
 
+// ───────────────────────── version panel ─────────────────────────
+
+/// One real commit — `ui` can't depend on `bw-engine`, so `app-desktop`
+/// unpacks its `GitCommit` into this before calling [`commit_row`].
+#[derive(Clone, Debug)]
+pub struct CommitSource {
+    pub short_hash: String,
+    pub author: String,
+    /// Raw `--date=iso-strict` string, e.g. `2026-07-09T03:15:42+00:00`.
+    pub date: String,
+    pub subject: String,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct CommitRowVm {
+    pub short_hash: String,
+    pub author: String,
+    pub date_label: String,
+    pub subject: String,
+}
+
+/// git's own `iso-strict` date, lightly reformatted (`T` → space, offset
+/// dropped) — no date-parsing dependency for a single cosmetic change, same
+/// "keep it a plain label" choice already made for `CronTask.last_run`.
+pub fn commit_row(c: &CommitSource) -> CommitRowVm {
+    let date_label = c
+        .date
+        .get(0..16)
+        .map(|s| s.replace('T', " "))
+        .unwrap_or_else(|| c.date.clone());
+    CommitRowVm {
+        short_hash: c.short_hash.clone(),
+        author: c.author.clone(),
+        date_label,
+        subject: c.subject.clone(),
+    }
+}
+
+#[derive(Clone, PartialEq, Debug, Default)]
+pub enum VersionLogVm {
+    /// Never fetched for this project yet — the screen shows a real call to
+    /// action, not an empty list pretending nothing has ever happened.
+    #[default]
+    NotLoaded,
+    /// A real `git log` attempt failed, or `workspace_path` isn't
+    /// configured — carries git's (or the config check's) own message.
+    Unavailable(String),
+    Commits(Vec<CommitRowVm>),
+}
+
+pub fn version_log_vm(fetched: Option<Result<Vec<CommitSource>, String>>) -> VersionLogVm {
+    match fetched {
+        None => VersionLogVm::NotLoaded,
+        Some(Err(msg)) => VersionLogVm::Unavailable(msg),
+        Some(Ok(commits)) => VersionLogVm::Commits(commits.iter().map(commit_row).collect()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1463,5 +1521,37 @@ mod tests {
         assert_eq!(custom.binary_label, "/usr/local/bin/claude");
         assert_eq!(custom.max_budget_label, "$2.00");
         assert!(custom.bypass_default);
+    }
+
+    #[test]
+    fn commit_row_reformats_iso_date_without_parsing_it() {
+        let row = commit_row(&CommitSource {
+            short_hash: "abc12".into(),
+            author: "Builder".into(),
+            date: "2026-07-09T03:15:42+00:00".into(),
+            subject: "feat: real git log".into(),
+        });
+        assert_eq!(row.short_hash, "abc12");
+        assert_eq!(row.date_label, "2026-07-09 03:15");
+        assert_eq!(row.subject, "feat: real git log");
+    }
+
+    #[test]
+    fn version_log_vm_distinguishes_not_loaded_unavailable_and_commits() {
+        assert_eq!(version_log_vm(None), VersionLogVm::NotLoaded);
+        assert_eq!(
+            version_log_vm(Some(Err("工作目录未配置".to_string()))),
+            VersionLogVm::Unavailable("工作目录未配置".to_string())
+        );
+        let source = CommitSource {
+            short_hash: "abc12".into(),
+            author: "Builder".into(),
+            date: "2026-07-09T03:15:42+00:00".into(),
+            subject: "s".into(),
+        };
+        match version_log_vm(Some(Ok(vec![source]))) {
+            VersionLogVm::Commits(rows) => assert_eq!(rows.len(), 1),
+            other => panic!("expected Commits, got {other:?}"),
+        }
     }
 }
