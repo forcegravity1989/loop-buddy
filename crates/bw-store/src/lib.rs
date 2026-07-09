@@ -19,9 +19,11 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    Cadence, ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, SourceKind, StageKind,
+    AgentCard, AgentRef, Cadence, HubSource, LibSource, LoopConfig, Maturity, ProjectCycle,
+    ProjectPhase, Role, SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind,
+    WorkflowKind, WorkflowSpec,
 };
-use bw_core::{MetricId, ProjectId, SessionId};
+use bw_core::{AgentId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
 use time::OffsetDateTime;
 
 mod sqlite;
@@ -89,6 +91,40 @@ pub struct NewSession {
     pub kind: SessionKind,
     pub title: String,
     pub snippet: String,
+}
+
+/// Hub library (global — no `project_id`). `uses`/`runs` are omitted here:
+/// they're usage-derived counters that start at 0, filled by a separate
+/// write path (`record_workflow_use`), not part of creation.
+pub struct NewWorkflowSpec {
+    pub id: WorkflowId,
+    pub name: String,
+    pub kind: WorkflowKind,
+    pub prompt: String,
+    pub goal: String,
+    pub stage_ref: Option<u8>,
+    pub phases: Vec<String>,
+    pub agents: Vec<AgentRef>,
+    pub skills: Vec<SkillRef>,
+    pub loop_config: LoopConfig,
+}
+
+pub struct NewSkill {
+    pub id: SkillId,
+    pub name: String,
+    pub maturity: Maturity,
+    pub desc: String,
+    pub category: String,
+    pub source: LibSource,
+}
+
+pub struct NewAgent {
+    pub id: AgentId,
+    pub name: String,
+    pub role: String,
+    pub maturity: Maturity,
+    pub skills: Vec<String>,
+    pub model: String,
 }
 
 // ───────────────────────────── read DTOs ─────────────────────────────
@@ -293,6 +329,33 @@ pub trait Store: Send + Sync {
     async fn list_handoffs(&self, project_id: ProjectId) -> Result<Vec<HandoffRow>>;
     async fn list_sessions(&self, project_id: ProjectId) -> Result<Vec<SessionRow>>;
     async fn session_messages(&self, session_id: SessionId) -> Result<Vec<MessageRow>>;
+
+    // ── hub library (global — no active-project gate) ──
+    async fn create_workflow_spec(&self, w: NewWorkflowSpec) -> Result<()>;
+    async fn list_workflow_specs(&self) -> Result<Vec<WorkflowSpec>>;
+    async fn get_workflow_spec(&self, id: WorkflowId) -> Result<Option<WorkflowSpec>>;
+    /// Promote a `Dynamic` spec to a new `Static` hub entry: mints a fresh row
+    /// (`maturity: Fresh, version: 1, uses: 0`), copying prompt/goal/phases/
+    /// agents/skills/stage_ref/loop_config from `from`. The session that
+    /// inspired it is untouched — this is purely additive, never a mutation
+    /// of run history.
+    async fn promote_workflow(
+        &self,
+        new_id: WorkflowId,
+        from: &WorkflowSpec,
+        source: HubSource,
+    ) -> Result<()>;
+    /// Bump a hub spec's `uses` counter by 1 — called when it's run via
+    /// `RunHubWorkflow`.
+    async fn record_workflow_use(&self, id: WorkflowId) -> Result<()>;
+
+    async fn create_skill(&self, s: NewSkill) -> Result<()>;
+    async fn list_skills(&self) -> Result<Vec<SkillCard>>;
+    async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>>;
+
+    async fn create_agent(&self, a: NewAgent) -> Result<()>;
+    async fn list_agents(&self) -> Result<Vec<AgentCard>>;
+    async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────
@@ -382,5 +445,35 @@ pub(crate) fn parse_cadence(s: &str) -> Cadence {
             .strip_prefix("cron:")
             .map(|e| Cadence::Cron(e.to_string()))
             .unwrap_or(Cadence::Weekly),
+    }
+}
+
+pub(crate) fn maturity_text(m: Maturity) -> &'static str {
+    match m {
+        Maturity::Mature => "mature",
+        Maturity::Polishing => "polishing",
+        Maturity::Fresh => "fresh",
+    }
+}
+
+pub(crate) fn parse_maturity(s: &str) -> Maturity {
+    match s {
+        "mature" => Maturity::Mature,
+        "polishing" => Maturity::Polishing,
+        _ => Maturity::Fresh,
+    }
+}
+
+pub(crate) fn lib_source_text(s: LibSource) -> &'static str {
+    match s {
+        LibSource::Official => "official",
+        LibSource::SelfBuilt => "self_built",
+    }
+}
+
+pub(crate) fn parse_lib_source(s: &str) -> LibSource {
+    match s {
+        "official" => LibSource::Official,
+        _ => LibSource::SelfBuilt,
     }
 }

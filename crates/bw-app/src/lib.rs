@@ -15,12 +15,15 @@
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    Cadence, ProjectCycle, ProjectPhase, Role, Signal, SourceKind, StageKind, WorkflowSpec,
+    stage_workflow, AgentCard, AgentRef, Cadence, HubSource, LibSource, LoopConfig, Maturity,
+    ProjectCycle, ProjectPhase, Role, Signal, SkillCard, SkillRef, SourceKind, StageKind,
+    WorkflowKind, WorkflowSpec,
 };
-use bw_core::{MetricId, ProjectId, SessionId};
+use bw_core::{AgentId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, ClaudeCliExecutor, Engine, RunCtx, RunEvent};
 use bw_store::{
-    MetricRole, NewMetric, NewProject, NewSession, NewStage, ProjectRow, SessionKind, Store,
+    MetricRole, NewAgent, NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec,
+    ProjectRow, SessionKind, Store,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -149,6 +152,55 @@ pub enum Command {
         session: SessionId,
         spec: WorkflowSpec,
     },
+    /// Reload the hub library (`workflow_specs`/`skills`/`agents`) from the
+    /// store. Called at `Boot`; also dispatchable standalone for a manual
+    /// refresh. Deliberately separate from `Boot` — hub data has nothing to
+    /// do with project-signal staleness, so this keeps `Boot`'s own contract
+    /// unchanged.
+    RefreshHubs,
+    CreateWorkflowSpec {
+        id: WorkflowId,
+        name: String,
+        prompt: String,
+        goal: String,
+        stage_ref: Option<u8>,
+        phases: Vec<String>,
+        agents: Vec<AgentRef>,
+        skills: Vec<SkillRef>,
+        loop_config: LoopConfig,
+        maturity: Maturity,
+        scope: String,
+        source: HubSource,
+        trigger: Option<String>,
+    },
+    /// Promote the workflow most recently run in `session` (reconstructed
+    /// from the session's `stage_kind`, since a `Dynamic` spec is never
+    /// itself persisted) into a new `Static` hub entry.
+    PromoteWorkflow {
+        new_id: WorkflowId,
+        session: SessionId,
+        source: HubSource,
+    },
+    /// Run a workflow already stored in the hub. Looks the spec up, bumps its
+    /// `uses` counter, then executes identically to `RunWorkflow`.
+    RunHubWorkflow {
+        session: SessionId,
+        workflow_id: WorkflowId,
+    },
+    CreateSkill {
+        id: SkillId,
+        name: String,
+        desc: String,
+        category: String,
+        source: LibSource,
+    },
+    CreateAgent {
+        id: AgentId,
+        name: String,
+        role: String,
+        skills: Vec<String>,
+        model: String,
+    },
     SendSessionMessage {
         session: SessionId,
         text: String,
@@ -188,6 +240,9 @@ pub enum Event {
         to: StageKind,
         risky: bool,
     },
+    WorkflowSpecsChanged,
+    SkillsChanged,
+    AgentsChanged,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -212,6 +267,10 @@ pub struct AppState {
     pub active_project: Option<ProjectId>,
     pub active_session: Option<SessionId>,
     pub projects: Vec<ProjectRow>,
+    /// Hub library — global, loaded independent of any active project.
+    pub workflow_specs: Vec<WorkflowSpec>,
+    pub skills: Vec<SkillCard>,
+    pub agents: Vec<AgentCard>,
 }
 
 impl Default for AppState {
@@ -223,6 +282,9 @@ impl Default for AppState {
             active_project: None,
             active_session: None,
             projects: Vec::new(),
+            workflow_specs: Vec::new(),
+            skills: Vec::new(),
+            agents: Vec::new(),
         }
     }
 }
@@ -277,6 +339,100 @@ impl App {
         Ok(())
     }
 
+    async fn refresh_workflow_specs(&mut self) -> Result<(), AppError> {
+        self.state.workflow_specs = self.store.list_workflow_specs().await?;
+        Ok(())
+    }
+
+    async fn refresh_skills(&mut self) -> Result<(), AppError> {
+        self.state.skills = self.store.list_skills().await?;
+        Ok(())
+    }
+
+    async fn refresh_agents(&mut self) -> Result<(), AppError> {
+        self.state.agents = self.store.list_agents().await?;
+        Ok(())
+    }
+
+    /// Shared by `Command::RunWorkflow` and `Command::RunHubWorkflow` — the
+    /// latter differs only in how `spec` was obtained (a hub lookup + a
+    /// `uses` bump) and looks identical once it has one.
+    async fn run_workflow_inner(
+        &mut self,
+        session: SessionId,
+        spec: WorkflowSpec,
+    ) -> Result<(), AppError> {
+        let p = self.active()?;
+        let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+        let ctx = RunCtx {
+            project: p,
+            workflow: spec.id,
+        };
+
+        // `workspace_path` is per-project runtime data, not something
+        // baked into a long-lived Engine at App::new time: unconfigured
+        // projects keep running on the shared Mock engine (byte-for-
+        // byte today's behavior, zero regression); a configured one
+        // gets a fresh, one-shot real executor built just for this call.
+        let fresh_engine;
+        let engine: &Engine = if proj.workspace_path.trim().is_empty() {
+            &self.mock_engine
+        } else {
+            let executor = ClaudeCliExecutor::new(
+                self.claude_config.clone(),
+                PathBuf::from(proj.workspace_path.trim()),
+                proj.allow_commands,
+            );
+            fresh_engine = Engine::new(Arc::new(executor));
+            &fresh_engine
+        };
+
+        // Progress events are emitted LIVE from inside the engine
+        // callback (broadcast::send is sync), so a subscriber watches
+        // phases advance while the run is still going. Only persistence
+        // (async) is deferred to after the run.
+        let live = self.events.clone();
+        let mut completed: Vec<bw_engine::PhaseOutput> = Vec::new();
+        let run = engine
+            .run_workflow(&spec, &ctx, |e| match e {
+                RunEvent::PhaseStarted { idx, name } => {
+                    let _ = live.send(Event::WorkflowProgress {
+                        phase_idx: idx,
+                        status: format!("started:{name}"),
+                    });
+                }
+                RunEvent::PhaseCompleted { idx, output } => {
+                    let _ = live.send(Event::WorkflowProgress {
+                        phase_idx: idx,
+                        status: "completed".into(),
+                    });
+                    completed.push(output);
+                }
+                RunEvent::WorkflowDone { .. } => {
+                    let _ = live.send(Event::WorkflowDone);
+                }
+                RunEvent::WorkflowFailed { error } => {
+                    let _ = live.send(Event::WorkflowFailed(error));
+                }
+            })
+            .await;
+
+        // Persist whatever phases completed, even on failure — the run
+        // history must not silently vanish.
+        for output in completed {
+            self.store
+                .append_message(session, Role::Agent, &output.text)
+                .await?;
+            self.emit(Event::SessionMessageAdded {
+                session,
+                role: Role::Agent,
+                text: output.text,
+            });
+        }
+        run.map_err(|e| AppError::Engine(e.to_string()))?;
+        Ok(())
+    }
+
     pub async fn dispatch(&mut self, cmd: Command) -> Result<(), AppError> {
         match cmd {
             Command::Boot => {
@@ -290,6 +446,9 @@ impl App {
                     }
                 }
                 self.refresh_projects().await?;
+                self.refresh_workflow_specs().await?;
+                self.refresh_skills().await?;
+                self.refresh_agents().await?;
                 self.emit(Event::ProjectsChanged);
             }
 
@@ -491,74 +650,145 @@ impl App {
             }
 
             Command::RunWorkflow { session, spec } => {
-                let p = self.active()?;
-                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
-                let ctx = RunCtx {
-                    project: p,
-                    workflow: spec.id,
-                };
+                self.run_workflow_inner(session, spec).await?;
+            }
 
-                // `workspace_path` is per-project runtime data, not something
-                // baked into a long-lived Engine at App::new time: unconfigured
-                // projects keep running on the shared Mock engine (byte-for-
-                // byte today's behavior, zero regression); a configured one
-                // gets a fresh, one-shot real executor built just for this call.
-                let fresh_engine;
-                let engine: &Engine = if proj.workspace_path.trim().is_empty() {
-                    &self.mock_engine
-                } else {
-                    let executor = ClaudeCliExecutor::new(
-                        self.claude_config.clone(),
-                        PathBuf::from(proj.workspace_path.trim()),
-                        proj.allow_commands,
-                    );
-                    fresh_engine = Engine::new(Arc::new(executor));
-                    &fresh_engine
-                };
+            Command::RefreshHubs => {
+                self.refresh_workflow_specs().await?;
+                self.refresh_skills().await?;
+                self.refresh_agents().await?;
+            }
 
-                // Progress events are emitted LIVE from inside the engine
-                // callback (broadcast::send is sync), so a subscriber watches
-                // phases advance while the run is still going. Only persistence
-                // (async) is deferred to after the run.
-                let live = self.events.clone();
-                let mut completed: Vec<bw_engine::PhaseOutput> = Vec::new();
-                let run = engine
-                    .run_workflow(&spec, &ctx, |e| match e {
-                        RunEvent::PhaseStarted { idx, name } => {
-                            let _ = live.send(Event::WorkflowProgress {
-                                phase_idx: idx,
-                                status: format!("started:{name}"),
-                            });
-                        }
-                        RunEvent::PhaseCompleted { idx, output } => {
-                            let _ = live.send(Event::WorkflowProgress {
-                                phase_idx: idx,
-                                status: "completed".into(),
-                            });
-                            completed.push(output);
-                        }
-                        RunEvent::WorkflowDone { .. } => {
-                            let _ = live.send(Event::WorkflowDone);
-                        }
-                        RunEvent::WorkflowFailed { error } => {
-                            let _ = live.send(Event::WorkflowFailed(error));
-                        }
-                    })
-                    .await;
-
-                // Persist whatever phases completed, even on failure — the run
-                // history must not silently vanish.
-                for output in completed {
-                    self.store
-                        .append_message(session, Role::Agent, &output.text)
-                        .await?;
-                    self.emit(Event::SessionMessageAdded {
-                        session,
-                        role: Role::Agent,
-                        text: output.text,
-                    });
+            Command::CreateWorkflowSpec {
+                id,
+                name,
+                prompt,
+                goal,
+                stage_ref,
+                phases,
+                agents,
+                skills,
+                loop_config,
+                maturity,
+                scope,
+                source,
+                trigger,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
                 }
-                run.map_err(|e| AppError::Engine(e.to_string()))?;
+                self.store
+                    .create_workflow_spec(NewWorkflowSpec {
+                        id,
+                        name,
+                        kind: WorkflowKind::Static {
+                            maturity,
+                            version: 1,
+                            uses: 0,
+                            scope,
+                            source,
+                            trigger,
+                        },
+                        prompt,
+                        goal,
+                        stage_ref,
+                        phases,
+                        agents,
+                        skills,
+                        loop_config,
+                    })
+                    .await?;
+                self.refresh_workflow_specs().await?;
+                self.emit(Event::WorkflowSpecsChanged);
+            }
+
+            Command::PromoteWorkflow {
+                new_id,
+                session,
+                source,
+            } => {
+                let p = self.active()?;
+                let sess = self
+                    .store
+                    .list_sessions(p)
+                    .await?
+                    .into_iter()
+                    .find(|s| s.id == session)
+                    .ok_or(AppError::NotFound)?;
+                let spec = match sess.stage_kind {
+                    Some(kind) => stage_workflow(kind),
+                    None => {
+                        return Err(AppError::Invalid("会话未关联阶段,无法沉淀".into()));
+                    }
+                };
+                self.store.promote_workflow(new_id, &spec, source).await?;
+                self.refresh_workflow_specs().await?;
+                self.emit(Event::WorkflowSpecsChanged);
+            }
+
+            Command::RunHubWorkflow {
+                session,
+                workflow_id,
+            } => {
+                let spec = self
+                    .store
+                    .get_workflow_spec(workflow_id)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                self.store.record_workflow_use(workflow_id).await?;
+                self.refresh_workflow_specs().await?;
+                self.run_workflow_inner(session, spec).await?;
+            }
+
+            Command::CreateSkill {
+                id,
+                name,
+                desc,
+                category,
+                source,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .create_skill(NewSkill {
+                        id,
+                        name,
+                        // A freshly created skill is honestly "just made,
+                        // not yet proven" — Polishing, never Fresh (the
+                        // SkillHub/AgentHub UI has no chip for a 3rd tier).
+                        maturity: Maturity::Polishing,
+                        desc,
+                        category,
+                        source,
+                    })
+                    .await?;
+                self.refresh_skills().await?;
+                self.emit(Event::SkillsChanged);
+            }
+
+            Command::CreateAgent {
+                id,
+                name,
+                role,
+                skills,
+                model,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .create_agent(NewAgent {
+                        id,
+                        name,
+                        role,
+                        maturity: Maturity::Polishing,
+                        skills,
+                        model,
+                    })
+                    .await?;
+                self.refresh_agents().await?;
+                self.emit(Event::AgentsChanged);
             }
 
             Command::SendSessionMessage { session, text } => {

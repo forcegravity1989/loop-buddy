@@ -13,7 +13,7 @@
 //! methodology text is `StageKind`'s own static metadata.
 
 use bw_app::{App, Command, Event, Panel, Scope, View};
-use bw_core::model::{ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, StageKind};
+use bw_core::model::{HubCard, ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, StageKind};
 use bw_core::{MetricId, SessionId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{MetricRole, SqliteStore, Store};
@@ -23,9 +23,10 @@ use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
-    attention_from_rows, cadence_label, metric_vm, observation_feed, project_card,
-    session_status_label, stage_detail, stage_nav, week_plan_rows, FeedItemVm, FeedSource,
-    MetricVm, ProjectCardVm, SessionCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm,
+    agent_card, attention_from_rows, cadence_label, hub_overview, metric_vm, observation_feed,
+    project_card, session_status_label, skill_card, stage_detail, stage_nav, week_plan_rows,
+    workflow_hub_row, AgentCardVm, FeedItemVm, FeedSource, MetricVm, ProjectCardVm, SessionCardVm,
+    SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm, WorkflowHubRowVm,
 };
 use ui::{overall_progress, Attention};
 
@@ -41,6 +42,21 @@ pub struct Vm {
     pub projects: Vec<ProjectCardVm>,
     pub create: Option<CreateVm>,
     pub op: Option<OpVm>,
+    /// Hub library — global, built unconditionally (no active project
+    /// required), unlike `create`/`op`.
+    pub hub: HubVm,
+}
+
+/// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
+/// overview. Rebuilt on every dispatch, same as `projects` — at this scale
+/// (tens to low hundreds of rows, all already in memory via `AppState`) that
+/// costs nothing extra; revisit if a later hub's row count changes that.
+#[derive(Clone, PartialEq, Default)]
+pub struct HubVm {
+    pub workflows: Vec<WorkflowHubRowVm>,
+    pub skills: Vec<SkillCardVm>,
+    pub agents: Vec<AgentCardVm>,
+    pub overview: Vec<HubCard>,
 }
 
 /// The creation flow's real, persisted-so-far draft (screen-local navigation
@@ -113,6 +129,10 @@ pub struct OpVm {
     pub overall: u8,
     pub sessions: Vec<SessionCardVm>,
     pub chat: Option<ChatVm>,
+    /// Threaded down for the "从 Hub 导入" overview strip in the Workflow
+    /// panel — same data as the top-level `Vm.hub`, just also reachable from
+    /// deep inside `Op`'s component tree without re-prop-drilling `Vm` itself.
+    pub hub: HubVm,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -357,6 +377,31 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         ));
     }
 
+    // Hub library — global, built unconditionally (no active project
+    // involved), so it's ready even before the `active_project` early-return
+    // below and reachable from the standalone Hub screens (rail-routed, not
+    // tied to `active_project` at all).
+    let workflows: Vec<WorkflowHubRowVm> = state
+        .workflow_specs
+        .iter()
+        .filter_map(workflow_hub_row)
+        .collect();
+    let skills: Vec<SkillCardVm> = state.skills.iter().map(skill_card).collect();
+    let agents: Vec<AgentCardVm> = state.agents.iter().map(agent_card).collect();
+    let hub = HubVm {
+        overview: hub_overview(
+            workflows.len(),
+            &workflows.iter().map(|w| w.name.clone()).collect::<Vec<_>>(),
+            skills.len(),
+            &skills.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+            agents.len(),
+            &agents.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
+        ),
+        workflows,
+        skills,
+        agents,
+    };
+
     let mut vm = Vm {
         ready: true,
         fatal: None,
@@ -364,6 +409,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         projects: cards,
         create: None,
         op: None,
+        hub: hub.clone(),
     };
 
     let Some(pid) = state.active_project else {
@@ -589,6 +635,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         overall,
         sessions: session_cards,
         chat,
+        hub,
     });
     vm
 }

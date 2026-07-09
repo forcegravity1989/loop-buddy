@@ -10,7 +10,7 @@ pub enum Hub {
     Workspace,
     Skill,
     Agent,
-    Routine,
+    Workflow,
     Cron,
     Connector,
     Knowledge,
@@ -25,7 +25,7 @@ impl Hub {
             Hub::Workspace => "工作台",
             Hub::Skill => "SkillHub",
             Hub::Agent => "AgentHub",
-            Hub::Routine => "Routines",
+            Hub::Workflow => "Routines",
             Hub::Cron => "CronHub",
             Hub::Connector => "Connectors",
             Hub::Knowledge => "Knowledge",
@@ -43,7 +43,7 @@ impl Hub {
             Hub::Agent => {
                 "M7 8h10v8a2 2 0 01-2 2H9a2 2 0 01-2-2zM9 8V6a3 3 0 016 0v2M10 13h.01M14 13h.01"
             }
-            Hub::Routine => "M6 6h.01M18 6h.01M12 18h.01M6.5 6.5L11.5 17M17.5 6.5L12.5 17M7 6h10",
+            Hub::Workflow => "M6 6h.01M18 6h.01M12 18h.01M6.5 6.5L11.5 17M17.5 6.5L12.5 17M7 6h10",
             Hub::Cron => "M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 3",
             Hub::Connector => "M7 9v6M17 9v6M7 12h10M4 10v4M20 10v4",
             Hub::Knowledge => "M5 5a2 2 0 012-2h12v18H7a2 2 0 01-2-2zM19 3v18M9 7h6M9 11h6",
@@ -58,7 +58,7 @@ pub const RAIL_HUBS: [Hub; 10] = [
     Hub::Workspace,
     Hub::Skill,
     Hub::Agent,
-    Hub::Routine,
+    Hub::Workflow,
     Hub::Cron,
     Hub::Connector,
     Hub::Knowledge,

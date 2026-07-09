@@ -11,7 +11,7 @@
 //! `serde`-round-trippable.
 
 use crate::derive::{reduce_worst_of, AmberBand, Derived};
-use crate::ids::{ProjectId, SessionId, WorkflowId};
+use crate::ids::{AgentId, ProjectId, SessionId, SkillId, WorkflowId};
 use serde::{Deserialize, Serialize};
 
 /// Health signal. The prototype had three states; `Unknown` is the honesty
@@ -483,6 +483,34 @@ pub enum Maturity {
     Fresh,
 }
 
+/// Where a hub-catalog workflow's own definition originated. Only meaningful
+/// on `WorkflowKind::Static` — a `Dynamic` (session-scoped, ad-hoc) workflow
+/// has no stable provenance to tag, so this stays off that variant entirely
+/// rather than becoming an always-present-but-sometimes-meaningless field.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HubSource {
+    /// oh-my-claudecode
+    Omc,
+    /// Everything Claude Code
+    Ecc,
+    /// 自建
+    SelfBuilt,
+    /// 会话内
+    WithinSession,
+}
+
+impl HubSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            HubSource::Omc => "OMC",
+            HubSource::Ecc => "ECC",
+            HubSource::SelfBuilt => "自建",
+            HubSource::WithinSession => "会话内",
+        }
+    }
+}
+
 /// Static (distilled, reusable) vs dynamic (use-and-discard) workflow.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -492,6 +520,10 @@ pub enum WorkflowKind {
         version: u32,
         uses: u32,
         scope: String,
+        source: HubSource,
+        /// Optional slash-command trigger, e.g. `/security-review`. Not every
+        /// hub workflow has one — most are browse-and-import only.
+        trigger: Option<String>,
     },
     Dynamic {
         origin: String,
@@ -532,6 +564,129 @@ pub struct WorkflowSpec {
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     pub loop_config: LoopConfig,
+}
+
+/// The standard (dynamic, use-and-discard) workflow for one stage, driven
+/// straight through its method loop. Pure function of `StageKind`'s own
+/// methodology metadata — no UI/store dependency, so both `bw-app` (to
+/// reconstruct a promoted workflow's source spec) and `app-desktop` (to run
+/// it) can call the identical logic.
+///
+/// `idgen`-gated (mints a fresh `WorkflowId`) — native-only, matches every
+/// other id-minting call in this crate; the wasm32 keepalive build never
+/// needs to construct a runnable spec, only the types that describe one.
+#[cfg(feature = "idgen")]
+pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
+    let goal = format!(
+        "{} → {}",
+        kind.core_question(),
+        kind.dod_items().first().copied().unwrap_or("交棒条件达成")
+    );
+    WorkflowSpec {
+        id: WorkflowId::new(),
+        name: format!("「{}」标准工作流", kind.label()),
+        kind: WorkflowKind::Dynamic {
+            origin: "阶段标准模板".into(),
+            stage: kind.label().into(),
+        },
+        prompt: kind.method_loop().join(" → "),
+        goal,
+        stage_ref: Some(kind.index()),
+        phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
+        agents: vec![],
+        skills: vec![],
+        loop_config: LoopConfig {
+            retries: 1,
+            max_iter: 3,
+        },
+    }
+}
+
+/// The drafting run for the creation flow: one workflow, phases matching the
+/// "正在按方法论起草体系" loading copy. Runs through the same `Engine` as any
+/// other workflow — `MockExecutor` produces a clearly-labeled mock transcript;
+/// nothing here is injected into the editable draft fields as fact.
+#[cfg(feature = "idgen")]
+pub fn drafting_workflow() -> WorkflowSpec {
+    WorkflowSpec {
+        id: WorkflowId::new(),
+        name: "创建 · 体系起草".into(),
+        kind: WorkflowKind::Dynamic {
+            origin: "创建流程".into(),
+            stage: StageKind::Prototype.label().into(),
+        },
+        prompt: "周期判定 → 北极星起草 → 指标框架 → 阶段激活".into(),
+        goal: "产出可编辑的北极星候选 + 指标框架草案".into(),
+        stage_ref: Some(StageKind::Prototype.index()),
+        phases: vec![
+            "周期判定".into(),
+            "北极星起草".into(),
+            "指标框架".into(),
+            "阶段激活".into(),
+        ],
+        agents: vec![],
+        skills: vec![],
+        loop_config: LoopConfig {
+            retries: 1,
+            max_iter: 1,
+        },
+    }
+}
+
+// ─────────────────────────── skill / agent hub ───────────────────────────
+
+/// Binary provenance for Skill/Agent hub items — a library entry the
+/// platform ships (官方) or one a builder authored locally (自建). Distinct
+/// from [`HubSource`] (Workflow's 4-tier provenance): these are two
+/// independent, purpose-built vocabularies, not one shared enum.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LibSource {
+    /// 官方
+    Official,
+    /// 自建
+    SelfBuilt,
+}
+
+impl LibSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            LibSource::Official => "官方",
+            LibSource::SelfBuilt => "自建",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SkillCard {
+    pub id: SkillId,
+    pub name: String,
+    /// 2-tier in practice (成熟/打磨中) — a freshly created skill defaults to
+    /// `Polishing`, never `Fresh` (see bw-app's `CreateSkill`).
+    pub maturity: Maturity,
+    pub desc: String,
+    pub category: String,
+    pub source: LibSource,
+    pub uses: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentSkillTag {
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentCard {
+    pub id: AgentId,
+    pub name: String,
+    pub role: String,
+    pub maturity: Maturity,
+    pub skills: Vec<AgentSkillTag>,
+    pub model: String,
+    pub runs: u32,
+    /// Adoption rate as a pre-formatted display string (e.g. `"94%"`) —
+    /// matches how metric values are stored as display strings elsewhere.
+    pub win_rate: String,
 }
 
 // ─────────────────────────── project ───────────────────────────
@@ -654,10 +809,13 @@ pub enum HubKind {
     Agent,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct HubCard {
     pub id: HubKind,
     pub name: String,
+    /// One-line subtitle (e.g. "完整工作流") — distinct from `HubKind`'s own
+    /// variant identity.
+    pub kind_label: String,
     pub count: u32,
     pub color: String,
     pub desc: String,

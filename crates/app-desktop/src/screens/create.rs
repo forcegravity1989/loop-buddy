@@ -13,9 +13,9 @@
 //! and means an interrupted creation resumes instead of vanishing.
 
 use crate::kernel::{CreateVm, Kernel, RunVm};
-use crate::{templates, theme};
+use crate::theme;
 use bw_app::{Command, Panel, Scope};
-use bw_core::model::{Cadence, ProjectCycle, StageKind};
+use bw_core::model::{drafting_workflow, Cadence, ProjectCycle, StageKind};
 use bw_core::{MetricId, ProjectId, SessionId};
 use bw_store::{MetricRole, SessionKind};
 use dioxus::prelude::*;
@@ -201,7 +201,7 @@ fn QuestionsCard(vm: CreateVm, cadence: Signal<Cadence>, on_next: EventHandler<(
         });
         k.send(Command::RunWorkflow {
             session,
-            spec: templates::drafting_workflow(),
+            spec: drafting_workflow(),
         });
         on_next.call(());
     };

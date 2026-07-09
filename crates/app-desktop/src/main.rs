@@ -8,16 +8,19 @@
 
 mod kernel;
 mod screens;
-mod templates;
 mod theme;
 
 use bw_app::View;
+use bw_core::model::HubKind;
 use dioxus::prelude::*;
 use kernel::{RunVm, UiNote, Vm};
+use screens::agent_hub::AgentHub;
 use screens::chrome::{BootFrame, FatalFrame, Hub, HubStub, IconRail, Toast};
 use screens::create::Create;
 use screens::op::Op;
+use screens::skill_hub::SkillHub;
 use screens::wall::Wall;
+use screens::workflow_hub::WorkflowHub;
 use tokio::sync::broadcast::error::RecvError;
 
 fn main() {
@@ -117,6 +120,12 @@ fn Root() -> Element {
                     BootFrame {}
                 } else if v.fatal.is_some() {
                     FatalFrame { msg: v.fatal.clone().unwrap_or_default() }
+                } else if hub() == Hub::Workflow {
+                    WorkflowHub { hub: v.hub.clone(), projects: v.projects.clone() }
+                } else if hub() == Hub::Skill {
+                    SkillHub { hub: v.hub.clone() }
+                } else if hub() == Hub::Agent {
+                    AgentHub { hub: v.hub.clone() }
                 } else if hub() != Hub::Workspace {
                     HubStub { hub: hub() }
                 } else if show_create {
@@ -127,7 +136,17 @@ fn Root() -> Element {
                     }
                 } else if show_op {
                     if v.op.is_some() {
-                        Op { op: v.op.clone().unwrap(), run: run() }
+                        Op {
+                            op: v.op.clone().unwrap(),
+                            run: run(),
+                            on_pick_hub: move |hk: HubKind| {
+                                hub.set(match hk {
+                                    HubKind::Workflow => Hub::Workflow,
+                                    HubKind::Skill => Hub::Skill,
+                                    HubKind::Agent => Hub::Agent,
+                                })
+                            },
+                        }
                     } else {
                         BootFrame {}
                     }

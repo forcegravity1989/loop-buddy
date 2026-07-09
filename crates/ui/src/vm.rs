@@ -12,9 +12,10 @@
 use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAttention};
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
-    Cadence, FeedLevel, ProjectCycle, ProjectPhase, SessionStatus, Signal, SourceKind, StageKind,
+    AgentCard, Cadence, FeedLevel, HubCard, HubKind, Maturity, ProjectCycle, ProjectPhase,
+    SessionStatus, Signal, SkillCard, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
-use bw_core::{MetricId, ProjectId, SessionId};
+use bw_core::{AgentId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
 use time::OffsetDateTime;
 
 /// A cached signal read: cache miss = `Unknown`, never green.
@@ -471,6 +472,247 @@ pub fn stage_detail(kind: StageKind, dod_checked: &[bool], handoff_count: u32) -
     }
 }
 
+// ───────────────────────── hub library ─────────────────────────
+
+pub fn maturity_label(m: Maturity) -> &'static str {
+    match m {
+        Maturity::Mature => "成熟",
+        Maturity::Polishing => "打磨中",
+        Maturity::Fresh => "新沉淀",
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct WorkflowHubRowVm {
+    pub id: WorkflowId,
+    pub name: String,
+    pub source_label: &'static str,
+    pub maturity_label: &'static str,
+    pub trigger: Option<String>,
+    /// First `agents[0].name`, `"—"` if the spec has none.
+    pub primary_agent: String,
+    /// Pre-formatted, e.g. `"v3"`.
+    pub version_label: String,
+    pub uses: u32,
+    pub goal: String,
+    pub phases_count: usize,
+    /// Pre-formatted, e.g. `"重试1·迭代3"`.
+    pub loop_label: String,
+    pub phases: Vec<String>,
+    pub skills: Vec<String>,
+    pub stage_ref: Option<u8>,
+}
+
+/// One hub row from a stored [`WorkflowSpec`] — `None` for a `Dynamic` spec
+/// (nothing to browse yet; only `Static` entries are hub-catalog items).
+pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
+    let WorkflowKind::Static {
+        maturity,
+        version,
+        uses,
+        source,
+        trigger,
+        ..
+    } = &spec.kind
+    else {
+        return None;
+    };
+    Some(WorkflowHubRowVm {
+        id: spec.id,
+        name: spec.name.clone(),
+        source_label: source.label(),
+        maturity_label: maturity_label(*maturity),
+        trigger: trigger.clone(),
+        primary_agent: spec
+            .agents
+            .first()
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| "—".into()),
+        version_label: format!("v{version}"),
+        uses: *uses,
+        goal: spec.goal.clone(),
+        phases_count: spec.phases.len(),
+        loop_label: format!(
+            "重试{}·迭代{}",
+            spec.loop_config.retries, spec.loop_config.max_iter
+        ),
+        phases: spec.phases.clone(),
+        skills: spec.skills.iter().map(|s| s.name.clone()).collect(),
+        stage_ref: spec.stage_ref,
+    })
+}
+
+/// Group hub rows by `stage_ref` (1..=5) + a 6th "metrics layer" bucket
+/// (`stage_ref == None` or unmapped), matching the 5-stage-plus-cross-cutting
+/// layout every stage-scoped screen in this app already uses.
+pub fn group_by_stage(
+    rows: &[WorkflowHubRowVm],
+) -> Vec<(Option<StageKind>, Vec<WorkflowHubRowVm>)> {
+    let mut groups: Vec<(Option<StageKind>, Vec<WorkflowHubRowVm>)> = StageKind::ALL
+        .iter()
+        .map(|k| (Some(*k), Vec::new()))
+        .collect();
+    groups.push((None, Vec::new()));
+    for r in rows {
+        let idx = r
+            .stage_ref
+            .and_then(|n| StageKind::ALL.iter().position(|k| k.index() == n))
+            .unwrap_or(groups.len() - 1);
+        groups[idx].1.push(r.clone());
+    }
+    groups
+}
+
+/// Counts per source label, in a fixed display order — a filter-chip row.
+pub fn source_chip_counts(rows: &[WorkflowHubRowVm]) -> Vec<(&'static str, usize)> {
+    let mut counts: Vec<(&'static str, usize)> =
+        vec![("OMC", 0), ("ECC", 0), ("自建", 0), ("会话内", 0)];
+    for r in rows {
+        if let Some(slot) = counts
+            .iter_mut()
+            .find(|(label, _)| *label == r.source_label)
+        {
+            slot.1 += 1;
+        }
+    }
+    counts
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct WorkflowDetailVm {
+    pub row: WorkflowHubRowVm,
+    pub prompt: String,
+    /// (name, def, from) per agent — the per-workflow-instance description +
+    /// provenance tag, not just a bare name.
+    pub agents: Vec<(String, String, String)>,
+    pub skills: Vec<(String, String, String)>,
+    pub phases_numbered: Vec<(usize, String)>,
+}
+
+/// The single-workflow "anatomy" view — `None` for a `Dynamic` spec, same
+/// rule as [`workflow_hub_row`].
+pub fn workflow_detail(spec: &WorkflowSpec) -> Option<WorkflowDetailVm> {
+    let row = workflow_hub_row(spec)?;
+    Some(WorkflowDetailVm {
+        row,
+        prompt: spec.prompt.clone(),
+        agents: spec
+            .agents
+            .iter()
+            .map(|a| (a.name.clone(), a.def.clone(), a.from.clone()))
+            .collect(),
+        skills: spec
+            .skills
+            .iter()
+            .map(|s| (s.name.clone(), s.def.clone(), s.from.clone()))
+            .collect(),
+        phases_numbered: spec
+            .phases
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, p)| (i + 1, p))
+            .collect(),
+    })
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct SkillCardVm {
+    pub id: SkillId,
+    pub name: String,
+    pub maturity_label: &'static str,
+    pub desc: String,
+    pub category: String,
+    pub source_label: &'static str,
+    pub uses: u32,
+}
+
+pub fn skill_card(s: &SkillCard) -> SkillCardVm {
+    SkillCardVm {
+        id: s.id,
+        name: s.name.clone(),
+        maturity_label: maturity_label(s.maturity),
+        desc: s.desc.clone(),
+        category: s.category.clone(),
+        source_label: s.source.label(),
+        uses: s.uses,
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct AgentCardVm {
+    pub id: AgentId,
+    pub name: String,
+    pub initial: String,
+    pub role: String,
+    pub maturity_label: &'static str,
+    pub skills: Vec<String>,
+    pub model: String,
+    pub runs: u32,
+    pub win_rate: String,
+}
+
+pub fn agent_card(a: &AgentCard) -> AgentCardVm {
+    AgentCardVm {
+        id: a.id,
+        name: a.name.clone(),
+        initial: a
+            .name
+            .chars()
+            .next()
+            .map(|c| c.to_string())
+            .unwrap_or_default(),
+        role: a.role.clone(),
+        maturity_label: maturity_label(a.maturity),
+        skills: a.skills.iter().map(|t| t.name.clone()).collect(),
+        model: a.model.clone(),
+        runs: a.runs,
+        win_rate: a.win_rate.clone(),
+    }
+}
+
+/// The 3-card "从 Hub 导入" overview strip — count + a few sample names per
+/// library. Takes primitives (not the row `Vec`s themselves) so it stays a
+/// plain, easily-tested pure function.
+pub fn hub_overview(
+    workflow_count: usize,
+    workflow_sample: &[String],
+    skill_count: usize,
+    skill_sample: &[String],
+    agent_count: usize,
+    agent_sample: &[String],
+) -> Vec<HubCard> {
+    vec![
+        HubCard {
+            id: HubKind::Workflow,
+            name: "WorkflowHub".into(),
+            kind_label: "完整工作流".into(),
+            count: workflow_count as u32,
+            color: "#B0503A".into(),
+            desc: "整套 workflow 模板：含 phases、goal(验收)、loop 配置，导入即可跑".into(),
+            items: workflow_sample.iter().take(4).cloned().collect(),
+        },
+        HubCard {
+            id: HubKind::Skill,
+            name: "SkillHub".into(),
+            kind_label: "可插拔技能".into(),
+            count: skill_count as u32,
+            color: "#5F7355".into(),
+            desc: "单一能力的 skill，可被任意 agent / 工作流复用".into(),
+            items: skill_sample.iter().take(4).cloned().collect(),
+        },
+        HubCard {
+            id: HubKind::Agent,
+            name: "AgentHub".into(),
+            kind_label: "优化好的智能体".into(),
+            count: agent_count as u32,
+            color: "#5A4E7A".into(),
+            desc: "带系统提示与技能组合的 agent，定义各不相同".into(),
+            items: agent_sample.iter().take(4).cloned().collect(),
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,5 +922,164 @@ mod tests {
         let clean = stage_detail(StageKind::Build, &[true, true, true], 2);
         assert!(clean.dod_all_checked);
         assert_eq!(clean.handoff_count, 2);
+    }
+
+    fn static_spec(stage_ref: Option<u8>) -> WorkflowSpec {
+        WorkflowSpec {
+            id: WorkflowId::nil(),
+            name: "深度访谈 → 问题定义".into(),
+            kind: WorkflowKind::Static {
+                maturity: Maturity::Mature,
+                version: 3,
+                uses: 12,
+                scope: "跨项目复用".into(),
+                source: bw_core::model::HubSource::SelfBuilt,
+                trigger: Some("deep interview".into()),
+            },
+            prompt: "界定→采集→结构化→分析".into(),
+            goal: "产出验证过的问题陈述".into(),
+            stage_ref,
+            phases: vec!["访谈提纲".into(), "深挖场景".into()],
+            agents: vec![],
+            skills: vec![],
+            loop_config: bw_core::model::LoopConfig {
+                retries: 2,
+                max_iter: 3,
+            },
+        }
+    }
+
+    fn dynamic_spec() -> WorkflowSpec {
+        WorkflowSpec {
+            id: WorkflowId::nil(),
+            name: "「原型」标准工作流".into(),
+            kind: WorkflowKind::Dynamic {
+                origin: "阶段标准模板".into(),
+                stage: "原型".into(),
+            },
+            prompt: "p".into(),
+            goal: "g".into(),
+            stage_ref: Some(1),
+            phases: vec![],
+            agents: vec![],
+            skills: vec![],
+            loop_config: bw_core::model::LoopConfig {
+                retries: 1,
+                max_iter: 1,
+            },
+        }
+    }
+
+    #[test]
+    fn workflow_hub_row_returns_none_for_dynamic() {
+        assert!(workflow_hub_row(&dynamic_spec()).is_none());
+    }
+
+    #[test]
+    fn workflow_hub_row_reads_static_fields() {
+        let row = workflow_hub_row(&static_spec(Some(1))).unwrap();
+        assert_eq!(row.source_label, "自建");
+        assert_eq!(row.maturity_label, "成熟");
+        assert_eq!(row.trigger.as_deref(), Some("deep interview"));
+        assert_eq!(row.version_label, "v3");
+        assert_eq!(row.uses, 12);
+        assert_eq!(row.loop_label, "重试2·迭代3");
+        assert_eq!(row.primary_agent, "—");
+    }
+
+    #[test]
+    fn group_by_stage_covers_six_groups_in_order() {
+        let rows = vec![
+            workflow_hub_row(&static_spec(Some(1))).unwrap(),
+            workflow_hub_row(&static_spec(None)).unwrap(),
+        ];
+        let groups = group_by_stage(&rows);
+        assert_eq!(groups.len(), 6);
+        assert_eq!(groups[0].0, Some(StageKind::Prototype));
+        assert_eq!(groups[0].1.len(), 1);
+        assert_eq!(groups[5].0, None, "6th group is the metrics-layer bucket");
+        assert_eq!(groups[5].1.len(), 1);
+    }
+
+    #[test]
+    fn source_chip_counts_tallies_by_label() {
+        let rows = vec![
+            workflow_hub_row(&static_spec(Some(1))).unwrap(),
+            workflow_hub_row(&static_spec(Some(2))).unwrap(),
+        ];
+        let counts = source_chip_counts(&rows);
+        let self_built = counts.iter().find(|(l, _)| *l == "自建").unwrap();
+        assert_eq!(self_built.1, 2);
+    }
+
+    #[test]
+    fn workflow_detail_carries_agent_and_skill_provenance() {
+        let mut spec = static_spec(Some(1));
+        spec.agents.push(bw_core::model::AgentRef {
+            name: "竞品分析 Agent".into(),
+            def: "强检索、低臆测".into(),
+            from: "AgentHub".into(),
+        });
+        let detail = workflow_detail(&spec).unwrap();
+        assert_eq!(detail.agents.len(), 1);
+        assert_eq!(detail.agents[0].0, "竞品分析 Agent");
+        assert_eq!(detail.agents[0].2, "AgentHub");
+        assert_eq!(
+            detail.phases_numbered,
+            vec![(1, "访谈提纲".into()), (2, "深挖场景".into())]
+        );
+    }
+
+    #[test]
+    fn skill_card_maps_2tier_maturity() {
+        let card = skill_card(&SkillCard {
+            id: SkillId::nil(),
+            name: "web-scan".into(),
+            maturity: Maturity::Polishing,
+            desc: "d".into(),
+            category: "检索".into(),
+            source: bw_core::model::LibSource::SelfBuilt,
+            uses: 128,
+        });
+        assert_eq!(card.maturity_label, "打磨中");
+        assert_eq!(card.source_label, "自建");
+        assert_eq!(card.uses, 128);
+    }
+
+    #[test]
+    fn agent_card_derives_initial_and_skill_names() {
+        let card = agent_card(&AgentCard {
+            id: AgentId::nil(),
+            name: "竞品分析 Agent".into(),
+            role: "r".into(),
+            maturity: Maturity::Mature,
+            skills: vec![bw_core::model::AgentSkillTag {
+                name: "web-scan".into(),
+            }],
+            model: "claude-opus".into(),
+            runs: 213,
+            win_rate: "94%".into(),
+        });
+        assert_eq!(card.initial, "竞");
+        assert_eq!(card.skills, vec!["web-scan".to_string()]);
+        assert_eq!(card.runs, 213);
+    }
+
+    #[test]
+    fn hub_overview_builds_three_cards_with_capped_samples() {
+        let names = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+        ];
+        let cards = hub_overview(53, &names, 340, &names, 96, &names);
+        assert_eq!(cards.len(), 3);
+        assert_eq!(cards[0].id, HubKind::Workflow);
+        assert_eq!(cards[0].count, 53);
+        assert_eq!(cards[0].items.len(), 4, "sample list caps at 4 items");
+        assert_eq!(cards[1].id, HubKind::Skill);
+        assert_eq!(cards[2].id, HubKind::Agent);
     }
 }

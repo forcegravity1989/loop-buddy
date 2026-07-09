@@ -4,18 +4,23 @@
 //! sidesteps `SQLITE_BUSY` without ceremony.
 
 use crate::{
-    cadence_text, cycle_text, parse_cadence, parse_cycle, parse_session_status, parse_sig,
-    parse_stage_kind, session_status_text, sig_text, stage_kind_text, HandoffRow, MessageRow,
-    MetricRole, MetricSignal, NewMetric, NewProject, NewSession, NewStage, ObservationRow,
-    PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, StageRow, StageSignal, Store,
-    StoreError,
+    cadence_text, cycle_text, lib_source_text, maturity_text, parse_cadence, parse_cycle,
+    parse_lib_source, parse_maturity, parse_session_status, parse_sig, parse_stage_kind,
+    session_status_text, sig_text, stage_kind_text, HandoffRow, MessageRow, MetricRole,
+    MetricSignal, NewAgent, NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec,
+    ObservationRow, PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, StageRow,
+    StageSignal, Store, StoreError,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
     evaluate_metric, measure, parse_target_with, reduce_worst_of, AmberBand, Measurement,
 };
-use bw_core::model::{ProjectCycle, ProjectPhase, Role, Signal, SourceKind, StageKind};
-use bw_core::{MetricId, ProjectId, SessionId};
+use bw_core::model::{
+    AgentCard, AgentRef, AgentSkillTag, HubSource, LoopConfig, Maturity, ProjectCycle,
+    ProjectPhase, Role, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind,
+    WorkflowSpec,
+};
+use bw_core::{AgentId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
@@ -807,6 +812,191 @@ impl Store for SqliteStore {
             })
             .collect())
     }
+
+    // ── hub library (global — no active-project gate) ──
+
+    async fn create_workflow_spec(&self, w: NewWorkflowSpec) -> Result<()> {
+        let t = now_unix();
+        sqlx::query(
+            "INSERT INTO workflow_spec
+                (id, name, kind_json, prompt, goal, stage_ref, phases, agents_json, skills_json,
+                 loop_retries, loop_max_iter, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+        )
+        .bind(w.id.uuid().to_string())
+        .bind(&w.name)
+        .bind(serde_json::to_string(&w.kind)?)
+        .bind(&w.prompt)
+        .bind(&w.goal)
+        .bind(w.stage_ref.map(i64::from))
+        .bind(serde_json::to_string(&w.phases)?)
+        .bind(serde_json::to_string(&w.agents)?)
+        .bind(serde_json::to_string(&w.skills)?)
+        .bind(i64::from(w.loop_config.retries))
+        .bind(i64::from(w.loop_config.max_iter))
+        .bind(t)
+        .bind(t)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_workflow_specs(&self) -> Result<Vec<WorkflowSpec>> {
+        let rows = sqlx::query(
+            "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, agents_json, skills_json,
+                    loop_retries, loop_max_iter
+             FROM workflow_spec ORDER BY created_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(workflow_spec_row).collect()
+    }
+
+    async fn get_workflow_spec(&self, id: WorkflowId) -> Result<Option<WorkflowSpec>> {
+        let row = sqlx::query(
+            "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, agents_json, skills_json,
+                    loop_retries, loop_max_iter
+             FROM workflow_spec WHERE id=?",
+        )
+        .bind(id.uuid().to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(workflow_spec_row).transpose()
+    }
+
+    async fn promote_workflow(
+        &self,
+        new_id: WorkflowId,
+        from: &WorkflowSpec,
+        source: HubSource,
+    ) -> Result<()> {
+        let kind = WorkflowKind::Static {
+            maturity: Maturity::Fresh,
+            version: 1,
+            uses: 0,
+            scope: String::new(),
+            source,
+            trigger: None,
+        };
+        let t = now_unix();
+        sqlx::query(
+            "INSERT INTO workflow_spec
+                (id, name, kind_json, prompt, goal, stage_ref, phases, agents_json, skills_json,
+                 loop_retries, loop_max_iter, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+        )
+        .bind(new_id.uuid().to_string())
+        .bind(&from.name)
+        .bind(serde_json::to_string(&kind)?)
+        .bind(&from.prompt)
+        .bind(&from.goal)
+        .bind(from.stage_ref.map(i64::from))
+        .bind(serde_json::to_string(&from.phases)?)
+        .bind(serde_json::to_string(&from.agents)?)
+        .bind(serde_json::to_string(&from.skills)?)
+        .bind(i64::from(from.loop_config.retries))
+        .bind(i64::from(from.loop_config.max_iter))
+        .bind(t)
+        .bind(t)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn record_workflow_use(&self, id: WorkflowId) -> Result<()> {
+        let row = sqlx::query("SELECT kind_json FROM workflow_spec WHERE id=?")
+            .bind(id.uuid().to_string())
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| StoreError::Other("workflow spec not found".into()))?;
+        let mut kind: WorkflowKind = serde_json::from_str(&row.get::<String, _>("kind_json"))?;
+        if let WorkflowKind::Static { uses, .. } = &mut kind {
+            *uses += 1;
+        }
+        sqlx::query("UPDATE workflow_spec SET kind_json=?, updated_at=?, rev=rev+1 WHERE id=?")
+            .bind(serde_json::to_string(&kind)?)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn create_skill(&self, s: NewSkill) -> Result<()> {
+        let t = now_unix();
+        sqlx::query(
+            "INSERT INTO skill (id, name, maturity, descr, category, source, uses, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 0)",
+        )
+        .bind(s.id.uuid().to_string())
+        .bind(&s.name)
+        .bind(maturity_text(s.maturity))
+        .bind(&s.desc)
+        .bind(&s.category)
+        .bind(lib_source_text(s.source))
+        .bind(t)
+        .bind(t)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_skills(&self) -> Result<Vec<SkillCard>> {
+        let rows = sqlx::query(
+            "SELECT id, name, maturity, descr, category, source, uses FROM skill ORDER BY created_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(skill_row).collect()
+    }
+
+    async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>> {
+        let row = sqlx::query(
+            "SELECT id, name, maturity, descr, category, source, uses FROM skill WHERE id=?",
+        )
+        .bind(id.uuid().to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(skill_row).transpose()
+    }
+
+    async fn create_agent(&self, a: NewAgent) -> Result<()> {
+        let t = now_unix();
+        sqlx::query(
+            "INSERT INTO agent (id, name, role, maturity, skills, model, runs, win_rate, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, ?, 0)",
+        )
+        .bind(a.id.uuid().to_string())
+        .bind(&a.name)
+        .bind(&a.role)
+        .bind(maturity_text(a.maturity))
+        .bind(serde_json::to_string(&a.skills)?)
+        .bind(&a.model)
+        .bind(t)
+        .bind(t)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_agents(&self) -> Result<Vec<AgentCard>> {
+        let rows = sqlx::query(
+            "SELECT id, name, role, maturity, skills, model, runs, win_rate FROM agent ORDER BY created_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(agent_row).collect()
+    }
+
+    async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>> {
+        let row = sqlx::query(
+            "SELECT id, name, role, maturity, skills, model, runs, win_rate FROM agent WHERE id=?",
+        )
+        .bind(id.uuid().to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(agent_row).transpose()
+    }
 }
 
 fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
@@ -833,5 +1023,59 @@ fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
         weekly_signal: r
             .get::<Option<String>, _>("weekly_signal")
             .and_then(|s| parse_sig(&s)),
+    })
+}
+
+fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
+    let id = parse_uuid(&r.get::<String, _>("id"), WorkflowId::from_uuid)?;
+    let kind: WorkflowKind = serde_json::from_str(&r.get::<String, _>("kind_json"))?;
+    let phases: Vec<String> = serde_json::from_str(&r.get::<String, _>("phases"))?;
+    let agents: Vec<AgentRef> = serde_json::from_str(&r.get::<String, _>("agents_json"))?;
+    let skills: Vec<SkillRef> = serde_json::from_str(&r.get::<String, _>("skills_json"))?;
+    Ok(WorkflowSpec {
+        id,
+        name: r.get("name"),
+        kind,
+        prompt: r.get("prompt"),
+        goal: r.get("goal"),
+        stage_ref: r.get::<Option<i64>, _>("stage_ref").map(|v| v as u8),
+        phases,
+        agents,
+        skills,
+        loop_config: LoopConfig {
+            retries: r.get::<i64, _>("loop_retries") as u8,
+            max_iter: r.get::<i64, _>("loop_max_iter") as u8,
+        },
+    })
+}
+
+fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
+    let id = parse_uuid(&r.get::<String, _>("id"), SkillId::from_uuid)?;
+    Ok(SkillCard {
+        id,
+        name: r.get("name"),
+        maturity: parse_maturity(&r.get::<String, _>("maturity")),
+        desc: r.get("descr"),
+        category: r.get("category"),
+        source: parse_lib_source(&r.get::<String, _>("source")),
+        uses: r.get::<i64, _>("uses") as u32,
+    })
+}
+
+fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
+    let id = parse_uuid(&r.get::<String, _>("id"), AgentId::from_uuid)?;
+    let skills: Vec<String> = serde_json::from_str(&r.get::<String, _>("skills"))?;
+    Ok(AgentCard {
+        id,
+        name: r.get("name"),
+        role: r.get("role"),
+        maturity: parse_maturity(&r.get::<String, _>("maturity")),
+        skills: skills
+            .into_iter()
+            .map(|name| AgentSkillTag { name })
+            .collect(),
+        model: r.get("model"),
+        runs: r.get::<i64, _>("runs") as u32,
+        win_rate: r.get("win_rate"),
     })
 }

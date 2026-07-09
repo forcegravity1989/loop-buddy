@@ -64,3 +64,11 @@ id_newtype!(
     /// Stable identity of a [`crate::model::Routine`].
     RoutineId
 );
+id_newtype!(
+    /// Stable identity of a [`crate::model::SkillCard`].
+    SkillId
+);
+id_newtype!(
+    /// Stable identity of a [`crate::model::AgentCard`].
+    AgentId
+);

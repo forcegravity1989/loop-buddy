@@ -134,3 +134,54 @@ CREATE TABLE IF NOT EXISTS handoff (
     created_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_handoff_project_ts ON handoff(project_id, created_at DESC);
+
+-- ═══════════════════════ hub library (global, no project_id) ═══════════════════════
+-- Workflow/Skill/Agent hub tables are the FIRST global (non-project-scoped)
+-- tables in this schema — a deliberate architectural first, not a retrofit:
+-- a hub entry is a catalog/library item that exists independent of any
+-- project and gets *imported into* one, not owned by one.
+
+CREATE TABLE IF NOT EXISTS workflow_spec (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    kind_json      TEXT NOT NULL,             -- JSON-serialized WorkflowKind (Static|Dynamic)
+    prompt         TEXT NOT NULL DEFAULT '',
+    goal           TEXT NOT NULL DEFAULT '',
+    stage_ref      INTEGER,                   -- 1..=5, nullable (metrics-layer / cross-cutting)
+    phases         TEXT NOT NULL DEFAULT '[]', -- JSON [String]
+    agents_json    TEXT NOT NULL DEFAULT '[]', -- JSON [AgentRef]
+    skills_json    TEXT NOT NULL DEFAULT '[]', -- JSON [SkillRef]
+    loop_retries   INTEGER NOT NULL DEFAULT 1,
+    loop_max_iter  INTEGER NOT NULL DEFAULT 3,
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    rev            INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_spec_stage ON workflow_spec(stage_ref);
+
+CREATE TABLE IF NOT EXISTS skill (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    maturity    TEXT NOT NULL DEFAULT 'fresh',
+    descr       TEXT NOT NULL DEFAULT '',
+    category    TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT 'self_built',
+    uses        INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS agent (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    role        TEXT NOT NULL DEFAULT '',
+    maturity    TEXT NOT NULL DEFAULT 'fresh',
+    skills      TEXT NOT NULL DEFAULT '[]',   -- JSON [String] tag names
+    model       TEXT NOT NULL DEFAULT '',
+    runs        INTEGER NOT NULL DEFAULT 0,
+    win_rate    TEXT NOT NULL DEFAULT '',     -- pre-formatted, e.g. '94%'
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0
+);

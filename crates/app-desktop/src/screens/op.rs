@@ -14,17 +14,18 @@
 //! `运维 → 原型` 回流闭环。
 
 use crate::kernel::{ChatVm, Kernel, OpVm, RunVm, StageVm};
-use crate::{templates, theme};
+use crate::screens::chrome::Toast;
+use crate::theme;
 use bw_app::{Command, Panel, Scope};
-use bw_core::model::{FeedLevel, Signal, StageKind};
-use bw_core::SessionId;
+use bw_core::model::{stage_workflow, FeedLevel, HubKind, HubSource, Signal, StageKind};
+use bw_core::{SessionId, WorkflowId};
 use bw_store::SessionKind;
 use dioxus::prelude::*;
 use ui::vm::{MetricVm, SessionCardVm};
 use ui::{sparkline_path, SparkPath, WowDir};
 
 #[component]
-pub fn Op(op: OpVm, run: RunVm) -> Element {
+pub fn Op(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     let paper = theme::PAPER;
     rsx! {
         div {
@@ -37,7 +38,7 @@ pub fn Op(op: OpVm, run: RunVm) -> Element {
                 LeftRail { op: op.clone() }
                 div {
                     style: "flex:1;min-width:0;overflow-y:auto;padding:18px 22px 40px;",
-                    Center { op, run }
+                    Center { op, run, on_pick_hub }
                 }
             }
         }
@@ -327,7 +328,7 @@ fn SessionCard(s: SessionCardVm, selected: bool) -> Element {
 // ───────────────────────── center ─────────────────────────
 
 #[component]
-fn Center(op: OpVm, run: RunVm) -> Element {
+fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     let stage = match op.scope {
         Scope::Stage(kind) => op.stages.iter().find(|s| s.kind == kind).cloned(),
         Scope::All => None,
@@ -335,7 +336,7 @@ fn Center(op: OpVm, run: RunVm) -> Element {
     match (op.panel, stage) {
         (Panel::Progress, None) => rsx! { ProgressAll { op } },
         (Panel::Progress, Some(s)) => rsx! { ProgressStage { op, s } },
-        (Panel::Workflow, s) => rsx! { WorkflowPanel { op, stage: s, run } },
+        (Panel::Workflow, s) => rsx! { WorkflowPanel { op, stage: s, run, on_pick_hub } },
         (Panel::Routine, None) => rsx! { RoutineAll { op } },
         (Panel::Routine, Some(s)) => rsx! { RoutineStage { s } },
         (Panel::Artifact, _) => rsx! { P3Stub { what: "产物画廊 / 产物画布" } },
@@ -895,20 +896,66 @@ fn ProgressStage(op: OpVm, s: StageVm) -> Element {
 // ── workflow panel ──
 
 #[component]
-fn WorkflowPanel(op: OpVm, stage: Option<StageVm>, run: RunVm) -> Element {
-    let card = theme::card();
-    let ink2 = theme::INK_2;
+fn WorkflowPanel(
+    op: OpVm,
+    stage: Option<StageVm>,
+    run: RunVm,
+    on_pick_hub: EventHandler<HubKind>,
+) -> Element {
     match stage {
         None => rsx! {
             div {
-                style: "{card} padding:22px 24px;max-width:640px;",
-                div { style: "font-weight:600;margin-bottom:8px;", "工作流库(跨阶段)属 P3" }
-                p { style: "color:{ink2};font-size:13px;line-height:1.8;margin:0;",
-                    "当前版本为每个阶段内置一条标准工作流,直接来自其方法循环:选中阶段轴上的任一阶段,即可运行并实时观察阶段推进;产出会作为会话消息入库。沉淀/复用型工作流库在 P3 铺屏时交付。"
+                div { style: "font-weight:600;margin-bottom:4px;", "从 Hub 导入" }
+                p { style: "color:{theme::INK_2};font-size:12.5px;line-height:1.7;margin:0 0 14px;",
+                    "选中阶段轴上的任一阶段可运行其内置标准工作流;这里是三个可复用库的入口——沉淀过的工作流、可插拔技能、配置好的智能体。"
                 }
+                HubOverviewStrip { hub: op.hub.clone(), on_pick_hub }
             }
         },
         Some(s) => rsx! { WorkflowStage { op, s, run } },
+    }
+}
+
+#[component]
+fn HubOverviewStrip(hub: crate::kernel::HubVm, on_pick_hub: EventHandler<HubKind>) -> Element {
+    let card = theme::card();
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    rsx! {
+        div {
+            style: "display:grid;grid-template-columns:repeat(3,1fr);gap:14px;",
+            for hc in hub.overview.clone() {
+                {
+                    let dot = theme::dot(&hc.color, 8);
+                    let kind = hc.id;
+                    rsx! {
+                        div {
+                            key: "{hc.name}",
+                            style: "{card} padding:16px 18px;display:flex;flex-direction:column;",
+                            div { style: "display:flex;align-items:center;gap:8px;margin-bottom:4px;",
+                                span { style: "{dot}" }
+                                span { style: "font-size:13.5px;font-weight:600;", "{hc.name}" }
+                                span { style: "margin-left:auto;font-family:{theme::MONO};font-size:12px;color:{ink3};", "{hc.count}" }
+                            }
+                            div { style: "font-size:11.5px;color:{ink3};margin-bottom:8px;", "{hc.kind_label}" }
+                            p { style: "color:{ink2};font-size:12px;line-height:1.6;margin:0 0 10px;flex:1;", "{hc.desc}" }
+                            if !hc.items.is_empty() {
+                                div { style: "display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px;",
+                                    for (i , item) in hc.items.iter().enumerate() {
+                                        span { key: "{i}", style: "{theme::chip(\"#F4F0E7\", ink2)}", "{item}" }
+                                    }
+                                }
+                            }
+                            button {
+                                style: "cursor:pointer;background:transparent;border:none;padding:0;font-size:12px;color:{theme::CLAY};text-align:left;",
+                                onclick: move |_| on_pick_hub.call(kind),
+                                "浏览并导入 →"
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -961,7 +1008,7 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
     let primary = theme::btn_primary();
-    let spec_preview = templates::stage_workflow(s.kind);
+    let spec_preview = stage_workflow(s.kind);
     let phases = spec_preview.phases.join(" → ");
     let goal = spec_preview.goal.clone();
     let stage_kind = s.kind;
@@ -989,8 +1036,24 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             // A fresh spec per run — the template is methodology, the run is real.
             k.send(Command::RunWorkflow {
                 session: sid,
-                spec: templates::stage_workflow(stage_kind),
+                spec: stage_workflow(stage_kind),
             });
+        }
+    };
+    let mut promoted_msg = use_signal(|| None::<String>);
+    let promote = {
+        let k = k.clone();
+        let session = op.chat.as_ref().map(|c| c.id);
+        move |_| {
+            let Some(session) = session else {
+                return;
+            };
+            k.send(Command::PromoteWorkflow {
+                new_id: WorkflowId::new(),
+                session,
+                source: HubSource::SelfBuilt,
+            });
+            promoted_msg.set(Some("已沉淀为静态工作流 → WorkflowHub".into()));
         }
     };
     let chat_area = match op.chat.clone() {
@@ -1023,9 +1086,19 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
                 div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "当前未配置工作目录 → 本轮仍为模拟执行" }
             }
             div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
-            div { style: "font-size:12px;color:{ink3};", "验收:{goal} · loop ≤3 迭代" }
+            div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
+            if op.chat.is_some() {
+                button {
+                    style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
+                    onclick: promote,
+                    "↑ 沉淀为静态"
+                }
+            }
         }
         {chat_area}
+        if let Some(msg) = promoted_msg() {
+            Toast { msg, onclose: move |_| promoted_msg.set(None) }
+        }
     }
 }
 
