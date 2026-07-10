@@ -725,10 +725,14 @@ pub struct CronRowVm {
     pub name: String,
     pub target: String,
     pub schedule_label: String,
+    /// Raw scoping fact — `None` = 全部项目. The UI needs the id itself (not
+    /// just `project_label`) to actually dispatch a manual "立即执行" run.
+    pub project_id: Option<ProjectId>,
     /// "全部项目" when `project_id` is `None`, else the resolved project name
     /// (falls back to a short id-derived label if the project can't be found —
     /// never silently drops the scoping fact).
     pub project_label: String,
+    pub status: CronStatus,
     pub status_label: &'static str,
     pub last_run: String,
     pub next_run: String,
@@ -750,7 +754,9 @@ pub fn cron_row(c: &CronTask, project_names: &[(ProjectId, String)]) -> CronRowV
         name: c.name.clone(),
         target: c.target.clone(),
         schedule_label: cadence_label(&c.schedule),
+        project_id: c.project_id,
         project_label,
+        status: c.status,
         status_label: c.status.label(),
         last_run: c.last_run.clone(),
         next_run: c.next_run.clone(),

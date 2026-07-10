@@ -115,6 +115,19 @@ pub struct NewWorkflowSpec {
     pub loop_config: LoopConfig,
 }
 
+/// The editable content of an existing **Static** hub workflow — the "优化"
+/// action on a spec that already exists, distinct from `NewWorkflowSpec`
+/// (creation) and `promote_workflow` (mint a new row from a session). Omits
+/// `name`/`stage_ref`/`loop_config`: this is a content revision (prompt,
+/// goal, method, crew), not a re-classification.
+pub struct WorkflowEdit {
+    pub prompt: String,
+    pub goal: String,
+    pub phases: Vec<String>,
+    pub agents: Vec<AgentRef>,
+    pub skills: Vec<SkillRef>,
+}
+
 pub struct NewSkill {
     pub id: SkillId,
     pub name: String,
@@ -400,6 +413,12 @@ pub trait Store: Send + Sync {
     /// Bump a hub spec's `uses` counter by 1 — called when it's run via
     /// `RunHubWorkflow`.
     async fn record_workflow_use(&self, id: WorkflowId) -> Result<()>;
+    /// Revise an existing **Static** spec's authored content ("优化" a hub
+    /// workflow) — bumps `version`; `uses`/`maturity`/`source`/`scope`/
+    /// `trigger` are preserved untouched from the row being edited. Errors
+    /// if `id` resolves to a `Dynamic` spec (nothing durable to edit) or to
+    /// no row at all.
+    async fn update_workflow_spec(&self, id: WorkflowId, edit: WorkflowEdit) -> Result<()>;
 
     async fn create_skill(&self, s: NewSkill) -> Result<()>;
     async fn list_skills(&self) -> Result<Vec<SkillCard>>;
@@ -411,6 +430,18 @@ pub trait Store: Send + Sync {
 
     async fn create_cron_task(&self, c: NewCronTask) -> Result<()>;
     async fn list_cron_tasks(&self) -> Result<Vec<CronTask>>;
+    /// Pure status flip — pause/resume, the "人工介入" action on a cron task.
+    /// Never touches `last_run`: nothing actually ran.
+    async fn set_cron_status(&self, id: CronTaskId, status: CronStatus) -> Result<()>;
+    /// Record that a task's target really ran just now (manually triggered —
+    /// this app has no background scheduler; see `cron_hub.rs`'s own header),
+    /// with the real outcome `status` and a real, caller-formatted timestamp.
+    async fn record_cron_run(
+        &self,
+        id: CronTaskId,
+        status: CronStatus,
+        last_run: String,
+    ) -> Result<()>;
 
     async fn create_connector(&self, c: NewConnector) -> Result<()>;
     async fn list_connectors(&self) -> Result<Vec<Connector>>;
@@ -545,6 +576,15 @@ pub(crate) fn parse_cron_status(s: &str) -> CronStatus {
         "failed" => CronStatus::Failed,
         "paused" => CronStatus::Paused,
         _ => CronStatus::Normal,
+    }
+}
+
+pub(crate) fn cron_status_text(s: CronStatus) -> &'static str {
+    match s {
+        CronStatus::Running => "running",
+        CronStatus::Normal => "normal",
+        CronStatus::Failed => "failed",
+        CronStatus::Paused => "paused",
     }
 }
 

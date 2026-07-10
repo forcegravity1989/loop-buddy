@@ -1,4 +1,4 @@
-//! **Full-chain goal verification.** 13 named hypotheses, each exercised
+//! **Full-chain goal verification.** 17 named hypotheses, each exercised
 //! through the real `App`/`Command` API (the exact same path the desktop UI
 //! drives), against a fresh store, using the real OMC/ECC-seeded hub library
 //! and freshly-created real projects — no mocked assertions, no hand-waving:
@@ -7,10 +7,13 @@
 //!
 //! Run: `cargo run -p bw-app --example verify_goal -- <output-db-path>`
 
-use bw_app::{App, Command};
+use bw_app::{App, Command, Event};
 use bw_core::derive::{evaluate_metric, measure, parse_target};
-use bw_core::model::{stage_workflow, Cadence, HubSource, ProjectCycle, SourceKind, StageKind};
-use bw_core::{MetricId, ProjectId, SessionId, Signal, WorkflowId};
+use bw_core::model::{
+    stage_template_workflow, stage_workflow, AgentRef, Cadence, CronStatus, HubSource, LoopConfig,
+    ProjectCycle, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+};
+use bw_core::{CronTaskId, MetricId, ProjectId, SessionId, Signal, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
 use bw_store::{MetricRole, SessionKind, SqliteStore, Store};
 use std::sync::Arc;
@@ -432,6 +435,21 @@ async fn main() {
         ),
     });
 
+    // H11 left p1.workspace_path pointed at this real repo — real, on
+    // purpose, to prove H11. But `run_workflow_inner` (bw-app) picks Mock vs
+    // real `ClaudeCliExecutor` purely off whether `workspace_path` is
+    // non-empty, with no other gate — so any later `RunWorkflow`/
+    // `RunHubWorkflow` on p1 would now attempt a real `claude` CLI spawn.
+    // This sandbox doesn't have one installed. Clear it back to Mock before
+    // anything downstream runs a workflow (H17) — the same real trap
+    // `dogfood_workflowhub.rs` hit and fixed the same way.
+    app.dispatch(Command::SetWorkspace {
+        path: String::new(),
+        allow_commands: false,
+    })
+    .await
+    .unwrap();
+
     // ── H12: Cron/Connector/Knowledge 真实 CRUD(9 库里另外 3 个) ──
     let cron_id = bw_core::CronTaskId::new();
     let conn_id = bw_core::ConnectorId::new();
@@ -495,6 +513,221 @@ async fn main() {
                 "残留!"
             },
             still_have_p1
+        ),
+    });
+
+    // ── H14: 五阶段标准模板真实持久化(自建·Static),每阶段恰好一个,phases 与
+    //    StageKind::method_loop() 一致(不是编的占位行)──
+    let template_hits: Vec<(StageKind, bool)> = StageKind::ALL
+        .into_iter()
+        .map(|kind| {
+            let expected_phases = stage_template_workflow(kind).phases;
+            let ok = workflows.iter().any(|w| {
+                w.stage_ref == Some(kind.index())
+                    && w.phases == expected_phases
+                    && matches!(
+                        &w.kind,
+                        bw_core::model::WorkflowKind::Static { source, maturity, .. }
+                            if *source == HubSource::SelfBuilt
+                                && *maturity == bw_core::model::Maturity::Mature
+                    )
+            });
+            (kind, ok)
+        })
+        .collect();
+    h.push(Hyp {
+        id: "H14",
+        title: "五阶段标准模板已持久化为自建·Static Hub 条目,每阶段一个,非临时占位",
+        passed: template_hits.iter().all(|(_, ok)| *ok),
+        evidence: format!(
+            "boot 时 seed_hub_if_empty 种下的模板逐阶段核对:{}",
+            template_hits
+                .iter()
+                .map(|(k, ok)| format!("{}{}", k.label(), if *ok { "✓" } else { "✗缺失" }))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ),
+    });
+
+    // ── H15: UpdateWorkflowSpec("优化"一个已有 Hub workflow)真实持久化 ——
+    //    version+1,uses/maturity/source 原样保留,内容真的改了 ──
+    // Picks a stage template (untouched by H4's "ecc-guide" run) and reads
+    // its *current* persisted state fresh from the store right before
+    // editing — not the H1-era in-memory `workflows` snapshot, which would
+    // be stale for anything H4/H5 already mutated.
+    let optimize_target_id = workflows
+        .iter()
+        .find(|w| w.name.contains("标准工作流") && matches!(&w.kind, WorkflowKind::Static { .. }))
+        .map(|w| w.id)
+        .expect("至少一个自建阶段标准模板可优化");
+    let optimize_before = store
+        .get_workflow_spec(optimize_target_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let optimize_name = optimize_before.name.clone();
+    let (before_version, before_uses, before_maturity) = match &optimize_before.kind {
+        WorkflowKind::Static {
+            version,
+            uses,
+            maturity,
+            ..
+        } => (*version, *uses, *maturity),
+        WorkflowKind::Dynamic { .. } => unreachable!(),
+    };
+    app.dispatch(Command::UpdateWorkflowSpec {
+        id: optimize_target_id,
+        prompt: "验证:优化后的 prompt".into(),
+        goal: "验证:优化后的验收目标".into(),
+        phases: vec!["验证阶段A".into(), "验证阶段B".into()],
+        agents: vec![],
+        skills: vec![],
+    })
+    .await
+    .unwrap();
+    let optimized = store
+        .get_workflow_spec(optimize_target_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let (after_version, after_uses, after_maturity) = match &optimized.kind {
+        WorkflowKind::Static {
+            version,
+            uses,
+            maturity,
+            ..
+        } => (*version, *uses, *maturity),
+        WorkflowKind::Dynamic { .. } => unreachable!(),
+    };
+    h.push(Hyp {
+        id: "H15",
+        title: format!("UpdateWorkflowSpec 真实优化「{optimize_name}」:内容改了,version+1,uses/maturity 原样保留").leak() as &str,
+        passed: after_version == before_version + 1
+            && after_uses == before_uses
+            && after_maturity == before_maturity
+            && optimized.prompt == "验证:优化后的 prompt"
+            && optimized.phases.len() == 2,
+        evidence: format!(
+            "version {before_version}→{after_version} · uses 保持 {before_uses} · maturity 保持 {before_maturity:?} · prompt/phases 真实改写(读回验证,非只改内存)"
+        ),
+    });
+
+    // ── H16: SetCronStatus(人工介入)+ MarkCronRun(手动触发的真实结果)
+    //    都真实持久化,不是内存态假装 ──
+    let cron_id2 = CronTaskId::new();
+    app.dispatch(Command::CreateCronTask {
+        id: cron_id2,
+        name: "验证:立即执行".into(),
+        target: real_wf.name.clone(),
+        schedule: Cadence::Weekly,
+        project_id: Some(p1),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::SetCronStatus {
+        id: cron_id2,
+        status: CronStatus::Paused,
+    })
+    .await
+    .unwrap();
+    let paused_read = store
+        .list_cron_tasks()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.id == cron_id2)
+        .unwrap();
+    app.dispatch(Command::MarkCronRun {
+        id: cron_id2,
+        status: CronStatus::Normal,
+    })
+    .await
+    .unwrap();
+    let ran_read = store
+        .list_cron_tasks()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.id == cron_id2)
+        .unwrap();
+    h.push(Hyp {
+        id: "H16",
+        title: "SetCronStatus(人工介入·暂停)+ MarkCronRun(手动触发结果)真实持久化",
+        passed: paused_read.status == CronStatus::Paused
+            && ran_read.status == CronStatus::Normal
+            && !ran_read.last_run.is_empty(),
+        evidence: format!(
+            "暂停后读回 status={:?} · MarkCronRun 后 status={:?} last_run=「{}」(真实时间戳,非空、非硬编码)",
+            paused_read.status, ran_read.status, ran_read.last_run
+        ),
+    });
+
+    // ── H17: Event::RunStarted 真实携带 spec 的 agents/skills(不是永远空)；
+    //    用户临时手搭的 Dynamic 工作流(WorkflowHub「⚡ 临时任务」的真实路径)
+    //    真的能跑 ──
+    let mut ev = app.subscribe();
+    let adhoc_session = SessionId::new();
+    app.dispatch(Command::StartSession {
+        id: adhoc_session,
+        stage_kind: None,
+        kind: SessionKind::Create,
+        title: "验证:临时任务".into(),
+    })
+    .await
+    .unwrap();
+    let adhoc_spec = WorkflowSpec {
+        id: WorkflowId::new(),
+        name: "验证:临时任务".into(),
+        kind: WorkflowKind::Dynamic {
+            origin: "验证".into(),
+            stage: "指标层".into(),
+        },
+        prompt: "验证 prompt".into(),
+        goal: "验证 goal".into(),
+        stage_ref: None,
+        phases: vec!["步骤一".into()],
+        agents: vec![AgentRef {
+            name: "验证 Agent".into(),
+            def: "验证角色".into(),
+            from: "验证".into(),
+        }],
+        skills: vec![SkillRef {
+            name: "验证 Skill".into(),
+            def: "验证效果".into(),
+            from: "验证".into(),
+        }],
+        loop_config: LoopConfig {
+            retries: 1,
+            max_iter: 1,
+        },
+    };
+    app.dispatch(Command::RunWorkflow {
+        session: adhoc_session,
+        spec: adhoc_spec,
+    })
+    .await
+    .unwrap();
+    let mut saw_run_started = false;
+    while let Ok(e) = ev.try_recv() {
+        if let Event::RunStarted {
+            workflow_name,
+            agents,
+            skills,
+        } = e
+        {
+            if workflow_name == "验证:临时任务" && agents.len() == 1 && skills.len() == 1 {
+                saw_run_started = true;
+            }
+        }
+    }
+    let adhoc_msgs = store.session_messages(adhoc_session).await.unwrap();
+    h.push(Hyp {
+        id: "H17",
+        title: "临时任务(用户手搭的 Dynamic 工作流)真实可跑,RunStarted 真实携带 agents/skills",
+        passed: saw_run_started && !adhoc_msgs.is_empty(),
+        evidence: format!(
+            "RunStarted 携带 1 个 agent + 1 个 skill(来自真实 spec,非空占位)={saw_run_started} · 临时工作流真实产出 {} 条 session message",
+            adhoc_msgs.len()
         ),
     });
 

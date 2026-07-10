@@ -15,9 +15,9 @@
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    stage_workflow, AgentCard, AgentRef, Cadence, Connector, CronTask, HubSource, KnowledgeSource,
-    LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, Signal, SkillCard, SkillRef,
-    SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    stage_workflow, AgentCard, AgentRef, Cadence, Connector, CronStatus, CronTask, HubSource,
+    KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, Signal,
+    SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -29,7 +29,7 @@ use bw_engine::{
 use bw_store::{
     GlobalHandoffRow, MetricRole, NewAgent, NewConnector, NewCronTask, NewKnowledgeSource,
     NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec, ProjectRow,
-    SessionKind, Store,
+    SessionKind, Store, WorkflowEdit,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -208,6 +208,18 @@ pub enum Command {
         session: SessionId,
         workflow_id: WorkflowId,
     },
+    /// "优化" an existing **Static** hub workflow — revise its authored
+    /// content in place (bumps `version`; `uses`/`maturity`/`source` are
+    /// untouched). Distinct from `PromoteWorkflow` (mints a brand-new row
+    /// from a session run) and `CreateWorkflowSpec` (a fresh spec).
+    UpdateWorkflowSpec {
+        id: WorkflowId,
+        prompt: String,
+        goal: String,
+        phases: Vec<String>,
+        agents: Vec<AgentRef>,
+        skills: Vec<SkillRef>,
+    },
     CreateSkill {
         id: SkillId,
         name: String,
@@ -228,6 +240,20 @@ pub enum Command {
         target: String,
         schedule: Cadence,
         project_id: Option<ProjectId>,
+    },
+    /// Pause/resume a cron task — the "人工介入" lever. Pure status flip;
+    /// never touches `last_run` since nothing actually ran.
+    SetCronStatus {
+        id: CronTaskId,
+        status: CronStatus,
+    },
+    /// Record that a cron task's target really ran just now (this app has no
+    /// background scheduler — manually triggered from Cron Hub's "▶ 立即执行").
+    /// `status` is the real outcome (`Running` when the caller fires this
+    /// before dispatching the actual run, `Normal`/`Failed` once it's known).
+    MarkCronRun {
+        id: CronTaskId,
+        status: CronStatus,
     },
     CreateConnector {
         id: ConnectorId,
@@ -271,6 +297,16 @@ pub enum Event {
         session: SessionId,
         role: Role,
         text: String,
+    },
+    /// A run is really about to begin — carries the spec's own name/agents/
+    /// skills so the UI can show what's actually behind this run (real
+    /// `AgentRef`/`SkillRef` data from the spec, never invented) before the
+    /// first `WorkflowProgress` phase event arrives. Emitted once, first,
+    /// ahead of any `WorkflowProgress` for the same run.
+    RunStarted {
+        workflow_name: String,
+        agents: Vec<AgentRef>,
+        skills: Vec<SkillRef>,
     },
     WorkflowProgress {
         phase_idx: usize,
@@ -480,6 +516,15 @@ impl App {
             fresh_engine = Engine::new(Arc::new(executor));
             &fresh_engine
         };
+
+        // Announce what's actually about to run — real name/agents/skills
+        // straight off `spec`, before the first phase event — so a live
+        // subscriber can render "this run uses X/Y" without guessing.
+        self.emit(Event::RunStarted {
+            workflow_name: spec.name.clone(),
+            agents: spec.agents.clone(),
+            skills: spec.skills.clone(),
+        });
 
         // Progress events are emitted LIVE from inside the engine
         // callback (broadcast::send is sync), so a subscriber watches
@@ -871,6 +916,30 @@ impl App {
                 self.run_workflow_inner(session, spec).await?;
             }
 
+            Command::UpdateWorkflowSpec {
+                id,
+                prompt,
+                goal,
+                phases,
+                agents,
+                skills,
+            } => {
+                self.store
+                    .update_workflow_spec(
+                        id,
+                        WorkflowEdit {
+                            prompt,
+                            goal,
+                            phases,
+                            agents,
+                            skills,
+                        },
+                    )
+                    .await?;
+                self.refresh_workflow_specs().await?;
+                self.emit(Event::WorkflowSpecsChanged);
+            }
+
             Command::CreateSkill {
                 id,
                 name,
@@ -940,6 +1009,20 @@ impl App {
                         schedule,
                         project_id,
                     })
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+            }
+
+            Command::SetCronStatus { id, status } => {
+                self.store.set_cron_status(id, status).await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+            }
+
+            Command::MarkCronRun { id, status } => {
+                self.store
+                    .record_cron_run(id, status, run_at_label(now()))
                     .await?;
                 self.refresh_cron_tasks().await?;
                 self.emit(Event::CronTasksChanged);
@@ -1086,6 +1169,20 @@ impl App {
 
 fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
+}
+
+/// Compact, real `"YYYY-MM-DD HH:MM"` label for `CronTask.last_run` — a
+/// plain display string (same tier as `next_run`), not a typed timestamp
+/// column, so this is formatted once here rather than at every read site.
+fn run_at_label(at: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        at.year(),
+        u8::from(at.month()),
+        at.day(),
+        at.hour(),
+        at.minute()
+    )
 }
 
 /// Worse signals sort higher. `Unknown` sits between green and amber — more

@@ -10,8 +10,10 @@ mod kernel;
 mod screens;
 mod theme;
 
-use bw_app::View;
-use bw_core::model::HubKind;
+use bw_app::{Command, View};
+use bw_core::model::{CronStatus, HubKind, StageKind};
+use bw_core::{CronTaskId, SessionId};
+use bw_store::SessionKind;
 use dioxus::prelude::*;
 use kernel::{RunVm, UiNote, Vm};
 use screens::activity_hub::ActivityHub;
@@ -59,6 +61,12 @@ fn Root() -> Element {
     let mut creating = use_signal(|| false);
     let mut toast = use_signal(|| None::<String>);
     let mut run = use_signal(RunVm::default);
+    // Set right before a Cron Hub "▶ 立即执行" trigger fires; consumed (and
+    // cleared) by the notes listener below once that run's real `RunDone`/
+    // `RunFailed` arrives, closing the loop with a real `MarkCronRun`. Lives
+    // here (not in `RunVm`) because "which cron task triggered this" is
+    // client-side orchestration knowledge the kernel doesn't have.
+    let mut pending_cron = use_signal(|| None::<CronTaskId>);
 
     // Latest kernel snapshot → the one rendering source of truth.
     use_future({
@@ -76,11 +84,16 @@ fn Root() -> Element {
         }
     });
 
-    // Transient notes: live run progress + dispatch errors.
+    // Transient notes: live run progress + dispatch errors. Also the one
+    // place that closes the Cron Hub trigger loop: if this run was fired by
+    // "▶ 立即执行" (`pending_cron` is set), the real `RunDone`/`RunFailed`
+    // that ends it becomes a real `Command::MarkCronRun` with the real
+    // outcome — never optimistically marked at trigger time.
     use_future({
         let kernel = kernel.clone();
         move || {
             let mut rx = kernel.notes();
+            let kernel = kernel.clone();
             async move {
                 loop {
                     match rx.recv().await {
@@ -89,6 +102,23 @@ fn Root() -> Element {
                             UiNote::RunFailed(e) => {
                                 toast.set(Some(format!("工作流失败:{e}")));
                                 run.with_mut(|r| r.apply(&note));
+                                if let Some(cid) = pending_cron() {
+                                    kernel.send(Command::MarkCronRun {
+                                        id: cid,
+                                        status: CronStatus::Failed,
+                                    });
+                                    pending_cron.set(None);
+                                }
+                            }
+                            UiNote::RunDone => {
+                                run.with_mut(|r| r.apply(&note));
+                                if let Some(cid) = pending_cron() {
+                                    kernel.send(Command::MarkCronRun {
+                                        id: cid,
+                                        status: CronStatus::Normal,
+                                    });
+                                    pending_cron.set(None);
+                                }
                             }
                             _ => run.with_mut(|r| r.apply(&note)),
                         },
@@ -115,6 +145,45 @@ fn Root() -> Element {
     let show_create = creating() || v.view == View::Create;
     let show_op = !show_create && v.view == View::App;
 
+    // Cron Hub's "▶ 立即执行": resolve the real project + workflow from this
+    // render's hub snapshot, dispatch the exact same real Command sequence
+    // WorkflowHub's "确认导入" uses, mark the task Running for real, then
+    // navigate to go watch it (same as any other real run).
+    let hub_for_cron = v.hub.clone();
+    let kernel_for_cron = kernel.clone();
+    let on_trigger_cron = move |cron_id: CronTaskId| {
+        let Some(c) = hub_for_cron.cron_tasks.iter().find(|x| x.id == cron_id) else {
+            return;
+        };
+        let Some(pid) = c.project_id else {
+            return;
+        };
+        let Some(wf) = hub_for_cron.workflows.iter().find(|w| w.name == c.target) else {
+            return;
+        };
+        let session = SessionId::new();
+        kernel_for_cron.send(Command::OpenProject(pid));
+        kernel_for_cron.send(Command::StartSession {
+            id: session,
+            stage_kind: wf
+                .stage_ref
+                .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n)),
+            kind: SessionKind::Optimize,
+            title: format!("⏰ 定时触发 · {}", c.name),
+        });
+        kernel_for_cron.send(Command::MarkCronRun {
+            id: cron_id,
+            status: CronStatus::Running,
+        });
+        kernel_for_cron.send(Command::RunHubWorkflow {
+            session,
+            workflow_id: wf.id,
+        });
+        kernel_for_cron.send(Command::SelectSession(Some(session)));
+        pending_cron.set(Some(cron_id));
+        hub.set(Hub::Workspace);
+    };
+
     rsx! {
         GlobalChrome {}
         div {
@@ -127,13 +196,21 @@ fn Root() -> Element {
                 } else if v.fatal.is_some() {
                     FatalFrame { msg: v.fatal.clone().unwrap_or_default() }
                 } else if hub() == Hub::Workflow {
-                    WorkflowHub { hub: v.hub.clone(), projects: v.projects.clone() }
+                    WorkflowHub {
+                        hub: v.hub.clone(),
+                        projects: v.projects.clone(),
+                        on_run: move |_| hub.set(Hub::Workspace),
+                    }
                 } else if hub() == Hub::Skill {
                     SkillHub { hub: v.hub.clone() }
                 } else if hub() == Hub::Agent {
                     AgentHub { hub: v.hub.clone() }
                 } else if hub() == Hub::Cron {
-                    CronHub { hub: v.hub.clone() }
+                    CronHub {
+                        hub: v.hub.clone(),
+                        projects: v.projects.clone(),
+                        on_trigger: on_trigger_cron,
+                    }
                 } else if hub() == Hub::Connector {
                     ConnectorHub { hub: v.hub.clone() }
                 } else if hub() == Hub::Knowledge {
