@@ -10,8 +10,8 @@ use bw_core::model::{
 };
 use bw_core::{AgentId, CronTaskId, MetricId, ProjectId, Signal, SkillId, WorkflowId};
 use bw_store::{
-    MetricRole, NewAgent, NewCronTask, NewMetric, NewProject, NewSkill, NewStage, NewWorkflowSpec,
-    SqliteStore, Store,
+    AgentEdit, MetricRole, NewAgent, NewCronTask, NewMetric, NewProject, NewSkill, NewStage,
+    NewWorkflowSpec, SkillEdit, SqliteStore, Store,
 };
 use time::OffsetDateTime;
 
@@ -217,7 +217,7 @@ async fn dod_and_handoff_are_real_and_audited() {
             StageKind::Prototype,
             StageKind::Build,
             true,
-            "性能基线未测 · 带险交棒".into(),
+            "性能基线未测 · 带险交棒",
             now,
         )
         .await
@@ -241,7 +241,7 @@ async fn dod_and_handoff_are_real_and_audited() {
             StageKind::Ops,
             StageKind::Prototype,
             false,
-            "复盘洞察已回流".into(),
+            "复盘洞察已回流",
             now,
         )
         .await
@@ -435,6 +435,31 @@ async fn skill_create_list_get_roundtrip() {
     assert_eq!(got.uses, 0, "a freshly created skill starts unused");
     assert!(store.get_skill(SkillId::new()).await.unwrap().is_none());
 
+    // A real edit (AgentHub/SkillHub's detail-panel "编辑 →") changes content
+    // but must never touch lifecycle fields (maturity/uses) — same rule
+    // `update_workflow_spec` established for workflows.
+    store
+        .update_skill(
+            id,
+            SkillEdit {
+                name: "web-scan-v2".into(),
+                desc: "扫描公开网页并结构化提取,新增去重".into(),
+                category: "检索/数据".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let edited = store.get_skill(id).await.unwrap().unwrap();
+    assert_eq!(edited.name, "web-scan-v2");
+    assert_eq!(edited.desc, "扫描公开网页并结构化提取,新增去重");
+    assert_eq!(edited.category, "检索/数据");
+    assert_eq!(
+        edited.maturity,
+        Maturity::Polishing,
+        "editing content must not touch lifecycle fields"
+    );
+    assert_eq!(edited.uses, 0, "editing content must not fabricate usage");
+
     let _ = std::fs::remove_file(&path);
 }
 
@@ -471,6 +496,38 @@ async fn agent_create_list_get_roundtrip() {
     assert_eq!(got.model, "claude-opus");
     assert_eq!(got.runs, 0, "a freshly created agent starts unused");
     assert!(store.get_agent(AgentId::new()).await.unwrap().is_none());
+
+    // Same rule as skills: a real edit changes content, never lifecycle data.
+    store
+        .update_agent(
+            id,
+            AgentEdit {
+                name: "竞品分析 Agent v2".into(),
+                role: "强检索、低臆测，新增中文来源优先".into(),
+                skills: vec!["web-scan".into()],
+                model: "claude-sonnet".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let edited = store.get_agent(id).await.unwrap().unwrap();
+    assert_eq!(edited.name, "竞品分析 Agent v2");
+    assert_eq!(edited.role, "强检索、低臆测，新增中文来源优先");
+    assert_eq!(
+        edited
+            .skills
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["web-scan"]
+    );
+    assert_eq!(edited.model, "claude-sonnet");
+    assert_eq!(
+        edited.maturity,
+        Maturity::Polishing,
+        "editing content must not touch lifecycle fields"
+    );
+    assert_eq!(edited.runs, 0, "editing content must not fabricate usage");
 
     let _ = std::fs::remove_file(&path);
 }

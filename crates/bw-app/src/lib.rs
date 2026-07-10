@@ -27,9 +27,9 @@ use bw_engine::{
     ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit, PermissionMode, RunCtx, RunEvent,
 };
 use bw_store::{
-    GlobalHandoffRow, MetricRole, NewAgent, NewConnector, NewCronTask, NewKnowledgeSource,
-    NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec, ProjectRow,
-    SessionKind, Store, WorkflowEdit,
+    AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewConnector, NewCronTask,
+    NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec,
+    ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -227,7 +227,24 @@ pub enum Command {
         category: String,
         source: LibSource,
     },
+    /// SkillHub's detail-panel edit — content only (`maturity`/`uses` are
+    /// lifecycle data, untouched).
+    UpdateSkill {
+        id: SkillId,
+        name: String,
+        desc: String,
+        category: String,
+    },
     CreateAgent {
+        id: AgentId,
+        name: String,
+        role: String,
+        skills: Vec<String>,
+        model: String,
+    },
+    /// AgentHub's detail-panel edit — content only (`maturity`/`runs`/
+    /// `win_rate` are lifecycle data, untouched).
+    UpdateAgent {
         id: AgentId,
         name: String,
         role: String,
@@ -1067,6 +1084,29 @@ impl App {
                 self.emit(Event::SkillsChanged);
             }
 
+            Command::UpdateSkill {
+                id,
+                name,
+                desc,
+                category,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .update_skill(
+                        id,
+                        SkillEdit {
+                            name,
+                            desc,
+                            category,
+                        },
+                    )
+                    .await?;
+                self.refresh_skills().await?;
+                self.emit(Event::SkillsChanged);
+            }
+
             Command::CreateAgent {
                 id,
                 name,
@@ -1086,6 +1126,31 @@ impl App {
                         skills,
                         model,
                     })
+                    .await?;
+                self.refresh_agents().await?;
+                self.emit(Event::AgentsChanged);
+            }
+
+            Command::UpdateAgent {
+                id,
+                name,
+                role,
+                skills,
+                model,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .update_agent(
+                        id,
+                        AgentEdit {
+                            name,
+                            role,
+                            skills,
+                            model,
+                        },
+                    )
                     .await?;
                 self.refresh_agents().await?;
                 self.emit(Event::AgentsChanged);

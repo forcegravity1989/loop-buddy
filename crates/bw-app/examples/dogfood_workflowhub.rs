@@ -28,7 +28,20 @@
 //! so the workflow run below is honestly on `MockExecutor`, same as
 //! `verify_goal`'s H4/H5.
 //!
-//! Run: `cargo run -p bw-app --example dogfood_workflowhub -- <output-db-path>`
+//! **Honesty constraint #3**, added when this script was pointed at the
+//! *real* desktop app's persistent DB instead of only a disposable scratch
+//! path (so the WorkflowHub project card actually shows up when you open
+//! the real app, not just in a throwaway verification file): this script
+//! never deletes its target DB, and is idempotent — if a project named
+//! "WorkflowHub" already exists there, it prints the real current state and
+//! exits instead of re-running the creation sequence. A fresh scratch path
+//! still works exactly as before (nothing exists yet, so the full sequence
+//! runs); the same script is now also safe to point at
+//! `~/Library/Application Support/BuildersWorkbench/workbench.db` (or
+//! `$BW_DB`) without wiping the seeded Hub library or creating duplicate
+//! project cards on a second run.
+//!
+//! Run: `cargo run -p bw-app --example dogfood_workflowhub -- <db-path>`
 
 use bw_app::{App, Command};
 use bw_core::model::{Cadence, HubSource, Maturity, ProjectCycle, StageKind, WorkflowKind};
@@ -41,11 +54,9 @@ use std::sync::Arc;
 async fn main() {
     let out_path = std::env::args()
         .nth(1)
-        .expect("usage: dogfood_workflowhub <output-db-path>");
-    let _ = std::fs::remove_file(&out_path); // fresh, honest run
+        .expect("usage: dogfood_workflowhub <db-path>");
 
-    let store: Arc<dyn Store> =
-        Arc::new(SqliteStore::open(&out_path).await.expect("open output db"));
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&out_path).await.expect("open db"));
     let mut app = App::new(
         store.clone(),
         Engine::new(Arc::new(MockExecutor::new())),
@@ -54,6 +65,26 @@ async fn main() {
 
     app.dispatch(Command::Boot).await.expect("boot");
     println!("=== WorkflowHub 自举:用 Builders 工作台管理 WorkflowHub 自己的从零到一创建 ===\n");
+
+    // 幂等:这个库里已经有真实的 WorkflowHub 项目了,不重复创建、不删库重来——
+    // 尤其是指向真实桌面应用的持久化 DB 时,这是唯一安全的行为。
+    if let Some(existing) = store
+        .list_projects()
+        .await
+        .expect("list projects")
+        .into_iter()
+        .find(|p| p.name == "WorkflowHub")
+    {
+        let proj = store.get_project(existing.id).await.unwrap().unwrap();
+        let handoffs = store.list_handoffs(existing.id).await.unwrap();
+        println!("WorkflowHub 项目已存在于这个数据库里——幂等跳过创建,不重复、不清空重来。");
+        println!(
+            "project.active_stage = {:?} · 已记录 {} 次交棒 · DB: {out_path}",
+            proj.active_stage,
+            handoffs.len()
+        );
+        return;
+    }
 
     // ── 真实仓库根路径(与 verify_goal 的 H11 同一条推导路径)──
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -7,10 +7,10 @@ use crate::{
     cadence_text, cron_status_text, cycle_text, lib_source_text, maturity_text, parse_cadence,
     parse_connector_status, parse_cron_status, parse_cycle, parse_lib_source, parse_maturity,
     parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
-    stage_kind_text, GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal, NewAgent,
-    NewConnector, NewCronTask, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
-    NewStage, NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectRow, Result, SessionKind,
-    SessionRow, StageRow, StageSignal, Store, StoreError, WorkflowEdit,
+    stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal,
+    NewAgent, NewConnector, NewCronTask, NewKnowledgeSource, NewMetric, NewProject, NewSession,
+    NewSkill, NewStage, NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectRow, Result,
+    SessionKind, SessionRow, SkillEdit, StageRow, StageSignal, Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -1091,6 +1091,20 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn update_skill(&self, id: SkillId, edit: SkillEdit) -> Result<()> {
+        sqlx::query(
+            "UPDATE skill SET name=?, descr=?, category=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(&edit.name)
+        .bind(&edit.desc)
+        .bind(&edit.category)
+        .bind(now_unix())
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
             "SELECT id, name, maturity, descr, category, source, uses FROM skill ORDER BY created_at",
@@ -1124,6 +1138,21 @@ impl Store for SqliteStore {
         .bind(&a.model)
         .bind(t)
         .bind(t)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn update_agent(&self, id: AgentId, edit: AgentEdit) -> Result<()> {
+        sqlx::query(
+            "UPDATE agent SET name=?, role=?, skills=?, model=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(&edit.name)
+        .bind(&edit.role)
+        .bind(serde_json::to_string(&edit.skills)?)
+        .bind(&edit.model)
+        .bind(now_unix())
+        .bind(id.uuid().to_string())
         .execute(&self.pool)
         .await?;
         Ok(())

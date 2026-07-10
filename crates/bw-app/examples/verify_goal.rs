@@ -490,9 +490,9 @@ async fn main() {
         passed: crons.iter().any(|c| c.id == cron_id)
             && conns.iter().any(|c| c.id == conn_id)
             && knows.iter().any(|k| k.id == know_id),
-        evidence: format!(
+        evidence:
             "新建的定时任务/连接器/知识源均可在各自 list_* 里读回,字段(如 project_id 关联)保持正确"
-        ),
+                .to_string(),
     });
 
     // ── H13: 项目删除级联清理(CRUD 的 D,不留孤儿数据) ──

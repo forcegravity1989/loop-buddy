@@ -137,11 +137,29 @@ pub struct NewSkill {
     pub source: LibSource,
 }
 
+/// Editable content fields for an existing skill — `maturity`/`source`/
+/// `uses` are lifecycle data untouched by an edit, same rule
+/// `WorkflowEdit`/`update_workflow_spec` already established.
+pub struct SkillEdit {
+    pub name: String,
+    pub desc: String,
+    pub category: String,
+}
+
 pub struct NewAgent {
     pub id: AgentId,
     pub name: String,
     pub role: String,
     pub maturity: Maturity,
+    pub skills: Vec<String>,
+    pub model: String,
+}
+
+/// Editable content fields for an existing agent — `maturity`/`runs`/
+/// `win_rate` are lifecycle data untouched by an edit.
+pub struct AgentEdit {
+    pub name: String,
+    pub role: String,
     pub skills: Vec<String>,
     pub model: String,
 }
@@ -423,10 +441,12 @@ pub trait Store: Send + Sync {
     async fn create_skill(&self, s: NewSkill) -> Result<()>;
     async fn list_skills(&self) -> Result<Vec<SkillCard>>;
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>>;
+    async fn update_skill(&self, id: SkillId, edit: SkillEdit) -> Result<()>;
 
     async fn create_agent(&self, a: NewAgent) -> Result<()>;
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>>;
+    async fn update_agent(&self, id: AgentId, edit: AgentEdit) -> Result<()>;
 
     async fn create_cron_task(&self, c: NewCronTask) -> Result<()>;
     async fn list_cron_tasks(&self) -> Result<Vec<CronTask>>;
