@@ -740,7 +740,13 @@ pub struct CronRowVm {
 
 /// `project_names` resolves `CronTask.project_id` to a display name — pass
 /// the real project rows' `(id, name)` pairs, not a hand-maintained lookup.
-pub fn cron_row(c: &CronTask, project_names: &[(ProjectId, String)]) -> CronRowVm {
+/// `now` feeds `cron_next_run_label` — the real scheduler's own due-check,
+/// not the always-empty `CronTask.next_run` column (nothing ever wrote it).
+pub fn cron_row(
+    c: &CronTask,
+    project_names: &[(ProjectId, String)],
+    now: OffsetDateTime,
+) -> CronRowVm {
     let project_label = match c.project_id {
         None => "全部项目".to_string(),
         Some(pid) => project_names
@@ -759,7 +765,7 @@ pub fn cron_row(c: &CronTask, project_names: &[(ProjectId, String)]) -> CronRowV
         status: c.status,
         status_label: c.status.label(),
         last_run: c.last_run.clone(),
-        next_run: c.next_run.clone(),
+        next_run: bw_core::model::cron_next_run_label(&c.schedule, c.last_run_at, c.status, now),
     }
 }
 
@@ -1450,6 +1456,7 @@ mod tests {
                 status: CronStatus::Failed,
                 last_run: "1h 前".into(),
                 next_run: "-".into(),
+                last_run_at: None,
             },
             CronTask {
                 id: CronTaskId::nil(),
@@ -1460,6 +1467,7 @@ mod tests {
                 status: CronStatus::Normal,
                 last_run: "10min 前".into(),
                 next_run: "今晚".into(),
+                last_run_at: None,
             },
         ];
         let connectors = vec![Connector {

@@ -120,6 +120,15 @@ fn Root() -> Element {
                                     pending_cron.set(None);
                                 }
                             }
+                            // A real, unattended scheduler fire (not this
+                            // click-driven `pending_cron` flow at all) — a
+                            // toast, deliberately never a navigation. See
+                            // `App::tick_scheduler`'s own doc comment for why
+                            // it must not touch the user's current screen.
+                            UiNote::CronAutoFired { name, ok } => {
+                                let mark = if *ok { "✓" } else { "✕" };
+                                toast.set(Some(format!("⏰ 定时任务自动运行 {mark} · {name}")));
+                            }
                             _ => run.with_mut(|r| r.apply(&note)),
                         },
                         Err(RecvError::Lagged(_)) => continue,

@@ -15,9 +15,9 @@
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    stage_workflow, AgentCard, AgentRef, Cadence, Connector, CronStatus, CronTask, HubSource,
-    KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, Signal,
-    SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    cron_due, stage_workflow, AgentCard, AgentRef, Cadence, Connector, CronStatus, CronTask,
+    HubSource, KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role,
+    Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -324,6 +324,15 @@ pub enum Event {
     SkillsChanged,
     AgentsChanged,
     CronTasksChanged,
+    /// A real, unattended auto-fire from `App::tick_scheduler` just finished
+    /// (not a manual "▶ 立即执行") — the live "monitoring" signal for the
+    /// scheduler: a subscriber can toast/notify without the run having
+    /// stolen `active_project`/the user's current screen to get there.
+    CronAutoFired {
+        id: CronTaskId,
+        name: String,
+        ok: bool,
+    },
     ConnectorsChanged,
     KnowledgeSourcesChanged,
     ActivityChanged,
@@ -484,15 +493,20 @@ impl App {
         Ok(())
     }
 
-    /// Shared by `Command::RunWorkflow` and `Command::RunHubWorkflow` — the
-    /// latter differs only in how `spec` was obtained (a hub lookup + a
-    /// `uses` bump) and looks identical once it has one.
+    /// Shared by `Command::RunWorkflow`, `Command::RunHubWorkflow`, and
+    /// `tick_scheduler`'s real auto-fire — the first two differ only in how
+    /// `spec` was obtained (a hub lookup + a `uses` bump) and look identical
+    /// once they have one. `project` is explicit (not read off
+    /// `self.state.active_project`) so a background scheduler fire can run a
+    /// workflow against its *bound* project without touching — let alone
+    /// hijacking — whatever project the user currently has open.
     async fn run_workflow_inner(
         &mut self,
+        project: ProjectId,
         session: SessionId,
         spec: WorkflowSpec,
     ) -> Result<(), AppError> {
-        let p = self.active()?;
+        let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
         let ctx = RunCtx {
             project: p,
@@ -570,6 +584,90 @@ impl App {
         }
         run.map_err(|e| AppError::Engine(e.to_string()))?;
         Ok(())
+    }
+
+    /// The real scheduler tick — call this on an interval (see
+    /// `app-desktop/src/kernel.rs`) to really auto-fire due cron tasks, no
+    /// click required. Reads cron tasks + hub specs fresh from the store
+    /// (never trusts a possibly-stale in-memory snapshot for a decision this
+    /// consequential), fires each task whose `bw_core::model::cron_due` says
+    /// yes, and returns which ones fired — `[]` on a quiet tick, which is
+    /// the common case and not an error.
+    ///
+    /// Deliberately does **not** touch `self.state.active_project`/`view`/
+    /// `panel`/`scope`/`active_session`: unlike the desktop UI's manual "▶
+    /// 立即执行" (which *does* navigate the caller to go watch, because a
+    /// human just asked for that), an unattended background fire must not
+    /// yank whatever project/screen the user currently has open. Real
+    /// "monitoring" here means `Event::CronAutoFired` + the cron row's own
+    /// persisted status/`last_run`, not a hijacked view.
+    ///
+    /// One task failing (a real `run_workflow_inner` error) is recorded as
+    /// `CronStatus::Failed` and does not stop the rest of this tick from
+    /// evaluating the remaining tasks.
+    pub async fn tick_scheduler(&mut self) -> Result<Vec<CronTaskId>, AppError> {
+        let now_ts = now();
+        let tasks = self.store.list_cron_tasks().await?;
+        let specs = self.store.list_workflow_specs().await?;
+        let mut fired = Vec::new();
+
+        for c in tasks {
+            if c.status != CronStatus::Normal {
+                continue; // Paused/Running/Failed never auto-fire — pause is real human intervention, honored here.
+            }
+            let Some(pid) = c.project_id else {
+                continue; // "全部项目" tasks can't resolve a single project to run in — same rule the manual trigger's `can_run` check uses.
+            };
+            if !cron_due(&c.schedule, c.last_run_at, now_ts) {
+                continue;
+            }
+            let Some(spec) = specs.iter().find(|w| w.name == c.target).cloned() else {
+                continue; // target doesn't (yet) name a real hub workflow — same rule as the manual trigger.
+            };
+
+            self.store
+                .record_cron_run(c.id, CronStatus::Running, run_at_label(now_ts))
+                .await?;
+            self.refresh_cron_tasks().await?;
+            self.emit(Event::CronTasksChanged);
+
+            let session = SessionId::new();
+            self.store
+                .ensure_session(NewSession {
+                    id: session,
+                    project_id: pid,
+                    stage_kind: spec
+                        .stage_ref
+                        .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n)),
+                    kind: SessionKind::Optimize,
+                    title: format!("⏰ 定时触发 · {}", c.name),
+                    snippet: String::new(),
+                })
+                .await?;
+            self.store.record_workflow_use(spec.id).await?;
+            self.refresh_workflow_specs().await?;
+
+            let result = self.run_workflow_inner(pid, session, spec).await;
+            let ok = result.is_ok();
+            let outcome = if ok {
+                CronStatus::Normal
+            } else {
+                CronStatus::Failed
+            };
+            self.store
+                .record_cron_run(c.id, outcome, run_at_label(now()))
+                .await?;
+            self.refresh_cron_tasks().await?;
+            self.emit(Event::CronTasksChanged);
+            self.emit(Event::CronAutoFired {
+                id: c.id,
+                name: c.name.clone(),
+                ok,
+            });
+
+            fired.push(c.id);
+        }
+        Ok(fired)
     }
 
     pub async fn dispatch(&mut self, cmd: Command) -> Result<(), AppError> {
@@ -826,7 +924,8 @@ impl App {
             }
 
             Command::RunWorkflow { session, spec } => {
-                self.run_workflow_inner(session, spec).await?;
+                let p = self.active()?;
+                self.run_workflow_inner(p, session, spec).await?;
             }
 
             Command::RefreshHubs => {
@@ -906,6 +1005,7 @@ impl App {
                 session,
                 workflow_id,
             } => {
+                let p = self.active()?;
                 let spec = self
                     .store
                     .get_workflow_spec(workflow_id)
@@ -913,7 +1013,7 @@ impl App {
                     .ok_or(AppError::NotFound)?;
                 self.store.record_workflow_use(workflow_id).await?;
                 self.refresh_workflow_specs().await?;
-                self.run_workflow_inner(session, spec).await?;
+                self.run_workflow_inner(p, session, spec).await?;
             }
 
             Command::UpdateWorkflowSpec {

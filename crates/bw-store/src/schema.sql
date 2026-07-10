@@ -197,6 +197,11 @@ CREATE TABLE IF NOT EXISTS cron_task (
     status      TEXT NOT NULL DEFAULT 'normal',
     last_run    TEXT NOT NULL DEFAULT '',
     next_run    TEXT NOT NULL DEFAULT '',
+    -- Unix seconds, 0 = never run. Kept separate from the pre-formatted
+    -- `last_run` display string so the real scheduler (App::tick_scheduler)
+    -- has a machine-comparable clock to test "due" against — parsing the
+    -- display string back would be fragile. See bw_core::model::cron_due.
+    last_run_at INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0

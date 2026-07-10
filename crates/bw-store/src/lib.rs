@@ -433,9 +433,11 @@ pub trait Store: Send + Sync {
     /// Pure status flip — pause/resume, the "人工介入" action on a cron task.
     /// Never touches `last_run`: nothing actually ran.
     async fn set_cron_status(&self, id: CronTaskId, status: CronStatus) -> Result<()>;
-    /// Record that a task's target really ran just now (manually triggered —
-    /// this app has no background scheduler; see `cron_hub.rs`'s own header),
-    /// with the real outcome `status` and a real, caller-formatted timestamp.
+    /// Record that a task's target really ran just now — either a manual
+    /// "▶ 立即执行" or a real auto-fire from `App::tick_scheduler` — with the
+    /// real outcome `status`, a real caller-formatted display timestamp
+    /// (`last_run`), and (set here, server-side) the real unix-seconds clock
+    /// (`last_run_at`) `cron_due` compares future ticks against.
     async fn record_cron_run(
         &self,
         id: CronTaskId,

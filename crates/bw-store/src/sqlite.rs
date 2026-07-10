@@ -65,8 +65,44 @@ impl SqliteStore {
             }
             sqlx::query(stmt).execute(&pool).await?;
         }
+
+        // `CREATE TABLE IF NOT EXISTS` above is a no-op against a real,
+        // pre-existing on-disk DB whose `cron_task` table predates a new
+        // column — exactly the class of bug that already crashed this app
+        // once (see archive/workbench-pre-5stage-migration.db history).
+        // Guarded, additive `ADD COLUMN` migrations belong here so old real
+        // databases keep opening instead of requiring another manual reset.
+        add_column_if_missing(
+            &pool,
+            "cron_task",
+            "last_run_at",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+
         Ok(Self { pool })
     }
+}
+
+/// `ALTER TABLE ... ADD COLUMN` has no `IF NOT EXISTS` clause in SQLite, so
+/// check `PRAGMA table_info` first. Safe to call on every `open()` — a no-op
+/// once the column exists.
+async fn add_column_if_missing(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+    ddl: &str,
+) -> Result<()> {
+    let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
+        .fetch_all(pool)
+        .await?;
+    let exists = rows.iter().any(|r| r.get::<String, _>("name") == column);
+    if !exists {
+        sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
 }
 
 fn now_unix() -> i64 {
@@ -1132,7 +1168,7 @@ impl Store for SqliteStore {
 
     async fn list_cron_tasks(&self) -> Result<Vec<CronTask>> {
         let rows = sqlx::query(
-            "SELECT id, name, target, schedule, project_id, status, last_run, next_run
+            "SELECT id, name, target, schedule, project_id, status, last_run, next_run, last_run_at
              FROM cron_task ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -1156,12 +1192,14 @@ impl Store for SqliteStore {
         status: CronStatus,
         last_run: String,
     ) -> Result<()> {
+        let t = now_unix();
         sqlx::query(
-            "UPDATE cron_task SET status=?, last_run=?, updated_at=?, rev=rev+1 WHERE id=?",
+            "UPDATE cron_task SET status=?, last_run=?, last_run_at=?, updated_at=?, rev=rev+1 WHERE id=?",
         )
         .bind(cron_status_text(status))
         .bind(&last_run)
-        .bind(now_unix())
+        .bind(t)
+        .bind(t)
         .bind(id.uuid().to_string())
         .execute(&self.pool)
         .await?;
@@ -1308,6 +1346,7 @@ fn cron_task_row(r: sqlx::sqlite::SqliteRow) -> Result<CronTask> {
         .get::<Option<String>, _>("project_id")
         .map(|s| parse_uuid(&s, ProjectId::from_uuid))
         .transpose()?;
+    let last_run_at_raw: i64 = r.get("last_run_at");
     Ok(CronTask {
         id,
         name: r.get("name"),
@@ -1317,6 +1356,9 @@ fn cron_task_row(r: sqlx::sqlite::SqliteRow) -> Result<CronTask> {
         status: parse_cron_status(&r.get::<String, _>("status")),
         last_run: r.get("last_run"),
         next_run: r.get("next_run"),
+        last_run_at: (last_run_at_raw > 0)
+            .then(|| OffsetDateTime::from_unix_timestamp(last_run_at_raw).ok())
+            .flatten(),
     })
 }
 

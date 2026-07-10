@@ -187,6 +187,14 @@ pub enum UiNote {
         risky: bool,
     },
     Error(String),
+    /// A real, unattended scheduler auto-fire just finished (see
+    /// `App::tick_scheduler`) — surfaced as a toast, never a navigation:
+    /// unlike a manual "▶ 立即执行", nothing about the user's current screen
+    /// should change just because a background task ran.
+    CronAutoFired {
+        name: String,
+        ok: bool,
+    },
 }
 
 /// Folded run-progress state the UI renders as the live banner. Fed purely by
@@ -235,7 +243,7 @@ impl RunVm {
                 self.running = false;
                 self.failed = Some(e.clone());
             }
-            UiNote::Handoff { .. } | UiNote::Error(_) => {}
+            UiNote::Handoff { .. } | UiNote::Error(_) | UiNote::CronAutoFired { .. } => {}
         }
     }
 }
@@ -375,6 +383,9 @@ pub fn spawn() -> Kernel {
                             Event::StageHandoff { from, to, risky } => {
                                 UiNote::Handoff { from, to, risky }
                             }
+                            Event::CronAutoFired { name, ok, .. } => {
+                                UiNote::CronAutoFired { name, ok }
+                            }
                             _ => continue,
                         };
                         let _ = fwd.send(note);
@@ -386,11 +397,37 @@ pub fn spawn() -> Kernel {
                 }
                 let _ = vm_tx.send(build_vm(&app, &store).await);
 
-                while let Some(cmd) = cmd_rx.recv().await {
-                    if let Err(e) = app.dispatch(cmd).await {
-                        let _ = note_tx.send(UiNote::Error(e.to_string()));
+                // The real scheduler clock: `App` is owned single-threaded by
+                // this loop (no `Arc<Mutex<_>>`), so an auto-fire tick has to
+                // interleave with command dispatch via `select!` rather than
+                // run on its own spawned task — same thread, same `&mut app`,
+                // no synchronization needed. A quiet tick (nothing due) is
+                // free: `Vm` is only rebuilt when `tick_scheduler` actually
+                // fired something, so idle polling costs nothing extra.
+                let mut ticker = tokio::time::interval(Duration::from_secs(5));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+                loop {
+                    tokio::select! {
+                        cmd = cmd_rx.recv() => {
+                            let Some(cmd) = cmd else { break };
+                            if let Err(e) = app.dispatch(cmd).await {
+                                let _ = note_tx.send(UiNote::Error(e.to_string()));
+                            }
+                            let _ = vm_tx.send(build_vm(&app, &store).await);
+                        }
+                        _ = ticker.tick() => {
+                            match app.tick_scheduler().await {
+                                Ok(fired) if !fired.is_empty() => {
+                                    let _ = vm_tx.send(build_vm(&app, &store).await);
+                                }
+                                Ok(_) => {}
+                                Err(e) => {
+                                    let _ = note_tx.send(UiNote::Error(e.to_string()));
+                                }
+                            }
+                        }
                     }
-                    let _ = vm_tx.send(build_vm(&app, &store).await);
                 }
             });
         })
@@ -459,7 +496,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     let cron_tasks: Vec<CronRowVm> = state
         .cron_tasks
         .iter()
-        .map(|c| cron_row(c, &project_names))
+        .map(|c| cron_row(c, &project_names, now))
         .collect();
     let connectors: Vec<ConnectorCardVm> = state.connectors.iter().map(connector_card).collect();
     let knowledge_sources: Vec<KnowledgeRowVm> =

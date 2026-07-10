@@ -731,6 +731,122 @@ async fn main() {
         ),
     });
 
+    // ── H18: 真实调度器(App::tick_scheduler)——无需点击,到期真实自动触发,
+    //    且绝不劫持调用方当前打开的项目/视图(不同于人工「▶ 立即执行」会主动
+    //    带你去看)。同一个 tick 里,已暂停/绑定「全部项目」/目标不存在的任务
+    //    必须保持原样不被触碰 ──
+    let scheduler_target_project = ProjectId::new();
+    app.dispatch(Command::CreateProject {
+        id: scheduler_target_project,
+        name: "验证项目 C · 调度目标".into(),
+        kind: "内部工具".into(),
+        desc: String::new(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CompleteCreation {
+        cadence: Cadence::Weekly,
+    })
+    .await
+    .unwrap();
+    // p1 stays the "currently open" project throughout — CreateProject(C) /
+    // CompleteCreation(C) above never dispatched OpenProject(C), so this is
+    // exactly the scenario the no-hijack guarantee exists for: a due task
+    // belongs to C, but the caller is looking at p1.
+    app.dispatch(Command::OpenProject(p1)).await.unwrap();
+    let scheduler_workflow = WorkflowId::new();
+    app.dispatch(Command::CreateWorkflowSpec {
+        id: scheduler_workflow,
+        name: "验证:定时自动工作流".into(),
+        prompt: "p".into(),
+        goal: "g".into(),
+        stage_ref: None,
+        phases: vec!["步骤一".into()],
+        agents: vec![],
+        skills: vec![],
+        loop_config: LoopConfig {
+            retries: 1,
+            max_iter: 1,
+        },
+        maturity: bw_core::model::Maturity::Mature,
+        scope: String::new(),
+        source: HubSource::SelfBuilt,
+        trigger: None,
+    })
+    .await
+    .unwrap();
+    let due_cron = CronTaskId::new();
+    app.dispatch(Command::CreateCronTask {
+        id: due_cron,
+        name: "验证:到期应自动触发".into(),
+        target: "验证:定时自动工作流".into(),
+        schedule: Cadence::Daily,
+        project_id: Some(scheduler_target_project),
+    })
+    .await
+    .unwrap();
+    let paused_cron = CronTaskId::new();
+    app.dispatch(Command::CreateCronTask {
+        id: paused_cron,
+        name: "验证:已暂停不应触发".into(),
+        target: "验证:定时自动工作流".into(),
+        schedule: Cadence::Daily,
+        project_id: Some(scheduler_target_project),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::SetCronStatus {
+        id: paused_cron,
+        status: CronStatus::Paused,
+    })
+    .await
+    .unwrap();
+    let before_active = app.snapshot().active_project;
+    let before_view = app.snapshot().view;
+
+    let fired = app.tick_scheduler().await.unwrap();
+
+    let after_active = app.snapshot().active_project;
+    let after_view = app.snapshot().view;
+    let due_row = store
+        .list_cron_tasks()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.id == due_cron)
+        .unwrap();
+    let paused_row = store
+        .list_cron_tasks()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.id == paused_cron)
+        .unwrap();
+    let scheduler_wf_after = store
+        .get_workflow_spec(scheduler_workflow)
+        .await
+        .unwrap()
+        .unwrap();
+    let scheduler_uses = match scheduler_wf_after.kind {
+        WorkflowKind::Static { uses, .. } => uses,
+        WorkflowKind::Dynamic { .. } => 0,
+    };
+    h.push(Hyp {
+        id: "H18",
+        title: "真实调度器无需点击自动触发到期任务,不劫持当前项目/视图,暂停任务保持原样",
+        passed: fired == vec![due_cron]
+            && after_active == before_active
+            && after_view == before_view
+            && due_row.status == CronStatus::Normal
+            && due_row.last_run_at.is_some()
+            && scheduler_uses == 1
+            && paused_row.last_run_at.is_none(),
+        evidence: format!(
+            "tick_scheduler() 本轮触发={fired:?}(仅到期任务) · 触发前后 active_project 均={after_active:?}/view 均={after_view:?}(未被劫持,尽管到期任务属于「验证项目 C」而非当前打开的「验证项目 A」)· 到期任务 last_run_at={:?} · 目标工作流 uses 0→{scheduler_uses} · 已暂停任务 last_run_at 保持 {:?}",
+            due_row.last_run_at, paused_row.last_run_at
+        ),
+    });
+
     // ── 汇总 ──
     let total = h.len();
     let passed = h.iter().filter(|x| x.passed).count();
