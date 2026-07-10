@@ -10,9 +10,18 @@
 //! Categories map onto the 5-stage lifecycle by the source documents' own
 //! role split (原型构建/Builder/优化清理者/增长者/维护者 ==
 //! Prototype/Build/Optimize/Growth/Ops).
+//!
+//! On top of that external catalog, `seed_hub_if_empty` also plants the
+//! app's own 5 stage-template workflows (`bw_core::model::stage_template_workflow`,
+//! one per `StageKind`) — not external data, but this app's own already-designed
+//! methodology (`StageKind`'s core question / method loop / DoD) made into a
+//! standing, importable Hub entry instead of only the ephemeral spec a
+//! session builds on the fly.
 
 use crate::{NewAgent, NewSkill, NewWorkflowSpec, Result, Store};
-use bw_core::model::{HubSource, LibSource, LoopConfig, Maturity, WorkflowKind};
+use bw_core::model::{
+    stage_template_workflow, HubSource, LibSource, LoopConfig, Maturity, StageKind, WorkflowKind,
+};
 use bw_core::{AgentId, SkillId, WorkflowId};
 
 struct SeedSkill {
@@ -2925,6 +2934,24 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                     retries: 1,
                     max_iter: 3,
                 },
+            })
+            .await?;
+    }
+
+    for kind in StageKind::ALL {
+        let spec = stage_template_workflow(kind);
+        store
+            .create_workflow_spec(NewWorkflowSpec {
+                id: spec.id,
+                name: spec.name,
+                kind: spec.kind,
+                prompt: spec.prompt,
+                goal: spec.goal,
+                stage_ref: spec.stage_ref,
+                phases: spec.phases,
+                agents: spec.agents,
+                skills: spec.skills,
+                loop_config: spec.loop_config,
             })
             .await?;
     }

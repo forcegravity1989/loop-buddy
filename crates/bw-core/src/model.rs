@@ -539,14 +539,14 @@ pub struct LoopConfig {
     pub max_iter: u8,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentRef {
     pub name: String,
     pub def: String,
     pub from: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SkillRef {
     pub name: String,
     pub def: String,
@@ -568,6 +568,20 @@ pub struct WorkflowSpec {
     pub loop_config: LoopConfig,
 }
 
+/// Shared by `stage_workflow` and `stage_template_workflow` — both are the
+/// same methodology projected into a `WorkflowSpec.goal`, just with
+/// different `kind` (Dynamic vs Static). `idgen`-gated like both callers:
+/// with the feature off (wasm32 keepalive build) neither caller exists, so
+/// this would otherwise be dead code.
+#[cfg(feature = "idgen")]
+fn stage_goal(kind: StageKind) -> String {
+    format!(
+        "{} → {}",
+        kind.core_question(),
+        kind.dod_items().first().copied().unwrap_or("交棒条件达成")
+    )
+}
+
 /// The standard (dynamic, use-and-discard) workflow for one stage, driven
 /// straight through its method loop. Pure function of `StageKind`'s own
 /// methodology metadata — no UI/store dependency, so both `bw-app` (to
@@ -579,11 +593,6 @@ pub struct WorkflowSpec {
 /// needs to construct a runnable spec, only the types that describe one.
 #[cfg(feature = "idgen")]
 pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
-    let goal = format!(
-        "{} → {}",
-        kind.core_question(),
-        kind.dod_items().first().copied().unwrap_or("交棒条件达成")
-    );
     WorkflowSpec {
         id: WorkflowId::new(),
         name: format!("「{}」标准工作流", kind.label()),
@@ -592,7 +601,48 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
             stage: kind.label().into(),
         },
         prompt: kind.method_loop().join(" → "),
-        goal,
+        goal: stage_goal(kind),
+        stage_ref: Some(kind.index()),
+        phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
+        agents: vec![],
+        skills: vec![],
+        loop_config: LoopConfig {
+            retries: 1,
+            max_iter: 3,
+        },
+    }
+}
+
+/// The persisted, browsable counterpart to [`stage_workflow`] — a **Static**
+/// (自建 · Mature) Hub entry carrying the identical methodology, so each of
+/// the five stages has one standing, importable template in WorkflowHub
+/// instead of only the ephemeral spec a session constructs and discards.
+/// Seeded once at boot (`bw_store::seed::seed_hub_if_empty`); `stage_workflow`
+/// remains the throwaway variant the creation flow / direct "▶ 运行" path
+/// builds fresh every time (running *this* template's hub row goes through
+/// `RunHubWorkflow`, which looks the persisted spec back up by id).
+#[cfg(feature = "idgen")]
+pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
+    let slug = match kind {
+        StageKind::Prototype => "prototype",
+        StageKind::Build => "build",
+        StageKind::Optimize => "optimize",
+        StageKind::Growth => "growth",
+        StageKind::Ops => "ops",
+    };
+    WorkflowSpec {
+        id: WorkflowId::new(),
+        name: format!("「{}」标准工作流 · {}", kind.label(), kind.role_short()),
+        kind: WorkflowKind::Static {
+            maturity: Maturity::Mature,
+            version: 1,
+            uses: 0,
+            scope: "全项目通用 · 阶段标准模板".into(),
+            source: HubSource::SelfBuilt,
+            trigger: Some(format!("/stage-{slug}")),
+        },
+        prompt: kind.method_loop().join(" → "),
+        goal: stage_goal(kind),
         stage_ref: Some(kind.index()),
         phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
         agents: vec![],

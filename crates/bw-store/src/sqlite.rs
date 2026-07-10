@@ -4,22 +4,22 @@
 //! sidesteps `SQLITE_BUSY` without ceremony.
 
 use crate::{
-    cadence_text, cycle_text, lib_source_text, maturity_text, parse_cadence,
+    cadence_text, cron_status_text, cycle_text, lib_source_text, maturity_text, parse_cadence,
     parse_connector_status, parse_cron_status, parse_cycle, parse_lib_source, parse_maturity,
     parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
     stage_kind_text, GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal, NewAgent,
     NewConnector, NewCronTask, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
     NewStage, NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectRow, Result, SessionKind,
-    SessionRow, StageRow, StageSignal, Store, StoreError,
+    SessionRow, StageRow, StageSignal, Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
     evaluate_metric, measure, parse_target_with, reduce_worst_of, AmberBand, Measurement,
 };
 use bw_core::model::{
-    AgentCard, AgentRef, AgentSkillTag, Connector, CronTask, HubSource, KnowledgeSource,
-    LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, Signal, SkillCard, SkillRef,
-    SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    AgentCard, AgentRef, AgentSkillTag, Connector, CronStatus, CronTask, HubSource,
+    KnowledgeSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, Signal, SkillCard,
+    SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -1004,6 +1004,38 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn update_workflow_spec(&self, id: WorkflowId, edit: WorkflowEdit) -> Result<()> {
+        let row = sqlx::query("SELECT kind_json FROM workflow_spec WHERE id=?")
+            .bind(id.uuid().to_string())
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| StoreError::Other("workflow spec not found".into()))?;
+        let mut kind: WorkflowKind = serde_json::from_str(&row.get::<String, _>("kind_json"))?;
+        match &mut kind {
+            WorkflowKind::Static { version, .. } => *version += 1,
+            WorkflowKind::Dynamic { .. } => {
+                return Err(StoreError::Other("动态工作流没有持久内容可优化".into()));
+            }
+        }
+        sqlx::query(
+            "UPDATE workflow_spec
+             SET kind_json=?, prompt=?, goal=?, phases=?, agents_json=?, skills_json=?,
+                 updated_at=?, rev=rev+1
+             WHERE id=?",
+        )
+        .bind(serde_json::to_string(&kind)?)
+        .bind(&edit.prompt)
+        .bind(&edit.goal)
+        .bind(serde_json::to_string(&edit.phases)?)
+        .bind(serde_json::to_string(&edit.agents)?)
+        .bind(serde_json::to_string(&edit.skills)?)
+        .bind(now_unix())
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn create_skill(&self, s: NewSkill) -> Result<()> {
         let t = now_unix();
         sqlx::query(
@@ -1106,6 +1138,34 @@ impl Store for SqliteStore {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(cron_task_row).collect()
+    }
+
+    async fn set_cron_status(&self, id: CronTaskId, status: CronStatus) -> Result<()> {
+        sqlx::query("UPDATE cron_task SET status=?, updated_at=?, rev=rev+1 WHERE id=?")
+            .bind(cron_status_text(status))
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn record_cron_run(
+        &self,
+        id: CronTaskId,
+        status: CronStatus,
+        last_run: String,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE cron_task SET status=?, last_run=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(cron_status_text(status))
+        .bind(&last_run)
+        .bind(now_unix())
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn create_connector(&self, c: NewConnector) -> Result<()> {

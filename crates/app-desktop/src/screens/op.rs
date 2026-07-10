@@ -13,7 +13,7 @@
 //! Plus the handoff loop: 勾 DoD → 交棒(可带险,永不静默拦截)→ 下一段自动换装,
 //! `运维 → 原型` 回流闭环。
 
-use crate::kernel::{ChatVm, Kernel, OpVm, RunVm, StageVm};
+use crate::kernel::{ChatVm, Kernel, MsgVm, OpVm, RunVm, StageVm};
 use crate::screens::chrome::Toast;
 use crate::theme;
 use bw_app::{Command, Panel, Scope};
@@ -1038,13 +1038,16 @@ fn HubOverviewStrip(hub: crate::kernel::HubVm, on_pick_hub: EventHandler<HubKind
     }
 }
 
+/// Live run visualization: a real step-track (not a flat pill row) fed
+/// purely by `RunVm` — every node/line color is derived from real
+/// `PhaseStarted`/`PhaseCompleted`/`RunFailed` facts, plus the real
+/// `AgentRef`/`SkillRef` crew `RunStarted` announced for this run (empty is
+/// an honest "this run declared none", not a placeholder).
 #[component]
 fn RunBanner(run: RunVm) -> Element {
     let card_alt = theme::CARD_ALT;
-    let clay = theme::CLAY;
+    let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
-    let green = ui::signal_color(Signal::Green);
-    let red = ui::signal_color(Signal::Red);
     if run.phases.is_empty() {
         return rsx! { span {} };
     }
@@ -1055,21 +1058,96 @@ fn RunBanner(run: RunVm) -> Element {
     } else {
         "本轮完成 · 产出已写入会话".to_string()
     };
+    let workflow_name = run.workflow_name.clone();
     rsx! {
         div {
-            style: "background:{card_alt};border:1px solid #DBD4C5;border-radius:10px;padding:12px 16px;margin-bottom:14px;",
-            div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "{status}" }
+            style: "background:{card_alt};border:1px solid #DBD4C5;border-radius:10px;padding:14px 16px;margin-bottom:14px;",
             div {
-                style: "display:flex;gap:8px;flex-wrap:wrap;",
-                for (i, (name, done)) in run.phases.iter().enumerate() {
-                    {
-                        let color = if *done { green } else if run.failed.is_some() { red } else { clay };
-                        let mark = if *done { "✓" } else { "…" };
-                        rsx! {
+                style: "display:flex;align-items:baseline;gap:8px;margin-bottom:10px;",
+                if !workflow_name.is_empty() {
+                    span { style: "font-size:12.5px;font-weight:600;", "{workflow_name}" }
+                }
+                span { style: "font-size:12px;color:{ink3};", "{status}" }
+            }
+            PhaseTrack { run: run.clone() }
+            if !run.agents.is_empty() || !run.skills.is_empty() {
+                div {
+                    style: "display:flex;flex-wrap:wrap;gap:5px;margin-top:12px;padding-top:10px;border-top:1px dashed {theme::BORDER};",
+                    for (i , a) in run.agents.iter().enumerate() {
+                        span {
+                            key: "ag{i}",
+                            title: "{a.def}",
+                            style: "{theme::chip(\"#EDE8F5\", theme::AGENT)}",
+                            "◆ {a.name}"
+                        }
+                    }
+                    for (i , s) in run.skills.iter().enumerate() {
+                        span {
+                            key: "sk{i}",
+                            title: "{s.def}",
+                            style: "{theme::chip(\"#EFE9DA\", ink2)}",
+                            "🧩 {s.name}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A numbered step-track: circular phase badges connected by a progress
+/// line, colored by real status — done (✓ green) / running (● clay,
+/// pulsing) / failed (✕ red, only the phase that was in flight when it
+/// failed) / pending (○ gray, hasn't started).
+#[component]
+fn PhaseTrack(run: RunVm) -> Element {
+    let ink2 = theme::INK_2;
+    let green = ui::signal_color(Signal::Green);
+    let red = ui::signal_color(Signal::Red);
+    let clay = theme::CLAY;
+    let gray = "#D8D2C4";
+    let current_idx = run.phases.iter().position(|(_, done)| !done);
+    let n = run.phases.len();
+
+    rsx! {
+        div {
+            style: "display:flex;align-items:flex-start;width:100%;",
+            for (i, (name, done)) in run.phases.iter().enumerate() {
+                {
+                    let is_current = current_idx == Some(i);
+                    let failed_here = is_current && run.failed.is_some();
+                    let (badge_bg, badge_border, badge_fg, mark): (&str, &str, &str, String) = if *done {
+                        ("#FFFDF8", green, green, "✓".into())
+                    } else if failed_here {
+                        ("#FFFDF8", red, red, "✕".into())
+                    } else if is_current {
+                        (clay, clay, "#FFF", (i + 1).to_string())
+                    } else {
+                        ("#FFFDF8", gray, "#B4AD9C", (i + 1).to_string())
+                    };
+                    let prev_done = i > 0 && run.phases[i - 1].1;
+                    let left_color = if prev_done { green } else { gray };
+                    let right_color = if *done { green } else { gray };
+                    rsx! {
+                        div {
+                            key: "{i}",
+                            style: "display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;",
+                            div {
+                                style: "display:flex;align-items:center;width:100%;",
+                                div {
+                                    style: if i == 0 { "flex:1;height:2px;background:transparent;".to_string() } else { format!("flex:1;height:2px;background:{left_color};") },
+                                }
+                                div {
+                                    style: "width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none;background:{badge_bg};color:{badge_fg};border:2px solid {badge_border};",
+                                    "{mark}"
+                                }
+                                div {
+                                    style: if i + 1 == n { "flex:1;height:2px;background:transparent;".to_string() } else { format!("flex:1;height:2px;background:{right_color};") },
+                                }
+                            }
                             span {
-                                key: "{i}",
-                                style: "border:1.4px solid {color};color:{color};border-radius:7px;padding:3px 10px;font-size:12px;",
-                                "{name} {mark}"
+                                style: "font-size:10px;color:{ink2};margin-top:5px;text-align:center;padding:0 2px;line-height:1.3;",
+                                "{name}"
                             }
                         }
                     }
@@ -1150,7 +1228,13 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
                 span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{spec_preview.name}" }
                 {
                     let opacity = if running { ".5" } else { "1" };
-                    let run_label = if running { "运行中…" } else { "▶ 运行" };
+                    let run_label = if running {
+                        "运行中…"
+                    } else if run.failed.is_some() {
+                        "↻ 重新运行"
+                    } else {
+                        "▶ 运行"
+                    };
                     rsx! {
                         button {
                             style: "{primary} padding:8px 18px;font-size:13px;opacity:{opacity};",
@@ -1174,9 +1258,51 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
                 }
             }
         }
+        RunOutputs {
+            phases: run.phases.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
+            msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
+        }
         {chat_area}
         if let Some(msg) = promoted_msg() {
             Toast { msg, onclose: move |_| promoted_msg.set(None) }
+        }
+    }
+}
+
+/// "结果呈现": pairs the run's real phase names (from `RunVm`, so it reflects
+/// whatever actually ran — the stage's own template, an imported hub
+/// workflow, or an ad-hoc dynamic one — not just the stage's default
+/// preview) with the real `Role::Agent` session messages, in order. A
+/// best-effort zip (agent messages are appended in completion order, one per
+/// phase, by `run_workflow_inner`) — honestly labeled as such, not a hard
+/// per-phase binding the store actually tracks.
+#[component]
+fn RunOutputs(phases: Vec<String>, msgs: Vec<MsgVm>) -> Element {
+    let agent_msgs: Vec<&MsgVm> = msgs.iter().filter(|m| m.agent).collect();
+    if agent_msgs.is_empty() {
+        return rsx! {};
+    }
+    let card = theme::card();
+    let ink3 = theme::INK_3;
+    rsx! {
+        div {
+            style: "{card} padding:16px 18px;margin-bottom:14px;",
+            div { style: "font-size:12.5px;font-weight:600;margin-bottom:2px;", "产出" }
+            div { style: "font-size:10.5px;color:{ink3};margin-bottom:10px;", "按完成顺序把每条 agent 产出与对应阶段配对(最佳努力对齐)" }
+            for (i , m) in agent_msgs.iter().enumerate() {
+                {
+                    let phase_label = phases.get(i).cloned().unwrap_or_else(|| format!("第{}步", i + 1));
+                    let text = m.text.clone();
+                    rsx! {
+                        div {
+                            key: "{i}",
+                            style: "margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed {theme::BORDER};",
+                            div { style: "font-size:11px;color:{theme::CLAY};font-weight:600;margin-bottom:4px;", "{i + 1}. {phase_label}" }
+                            div { style: "font-size:12.5px;color:{theme::INK};line-height:1.6;white-space:pre-wrap;", "{text}" }
+                        }
+                    }
+                }
+            }
         }
     }
 }

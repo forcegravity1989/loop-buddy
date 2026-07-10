@@ -13,7 +13,9 @@
 //! methodology text is `StageKind`'s own static metadata.
 
 use bw_app::{App, Command, Event, Panel, Scope, View};
-use bw_core::model::{HubCard, ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, StageKind};
+use bw_core::model::{
+    AgentRef, HubCard, ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, SkillRef, StageKind,
+};
 use bw_core::{MetricId, SessionId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
 use bw_store::{MetricRole, SqliteStore, Store};
@@ -59,6 +61,13 @@ pub struct Vm {
 #[derive(Clone, PartialEq, Default)]
 pub struct HubVm {
     pub workflows: Vec<WorkflowHubRowVm>,
+    /// Full detail (prompt + real agent/skill provenance tuples) per
+    /// `workflows` row — a separate parallel list rather than folded into
+    /// `WorkflowHubRowVm` itself, since the row list is what every filter/
+    /// group pass iterates and most consumers only need the summary.
+    /// `workflow_detail` already existed (unit-tested) but was never wired
+    /// to a screen until now.
+    pub workflow_details: Vec<ui::vm::WorkflowDetailVm>,
     pub skills: Vec<SkillCardVm>,
     pub agents: Vec<AgentCardVm>,
     pub overview: Vec<HubCard>,
@@ -155,6 +164,14 @@ pub struct OpVm {
 /// Transient, non-persistent notices (live run progress, dispatch errors).
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiNote {
+    /// A run is really about to begin — the canonical "new run, reset the
+    /// banner" signal (not the `PhaseStarted{idx:0}` heuristic this replaced),
+    /// carrying the spec's own real name/agents/skills.
+    RunStarted {
+        workflow_name: String,
+        agents: Vec<AgentRef>,
+        skills: Vec<SkillRef>,
+    },
     PhaseStarted {
         idx: usize,
         name: String,
@@ -177,6 +194,13 @@ pub enum UiNote {
 #[derive(Clone, PartialEq, Default)]
 pub struct RunVm {
     pub running: bool,
+    /// The spec name currently (or most recently) running — empty until the
+    /// first `RunStarted`.
+    pub workflow_name: String,
+    /// Real `AgentRef`/`SkillRef` from the spec that's running — empty is
+    /// honest ("this run declared none"), not a loading state.
+    pub agents: Vec<AgentRef>,
+    pub skills: Vec<SkillRef>,
     /// (phase name, completed) in start order.
     pub phases: Vec<(String, bool)>,
     pub failed: Option<String>,
@@ -185,11 +209,19 @@ pub struct RunVm {
 impl RunVm {
     pub fn apply(&mut self, note: &UiNote) {
         match note {
-            UiNote::PhaseStarted { idx, name } => {
-                if *idx == 0 {
-                    self.phases.clear();
-                    self.failed = None;
-                }
+            UiNote::RunStarted {
+                workflow_name,
+                agents,
+                skills,
+            } => {
+                self.running = true;
+                self.workflow_name = workflow_name.clone();
+                self.agents = agents.clone();
+                self.skills = skills.clone();
+                self.phases.clear();
+                self.failed = None;
+            }
+            UiNote::PhaseStarted { name, .. } => {
                 self.running = true;
                 self.phases.push((name.clone(), false));
             }
@@ -319,6 +351,15 @@ pub fn spawn() -> Kernel {
                 tokio::spawn(async move {
                     while let Ok(e) = ev.recv().await {
                         let note = match e {
+                            Event::RunStarted {
+                                workflow_name,
+                                agents,
+                                skills,
+                            } => UiNote::RunStarted {
+                                workflow_name,
+                                agents,
+                                skills,
+                            },
                             Event::WorkflowProgress { phase_idx, status } => {
                                 if let Some(name) = status.strip_prefix("started:") {
                                     UiNote::PhaseStarted {
@@ -403,6 +444,11 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         .iter()
         .filter_map(workflow_hub_row)
         .collect();
+    let workflow_details: Vec<ui::vm::WorkflowDetailVm> = state
+        .workflow_specs
+        .iter()
+        .filter_map(ui::vm::workflow_detail)
+        .collect();
     let skills: Vec<SkillCardVm> = state.skills.iter().map(skill_card).collect();
     let agents: Vec<AgentCardVm> = state.agents.iter().map(agent_card).collect();
     let project_names: Vec<(bw_core::ProjectId, String)> = state
@@ -448,6 +494,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             &agents.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
         ),
         workflows,
+        workflow_details,
         skills,
         agents,
         cron_tasks,
