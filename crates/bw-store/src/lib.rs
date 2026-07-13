@@ -100,6 +100,24 @@ pub struct NewSession {
     pub snippet: String,
 }
 
+/// Bundle of the fields known when a run *starts* (iter 1/3). Grouping them
+/// into a struct keeps `record_workflow_run_start` under the argument-count
+/// lint and mirrors the `New*` pattern used for every other write. The run's
+/// id is *minted inside* the store (not passed in) so the caller can't lose
+/// the handle that settles the row later.
+pub struct NewWorkflowRun<'a> {
+    pub workflow_id: WorkflowId,
+    pub workflow_name: &'a str,
+    pub project_id: Option<ProjectId>,
+    pub session_id: Option<SessionId>,
+    pub trigger: RunTrigger,
+    pub started_at: i64,
+    /// Snapshot of the spec's shape at run time (iter 3) — what this run is
+    /// actually executing, frozen before the engine runs. `''` is valid
+    /// (no snapshot) and stays backward-compatible with iter 1 rows.
+    pub params_json: &'a str,
+}
+
 /// Hub library (global — no `project_id`). `uses`/`runs` are omitted here:
 /// they're usage-derived counters that start at 0, filled by a separate
 /// write path (`record_workflow_use`), not part of creation.
@@ -439,15 +457,7 @@ pub trait Store: Send + Sync {
     /// returns. The run's start is the *only* thing recorded here — outcome
     /// is settled separately so a crash mid-run still leaves an honest
     /// "started, never settled" row rather than a fabricated success.
-    async fn record_workflow_run_start(
-        &self,
-        workflow_id: WorkflowId,
-        workflow_name: &str,
-        project_id: Option<ProjectId>,
-        session_id: Option<SessionId>,
-        trigger: RunTrigger,
-        started_at: i64,
-    ) -> Result<WorkflowRunId>;
+    async fn record_workflow_run_start(&self, run: NewWorkflowRun<'_>) -> Result<WorkflowRunId>;
     /// Settle a run's terminal state exactly once: `status`, real
     /// `finished_at`/`duration_ms`, `phases_completed`, and `error`. No-op-safe
     /// if the row already settled (idempotent re-runs of the dogfood).

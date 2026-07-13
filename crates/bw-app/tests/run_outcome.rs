@@ -74,7 +74,15 @@ async fn store_records_start_settle_and_is_idempotent() {
     let wid = WorkflowId::new();
     let started = 1_700_000_000;
     let id = store
-        .record_workflow_run_start(wid, "wf", None, None, RunTrigger::Manual, started)
+        .record_workflow_run_start(bw_store::NewWorkflowRun {
+            workflow_id: wid,
+            workflow_name: "wf",
+            project_id: None,
+            session_id: None,
+            trigger: RunTrigger::Manual,
+            started_at: started,
+            params_json: r#"{"phase_count":3}"#,
+        })
         .await
         .unwrap();
 
@@ -308,7 +316,15 @@ async fn analytics_aggregates_runs_and_rates_success_honestly() {
     // Seed: 3 ok, 1 failed, with varying durations.
     for (i, ok) in [(0, true), (1, true), (2, false), (3, true)] {
         let id = store
-            .record_workflow_run_start(wid, "wf", None, None, RunTrigger::Manual, 1000 + i)
+            .record_workflow_run_start(bw_store::NewWorkflowRun {
+                workflow_id: wid,
+                workflow_name: "wf",
+                project_id: None,
+                session_id: None,
+                trigger: RunTrigger::Manual,
+                started_at: 1000 + i,
+                params_json: r#"{"phase_count":1}"#,
+            })
             .await
             .unwrap();
         let status = if ok { RunStatus::Ok } else { RunStatus::Failed };
@@ -327,4 +343,73 @@ async fn analytics_aggregates_runs_and_rates_success_honestly() {
     // durations 100,200,300,400 → median of even count = (200+300)/2 = 250
     assert_eq!(a.median_duration_ms, Some(250));
     assert_eq!(a.last_status, Some(RunStatus::Ok), "last run was ok");
+}
+
+#[tokio::test]
+async fn params_snapshot_captures_spec_shape_at_run_time() {
+    let path = tmp_db();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    quick_project(&mut app, "项目 · 参数快照").await;
+
+    let workflow_id = WorkflowId::new();
+    app.dispatch(Command::CreateWorkflowSpec {
+        id: workflow_id,
+        name: "参数 · 验证".into(),
+        prompt: "p".into(),
+        goal: "g".into(),
+        stage_ref: Some(3),
+        phases: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+        agents: vec![],
+        skills: vec![],
+        loop_config: LoopConfig {
+            retries: 2,
+            max_iter: 5,
+        },
+        maturity: Maturity::Mature,
+        scope: String::new(),
+        source: HubSource::SelfBuilt,
+        trigger: None,
+    })
+    .await
+    .unwrap();
+
+    let session = bw_core::SessionId::new();
+    app.dispatch(Command::StartSession {
+        id: session,
+        stage_kind: None,
+        kind: bw_store::SessionKind::Create,
+        title: "参数快照运行".into(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::RunHubWorkflow {
+        workflow_id,
+        session,
+    })
+    .await
+    .unwrap();
+
+    let runs = store.list_workflow_runs(workflow_id).await.unwrap();
+    let params = &runs[0].params_json;
+    assert!(
+        params.contains(r#""phase_count":4"#),
+        "phase_count captured: {params}"
+    );
+    assert!(
+        params.contains(r#""max_iter":5"#),
+        "loop config captured: {params}"
+    );
+    assert!(
+        params.contains(r#""stage_ref":3"#),
+        "stage_ref captured: {params}"
+    );
+    assert!(
+        params.contains(r#""trigger":"manual""#),
+        "trigger captured: {params}"
+    );
 }

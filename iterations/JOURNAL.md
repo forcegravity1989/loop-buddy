@@ -27,3 +27,13 @@
 - **运维师**:无 settled 时返回 total=0 而非报错(调用方能诚实显示"未运行");只读查询,无写入风险。**回流**:这聚合喂给 iter 6 冷热榜 + iter 11 健康信号。
 
 **门禁**:fmt clean · clippy clean · **92 tests pass**(+1)。
+
+## Iter 03 · 参数捕获(数据基座 3/5)
+
+- **原型师**:运行记录了成败,但不知道"这次跑的 spec 长什么样"。**假设**:spec 会被优化(改阶段/改 loop),改完之后历史就看不出"当时跑的是哪个版本"——版本演化断了链。**DoD**:每次运行冻结一份 spec 形状快照。
+- **构建师**:`run_params_snapshot(spec, trigger)` 纯函数产出 JSON(phases/phase_count/loop/agents/skills/stage_ref/trigger/kind 含版本号);`record_workflow_run_start` 重构为收 `NewWorkflowRun` 参数结构体(clippy 推的 8→1 参数收敛,顺带对齐 `New*` 模式);run 开始时写入 params_json。
+- **优化师**:clippy `too many arguments` 8/7 → 重构成 `NewWorkflowRun<'a>` 结构(对齐 NewProject/NewSession 模式);serde_json::Value 保证字段增删是加法不改历史行;`kind` 带 `static:v{version}` 让动态/静态可辨。+1 测试验证 phase_count/max_iter/stage_ref/trigger 都被快照。
+- **运营推广师**:真实场景——一个工作流被优化了 3 次,历史里每条 run 仍能说出"我跑的是 v2、4 阶段、max_iter=5"。这是 iter 5 版本快照 + iter 14 A/B 对比的地基。
+- **运维师**:`params_json` 默认 '' 对 iter 1 老行向后兼容;纯函数无 IO 无副作用;id 仍在 store 内部生成(调用方丢不了 settle 句柄)。**回流**:喂给 iter 8 参数频率分析。
+
+**门禁**:fmt clean · clippy clean · **93 tests pass**(+1)。

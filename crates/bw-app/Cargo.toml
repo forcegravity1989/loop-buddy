@@ -13,6 +13,7 @@ bw-store = { workspace = true }
 tokio = { workspace = true }
 time = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

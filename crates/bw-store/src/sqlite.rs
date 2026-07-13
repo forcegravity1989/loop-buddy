@@ -9,8 +9,9 @@ use crate::{
     parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
     stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal,
     NewAgent, NewConnector, NewCronTask, NewKnowledgeSource, NewMetric, NewProject, NewSession,
-    NewSkill, NewStage, NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectRow, Result,
-    SessionKind, SessionRow, SkillEdit, StageRow, StageSignal, Store, StoreError, WorkflowEdit,
+    NewSkill, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals,
+    ProjectRow, Result, SessionKind, SessionRow, SkillEdit, StageRow, StageSignal, Store,
+    StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -1041,30 +1042,23 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn record_workflow_run_start(
-        &self,
-        workflow_id: WorkflowId,
-        workflow_name: &str,
-        project_id: Option<ProjectId>,
-        session_id: Option<SessionId>,
-        trigger: RunTrigger,
-        started_at: i64,
-    ) -> Result<WorkflowRunId> {
+    async fn record_workflow_run_start(&self, run: NewWorkflowRun<'_>) -> Result<WorkflowRunId> {
         let id = WorkflowRunId::from_uuid(Uuid::new_v4());
         sqlx::query(
             "INSERT INTO workflow_run
              (id, workflow_id, workflow_name, project_id, session_id, trigger,
               status, started_at, finished_at, duration_ms, phases_completed,
               error, params_json, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, 'running', ?, NULL, NULL, 0, '', '', ?)",
+             VALUES (?, ?, ?, ?, ?, ?, 'running', ?, NULL, NULL, 0, '', ?, ?)",
         )
         .bind(id.uuid().to_string())
-        .bind(workflow_id.uuid().to_string())
-        .bind(workflow_name)
-        .bind(project_id.map(|p| p.uuid().to_string()))
-        .bind(session_id.map(|s| s.uuid().to_string()))
-        .bind(trigger.text())
-        .bind(started_at)
+        .bind(run.workflow_id.uuid().to_string())
+        .bind(run.workflow_name)
+        .bind(run.project_id.map(|p| p.uuid().to_string()))
+        .bind(run.session_id.map(|s| s.uuid().to_string()))
+        .bind(run.trigger.text())
+        .bind(run.started_at)
+        .bind(run.params_json)
         .bind(now_unix())
         .execute(&self.pool)
         .await?;

@@ -535,19 +535,24 @@ impl App {
 
         // Record the run's start *before* the engine runs — so even a crash
         // mid-run leaves an honest "started, never settled" row instead of a
-        // fabricated success (iter 1 telemetry foundation).
+        // fabricated success (iter 1 telemetry foundation). `params_json`
+        // snapshots what the spec *was* at run time (phases/loop/agents/
+        // skills) — so after a later "优化" changes the spec, history still
+        // shows what each past run actually executed (iter 3 param capture).
         let started_at = OffsetDateTime::now_utc().unix_timestamp();
         let t0 = Instant::now();
+        let params_json = run_params_snapshot(&spec, trigger);
         let run_log_id = self
             .store
-            .record_workflow_run_start(
-                spec.id,
-                &spec.name,
-                Some(p),
-                Some(session),
+            .record_workflow_run_start(bw_store::NewWorkflowRun {
+                workflow_id: spec.id,
+                workflow_name: &spec.name,
+                project_id: Some(p),
+                session_id: Some(session),
                 trigger,
                 started_at,
-            )
+                params_json: &params_json,
+            })
             .await?;
 
         // `workspace_path` is per-project runtime data, not something
@@ -1392,6 +1397,30 @@ impl App {
 
 fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
+}
+
+/// Snapshot of the spec's shape at run time, serialized into the run's
+/// `params_json` (iter 3). Records what a run *actually executed* — so after
+/// a later `UpdateWorkflowSpec` rewrites the phases, a past run's history
+/// still truthfully shows the phases it ran. Pure function of the spec +
+/// trigger; no IO, no secrets.
+fn run_params_snapshot(spec: &WorkflowSpec, trigger: RunTrigger) -> String {
+    // serde_json::Value keeps this stable as the spec grows — adding a field
+    // later is additive, not a schema break on historical run rows.
+    let v = serde_json::json!({
+        "phases": spec.phases,
+        "phase_count": spec.phases.len(),
+        "loop": { "retries": spec.loop_config.retries, "max_iter": spec.loop_config.max_iter },
+        "agents": spec.agents.len(),
+        "skills": spec.skills.len(),
+        "stage_ref": spec.stage_ref,
+        "trigger": trigger.text(),
+        "kind": match &spec.kind {
+            WorkflowKind::Static { version, .. } => format!("static:v{version}"),
+            WorkflowKind::Dynamic { origin, .. } => format!("dynamic:{origin}"),
+        },
+    });
+    v.to_string()
 }
 
 /// Compact, real `"YYYY-MM-DD HH:MM"` label for `CronTask.last_run` — a

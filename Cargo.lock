@@ -265,6 +265,7 @@ dependencies = [
  "bw-core",
  "bw-engine",
  "bw-store",
+ "serde_json",
  "thiserror 1.0.69",
  "time",
  "tokio",
