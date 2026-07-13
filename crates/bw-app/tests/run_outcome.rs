@@ -576,3 +576,72 @@ async fn optimizing_a_workflow_snapshots_every_prior_version_with_reason() {
     }
     assert_eq!(live.phases.len(), 3, "live spec is the latest content");
 }
+
+#[tokio::test]
+async fn usage_ranking_puts_hot_first_and_flags_cold() {
+    let path = tmp_db();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    quick_project(&mut app, "项目 · 冷热榜").await;
+
+    // Hot: runs 3 times. Cold: never run. Middle: 1 run.
+    let hot = WorkflowId::new();
+    let mid = WorkflowId::new();
+    let cold = WorkflowId::new();
+    for (id, name) in [(hot, "热 · 高频"), (mid, "中 · 一次"), (cold, "冷 · 从未")] {
+        app.dispatch(Command::CreateWorkflowSpec {
+            id,
+            name: name.into(),
+            prompt: "p".into(),
+            goal: "g".into(),
+            stage_ref: None,
+            phases: vec!["s".into()],
+            agents: vec![],
+            skills: vec![],
+            loop_config: LoopConfig {
+                retries: 1,
+                max_iter: 1,
+            },
+            maturity: Maturity::Fresh,
+            scope: String::new(),
+            source: HubSource::SelfBuilt,
+            trigger: None,
+        })
+        .await
+        .unwrap();
+    }
+
+    for wid in [hot, hot, hot, mid] {
+        let session = bw_core::SessionId::new();
+        app.dispatch(Command::StartSession {
+            id: session,
+            stage_kind: None,
+            kind: bw_store::SessionKind::Create,
+            title: "run".into(),
+        })
+        .await
+        .unwrap();
+        app.dispatch(Command::RunHubWorkflow {
+            workflow_id: wid,
+            session,
+        })
+        .await
+        .unwrap();
+    }
+
+    let rank = store.hub_usage_ranking().await.unwrap();
+    // hot(3) → mid(1) → cold(0), in that order.
+    assert_eq!(rank[0].workflow_id, hot);
+    assert_eq!(rank[0].total_runs, 3);
+    assert!(!rank[0].cold);
+    assert_eq!(rank[1].workflow_id, mid);
+    assert_eq!(rank[1].total_runs, 1);
+    let cold_row = rank.iter().find(|r| r.workflow_id == cold).unwrap();
+    assert_eq!(cold_row.total_runs, 0);
+    assert!(cold_row.cold, "never-run workflow flagged cold");
+    assert!(cold_row.success_rate.is_none());
+}

@@ -57,3 +57,13 @@
 - **运维师**:历史表 append-only(永不改写);非 FK(version 比 spec 长寿);`note` 默认 '' 向后兼容;examples(verify_goal)+ desktop UI 同步加 note。**回流**:演化链喂给 iter 9 优化建议("上次为什么改")+ iter 20 成效 delta。**Arc 1 数据基座完成——五角色环闭。**
 
 **门禁**:fmt clean · clippy clean · 全测试 0 失败 · dogfood 端到端仍跑通(27 session / 5 闭环交接)。
+
+## Iter 06 · 使用频率分析(优化智能 1/7)
+
+- **原型师**:hub 里有几十个工作流,但不知道哪些真在被用、哪些是僵尸。**假设**:一个从不被跑的工作流是认知负担 + 维护税,该退役或优化;一个高频的该被爱护。**DoD**:全局冷热榜,从最热到最冷。
+- **构建师**:`UsageRank` 结构 + `hub_usage_ranking()` Store 方法;LEFT JOIN workflow_spec↔workflow_run,按真实运行数降序,`cold=true` 标记零运行。
+- **优化师**:排名用 append-only 日志的真实计数,不用可能漂移的 `uses` 计数器;冷工作流 `success_rate=None`(无证据≠差);LEFT JOIN 保证零运行也上榜(否则隐身)。+1 测试验证 热(3)>中(1)>冷(0,cold=true)。
+- **运营推广师**:一句话运营判断——"这 3 个工作流这周一次没跑,考虑退役;这 2 个高频但成功率才 60%,优先优化"。喂 iter 9 建议 + iter 17 推荐。
+- **运维师**:只读聚合,无写入;GROUP BY ws.id 稳定。**回流**:冷热是 iter 11 健康信号的输入之一。
+
+**门禁**:fmt clean · clippy clean · **run_outcome 9 tests pass**(+1)。

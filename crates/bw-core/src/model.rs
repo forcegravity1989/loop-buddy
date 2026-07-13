@@ -730,6 +730,26 @@ pub struct WorkflowVersion {
     pub created_at: i64,
 }
 
+/// One workflow's position in the global usage ranking (iter 6) — the
+/// answer to "which workflows are actually earning their keep?" The hottest
+/// (most-run) sit at the top; the coldest (never or rarely run) at the
+/// bottom. A workflow that's in the hub but has **zero** runs is `cold =
+/// true` — the prime "should this even exist / be optimized or retired?"
+/// candidate.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UsageRank {
+    pub workflow_id: WorkflowId,
+    pub workflow_name: String,
+    pub stage_ref: Option<u8>,
+    pub total_runs: u32,
+    pub ok_runs: u32,
+    pub failed_runs: u32,
+    pub success_rate: Option<f32>,
+    pub last_run_at: Option<i64>,
+    /// `true` when `total_runs == 0` — never run since landing in the hub.
+    pub cold: bool,
+}
+
 /// Shared by `stage_workflow` and `stage_template_workflow` — both are the
 /// same methodology projected into a `WorkflowSpec.goal`, just with
 /// different `kind` (Dynamic vs Static). `idgen`-gated like both callers:

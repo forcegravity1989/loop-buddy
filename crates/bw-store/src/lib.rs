@@ -22,8 +22,8 @@ use bw_core::model::{
     AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronStatus,
     CronTask, HubSource, KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle,
     ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SkillRef,
-    SourceKind, StageKind, WorkflowKind, WorkflowRun, WorkflowRunAnalytics, WorkflowSpec,
-    WorkflowVersion,
+    SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowRunAnalytics,
+    WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -504,6 +504,10 @@ pub trait Store: Send + Sync {
     /// with the reason it was replaced. Empty for a spec never updated.
     async fn list_workflow_versions(&self, workflow_id: WorkflowId)
         -> Result<Vec<WorkflowVersion>>;
+
+    /// Global usage ranking of every hub workflow by real run history
+    /// (iter 6) — hottest (most-run) first, coldest (never-run) last.
+    async fn hub_usage_ranking(&self) -> Result<Vec<UsageRank>>;
 
     async fn create_skill(&self, s: NewSkill) -> Result<()>;
     async fn list_skills(&self) -> Result<Vec<SkillCard>>;

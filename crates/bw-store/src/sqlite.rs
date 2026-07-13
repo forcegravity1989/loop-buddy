@@ -20,8 +20,8 @@ use bw_core::derive::{
 use bw_core::model::{
     AgentCard, AgentRef, AgentSkillTag, Connector, CronEffectiveness, CronStatus, CronTask,
     HubSource, KnowledgeSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus,
-    RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowRun,
-    WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
+    RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
+    WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -1386,6 +1386,51 @@ impl Store for SqliteStore {
                 })
             })
             .collect()
+    }
+
+    async fn hub_usage_ranking(&self) -> Result<Vec<UsageRank>> {
+        // LEFT JOIN so a spec that's never run still appears (cold=true at the
+        // bottom). Rank by real run count desc — the Static `uses` counter is
+        // deliberately not used here so the ranking reflects the append-only
+        // log, not a counter that could drift from it.
+        let rows = sqlx::query(
+            "SELECT ws.id AS wid, ws.name AS name, ws.stage_ref AS stage_ref,
+                    COUNT(wr.id) AS total,
+                    SUM(CASE WHEN wr.status='ok' THEN 1 ELSE 0 END) AS ok_n,
+                    SUM(CASE WHEN wr.status='failed' THEN 1 ELSE 0 END) AS fail_n,
+                    MAX(wr.started_at) AS last_at
+             FROM workflow_spec ws
+             LEFT JOIN workflow_run wr ON wr.workflow_id = ws.id
+             GROUP BY ws.id
+             ORDER BY total DESC, ws.name ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let total: i64 = r.get("total");
+                let ok_runs: i64 = r.get("ok_n");
+                let failed_runs: i64 = r.get("fail_n");
+                let settled = ok_runs + failed_runs;
+                UsageRank {
+                    workflow_id: parse_uuid(&r.get::<String, _>("wid"), WorkflowId::from_uuid)
+                        .unwrap_or(WorkflowId::nil()),
+                    workflow_name: r.get("name"),
+                    stage_ref: r.get::<Option<i64>, _>("stage_ref").map(|n| n as u8),
+                    total_runs: total as u32,
+                    ok_runs: ok_runs as u32,
+                    failed_runs: failed_runs as u32,
+                    success_rate: if settled > 0 {
+                        Some(ok_runs as f32 / settled as f32)
+                    } else {
+                        None
+                    },
+                    last_run_at: r.get("last_at"),
+                    cold: total == 0,
+                }
+            })
+            .collect())
     }
 
     async fn create_skill(&self, s: NewSkill) -> Result<()> {
