@@ -611,7 +611,7 @@ impl RunStatus {
 /// What triggered a run — distinguishes a user's manual fire from the
 /// background scheduler's unattended auto-fire, so analytics (iter 2) can
 /// attribute outcomes to the right source.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunTrigger {
     Manual,

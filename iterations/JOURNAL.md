@@ -147,3 +147,13 @@
 - **运维师**:纯函数;Inconclusive 不等于"没问题"(诚实区分"没变化"和"看不出");回滚判定可执行。**回流**:A/B → iter 18 自驱的回归检测 + iter 20 成效。
 
 **门禁**:fmt clean · clippy clean · analysis 共 20 测试。
+
+## Iter 15 · 场景聚类(自改进闭环 3/8)
+
+- **原型师**:iter 8 的形状是"平均形状",但用户可能用 N 种方式跑同一工作流。**假设**:平均掩盖多场景;优化要服务"真实场景"不是"平均"。**DoD**:按 (phase_count, trigger) 签名聚类出场景。
+- **构建师**:`Scenario`(label/count/success_rate/median)+ `cluster_scenarios(runs)` 纯函数;按 (params phase_count, trigger) 签名分桶,每桶算自己的统计;RunTrigger 加 `Hash` 派生(做 HashMap 键)。
+- **优化师**:每场景独立成功率("3阶段·手动 90% vs 5阶段·定时 40%"——揭示定时那条线在拖后腿);最大场景在前;phase_count 缺失归"未知阶段"不丢。+1 测试。
+- **运营推广师**:一句话——"这个工作流有 2 种用法,定时的那种总失败"——精准定位优化目标场景。喂 iter 19 默认推断("默认走成功率高的场景")。
+- **运维师**:RunTrigger 加 Hash 是加法不破坏;纯函数;聚类维度可扩。**回流**:场景 → iter 17 推荐("当前像哪个场景,推那个场景的绿色工作流")。
+
+**门禁**:fmt clean · clippy clean · analysis 共 21 测试。

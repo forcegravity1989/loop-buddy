@@ -703,6 +703,59 @@ fn slice_stats(runs: &[WorkflowRun]) -> (u32, Option<f32>, Option<i64>) {
     (n, rate, med)
 }
 
+// ───────────────────────── iter 15: scenario clustering ─────────────────────────
+
+/// One usage scenario — a cluster of runs sharing an invocation signature
+/// (iter 15). "Users run this workflow in N distinct ways" is the answer this
+/// gives, each with its own volume + success rate.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scenario {
+    pub label: String,
+    pub count: u32,
+    pub success_rate: Option<f32>,
+    pub median_duration_ms: Option<i64>,
+}
+
+/// Cluster runs into usage scenarios by their (phase_count, trigger)
+/// signature (iter 15). Pure. Reveals the distinct ways a workflow is
+/// actually invoked — the scenarios optimization must serve, not a single
+/// averaged shape. Largest scenario first.
+pub fn cluster_scenarios(runs: &[WorkflowRun]) -> Vec<Scenario> {
+    let mut bucket: HashMap<(Option<u8>, RunTrigger), Vec<&WorkflowRun>> = HashMap::new();
+    for r in runs {
+        let pc = serde_json::from_str::<serde_json::Value>(&r.params_json)
+            .ok()
+            .and_then(|v| {
+                v.get("phase_count")
+                    .and_then(|x| x.as_u64())
+                    .map(|n| n as u8)
+            });
+        bucket.entry((pc, r.trigger)).or_default().push(r);
+    }
+    let mut out: Vec<Scenario> = bucket
+        .into_iter()
+        .map(|((pc, trig), group)| {
+            let owned: Vec<WorkflowRun> = group.into_iter().cloned().collect();
+            let (_n, rate, med) = slice_stats(&owned);
+            let pc_label = pc
+                .map(|n| format!("{}阶段", n))
+                .unwrap_or_else(|| "未知阶段".into());
+            let trig_label = match trig {
+                RunTrigger::Manual => "手动",
+                RunTrigger::Scheduled => "定时",
+            };
+            Scenario {
+                label: format!("{} · {}", pc_label, trig_label),
+                count: owned.len() as u32,
+                success_rate: rate,
+                median_duration_ms: med,
+            }
+        })
+        .collect();
+    out.sort_by_key(|s| std::cmp::Reverse(s.count));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1112,10 +1165,33 @@ mod tests {
 
     #[test]
     fn ab_flat_rate_breaks_tie_on_duration() {
-        // Same 100% rate both sides, but after is 1000ms faster → Improved.
         let before = settled(&[RunStatus::Ok, RunStatus::Ok, RunStatus::Ok], 1500);
         let after = settled(&[RunStatus::Ok, RunStatus::Ok, RunStatus::Ok], 500);
         let d = ab_compare(&before, &after);
         assert_eq!(d.verdict, AbVerdict::Improved, "duration breaks the tie");
+    }
+
+    #[test]
+    fn scenario_clustering_reveals_distinct_invocation_shapes() {
+        // Two scenarios: "3阶段·手动" (3 runs) and "5阶段·定时" (2 runs).
+        let runs = vec![
+            run_with_params(r#"{"phase_count":3}"#, RunTrigger::Manual, RunStatus::Ok),
+            run_with_params(r#"{"phase_count":3}"#, RunTrigger::Manual, RunStatus::Ok),
+            run_with_params(
+                r#"{"phase_count":3}"#,
+                RunTrigger::Manual,
+                RunStatus::Failed,
+            ),
+            run_with_params(r#"{"phase_count":5}"#, RunTrigger::Scheduled, RunStatus::Ok),
+            run_with_params(r#"{"phase_count":5}"#, RunTrigger::Scheduled, RunStatus::Ok),
+        ];
+        let sc = cluster_scenarios(&runs);
+        assert_eq!(sc.len(), 2, "two distinct signatures");
+        assert_eq!(sc[0].count, 3, "largest scenario first");
+        assert!(sc[0].label.contains("3阶段"));
+        assert!(sc[0].label.contains("手动"));
+        assert_eq!(sc[0].success_rate, Some(2.0 / 3.0));
+        assert!(sc[1].label.contains("5阶段"));
+        assert!(sc[1].label.contains("定时"));
     }
 }
