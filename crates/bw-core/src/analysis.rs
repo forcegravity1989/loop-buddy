@@ -988,6 +988,78 @@ pub fn infer_defaults(profile: &RunShapeProfile) -> SuggestedDefaults {
     }
 }
 
+// ───────────────────────── iter 20: effectiveness summary ─────────────────────────
+
+/// Hub-wide roll-up of how much optimization *actually* helped (iter 20) —
+/// the answer to "are we getting better, across all workflows?" Built from a
+/// list of per-workflow `VersionDelta`s (iter 14). This is the loop's
+/// scoreboard: if `improved > regressed` over time, the self-driving
+/// optimization is earning its keep.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectivenessSummary {
+    pub compared: u32,
+    pub improved: u32,
+    pub regressed: u32,
+    pub inconclusive: u32,
+    /// Mean of all non-None `rate_delta` — the average success-rate lift (pp)
+    /// optimization delivered across comparable workflows. Positive = better.
+    pub avg_rate_delta: Option<f32>,
+    /// Mean duration delta across comparable workflows (ms). Negative = faster.
+    pub avg_duration_delta_ms: Option<i64>,
+    /// One-line verdict, e.g. "改善 3 / 回归 1 · 平均成功率 +12pp".
+    pub verdict: String,
+}
+
+/// Aggregate per-workflow A/B deltas into a hub-wide effectiveness summary
+/// (iter 20). Pure. Skips `Inconclusive` deltas in the averages (they carry
+/// no usable delta) but still count them, so the summary never hides "we
+/// couldn't tell" behind a rosy average.
+pub fn summarize_effectiveness(deltas: &[VersionDelta]) -> EffectivenessSummary {
+    let compared = deltas.len() as u32;
+    let improved = deltas
+        .iter()
+        .filter(|d| d.verdict == AbVerdict::Improved)
+        .count() as u32;
+    let regressed = deltas
+        .iter()
+        .filter(|d| d.verdict == AbVerdict::Regressed)
+        .count() as u32;
+    let inconclusive = deltas
+        .iter()
+        .filter(|d| matches!(d.verdict, AbVerdict::Inconclusive(_)))
+        .count() as u32;
+    let rate_deltas: Vec<f32> = deltas.iter().filter_map(|d| d.rate_delta).collect();
+    let dur_deltas: Vec<i64> = deltas.iter().filter_map(|d| d.duration_delta_ms).collect();
+    let avg_rate_delta = if rate_deltas.is_empty() {
+        None
+    } else {
+        Some(rate_deltas.iter().sum::<f32>() / rate_deltas.len() as f32)
+    };
+    let avg_duration_delta_ms = if dur_deltas.is_empty() {
+        None
+    } else {
+        Some(dur_deltas.iter().sum::<i64>() / dur_deltas.len() as i64)
+    };
+    let verdict = format!(
+        "改善 {} / 回归 {} / 未定 {}{}",
+        improved,
+        regressed,
+        inconclusive,
+        avg_rate_delta
+            .map(|d| format!(" · 平均成功率 {:+.0}pp", d * 100.0))
+            .unwrap_or_default()
+    );
+    EffectivenessSummary {
+        compared,
+        improved,
+        regressed,
+        inconclusive,
+        avg_rate_delta,
+        avg_duration_delta_ms,
+        verdict,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1526,7 +1598,6 @@ mod tests {
 
     #[test]
     fn infer_defaults_none_when_no_dominant_habit() {
-        // 40% share — below the 60% dominance floor → no guess.
         let p = RunShapeProfile {
             sample: 10,
             dominant_phase_count: Some((3, 0.4)),
@@ -1536,5 +1607,47 @@ mod tests {
         let d = infer_defaults(&p);
         assert_eq!(d.phase_count, None, "no dominant habit → no guess");
         assert!(d.why.contains("未形成"));
+    }
+
+    fn delta(rate: Option<f32>, verdict: AbVerdict) -> VersionDelta {
+        VersionDelta {
+            before_settled: 5,
+            after_settled: 5,
+            before_rate: rate.map(|r| r - 0.2),
+            after_rate: rate,
+            rate_delta: rate.map(|r| r - (r - 0.2)),
+            before_median_ms: Some(200),
+            after_median_ms: Some(150),
+            duration_delta_ms: Some(-50),
+            verdict,
+        }
+    }
+
+    #[test]
+    fn effectiveness_summary_rolls_up_improved_vs_regressed() {
+        let deltas = vec![
+            delta(Some(0.9), AbVerdict::Improved),
+            delta(Some(0.9), AbVerdict::Improved),
+            delta(Some(0.3), AbVerdict::Regressed),
+            VersionDelta {
+                before_settled: 1,
+                after_settled: 5,
+                before_rate: None,
+                after_rate: None,
+                rate_delta: None,
+                before_median_ms: None,
+                after_median_ms: None,
+                duration_delta_ms: None,
+                verdict: AbVerdict::Inconclusive("thin".into()),
+            },
+        ];
+        let s = summarize_effectiveness(&deltas);
+        assert_eq!(s.compared, 4);
+        assert_eq!(s.improved, 2);
+        assert_eq!(s.regressed, 1);
+        assert_eq!(s.inconclusive, 1);
+        assert!(s.avg_rate_delta.unwrap() > 0.0, "net positive lift");
+        assert!(s.verdict.contains("改善 2"));
+        assert!(s.verdict.contains("回归 1"));
     }
 }

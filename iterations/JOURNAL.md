@@ -197,3 +197,13 @@
 - **运维师**:纯函数;阈值集中;None 诚实。**回流**:默认推断 → iter 21 仿真器 + iter 24 旅程。
 
 **门禁**:fmt clean · clippy clean · analysis 共 26 测试。
+
+## Iter 20 · 优化成效报告(自改进闭环 8/8)—— Arc 3 闭环
+
+- **原型师**:单工作流 A/B(iter 14)有了,但"hub 整体在变好吗"答不上来。**假设**:自驱循环的价值需要 scoreboard 验证——改善数 > 回归数才证明循环在挣钱。**DoD**:hub 级成效汇总。
+- **构建师**:`EffectivenessSummary`(compared/improved/regressed/inconclusive/avg_rate_delta/avg_duration_delta_ms/verdict)+ `summarize_effectiveness(deltas)` 纯函数,聚合多工作流 VersionDelta。
+- **优化师**:Inconclusive **不计入均值**(无 delta 不能稀释)但仍计数(不藏"看不出");avg_rate_delta 正=变好;verdict 一行可读("改善 3 / 回归 1 · 平均成功率 +12pp")。+1 测试。
+- **运营推广师**:一句话——"过去 N 次优化:3 改善 1 回归,平均成功率 +12pp"——循环价值的量化证明。喂 iter 24 旅程可视化 + iter 25 报告。
+- **运维师**:纯聚合;Inconclusive 诚实计数不藏。**Arc 3 自改进闭环完成。** 回流:成效 → iter 24 旅程指标曲线 + iter 25 报告结论。
+
+**门禁**:fmt clean · clippy clean · analysis 共 27 测试。
