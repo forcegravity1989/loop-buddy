@@ -424,6 +424,100 @@ pub fn workflow_health(a: &WorkflowRunAnalytics) -> Signal {
     }
 }
 
+// ───────────────────────── iter 12: habit profile ─────────────────────────
+
+/// How hot a workflow is, by run volume (iter 12). The bands are deliberately
+/// coarse — three buckets a human reasons about, not a continuous score.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsageTier {
+    /// ≥10 runs — a workhorse the org leans on.
+    Hot,
+    /// 1–9 runs — used, but not central.
+    Warm,
+    /// 0 runs — dormant (same flag as `UsageRank::cold`).
+    Cold,
+}
+
+/// A workflow's full usage signature (iter 12) — the one struct a "how is
+/// this workflow actually used?" view reads from. Composes health (iter 11),
+/// shape (iter 8), and usage tier into a single, human-summarizable profile.
+/// The seed of habit-based defaults (iter 19).
+#[derive(Clone, Debug, PartialEq)]
+pub struct HabitProfile {
+    pub workflow_id: crate::WorkflowId,
+    pub workflow_name: String,
+    pub health: Signal,
+    pub tier: UsageTier,
+    pub shape: RunShapeProfile,
+    /// `(manual, scheduled)` — same as shape's trigger_split, lifted for
+    /// convenience so a caller doesn't re-read the shape.
+    pub trigger_split: (u32, u32),
+    /// One-line human summary, e.g. "热门·绿色·3阶段·主要手动触发·典型耗时 200ms".
+    pub summary: String,
+}
+
+/// Classify run volume into a coarse tier (iter 12). ≥10 → Hot, 1–9 → Warm,
+/// 0 → Cold. The thresholds are product judgement, tuned to be useful not
+/// precise — three buckets a person reasons about.
+pub fn usage_tier(total_runs: u32) -> UsageTier {
+    if total_runs == 0 {
+        UsageTier::Cold
+    } else if total_runs >= 10 {
+        UsageTier::Hot
+    } else {
+        UsageTier::Warm
+    }
+}
+
+/// Compose a workflow's analytics + usage + shape into a single habit profile
+/// (iter 12). Pure. The `shape` is computed from that workflow's runs (iter 8);
+/// pass it in so this function stays free of the run log.
+pub fn habit_profile(
+    analytics: &WorkflowRunAnalytics,
+    usage: &UsageRank,
+    shape: RunShapeProfile,
+) -> HabitProfile {
+    let health = workflow_health(analytics);
+    let tier = usage_tier(usage.total_runs);
+    let health_label = match health {
+        Signal::Green => "绿色",
+        Signal::Amber => "黄色",
+        Signal::Red => "红色",
+        Signal::Unknown => "未知",
+    };
+    let tier_label = match tier {
+        UsageTier::Hot => "热门",
+        UsageTier::Warm => "温",
+        UsageTier::Cold => "冷门",
+    };
+    let trigger_label = match shape.trigger_split {
+        (m, s) if m >= s && m > 0 => "主要手动触发",
+        (m, s) if s > m => "主要定时触发",
+        _ => "无运行",
+    };
+    let phase_label = shape
+        .dominant_phase_count
+        .map(|(n, _)| format!("·{}阶段", n))
+        .unwrap_or_default();
+    let dur_label = analytics
+        .median_duration_ms
+        .map(|d| format!("·典型耗时 {}ms", d))
+        .unwrap_or_default();
+    let summary = format!(
+        "{}·{}{}·{}{}",
+        tier_label, health_label, phase_label, trigger_label, dur_label
+    );
+    HabitProfile {
+        workflow_id: analytics.workflow_id,
+        workflow_name: analytics.workflow_name.clone(),
+        health,
+        tier,
+        trigger_split: shape.trigger_split,
+        shape,
+        summary,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -704,5 +798,41 @@ mod tests {
     fn no_failures_yields_empty_not_error() {
         let runs = vec![run("", RunStatus::Ok, WorkflowId::nil(), 1)];
         assert!(failure_modes(&runs).is_empty());
+    }
+
+    fn shape(manual: u32, scheduled: u32, phases: u8) -> RunShapeProfile {
+        RunShapeProfile {
+            sample: manual + scheduled,
+            dominant_phase_count: Some((phases, 1.0)),
+            dominant_loop: None,
+            trigger_split: (manual, scheduled),
+        }
+    }
+
+    #[test]
+    fn habit_profile_classifies_tier_and_summarizes() {
+        // Hot + green + 3 phases + manual-heavy → summary reads all four.
+        let mut a = analytics(12, 12, 0, Some(1.0), Some(200));
+        a.last_status = Some(RunStatus::Ok);
+        let u = usage(12, false);
+        let p = habit_profile(&a, &u, shape(10, 2, 3));
+        assert_eq!(p.tier, UsageTier::Hot);
+        assert_eq!(p.health, Signal::Green);
+        assert!(p.summary.contains("热门"), "tier: {}", p.summary);
+        assert!(p.summary.contains("绿色"), "health in summary");
+        assert!(p.summary.contains("3阶段"), "phase shape in summary");
+        assert!(p.summary.contains("手动"), "trigger mix in summary");
+        assert!(p.summary.contains("200ms"), "median duration in summary");
+    }
+
+    #[test]
+    fn habit_profile_cold_unknown_when_never_run() {
+        let a = analytics(0, 0, 0, None, None);
+        let u = usage(0, true);
+        let p = habit_profile(&a, &u, shape(0, 0, 0));
+        assert_eq!(p.tier, UsageTier::Cold);
+        assert_eq!(p.health, Signal::Unknown);
+        assert!(p.summary.contains("冷门"));
+        assert!(p.summary.contains("无运行"));
     }
 }
