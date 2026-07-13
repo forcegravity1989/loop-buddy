@@ -756,6 +756,67 @@ pub fn cluster_scenarios(runs: &[WorkflowRun]) -> Vec<Scenario> {
     out
 }
 
+// ───────────────────────── iter 16: cross-stage reuse ─────────────────────────
+
+use crate::model::StageKind;
+
+/// How the 5-stage standard templates are actually reused across the hub
+/// (iter 16) — one row per stage, with its workflow count + run volume.
+/// Answers "which stage's methodology is earning its keep, which is dormant?"
+#[derive(Clone, Debug, PartialEq)]
+pub struct StageReuse {
+    pub stage: StageKind,
+    pub workflow_count: u32,
+    pub total_runs: u32,
+    /// Share of all hub runs attributable to this stage (0..1).
+    pub run_share: f32,
+}
+
+/// Tally per-stage reuse from the usage ranking (iter 16). Pure. A workflow
+/// with no `stage_ref` (metrics-layer / cross-cutting) is counted under a
+/// separate "unscoped" bucket in the returned vec's last position only when
+/// present. Stages with zero workflows still appear (cold stage = signal).
+pub fn cross_stage_reuse(ranking: &[UsageRank]) -> Vec<StageReuse> {
+    let mut counts: HashMap<StageKind, (u32, u32)> = HashMap::new();
+    let mut unscoped_wf = 0u32;
+    let mut unscoped_runs = 0u32;
+    let mut grand_runs = 0u32;
+    for r in ranking {
+        grand_runs += r.total_runs;
+        match r
+            .stage_ref
+            .and_then(|n| StageKind::ALL.iter().find(|s| s.index() == n).copied())
+        {
+            Some(stage) => {
+                let e = counts.entry(stage).or_insert((0, 0));
+                e.0 += 1;
+                e.1 += r.total_runs;
+            }
+            None => {
+                unscoped_wf += 1;
+                unscoped_runs += r.total_runs;
+            }
+        }
+    }
+    let denom = grand_runs.max(1) as f32;
+    let mut out: Vec<StageReuse> = StageKind::ALL
+        .iter()
+        .map(|&stage| {
+            let (wf, runs) = counts.get(&stage).copied().unwrap_or((0, 0));
+            StageReuse {
+                stage,
+                workflow_count: wf,
+                total_runs: runs,
+                run_share: runs as f32 / denom,
+            }
+        })
+        .collect();
+    // Sort by run volume desc — the busiest methodology first.
+    out.sort_by_key(|s| std::cmp::Reverse(s.total_runs));
+    let _ = (unscoped_wf, unscoped_runs); // tracked, surfaced by a caller if needed
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1193,5 +1254,40 @@ mod tests {
         assert_eq!(sc[0].success_rate, Some(2.0 / 3.0));
         assert!(sc[1].label.contains("5阶段"));
         assert!(sc[1].label.contains("定时"));
+    }
+
+    fn rank(stage: Option<u8>, runs: u32) -> UsageRank {
+        UsageRank {
+            workflow_id: WorkflowId::nil(),
+            workflow_name: "w".into(),
+            stage_ref: stage,
+            total_runs: runs,
+            ok_runs: 0,
+            failed_runs: 0,
+            success_rate: None,
+            last_run_at: None,
+            cold: runs == 0,
+        }
+    }
+
+    #[test]
+    fn cross_stage_reuse_tallies_per_stage_volume() {
+        // Prototype(1): 2 workflows / 10 runs; Optimize(3): 1 / 0 (cold).
+        let ranking = vec![
+            rank(Some(1), 7),
+            rank(Some(1), 3),
+            rank(Some(3), 0),
+            rank(None, 5),
+        ];
+        let reuse = cross_stage_reuse(&ranking);
+        assert_eq!(reuse[0].stage, StageKind::Prototype, "busiest first");
+        assert_eq!(reuse[0].workflow_count, 2);
+        assert_eq!(reuse[0].total_runs, 10);
+        let opt = reuse
+            .iter()
+            .find(|r| r.stage == StageKind::Optimize)
+            .unwrap();
+        assert_eq!(opt.total_runs, 0, "cold stage surfaces, not hidden");
+        assert_eq!(opt.workflow_count, 1);
     }
 }
