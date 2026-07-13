@@ -23,6 +23,6 @@ pub mod model;
 
 pub use ids::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, RoutineId, SessionId,
-    SkillId, WorkflowId,
+    SkillId, WorkflowId, WorkflowRunId,
 };
 pub use model::*;

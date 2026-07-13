@@ -17,7 +17,8 @@ use bw_core::derive::AmberBand;
 use bw_core::model::{
     cron_due, stage_workflow, AgentCard, AgentRef, Cadence, Connector, CronStatus, CronTask,
     HubSource, KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role,
-    Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind,
+    WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -33,6 +34,7 @@ use bw_store::{
 };
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
 
@@ -522,6 +524,7 @@ impl App {
         project: ProjectId,
         session: SessionId,
         spec: WorkflowSpec,
+        trigger: RunTrigger,
     ) -> Result<(), AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
@@ -529,6 +532,23 @@ impl App {
             project: p,
             workflow: spec.id,
         };
+
+        // Record the run's start *before* the engine runs — so even a crash
+        // mid-run leaves an honest "started, never settled" row instead of a
+        // fabricated success (iter 1 telemetry foundation).
+        let started_at = OffsetDateTime::now_utc().unix_timestamp();
+        let t0 = Instant::now();
+        let run_log_id = self
+            .store
+            .record_workflow_run_start(
+                spec.id,
+                &spec.name,
+                Some(p),
+                Some(session),
+                trigger,
+                started_at,
+            )
+            .await?;
 
         // `workspace_path` is per-project runtime data, not something
         // baked into a long-lived Engine at App::new time: unconfigured
@@ -589,6 +609,7 @@ impl App {
 
         // Persist whatever phases completed, even on failure — the run
         // history must not silently vanish.
+        let phases_completed = completed.len() as u32;
         for output in completed {
             self.store
                 .append_message(session, Role::Agent, &output.text)
@@ -599,6 +620,39 @@ impl App {
                 text: output.text,
             });
         }
+
+        // Settle the run record with the real outcome + real elapsed time.
+        // `phases_completed` is the honest count of phases that finished — a
+        // partial run that died at phase 2 of 5 records `2`, not silence.
+        let finished_at = OffsetDateTime::now_utc().unix_timestamp();
+        let duration_ms = t0.elapsed().as_millis() as i64;
+        match &run {
+            Ok(_) => {
+                self.store
+                    .settle_workflow_run(
+                        run_log_id,
+                        RunStatus::Ok,
+                        finished_at,
+                        duration_ms,
+                        phases_completed,
+                        "",
+                    )
+                    .await?;
+            }
+            Err(e) => {
+                self.store
+                    .settle_workflow_run(
+                        run_log_id,
+                        RunStatus::Failed,
+                        finished_at,
+                        duration_ms,
+                        phases_completed,
+                        &e.to_string(),
+                    )
+                    .await?;
+            }
+        }
+
         run.map_err(|e| AppError::Engine(e.to_string()))?;
         Ok(())
     }
@@ -664,7 +718,9 @@ impl App {
             self.store.record_workflow_use(spec.id).await?;
             self.refresh_workflow_specs().await?;
 
-            let result = self.run_workflow_inner(pid, session, spec).await;
+            let result = self
+                .run_workflow_inner(pid, session, spec, RunTrigger::Scheduled)
+                .await;
             let ok = result.is_ok();
             let outcome = if ok {
                 CronStatus::Normal
@@ -942,7 +998,8 @@ impl App {
 
             Command::RunWorkflow { session, spec } => {
                 let p = self.active()?;
-                self.run_workflow_inner(p, session, spec).await?;
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual)
+                    .await?;
             }
 
             Command::RefreshHubs => {
@@ -1030,7 +1087,8 @@ impl App {
                     .ok_or(AppError::NotFound)?;
                 self.store.record_workflow_use(workflow_id).await?;
                 self.refresh_workflow_specs().await?;
-                self.run_workflow_inner(p, session, spec).await?;
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual)
+                    .await?;
             }
 
             Command::UpdateWorkflowSpec {

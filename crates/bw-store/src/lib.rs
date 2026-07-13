@@ -20,12 +20,13 @@ use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
     AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, HubSource,
-    KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role,
-    SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus,
+    RunTrigger, SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind,
+    WorkflowRun, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
-    WorkflowId,
+    WorkflowId, WorkflowRunId,
 };
 use time::OffsetDateTime;
 
@@ -431,6 +432,40 @@ pub trait Store: Send + Sync {
     /// Bump a hub spec's `uses` counter by 1 — called when it's run via
     /// `RunHubWorkflow`.
     async fn record_workflow_use(&self, id: WorkflowId) -> Result<()>;
+
+    // ── workflow_run: append-only execution telemetry (iter 1) ──────────────
+    /// Insert a fresh run row at `status = Running`, returning the minted id
+    /// the caller passes to [`Store::settle_workflow_run`] when the engine
+    /// returns. The run's start is the *only* thing recorded here — outcome
+    /// is settled separately so a crash mid-run still leaves an honest
+    /// "started, never settled" row rather than a fabricated success.
+    async fn record_workflow_run_start(
+        &self,
+        workflow_id: WorkflowId,
+        workflow_name: &str,
+        project_id: Option<ProjectId>,
+        session_id: Option<SessionId>,
+        trigger: RunTrigger,
+        started_at: i64,
+    ) -> Result<WorkflowRunId>;
+    /// Settle a run's terminal state exactly once: `status`, real
+    /// `finished_at`/`duration_ms`, `phases_completed`, and `error`. No-op-safe
+    /// if the row already settled (idempotent re-runs of the dogfood).
+    async fn settle_workflow_run(
+        &self,
+        id: WorkflowRunId,
+        status: RunStatus,
+        finished_at: i64,
+        duration_ms: i64,
+        phases_completed: u32,
+        error: &str,
+    ) -> Result<()>;
+    /// Recorded runs for one workflow, newest first — the series optimization
+    /// analytics (iter 2) aggregates over.
+    async fn list_workflow_runs(&self, workflow_id: WorkflowId) -> Result<Vec<WorkflowRun>>;
+    /// All recorded runs across every workflow, newest first — for a global
+    /// "what actually ran" feed / cross-workflow analytics.
+    async fn list_all_workflow_runs(&self, limit: u32) -> Result<Vec<WorkflowRun>>;
     /// Revise an existing **Static** spec's authored content ("优化" a hub
     /// workflow) — bumps `version`; `uses`/`maturity`/`source`/`scope`/
     /// `trigger` are preserved untouched from the row being edited. Errors

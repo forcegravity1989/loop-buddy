@@ -230,3 +230,34 @@ CREATE TABLE IF NOT EXISTS knowledge_source (
     updated_at    INTEGER NOT NULL,
     rev           INTEGER NOT NULL DEFAULT 0
 );
+
+-- ═══════════════════════ workflow_run (iter 1 · telemetry foundation) ═══════════════════════
+-- Append-only execution log: the SOLE birthplace of "did this run succeed,
+-- how long did it take, who fired it". Every workflow execution — manual
+-- (RunWorkflow/RunHubWorkflow) and the background scheduler's auto-fire
+-- (tick_scheduler) — records a row here. This is the grain optimization
+-- intelligence (iters 6-12) is built on; without it, no "this workflow fails
+-- 30%" claim is knowable.
+--
+-- A row is inserted at status='running' when the run starts, then its
+-- status/finished_at/duration_ms/phases_completed/error are settled exactly
+-- once when the engine returns. `params_json` is reserved for iter 3
+-- (parameter capture) and is '' until then.
+CREATE TABLE IF NOT EXISTS workflow_run (
+    id               TEXT PRIMARY KEY,
+    workflow_id      TEXT NOT NULL,                 -- FK omitted: a run may outlive a deleted spec
+    workflow_name    TEXT NOT NULL DEFAULT '',      -- snapshot of name at run time
+    project_id       TEXT,                          -- nullable: a hub run need not bind a project
+    session_id       TEXT,
+    trigger          TEXT NOT NULL DEFAULT 'manual',-- 'manual' | 'scheduled'
+    status           TEXT NOT NULL DEFAULT 'running',-- 'running' | 'ok' | 'failed'
+    started_at       INTEGER NOT NULL,
+    finished_at      INTEGER,
+    duration_ms      INTEGER,
+    phases_completed INTEGER NOT NULL DEFAULT 0,
+    error            TEXT NOT NULL DEFAULT '',
+    params_json      TEXT NOT NULL DEFAULT '',
+    created_at       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_run_spec ON workflow_run(workflow_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workflow_run_proj ON workflow_run(project_id, started_at DESC);

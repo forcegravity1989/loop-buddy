@@ -13,6 +13,7 @@
 use crate::derive::{reduce_worst_of, AmberBand, Derived};
 use crate::ids::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, ProjectId, SessionId, SkillId, WorkflowId,
+    WorkflowRunId,
 };
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
@@ -567,6 +568,94 @@ pub struct WorkflowSpec {
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     pub loop_config: LoopConfig,
+}
+
+/// Outcome of one workflow execution — the data a later "should this workflow
+/// be optimized?" decision is built on. Persisted append-only (a run is never
+/// mutated once it settles); the only transition is `Running → {Ok|Failed}`
+/// when the engine returns.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatus {
+    /// Engine is still executing (not yet persisted as a settled row in the
+    /// common path — kept so an in-memory view can show a live run).
+    Running,
+    /// Engine returned `Ok` — every phase completed.
+    Ok,
+    /// Engine returned an error; `error` carries the message.
+    Failed,
+}
+
+impl RunStatus {
+    pub fn text(self) -> &'static str {
+        match self {
+            RunStatus::Running => "running",
+            RunStatus::Ok => "ok",
+            RunStatus::Failed => "failed",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "ok" => RunStatus::Ok,
+            "failed" => RunStatus::Failed,
+            _ => RunStatus::Running,
+        }
+    }
+    /// `true` only for a settled-successful run — the basis of a "healthy
+    /// workflow" signal later (iter 11).
+    pub fn is_ok(self) -> bool {
+        matches!(self, RunStatus::Ok)
+    }
+}
+
+/// What triggered a run — distinguishes a user's manual fire from the
+/// background scheduler's unattended auto-fire, so analytics (iter 2) can
+/// attribute outcomes to the right source.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunTrigger {
+    Manual,
+    Scheduled,
+}
+
+impl RunTrigger {
+    pub fn text(self) -> &'static str {
+        match self {
+            RunTrigger::Manual => "manual",
+            RunTrigger::Scheduled => "scheduled",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "scheduled" => RunTrigger::Scheduled,
+            _ => RunTrigger::Manual,
+        }
+    }
+}
+
+/// One execution record of a workflow. Append-only once settled (`status !=
+/// Running`). `duration_ms` is the real wall-clock the engine took — the
+/// primary cost/health input for optimization. `params_json` is left for
+/// iter 3 (parameter capture) to fill; empty string until then.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkflowRun {
+    pub id: WorkflowRunId,
+    pub workflow_id: WorkflowId,
+    pub workflow_name: String,
+    pub project_id: Option<ProjectId>,
+    pub session_id: Option<SessionId>,
+    pub trigger: RunTrigger,
+    pub status: RunStatus,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    /// Real elapsed milliseconds (`finished_at - started_at`). `None` while
+    /// running or if the clock was unavailable.
+    pub duration_ms: Option<i64>,
+    /// Phases that completed before the run settled (count) — a partial run
+    /// that failed at phase 2 of 5 records `2` here, not a silent hole.
+    pub phases_completed: u32,
+    pub error: String,
+    pub params_json: String,
 }
 
 /// Shared by `stage_workflow` and `stage_template_workflow` — both are the

@@ -18,12 +18,12 @@ use bw_core::derive::{
 };
 use bw_core::model::{
     AgentCard, AgentRef, AgentSkillTag, Connector, CronStatus, CronTask, HubSource,
-    KnowledgeSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, Signal, SkillCard,
-    SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    KnowledgeSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger,
+    Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
-    WorkflowId,
+    WorkflowId, WorkflowRunId,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
@@ -1040,6 +1040,100 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn record_workflow_run_start(
+        &self,
+        workflow_id: WorkflowId,
+        workflow_name: &str,
+        project_id: Option<ProjectId>,
+        session_id: Option<SessionId>,
+        trigger: RunTrigger,
+        started_at: i64,
+    ) -> Result<WorkflowRunId> {
+        let id = WorkflowRunId::from_uuid(Uuid::new_v4());
+        sqlx::query(
+            "INSERT INTO workflow_run
+             (id, workflow_id, workflow_name, project_id, session_id, trigger,
+              status, started_at, finished_at, duration_ms, phases_completed,
+              error, params_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'running', ?, NULL, NULL, 0, '', '', ?)",
+        )
+        .bind(id.uuid().to_string())
+        .bind(workflow_id.uuid().to_string())
+        .bind(workflow_name)
+        .bind(project_id.map(|p| p.uuid().to_string()))
+        .bind(session_id.map(|s| s.uuid().to_string()))
+        .bind(trigger.text())
+        .bind(started_at)
+        .bind(now_unix())
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    async fn settle_workflow_run(
+        &self,
+        id: WorkflowRunId,
+        status: RunStatus,
+        finished_at: i64,
+        duration_ms: i64,
+        phases_completed: u32,
+        error: &str,
+    ) -> Result<()> {
+        // Idempotent: a row already settled to a terminal state is left as-is
+        // so a re-driven dogfood round never overwrites a real past outcome.
+        let existing = sqlx::query("SELECT status FROM workflow_run WHERE id=?")
+            .bind(id.uuid().to_string())
+            .fetch_optional(&self.pool)
+            .await?;
+        match existing {
+            None => Ok(()), // nothing to settle — honest no-op
+            Some(row) => {
+                let cur: String = row.get("status");
+                if cur != "running" {
+                    return Ok(()); // already terminal
+                }
+                sqlx::query(
+                    "UPDATE workflow_run
+                     SET status=?, finished_at=?, duration_ms=?, phases_completed=?, error=?
+                     WHERE id=? AND status='running'",
+                )
+                .bind(status.text())
+                .bind(finished_at)
+                .bind(duration_ms)
+                .bind(phases_completed as i64)
+                .bind(error)
+                .bind(id.uuid().to_string())
+                .execute(&self.pool)
+                .await?;
+                Ok(())
+            }
+        }
+    }
+
+    async fn list_workflow_runs(&self, workflow_id: WorkflowId) -> Result<Vec<WorkflowRun>> {
+        let rows = sqlx::query(
+            "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json
+             FROM workflow_run WHERE workflow_id=? ORDER BY started_at DESC, rowid DESC",
+        )
+        .bind(workflow_id.uuid().to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(parse_run_row).collect())
+    }
+
+    async fn list_all_workflow_runs(&self, limit: u32) -> Result<Vec<WorkflowRun>> {
+        let rows = sqlx::query(
+            "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json
+             FROM workflow_run ORDER BY started_at DESC, rowid DESC LIMIT ?",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(parse_run_row).collect())
+    }
+
     async fn update_workflow_spec(&self, id: WorkflowId, edit: WorkflowEdit) -> Result<()> {
         let row = sqlx::query("SELECT kind_json FROM workflow_spec WHERE id=?")
             .bind(id.uuid().to_string())
@@ -1285,6 +1379,38 @@ impl Store for SqliteStore {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(knowledge_source_row).collect()
+    }
+}
+
+fn parse_run_row(r: &sqlx::sqlite::SqliteRow) -> WorkflowRun {
+    let id = parse_uuid(&r.get::<String, _>("id"), WorkflowRunId::from_uuid)
+        .unwrap_or(WorkflowRunId::nil());
+    let workflow_id = parse_uuid(&r.get::<String, _>("workflow_id"), WorkflowId::from_uuid)
+        .unwrap_or(WorkflowId::nil());
+    let project_id = r
+        .get::<Option<String>, _>("project_id")
+        .filter(|s| !s.is_empty())
+        .and_then(|s| parse_uuid(&s, ProjectId::from_uuid).ok());
+    let session_id = r
+        .get::<Option<String>, _>("session_id")
+        .filter(|s| !s.is_empty())
+        .and_then(|s| parse_uuid(&s, SessionId::from_uuid).ok());
+    let finished_at: Option<i64> = r.get("finished_at");
+    let duration_ms: Option<i64> = r.get("duration_ms");
+    WorkflowRun {
+        id,
+        workflow_id,
+        workflow_name: r.get("workflow_name"),
+        project_id,
+        session_id,
+        trigger: RunTrigger::parse(&r.get::<String, _>("trigger")),
+        status: RunStatus::parse(&r.get::<String, _>("status")),
+        started_at: r.get("started_at"),
+        finished_at,
+        duration_ms,
+        phases_completed: r.get::<i64, _>("phases_completed") as u32,
+        error: r.get("error"),
+        params_json: r.get("params_json"),
     }
 }
 
