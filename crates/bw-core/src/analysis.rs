@@ -10,7 +10,7 @@
 //! signals, optimization proposals. The split mirrors the existing derive
 //! chain: raw values in, derived signal out.
 
-use crate::model::{RunStatus, RunTrigger, WorkflowRun};
+use crate::model::{RunStatus, RunTrigger, Signal, WorkflowRun};
 use std::collections::{HashMap, HashSet};
 
 /// One cluster of failed runs sharing a common cause (iter 7). The "cause" is
@@ -379,13 +379,48 @@ pub fn suggest_cadence(
         };
     }
 
-    // Rule 3: healthy + no manual demand → keep. (We deliberately do NOT
-    // suggest relaxing a cadence on low demand — silently running less often
-    // can hide a regression. Keeping is the safe default.)
+    // Rule 3: healthy + no manual demand → keep.
     CadenceSuggestion {
         current,
         suggested: None,
         reason: "节奏合适:定时健康且无手动补跑信号。".into(),
+    }
+}
+
+// ───────────────────────── iter 11: workflow health signal ─────────────────────────
+
+/// Derive a workflow's health `Signal` from its run analytics (iter 11) —
+/// reusing the *same* `Signal{Green,Amber,Red,Unknown}` the metric derive
+/// chain already defines, so a workflow is "green" by exactly the same
+/// semantics a metric is. Pure + threshold-documented.
+///
+/// * `Unknown` — no settled runs yet (mirrors "no data ≠ green"; never a
+///   fabricated green for a workflow that's never really run).
+/// * `Red`     — success rate < 50% over ≥2 settled runs (mostly broken).
+/// * `Amber`   — success rate 50–80%, OR the most recent run failed (a
+///   fresh regression deserves attention even if the long-run rate is ok).
+/// * `Green`   — success rate ≥ 80% over ≥2 settled runs, last run ok.
+pub fn workflow_health(a: &WorkflowRunAnalytics) -> Signal {
+    // No evidence → Unknown, never a guessed green. This is the load-bearing
+    // rule: it's what stops a brand-new workflow from masquerading as healthy.
+    let Some(rate) = a.success_rate else {
+        return Signal::Unknown;
+    };
+    let settled = a.ok_runs + a.failed_runs;
+    if settled < 2 {
+        // One run isn't a track record — call it Unknown, not Green/Red on a
+        // sample of one. Same caution as a metric with a single observation.
+        return Signal::Unknown;
+    }
+    // A fresh failure is an amber regression even when the rate looks fine —
+    // "it broke just now" is actionable before the long-run average catches up.
+    let last_failed = matches!(a.last_status, Some(RunStatus::Failed));
+    if rate < 0.5 {
+        Signal::Red
+    } else if rate < 0.8 || last_failed {
+        Signal::Amber
+    } else {
+        Signal::Green
     }
 }
 
@@ -596,6 +631,50 @@ mod tests {
         let s = suggest_cadence(Cadence::Daily, &eff, 0);
         assert_eq!(s.suggested, None);
         assert!(s.reason.contains("合适"));
+    }
+
+    #[test]
+    fn workflow_health_unknown_until_two_settled_runs() {
+        // No runs → Unknown (never a guessed green).
+        assert_eq!(
+            workflow_health(&analytics(0, 0, 0, None, None)),
+            Signal::Unknown
+        );
+        // One run, even successful → still Unknown (sample of one isn't a track record).
+        assert_eq!(
+            workflow_health(&analytics(1, 1, 0, Some(1.0), None)),
+            Signal::Unknown
+        );
+    }
+
+    #[test]
+    fn workflow_health_red_amber_green_by_success_rate() {
+        // 40% over 5 settled → Red.
+        assert_eq!(
+            workflow_health(&analytics(5, 2, 3, Some(0.4), None)),
+            Signal::Red
+        );
+        // 60% over 5 → Amber.
+        assert_eq!(
+            workflow_health(&analytics(5, 3, 2, Some(0.6), None)),
+            Signal::Amber
+        );
+        // 90% over 10, last ok → Green.
+        let mut green = analytics(10, 9, 1, Some(0.9), None);
+        green.last_status = Some(RunStatus::Ok);
+        assert_eq!(workflow_health(&green), Signal::Green);
+    }
+
+    #[test]
+    fn workflow_health_amber_when_rate_ok_but_last_failed() {
+        // 90% but the most recent run failed → Amber (fresh regression).
+        let mut a = analytics(10, 9, 1, Some(0.9), None);
+        a.last_status = Some(RunStatus::Failed);
+        assert_eq!(
+            workflow_health(&a),
+            Signal::Amber,
+            "recent failure is amber"
+        );
     }
 
     #[test]
