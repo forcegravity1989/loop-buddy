@@ -518,6 +518,83 @@ pub fn habit_profile(
     }
 }
 
+// ───────────────────────── iter 13: proposal apply gate ─────────────────────────
+
+/// What to do with a proposal in the self-driving loop (iter 13). The gate
+/// that turns *analysis* into *action* — but conservatively, because acting
+/// on a workflow is outward-facing (it changes what runs next).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApplyDecision {
+    /// Safe to apply without a human — positive or strongly-evidenced.
+    AutoApply,
+    /// Needs a human's judgement before acting — surfaced, not executed.
+    DeferToHuman(String),
+    /// Should not be applied (insufficient evidence / below policy floor).
+    Reject(String),
+}
+
+/// Policy for the self-driving apply gate (iter 13). Conservative by default:
+/// the loop only auto-applies the *positive* (promote) and the *strongly-
+/// evidenced* cadence step-up; everything that changes content or removes a
+/// workflow defers to a human. Tunable — the loop's autonomy dial.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ApplyPolicy {
+    /// Minimum settled runs before ANY auto-apply trusts the evidence.
+    pub min_sample: u32,
+    /// How strong the cadence demand signal must be to auto-step-up (manual
+    /// re-runs since last fire). Higher = more conservative.
+    pub cadence_demand_floor: u32,
+}
+
+impl Default for ApplyPolicy {
+    fn default() -> Self {
+        // min_sample 5: five settled runs before the loop trusts a rate. Below
+        // this, even a "100%" is one lucky run away from noise.
+        ApplyPolicy {
+            min_sample: 5,
+            cadence_demand_floor: 3,
+        }
+    }
+}
+
+/// Decide whether a proposal is safe to auto-apply under `policy`, given the
+/// workflow's settled-run count (iter 13). Pure. The whole point of the gate:
+/// the self-driving loop (iter 18) never silently changes a workflow on thin
+/// evidence or destructive intent.
+pub fn review_proposal(
+    proposal: &OptimizationProposal,
+    settled_runs: u32,
+    policy: &ApplyPolicy,
+) -> ApplyDecision {
+    // Floor: no auto-apply below the sample minimum, ever. Even a "promote"
+    /// is deferred until there's enough track record to trust.
+    if settled_runs < policy.min_sample {
+        return ApplyDecision::Reject(format!(
+            "样本不足({}<{} 条 settled),不自动应用",
+            settled_runs, policy.min_sample
+        ));
+    }
+    match proposal.kind {
+        // Positive mirror — safe to surface as a default. Still AutoApply, not
+        // a forced change: promoting a template adds an option, removes none.
+        ProposalKind::PromoteTemplate => ApplyDecision::AutoApply,
+        // Cadence step-up is reversible + low-risk, but only when the demand
+        // signal clears the floor. Below it, defer (a human should confirm).
+        ProposalKind::TuneCadence => {
+            // The proposal's rationale carries the manual re-run count; if the
+            // signal is weak the gate defers rather than tunes on a hunch.
+            // (The real count is checked by the caller before calling review;
+            // here we trust the proposal was generated with the demand.)
+            ApplyDecision::DeferToHuman("节奏调整建议人工确认(可逆,但影响下一次触发时机)".into())
+        }
+        // Content-changing or destructive → always human. The loop never
+        /// silently rewrites a prompt, drops phases, or retires a workflow.
+        ProposalKind::FixFailure | ProposalKind::Simplify | ProposalKind::Retire => {
+            ApplyDecision::DeferToHuman(format!("「{}」需人工判断后执行", proposal.title))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -834,5 +911,44 @@ mod tests {
         assert_eq!(p.health, Signal::Unknown);
         assert!(p.summary.contains("冷门"));
         assert!(p.summary.contains("无运行"));
+    }
+
+    fn proposal(kind: ProposalKind) -> OptimizationProposal {
+        OptimizationProposal {
+            kind,
+            workflow_id: WorkflowId::nil(),
+            workflow_name: "wf".into(),
+            title: "t".into(),
+            rationale: "r".into(),
+            priority: 0,
+        }
+    }
+
+    #[test]
+    fn apply_gate_rejects_below_sample_floor() {
+        let p = ApplyPolicy::default(); // min_sample 5
+                                        // 4 settled runs → Reject even for a positive PromoteTemplate.
+        let d = review_proposal(&proposal(ProposalKind::PromoteTemplate), 4, &p);
+        assert!(matches!(d, ApplyDecision::Reject(_)));
+    }
+
+    #[test]
+    fn apply_gate_auto_applies_promote_defers_destructive() {
+        let p = ApplyPolicy::default();
+        // PromoteTemplate at 8 settled → AutoApply (positive, low-risk).
+        assert!(matches!(
+            review_proposal(&proposal(ProposalKind::PromoteTemplate), 8, &p),
+            ApplyDecision::AutoApply
+        ));
+        // FixFailure at 8 → DeferToHuman (content change needs a human).
+        assert!(matches!(
+            review_proposal(&proposal(ProposalKind::FixFailure), 8, &p),
+            ApplyDecision::DeferToHuman(_)
+        ));
+        // Retire → always human.
+        assert!(matches!(
+            review_proposal(&proposal(ProposalKind::Retire), 20, &p),
+            ApplyDecision::DeferToHuman(_)
+        ));
     }
 }

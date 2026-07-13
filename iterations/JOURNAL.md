@@ -127,3 +127,13 @@
 - **运维师**:纯组合无副作用;tier 阈值集中可调。**Arc 2 优化智能完成——五角色环闭。** 回流:画像 → iter 19 默认推断 + iter 24 旅程可视化。
 
 **门禁**:fmt clean · clippy clean · analysis 共 15 测试。
+
+## Iter 13 · 建议评审/应用管线(自改进闭环 1/8)
+
+- **原型师**:iter 9 能产建议,但建议不会被应用——闭环断在"知道了不行动"。**假设**:但全自动应用危险(改 prompt/退役是外向操作)。需要"度量门控":哪些可自动、哪些必须人工。**DoD**:建议 → 门控决策(AutoApply/DeferToHuman/Reject)。
+- **构建师**:`ApplyDecision{AutoApply, DeferToHuman(reason), Reject(reason)}` + `ApplyPolicy{min_sample, cadence_demand_floor}`(可调的"自治度旋钮")+ `review_proposal(proposal, settled, policy)` 纯函数。
+- **优化师**:样本地板(min_sample=5):低于此一律 Reject(一条 100% 是噪声);**只有 PromoteTemplate 自动**(正向·低风险·只增选项不删);FixFailure/Simplify/Retire 一律人工(改内容/破坏性);TuneCadence 可逆但仍建议人工确认(影响下次触发时机)。+2 测试。
+- **运营推广师**:这是 iter 18 闭环自驱的"刹车"——系统能自己跑优化循环,但破坏性动作必须人确认。PM 模板"度量门控决策"的样例。
+- **运维师**:门控纯函数可单测;policy 可调(min_sample/地板旋钮);默认保守。**回流**:决策 → iter 18 自驱循环执行 AutoApply、搁置 Defer。
+
+**门禁**:fmt clean · clippy clean · analysis 共 17 测试。
