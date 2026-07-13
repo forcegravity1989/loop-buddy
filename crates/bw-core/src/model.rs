@@ -535,7 +535,7 @@ pub enum WorkflowKind {
     },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopConfig {
     pub retries: u8,
     pub max_iter: u8,

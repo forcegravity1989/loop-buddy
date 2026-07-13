@@ -905,6 +905,89 @@ pub fn recommend_for_stage(
     })
 }
 
+// ───────────────────────── iter 19: habit-based defaults ─────────────────────────
+
+use crate::model::LoopConfig;
+
+/// Defaults inferred from observed habit (iter 19) — what a *new* workflow's
+/// phase-count / loop / trigger should default to, given how the hub's
+/// workflows are actually run. Every field is `Option` — inference proposes,
+/// it doesn't fabricate: `None` means "no clear habit, leave the current
+/// default".
+#[derive(Clone, Debug, PartialEq)]
+pub struct SuggestedDefaults {
+    /// The phase_count most runs in the profile used, if one dominated.
+    pub phase_count: Option<u8>,
+    /// The loop config most runs used.
+    pub loop_config: Option<LoopConfig>,
+    /// Whether the habit leans scheduled or manual.
+    pub prefers_scheduled: Option<bool>,
+    /// Human-readable rationale for the whole suggestion.
+    pub why: String,
+}
+
+/// Infer sensible defaults for a new workflow from a habit profile (iter 19).
+/// Pure. Only suggests when a habit is **clear** (≥60% share) — a 40/30/30
+/// split has no dominant shape, so it returns `None`s rather than guessing.
+/// This is how the hub "贴近用户使用习惯": new workflows start where the
+/// user's behavior already is.
+pub fn infer_defaults(profile: &RunShapeProfile) -> SuggestedDefaults {
+    // 60% threshold: a habit must clearly dominate before it becomes a default.
+    // Below that, the current authored default is more honest than a guess.
+    const DOMINANCE: f32 = 0.6;
+    let phase_count = profile
+        .dominant_phase_count
+        .and_then(|(n, share)| (share >= DOMINANCE).then_some(n));
+    let loop_config = profile.dominant_loop.and_then(|((rt, mi), share)| {
+        (share >= DOMINANCE).then_some(LoopConfig {
+            retries: rt,
+            max_iter: mi,
+        })
+    });
+    let (manual, scheduled) = profile.trigger_split;
+    let total = manual + scheduled;
+    let prefers_scheduled = if total >= 3 {
+        let sched_share = scheduled as f32 / total as f32;
+        if sched_share >= DOMINANCE {
+            Some(true)
+        } else if (1.0 - sched_share) >= DOMINANCE {
+            Some(false)
+        } else {
+            None // no clear lean — 50/50 stays neutral
+        }
+    } else {
+        None
+    };
+    let mut bits = Vec::new();
+    if let Some(n) = phase_count {
+        bits.push(format!("默认 {} 阶段", n));
+    }
+    if let Some(lc) = &loop_config {
+        bits.push(format!(
+            "loop retries={}/max_iter={}",
+            lc.retries, lc.max_iter
+        ));
+    }
+    if let Some(sched) = prefers_scheduled {
+        bits.push(if sched {
+            "默认定时触发".into()
+        } else {
+            "默认手动触发".into()
+        });
+    }
+    let why = if bits.is_empty() {
+        "习惯未形成明显主导(各档<60%),保留当前默认。".into()
+    } else {
+        format!("基于 {} 条运行的习惯:{}", profile.sample, bits.join(" · "))
+    };
+    SuggestedDefaults {
+        phase_count,
+        loop_config,
+        prefers_scheduled,
+        why,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1417,5 +1500,41 @@ mod tests {
         let rec = recommend_for_stage(StageKind::Build, &pool).unwrap();
         assert_eq!(rec.workflow_name, "新·未测");
         assert!(rec.why.contains("证据"));
+    }
+
+    #[test]
+    fn infer_defaults_when_habit_dominates() {
+        // 70% of runs used 3 phases + loop(1,3) → both suggested.
+        let p = RunShapeProfile {
+            sample: 10,
+            dominant_phase_count: Some((3, 0.7)),
+            dominant_loop: Some(((1, 3), 0.7)),
+            trigger_split: (8, 2), // 80% manual
+        };
+        let d = infer_defaults(&p);
+        assert_eq!(d.phase_count, Some(3));
+        assert_eq!(
+            d.loop_config,
+            Some(LoopConfig {
+                retries: 1,
+                max_iter: 3
+            })
+        );
+        assert_eq!(d.prefers_scheduled, Some(false));
+        assert!(d.why.contains("3 阶段"));
+    }
+
+    #[test]
+    fn infer_defaults_none_when_no_dominant_habit() {
+        // 40% share — below the 60% dominance floor → no guess.
+        let p = RunShapeProfile {
+            sample: 10,
+            dominant_phase_count: Some((3, 0.4)),
+            dominant_loop: None,
+            trigger_split: (5, 5),
+        };
+        let d = infer_defaults(&p);
+        assert_eq!(d.phase_count, None, "no dominant habit → no guess");
+        assert!(d.why.contains("未形成"));
     }
 }
