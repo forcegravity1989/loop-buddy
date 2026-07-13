@@ -595,6 +595,114 @@ pub fn review_proposal(
     }
 }
 
+// ───────────────────────── iter 14: A/B version comparison ─────────────────────────
+
+/// Did an optimization actually help? (iter 14) The verdict on a version
+/// change, comparing the settled runs *before* vs *after*.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AbVerdict {
+    /// After is meaningfully better on the metric that mattered.
+    Improved,
+    /// After is meaningfully worse — roll back / reconsider.
+    Regressed,
+    /// Not enough settled runs on one or both sides to tell.
+    Inconclusive(String),
+}
+
+/// The before/after delta from one version change (iter 14). A positive
+/// `rate_delta` and negative `duration_delta` = the optimization worked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VersionDelta {
+    pub before_settled: u32,
+    pub after_settled: u32,
+    pub before_rate: Option<f32>,
+    pub after_rate: Option<f32>,
+    /// `after - before` success rate. `None` when either side has no data.
+    pub rate_delta: Option<f32>,
+    pub before_median_ms: Option<i64>,
+    pub after_median_ms: Option<i64>,
+    pub duration_delta_ms: Option<i64>,
+    pub verdict: AbVerdict,
+}
+
+/// Compare two run slices (before vs after a version change) into a delta +
+/// verdict (iter 14). Pure. A side needs ≥3 settled runs to count; below that
+/// the verdict is `Inconclusive` — never a confident "improved" on thin data.
+pub fn ab_compare(before: &[WorkflowRun], after: &[WorkflowRun]) -> VersionDelta {
+    let (b_settled, b_rate, b_med) = slice_stats(before);
+    let (a_settled, a_rate, a_med) = slice_stats(after);
+    let rate_delta = match (b_rate, a_rate) {
+        (Some(b), Some(a)) => Some(a - b),
+        _ => None,
+    };
+    let duration_delta_ms = match (b_med, a_med) {
+        (Some(b), Some(a)) => Some(a - b),
+        _ => None,
+    };
+    // Verdict needs ≥3 settled on BOTH sides, else we can't trust a delta.
+    let verdict = if b_settled < 3 || a_settled < 3 {
+        AbVerdict::Inconclusive(format!(
+            "样本不足(前 {}/后 {} 条 settled,各需 ≥3)",
+            b_settled, a_settled
+        ))
+    } else if let Some(d) = rate_delta {
+        // Rate is the primary signal; duration is secondary tiebreak.
+        if d >= 0.1 {
+            AbVerdict::Improved
+        } else if d <= -0.1 {
+            AbVerdict::Regressed
+        } else {
+            // Rate flat within ±10% — let duration break the tie (faster = improved).
+            match duration_delta_ms {
+                Some(dd) if dd <= -500 => AbVerdict::Improved,
+                Some(dd) if dd >= 500 => AbVerdict::Regressed,
+                _ => AbVerdict::Inconclusive("成功率与耗时均无显著变化".into()),
+            }
+        }
+    } else {
+        AbVerdict::Inconclusive("缺少成功率数据".into())
+    };
+    VersionDelta {
+        before_settled: b_settled,
+        after_settled: a_settled,
+        before_rate: b_rate,
+        after_rate: a_rate,
+        rate_delta,
+        before_median_ms: b_med,
+        after_median_ms: a_med,
+        duration_delta_ms,
+        verdict,
+    }
+}
+
+/// (settled_count, success_rate, median_duration) for a run slice. Factored
+/// out so both sides of the comparison use the identical computation.
+fn slice_stats(runs: &[WorkflowRun]) -> (u32, Option<f32>, Option<i64>) {
+    let settled: Vec<&WorkflowRun> = runs
+        .iter()
+        .filter(|r| matches!(r.status, RunStatus::Ok | RunStatus::Failed))
+        .collect();
+    if settled.is_empty() {
+        return (0, None, None);
+    }
+    let ok = settled.iter().filter(|r| r.status == RunStatus::Ok).count() as u32;
+    let n = settled.len() as u32;
+    let rate = Some(ok as f32 / n as f32);
+    let mut durs: Vec<i64> = settled.iter().filter_map(|r| r.duration_ms).collect();
+    durs.sort_unstable();
+    let med = if durs.is_empty() {
+        None
+    } else {
+        let mid = durs.len() / 2;
+        Some(if durs.len() % 2 == 0 {
+            (durs[mid - 1] + durs[mid]) / 2
+        } else {
+            durs[mid]
+        })
+    };
+    (n, rate, med)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -935,20 +1043,79 @@ mod tests {
     #[test]
     fn apply_gate_auto_applies_promote_defers_destructive() {
         let p = ApplyPolicy::default();
-        // PromoteTemplate at 8 settled → AutoApply (positive, low-risk).
         assert!(matches!(
             review_proposal(&proposal(ProposalKind::PromoteTemplate), 8, &p),
             ApplyDecision::AutoApply
         ));
-        // FixFailure at 8 → DeferToHuman (content change needs a human).
         assert!(matches!(
             review_proposal(&proposal(ProposalKind::FixFailure), 8, &p),
             ApplyDecision::DeferToHuman(_)
         ));
-        // Retire → always human.
         assert!(matches!(
             review_proposal(&proposal(ProposalKind::Retire), 20, &p),
             ApplyDecision::DeferToHuman(_)
         ));
+    }
+
+    fn settled(statuses: &[RunStatus], dur: i64) -> Vec<WorkflowRun> {
+        statuses
+            .iter()
+            .enumerate()
+            .map(|(i, &st)| WorkflowRun {
+                id: WorkflowRunId::nil(),
+                workflow_id: WorkflowId::nil(),
+                workflow_name: "w".into(),
+                project_id: None,
+                session_id: None,
+                trigger: RunTrigger::Manual,
+                status: st,
+                started_at: i as i64,
+                finished_at: Some(i as i64 + 1),
+                duration_ms: Some(dur + i as i64),
+                phases_completed: 1,
+                error: String::new(),
+                params_json: String::new(),
+                cron_task_id: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ab_compares_rate_and_flags_improvement() {
+        // Before: 1/4 ok (25%). After: 4/4 ok (100%) → Improved.
+        let before = settled(
+            &[
+                RunStatus::Ok,
+                RunStatus::Failed,
+                RunStatus::Failed,
+                RunStatus::Failed,
+            ],
+            200,
+        );
+        let after = settled(
+            &[RunStatus::Ok, RunStatus::Ok, RunStatus::Ok, RunStatus::Ok],
+            200,
+        );
+        let d = ab_compare(&before, &after);
+        assert_eq!(d.verdict, AbVerdict::Improved);
+        assert!(d.rate_delta.unwrap() > 0.5);
+    }
+
+    #[test]
+    fn ab_inconclusive_on_thin_data() {
+        // Only 1 settled on the after side → Inconclusive.
+        let before = settled(&[RunStatus::Ok, RunStatus::Ok, RunStatus::Ok], 100);
+        let after = settled(&[RunStatus::Ok], 100);
+        let d = ab_compare(&before, &after);
+        assert!(matches!(d.verdict, AbVerdict::Inconclusive(_)));
+    }
+
+    #[test]
+    fn ab_flat_rate_breaks_tie_on_duration() {
+        // Same 100% rate both sides, but after is 1000ms faster → Improved.
+        let before = settled(&[RunStatus::Ok, RunStatus::Ok, RunStatus::Ok], 1500);
+        let after = settled(&[RunStatus::Ok, RunStatus::Ok, RunStatus::Ok], 500);
+        let d = ab_compare(&before, &after);
+        assert_eq!(d.verdict, AbVerdict::Improved, "duration breaks the tie");
     }
 }

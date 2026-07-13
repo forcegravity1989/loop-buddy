@@ -137,3 +137,13 @@
 - **运维师**:门控纯函数可单测;policy 可调(min_sample/地板旋钮);默认保守。**回流**:决策 → iter 18 自驱循环执行 AutoApply、搁置 Defer。
 
 **门禁**:fmt clean · clippy clean · analysis 共 17 测试。
+
+## Iter 14 · 版本 A/B 对比(自改进闭环 2/8)
+
+- **原型师**:iter 5 存了版本史,iter 13 能应用建议——但"优化后到底变好没"答不上来。**假设**:无反馈的优化是盲改,A/B 对比给"该回滚还是继续"。**DoD**:版本前后 run 切片对比 → delta + 判定。
+- **构建师**:`VersionDelta`(前后 settled/成功率/中位耗时 + delta)+ `AbVerdict{Improved,Regressed,Inconclusive}` + `ab_compare(before, after)` 纯函数;`slice_stats()` 提取每侧统计。
+- **优化师**:**双侧各需 ≥3 settled** 才下判定(否则 Inconclusive,绝不在薄数据上喊"改善了");成功率是主信号(±10% 阈),平局时耗时打破(±500ms);Regressed 明确给出(支持回滚决策)。+3 测试。
+- **运营推广师**:一句话——"v2 比 v1 成功率 +50pp,耗时 -300ms → 改善,保留"。喂 iter 20 成效报告 + iter 18 闭环(回归则触发告警)。
+- **运维师**:纯函数;Inconclusive 不等于"没问题"(诚实区分"没变化"和"看不出");回滚判定可执行。**回流**:A/B → iter 18 自驱的回归检测 + iter 20 成效。
+
+**门禁**:fmt clean · clippy clean · analysis 共 20 测试。
