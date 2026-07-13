@@ -17,6 +17,7 @@
 //!   modelled so illegal states are unrepresentable.
 //! - [`derive`] — the metric→signal→health chain + the sealed [`derive::Derived`].
 
+pub mod analysis;
 pub mod derive;
 pub mod ids;
 pub mod model;

@@ -67,3 +67,13 @@
 - **运维师**:只读聚合,无写入;GROUP BY ws.id 稳定。**回流**:冷热是 iter 11 健康信号的输入之一。
 
 **门禁**:fmt clean · clippy clean · **run_outcome 9 tests pass**(+1)。
+
+## Iter 07 · 失败模式检测(优化智能 2/7)
+
+- **原型师**:失败是一团散沙——每条 run 一个 error 串,看不出"根因"。**假设**:若 10 次失败里 7 次是同一个根因,修那一个就消掉 70% 失败;但散沙状态下看不出来。**DoD**:按归一化根因聚类,频次降序。
+- **构建师**:新建 `bw-core::analysis` 纯函数层(无 IO/无 async,wasm-clean);`failure_modes(runs) -> Vec<FailureMode>` 按 `normalize_cause`(去 `:`/`—`/`(`/换行 + 小写)聚类根因,带 count + affected_workflows(跨工作流=系统性问题)+ last_seen。
+- **优化师**:纯函数 → 合成数据单测,零 DB 开销;归一化剥离 ` (retry N)` 等易变后缀让同根因合并;affected_workflows 区分"单工作流问题"vs"系统性问题";空输入返回 `[]` 不报错。+2 测试。
+- **运营推广师**:一句话——"修'模拟·第二步失败'(7次,1工作流)能消掉 70% 失败"。喂 iter 9 优化建议的"失败驱动"输入。
+- **运维师**:纯函数无副作用无写入;`analysis` 模块挂 bw-core(复用 derive 链"原始值进、判断出"的同构)。**回流**:失败模式 → iter 11 健康信号的 Red 判据之一。
+
+**门禁**:fmt clean · clippy clean · analysis +2 测试通过。
