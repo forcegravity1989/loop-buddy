@@ -202,7 +202,12 @@ pub fn propose_optimizations(
                 kind: ProposalKind::FixFailure,
                 workflow_id: id,
                 workflow_name: name.clone(),
-                title: format!("成功率 {:.0}% · 先修「{}」", rate * 100.0, cause),
+                title: format!(
+                    "「{}」成功率 {:.0}% · 先修「{}」",
+                    name,
+                    rate * 100.0,
+                    cause
+                ),
                 rationale: format!(
                     "近 {} 次运行成功 {}/{}({:.0}%),头号失败「{}」占 {} 次 —— 修它收益最大。",
                     analytics.total_runs,
@@ -223,7 +228,7 @@ pub fn propose_optimizations(
             kind: ProposalKind::Retire,
             workflow_id: id,
             workflow_name: name.clone(),
-            title: "从未运行 · 复核是否保留".into(),
+            title: format!("「{}」从未运行 · 复核是否保留", name),
             rationale: format!(
                 "「{}」进 hub 后一次未跑 —— 要么退役减负,要么明确它的触发场景。",
                 name
@@ -240,7 +245,11 @@ pub fn propose_optimizations(
                     kind: ProposalKind::TuneCadence,
                     workflow_id: id,
                     workflow_name: name.clone(),
-                    title: format!("定时成功率 {:.0}% · 调节奏或修目标", rate * 100.0),
+                    title: format!(
+                        "「{}」定时成功率 {:.0}% · 调节奏或修目标",
+                        name,
+                        rate * 100.0
+                    ),
                     rationale: format!(
                         "定时任务自动触发 {} 次,成功 {}({:.0}%) —— 继续烧 run 不如先修。",
                         eff.fires,
@@ -262,7 +271,7 @@ pub fn propose_optimizations(
                 kind: ProposalKind::Simplify,
                 workflow_id: id,
                 workflow_name: name.clone(),
-                title: format!("典型耗时 {}ms · 考虑精简", med),
+                title: format!("「{}」典型耗时 {}ms · 考虑精简", name, med),
                 rationale: format!(
                     "中位耗时 {}ms(>5s) —— 看哪个阶段最重,能否拆/并行/缓存。",
                     med
@@ -280,7 +289,7 @@ pub fn propose_optimizations(
                 kind: ProposalKind::PromoteTemplate,
                 workflow_id: id,
                 workflow_name: name.clone(),
-                title: format!("高频且可靠({:.0}%) · 可作模板", rate * 100.0),
+                title: format!("「{}」高频且可靠({:.0}%) · 可作模板", name, rate * 100.0),
                 rationale: format!(
                     "{} 次运行成功 {}/{},中位 {}ms —— 形状稳定,适合做同类任务的默认模板。",
                     analytics.total_runs,
@@ -566,8 +575,17 @@ pub fn review_proposal(
     settled_runs: u32,
     policy: &ApplyPolicy,
 ) -> ApplyDecision {
-    // Floor: no auto-apply below the sample minimum, ever. Even a "promote"
-    // is deferred until there's enough track record to trust.
+    // Retire is *about* absence-of-runs — a cold workflow has 0 settled runs
+    // by definition, so the sample floor must not block it. It always defers
+    // to a human (retiring is a judgement call, never auto-applied).
+    if proposal.kind == ProposalKind::Retire {
+        return ApplyDecision::DeferToHuman(format!(
+            "「{}」需人工判断后执行(退役是判断题)",
+            proposal.title
+        ));
+    }
+    // Floor: no auto-apply below the sample minimum for rate-based proposals.
+    // Even a "promote" defers until there's enough track record to trust.
     if settled_runs < policy.min_sample {
         return ApplyDecision::Reject(format!(
             "样本不足({}<{} 条 settled),不自动应用",
@@ -581,17 +599,15 @@ pub fn review_proposal(
         // Cadence step-up is reversible + low-risk, but only when the demand
         // signal clears the floor. Below it, defer (a human should confirm).
         ProposalKind::TuneCadence => {
-            // The proposal's rationale carries the manual re-run count; if the
-            // signal is weak the gate defers rather than tunes on a hunch.
-            // (The real count is checked by the caller before calling review;
-            // here we trust the proposal was generated with the demand.)
             ApplyDecision::DeferToHuman("节奏调整建议人工确认(可逆,但影响下一次触发时机)".into())
         }
-        // Content-changing or destructive → always human. The loop never
-        // silently rewrites a prompt, drops phases, or retires a workflow.
-        ProposalKind::FixFailure | ProposalKind::Simplify | ProposalKind::Retire => {
+        // Content-changing → always human. The loop never silently rewrites a
+        // prompt or drops phases.
+        ProposalKind::FixFailure | ProposalKind::Simplify => {
             ApplyDecision::DeferToHuman(format!("「{}」需人工判断后执行", proposal.title))
         }
+        // Retire handled above (before the sample floor).
+        ProposalKind::Retire => unreachable!(),
     }
 }
 

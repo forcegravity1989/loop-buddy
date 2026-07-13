@@ -177,3 +177,13 @@
 - **运维师**:纯函数;确定性排序(健康→热度→名字);红色排除是硬规则。**回流**:推荐 → iter 18 自驱循环可"自动跑推荐项"+ iter 22 仿真器。
 
 **门禁**:fmt clean · clippy clean · analysis 共 24 测试。
+
+## Iter 18 · 闭环定时优化运行(自改进闭环 6/8)—— 核心引擎
+
+- **原型师**:前 17 轮造了所有零件,但没组装成"自己跑起来的循环"。**假设**:目标的"通过 schedule 不断优化 workflow 本身"需要一个可被定时驱动的 measure→propose→gate 闭环。**DoD**:`App::run_optimization_cycle()` 一调,全 hub 自动度量+建议+门控+出报告。
+- **构建师**:`OptimizationReport`(scanned/proposals/auto_applied/defer/rejected)+ `Event::OptimizationCycleReported` + `App::run_optimization_cycle()`:遍历 hub → 每工作流取 analytics+usage+runs+failures → `propose_optimizations` → `review_proposal` 门控 → 分类 AutoApply/Defer/Reject → 报告 + 事件。
+- **优化师**:修复门控 bug——Retire 是"关于零运行"的建议,样本地板不该拦它(0 run 不是证据不足,而是建议本身的前提)→ Retire 在地板前分流;冷工作流 analytics 名为空 → 从 spec 补名(诚实);AutoApply 仅 PromoteTemplate(正向),其余人工。+1 集成测试验证 热+可靠→自动、冷→人工。
+- **运营推广师**:一句话——"扫了 N 个工作流,发现 M 个机会,自动标记 K 个达标,余下 J 个待人"。这是目标"自驱优化"的可运行证据。iter 22 仿真器会定时驱动它。
+- **运维师**:门控保守(破坏性永不自动);报告是只读 Receipt(真实计数);事件可订阅。**回流**:闭环 → iter 20 成效(多轮跑下来 hub 整体变好了吗)+ iter 22 定时驱动。
+
+**门禁**:fmt clean · clippy clean · **全 121 测试通过**(基线 87 → +34)。

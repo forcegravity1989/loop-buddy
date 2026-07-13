@@ -645,3 +645,82 @@ async fn usage_ranking_puts_hot_first_and_flags_cold() {
     assert!(cold_row.cold, "never-run workflow flagged cold");
     assert!(cold_row.success_rate.is_none());
 }
+
+#[tokio::test]
+async fn optimization_cycle_measures_proposes_and_gates() {
+    // The self-driving loop's exit gate (iter 18): prove the full
+    // measure→propose→gate cycle runs over real hub data and produces an
+    // honest report — auto-applies the safe-positive, defers the rest.
+    let path = tmp_db();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    let project = quick_project(&mut app, "项目 · 自驱循环").await;
+
+    // Hot + green: 6 successful runs → should auto-apply PromoteTemplate.
+    let hot = WorkflowId::new();
+    // Cold: never run → should defer (Retire) to human.
+    let cold = WorkflowId::new();
+    for (id, name) in [(hot, "热·可靠"), (cold, "冷·从未跑")] {
+        app.dispatch(Command::CreateWorkflowSpec {
+            id,
+            name: name.into(),
+            prompt: "p".into(),
+            goal: "g".into(),
+            stage_ref: None,
+            phases: vec!["s".into()],
+            agents: vec![],
+            skills: vec![],
+            loop_config: LoopConfig {
+                retries: 1,
+                max_iter: 1,
+            },
+            maturity: Maturity::Fresh,
+            scope: String::new(),
+            source: HubSource::SelfBuilt,
+            trigger: None,
+        })
+        .await
+        .unwrap();
+    }
+    for _ in 0..6 {
+        let session = bw_core::SessionId::new();
+        app.dispatch(Command::StartSession {
+            id: session,
+            stage_kind: None,
+            kind: bw_store::SessionKind::Create,
+            title: "run".into(),
+        })
+        .await
+        .unwrap();
+        app.dispatch(Command::RunHubWorkflow {
+            workflow_id: hot,
+            session,
+        })
+        .await
+        .unwrap();
+    }
+    let _ = project;
+
+    let report = app.run_optimization_cycle().await.unwrap();
+    assert_eq!(report.scanned, 2, "both hub workflows scanned");
+    assert!(report.proposals >= 2, "at least one proposal per workflow");
+    // The hot+reliable workflow → PromoteTemplate auto-applied.
+    assert!(
+        report.auto_applied.iter().any(|t| t.contains("热·可靠")),
+        "hot+reliable auto-applied: {:?}",
+        report.auto_applied
+    );
+    // The cold workflow → Retire deferred to human.
+    assert!(
+        report
+            .defer_to_human
+            .iter()
+            .any(|t| t.contains("冷·从未跑")),
+        "cold deferred to human: {:?}",
+        report.defer_to_human
+    );
+}
