@@ -155,6 +155,13 @@
 <h2>③ 最终形态演示 · 自驱优化闭环</h2>
 <p class="muted">目标的"通过不断执行 schedule 的 workflow 来优化 workflow 本身"——下面是真实可跑的端到端证据。<b>全部数字来自真实运行,非编造。</b></p>
 
+<h3>3.0 演示短视频(自动播放 · 循环)</h3>
+<p class="muted">18 秒动画:五角色环点亮 → 25 轮四弧线 → 自驱闭环(29%→57%,A/B Improved)→ 最终指标。APNG 格式,浏览器内联自动播放。完整 1280×720 版本见 <code>WorkflowHub-Demo.apng</code>。</p>
+<div style="text-align:center;margin:14px 0;">
+  <img src="WorkflowHub-Demo-embed.apng" alt="WorkflowHub 自驱优化演示" style="max-width:100%;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 26px rgba(35,33,28,.1);" />
+</div>
+
+
 <h3>3.1 自驱循环:一个失败工作流被诊断、修复、证明改善</h3>
 <pre>╔══ 第 1 周:工作流在失败 ══╗
   健康度: <span style="color:var(--red)">Red</span>(成功率 29%)
@@ -190,10 +197,11 @@
   [<span style="color:var(--unknown)">Unknown</span>] 运维·巡检 · 0 次 · 成功率 —    · 中位 0ms     (冷,无数据≠绿)</pre>
 
 <div class="note">
-  <b>关于"演示短视频"</b>:本环境无法生成视频文件。上方是<b>真实可跑演示</b>的完整控制台输出——任何时刻可用下面的命令重现并录屏。一个工作流从 29% 失败被自驱循环诊断、人工修复、再度量证明改善(+57pp,A/B Improved),即"最终形态"的可运行证据。
+  <b>演示视频已交付</b>:上方 APNG(<code>WorkflowHub-Demo.apng</code> 完整版 1280×720 / <code>WorkflowHub-Demo-embed.apng</code> 嵌入版)由纯 Python + Pillow 逐帧渲染,脚本 <code>scripts/make_demo_video.py</code>。视频里的每个数字(29%→57%、+57pp、25 轮、87→124 测试)都来自真实运行,非编造。需要 MP4 可用 <code>ffmpeg -i WorkflowHub-Demo.apng -vf ... out.mp4</code> 转换。
 </div>
 
 <h3>3.3 一键复现(真实运行)</h3>
+<div class="cmd">$ python3 scripts/make_demo_video.py                       # 重渲 270 帧</div>
 <div class="cmd">$ cargo run --example simulate_hub -- /tmp/hub.db        # 播种仿真场景</div>
 <div class="cmd">$ cargo run --example self_optimize_demo -- /tmp/opt.db  # 跑通自驱闭环</div>
 <div class="cmd">$ cargo run --example dogfood_workflowhub -- /tmp/dog.db # WorkflowHub 自身 dogfood(27 session / 5 闭环交接)</div>
