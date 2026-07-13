@@ -300,6 +300,95 @@ pub fn propose_optimizations(
     out
 }
 
+// ───────────────────────── iter 10: cadence auto-tune ─────────────────────────
+
+use crate::model::Cadence;
+
+/// A suggestion to change (or keep) a cron task's cadence (iter 10). Grounded
+/// in the schedule's real track record + how often the user manually re-ran
+/// the same workflow between fires (the demand signal).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CadenceSuggestion {
+    pub current: Cadence,
+    /// `None` = keep the current cadence (with a reason). `Some` = the
+    /// suggested replacement, always *one step* from current (never a jump
+    /// from Weekly straight to RealTime — tuning is incremental).
+    pub suggested: Option<Cadence>,
+    pub reason: String,
+}
+
+/// The most-frequent cadence at or below `c` (one step). `RealTime` and
+/// `Cron(_)` have no "more frequent" form, so they return unchanged.
+fn more_frequent(c: Cadence) -> Cadence {
+    match c {
+        Cadence::Weekly => Cadence::Daily,
+        Cadence::Daily => Cadence::RealTime,
+        other => other,
+    }
+}
+
+/// Suggest a cadence change from the schedule's effectiveness + the count of
+/// **manual re-runs** of the same workflow since the last scheduled fire
+/// (iter 10). The demand signal: if the user keeps manually firing between
+/// scheduled fires, the schedule is too sparse. Pure + conservative — it
+/// never suggests tuning a failing task (fix first), and only moves one step.
+pub fn suggest_cadence(
+    current: Cadence,
+    eff: &CronEffectiveness,
+    manual_re_runs: u32,
+) -> CadenceSuggestion {
+    // Rule 1: a failing schedule gets no cadence change — fix the failure
+    // first. Tuning the rhythm of something that breaks is noise.
+    if let Some(rate) = eff.effectiveness {
+        if eff.fires >= 2 && rate < 0.5 {
+            return CadenceSuggestion {
+                current,
+                suggested: None,
+                reason: format!(
+                    "定时成功率仅 {:.0}%({}/{}) —— 先修失败,再调节奏。",
+                    rate * 100.0,
+                    eff.ok_fires,
+                    eff.fires
+                ),
+            };
+        }
+    }
+
+    // Rule 2: demand signal — user manually re-ran ≥2 times since the last
+    // scheduled fire. The schedule is too sparse → step up one notch.
+    if manual_re_runs >= 2 {
+        let next = more_frequent(current.clone());
+        if next != current {
+            return CadenceSuggestion {
+                current,
+                suggested: Some(next),
+                reason: format!(
+                    "用户在两次定时之间手动重跑了 {} 次 —— 需求高于当前节奏,建议加密。",
+                    manual_re_runs
+                ),
+            };
+        }
+        // Already at the most frequent fixed cadence.
+        return CadenceSuggestion {
+            current,
+            suggested: None,
+            reason: format!(
+                "用户重跑 {} 次但已是最高频(RealTime/Cron) —— 看是否该拆任务。",
+                manual_re_runs
+            ),
+        };
+    }
+
+    // Rule 3: healthy + no manual demand → keep. (We deliberately do NOT
+    // suggest relaxing a cadence on low demand — silently running less often
+    // can hide a regression. Keeping is the safe default.)
+    CadenceSuggestion {
+        current,
+        suggested: None,
+        reason: "节奏合适:定时健康且无手动补跑信号。".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +549,53 @@ mod tests {
         let a = analytics(3, 3, 0, Some(1.0), Some(50));
         let u = usage(3, false);
         assert!(propose_optimizations(&a, &u, &[], None).is_empty());
+    }
+
+    fn cron_eff(fires: u32, ok: u32) -> CronEffectiveness {
+        CronEffectiveness {
+            cron_task_id: crate::CronTaskId::nil(),
+            fires,
+            ok_fires: ok,
+            failed_fires: fires - ok,
+            effectiveness: if fires > 0 {
+                Some(ok as f32 / fires as f32)
+            } else {
+                None
+            },
+            avg_duration_ms: None,
+            last_fire_at: None,
+            last_fire_ok: None,
+        }
+    }
+
+    #[test]
+    fn cadence_step_up_on_manual_demand_healthy() {
+        // Healthy (4/4) but user manually re-ran 3× since last fire → too sparse.
+        let eff = cron_eff(4, 4);
+        let s = suggest_cadence(Cadence::Weekly, &eff, 3);
+        assert_eq!(
+            s.suggested,
+            Some(Cadence::Daily),
+            "Weekly → Daily, one step"
+        );
+        assert!(s.reason.contains("3 次"));
+    }
+
+    #[test]
+    fn cadence_no_tune_when_failing() {
+        // Failing (1/4) → no cadence change, fix first.
+        let eff = cron_eff(4, 1);
+        let s = suggest_cadence(Cadence::Weekly, &eff, 5);
+        assert_eq!(s.suggested, None, "don't tune a failing schedule");
+        assert!(s.reason.contains("先修失败"));
+    }
+
+    #[test]
+    fn cadence_keep_when_healthy_no_demand() {
+        let eff = cron_eff(3, 3);
+        let s = suggest_cadence(Cadence::Daily, &eff, 0);
+        assert_eq!(s.suggested, None);
+        assert!(s.reason.contains("合适"));
     }
 
     #[test]

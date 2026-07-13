@@ -97,3 +97,13 @@
 - **运维师**:纯函数无副作用;阈值集中可调;PromoteTemplate 是失败检查的正面镜像(对称设计)。**回流**:建议 → iter 13 应用管线 → iter 18 闭环自驱。
 
 **门禁**:fmt clean · clippy clean · analysis +3 测试(共 7)。
+
+## Iter 10 · 节奏自调建议(优化智能 5/7)
+
+- **原型师**:定时任务的 cadence 写死,但需求在变。**假设**:用户在两次定时之间反复手动重跑同一工作流 = "节奏太慢"的信号;反之一直没人碰 = 可能刚好。**DoD**:基于有效性 + 手动补跑信号,给出"加密一步/保持"的建议。
+- **构建师**:`CadenceSuggestion`(current/suggested/reason)+ `suggest_cadence(current, eff, manual_re_runs)` 纯函数;`more_frequent()` 一步加密(Weekly→Daily→RealTime);Cadence 加 `PartialEq/Eq` 派生(支持比较)。
+- **优化师**:**失败的任务不调节奏**(先修,否则是噪音);只移动一步(不 Weekly 直跳 RealTime);**不主动建议降频**(静默少跑会藏回归,保持是安全默认);RealTime/Cron 已到顶时给"拆任务"提示。+3 测试。
+- **运营推广师**:一句话——"用户在两次巡检间手动跑了 3 次,建议从周级提到日级"。喂 iter 18 闭环自驱的节奏调整。
+- **运维师**:纯函数;Cadence 加派生是加法不破坏现有;增量一步保守。**回流**:节奏建议 → iter 13 应用管线 → iter 18 自驱。
+
+**门禁**:fmt clean · clippy clean · analysis +3 测试(共 10)。
