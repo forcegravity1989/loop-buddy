@@ -16,10 +16,10 @@ idgen = ["uuid/v4"]
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 time = { workspace = true }

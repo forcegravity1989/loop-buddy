@@ -77,3 +77,13 @@
 - **运维师**:纯函数无副作用无写入;`analysis` 模块挂 bw-core(复用 derive 链"原始值进、判断出"的同构)。**回流**:失败模式 → iter 11 健康信号的 Red 判据之一。
 
 **门禁**:fmt clean · clippy clean · analysis +2 测试通过。
+
+## Iter 08 · 参数频率分析(优化智能 3/7)
+
+- **原型师**:每次运行的 params 快照有了(iter 3),但谁也不看原始 JSON。**假设**:用户的"习惯"藏在多数 run 的 phase_count/loop 配置里——若 70% 的 run 都用 3 阶段,那"3 阶段"就是该工作流的自然形状,默认值该跟它走。**DoD**:从 run 群里抽出主导形状 + 置信度。
+- **构建师**:`RunShapeProfile`(dominant_phase_count / dominant_loop / trigger_split)+ `run_shape_profile(runs)` 纯函数:解析每条 params_json,直方图取众数 + 占比;malformed JSON 容错跳过。
+- **优化师**:`mode()` 泛型取众数,平局按最小键(确定性);share 用"解析成功数"作分母(不被 malformed 稀释);serde_json 进 bw-core deps(wasm-clean,已验证 wasm32 keepalive 仍过)。+2 测试。
+- **运营推广师**:"这个工作流 70% 的运行是 3 阶段·retries=1·手动触发"——这是 iter 19 习惯驱动默认参数的直接依据,也是 iter 12 习惯画像的组成。
+- **运维师**:解析容错(bad JSON 不崩,只跳过);wasm32 编译验证通过(Web 留口不破)。**回流**:形状 → iter 12 习惯画像 → iter 19 默认参数推断。
+
+**门禁**:fmt clean · clippy clean · wasm32 keepalive 过 · analysis +2 测试。

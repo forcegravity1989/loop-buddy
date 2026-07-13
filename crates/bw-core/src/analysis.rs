@@ -10,7 +10,7 @@
 //! signals, optimization proposals. The split mirrors the existing derive
 //! chain: raw values in, derived signal out.
 
-use crate::model::{RunStatus, WorkflowRun};
+use crate::model::{RunStatus, RunTrigger, WorkflowRun};
 use std::collections::{HashMap, HashSet};
 
 /// One cluster of failed runs sharing a common cause (iter 7). The "cause" is
@@ -75,6 +75,71 @@ fn normalize_cause(raw: &str) -> String {
     head.to_lowercase()
 }
 
+/// The distribution of run "shapes" across a set of runs (iter 8) — what
+/// phase-count, loop-config, and trigger mix users actually invoke. Reveals
+/// the *habitual* shape, which is the seed of habit-based defaults (iter 19).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunShapeProfile {
+    pub sample: u32,
+    /// Most common phase_count, with its share of runs. `None` when no run
+    /// carried a parseable snapshot.
+    pub dominant_phase_count: Option<(u8, f32)>,
+    /// Most common (retries, max_iter) loop config + its share.
+    pub dominant_loop: Option<((u8, u8), f32)>,
+    /// `(manual_count, scheduled_count)` — the trigger mix.
+    pub trigger_split: (u32, u32),
+}
+
+/// Aggregate the run-shape distribution from each run's `params_json`
+/// snapshot (iter 3). Pure + tolerant: a malformed/empty snapshot is skipped,
+/// not a panic. Returns an empty profile (`sample == 0`) if nothing parsed.
+pub fn run_shape_profile(runs: &[WorkflowRun]) -> RunShapeProfile {
+    let mut phase_counts: HashMap<u8, u32> = HashMap::new();
+    let mut loops: HashMap<(u8, u8), u32> = HashMap::new();
+    let mut manual = 0u32;
+    let mut scheduled = 0u32;
+    let mut sample = 0u32;
+
+    for r in runs {
+        match r.trigger {
+            RunTrigger::Manual => manual += 1,
+            RunTrigger::Scheduled => scheduled += 1,
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&r.params_json) else {
+            continue;
+        };
+        sample += 1;
+        if let Some(n) = v.get("phase_count").and_then(|x| x.as_u64()) {
+            *phase_counts.entry(n as u8).or_insert(0) += 1;
+        }
+        if let (Some(rt), Some(mi)) = (
+            v.get("loop")
+                .and_then(|l| l.get("retries"))
+                .and_then(|x| x.as_u64()),
+            v.get("loop")
+                .and_then(|l| l.get("max_iter"))
+                .and_then(|x| x.as_u64()),
+        ) {
+            *loops.entry((rt as u8, mi as u8)).or_insert(0) += 1;
+        }
+    }
+    let total = sample.max(1) as f32;
+    RunShapeProfile {
+        sample,
+        dominant_phase_count: mode(&phase_counts).map(|(k, c)| (*k, c as f32 / total)),
+        dominant_loop: mode(&loops).map(|(k, c)| (*k, c as f32 / total)),
+        trigger_split: (manual, scheduled),
+    }
+}
+
+/// Pick the most-frequent key from a histogram. Ties broken by smallest key
+/// for determinism (so the output is stable across equal-data reruns).
+fn mode<K: Ord + Copy>(hist: &HashMap<K, u32>) -> Option<(&K, u32)> {
+    hist.iter()
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(k, c)| (k, *c))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,6 +163,65 @@ mod tests {
             params_json: String::new(),
             cron_task_id: None,
         }
+    }
+
+    fn run_with_params(params: &str, trigger: RunTrigger, status: RunStatus) -> WorkflowRun {
+        WorkflowRun {
+            id: WorkflowRunId::nil(),
+            workflow_id: WorkflowId::nil(),
+            workflow_name: "w".into(),
+            project_id: None,
+            session_id: None,
+            trigger,
+            status,
+            started_at: 0,
+            finished_at: Some(1),
+            duration_ms: Some(10),
+            phases_completed: 1,
+            error: String::new(),
+            params_json: params.into(),
+            cron_task_id: None,
+        }
+    }
+
+    #[test]
+    fn run_shape_finds_dominant_phase_count_and_loop() {
+        let runs = vec![
+            run_with_params(
+                r#"{"phase_count":3,"loop":{"retries":1,"max_iter":3}}"#,
+                RunTrigger::Manual,
+                RunStatus::Ok,
+            ),
+            run_with_params(
+                r#"{"phase_count":3,"loop":{"retries":1,"max_iter":3}}"#,
+                RunTrigger::Manual,
+                RunStatus::Ok,
+            ),
+            run_with_params(
+                r#"{"phase_count":5,"loop":{"retries":2,"max_iter":5}}"#,
+                RunTrigger::Scheduled,
+                RunStatus::Ok,
+            ),
+            run_with_params("not json", RunTrigger::Manual, RunStatus::Ok), // skipped gracefully
+        ];
+        let p = run_shape_profile(&runs);
+        assert_eq!(p.sample, 3, "malformed snapshot skipped, not counted");
+        let (pc, share) = p.dominant_phase_count.unwrap();
+        assert_eq!(pc, 3);
+        assert!(
+            (share - (2.0 / 3.0)).abs() < 1e-5,
+            "2 of 3 snapshots had 3 phases"
+        );
+        let ((rt, mi), _) = p.dominant_loop.unwrap();
+        assert_eq!((rt, mi), (1, 3));
+        assert_eq!(p.trigger_split, (3, 1), "3 manual + 1 scheduled");
+    }
+
+    #[test]
+    fn run_shape_empty_when_no_snapshots() {
+        let p = run_shape_profile(&[run_with_params("", RunTrigger::Manual, RunStatus::Ok)]);
+        assert_eq!(p.sample, 0);
+        assert!(p.dominant_phase_count.is_none());
     }
 
     #[test]
