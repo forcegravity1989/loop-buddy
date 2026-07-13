@@ -817,6 +817,78 @@ pub fn cross_stage_reuse(ranking: &[UsageRank]) -> Vec<StageReuse> {
     out
 }
 
+// ───────────────────────── iter 17: recommendation engine ─────────────────────────
+
+/// A "run this next" recommendation (iter 17). Grounded — the `why` cites the
+/// signal that made this workflow the pick, never a bare "try this".
+#[derive(Clone, Debug, PartialEq)]
+pub struct Recommendation {
+    pub workflow_id: crate::WorkflowId,
+    pub workflow_name: String,
+    pub why: String,
+}
+
+/// Recommend the best workflow to run for `stage`, given each candidate's
+/// usage rank + health signal (iter 17). Pure. Selection rules, in order:
+/// 1. same-stage, **green**, hottest (most runs) — the proven default;
+/// 2. same-stage, **unknown** (new/untested), hottest — give the new one a
+///    chance to earn evidence rather than starve forever;
+/// 3. same-stage, **amber** but hot — used despite being shaky (worth running
+///    to gather more signal).
+///
+/// Never **red** — a broken workflow isn't recommended, even if hot.
+pub fn recommend_for_stage(
+    stage: StageKind,
+    candidates: &[(UsageRank, Signal)],
+) -> Option<Recommendation> {
+    // Filter to same-stage, exclude red, and score by (health_rank, -runs).
+    // health_rank: green=0, unknown=1, amber=2 (red already excluded).
+    fn health_rank(s: Signal) -> Option<u8> {
+        match s {
+            Signal::Green => Some(0),
+            Signal::Unknown => Some(1),
+            Signal::Amber => Some(2),
+            Signal::Red => None, // never recommended
+        }
+    }
+    let mut pool: Vec<(&UsageRank, Signal, u8)> = candidates
+        .iter()
+        .filter(|(r, _)| {
+            r.stage_ref
+                .and_then(|n| StageKind::ALL.iter().find(|s| s.index() == n).copied())
+                == Some(stage)
+        })
+        .filter_map(|(r, s)| health_rank(*s).map(|rk| (r, *s, rk)))
+        .collect();
+    // Best = lowest health_rank, then most runs (hot), then name for stability.
+    pool.sort_by(|a, b| {
+        a.2.cmp(&b.2)
+            .then_with(|| b.0.total_runs.cmp(&a.0.total_runs))
+            .then_with(|| a.0.workflow_name.cmp(&b.0.workflow_name))
+    });
+    let (rank, health, _) = pool.first()?;
+    let why = match health {
+        Signal::Green => format!(
+            "「{}」同阶段·绿色·已跑 {} 次 —— 放心的默认选择。",
+            rank.workflow_name, rank.total_runs
+        ),
+        Signal::Unknown => format!(
+            "「{}」同阶段·尚未验证 —— 跑一次给它积累证据(避免新工作流永远饿死)。",
+            rank.workflow_name
+        ),
+        Signal::Amber => format!(
+            "「{}」同阶段·黄色但已跑 {} 次 —— 继续跑以补全诊断信号。",
+            rank.workflow_name, rank.total_runs
+        ),
+        Signal::Red => unreachable!("red filtered out above"),
+    };
+    Some(Recommendation {
+        workflow_id: rank.workflow_id,
+        workflow_name: rank.workflow_name.clone(),
+        why,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1289,5 +1361,45 @@ mod tests {
             .unwrap();
         assert_eq!(opt.total_runs, 0, "cold stage surfaces, not hidden");
         assert_eq!(opt.workflow_count, 1);
+    }
+
+    fn cand(stage: Option<u8>, runs: u32, name: &str, health: Signal) -> (UsageRank, Signal) {
+        (
+            UsageRank {
+                workflow_id: WorkflowId::nil(),
+                workflow_name: name.into(),
+                stage_ref: stage,
+                total_runs: runs,
+                ok_runs: 0,
+                failed_runs: 0,
+                success_rate: None,
+                last_run_at: None,
+                cold: runs == 0,
+            },
+            health,
+        )
+    }
+
+    #[test]
+    fn recommend_picks_green_hot_over_red_hot() {
+        let pool = vec![
+            cand(Some(1), 50, "坏的·热门", Signal::Red),
+            cand(Some(1), 20, "好·热门", Signal::Green),
+            cand(Some(1), 1, "好·冷门", Signal::Green),
+        ];
+        let rec = recommend_for_stage(StageKind::Prototype, &pool).unwrap();
+        assert_eq!(rec.workflow_name, "好·热门");
+        assert!(rec.why.contains("绿色"));
+    }
+
+    #[test]
+    fn recommend_gives_unknown_a_chance_when_no_green() {
+        let pool = vec![
+            cand(Some(2), 5, "黄·温", Signal::Amber),
+            cand(Some(2), 0, "新·未测", Signal::Unknown),
+        ];
+        let rec = recommend_for_stage(StageKind::Build, &pool).unwrap();
+        assert_eq!(rec.workflow_name, "新·未测");
+        assert!(rec.why.contains("证据"));
     }
 }
