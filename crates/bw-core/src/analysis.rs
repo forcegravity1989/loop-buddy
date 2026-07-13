@@ -567,7 +567,7 @@ pub fn review_proposal(
     policy: &ApplyPolicy,
 ) -> ApplyDecision {
     // Floor: no auto-apply below the sample minimum, ever. Even a "promote"
-    /// is deferred until there's enough track record to trust.
+    // is deferred until there's enough track record to trust.
     if settled_runs < policy.min_sample {
         return ApplyDecision::Reject(format!(
             "样本不足({}<{} 条 settled),不自动应用",
@@ -588,7 +588,7 @@ pub fn review_proposal(
             ApplyDecision::DeferToHuman("节奏调整建议人工确认(可逆,但影响下一次触发时机)".into())
         }
         // Content-changing or destructive → always human. The loop never
-        /// silently rewrites a prompt, drops phases, or retires a workflow.
+        // silently rewrites a prompt, drops phases, or retires a workflow.
         ProposalKind::FixFailure | ProposalKind::Simplify | ProposalKind::Retire => {
             ApplyDecision::DeferToHuman(format!("「{}」需人工判断后执行", proposal.title))
         }
