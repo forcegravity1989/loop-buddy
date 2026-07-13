@@ -656,6 +656,8 @@ pub struct WorkflowRun {
     pub phases_completed: u32,
     pub error: String,
     pub params_json: String,
+    /// The cron task that fired this run (iter 4). `None` for manual runs.
+    pub cron_task_id: Option<CronTaskId>,
 }
 
 /// Per-workflow aggregate over its run history — the read-side shape optimization
@@ -682,6 +684,27 @@ pub struct WorkflowRunAnalytics {
     /// Unix seconds of the most recent run (any status), if any.
     pub last_run_at: Option<i64>,
     pub last_status: Option<RunStatus>,
+}
+
+/// Effectiveness of one cron schedule (iter 4): of the times this task's
+/// target auto-fired, how many succeeded? The answer to "is this schedule
+/// actually doing anything useful, or just burning runs?" — the gating input
+/// for cadence auto-tune (iter 10) and the self-improving loop (iter 18).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CronEffectiveness {
+    pub cron_task_id: CronTaskId,
+    /// Scheduled fires attributed to this task (manual runs of the same
+    /// workflow are excluded — this is purely the schedule's track record).
+    pub fires: u32,
+    pub ok_fires: u32,
+    pub failed_fires: u32,
+    /// `ok_fires / fires`. `None` when the task has never fired — "no
+    /// evidence", mirroring `success_rate`.
+    pub effectiveness: Option<f32>,
+    /// Mean scheduled-run duration — the schedule's typical cost.
+    pub avg_duration_ms: Option<i64>,
+    pub last_fire_at: Option<i64>,
+    pub last_fire_ok: Option<bool>,
 }
 
 /// Shared by `stage_workflow` and `stage_template_workflow` — both are the

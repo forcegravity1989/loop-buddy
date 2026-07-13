@@ -82,6 +82,7 @@ async fn store_records_start_settle_and_is_idempotent() {
             trigger: RunTrigger::Manual,
             started_at: started,
             params_json: r#"{"phase_count":3}"#,
+            cron_task_id: None,
         })
         .await
         .unwrap();
@@ -324,6 +325,7 @@ async fn analytics_aggregates_runs_and_rates_success_honestly() {
                 trigger: RunTrigger::Manual,
                 started_at: 1000 + i,
                 params_json: r#"{"phase_count":1}"#,
+                cron_task_id: None,
             })
             .await
             .unwrap();
@@ -412,4 +414,82 @@ async fn params_snapshot_captures_spec_shape_at_run_time() {
         params.contains(r#""trigger":"manual""#),
         "trigger captured: {params}"
     );
+}
+
+#[tokio::test]
+async fn cron_effectiveness_attributes_only_scheduled_fires() {
+    let path = tmp_db();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    let project = quick_project(&mut app, "项目 · 调度有效性").await;
+
+    let workflow_id = WorkflowId::new();
+    app.dispatch(Command::CreateWorkflowSpec {
+        id: workflow_id,
+        name: "定时 · 目标B".into(),
+        prompt: "p".into(),
+        goal: "g".into(),
+        stage_ref: None,
+        phases: vec!["巡检".into()],
+        agents: vec![],
+        skills: vec![],
+        loop_config: LoopConfig {
+            retries: 1,
+            max_iter: 1,
+        },
+        maturity: Maturity::Mature,
+        scope: String::new(),
+        source: HubSource::SelfBuilt,
+        trigger: None,
+    })
+    .await
+    .unwrap();
+
+    let task = CronTaskId::new();
+    app.dispatch(Command::CreateCronTask {
+        id: task,
+        name: "每日巡检B".into(),
+        target: "定时 · 目标B".into(),
+        schedule: Cadence::Daily,
+        project_id: Some(project),
+    })
+    .await
+    .unwrap();
+
+    // Manual run first — must NOT count toward the schedule's effectiveness.
+    let session = bw_core::SessionId::new();
+    app.dispatch(Command::StartSession {
+        id: session,
+        stage_kind: None,
+        kind: bw_store::SessionKind::Create,
+        title: "手动一次".into(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::RunHubWorkflow {
+        workflow_id,
+        session,
+    })
+    .await
+    .unwrap();
+
+    let e0 = store.cron_effectiveness(task).await.unwrap();
+    assert_eq!(
+        e0.fires, 0,
+        "manual run excluded from schedule effectiveness"
+    );
+    assert!(e0.effectiveness.is_none());
+
+    // Now the scheduler auto-fires it (Daily + last_run_at=0 is due).
+    app.tick_scheduler().await.unwrap();
+
+    let e1 = store.cron_effectiveness(task).await.unwrap();
+    assert_eq!(e1.fires, 1, "scheduled fire counted");
+    assert_eq!(e1.effectiveness, Some(1.0), "succeeded → 100%");
+    assert_eq!(e1.last_fire_ok, Some(true));
+    assert!(e1.last_fire_at.is_some());
 }

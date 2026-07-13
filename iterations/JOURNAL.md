@@ -37,3 +37,13 @@
 - **运维师**:`params_json` 默认 '' 对 iter 1 老行向后兼容;纯函数无 IO 无副作用;id 仍在 store 内部生成(调用方丢不了 settle 句柄)。**回流**:喂给 iter 8 参数频率分析。
 
 **门禁**:fmt clean · clippy clean · **93 tests pass**(+1)。
+
+## Iter 04 · 调度有效性度量(数据基座 4/5)
+
+- **原型师**:定时任务跑了,但"跑完有没有用"答不上来。**假设**:一个每天触发的巡检任务若连续失败却没人知道,就是白烧 run。**DoD**:每个 cron task 有"有效性分"(自动触发次数/成功数/典型耗时),且**只算定时触发**、不被手动运行污染。
+- **构建师**:`workflow_run` 加 `cron_task_id` 列(`add_column_if_missing` 守卫,老库安全);`run_workflow_inner` 多透一个 `cron_task_id: Option<CronTaskId>`,调度器传 `Some(c.id)`、手动两路传 `None`;`CronEffectiveness` 结构 + `cron_effectiveness(task_id)` 聚合(trigger='scheduled' AND cron_task_id=? 过滤)。
+- **优化师**:`effectiveness` 未触发时 `None`(无证据≠0%);last_fire_ok 二次查询读最近一次(避开 window 函数依赖);非 FK 约束(run 比 task 长寿,task 删了 run 仍是诚实证据)。+1 测试验证手动运行不计入、定时触发后 effectiveness=1.0。
+- **运营推广师**:一句话判断"这个定时任务该不该留着"——fires / 成功率 / 典型成本。直接喂 iter 10 节奏自调 + iter 18 闭环自驱。
+- **运维师**:迁移守卫(真实事故教训:`CREATE TABLE IF NOT EXISTS` 不加列);cron_task_id 可空,手动行 NULL;老 DB 开 open() 自动加列。**回流**:调度有效性的"成功/失败"回流到 iter 7 失败模式检测。
+
+**门禁**:fmt clean · clippy clean · **94 tests pass**(+1)。

@@ -525,6 +525,7 @@ impl App {
         session: SessionId,
         spec: WorkflowSpec,
         trigger: RunTrigger,
+        cron_task_id: Option<CronTaskId>,
     ) -> Result<(), AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
@@ -551,6 +552,7 @@ impl App {
                 session_id: Some(session),
                 trigger,
                 started_at,
+                cron_task_id,
                 params_json: &params_json,
             })
             .await?;
@@ -724,7 +726,7 @@ impl App {
             self.refresh_workflow_specs().await?;
 
             let result = self
-                .run_workflow_inner(pid, session, spec, RunTrigger::Scheduled)
+                .run_workflow_inner(pid, session, spec, RunTrigger::Scheduled, Some(c.id))
                 .await;
             let ok = result.is_ok();
             let outcome = if ok {
@@ -1003,7 +1005,7 @@ impl App {
 
             Command::RunWorkflow { session, spec } => {
                 let p = self.active()?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None)
                     .await?;
             }
 
@@ -1092,7 +1094,7 @@ impl App {
                     .ok_or(AppError::NotFound)?;
                 self.store.record_workflow_use(workflow_id).await?;
                 self.refresh_workflow_specs().await?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None)
                     .await?;
             }
 

@@ -259,5 +259,10 @@ CREATE TABLE IF NOT EXISTS workflow_run (
     params_json      TEXT NOT NULL DEFAULT '',
     created_at       INTEGER NOT NULL
 );
+-- iter 4: link a scheduled run back to the cron task that fired it (NULL for
+-- manual runs). Added via guarded migration so pre-iter-4 DBs keep opening.
+-- Kept denormalized (not a FK) so a run survives its task being deleted — the
+-- history is the point, and an orphaned run is still honest evidence.
+--   NOTE: applied by add_column_if_missing in SqliteStore::open, not inline.
 CREATE INDEX IF NOT EXISTS idx_workflow_run_spec ON workflow_run(workflow_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_run_proj ON workflow_run(project_id, started_at DESC);

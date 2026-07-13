@@ -19,10 +19,10 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, HubSource,
-    KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus,
-    RunTrigger, SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind,
-    WorkflowRun, WorkflowRunAnalytics, WorkflowSpec,
+    AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronStatus,
+    CronTask, HubSource, KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle,
+    ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SkillRef,
+    SourceKind, StageKind, WorkflowKind, WorkflowRun, WorkflowRunAnalytics, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -112,6 +112,10 @@ pub struct NewWorkflowRun<'a> {
     pub session_id: Option<SessionId>,
     pub trigger: RunTrigger,
     pub started_at: i64,
+    /// The cron task that fired this run, if any (iter 4). `None` for manual
+    /// runs; `Some` only on the scheduler's auto-fire path, so a per-task
+    /// effectiveness aggregate can attribute outcomes correctly.
+    pub cron_task_id: Option<CronTaskId>,
     /// Snapshot of the spec's shape at run time (iter 3) — what this run is
     /// actually executing, frozen before the engine runs. `''` is valid
     /// (no snapshot) and stays backward-compatible with iter 1 rows.
@@ -480,6 +484,10 @@ pub trait Store: Send + Sync {
     /// Returns a zeroed-name row with `total_runs = 0` if the workflow has
     /// never run — never an error, so a caller can show "未运行" honestly.
     async fn workflow_analytics(&self, workflow_id: WorkflowId) -> Result<WorkflowRunAnalytics>;
+    /// Effectiveness of one cron schedule over its auto-fired runs (iter 4).
+    /// Manual runs of the same workflow are excluded — this is purely the
+    /// schedule's track record. `fires = 0` (never fired) is not an error.
+    async fn cron_effectiveness(&self, cron_task_id: CronTaskId) -> Result<CronEffectiveness>;
     /// Revise an existing **Static** spec's authored content ("优化" a hub
     /// workflow) — bumps `version`; `uses`/`maturity`/`source`/`scope`/
     /// `trigger` are preserved untouched from the row being edited. Errors

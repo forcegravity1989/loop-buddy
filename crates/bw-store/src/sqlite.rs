@@ -18,9 +18,9 @@ use bw_core::derive::{
     evaluate_metric, measure, parse_target_with, reduce_worst_of, AmberBand, Measurement,
 };
 use bw_core::model::{
-    AgentCard, AgentRef, AgentSkillTag, Connector, CronStatus, CronTask, HubSource,
-    KnowledgeSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger,
-    Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowRun,
+    AgentCard, AgentRef, AgentSkillTag, Connector, CronEffectiveness, CronStatus, CronTask,
+    HubSource, KnowledgeSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus,
+    RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowRun,
     WorkflowRunAnalytics, WorkflowSpec,
 };
 use bw_core::{
@@ -81,6 +81,10 @@ impl SqliteStore {
             "INTEGER NOT NULL DEFAULT 0",
         )
         .await?;
+        // iter 4: link scheduled runs to the cron task that fired them. Old
+        // DBs (pre-iter-4) opened before this column existed get it added here;
+        // manual-run rows simply stay NULL.
+        add_column_if_missing(&pool, "workflow_run", "cron_task_id", "TEXT").await?;
 
         Ok(Self { pool })
     }
@@ -1048,8 +1052,8 @@ impl Store for SqliteStore {
             "INSERT INTO workflow_run
              (id, workflow_id, workflow_name, project_id, session_id, trigger,
               status, started_at, finished_at, duration_ms, phases_completed,
-              error, params_json, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, 'running', ?, NULL, NULL, 0, '', ?, ?)",
+              error, params_json, cron_task_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'running', ?, NULL, NULL, 0, '', ?, ?, ?)",
         )
         .bind(id.uuid().to_string())
         .bind(run.workflow_id.uuid().to_string())
@@ -1059,6 +1063,7 @@ impl Store for SqliteStore {
         .bind(run.trigger.text())
         .bind(run.started_at)
         .bind(run.params_json)
+        .bind(run.cron_task_id.map(|t| t.uuid().to_string()))
         .bind(now_unix())
         .execute(&self.pool)
         .await?;
@@ -1108,7 +1113,7 @@ impl Store for SqliteStore {
     async fn list_workflow_runs(&self, workflow_id: WorkflowId) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id
              FROM workflow_run WHERE workflow_id=? ORDER BY started_at DESC, rowid DESC",
         )
         .bind(workflow_id.uuid().to_string())
@@ -1120,7 +1125,7 @@ impl Store for SqliteStore {
     async fn list_all_workflow_runs(&self, limit: u32) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id
              FROM workflow_run ORDER BY started_at DESC, rowid DESC LIMIT ?",
         )
         .bind(limit as i64)
@@ -1211,6 +1216,57 @@ impl Store for SqliteStore {
             median_duration_ms: median,
             last_run_at,
             last_status,
+        })
+    }
+
+    async fn cron_effectiveness(&self, cron_task_id: CronTaskId) -> Result<CronEffectiveness> {
+        // Only runs this task auto-fired (trigger='scheduled' AND linked to
+        // this task). Manual runs of the same workflow are excluded — a
+        // schedule's track record is its own, not contaminated by ad-hoc fires.
+        let row = sqlx::query(
+            "SELECT
+                COUNT(*)                                                         AS fires,
+                SUM(CASE WHEN status='ok'     THEN 1 ELSE 0 END)                AS ok_n,
+                SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END)                AS fail_n,
+                AVG(CASE WHEN status IN ('ok','failed') THEN duration_ms END)   AS avg_dur,
+                MAX(started_at)                                                  AS last_at
+             FROM workflow_run WHERE cron_task_id=? AND trigger='scheduled'",
+        )
+        .bind(cron_task_id.uuid().to_string())
+        .fetch_one(&self.pool)
+        .await?;
+        let fires: i64 = row.get("fires");
+        let ok_fires: i64 = row.get("ok_n");
+        let failed_fires: i64 = row.get("fail_n");
+        let avg_dur: Option<f64> = row.get("avg_dur");
+        let last_at: Option<i64> = row.get("last_at");
+        let last_fire_ok = if fires > 0 {
+            // Read the most recent fire's status in a second cheap query —
+            // keeping it separate avoids a window-function dependency.
+            let last = sqlx::query(
+                "SELECT status FROM workflow_run WHERE cron_task_id=? AND trigger='scheduled'
+                 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            )
+            .bind(cron_task_id.uuid().to_string())
+            .fetch_one(&self.pool)
+            .await?;
+            Some(RunStatus::parse(&last.get::<String, _>("status")) == RunStatus::Ok)
+        } else {
+            None
+        };
+        Ok(CronEffectiveness {
+            cron_task_id,
+            fires: fires as u32,
+            ok_fires: ok_fires as u32,
+            failed_fires: failed_fires as u32,
+            effectiveness: if fires > 0 {
+                Some(ok_fires as f32 / fires as f32)
+            } else {
+                None
+            },
+            avg_duration_ms: avg_dur.map(|v| v as i64),
+            last_fire_at: last_at,
+            last_fire_ok,
         })
     }
 
@@ -1491,6 +1547,10 @@ fn parse_run_row(r: &sqlx::sqlite::SqliteRow) -> WorkflowRun {
         phases_completed: r.get::<i64, _>("phases_completed") as u32,
         error: r.get("error"),
         params_json: r.get("params_json"),
+        cron_task_id: r
+            .get::<Option<String>, _>("cron_task_id")
+            .filter(|s| !s.is_empty())
+            .and_then(|s| parse_uuid(&s, CronTaskId::from_uuid).ok()),
     }
 }
 
