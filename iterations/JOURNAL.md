@@ -87,3 +87,13 @@
 - **运维师**:解析容错(bad JSON 不崩,只跳过);wasm32 编译验证通过(Web 留口不破)。**回流**:形状 → iter 12 习惯画像 → iter 19 默认参数推断。
 
 **门禁**:fmt clean · clippy clean · wasm32 keepalive 过 · analysis +2 测试。
+
+## Iter 09 · 优化建议生成(优化智能 4/7)
+
+- **原型师**:有了成败/频率/失败模式/形状,但仍是数据,不是"该做什么"。**假设**:用户的认知负荷在看数字上,不在做决定上——系统该把数据翻译成"先修 X(因为 Y)"的可执行建议。**DoD**:给定 analytics+usage+failures+effectiveness,产出排好序、带证据链的建议。
+- **构建师**:`OptimizationProposal`(kind/title/rationale/priority)+ 5 种 `ProposalKind`(Retire/FixFailure/Simplify/TuneCadence/PromoteTemplate);`propose_optimizations(...)` 纯函数按阈值生成建议并按严重度排序。
+- **优化师**:每条建议**必有证据**(引用具体数字:成功率/失败次数/耗时),不是空话"该优化";阈值文档化(成功率<80%、冷=0运行、定时<50%、中位>5s、热+可靠≥95%);"健康且温暖"时不产建议(不制造噪音)。+3 测试。
+- **运营推广师**:一句话行动——"先修'网络超时'(7次,消 70% 失败)" > "成功率 60%"。这是 iter 13 建议应用管线的输入,也是 PM 模板"优化决策"的样例。
+- **运维师**:纯函数无副作用;阈值集中可调;PromoteTemplate 是失败检查的正面镜像(对称设计)。**回流**:建议 → iter 13 应用管线 → iter 18 闭环自驱。
+
+**门禁**:fmt clean · clippy clean · analysis +3 测试(共 7)。

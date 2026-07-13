@@ -140,6 +140,166 @@ fn mode<K: Ord + Copy>(hist: &HashMap<K, u32>) -> Option<(&K, u32)> {
         .map(|(k, c)| (k, *c))
 }
 
+// ───────────────────────── iter 9: optimization proposals ─────────────────────────
+
+use crate::model::{CronEffectiveness, UsageRank, WorkflowRunAnalytics};
+
+/// What kind of optimization a proposal recommends (iter 9). The variant is
+/// the *action class*; the `rationale` carries the why.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProposalKind {
+    /// A cold workflow (0 runs) — review whether it should stay in the hub.
+    Retire,
+    /// Success rate is below healthy — fix the dominant failure mode first.
+    FixFailure,
+    /// Runs are slow / heavy — simplify the phase structure.
+    Simplify,
+    /// A schedule fires but rarely succeeds — tune cadence or fix the target.
+    TuneCadence,
+    /// A hot, reliable workflow — promote its shape as a default/template.
+    PromoteTemplate,
+}
+
+/// One actionable optimization suggestion (iter 9). Every proposal is
+/// *grounded* — it cites the concrete evidence (numbers) that triggered it,
+/// never a bare "you should optimize this". Priority is 0 (highest) → larger.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OptimizationProposal {
+    pub kind: ProposalKind,
+    pub workflow_id: crate::WorkflowId,
+    pub workflow_name: String,
+    /// Human-readable one-liner ("成功率 60%,主要失败:网络超时(7次)").
+    pub title: String,
+    /// The why — the evidence chain a human reads before acting.
+    pub rationale: String,
+    /// 0 = most urgent. Derived from severity (failure > cold > slow > promote).
+    pub priority: u8,
+}
+
+/// Compose analytics + usage + failures into ranked, evidence-grounded
+/// optimization proposals (iter 9). Pure: pass the already-fetched data,
+/// get suggestions back, most-urgent first. No thresholds are magic — each
+/// is documented at the check that uses it.
+pub fn propose_optimizations(
+    analytics: &WorkflowRunAnalytics,
+    usage: &UsageRank,
+    failures: &[FailureMode],
+    cron_eff: Option<&CronEffectiveness>,
+) -> Vec<OptimizationProposal> {
+    let mut out = Vec::new();
+    let id = analytics.workflow_id;
+    let name = analytics.workflow_name.clone();
+
+    // 1. Failure-driven (most urgent): <80% success over ≥3 settled runs.
+    // The fix-first principle — one root cause often explains most failures.
+    if let Some(rate) = analytics.success_rate {
+        if analytics.total_runs >= 3 && rate < 0.8 {
+            let (cause, count) = failures
+                .first()
+                .map(|f| (f.cause.clone(), f.count))
+                .unwrap_or(("未知".into(), analytics.failed_runs));
+            out.push(OptimizationProposal {
+                kind: ProposalKind::FixFailure,
+                workflow_id: id,
+                workflow_name: name.clone(),
+                title: format!("成功率 {:.0}% · 先修「{}」", rate * 100.0, cause),
+                rationale: format!(
+                    "近 {} 次运行成功 {}/{}({:.0}%),头号失败「{}」占 {} 次 —— 修它收益最大。",
+                    analytics.total_runs,
+                    analytics.ok_runs,
+                    analytics.total_runs,
+                    rate * 100.0,
+                    cause,
+                    count
+                ),
+                priority: 0,
+            });
+        }
+    }
+
+    // 2. Cold workflow (review/retire). Never run = pure maintenance tax.
+    if usage.cold {
+        out.push(OptimizationProposal {
+            kind: ProposalKind::Retire,
+            workflow_id: id,
+            workflow_name: name.clone(),
+            title: "从未运行 · 复核是否保留".into(),
+            rationale: format!(
+                "「{}」进 hub 后一次未跑 —— 要么退役减负,要么明确它的触发场景。",
+                name
+            ),
+            priority: 1,
+        });
+    }
+
+    // 3. Schedule misfire: a cron task fires but <50% succeed.
+    if let Some(eff) = cron_eff {
+        if let Some(rate) = eff.effectiveness {
+            if eff.fires >= 2 && rate < 0.5 {
+                out.push(OptimizationProposal {
+                    kind: ProposalKind::TuneCadence,
+                    workflow_id: id,
+                    workflow_name: name.clone(),
+                    title: format!("定时成功率 {:.0}% · 调节奏或修目标", rate * 100.0),
+                    rationale: format!(
+                        "定时任务自动触发 {} 次,成功 {}({:.0}%) —— 继续烧 run 不如先修。",
+                        eff.fires,
+                        eff.ok_fires,
+                        rate * 100.0
+                    ),
+                    priority: 1,
+                });
+            }
+        }
+    }
+
+    // 4. Slow: median duration over 5s — simplify the phase structure.
+    // (5s is a placeholder product threshold; the point is the check exists
+    // and is tunable, not the specific number.)
+    if let Some(med) = analytics.median_duration_ms {
+        if med > 5_000 {
+            out.push(OptimizationProposal {
+                kind: ProposalKind::Simplify,
+                workflow_id: id,
+                workflow_name: name.clone(),
+                title: format!("典型耗时 {}ms · 考虑精简", med),
+                rationale: format!(
+                    "中位耗时 {}ms(>5s) —— 看哪个阶段最重,能否拆/并行/缓存。",
+                    med
+                ),
+                priority: 2,
+            });
+        }
+    }
+
+    // 5. Promote: hot (≥5 runs) AND reliable (≥95%) — its shape is worth
+    // copying. The positive mirror of the failure check.
+    if let Some(rate) = analytics.success_rate {
+        if analytics.total_runs >= 5 && rate >= 0.95 {
+            out.push(OptimizationProposal {
+                kind: ProposalKind::PromoteTemplate,
+                workflow_id: id,
+                workflow_name: name.clone(),
+                title: format!("高频且可靠({:.0}%) · 可作模板", rate * 100.0),
+                rationale: format!(
+                    "{} 次运行成功 {}/{},中位 {}ms —— 形状稳定,适合做同类任务的默认模板。",
+                    analytics.total_runs,
+                    analytics.ok_runs,
+                    analytics.total_runs,
+                    analytics
+                        .median_duration_ms
+                        .map(|m| m.to_string())
+                        .unwrap_or_else(|| "—".into())
+                ),
+                priority: 3,
+            });
+        }
+    }
+
+    out.sort_by_key(|p| p.priority);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +382,84 @@ mod tests {
         let p = run_shape_profile(&[run_with_params("", RunTrigger::Manual, RunStatus::Ok)]);
         assert_eq!(p.sample, 0);
         assert!(p.dominant_phase_count.is_none());
+    }
+
+    fn analytics(
+        total: u32,
+        ok: u32,
+        failed: u32,
+        rate: Option<f32>,
+        med: Option<i64>,
+    ) -> WorkflowRunAnalytics {
+        WorkflowRunAnalytics {
+            workflow_id: WorkflowId::nil(),
+            workflow_name: "wf".into(),
+            total_runs: total,
+            ok_runs: ok,
+            failed_runs: failed,
+            running_runs: 0,
+            success_rate: rate,
+            avg_duration_ms: med,
+            median_duration_ms: med,
+            last_run_at: None,
+            last_status: None,
+        }
+    }
+
+    fn usage(total: u32, cold: bool) -> UsageRank {
+        UsageRank {
+            workflow_id: WorkflowId::nil(),
+            workflow_name: "wf".into(),
+            stage_ref: None,
+            total_runs: total,
+            ok_runs: 0,
+            failed_runs: 0,
+            success_rate: None,
+            last_run_at: None,
+            cold,
+        }
+    }
+
+    #[test]
+    fn proposal_fix_failure_cites_the_top_failure_mode() {
+        let a = analytics(10, 6, 4, Some(0.6), None);
+        let u = usage(10, false);
+        let f = vec![FailureMode {
+            cause: "网络超时".into(),
+            count: 3,
+            affected_workflows: 1,
+            last_seen: Some(100),
+        }];
+        let p = propose_optimizations(&a, &u, &f, None);
+        assert_eq!(p[0].kind, ProposalKind::FixFailure);
+        assert_eq!(p[0].priority, 0);
+        assert!(p[0].title.contains("60%"), "rate in title: {}", p[0].title);
+        assert!(p[0].rationale.contains("网络超时"), "evidence cited");
+        assert!(p[0].rationale.contains("3 次"), "count cited");
+    }
+
+    #[test]
+    fn proposal_retire_for_cold_and_promote_for_hot_reliable() {
+        // Cold → Retire.
+        let a = analytics(0, 0, 0, None, None);
+        let u = usage(0, true);
+        let p = propose_optimizations(&a, &u, &[], None);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].kind, ProposalKind::Retire);
+
+        // Hot + reliable → Promote.
+        let a2 = analytics(8, 8, 0, Some(1.0), Some(200));
+        let u2 = usage(8, false);
+        let p2 = propose_optimizations(&a2, &u2, &[], None);
+        assert!(p2.iter().any(|x| x.kind == ProposalKind::PromoteTemplate));
+    }
+
+    #[test]
+    fn no_proposal_when_healthy_and_warm() {
+        // 3 runs, 100% success, not cold, fast, no failures → nothing to say.
+        let a = analytics(3, 3, 0, Some(1.0), Some(50));
+        let u = usage(3, false);
+        assert!(propose_optimizations(&a, &u, &[], None).is_empty());
     }
 
     #[test]
