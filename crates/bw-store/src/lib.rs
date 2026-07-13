@@ -23,6 +23,7 @@ use bw_core::model::{
     CronTask, HubSource, KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle,
     ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SkillRef,
     SourceKind, StageKind, WorkflowKind, WorkflowRun, WorkflowRunAnalytics, WorkflowSpec,
+    WorkflowVersion,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -149,6 +150,10 @@ pub struct WorkflowEdit {
     pub phases: Vec<String>,
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
+    /// Caller's reason for this "优化" — recorded on the version snapshot
+    /// (iter 5) so the evolution history says *why* each change happened,
+    /// not just that it did. `''` is valid (no reason given).
+    pub note: String,
 }
 
 pub struct NewSkill {
@@ -494,6 +499,11 @@ pub trait Store: Send + Sync {
     /// if `id` resolves to a `Dynamic` spec (nothing durable to edit) or to
     /// no row at all.
     async fn update_workflow_spec(&self, id: WorkflowId, edit: WorkflowEdit) -> Result<()>;
+    /// The frozen content-history of a Static workflow (iter 5), newest
+    /// version first — every prior prompt/goal/phases/agents/skills, each
+    /// with the reason it was replaced. Empty for a spec never updated.
+    async fn list_workflow_versions(&self, workflow_id: WorkflowId)
+        -> Result<Vec<WorkflowVersion>>;
 
     async fn create_skill(&self, s: NewSkill) -> Result<()>;
     async fn list_skills(&self) -> Result<Vec<SkillCard>>;

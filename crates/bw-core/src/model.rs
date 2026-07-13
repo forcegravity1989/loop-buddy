@@ -707,6 +707,29 @@ pub struct CronEffectiveness {
     pub last_fire_ok: Option<bool>,
 }
 
+/// One frozen version of a Static workflow's content (iter 5) — snapshotted
+/// the instant before `UpdateWorkflowSpec` overwrites it. Together the series
+/// is the spec's evolution: what changed, when, and (via `note`) why.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkflowVersion {
+    pub id: WorkflowRunId,
+    pub workflow_id: WorkflowId,
+    /// The `Static.version` this snapshot was taken at (pre-update).
+    pub version: u32,
+    pub name: String,
+    pub prompt: String,
+    pub goal: String,
+    pub phases: Vec<String>,
+    pub agents: Vec<AgentRef>,
+    pub skills: Vec<SkillRef>,
+    pub loop_retries: u8,
+    pub loop_max_iter: u8,
+    /// Caller's reason for the change that replaced this version (the "优化"
+    /// note). `''` when none was given.
+    pub note: String,
+    pub created_at: i64,
+}
+
 /// Shared by `stage_workflow` and `stage_template_workflow` — both are the
 /// same methodology projected into a `WorkflowSpec.goal`, just with
 /// different `kind` (Dynamic vs Static). `idgen`-gated like both callers:

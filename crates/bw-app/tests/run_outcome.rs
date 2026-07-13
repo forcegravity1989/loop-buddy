@@ -493,3 +493,86 @@ async fn cron_effectiveness_attributes_only_scheduled_fires() {
     assert_eq!(e1.last_fire_ok, Some(true));
     assert!(e1.last_fire_at.is_some());
 }
+
+#[tokio::test]
+async fn optimizing_a_workflow_snapshots_every_prior_version_with_reason() {
+    let path = tmp_db();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    quick_project(&mut app, "项目 · 版本史").await;
+
+    let workflow_id = WorkflowId::new();
+    app.dispatch(Command::CreateWorkflowSpec {
+        id: workflow_id,
+        name: "演化 · 工作流".into(),
+        prompt: "v1 prompt".into(),
+        goal: "g1".into(),
+        stage_ref: None,
+        phases: vec!["p1".into()],
+        agents: vec![],
+        skills: vec![],
+        loop_config: LoopConfig {
+            retries: 1,
+            max_iter: 1,
+        },
+        maturity: Maturity::Mature,
+        scope: String::new(),
+        source: HubSource::SelfBuilt,
+        trigger: None,
+    })
+    .await
+    .unwrap();
+
+    // No history yet.
+    assert!(store
+        .list_workflow_versions(workflow_id)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Optimize twice, each with a reason.
+    app.dispatch(Command::UpdateWorkflowSpec {
+        id: workflow_id,
+        prompt: "v2 prompt".into(),
+        goal: "g2".into(),
+        phases: vec!["p1".into(), "p2".into()],
+        agents: vec![],
+        skills: vec![],
+        note: "加了第二步 · 用户反馈漏了交付检查".into(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::UpdateWorkflowSpec {
+        id: workflow_id,
+        prompt: "v3 prompt".into(),
+        goal: "g3".into(),
+        phases: vec!["p1".into(), "p2".into(), "p3".into()],
+        agents: vec![],
+        skills: vec![],
+        note: "加回归检查 · 失败率从 12% 降目标".into(),
+    })
+    .await
+    .unwrap();
+
+    let hist = store.list_workflow_versions(workflow_id).await.unwrap();
+    assert_eq!(hist.len(), 2, "two prior versions snapshotted");
+    // Newest first; create starts at v1, so two updates → snapshots v1 then v2.
+    assert_eq!(hist[0].version, 2, "second update snapshotted v2's content");
+    assert_eq!(hist[0].phases.len(), 2, "v2 had two phases");
+    assert!(hist[0].note.contains("加回归检查"), "reason v2 frozen");
+    assert_eq!(hist[1].version, 1, "first update snapshotted v1's content");
+    assert_eq!(hist[1].phases.len(), 1, "v1 had one phase");
+    assert!(hist[1].note.contains("加了第二步"), "reason v1 frozen");
+
+    // The live spec is now v3 (bumped twice from v1).
+    let live = store.get_workflow_spec(workflow_id).await.unwrap().unwrap();
+    match live.kind {
+        bw_core::model::WorkflowKind::Static { version, .. } => assert_eq!(version, 3),
+        _ => panic!("expected static"),
+    }
+    assert_eq!(live.phases.len(), 3, "live spec is the latest content");
+}

@@ -21,7 +21,7 @@ use bw_core::model::{
     AgentCard, AgentRef, AgentSkillTag, Connector, CronEffectiveness, CronStatus, CronTask,
     HubSource, KnowledgeSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus,
     RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowRun,
-    WorkflowRunAnalytics, WorkflowSpec,
+    WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -1271,25 +1271,74 @@ impl Store for SqliteStore {
     }
 
     async fn update_workflow_spec(&self, id: WorkflowId, edit: WorkflowEdit) -> Result<()> {
-        let row = sqlx::query("SELECT kind_json FROM workflow_spec WHERE id=?")
-            .bind(id.uuid().to_string())
-            .fetch_optional(&self.pool)
-            .await?
-            .ok_or_else(|| StoreError::Other("workflow spec not found".into()))?;
-        let mut kind: WorkflowKind = serde_json::from_str(&row.get::<String, _>("kind_json"))?;
-        match &mut kind {
-            WorkflowKind::Static { version, .. } => *version += 1,
-            WorkflowKind::Dynamic { .. } => {
-                return Err(StoreError::Other("动态工作流没有持久内容可优化".into()));
-            }
+        // iter 5: snapshot the CURRENT content into workflow_version BEFORE
+        // the overwrite — so the evolution history survives. Read everything
+        // the version row needs in one fetch.
+        let cur = sqlx::query(
+            "SELECT kind_json, name, prompt, goal, phases, agents_json, skills_json
+             FROM workflow_spec WHERE id=?",
+        )
+        .bind(id.uuid().to_string())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StoreError::Other("workflow spec not found".into()))?;
+        let kind: WorkflowKind = serde_json::from_str(&cur.get::<String, _>("kind_json"))?;
+        let (old_version, is_static) = match &kind {
+            WorkflowKind::Static { version, .. } => (*version, true),
+            WorkflowKind::Dynamic { .. } => (0, false),
+        };
+        if !is_static {
+            return Err(StoreError::Other("动态工作流没有持久内容可优化".into()));
         }
+        // Bump the version on the existing kind, preserving every other Static
+        // field (maturity/uses/scope/source/trigger) untouched.
+        let new_kind = match kind {
+            WorkflowKind::Static {
+                maturity,
+                version: _,
+                uses,
+                scope,
+                source,
+                trigger,
+            } => WorkflowKind::Static {
+                maturity,
+                version: old_version + 1,
+                uses,
+                scope,
+                source,
+                trigger,
+            },
+            other => other,
+        };
+        // Freeze the about-to-be-replaced content as version `old_version`.
+        sqlx::query(
+            "INSERT INTO workflow_version
+             (id, workflow_id, version, name, prompt, goal, phases, agents_json,
+              skills_json, loop_retries, loop_max_iter, note, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 3, ?, ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(id.uuid().to_string())
+        .bind(old_version as i64)
+        .bind(cur.get::<String, _>("name"))
+        .bind(cur.get::<String, _>("prompt"))
+        .bind(cur.get::<String, _>("goal"))
+        .bind(cur.get::<String, _>("phases"))
+        .bind(cur.get::<String, _>("agents_json"))
+        .bind(cur.get::<String, _>("skills_json"))
+        .bind(&edit.note)
+        .bind(now_unix())
+        .execute(&self.pool)
+        .await?;
+
+        // Now overwrite with the new version.
         sqlx::query(
             "UPDATE workflow_spec
              SET kind_json=?, prompt=?, goal=?, phases=?, agents_json=?, skills_json=?,
                  updated_at=?, rev=rev+1
              WHERE id=?",
         )
-        .bind(serde_json::to_string(&kind)?)
+        .bind(serde_json::to_string(&new_kind)?)
         .bind(&edit.prompt)
         .bind(&edit.goal)
         .bind(serde_json::to_string(&edit.phases)?)
@@ -1300,6 +1349,43 @@ impl Store for SqliteStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn list_workflow_versions(
+        &self,
+        workflow_id: WorkflowId,
+    ) -> Result<Vec<WorkflowVersion>> {
+        let rows = sqlx::query(
+            "SELECT id, workflow_id, version, name, prompt, goal, phases, agents_json,
+                    skills_json, loop_retries, loop_max_iter, note, created_at
+             FROM workflow_version WHERE workflow_id=? ORDER BY version DESC",
+        )
+        .bind(workflow_id.uuid().to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let wid = parse_uuid(&r.get::<String, _>("workflow_id"), WorkflowId::from_uuid)
+                    .unwrap_or(WorkflowId::nil());
+                let id = parse_uuid(&r.get::<String, _>("id"), WorkflowRunId::from_uuid)
+                    .unwrap_or(WorkflowRunId::nil());
+                Ok(WorkflowVersion {
+                    id,
+                    workflow_id: wid,
+                    version: r.get::<i64, _>("version") as u32,
+                    name: r.get("name"),
+                    prompt: r.get("prompt"),
+                    goal: r.get("goal"),
+                    phases: serde_json::from_str(&r.get::<String, _>("phases"))?,
+                    agents: serde_json::from_str(&r.get::<String, _>("agents_json"))?,
+                    skills: serde_json::from_str(&r.get::<String, _>("skills_json"))?,
+                    loop_retries: r.get::<i64, _>("loop_retries") as u8,
+                    loop_max_iter: r.get::<i64, _>("loop_max_iter") as u8,
+                    note: r.get("note"),
+                    created_at: r.get("created_at"),
+                })
+            })
+            .collect()
     }
 
     async fn create_skill(&self, s: NewSkill) -> Result<()> {

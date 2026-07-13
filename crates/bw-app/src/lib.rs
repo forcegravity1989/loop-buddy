@@ -221,6 +221,8 @@ pub enum Command {
         phases: Vec<String>,
         agents: Vec<AgentRef>,
         skills: Vec<SkillRef>,
+        /// Why this "优化" happened — frozen onto the version snapshot (iter 5).
+        note: String,
     },
     CreateSkill {
         id: SkillId,
@@ -1105,6 +1107,7 @@ impl App {
                 phases,
                 agents,
                 skills,
+                note,
             } => {
                 self.store
                     .update_workflow_spec(
@@ -1115,6 +1118,7 @@ impl App {
                             phases,
                             agents,
                             skills,
+                            note,
                         },
                     )
                     .await?;

@@ -582,6 +582,7 @@ async fn main() {
         phases: vec!["验证阶段A".into(), "验证阶段B".into()],
         agents: vec![],
         skills: vec![],
+        note: "verify_goal: 优化演示 · 加了验证阶段B".into(),
     })
     .await
     .unwrap();

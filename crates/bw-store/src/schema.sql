@@ -266,3 +266,31 @@ CREATE TABLE IF NOT EXISTS workflow_run (
 --   NOTE: applied by add_column_if_missing in SqliteStore::open, not inline.
 CREATE INDEX IF NOT EXISTS idx_workflow_run_spec ON workflow_run(workflow_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_run_proj ON workflow_run(project_id, started_at DESC);
+
+-- ═══════════════════════ workflow_version (iter 5 · evolution history) ═══════════════════════
+-- Append-only snapshot of a Static spec's content, taken the instant BEFORE
+-- each `UpdateWorkflowSpec` overwrites it. So the live `workflow_spec` row is
+-- always the latest, but every prior version's prompt/goal/phases/agents/
+-- skills survives here — the diff/rollback/A-B material optimization
+-- intelligence (iter 14) and the "what did we change and why" audit need.
+--
+-- A row records version N's content, written when version N+1 is being
+-- authored (i.e. the snapshot is of what's about to be replaced). No FK on
+-- workflow_id: a version outlives its spec being deleted (the history is the
+-- point). `version` matches the `Static.version` that was current pre-update.
+CREATE TABLE IF NOT EXISTS workflow_version (
+    id             TEXT PRIMARY KEY,
+    workflow_id    TEXT NOT NULL,
+    version        INTEGER NOT NULL,
+    name           TEXT NOT NULL DEFAULT '',
+    prompt         TEXT NOT NULL DEFAULT '',
+    goal           TEXT NOT NULL DEFAULT '',
+    phases         TEXT NOT NULL DEFAULT '[]',
+    agents_json    TEXT NOT NULL DEFAULT '[]',
+    skills_json    TEXT NOT NULL DEFAULT '[]',
+    loop_retries   INTEGER NOT NULL DEFAULT 1,
+    loop_max_iter  INTEGER NOT NULL DEFAULT 3,
+    note           TEXT NOT NULL DEFAULT '',
+    created_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_version_spec ON workflow_version(workflow_id, version DESC);

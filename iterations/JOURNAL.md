@@ -47,3 +47,13 @@
 - **运维师**:迁移守卫(真实事故教训:`CREATE TABLE IF NOT EXISTS` 不加列);cron_task_id 可空,手动行 NULL;老 DB 开 open() 自动加列。**回流**:调度有效性的"成功/失败"回流到 iter 7 失败模式检测。
 
 **门禁**:fmt clean · clippy clean · **94 tests pass**(+1)。
+
+## Iter 05 · 版本快照(数据基座 5/5)—— Arc 1 闭环
+
+- **原型师**:`UpdateWorkflowSpec` 优化工作流时直接覆盖旧内容——版本号 +1 但旧 prompt/goal/phases 永久丢失。**假设**:优化是演化的,丢掉"改之前是什么样"就没法回答"这次优化到底改了啥、为什么、有没有变好"。**DoD**:每次优化前冻结一份历史版本 + 记原因。
+- **构建师**:`workflow_version` append-only 表(version/name/prompt/goal/phases/agents/skills/loop/note/created_at);`update_workflow_spec` 改为先 SELECT 当前内容 → INSERT 进历史 → 再覆盖;`WorkflowEdit` + `Command::UpdateWorkflowSpec` 加 `note`(改的原因);`list_workflow_versions(id)` 读回演化链。
+- **优化师**:`WorkflowKind::Static` 重建时保留全部既有字段(maturity/uses/scope/source/trigger),只 bump version——不丢元数据;version 号语义清晰("version N 的内容,在写 N+1 时被冻结")。+1 测试验证两次优化 → 2 条历史(version 1、2),live=v3,note 各自冻结。
+- **运营推广师**:真实场景——一个工作流被优化了 5 次,用户能回看每一次改了什么、为什么("失败率 12%→加回归检查")。这是 iter 14 A/B 对比 + iter 23 PM 模板"演化叙事"的地基。
+- **运维师**:历史表 append-only(永不改写);非 FK(version 比 spec 长寿);`note` 默认 '' 向后兼容;examples(verify_goal)+ desktop UI 同步加 note。**回流**:演化链喂给 iter 9 优化建议("上次为什么改")+ iter 20 成效 delta。**Arc 1 数据基座完成——五角色环闭。**
+
+**门禁**:fmt clean · clippy clean · 全测试 0 失败 · dogfood 端到端仍跑通(27 session / 5 闭环交接)。

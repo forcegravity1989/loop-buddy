@@ -692,6 +692,7 @@ fn OptimizeWorkflowForm(
             phases,
             agents: agent_refs,
             skills: skill_refs,
+            note: String::new(),
         });
         on_done.call(());
     };
