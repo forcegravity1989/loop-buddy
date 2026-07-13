@@ -5,13 +5,13 @@
 
 use bw_core::derive::{evaluate_metric, measure, parse_target, reduce_worst_of, Measurement};
 use bw_core::model::{
-    stage_workflow, Cadence, HubSource, LibSource, LoopConfig, Maturity, ProjectPhase, SourceKind,
-    StageKind, WorkflowKind,
+    stage_workflow, Cadence, CronStatus, HubSource, LibSource, LoopConfig, Maturity, ProjectPhase,
+    SourceKind, StageKind, WorkflowKind,
 };
-use bw_core::{AgentId, MetricId, ProjectId, Signal, SkillId, WorkflowId};
+use bw_core::{AgentId, CronTaskId, MetricId, ProjectId, Signal, SkillId, WorkflowId};
 use bw_store::{
-    MetricRole, NewAgent, NewMetric, NewProject, NewSkill, NewStage, NewWorkflowSpec, SqliteStore,
-    Store,
+    MetricRole, NewAgent, NewCronTask, NewMetric, NewProject, NewSkill, NewStage, NewWorkflowSpec,
+    SqliteStore, Store,
 };
 use time::OffsetDateTime;
 
@@ -636,6 +636,127 @@ async fn list_recent_handoffs_joins_project_name_newest_first_and_respects_limit
     assert_eq!(capped.len(), 2, "limit is respected");
     assert_eq!(capped[0].note, "A2");
     assert_eq!(capped[1].note, "B1 险");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn cron_task_last_run_at_roundtrips_real_clock_for_scheduler() {
+    let path = tmp_db();
+    let store = SqliteStore::open(&path).await.unwrap();
+    let id = CronTaskId::new();
+
+    store
+        .create_cron_task(NewCronTask {
+            id,
+            name: "验证 · 真实定时".into(),
+            target: "wf".into(),
+            schedule: Cadence::Daily,
+            project_id: None,
+        })
+        .await
+        .unwrap();
+    let fresh = store
+        .list_cron_tasks()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.id == id)
+        .unwrap();
+    assert_eq!(
+        fresh.last_run_at, None,
+        "never-run task must read back as real None, not a fabricated epoch"
+    );
+
+    store
+        .record_cron_run(id, CronStatus::Normal, "2026-07-10 12:00".into())
+        .await
+        .unwrap();
+    let ran = store
+        .list_cron_tasks()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.id == id)
+        .unwrap();
+    let last_run_at = ran
+        .last_run_at
+        .expect("record_cron_run must set a real clock");
+    let now = OffsetDateTime::now_utc();
+    assert!(
+        (now - last_run_at).whole_seconds().abs() < 10,
+        "last_run_at should be the real current time, not a stale/fabricated value"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn opening_a_db_from_before_last_run_at_existed_migrates_without_crashing() {
+    // Reproduces, on purpose, the exact class of bug that already crashed
+    // this app once (archive/workbench-pre-5stage-migration.db): a real
+    // on-disk DB whose `cron_task` table predates a new column. Build one by
+    // hand (mirrors the table shape `da6e437` originally shipped, minus
+    // `last_run_at`), then confirm `SqliteStore::open` migrates it in place
+    // instead of the new column simply not existing.
+    let path = tmp_db();
+    {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE cron_task (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, target TEXT NOT NULL DEFAULT '',
+                schedule TEXT NOT NULL DEFAULT 'weekly', project_id TEXT,
+                status TEXT NOT NULL DEFAULT 'normal', last_run TEXT NOT NULL DEFAULT '',
+                next_run TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL, rev INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO cron_task (id, name, created_at, updated_at) VALUES (?, '老任务', 0, 0)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    // The real regression: before the migration guard, this second `open()`
+    // against the pre-existing file either errors (column missing on
+    // INSERT/SELECT) or silently can't see the new column. Neither is
+    // acceptable for a real user's real local DB.
+    let store = SqliteStore::open(&path)
+        .await
+        .expect("open must migrate the old table, not fail against it");
+    let tasks = store.list_cron_tasks().await.unwrap();
+    assert_eq!(
+        tasks.len(),
+        1,
+        "pre-existing row must survive the migration"
+    );
+    assert_eq!(tasks[0].name, "老任务");
+    assert_eq!(
+        tasks[0].last_run_at, None,
+        "migrated column defaults to 0 → None, not a fabricated timestamp"
+    );
+
+    // And the newly-migrated column is really writable, not just readable.
+    store
+        .record_cron_run(tasks[0].id, CronStatus::Normal, "刚刚".into())
+        .await
+        .unwrap();
+    let after = store.list_cron_tasks().await.unwrap();
+    assert!(after[0].last_run_at.is_some());
 
     let _ = std::fs::remove_file(&path);
 }

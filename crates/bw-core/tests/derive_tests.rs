@@ -368,3 +368,124 @@ fn project_cycle_mix_sums_to_100() {
         assert_eq!(sum, 100, "{c:?} mix must sum to 100");
     }
 }
+
+// ───────────────── real scheduler: cron_due ─────────────────
+
+#[test]
+fn cron_due_never_run_is_immediately_due() {
+    use bw_core::model::cron_due;
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    for c in [Cadence::RealTime, Cadence::Daily, Cadence::Weekly] {
+        assert!(
+            cron_due(&c, None, now),
+            "{c:?} with no last_run must be due"
+        );
+    }
+    // The one honest exception: unparsed raw cron expressions never claim to
+    // know, even for a task that's never run.
+    assert!(!cron_due(&Cadence::Cron("0 9 * * 1".into()), None, now));
+}
+
+#[test]
+fn cron_due_real_time_always_due() {
+    use bw_core::model::cron_due;
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    assert!(cron_due(&Cadence::RealTime, Some(now), now));
+    assert!(cron_due(
+        &Cadence::RealTime,
+        Some(now - Duration::seconds(1)),
+        now
+    ));
+}
+
+#[test]
+fn cron_due_daily_respects_real_24h() {
+    use bw_core::model::cron_due;
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    assert!(!cron_due(
+        &Cadence::Daily,
+        Some(now - Duration::hours(23)),
+        now
+    ));
+    assert!(cron_due(
+        &Cadence::Daily,
+        Some(now - Duration::hours(24)),
+        now
+    ));
+    assert!(cron_due(
+        &Cadence::Daily,
+        Some(now - Duration::hours(25)),
+        now
+    ));
+}
+
+#[test]
+fn cron_due_weekly_respects_real_7d() {
+    use bw_core::model::cron_due;
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    assert!(!cron_due(
+        &Cadence::Weekly,
+        Some(now - Duration::days(6)),
+        now
+    ));
+    assert!(cron_due(
+        &Cadence::Weekly,
+        Some(now - Duration::days(7)),
+        now
+    ));
+}
+
+#[test]
+fn cron_next_run_label_never_guesses() {
+    use bw_core::model::{cron_next_run_label, CronStatus};
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+    assert_eq!(
+        cron_next_run_label(&Cadence::Daily, Some(now), CronStatus::Paused, now),
+        "已暂停"
+    );
+    assert_eq!(
+        cron_next_run_label(
+            &Cadence::Cron("0 9 * * 1".into()),
+            None,
+            CronStatus::Normal,
+            now
+        ),
+        "不支持自动触发(cron 表达式)"
+    );
+    assert_eq!(
+        cron_next_run_label(&Cadence::Daily, None, CronStatus::Normal, now),
+        "等待下次检查",
+        "never-run is due now, not a fabricated future time"
+    );
+    assert_eq!(
+        cron_next_run_label(
+            &Cadence::Daily,
+            Some(now - Duration::hours(23)),
+            CronStatus::Normal,
+            now
+        ),
+        "约 1 小时后"
+    );
+    assert_eq!(
+        cron_next_run_label(
+            &Cadence::Weekly,
+            Some(now - Duration::days(2)),
+            CronStatus::Normal,
+            now
+        ),
+        "约 5 天后"
+    );
+}
+
+#[test]
+fn cron_due_raw_cron_expr_unsupported_not_fabricated() {
+    use bw_core::model::cron_due;
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    // Even a task that's been "overdue" for a year doesn't get guessed at.
+    assert!(!cron_due(
+        &Cadence::Cron("*/5 * * * *".into()),
+        Some(now - Duration::days(365)),
+        now
+    ));
+}

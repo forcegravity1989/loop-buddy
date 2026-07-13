@@ -15,6 +15,7 @@ use crate::ids::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, ProjectId, SessionId, SkillId, WorkflowId,
 };
 use serde::{Deserialize, Serialize};
+use time::{Duration, OffsetDateTime};
 
 /// Health signal. The prototype had three states; `Unknown` is the honesty
 /// fourth — "no data" must never default to green (plan `§2.5`).
@@ -778,6 +779,83 @@ pub struct CronTask {
     pub status: CronStatus,
     pub last_run: String,
     pub next_run: String,
+    /// Real clock, `None` = never run. Separate from the pre-formatted
+    /// `last_run` display string — this is what `cron_due` compares against,
+    /// never a parsed-back label.
+    pub last_run_at: Option<OffsetDateTime>,
+}
+
+/// Is `task` due to auto-fire right now? Pure and independently unit-tested —
+/// the same function `App::tick_scheduler` calls and this module's tests
+/// call directly, so "why did/didn't this fire" is always answerable without
+/// a running app.
+///
+/// - Never run (`last_run_at: None`) is due immediately — an honest "overdue
+///   since creation", not a fabricated wait.
+/// - `RealTime` is always due (fires every scheduler tick while `Normal`).
+/// - `Daily`/`Weekly` compare real elapsed wall-clock time — no shortcuts.
+/// - `Cron(_)` (raw cron expressions) has no parser built yet; returns
+///   `false` rather than guessing — an honest "not supported yet", not a
+///   silent wrong answer.
+pub fn cron_due(
+    schedule: &Cadence,
+    last_run_at: Option<OffsetDateTime>,
+    now: OffsetDateTime,
+) -> bool {
+    // Cadence::Cron(_) is checked first, ahead of the never-run shortcut —
+    // "unsupported" must win over "overdue", or a never-run raw-cron task
+    // would wrongly fire on its very first tick.
+    if matches!(schedule, Cadence::Cron(_)) {
+        return false;
+    }
+    let Some(last) = last_run_at else {
+        return true;
+    };
+    match schedule {
+        Cadence::RealTime => true,
+        Cadence::Daily => now - last >= Duration::hours(24),
+        Cadence::Weekly => now - last >= Duration::days(7),
+        Cadence::Cron(_) => unreachable!("handled above"),
+    }
+}
+
+/// Real, honest "next run" display text for `CronRowVm` — replaces what was
+/// an always-empty `next_run` column (nothing ever wrote it) now that
+/// `tick_scheduler` gives this a real answer to compute. Never a guess: a
+/// paused task says so, an unsupported raw-cron expression says so, and a
+/// task already due says "等待下次检查" (the next scheduler tick, at most a
+/// few seconds away) rather than a fabricated clock time.
+pub fn cron_next_run_label(
+    schedule: &Cadence,
+    last_run_at: Option<OffsetDateTime>,
+    status: CronStatus,
+    now: OffsetDateTime,
+) -> String {
+    if status == CronStatus::Paused {
+        return "已暂停".into();
+    }
+    if matches!(schedule, Cadence::Cron(_)) {
+        return "不支持自动触发(cron 表达式)".into();
+    }
+    if cron_due(schedule, last_run_at, now) {
+        return "等待下次检查".into();
+    }
+    // Only reachable with Some(last) — cron_due returns true above whenever
+    // last_run_at is None, for every non-Cron schedule.
+    let last = last_run_at.expect("due()=false implies a real last_run_at for this schedule");
+    let period = match schedule {
+        Cadence::Daily => Duration::hours(24),
+        Cadence::Weekly => Duration::days(7),
+        Cadence::RealTime | Cadence::Cron(_) => unreachable!("handled above"),
+    };
+    let remaining = (last + period) - now;
+    if remaining >= Duration::hours(24) {
+        format!("约 {} 天后", remaining.whole_days())
+    } else if remaining >= Duration::hours(1) {
+        format!("约 {} 小时后", remaining.whole_hours())
+    } else {
+        format!("约 {} 分钟后", remaining.whole_minutes().max(1))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]

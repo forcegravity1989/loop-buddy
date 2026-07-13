@@ -1,12 +1,19 @@
-//! `Hub::Cron` — scheduled tasks. Real store-backed records; this app has no
-//! actual background *scheduler* daemon (Tier D territory — a desktop app
-//! isn't running while closed, so a real timer belongs in a `Connector`/
-//! server-side piece, not here). What *is* real: "▶ 立即执行" manually fires
-//! the task's target workflow right now through the same `Command` path
-//! WorkflowHub uses, records the real outcome (`Command::MarkCronRun`), and
-//! "⏸ 暂停/▶ 恢复" is real human intervention (`Command::SetCronStatus`) — the
-//! monitoring + intervention surface is honest about being manual, not
-//! pretending to be a live cron daemon.
+//! `Hub::Cron` — scheduled tasks. Real store-backed records, and a real
+//! in-process scheduler (`App::tick_scheduler`, ticked every few seconds by
+//! `app-desktop/src/kernel.rs`): while this app is running, a `Normal`-
+//! status task bound to a project, whose target names a real Hub workflow,
+//! really auto-fires on its own once `bw_core::model::cron_due` says so — no
+//! click required. What's still honestly *not* here: a background daemon
+//! that fires while the app is fully closed (Tier D territory — that belongs
+//! to a `Connector`/server-side piece, not a desktop process) — see
+//! `tick_scheduler`'s own doc comment in `bw-app/src/lib.rs`.
+//!
+//! "▶ 立即执行" is the human-initiated twin of the same real path: it fires
+//! the task's target workflow right now instead of waiting for it to become
+//! due, through the same `Command` sequence WorkflowHub uses, and records
+//! the real outcome (`Command::MarkCronRun`). "⏸ 暂停/▶ 恢复" is real human
+//! intervention (`Command::SetCronStatus`) — a paused task is the one thing
+//! `tick_scheduler` will never auto-fire, checked first, every tick.
 
 use crate::kernel::{HubVm, Kernel};
 use crate::theme;
@@ -49,7 +56,7 @@ pub fn CronHub(
                 }
             }
             p { style: "color:{ink3};font-size:11.5px;line-height:1.6;margin:0 0 14px;",
-                "没有后台常驻的调度器——「▶ 立即执行」是真实的手动触发(走真实 Command 路径,真更新状态/上次执行时间);「⏸ 暂停/▶ 恢复」是真实的人工介入。绑定了项目、且目标名与 WorkflowHub 里某个工作流同名时,才能立即执行。"
+                "真实调度:应用运行期间,「正常」状态且已绑定项目、目标名与某个 Hub 工作流同名的任务,到期后无需点击就会在后台自动触发(每几秒检查一次)——不是应用完全关闭时也在跑的常驻守护进程。「▶ 立即执行」是同一条真实路径的手动版,不等到期就立刻跑;「⏸ 暂停/▶ 恢复」是真实的人工介入,暂停的任务永远不会被自动触发。"
             }
             if creating() {
                 CreateCronForm { projects: projects.clone(), on_done: move |_| creating.set(false) }
@@ -158,11 +165,13 @@ fn CreateCronForm(projects: Vec<ProjectCardVm>, on_done: EventHandler<()>) -> El
     let card = theme::card();
     let input = theme::input();
     let label = theme::label();
+    let ink3 = theme::INK_3;
 
     let mut name = use_signal(String::new);
     let mut target = use_signal(String::new);
     // 0 = 全部项目 (None); 1..=projects.len() maps to projects[i-1].
     let mut project_choice = use_signal(|| 0usize);
+    let mut schedule = use_signal(|| Cadence::Weekly);
 
     let projects_for_save = projects.clone();
     let save = move |_| {
@@ -178,12 +187,13 @@ fn CreateCronForm(projects: Vec<ProjectCardVm>, on_done: EventHandler<()>) -> El
             id: CronTaskId::new(),
             name: n,
             target: target().trim().to_string(),
-            schedule: Cadence::Weekly,
+            schedule: schedule(),
             project_id,
         });
         name.set(String::new());
         target.set(String::new());
         project_choice.set(0);
+        schedule.set(Cadence::Weekly);
         on_done.call(());
     };
 
@@ -217,12 +227,29 @@ fn CreateCronForm(projects: Vec<ProjectCardVm>, on_done: EventHandler<()>) -> El
                     }
                 }
             }
-            div { style: "{label}", "运行目标(需与 WorkflowHub 里某个工作流名称完全一致,才能「▶ 立即执行」)" }
+            div { style: "{label}", "运行目标(需与 WorkflowHub 里某个工作流名称完全一致,才能「▶ 立即执行」/自动触发)" }
             input {
-                style: "{input} margin-bottom:12px;",
+                style: "{input} margin-bottom:10px;",
                 placeholder: "跑什么——一个工作流/routine 的名字",
                 value: "{target}",
                 oninput: move |e| target.set(e.value()),
+            }
+            div { style: "{label}", "频率(真实调度——满足条件后无需点击,后台自动触发)" }
+            select {
+                style: "{input} width:auto;margin-bottom:6px;",
+                onchange: move |e| {
+                    schedule.set(match e.value().as_str() {
+                        "realtime" => Cadence::RealTime,
+                        "daily" => Cadence::Daily,
+                        _ => Cadence::Weekly,
+                    });
+                },
+                option { value: "daily", "每日(24 小时)" }
+                option { value: "weekly", selected: true, "每周(7 天)" }
+                option { value: "realtime", "实时(每次调度检查都触发)" }
+            }
+            p { style: "font-size:11px;color:{ink3};margin:0 0 12px;line-height:1.6;",
+                "从未运行过的任务视为已到期,保存后的下一次后台检查(≤5 秒)就会真实触发一次。"
             }
             button {
                 style: "cursor:pointer;background:{theme::CLAY};color:#FFF;border:none;border-radius:7px;padding:7px 16px;font-size:12.5px;",
