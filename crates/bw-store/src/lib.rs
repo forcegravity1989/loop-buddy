@@ -22,7 +22,7 @@ use bw_core::model::{
     AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, HubSource,
     KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus,
     RunTrigger, SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind,
-    WorkflowRun, WorkflowSpec,
+    WorkflowRun, WorkflowRunAnalytics, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -466,6 +466,10 @@ pub trait Store: Send + Sync {
     /// All recorded runs across every workflow, newest first — for a global
     /// "what actually ran" feed / cross-workflow analytics.
     async fn list_all_workflow_runs(&self, limit: u32) -> Result<Vec<WorkflowRun>>;
+    /// Aggregate analytics for one workflow over its run history (iter 2).
+    /// Returns a zeroed-name row with `total_runs = 0` if the workflow has
+    /// never run — never an error, so a caller can show "未运行" honestly.
+    async fn workflow_analytics(&self, workflow_id: WorkflowId) -> Result<WorkflowRunAnalytics>;
     /// Revise an existing **Static** spec's authored content ("优化" a hub
     /// workflow) — bumps `version`; `uses`/`maturity`/`source`/`scope`/
     /// `trigger` are preserved untouched from the row being edited. Errors

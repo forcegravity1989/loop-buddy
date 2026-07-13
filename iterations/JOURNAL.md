@@ -17,3 +17,13 @@
 
 **门禁**:fmt clean · clippy clean · **91 tests pass / 0 fail**(基线 87 → +4)。
 **提交**:见 git log `workflow_run` telemetry。
+
+## Iter 02 · 工作流运行分析(数据基座 2/5)
+
+- **原型师**:有了运行记录,但仍是行级原始数据,没有聚合视图。**假设**:优化决策要的是"这个工作流成功率 75%、典型耗时 250ms"这种一句话判断,不是逐行翻日志。**DoD**:`workflow_analytics(id)` 一调出 per-workflow 聚合。
+- **构建师**:`WorkflowRunAnalytics` 结构(total/ok/failed/running 计数、success_rate、avg+median duration、last_run_at/status);单条 SQL 聚合 + Rust 算 median(中位数,抗单个慢离群点)。
+- **优化师**:median 用中位数而非均值(一个慢 run 不污染"典型成本");`success_rate` 在无 settled 记录时为 `None` 而非 0("未知"≠"总失败",镜像 `Signal::Unknown`)。+1 测试覆盖 3ok/1fail → 0.75 + median 250。
+- **运营推广师**:一句话能说清"这个工作流健康吗"——成功率 + 典型耗时 + 上次状态,是后续冷热榜/健康信号的直接输入。
+- **运维师**:无 settled 时返回 total=0 而非报错(调用方能诚实显示"未运行");只读查询,无写入风险。**回流**:这聚合喂给 iter 6 冷热榜 + iter 11 健康信号。
+
+**门禁**:fmt clean · clippy clean · **92 tests pass**(+1)。

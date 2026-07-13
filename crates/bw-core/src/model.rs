@@ -658,6 +658,32 @@ pub struct WorkflowRun {
     pub params_json: String,
 }
 
+/// Per-workflow aggregate over its run history — the read-side shape optimization
+/// intelligence consumes. Every field is derived from settled `workflow_run`
+/// rows; a workflow with no runs returns `success_rate = None` (not 0 —
+/// "unknown" must not masquerade as "always fails", mirroring `Signal::Unknown`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkflowRunAnalytics {
+    pub workflow_id: WorkflowId,
+    pub workflow_name: String,
+    /// Total rows ever recorded (running + ok + failed).
+    pub total_runs: u32,
+    pub ok_runs: u32,
+    pub failed_runs: u32,
+    pub running_runs: u32,
+    /// `ok_runs / settled_runs`. `None` when no run has settled yet — "no
+    /// evidence", not "0%". The single most important optimization input.
+    pub success_rate: Option<f32>,
+    /// Mean `duration_ms` over settled runs. `None` if none settled.
+    pub avg_duration_ms: Option<i64>,
+    /// Median `duration_ms` over settled runs — robust to one slow outlier,
+    /// a better "typical cost" than the mean for optimization decisions.
+    pub median_duration_ms: Option<i64>,
+    /// Unix seconds of the most recent run (any status), if any.
+    pub last_run_at: Option<i64>,
+    pub last_status: Option<RunStatus>,
+}
+
 /// Shared by `stage_workflow` and `stage_template_workflow` — both are the
 /// same methodology projected into a `WorkflowSpec.goal`, just with
 /// different `kind` (Dynamic vs Static). `idgen`-gated like both callers:

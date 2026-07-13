@@ -293,3 +293,38 @@ async fn scheduler_triggered_run_is_attributed_scheduled_not_manual() {
     assert_eq!(app.snapshot().active_project, Some(other), "no hijack");
     let _ = View::Projects; // silence unused import in some configs
 }
+
+#[tokio::test]
+async fn analytics_aggregates_runs_and_rates_success_honestly() {
+    let path = tmp_db();
+    let store = SqliteStore::open(&path).await.unwrap();
+    let wid = WorkflowId::new();
+
+    // No runs yet → success_rate None (unknown ≠ 0%), not a panic.
+    let a = store.workflow_analytics(wid).await.unwrap();
+    assert_eq!(a.total_runs, 0);
+    assert!(a.success_rate.is_none());
+
+    // Seed: 3 ok, 1 failed, with varying durations.
+    for (i, ok) in [(0, true), (1, true), (2, false), (3, true)] {
+        let id = store
+            .record_workflow_run_start(wid, "wf", None, None, RunTrigger::Manual, 1000 + i)
+            .await
+            .unwrap();
+        let status = if ok { RunStatus::Ok } else { RunStatus::Failed };
+        store
+            .settle_workflow_run(id, status, 1000 + i + 5, 100 * (i as i64 + 1), 1, "")
+            .await
+            .unwrap();
+    }
+
+    let a = store.workflow_analytics(wid).await.unwrap();
+    assert_eq!(a.total_runs, 4);
+    assert_eq!(a.ok_runs, 3);
+    assert_eq!(a.failed_runs, 1);
+    // 3 ok / 4 settled = 0.75
+    assert!((a.success_rate.unwrap() - 0.75).abs() < 1e-5);
+    // durations 100,200,300,400 → median of even count = (200+300)/2 = 250
+    assert_eq!(a.median_duration_ms, Some(250));
+    assert_eq!(a.last_status, Some(RunStatus::Ok), "last run was ok");
+}

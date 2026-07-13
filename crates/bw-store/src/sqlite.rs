@@ -19,7 +19,8 @@ use bw_core::derive::{
 use bw_core::model::{
     AgentCard, AgentRef, AgentSkillTag, Connector, CronStatus, CronTask, HubSource,
     KnowledgeSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger,
-    Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowRun, WorkflowSpec,
+    Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowRun,
+    WorkflowRunAnalytics, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -1132,6 +1133,91 @@ impl Store for SqliteStore {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.iter().map(parse_run_row).collect())
+    }
+
+    async fn workflow_analytics(&self, workflow_id: WorkflowId) -> Result<WorkflowRunAnalytics> {
+        // One aggregation query: counts + mean over settled runs. Median is
+        // computed in Rust over the fetched series (SQLite has no native
+        // MEDIAN), which also gives us last_run_at/last_status in the same
+        // pass. A workflow with no rows returns total_runs=0, success_rate=None.
+        let agg = sqlx::query(
+            "SELECT
+                COUNT(*)                                               AS total,
+                SUM(CASE WHEN status='ok'      THEN 1 ELSE 0 END)     AS ok_n,
+                SUM(CASE WHEN status='failed'  THEN 1 ELSE 0 END)     AS fail_n,
+                SUM(CASE WHEN status='running' THEN 1 ELSE 0 END)     AS run_n,
+                AVG(CASE WHEN status IN ('ok','failed') THEN duration_ms END) AS avg_dur
+             FROM workflow_run WHERE workflow_id=?",
+        )
+        .bind(workflow_id.uuid().to_string())
+        .fetch_one(&self.pool)
+        .await?;
+        let total: i64 = agg.get("total");
+        let ok_runs: i64 = agg.get("ok_n");
+        let failed_runs: i64 = agg.get("fail_n");
+        let running_runs: i64 = agg.get("run_n");
+        let avg_dur: Option<f64> = agg.get("avg_dur");
+        let settled = ok_runs + failed_runs;
+
+        // Name + last run + the duration series (for median) in one fetch.
+        let name_row = sqlx::query("SELECT workflow_name, started_at, status FROM workflow_run WHERE workflow_id=? ORDER BY started_at DESC, rowid DESC LIMIT 1")
+            .bind(workflow_id.uuid().to_string())
+            .fetch_optional(&self.pool)
+            .await?;
+        let (workflow_name, last_run_at, last_status) = match name_row {
+            Some(r) => (
+                r.get::<String, _>("workflow_name"),
+                Some(r.get::<i64, _>("started_at")),
+                Some(RunStatus::parse(&r.get::<String, _>("status"))),
+            ),
+            None => (String::new(), None, None),
+        };
+
+        // Median over settled durations — robust to a single slow outlier.
+        let median = if settled > 0 {
+            let dur_rows = sqlx::query(
+                "SELECT duration_ms FROM workflow_run
+                 WHERE workflow_id=? AND status IN ('ok','failed') AND duration_ms IS NOT NULL
+                 ORDER BY duration_ms",
+            )
+            .bind(workflow_id.uuid().to_string())
+            .fetch_all(&self.pool)
+            .await?;
+            let ds: Vec<i64> = dur_rows
+                .iter()
+                .map(|r| r.get::<i64, _>("duration_ms"))
+                .collect();
+            if ds.is_empty() {
+                None
+            } else {
+                let mid = ds.len() / 2;
+                Some(if ds.len() % 2 == 0 {
+                    (ds[mid - 1] + ds[mid]) / 2
+                } else {
+                    ds[mid]
+                })
+            }
+        } else {
+            None
+        };
+
+        Ok(WorkflowRunAnalytics {
+            workflow_id,
+            workflow_name,
+            total_runs: total as u32,
+            ok_runs: ok_runs as u32,
+            failed_runs: failed_runs as u32,
+            running_runs: running_runs as u32,
+            success_rate: if settled > 0 {
+                Some(ok_runs as f32 / settled as f32)
+            } else {
+                None
+            },
+            avg_duration_ms: avg_dur.map(|v| v as i64),
+            median_duration_ms: median,
+            last_run_at,
+            last_status,
+        })
     }
 
     async fn update_workflow_spec(&self, id: WorkflowId, edit: WorkflowEdit) -> Result<()> {
