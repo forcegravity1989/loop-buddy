@@ -20,14 +20,14 @@ use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
     AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronStatus,
-    CronTask, HubSource, KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle,
-    ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SkillRef,
-    SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowRunAnalytics,
-    WorkflowSpec, WorkflowVersion,
+    CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig,
+    Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus, Signal,
+    SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
+    WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
-    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
-    WorkflowId, WorkflowRunId,
+    AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
+    SkillId, WorkflowId, WorkflowRunId,
 };
 use time::OffsetDateTime;
 
@@ -198,6 +198,17 @@ pub struct NewCronTask {
     pub target: String,
     pub schedule: Cadence,
     pub project_id: Option<ProjectId>,
+}
+
+/// Write DTO for creating an [`Issue`]. `status` defaults to `Backlog`;
+/// `number` is auto-assigned per project (1, 2, 3, …) inside `create_issue`.
+pub struct NewIssue {
+    pub id: IssueId,
+    pub project_id: ProjectId,
+    pub stage: StageKind,
+    pub title: String,
+    pub desc: String,
+    pub priority: IssuePriority,
 }
 
 pub struct NewConnector {
@@ -541,6 +552,18 @@ pub trait Store: Send + Sync {
 
     async fn create_knowledge_source(&self, k: NewKnowledgeSource) -> Result<()>;
     async fn list_knowledge_sources(&self) -> Result<Vec<KnowledgeSource>>;
+
+    // ── issue: assignable, stage-scoped work units ──
+    async fn create_issue(&self, i: NewIssue) -> Result<()>;
+    async fn list_issues(
+        &self,
+        project_id: ProjectId,
+        stage: Option<StageKind>,
+        status: Option<IssueStatus>,
+    ) -> Result<Vec<Issue>>;
+    async fn get_issue(&self, id: IssueId) -> Result<Option<Issue>>;
+    async fn transition_issue(&self, id: IssueId, status: IssueStatus) -> Result<()>;
+    async fn assign_issue(&self, id: IssueId, assignee: Option<AgentId>) -> Result<()>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────
@@ -687,5 +710,49 @@ pub(crate) fn parse_connector_status(s: &str) -> ConnectorStatus {
         "syncing" => ConnectorStatus::Syncing,
         "error" => ConnectorStatus::Error,
         _ => ConnectorStatus::Disconnected,
+    }
+}
+
+pub(crate) fn issue_status_text(s: IssueStatus) -> &'static str {
+    match s {
+        IssueStatus::Backlog => "backlog",
+        IssueStatus::Todo => "todo",
+        IssueStatus::InProgress => "in_progress",
+        IssueStatus::InReview => "in_review",
+        IssueStatus::Done => "done",
+        IssueStatus::Blocked => "blocked",
+        IssueStatus::Cancelled => "cancelled",
+    }
+}
+
+pub(crate) fn parse_issue_status(s: &str) -> IssueStatus {
+    match s {
+        "todo" => IssueStatus::Todo,
+        "in_progress" => IssueStatus::InProgress,
+        "in_review" => IssueStatus::InReview,
+        "done" => IssueStatus::Done,
+        "blocked" => IssueStatus::Blocked,
+        "cancelled" => IssueStatus::Cancelled,
+        _ => IssueStatus::Backlog,
+    }
+}
+
+pub(crate) fn issue_priority_text(p: IssuePriority) -> &'static str {
+    match p {
+        IssuePriority::None => "none",
+        IssuePriority::Low => "low",
+        IssuePriority::Medium => "medium",
+        IssuePriority::High => "high",
+        IssuePriority::Urgent => "urgent",
+    }
+}
+
+pub(crate) fn parse_issue_priority(s: &str) -> IssuePriority {
+    match s {
+        "low" => IssuePriority::Low,
+        "medium" => IssuePriority::Medium,
+        "high" => IssuePriority::High,
+        "urgent" => IssuePriority::Urgent,
+        _ => IssuePriority::None,
     }
 }

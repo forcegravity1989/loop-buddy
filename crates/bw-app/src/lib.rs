@@ -16,19 +16,19 @@
 use bw_core::derive::AmberBand;
 use bw_core::model::{
     cron_due, stage_workflow, AgentCard, AgentRef, Cadence, Connector, CronStatus, CronTask,
-    HubSource, KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role,
-    RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind,
-    WorkflowSpec,
+    HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig, Maturity,
+    ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
+    SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{
-    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
-    WorkflowId,
+    AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
+    SkillId, WorkflowId,
 };
 use bw_engine::{
     ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit, PermissionMode, RunCtx, RunEvent,
 };
 use bw_store::{
-    AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewConnector, NewCronTask,
+    AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewConnector, NewCronTask, NewIssue,
     NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec,
     ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
@@ -288,6 +288,28 @@ pub enum Command {
         kind: String,
         used_by: String,
     },
+    /// Create a new issue in the active project (defaults to `Backlog`,
+    /// auto-assigned per-project number). Scoped to the given stage.
+    CreateIssue {
+        id: IssueId,
+        stage: StageKind,
+        title: String,
+        desc: String,
+        priority: IssuePriority,
+    },
+    /// Move an issue to a new kanban status (the kanban lifecycle transition).
+    TransitionIssue {
+        id: IssueId,
+        status: IssueStatus,
+    },
+    /// Assign (or, with `None`, unassign) an issue to an agent teammate.
+    AssignIssue {
+        id: IssueId,
+        assignee: Option<AgentId>,
+    },
+    /// Reload the active project's issues from the store (mirrors
+    /// `RefreshHubs` for the hub library, but project-scoped).
+    RefreshIssues,
     SendSessionMessage {
         session: SessionId,
         text: String,
@@ -356,6 +378,7 @@ pub enum Event {
     },
     ConnectorsChanged,
     KnowledgeSourcesChanged,
+    IssuesChanged,
     ActivityChanged,
     ClaudeConfigChanged,
     VersionLogChanged,
@@ -416,6 +439,9 @@ pub struct AppState {
     pub cron_tasks: Vec<CronTask>,
     pub connectors: Vec<Connector>,
     pub knowledge_sources: Vec<KnowledgeSource>,
+    /// Issues for the active project (empty when no project is open). Mirrors
+    /// `cron_tasks` but project-scoped — loaded by `refresh_issues`.
+    pub issues: Vec<Issue>,
     /// Activity feed — derived from `handoff` (+ `project` join), never
     /// written to directly. See `Store::list_recent_handoffs`.
     pub recent_activity: Vec<GlobalHandoffRow>,
@@ -447,6 +473,7 @@ impl Default for AppState {
             cron_tasks: Vec::new(),
             connectors: Vec::new(),
             knowledge_sources: Vec::new(),
+            issues: Vec::new(),
             recent_activity: Vec::new(),
             claude_config: ClaudeCliConfig::default(),
             version_log: None,
@@ -532,6 +559,18 @@ impl App {
 
     async fn refresh_knowledge_sources(&mut self) -> Result<(), AppError> {
         self.state.knowledge_sources = self.store.list_knowledge_sources().await?;
+        Ok(())
+    }
+
+    /// Reload the active project's issues. When no project is active, the list
+    /// is cleared to empty (not an error — the UI shows an empty board).
+    async fn refresh_issues(&mut self) -> Result<(), AppError> {
+        match self.state.active_project {
+            Some(p) => {
+                self.state.issues = self.store.list_issues(p, None, None).await?;
+            }
+            None => self.state.issues.clear(),
+        }
         Ok(())
     }
 
@@ -904,6 +943,7 @@ impl App {
                 self.refresh_connectors().await?;
                 self.refresh_knowledge_sources().await?;
                 self.refresh_activity().await?;
+                self.refresh_issues().await?;
                 self.emit(Event::ProjectsChanged);
             }
 
@@ -1433,6 +1473,48 @@ impl App {
                 self.emit(Event::KnowledgeSourcesChanged);
             }
 
+            Command::CreateIssue {
+                id,
+                stage,
+                title,
+                desc,
+                priority,
+            } => {
+                let p = self.active()?;
+                if title.trim().is_empty() {
+                    return Err(AppError::Invalid("标题不能为空".into()));
+                }
+                self.store
+                    .create_issue(NewIssue {
+                        id,
+                        project_id: p,
+                        stage,
+                        title,
+                        desc,
+                        priority,
+                    })
+                    .await?;
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+            }
+
+            Command::TransitionIssue { id, status } => {
+                self.store.transition_issue(id, status).await?;
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+            }
+
+            Command::AssignIssue { id, assignee } => {
+                self.store.assign_issue(id, assignee).await?;
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+            }
+
+            Command::RefreshIssues => {
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+            }
+
             Command::SendSessionMessage { session, text } => {
                 self.store
                     .append_message(session, Role::Builder, &text)
@@ -1499,6 +1581,7 @@ impl App {
                         View::App
                     }
                 };
+                self.refresh_issues().await?;
                 self.emit(Event::ViewChanged(self.state.view));
             }
 
@@ -1519,6 +1602,7 @@ impl App {
                 self.state.active_project = None;
                 self.state.active_session = None;
                 self.refresh_projects().await?;
+                self.refresh_issues().await?;
                 self.emit(Event::ViewChanged(View::Projects));
             }
 

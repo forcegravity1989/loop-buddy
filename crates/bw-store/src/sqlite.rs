@@ -4,14 +4,15 @@
 //! sidesteps `SQLITE_BUSY` without ceremony.
 
 use crate::{
-    cadence_text, cron_status_text, cycle_text, lib_source_text, maturity_text, parse_cadence,
-    parse_connector_status, parse_cron_status, parse_cycle, parse_lib_source, parse_maturity,
+    cadence_text, cron_status_text, cycle_text, issue_priority_text, issue_status_text,
+    lib_source_text, maturity_text, parse_cadence, parse_connector_status, parse_cron_status,
+    parse_cycle, parse_issue_priority, parse_issue_status, parse_lib_source, parse_maturity,
     parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
     stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal,
-    NewAgent, NewConnector, NewCronTask, NewKnowledgeSource, NewMetric, NewProject, NewSession,
-    NewSkill, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals,
-    ProjectRow, Result, SessionKind, SessionRow, SkillEdit, StageRow, StageSignal, Store,
-    StoreError, WorkflowEdit,
+    NewAgent, NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject,
+    NewSession, NewSkill, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow,
+    PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, SkillEdit, StageRow,
+    StageSignal, Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -19,13 +20,13 @@ use bw_core::derive::{
 };
 use bw_core::model::{
     AgentCard, AgentRef, AgentSkillTag, Connector, CronEffectiveness, CronStatus, CronTask,
-    HubSource, KnowledgeSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus,
-    RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
-    WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
+    HubSource, Issue, IssueStatus, KnowledgeSource, LoopConfig, Maturity, ProjectCycle,
+    ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind,
+    UsageRank, WorkflowKind, WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
-    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
-    WorkflowId, WorkflowRunId,
+    AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
+    SkillId, WorkflowId, WorkflowRunId,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
@@ -1647,6 +1648,100 @@ impl Store for SqliteStore {
         .await?;
         rows.into_iter().map(knowledge_source_row).collect()
     }
+
+    async fn create_issue(&self, i: NewIssue) -> Result<()> {
+        let t = now_unix();
+        // Per-project sequence: 1, 2, 3, … (COALESCE so the first issue gets 1).
+        let number: i64 = sqlx::query(
+            "SELECT COALESCE(MAX(number), 0) + 1 AS next FROM issue WHERE project_id=?",
+        )
+        .bind(pid(i.project_id))
+        .fetch_one(&self.pool)
+        .await?
+        .get("next");
+        sqlx::query(
+            "INSERT INTO issue
+                (id, project_id, stage, number, title, descr, status, priority, assignee,
+                 created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'backlog', ?, NULL, ?, ?)",
+        )
+        .bind(i.id.uuid().to_string())
+        .bind(pid(i.project_id))
+        .bind(stage_kind_text(i.stage))
+        .bind(number)
+        .bind(&i.title)
+        .bind(&i.desc)
+        .bind(issue_priority_text(i.priority))
+        .bind(t)
+        .bind(t)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_issues(
+        &self,
+        project_id: ProjectId,
+        stage: Option<StageKind>,
+        status: Option<IssueStatus>,
+    ) -> Result<Vec<Issue>> {
+        // Build the query dynamically: `None` filter = no constraint. Two
+        // optional filters × the base WHERE keeps this readable without an
+        // query-builder dependency.
+        let mut sql = String::from(
+            "SELECT id, project_id, stage, number, title, descr, status, priority, assignee,
+                    created_at, updated_at
+             FROM issue WHERE project_id=?",
+        );
+        if stage.is_some() {
+            sql.push_str(" AND stage=?");
+        }
+        if status.is_some() {
+            sql.push_str(" AND status=?");
+        }
+        sql.push_str(" ORDER BY number ASC");
+        let mut q = sqlx::query(&sql).bind(pid(project_id));
+        if let Some(k) = stage {
+            q = q.bind(stage_kind_text(k));
+        }
+        if let Some(s) = status {
+            q = q.bind(issue_status_text(s));
+        }
+        let rows = q.fetch_all(&self.pool).await?;
+        rows.into_iter().map(issue_row).collect()
+    }
+
+    async fn get_issue(&self, id: IssueId) -> Result<Option<Issue>> {
+        let row = sqlx::query(
+            "SELECT id, project_id, stage, number, title, descr, status, priority, assignee,
+                    created_at, updated_at
+             FROM issue WHERE id=?",
+        )
+        .bind(id.uuid().to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(issue_row).transpose()
+    }
+
+    async fn transition_issue(&self, id: IssueId, status: IssueStatus) -> Result<()> {
+        sqlx::query("UPDATE issue SET status=?, updated_at=? WHERE id=?")
+            .bind(issue_status_text(status))
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn assign_issue(&self, id: IssueId, assignee: Option<AgentId>) -> Result<()> {
+        sqlx::query("UPDATE issue SET assignee=?, updated_at=? WHERE id=?")
+            .bind(assignee.map(|a| a.uuid().to_string()))
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 fn parse_run_row(r: &sqlx::sqlite::SqliteRow) -> WorkflowRun {
@@ -1809,5 +1904,30 @@ fn knowledge_source_row(r: sqlx::sqlite::SqliteRow) -> Result<KnowledgeSource> {
         chunks: r.get::<i64, _>("chunks") as u32,
         updated_label: r.get("updated_label"),
         used_by: r.get("used_by"),
+    })
+}
+
+fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
+    let id = parse_uuid(&r.get::<String, _>("id"), IssueId::from_uuid)?;
+    let project_id = parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid)?;
+    let stage = parse_stage_kind(&r.get::<String, _>("stage"))
+        .ok_or_else(|| StoreError::Other("bad issue stage".into()))?;
+    let assignee = r
+        .get::<Option<String>, _>("assignee")
+        .filter(|s| !s.is_empty())
+        .map(|s| parse_uuid(&s, AgentId::from_uuid))
+        .transpose()?;
+    Ok(Issue {
+        id,
+        project_id,
+        stage,
+        number: r.get::<i64, _>("number") as u32,
+        title: r.get("title"),
+        desc: r.get("descr"),
+        status: parse_issue_status(&r.get::<String, _>("status")),
+        priority: parse_issue_priority(&r.get::<String, _>("priority")),
+        assignee,
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
     })
 }

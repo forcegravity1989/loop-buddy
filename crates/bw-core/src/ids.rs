@@ -88,3 +88,7 @@ id_newtype!(
     /// Stable identity of one execution of a workflow (a run record).
     WorkflowRunId
 );
+id_newtype!(
+    /// Stable identity of an [`crate::model::Issue`].
+    IssueId
+);
