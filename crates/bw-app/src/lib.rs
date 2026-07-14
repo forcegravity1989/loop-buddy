@@ -56,6 +56,9 @@ pub enum Panel {
     Routine,
     Artifact,
     Version,
+    /// Issue 看板 (R1) — assignable work units scoped to a stage, the
+    /// multica-style board the operating view now surfaces.
+    Issues,
 }
 
 /// Stage-axis selection: all stages or one of the five.

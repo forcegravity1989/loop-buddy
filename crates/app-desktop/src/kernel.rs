@@ -26,10 +26,10 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
     activity_row, agent_card, attention_from_rows, cadence_label, connector_card, cron_row,
-    hub_overview, knowledge_row, metric_vm, notify_feed, observation_feed, project_card,
+    hub_overview, issue_card, knowledge_row, metric_vm, notify_feed, observation_feed, project_card,
     session_status_label, settings_vm, skill_card, stage_detail, stage_nav, version_log_vm,
     week_plan_rows, workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm, ConnectorCardVm,
-    CronRowVm, FeedItemVm, FeedSource, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm,
+    CronRowVm, FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm,
     SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm,
     WorkflowHubRowVm,
 };
@@ -150,6 +150,9 @@ pub struct OpVm {
     pub stats: ui::vm::StatCardsVm,
     pub overall: u8,
     pub sessions: Vec<SessionCardVm>,
+    /// The project's Issues (R1) — assignable work units scoped to a stage,
+    /// the multica-style board the operating view now surfaces.
+    pub issues: Vec<IssueVm>,
     pub chat: Option<ChatVm>,
     /// Threaded down for the "从 Hub 导入" overview strip in the Workflow
     /// panel — same data as the top-level `Vm.hub`, just also reachable from
@@ -396,6 +399,26 @@ pub fn spawn() -> Kernel {
                     let _ = note_tx.send(UiNote::Error(e.to_string()));
                 }
                 let _ = vm_tx.send(build_vm(&app, &store).await);
+
+                // Optional deep-link / demo boot: open a named project straight
+                // into the Issue board (env BW_OPEN=<project name>). An honest
+                // navigation shortcut — real data + real view, just skips the
+                // wall→open→tab clicks (useful for demos + hands-free verify).
+                if let Ok(name) = std::env::var("BW_OPEN") {
+                    if let Some(p) = app.snapshot().projects.iter().find(|p| p.name == name) {
+                        let pid = p.id;
+                        let _ = app.dispatch(Command::OpenProject(pid)).await;
+                        let _ = app.dispatch(Command::SetPanel(Panel::Issues)).await;
+                        let s = app.snapshot();
+                        eprintln!(
+                            "[BW_OPEN] opened {name:?} -> view={:?} panel={:?} issues={}",
+                            s.view, s.panel, s.issues.len()
+                        );
+                        let _ = vm_tx.send(build_vm(&app, &store).await);
+                    } else {
+                        eprintln!("[BW_OPEN] project {name:?} NOT FOUND");
+                    }
+                }
 
                 // The real scheduler clock: `App` is owned single-threaded by
                 // this loop (no `Arc<Mutex<_>>`), so an auto-fire tick has to
@@ -799,6 +822,11 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         stats,
         overall,
         sessions: session_cards,
+        issues: state
+            .issues
+            .iter()
+            .map(|i| issue_card(i, &state.agents))
+            .collect(),
         chat,
         hub,
         version_log,

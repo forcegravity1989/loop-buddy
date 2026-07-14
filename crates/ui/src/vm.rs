@@ -13,11 +13,12 @@ use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAtten
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
     AgentCard, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, FeedLevel, HubCard,
-    HubKind, KnowledgeSource, Maturity, ProjectCycle, ProjectPhase, SessionStatus, Signal,
-    SkillCard, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    HubKind, Issue, IssueStatus, KnowledgeSource, Maturity, ProjectCycle, ProjectPhase,
+    SessionStatus, Signal, SkillCard, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{
-    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
+    AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
+    SkillId,
     WorkflowId,
 };
 use time::OffsetDateTime;
@@ -672,6 +673,58 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
         model: a.model.clone(),
         runs: a.runs,
         win_rate: a.win_rate.clone(),
+    }
+}
+
+// ───────────────────────── issue board (R1) ─────────────────────────
+
+/// One assignable work unit on the Issue board (R1). Scoped to a stage,
+/// owned by an agent teammate, carrying a kanban status. Every field traces
+/// back to a real `issue` row — nothing invented. `status_color` is the
+/// board's per-status accent (precomputed so the view stays simple).
+#[derive(Clone, PartialEq)]
+pub struct IssueVm {
+    pub id: IssueId,
+    pub number: u32,
+    pub stage: StageKind,
+    pub title: String,
+    pub desc: String,
+    pub status: IssueStatus,
+    pub status_label: &'static str,
+    pub status_color: &'static str,
+    pub priority_label: &'static str,
+    pub assignee_name: Option<String>,
+}
+
+/// Board accent for a status — multica's warning/success/info/destructive
+/// theming, in this app's own signal-adjacent palette.
+pub fn issue_status_color(s: IssueStatus) -> &'static str {
+    match s {
+        IssueStatus::Backlog | IssueStatus::Todo => "#9A9384",
+        IssueStatus::InProgress => "#B5862F",
+        IssueStatus::InReview => "#6E8C5A",
+        IssueStatus::Done => "#5F7355",
+        IssueStatus::Blocked => "#B0503A",
+        IssueStatus::Cancelled => "#9A9384",
+    }
+}
+
+/// `Issue` → `IssueVm`, resolving the assignee agent's name against the hub
+/// roster. An unassigned issue is honestly `None`, not a fabricated name.
+pub fn issue_card(i: &Issue, agents: &[AgentCard]) -> IssueVm {
+    IssueVm {
+        id: i.id,
+        number: i.number,
+        stage: i.stage,
+        title: i.title.clone(),
+        desc: i.desc.clone(),
+        status: i.status,
+        status_label: i.status.label(),
+        status_color: issue_status_color(i.status),
+        priority_label: i.priority.label(),
+        assignee_name: i
+            .assignee
+            .and_then(|aid| agents.iter().find(|a| a.id == aid).map(|a| a.name.clone())),
     }
 }
 
