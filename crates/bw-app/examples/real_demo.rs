@@ -21,8 +21,11 @@
 //!   cargo run -p bw-app --example real_demo -- <db-path> <workspaces-root> [--mock] [--only <slug>]
 
 use bw_app::{App, Command, Event};
-use bw_core::model::{Cadence, ProjectCycle, SourceKind, StageKind};
-use bw_core::{CronTaskId, MetricId, ProjectId, SessionId};
+use bw_core::model::{
+    Cadence, ProjectCycle, SourceKind, StageKind, CONNECTOR_KIND_CLAUDE_CLI,
+    CONNECTOR_KIND_GIT_REPO,
+};
+use bw_core::{ConnectorId, CronTaskId, MetricId, ProjectId, SessionId};
 use bw_engine::{evidence, ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
 use bw_store::{MetricRole, SessionKind, SqliteStore, Store};
 use std::path::{Path, PathBuf};
@@ -98,32 +101,25 @@ async fn run_in(dir: &Path, cmd: &str, args: &[&str]) -> (bool, String) {
     }
 }
 
-/// Create (idempotently) the requirement's real workspace: a fresh git repo
-/// with one empty root commit so the evidence collector has a HEAD.
-async fn ensure_workspace(root: &Path, slug: &str) -> PathBuf {
-    let dir = root.join(slug);
-    if dir.join(".git").exists() {
-        println!("  [工作区已存在] {}", dir.display());
-        return dir;
-    }
-    std::fs::create_dir_all(&dir).expect("create workspace dir");
-    let (ok, out) = run_in(&dir, "git", &["init", "-q"]).await;
-    assert!(ok, "git init failed: {out}");
-    // Empty root commit — a real anchor, not fabricated content.
-    let (ok, out) = run_in(
-        &dir,
-        "git",
-        &[
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "chore: workspace 初始化（builders-workbench 托管起点）",
-        ],
-    )
-    .await;
-    assert!(ok, "git initial commit failed: {out}");
-    println!("  [工作区已初始化] {}", dir.display());
+/// Create (idempotently) the requirement's real workspace — the same
+/// provisioner `CompleteCreation` uses (README from the requirement's own
+/// brief + .gitignore + one real first commit), so conductor-made and
+/// creation-flow-made repos are indistinguishable.
+async fn ensure_workspace(root: &Path, req: &Requirement) -> PathBuf {
+    let dir = root.join(req.slug);
+    let existed = dir.join(".git").exists();
+    bw_engine::provision_git_workspace(&dir, req.name, req.desc)
+        .await
+        .expect("provision workspace");
+    println!(
+        "  [{}] {}",
+        if existed {
+            "工作区已存在"
+        } else {
+            "工作区已开仓"
+        },
+        dir.display()
+    );
     dir
 }
 
@@ -378,20 +374,26 @@ async fn run_stage(
         "  [证据] commits={} tracked={} docs={} dirty={}",
         ev.commit_count, ev.tracked_files, ev.docs_files, ev.dirty_paths
     );
-    app.dispatch(Command::RecordCollectedObservation {
-        metric: metrics.docs,
-        value: ev.docs_files.to_string(),
-        source: SourceKind::GitPr,
-    })
-    .await
-    .expect("record docs observation");
-    app.dispatch(Command::RecordCollectedObservation {
-        metric: metrics.commits,
-        value: ev.commit_count.to_string(),
-        source: SourceKind::GitPr,
-    })
-    .await
-    .expect("record commits observation");
+    // Connector 真喂指标 (Tier D): the project's own git-repo connector probes
+    // the workspace and feeds 工作区真实提交数/剧本产物文档数 as
+    // `SourceKind::Connector` observations (change-guarded — a stage that
+    // moved nothing appends nothing). Replaces the conductor's former direct
+    // `RecordCollectedObservation(GitPr)` writes for these two metrics: the
+    // standing connector, not the demo script, is now the collector.
+    let repo_conn = store
+        .list_connectors()
+        .await
+        .expect("list connectors")
+        .into_iter()
+        .find(|c| c.kind == CONNECTOR_KIND_GIT_REPO && c.project_id == Some(project));
+    match repo_conn {
+        Some(c) => {
+            app.dispatch(Command::SyncConnector { id: c.id })
+                .await
+                .expect("sync git-repo connector");
+        }
+        None => println!("  [警告] 该项目没有 git-repo 连接器——工作区指标本轮无人喂"),
+    }
     if let Some((passed, total)) = measure_tests(ws).await {
         println!("  [证据] cargo test 真实结果：{passed}/{total}");
         if total > 0 {
@@ -476,8 +478,8 @@ async fn run_stage(
 }
 
 struct DemoMetrics {
-    docs: MetricId,
-    commits: MetricId,
+    /// The one metric the conductor still feeds directly (`Ci` source) —
+    /// docs/commits moved to the project's git-repo connector.
     tests: MetricId,
 }
 
@@ -552,6 +554,35 @@ async fn main() {
         now_label()
     );
 
+    // ── 执行器连接器(全局一次):claude CLI 的真实版本探针 ──
+    {
+        let conns = store.list_connectors().await.unwrap();
+        let cli_conn = match conns.iter().find(|c| c.kind == CONNECTOR_KIND_CLAUDE_CLI) {
+            Some(c) => c.id,
+            None => {
+                let id = ConnectorId::new();
+                app.dispatch(Command::CreateConnector {
+                    id,
+                    name: "claude CLI · 执行器".into(),
+                    kind: CONNECTOR_KIND_CLAUDE_CLI.into(),
+                    scope: "全部项目".into(),
+                    project_id: None,
+                    config: String::new(),
+                })
+                .await
+                .expect("create claude-cli connector");
+                id
+            }
+        };
+        app.dispatch(Command::SyncConnector { id: cli_conn })
+            .await
+            .expect("sync claude-cli connector");
+        let after = store.list_connectors().await.unwrap();
+        if let Some(c) = after.iter().find(|c| c.id == cli_conn) {
+            println!("[执行器探针] {} → {}\n", c.name, c.status.label());
+        }
+    }
+
     for req in REQUIREMENTS {
         if let Some(o) = &only {
             if o != req.slug {
@@ -559,7 +590,7 @@ async fn main() {
             }
         }
         println!("━━ 需求「{}」（{}）━━", req.name, req.kind);
-        let ws = ensure_workspace(&ws_root, req.slug).await;
+        let ws = ensure_workspace(&ws_root, req).await;
 
         // ── 创建流程（幂等：项目已存在则直接续跑）──
         let project = match store
@@ -625,30 +656,53 @@ async fn main() {
             .expect("set workspace");
         }
 
-        // ── 三个机器采集指标（初值 = 真实当前态）──
+        // ── 项目的 git-repo 连接器（工作区指标的常驻采集者）──
+        let existing_conns = store.list_connectors().await.unwrap();
+        if !existing_conns
+            .iter()
+            .any(|c| c.kind == CONNECTOR_KIND_GIT_REPO && c.project_id == Some(project))
+        {
+            app.dispatch(Command::CreateConnector {
+                id: ConnectorId::new(),
+                name: format!("{} · 代码仓", req.name),
+                kind: CONNECTOR_KIND_GIT_REPO.into(),
+                scope: req.name.into(),
+                project_id: Some(project),
+                // config = the real repo path — the probe's fallback when the
+                // project runs --mock (workspace_path left empty on purpose).
+                config: ws.to_string_lossy().into_owned(),
+            })
+            .await
+            .expect("create git-repo connector");
+            println!("  [连接器] git-repo 已绑定(工作区指标的常驻采集者)");
+        }
+
+        // ── 三个机器采集指标（初值 = 真实当前态）——
+        // docs/commits 定义在此,喂入由 git-repo 连接器负责(名字即契约:
+        // bw_app::METRIC_WS_DOCS / METRIC_WS_COMMITS)。
+        let _ = find_or_create_metric(
+            &mut app,
+            &store,
+            project,
+            bw_app::METRIC_WS_DOCS,
+            "工作区 docs/ 下被 git 追踪的 .md 数 —— 五角色剧本的真实产出物（Connector 采集）",
+            MetricRole::Leading,
+            "≥10",
+            "0",
+        )
+        .await;
+        let _ = find_or_create_metric(
+            &mut app,
+            &store,
+            project,
+            bw_app::METRIC_WS_COMMITS,
+            "git rev-list --count HEAD —— 阶段产出被真实合入的次数（Connector 采集）",
+            MetricRole::Leading,
+            "≥5",
+            "1",
+        )
+        .await;
         let metrics = DemoMetrics {
-            docs: find_or_create_metric(
-                &mut app,
-                &store,
-                project,
-                "剧本产物文档数",
-                "工作区 docs/ 下被 git 追踪的 .md 数 —— 五角色剧本的真实产出物（GitPr 采集）",
-                MetricRole::Leading,
-                "≥10",
-                "0",
-            )
-            .await,
-            commits: find_or_create_metric(
-                &mut app,
-                &store,
-                project,
-                "工作区真实提交数",
-                "git rev-list --count HEAD —— 阶段产出被真实合入的次数（GitPr 采集）",
-                MetricRole::Leading,
-                "≥5",
-                "1",
-            )
-            .await,
             tests: find_or_create_metric(
                 &mut app,
                 &store,
@@ -704,6 +758,29 @@ async fn main() {
             }
         }
 
+        // ── 产物登记:真实运行已自动登记;这里再做一次显式采集兜底。
+        // --mock 时项目没有 workspace_path(执行留在 Mock 是刻意的),仅为
+        // 扫描临时绑定再清空——期间不发生任何执行。
+        if mock {
+            app.dispatch(Command::SetWorkspace {
+                path: ws.to_string_lossy().into_owned(),
+                allow_commands: false,
+            })
+            .await
+            .expect("bind ws for scan");
+        }
+        app.dispatch(Command::CollectArtifacts)
+            .await
+            .expect("collect artifacts");
+        if mock {
+            app.dispatch(Command::SetWorkspace {
+                path: String::new(),
+                allow_commands: false,
+            })
+            .await
+            .expect("unbind ws after scan");
+        }
+
         // ── 结论：全部真实读回 ──
         let proj = store.get_project(project).await.unwrap().unwrap();
         let handoffs = store.list_handoffs(project).await.unwrap();
@@ -715,6 +792,27 @@ async fn main() {
             .collect();
         let obs = store.list_observations(project).await.unwrap();
         let sigs = store.persisted_signals(project).await.unwrap();
+        let artifacts = store.list_artifacts(project).await.unwrap();
+        let connectors = store.list_connectors().await.unwrap();
+        let role_agents: Vec<_> = store
+            .list_agents()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|a| StageKind::ALL.iter().any(|k| a.name == k.role_short()))
+            .collect();
+        let stage_skills: Vec<_> = store
+            .list_skills()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|s| {
+                StageKind::ALL
+                    .iter()
+                    .flat_map(|k| bw_core::playbook::stage_skills(*k))
+                    .any(|sk| sk.name == s.name)
+            })
+            .collect();
         println!("\n  ── 「{}」真实读回 ──", req.name);
         println!(
             "  active_stage = {:?}（环闭合后回到原型）",
@@ -739,6 +837,34 @@ async fn main() {
                 .count(),
             sigs.project,
         );
+        println!(
+            "  产物登记 {} 个版本（{} 个文件）· 其中 run 产出归属 {} 个",
+            artifacts.len(),
+            {
+                let mut paths: Vec<_> = artifacts.iter().map(|a| a.path.as_str()).collect();
+                paths.sort_unstable();
+                paths.dedup();
+                paths.len()
+            },
+            artifacts
+                .iter()
+                .filter(|a| a.workflow_run_id.is_some())
+                .count(),
+        );
+        for a in &role_agents {
+            if a.runs > 0 {
+                println!(
+                    "  角色记账:{} 运行 {} 次 · 成功率 {}",
+                    a.name,
+                    a.runs,
+                    if a.win_rate.is_empty() {
+                        "—"
+                    } else {
+                        &a.win_rate
+                    }
+                );
+            }
+        }
         println!();
 
         // ── 证据导出（报告的数据源；全部读回值，无一手写）──
@@ -781,6 +907,33 @@ async fn main() {
             "metric_signals": sigs.metrics.iter().map(|m| serde_json::json!({
                 "name": m.name,
                 "signal": m.signal.map(|s| format!("{s:?}")),
+                "source": m.source.map(|s| format!("{s:?}")),
+            })).collect::<Vec<_>>(),
+            "artifacts": artifacts.iter().map(|a| serde_json::json!({
+                "path": a.path,
+                "kind": a.kind.text(),
+                "bytes": a.bytes,
+                "git_commit": a.git_commit,
+                "from_run": a.workflow_run_id.is_some(),
+                "stage": a.stage_kind.map(|k| k.label()),
+            })).collect::<Vec<_>>(),
+            "connectors": connectors.iter().map(|c| serde_json::json!({
+                "name": c.name,
+                "kind": c.kind,
+                "status": c.status.label(),
+                "last_sync": c.last_sync,
+                "bound_project": c.project_id.map(|p| p.uuid().to_string()),
+            })).collect::<Vec<_>>(),
+            "role_agents": role_agents.iter().map(|a| serde_json::json!({
+                "name": a.name,
+                "runs": a.runs,
+                "win_rate": a.win_rate,
+                "has_instructions": !a.instructions.trim().is_empty(),
+            })).collect::<Vec<_>>(),
+            "stage_skills": stage_skills.iter().map(|s| serde_json::json!({
+                "name": s.name,
+                "uses": s.uses,
+                "has_content": !s.content.trim().is_empty(),
             })).collect::<Vec<_>>(),
         });
         let export_path = ws_root.join(format!("evidence-{}.json", req.slug));
