@@ -85,6 +85,23 @@ impl SqliteStore {
         // DBs (pre-iter-4) opened before this column existed get it added here;
         // manual-run rows simply stay NULL.
         add_column_if_missing(&pool, "workflow_run", "cron_task_id", "TEXT").await?;
+        // Playbook upgrade: per-phase real instructions. Old DBs get the
+        // column with `'[]'` — every existing workflow keeps its shared-prompt
+        // behavior byte-for-byte.
+        add_column_if_missing(
+            &pool,
+            "workflow_spec",
+            "phase_prompts",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )
+        .await?;
+        add_column_if_missing(
+            &pool,
+            "workflow_version",
+            "phase_prompts",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )
+        .await?;
 
         Ok(Self { pool })
     }
@@ -943,9 +960,9 @@ impl Store for SqliteStore {
         let t = now_unix();
         sqlx::query(
             "INSERT INTO workflow_spec
-                (id, name, kind_json, prompt, goal, stage_ref, phases, agents_json, skills_json,
-                 loop_retries, loop_max_iter, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                (id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts, agents_json,
+                 skills_json, loop_retries, loop_max_iter, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(w.id.uuid().to_string())
         .bind(&w.name)
@@ -954,6 +971,7 @@ impl Store for SqliteStore {
         .bind(&w.goal)
         .bind(w.stage_ref.map(i64::from))
         .bind(serde_json::to_string(&w.phases)?)
+        .bind(serde_json::to_string(&w.phase_prompts)?)
         .bind(serde_json::to_string(&w.agents)?)
         .bind(serde_json::to_string(&w.skills)?)
         .bind(i64::from(w.loop_config.retries))
@@ -967,8 +985,8 @@ impl Store for SqliteStore {
 
     async fn list_workflow_specs(&self) -> Result<Vec<WorkflowSpec>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, agents_json, skills_json,
-                    loop_retries, loop_max_iter
+            "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts,
+                    agents_json, skills_json, loop_retries, loop_max_iter
              FROM workflow_spec ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -978,8 +996,8 @@ impl Store for SqliteStore {
 
     async fn get_workflow_spec(&self, id: WorkflowId) -> Result<Option<WorkflowSpec>> {
         let row = sqlx::query(
-            "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, agents_json, skills_json,
-                    loop_retries, loop_max_iter
+            "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts,
+                    agents_json, skills_json, loop_retries, loop_max_iter
              FROM workflow_spec WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -1005,9 +1023,9 @@ impl Store for SqliteStore {
         let t = now_unix();
         sqlx::query(
             "INSERT INTO workflow_spec
-                (id, name, kind_json, prompt, goal, stage_ref, phases, agents_json, skills_json,
-                 loop_retries, loop_max_iter, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                (id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts, agents_json,
+                 skills_json, loop_retries, loop_max_iter, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(new_id.uuid().to_string())
         .bind(&from.name)
@@ -1016,6 +1034,7 @@ impl Store for SqliteStore {
         .bind(&from.goal)
         .bind(from.stage_ref.map(i64::from))
         .bind(serde_json::to_string(&from.phases)?)
+        .bind(serde_json::to_string(&from.phase_prompts)?)
         .bind(serde_json::to_string(&from.agents)?)
         .bind(serde_json::to_string(&from.skills)?)
         .bind(i64::from(from.loop_config.retries))
@@ -1275,7 +1294,7 @@ impl Store for SqliteStore {
         // the overwrite — so the evolution history survives. Read everything
         // the version row needs in one fetch.
         let cur = sqlx::query(
-            "SELECT kind_json, name, prompt, goal, phases, agents_json, skills_json
+            "SELECT kind_json, name, prompt, goal, phases, phase_prompts, agents_json, skills_json
              FROM workflow_spec WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -1313,9 +1332,9 @@ impl Store for SqliteStore {
         // Freeze the about-to-be-replaced content as version `old_version`.
         sqlx::query(
             "INSERT INTO workflow_version
-             (id, workflow_id, version, name, prompt, goal, phases, agents_json,
+             (id, workflow_id, version, name, prompt, goal, phases, phase_prompts, agents_json,
               skills_json, loop_retries, loop_max_iter, note, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 3, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 3, ?, ?)",
         )
         .bind(uuid::Uuid::new_v4().to_string())
         .bind(id.uuid().to_string())
@@ -1324,6 +1343,7 @@ impl Store for SqliteStore {
         .bind(cur.get::<String, _>("prompt"))
         .bind(cur.get::<String, _>("goal"))
         .bind(cur.get::<String, _>("phases"))
+        .bind(cur.get::<String, _>("phase_prompts"))
         .bind(cur.get::<String, _>("agents_json"))
         .bind(cur.get::<String, _>("skills_json"))
         .bind(&edit.note)
@@ -1334,14 +1354,15 @@ impl Store for SqliteStore {
         // Now overwrite with the new version.
         sqlx::query(
             "UPDATE workflow_spec
-             SET kind_json=?, prompt=?, goal=?, phases=?, agents_json=?, skills_json=?,
-                 updated_at=?, rev=rev+1
+             SET kind_json=?, prompt=?, goal=?, phases=?, phase_prompts=?, agents_json=?,
+                 skills_json=?, updated_at=?, rev=rev+1
              WHERE id=?",
         )
         .bind(serde_json::to_string(&new_kind)?)
         .bind(&edit.prompt)
         .bind(&edit.goal)
         .bind(serde_json::to_string(&edit.phases)?)
+        .bind(serde_json::to_string(&edit.phase_prompts)?)
         .bind(serde_json::to_string(&edit.agents)?)
         .bind(serde_json::to_string(&edit.skills)?)
         .bind(now_unix())
@@ -1356,8 +1377,8 @@ impl Store for SqliteStore {
         workflow_id: WorkflowId,
     ) -> Result<Vec<WorkflowVersion>> {
         let rows = sqlx::query(
-            "SELECT id, workflow_id, version, name, prompt, goal, phases, agents_json,
-                    skills_json, loop_retries, loop_max_iter, note, created_at
+            "SELECT id, workflow_id, version, name, prompt, goal, phases, phase_prompts,
+                    agents_json, skills_json, loop_retries, loop_max_iter, note, created_at
              FROM workflow_version WHERE workflow_id=? ORDER BY version DESC",
         )
         .bind(workflow_id.uuid().to_string())
@@ -1377,6 +1398,8 @@ impl Store for SqliteStore {
                     prompt: r.get("prompt"),
                     goal: r.get("goal"),
                     phases: serde_json::from_str(&r.get::<String, _>("phases"))?,
+                    phase_prompts: serde_json::from_str(&r.get::<String, _>("phase_prompts"))
+                        .unwrap_or_default(),
                     agents: serde_json::from_str(&r.get::<String, _>("agents_json"))?,
                     skills: serde_json::from_str(&r.get::<String, _>("skills_json"))?,
                     loop_retries: r.get::<i64, _>("loop_retries") as u8,
@@ -1716,6 +1739,8 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
     let id = parse_uuid(&r.get::<String, _>("id"), WorkflowId::from_uuid)?;
     let kind: WorkflowKind = serde_json::from_str(&r.get::<String, _>("kind_json"))?;
     let phases: Vec<String> = serde_json::from_str(&r.get::<String, _>("phases"))?;
+    let phase_prompts: Vec<String> =
+        serde_json::from_str(&r.get::<String, _>("phase_prompts")).unwrap_or_default();
     let agents: Vec<AgentRef> = serde_json::from_str(&r.get::<String, _>("agents_json"))?;
     let skills: Vec<SkillRef> = serde_json::from_str(&r.get::<String, _>("skills_json"))?;
     Ok(WorkflowSpec {
@@ -1726,6 +1751,7 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
         goal: r.get("goal"),
         stage_ref: r.get::<Option<i64>, _>("stage_ref").map(|v| v as u8),
         phases,
+        phase_prompts,
         agents,
         skills,
         loop_config: LoopConfig {

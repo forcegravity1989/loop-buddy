@@ -134,6 +134,9 @@ pub struct NewWorkflowSpec {
     pub goal: String,
     pub stage_ref: Option<u8>,
     pub phases: Vec<String>,
+    /// Per-phase real instructions (playbook), index-aligned with `phases`.
+    /// Empty = pre-playbook workflow (every phase shares `prompt`).
+    pub phase_prompts: Vec<String>,
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     pub loop_config: LoopConfig,
@@ -148,6 +151,9 @@ pub struct WorkflowEdit {
     pub prompt: String,
     pub goal: String,
     pub phases: Vec<String>,
+    /// Per-phase instructions, index-aligned with `phases` (may be empty —
+    /// an edit that drops back to a single shared `prompt` is legal).
+    pub phase_prompts: Vec<String>,
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     /// Caller's reason for this "优化" — recorded on the version snapshot

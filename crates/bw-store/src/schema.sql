@@ -149,6 +149,8 @@ CREATE TABLE IF NOT EXISTS workflow_spec (
     goal           TEXT NOT NULL DEFAULT '',
     stage_ref      INTEGER,                   -- 1..=5, nullable (metrics-layer / cross-cutting)
     phases         TEXT NOT NULL DEFAULT '[]', -- JSON [String]
+    phase_prompts  TEXT NOT NULL DEFAULT '[]', -- JSON [String], index-aligned with phases;
+                                               -- '[]' = pre-playbook (all phases share prompt)
     agents_json    TEXT NOT NULL DEFAULT '[]', -- JSON [AgentRef]
     skills_json    TEXT NOT NULL DEFAULT '[]', -- JSON [SkillRef]
     loop_retries   INTEGER NOT NULL DEFAULT 1,
@@ -286,6 +288,7 @@ CREATE TABLE IF NOT EXISTS workflow_version (
     prompt         TEXT NOT NULL DEFAULT '',
     goal           TEXT NOT NULL DEFAULT '',
     phases         TEXT NOT NULL DEFAULT '[]',
+    phase_prompts  TEXT NOT NULL DEFAULT '[]', -- frozen with the rest of the content
     agents_json    TEXT NOT NULL DEFAULT '[]',
     skills_json    TEXT NOT NULL DEFAULT '[]',
     loop_retries   INTEGER NOT NULL DEFAULT 1,

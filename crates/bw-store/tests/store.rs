@@ -275,6 +275,7 @@ async fn workflow_spec_create_list_get_roundtrip() {
             goal: "产出验证过的问题陈述".into(),
             stage_ref: Some(1),
             phases: vec!["访谈提纲".into(), "深挖场景".into()],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: LoopConfig {
@@ -384,6 +385,7 @@ async fn record_workflow_use_increments_uses() {
             goal: "g".into(),
             stage_ref: None,
             phases: vec![],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: LoopConfig {

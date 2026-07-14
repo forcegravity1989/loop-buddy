@@ -15,10 +15,10 @@
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    cron_due, stage_workflow, AgentCard, AgentRef, Cadence, Connector, CronStatus, CronTask,
-    HubSource, KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role,
-    RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind,
-    WorkflowSpec,
+    cron_due, stage_workflow, stage_workflow_with_playbook, AgentCard, AgentRef, Cadence,
+    Connector, CronStatus, CronTask, HubSource, KnowledgeSource, LibSource, LoopConfig, Maturity,
+    ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
+    SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
@@ -119,6 +119,16 @@ pub enum Command {
         metric: MetricId,
         value: String,
     },
+    /// A **machine-collected** observation — same append-only path as
+    /// `RecordObservation`, but the source is the collector that really
+    /// measured it (`Ci` / `GitPr` / …), never `Manual`. This is the evidence
+    /// collector's write path (`bw_engine::evidence` → metric), the first
+    /// non-Manual L0 producer (Tier D's minimal down payment).
+    RecordCollectedObservation {
+        metric: MetricId,
+        value: String,
+        source: SourceKind,
+    },
     /// Hand-set plan progress for one stage (plan data, not a signal — the
     /// derive chain is untouched).
     SetStageProgress {
@@ -175,6 +185,17 @@ pub enum Command {
         session: SessionId,
         spec: WorkflowSpec,
     },
+    /// Run one stage's **playbook** workflow for the active project: the
+    /// kernel assembles the real project context (brief/north star/last
+    /// handoff note/workspace state) into `stage_workflow_with_playbook`'s
+    /// per-phase instructions, then executes through the same
+    /// `run_workflow_inner` path as any other run. This is the "五角色真实
+    /// 执行" entry point — the UI/conductor names the stage; the kernel owns
+    /// what the role actually gets told.
+    RunStagePlaybook {
+        session: SessionId,
+        stage_kind: StageKind,
+    },
     /// Reload the hub library (`workflow_specs`/`skills`/`agents`) from the
     /// store. Called at `Boot`; also dispatchable standalone for a manual
     /// refresh. Deliberately separate from `Boot` — hub data has nothing to
@@ -188,6 +209,9 @@ pub enum Command {
         goal: String,
         stage_ref: Option<u8>,
         phases: Vec<String>,
+        /// Per-phase real instructions (playbook), index-aligned with
+        /// `phases`; empty = every phase shares `prompt` (legacy behavior).
+        phase_prompts: Vec<String>,
         agents: Vec<AgentRef>,
         skills: Vec<SkillRef>,
         loop_config: LoopConfig,
@@ -219,6 +243,9 @@ pub enum Command {
         prompt: String,
         goal: String,
         phases: Vec<String>,
+        /// Per-phase instructions (may be empty — dropping back to a single
+        /// shared `prompt` is a legal edit).
+        phase_prompts: Vec<String>,
         agents: Vec<AgentRef>,
         skills: Vec<SkillRef>,
         /// Why this "优化" happened — frozen onto the version snapshot (iter 5).
@@ -1025,6 +1052,32 @@ impl App {
                 self.emit(Event::ProjectUpdated(p));
             }
 
+            Command::RecordCollectedObservation {
+                metric,
+                value,
+                source,
+            } => {
+                let p = self.active()?;
+                let value = value.trim();
+                if value.is_empty() {
+                    return Err(AppError::Invalid("观测值不能为空".into()));
+                }
+                if matches!(source, SourceKind::Manual) {
+                    // A hand-typed value must go through `RecordObservation`
+                    // and wear its `手填` badge — letting a caller stamp
+                    // `Manual` here would blur the one line this command
+                    // exists to draw (machine-measured vs hand-entered).
+                    return Err(AppError::Invalid(
+                        "机器采集观测不能标记为 Manual——请走 RecordObservation".into(),
+                    ));
+                }
+                self.store
+                    .append_observation(metric, source, value, now())
+                    .await?;
+                self.store.recompute_signals(p, now()).await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
             Command::SetStageProgress {
                 stage_kind,
                 progress,
@@ -1140,6 +1193,48 @@ impl App {
                     .await?;
             }
 
+            Command::RunStagePlaybook {
+                session,
+                stage_kind,
+            } => {
+                let p = self.active()?;
+                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+                // The baton this stage received — the latest real handoff
+                // note (empty on a project's very first stage).
+                // `list_handoffs` is newest-first (ORDER BY created_at DESC),
+                // so the latest note is `.first()`.
+                let handoff_note = self
+                    .store
+                    .list_handoffs(p)
+                    .await?
+                    .first()
+                    .map(|h| h.note.clone())
+                    .unwrap_or_default();
+                let workspace_hint = if proj.workspace_path.trim().is_empty() {
+                    "（未配置真实工作区 —— 本次运行在 MockExecutor 上，产出仅为流程演示）"
+                        .to_string()
+                } else {
+                    format!(
+                        "工作区 {}（git 仓库）。请在其中完成一切产出；之前阶段的产出也在这里，先查看现状再动手。",
+                        proj.workspace_path.trim()
+                    )
+                };
+                let ctx = bw_core::playbook::PlaybookCtx {
+                    project_name: proj.name.clone(),
+                    project_kind: proj.kind.clone(),
+                    project_desc: proj.desc.clone(),
+                    benchmark: proj.benchmark.clone(),
+                    opportunity: proj.opportunity.clone(),
+                    north_star: proj.north_star.clone(),
+                    ns_def: proj.ns_def.clone(),
+                    handoff_note,
+                    workspace_hint,
+                };
+                let spec = stage_workflow_with_playbook(stage_kind, &ctx);
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None)
+                    .await?;
+            }
+
             Command::RefreshHubs => {
                 self.refresh_workflow_specs().await?;
                 self.refresh_skills().await?;
@@ -1153,6 +1248,7 @@ impl App {
                 goal,
                 stage_ref,
                 phases,
+                phase_prompts,
                 agents,
                 skills,
                 loop_config,
@@ -1163,6 +1259,11 @@ impl App {
             } => {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                if !phase_prompts.is_empty() && phase_prompts.len() != phases.len() {
+                    return Err(AppError::Invalid(
+                        "phase_prompts 必须为空或与 phases 等长".into(),
+                    ));
                 }
                 self.store
                     .create_workflow_spec(NewWorkflowSpec {
@@ -1180,6 +1281,7 @@ impl App {
                         goal,
                         stage_ref,
                         phases,
+                        phase_prompts,
                         agents,
                         skills,
                         loop_config,
@@ -1234,10 +1336,16 @@ impl App {
                 prompt,
                 goal,
                 phases,
+                phase_prompts,
                 agents,
                 skills,
                 note,
             } => {
+                if !phase_prompts.is_empty() && phase_prompts.len() != phases.len() {
+                    return Err(AppError::Invalid(
+                        "phase_prompts 必须为空或与 phases 等长".into(),
+                    ));
+                }
                 self.store
                     .update_workflow_spec(
                         id,
@@ -1245,6 +1353,7 @@ impl App {
                             prompt,
                             goal,
                             phases,
+                            phase_prompts,
                             agents,
                             skills,
                             note,
@@ -1545,6 +1654,9 @@ fn run_params_snapshot(spec: &WorkflowSpec, trigger: RunTrigger) -> String {
     let v = serde_json::json!({
         "phases": spec.phases,
         "phase_count": spec.phases.len(),
+        // Whether this run executed per-phase playbook instructions (vs the
+        // legacy shared prompt) — an A/B axis for later run analytics.
+        "playbook": !spec.phase_prompts.is_empty(),
         "loop": { "retries": spec.loop_config.retries, "max_iter": spec.loop_config.max_iter },
         "agents": spec.agents.len(),
         "skills": spec.skills.len(),

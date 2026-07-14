@@ -1280,6 +1280,7 @@ mod tests {
             goal: "产出验证过的问题陈述".into(),
             stage_ref,
             phases: vec!["访谈提纲".into(), "深挖场景".into()],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: bw_core::model::LoopConfig {
@@ -1301,6 +1302,7 @@ mod tests {
             goal: "g".into(),
             stage_ref: Some(1),
             phases: vec![],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: bw_core::model::LoopConfig {

@@ -2928,6 +2928,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 goal: w.desc.to_string(),
                 stage_ref: Some(w.stage_ref),
                 phases: vec![w.name.to_string()],
+                phase_prompts: vec![],
                 agents: vec![],
                 skills: vec![],
                 loop_config: LoopConfig {
@@ -2949,6 +2950,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 goal: spec.goal,
                 stage_ref: spec.stage_ref,
                 phases: spec.phases,
+                phase_prompts: spec.phase_prompts,
                 agents: spec.agents,
                 skills: spec.skills,
                 loop_config: spec.loop_config,

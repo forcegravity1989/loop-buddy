@@ -548,6 +548,9 @@ fn CreateWorkflowForm(
             goal: goal().trim().to_string(),
             stage_ref: stage_ref().map(|s| s.index()),
             phases,
+            // The hub's create form authors a single shared prompt; per-phase
+            // playbook prompts come from `stage_workflow_with_playbook` runs.
+            phase_prompts: vec![],
             agents: agent_refs,
             skills: skill_refs,
             loop_config: LoopConfig {
@@ -690,6 +693,11 @@ fn OptimizeWorkflowForm(
             prompt: prompt().trim().to_string(),
             goal: goal().trim().to_string(),
             phases,
+            // This form edits a single shared prompt — saving through it
+            // honestly reverts the spec to shared-prompt mode (the version
+            // snapshot has already frozen any per-phase prompts it had; a
+            // per-phase editor is P3 UI work).
+            phase_prompts: vec![],
             agents: agent_refs,
             skills: skill_refs,
             note: String::new(),
@@ -809,6 +817,7 @@ fn AdHocWorkflowForm(
             goal: goal().trim().to_string(),
             stage_ref: kind.map(|s| s.index()),
             phases,
+            phase_prompts: vec![],
             agents: agent_refs,
             skills: skill_refs,
             loop_config: LoopConfig {

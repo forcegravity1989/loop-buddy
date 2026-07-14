@@ -1190,10 +1190,11 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
                 title: format!("{} · 第{}轮", stage_kind.label(), round),
             });
             k.send(Command::SelectSession(Some(sid)));
-            // A fresh spec per run — the template is methodology, the run is real.
-            k.send(Command::RunWorkflow {
+            // The kernel assembles this stage's playbook (role instructions +
+            // real project context) — the UI only names the stage.
+            k.send(Command::RunStagePlaybook {
                 session: sid,
-                spec: stage_workflow(stage_kind),
+                stage_kind,
             });
         }
     };
