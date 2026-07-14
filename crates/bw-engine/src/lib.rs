@@ -20,11 +20,13 @@ pub mod contract;
 pub mod evidence;
 pub mod git_log;
 mod mock;
+pub mod workspace;
 
 pub use claude_cli::{ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
 pub use evidence::{EvidenceError, WorkspaceEvidence, WorkspaceFile};
 pub use git_log::{read_commits, GitCommit, GitLogError};
 pub use mock::MockExecutor;
+pub use workspace::{provision_git_workspace, ProvisionError};
 
 /// One executable phase, built from a [`WorkflowSpec`] phase.
 #[derive(Clone, Debug)]

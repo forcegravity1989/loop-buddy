@@ -15,20 +15,22 @@
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    cron_due, stage_workflow, stage_workflow_with_playbook, AgentCard, AgentRef, Cadence,
-    Connector, CronStatus, CronTask, HubSource, KnowledgeSource, LibSource, LoopConfig, Maturity,
-    ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
-    SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    classify_artifact_path, cron_due, stage_workflow, stage_workflow_with_playbook, AgentCard,
+    AgentRef, Artifact, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, HubSource,
+    KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus,
+    RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{
-    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
-    WorkflowId,
+    AgentId, ArtifactId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId,
+    SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit, PermissionMode, RunCtx, RunEvent,
+    evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit, PermissionMode, RunCtx,
+    RunEvent,
 };
 use bw_store::{
-    AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewConnector, NewCronTask,
+    AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewArtifact, NewConnector, NewCronTask,
     NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec,
     ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
@@ -175,6 +177,21 @@ pub enum Command {
     /// since it's per-project, potentially slow, and most projects have no
     /// `workspace_path` configured at all.
     LoadVersionLog,
+    /// Load the active project's registered artifacts into state (Artifact
+    /// panel). Same explicit-load pattern as `LoadVersionLog`.
+    LoadArtifacts,
+    /// Re-scan the active project's workspace right now and register any new
+    /// artifact versions (the manual counterpart to the automatic post-run
+    /// scan). Requires a configured workspace.
+    CollectArtifacts,
+    /// Run a connector's *real* probe: `git-repo` collects live workspace
+    /// evidence (and feeds it to the bound project's matching metrics as
+    /// `SourceKind::Connector` observations — Tier D for real); `claude-cli`
+    /// checks the executor binary. Any other kind errors honestly — there is
+    /// no fake "synced" state.
+    SyncConnector {
+        id: ConnectorId,
+    },
     StartSession {
         id: SessionId,
         stage_kind: Option<StageKind>,
@@ -393,10 +410,24 @@ pub enum Event {
         ok: bool,
     },
     ConnectorsChanged,
+    /// A connector's real probe just finished — `detail` is the probe's
+    /// honest summary (e.g. "3 提交 · 12 文件" or the error text).
+    ConnectorSynced {
+        name: String,
+        ok: bool,
+        detail: String,
+    },
     KnowledgeSourcesChanged,
     ActivityChanged,
     ClaudeConfigChanged,
     VersionLogChanged,
+    /// New artifact versions were registered (post-run auto-scan or a manual
+    /// `CollectArtifacts`). Carries the honest count of *genuinely new* rows.
+    ArtifactsRegistered {
+        fresh: u32,
+    },
+    /// The `AppState.artifacts` snapshot was (re)loaded.
+    ArtifactsChanged,
     /// The self-driving optimization cycle (iter 18) just ran. Carries the
     /// full report — scanned workflows, proposals generated, what was
     /// auto-applied (safe/positive), and what was deferred to a human. A
@@ -468,6 +499,9 @@ pub struct AppState {
     /// runs at least once — never eagerly fetched (per-project, potentially
     /// slow, and most projects have no `workspace_path` at all).
     pub version_log: Option<(ProjectId, Result<Vec<GitCommit>, String>)>,
+    /// Registered artifacts of the active project (Artifact panel) — same
+    /// explicit-load, project-tagged pattern as `version_log`.
+    pub artifacts: Option<(ProjectId, Vec<Artifact>)>,
 }
 
 impl Default for AppState {
@@ -488,6 +522,7 @@ impl Default for AppState {
             recent_activity: Vec::new(),
             claude_config: ClaudeCliConfig::default(),
             version_log: None,
+            artifacts: None,
         }
     }
 }
@@ -498,6 +533,11 @@ pub struct App {
     mock_engine: Engine,
     state: AppState,
     events: broadcast::Sender<Event>,
+    /// Root under which `CompleteCreation` auto-provisions each new project's
+    /// own git workspace (all-in-one-codebase 默认: 每个项目=一个代码仓).
+    /// `None` (the default, and every pre-完整形态 caller) keeps the old
+    /// behavior: no provisioning, workspace stays an explicit opt-in.
+    workspaces_root: Option<PathBuf>,
 }
 
 impl App {
@@ -511,7 +551,17 @@ impl App {
                 ..AppState::default()
             },
             events: tx,
+            workspaces_root: None,
         }
+    }
+
+    /// Enable all-in-one-codebase auto-provisioning: every project completed
+    /// through the creation flow gets its own real git repo under `root`
+    /// (created + `git init` + first commit + a bound `git-repo` connector),
+    /// so the five roles have a real substrate from birth instead of Mock.
+    pub fn with_workspaces_root(mut self, root: PathBuf) -> Self {
+        self.workspaces_root = Some(root);
+        self
     }
 
     /// Subscribe to the event stream. Each subscriber gets its own receiver.
@@ -589,12 +639,25 @@ impl App {
         &mut self,
         project: ProjectId,
         session: SessionId,
-        spec: WorkflowSpec,
+        mut spec: WorkflowSpec,
         trigger: RunTrigger,
         cron_task_id: Option<CronTaskId>,
     ) -> Result<(), AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+
+        // Skill refs become *operative* here: for a non-playbook spec (a
+        // playbook already bakes its skill bodies into every phase prompt in
+        // bw-core), resolve each ref against the Skill Hub and append the
+        // real bodies to the shared prompt. Name-only refs with no stored
+        // content contribute nothing — never a fabricated placeholder.
+        if spec.phase_prompts.is_empty() && !spec.skills.is_empty() {
+            let block = self.skills_prompt_block(&spec.skills).await?;
+            if !block.is_empty() {
+                spec.prompt = format!("{}{block}", spec.prompt);
+            }
+        }
+
         let ctx = RunCtx {
             project: p,
             workflow: spec.id,
@@ -726,8 +789,211 @@ impl App {
             }
         }
 
+        // Usage accounting: the run really happened, so the entities it rode
+        // on get their real counters bumped — the agent that hosted it (ok
+        // AND failed both count; win_rate needs the losses) and every skill
+        // whose content/name it carried. Refs that don't resolve to a hub
+        // row are an honest 0-row no-op.
+        let run_ok = run.is_ok();
+        for a in &spec.agents {
+            self.store.record_agent_run_by_name(&a.name, run_ok).await?;
+        }
+        for s in &spec.skills {
+            self.store.record_skill_use_by_name(&s.name).await?;
+        }
+        if !spec.agents.is_empty() {
+            self.refresh_agents().await?;
+            self.emit(Event::AgentsChanged);
+        }
+        if !spec.skills.is_empty() {
+            self.refresh_skills().await?;
+            self.emit(Event::SkillsChanged);
+        }
+
+        // Artifact reflux: scan the real workspace the run just worked in and
+        // register any new file versions against this run. A failed run's
+        // partial output is still real output — scan regardless of outcome.
+        // Scan errors (e.g. git missing) must not turn a settled run into an
+        // error; they surface as a 0-fresh no-op with the run's own outcome
+        // untouched.
+        if !proj.workspace_path.trim().is_empty() {
+            let stage_kind = spec
+                .stage_ref
+                .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n));
+            if let Ok(fresh) = self
+                .scan_and_register_artifacts(p, &proj.workspace_path, Some(run_log_id), stage_kind)
+                .await
+            {
+                if fresh > 0 {
+                    self.emit(Event::ArtifactsRegistered { fresh });
+                }
+            }
+        }
+
         run.map_err(|e| AppError::Engine(e.to_string()))?;
         Ok(())
+    }
+
+    /// Resolve skill refs against the hub and render the non-empty bodies as
+    /// a prompt block. Pure read; the honest empty string when nothing
+    /// resolves. Capped so a pathological catalog can't drown the task.
+    async fn skills_prompt_block(&self, refs: &[SkillRef]) -> Result<String, AppError> {
+        const MAX_BLOCK_CHARS: usize = 6000;
+        let catalog = self.store.list_skills().await?;
+        let mut bodies = Vec::new();
+        let mut total = 0usize;
+        for r in refs {
+            let Some(skill) = catalog
+                .iter()
+                .find(|s| s.name == r.name && !s.content.trim().is_empty())
+            else {
+                continue;
+            };
+            let chars = skill.content.chars().count();
+            if total + chars > MAX_BLOCK_CHARS {
+                break;
+            }
+            total += chars;
+            bodies.push(skill.content.trim().to_string());
+        }
+        if bodies.is_empty() {
+            return Ok(String::new());
+        }
+        Ok(format!(
+            "\n\n## 技能(工作方法,来自技能库)\n{}\n",
+            bodies.join("\n\n")
+        ))
+    }
+
+    /// Run one connector's real probe. Returns `(healthy, honest detail)`;
+    /// errors only on kinds that have no real probe (there is no fake
+    /// "synced" for those) or store failures.
+    async fn probe_connector(&mut self, c: &Connector) -> Result<(bool, String), AppError> {
+        match c.kind.as_str() {
+            CONNECTOR_KIND_GIT_REPO => {
+                // The bound project's *current* workspace is the live truth;
+                // `config` is the provisioning-time record / fallback.
+                let workspace = match c.project_id {
+                    Some(p) => self
+                        .store
+                        .get_project(p)
+                        .await?
+                        .map(|proj| proj.workspace_path)
+                        .filter(|w| !w.trim().is_empty())
+                        .unwrap_or_else(|| c.config.clone()),
+                    None => c.config.clone(),
+                };
+                match evidence::collect(&workspace).await {
+                    Ok(ev) => {
+                        // Tier D for real: the probe's numbers flow into the
+                        // bound project's matching metrics as machine-source
+                        // observations (only when the metric exists and the
+                        // value really changed — no observation spam).
+                        if let Some(p) = c.project_id {
+                            self.feed_workspace_metrics(p, &ev).await?;
+                        }
+                        Ok((
+                            true,
+                            format!(
+                                "{} 提交 · {} 追踪文件 · {} 文档 · {} 未提交路径",
+                                ev.commit_count, ev.tracked_files, ev.docs_files, ev.dirty_paths
+                            ),
+                        ))
+                    }
+                    Err(e) => Ok((false, e.to_string())),
+                }
+            }
+            CONNECTOR_KIND_CLAUDE_CLI => {
+                let binary = if c.config.trim().is_empty() {
+                    self.state
+                        .claude_config
+                        .binary
+                        .clone()
+                        .unwrap_or_else(|| "claude".into())
+                } else {
+                    c.config.trim().to_string()
+                };
+                match claude_version_probe(&binary).await {
+                    Ok(v) => Ok((true, v)),
+                    Err(e) => Ok((false, e)),
+                }
+            }
+            other => Err(AppError::Invalid(format!(
+                "连接器类型「{other}」没有真实探针——不支持同步(诚实拒绝,不伪造状态)"
+            ))),
+        }
+    }
+
+    /// Feed a real workspace evidence reading into the project's matching
+    /// metrics (`METRIC_WS_COMMITS` / `METRIC_WS_DOCS`) as
+    /// `SourceKind::Connector` observations. Metrics the project hasn't
+    /// defined are skipped — the kernel never invents a metric (targets are
+    /// human intent, not machine output).
+    async fn feed_workspace_metrics(
+        &mut self,
+        project: ProjectId,
+        ev: &evidence::WorkspaceEvidence,
+    ) -> Result<(), AppError> {
+        let sigs = self.store.persisted_signals(project).await?;
+        let mut touched = false;
+        for (name, value) in [
+            (METRIC_WS_COMMITS, ev.commit_count.to_string()),
+            (METRIC_WS_DOCS, ev.docs_files.to_string()),
+        ] {
+            let Some(m) = sigs.metrics.iter().find(|m| m.name == name) else {
+                continue;
+            };
+            if m.value_raw == value {
+                continue; // unchanged — a re-probe is not a new fact
+            }
+            self.store
+                .append_observation(m.id, SourceKind::Connector, &value, now())
+                .await?;
+            touched = true;
+        }
+        if touched {
+            self.store.recompute_signals(project, now()).await?;
+            self.emit(Event::ProjectUpdated(project));
+        }
+        Ok(())
+    }
+
+    /// Scan `workspace` (real `git ls-files` + `stat` + short HEAD) and
+    /// register every tracked file as an artifact version. Idempotent at the
+    /// store layer — returns only the genuinely-new count.
+    async fn scan_and_register_artifacts(
+        &self,
+        project: ProjectId,
+        workspace: &str,
+        workflow_run_id: Option<WorkflowRunId>,
+        stage_kind: Option<StageKind>,
+    ) -> Result<u32, AppError> {
+        let files = evidence::list_workspace_files(workspace)
+            .await
+            .map_err(|e| AppError::Invalid(e.to_string()))?;
+        if files.is_empty() {
+            return Ok(0);
+        }
+        let commit = evidence::head_commit(workspace)
+            .await
+            .map_err(|e| AppError::Invalid(e.to_string()))?
+            .unwrap_or_default();
+        let registered_at = now().unix_timestamp();
+        let items = files
+            .into_iter()
+            .map(|f| NewArtifact {
+                id: ArtifactId::new(),
+                project_id: project,
+                workflow_run_id,
+                stage_kind,
+                kind: classify_artifact_path(&f.path),
+                path: f.path,
+                bytes: f.bytes,
+                git_commit: commit.clone(),
+                registered_at,
+            })
+            .collect();
+        Ok(self.store.register_artifacts(items).await?)
     }
 
     /// The real scheduler tick — call this on an interval (see
@@ -845,6 +1111,7 @@ impl App {
         let policy = ApplyPolicy::default();
         let specs = self.store.list_workflow_specs().await?;
         let ranking = self.store.hub_usage_ranking().await?;
+        let cron_tasks = self.store.list_cron_tasks().await?;
         let mut scanned = 0u32;
         let mut proposals = 0u32;
         let mut auto_applied = Vec::new();
@@ -876,20 +1143,13 @@ impl App {
                 });
             let runs = self.store.list_workflow_runs(spec.id).await?;
             let failures = bw_core::analysis::failure_modes(&runs);
-            // Cron effectiveness: find a cron task targeting this workflow, if any.
-            let cron_eff = self
-                .store
-                .list_cron_tasks()
-                .await?
-                .iter()
-                .find(|c| c.target == spec.name)
-                .and_then(|c| {
-                    // effectiveness needs the task id; do a best-effort lookup.
-                    let _ = c;
-                    None::<&bw_core::model::CronEffectiveness>
-                });
-            let _ = cron_eff; // (effectiveness fetch wired when a task id is in hand)
-            let ps = propose_optimizations(&analytics, &usage, &failures, cron_eff);
+            // Cron effectiveness: a task targeting this workflow contributes
+            // its real scheduled-fire track record to the proposal inputs.
+            let cron_eff = match cron_tasks.iter().find(|c| c.target == spec.name) {
+                Some(c) => Some(self.store.cron_effectiveness(c.id).await?),
+                None => None,
+            };
+            let ps = propose_optimizations(&analytics, &usage, &failures, cron_eff.as_ref());
             for p in ps {
                 proposals += 1;
                 let settled = analytics.ok_runs + analytics.failed_runs;
@@ -935,6 +1195,10 @@ impl App {
                 // Real OMC/ECC catalog, not fabricated sample data — a no-op
                 // once the hub tables are non-empty (checked inside).
                 bw_store::seed_hub_if_empty(self.store.as_ref()).await?;
+                // The five stage-role agents + stage working-method skills
+                // (bw_core::playbook projections) — by-name idempotent, so an
+                // already-seeded database gains them too.
+                bw_store::seed_stage_entities_if_missing(self.store.as_ref()).await?;
                 self.refresh_workflow_specs().await?;
                 self.refresh_skills().await?;
                 self.refresh_agents().await?;
@@ -1129,6 +1393,40 @@ impl App {
                 self.store
                     .materialize_stages(five_stages(p, cadence))
                     .await?;
+                // All-in-one-codebase default: a project completing creation
+                // gets its own real git repo (when a workspaces root is
+                // configured and no workspace was set by hand), plus a bound
+                // `git-repo` connector. Provisioning failure degrades to the
+                // old Mock-only behavior — creation itself never breaks.
+                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+                if self.workspaces_root.is_some() && proj.workspace_path.trim().is_empty() {
+                    let root = self.workspaces_root.clone().expect("checked above");
+                    match provision_workspace(&root, &proj).await {
+                        Ok(path) => {
+                            self.store.set_workspace(p, &path, true).await?;
+                            self.store
+                                .create_connector(NewConnector {
+                                    id: ConnectorId::new(),
+                                    name: format!("{} · 代码仓", proj.name),
+                                    kind: CONNECTOR_KIND_GIT_REPO.into(),
+                                    scope: proj.name.clone(),
+                                    project_id: Some(p),
+                                    config: path.clone(),
+                                })
+                                .await?;
+                            self.refresh_connectors().await?;
+                            self.emit(Event::ConnectorsChanged);
+                        }
+                        Err(e) => {
+                            // Loud, honest degradation — never a silent fake.
+                            self.emit(Event::ConnectorSynced {
+                                name: format!("{} · 代码仓", proj.name),
+                                ok: false,
+                                detail: format!("自动开仓失败,项目将以 Mock 模式运行:{e}"),
+                            });
+                        }
+                    }
+                }
                 self.store.recompute_signals(p, now()).await?;
                 self.state.view = View::App;
                 self.refresh_projects().await?;
@@ -1176,6 +1474,56 @@ impl App {
                     .map_err(|e| e.to_string());
                 self.state.version_log = Some((p, result));
                 self.emit(Event::VersionLogChanged);
+            }
+
+            Command::LoadArtifacts => {
+                let p = self.active()?;
+                let rows = self.store.list_artifacts(p).await?;
+                self.state.artifacts = Some((p, rows));
+                self.emit(Event::ArtifactsChanged);
+            }
+
+            Command::CollectArtifacts => {
+                let p = self.active()?;
+                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+                if proj.workspace_path.trim().is_empty() {
+                    return Err(AppError::Invalid(
+                        "未配置真实工作区——没有可扫描的代码仓".into(),
+                    ));
+                }
+                let fresh = self
+                    .scan_and_register_artifacts(p, &proj.workspace_path, None, None)
+                    .await?;
+                self.emit(Event::ArtifactsRegistered { fresh });
+                // Refresh the panel snapshot in the same dispatch so the UI
+                // sees the scan's result without a second command.
+                let rows = self.store.list_artifacts(p).await?;
+                self.state.artifacts = Some((p, rows));
+                self.emit(Event::ArtifactsChanged);
+            }
+
+            Command::SyncConnector { id } => {
+                let all = self.store.list_connectors().await?;
+                let c = all
+                    .into_iter()
+                    .find(|c| c.id == id)
+                    .ok_or(AppError::NotFound)?;
+                let (ok, detail) = self.probe_connector(&c).await?;
+                let status = if ok {
+                    ConnectorStatus::Connected
+                } else {
+                    ConnectorStatus::Error
+                };
+                self.store
+                    .set_connector_sync(id, status, &run_at_label(now()))
+                    .await?;
+                self.refresh_connectors().await?;
+                self.emit(Event::ConnectorsChanged);
+                self.emit(Event::ConnectorSynced {
+                    name: c.name.clone(),
+                    ok,
+                    detail,
+                });
             }
 
             Command::StartSession {
@@ -1664,6 +2012,73 @@ impl App {
 
 fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
+}
+
+/// Standard workspace-derived metric names — the join keys between the
+/// `git-repo` connector's probe and a project's metric definitions. A project
+/// that defines metrics with these names (the conductor does; the creation
+/// flow may) gets them machine-fed on every sync.
+pub const METRIC_WS_COMMITS: &str = "工作区真实提交数";
+pub const METRIC_WS_DOCS: &str = "剧本产物文档数";
+
+/// `claude --version` probe with a hard timeout — the `claude-cli`
+/// connector's real health check. Returns the version line on success.
+async fn claude_version_probe(binary: &str) -> Result<String, String> {
+    let fut = tokio::process::Command::new(binary)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+    let output = tokio::time::timeout(std::time::Duration::from_secs(10), fut)
+        .await
+        .map_err(|_| "探针超时(10s)".to_string())?
+        .map_err(|e| format!("无法运行 {binary}:{e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{binary} --version 退出码非零:{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Filesystem-safe slug for a project's workspace directory: ascii
+/// alphanumerics kept, everything else (CJK included) dropped, always
+/// suffixed with the id's first 8 hex chars so two "同名" projects can never
+/// collide (and a fully-CJK name still yields a unique, valid dir).
+fn workspace_slug(name: &str, id: ProjectId) -> String {
+    let base: String = name
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let id8: String = id.uuid().simple().to_string().chars().take(8).collect();
+    if base.is_empty() {
+        format!("proj-{id8}")
+    } else {
+        format!("{base}-{id8}")
+    }
+}
+
+/// Provision the project's own git workspace under `root` (all-in-one-
+/// codebase default). Returns the real path. The README is written from the
+/// project's own creation-flow data — real inputs, not invented content.
+async fn provision_workspace(root: &std::path::Path, proj: &ProjectRow) -> Result<String, String> {
+    let dir = root.join(workspace_slug(&proj.name, proj.id));
+    let body = if proj.desc.trim().is_empty() {
+        "(创建流程未填写 brief)".to_string()
+    } else {
+        proj.desc.trim().to_string()
+    };
+    bw_engine::provision_git_workspace(&dir, &proj.name, &body)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
 }
 
 /// Snapshot of the spec's shape at run time, serialized into the run's
