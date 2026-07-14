@@ -31,14 +31,24 @@
 
 ### 完整形态的缺口
 
-| # | 缺口 | 现状 | 完整形态 |
-|---|---|---|---|
-| G1 | **角色是展示品** | `ai_crew()` display-only；执行时无角色系统提示 | 每阶段工作流由该角色的真实 agent 执行（角色 system prompt + 阶段方法论注入） |
-| G2 | **phase 无独立 prompt** | `WorkflowSpec.phases: Vec<String>` 只有名字，全部 phase 共用 `spec.prompt` | per-phase 真实指令，注入项目上下文（brief/北极星/上一棒交接/工作区状态） |
-| G3 | **创建起草是 Mock** | 起草 run 走 MockExecutor | 起草可走真实执行器（项目配置 workspace 后） |
-| G4 | **真实执行未验证** | ClaudeCliExecutor 只有解析层测试 | 本机端到端实跑（本机 claude CLI 已认证） |
-| G5 | **产物/证据不回流** | 产物面板占位；观测只有手填 | run 后采集真实证据（文件/git/测试/clippy）→ Ci/GitPr 观测 → 派生链变色 |
-| G6 | **无 headless 驱动** | 只有桌面 UI 或测试能驱动 | headless conductor（CLI/example）可全自动跑完整生命周期——也是 multica 类工具的接入面 |
+| # | 缺口 | 现状 | 完整形态 | 收敛 |
+|---|---|---|---|---|
+| G1 | **角色是展示品** | `ai_crew()` display-only；执行时无角色系统提示 | 每阶段工作流由该角色的真实 agent 执行（角色 system prompt + 阶段方法论注入） | ✅ 第一轮(剧本) + 第二轮(五角色 agent 实体+按名记账) |
+| G2 | **phase 无独立 prompt** | `WorkflowSpec.phases: Vec<String>` 只有名字，全部 phase 共用 `spec.prompt` | per-phase 真实指令，注入项目上下文（brief/北极星/上一棒交接/工作区状态） | ✅ 第一轮 |
+| G3 | **创建起草是 Mock** | 起草 run 走 MockExecutor | 起草可走真实执行器（项目配置 workspace 后） | ◐ 第二轮起项目出生即有真工作区(自动开仓);起草工作流本身仍 Mock(标注清晰) |
+| G4 | **真实执行未验证** | ClaudeCliExecutor 只有解析层测试 | 本机端到端实跑（本机 claude CLI 已认证） | ◐ 链路全通(mock 自检+529 退避内建);端到端实跑受 GLM 网关 529 制约,supervisor 持续尝试,以 run 行为准 |
+| G5 | **产物/证据不回流** | 产物面板占位；观测只有手填 | run 后采集真实证据（文件/git/测试/clippy）→ Ci/GitPr 观测 → 派生链变色 | ✅ 第一轮(evidence)+第二轮(artifact 表+run 后自动登记+connector 常驻喂指标+面板真身) |
+| G6 | **无 headless 驱动** | 只有桌面 UI 或测试能驱动 | headless conductor（CLI/example）可全自动跑完整生命周期——也是 multica 类工具的接入面 | ✅ real_demo + supervise-real-demo.sh |
+
+### 第二轮追加的缺口收敛(2026-07-14,「均有实际内容」审计)
+
+| # | 缺口 | 收敛 |
+|---|---|---|
+| G7 | skill 无正文无记账 | `skill.content` + 五阶段方法技能(playbook 烘焙进 phase prompt) + 库内正文运行时注入非剧本 spec + `uses` 真实计数 |
+| G8 | agent 无指令无记账 | `agent.instructions/wins` + 五角色实体播种 + settle 按名记账,`win_rate` 由真实 runs/wins 派生 |
+| G9 | connector 无同步 | `git-repo`/`claude-cli` 真探针;`SourceKind::Connector` 观测落地(Tier D);状态只由探针写;其余类型诚实拒绝 |
+| G10 | 产物无实体 | `artifact` 表(project×path×commit 幂等=版本史) + run 后自动登记 + 面板真身 |
+| G11 | 工作区非默认 | all-in-one-codebase:`CompleteCreation` 自动开仓 + 绑 git-repo 连接器(`BW_WORKSPACES`) |
 
 ---
 

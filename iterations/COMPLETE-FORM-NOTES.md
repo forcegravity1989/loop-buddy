@@ -3,6 +3,29 @@
 > 本文件是演示报告的静态素材：每条陈述都指向仓库内真实存在的代码/文档。
 > 动态证据（真实运行数据）由 `real_demo` 导出的 evidence JSON 提供，两者合成最终报告。
 
+## 0. 第二轮完善(2026-07-14 · fable 接手):九实体全有实际内容
+
+> 第一轮(§2)把「五角色真实执行」的执行链打通;本轮的靶子是剩余的
+> 「只得其形」实体——skill/agent/connector/产物/版本 在库里有卡片、
+> 在执行里却是空气。逐一实体化,并落定 all-in-one-codebase 默认。
+
+| 实体 | 第一轮后的形 | 本轮的实 | 代码 |
+|---|---|---|---|
+| skill | 344 条目录卡片,无正文,`uses` 恒 0 | `content` 正文列;五阶段工作方法技能(`bw-core::playbook::stage_skills`,真实可执行指令)烘焙进每个 phase prompt;非剧本 spec 运行时从技能库解析正文注入;每次真实 run `uses+=1` | playbook.rs / sqlite.rs / bw-app `skills_prompt_block` |
+| agent | 104 条卡片,`runs`/`win_rate` 死数,与执行无关 | `instructions` 列;五角色 agent 实体(指令=真实 preamble 模板)开机播种;每次 settle 的 run 按名记账 `runs`/`wins`,`win_rate` 同语句从真实计数派生;无证据显示「—」 | seed.rs `seed_stage_entities_if_missing` / `record_agent_run_by_name` |
+| connector | 建了即冻结,无同步,`SourceKind::Connector` 从未被用 | 两种真探针:`git-repo`(evidence 采集→状态翻转→按名喂 `METRIC_WS_COMMITS/DOCS` 为 Connector 源观测,值变才追加)与 `claude-cli`(--version);其余类型诚实拒绝同步;状态只由探针写 | bw-app `SyncConnector`/`probe_connector`/`feed_workspace_metrics` |
+| 产物 | 面板留白壳,无表 | `artifact` 表,身份=(project,path,git_commit)——幂等注册即版本史;真实 run settle 后自动扫描登记(绑 run id+阶段),手动 `CollectArtifacts` 兜底;面板真身(类型/版本数/run 归属/大小/提交) | schema.sql / `register_artifacts` / op.rs ArtifactPanel |
+| 版本 | workflow_version + 真实 git log(已实) | 产物版本 = 同路径多提交行;`LoadVersionLog` 不变 | 同上 |
+| all-in-one-codebase | 工作区=创建后手动可选,不配=永远 Mock | `CompleteCreation` 自动开仓(root 可配,`BW_WORKSPACES`/DB 旁 `workspaces/`):真实 git init+README(项目真实 brief)+首提交+绑定 git-repo 连接器;开仓失败响亮降级,创建不破 | bw-engine::workspace / bw-app `provision_workspace` |
+| 杂项 | `run_optimization_cycle` cron 效果悬空 hack | 真实 `cron_effectiveness(task.id)` 接入建议链 | bw-app |
+
+**验证**:`bw-app/tests/complete_form.rs` 3 条端到端(开仓→探针→Connector 观测→
+信号命中→产物幂等→五角色/技能记账);全仓 120+ 测试、fmt/clippy -D warnings/
+wasm32 keepalive/kernel-ui-free 五门禁全绿。`real_demo --mock` 全管线自检:
+双需求五阶段环、claude-cli 探针已连接、产物 2 版本/需求、五角色各记账 100%。
+真实执行经 supervisor 发起(网关 529 退避已内建于 claude_cli.rs),结果以
+run 行与 evidence JSON 为准——绝不在报告里代答。
+
 ## 1. glm5.2 25 轮迭代的判定（背景）
 
 **保留**（真实资产，本次继续使用）：
