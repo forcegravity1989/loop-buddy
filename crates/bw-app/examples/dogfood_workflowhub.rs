@@ -94,6 +94,7 @@ async fn round_dynamic(
         goal: "真实完成,且有可独立核验的证据".into(),
         stage_ref: Some(stage.index()),
         phases: phases.iter().map(|s| s.to_string()).collect(),
+        phase_prompts: vec![],
         agents: vec![AgentRef {
             name: "Claude Code".into(),
             def: "本轮实际执行这项真实工作的角色".into(),
@@ -179,6 +180,7 @@ async fn round_hub_template(
 /// Find a project metric by name (stable across script re-invocations,
 /// unlike a freshly-minted `MetricId`), or define it once if this is the
 /// first invocation to need it. Returns its real, persisted id.
+#[allow(clippy::too_many_arguments)]
 async fn find_or_create_metric(
     app: &mut App,
     store: &Arc<dyn Store>,

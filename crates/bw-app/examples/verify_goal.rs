@@ -580,6 +580,7 @@ async fn main() {
         prompt: "验证:优化后的 prompt".into(),
         goal: "验证:优化后的验收目标".into(),
         phases: vec!["验证阶段A".into(), "验证阶段B".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         note: "verify_goal: 优化演示 · 加了验证阶段B".into(),
@@ -687,6 +688,7 @@ async fn main() {
         goal: "验证 goal".into(),
         stage_ref: None,
         phases: vec!["步骤一".into()],
+        phase_prompts: vec![],
         agents: vec![AgentRef {
             name: "验证 Agent".into(),
             def: "验证角色".into(),
@@ -763,6 +765,7 @@ async fn main() {
         goal: "g".into(),
         stage_ref: None,
         phases: vec!["步骤一".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {

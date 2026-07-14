@@ -103,6 +103,7 @@ async fn main() {
         goal: "g".into(),
         stage_ref: Some(2),
         phases: vec!["设计".into(), "编码".into(), "测试".into(), "发布".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -177,6 +178,7 @@ async fn main() {
             "测试(含重试)".into(),
             "发布".into(),
         ],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         note: "自驱循环诊断:执行超时占 5/7 → 测试加重试".into(),

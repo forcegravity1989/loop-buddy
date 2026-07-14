@@ -74,6 +74,7 @@ async fn tick_scheduler_auto_fires_due_tasks_without_hijacking_the_open_project(
         goal: "g".into(),
         stage_ref: None,
         phases: vec!["步骤一".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {

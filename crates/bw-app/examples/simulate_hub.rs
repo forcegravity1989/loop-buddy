@@ -4,11 +4,11 @@
 //! (iter 18) and every analysis function has *realistic* data to chew on,
 //! not just the all-success MockExecutor path.
 //!
-//! Run history is written **directly via the Store** (record_workflow_run_start
-//! + settle_workflow_run) with controlled outcomes, because the point is to
-//! exercise analysis on a known scenario, not to actually execute. This is
-//! honest: the rows are real `workflow_run` records, just synthesized — same
-//! shape a real run produces.
+//! Run history is written **directly via the Store**
+//! (record_workflow_run_start + settle_workflow_run) with controlled
+//! outcomes, because the point is to exercise analysis on a known scenario,
+//! not to actually execute. This is honest: the rows are real `workflow_run`
+//! records, just synthesized — same shape a real run produces.
 //!
 //! Usage: `cargo run --example simulate_hub -- /path/out.db`
 
@@ -45,6 +45,7 @@ async fn quick_project(app: &mut App, name: &str) -> ProjectId {
 
 /// Seed one run record directly into the store with a controlled outcome —
 /// the simulator's primitive. `t` is a synthetic monotonic clock (seconds).
+#[allow(clippy::too_many_arguments)]
 async fn seed_run(
     store: &Arc<dyn Store>,
     wid: WorkflowId,
@@ -96,6 +97,7 @@ async fn make_spec(app: &mut App, id: WorkflowId, name: &str, stage: Option<u8>,
         goal: "仿真 goal".into(),
         stage_ref: stage,
         phases: (0..phases).map(|i| format!("步骤{}", i + 1)).collect(),
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {

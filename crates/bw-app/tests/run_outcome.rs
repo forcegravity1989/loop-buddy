@@ -131,6 +131,7 @@ async fn successful_manual_run_records_ok_with_real_duration() {
         goal: "g".into(),
         stage_ref: None,
         phases: vec!["步骤一".into(), "步骤二".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -191,6 +192,7 @@ async fn failed_run_records_failed_status_and_partial_phases() {
         goal: "g".into(),
         stage_ref: None,
         phases: vec!["第一步".into(), "第二步".into(), "第三步".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -259,6 +261,7 @@ async fn scheduler_triggered_run_is_attributed_scheduled_not_manual() {
         goal: "g".into(),
         stage_ref: None,
         phases: vec!["巡检".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -331,7 +334,7 @@ async fn analytics_aggregates_runs_and_rates_success_honestly() {
             .unwrap();
         let status = if ok { RunStatus::Ok } else { RunStatus::Failed };
         store
-            .settle_workflow_run(id, status, 1000 + i + 5, 100 * (i as i64 + 1), 1, "")
+            .settle_workflow_run(id, status, 1000 + i + 5, 100 * (i + 1), 1, "")
             .await
             .unwrap();
     }
@@ -366,6 +369,7 @@ async fn params_snapshot_captures_spec_shape_at_run_time() {
         goal: "g".into(),
         stage_ref: Some(3),
         phases: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -435,6 +439,7 @@ async fn cron_effectiveness_attributes_only_scheduled_fires() {
         goal: "g".into(),
         stage_ref: None,
         phases: vec!["巡检".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -513,6 +518,7 @@ async fn optimizing_a_workflow_snapshots_every_prior_version_with_reason() {
         goal: "g1".into(),
         stage_ref: None,
         phases: vec!["p1".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -540,6 +546,7 @@ async fn optimizing_a_workflow_snapshots_every_prior_version_with_reason() {
         prompt: "v2 prompt".into(),
         goal: "g2".into(),
         phases: vec!["p1".into(), "p2".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         note: "加了第二步 · 用户反馈漏了交付检查".into(),
@@ -551,6 +558,7 @@ async fn optimizing_a_workflow_snapshots_every_prior_version_with_reason() {
         prompt: "v3 prompt".into(),
         goal: "g3".into(),
         phases: vec!["p1".into(), "p2".into(), "p3".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         note: "加回归检查 · 失败率从 12% 降目标".into(),
@@ -600,6 +608,7 @@ async fn usage_ranking_puts_hot_first_and_flags_cold() {
             goal: "g".into(),
             stage_ref: None,
             phases: vec!["s".into()],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: LoopConfig {
@@ -672,6 +681,7 @@ async fn optimization_cycle_measures_proposes_and_gates() {
             goal: "g".into(),
             stage_ref: None,
             phases: vec!["s".into()],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: LoopConfig {
