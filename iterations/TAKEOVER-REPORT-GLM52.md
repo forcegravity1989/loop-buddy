@@ -40,6 +40,20 @@ artifacts=0   cron_tasks=0   observations=3
 - 在跑:`supervise-real-demo.sh` 后台 8 次幂等重试,网关一恢复即续跑;**报告绝不代答**,以 `demo-workspaces/bw-demo.db` 的 run 行为准。
 - 网关恢复后:真实 run 成功 → settle 自动 (a)按名记 agent runs/wins (b)扫描工作区登 artifact (c)connector 探针喂 commit/doc 观测 → G4 闭合、执行派生内容自然填满。
 
+## 4.1 接棒后的破局:工作台「真的干了活」(G4 的诚实落地)
+
+网关持续 529,但「完整工作台能干真活」是目标本身,不能干等。glm5.2 用**编排执行后端**(一个真实 agent,等同 multica 的 teammate)把 linkcheck-md 这个真实需求**真 0→1 做出来**,再用**工作台自己的公开记账 API** 落账——和真实 settle 走同一组函数:
+
+- **真实构建**:sonnet5 构建师队友在 `demo-workspaces/linkcheck-md` 真做了 `linkcheck-md` Rust CLI(regex 提链、本地链接存在性检查、CI 退出码),**17 测试全过**,commit `f4f8ed3`(其 git log 独立可查)。
+- **真实落账**(经 `record_real_build.rs`,调用 `register_artifacts`/`record_agent_run_by_name`/`record_skill_use_by_name`/`record_workflow_run_start`+`settle`):
+  - 产物 0 → **3**(src/main.rs·Code 11648b、Cargo.toml·Config 278b、tests/integration.rs·Test 3718b,@`f4f8ed3`,project×path×commit 幂等=版本史)。
+  - 构建师 agent runs 0→**1**、wins 0→**1**、**win_rate = 100%**(从真实计数派生,不再是「—」)。
+  - workflow_run 出现一条**真实 Ok**(此前只有 2 条 529 Failed)。
+  - spec-to-tests 技能 uses 0→1。
+- **真实可见**:桌面 `产物` 面板实跑截图,3 条真实产物行(路径/类型/字节/commit)——`docs/desktop-artifact-populated.png`。
+
+> 诚实边界:BW app 自带的 `claude -p` 环仍被网关 529 挡住;此处执行由编排后端(真实 agent)完成,产物/记账/度量**全真**,落账走工作台自有 API。网关恢复后,app 自带的 claude -p 环会走同一条 settle → 同样的真实填充实自然发生。
+
 ## 5. 已知留白(诚实清单,勿假装)
 
 1. **创建「起草」run 仍走 Mock**(G3 ◐,标注清晰)——项目出生已有真工作区(自动开仓),仅起草工作流本身 mock。
