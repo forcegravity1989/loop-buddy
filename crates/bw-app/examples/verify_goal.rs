@@ -468,6 +468,8 @@ async fn main() {
         name: "验证:飞书云文档".into(),
         kind: "知识库".into(),
         scope: "全部项目".into(),
+        project_id: None,
+        config: String::new(),
     })
     .await
     .unwrap();

@@ -42,6 +42,7 @@ async fn hub_library_is_global_and_uses_only_moves_on_a_real_run() {
         desc: "扫描公开网页并结构化提取".into(),
         category: "检索".into(),
         source: LibSource::SelfBuilt,
+        content: String::new(),
     })
     .await
     .unwrap();
@@ -55,6 +56,7 @@ async fn hub_library_is_global_and_uses_only_moves_on_a_real_run() {
         role: "强检索、低臆测".into(),
         skills: vec!["web-scan".into()],
         model: "claude-opus".into(),
+        instructions: String::new(),
     })
     .await
     .unwrap();
@@ -69,6 +71,7 @@ async fn hub_library_is_global_and_uses_only_moves_on_a_real_run() {
             desc: String::new(),
             category: String::new(),
             source: LibSource::SelfBuilt,
+            content: String::new(),
         })
         .await
         .is_err());

@@ -209,14 +209,144 @@ pub fn phase_instructions(kind: StageKind) -> &'static [&'static str] {
     }
 }
 
+/// One stage's working-method skill: a real, compact markdown instruction
+/// block a real executor follows — the *executable* counterpart of the Skill
+/// Hub's catalog cards. Same nature as [`phase_instructions`]: methodology in
+/// code, generic across projects, never per-project content.
+#[derive(Clone, Copy, Debug)]
+pub struct StageSkill {
+    /// Stable kebab-case name — the join key between the spec's `SkillRef`,
+    /// the seeded Skill-Hub row, and run-time usage accounting.
+    pub name: &'static str,
+    /// One-line description (the hub card's `desc`).
+    pub def: &'static str,
+    /// The skill body — real instructions, injected verbatim into every
+    /// phase prompt of the stage that carries it.
+    pub content: &'static str,
+}
+
+/// The working-method skills each stage's role brings to a run. Small on
+/// purpose: one to two per stage, each dense enough to change behavior, short
+/// enough to inject into every phase without drowning the task itself.
+pub fn stage_skills(kind: StageKind) -> &'static [StageSkill] {
+    match kind {
+        StageKind::Prototype => &[StageSkill {
+            name: "evidence-first",
+            def: "证据先行:只写站得住的内容,标注未核实",
+            content: "### 证据先行 (evidence-first)\n\
+                 1. 只记录两类内容:(a) 你直接验证过的事实(真实命令输出、真实文件内容);\
+                 (b) 你的先验知识——必须标注「未核实」。\n\
+                 2. 每条证据注明来源:文件路径、命令、或「知识截止内记忆,未核实」。\n\
+                 3. 禁止编造统计数字与引用;没有可靠数字就写「无可靠数字」。\n\
+                 4. 结论按「证据 → 洞察 → 假设」链书写,断链处如实标断。",
+        }],
+        StageKind::Build => &[StageSkill {
+            name: "spec-to-tests",
+            def: "规格即测试:每条验收标准落成一个可跑的用例",
+            content: "### 规格即测试 (spec-to-tests)\n\
+                 1. SPEC 里每条验收标准编号(AC-1, AC-2, …);写实现前先把它翻译成测试名\
+                 (如 `ac1_reports_dead_relative_link`)。\n\
+                 2. 无法翻译成测试的验收标准是坏标准——回头改写它,而不是跳过。\n\
+                 3. 实现只做到让测试通过为止,不做规格外功能。\n\
+                 4. 提交前 `cargo test` 全绿是硬门禁;失败输出原样留档,不美化。",
+        }],
+        StageKind::Optimize => &[StageSkill {
+            name: "baseline-before-touch",
+            def: "先测基线再动手:无基线不优化,删减优先",
+            content: "### 先测基线再动手 (baseline-before-touch)\n\
+                 1. 动手前先真实测量并落盘:测试数、clippy 警告数、代码行数、构建耗时——\
+                 全部来自真实命令输出的原样摘录。\n\
+                 2. 每步重构保持测试全绿;一步只做一类等价变换。\n\
+                 3. 删减优先:能删的代码是最好的优化,删除行数计入成果。\n\
+                 4. 结束时用与基线完全相同的命令重测,报 delta;无 delta 也如实报。",
+        }],
+        StageKind::Growth => &[StageSkill {
+            name: "fresh-eyes-funnel",
+            def: "新用户漏斗走查:亲手走一遍,只记录真实摩擦",
+            content: "### 新用户漏斗走查 (fresh-eyes-funnel)\n\
+                 1. 以从未见过本项目的人的视角,真实执行「发现 → 安装 → 首次使用 → 再次使用」\
+                 每一步,不跳步、不脑补。\n\
+                 2. 只记录你真实遇到的摩擦(命令报错、文档缺失、参数不明),不臆想用户。\n\
+                 3. 一次实验只改一个变量,改动前后用同一条真实命令对照。\n\
+                 4. 没有真实流量就如实做「前后对照」,不假装有 A/B 分流。",
+        }],
+        StageKind::Ops => &[StageSkill {
+            name: "breaking-drill",
+            def: "破坏性演练:拿坏输入砸,坏行为当场修",
+            content: "### 破坏性演练 (breaking-drill)\n\
+                 1. 系统性地喂坏输入:不存在的路径、空输入、超长输入、坏参数、坏编码——\
+                 逐个真实执行并原样记录行为。\n\
+                 2. 任何 panic 或不知所云的报错都算事故:当场修复成友好报错,修后重测。\n\
+                 3. 健康检查脚本必须一键可跑、任何失败以非零码退出;写完真实执行一遍留档。\n\
+                 4. 复盘只引用真实存在的文件与提交号(写之前 ls / git log 核实)。",
+        }],
+    }
+}
+
+/// The role-as-agent identity for one stage — what the Agent Hub's five
+/// standing role agents are seeded from, and what a run's `AgentRef` points
+/// back to. `instructions` is the *template* (with `{var}` slots): that is
+/// honestly what the role gets told, with project specifics filled in at run
+/// time by [`render`].
+pub struct RoleAgent {
+    /// `role_short()` — the join key (spec `AgentRef.name` ↔ agent row name).
+    pub name: &'static str,
+    pub role: String,
+    pub skills: Vec<String>,
+    /// Honest model label: execution rides the configured `claude` CLI; the
+    /// workbench does not pin a model per role.
+    pub model: &'static str,
+    pub instructions: String,
+}
+
+/// Build the five standing role agents. Pure projection of stage metadata +
+/// [`role_preamble`] — nothing here is invented per call.
+pub fn role_agents() -> Vec<(StageKind, RoleAgent)> {
+    StageKind::ALL
+        .into_iter()
+        .map(|kind| {
+            (
+                kind,
+                RoleAgent {
+                    name: kind.role_short(),
+                    role: format!("{} · {}段执行者", kind.methodology(), kind.label()),
+                    skills: stage_skills(kind)
+                        .iter()
+                        .map(|s| s.name.to_string())
+                        .collect(),
+                    model: "claude CLI · 跟随执行器配置",
+                    instructions: role_preamble(kind),
+                },
+            )
+        })
+        .collect()
+}
+
+/// The "## 技能(工作方法)" block appended to each phase prompt — the stage's
+/// skills made *operative* (real content in the real prompt), not a name-only
+/// advisory hint. Empty string when the stage has no skills.
+fn skills_block(kind: StageKind) -> String {
+    let skills = stage_skills(kind);
+    if skills.is_empty() {
+        return String::new();
+    }
+    let body = skills
+        .iter()
+        .map(|s| s.content)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    format!("\n## 技能(工作方法,本阶段全程适用)\n{body}\n")
+}
+
 /// Render the full per-phase prompt list for one stage: role preamble +
-/// project context + the phase's own instruction. Index-aligned with
-/// [`StageKind::method_loop`].
+/// project context + the stage's skill blocks + the phase's own instruction.
+/// Index-aligned with [`StageKind::method_loop`].
 pub fn rendered_phase_prompts(kind: StageKind, ctx: &PlaybookCtx) -> Vec<String> {
     let preamble = render(&role_preamble(kind), ctx);
+    let skills = skills_block(kind);
     phase_instructions(kind)
         .iter()
-        .map(|instr| format!("{preamble}\n## 当前任务\n{}", render(instr, ctx)))
+        .map(|instr| format!("{preamble}{skills}\n## 当前任务\n{}", render(instr, ctx)))
         .collect()
 }
 
@@ -285,6 +415,54 @@ mod tests {
                 assert!(p.contains("绝不编造"), "{kind:?} 每个 phase 都带诚实约束");
                 assert!(p.contains("demo"), "{kind:?} 每个 phase 都带项目上下文");
             }
+        }
+    }
+
+    /// Every stage ships at least one skill, every skill has a real body,
+    /// and that body really lands inside every phase prompt (operative
+    /// injection, not a name-only hint).
+    #[test]
+    fn stage_skills_have_content_and_are_injected() {
+        let ctx = PlaybookCtx {
+            project_name: "demo".into(),
+            ..Default::default()
+        };
+        for kind in StageKind::ALL {
+            let skills = stage_skills(kind);
+            assert!(!skills.is_empty(), "{kind:?} 至少一个工作方法技能");
+            for s in skills {
+                assert!(
+                    s.content.len() > 80,
+                    "{kind:?}/{} 技能正文必须是真内容",
+                    s.name
+                );
+                assert!(!s.name.trim().is_empty() && !s.def.trim().is_empty());
+            }
+            for p in rendered_phase_prompts(kind, &ctx) {
+                for s in skills {
+                    assert!(
+                        p.contains(s.content),
+                        "{kind:?} 每个 phase prompt 都注入技能正文 {}",
+                        s.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// The five role agents are a pure projection: name = role_short (the
+    /// accounting join key), instructions = the exact preamble template, and
+    /// their skill tags name this stage's real skills.
+    #[test]
+    fn role_agents_project_stage_metadata() {
+        let agents = role_agents();
+        assert_eq!(agents.len(), 5);
+        for (kind, a) in agents {
+            assert_eq!(a.name, kind.role_short());
+            assert_eq!(a.instructions, role_preamble(kind));
+            let skill_names: Vec<_> = stage_skills(kind).iter().map(|s| s.name).collect();
+            assert_eq!(a.skills, skill_names);
+            assert!(a.role.contains(kind.methodology()));
         }
     }
 

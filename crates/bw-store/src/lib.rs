@@ -35,7 +35,7 @@ mod sqlite;
 pub use sqlite::SqliteStore;
 
 pub mod seed;
-pub use seed::seed_hub_if_empty;
+pub use seed::{seed_hub_if_empty, seed_stage_entities_if_missing};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -169,6 +169,8 @@ pub struct NewSkill {
     pub desc: String,
     pub category: String,
     pub source: LibSource,
+    /// Executable body (may be empty for a catalog reference entry).
+    pub content: String,
 }
 
 /// Editable content fields for an existing skill — `maturity`/`source`/
@@ -178,6 +180,7 @@ pub struct SkillEdit {
     pub name: String,
     pub desc: String,
     pub category: String,
+    pub content: String,
 }
 
 pub struct NewAgent {
@@ -187,6 +190,8 @@ pub struct NewAgent {
     pub maturity: Maturity,
     pub skills: Vec<String>,
     pub model: String,
+    /// Standing instructions (may be empty for a catalog reference entry).
+    pub instructions: String,
 }
 
 /// Editable content fields for an existing agent — `maturity`/`runs`/
@@ -196,6 +201,7 @@ pub struct AgentEdit {
     pub role: String,
     pub skills: Vec<String>,
     pub model: String,
+    pub instructions: String,
 }
 
 pub struct NewCronTask {
@@ -211,6 +217,26 @@ pub struct NewConnector {
     pub name: String,
     pub kind: String,
     pub scope: String,
+    /// Project this connector feeds (a `git-repo` connector is always bound).
+    pub project_id: Option<ProjectId>,
+    /// Kind-specific real config (`git-repo`: workspace path; `claude-cli`:
+    /// binary override, empty = PATH).
+    pub config: String,
+}
+
+/// One real workspace-file version to register (完整形态 · 产物). Identity is
+/// `(project_id, path, git_commit)` — the store ignores duplicates, so a
+/// caller can re-scan freely and only genuinely new versions land.
+pub struct NewArtifact {
+    pub id: bw_core::ArtifactId,
+    pub project_id: ProjectId,
+    pub workflow_run_id: Option<WorkflowRunId>,
+    pub stage_kind: Option<StageKind>,
+    pub path: String,
+    pub kind: bw_core::model::ArtifactKind,
+    pub bytes: u64,
+    pub git_commit: String,
+    pub registered_at: i64,
 }
 
 pub struct NewKnowledgeSource {
@@ -519,11 +545,19 @@ pub trait Store: Send + Sync {
     async fn list_skills(&self) -> Result<Vec<SkillCard>>;
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>>;
     async fn update_skill(&self, id: SkillId, edit: SkillEdit) -> Result<()>;
+    /// Credit one real run to every skill row named `name` (`uses += 1`).
+    /// Returns how many rows matched — `0` (an unregistered ad-hoc ref) is
+    /// honest data, not an error.
+    async fn record_skill_use_by_name(&self, name: &str) -> Result<u32>;
 
     async fn create_agent(&self, a: NewAgent) -> Result<()>;
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>>;
     async fn update_agent(&self, id: AgentId, edit: AgentEdit) -> Result<()>;
+    /// Credit one settled run to every agent row named `name`: `runs += 1`,
+    /// `wins += ok as int`, `win_rate` recomputed from the real counters.
+    /// Returns how many rows matched (0 = unregistered ref, honest no-op).
+    async fn record_agent_run_by_name(&self, name: &str, ok: bool) -> Result<u32>;
 
     async fn create_cron_task(&self, c: NewCronTask) -> Result<()>;
     async fn list_cron_tasks(&self) -> Result<Vec<CronTask>>;
@@ -544,9 +578,27 @@ pub trait Store: Send + Sync {
 
     async fn create_connector(&self, c: NewConnector) -> Result<()>;
     async fn list_connectors(&self) -> Result<Vec<Connector>>;
+    /// Record the outcome of a *real* sync probe: the new status + a real
+    /// display timestamp. The only writer of `connector.status` after
+    /// creation — a connector's health is probe-derived, never hand-flipped.
+    async fn set_connector_sync(
+        &self,
+        id: ConnectorId,
+        status: ConnectorStatus,
+        last_sync: &str,
+    ) -> Result<()>;
 
     async fn create_knowledge_source(&self, k: NewKnowledgeSource) -> Result<()>;
     async fn list_knowledge_sources(&self) -> Result<Vec<KnowledgeSource>>;
+
+    // ── artifact: append-only real-file registry (完整形态 · 产物) ──
+    /// Register a batch of scanned workspace files. Duplicate identities
+    /// (`project × path × git_commit`) are ignored; returns how many rows
+    /// were *genuinely new* — the honest "this run produced N new artifact
+    /// versions" number.
+    async fn register_artifacts(&self, items: Vec<NewArtifact>) -> Result<u32>;
+    /// All registered artifact versions for a project, newest first.
+    async fn list_artifacts(&self, project_id: ProjectId) -> Result<Vec<bw_core::model::Artifact>>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────
@@ -693,5 +745,14 @@ pub(crate) fn parse_connector_status(s: &str) -> ConnectorStatus {
         "syncing" => ConnectorStatus::Syncing,
         "error" => ConnectorStatus::Error,
         _ => ConnectorStatus::Disconnected,
+    }
+}
+
+pub(crate) fn connector_status_text(s: ConnectorStatus) -> &'static str {
+    match s {
+        ConnectorStatus::Connected => "connected",
+        ConnectorStatus::Syncing => "syncing",
+        ConnectorStatus::Error => "error",
+        ConnectorStatus::Disconnected => "disconnected",
     }
 }

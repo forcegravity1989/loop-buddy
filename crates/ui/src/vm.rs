@@ -1382,6 +1382,7 @@ mod tests {
             category: "检索".into(),
             source: bw_core::model::LibSource::SelfBuilt,
             uses: 128,
+            content: String::new(),
         });
         assert_eq!(card.maturity_label, "打磨中");
         assert_eq!(card.source_label, "自建");
@@ -1398,6 +1399,7 @@ mod tests {
             skills: vec![bw_core::model::AgentSkillTag {
                 name: "web-scan".into(),
             }],
+            instructions: String::new(),
             model: "claude-opus".into(),
             runs: 213,
             win_rate: "94%".into(),
@@ -1479,6 +1481,8 @@ mod tests {
             status: ConnectorStatus::Error,
             last_sync: "2h 前".into(),
             scope: "全部项目".into(),
+            project_id: None,
+            config: String::new(),
         }];
         let activity = vec![
             activity_row(

@@ -269,6 +269,28 @@ CREATE TABLE IF NOT EXISTS workflow_run (
 CREATE INDEX IF NOT EXISTS idx_workflow_run_spec ON workflow_run(workflow_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_run_proj ON workflow_run(project_id, started_at DESC);
 
+-- ═══════════════════════ artifact (完整形态 · 真实产物登记) ═══════════════════════
+-- Append-only registry of real workspace files. One row = one *version* of a
+-- file: identity is (project, path, git_commit) — re-registering the same
+-- path at the same commit is a no-op (INSERT OR IGNORE); at a new commit it
+-- appends a new row, so the rows sharing a path ARE that artifact's version
+-- history. Rows are only ever harvested from a real `git ls-files` scan
+-- (bw-engine::evidence), never typed in; `workflow_run_id` links a version to
+-- the run whose settle-time scan first saw it (NULL for manual collects).
+CREATE TABLE IF NOT EXISTS artifact (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES project(id),
+    workflow_run_id TEXT,                        -- no FK: a registration outlives a purged run
+    stage_kind      TEXT,                        -- StageKind at registration time, if known
+    path            TEXT NOT NULL,               -- workspace-relative, git's own form
+    kind            TEXT NOT NULL DEFAULT 'other', -- bw_core::model::ArtifactKind::text()
+    bytes           INTEGER NOT NULL DEFAULT 0,  -- real stat at scan time
+    git_commit      TEXT NOT NULL DEFAULT '',    -- short HEAD at scan; '' = commitless repo
+    registered_at   INTEGER NOT NULL,
+    UNIQUE(project_id, path, git_commit)
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_project ON artifact(project_id, registered_at DESC);
+
 -- ═══════════════════════ workflow_version (iter 5 · evolution history) ═══════════════════════
 -- Append-only snapshot of a Static spec's content, taken the instant BEFORE
 -- each `UpdateWorkflowSpec` overwrites it. So the live `workflow_spec` row is

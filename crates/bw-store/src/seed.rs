@@ -2870,6 +2870,9 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 desc: s.desc.to_string(),
                 category: s.category.to_string(),
                 source: LibSource::Official,
+                // Catalog *reference*: the full text lives in the source
+                // repo — an empty body here is honest, not missing data.
+                content: String::new(),
             })
             .await?;
     }
@@ -2882,6 +2885,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 desc: s.desc.to_string(),
                 category: s.category.to_string(),
                 source: LibSource::Official,
+                content: String::new(),
             })
             .await?;
     }
@@ -2895,6 +2899,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 maturity: Maturity::Mature,
                 skills: vec![],
                 model: "claude-sonnet".to_string(),
+                instructions: String::new(),
             })
             .await?;
     }
@@ -2907,6 +2912,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 maturity: Maturity::Mature,
                 skills: vec![],
                 model: "claude-sonnet".to_string(),
+                instructions: String::new(),
             })
             .await?;
     }
@@ -2958,5 +2964,65 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
             .await?;
     }
 
+    Ok(())
+}
+
+/// Seed the five stage-role agents and the stage working-method skills —
+/// the *executable* entities behind 五角色真实执行, projected straight from
+/// `bw_core::playbook` (instructions = the real preamble template, skill
+/// content = the real injected body). By-name idempotent, and deliberately
+/// separate from [`seed_hub_if_empty`]'s all-or-nothing gate: an existing,
+/// already-seeded database still gains these on first boot after the 完整形态
+/// upgrade — they're this app's own methodology, not external catalog data.
+pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
+    let have_skills: std::collections::HashSet<String> = store
+        .list_skills()
+        .await?
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    let have_agents: std::collections::HashSet<String> = store
+        .list_agents()
+        .await?
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+
+    for kind in StageKind::ALL {
+        for sk in bw_core::playbook::stage_skills(kind) {
+            if have_skills.contains(sk.name) {
+                continue;
+            }
+            store
+                .create_skill(NewSkill {
+                    id: SkillId::new(),
+                    name: sk.name.to_string(),
+                    // The methodology the app itself ships — Mature, 官方.
+                    maturity: Maturity::Mature,
+                    desc: sk.def.to_string(),
+                    category: kind.label().to_string(),
+                    source: LibSource::Official,
+                    content: sk.content.to_string(),
+                })
+                .await?;
+        }
+    }
+
+    for (_kind, ra) in bw_core::playbook::role_agents() {
+        if have_agents.contains(ra.name) {
+            continue;
+        }
+        store
+            .create_agent(NewAgent {
+                id: AgentId::new(),
+                name: ra.name.to_string(),
+                role: ra.role,
+                maturity: Maturity::Mature,
+                skills: ra.skills,
+                model: ra.model.to_string(),
+                instructions: ra.instructions,
+            })
+            .await?;
+    }
     Ok(())
 }

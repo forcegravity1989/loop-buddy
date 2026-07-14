@@ -88,3 +88,8 @@ id_newtype!(
     /// Stable identity of one execution of a workflow (a run record).
     WorkflowRunId
 );
+id_newtype!(
+    /// Stable identity of a [`crate::model::Artifact`] — one registered file
+    /// version (`project × path × git_commit`) in a project's workspace.
+    ArtifactId
+);

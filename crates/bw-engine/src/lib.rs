@@ -22,7 +22,7 @@ pub mod git_log;
 mod mock;
 
 pub use claude_cli::{ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
-pub use evidence::{EvidenceError, WorkspaceEvidence};
+pub use evidence::{EvidenceError, WorkspaceEvidence, WorkspaceFile};
 pub use git_log::{read_commits, GitCommit, GitLogError};
 pub use mock::MockExecutor;
 

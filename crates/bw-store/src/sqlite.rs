@@ -4,28 +4,29 @@
 //! sidesteps `SQLITE_BUSY` without ceremony.
 
 use crate::{
-    cadence_text, cron_status_text, cycle_text, lib_source_text, maturity_text, parse_cadence,
-    parse_connector_status, parse_cron_status, parse_cycle, parse_lib_source, parse_maturity,
-    parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
-    stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal,
-    NewAgent, NewConnector, NewCronTask, NewKnowledgeSource, NewMetric, NewProject, NewSession,
-    NewSkill, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals,
-    ProjectRow, Result, SessionKind, SessionRow, SkillEdit, StageRow, StageSignal, Store,
-    StoreError, WorkflowEdit,
+    cadence_text, connector_status_text, cron_status_text, cycle_text, lib_source_text,
+    maturity_text, parse_cadence, parse_connector_status, parse_cron_status, parse_cycle,
+    parse_lib_source, parse_maturity, parse_session_status, parse_sig, parse_stage_kind,
+    session_status_text, sig_text, stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow,
+    MessageRow, MetricRole, MetricSignal, NewAgent, NewArtifact, NewConnector, NewCronTask,
+    NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowRun,
+    NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectRow, Result, SessionKind, SessionRow,
+    SkillEdit, StageRow, StageSignal, Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
     evaluate_metric, measure, parse_target_with, reduce_worst_of, AmberBand, Measurement,
 };
 use bw_core::model::{
-    AgentCard, AgentRef, AgentSkillTag, Connector, CronEffectiveness, CronStatus, CronTask,
-    HubSource, KnowledgeSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus,
-    RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
-    WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
+    AgentCard, AgentRef, AgentSkillTag, Artifact, ArtifactKind, Connector, ConnectorStatus,
+    CronEffectiveness, CronStatus, CronTask, HubSource, KnowledgeSource, LoopConfig, Maturity,
+    ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
+    SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowRunAnalytics,
+    WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
-    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
-    WorkflowId, WorkflowRunId,
+    AgentId, ArtifactId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId,
+    SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
@@ -102,6 +103,15 @@ impl SqliteStore {
             "TEXT NOT NULL DEFAULT '[]'",
         )
         .await?;
+        // 完整形态: skills/agents grow executable bodies, agents grow real
+        // win accounting, connectors grow a project binding + live config.
+        // All guarded — a pre-完整形态 DB opens unchanged, with honest empty
+        // defaults ('' = catalog reference, 0 wins = no evidence).
+        add_column_if_missing(&pool, "skill", "content", "TEXT NOT NULL DEFAULT ''").await?;
+        add_column_if_missing(&pool, "agent", "instructions", "TEXT NOT NULL DEFAULT ''").await?;
+        add_column_if_missing(&pool, "agent", "wins", "INTEGER NOT NULL DEFAULT 0").await?;
+        add_column_if_missing(&pool, "connector", "project_id", "TEXT").await?;
+        add_column_if_missing(&pool, "connector", "config", "TEXT NOT NULL DEFAULT ''").await?;
 
         Ok(Self { pool })
     }
@@ -1459,8 +1469,8 @@ impl Store for SqliteStore {
     async fn create_skill(&self, s: NewSkill) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO skill (id, name, maturity, descr, category, source, uses, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 0)",
+            "INSERT INTO skill (id, name, maturity, descr, category, source, uses, content, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0)",
         )
         .bind(s.id.uuid().to_string())
         .bind(&s.name)
@@ -1468,6 +1478,7 @@ impl Store for SqliteStore {
         .bind(&s.desc)
         .bind(&s.category)
         .bind(lib_source_text(s.source))
+        .bind(&s.content)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1477,11 +1488,12 @@ impl Store for SqliteStore {
 
     async fn update_skill(&self, id: SkillId, edit: SkillEdit) -> Result<()> {
         sqlx::query(
-            "UPDATE skill SET name=?, descr=?, category=?, updated_at=?, rev=rev+1 WHERE id=?",
+            "UPDATE skill SET name=?, descr=?, category=?, content=?, updated_at=?, rev=rev+1 WHERE id=?",
         )
         .bind(&edit.name)
         .bind(&edit.desc)
         .bind(&edit.category)
+        .bind(&edit.content)
         .bind(now_unix())
         .bind(id.uuid().to_string())
         .execute(&self.pool)
@@ -1491,7 +1503,7 @@ impl Store for SqliteStore {
 
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, maturity, descr, category, source, uses FROM skill ORDER BY created_at",
+            "SELECT id, name, maturity, descr, category, source, uses, content FROM skill ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1500,7 +1512,7 @@ impl Store for SqliteStore {
 
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>> {
         let row = sqlx::query(
-            "SELECT id, name, maturity, descr, category, source, uses FROM skill WHERE id=?",
+            "SELECT id, name, maturity, descr, category, source, uses, content FROM skill WHERE id=?",
         )
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
@@ -1508,11 +1520,20 @@ impl Store for SqliteStore {
         row.map(skill_row).transpose()
     }
 
+    async fn record_skill_use_by_name(&self, name: &str) -> Result<u32> {
+        let res = sqlx::query("UPDATE skill SET uses=uses+1, updated_at=?, rev=rev+1 WHERE name=?")
+            .bind(now_unix())
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() as u32)
+    }
+
     async fn create_agent(&self, a: NewAgent) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO agent (id, name, role, maturity, skills, model, runs, win_rate, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, ?, 0)",
+            "INSERT INTO agent (id, name, role, maturity, skills, model, runs, win_rate, instructions, wins, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, 0, ?, ?, 0)",
         )
         .bind(a.id.uuid().to_string())
         .bind(&a.name)
@@ -1520,6 +1541,7 @@ impl Store for SqliteStore {
         .bind(maturity_text(a.maturity))
         .bind(serde_json::to_string(&a.skills)?)
         .bind(&a.model)
+        .bind(&a.instructions)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1529,12 +1551,13 @@ impl Store for SqliteStore {
 
     async fn update_agent(&self, id: AgentId, edit: AgentEdit) -> Result<()> {
         sqlx::query(
-            "UPDATE agent SET name=?, role=?, skills=?, model=?, updated_at=?, rev=rev+1 WHERE id=?",
+            "UPDATE agent SET name=?, role=?, skills=?, model=?, instructions=?, updated_at=?, rev=rev+1 WHERE id=?",
         )
         .bind(&edit.name)
         .bind(&edit.role)
         .bind(serde_json::to_string(&edit.skills)?)
         .bind(&edit.model)
+        .bind(&edit.instructions)
         .bind(now_unix())
         .bind(id.uuid().to_string())
         .execute(&self.pool)
@@ -1544,7 +1567,7 @@ impl Store for SqliteStore {
 
     async fn list_agents(&self) -> Result<Vec<AgentCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, role, maturity, skills, model, runs, win_rate FROM agent ORDER BY created_at",
+            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions FROM agent ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1553,12 +1576,30 @@ impl Store for SqliteStore {
 
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>> {
         let row = sqlx::query(
-            "SELECT id, name, role, maturity, skills, model, runs, win_rate FROM agent WHERE id=?",
+            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions FROM agent WHERE id=?",
         )
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
         .await?;
         row.map(agent_row).transpose()
+    }
+
+    async fn record_agent_run_by_name(&self, name: &str, ok: bool) -> Result<u32> {
+        // runs/wins are the real counters; win_rate is a derived display
+        // string recomputed from them in the same statement — never patched
+        // independently, so it can't drift from the counters it summarizes.
+        let res = sqlx::query(
+            "UPDATE agent SET runs=runs+1, wins=wins+?, \
+             win_rate = printf('%d%%', (wins+?)*100/(runs+1)), \
+             updated_at=?, rev=rev+1 WHERE name=?",
+        )
+        .bind(if ok { 1 } else { 0 })
+        .bind(if ok { 1 } else { 0 })
+        .bind(now_unix())
+        .bind(name)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() as u32)
     }
 
     async fn create_cron_task(&self, c: NewCronTask) -> Result<()> {
@@ -1622,13 +1663,15 @@ impl Store for SqliteStore {
     async fn create_connector(&self, c: NewConnector) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO connector (id, name, kind, status, last_sync, scope, created_at, updated_at, rev)
-             VALUES (?, ?, ?, 'disconnected', '', ?, ?, ?, 0)",
+            "INSERT INTO connector (id, name, kind, status, last_sync, scope, project_id, config, created_at, updated_at, rev)
+             VALUES (?, ?, ?, 'disconnected', '', ?, ?, ?, ?, ?, 0)",
         )
         .bind(c.id.uuid().to_string())
         .bind(&c.name)
         .bind(&c.kind)
         .bind(&c.scope)
+        .bind(c.project_id.map(pid))
+        .bind(&c.config)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1638,11 +1681,29 @@ impl Store for SqliteStore {
 
     async fn list_connectors(&self) -> Result<Vec<Connector>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, status, last_sync, scope FROM connector ORDER BY created_at",
+            "SELECT id, name, kind, status, last_sync, scope, project_id, config FROM connector ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(connector_row).collect()
+    }
+
+    async fn set_connector_sync(
+        &self,
+        id: ConnectorId,
+        status: ConnectorStatus,
+        last_sync: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE connector SET status=?, last_sync=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(connector_status_text(status))
+        .bind(last_sync)
+        .bind(now_unix())
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn create_knowledge_source(&self, k: NewKnowledgeSource) -> Result<()> {
@@ -1669,6 +1730,44 @@ impl Store for SqliteStore {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(knowledge_source_row).collect()
+    }
+
+    async fn register_artifacts(&self, items: Vec<NewArtifact>) -> Result<u32> {
+        let mut fresh = 0u32;
+        for a in items {
+            // INSERT OR IGNORE against UNIQUE(project_id, path, git_commit):
+            // a re-scan of an unchanged workspace inserts nothing; only a
+            // genuinely new version counts.
+            let res = sqlx::query(
+                "INSERT OR IGNORE INTO artifact \
+                 (id, project_id, workflow_run_id, stage_kind, path, kind, bytes, git_commit, registered_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(a.id.uuid().to_string())
+            .bind(pid(a.project_id))
+            .bind(a.workflow_run_id.map(|r| r.uuid().to_string()))
+            .bind(a.stage_kind.map(stage_kind_text))
+            .bind(&a.path)
+            .bind(a.kind.text())
+            .bind(a.bytes as i64)
+            .bind(&a.git_commit)
+            .bind(a.registered_at)
+            .execute(&self.pool)
+            .await?;
+            fresh += res.rows_affected() as u32;
+        }
+        Ok(fresh)
+    }
+
+    async fn list_artifacts(&self, project_id: ProjectId) -> Result<Vec<Artifact>> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, workflow_run_id, stage_kind, path, kind, bytes, git_commit, registered_at \
+             FROM artifact WHERE project_id=? ORDER BY registered_at DESC, path",
+        )
+        .bind(pid(project_id))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(artifact_row).collect()
     }
 }
 
@@ -1771,6 +1870,7 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         category: r.get("category"),
         source: parse_lib_source(&r.get::<String, _>("source")),
         uses: r.get::<i64, _>("uses") as u32,
+        content: r.get("content"),
     })
 }
 
@@ -1789,6 +1889,7 @@ fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
         model: r.get("model"),
         runs: r.get::<i64, _>("runs") as u32,
         win_rate: r.get("win_rate"),
+        instructions: r.get("instructions"),
     })
 }
 
@@ -1816,6 +1917,10 @@ fn cron_task_row(r: sqlx::sqlite::SqliteRow) -> Result<CronTask> {
 
 fn connector_row(r: sqlx::sqlite::SqliteRow) -> Result<Connector> {
     let id = parse_uuid(&r.get::<String, _>("id"), ConnectorId::from_uuid)?;
+    let project_id = r
+        .get::<Option<String>, _>("project_id")
+        .filter(|s| !s.is_empty())
+        .and_then(|s| parse_uuid(&s, ProjectId::from_uuid).ok());
     Ok(Connector {
         id,
         name: r.get("name"),
@@ -1823,6 +1928,32 @@ fn connector_row(r: sqlx::sqlite::SqliteRow) -> Result<Connector> {
         status: parse_connector_status(&r.get::<String, _>("status")),
         last_sync: r.get("last_sync"),
         scope: r.get("scope"),
+        project_id,
+        config: r.get("config"),
+    })
+}
+
+fn artifact_row(r: sqlx::sqlite::SqliteRow) -> Result<Artifact> {
+    let id = parse_uuid(&r.get::<String, _>("id"), ArtifactId::from_uuid)?;
+    let project_id = parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid)?;
+    let workflow_run_id = r
+        .get::<Option<String>, _>("workflow_run_id")
+        .filter(|s| !s.is_empty())
+        .and_then(|s| parse_uuid(&s, WorkflowRunId::from_uuid).ok());
+    let stage_kind = r
+        .get::<Option<String>, _>("stage_kind")
+        .as_deref()
+        .and_then(parse_stage_kind);
+    Ok(Artifact {
+        id,
+        project_id,
+        workflow_run_id,
+        stage_kind,
+        path: r.get("path"),
+        kind: ArtifactKind::parse(&r.get::<String, _>("kind")),
+        bytes: r.get::<i64, _>("bytes") as u64,
+        git_commit: r.get("git_commit"),
+        registered_at: r.get("registered_at"),
     })
 }
 

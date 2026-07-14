@@ -109,6 +109,60 @@ pub async fn collect(workspace: &str) -> Result<WorkspaceEvidence, EvidenceError
     })
 }
 
+/// One tracked file as really found in the workspace — the raw material an
+/// artifact registration is made of. `bytes` is a real `stat` at scan time
+/// (`0` if the file vanished between `git ls-files` and the stat — rare but
+/// honest).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceFile {
+    /// Workspace-relative path, exactly as git reports it.
+    pub path: String,
+    pub bytes: u64,
+}
+
+/// The workspace's current short HEAD hash — the "which version of the
+/// codebase was this seen at" stamp for artifact registration. `None` on a
+/// repo with no commits yet (an honest "no version to pin to", not an error).
+pub async fn head_commit(workspace: &str) -> Result<Option<String>, EvidenceError> {
+    if workspace.trim().is_empty() {
+        return Err(EvidenceError::NotConfigured);
+    }
+    Ok(git_stdout(workspace, &["rev-parse", "--short", "HEAD"])
+        .await?
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()))
+}
+
+/// Every tracked file in the workspace with its real on-disk size. Read-only:
+/// one `git ls-files` + one `stat` per file, no interpretation — classifying
+/// and persisting is the caller's job.
+pub async fn list_workspace_files(workspace: &str) -> Result<Vec<WorkspaceFile>, EvidenceError> {
+    if workspace.trim().is_empty() {
+        return Err(EvidenceError::NotConfigured);
+    }
+    let ls = git_stdout(workspace, &["ls-files"])
+        .await?
+        .unwrap_or_default();
+    let root = std::path::Path::new(workspace);
+    let mut files = Vec::new();
+    for line in ls.lines() {
+        let path = line.trim();
+        if path.is_empty() {
+            continue;
+        }
+        // Plain sync stat: workspaces here are small (tens of files) and the
+        // engine's tokio feature set has no `fs` — not worth adding one.
+        let bytes = std::fs::metadata(root.join(path))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        files.push(WorkspaceFile {
+            path: path.to_string(),
+            bytes,
+        });
+    }
+    Ok(files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,11 +171,67 @@ mod tests {
     async fn empty_workspace_short_circuits_without_spawning() {
         let err = collect("").await.unwrap_err();
         assert!(matches!(err, EvidenceError::NotConfigured));
+        assert!(matches!(
+            head_commit("").await.unwrap_err(),
+            EvidenceError::NotConfigured
+        ));
+        assert!(matches!(
+            list_workspace_files("").await.unwrap_err(),
+            EvidenceError::NotConfigured
+        ));
     }
 
     #[test]
     fn count_lines_ignores_blank_lines() {
         assert_eq!(count_lines("a\n\n b \n"), 2);
         assert_eq!(count_lines(""), 0);
+    }
+
+    /// Real end-to-end against a throwaway repo: init → commit a file →
+    /// list + head. Skips honestly (not fails) when git is unavailable.
+    #[tokio::test]
+    async fn lists_real_tracked_files_with_sizes_and_head() {
+        let dir = std::env::temp_dir().join(format!("bw-evidence-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        let ws = dir.to_string_lossy().to_string();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&dir)
+                .args(args)
+                .output()
+        };
+        if git(&["init", "-q"])
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
+            eprintln!("git unavailable — skipping");
+            return;
+        }
+        std::fs::write(dir.join("docs/evidence.md"), "# 证据\n真实内容\n").unwrap();
+
+        // Before any commit: files untracked, no HEAD.
+        assert_eq!(head_commit(&ws).await.unwrap(), None);
+        assert!(list_workspace_files(&ws).await.unwrap().is_empty());
+
+        git(&["add", "-A"]).unwrap();
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "init",
+        ])
+        .unwrap();
+
+        let head = head_commit(&ws).await.unwrap().expect("head after commit");
+        assert!(!head.is_empty());
+        let files = list_workspace_files(&ws).await.unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "docs/evidence.md");
+        assert!(files[0].bytes > 0, "real stat, not a placeholder");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

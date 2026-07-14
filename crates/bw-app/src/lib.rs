@@ -257,6 +257,8 @@ pub enum Command {
         desc: String,
         category: String,
         source: LibSource,
+        /// Executable body (may be empty — a catalog reference entry).
+        content: String,
     },
     /// SkillHub's detail-panel edit — content only (`maturity`/`uses` are
     /// lifecycle data, untouched).
@@ -265,6 +267,7 @@ pub enum Command {
         name: String,
         desc: String,
         category: String,
+        content: String,
     },
     CreateAgent {
         id: AgentId,
@@ -272,6 +275,8 @@ pub enum Command {
         role: String,
         skills: Vec<String>,
         model: String,
+        /// Standing instructions (may be empty — a catalog reference entry).
+        instructions: String,
     },
     /// AgentHub's detail-panel edit — content only (`maturity`/`runs`/
     /// `win_rate` are lifecycle data, untouched).
@@ -281,6 +286,7 @@ pub enum Command {
         role: String,
         skills: Vec<String>,
         model: String,
+        instructions: String,
     },
     CreateCronTask {
         id: CronTaskId,
@@ -308,6 +314,11 @@ pub enum Command {
         name: String,
         kind: String,
         scope: String,
+        /// Project this connector feeds (`git-repo` is always bound).
+        project_id: Option<ProjectId>,
+        /// Kind-specific real config (`git-repo`: workspace path;
+        /// `claude-cli`: binary override, empty = PATH).
+        config: String,
     },
     CreateKnowledgeSource {
         id: KnowledgeSourceId,
@@ -1370,6 +1381,7 @@ impl App {
                 desc,
                 category,
                 source,
+                content,
             } => {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
@@ -1385,6 +1397,7 @@ impl App {
                         desc,
                         category,
                         source,
+                        content,
                     })
                     .await?;
                 self.refresh_skills().await?;
@@ -1396,6 +1409,7 @@ impl App {
                 name,
                 desc,
                 category,
+                content,
             } => {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
@@ -1407,6 +1421,7 @@ impl App {
                             name,
                             desc,
                             category,
+                            content,
                         },
                     )
                     .await?;
@@ -1420,6 +1435,7 @@ impl App {
                 role,
                 skills,
                 model,
+                instructions,
             } => {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
@@ -1432,6 +1448,7 @@ impl App {
                         maturity: Maturity::Polishing,
                         skills,
                         model,
+                        instructions,
                     })
                     .await?;
                 self.refresh_agents().await?;
@@ -1444,6 +1461,7 @@ impl App {
                 role,
                 skills,
                 model,
+                instructions,
             } => {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
@@ -1456,6 +1474,7 @@ impl App {
                             role,
                             skills,
                             model,
+                            instructions,
                         },
                     )
                     .await?;
@@ -1505,6 +1524,8 @@ impl App {
                 name,
                 kind,
                 scope,
+                project_id,
+                config,
             } => {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
@@ -1515,6 +1536,8 @@ impl App {
                         name,
                         kind,
                         scope,
+                        project_id,
+                        config,
                     })
                     .await?;
                 self.refresh_connectors().await?;

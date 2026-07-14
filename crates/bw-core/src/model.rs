@@ -12,8 +12,8 @@
 
 use crate::derive::{reduce_worst_of, AmberBand, Derived};
 use crate::ids::{
-    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, ProjectId, SessionId, SkillId, WorkflowId,
-    WorkflowRunId,
+    AgentId, ArtifactId, ConnectorId, CronTaskId, KnowledgeSourceId, ProjectId, SessionId, SkillId,
+    WorkflowId, WorkflowRunId,
 };
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
@@ -826,6 +826,18 @@ pub fn stage_workflow_with_playbook(
         def: format!("{} · {}", kind.methodology(), kind.seek()),
         from: "阶段剧本(bw-core::playbook)".into(),
     }];
+    // The stage's working-method skills ride along as real refs: their
+    // *content* is already injected into every phase prompt by
+    // `rendered_phase_prompts`, and the ref names let the run accounting
+    // credit the Skill Hub rows that carry the same content.
+    spec.skills = crate::playbook::stage_skills(kind)
+        .iter()
+        .map(|s| SkillRef {
+            name: s.name.to_string(),
+            def: s.def.to_string(),
+            from: "阶段剧本(bw-core::playbook)".into(),
+        })
+        .collect();
     // A playbook phase is a full, self-contained work order — one honest
     // attempt each, no blind re-run of an identical prompt (real spend).
     spec.loop_config = LoopConfig {
@@ -944,6 +956,12 @@ pub struct SkillCard {
     pub category: String,
     pub source: LibSource,
     pub uses: u32,
+    /// The skill body — real instructions an executor can act on. Empty for
+    /// catalog *references* (OMC/ECC entries whose full text lives in the
+    /// source repo); non-empty means this row is executable content that
+    /// really gets injected into prompts (stage skills, self-authored ones).
+    #[serde(default)]
+    pub content: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -959,10 +977,18 @@ pub struct AgentCard {
     pub maturity: Maturity,
     pub skills: Vec<AgentSkillTag>,
     pub model: String,
+    /// Real settled runs credited to this agent (`record_agent_run_by_name`).
     pub runs: u32,
-    /// Adoption rate as a pre-formatted display string (e.g. `"94%"`) —
-    /// matches how metric values are stored as display strings elsewhere.
+    /// Success rate over credited runs as a pre-formatted display string
+    /// (e.g. `"94%"`), recomputed from real `runs`/`wins` on every credit —
+    /// `""` while `runs == 0` ("no evidence", never "0%").
     pub win_rate: String,
+    /// The agent's standing instructions (system-prompt tier). Empty for
+    /// catalog references; the five stage-role agents carry their real
+    /// `bw_core::playbook::role_preamble` template here — honestly what the
+    /// role gets told, `{var}` slots filled per project at run time.
+    #[serde(default)]
+    pub instructions: String,
 }
 
 // ─────────────────────────── cron / connector / knowledge hub ───────────────────────────
@@ -1101,16 +1127,31 @@ impl ConnectorStatus {
     }
 }
 
+/// The two connector kinds the workbench can *really* sync today — everything
+/// else stays a free-text reference entry (recorded, listed, honestly marked
+/// unsynced). Matching is by the `Connector.kind` string.
+pub const CONNECTOR_KIND_GIT_REPO: &str = "git-repo";
+pub const CONNECTOR_KIND_CLAUDE_CLI: &str = "claude-cli";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Connector {
     pub id: ConnectorId,
     pub name: String,
-    /// e.g. 可观测性/数据库/代码仓库 — free text, this app has no fixed
-    /// connector-type taxonomy yet (Tier D territory).
+    /// Connector type. [`CONNECTOR_KIND_GIT_REPO`] and
+    /// [`CONNECTOR_KIND_CLAUDE_CLI`] are *live* kinds a `SyncConnector`
+    /// really probes; any other value is a free-text reference entry.
     pub kind: String,
     pub status: ConnectorStatus,
     pub last_sync: String,
     pub scope: String,
+    /// The project this connector feeds, if project-bound (a `git-repo`
+    /// connector always is; a `claude-cli` probe is global).
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
+    /// Kind-specific real configuration — for `git-repo` the workspace path;
+    /// for `claude-cli` the binary override (empty = `claude` on PATH).
+    #[serde(default)]
+    pub config: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1124,6 +1165,138 @@ pub struct KnowledgeSource {
     /// Which agent (by name) consumes this source — free text, matching the
     /// prototype's own by-name (not by-id) reference.
     pub used_by: String,
+}
+
+// ─────────────────────────── artifact ───────────────────────────
+
+/// Coarse classification of a workspace file — derived from its path alone
+/// (see [`classify_artifact_path`]), never asserted by hand.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    /// Markdown/docs — what playbook phases write under `docs/`.
+    Doc,
+    /// Source code.
+    Code,
+    /// Test code (`tests/`, `*_test.*`).
+    Test,
+    /// Shell/automation scripts.
+    Script,
+    /// Manifests & config (`Cargo.toml`, `*.yaml`, …).
+    Config,
+    /// Everything else.
+    Other,
+}
+
+impl ArtifactKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ArtifactKind::Doc => "文档",
+            ArtifactKind::Code => "代码",
+            ArtifactKind::Test => "测试",
+            ArtifactKind::Script => "脚本",
+            ArtifactKind::Config => "配置",
+            ArtifactKind::Other => "其他",
+        }
+    }
+
+    pub fn text(self) -> &'static str {
+        match self {
+            ArtifactKind::Doc => "doc",
+            ArtifactKind::Code => "code",
+            ArtifactKind::Test => "test",
+            ArtifactKind::Script => "script",
+            ArtifactKind::Config => "config",
+            ArtifactKind::Other => "other",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "doc" => ArtifactKind::Doc,
+            "code" => ArtifactKind::Code,
+            "test" => ArtifactKind::Test,
+            "script" => ArtifactKind::Script,
+            "config" => ArtifactKind::Config,
+            _ => ArtifactKind::Other,
+        }
+    }
+}
+
+/// Classify a workspace-relative path. Pure string rules, order matters:
+/// tests before code (a `tests/*.rs` file is a test, not generic code), docs
+/// by extension anywhere (playbooks write `docs/*.md`, but a root `README.md`
+/// is a doc too).
+pub fn classify_artifact_path(path: &str) -> ArtifactKind {
+    let p = path.trim().trim_start_matches("./");
+    let lower = p.to_ascii_lowercase();
+    let file = lower.rsplit('/').next().unwrap_or(&lower).to_string();
+    let ext = file.rsplit_once('.').map(|(_, e)| e.to_string());
+
+    let is_code_ext = matches!(
+        ext.as_deref(),
+        Some("rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "c" | "h" | "cpp" | "java")
+    );
+    if lower.starts_with("tests/") || lower.contains("/tests/") {
+        // Only actual code under tests/ is a test; a tests/fixture.md is a doc.
+        if is_code_ext {
+            return ArtifactKind::Test;
+        }
+    }
+    if is_code_ext
+        && (file.ends_with("_test.rs")
+            || file.ends_with(".test.ts")
+            || file.ends_with(".test.js")
+            || file.ends_with("_test.py"))
+    {
+        return ArtifactKind::Test;
+    }
+    if matches!(ext.as_deref(), Some("md" | "mdx" | "txt")) {
+        return ArtifactKind::Doc;
+    }
+    if matches!(ext.as_deref(), Some("sh" | "bash" | "zsh")) || lower.starts_with("scripts/") {
+        return ArtifactKind::Script;
+    }
+    if matches!(
+        ext.as_deref(),
+        Some("toml" | "yaml" | "yml" | "json" | "ini")
+    ) || file == "makefile"
+        || file == "dockerfile"
+        || file == ".gitignore"
+    {
+        return ArtifactKind::Config;
+    }
+    if is_code_ext {
+        return ArtifactKind::Code;
+    }
+    ArtifactKind::Other
+}
+
+/// One registered file version in a project's workspace — the real 产物.
+/// Identity is `project × path × git_commit`: registering the same path again
+/// at the same commit is a no-op; at a *new* commit it appends a new row, so
+/// the rows sharing one `path` are that artifact's real version history
+/// (nothing is ever edited in place). Always harvested from a real workspace
+/// scan (`bw-engine::evidence`), never typed in.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Artifact {
+    pub id: ArtifactId,
+    pub project_id: ProjectId,
+    /// The run that most plausibly produced this version — the run whose
+    /// settle-time scan first saw it. `None` when registered by a manual
+    /// collect outside any run.
+    pub workflow_run_id: Option<WorkflowRunId>,
+    /// Stage the project was operating when this version appeared, if known.
+    pub stage_kind: Option<StageKind>,
+    /// Workspace-relative path (git's own path form).
+    pub path: String,
+    pub kind: ArtifactKind,
+    /// Real size in bytes at registration time.
+    pub bytes: u64,
+    /// Short HEAD hash the workspace was at when this version was seen.
+    /// Empty when the repo had no commits yet.
+    pub git_commit: String,
+    pub registered_at: i64,
 }
 
 // ─────────────────────────── project ───────────────────────────
@@ -1257,4 +1430,81 @@ pub struct HubCard {
     pub color: String,
     pub desc: String,
     pub items: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_artifact_path_covers_the_playbook_output_shapes() {
+        // What the five stage playbooks actually write:
+        assert_eq!(
+            classify_artifact_path("docs/evidence.md"),
+            ArtifactKind::Doc
+        );
+        assert_eq!(classify_artifact_path("README.md"), ArtifactKind::Doc);
+        assert_eq!(classify_artifact_path("src/main.rs"), ArtifactKind::Code);
+        assert_eq!(classify_artifact_path("src/lib.rs"), ArtifactKind::Code);
+        assert_eq!(classify_artifact_path("tests/cli.rs"), ArtifactKind::Test);
+        assert_eq!(
+            classify_artifact_path("src/parser_test.rs"),
+            ArtifactKind::Test
+        );
+        assert_eq!(
+            classify_artifact_path("scripts/healthcheck.sh"),
+            ArtifactKind::Script
+        );
+        assert_eq!(classify_artifact_path("Cargo.toml"), ArtifactKind::Config);
+        assert_eq!(classify_artifact_path(".gitignore"), ArtifactKind::Config);
+        assert_eq!(
+            classify_artifact_path("assets/logo.png"),
+            ArtifactKind::Other
+        );
+        // Non-code files under tests/ are not "tests".
+        assert_eq!(
+            classify_artifact_path("tests/fixtures/sample.md"),
+            ArtifactKind::Doc
+        );
+        // Round-trips through the persisted text form.
+        for k in [
+            ArtifactKind::Doc,
+            ArtifactKind::Code,
+            ArtifactKind::Test,
+            ArtifactKind::Script,
+            ArtifactKind::Config,
+            ArtifactKind::Other,
+        ] {
+            assert_eq!(ArtifactKind::parse(k.text()), k);
+        }
+    }
+
+    /// The playbook spec is fully armed: per-phase prompts, the hosting role
+    /// as its real agent ref, and the stage's skills as real refs whose
+    /// content is inside every phase prompt.
+    #[cfg(feature = "idgen")]
+    #[test]
+    fn playbook_spec_carries_role_agent_and_operative_skills() {
+        let ctx = crate::playbook::PlaybookCtx {
+            project_name: "demo".into(),
+            ..Default::default()
+        };
+        for kind in StageKind::ALL {
+            let spec = stage_workflow_with_playbook(kind, &ctx);
+            assert_eq!(spec.phases.len(), spec.phase_prompts.len());
+            assert_eq!(spec.agents.len(), 1);
+            assert_eq!(spec.agents[0].name, kind.role_short());
+            let skills = crate::playbook::stage_skills(kind);
+            assert_eq!(spec.skills.len(), skills.len());
+            for (s_ref, s) in spec.skills.iter().zip(skills) {
+                assert_eq!(s_ref.name, s.name);
+            }
+            for p in &spec.phase_prompts {
+                assert!(
+                    p.contains(skills[0].content),
+                    "{kind:?} 技能正文在 prompt 内"
+                );
+            }
+        }
+    }
 }
