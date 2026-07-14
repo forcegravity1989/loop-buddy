@@ -17,3 +17,4 @@ node_modules/
 
 # Generated self-verification reports (point-in-time output, not source).
 /verification-report/
+demo-workspaces/
