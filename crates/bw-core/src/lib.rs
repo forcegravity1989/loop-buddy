@@ -21,6 +21,7 @@ pub mod analysis;
 pub mod derive;
 pub mod ids;
 pub mod model;
+pub mod playbook;
 
 pub use ids::{
     AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, RoutineId, SessionId,

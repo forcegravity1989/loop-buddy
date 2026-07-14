@@ -17,10 +17,12 @@ use bw_core::{ProjectId, WorkflowId};
 
 pub mod claude_cli;
 pub mod contract;
+pub mod evidence;
 pub mod git_log;
 mod mock;
 
 pub use claude_cli::{ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
+pub use evidence::{EvidenceError, WorkspaceEvidence};
 pub use git_log::{read_commits, GitCommit, GitLogError};
 pub use mock::MockExecutor;
 
@@ -33,6 +35,10 @@ pub struct PhaseNode {
     pub skills: Vec<SkillRef>,
     pub max_iter: u8,
     pub retries: u8,
+    /// Tail of the *previous* phase's real output — the relay baton, so a
+    /// stateless per-phase executor still sees what the phase before it
+    /// actually produced. `None` on the first phase.
+    pub prior_summary: Option<String>,
 }
 
 /// The product of running one phase. `done` ends the phase loop; `gaps` feed the
@@ -106,15 +112,26 @@ impl Engine {
         mut on_event: impl FnMut(RunEvent),
     ) -> Result<RunSummary, ExecError> {
         let mut summary = RunSummary::default();
+        let mut baton: Option<String> = None;
 
         for (idx, phase_name) in spec.phases.iter().enumerate() {
+            // A phase runs its own instruction when the spec carries one
+            // (playbook path); a missing/blank entry falls back to the shared
+            // `prompt` — byte-for-byte the pre-playbook behavior.
+            let phase_prompt = spec
+                .phase_prompts
+                .get(idx)
+                .filter(|p| !p.trim().is_empty())
+                .cloned()
+                .unwrap_or_else(|| spec.prompt.clone());
             let node = PhaseNode {
                 name: phase_name.clone(),
-                prompt: spec.prompt.clone(),
+                prompt: phase_prompt,
                 agents: spec.agents.clone(),
                 skills: spec.skills.clone(),
                 max_iter: spec.loop_config.max_iter,
                 retries: spec.loop_config.retries,
+                prior_summary: baton.clone(),
             };
             on_event(RunEvent::PhaseStarted {
                 idx,
@@ -143,6 +160,7 @@ impl Engine {
 
             // `cap >= 1` guarantees at least one iteration ran.
             let output = output.expect("phase loop runs at least once");
+            baton = Some(relay_tail(&output.text));
             summary.phases_run += 1;
             summary.final_output = output.text.clone();
             on_event(RunEvent::PhaseCompleted { idx, output });
@@ -152,5 +170,42 @@ impl Engine {
             summary: summary.clone(),
         });
         Ok(summary)
+    }
+}
+
+/// The relay baton passed between phases: the **tail** of the previous
+/// phase's output (playbook instructions end each phase with a real summary
+/// of what was done, so the tail is the highest-signal slice), capped so a
+/// long transcript can't blow up the next phase's prompt.
+const RELAY_TAIL_MAX_CHARS: usize = 1500;
+
+fn relay_tail(text: &str) -> String {
+    let trimmed = text.trim();
+    let total = trimmed.chars().count();
+    if total <= RELAY_TAIL_MAX_CHARS {
+        return trimmed.to_string();
+    }
+    let skip = total - RELAY_TAIL_MAX_CHARS;
+    let tail: String = trimmed.chars().skip(skip).collect();
+    format!("…（前文省略 {skip} 字符）{tail}")
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::relay_tail;
+
+    #[test]
+    fn short_text_passes_through_untruncated() {
+        assert_eq!(relay_tail("  完成了证据采集  "), "完成了证据采集");
+    }
+
+    #[test]
+    fn long_text_keeps_the_tail_on_char_boundaries() {
+        let text = "头".repeat(2000) + &"尾".repeat(1000);
+        let out = relay_tail(&text);
+        assert!(out.ends_with(&"尾".repeat(1000)));
+        assert!(out.starts_with("…（前文省略"));
+        // Multi-byte safety: no panic, and the kept slice is exactly the cap.
+        assert!(out.chars().count() < 1600);
     }
 }

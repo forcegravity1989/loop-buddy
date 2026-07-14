@@ -565,6 +565,12 @@ pub struct WorkflowSpec {
     /// Associated stage (1..=5), if any.
     pub stage_ref: Option<u8>,
     pub phases: Vec<String>,
+    /// Per-phase real instructions, index-aligned with `phases`. Empty (the
+    /// pre-playbook default) or a missing/blank entry ⇒ that phase falls back
+    /// to the shared `prompt` — byte-for-byte the old behavior. Rendered by
+    /// `crate::playbook` for stage workflows; hand-authorable for custom ones.
+    #[serde(default)]
+    pub phase_prompts: Vec<String>,
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     pub loop_config: LoopConfig,
@@ -720,6 +726,11 @@ pub struct WorkflowVersion {
     pub prompt: String,
     pub goal: String,
     pub phases: Vec<String>,
+    /// Per-phase instructions frozen with the rest of the content — an
+    /// evolution history that dropped them would misreport what old versions
+    /// actually executed. Empty for pre-playbook snapshots.
+    #[serde(default)]
+    pub phase_prompts: Vec<String>,
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     pub loop_retries: u8,
@@ -786,6 +797,7 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
         goal: stage_goal(kind),
         stage_ref: Some(kind.index()),
         phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -793,6 +805,34 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
             max_iter: 3,
         },
     }
+}
+
+/// [`stage_workflow`] upgraded by the stage's executable playbook
+/// (`crate::playbook`): same method-loop phases, but each phase carries a
+/// real, project-contextualized instruction a real executor can act on. The
+/// role that hosts the stage rides along as the spec's (real) `AgentRef` —
+/// this is what actually executes, not a display-only crew suggestion.
+#[cfg(feature = "idgen")]
+pub fn stage_workflow_with_playbook(
+    kind: StageKind,
+    ctx: &crate::playbook::PlaybookCtx,
+) -> WorkflowSpec {
+    let mut spec = stage_workflow(kind);
+    spec.name = format!("「{}」剧本工作流 · {}", kind.label(), kind.role_short());
+    spec.prompt = crate::playbook::stage_prompt(kind, ctx);
+    spec.phase_prompts = crate::playbook::rendered_phase_prompts(kind, ctx);
+    spec.agents = vec![AgentRef {
+        name: kind.role_short().to_string(),
+        def: format!("{} · {}", kind.methodology(), kind.seek()),
+        from: "阶段剧本(bw-core::playbook)".into(),
+    }];
+    // A playbook phase is a full, self-contained work order — one honest
+    // attempt each, no blind re-run of an identical prompt (real spend).
+    spec.loop_config = LoopConfig {
+        retries: 1,
+        max_iter: 1,
+    };
+    spec
 }
 
 /// The persisted, browsable counterpart to [`stage_workflow`] — a **Static**
@@ -827,6 +867,7 @@ pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
         goal: stage_goal(kind),
         stage_ref: Some(kind.index()),
         phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -858,6 +899,7 @@ pub fn drafting_workflow() -> WorkflowSpec {
             "指标框架".into(),
             "阶段激活".into(),
         ],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {

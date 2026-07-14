@@ -87,6 +87,15 @@ impl ClaudeCliExecutor {
 /// are surfaced as advisory hints, not enforced.
 pub fn build_prompt(phase: &PhaseNode) -> String {
     let mut out = format!("# 阶段：{}\n\n{}", phase.name, phase.prompt);
+    if let Some(prior) = phase
+        .prior_summary
+        .as_deref()
+        .filter(|p| !p.trim().is_empty())
+    {
+        out.push_str(&format!(
+            "\n\n## 上一阶段真实产出（接力棒，供衔接，不要重做）\n{prior}"
+        ));
+    }
     if !phase.agents.is_empty() {
         let names: Vec<&str> = phase.agents.iter().map(|a| a.name.as_str()).collect();
         out.push_str(&format!("\n\n建议协作角色：{}", names.join("、")));
@@ -110,6 +119,32 @@ struct CliResult {
     permission_denials: Vec<serde_json::Value>,
 }
 
+/// Gateway-side transient failures (overload / brief unavailability). Only
+/// these are retried — auth errors, budget stops, and parse failures are
+/// final on the first occurrence. Patterns cover both Anthropic first-party
+/// ("overloaded_error") and third-party inference gateways（如 bigmodel 的
+/// 「访问量过大」529）.
+fn is_transient_gateway_error(msg: &str) -> bool {
+    [
+        "API Error: 529",
+        "API Error: 503",
+        "API Error: 502",
+        "API Error: 504",
+    ]
+    .iter()
+    .any(|p| msg.contains(p))
+        || msg.to_ascii_lowercase().contains("overloaded")
+        || msg.contains("访问量过大")
+}
+
+/// Bounded retry schedule for transient gateway errors. Failed-at-gateway
+/// attempts cost $0 (the error precedes generation), so the per-phase budget
+/// cap is not multiplied in practice.
+const TRANSIENT_BACKOFF_SECS: &[u64] = &[30, 90, 180];
+/// A single attempt may legitimately run long (real coding work), but a hung
+/// child must not silently eat the whole stage window.
+const ATTEMPT_TIMEOUT_SECS: u64 = 30 * 60;
+
 #[async_trait]
 impl Executor for ClaudeCliExecutor {
     async fn run_phase(&self, phase: &PhaseNode, _ctx: &RunCtx) -> Result<PhaseOutput, ExecError> {
@@ -126,67 +161,106 @@ impl Executor for ClaudeCliExecutor {
             self.config.default_mode
         };
 
-        let mut cmd =
-            tokio::process::Command::new(self.config.binary.as_deref().unwrap_or("claude"));
-        cmd.current_dir(&self.workspace)
-            .arg("-p")
-            .arg(&prompt)
-            .arg("--output-format")
-            .arg("json")
-            .arg("--no-session-persistence")
-            .arg("--max-budget-usd")
-            .arg(self.config.max_budget_usd.to_string())
-            .arg("--permission-mode")
-            .arg(mode.as_cli_flag())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let mut attempt = 0usize;
+        loop {
+            let mut cmd =
+                tokio::process::Command::new(self.config.binary.as_deref().unwrap_or("claude"));
+            // 宿主若本身运行在 Claude Code 会话内（嵌套执行），环境里会注入会话级
+            // 令牌/网关地址/模型别名——子 CLI 用它们会 401。剥离后子进程回落到
+            // 用户自己的 CLI 配置，这是唯一对子进程有效的凭据。
+            for var in [
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_MODEL",
+                "CLAUDECODE",
+                "CLAUDE_CODE_SESSION_ID",
+                "CLAUDE_CODE_CHILD_SESSION",
+                "CLAUDE_CODE_ENTRYPOINT",
+            ] {
+                cmd.env_remove(var);
+            }
+            cmd.current_dir(&self.workspace)
+                .arg("-p")
+                .arg(&prompt)
+                .arg("--output-format")
+                .arg("json")
+                .arg("--no-session-persistence")
+                .arg("--max-budget-usd")
+                .arg(self.config.max_budget_usd.to_string())
+                .arg("--permission-mode")
+                .arg(mode.as_cli_flag())
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                // 阶段级超时会 drop 这个 future——没有 kill_on_drop 的话
+                // 子 claude 进程会泄漏并继续烧预算。
+                .kill_on_drop(true);
 
-        if self.allow_commands {
-            cmd.arg("--allowedTools").arg("Bash");
-        }
+            if self.allow_commands {
+                cmd.arg("--allowedTools").arg("Bash");
+            }
 
-        let output = cmd
-            .output()
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(ATTEMPT_TIMEOUT_SECS),
+                cmd.output(),
+            )
             .await
+            .map_err(|_| {
+                ExecError::Failed(format!(
+                    "claude CLI attempt exceeded {ATTEMPT_TIMEOUT_SECS}s (hung child killed)"
+                ))
+            })?
             .map_err(|e| ExecError::Failed(format!("failed to spawn claude CLI: {e}")))?;
 
-        if !output.status.success() && output.stdout.is_empty() {
-            return Err(ExecError::Failed(format!(
-                "claude CLI exited with {}: {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr)
-            )));
+            // 两条失败通道都可能是瞬时网关错误：非零退出+空 stdout（错误只
+            // 打到 stderr），或 JSON 里的 is_error（网关错误经 CLI 转述）。
+            let err_text = if !output.status.success() && output.stdout.is_empty() {
+                format!(
+                    "claude CLI exited with {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            } else {
+                let parsed: CliResult = serde_json::from_slice(&output.stdout).map_err(|e| {
+                    ExecError::Failed(format!(
+                        "failed to parse claude CLI JSON output: {e} (raw: {})",
+                        String::from_utf8_lossy(&output.stdout)
+                    ))
+                })?;
+                if !parsed.is_error {
+                    let mut text = parsed.result;
+                    // v1 has no multi-turn loop, so `done` is unconditionally
+                    // `true` here — folding denials into `gaps` instead would
+                    // violate contract.rs's "done && !gaps.is_empty() is
+                    // illegal" invariant and could re-run an inherently-stuck
+                    // phase up to `max_iter` times, multiplying real spend.
+                    if !parsed.permission_denials.is_empty() {
+                        text.push_str(&format!(
+                            "\n\n[权限提示] {} 项操作被当前权限模式拒绝",
+                            parsed.permission_denials.len()
+                        ));
+                    }
+                    return Ok(PhaseOutput {
+                        text,
+                        done: true,
+                        gaps: vec![],
+                    });
+                }
+                parsed.result
+            };
+
+            if attempt < TRANSIENT_BACKOFF_SECS.len() && is_transient_gateway_error(&err_text) {
+                let delay = TRANSIENT_BACKOFF_SECS[attempt];
+                attempt += 1;
+                eprintln!(
+                    "  [executor] 瞬时网关错误（第 {attempt} 次，{delay}s 后重试）: {}",
+                    err_text.chars().take(120).collect::<String>()
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                continue;
+            }
+            return Err(ExecError::Failed(err_text));
         }
-
-        let parsed: CliResult = serde_json::from_slice(&output.stdout).map_err(|e| {
-            ExecError::Failed(format!(
-                "failed to parse claude CLI JSON output: {e} (raw: {})",
-                String::from_utf8_lossy(&output.stdout)
-            ))
-        })?;
-
-        if parsed.is_error {
-            return Err(ExecError::Failed(parsed.result));
-        }
-
-        let mut text = parsed.result;
-        // v1 has no multi-turn loop, so `done` is unconditionally `true` here —
-        // folding denials into `gaps` instead would violate contract.rs's
-        // "done && !gaps.is_empty() is illegal" invariant and could re-run an
-        // inherently-stuck phase up to `max_iter` times, multiplying real spend.
-        if !parsed.permission_denials.is_empty() {
-            text.push_str(&format!(
-                "\n\n[权限提示] {} 项操作被当前权限模式拒绝",
-                parsed.permission_denials.len()
-            ));
-        }
-
-        Ok(PhaseOutput {
-            text,
-            done: true,
-            gaps: vec![],
-        })
     }
 }
 
@@ -203,7 +277,38 @@ mod tests {
             skills,
             max_iter: 3,
             retries: 1,
+            prior_summary: None,
         }
+    }
+
+    #[test]
+    fn build_prompt_carries_the_relay_baton_when_present() {
+        let mut n = node(vec![], vec![]);
+        n.prior_summary = Some("已创建 docs/evidence.md，共 3 条证据".into());
+        let out = build_prompt(&n);
+        assert!(out.contains("接力棒"));
+        assert!(out.contains("docs/evidence.md"));
+        // Blank baton must not inject an empty section.
+        n.prior_summary = Some("   ".into());
+        assert!(!build_prompt(&n).contains("接力棒"));
+    }
+
+    #[test]
+    fn transient_gateway_errors_are_recognized_and_final_errors_are_not() {
+        // 真实网关错误样本（bigmodel 529，实测于 2026-07-14 的实跑日志）。
+        assert!(is_transient_gateway_error(
+            "API Error: 529 [1305][该模型当前访问量过大，请您稍后再试][20260714]"
+        ));
+        assert!(is_transient_gateway_error("Overloaded: upstream busy"));
+        assert!(is_transient_gateway_error(
+            "API Error: 503 service unavailable"
+        ));
+        // 终态错误绝不能重试：auth、预算、解析。
+        assert!(!is_transient_gateway_error(
+            "Failed to authenticate. API Error: 401 Invalid bearer token"
+        ));
+        assert!(!is_transient_gateway_error("budget exceeded"));
+        assert!(!is_transient_gateway_error("API Error: 400 bad request"));
     }
 
     #[test]

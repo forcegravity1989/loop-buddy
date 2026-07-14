@@ -19,3 +19,6 @@ tokio = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Integration tests implement `Executor` (a #[async_trait] trait) directly —
+# tests/*.rs are separate crates and don't inherit normal dependencies.
+async-trait = { workspace = true }
