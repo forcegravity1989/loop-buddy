@@ -159,6 +159,10 @@ pub struct OpVm {
     /// `NotLoaded` until `Command::LoadVersionLog` is dispatched at least
     /// once for this specific project.
     pub version_log: ui::vm::VersionLogVm,
+    /// Registered artifacts (Artifact panel) — `None` until
+    /// `Command::LoadArtifacts` ran for this project; `Some(vec![])` is a
+    /// really-empty registry, a different honest state.
+    pub artifacts: Option<Vec<ui::vm::ArtifactRowVm>>,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -194,6 +198,17 @@ pub enum UiNote {
     CronAutoFired {
         name: String,
         ok: bool,
+    },
+    /// New artifact versions were really registered (post-run auto-scan or a
+    /// manual collect) — `fresh` is the genuinely-new count.
+    ArtifactsRegistered {
+        fresh: u32,
+    },
+    /// A connector's real probe finished — `detail` is its honest summary.
+    ConnectorSynced {
+        name: String,
+        ok: bool,
+        detail: String,
     },
 }
 
@@ -243,7 +258,11 @@ impl RunVm {
                 self.running = false;
                 self.failed = Some(e.clone());
             }
-            UiNote::Handoff { .. } | UiNote::Error(_) | UiNote::CronAutoFired { .. } => {}
+            UiNote::Handoff { .. }
+            | UiNote::Error(_)
+            | UiNote::CronAutoFired { .. }
+            | UiNote::ArtifactsRegistered { .. }
+            | UiNote::ConnectorSynced { .. } => {}
         }
     }
 }
@@ -292,6 +311,20 @@ fn db_path() -> String {
             format!("{dir}/workbench.db")
         }
         None => "workbench.db".into(),
+    }
+}
+
+/// Where auto-provisioned project repos live: `BW_WORKSPACES` override, else
+/// a `workspaces/` directory next to the database — same env-override-else-
+/// derived pattern as [`db_path`].
+fn workspaces_root() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("BW_WORKSPACES") {
+        return std::path::PathBuf::from(p);
+    }
+    let db = std::path::PathBuf::from(db_path());
+    match db.parent() {
+        Some(dir) => dir.join("workspaces"),
+        None => std::path::PathBuf::from("workspaces"),
     }
 }
 
@@ -350,7 +383,10 @@ pub fn spawn() -> Kernel {
                         450,
                     )))),
                     claude_config_from_env(),
-                );
+                )
+                // All-in-one-codebase default: projects born through the
+                // creation flow get their own real git repo next to the DB.
+                .with_workspaces_root(workspaces_root());
 
                 // Live event → transient note forwarding. Runs concurrently with
                 // dispatch (progress events are emitted mid-run).
@@ -385,6 +421,12 @@ pub fn spawn() -> Kernel {
                             }
                             Event::CronAutoFired { name, ok, .. } => {
                                 UiNote::CronAutoFired { name, ok }
+                            }
+                            Event::ArtifactsRegistered { fresh } if fresh > 0 => {
+                                UiNote::ArtifactsRegistered { fresh }
+                            }
+                            Event::ConnectorSynced { name, ok, detail } => {
+                                UiNote::ConnectorSynced { name, ok, detail }
                             }
                             _ => continue,
                         };
@@ -761,6 +803,13 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         })
     }));
 
+    // Artifact registry snapshot — same explicit-load, project-tagged rule
+    // as `version_log`: `None` until `LoadArtifacts` ran for THIS project.
+    let artifacts = state
+        .artifacts
+        .as_ref()
+        .and_then(|(apid, rows)| (*apid == pid).then(|| ui::vm::artifact_rows(rows, now)));
+
     let overall = overall_progress(&stages.iter().map(|s| s.progress).collect::<Vec<_>>());
     let stats = ui::vm::stat_cards(
         stages.len(),
@@ -802,6 +851,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         chat,
         hub,
         version_log,
+        artifacts,
     });
     vm
 }

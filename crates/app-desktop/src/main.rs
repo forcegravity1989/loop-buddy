@@ -129,6 +129,13 @@ fn Root() -> Element {
                                 let mark = if *ok { "✓" } else { "✕" };
                                 toast.set(Some(format!("⏰ 定时任务自动运行 {mark} · {name}")));
                             }
+                            UiNote::ArtifactsRegistered { fresh } => {
+                                toast.set(Some(format!("📦 新登记 {fresh} 个产物版本")));
+                            }
+                            UiNote::ConnectorSynced { name, ok, detail } => {
+                                let mark = if *ok { "✓" } else { "✕" };
+                                toast.set(Some(format!("🔌 {name} 同步 {mark} · {detail}")));
+                            }
                             _ => run.with_mut(|r| r.apply(&note)),
                         },
                         Err(RecvError::Lagged(_)) => continue,

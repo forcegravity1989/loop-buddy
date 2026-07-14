@@ -629,6 +629,9 @@ pub struct SkillCardVm {
     pub category: String,
     pub source_label: &'static str,
     pub uses: u32,
+    /// Executable body. Empty = catalog reference (the detail panel says so
+    /// honestly instead of showing a blank that reads as broken).
+    pub content: String,
 }
 
 pub fn skill_card(s: &SkillCard) -> SkillCardVm {
@@ -640,6 +643,7 @@ pub fn skill_card(s: &SkillCard) -> SkillCardVm {
         category: s.category.clone(),
         source_label: s.source.label(),
         uses: s.uses,
+        content: s.content.clone(),
     }
 }
 
@@ -653,7 +657,10 @@ pub struct AgentCardVm {
     pub skills: Vec<String>,
     pub model: String,
     pub runs: u32,
+    /// `""` while `runs == 0` — render as "—" (no evidence), never "0%".
     pub win_rate: String,
+    /// Standing instructions. Empty = catalog reference.
+    pub instructions: String,
 }
 
 pub fn agent_card(a: &AgentCard) -> AgentCardVm {
@@ -672,6 +679,7 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
         model: a.model.clone(),
         runs: a.runs,
         win_rate: a.win_rate.clone(),
+        instructions: a.instructions.clone(),
     }
 }
 
@@ -775,9 +783,14 @@ pub struct ConnectorCardVm {
     pub name: String,
     pub initial: String,
     pub kind: String,
+    pub status: ConnectorStatus,
     pub status_label: &'static str,
     pub last_sync: String,
     pub scope: String,
+    /// `true` only for kinds with a *real* probe (`git-repo`/`claude-cli`) —
+    /// the sync button renders only where syncing really does something;
+    /// reference entries honestly show none.
+    pub syncable: bool,
 }
 
 pub fn connector_card(c: &Connector) -> ConnectorCardVm {
@@ -791,9 +804,14 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
             .map(|ch| ch.to_string())
             .unwrap_or_default(),
         kind: c.kind.clone(),
+        status: c.status,
         status_label: c.status.label(),
         last_sync: c.last_sync.clone(),
         scope: c.scope.clone(),
+        syncable: matches!(
+            c.kind.as_str(),
+            bw_core::model::CONNECTOR_KIND_GIT_REPO | bw_core::model::CONNECTOR_KIND_CLAUDE_CLI
+        ),
     }
 }
 
@@ -1053,6 +1071,67 @@ pub fn version_log_vm(fetched: Option<Result<Vec<CommitSource>, String>>) -> Ver
     }
 }
 
+// ───────────────────────── artifact panel ─────────────────────────
+
+/// One file in the Artifact panel — the *latest* registered version of a
+/// path, plus how many versions (distinct commits) the registry holds for it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct ArtifactRowVm {
+    pub path: String,
+    pub kind_label: &'static str,
+    pub bytes_label: String,
+    /// Short commit of the latest version; "(未提交)" for a commitless repo.
+    pub commit_label: String,
+    pub time_label: String,
+    /// Registered versions of this path (rows sharing the path).
+    pub versions: u32,
+    /// Whether the latest version is attributed to a workflow run.
+    pub from_run: bool,
+    pub stage_label: Option<&'static str>,
+}
+
+/// Human byte size — real value, coarse unit (the panel is a registry view,
+/// not a disk auditor).
+pub fn bytes_label(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Fold the raw registry rows (newest first, as `list_artifacts` returns
+/// them) into one row per path: latest version wins the display, the rest
+/// count as history. Pure fold — no invention, no reordering surprises.
+pub fn artifact_rows(rows: &[bw_core::model::Artifact], now: OffsetDateTime) -> Vec<ArtifactRowVm> {
+    let mut out: Vec<ArtifactRowVm> = Vec::new();
+    for a in rows {
+        if let Some(existing) = out.iter_mut().find(|r| r.path == a.path) {
+            existing.versions += 1;
+            continue;
+        }
+        out.push(ArtifactRowVm {
+            path: a.path.clone(),
+            kind_label: a.kind.label(),
+            bytes_label: bytes_label(a.bytes),
+            commit_label: if a.git_commit.is_empty() {
+                "(未提交)".to_string()
+            } else {
+                a.git_commit.clone()
+            },
+            time_label: OffsetDateTime::from_unix_timestamp(a.registered_at)
+                .map(|ts| time_label(ts, now))
+                .unwrap_or_default(),
+            versions: 1,
+            from_run: a.workflow_run_id.is_some(),
+            stage_label: a.stage_kind.map(|k| k.label()),
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1060,6 +1139,59 @@ mod tests {
 
     fn t0() -> OffsetDateTime {
         OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap()
+    }
+
+    #[test]
+    fn artifact_rows_fold_versions_per_path_latest_first() {
+        use bw_core::model::{Artifact, ArtifactKind};
+        use bw_core::{ArtifactId, WorkflowRunId};
+        let mk = |path: &str, commit: &str, ts: i64, run: bool| Artifact {
+            id: ArtifactId::nil(),
+            project_id: ProjectId::nil(),
+            workflow_run_id: run.then(WorkflowRunId::nil),
+            stage_kind: Some(StageKind::Prototype),
+            path: path.into(),
+            kind: ArtifactKind::Doc,
+            bytes: 2048,
+            git_commit: commit.into(),
+            registered_at: ts,
+        };
+        // list_artifacts order: newest first.
+        let rows = artifact_rows(
+            &[
+                mk("docs/evidence.md", "bbb", 1_700_000_000, true),
+                mk("docs/evidence.md", "aaa", 1_699_990_000, false),
+                mk("README.md", "aaa", 1_699_990_000, false),
+            ],
+            t0(),
+        );
+        assert_eq!(rows.len(), 2, "one display row per path");
+        let ev = rows.iter().find(|r| r.path == "docs/evidence.md").unwrap();
+        assert_eq!(ev.versions, 2, "version count = rows sharing the path");
+        assert_eq!(ev.commit_label, "bbb", "latest version wins the display");
+        assert!(ev.from_run);
+        assert_eq!(ev.bytes_label, "2.0 KB");
+        assert_eq!(ev.stage_label, Some("原型"));
+    }
+
+    #[test]
+    fn connector_card_marks_only_probeable_kinds_syncable() {
+        let mk = |kind: &str| Connector {
+            id: ConnectorId::nil(),
+            name: "c".into(),
+            kind: kind.into(),
+            status: ConnectorStatus::Disconnected,
+            last_sync: String::new(),
+            scope: String::new(),
+            project_id: None,
+            config: String::new(),
+        };
+        assert!(connector_card(&mk("git-repo")).syncable);
+        assert!(connector_card(&mk("claude-cli")).syncable);
+        assert!(
+            !connector_card(&mk("知识库")).syncable,
+            "reference kinds honestly have no sync button"
+        );
     }
 
     #[test]

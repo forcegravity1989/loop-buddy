@@ -339,32 +339,109 @@ fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
         (Panel::Workflow, s) => rsx! { WorkflowPanel { op, stage: s, run, on_pick_hub } },
         (Panel::Routine, None) => rsx! { RoutineAll { op } },
         (Panel::Routine, Some(s)) => rsx! { RoutineStage { s } },
-        (Panel::Artifact, _) => rsx! { ArtifactPanel {} },
+        (Panel::Artifact, _) => rsx! { ArtifactPanel { op } },
         (Panel::Version, _) => rsx! { VersionPanel { op } },
     }
 }
 
-/// Deliberately still a stub — not "not built yet," but assessed and left
-/// this way. The prototype's "产物画廊/产物画布" is rich structured content
-/// (a clickable web app, a data matrix, a document) fabricated from a
-/// commit-id hash; this app has no matching real concept (`session`s are
-/// plain text transcripts, nothing structured is ever produced or stored).
-/// Unlike Version — where "real git commits" was an unambiguous, already-
-/// available honest data source — there's no equally clean real source
-/// here yet. Repurposing something adjacent (e.g. "recently changed files
-/// under `workspace_path`") would be a materially weaker echo of what this
-/// panel promises, likely to read as broken rather than honest. Revisit
-/// once sessions can produce a real structured output.
+/// Kind chip color — muted per-type hues from the existing stage palette
+/// family, keyed on the display label (the Vm carries labels, not enums).
+fn artifact_kind_color(kind_label: &str) -> &'static str {
+    match kind_label {
+        "文档" => "#4F7E86",
+        "代码" => "#C5654A",
+        "测试" => "#6E8C5A",
+        "脚本" => "#CC8B3C",
+        "配置" => "#8A8275",
+        _ => "#A19B8D",
+    }
+}
+
+/// The real artifact registry — every row is a tracked file version really
+/// scanned out of the project's workspace (`git ls-files` + `stat` + HEAD),
+/// registered by post-run auto-scans or a manual "重新采集". The long-ago
+/// stub's reason ("no real data source yet") retired when the evidence
+/// collector + all-in-one-codebase workspace landed; this panel now renders
+/// exactly that source, nothing invented.
 #[component]
-fn ArtifactPanel() -> Element {
+fn ArtifactPanel(op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let k2 = k.clone();
     let card = theme::card();
     let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+    let clay = theme::CLAY;
+    let configured = !op.workspace_path.trim().is_empty();
+
     rsx! {
         div {
-            style: "{card} padding:26px 30px;max-width:560px;",
-            div { style: "font-weight:600;margin-bottom:8px;", "产物画廊 / 产物画布" }
-            p { style: "color:{ink2};font-size:13px;line-height:1.7;margin:0;",
-                "还没有真实数据源:会话目前只产出纯文本,没有结构化产物这个存量。等会话能真正产出可展示的结构化输出后再做,不提前拼一个半假的版本。"
+            style: "max-width:820px;",
+            div {
+                style: "{card} padding:14px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px;",
+                span { style: "font-size:12px;color:{ink3};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                    if configured {
+                        "真实产物登记 · 扫描自 {op.workspace_path}"
+                    } else {
+                        "未配置真实工作区 —— 没有可扫描的代码仓"
+                    }
+                }
+                button {
+                    style: "cursor:pointer;background:transparent;color:{clay};border:1px solid {clay};border-radius:7px;padding:6px 14px;font-size:12px;flex:none;",
+                    onclick: move |_| k.send(Command::LoadArtifacts),
+                    "读取登记"
+                }
+                if configured {
+                    button {
+                        style: "cursor:pointer;background:{clay};color:#fff;border:1px solid {clay};border-radius:7px;padding:6px 14px;font-size:12px;flex:none;",
+                        onclick: move |_| {
+                            k2.send(Command::CollectArtifacts);
+                        },
+                        "重新采集"
+                    }
+                }
+            }
+            match &op.artifacts {
+                None => rsx! {
+                    div { style: "{card} padding:26px 30px;color:{ink2};font-size:13px;line-height:1.7;",
+                        "还没有加载过 —— 点「读取登记」查看已登记产物,或「重新采集」扫描工作区。"
+                    }
+                },
+                Some(rows) if rows.is_empty() => rsx! {
+                    div { style: "{card} padding:26px 30px;color:{ink2};font-size:13px;line-height:1.7;",
+                        "登记表是空的 —— 这个项目的工作区还没有任何被追踪的文件(或尚未采集过)。"
+                    }
+                },
+                Some(rows) => rsx! {
+                    div {
+                        for a in rows.clone() {
+                            div {
+                                key: "{a.path}",
+                                style: "{card} padding:11px 18px;margin-bottom:6px;display:flex;align-items:center;gap:12px;",
+                                span {
+                                    style: "font-family:{mono};font-size:10.5px;color:#fff;background:{artifact_kind_color(a.kind_label)};border-radius:5px;padding:2px 8px;flex:none;",
+                                    "{a.kind_label}"
+                                }
+                                span {
+                                    style: "flex:1;min-width:0;font-size:13px;font-family:{mono};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                                    "{a.path}"
+                                }
+                                if let Some(stage) = a.stage_label {
+                                    span { style: "font-size:11px;color:{ink2};flex:none;", "{stage}段" }
+                                }
+                                if a.versions > 1 {
+                                    span { style: "font-size:11px;color:{ink2};flex:none;", "{a.versions} 个版本" }
+                                }
+                                if a.from_run {
+                                    span { style: "font-size:11px;color:{ink3};flex:none;", "run 产出" }
+                                }
+                                span { style: "font-size:11px;color:{ink3};flex:none;", "{a.bytes_label}" }
+                                span { style: "font-family:{mono};font-size:11px;color:{ink3};flex:none;", "{a.commit_label}" }
+                                span { style: "font-size:11px;color:{ink3};flex:none;", "{a.time_label}" }
+                            }
+                        }
+                    }
+                },
             }
         }
     }

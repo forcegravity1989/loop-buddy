@@ -134,6 +134,15 @@ fn SkillCard(
                     if is_editing {
                         EditSkillForm { s: s.clone(), on_done: move |_| on_done_edit.call(()) }
                     } else {
+                        if s.content.trim().is_empty() {
+                            div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "目录引用 · 无正文(全文在来源仓库;可「编辑」补充本地正文)" }
+                        } else {
+                            div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "技能正文(运行时注入 prompt)" }
+                            pre {
+                                style: "font-family:{theme::MONO};font-size:11.5px;line-height:1.6;color:{ink2};background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:10px 12px;white-space:pre-wrap;margin:0 0 10px;",
+                                "{s.content}"
+                            }
+                        }
                         div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "被这些工作流使用" }
                         if used_by.is_empty() {
                             div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "还没有工作流引用这个技能。" }
@@ -168,6 +177,7 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
     let mut name = use_signal(|| s.name.clone());
     let mut desc = use_signal(|| s.desc.clone());
     let mut category = use_signal(|| s.category.clone());
+    let mut content = use_signal(|| s.content.clone());
 
     let save = move |_| {
         let n = name().trim().to_string();
@@ -179,6 +189,7 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
             name: n,
             desc: desc().trim().to_string(),
             category: category().trim().to_string(),
+            content: content().trim().to_string(),
         });
         on_done.call(());
     };
@@ -201,9 +212,15 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
             }
             div { style: "{label}", "分类" }
             input {
-                style: "{input} margin-bottom:12px;",
+                style: "{input} margin-bottom:10px;",
                 value: "{category}",
                 oninput: move |e| category.set(e.value()),
+            }
+            div { style: "{label}", "正文(可执行指令,运行时注入 prompt;留空=仅目录引用)" }
+            textarea {
+                style: "{input} margin-bottom:12px;min-height:120px;font-family:{theme::MONO};font-size:11.5px;line-height:1.6;resize:vertical;",
+                value: "{content}",
+                oninput: move |e| content.set(e.value()),
             }
             div {
                 style: "display:flex;align-items:center;gap:10px;",
@@ -233,6 +250,7 @@ fn CreateSkillForm(on_done: EventHandler<()>) -> Element {
     let mut name = use_signal(String::new);
     let mut desc = use_signal(String::new);
     let mut category = use_signal(String::new);
+    let mut content = use_signal(String::new);
 
     let save = move |_| {
         let n = name().trim().to_string();
@@ -245,10 +263,12 @@ fn CreateSkillForm(on_done: EventHandler<()>) -> Element {
             desc: desc().trim().to_string(),
             category: category().trim().to_string(),
             source: LibSource::SelfBuilt,
+            content: content().trim().to_string(),
         });
         name.set(String::new());
         desc.set(String::new());
         category.set(String::new());
+        content.set(String::new());
         on_done.call(());
     };
 
@@ -271,10 +291,17 @@ fn CreateSkillForm(on_done: EventHandler<()>) -> Element {
             }
             div { style: "{label}", "分类" }
             input {
-                style: "{input} margin-bottom:12px;",
+                style: "{input} margin-bottom:10px;",
                 placeholder: "如 检索 / 数据 / 前端",
                 value: "{category}",
                 oninput: move |e| category.set(e.value()),
+            }
+            div { style: "{label}", "正文(可执行指令,运行时注入 prompt;留空=仅目录引用)" }
+            textarea {
+                style: "{input} margin-bottom:12px;min-height:100px;font-family:{theme::MONO};font-size:11.5px;line-height:1.6;resize:vertical;",
+                placeholder: "### 方法\n1. …",
+                value: "{content}",
+                oninput: move |e| content.set(e.value()),
             }
             div {
                 style: "display:flex;align-items:center;gap:10px;",

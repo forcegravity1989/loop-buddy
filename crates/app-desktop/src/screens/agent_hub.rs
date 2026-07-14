@@ -140,7 +140,11 @@ fn AgentCard(
                 span { "{a.model}" }
                 span { "·" }
                 span { "{a.runs} 次运行" }
-                span { style: "margin-left:auto;", "采纳 {a.win_rate}" }
+                if a.win_rate.is_empty() {
+                    span { style: "margin-left:auto;", "成功率 —(无运行证据)" }
+                } else {
+                    span { style: "margin-left:auto;", "成功率 {a.win_rate}" }
+                }
             }
             if is_open {
                 div {
@@ -148,6 +152,15 @@ fn AgentCard(
                     if is_editing {
                         EditAgentForm { a: a.clone(), on_done: move |_| on_done_edit.call(()) }
                     } else {
+                        if a.instructions.trim().is_empty() {
+                            div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "目录引用 · 无本地指令(可「编辑」补充)" }
+                        } else {
+                            div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "常驻指令(角色系统提示;{{var}} 槽位在运行时按项目填充)" }
+                            pre {
+                                style: "font-family:{mono};font-size:11.5px;line-height:1.6;color:{ink2};background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:10px 12px;white-space:pre-wrap;margin:0 0 10px;",
+                                "{a.instructions}"
+                            }
+                        }
                         div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "被这些工作流使用" }
                         if used_by.is_empty() {
                             div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "还没有工作流引用这个智能体。" }
@@ -183,6 +196,7 @@ fn EditAgentForm(a: AgentCardVm, on_done: EventHandler<()>) -> Element {
     let mut role = use_signal(|| a.role.clone());
     let mut model = use_signal(|| a.model.clone());
     let mut skills_text = use_signal(|| a.skills.join(", "));
+    let mut instructions = use_signal(|| a.instructions.clone());
 
     let save = move |_| {
         let n = name().trim().to_string();
@@ -200,6 +214,7 @@ fn EditAgentForm(a: AgentCardVm, on_done: EventHandler<()>) -> Element {
             role: role().trim().to_string(),
             skills,
             model: model().trim().to_string(),
+            instructions: instructions().trim().to_string(),
         });
         on_done.call(());
     };
@@ -228,9 +243,15 @@ fn EditAgentForm(a: AgentCardVm, on_done: EventHandler<()>) -> Element {
             }
             div { style: "{label}", "技能(逗号分隔)" }
             input {
-                style: "{input} margin-bottom:12px;",
+                style: "{input} margin-bottom:10px;",
                 value: "{skills_text}",
                 oninput: move |e| skills_text.set(e.value()),
+            }
+            div { style: "{label}", "常驻指令(系统提示;留空=仅目录引用)" }
+            textarea {
+                style: "{input} margin-bottom:12px;min-height:120px;font-family:{theme::MONO};font-size:11.5px;line-height:1.6;resize:vertical;",
+                value: "{instructions}",
+                oninput: move |e| instructions.set(e.value()),
             }
             div {
                 style: "display:flex;align-items:center;gap:10px;",
@@ -260,6 +281,7 @@ fn CreateAgentForm(on_done: EventHandler<()>) -> Element {
     let mut role = use_signal(String::new);
     let mut model = use_signal(|| "claude-sonnet".to_string());
     let mut skills_text = use_signal(String::new);
+    let mut instructions = use_signal(String::new);
 
     let save = move |_| {
         let n = name().trim().to_string();
@@ -277,10 +299,12 @@ fn CreateAgentForm(on_done: EventHandler<()>) -> Element {
             role: role().trim().to_string(),
             skills,
             model: model().trim().to_string(),
+            instructions: instructions().trim().to_string(),
         });
         name.set(String::new());
         role.set(String::new());
         skills_text.set(String::new());
+        instructions.set(String::new());
         on_done.call(());
     };
 
@@ -309,10 +333,17 @@ fn CreateAgentForm(on_done: EventHandler<()>) -> Element {
             }
             div { style: "{label}", "技能(逗号分隔)" }
             input {
-                style: "{input} margin-bottom:12px;",
+                style: "{input} margin-bottom:10px;",
                 placeholder: "如 web-scan, 对比矩阵",
                 value: "{skills_text}",
                 oninput: move |e| skills_text.set(e.value()),
+            }
+            div { style: "{label}", "常驻指令(系统提示;留空=仅目录引用)" }
+            textarea {
+                style: "{input} margin-bottom:12px;min-height:100px;font-family:{theme::MONO};font-size:11.5px;line-height:1.6;resize:vertical;",
+                placeholder: "你是…;约束…",
+                value: "{instructions}",
+                oninput: move |e| instructions.set(e.value()),
             }
             button {
                 style: "cursor:pointer;background:{theme::CLAY};color:#FFF;border:none;border-radius:7px;padding:7px 16px;font-size:12.5px;",
