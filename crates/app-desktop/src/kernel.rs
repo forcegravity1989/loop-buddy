@@ -439,6 +439,34 @@ pub fn spawn() -> Kernel {
                 }
                 let _ = vm_tx.send(build_vm(&app, &store).await);
 
+                // Hands-free deep-link (verify/demo): open a named project and
+                // optionally a panel from env — skips the wall→open→tab clicks.
+                // BW_OPEN=<project name>; BW_PANEL=progress|workflow|routine|artifact|version.
+                if let Ok(name) = std::env::var("BW_OPEN") {
+                    if let Some(p) = app.snapshot().projects.iter().find(|p| p.name == name) {
+                        let pid = p.id;
+                        let _ = app.dispatch(Command::OpenProject(pid)).await;
+                        if let Ok(pl) = std::env::var("BW_PANEL") {
+                            let panel = match pl.as_str() {
+                                "workflow" => Panel::Workflow,
+                                "routine" => Panel::Routine,
+                                "artifact" => Panel::Artifact,
+                                "version" => Panel::Version,
+                                _ => Panel::Progress,
+                            };
+                            let _ = app.dispatch(Command::SetPanel(panel)).await;
+                        }
+                        let s = app.snapshot();
+                        eprintln!(
+                            "[BW_OPEN] {name:?} -> view={:?} panel={:?} projects={}",
+                            s.view, s.panel, s.projects.len()
+                        );
+                        let _ = vm_tx.send(build_vm(&app, &store).await);
+                    } else {
+                        eprintln!("[BW_OPEN] project {name:?} NOT FOUND");
+                    }
+                }
+
                 // The real scheduler clock: `App` is owned single-threaded by
                 // this loop (no `Arc<Mutex<_>>`), so an auto-fire tick has to
                 // interleave with command dispatch via `select!` rather than
