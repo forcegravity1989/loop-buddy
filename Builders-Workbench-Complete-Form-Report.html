@@ -159,7 +159,19 @@ runtime 是本地 daemon + 云;autopilot 自动建 Issue 并路由;skill <strong
   带真实 provenance 的 Skill = 1 · 真实交棒次数(审计)= 2</pre>
 </div>
 
-<h2><span class="n">§6</span> 诚实边界:本轮建了什么 vs 只设计没建</h2>
+<h2><span class="n">§6</span> 看得见的工作台 —— 真桌面壳里的 Issue 看板(选项 A)</h2>
+<div class="card">
+<p>R1/R2 不再只是内核 + CLI:它们现在是<strong>真实 Dioxus 桌面壳里、用户看得见点得动</strong>的 Issue 看板。
+顶部创建条(标题输入 + 5 阶段 chip + 创建);下方 5 列看板(待办池/待办/进行中/评审中/已完成),
+每张卡带 <code>#号·阶段·标题·优先级·真实 assignee</code> + 一键推进下一态 —— 全部跑在真内核、真数据上。</p>
+<p><strong>本机实跑验证</strong>:启动诊断 <code>view=App panel=Issues issues=6</code>;截图读回列计数 <code>1/1/1/1/2</code>
+与 6 条 seed 精确吻合;卡片 <code>#5「Issue 看板桌面 UI」(构建·sonnet5)</code>、<code>#6「Squad leader 路由委派(留口)」(构建·未分配)</code>
+等全部正确 —— 真实渲染,非 mock。(computer-use 经 screencapture 在本会话验证可行;点击交互需辅助访问权限,本轮用真数据 seed + 截图验证渲染。)</p>
+<img src="docs/board-issues.png" alt="Issue 看板真实渲染截图" style="width:100%;border:1px solid var(--line);border-radius:10px;margin-top:12px;">
+<p class="sub">一键复现:<code>cargo run -p bw-app --example seed_board_demo -- /tmp/d.db</code> 然后 <code>BW_DB=/tmp/d.db BW_OPEN='Builders' Workbench · 完整形态' cargo run -p app-desktop</code></p>
+</div>
+
+<h2><span class="n">§7</span> 诚实边界:本轮建了什么 vs 只设计没建</h2>
 <div class="grid2">
   <div class="card">
     <h3 style="margin-top:0"><span class="check">✓ 真实建了</span>(代码+测试+commit)</h3>
@@ -167,6 +179,7 @@ runtime 是本地 daemon + 云;autopilot 自动建 Issue 并路由;skill <strong
       <li>R1 Issue 层(状态机 + 阶段 + assignee)</li>
       <li>R2 Skill 复利(带 provenance)</li>
       <li>App 级 Issue→Skill 集成测试</li>
+      <li><strong>Issue 看板桌面面板(可见可点,选项 A)</strong></li>
       <li>真实闭环演示 + 设计综合文档</li>
     </ul>
   </div>
@@ -177,13 +190,13 @@ runtime 是本地 daemon + 云;autopilot 自动建 Issue 并路由;skill <strong
       <li>云 Runtime + WebSocket 实时流</li>
       <li>Gantt / Swimlane 视图(本轮只 Board/List 数据层)</li>
       <li>Autopilot 两态(create_issue / run_only)</li>
-      <li>Inbox / Chat / Board 桌面 UI</li>
+      <li>Inbox / Chat / Gantt 桌面页(Board 看板已建)</li>
     </ul>
   </div>
 </div>
 <p class="sub">三条不可妥协贯穿全程:<strong>绝不编造</strong>(每个数字指向真实代码/测试/commit)· <strong>无数据 ≠ 绿</strong> · <strong>破坏性永不自动</strong>。</p>
 
-<h2><span class="n">§7</span> 如何核验(全部可一键复现)</h2>
+<h2><span class="n">§8</span> 如何核验(全部可一键复现)</h2>
 <pre><span class="c"># 门禁(本报告所有「绿」都来自这些命令的真实输出)</span>
 cargo fmt --all --check
 cargo clippy --workspace --exclude app-desktop -- -D warnings
@@ -209,7 +222,7 @@ git log --oneline 4fdbe08..HEAD</pre>
   </table>
 </div>
 
-<h2><span class="n">§8</span> 结论:完整形态 = 方法论驱动 × agent 执行 × 度量诚实</h2>
+<h2><span class="n">§9</span> 结论:完整形态 = 方法论驱动 × agent 执行 × 度量诚实</h2>
 <div class="card">
 <p>单看 multica 或 BW 都不完整:multica 没有方法论骨干(为什么做、在哪个阶段、健不健康答不上);BW 没有真实执行(没有可分配任务、没有真实 agent)。
 本轮把两者焊起来 —— <strong>BW 的五角色环 = multica 的真实 agent 队友</strong>,Issue 是连接阶段方法论与真实执行的结缔组织,Skill 从真实工作里复利,度量从真实结果派生。</p>
