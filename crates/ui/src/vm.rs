@@ -1380,6 +1380,8 @@ mod tests {
             category: "检索".into(),
             source: bw_core::model::LibSource::SelfBuilt,
             uses: 128,
+            distilled_from_issue: None,
+            origin_agent: None,
         });
         assert_eq!(card.maturity_label, "打磨中");
         assert_eq!(card.source_label, "自建");

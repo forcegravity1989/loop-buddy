@@ -231,6 +231,17 @@ pub enum Command {
         category: String,
         source: LibSource,
     },
+    /// Distill a new skill from a completed, assigned Issue — the "every
+    /// solution compounds into a reusable skill" link. Provenance + Done/
+    /// assignee validation lives in the store; this is a thin wrapper that
+    /// delegates and refreshes, like `CreateSkill`.
+    DistillSkillFromIssue {
+        skill_id: SkillId,
+        issue_id: IssueId,
+        name: String,
+        desc: String,
+        category: String,
+    },
     /// SkillHub's detail-panel edit — content only (`maturity`/`uses` are
     /// lifecycle data, untouched).
     UpdateSkill {
@@ -1317,6 +1328,33 @@ impl App {
                         category,
                         source,
                     })
+                    .await?;
+                self.refresh_skills().await?;
+                self.emit(Event::SkillsChanged);
+            }
+
+            Command::DistillSkillFromIssue {
+                skill_id,
+                issue_id,
+                name,
+                desc,
+                category,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .distill_skill_from_issue(
+                        NewSkill {
+                            id: skill_id,
+                            name,
+                            maturity: Maturity::Polishing,
+                            desc,
+                            category,
+                            source: LibSource::SelfBuilt,
+                        },
+                        issue_id,
+                    )
                     .await?;
                 self.refresh_skills().await?;
                 self.emit(Event::SkillsChanged);

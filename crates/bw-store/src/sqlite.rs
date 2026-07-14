@@ -20,7 +20,7 @@ use bw_core::derive::{
 };
 use bw_core::model::{
     AgentCard, AgentRef, AgentSkillTag, Connector, CronEffectiveness, CronStatus, CronTask,
-    HubSource, Issue, IssueStatus, KnowledgeSource, LoopConfig, Maturity, ProjectCycle,
+    HubSource, Issue, IssueStatus, KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle,
     ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind,
     UsageRank, WorkflowKind, WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
@@ -86,6 +86,13 @@ impl SqliteStore {
         // DBs (pre-iter-4) opened before this column existed get it added here;
         // manual-run rows simply stay NULL.
         add_column_if_missing(&pool, "workflow_run", "cron_task_id", "TEXT").await?;
+        // R2: skill provenance — link a distilled skill back to the real
+        // completed Issue (+ the agent that did the work) it was distilled
+        // from. NULL = catalog/seeded skill (no real-work origin). Old DBs
+        // opened before R2 get these columns added here; fresh DBs define them
+        // in the `skill` CREATE TABLE.
+        add_column_if_missing(&pool, "skill", "distilled_from_issue", "TEXT").await?;
+        add_column_if_missing(&pool, "skill", "origin_agent", "TEXT").await?;
 
         Ok(Self { pool })
     }
@@ -1469,7 +1476,9 @@ impl Store for SqliteStore {
 
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, maturity, descr, category, source, uses FROM skill ORDER BY created_at",
+            "SELECT id, name, maturity, descr, category, source, uses,
+                    distilled_from_issue, origin_agent
+             FROM skill ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1478,12 +1487,54 @@ impl Store for SqliteStore {
 
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>> {
         let row = sqlx::query(
-            "SELECT id, name, maturity, descr, category, source, uses FROM skill WHERE id=?",
+            "SELECT id, name, maturity, descr, category, source, uses,
+                    distilled_from_issue, origin_agent
+             FROM skill WHERE id=?",
         )
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
         .await?;
         row.map(skill_row).transpose()
+    }
+
+    /// Distill a new skill from a completed, assigned Issue — the "every
+    /// solution compounds into a reusable skill" link. Errors unless the issue
+    /// exists, is `Done`, and has a real assignee (a distilled skill must
+    /// attribute a real agent). The new skill is `SelfBuilt` / `Polishing` /
+    /// `uses = 0`, carrying `distilled_from_issue` + `origin_agent`.
+    async fn distill_skill_from_issue(&self, skill: NewSkill, from_issue: IssueId) -> Result<()> {
+        let issue = self
+            .get_issue(from_issue)
+            .await?
+            .ok_or_else(|| StoreError::Other("distill: issue not found".into()))?;
+        if issue.status != IssueStatus::Done {
+            return Err(StoreError::Other("distill: issue is not Done".into()));
+        }
+        let origin_agent = issue
+            .assignee
+            .ok_or_else(|| StoreError::Other("distill: issue has no assignee".into()))?;
+
+        let t = now_unix();
+        sqlx::query(
+            "INSERT INTO skill
+                (id, name, maturity, descr, category, source, uses,
+                 distilled_from_issue, origin_agent,
+                 created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
+        )
+        .bind(skill.id.uuid().to_string())
+        .bind(&skill.name)
+        .bind(maturity_text(Maturity::Polishing))
+        .bind(&skill.desc)
+        .bind(&skill.category)
+        .bind(lib_source_text(LibSource::SelfBuilt))
+        .bind(from_issue.uuid().to_string())
+        .bind(origin_agent.uuid().to_string())
+        .bind(t)
+        .bind(t)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn create_agent(&self, a: NewAgent) -> Result<()> {
@@ -1832,6 +1883,16 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
 
 fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
     let id = parse_uuid(&r.get::<String, _>("id"), SkillId::from_uuid)?;
+    let distilled_from_issue = r
+        .get::<Option<String>, _>("distilled_from_issue")
+        .filter(|s| !s.is_empty())
+        .map(|s| parse_uuid(&s, IssueId::from_uuid))
+        .transpose()?;
+    let origin_agent = r
+        .get::<Option<String>, _>("origin_agent")
+        .filter(|s| !s.is_empty())
+        .map(|s| parse_uuid(&s, AgentId::from_uuid))
+        .transpose()?;
     Ok(SkillCard {
         id,
         name: r.get("name"),
@@ -1840,6 +1901,8 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         category: r.get("category"),
         source: parse_lib_source(&r.get::<String, _>("source")),
         uses: r.get::<i64, _>("uses") as u32,
+        distilled_from_issue,
+        origin_agent,
     })
 }
 

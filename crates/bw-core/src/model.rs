@@ -902,6 +902,16 @@ pub struct SkillCard {
     pub category: String,
     pub source: LibSource,
     pub uses: u32,
+    /// The completed Issue this skill was distilled from, if any. `None` for
+    /// catalog/seeded skills — only a `DistillSkillFromIssue` sets it. This is
+    /// BW's "skills compound from real work" link (multica's skills are manual;
+    /// we attribute them to the real issue + agent that produced them).
+    #[serde(default)]
+    pub distilled_from_issue: Option<IssueId>,
+    /// The agent teammate that did the work behind `distilled_from_issue`.
+    /// `None` iff `distilled_from_issue` is `None`.
+    #[serde(default)]
+    pub origin_agent: Option<AgentId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

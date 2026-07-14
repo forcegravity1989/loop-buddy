@@ -524,6 +524,14 @@ pub trait Store: Send + Sync {
     async fn list_skills(&self) -> Result<Vec<SkillCard>>;
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>>;
     async fn update_skill(&self, id: SkillId, edit: SkillEdit) -> Result<()>;
+    /// Distill a new skill from a completed, assigned Issue — the "every
+    /// solution compounds into a reusable skill" link. The issue must exist,
+    /// be `Done`, and have a real assignee; the new skill is `SelfBuilt` /
+    /// `Polishing` / `uses = 0`, carrying `distilled_from_issue` +
+    /// `origin_agent` from the source issue. Additive: each call mints a new
+    /// skill row (distilling the same issue twice produces two skills, not an
+    /// error).
+    async fn distill_skill_from_issue(&self, skill: NewSkill, from_issue: IssueId) -> Result<()>;
 
     async fn create_agent(&self, a: NewAgent) -> Result<()>;
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;

@@ -167,6 +167,10 @@ CREATE TABLE IF NOT EXISTS skill (
     category    TEXT NOT NULL DEFAULT '',
     source      TEXT NOT NULL DEFAULT 'self_built',
     uses        INTEGER NOT NULL DEFAULT 0,
+    -- R2: provenance link from a real completed Issue. NULL = catalog/seeded
+    -- skill (no real-work origin); populated only by distill_skill_from_issue.
+    distilled_from_issue TEXT,                   -- IssueId uuid string; NULL = catalog
+    origin_agent         TEXT,                   -- AgentId uuid string; NULL = catalog
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0
