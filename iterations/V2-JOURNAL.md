@@ -53,15 +53,29 @@ BW 的 store 如实记账(真实 status / 真实 duration / 真实 owner),度量
 
 ---
 
-## 4. 设计综合(multica × BW)—— 待 multica 真实源研究完成后填写
+## 4. 设计综合(multica × BW)—— 已落定
 
-> ⏳ 子 agent 正在抓取 multica 真实源码(数据模型 / 屏幕 / 操作流)。下面在结果回来后落定。
+完整方案见 `V2-DESIGN.md`(经 sonnet5 子 agent 读 multica `models.go`+SQL 迁移核验)。核心:
+**BW 五角色环 = multica 真实 agent 队友**;Issue 是连接阶段方法论与真实执行的结缔组织;
+Skill 从真实 Issue 复利(带 provenance);度量从真实结果派生。关键校验:multica 的 `issue.stage`
+真实存在(迁移 123)→「Issue 作用域到 BW 阶段」是被验证的融合点;multica 的 skill 是手工的 →
+R2 的 provenance 是 BW 相对 multica 的真实增量。
 
-_(占位:完整的 IA 融合方案、Issue/Agent/Runtime/Autopilot/Skill/Squad 如何映射进 BW 的
-五阶段环与项目生命周期、本轮真正要建的切片 vs 仅设计不建的边界。)_
+## 5. 两个真实需求 0→1 —— 已完成(五角色环各跑一圈)
 
-## 5. 两个真实需求 0→1 —— 待设计锁定后填写
+- **R1 · Issue 层**(`4d9d8d7`):可分配工作单元 × 阶段作用域 × agent 队友。7 态状态机 +
+  per-project 自增 number + assignee;model/store/app 全链路;+12 测试(121→133)。
+- **R2 · Skill 复利**(`9ff53b3`):Done Issue → 带 `distilled_from_issue`/`origin_agent` 的 Skill。
+  迁移守卫(skill 表 `add_column_if_missing`)+ 诚实门控(非 Done/无 assignee 即 Err);+5 测试(133→138)。
+- **App 级集成测试**(`2f3a76f`,sonnet5 真实编写):经 `App::dispatch` 全程驱动 Issue→Skill;+2 测试(138→140)。
 
-> ⏳ R1 / R2 的假设 + DoD。
+构建师/优化师 = sonnet5 子 agent;原型/运营/运维 = Fable。门禁每圈绿(fmt/clippy/wasm/test)。
 
-## 6. 真实端到端演示 + 最终报告 —— 末尾填写
+## 6. 真实端到端演示 + 最终报告 —— 已完成
+
+- 演示二进制 `crates/bw-app/examples/real_team_loop.rs`(`0a4da26`):驱动真实 Command 路径,
+  把本轮真实完成的工作记成五阶段环上的 Issue(每件带可核验 commit+测试证据),分配给真实 agent,
+  推进 Done,真实交棒(原型→构建→优化),R2 蒸馏带 provenance 的 Skill,从 store 派生真实度量。
+  **与 simulate_hub 的本质区别:每条数据都对应真实完成的工作;引擎全程不被调用,零 mock 产物。**
+- 最终报告:`Builders-Workbench-Complete-Form-Report.html`(自包含,零外部依赖,暖纸/clay 设计系统)。
+- 终态门禁(本机实跑):**140 tests pass / 0 fail** · fmt clean · clippy -D warnings clean · wasm32 keepalive clean。

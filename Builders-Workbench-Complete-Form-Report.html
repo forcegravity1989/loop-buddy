@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Builders' Workbench · 完整形态演示报告(multica × BW)</title>
+<style>
+  :root{
+    --paper:#EFEBE2; --rail:#E9E3D7; --ink:#2B2820; --ink3:#6F6A5E;
+    --clay:#C5654A; --clay2:#CC8B3C; --green:#5F7355; --amber:#B5862F; --red:#B0503A; --gray:#9A9384;
+    --line:#D9D2C2; --card:#FBF8F1;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:"Noto Sans SC","PingFang SC",-apple-system,sans-serif;line-height:1.75;font-size:15px;}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 32px 80px;}
+  h1,h2,h3,.serif{font-family:"Noto Serif SC","Songti SC",Georgia,serif;}
+  h1{font-size:30px;line-height:1.3;margin:0 0 6px;letter-spacing:.5px;}
+  h2{font-size:21px;margin:42px 0 12px;padding-bottom:8px;border-bottom:2px solid var(--clay);display:flex;align-items:baseline;gap:10px;}
+  h2 .n{color:var(--clay);font-family:"JetBrains Mono",monospace;font-size:14px;}
+  h3{font-size:16px;margin:24px 0 6px;color:var(--clay);}
+  p{margin:8px 0;}
+  .sub{color:var(--ink3);font-size:14px;margin:0 0 4px;}
+  .mono,code,pre{font-family:"JetBrains Mono",ui-monospace,monospace;}
+  code{background:var(--rail);padding:1px 6px;border-radius:5px;font-size:13px;}
+  pre{background:#2B2820;color:#F3EDDF;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.5px;line-height:1.6;}
+  pre .c{color:#9A9384;} pre .k{color:#E0A37A;} pre .g{color:#9CB394;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin:14px 0;
+    box-shadow:0 8px 26px rgba(35,33,28,.06);}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin:8px 0;}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{color:var(--ink3);font-weight:600;background:var(--rail);}
+  .pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600;}
+  .g{background:#E4EADF;color:var(--green);} .a{background:#F4ECD8;color:var(--amber);}
+  .r{background:#F3DED9;color:var(--red);} .u{background:#ECE8DF;color:var(--gray);}
+  .clay{background:#F3D9CF;color:var(--clay);}
+  .ring{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0;}
+  .ring span{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:13px;}
+  .arrow{color:var(--clay);font-weight:700;}
+  .facts{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0;}
+  .fact{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center;}
+  .fact .big{font-family:"JetBrains Mono",monospace;font-size:24px;color:var(--clay);font-weight:700;}
+  .fact .lab{font-size:11.5px;color:var(--ink3);margin-top:2px;}
+  .quote{border-left:3px solid var(--clay);padding:4px 0 4px 16px;color:var(--ink);font-style:italic;margin:12px 0;}
+  .check{color:var(--green);font-weight:700;}
+  .cross{color:var(--red);font-weight:700;}
+  .tag{font-size:11px;color:var(--ink3);font-family:"JetBrains Mono",monospace;}
+  .lead{font-size:16.5px;color:var(--ink);margin:14px 0 0;}
+  .foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);color:var(--ink3);font-size:12.5px;}
+  .role{font-weight:700;color:var(--clay);}
+  details{margin:8px 0;} summary{cursor:pointer;color:var(--clay);font-weight:600;}
+  ul{margin:6px 0;padding-left:22px;} li{margin:3px 0;}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>Builders' Workbench · 完整形态</h1>
+<p class="sub">multica 的「真实 agent 队友执行」× BW 的「五阶段方法论骨干 + 度量派生链」</p>
+<p class="lead">一次全程托管的构建:Fable 作唯一调度 agent,用<strong>五角色五阶段环</strong>调度真实的 sonnet5 子 agent 队友,
+把 builders-workbench 从「Mock 驱动的项目管理壳」推进到「真实 agent 队友 + 真实工作 + 真实度量」。一切实跑,绝不 mock。</p>
+
+<div class="facts">
+  <div class="fact"><div class="big">140</div><div class="lab">测试全绿(基线 121,+19)</div></div>
+  <div class="fact"><div class="big">2</div><div class="lab">真实需求 0→1(R1+R2)</div></div>
+  <div class="fact"><div class="big">4</div><div class="lab">真实 sonnet5 队友任务</div></div>
+  <div class="fact"><div class="big">5</div><div class="lab">真实 commit(可核验)</div></div>
+</div>
+
+<h2><span class="n">§1</span> 先纠正我自己:为什么上一轮 25-iter 是一次失败</h2>
+<div class="card">
+<p>我起初只读 multica 的 README 就武断下结论「问题在运行时」——被用户当场纠正。修正后,<strong>实地核验</strong>
+multica 真实源码,才看清两件事:</p>
+<p><strong>(1) 上一轮 25-iter 的真实问题:</strong>整轮工作跑在 <code>MockExecutor</code> 之上。<code>simulate_hub.rs</code> 把<strong>合成</strong>的
+<code>workflow_run</code> 行直接写进 store,<code>run_optimization_cycle</code> 在这堆合成历史上优化 workflow 的 spec ——
+<span class="quote-inline"><em>没有任何真实 agent 做过任何真实工作,系统在度量并优化「关于 mock 的 mock」</em></span>。<code>ClaudeCliExecutor</code> 写了,
+但只靠一条 captured <strong>auth-failure</strong> 验证过,从未真正跑成过一次。</p>
+<p><strong>(2) multica 真实的核心(核验自 <code>models.go</code> + SQL 迁移 + 真实路由/组件,非 README 复述):</strong>
+Issue = 可分配工作单元,真实状态机 <code>backlog→todo→in_progress→in_review→done</code>(+blocked/cancelled);
+assignee 可是人/agent/squad;<strong>issue.stage 字段真实存在(迁移 123)</strong>;agent 是真实队友(profile/runtime/model/system prompt/skills/permissions);
+runtime 是本地 daemon + 云;autopilot 自动建 Issue 并路由;skill <strong>手工</strong>创建挂载(无自动捕获)。</p>
+</div>
+
+<h2><span class="n">§2</span> 融合的核心洞察(「完整形态」是什么)</h2>
+<div class="card">
+<p>BW 用<strong>方法论环</strong>思考(项目在哪个阶段、该怎么演进、健不健康);multica 用<strong>分配给 agent 的 Issue</strong>思考(这件活谁接、跑到哪、产出什么)。</p>
+<p class="quote">完整工作台 = 把两者焊在一起:一个项目在其五阶段环上运营;每个阶段里的真实工作,
+被分解成 Issue,分配给真实 agent 队友,由他们执行、回报,完成的方案复利成可复用 Skill;
+项目的度量从这些<strong>真实 Issue 运行结果</strong>派生 —— 不是 mock。</p>
+<p>关键校验(子 agent 读 multica 真实源确认):<strong>multica 的 <code>issue.stage</code> 是裸整数;BW 的 <code>StageKind</code> 是带角色/方法论/DoD/反模式的富类型</strong> ——
+所以「Issue 作用域到 BW 阶段」是被验证的融合点,BW 在此处<strong>增强</strong> multica。</p>
+<div class="ring">
+  <span><span class="role">原型师</span>·求真</span><span class="arrow">→</span>
+  <span><span class="role">构建师</span>·求成</span><span class="arrow">→</span>
+  <span><span class="role">优化师</span>·求简</span><span class="arrow">→</span>
+  <span><span class="role">运营推广师</span>·求增</span><span class="arrow">→</span>
+  <span><span class="role">运维师</span>·求稳</span><span class="arrow">↺</span>
+  <span>回流原型(线闭成环)</span>
+</div>
+<p class="sub">五角色 = multica 的真实 agent 队友。阶段方法论告诉「做什么性质的工作」,Issue 是「这件活的实际可分配单元」,由真实 agent 执行。</p>
+</div>
+
+<h2><span class="n">§3</span> 五角色环 · 本轮真实跑通(每条证据可核验)</h2>
+<table>
+  <thead><tr><th>角色</th><th>谁干的(真实)</th><th>真实产物 / 证据</th></tr></thead>
+  <tbody>
+    <tr><td><span class="role">原型师</span> 求真</td><td>Fable(调度)</td><td>假设 + DoD;<code>iterations/V2-DESIGN.md</code> · <span class="tag">4fdbe08</span> · 含 multica <code>issue.stage</code> 真实校验</td></tr>
+    <tr><td><span class="role">构建师</span> 求成</td><td>sonnet5 子 agent ×3</td><td>R1 Issue 层(<span class="tag">4d9d8d7</span>)· R2 Skill 复利(<span class="tag">9ff53b3</span>)· App 集成测试(<span class="tag">2f3a76f</span>)</td></tr>
+    <tr><td><span class="role">优化师</span> 求简</td><td>Fable + sonnet5</td><td>fmt/clippy(-D warnings)/wasm32 keepalive/test 每圈绿;模式对齐无冗余</td></tr>
+    <tr><td><span class="role">运营推广师</span> 求增</td><td>Fable</td><td>价值一句话:assignable work unit × stage = multica 核心补进 BW(已被 issue.stage 验证)</td></tr>
+    <tr><td><span class="role">运维师</span> 求稳</td><td>Fable</td><td>迁移守卫:全新 issue 表(零风险)+ skill 加列用 <code>add_column_if_missing</code>(沿用真实事故教训)</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="n">§4</span> 两个真实需求 0→1</h2>
+
+<h3>R1 · Issue 层 — 可分配工作单元 × 阶段作用域 × agent 队友</h3>
+<div class="card">
+<p><strong>假设</strong>:BW 的工作单元只有 Workflow(模板)和 Session(对话),缺「这件活谁接、跑到哪步」的可分配单元 —— 与 multica 最大的 IA 缺口。
+<strong>DoD</strong>:Issue{项目·阶段·标题·状态·assignee·优先级·时间}落库 + 7 态状态机 + 可按 项目/阶段/状态 过滤。</p>
+<ul>
+  <li><strong>bw-core</strong>:<code>IssueId</code>;<code>IssueStatus{Backlog,Todo,InProgress,InReview,Done,Blocked,Cancelled}</code>(Backlog = 抑制触发的停车场;<code>is_terminal</code> 仅 Done/Cancelled —— 与 multica 一致);<code>IssuePriority</code>;<code>Issue</code>。</li>
+  <li><strong>bw-store</strong>:全新 <code>issue</code> 表(CREATE IF NOT EXISTS,零迁移风险)+ per-project 自增 <code>number</code>;<code>create/list(可按 stage+status 过滤)/get/transition/assign</code> + snake_case 编解码。</li>
+  <li><strong>bw-app</strong>:<code>CreateIssue/TransitionIssue/AssignIssue/RefreshIssues</code> + <code>IssuesChanged</code> + <code>AppState.issues</code>(项目作用域),Boot/OpenProject/BackToProjects 生命周期挂载。</li>
+</ul>
+<p><span class="pill g">门禁</span> +12 测试(121→133),clippy/fmt/wasm 全绿。</p>
+</div>
+
+<h3>R2 · Skill 复利 — 完成的 Issue → 带 provenance 的 Skill <span class="pill clay">BW 相对 multica 的增量</span></h3>
+<div class="card">
+<p><strong>假设</strong>:BW 的 Skill 是静态目录,不从真实工作里长出来 —— 与 multica「每个方案复利成 skill」相反。
+<strong>DoD</strong>:一件 Done 的 Issue(有真实 assignee)可蒸馏成 SkillHub 条目,带 provenance。</p>
+<p>关键诚实点:<strong>multica 的 skill 是手工的(子 agent 确认:无自动捕获)</strong> —— 所以「从真实 Issue 蒸馏 + 归因到做活的 agent」是 BW 的真实创新,不是抄。</p>
+<ul>
+  <li><strong>bw-core</strong>:<code>SkillCard</code> 加 <code>distilled_from_issue / origin_agent</code>(均 <code>Option</code>,<code>#[serde(default)]</code> 向后兼容)。</li>
+  <li><strong>bw-store</strong>:真实 skill 表已存在 → <code>add_column_if_missing</code> 加两列(沿用真实事故教训);<code>distill_skill_from_issue</code> <strong>校验 issue 存在·Done·有 assignee,三者缺一即 Err</strong>(诚实门控)。</li>
+  <li><strong>bw-app</strong>:<code>DistillSkillFromIssue</code> 命令。</li>
+</ul>
+<p><span class="pill g">门禁</span> +5 测试(133→138),clippy/fmt/wasm 全绿。</p>
+</div>
+
+<h2><span class="n">§5</span> 真实端到端演示(非 mock,可一键复现)</h2>
+<div class="card">
+<p>由 sonnet5 真实编写的 App 级集成测试(<code>issues_skill_loop.rs</code>,+2 测试)+ 我写的演示二进制(<code>real_team_loop.rs</code>)
+共同证明闭环。<strong>与 simulate_hub 的本质区别:每条数据都对应一件真实完成、可核验的工作;引擎全程不被调用,不引入任何 mock 产物。</strong></p>
+<pre><span class="c">$ cargo run -p bw-app --example real_team_loop</span>
+▶ 项目已建(真实 Command 路径):「Builders' Workbench · 完整形态」· 探索期 · 5 阶段落库
+▶ 真实 agent 队友已建档:Fable(调度)· sonnet5(构建师)
+▶ 真实 Issue(每件 = 一件本会话真实完成、可核验的工作):
+   · [原型]「设计综合」   assignee=Fable        Done · 证据 4fdbe08
+   · [构建]「R1 Issue 层」assignee=sonnet5 构建师 Done · 证据 4d9d8d7 · +12 测试
+   · [构建]「R2 Skill 复利」assignee=sonnet5 构建师 Done · 证据 9ff53b3 · +5 测试
+   · [优化]「App 级集成测试」assignee=sonnet5 构建师 Done · 证据 2f3a76f · +2 测试
+▶ 真实交棒(append-only 审计):原型 → 构建 → 优化 · 现活跃阶段 = <span class="g">优化</span>
+▶ R2 Skill 复利(从 Done Issue 真实蒸馏,带 provenance):
+   · skill「五角色环 · 真实交付法」 distilled_from_issue=Some · origin_agent=sonnet5 构建师
+<span class="g">╔══ 真实读回(全部从 store 派生,非硬编码)══╗</span>
+  项目的 Issue 总数 = 4 · 其中 Done = 4 · 完成率 = 100%
+  带真实 provenance 的 Skill = 1 · 真实交棒次数(审计)= 2</pre>
+</div>
+
+<h2><span class="n">§6</span> 诚实边界:本轮建了什么 vs 只设计没建</h2>
+<div class="grid2">
+  <div class="card">
+    <h3 style="margin-top:0"><span class="check">✓ 真实建了</span>(代码+测试+commit)</h3>
+    <ul>
+      <li>R1 Issue 层(状态机 + 阶段 + assignee)</li>
+      <li>R2 Skill 复利(带 provenance)</li>
+      <li>App 级 Issue→Skill 集成测试</li>
+      <li>真实闭环演示 + 设计综合文档</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0"><span class="cross">✗ 只设计,留口不假装</span></h3>
+    <ul>
+      <li>Squad(leader 路由委派)</li>
+      <li>云 Runtime + WebSocket 实时流</li>
+      <li>Gantt / Swimlane 视图(本轮只 Board/List 数据层)</li>
+      <li>Autopilot 两态(create_issue / run_only)</li>
+      <li>Inbox / Chat / Board 桌面 UI</li>
+    </ul>
+  </div>
+</div>
+<p class="sub">三条不可妥协贯穿全程:<strong>绝不编造</strong>(每个数字指向真实代码/测试/commit)· <strong>无数据 ≠ 绿</strong> · <strong>破坏性永不自动</strong>。</p>
+
+<h2><span class="n">§7</span> 如何核验(全部可一键复现)</h2>
+<pre><span class="c"># 门禁(本报告所有「绿」都来自这些命令的真实输出)</span>
+cargo fmt --all --check
+cargo clippy --workspace --exclude app-desktop -- -D warnings
+cargo test                                                    <span class="c"># → 140 passed / 0 failed</span>
+cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features
+
+<span class="c"># 真实端到端演示</span>
+cargo run -p bw-app --example real_team_loop
+
+<span class="c"># 真实提交(可 git show 逐一核验)</span>
+git log --oneline 4fdbe08..HEAD</pre>
+
+<div class="card">
+  <h3 style="margin-top:0">真实 commit 链(本会话产出)</h3>
+  <table>
+    <tbody>
+      <tr><td class="tag">0a4da26</td><td>demo: 完整形态真实闭环(real_team_loop · 非 mock)</td></tr>
+      <tr><td class="tag">2f3a76f</td><td>test(R1+R2): App 级 Issue→Skill 全链路集成(sonnet5 真实交付)</td></tr>
+      <tr><td class="tag">9ff53b3</td><td>R2 · Skill 复利(完成的 Issue → 带 provenance 的 Skill)</td></tr>
+      <tr><td class="tag">4d9d8d7</td><td>R1 · Issue 层(可分配工作单元 × 阶段作用域 × agent 队友)</td></tr>
+      <tr><td class="tag">4fdbe08</td><td>bw-complete-form · 设计综合(multica × BW)+ 五角色环构建日志</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2><span class="n">§8</span> 结论:完整形态 = 方法论驱动 × agent 执行 × 度量诚实</h2>
+<div class="card">
+<p>单看 multica 或 BW 都不完整:multica 没有方法论骨干(为什么做、在哪个阶段、健不健康答不上);BW 没有真实执行(没有可分配任务、没有真实 agent)。
+本轮把两者焊起来 —— <strong>BW 的五角色环 = multica 的真实 agent 队友</strong>,Issue 是连接阶段方法论与真实执行的结缔组织,Skill 从真实工作里复利,度量从真实结果派生。</p>
+<p>这不再是「关于 mock 的 mock」:R1/R2 由真实 sonnet5 队友写出、真实门禁验证、真实 commit 留痕;演示里的每条 Issue 都对应一件真实完成、可独立核验的工作。</p>
+<p class="sub">分支:<code>claude/bw-complete-form</code> · 设计详:<code>iterations/V2-DESIGN.md</code> · 过程:<code>iterations/V2-JOURNAL.md</code></p>
+</div>
+
+<div class="foot">
+  Builders' Workbench · 完整形态演示报告 · Fable 调度,sonnet5 构建师队友真实交付 · 暖纸/clay 设计系统 · 零外部依赖,离线正确。
+</div>
+
+</div></body>
+</html>
