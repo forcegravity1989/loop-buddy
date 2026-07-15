@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="../support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{background:#EFEBE2;font-family:'Noto Sans SC',-apple-system,sans-serif;color:#23211C;-webkit-font-smoothing:antialiased;}
+  ::selection{background:#E7CFC4;}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-thumb{background:#D8D1C2;border-radius:6px;border:3px solid #EFEBE2;}
+  a{color:inherit;}
+</style>
+</helmet>
+
+<template id="__bundler_thumbnail" data-bg-color="#EFEBE2">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#EFEBE2"/>
+    <rect x="436" y="250" width="328" height="46" rx="9" fill="#C5654A"/>
+    <text x="600" y="282" font-family="monospace" font-size="22" font-weight="700" fill="#FFFFFF" text-anchor="middle">NORTH STAR</text>
+    <rect x="436" y="312" width="76" height="72" rx="9" fill="#FBFAF6" stroke="#D8D1C2"/>
+    <rect x="520" y="312" width="76" height="72" rx="9" fill="#CC8B3C"/>
+    <rect x="604" y="312" width="76" height="72" rx="9" fill="#6E8C5A"/>
+    <rect x="688" y="312" width="76" height="72" rx="9" fill="#4F7E86"/>
+    <rect x="436" y="400" width="76" height="72" rx="9" fill="#6E8C5A"/>
+    <rect x="520" y="400" width="76" height="72" rx="9" fill="#FBFAF6" stroke="#D8D1C2"/>
+    <rect x="604" y="400" width="76" height="72" rx="9" fill="#8A8275"/>
+    <rect x="688" y="400" width="76" height="72" rx="9" fill="#FBFAF6" stroke="#D8D1C2"/>
+    <text x="600" y="520" font-family="serif" font-size="30" font-weight="600" fill="#23211C" text-anchor="middle">体系重构 · 角色 × 周期</text>
+  </svg>
+</template>
+
+<div style="max-width:1080px;margin:0 auto;padding:64px 40px 120px;">
+
+  <!-- ===== HERO ===== -->
+  <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.22em;text-transform:uppercase;color:#C5654A;margin-bottom:22px;">体系重构 · FLOW × METHOD × ROLE</div>
+  <h1 style="font:600 42px/1.22 'Noto Serif SC',serif;margin:0 0 22px;letter-spacing:-.01em;max-width:18em;">七个步骤不该是一条直线 ——<br>而是一张横纵交织、随周期重织的网</h1>
+  <p style="font:400 17px/1.85 'Noto Sans SC';color:#57534A;max-width:42em;margin:0 0 32px;">现在的七步偏分析、弱开发，还把北极星 / 引领 / 滞后<b style="color:#23211C;font-weight:600;">钉死成三个固定步骤</b>。这份方案把<b style="color:#23211C;font-weight:600;">流程摊成横轴</b>、把<b style="color:#23211C;font-weight:600;">方法论立成纵轴</b>，再让 Boris 的<b style="color:#23211C;font-weight:600;">五种角色</b>随<b style="color:#23211C;font-weight:600;">三个周期</b>在这张网上流动。</p>
+
+  <!-- 三支柱 -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:18px 20px;">
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.14em;color:#A19B8D;margin-bottom:10px;">横轴 · 流程</div>
+      <div style="font:600 15px/1.4 'Noto Serif SC',serif;color:#23211C;margin-bottom:8px;">分析 → 设计 → 开发 → 运维</div>
+      <div style="font:400 12px/1.55 'Noto Sans SC';color:#8C867A;">对齐真实 workflow（ECC / Claude Code），补回被压薄的开发层。</div>
+    </div>
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:18px 20px;">
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.14em;color:#A19B8D;margin-bottom:10px;">纵轴 · 方法论</div>
+      <div style="font:600 15px/1.4 'Noto Serif SC',serif;color:#23211C;margin-bottom:8px;">北极星 · 引领 · 滞后</div>
+      <div style="font:400 12px/1.55 'Noto Sans SC';color:#8C867A;">每个阶段都需要的指标层，不再只钉在某一步。</div>
+    </div>
+    <div style="background:#F7EDE7;border:1px solid #E6D2C8;border-radius:10px;padding:18px 20px;">
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.14em;color:#B0503A;margin-bottom:10px;">第三维 · 角色 × 周期</div>
+      <div style="font:600 15px/1.4 'Noto Serif SC',serif;color:#7A3D2D;margin-bottom:8px;">五角色 × 三周期</div>
+      <div style="font:400 12px/1.55 'Noto Sans SC';color:#9A6450;">角色配比随产品阶段漂移，创建时声明侧重周期。</div>
+    </div>
+  </div>
+
+  <div style="height:1px;background:#E2DCCF;margin:56px 0;"></div>
+
+  <!-- ===== 01 诊断 ===== -->
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:18px;">
+    <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C5654A;">01</div>
+    <h2 style="font:600 27px/1.3 'Noto Serif SC',serif;margin:0;">诊断 · 七步偏了，指标钉死了</h2>
+  </div>
+  <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 30px;">现在的七步法把一个项目压成一条直线。两个结构性问题：流程<b style="color:#23211C;font-weight:600;">偏分析、弱开发</b>；指标被<b style="color:#23211C;font-weight:600;">当成步骤</b>，而不是贯穿全程的方法论层。</p>
+
+  <!-- 现在 7 步 -->
+  <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:24px 26px;margin-bottom:14px;">
+    <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;margin-bottom:16px;">现在 · 7 步一条直线</div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+      <span style="display:inline-flex;align-items:center;gap:7px;background:#fff;border:1px solid #E2DCCF;border-radius:20px;padding:6px 12px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#EFE9DD;color:#8C867A;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">01</span><span style="font:500 12px/1 'Noto Sans SC';color:#57534A;">竞品洞察</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#A19B8D;">分析</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="display:inline-flex;align-items:center;gap:7px;background:#fff;border:1px solid #E2DCCF;border-radius:20px;padding:6px 12px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#EFE9DD;color:#8C867A;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">02</span><span style="font:500 12px/1 'Noto Sans SC';color:#57534A;">需求导入</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#A19B8D;">分析</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="display:inline-flex;align-items:center;gap:7px;background:#FBF1D8;border:1.5px dashed #C9A227;border-radius:20px;padding:6px 12px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#EAD6A0;color:#8A6A1A;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">03</span><span style="font:500 12px/1 'Noto Sans SC';color:#8A6A1A;">北极星</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#B5862F;">指标·钉死</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="display:inline-flex;align-items:center;gap:7px;background:#FBF1D8;border:1.5px dashed #C9A227;border-radius:20px;padding:6px 12px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#EAD6A0;color:#8A6A1A;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">04</span><span style="font:500 12px/1 'Noto Sans SC';color:#8A6A1A;">引领指标</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#B5862F;">指标·钉死</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="display:inline-flex;align-items:center;gap:7px;background:#FBF1D8;border:1.5px dashed #C9A227;border-radius:20px;padding:6px 12px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#EAD6A0;color:#8A6A1A;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">05</span><span style="font:500 12px/1 'Noto Sans SC';color:#8A6A1A;">滞后指标</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#B5862F;">指标·钉死</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="display:inline-flex;align-items:center;gap:7px;background:#F7EDE7;border:1.5px solid #C5654A;border-radius:20px;padding:6px 12px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#E6C3B4;color:#7A3D2D;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">06</span><span style="font:500 12px/1 'Noto Sans SC';color:#7A3D2D;">原型创建</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#B0503A;">开发·唯一</span></span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;">→</span>
+      <span style="display:inline-flex;align-items:center;gap:7px;background:#fff;border:1px solid #E2DCCF;border-radius:20px;padding:6px 12px 6px 7px;"><span style="width:19px;height:19px;border-radius:50%;background:#EFE9DD;color:#8C867A;font:600 9px/19px 'JetBrains Mono',monospace;text-align:center;">07</span><span style="font:500 12px/1 'Noto Sans SC';color:#57534A;">进度管理</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#A19B8D;">运维</span></span>
+    </div>
+    <!-- layer band -->
+    <div style="display:flex;gap:6px;margin-top:16px;">
+      <div style="flex:5;background:#F4F0E7;border:1px solid #E6E0D3;border-radius:7px;padding:9px 13px;font:500 11px/1 'JetBrains Mono',monospace;color:#8C867A;">分析层 · 5 步</div>
+      <div style="flex:1;background:#F7EDE7;border:1.5px solid #C5654A;border-radius:7px;padding:9px 6px;text-align:center;font:600 11px/1 'JetBrains Mono',monospace;color:#B0503A;">开发 · 太薄</div>
+      <div style="flex:1;background:#F4F0E7;border:1px solid #E6E0D3;border-radius:7px;padding:9px 6px;text-align:center;font:500 11px/1 'JetBrains Mono',monospace;color:#8C867A;">运维 · 1</div>
+    </div>
+  </div>
+
+  <!-- 真实 workflow -->
+  <div style="background:#23211C;border-radius:12px;padding:22px 26px;margin-bottom:30px;">
+    <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#E0A78F;margin-bottom:16px;">真实 workflow · ECC / Claude Code</div>
+    <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">
+      <span style="background:#3A3833;color:#E0D8CC;border-radius:8px;padding:9px 16px;font:600 13px/1 'Noto Sans SC';">需求分析</span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#6B655C;">→</span>
+      <span style="background:#3A3833;color:#E0D8CC;border-radius:8px;padding:9px 16px;font:600 13px/1 'Noto Sans SC';">需求设计</span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#6B655C;">→</span>
+      <span style="background:#3A3833;color:#E0D8CC;border-radius:8px;padding:9px 16px;font:600 13px/1 'Noto Sans SC';">需求开发</span>
+      <span style="font:400 13px/1 'JetBrains Mono',monospace;color:#6B655C;">→</span>
+      <span style="background:#3A3833;color:#E0D8CC;border-radius:8px;padding:9px 16px;font:600 13px/1 'Noto Sans SC';">运营运维</span>
+    </div>
+    <div style="margin-top:15px;font:400 13px/1.7 'Noto Sans SC';color:#C9BEB0;max-width:46em;">成熟流程把「开发」展开成<b style="color:#F3EEE6;font-weight:600;">设计 + 开发</b>两段；我们的七步却把它压成「原型创建」一格。底层逻辑本就建立在这些开发 workflow 之上 —— 该补回来。</div>
+  </div>
+
+  <!-- 三个问题 -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:20px 22px;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:11px;">问题 A</div>
+      <div style="font:600 16px/1.35 'Noto Serif SC',serif;color:#23211C;margin-bottom:8px;">偏分析 · 弱开发</div>
+      <div style="font:400 13px/1.7 'Noto Sans SC';color:#57534A;">7 步里 5 步在分析，开发只剩「原型创建」一格。重心压在「想清楚」，落不到「做出来」。</div>
+    </div>
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:20px 22px;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:11px;">问题 B</div>
+      <div style="font:600 16px/1.35 'Noto Serif SC',serif;color:#23211C;margin-bottom:8px;">指标当步骤</div>
+      <div style="font:400 13px/1.7 'Noto Sans SC';color:#57534A;">北极星 / 引领 / 滞后 是贯穿每个阶段的<b style="color:#23211C;font-weight:600;">纵向层</b>，却被钉死成第 3 / 4 / 5 步，做完就不管了。</div>
+    </div>
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:20px 22px;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:11px;">问题 C</div>
+      <div style="font:600 16px/1.35 'Noto Serif SC',serif;color:#23211C;margin-bottom:8px;">角色塌缩</div>
+      <div style="font:400 13px/1.7 'Noto Sans SC';color:#57534A;">旧开篇把「5 角色 → 1 Builder」，抹掉了真实的<b style="color:#23211C;font-weight:600;">角色生命周期</b>。角色不是被 AI 消灭，而是被重新定义。</div>
+    </div>
+  </div>
+
+  <div style="height:1px;background:#E2DCCF;margin:56px 0;"></div>
+
+  <!-- ===== 02 新模型 ===== -->
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:18px;">
+    <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C5654A;">02</div>
+    <h2 style="font:600 27px/1.3 'Noto Serif SC',serif;margin:0;">新模型 · 横向流程 × 纵向方法论 × 角色配比</h2>
+  </div>
+  <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 36px;">把流程摊成横轴、方法论立成纵轴，指标在每个阶段都在；再把五种角色按周期铺到这张网上。先看角色，再看配比随周期的漂移，最后看横纵这张网怎么画。</p>
+
+  <!-- 02a 五种角色原型 -->
+  <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:16px;">02 · A　五种角色原型 · 来自 Boris</div>
+
+  <div style="display:flex;align-items:flex-start;gap:18px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:18px 22px;margin-bottom:10px;border-left:4px solid #C5654A;">
+    <div style="flex:none;width:34px;font:700 22px/1 'JetBrains Mono',monospace;color:#C5654A;">01</div>
+    <div style="flex:none;width:138px;"><div style="font:600 16px/1.3 'Noto Serif SC',serif;color:#23211C;">原型师</div><div style="font:500 11px/1.4 'JetBrains Mono',monospace;color:#A19B8D;letter-spacing:.03em;">Prototyper</div></div>
+    <div style="flex:1;"><div style="font:600 13px/1.5 'Noto Sans SC';color:#23211C;margin-bottom:3px;">让想法涌现</div><div style="font:400 13px/1.7 'Noto Sans SC';color:#57534A;">提出全新想法；高产，但多数不落地。</div></div>
+  </div>
+  <div style="display:flex;align-items:flex-start;gap:18px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:18px 22px;margin-bottom:10px;border-left:4px solid #CC8B3C;">
+    <div style="flex:none;width:34px;font:700 22px/1 'JetBrains Mono',monospace;color:#CC8B3C;">02</div>
+    <div style="flex:none;width:138px;"><div style="font:600 16px/1.3 'Noto Serif SC',serif;color:#23211C;">构建者</div><div style="font:500 11px/1.4 'JetBrains Mono',monospace;color:#A19B8D;letter-spacing:.03em;">Builder</div></div>
+    <div style="flex:1;"><div style="font:600 13px/1.5 'Noto Sans SC';color:#23211C;margin-bottom:3px;">让想法变成可用</div><div style="font:400 13px/1.7 'Noto Sans SC';color:#57534A;">把原型 / 想法快速转为生产级产品或基础设施。</div></div>
+  </div>
+  <div style="display:flex;align-items:flex-start;gap:18px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:18px 22px;margin-bottom:10px;border-left:4px solid #6E8C5A;">
+    <div style="flex:none;width:34px;font:700 22px/1 'JetBrains Mono',monospace;color:#6E8C5A;">03</div>
+    <div style="flex:none;width:138px;"><div style="font:600 16px/1.3 'Noto Serif SC',serif;color:#23211C;">清理者</div><div style="font:500 11px/1.4 'JetBrains Mono',monospace;color:#A19B8D;letter-spacing:.03em;">Sweeper</div></div>
+    <div style="flex:1;"><div style="font:600 13px/1.5 'Noto Sans SC';color:#23211C;margin-bottom:3px;">让系统变干净、变快</div><div style="font:400 13px/1.7 'Noto Sans SC';color:#57534A;">打磨 UI、简化代码与系统、下线冗余、优化性能。</div></div>
+  </div>
+  <div style="display:flex;align-items:flex-start;gap:18px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:18px 22px;margin-bottom:10px;border-left:4px solid #4F7E86;">
+    <div style="flex:none;width:34px;font:700 22px/1 'JetBrains Mono',monospace;color:#4F7E86;">04</div>
+    <div style="flex:none;width:138px;"><div style="font:600 16px/1.3 'Noto Serif SC',serif;color:#23211C;">增长者</div><div style="font:500 11px/1.4 'JetBrains Mono',monospace;color:#A19B8D;letter-spacing:.03em;">Grower</div></div>
+    <div style="flex:1;"><div style="font:600 13px/1.5 'Noto Sans SC';color:#23211C;margin-bottom:3px;">提升市场契合度</div><div style="font:400 13px/1.7 'Noto Sans SC';color:#57534A;">对已建成产品持续迭代，提升 PMF。</div></div>
+  </div>
+  <div style="display:flex;align-items:flex-start;gap:18px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:18px 22px;margin-bottom:0;border-left:4px solid #8A8275;">
+    <div style="flex:none;width:34px;font:700 22px/1 'JetBrains Mono',monospace;color:#8A8275;">05</div>
+    <div style="flex:none;width:138px;"><div style="font:600 16px/1.3 'Noto Serif SC',serif;color:#23211C;">维护者</div><div style="font:500 11px/1.4 'JetBrains Mono',monospace;color:#A19B8D;letter-spacing:.03em;">Maintainer</div></div>
+    <div style="flex:1;"><div style="font:600 13px/1.5 'Noto Sans SC';color:#23211C;margin-bottom:3px;">让系统长期稳定</div><div style="font:400 13px/1.7 'Noto Sans SC';color:#57534A;">守护成熟系统，保障安全 / 可靠 / 快速 / 高效随规模扩展。</div></div>
+  </div>
+
+  <div style="height:40px;"></div>
+
+  <!-- 02b 角色配比带 -->
+  <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:8px;">02 · B　角色配比随周期漂移</div>
+  <p style="font:400 14px/1.8 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 22px;">同一批角色，不同周期、不同配比。项目重心随产品阶段推移而偏移 —— 这正是「项目要不要走完三个大周期」的答案：它<b style="color:#23211C;font-weight:600;">始终是这五种角色</b>，只是配比在变。</p>
+
+  <!-- legend -->
+  <div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:18px;">
+    <span style="display:inline-flex;align-items:center;gap:7px;font:500 12px/1 'Noto Sans SC';color:#57534A;"><span style="width:11px;height:11px;border-radius:3px;background:#C5654A;"></span>原型师</span>
+    <span style="display:inline-flex;align-items:center;gap:7px;font:500 12px/1 'Noto Sans SC';color:#57534A;"><span style="width:11px;height:11px;border-radius:3px;background:#CC8B3C;"></span>构建者</span>
+    <span style="display:inline-flex;align-items:center;gap:7px;font:500 12px/1 'Noto Sans SC';color:#57534A;"><span style="width:11px;height:11px;border-radius:3px;background:#6E8C5A;"></span>清理者</span>
+    <span style="display:inline-flex;align-items:center;gap:7px;font:500 12px/1 'Noto Sans SC';color:#57534A;"><span style="width:11px;height:11px;border-radius:3px;background:#4F7E86;"></span>增长者</span>
+    <span style="display:inline-flex;align-items:center;gap:7px;font:500 12px/1 'Noto Sans SC';color:#57534A;"><span style="width:11px;height:11px;border-radius:3px;background:#8A8275;"></span>维护者</span>
+  </div>
+
+  <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:24px 26px;">
+    <!-- 探索 -->
+    <div style="display:flex;align-items:center;gap:18px;margin-bottom:16px;">
+      <div style="flex:none;width:118px;"><div style="font:600 16px/1.2 'Noto Serif SC',serif;color:#23211C;">探索</div><div style="font:500 11px/1.3 'JetBrains Mono',monospace;color:#A19B8D;">0 → 1 · 未达 PMF</div></div>
+      <div style="flex:1;display:flex;height:40px;border-radius:8px;overflow:hidden;border:1px solid #E2DCCF;">
+        <div style="width:32%;background:#C5654A;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">原 32</span></div>
+        <div style="width:28%;background:#CC8B3C;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">构 28</span></div>
+        <div style="width:20%;background:#6E8C5A;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">清 20</span></div>
+        <div style="width:12%;background:#4F7E86;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">增</span></div>
+        <div style="width:8%;background:#8A8275;"></div>
+      </div>
+      <div style="flex:none;width:150px;font:500 11.5px/1.5 'Noto Sans SC';color:#8C867A;">需 1+2+3 · 造点子 · 能落地 · 能收拾</div>
+    </div>
+    <!-- 扩张 -->
+    <div style="display:flex;align-items:center;gap:18px;margin-bottom:16px;">
+      <div style="flex:none;width:118px;"><div style="font:600 16px/1.2 'Noto Serif SC',serif;color:#23211C;">扩张</div><div style="font:500 11px/1.3 'JetBrains Mono',monospace;color:#A19B8D;">1 → N · 增长期</div></div>
+      <div style="flex:1;display:flex;height:40px;border-radius:8px;overflow:hidden;border:1px solid #E2DCCF;">
+        <div style="width:10%;background:#C5654A;"></div>
+        <div style="width:27%;background:#CC8B3C;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">构 27</span></div>
+        <div style="width:23%;background:#6E8C5A;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">清 23</span></div>
+        <div style="width:26%;background:#4F7E86;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">增 26</span></div>
+        <div style="width:14%;background:#8A8275;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">维</span></div>
+      </div>
+      <div style="flex:none;width:150px;font:500 11.5px/1.5 'Noto Sans SC';color:#8C867A;">需 2+3+4 · 配少量 5</div>
+    </div>
+    <!-- 运维 -->
+    <div style="display:flex;align-items:center;gap:18px;">
+      <div style="flex:none;width:118px;"><div style="font:600 16px/1.2 'Noto Serif SC',serif;color:#23211C;">运维</div><div style="font:500 11px/1.3 'JetBrains Mono',monospace;color:#A19B8D;">Sustain · 成熟期</div></div>
+      <div style="flex:1;display:flex;height:40px;border-radius:8px;overflow:hidden;border:1px solid #E2DCCF;">
+        <div style="width:5%;background:#C5654A;"></div>
+        <div style="width:13%;background:#CC8B3C;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">构</span></div>
+        <div style="width:23%;background:#6E8C5A;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">清 23</span></div>
+        <div style="width:26%;background:#4F7E86;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">增 26</span></div>
+        <div style="width:33%;background:#8A8275;display:flex;align-items:center;justify-content:center;overflow:hidden;"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;white-space:nowrap;">维 33</span></div>
+      </div>
+      <div style="flex:none;width:150px;font:500 11.5px/1.5 'Noto Sans SC';color:#8C867A;">需 3+4+5 · 配少量 2</div>
+    </div>
+  </div>
+
+  <div style="height:40px;"></div>
+
+  <!-- 02c 横纵矩阵 · 三个探索 -->
+  <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:8px;">02 · C　横纵这张网 · 三种画法</div>
+  <p style="font:400 14px/1.8 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 18px;">北极星 / 引领 / 滞后 不是三个步骤，是贯穿四个阶段的<b style="color:#23211C;font-weight:600;">纵向层</b>。下面三种画法各有侧重，挑一个落地 —— 用 <a href="#1a" style="color:#C5654A;font-weight:600;text-decoration:none;">1a</a> / <a href="#1b" style="color:#C5654A;font-weight:600;text-decoration:none;">1b</a> / <a href="#1c" style="color:#C5654A;font-weight:600;text-decoration:none;">1c</a> 在对话里指给我。</p>
+
+  <div style="display:flex;align-items:center;gap:8px;margin:0 0 22px;flex-wrap:wrap;">
+    <span style="font:500 12px/1 'Noto Sans SC';color:#8C867A;">跳到：</span>
+    <a href="#1a" style="text-decoration:none;font:600 12px/1 'JetBrains Mono',monospace;color:#C5654A;border:1px solid #E6D2C8;border-radius:14px;padding:6px 12px;">探索 A · 1a</a>
+    <a href="#1b" style="text-decoration:none;font:600 12px/1 'JetBrains Mono',monospace;color:#C5654A;border:1px solid #E6D2C8;border-radius:14px;padding:6px 12px;">探索 B · 1b</a>
+    <a href="#1c" style="text-decoration:none;font:600 12px/1 'JetBrains Mono',monospace;color:#C5654A;border:1px solid #E6D2C8;border-radius:14px;padding:6px 12px;">探索 C · 1c</a>
+  </div>
+
+  <!-- ===== 探索 A · 1a ===== -->
+  <div id="1a" style="scroll-margin-top:20px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:14px;padding:24px 26px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:18px;flex-wrap:wrap;">
+      <div style="font:700 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#fff;background:#23211C;border-radius:6px;padding:6px 10px;">探索 A</div>
+      <div style="font:600 17px/1.3 'Noto Serif SC',serif;color:#23211C;">正交矩阵</div>
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;color:#A19B8D;border:1px solid #E2DCCF;border-radius:12px;padding:5px 9px;">id · 1a</div>
+      <sc-if value="{{ featA }}" hint-placeholder-val="{{ false }}"><div style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:#C5654A;border-radius:5px;padding:5px 9px;">你选的 · 推荐</div></sc-if>
+      <div style="margin-left:auto;font:400 12px/1.5 'Noto Sans SC';color:#8C867A;max-width:20em;text-align:right;">方法论作行、流程作列 —— 最像一张可对照的表</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:104px 1fr 1fr 1fr 1fr;gap:1px;background:#E2DCCF;border:1px solid #E2DCCF;border-radius:10px;overflow:hidden;">
+      <div style="background:#F4F0E7;padding:12px 12px;display:flex;flex-direction:column;justify-content:flex-end;"><div style="font:600 9px/1.3 'JetBrains Mono',monospace;color:#A19B8D;">纵 方法论</div><div style="font:600 9px/1.3 'JetBrains Mono',monospace;color:#A19B8D;">横 流程 →</div></div>
+      <div style="background:#FBFAF6;padding:12px;font:600 13px/1.3 'Noto Sans SC';color:#23211C;text-align:center;">需求分析</div>
+      <div style="background:#FBFAF6;padding:12px;font:600 13px/1.3 'Noto Sans SC';color:#23211C;text-align:center;">需求设计</div>
+      <div style="background:#FBFAF6;padding:12px;font:600 13px/1.3 'Noto Sans SC';color:#23211C;text-align:center;">需求开发</div>
+      <div style="background:#FBFAF6;padding:12px;font:600 13px/1.3 'Noto Sans SC';color:#23211C;text-align:center;">运营运维</div>
+
+      <div style="background:#F4F0E7;padding:14px 12px;display:flex;align-items:center;"><span style="font:600 12px/1.3 'Noto Serif SC',serif;color:#B0503A;">北极星</span></div>
+      <div style="grid-column:2 / 6;background:#F7EDE7;padding:14px 16px;display:flex;align-items:center;gap:12px;"><span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#B0503A;background:#EFD9CE;border-radius:5px;padding:4px 8px;white-space:nowrap;">全程一致</span><span style="font:400 13px/1.5 'Noto Sans SC';color:#7A3D2D;">同一个北极星贯穿四个阶段 —— 看板样板：活跃调用 × 留存</span></div>
+
+      <div style="background:#F4F0E7;padding:14px 12px;display:flex;align-items:center;"><span style="font:600 12px/1.3 'Noto Serif SC',serif;color:#5F7355;">引领</span></div>
+      <div style="background:#fff;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">洞察密度 · 假设数</div>
+      <div style="background:#fff;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">评审轮次 · 原型测试</div>
+      <div style="background:#fff;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">评审时长 · CI 通过</div>
+      <div style="background:#fff;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">错误预算 · 告警响应</div>
+
+      <div style="background:#F4F0E7;padding:14px 12px;display:flex;align-items:center;"><span style="font:600 12px/1.3 'Noto Serif SC',serif;color:#8C867A;">滞后</span></div>
+      <div style="background:#fff;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">立项通过率</div>
+      <div style="background:#fff;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">设计返工率</div>
+      <div style="background:#fff;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">交付周期 · 上线缺陷</div>
+      <div style="background:#fff;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">可用性 · 留存 · 单位成本</div>
+    </div>
+    <div style="margin-top:14px;font:400 12.5px/1.6 'Noto Sans SC';color:#8C867A;"><b style="color:#5F7355;font-weight:600;">取舍 ·</b> 信息密度高、适合评审与对照；但弱化了「流程正在推进」的时间感。</div>
+  </div>
+
+  <!-- ===== 探索 B · 1b ===== -->
+  <div id="1b" style="scroll-margin-top:20px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:14px;padding:24px 26px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:18px;flex-wrap:wrap;">
+      <div style="font:700 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#fff;background:#23211C;border-radius:6px;padding:6px 10px;">探索 B</div>
+      <div style="font:600 17px/1.3 'Noto Serif SC',serif;color:#23211C;">流程主轴 · 方法论垂线</div>
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;color:#A19B8D;border:1px solid #E2DCCF;border-radius:12px;padding:5px 9px;">id · 1b</div>
+      <sc-if value="{{ featB }}" hint-placeholder-val="{{ false }}"><div style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:#C5654A;border-radius:5px;padding:5px 9px;">你选的 · 推荐</div></sc-if>
+      <div style="margin-left:auto;font:400 12px/1.5 'Noto Sans SC';color:#8C867A;max-width:20em;text-align:right;">流程是横向主轴，方法论在每个节点「垂」下来</div>
+    </div>
+
+    <!-- north star banner -->
+    <div style="background:#F7EDE7;border:1px solid #E6D2C8;border-radius:9px;padding:11px 16px;display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+      <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#fff;background:#C5654A;border-radius:5px;padding:5px 9px;white-space:nowrap;">北极星</span>
+      <span style="font:400 13px/1.4 'Noto Sans SC';color:#7A3D2D;">全程同一个目标 —— 活跃调用 × 留存，悬在整条流程之上</span>
+    </div>
+    <div style="text-align:center;font:400 15px/1 'JetBrains Mono',monospace;color:#C2BBAB;margin:2px 0 8px;">▽</div>
+
+    <div style="font:500 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#A19B8D;text-align:center;margin-bottom:10px;">流程推进 →</div>
+    <!-- phases -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+      <div style="background:#23211C;color:#F3EEE6;border-radius:9px;padding:12px;text-align:center;font:600 13px/1.3 'Noto Sans SC';">需求分析</div>
+      <div style="background:#23211C;color:#F3EEE6;border-radius:9px;padding:12px;text-align:center;font:600 13px/1.3 'Noto Sans SC';">需求设计</div>
+      <div style="background:#23211C;color:#F3EEE6;border-radius:9px;padding:12px;text-align:center;font:600 13px/1.3 'Noto Sans SC';">需求开发</div>
+      <div style="background:#23211C;color:#F3EEE6;border-radius:9px;padding:12px;text-align:center;font:600 13px/1.3 'Noto Sans SC';">运营运维</div>
+    </div>
+    <!-- drops -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:2px;">
+      <div style="display:flex;flex-direction:column;align-items:stretch;gap:6px;"><div style="text-align:center;font:400 14px/1 'JetBrains Mono',monospace;color:#C2BBAB;">↓</div><div style="background:#F1F4EC;border:1px solid #DCE5D2;border-radius:7px;padding:9px 11px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;margin-bottom:4px;">引领</div><div style="font:400 11.5px/1.45 'Noto Sans SC';color:#57534A;">洞察密度 · 假设数</div></div><div style="background:#F5F1E8;border:1px solid #E6E0D3;border-radius:7px;padding:9px 11px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:4px;">滞后</div><div style="font:400 11.5px/1.45 'Noto Sans SC';color:#57534A;">立项通过率</div></div></div>
+      <div style="display:flex;flex-direction:column;align-items:stretch;gap:6px;"><div style="text-align:center;font:400 14px/1 'JetBrains Mono',monospace;color:#C2BBAB;">↓</div><div style="background:#F1F4EC;border:1px solid #DCE5D2;border-radius:7px;padding:9px 11px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;margin-bottom:4px;">引领</div><div style="font:400 11.5px/1.45 'Noto Sans SC';color:#57534A;">评审轮次 · 原型测试</div></div><div style="background:#F5F1E8;border:1px solid #E6E0D3;border-radius:7px;padding:9px 11px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:4px;">滞后</div><div style="font:400 11.5px/1.45 'Noto Sans SC';color:#57534A;">设计返工率</div></div></div>
+      <div style="display:flex;flex-direction:column;align-items:stretch;gap:6px;"><div style="text-align:center;font:400 14px/1 'JetBrains Mono',monospace;color:#C2BBAB;">↓</div><div style="background:#F1F4EC;border:1px solid #DCE5D2;border-radius:7px;padding:9px 11px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;margin-bottom:4px;">引领</div><div style="font:400 11.5px/1.45 'Noto Sans SC';color:#57534A;">评审时长 · CI 通过</div></div><div style="background:#F5F1E8;border:1px solid #E6E0D3;border-radius:7px;padding:9px 11px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:4px;">滞后</div><div style="font:400 11.5px/1.45 'Noto Sans SC';color:#57534A;">交付周期 · 上线缺陷</div></div></div>
+      <div style="display:flex;flex-direction:column;align-items:stretch;gap:6px;"><div style="text-align:center;font:400 14px/1 'JetBrains Mono',monospace;color:#C2BBAB;">↓</div><div style="background:#F1F4EC;border:1px solid #DCE5D2;border-radius:7px;padding:9px 11px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;margin-bottom:4px;">引领</div><div style="font:400 11.5px/1.45 'Noto Sans SC';color:#57534A;">错误预算 · 告警响应</div></div><div style="background:#F5F1E8;border:1px solid #E6E0D3;border-radius:7px;padding:9px 11px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:4px;">滞后</div><div style="font:400 11.5px/1.45 'Noto Sans SC';color:#57534A;">可用性 · 留存 · 单位成本</div></div></div>
+    </div>
+    <div style="margin-top:14px;font:400 12.5px/1.6 'Noto Sans SC';color:#8C867A;"><b style="color:#5F7355;font-weight:600;">取舍 ·</b> 最贴近「横向流程 + 纵向方法论」这句话本身；但每阶段只能挂少量指标，细节得点开。</div>
+  </div>
+
+  <!-- ===== 探索 C · 1c ===== -->
+  <div id="1c" style="scroll-margin-top:20px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:14px;padding:24px 26px;margin-bottom:0;">
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:18px;flex-wrap:wrap;">
+      <div style="font:700 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#fff;background:#23211C;border-radius:6px;padding:6px 10px;">探索 C</div>
+      <div style="font:600 17px/1.3 'Noto Serif SC',serif;color:#23211C;">连续泳道</div>
+      <div style="font:600 10px/1 'JetBrains Mono',monospace;color:#A19B8D;border:1px solid #E2DCCF;border-radius:12px;padding:5px 9px;">id · 1c</div>
+      <sc-if value="{{ featC }}" hint-placeholder-val="{{ false }}"><div style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:#C5654A;border-radius:5px;padding:5px 9px;">你选的 · 推荐</div></sc-if>
+      <div style="margin-left:auto;font:400 12px/1.5 'Noto Sans SC';color:#8C867A;max-width:20em;text-align:right;">方法论是连续的「带」，流程只是把它切成阶段</div>
+    </div>
+
+    <div style="border:1px solid #E2DCCF;border-radius:10px;overflow:hidden;">
+      <!-- phase headers -->
+      <div style="display:grid;grid-template-columns:92px repeat(4,1fr);">
+        <div style="background:#F4F0E7;padding:11px;"></div>
+        <div style="background:#FBFAF6;border-left:1px solid #E2DCCF;padding:11px;text-align:center;font:600 12.5px/1.3 'Noto Sans SC';color:#23211C;">需求分析</div>
+        <div style="background:#FBFAF6;border-left:1px solid #E2DCCF;padding:11px;text-align:center;font:600 12.5px/1.3 'Noto Sans SC';color:#23211C;">需求设计</div>
+        <div style="background:#FBFAF6;border-left:1px solid #E2DCCF;padding:11px;text-align:center;font:600 12.5px/1.3 'Noto Sans SC';color:#23211C;">需求开发</div>
+        <div style="background:#FBFAF6;border-left:1px solid #E2DCCF;padding:11px;text-align:center;font:600 12.5px/1.3 'Noto Sans SC';color:#23211C;">运营运维</div>
+      </div>
+      <!-- north star lane (continuous, no inner lines) -->
+      <div style="display:grid;grid-template-columns:92px 1fr;border-top:1px solid #E2DCCF;">
+        <div style="background:#F4F0E7;padding:13px 11px;display:flex;align-items:center;font:600 11.5px/1.2 'Noto Serif SC',serif;color:#B0503A;">北极星</div>
+        <div style="background:#F7EDE7;padding:13px 16px;display:flex;align-items:center;gap:10px;"><span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#B0503A;">一条连续目标线</span><span style="font:400 12.5px/1.4 'Noto Sans SC';color:#7A3D2D;">活跃调用 × 留存 · 不被阶段切断</span></div>
+      </div>
+      <!-- leading lane -->
+      <div style="display:grid;grid-template-columns:92px repeat(4,1fr);border-top:1px solid #E2DCCF;">
+        <div style="background:#F4F0E7;padding:13px 11px;display:flex;align-items:center;font:600 11.5px/1.2 'Noto Serif SC',serif;color:#5F7355;">引领</div>
+        <div style="background:#F1F4EC;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">洞察密度</div>
+        <div style="background:#F1F4EC;border-left:1px solid #DCE5D2;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">评审轮次</div>
+        <div style="background:#F1F4EC;border-left:1px solid #DCE5D2;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">CI 通过率</div>
+        <div style="background:#F1F4EC;border-left:1px solid #DCE5D2;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">错误预算</div>
+      </div>
+      <!-- lagging lane -->
+      <div style="display:grid;grid-template-columns:92px repeat(4,1fr);border-top:1px solid #E2DCCF;">
+        <div style="background:#F4F0E7;padding:13px 11px;display:flex;align-items:center;font:600 11.5px/1.2 'Noto Serif SC',serif;color:#8C867A;">滞后</div>
+        <div style="background:#F5F1E8;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">立项通过率</div>
+        <div style="background:#F5F1E8;border-left:1px solid #E6E0D3;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">返工率</div>
+        <div style="background:#F5F1E8;border-left:1px solid #E6E0D3;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">上线缺陷</div>
+        <div style="background:#F5F1E8;border-left:1px solid #E6E0D3;padding:13px 12px;font:400 11.5px/1.5 'Noto Sans SC';color:#57534A;">可用性 · 留存</div>
+      </div>
+    </div>
+    <div style="margin-top:14px;font:400 12.5px/1.6 'Noto Sans SC';color:#8C867A;"><b style="color:#5F7355;font-weight:600;">取舍 ·</b> 最强调「指标贯穿、不属于某一步」，适合放进看板顶部当持续视图；但看「推进」不如 A / B 清晰。</div>
+  </div>
+
+  <div style="height:40px;"></div>
+
+  <!-- 02d 三个关键洞察 -->
+  <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:16px;">02 · D　三个关键洞察</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:22px 24px;">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;"><span style="font:700 14px/1 'JetBrains Mono',monospace;color:#C5654A;">1</span><span style="font:600 17px/1.3 'Noto Serif SC',serif;color:#23211C;">角色 ≠ 职能</span></div>
+      <div style="font:400 13.5px/1.75 'Noto Sans SC';color:#57534A;">五种原型与岗位头衔无关 —— 设计师可以是 1，也可以是 2 或 3；工程师同理。决定角色的是「<b style="color:#23211C;font-weight:600;">擅长做哪类事</b>」，而非「在哪个部门」。</div>
+    </div>
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:11px;padding:22px 24px;">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;"><span style="font:700 14px/1 'JetBrains Mono',monospace;color:#C5654A;">2</span><span style="font:600 17px/1.3 'Noto Serif SC',serif;color:#23211C;">一人多角色</span></div>
+      <div style="font:400 13.5px/1.75 'Noto Sans SC';color:#57534A;">多数人横跨 <b style="color:#23211C;font-weight:600;">2 个</b>角色，少数跨 3 个。角色组合比单一标签更能描述一个人的真实价值。</div>
+      <div style="margin-top:14px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        <span style="display:inline-flex;align-items:center;gap:5px;font:600 11px/1 'Noto Sans SC';color:#7A3D2D;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:6px;padding:6px 10px;"><span style="width:9px;height:9px;border-radius:2px;background:#CC8B3C;"></span>构建者</span>
+        <span style="font:400 11px/1 'JetBrains Mono',monospace;color:#C2BBAB;">+</span>
+        <span style="display:inline-flex;align-items:center;gap:5px;font:600 11px/1 'Noto Sans SC';color:#7A3D2D;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:6px;padding:6px 10px;"><span style="width:9px;height:9px;border-radius:2px;background:#6E8C5A;"></span>清理者</span>
+        <span style="font:400 11px/1 'Noto Sans SC';color:#A19B8D;margin-left:4px;">= 一个能落地又能收拾的人</span>
+      </div>
+    </div>
+    <div style="grid-column:1 / 3;background:#23211C;border-radius:11px;padding:22px 26px;">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:14px;"><span style="font:700 14px/1 'JetBrains Mono',monospace;color:#E0A78F;">3</span><span style="font:600 17px/1.3 'Noto Serif SC',serif;color:#F3EEE6;">产品阶段决定角色配比</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        <div style="background:#312E29;border-radius:9px;padding:15px 17px;"><div style="font:600 11px/1 'JetBrains Mono',monospace;color:#E0A78F;margin-bottom:8px;">新产品 / 未达 PMF</div><div style="font:600 19px/1.2 'JetBrains Mono',monospace;color:#F3EEE6;">1 + 2 + 3</div><div style="font:400 11.5px/1.5 'Noto Sans SC';color:#9B948A;margin-top:7px;">造点子 · 能落地 · 能收拾</div></div>
+        <div style="background:#312E29;border-radius:9px;padding:15px 17px;"><div style="font:600 11px/1 'JetBrains Mono',monospace;color:#E0A78F;margin-bottom:8px;">找到 PMF / 增长期</div><div style="font:600 19px/1.2 'JetBrains Mono',monospace;color:#F3EEE6;">2 + 3 + 4 <span style="font-size:12px;color:#9B948A;">+少5</span></div><div style="font:400 11.5px/1.5 'Noto Sans SC';color:#9B948A;margin-top:7px;">落地 · 打磨 · 增长</div></div>
+        <div style="background:#312E29;border-radius:9px;padding:15px 17px;"><div style="font:600 11px/1 'JetBrains Mono',monospace;color:#E0A78F;margin-bottom:8px;">PMF 稳固 / 成熟期</div><div style="font:600 19px/1.2 'JetBrains Mono',monospace;color:#F3EEE6;">3 + 4 + 5 <span style="font-size:12px;color:#9B948A;">+少2</span></div><div style="font:400 11.5px/1.5 'Noto Sans SC';color:#9B948A;margin-top:7px;">打磨 · 增长 · 守成</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:1px;background:#E2DCCF;margin:56px 0;"></div>
+
+  <!-- ===== 03 落地 ===== -->
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:18px;">
+    <div style="font:700 13px/1 'JetBrains Mono',monospace;color:#C5654A;">03</div>
+    <h2 style="font:600 27px/1.3 'Noto Serif SC',serif;margin:0;">落地 · 创建时就声明「这一程侧重哪个周期」</h2>
+  </div>
+  <p style="font:400 15px/1.85 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 30px;">方法论要落到工具上。项目创建时选一个<b style="color:#23211C;font-weight:600;">侧重周期</b>，系统据此预置角色配比与侧重阶段 —— 项目不必每次都走完三个周期，而是带着重心出发，再随阶段漂移。</p>
+
+  <!-- mockup -->
+  <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:14px;padding:24px 26px;margin-bottom:30px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+      <div style="width:24px;height:24px;border-radius:6px;background:#C5654A;color:#fff;font:700 12px/24px 'JetBrains Mono',monospace;text-align:center;">B</div>
+      <div style="font:600 14px/1.2 'Noto Sans SC';color:#23211C;">新建项目</div>
+      <div style="width:1px;height:14px;background:#D8D1C2;"></div>
+      <div style="font:400 12.5px/1.2 'Noto Sans SC';color:#8C867A;">第 1 步 · 选择侧重周期</div>
+      <div style="margin-left:auto;font:500 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#A19B8D;text-transform:uppercase;">示意 · 可点</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start;">
+      <!-- left chips -->
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="font:500 11px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#A19B8D;text-transform:uppercase;margin-bottom:2px;">侧重周期</div>
+        <sc-for list="{{ cycChips }}" as="c" hint-placeholder-count="3">
+          <div onClick="{{ c.onClick }}" style="cursor:pointer;border-radius:10px;padding:14px 16px;background:{{ c.cardBg }};border:{{ c.cardBorder }};" style-hover="border-color:#C5654A;">
+            <div style="display:flex;align-items:center;gap:9px;">
+              <div style="font:600 16px/1.2 'Noto Serif SC',serif;color:{{ c.kColor }};">{{ c.key2 }}</div>
+              <div style="font:500 11px/1 'JetBrains Mono',monospace;color:{{ c.sColor }};">{{ c.sub }}</div>
+              <div style="margin-left:auto;font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.04em;color:{{ c.tagColor }};background:{{ c.tagBg }};border-radius:5px;padding:5px 9px;">{{ c.tag }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <!-- right preview -->
+      <div style="background:#23211C;border-radius:11px;padding:18px 20px;">
+        <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#E0A78F;margin-bottom:14px;">预置 · 自动带出</div>
+        <div style="margin-bottom:12px;"><div style="font:500 10px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:5px;">北极星</div><div style="font:400 13px/1.5 'Noto Sans SC';color:#F3EEE6;">{{ curNorth }}</div></div>
+        <div style="margin-bottom:14px;"><div style="font:500 10px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:5px;">侧重阶段</div><div style="font:400 13px/1.5 'Noto Sans SC';color:#F3EEE6;">{{ curPhases }}</div></div>
+        <div>
+          <div style="font:500 10px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:7px;">预置角色配比</div>
+          <div style="display:flex;height:34px;border-radius:7px;overflow:hidden;">
+            <sc-for list="{{ curMix }}" as="m" hint-placeholder-count="5">
+              <div style="width:{{ m.w }};background:{{ m.color }};display:flex;align-items:center;justify-content:center;overflow:hidden;">
+                <sc-if value="{{ m.showLabel }}" hint-placeholder-val="{{ false }}"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;">{{ m.abbr }}</span></sc-if>
+              </div>
+            </sc-for>
+          </div>
+          <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:9px;">
+            <span style="display:inline-flex;align-items:center;gap:5px;font:500 10px/1 'Noto Sans SC';color:#9B948A;"><span style="width:9px;height:9px;border-radius:2px;background:#C5654A;"></span>原型师</span>
+            <span style="display:inline-flex;align-items:center;gap:5px;font:500 10px/1 'Noto Sans SC';color:#9B948A;"><span style="width:9px;height:9px;border-radius:2px;background:#CC8B3C;"></span>构建者</span>
+            <span style="display:inline-flex;align-items:center;gap:5px;font:500 10px/1 'Noto Sans SC';color:#9B948A;"><span style="width:9px;height:9px;border-radius:2px;background:#6E8C5A;"></span>清理者</span>
+            <span style="display:inline-flex;align-items:center;gap:5px;font:500 10px/1 'Noto Sans SC';color:#9B948A;"><span style="width:9px;height:9px;border-radius:2px;background:#4F7E86;"></span>增长者</span>
+            <span style="display:inline-flex;align-items:center;gap:5px;font:500 10px/1 'Noto Sans SC';color:#9B948A;"><span style="width:9px;height:9px;border-radius:2px;background:#8A8275;"></span>维护者</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 更深一层 -->
+  <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:16px;">更深一层 · 这套模型读进组织</div>
+  <div style="border-left:2px solid #D8D1C2;padding:4px 0 4px 18px;margin-bottom:18px;">
+    <div style="font:600 15px/1.4 'Noto Serif SC',serif;color:#23211C;margin-bottom:6px;">从「职能分工」到「价值流分工」</div>
+    <div style="font:400 13.5px/1.8 'Noto Sans SC';color:#57534A;max-width:46em;">传统组织按「写代码 / 画设计 / 做研究」切分；未来或按「谁负责创造、谁负责落地、谁负责打磨、谁负责增长、谁负责守成」切分。当 AI 让跨域行动成本下降，单人可覆盖的链路变长，职能壁垒自然松动。</div>
+  </div>
+  <div style="border-left:2px solid #D8D1C2;padding:4px 0 4px 18px;margin-bottom:18px;">
+    <div style="font:600 15px/1.4 'Noto Serif SC',serif;color:#23211C;margin-bottom:6px;">团队健康度 = 角色配比与阶段的匹配度</div>
+    <div style="font:400 13.5px/1.8 'Noto Sans SC';color:#57534A;max-width:46em;">不是招「最强的人」，而是招「当前阶段最缺的角色」。全员 1+2、没有 3 的团队会陷入「只造不收」的泥潭；全员 5、没有 1 的团队会失去创新。</div>
+  </div>
+  <div style="border-left:2px solid #C5654A;padding:4px 0 4px 18px;margin-bottom:0;">
+    <div style="font:600 15px/1.4 'Noto Serif SC',serif;color:#23211C;margin-bottom:6px;">角色是动态漂移的</div>
+    <div style="font:400 13.5px/1.8 'Noto Sans SC';color:#57534A;max-width:46em;">同一个人随产品阶段推移，角色重心会迁移（从 1 → 2 → 4 / 5）。组织需要容忍并支持这种演化 —— 这也是项目从「探索」漂向「运维」的微观写照。</div>
+  </div>
+
+  <!-- closer -->
+  <div style="margin-top:44px;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:11px;padding:28px 32px;display:flex;align-items:center;gap:20px;">
+    <div style="font:600 30px/1 'JetBrains Mono',monospace;color:#C5654A;flex:none;">“</div>
+    <div style="font:500 19px/1.6 'Noto Serif SC',serif;color:#7A3D2D;">你要管理的不是一条七步流水线，而是一张会随周期重织的网 —— 横向流程、纵向指标，再加上五种角色的动态配比。项目创建时先问一句：<b style="color:#B0503A;">这一程，我们侧重哪个周期？</b></div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;startCycle&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;探索&quot;, &quot;扩张&quot;, &quot;运维&quot;], &quot;default&quot;: &quot;探索&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;周期选择器&quot; },
+  &quot;matrixPick&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;未定&quot;, &quot;A&quot;, &quot;B&quot;, &quot;C&quot;], &quot;default&quot;: &quot;未定&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;关键图 · 标记你选的画法&quot; }
+}">
+class Component extends DCLogic {
+  state = { cyc: 0 };
+  componentDidMount() {
+    const map = { '探索': 0, '扩张': 1, '运维': 2 };
+    const s = map[this.props.startCycle];
+    if (s != null && s !== this.state.cyc) this.setState({ cyc: s });
+  }
+  renderVals() {
+    const rc = { '原型师':'#C5654A', '构建者':'#CC8B3C', '清理者':'#6E8C5A', '增长者':'#4F7E86', '维护者':'#8A8275' };
+    const ab = { '原型师':'原', '构建者':'构', '清理者':'清', '增长者':'增', '维护者':'维' };
+    const cycles = [
+      { key:'探索', sub:'0 → 1', tag:'找 PMF', north:'验证假设 · 找到 PMF 信号', phases:'需求分析 · 需求设计',
+        mix:[['原型师',32],['构建者',28],['清理者',20],['增长者',12],['维护者',8]] },
+      { key:'扩张', sub:'1 → N', tag:'上规模', north:'提升 PMF · 规模化增长', phases:'需求设计 · 需求开发',
+        mix:[['原型师',10],['构建者',27],['清理者',23],['增长者',26],['维护者',14]] },
+      { key:'运维', sub:'Sustain', tag:'保稳态', north:'安全 · 可靠 · 效率随规模扩展', phases:'需求开发 · 运营运维',
+        mix:[['原型师',5],['构建者',13],['清理者',23],['增长者',26],['维护者',33]] },
+    ];
+    const i = this.state.cyc;
+    const cur = cycles[i] || cycles[0];
+    const pick = this.props.matrixPick || '未定';
+    return {
+      cycChips: cycles.map((c, idx) => ({
+        key2: c.key, sub: c.sub, tag: c.tag,
+        onClick: () => this.setState({ cyc: idx }),
+        cardBg: idx === i ? '#F7EDE7' : '#FBFAF6',
+        cardBorder: idx === i ? '1.5px solid #C5654A' : '1px solid #E2DCCF',
+        kColor: idx === i ? '#7A3D2D' : '#23211C',
+        sColor: idx === i ? '#B0503A' : '#A19B8D',
+        tagBg: idx === i ? '#C5654A' : '#EFE9DD',
+        tagColor: idx === i ? '#FFFFFF' : '#8C867A',
+      })),
+      curNorth: cur.north, curPhases: cur.phases,
+      curMix: cur.mix.map(([n, w]) => ({ abbr: ab[n], w: w + '%', color: rc[n], showLabel: w >= 12 })),
+      featA: pick === 'A', featB: pick === 'B', featC: pick === 'C',
+    };
+  }
+}
+</script>
+</body>
+</html>

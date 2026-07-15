@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="./support.js"></script>
+<script src="../support.js"></script>
 </head>
 <body>
 <x-dc>
@@ -89,20 +89,40 @@
 
   <!-- ===== TOP BAR ===== -->
   <div style="position:sticky;top:0;z-index:50;background:rgba(239,235,226,0.88);backdrop-filter:blur(12px);border-bottom:1px solid #E2DCCF;">
-    <div style="max-width:1180px;margin:0 auto;padding:14px 40px;display:flex;align-items:center;gap:24px;">
-      <div style="display:flex;align-items:center;gap:11px;flex:none;">
-        <div style="width:26px;height:26px;border-radius:6px;background:#C5654A;display:flex;align-items:center;justify-content:center;color:#fff;font:700 13px/1 'JetBrains Mono',monospace;">B</div>
-        <div style="font:600 14px/1.2 'Noto Sans SC';letter-spacing:.01em;">Builders 工作台</div>
-        <div style="width:1px;height:16px;background:#D8D1C2;"></div>
-        <div style="font:400 13px/1.2 'Noto Sans SC';color:#8C867A;">OPC 项目管理向导</div>
-      </div>
-      <div style="flex:1;display:flex;align-items:center;gap:0;overflow-x:auto;justify-content:flex-end;">
-        <sc-for list="{{ steps }}" as="st" hint-placeholder-count="8">
-          <div onClick="{{ st.onClick }}" style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:none;padding:4px 10px;">
-            <div style="width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:600 10px/1 'JetBrains Mono',monospace;background:{{ st.dotBg }};color:{{ st.dotColor }};border:{{ st.dotBorder }};">{{ st.num }}</div>
-            <div style="font:500 12px/1 'Noto Sans SC';color:{{ st.labelColor }};white-space:nowrap;">{{ st.label }}</div>
+    <div style="max-width:1180px;margin:0 auto;padding:11px 40px 12px;">
+      <div style="display:flex;align-items:center;gap:20px;margin-bottom:11px;">
+        <div style="display:flex;align-items:center;gap:11px;flex:none;">
+          <div style="width:26px;height:26px;border-radius:6px;background:#C5654A;display:flex;align-items:center;justify-content:center;color:#fff;font:700 13px/1 'JetBrains Mono',monospace;">B</div>
+          <div style="font:600 14px/1.2 'Noto Sans SC';letter-spacing:.01em;color:#23211C;">Builders 工作台</div>
+          <div style="width:1px;height:16px;background:#D8D1C2;"></div>
+          <div style="font:400 13px/1.2 'Noto Sans SC';color:#8C867A;">OPC 项目管理向导</div>
+        </div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:10px;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:9px;padding:5px 8px 5px 12px;overflow-x:auto;">
+          <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#B0503A;white-space:nowrap;flex:none;">方法论层 · 贯穿四阶段</span>
+          <div style="display:flex;gap:4px;flex:none;">
+            <sc-for list="{{ wizMethod }}" as="m" hint-placeholder-count="3">
+              <div onClick="{{ m.onClick }}" style="cursor:pointer;display:flex;align-items:center;gap:5px;border-radius:6px;padding:5px 9px;background:{{ m.bg }};border:{{ m.border }};">
+                <span style="font:600 9px/1 'JetBrains Mono',monospace;color:{{ m.numColor }};">{{ m.num }}</span>
+                <span style="font:500 11px/1 'Noto Sans SC';color:{{ m.labelColor }};white-space:nowrap;">{{ m.label }}</span>
+              </div>
+            </sc-for>
           </div>
-        </sc-for>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;">
+        <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#A19B8D;flex:none;">流程主轴</span>
+        <div style="flex:1;display:flex;align-items:stretch;gap:0;overflow-x:auto;">
+          <sc-for list="{{ wizPhases }}" as="p" hint-placeholder-count="4">
+            <div onClick="{{ p.onClick }}" style="cursor:pointer;flex:1;min-width:150px;display:flex;align-items:center;gap:10px;padding:7px 14px;border-radius:9px;background:{{ p.bg }};border:{{ p.border }};">
+              <div style="width:24px;height:24px;border-radius:7px;display:flex;align-items:center;justify-content:center;font:700 10px/1 'JetBrains Mono',monospace;background:{{ p.badgeBg }};color:{{ p.badgeColor }};flex:none;">{{ p.idx }}</div>
+              <div style="min-width:0;">
+                <div style="font:600 13px/1.2 'Noto Sans SC';color:{{ p.nameColor }};white-space:nowrap;">{{ p.name }}</div>
+                <div style="font:400 10px/1.3 'JetBrains Mono',monospace;color:{{ p.subColor }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ p.sub }}</div>
+              </div>
+            </div>
+            <sc-if value="{{ p.notLast }}" hint-placeholder-val="{{ true }}"><span style="font:400 13px/1 'JetBrains Mono',monospace;color:#C2BBAB;padding:0 5px;align-self:center;flex:none;">→</span></sc-if>
+          </sc-for>
+        </div>
       </div>
     </div>
   </div>
@@ -136,8 +156,8 @@
       </div>
       <div style="padding:32px 34px;background:#F7F2EC;">
         <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#C5654A;margin-bottom:18px;">AI 时代 · Builders 模式</div>
-        <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:10px;">角色收敛</div>
-        <div style="font:400 14px/1.9 'Noto Sans SC';color:#57534A;margin-bottom:22px;"><b style="font-weight:600;color:#23211C;">1 个 Builder（系统设计者，端到端 own）+ Agent Loop。</b><br><span style="font-size:12.5px;color:#8C867A;">每个人职责范围更大；OpenAI 把团队当「分形小创业公司」，Cursor 50 人没有专职 PM。</span></div>
+        <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:10px;">角色重定义（不是收敛成 1 个）</div>
+        <div style="font:400 14px/1.9 'Noto Sans SC';color:#57534A;margin-bottom:22px;"><b style="font-weight:600;color:#23211C;">5 种角色原型：原型师 · 构建者 · 清理者 · 增长者 · 维护者。</b><br><span style="font-size:12.5px;color:#8C867A;">角色 ≠ 职能、一人多角 —— 一个 Builder 往往同时是「原型师 + 构建者」。决定角色的是擅长做什么，不是部门。</span></div>
         <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:12px;">流程精简（被划掉的，靠 agent 与真实数据替代）</div>
         <div style="display:flex;flex-direction:column;gap:11px;">
           <div style="font:400 14px/1.5 'Noto Sans SC';color:#23211C;">② ③ PRD + 评审 <span style="color:#C5654A;">→ 原型即规格</span></div>
@@ -146,6 +166,43 @@
           <div style="font:400 14px/1.5 'Noto Sans SC';color:#23211C;">⑨ 状态周会 <span style="color:#C5654A;">→ 真实 telemetry，难造假</span></div>
           <div style="height:1px;background:#E2DCCF;margin:6px 0;"></div>
           <div style="font:400 13.5px/1.5 'Noto Sans SC';color:#8C867A;">保留并强化 → 竞品对标 · 北极星对齐 · 引领 / 滞后指标 · 原型 · 复盘</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 角色 × 周期 -->
+    <div style="margin-top:56px;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#A19B8D;margin-bottom:8px;">角色 × 周期 · Boris 的五种原型</div>
+      <p style="font:400 15px/1.8 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 22px;">不是把团队压成「1 个 Builder」，而是认清五种贯穿生命周期的<b style="color:#23211C;font-weight:600;">角色原型</b>。角色 ≠ 职能、一人多角，配比随产品阶段漂移。</p>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:20px;">
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-top:3px solid #C5654A;border-radius:10px;padding:14px;"><div style="font:600 14px/1.3 'Noto Serif SC',serif;color:#23211C;">原型师</div><div style="font:500 10px/1.3 'JetBrains Mono',monospace;color:#A19B8D;margin:3px 0 8px;">Prototyper</div><div style="font:400 11.5px/1.5 'Noto Sans SC';color:#8C867A;">让想法涌现</div></div>
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-top:3px solid #CC8B3C;border-radius:10px;padding:14px;"><div style="font:600 14px/1.3 'Noto Serif SC',serif;color:#23211C;">构建者</div><div style="font:500 10px/1.3 'JetBrains Mono',monospace;color:#A19B8D;margin:3px 0 8px;">Builder</div><div style="font:400 11.5px/1.5 'Noto Sans SC';color:#8C867A;">让想法可用</div></div>
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-top:3px solid #6E8C5A;border-radius:10px;padding:14px;"><div style="font:600 14px/1.3 'Noto Serif SC',serif;color:#23211C;">清理者</div><div style="font:500 10px/1.3 'JetBrains Mono',monospace;color:#A19B8D;margin:3px 0 8px;">Sweeper</div><div style="font:400 11.5px/1.5 'Noto Sans SC';color:#8C867A;">让系统变干净变快</div></div>
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-top:3px solid #4F7E86;border-radius:10px;padding:14px;"><div style="font:600 14px/1.3 'Noto Serif SC',serif;color:#23211C;">增长者</div><div style="font:500 10px/1.3 'JetBrains Mono',monospace;color:#A19B8D;margin:3px 0 8px;">Grower</div><div style="font:400 11.5px/1.5 'Noto Sans SC';color:#8C867A;">提升市场契合</div></div>
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-top:3px solid #8A8275;border-radius:10px;padding:14px;"><div style="font:600 14px/1.3 'Noto Serif SC',serif;color:#23211C;">维护者</div><div style="font:500 10px/1.3 'JetBrains Mono',monospace;color:#A19B8D;margin:3px 0 8px;">Maintainer</div><div style="font:400 11.5px/1.5 'Noto Sans SC';color:#8C867A;">让系统长期稳定</div></div>
+      </div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:20px 22px;">
+        <div style="display:flex;flex-wrap:wrap;gap:13px;margin-bottom:16px;">
+          <span style="display:inline-flex;align-items:center;gap:6px;font:500 11px/1 'Noto Sans SC';color:#57534A;"><span style="width:10px;height:10px;border-radius:3px;background:#C5654A;"></span>原型师</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font:500 11px/1 'Noto Sans SC';color:#57534A;"><span style="width:10px;height:10px;border-radius:3px;background:#CC8B3C;"></span>构建者</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font:500 11px/1 'Noto Sans SC';color:#57534A;"><span style="width:10px;height:10px;border-radius:3px;background:#6E8C5A;"></span>清理者</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font:500 11px/1 'Noto Sans SC';color:#57534A;"><span style="width:10px;height:10px;border-radius:3px;background:#4F7E86;"></span>增长者</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font:500 11px/1 'Noto Sans SC';color:#57534A;"><span style="width:10px;height:10px;border-radius:3px;background:#8A8275;"></span>维护者</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">
+          <div style="flex:none;width:96px;"><div style="font:600 14px/1.2 'Noto Serif SC',serif;color:#23211C;">探索</div><div style="font:500 10px/1.2 'JetBrains Mono',monospace;color:#A19B8D;">0 → 1</div></div>
+          <div style="flex:1;display:flex;height:30px;border-radius:7px;overflow:hidden;border:1px solid #E2DCCF;"><div style="width:32%;background:#C5654A;"></div><div style="width:28%;background:#CC8B3C;"></div><div style="width:20%;background:#6E8C5A;"></div><div style="width:12%;background:#4F7E86;"></div><div style="width:8%;background:#8A8275;"></div></div>
+          <div style="flex:none;width:120px;font:500 11px/1.4 'Noto Sans SC';color:#8C867A;">原型 + 构建 + 清理</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">
+          <div style="flex:none;width:96px;"><div style="font:600 14px/1.2 'Noto Serif SC',serif;color:#23211C;">扩张</div><div style="font:500 10px/1.2 'JetBrains Mono',monospace;color:#A19B8D;">1 → N</div></div>
+          <div style="flex:1;display:flex;height:30px;border-radius:7px;overflow:hidden;border:1px solid #E2DCCF;"><div style="width:10%;background:#C5654A;"></div><div style="width:27%;background:#CC8B3C;"></div><div style="width:23%;background:#6E8C5A;"></div><div style="width:26%;background:#4F7E86;"></div><div style="width:14%;background:#8A8275;"></div></div>
+          <div style="flex:none;width:120px;font:500 11px/1.4 'Noto Sans SC';color:#8C867A;">构建 + 清理 + 增长</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;">
+          <div style="flex:none;width:96px;"><div style="font:600 14px/1.2 'Noto Serif SC',serif;color:#23211C;">运维</div><div style="font:500 10px/1.2 'JetBrains Mono',monospace;color:#A19B8D;">Sustain</div></div>
+          <div style="flex:1;display:flex;height:30px;border-radius:7px;overflow:hidden;border:1px solid #E2DCCF;"><div style="width:5%;background:#C5654A;"></div><div style="width:13%;background:#CC8B3C;"></div><div style="width:23%;background:#6E8C5A;"></div><div style="width:26%;background:#4F7E86;"></div><div style="width:33%;background:#8A8275;"></div></div>
+          <div style="flex:none;width:120px;font:500 11px/1.4 'Noto Sans SC';color:#8C867A;">清理 + 增长 + 维护</div>
         </div>
       </div>
     </div>
@@ -173,6 +230,76 @@
           <div style="font:700 18px/1 'JetBrains Mono',monospace;color:#C5654A;margin-bottom:12px;">04</div>
           <div style="font:600 16px/1.4 'Noto Serif SC',serif;margin-bottom:8px;">目标清晰且难造假</div>
           <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#8C867A;">北极星唯一；引领指标可控、可被真实统计。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 横向流程 × 纵向方法论 -->
+    <div style="margin-top:56px;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#A19B8D;margin-bottom:8px;">横向流程 × 纵向方法论</div>
+      <p style="font:400 15px/1.8 'Noto Sans SC';color:#57534A;max-width:44em;margin:0 0 20px;">北极星 / 引领 / 滞后 不是三个步骤，而是贯穿每个阶段的<b style="color:#23211C;font-weight:600;">纵向层</b>。接下来的 7 步，就铺在这张网的横轴上。</p>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:22px 24px;">
+        <div style="background:#F7EDE7;border:1px solid #E6D2C8;border-radius:9px;padding:10px 16px;display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+          <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#fff;background:#C5654A;border-radius:5px;padding:5px 9px;white-space:nowrap;">北极星</span>
+          <span style="font:400 13px/1.4 'Noto Sans SC';color:#7A3D2D;">全程同一个目标，悬在整条流程之上 —— 不属于某一步</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+          <div style="background:#23211C;color:#F3EEE6;border-radius:9px;padding:11px;text-align:center;font:600 13px/1.3 'Noto Sans SC';">需求分析</div>
+          <div style="background:#23211C;color:#F3EEE6;border-radius:9px;padding:11px;text-align:center;font:600 13px/1.3 'Noto Sans SC';">需求设计</div>
+          <div style="background:#23211C;color:#F3EEE6;border-radius:9px;padding:11px;text-align:center;font:600 13px/1.3 'Noto Sans SC';">需求开发</div>
+          <div style="background:#23211C;color:#F3EEE6;border-radius:9px;padding:11px;text-align:center;font:600 13px/1.3 'Noto Sans SC';">运营运维</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px;">
+          <div style="display:flex;flex-direction:column;gap:6px;"><div style="background:#F1F4EC;border:1px solid #DCE5D2;border-radius:7px;padding:8px 10px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;margin-bottom:3px;">引领</div><div style="font:400 11px/1.4 'Noto Sans SC';color:#57534A;">洞察密度</div></div><div style="background:#F5F1E8;border:1px solid #E6E0D3;border-radius:7px;padding:8px 10px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:3px;">滞后</div><div style="font:400 11px/1.4 'Noto Sans SC';color:#57534A;">立项通过率</div></div></div>
+          <div style="display:flex;flex-direction:column;gap:6px;"><div style="background:#F1F4EC;border:1px solid #DCE5D2;border-radius:7px;padding:8px 10px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;margin-bottom:3px;">引领</div><div style="font:400 11px/1.4 'Noto Sans SC';color:#57534A;">评审轮次</div></div><div style="background:#F5F1E8;border:1px solid #E6E0D3;border-radius:7px;padding:8px 10px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:3px;">滞后</div><div style="font:400 11px/1.4 'Noto Sans SC';color:#57534A;">设计返工率</div></div></div>
+          <div style="display:flex;flex-direction:column;gap:6px;"><div style="background:#F1F4EC;border:1px solid #DCE5D2;border-radius:7px;padding:8px 10px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;margin-bottom:3px;">引领</div><div style="font:400 11px/1.4 'Noto Sans SC';color:#57534A;">CI 通过率</div></div><div style="background:#F5F1E8;border:1px solid #E6E0D3;border-radius:7px;padding:8px 10px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:3px;">滞后</div><div style="font:400 11px/1.4 'Noto Sans SC';color:#57534A;">上线缺陷</div></div></div>
+          <div style="display:flex;flex-direction:column;gap:6px;"><div style="background:#F1F4EC;border:1px solid #DCE5D2;border-radius:7px;padding:8px 10px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;margin-bottom:3px;">引领</div><div style="font:400 11px/1.4 'Noto Sans SC';color:#57534A;">错误预算</div></div><div style="background:#F5F1E8;border:1px solid #E6E0D3;border-radius:7px;padding:8px 10px;"><div style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:3px;">滞后</div><div style="font:400 11px/1.4 'Noto Sans SC';color:#57534A;">可用性 · 留存</div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 侧重周期 selector -->
+    <div style="margin-top:56px;background:#F7F2EC;border:1px solid #E6D2C8;border-radius:12px;padding:26px 28px;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#B0503A;margin-bottom:8px;">这个项目侧重哪个周期？</div>
+      <p style="font:400 14px/1.75 'Noto Sans SC';color:#7A3D2D;max-width:44em;margin:0 0 20px;">创建时声明侧重周期，系统据此预置角色配比与侧重阶段。项目不必走完三个周期，而是带着重心出发、再随阶段漂移。</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <sc-for list="{{ wzCycleChips }}" as="c" hint-placeholder-count="3">
+            <div onClick="{{ c.onClick }}" style="cursor:pointer;border-radius:10px;padding:14px 16px;background:{{ c.cardBg }};border:{{ c.cardBorder }};">
+              <div style="display:flex;align-items:center;gap:9px;">
+                <div style="font:600 16px/1.2 'Noto Serif SC',serif;color:{{ c.kColor }};">{{ c.key2 }}</div>
+                <div style="font:500 11px/1 'JetBrains Mono',monospace;color:{{ c.sColor }};">{{ c.sub }}</div>
+                <div style="margin-left:auto;font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.04em;color:{{ c.tagColor }};background:{{ c.tagBg }};border-radius:5px;padding:5px 9px;">{{ c.tag }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="background:#23211C;border-radius:11px;padding:18px 20px;">
+          <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#E0A78F;margin-bottom:14px;">预置 · 自动带出</div>
+          <div style="margin-bottom:12px;"><div style="font:500 10px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:5px;">北极星</div><div style="font:400 13px/1.5 'Noto Sans SC';color:#F3EEE6;">{{ wzNorth }}</div></div>
+          <div style="margin-bottom:14px;"><div style="font:500 10px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:5px;">侧重阶段</div><div style="font:400 13px/1.5 'Noto Sans SC';color:#F3EEE6;">{{ wzPhases }}</div></div>
+          <div>
+            <div style="font:500 10px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:7px;">预置角色配比</div>
+            <div style="display:flex;height:32px;border-radius:7px;overflow:hidden;">
+              <sc-for list="{{ wzMix }}" as="m" hint-placeholder-count="5">
+                <div style="width:{{ m.w }};background:{{ m.color }};display:flex;align-items:center;justify-content:center;overflow:hidden;">
+                  <sc-if value="{{ m.showLabel }}" hint-placeholder-val="{{ false }}"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#fff;">{{ m.abbr }}</span></sc-if>
+                </div>
+              </sc-for>
+            </div>
+            <div style="margin-top:14px;border-top:1px solid #3A3833;padding-top:12px;">
+              <div style="font:500 10px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:9px;">预置班子 · 真实 agents 进场</div>
+              <div style="display:flex;flex-direction:column;gap:7px;">
+                <sc-for list="{{ wzAgents }}" as="g" hint-placeholder-count="3">
+                  <div style="display:flex;align-items:center;gap:9px;">
+                    <span style="width:9px;height:9px;border-radius:2px;background:{{ g.color }};flex:none;"></span>
+                    <span style="font:600 11px/1.2 'Noto Sans SC';color:#F3EEE6;flex:none;width:48px;">{{ g.name }}</span>
+                    <span style="font:500 10px/1.5 'JetBrains Mono',monospace;color:#B7AE9F;">{{ g.agents }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -646,11 +773,13 @@
       <sc-for list="{{ projectRows }}" as="p" hint-placeholder-count="3">
         <div onClick="{{ p.onClick }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:24px 26px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-            <span style="font:500 11px/1 'Noto Sans SC';background:{{ p.phaseBg }};color:{{ p.phaseColor }};border-radius:6px;padding:5px 10px;">{{ p.phaseLabel }}</span>
+            <span style="display:inline-flex;align-items:center;gap:7px;font:500 11px/1 'Noto Sans SC';background:{{ p.cycleBg }};color:{{ p.cycleColor }};border-radius:6px;padding:5px 10px;">侧重 · {{ p.cycleLabel }}<span style="font:600 9px/1 'JetBrains Mono',monospace;opacity:.65;">{{ p.cycleSub }}</span></span>
             <div style="width:9px;height:9px;border-radius:50%;background:{{ p.sig }};"></div>
           </div>
           <div style="font:600 19px/1.35 'Noto Serif SC',serif;color:#23211C;margin-bottom:9px;">{{ p.name }}</div>
-          <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#8C867A;margin-bottom:22px;min-height:46px;">{{ p.desc }}</div>
+          <div style="font:400 13.5px/1.7 'Noto Sans SC';color:#8C867A;margin-bottom:15px;min-height:46px;">{{ p.desc }}</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;"><span style="font:500 9px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#B3AC9D;">角色配比</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#B3AC9D;">原 构 清 增 维</span></div>
+          <div style="display:flex;height:7px;border-radius:4px;overflow:hidden;margin-bottom:18px;"><sc-for list="{{ p.mixSegs }}" as="m" hint-placeholder-count="5"><div style="width:{{ m.w }};background:{{ m.color }};"></div></sc-for></div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
             <span style="font:500 12px/1 'Noto Sans SC';color:#A19B8D;">{{ p.meta }}</span>
             <span style="font:600 13px/1 'JetBrains Mono',monospace;color:{{ p.progColor }};">{{ p.progLabel }}</span>
@@ -680,23 +809,54 @@
       <div style="width:1px;height:16px;background:#D8D1C2;"></div>
       <div style="font:600 15px/1.2 'Noto Sans SC';color:#23211C;">{{ appProjName }}</div>
       <span style="font:500 11px/1 'Noto Sans SC';background:#E7EDE2;color:#4A5E42;border-radius:5px;padding:4px 9px;">{{ appProjPhase }}</span>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:10px;min-width:0;">
+        <div style="width:7px;height:7px;border-radius:50%;background:{{ sigMeta.color }};flex:none;"></div>
+        <span style="font:600 11.5px/1 'Noto Sans SC';color:{{ sigMeta.color }};white-space:nowrap;flex:none;">{{ sigMeta.label }}</span>
+        <div style="width:1px;height:14px;background:#D8D1C2;flex:none;"></div>
+        <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#A19B8D;flex:none;">北极星</span>
+        <span style="display:inline-block;font:600 13.5px/1.3 'Noto Serif SC',serif;color:#23211C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px;">{{ northStar }}</span>
+        <div style="width:1px;height:14px;background:#D8D1C2;flex:none;"></div>
+        <span style="font:500 11.5px/1 'Noto Sans SC';color:#8C867A;white-space:nowrap;flex:none;">引领 <b style="color:#23211C;">{{ topLeadHit }}</b>/{{ topLeadTotal }} 达标</span>
+      </div>
     </div>
 
-    <!-- STAGE AXIS · horizontal (above toolbar) -->
-    <div style="flex:none;background:#EFEBE2;border-bottom:1px solid #E2DCCF;padding:8px 22px;display:flex;align-items:center;gap:8px;overflow-x:auto;">
-      <div onClick="{{ showOverview }}" style="cursor:pointer;flex:none;padding:7px 12px;border-radius:7px;background:{{ allScopeBg }};display:flex;align-items:center;gap:7px;">
+    <!-- STAGE AXIS · 周期指挥台常驻于此：四大周期 = 四阶段，当前阶段重心放大 + 角色配比，其余收窄为标签 -->
+    <div style="flex:none;background:#EFEBE2;border-bottom:1px solid #E2DCCF;padding:10px 22px;display:flex;align-items:stretch;gap:10px;overflow-x:auto;">
+      <div onClick="{{ showOverview }}" style="cursor:pointer;flex:none;padding:7px 12px;border-radius:7px;background:{{ allScopeBg }};display:flex;align-items:center;gap:7px;align-self:center;">
         <div style="font:700 12px/1 'JetBrains Mono',monospace;color:#C5654A;">◎</div>
         <div style="font:600 12.5px/1 'Noto Sans SC';color:{{ allScopeColor }};white-space:nowrap;">全部环节 · 总览</div>
       </div>
-      <div style="width:1px;height:20px;background:#D8D1C2;flex:none;"></div>
-      <sc-for list="{{ stageNav }}" as="e" hint-placeholder-count="8">
-        <div onClick="{{ e.onClick }}" style="cursor:pointer;flex:none;padding:7px 11px;border-radius:7px;display:flex;align-items:center;gap:7px;border:1px solid {{ e.bdr }};background:{{ e.bg }};">
-          <div style="font:700 10px/1 'JetBrains Mono',monospace;color:#C2BBAB;">{{ e.num }}</div>
-          <div style="width:6px;height:6px;border-radius:50%;background:{{ e.sig }};"></div>
-          <div style="font:{{ e.weight }} 12.5px/1 'Noto Sans SC';color:{{ e.nameColor }};white-space:nowrap;">{{ e.name }}</div>
-          <sc-if value="{{ e.hasBadge }}" hint-placeholder-val="{{ false }}">
-            <div style="font:600 9px/1 'JetBrains Mono',monospace;color:#B0503A;background:#F2E4DD;border-radius:5px;padding:2px 5px;">{{ e.badge }}</div>
+      <div style="width:1px;background:#D8D1C2;flex:none;align-self:stretch;"></div>
+      <sc-for list="{{ navClusters }}" as="cl" hint-placeholder-count="4">
+        <div style="flex:{{ cl.flex }};min-width:{{ cl.clMinWidth }};display:flex;flex-direction:column;gap:6px;padding:7px 12px;border-radius:9px;background:{{ cl.wrapBg }};border:{{ cl.wrapBorder }};">
+          <div onClick="{{ cl.onClick }}" style="cursor:pointer;display:flex;align-items:baseline;gap:7px;">
+            <span style="font:700 10px/1 'JetBrains Mono',monospace;color:{{ cl.idxColor }};">{{ cl.idx }}</span>
+            <span style="font:{{ cl.labelWeight }} {{ cl.labelSize }}px/1.15 'Noto Sans SC';color:{{ cl.labelColor }};white-space:nowrap;">{{ cl.name }}</span>
+          </div>
+          <sc-if value="{{ cl.showMix }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="display:flex;height:7px;border-radius:4px;overflow:hidden;margin-bottom:5px;">
+                <sc-for list="{{ cl.mixSegs }}" as="m" hint-placeholder-count="1">
+                  <div style="width:{{ m.w }};background:{{ m.color }};"></div>
+                </sc-for>
+              </div>
+              <div style="font:500 10px/1.3 'JetBrains Mono',monospace;color:#8C867A;white-space:nowrap;">{{ cl.mixLabel }}</div>
+            </div>
           </sc-if>
+          <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;opacity:{{ cl.chipsOpacity }};">
+            <sc-for list="{{ cl.chips }}" as="e" hint-placeholder-count="2">
+              <div onClick="{{ e.onClick }}" title="{{ e.title }}" style="cursor:pointer;flex:none;padding:{{ e.pad }};border-radius:7px;display:flex;align-items:center;gap:6px;border:1px solid {{ e.bdr }};background:{{ e.bg }};">
+                <div style="font:700 10px/1 'JetBrains Mono',monospace;color:#C2BBAB;">{{ e.num }}</div>
+                <div style="width:6px;height:6px;border-radius:50%;background:{{ e.sig }};"></div>
+                <sc-if value="{{ e.showName }}" hint-placeholder-val="{{ true }}">
+                  <div style="font:{{ e.weight }} 12px/1 'Noto Sans SC';color:{{ e.nameColor }};white-space:nowrap;">{{ e.name }}</div>
+                </sc-if>
+                <sc-if value="{{ e.hasBadge }}" hint-placeholder-val="{{ false }}">
+                  <div style="font:600 9px/1 'JetBrains Mono',monospace;color:#B0503A;background:#F2E4DD;border-radius:5px;padding:2px 5px;">{{ e.badge }}</div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
         </div>
       </sc-for>
     </div>
@@ -850,7 +1010,19 @@
             <div style="display:flex;align-items:center;gap:8px;margin-top:13px;font:400 11.5px/1.5 'Noto Sans SC';color:#A19B8D;"><span style="width:7px;height:7px;border-radius:50%;background:{{ sigMeta.color }};flex:none;"></span>本周目标定好后 → 周中 agent loop 执行 → 周五用真实数据复盘出健康信号 → 回到周一</div>
           </div>
 
-          <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;margin-bottom:13px;">各环节 · 切到任意环节看其工作流与定时任务</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:10px;">
+            <div style="font:500 13px/1 'Noto Sans SC';color:#8C867A;">各环节 · 选择监控视角</div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+              <div style="display:flex;background:#EBE5D9;border-radius:8px;padding:3px;gap:2px;">
+                <sc-for list="{{ lensChips }}" as="l" hint-placeholder-count="3">
+                  <div onClick="{{ l.onClick }}" style="cursor:pointer;border-radius:6px;padding:7px 13px;font:600 12px/1 'Noto Sans SC';white-space:nowrap;background:{{ l.bg }};color:{{ l.fg }};box-shadow:{{ l.shadow }};">{{ l.label }}</div>
+                </sc-for>
+              </div>
+              <div style="font:400 11.5px/1.5 'Noto Sans SC';color:#A19B8D;max-width:22em;">{{ lensDesc }}</div>
+            </div>
+          </div>
+
+          <sc-if value="{{ showLensOverview }}" hint-placeholder-val="{{ true }}">
           <div style="display:flex;flex-direction:column;gap:11px;">
             <sc-for list="{{ opRows }}" as="r" hint-placeholder-count="8">
               <div onClick="{{ r.onClick }}" style="cursor:pointer;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:16px 20px;display:grid;grid-template-columns:210px 140px 1fr 22px;gap:20px;align-items:center;">
@@ -859,6 +1031,11 @@
                   <div>
                     <div style="font:600 14.5px/1.3 'Noto Sans SC';color:#23211C;margin-bottom:6px;">{{ r.name }}</div>
                     <span style="display:inline-block;font:500 11px/1 'Noto Sans SC';background:{{ r.phaseBg }};color:{{ r.phaseColor }};border-radius:5px;padding:4px 8px;">{{ r.phase }}</span>
+                    <div style="margin-top:8px;display:flex;align-items:center;gap:5px;flex-wrap:wrap;">
+                      <span style="display:inline-flex;align-items:center;gap:4px;font:600 9.5px/1 'Noto Sans SC';color:{{ r.roleColor }};"><span style="width:7px;height:7px;border-radius:2px;background:{{ r.roleColor }};"></span>{{ r.roleName }}</span>
+                      <span style="font:600 8.5px/1.3 'JetBrains Mono',monospace;color:#6E5848;background:#F1E9E1;border-radius:4px;padding:2px 5px;">{{ r.roleAgent }}</span>
+                      <span style="font:500 8.5px/1.3 'JetBrains Mono',monospace;color:#9A8C7B;background:#fff;border:1px solid #E6DBD0;border-radius:4px;padding:2px 5px;">{{ r.roleSkill }}</span>
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -873,6 +1050,47 @@
               </div>
             </sc-for>
           </div>
+          </sc-if>
+
+          <!-- LENS · 五角色泳道（1b）-->
+          <sc-if value="{{ showLensSwimlane }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:20px 22px;">
+            <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+              <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#B0503A;">五角色泳道</div>
+              <div style="font:400 12px/1.5 'Noto Sans SC';color:#8C867A;">横向 4 阶段 · 纵向 5 角色 · 每个环节落在其驱动角色所在的行与所属阶段的列</div>
+            </div>
+            <div style="display:grid;grid-template-columns:158px repeat(4,1fr);margin-bottom:6px;">
+              <div></div>
+              <sc-for list="{{ swimPhaseHeaders }}" as="p" hint-placeholder-count="4">
+                <div style="text-align:center;font:600 10px/1 'JetBrains Mono',monospace;color:#A19B8D;">{{ p.name }}</div>
+              </sc-for>
+            </div>
+            <div style="border:1px solid #E2DCCF;border-radius:9px;overflow:hidden;">
+              <sc-for list="{{ swimGrid }}" as="lane" hint-placeholder-count="5">
+                <div style="display:grid;grid-template-columns:158px repeat(4,1fr);background:#fff;border-bottom:1px solid #EDE7DA;">
+                  <div style="background:{{ lane.rowBg }};border-left:4px solid {{ lane.color }};padding:10px 12px;display:flex;flex-direction:column;justify-content:center;">
+                    <div style="font:600 13.5px/1.15 'Noto Serif SC',serif;color:#23211C;">{{ lane.role }}</div>
+                    <div style="font:500 8px/1.4 'JetBrains Mono',monospace;color:#A19B8D;margin-top:3px;">{{ lane.agents }}</div>
+                  </div>
+                  <sc-for list="{{ lane.cells }}" as="cell" hint-placeholder-count="4">
+                    <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;flex-direction:column;gap:5px;justify-content:center;">
+                      <sc-for list="{{ cell.items }}" as="it" hint-placeholder-count="1">
+                        <div onClick="{{ it.onClick }}" style="cursor:pointer;background:{{ it.bg }};border:{{ it.border }};border-radius:6px;padding:6px 8px;display:flex;align-items:center;justify-content:space-between;gap:6px;">
+                          <span style="font:500 10px/1.2 'Noto Sans SC';color:{{ it.color }};">{{ it.label }}</span>
+                          <span style="font:600 9px/1 'JetBrains Mono',monospace;color:{{ it.color }};opacity:.75;">{{ it.pct }}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ swimEmptyNoteShow }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:13px;font:400 11.5px/1.6 'Noto Sans SC';color:#A19B8D;">{{ swimEmptyNote }}</div>
+            </sc-if>
+          </div>
+          </sc-if>
+
         </div>
         </sc-if>
 
@@ -2200,6 +2418,7 @@ class Component extends DCLogic {
   state = {
     view: 'projects',
     appSection: 'overview',
+    progLens: 'overview',
     panel: 'progress',
     activeScope: 'all',
     wfDetailId: null,
@@ -2209,14 +2428,17 @@ class Component extends DCLogic {
     railOpen: true,
     activeProjectId: 'p1',
     projects: [
+      { id:'p0', name:'WorkflowHub · 工作流资产库', kind:'资产库 / 编排平台',
+        desc:'把 OCC / OMC 会话里长出的工作流沉淀成可复用资产：模板 · 技能 · Agent，导入即跑。本平台自举示例。', phase:'运营中', cycle:'探索', signal:'green', progress:30, envCount:2 },
       { id:'p1', name:'模型 API 服务 · 运维运营看板', kind:'看板 / 网页应用',
-        desc:'把基础设施监控与 LLM 调用的成本 / 质量归因合并到一个值班视图。', phase:'运营中', signal:'amber', progress:88, envCount:7 },
+        desc:'把基础设施监控与 LLM 调用的成本 / 质量归因合并到一个值班视图。', phase:'运营中', cycle:'运维', signal:'amber', progress:88, envCount:7 },
       { id:'p2', name:'内部知识库 · RAG 助手', kind:'对话应用',
-        desc:'让全员用自然语言检索公司文档，替代散落在多个网盘里的搜索。', phase:'冷启动中', signal:'green', progress:55, coldStep:5 },
+        desc:'让全员用自然语言检索公司文档，替代散落在多个网盘里的搜索。', phase:'冷启动中', cycle:'扩张', signal:'green', progress:55, coldStep:5 },
       { id:'p3', name:'增长落地页 · A/B 实验台', kind:'Design / 无限画布',
-        desc:'营销落地页的多版本设计与转化实验，设计稿即原型。', phase:'冷启动中', signal:'green', progress:25, coldStep:2 },
+        desc:'营销落地页的多版本设计与转化实验，设计稿即原型。', phase:'冷启动中', cycle:'探索', signal:'green', progress:25, coldStep:2 },
     ],
     step: 0,
+    wizardCycle: '探索',
     completed: {},
     projectName: '模型 API 服务 · 运维运营看板',
     benchmark: 'Datadog · Helicone · Langfuse',
@@ -2412,13 +2634,62 @@ class Component extends DCLogic {
     this.go(this.state.step + 1);
   }
 
+  // 每个项目的「体系字段」种子：打开项目时载入，向导与运营视图读同一份状态。
+  // p0 = WorkflowHub（探索 · 0→1 示例）；其余项目沿用「模型 API 服务」样板内容。
+  wizardSeed(id) {
+    if (id === 'p0') return {
+      projectName: 'WorkflowHub · 工作流资产库',
+      wizardCycle: '探索',
+      benchmark: 'n8n · Dify · Zapier',
+      opportunity: 'OCC / OMC 会话里长出的工作流散落各处，无法检索与复用 —— 把它们沉淀成「导入即跑」的资产。',
+      northStar: '每周被复用的工作流运行数',
+      nsDef: '非作者导入并成功跑通的次数 / 周，从运行日志计算，难以人为修饰。复用发生 = 资产真的有价值。',
+      weeklySignal: 'green',
+      leading: [
+        { name: '模板收录数', def: '已沉淀为标准模板的工作流数（含 phases / goal / loop 元数据）', cur: '12', target: '30', source: 'WorkflowHub 自动统计', ok: '可控 · 难造假', lastTarget: '20', hit: false, driver: '把 OCC / OMC 高频会话批量沉淀为模板' },
+        { name: '导入即跑成功率', def: '导入模板后不改配置一次跑通的比例', cur: '58%', target: '85%', source: '运行日志自动统计', ok: '可控 · 难造假', lastTarget: '70%', hit: false, driver: '补齐模板元数据规范 + 导入前预检' },
+        { name: '周复用次数', def: '非作者导入使用某工作流的次数 / 周', cur: '9', target: '25', source: '运行日志自动统计', ok: '可控 · 难造假', lastTarget: '15', hit: false, driver: '在 SkillHub / AgentHub 加推荐互链' },
+      ],
+      lagging: [
+        { name: '周活跃 Builder 数', def: '每周至少运行一次工作流的用户数', cur: '7', target: '20' },
+        { name: '复用率', def: '非作者使用占全部运行的比例', cur: '31%', target: '60%' },
+        { name: '想法 → 可跑工作流', def: '从提出想法到首次成功运行的中位时间', cur: '2.5 天', target: '<0.5 天' },
+        { name: '重复造轮子率', def: '与已有模板高度相似的新建占比', cur: '40%', target: '≤10%' },
+      ],
+    };
+    return {
+      projectName: '模型 API 服务 · 运维运营看板',
+      wizardCycle: '探索',
+      benchmark: 'Datadog · Helicone · Langfuse',
+      opportunity: '把基础设施监控与 LLM 调用的成本 / 质量归因，合并到同一个值班视图。',
+      northStar: '服务有效可用性 99.9%',
+      nsDef: '用户可成功调用的请求时间占比，从真实网关日志计算，难以人为修饰。',
+      weeklySignal: 'green',
+      leading: [
+        { name: '告警覆盖率', def: '已配置自动告警的关键指标 / 全部关键指标', cur: '60%', target: '85%', source: '监控系统自动统计', ok: '可控 · 难造假', lastTarget: '70%', hit: false, driver: '本周交付 11 个关键指标的默认告警模板' },
+        { name: '根因采纳率', def: 'agent 给出的根因建议被值班采纳的比例', cur: '41%', target: '70%', source: '事故复盘自动记录', ok: '可控 · 难造假', lastTarget: '50%', hit: false, driver: '根因建议补证据链 + 值班一键采纳' },
+        { name: '延迟回归运行率', def: '每周自动跑 P95 延迟回归的天数 / 7', cur: '5/7', target: '7/7', source: 'CI 流水线记录', ok: '可控 · 难造假', lastTarget: '6/7', hit: false, driver: 'CI 加夜间定时触发，补齐周末两天' },
+      ],
+      lagging: [
+        { name: '月度有效可用性', def: '北极星的直接结果', cur: '99.4%', target: '99.9%' },
+        { name: '平均故障定位时间', def: '告警到定位根因的中位时间', cur: '38min', target: '<15min' },
+        { name: '用户主动上报事故数', def: '每月由用户先于监控发现的事故', cur: '6/月', target: '≤1/月' },
+        { name: '每千次调用成本', def: '按真实账单 / 调用量计算', cur: '¥2.30', target: '¥1.80' },
+      ],
+    };
+  }
+
   openProject(id) {
     const p = this.state.projects.find(x => x.id === id); if (!p) return;
-    if (p.phase === '冷启动中') this.setState({ view: 'wizard', activeProjectId: id, step: p.coldStep || 0 });
-    else this.setState({ view: 'app', activeProjectId: id, activeScope: 'all', panel: 'progress', wfDetailId: null });
+    const seed = this.wizardSeed(id);
+    if (p.phase === '冷启动中') {
+      const done = {}; for (let i = 1; i < (p.coldStep || 0); i++) done[i] = true;
+      this.setState({ ...seed, view: 'wizard', activeProjectId: id, step: p.coldStep || 0, completed: done });
+    }
+    else this.setState({ ...seed, view: 'app', activeProjectId: id, activeScope: 'all', panel: 'progress', wfDetailId: null });
     this.scrollTop();
   }
-  newProject() { this.setState({ view: 'wizard', step: 0 }); this.scrollTop(); }
+  newProject() { this.setState({ ...this.wizardSeed(null), view: 'wizard', step: 0, completed: {} }); this.scrollTop(); }
   backToProjects() { this.setState({ view: 'projects' }); this.scrollTop(); }
   showOverview() { this.setState({ activeScope: 'all', panel: 'progress', wfDetailId: null }); this.scrollTop(); }
   openTask(n, id) { this.setState({ view: 'app', activeScope: n, panel: 'workflow', wfDetailId: null, activeSessionId: id, viewMode: 'chat' }); this.scrollTop(); }
@@ -2453,6 +2724,63 @@ class Component extends DCLogic {
     this.setState({ opStages: stages, activeSessionId: newId, panel: 'workflow', wfDetailId: null });
   }
 
+  roleAgents(role) {
+    return ({
+      '原型师':'analyst · planner · designer',
+      '构建者':'executor · test-engineer · git-master',
+      '清理者':'code-simplifier · code-reviewer · qa-tester',
+      '增长者':'scientist · analyst · writer',
+      '维护者':'security-reviewer · tracer · verifier',
+    })[role];
+  }
+
+  cycleList() {
+    return [
+      { key:'探索', sub:'0 → 1', tag:'找 PMF', bg:'#F2E4DD', color:'#B0503A',
+        north:'验证假设 · 找到 PMF 信号', phases:'需求分析 · 需求设计', need:'原型 + 构建 + 清理',
+        mix:[['原型师',32,'#C5654A'],['构建者',28,'#CC8B3C'],['清理者',20,'#6E8C5A'],['增长者',12,'#4F7E86'],['维护者',8,'#8A8275']] },
+      { key:'扩张', sub:'1 → N', tag:'上规模', bg:'#F5ECD6', color:'#8A6720',
+        north:'提升 PMF · 规模化增长', phases:'需求设计 · 需求开发', need:'构建 + 清理 + 增长',
+        mix:[['原型师',10,'#C5654A'],['构建者',27,'#CC8B3C'],['清理者',23,'#6E8C5A'],['增长者',26,'#4F7E86'],['维护者',14,'#8A8275']] },
+      { key:'运维', sub:'Sustain', tag:'保稳态', bg:'#E7EDE2', color:'#4A5E42',
+        north:'安全 · 可靠 · 效率随规模扩展', phases:'需求开发 · 运营运维', need:'清理 + 增长 + 维护',
+        mix:[['原型师',5,'#C5654A'],['构建者',13,'#CC8B3C'],['清理者',23,'#6E8C5A'],['增长者',26,'#4F7E86'],['维护者',33,'#8A8275']] },
+    ];
+  }
+
+  // 项目「四阶段」流程轴（7 步精简后的顶层分组）。监控视角（泳道 / 指挥台）与此轴各自独立，
+  // 但泳道要按这 4 个阶段分列，故复用同一份定义，不重复维护。
+  phaseBuckets() {
+    return [
+      { name:'需求分析', sub:'01 竞品洞察 · 02 需求导入', steps:[1,2], rep:1, idx:'01' },
+      { name:'需求设计', sub:'设定方法论 · 指标对齐', steps:[3,4,5], rep:3, idx:'02' },
+      { name:'需求开发', sub:'06 原型创建', steps:[6], rep:6, idx:'03' },
+      { name:'运营运维', sub:'07 进度管理', steps:[7], rep:7, idx:'04' },
+    ];
+  }
+
+  wizardCycleVals() {
+    const cycles = this.cycleList();
+    let idx = cycles.findIndex(c => c.key === this.state.wizardCycle);
+    if (idx < 0) idx = 0;
+    const cur = cycles[idx];
+    return {
+      wzCycleChips: cycles.map((c, k) => ({
+        key2: c.key, sub: c.sub, tag: c.tag,
+        onClick: () => this.setState({ wizardCycle: c.key }),
+        cardBg: k === idx ? '#F7EDE7' : '#FBFAF6',
+        cardBorder: k === idx ? '1.5px solid #C5654A' : '1px solid #E2DCCF',
+        kColor: k === idx ? '#7A3D2D' : '#23211C',
+        sColor: k === idx ? '#B0503A' : '#A19B8D',
+        tagBg: k === idx ? '#C5654A' : '#EFE9DD',
+        tagColor: k === idx ? '#FFFFFF' : '#8C867A',
+      })),
+      wzNorth: cur.north, wzPhases: cur.phases, wzNeed: cur.need,
+      wzMix: cur.mix.map(m => ({ abbr: m[0].charAt(0), w: m[1] + '%', color: m[2], showLabel: m[1] >= 12 })),
+      wzAgents: cur.mix.slice().sort((a, b) => b[1] - a[1]).slice(0, 3).map(m => ({ name: m[0], color: m[2], agents: this.roleAgents(m[0]) })),
+    };
+  }
+
   buildApp() {
     const st = this.state;
     const sigColor = (s) => s === 'green' ? '#5F7355' : (s === 'amber' ? '#B5862F' : '#B0503A');
@@ -2464,10 +2792,15 @@ class Component extends DCLogic {
     // ---- projects home ----
     const projPhase = (p) => p === '运营中' ? { bg: '#E7EDE2', color: '#4A5E42' }
       : p === '冷启动中' ? { bg: '#F2E4DD', color: '#B0503A' } : { bg: '#EDE8DE', color: '#6B6557' };
+    const cyc = this.cycleList();
+    const cycleOf = (k) => cyc.find(c => c.key === k) || cyc[0];
     const projectRows = st.projects.map(p => {
       const ps = projPhase(p.phase);
+      const cy = cycleOf(p.cycle);
       return { onClick: () => this.openProject(p.id), name: p.name, desc: p.desc, kind: p.kind,
         phaseLabel: p.phase, phaseBg: ps.bg, phaseColor: ps.color,
+        cycleLabel: p.cycle, cycleSub: cy.sub, cycleBg: cy.bg, cycleColor: cy.color,
+        mixSegs: cy.mix.map(m => ({ w: m[1] + '%', color: m[2] })),
         sig: sigColor(p.signal), progLabel: p.progress + '%', progWidth: p.progress + '%',
         progColor: p.progress >= 100 ? '#5F7355' : '#C5654A',
         meta: p.phase === '冷启动中' ? ('冷启动向导 · 第 ' + p.coldStep + '/7 步') : (p.envCount + ' 个环节 · ' + p.kind) };
@@ -2480,9 +2813,20 @@ class Component extends DCLogic {
     const opWorkflowTotal = stages.reduce((a, s) => a + s.create.length + s.optimize.length, 0);
     const opRoutines = stages.length;
     const opOptOpen = stages.reduce((a, s) => a + s.optimize.length, 0);
+    const stageRole = {
+      1: ['原型师', '#C5654A', 'analyst', 'deep-research'],
+      2: ['原型师', '#C5654A', 'planner', 'deep-interview'],
+      3: ['增长者', '#4F7E86', 'scientist', 'novel-analytics'],
+      4: ['构建者', '#CC8B3C', 'test-engineer', 'TDD'],
+      5: ['维护者', '#8A8275', 'security-reviewer', 'loop'],
+      6: ['构建者', '#CC8B3C', 'executor', 'ultrawork'],
+      7: ['维护者', '#8A8275', 'tracer', 'hud'],
+    };
     const opRows = stages.map(s => {
       const ps = phaseStyle(s.phase); const optN = s.optimize.length;
+      const sr = stageRole[s.n] || ['构建者', '#CC8B3C', 'executor', 'run'];
       return { onClick: () => this.enterEnv(s.n),
+        roleName: sr[0], roleColor: sr[1], roleAgent: sr[2], roleSkill: sr[3],
         num: (s.n < 10 ? '0' + s.n : '' + s.n), name: s.name, phase: s.phase, phaseBg: ps.bg, phaseColor: ps.color,
         progLabel: s.progress + '%', progWidth: s.progress + '%', progColor: s.progress >= 100 ? '#5F7355' : '#C5654A',
         wfLabel: (s.create.length + s.optimize.length) + ' 会话',
@@ -2490,6 +2834,53 @@ class Component extends DCLogic {
         wfColor: optN > 0 ? '#C5654A' : '#8C867A',
         rtColor: sigColor(s.routine.signal), rtLabel: s.routine.schedule };
     });
+    const appProj = st.projects.find(p => p.id === st.activeProjectId) || st.projects.find(p => p.phase === '运营中') || st.projects[0];
+
+    // ---- 监控视角：五角色泳道 —— 「怎么看进展」的方法论之一，与四阶段流程轴（phaseBuckets）各自独立、
+    // 随时可切换，互不影响；北极星 / 引领 / 滞后 + 周期指挥台是贯穿所有环节的常驻方法论，见顶部两条 bar ----
+    const roleOrder = ['原型师', '构建者', '清理者', '增长者', '维护者'];
+    const roleColorMap = { '原型师': '#C5654A', '构建者': '#CC8B3C', '清理者': '#6E8C5A', '增长者': '#4F7E86', '维护者': '#8A8275' };
+    const roleTint = {
+      '原型师': { row: '#FBF1EC', border: '#E6C3B4', text: '#7A3D2D' },
+      '构建者': { row: '#FBF4E9', border: '#E6D2A8', text: '#7A5A1E' },
+      '清理者': { row: '#F1F5EC', border: '#CFE0C2', text: '#46603A' },
+      '增长者': { row: '#EDF3F4', border: '#BFD6DA', text: '#37606A' },
+      '维护者': { row: '#F2F1ED', border: '#D6D2C7', text: '#5A554B' },
+    };
+    const phaseBuckets = this.phaseBuckets();
+    const swimGrid = roleOrder.map(role => {
+      const tint = roleTint[role];
+      const cells = phaseBuckets.map(b => ({
+        items: stages.filter(s => (stageRole[s.n] || [])[0] === role && b.steps.indexOf(s.n) >= 0)
+          .map(s => ({ onClick: () => this.enterEnv(s.n), label: s.name, pct: s.progress + '%',
+            bg: tint.row, border: '1px solid ' + tint.border, color: tint.text })),
+      }));
+      return { role, color: roleColorMap[role], agents: this.roleAgents(role), rowBg: tint.row, cells };
+    });
+    const swimPhaseHeaders = phaseBuckets.map(b => ({ name: b.name }));
+    const swimEmptyRoles = roleOrder.filter(role => !stages.some(s => (stageRole[s.n] || [])[0] === role));
+    const swimEmptyNote = swimEmptyRoles.length
+      ? (swimEmptyRoles.join('、') + ' 当前未直接驱动任何环节，对应行留白——仍通过其 skills 支持各环节的优化会话（' + swimEmptyRoles.map(r => this.roleAgents(r)).join(' / ') + '）。')
+      : '';
+
+    const lensDef = [
+      { key: 'overview', label: '环节总览', desc: '7 个环节的列表 + 进度条 · 默认视角' },
+      { key: 'swimlane', label: '五角色泳道', desc: '横向 4 阶段 × 纵向 5 角色，看谁在哪个阶段做什么' },
+    ];
+    const progLens = st.progLens || 'overview';
+    const lensChips = lensDef.map(l => ({
+      key: l.key, label: l.label, onClick: () => this.setState({ progLens: l.key }),
+      bg: progLens === l.key ? '#FFFFFF' : 'transparent',
+      fg: progLens === l.key ? '#23211C' : '#8C867A',
+      shadow: progLens === l.key ? '0 1px 3px rgba(35,33,28,0.14)' : 'none',
+    }));
+    const lensDesc = (lensDef.find(l => l.key === progLens) || lensDef[0]).desc;
+    const showLensOverview = progLens === 'overview';
+    const showLensSwimlane = progLens === 'swimlane';
+
+    // ---- 顶部常驻方法论：北极星 / 引领 / 滞后 贯穿所有环节，不随面板或视角变化 ----
+    const topLeadHit = st.leading.filter(l => l.hit).length;
+    const topLeadTotal = st.leading.length;
 
     // ---- 定时任务 / Routines：跨环节聚合，按调度归类（与 workflow 区分的两个实体）----
     const cadenceOf = (sch) => /30s|秒|实时/.test(sch) ? '实时' : (/每日/.test(sch) ? '每日' : '每周');
@@ -2577,14 +2968,50 @@ class Component extends DCLogic {
     const panel = st.panel || 'progress';
 
     // left sidebar = persistent stage-scope selector
-    const stageNav = stages.map(s => {
+    // 顶部环节轴 = 周期指挥台本体：四阶段即四大「周期」，当前所在阶段被重心放大（宽度 + 角色配比），
+    // 其余阶段收窄为标签；点某阶段跳转到其代表环节（phaseBuckets.rep），阶段判定随 activeScope 实时跟随。
+    // compact=true → 收窄阶段用的迷你数字胶囊（仅编号+信号点，不放名字/角标），避免撑爆布局；
+    // 焦点阶段仍用带名字的完整 chip。两者共用同一批字段，模板不用分支。
+    const mkChip = (s, compact) => {
       const active = scopeStage && st.activeScope === s.n;
       const optN = s.optimize.length;
       return { onClick: () => this.setScope(s.n), num: (s.n < 10 ? '0' + s.n : '' + s.n), name: s.name,
+        title: (s.n < 10 ? '0' + s.n : '' + s.n) + ' · ' + s.name,
         sig: sigColor(s.routine.signal),
         bg: active ? '#F1ECE3' : 'transparent', bdr: active ? '#E2DCCF' : 'transparent',
         nameColor: active ? '#23211C' : '#57534A', weight: active ? '600' : '500',
-        prog: s.progress + '%', badge: optN > 0 ? (optN + '') : '', hasBadge: optN > 0 };
+        pad: compact ? '5px 6px' : '6px 10px', showName: !compact,
+        badge: optN > 0 ? (optN + '') : '', hasBadge: !compact && optN > 0 };
+    };
+    const phaseIdxOfStep = (n) => { const i = phaseBuckets.findIndex(b => b.steps.indexOf(n) >= 0); return i < 0 ? 0 : i; };
+    const focusIdx = scopeStage ? phaseIdxOfStep(st.activeScope)
+      : (typeof appProj.coldStep === 'number' ? phaseIdxOfStep(appProj.coldStep) : phaseBuckets.length - 1);
+    const navClusters = phaseBuckets.map((b, i) => {
+      const owned = stages.filter(s => b.steps.indexOf(s.n) >= 0);
+      const isFocus = i === focusIdx;
+      const counts = {};
+      owned.forEach(s => { const r = (stageRole[s.n] || [])[0]; if (r) counts[r] = (counts[r] || 0) + 1; });
+      const mix = Object.keys(counts).map(r => ({ name: r, pct: Math.round(counts[r] / owned.length * 100), color: roleColorMap[r] }))
+        .sort((a2, b2) => b2.pct - a2.pct);
+      const mixLabel = mix.length > 1
+        ? ('角色配比 · ' + mix.map(m => m.name + ' ' + m.pct + '%').join(' · '))
+        : ('重心角色 · ' + (mix[0] ? mix[0].name : '—'));
+      return {
+        key: b.idx, idx: b.idx, name: b.name,
+        onClick: () => this.setScope(b.rep),
+        flex: isFocus ? '1 1 0%' : '0 0 auto',
+        clMinWidth: isFocus ? '350px' : '0px',
+        wrapBg: isFocus ? '#FBFAF6' : 'transparent',
+        wrapBorder: isFocus ? '1px solid #E2DCCF' : '1px solid transparent',
+        labelWeight: isFocus ? '700' : '600', labelSize: isFocus ? '15' : '11.5',
+        labelColor: isFocus ? '#23211C' : '#8C867A',
+        idxColor: isFocus ? '#C5654A' : '#C2BBAB',
+        showMix: isFocus,
+        mixLabel, mixSegs: mix.map(m => ({ w: m.pct + '%', color: m.color })),
+        chips: owned.map(s => mkChip(s, !isFocus)),
+        chipsOpacity: isFocus ? 1 : 0.7,
+        showEmptyNote: owned.length === 0,
+      };
     });
     const allActive = scopeAll;
     const scopeLabel = scopeAll ? '全部环节 · 总览' : ((stage.n < 10 ? '0' + stage.n : '' + stage.n) + ' · ' + stage.name);
@@ -2941,7 +3368,7 @@ class Component extends DCLogic {
       appProjName: proj.name, appProjPhase: proj.phase,
       backToProjects: () => this.backToProjects(),
       // scope selector
-      showOverview: () => this.showOverview(), stageNav, scopeLabel,
+      showOverview: () => this.showOverview(), navClusters, scopeLabel,
       taskGroups, taskScopeLabel, taskEmpty,
       routineHistGroups, sideRoutine, sideTask: !sideRoutine && !overviewHealth, sideEyebrow, sideEmpty,
       overviewHealth, ovAttention, ovArchivedLabel,
@@ -2967,6 +3394,11 @@ class Component extends DCLogic {
       verStageCommits, verStageHasCommits, verStageIssuesOpen, verStageIssuesClosed,
       // progress · all
       opBars, opRows, opOverall, opWorkflowTotal, opRoutines, opOptOpen, opDaily,
+      // 顶部常驻方法论条：北极星 / 引领 / 滞后 —— 贯穿所有环节，不随面板或视角变化
+      topLeadHit, topLeadTotal,
+      // progress · 监控视角（目前 环节总览 / 五角色泳道 两种可切换；周期指挥台已并入顶部环节轴常驻显示）
+      progLens, lensChips, lensDesc, showLensOverview, showLensSwimlane,
+      swimGrid, swimPhaseHeaders, swimEmptyNote, swimEmptyNoteShow: !!swimEmptyNote,
       // progress · stage
       wsStageNum: (stage.n < 10 ? '0' + stage.n : '' + stage.n), wsStageName: stage.name,
       stagePhaseLabel: stage.phase, stagePhaseBg: stagePhase.bg, stagePhaseColor: stagePhase.color,
@@ -3202,6 +3634,29 @@ class Component extends DCLogic {
       };
     });
 
+    // 1a · 顶部 7 步精简为「四阶段流程主轴 + 贯穿方法论层」
+    const phaseDef = this.phaseBuckets();
+    const wizPhases = phaseDef.map((p, i) => {
+      const isCur = step !== 0 && p.steps.indexOf(step) >= 0;
+      const allDone = p.steps.every(n => completed[n]);
+      return { name: p.name, sub: p.sub, idx: p.idx, notLast: i < phaseDef.length - 1,
+        onClick: () => this.go(p.rep),
+        bg: isCur ? '#F7EDE7' : '#FBFAF6',
+        border: isCur ? '1.5px solid #C5654A' : '1px solid #E2DCCF',
+        nameColor: isCur ? '#7A3D2D' : '#23211C',
+        subColor: isCur ? '#B0503A' : '#A19B8D',
+        badgeBg: (isCur || allDone) ? '#C5654A' : '#EFE9DD',
+        badgeColor: (isCur || allDone) ? '#FFFFFF' : '#8C867A' };
+    });
+    const wizMethod = [ {n:3,label:'北极星'},{n:4,label:'引领'},{n:5,label:'滞后'} ].map(m => {
+      const isCur = step === m.n; const done = !!completed[m.n];
+      return { label: m.label, num: (m.n < 10 ? '0' + m.n : '' + m.n), onClick: () => this.go(m.n),
+        bg: isCur ? '#C5654A' : (done ? '#F2E4DD' : '#FBF1EC'),
+        border: isCur ? '1px solid #C5654A' : '1px solid #ECD9D0',
+        numColor: isCur ? 'rgba(255,255,255,0.78)' : '#C08A77',
+        labelColor: isCur ? '#FFFFFF' : '#7A3D2D' };
+    });
+
     const leading = this.state.leading.map((it, i) => ({
       ...it,
       onTarget: (e) => {
@@ -3253,9 +3708,10 @@ class Component extends DCLogic {
       step,
       ...this.buildApp(),
       ...this.buildHubs(),
+      ...this.wizardCycleVals(),
       isStep0: step === 0, isStep1: step === 1, isStep2: step === 2, isStep3: step === 3,
       isStep4: step === 4, isStep5: step === 5, isStep6: step === 6, isStep7: step === 7,
-      steps,
+      steps, wizPhases, wizMethod,
       goTo: (n) => this.go(n), next: () => this.next(), prev: () => this.prev(), confirm: () => this.confirm(),
       start: () => this.go(1),
       goStep0: () => this.go(0), goStep1: () => this.go(1), goStep4: () => this.go(4),

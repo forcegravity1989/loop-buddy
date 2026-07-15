@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="../support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#EFEBE2;}
+  *{box-sizing:border-box;}
+  textarea{resize:none;}
+  input,textarea{font-family:'Noto Sans SC',sans-serif;}
+  @keyframes pulse{0%,100%{opacity:.3;}50%{opacity:1;}}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#EFEBE2;color:#57534A;font-family:'Noto Sans SC',sans-serif;">
+
+  <!-- top bar -->
+  <div style="position:sticky;top:0;z-index:20;background:rgba(239,235,226,.94);backdrop-filter:blur(12px);border-bottom:1px solid #E2DCCF;padding:11px 24px;display:flex;align-items:center;gap:11px;">
+    <div style="width:25px;height:25px;border-radius:6px;background:#C5654A;display:flex;align-items:center;justify-content:center;color:#fff;font:700 12px/1 'JetBrains Mono',monospace;">B</div>
+    <span style="font:600 13.5px/1.2 'Noto Sans SC';color:#23211C;">新建项目</span>
+    <span style="font:500 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;background:#F2E4DD;color:#B0503A;border-radius:5px;padding:4px 7px;">卡片流 v4</span>
+    <span style="margin-left:auto;font:400 11px/1 'Noto Sans SC';color:#B3AC9D;">esc 取消</span>
+  </div>
+
+  <div data-screen-label="创建卡片流" style="max-width:620px;margin:0 auto;padding:44px 24px 120px;display:flex;flex-direction:column;gap:12px;">
+
+    <!-- ── 1 · 意图 ── -->
+    <sc-if value="{{ notSent }}" hint-placeholder-val="{{ true }}">
+      <div style="font:600 22px/1.4 'Noto Serif SC',serif;color:#23211C;margin:26px 0 4px;">你想做什么？</div>
+      <div style="font:400 12.5px/1.7 'Noto Sans SC';color:#A19B8D;margin-bottom:10px;">一句话即可，资料挂上后问题会更少。</div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:4px;box-shadow:0 2px 10px rgba(35,33,28,.05);">
+        <textarea value="{{ brief }}" onChange="{{ onBrief }}" style="width:100%;height:74px;border:none;background:transparent;outline:none;padding:14px 16px 4px;font:400 14px/1.7 'Noto Sans SC';color:#23211C;"></textarea>
+        <div style="display:flex;align-items:center;gap:6px;padding:6px 8px 8px;">
+          <sc-for list="{{ ctxChips }}" as="c" hint-placeholder-count="3">
+            <div onClick="{{ c.onClick }}" style="cursor:pointer;display:flex;align-items:center;gap:5px;border:1px solid {{ c.bd }};background:{{ c.bg }};border-radius:14px;padding:5px 10px;">
+              <span style="font:600 9px/1 'JetBrains Mono',monospace;color:{{ c.ic }};">{{ c.icon }}</span>
+              <span style="font:500 11px/1 'Noto Sans SC';color:{{ c.color }};">{{ c.name }}</span>
+            </div>
+          </sc-for>
+          <div onClick="{{ send }}" style="cursor:pointer;margin-left:auto;width:32px;height:32px;border-radius:9px;background:#C5654A;color:#fff;display:flex;align-items:center;justify-content:center;font:600 14px/1 'JetBrains Mono',monospace;">↑</div>
+        </div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ sent }}" hint-placeholder-val="{{ false }}">
+      <div style="align-self:flex-end;max-width:86%;background:#E7DFD0;border-radius:14px 14px 4px 14px;padding:12px 16px;font:400 13px/1.7 'Noto Sans SC';color:#3A3833;">{{ brief }}</div>
+      <div style="align-self:flex-end;display:flex;gap:5px;">
+        <span style="font:500 10px/1 'JetBrains Mono',monospace;color:#A19B8D;background:#EBE5D9;border-radius:4px;padding:4px 7px;">⌥ loop-buddy</span>
+        <span style="font:500 10px/1 'JetBrains Mono',monospace;color:#A19B8D;background:#EBE5D9;border-radius:4px;padding:4px 7px;">◈ OMC 角色地图</span>
+      </div>
+    </sc-if>
+
+    <!-- ── 2 · 快速问题 ── -->
+    <sc-if value="{{ showForm }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:13px;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:9px;padding:13px 18px;border-bottom:1px solid #F0EBDF;">
+          <span style="font:600 13px/1.3 'Noto Sans SC';color:#23211C;">关于 WorkflowHub 的几个问题</span>
+          <sc-if value="{{ formOpen }}" hint-placeholder-val="{{ true }}">
+            <span style="margin-left:auto;font:400 11px/1 'Noto Sans SC';color:#B3AC9D;">不答也行，未答的我来定</span>
+          </sc-if>
+          <sc-if value="{{ formDone }}" hint-placeholder-val="{{ false }}">
+            <span style="margin-left:auto;font:500 10.5px/1 'JetBrains Mono',monospace;color:#4A5E42;">✓ {{ answerSummary }}</span>
+            <span onClick="{{ reopenForm }}" style="cursor:pointer;font:500 11px/1 'Noto Sans SC';color:#B0503A;">编辑</span>
+          </sc-if>
+        </div>
+        <sc-if value="{{ formOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:6px 18px 14px;">
+            <sc-for list="{{ qRows }}" as="q" hint-placeholder-count="5">
+              <div style="padding:11px 0;border-bottom:1px solid #F3EFE5;">
+                <div style="font:600 12.5px/1.5 'Noto Sans SC';color:#3A3833;margin-bottom:8px;">{{ q.t }}</div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <sc-for list="{{ q.chips }}" as="c" hint-placeholder-count="4">
+                    <div onClick="{{ c.onClick }}" style="cursor:pointer;border:{{ c.bd }};background:{{ c.bg }};color:{{ c.color }};border-radius:15px;padding:6px 12px;font:{{ c.weight }} 12px/1 'Noto Sans SC';">{{ c.label }}</div>
+                  </sc-for>
+                </div>
+                <sc-if value="{{ q.showAuto }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:8px;font:400 11px/1.6 'Noto Sans SC';color:#B0503A;">✦ {{ q.autoNote }}</div>
+                </sc-if>
+              </div>
+            </sc-for>
+            <div style="display:flex;align-items:center;gap:12px;padding-top:14px;">
+              <span onClick="{{ autoRest }}" style="cursor:pointer;font:500 12px/1 'Noto Sans SC';color:#B0503A;border-bottom:1px dashed #D9A794;padding-bottom:2px;">全部帮我决定</span>
+              <div onClick="{{ submitForm }}" style="cursor:pointer;margin-left:auto;background:#C5654A;color:#fff;border-radius:8px;padding:9px 18px;font:600 12.5px/1 'Noto Sans SC';">继续</div>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- ── 3 · 方法论 + Hub 导入 ── -->
+    <sc-if value="{{ showHub }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:13px;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:9px;padding:13px 18px;border-bottom:1px solid #F0EBDF;">
+          <span style="font:600 13px/1.3 'Noto Sans SC';color:#23211C;">起点资产</span>
+          <sc-if value="{{ hubOpen }}" hint-placeholder-val="{{ true }}">
+            <span style="margin-left:auto;font:400 11px/1 'Noto Sans SC';color:#B3AC9D;">已按上下文推荐 · 可增删</span>
+          </sc-if>
+          <sc-if value="{{ hubDone }}" hint-placeholder-val="{{ false }}">
+            <span style="margin-left:auto;font:500 10.5px/1 'JetBrains Mono',monospace;color:#4A5E42;">✓ {{ assetSummary }}</span>
+            <span onClick="{{ reopenHub }}" style="cursor:pointer;font:500 11px/1 'Noto Sans SC';color:#B0503A;">编辑</span>
+          </sc-if>
+        </div>
+        <sc-if value="{{ hubOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:12px 18px 16px;">
+            <div style="display:flex;align-items:center;gap:10px;background:#23211C;border-radius:9px;padding:12px 14px;margin-bottom:12px;">
+              <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#E0A78F;">方法论</span>
+              <span style="font:600 12.5px/1.4 'Noto Sans SC';color:#fff;">标准项目管理 v2</span>
+              <span style="font:400 10.5px/1.4 'Noto Sans SC';color:#9A9388;">四阶段 · 七环节 · 五角色三周期</span>
+              <span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',monospace;color:#A8C09A;">✓ 默认应用</span>
+            </div>
+            <sc-for list="{{ hubGroups }}" as="g" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;gap:7px;margin:10px 0 6px;">
+                <span style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:{{ g.color }};">{{ g.name }}</span>
+                <div style="flex:1;height:1px;background:#F0EBDF;"></div>
+              </div>
+              <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="2">
+                <div onClick="{{ it.onClick }}" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;background:{{ it.bg }};margin-bottom:3px;">
+                  <div style="flex:none;width:15px;height:15px;border-radius:4px;border:1.5px solid {{ it.boxBd }};background:{{ it.boxBg }};color:#fff;font:700 9px/13px 'JetBrains Mono',monospace;text-align:center;">{{ it.check }}</div>
+                  <span style="font:500 12.5px/1.4 'Noto Sans SC';color:#3A3833;">{{ it.name }}</span>
+                  <span style="margin-left:auto;font:400 10px/1.4 'JetBrains Mono',monospace;color:#B3AC9D;white-space:nowrap;">{{ it.meta }}</span>
+                </div>
+              </sc-for>
+            </sc-for>
+            <div style="display:flex;padding-top:14px;">
+              <div onClick="{{ submitHub }}" style="cursor:pointer;margin-left:auto;background:#C5654A;color:#fff;border-radius:8px;padding:9px 18px;font:600 12.5px/1 'Noto Sans SC';">开始起草 →</div>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- ── 4 · 起草中 ── -->
+    <sc-if value="{{ isDrafting }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 18px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:13px;">
+        <div style="width:7px;height:7px;border-radius:50%;background:#C5654A;animation:pulse 1.2s ease-in-out infinite;"></div>
+        <span style="font:400 12.5px/1.5 'Noto Sans SC';color:#8C867A;">正在按方法论起草体系 —— 周期判定 · 北极星 · 指标 · 环节激活…</span>
+      </div>
+    </sc-if>
+
+    <!-- ── 5 · 方案 ── -->
+    <sc-if value="{{ showDraft }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:13px;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:9px;padding:13px 18px;border-bottom:1px solid #F0EBDF;">
+          <span style="font:600 13px/1.3 'Noto Sans SC';color:#23211C;">WorkflowHub · 体系草案</span>
+          <span style="font:500 9.5px/1 'JetBrains Mono',monospace;background:#F2E4DD;color:#B0503A;border-radius:4px;padding:4px 7px;">审阅关口</span>
+          <span style="margin-left:auto;font:400 11px/1 'Noto Sans SC';color:#B3AC9D;">改完确认即建立</span>
+        </div>
+        <div style="padding:14px 18px 16px;display:flex;flex-direction:column;gap:12px;">
+
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="flex:none;font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#A19B8D;width:52px;">周期</span>
+            <span style="font:600 13px/1.4 'Noto Sans SC';color:#23211C;">探索 · 0→1</span>
+            <div style="flex:1;display:flex;height:7px;border-radius:4px;overflow:hidden;max-width:170px;">
+              <sc-for list="{{ mixSegs }}" as="m" hint-placeholder-count="5"><div style="width:{{ m.w }};background:{{ m.color }};"></div></sc-for>
+            </div>
+            <span style="font:500 9.5px/1 'JetBrains Mono',monospace;color:#B3AC9D;">原32 构28 清20 增12 维8</span>
+          </div>
+
+          <div style="background:#23211C;border-radius:10px;padding:15px 17px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;">
+              <span style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#E0A78F;">北极星</span>
+              <span onClick="{{ regenNS }}" style="cursor:pointer;margin-left:auto;font:500 10.5px/1 'Noto Sans SC';color:#E0A78F;border:1px solid #4A453C;border-radius:5px;padding:5px 9px;">↺ 候选 {{ nsIdxLabel }}</span>
+            </div>
+            <div style="font:600 17px/1.45 'Noto Serif SC',serif;color:#fff;margin-bottom:5px;">{{ nsStar }}</div>
+            <div style="font:400 11.5px/1.65 'Noto Sans SC';color:#C9C2B4;">{{ nsDef }}</div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div>
+              <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#A19B8D;margin-bottom:7px;">引领 · 每周推动</div>
+              <sc-for list="{{ leadRows }}" as="l" hint-placeholder-count="3">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px dashed #EFEAE0;">
+                  <span style="font:500 12px/1.4 'Noto Sans SC';color:#3A3833;">{{ l.name }}</span>
+                  <span style="font:600 11px/1 'JetBrains Mono',monospace;color:#B0503A;white-space:nowrap;">{{ l.cur }} → {{ l.target }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div>
+              <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#A19B8D;margin-bottom:7px;">滞后 · 只看不追</div>
+              <sc-for list="{{ lagRows }}" as="l" hint-placeholder-count="4">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px dashed #EFEAE0;">
+                  <span style="font:500 12px/1.4 'Noto Sans SC';color:#3A3833;">{{ l.name }}</span>
+                  <span style="font:600 11px/1 'JetBrains Mono',monospace;color:#8C867A;white-space:nowrap;">{{ l.cur }} → {{ l.target }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="flex:none;font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#A19B8D;width:52px;">资产</span>
+            <span style="font:400 12px/1.6 'Noto Sans SC';color:#57534A;">{{ assetLine }}</span>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="flex:none;font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#A19B8D;width:52px;">环节</span>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
+              <sc-for list="{{ stageChips }}" as="s" hint-placeholder-count="7">
+                <span title="{{ s.title }}" style="font:600 10px/1 'JetBrains Mono',monospace;background:{{ s.bg }};color:{{ s.color }};border-radius:5px;padding:5px 8px;">{{ s.n }} {{ s.name }}</span>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="flex:none;font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#A19B8D;width:52px;">节奏</span>
+            <span style="font:400 12px/1.6 'Noto Sans SC';color:#57534A;">每周一 09:00 体检 Routine · 人只在 2 个关口介入（洞察→北极星 · 原型→开发）</span>
+          </div>
+
+          <sc-if value="{{ notConfirmed }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;align-items:center;gap:10px;padding-top:6px;">
+              <div onClick="{{ backHub }}" style="cursor:pointer;border:1px solid #DDD5C5;color:#8C867A;border-radius:8px;padding:9px 15px;font:500 12px/1 'Noto Sans SC';">← 调整</div>
+              <div onClick="{{ confirmAll }}" style="cursor:pointer;margin-left:auto;background:#C5654A;color:#fff;border-radius:8px;padding:10px 20px;font:600 12.5px/1 'Noto Sans SC';box-shadow:0 3px 10px rgba(197,101,74,.25);">确认 · 建立项目</div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ confirmed }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;background:#E7EDE2;border-radius:9px;padding:11px 14px;">
+              <span style="font:600 12px/1.5 'Noto Sans SC';color:#3E4A38;">✓ 已建立 · 环节 01/02 激活，Routine 已排</span>
+              <a href="../project-management-wizard/Builders工作台-项目管理向导 v2.dc.html" style="margin-left:auto;text-decoration:none;font:600 12px/1 'Noto Sans SC';color:#3E4A38;border-bottom:1.5px solid #3E4A38;padding-bottom:1px;">进入工作台 →</a>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1200, &quot;height&quot;: 860}}">
+class Component extends DCLogic {
+  state = {
+    sent: false, formState: 'open', hubState: 'hidden', drafting: false, drafted: false, confirmed: false,
+    nsIdx: 0,
+    brief: '做一个 WorkflowHub：把 OCC / OMC 会话里长出的工作流沉淀成可复用资产，导入即跑。',
+    ctx: { git: true, omc: true, occ: false },
+    answers: {},
+    assets: { wf1: true, wf2: true, wf3: false, sk1: true, sk2: true, sk3: false, ag1: true, ag2: true },
+  };
+
+  questions() {
+    return [
+      { id:'cycle', t:'项目处在什么周期？', opts:['全新想法 0→1','已验证 · 上量','保稳态'], autoNote:'探索 0→1 —— 上下文无用户与复用数据，先验证「复用会发生」。', },
+      { id:'bench', t:'最像的对标？（可多选）', opts:['n8n','Dify','Zapier','LangSmith'], multi:true, autoNote:'建议 n8n · Dify · Zapier —— 没人做「从 agent 会话沉淀资产」。' },
+      { id:'win', t:'三个月后怎样算成了？', opts:['被持续复用','效率可量化提升','成为默认入口'], autoNote:'复用发生 = 资产有价值 → 北极星从复用推导。' },
+      { id:'user', t:'谁最先用？', opts:['自己团队','全公司 Builder','外部用户'], autoNote:'先 12 位 OMC 活跃 Builder，一周内可见复用信号。' },
+      { id:'pace', t:'复盘节奏？', opts:['每周','双周','每日轻检'], autoNote:'每周一 09:00 —— 探索期信号快，双周太慢。' },
+    ];
+  }
+
+  nsAlts() {
+    return [
+      { star:'每周被复用的工作流运行数', def:'非作者导入并成功跑通的次数 / 周，从运行日志计算，难以人为修饰。' },
+      { star:'非作者周复用运行数 ≥ 25', def:'同一口径加显式目标线，周会只对这一条负责。' },
+      { star:'每周新增「导入即跑」模板数', def:'供给侧候选：先做厚资产池，需配复用率护栏防堆量。' },
+    ];
+  }
+
+  hubDefs() {
+    return [
+      { name:'WORKFLOWHUB', color:'#B0503A', items:[
+        { k:'wf1', name:'竞品扫描 → 差距矩阵', meta:'v4 · 复用 23 次' },
+        { k:'wf2', name:'看板原型脚手架', meta:'v7 · 初稿可用 80%' },
+        { k:'wf3', name:'北极星推导编排', meta:'v2 · 复用 11 次' } ] },
+      { name:'SKILLHUB', color:'#5F7355', items:[
+        { k:'sk1', name:'web-scan', meta:'抓取清洗公开网页' },
+        { k:'sk2', name:'对比矩阵', meta:'多维归一可比' },
+        { k:'sk3', name:'dashboard-kit', meta:'看板组件库' } ] },
+      { name:'AGENTHUB', color:'#5A4E7A', items:[
+        { k:'ag1', name:'竞品分析 Agent', meta:'强检索 · 低臆测' },
+        { k:'ag2', name:'前端原型 Agent', meta:'可点击原型' } ] },
+    ];
+  }
+
+  setAns(id, val) {
+    const q = this.questions().find(x => x.id === id);
+    const cur = this.state.answers[id];
+    if (q.multi) {
+      const arr = (cur && cur.multi) ? [...cur.multi] : [];
+      const i = arr.indexOf(val);
+      if (i >= 0) arr.splice(i, 1); else arr.push(val);
+      this.setState({ answers: { ...this.state.answers, [id]: arr.length ? { multi: arr } : undefined } });
+    } else {
+      const same = cur && !cur.auto && cur.val === val;
+      this.setState({ answers: { ...this.state.answers, [id]: same ? undefined : { val } } });
+    }
+  }
+  setAuto(id) {
+    const cur = this.state.answers[id];
+    this.setState({ answers: { ...this.state.answers, [id]: (cur && cur.auto) ? undefined : { auto: true } } });
+  }
+  fillAuto() {
+    const a = { ...this.state.answers };
+    this.questions().forEach(q => { if (!a[q.id]) a[q.id] = { auto: true }; });
+    return a;
+  }
+
+  renderVals() {
+    const st = this.state;
+    const answers = st.answers;
+    const nAns = this.questions().filter(q => !!answers[q.id]).length;
+    const nAuto = this.questions().filter(q => answers[q.id] && answers[q.id].auto).length;
+
+    const ctxDefs = [
+      { key:'git', icon:'⌥', name:'loop-buddy' },
+      { key:'omc', icon:'◈', name:'OMC 角色地图' },
+      { key:'occ', icon:'+', name:'OCC 会话' },
+    ];
+    const ctxChips = ctxDefs.map(c => {
+      const on = st.ctx[c.key];
+      return { icon: on ? '✓' : c.icon, name: c.name,
+        onClick: () => this.setState({ ctx: { ...st.ctx, [c.key]: !on } }),
+        bd: on ? '#C9B8A4' : '#E2DCCF', bg: on ? '#F3EBDD' : 'transparent',
+        ic: on ? '#5F7355' : '#B3AC9D', color: on ? '#57534A' : '#A19B8D' };
+    });
+
+    const qRows = this.questions().map(q => {
+      const a = answers[q.id];
+      const chips = q.opts.map(o => {
+        const sel = a && (q.multi ? (a.multi || []).includes(o) : (!a.auto && a.val === o));
+        return { label: o, onClick: () => this.setAns(q.id, o),
+          bd: sel ? '1.5px solid #C5654A' : '1px solid #DDD5C5',
+          bg: sel ? '#C5654A' : 'transparent', color: sel ? '#fff' : '#57534A', weight: sel ? 600 : 400 };
+      });
+      const autoSel = a && a.auto;
+      chips.push({ label: '✦ 帮我决定', onClick: () => this.setAuto(q.id),
+        bd: autoSel ? '1.5px solid #B0503A' : '1px dashed #C9A08E',
+        bg: autoSel ? '#F2E4DD' : 'transparent', color: '#B0503A', weight: autoSel ? 600 : 500 });
+      return { t: q.t, chips, showAuto: !!autoSel, autoNote: q.autoNote };
+    });
+
+    const assets = st.assets;
+    const hubGroups = this.hubDefs().map(g => ({
+      name: g.name, color: g.color,
+      items: g.items.map(it => {
+        const on = assets[it.k];
+        return { name: it.name, meta: it.meta,
+          onClick: () => this.setState({ assets: { ...assets, [it.k]: !on } }),
+          check: on ? '✓' : '', bg: on ? '#F4F0E5' : 'transparent',
+          boxBd: on ? '#C5654A' : '#CFC7B6', boxBg: on ? '#C5654A' : 'transparent' };
+      }),
+    }));
+    const cnt = (pre) => Object.keys(assets).filter(k => k.indexOf(pre) === 0 && assets[k]).length;
+    const assetSummary = cnt('wf') + ' 工作流 · ' + cnt('sk') + ' 技能 · ' + cnt('ag') + ' Agent';
+
+    const ns = this.nsAlts()[st.nsIdx % 3];
+    const mixSegs = [['32%','#C5654A'],['28%','#CC8B3C'],['20%','#6E8C5A'],['12%','#4F7E86'],['8%','#8A8275']].map(m => ({ w: m[0], color: m[1] }));
+
+    const stageChips = [
+      { n:'01', name:'竞品洞察', s:'hot', title:'立即激活' },
+      { n:'02', name:'需求导入', s:'hot', title:'立即激活' },
+      { n:'03', name:'方法论', s:'done', title:'本向导已完成' },
+      { n:'04', name:'引领', s:'done', title:'本向导已完成' },
+      { n:'05', name:'滞后', s:'done', title:'本向导已完成' },
+      { n:'06', name:'原型', s:'cold', title:'关口通过后' },
+      { n:'07', name:'进度', s:'cold', title:'随运营自动开启' },
+    ].map(s => ({ n: s.n, name: s.name, title: s.title,
+      bg: s.s === 'hot' ? '#F2E4DD' : (s.s === 'done' ? '#E7EDE2' : '#EDE8DE'),
+      color: s.s === 'hot' ? '#B0503A' : (s.s === 'done' ? '#4A5E42' : '#8C867A') }));
+
+    return {
+      notSent: !st.sent, sent: st.sent,
+      brief: st.brief, onBrief: (e) => this.setState({ brief: e.target.value }),
+      ctxChips,
+      send: () => { this.setState({ sent: true, formState: 'open' }); window.scrollTo(0, 0); },
+
+      showForm: st.sent, formOpen: st.formState === 'open', formDone: st.formState === 'done',
+      qRows,
+      answerSummary: '已答 ' + nAns + '/5' + (nAuto ? ' · ' + nAuto + ' 项交给 AI' : ''),
+      autoRest: () => this.setState({ answers: this.fillAuto() }),
+      submitForm: () => this.setState({ answers: this.fillAuto(), formState: 'done', hubState: 'open' }),
+      reopenForm: () => this.setState({ formState: 'open' }),
+
+      showHub: st.hubState !== 'hidden', hubOpen: st.hubState === 'open', hubDone: st.hubState === 'done',
+      hubGroups, assetSummary,
+      submitHub: () => {
+        this.setState({ hubState: 'done', drafting: true });
+        setTimeout(() => this.setState({ drafting: false, drafted: true }), 1300);
+      },
+      reopenHub: () => this.setState({ hubState: 'open', drafted: false, confirmed: false }),
+      backHub: () => this.setState({ hubState: 'open', drafted: false }),
+
+      isDrafting: st.drafting, showDraft: st.drafted,
+      nsStar: ns.star, nsDef: ns.def, nsIdxLabel: (st.nsIdx % 3 + 1) + '/3',
+      regenNS: () => this.setState({ nsIdx: st.nsIdx + 1 }),
+      mixSegs,
+      leadRows: [
+        { name:'模板收录数', cur:'12', target:'30' },
+        { name:'导入即跑成功率', cur:'58%', target:'85%' },
+        { name:'周复用次数', cur:'9', target:'25' },
+      ],
+      lagRows: [
+        { name:'周活跃 Builder', cur:'7', target:'20' },
+        { name:'复用率', cur:'31%', target:'60%' },
+        { name:'想法 → 可跑', cur:'2.5天', target:'<0.5天' },
+        { name:'重复造轮子', cur:'40%', target:'≤10%' },
+      ],
+      assetLine: '方法论 v2（默认） · ' + assetSummary + ' —— 已从 Hub 导入',
+      stageChips,
+      notConfirmed: !st.confirmed, confirmed: st.confirmed,
+      confirmAll: () => this.setState({ confirmed: true }),
+    };
+  }
+}
+</script>
+</body>
+</html>
