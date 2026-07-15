@@ -12,8 +12,8 @@
 
 use crate::derive::{reduce_worst_of, AmberBand, Derived};
 use crate::ids::{
-    AgentId, ArtifactId, ConnectorId, CronTaskId, KnowledgeSourceId, ProjectId, SessionId, SkillId,
-    WorkflowId, WorkflowRunId,
+    AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, ProjectId, SessionId,
+    SkillId, WorkflowId, WorkflowRunId,
 };
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
@@ -962,6 +962,16 @@ pub struct SkillCard {
     /// really gets injected into prompts (stage skills, self-authored ones).
     #[serde(default)]
     pub content: String,
+    /// The completed Issue this skill was distilled from, if any. `None` for
+    /// catalog/seeded skills — only a `DistillSkillFromIssue` sets it. This is
+    /// BW's "skills compound from real work" link (multica's skills are manual;
+    /// we attribute them to the real issue + agent that produced them).
+    #[serde(default)]
+    pub distilled_from_issue: Option<IssueId>,
+    /// The agent teammate that did the work behind `distilled_from_issue`.
+    /// `None` iff `distilled_from_issue` is `None`.
+    #[serde(default)]
+    pub origin_agent: Option<AgentId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1299,6 +1309,108 @@ pub struct Artifact {
     pub registered_at: i64,
 }
 
+// ─────────────────────────── issue ───────────────────────────
+
+/// Kanban lifecycle of an [`Issue`] — an assignable unit of work scoped to a
+/// project's stage. The seven states are ordered as a lifecycle: an issue
+/// advances left-to-right (Backlog → Todo → InProgress → InReview → Done),
+/// but `Blocked` is a recoverable side-state (not terminal — the work resumes
+/// once the blocker clears), and `Cancelled` is the other terminal alongside
+/// `Done`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueStatus {
+    Backlog,
+    Todo,
+    InProgress,
+    InReview,
+    Done,
+    Blocked,
+    Cancelled,
+}
+
+impl IssueStatus {
+    /// All seven, in lifecycle order.
+    pub const ALL: [IssueStatus; 7] = [
+        IssueStatus::Backlog,
+        IssueStatus::Todo,
+        IssueStatus::InProgress,
+        IssueStatus::InReview,
+        IssueStatus::Done,
+        IssueStatus::Blocked,
+        IssueStatus::Cancelled,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            IssueStatus::Backlog => "待办池",
+            IssueStatus::Todo => "待办",
+            IssueStatus::InProgress => "进行中",
+            IssueStatus::InReview => "评审中",
+            IssueStatus::Done => "已完成",
+            IssueStatus::Blocked => "阻塞",
+            IssueStatus::Cancelled => "已取消",
+        }
+    }
+
+    /// `true` only for `Done` and `Cancelled` — the two states no further work
+    /// is expected from. `Blocked` is deliberately NOT terminal (the work
+    /// resumes when the blocker clears; treating it as done would hide stuck
+    /// work).
+    pub fn is_terminal(self) -> bool {
+        matches!(self, IssueStatus::Done | IssueStatus::Cancelled)
+    }
+
+    /// `true` only for `Backlog` — the "not yet committed to" pile.
+    pub fn is_backlog(self) -> bool {
+        matches!(self, IssueStatus::Backlog)
+    }
+}
+
+/// How urgent an [`Issue`] is — drives ordering and visual emphasis. `None`
+/// (the default for a freshly created issue) means "no priority assigned",
+/// distinct from `Low` which is an explicit, deliberate low-urgency tag.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssuePriority {
+    None,
+    Low,
+    Medium,
+    High,
+    Urgent,
+}
+
+impl IssuePriority {
+    pub fn label(self) -> &'static str {
+        match self {
+            IssuePriority::None => "无",
+            IssuePriority::Low => "低",
+            IssuePriority::Medium => "中",
+            IssuePriority::High => "高",
+            IssuePriority::Urgent => "紧急",
+        }
+    }
+}
+
+/// An assignable unit of work scoped to a project's stage — the multica
+/// "assign a task to a teammate" model fused into BW's stage ring. `number`
+/// is per-project (1, 2, 3, …), auto-assigned at creation. `assignee` is the
+/// agent teammate the issue is currently delegated to (`None` = unassigned).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Issue {
+    pub id: IssueId,
+    pub project_id: ProjectId,
+    pub stage: StageKind,
+    pub number: u32,
+    pub title: String,
+    pub desc: String,
+    pub status: IssueStatus,
+    pub priority: IssuePriority,
+    pub assignee: Option<AgentId>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 // ─────────────────────────── project ───────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -1506,5 +1618,72 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn issue_status_is_terminal_only_for_done_and_cancelled() {
+        assert!(!IssueStatus::Backlog.is_terminal());
+        assert!(!IssueStatus::Todo.is_terminal());
+        assert!(!IssueStatus::InProgress.is_terminal());
+        assert!(!IssueStatus::InReview.is_terminal());
+        assert!(IssueStatus::Done.is_terminal());
+        assert!(
+            !IssueStatus::Blocked.is_terminal(),
+            "Blocked is recoverable, not terminal"
+        );
+        assert!(IssueStatus::Cancelled.is_terminal());
+    }
+
+    #[test]
+    fn issue_status_is_backlog_only_for_backlog() {
+        assert!(IssueStatus::Backlog.is_backlog());
+        assert!(!IssueStatus::Todo.is_backlog());
+        assert!(!IssueStatus::Done.is_backlog());
+        assert!(!IssueStatus::Blocked.is_backlog());
+    }
+
+    #[test]
+    fn issue_status_all_has_seven_in_lifecycle_order() {
+        assert_eq!(IssueStatus::ALL.len(), 7);
+        assert_eq!(IssueStatus::ALL[0], IssueStatus::Backlog);
+        assert_eq!(IssueStatus::ALL[6], IssueStatus::Cancelled);
+    }
+
+    #[test]
+    fn issue_priority_labels() {
+        assert_eq!(IssuePriority::None.label(), "无");
+        assert_eq!(IssuePriority::Low.label(), "低");
+        assert_eq!(IssuePriority::Medium.label(), "中");
+        assert_eq!(IssuePriority::High.label(), "高");
+        assert_eq!(IssuePriority::Urgent.label(), "紧急");
+    }
+
+    #[test]
+    fn issue_status_labels() {
+        assert_eq!(IssueStatus::Backlog.label(), "待办池");
+        assert_eq!(IssueStatus::Todo.label(), "待办");
+        assert_eq!(IssueStatus::InProgress.label(), "进行中");
+        assert_eq!(IssueStatus::InReview.label(), "评审中");
+        assert_eq!(IssueStatus::Done.label(), "已完成");
+        assert_eq!(IssueStatus::Blocked.label(), "阻塞");
+        assert_eq!(IssueStatus::Cancelled.label(), "已取消");
+    }
+
+    #[test]
+    fn issue_status_none_serializes_as_snake_case() {
+        // None priority must serialize as "none" (not a sentinel/empty string).
+        let json = serde_json::to_string(&IssuePriority::None).unwrap();
+        assert_eq!(json, "\"none\"");
+        // And round-trip back.
+        let back: IssuePriority = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IssuePriority::None);
+    }
+
+    #[test]
+    fn issue_status_serializes_as_snake_case() {
+        let json = serde_json::to_string(&IssueStatus::InProgress).unwrap();
+        assert_eq!(json, "\"in_progress\"");
+        let back: IssueStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IssueStatus::InProgress);
     }
 }

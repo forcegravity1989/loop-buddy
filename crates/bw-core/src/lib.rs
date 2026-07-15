@@ -24,7 +24,7 @@ pub mod model;
 pub mod playbook;
 
 pub use ids::{
-    AgentId, ArtifactId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId,
+    AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
     RoutineId, SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 pub use model::*;

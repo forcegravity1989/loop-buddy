@@ -93,3 +93,7 @@ id_newtype!(
     /// version (`project × path × git_commit`) in a project's workspace.
     ArtifactId
 );
+id_newtype!(
+    /// Stable identity of an [`crate::model::Issue`].
+    IssueId
+);

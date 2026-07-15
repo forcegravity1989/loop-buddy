@@ -26,12 +26,12 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
     activity_row, agent_card, attention_from_rows, cadence_label, connector_card, cron_row,
-    hub_overview, knowledge_row, metric_vm, notify_feed, observation_feed, project_card,
-    session_status_label, settings_vm, skill_card, stage_detail, stage_nav, version_log_vm,
-    week_plan_rows, workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm, ConnectorCardVm,
-    CronRowVm, FeedItemVm, FeedSource, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm,
-    SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm,
-    WorkflowHubRowVm,
+    hub_overview, issue_card, knowledge_row, metric_vm, notify_feed, observation_feed,
+    project_card, session_status_label, settings_vm, skill_card, stage_detail, stage_nav,
+    version_log_vm, week_plan_rows, workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm,
+    ConnectorCardVm, CronRowVm, FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm,
+    NotifyItemVm, ProjectCardVm, SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm,
+    StageNavItemVm, WeekPlanRowVm, WorkflowHubRowVm,
 };
 use ui::{overall_progress, Attention};
 
@@ -150,6 +150,9 @@ pub struct OpVm {
     pub stats: ui::vm::StatCardsVm,
     pub overall: u8,
     pub sessions: Vec<SessionCardVm>,
+    /// The project's Issues (R1) — assignable work units scoped to a stage,
+    /// the multica-style board the operating view now surfaces.
+    pub issues: Vec<IssueVm>,
     pub chat: Option<ChatVm>,
     /// Threaded down for the "从 Hub 导入" overview strip in the Workflow
     /// panel — same data as the top-level `Vm.hub`, just also reachable from
@@ -441,7 +444,8 @@ pub fn spawn() -> Kernel {
 
                 // Hands-free deep-link (verify/demo): open a named project and
                 // optionally a panel from env — skips the wall→open→tab clicks.
-                // BW_OPEN=<project name>; BW_PANEL=progress|workflow|routine|artifact|version.
+                // BW_OPEN=<project name>;
+                // BW_PANEL=progress|workflow|routine|artifact|version|issues.
                 if let Ok(name) = std::env::var("BW_OPEN") {
                     if let Some(p) = app.snapshot().projects.iter().find(|p| p.name == name) {
                         let pid = p.id;
@@ -452,14 +456,18 @@ pub fn spawn() -> Kernel {
                                 "routine" => Panel::Routine,
                                 "artifact" => Panel::Artifact,
                                 "version" => Panel::Version,
+                                "issues" => Panel::Issues,
                                 _ => Panel::Progress,
                             };
                             let _ = app.dispatch(Command::SetPanel(panel)).await;
                         }
                         let s = app.snapshot();
                         eprintln!(
-                            "[BW_OPEN] {name:?} -> view={:?} panel={:?} projects={}",
-                            s.view, s.panel, s.projects.len()
+                            "[BW_OPEN] {name:?} -> view={:?} panel={:?} projects={} issues={}",
+                            s.view,
+                            s.panel,
+                            s.projects.len(),
+                            s.issues.len()
                         );
                         let _ = vm_tx.send(build_vm(&app, &store).await);
                     } else {
@@ -876,6 +884,11 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         stats,
         overall,
         sessions: session_cards,
+        issues: state
+            .issues
+            .iter()
+            .map(|i| issue_card(i, &state.agents))
+            .collect(),
         chat,
         hub,
         version_log,

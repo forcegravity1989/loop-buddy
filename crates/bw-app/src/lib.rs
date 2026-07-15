@@ -17,12 +17,13 @@ use bw_core::derive::AmberBand;
 use bw_core::model::{
     classify_artifact_path, cron_due, stage_workflow, stage_workflow_with_playbook, AgentCard,
     AgentRef, Artifact, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, HubSource,
-    KnowledgeSource, LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus,
-    RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
-    CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_GIT_REPO,
+    Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig, Maturity,
+    ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
+    SourceKind, StageKind, WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI,
+    CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{
-    AgentId, ArtifactId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId,
+    AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
     SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
@@ -31,8 +32,8 @@ use bw_engine::{
 };
 use bw_store::{
     AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewArtifact, NewConnector, NewCronTask,
-    NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowSpec,
-    ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
+    NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewStage,
+    NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -58,6 +59,9 @@ pub enum Panel {
     Routine,
     Artifact,
     Version,
+    /// Issue 看板 (R1) — assignable work units scoped to a stage, the
+    /// multica-style board the operating view now surfaces.
+    Issues,
 }
 
 /// Stage-axis selection: all stages or one of the five.
@@ -277,6 +281,20 @@ pub enum Command {
         /// Executable body (may be empty — a catalog reference entry).
         content: String,
     },
+    /// Distill a new skill from a completed, assigned Issue — the "every
+    /// solution compounds into a reusable skill" link. Provenance + Done/
+    /// assignee validation lives in the store; this is a thin wrapper that
+    /// delegates and refreshes, like `CreateSkill`. `content` is the distilled
+    /// method body itself — a skill minted from real work must be executable
+    /// content, not another empty catalog card.
+    DistillSkillFromIssue {
+        skill_id: SkillId,
+        issue_id: IssueId,
+        name: String,
+        desc: String,
+        category: String,
+        content: String,
+    },
     /// SkillHub's detail-panel edit — content only (`maturity`/`uses` are
     /// lifecycle data, untouched).
     UpdateSkill {
@@ -343,6 +361,28 @@ pub enum Command {
         kind: String,
         used_by: String,
     },
+    /// Create a new issue in the active project (defaults to `Backlog`,
+    /// auto-assigned per-project number). Scoped to the given stage.
+    CreateIssue {
+        id: IssueId,
+        stage: StageKind,
+        title: String,
+        desc: String,
+        priority: IssuePriority,
+    },
+    /// Move an issue to a new kanban status (the kanban lifecycle transition).
+    TransitionIssue {
+        id: IssueId,
+        status: IssueStatus,
+    },
+    /// Assign (or, with `None`, unassign) an issue to an agent teammate.
+    AssignIssue {
+        id: IssueId,
+        assignee: Option<AgentId>,
+    },
+    /// Reload the active project's issues from the store (mirrors
+    /// `RefreshHubs` for the hub library, but project-scoped).
+    RefreshIssues,
     SendSessionMessage {
         session: SessionId,
         text: String,
@@ -418,6 +458,7 @@ pub enum Event {
         detail: String,
     },
     KnowledgeSourcesChanged,
+    IssuesChanged,
     ActivityChanged,
     ClaudeConfigChanged,
     VersionLogChanged,
@@ -485,6 +526,9 @@ pub struct AppState {
     pub cron_tasks: Vec<CronTask>,
     pub connectors: Vec<Connector>,
     pub knowledge_sources: Vec<KnowledgeSource>,
+    /// Issues for the active project (empty when no project is open). Mirrors
+    /// `cron_tasks` but project-scoped — loaded by `refresh_issues`.
+    pub issues: Vec<Issue>,
     /// Activity feed — derived from `handoff` (+ `project` join), never
     /// written to directly. See `Store::list_recent_handoffs`.
     pub recent_activity: Vec<GlobalHandoffRow>,
@@ -519,6 +563,7 @@ impl Default for AppState {
             cron_tasks: Vec::new(),
             connectors: Vec::new(),
             knowledge_sources: Vec::new(),
+            issues: Vec::new(),
             recent_activity: Vec::new(),
             claude_config: ClaudeCliConfig::default(),
             version_log: None,
@@ -620,6 +665,18 @@ impl App {
 
     async fn refresh_knowledge_sources(&mut self) -> Result<(), AppError> {
         self.state.knowledge_sources = self.store.list_knowledge_sources().await?;
+        Ok(())
+    }
+
+    /// Reload the active project's issues. When no project is active, the list
+    /// is cleared to empty (not an error — the UI shows an empty board).
+    async fn refresh_issues(&mut self) -> Result<(), AppError> {
+        match self.state.active_project {
+            Some(p) => {
+                self.state.issues = self.store.list_issues(p, None, None).await?;
+            }
+            None => self.state.issues.clear(),
+        }
         Ok(())
     }
 
@@ -1206,6 +1263,7 @@ impl App {
                 self.refresh_connectors().await?;
                 self.refresh_knowledge_sources().await?;
                 self.refresh_activity().await?;
+                self.refresh_issues().await?;
                 self.emit(Event::ProjectsChanged);
             }
 
@@ -1752,6 +1810,35 @@ impl App {
                 self.emit(Event::SkillsChanged);
             }
 
+            Command::DistillSkillFromIssue {
+                skill_id,
+                issue_id,
+                name,
+                desc,
+                category,
+                content,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .distill_skill_from_issue(
+                        NewSkill {
+                            id: skill_id,
+                            name,
+                            maturity: Maturity::Polishing,
+                            desc,
+                            category,
+                            source: LibSource::SelfBuilt,
+                            content,
+                        },
+                        issue_id,
+                    )
+                    .await?;
+                self.refresh_skills().await?;
+                self.emit(Event::SkillsChanged);
+            }
+
             Command::UpdateSkill {
                 id,
                 name,
@@ -1913,6 +2000,48 @@ impl App {
                 self.emit(Event::KnowledgeSourcesChanged);
             }
 
+            Command::CreateIssue {
+                id,
+                stage,
+                title,
+                desc,
+                priority,
+            } => {
+                let p = self.active()?;
+                if title.trim().is_empty() {
+                    return Err(AppError::Invalid("标题不能为空".into()));
+                }
+                self.store
+                    .create_issue(NewIssue {
+                        id,
+                        project_id: p,
+                        stage,
+                        title,
+                        desc,
+                        priority,
+                    })
+                    .await?;
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+            }
+
+            Command::TransitionIssue { id, status } => {
+                self.store.transition_issue(id, status).await?;
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+            }
+
+            Command::AssignIssue { id, assignee } => {
+                self.store.assign_issue(id, assignee).await?;
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+            }
+
+            Command::RefreshIssues => {
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+            }
+
             Command::SendSessionMessage { session, text } => {
                 self.store
                     .append_message(session, Role::Builder, &text)
@@ -1979,6 +2108,7 @@ impl App {
                         View::App
                     }
                 };
+                self.refresh_issues().await?;
                 self.emit(Event::ViewChanged(self.state.view));
             }
 
@@ -1999,6 +2129,7 @@ impl App {
                 self.state.active_project = None;
                 self.state.active_session = None;
                 self.refresh_projects().await?;
+                self.refresh_issues().await?;
                 self.emit(Event::ViewChanged(View::Projects));
             }
 

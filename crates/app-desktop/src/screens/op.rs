@@ -17,8 +17,10 @@ use crate::kernel::{ChatVm, Kernel, MsgVm, OpVm, RunVm, StageVm};
 use crate::screens::chrome::Toast;
 use crate::theme;
 use bw_app::{Command, Panel, Scope};
-use bw_core::model::{stage_workflow, FeedLevel, HubKind, HubSource, Signal, StageKind};
-use bw_core::{SessionId, WorkflowId};
+use bw_core::model::{
+    stage_workflow, FeedLevel, HubKind, HubSource, IssuePriority, IssueStatus, Signal, StageKind,
+};
+use bw_core::{IssueId, SessionId, WorkflowId};
 use bw_store::SessionKind;
 use dioxus::prelude::*;
 use ui::vm::{MetricVm, SessionCardVm, VersionLogVm};
@@ -148,12 +150,13 @@ fn StageAxis(op: OpVm) -> Element {
     }
 }
 
-const PANELS: [(Panel, &str); 5] = [
+const PANELS: [(Panel, &str); 6] = [
     (Panel::Progress, "进度"),
     (Panel::Workflow, "工作流"),
     (Panel::Routine, "定时任务"),
     (Panel::Artifact, "产物"),
     (Panel::Version, "版本"),
+    (Panel::Issues, "Issue 看板"),
 ];
 
 #[component]
@@ -341,6 +344,7 @@ fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
         (Panel::Routine, Some(s)) => rsx! { RoutineStage { s } },
         (Panel::Artifact, _) => rsx! { ArtifactPanel { op } },
         (Panel::Version, _) => rsx! { VersionPanel { op } },
+        (Panel::Issues, _) => rsx! { IssuesPanel { op } },
     }
 }
 
@@ -510,6 +514,141 @@ fn VersionPanel(op: OpVm) -> Element {
                         }
                     }
                 },
+            }
+        }
+    }
+}
+
+// ── issue board (R1) ──
+
+/// The kanban status that follows `s` in the lifecycle, if any (terminal +
+/// `Blocked` don't advance — they're a stop or a side state).
+fn next_issue_status(s: IssueStatus) -> Option<IssueStatus> {
+    match s {
+        IssueStatus::Backlog => Some(IssueStatus::Todo),
+        IssueStatus::Todo => Some(IssueStatus::InProgress),
+        IssueStatus::InProgress => Some(IssueStatus::InReview),
+        IssueStatus::InReview => Some(IssueStatus::Done),
+        IssueStatus::Done | IssueStatus::Blocked | IssueStatus::Cancelled => None,
+    }
+}
+
+/// The Issue board (R1): real assignable work units grouped by status into
+/// columns, each card carrying its stage + agent teammate + a one-click
+/// advance to the next status. The create strip scopes a new issue to a
+/// chosen stage. Every card is a real `issue` row — nothing invented.
+#[component]
+fn IssuesPanel(op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let border = theme::BORDER;
+    let ink = theme::INK;
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let clay = theme::CLAY;
+    let mono = theme::MONO;
+    let initial_stage = op.active_stage;
+    let mut new_title = use_signal(String::new);
+    let mut new_stage = use_signal(move || initial_stage);
+
+    let cols: [(IssueStatus, &str); 5] = [
+        (IssueStatus::Backlog, "待办池"),
+        (IssueStatus::Todo, "待办"),
+        (IssueStatus::InProgress, "进行中"),
+        (IssueStatus::InReview, "评审中"),
+        (IssueStatus::Done, "已完成"),
+    ];
+    // Precompute the columns outside rsx so the board stays borrow-clean.
+    let grouped: Vec<_> = cols
+        .iter()
+        .map(|(st, label)| {
+            (
+                *label,
+                op.issues
+                    .iter()
+                    .filter(|i| i.status == *st)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+
+    rsx! {
+        div { style: "max-width:1120px;",
+            div {
+                style: "{card} padding:12px 16px;margin-bottom:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;",
+                input {
+                    value: "{new_title}",
+                    placeholder: "新 Issue 标题(作用域到选中阶段)…",
+                    style: "flex:1;min-width:220px;border:1px solid {border};border-radius:7px;padding:8px 11px;font-size:13px;background:#FFF;",
+                    oninput: move |e| new_title.set(e.value()),
+                }
+                for s in StageKind::ALL {
+                    {
+                        let sel = new_stage() == s;
+                        let (bg, fg) = if sel { (clay, "#FFF") } else { ("transparent", ink2) };
+                        rsx! {
+                            button {
+                                key: "{s:?}",
+                                style: "cursor:pointer;border:1px solid {border};border-radius:20px;background:{bg};color:{fg};padding:5px 12px;font-size:12px;",
+                                onclick: move |_| new_stage.set(s),
+                                "{s.label()}"
+                            }
+                        }
+                    }
+                }
+                button {
+                    style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:8px 16px;font-size:13px;flex:none;",
+                    onclick: move |_| {
+                        let t = new_title().trim().to_string();
+                        if !t.is_empty() {
+                            k.send(Command::CreateIssue {
+                                id: IssueId::new(),
+                                stage: new_stage(),
+                                title: t,
+                                desc: String::new(),
+                                priority: IssuePriority::Medium,
+                            });
+                            new_title.set(String::new());
+                        }
+                    },
+                    "＋ 创建 Issue"
+                }
+            }
+            div { style: "display:flex;gap:12px;align-items:flex-start;",
+                for (label, list) in grouped {
+                    div { key: "{label}", style: "flex:1;min-width:190px;",
+                        div { style: "font-size:11.5px;color:{ink3};margin-bottom:9px;letter-spacing:.04em;", "{label} · {list.len()}" }
+                        for i in list {
+                            {
+                                let k = k.clone();
+                                let i_id = i.id;
+                                let advance = next_issue_status(i.status);
+                                let advance_label = advance.map(|s| s.label()).unwrap_or("");
+                                let assignee = i
+                                    .assignee_name
+                                    .clone()
+                                    .unwrap_or_else(|| "未分配".to_string());
+                                rsx! {
+                                    div {
+                                        key: "{i.number}",
+                                        style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {i.status_color};",
+                                        div { style: "font-size:11px;color:{ink3};font-family:{mono};", "#{i.number} · {i.stage.label()}" }
+                                        div { style: "font-size:13px;margin:3px 0 4px;color:{ink};", "{i.title}" }
+                                        div { style: "font-size:11px;color:{ink2};", "{i.priority_label} · {assignee}" }
+                                        if let Some(ns) = advance {
+                                            button {
+                                                style: "margin-top:6px;cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
+                                                onclick: move |_| k.send(Command::TransitionIssue { id: i_id, status: ns }),
+                                                "→ {advance_label}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

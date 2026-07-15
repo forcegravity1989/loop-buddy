@@ -169,6 +169,10 @@ CREATE TABLE IF NOT EXISTS skill (
     category    TEXT NOT NULL DEFAULT '',
     source      TEXT NOT NULL DEFAULT 'self_built',
     uses        INTEGER NOT NULL DEFAULT 0,
+    -- R2: provenance link from a real completed Issue. NULL = catalog/seeded
+    -- skill (no real-work origin); populated only by distill_skill_from_issue.
+    distilled_from_issue TEXT,                   -- IssueId uuid string; NULL = catalog
+    origin_agent         TEXT,                   -- AgentId uuid string; NULL = catalog
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0
@@ -319,3 +323,25 @@ CREATE TABLE IF NOT EXISTS workflow_version (
     created_at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_version_spec ON workflow_version(workflow_id, version DESC);
+
+-- ═══════════════════════ issue (R1 · assignable stage-scoped work) ═══════════════════════
+-- An assignable unit of work scoped to a project's stage — the multica "assign
+-- a task to a teammate" model fused into BW's stage ring. `number` is
+-- per-project (1, 2, 3, …), auto-assigned at creation. `assignee` is nullable
+-- (NULL = unassigned). `status` is a kanban lifecycle (Backlog → Done /
+-- Cancelled; Blocked is recoverable, not terminal).
+CREATE TABLE IF NOT EXISTS issue (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL REFERENCES project(id),
+    stage       TEXT NOT NULL,                   -- StageKind (5 values)
+    number      INTEGER NOT NULL,                -- per-project sequence: 1, 2, 3, …
+    title       TEXT NOT NULL,
+    descr       TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'backlog', -- IssueStatus
+    priority    TEXT NOT NULL DEFAULT 'none',    -- IssuePriority
+    assignee    TEXT,                            -- AgentId uuid string; NULL = unassigned
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_issue_project_number ON issue(project_id, number);
+CREATE INDEX IF NOT EXISTS idx_issue_project_stage ON issue(project_id, stage);

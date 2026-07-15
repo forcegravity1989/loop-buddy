@@ -66,8 +66,14 @@ async fn main() {
     println!("[run]「{}」settled Ok(真实执行:sonnet5 构建师)", wf.name);
 
     // 2) Credit the real successful work to the 构建 agent + its method skill.
-    let a = store.record_agent_run_by_name("构建师", true).await.unwrap();
-    let s = store.record_skill_use_by_name("spec-to-tests").await.unwrap();
+    let a = store
+        .record_agent_run_by_name("构建师", true)
+        .await
+        .unwrap();
+    let s = store
+        .record_skill_use_by_name("spec-to-tests")
+        .await
+        .unwrap();
     println!("[account] 构建师 agent +{a} 行(runs/wins); spec-to-tests 技能 +{s}");
 
     // 3) Register the REAL artifacts the build produced (commit f4f8ed3).
