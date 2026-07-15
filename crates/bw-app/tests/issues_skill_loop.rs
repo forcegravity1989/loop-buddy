@@ -12,11 +12,14 @@
 //!   store's "issue is not Done" check surfaces through the command as an
 //!   `AppError`.
 
+use async_trait::async_trait;
 use bw_app::{App, Command};
-use bw_core::model::{Cadence, IssuePriority, IssueStatus, ProjectCycle, StageKind};
-use bw_core::{AgentId, IssueId, ProjectId, SkillId};
-use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
-use bw_store::{SqliteStore, Store};
+use bw_core::model::{Cadence, IssuePriority, IssueStatus, ProjectCycle, RunStatus, StageKind};
+use bw_core::{AgentId, IssueId, ProjectId, SessionId, SkillId};
+use bw_engine::{
+    ClaudeCliConfig, Engine, ExecError, Executor, MockExecutor, PhaseNode, PhaseOutput, RunCtx,
+};
+use bw_store::{SessionKind, SqliteStore, Store};
 use std::sync::Arc;
 
 fn tmp_db() -> String {
@@ -24,6 +27,174 @@ fn tmp_db() -> String {
         .join(format!("bw_issues_skill_loop_{}.db", uuid::Uuid::new_v4()))
         .to_string_lossy()
         .into_owned()
+}
+
+/// Always-fails executor — proves RunIssue's failure path leaves the issue
+/// InProgress (never fakes InReview/Done) and still records a Failed run.
+struct FailingExecutor;
+#[async_trait]
+impl Executor for FailingExecutor {
+    async fn run_phase(&self, _phase: &PhaseNode, _ctx: &RunCtx) -> Result<PhaseOutput, ExecError> {
+        Err(ExecError::Failed("故意失败(RunIssue 失败路径测试)".into()))
+    }
+}
+
+/// Shared A3 setup: project → cycle → complete → agent → issue(Build) → assign
+/// → session. Leaves the issue Backlog-assigned and a session ready for RunIssue.
+async fn setup_issue_ready_to_run(
+    app: &mut App,
+    project: ProjectId,
+    agent: AgentId,
+    issue: IssueId,
+    session: SessionId,
+) {
+    app.dispatch(Command::CreateProject {
+        id: project,
+        name: "RunIssue 测试项目".into(),
+        kind: "自举".into(),
+        desc: String::new(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::SetCycle {
+        cycle: ProjectCycle::Explore,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CompleteCreation {
+        cadence: Cadence::Weekly,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CreateAgent {
+        id: agent,
+        name: "构建师 · mock".into(),
+        role: "构建".into(),
+        skills: vec![],
+        model: "sonnet".into(),
+        instructions: "构建师:接 Issue 后写真实代码与测试。".into(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CreateIssue {
+        id: issue,
+        stage: StageKind::Build,
+        title: "可执行的活".into(),
+        desc: "RunIssue 应驱动一次真实(Mock)运行。".into(),
+        priority: IssuePriority::Medium,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::AssignIssue {
+        id: issue,
+        assignee: Some(agent),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::StartSession {
+        id: session,
+        stage_kind: Some(StageKind::Build),
+        kind: SessionKind::Optimize,
+        title: "构建 · Issue 执行".into(),
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn run_issue_advances_to_inreview_binds_run_and_never_auto_done() {
+    // A3: a successful RunIssue advances the issue to InReview (NOT Done — Done
+    // is a human TransitionIssue only), binds the run to it (issue_id), and
+    // fires no settle accounting (settled_at stays None).
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let agent = AgentId::new();
+    let issue = IssueId::new();
+    let session = SessionId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    setup_issue_ready_to_run(&mut app, project, agent, issue, session).await;
+
+    app.dispatch(Command::RunIssue { session, id: issue })
+        .await
+        .unwrap();
+
+    let i = app
+        .snapshot()
+        .issues
+        .iter()
+        .find(|i| i.id == issue)
+        .unwrap();
+    assert_eq!(i.status, IssueStatus::InReview, "successful run → InReview");
+    assert!(
+        i.settled_at.is_none(),
+        "RunIssue never auto-Done — Done + settle accounting is human-only"
+    );
+
+    // The run is bound to this issue — its detail can answer "which runs?".
+    let runs = store.list_runs_for_issue(issue).await.unwrap();
+    assert_eq!(runs.len(), 1, "exactly one run bound to the issue");
+    assert_eq!(runs[0].issue_id, Some(issue));
+    assert_eq!(runs[0].status, RunStatus::Ok);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn run_issue_failure_leaves_inprogress_and_records_failed_run() {
+    // A3: a failed run leaves the issue InProgress (never faked to InReview/
+    // Done), propagates the error honestly, and still records the Failed run
+    // bound to the issue — the attempt is real evidence even when it fails.
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let agent = AgentId::new();
+    let issue = IssueId::new();
+    let session = SessionId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(FailingExecutor)),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    setup_issue_ready_to_run(&mut app, project, agent, issue, session).await;
+
+    let res = app.dispatch(Command::RunIssue { session, id: issue }).await;
+    assert!(
+        res.is_err(),
+        "a failed run propagates the error — never fakes success"
+    );
+
+    let i = app
+        .snapshot()
+        .issues
+        .iter()
+        .find(|i| i.id == issue)
+        .unwrap();
+    assert_eq!(
+        i.status,
+        IssueStatus::InProgress,
+        "failure leaves InProgress"
+    );
+    assert!(i.settled_at.is_none());
+
+    let runs = store.list_runs_for_issue(issue).await.unwrap();
+    assert_eq!(
+        runs.len(),
+        1,
+        "the failed run is still recorded + bound — honest evidence"
+    );
+    assert_eq!(runs[0].issue_id, Some(issue));
+    assert_eq!(runs[0].status, RunStatus::Failed);
+
+    let _ = std::fs::remove_file(&path);
 }
 
 #[tokio::test]

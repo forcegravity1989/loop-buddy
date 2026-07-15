@@ -217,6 +217,17 @@ pub enum Command {
         session: SessionId,
         stage_kind: StageKind,
     },
+    /// A3: run an Issue — assemble the issue's title/desc + its stage's role
+    /// playbook + any distilled (compounded) skills from the same project into
+    /// one real run through `run_workflow_inner`. The run records the issue_id,
+    /// so the issue's detail answers "which runs/产物 did this produce?". The
+    /// issue is pushed `InProgress` at start, `InReview` on success, and left
+    /// `InProgress` on failure — **never auto-Done** (Done is a human
+    /// `TransitionIssue` only; one work item, one human-confirmed credit).
+    RunIssue {
+        session: SessionId,
+        id: IssueId,
+    },
     /// Reload the hub library (`workflow_specs`/`skills`/`agents`) from the
     /// store. Called at `Boot`; also dispatchable standalone for a manual
     /// refresh. Deliberately separate from `Boot` — hub data has nothing to
@@ -699,6 +710,7 @@ impl App {
         mut spec: WorkflowSpec,
         trigger: RunTrigger,
         cron_task_id: Option<CronTaskId>,
+        issue_id: Option<IssueId>,
     ) -> Result<(), AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
@@ -742,6 +754,12 @@ impl App {
                 params_json: &params_json,
             })
             .await?;
+        // A3: bind this run to the Issue it executes (RunIssue passes Some;
+        // every other caller passes None). Kept as a separate UPDATE so the
+        // run-creation DTO stays stable — the issue link is a RunIssue concern.
+        if let Some(iid) = issue_id {
+            self.store.set_run_issue(run_log_id, iid).await?;
+        }
 
         // `workspace_path` is per-project runtime data, not something
         // baked into a long-lived Engine at App::new time: unconfigured
@@ -924,6 +942,49 @@ impl App {
         }
         Ok(format!(
             "\n\n## 技能(工作方法,来自技能库)\n{}\n",
+            bodies.join("\n\n")
+        ))
+    }
+
+    /// A3: render up to 3 distilled (compounded) skills for project `p` as a
+    /// prompt block, same-stage preferred then proven-first (`uses` desc as the
+    /// distill-time proxy — `SkillCard` carries no timestamp). Only skills with
+    /// real `content` distilled from a Done issue in THIS project qualify.
+    /// Honest empty string when the project has no compounded skill yet.
+    async fn distilled_skills_block(
+        &self,
+        project: ProjectId,
+        stage: StageKind,
+    ) -> Result<String, AppError> {
+        const MAX: usize = 3;
+        let catalog = self.store.list_skills().await?;
+        // (uses, same_stage, skill) — resolve each distilled skill back to its
+        // origin issue's project+stage to scope the compounding to this project.
+        let mut scored: Vec<(u32, bool, SkillCard)> = Vec::new();
+        for s in catalog {
+            let Some(iid) = s.distilled_from_issue else {
+                continue;
+            };
+            let Some(issue) = self.store.get_issue(iid).await? else {
+                continue;
+            };
+            if issue.project_id != project || s.content.trim().is_empty() {
+                continue; // wrong project, or a content-less catalog reference
+            }
+            scored.push((s.uses, issue.stage == stage, s));
+        }
+        // Same-stage first, then proven-first; stable within ties.
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+        let picked: Vec<&SkillCard> = scored.iter().take(MAX).map(|(_, _, s)| s).collect();
+        if picked.is_empty() {
+            return Ok(String::new());
+        }
+        let bodies: Vec<String> = picked
+            .iter()
+            .map(|s| format!("- {}：\n{}", s.name, s.content.trim()))
+            .collect();
+        Ok(format!(
+            "\n\n## 复利技能(本项目蒸馏,同阶段优先)\n{}\n",
             bodies.join("\n\n")
         ))
     }
@@ -1123,7 +1184,7 @@ impl App {
             self.refresh_workflow_specs().await?;
 
             let result = self
-                .run_workflow_inner(pid, session, spec, RunTrigger::Scheduled, Some(c.id))
+                .run_workflow_inner(pid, session, spec, RunTrigger::Scheduled, Some(c.id), None)
                 .await;
             let ok = result.is_ok();
             let outcome = if ok {
@@ -1614,7 +1675,7 @@ impl App {
 
             Command::RunWorkflow { session, spec } => {
                 let p = self.active()?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
                     .await?;
             }
 
@@ -1656,7 +1717,7 @@ impl App {
                     workspace_hint,
                 };
                 let spec = stage_workflow_with_playbook(stage_kind, &ctx);
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
                     .await?;
             }
 
@@ -1752,8 +1813,90 @@ impl App {
                     .ok_or(AppError::NotFound)?;
                 self.store.record_workflow_use(workflow_id).await?;
                 self.refresh_workflow_specs().await?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
                     .await?;
+            }
+
+            Command::RunIssue { session, id } => {
+                let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                let p = issue.project_id;
+                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+
+                // Same stage-playbook scaffolding as RunStagePlaybook (fills the
+                // role preamble + real project context), then the issue is
+                // stamped on top so the agent runs its stage methodology against
+                // THIS concrete work item.
+                let handoff_note = self
+                    .store
+                    .list_handoffs(p)
+                    .await?
+                    .first()
+                    .map(|h| h.note.clone())
+                    .unwrap_or_default();
+                let workspace_hint = if proj.workspace_path.trim().is_empty() {
+                    "（未配置真实工作区 —— 本次运行在 MockExecutor 上,产出仅为流程演示）"
+                        .to_string()
+                } else {
+                    format!(
+                        "工作区 {}（git 仓库）。产出落于此;先查看现状再动手。",
+                        proj.workspace_path.trim()
+                    )
+                };
+                let ctx = bw_core::playbook::PlaybookCtx {
+                    project_name: proj.name.clone(),
+                    project_kind: proj.kind.clone(),
+                    project_desc: proj.desc.clone(),
+                    benchmark: proj.benchmark.clone(),
+                    opportunity: proj.opportunity.clone(),
+                    north_star: proj.north_star.clone(),
+                    ns_def: proj.ns_def.clone(),
+                    handoff_note,
+                    workspace_hint,
+                };
+                let mut spec = stage_workflow_with_playbook(issue.stage, &ctx);
+                let issue_brief = format!(
+                    "\n\n## 本件活(Issue #{})\n标题:{}\n描述:{}\n请用本阶段方法论完成它,产出落为工作区真实文件。\n",
+                    issue.number, issue.title, issue.desc
+                );
+                // Distilled (compounded) skills from this project, same-stage
+                // preferred, capped at 3. Appended to the prompt directly — a
+                // playbook spec has non-empty phase_prompts, so the generic
+                // skills injection in run_workflow_inner is skipped by design.
+                let distilled = self.distilled_skills_block(p, issue.stage).await?;
+                spec.name = format!("#{} {}", issue.number, issue.title);
+                spec.prompt = format!("{}{}{}", spec.prompt, issue_brief, distilled);
+
+                // Start: commit to the work (Backlog/Todo → InProgress).
+                self.store
+                    .transition_issue(id, IssueStatus::InProgress)
+                    .await?;
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+
+                // Run through the same path as any run, bound to this issue.
+                let run = self
+                    .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id))
+                    .await;
+                match run {
+                    Ok(()) => {
+                        self.store
+                            .transition_issue(id, IssueStatus::InReview)
+                            .await?;
+                        self.refresh_issues().await?;
+                        self.emit(Event::IssuesChanged);
+                    }
+                    Err(e) => {
+                        // Honest failure: the issue stays InProgress (not faked
+                        // to InReview/Done). Done remains a human TransitionIssue.
+                        self.emit(Event::WorkflowFailed(format!(
+                            "Issue #{} 运行失败:{}",
+                            issue.number, e
+                        )));
+                        self.refresh_issues().await?;
+                        self.emit(Event::IssuesChanged);
+                        return Err(e);
+                    }
+                }
             }
 
             Command::UpdateWorkflowSpec {

@@ -1115,6 +1115,15 @@ impl Store for SqliteStore {
         Ok(id)
     }
 
+    async fn set_run_issue(&self, run_id: WorkflowRunId, issue_id: IssueId) -> Result<()> {
+        sqlx::query("UPDATE workflow_run SET issue_id=? WHERE id=?")
+            .bind(issue_id.uuid().to_string())
+            .bind(run_id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn settle_workflow_run(
         &self,
         id: WorkflowRunId,

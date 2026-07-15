@@ -513,6 +513,11 @@ pub trait Store: Send + Sync {
     /// is settled separately so a crash mid-run still leaves an honest
     /// "started, never settled" row rather than a fabricated success.
     async fn record_workflow_run_start(&self, run: NewWorkflowRun<'_>) -> Result<WorkflowRunId>;
+    /// A3: bind a run to the Issue it executes (RunIssue). Separate from run
+    /// creation so `NewWorkflowRun` stays stable; NULL until a RunIssue fire
+    /// sets it. Feeds `list_runs_for_issue` ("which runs did this issue
+    /// produce?").
+    async fn set_run_issue(&self, run_id: WorkflowRunId, issue_id: IssueId) -> Result<()>;
     /// Settle a run's terminal state exactly once: `status`, real
     /// `finished_at`/`duration_ms`, `phases_completed`, and `error`. No-op-safe
     /// if the row already settled (idempotent re-runs of the dogfood).
