@@ -26,12 +26,12 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
     activity_row, agent_card, attention_from_rows, cadence_label, connector_card, cron_row,
-    hub_overview, knowledge_row, metric_vm, notify_feed, observation_feed, project_card,
-    session_status_label, settings_vm, skill_card, stage_detail, stage_nav, version_log_vm,
-    week_plan_rows, workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm, ConnectorCardVm,
-    CronRowVm, FeedItemVm, FeedSource, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm,
-    SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm,
-    WorkflowHubRowVm,
+    hub_overview, issue_card, knowledge_row, metric_vm, notify_feed, observation_feed,
+    project_card, session_status_label, settings_vm, skill_card, stage_detail, stage_nav,
+    version_log_vm, week_plan_rows, workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm,
+    ConnectorCardVm, CronRowVm, FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm,
+    NotifyItemVm, ProjectCardVm, SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm,
+    StageNavItemVm, WeekPlanRowVm, WorkflowHubRowVm,
 };
 use ui::{overall_progress, Attention};
 
@@ -150,6 +150,9 @@ pub struct OpVm {
     pub stats: ui::vm::StatCardsVm,
     pub overall: u8,
     pub sessions: Vec<SessionCardVm>,
+    /// The project's Issues (R1) — assignable work units scoped to a stage,
+    /// the multica-style board the operating view now surfaces.
+    pub issues: Vec<IssueVm>,
     pub chat: Option<ChatVm>,
     /// Threaded down for the "从 Hub 导入" overview strip in the Workflow
     /// panel — same data as the top-level `Vm.hub`, just also reachable from
@@ -159,6 +162,10 @@ pub struct OpVm {
     /// `NotLoaded` until `Command::LoadVersionLog` is dispatched at least
     /// once for this specific project.
     pub version_log: ui::vm::VersionLogVm,
+    /// Registered artifacts (Artifact panel) — `None` until
+    /// `Command::LoadArtifacts` ran for this project; `Some(vec![])` is a
+    /// really-empty registry, a different honest state.
+    pub artifacts: Option<Vec<ui::vm::ArtifactRowVm>>,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -194,6 +201,17 @@ pub enum UiNote {
     CronAutoFired {
         name: String,
         ok: bool,
+    },
+    /// New artifact versions were really registered (post-run auto-scan or a
+    /// manual collect) — `fresh` is the genuinely-new count.
+    ArtifactsRegistered {
+        fresh: u32,
+    },
+    /// A connector's real probe finished — `detail` is its honest summary.
+    ConnectorSynced {
+        name: String,
+        ok: bool,
+        detail: String,
     },
 }
 
@@ -243,7 +261,11 @@ impl RunVm {
                 self.running = false;
                 self.failed = Some(e.clone());
             }
-            UiNote::Handoff { .. } | UiNote::Error(_) | UiNote::CronAutoFired { .. } => {}
+            UiNote::Handoff { .. }
+            | UiNote::Error(_)
+            | UiNote::CronAutoFired { .. }
+            | UiNote::ArtifactsRegistered { .. }
+            | UiNote::ConnectorSynced { .. } => {}
         }
     }
 }
@@ -292,6 +314,20 @@ fn db_path() -> String {
             format!("{dir}/workbench.db")
         }
         None => "workbench.db".into(),
+    }
+}
+
+/// Where auto-provisioned project repos live: `BW_WORKSPACES` override, else
+/// a `workspaces/` directory next to the database — same env-override-else-
+/// derived pattern as [`db_path`].
+fn workspaces_root() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("BW_WORKSPACES") {
+        return std::path::PathBuf::from(p);
+    }
+    let db = std::path::PathBuf::from(db_path());
+    match db.parent() {
+        Some(dir) => dir.join("workspaces"),
+        None => std::path::PathBuf::from("workspaces"),
     }
 }
 
@@ -350,7 +386,10 @@ pub fn spawn() -> Kernel {
                         450,
                     )))),
                     claude_config_from_env(),
-                );
+                )
+                // All-in-one-codebase default: projects born through the
+                // creation flow get their own real git repo next to the DB.
+                .with_workspaces_root(workspaces_root());
 
                 // Live event → transient note forwarding. Runs concurrently with
                 // dispatch (progress events are emitted mid-run).
@@ -386,6 +425,12 @@ pub fn spawn() -> Kernel {
                             Event::CronAutoFired { name, ok, .. } => {
                                 UiNote::CronAutoFired { name, ok }
                             }
+                            Event::ArtifactsRegistered { fresh } if fresh > 0 => {
+                                UiNote::ArtifactsRegistered { fresh }
+                            }
+                            Event::ConnectorSynced { name, ok, detail } => {
+                                UiNote::ConnectorSynced { name, ok, detail }
+                            }
                             _ => continue,
                         };
                         let _ = fwd.send(note);
@@ -396,6 +441,39 @@ pub fn spawn() -> Kernel {
                     let _ = note_tx.send(UiNote::Error(e.to_string()));
                 }
                 let _ = vm_tx.send(build_vm(&app, &store).await);
+
+                // Hands-free deep-link (verify/demo): open a named project and
+                // optionally a panel from env — skips the wall→open→tab clicks.
+                // BW_OPEN=<project name>;
+                // BW_PANEL=progress|workflow|routine|artifact|version|issues.
+                if let Ok(name) = std::env::var("BW_OPEN") {
+                    if let Some(p) = app.snapshot().projects.iter().find(|p| p.name == name) {
+                        let pid = p.id;
+                        let _ = app.dispatch(Command::OpenProject(pid)).await;
+                        if let Ok(pl) = std::env::var("BW_PANEL") {
+                            let panel = match pl.as_str() {
+                                "workflow" => Panel::Workflow,
+                                "routine" => Panel::Routine,
+                                "artifact" => Panel::Artifact,
+                                "version" => Panel::Version,
+                                "issues" => Panel::Issues,
+                                _ => Panel::Progress,
+                            };
+                            let _ = app.dispatch(Command::SetPanel(panel)).await;
+                        }
+                        let s = app.snapshot();
+                        eprintln!(
+                            "[BW_OPEN] {name:?} -> view={:?} panel={:?} projects={} issues={}",
+                            s.view,
+                            s.panel,
+                            s.projects.len(),
+                            s.issues.len()
+                        );
+                        let _ = vm_tx.send(build_vm(&app, &store).await);
+                    } else {
+                        eprintln!("[BW_OPEN] project {name:?} NOT FOUND");
+                    }
+                }
 
                 // The real scheduler clock: `App` is owned single-threaded by
                 // this loop (no `Arc<Mutex<_>>`), so an auto-fire tick has to
@@ -761,6 +839,13 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         })
     }));
 
+    // Artifact registry snapshot — same explicit-load, project-tagged rule
+    // as `version_log`: `None` until `LoadArtifacts` ran for THIS project.
+    let artifacts = state
+        .artifacts
+        .as_ref()
+        .and_then(|(apid, rows)| (*apid == pid).then(|| ui::vm::artifact_rows(rows, now)));
+
     let overall = overall_progress(&stages.iter().map(|s| s.progress).collect::<Vec<_>>());
     let stats = ui::vm::stat_cards(
         stages.len(),
@@ -799,9 +884,15 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         stats,
         overall,
         sessions: session_cards,
+        issues: state
+            .issues
+            .iter()
+            .map(|i| issue_card(i, &state.agents))
+            .collect(),
         chat,
         hub,
         version_log,
+        artifacts,
     });
     vm
 }

@@ -1,0 +1,53 @@
+{
+  "title": "WorkflowHub · 25-Iteration 自举旅程",
+  "north_star": "WorkflowHub 既能创建 static workflow,也能通过 schedule 不断执行 workflow、度量效果、优化 workflow 本身,贴近用户习惯与场景。",
+  "methodology": "每轮 = 一次完整五角色环(原型→构建→优化→运营推广→运维),Ops 回流 Prototype 闭环。",
+  "arcs": [
+    { "id": "arc1", "name": "数据基座", "range": [1, 5], "color": "#C5654A", "summary": "为优化引擎种下数据粮食:运行结果/分析/参数/调度有效性/版本快照。" },
+    { "id": "arc2", "name": "优化智能", "range": [6, 12], "color": "#CC8B3C", "summary": "让数据长出判断:频率/失败模式/参数频率/建议/节奏/健康/习惯画像。" },
+    { "id": "arc3", "name": "自改进闭环", "range": [13, 20], "color": "#6E8C5A", "summary": "度量→建议→应用(度量门控):评审/A-B/场景/复用/推荐/自驱/默认/成效。" },
+    { "id": "arc4", "name": "演示与 PM 模板", "range": [21, 25], "color": "#4F7E86", "summary": "仿真器+跑通闭环+PM模板+旅程可视化+最终 HTML 报告。" }
+  ],
+  "iterations": [
+    { "n": 1,  "arc": "arc1", "title": "运行结果追踪",     "stage": "数据", "artifact": "workflow_run 表 + RunStatus/RunTrigger", "tests": 4 },
+    { "n": 2,  "arc": "arc1", "title": "工作流运行分析",   "stage": "数据", "artifact": "WorkflowRunAnalytics + 中位耗时", "tests": 1 },
+    { "n": 3,  "arc": "arc1", "title": "参数捕获",         "stage": "数据", "artifact": "run_params_snapshot + NewWorkflowRun", "tests": 1 },
+    { "n": 4,  "arc": "arc1", "title": "调度有效性度量",   "stage": "数据", "artifact": "CronEffectiveness + cron_task_id", "tests": 1 },
+    { "n": 5,  "arc": "arc1", "title": "版本快照",         "stage": "数据", "artifact": "workflow_version 表 + note", "tests": 1 },
+    { "n": 6,  "arc": "arc2", "title": "使用频率分析",     "stage": "智能", "artifact": "UsageRank + hub_usage_ranking", "tests": 1 },
+    { "n": 7,  "arc": "arc2", "title": "失败模式检测",     "stage": "智能", "artifact": "analysis 模块 + failure_modes", "tests": 2 },
+    { "n": 8,  "arc": "arc2", "title": "参数频率分析",     "stage": "智能", "artifact": "RunShapeProfile + run_shape_profile", "tests": 2 },
+    { "n": 9,  "arc": "arc2", "title": "优化建议生成",     "stage": "智能", "artifact": "OptimizationProposal + propose_optimizations", "tests": 3 },
+    { "n": 10, "arc": "arc2", "title": "节奏自调建议",     "stage": "智能", "artifact": "CadenceSuggestion + suggest_cadence", "tests": 3 },
+    { "n": 11, "arc": "arc2", "title": "工作流健康信号",   "stage": "智能", "artifact": "workflow_health (复用 Signal)", "tests": 3 },
+    { "n": 12, "arc": "arc2", "title": "习惯画像",         "stage": "智能", "artifact": "HabitProfile + usage_tier", "tests": 2 },
+    { "n": 13, "arc": "arc3", "title": "建议评审/应用管线", "stage": "闭环", "artifact": "ApplyDecision + ApplyPolicy + review_proposal", "tests": 2 },
+    { "n": 14, "arc": "arc3", "title": "版本 A/B 对比",    "stage": "闭环", "artifact": "VersionDelta + ab_compare", "tests": 3 },
+    { "n": 15, "arc": "arc3", "title": "场景聚类",         "stage": "闭环", "artifact": "Scenario + cluster_scenarios", "tests": 1 },
+    { "n": 16, "arc": "arc3", "title": "跨阶段复用智能",   "stage": "闭环", "artifact": "StageReuse + cross_stage_reuse", "tests": 1 },
+    { "n": 17, "arc": "arc3", "title": "推荐引擎",         "stage": "闭环", "artifact": "Recommendation + recommend_for_stage", "tests": 2 },
+    { "n": 18, "arc": "arc3", "title": "闭环定时优化运行", "stage": "闭环", "artifact": "App::run_optimization_cycle + OptimizationReport", "tests": 1 },
+    { "n": 19, "arc": "arc3", "title": "习惯驱动默认参数", "stage": "闭环", "artifact": "SuggestedDefaults + infer_defaults", "tests": 2 },
+    { "n": 20, "arc": "arc3", "title": "优化成效报告",     "stage": "闭环", "artifact": "EffectivenessSummary + summarize_effectiveness", "tests": 1 },
+    { "n": 21, "arc": "arc4", "title": "真实场景仿真器",   "stage": "演示", "artifact": "examples/simulate_hub.rs", "tests": 0 },
+    { "n": 22, "arc": "arc4", "title": "跑通自优化闭环",   "stage": "演示", "artifact": "examples/self_optimize_demo.rs (A/B Improved +57pp)", "tests": 0 },
+    { "n": 23, "arc": "arc4", "title": "PM 模板抽取",     "stage": "演示", "artifact": "iterations/PM-TEMPLATE.md", "tests": 0 },
+    { "n": 24, "arc": "arc4", "title": "25 轮旅程可视化", "stage": "演示", "artifact": "iterations/JOURNEY.json (本文件)", "tests": 0 },
+    { "n": 25, "arc": "arc4", "title": "最终 HTML 报告",  "stage": "演示", "artifact": "WorkflowHub-25-Iterations-Report.html", "tests": 0 }
+  ],
+  "cumulative_tests": [
+    { "after": 0, "total": 87 },
+    { "after": 5, "total": 94 },
+    { "after": 12, "total": 94 },
+    { "after": 20, "total": 121 },
+    { "after": 25, "total": 121 }
+  ],
+  "headline_metrics": {
+    "iterations": 25,
+    "arcs": 4,
+    "analysis_pure_functions": 14,
+    "total_tests": "87 → 121 (+34)",
+    "self_driving_loop": "App::run_optimization_cycle (measure→propose→gate→report)",
+    "demo_improvement": "失败工作流 29%→57%,A/B = Improved,+57pp"
+  }
+}

@@ -55,9 +55,18 @@ pub fn ConnectorHub(hub: HubVm) -> Element {
 
 #[component]
 fn ConnectorCard(c: ui::vm::ConnectorCardVm) -> Element {
+    let k = use_context::<Kernel>();
     let card = theme::card();
     let ink3 = theme::INK_3;
-    let chip = theme::chip("#EFE9DA", theme::INK_2);
+    // Real status → real chip color: probe-verified green, error red, the
+    // rest neutral (a reference entry is honestly just "recorded").
+    let (chip_bg, chip_fg) = match c.status {
+        bw_core::model::ConnectorStatus::Connected => ("#E5EBDD", "#4D6B3C"),
+        bw_core::model::ConnectorStatus::Error => ("#F3DFD8", theme::ALERT_DEEP),
+        _ => ("#EFE9DA", theme::INK_2),
+    };
+    let chip = theme::chip(chip_bg, chip_fg);
+    let id = c.id;
     rsx! {
         div {
             style: "{card} padding:16px 18px;",
@@ -74,9 +83,18 @@ fn ConnectorCard(c: ui::vm::ConnectorCardVm) -> Element {
                 span { style: "{chip}", "{c.status_label}" }
             }
             div {
-                style: "display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:{ink3};",
-                span { "{c.scope}" }
-                span { "{c.last_sync}" }
+                style: "display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:{ink3};gap:8px;",
+                span { style: "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", "{c.scope}" }
+                span { style: "flex:none;", "{c.last_sync}" }
+                if c.syncable {
+                    button {
+                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:6px;padding:3px 10px;font-size:11px;flex:none;",
+                        onclick: move |_| k.send(Command::SyncConnector { id }),
+                        "立即同步"
+                    }
+                } else {
+                    span { style: "font-size:10.5px;color:{theme::INK_4};flex:none;", "登记项 · 无真实探针" }
+                }
             }
         }
     }
@@ -103,6 +121,11 @@ fn CreateConnectorForm(on_done: EventHandler<()>) -> Element {
             name: n,
             kind: kind().trim().to_string(),
             scope: scope().trim().to_string(),
+            // Hand-recorded entries are unbound reference rows; the two live
+            // kinds (`git-repo`/`claude-cli`) are minted by the kernel with
+            // their real binding at provisioning time, not typed in here.
+            project_id: None,
+            config: String::new(),
         });
         name.set(String::new());
         kind.set(String::new());

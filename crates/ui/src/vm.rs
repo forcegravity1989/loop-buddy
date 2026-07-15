@@ -13,12 +13,12 @@ use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAtten
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
     AgentCard, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, FeedLevel, HubCard,
-    HubKind, KnowledgeSource, Maturity, ProjectCycle, ProjectPhase, SessionStatus, Signal,
-    SkillCard, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    HubKind, Issue, IssueStatus, KnowledgeSource, Maturity, ProjectCycle, ProjectPhase,
+    SessionStatus, Signal, SkillCard, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{
-    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, MetricId, ProjectId, SessionId, SkillId,
-    WorkflowId,
+    AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
+    SkillId, WorkflowId,
 };
 use time::OffsetDateTime;
 
@@ -629,6 +629,9 @@ pub struct SkillCardVm {
     pub category: String,
     pub source_label: &'static str,
     pub uses: u32,
+    /// Executable body. Empty = catalog reference (the detail panel says so
+    /// honestly instead of showing a blank that reads as broken).
+    pub content: String,
 }
 
 pub fn skill_card(s: &SkillCard) -> SkillCardVm {
@@ -640,6 +643,7 @@ pub fn skill_card(s: &SkillCard) -> SkillCardVm {
         category: s.category.clone(),
         source_label: s.source.label(),
         uses: s.uses,
+        content: s.content.clone(),
     }
 }
 
@@ -653,7 +657,10 @@ pub struct AgentCardVm {
     pub skills: Vec<String>,
     pub model: String,
     pub runs: u32,
+    /// `""` while `runs == 0` — render as "—" (no evidence), never "0%".
     pub win_rate: String,
+    /// Standing instructions. Empty = catalog reference.
+    pub instructions: String,
 }
 
 pub fn agent_card(a: &AgentCard) -> AgentCardVm {
@@ -672,6 +679,59 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
         model: a.model.clone(),
         runs: a.runs,
         win_rate: a.win_rate.clone(),
+        instructions: a.instructions.clone(),
+    }
+}
+
+// ───────────────────────── issue board (R1) ─────────────────────────
+
+/// One assignable work unit on the Issue board (R1). Scoped to a stage,
+/// owned by an agent teammate, carrying a kanban status. Every field traces
+/// back to a real `issue` row — nothing invented. `status_color` is the
+/// board's per-status accent (precomputed so the view stays simple).
+#[derive(Clone, PartialEq)]
+pub struct IssueVm {
+    pub id: IssueId,
+    pub number: u32,
+    pub stage: StageKind,
+    pub title: String,
+    pub desc: String,
+    pub status: IssueStatus,
+    pub status_label: &'static str,
+    pub status_color: &'static str,
+    pub priority_label: &'static str,
+    pub assignee_name: Option<String>,
+}
+
+/// Board accent for a status — multica's warning/success/info/destructive
+/// theming, in this app's own signal-adjacent palette.
+pub fn issue_status_color(s: IssueStatus) -> &'static str {
+    match s {
+        IssueStatus::Backlog | IssueStatus::Todo => "#9A9384",
+        IssueStatus::InProgress => "#B5862F",
+        IssueStatus::InReview => "#6E8C5A",
+        IssueStatus::Done => "#5F7355",
+        IssueStatus::Blocked => "#B0503A",
+        IssueStatus::Cancelled => "#9A9384",
+    }
+}
+
+/// `Issue` → `IssueVm`, resolving the assignee agent's name against the hub
+/// roster. An unassigned issue is honestly `None`, not a fabricated name.
+pub fn issue_card(i: &Issue, agents: &[AgentCard]) -> IssueVm {
+    IssueVm {
+        id: i.id,
+        number: i.number,
+        stage: i.stage,
+        title: i.title.clone(),
+        desc: i.desc.clone(),
+        status: i.status,
+        status_label: i.status.label(),
+        status_color: issue_status_color(i.status),
+        priority_label: i.priority.label(),
+        assignee_name: i
+            .assignee
+            .and_then(|aid| agents.iter().find(|a| a.id == aid).map(|a| a.name.clone())),
     }
 }
 
@@ -775,9 +835,14 @@ pub struct ConnectorCardVm {
     pub name: String,
     pub initial: String,
     pub kind: String,
+    pub status: ConnectorStatus,
     pub status_label: &'static str,
     pub last_sync: String,
     pub scope: String,
+    /// `true` only for kinds with a *real* probe (`git-repo`/`claude-cli`) —
+    /// the sync button renders only where syncing really does something;
+    /// reference entries honestly show none.
+    pub syncable: bool,
 }
 
 pub fn connector_card(c: &Connector) -> ConnectorCardVm {
@@ -791,9 +856,14 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
             .map(|ch| ch.to_string())
             .unwrap_or_default(),
         kind: c.kind.clone(),
+        status: c.status,
         status_label: c.status.label(),
         last_sync: c.last_sync.clone(),
         scope: c.scope.clone(),
+        syncable: matches!(
+            c.kind.as_str(),
+            bw_core::model::CONNECTOR_KIND_GIT_REPO | bw_core::model::CONNECTOR_KIND_CLAUDE_CLI
+        ),
     }
 }
 
@@ -1053,13 +1123,129 @@ pub fn version_log_vm(fetched: Option<Result<Vec<CommitSource>, String>>) -> Ver
     }
 }
 
+// ───────────────────────── artifact panel ─────────────────────────
+
+/// One file in the Artifact panel — the *latest* registered version of a
+/// path, plus how many versions (distinct commits) the registry holds for it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct ArtifactRowVm {
+    pub path: String,
+    pub kind_label: &'static str,
+    pub bytes_label: String,
+    /// Short commit of the latest version; "(未提交)" for a commitless repo.
+    pub commit_label: String,
+    pub time_label: String,
+    /// Registered versions of this path (rows sharing the path).
+    pub versions: u32,
+    /// Whether the latest version is attributed to a workflow run.
+    pub from_run: bool,
+    pub stage_label: Option<&'static str>,
+}
+
+/// Human byte size — real value, coarse unit (the panel is a registry view,
+/// not a disk auditor).
+pub fn bytes_label(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Fold the raw registry rows (newest first, as `list_artifacts` returns
+/// them) into one row per path: latest version wins the display, the rest
+/// count as history. Pure fold — no invention, no reordering surprises.
+pub fn artifact_rows(rows: &[bw_core::model::Artifact], now: OffsetDateTime) -> Vec<ArtifactRowVm> {
+    let mut out: Vec<ArtifactRowVm> = Vec::new();
+    for a in rows {
+        if let Some(existing) = out.iter_mut().find(|r| r.path == a.path) {
+            existing.versions += 1;
+            continue;
+        }
+        out.push(ArtifactRowVm {
+            path: a.path.clone(),
+            kind_label: a.kind.label(),
+            bytes_label: bytes_label(a.bytes),
+            commit_label: if a.git_commit.is_empty() {
+                "(未提交)".to_string()
+            } else {
+                a.git_commit.clone()
+            },
+            time_label: OffsetDateTime::from_unix_timestamp(a.registered_at)
+                .map(|ts| time_label(ts, now))
+                .unwrap_or_default(),
+            versions: 1,
+            from_run: a.workflow_run_id.is_some(),
+            stage_label: a.stage_kind.map(|k| k.label()),
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bw_core::model::CronMode;
     use time::Duration;
 
     fn t0() -> OffsetDateTime {
         OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap()
+    }
+
+    #[test]
+    fn artifact_rows_fold_versions_per_path_latest_first() {
+        use bw_core::model::{Artifact, ArtifactKind};
+        use bw_core::{ArtifactId, WorkflowRunId};
+        let mk = |path: &str, commit: &str, ts: i64, run: bool| Artifact {
+            id: ArtifactId::nil(),
+            project_id: ProjectId::nil(),
+            workflow_run_id: run.then(WorkflowRunId::nil),
+            issue_id: None,
+            stage_kind: Some(StageKind::Prototype),
+            path: path.into(),
+            kind: ArtifactKind::Doc,
+            bytes: 2048,
+            git_commit: commit.into(),
+            registered_at: ts,
+        };
+        // list_artifacts order: newest first.
+        let rows = artifact_rows(
+            &[
+                mk("docs/evidence.md", "bbb", 1_700_000_000, true),
+                mk("docs/evidence.md", "aaa", 1_699_990_000, false),
+                mk("README.md", "aaa", 1_699_990_000, false),
+            ],
+            t0(),
+        );
+        assert_eq!(rows.len(), 2, "one display row per path");
+        let ev = rows.iter().find(|r| r.path == "docs/evidence.md").unwrap();
+        assert_eq!(ev.versions, 2, "version count = rows sharing the path");
+        assert_eq!(ev.commit_label, "bbb", "latest version wins the display");
+        assert!(ev.from_run);
+        assert_eq!(ev.bytes_label, "2.0 KB");
+        assert_eq!(ev.stage_label, Some("原型"));
+    }
+
+    #[test]
+    fn connector_card_marks_only_probeable_kinds_syncable() {
+        let mk = |kind: &str| Connector {
+            id: ConnectorId::nil(),
+            name: "c".into(),
+            kind: kind.into(),
+            status: ConnectorStatus::Disconnected,
+            last_sync: String::new(),
+            scope: String::new(),
+            project_id: None,
+            config: String::new(),
+        };
+        assert!(connector_card(&mk("git-repo")).syncable);
+        assert!(connector_card(&mk("claude-cli")).syncable);
+        assert!(
+            !connector_card(&mk("知识库")).syncable,
+            "reference kinds honestly have no sync button"
+        );
     }
 
     #[test]
@@ -1280,6 +1466,7 @@ mod tests {
             goal: "产出验证过的问题陈述".into(),
             stage_ref,
             phases: vec!["访谈提纲".into(), "深挖场景".into()],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: bw_core::model::LoopConfig {
@@ -1301,6 +1488,7 @@ mod tests {
             goal: "g".into(),
             stage_ref: Some(1),
             phases: vec![],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: bw_core::model::LoopConfig {
@@ -1380,6 +1568,9 @@ mod tests {
             category: "检索".into(),
             source: bw_core::model::LibSource::SelfBuilt,
             uses: 128,
+            content: String::new(),
+            distilled_from_issue: None,
+            origin_agent: None,
         });
         assert_eq!(card.maturity_label, "打磨中");
         assert_eq!(card.source_label, "自建");
@@ -1396,6 +1587,7 @@ mod tests {
             skills: vec![bw_core::model::AgentSkillTag {
                 name: "web-scan".into(),
             }],
+            instructions: String::new(),
             model: "claude-opus".into(),
             runs: 213,
             win_rate: "94%".into(),
@@ -1457,6 +1649,9 @@ mod tests {
                 last_run: "1h 前".into(),
                 next_run: "-".into(),
                 last_run_at: None,
+                mode: CronMode::RunWorkflow,
+                issue_stage: None,
+                issue_assignee: None,
             },
             CronTask {
                 id: CronTaskId::nil(),
@@ -1468,6 +1663,9 @@ mod tests {
                 last_run: "10min 前".into(),
                 next_run: "今晚".into(),
                 last_run_at: None,
+                mode: CronMode::RunWorkflow,
+                issue_stage: None,
+                issue_assignee: None,
             },
         ];
         let connectors = vec![Connector {
@@ -1477,6 +1675,8 @@ mod tests {
             status: ConnectorStatus::Error,
             last_sync: "2h 前".into(),
             scope: "全部项目".into(),
+            project_id: None,
+            config: String::new(),
         }];
         let activity = vec![
             activity_row(

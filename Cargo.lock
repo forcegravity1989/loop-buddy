@@ -261,9 +261,11 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 name = "bw-app"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "bw-core",
  "bw-engine",
  "bw-store",
+ "serde_json",
  "thiserror 1.0.69",
  "time",
  "tokio",

@@ -468,6 +468,8 @@ async fn main() {
         name: "验证:飞书云文档".into(),
         kind: "知识库".into(),
         scope: "全部项目".into(),
+        project_id: None,
+        config: String::new(),
     })
     .await
     .unwrap();
@@ -490,9 +492,9 @@ async fn main() {
         passed: crons.iter().any(|c| c.id == cron_id)
             && conns.iter().any(|c| c.id == conn_id)
             && knows.iter().any(|k| k.id == know_id),
-        evidence: format!(
+        evidence:
             "新建的定时任务/连接器/知识源均可在各自 list_* 里读回,字段(如 project_id 关联)保持正确"
-        ),
+                .to_string(),
     });
 
     // ── H13: 项目删除级联清理(CRUD 的 D,不留孤儿数据) ──
@@ -580,8 +582,10 @@ async fn main() {
         prompt: "验证:优化后的 prompt".into(),
         goal: "验证:优化后的验收目标".into(),
         phases: vec!["验证阶段A".into(), "验证阶段B".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
+        note: "verify_goal: 优化演示 · 加了验证阶段B".into(),
     })
     .await
     .unwrap();
@@ -686,6 +690,7 @@ async fn main() {
         goal: "验证 goal".into(),
         stage_ref: None,
         phases: vec!["步骤一".into()],
+        phase_prompts: vec![],
         agents: vec![AgentRef {
             name: "验证 Agent".into(),
             def: "验证角色".into(),
@@ -762,6 +767,7 @@ async fn main() {
         goal: "g".into(),
         stage_ref: None,
         phases: vec!["步骤一".into()],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {

@@ -13,9 +13,12 @@ bw-store = { workspace = true }
 tokio = { workspace = true }
 time = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 bw-store = { workspace = true }
+bw-engine = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 time = { workspace = true, features = ["std"] }
+async-trait = { workspace = true }

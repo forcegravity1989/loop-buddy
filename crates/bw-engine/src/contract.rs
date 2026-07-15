@@ -29,6 +29,7 @@ pub async fn check<E: Executor>(exec: &E) -> Result<(), String> {
         skills: Vec::new(),
         max_iter: 2,
         retries: 1,
+        prior_summary: None,
     };
 
     let out = exec

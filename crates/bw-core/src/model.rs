@@ -12,7 +12,8 @@
 
 use crate::derive::{reduce_worst_of, AmberBand, Derived};
 use crate::ids::{
-    AgentId, ConnectorId, CronTaskId, KnowledgeSourceId, ProjectId, SessionId, SkillId, WorkflowId,
+    AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, ProjectId, SessionId,
+    SkillId, WorkflowId, WorkflowRunId,
 };
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
@@ -393,7 +394,7 @@ impl OpStage {
 
 // ─────────────────────────── routine ───────────────────────────
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Cadence {
     RealTime,
@@ -534,7 +535,7 @@ pub enum WorkflowKind {
     },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopConfig {
     pub retries: u8,
     pub max_iter: u8,
@@ -564,9 +565,204 @@ pub struct WorkflowSpec {
     /// Associated stage (1..=5), if any.
     pub stage_ref: Option<u8>,
     pub phases: Vec<String>,
+    /// Per-phase real instructions, index-aligned with `phases`. Empty (the
+    /// pre-playbook default) or a missing/blank entry ⇒ that phase falls back
+    /// to the shared `prompt` — byte-for-byte the old behavior. Rendered by
+    /// `crate::playbook` for stage workflows; hand-authorable for custom ones.
+    #[serde(default)]
+    pub phase_prompts: Vec<String>,
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     pub loop_config: LoopConfig,
+}
+
+/// Outcome of one workflow execution — the data a later "should this workflow
+/// be optimized?" decision is built on. Persisted append-only (a run is never
+/// mutated once it settles); the only transition is `Running → {Ok|Failed}`
+/// when the engine returns.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatus {
+    /// Engine is still executing (not yet persisted as a settled row in the
+    /// common path — kept so an in-memory view can show a live run).
+    Running,
+    /// Engine returned `Ok` — every phase completed.
+    Ok,
+    /// Engine returned an error; `error` carries the message.
+    Failed,
+}
+
+impl RunStatus {
+    pub fn text(self) -> &'static str {
+        match self {
+            RunStatus::Running => "running",
+            RunStatus::Ok => "ok",
+            RunStatus::Failed => "failed",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "ok" => RunStatus::Ok,
+            "failed" => RunStatus::Failed,
+            _ => RunStatus::Running,
+        }
+    }
+    /// `true` only for a settled-successful run — the basis of a "healthy
+    /// workflow" signal later (iter 11).
+    pub fn is_ok(self) -> bool {
+        matches!(self, RunStatus::Ok)
+    }
+}
+
+/// What triggered a run — distinguishes a user's manual fire from the
+/// background scheduler's unattended auto-fire, so analytics (iter 2) can
+/// attribute outcomes to the right source.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunTrigger {
+    Manual,
+    Scheduled,
+}
+
+impl RunTrigger {
+    pub fn text(self) -> &'static str {
+        match self {
+            RunTrigger::Manual => "manual",
+            RunTrigger::Scheduled => "scheduled",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "scheduled" => RunTrigger::Scheduled,
+            _ => RunTrigger::Manual,
+        }
+    }
+}
+
+/// One execution record of a workflow. Append-only once settled (`status !=
+/// Running`). `duration_ms` is the real wall-clock the engine took — the
+/// primary cost/health input for optimization. `params_json` is left for
+/// iter 3 (parameter capture) to fill; empty string until then.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkflowRun {
+    pub id: WorkflowRunId,
+    pub workflow_id: WorkflowId,
+    pub workflow_name: String,
+    pub project_id: Option<ProjectId>,
+    pub session_id: Option<SessionId>,
+    pub trigger: RunTrigger,
+    pub status: RunStatus,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    /// Real elapsed milliseconds (`finished_at - started_at`). `None` while
+    /// running or if the clock was unavailable.
+    pub duration_ms: Option<i64>,
+    /// Phases that completed before the run settled (count) — a partial run
+    /// that failed at phase 2 of 5 records `2` here, not a silent hole.
+    pub phases_completed: u32,
+    pub error: String,
+    pub params_json: String,
+    /// The cron task that fired this run (iter 4). `None` for manual runs.
+    pub cron_task_id: Option<CronTaskId>,
+    /// A2: the Issue this run executes — set only when the run is fired by
+    /// `RunIssue` (`None` for ordinary workflow / scheduler runs). Lets an
+    /// Issue's detail answer "which runs did this issue produce, and what?".
+    pub issue_id: Option<IssueId>,
+}
+
+/// Per-workflow aggregate over its run history — the read-side shape optimization
+/// intelligence consumes. Every field is derived from settled `workflow_run`
+/// rows; a workflow with no runs returns `success_rate = None` (not 0 —
+/// "unknown" must not masquerade as "always fails", mirroring `Signal::Unknown`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkflowRunAnalytics {
+    pub workflow_id: WorkflowId,
+    pub workflow_name: String,
+    /// Total rows ever recorded (running + ok + failed).
+    pub total_runs: u32,
+    pub ok_runs: u32,
+    pub failed_runs: u32,
+    pub running_runs: u32,
+    /// `ok_runs / settled_runs`. `None` when no run has settled yet — "no
+    /// evidence", not "0%". The single most important optimization input.
+    pub success_rate: Option<f32>,
+    /// Mean `duration_ms` over settled runs. `None` if none settled.
+    pub avg_duration_ms: Option<i64>,
+    /// Median `duration_ms` over settled runs — robust to one slow outlier,
+    /// a better "typical cost" than the mean for optimization decisions.
+    pub median_duration_ms: Option<i64>,
+    /// Unix seconds of the most recent run (any status), if any.
+    pub last_run_at: Option<i64>,
+    pub last_status: Option<RunStatus>,
+}
+
+/// Effectiveness of one cron schedule (iter 4): of the times this task's
+/// target auto-fired, how many succeeded? The answer to "is this schedule
+/// actually doing anything useful, or just burning runs?" — the gating input
+/// for cadence auto-tune (iter 10) and the self-improving loop (iter 18).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CronEffectiveness {
+    pub cron_task_id: CronTaskId,
+    /// Scheduled fires attributed to this task (manual runs of the same
+    /// workflow are excluded — this is purely the schedule's track record).
+    pub fires: u32,
+    pub ok_fires: u32,
+    pub failed_fires: u32,
+    /// `ok_fires / fires`. `None` when the task has never fired — "no
+    /// evidence", mirroring `success_rate`.
+    pub effectiveness: Option<f32>,
+    /// Mean scheduled-run duration — the schedule's typical cost.
+    pub avg_duration_ms: Option<i64>,
+    pub last_fire_at: Option<i64>,
+    pub last_fire_ok: Option<bool>,
+}
+
+/// One frozen version of a Static workflow's content (iter 5) — snapshotted
+/// the instant before `UpdateWorkflowSpec` overwrites it. Together the series
+/// is the spec's evolution: what changed, when, and (via `note`) why.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkflowVersion {
+    pub id: WorkflowRunId,
+    pub workflow_id: WorkflowId,
+    /// The `Static.version` this snapshot was taken at (pre-update).
+    pub version: u32,
+    pub name: String,
+    pub prompt: String,
+    pub goal: String,
+    pub phases: Vec<String>,
+    /// Per-phase instructions frozen with the rest of the content — an
+    /// evolution history that dropped them would misreport what old versions
+    /// actually executed. Empty for pre-playbook snapshots.
+    #[serde(default)]
+    pub phase_prompts: Vec<String>,
+    pub agents: Vec<AgentRef>,
+    pub skills: Vec<SkillRef>,
+    pub loop_retries: u8,
+    pub loop_max_iter: u8,
+    /// Caller's reason for the change that replaced this version (the "优化"
+    /// note). `''` when none was given.
+    pub note: String,
+    pub created_at: i64,
+}
+
+/// One workflow's position in the global usage ranking (iter 6) — the
+/// answer to "which workflows are actually earning their keep?" The hottest
+/// (most-run) sit at the top; the coldest (never or rarely run) at the
+/// bottom. A workflow that's in the hub but has **zero** runs is `cold =
+/// true` — the prime "should this even exist / be optimized or retired?"
+/// candidate.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UsageRank {
+    pub workflow_id: WorkflowId,
+    pub workflow_name: String,
+    pub stage_ref: Option<u8>,
+    pub total_runs: u32,
+    pub ok_runs: u32,
+    pub failed_runs: u32,
+    pub success_rate: Option<f32>,
+    pub last_run_at: Option<i64>,
+    /// `true` when `total_runs == 0` — never run since landing in the hub.
+    pub cold: bool,
 }
 
 /// Shared by `stage_workflow` and `stage_template_workflow` — both are the
@@ -605,6 +801,7 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
         goal: stage_goal(kind),
         stage_ref: Some(kind.index()),
         phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -612,6 +809,46 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
             max_iter: 3,
         },
     }
+}
+
+/// [`stage_workflow`] upgraded by the stage's executable playbook
+/// (`crate::playbook`): same method-loop phases, but each phase carries a
+/// real, project-contextualized instruction a real executor can act on. The
+/// role that hosts the stage rides along as the spec's (real) `AgentRef` —
+/// this is what actually executes, not a display-only crew suggestion.
+#[cfg(feature = "idgen")]
+pub fn stage_workflow_with_playbook(
+    kind: StageKind,
+    ctx: &crate::playbook::PlaybookCtx,
+) -> WorkflowSpec {
+    let mut spec = stage_workflow(kind);
+    spec.name = format!("「{}」剧本工作流 · {}", kind.label(), kind.role_short());
+    spec.prompt = crate::playbook::stage_prompt(kind, ctx);
+    spec.phase_prompts = crate::playbook::rendered_phase_prompts(kind, ctx);
+    spec.agents = vec![AgentRef {
+        name: kind.role_short().to_string(),
+        def: format!("{} · {}", kind.methodology(), kind.seek()),
+        from: "阶段剧本(bw-core::playbook)".into(),
+    }];
+    // The stage's working-method skills ride along as real refs: their
+    // *content* is already injected into every phase prompt by
+    // `rendered_phase_prompts`, and the ref names let the run accounting
+    // credit the Skill Hub rows that carry the same content.
+    spec.skills = crate::playbook::stage_skills(kind)
+        .iter()
+        .map(|s| SkillRef {
+            name: s.name.to_string(),
+            def: s.def.to_string(),
+            from: "阶段剧本(bw-core::playbook)".into(),
+        })
+        .collect();
+    // A playbook phase is a full, self-contained work order — one honest
+    // attempt each, no blind re-run of an identical prompt (real spend).
+    spec.loop_config = LoopConfig {
+        retries: 1,
+        max_iter: 1,
+    };
+    spec
 }
 
 /// The persisted, browsable counterpart to [`stage_workflow`] — a **Static**
@@ -646,6 +883,7 @@ pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
         goal: stage_goal(kind),
         stage_ref: Some(kind.index()),
         phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -677,6 +915,7 @@ pub fn drafting_workflow() -> WorkflowSpec {
             "指标框架".into(),
             "阶段激活".into(),
         ],
+        phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
         loop_config: LoopConfig {
@@ -721,6 +960,22 @@ pub struct SkillCard {
     pub category: String,
     pub source: LibSource,
     pub uses: u32,
+    /// The skill body — real instructions an executor can act on. Empty for
+    /// catalog *references* (OMC/ECC entries whose full text lives in the
+    /// source repo); non-empty means this row is executable content that
+    /// really gets injected into prompts (stage skills, self-authored ones).
+    #[serde(default)]
+    pub content: String,
+    /// The completed Issue this skill was distilled from, if any. `None` for
+    /// catalog/seeded skills — only a `DistillSkillFromIssue` sets it. This is
+    /// BW's "skills compound from real work" link (multica's skills are manual;
+    /// we attribute them to the real issue + agent that produced them).
+    #[serde(default)]
+    pub distilled_from_issue: Option<IssueId>,
+    /// The agent teammate that did the work behind `distilled_from_issue`.
+    /// `None` iff `distilled_from_issue` is `None`.
+    #[serde(default)]
+    pub origin_agent: Option<AgentId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -736,10 +991,18 @@ pub struct AgentCard {
     pub maturity: Maturity,
     pub skills: Vec<AgentSkillTag>,
     pub model: String,
+    /// Real settled runs credited to this agent (`record_agent_run_by_name`).
     pub runs: u32,
-    /// Adoption rate as a pre-formatted display string (e.g. `"94%"`) —
-    /// matches how metric values are stored as display strings elsewhere.
+    /// Success rate over credited runs as a pre-formatted display string
+    /// (e.g. `"94%"`), recomputed from real `runs`/`wins` on every credit —
+    /// `""` while `runs == 0` ("no evidence", never "0%").
     pub win_rate: String,
+    /// The agent's standing instructions (system-prompt tier). Empty for
+    /// catalog references; the five stage-role agents carry their real
+    /// `bw_core::playbook::role_preamble` template here — honestly what the
+    /// role gets told, `{var}` slots filled per project at run time.
+    #[serde(default)]
+    pub instructions: String,
 }
 
 // ─────────────────────────── cron / connector / knowledge hub ───────────────────────────
@@ -751,6 +1014,18 @@ pub enum CronStatus {
     Normal,
     Failed,
     Paused,
+}
+
+/// What a [`CronTask`] does when due (A1). `RunWorkflow` (the default) resolves
+/// `target` as a hub workflow and runs it — the original behavior; `CreateIssue`
+/// is autopilot: it mints a stage-scoped Issue. No-hijack by construction: a
+/// `CreateIssue` task never auto-runs anything, it only creates work.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CronMode {
+    #[default]
+    RunWorkflow,
+    CreateIssue,
 }
 
 impl CronStatus {
@@ -783,6 +1058,18 @@ pub struct CronTask {
     /// `last_run` display string — this is what `cron_due` compares against,
     /// never a parsed-back label.
     pub last_run_at: Option<OffsetDateTime>,
+    /// A1: what this task does when due. `RunWorkflow` (default) runs `target`;
+    /// `CreateIssue` mints a stage-scoped Issue (autopilot, no-hijack).
+    #[serde(default)]
+    pub mode: CronMode,
+    /// A1: the stage a `CreateIssue` task scopes its Issue to (`None` for
+    /// `RunWorkflow` tasks).
+    #[serde(default)]
+    pub issue_stage: Option<StageKind>,
+    /// A1: agent NAME a `CreateIssue` task assigns its Issue to (`None` =
+    /// unassigned). Name-led, matching the by-name accounting convention.
+    #[serde(default)]
+    pub issue_assignee: Option<String>,
 }
 
 /// Is `task` due to auto-fire right now? Pure and independently unit-tested —
@@ -878,16 +1165,31 @@ impl ConnectorStatus {
     }
 }
 
+/// The two connector kinds the workbench can *really* sync today — everything
+/// else stays a free-text reference entry (recorded, listed, honestly marked
+/// unsynced). Matching is by the `Connector.kind` string.
+pub const CONNECTOR_KIND_GIT_REPO: &str = "git-repo";
+pub const CONNECTOR_KIND_CLAUDE_CLI: &str = "claude-cli";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Connector {
     pub id: ConnectorId,
     pub name: String,
-    /// e.g. 可观测性/数据库/代码仓库 — free text, this app has no fixed
-    /// connector-type taxonomy yet (Tier D territory).
+    /// Connector type. [`CONNECTOR_KIND_GIT_REPO`] and
+    /// [`CONNECTOR_KIND_CLAUDE_CLI`] are *live* kinds a `SyncConnector`
+    /// really probes; any other value is a free-text reference entry.
     pub kind: String,
     pub status: ConnectorStatus,
     pub last_sync: String,
     pub scope: String,
+    /// The project this connector feeds, if project-bound (a `git-repo`
+    /// connector always is; a `claude-cli` probe is global).
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
+    /// Kind-specific real configuration — for `git-repo` the workspace path;
+    /// for `claude-cli` the binary override (empty = `claude` on PATH).
+    #[serde(default)]
+    pub config: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -901,6 +1203,247 @@ pub struct KnowledgeSource {
     /// Which agent (by name) consumes this source — free text, matching the
     /// prototype's own by-name (not by-id) reference.
     pub used_by: String,
+}
+
+// ─────────────────────────── artifact ───────────────────────────
+
+/// Coarse classification of a workspace file — derived from its path alone
+/// (see [`classify_artifact_path`]), never asserted by hand.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    /// Markdown/docs — what playbook phases write under `docs/`.
+    Doc,
+    /// Source code.
+    Code,
+    /// Test code (`tests/`, `*_test.*`).
+    Test,
+    /// Shell/automation scripts.
+    Script,
+    /// Manifests & config (`Cargo.toml`, `*.yaml`, …).
+    Config,
+    /// Everything else.
+    Other,
+}
+
+impl ArtifactKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ArtifactKind::Doc => "文档",
+            ArtifactKind::Code => "代码",
+            ArtifactKind::Test => "测试",
+            ArtifactKind::Script => "脚本",
+            ArtifactKind::Config => "配置",
+            ArtifactKind::Other => "其他",
+        }
+    }
+
+    pub fn text(self) -> &'static str {
+        match self {
+            ArtifactKind::Doc => "doc",
+            ArtifactKind::Code => "code",
+            ArtifactKind::Test => "test",
+            ArtifactKind::Script => "script",
+            ArtifactKind::Config => "config",
+            ArtifactKind::Other => "other",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "doc" => ArtifactKind::Doc,
+            "code" => ArtifactKind::Code,
+            "test" => ArtifactKind::Test,
+            "script" => ArtifactKind::Script,
+            "config" => ArtifactKind::Config,
+            _ => ArtifactKind::Other,
+        }
+    }
+}
+
+/// Classify a workspace-relative path. Pure string rules, order matters:
+/// tests before code (a `tests/*.rs` file is a test, not generic code), docs
+/// by extension anywhere (playbooks write `docs/*.md`, but a root `README.md`
+/// is a doc too).
+pub fn classify_artifact_path(path: &str) -> ArtifactKind {
+    let p = path.trim().trim_start_matches("./");
+    let lower = p.to_ascii_lowercase();
+    let file = lower.rsplit('/').next().unwrap_or(&lower).to_string();
+    let ext = file.rsplit_once('.').map(|(_, e)| e.to_string());
+
+    let is_code_ext = matches!(
+        ext.as_deref(),
+        Some("rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "c" | "h" | "cpp" | "java")
+    );
+    if lower.starts_with("tests/") || lower.contains("/tests/") {
+        // Only actual code under tests/ is a test; a tests/fixture.md is a doc.
+        if is_code_ext {
+            return ArtifactKind::Test;
+        }
+    }
+    if is_code_ext
+        && (file.ends_with("_test.rs")
+            || file.ends_with(".test.ts")
+            || file.ends_with(".test.js")
+            || file.ends_with("_test.py"))
+    {
+        return ArtifactKind::Test;
+    }
+    if matches!(ext.as_deref(), Some("md" | "mdx" | "txt")) {
+        return ArtifactKind::Doc;
+    }
+    if matches!(ext.as_deref(), Some("sh" | "bash" | "zsh")) || lower.starts_with("scripts/") {
+        return ArtifactKind::Script;
+    }
+    if matches!(
+        ext.as_deref(),
+        Some("toml" | "yaml" | "yml" | "json" | "ini")
+    ) || file == "makefile"
+        || file == "dockerfile"
+        || file == ".gitignore"
+    {
+        return ArtifactKind::Config;
+    }
+    if is_code_ext {
+        return ArtifactKind::Code;
+    }
+    ArtifactKind::Other
+}
+
+/// One registered file version in a project's workspace — the real 产物.
+/// Identity is `project × path × git_commit`: registering the same path again
+/// at the same commit is a no-op; at a *new* commit it appends a new row, so
+/// the rows sharing one `path` are that artifact's real version history
+/// (nothing is ever edited in place). Always harvested from a real workspace
+/// scan (`bw-engine::evidence`), never typed in.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Artifact {
+    pub id: ArtifactId,
+    pub project_id: ProjectId,
+    /// The run that most plausibly produced this version — the run whose
+    /// settle-time scan first saw it. `None` when registered by a manual
+    /// collect outside any run.
+    pub workflow_run_id: Option<WorkflowRunId>,
+    /// A2: the Issue whose Done-edge scan first registered this version
+    /// (`None` for run-settle scans and manual collects).
+    pub issue_id: Option<IssueId>,
+    /// Stage the project was operating when this version appeared, if known.
+    pub stage_kind: Option<StageKind>,
+    /// Workspace-relative path (git's own path form).
+    pub path: String,
+    pub kind: ArtifactKind,
+    /// Real size in bytes at registration time.
+    pub bytes: u64,
+    /// Short HEAD hash the workspace was at when this version was seen.
+    /// Empty when the repo had no commits yet.
+    pub git_commit: String,
+    pub registered_at: i64,
+}
+
+// ─────────────────────────── issue ───────────────────────────
+
+/// Kanban lifecycle of an [`Issue`] — an assignable unit of work scoped to a
+/// project's stage. The seven states are ordered as a lifecycle: an issue
+/// advances left-to-right (Backlog → Todo → InProgress → InReview → Done),
+/// but `Blocked` is a recoverable side-state (not terminal — the work resumes
+/// once the blocker clears), and `Cancelled` is the other terminal alongside
+/// `Done`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueStatus {
+    Backlog,
+    Todo,
+    InProgress,
+    InReview,
+    Done,
+    Blocked,
+    Cancelled,
+}
+
+impl IssueStatus {
+    /// All seven, in lifecycle order.
+    pub const ALL: [IssueStatus; 7] = [
+        IssueStatus::Backlog,
+        IssueStatus::Todo,
+        IssueStatus::InProgress,
+        IssueStatus::InReview,
+        IssueStatus::Done,
+        IssueStatus::Blocked,
+        IssueStatus::Cancelled,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            IssueStatus::Backlog => "待办池",
+            IssueStatus::Todo => "待办",
+            IssueStatus::InProgress => "进行中",
+            IssueStatus::InReview => "评审中",
+            IssueStatus::Done => "已完成",
+            IssueStatus::Blocked => "阻塞",
+            IssueStatus::Cancelled => "已取消",
+        }
+    }
+
+    /// `true` only for `Done` and `Cancelled` — the two states no further work
+    /// is expected from. `Blocked` is deliberately NOT terminal (the work
+    /// resumes when the blocker clears; treating it as done would hide stuck
+    /// work).
+    pub fn is_terminal(self) -> bool {
+        matches!(self, IssueStatus::Done | IssueStatus::Cancelled)
+    }
+
+    /// `true` only for `Backlog` — the "not yet committed to" pile.
+    pub fn is_backlog(self) -> bool {
+        matches!(self, IssueStatus::Backlog)
+    }
+}
+
+/// How urgent an [`Issue`] is — drives ordering and visual emphasis. `None`
+/// (the default for a freshly created issue) means "no priority assigned",
+/// distinct from `Low` which is an explicit, deliberate low-urgency tag.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssuePriority {
+    None,
+    Low,
+    Medium,
+    High,
+    Urgent,
+}
+
+impl IssuePriority {
+    pub fn label(self) -> &'static str {
+        match self {
+            IssuePriority::None => "无",
+            IssuePriority::Low => "低",
+            IssuePriority::Medium => "中",
+            IssuePriority::High => "高",
+            IssuePriority::Urgent => "紧急",
+        }
+    }
+}
+
+/// An assignable unit of work scoped to a project's stage — the multica
+/// "assign a task to a teammate" model fused into BW's stage ring. `number`
+/// is per-project (1, 2, 3, …), auto-assigned at creation. `assignee` is the
+/// agent teammate the issue is currently delegated to (`None` = unassigned).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Issue {
+    pub id: IssueId,
+    pub project_id: ProjectId,
+    pub stage: StageKind,
+    pub number: u32,
+    pub title: String,
+    pub desc: String,
+    pub status: IssueStatus,
+    pub priority: IssuePriority,
+    pub assignee: Option<AgentId>,
+    /// Unix ts of the FIRST …→Done edge (when issue-side accounting fired).
+    /// `None` = never settled. Reopen-and-redo does not settle again.
+    #[serde(default)]
+    pub settled_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 // ─────────────────────────── project ───────────────────────────
@@ -1034,4 +1577,148 @@ pub struct HubCard {
     pub color: String,
     pub desc: String,
     pub items: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_artifact_path_covers_the_playbook_output_shapes() {
+        // What the five stage playbooks actually write:
+        assert_eq!(
+            classify_artifact_path("docs/evidence.md"),
+            ArtifactKind::Doc
+        );
+        assert_eq!(classify_artifact_path("README.md"), ArtifactKind::Doc);
+        assert_eq!(classify_artifact_path("src/main.rs"), ArtifactKind::Code);
+        assert_eq!(classify_artifact_path("src/lib.rs"), ArtifactKind::Code);
+        assert_eq!(classify_artifact_path("tests/cli.rs"), ArtifactKind::Test);
+        assert_eq!(
+            classify_artifact_path("src/parser_test.rs"),
+            ArtifactKind::Test
+        );
+        assert_eq!(
+            classify_artifact_path("scripts/healthcheck.sh"),
+            ArtifactKind::Script
+        );
+        assert_eq!(classify_artifact_path("Cargo.toml"), ArtifactKind::Config);
+        assert_eq!(classify_artifact_path(".gitignore"), ArtifactKind::Config);
+        assert_eq!(
+            classify_artifact_path("assets/logo.png"),
+            ArtifactKind::Other
+        );
+        // Non-code files under tests/ are not "tests".
+        assert_eq!(
+            classify_artifact_path("tests/fixtures/sample.md"),
+            ArtifactKind::Doc
+        );
+        // Round-trips through the persisted text form.
+        for k in [
+            ArtifactKind::Doc,
+            ArtifactKind::Code,
+            ArtifactKind::Test,
+            ArtifactKind::Script,
+            ArtifactKind::Config,
+            ArtifactKind::Other,
+        ] {
+            assert_eq!(ArtifactKind::parse(k.text()), k);
+        }
+    }
+
+    /// The playbook spec is fully armed: per-phase prompts, the hosting role
+    /// as its real agent ref, and the stage's skills as real refs whose
+    /// content is inside every phase prompt.
+    #[cfg(feature = "idgen")]
+    #[test]
+    fn playbook_spec_carries_role_agent_and_operative_skills() {
+        let ctx = crate::playbook::PlaybookCtx {
+            project_name: "demo".into(),
+            ..Default::default()
+        };
+        for kind in StageKind::ALL {
+            let spec = stage_workflow_with_playbook(kind, &ctx);
+            assert_eq!(spec.phases.len(), spec.phase_prompts.len());
+            assert_eq!(spec.agents.len(), 1);
+            assert_eq!(spec.agents[0].name, kind.role_short());
+            let skills = crate::playbook::stage_skills(kind);
+            assert_eq!(spec.skills.len(), skills.len());
+            for (s_ref, s) in spec.skills.iter().zip(skills) {
+                assert_eq!(s_ref.name, s.name);
+            }
+            for p in &spec.phase_prompts {
+                assert!(
+                    p.contains(skills[0].content),
+                    "{kind:?} 技能正文在 prompt 内"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn issue_status_is_terminal_only_for_done_and_cancelled() {
+        assert!(!IssueStatus::Backlog.is_terminal());
+        assert!(!IssueStatus::Todo.is_terminal());
+        assert!(!IssueStatus::InProgress.is_terminal());
+        assert!(!IssueStatus::InReview.is_terminal());
+        assert!(IssueStatus::Done.is_terminal());
+        assert!(
+            !IssueStatus::Blocked.is_terminal(),
+            "Blocked is recoverable, not terminal"
+        );
+        assert!(IssueStatus::Cancelled.is_terminal());
+    }
+
+    #[test]
+    fn issue_status_is_backlog_only_for_backlog() {
+        assert!(IssueStatus::Backlog.is_backlog());
+        assert!(!IssueStatus::Todo.is_backlog());
+        assert!(!IssueStatus::Done.is_backlog());
+        assert!(!IssueStatus::Blocked.is_backlog());
+    }
+
+    #[test]
+    fn issue_status_all_has_seven_in_lifecycle_order() {
+        assert_eq!(IssueStatus::ALL.len(), 7);
+        assert_eq!(IssueStatus::ALL[0], IssueStatus::Backlog);
+        assert_eq!(IssueStatus::ALL[6], IssueStatus::Cancelled);
+    }
+
+    #[test]
+    fn issue_priority_labels() {
+        assert_eq!(IssuePriority::None.label(), "无");
+        assert_eq!(IssuePriority::Low.label(), "低");
+        assert_eq!(IssuePriority::Medium.label(), "中");
+        assert_eq!(IssuePriority::High.label(), "高");
+        assert_eq!(IssuePriority::Urgent.label(), "紧急");
+    }
+
+    #[test]
+    fn issue_status_labels() {
+        assert_eq!(IssueStatus::Backlog.label(), "待办池");
+        assert_eq!(IssueStatus::Todo.label(), "待办");
+        assert_eq!(IssueStatus::InProgress.label(), "进行中");
+        assert_eq!(IssueStatus::InReview.label(), "评审中");
+        assert_eq!(IssueStatus::Done.label(), "已完成");
+        assert_eq!(IssueStatus::Blocked.label(), "阻塞");
+        assert_eq!(IssueStatus::Cancelled.label(), "已取消");
+    }
+
+    #[test]
+    fn issue_status_none_serializes_as_snake_case() {
+        // None priority must serialize as "none" (not a sentinel/empty string).
+        let json = serde_json::to_string(&IssuePriority::None).unwrap();
+        assert_eq!(json, "\"none\"");
+        // And round-trip back.
+        let back: IssuePriority = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IssuePriority::None);
+    }
+
+    #[test]
+    fn issue_status_serializes_as_snake_case() {
+        let json = serde_json::to_string(&IssueStatus::InProgress).unwrap();
+        assert_eq!(json, "\"in_progress\"");
+        let back: IssueStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IssueStatus::InProgress);
+    }
 }

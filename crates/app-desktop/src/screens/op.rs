@@ -17,8 +17,10 @@ use crate::kernel::{ChatVm, Kernel, MsgVm, OpVm, RunVm, StageVm};
 use crate::screens::chrome::Toast;
 use crate::theme;
 use bw_app::{Command, Panel, Scope};
-use bw_core::model::{stage_workflow, FeedLevel, HubKind, HubSource, Signal, StageKind};
-use bw_core::{SessionId, WorkflowId};
+use bw_core::model::{
+    stage_workflow, FeedLevel, HubKind, HubSource, IssuePriority, IssueStatus, Signal, StageKind,
+};
+use bw_core::{IssueId, SessionId, WorkflowId};
 use bw_store::SessionKind;
 use dioxus::prelude::*;
 use ui::vm::{MetricVm, SessionCardVm, VersionLogVm};
@@ -148,12 +150,13 @@ fn StageAxis(op: OpVm) -> Element {
     }
 }
 
-const PANELS: [(Panel, &str); 5] = [
+const PANELS: [(Panel, &str); 6] = [
     (Panel::Progress, "进度"),
     (Panel::Workflow, "工作流"),
     (Panel::Routine, "定时任务"),
     (Panel::Artifact, "产物"),
     (Panel::Version, "版本"),
+    (Panel::Issues, "Issue 看板"),
 ];
 
 #[component]
@@ -339,32 +342,110 @@ fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
         (Panel::Workflow, s) => rsx! { WorkflowPanel { op, stage: s, run, on_pick_hub } },
         (Panel::Routine, None) => rsx! { RoutineAll { op } },
         (Panel::Routine, Some(s)) => rsx! { RoutineStage { s } },
-        (Panel::Artifact, _) => rsx! { ArtifactPanel {} },
+        (Panel::Artifact, _) => rsx! { ArtifactPanel { op } },
         (Panel::Version, _) => rsx! { VersionPanel { op } },
+        (Panel::Issues, _) => rsx! { IssuesPanel { op } },
     }
 }
 
-/// Deliberately still a stub — not "not built yet," but assessed and left
-/// this way. The prototype's "产物画廊/产物画布" is rich structured content
-/// (a clickable web app, a data matrix, a document) fabricated from a
-/// commit-id hash; this app has no matching real concept (`session`s are
-/// plain text transcripts, nothing structured is ever produced or stored).
-/// Unlike Version — where "real git commits" was an unambiguous, already-
-/// available honest data source — there's no equally clean real source
-/// here yet. Repurposing something adjacent (e.g. "recently changed files
-/// under `workspace_path`") would be a materially weaker echo of what this
-/// panel promises, likely to read as broken rather than honest. Revisit
-/// once sessions can produce a real structured output.
+/// Kind chip color — muted per-type hues from the existing stage palette
+/// family, keyed on the display label (the Vm carries labels, not enums).
+fn artifact_kind_color(kind_label: &str) -> &'static str {
+    match kind_label {
+        "文档" => "#4F7E86",
+        "代码" => "#C5654A",
+        "测试" => "#6E8C5A",
+        "脚本" => "#CC8B3C",
+        "配置" => "#8A8275",
+        _ => "#A19B8D",
+    }
+}
+
+/// The real artifact registry — every row is a tracked file version really
+/// scanned out of the project's workspace (`git ls-files` + `stat` + HEAD),
+/// registered by post-run auto-scans or a manual "重新采集". The long-ago
+/// stub's reason ("no real data source yet") retired when the evidence
+/// collector + all-in-one-codebase workspace landed; this panel now renders
+/// exactly that source, nothing invented.
 #[component]
-fn ArtifactPanel() -> Element {
+fn ArtifactPanel(op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let k2 = k.clone();
     let card = theme::card();
     let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+    let clay = theme::CLAY;
+    let configured = !op.workspace_path.trim().is_empty();
+
     rsx! {
         div {
-            style: "{card} padding:26px 30px;max-width:560px;",
-            div { style: "font-weight:600;margin-bottom:8px;", "产物画廊 / 产物画布" }
-            p { style: "color:{ink2};font-size:13px;line-height:1.7;margin:0;",
-                "还没有真实数据源:会话目前只产出纯文本,没有结构化产物这个存量。等会话能真正产出可展示的结构化输出后再做,不提前拼一个半假的版本。"
+            style: "max-width:820px;",
+            div {
+                style: "{card} padding:14px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px;",
+                span { style: "font-size:12px;color:{ink3};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                    if configured {
+                        "真实产物登记 · 扫描自 {op.workspace_path}"
+                    } else {
+                        "未配置真实工作区 —— 没有可扫描的代码仓"
+                    }
+                }
+                button {
+                    style: "cursor:pointer;background:transparent;color:{clay};border:1px solid {clay};border-radius:7px;padding:6px 14px;font-size:12px;flex:none;",
+                    onclick: move |_| k.send(Command::LoadArtifacts),
+                    "读取登记"
+                }
+                if configured {
+                    button {
+                        style: "cursor:pointer;background:{clay};color:#fff;border:1px solid {clay};border-radius:7px;padding:6px 14px;font-size:12px;flex:none;",
+                        onclick: move |_| {
+                            k2.send(Command::CollectArtifacts);
+                        },
+                        "重新采集"
+                    }
+                }
+            }
+            match &op.artifacts {
+                None => rsx! {
+                    div { style: "{card} padding:26px 30px;color:{ink2};font-size:13px;line-height:1.7;",
+                        "还没有加载过 —— 点「读取登记」查看已登记产物,或「重新采集」扫描工作区。"
+                    }
+                },
+                Some(rows) if rows.is_empty() => rsx! {
+                    div { style: "{card} padding:26px 30px;color:{ink2};font-size:13px;line-height:1.7;",
+                        "登记表是空的 —— 这个项目的工作区还没有任何被追踪的文件(或尚未采集过)。"
+                    }
+                },
+                Some(rows) => rsx! {
+                    div {
+                        for a in rows.clone() {
+                            div {
+                                key: "{a.path}",
+                                style: "{card} padding:11px 18px;margin-bottom:6px;display:flex;align-items:center;gap:12px;",
+                                span {
+                                    style: "font-family:{mono};font-size:10.5px;color:#fff;background:{artifact_kind_color(a.kind_label)};border-radius:5px;padding:2px 8px;flex:none;",
+                                    "{a.kind_label}"
+                                }
+                                span {
+                                    style: "flex:1;min-width:0;font-size:13px;font-family:{mono};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                                    "{a.path}"
+                                }
+                                if let Some(stage) = a.stage_label {
+                                    span { style: "font-size:11px;color:{ink2};flex:none;", "{stage}段" }
+                                }
+                                if a.versions > 1 {
+                                    span { style: "font-size:11px;color:{ink2};flex:none;", "{a.versions} 个版本" }
+                                }
+                                if a.from_run {
+                                    span { style: "font-size:11px;color:{ink3};flex:none;", "run 产出" }
+                                }
+                                span { style: "font-size:11px;color:{ink3};flex:none;", "{a.bytes_label}" }
+                                span { style: "font-family:{mono};font-size:11px;color:{ink3};flex:none;", "{a.commit_label}" }
+                                span { style: "font-size:11px;color:{ink3};flex:none;", "{a.time_label}" }
+                            }
+                        }
+                    }
+                },
             }
         }
     }
@@ -433,6 +514,141 @@ fn VersionPanel(op: OpVm) -> Element {
                         }
                     }
                 },
+            }
+        }
+    }
+}
+
+// ── issue board (R1) ──
+
+/// The kanban status that follows `s` in the lifecycle, if any (terminal +
+/// `Blocked` don't advance — they're a stop or a side state).
+fn next_issue_status(s: IssueStatus) -> Option<IssueStatus> {
+    match s {
+        IssueStatus::Backlog => Some(IssueStatus::Todo),
+        IssueStatus::Todo => Some(IssueStatus::InProgress),
+        IssueStatus::InProgress => Some(IssueStatus::InReview),
+        IssueStatus::InReview => Some(IssueStatus::Done),
+        IssueStatus::Done | IssueStatus::Blocked | IssueStatus::Cancelled => None,
+    }
+}
+
+/// The Issue board (R1): real assignable work units grouped by status into
+/// columns, each card carrying its stage + agent teammate + a one-click
+/// advance to the next status. The create strip scopes a new issue to a
+/// chosen stage. Every card is a real `issue` row — nothing invented.
+#[component]
+fn IssuesPanel(op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let border = theme::BORDER;
+    let ink = theme::INK;
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let clay = theme::CLAY;
+    let mono = theme::MONO;
+    let initial_stage = op.active_stage;
+    let mut new_title = use_signal(String::new);
+    let mut new_stage = use_signal(move || initial_stage);
+
+    let cols: [(IssueStatus, &str); 5] = [
+        (IssueStatus::Backlog, "待办池"),
+        (IssueStatus::Todo, "待办"),
+        (IssueStatus::InProgress, "进行中"),
+        (IssueStatus::InReview, "评审中"),
+        (IssueStatus::Done, "已完成"),
+    ];
+    // Precompute the columns outside rsx so the board stays borrow-clean.
+    let grouped: Vec<_> = cols
+        .iter()
+        .map(|(st, label)| {
+            (
+                *label,
+                op.issues
+                    .iter()
+                    .filter(|i| i.status == *st)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+
+    rsx! {
+        div { style: "max-width:1120px;",
+            div {
+                style: "{card} padding:12px 16px;margin-bottom:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;",
+                input {
+                    value: "{new_title}",
+                    placeholder: "新 Issue 标题(作用域到选中阶段)…",
+                    style: "flex:1;min-width:220px;border:1px solid {border};border-radius:7px;padding:8px 11px;font-size:13px;background:#FFF;",
+                    oninput: move |e| new_title.set(e.value()),
+                }
+                for s in StageKind::ALL {
+                    {
+                        let sel = new_stage() == s;
+                        let (bg, fg) = if sel { (clay, "#FFF") } else { ("transparent", ink2) };
+                        rsx! {
+                            button {
+                                key: "{s:?}",
+                                style: "cursor:pointer;border:1px solid {border};border-radius:20px;background:{bg};color:{fg};padding:5px 12px;font-size:12px;",
+                                onclick: move |_| new_stage.set(s),
+                                "{s.label()}"
+                            }
+                        }
+                    }
+                }
+                button {
+                    style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:8px 16px;font-size:13px;flex:none;",
+                    onclick: move |_| {
+                        let t = new_title().trim().to_string();
+                        if !t.is_empty() {
+                            k.send(Command::CreateIssue {
+                                id: IssueId::new(),
+                                stage: new_stage(),
+                                title: t,
+                                desc: String::new(),
+                                priority: IssuePriority::Medium,
+                            });
+                            new_title.set(String::new());
+                        }
+                    },
+                    "＋ 创建 Issue"
+                }
+            }
+            div { style: "display:flex;gap:12px;align-items:flex-start;",
+                for (label, list) in grouped {
+                    div { key: "{label}", style: "flex:1;min-width:190px;",
+                        div { style: "font-size:11.5px;color:{ink3};margin-bottom:9px;letter-spacing:.04em;", "{label} · {list.len()}" }
+                        for i in list {
+                            {
+                                let k = k.clone();
+                                let i_id = i.id;
+                                let advance = next_issue_status(i.status);
+                                let advance_label = advance.map(|s| s.label()).unwrap_or("");
+                                let assignee = i
+                                    .assignee_name
+                                    .clone()
+                                    .unwrap_or_else(|| "未分配".to_string());
+                                rsx! {
+                                    div {
+                                        key: "{i.number}",
+                                        style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {i.status_color};",
+                                        div { style: "font-size:11px;color:{ink3};font-family:{mono};", "#{i.number} · {i.stage.label()}" }
+                                        div { style: "font-size:13px;margin:3px 0 4px;color:{ink};", "{i.title}" }
+                                        div { style: "font-size:11px;color:{ink2};", "{i.priority_label} · {assignee}" }
+                                        if let Some(ns) = advance {
+                                            button {
+                                                style: "margin-top:6px;cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
+                                                onclick: move |_| k.send(Command::TransitionIssue { id: i_id, status: ns }),
+                                                "→ {advance_label}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1190,10 +1406,11 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
                 title: format!("{} · 第{}轮", stage_kind.label(), round),
             });
             k.send(Command::SelectSession(Some(sid)));
-            // A fresh spec per run — the template is methodology, the run is real.
-            k.send(Command::RunWorkflow {
+            // The kernel assembles this stage's playbook (role instructions +
+            // real project context) — the UI only names the stage.
+            k.send(Command::RunStagePlaybook {
                 session: sid,
-                spec: stage_workflow(stage_kind),
+                stage_kind,
             });
         }
     };

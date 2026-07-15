@@ -5,13 +5,13 @@
 
 use bw_core::derive::{evaluate_metric, measure, parse_target, reduce_worst_of, Measurement};
 use bw_core::model::{
-    stage_workflow, Cadence, CronStatus, HubSource, LibSource, LoopConfig, Maturity, ProjectPhase,
-    SourceKind, StageKind, WorkflowKind,
+    stage_workflow, Cadence, CronMode, CronStatus, HubSource, LibSource, LoopConfig, Maturity,
+    ProjectPhase, SourceKind, StageKind, WorkflowKind,
 };
 use bw_core::{AgentId, CronTaskId, MetricId, ProjectId, Signal, SkillId, WorkflowId};
 use bw_store::{
-    MetricRole, NewAgent, NewCronTask, NewMetric, NewProject, NewSkill, NewStage, NewWorkflowSpec,
-    SqliteStore, Store,
+    AgentEdit, MetricRole, NewAgent, NewCronTask, NewMetric, NewProject, NewSkill, NewStage,
+    NewWorkflowSpec, SkillEdit, SqliteStore, Store,
 };
 use time::OffsetDateTime;
 
@@ -217,7 +217,7 @@ async fn dod_and_handoff_are_real_and_audited() {
             StageKind::Prototype,
             StageKind::Build,
             true,
-            "性能基线未测 · 带险交棒".into(),
+            "性能基线未测 · 带险交棒",
             now,
         )
         .await
@@ -241,7 +241,7 @@ async fn dod_and_handoff_are_real_and_audited() {
             StageKind::Ops,
             StageKind::Prototype,
             false,
-            "复盘洞察已回流".into(),
+            "复盘洞察已回流",
             now,
         )
         .await
@@ -275,6 +275,7 @@ async fn workflow_spec_create_list_get_roundtrip() {
             goal: "产出验证过的问题陈述".into(),
             stage_ref: Some(1),
             phases: vec!["访谈提纲".into(), "深挖场景".into()],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: LoopConfig {
@@ -384,6 +385,7 @@ async fn record_workflow_use_increments_uses() {
             goal: "g".into(),
             stage_ref: None,
             phases: vec![],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: LoopConfig {
@@ -420,6 +422,7 @@ async fn skill_create_list_get_roundtrip() {
             desc: "扫描公开网页并结构化提取".into(),
             category: "检索".into(),
             source: LibSource::SelfBuilt,
+            content: "### 扫描方法\n1. 只记录真实抓到的页面。".into(),
         })
         .await
         .unwrap();
@@ -434,6 +437,32 @@ async fn skill_create_list_get_roundtrip() {
     assert_eq!(got.source, LibSource::SelfBuilt);
     assert_eq!(got.uses, 0, "a freshly created skill starts unused");
     assert!(store.get_skill(SkillId::new()).await.unwrap().is_none());
+
+    // A real edit (AgentHub/SkillHub's detail-panel "编辑 →") changes content
+    // but must never touch lifecycle fields (maturity/uses) — same rule
+    // `update_workflow_spec` established for workflows.
+    store
+        .update_skill(
+            id,
+            SkillEdit {
+                name: "web-scan-v2".into(),
+                desc: "扫描公开网页并结构化提取,新增去重".into(),
+                category: "检索/数据".into(),
+                content: "### 扫描方法 v2\n1. 只记录真实抓到的页面。\n2. 去重。".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let edited = store.get_skill(id).await.unwrap().unwrap();
+    assert_eq!(edited.name, "web-scan-v2");
+    assert_eq!(edited.desc, "扫描公开网页并结构化提取,新增去重");
+    assert_eq!(edited.category, "检索/数据");
+    assert_eq!(
+        edited.maturity,
+        Maturity::Polishing,
+        "editing content must not touch lifecycle fields"
+    );
+    assert_eq!(edited.uses, 0, "editing content must not fabricate usage");
 
     let _ = std::fs::remove_file(&path);
 }
@@ -452,6 +481,7 @@ async fn agent_create_list_get_roundtrip() {
             maturity: Maturity::Polishing,
             skills: vec!["web-scan".into(), "对比矩阵".into()],
             model: "claude-opus".into(),
+            instructions: "你是竞品分析师;结论必须附来源。".into(),
         })
         .await
         .unwrap();
@@ -471,6 +501,39 @@ async fn agent_create_list_get_roundtrip() {
     assert_eq!(got.model, "claude-opus");
     assert_eq!(got.runs, 0, "a freshly created agent starts unused");
     assert!(store.get_agent(AgentId::new()).await.unwrap().is_none());
+
+    // Same rule as skills: a real edit changes content, never lifecycle data.
+    store
+        .update_agent(
+            id,
+            AgentEdit {
+                name: "竞品分析 Agent v2".into(),
+                role: "强检索、低臆测，新增中文来源优先".into(),
+                skills: vec!["web-scan".into()],
+                model: "claude-sonnet".into(),
+                instructions: "你是竞品分析师;中文来源优先,结论必须附来源。".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let edited = store.get_agent(id).await.unwrap().unwrap();
+    assert_eq!(edited.name, "竞品分析 Agent v2");
+    assert_eq!(edited.role, "强检索、低臆测，新增中文来源优先");
+    assert_eq!(
+        edited
+            .skills
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["web-scan"]
+    );
+    assert_eq!(edited.model, "claude-sonnet");
+    assert_eq!(
+        edited.maturity,
+        Maturity::Polishing,
+        "editing content must not touch lifecycle fields"
+    );
+    assert_eq!(edited.runs, 0, "editing content must not fabricate usage");
 
     let _ = std::fs::remove_file(&path);
 }
@@ -653,6 +716,9 @@ async fn cron_task_last_run_at_roundtrips_real_clock_for_scheduler() {
             target: "wf".into(),
             schedule: Cadence::Daily,
             project_id: None,
+            mode: CronMode::RunWorkflow,
+            issue_stage: None,
+            issue_assignee: None,
         })
         .await
         .unwrap();
@@ -757,6 +823,253 @@ async fn opening_a_db_from_before_last_run_at_existed_migrates_without_crashing(
         .unwrap();
     let after = store.list_cron_tasks().await.unwrap();
     assert!(after[0].last_run_at.is_some());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+// ═══════════════════ 完整形态: artifact / accounting / connector sync ═══════════════════
+
+#[tokio::test]
+async fn artifact_registration_is_idempotent_and_versions_by_commit() {
+    use bw_core::model::{classify_artifact_path, ArtifactKind};
+    use bw_core::ArtifactId;
+    use bw_store::NewArtifact;
+
+    let path = tmp_db();
+    let store = SqliteStore::open(&path).await.unwrap();
+    let project = ProjectId::new();
+    store
+        .create_project(bw_store::NewProject {
+            id: project,
+            name: "p".into(),
+            kind: "k".into(),
+            desc: String::new(),
+        })
+        .await
+        .unwrap();
+
+    let mk = |path: &str, commit: &str| NewArtifact {
+        id: ArtifactId::new(),
+        project_id: project,
+        workflow_run_id: None,
+        issue_id: None,
+        stage_kind: Some(StageKind::Prototype),
+        path: path.into(),
+        kind: classify_artifact_path(path),
+        bytes: 120,
+        git_commit: commit.into(),
+        registered_at: 1_700_000_000,
+    };
+
+    // First scan at commit aaa111: two files, both fresh.
+    let fresh = store
+        .register_artifacts(vec![
+            mk("docs/evidence.md", "aaa111"),
+            mk("src/main.rs", "aaa111"),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(fresh, 2);
+
+    // Re-scan of the unchanged workspace: same identities ⇒ zero new rows.
+    let again = store
+        .register_artifacts(vec![
+            mk("docs/evidence.md", "aaa111"),
+            mk("src/main.rs", "aaa111"),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(again, 0, "re-scan must not duplicate");
+
+    // A new commit revising one file: exactly one new version row.
+    let v2 = store
+        .register_artifacts(vec![mk("docs/evidence.md", "bbb222")])
+        .await
+        .unwrap();
+    assert_eq!(v2, 1);
+
+    let all = store.list_artifacts(project).await.unwrap();
+    assert_eq!(all.len(), 3);
+    let evidence_versions: Vec<_> = all
+        .iter()
+        .filter(|a| a.path == "docs/evidence.md")
+        .collect();
+    assert_eq!(
+        evidence_versions.len(),
+        2,
+        "rows sharing a path are that artifact's version history"
+    );
+    assert!(all.iter().any(|a| a.kind == ArtifactKind::Doc));
+    assert!(all.iter().any(|a| a.kind == ArtifactKind::Code));
+    assert_eq!(all[0].stage_kind, Some(StageKind::Prototype));
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn skill_and_agent_accounting_updates_real_counters() {
+    let path = tmp_db();
+    let store = SqliteStore::open(&path).await.unwrap();
+
+    store
+        .create_skill(NewSkill {
+            id: SkillId::new(),
+            name: "evidence-first".into(),
+            maturity: Maturity::Mature,
+            desc: "d".into(),
+            category: "原型".into(),
+            source: LibSource::Official,
+            content: "### 证据先行\n1. 只写站得住的。".into(),
+        })
+        .await
+        .unwrap();
+    store
+        .create_agent(NewAgent {
+            id: AgentId::new(),
+            name: "原型师".into(),
+            role: "假设驱动探索".into(),
+            maturity: Maturity::Mature,
+            skills: vec!["evidence-first".into()],
+            model: "claude CLI".into(),
+            instructions: "你是原型师。".into(),
+        })
+        .await
+        .unwrap();
+
+    // Unregistered names are an honest no-op (0 rows), never an error.
+    assert_eq!(store.record_skill_use_by_name("不存在").await.unwrap(), 0);
+    assert_eq!(
+        store
+            .record_agent_run_by_name("不存在", true)
+            .await
+            .unwrap(),
+        0
+    );
+
+    assert_eq!(
+        store
+            .record_skill_use_by_name("evidence-first")
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .record_skill_use_by_name("evidence-first")
+            .await
+            .unwrap(),
+        1
+    );
+    let skill = &store.list_skills().await.unwrap()[0];
+    assert_eq!(skill.uses, 2, "uses is a real counter now");
+    assert!(skill.content.contains("证据先行"));
+
+    // 2 ok + 1 failed ⇒ runs=3, win_rate=66% — derived from real counters.
+    store
+        .record_agent_run_by_name("原型师", true)
+        .await
+        .unwrap();
+    store
+        .record_agent_run_by_name("原型师", true)
+        .await
+        .unwrap();
+    store
+        .record_agent_run_by_name("原型师", false)
+        .await
+        .unwrap();
+    let agent = &store.list_agents().await.unwrap()[0];
+    assert_eq!(agent.runs, 3);
+    assert_eq!(agent.win_rate, "66%");
+    assert!(agent.instructions.contains("原型师"));
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn connector_sync_is_probe_written_and_survives_reopen() {
+    use bw_core::model::{ConnectorStatus, CONNECTOR_KIND_GIT_REPO};
+    use bw_core::ConnectorId;
+    use bw_store::NewConnector;
+
+    let path = tmp_db();
+    let store = SqliteStore::open(&path).await.unwrap();
+    let project = ProjectId::new();
+    store
+        .create_project(bw_store::NewProject {
+            id: project,
+            name: "p".into(),
+            kind: "k".into(),
+            desc: String::new(),
+        })
+        .await
+        .unwrap();
+
+    let id = ConnectorId::new();
+    store
+        .create_connector(NewConnector {
+            id,
+            name: "p 代码仓".into(),
+            kind: CONNECTOR_KIND_GIT_REPO.into(),
+            scope: "p".into(),
+            project_id: Some(project),
+            config: "/tmp/ws".into(),
+        })
+        .await
+        .unwrap();
+
+    let c = &store.list_connectors().await.unwrap()[0];
+    assert_eq!(
+        c.status,
+        ConnectorStatus::Disconnected,
+        "born disconnected — health comes only from a real probe"
+    );
+    assert_eq!(c.project_id, Some(project));
+    assert_eq!(c.config, "/tmp/ws");
+
+    store
+        .set_connector_sync(id, ConnectorStatus::Connected, "2026-07-14 10:00")
+        .await
+        .unwrap();
+    drop(store);
+    let store = SqliteStore::open(&path).await.unwrap();
+    let c = &store.list_connectors().await.unwrap()[0];
+    assert_eq!(c.status, ConnectorStatus::Connected);
+    assert_eq!(c.last_sync, "2026-07-14 10:00");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The 完整形态 migration guard: a database created *before* the new columns
+/// (simulated by dropping them is impossible in sqlite — instead verify the
+/// stage-entity seeder is by-name idempotent and fills an already-seeded DB).
+#[tokio::test]
+async fn stage_entities_seed_into_existing_dbs_idempotently() {
+    let path = tmp_db();
+    let store = SqliteStore::open(&path).await.unwrap();
+
+    bw_store::seed_stage_entities_if_missing(&store)
+        .await
+        .unwrap();
+    let skills_1 = store.list_skills().await.unwrap();
+    let agents_1 = store.list_agents().await.unwrap();
+    assert_eq!(agents_1.len(), 5, "五角色 agent 实体");
+    assert!(skills_1.len() >= 5, "每阶段至少一个技能实体");
+    let proto = agents_1.iter().find(|a| a.name == "原型师").unwrap();
+    assert!(
+        proto.instructions.contains("原型师"),
+        "role agent carries its real preamble template"
+    );
+    assert!(skills_1.iter().all(|s| {
+        // Stage skills carry real bodies; (this DB has only stage skills.)
+        !s.content.trim().is_empty()
+    }));
+
+    // Second call: by-name idempotent, nothing duplicated.
+    bw_store::seed_stage_entities_if_missing(&store)
+        .await
+        .unwrap();
+    assert_eq!(store.list_skills().await.unwrap().len(), skills_1.len());
+    assert_eq!(store.list_agents().await.unwrap().len(), 5);
 
     let _ = std::fs::remove_file(&path);
 }

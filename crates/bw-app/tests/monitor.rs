@@ -211,6 +211,7 @@ async fn run_progress_streams_before_persistence() {
             goal: "产出验证过的原型".into(),
             stage_ref: Some(1),
             phases: vec!["证据".into(), "洞察".into(), "假设".into()],
+            phase_prompts: vec![],
             agents: vec![],
             skills: vec![],
             loop_config: LoopConfig {

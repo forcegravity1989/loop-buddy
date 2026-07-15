@@ -149,6 +149,8 @@ CREATE TABLE IF NOT EXISTS workflow_spec (
     goal           TEXT NOT NULL DEFAULT '',
     stage_ref      INTEGER,                   -- 1..=5, nullable (metrics-layer / cross-cutting)
     phases         TEXT NOT NULL DEFAULT '[]', -- JSON [String]
+    phase_prompts  TEXT NOT NULL DEFAULT '[]', -- JSON [String], index-aligned with phases;
+                                               -- '[]' = pre-playbook (all phases share prompt)
     agents_json    TEXT NOT NULL DEFAULT '[]', -- JSON [AgentRef]
     skills_json    TEXT NOT NULL DEFAULT '[]', -- JSON [SkillRef]
     loop_retries   INTEGER NOT NULL DEFAULT 1,
@@ -167,6 +169,10 @@ CREATE TABLE IF NOT EXISTS skill (
     category    TEXT NOT NULL DEFAULT '',
     source      TEXT NOT NULL DEFAULT 'self_built',
     uses        INTEGER NOT NULL DEFAULT 0,
+    -- R2: provenance link from a real completed Issue. NULL = catalog/seeded
+    -- skill (no real-work origin); populated only by distill_skill_from_issue.
+    distilled_from_issue TEXT,                   -- IssueId uuid string; NULL = catalog
+    origin_agent         TEXT,                   -- AgentId uuid string; NULL = catalog
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0
@@ -202,6 +208,11 @@ CREATE TABLE IF NOT EXISTS cron_task (
     -- has a machine-comparable clock to test "due" against — parsing the
     -- display string back would be fragile. See bw_core::model::cron_due.
     last_run_at INTEGER NOT NULL DEFAULT 0,
+    -- A1: what this task does when due. Defaults to run_workflow so pre-A1
+    -- rows keep their semantics byte-for-byte; create_issue mints an Issue.
+    mode            TEXT NOT NULL DEFAULT 'run_workflow',
+    issue_stage     TEXT,                        -- A1: stage for a create_issue task
+    issue_assignee  TEXT,                        -- A1: agent name to assign (NULL = unassigned)
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0
@@ -230,3 +241,121 @@ CREATE TABLE IF NOT EXISTS knowledge_source (
     updated_at    INTEGER NOT NULL,
     rev           INTEGER NOT NULL DEFAULT 0
 );
+
+-- ═══════════════════════ workflow_run (iter 1 · telemetry foundation) ═══════════════════════
+-- Append-only execution log: the SOLE birthplace of "did this run succeed,
+-- how long did it take, who fired it". Every workflow execution — manual
+-- (RunWorkflow/RunHubWorkflow) and the background scheduler's auto-fire
+-- (tick_scheduler) — records a row here. This is the grain optimization
+-- intelligence (iters 6-12) is built on; without it, no "this workflow fails
+-- 30%" claim is knowable.
+--
+-- A row is inserted at status='running' when the run starts, then its
+-- status/finished_at/duration_ms/phases_completed/error are settled exactly
+-- once when the engine returns. `params_json` is reserved for iter 3
+-- (parameter capture) and is '' until then.
+CREATE TABLE IF NOT EXISTS workflow_run (
+    id               TEXT PRIMARY KEY,
+    workflow_id      TEXT NOT NULL,                 -- FK omitted: a run may outlive a deleted spec
+    workflow_name    TEXT NOT NULL DEFAULT '',      -- snapshot of name at run time
+    project_id       TEXT,                          -- nullable: a hub run need not bind a project
+    session_id       TEXT,
+    trigger          TEXT NOT NULL DEFAULT 'manual',-- 'manual' | 'scheduled'
+    status           TEXT NOT NULL DEFAULT 'running',-- 'running' | 'ok' | 'failed'
+    started_at       INTEGER NOT NULL,
+    finished_at      INTEGER,
+    duration_ms      INTEGER,
+    phases_completed INTEGER NOT NULL DEFAULT 0,
+    error            TEXT NOT NULL DEFAULT '',
+    params_json      TEXT NOT NULL DEFAULT '',
+    -- A2: the Issue this run executes (NULL unless fired by RunIssue). Kept
+    -- denormalized (no FK) so a run survives its issue being deleted — the
+    -- linkage is the point, an orphaned run is still honest evidence.
+    issue_id         TEXT,
+    created_at       INTEGER NOT NULL
+);
+-- iter 4: link a scheduled run back to the cron task that fired it (NULL for
+-- manual runs). Added via guarded migration so pre-iter-4 DBs keep opening.
+-- Kept denormalized (not a FK) so a run survives its task being deleted — the
+-- history is the point, and an orphaned run is still honest evidence.
+--   NOTE: applied by add_column_if_missing in SqliteStore::open, not inline.
+CREATE INDEX IF NOT EXISTS idx_workflow_run_spec ON workflow_run(workflow_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workflow_run_proj ON workflow_run(project_id, started_at DESC);
+
+-- ═══════════════════════ artifact (完整形态 · 真实产物登记) ═══════════════════════
+-- Append-only registry of real workspace files. One row = one *version* of a
+-- file: identity is (project, path, git_commit) — re-registering the same
+-- path at the same commit is a no-op (INSERT OR IGNORE); at a new commit it
+-- appends a new row, so the rows sharing a path ARE that artifact's version
+-- history. Rows are only ever harvested from a real `git ls-files` scan
+-- (bw-engine::evidence), never typed in; `workflow_run_id` links a version to
+-- the run whose settle-time scan first saw it (NULL for manual collects).
+CREATE TABLE IF NOT EXISTS artifact (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES project(id),
+    workflow_run_id TEXT,                        -- no FK: a registration outlives a purged run
+    issue_id        TEXT,                        -- A2: the Issue whose Done-edge registered this version
+    stage_kind      TEXT,                        -- StageKind at registration time, if known
+    path            TEXT NOT NULL,               -- workspace-relative, git's own form
+    kind            TEXT NOT NULL DEFAULT 'other', -- bw_core::model::ArtifactKind::text()
+    bytes           INTEGER NOT NULL DEFAULT 0,  -- real stat at scan time
+    git_commit      TEXT NOT NULL DEFAULT '',    -- short HEAD at scan; '' = commitless repo
+    registered_at   INTEGER NOT NULL,
+    UNIQUE(project_id, path, git_commit)
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_project ON artifact(project_id, registered_at DESC);
+
+-- ═══════════════════════ workflow_version (iter 5 · evolution history) ═══════════════════════
+-- Append-only snapshot of a Static spec's content, taken the instant BEFORE
+-- each `UpdateWorkflowSpec` overwrites it. So the live `workflow_spec` row is
+-- always the latest, but every prior version's prompt/goal/phases/agents/
+-- skills survives here — the diff/rollback/A-B material optimization
+-- intelligence (iter 14) and the "what did we change and why" audit need.
+--
+-- A row records version N's content, written when version N+1 is being
+-- authored (i.e. the snapshot is of what's about to be replaced). No FK on
+-- workflow_id: a version outlives its spec being deleted (the history is the
+-- point). `version` matches the `Static.version` that was current pre-update.
+CREATE TABLE IF NOT EXISTS workflow_version (
+    id             TEXT PRIMARY KEY,
+    workflow_id    TEXT NOT NULL,
+    version        INTEGER NOT NULL,
+    name           TEXT NOT NULL DEFAULT '',
+    prompt         TEXT NOT NULL DEFAULT '',
+    goal           TEXT NOT NULL DEFAULT '',
+    phases         TEXT NOT NULL DEFAULT '[]',
+    phase_prompts  TEXT NOT NULL DEFAULT '[]', -- frozen with the rest of the content
+    agents_json    TEXT NOT NULL DEFAULT '[]',
+    skills_json    TEXT NOT NULL DEFAULT '[]',
+    loop_retries   INTEGER NOT NULL DEFAULT 1,
+    loop_max_iter  INTEGER NOT NULL DEFAULT 3,
+    note           TEXT NOT NULL DEFAULT '',
+    created_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_version_spec ON workflow_version(workflow_id, version DESC);
+
+-- ═══════════════════════ issue (R1 · assignable stage-scoped work) ═══════════════════════
+-- An assignable unit of work scoped to a project's stage — the multica "assign
+-- a task to a teammate" model fused into BW's stage ring. `number` is
+-- per-project (1, 2, 3, …), auto-assigned at creation. `assignee` is nullable
+-- (NULL = unassigned). `status` is a kanban lifecycle (Backlog → Done /
+-- Cancelled; Blocked is recoverable, not terminal).
+CREATE TABLE IF NOT EXISTS issue (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL REFERENCES project(id),
+    stage       TEXT NOT NULL,                   -- StageKind (5 values)
+    number      INTEGER NOT NULL,                -- per-project sequence: 1, 2, 3, …
+    title       TEXT NOT NULL,
+    descr       TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'backlog', -- IssueStatus
+    priority    TEXT NOT NULL DEFAULT 'none',    -- IssuePriority
+    assignee    TEXT,                            -- AgentId uuid string; NULL = unassigned
+    -- Settle-once marker: unix ts of the FIRST …→Done edge (when accounting
+    -- fired). NULL = never settled. A reopened-and-redone issue does NOT
+    -- settle twice — one work item, one credit.
+    settled_at  INTEGER,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_issue_project_number ON issue(project_id, number);
+CREATE INDEX IF NOT EXISTS idx_issue_project_stage ON issue(project_id, stage);

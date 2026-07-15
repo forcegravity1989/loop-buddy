@@ -1,4 +1,14 @@
-# Builders' Workbench — 开发指南 (P0 + P1 + P2 + 五阶段方法论迁移)
+# Builders' Workbench — 开发指南 (P0 + P1 + P2 + 五阶段方法论迁移 + 剧本执行)
+
+> **完整形态增量（2026-07-13）**:五角色从静态元数据升级为**可真实执行的剧本**
+> (`bw-core::playbook`):每阶段的方法循环 phase 各带一条真实指令(注入项目上下文
+> 与上一棒交接词),经 `Command::RunStagePlaybook` → `ClaudeCliExecutor` 在项目
+> 工作区真实产出文件/提交/测试;`bw-engine::evidence` 把工作区真实状态(git 提交数/
+> docs 产物/测试通过率)经 `Command::RecordCollectedObservation`(Ci/GitPr 来源,
+> 绝不 Manual)回流度量派生链 —— 首个非手填 L0 生产者。`WorkflowSpec.phase_prompts`
+> 平行字段(serde default + `add_column_if_missing` 双守卫)承载 per-phase 指令,
+> 空 = 旧行为字节不变。phase 间接力:上一 phase 输出尾部注入下一 phase(relay baton)。
+> headless 指挥器 `cargo run -p bw-app --example real_demo` 驱动完整 0→1 生命周期。
 
 Rust 桌面应用,按 [`plan/00-PLAN.md`](plan/00-PLAN.md) 路线图实现,叠加**体系重构 v2 · 阶段=角色=方法论**的架构迁移。当前进度:**P0 · 基座**、**P1 · 架构脊椎**、**P2 · 纵切 UI**均已落地,并已从「7 控制点线性向导」整体迁移到「5 阶段=角色=方法论 · 交棒制 · 线闭成环」模型。原型中的模拟项目**没有**被移植 —— 项目墙从空态开始,一切数据都由真实输入产生。
 
