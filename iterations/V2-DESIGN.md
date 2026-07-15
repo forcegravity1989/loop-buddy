@@ -1,5 +1,9 @@
 # V2 设计综合 — 完整形态 Builders' Workbench = multica 优点 × BW 设计初衷
 
+> **谱系注(2026-07-15)**:本文写于 `claude/bw-complete-form` 分支;R1/R2 已经
+> merge `c723480` 并入主线 `claude/builders-workbench-multica-0517f4`,并在 `fc5bded`
+> 补上 Issue Done 边沿的真实记账联动。**对齐后的单一方案见 `plan/06-overall-alignment.md`**。
+
 > 起点的一次纠正:我最初只读 README 就断言「问题在运行时」——太武断。这份设计建立在对
 > multica **真实源码**的核验之上:真实的 dashboard 路由(导航 IA)、真实的 handler 操作面、
 > 真实的 Issue 状态生命周期(`packages/core/issues/config/status.ts`,经 GitHub API 核验)、
