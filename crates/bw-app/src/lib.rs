@@ -2026,7 +2026,53 @@ impl App {
             }
 
             Command::TransitionIssue { id, status } => {
+                // Read the prior state first: the accounting below must fire
+                // exactly once, on the real …→Done edge — a repeated
+                // Done→Done dispatch is a no-op, not a second win.
+                let prev = self.store.get_issue(id).await?;
                 self.store.transition_issue(id, status).await?;
+                let newly_done = status == IssueStatus::Done
+                    && prev.as_ref().is_some_and(|i| i.status != IssueStatus::Done);
+                if let (true, Some(issue)) = (newly_done, prev) {
+                    // The Done edge is the issue-side settle: the same real
+                    // accounting a workflow-run settle does, fed by the same
+                    // store functions. An issue completed by an agent teammate
+                    // is one real run + one real win for that agent —
+                    // `win_rate` derives from these counters, never hand-set.
+                    // (Cancelled records nothing: dropping an issue is not
+                    // evidence about the agent's work, and inventing a loss
+                    // would fabricate a metric.)
+                    if let Some(agent_id) = issue.assignee {
+                        if let Some(agent) = self.store.get_agent(agent_id).await? {
+                            self.store
+                                .record_agent_run_by_name(&agent.name, true)
+                                .await?;
+                            self.refresh_agents().await?;
+                            self.emit(Event::AgentsChanged);
+                        }
+                    }
+                    // Artifact reflux, issue-scoped: whatever real files exist
+                    // in the workspace at completion time get registered
+                    // against the issue's stage (idempotent — an unchanged
+                    // workspace registers 0 fresh rows).
+                    if let Ok(Some(proj)) = self.store.get_project(issue.project_id).await {
+                        if !proj.workspace_path.trim().is_empty() {
+                            if let Ok(fresh) = self
+                                .scan_and_register_artifacts(
+                                    issue.project_id,
+                                    &proj.workspace_path,
+                                    None,
+                                    Some(issue.stage),
+                                )
+                                .await
+                            {
+                                if fresh > 0 {
+                                    self.emit(Event::ArtifactsRegistered { fresh });
+                                }
+                            }
+                        }
+                    }
+                }
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
             }

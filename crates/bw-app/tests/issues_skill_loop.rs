@@ -277,3 +277,127 @@ async fn distill_command_rejects_non_done_issue() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn issue_done_edge_settles_agent_accounting_exactly_once() {
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let agent = AgentId::new();
+    let issue = IssueId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    app.dispatch(Command::CreateProject {
+        id: project,
+        name: "记账联动".into(),
+        kind: "自举".into(),
+        desc: String::new(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::SetCycle {
+        cycle: ProjectCycle::Explore,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CompleteCreation {
+        cadence: Cadence::Weekly,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CreateAgent {
+        id: agent,
+        name: "构建师 · 记账验证".into(),
+        role: "构建".into(),
+        skills: vec![],
+        model: "sonnet".into(),
+        instructions: "构建师:真活真账。".into(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CreateIssue {
+        id: issue,
+        stage: StageKind::Build,
+        title: "一件真活".into(),
+        desc: String::new(),
+        priority: IssuePriority::High,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::AssignIssue {
+        id: issue,
+        assignee: Some(agent),
+    })
+    .await
+    .unwrap();
+
+    let runs_of = |app: &App| {
+        app.snapshot()
+            .agents
+            .iter()
+            .find(|a| a.id == agent)
+            .map(|a| (a.runs, a.win_rate.clone()))
+            .unwrap()
+    };
+    // Fresh agent: no runs, and win_rate is the honest "" (no evidence),
+    // never "0%".
+    assert_eq!(runs_of(&app), (0, String::new()));
+
+    // Mid-lifecycle transitions are not completion evidence — no accounting.
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::InProgress,
+    })
+    .await
+    .unwrap();
+    assert_eq!(runs_of(&app), (0, String::new()));
+
+    // The real …→Done edge: exactly one run + one win, win_rate derived.
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::Done,
+    })
+    .await
+    .unwrap();
+    assert_eq!(runs_of(&app), (1, "100%".into()));
+
+    // A repeated Done→Done dispatch is a no-op, not a second win.
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::Done,
+    })
+    .await
+    .unwrap();
+    assert_eq!(runs_of(&app), (1, "100%".into()));
+
+    // Cancelling a different assigned issue records nothing: dropping work is
+    // not evidence about the agent (neither a run nor a loss).
+    let issue2 = IssueId::new();
+    app.dispatch(Command::CreateIssue {
+        id: issue2,
+        stage: StageKind::Build,
+        title: "被取消的活".into(),
+        desc: String::new(),
+        priority: IssuePriority::Low,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::AssignIssue {
+        id: issue2,
+        assignee: Some(agent),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::TransitionIssue {
+        id: issue2,
+        status: IssueStatus::Cancelled,
+    })
+    .await
+    .unwrap();
+    assert_eq!(runs_of(&app), (1, "100%".into()));
+}
