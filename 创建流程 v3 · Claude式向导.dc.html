@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#EFEBE2;}
+  *{box-sizing:border-box;}
+  textarea{resize:none;}
+  input,textarea{font-family:'Noto Sans SC',sans-serif;}
+  @keyframes pulse{0%,100%{opacity:.35;}50%{opacity:1;}}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#EFEBE2;color:#57534A;font-family:'Noto Sans SC',sans-serif;">
+
+  <!-- ===== TOP BAR · 三幕进度 ===== -->
+  <div style="position:sticky;top:0;z-index:20;background:rgba(239,235,226,.94);backdrop-filter:blur(12px);border-bottom:1px solid #E2DCCF;padding:13px 26px;display:flex;align-items:center;gap:16px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div style="width:27px;height:27px;border-radius:7px;background:#C5654A;display:flex;align-items:center;justify-content:center;color:#fff;font:700 13px/1 'JetBrains Mono',monospace;">B</div>
+      <span style="font:600 14px/1.2 'Noto Sans SC';color:#23211C;">新建项目</span>
+      <span style="font:500 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;background:#F2E4DD;color:#B0503A;border-radius:5px;padding:4px 8px;">创建流程 v3 · 三幕</span>
+    </div>
+    <div style="width:1px;height:18px;background:#D8D1C2;"></div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <sc-for list="{{ stepper }}" as="s" hint-placeholder-count="3">
+        <div onClick="{{ s.onClick }}" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:7px 13px;border-radius:8px;background:{{ s.bg }};">
+          <div style="width:19px;height:19px;border-radius:50%;background:{{ s.numBg }};color:{{ s.numColor }};font:700 10px/19px 'JetBrains Mono',monospace;text-align:center;">{{ s.num }}</div>
+          <span style="font:{{ s.weight }} 12.5px/1 'Noto Sans SC';color:{{ s.color }};white-space:nowrap;">{{ s.name }}</span>
+        </div>
+        <sc-if value="{{ s.showArrow }}" hint-placeholder-val="{{ true }}"><span style="color:#C2BBAB;font:400 12px/1 'JetBrains Mono',monospace;">→</span></sc-if>
+      </sc-for>
+    </div>
+    <div style="margin-left:auto;font:400 11.5px/1.5 'Noto Sans SC';color:#A19B8D;">参考 Claude Design / Cowork 初始向导 · 替代原 8 步冷启动</div>
+  </div>
+
+  <!-- ===== 第一幕 · 意图与上下文 ===== -->
+  <sc-if value="{{ isP1 }}" hint-placeholder-val="{{ true }}">
+  <div data-screen-label="第一幕 · 意图与上下文" style="max-width:780px;margin:0 auto;padding:72px 40px 90px;">
+    <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.2em;text-transform:uppercase;color:#C5654A;margin-bottom:20px;">第一幕 · 从一句话开始</div>
+    <h1 style="font:600 40px/1.25 'Noto Serif SC',serif;color:#23211C;margin:0 0 14px;letter-spacing:-.01em;">你想做一个什么项目？</h1>
+    <p style="font:400 15px/1.85 'Noto Sans SC';color:#8C867A;margin:0 0 34px;max-width:40em;">一句话即可。资料先挂上，后面的问题就会少 —— <b style="color:#57534A;">机器能从上下文推出来的，不会再问你。</b></p>
+
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:6px;box-shadow:0 2px 10px rgba(35,33,28,.04);margin-bottom:14px;">
+      <textarea value="{{ brief }}" onChange="{{ onBrief }}" style="width:100%;height:96px;border:none;background:transparent;outline:none;padding:18px 20px 8px;font:400 16.5px/1.75 'Noto Serif SC',serif;color:#23211C;"></textarea>
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px 10px;border-top:1px solid #F0EBDF;">
+        <span style="font:500 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#B3AC9D;flex:none;">挂载上下文</span>
+        <div style="display:flex;gap:7px;flex-wrap:wrap;">
+          <sc-for list="{{ ctxChips }}" as="c" hint-placeholder-count="3">
+            <div onClick="{{ c.onClick }}" style="cursor:pointer;display:flex;align-items:center;gap:6px;border:1px solid {{ c.bd }};background:{{ c.bg }};border-radius:16px;padding:6px 12px;">
+              <span style="font:600 10px/1 'JetBrains Mono',monospace;color:{{ c.iconColor }};">{{ c.icon }}</span>
+              <span style="font:500 12px/1 'Noto Sans SC';color:{{ c.color }};">{{ c.name }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+    <div style="font:400 12px/1.7 'Noto Sans SC';color:#A19B8D;margin-bottom:40px;">已挂载 <b style="color:#C5654A;font-family:'JetBrains Mono',monospace;">{{ ctxCount }}</b> 份 · 系统将从中预判周期、对标与角色配比</div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:44px;">
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:16px 18px;">
+        <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#B0503A;margin-bottom:9px;">01 少问</div>
+        <div style="font:400 12.5px/1.7 'Noto Sans SC';color:#57534A;">只问机器推不出来的 —— 5 个关键问题，每题可「帮我决定」。</div>
+      </div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:16px 18px;">
+        <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#B0503A;margin-bottom:9px;">02 上下文先行</div>
+        <div style="font:400 12.5px/1.7 'Noto Sans SC';color:#57534A;">先挂资料再提问，答案边答边变成体系（右栏实时推导）。</div>
+      </div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:16px 18px;">
+        <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#B0503A;margin-bottom:9px;">03 AI 起草</div>
+        <div style="font:400 12.5px/1.7 'Noto Sans SC';color:#57534A;">整套体系由 AI 起草，你只在关口审阅、修改、确认。</div>
+      </div>
+    </div>
+
+    <div onClick="{{ toP2 }}" style="cursor:pointer;display:inline-flex;align-items:center;gap:10px;background:#C5654A;color:#fff;border-radius:9px;padding:14px 26px;font:600 14.5px/1 'Noto Sans SC';box-shadow:0 4px 14px rgba(197,101,74,.28);">继续 · 回答 5 个问题 <span style="font-family:'JetBrains Mono',monospace;">→</span></div>
+    <div style="margin-top:14px;font:400 11.5px/1.6 'Noto Sans SC';color:#A19B8D;">原 8 步向导 → 压缩为 3 幕 · 教学内容移到各题「为什么问这个」</div>
+  </div>
+  </sc-if>
+
+  <!-- ===== 第二幕 · 关键问题 ===== -->
+  <sc-if value="{{ isP2 }}" hint-placeholder-val="{{ false }}">
+  <div data-screen-label="第二幕 · 关键问题" style="max-width:1140px;margin:0 auto;padding:48px 40px 120px;display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:30px;align-items:start;">
+    <div>
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.2em;text-transform:uppercase;color:#C5654A;margin-bottom:16px;">第二幕 · 只有 5 个问题</div>
+      <h2 style="font:600 30px/1.3 'Noto Serif SC',serif;color:#23211C;margin:0 0 8px;">回答，或者交给我判断</h2>
+      <p style="font:400 14px/1.8 'Noto Sans SC';color:#8C867A;margin:0 0 30px;">每答一题，右侧的体系骨架就长出一块。选「帮我决定」会附上判断理由。</p>
+
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <sc-for list="{{ qRows }}" as="q" hint-placeholder-count="5">
+          <div style="background:#FBFAF6;border:1px solid {{ q.bd }};border-radius:12px;padding:20px 24px;">
+            <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:5px;">
+              <span style="font:700 11px/1 'JetBrains Mono',monospace;color:{{ q.numColor }};">{{ q.num }}</span>
+              <span style="font:600 16.5px/1.4 'Noto Serif SC',serif;color:#23211C;">{{ q.t }}</span>
+              <sc-if value="{{ q.done }}" hint-placeholder-val="{{ false }}">
+                <span style="margin-left:auto;font:600 10.5px/1 'JetBrains Mono',monospace;color:#4A5E42;background:#E7EDE2;border-radius:5px;padding:4px 8px;white-space:nowrap;">✓ 已定</span>
+              </sc-if>
+            </div>
+            <div style="font:400 12.5px/1.6 'Noto Sans SC';color:#A19B8D;margin:0 0 14px 23px;">{{ q.sub }}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-left:23px;">
+              <sc-for list="{{ q.chips }}" as="c" hint-placeholder-count="4">
+                <div onClick="{{ c.onClick }}" style="cursor:pointer;border:{{ c.bd }};background:{{ c.bg }};color:{{ c.color }};border-radius:18px;padding:9px 16px;font:{{ c.weight }} 13px/1 'Noto Sans SC';">{{ c.label }}</div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ q.showAuto }}" hint-placeholder-val="{{ false }}">
+              <div style="margin:13px 0 0 23px;display:flex;gap:9px;align-items:flex-start;background:#F7EDE7;border-radius:8px;padding:11px 14px;">
+                <span style="font:700 10px/1.6 'JetBrains Mono',monospace;color:#B0503A;flex:none;">AI</span>
+                <span style="font:400 12.5px/1.65 'Noto Sans SC';color:#7A3D2D;">{{ q.autoNote }}</span>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="margin-top:28px;display:flex;align-items:center;gap:16px;">
+        <div onClick="{{ toP3 }}" style="cursor:{{ genCursor }};display:inline-flex;align-items:center;gap:10px;background:{{ genBg }};color:{{ genColor }};border-radius:9px;padding:14px 26px;font:600 14.5px/1 'Noto Sans SC';box-shadow:{{ genShadow }};">{{ genLabel }}</div>
+        <span style="font:400 12px/1.5 'Noto Sans SC';color:#A19B8D;">已答 <b style="color:#C5654A;font-family:'JetBrains Mono',monospace;">{{ answeredCount }}</b>/5</span>
+        <div onClick="{{ autoRest }}" style="cursor:pointer;font:500 12.5px/1 'Noto Sans SC';color:#B0503A;border-bottom:1px dashed #D9A794;padding-bottom:2px;">剩下的全部帮我决定</div>
+      </div>
+    </div>
+
+    <!-- 右栏 · 实时推导 -->
+    <sc-if value="{{ showRail }}" hint-placeholder-val="{{ true }}">
+    <div style="position:sticky;top:76px;background:#23211C;border-radius:13px;padding:20px 20px 16px;color:#F3EEE6;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+        <div style="width:7px;height:7px;border-radius:50%;background:#E0A78F;animation:pulse 2.2s ease-in-out infinite;"></div>
+        <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#E0A78F;">体系正在成形</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:11px;">
+        <sc-for list="{{ derivRows }}" as="d" hint-placeholder-count="5">
+          <div style="opacity:{{ d.op }};background:#2D2A24;border-radius:9px;padding:12px 14px;">
+            <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px;">
+              <div style="width:6px;height:6px;border-radius:50%;background:{{ d.dot }};"></div>
+              <span style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#9A9388;">{{ d.k }}</span>
+            </div>
+            <div style="font:500 12.5px/1.55 'Noto Sans SC';color:#F3EEE6;">{{ d.v }}</div>
+            <sc-if value="{{ d.showMix }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-top:9px;">
+                <sc-for list="{{ mixSegs }}" as="m" hint-placeholder-count="5"><div style="width:{{ m.w }};background:{{ m.color }};"></div></sc-for>
+              </div>
+              <div style="font:500 9px/1.4 'JetBrains Mono',monospace;color:#9A9388;margin-top:5px;">原32 构28 清20 增12 维8</div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+      <div style="margin-top:14px;font:400 10.5px/1.6 'Noto Sans SC';color:#9A9388;">来自 {{ ctxCount }} 份上下文 + {{ answeredCount }} 个回答</div>
+    </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <!-- ===== 起草中 ===== -->
+  <sc-if value="{{ isDrafting }}" hint-placeholder-val="{{ false }}">
+  <div data-screen-label="起草中" style="max-width:560px;margin:0 auto;padding:130px 40px;">
+    <div style="background:#23211C;border-radius:14px;padding:34px 36px;color:#F3EEE6;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:22px;">
+        <div style="width:9px;height:9px;border-radius:50%;background:#E0A78F;animation:pulse 1.4s ease-in-out infinite;"></div>
+        <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#E0A78F;">正在起草整套体系</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px;font:400 13.5px/1.6 'Noto Sans SC';color:#C9C2B4;">
+        <div>✓ 读取 GitHub · loop-buddy（OCC / OMC 工作流基础）</div>
+        <div>✓ 读取 OMC 角色地图 · 32 个 agent 定义</div>
+        <div>✓ 周期判定 → 探索 0→1，角色配比已生成</div>
+        <div style="animation:pulse 1.4s ease-in-out infinite;">… 推导北极星与引领 / 滞后指标，编排首批工作流</div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== 第三幕 · 审阅方案 ===== -->
+  <sc-if value="{{ isP3 }}" hint-placeholder-val="{{ false }}">
+  <div data-screen-label="第三幕 · 审阅方案" style="max-width:1180px;margin:0 auto;padding:48px 40px 140px;">
+    <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.2em;text-transform:uppercase;color:#C5654A;margin-bottom:16px;">第三幕 · 审阅关口</div>
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:10px;">
+      <h2 style="font:600 30px/1.3 'Noto Serif SC',serif;color:#23211C;margin:0;">WorkflowHub · 整套体系已起草</h2>
+      <div style="display:flex;gap:7px;flex-wrap:wrap;">
+        <span style="font:500 10.5px/1 'JetBrains Mono',monospace;background:#EDE8DE;color:#6B6557;border-radius:5px;padding:5px 9px;">依据 · loop-buddy</span>
+        <span style="font:500 10.5px/1 'JetBrains Mono',monospace;background:#EDE8DE;color:#6B6557;border-radius:5px;padding:5px 9px;">OMC 角色地图</span>
+        <span style="font:500 10.5px/1 'JetBrains Mono',monospace;background:#EDE8DE;color:#6B6557;border-radius:5px;padding:5px 9px;">5 个回答</span>
+      </div>
+    </div>
+    <p style="font:400 14px/1.8 'Noto Sans SC';color:#8C867A;margin:0 0 30px;">每块都可改可重新生成 —— 这是唯一需要你介入的关口。确认后直接进入运营态。</p>
+
+    <div style="display:grid;grid-template-columns:repeat(12,1fr);gap:14px;">
+
+      <!-- 周期声明 -->
+      <div style="grid-column:span 5;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:22px 24px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <span style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;">周期声明</span>
+          <span style="font:500 10px/1 'JetBrains Mono',monospace;color:#B3AC9D;">AI 起草</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+          <span style="font:600 20px/1.3 'Noto Serif SC',serif;color:#23211C;">探索</span>
+          <span style="font:600 11px/1 'JetBrains Mono',monospace;background:#F2E4DD;color:#B0503A;border-radius:5px;padding:5px 9px;">0 → 1 · 找 PMF</span>
+        </div>
+        <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:8px;">
+          <sc-for list="{{ mixSegs }}" as="m" hint-placeholder-count="5"><div style="width:{{ m.w }};background:{{ m.color }};"></div></sc-for>
+        </div>
+        <div style="font:500 10px/1.4 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:14px;">原型32 · 构建28 · 清理20 · 增长12 · 维护8</div>
+        <div style="display:flex;flex-direction:column;gap:7px;">
+          <div style="font:400 12px/1.6 'Noto Sans SC';color:#57534A;"><b style="color:#C5654A;">原型师</b> analyst · planner · designer 重配</div>
+          <div style="font:400 12px/1.6 'Noto Sans SC';color:#57534A;"><b style="color:#CC8B3C;">构建者</b> executor · tdd 跟进原型验证</div>
+          <div style="font:400 12px/1.6 'Noto Sans SC';color:#57534A;"><b style="color:#8A8275;">维护者</b> 轻配 · 仅安全底线</div>
+        </div>
+      </div>
+
+      <!-- 北极星 -->
+      <div style="grid-column:span 7;background:#23211C;border-radius:12px;padding:22px 24px;color:#F3EEE6;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <span style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#E0A78F;">北极星 · 唯一的成功定义</span>
+          <div onClick="{{ regenNS }}" style="cursor:pointer;font:500 11px/1 'Noto Sans SC';color:#E0A78F;border:1px solid #4A453C;border-radius:6px;padding:6px 11px;">↺ 换一个候选 {{ nsIdxLabel }}</div>
+        </div>
+        <div style="font:600 26px/1.4 'Noto Serif SC',serif;color:#fff;margin-bottom:10px;">{{ nsStar }}</div>
+        <div style="font:400 13px/1.75 'Noto Sans SC';color:#C9C2B4;margin-bottom:16px;">{{ nsDef }}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <span style="font:500 11px/1 'Noto Sans SC';background:#2D2A24;color:#A8C09A;border-radius:14px;padding:6px 12px;">✓ 用户价值导向</span>
+          <span style="font:500 11px/1 'Noto Sans SC';background:#2D2A24;color:#A8C09A;border-radius:14px;padding:6px 12px;">✓ 从运行日志取数 · 难造假</span>
+          <span style="font:500 11px/1 'Noto Sans SC';background:#2D2A24;color:#A8C09A;border-radius:14px;padding:6px 12px;">✓ 每周可观测</span>
+        </div>
+      </div>
+
+      <!-- 引领指标 -->
+      <div style="grid-column:span 6;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:22px 24px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <span style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;">引领指标 · 每周可推动</span>
+          <span style="font:500 10px/1 'JetBrains Mono',monospace;color:#B3AC9D;">3 条 · AI 起草</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <sc-for list="{{ leadRows }}" as="l" hint-placeholder-count="3">
+            <div style="background:#F4F1EA;border:1px solid #EAE3D5;border-radius:9px;padding:13px 15px;">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:4px;">
+                <span style="font:600 13.5px/1.4 'Noto Sans SC';color:#23211C;">{{ l.name }}</span>
+                <span style="font:600 12px/1 'JetBrains Mono',monospace;color:#B0503A;white-space:nowrap;">{{ l.cur }} → {{ l.target }}</span>
+              </div>
+              <div style="font:400 11.5px/1.6 'Noto Sans SC';color:#8C867A;">{{ l.def }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- 滞后指标 -->
+      <div style="grid-column:span 6;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:22px 24px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <span style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;">滞后指标 · 结果验证</span>
+          <span style="font:500 10px/1 'JetBrains Mono',monospace;color:#B3AC9D;">4 条 · 只看不追</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <sc-for list="{{ lagRows }}" as="l" hint-placeholder-count="4">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:9px 4px;border-bottom:1px dashed #EAE3D5;">
+              <div>
+                <span style="font:600 13px/1.4 'Noto Sans SC';color:#23211C;">{{ l.name }}</span>
+                <span style="font:400 11.5px/1.5 'Noto Sans SC';color:#A19B8D;margin-left:8px;">{{ l.def }}</span>
+              </div>
+              <span style="font:600 12px/1 'JetBrains Mono',monospace;color:#57534A;white-space:nowrap;">{{ l.cur }} → {{ l.target }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- 首批工作流 -->
+      <div style="grid-column:span 5;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:22px 24px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <span style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;">首批工作流</span>
+          <span style="font:500 10px/1 'JetBrains Mono',monospace;color:#B3AC9D;">2 导入 · 1 新建</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <sc-for list="{{ wfRows }}" as="w" hint-placeholder-count="3">
+            <div style="display:flex;align-items:center;gap:11px;background:#F4F1EA;border:1px solid #EAE3D5;border-radius:9px;padding:12px 14px;">
+              <span style="flex:none;font:600 9.5px/1 'JetBrains Mono',monospace;background:{{ w.tagBg }};color:{{ w.tagColor }};border-radius:5px;padding:4px 7px;">{{ w.tag }}</span>
+              <div style="min-width:0;">
+                <div style="font:600 13px/1.4 'Noto Sans SC';color:#23211C;">{{ w.name }}</div>
+                <div style="font:400 11px/1.5 'Noto Sans SC';color:#A19B8D;">{{ w.sub }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- 环节激活计划 + 节奏 -->
+      <div style="grid-column:span 7;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:22px 24px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <span style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;">环节激活计划</span>
+          <span style="font:500 10px/1 'JetBrains Mono',monospace;color:#B3AC9D;">探索期 · 前轻后重</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:16px;">
+          <sc-for list="{{ stageRows }}" as="s" hint-placeholder-count="7">
+            <div style="display:flex;align-items:center;gap:11px;padding:7px 4px;">
+              <span style="flex:none;font:700 10px/1 'JetBrains Mono',monospace;color:{{ s.numColor }};">{{ s.n }}</span>
+              <span style="font:{{ s.weight }} 13px/1.4 'Noto Sans SC';color:{{ s.color }};">{{ s.name }}</span>
+              <div style="flex:1;height:1px;background:#EAE3D5;"></div>
+              <span style="flex:none;font:500 10.5px/1 'JetBrains Mono',monospace;background:{{ s.tagBg }};color:{{ s.tagColor }};border-radius:5px;padding:4px 8px;">{{ s.tag }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;background:#F7EDE7;border-radius:9px;padding:12px 15px;">
+          <span style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#B0503A;flex:none;">节奏</span>
+          <span style="font:400 12.5px/1.6 'Noto Sans SC';color:#7A3D2D;">每周一 09:00 体检 Routine · 人只在两个关口介入：洞察 → 北极星、原型 → 开发</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 确认栏 -->
+    <sc-if value="{{ notConfirmed }}" hint-placeholder-val="{{ true }}">
+      <div style="position:sticky;bottom:18px;margin-top:26px;background:rgba(35,33,28,.96);backdrop-filter:blur(10px);border-radius:13px;padding:15px 22px;display:flex;align-items:center;gap:16px;box-shadow:0 10px 34px rgba(35,33,28,.28);">
+        <span style="font:400 12.5px/1.6 'Noto Sans SC';color:#C9C2B4;">审阅无误？确认后建立项目并进入运营态。</span>
+        <div style="margin-left:auto;display:flex;gap:10px;">
+          <div onClick="{{ backP2 }}" style="cursor:pointer;border:1px solid #4A453C;color:#C9C2B4;border-radius:8px;padding:11px 18px;font:500 13px/1 'Noto Sans SC';">← 返回调整回答</div>
+          <div onClick="{{ confirmAll }}" style="cursor:pointer;background:#C5654A;color:#fff;border-radius:8px;padding:11px 22px;font:600 13.5px/1 'Noto Sans SC';">确认 · 建立体系</div>
+        </div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ confirmed }}" hint-placeholder-val="{{ false }}">
+      <div style="position:sticky;bottom:18px;margin-top:26px;background:#3E4A38;border-radius:13px;padding:15px 22px;display:flex;align-items:center;gap:16px;box-shadow:0 10px 34px rgba(62,74,56,.3);">
+        <span style="font:600 13px/1.6 'Noto Sans SC';color:#E7EDE2;">✓ WorkflowHub 已建立 · 环节 01 / 02 已激活，Routine 每周一 09:00</span>
+        <a href="Builders工作台-项目管理向导 v2.dc.html" style="margin-left:auto;text-decoration:none;background:#E7EDE2;color:#3E4A38;border-radius:8px;padding:11px 20px;font:600 13px/1 'Noto Sans SC';">进入项目工作台 →</a>
+      </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 900}, &quot;showRail&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;布局&quot;}}">
+class Component extends DCLogic {
+  state = {
+    phase: 1,
+    drafting: false,
+    confirmed: false,
+    nsIdx: 0,
+    brief: '做一个 WorkflowHub：把 OCC / OMC 会话里长出的工作流沉淀成可复用资产 —— 模板、技能、Agent，导入即跑。',
+    ctx: { git: true, omc: true, occ: false },
+    answers: {},
+  };
+
+  questions() {
+    return [
+      { id:'cycle', t:'这个项目处在什么周期？', sub:'为什么问：周期决定角色配比与节奏 —— 探索期原型重配，运维期维护重配。',
+        opts:['全新想法 · 0→1','已验证 · 上量 1→N','成熟系统 · 保稳态'],
+        autoNote:'判断：探索 0→1。上下文里只有工作流原型与角色定义，无用户与复用数据 → 先验证「复用会发生」这个假设。', autoPick:'全新想法 · 0→1' },
+      { id:'bench', t:'最接近的对标是谁？（可多选）', sub:'为什么问：对标决定竞品扫描范围，差距矩阵从这里长出来。',
+        opts:['n8n','Dify','Zapier','LangSmith'], multi:true,
+        autoNote:'调研建议：n8n · Dify · Zapier —— 三者都做工作流编排，但没人做「从 agent 会话沉淀资产」。', autoPick:['n8n','Dify','Zapier'] },
+      { id:'win', t:'三个月后，怎样算「成了」？', sub:'为什么问：北极星将从这里推导 —— 只选一个，防止指标发散。',
+        opts:['工作流被持续复用','搭建效率可量化提升','成为团队默认入口'],
+        autoNote:'提炼：复用发生 = 资产真的有价值。北极星取「每周被复用的工作流运行数」，从运行日志取数、难造假。', autoPick:'工作流被持续复用' },
+      { id:'user', t:'谁最先使用？', sub:'为什么问：决定冷启动名单与首批反馈回路。',
+        opts:['自己团队','全公司 Builder','外部用户'],
+        autoNote:'建议：先 12 位种子 Builder（OMC 活跃作者），一周内能给出复用信号。', autoPick:'自己团队' },
+      { id:'pace', t:'关口检查的节奏？', sub:'为什么问：人只在关口介入，其余交给 agent 与 Routine。',
+        opts:['每周复盘','双周复盘','每日轻检查'],
+        autoNote:'建议：每周一 09:00 体检 Routine —— 探索期信号快，双周太慢、每日太吵。', autoPick:'每周复盘' },
+    ];
+  }
+
+  nsAlts() {
+    return [
+      { star:'每周被复用的工作流运行数', def:'非作者导入并成功跑通的次数 / 周，从运行日志计算，难以人为修饰。复用发生 = 资产真的有价值。' },
+      { star:'非作者周复用运行数 ≥ 25', def:'同一口径加显式目标线：把「复用」直接锚在数字上，周会只对这一条负责。' },
+      { star:'每周新增「导入即跑」模板数', def:'偏供给侧的候选：先把资产池做厚。风险：可能堆量不保质，需配复用率护栏。' },
+    ];
+  }
+
+  setAns(id, val) {
+    const q = this.questions().find(x => x.id === id);
+    const cur = this.state.answers[id];
+    if (q.multi) {
+      const arr = (cur && cur.multi) ? [...cur.multi] : [];
+      const i = arr.indexOf(val);
+      if (i >= 0) arr.splice(i, 1); else arr.push(val);
+      this.setState({ answers: { ...this.state.answers, [id]: arr.length ? { multi: arr } : undefined } });
+    } else {
+      const same = cur && !cur.auto && cur.val === val;
+      this.setState({ answers: { ...this.state.answers, [id]: same ? undefined : { val } } });
+    }
+  }
+  setAuto(id) {
+    const cur = this.state.answers[id];
+    const same = cur && cur.auto;
+    this.setState({ answers: { ...this.state.answers, [id]: same ? undefined : { auto: true } } });
+  }
+  autoRest() {
+    const a = { ...this.state.answers };
+    this.questions().forEach(q => { if (!a[q.id]) a[q.id] = { auto: true }; });
+    this.setState({ answers: a });
+  }
+  answered(id) { return !!this.state.answers[id]; }
+  answeredCount() { return this.questions().filter(q => this.answered(q.id)).length; }
+
+  go(p) { this.setState({ phase: p }); window.scrollTo(0, 0); }
+  toP3() {
+    if (this.answeredCount() < 5) return;
+    this.setState({ drafting: true }); window.scrollTo(0, 0);
+    setTimeout(() => this.setState({ drafting: false, phase: 3 }), 1400);
+  }
+
+  renderVals() {
+    const st = this.state;
+    const showRail = this.props.showRail ?? true;
+    const isP1 = st.phase === 1 && !st.drafting;
+    const isP2 = st.phase === 2 && !st.drafting;
+    const isP3 = st.phase === 3 && !st.drafting;
+    const n = this.answeredCount();
+
+    const stepNames = ['意图与上下文', '5 个关键问题', '审阅方案'];
+    const stepper = stepNames.map((name, i) => {
+      const p = i + 1; const active = st.phase === p && !st.drafting; const done = st.phase > p || (st.drafting && p <= 2);
+      return {
+        num: done ? '✓' : String(p), name,
+        onClick: () => { if (p < st.phase) this.go(p); },
+        bg: active ? '#F7EDE7' : 'transparent',
+        numBg: active ? '#C5654A' : (done ? '#5F7355' : '#E2DCCF'),
+        numColor: active || done ? '#fff' : '#8C867A',
+        color: active ? '#7A3D2D' : (done ? '#4A5E42' : '#A19B8D'),
+        weight: active ? 600 : 500,
+        showArrow: i < 2,
+      };
+    });
+
+    // 第一幕
+    const ctxDefs = [
+      { key:'git', icon:'⌥', name:'GitHub · loop-buddy（OCC/OMC 工作流）' },
+      { key:'omc', icon:'◈', name:'OMC 角色地图 · 32 agents' },
+      { key:'occ', icon:'≡', name:'OCC 会话记录 × 3' },
+    ];
+    const ctxChips = ctxDefs.map(c => {
+      const on = st.ctx[c.key];
+      return { icon: on ? '✓' : c.icon, name: c.name,
+        onClick: () => this.setState({ ctx: { ...st.ctx, [c.key]: !on } }),
+        bd: on ? '#C9B8A4' : '#E2DCCF', bg: on ? '#F3EBDD' : '#FBFAF6',
+        iconColor: on ? '#5F7355' : '#B3AC9D', color: on ? '#57534A' : '#A19B8D' };
+    });
+    const ctxCount = ctxDefs.filter(c => st.ctx[c.key]).length;
+
+    // 第二幕 · 问题卡片
+    const qRows = this.questions().map((q, i) => {
+      const a = st.answers[q.id];
+      const chips = q.opts.map(o => {
+        const sel = a && (q.multi ? (a.multi || []).includes(o) : (!a.auto && a.val === o));
+        return { label: o, onClick: () => this.setAns(q.id, o),
+          bd: sel ? '1.5px solid #C5654A' : '1px solid #DDD5C5',
+          bg: sel ? '#C5654A' : '#FBFAF6', color: sel ? '#fff' : '#57534A', weight: sel ? 600 : 400 };
+      });
+      const autoSel = a && a.auto;
+      chips.push({ label: '✦ 帮我决定', onClick: () => this.setAuto(q.id),
+        bd: autoSel ? '1.5px solid #B0503A' : '1px dashed #C9A08E',
+        bg: autoSel ? '#F2E4DD' : 'transparent', color: '#B0503A', weight: autoSel ? 600 : 500 });
+      return { num: '0' + (i + 1), t: q.t, sub: q.sub, done: !!a,
+        bd: a ? '#CBC3B1' : '#E2DCCF', numColor: a ? '#5F7355' : '#C5654A',
+        chips, showAuto: !!autoSel, autoNote: q.autoNote };
+    });
+
+    const ready = n >= 5;
+    const derivDefs = [
+      { k:'周期 → 配比', v:'探索 · 0→1 —— 原型师重配，维护轻配', id:'cycle', mix:true },
+      { k:'对标 → 竞品扫描', v:'差距矩阵已排队：n8n · Dify · Zapier', id:'bench' },
+      { k:'成功 → 北极星', v:'候选 ×3 已生成，待第三幕审阅', id:'win' },
+      { k:'用户 → 冷启动', v:'种子名单：12 位 OMC 活跃 Builder', id:'user' },
+      { k:'节奏 → Routine', v:'每周一 09:00 体检 · 两个人工关口', id:'pace' },
+    ];
+    const derivRows = derivDefs.map(d => {
+      const on = this.answered(d.id);
+      return { k: d.k, v: on ? d.v : '等待回答…', op: on ? 1 : .38,
+        dot: on ? '#7FA56F' : '#4A453C', showMix: !!d.mix && on };
+    });
+
+    const mixSegs = [['32%','#C5654A'],['28%','#CC8B3C'],['20%','#6E8C5A'],['12%','#4F7E86'],['8%','#8A8275']].map(m => ({ w: m[0], color: m[1] }));
+
+    // 第三幕
+    const ns = this.nsAlts()[st.nsIdx % 3];
+    const leadRows = [
+      { name:'模板收录数', def:'已沉淀为标准模板的工作流数（含 phases / goal / loop 元数据）', cur:'12', target:'30' },
+      { name:'导入即跑成功率', def:'导入模板后不改配置一次跑通的比例', cur:'58%', target:'85%' },
+      { name:'周复用次数', def:'非作者导入使用某工作流的次数 / 周', cur:'9', target:'25' },
+    ];
+    const lagRows = [
+      { name:'周活跃 Builder 数', def:'每周至少运行一次', cur:'7', target:'20' },
+      { name:'复用率', def:'非作者使用占比', cur:'31%', target:'60%' },
+      { name:'想法 → 可跑', def:'中位时间', cur:'2.5 天', target:'<0.5 天' },
+      { name:'重复造轮子率', def:'与已有模板高度相似', cur:'40%', target:'≤10%' },
+    ];
+    const wfRows = [
+      { tag:'导入', tagBg:'#E7EDE2', tagColor:'#4A5E42', name:'竞品扫描 → 差距矩阵', sub:'WorkflowHub · v4 · 已被复用 23 次' },
+      { tag:'导入', tagBg:'#E7EDE2', tagColor:'#4A5E42', name:'看板原型脚手架', sub:'WorkflowHub · v7 · 初稿可用率 80%' },
+      { tag:'新建', tagBg:'#F2E4DD', tagColor:'#B0503A', name:'模板元数据 Lint', sub:'自建 · 保障「导入即跑」成功率' },
+    ];
+    const stageRows = [
+      { n:'01', name:'竞品洞察', tag:'立即激活', hot:true },
+      { n:'02', name:'需求导入', tag:'立即激活', hot:true },
+      { n:'03', name:'设定方法论', tag:'已由本向导完成', done:true },
+      { n:'04', name:'指标对齐 · 引领', tag:'已由本向导完成', done:true },
+      { n:'05', name:'指标对齐 · 滞后', tag:'已由本向导完成', done:true },
+      { n:'06', name:'原型创建', tag:'关口通过后', cold:true },
+      { n:'07', name:'进度管理', tag:'随运营自动开启', cold:true },
+    ].map(s => ({ n: s.n, name: s.name, tag: s.tag,
+      numColor: s.hot ? '#C5654A' : (s.done ? '#5F7355' : '#B3AC9D'),
+      color: s.cold ? '#8C867A' : '#23211C', weight: s.hot ? 600 : 500,
+      tagBg: s.hot ? '#F2E4DD' : (s.done ? '#E7EDE2' : '#EDE8DE'),
+      tagColor: s.hot ? '#B0503A' : (s.done ? '#4A5E42' : '#8C867A') }));
+
+    return {
+      isP1, isP2, isP3, isDrafting: st.drafting,
+      stepper, showRail,
+      brief: st.brief, onBrief: (e) => this.setState({ brief: e.target.value }),
+      ctxChips, ctxCount,
+      toP2: () => this.go(2),
+      qRows, answeredCount: n,
+      autoRest: () => this.autoRest(),
+      toP3: () => this.toP3(), backP2: () => this.go(2),
+      genLabel: ready ? '生成整套体系 →' : '答完 5 题后生成',
+      genBg: ready ? '#C5654A' : '#E2DCCF', genColor: ready ? '#fff' : '#A19B8D',
+      genCursor: ready ? 'pointer' : 'default',
+      genShadow: ready ? '0 4px 14px rgba(197,101,74,.28)' : 'none',
+      derivRows, mixSegs,
+      nsStar: ns.star, nsDef: ns.def, nsIdxLabel: (st.nsIdx % 3 + 1) + '/3',
+      regenNS: () => this.setState({ nsIdx: st.nsIdx + 1 }),
+      leadRows, lagRows, wfRows, stageRows,
+      notConfirmed: !st.confirmed, confirmed: st.confirmed,
+      confirmAll: () => this.setState({ confirmed: true }),
+    };
+  }
+}
+</script>
+</body>
+</html>
