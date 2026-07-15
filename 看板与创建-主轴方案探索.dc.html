@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;overflow-x:hidden;}
+  body{background:#EFEBE2;font-family:'Noto Sans SC',-apple-system,sans-serif;color:#23211C;-webkit-font-smoothing:antialiased;}
+  ::selection{background:#E7CFC4;}
+  a{color:inherit;}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-thumb{background:#D8D1C2;border-radius:6px;border:3px solid #EFEBE2;}
+</style>
+</helmet>
+
+<template id="__bundler_thumbnail" data-bg-color="#EFEBE2">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#EFEBE2"/>
+    <rect x="372" y="318" width="60" height="164" rx="9" fill="#C5654A"/>
+    <rect x="444" y="318" width="60" height="164" rx="9" fill="#CC8B3C"/>
+    <rect x="516" y="318" width="60" height="164" rx="9" fill="#6E8C5A"/>
+    <rect x="588" y="318" width="60" height="164" rx="9" fill="#4F7E86"/>
+    <rect x="660" y="318" width="60" height="164" rx="9" fill="#8A8275"/>
+    <text x="600" y="250" font-family="serif" font-size="34" font-weight="600" fill="#23211C" text-anchor="middle">五角色 · 主轴方案探索</text>
+    <text x="600" y="540" font-family="monospace" font-size="18" fill="#8C867A" text-anchor="middle">1a / 1b / 1c · 1d / 1e / 1f</text>
+  </svg>
+</template>
+
+<!-- ============ PAGE HEADER · 理解 + 设计系统 + 锚点 ============ -->
+<div style="max-width:1200px;margin:0 auto;padding:56px 40px 4px;">
+  <div style="font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.22em;text-transform:uppercase;color:#C5654A;margin-bottom:20px;">方案探索 · 看板 / 创建 · 五角色重织</div>
+  <h1 style="font:600 40px/1.22 'Noto Serif SC',serif;margin:0 0 20px;letter-spacing:-.01em;max-width:19em;">把 7 步线性主轴，换成「五角色」的三种重织法</h1>
+  <p style="font:400 16px/1.85 'Noto Sans SC';color:#57534A;max-width:46em;margin:0 0 14px;">我读到的：基于新的角色定义（五角色 = 把真实 agents / skills / commands 归类的结果），重构 v2 的<b style="color:#23211C;font-weight:600;">看板 · 创建 · 管理</b>。这一轮先不动外壳，只重组「角色」这条维度，给你挑主轴。</p>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin:0 0 26px;">
+    <span style="font:500 11px/1 'Noto Sans SC';color:#5F7355;background:#EEF2E8;border:1px solid #DCE5D2;border-radius:14px;padding:6px 11px;">保留 · 北极星/引领/滞后 方法论层</span>
+    <span style="font:500 11px/1 'Noto Sans SC';color:#5F7355;background:#EEF2E8;border:1px solid #DCE5D2;border-radius:14px;padding:6px 11px;">保留 · 进度/工作流/定时/产物/版本 五面板</span>
+    <span style="font:500 11px/1 'Noto Sans SC';color:#5F7355;background:#EEF2E8;border:1px solid #DCE5D2;border-radius:14px;padding:6px 11px;">保留 · Routines 观测→优化回路</span>
+    <span style="font:500 11px/1 'Noto Sans SC';color:#5F7355;background:#EEF2E8;border:1px solid #DCE5D2;border-radius:14px;padding:6px 11px;">保留 · 左栏会话 + 中央画布外壳</span>
+  </div>
+
+  <!-- 五角色锚点 legend -->
+  <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#A19B8D;margin-bottom:11px;">五角色 · 全局锚点（命名 / 配色沿用应用现有）</div>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-bottom:14px;">
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:13px 13px;border-top:3px solid #C5654A;">
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;"><span style="width:12px;height:12px;border-radius:4px;background:#C5654A;flex:none;"></span><span style="font:600 14px/1.1 'Noto Serif SC',serif;color:#23211C;">原型师</span></div>
+      <div style="font:500 9px/1 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:7px;">Prototyper · 让想法涌现</div>
+      <div style="font:400 10.5px/1.5 'Noto Sans SC';color:#8C867A;">analyst · planner · designer · deep-research</div>
+    </div>
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:13px 13px;border-top:3px solid #CC8B3C;">
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;"><span style="width:12px;height:12px;border-radius:4px;background:#CC8B3C;flex:none;"></span><span style="font:600 14px/1.1 'Noto Serif SC',serif;color:#23211C;">构建者</span></div>
+      <div style="font:500 9px/1 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:7px;">Builder · 让想法变可用</div>
+      <div style="font:400 10.5px/1.5 'Noto Sans SC';color:#8C867A;">executor · test-engineer · git-master · TDD</div>
+    </div>
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:13px 13px;border-top:3px solid #6E8C5A;">
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;"><span style="width:12px;height:12px;border-radius:4px;background:#6E8C5A;flex:none;"></span><span style="font:600 14px/1.1 'Noto Serif SC',serif;color:#23211C;">清理者</span></div>
+      <div style="font:500 9px/1 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:7px;">Sweeper · 让系统干净变快</div>
+      <div style="font:400 10.5px/1.5 'Noto Sans SC';color:#8C867A;">code-simplifier · reviewer · qa · deslop</div>
+    </div>
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:13px 13px;border-top:3px solid #4F7E86;">
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;"><span style="width:12px;height:12px;border-radius:4px;background:#4F7E86;flex:none;"></span><span style="font:600 14px/1.1 'Noto Serif SC',serif;color:#23211C;">增长者</span></div>
+      <div style="font:500 9px/1 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:7px;">Grower · 提升 PMF</div>
+      <div style="font:400 10.5px/1.5 'Noto Sans SC';color:#8C867A;">scientist · marketing · novel-analytics</div>
+    </div>
+    <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:10px;padding:13px 13px;border-top:3px solid #8A8275;">
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;"><span style="width:12px;height:12px;border-radius:4px;background:#8A8275;flex:none;"></span><span style="font:600 14px/1.1 'Noto Serif SC',serif;color:#23211C;">维护者</span></div>
+      <div style="font:500 9px/1 'JetBrains Mono',monospace;color:#A19B8D;margin-bottom:7px;">Maintainer · 让系统长期稳定</div>
+      <div style="font:400 10.5px/1.5 'Noto Sans SC';color:#8C867A;">security · tracer · canary-watch · loop</div>
+    </div>
+  </div>
+  <div style="font:400 12px/1.6 'Noto Sans SC';color:#A19B8D;max-width:46em;margin-bottom:30px;">三周期决定配比 —— <b style="color:#7A3D2D;">探索</b> 原32/构28/清20/增12/维8 · <b style="color:#7A3D2D;">扩张</b> 原10/构27/清23/增26/维14 · <b style="color:#7A3D2D;">运维</b> 原5/构13/清23/增26/维33。配比是这几个方案共用的底层数据。</div>
+</div>
+
+<!-- ============ TURN t2 · 1a × 1d 合并进运维看板 ============ -->
+<section id="t2" style="max-width:1200px;margin:0 auto;padding:8px 40px 40px;">
+  <div style="display:flex;align-items:baseline;gap:10px;margin:0 0 8px;">
+    <a href="#t2" style="font:600 11px/1 'JetBrains Mono',monospace;color:#fff;background:#23211C;border-radius:5px;padding:5px 9px;text-decoration:none;">轮次 2</a>
+    <span style="font:600 13px/1.2 'Noto Sans SC';color:#23211C;">第二轮 · 把 1a 的四阶段板 × 1d 的周期指挥台 合并进运维看板</span>
+  </div>
+  <p style="font:400 13px/1.75 'Noto Sans SC';color:#8C867A;max-width:47em;margin:0 0 22px;">你说的「有机结合」：<a href="#1a" style="color:#C5654A;font-weight:600;text-decoration:none;">1a</a> 出<b style="color:#23211C;">四阶段主板 + 每阶段角色配比 + 卡片挂真实 agent / skill</b>；<a href="#1d" style="color:#C5654A;font-weight:600;text-decoration:none;">1d</a> 出<b style="color:#23211C;">顶部选侧重周期 → 自动预置</b>。合起来 = 看板顶部一条<b style="color:#7A3D2D;">周期指挥台</b>，选周期即联动整块主板：北极星、侧重阶段、角色配比全部换算，主板上「非重心角色」的卡片自动淡出。<b style="color:#7A3D2D;">点下面的「探索 / 扩张 / 运维」试试。</b></p>
+
+  <!-- ---- 2a ---- -->
+  <div id="2a" style="scroll-margin-top:16px;">
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:12px;flex-wrap:wrap;">
+      <a href="#2a" style="font:700 11px/1 'JetBrains Mono',monospace;color:#fff;background:#23211C;border-radius:6px;padding:6px 10px;text-decoration:none;">2a</a>
+      <div style="font:600 18px/1.2 'Noto Serif SC',serif;color:#23211C;">运维看板 · 周期指挥台驱动的四阶段主板</div>
+      <div style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#B0503A;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:5px;padding:5px 8px;">1a × 1d · 可点</div>
+    </div>
+
+    <!-- shell header -->
+    <div style="background:rgba(239,235,226,0.92);border:1px solid #E2DCCF;border-bottom:none;border-radius:11px 11px 0 0;padding:11px 16px;display:flex;align-items:center;gap:11px;">
+      <div style="width:24px;height:24px;border-radius:6px;background:#C5654A;color:#fff;font:700 12px/24px 'JetBrains Mono',monospace;text-align:center;">B</div>
+      <div style="font:600 13.5px/1 'Noto Sans SC';color:#23211C;">模型 API 服务 · 运维看板</div>
+      <span style="font:500 10px/1 'Noto Sans SC';background:#E7EDE2;color:#4A5E42;border-radius:5px;padding:4px 8px;">运营中</span>
+      <div style="margin-left:auto;display:flex;background:#EBE5D9;border-radius:8px;padding:2px;gap:1px;">
+        <span style="border-radius:6px;padding:5px 12px;font:600 11px/1 'Noto Sans SC';background:#fff;color:#23211C;">进度</span>
+        <span style="border-radius:6px;padding:5px 12px;font:600 11px/1 'Noto Sans SC';color:#8C867A;">工作流</span>
+        <span style="border-radius:6px;padding:5px 12px;font:600 11px/1 'Noto Sans SC';color:#8C867A;">定时任务</span>
+        <span style="border-radius:6px;padding:5px 12px;font:600 11px/1 'Noto Sans SC';color:#8C867A;">产物</span>
+        <span style="border-radius:6px;padding:5px 12px;font:600 11px/1 'Noto Sans SC';color:#8C867A;">版本</span>
+      </div>
+    </div>
+
+    <div style="display:flex;border:1px solid #E2DCCF;border-radius:0 0 11px 11px;overflow:hidden;background:#EFEBE2;">
+      <!-- rail -->
+      <div style="width:44px;flex:none;background:#F4F0E7;border-right:1px solid #E2DCCF;padding:12px 7px;display:flex;flex-direction:column;gap:6px;">
+        <div style="height:6px;border-radius:3px;background:#E0D9CA;"></div>
+        <div style="height:6px;border-radius:3px;background:#E0D9CA;width:70%;"></div>
+        <div style="height:6px;border-radius:3px;background:#E0D9CA;"></div>
+        <div style="height:6px;border-radius:3px;background:#E0D9CA;width:55%;"></div>
+      </div>
+
+      <div style="flex:1;min-width:0;padding:16px 18px;">
+        <!-- ===== 周期指挥台 (1d) ===== -->
+        <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:14px 16px;margin-bottom:14px;">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:13px;flex-wrap:wrap;">
+            <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;flex:none;">侧重周期 · 指挥台</span>
+            <div style="flex:1;min-width:230px;display:flex;gap:7px;align-items:stretch;">
+              <sc-for list="{{ k2Chips }}" as="c" hint-placeholder-count="3">
+                <div onClick="{{ c.onClick }}" title="{{ c.title }}" style="cursor:pointer;flex:{{ c.flex }};min-width:0;border-radius:9px;padding:{{ c.pad }};background:{{ c.bg }};border:{{ c.bdr }};overflow:hidden;display:flex;flex-direction:column;justify-content:center;transition:background .25s ease,color .2s ease;">
+                  <div style="font:600 14px/1.1 'Noto Serif SC',serif;color:{{ c.fg }};white-space:nowrap;">{{ c.label }}</div>
+                  <sc-if value="{{ c.showSub }}" hint-placeholder-val="{{ true }}"><div style="font:500 9px/1.2 'JetBrains Mono',monospace;color:{{ c.subColor }};margin-top:3px;white-space:nowrap;">{{ c.sub }}</div></sc-if>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;gap:6px;flex:none;">
+              <span style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;background:#EEF2E8;border:1px solid #DCE5D2;border-radius:5px;padding:5px 8px;">引领 3</span>
+              <span style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;background:#F0ECE3;border:1px solid #E2DCCF;border-radius:5px;padding:5px 8px;">滞后 4</span>
+            </div>
+          </div>
+          <div style="display:flex;align-items:stretch;gap:12px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:230px;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:9px;padding:11px 14px;display:flex;flex-direction:column;justify-content:center;">
+              <div style="font:600 8px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#B0503A;margin-bottom:6px;">北极星 · 随周期</div>
+              <div style="font:500 13px/1.4 'Noto Sans SC';color:#7A3D2D;">{{ k2North }}</div>
+            </div>
+            <div style="flex:2;min-width:330px;">
+              <div style="display:flex;align-items:center;gap:7px;margin-bottom:7px;">
+                <sc-for list="{{ k2Roster }}" as="r" hint-placeholder-count="5">
+                  <div style="flex:1;border-radius:8px;padding:8px 6px;text-align:center;background:{{ r.bg }};border:{{ r.bdr }};opacity:{{ r.op }};">
+                    <div style="width:14px;height:14px;border-radius:4px;background:{{ r.color }};margin:0 auto 5px;"></div>
+                    <div style="font:600 10px/1.1 'Noto Sans SC';color:#23211C;">{{ r.name }}</div>
+                    <div style="font:600 10px/1 'JetBrains Mono',monospace;color:#8C867A;margin-top:3px;">{{ r.pct }}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="display:flex;height:9px;border-radius:4px;overflow:hidden;">
+                <sc-for list="{{ k2Mix }}" as="m" hint-placeholder-count="5">
+                  <div style="background:{{ m.color }};width:{{ m.w }};"></div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 四阶段主板 (1a) ===== -->
+        <div style="font:500 9px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;margin-bottom:9px;">流程主轴 →　侧重阶段随周期高亮　·　非重心角色卡片自动淡出</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:9px;align-items:start;">
+          <sc-for list="{{ k2Cols }}" as="col" hint-placeholder-count="4">
+            <div style="background:{{ col.colBg }};border:1px solid #E2DCCF;border-radius:10px;padding:11px 11px;">
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:9px;background:{{ col.headBg }};border:{{ col.headBdr }};border-radius:7px;padding:6px 9px;">
+                <span style="font:700 9px/1 'JetBrains Mono',monospace;color:{{ col.numColor }};">{{ col.num }}</span>
+                <span style="font:600 12px/1.2 'Noto Sans SC';color:#23211C;">{{ col.key }}</span>
+                <sc-if value="{{ col.emph }}" hint-placeholder-val="{{ false }}"><span style="margin-left:auto;font:600 8px/1 'JetBrains Mono',monospace;color:#fff;background:#C5654A;border-radius:4px;padding:2px 6px;">侧重</span></sc-if>
+              </div>
+              <div style="display:flex;height:5px;border-radius:3px;overflow:hidden;margin-bottom:9px;">
+                <sc-for list="{{ col.bar }}" as="b" hint-placeholder-count="5">
+                  <div style="width:{{ b.w }};background:{{ b.color }};"></div>
+                </sc-for>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px;">
+                <sc-for list="{{ col.cards }}" as="cd" hint-placeholder-count="2">
+                  <div style="background:{{ cd.cardBg }};border:1px solid #E2DCCF;border-left:{{ cd.leftBorder }};border-radius:7px;padding:7px 8px;opacity:{{ cd.op }};">
+                    <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;">
+                      <span style="width:6px;height:6px;border-radius:50%;background:{{ cd.roleColor }};"></span>
+                      <span style="font:600 8px/1 'JetBrains Mono',monospace;color:{{ cd.roleColor }};">{{ cd.role }}</span>
+                      <sc-if value="{{ cd.hasTag }}" hint-placeholder-val="{{ false }}"><span style="margin-left:auto;font:600 8px/1 'JetBrains Mono',monospace;color:{{ cd.tagColor }};background:{{ cd.tagBg }};border-radius:4px;padding:2px 5px;">{{ cd.tag }}</span></sc-if>
+                    </div>
+                    <div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">{{ cd.title }}</div>
+                    <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;">
+                      <span style="font:600 8px/1.3 'JetBrains Mono',monospace;color:#6E5848;background:#F1E9E1;border-radius:4px;padding:2px 5px;">{{ cd.agent }}</span>
+                      <span style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#9A8C7B;background:#fff;border:1px solid #E6DBD0;border-radius:4px;padding:2px 5px;">{{ cd.skill }}</span>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:13px;font:400 12px/1.65 'Noto Sans SC';color:#8C867A;"><b style="color:#5F7355;font-weight:600;">合并逻辑 ·</b> 顶部指挥台（1d）是<b>一个开关</b>，联动整块主板（1a）：切「运维」→ 需求开发 / 运营运维 两阶段高亮，维护者 / 增长者 / 清理者 的卡片点亮、其余淡出；切「探索」→ 重心回到需求分析 / 设计与原型师 / 构建者。同一块板，随周期重织。</div>
+  </div>
+</section>
+
+<!-- ============ TURN t1 ============ -->
+<section id="t1" style="max-width:1200px;margin:0 auto;padding:8px 40px 80px;">
+  <div style="display:flex;align-items:baseline;gap:10px;margin:0 0 8px;">
+    <a href="#t1" style="font:600 11px/1 'JetBrains Mono',monospace;color:#fff;background:#23211C;border-radius:5px;padding:5px 9px;text-decoration:none;">轮次 1</a>
+    <span style="font:600 13px/1.2 'Noto Sans SC';color:#23211C;">第一轮探索 · 看板主轴 × 创建流程</span>
+  </div>
+  <p style="font:400 13px/1.7 'Noto Sans SC';color:#8C867A;max-width:44em;margin:0 0 26px;">挑法：看板主轴 <a href="#1a" style="color:#C5654A;font-weight:600;text-decoration:none;">1a</a> / <a href="#1b" style="color:#C5654A;font-weight:600;text-decoration:none;">1b</a> / <a href="#1c" style="color:#C5654A;font-weight:600;text-decoration:none;">1c</a> 选一个，创建流程 <a href="#1d" style="color:#C5654A;font-weight:600;text-decoration:none;">1d</a> / <a href="#1e" style="color:#C5654A;font-weight:600;text-decoration:none;">1e</a> / <a href="#1f" style="color:#C5654A;font-weight:600;text-decoration:none;">1f</a> 选一个，可混搭。在对话里报 id 即可。<b style="color:#7A3D2D;">本轮已把 1a / 1d 注入真实 agents / skills —— 看卡片底部那排 mono 标签。</b></p>
+
+  <!-- ===== GROUP A · 看板主轴 ===== -->
+  <div style="display:flex;align-items:center;gap:10px;margin:0 0 16px;">
+    <div style="font:700 12px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#23211C;">A · 看板主轴</div>
+    <div style="flex:1;height:1px;background:#E2DCCF;"></div>
+    <div style="font:400 11px/1 'Noto Sans SC';color:#A19B8D;">同一套外壳，三种「谁来当横轴」</div>
+  </div>
+
+  <!-- ---- 1a ---- -->
+  <div id="1a" style="scroll-margin-top:16px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:14px;padding:20px 22px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:7px;flex-wrap:wrap;">
+      <a href="#1a" style="font:700 11px/1 'JetBrains Mono',monospace;color:#fff;background:#23211C;border-radius:6px;padding:6px 10px;text-decoration:none;">1a</a>
+      <div style="font:600 18px/1.2 'Noto Serif SC',serif;color:#23211C;">流程四阶段主轴 · 角色作配比层</div>
+      <div style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#5F7355;background:#EEF2E8;border:1px solid #DCE5D2;border-radius:5px;padding:5px 8px;">最稳 · 改动最小</div>
+      <div style="margin-left:auto;font:400 12px/1.5 'Noto Sans SC';color:#8C867A;max-width:24em;text-align:right;">横轴 = 需求分析→设计→开发→运维；角色在每阶段以「配比微条 + 来源色点」出现</div>
+    </div>
+    <div style="font:400 12.5px/1.6 'Noto Sans SC';color:#57534A;max-width:50em;margin-bottom:16px;">最贴近 v2 现状：把现在的 7 个环节并成 4 个流程阶段当横轴；每个阶段顶部一条角色配比微条，里面的工作项按「由哪个角色驱动」上色。方法论横幅常驻顶部、贯穿四阶段。</div>
+
+    <!-- shell -->
+    <div style="background:rgba(239,235,226,0.92);border:1px solid #E2DCCF;border-bottom:none;border-radius:11px 11px 0 0;padding:9px 14px;display:flex;align-items:center;gap:11px;">
+      <div style="width:22px;height:22px;border-radius:5px;background:#C5654A;color:#fff;font:700 11px/22px 'JetBrains Mono',monospace;text-align:center;">B</div>
+      <div style="font:600 12.5px/1 'Noto Sans SC';color:#23211C;">模型 API 服务 · 运维看板</div>
+      <span style="font:500 10px/1 'Noto Sans SC';background:#E7EDE2;color:#4A5E42;border-radius:5px;padding:3px 7px;">运营中</span>
+      <div style="margin-left:auto;display:flex;background:#EBE5D9;border-radius:7px;padding:2px;gap:1px;">
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';background:#fff;color:#23211C;">进度</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">工作流</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">定时任务</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">产物</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">版本</span>
+      </div>
+    </div>
+    <div style="display:flex;border:1px solid #E2DCCF;border-radius:0 0 11px 11px;overflow:hidden;background:#EFEBE2;">
+      <!-- rail hint -->
+      <div style="width:40px;flex:none;background:#F4F0E7;border-right:1px solid #E2DCCF;padding:10px 6px;display:flex;flex-direction:column;gap:5px;">
+        <div style="height:5px;border-radius:3px;background:#E0D9CA;"></div>
+        <div style="height:5px;border-radius:3px;background:#E0D9CA;width:70%;"></div>
+        <div style="height:5px;border-radius:3px;background:#E0D9CA;"></div>
+        <div style="height:5px;border-radius:3px;background:#E0D9CA;width:55%;"></div>
+      </div>
+      <div style="flex:1;min-width:0;padding:13px;">
+        <!-- methodology band -->
+        <div style="display:flex;align-items:center;gap:10px;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:8px;padding:8px 13px;margin-bottom:13px;">
+          <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:#C5654A;border-radius:5px;padding:4px 8px;">北极星</span>
+          <span style="font:500 12px/1.4 'Noto Sans SC';color:#7A3D2D;">有效可用性 99.9% · 悬在四阶段之上</span>
+          <span style="margin-left:auto;display:flex;gap:6px;">
+            <span style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;background:#EEF2E8;border:1px solid #DCE5D2;border-radius:5px;padding:4px 7px;">引领 3</span>
+            <span style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;background:#F0ECE3;border:1px solid #E2DCCF;border-radius:5px;padding:4px 7px;">滞后 4</span>
+          </span>
+        </div>
+        <div style="font:500 9px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#A19B8D;margin-bottom:9px;">流程主轴 →　角色配比 + 来源色点　·　卡片底部＝驱动 agent / 关键 skill</div>
+        <!-- 4 phase columns -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:9px;">
+          <!-- 分析 -->
+          <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:9px;padding:10px 10px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;"><span style="font:700 9px/1 'JetBrains Mono',monospace;color:#C2BBAB;">01</span><span style="font:600 12px/1.2 'Noto Sans SC';color:#23211C;">需求分析</span></div>
+            <div style="display:flex;height:5px;border-radius:3px;overflow:hidden;margin-bottom:9px;"><div style="width:55%;background:#C5654A;"></div><div style="width:10%;background:#CC8B3C;"></div><div style="width:10%;background:#6E8C5A;"></div><div style="width:20%;background:#4F7E86;"></div><div style="width:5%;background:#8A8275;"></div></div>
+            <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #C5654A;border-radius:7px;padding:7px 8px;margin-bottom:6px;">
+              <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#C5654A;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#C5654A;">原型师</span><span style="margin-left:auto;font:600 8px/1 'JetBrains Mono',monospace;color:#5F7355;background:#EEF2E8;border-radius:4px;padding:2px 5px;">引领</span></div>
+              <div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">竞品差距矩阵 → 洞察</div>
+              <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"><span style="font:600 8px/1.3 'JetBrains Mono',monospace;color:#6E5848;background:#F1E9E1;border-radius:4px;padding:2px 5px;">analyst</span><span style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#9A8C7B;background:#fff;border:1px solid #E6DBD0;border-radius:4px;padding:2px 5px;">deep-research</span></div>
+            </div>
+            <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #4F7E86;border-radius:7px;padding:7px 8px;">
+              <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#4F7E86;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#4F7E86;">增长者</span></div>
+              <div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">用户访谈 · PMF 信号</div>
+              <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"><span style="font:600 8px/1.3 'JetBrains Mono',monospace;color:#6E5848;background:#F1E9E1;border-radius:4px;padding:2px 5px;">scientist</span><span style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#9A8C7B;background:#fff;border:1px solid #E6DBD0;border-radius:4px;padding:2px 5px;">mass-line</span></div>
+            </div>
+          </div>
+          <!-- 设计 -->
+          <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:9px;padding:10px 10px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;"><span style="font:700 9px/1 'JetBrains Mono',monospace;color:#C2BBAB;">02</span><span style="font:600 12px/1.2 'Noto Sans SC';color:#23211C;">需求设计</span></div>
+            <div style="display:flex;height:5px;border-radius:3px;overflow:hidden;margin-bottom:9px;"><div style="width:35%;background:#C5654A;"></div><div style="width:35%;background:#CC8B3C;"></div><div style="width:20%;background:#6E8C5A;"></div><div style="width:5%;background:#4F7E86;"></div><div style="width:5%;background:#8A8275;"></div></div>
+            <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #C5654A;border-radius:7px;padding:7px 8px;margin-bottom:6px;">
+              <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#C5654A;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#C5654A;">原型师</span><span style="margin-left:auto;font:600 8px/1 'JetBrains Mono',monospace;color:#5F7355;background:#EEF2E8;border-radius:4px;padding:2px 5px;">引领</span></div>
+              <div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">看板信息架构</div>
+              <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"><span style="font:600 8px/1.3 'JetBrains Mono',monospace;color:#6E5848;background:#F1E9E1;border-radius:4px;padding:2px 5px;">planner</span><span style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#9A8C7B;background:#fff;border:1px solid #E6DBD0;border-radius:4px;padding:2px 5px;">plan</span></div>
+            </div>
+            <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #CC8B3C;border-radius:7px;padding:7px 8px;">
+              <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#CC8B3C;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#CC8B3C;">构建者</span></div>
+              <div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">评测口径设计</div>
+              <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"><span style="font:600 8px/1.3 'JetBrains Mono',monospace;color:#6E5848;background:#F1E9E1;border-radius:4px;padding:2px 5px;">architect</span><span style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#9A8C7B;background:#fff;border:1px solid #E6DBD0;border-radius:4px;padding:2px 5px;">claude-api</span></div>
+            </div>
+          </div>
+          <!-- 开发 -->
+          <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:9px;padding:10px 10px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;"><span style="font:700 9px/1 'JetBrains Mono',monospace;color:#C2BBAB;">03</span><span style="font:600 12px/1.2 'Noto Sans SC';color:#23211C;">需求开发</span></div>
+            <div style="display:flex;height:5px;border-radius:3px;overflow:hidden;margin-bottom:9px;"><div style="width:5%;background:#C5654A;"></div><div style="width:55%;background:#CC8B3C;"></div><div style="width:25%;background:#6E8C5A;"></div><div style="width:5%;background:#4F7E86;"></div><div style="width:10%;background:#8A8275;"></div></div>
+            <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #CC8B3C;border-radius:7px;padding:7px 8px;margin-bottom:6px;">
+              <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#CC8B3C;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#CC8B3C;">构建者</span><span style="margin-left:auto;font:600 8px/1 'JetBrains Mono',monospace;color:#5F7355;background:#EEF2E8;border-radius:4px;padding:2px 5px;">引领</span></div>
+              <div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">告警覆盖率脚手架</div>
+              <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"><span style="font:600 8px/1.3 'JetBrains Mono',monospace;color:#6E5848;background:#F1E9E1;border-radius:4px;padding:2px 5px;">executor</span><span style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#9A8C7B;background:#fff;border:1px solid #E6DBD0;border-radius:4px;padding:2px 5px;">ultrawork</span></div>
+            </div>
+            <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #6E8C5A;border-radius:7px;padding:7px 8px;">
+              <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#6E8C5A;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#6E8C5A;">清理者</span></div>
+              <div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">根因建议阈值简化</div>
+              <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"><span style="font:600 8px/1.3 'JetBrains Mono',monospace;color:#6E5848;background:#F1E9E1;border-radius:4px;padding:2px 5px;">code-simplifier</span><span style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#9A8C7B;background:#fff;border:1px solid #E6DBD0;border-radius:4px;padding:2px 5px;">simplify</span></div>
+            </div>
+          </div>
+          <!-- 运维 -->
+          <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:9px;padding:10px 10px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;"><span style="font:700 9px/1 'JetBrains Mono',monospace;color:#C2BBAB;">04</span><span style="font:600 12px/1.2 'Noto Sans SC';color:#23211C;">运营运维</span></div>
+            <div style="display:flex;height:5px;border-radius:3px;overflow:hidden;margin-bottom:9px;"><div style="width:3%;background:#C5654A;"></div><div style="width:10%;background:#CC8B3C;"></div><div style="width:22%;background:#6E8C5A;"></div><div style="width:30%;background:#4F7E86;"></div><div style="width:35%;background:#8A8275;"></div></div>
+            <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #8A8275;border-radius:7px;padding:7px 8px;margin-bottom:6px;">
+              <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#8A8275;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#8A8275;">维护者</span><span style="margin-left:auto;font:600 8px/1 'JetBrains Mono',monospace;color:#8C867A;background:#F0ECE3;border-radius:4px;padding:2px 5px;">滞后</span></div>
+              <div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">P95 延迟回归看护</div>
+              <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"><span style="font:600 8px/1.3 'JetBrains Mono',monospace;color:#6E5848;background:#F1E9E1;border-radius:4px;padding:2px 5px;">tracer</span><span style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#9A8C7B;background:#fff;border:1px solid #E6DBD0;border-radius:4px;padding:2px 5px;">loop</span></div>
+            </div>
+            <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #4F7E86;border-radius:7px;padding:7px 8px;">
+              <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#4F7E86;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#4F7E86;">增长者</span></div>
+              <div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">成本按租户下钻</div>
+              <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"><span style="font:600 8px/1.3 'JetBrains Mono',monospace;color:#6E5848;background:#F1E9E1;border-radius:4px;padding:2px 5px;">scientist</span><span style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#9A8C7B;background:#fff;border:1px solid #E6DBD0;border-radius:4px;padding:2px 5px;">novel-analytics</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:13px;font:400 12px/1.6 'Noto Sans SC';color:#8C867A;"><b style="color:#5F7355;font-weight:600;">取舍 ·</b> 升级路径最短、最易接受；卡片已挂上真实 <span style="font-family:'JetBrains Mono',monospace;color:#6E5848;">agent / skill</span>，角色不再隐性 —— 但它仍是配比层，不是主轴。</div>
+  </div>
+
+  <!-- ---- 1b ---- -->
+  <div id="1b" style="scroll-margin-top:16px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:14px;padding:20px 22px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:7px;flex-wrap:wrap;">
+      <a href="#1b" style="font:700 11px/1 'JetBrains Mono',monospace;color:#fff;background:#23211C;border-radius:6px;padding:6px 10px;text-decoration:none;">1b</a>
+      <div style="font:600 18px/1.2 'Noto Serif SC',serif;color:#23211C;">五角色泳道主轴 · 按「谁」读看板</div>
+      <div style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#B0503A;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:5px;padding:5px 8px;">角色最前台</div>
+      <div style="margin-left:auto;font:400 12px/1.5 'Noto Sans SC';color:#8C867A;max-width:24em;text-align:right;">五条泳道 = 五角色；每条泳道里的工作沿四阶段推进，角色之间画轻量回路</div>
+    </div>
+    <div style="font:400 12.5px/1.6 'Noto Sans SC';color:#57534A;max-width:50em;margin-bottom:16px;">最忠于「新角色定义」这件事本身：横向五条泳道，一条一个角色，左侧带它的 agents/skills 数。工作项落在所属阶段的列位上，读图就是读「谁在做什么、推进到哪了」。底部一条轻量「角色回路」标注反馈流向。</div>
+
+    <!-- shell -->
+    <div style="background:rgba(239,235,226,0.92);border:1px solid #E2DCCF;border-bottom:none;border-radius:11px 11px 0 0;padding:9px 14px;display:flex;align-items:center;gap:11px;">
+      <div style="width:22px;height:22px;border-radius:5px;background:#C5654A;color:#fff;font:700 11px/22px 'JetBrains Mono',monospace;text-align:center;">B</div>
+      <div style="font:600 12.5px/1 'Noto Sans SC';color:#23211C;">模型 API 服务 · 运维看板</div>
+      <span style="font:500 10px/1 'Noto Sans SC';background:#E7EDE2;color:#4A5E42;border-radius:5px;padding:3px 7px;">运营中</span>
+      <div style="margin-left:auto;display:flex;background:#EBE5D9;border-radius:7px;padding:2px;gap:1px;">
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';background:#fff;color:#23211C;">进度</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">工作流</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">定时任务</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">产物</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">版本</span>
+      </div>
+    </div>
+    <div style="display:flex;border:1px solid #E2DCCF;border-radius:0 0 11px 11px;overflow:hidden;background:#EFEBE2;">
+      <div style="width:40px;flex:none;background:#F4F0E7;border-right:1px solid #E2DCCF;padding:10px 6px;display:flex;flex-direction:column;gap:5px;">
+        <div style="height:5px;border-radius:3px;background:#E0D9CA;"></div>
+        <div style="height:5px;border-radius:3px;background:#E0D9CA;width:70%;"></div>
+        <div style="height:5px;border-radius:3px;background:#E0D9CA;"></div>
+      </div>
+      <div style="flex:1;min-width:0;padding:13px;">
+        <!-- methodology band -->
+        <div style="display:flex;align-items:center;gap:10px;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:8px;padding:8px 13px;margin-bottom:11px;">
+          <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:#C5654A;border-radius:5px;padding:4px 8px;">北极星</span>
+          <span style="font:500 12px/1.4 'Noto Sans SC';color:#7A3D2D;">有效可用性 99.9%</span>
+          <span style="margin-left:auto;display:flex;gap:6px;"><span style="font:600 9px/1 'JetBrains Mono',monospace;color:#5F7355;background:#EEF2E8;border:1px solid #DCE5D2;border-radius:5px;padding:4px 7px;">引领 3</span><span style="font:600 9px/1 'JetBrains Mono',monospace;color:#8C867A;background:#F0ECE3;border:1px solid #E2DCCF;border-radius:5px;padding:4px 7px;">滞后 4</span></span>
+        </div>
+        <!-- phase header row -->
+        <div style="display:grid;grid-template-columns:152px repeat(4,1fr);margin-bottom:5px;">
+          <div></div>
+          <div style="text-align:center;font:600 10px/1 'JetBrains Mono',monospace;color:#A19B8D;">需求分析</div>
+          <div style="text-align:center;font:600 10px/1 'JetBrains Mono',monospace;color:#A19B8D;">需求设计</div>
+          <div style="text-align:center;font:600 10px/1 'JetBrains Mono',monospace;color:#A19B8D;">需求开发</div>
+          <div style="text-align:center;font:600 10px/1 'JetBrains Mono',monospace;color:#A19B8D;">运营运维</div>
+        </div>
+        <!-- lanes -->
+        <div style="border:1px solid #E2DCCF;border-radius:9px;overflow:hidden;">
+          <!-- 原型师 -->
+          <div style="display:grid;grid-template-columns:152px repeat(4,1fr);background:#FBFAF6;border-bottom:1px solid #EDE7DA;">
+            <div style="background:#FBF1EC;border-left:4px solid #C5654A;padding:9px 11px;display:flex;flex-direction:column;justify-content:center;"><div style="font:600 13px/1.15 'Noto Serif SC',serif;color:#23211C;">原型师</div><div style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#A19B8D;">7 agents · 15 skills</div></div>
+            <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;align-items:center;"><div style="background:#FBF1EC;border:1px solid #E6C3B4;border-radius:6px;padding:5px 7px;font:500 9.5px/1.2 'Noto Sans SC';color:#7A3D2D;">竞品洞察链</div></div>
+            <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;align-items:center;"><div style="background:#FBF1EC;border:1px solid #E6C3B4;border-radius:6px;padding:5px 7px;font:500 9.5px/1.2 'Noto Sans SC';color:#7A3D2D;">看板原型</div></div>
+            <div style="border-left:1px solid #EDE7DA;"></div>
+            <div style="border-left:1px solid #EDE7DA;"></div>
+          </div>
+          <!-- 构建者 -->
+          <div style="display:grid;grid-template-columns:152px repeat(4,1fr);background:#FBFAF6;border-bottom:1px solid #EDE7DA;">
+            <div style="background:#FBF4E9;border-left:4px solid #CC8B3C;padding:9px 11px;display:flex;flex-direction:column;justify-content:center;"><div style="font:600 13px/1.15 'Noto Serif SC',serif;color:#23211C;">构建者</div><div style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#A19B8D;">7 agents · 15 skills</div></div>
+            <div style="border-left:1px solid #EDE7DA;"></div>
+            <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;align-items:center;"><div style="background:#FBF4E9;border:1px solid #E6D2A8;border-radius:6px;padding:5px 7px;font:500 9.5px/1.2 'Noto Sans SC';color:#7A5A1E;">取数适配层</div></div>
+            <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;align-items:center;"><div style="background:#FBF4E9;border:1px solid #E6D2A8;border-radius:6px;padding:5px 7px;font:500 9.5px/1.2 'Noto Sans SC';color:#7A5A1E;">告警脚手架</div></div>
+            <div style="border-left:1px solid #EDE7DA;"></div>
+          </div>
+          <!-- 清理者 -->
+          <div style="display:grid;grid-template-columns:152px repeat(4,1fr);background:#FBFAF6;border-bottom:1px solid #EDE7DA;">
+            <div style="background:#F1F5EC;border-left:4px solid #6E8C5A;padding:9px 11px;display:flex;flex-direction:column;justify-content:center;"><div style="font:600 13px/1.15 'Noto Serif SC',serif;color:#23211C;">清理者</div><div style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#A19B8D;">8 agents · 11 skills</div></div>
+            <div style="border-left:1px solid #EDE7DA;"></div>
+            <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;align-items:center;"><div style="background:#F1F5EC;border:1px solid #CFE0C2;border-radius:6px;padding:5px 7px;font:500 9.5px/1.2 'Noto Sans SC';color:#46603A;">交互打磨</div></div>
+            <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;align-items:center;"><div style="background:#F1F5EC;border:1px solid #CFE0C2;border-radius:6px;padding:5px 7px;font:500 9.5px/1.2 'Noto Sans SC';color:#46603A;">误报阈值简化</div></div>
+            <div style="border-left:1px solid #EDE7DA;"></div>
+          </div>
+          <!-- 增长者 -->
+          <div style="display:grid;grid-template-columns:152px repeat(4,1fr);background:#FBFAF6;border-bottom:1px solid #EDE7DA;">
+            <div style="background:#EDF3F4;border-left:4px solid #4F7E86;padding:9px 11px;display:flex;flex-direction:column;justify-content:center;"><div style="font:600 13px/1.15 'Noto Serif SC',serif;color:#23211C;">增长者</div><div style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#A19B8D;">6 agents · 15 skills</div></div>
+            <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;align-items:center;"><div style="background:#EDF3F4;border:1px solid #BFD6DA;border-radius:6px;padding:5px 7px;font:500 9.5px/1.2 'Noto Sans SC';color:#37606A;">PMF 信号</div></div>
+            <div style="border-left:1px solid #EDE7DA;"></div>
+            <div style="border-left:1px solid #EDE7DA;"></div>
+            <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;align-items:center;"><div style="background:#EDF3F4;border:1px solid #BFD6DA;border-radius:6px;padding:5px 7px;font:500 9.5px/1.2 'Noto Sans SC';color:#37606A;">留存复盘</div></div>
+          </div>
+          <!-- 维护者 -->
+          <div style="display:grid;grid-template-columns:152px repeat(4,1fr);background:#FBFAF6;">
+            <div style="background:#F2F1ED;border-left:4px solid #8A8275;padding:9px 11px;display:flex;flex-direction:column;justify-content:center;"><div style="font:600 13px/1.15 'Noto Serif SC',serif;color:#23211C;">维护者</div><div style="font:500 8px/1.3 'JetBrains Mono',monospace;color:#A19B8D;">9 agents · 17 skills</div></div>
+            <div style="border-left:1px solid #EDE7DA;"></div>
+            <div style="border-left:1px solid #EDE7DA;"></div>
+            <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;align-items:center;"><div style="background:#F2F1ED;border:1px solid #D6D2C7;border-radius:6px;padding:5px 7px;font:500 9.5px/1.2 'Noto Sans SC';color:#5A554B;">安全审查</div></div>
+            <div style="border-left:1px solid #EDE7DA;padding:8px 7px;display:flex;align-items:center;"><div style="background:#F2F1ED;border:1px solid #D6D2C7;border-radius:6px;padding:5px 7px;font:500 9.5px/1.2 'Noto Sans SC';color:#5A554B;">延迟回归看护</div></div>
+          </div>
+        </div>
+        <!-- feedback loops -->
+        <div style="display:flex;align-items:center;gap:9px;margin-top:11px;flex-wrap:wrap;">
+          <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#A19B8D;">角色回路</span>
+          <span style="display:inline-flex;align-items:center;gap:5px;font:500 9.5px/1 'Noto Sans SC';color:#57534A;background:#fff;border:1px solid #E2DCCF;border-radius:14px;padding:5px 9px;"><span style="width:8px;height:8px;border-radius:2px;background:#4F7E86;"></span>增长者 →<span style="color:#A19B8D;">用户反馈</span>→<span style="width:8px;height:8px;border-radius:2px;background:#6E8C5A;"></span><span style="width:8px;height:8px;border-radius:2px;background:#CC8B3C;"></span></span>
+          <span style="display:inline-flex;align-items:center;gap:5px;font:500 9.5px/1 'Noto Sans SC';color:#57534A;background:#fff;border:1px solid #E2DCCF;border-radius:14px;padding:5px 9px;"><span style="width:8px;height:8px;border-radius:2px;background:#8A8275;"></span>维护者 →<span style="color:#A19B8D;">稳定约束</span>→<span style="width:8px;height:8px;border-radius:2px;background:#CC8B3C;"></span></span>
+          <span style="display:inline-flex;align-items:center;gap:5px;font:500 9.5px/1 'Noto Sans SC';color:#57534A;background:#fff;border:1px solid #E2DCCF;border-radius:14px;padding:5px 9px;"><span style="width:8px;height:8px;border-radius:2px;background:#C5654A;"></span>原型师 ←<span style="color:#A19B8D;">新问题</span>←<span style="width:8px;height:8px;border-radius:2px;background:#4F7E86;"></span></span>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:13px;font:400 12px/1.6 'Noto Sans SC';color:#8C867A;"><b style="color:#5F7355;font-weight:600;">取舍 ·</b> 角色是绝对主角、回路一目了然；但「流程推进」被压成列位，时间感弱，且空泳道在某些阶段会留白。</div>
+  </div>
+
+  <!-- ---- 1c ---- -->
+  <div id="1c" style="scroll-margin-top:16px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:14px;padding:20px 22px;margin-bottom:14px;">
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:7px;flex-wrap:wrap;">
+      <a href="#1c" style="font:700 11px/1 'JetBrains Mono',monospace;color:#fff;background:#23211C;border-radius:6px;padding:6px 10px;text-decoration:none;">1c</a>
+      <div style="font:600 18px/1.2 'Noto Serif SC',serif;color:#23211C;">周期 × 角色 指挥台 · 配比随周期重织</div>
+      <div style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#5A4E7A;background:#EEEAF3;border:1px solid #D8D0E6;border-radius:5px;padding:5px 8px;">最贴方法论 · 可点</div>
+      <div style="margin-left:auto;font:400 12px/1.5 'Noto Sans SC';color:#8C867A;max-width:24em;text-align:right;">顶部选侧重周期，角色班子按配比点亮 / 淡出，点角色筛选下方工作</div>
+    </div>
+    <div style="font:400 12.5px/1.6 'Noto Sans SC';color:#57534A;max-width:50em;margin-bottom:16px;">把「体系重构方案」的核心 —— 配比随周期漂移 —— 直接做成看板顶部的指挥台。<b style="color:#23211C;">点下面的周期试试</b>：角色班子的高亮与百分比会实时重织。点某个角色即筛选它驱动的工作。</div>
+
+    <!-- shell -->
+    <div style="background:rgba(239,235,226,0.92);border:1px solid #E2DCCF;border-bottom:none;border-radius:11px 11px 0 0;padding:9px 14px;display:flex;align-items:center;gap:11px;">
+      <div style="width:22px;height:22px;border-radius:5px;background:#C5654A;color:#fff;font:700 11px/22px 'JetBrains Mono',monospace;text-align:center;">B</div>
+      <div style="font:600 12.5px/1 'Noto Sans SC';color:#23211C;">模型 API 服务 · 运维看板</div>
+      <span style="font:500 10px/1 'Noto Sans SC';background:#E7EDE2;color:#4A5E42;border-radius:5px;padding:3px 7px;">运营中</span>
+      <div style="margin-left:auto;display:flex;background:#EBE5D9;border-radius:7px;padding:2px;gap:1px;">
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';background:#fff;color:#23211C;">进度</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">工作流</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">定时任务</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">产物</span>
+        <span style="border-radius:5px;padding:4px 9px;font:600 10px/1 'Noto Sans SC';color:#8C867A;">版本</span>
+      </div>
+    </div>
+    <div style="display:flex;border:1px solid #E2DCCF;border-radius:0 0 11px 11px;overflow:hidden;background:#EFEBE2;">
+      <div style="width:40px;flex:none;background:#F4F0E7;border-right:1px solid #E2DCCF;padding:10px 6px;display:flex;flex-direction:column;gap:5px;">
+        <div style="height:5px;border-radius:3px;background:#E0D9CA;"></div>
+        <div style="height:5px;border-radius:3px;background:#E0D9CA;width:70%;"></div>
+        <div style="height:5px;border-radius:3px;background:#E0D9CA;"></div>
+      </div>
+      <div style="flex:1;min-width:0;padding:13px;">
+        <!-- methodology band -->
+        <div style="display:flex;align-items:center;gap:10px;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:8px;padding:8px 13px;margin-bottom:12px;">
+          <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:#C5654A;border-radius:5px;padding:4px 8px;">北极星</span>
+          <span style="font:500 12px/1.4 'Noto Sans SC';color:#7A3D2D;">{{ c1North }}</span>
+        </div>
+        <!-- cycle selector -->
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px;">
+          <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#A19B8D;flex:none;">侧重周期</span>
+          <div style="flex:1;display:flex;gap:7px;">
+            <sc-for list="{{ c1Chips }}" as="c" hint-placeholder-count="3">
+              <div onClick="{{ c.onClick }}" style="cursor:pointer;flex:1;border-radius:9px;padding:9px 12px;background:{{ c.bg }};border:{{ c.bdr }};">
+                <div style="font:600 14px/1.1 'Noto Serif SC',serif;color:{{ c.fg }};">{{ c.label }}</div>
+                <div style="font:500 9px/1.2 'JetBrains Mono',monospace;color:{{ c.subColor }};margin-top:3px;">{{ c.sub }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <!-- role roster -->
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:9px;">
+          <sc-for list="{{ c1Roster }}" as="r" hint-placeholder-count="5">
+            <div style="flex:1;border-radius:9px;padding:10px 8px;text-align:center;background:{{ r.bg }};border:{{ r.bdr }};opacity:{{ r.op }};">
+              <div style="width:16px;height:16px;border-radius:5px;background:{{ r.color }};margin:0 auto 6px;"></div>
+              <div style="font:600 11px/1.1 'Noto Sans SC';color:#23211C;">{{ r.name }}</div>
+              <div style="font:600 11px/1 'JetBrains Mono',monospace;color:#8C867A;margin-top:4px;">{{ r.pct }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <!-- mix bar -->
+        <div style="display:flex;height:14px;border-radius:5px;overflow:hidden;margin-bottom:13px;">
+          <sc-for list="{{ c1Mix }}" as="m" hint-placeholder-count="5">
+            <div style="background:{{ m.color }};width:{{ m.w }};"></div>
+          </sc-for>
+        </div>
+        <!-- filtered work -->
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:8px;"><span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#A19B8D;">当前周期 · 重心角色的工作</span><span style="font:500 10px/1 'Noto Sans SC';color:#C5654A;">班子 {{ c1Roster2 }}</span></div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+          <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #6E8C5A;border-radius:7px;padding:8px 9px;"><div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#6E8C5A;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#6E8C5A;">清理者</span><span style="margin-left:auto;font:600 8px/1 'JetBrains Mono',monospace;color:#5F7355;background:#EEF2E8;border-radius:4px;padding:2px 5px;">引领</span></div><div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">误报阈值简化 → 命中率回升</div></div>
+          <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #4F7E86;border-radius:7px;padding:8px 9px;"><div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#4F7E86;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#4F7E86;">增长者</span></div><div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">成本按租户下钻 · 留存复盘</div></div>
+          <div style="background:#fff;border:1px solid #E2DCCF;border-left:3px solid #8A8275;border-radius:7px;padding:8px 9px;"><div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#8A8275;"></span><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#8A8275;">维护者</span><span style="margin-left:auto;font:600 8px/1 'JetBrains Mono',monospace;color:#8C867A;background:#F0ECE3;border-radius:4px;padding:2px 5px;">滞后</span></div><div style="font:500 10.5px/1.35 'Noto Sans SC';color:#23211C;">P95 延迟回归看护 + 告警</div></div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:13px;font:400 12px/1.6 'Noto Sans SC';color:#8C867A;"><b style="color:#5F7355;font-weight:600;">取舍 ·</b> 把「周期决定配比」讲得最透、最有指挥台气质；但它是「镜头/筛选器」，要和 1a 或 1b 的某种底层排布搭配才完整。</div>
+  </div>
+
+  <div style="font:400 11.5px/1.6 'Noto Sans SC';color:#A19B8D;margin:0 0 30px;text-align:center;">💡 1c 可叠加在 1a / 1b 之上当顶部镜头 —— 想这么合并就说「1a 的底 + 1c 的顶」之类。</div>
+
+  <!-- ===== GROUP B · 创建流程 ===== -->
+  <div style="display:flex;align-items:center;gap:10px;margin:0 0 16px;">
+    <div style="font:700 12px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#23211C;">B · 创建流程</div>
+    <div style="flex:1;height:1px;background:#E2DCCF;"></div>
+    <div style="font:400 11px/1 'Noto Sans SC';color:#A19B8D;">新建项目第一步：怎么把「角色 / 周期」放进去</div>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:stretch;">
+    <!-- ---- 1d ---- -->
+    <div id="1d" style="scroll-margin-top:16px;flex:1;min-width:340px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:14px;padding:18px 18px;display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:7px;flex-wrap:wrap;">
+        <a href="#1d" style="font:700 11px/1 'JetBrains Mono',monospace;color:#fff;background:#23211C;border-radius:6px;padding:6px 10px;text-decoration:none;">1d</a>
+        <div style="font:600 15px/1.2 'Noto Serif SC',serif;color:#23211C;">周期优先</div>
+        <div style="font:600 8px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#5F7355;background:#EEF2E8;border:1px solid #DCE5D2;border-radius:5px;padding:4px 7px;">最少决策</div>
+      </div>
+      <div style="font:400 11.5px/1.6 'Noto Sans SC';color:#57534A;margin-bottom:13px;">先选侧重周期 → 自动预置角色配比 + 侧重阶段 + 北极星草案，再逐项微调。<b style="color:#23211C;">点周期看预置变化。</b></div>
+      <div style="background:#fff;border:1px solid #E2DCCF;border-radius:10px;padding:13px;flex:1;">
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:12px;"><div style="width:18px;height:18px;border-radius:5px;background:#C5654A;color:#fff;font:700 9px/18px 'JetBrains Mono',monospace;text-align:center;">B</div><div style="font:600 11px/1 'Noto Sans SC';color:#23211C;">新建项目</div><div style="font:400 9px/1 'Noto Sans SC';color:#A19B8D;">第 1 步 · 选侧重周期</div></div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:13px;">
+          <sc-for list="{{ dcChips }}" as="c" hint-placeholder-count="3">
+            <div onClick="{{ c.onClick }}" style="cursor:pointer;border-radius:9px;padding:9px 12px;display:flex;align-items:center;gap:9px;background:{{ c.bg }};border:{{ c.bdr }};">
+              <div style="font:600 13px/1.1 'Noto Serif SC',serif;color:{{ c.fg }};">{{ c.label }}</div>
+              <div style="font:500 9px/1 'JetBrains Mono',monospace;color:{{ c.subColor }};">{{ c.sub }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <!-- preview -->
+        <div style="background:#23211C;border-radius:9px;padding:13px;">
+          <div style="font:600 8px/1 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#E0A78F;margin-bottom:11px;">预置 · 自动带出</div>
+          <div style="margin-bottom:9px;"><div style="font:500 8px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:4px;">北极星草案</div><div style="font:400 11px/1.4 'Noto Sans SC';color:#F3EEE6;">{{ dNorth }}</div></div>
+          <div style="margin-bottom:11px;"><div style="font:500 8px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:4px;">侧重阶段</div><div style="font:400 11px/1.4 'Noto Sans SC';color:#F3EEE6;">{{ dPhases }}</div></div>
+          <div style="font:500 8px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:6px;">预置角色配比 · {{ dRoster }}</div>
+          <div style="display:flex;height:26px;border-radius:6px;overflow:hidden;">
+            <sc-for list="{{ dMix }}" as="m" hint-placeholder-count="5">
+              <div style="background:{{ m.color }};width:{{ m.w }};display:flex;align-items:center;justify-content:center;overflow:hidden;"><sc-if value="{{ m.showLabel }}" hint-placeholder-val="{{ false }}"><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#fff;">{{ m.abbr }}</span></sc-if></div>
+            </sc-for>
+          </div>
+          <div style="margin-top:12px;border-top:1px solid #3A3833;padding-top:11px;">
+            <div style="font:500 8px/1 'JetBrains Mono',monospace;color:#8C867A;margin-bottom:8px;">预置班子 · 真实 agents 进场</div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <sc-for list="{{ dAgents }}" as="g" hint-placeholder-count="3">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="width:8px;height:8px;border-radius:2px;background:{{ g.color }};flex:none;"></span>
+                  <span style="font:600 9.5px/1.2 'Noto Sans SC';color:#E8E1D6;flex:none;width:42px;">{{ g.name }}</span>
+                  <span style="font:500 9px/1.5 'JetBrains Mono',monospace;color:#B7AE9F;">{{ g.agents }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:11px;font:400 11px/1.55 'Noto Sans SC';color:#8C867A;"><b style="color:#5F7355;font-weight:600;">取舍 ·</b> 上手最快、最契合「带着重心出发」；但把角色藏在了周期背后，新人不直接接触五角色。</div>
+    </div>
+
+    <!-- ---- 1e ---- -->
+    <div id="1e" style="scroll-margin-top:16px;flex:1;min-width:340px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:14px;padding:18px 18px;display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:7px;flex-wrap:wrap;">
+        <a href="#1e" style="font:700 11px/1 'JetBrains Mono',monospace;color:#fff;background:#23211C;border-radius:6px;padding:6px 10px;text-decoration:none;">1e</a>
+        <div style="font:600 15px/1.2 'Noto Serif SC',serif;color:#23211C;">角色优先 · 组建班子</div>
+        <div style="font:600 8px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#B0503A;background:#F7EDE7;border:1px solid #E6D2C8;border-radius:5px;padding:4px 7px;">角色显式</div>
+      </div>
+      <div style="font:400 11.5px/1.6 'Noto Sans SC';color:#57534A;margin-bottom:13px;">先为项目挑角色班子（每个角色背后是一组 agents），系统按所选组合反推推荐周期与缺角提醒。</div>
+      <div style="background:#fff;border:1px solid #E2DCCF;border-radius:10px;padding:13px;flex:1;">
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:12px;"><div style="width:18px;height:18px;border-radius:5px;background:#C5654A;color:#fff;font:700 9px/18px 'JetBrains Mono',monospace;text-align:center;">B</div><div style="font:600 11px/1 'Noto Sans SC';color:#23211C;">新建项目</div><div style="font:400 9px/1 'Noto Sans SC';color:#A19B8D;">第 1 步 · 组建角色班子</div></div>
+        <!-- role toggles -->
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">
+          <div style="display:flex;align-items:center;gap:9px;border:1.5px solid #C5654A;background:#FBF1EC;border-radius:8px;padding:7px 10px;"><div style="width:16px;height:16px;border-radius:4px;background:#C5654A;color:#fff;font:700 10px/16px 'JetBrains Mono',monospace;text-align:center;">✓</div><div style="flex:1;"><div style="font:600 11px/1.1 'Noto Sans SC';color:#23211C;">原型师</div></div><div style="font:500 8px/1 'JetBrains Mono',monospace;color:#A19B8D;">7 agents</div></div>
+          <div style="display:flex;align-items:center;gap:9px;border:1.5px solid #CC8B3C;background:#FBF4E9;border-radius:8px;padding:7px 10px;"><div style="width:16px;height:16px;border-radius:4px;background:#CC8B3C;color:#fff;font:700 10px/16px 'JetBrains Mono',monospace;text-align:center;">✓</div><div style="flex:1;"><div style="font:600 11px/1.1 'Noto Sans SC';color:#23211C;">构建者</div></div><div style="font:500 8px/1 'JetBrains Mono',monospace;color:#A19B8D;">7 agents</div></div>
+          <div style="display:flex;align-items:center;gap:9px;border:1.5px solid #6E8C5A;background:#F1F5EC;border-radius:8px;padding:7px 10px;"><div style="width:16px;height:16px;border-radius:4px;background:#6E8C5A;color:#fff;font:700 10px/16px 'JetBrains Mono',monospace;text-align:center;">✓</div><div style="flex:1;"><div style="font:600 11px/1.1 'Noto Sans SC';color:#23211C;">清理者</div></div><div style="font:500 8px/1 'JetBrains Mono',monospace;color:#A19B8D;">8 agents</div></div>
+          <div style="display:flex;align-items:center;gap:9px;border:1px solid #E2DCCF;background:#FBFAF6;border-radius:8px;padding:7px 10px;opacity:.55;"><div style="width:16px;height:16px;border-radius:4px;border:1.5px solid #CFC7B6;"></div><div style="flex:1;"><div style="font:600 11px/1.1 'Noto Sans SC';color:#23211C;">增长者</div></div><div style="font:500 8px/1 'JetBrains Mono',monospace;color:#A19B8D;">6 agents</div></div>
+          <div style="display:flex;align-items:center;gap:9px;border:1px solid #E2DCCF;background:#FBFAF6;border-radius:8px;padding:7px 10px;opacity:.55;"><div style="width:16px;height:16px;border-radius:4px;border:1.5px solid #CFC7B6;"></div><div style="flex:1;"><div style="font:600 11px/1.1 'Noto Sans SC';color:#23211C;">维护者</div></div><div style="font:500 8px/1 'JetBrains Mono',monospace;color:#A19B8D;">9 agents</div></div>
+        </div>
+        <!-- inferred -->
+        <div style="background:#F7EDE7;border:1px solid #E6D2C8;border-radius:8px;padding:9px 11px;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;"><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#B0503A;">班子 1+2+3 →</span><span style="font:600 11px/1 'Noto Serif SC',serif;color:#7A3D2D;">推荐周期 · 探索</span></div>
+          <div style="font:400 10px/1.5 'Noto Sans SC';color:#9A6450;">已具备「造点子 · 能落地 · 能收拾」，缺 4/5 适合 0→1。增长 / 守成可后续阶段补。</div>
+        </div>
+      </div>
+      <div style="margin-top:11px;font:400 11px/1.55 'Noto Sans SC';color:#8C867A;"><b style="color:#5F7355;font-weight:600;">取舍 ·</b> 五角色第一眼就出场、教学性最强；但比 1d 多一层决策，且容易让人纠结「选谁」。</div>
+    </div>
+
+    <!-- ---- 1f ---- -->
+    <div id="1f" style="scroll-margin-top:16px;flex:1;min-width:340px;background:#FBFAF6;border:1px solid #E2DCCF;border-radius:14px;padding:18px 18px;display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:7px;flex-wrap:wrap;">
+        <a href="#1f" style="font:700 11px/1 'JetBrains Mono',monospace;color:#fff;background:#23211C;border-radius:6px;padding:6px 10px;text-decoration:none;">1f</a>
+        <div style="font:600 15px/1.2 'Noto Serif SC',serif;color:#23211C;">方法论保留 · 角色串线</div>
+        <div style="font:600 8px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#8C867A;background:#F0ECE3;border:1px solid #E2DCCF;border-radius:5px;padding:4px 7px;">最连续</div>
+      </div>
+      <div style="font:400 11.5px/1.6 'Noto Sans SC';color:#57534A;margin-bottom:13px;">保留 v2 熟悉的方法论步骤（洞察 → 北极星 → 引领 → 滞后 → 原型），但每步标注「由哪个角色镜头主导」，末步补班子 / 周期。</div>
+      <div style="background:#fff;border:1px solid #E2DCCF;border-radius:10px;padding:13px;flex:1;">
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:12px;"><div style="width:18px;height:18px;border-radius:5px;background:#C5654A;color:#fff;font:700 9px/18px 'JetBrains Mono',monospace;text-align:center;">B</div><div style="font:600 11px/1 'Noto Sans SC';color:#23211C;">新建项目 · 冷启动向导</div></div>
+        <div style="display:flex;flex-direction:column;gap:0;">
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 4px;border-bottom:1px solid #F0ECE2;"><div style="width:20px;height:20px;border-radius:50%;background:#EFE9DD;color:#8C867A;font:600 9px/20px 'JetBrains Mono',monospace;text-align:center;flex:none;">01</div><div style="flex:1;font:500 11.5px/1.3 'Noto Sans SC';color:#23211C;">洞察链 · 证据→发现→洞察</div><span style="display:inline-flex;align-items:center;gap:4px;font:600 8px/1 'JetBrains Mono',monospace;color:#7A3D2D;background:#FBF1EC;border-radius:4px;padding:3px 6px;"><span style="width:7px;height:7px;border-radius:2px;background:#C5654A;"></span>原型师·增长者</span></div>
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 4px;border-bottom:1px solid #F0ECE2;"><div style="width:20px;height:20px;border-radius:50%;background:#EFE9DD;color:#8C867A;font:600 9px/20px 'JetBrains Mono',monospace;text-align:center;flex:none;">02</div><div style="flex:1;font:500 11.5px/1.3 'Noto Sans SC';color:#23211C;">北极星</div><span style="display:inline-flex;align-items:center;gap:4px;font:600 8px/1 'JetBrains Mono',monospace;color:#37606A;background:#EDF3F4;border-radius:4px;padding:3px 6px;"><span style="width:7px;height:7px;border-radius:2px;background:#4F7E86;"></span>增长者</span></div>
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 4px;border-bottom:1px solid #F0ECE2;"><div style="width:20px;height:20px;border-radius:50%;background:#EFE9DD;color:#8C867A;font:600 9px/20px 'JetBrains Mono',monospace;text-align:center;flex:none;">03</div><div style="flex:1;font:500 11.5px/1.3 'Noto Sans SC';color:#23211C;">引领指标</div><span style="display:inline-flex;align-items:center;gap:4px;font:600 8px/1 'JetBrains Mono',monospace;color:#7A5A1E;background:#FBF4E9;border-radius:4px;padding:3px 6px;"><span style="width:7px;height:7px;border-radius:2px;background:#CC8B3C;"></span>构建者</span></div>
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 4px;border-bottom:1px solid #F0ECE2;"><div style="width:20px;height:20px;border-radius:50%;background:#EFE9DD;color:#8C867A;font:600 9px/20px 'JetBrains Mono',monospace;text-align:center;flex:none;">04</div><div style="flex:1;font:500 11.5px/1.3 'Noto Sans SC';color:#23211C;">滞后指标</div><span style="display:inline-flex;align-items:center;gap:4px;font:600 8px/1 'JetBrains Mono',monospace;color:#5A554B;background:#F2F1ED;border-radius:4px;padding:3px 6px;"><span style="width:7px;height:7px;border-radius:2px;background:#8A8275;"></span>维护者</span></div>
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 4px;border-bottom:1px solid #F0ECE2;"><div style="width:20px;height:20px;border-radius:50%;background:#EFE9DD;color:#8C867A;font:600 9px/20px 'JetBrains Mono',monospace;text-align:center;flex:none;">05</div><div style="flex:1;font:500 11.5px/1.3 'Noto Sans SC';color:#23211C;">原型创建</div><span style="display:inline-flex;align-items:center;gap:4px;font:600 8px/1 'JetBrains Mono',monospace;color:#7A3D2D;background:#FBF1EC;border-radius:4px;padding:3px 6px;"><span style="width:7px;height:7px;border-radius:2px;background:#C5654A;"></span>原型师→构建者</span></div>
+          <div style="display:flex;align-items:center;gap:9px;padding:8px 4px 2px;"><div style="width:20px;height:20px;border-radius:50%;background:#C5654A;color:#fff;font:600 9px/20px 'JetBrains Mono',monospace;text-align:center;flex:none;">06</div><div style="flex:1;font:600 11.5px/1.3 'Noto Sans SC';color:#23211C;">班子 & 侧重周期</div><span style="font:600 8px/1 'JetBrains Mono',monospace;color:#fff;background:#C5654A;border-radius:4px;padding:3px 6px;">新增</span></div>
+        </div>
+      </div>
+      <div style="margin-top:11px;font:400 11px/1.55 'Noto Sans SC';color:#8C867A;"><b style="color:#5F7355;font-weight:600;">取舍 ·</b> 对老用户零学习成本、平滑过渡；但仍是线性向导，角色更像「注解」而非驱动结构。</div>
+    </div>
+  </div>
+
+  <!-- next -->
+  <p style="margin:30px 0 0;font:400 12.5px/1.7 'Noto Sans SC';color:#8C867A;border-top:1px solid #E2DCCF;padding-top:18px;">下一步可以这样说：「看板用 <a href="#1b" style="color:#C5654A;font-weight:600;text-decoration:none;">1b</a> 的泳道、创建用 <a href="#1d" style="color:#C5654A;font-weight:600;text-decoration:none;">1d</a>」 · 「<a href="#1a" style="color:#C5654A;font-weight:600;text-decoration:none;">1a</a> 的底 + <a href="#1c" style="color:#C5654A;font-weight:600;text-decoration:none;">1c</a> 的顶部指挥台」 · 「<a href="#1b" style="color:#C5654A;font-weight:600;text-decoration:none;">1b</a> 再大胆点，加角色实时交接」 · 「就按 <a href="#1a" style="color:#C5654A;font-weight:600;text-decoration:none;">1a</a> + <a href="#1f" style="color:#C5654A;font-weight:600;text-decoration:none;">1f</a> 定稿，开始做 v3」。</p>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { c1: '运维', dc: '探索', k2: '运维' };
+  cycles() {
+    return {
+      '探索': { sub:'0 → 1 · 未达 PMF', north:'验证假设 · 找到 PMF 信号', phases:'需求分析 · 需求设计', roster:'1 + 2 + 3', active:['原型师','构建者','清理者'], pk:['需求分析','需求设计'],
+                mix:[['原型师',32],['构建者',28],['清理者',20],['增长者',12],['维护者',8]] },
+      '扩张': { sub:'1 → N · 增长期', north:'提升 PMF · 规模化增长', phases:'需求设计 · 需求开发', roster:'2 + 3 + 4 · 少量 5', active:['构建者','清理者','增长者'], pk:['需求设计','需求开发'],
+                mix:[['原型师',10],['构建者',27],['清理者',23],['增长者',26],['维护者',14]] },
+      '运维': { sub:'Sustain · 成熟期', north:'安全 · 可靠 · 效率随规模扩展', phases:'需求开发 · 运营运维', roster:'3 + 4 + 5 · 少量 2', active:['清理者','增长者','维护者'], pk:['需求开发','运营运维'],
+                mix:[['原型师',5],['构建者',13],['清理者',23],['增长者',26],['维护者',33]] },
+    };
+  }
+  k2Board() {
+    return [
+      { key:'需求分析', num:'01', bar:[['原型师',55],['增长者',20],['构建者',10],['清理者',10],['维护者',5]],
+        cards:[
+          { role:'原型师', tag:'引领', title:'竞品差距矩阵 → 洞察', agent:'analyst', skill:'deep-research' },
+          { role:'增长者', tag:'', title:'用户访谈 · PMF 信号', agent:'scientist', skill:'mass-line' },
+        ] },
+      { key:'需求设计', num:'02', bar:[['原型师',35],['构建者',35],['清理者',20],['增长者',5],['维护者',5]],
+        cards:[
+          { role:'原型师', tag:'引领', title:'看板信息架构', agent:'planner', skill:'plan' },
+          { role:'构建者', tag:'', title:'评测口径设计', agent:'architect', skill:'claude-api' },
+        ] },
+      { key:'需求开发', num:'03', bar:[['构建者',55],['清理者',25],['维护者',10],['原型师',5],['增长者',5]],
+        cards:[
+          { role:'构建者', tag:'引领', title:'告警覆盖率脚手架', agent:'executor', skill:'ultrawork' },
+          { role:'清理者', tag:'', title:'根因建议阈值简化', agent:'code-simplifier', skill:'simplify' },
+          { role:'维护者', tag:'', title:'灰度发布看护', agent:'canary-watch', skill:'loop' },
+        ] },
+      { key:'运营运维', num:'04', bar:[['维护者',35],['增长者',30],['清理者',22],['构建者',10],['原型师',3]],
+        cards:[
+          { role:'维护者', tag:'滞后', title:'P95 延迟回归看护', agent:'tracer', skill:'loop' },
+          { role:'增长者', tag:'', title:'成本按租户下钻', agent:'scientist', skill:'novel-analytics' },
+          { role:'清理者', tag:'', title:'冗余告警下线', agent:'deslop', skill:'simplify' },
+        ] },
+    ];
+  }
+  renderVals() {
+    const rc = { '原型师':'#C5654A','构建者':'#CC8B3C','清理者':'#6E8C5A','增长者':'#4F7E86','维护者':'#8A8275' };
+    const ab = { '原型师':'原','构建者':'构','清理者':'清','增长者':'增','维护者':'维' };
+    const order = ['原型师','构建者','清理者','增长者','维护者'];
+    const cyc = this.cycles();
+    const chips = (selKey, patch, opts) => Object.keys(cyc).map(k => {
+      const on = k === selKey;
+      const c = {
+        label: k, sub: cyc[k].sub, title: k + ' · ' + cyc[k].sub,
+        onClick: () => this.setState(patch(k)),
+        bg: on ? '#C5654A' : '#FBFAF6',
+        fg: on ? '#FFFFFF' : '#23211C',
+        subColor: on ? 'rgba(255,255,255,0.82)' : '#A19B8D',
+        bdr: on ? '1.5px solid #C5654A' : '1px solid #E2DCCF',
+        flex: '1 1 0%', pad: '8px 12px', showSub: true,
+      };
+      if (opts && opts.dominant) {
+        if (on) { c.pad = '9px 15px'; }
+        else { c.flex = '0 0 auto'; c.pad = '9px 10px'; c.showSub = false;
+               c.bg = '#F1EDE4'; c.fg = '#9A9384'; c.bdr = '1px solid #E5DFD2'; }
+      }
+      return c;
+    });
+    const mix = (key) => cyc[key].mix.map(([n, w]) => ({ w: w + '%', color: rc[n], abbr: ab[n], pct: w, showLabel: w >= 12 }));
+    const roster = (key) => order.map(n => {
+      const m = cyc[key].mix.find(x => x[0] === n);
+      const active = cyc[key].active.indexOf(n) >= 0;
+      return { name: n, abbr: ab[n], color: rc[n], pct: (m ? m[1] : 0) + '%',
+        op: active ? '1' : '0.4', bg: active ? '#FBFAF6' : '#F1EDE4',
+        bdr: active ? ('1.5px solid ' + rc[n]) : '1px solid #E5DFD2' };
+    });
+    const c1 = this.state.c1, dc = this.state.dc;
+    const roleAgents = {
+      '原型师':'analyst · planner · designer',
+      '构建者':'executor · test-engineer · git-master',
+      '清理者':'code-simplifier · code-reviewer · qa-tester',
+      '增长者':'scientist · analyst · writer',
+      '维护者':'security-reviewer · tracer · verifier',
+    };
+    const dAgents = cyc[dc].active.map(n => ({ name: n, color: rc[n], agents: roleAgents[n] }));
+    const k2 = this.state.k2, kc = cyc[k2];
+    const k2Cols = this.k2Board().map(p => {
+      const emph = kc.pk.indexOf(p.key) >= 0;
+      return {
+        key: p.key, num: p.num, emph,
+        headBg: emph ? '#F7EDE7' : '#F4F0E7',
+        headBdr: emph ? '1.5px solid #E6C3B4' : '1px solid #E6E0D3',
+        numColor: emph ? '#C5654A' : '#C2BBAB',
+        colBg: emph ? '#FCF7F3' : '#FAF8F2',
+        bar: p.bar.map(([n, w]) => ({ color: rc[n], w: w + '%' })),
+        cards: p.cards.map(c => {
+          const on = kc.active.indexOf(c.role) >= 0;
+          return {
+            title: c.title, role: c.role, roleColor: rc[c.role],
+            agent: c.agent, skill: c.skill,
+            hasTag: !!c.tag, tag: c.tag,
+            tagBg: c.tag === '引领' ? '#EEF2E8' : '#F0ECE3',
+            tagColor: c.tag === '引领' ? '#5F7355' : '#8C867A',
+            op: on ? '1' : '0.4',
+            cardBg: on ? '#FFFFFF' : '#F6F3EC',
+            leftBorder: '3px solid ' + (on ? rc[c.role] : '#D8D1C2'),
+          };
+        }),
+      };
+    });
+    return {
+      dAgents,
+      c1Chips: chips(c1, k => ({ c1: k })),
+      dcChips: chips(dc, k => ({ dc: k })),
+      c1Roster: roster(c1), c1Mix: mix(c1),
+      c1North: cyc[c1].north, c1Roster2: cyc[c1].roster,
+      dMix: mix(dc), dNorth: cyc[dc].north, dPhases: cyc[dc].phases, dRoster: cyc[dc].roster,
+      k2Chips: chips(k2, k => ({ k2: k }), { dominant: true }),
+      k2Roster: roster(k2), k2Mix: mix(k2),
+      k2North: kc.north, k2Roster2: kc.roster, k2Cols,
+    };
+  }
+}
+</script>
+</body>
+</html>
