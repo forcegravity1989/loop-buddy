@@ -1003,6 +1003,85 @@ impl App {
         Ok((block, refs))
     }
 
+    /// A4: name of the machine-fed "完成 Issue 数" leading metric, seeded per
+    /// project×stage with an EMPTY target so its signal stays Unknown (honest
+    /// "no goal set") — never a fake green from a raw completion count.
+    fn stage_done_metric_name() -> &'static str {
+        "阶段完成 Issue 数"
+    }
+
+    /// A4: idempotently seed the per-stage "完成 Issue 数" leading metric (one
+    /// per stage, empty target). By-name idempotent — a re-seed adds nothing,
+    /// so Boot can backfill pre-A4 projects safely.
+    async fn seed_stage_done_metrics(&self, project: ProjectId) -> Result<(), AppError> {
+        let have: std::collections::HashSet<StageKind> = self
+            .store
+            .persisted_signals(project)
+            .await?
+            .metrics
+            .into_iter()
+            .filter(|m| m.name == Self::stage_done_metric_name())
+            .filter_map(|m| m.stage_kind)
+            .collect();
+        for kind in StageKind::ALL {
+            if have.contains(&kind) {
+                continue;
+            }
+            self.store
+                .upsert_metric(NewMetric {
+                    id: MetricId::new(),
+                    project_id: project,
+                    role: MetricRole::Leading,
+                    stage_kind: Some(kind),
+                    name: Self::stage_done_metric_name().into(),
+                    def: "本阶段已完成的 Issue 数(每次 Done 自动计数,机器源)".into(),
+                    target_raw: String::new(),
+                    amber: AmberBand::default(),
+                    last_target: String::new(),
+                    driver: String::new(),
+                    pos: 100 + kind.index() as i64,
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// A4: feed the stage's "完成 Issue 数" metric the current count of Done
+    /// issues in that stage, but only when it changed (change-guard — same
+    /// idempotency as a manual re-confirm). Machine source (Telemetry). The
+    /// metric's empty target keeps its signal Unknown: a count is not a goal.
+    async fn feed_stage_done_count(
+        &self,
+        project: ProjectId,
+        stage: StageKind,
+    ) -> Result<(), AppError> {
+        self.seed_stage_done_metrics(project).await?;
+        let done = self
+            .store
+            .list_issues(project, Some(stage), Some(IssueStatus::Done))
+            .await?
+            .len() as i64;
+        let new_raw = done.to_string();
+        let metric = self
+            .store
+            .persisted_signals(project)
+            .await?
+            .metrics
+            .into_iter()
+            .find(|m| m.name == Self::stage_done_metric_name() && m.stage_kind == Some(stage));
+        let Some(m) = metric else {
+            return Ok(()); // metric missing — honest no-op
+        };
+        if m.value_raw == new_raw {
+            return Ok(()); // change-guard: no new fact
+        }
+        self.store
+            .append_observation(m.id, SourceKind::Telemetry, &new_raw, now())
+            .await?;
+        self.store.recompute_signals(project, now()).await?;
+        Ok(())
+    }
+
     /// Run one connector's real probe. Returns `(healthy, honest detail)`;
     /// errors only on kinds that have no real probe (there is no fake
     /// "synced" for those) or store failures.
@@ -1339,6 +1418,12 @@ impl App {
                 // (bw_core::playbook projections) — by-name idempotent, so an
                 // already-seeded database gains them too.
                 bw_store::seed_stage_entities_if_missing(self.store.as_ref()).await?;
+                // A4: backfill the per-stage "完成 Issue 数" metric for every
+                // project — pre-A4 projects gain it; already-seeded ones are
+                // unchanged (by-name idempotent).
+                for p in &projects {
+                    self.seed_stage_done_metrics(p.id).await?;
+                }
                 self.refresh_workflow_specs().await?;
                 self.refresh_skills().await?;
                 self.refresh_agents().await?;
@@ -1516,6 +1601,27 @@ impl App {
                 let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
                 let from = proj.active_stage;
                 let to = from.next();
+                // A4: leaving a stage with unfinished (non-terminal) issues is a
+                // risky handoff by definition — force it honest + tag the note,
+                // so open work can't slip silently into the next stage.
+                let open_in_stage = self
+                    .store
+                    .list_issues(p, Some(from), None)
+                    .await?
+                    .iter()
+                    .filter(|i| !i.status.is_terminal())
+                    .count();
+                let (risky, note) = if open_in_stage > 0 {
+                    let tag = format!("留 {} 件未完 Issue;", open_in_stage);
+                    let note = if note.trim().is_empty() {
+                        tag
+                    } else {
+                        format!("{tag} {note}")
+                    };
+                    (true, note)
+                } else {
+                    (risky, note)
+                };
                 self.store
                     .handoff_stage(p, from, to, risky, &note, now())
                     .await?;
@@ -1534,6 +1640,10 @@ impl App {
                 self.store
                     .materialize_stages(five_stages(p, cadence))
                     .await?;
+                // A4: seed the per-stage "完成 Issue 数" leading metric (empty
+                // target ⇒ honest Unknown) so Done-edge feeds have a home. The
+                // recompute at the end of CompleteCreation derives its signal.
+                self.seed_stage_done_metrics(p).await?;
                 // All-in-one-codebase default: a project completing creation
                 // gets its own real git repo (when a workspaces root is
                 // configured and no workspace was set by hand), plus a bound
@@ -2255,6 +2365,10 @@ impl App {
                             }
                         }
                     }
+                    // A4: feed the stage's machine "完成 Issue 数" metric —
+                    // change-guarded; empty target ⇒ Unknown (no fake green).
+                    self.feed_stage_done_count(issue.project_id, issue.stage)
+                        .await?;
                 }
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
