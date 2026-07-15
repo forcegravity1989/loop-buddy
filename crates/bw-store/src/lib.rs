@@ -629,6 +629,9 @@ pub trait Store: Send + Sync {
     async fn get_issue(&self, id: IssueId) -> Result<Option<Issue>>;
     async fn transition_issue(&self, id: IssueId, status: IssueStatus) -> Result<()>;
     async fn assign_issue(&self, id: IssueId, assignee: Option<AgentId>) -> Result<()>;
+    /// Stamp the FIRST settle time (COALESCE — later calls keep the original).
+    /// The app's Done-edge accounting fires iff this was previously NULL.
+    async fn mark_issue_settled(&self, id: IssueId, at: i64) -> Result<()>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────

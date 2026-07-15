@@ -401,3 +401,113 @@ async fn issue_done_edge_settles_agent_accounting_exactly_once() {
     .unwrap();
     assert_eq!(runs_of(&app), (1, "100%".into()));
 }
+
+#[tokio::test]
+async fn reopened_issue_settles_only_once() {
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let agent = AgentId::new();
+    let issue = IssueId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    app.dispatch(Command::CreateProject {
+        id: project,
+        name: "重开不重计".into(),
+        kind: "自举".into(),
+        desc: String::new(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::SetCycle {
+        cycle: ProjectCycle::Explore,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CompleteCreation {
+        cadence: Cadence::Weekly,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CreateAgent {
+        id: agent,
+        name: "构建师 · settle-once".into(),
+        role: "构建".into(),
+        skills: vec![],
+        model: "sonnet".into(),
+        instructions: "一件活记一次账。".into(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CreateIssue {
+        id: issue,
+        stage: StageKind::Build,
+        title: "会被重开的活".into(),
+        desc: String::new(),
+        priority: IssuePriority::High,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::AssignIssue {
+        id: issue,
+        assignee: Some(agent),
+    })
+    .await
+    .unwrap();
+
+    let runs = |app: &App| {
+        app.snapshot()
+            .agents
+            .iter()
+            .find(|a| a.id == agent)
+            .map(|a| a.runs)
+            .unwrap()
+    };
+
+    // First Done: settles, credits one run.
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::Done,
+    })
+    .await
+    .unwrap();
+    assert_eq!(runs(&app), 1);
+    let settled = app
+        .snapshot()
+        .issues
+        .iter()
+        .find(|i| i.id == issue)
+        .unwrap()
+        .settled_at;
+    assert!(settled.is_some(), "first Done stamps settled_at");
+
+    // Reopen (Done → InProgress) then Done again: the bounce must NOT credit
+    // a second run — one work item, one credit; settled_at keeps its first
+    // timestamp.
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::InProgress,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::Done,
+    })
+    .await
+    .unwrap();
+    assert_eq!(runs(&app), 1, "reopen-and-redo must not double-credit");
+    let settled_again = app
+        .snapshot()
+        .issues
+        .iter()
+        .find(|i| i.id == issue)
+        .unwrap()
+        .settled_at;
+    assert_eq!(settled_again, settled, "settled_at keeps the first stamp");
+}

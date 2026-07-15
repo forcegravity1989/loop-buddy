@@ -120,6 +120,9 @@ impl SqliteStore {
         // in the `skill` CREATE TABLE.
         add_column_if_missing(&pool, "skill", "distilled_from_issue", "TEXT").await?;
         add_column_if_missing(&pool, "skill", "origin_agent", "TEXT").await?;
+        // R3 settle-once: issues opened before this column exist unsettled —
+        // honest for them (their Done predates issue-side accounting).
+        add_column_if_missing(&pool, "issue", "settled_at", "INTEGER").await?;
 
         Ok(Self { pool })
     }
@@ -1864,7 +1867,7 @@ impl Store for SqliteStore {
         // query-builder dependency.
         let mut sql = String::from(
             "SELECT id, project_id, stage, number, title, descr, status, priority, assignee,
-                    created_at, updated_at
+                    settled_at, created_at, updated_at
              FROM issue WHERE project_id=?",
         );
         if stage.is_some() {
@@ -1888,6 +1891,7 @@ impl Store for SqliteStore {
     async fn get_issue(&self, id: IssueId) -> Result<Option<Issue>> {
         let row = sqlx::query(
             "SELECT id, project_id, stage, number, title, descr, status, priority, assignee,
+                    settled_at,
                     created_at, updated_at
              FROM issue WHERE id=?",
         )
@@ -1911,6 +1915,17 @@ impl Store for SqliteStore {
         sqlx::query("UPDATE issue SET assignee=?, updated_at=? WHERE id=?")
             .bind(assignee.map(|a| a.uuid().to_string()))
             .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_issue_settled(&self, id: IssueId, at: i64) -> Result<()> {
+        // COALESCE keeps the FIRST settle timestamp even if called twice —
+        // the settle-once invariant is enforced in the DB, not just the app.
+        sqlx::query("UPDATE issue SET settled_at=COALESCE(settled_at, ?) WHERE id=?")
+            .bind(at)
             .bind(id.uuid().to_string())
             .execute(&self.pool)
             .await?;
@@ -2148,6 +2163,7 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
         status: parse_issue_status(&r.get::<String, _>("status")),
         priority: parse_issue_priority(&r.get::<String, _>("priority")),
         assignee,
+        settled_at: r.get("settled_at"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     })

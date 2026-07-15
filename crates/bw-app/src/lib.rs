@@ -2027,13 +2027,21 @@ impl App {
 
             Command::TransitionIssue { id, status } => {
                 // Read the prior state first: the accounting below must fire
-                // exactly once, on the real …→Done edge — a repeated
-                // Done→Done dispatch is a no-op, not a second win.
+                // exactly once per work item, on its FIRST …→Done edge.
+                // `settled_at` is the persistent settle-once marker — without
+                // it, a Done → reopen → Done bounce (reachable through this
+                // public command even though the desktop only offers forward
+                // moves) would credit the same work twice.
                 let prev = self.store.get_issue(id).await?;
                 self.store.transition_issue(id, status).await?;
                 let newly_done = status == IssueStatus::Done
-                    && prev.as_ref().is_some_and(|i| i.status != IssueStatus::Done);
+                    && prev
+                        .as_ref()
+                        .is_some_and(|i| i.status != IssueStatus::Done && i.settled_at.is_none());
                 if let (true, Some(issue)) = (newly_done, prev) {
+                    self.store
+                        .mark_issue_settled(id, now().unix_timestamp())
+                        .await?;
                     // The Done edge is the issue-side settle: the same real
                     // accounting a workflow-run settle does, fed by the same
                     // store functions. An issue completed by an agent teammate
@@ -2041,7 +2049,9 @@ impl App {
                     // `win_rate` derives from these counters, never hand-set.
                     // (Cancelled records nothing: dropping an issue is not
                     // evidence about the agent's work, and inventing a loss
-                    // would fabricate a metric.)
+                    // would fabricate a metric. Reopen-and-redo also records
+                    // nothing new: one work item, one credit — the first win
+                    // stands in the append-only history.)
                     if let Some(agent_id) = issue.assignee {
                         if let Some(agent) = self.store.get_agent(agent_id).await? {
                             self.store

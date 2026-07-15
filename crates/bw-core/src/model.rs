@@ -1407,6 +1407,10 @@ pub struct Issue {
     pub status: IssueStatus,
     pub priority: IssuePriority,
     pub assignee: Option<AgentId>,
+    /// Unix ts of the FIRST …→Done edge (when issue-side accounting fired).
+    /// `None` = never settled. Reopen-and-redo does not settle again.
+    #[serde(default)]
+    pub settled_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
