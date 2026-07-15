@@ -242,6 +242,9 @@ pub struct NewArtifact {
     pub id: bw_core::ArtifactId,
     pub project_id: ProjectId,
     pub workflow_run_id: Option<WorkflowRunId>,
+    /// A2: bind this version to an Issue (set on the Done-edge scan; `None`
+    /// for run-settle and manual-collect registrations).
+    pub issue_id: Option<IssueId>,
     pub stage_kind: Option<StageKind>,
     pub path: String,
     pub kind: bw_core::model::ArtifactKind,
@@ -629,6 +632,16 @@ pub trait Store: Send + Sync {
     async fn get_issue(&self, id: IssueId) -> Result<Option<Issue>>;
     async fn transition_issue(&self, id: IssueId, status: IssueStatus) -> Result<()>;
     async fn assign_issue(&self, id: IssueId, assignee: Option<AgentId>) -> Result<()>;
+    /// A2: the runs bound to an Issue (fired by RunIssue), newest first — the
+    /// "which runs did this issue produce?" half of an Issue's detail page.
+    async fn list_runs_for_issue(&self, issue_id: IssueId) -> Result<Vec<WorkflowRun>>;
+    /// A2: the artifact versions whose Done-edge scan registered them against
+    /// this Issue — the "what did this issue produce?" half. Empty until an
+    /// issue is transitioned Done (or a RunIssue run registers artifacts).
+    async fn list_artifacts_for_issue(
+        &self,
+        issue_id: IssueId,
+    ) -> Result<Vec<bw_core::model::Artifact>>;
     /// Stamp the FIRST settle time (COALESCE — later calls keep the original).
     /// The app's Done-edge accounting fires iff this was previously NULL.
     async fn mark_issue_settled(&self, id: IssueId, at: i64) -> Result<()>;

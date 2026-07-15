@@ -664,6 +664,10 @@ pub struct WorkflowRun {
     pub params_json: String,
     /// The cron task that fired this run (iter 4). `None` for manual runs.
     pub cron_task_id: Option<CronTaskId>,
+    /// A2: the Issue this run executes — set only when the run is fired by
+    /// `RunIssue` (`None` for ordinary workflow / scheduler runs). Lets an
+    /// Issue's detail answer "which runs did this issue produce, and what?".
+    pub issue_id: Option<IssueId>,
 }
 
 /// Per-workflow aggregate over its run history — the read-side shape optimization
@@ -1296,6 +1300,9 @@ pub struct Artifact {
     /// settle-time scan first saw it. `None` when registered by a manual
     /// collect outside any run.
     pub workflow_run_id: Option<WorkflowRunId>,
+    /// A2: the Issue whose Done-edge scan first registered this version
+    /// (`None` for run-settle scans and manual collects).
+    pub issue_id: Option<IssueId>,
     /// Stage the project was operating when this version appeared, if known.
     pub stage_kind: Option<StageKind>,
     /// Workspace-relative path (git's own path form).

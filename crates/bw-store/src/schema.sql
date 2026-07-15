@@ -263,6 +263,10 @@ CREATE TABLE IF NOT EXISTS workflow_run (
     phases_completed INTEGER NOT NULL DEFAULT 0,
     error            TEXT NOT NULL DEFAULT '',
     params_json      TEXT NOT NULL DEFAULT '',
+    -- A2: the Issue this run executes (NULL unless fired by RunIssue). Kept
+    -- denormalized (no FK) so a run survives its issue being deleted — the
+    -- linkage is the point, an orphaned run is still honest evidence.
+    issue_id         TEXT,
     created_at       INTEGER NOT NULL
 );
 -- iter 4: link a scheduled run back to the cron task that fired it (NULL for
@@ -285,6 +289,7 @@ CREATE TABLE IF NOT EXISTS artifact (
     id              TEXT PRIMARY KEY,
     project_id      TEXT NOT NULL REFERENCES project(id),
     workflow_run_id TEXT,                        -- no FK: a registration outlives a purged run
+    issue_id        TEXT,                        -- A2: the Issue whose Done-edge registered this version
     stage_kind      TEXT,                        -- StageKind at registration time, if known
     path            TEXT NOT NULL,               -- workspace-relative, git's own form
     kind            TEXT NOT NULL DEFAULT 'other', -- bw_core::model::ArtifactKind::text()

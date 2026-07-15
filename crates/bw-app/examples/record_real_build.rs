@@ -89,6 +89,7 @@ async fn main() {
             id: ArtifactId::new(),
             project_id: pid,
             workflow_run_id: Some(run),
+            issue_id: None,
             stage_kind: Some(StageKind::Build),
             path: (*p).into(),
             kind: *k,

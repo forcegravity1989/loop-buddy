@@ -1,13 +1,98 @@
 //! R1 Issue layer — store-level checks: per-project numbering, default status,
 //! transitions, assignment, filtered listing, and full field round-trip.
 
-use bw_core::model::{IssuePriority, IssueStatus, StageKind};
-use bw_core::{AgentId, IssueId, ProjectId};
-use bw_store::{NewIssue, NewProject, SqliteStore, Store};
+use bw_core::model::{ArtifactKind, IssuePriority, IssueStatus, StageKind};
+use bw_core::{AgentId, ArtifactId, IssueId, ProjectId};
+use bw_store::{NewArtifact, NewIssue, NewProject, SqliteStore, Store};
 
 fn tmp_db() -> String {
     let p = std::env::temp_dir().join(format!("bw_store_issue_test_{}.db", uuid::Uuid::new_v4()));
     p.to_string_lossy().into_owned()
+}
+
+#[tokio::test]
+async fn issue_linkage_columns_round_trip_and_null_for_old_rows() {
+    // A2: workflow_run.issue_id + artifact.issue_id link work to the Issue it
+    // belongs to. An issue-bound artifact (the Done-edge case) carries its
+    // issue_id back on read; a pre-A2 / non-issue row stays NULL; the per-issue
+    // query returns only the bound versions.
+    let path = tmp_db();
+    let store = SqliteStore::open(&path).await.unwrap();
+    let project = ProjectId::new();
+    store
+        .create_project(NewProject {
+            id: project,
+            name: "A2 关联列测试".into(),
+            kind: "y".into(),
+            desc: String::new(),
+        })
+        .await
+        .unwrap();
+    let issue = IssueId::new();
+    store
+        .create_issue(NewIssue {
+            id: issue,
+            project_id: project,
+            stage: StageKind::Build,
+            title: "可验收的活".into(),
+            desc: String::new(),
+            priority: IssuePriority::Medium,
+        })
+        .await
+        .unwrap();
+
+    let bound = NewArtifact {
+        id: ArtifactId::new(),
+        project_id: project,
+        workflow_run_id: None,
+        issue_id: Some(issue),
+        stage_kind: Some(StageKind::Build),
+        path: "docs/done-edge.md".into(),
+        kind: ArtifactKind::Doc,
+        bytes: 128,
+        git_commit: "abc".into(),
+        registered_at: 1_700_000_000,
+    };
+    let legacy = NewArtifact {
+        id: ArtifactId::new(),
+        project_id: project,
+        workflow_run_id: None,
+        issue_id: None,
+        stage_kind: None,
+        path: "README.md".into(),
+        kind: ArtifactKind::Doc,
+        bytes: 256,
+        git_commit: "abc".into(),
+        registered_at: 1_700_000_001,
+    };
+    assert_eq!(
+        store.register_artifacts(vec![bound, legacy]).await.unwrap(),
+        2
+    );
+
+    // Round-trip: the bound version carries its issue_id; the legacy one is NULL.
+    let arts = store.list_artifacts(project).await.unwrap();
+    let bound_back = arts
+        .iter()
+        .find(|a| a.path == "docs/done-edge.md")
+        .expect("bound artifact registered");
+    assert_eq!(bound_back.issue_id, Some(issue));
+    let legacy_back = arts
+        .iter()
+        .find(|a| a.path == "README.md")
+        .expect("legacy artifact registered");
+    assert_eq!(legacy_back.issue_id, None);
+
+    // Per-issue query returns ONLY the bound version.
+    let for_issue = store.list_artifacts_for_issue(issue).await.unwrap();
+    assert_eq!(for_issue.len(), 1);
+    assert_eq!(for_issue[0].id, bound_back.id);
+
+    // No runs are issue-bound yet (RunIssue lands in A3) — honest empty, and no
+    // panic reading the new column.
+    assert!(store.list_runs_for_issue(issue).await.unwrap().is_empty());
+
+    let _ = std::fs::remove_file(&path);
 }
 
 #[tokio::test]

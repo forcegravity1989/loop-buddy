@@ -1082,6 +1082,7 @@ mod tests {
             error: err.into(),
             params_json: String::new(),
             cron_task_id: None,
+            issue_id: None,
         }
     }
 
@@ -1101,6 +1102,7 @@ mod tests {
             error: String::new(),
             params_json: params.into(),
             cron_task_id: None,
+            issue_id: None,
         }
     }
 
@@ -1433,6 +1435,7 @@ mod tests {
                 error: String::new(),
                 params_json: String::new(),
                 cron_task_id: None,
+                issue_id: None,
             })
             .collect()
     }

@@ -849,6 +849,7 @@ async fn artifact_registration_is_idempotent_and_versions_by_commit() {
         id: ArtifactId::new(),
         project_id: project,
         workflow_run_id: None,
+        issue_id: None,
         stage_kind: Some(StageKind::Prototype),
         path: path.into(),
         kind: classify_artifact_path(path),

@@ -1201,6 +1201,7 @@ mod tests {
             id: ArtifactId::nil(),
             project_id: ProjectId::nil(),
             workflow_run_id: run.then(WorkflowRunId::nil),
+            issue_id: None,
             stage_kind: Some(StageKind::Prototype),
             path: path.into(),
             kind: ArtifactKind::Doc,

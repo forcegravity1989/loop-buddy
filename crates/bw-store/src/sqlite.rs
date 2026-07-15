@@ -123,6 +123,11 @@ impl SqliteStore {
         // R3 settle-once: issues opened before this column exist unsettled —
         // honest for them (their Done predates issue-side accounting).
         add_column_if_missing(&pool, "issue", "settled_at", "INTEGER").await?;
+        // A2: link runs and artifacts back to the Issue they belong to. Old DBs
+        // opened before A2 get these columns (NULL = no issue binding, honest
+        // for pre-A2 rows); fresh DBs also define them inline in CREATE TABLE.
+        add_column_if_missing(&pool, "workflow_run", "issue_id", "TEXT").await?;
+        add_column_if_missing(&pool, "artifact", "issue_id", "TEXT").await?;
 
         Ok(Self { pool })
     }
@@ -1153,7 +1158,7 @@ impl Store for SqliteStore {
     async fn list_workflow_runs(&self, workflow_id: WorkflowId) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id
              FROM workflow_run WHERE workflow_id=? ORDER BY started_at DESC, rowid DESC",
         )
         .bind(workflow_id.uuid().to_string())
@@ -1165,7 +1170,7 @@ impl Store for SqliteStore {
     async fn list_all_workflow_runs(&self, limit: u32) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id
              FROM workflow_run ORDER BY started_at DESC, rowid DESC LIMIT ?",
         )
         .bind(limit as i64)
@@ -1796,12 +1801,13 @@ impl Store for SqliteStore {
             // genuinely new version counts.
             let res = sqlx::query(
                 "INSERT OR IGNORE INTO artifact \
-                 (id, project_id, workflow_run_id, stage_kind, path, kind, bytes, git_commit, registered_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (id, project_id, workflow_run_id, issue_id, stage_kind, path, kind, bytes, git_commit, registered_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(a.id.uuid().to_string())
             .bind(pid(a.project_id))
             .bind(a.workflow_run_id.map(|r| r.uuid().to_string()))
+            .bind(a.issue_id.map(|i| i.uuid().to_string()))
             .bind(a.stage_kind.map(stage_kind_text))
             .bind(&a.path)
             .bind(a.kind.text())
@@ -1817,13 +1823,36 @@ impl Store for SqliteStore {
 
     async fn list_artifacts(&self, project_id: ProjectId) -> Result<Vec<Artifact>> {
         let rows = sqlx::query(
-            "SELECT id, project_id, workflow_run_id, stage_kind, path, kind, bytes, git_commit, registered_at \
+            "SELECT id, project_id, workflow_run_id, issue_id, stage_kind, path, kind, bytes, git_commit, registered_at \
              FROM artifact WHERE project_id=? ORDER BY registered_at DESC, path",
         )
         .bind(pid(project_id))
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(artifact_row).collect()
+    }
+
+    async fn list_artifacts_for_issue(&self, issue_id: IssueId) -> Result<Vec<Artifact>> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, workflow_run_id, issue_id, stage_kind, path, kind, bytes, git_commit, registered_at \
+             FROM artifact WHERE issue_id=? ORDER BY registered_at DESC, path",
+        )
+        .bind(issue_id.uuid().to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(artifact_row).collect()
+    }
+
+    async fn list_runs_for_issue(&self, issue_id: IssueId) -> Result<Vec<WorkflowRun>> {
+        let rows = sqlx::query(
+            "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id
+             FROM workflow_run WHERE issue_id=? ORDER BY started_at DESC, rowid DESC",
+        )
+        .bind(issue_id.uuid().to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(parse_run_row).collect())
     }
 
     async fn create_issue(&self, i: NewIssue) -> Result<()> {
@@ -1966,6 +1995,10 @@ fn parse_run_row(r: &sqlx::sqlite::SqliteRow) -> WorkflowRun {
             .get::<Option<String>, _>("cron_task_id")
             .filter(|s| !s.is_empty())
             .and_then(|s| parse_uuid(&s, CronTaskId::from_uuid).ok()),
+        issue_id: r
+            .get::<Option<String>, _>("issue_id")
+            .filter(|s| !s.is_empty())
+            .and_then(|s| parse_uuid(&s, IssueId::from_uuid).ok()),
     }
 }
 
@@ -2114,6 +2147,10 @@ fn artifact_row(r: sqlx::sqlite::SqliteRow) -> Result<Artifact> {
         .get::<Option<String>, _>("workflow_run_id")
         .filter(|s| !s.is_empty())
         .and_then(|s| parse_uuid(&s, WorkflowRunId::from_uuid).ok());
+    let issue_id = r
+        .get::<Option<String>, _>("issue_id")
+        .filter(|s| !s.is_empty())
+        .and_then(|s| parse_uuid(&s, IssueId::from_uuid).ok());
     let stage_kind = r
         .get::<Option<String>, _>("stage_kind")
         .as_deref()
@@ -2122,6 +2159,7 @@ fn artifact_row(r: sqlx::sqlite::SqliteRow) -> Result<Artifact> {
         id,
         project_id,
         workflow_run_id,
+        issue_id,
         stage_kind,
         path: r.get("path"),
         kind: ArtifactKind::parse(&r.get::<String, _>("kind")),

@@ -878,7 +878,13 @@ impl App {
                 .stage_ref
                 .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n));
             if let Ok(fresh) = self
-                .scan_and_register_artifacts(p, &proj.workspace_path, Some(run_log_id), stage_kind)
+                .scan_and_register_artifacts(
+                    p,
+                    &proj.workspace_path,
+                    Some(run_log_id),
+                    stage_kind,
+                    None,
+                )
                 .await
             {
                 if fresh > 0 {
@@ -1024,6 +1030,7 @@ impl App {
         workspace: &str,
         workflow_run_id: Option<WorkflowRunId>,
         stage_kind: Option<StageKind>,
+        issue_id: Option<IssueId>,
     ) -> Result<u32, AppError> {
         let files = evidence::list_workspace_files(workspace)
             .await
@@ -1042,6 +1049,7 @@ impl App {
                 id: ArtifactId::new(),
                 project_id: project,
                 workflow_run_id,
+                issue_id,
                 stage_kind,
                 kind: classify_artifact_path(&f.path),
                 path: f.path,
@@ -1550,7 +1558,7 @@ impl App {
                     ));
                 }
                 let fresh = self
-                    .scan_and_register_artifacts(p, &proj.workspace_path, None, None)
+                    .scan_and_register_artifacts(p, &proj.workspace_path, None, None, None)
                     .await?;
                 self.emit(Event::ArtifactsRegistered { fresh });
                 // Refresh the panel snapshot in the same dispatch so the UI
@@ -2073,6 +2081,7 @@ impl App {
                                     &proj.workspace_path,
                                     None,
                                     Some(issue.stage),
+                                    Some(id),
                                 )
                                 .await
                             {
