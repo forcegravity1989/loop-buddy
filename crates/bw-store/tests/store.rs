@@ -5,8 +5,8 @@
 
 use bw_core::derive::{evaluate_metric, measure, parse_target, reduce_worst_of, Measurement};
 use bw_core::model::{
-    stage_workflow, Cadence, CronStatus, HubSource, LibSource, LoopConfig, Maturity, ProjectPhase,
-    SourceKind, StageKind, WorkflowKind,
+    stage_workflow, Cadence, CronMode, CronStatus, HubSource, LibSource, LoopConfig, Maturity,
+    ProjectPhase, SourceKind, StageKind, WorkflowKind,
 };
 use bw_core::{AgentId, CronTaskId, MetricId, ProjectId, Signal, SkillId, WorkflowId};
 use bw_store::{
@@ -716,6 +716,9 @@ async fn cron_task_last_run_at_roundtrips_real_clock_for_scheduler() {
             target: "wf".into(),
             schedule: Cadence::Daily,
             project_id: None,
+            mode: CronMode::RunWorkflow,
+            issue_stage: None,
+            issue_assignee: None,
         })
         .await
         .unwrap();

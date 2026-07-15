@@ -208,6 +208,11 @@ CREATE TABLE IF NOT EXISTS cron_task (
     -- has a machine-comparable clock to test "due" against — parsing the
     -- display string back would be fragile. See bw_core::model::cron_due.
     last_run_at INTEGER NOT NULL DEFAULT 0,
+    -- A1: what this task does when due. Defaults to run_workflow so pre-A1
+    -- rows keep their semantics byte-for-byte; create_issue mints an Issue.
+    mode            TEXT NOT NULL DEFAULT 'run_workflow',
+    issue_stage     TEXT,                        -- A1: stage for a create_issue task
+    issue_assignee  TEXT,                        -- A1: agent name to assign (NULL = unassigned)
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0

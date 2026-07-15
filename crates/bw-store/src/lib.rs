@@ -19,10 +19,10 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronStatus,
-    CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig,
-    Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus, Signal,
-    SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
+    AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronMode,
+    CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource,
+    LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus,
+    Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
     WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
@@ -210,6 +210,12 @@ pub struct NewCronTask {
     pub target: String,
     pub schedule: Cadence,
     pub project_id: Option<ProjectId>,
+    /// A1: what this task does when due (default `RunWorkflow`).
+    pub mode: CronMode,
+    /// A1: stage for a `CreateIssue` task (`None` for `RunWorkflow`).
+    pub issue_stage: Option<StageKind>,
+    /// A1: agent NAME to assign the minted Issue to (`None` = unassigned).
+    pub issue_assignee: Option<String>,
 }
 
 /// Write DTO for creating an [`Issue`]. `status` defaults to `Backlog`;
@@ -718,6 +724,20 @@ pub(crate) fn parse_session_status(s: &str) -> SessionStatus {
         "archived" => SessionStatus::Archived,
         "done" => SessionStatus::Done,
         _ => SessionStatus::Active,
+    }
+}
+
+pub(crate) fn cron_mode_text(m: CronMode) -> &'static str {
+    match m {
+        CronMode::RunWorkflow => "run_workflow",
+        CronMode::CreateIssue => "create_issue",
+    }
+}
+
+pub(crate) fn parse_cron_mode(s: &str) -> CronMode {
+    match s {
+        "create_issue" => CronMode::CreateIssue,
+        _ => CronMode::RunWorkflow,
     }
 }
 

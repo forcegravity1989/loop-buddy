@@ -1187,6 +1187,7 @@ pub fn artifact_rows(rows: &[bw_core::model::Artifact], now: OffsetDateTime) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bw_core::model::CronMode;
     use time::Duration;
 
     fn t0() -> OffsetDateTime {
@@ -1648,6 +1649,9 @@ mod tests {
                 last_run: "1h 前".into(),
                 next_run: "-".into(),
                 last_run_at: None,
+                mode: CronMode::RunWorkflow,
+                issue_stage: None,
+                issue_assignee: None,
             },
             CronTask {
                 id: CronTaskId::nil(),
@@ -1659,6 +1663,9 @@ mod tests {
                 last_run: "10min 前".into(),
                 next_run: "今晚".into(),
                 last_run_at: None,
+                mode: CronMode::RunWorkflow,
+                issue_stage: None,
+                issue_assignee: None,
             },
         ];
         let connectors = vec![Connector {

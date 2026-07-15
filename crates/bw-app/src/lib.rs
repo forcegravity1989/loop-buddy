@@ -16,8 +16,8 @@
 use bw_core::derive::AmberBand;
 use bw_core::model::{
     classify_artifact_path, cron_due, stage_workflow, stage_workflow_with_playbook, AgentCard,
-    AgentRef, Artifact, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, HubSource,
-    Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig, Maturity,
+    AgentRef, Artifact, Cadence, Connector, ConnectorStatus, CronMode, CronStatus, CronTask,
+    HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig, Maturity,
     ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
     SourceKind, StageKind, WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI,
     CONNECTOR_KIND_GIT_REPO,
@@ -340,6 +340,18 @@ pub enum Command {
         target: String,
         schedule: Cadence,
         project_id: Option<ProjectId>,
+    },
+    /// A1: an autopilot cron task — when due, it mints a stage-scoped Issue
+    /// (Todo, optionally assigned) instead of running a workflow. No-hijack: it
+    /// never auto-runs anything. `assignee` is an agent NAME matched at fire
+    /// time (no match ⇒ honest unassigned Issue, not a failure).
+    CreateAutopilotTask {
+        id: CronTaskId,
+        name: String,
+        schedule: Cadence,
+        project_id: Option<ProjectId>,
+        stage: StageKind,
+        assignee: Option<String>,
     },
     /// Pause/resume a cron task — the "人工介入" lever. Pure status flip;
     /// never touches `last_run` since nothing actually ran.
@@ -1250,6 +1262,40 @@ impl App {
             if !cron_due(&c.schedule, c.last_run_at, now_ts) {
                 continue;
             }
+
+            // A1: autopilot — a create_issue task mints a stage-scoped Issue
+            // (Todo, optionally assigned) instead of running a workflow. No-hijack
+            // by construction: this branch never calls run_workflow_inner.
+            if c.mode == CronMode::CreateIssue {
+                let Some(stage) = c.issue_stage else {
+                    continue; // misconfigured — no stage to scope the Issue to
+                };
+                self.store
+                    .record_cron_run(c.id, CronStatus::Running, run_at_label(now_ts))
+                    .await?;
+                let res = self
+                    .autopilot_fire(pid, &c.name, stage, c.issue_assignee.as_deref(), now_ts)
+                    .await;
+                let (ok, status) = match &res {
+                    Ok(_) => (true, CronStatus::Normal),
+                    Err(_) => (false, CronStatus::Failed),
+                };
+                self.store
+                    .record_cron_run(c.id, status, run_at_label(now()))
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.refresh_issues().await?;
+                self.emit(Event::CronTasksChanged);
+                self.emit(Event::IssuesChanged);
+                self.emit(Event::CronAutoFired {
+                    id: c.id,
+                    name: c.name.clone(),
+                    ok,
+                });
+                fired.push(c.id);
+                continue;
+            }
+
             let Some(spec) = specs.iter().find(|w| w.name == c.target).cloned() else {
                 continue; // target doesn't (yet) name a real hub workflow — same rule as the manual trigger.
             };
@@ -1299,6 +1345,52 @@ impl App {
             fired.push(c.id);
         }
         Ok(fired)
+    }
+
+    /// A1: the create_issue cron path — mint a stage-scoped Issue (Todo,
+    /// optionally assigned by name). No-hijack: never runs a workflow. A missing
+    /// named agent is an honest unassigned Issue, not a failure.
+    async fn autopilot_fire(
+        &mut self,
+        project: ProjectId,
+        name: &str,
+        stage: StageKind,
+        assignee: Option<&str>,
+        fired_at: OffsetDateTime,
+    ) -> Result<IssueId, AppError> {
+        let issue_id = IssueId::new();
+        self.store
+            .create_issue(NewIssue {
+                id: issue_id,
+                project_id: project,
+                stage,
+                title: format!("[auto] {name}"),
+                desc: format!(
+                    "Autopilot 建单(定时任务「{name}」于 {} 触发,{} 阶段)。",
+                    run_at_label(fired_at),
+                    stage.label()
+                ),
+                priority: IssuePriority::Medium,
+            })
+            .await?;
+        // Todo (committed work), not Backlog (the parking lot) — autopilot建单
+        // is a commitment, and Backlog is the suppress-firing pile in multica.
+        self.store
+            .transition_issue(issue_id, IssueStatus::Todo)
+            .await?;
+        // Assign by name if the named agent exists — honest 0-match otherwise.
+        if let Some(agent_name) = assignee {
+            if let Some(agent) = self
+                .store
+                .list_agents()
+                .await?
+                .into_iter()
+                .find(|a| a.name == agent_name)
+            {
+                self.store.assign_issue(issue_id, Some(agent.id)).await?;
+            }
+        }
+        Ok(issue_id)
     }
 
     /// **The self-driving optimization loop (iter 18).** Runs the full
@@ -2216,6 +2308,36 @@ impl App {
                         target,
                         schedule,
                         project_id,
+                        mode: CronMode::RunWorkflow,
+                        issue_stage: None,
+                        issue_assignee: None,
+                    })
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+            }
+
+            Command::CreateAutopilotTask {
+                id,
+                name,
+                schedule,
+                project_id,
+                stage,
+                assignee,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .create_cron_task(NewCronTask {
+                        id,
+                        name,
+                        target: String::new(), // unused in create_issue mode
+                        schedule,
+                        project_id,
+                        mode: CronMode::CreateIssue,
+                        issue_stage: Some(stage),
+                        issue_assignee: assignee,
                     })
                     .await?;
                 self.refresh_cron_tasks().await?;

@@ -1016,6 +1016,18 @@ pub enum CronStatus {
     Paused,
 }
 
+/// What a [`CronTask`] does when due (A1). `RunWorkflow` (the default) resolves
+/// `target` as a hub workflow and runs it — the original behavior; `CreateIssue`
+/// is autopilot: it mints a stage-scoped Issue. No-hijack by construction: a
+/// `CreateIssue` task never auto-runs anything, it only creates work.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CronMode {
+    #[default]
+    RunWorkflow,
+    CreateIssue,
+}
+
 impl CronStatus {
     pub fn label(self) -> &'static str {
         match self {
@@ -1046,6 +1058,18 @@ pub struct CronTask {
     /// `last_run` display string — this is what `cron_due` compares against,
     /// never a parsed-back label.
     pub last_run_at: Option<OffsetDateTime>,
+    /// A1: what this task does when due. `RunWorkflow` (default) runs `target`;
+    /// `CreateIssue` mints a stage-scoped Issue (autopilot, no-hijack).
+    #[serde(default)]
+    pub mode: CronMode,
+    /// A1: the stage a `CreateIssue` task scopes its Issue to (`None` for
+    /// `RunWorkflow` tasks).
+    #[serde(default)]
+    pub issue_stage: Option<StageKind>,
+    /// A1: agent NAME a `CreateIssue` task assigns its Issue to (`None` =
+    /// unassigned). Name-led, matching the by-name accounting convention.
+    #[serde(default)]
+    pub issue_assignee: Option<String>,
 }
 
 /// Is `task` due to auto-fire right now? Pure and independently unit-tested —

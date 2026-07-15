@@ -4,15 +4,16 @@
 //! sidesteps `SQLITE_BUSY` without ceremony.
 
 use crate::{
-    cadence_text, connector_status_text, cron_status_text, cycle_text, issue_priority_text,
-    issue_status_text, lib_source_text, maturity_text, parse_cadence, parse_connector_status,
-    parse_cron_status, parse_cycle, parse_issue_priority, parse_issue_status, parse_lib_source,
-    parse_maturity, parse_session_status, parse_sig, parse_stage_kind, session_status_text,
-    sig_text, stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow, MessageRow, MetricRole,
-    MetricSignal, NewAgent, NewArtifact, NewConnector, NewCronTask, NewIssue, NewKnowledgeSource,
-    NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowRun, NewWorkflowSpec,
-    ObservationRow, PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, SkillEdit,
-    StageRow, StageSignal, Store, StoreError, WorkflowEdit,
+    cadence_text, connector_status_text, cron_mode_text, cron_status_text, cycle_text,
+    issue_priority_text, issue_status_text, lib_source_text, maturity_text, parse_cadence,
+    parse_connector_status, parse_cron_mode, parse_cron_status, parse_cycle, parse_issue_priority,
+    parse_issue_status, parse_lib_source, parse_maturity, parse_session_status, parse_sig,
+    parse_stage_kind, session_status_text, sig_text, stage_kind_text, AgentEdit, GlobalHandoffRow,
+    HandoffRow, MessageRow, MetricRole, MetricSignal, NewAgent, NewArtifact, NewConnector,
+    NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
+    NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectRow,
+    Result, SessionKind, SessionRow, SkillEdit, StageRow, StageSignal, Store, StoreError,
+    WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -83,6 +84,17 @@ impl SqliteStore {
             "INTEGER NOT NULL DEFAULT 0",
         )
         .await?;
+        // A1: autopilot mode — what a due task does. Defaults to run_workflow
+        // so pre-A1 rows keep their semantics; create_issue mints an Issue.
+        add_column_if_missing(
+            &pool,
+            "cron_task",
+            "mode",
+            "TEXT NOT NULL DEFAULT 'run_workflow'",
+        )
+        .await?;
+        add_column_if_missing(&pool, "cron_task", "issue_stage", "TEXT").await?;
+        add_column_if_missing(&pool, "cron_task", "issue_assignee", "TEXT").await?;
         // iter 4: link scheduled runs to the cron task that fired them. Old
         // DBs (pre-iter-4) opened before this column existed get it added here;
         // manual-run rows simply stay NULL.
@@ -1675,14 +1687,17 @@ impl Store for SqliteStore {
     async fn create_cron_task(&self, c: NewCronTask) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO cron_task (id, name, target, schedule, project_id, status, last_run, next_run, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, 'normal', '', '', ?, ?, 0)",
+            "INSERT INTO cron_task (id, name, target, schedule, project_id, status, last_run, next_run, mode, issue_stage, issue_assignee, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, 'normal', '', '', ?, ?, ?, ?, ?, 0)",
         )
         .bind(c.id.uuid().to_string())
         .bind(&c.name)
         .bind(&c.target)
         .bind(cadence_text(&c.schedule))
         .bind(c.project_id.map(pid))
+        .bind(cron_mode_text(c.mode))
+        .bind(c.issue_stage.map(stage_kind_text))
+        .bind(&c.issue_assignee)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1692,7 +1707,7 @@ impl Store for SqliteStore {
 
     async fn list_cron_tasks(&self) -> Result<Vec<CronTask>> {
         let rows = sqlx::query(
-            "SELECT id, name, target, schedule, project_id, status, last_run, next_run, last_run_at
+            "SELECT id, name, target, schedule, project_id, status, last_run, next_run, last_run_at, mode, issue_stage, issue_assignee
              FROM cron_task ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -2128,6 +2143,12 @@ fn cron_task_row(r: sqlx::sqlite::SqliteRow) -> Result<CronTask> {
         last_run_at: (last_run_at_raw > 0)
             .then(|| OffsetDateTime::from_unix_timestamp(last_run_at_raw).ok())
             .flatten(),
+        mode: parse_cron_mode(&r.get::<String, _>("mode")),
+        issue_stage: r
+            .get::<Option<String>, _>("issue_stage")
+            .as_deref()
+            .and_then(parse_stage_kind),
+        issue_assignee: r.get::<Option<String>, _>("issue_assignee"),
     })
 }
 
