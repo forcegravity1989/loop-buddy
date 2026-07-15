@@ -229,7 +229,16 @@ async fn main() {
         .filter(|s| s.distilled_from_issue.is_some())
         .count();
     let handoffs = store.list_handoffs(project).await.unwrap().len();
+    // R3(Done 边沿 = issue 侧 settle):完成的 Issue 自动给 assignee 记
+    // runs/wins,win_rate 从真实计数派生 —— 读回而非断言。
+    let agents = app.snapshot().agents.clone();
+    let fable_row = agents.iter().find(|a| a.id == fable).unwrap();
+    let sonnet_row = agents.iter().find(|a| a.id == sonnet_builder).unwrap();
     println!("╔══ 真实读回(全部从 store 派生,非硬编码)══╗");
+    println!(
+        "  R3 记账联动:Fable runs={} win_rate={} · sonnet5 runs={} win_rate={}",
+        fable_row.runs, fable_row.win_rate, sonnet_row.runs, sonnet_row.win_rate
+    );
     println!("  项目的 Issue 总数 = {} · 其中 Done = {}", total, done);
     println!(
         "  完成率(Done/总)= {:.0}%",
