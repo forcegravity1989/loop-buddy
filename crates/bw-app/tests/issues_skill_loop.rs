@@ -198,6 +198,103 @@ async fn run_issue_failure_leaves_inprogress_and_records_failed_run() {
 }
 
 #[tokio::test]
+async fn distilled_skill_compounds_into_next_run_via_uses_increment() {
+    // A0: the compounding loop end-to-end. A skill distilled from a completed
+    // Issue is injected into a later RunIssue in the same project+stage, and its
+    // `uses` counter increments — real reuse, the whole point of distillation.
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let agent = AgentId::new();
+    let issue_a = IssueId::new();
+    let issue_b = IssueId::new();
+    let skill = SkillId::new();
+    let session = SessionId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    // issue_a is now Backlog-assigned in a ready project, with a session open.
+    setup_issue_ready_to_run(&mut app, project, agent, issue_a, session).await;
+
+    // Complete A + distill a skill from it (with real content).
+    app.dispatch(Command::TransitionIssue {
+        id: issue_a,
+        status: IssueStatus::Done,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::DistillSkillFromIssue {
+        skill_id: skill,
+        issue_id: issue_a,
+        name: "构建交付法".into(),
+        desc: "从完成的 Issue 蒸馏".into(),
+        category: "方法论".into(),
+        content: "## 构建交付法\n1. 拆 Issue 为可验收步骤\n2. 写真实代码+测试\n3. 门禁全绿才交付"
+            .into(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::RefreshHubs).await.unwrap();
+
+    let before = store.get_skill(skill).await.unwrap().unwrap();
+    assert!(
+        !before.content.trim().is_empty(),
+        "distilled skill carries real content"
+    );
+    assert_eq!(before.distilled_from_issue, Some(issue_a));
+    assert_eq!(before.uses, 0, "freshly distilled — never ridden a run yet");
+
+    // Issue B (same project + stage) — RunIssue should compound the skill in.
+    app.dispatch(Command::CreateIssue {
+        id: issue_b,
+        stage: StageKind::Build,
+        title: "第二件活".into(),
+        desc: "应复用上一件蒸馏的方法".into(),
+        priority: IssuePriority::Medium,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::AssignIssue {
+        id: issue_b,
+        assignee: Some(agent),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::RunIssue {
+        session,
+        id: issue_b,
+    })
+    .await
+    .unwrap();
+
+    // The compounding loop closed: the distilled skill rode B's run → uses+1.
+    let after = store.get_skill(skill).await.unwrap().unwrap();
+    assert_eq!(
+        after.uses,
+        before.uses + 1,
+        "distilled skill compounded into the next run → uses+1"
+    );
+
+    let b = app
+        .snapshot()
+        .issues
+        .iter()
+        .find(|i| i.id == issue_b)
+        .unwrap();
+    assert_eq!(
+        b.status,
+        IssueStatus::InReview,
+        "the compounding run advanced B to InReview"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
 async fn issue_to_skill_full_loop_through_app_commands() {
     let path = tmp_db();
     let project = ProjectId::new();

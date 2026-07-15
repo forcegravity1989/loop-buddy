@@ -950,12 +950,17 @@ impl App {
     /// prompt block, same-stage preferred then proven-first (`uses` desc as the
     /// distill-time proxy — `SkillCard` carries no timestamp). Only skills with
     /// real `content` distilled from a Done issue in THIS project qualify.
-    /// Honest empty string when the project has no compounded skill yet.
+    /// Returns `(prompt_block, skill_refs)`. The block carries the real content
+    /// (injected into the prompt); the name-led refs are returned separately so
+    /// the caller can put them on `spec.skills` and let `run_workflow_inner`'s
+    /// usage accounting bump each one's `uses` — closing the compounding loop
+    /// (a distilled skill used by a run → uses+1). Honest `(empty, [])` when the
+    /// project has no compounded skill yet.
     async fn distilled_skills_block(
         &self,
         project: ProjectId,
         stage: StageKind,
-    ) -> Result<String, AppError> {
+    ) -> Result<(String, Vec<SkillRef>), AppError> {
         const MAX: usize = 3;
         let catalog = self.store.list_skills().await?;
         // (uses, same_stage, skill) — resolve each distilled skill back to its
@@ -977,16 +982,25 @@ impl App {
         scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
         let picked: Vec<&SkillCard> = scored.iter().take(MAX).map(|(_, _, s)| s).collect();
         if picked.is_empty() {
-            return Ok(String::new());
+            return Ok((String::new(), Vec::new()));
         }
         let bodies: Vec<String> = picked
             .iter()
             .map(|s| format!("- {}：\n{}", s.name, s.content.trim()))
             .collect();
-        Ok(format!(
+        let block = format!(
             "\n\n## 复利技能(本项目蒸馏,同阶段优先)\n{}\n",
             bodies.join("\n\n")
-        ))
+        );
+        let refs: Vec<SkillRef> = picked
+            .iter()
+            .map(|s| SkillRef {
+                name: s.name.clone(),
+                def: s.desc.clone(),
+                from: s.category.clone(),
+            })
+            .collect();
+        Ok((block, refs))
     }
 
     /// Run one connector's real probe. Returns `(healthy, honest detail)`;
@@ -1862,9 +1876,16 @@ impl App {
                 // preferred, capped at 3. Appended to the prompt directly — a
                 // playbook spec has non-empty phase_prompts, so the generic
                 // skills injection in run_workflow_inner is skipped by design.
-                let distilled = self.distilled_skills_block(p, issue.stage).await?;
+                let (distilled_block, distilled_refs) =
+                    self.distilled_skills_block(p, issue.stage).await?;
                 spec.name = format!("#{} {}", issue.number, issue.title);
-                spec.prompt = format!("{}{}{}", spec.prompt, issue_brief, distilled);
+                spec.prompt = format!("{}{}{}", spec.prompt, issue_brief, distilled_block);
+                // Put the injected skills on spec.skills so run_workflow_inner's
+                // usage accounting bumps each one's `uses` — the compounding
+                // loop closes here (a run that rides a distilled skill → uses+1).
+                // The content itself is already in the prompt via distilled_block;
+                // generic injection is skipped (playbook spec has phase_prompts).
+                spec.skills.extend(distilled_refs);
 
                 // Start: commit to the work (Backlog/Todo → InProgress).
                 self.store
