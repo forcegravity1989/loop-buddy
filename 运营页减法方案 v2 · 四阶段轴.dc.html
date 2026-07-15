@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#EFEBE2;}
+  *{box-sizing:border-box;}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#EFEBE2;color:#57534A;font-family:'Noto Sans SC',sans-serif;">
+
+  <!-- 方案说明条 -->
+  <sc-if value="{{ showNote }}" hint-placeholder-val="{{ true }}">
+  <div style="background:#23211C;color:#E8E2D5;padding:9px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+    <span style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#E0A78F;">减法方案 v2</span>
+    <span style="font:400 11.5px/1.5 'Noto Sans SC';color:#C9C2B4;">四看板保留不动 · 减法只在轴上：7 环节 → 4 阶段 —— 方法论 / 指标在创建时定稿（顶栏常驻 · 复盘回看），进度管理即本页，洞察 + 需求合并为分析</span>
+    <span onClick="{{ hideNote }}" style="cursor:pointer;margin-left:auto;font:500 11px/1 'Noto Sans SC';color:#9A9388;">收起 ×</span>
+  </div>
+  </sc-if>
+
+  <!-- ===== 顶栏 ===== -->
+  <div data-screen-label="减法v2 · 四阶段轴" style="position:sticky;top:0;z-index:20;background:rgba(239,235,226,.94);backdrop-filter:blur(12px);border-bottom:1px solid #E2DCCF;">
+    <div style="padding:10px 22px;display:flex;align-items:center;gap:12px;">
+      <div style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <div style="width:24px;height:24px;border-radius:6px;background:#C5654A;display:flex;align-items:center;justify-content:center;color:#fff;font:700 12px/1 'JetBrains Mono',monospace;">B</div>
+        <span style="font:500 12px/1 'Noto Sans SC';color:#A19B8D;">← 全部项目</span>
+      </div>
+      <div style="width:1px;height:15px;background:#D8D1C2;"></div>
+      <span style="font:600 14px/1.2 'Noto Sans SC';color:#23211C;">模型 API 服务 · 运维运营看板</span>
+      <span style="font:500 10.5px/1 'Noto Sans SC';background:#E7EDE2;color:#4A5E42;border-radius:5px;padding:4px 8px;">运营中</span>
+      <span style="font:500 10px/1 'JetBrains Mono',monospace;background:#EDE8DE;color:#8C867A;border-radius:5px;padding:4px 8px;" title="方法论与指标 · 创建时定稿">体系 v2</span>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:9px;">
+        <span style="font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#A19B8D;">北极星</span>
+        <span style="font:600 13px/1.3 'Noto Serif SC',serif;color:#23211C;">服务有效可用性 99.9%</span>
+        <div style="width:1px;height:14px;background:#D8D1C2;"></div>
+        <span style="font:500 11px/1 'Noto Sans SC';color:#8C867A;">引领 <b style="color:#B0503A;">0</b>/3</span>
+        <div style="width:8px;height:8px;border-radius:50%;background:#B5862F;"></div>
+      </div>
+    </div>
+    <!-- 阶段轴：4 阶段 + 3 关口 -->
+    <div style="padding:0 22px 9px;display:flex;align-items:center;gap:5px;overflow-x:auto;">
+      <div onClick="{{ scopeAll }}" style="cursor:pointer;flex:none;white-space:nowrap;padding:6px 11px;border-radius:7px;background:{{ allBg }};font:600 11.5px/1 'Noto Sans SC';color:{{ allColor }};">◎ 总览</div>
+      <sc-for list="{{ stageChips }}" as="s" hint-placeholder-count="4">
+        <div onClick="{{ s.onClick }}" style="cursor:pointer;flex:none;display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:7px;background:{{ s.bg }};border:1px solid {{ s.bd }};">
+          <span style="font:700 9.5px/1 'JetBrains Mono',monospace;color:#B3AC9D;">{{ s.n }}</span>
+          <div style="width:6px;height:6px;border-radius:50%;background:{{ s.sig }};"></div>
+          <span style="font:{{ s.weight }} 11.5px/1 'Noto Sans SC';color:{{ s.color }};white-space:nowrap;">{{ s.name }}</span>
+        </div>
+        <sc-if value="{{ s.hasGate }}" hint-placeholder-val="{{ true }}">
+          <span title="{{ s.gateTitle }}" style="flex:none;font:600 10px/1 'JetBrains Mono',monospace;color:{{ s.gateColor }};padding:0 1px;">{{ s.gateMark }}</span>
+        </sc-if>
+      </sc-for>
+      <div style="margin-left:auto;flex:none;display:flex;background:#EBE5D9;border-radius:8px;padding:2px;gap:2px;">
+        <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4">
+          <div onClick="{{ t.onClick }}" style="cursor:pointer;white-space:nowrap;border-radius:6px;padding:6px 13px;font:600 11.5px/1 'Noto Sans SC';background:{{ t.bg }};color:{{ t.color }};">{{ t.name }}</div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:1040px;margin:0 auto;padding:26px 24px 90px;">
+
+    <!-- ===== 等你决策 ===== -->
+    <div style="margin-bottom:22px;">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">
+        <span style="font:600 15px/1.3 'Noto Serif SC',serif;color:#23211C;">等你决策</span>
+        <span style="font:600 10.5px/1 'JetBrains Mono',monospace;color:#B0503A;background:#F2E4DD;border-radius:5px;padding:4px 7px;">{{ gateOpenCount }}</span>
+        <span style="font:400 11.5px/1.5 'Noto Sans SC';color:#A19B8D;">人只在关口介入 —— 其余都在自动推进</span>
+      </div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;overflow:hidden;">
+        <sc-for list="{{ gateRows }}" as="g" hint-placeholder-count="4">
+          <div style="display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid #F3EFE5;opacity:{{ g.op }};">
+            <span style="flex:none;font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;background:{{ g.tagBg }};color:{{ g.tagColor }};border-radius:5px;padding:5px 8px;">{{ g.tag }}</span>
+            <div style="min-width:0;flex:1;">
+              <div style="font:{{ g.nameWeight }} 13px/1.5 'Noto Sans SC';color:#23211C;">{{ g.title }}</div>
+              <div style="font:400 11px/1.5 'Noto Sans SC';color:#A19B8D;">{{ g.meta }}</div>
+            </div>
+            <span style="flex:none;font:400 10.5px/1 'JetBrains Mono',monospace;color:#B3AC9D;">{{ g.age }}</span>
+            <div onClick="{{ g.onClick }}" style="cursor:pointer;flex:none;border:1px solid {{ g.btnBd }};background:{{ g.btnBg }};color:{{ g.btnColor }};border-radius:7px;padding:7px 13px;font:600 11.5px/1 'Noto Sans SC';">{{ g.btnLabel }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- ===== TAB · 进度看板 ===== -->
+    <sc-if value="{{ isProgress }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">
+        <span style="font:600 15px/1.3 'Noto Serif SC',serif;color:#23211C;">阶段进度</span>
+        <span style="font:400 11.5px/1.5 'Noto Sans SC';color:#A19B8D;">{{ scopeHint }}</span>
+      </div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;overflow:hidden;margin-bottom:22px;">
+        <sc-for list="{{ stageRows }}" as="s" hint-placeholder-count="4">
+          <div onClick="{{ s.onClick }}" style="cursor:pointer;display:grid;grid-template-columns:14px 150px 1fr 160px 200px;gap:14px;align-items:center;padding:13px 18px;border-bottom:1px solid #F3EFE5;background:{{ s.rowBg }};">
+            <div style="width:8px;height:8px;border-radius:50%;background:{{ s.sig }};"></div>
+            <div style="display:flex;align-items:baseline;gap:8px;"><span style="font:700 10px/1 'JetBrains Mono',monospace;color:#B3AC9D;">{{ s.n }}</span><span style="font:600 13px/1.4 'Noto Sans SC';color:#23211C;">{{ s.name }}</span></div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="flex:1;height:6px;background:#EBE5D9;border-radius:3px;overflow:hidden;"><div style="width:{{ s.pw }};height:100%;background:{{ s.pc }};"></div></div>
+              <span style="font:600 11px/1 'JetBrains Mono',monospace;color:{{ s.pc }};width:36px;text-align:right;">{{ s.pl }}</span>
+            </div>
+            <span style="font:500 11.5px/1.4 'Noto Sans SC';color:{{ s.runColor }};">{{ s.runLabel }}</span>
+            <span style="font:500 11px/1.4 'Noto Sans SC';color:{{ s.gateColor }};">{{ s.gateLabel }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- 复盘 · 默认收起 -->
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;overflow:hidden;">
+        <div onClick="{{ toggleReview }}" style="cursor:pointer;display:flex;align-items:center;gap:11px;padding:13px 18px;">
+          <span style="font:600 13.5px/1.3 'Noto Serif SC',serif;color:#23211C;">本周复盘</span>
+          <span style="font:500 10.5px/1 'JetBrains Mono',monospace;color:#B0503A;">引领 0/3 达标</span>
+          <span style="font:400 11.5px/1.4 'Noto Sans SC';color:#A19B8D;">下次 · 周一 09:00 体检 Routine 之后</span>
+          <span style="margin-left:auto;font:500 12px/1 'JetBrains Mono',monospace;color:#8C867A;">{{ reviewArrow }}</span>
+        </div>
+        <sc-if value="{{ reviewOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="border-top:1px solid #F0EBDF;padding:16px 18px;display:grid;grid-template-columns:1.25fr 1fr;gap:22px;">
+            <div>
+              <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#A19B8D;margin-bottom:9px;">引领 · 定本周驱动项</div>
+              <sc-for list="{{ leadRows }}" as="l" hint-placeholder-count="3">
+                <div style="padding:9px 0;border-bottom:1px dashed #EFEAE0;">
+                  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;">
+                    <span style="font:600 12.5px/1.4 'Noto Sans SC';color:#23211C;">{{ l.name }}</span>
+                    <span style="font:600 11px/1 'JetBrains Mono',monospace;color:#B0503A;">{{ l.cur }} → {{ l.target }}</span>
+                  </div>
+                  <div style="font:400 11px/1.6 'Noto Sans SC';color:#8C867A;margin-top:3px;">本周驱动 · {{ l.driver }}</div>
+                </div>
+              </sc-for>
+            </div>
+            <div>
+              <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#A19B8D;margin-bottom:9px;">滞后 · 只看不追</div>
+              <sc-for list="{{ lagRows }}" as="l" hint-placeholder-count="4">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px dashed #EFEAE0;">
+                  <span style="font:500 12px/1.4 'Noto Sans SC';color:#3A3833;">{{ l.name }}</span>
+                  <span style="font:600 11px/1 'JetBrains Mono',monospace;color:#8C867A;">{{ l.cur }} → {{ l.target }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- ===== TAB · 工作流会话 ===== -->
+    <sc-if value="{{ isSessions }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">
+        <span style="font:600 15px/1.3 'Noto Serif SC',serif;color:#23211C;">工作流会话</span>
+        <span style="font:400 11.5px/1.5 'Noto Sans SC';color:#A19B8D;">动态即创即用 · 成熟沉淀为标准工作流</span>
+      </div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;overflow:hidden;">
+        <sc-for list="{{ sessionRows }}" as="r" hint-placeholder-count="5">
+          <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid #F3EFE5;">
+            <span style="flex:none;width:52px;text-align:center;font:600 9.5px/1 'JetBrains Mono',monospace;background:{{ r.tagBg }};color:{{ r.tagColor }};border-radius:5px;padding:5px 0;">{{ r.tag }}</span>
+            <div style="min-width:0;flex:1;">
+              <div style="font:600 13px/1.4 'Noto Sans SC';color:#23211C;">{{ r.name }}</div>
+              <div style="font:400 11px/1.5 'Noto Sans SC';color:#A19B8D;">{{ r.meta }}</div>
+            </div>
+            <span style="flex:none;font:500 10px/1 'JetBrains Mono',monospace;color:#B3AC9D;">{{ r.stage }}</span>
+            <div style="flex:none;display:flex;align-items:center;gap:6px;width:96px;">
+              <div style="width:6px;height:6px;border-radius:50%;background:{{ r.sig }};"></div>
+              <span style="font:500 11px/1.3 'Noto Sans SC';color:{{ r.stColor }};">{{ r.status }}</span>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===== TAB · 定时任务 ===== -->
+    <sc-if value="{{ isRoutines }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">
+        <span style="font:600 15px/1.3 'Noto Serif SC',serif;color:#23211C;">定时任务</span>
+        <span style="font:400 11.5px/1.5 'Noto Sans SC';color:#A19B8D;">Routine 值守 · 产出自动进产物与复盘</span>
+      </div>
+      <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;overflow:hidden;">
+        <sc-for list="{{ routineRows }}" as="r" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid #F3EFE5;">
+            <span style="flex:none;font:600 10px/1 'JetBrains Mono',monospace;background:#EDE4F0;color:#5A4E7A;border-radius:5px;padding:5px 9px;">↻ {{ r.sched }}</span>
+            <div style="min-width:0;flex:1;">
+              <div style="font:600 13px/1.4 'Noto Sans SC';color:#23211C;">{{ r.name }}</div>
+              <div style="font:400 11px/1.5 'Noto Sans SC';color:#A19B8D;">{{ r.meta }}</div>
+            </div>
+            <span style="flex:none;font:500 10px/1 'JetBrains Mono',monospace;color:#B3AC9D;">{{ r.stage }}</span>
+            <div style="flex:none;display:flex;align-items:center;gap:6px;width:96px;">
+              <div style="width:6px;height:6px;border-radius:50%;background:{{ r.sig }};"></div>
+              <span style="font:500 11px/1.3 'Noto Sans SC';color:{{ r.stColor }};">{{ r.status }}</span>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===== TAB · 产物 ===== -->
+    <sc-if value="{{ isArtifacts }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">
+        <span style="font:600 15px/1.3 'Noto Serif SC',serif;color:#23211C;">产物</span>
+        <span style="font:400 11.5px/1.5 'Noto Sans SC';color:#A19B8D;">版本历史内嵌 —— 点版本号展开</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <sc-for list="{{ artRows }}" as="a" hint-placeholder-count="4">
+          <div style="background:#FBFAF6;border:1px solid #E2DCCF;border-radius:12px;padding:16px 18px;">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px;">
+              <span style="font:600 13.5px/1.4 'Noto Sans SC';color:#23211C;">{{ a.name }}</span>
+              <span onClick="{{ a.onVer }}" style="cursor:pointer;margin-left:auto;font:600 10px/1 'JetBrains Mono',monospace;background:#EDE8DE;color:#6B6557;border-radius:5px;padding:4px 8px;">{{ a.ver }} ▾</span>
+            </div>
+            <div style="font:400 11.5px/1.6 'Noto Sans SC';color:#8C867A;">{{ a.meta }}</div>
+            <sc-if value="{{ a.open }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:10px;border-top:1px dashed #EFEAE0;padding-top:9px;display:flex;flex-direction:column;gap:6px;">
+                <sc-for list="{{ a.history }}" as="h" hint-placeholder-count="2">
+                  <div style="display:flex;align-items:baseline;gap:9px;font:400 11px/1.5 'Noto Sans SC';color:#8C867A;">
+                    <span style="font:600 10px/1 'JetBrains Mono',monospace;color:#B3AC9D;">{{ h.v }}</span>
+                    <span>{{ h.note }}</span>
+                    <span style="margin-left:auto;font:400 10px/1 'JetBrains Mono',monospace;color:#C2BBAB;">{{ h.date }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1280, &quot;height&quot;: 860}, &quot;showNote&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;方案说明&quot;}}">
+class Component extends DCLogic {
+  state = {
+    note: true,
+    scope: 'all',
+    tab: 'progress',
+    reviewOpen: false,
+    gateDone: {},
+    verOpen: {},
+  };
+
+  stages() {
+    return [
+      { n:'01', name:'分析', full:'需求分析 · 竞品洞察 + 需求导入', sig:'green', p:100, runs:'3 会话 · 已归档',
+        gate:'洞察 → 需求 确认', gateState:'passed', gateNote:'✓ 需求确认 · 06-18' },
+      { n:'02', name:'设计', full:'需求设计 · 原型即设计稿', sig:'green', p:100, runs:'1 会话 · 已归档',
+        gate:'原型评审', gateState:'passed', gateNote:'✓ 原型评审通过 · 06-24' },
+      { n:'03', name:'开发', full:'需求开发 · 构建与打磨', sig:'amber', p:72, runs:'3 会话进行中', hot:true,
+        gate:'上线验收', gateState:'pending', gateNote:'◇ 上线验收 · 待你确认' },
+      { n:'04', name:'运营', full:'运营运维 · 值守与回流', sig:'green', p:-1, runs:'2 Routine 值守', last:true,
+        gateNote:'持续 · 发现回流 → 分析' },
+    ];
+  }
+
+  gates() {
+    return [
+      { id:'g1', tag:'验收', kind:'accept', title:'告警模板 × 11 已产出，待上线确认', meta:'03 开发 · 关口「上线验收」 · 引领指标「告警覆盖率」本周驱动项', stage:3, age:'1 天' },
+      { id:'g2', tag:'人审', kind:'review', title:'根因建议误报阈值（<0.6 不展示）', meta:'03 开发 · 动态工作流「根因误报偏高」', stage:3, age:'5 小时' },
+      { id:'g3', tag:'验收', kind:'accept', title:'成本按租户下钻 · 原型可验', meta:'02 设计 · 值班发现的新需求，即创即用', stage:2, age:'3 小时' },
+      { id:'g4', tag:'回流', kind:'gate', title:'值班新发现 2 条，待收敛为需求', meta:'04 运营 → 01 分析 · 洞察回流', stage:4, age:'2 天' },
+    ];
+  }
+
+  renderVals() {
+    const st = this.state;
+    const sigColor = (s) => s === 'green' ? '#5F7355' : (s === 'amber' ? '#B5862F' : '#B0503A');
+
+    const stageChips = this.stages().map((e, i) => {
+      const n = i + 1; const active = st.scope === n;
+      return { n: e.n, name: e.name, sig: sigColor(e.sig),
+        onClick: () => this.setState({ scope: active ? 'all' : n }),
+        bg: active ? '#F7EDE7' : 'transparent', bd: active ? '#E2C9BF' : 'transparent',
+        color: active ? '#7A3D2D' : '#57534A', weight: active ? 600 : 500,
+        hasGate: !e.last,
+        gateMark: e.gateState === 'passed' ? '◆' : '◇',
+        gateColor: e.gateState === 'passed' ? '#5F7355' : '#B0503A',
+        gateTitle: e.gate ? ('关口 · ' + e.gate + (e.gateState === 'passed' ? ' · 已通过' : ' · 待通过')) : '' };
+    });
+
+    const tabDefs = [ ['progress','进度'], ['sessions','工作流会话'], ['routines','定时任务'], ['artifacts','产物'] ];
+    const tabs = tabDefs.map(t => ({ name: t[1],
+      onClick: () => this.setState({ tab: t[0] }),
+      bg: st.tab === t[0] ? '#FBFAF6' : 'transparent',
+      color: st.tab === t[0] ? '#23211C' : '#8C867A' }));
+
+    const gateRows = this.gates().map(g => {
+      const inScope = st.scope === 'all' || g.stage === st.scope;
+      const done = st.gateDone[g.id];
+      const tagStyle = g.kind === 'gate' ? ['#23211C', '#E0A78F'] : (g.kind === 'review' ? ['#F2E4DD', '#B0503A'] : ['#F5ECD6', '#8A6720']);
+      return { tag: g.tag, title: g.title, meta: g.meta, age: g.age,
+        tagBg: tagStyle[0], tagColor: tagStyle[1],
+        nameWeight: done ? 400 : 600,
+        op: inScope ? (done ? .45 : 1) : .25,
+        btnLabel: done ? '✓ 已处理' : '去处理',
+        btnBd: done ? '#D8D1C2' : '#C5654A', btnBg: done ? 'transparent' : '#C5654A',
+        btnColor: done ? '#A19B8D' : '#fff',
+        onClick: () => this.setState({ gateDone: { ...st.gateDone, [g.id]: !done } }) };
+    });
+    const gateOpenCount = this.gates().filter(g => !st.gateDone[g.id]).length;
+
+    const stageRows = this.stages().map((e, i) => {
+      const n = i + 1; const active = st.scope === n;
+      return { n: e.n, name: e.name, sig: sigColor(e.sig),
+        onClick: () => this.setState({ scope: active ? 'all' : n }),
+        rowBg: active ? '#F7F3E9' : 'transparent',
+        pw: e.p < 0 ? '100%' : e.p + '%', pl: e.p < 0 ? '∞' : e.p + '%',
+        pc: e.p < 0 ? '#8A8275' : (e.p >= 100 ? '#5F7355' : '#C5654A'),
+        runLabel: e.runs, runColor: e.hot ? '#B0503A' : '#8C867A',
+        gateLabel: e.gateNote,
+        gateColor: e.gateState === 'pending' ? '#B0503A' : (e.gateState === 'passed' ? '#4A5E42' : '#8C867A') };
+    });
+
+    const sessionsAll = [
+      { tag:'动态', kind:'dyn', name:'根因建议误报率偏高', meta:'加置信度阈值并回放历史事故验证 · 即创即用', stage:3, sig:'#B5862F', status:'进行中' },
+      { tag:'动态', kind:'dyn', name:'成本按租户下钻', meta:'值班发现 · 新增租户维度与下钻入口', stage:2, sig:'#B5862F', status:'进行中' },
+      { tag:'工作流', kind:'wf', name:'告警覆盖率推进', meta:'v2 · 打磨中 · 已复用 6 次 · 阈值经人审', stage:3, sig:'#B5862F', status:'循环中' },
+      { tag:'工作流', kind:'wf', name:'看板原型脚手架', meta:'v7 · 成熟 · 初稿可用率 80%', stage:2, sig:'#5F7355', status:'已归档' },
+      { tag:'工作流', kind:'wf', name:'竞品扫描 → 差距矩阵', meta:'v4 · 成熟 · 已复用 23 次', stage:1, sig:'#5F7355', status:'已归档' },
+    ];
+    const stName = (n) => '0' + n + ' ' + this.stages()[n - 1].name;
+    const sessionRows = sessionsAll
+      .filter(r => st.scope === 'all' || r.stage === st.scope)
+      .map(r => ({ ...r, stage: stName(r.stage),
+        tagBg: r.kind === 'dyn' ? '#F2E4DD' : '#E7EDE2',
+        tagColor: r.kind === 'dyn' ? '#B0503A' : '#4A5E42',
+        stColor: r.sig === '#5F7355' ? '#4A5E42' : '#8A6720' }));
+
+    const routinesAll = [
+      { sched:'周一 09:00', name:'全链路体检', meta:'北极星 + 引领取数 → 周报草稿 → 触发本周复盘', stage:4, sig:'#5F7355', status:'正常' },
+      { sched:'每日 02:00', name:'P95 延迟回归', meta:'本周 5/7 天 · 周末缺口待补（引领③的驱动项）', stage:3, sig:'#B5862F', status:'有缺口' },
+      { sched:'周五 17:00', name:'竞品动态扫描', meta:'输出 → 洞察池，重大变化自动建议新需求', stage:1, sig:'#5F7355', status:'正常' },
+    ];
+    const routineRows = routinesAll
+      .filter(r => st.scope === 'all' || r.stage === st.scope)
+      .map(r => ({ ...r, stage: stName(r.stage),
+        stColor: r.sig === '#5F7355' ? '#4A5E42' : '#8A6720' }));
+
+    const artsAll = [
+      { id:'a1', name:'值班看板 · 可点击原型', ver:'v7', stage:2, meta:'02 设计 · KPI 卡 + 趋势 + 归因模块 · 关键逻辑已人审', history:[ { v:'v6', note:'加成本归因模块', date:'06-28' }, { v:'v5', note:'接真实网关取数', date:'06-21' } ] },
+      { id:'a2', name:'告警模板包', ver:'v2', stage:3, meta:'03 开发 · 11 个关键指标默认告警 · 待上线确认', history:[ { v:'v1', note:'首批 6 个指标模板', date:'06-30' } ] },
+      { id:'a3', name:'竞品差距矩阵', ver:'v4', stage:1, meta:'01 分析 · 5 家竞品 · 每格可回溯证据', history:[ { v:'v3', note:'补 Langfuse 定价维度', date:'06-25' } ] },
+      { id:'a4', name:'北极星定义书', ver:'v1', stage:1, meta:'体系 · 口径 + 取数来源 + 反造假说明 · 创建时定稿', history:[] },
+    ];
+    const artRows = artsAll
+      .filter(a => st.scope === 'all' || a.stage === st.scope)
+      .map(a => ({ name: a.name, ver: a.ver, meta: a.meta,
+        open: !!st.verOpen[a.id] && a.history.length > 0, history: a.history,
+        onVer: () => this.setState({ verOpen: { ...st.verOpen, [a.id]: !st.verOpen[a.id] } }) }));
+
+    const scopeStage = st.scope === 'all' ? null : this.stages()[st.scope - 1];
+
+    return {
+      showNote: st.note && (this.props.showNote ?? true),
+      hideNote: () => this.setState({ note: false }),
+      scopeAll: () => this.setState({ scope: 'all' }),
+      allBg: st.scope === 'all' ? '#F7EDE7' : 'transparent',
+      allColor: st.scope === 'all' ? '#7A3D2D' : '#8C867A',
+      stageChips, tabs,
+      isProgress: st.tab === 'progress', isSessions: st.tab === 'sessions',
+      isRoutines: st.tab === 'routines', isArtifacts: st.tab === 'artifacts',
+      gateRows, gateOpenCount,
+      stageRows,
+      scopeHint: scopeStage ? ('聚焦 · ' + scopeStage.full + '（再点一次回总览）') : '◆ 已过关 · ◇ 待过关 —— 方法论与指标不在轴上，在顶栏与复盘里',
+      toggleReview: () => this.setState({ reviewOpen: !st.reviewOpen }),
+      reviewOpen: st.reviewOpen, reviewArrow: st.reviewOpen ? '▴' : '▾',
+      leadRows: [
+        { name:'告警覆盖率', cur:'60%', target:'85%', driver:'交付 11 个关键指标的默认告警模板' },
+        { name:'根因采纳率', cur:'41%', target:'70%', driver:'根因建议补证据链 + 值班一键采纳' },
+        { name:'延迟回归运行率', cur:'5/7', target:'7/7', driver:'CI 加夜间定时触发，补齐周末' },
+      ],
+      lagRows: [
+        { name:'月度有效可用性', cur:'99.4%', target:'99.9%' },
+        { name:'平均故障定位时间', cur:'38min', target:'<15min' },
+        { name:'用户主动上报事故', cur:'6/月', target:'≤1/月' },
+        { name:'每千次调用成本', cur:'¥2.30', target:'¥1.80' },
+      ],
+      sessionRows, routineRows, artRows,
+    };
+  }
+}
+</script>
+</body>
+</html>
