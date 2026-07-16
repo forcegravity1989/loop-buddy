@@ -78,6 +78,12 @@ fn ProjectCard(card: ProjectCardVm) -> Element {
                 style: "display:flex;align-items:center;gap:6px;margin-bottom:12px;",
                 span { style: "{chip}", "{card.phase_label}" }
                 span { style: "font-size:11px;color:{ink3};", "{card.cycle_label}" }
+                if card.open_issues > 0 {
+                    span {
+                        style: "font-size:11px;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:10px;padding:1px 8px;",
+                        "⚑ {card.open_issues} 开放"
+                    }
+                }
                 span { style: "margin-left:auto;{dot}" }
                 button {
                     title: "删除项目",

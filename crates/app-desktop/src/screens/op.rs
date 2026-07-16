@@ -522,7 +522,9 @@ fn VersionPanel(op: OpVm) -> Element {
 // ── issue board (R1) ──
 
 /// The kanban status that follows `s` in the lifecycle, if any (terminal +
-/// `Blocked` don't advance — they're a stop or a side state).
+/// `Blocked` don't advance — they're a stop or a side state). Deliberately
+/// forward-only: reopen/rewind stay API-only (A5-H leaves no UI for them —
+/// settle-once is the safety net for the ones that ARE public).
 fn next_issue_status(s: IssueStatus) -> Option<IssueStatus> {
     match s {
         IssueStatus::Backlog => Some(IssueStatus::Todo),
@@ -533,10 +535,25 @@ fn next_issue_status(s: IssueStatus) -> Option<IssueStatus> {
     }
 }
 
+/// `true` for the three states `can_transition_to(Blocked)` actually allows
+/// (bw-core's table) — only these get the "⛔ 阻塞" action.
+fn can_block(s: IssueStatus) -> bool {
+    matches!(
+        s,
+        IssueStatus::Todo | IssueStatus::InProgress | IssueStatus::InReview
+    )
+}
+
 /// The Issue board (R1): real assignable work units grouped by status into
 /// columns, each card carrying its stage + agent teammate + a one-click
 /// advance to the next status. The create strip scopes a new issue to a
 /// chosen stage. Every card is a real `issue` row — nothing invented.
+///
+/// A5-H adds: a real assign dropdown (was static text), a Blocked column
+/// (previously invisible on the board — a stuck issue used to vanish from
+/// view), and the only path to/from Blocked (reason required going in,
+/// two explicit outs coming back). Cancelled stays off-board by design
+/// (dropped work, not a state to manage from here).
 #[component]
 fn IssuesPanel(op: OpVm) -> Element {
     let k = use_context::<Kernel>();
@@ -546,17 +563,25 @@ fn IssuesPanel(op: OpVm) -> Element {
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
     let clay = theme::CLAY;
+    let alert = theme::ALERT_DEEP;
     let mono = theme::MONO;
     let initial_stage = op.active_stage;
     let mut new_title = use_signal(String::new);
     let mut new_stage = use_signal(move || initial_stage);
+    let agents = op.hub.agents.clone();
+    // Board-wide: at most one card is "entering a block reason" at a time.
+    // Fully qualified: `Signal` bare would resolve to `bw_core::model::Signal`
+    // (the derived-health enum), already imported unqualified above.
+    let mut blocking: dioxus::prelude::Signal<Option<IssueId>> = use_signal(|| None);
+    let mut block_reason = use_signal(String::new);
 
-    let cols: [(IssueStatus, &str); 5] = [
+    let cols: [(IssueStatus, &str); 6] = [
         (IssueStatus::Backlog, "待办池"),
         (IssueStatus::Todo, "待办"),
         (IssueStatus::InProgress, "进行中"),
         (IssueStatus::InReview, "评审中"),
         (IssueStatus::Done, "已完成"),
+        (IssueStatus::Blocked, "阻塞"),
     ];
     // Precompute the columns outside rsx so the board stays borrow-clean.
     let grouped: Vec<_> = cols
@@ -621,26 +646,111 @@ fn IssuesPanel(op: OpVm) -> Element {
                         div { style: "font-size:11.5px;color:{ink3};margin-bottom:9px;letter-spacing:.04em;", "{label} · {list.len()}" }
                         for i in list {
                             {
-                                let k = k.clone();
+                                // One clone per closure below — each `move`
+                                // closure needs to independently own a
+                                // `Kernel`, since only one of a card's several
+                                // buttons ever fires but Rust still has to
+                                // typecheck every branch.
+                                let k_select = k.clone();
+                                let k_a = k.clone();
+                                let k_b = k.clone();
+                                let agents = agents.clone();
                                 let i_id = i.id;
                                 let advance = next_issue_status(i.status);
                                 let advance_label = advance.map(|s| s.label()).unwrap_or("");
-                                let assignee = i
-                                    .assignee_name
-                                    .clone()
-                                    .unwrap_or_else(|| "未分配".to_string());
+                                let is_blocked = i.status == IssueStatus::Blocked;
+                                let entering_reason = blocking() == Some(i_id);
                                 rsx! {
                                     div {
                                         key: "{i.number}",
                                         style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {i.status_color};",
                                         div { style: "font-size:11px;color:{ink3};font-family:{mono};", "#{i.number} · {i.stage.label()}" }
                                         div { style: "font-size:13px;margin:3px 0 4px;color:{ink};", "{i.title}" }
-                                        div { style: "font-size:11px;color:{ink2};", "{i.priority_label} · {assignee}" }
-                                        if let Some(ns) = advance {
-                                            button {
-                                                style: "margin-top:6px;cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
-                                                onclick: move |_| k.send(Command::TransitionIssue { id: i_id, status: ns }),
-                                                "→ {advance_label}"
+                                        div { style: "font-size:11px;color:{ink2};margin-bottom:5px;", "{i.priority_label}" }
+                                        select {
+                                            style: "font-size:11.5px;border:1px solid {border};border-radius:5px;padding:3px 5px;background:#FFF;max-width:100%;",
+                                            onchange: move |e| {
+                                                let v = e.value();
+                                                let assignee = v
+                                                    .parse::<usize>()
+                                                    .ok()
+                                                    .and_then(|idx| agents.get(idx))
+                                                    .map(|a| a.id);
+                                                k_select.send(Command::AssignIssue { id: i_id, assignee });
+                                            },
+                                            option { value: "", selected: i.assignee_name.is_none(), "未分配" }
+                                            for (idx , a) in agents.iter().enumerate() {
+                                                option {
+                                                    key: "{idx}",
+                                                    value: "{idx}",
+                                                    selected: i.assignee_name.as_deref() == Some(a.name.as_str()),
+                                                    "{a.name}({a.role})"
+                                                }
+                                            }
+                                        }
+                                        if is_blocked {
+                                            div {
+                                                style: "margin-top:7px;padding:6px 8px;background:#F2E4DD;border-radius:6px;font-size:11.5px;color:{alert};",
+                                                "⛔ {i.blocked_reason.clone().unwrap_or_default()}"
+                                            }
+                                            div { style: "margin-top:6px;display:flex;gap:10px;",
+                                                button {
+                                                    style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
+                                                    onclick: move |_| k_a.send(Command::TransitionIssue { id: i_id, status: IssueStatus::Todo }),
+                                                    "解除→待办"
+                                                }
+                                                button {
+                                                    style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
+                                                    onclick: move |_| k_b.send(Command::TransitionIssue { id: i_id, status: IssueStatus::InProgress }),
+                                                    "解除→进行中"
+                                                }
+                                            }
+                                        } else if entering_reason {
+                                            div { style: "margin-top:7px;",
+                                                input {
+                                                    value: "{block_reason}",
+                                                    placeholder: "阻塞原因(必填)…",
+                                                    style: "width:100%;font-size:11.5px;border:1px solid {border};border-radius:5px;padding:4px 7px;background:#FFF;",
+                                                    oninput: move |e| block_reason.set(e.value()),
+                                                }
+                                                div { style: "margin-top:5px;display:flex;gap:10px;",
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{alert};font-size:11.5px;padding:0;",
+                                                        onclick: move |_| {
+                                                            let reason = block_reason().trim().to_string();
+                                                            if !reason.is_empty() {
+                                                                k_a.send(Command::BlockIssue { id: i_id, reason });
+                                                                blocking.set(None);
+                                                            }
+                                                        },
+                                                        "确认阻塞"
+                                                    }
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{ink3};font-size:11.5px;padding:0;",
+                                                        onclick: move |_| blocking.set(None),
+                                                        "取消"
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            div { style: "margin-top:6px;display:flex;gap:12px;",
+                                                if let Some(ns) = advance {
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
+                                                        onclick: move |_| k_a.send(Command::TransitionIssue { id: i_id, status: ns }),
+                                                        "→ {advance_label}"
+                                                    }
+                                                }
+                                                if can_block(i.status) {
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{ink3};font-size:11.5px;padding:0;",
+                                                        onclick: move |_| {
+                                                            block_reason.set(String::new());
+                                                            blocking.set(Some(i_id));
+                                                        },
+                                                        "⛔ 阻塞"
+                                                    }
+                                                }
                                             }
                                         }
                                     }

@@ -537,6 +537,10 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         } else {
             Vec::new()
         };
+        // A5-H: the wall's "open work" badge — same non-terminal predicate as
+        // the A4 handoff risky-guard. Recomputed on every `build_vm` call
+        // (i.e. after every dispatched command), so it's never stale.
+        let open_issues = store.count_open_issues(p.id).await.unwrap_or(0) as usize;
         cards.push(project_card(
             p.id,
             &p.name,
@@ -547,6 +551,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             p.active_stage,
             p.signal,
             &stage_progresses,
+            open_issues,
         ));
     }
 

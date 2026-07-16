@@ -43,6 +43,10 @@ pub struct ProjectCardVm {
     /// 创建中:desc 预览;运营中:"5 段 · kind · 当前 {active_stage}"
     pub meta: String,
     pub cycle_label: &'static str,
+    /// A5-H: count of non-terminal issues in this project (same predicate as
+    /// the A4 handoff risky-guard) — the wall's "open work" badge. `0` means
+    /// the badge doesn't render; this field just carries the honest number.
+    pub open_issues: usize,
 }
 
 /// Build one wall card. `stage_progresses` = the project's real stage progress
@@ -58,6 +62,7 @@ pub fn project_card(
     active_stage: StageKind,
     signal: Option<Signal>,
     stage_progresses: &[u8],
+    open_issues: usize,
 ) -> ProjectCardVm {
     let running = phase == ProjectPhase::Running;
     let progress = if running {
@@ -88,6 +93,7 @@ pub fn project_card(
         progress,
         meta,
         cycle_label: cycle.label(),
+        open_issues,
     }
 }
 
@@ -701,6 +707,9 @@ pub struct IssueVm {
     pub status_color: &'static str,
     pub priority_label: &'static str,
     pub assignee_name: Option<String>,
+    /// A5-H: non-empty only while `status == Blocked` — the board's Blocked
+    /// column renders this; every other column ignores it.
+    pub blocked_reason: Option<String>,
 }
 
 /// Board accent for a status — multica's warning/success/info/destructive
@@ -732,6 +741,7 @@ pub fn issue_card(i: &Issue, agents: &[AgentCard]) -> IssueVm {
         assignee_name: i
             .assignee
             .and_then(|aid| agents.iter().find(|a| a.id == aid).map(|a| a.name.clone())),
+        blocked_reason: i.blocked_reason.clone(),
     }
 }
 
@@ -1261,11 +1271,13 @@ mod tests {
             StageKind::Prototype,
             None,
             &[],
+            0,
         );
         assert_eq!(c.progress, 0);
         assert_eq!(c.phase_label, "创建中");
         assert_eq!(c.signal, Signal::Unknown); // no cache ⇒ Unknown, not green
         assert!(c.meta.contains("创建中"));
+        assert_eq!(c.open_issues, 0);
 
         // Running: mean of REAL stage progresses (all zero for a fresh project).
         let r = project_card(
@@ -1278,10 +1290,12 @@ mod tests {
             StageKind::Build,
             Some(Signal::Green),
             &[0, 0, 0, 0, 0],
+            3,
         );
         assert_eq!(r.progress, 0);
         assert!(r.meta.contains("5 段"));
         assert!(r.meta.contains("构建")); // active_stage surfaces on the wall
+        assert_eq!(r.open_issues, 3, "open issue count passes through");
     }
 
     #[test]
