@@ -149,10 +149,11 @@ async fn main() {
         })
         .await
         .unwrap();
-        // 真实生命周期推进(不跳态):Todo → InProgress → Done。
+        // 真实生命周期推进(不跳态,A5-F 合法链):Todo → InProgress → InReview → Done。
         for st in [
             IssueStatus::Todo,
             IssueStatus::InProgress,
+            IssueStatus::InReview,
             IssueStatus::Done,
         ] {
             app.dispatch(Command::TransitionIssue {

@@ -150,6 +150,19 @@ async fn main() {
         })
         .await
         .unwrap();
+        // A5-F 合法链(不跳态):InProgress → InReview → Done。
+        app.dispatch(Command::TransitionIssue {
+            id: iid,
+            status: IssueStatus::InProgress,
+        })
+        .await
+        .unwrap();
+        app.dispatch(Command::TransitionIssue {
+            id: iid,
+            status: IssueStatus::InReview,
+        })
+        .await
+        .unwrap();
         app.dispatch(Command::TransitionIssue {
             id: iid,
             status: IssueStatus::Done,

@@ -354,6 +354,9 @@ CREATE TABLE IF NOT EXISTS issue (
     -- fired). NULL = never settled. A reopened-and-redone issue does NOT
     -- settle twice — one work item, one credit.
     settled_at  INTEGER,
+    -- A5-F: non-empty only while status='blocked'; set exclusively via the
+    -- BlockIssue command, cleared on every other transition.
+    blocked_reason TEXT,
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );

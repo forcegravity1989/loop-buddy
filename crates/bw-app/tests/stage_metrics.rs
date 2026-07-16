@@ -133,7 +133,22 @@ async fn done_edge_feeds_stage_done_count_only_on_change() {
     .await
     .unwrap();
 
-    // Done one → the Build metric reads "1"; Done another → "2".
+    // Done one → the Build metric reads "1"; Done another → "2". Each walks
+    // the legal chain (A5-F rejects a bare Backlog→Done jump).
+    for id in [i1, i2] {
+        app.dispatch(Command::TransitionIssue {
+            id,
+            status: IssueStatus::InProgress,
+        })
+        .await
+        .unwrap();
+        app.dispatch(Command::TransitionIssue {
+            id,
+            status: IssueStatus::InReview,
+        })
+        .await
+        .unwrap();
+    }
     app.dispatch(Command::TransitionIssue {
         id: i1,
         status: IssueStatus::Done,

@@ -403,6 +403,13 @@ pub enum Command {
         id: IssueId,
         assignee: Option<AgentId>,
     },
+    /// A5-F: the only path into `Blocked` — `reason` must be non-empty.
+    /// `TransitionIssue { status: Blocked }` is rejected; this is how a stuck
+    /// issue leaves a record of *why*, not just *that*.
+    BlockIssue {
+        id: IssueId,
+        reason: String,
+    },
     /// Reload the active project's issues from the store (mirrors
     /// `RefreshHubs` for the hub library, but project-scoped).
     RefreshIssues,
@@ -2035,6 +2042,20 @@ impl App {
 
             Command::RunIssue { session, id } => {
                 let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                // A5-F: only work not yet settled/parked/under-review/blocked
+                // can be (re)started this way. InProgress is a legal starting
+                // point too — it's the retry path after an honest failure
+                // (the issue stays InProgress on error, never faked forward).
+                if !matches!(
+                    issue.status,
+                    IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
+                ) {
+                    return Err(AppError::Invalid(format!(
+                        "#{} 处于{},不能直接运行",
+                        issue.number,
+                        issue.status.label()
+                    )));
+                }
                 let p = issue.project_id;
                 let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
 
@@ -2089,12 +2110,17 @@ impl App {
                 // generic injection is skipped (playbook spec has phase_prompts).
                 spec.skills.extend(distilled_refs);
 
-                // Start: commit to the work (Backlog/Todo → InProgress).
-                self.store
-                    .transition_issue(id, IssueStatus::InProgress)
-                    .await?;
-                self.refresh_issues().await?;
-                self.emit(Event::IssuesChanged);
+                // Start: commit to the work (Backlog/Todo → InProgress). A
+                // retry (issue already InProgress from a prior failed run)
+                // skips this — X→X is not a legal table edge, and there's
+                // nothing to change anyway.
+                if issue.status != IssueStatus::InProgress {
+                    self.store
+                        .transition_issue(id, IssueStatus::InProgress)
+                        .await?;
+                    self.refresh_issues().await?;
+                    self.emit(Event::IssuesChanged);
+                }
 
                 // Run through the same path as any run, bound to this issue.
                 let run = self
@@ -2436,13 +2462,37 @@ impl App {
                 // it, a Done → reopen → Done bounce (reachable through this
                 // public command even though the desktop only offers forward
                 // moves) would credit the same work twice.
-                let prev = self.store.get_issue(id).await?;
+                let prev = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                // A5-F: `Blocked` has its own entry point (`BlockIssue`) that
+                // forces a reason — bare `TransitionIssue` never reaches it,
+                // even though the edge is graph-legal (`can_transition_to`
+                // says so); this command-level rule sits on top of the table.
+                if status == IssueStatus::Blocked {
+                    return Err(AppError::Invalid(format!(
+                        "#{} 转 Blocked 需要阻塞原因;请使用 BlockIssue 命令",
+                        prev.number
+                    )));
+                }
+                // A re-dispatch of the SAME status (e.g. a duplicated Done
+                // command) is a harmless re-affirmation, not a transition —
+                // `can_transition_to` has no self-loops by design, so it's
+                // checked only for a genuine state change. The settle-once
+                // guard below (keyed on `prev.status != Done`) already makes
+                // this safe: re-affirming Done fires no accounting twice.
+                if status != prev.status && !prev.status.can_transition_to(status) {
+                    return Err(AppError::Invalid(format!(
+                        "非法转移:#{} {}→{}",
+                        prev.number,
+                        prev.status.label(),
+                        status.label()
+                    )));
+                }
                 self.store.transition_issue(id, status).await?;
                 let newly_done = status == IssueStatus::Done
-                    && prev
-                        .as_ref()
-                        .is_some_and(|i| i.status != IssueStatus::Done && i.settled_at.is_none());
-                if let (true, Some(issue)) = (newly_done, prev) {
+                    && prev.status != IssueStatus::Done
+                    && prev.settled_at.is_none();
+                if newly_done {
+                    let issue = prev;
                     self.store
                         .mark_issue_settled(id, now().unix_timestamp())
                         .await?;
@@ -2498,6 +2548,27 @@ impl App {
 
             Command::AssignIssue { id, assignee } => {
                 self.store.assign_issue(id, assignee).await?;
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+            }
+
+            Command::BlockIssue { id, reason } => {
+                let reason = reason.trim().to_string();
+                if reason.is_empty() {
+                    return Err(AppError::Invalid("转 Blocked 必须给出阻塞原因".into()));
+                }
+                let prev = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                // Same table as TransitionIssue queries — Blocked is only
+                // reachable from Todo/InProgress/InReview (`can_transition_to`
+                // is the single source of truth for both entry points).
+                if !prev.status.can_transition_to(IssueStatus::Blocked) {
+                    return Err(AppError::Invalid(format!(
+                        "非法转移:#{} {}→阻塞",
+                        prev.number,
+                        prev.status.label()
+                    )));
+                }
+                self.store.block_issue(id, &reason).await?;
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
             }

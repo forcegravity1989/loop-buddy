@@ -656,6 +656,15 @@ pub trait Store: Send + Sync {
     /// Stamp the FIRST settle time (COALESCE — later calls keep the original).
     /// The app's Done-edge accounting fires iff this was previously NULL.
     async fn mark_issue_settled(&self, id: IssueId, at: i64) -> Result<()>;
+    /// A5-F: the only way an issue reaches `Blocked` — sets status and reason
+    /// together in one write. Legality (which source states may block) and
+    /// the non-empty-reason rule are the App layer's job; the store just
+    /// persists what it's told.
+    async fn block_issue(&self, id: IssueId, reason: &str) -> Result<()>;
+    /// A5-H: count of non-terminal (`!is_terminal()`) issues in a project —
+    /// the project wall's "open work" badge. Same predicate as the A4 handoff
+    /// risky-guard, so the two numbers never disagree.
+    async fn count_open_issues(&self, project_id: ProjectId) -> Result<i64>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────

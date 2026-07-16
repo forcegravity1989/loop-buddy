@@ -291,3 +291,126 @@ async fn issue_numbering_is_per_project() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn count_open_issues_excludes_only_terminal_states() {
+    // A5-H: the wall's "open work" badge — Done/Cancelled are the only
+    // states that stop counting as open (same predicate as `is_terminal`);
+    // Blocked very much still counts (it's stuck work, not finished work).
+    let path = tmp_db();
+    let store = SqliteStore::open(&path).await.unwrap();
+    let project = ProjectId::new();
+    store
+        .create_project(NewProject {
+            id: project,
+            name: "开放计数测试".into(),
+            kind: "y".into(),
+            desc: String::new(),
+        })
+        .await
+        .unwrap();
+
+    let backlog = IssueId::new();
+    let done = IssueId::new();
+    let cancelled = IssueId::new();
+    let blocked = IssueId::new();
+    for (id, title) in [
+        (backlog, "仍在待办池"),
+        (done, "会被做完"),
+        (cancelled, "会被取消"),
+        (blocked, "会被阻塞"),
+    ] {
+        store
+            .create_issue(NewIssue {
+                id,
+                project_id: project,
+                stage: StageKind::Build,
+                title: title.into(),
+                desc: String::new(),
+                priority: IssuePriority::Medium,
+            })
+            .await
+            .unwrap();
+    }
+
+    // All 4 fresh (Backlog) issues are open.
+    assert_eq!(store.count_open_issues(project).await.unwrap(), 4);
+
+    // Walk `done` to Done — count drops to 3.
+    store
+        .transition_issue(done, IssueStatus::InProgress)
+        .await
+        .unwrap();
+    store
+        .transition_issue(done, IssueStatus::InReview)
+        .await
+        .unwrap();
+    store
+        .transition_issue(done, IssueStatus::Done)
+        .await
+        .unwrap();
+    assert_eq!(store.count_open_issues(project).await.unwrap(), 3);
+
+    // Cancel `cancelled` — count drops to 2.
+    store
+        .transition_issue(cancelled, IssueStatus::Cancelled)
+        .await
+        .unwrap();
+    assert_eq!(store.count_open_issues(project).await.unwrap(), 2);
+
+    // Block `blocked` — still open (count unchanged at 2, not 1).
+    store.block_issue(blocked, "等等看").await.unwrap();
+    assert_eq!(
+        store.count_open_issues(project).await.unwrap(),
+        2,
+        "Blocked is stuck work, not finished work — still counts as open"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn block_issue_sets_status_and_reason_transition_clears_it() {
+    let path = tmp_db();
+    let store = SqliteStore::open(&path).await.unwrap();
+    let project = ProjectId::new();
+    store
+        .create_project(NewProject {
+            id: project,
+            name: "BlockIssue store 测试".into(),
+            kind: "y".into(),
+            desc: String::new(),
+        })
+        .await
+        .unwrap();
+    let issue = IssueId::new();
+    store
+        .create_issue(NewIssue {
+            id: issue,
+            project_id: project,
+            stage: StageKind::Build,
+            title: "会被阻塞".into(),
+            desc: String::new(),
+            priority: IssuePriority::Medium,
+        })
+        .await
+        .unwrap();
+
+    store.block_issue(issue, "等待上游依赖").await.unwrap();
+    let blocked = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(blocked.status, IssueStatus::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("等待上游依赖"));
+
+    // Any transition_issue call clears the reason, even one that isn't
+    // "leaving Blocked" per se — nothing but block_issue ever sets it, so an
+    // unconditional clear on the general path is always correct.
+    store
+        .transition_issue(issue, IssueStatus::InProgress)
+        .await
+        .unwrap();
+    let unblocked = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(unblocked.status, IssueStatus::InProgress);
+    assert_eq!(unblocked.blocked_reason, None);
+
+    let _ = std::fs::remove_file(&path);
+}

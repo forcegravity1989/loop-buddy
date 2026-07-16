@@ -41,7 +41,23 @@ async fn mk(
         .await
         .unwrap();
     }
-    if status != IssueStatus::Backlog {
+    // A5-F: walk the legal chain from Backlog rather than jumping straight to
+    // the target (Backlog→Done etc. are no longer legal single hops).
+    const FORWARD: [IssueStatus; 4] = [
+        IssueStatus::Todo,
+        IssueStatus::InProgress,
+        IssueStatus::InReview,
+        IssueStatus::Done,
+    ];
+    if let Some(target_idx) = FORWARD.iter().position(|s| *s == status) {
+        for st in &FORWARD[..=target_idx] {
+            app.dispatch(Command::TransitionIssue { id, status: *st })
+                .await
+                .unwrap();
+        }
+    } else if status != IssueStatus::Backlog {
+        // Cancelled (or anything else non-forward) is legal directly from
+        // Backlog.
         app.dispatch(Command::TransitionIssue { id, status })
             .await
             .unwrap();

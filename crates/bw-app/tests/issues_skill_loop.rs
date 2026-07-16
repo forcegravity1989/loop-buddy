@@ -220,7 +220,20 @@ async fn distilled_skill_compounds_into_next_run_via_uses_increment() {
     // issue_a is now Backlog-assigned in a ready project, with a session open.
     setup_issue_ready_to_run(&mut app, project, agent, issue_a, session).await;
 
-    // Complete A + distill a skill from it (with real content).
+    // Complete A + distill a skill from it (with real content). Walks the
+    // legal chain (A5-F guard rejects a bare Backlog→Done jump).
+    app.dispatch(Command::TransitionIssue {
+        id: issue_a,
+        status: IssueStatus::InProgress,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::TransitionIssue {
+        id: issue_a,
+        status: IssueStatus::InReview,
+    })
+    .await
+    .unwrap();
     app.dispatch(Command::TransitionIssue {
         id: issue_a,
         status: IssueStatus::Done,
@@ -379,7 +392,20 @@ async fn issue_to_skill_full_loop_through_app_commands() {
         .unwrap();
     assert_eq!(assigned.assignee, Some(agent));
 
-    // Transition to Done — the precondition for distillation.
+    // Walk the legal chain to Done (A5-F rejects a bare Backlog→Done jump) —
+    // the precondition for distillation.
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::InProgress,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::InReview,
+    })
+    .await
+    .unwrap();
     app.dispatch(Command::TransitionIssue {
         id: issue,
         status: IssueStatus::Done,
@@ -624,6 +650,13 @@ async fn issue_done_edge_settles_agent_accounting_exactly_once() {
     .await
     .unwrap();
     assert_eq!(runs_of(&app), (0, String::new()));
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::InReview,
+    })
+    .await
+    .unwrap();
+    assert_eq!(runs_of(&app), (0, String::new()));
 
     // The real …→Done edge: exactly one run + one win, win_rate derived.
     app.dispatch(Command::TransitionIssue {
@@ -737,7 +770,20 @@ async fn reopened_issue_settles_only_once() {
             .unwrap()
     };
 
-    // First Done: settles, credits one run.
+    // First Done: settles, credits one run. Walks the legal chain (A5-F
+    // rejects a bare Backlog→Done jump).
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::InProgress,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::InReview,
+    })
+    .await
+    .unwrap();
     app.dispatch(Command::TransitionIssue {
         id: issue,
         status: IssueStatus::Done,
@@ -765,6 +811,12 @@ async fn reopened_issue_settles_only_once() {
     .unwrap();
     app.dispatch(Command::TransitionIssue {
         id: issue,
+        status: IssueStatus::InReview,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
         status: IssueStatus::Done,
     })
     .await
@@ -778,4 +830,334 @@ async fn reopened_issue_settles_only_once() {
         .unwrap()
         .settled_at;
     assert_eq!(settled_again, settled, "settled_at keeps the first stamp");
+}
+
+// ── A5-F: transition/block/run guards ───────────────────────────────────
+
+async fn ready_project(app: &mut App, project: ProjectId, name: &str) {
+    app.dispatch(Command::CreateProject {
+        id: project,
+        name: name.into(),
+        kind: "自举".into(),
+        desc: String::new(),
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::SetCycle {
+        cycle: ProjectCycle::Explore,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::CompleteCreation {
+        cadence: Cadence::Weekly,
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn illegal_transition_is_rejected_and_state_unchanged() {
+    // A5-F: Backlog -> Done is not a legal single hop.
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let issue = IssueId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    ready_project(&mut app, project, "非法转移守卫").await;
+    app.dispatch(Command::CreateIssue {
+        id: issue,
+        stage: StageKind::Build,
+        title: "非法直跳".into(),
+        desc: String::new(),
+        priority: IssuePriority::Medium,
+    })
+    .await
+    .unwrap();
+
+    let result = app
+        .dispatch(Command::TransitionIssue {
+            id: issue,
+            status: IssueStatus::Done,
+        })
+        .await;
+    assert!(result.is_err(), "Backlog->Done is not a legal single hop");
+
+    let after = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(
+        after.status,
+        IssueStatus::Backlog,
+        "rejected transition leaves state unchanged"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn transition_issue_to_blocked_is_rejected_use_block_issue_instead() {
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let issue = IssueId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    ready_project(&mut app, project, "Blocked 守卫").await;
+    app.dispatch(Command::CreateIssue {
+        id: issue,
+        stage: StageKind::Build,
+        title: "该走 BlockIssue".into(),
+        desc: String::new(),
+        priority: IssuePriority::Medium,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::Todo,
+    })
+    .await
+    .unwrap();
+
+    let result = app
+        .dispatch(Command::TransitionIssue {
+            id: issue,
+            status: IssueStatus::Blocked,
+        })
+        .await;
+    assert!(
+        result.is_err(),
+        "bare TransitionIssue must reject a Blocked target"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("BlockIssue"),
+        "error should point at BlockIssue, got: {msg}"
+    );
+
+    let after = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(
+        after.status,
+        IssueStatus::Todo,
+        "rejected transition leaves state unchanged"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn block_issue_requires_non_empty_reason_and_round_trips() {
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let issue = IssueId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    ready_project(&mut app, project, "BlockIssue 正常路").await;
+    app.dispatch(Command::CreateIssue {
+        id: issue,
+        stage: StageKind::Build,
+        title: "会被阻塞的活".into(),
+        desc: String::new(),
+        priority: IssuePriority::Medium,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::Todo,
+    })
+    .await
+    .unwrap();
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::InProgress,
+    })
+    .await
+    .unwrap();
+
+    // Empty (whitespace-only) reason rejected.
+    let empty = app
+        .dispatch(Command::BlockIssue {
+            id: issue,
+            reason: "   ".into(),
+        })
+        .await;
+    assert!(empty.is_err(), "blank reason must be rejected");
+    let still = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(
+        still.status,
+        IssueStatus::InProgress,
+        "rejected block leaves state unchanged"
+    );
+
+    // Real reason: status flips, reason persists (read back from the store).
+    app.dispatch(Command::BlockIssue {
+        id: issue,
+        reason: "等待上游 API 决定".into(),
+    })
+    .await
+    .unwrap();
+    let blocked = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(blocked.status, IssueStatus::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("等待上游 API 决定"));
+
+    // Unblock (back to InProgress) clears the reason.
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::InProgress,
+    })
+    .await
+    .unwrap();
+    let unblocked = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(unblocked.status, IssueStatus::InProgress);
+    assert_eq!(
+        unblocked.blocked_reason, None,
+        "leaving Blocked clears the reason"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn block_issue_rejects_illegal_source_state() {
+    // Blocked is only reachable from Todo/InProgress/InReview — not Backlog.
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let issue = IssueId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    ready_project(&mut app, project, "BlockIssue 来源守卫").await;
+    app.dispatch(Command::CreateIssue {
+        id: issue,
+        stage: StageKind::Build,
+        title: "仍在待办池".into(),
+        desc: String::new(),
+        priority: IssuePriority::Medium,
+    })
+    .await
+    .unwrap();
+
+    let result = app
+        .dispatch(Command::BlockIssue {
+            id: issue,
+            reason: "不该成功".into(),
+        })
+        .await;
+    assert!(result.is_err(), "Backlog cannot go straight to Blocked");
+
+    let after = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(after.status, IssueStatus::Backlog);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn run_issue_rejects_non_startable_states() {
+    // A5-F: RunIssue only accepts Backlog/Todo/InProgress.
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let agent = AgentId::new();
+    let issue = IssueId::new();
+    let session = SessionId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(MockExecutor::new())),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    setup_issue_ready_to_run(&mut app, project, agent, issue, session).await;
+
+    // A real run advances Backlog -> InReview (the RunIssue path itself).
+    app.dispatch(Command::RunIssue { session, id: issue })
+        .await
+        .unwrap();
+    let after_run = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(after_run.status, IssueStatus::InReview);
+
+    // InReview: RunIssue must reject.
+    let res = app.dispatch(Command::RunIssue { session, id: issue }).await;
+    assert!(res.is_err(), "InReview issue cannot be RunIssue'd");
+    let unchanged = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(
+        unchanged.status,
+        IssueStatus::InReview,
+        "rejected RunIssue leaves state unchanged"
+    );
+
+    // Done: also rejected.
+    app.dispatch(Command::TransitionIssue {
+        id: issue,
+        status: IssueStatus::Done,
+    })
+    .await
+    .unwrap();
+    let res = app.dispatch(Command::RunIssue { session, id: issue }).await;
+    assert!(res.is_err(), "Done issue cannot be RunIssue'd");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn run_issue_retries_from_failed_inprogress() {
+    // A5-F: a failed run leaves the issue InProgress (see
+    // run_issue_failure_leaves_inprogress_and_records_failed_run) — that
+    // state must remain a legal RunIssue starting point, since it is the
+    // only way to retry a failed attempt.
+    let path = tmp_db();
+    let project = ProjectId::new();
+    let agent = AgentId::new();
+    let issue = IssueId::new();
+    let session = SessionId::new();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&path).await.unwrap());
+    let mut app = App::new(
+        store.clone(),
+        Engine::new(Arc::new(FailingExecutor)),
+        ClaudeCliConfig::default(),
+    );
+    app.dispatch(Command::Boot).await.unwrap();
+    setup_issue_ready_to_run(&mut app, project, agent, issue, session).await;
+
+    let res = app.dispatch(Command::RunIssue { session, id: issue }).await;
+    assert!(res.is_err());
+    let after_fail = store.get_issue(issue).await.unwrap().unwrap();
+    assert_eq!(after_fail.status, IssueStatus::InProgress);
+
+    // The retry must be ACCEPTED by the guard (not rejected as illegal) —
+    // it still fails against the same FailingExecutor, but a second Failed
+    // run gets bound to the issue, proving the guard let it through rather
+    // than short-circuiting before any run was attempted.
+    let retry = app.dispatch(Command::RunIssue { session, id: issue }).await;
+    assert!(retry.is_err());
+    let runs = store.list_runs_for_issue(issue).await.unwrap();
+    assert_eq!(
+        runs.len(),
+        2,
+        "InProgress is a legal RunIssue start — the retry actually ran"
+    );
+
+    let _ = std::fs::remove_file(&path);
 }

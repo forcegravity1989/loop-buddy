@@ -140,6 +140,9 @@ impl SqliteStore {
         // for pre-A2 rows); fresh DBs also define them inline in CREATE TABLE.
         add_column_if_missing(&pool, "workflow_run", "issue_id", "TEXT").await?;
         add_column_if_missing(&pool, "artifact", "issue_id", "TEXT").await?;
+        // A5-F: issues opened before this column exist get no blocked reason
+        // (NULL = never blocked under this scheme — honest for pre-A5 rows).
+        add_column_if_missing(&pool, "issue", "blocked_reason", "TEXT").await?;
 
         Ok(Self { pool })
     }
@@ -1920,7 +1923,7 @@ impl Store for SqliteStore {
         // query-builder dependency.
         let mut sql = String::from(
             "SELECT id, project_id, stage, number, title, descr, status, priority, assignee,
-                    settled_at, created_at, updated_at
+                    settled_at, blocked_reason, created_at, updated_at
              FROM issue WHERE project_id=?",
         );
         if stage.is_some() {
@@ -1944,7 +1947,7 @@ impl Store for SqliteStore {
     async fn get_issue(&self, id: IssueId) -> Result<Option<Issue>> {
         let row = sqlx::query(
             "SELECT id, project_id, stage, number, title, descr, status, priority, assignee,
-                    settled_at,
+                    settled_at, blocked_reason,
                     created_at, updated_at
              FROM issue WHERE id=?",
         )
@@ -1955,13 +1958,41 @@ impl Store for SqliteStore {
     }
 
     async fn transition_issue(&self, id: IssueId, status: IssueStatus) -> Result<()> {
-        sqlx::query("UPDATE issue SET status=?, updated_at=? WHERE id=?")
+        // Nothing but `block_issue` can put an issue INTO Blocked (the App
+        // layer rejects a bare TransitionIssue targeting Blocked), so every
+        // move through this path unconditionally clears any stale reason —
+        // a plain transition out of Blocked, or any other edge, leaves no
+        // dangling `blocked_reason` behind.
+        sqlx::query("UPDATE issue SET status=?, blocked_reason=NULL, updated_at=? WHERE id=?")
             .bind(issue_status_text(status))
             .bind(now_unix())
             .bind(id.uuid().to_string())
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn block_issue(&self, id: IssueId, reason: &str) -> Result<()> {
+        sqlx::query("UPDATE issue SET status=?, blocked_reason=?, updated_at=? WHERE id=?")
+            .bind(issue_status_text(IssueStatus::Blocked))
+            .bind(reason)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn count_open_issues(&self, project_id: ProjectId) -> Result<i64> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS n FROM issue WHERE project_id=? AND status NOT IN (?, ?)",
+        )
+        .bind(pid(project_id))
+        .bind(issue_status_text(IssueStatus::Done))
+        .bind(issue_status_text(IssueStatus::Cancelled))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.get::<i64, _>("n"))
     }
 
     async fn assign_issue(&self, id: IssueId, assignee: Option<AgentId>) -> Result<()> {
@@ -2232,6 +2263,9 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
         priority: parse_issue_priority(&r.get::<String, _>("priority")),
         assignee,
         settled_at: r.get("settled_at"),
+        blocked_reason: r
+            .get::<Option<String>, _>("blocked_reason")
+            .filter(|s| !s.is_empty()),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     })

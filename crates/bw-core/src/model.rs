@@ -1396,6 +1396,42 @@ impl IssueStatus {
     pub fn is_backlog(self) -> bool {
         matches!(self, IssueStatus::Backlog)
     }
+
+    /// `true` iff `to` is a legal next state from `self` in the Issue
+    /// lifecycle graph — the single source of truth for every transition
+    /// guard (App-layer `TransitionIssue`/`BlockIssue`/`RunIssue` all query
+    /// this, never invent their own edges). `Blocked` is graph-legal from
+    /// `Todo`/`InProgress`/`InReview`, but is reached in practice only
+    /// through the `BlockIssue` command (which requires a reason) — bare
+    /// `TransitionIssue` rejects a `Blocked` target regardless of this table.
+    /// No state transitions to itself; `Cancelled` and `Done`-via-non-`InReview`
+    /// have no legal predecessor edge here beyond what's listed.
+    pub fn can_transition_to(self, to: IssueStatus) -> bool {
+        use IssueStatus::*;
+        matches!(
+            (self, to),
+            (Backlog, Todo)
+                | (Backlog, InProgress)
+                | (Backlog, Cancelled)
+                | (Todo, InProgress)
+                | (Todo, Backlog)
+                | (Todo, Blocked)
+                | (Todo, Cancelled)
+                | (InProgress, InReview)
+                | (InProgress, Todo)
+                | (InProgress, Blocked)
+                | (InProgress, Cancelled)
+                | (InReview, Done)
+                | (InReview, InProgress)
+                | (InReview, Blocked)
+                | (InReview, Cancelled)
+                | (Blocked, Todo)
+                | (Blocked, InProgress)
+                | (Blocked, Cancelled)
+                | (Done, Todo)
+                | (Done, InProgress)
+        )
+    }
 }
 
 /// How urgent an [`Issue`] is — drives ordering and visual emphasis. `None`
@@ -1442,6 +1478,12 @@ pub struct Issue {
     /// `None` = never settled. Reopen-and-redo does not settle again.
     #[serde(default)]
     pub settled_at: Option<i64>,
+    /// Non-empty only while `status == Blocked`; set exclusively via the
+    /// `BlockIssue` command and cleared on every other transition (nothing
+    /// but `BlockIssue` can reach `Blocked`, so a plain `transition_issue`
+    /// unconditionally clearing it on every other move is safe and correct).
+    #[serde(default)]
+    pub blocked_reason: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -1623,6 +1665,66 @@ mod tests {
             ArtifactKind::Other,
         ] {
             assert_eq!(ArtifactKind::parse(k.text()), k);
+        }
+    }
+
+    /// A5-F: `can_transition_to` is the single source of truth for issue
+    /// lifecycle legality — enumerate all 7×7 (from, to) pairs against the
+    /// exact edge set the design settled on (plan/06 §7-F / HANDOFF-2026-07-16-A5
+    /// §2.1), not just a handful of spot-checks. No state ever transitions to
+    /// itself; `Cancelled` has no outgoing edges at all.
+    #[test]
+    fn issue_status_can_transition_to_matches_the_legal_table() {
+        use IssueStatus::*;
+        let legal: &[(IssueStatus, IssueStatus)] = &[
+            (Backlog, Todo),
+            (Backlog, InProgress),
+            (Backlog, Cancelled),
+            (Todo, InProgress),
+            (Todo, Backlog),
+            (Todo, Blocked),
+            (Todo, Cancelled),
+            (InProgress, InReview),
+            (InProgress, Todo),
+            (InProgress, Blocked),
+            (InProgress, Cancelled),
+            (InReview, Done),
+            (InReview, InProgress),
+            (InReview, Blocked),
+            (InReview, Cancelled),
+            (Blocked, Todo),
+            (Blocked, InProgress),
+            (Blocked, Cancelled),
+            (Done, Todo),
+            (Done, InProgress),
+        ];
+        assert_eq!(legal.len(), 20, "the table itself has exactly 20 edges");
+        for from in IssueStatus::ALL {
+            for to in IssueStatus::ALL {
+                let expected = legal.contains(&(from, to));
+                assert_eq!(
+                    from.can_transition_to(to),
+                    expected,
+                    "{from:?} -> {to:?} should be {expected}"
+                );
+            }
+        }
+        // Explicit spot-checks for the edges an implementation most tempts
+        // you to get wrong.
+        assert!(!Backlog.can_transition_to(Done), "no direct Backlog->Done");
+        assert!(
+            !InProgress.can_transition_to(Done),
+            "Done only reachable via InReview"
+        );
+        assert!(
+            !Cancelled.can_transition_to(Todo),
+            "Cancelled is terminal, no outgoing edges"
+        );
+        for s in IssueStatus::ALL {
+            assert!(
+                !s.can_transition_to(s),
+                "{s:?} -> {s:?} is not a table edge"
+            );
         }
     }
 
