@@ -169,6 +169,8 @@ pub struct OpVm {
     /// P4: the Issue-detail overlay, `None` = closed. Opened per-issue by
     /// `Command::OpenIssueDetail`, cleared by `Command::CloseIssueDetail`.
     pub issue_detail: Option<ui::vm::IssueDetailVm>,
+    /// P5: weekly-review card (top of the progress panel).
+    pub week_review: ui::vm::WeekReviewVm,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -877,6 +879,34 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             .collect::<Vec<_>>(),
     );
 
+    // P5: weekly-review card — a pure read of already-recorded facts. Counts
+    // come off `state.issues` + the per-metric latest-observation-ts map built
+    // above; the date math (ISO week, 90-day line) lives in the VM.
+    let now_unix = now.unix_timestamp();
+    let week_start = ui::vm::iso_week_start_unix(now_unix);
+    let week_review = ui::vm::week_review_vm(
+        now_unix,
+        row.created_at,
+        state
+            .issues
+            .iter()
+            .filter(|i| i.settled_at.map_or(false, |t| t >= week_start))
+            .count() as u32,
+        state
+            .issues
+            .iter()
+            .filter(|i| !i.status.is_terminal())
+            .count() as u32,
+        sigs.metrics
+            .iter()
+            .filter(|m| {
+                latest_ts
+                    .get(&m.id)
+                    .map_or(true, |t| t.unix_timestamp() < week_start)
+            })
+            .count() as u32,
+    );
+
     vm.op = Some(OpVm {
         name: row.name.clone(),
         kind: row.kind.clone(),
@@ -915,6 +945,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         issue_detail: state.issue_detail.as_ref().map(|d| {
             ui::vm::issue_detail_vm(&d.issue, &d.runs, &d.changes, &d.artifacts, &state.agents)
         }),
+        week_review,
     });
     vm
 }

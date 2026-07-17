@@ -1136,7 +1136,44 @@ fn ProgressAll(op: OpVm) -> Element {
         ("定时任务运行中", op.stats.routines_active),
         ("优化中待验收", op.stats.optimizing),
     ];
+    let goal_color = if op.week_review.goal_negative {
+        "#C5654A"
+    } else {
+        ink2
+    };
     rsx! {
+        // P5: weekly-review card — pure read of recorded facts, top of panel.
+        div {
+            style: "{card} padding:16px 20px;margin-bottom:16px;",
+            div {
+                style: "display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;",
+                span { style: "font-family:{serif};font-size:16px;font-weight:600;", "本周复盘" }
+                span { style: "font-size:12px;color:{ink3};", "{op.week_review.week_label}" }
+            }
+            div {
+                style: "display:grid;grid-template-columns:repeat(4,1fr);gap:12px;",
+                div {
+                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "本周完成" }
+                    div { style: "font-family:{mono};font-size:20px;font-weight:600;", "{op.week_review.done_this_week} 件" }
+                }
+                div {
+                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "仍开着" }
+                    div { style: "font-family:{mono};font-size:20px;font-weight:600;", "{op.week_review.open_count} 件" }
+                }
+                div {
+                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "本周未记指标" }
+                    div { style: "font-family:{mono};font-size:20px;font-weight:600;", "{op.week_review.metrics_stale} 个" }
+                }
+                div {
+                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "90 天目标" }
+                    div { style: "font-family:{mono};font-size:13px;font-weight:600;color:{goal_color};", "{op.week_review.goal_label}" }
+                }
+            }
+            div {
+                style: "font-size:11px;color:{ink3};margin-top:10px;",
+                "全从已记录的数据算:本周结算的 Issue、未结 Issue、本周无观测的指标、距创建日 90 天。"
+            }
+        }
         WorkspaceConfig { op: op.clone() }
         div {
             style: "{card} padding:20px 22px;margin-bottom:16px;",

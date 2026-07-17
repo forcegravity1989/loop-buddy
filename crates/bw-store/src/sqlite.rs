@@ -765,7 +765,7 @@ impl Store for SqliteStore {
 
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>> {
         let row = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal, created_at
              FROM project WHERE id=?",
         )
         .bind(pid(id))
@@ -776,7 +776,7 @@ impl Store for SqliteStore {
 
     async fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal, created_at
              FROM project ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -2106,6 +2106,7 @@ fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
         weekly_signal: r
             .get::<Option<String>, _>("weekly_signal")
             .and_then(|s| parse_sig(&s)),
+        created_at: r.get::<i64, _>("created_at"),
     })
 }
 

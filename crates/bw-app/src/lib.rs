@@ -2946,11 +2946,7 @@ fn charter_md(proj: &ProjectRow) -> String {
 /// commit it (`docs(bw): 项目章程 · <节>`)。Bound、pre-existing 仓永不写;
 /// 无工作区则 no-op。Best-effort —— 章程写失败不阻断创建流。
 async fn write_charter(app: &App, p: ProjectId, section: &str) -> Result<(), AppError> {
-    let proj = app
-        .store
-        .get_project(p)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let proj = app.store.get_project(p).await?.ok_or(AppError::NotFound)?;
     let ws = proj.workspace_path.trim();
     if ws.is_empty() {
         return Ok(());

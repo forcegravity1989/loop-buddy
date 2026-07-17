@@ -291,6 +291,8 @@ pub struct ProjectRow {
     /// Cached derived signal (read-only; recompute is authoritative).
     pub signal: Option<Signal>,
     pub weekly_signal: Option<Signal>,
+    /// Unix seconds — the project's birth moment (P5: 90-day countdown).
+    pub created_at: i64,
 }
 
 #[derive(Clone, Debug)]

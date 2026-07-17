@@ -1337,3 +1337,74 @@ pub fn artifact_rows(rows: &[bw_core::model::Artifact], now: OffsetDateTime) -> 
     }
     out
 }
+
+/// P5: the weekly-review card — a pure read of already-recorded facts (issues
+/// settled this ISO week, still-open issues, metrics with no observation this
+/// week, and the countdown to the 90-day success line). `now` is injected so
+/// the date math is deterministic; nothing here is invented.
+#[derive(Clone, PartialEq, Debug)]
+pub struct WeekReviewVm {
+    /// `"本周 07-14 ~ 07-20"` — the ISO (Monday-anchored) week the card covers.
+    pub week_label: String,
+    /// Issues settled (`settled_at`) within this ISO week.
+    pub done_this_week: u32,
+    /// Non-terminal issues still open.
+    pub open_count: u32,
+    /// Metrics whose latest observation predates this week's Monday (or none).
+    pub metrics_stale: u32,
+    /// `"距 90 天目标剩 23 天"` or `"已过 90 天目标线 5 天"`.
+    pub goal_label: String,
+    /// `true` once the 90-day line is crossed.
+    pub goal_negative: bool,
+}
+
+/// The unix timestamp of the current ISO week's Monday, 00:00 UTC. Pure
+/// integer math on the epoch (1970-01-01 was a Thursday) — no calendar crate,
+/// no DST, no local-time drift. Shared by the label and the "this week"
+/// counts so they always agree on the same boundary.
+pub fn iso_week_start_unix(now_unix: i64) -> i64 {
+    const DAY: i64 = 86_400;
+    let days_since_epoch = now_unix.div_euclid(DAY);
+    // 1970-01-01 = Thursday → (days + 3) mod 7 gives 0=Monday..6=Sunday.
+    let dow = (days_since_epoch + 3).rem_euclid(7);
+    (days_since_epoch - dow) * DAY
+}
+
+/// P5: assemble the weekly-review card. `done_this_week` / `open_count` /
+/// `metrics_stale` are real counts the caller computed off the store; this fn
+/// only does the honest date math (week label + 90-day countdown).
+pub fn week_review_vm(
+    now_unix: i64,
+    created_at_unix: i64,
+    done_this_week: u32,
+    open_count: u32,
+    metrics_stale: u32,
+) -> WeekReviewVm {
+    const DAY: i64 = 86_400;
+    let week_start = iso_week_start_unix(now_unix);
+    let mon = OffsetDateTime::from_unix_timestamp(week_start).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let sun = OffsetDateTime::from_unix_timestamp(week_start + 6 * DAY)
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let week_label = format!(
+        "本周 {:02}-{:02} ~ {:02}-{:02}",
+        u8::from(mon.month()),
+        mon.day(),
+        u8::from(sun.month()),
+        sun.day()
+    );
+    let days_since = (now_unix - created_at_unix).div_euclid(DAY);
+    let remaining = 90 - days_since;
+    let (goal_label, goal_negative) = if remaining >= 0 {
+        (format!("距 90 天目标剩 {remaining} 天"), false)
+    } else {
+        (format!("已过 90 天目标线 {} 天", -remaining), true)
+    };
+    WeekReviewVm {
+        week_label,
+        done_this_week,
+        open_count,
+        metrics_stale,
+        goal_label,
+        goal_negative,
+    }
+}
