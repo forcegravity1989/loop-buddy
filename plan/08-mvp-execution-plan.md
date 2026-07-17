@@ -8,6 +8,25 @@
 
 ---
 
+## 0. 进度实况(2026-07-17 自主夜,no-UT 纪律下)
+
+| 件 | 状态 | commit / 验证 |
+|---|---|---|
+| Bat A · P3 看板▶跑 + P4 活详情页 | ✅ | 7160fa0;app 启动 + sqlite 读回 + head_before/after 在老库迁移在场 |
+| Bat B · W1/W2/W3 workflow 可见 | ✅ | 7160fa0;hub_usage_ranking 实跑、app 编译 |
+| no-UT 核心纪律 | ✅ | 7160fa0;17 测试文件 + 内联模块全删、门禁/CLAUDE.md 改写 |
+| P1 · 建项目即建仓 + 章程 | ✅ | fdc59b1;driver 读回:出生即开仓 + 4 提交 + PROJECT.md;绑仓不动文件 |
+| P5 · 周复盘卡 | ✅ | 2566dc6;iso_week 公式 python 交叉核 5 时间戳全一致 + sqlite 读回 + 渲染编译 |
+| **S1 · 归属反转** | ⬜ 未开始 | 与 P2 强耦合,见下 |
+| **P2 · 项目自带套件** | ⬜ 未开始 | 依赖 S1 |
+| M4 · 端到端验收 | ◐ 集成启动证明 | 全部已交付件集成启动无 panic(深链 Progress,stderr [BW_OPEN]) |
+
+**S1+P2 未做的诚实理由**:二者强耦合——把 agent/skill/workflow_spec 查询按 `project_id` 收窄,必须**同时**给每个项目种自有的五角色/五剧本/技能(P2),否则项目看不到任何队友、树直接破。完整 S1+P2 ≈ 3.5–4 天量级,远超单次自主夜预算;在 no-UT(仅 E2E 读回)下强做半截会留下**不一致的破树**,比不做更糟。
+
+**接棒顺序建议**:① S1 schema(三表加 `project_id TEXT` 可空,可空=NULL 共享目录;schema.sql + add_column_if_missing 双守卫;138 行注释改写)→ ② P2 按项目种角色/剧本/技能 + 指派/注入/运行查询收窄到本项目 → ③ S1 剩余(Hub 列全部 + 归属标签 + 名称过滤 + AdoptIntoProject 复制命令 + 记账 record_agent_run_by_name/skill uses/cron 本项目优先 + DistillSkillFromIssue 写 project_id)→ ④ 全链 E2E 读回。存量全局行保留为共享目录、不迁移不拆分。
+
+---
+
 ## 1. MVP 是什么(一句话 + 两条生命周期)
 
 **一句话**:一个你每天真实打开的桌面应用,管好两条生命周期——**项目的**(从一个创意到持续运营),
