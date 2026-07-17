@@ -191,6 +191,12 @@ Inbox——multica 的多人/分布式面,与 BW 单人桌面定位相斥,见 §
 - **B4 · 知识库实体化 · B5 cron 表达式**(独立,随时可插)。
 - **B6 · 像素核验 + 合并版 HTML 报告**(需屏幕录制授权;数字一律 DB 读回)。
 
+> **2026-07-16 后续**:A 队列(A2/A3/A0/A4/A1/A5+M3)已全部落地;真实孵化已启动
+> (linkcheck-md Issue #1 全真生命周期,`incubate_issue` 指挥器)。**MVP 收口队列
+> (两线:项目的生命周期 P1-P5 × workflow 的生命周期 W1-W3)已冻结在
+> [`plan/08-mvp-execution-plan.md`](08-mvp-execution-plan.md),接棒照那里走;
+> 分支隔离/成本预算等挪进其 §5 加固层,不在 MVP。**
+
 **M3 验收补一条「用户一天」场景**(纯读回,防构建者视角自嗨):
 打开工作台 → 项目墙即见各项目信号灯与开放 Issue 数 → 进入某项目,五阶段环显示活跃段
 与真实完成率 → 看板见 Autopilot 晨间建的单 → 一键 RunIssue → InReview 人审 → 确认 Done

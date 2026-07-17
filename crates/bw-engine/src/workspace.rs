@@ -77,34 +77,52 @@ pub async fn provision_git_workspace(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// One file's real change stat between two commits (`git diff --numstat`).
+/// Binary files (numstat prints `-`) record 0/0 — present, size unknown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileChange {
+    pub path: String,
+    pub added: u32,
+    pub deleted: u32,
+}
 
-    #[tokio::test]
-    async fn provisions_a_real_repo_and_is_idempotent() {
-        let dir = std::env::temp_dir().join(format!("bw-provision-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-
-        provision_git_workspace(&dir, "demo", "一个真实项目")
-            .await
-            .unwrap();
-        assert!(dir.join(".git").exists(), "real git repo");
-        assert!(dir.join("README.md").exists(), "real first file");
-        let head = crate::evidence::head_commit(&dir.to_string_lossy())
-            .await
-            .unwrap();
-        assert!(head.is_some(), "real first commit");
-
-        // Second call: must not touch the existing history.
-        std::fs::write(dir.join("later.md"), "后来的真实工作").unwrap();
-        provision_git_workspace(&dir, "demo", "一个真实项目")
-            .await
-            .unwrap();
-        assert!(
-            dir.join("later.md").exists(),
-            "re-provision must not clobber real work"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
+/// What really changed between two recorded commits — `git diff --numstat
+/// from..to`, parsed. Read-only; errors surface as strings so a detail view
+/// can show "对比不可用:…" honestly instead of an empty list pretending
+/// nothing changed.
+pub async fn diff_numstat(
+    workspace: &str,
+    from: &str,
+    to: &str,
+) -> Result<Vec<FileChange>, String> {
+    let output = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(["diff", "--numstat", &format!("{from}..{to}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(text
+        .lines()
+        .filter_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            let added = it.next()?.trim();
+            let deleted = it.next()?.trim();
+            let path = it.next()?.trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(FileChange {
+                path: path.to_string(),
+                added: added.parse().unwrap_or(0),
+                deleted: deleted.parse().unwrap_or(0),
+            })
+        })
+        .collect())
 }

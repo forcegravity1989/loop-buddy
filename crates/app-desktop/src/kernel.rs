@@ -166,6 +166,9 @@ pub struct OpVm {
     /// `Command::LoadArtifacts` ran for this project; `Some(vec![])` is a
     /// really-empty registry, a different honest state.
     pub artifacts: Option<Vec<ui::vm::ArtifactRowVm>>,
+    /// P4: the Issue-detail overlay, `None` = closed. Opened per-issue by
+    /// `Command::OpenIssueDetail`, cleared by `Command::CloseIssueDetail`.
+    pub issue_detail: Option<ui::vm::IssueDetailVm>,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -559,10 +562,19 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // involved), so it's ready even before the `active_project` early-return
     // below and reachable from the standalone Hub screens (rail-routed, not
     // tied to `active_project` at all).
+    // W1: fold each spec's real run record (aggregated off `workflow_run`)
+    // into its hub row — a cold workflow keeps the honest "暂无运行".
+    let usage_ranking = store.hub_usage_ranking().await.unwrap_or_default();
     let workflows: Vec<WorkflowHubRowVm> = state
         .workflow_specs
         .iter()
-        .filter_map(workflow_hub_row)
+        .filter_map(|spec| {
+            let mut row = workflow_hub_row(spec)?;
+            if let Some(rank) = usage_ranking.iter().find(|r| r.workflow_id == spec.id) {
+                ui::vm::attach_run_record(&mut row, rank);
+            }
+            Some(row)
+        })
         .collect();
     let workflow_details: Vec<ui::vm::WorkflowDetailVm> = state
         .workflow_specs
@@ -898,6 +910,11 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         hub,
         version_log,
         artifacts,
+        // P4: the explicitly-opened Issue detail — assembled by
+        // `Command::OpenIssueDetail`, mapped 1:1 here, `None` = no overlay.
+        issue_detail: state.issue_detail.as_ref().map(|d| {
+            ui::vm::issue_detail_vm(&d.issue, &d.runs, &d.changes, &d.artifacts, &state.agents)
+        }),
     });
     vm
 }

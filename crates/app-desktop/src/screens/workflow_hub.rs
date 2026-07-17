@@ -76,286 +76,295 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
     let groups = ui::vm::group_by_stage(&filtered);
 
     rsx! {
-        div {
-            style: "display:flex;flex-direction:column;height:100%;background:{paper};padding:22px 26px;overflow-y:auto;",
-            span { style: "font-family:{mono};font-size:11px;letter-spacing:.06em;color:{ink3};", "WORKFLOWHUB" }
             div {
-                style: "display:flex;align-items:center;justify-content:space-between;margin:4px 0 14px;",
-                div { style: "display:flex;align-items:baseline;gap:10px;",
-                    span { style: "font-family:{serif};font-size:22px;font-weight:600;", "工作流库" }
-                    span { style: "font-size:12.5px;color:{ink3};", "{n} 工作流" }
-                }
+                style: "display:flex;flex-direction:column;height:100%;background:{paper};padding:22px 26px;overflow-y:auto;",
+                span { style: "font-family:{mono};font-size:11px;letter-spacing:.06em;color:{ink3};", "WORKFLOWHUB" }
                 div {
-                    style: "display:flex;gap:8px;",
-                    button {
-                        style: "cursor:pointer;background:transparent;color:{ink2};border:1px solid {theme::BORDER};border-radius:7px;padding:6px 14px;font-size:12.5px;",
-                        onclick: move |_| {
-                            adhoc.set(!adhoc());
-                            creating.set(false);
-                        },
-                        if adhoc() { "取消" } else { "⚡ 临时任务" }
+                    style: "display:flex;align-items:center;justify-content:space-between;margin:4px 0 14px;",
+                    div { style: "display:flex;align-items:baseline;gap:10px;",
+                        span { style: "font-family:{serif};font-size:22px;font-weight:600;", "工作流库" }
+                        span { style: "font-size:12.5px;color:{ink3};", "{n} 工作流" }
                     }
-                    button {
-                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:6px 14px;font-size:12.5px;",
-                        onclick: move |_| {
-                            creating.set(!creating());
+                    div {
+                        style: "display:flex;gap:8px;",
+                        button {
+                            style: "cursor:pointer;background:transparent;color:{ink2};border:1px solid {theme::BORDER};border-radius:7px;padding:6px 14px;font-size:12.5px;",
+                            onclick: move |_| {
+                                adhoc.set(!adhoc());
+                                creating.set(false);
+                            },
+                            if adhoc() { "取消" } else { "⚡ 临时任务" }
+                        }
+                        button {
+                            style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:6px 14px;font-size:12.5px;",
+                            onclick: move |_| {
+                                creating.set(!creating());
+                                adhoc.set(false);
+                            },
+                            if creating() { "取消" } else { "+ 新建工作流" }
+                        }
+                    }
+                }
+                if adhoc() {
+                    AdHocWorkflowForm {
+                        skills: hub.skills.clone(),
+                        agents: hub.agents.clone(),
+                        projects: projects.clone(),
+                        on_run: move |_| {
                             adhoc.set(false);
+                            on_run.call(());
                         },
-                        if creating() { "取消" } else { "+ 新建工作流" }
                     }
                 }
-            }
-            if adhoc() {
-                AdHocWorkflowForm {
-                    skills: hub.skills.clone(),
-                    agents: hub.agents.clone(),
-                    projects: projects.clone(),
-                    on_run: move |_| {
-                        adhoc.set(false);
-                        on_run.call(());
-                    },
+                if creating() {
+                    CreateWorkflowForm {
+                        skills: hub.skills.clone(),
+                        agents: hub.agents.clone(),
+                        on_done: move |_| creating.set(false),
+                    }
                 }
-            }
-            if creating() {
-                CreateWorkflowForm {
-                    skills: hub.skills.clone(),
-                    agents: hub.agents.clone(),
-                    on_done: move |_| creating.set(false),
-                }
-            }
 
-            div {
-                style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;",
-                {
-                    let active = stage_filter().is_none();
-                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
-                    rsx! {
-                        button {
-                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                            onclick: move |_| stage_filter.set(None),
-                            "全部阶段"
-                        }
-                    }
-                }
-                for sk in StageKind::ALL {
+                div {
+                    style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;",
                     {
-                        let active = stage_filter() == Some(sk);
-                        let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
-                        rsx! {
-                            button {
-                                key: "{sk.index()}",
-                                style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                                onclick: move |_| stage_filter.set(Some(sk)),
-                                "{sk.label()}"
-                            }
-                        }
-                    }
-                }
-            }
-            div {
-                style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;",
-                {
-                    let active = source_filter().is_none();
-                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
-                    rsx! {
-                        button {
-                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                            onclick: move |_| source_filter.set(None),
-                            "全部来源"
-                        }
-                    }
-                }
-                for (label, count) in chip_counts {
-                    {
-                        let active = source_filter() == Some(label);
+                        let active = stage_filter().is_none();
                         let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
                         rsx! {
                             button {
-                                key: "{label}",
                                 style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                                onclick: move |_| source_filter.set(Some(label)),
-                                "{label} · {count}"
+                                onclick: move |_| stage_filter.set(None),
+                                "全部阶段"
+                            }
+                        }
+                    }
+                    for sk in StageKind::ALL {
+                        {
+                            let active = stage_filter() == Some(sk);
+                            let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
+                            rsx! {
+                                button {
+                                    key: "{sk.index()}",
+                                    style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                                    onclick: move |_| stage_filter.set(Some(sk)),
+                                    "{sk.label()}"
+                                }
                             }
                         }
                     }
                 }
-            }
-
-            if filtered.is_empty() {
-                div { style: "color:{ink3};font-size:13px;padding:30px 0;", "没有符合筛选的工作流。" }
-            }
-
-            for (stage_opt, rows) in groups {
-                if !rows.is_empty() {
+                div {
+                    style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;",
                     {
-                        let group_key = stage_opt.map(|s| s.index() as i32).unwrap_or(-1);
-                        let (glabel, gcolor): (&str, &str) = match stage_opt {
-                            Some(sk) => (sk.label(), sk.color()),
-                            None => ("指标层", ink3),
-                        };
-                        let rows_len = rows.len();
+                        let active = source_filter().is_none();
+                        let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
                         rsx! {
-                            div {
-                                key: "{group_key}",
-                                style: "margin-bottom:22px;",
-                                div {
-                                    style: "display:flex;align-items:center;gap:8px;margin-bottom:10px;",
-                                    span { style: "{theme::dot(gcolor, 8)}" }
-                                    span { style: "font-size:13.5px;font-weight:600;", "{glabel}" }
-                                    span { style: "font-size:11.5px;color:{ink3};", "{rows_len} 个工作流" }
+                            button {
+                                style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                                onclick: move |_| source_filter.set(None),
+                                "全部来源"
+                            }
+                        }
+                    }
+                    for (label, count) in chip_counts {
+                        {
+                            let active = source_filter() == Some(label);
+                            let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                            rsx! {
+                                button {
+                                    key: "{label}",
+                                    style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                                    onclick: move |_| source_filter.set(Some(label)),
+                                    "{label} · {count}"
                                 }
-                                for row in rows {
-                                    {
-                                        let k = k.clone();
-                                        let on_run = on_run;
-                                        let projects = projects.clone();
-                                        let row_id = row.id;
-                                        let is_open = expanded() == Some(row_id);
-                                        let picker_open = importing() == Some(row_id);
-                                        let editing = optimizing() == Some(row_id);
-                                        let stage_ref = row.stage_ref;
-                                        let row_name = row.name.clone();
-                                        let detail = details_by_id.get(&row_id).cloned();
-                                        let skills_pool = hub.skills.clone();
-                                        let agents_pool = hub.agents.clone();
-                                        rsx! {
-                                            div {
-                                                key: "{row_id.uuid()}",
-                                                style: "{card} padding:14px 16px;margin-bottom:8px;",
+                            }
+                        }
+                    }
+                }
+
+                if filtered.is_empty() {
+                    div { style: "color:{ink3};font-size:13px;padding:30px 0;", "没有符合筛选的工作流。" }
+                }
+
+                for (stage_opt, rows) in groups {
+                    if !rows.is_empty() {
+                        {
+                            let group_key = stage_opt.map(|s| s.index() as i32).unwrap_or(-1);
+                            let (glabel, gcolor): (&str, &str) = match stage_opt {
+                                Some(sk) => (sk.label(), sk.color()),
+                                None => ("指标层", ink3),
+                            };
+                            let rows_len = rows.len();
+                            rsx! {
+                                div {
+                                    key: "{group_key}",
+                                    style: "margin-bottom:22px;",
+                                    div {
+                                        style: "display:flex;align-items:center;gap:8px;margin-bottom:10px;",
+                                        span { style: "{theme::dot(gcolor, 8)}" }
+                                        span { style: "font-size:13.5px;font-weight:600;", "{glabel}" }
+                                        span { style: "font-size:11.5px;color:{ink3};", "{rows_len} 个工作流" }
+                                    }
+                                    for row in rows {
+                                        {
+                                            let k = k.clone();
+                                            let on_run = on_run;
+                                            let projects = projects.clone();
+                                            let row_id = row.id;
+                                            let is_open = expanded() == Some(row_id);
+                                            let picker_open = importing() == Some(row_id);
+                                            let editing = optimizing() == Some(row_id);
+                                            let stage_ref = row.stage_ref;
+                                            let row_name = row.name.clone();
+                                            let detail = details_by_id.get(&row_id).cloned();
+                                            let skills_pool = hub.skills.clone();
+                                            let agents_pool = hub.agents.clone();
+                                            rsx! {
                                                 div {
-                                                    style: "display:flex;align-items:center;gap:12px;cursor:pointer;",
-                                                    onclick: move |_| expanded.set(if is_open { None } else { Some(row_id) }),
-                                                    span { style: "font-size:13px;font-weight:500;flex:1;min-width:0;", "{row.name}" }
-                                                    span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.source_label}" }
-                                                    span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.maturity_label}" }
-                                                    if let Some(t) = &row.trigger {
-                                                        span { style: "{theme::chip(\"#F4F0E7\", theme::CLAY)} font-family:{mono};", "{t}" }
-                                                    }
-                                                    span { style: "font-size:11.5px;color:{ink3};", "{row.primary_agent}" }
-                                                    span { style: "font-family:{mono};font-size:11.5px;color:{ink3};", "{row.version_label} · {row.uses} 次复用" }
-                                                }
-                                                div { style: "font-size:12px;color:{ink2};margin-top:6px;", "验收:{row.goal}" }
-                                                if is_open {
+                                                    key: "{row_id.uuid()}",
+                                                    style: "{card} padding:14px 16px;margin-bottom:8px;",
                                                     div {
-                                                        style: "margin-top:12px;padding-top:12px;border-top:1px dashed {theme::BORDER};",
-                                                        if editing {
-                                                            if let Some(d) = detail.clone() {
-                                                                OptimizeWorkflowForm {
-                                                                    skills: skills_pool,
-                                                                    agents: agents_pool,
-                                                                    detail: d,
-                                                                    on_done: move |_| optimizing.set(None),
-                                                                }
-                                                            }
-                                                        } else {
-                                                            div { style: "font-size:11.5px;color:{ink3};margin-bottom:6px;", "方法循环" }
-                                                            for (i , p) in row.phases.iter().enumerate() {
-                                                                span { key: "{i}", style: "{theme::chip(\"#F4F0E7\", ink2)} margin-right:6px;", "{i + 1}. {p}" }
-                                                            }
-                                                            if let Some(d) = &detail {
-                                                                if !d.agents.is_empty() {
-                                                                    div { style: "font-size:11.5px;color:{ink3};margin:10px 0 6px;", "涉及智能体 · 悬停查看角色" }
-                                                                    for (i , (name , def , _from)) in d.agents.iter().enumerate() {
-                                                                        span {
-                                                                            key: "ag{i}",
-                                                                            title: "{def}",
-                                                                            style: "{theme::chip(\"#EDE8F5\", theme::AGENT)} margin-right:6px;",
-                                                                            "◆ {name}"
-                                                                        }
+                                                        style: "display:flex;align-items:center;gap:12px;cursor:pointer;",
+                                                        onclick: move |_| expanded.set(if is_open { None } else { Some(row_id) }),
+                                                        span { style: "font-size:13px;font-weight:500;flex:1;min-width:0;", "{row.name}" }
+                                                        span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.source_label}" }
+                                                        span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.maturity_label}" }
+                                                        if let Some(t) = &row.trigger {
+                                                            span { style: "{theme::chip(\"#F4F0E7\", theme::CLAY)} font-family:{mono};", "{t}" }
+                                                        }
+                                                        span { style: "font-size:11.5px;color:{ink3};", "{row.primary_agent}" }
+                                                        span { style: "font-family:{mono};font-size:11.5px;color:{ink3};",
+        // W1: the row's real run record (runs/success rate off
+        // `workflow_run`) — "暂无运行" is honest cold, never 0%.
+        if row.last_run_label.is_empty() {
+            "{row.version_label} · {row.uses} 次复用 · {row.record_label}"
+        } else {
+            "{row.version_label} · {row.uses} 次复用 · {row.record_label} · {row.last_run_label}"
+        }
+    }
+                                                    }
+                                                    div { style: "font-size:12px;color:{ink2};margin-top:6px;", "验收:{row.goal}" }
+                                                    if is_open {
+                                                        div {
+                                                            style: "margin-top:12px;padding-top:12px;border-top:1px dashed {theme::BORDER};",
+                                                            if editing {
+                                                                if let Some(d) = detail.clone() {
+                                                                    OptimizeWorkflowForm {
+                                                                        skills: skills_pool,
+                                                                        agents: agents_pool,
+                                                                        detail: d,
+                                                                        on_done: move |_| optimizing.set(None),
                                                                     }
                                                                 }
-                                                                if !d.skills.is_empty() {
-                                                                    div { style: "font-size:11.5px;color:{ink3};margin:10px 0 6px;", "涉及技能 · 悬停查看效果" }
-                                                                    for (i , (name , def , _from)) in d.skills.iter().enumerate() {
-                                                                        span {
-                                                                            key: "sk{i}",
-                                                                            title: "{def}",
-                                                                            style: "{theme::chip(\"#EFE9DA\", ink2)} margin-right:6px;",
-                                                                            "🧩 {name}"
-                                                                        }
-                                                                    }
+                                                            } else {
+                                                                div { style: "font-size:11.5px;color:{ink3};margin-bottom:6px;", "方法循环" }
+                                                                for (i , p) in row.phases.iter().enumerate() {
+                                                                    span { key: "{i}", style: "{theme::chip(\"#F4F0E7\", ink2)} margin-right:6px;", "{i + 1}. {p}" }
                                                                 }
-                                                            } else if !row.skills.is_empty() {
-                                                                div { style: "font-size:11.5px;color:{ink3};margin:10px 0 6px;", "涉及技能" }
-                                                                for (i , s) in row.skills.iter().enumerate() {
-                                                                    span { key: "{i}", style: "{theme::chip(\"#EFE9DA\", ink2)} margin-right:6px;", "{s}" }
-                                                                }
-                                                            }
-                                                            div { style: "font-size:11.5px;color:{ink3};margin-top:10px;", "{row.loop_label}" }
-                                                            div {
-                                                                style: "display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap;",
-                                                                if picker_open {
-                                                                    select {
-                                                                        style: "{theme::input()} width:auto;",
-                                                                        onchange: move |e| {
-                                                                            if let Ok(i) = e.value().parse::<usize>() {
-                                                                                import_target.set(i);
+                                                                if let Some(d) = &detail {
+                                                                    if !d.agents.is_empty() {
+                                                                        div { style: "font-size:11.5px;color:{ink3};margin:10px 0 6px;", "涉及智能体 · 悬停查看角色" }
+                                                                        for (i , (name , def , _from)) in d.agents.iter().enumerate() {
+                                                                            span {
+                                                                                key: "ag{i}",
+                                                                                title: "{def}",
+                                                                                style: "{theme::chip(\"#EDE8F5\", theme::AGENT)} margin-right:6px;",
+                                                                                "◆ {name}"
                                                                             }
-                                                                        },
-                                                                        for (i , p) in projects.iter().enumerate() {
-                                                                            option { value: "{i}", "{p.name}" }
                                                                         }
                                                                     }
-                                                                    button {
-                                                                        style: "{theme::btn_primary()} padding:6px 14px;font-size:12px;",
-                                                                        onclick: move |_| {
-                                                                            if let Some(target) = projects.get(import_target()) {
-                                                                                let session = SessionId::new();
-                                                                                k.send(Command::OpenProject(target.id));
-                                                                                k.send(Command::StartSession {
-                                                                                    id: session,
-                                                                                    stage_kind: stage_ref
-                                                                                        .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n)),
-                                                                                    kind: SessionKind::Create,
-                                                                                    title: format!("{row_name} · 导入"),
-                                                                                });
-                                                                                k.send(Command::RunHubWorkflow { session, workflow_id: row_id });
-                                                                                k.send(Command::SelectSession(Some(session)));
-                                                                                importing.set(None);
-                                                                                on_run.call(());
+                                                                    if !d.skills.is_empty() {
+                                                                        div { style: "font-size:11.5px;color:{ink3};margin:10px 0 6px;", "涉及技能 · 悬停查看效果" }
+                                                                        for (i , (name , def , _from)) in d.skills.iter().enumerate() {
+                                                                            span {
+                                                                                key: "sk{i}",
+                                                                                title: "{def}",
+                                                                                style: "{theme::chip(\"#EFE9DA\", ink2)} margin-right:6px;",
+                                                                                "🧩 {name}"
                                                                             }
-                                                                        },
-                                                                        "确认导入 · 运行"
+                                                                        }
                                                                     }
-                                                                    button {
-                                                                        style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid {theme::BORDER};border-radius:7px;padding:6px 12px;font-size:12px;",
-                                                                        onclick: move |_| importing.set(None),
-                                                                        "取消"
+                                                                } else if !row.skills.is_empty() {
+                                                                    div { style: "font-size:11.5px;color:{ink3};margin:10px 0 6px;", "涉及技能" }
+                                                                    for (i , s) in row.skills.iter().enumerate() {
+                                                                        span { key: "{i}", style: "{theme::chip(\"#EFE9DA\", ink2)} margin-right:6px;", "{s}" }
                                                                     }
-                                                                } else {
-                                                                    button {
-                                                                        style: "{theme::btn_primary()} padding:6px 14px;font-size:12px;",
-                                                                        disabled: projects.is_empty(),
-                                                                        onclick: move |_| {
-                                                                            importing.set(Some(row_id));
-                                                                            optimizing.set(None);
-                                                                        },
-                                                                        "导入到项目 →"
-                                                                    }
-                                                                    button {
-                                                                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:6px 12px;font-size:12px;",
-                                                                        onclick: move |_| {
-                                                                            optimizing.set(Some(row_id));
-                                                                            importing.set(None);
-                                                                        },
-                                                                        "优化 →"
-                                                                    }
-                                                                    if cron_added().contains(&row_id) {
-                                                                        span { style: "font-size:11.5px;color:{ink3};", "✓ 已加入 Cron Hub · 每周" }
-                                                                    } else {
+                                                                }
+                                                                div { style: "font-size:11.5px;color:{ink3};margin-top:10px;", "{row.loop_label}" }
+                                                                div {
+                                                                    style: "display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap;",
+                                                                    if picker_open {
+                                                                        select {
+                                                                            style: "{theme::input()} width:auto;",
+                                                                            onchange: move |e| {
+                                                                                if let Ok(i) = e.value().parse::<usize>() {
+                                                                                    import_target.set(i);
+                                                                                }
+                                                                            },
+                                                                            for (i , p) in projects.iter().enumerate() {
+                                                                                option { value: "{i}", "{p.name}" }
+                                                                            }
+                                                                        }
+                                                                        button {
+                                                                            style: "{theme::btn_primary()} padding:6px 14px;font-size:12px;",
+                                                                            onclick: move |_| {
+                                                                                if let Some(target) = projects.get(import_target()) {
+                                                                                    let session = SessionId::new();
+                                                                                    k.send(Command::OpenProject(target.id));
+                                                                                    k.send(Command::StartSession {
+                                                                                        id: session,
+                                                                                        stage_kind: stage_ref
+                                                                                            .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n)),
+                                                                                        kind: SessionKind::Create,
+                                                                                        title: format!("{row_name} · 导入"),
+                                                                                    });
+                                                                                    k.send(Command::RunHubWorkflow { session, workflow_id: row_id });
+                                                                                    k.send(Command::SelectSession(Some(session)));
+                                                                                    importing.set(None);
+                                                                                    on_run.call(());
+                                                                                }
+                                                                            },
+                                                                            "确认导入 · 运行"
+                                                                        }
                                                                         button {
                                                                             style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid {theme::BORDER};border-radius:7px;padding:6px 12px;font-size:12px;",
+                                                                            onclick: move |_| importing.set(None),
+                                                                            "取消"
+                                                                        }
+                                                                    } else {
+                                                                        button {
+                                                                            style: "{theme::btn_primary()} padding:6px 14px;font-size:12px;",
+                                                                            disabled: projects.is_empty(),
                                                                             onclick: move |_| {
-                                                                                k.send(Command::CreateCronTask {
-                                                                                    id: CronTaskId::new(),
-                                                                                    name: format!("{row_name} · 定时执行"),
-                                                                                    target: row_name.clone(),
-                                                                                    schedule: Cadence::Weekly,
-                                                                                    project_id: None,
-                                                                                });
-                                                                                cron_added.write().insert(row_id);
+                                                                                importing.set(Some(row_id));
+                                                                                optimizing.set(None);
                                                                             },
-                                                                            "设为定时任务 →"
+                                                                            "导入到项目 →"
+                                                                        }
+                                                                        button {
+                                                                            style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:6px 12px;font-size:12px;",
+                                                                            onclick: move |_| {
+                                                                                optimizing.set(Some(row_id));
+                                                                                importing.set(None);
+                                                                            },
+                                                                            "优化 →"
+                                                                        }
+                                                                        if cron_added().contains(&row_id) {
+                                                                            span { style: "font-size:11.5px;color:{ink3};", "✓ 已加入 Cron Hub · 每周" }
+                                                                        } else {
+                                                                            button {
+                                                                                style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid {theme::BORDER};border-radius:7px;padding:6px 12px;font-size:12px;",
+                                                                                onclick: move |_| {
+                                                                                    k.send(Command::CreateCronTask {
+                                                                                        id: CronTaskId::new(),
+                                                                                        name: format!("{row_name} · 定时执行"),
+                                                                                        target: row_name.clone(),
+                                                                                        schedule: Cadence::Weekly,
+                                                                                        project_id: None,
+                                                                                    });
+                                                                                    cron_added.write().insert(row_id);
+                                                                                },
+                                                                                "设为定时任务 →"
+                                                                            }
                                                                         }
                                                                     }
                                                                 }
@@ -373,7 +382,6 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
                 }
             }
         }
-    }
 }
 
 /// Shared by create/optimize/ad-hoc forms — toggle real Skill/AgentHub

@@ -99,6 +99,10 @@ impl SqliteStore {
         // DBs (pre-iter-4) opened before this column existed get it added here;
         // manual-run rows simply stay NULL.
         add_column_if_missing(&pool, "workflow_run", "cron_task_id", "TEXT").await?;
+        // P4: workspace HEAD at run start/settle — feeds the Issue detail's
+        // "这次运行改了什么" diff. Mock runs (no workspace) stay NULL.
+        add_column_if_missing(&pool, "workflow_run", "head_before", "TEXT").await?;
+        add_column_if_missing(&pool, "workflow_run", "head_after", "TEXT").await?;
         // Playbook upgrade: per-phase real instructions. Old DBs get the
         // column with `'[]'` — every existing workflow keeps its shared-prompt
         // behavior byte-for-byte.
@@ -1139,6 +1143,21 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn set_run_heads(
+        &self,
+        run_id: WorkflowRunId,
+        head_before: Option<String>,
+        head_after: Option<String>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE workflow_run SET head_before=?, head_after=? WHERE id=?")
+            .bind(head_before)
+            .bind(head_after)
+            .bind(run_id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn settle_workflow_run(
         &self,
         id: WorkflowRunId,
@@ -1182,7 +1201,7 @@ impl Store for SqliteStore {
     async fn list_workflow_runs(&self, workflow_id: WorkflowId) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id, head_before, head_after
              FROM workflow_run WHERE workflow_id=? ORDER BY started_at DESC, rowid DESC",
         )
         .bind(workflow_id.uuid().to_string())
@@ -1194,7 +1213,7 @@ impl Store for SqliteStore {
     async fn list_all_workflow_runs(&self, limit: u32) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id, head_before, head_after
              FROM workflow_run ORDER BY started_at DESC, rowid DESC LIMIT ?",
         )
         .bind(limit as i64)
@@ -1873,7 +1892,7 @@ impl Store for SqliteStore {
     async fn list_runs_for_issue(&self, issue_id: IssueId) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id, head_before, head_after
              FROM workflow_run WHERE issue_id=? ORDER BY started_at DESC, rowid DESC",
         )
         .bind(issue_id.uuid().to_string())
@@ -2054,6 +2073,12 @@ fn parse_run_row(r: &sqlx::sqlite::SqliteRow) -> WorkflowRun {
             .get::<Option<String>, _>("issue_id")
             .filter(|s| !s.is_empty())
             .and_then(|s| parse_uuid(&s, IssueId::from_uuid).ok()),
+        head_before: r
+            .get::<Option<String>, _>("head_before")
+            .filter(|s| !s.is_empty()),
+        head_after: r
+            .get::<Option<String>, _>("head_after")
+            .filter(|s| !s.is_empty()),
     }
 }
 

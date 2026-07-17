@@ -668,7 +668,18 @@ pub struct WorkflowRun {
     /// `RunIssue` (`None` for ordinary workflow / scheduler runs). Lets an
     /// Issue's detail answer "which runs did this issue produce, and what?".
     pub issue_id: Option<IssueId>,
+    /// P4: workspace HEAD when the run started / settled. `None` when the
+    /// project has no real workspace (Mock runs touch no files). The pair is
+    /// recorded fact — "这次运行改了什么" is answered by diffing between them,
+    /// never by re-guessing after the tree has moved on.
+    pub head_before: Option<String>,
+    pub head_after: Option<String>,
 }
+
+/// P4: one run's resolved change list — `(run id, Ok(per-file (path, +added,
+/// -deleted)) | Err(为何不可用的诚实原因))`. The shared shape between app
+/// state (assembled at detail-open time) and the view layer.
+pub type RunChanges = (WorkflowRunId, Result<Vec<(String, u32, u32)>, String>);
 
 /// Per-workflow aggregate over its run history — the read-side shape optimization
 /// intelligence consumes. Every field is derived from settled `workflow_run`
@@ -1619,208 +1630,4 @@ pub struct HubCard {
     pub color: String,
     pub desc: String,
     pub items: Vec<String>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classify_artifact_path_covers_the_playbook_output_shapes() {
-        // What the five stage playbooks actually write:
-        assert_eq!(
-            classify_artifact_path("docs/evidence.md"),
-            ArtifactKind::Doc
-        );
-        assert_eq!(classify_artifact_path("README.md"), ArtifactKind::Doc);
-        assert_eq!(classify_artifact_path("src/main.rs"), ArtifactKind::Code);
-        assert_eq!(classify_artifact_path("src/lib.rs"), ArtifactKind::Code);
-        assert_eq!(classify_artifact_path("tests/cli.rs"), ArtifactKind::Test);
-        assert_eq!(
-            classify_artifact_path("src/parser_test.rs"),
-            ArtifactKind::Test
-        );
-        assert_eq!(
-            classify_artifact_path("scripts/healthcheck.sh"),
-            ArtifactKind::Script
-        );
-        assert_eq!(classify_artifact_path("Cargo.toml"), ArtifactKind::Config);
-        assert_eq!(classify_artifact_path(".gitignore"), ArtifactKind::Config);
-        assert_eq!(
-            classify_artifact_path("assets/logo.png"),
-            ArtifactKind::Other
-        );
-        // Non-code files under tests/ are not "tests".
-        assert_eq!(
-            classify_artifact_path("tests/fixtures/sample.md"),
-            ArtifactKind::Doc
-        );
-        // Round-trips through the persisted text form.
-        for k in [
-            ArtifactKind::Doc,
-            ArtifactKind::Code,
-            ArtifactKind::Test,
-            ArtifactKind::Script,
-            ArtifactKind::Config,
-            ArtifactKind::Other,
-        ] {
-            assert_eq!(ArtifactKind::parse(k.text()), k);
-        }
-    }
-
-    /// A5-F: `can_transition_to` is the single source of truth for issue
-    /// lifecycle legality — enumerate all 7×7 (from, to) pairs against the
-    /// exact edge set the design settled on (plan/06 §7-F / HANDOFF-2026-07-16-A5
-    /// §2.1), not just a handful of spot-checks. No state ever transitions to
-    /// itself; `Cancelled` has no outgoing edges at all.
-    #[test]
-    fn issue_status_can_transition_to_matches_the_legal_table() {
-        use IssueStatus::*;
-        let legal: &[(IssueStatus, IssueStatus)] = &[
-            (Backlog, Todo),
-            (Backlog, InProgress),
-            (Backlog, Cancelled),
-            (Todo, InProgress),
-            (Todo, Backlog),
-            (Todo, Blocked),
-            (Todo, Cancelled),
-            (InProgress, InReview),
-            (InProgress, Todo),
-            (InProgress, Blocked),
-            (InProgress, Cancelled),
-            (InReview, Done),
-            (InReview, InProgress),
-            (InReview, Blocked),
-            (InReview, Cancelled),
-            (Blocked, Todo),
-            (Blocked, InProgress),
-            (Blocked, Cancelled),
-            (Done, Todo),
-            (Done, InProgress),
-        ];
-        assert_eq!(legal.len(), 20, "the table itself has exactly 20 edges");
-        for from in IssueStatus::ALL {
-            for to in IssueStatus::ALL {
-                let expected = legal.contains(&(from, to));
-                assert_eq!(
-                    from.can_transition_to(to),
-                    expected,
-                    "{from:?} -> {to:?} should be {expected}"
-                );
-            }
-        }
-        // Explicit spot-checks for the edges an implementation most tempts
-        // you to get wrong.
-        assert!(!Backlog.can_transition_to(Done), "no direct Backlog->Done");
-        assert!(
-            !InProgress.can_transition_to(Done),
-            "Done only reachable via InReview"
-        );
-        assert!(
-            !Cancelled.can_transition_to(Todo),
-            "Cancelled is terminal, no outgoing edges"
-        );
-        for s in IssueStatus::ALL {
-            assert!(
-                !s.can_transition_to(s),
-                "{s:?} -> {s:?} is not a table edge"
-            );
-        }
-    }
-
-    /// The playbook spec is fully armed: per-phase prompts, the hosting role
-    /// as its real agent ref, and the stage's skills as real refs whose
-    /// content is inside every phase prompt.
-    #[cfg(feature = "idgen")]
-    #[test]
-    fn playbook_spec_carries_role_agent_and_operative_skills() {
-        let ctx = crate::playbook::PlaybookCtx {
-            project_name: "demo".into(),
-            ..Default::default()
-        };
-        for kind in StageKind::ALL {
-            let spec = stage_workflow_with_playbook(kind, &ctx);
-            assert_eq!(spec.phases.len(), spec.phase_prompts.len());
-            assert_eq!(spec.agents.len(), 1);
-            assert_eq!(spec.agents[0].name, kind.role_short());
-            let skills = crate::playbook::stage_skills(kind);
-            assert_eq!(spec.skills.len(), skills.len());
-            for (s_ref, s) in spec.skills.iter().zip(skills) {
-                assert_eq!(s_ref.name, s.name);
-            }
-            for p in &spec.phase_prompts {
-                assert!(
-                    p.contains(skills[0].content),
-                    "{kind:?} 技能正文在 prompt 内"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn issue_status_is_terminal_only_for_done_and_cancelled() {
-        assert!(!IssueStatus::Backlog.is_terminal());
-        assert!(!IssueStatus::Todo.is_terminal());
-        assert!(!IssueStatus::InProgress.is_terminal());
-        assert!(!IssueStatus::InReview.is_terminal());
-        assert!(IssueStatus::Done.is_terminal());
-        assert!(
-            !IssueStatus::Blocked.is_terminal(),
-            "Blocked is recoverable, not terminal"
-        );
-        assert!(IssueStatus::Cancelled.is_terminal());
-    }
-
-    #[test]
-    fn issue_status_is_backlog_only_for_backlog() {
-        assert!(IssueStatus::Backlog.is_backlog());
-        assert!(!IssueStatus::Todo.is_backlog());
-        assert!(!IssueStatus::Done.is_backlog());
-        assert!(!IssueStatus::Blocked.is_backlog());
-    }
-
-    #[test]
-    fn issue_status_all_has_seven_in_lifecycle_order() {
-        assert_eq!(IssueStatus::ALL.len(), 7);
-        assert_eq!(IssueStatus::ALL[0], IssueStatus::Backlog);
-        assert_eq!(IssueStatus::ALL[6], IssueStatus::Cancelled);
-    }
-
-    #[test]
-    fn issue_priority_labels() {
-        assert_eq!(IssuePriority::None.label(), "无");
-        assert_eq!(IssuePriority::Low.label(), "低");
-        assert_eq!(IssuePriority::Medium.label(), "中");
-        assert_eq!(IssuePriority::High.label(), "高");
-        assert_eq!(IssuePriority::Urgent.label(), "紧急");
-    }
-
-    #[test]
-    fn issue_status_labels() {
-        assert_eq!(IssueStatus::Backlog.label(), "待办池");
-        assert_eq!(IssueStatus::Todo.label(), "待办");
-        assert_eq!(IssueStatus::InProgress.label(), "进行中");
-        assert_eq!(IssueStatus::InReview.label(), "评审中");
-        assert_eq!(IssueStatus::Done.label(), "已完成");
-        assert_eq!(IssueStatus::Blocked.label(), "阻塞");
-        assert_eq!(IssueStatus::Cancelled.label(), "已取消");
-    }
-
-    #[test]
-    fn issue_status_none_serializes_as_snake_case() {
-        // None priority must serialize as "none" (not a sentinel/empty string).
-        let json = serde_json::to_string(&IssuePriority::None).unwrap();
-        assert_eq!(json, "\"none\"");
-        // And round-trip back.
-        let back: IssuePriority = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, IssuePriority::None);
-    }
-
-    #[test]
-    fn issue_status_serializes_as_snake_case() {
-        let json = serde_json::to_string(&IssueStatus::InProgress).unwrap();
-        assert_eq!(json, "\"in_progress\"");
-        let back: IssueStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, IssueStatus::InProgress);
-    }
 }

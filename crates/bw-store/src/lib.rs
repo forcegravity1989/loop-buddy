@@ -524,6 +524,15 @@ pub trait Store: Send + Sync {
     /// sets it. Feeds `list_runs_for_issue` ("which runs did this issue
     /// produce?").
     async fn set_run_issue(&self, run_id: WorkflowRunId, issue_id: IssueId) -> Result<()>;
+    /// P4: record the workspace HEAD pair (run start / settle) captured by the
+    /// app around a real-workspace run — the recorded fact behind an Issue
+    /// detail's "这次运行改了什么". Mock runs never call this (both stay NULL).
+    async fn set_run_heads(
+        &self,
+        run_id: WorkflowRunId,
+        head_before: Option<String>,
+        head_after: Option<String>,
+    ) -> Result<()>;
     /// Settle a run's terminal state exactly once: `status`, real
     /// `finished_at`/`duration_ms`, `phases_completed`, and `error`. No-op-safe
     /// if the row already settled (idempotent re-runs of the dogfood).

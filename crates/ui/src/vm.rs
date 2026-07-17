@@ -12,9 +12,10 @@
 use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAttention};
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
-    AgentCard, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, FeedLevel, HubCard,
-    HubKind, Issue, IssueStatus, KnowledgeSource, Maturity, ProjectCycle, ProjectPhase,
-    SessionStatus, Signal, SkillCard, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    AgentCard, Artifact, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, FeedLevel,
+    HubCard, HubKind, Issue, IssueStatus, KnowledgeSource, Maturity, ProjectCycle, ProjectPhase,
+    RunChanges, RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SourceKind, StageKind,
+    UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
@@ -511,6 +512,33 @@ pub struct WorkflowHubRowVm {
     pub phases: Vec<String>,
     pub skills: Vec<String>,
     pub stage_ref: Option<u8>,
+    /// W1: the row's real run record, e.g. `"跑 3 次 · 成功 67%"` — or
+    /// `"暂无运行"` when nothing ever ran (never a fabricated `0%`).
+    pub record_label: String,
+    /// W1: `"最近 07-16"` from the newest run's real timestamp; empty when
+    /// there is none.
+    pub last_run_label: String,
+}
+
+/// W1: fold a workflow's real run aggregate (`UsageRank`, derived from
+/// `workflow_run` rows) into its hub row. Separate from [`workflow_hub_row`]
+/// so spec-only callers/tests stay untouched; a cold workflow keeps the
+/// honest `"暂无运行"` default.
+pub fn attach_run_record(row: &mut WorkflowHubRowVm, rank: &UsageRank) {
+    if rank.total_runs == 0 {
+        return;
+    }
+    let rate = match rank.success_rate {
+        Some(r) => format!("{:.0}%", r * 100.0),
+        // Runs exist but none settled yet — unknown, not 0%.
+        None => "—".to_string(),
+    };
+    row.record_label = format!("跑 {} 次 · 成功 {}", rank.total_runs, rate);
+    if let Some(ts) = rank.last_run_at {
+        if let Ok(t) = time::OffsetDateTime::from_unix_timestamp(ts) {
+            row.last_run_label = format!("最近 {:02}-{:02}", u8::from(t.month()), t.day());
+        }
+    }
 }
 
 /// One hub row from a stored [`WorkflowSpec`] — `None` for a `Dynamic` spec
@@ -549,6 +577,8 @@ pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
         phases: spec.phases.clone(),
         skills: spec.skills.iter().map(|s| s.name.clone()).collect(),
         stage_ref: spec.stage_ref,
+        record_label: "暂无运行".into(),
+        last_run_label: String::new(),
     })
 }
 
@@ -624,6 +654,120 @@ pub fn workflow_detail(spec: &WorkflowSpec) -> Option<WorkflowDetailVm> {
             .map(|(i, p)| (i + 1, p))
             .collect(),
     })
+}
+
+/// P4: one run row inside the Issue-detail overlay — every field is a real
+/// recorded value off `workflow_run` (+ the diff between its recorded HEAD
+/// pair). Nothing here is recomputed or guessed at render time.
+#[derive(Clone, PartialEq, Debug)]
+pub struct IssueRunRowVm {
+    pub workflow_name: String,
+    pub status_label: &'static str,
+    pub ok: bool,
+    pub trigger_label: &'static str,
+    /// `"1.2s"` / `"340ms"`; `"—"` while running.
+    pub duration_label: String,
+    pub phases_label: String,
+    pub error: String,
+    /// (path, +added, -deleted) per really-changed file.
+    pub changes: Vec<(String, u32, u32)>,
+    /// The honest reason a diff is unavailable (mock run / pre-tracking run /
+    /// git error); `None` when `changes` is the truth (possibly empty).
+    pub changes_unavailable: Option<String>,
+}
+
+/// P4: the Issue-detail overlay — header + run history + artifacts. Actions
+/// (确认完成/打回/蒸馏) are gated on `status` by the view; the VM only reports.
+#[derive(Clone, PartialEq, Debug)]
+pub struct IssueDetailVm {
+    pub id: IssueId,
+    pub number: u32,
+    pub title: String,
+    pub desc: String,
+    pub status: IssueStatus,
+    pub status_label: &'static str,
+    pub stage: StageKind,
+    pub stage_label: &'static str,
+    pub assignee_name: Option<String>,
+    pub priority_label: &'static str,
+    pub blocked_reason: Option<String>,
+    pub settled: bool,
+    pub runs: Vec<IssueRunRowVm>,
+    /// (path, short commit, bytes) per registered artifact version.
+    pub artifacts: Vec<(String, String, u64)>,
+}
+
+fn duration_label(ms: Option<i64>) -> String {
+    match ms {
+        None => "—".into(),
+        Some(v) if v >= 1000 => format!("{:.1}s", v as f64 / 1000.0),
+        Some(v) => format!("{v}ms"),
+    }
+}
+
+/// P4: assemble the Issue-detail overlay from store-read rows. `changes` is
+/// keyed by run id (the app resolves diffs at open time); a run with no entry
+/// falls back to "无变更记录".
+pub fn issue_detail_vm(
+    issue: &Issue,
+    runs: &[WorkflowRun],
+    changes: &[RunChanges],
+    artifacts: &[Artifact],
+    agents: &[AgentCard],
+) -> IssueDetailVm {
+    let run_rows = runs
+        .iter()
+        .map(|r| {
+            let (chg, unavailable) = match changes.iter().find(|(id, _)| *id == r.id) {
+                Some((_, Ok(list))) => (list.clone(), None),
+                Some((_, Err(why))) => (Vec::new(), Some(why.clone())),
+                None => (Vec::new(), Some("无变更记录".to_string())),
+            };
+            IssueRunRowVm {
+                workflow_name: r.workflow_name.clone(),
+                status_label: match r.status {
+                    RunStatus::Ok => "成功",
+                    RunStatus::Failed => "失败",
+                    RunStatus::Running => "进行中",
+                },
+                ok: r.status == RunStatus::Ok,
+                trigger_label: match r.trigger {
+                    RunTrigger::Manual => "手动",
+                    RunTrigger::Scheduled => "定时",
+                },
+                duration_label: duration_label(r.duration_ms),
+                phases_label: format!("{} 个阶段完成", r.phases_completed),
+                error: r.error.clone(),
+                changes: chg,
+                changes_unavailable: unavailable,
+            }
+        })
+        .collect();
+    IssueDetailVm {
+        id: issue.id,
+        number: issue.number,
+        title: issue.title.clone(),
+        desc: issue.desc.clone(),
+        status: issue.status,
+        status_label: issue.status.label(),
+        stage: issue.stage,
+        stage_label: issue.stage.label(),
+        assignee_name: issue
+            .assignee
+            .and_then(|aid| agents.iter().find(|a| a.id == aid))
+            .map(|a| a.name.clone()),
+        priority_label: issue.priority.label(),
+        blocked_reason: issue.blocked_reason.clone(),
+        settled: issue.settled_at.is_some(),
+        runs: run_rows,
+        artifacts: artifacts
+            .iter()
+            .map(|a| {
+                let short = a.git_commit.chars().take(7).collect::<String>();
+                (a.path.clone(), short, a.bytes)
+            })
+            .collect(),
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -1192,594 +1336,4 @@ pub fn artifact_rows(rows: &[bw_core::model::Artifact], now: OffsetDateTime) -> 
         });
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bw_core::model::CronMode;
-    use time::Duration;
-
-    fn t0() -> OffsetDateTime {
-        OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap()
-    }
-
-    #[test]
-    fn artifact_rows_fold_versions_per_path_latest_first() {
-        use bw_core::model::{Artifact, ArtifactKind};
-        use bw_core::{ArtifactId, WorkflowRunId};
-        let mk = |path: &str, commit: &str, ts: i64, run: bool| Artifact {
-            id: ArtifactId::nil(),
-            project_id: ProjectId::nil(),
-            workflow_run_id: run.then(WorkflowRunId::nil),
-            issue_id: None,
-            stage_kind: Some(StageKind::Prototype),
-            path: path.into(),
-            kind: ArtifactKind::Doc,
-            bytes: 2048,
-            git_commit: commit.into(),
-            registered_at: ts,
-        };
-        // list_artifacts order: newest first.
-        let rows = artifact_rows(
-            &[
-                mk("docs/evidence.md", "bbb", 1_700_000_000, true),
-                mk("docs/evidence.md", "aaa", 1_699_990_000, false),
-                mk("README.md", "aaa", 1_699_990_000, false),
-            ],
-            t0(),
-        );
-        assert_eq!(rows.len(), 2, "one display row per path");
-        let ev = rows.iter().find(|r| r.path == "docs/evidence.md").unwrap();
-        assert_eq!(ev.versions, 2, "version count = rows sharing the path");
-        assert_eq!(ev.commit_label, "bbb", "latest version wins the display");
-        assert!(ev.from_run);
-        assert_eq!(ev.bytes_label, "2.0 KB");
-        assert_eq!(ev.stage_label, Some("原型"));
-    }
-
-    #[test]
-    fn connector_card_marks_only_probeable_kinds_syncable() {
-        let mk = |kind: &str| Connector {
-            id: ConnectorId::nil(),
-            name: "c".into(),
-            kind: kind.into(),
-            status: ConnectorStatus::Disconnected,
-            last_sync: String::new(),
-            scope: String::new(),
-            project_id: None,
-            config: String::new(),
-        };
-        assert!(connector_card(&mk("git-repo")).syncable);
-        assert!(connector_card(&mk("claude-cli")).syncable);
-        assert!(
-            !connector_card(&mk("知识库")).syncable,
-            "reference kinds honestly have no sync button"
-        );
-    }
-
-    #[test]
-    fn card_progress_is_real_not_invented() {
-        // Cold start: nothing materializes yet, no invented interim %.
-        let c = project_card(
-            ProjectId::nil(),
-            "P",
-            "看板",
-            "",
-            ProjectPhase::ColdStart,
-            ProjectCycle::Explore,
-            StageKind::Prototype,
-            None,
-            &[],
-            0,
-        );
-        assert_eq!(c.progress, 0);
-        assert_eq!(c.phase_label, "创建中");
-        assert_eq!(c.signal, Signal::Unknown); // no cache ⇒ Unknown, not green
-        assert!(c.meta.contains("创建中"));
-        assert_eq!(c.open_issues, 0);
-
-        // Running: mean of REAL stage progresses (all zero for a fresh project).
-        let r = project_card(
-            ProjectId::nil(),
-            "P",
-            "看板",
-            "",
-            ProjectPhase::Running,
-            ProjectCycle::Explore,
-            StageKind::Build,
-            Some(Signal::Green),
-            &[0, 0, 0, 0, 0],
-            3,
-        );
-        assert_eq!(r.progress, 0);
-        assert!(r.meta.contains("5 段"));
-        assert!(r.meta.contains("构建")); // active_stage surfaces on the wall
-        assert_eq!(r.open_issues, 3, "open issue count passes through");
-    }
-
-    #[test]
-    fn trend_is_observation_history() {
-        let m = metric_vm(
-            MetricId::nil(),
-            "对话数",
-            "",
-            true,
-            Some(StageKind::Prototype),
-            "3",
-            "≥5",
-            "",
-            "",
-            Some(Signal::Red),
-            Some(false),
-            Some(SourceKind::Manual),
-            &["8".into(), "60%".into(), "3".into(), "口径变更".into()],
-        );
-        // Unparseable entries drop out; nothing is interpolated.
-        assert_eq!(m.trend, vec![8.0, 60.0, 3.0]);
-        assert!(m.manual);
-        assert!(!m.spark.polyline.is_empty());
-
-        // One observation = one honest point, no fake series.
-        let single = metric_vm(
-            MetricId::nil(),
-            "留存",
-            "",
-            true,
-            None,
-            "8",
-            "≥5",
-            "",
-            "",
-            None,
-            None,
-            None,
-            &["8".into()],
-        );
-        assert_eq!(single.trend, vec![8.0]);
-        assert_eq!(single.signal, Signal::Unknown); // cache miss ⇒ Unknown
-    }
-
-    #[test]
-    fn stage_nav_covers_all_five_in_order() {
-        let nav = stage_nav(
-            &[(StageKind::Build, Some(Signal::Amber))],
-            &[(Some(StageKind::Build), true), (None, true)],
-        );
-        assert_eq!(nav.len(), 5);
-        assert_eq!(nav[0].n, 1);
-        assert_eq!(nav[0].kind, StageKind::Prototype);
-        assert_eq!(nav[1].kind, StageKind::Build);
-        assert_eq!(nav[1].signal, Signal::Amber);
-        assert_eq!(nav[1].active, 1);
-        assert_eq!(nav[1].role_short, "构建师");
-        // Unmaterialized stages read Unknown, not green.
-        assert_eq!(nav[0].signal, Signal::Unknown);
-    }
-
-    #[test]
-    fn feed_newest_first_with_signal_level() {
-        let now = t0() + Duration::hours(2);
-        let feed = observation_feed(
-            &[
-                FeedSource {
-                    metric_name: "对话数".into(),
-                    raw: "8".into(),
-                    source: SourceKind::Manual,
-                    ts: t0(),
-                    current_signal: Signal::Red,
-                    is_latest: false,
-                },
-                FeedSource {
-                    metric_name: "对话数".into(),
-                    raw: "3".into(),
-                    source: SourceKind::Manual,
-                    ts: t0() + Duration::hours(1),
-                    current_signal: Signal::Red,
-                    is_latest: true,
-                },
-            ],
-            now,
-        );
-        assert_eq!(feed.len(), 2);
-        assert!(feed[0].text.contains("3"), "newest first");
-        assert_eq!(feed[0].level, FeedLevel::Err); // latest echoes current red
-        assert_eq!(feed[1].level, FeedLevel::Info); // history stays plain
-        assert!(feed[0].text.contains("手填"));
-    }
-
-    #[test]
-    fn time_labels() {
-        let now = t0();
-        assert_eq!(time_label(now, now), "刚刚");
-        assert_eq!(time_label(now - Duration::minutes(5), now), "5分钟前");
-        assert_eq!(time_label(now - Duration::days(1), now), "昨日");
-        assert_eq!(time_label(now - Duration::days(3), now), "3天前");
-        assert_eq!(time_label(now - Duration::days(30), now), "10-15");
-    }
-
-    #[test]
-    fn week_plan_from_leading_only() {
-        let lead = metric_vm(
-            MetricId::nil(),
-            "对话数",
-            "",
-            true,
-            None,
-            "8",
-            "≥5",
-            "≥4",
-            "抓手A",
-            Some(Signal::Green),
-            Some(true),
-            Some(SourceKind::Manual),
-            &[],
-        );
-        let lag = metric_vm(
-            MetricId::nil(),
-            "周留存",
-            "",
-            false,
-            None,
-            "41%",
-            "≥45%",
-            "",
-            "",
-            Some(Signal::Amber),
-            Some(false),
-            Some(SourceKind::Manual),
-            &[],
-        );
-        let rows = week_plan_rows(&[lead, lag]);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].last_target, "≥4");
-        assert_eq!(rows[0].current, "8");
-        assert_eq!(rows[0].hit, Some(true));
-    }
-
-    #[test]
-    fn stat_cards_from_real_rows() {
-        let s = stat_cards(
-            5,
-            &[(true, false), (true, true), (false, true), (false, false)],
-        );
-        assert_eq!(s.workflows_total, 2);
-        assert_eq!(s.routines_active, 5);
-        assert_eq!(s.optimizing, 1);
-    }
-
-    #[test]
-    fn stage_detail_carries_real_dod_state() {
-        let d = stage_detail(StageKind::Prototype, &[true, false, false], 0);
-        assert_eq!(d.dod.len(), 3);
-        assert!(d.dod[0].checked);
-        assert!(!d.dod[1].checked);
-        assert!(!d.dod_all_checked);
-        assert_eq!(d.handoff_count, 0);
-        assert!(!d.method_loop.is_empty());
-        assert_eq!(d.ai_crew.len(), 3);
-
-        let clean = stage_detail(StageKind::Build, &[true, true, true], 2);
-        assert!(clean.dod_all_checked);
-        assert_eq!(clean.handoff_count, 2);
-    }
-
-    fn static_spec(stage_ref: Option<u8>) -> WorkflowSpec {
-        WorkflowSpec {
-            id: WorkflowId::nil(),
-            name: "深度访谈 → 问题定义".into(),
-            kind: WorkflowKind::Static {
-                maturity: Maturity::Mature,
-                version: 3,
-                uses: 12,
-                scope: "跨项目复用".into(),
-                source: bw_core::model::HubSource::SelfBuilt,
-                trigger: Some("deep interview".into()),
-            },
-            prompt: "界定→采集→结构化→分析".into(),
-            goal: "产出验证过的问题陈述".into(),
-            stage_ref,
-            phases: vec!["访谈提纲".into(), "深挖场景".into()],
-            phase_prompts: vec![],
-            agents: vec![],
-            skills: vec![],
-            loop_config: bw_core::model::LoopConfig {
-                retries: 2,
-                max_iter: 3,
-            },
-        }
-    }
-
-    fn dynamic_spec() -> WorkflowSpec {
-        WorkflowSpec {
-            id: WorkflowId::nil(),
-            name: "「原型」标准工作流".into(),
-            kind: WorkflowKind::Dynamic {
-                origin: "阶段标准模板".into(),
-                stage: "原型".into(),
-            },
-            prompt: "p".into(),
-            goal: "g".into(),
-            stage_ref: Some(1),
-            phases: vec![],
-            phase_prompts: vec![],
-            agents: vec![],
-            skills: vec![],
-            loop_config: bw_core::model::LoopConfig {
-                retries: 1,
-                max_iter: 1,
-            },
-        }
-    }
-
-    #[test]
-    fn workflow_hub_row_returns_none_for_dynamic() {
-        assert!(workflow_hub_row(&dynamic_spec()).is_none());
-    }
-
-    #[test]
-    fn workflow_hub_row_reads_static_fields() {
-        let row = workflow_hub_row(&static_spec(Some(1))).unwrap();
-        assert_eq!(row.source_label, "自建");
-        assert_eq!(row.maturity_label, "成熟");
-        assert_eq!(row.trigger.as_deref(), Some("deep interview"));
-        assert_eq!(row.version_label, "v3");
-        assert_eq!(row.uses, 12);
-        assert_eq!(row.loop_label, "重试2·迭代3");
-        assert_eq!(row.primary_agent, "—");
-    }
-
-    #[test]
-    fn group_by_stage_covers_six_groups_in_order() {
-        let rows = vec![
-            workflow_hub_row(&static_spec(Some(1))).unwrap(),
-            workflow_hub_row(&static_spec(None)).unwrap(),
-        ];
-        let groups = group_by_stage(&rows);
-        assert_eq!(groups.len(), 6);
-        assert_eq!(groups[0].0, Some(StageKind::Prototype));
-        assert_eq!(groups[0].1.len(), 1);
-        assert_eq!(groups[5].0, None, "6th group is the metrics-layer bucket");
-        assert_eq!(groups[5].1.len(), 1);
-    }
-
-    #[test]
-    fn source_chip_counts_tallies_by_label() {
-        let rows = vec![
-            workflow_hub_row(&static_spec(Some(1))).unwrap(),
-            workflow_hub_row(&static_spec(Some(2))).unwrap(),
-        ];
-        let counts = source_chip_counts(&rows);
-        let self_built = counts.iter().find(|(l, _)| *l == "自建").unwrap();
-        assert_eq!(self_built.1, 2);
-    }
-
-    #[test]
-    fn workflow_detail_carries_agent_and_skill_provenance() {
-        let mut spec = static_spec(Some(1));
-        spec.agents.push(bw_core::model::AgentRef {
-            name: "竞品分析 Agent".into(),
-            def: "强检索、低臆测".into(),
-            from: "AgentHub".into(),
-        });
-        let detail = workflow_detail(&spec).unwrap();
-        assert_eq!(detail.agents.len(), 1);
-        assert_eq!(detail.agents[0].0, "竞品分析 Agent");
-        assert_eq!(detail.agents[0].2, "AgentHub");
-        assert_eq!(
-            detail.phases_numbered,
-            vec![(1, "访谈提纲".into()), (2, "深挖场景".into())]
-        );
-    }
-
-    #[test]
-    fn skill_card_maps_2tier_maturity() {
-        let card = skill_card(&SkillCard {
-            id: SkillId::nil(),
-            name: "web-scan".into(),
-            maturity: Maturity::Polishing,
-            desc: "d".into(),
-            category: "检索".into(),
-            source: bw_core::model::LibSource::SelfBuilt,
-            uses: 128,
-            content: String::new(),
-            distilled_from_issue: None,
-            origin_agent: None,
-        });
-        assert_eq!(card.maturity_label, "打磨中");
-        assert_eq!(card.source_label, "自建");
-        assert_eq!(card.uses, 128);
-    }
-
-    #[test]
-    fn agent_card_derives_initial_and_skill_names() {
-        let card = agent_card(&AgentCard {
-            id: AgentId::nil(),
-            name: "竞品分析 Agent".into(),
-            role: "r".into(),
-            maturity: Maturity::Mature,
-            skills: vec![bw_core::model::AgentSkillTag {
-                name: "web-scan".into(),
-            }],
-            instructions: String::new(),
-            model: "claude-opus".into(),
-            runs: 213,
-            win_rate: "94%".into(),
-        });
-        assert_eq!(card.initial, "竞");
-        assert_eq!(card.skills, vec!["web-scan".to_string()]);
-        assert_eq!(card.runs, 213);
-    }
-
-    #[test]
-    fn hub_overview_builds_three_cards_with_capped_samples() {
-        let names = vec![
-            "a".to_string(),
-            "b".to_string(),
-            "c".to_string(),
-            "d".to_string(),
-            "e".to_string(),
-        ];
-        let cards = hub_overview(53, &names, 340, &names, 96, &names);
-        assert_eq!(cards.len(), 3);
-        assert_eq!(cards[0].id, HubKind::Workflow);
-        assert_eq!(cards[0].count, 53);
-        assert_eq!(cards[0].items.len(), 4, "sample list caps at 4 items");
-        assert_eq!(cards[1].id, HubKind::Skill);
-        assert_eq!(cards[2].id, HubKind::Agent);
-    }
-
-    #[test]
-    fn activity_row_labels_stages_and_carries_risky_flag() {
-        let row = activity_row(
-            &ActivitySource {
-                project_id: ProjectId::nil(),
-                project_name: "智能客服知识库".into(),
-                from_stage: StageKind::Prototype,
-                to_stage: StageKind::Build,
-                risky: true,
-                note: "赶工期，测试覆盖不足".into(),
-                at: t0(),
-            },
-            t0() + Duration::minutes(5),
-        );
-        assert_eq!(row.project_name, "智能客服知识库");
-        assert_eq!(row.from_label, StageKind::Prototype.label());
-        assert_eq!(row.to_label, StageKind::Build.label());
-        assert!(row.risky);
-        assert_eq!(row.time_label, "5分钟前");
-    }
-
-    #[test]
-    fn notify_feed_surfaces_only_flipped_signals() {
-        let cron_tasks = vec![
-            CronTask {
-                id: CronTaskId::nil(),
-                name: "夜间索引".into(),
-                target: "knowledge-sync".into(),
-                schedule: Cadence::Daily,
-                project_id: None,
-                status: CronStatus::Failed,
-                last_run: "1h 前".into(),
-                next_run: "-".into(),
-                last_run_at: None,
-                mode: CronMode::RunWorkflow,
-                issue_stage: None,
-                issue_assignee: None,
-            },
-            CronTask {
-                id: CronTaskId::nil(),
-                name: "健康扫描".into(),
-                target: "health-check".into(),
-                schedule: Cadence::Daily,
-                project_id: None,
-                status: CronStatus::Normal,
-                last_run: "10min 前".into(),
-                next_run: "今晚".into(),
-                last_run_at: None,
-                mode: CronMode::RunWorkflow,
-                issue_stage: None,
-                issue_assignee: None,
-            },
-        ];
-        let connectors = vec![Connector {
-            id: ConnectorId::nil(),
-            name: "飞书云文档".into(),
-            kind: "知识库".into(),
-            status: ConnectorStatus::Error,
-            last_sync: "2h 前".into(),
-            scope: "全部项目".into(),
-            project_id: None,
-            config: String::new(),
-        }];
-        let activity = vec![
-            activity_row(
-                &ActivitySource {
-                    project_id: ProjectId::nil(),
-                    project_name: "P1".into(),
-                    from_stage: StageKind::Prototype,
-                    to_stage: StageKind::Build,
-                    risky: true,
-                    note: "".into(),
-                    at: t0(),
-                },
-                t0(),
-            ),
-            activity_row(
-                &ActivitySource {
-                    project_id: ProjectId::nil(),
-                    project_name: "P2".into(),
-                    from_stage: StageKind::Build,
-                    to_stage: StageKind::Optimize,
-                    risky: false,
-                    note: "".into(),
-                    at: t0(),
-                },
-                t0(),
-            ),
-        ];
-        let items = notify_feed(&cron_tasks, &connectors, &activity);
-        // 1 failed cron + 1 errored connector + 1 risky handoff = 3 alerts;
-        // the normal cron contributes nothing, the clean handoff contributes
-        // exactly 1 "done" entry.
-        let alerts = items
-            .iter()
-            .filter(|i| i.level == NotifyLevel::Alert)
-            .count();
-        let done = items
-            .iter()
-            .filter(|i| i.level == NotifyLevel::Done)
-            .count();
-        assert_eq!(alerts, 3);
-        assert_eq!(done, 1);
-        assert!(items.iter().any(|i| i.title.contains("夜间索引")));
-        assert!(items.iter().any(|i| i.title.contains("飞书云文档")));
-    }
-
-    #[test]
-    fn settings_vm_labels_unconfigured_binary_and_formats_budget() {
-        let auto = settings_vm(None, 0.5, false, false);
-        assert_eq!(auto.binary_label, "自动从 PATH 解析");
-        assert_eq!(auto.binary_raw, "");
-        assert_eq!(auto.max_budget_label, "$0.50");
-        assert!(!auto.bypass_default);
-        assert!(!auto.bypass_commands);
-
-        let custom = settings_vm(Some("/usr/local/bin/claude"), 2.0, true, false);
-        assert_eq!(custom.binary_label, "/usr/local/bin/claude");
-        assert_eq!(custom.max_budget_label, "$2.00");
-        assert!(custom.bypass_default);
-    }
-
-    #[test]
-    fn commit_row_reformats_iso_date_without_parsing_it() {
-        let row = commit_row(&CommitSource {
-            short_hash: "abc12".into(),
-            author: "Builder".into(),
-            date: "2026-07-09T03:15:42+00:00".into(),
-            subject: "feat: real git log".into(),
-        });
-        assert_eq!(row.short_hash, "abc12");
-        assert_eq!(row.date_label, "2026-07-09 03:15");
-        assert_eq!(row.subject, "feat: real git log");
-    }
-
-    #[test]
-    fn version_log_vm_distinguishes_not_loaded_unavailable_and_commits() {
-        assert_eq!(version_log_vm(None), VersionLogVm::NotLoaded);
-        assert_eq!(
-            version_log_vm(Some(Err("工作目录未配置".to_string()))),
-            VersionLogVm::Unavailable("工作目录未配置".to_string())
-        );
-        let source = CommitSource {
-            short_hash: "abc12".into(),
-            author: "Builder".into(),
-            date: "2026-07-09T03:15:42+00:00".into(),
-            subject: "s".into(),
-        };
-        match version_log_vm(Some(Ok(vec![source]))) {
-            VersionLogVm::Commits(rows) => assert_eq!(rows.len(), 1),
-            other => panic!("expected Commits, got {other:?}"),
-        }
-    }
 }

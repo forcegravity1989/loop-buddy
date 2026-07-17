@@ -184,6 +184,11 @@ pub enum Command {
     /// Load the active project's registered artifacts into state (Artifact
     /// panel). Same explicit-load pattern as `LoadVersionLog`.
     LoadArtifacts,
+    /// P4: assemble one Issue's detail (its runs + each run's real file
+    /// changes + its artifacts) into state for the board overlay. Read-only.
+    OpenIssueDetail(IssueId),
+    /// P4: close the overlay (clears the assembled detail).
+    CloseIssueDetail,
     /// Re-scan the active project's workspace right now and register any new
     /// artifact versions (the manual counterpart to the automatic post-run
     /// scan). Requires a configured workspace.
@@ -576,6 +581,21 @@ pub struct AppState {
     /// Registered artifacts of the active project (Artifact panel) — same
     /// explicit-load, project-tagged pattern as `version_log`.
     pub artifacts: Option<(ProjectId, Vec<Artifact>)>,
+    /// P4: the explicitly-opened Issue detail (board overlay) — same
+    /// explicit-load pattern as `artifacts`. `None` = no overlay open.
+    pub issue_detail: Option<IssueDetailData>,
+}
+
+/// P4: everything the Issue-detail overlay shows, assembled read-only at
+/// `OpenIssueDetail` time. `changes` pairs each run with the files it really
+/// touched (`Err` = the honest reason a diff isn't available — mock run, or
+/// a run recorded before change-tracking existed).
+#[derive(Clone, Debug)]
+pub struct IssueDetailData {
+    pub issue: Issue,
+    pub runs: Vec<bw_core::model::WorkflowRun>,
+    pub changes: Vec<bw_core::model::RunChanges>,
+    pub artifacts: Vec<Artifact>,
 }
 
 impl Default for AppState {
@@ -598,6 +618,7 @@ impl Default for AppState {
             claude_config: ClaudeCliConfig::default(),
             version_log: None,
             artifacts: None,
+            issue_detail: None,
         }
     }
 }
@@ -757,6 +778,16 @@ impl App {
         // snapshots what the spec *was* at run time (phases/loop/agents/
         // skills) — so after a later "优化" changes the spec, history still
         // shows what each past run actually executed (iter 3 param capture).
+        // P4: capture the workspace HEAD before the engine touches anything —
+        // the "before" half of this run's recorded change window. Mock runs
+        // (no workspace) record nothing: no files were ever at stake.
+        let heads_workspace = proj.workspace_path.trim().to_string();
+        let head_before = if heads_workspace.is_empty() {
+            None
+        } else {
+            evidence::head_commit(&heads_workspace).await.ok().flatten()
+        };
+
         let started_at = OffsetDateTime::now_utc().unix_timestamp();
         let t0 = Instant::now();
         let params_json = run_params_snapshot(&spec, trigger);
@@ -883,6 +914,16 @@ impl App {
             }
         }
 
+        // P4: the "after" half of the change window — recorded on success AND
+        // failure alike (a failed run that still committed something must not
+        // hide it). Diffing happens lazily at detail-open time, never here.
+        if !heads_workspace.is_empty() {
+            let head_after = evidence::head_commit(&heads_workspace).await.ok().flatten();
+            self.store
+                .set_run_heads(run_log_id, head_before, head_after)
+                .await?;
+        }
+
         // Usage accounting: the run really happened, so the entities it rode
         // on get their real counters bumped — the agent that hosted it (ok
         // AND failed both count; win_rate needs the losses) and every skill
@@ -920,7 +961,11 @@ impl App {
                     &proj.workspace_path,
                     Some(run_log_id),
                     stage_kind,
-                    None,
+                    // A2 原设计:「RunIssue 落 run 时写入」issue 归属——此前
+                    // 误传 None,导致活的产物只绑 run 不绑 issue,Done 边沿
+                    // 的幂等重扫(同 commit)又补不回来。P4 证据面测试暴露
+                    // 了这个偏差,修复即对齐冻结设计。
+                    issue_id,
                 )
                 .await
             {
@@ -1831,6 +1876,55 @@ impl App {
                 let rows = self.store.list_artifacts(p).await?;
                 self.state.artifacts = Some((p, rows));
                 self.emit(Event::ArtifactsChanged);
+            }
+
+            // P4: assemble one Issue's evidence — its runs, what each run
+            // really changed (diff between the recorded HEAD pair), and its
+            // registered artifacts. Read-only; every number the overlay shows
+            // comes from the store / git, nothing synthesized here.
+            Command::OpenIssueDetail(id) => {
+                let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                let runs = self.store.list_runs_for_issue(id).await?;
+                let artifacts = self.store.list_artifacts_for_issue(id).await?;
+                let workspace = self
+                    .store
+                    .get_project(issue.project_id)
+                    .await?
+                    .map(|p| p.workspace_path.trim().to_string())
+                    .unwrap_or_default();
+                let mut changes = Vec::with_capacity(runs.len());
+                for r in &runs {
+                    let entry = match (&r.head_before, &r.head_after) {
+                        (Some(b), Some(a)) if !workspace.is_empty() => {
+                            if b == a {
+                                // A real run that committed nothing — an
+                                // honest empty list, not an error.
+                                Ok(Vec::new())
+                            } else {
+                                bw_engine::workspace::diff_numstat(&workspace, b, a)
+                                    .await
+                                    .map(|v| {
+                                        v.into_iter()
+                                            .map(|c| (c.path, c.added, c.deleted))
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .map_err(|e| format!("对比不可用:{e}"))
+                            }
+                        }
+                        _ => Err("无变更记录(演示模式运行,或早于变更追踪)".to_string()),
+                    };
+                    changes.push((r.id, entry));
+                }
+                self.state.issue_detail = Some(IssueDetailData {
+                    issue,
+                    runs,
+                    changes,
+                    artifacts,
+                });
+            }
+
+            Command::CloseIssueDetail => {
+                self.state.issue_detail = None;
             }
 
             Command::CollectArtifacts => {

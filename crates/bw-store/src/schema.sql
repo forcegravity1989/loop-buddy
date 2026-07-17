@@ -272,6 +272,11 @@ CREATE TABLE IF NOT EXISTS workflow_run (
     -- denormalized (no FK) so a run survives its issue being deleted — the
     -- linkage is the point, an orphaned run is still honest evidence.
     issue_id         TEXT,
+    -- P4: workspace HEAD at run start / settle (NULL = no real workspace).
+    -- The pair answers "这次运行改了什么" via git diff — recorded fact, not
+    -- recomputed later. Applied to old DBs by add_column_if_missing.
+    head_before      TEXT,
+    head_after       TEXT,
     created_at       INTEGER NOT NULL
 );
 -- iter 4: link a scheduled run back to the cron task that fired it (NULL for
