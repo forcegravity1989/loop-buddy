@@ -56,6 +56,8 @@ async fn main() {
         desc:
             "用 BW 自己的五角色环,把 multica「真实 agent 队友」融进 BW「五阶段方法论 + 度量派生」"
                 .into(),
+
+        workspace: None,
     })
     .await
     .unwrap();

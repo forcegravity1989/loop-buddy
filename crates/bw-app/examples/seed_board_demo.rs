@@ -86,6 +86,8 @@ async fn main() {
         name: name.into(),
         kind: "开发者工作台 · multica × BW".into(),
         desc: "完整形态:五角色环 × 真实 agent 队友 × 度量诚实".into(),
+
+        workspace: None,
     })
     .await
     .unwrap();

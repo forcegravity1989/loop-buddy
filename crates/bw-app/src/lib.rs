@@ -84,6 +84,10 @@ pub enum Command {
         name: String,
         kind: String,
         desc: String,
+        /// P1: optional pre-existing repo to bind (must contain `.git`). When
+        /// `None` and a workspaces root is configured, a fresh repo is minted
+        /// at creation. Bound repos are never rewritten by the workbench.
+        workspace: Option<String>,
     },
     /// Creation flow step 2 (快速问题 · 周期).
     SetCycle {
@@ -1584,6 +1588,7 @@ impl App {
                 name,
                 kind,
                 desc,
+                workspace,
             } => {
                 self.store
                     .create_project(NewProject {
@@ -1595,7 +1600,58 @@ impl App {
                     .await?;
                 self.state.active_project = Some(id);
                 self.state.view = View::Create;
+                // P1: 建项目即建仓 —— 出生那一刻仓就存在(而非走完创建流才有)。
+                // 绑定已有仓:只校验含 .git,绝不动原文件;新建仓在 workspaces_root
+                // 下 mint,失败沿用既有降级(项目以 Mock 模式活着,创建本身不破)。
+                let bound = workspace
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let proj = self
+                    .store
+                    .get_project(id)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                match bound {
+                    Some(path) => {
+                        if !std::path::Path::new(path).join(".git").exists() {
+                            return Err(AppError::Invalid(format!(
+                                "绑定的工作目录不是 git 仓库(无 .git):{path}"
+                            )));
+                        }
+                        self.store.set_workspace(id, path, true).await?;
+                    }
+                    None => {
+                        if let Some(root) = self.workspaces_root.clone() {
+                            match provision_workspace(&root, &proj).await {
+                                Ok(path) => {
+                                    self.store.set_workspace(id, &path, true).await?;
+                                    self.store
+                                        .create_connector(NewConnector {
+                                            id: ConnectorId::new(),
+                                            name: format!("{} · 代码仓", proj.name),
+                                            kind: CONNECTOR_KIND_GIT_REPO.into(),
+                                            scope: proj.name.clone(),
+                                            project_id: Some(id),
+                                            config: path.clone(),
+                                        })
+                                        .await?;
+                                }
+                                Err(e) => {
+                                    self.emit(Event::ConnectorSynced {
+                                        name: format!("{} · 代码仓", proj.name),
+                                        ok: false,
+                                        detail: format!("自动开仓失败,项目将以 Mock 模式运行:{e}"),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                // 章程开篇(仅 owned 仓写;bound 仓尊重「不动原文件」)。
+                let _ = write_charter(self, id, "开篇").await;
                 self.refresh_projects().await?;
+                self.refresh_connectors().await?;
                 self.emit(Event::ProjectsChanged);
                 self.emit(Event::ViewChanged(View::Create));
             }
@@ -1612,12 +1668,14 @@ impl App {
             } => {
                 let p = self.active()?;
                 self.store.set_brief(p, &benchmark, &opportunity).await?;
+                let _ = write_charter(self, p, "定位与机会").await;
                 self.emit(Event::ProjectUpdated(p));
             }
 
             Command::UpdateNorthStar { value, def } => {
                 let p = self.active()?;
                 self.store.set_north_star(p, &value, &def).await?;
+                let _ = write_charter(self, p, "北极星").await;
                 self.emit(Event::ProjectUpdated(p));
             }
 
@@ -1823,6 +1881,7 @@ impl App {
                     }
                 }
                 self.store.recompute_signals(p, now()).await?;
+                let _ = write_charter(self, p, "完成创建").await;
                 self.state.view = View::App;
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectUpdated(p));
@@ -2840,6 +2899,75 @@ async fn provision_workspace(root: &std::path::Path, proj: &ProjectRow) -> Resul
         .await
         .map_err(|e| e.to_string())?;
     Ok(dir.to_string_lossy().into_owned())
+}
+
+/// P1: the project's charter (`PROJECT.md`) — every line is a real creation-
+/// flow input, never invented. Empty fields show 「(待填)」 so an in-progress
+/// charter reads honestly rather than faking completeness.
+fn charter_md(proj: &ProjectRow) -> String {
+    const PENDING: &str = "(待填)";
+    let mut s = String::new();
+    s.push_str(&format!("# {}\n\n", proj.name));
+    let kind = proj.kind.trim();
+    if !kind.is_empty() {
+        s.push_str(&format!("**类型**:{kind}\n\n"));
+    }
+    let desc = proj.desc.trim();
+    if !desc.is_empty() {
+        s.push_str(&format!("{desc}\n\n"));
+    }
+    s.push_str("## 定位与机会\n\n");
+    let bench = proj.benchmark.trim();
+    let opp = proj.opportunity.trim();
+    s.push_str(&format!(
+        "- **对标**:{}\n",
+        if bench.is_empty() { PENDING } else { bench }
+    ));
+    s.push_str(&format!(
+        "- **机会**:{}\n\n",
+        if opp.is_empty() { PENDING } else { opp }
+    ));
+    s.push_str("## 北极星(三个月成功标准)\n\n");
+    let ns = proj.north_star.trim();
+    if ns.is_empty() {
+        s.push_str(&format!("{PENDING}\n\n"));
+    } else {
+        s.push_str(&format!("{ns}\n\n"));
+        let def = proj.ns_def.trim();
+        if !def.is_empty() {
+            s.push_str(&format!("> 定义:{def}\n\n"));
+        }
+    }
+    s.push_str("---\n\n> 本章程由 Builders' Workbench 在创建流程中逐步写就,每次更新留一次提交。\n");
+    s
+}
+
+/// P1: write the project's `PROJECT.md` charter into its OWNED workspace and
+/// commit it (`docs(bw): 项目章程 · <节>`)。Bound、pre-existing 仓永不写;
+/// 无工作区则 no-op。Best-effort —— 章程写失败不阻断创建流。
+async fn write_charter(app: &App, p: ProjectId, section: &str) -> Result<(), AppError> {
+    let proj = app
+        .store
+        .get_project(p)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let ws = proj.workspace_path.trim();
+    if ws.is_empty() {
+        return Ok(());
+    }
+    let dir = std::path::Path::new(ws);
+    if !bw_engine::workspace::is_owned_workspace(dir).await {
+        return Ok(());
+    }
+    bw_engine::workspace::commit_file(
+        dir,
+        "PROJECT.md",
+        &charter_md(&proj),
+        &format!("docs(bw): 项目章程 · {section}"),
+    )
+    .await
+    .map_err(|e| AppError::Engine(format!("写章程失败:{e}")))?;
+    Ok(())
 }
 
 /// Snapshot of the spec's shape at run time, serialized into the run's

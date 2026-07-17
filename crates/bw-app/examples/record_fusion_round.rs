@@ -69,6 +69,8 @@ async fn main() {
         desc: "把 multica 的 Issue/队友/复利并入九实体主线,焊上 Done 边沿记账,对齐为单一方案。\
                证据即本仓库 git 历史:c723480(合并)/ fc5bded(记账)/ plan/06(对齐)。"
             .into(),
+
+        workspace: None,
     })
     .await
     .unwrap();

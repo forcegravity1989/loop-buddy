@@ -85,6 +85,8 @@ async fn main() {
         name: "验证项目 A · 智能排班助手".into(),
         kind: "AI 助手 / 内部工具".into(),
         desc: "把人工排班的冲突检测自动化".into(),
+
+        workspace: None,
     })
     .await
     .unwrap();
@@ -151,6 +153,8 @@ async fn main() {
         name: "验证项目 B · 会议纪要归档".into(),
         kind: "内部工具".into(),
         desc: "会议结束自动生成结构化纪要并归档".into(),
+
+        workspace: None,
     })
     .await
     .unwrap();
@@ -746,6 +750,8 @@ async fn main() {
         name: "验证项目 C · 调度目标".into(),
         kind: "内部工具".into(),
         desc: String::new(),
+
+        workspace: None,
     })
     .await
     .unwrap();
