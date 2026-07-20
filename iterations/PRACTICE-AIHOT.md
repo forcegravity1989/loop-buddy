@@ -35,4 +35,38 @@
 
 ## 1. 假设 → 动作 → 结论(逐轮追加)
 
+### 0a. 模板能力真实落地 —— 确认
+`crates/bw-core/src/standards.rs` 四份标准文件(逐字段核对真实 schema,含
+`add_column_if_missing` 隐藏列)+ `write_component_standards`(项目出生写入
+`.claude/standards/*.md`)+ agent/skill/workflow_spec 三表加可空 `project_id`
+(既有 12 处构造点全部显式 `None`,行为不变;`DistillSkillFromIssue` 例外——
+蒸馏技能的 project_id 从源 Issue 真实派生)。commit `4adba65`。全部编译门禁绿。
+
+### 0b. superpowers 真实选型引入 —— 成功
+`claude plugin marketplace add obra/superpowers` → `claude plugin install
+superpowers@superpowers-dev`,真实装好(version 6.1.1, scope user)。真实技能名:
+brainstorming / writing-plans / executing-plans / test-driven-development /
+requesting-code-review / verification-before-completion 等,与用户描述的
+"头脑风暴→写计划→按计划实现→评审"完全对应。**撞到一堵真墙并顺手补上**:
+`HubSource` 枚举只有 Omc/Ecc/SelfBuilt/WithinSession 四值,没有"选型引入外部
+插件"的诚实选项——加了 `HubSource::Adopted`(JSON 序列化字段,无需表迁移)。
+
+### 0c. 真实开仓 + 组件注册 —— 成功,sqlite 读回
+`practice_aihot setup`(新 driver,`crates/bw-app/examples/practice_aihot.rs`)
+真实创建「aihot 日报」项目:本地开仓(`practice-aihot/workspaces/aihot-*`,
+8 个真实 git 提交)、章程 PROJECT.md 真实写入、四份标准文件真实写入、三条真实
+指标(引领×2 含 `工作区真实提交数`——复用 git-repo connector 现成的 Tier D
+本地采集,零自定义代码;结果×1)、一个项目自有 agent(日报编辑)、一条项目
+自有 skill(关键词关注面打分法)、一条项目自有 workflow(aihot 主 workflow,
+`source=adopted`,phase_prompts 显式点名调用 superpowers 的真实技能名)。
+sqlite 直查全部核对一致(见下方命令)。**幂等验证**:重跑 `setup`,project_id
+不变、git log 仍 8 commit——未重复造。
+```
+sqlite3 practice-aihot/bw-aihot.db "SELECT name, project_id FROM agent WHERE project_id IS NOT NULL;"
+# 日报编辑|b7971eca-99e0-421f-bf59-6a7f9e4b2331
+```
+**留白如实标注**:四份标准文件目前是 4 次独立 commit(每文件一次),不是合并
+1 次——`commit_file` 逐文件 add+commit 的既有实现如此,行为诚实但可以更省;
+本次不修,记在这里留给下一棒。
+
 （后续每完成一件事在下面追加一条,格式:`### N. 假设 —— 结论`）

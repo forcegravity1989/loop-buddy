@@ -502,6 +502,11 @@ pub enum HubSource {
     SelfBuilt,
     /// 会话内
     WithinSession,
+    /// 选型引入的外部 workflow 引擎/插件市场(如 superpowers)——不是本仓的
+    /// OMC/ECC 两个固定目录,也不是自建。真实来源名放调用方的 `scope` 字段或
+    /// 对应 `AgentRef`/`SkillRef.from`(2026-07-20 践行 aihot 时发现:此前只有
+    /// 四值,逼着"选型引入"要么误标 SelfBuilt 要么无值可选,如实补上)。
+    Adopted,
 }
 
 impl HubSource {
@@ -511,6 +516,7 @@ impl HubSource {
             HubSource::Ecc => "ECC",
             HubSource::SelfBuilt => "自建",
             HubSource::WithinSession => "会话内",
+            HubSource::Adopted => "选型引入",
         }
     }
 }
