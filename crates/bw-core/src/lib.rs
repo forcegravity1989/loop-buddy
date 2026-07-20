@@ -22,6 +22,7 @@ pub mod derive;
 pub mod ids;
 pub mod model;
 pub mod playbook;
+pub mod standards;
 
 pub use ids::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,

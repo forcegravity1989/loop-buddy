@@ -147,6 +147,11 @@ impl SqliteStore {
         // A5-F: issues opened before this column exist get no blocked reason
         // (NULL = never blocked under this scheme — honest for pre-A5 rows).
         add_column_if_missing(&pool, "issue", "blocked_reason", "TEXT").await?;
+        // 践行最小切片(2026-07-20,plan/09 墙 B):hub 三表加可空 project_id.
+        // NULL = 沿用既有全局/共享语义,老库/老行为一律不变。
+        add_column_if_missing(&pool, "workflow_spec", "project_id", "TEXT").await?;
+        add_column_if_missing(&pool, "skill", "project_id", "TEXT").await?;
+        add_column_if_missing(&pool, "agent", "project_id", "TEXT").await?;
 
         Ok(Self { pool })
     }
@@ -1006,8 +1011,8 @@ impl Store for SqliteStore {
         sqlx::query(
             "INSERT INTO workflow_spec
                 (id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts, agents_json,
-                 skills_json, loop_retries, loop_max_iter, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                 skills_json, loop_retries, loop_max_iter, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(w.id.uuid().to_string())
         .bind(&w.name)
@@ -1021,6 +1026,7 @@ impl Store for SqliteStore {
         .bind(serde_json::to_string(&w.skills)?)
         .bind(i64::from(w.loop_config.retries))
         .bind(i64::from(w.loop_config.max_iter))
+        .bind(w.project_id.map(pid))
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1528,8 +1534,8 @@ impl Store for SqliteStore {
     async fn create_skill(&self, s: NewSkill) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO skill (id, name, maturity, descr, category, source, uses, content, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0)",
+            "INSERT INTO skill (id, name, maturity, descr, category, source, uses, content, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
         )
         .bind(s.id.uuid().to_string())
         .bind(&s.name)
@@ -1538,6 +1544,7 @@ impl Store for SqliteStore {
         .bind(&s.category)
         .bind(lib_source_text(s.source))
         .bind(&s.content)
+        .bind(s.project_id.map(pid))
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1613,9 +1620,9 @@ impl Store for SqliteStore {
         sqlx::query(
             "INSERT INTO skill
                 (id, name, maturity, descr, category, source, uses, content,
-                 distilled_from_issue, origin_agent,
+                 distilled_from_issue, origin_agent, project_id,
                  created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 0)",
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(skill.id.uuid().to_string())
         .bind(&skill.name)
@@ -1626,6 +1633,9 @@ impl Store for SqliteStore {
         .bind(&skill.content)
         .bind(from_issue.uuid().to_string())
         .bind(origin_agent.uuid().to_string())
+        // 蒸馏出的技能归属本项目(plan/08 S1 完成标准):项目归属来自源
+        // Issue 的真实 project_id,不是调用方随手传的值——provenance,不是输入。
+        .bind(pid(issue.project_id))
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1636,8 +1646,8 @@ impl Store for SqliteStore {
     async fn create_agent(&self, a: NewAgent) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO agent (id, name, role, maturity, skills, model, runs, win_rate, instructions, wins, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, 0, ?, ?, 0)",
+            "INSERT INTO agent (id, name, role, maturity, skills, model, runs, win_rate, instructions, wins, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, 0, ?, ?, ?, 0)",
         )
         .bind(a.id.uuid().to_string())
         .bind(&a.name)
@@ -1646,6 +1656,7 @@ impl Store for SqliteStore {
         .bind(serde_json::to_string(&a.skills)?)
         .bind(&a.model)
         .bind(&a.instructions)
+        .bind(a.project_id.map(pid))
         .bind(t)
         .bind(t)
         .execute(&self.pool)

@@ -25,6 +25,8 @@
 
 **接棒顺序建议**:① S1 schema(三表加 `project_id TEXT` 可空,可空=NULL 共享目录;schema.sql + add_column_if_missing 双守卫;138 行注释改写)→ ② P2 按项目种角色/剧本/技能 + 指派/注入/运行查询收窄到本项目 → ③ S1 剩余(Hub 列全部 + 归属标签 + 名称过滤 + AdoptIntoProject 复制命令 + 记账 record_agent_run_by_name/skill uses/cron 本项目优先 + DistillSkillFromIssue 写 project_id)→ ④ 全链 E2E 读回。存量全局行保留为共享目录、不迁移不拆分。
 
+> **2026-07-20 转向(用户拍板)**:MVP 改为**实践版**——以真实项目「aihot 日报」从零到一真实践行,零 mock,见 **`plan/09-aihot-practice-run.md`(当前接棒入口)**。上表 S1+P2 全量**暂缓**;其中"三表加可空 project_id + 项目内查询收窄"这一最小切片并入 09 的墙 B,由践行需要拉动。本文其余(两条生命周期的定义、现状盘点)仍有效。
+
 ---
 
 ## 1. MVP 是什么(一句话 + 两条生命周期)

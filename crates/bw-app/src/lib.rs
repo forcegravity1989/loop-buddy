@@ -1650,6 +1650,10 @@ impl App {
                 }
                 // 章程开篇(仅 owned 仓写;bound 仓尊重「不动原文件」)。
                 let _ = write_charter(self, id, "开篇").await;
+                // 模板能力(用户 2026-07-20 拍板):四份组件标准文件写进仓里,
+                // 供人与 agent 之后在这个项目里创建 agent/skill/workflow/cron 时
+                // 对照(同一 owned-workspace 门槛,一次性,不随创建流逐步改写)。
+                let _ = write_component_standards(self, id).await;
                 self.refresh_projects().await?;
                 self.refresh_connectors().await?;
                 self.emit(Event::ProjectsChanged);
@@ -2147,6 +2151,10 @@ impl App {
                         agents,
                         skills,
                         loop_config,
+                        // 践行最小切片(2026-07-20):Command 层暂不带 project_id
+                        // 参数(那是 P2 全量的事,见 plan/08 §0)——Hub 创建口径
+                        // 不变,一律全局。
+                        project_id: None,
                     })
                     .await?;
                 self.refresh_workflow_specs().await?;
@@ -2357,6 +2365,7 @@ impl App {
                         category,
                         source,
                         content,
+                        project_id: None, // Hub 创建口径不变,一律全局
                     })
                     .await?;
                 self.refresh_skills().await?;
@@ -2384,6 +2393,10 @@ impl App {
                             category,
                             source: LibSource::SelfBuilt,
                             content,
+                            // 忽略:store::distill_skill_from_issue 改从源 Issue
+                            // 的真实 project_id 派生归属(provenance),不采用
+                            // 这里传入的值。
+                            project_id: None,
                         },
                         issue_id,
                     )
@@ -2437,6 +2450,7 @@ impl App {
                         skills,
                         model,
                         instructions,
+                        project_id: None, // Hub 创建口径不变,一律全局
                     })
                     .await?;
                 self.refresh_agents().await?;
@@ -2963,6 +2977,51 @@ async fn write_charter(app: &App, p: ProjectId, section: &str) -> Result<(), App
     )
     .await
     .map_err(|e| AppError::Engine(format!("写章程失败:{e}")))?;
+    Ok(())
+}
+
+/// 模板能力:写四份组件标准文件(`.claude/standards/*.md`)进项目的 owned 工作区。
+/// 内容是 [`bw_core::standards`] 里通用、versioned-in-code 的方法论文本(不含
+/// per-project 数据),所以只在出生那一刻写一次——不像章程随创建流逐步补内容,
+/// 这四份文件从第一天起就是完整的。Bound(绑定已有仓)项目不写,同 `write_charter`
+/// 的「不动原文件」纪律;无工作区则 no-op;best-effort,失败不阻断创建流。
+async fn write_component_standards(app: &App, p: ProjectId) -> Result<(), AppError> {
+    let proj = app.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+    let ws = proj.workspace_path.trim();
+    if ws.is_empty() {
+        return Ok(());
+    }
+    let dir = std::path::Path::new(ws);
+    if !bw_engine::workspace::is_owned_workspace(dir).await {
+        return Ok(());
+    }
+    for (rel_path, content) in [
+        (
+            ".claude/standards/agent-standards.md",
+            bw_core::standards::AGENT_STANDARDS_MD,
+        ),
+        (
+            ".claude/standards/skill-standards.md",
+            bw_core::standards::SKILL_STANDARDS_MD,
+        ),
+        (
+            ".claude/standards/workflow-standards.md",
+            bw_core::standards::WORKFLOW_STANDARDS_MD,
+        ),
+        (
+            ".claude/standards/cron-standards.md",
+            bw_core::standards::CRON_STANDARDS_MD,
+        ),
+    ] {
+        bw_engine::workspace::commit_file(
+            dir,
+            rel_path,
+            content,
+            "docs(bw): 模板能力 · 组件标准文件",
+        )
+        .await
+        .map_err(|e| AppError::Engine(format!("写标准文件失败({rel_path}):{e}")))?;
+    }
     Ok(())
 }
 

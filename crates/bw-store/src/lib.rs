@@ -140,6 +140,10 @@ pub struct NewWorkflowSpec {
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     pub loop_config: LoopConfig,
+    /// 践行最小切片(2026-07-20):`None` = hub library(全局,现有行为不变);
+    /// `Some` = 项目自有,只这一条项目自己看得见——查询收窄(P2 全量)不在本次范围,
+    /// 这里只落列 + 落值,读回走 sqlite 直查。
+    pub project_id: Option<ProjectId>,
 }
 
 /// The editable content of an existing **Static** hub workflow — the "优化"
@@ -171,6 +175,9 @@ pub struct NewSkill {
     pub source: LibSource,
     /// Executable body (may be empty for a catalog reference entry).
     pub content: String,
+    /// 践行最小切片(2026-07-20):`None` = hub library(全局);`Some` = 项目自有。
+    /// 见 [`NewWorkflowSpec::project_id`]。
+    pub project_id: Option<ProjectId>,
 }
 
 /// Editable content fields for an existing skill — `maturity`/`source`/
@@ -192,6 +199,9 @@ pub struct NewAgent {
     pub model: String,
     /// Standing instructions (may be empty for a catalog reference entry).
     pub instructions: String,
+    /// 践行最小切片(2026-07-20):`None` = hub library(全局);`Some` = 项目自有。
+    /// 见 [`NewWorkflowSpec::project_id`]。
+    pub project_id: Option<ProjectId>,
 }
 
 /// Editable content fields for an existing agent — `maturity`/`runs`/
