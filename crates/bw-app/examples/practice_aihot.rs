@@ -71,6 +71,12 @@ async fn main() {
     app.dispatch(Command::Boot).await.expect("boot");
 
     let project = find_or_create_project(&mut app).await;
+    // 每次 `cargo run` 都是全新进程——`active_project` 是内存态,不跨进程持久,
+    // `Boot` 只重载项目列表不恢复"上次开着哪个"。凡用到 `self.active()?` 的
+    // 命令(CreateIssue 等)都得显式先 OpenProject。
+    app.dispatch(Command::OpenProject(project))
+        .await
+        .expect("open project");
 
     match sub.as_str() {
         "setup" => cmd_setup(&mut app, &store, project).await,
@@ -81,6 +87,8 @@ async fn main() {
         "cron" => cmd_cron(&mut app, project).await,
         "distill" => cmd_distill(&mut app, project, &args[2..]).await,
         "sync" => cmd_sync(&mut app, &store, project).await,
+        "record-metric" => cmd_record_metric(&mut app, &store, project, &args[2..]).await,
+        "weekly-review" => cmd_weekly_review(&mut app, &args[2..]).await,
         "summary" => cmd_summary(&app, &store, project).await,
         other => {
             eprintln!("未知子命令:「{other}」");
@@ -567,6 +575,47 @@ async fn cmd_sync(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
     } else {
         println!("没有找到 aihot 的 git-repo connector");
     }
+}
+
+/// `record-metric <name> <value>` —— 人工按真实观察记一条 append-only 观测
+/// (METRIC_COMMITS 走 `sync` 自动喂,这个子命令给另外两条手填指标用)。
+async fn cmd_record_metric(
+    app: &mut App,
+    store: &Arc<dyn Store>,
+    project: ProjectId,
+    args: &[String],
+) {
+    let [name, value] = args else {
+        panic!("用法: record-metric <name> <value>");
+    };
+    let sigs = store.persisted_signals(project).await.unwrap();
+    let m = sigs
+        .metrics
+        .iter()
+        .find(|m| &m.name == name)
+        .unwrap_or_else(|| panic!("指标不存在:{name}"));
+    app.dispatch(Command::RecordObservation {
+        metric: m.id,
+        value: value.clone(),
+    })
+    .await
+    .expect("record observation");
+    println!("已记录「{name}」= {value}");
+}
+
+/// `weekly-review <reason>` —— 用当前真实派生信号周复盘(不手设,human_override
+/// 留 None;只并置事实,不编因果——是否正向,人看 reason 里的真实数据判断)。
+async fn cmd_weekly_review(app: &mut App, args: &[String]) {
+    let [reason] = args else {
+        panic!("用法: weekly-review <reason>");
+    };
+    app.dispatch(Command::AnnotateWeeklyReview {
+        human_override: None,
+        reason: reason.clone(),
+    })
+    .await
+    .expect("annotate weekly review");
+    println!("周复盘已记录(派生信号,未手设)");
 }
 
 /// `summary` —— 真实读回汇总。每个数字都能独立用 sqlite3 核对。
