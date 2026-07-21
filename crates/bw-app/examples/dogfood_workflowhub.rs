@@ -105,6 +105,7 @@ async fn round_dynamic(
             retries: 1,
             max_iter: 1,
         },
+        project_id: None,
     };
     app.dispatch(Command::RunWorkflow { session, spec })
         .await

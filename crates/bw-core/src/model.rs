@@ -580,6 +580,10 @@ pub struct WorkflowSpec {
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     pub loop_config: LoopConfig,
+    /// `None` = 全局/共享(built-in 阶段模板、Hub 目录条目);`Some` = 这个
+    /// 项目自建的 workflow(plan/10 K1 项目侧边栏按这个字段过滤)。
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
 }
 
 /// Outcome of one workflow execution — the data a later "should this workflow
@@ -825,6 +829,7 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
             retries: 1,
             max_iter: 3,
         },
+        project_id: None,
     }
 }
 
@@ -907,6 +912,7 @@ pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
             retries: 1,
             max_iter: 3,
         },
+        project_id: None,
     }
 }
 
@@ -939,6 +945,7 @@ pub fn drafting_workflow() -> WorkflowSpec {
             retries: 1,
             max_iter: 1,
         },
+        project_id: None,
     }
 }
 
@@ -993,6 +1000,10 @@ pub struct SkillCard {
     /// `None` iff `distilled_from_issue` is `None`.
     #[serde(default)]
     pub origin_agent: Option<AgentId>,
+    /// `None` = 全局/共享;`Some` = 这个项目自建(或从其项目 Issue 蒸馏)的
+    /// 技能(plan/10 K1 项目侧边栏按这个字段过滤)。
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1020,6 +1031,10 @@ pub struct AgentCard {
     /// role gets told, `{var}` slots filled per project at run time.
     #[serde(default)]
     pub instructions: String,
+    /// `None` = 全局/共享(五角色内置 agent);`Some` = 这个项目自建的
+    /// 专精 agent(plan/10 K1 项目侧边栏按这个字段过滤)。
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
 }
 
 // ─────────────────────────── cron / connector / knowledge hub ───────────────────────────

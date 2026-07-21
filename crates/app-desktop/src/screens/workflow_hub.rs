@@ -832,6 +832,9 @@ fn AdHocWorkflowForm(
                 retries: 1,
                 max_iter: 1,
             },
+            // 临时任务不进 Hub 库(见下方 UI 文案),这个字段对持久化查询没有
+            // 意义——但它确实是为 `target` 这个项目跑的,如实标注。
+            project_id: Some(target),
         };
         let session = SessionId::new();
         k.send(Command::OpenProject(target));

@@ -1037,7 +1037,7 @@ impl Store for SqliteStore {
     async fn list_workflow_specs(&self) -> Result<Vec<WorkflowSpec>> {
         let rows = sqlx::query(
             "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts,
-                    agents_json, skills_json, loop_retries, loop_max_iter
+                    agents_json, skills_json, loop_retries, loop_max_iter, project_id
              FROM workflow_spec ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -1048,7 +1048,7 @@ impl Store for SqliteStore {
     async fn get_workflow_spec(&self, id: WorkflowId) -> Result<Option<WorkflowSpec>> {
         let row = sqlx::query(
             "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts,
-                    agents_json, skills_json, loop_retries, loop_max_iter
+                    agents_json, skills_json, loop_retries, loop_max_iter, project_id
              FROM workflow_spec WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -1570,7 +1570,7 @@ impl Store for SqliteStore {
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
             "SELECT id, name, maturity, descr, category, source, uses, content,
-                    distilled_from_issue, origin_agent
+                    distilled_from_issue, origin_agent, project_id
              FROM skill ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -1581,7 +1581,7 @@ impl Store for SqliteStore {
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>> {
         let row = sqlx::query(
             "SELECT id, name, maturity, descr, category, source, uses, content,
-                    distilled_from_issue, origin_agent
+                    distilled_from_issue, origin_agent, project_id
              FROM skill WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -1682,7 +1682,7 @@ impl Store for SqliteStore {
 
     async fn list_agents(&self) -> Result<Vec<AgentCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions FROM agent ORDER BY created_at",
+            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions, project_id FROM agent ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1691,7 +1691,7 @@ impl Store for SqliteStore {
 
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>> {
         let row = sqlx::query(
-            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions FROM agent WHERE id=?",
+            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions, project_id FROM agent WHERE id=?",
         )
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
@@ -2121,6 +2121,15 @@ fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
     })
 }
 
+/// Nullable `project_id TEXT` column → `Option<ProjectId>`. Same shape as
+/// `cron_task_row`/`connector_row`'s existing parsing — `NULL`/empty = global.
+fn opt_project_id(r: &sqlx::sqlite::SqliteRow) -> Result<Option<ProjectId>> {
+    r.get::<Option<String>, _>("project_id")
+        .filter(|s| !s.is_empty())
+        .map(|s| parse_uuid(&s, ProjectId::from_uuid))
+        .transpose()
+}
+
 fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
     let id = parse_uuid(&r.get::<String, _>("id"), WorkflowId::from_uuid)?;
     let kind: WorkflowKind = serde_json::from_str(&r.get::<String, _>("kind_json"))?;
@@ -2129,6 +2138,7 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
         serde_json::from_str(&r.get::<String, _>("phase_prompts")).unwrap_or_default();
     let agents: Vec<AgentRef> = serde_json::from_str(&r.get::<String, _>("agents_json"))?;
     let skills: Vec<SkillRef> = serde_json::from_str(&r.get::<String, _>("skills_json"))?;
+    let project_id = opt_project_id(&r)?;
     Ok(WorkflowSpec {
         id,
         name: r.get("name"),
@@ -2144,6 +2154,7 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
             retries: r.get::<i64, _>("loop_retries") as u8,
             max_iter: r.get::<i64, _>("loop_max_iter") as u8,
         },
+        project_id,
     })
 }
 
@@ -2159,6 +2170,7 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         .filter(|s| !s.is_empty())
         .map(|s| parse_uuid(&s, AgentId::from_uuid))
         .transpose()?;
+    let project_id = opt_project_id(&r)?;
     Ok(SkillCard {
         id,
         name: r.get("name"),
@@ -2170,12 +2182,14 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         content: r.get("content"),
         distilled_from_issue,
         origin_agent,
+        project_id,
     })
 }
 
 fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
     let id = parse_uuid(&r.get::<String, _>("id"), AgentId::from_uuid)?;
     let skills: Vec<String> = serde_json::from_str(&r.get::<String, _>("skills"))?;
+    let project_id = opt_project_id(&r)?;
     Ok(AgentCard {
         id,
         name: r.get("name"),
@@ -2189,6 +2203,7 @@ fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
         runs: r.get::<i64, _>("runs") as u32,
         win_rate: r.get("win_rate"),
         instructions: r.get("instructions"),
+        project_id,
     })
 }
 
