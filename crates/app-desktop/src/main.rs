@@ -19,12 +19,14 @@ use kernel::{RunVm, UiNote, Vm};
 use screens::activity_hub::ActivityHub;
 use screens::agent_hub::AgentHub;
 use screens::chrome::{BootFrame, FatalFrame, Hub, IconRail, Toast};
+use screens::component_detail::{ComponentDetail, ComponentSel};
 use screens::connector_hub::ConnectorHub;
 use screens::create::Create;
 use screens::cron_hub::CronHub;
 use screens::knowledge_hub::KnowledgeHub;
 use screens::notify_hub::NotifyHub;
 use screens::op::Op;
+use screens::project_rail::ProjectRail;
 use screens::settings_hub::SettingsHub;
 use screens::skill_hub::SkillHub;
 use screens::wall::Wall;
@@ -57,7 +59,57 @@ fn GlobalChrome() -> Element {
 fn Root() -> Element {
     let kernel = use_context_provider(kernel::spawn);
     let mut vm = use_signal(Vm::default);
-    let mut hub = use_signal(|| Hub::Workspace);
+    // BW_HUB=skill|agent|workflow|cron|connector|knowledge|activity|notify|settings
+    // deep-links straight to a rail Hub screen — same verification discipline
+    // as BW_OPEN/BW_PANEL (CLAUDE.md), extended because those two only reach
+    // per-project panels; the marketplace Hub screens are rail-click-only and
+    // were otherwise unreachable without computer-use.
+    let initial_hub = std::env::var("BW_HUB")
+        .ok()
+        .and_then(|v| match v.as_str() {
+            "skill" => Some(Hub::Skill),
+            "agent" => Some(Hub::Agent),
+            "workflow" => Some(Hub::Workflow),
+            "cron" => Some(Hub::Cron),
+            "connector" => Some(Hub::Connector),
+            "knowledge" => Some(Hub::Knowledge),
+            "activity" => Some(Hub::Activity),
+            "notify" => Some(Hub::Notify),
+            "settings" => Some(Hub::Settings),
+            _ => None,
+        })
+        .unwrap_or(Hub::Workspace);
+    if let Ok(v) = std::env::var("BW_HUB") {
+        eprintln!("[BW_HUB] {v:?} -> {initial_hub:?}");
+    }
+    let mut hub = use_signal(|| initial_hub);
+    // L1(plan/11): the project rail's open component detail, `None` when
+    // closed. Cleared whenever the icon rail navigates to a marketplace hub
+    // (visiting the full catalog and viewing one project's own component
+    // detail are two different intents — one shouldn't leave the other
+    // stuck open underneath it).
+    // BW_SEL=skill:<uuid>|agent:<uuid>|workflow:<uuid>|cron:<uuid>|connector:<uuid>
+    // deep-links straight into a `ComponentDetail` — same verification
+    // discipline as BW_HUB, extended because a rail click's resulting `sel`
+    // state is pure client state with no store trace to read back.
+    let initial_sel = std::env::var("BW_SEL").ok().and_then(|v| {
+        let (kind, id_str) = v.split_once(':')?;
+        let uuid = uuid::Uuid::parse_str(id_str).ok()?;
+        match kind {
+            "skill" => Some(ComponentSel::Skill(bw_core::SkillId::from_uuid(uuid))),
+            "agent" => Some(ComponentSel::Agent(bw_core::AgentId::from_uuid(uuid))),
+            "workflow" => Some(ComponentSel::Workflow(bw_core::WorkflowId::from_uuid(uuid))),
+            "cron" => Some(ComponentSel::Cron(bw_core::CronTaskId::from_uuid(uuid))),
+            "connector" => Some(ComponentSel::Connector(bw_core::ConnectorId::from_uuid(
+                uuid,
+            ))),
+            _ => None,
+        }
+    });
+    if let Ok(v) = std::env::var("BW_SEL") {
+        eprintln!("[BW_SEL] {v:?} -> {initial_sel:?}");
+    }
+    let mut sel = use_signal(move || initial_sel);
     let mut creating = use_signal(|| false);
     let mut toast = use_signal(|| None::<String>);
     let mut run = use_signal(RunVm::default);
@@ -204,7 +256,25 @@ fn Root() -> Element {
         GlobalChrome {}
         div {
             style: "display:flex;height:100vh;background:{paper};color:{ink};font-family:{sans};font-size:14px;overflow:hidden;",
-            IconRail { hub: hub(), on_pick: move |h| hub.set(h) }
+            IconRail {
+                hub: hub(),
+                on_pick: move |h| {
+                    hub.set(h);
+                    sel.set(None);
+                },
+            }
+            if v.view == View::App {
+                if let Some(op) = v.op.clone() {
+                    ProjectRail {
+                        project_id: op.id,
+                        hub: v.hub.clone(),
+                        on_pick: move |s: ComponentSel| {
+                            sel.set(Some(s));
+                            hub.set(Hub::Workspace);
+                        },
+                    }
+                }
+            }
             div {
                 style: "flex:1;min-width:0;height:100vh;overflow-y:auto;",
                 if !v.ready {
@@ -218,9 +288,9 @@ fn Root() -> Element {
                         on_run: move |_| hub.set(Hub::Workspace),
                     }
                 } else if hub() == Hub::Skill {
-                    SkillHub { hub: v.hub.clone() }
+                    SkillHub { hub: v.hub.clone(), projects: v.projects.clone() }
                 } else if hub() == Hub::Agent {
-                    AgentHub { hub: v.hub.clone() }
+                    AgentHub { hub: v.hub.clone(), projects: v.projects.clone() }
                 } else if hub() == Hub::Cron {
                     CronHub {
                         hub: v.hub.clone(),
@@ -237,6 +307,14 @@ fn Root() -> Element {
                     NotifyHub { hub: v.hub.clone() }
                 } else if hub() == Hub::Settings {
                     SettingsHub { settings: v.settings.clone() }
+                } else if hub() == Hub::Workspace && sel().is_some() {
+                    ComponentDetail {
+                        sel: sel().unwrap(),
+                        hub: v.hub.clone(),
+                        projects: v.projects.clone(),
+                        cron_effectiveness: v.cron_effectiveness.clone(),
+                        on_close: move |_| sel.set(None),
+                    }
                 } else if show_create {
                     Create {
                         vm: v.create.clone(),

@@ -140,6 +140,10 @@ pub struct NewWorkflowSpec {
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     pub loop_config: LoopConfig,
+    /// 践行最小切片(2026-07-20):`None` = hub library(全局,现有行为不变);
+    /// `Some` = 项目自有,只这一条项目自己看得见——查询收窄(P2 全量)不在本次范围,
+    /// 这里只落列 + 落值,读回走 sqlite 直查。
+    pub project_id: Option<ProjectId>,
 }
 
 /// The editable content of an existing **Static** hub workflow — the "优化"
@@ -171,6 +175,9 @@ pub struct NewSkill {
     pub source: LibSource,
     /// Executable body (may be empty for a catalog reference entry).
     pub content: String,
+    /// 践行最小切片(2026-07-20):`None` = hub library(全局);`Some` = 项目自有。
+    /// 见 [`NewWorkflowSpec::project_id`]。
+    pub project_id: Option<ProjectId>,
 }
 
 /// Editable content fields for an existing skill — `maturity`/`source`/
@@ -192,6 +199,9 @@ pub struct NewAgent {
     pub model: String,
     /// Standing instructions (may be empty for a catalog reference entry).
     pub instructions: String,
+    /// 践行最小切片(2026-07-20):`None` = hub library(全局);`Some` = 项目自有。
+    /// 见 [`NewWorkflowSpec::project_id`]。
+    pub project_id: Option<ProjectId>,
 }
 
 /// Editable content fields for an existing agent — `maturity`/`runs`/
@@ -291,6 +301,8 @@ pub struct ProjectRow {
     /// Cached derived signal (read-only; recompute is authoritative).
     pub signal: Option<Signal>,
     pub weekly_signal: Option<Signal>,
+    /// Unix seconds — the project's birth moment (P5: 90-day countdown).
+    pub created_at: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -524,6 +536,15 @@ pub trait Store: Send + Sync {
     /// sets it. Feeds `list_runs_for_issue` ("which runs did this issue
     /// produce?").
     async fn set_run_issue(&self, run_id: WorkflowRunId, issue_id: IssueId) -> Result<()>;
+    /// P4: record the workspace HEAD pair (run start / settle) captured by the
+    /// app around a real-workspace run — the recorded fact behind an Issue
+    /// detail's "这次运行改了什么". Mock runs never call this (both stay NULL).
+    async fn set_run_heads(
+        &self,
+        run_id: WorkflowRunId,
+        head_before: Option<String>,
+        head_after: Option<String>,
+    ) -> Result<()>;
     /// Settle a run's terminal state exactly once: `status`, real
     /// `finished_at`/`duration_ms`, `phases_completed`, and `error`. No-op-safe
     /// if the row already settled (idempotent re-runs of the dogfood).
@@ -656,6 +677,15 @@ pub trait Store: Send + Sync {
     /// Stamp the FIRST settle time (COALESCE — later calls keep the original).
     /// The app's Done-edge accounting fires iff this was previously NULL.
     async fn mark_issue_settled(&self, id: IssueId, at: i64) -> Result<()>;
+    /// A5-F: the only way an issue reaches `Blocked` — sets status and reason
+    /// together in one write. Legality (which source states may block) and
+    /// the non-empty-reason rule are the App layer's job; the store just
+    /// persists what it's told.
+    async fn block_issue(&self, id: IssueId, reason: &str) -> Result<()>;
+    /// A5-H: count of non-terminal (`!is_terminal()`) issues in a project —
+    /// the project wall's "open work" badge. Same predicate as the A4 handoff
+    /// risky-guard, so the two numbers never disagree.
+    async fn count_open_issues(&self, project_id: ProjectId) -> Result<i64>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────

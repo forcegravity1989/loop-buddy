@@ -135,15 +135,22 @@ CREATE TABLE IF NOT EXISTS handoff (
 );
 CREATE INDEX IF NOT EXISTS idx_handoff_project_ts ON handoff(project_id, created_at DESC);
 
--- ═══════════════════════ hub library (global, no project_id) ═══════════════════════
--- Workflow/Skill/Agent hub tables are the FIRST global (non-project-scoped)
--- tables in this schema — a deliberate architectural first, not a retrofit:
--- a hub entry is a catalog/library item that exists independent of any
--- project and gets *imported into* one, not owned by one.
+-- ═══════════════════════ hub library (global by default) ═══════════════════════
+-- Workflow/Skill/Agent hub tables were originally global-only (no project_id) —
+-- a deliberate architectural first: a hub entry is a catalog/library item that
+-- exists independent of any project. 2026-07-20 践行最小切片(plan/09 墙 B)
+-- added a nullable `project_id`: NULL keeps the original global/shared
+-- semantics byte-for-byte; non-NULL marks a project-owned row. Query-side
+-- scoping (指派下拉/技能注入/剧本选择只看本项目) is deliberately NOT part of
+-- this slice — that's plan/08 的 P2,一次性做够,不留半破的收窄。
 
 CREATE TABLE IF NOT EXISTS workflow_spec (
     id             TEXT PRIMARY KEY,
     name           TEXT NOT NULL,
+    -- 践行最小切片(2026-07-20,见 plan/09 墙 B):NULL = hub library(全局,现有
+    -- 行为不变);非 NULL = 项目自有。查询收窄到 project_id 是 P2 全量的事,
+    -- 这里只落列+落值,不改任何现有查询口径。
+    project_id     TEXT REFERENCES project(id),
     kind_json      TEXT NOT NULL,             -- JSON-serialized WorkflowKind (Static|Dynamic)
     prompt         TEXT NOT NULL DEFAULT '',
     goal           TEXT NOT NULL DEFAULT '',
@@ -164,6 +171,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_spec_stage ON workflow_spec(stage_ref);
 CREATE TABLE IF NOT EXISTS skill (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
+    -- 践行最小切片(2026-07-20):NULL = hub library(全局);非 NULL = 项目自有。
+    project_id  TEXT REFERENCES project(id),
     maturity    TEXT NOT NULL DEFAULT 'fresh',
     descr       TEXT NOT NULL DEFAULT '',
     category    TEXT NOT NULL DEFAULT '',
@@ -181,6 +190,8 @@ CREATE TABLE IF NOT EXISTS skill (
 CREATE TABLE IF NOT EXISTS agent (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
+    -- 践行最小切片(2026-07-20):NULL = hub library(全局);非 NULL = 项目自有。
+    project_id  TEXT REFERENCES project(id),
     role        TEXT NOT NULL DEFAULT '',
     maturity    TEXT NOT NULL DEFAULT 'fresh',
     skills      TEXT NOT NULL DEFAULT '[]',   -- JSON [String] tag names
@@ -272,6 +283,11 @@ CREATE TABLE IF NOT EXISTS workflow_run (
     -- denormalized (no FK) so a run survives its issue being deleted — the
     -- linkage is the point, an orphaned run is still honest evidence.
     issue_id         TEXT,
+    -- P4: workspace HEAD at run start / settle (NULL = no real workspace).
+    -- The pair answers "这次运行改了什么" via git diff — recorded fact, not
+    -- recomputed later. Applied to old DBs by add_column_if_missing.
+    head_before      TEXT,
+    head_after       TEXT,
     created_at       INTEGER NOT NULL
 );
 -- iter 4: link a scheduled run back to the cron task that fired it (NULL for
@@ -354,6 +370,9 @@ CREATE TABLE IF NOT EXISTS issue (
     -- fired). NULL = never settled. A reopened-and-redone issue does NOT
     -- settle twice — one work item, one credit.
     settled_at  INTEGER,
+    -- A5-F: non-empty only while status='blocked'; set exclusively via the
+    -- BlockIssue command, cleared on every other transition.
+    blocked_reason TEXT,
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );

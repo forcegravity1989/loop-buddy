@@ -52,6 +52,11 @@ pub struct Vm {
     pub hub: HubVm,
     /// The real, editable `ClaudeCliConfig` (Settings hub) — also global.
     pub settings: SettingsVm,
+    /// L1(plan/11): last-loaded cron task's real fire history — lives at the
+    /// top level (not `OpVm`) because the component-detail overlay that
+    /// shows it is rendered outside any one project's `Op` tree, same as
+    /// `hub`. `None` until `Command::LoadCronEffectiveness` runs for a task.
+    pub cron_effectiveness: Option<(bw_core::CronTaskId, ui::vm::CronEffectivenessVm)>,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -128,6 +133,7 @@ pub struct ChatVm {
 
 #[derive(Clone, PartialEq)]
 pub struct OpVm {
+    pub id: bw_core::ProjectId,
     pub name: String,
     pub kind: String,
     pub project_signal: Signal,
@@ -166,6 +172,11 @@ pub struct OpVm {
     /// `Command::LoadArtifacts` ran for this project; `Some(vec![])` is a
     /// really-empty registry, a different honest state.
     pub artifacts: Option<Vec<ui::vm::ArtifactRowVm>>,
+    /// P4: the Issue-detail overlay, `None` = closed. Opened per-issue by
+    /// `Command::OpenIssueDetail`, cleared by `Command::CloseIssueDetail`.
+    pub issue_detail: Option<ui::vm::IssueDetailVm>,
+    /// P5: weekly-review card (top of the progress panel).
+    pub week_review: ui::vm::WeekReviewVm,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -537,6 +548,10 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         } else {
             Vec::new()
         };
+        // A5-H: the wall's "open work" badge — same non-terminal predicate as
+        // the A4 handoff risky-guard. Recomputed on every `build_vm` call
+        // (i.e. after every dispatched command), so it's never stale.
+        let open_issues = store.count_open_issues(p.id).await.unwrap_or(0) as usize;
         cards.push(project_card(
             p.id,
             &p.name,
@@ -547,6 +562,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             p.active_stage,
             p.signal,
             &stage_progresses,
+            open_issues,
         ));
     }
 
@@ -554,10 +570,19 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // involved), so it's ready even before the `active_project` early-return
     // below and reachable from the standalone Hub screens (rail-routed, not
     // tied to `active_project` at all).
+    // W1: fold each spec's real run record (aggregated off `workflow_run`)
+    // into its hub row — a cold workflow keeps the honest "暂无运行".
+    let usage_ranking = store.hub_usage_ranking().await.unwrap_or_default();
     let workflows: Vec<WorkflowHubRowVm> = state
         .workflow_specs
         .iter()
-        .filter_map(workflow_hub_row)
+        .filter_map(|spec| {
+            let mut row = workflow_hub_row(spec)?;
+            if let Some(rank) = usage_ranking.iter().find(|r| r.workflow_id == spec.id) {
+                ui::vm::attach_run_record(&mut row, rank);
+            }
+            Some(row)
+        })
         .collect();
     let workflow_details: Vec<ui::vm::WorkflowDetailVm> = state
         .workflow_specs
@@ -625,6 +650,13 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         state.claude_config.commands_mode == PermissionMode::BypassPermissions,
     );
 
+    // L1(plan/11): pre-format the last-loaded cron task's fire history, if
+    // any — same explicit single-slot pattern as `version_log`/`artifacts`.
+    let cron_effectiveness = state
+        .cron_effectiveness
+        .as_ref()
+        .map(|(id, e)| (*id, ui::vm::cron_effectiveness_vm(e)));
+
     let mut vm = Vm {
         ready: true,
         fatal: None,
@@ -634,6 +666,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         op: None,
         hub: hub.clone(),
         settings,
+        cron_effectiveness,
     };
 
     let Some(pid) = state.active_project else {
@@ -860,7 +893,36 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             .collect::<Vec<_>>(),
     );
 
+    // P5: weekly-review card — a pure read of already-recorded facts. Counts
+    // come off `state.issues` + the per-metric latest-observation-ts map built
+    // above; the date math (ISO week, 90-day line) lives in the VM.
+    let now_unix = now.unix_timestamp();
+    let week_start = ui::vm::iso_week_start_unix(now_unix);
+    let week_review = ui::vm::week_review_vm(
+        now_unix,
+        row.created_at,
+        state
+            .issues
+            .iter()
+            .filter(|i| i.settled_at.map_or(false, |t| t >= week_start))
+            .count() as u32,
+        state
+            .issues
+            .iter()
+            .filter(|i| !i.status.is_terminal())
+            .count() as u32,
+        sigs.metrics
+            .iter()
+            .filter(|m| {
+                latest_ts
+                    .get(&m.id)
+                    .map_or(true, |t| t.unix_timestamp() < week_start)
+            })
+            .count() as u32,
+    );
+
     vm.op = Some(OpVm {
+        id: pid,
         name: row.name.clone(),
         kind: row.kind.clone(),
         project_signal: ui::vm::resolved(sigs.project),
@@ -893,6 +955,12 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         hub,
         version_log,
         artifacts,
+        // P4: the explicitly-opened Issue detail — assembled by
+        // `Command::OpenIssueDetail`, mapped 1:1 here, `None` = no overlay.
+        issue_detail: state.issue_detail.as_ref().map(|d| {
+            ui::vm::issue_detail_vm(&d.issue, &d.runs, &d.changes, &d.artifacts, &state.agents)
+        }),
+        week_review,
     });
     vm
 }

@@ -84,6 +84,10 @@ pub enum Command {
         name: String,
         kind: String,
         desc: String,
+        /// P1: optional pre-existing repo to bind (must contain `.git`). When
+        /// `None` and a workspaces root is configured, a fresh repo is minted
+        /// at creation. Bound repos are never rewritten by the workbench.
+        workspace: Option<String>,
     },
     /// Creation flow step 2 (快速问题 · 周期).
     SetCycle {
@@ -184,6 +188,15 @@ pub enum Command {
     /// Load the active project's registered artifacts into state (Artifact
     /// panel). Same explicit-load pattern as `LoadVersionLog`.
     LoadArtifacts,
+    /// L1(plan/11): load one cron task's real fire history
+    /// (`Store::cron_effectiveness` — always existed, never had a caller).
+    /// Same explicit-load pattern as `LoadArtifacts`.
+    LoadCronEffectiveness(CronTaskId),
+    /// P4: assemble one Issue's detail (its runs + each run's real file
+    /// changes + its artifacts) into state for the board overlay. Read-only.
+    OpenIssueDetail(IssueId),
+    /// P4: close the overlay (clears the assembled detail).
+    CloseIssueDetail,
     /// Re-scan the active project's workspace right now and register any new
     /// artifact versions (the manual counterpart to the automatic post-run
     /// scan). Requires a configured workspace.
@@ -403,6 +416,13 @@ pub enum Command {
         id: IssueId,
         assignee: Option<AgentId>,
     },
+    /// A5-F: the only path into `Blocked` — `reason` must be non-empty.
+    /// `TransitionIssue { status: Blocked }` is rejected; this is how a stuck
+    /// issue leaves a record of *why*, not just *that*.
+    BlockIssue {
+        id: IssueId,
+        reason: String,
+    },
     /// Reload the active project's issues from the store (mirrors
     /// `RefreshHubs` for the hub library, but project-scoped).
     RefreshIssues,
@@ -492,6 +512,8 @@ pub enum Event {
     },
     /// The `AppState.artifacts` snapshot was (re)loaded.
     ArtifactsChanged,
+    /// L1(plan/11): the `AppState.cron_effectiveness` snapshot was (re)loaded.
+    CronEffectivenessChanged,
     /// The self-driving optimization cycle (iter 18) just ran. Carries the
     /// full report — scanned workflows, proposals generated, what was
     /// auto-applied (safe/positive), and what was deferred to a human. A
@@ -569,6 +591,24 @@ pub struct AppState {
     /// Registered artifacts of the active project (Artifact panel) — same
     /// explicit-load, project-tagged pattern as `version_log`.
     pub artifacts: Option<(ProjectId, Vec<Artifact>)>,
+    /// L1(plan/11): last-loaded cron task's real fire history — same single-
+    /// slot, task-tagged explicit-load pattern as `artifacts`/`version_log`.
+    pub cron_effectiveness: Option<(CronTaskId, bw_core::model::CronEffectiveness)>,
+    /// P4: the explicitly-opened Issue detail (board overlay) — same
+    /// explicit-load pattern as `artifacts`. `None` = no overlay open.
+    pub issue_detail: Option<IssueDetailData>,
+}
+
+/// P4: everything the Issue-detail overlay shows, assembled read-only at
+/// `OpenIssueDetail` time. `changes` pairs each run with the files it really
+/// touched (`Err` = the honest reason a diff isn't available — mock run, or
+/// a run recorded before change-tracking existed).
+#[derive(Clone, Debug)]
+pub struct IssueDetailData {
+    pub issue: Issue,
+    pub runs: Vec<bw_core::model::WorkflowRun>,
+    pub changes: Vec<bw_core::model::RunChanges>,
+    pub artifacts: Vec<Artifact>,
 }
 
 impl Default for AppState {
@@ -591,6 +631,8 @@ impl Default for AppState {
             claude_config: ClaudeCliConfig::default(),
             version_log: None,
             artifacts: None,
+            cron_effectiveness: None,
+            issue_detail: None,
         }
     }
 }
@@ -750,6 +792,16 @@ impl App {
         // snapshots what the spec *was* at run time (phases/loop/agents/
         // skills) — so after a later "优化" changes the spec, history still
         // shows what each past run actually executed (iter 3 param capture).
+        // P4: capture the workspace HEAD before the engine touches anything —
+        // the "before" half of this run's recorded change window. Mock runs
+        // (no workspace) record nothing: no files were ever at stake.
+        let heads_workspace = proj.workspace_path.trim().to_string();
+        let head_before = if heads_workspace.is_empty() {
+            None
+        } else {
+            evidence::head_commit(&heads_workspace).await.ok().flatten()
+        };
+
         let started_at = OffsetDateTime::now_utc().unix_timestamp();
         let t0 = Instant::now();
         let params_json = run_params_snapshot(&spec, trigger);
@@ -876,6 +928,16 @@ impl App {
             }
         }
 
+        // P4: the "after" half of the change window — recorded on success AND
+        // failure alike (a failed run that still committed something must not
+        // hide it). Diffing happens lazily at detail-open time, never here.
+        if !heads_workspace.is_empty() {
+            let head_after = evidence::head_commit(&heads_workspace).await.ok().flatten();
+            self.store
+                .set_run_heads(run_log_id, head_before, head_after)
+                .await?;
+        }
+
         // Usage accounting: the run really happened, so the entities it rode
         // on get their real counters bumped — the agent that hosted it (ok
         // AND failed both count; win_rate needs the losses) and every skill
@@ -913,7 +975,11 @@ impl App {
                     &proj.workspace_path,
                     Some(run_log_id),
                     stage_kind,
-                    None,
+                    // A2 原设计:「RunIssue 落 run 时写入」issue 归属——此前
+                    // 误传 None,导致活的产物只绑 run 不绑 issue,Done 边沿
+                    // 的幂等重扫(同 commit)又补不回来。P4 证据面测试暴露
+                    // 了这个偏差,修复即对齐冻结设计。
+                    issue_id,
                 )
                 .await
             {
@@ -1532,6 +1598,7 @@ impl App {
                 name,
                 kind,
                 desc,
+                workspace,
             } => {
                 self.store
                     .create_project(NewProject {
@@ -1543,7 +1610,62 @@ impl App {
                     .await?;
                 self.state.active_project = Some(id);
                 self.state.view = View::Create;
+                // P1: 建项目即建仓 —— 出生那一刻仓就存在(而非走完创建流才有)。
+                // 绑定已有仓:只校验含 .git,绝不动原文件;新建仓在 workspaces_root
+                // 下 mint,失败沿用既有降级(项目以 Mock 模式活着,创建本身不破)。
+                let bound = workspace
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let proj = self
+                    .store
+                    .get_project(id)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                match bound {
+                    Some(path) => {
+                        if !std::path::Path::new(path).join(".git").exists() {
+                            return Err(AppError::Invalid(format!(
+                                "绑定的工作目录不是 git 仓库(无 .git):{path}"
+                            )));
+                        }
+                        self.store.set_workspace(id, path, true).await?;
+                    }
+                    None => {
+                        if let Some(root) = self.workspaces_root.clone() {
+                            match provision_workspace(&root, &proj).await {
+                                Ok(path) => {
+                                    self.store.set_workspace(id, &path, true).await?;
+                                    self.store
+                                        .create_connector(NewConnector {
+                                            id: ConnectorId::new(),
+                                            name: format!("{} · 代码仓", proj.name),
+                                            kind: CONNECTOR_KIND_GIT_REPO.into(),
+                                            scope: proj.name.clone(),
+                                            project_id: Some(id),
+                                            config: path.clone(),
+                                        })
+                                        .await?;
+                                }
+                                Err(e) => {
+                                    self.emit(Event::ConnectorSynced {
+                                        name: format!("{} · 代码仓", proj.name),
+                                        ok: false,
+                                        detail: format!("自动开仓失败,项目将以 Mock 模式运行:{e}"),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                // 章程开篇(仅 owned 仓写;bound 仓尊重「不动原文件」)。
+                let _ = write_charter(self, id, "开篇").await;
+                // 模板能力(用户 2026-07-20 拍板):四份组件标准文件写进仓里,
+                // 供人与 agent 之后在这个项目里创建 agent/skill/workflow/cron 时
+                // 对照(同一 owned-workspace 门槛,一次性,不随创建流逐步改写)。
+                let _ = write_component_standards(self, id).await;
                 self.refresh_projects().await?;
+                self.refresh_connectors().await?;
                 self.emit(Event::ProjectsChanged);
                 self.emit(Event::ViewChanged(View::Create));
             }
@@ -1560,12 +1682,14 @@ impl App {
             } => {
                 let p = self.active()?;
                 self.store.set_brief(p, &benchmark, &opportunity).await?;
+                let _ = write_charter(self, p, "定位与机会").await;
                 self.emit(Event::ProjectUpdated(p));
             }
 
             Command::UpdateNorthStar { value, def } => {
                 let p = self.active()?;
                 self.store.set_north_star(p, &value, &def).await?;
+                let _ = write_charter(self, p, "北极星").await;
                 self.emit(Event::ProjectUpdated(p));
             }
 
@@ -1771,6 +1895,7 @@ impl App {
                     }
                 }
                 self.store.recompute_signals(p, now()).await?;
+                let _ = write_charter(self, p, "完成创建").await;
                 self.state.view = View::App;
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectUpdated(p));
@@ -1824,6 +1949,64 @@ impl App {
                 let rows = self.store.list_artifacts(p).await?;
                 self.state.artifacts = Some((p, rows));
                 self.emit(Event::ArtifactsChanged);
+            }
+
+            // L1(plan/11): a real backend function (`cron_effectiveness`)
+            // that has existed since the cron-run-attribution work landed but
+            // never had a caller — this is that caller.
+            Command::LoadCronEffectiveness(id) => {
+                let e = self.store.cron_effectiveness(id).await?;
+                self.state.cron_effectiveness = Some((id, e));
+                self.emit(Event::CronEffectivenessChanged);
+            }
+
+            // P4: assemble one Issue's evidence — its runs, what each run
+            // really changed (diff between the recorded HEAD pair), and its
+            // registered artifacts. Read-only; every number the overlay shows
+            // comes from the store / git, nothing synthesized here.
+            Command::OpenIssueDetail(id) => {
+                let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                let runs = self.store.list_runs_for_issue(id).await?;
+                let artifacts = self.store.list_artifacts_for_issue(id).await?;
+                let workspace = self
+                    .store
+                    .get_project(issue.project_id)
+                    .await?
+                    .map(|p| p.workspace_path.trim().to_string())
+                    .unwrap_or_default();
+                let mut changes = Vec::with_capacity(runs.len());
+                for r in &runs {
+                    let entry = match (&r.head_before, &r.head_after) {
+                        (Some(b), Some(a)) if !workspace.is_empty() => {
+                            if b == a {
+                                // A real run that committed nothing — an
+                                // honest empty list, not an error.
+                                Ok(Vec::new())
+                            } else {
+                                bw_engine::workspace::diff_numstat(&workspace, b, a)
+                                    .await
+                                    .map(|v| {
+                                        v.into_iter()
+                                            .map(|c| (c.path, c.added, c.deleted))
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .map_err(|e| format!("对比不可用:{e}"))
+                            }
+                        }
+                        _ => Err("无变更记录(演示模式运行,或早于变更追踪)".to_string()),
+                    };
+                    changes.push((r.id, entry));
+                }
+                self.state.issue_detail = Some(IssueDetailData {
+                    issue,
+                    runs,
+                    changes,
+                    artifacts,
+                });
+            }
+
+            Command::CloseIssueDetail => {
+                self.state.issue_detail = None;
             }
 
             Command::CollectArtifacts => {
@@ -1987,6 +2170,10 @@ impl App {
                         agents,
                         skills,
                         loop_config,
+                        // 践行最小切片(2026-07-20):Command 层暂不带 project_id
+                        // 参数(那是 P2 全量的事,见 plan/08 §0)——Hub 创建口径
+                        // 不变,一律全局。
+                        project_id: None,
                     })
                     .await?;
                 self.refresh_workflow_specs().await?;
@@ -2035,6 +2222,20 @@ impl App {
 
             Command::RunIssue { session, id } => {
                 let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                // A5-F: only work not yet settled/parked/under-review/blocked
+                // can be (re)started this way. InProgress is a legal starting
+                // point too — it's the retry path after an honest failure
+                // (the issue stays InProgress on error, never faked forward).
+                if !matches!(
+                    issue.status,
+                    IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
+                ) {
+                    return Err(AppError::Invalid(format!(
+                        "#{} 处于{},不能直接运行",
+                        issue.number,
+                        issue.status.label()
+                    )));
+                }
                 let p = issue.project_id;
                 let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
 
@@ -2089,12 +2290,17 @@ impl App {
                 // generic injection is skipped (playbook spec has phase_prompts).
                 spec.skills.extend(distilled_refs);
 
-                // Start: commit to the work (Backlog/Todo → InProgress).
-                self.store
-                    .transition_issue(id, IssueStatus::InProgress)
-                    .await?;
-                self.refresh_issues().await?;
-                self.emit(Event::IssuesChanged);
+                // Start: commit to the work (Backlog/Todo → InProgress). A
+                // retry (issue already InProgress from a prior failed run)
+                // skips this — X→X is not a legal table edge, and there's
+                // nothing to change anyway.
+                if issue.status != IssueStatus::InProgress {
+                    self.store
+                        .transition_issue(id, IssueStatus::InProgress)
+                        .await?;
+                    self.refresh_issues().await?;
+                    self.emit(Event::IssuesChanged);
+                }
 
                 // Run through the same path as any run, bound to this issue.
                 let run = self
@@ -2178,6 +2384,7 @@ impl App {
                         category,
                         source,
                         content,
+                        project_id: None, // Hub 创建口径不变,一律全局
                     })
                     .await?;
                 self.refresh_skills().await?;
@@ -2205,6 +2412,10 @@ impl App {
                             category,
                             source: LibSource::SelfBuilt,
                             content,
+                            // 忽略:store::distill_skill_from_issue 改从源 Issue
+                            // 的真实 project_id 派生归属(provenance),不采用
+                            // 这里传入的值。
+                            project_id: None,
                         },
                         issue_id,
                     )
@@ -2258,6 +2469,7 @@ impl App {
                         skills,
                         model,
                         instructions,
+                        project_id: None, // Hub 创建口径不变,一律全局
                     })
                     .await?;
                 self.refresh_agents().await?;
@@ -2436,13 +2648,37 @@ impl App {
                 // it, a Done → reopen → Done bounce (reachable through this
                 // public command even though the desktop only offers forward
                 // moves) would credit the same work twice.
-                let prev = self.store.get_issue(id).await?;
+                let prev = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                // A5-F: `Blocked` has its own entry point (`BlockIssue`) that
+                // forces a reason — bare `TransitionIssue` never reaches it,
+                // even though the edge is graph-legal (`can_transition_to`
+                // says so); this command-level rule sits on top of the table.
+                if status == IssueStatus::Blocked {
+                    return Err(AppError::Invalid(format!(
+                        "#{} 转 Blocked 需要阻塞原因;请使用 BlockIssue 命令",
+                        prev.number
+                    )));
+                }
+                // A re-dispatch of the SAME status (e.g. a duplicated Done
+                // command) is a harmless re-affirmation, not a transition —
+                // `can_transition_to` has no self-loops by design, so it's
+                // checked only for a genuine state change. The settle-once
+                // guard below (keyed on `prev.status != Done`) already makes
+                // this safe: re-affirming Done fires no accounting twice.
+                if status != prev.status && !prev.status.can_transition_to(status) {
+                    return Err(AppError::Invalid(format!(
+                        "非法转移:#{} {}→{}",
+                        prev.number,
+                        prev.status.label(),
+                        status.label()
+                    )));
+                }
                 self.store.transition_issue(id, status).await?;
                 let newly_done = status == IssueStatus::Done
-                    && prev
-                        .as_ref()
-                        .is_some_and(|i| i.status != IssueStatus::Done && i.settled_at.is_none());
-                if let (true, Some(issue)) = (newly_done, prev) {
+                    && prev.status != IssueStatus::Done
+                    && prev.settled_at.is_none();
+                if newly_done {
+                    let issue = prev;
                     self.store
                         .mark_issue_settled(id, now().unix_timestamp())
                         .await?;
@@ -2498,6 +2734,27 @@ impl App {
 
             Command::AssignIssue { id, assignee } => {
                 self.store.assign_issue(id, assignee).await?;
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+            }
+
+            Command::BlockIssue { id, reason } => {
+                let reason = reason.trim().to_string();
+                if reason.is_empty() {
+                    return Err(AppError::Invalid("转 Blocked 必须给出阻塞原因".into()));
+                }
+                let prev = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                // Same table as TransitionIssue queries — Blocked is only
+                // reachable from Todo/InProgress/InReview (`can_transition_to`
+                // is the single source of truth for both entry points).
+                if !prev.status.can_transition_to(IssueStatus::Blocked) {
+                    return Err(AppError::Invalid(format!(
+                        "非法转移:#{} {}→阻塞",
+                        prev.number,
+                        prev.status.label()
+                    )));
+                }
+                self.store.block_issue(id, &reason).await?;
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
             }
@@ -2675,6 +2932,116 @@ async fn provision_workspace(root: &std::path::Path, proj: &ProjectRow) -> Resul
         .await
         .map_err(|e| e.to_string())?;
     Ok(dir.to_string_lossy().into_owned())
+}
+
+/// P1: the project's charter (`PROJECT.md`) — every line is a real creation-
+/// flow input, never invented. Empty fields show 「(待填)」 so an in-progress
+/// charter reads honestly rather than faking completeness.
+fn charter_md(proj: &ProjectRow) -> String {
+    const PENDING: &str = "(待填)";
+    let mut s = String::new();
+    s.push_str(&format!("# {}\n\n", proj.name));
+    let kind = proj.kind.trim();
+    if !kind.is_empty() {
+        s.push_str(&format!("**类型**:{kind}\n\n"));
+    }
+    let desc = proj.desc.trim();
+    if !desc.is_empty() {
+        s.push_str(&format!("{desc}\n\n"));
+    }
+    s.push_str("## 定位与机会\n\n");
+    let bench = proj.benchmark.trim();
+    let opp = proj.opportunity.trim();
+    s.push_str(&format!(
+        "- **对标**:{}\n",
+        if bench.is_empty() { PENDING } else { bench }
+    ));
+    s.push_str(&format!(
+        "- **机会**:{}\n\n",
+        if opp.is_empty() { PENDING } else { opp }
+    ));
+    s.push_str("## 北极星(三个月成功标准)\n\n");
+    let ns = proj.north_star.trim();
+    if ns.is_empty() {
+        s.push_str(&format!("{PENDING}\n\n"));
+    } else {
+        s.push_str(&format!("{ns}\n\n"));
+        let def = proj.ns_def.trim();
+        if !def.is_empty() {
+            s.push_str(&format!("> 定义:{def}\n\n"));
+        }
+    }
+    s.push_str("---\n\n> 本章程由 Builders' Workbench 在创建流程中逐步写就,每次更新留一次提交。\n");
+    s
+}
+
+/// P1: write the project's `PROJECT.md` charter into its OWNED workspace and
+/// commit it (`docs(bw): 项目章程 · <节>`)。Bound、pre-existing 仓永不写;
+/// 无工作区则 no-op。Best-effort —— 章程写失败不阻断创建流。
+async fn write_charter(app: &App, p: ProjectId, section: &str) -> Result<(), AppError> {
+    let proj = app.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+    let ws = proj.workspace_path.trim();
+    if ws.is_empty() {
+        return Ok(());
+    }
+    let dir = std::path::Path::new(ws);
+    if !bw_engine::workspace::is_owned_workspace(dir).await {
+        return Ok(());
+    }
+    bw_engine::workspace::commit_file(
+        dir,
+        "PROJECT.md",
+        &charter_md(&proj),
+        &format!("docs(bw): 项目章程 · {section}"),
+    )
+    .await
+    .map_err(|e| AppError::Engine(format!("写章程失败:{e}")))?;
+    Ok(())
+}
+
+/// 模板能力:写四份组件标准文件(`.claude/standards/*.md`)进项目的 owned 工作区。
+/// 内容是 [`bw_core::standards`] 里通用、versioned-in-code 的方法论文本(不含
+/// per-project 数据),所以只在出生那一刻写一次——不像章程随创建流逐步补内容,
+/// 这四份文件从第一天起就是完整的。Bound(绑定已有仓)项目不写,同 `write_charter`
+/// 的「不动原文件」纪律;无工作区则 no-op;best-effort,失败不阻断创建流。
+async fn write_component_standards(app: &App, p: ProjectId) -> Result<(), AppError> {
+    let proj = app.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+    let ws = proj.workspace_path.trim();
+    if ws.is_empty() {
+        return Ok(());
+    }
+    let dir = std::path::Path::new(ws);
+    if !bw_engine::workspace::is_owned_workspace(dir).await {
+        return Ok(());
+    }
+    for (rel_path, content) in [
+        (
+            ".claude/standards/agent-standards.md",
+            bw_core::standards::AGENT_STANDARDS_MD,
+        ),
+        (
+            ".claude/standards/skill-standards.md",
+            bw_core::standards::SKILL_STANDARDS_MD,
+        ),
+        (
+            ".claude/standards/workflow-standards.md",
+            bw_core::standards::WORKFLOW_STANDARDS_MD,
+        ),
+        (
+            ".claude/standards/cron-standards.md",
+            bw_core::standards::CRON_STANDARDS_MD,
+        ),
+    ] {
+        bw_engine::workspace::commit_file(
+            dir,
+            rel_path,
+            content,
+            "docs(bw): 模板能力 · 组件标准文件",
+        )
+        .await
+        .map_err(|e| AppError::Engine(format!("写标准文件失败({rel_path}):{e}")))?;
+    }
+    Ok(())
 }
 
 /// Snapshot of the spec's shape at run time, serialized into the run's

@@ -99,6 +99,10 @@ impl SqliteStore {
         // DBs (pre-iter-4) opened before this column existed get it added here;
         // manual-run rows simply stay NULL.
         add_column_if_missing(&pool, "workflow_run", "cron_task_id", "TEXT").await?;
+        // P4: workspace HEAD at run start/settle — feeds the Issue detail's
+        // "这次运行改了什么" diff. Mock runs (no workspace) stay NULL.
+        add_column_if_missing(&pool, "workflow_run", "head_before", "TEXT").await?;
+        add_column_if_missing(&pool, "workflow_run", "head_after", "TEXT").await?;
         // Playbook upgrade: per-phase real instructions. Old DBs get the
         // column with `'[]'` — every existing workflow keeps its shared-prompt
         // behavior byte-for-byte.
@@ -140,6 +144,14 @@ impl SqliteStore {
         // for pre-A2 rows); fresh DBs also define them inline in CREATE TABLE.
         add_column_if_missing(&pool, "workflow_run", "issue_id", "TEXT").await?;
         add_column_if_missing(&pool, "artifact", "issue_id", "TEXT").await?;
+        // A5-F: issues opened before this column exist get no blocked reason
+        // (NULL = never blocked under this scheme — honest for pre-A5 rows).
+        add_column_if_missing(&pool, "issue", "blocked_reason", "TEXT").await?;
+        // 践行最小切片(2026-07-20,plan/09 墙 B):hub 三表加可空 project_id.
+        // NULL = 沿用既有全局/共享语义,老库/老行为一律不变。
+        add_column_if_missing(&pool, "workflow_spec", "project_id", "TEXT").await?;
+        add_column_if_missing(&pool, "skill", "project_id", "TEXT").await?;
+        add_column_if_missing(&pool, "agent", "project_id", "TEXT").await?;
 
         Ok(Self { pool })
     }
@@ -758,7 +770,7 @@ impl Store for SqliteStore {
 
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>> {
         let row = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal, created_at
              FROM project WHERE id=?",
         )
         .bind(pid(id))
@@ -769,7 +781,7 @@ impl Store for SqliteStore {
 
     async fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal, created_at
              FROM project ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -999,8 +1011,8 @@ impl Store for SqliteStore {
         sqlx::query(
             "INSERT INTO workflow_spec
                 (id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts, agents_json,
-                 skills_json, loop_retries, loop_max_iter, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                 skills_json, loop_retries, loop_max_iter, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(w.id.uuid().to_string())
         .bind(&w.name)
@@ -1014,6 +1026,7 @@ impl Store for SqliteStore {
         .bind(serde_json::to_string(&w.skills)?)
         .bind(i64::from(w.loop_config.retries))
         .bind(i64::from(w.loop_config.max_iter))
+        .bind(w.project_id.map(pid))
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1024,7 +1037,7 @@ impl Store for SqliteStore {
     async fn list_workflow_specs(&self) -> Result<Vec<WorkflowSpec>> {
         let rows = sqlx::query(
             "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts,
-                    agents_json, skills_json, loop_retries, loop_max_iter
+                    agents_json, skills_json, loop_retries, loop_max_iter, project_id
              FROM workflow_spec ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -1035,7 +1048,7 @@ impl Store for SqliteStore {
     async fn get_workflow_spec(&self, id: WorkflowId) -> Result<Option<WorkflowSpec>> {
         let row = sqlx::query(
             "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts,
-                    agents_json, skills_json, loop_retries, loop_max_iter
+                    agents_json, skills_json, loop_retries, loop_max_iter, project_id
              FROM workflow_spec WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -1136,6 +1149,21 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn set_run_heads(
+        &self,
+        run_id: WorkflowRunId,
+        head_before: Option<String>,
+        head_after: Option<String>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE workflow_run SET head_before=?, head_after=? WHERE id=?")
+            .bind(head_before)
+            .bind(head_after)
+            .bind(run_id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn settle_workflow_run(
         &self,
         id: WorkflowRunId,
@@ -1179,7 +1207,7 @@ impl Store for SqliteStore {
     async fn list_workflow_runs(&self, workflow_id: WorkflowId) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id, head_before, head_after
              FROM workflow_run WHERE workflow_id=? ORDER BY started_at DESC, rowid DESC",
         )
         .bind(workflow_id.uuid().to_string())
@@ -1191,7 +1219,7 @@ impl Store for SqliteStore {
     async fn list_all_workflow_runs(&self, limit: u32) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id, head_before, head_after
              FROM workflow_run ORDER BY started_at DESC, rowid DESC LIMIT ?",
         )
         .bind(limit as i64)
@@ -1506,8 +1534,8 @@ impl Store for SqliteStore {
     async fn create_skill(&self, s: NewSkill) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO skill (id, name, maturity, descr, category, source, uses, content, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0)",
+            "INSERT INTO skill (id, name, maturity, descr, category, source, uses, content, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
         )
         .bind(s.id.uuid().to_string())
         .bind(&s.name)
@@ -1516,6 +1544,7 @@ impl Store for SqliteStore {
         .bind(&s.category)
         .bind(lib_source_text(s.source))
         .bind(&s.content)
+        .bind(s.project_id.map(pid))
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1541,7 +1570,7 @@ impl Store for SqliteStore {
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
             "SELECT id, name, maturity, descr, category, source, uses, content,
-                    distilled_from_issue, origin_agent
+                    distilled_from_issue, origin_agent, project_id
              FROM skill ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -1552,7 +1581,7 @@ impl Store for SqliteStore {
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>> {
         let row = sqlx::query(
             "SELECT id, name, maturity, descr, category, source, uses, content,
-                    distilled_from_issue, origin_agent
+                    distilled_from_issue, origin_agent, project_id
              FROM skill WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -1591,9 +1620,9 @@ impl Store for SqliteStore {
         sqlx::query(
             "INSERT INTO skill
                 (id, name, maturity, descr, category, source, uses, content,
-                 distilled_from_issue, origin_agent,
+                 distilled_from_issue, origin_agent, project_id,
                  created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 0)",
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(skill.id.uuid().to_string())
         .bind(&skill.name)
@@ -1604,6 +1633,9 @@ impl Store for SqliteStore {
         .bind(&skill.content)
         .bind(from_issue.uuid().to_string())
         .bind(origin_agent.uuid().to_string())
+        // 蒸馏出的技能归属本项目(plan/08 S1 完成标准):项目归属来自源
+        // Issue 的真实 project_id,不是调用方随手传的值——provenance,不是输入。
+        .bind(pid(issue.project_id))
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1614,8 +1646,8 @@ impl Store for SqliteStore {
     async fn create_agent(&self, a: NewAgent) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO agent (id, name, role, maturity, skills, model, runs, win_rate, instructions, wins, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, 0, ?, ?, 0)",
+            "INSERT INTO agent (id, name, role, maturity, skills, model, runs, win_rate, instructions, wins, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, 0, ?, ?, ?, 0)",
         )
         .bind(a.id.uuid().to_string())
         .bind(&a.name)
@@ -1624,6 +1656,7 @@ impl Store for SqliteStore {
         .bind(serde_json::to_string(&a.skills)?)
         .bind(&a.model)
         .bind(&a.instructions)
+        .bind(a.project_id.map(pid))
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1649,7 +1682,7 @@ impl Store for SqliteStore {
 
     async fn list_agents(&self) -> Result<Vec<AgentCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions FROM agent ORDER BY created_at",
+            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions, project_id FROM agent ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1658,7 +1691,7 @@ impl Store for SqliteStore {
 
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>> {
         let row = sqlx::query(
-            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions FROM agent WHERE id=?",
+            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions, project_id FROM agent WHERE id=?",
         )
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
@@ -1870,7 +1903,7 @@ impl Store for SqliteStore {
     async fn list_runs_for_issue(&self, issue_id: IssueId) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id
+                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id, head_before, head_after
              FROM workflow_run WHERE issue_id=? ORDER BY started_at DESC, rowid DESC",
         )
         .bind(issue_id.uuid().to_string())
@@ -1920,7 +1953,7 @@ impl Store for SqliteStore {
         // query-builder dependency.
         let mut sql = String::from(
             "SELECT id, project_id, stage, number, title, descr, status, priority, assignee,
-                    settled_at, created_at, updated_at
+                    settled_at, blocked_reason, created_at, updated_at
              FROM issue WHERE project_id=?",
         );
         if stage.is_some() {
@@ -1944,7 +1977,7 @@ impl Store for SqliteStore {
     async fn get_issue(&self, id: IssueId) -> Result<Option<Issue>> {
         let row = sqlx::query(
             "SELECT id, project_id, stage, number, title, descr, status, priority, assignee,
-                    settled_at,
+                    settled_at, blocked_reason,
                     created_at, updated_at
              FROM issue WHERE id=?",
         )
@@ -1955,13 +1988,41 @@ impl Store for SqliteStore {
     }
 
     async fn transition_issue(&self, id: IssueId, status: IssueStatus) -> Result<()> {
-        sqlx::query("UPDATE issue SET status=?, updated_at=? WHERE id=?")
+        // Nothing but `block_issue` can put an issue INTO Blocked (the App
+        // layer rejects a bare TransitionIssue targeting Blocked), so every
+        // move through this path unconditionally clears any stale reason —
+        // a plain transition out of Blocked, or any other edge, leaves no
+        // dangling `blocked_reason` behind.
+        sqlx::query("UPDATE issue SET status=?, blocked_reason=NULL, updated_at=? WHERE id=?")
             .bind(issue_status_text(status))
             .bind(now_unix())
             .bind(id.uuid().to_string())
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn block_issue(&self, id: IssueId, reason: &str) -> Result<()> {
+        sqlx::query("UPDATE issue SET status=?, blocked_reason=?, updated_at=? WHERE id=?")
+            .bind(issue_status_text(IssueStatus::Blocked))
+            .bind(reason)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn count_open_issues(&self, project_id: ProjectId) -> Result<i64> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS n FROM issue WHERE project_id=? AND status NOT IN (?, ?)",
+        )
+        .bind(pid(project_id))
+        .bind(issue_status_text(IssueStatus::Done))
+        .bind(issue_status_text(IssueStatus::Cancelled))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.get::<i64, _>("n"))
     }
 
     async fn assign_issue(&self, id: IssueId, assignee: Option<AgentId>) -> Result<()> {
@@ -2023,6 +2084,12 @@ fn parse_run_row(r: &sqlx::sqlite::SqliteRow) -> WorkflowRun {
             .get::<Option<String>, _>("issue_id")
             .filter(|s| !s.is_empty())
             .and_then(|s| parse_uuid(&s, IssueId::from_uuid).ok()),
+        head_before: r
+            .get::<Option<String>, _>("head_before")
+            .filter(|s| !s.is_empty()),
+        head_after: r
+            .get::<Option<String>, _>("head_after")
+            .filter(|s| !s.is_empty()),
     }
 }
 
@@ -2050,7 +2117,17 @@ fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
         weekly_signal: r
             .get::<Option<String>, _>("weekly_signal")
             .and_then(|s| parse_sig(&s)),
+        created_at: r.get::<i64, _>("created_at"),
     })
+}
+
+/// Nullable `project_id TEXT` column → `Option<ProjectId>`. Same shape as
+/// `cron_task_row`/`connector_row`'s existing parsing — `NULL`/empty = global.
+fn opt_project_id(r: &sqlx::sqlite::SqliteRow) -> Result<Option<ProjectId>> {
+    r.get::<Option<String>, _>("project_id")
+        .filter(|s| !s.is_empty())
+        .map(|s| parse_uuid(&s, ProjectId::from_uuid))
+        .transpose()
 }
 
 fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
@@ -2061,6 +2138,7 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
         serde_json::from_str(&r.get::<String, _>("phase_prompts")).unwrap_or_default();
     let agents: Vec<AgentRef> = serde_json::from_str(&r.get::<String, _>("agents_json"))?;
     let skills: Vec<SkillRef> = serde_json::from_str(&r.get::<String, _>("skills_json"))?;
+    let project_id = opt_project_id(&r)?;
     Ok(WorkflowSpec {
         id,
         name: r.get("name"),
@@ -2076,6 +2154,7 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
             retries: r.get::<i64, _>("loop_retries") as u8,
             max_iter: r.get::<i64, _>("loop_max_iter") as u8,
         },
+        project_id,
     })
 }
 
@@ -2091,6 +2170,7 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         .filter(|s| !s.is_empty())
         .map(|s| parse_uuid(&s, AgentId::from_uuid))
         .transpose()?;
+    let project_id = opt_project_id(&r)?;
     Ok(SkillCard {
         id,
         name: r.get("name"),
@@ -2102,12 +2182,14 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         content: r.get("content"),
         distilled_from_issue,
         origin_agent,
+        project_id,
     })
 }
 
 fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
     let id = parse_uuid(&r.get::<String, _>("id"), AgentId::from_uuid)?;
     let skills: Vec<String> = serde_json::from_str(&r.get::<String, _>("skills"))?;
+    let project_id = opt_project_id(&r)?;
     Ok(AgentCard {
         id,
         name: r.get("name"),
@@ -2121,6 +2203,7 @@ fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
         runs: r.get::<i64, _>("runs") as u32,
         win_rate: r.get("win_rate"),
         instructions: r.get("instructions"),
+        project_id,
     })
 }
 
@@ -2232,6 +2315,9 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
         priority: parse_issue_priority(&r.get::<String, _>("priority")),
         assignee,
         settled_at: r.get("settled_at"),
+        blocked_reason: r
+            .get::<Option<String>, _>("blocked_reason")
+            .filter(|s| !s.is_empty()),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     })

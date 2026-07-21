@@ -20,7 +20,7 @@ use bw_app::{Command, Panel, Scope};
 use bw_core::model::{
     stage_workflow, FeedLevel, HubKind, HubSource, IssuePriority, IssueStatus, Signal, StageKind,
 };
-use bw_core::{IssueId, SessionId, WorkflowId};
+use bw_core::{IssueId, SessionId, SkillId, WorkflowId};
 use bw_store::SessionKind;
 use dioxus::prelude::*;
 use ui::vm::{MetricVm, SessionCardVm, VersionLogVm};
@@ -150,35 +150,54 @@ fn StageAxis(op: OpVm) -> Element {
     }
 }
 
-const PANELS: [(Panel, &str); 6] = [
+// L2(plan/11): two groups, not one flat row — 看板(对外可验证的整体进展 +
+// 难造假的健康)vs 过程件(达成看板数字的内部机制)。`Panel` itself is
+// untouched (bw-app); this split is pure UI grouping.
+const BOARD_PANELS: [(Panel, &str); 3] = [
     (Panel::Progress, "进度"),
+    (Panel::Issues, "Issue 看板"),
+    (Panel::Version, "版本"),
+];
+const PROCESS_PANELS: [(Panel, &str); 3] = [
     (Panel::Workflow, "工作流"),
     (Panel::Routine, "定时任务"),
     (Panel::Artifact, "产物"),
-    (Panel::Version, "版本"),
-    (Panel::Issues, "Issue 看板"),
 ];
 
 #[component]
 fn Toolbar(op: OpVm) -> Element {
-    let k = use_context::<Kernel>();
     let border = theme::BORDER;
-    let ink = theme::INK;
-    let ink2 = theme::INK_2;
     rsx! {
         div {
-            style: "display:flex;gap:6px;padding:10px 22px;border-bottom:1px solid {border};flex:none;",
-            for (panel, label) in PANELS {
+            style: "display:flex;align-items:center;gap:14px;padding:10px 22px;border-bottom:1px solid {border};flex:none;",
+            PanelGroup { label: "看板", panels: &BOARD_PANELS, op: op.clone() }
+            span { style: "width:1px;height:20px;background:{border};", "" }
+            PanelGroup { label: "过程件", panels: &PROCESS_PANELS, op: op.clone() }
+        }
+    }
+}
+
+#[component]
+fn PanelGroup(label: &'static str, panels: &'static [(Panel, &'static str)], op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let ink = theme::INK;
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    rsx! {
+        div {
+            style: "display:flex;align-items:center;gap:6px;",
+            span { style: "font-size:10.5px;color:{ink3};letter-spacing:.05em;margin-right:2px;", "{label}" }
+            for (panel , plabel) in panels.iter().copied() {
                 {
                     let k = k.clone();
                     let active = op.panel == panel;
                     let (bg, fg) = if active { (ink, "#FFF") } else { ("transparent", ink2) };
                     rsx! {
                         button {
-                            key: "{label}",
+                            key: "{plabel}",
                             style: "cursor:pointer;border:none;border-radius:8px;background:{bg};color:{fg};padding:7px 14px;font-size:12.5px;",
                             onclick: move |_| k.send(Command::SetPanel(panel)),
-                            "{label}"
+                            "{plabel}"
                         }
                     }
                 }
@@ -196,7 +215,7 @@ fn LeftRail(op: OpVm) -> Element {
         div {
             style: "width:232px;flex:none;border-right:1px solid {border};overflow-y:auto;padding:14px;",
             if op.scope == Scope::All {
-                HealthOverview { op }
+                ActiveSessionsRail { op }
             } else {
                 StageSessions { op }
             }
@@ -204,69 +223,92 @@ fn LeftRail(op: OpVm) -> Element {
     }
 }
 
+/// L2(plan/11): what's left of the old `HealthOverview` in the left rail —
+/// just "进行中 · 待你介入", session-nav, not health. The signal/attention
+/// half moved into `HealthOverviewCard` at the top of the 进度 panel (看板
+/// 数字属于看板,不属于每个面板都挂一份的侧栏挂件).
 #[component]
-fn HealthOverview(op: OpVm) -> Element {
+fn ActiveSessionsRail(op: OpVm) -> Element {
     let k = use_context::<Kernel>();
     let ink3 = theme::INK_3;
     let card_alt = theme::CARD_ALT;
     let needs_you: Vec<SessionCardVm> = op.sessions.iter().filter(|s| s.active).cloned().collect();
-    let quiet = needs_you.is_empty() && op.attention.watch.is_empty();
     rsx! {
-        div { style: "font-size:11px;color:{ink3};letter-spacing:.06em;margin-bottom:8px;", "健康概览" }
-        if quiet {
-            div { style: "font-size:12px;color:{ink3};line-height:1.7;", "一切安静。绿色隐身,只有红黄出声。" }
+        div { style: "font-size:11px;color:{ink3};letter-spacing:.06em;margin-bottom:8px;", "进行中 · 待你介入" }
+        if needs_you.is_empty() {
+            div { style: "font-size:12px;color:{ink3};line-height:1.7;", "没有进行中的会话——到「工作流」面板运行一轮标准工作流开始。" }
         }
-        if !needs_you.is_empty() {
-            div { style: "font-size:11px;color:{ink3};margin:6px 0;", "进行中 · 待你介入" }
-            for s in needs_you {
-                {
-                    let k = k.clone();
-                    let sid = s.id;
-                    let stage = s.stage_kind;
-                    let stage_label = stage.map(|x| x.label()).unwrap_or("项目");
-                    rsx! {
-                        button {
-                            key: "{s.title}",
-                            style: "width:100%;text-align:left;background:{card_alt};border:1px solid #DBD4C5;border-radius:8px;padding:9px 10px;margin-bottom:7px;cursor:pointer;",
-                            onclick: move |_| {
-                                if let Some(kind) = stage {
-                                    k.send(Command::SetScope(Scope::Stage(kind)));
-                                }
-                                k.send(Command::SetPanel(Panel::Workflow));
-                                k.send(Command::SelectSession(Some(sid)));
-                            },
-                            div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
-                            div { style: "font-size:11px;color:{ink3};", "{stage_label} · {s.status_label}" }
-                        }
+        for s in needs_you {
+            {
+                let k = k.clone();
+                let sid = s.id;
+                let stage = s.stage_kind;
+                let stage_label = stage.map(|x| x.label()).unwrap_or("项目");
+                rsx! {
+                    button {
+                        key: "{s.title}",
+                        style: "width:100%;text-align:left;background:{card_alt};border:1px solid #DBD4C5;border-radius:8px;padding:9px 10px;margin-bottom:7px;cursor:pointer;",
+                        onclick: move |_| {
+                            if let Some(kind) = stage {
+                                k.send(Command::SetScope(Scope::Stage(kind)));
+                            }
+                            k.send(Command::SetPanel(Panel::Workflow));
+                            k.send(Command::SelectSession(Some(sid)));
+                        },
+                        div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
+                        div { style: "font-size:11px;color:{ink3};", "{stage_label} · {s.status_label}" }
                     }
                 }
             }
         }
-        if !op.attention.watch.is_empty() {
-            div { style: "font-size:11px;color:{ink3};margin:8px 0 6px;", "阶段信号 · 需关注" }
-            for (kind, sig) in op.attention.watch.clone() {
-                {
-                    let k = k.clone();
-                    let color = ui::signal_color(sig);
-                    let dot = theme::dot(color, 8);
-                    let label = kind.label();
-                    let sig_label = ui::vm::signal_label(sig);
-                    rsx! {
-                        button {
-                            key: "{kind.index()}",
-                            style: "width:100%;text-align:left;background:transparent;border:1px solid #ECE6DA;border-radius:8px;padding:8px 10px;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:8px;",
-                            onclick: move |_| k.send(Command::SetScope(Scope::Stage(kind))),
-                            span { style: "{dot}" }
-                            span { style: "font-size:12.5px;", "{label}" }
-                            span { style: "margin-left:auto;font-size:11px;color:{ink3};", "{sig_label}" }
-                        }
-                    }
-                }
-            }
-        }
+    }
+}
+
+/// L2(plan/11): the health-signal half of the old `HealthOverview`, now a
+/// card at the top of the 看板/进度 panel instead of a left-rail widget that
+/// used to render on every panel regardless of relevance. Same data
+/// (`op.attention`), same click-through (switch scope to the flagged stage).
+#[component]
+fn HealthOverviewCard(op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let serif = theme::SERIF;
+    let ink3 = theme::INK_3;
+    let quiet = op.attention.watch.is_empty();
+    rsx! {
         div {
-            style: "font-size:11px;color:{ink3};margin-top:12px;border-top:1px dashed #E2DCCF;padding-top:10px;",
-            "{op.attention.steady} 个阶段平稳 · {op.archived} 条已归档"
+            style: "{card} padding:16px 20px;margin-bottom:16px;",
+            div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:10px;", "健康概览" }
+            if quiet {
+                div { style: "font-size:12.5px;color:{ink3};line-height:1.7;", "一切安静。绿色隐身,只有红黄出声。" }
+            } else {
+                div {
+                    style: "display:flex;flex-wrap:wrap;gap:8px;",
+                    for (kind , sig) in op.attention.watch.clone() {
+                        {
+                            let k = k.clone();
+                            let color = ui::signal_color(sig);
+                            let dot = theme::dot(color, 8);
+                            let label = kind.label();
+                            let sig_label = ui::vm::signal_label(sig);
+                            rsx! {
+                                button {
+                                    key: "{kind.index()}",
+                                    style: "text-align:left;background:transparent;border:1px solid #ECE6DA;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;gap:8px;",
+                                    onclick: move |_| k.send(Command::SetScope(Scope::Stage(kind))),
+                                    span { style: "{dot}" }
+                                    span { style: "font-size:12.5px;", "{label}" }
+                                    span { style: "font-size:11px;color:{ink3};", "{sig_label}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div {
+                style: "font-size:11px;color:{ink3};margin-top:12px;border-top:1px dashed #E2DCCF;padding-top:10px;",
+                "{op.attention.steady} 个阶段平稳 · {op.archived} 条已归档"
+            }
         }
     }
 }
@@ -522,7 +564,9 @@ fn VersionPanel(op: OpVm) -> Element {
 // ── issue board (R1) ──
 
 /// The kanban status that follows `s` in the lifecycle, if any (terminal +
-/// `Blocked` don't advance — they're a stop or a side state).
+/// `Blocked` don't advance — they're a stop or a side state). Deliberately
+/// forward-only: reopen/rewind stay API-only (A5-H leaves no UI for them —
+/// settle-once is the safety net for the ones that ARE public).
 fn next_issue_status(s: IssueStatus) -> Option<IssueStatus> {
     match s {
         IssueStatus::Backlog => Some(IssueStatus::Todo),
@@ -533,10 +577,25 @@ fn next_issue_status(s: IssueStatus) -> Option<IssueStatus> {
     }
 }
 
+/// `true` for the three states `can_transition_to(Blocked)` actually allows
+/// (bw-core's table) — only these get the "⛔ 阻塞" action.
+fn can_block(s: IssueStatus) -> bool {
+    matches!(
+        s,
+        IssueStatus::Todo | IssueStatus::InProgress | IssueStatus::InReview
+    )
+}
+
 /// The Issue board (R1): real assignable work units grouped by status into
 /// columns, each card carrying its stage + agent teammate + a one-click
 /// advance to the next status. The create strip scopes a new issue to a
 /// chosen stage. Every card is a real `issue` row — nothing invented.
+///
+/// A5-H adds: a real assign dropdown (was static text), a Blocked column
+/// (previously invisible on the board — a stuck issue used to vanish from
+/// view), and the only path to/from Blocked (reason required going in,
+/// two explicit outs coming back). Cancelled stays off-board by design
+/// (dropped work, not a state to manage from here).
 #[component]
 fn IssuesPanel(op: OpVm) -> Element {
     let k = use_context::<Kernel>();
@@ -546,17 +605,25 @@ fn IssuesPanel(op: OpVm) -> Element {
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
     let clay = theme::CLAY;
+    let alert = theme::ALERT_DEEP;
     let mono = theme::MONO;
     let initial_stage = op.active_stage;
     let mut new_title = use_signal(String::new);
     let mut new_stage = use_signal(move || initial_stage);
+    let agents = op.hub.agents.clone();
+    // Board-wide: at most one card is "entering a block reason" at a time.
+    // Fully qualified: `Signal` bare would resolve to `bw_core::model::Signal`
+    // (the derived-health enum), already imported unqualified above.
+    let mut blocking: dioxus::prelude::Signal<Option<IssueId>> = use_signal(|| None);
+    let mut block_reason = use_signal(String::new);
 
-    let cols: [(IssueStatus, &str); 5] = [
+    let cols: [(IssueStatus, &str); 6] = [
         (IssueStatus::Backlog, "待办池"),
         (IssueStatus::Todo, "待办"),
         (IssueStatus::InProgress, "进行中"),
         (IssueStatus::InReview, "评审中"),
         (IssueStatus::Done, "已完成"),
+        (IssueStatus::Blocked, "阻塞"),
     ];
     // Precompute the columns outside rsx so the board stays borrow-clean.
     let grouped: Vec<_> = cols
@@ -615,36 +682,380 @@ fn IssuesPanel(op: OpVm) -> Element {
                     "＋ 创建 Issue"
                 }
             }
+            // P4: the evidence overlay — floats above the board while open.
+            if let Some(d) = op.issue_detail.clone() {
+                IssueDetailOverlay { d }
+            }
             div { style: "display:flex;gap:12px;align-items:flex-start;",
                 for (label, list) in grouped {
                     div { key: "{label}", style: "flex:1;min-width:190px;",
                         div { style: "font-size:11.5px;color:{ink3};margin-bottom:9px;letter-spacing:.04em;", "{label} · {list.len()}" }
                         for i in list {
                             {
-                                let k = k.clone();
+                                // One clone per closure below — each `move`
+                                // closure needs to independently own a
+                                // `Kernel`, since only one of a card's several
+                                // buttons ever fires but Rust still has to
+                                // typecheck every branch.
+                                let k_select = k.clone();
+                                let k_a = k.clone();
+                                let k_b = k.clone();
+                                let k_run = k.clone();
+                                let k_detail = k.clone();
+                                let agents = agents.clone();
                                 let i_id = i.id;
+                                // P3: only work not yet under review / settled
+                                // can be started from the board — same states
+                                // `RunIssue` itself accepts (guard lives in
+                                // bw-app; this just hides a doomed button).
+                                let runnable = matches!(
+                                    i.status,
+                                    IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
+                                );
+                                let run_stage = i.stage;
+                                let run_sess_title = format!("#{} {}", i.number, i.title);
                                 let advance = next_issue_status(i.status);
                                 let advance_label = advance.map(|s| s.label()).unwrap_or("");
-                                let assignee = i
-                                    .assignee_name
-                                    .clone()
-                                    .unwrap_or_else(|| "未分配".to_string());
+                                let is_blocked = i.status == IssueStatus::Blocked;
+                                let entering_reason = blocking() == Some(i_id);
                                 rsx! {
                                     div {
                                         key: "{i.number}",
                                         style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {i.status_color};",
                                         div { style: "font-size:11px;color:{ink3};font-family:{mono};", "#{i.number} · {i.stage.label()}" }
-                                        div { style: "font-size:13px;margin:3px 0 4px;color:{ink};", "{i.title}" }
-                                        div { style: "font-size:11px;color:{ink2};", "{i.priority_label} · {assignee}" }
-                                        if let Some(ns) = advance {
-                                            button {
-                                                style: "margin-top:6px;cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
-                                                onclick: move |_| k.send(Command::TransitionIssue { id: i_id, status: ns }),
-                                                "→ {advance_label}"
+                                        // P4: the title opens the evidence
+                                        // overlay (runs / diffs / artifacts).
+                                        div {
+                                            style: "font-size:13px;margin:3px 0 4px;color:{ink};cursor:pointer;",
+                                            onclick: move |_| k_detail.send(Command::OpenIssueDetail(i_id)),
+                                            "{i.title}"
+                                        }
+                                        div { style: "font-size:11px;color:{ink2};margin-bottom:5px;", "{i.priority_label}" }
+                                        select {
+                                            style: "font-size:11.5px;border:1px solid {border};border-radius:5px;padding:3px 5px;background:#FFF;max-width:100%;",
+                                            onchange: move |e| {
+                                                let v = e.value();
+                                                let assignee = v
+                                                    .parse::<usize>()
+                                                    .ok()
+                                                    .and_then(|idx| agents.get(idx))
+                                                    .map(|a| a.id);
+                                                k_select.send(Command::AssignIssue { id: i_id, assignee });
+                                            },
+                                            option { value: "", selected: i.assignee_name.is_none(), "未分配" }
+                                            for (idx , a) in agents.iter().enumerate() {
+                                                option {
+                                                    key: "{idx}",
+                                                    value: "{idx}",
+                                                    selected: i.assignee_name.as_deref() == Some(a.name.as_str()),
+                                                    "{a.name}({a.role})"
+                                                }
+                                            }
+                                        }
+                                        if is_blocked {
+                                            div {
+                                                style: "margin-top:7px;padding:6px 8px;background:#F2E4DD;border-radius:6px;font-size:11.5px;color:{alert};",
+                                                "⛔ {i.blocked_reason.clone().unwrap_or_default()}"
+                                            }
+                                            div { style: "margin-top:6px;display:flex;gap:10px;",
+                                                button {
+                                                    style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
+                                                    onclick: move |_| k_a.send(Command::TransitionIssue { id: i_id, status: IssueStatus::Todo }),
+                                                    "解除→待办"
+                                                }
+                                                button {
+                                                    style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
+                                                    onclick: move |_| k_b.send(Command::TransitionIssue { id: i_id, status: IssueStatus::InProgress }),
+                                                    "解除→进行中"
+                                                }
+                                            }
+                                        } else if entering_reason {
+                                            div { style: "margin-top:7px;",
+                                                input {
+                                                    value: "{block_reason}",
+                                                    placeholder: "阻塞原因(必填)…",
+                                                    style: "width:100%;font-size:11.5px;border:1px solid {border};border-radius:5px;padding:4px 7px;background:#FFF;",
+                                                    oninput: move |e| block_reason.set(e.value()),
+                                                }
+                                                div { style: "margin-top:5px;display:flex;gap:10px;",
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{alert};font-size:11.5px;padding:0;",
+                                                        onclick: move |_| {
+                                                            let reason = block_reason().trim().to_string();
+                                                            if !reason.is_empty() {
+                                                                k_a.send(Command::BlockIssue { id: i_id, reason });
+                                                                blocking.set(None);
+                                                            }
+                                                        },
+                                                        "确认阻塞"
+                                                    }
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{ink3};font-size:11.5px;padding:0;",
+                                                        onclick: move |_| blocking.set(None),
+                                                        "取消"
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            div { style: "margin-top:6px;display:flex;gap:12px;",
+                                                // P3: really start the work —
+                                                // same session+run path the
+                                                // stage "▶ 运行" uses. Mock
+                                                // projects run self-labeled.
+                                                if runnable {
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;font-weight:700;",
+                                                        onclick: move |_| {
+                                                            let sid = SessionId::new();
+                                                            k_run.send(Command::StartSession {
+                                                                id: sid,
+                                                                stage_kind: Some(run_stage),
+                                                                kind: SessionKind::Create,
+                                                                title: run_sess_title.clone(),
+                                                            });
+                                                            k_run.send(Command::RunIssue { session: sid, id: i_id });
+                                                        },
+                                                        "▶ 跑"
+                                                    }
+                                                }
+                                                if let Some(ns) = advance {
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
+                                                        onclick: move |_| k_a.send(Command::TransitionIssue { id: i_id, status: ns }),
+                                                        "→ {advance_label}"
+                                                    }
+                                                }
+                                                if can_block(i.status) {
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{ink3};font-size:11.5px;padding:0;",
+                                                        onclick: move |_| {
+                                                            block_reason.set(String::new());
+                                                            blocking.set(Some(i_id));
+                                                        },
+                                                        "⛔ 阻塞"
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// P4: the Issue-detail overlay — the review gate's evidence surface. Every
+/// number shown is a stored fact: real runs (status/duration/phases), the
+/// files each run really changed (diff between its recorded HEAD pair), and
+/// registered artifact versions. Nothing is synthesized; a missing record
+/// says so instead of pretending "no changes". Actions dispatch the same
+/// guarded commands the board uses — 「确认完成」 is the human's call, here
+/// as everywhere.
+#[component]
+fn IssueDetailOverlay(d: ui::vm::IssueDetailVm) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let border = theme::BORDER;
+    let ink = theme::INK;
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let clay = theme::CLAY;
+    let alert = theme::ALERT_DEEP;
+    let mono = theme::MONO;
+    let id = d.id;
+    let k_close = k.clone();
+    let k_done = k.clone();
+    let k_back = k.clone();
+    let k_run = k.clone();
+    let k_distill = k.clone();
+    let mut distilling = use_signal(|| false);
+    let mut skill_name = use_signal(|| format!("{} · 做法", d.title));
+    let mut skill_desc = use_signal(|| format!("来自 Issue #{} 的实战沉淀", d.number));
+    let mut skill_content = use_signal(String::new);
+    let runnable = matches!(
+        d.status,
+        IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
+    );
+    let in_review = d.status == IssueStatus::InReview;
+    let done = d.status == IssueStatus::Done;
+    let run_stage = d.stage;
+    let run_sess_title = format!("#{} {}", d.number, d.title);
+    let assignee = d.assignee_name.clone().unwrap_or_else(|| "未分配".into());
+
+    rsx! {
+        div {
+            style: "position:fixed;inset:0;background:rgba(35,33,28,.38);z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;",
+            div {
+                style: "{card} width:720px;max-width:96vw;max-height:82vh;overflow-y:auto;padding:18px 22px;",
+                // ── header ──
+                div { style: "display:flex;align-items:baseline;gap:10px;",
+                    div { style: "font-size:11.5px;color:{ink3};font-family:{mono};", "#{d.number} · {d.stage_label} · {d.status_label}" }
+                    div { style: "flex:1;" }
+                    button {
+                        style: "cursor:pointer;background:transparent;border:none;color:{ink3};font-size:14px;",
+                        onclick: move |_| k_close.send(Command::CloseIssueDetail),
+                        "✕"
+                    }
+                }
+                div { style: "font-size:16px;color:{ink};margin:4px 0 2px;", "{d.title}" }
+                div { style: "font-size:12px;color:{ink2};margin-bottom:6px;", "指派:{assignee} · {d.priority_label}" }
+                if let Some(reason) = d.blocked_reason.clone() {
+                    div { style: "margin:6px 0;padding:6px 9px;background:#F2E4DD;border-radius:6px;font-size:12px;color:{alert};", "⛔ {reason}" }
+                }
+                if !d.desc.trim().is_empty() {
+                    div { style: "font-size:12.5px;color:{ink2};white-space:pre-wrap;margin:6px 0 10px;line-height:1.7;", "{d.desc}" }
+                }
+
+                // ── runs + real changes ──
+                div { style: "font-size:12px;color:{ink3};letter-spacing:.05em;margin:12px 0 6px;", "运行史({d.runs.len()})" }
+                if d.runs.is_empty() {
+                    div { style: "font-size:12px;color:{ink3};", "还没有运行——「▶ 跑」会真实开工并留痕。" }
+                }
+                for (ri , r) in d.runs.iter().enumerate() {
+                    div {
+                        key: "{ri}",
+                        style: "border:1px solid {border};border-radius:8px;padding:8px 11px;margin-bottom:8px;",
+                        div { style: "font-size:12px;color:{ink};font-family:{mono};",
+                            if r.ok {
+                                span { style: "color:#5F7355;", "● {r.status_label}" }
+                            } else {
+                                span { style: "color:{alert};", "● {r.status_label}" }
+                            }
+                            span { style: "color:{ink3};", " · {r.trigger_label} · {r.duration_label} · {r.phases_label}" }
+                        }
+                        if !r.error.is_empty() {
+                            div { style: "font-size:11.5px;color:{alert};margin-top:4px;white-space:pre-wrap;", "{r.error}" }
+                        }
+                        if let Some(why) = r.changes_unavailable.clone() {
+                            div { style: "font-size:11.5px;color:{ink3};margin-top:5px;", "变更:{why}" }
+                        } else if r.changes.is_empty() {
+                            div { style: "font-size:11.5px;color:{ink3};margin-top:5px;", "变更:本次运行没有提交任何文件改动(如实)。" }
+                        } else {
+                            div { style: "margin-top:5px;",
+                                for (ci , (path , add , del)) in r.changes.iter().enumerate() {
+                                    div {
+                                        key: "{ci}",
+                                        style: "font-size:11.5px;font-family:{mono};color:{ink2};display:flex;gap:8px;",
+                                        span { style: "flex:1;overflow:hidden;text-overflow:ellipsis;", "{path}" }
+                                        span { style: "color:#5F7355;", "+{add}" }
+                                        span { style: "color:{alert};", "-{del}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── artifacts ──
+                div { style: "font-size:12px;color:{ink3};letter-spacing:.05em;margin:12px 0 6px;", "产物登记({d.artifacts.len()})" }
+                if d.artifacts.is_empty() {
+                    div { style: "font-size:12px;color:{ink3};", "尚无登记——确认完成时会扫描工作区并登记(带险不登)。" }
+                }
+                for (ai , (path , commit , bytes)) in d.artifacts.iter().enumerate() {
+                    div {
+                        key: "{ai}",
+                        style: "font-size:11.5px;font-family:{mono};color:{ink2};display:flex;gap:10px;",
+                        span { style: "flex:1;overflow:hidden;text-overflow:ellipsis;", "{path}" }
+                        span { style: "color:{ink3};", "{commit} · {bytes}B" }
+                    }
+                }
+
+                // ── actions(status-gated;same guarded commands as the board)──
+                div { style: "display:flex;gap:14px;margin-top:16px;align-items:center;flex-wrap:wrap;",
+                    if runnable {
+                        button {
+                            style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
+                            onclick: move |_| {
+                                let sid = SessionId::new();
+                                k_run.send(Command::StartSession {
+                                    id: sid,
+                                    stage_kind: Some(run_stage),
+                                    kind: SessionKind::Create,
+                                    title: run_sess_title.clone(),
+                                });
+                                k_run.send(Command::RunIssue { session: sid, id });
+                                k_run.send(Command::OpenIssueDetail(id));
+                            },
+                            "▶ 跑"
+                        }
+                    }
+                    if in_review {
+                        button {
+                            style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
+                            onclick: move |_| {
+                                k_done.send(Command::TransitionIssue { id, status: IssueStatus::Done });
+                                k_done.send(Command::OpenIssueDetail(id));
+                            },
+                            "✓ 确认完成(人裁)"
+                        }
+                        button {
+                            style: "cursor:pointer;border:1px solid {border};border-radius:7px;background:transparent;color:{ink2};padding:7px 14px;font-size:12.5px;",
+                            onclick: move |_| {
+                                k_back.send(Command::TransitionIssue { id, status: IssueStatus::InProgress });
+                                k_back.send(Command::OpenIssueDetail(id));
+                            },
+                            "↩ 打回"
+                        }
+                    }
+                    if done && !distilling() {
+                        button {
+                            style: "cursor:pointer;border:1px solid {border};border-radius:7px;background:transparent;color:{clay};padding:7px 14px;font-size:12.5px;",
+                            onclick: move |_| distilling.set(true),
+                            "⚗ 蒸馏为技能"
+                        }
+                    }
+                    if d.settled {
+                        span { style: "font-size:11px;color:{ink3};", "已记账(同一件活绝不记两次)" }
+                    }
+                }
+
+                // ── distill form(content is the human's judgment — required)──
+                if distilling() {
+                    div { style: "margin-top:12px;border-top:1px dashed {border};padding-top:12px;",
+                        input {
+                            value: "{skill_name}",
+                            style: "width:100%;font-size:12.5px;border:1px solid {border};border-radius:6px;padding:6px 9px;background:#FFF;margin-bottom:6px;",
+                            oninput: move |e| skill_name.set(e.value()),
+                        }
+                        input {
+                            value: "{skill_desc}",
+                            style: "width:100%;font-size:12.5px;border:1px solid {border};border-radius:6px;padding:6px 9px;background:#FFF;margin-bottom:6px;",
+                            oninput: move |e| skill_desc.set(e.value()),
+                        }
+                        textarea {
+                            value: "{skill_content}",
+                            placeholder: "正文(必填,人写):这件活的可复用做法——下次同类活会被真实注入…",
+                            style: "width:100%;min-height:110px;font-size:12.5px;border:1px solid {border};border-radius:6px;padding:8px 10px;background:#FFF;font-family:inherit;line-height:1.7;",
+                            oninput: move |e| skill_content.set(e.value()),
+                        }
+                        div { style: "display:flex;gap:12px;margin-top:8px;",
+                            button {
+                                style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:6px 14px;font-size:12px;",
+                                onclick: move |_| {
+                                    let content = skill_content().trim().to_string();
+                                    let name = skill_name().trim().to_string();
+                                    if !content.is_empty() && !name.is_empty() {
+                                        k_distill.send(Command::DistillSkillFromIssue {
+                                            skill_id: SkillId::new(),
+                                            issue_id: id,
+                                            name,
+                                            desc: skill_desc().trim().to_string(),
+                                            category: "孵化沉淀".into(),
+                                            content,
+                                        });
+                                        distilling.set(false);
+                                    }
+                                },
+                                "确认蒸馏"
+                            }
+                            button {
+                                style: "cursor:pointer;background:transparent;border:none;color:{ink3};font-size:12px;",
+                                onclick: move |_| distilling.set(false),
+                                "取消"
                             }
                         }
                     }
@@ -767,7 +1178,47 @@ fn ProgressAll(op: OpVm) -> Element {
         ("定时任务运行中", op.stats.routines_active),
         ("优化中待验收", op.stats.optimizing),
     ];
+    let goal_color = if op.week_review.goal_negative {
+        "#C5654A"
+    } else {
+        ink2
+    };
     rsx! {
+        // L2(plan/11): health belongs on the board, at the very top — the
+        // number-one thing "整体进展" answers before anything else.
+        HealthOverviewCard { op: op.clone() }
+        // P5: weekly-review card — pure read of recorded facts, top of panel.
+        div {
+            style: "{card} padding:16px 20px;margin-bottom:16px;",
+            div {
+                style: "display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;",
+                span { style: "font-family:{serif};font-size:16px;font-weight:600;", "本周复盘" }
+                span { style: "font-size:12px;color:{ink3};", "{op.week_review.week_label}" }
+            }
+            div {
+                style: "display:grid;grid-template-columns:repeat(4,1fr);gap:12px;",
+                div {
+                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "本周完成" }
+                    div { style: "font-family:{mono};font-size:20px;font-weight:600;", "{op.week_review.done_this_week} 件" }
+                }
+                div {
+                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "仍开着" }
+                    div { style: "font-family:{mono};font-size:20px;font-weight:600;", "{op.week_review.open_count} 件" }
+                }
+                div {
+                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "本周未记指标" }
+                    div { style: "font-family:{mono};font-size:20px;font-weight:600;", "{op.week_review.metrics_stale} 个" }
+                }
+                div {
+                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "90 天目标" }
+                    div { style: "font-family:{mono};font-size:13px;font-weight:600;color:{goal_color};", "{op.week_review.goal_label}" }
+                }
+            }
+            div {
+                style: "font-size:11px;color:{ink3};margin-top:10px;",
+                "全从已记录的数据算:本周结算的 Issue、未结 Issue、本周无观测的指标、距创建日 90 天。"
+            }
+        }
         WorkspaceConfig { op: op.clone() }
         div {
             style: "{card} padding:20px 22px;margin-bottom:16px;",

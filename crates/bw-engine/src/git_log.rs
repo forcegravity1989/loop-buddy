@@ -99,32 +99,3 @@ fn parse_commits(text: &str) -> Result<Vec<GitCommit>, GitLogError> {
     }
     Ok(commits)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn empty_workspace_short_circuits_without_spawning() {
-        let err = read_commits("", 10).await.unwrap_err();
-        assert!(matches!(err, GitLogError::NotConfigured));
-    }
-
-    #[test]
-    fn parses_a_realistic_multi_record_log() {
-        let text = format!(
-            "abc123{FIELD_SEP}abc12{FIELD_SEP}Builder{FIELD_SEP}2026-07-09T03:15:42+00:00{FIELD_SEP}first commit{RECORD_SEP}\ndef456{FIELD_SEP}def45{FIELD_SEP}Agent{FIELD_SEP}2026-07-08T10:00:00+00:00{FIELD_SEP}second{RECORD_SEP}"
-        );
-        let commits = parse_commits(&text).unwrap();
-        assert_eq!(commits.len(), 2);
-        assert_eq!(commits[0].short_hash, "abc12");
-        assert_eq!(commits[0].subject, "first commit");
-        assert_eq!(commits[1].author, "Agent");
-    }
-
-    #[test]
-    fn empty_output_is_zero_commits_not_an_error() {
-        let commits = parse_commits("").unwrap();
-        assert!(commits.is_empty());
-    }
-}

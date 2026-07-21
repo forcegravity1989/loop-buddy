@@ -13,10 +13,10 @@ use crate::theme;
 use bw_app::Command;
 use bw_core::AgentId;
 use dioxus::prelude::*;
-use ui::vm::AgentCardVm;
+use ui::vm::{AgentCardVm, ProjectCardVm};
 
 #[component]
-pub fn AgentHub(hub: HubVm) -> Element {
+pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let paper = theme::PAPER;
     let serif = theme::SERIF;
     let ink3 = theme::INK_3;
@@ -57,6 +57,10 @@ pub fn AgentHub(hub: HubVm) -> Element {
                             let is_open = expanded() == Some(aid);
                             let is_editing = editing() == Some(aid);
                             let used_by = workflows_using_agent(&hub, &a.name);
+                            let owner_project = a
+                                .project_id
+                                .and_then(|pid| projects.iter().find(|p| p.id == pid))
+                                .map(|p| p.name.clone());
                             rsx! {
                                 AgentCard {
                                     key: "{aid.uuid()}",
@@ -64,6 +68,7 @@ pub fn AgentHub(hub: HubVm) -> Element {
                                     is_open,
                                     is_editing,
                                     used_by,
+                                    owner_project,
                                     on_toggle: move |_| {
                                         expanded.set(if is_open { None } else { Some(aid) });
                                         editing.set(None);
@@ -83,7 +88,8 @@ pub fn AgentHub(hub: HubVm) -> Element {
 /// Real reverse lookup: which Hub workflows list this agent (by name — the
 /// same free-text `AgentRef` convention `SkillAgentPicker` already uses, not
 /// a hard FK). Empty is honest ("nothing references this yet"), not hidden.
-fn workflows_using_agent(hub: &HubVm, agent_name: &str) -> Vec<String> {
+/// `pub(crate)`: reused by `component_detail.rs` (L1 project-rail detail).
+pub(crate) fn workflows_using_agent(hub: &HubVm, agent_name: &str) -> Vec<String> {
     hub.workflow_details
         .iter()
         .filter(|d| d.agents.iter().any(|(name, _, _)| name == agent_name))
@@ -97,6 +103,8 @@ fn AgentCard(
     is_open: bool,
     is_editing: bool,
     used_by: Vec<String>,
+    /// 真实项目名(从 project_id 反查)——`None` = 共享/五角色内置 agent。
+    owner_project: Option<String>,
     on_toggle: EventHandler<()>,
     on_edit: EventHandler<()>,
     on_done_edit: EventHandler<()>,
@@ -111,8 +119,9 @@ fn AgentCard(
     rsx! {
         div {
             style: "{card} padding:16px 18px;{span_style}",
+            // ── 1. 身份行 + 2. 一句话价值主张(角色描述本身就是主张)──
             div {
-                style: "display:flex;align-items:center;gap:10px;margin-bottom:10px;cursor:pointer;",
+                style: "display:flex;align-items:center;gap:10px;margin-bottom:8px;cursor:pointer;",
                 onclick: move |_| on_toggle.call(()),
                 div {
                     style: "width:36px;height:36px;border-radius:9px;background:{agent_color};color:#FFF;display:flex;align-items:center;justify-content:center;font-family:{theme::SERIF};font-weight:700;font-size:14px;flex:none;",
@@ -125,25 +134,29 @@ fn AgentCard(
                         "{a.role}"
                     }
                 }
+                if let Some(p) = &owner_project {
+                    span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)} flex:none;", "◇ {p}" }
+                }
                 span { style: "{chip} flex:none;", "{a.maturity_label}" }
             }
-            if !a.skills.is_empty() {
-                div {
-                    style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;",
-                    for (i , s) in a.skills.iter().enumerate() {
-                        span { key: "{i}", style: "{theme::chip(\"#F4F0E7\", ink2)}", "{s}" }
-                    }
-                }
-            }
+            // ── 3. 社会证明:真实战绩(runs/胜率)+ 被多少工作流用 ──
             div {
-                style: "display:flex;align-items:center;gap:10px;font-size:11px;color:{ink3};font-family:{mono};",
-                span { "{a.model}" }
-                span { "·" }
+                style: "display:flex;align-items:center;gap:10px;font-size:11px;color:{ink3};font-family:{mono};margin-bottom:8px;",
                 span { "{a.runs} 次运行" }
+                span { "·" }
                 if a.win_rate.is_empty() {
-                    span { style: "margin-left:auto;", "成功率 —(无运行证据)" }
+                    span { "成功率 —(无运行证据)" }
                 } else {
-                    span { style: "margin-left:auto;", "成功率 {a.win_rate}" }
+                    span { "成功率 {a.win_rate}" }
+                }
+                span { style: "margin-left:auto;", "被 {used_by.len()} 个工作流使用" }
+            }
+            // ── 4. 怎么用 / 6. 结构预览:绑定模型 + 装备技能 ──
+            div {
+                style: "display:flex;align-items:center;gap:6px;flex-wrap:wrap;",
+                span { style: "{theme::chip(\"#EFE9DA\", ink2)} font-family:{mono};", "{a.model}" }
+                for (i , s) in a.skills.iter().enumerate() {
+                    span { key: "{i}", style: "{theme::chip(\"#F4F0E7\", ink2)}", "{s}" }
                 }
             }
             if is_open {

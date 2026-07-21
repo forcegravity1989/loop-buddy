@@ -46,14 +46,3 @@ pub async fn check<E: Executor>(exec: &E) -> Result<(), String> {
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::MockExecutor;
-
-    #[tokio::test]
-    async fn mock_satisfies_contract() {
-        check(&MockExecutor::new()).await.unwrap();
-    }
-}

@@ -27,6 +27,8 @@ async fn quick_project(app: &mut App, name: &str) -> ProjectId {
         name: name.into(),
         kind: "自驱".into(),
         desc: String::new(),
+
+        workspace: None,
     })
     .await
     .unwrap();

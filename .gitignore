@@ -18,3 +18,7 @@ node_modules/
 # Generated self-verification reports (point-in-time output, not source).
 /verification-report/
 demo-workspaces/
+
+# 2026-07-20 aihot 践行:真实 DB + 真实本地 git 工作区(自带嵌套 .git),
+# 不是源码,不进本仓——真实产物见 iterations/PRACTICE-AIHOT.md 的读回记录。
+/practice-aihot/

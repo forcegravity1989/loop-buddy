@@ -2873,6 +2873,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 // Catalog *reference*: the full text lives in the source
                 // repo — an empty body here is honest, not missing data.
                 content: String::new(),
+                project_id: None, // hub catalog seed — global, unchanged behavior
             })
             .await?;
     }
@@ -2886,6 +2887,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 category: s.category.to_string(),
                 source: LibSource::Official,
                 content: String::new(),
+                project_id: None,
             })
             .await?;
     }
@@ -2900,6 +2902,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 skills: vec![],
                 model: "claude-sonnet".to_string(),
                 instructions: String::new(),
+                project_id: None,
             })
             .await?;
     }
@@ -2913,6 +2916,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 skills: vec![],
                 model: "claude-sonnet".to_string(),
                 instructions: String::new(),
+                project_id: None,
             })
             .await?;
     }
@@ -2941,6 +2945,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                     retries: 1,
                     max_iter: 3,
                 },
+                project_id: None,
             })
             .await?;
     }
@@ -2960,6 +2965,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 agents: spec.agents,
                 skills: spec.skills,
                 loop_config: spec.loop_config,
+                project_id: None,
             })
             .await?;
     }
@@ -3003,6 +3009,9 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
                     category: kind.label().to_string(),
                     source: LibSource::Official,
                     content: sk.content.to_string(),
+                    // 五阶段方法论技能是全局共享的(见本函数文档:「这个 app
+                    // 自己的方法论」),不是某个项目专属——project_id 留空。
+                    project_id: None,
                 })
                 .await?;
         }
@@ -3021,6 +3030,8 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
                 skills: ra.skills,
                 model: ra.model.to_string(),
                 instructions: ra.instructions,
+                // 同上:五角色是全局单例,不因这次践行的项目自有切片改变。
+                project_id: None,
             })
             .await?;
     }

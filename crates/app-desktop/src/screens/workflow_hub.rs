@@ -18,6 +18,7 @@
 //!   defaults Cron Hub's own create form uses).
 
 use crate::kernel::{HubVm, Kernel};
+use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
 use bw_app::Command;
 use bw_core::model::{
@@ -218,23 +219,45 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
                                         let detail = details_by_id.get(&row_id).cloned();
                                         let skills_pool = hub.skills.clone();
                                         let agents_pool = hub.agents.clone();
+                                        // 真实项目名(从 project_id 反查)——`None` = 共享/内建阶段模板。
+                                        let owner_project = row
+                                            .project_id
+                                            .and_then(|pid| projects.iter().find(|p| p.id == pid))
+                                            .map(|p| p.name.clone());
                                         rsx! {
                                             div {
                                                 key: "{row_id.uuid()}",
                                                 style: "{card} padding:14px 16px;margin-bottom:8px;",
+                                                // ── 1. 身份行 ──
                                                 div {
                                                     style: "display:flex;align-items:center;gap:12px;cursor:pointer;",
                                                     onclick: move |_| expanded.set(if is_open { None } else { Some(row_id) }),
                                                     span { style: "font-size:13px;font-weight:500;flex:1;min-width:0;", "{row.name}" }
-                                                    span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.source_label}" }
+                                                    if let Some(p) = &owner_project {
+                                                        span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)}", "◇ {p}" }
+                                                    }
                                                     span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.maturity_label}" }
+                                                }
+                                                // ── 2. 一句话价值主张:这个工作流解决什么问题(L3 详情页画流程图前的文字版)──
+                                                div { style: "font-size:12px;color:{ink2};margin-top:6px;", "解决:{row.goal}" }
+                                                // ── 3. 社会证明:真实复用数 + 真实运行战绩(暂无运行=诚实冷,绝不 0%)──
+                                                div {
+                                                    style: "font-family:{mono};font-size:11.5px;color:{ink3};margin-top:6px;",
+                                                    if row.last_run_label.is_empty() {
+                                                        "{row.version_label} · {row.uses} 次复用 · {row.record_label}"
+                                                    } else {
+                                                        "{row.version_label} · {row.uses} 次复用 · {row.record_label} · {row.last_run_label}"
+                                                    }
+                                                }
+                                                // ── 4. 出处可信度 + 怎么用:来源 · 触发词 · 主责 agent ──
+                                                div {
+                                                    style: "display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;",
+                                                    span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.source_label}" }
                                                     if let Some(t) = &row.trigger {
                                                         span { style: "{theme::chip(\"#F4F0E7\", theme::CLAY)} font-family:{mono};", "{t}" }
                                                     }
                                                     span { style: "font-size:11.5px;color:{ink3};", "{row.primary_agent}" }
-                                                    span { style: "font-family:{mono};font-size:11.5px;color:{ink3};", "{row.version_label} · {row.uses} 次复用" }
                                                 }
-                                                div { style: "font-size:12px;color:{ink2};margin-top:6px;", "验收:{row.goal}" }
                                                 if is_open {
                                                     div {
                                                         style: "margin-top:12px;padding-top:12px;border-top:1px dashed {theme::BORDER};",
@@ -248,9 +271,14 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
                                                                 }
                                                             }
                                                         } else {
-                                                            div { style: "font-size:11.5px;color:{ink3};margin-bottom:6px;", "方法循环" }
-                                                            for (i , p) in row.phases.iter().enumerate() {
-                                                                span { key: "{i}", style: "{theme::chip(\"#F4F0E7\", ink2)} margin-right:6px;", "{i + 1}. {p}" }
+                                                            div { style: "font-size:11.5px;color:{ink3};margin-bottom:8px;", "全流程" }
+                                                            div {
+                                                                style: "margin-bottom:10px;",
+                                                                WorkflowFlow {
+                                                                    phases: row.phases.clone(),
+                                                                    loop_retries: row.loop_retries,
+                                                                    loop_max_iter: row.loop_max_iter,
+                                                                }
                                                             }
                                                             if let Some(d) = &detail {
                                                                 if !d.agents.is_empty() {
@@ -281,7 +309,6 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
                                                                     span { key: "{i}", style: "{theme::chip(\"#EFE9DA\", ink2)} margin-right:6px;", "{s}" }
                                                                 }
                                                             }
-                                                            div { style: "font-size:11.5px;color:{ink3};margin-top:10px;", "{row.loop_label}" }
                                                             div {
                                                                 style: "display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap;",
                                                                 if picker_open {
@@ -824,6 +851,9 @@ fn AdHocWorkflowForm(
                 retries: 1,
                 max_iter: 1,
             },
+            // 临时任务不进 Hub 库(见下方 UI 文案),这个字段对持久化查询没有
+            // 意义——但它确实是为 `target` 这个项目跑的,如实标注。
+            project_id: Some(target),
         };
         let session = SessionId::new();
         k.send(Command::OpenProject(target));

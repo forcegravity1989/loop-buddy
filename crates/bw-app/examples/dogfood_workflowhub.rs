@@ -105,6 +105,7 @@ async fn round_dynamic(
             retries: 1,
             max_iter: 1,
         },
+        project_id: None,
     };
     app.dispatch(Command::RunWorkflow { session, spec })
         .await
@@ -256,6 +257,8 @@ async fn main() {
                        这次创建过程本身也走 Builders 工作台的 Command 路径,用这个仓库自己的\
                        真实 git 历史当证据,不编造。"
                     .into(),
+
+                workspace: None,
             })
             .await
             .expect("create project");

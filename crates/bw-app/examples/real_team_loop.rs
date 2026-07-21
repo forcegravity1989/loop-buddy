@@ -56,6 +56,8 @@ async fn main() {
         desc:
             "用 BW 自己的五角色环,把 multica「真实 agent 队友」融进 BW「五阶段方法论 + 度量派生」"
                 .into(),
+
+        workspace: None,
     })
     .await
     .unwrap();
@@ -147,6 +149,19 @@ async fn main() {
         app.dispatch(Command::AssignIssue {
             id: iid,
             assignee: Some(assignee),
+        })
+        .await
+        .unwrap();
+        // A5-F 合法链(不跳态):InProgress → InReview → Done。
+        app.dispatch(Command::TransitionIssue {
+            id: iid,
+            status: IssueStatus::InProgress,
+        })
+        .await
+        .unwrap();
+        app.dispatch(Command::TransitionIssue {
+            id: iid,
+            status: IssueStatus::InReview,
         })
         .await
         .unwrap();

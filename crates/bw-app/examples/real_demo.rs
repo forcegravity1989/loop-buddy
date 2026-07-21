@@ -611,6 +611,8 @@ async fn main() {
                     name: req.name.into(),
                     kind: req.kind.into(),
                     desc: req.desc.into(),
+
+                    workspace: None,
                 })
                 .await
                 .expect("create project");

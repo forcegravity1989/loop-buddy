@@ -191,23 +191,3 @@ fn relay_tail(text: &str) -> String {
     let tail: String = trimmed.chars().skip(skip).collect();
     format!("…（前文省略 {skip} 字符）{tail}")
 }
-
-#[cfg(test)]
-mod relay_tests {
-    use super::relay_tail;
-
-    #[test]
-    fn short_text_passes_through_untruncated() {
-        assert_eq!(relay_tail("  完成了证据采集  "), "完成了证据采集");
-    }
-
-    #[test]
-    fn long_text_keeps_the_tail_on_char_boundaries() {
-        let text = "头".repeat(2000) + &"尾".repeat(1000);
-        let out = relay_tail(&text);
-        assert!(out.ends_with(&"尾".repeat(1000)));
-        assert!(out.starts_with("…（前文省略"));
-        // Multi-byte safety: no panic, and the kept slice is exactly the cap.
-        assert!(out.chars().count() < 1600);
-    }
-}

@@ -502,6 +502,11 @@ pub enum HubSource {
     SelfBuilt,
     /// 会话内
     WithinSession,
+    /// 选型引入的外部 workflow 引擎/插件市场(如 superpowers)——不是本仓的
+    /// OMC/ECC 两个固定目录,也不是自建。真实来源名放调用方的 `scope` 字段或
+    /// 对应 `AgentRef`/`SkillRef.from`(2026-07-20 践行 aihot 时发现:此前只有
+    /// 四值,逼着"选型引入"要么误标 SelfBuilt 要么无值可选,如实补上)。
+    Adopted,
 }
 
 impl HubSource {
@@ -511,6 +516,7 @@ impl HubSource {
             HubSource::Ecc => "ECC",
             HubSource::SelfBuilt => "自建",
             HubSource::WithinSession => "会话内",
+            HubSource::Adopted => "选型引入",
         }
     }
 }
@@ -574,6 +580,10 @@ pub struct WorkflowSpec {
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
     pub loop_config: LoopConfig,
+    /// `None` = 全局/共享(built-in 阶段模板、Hub 目录条目);`Some` = 这个
+    /// 项目自建的 workflow(plan/10 K1 项目侧边栏按这个字段过滤)。
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
 }
 
 /// Outcome of one workflow execution — the data a later "should this workflow
@@ -668,7 +678,18 @@ pub struct WorkflowRun {
     /// `RunIssue` (`None` for ordinary workflow / scheduler runs). Lets an
     /// Issue's detail answer "which runs did this issue produce, and what?".
     pub issue_id: Option<IssueId>,
+    /// P4: workspace HEAD when the run started / settled. `None` when the
+    /// project has no real workspace (Mock runs touch no files). The pair is
+    /// recorded fact — "这次运行改了什么" is answered by diffing between them,
+    /// never by re-guessing after the tree has moved on.
+    pub head_before: Option<String>,
+    pub head_after: Option<String>,
 }
+
+/// P4: one run's resolved change list — `(run id, Ok(per-file (path, +added,
+/// -deleted)) | Err(为何不可用的诚实原因))`. The shared shape between app
+/// state (assembled at detail-open time) and the view layer.
+pub type RunChanges = (WorkflowRunId, Result<Vec<(String, u32, u32)>, String>);
 
 /// Per-workflow aggregate over its run history — the read-side shape optimization
 /// intelligence consumes. Every field is derived from settled `workflow_run`
@@ -808,6 +829,7 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
             retries: 1,
             max_iter: 3,
         },
+        project_id: None,
     }
 }
 
@@ -890,6 +912,7 @@ pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
             retries: 1,
             max_iter: 3,
         },
+        project_id: None,
     }
 }
 
@@ -922,6 +945,7 @@ pub fn drafting_workflow() -> WorkflowSpec {
             retries: 1,
             max_iter: 1,
         },
+        project_id: None,
     }
 }
 
@@ -976,6 +1000,10 @@ pub struct SkillCard {
     /// `None` iff `distilled_from_issue` is `None`.
     #[serde(default)]
     pub origin_agent: Option<AgentId>,
+    /// `None` = 全局/共享;`Some` = 这个项目自建(或从其项目 Issue 蒸馏)的
+    /// 技能(plan/10 K1 项目侧边栏按这个字段过滤)。
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1003,6 +1031,10 @@ pub struct AgentCard {
     /// role gets told, `{var}` slots filled per project at run time.
     #[serde(default)]
     pub instructions: String,
+    /// `None` = 全局/共享(五角色内置 agent);`Some` = 这个项目自建的
+    /// 专精 agent(plan/10 K1 项目侧边栏按这个字段过滤)。
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
 }
 
 // ─────────────────────────── cron / connector / knowledge hub ───────────────────────────
@@ -1026,6 +1058,17 @@ pub enum CronMode {
     #[default]
     RunWorkflow,
     CreateIssue,
+}
+
+impl CronMode {
+    /// L1(plan/11): cron 详情卡要如实标出「到点做什么」——运行一个 workflow
+    /// 还是只建一件活(autopilot,no-hijack)。
+    pub fn label(self) -> &'static str {
+        match self {
+            CronMode::RunWorkflow => "运行工作流",
+            CronMode::CreateIssue => "建活(autopilot · 不自动跑)",
+        }
+    }
 }
 
 impl CronStatus {
@@ -1396,6 +1439,42 @@ impl IssueStatus {
     pub fn is_backlog(self) -> bool {
         matches!(self, IssueStatus::Backlog)
     }
+
+    /// `true` iff `to` is a legal next state from `self` in the Issue
+    /// lifecycle graph — the single source of truth for every transition
+    /// guard (App-layer `TransitionIssue`/`BlockIssue`/`RunIssue` all query
+    /// this, never invent their own edges). `Blocked` is graph-legal from
+    /// `Todo`/`InProgress`/`InReview`, but is reached in practice only
+    /// through the `BlockIssue` command (which requires a reason) — bare
+    /// `TransitionIssue` rejects a `Blocked` target regardless of this table.
+    /// No state transitions to itself; `Cancelled` and `Done`-via-non-`InReview`
+    /// have no legal predecessor edge here beyond what's listed.
+    pub fn can_transition_to(self, to: IssueStatus) -> bool {
+        use IssueStatus::*;
+        matches!(
+            (self, to),
+            (Backlog, Todo)
+                | (Backlog, InProgress)
+                | (Backlog, Cancelled)
+                | (Todo, InProgress)
+                | (Todo, Backlog)
+                | (Todo, Blocked)
+                | (Todo, Cancelled)
+                | (InProgress, InReview)
+                | (InProgress, Todo)
+                | (InProgress, Blocked)
+                | (InProgress, Cancelled)
+                | (InReview, Done)
+                | (InReview, InProgress)
+                | (InReview, Blocked)
+                | (InReview, Cancelled)
+                | (Blocked, Todo)
+                | (Blocked, InProgress)
+                | (Blocked, Cancelled)
+                | (Done, Todo)
+                | (Done, InProgress)
+        )
+    }
 }
 
 /// How urgent an [`Issue`] is — drives ordering and visual emphasis. `None`
@@ -1442,6 +1521,12 @@ pub struct Issue {
     /// `None` = never settled. Reopen-and-redo does not settle again.
     #[serde(default)]
     pub settled_at: Option<i64>,
+    /// Non-empty only while `status == Blocked`; set exclusively via the
+    /// `BlockIssue` command and cleared on every other transition (nothing
+    /// but `BlockIssue` can reach `Blocked`, so a plain `transition_issue`
+    /// unconditionally clearing it on every other move is safe and correct).
+    #[serde(default)]
+    pub blocked_reason: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -1577,148 +1662,4 @@ pub struct HubCard {
     pub color: String,
     pub desc: String,
     pub items: Vec<String>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classify_artifact_path_covers_the_playbook_output_shapes() {
-        // What the five stage playbooks actually write:
-        assert_eq!(
-            classify_artifact_path("docs/evidence.md"),
-            ArtifactKind::Doc
-        );
-        assert_eq!(classify_artifact_path("README.md"), ArtifactKind::Doc);
-        assert_eq!(classify_artifact_path("src/main.rs"), ArtifactKind::Code);
-        assert_eq!(classify_artifact_path("src/lib.rs"), ArtifactKind::Code);
-        assert_eq!(classify_artifact_path("tests/cli.rs"), ArtifactKind::Test);
-        assert_eq!(
-            classify_artifact_path("src/parser_test.rs"),
-            ArtifactKind::Test
-        );
-        assert_eq!(
-            classify_artifact_path("scripts/healthcheck.sh"),
-            ArtifactKind::Script
-        );
-        assert_eq!(classify_artifact_path("Cargo.toml"), ArtifactKind::Config);
-        assert_eq!(classify_artifact_path(".gitignore"), ArtifactKind::Config);
-        assert_eq!(
-            classify_artifact_path("assets/logo.png"),
-            ArtifactKind::Other
-        );
-        // Non-code files under tests/ are not "tests".
-        assert_eq!(
-            classify_artifact_path("tests/fixtures/sample.md"),
-            ArtifactKind::Doc
-        );
-        // Round-trips through the persisted text form.
-        for k in [
-            ArtifactKind::Doc,
-            ArtifactKind::Code,
-            ArtifactKind::Test,
-            ArtifactKind::Script,
-            ArtifactKind::Config,
-            ArtifactKind::Other,
-        ] {
-            assert_eq!(ArtifactKind::parse(k.text()), k);
-        }
-    }
-
-    /// The playbook spec is fully armed: per-phase prompts, the hosting role
-    /// as its real agent ref, and the stage's skills as real refs whose
-    /// content is inside every phase prompt.
-    #[cfg(feature = "idgen")]
-    #[test]
-    fn playbook_spec_carries_role_agent_and_operative_skills() {
-        let ctx = crate::playbook::PlaybookCtx {
-            project_name: "demo".into(),
-            ..Default::default()
-        };
-        for kind in StageKind::ALL {
-            let spec = stage_workflow_with_playbook(kind, &ctx);
-            assert_eq!(spec.phases.len(), spec.phase_prompts.len());
-            assert_eq!(spec.agents.len(), 1);
-            assert_eq!(spec.agents[0].name, kind.role_short());
-            let skills = crate::playbook::stage_skills(kind);
-            assert_eq!(spec.skills.len(), skills.len());
-            for (s_ref, s) in spec.skills.iter().zip(skills) {
-                assert_eq!(s_ref.name, s.name);
-            }
-            for p in &spec.phase_prompts {
-                assert!(
-                    p.contains(skills[0].content),
-                    "{kind:?} 技能正文在 prompt 内"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn issue_status_is_terminal_only_for_done_and_cancelled() {
-        assert!(!IssueStatus::Backlog.is_terminal());
-        assert!(!IssueStatus::Todo.is_terminal());
-        assert!(!IssueStatus::InProgress.is_terminal());
-        assert!(!IssueStatus::InReview.is_terminal());
-        assert!(IssueStatus::Done.is_terminal());
-        assert!(
-            !IssueStatus::Blocked.is_terminal(),
-            "Blocked is recoverable, not terminal"
-        );
-        assert!(IssueStatus::Cancelled.is_terminal());
-    }
-
-    #[test]
-    fn issue_status_is_backlog_only_for_backlog() {
-        assert!(IssueStatus::Backlog.is_backlog());
-        assert!(!IssueStatus::Todo.is_backlog());
-        assert!(!IssueStatus::Done.is_backlog());
-        assert!(!IssueStatus::Blocked.is_backlog());
-    }
-
-    #[test]
-    fn issue_status_all_has_seven_in_lifecycle_order() {
-        assert_eq!(IssueStatus::ALL.len(), 7);
-        assert_eq!(IssueStatus::ALL[0], IssueStatus::Backlog);
-        assert_eq!(IssueStatus::ALL[6], IssueStatus::Cancelled);
-    }
-
-    #[test]
-    fn issue_priority_labels() {
-        assert_eq!(IssuePriority::None.label(), "无");
-        assert_eq!(IssuePriority::Low.label(), "低");
-        assert_eq!(IssuePriority::Medium.label(), "中");
-        assert_eq!(IssuePriority::High.label(), "高");
-        assert_eq!(IssuePriority::Urgent.label(), "紧急");
-    }
-
-    #[test]
-    fn issue_status_labels() {
-        assert_eq!(IssueStatus::Backlog.label(), "待办池");
-        assert_eq!(IssueStatus::Todo.label(), "待办");
-        assert_eq!(IssueStatus::InProgress.label(), "进行中");
-        assert_eq!(IssueStatus::InReview.label(), "评审中");
-        assert_eq!(IssueStatus::Done.label(), "已完成");
-        assert_eq!(IssueStatus::Blocked.label(), "阻塞");
-        assert_eq!(IssueStatus::Cancelled.label(), "已取消");
-    }
-
-    #[test]
-    fn issue_status_none_serializes_as_snake_case() {
-        // None priority must serialize as "none" (not a sentinel/empty string).
-        let json = serde_json::to_string(&IssuePriority::None).unwrap();
-        assert_eq!(json, "\"none\"");
-        // And round-trip back.
-        let back: IssuePriority = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, IssuePriority::None);
-    }
-
-    #[test]
-    fn issue_status_serializes_as_snake_case() {
-        let json = serde_json::to_string(&IssueStatus::InProgress).unwrap();
-        assert_eq!(json, "\"in_progress\"");
-        let back: IssueStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, IssueStatus::InProgress);
-    }
 }

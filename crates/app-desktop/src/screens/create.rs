@@ -111,6 +111,8 @@ fn IntentCard(on_created: EventHandler<()>) -> Element {
             name: name().trim().to_string(),
             kind: kind(),
             desc: brief().trim().to_string(),
+
+            workspace: None,
         });
         on_created.call(());
     };

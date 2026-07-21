@@ -59,6 +59,7 @@ dependencies = [
  "time",
  "tokio",
  "ui",
+ "uuid",
 ]
 
 [[package]]
