@@ -518,6 +518,8 @@ pub struct WorkflowHubRowVm {
     /// W1: `"最近 07-16"` from the newest run's real timestamp; empty when
     /// there is none.
     pub last_run_label: String,
+    /// `None` = 全局/共享;`Some` = 项目自建(plan/10 K1 侧边栏过滤用)。
+    pub project_id: Option<ProjectId>,
 }
 
 /// W1: fold a workflow's real run aggregate (`UsageRank`, derived from
@@ -579,6 +581,7 @@ pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
         stage_ref: spec.stage_ref,
         record_label: "暂无运行".into(),
         last_run_label: String::new(),
+        project_id: spec.project_id,
     })
 }
 
@@ -782,6 +785,8 @@ pub struct SkillCardVm {
     /// Executable body. Empty = catalog reference (the detail panel says so
     /// honestly instead of showing a blank that reads as broken).
     pub content: String,
+    /// `None` = 全局/共享;`Some` = 项目自建(plan/10 K1 侧边栏过滤用)。
+    pub project_id: Option<ProjectId>,
 }
 
 pub fn skill_card(s: &SkillCard) -> SkillCardVm {
@@ -794,6 +799,7 @@ pub fn skill_card(s: &SkillCard) -> SkillCardVm {
         source_label: s.source.label(),
         uses: s.uses,
         content: s.content.clone(),
+        project_id: s.project_id,
     }
 }
 
@@ -811,6 +817,8 @@ pub struct AgentCardVm {
     pub win_rate: String,
     /// Standing instructions. Empty = catalog reference.
     pub instructions: String,
+    /// `None` = 全局/共享;`Some` = 项目自建(plan/10 K1 侧边栏过滤用)。
+    pub project_id: Option<ProjectId>,
 }
 
 pub fn agent_card(a: &AgentCard) -> AgentCardVm {
@@ -830,6 +838,7 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
         runs: a.runs,
         win_rate: a.win_rate.clone(),
         instructions: a.instructions.clone(),
+        project_id: a.project_id,
     }
 }
 
@@ -997,6 +1006,9 @@ pub struct ConnectorCardVm {
     /// the sync button renders only where syncing really does something;
     /// reference entries honestly show none.
     pub syncable: bool,
+    /// `None` = 全局(如 claude-cli 探针);`Some` = 项目自有(plan/10 K1
+    /// 侧边栏过滤用)。
+    pub project_id: Option<ProjectId>,
 }
 
 pub fn connector_card(c: &Connector) -> ConnectorCardVm {
@@ -1018,6 +1030,7 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
             c.kind.as_str(),
             bw_core::model::CONNECTOR_KIND_GIT_REPO | bw_core::model::CONNECTOR_KIND_CLAUDE_CLI
         ),
+        project_id: c.project_id,
     }
 }
 
