@@ -58,7 +58,30 @@ fn GlobalChrome() -> Element {
 fn Root() -> Element {
     let kernel = use_context_provider(kernel::spawn);
     let mut vm = use_signal(Vm::default);
-    let mut hub = use_signal(|| Hub::Workspace);
+    // BW_HUB=skill|agent|workflow|cron|connector|knowledge|activity|notify|settings
+    // deep-links straight to a rail Hub screen — same verification discipline
+    // as BW_OPEN/BW_PANEL (CLAUDE.md), extended because those two only reach
+    // per-project panels; the marketplace Hub screens are rail-click-only and
+    // were otherwise unreachable without computer-use.
+    let initial_hub = std::env::var("BW_HUB")
+        .ok()
+        .and_then(|v| match v.as_str() {
+            "skill" => Some(Hub::Skill),
+            "agent" => Some(Hub::Agent),
+            "workflow" => Some(Hub::Workflow),
+            "cron" => Some(Hub::Cron),
+            "connector" => Some(Hub::Connector),
+            "knowledge" => Some(Hub::Knowledge),
+            "activity" => Some(Hub::Activity),
+            "notify" => Some(Hub::Notify),
+            "settings" => Some(Hub::Settings),
+            _ => None,
+        })
+        .unwrap_or(Hub::Workspace);
+    if let Ok(v) = std::env::var("BW_HUB") {
+        eprintln!("[BW_HUB] {v:?} -> {initial_hub:?}");
+    }
+    let mut hub = use_signal(|| initial_hub);
     let mut creating = use_signal(|| false);
     let mut toast = use_signal(|| None::<String>);
     let mut run = use_signal(RunVm::default);
