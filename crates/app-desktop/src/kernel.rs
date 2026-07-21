@@ -128,6 +128,7 @@ pub struct ChatVm {
 
 #[derive(Clone, PartialEq)]
 pub struct OpVm {
+    pub id: bw_core::ProjectId,
     pub name: String,
     pub kind: String,
     pub project_signal: Signal,
@@ -908,6 +909,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     );
 
     vm.op = Some(OpVm {
+        id: pid,
         name: row.name.clone(),
         kind: row.kind.clone(),
         project_signal: ui::vm::resolved(sigs.project),

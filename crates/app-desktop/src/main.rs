@@ -25,6 +25,7 @@ use screens::cron_hub::CronHub;
 use screens::knowledge_hub::KnowledgeHub;
 use screens::notify_hub::NotifyHub;
 use screens::op::Op;
+use screens::project_rail::ProjectRail;
 use screens::settings_hub::SettingsHub;
 use screens::skill_hub::SkillHub;
 use screens::wall::Wall;
@@ -205,6 +206,15 @@ fn Root() -> Element {
         div {
             style: "display:flex;height:100vh;background:{paper};color:{ink};font-family:{sans};font-size:14px;overflow:hidden;",
             IconRail { hub: hub(), on_pick: move |h| hub.set(h) }
+            if v.view == View::App {
+                if let Some(op) = v.op.clone() {
+                    ProjectRail {
+                        project_id: op.id,
+                        hub: v.hub.clone(),
+                        on_pick: move |h| hub.set(h),
+                    }
+                }
+            }
             div {
                 style: "flex:1;min-width:0;height:100vh;overflow-y:auto;",
                 if !v.ready {
