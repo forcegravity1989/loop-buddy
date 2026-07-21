@@ -24,7 +24,7 @@
 //!   probe-run <number>                            对该活做一次真实 RunIssue 探测(仅用一次)
 //!   settle-issue <number> <note>                   真实证据回收 + InReview → Done
 //!   block-issue <number> <reason>                  转 Blocked(唯一合法路径,reason 必填)
-//!   cron                                           幂等注册每日 autopilot cron(到点建活,不自动跑)
+//!   cron                                           L5:暂停旧的每日建活 cron,注册 Weekly@Optimize 治理 cron(到点建活,不自动跑)
 //!   distill <number> <name> <desc> <category> <content-file>   从真实 Done 活蒸馏技能
 //!   sync                                           SyncConnector(git-repo)真喂工作区指标
 //!   record-metric <name> <value>                  人工记一条 append-only 观测(手填指标用)
@@ -538,24 +538,72 @@ async fn cmd_block_issue(app: &mut App, project: ProjectId, args: &[String]) {
     println!("blocked #{number}:{reason}");
 }
 
-/// `cron` —— 幂等注册每日 autopilot(到点只建活,不自动跑,no-hijack)。
+/// `cron` —— L5(plan/11)修正 · aihot 真实运行态/开发态双环拆分。
+///
+/// **原设的真实错误**:上一夜把「aihot 每日日报生成」注册成 Daily +
+/// `CreateIssue`@Build——对一个已建成的产品,这等于"每天自动建一件开发
+/// 任务"。真实产品不该每天都在建新活;已建成产品的开发活该是**事件/阈值
+/// 触发**(命中率跌破阈值、或断更了),不是无脑每日。这条也把作用阶段错标
+/// 成 Build(从零构建),而 aihot 早过了构建段,持续改进应该落在 Optimize。
+///
+/// **真实修法(留痕,不是静默改库)**:老任务如果还在(名字仍是旧名),先
+/// `SetCronStatus(Paused)` 真实暂停它(留痕:Cron Hub 里能看到它被标记
+/// 暂停,不是凭空消失);再注册新任务(Weekly、Optimize)。**诚实局限**:
+/// BW 的 `cron_due` 只按经过时间判断,没有"指标跌破阈值才触发"的能力——
+/// 真正的阈值触发需要给调度器加度量条件读取,这是比本轮范围更大的引擎
+/// 改动,不在这里假装做到。Weekly 是诚实的退让:比每日合理,但不是精确
+/// 的阈值门。
+///
+/// **运行态(每天真实产出日报 + 写 telemetry.json)不经过这条 cron**——那是
+/// `aihot/main.py` 自己的确定性脚本,该由真实的 OS 级调度(launchd/cron)
+/// 每天调用它,再调 `feed-telemetry` 子命令把产出真实喂进 BW(命中率/连续
+/// 产出天数)。BW 自己的 `CronTask` 今天只有 `RunWorkflow`(过 agent 执行
+/// 器,会真花钱)和 `CreateIssue` 两种 mode,都不是"跑一个确定性脚本"——
+/// 如实留白,不为了看起来"全自动"而建一个真点了会让 agent 花钱重做脚本
+/// 已经做完的事的假 cron。示例调度(用户在自己机器上配置,不是 BW 内建):
+/// ```text
+/// # crontab -e:每天 07:00 真实生成日报 + 真实喂 telemetry
+/// 0 7 * * * cd <repo> && python -m aihot.main --out <ws>/aihot/digests \
+///   && BW_DB=<db> BW_WORKSPACES=<ws-root> \
+///      cargo run -p bw-app --example practice_aihot -- feed-telemetry
+/// ```
 async fn cmd_cron(app: &mut App, project: ProjectId) {
+    const OLD_NAME: &str = "aihot 每日日报生成";
+    const NEW_NAME: &str = "aihot 治理复盘 · 按需开发";
+
     let tasks = app.snapshot().cron_tasks.clone();
-    if tasks.iter().any(|t| t.name == "aihot 每日日报生成") {
-        println!("cron 任务已存在,跳过");
+    if let Some(old) = tasks
+        .iter()
+        .find(|t| t.name == OLD_NAME && t.status != bw_core::model::CronStatus::Paused)
+    {
+        app.dispatch(Command::SetCronStatus {
+            id: old.id,
+            status: bw_core::model::CronStatus::Paused,
+        })
+        .await
+        .expect("pause old daily-build autopilot cron");
+        println!("已暂停旧的每日建活 cron「{OLD_NAME}」(Build 段、Daily——对已建成产品是错的配置,留痕而非静默删除)");
+    }
+
+    if tasks.iter().any(|t| t.name == NEW_NAME) {
+        println!("cron 任务「{NEW_NAME}」已存在,跳过");
         return;
     }
     app.dispatch(Command::CreateAutopilotTask {
         id: CronTaskId::new(),
-        name: "aihot 每日日报生成".into(),
-        schedule: Cadence::Daily,
+        name: NEW_NAME.into(),
+        schedule: Cadence::Weekly,
         project_id: Some(project),
-        stage: StageKind::Build,
+        stage: StageKind::Optimize,
         assignee: Some("日报编辑".into()),
     })
     .await
     .expect("create autopilot task");
-    println!("cron 任务已注册(mode=create_issue,到点只建活,不自动跑——no-hijack)");
+    println!(
+        "cron 任务已注册(mode=create_issue,Weekly@Optimize,到点只建活,不自动跑——no-hijack)。\
+         真实运行态(每日产出+telemetry)不在 BW cron 里,由 OS 级调度跑 aihot/main.py \
+         + feed-telemetry,见本函数文档注释里的 crontab 示例。"
+    );
     let _ = CronMode::CreateIssue; // 文档锚点:此路径正是这个变体
 }
 
