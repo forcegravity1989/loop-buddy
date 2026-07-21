@@ -174,3 +174,29 @@ connector=1)与代码过滤逻辑一致。
 核对更新",非自动派生)——不是 K3 的缺口,K4 会把这类 issue 计数指标整体
 降级,到时候一并处理,不单独修。
 
+**K4 · 指标重定,产出连续性为纲**——两条真实产品指标取代 issue 计数代理。
+真实实现:`aihot/main.py` 每次运行后真落盘 `digests/telemetry.json`
+`{date, raw, hit, deduped, items, days}`,`days` 是 `render.py` 新增的
+`consecutive_days()` 真实往前逐天检查文件是否存在算出的连续流(有缺口就断,
+不是历史文件总数——补了一条测试专门验证这一点)。零命中的日子也如实记
+telemetry(命中率=0%),不是留着旧快照装没事——为此改写了一条原有测试的
+断言(旧断言"零命中=什么都不写"比 SPEC 的 AC-16 本身还严,现在写清楚"不写
+日报文件,但写真实 telemetry 快照")。32 个单测全绿。真实跑一次
+`python3 -m aihot.main`:raw=295 hit=97 items=29 days=3(07-19/20/21 真实
+连续)。
+
+BW 侧新增 `practice_aihot.rs` 两个子命令:`feed-telemetry` 读这份真实 JSON,
+幂等建「每日命中率」(leading,target=`≥8%`,derive 引擎认得的阈值语法)+
+「连续产出日报天数」(lagging,target=`↑`,方向性 token)两条指标,记
+`SourceKind::Telemetry` 观测(不是 manual);`relabel-workload-metrics` 把
+「本周结算活数」的 def 改成诚实的工作量旁注框架。真实执行验证(sqlite 读回):
+命中率 32.9%≥8% → `signal=green`;连续产出天数只有一个观测点 →
+`signal=unknown`(诚实——趋势判断要≥2 个点,不是缺陷)。
+
+**范围边界(诚实记录,没有扩大动刀面)**:`本周结算活数`/`阶段完成 Issue 数`
+本来就不带 `stage_kind`(前者)或是 BW 全局机制而非 aihot 自建(后者)——
+`recompute_signals` 的项目/阶段健康聚合只卷入带 `stage_kind` 的指标
+(`by_stage`),所以这次没有改任何全局聚合逻辑,只改了指标自己的定义文本让
+它如实说清楚"我是什么、不是什么"。改全局聚合是跨全部项目的产品决策,超出
+本次 aihot 践行范围,如实留白。
+
