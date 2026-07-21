@@ -150,35 +150,54 @@ fn StageAxis(op: OpVm) -> Element {
     }
 }
 
-const PANELS: [(Panel, &str); 6] = [
+// L2(plan/11): two groups, not one flat row — 看板(对外可验证的整体进展 +
+// 难造假的健康)vs 过程件(达成看板数字的内部机制)。`Panel` itself is
+// untouched (bw-app); this split is pure UI grouping.
+const BOARD_PANELS: [(Panel, &str); 3] = [
     (Panel::Progress, "进度"),
+    (Panel::Issues, "Issue 看板"),
+    (Panel::Version, "版本"),
+];
+const PROCESS_PANELS: [(Panel, &str); 3] = [
     (Panel::Workflow, "工作流"),
     (Panel::Routine, "定时任务"),
     (Panel::Artifact, "产物"),
-    (Panel::Version, "版本"),
-    (Panel::Issues, "Issue 看板"),
 ];
 
 #[component]
 fn Toolbar(op: OpVm) -> Element {
-    let k = use_context::<Kernel>();
     let border = theme::BORDER;
-    let ink = theme::INK;
-    let ink2 = theme::INK_2;
     rsx! {
         div {
-            style: "display:flex;gap:6px;padding:10px 22px;border-bottom:1px solid {border};flex:none;",
-            for (panel, label) in PANELS {
+            style: "display:flex;align-items:center;gap:14px;padding:10px 22px;border-bottom:1px solid {border};flex:none;",
+            PanelGroup { label: "看板", panels: &BOARD_PANELS, op: op.clone() }
+            span { style: "width:1px;height:20px;background:{border};", "" }
+            PanelGroup { label: "过程件", panels: &PROCESS_PANELS, op: op.clone() }
+        }
+    }
+}
+
+#[component]
+fn PanelGroup(label: &'static str, panels: &'static [(Panel, &'static str)], op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let ink = theme::INK;
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    rsx! {
+        div {
+            style: "display:flex;align-items:center;gap:6px;",
+            span { style: "font-size:10.5px;color:{ink3};letter-spacing:.05em;margin-right:2px;", "{label}" }
+            for (panel , plabel) in panels.iter().copied() {
                 {
                     let k = k.clone();
                     let active = op.panel == panel;
                     let (bg, fg) = if active { (ink, "#FFF") } else { ("transparent", ink2) };
                     rsx! {
                         button {
-                            key: "{label}",
+                            key: "{plabel}",
                             style: "cursor:pointer;border:none;border-radius:8px;background:{bg};color:{fg};padding:7px 14px;font-size:12.5px;",
                             onclick: move |_| k.send(Command::SetPanel(panel)),
-                            "{label}"
+                            "{plabel}"
                         }
                     }
                 }
@@ -196,7 +215,7 @@ fn LeftRail(op: OpVm) -> Element {
         div {
             style: "width:232px;flex:none;border-right:1px solid {border};overflow-y:auto;padding:14px;",
             if op.scope == Scope::All {
-                HealthOverview { op }
+                ActiveSessionsRail { op }
             } else {
                 StageSessions { op }
             }
@@ -204,69 +223,92 @@ fn LeftRail(op: OpVm) -> Element {
     }
 }
 
+/// L2(plan/11): what's left of the old `HealthOverview` in the left rail —
+/// just "进行中 · 待你介入", session-nav, not health. The signal/attention
+/// half moved into `HealthOverviewCard` at the top of the 进度 panel (看板
+/// 数字属于看板,不属于每个面板都挂一份的侧栏挂件).
 #[component]
-fn HealthOverview(op: OpVm) -> Element {
+fn ActiveSessionsRail(op: OpVm) -> Element {
     let k = use_context::<Kernel>();
     let ink3 = theme::INK_3;
     let card_alt = theme::CARD_ALT;
     let needs_you: Vec<SessionCardVm> = op.sessions.iter().filter(|s| s.active).cloned().collect();
-    let quiet = needs_you.is_empty() && op.attention.watch.is_empty();
     rsx! {
-        div { style: "font-size:11px;color:{ink3};letter-spacing:.06em;margin-bottom:8px;", "健康概览" }
-        if quiet {
-            div { style: "font-size:12px;color:{ink3};line-height:1.7;", "一切安静。绿色隐身,只有红黄出声。" }
+        div { style: "font-size:11px;color:{ink3};letter-spacing:.06em;margin-bottom:8px;", "进行中 · 待你介入" }
+        if needs_you.is_empty() {
+            div { style: "font-size:12px;color:{ink3};line-height:1.7;", "没有进行中的会话——到「工作流」面板运行一轮标准工作流开始。" }
         }
-        if !needs_you.is_empty() {
-            div { style: "font-size:11px;color:{ink3};margin:6px 0;", "进行中 · 待你介入" }
-            for s in needs_you {
-                {
-                    let k = k.clone();
-                    let sid = s.id;
-                    let stage = s.stage_kind;
-                    let stage_label = stage.map(|x| x.label()).unwrap_or("项目");
-                    rsx! {
-                        button {
-                            key: "{s.title}",
-                            style: "width:100%;text-align:left;background:{card_alt};border:1px solid #DBD4C5;border-radius:8px;padding:9px 10px;margin-bottom:7px;cursor:pointer;",
-                            onclick: move |_| {
-                                if let Some(kind) = stage {
-                                    k.send(Command::SetScope(Scope::Stage(kind)));
-                                }
-                                k.send(Command::SetPanel(Panel::Workflow));
-                                k.send(Command::SelectSession(Some(sid)));
-                            },
-                            div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
-                            div { style: "font-size:11px;color:{ink3};", "{stage_label} · {s.status_label}" }
-                        }
+        for s in needs_you {
+            {
+                let k = k.clone();
+                let sid = s.id;
+                let stage = s.stage_kind;
+                let stage_label = stage.map(|x| x.label()).unwrap_or("项目");
+                rsx! {
+                    button {
+                        key: "{s.title}",
+                        style: "width:100%;text-align:left;background:{card_alt};border:1px solid #DBD4C5;border-radius:8px;padding:9px 10px;margin-bottom:7px;cursor:pointer;",
+                        onclick: move |_| {
+                            if let Some(kind) = stage {
+                                k.send(Command::SetScope(Scope::Stage(kind)));
+                            }
+                            k.send(Command::SetPanel(Panel::Workflow));
+                            k.send(Command::SelectSession(Some(sid)));
+                        },
+                        div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
+                        div { style: "font-size:11px;color:{ink3};", "{stage_label} · {s.status_label}" }
                     }
                 }
             }
         }
-        if !op.attention.watch.is_empty() {
-            div { style: "font-size:11px;color:{ink3};margin:8px 0 6px;", "阶段信号 · 需关注" }
-            for (kind, sig) in op.attention.watch.clone() {
-                {
-                    let k = k.clone();
-                    let color = ui::signal_color(sig);
-                    let dot = theme::dot(color, 8);
-                    let label = kind.label();
-                    let sig_label = ui::vm::signal_label(sig);
-                    rsx! {
-                        button {
-                            key: "{kind.index()}",
-                            style: "width:100%;text-align:left;background:transparent;border:1px solid #ECE6DA;border-radius:8px;padding:8px 10px;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:8px;",
-                            onclick: move |_| k.send(Command::SetScope(Scope::Stage(kind))),
-                            span { style: "{dot}" }
-                            span { style: "font-size:12.5px;", "{label}" }
-                            span { style: "margin-left:auto;font-size:11px;color:{ink3};", "{sig_label}" }
-                        }
-                    }
-                }
-            }
-        }
+    }
+}
+
+/// L2(plan/11): the health-signal half of the old `HealthOverview`, now a
+/// card at the top of the 看板/进度 panel instead of a left-rail widget that
+/// used to render on every panel regardless of relevance. Same data
+/// (`op.attention`), same click-through (switch scope to the flagged stage).
+#[component]
+fn HealthOverviewCard(op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let serif = theme::SERIF;
+    let ink3 = theme::INK_3;
+    let quiet = op.attention.watch.is_empty();
+    rsx! {
         div {
-            style: "font-size:11px;color:{ink3};margin-top:12px;border-top:1px dashed #E2DCCF;padding-top:10px;",
-            "{op.attention.steady} 个阶段平稳 · {op.archived} 条已归档"
+            style: "{card} padding:16px 20px;margin-bottom:16px;",
+            div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:10px;", "健康概览" }
+            if quiet {
+                div { style: "font-size:12.5px;color:{ink3};line-height:1.7;", "一切安静。绿色隐身,只有红黄出声。" }
+            } else {
+                div {
+                    style: "display:flex;flex-wrap:wrap;gap:8px;",
+                    for (kind , sig) in op.attention.watch.clone() {
+                        {
+                            let k = k.clone();
+                            let color = ui::signal_color(sig);
+                            let dot = theme::dot(color, 8);
+                            let label = kind.label();
+                            let sig_label = ui::vm::signal_label(sig);
+                            rsx! {
+                                button {
+                                    key: "{kind.index()}",
+                                    style: "text-align:left;background:transparent;border:1px solid #ECE6DA;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;gap:8px;",
+                                    onclick: move |_| k.send(Command::SetScope(Scope::Stage(kind))),
+                                    span { style: "{dot}" }
+                                    span { style: "font-size:12.5px;", "{label}" }
+                                    span { style: "font-size:11px;color:{ink3};", "{sig_label}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div {
+                style: "font-size:11px;color:{ink3};margin-top:12px;border-top:1px dashed #E2DCCF;padding-top:10px;",
+                "{op.attention.steady} 个阶段平稳 · {op.archived} 条已归档"
+            }
         }
     }
 }
@@ -1142,6 +1184,9 @@ fn ProgressAll(op: OpVm) -> Element {
         ink2
     };
     rsx! {
+        // L2(plan/11): health belongs on the board, at the very top — the
+        // number-one thing "整体进展" answers before anything else.
+        HealthOverviewCard { op: op.clone() }
         // P5: weekly-review card — pure read of recorded facts, top of panel.
         div {
             style: "{card} padding:16px 20px;margin-bottom:16px;",
