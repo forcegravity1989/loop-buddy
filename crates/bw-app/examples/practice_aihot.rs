@@ -62,10 +62,20 @@ async fn main() {
         .unwrap_or_else(|_| std::path::PathBuf::from("practice-aihot/workspaces"));
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db).await.expect("open db"));
+    // 2026-07-21 真实探测:`ClaudeCliConfig::default()` 的 $0.50 预算对真实编码活
+    // 太紧——同一网关下一次「回一个词」的空转调用就吃掉 ~$0.10(缓存/工具上下文
+    // 固定开销),真实活(读文件+改代码+跑测试)几个 tool-use 回合就会撞
+    // `error_max_budget_usd` 提前腰斩。这里只调宽 aihot 践行用的这份配置,
+    // 不动 crate 全局默认——预算上限是产品级的花费封顶决策,不该被一次践行
+    // 静默改掉。
+    let claude_config = ClaudeCliConfig {
+        max_budget_usd: 3.0,
+        ..ClaudeCliConfig::default()
+    };
     let mut app = App::new(
         store.clone(),
         Engine::new(Arc::new(MockExecutor::new())),
-        ClaudeCliConfig::default(),
+        claude_config,
     )
     .with_workspaces_root(ws_root);
     app.dispatch(Command::Boot).await.expect("boot");

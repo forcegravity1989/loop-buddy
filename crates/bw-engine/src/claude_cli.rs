@@ -109,6 +109,12 @@ pub fn build_prompt(phase: &PhaseNode) -> String {
 
 /// Shape of `claude -p --output-format json`'s stdout (empirically verified
 /// against a real, auth-failed call — fields present regardless of success).
+///
+/// 2026-07-21 真实探测确认:`result` 字段在 `subtype:"error_max_budget_usd"`
+/// (预算耗尽)时**完全不出现**——只有 `errors`(字符串数组)和 `subtype` 带
+/// 真实原因。旧版只读 `result`,预算耗尽时 `err_text` 落到空字符串,
+/// `ExecError::Failed("")` 让使用者看不出真实失败原因(见
+/// `[[bw-real-executor-pending-verification]]` 的诚实排查记录)。
 #[derive(Deserialize)]
 struct CliResult {
     #[serde(default)]
@@ -117,6 +123,29 @@ struct CliResult {
     is_error: bool,
     #[serde(default)]
     permission_denials: Vec<serde_json::Value>,
+    #[serde(default)]
+    subtype: String,
+    #[serde(default)]
+    errors: Vec<String>,
+}
+
+impl CliResult {
+    /// The real failure text: prefer `result` (carries normal API-rejection
+    /// messages like 429/529), fall back to `errors`/`subtype` for the shapes
+    /// that never populate `result` at all (budget exhaustion confirmed;
+    /// likely other terminal-reason variants too).
+    fn error_text(&self) -> String {
+        if !self.result.trim().is_empty() {
+            return self.result.clone();
+        }
+        if !self.errors.is_empty() {
+            return format!("{}(subtype={})", self.errors.join("; "), self.subtype);
+        }
+        format!(
+            "claude CLI 返回 is_error=true 但无诊断文本(subtype={})",
+            self.subtype
+        )
+    }
 }
 
 /// Gateway-side transient failures (overload / brief unavailability). Only
@@ -246,7 +275,7 @@ impl Executor for ClaudeCliExecutor {
                         gaps: vec![],
                     });
                 }
-                parsed.result
+                parsed.error_text()
             };
 
             if attempt < TRANSIENT_BACKOFF_SECS.len() && is_transient_gateway_error(&err_text) {
