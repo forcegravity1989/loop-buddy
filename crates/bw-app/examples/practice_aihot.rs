@@ -27,6 +27,10 @@
 //!   cron                                           幂等注册每日 autopilot cron(到点建活,不自动跑)
 //!   distill <number> <name> <desc> <category> <content-file>   从真实 Done 活蒸馏技能
 //!   sync                                           SyncConnector(git-repo)真喂工作区指标
+//!   record-metric <name> <value>                  人工记一条 append-only 观测(手填指标用)
+//!   feed-telemetry                                 读真实 digests/telemetry.json,真喂命中率/连续产出天数(K4)
+//!   relabel-workload-metrics                       把「本周结算活数」的定义改成诚实的工作量旁注框架(K4)
+//!   weekly-review <reason>                         用当前真实派生信号记一次周复盘
 //!   summary                                        真实读回汇总(agent/skill/workflow/cron/issue/observation 计数)
 //!
 //! 用法: cargo run -p bw-app --example practice_aihot -- <subcommand> [args...]
@@ -34,7 +38,7 @@
 
 use bw_core::model::{
     Cadence, CronMode, HubSource, IssuePriority, IssueStatus, LibSource, LoopConfig, Maturity,
-    ProjectCycle, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
+    ProjectCycle, SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{AgentId, CronTaskId, IssueId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
@@ -50,6 +54,11 @@ const PROJECT_NAME: &str = "aihot 日报";
 const METRIC_COMMITS: &str = "工作区真实提交数";
 const METRIC_DIGESTS: &str = "累计生成日报天数";
 const METRIC_ISSUES_SETTLED: &str = "本周结算活数";
+// plan/10 K4:产出连续性为纲——两条真正的产品信号,零 mock,从
+// aihot/main.py 每次真实运行落盘的 digests/telemetry.json 真喂(见
+// `cmd_feed_telemetry`)。取代 issue 解决数量这种工作量代理。
+const METRIC_HIT_RATE: &str = "每日命中率";
+const METRIC_STREAK: &str = "连续产出日报天数";
 
 #[tokio::main]
 async fn main() {
@@ -98,11 +107,16 @@ async fn main() {
         "distill" => cmd_distill(&mut app, project, &args[2..]).await,
         "sync" => cmd_sync(&mut app, &store, project).await,
         "record-metric" => cmd_record_metric(&mut app, &store, project, &args[2..]).await,
+        "feed-telemetry" => cmd_feed_telemetry(&mut app, &store, project).await,
+        "relabel-workload-metrics" => cmd_relabel_workload_metrics(&mut app, &store, project).await,
         "weekly-review" => cmd_weekly_review(&mut app, &args[2..]).await,
         "summary" => cmd_summary(&app, &store, project).await,
         other => {
             eprintln!("未知子命令:「{other}」");
-            eprintln!("用法: setup|open-issue|probe-run|settle-issue|block-issue|cron|distill|sync|summary");
+            eprintln!(
+                "用法: setup|open-issue|probe-run|settle-issue|block-issue|cron|distill|sync|\
+                 record-metric|feed-telemetry|relabel-workload-metrics|weekly-review|summary"
+            );
             std::process::exit(1);
         }
     }
@@ -611,6 +625,133 @@ async fn cmd_record_metric(
     .await
     .expect("record observation");
     println!("已记录「{name}」= {value}");
+}
+
+/// `feed-telemetry` —— plan/10 K4:读真实 `digests/telemetry.json`(main.py 每次
+/// 真实运行落盘),幂等建两条真产品指标(命中率/连续产出天数)并记一条真实
+/// `SourceKind::Telemetry` 观测。零 mock——数字来自 aihot 自己的真实运行,
+/// 不是这个指挥器编的。首次调用建指标(target 用 derive 引擎认得的语法:
+/// `≥8%` 阈值比较、`↑` 方向性——不是自由文本),之后每次调用只追加观测。
+async fn cmd_feed_telemetry(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
+    let proj = app.store().get_project(project).await.unwrap().unwrap();
+    let telemetry_path =
+        std::path::Path::new(proj.workspace_path.trim()).join("digests/telemetry.json");
+    let raw_text = std::fs::read_to_string(&telemetry_path)
+        .unwrap_or_else(|e| panic!("读 {telemetry_path:?} 失败(先跑一次真实 main.py):{e}"));
+    let v: serde_json::Value = serde_json::from_str(&raw_text)
+        .unwrap_or_else(|e| panic!("{telemetry_path:?} 不是合法 JSON:{e}"));
+    let raw_count = v["raw"].as_f64().expect("telemetry.json 缺 raw 字段");
+    let hit_count = v["hit"].as_f64().expect("telemetry.json 缺 hit 字段");
+    let days = v["days"].as_u64().expect("telemetry.json 缺 days 字段");
+    let hit_rate_pct = if raw_count > 0.0 {
+        hit_count / raw_count * 100.0
+    } else {
+        0.0
+    };
+    let hit_rate_str = format!("{hit_rate_pct:.1}%");
+
+    let sigs = store.persisted_signals(project).await.unwrap();
+    let existing = |name: &str| sigs.metrics.iter().find(|m| m.name == name).map(|m| m.id);
+
+    let hit_rate_id = match existing(METRIC_HIT_RATE) {
+        Some(id) => id,
+        None => {
+            let id = MetricId::new();
+            app.dispatch(Command::UpsertManualMetric {
+                id,
+                name: METRIC_HIT_RATE.into(),
+                def: "真实产品信噪比信号:main.py 每次真实运行的 命中数/原始条目\
+                      (digests/telemetry.json 真喂,零 mock)。命中率下滑预示\
+                      关注面该收紧,或来源开始水化——不是造出来的健康灯。"
+                    .into(),
+                role: MetricRole::Leading,
+                stage_kind: None,
+                target: "≥8%".into(),
+                amber: Default::default(),
+                value: String::new(),
+            })
+            .await
+            .expect("create metric 每日命中率");
+            id
+        }
+    };
+    let streak_id = match existing(METRIC_STREAK) {
+        Some(id) => id,
+        None => {
+            let id = MetricId::new();
+            app.dispatch(Command::UpsertManualMetric {
+                id,
+                name: METRIC_STREAK.into(),
+                def: "真实产品结果信号:main.py 每次真实运行时从今天真实往前数的\
+                      连续产出天数,有缺口就断(digests/telemetry.json 真喂)。\
+                      直接回答「我到底有没有每天真的在出这个产品」。"
+                    .into(),
+                role: MetricRole::Lagging,
+                stage_kind: None,
+                target: "↑".into(),
+                amber: Default::default(),
+                value: String::new(),
+            })
+            .await
+            .expect("create metric 连续产出日报天数");
+            id
+        }
+    };
+
+    app.dispatch(Command::RecordCollectedObservation {
+        metric: hit_rate_id,
+        value: hit_rate_str.clone(),
+        source: SourceKind::Telemetry,
+    })
+    .await
+    .expect("record hit rate");
+    app.dispatch(Command::RecordCollectedObservation {
+        metric: streak_id,
+        value: days.to_string(),
+        source: SourceKind::Telemetry,
+    })
+    .await
+    .expect("record streak");
+
+    println!(
+        "已真喂「{METRIC_HIT_RATE}」={hit_rate_str}(命中{hit_count:.0}/原始{raw_count:.0})、\
+         「{METRIC_STREAK}」={days} 天(来源:{telemetry_path:?})"
+    );
+}
+
+/// `relabel-workload-metrics` —— plan/10 K4:把 issue 计数类指标的 def 改成
+/// 诚实的"工作量参考,非产品信号"框架。这两条本来就不带 stage_kind,不参与
+/// `recompute_signals` 的项目/阶段健康聚合(只有带 stage_kind 的指标才会被
+/// 卷进 `by_stage`)——所以这里不是修聚合逻辑(那是全局机制,超出 aihot
+/// 这一次践行的范围),只是让指标自己的定义文本如实说清楚它是什么、不是什么,
+/// 不让人误读成引领性产品指标。用同一个 id 重新 Upsert(不传 value,不碰
+/// 观测历史)。
+async fn cmd_relabel_workload_metrics(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
+    let sigs = store.persisted_signals(project).await.unwrap();
+    let Some(m) = sigs
+        .metrics
+        .iter()
+        .find(|m| m.name == METRIC_ISSUES_SETTLED)
+    else {
+        println!("「{METRIC_ISSUES_SETTLED}」还不存在,先跑 setup");
+        return;
+    };
+    app.dispatch(Command::UpsertManualMetric {
+        id: m.id,
+        name: METRIC_ISSUES_SETTLED.into(),
+        def: "工作量参考(非产品引领指标——issue 解决数量不等于产品在变好,\
+              真正的产品信号见「每日命中率」「连续产出日报天数」):\
+              本周真实结算(转 Done)的活数,工作台记账自生。"
+            .into(),
+        role: MetricRole::Leading,
+        stage_kind: None,
+        target: "≥5/周".into(),
+        amber: Default::default(),
+        value: String::new(),
+    })
+    .await
+    .expect("relabel 本周结算活数");
+    println!("已把「{METRIC_ISSUES_SETTLED}」的定义改为诚实的工作量旁注框架");
 }
 
 /// `weekly-review <reason>` —— 用当前真实派生信号周复盘(不手设,human_override
