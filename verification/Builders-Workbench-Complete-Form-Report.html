@@ -167,7 +167,7 @@ runtime 是本地 daemon + 云;autopilot 自动建 Issue 并路由;skill <strong
 <p><strong>本机实跑验证</strong>:启动诊断 <code>view=App panel=Issues issues=6</code>;截图读回列计数 <code>1/1/1/1/2</code>
 与 6 条 seed 精确吻合;卡片 <code>#5「Issue 看板桌面 UI」(构建·sonnet5)</code>、<code>#6「Squad leader 路由委派(留口)」(构建·未分配)</code>
 等全部正确 —— 真实渲染,非 mock。(computer-use 经 screencapture 在本会话验证可行;点击交互需辅助访问权限,本轮用真数据 seed + 截图验证渲染。)</p>
-<img src="docs/board-issues.png" alt="Issue 看板真实渲染截图" style="width:100%;border:1px solid var(--line);border-radius:10px;margin-top:12px;">
+<img src="../docs/board-issues.png" alt="Issue 看板真实渲染截图" style="width:100%;border:1px solid var(--line);border-radius:10px;margin-top:12px;">
 <p class="sub">一键复现:<code>cargo run -p bw-app --example seed_board_demo -- /tmp/d.db</code> 然后 <code>BW_DB=/tmp/d.db BW_OPEN='Builders' Workbench · 完整形态' cargo run -p app-desktop</code></p>
 </div>
 
