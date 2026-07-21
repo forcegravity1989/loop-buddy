@@ -112,17 +112,65 @@ python3 -m aihot.main                                                          #
 
 ## 3. 诚实的未尽事项(留白,不假装做了)
 
-- 真执行器(`claude -p` 子进程走 `RunIssue`/`RunStagePlaybook`)今晚全程被账号
-  配额挡住(2026-07-24 09:59:59 重置)——本次 28 件活里,#2-#28 的真实代码/文档
-  全部由值班 agent(本会话)直接产出,不是通过 BW 的 `RunIssue` 真实子进程调用
-  产出。这与「让 agent loop 干活」的产品命题有出入,是本夜诚实的最大偏差,
-  下一棒(或配额恢复后)应该补一次真 `RunIssue` 跑通至少一件活,替换掉这个
-  代跑状态。
-- superpowers 只做了"选型引入+登记"(marketplace add + install + workflow_spec
-  注册,phase_prompts 点名真实技能名),没有真实调用它的任何技能执行——
-  同样受阻于上一条(真执行器不可用)。
+- ~~真执行器全程被账号配额挡住~~ **2026-07-21 已解:见 §4**——用户修好登录后,
+  issue #30 真跑通(见下),`[[bw-real-executor-pending-verification]]` 已更新。
+- superpowers 只做了"选型引入+登记",§4 的 issue #30 真跑第一次真实调用了它
+  (workflow 的 phase_prompts 点名 brainstorming/writing-plans/executing-plans/
+  test-driven-development,4 阶段全部真实完成)——不再是"只登记未调用"。
 - 项目归属(project_id)只做了 schema 最小切片,查询收窄(指派下拉/技能注入
-  只看本项目)没做——plan/08 记录的 P2 全量仍待later。
+  只看本项目)没做——plan/08 记录的 P2 全量仍待later。§4 补了"读侧展示"
+  (项目侧边栏 + 卡片归属 chip),但**不是**查询收窄,如实区分。
 - aihot 应用本身:没有做账号体系、没有做真实"取消关注某关键词"式的用户偏好
   演化、没有做 RSS 输出格式——如实留白,不在本次践行范围内。
+
+## 4. plan/10 续篇(2026-07-21,用户拍板"个人级看板 + 真执行器实跑刷新")
+
+用户三个新指令:①一级侧边栏是 marketplace,项目维度组件管理没入口;
+②真执行器登录搞定了,可以真跑了;③skill/agent/workflow 卡片展示太简短,
+issue 解决数不是真正的引领/滞后指标。计划见 `plan/10-personal-kanban-and-real-run.md`,
+五条工作线 K0-K4,K0-K3 已完成如下(K4 见该文件后续):
+
+**K0 · 真执行器实跑验证**——真撞到一堵新墙又真解决:issue #30 的 `probe-run`
+首次真跑(默认 `max_budget_usd=0.50`)142.7s 后失败,但 `error` 字段是空字符串,
+诊断不出原因。直接裸调 `claude -p "回一个词"` 定位:真实花费 $0.0995(固定
+缓存/工具上下文开销就占这么多),且 CLI 在 `subtype:"error_max_budget_usd"`
+时压根不产出 `result` 字段——旧代码只读 `result`,真实原因被空字符串吞掉。
+修 `claude_cli.rs` 的 `CliResult` 补 `errors`/`subtype` 兜底(commit `06c1a60`),
+aihot 践行的 `ClaudeCliConfig.max_budget_usd` 调宽到 3.0(不动 crate 全局默认)。
+重跑:**真实成功**,493.5s,4/4 阶段完成,真实提交 `25e0a53`(SPEC.md/TASKS.md/
+REVIEW.md + 7 条新回归测试,23→30 全绿)。
+
+**诚实的次生发现——范围漂移,不是 bug**:issue #30 本来要的是"main.py 落盘
+telemetry.json",但 agent 的 brainstorm 阶段把范围重定向成了"全项目 SPEC 固化
++ 测试补齐"——真实、有价值,但不是原始的活。原因:aihot 主 workflow 的
+`phase_prompts` 是方法论导向("先发散再收敛出一个可执行方向"),不是逐字
+照办 issue 描述。已诚实结算 #30(credit 真实产出,note 缺口),开了新 issue
+留给 K4 直接实现 telemetry.json(不再靠真 RunIssue 二次赌范围漂移)。
+
+**K1 · 项目二级侧边栏**——发现 project_id 虽然进了 schema(昨夜),但读侧
+从没跟上:`list_workflow_specs`/`list_skills`/`list_agents` 的 SELECT 根本不取
+这列,domain struct(`WorkflowSpec`/`SkillCard`/`AgentCard`)压根没这个字段。
+补齐 domain→store→VM 全链路(6 个 SELECT + 3 个 row mapper + 4 个 VM 卡片
++ 6 处 `WorkflowSpec` 字面量构造点),新增 `ProjectRail` 组件——项目打开时
+在图标栏右侧多一列,五组(技能/智能体/工作流/定时/连接器)按真实 project_id
+分"本项目自建"/"共享引入",点项跳全局 Hub(复用已有导航)。全局图标栏
+原样不动。`sqlite3` 独立核对计数(skill=2/agent=1/workflow=1/cron=1/
+connector=1)与代码过滤逻辑一致。
+
+**K2 · 卡片归属 chip**——盘点发现 WorkflowHub 的行其实已经够丰富(源/成熟度/
+触发器 chip、真实战绩、悬停关系),真正缺的是三种卡片都拿到了真实 project_id
+却没处显示"这是谁的"。SkillHub/AgentHub 仿 WorkflowHub 已有的 `projects` 入参,
+三处卡头都加真实反查的归属 chip("◇ 项目名",None 不渲染)。顺手补
+`BW_HUB=skill|agent|...` 深链(现有 `BW_OPEN`/`BW_PANEL` 到不了图标栏 Hub 屏,
+这是本次唯一能核验 K2 渲染路径可达、无 panic 的手段——computer-use 对这个
+未打包 debug 二进制两次都申请不到窗口权限,肉眼截图仍缺,留给下一棒)。
+
+**K3 · 实跑后刷新链路核验**——纯核验,没发现代码缺口。五面板逐条 sqlite
+读回:产物(`CollectArtifacts` 真登记 577 行,`LoadArtifacts` 读同一张表)、
+定时(cron_task.last_run 真实反映今早 01:33:36 的自动触发)、版本
+(`LoadVersionLog` 直接 shell `git log`,零缓存不可能陈旧,真实 31 commit)、
+进展(`阶段完成 Issue 数` build 阶段 5→6,#30 结算时真实喂入)全部确认自动
+刷新;`本周结算活数` 看起来"没刷新"但那是它自己的设计(定义写明"人工按周
+核对更新",非自动派生)——不是 K3 的缺口,K4 会把这类 issue 计数指标整体
+降级,到时候一并处理,不单独修。
 
