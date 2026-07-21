@@ -188,6 +188,10 @@ pub enum Command {
     /// Load the active project's registered artifacts into state (Artifact
     /// panel). Same explicit-load pattern as `LoadVersionLog`.
     LoadArtifacts,
+    /// L1(plan/11): load one cron task's real fire history
+    /// (`Store::cron_effectiveness` — always existed, never had a caller).
+    /// Same explicit-load pattern as `LoadArtifacts`.
+    LoadCronEffectiveness(CronTaskId),
     /// P4: assemble one Issue's detail (its runs + each run's real file
     /// changes + its artifacts) into state for the board overlay. Read-only.
     OpenIssueDetail(IssueId),
@@ -508,6 +512,8 @@ pub enum Event {
     },
     /// The `AppState.artifacts` snapshot was (re)loaded.
     ArtifactsChanged,
+    /// L1(plan/11): the `AppState.cron_effectiveness` snapshot was (re)loaded.
+    CronEffectivenessChanged,
     /// The self-driving optimization cycle (iter 18) just ran. Carries the
     /// full report — scanned workflows, proposals generated, what was
     /// auto-applied (safe/positive), and what was deferred to a human. A
@@ -585,6 +591,9 @@ pub struct AppState {
     /// Registered artifacts of the active project (Artifact panel) — same
     /// explicit-load, project-tagged pattern as `version_log`.
     pub artifacts: Option<(ProjectId, Vec<Artifact>)>,
+    /// L1(plan/11): last-loaded cron task's real fire history — same single-
+    /// slot, task-tagged explicit-load pattern as `artifacts`/`version_log`.
+    pub cron_effectiveness: Option<(CronTaskId, bw_core::model::CronEffectiveness)>,
     /// P4: the explicitly-opened Issue detail (board overlay) — same
     /// explicit-load pattern as `artifacts`. `None` = no overlay open.
     pub issue_detail: Option<IssueDetailData>,
@@ -622,6 +631,7 @@ impl Default for AppState {
             claude_config: ClaudeCliConfig::default(),
             version_log: None,
             artifacts: None,
+            cron_effectiveness: None,
             issue_detail: None,
         }
     }
@@ -1939,6 +1949,15 @@ impl App {
                 let rows = self.store.list_artifacts(p).await?;
                 self.state.artifacts = Some((p, rows));
                 self.emit(Event::ArtifactsChanged);
+            }
+
+            // L1(plan/11): a real backend function (`cron_effectiveness`)
+            // that has existed since the cron-run-attribution work landed but
+            // never had a caller — this is that caller.
+            Command::LoadCronEffectiveness(id) => {
+                let e = self.store.cron_effectiveness(id).await?;
+                self.state.cron_effectiveness = Some((id, e));
+                self.emit(Event::CronEffectivenessChanged);
             }
 
             // P4: assemble one Issue's evidence — its runs, what each run

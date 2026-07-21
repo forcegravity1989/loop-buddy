@@ -1,49 +1,89 @@
-//! Project-scoped component rail (plan/10 K1). When a project is open, this
-//! renders as a second column between the global icon rail (`chrome::IconRail`
-//! — the marketplace, unfiltered) and the content area, listing *this
-//! project's own* skill/agent/workflow/cron/connector rows.
+//! Project-scoped component rail (plan/10 K1, reworked plan/11 L1). When a
+//! project is open, this renders as a second column between the global icon
+//! rail (`chrome::IconRail` — the marketplace, unfiltered) and the content
+//! area, listing *this project's own* skill/agent/workflow/cron/connector
+//! rows.
 //!
 //! Grouped by real `project_id` on each VM row: 本项目自建 (`Some(active)`)
 //! vs 共享/引入 (`None`, borrowed from the global library). An empty own-group
 //! says so honestly instead of hiding — this is a real gap in what a project
 //! has built for itself, not a rendering bug.
 //!
-//! Clicking any row jumps to the matching global Hub (same `Hub` rail target
-//! the icon rail already uses) — this sidebar is a filtered index into the
-//! same data, not a second source of truth or a second detail view.
+//! L1(plan/11): clicking a row used to jump to the matching global Hub
+//! (marketplace) — that conflated "this project's own components" with "the
+//! whole catalog". Now a click opens `ComponentDetail` in place: the full
+//! shape of *that one component*, not a detour into everything else. The
+//! group header is a plain label (no click target) since there's no "browse
+//! all" concept left in this rail — browsing the full catalog is the icon
+//! rail's job.
 
-use crate::kernel::HubVm;
-use crate::screens::chrome::Hub;
+use crate::screens::component_detail::ComponentSel;
 use crate::theme;
 use bw_core::ProjectId;
 use dioxus::prelude::*;
+use ui::vm::{AgentCardVm, ConnectorCardVm, SkillCardVm, WorkflowHubRowVm};
+
+#[derive(Clone, PartialEq)]
+struct RailItem {
+    name: String,
+    meta: String,
+    sel: ComponentSel,
+}
 
 #[component]
-pub fn ProjectRail(project_id: ProjectId, hub: HubVm, on_pick: EventHandler<Hub>) -> Element {
+pub fn ProjectRail(
+    project_id: ProjectId,
+    hub: crate::kernel::HubVm,
+    on_pick: EventHandler<ComponentSel>,
+) -> Element {
     let border = theme::BORDER;
     let ink3 = theme::INK_3;
     let mono = theme::MONO;
 
-    let own_skills: Vec<_> = hub
+    let own_skills: Vec<&SkillCardVm> = hub
         .skills
         .iter()
         .filter(|s| s.project_id == Some(project_id))
         .collect();
     let shared_skills = hub.skills.len() - own_skills.len();
+    let skill_items: Vec<RailItem> = own_skills
+        .iter()
+        .map(|s| RailItem {
+            name: s.name.clone(),
+            meta: s.maturity_label.to_string(),
+            sel: ComponentSel::Skill(s.id),
+        })
+        .collect();
 
-    let own_agents: Vec<_> = hub
+    let own_agents: Vec<&AgentCardVm> = hub
         .agents
         .iter()
         .filter(|a| a.project_id == Some(project_id))
         .collect();
     let shared_agents = hub.agents.len() - own_agents.len();
+    let agent_items: Vec<RailItem> = own_agents
+        .iter()
+        .map(|a| RailItem {
+            name: a.name.clone(),
+            meta: a.maturity_label.to_string(),
+            sel: ComponentSel::Agent(a.id),
+        })
+        .collect();
 
-    let own_workflows: Vec<_> = hub
+    let own_workflows: Vec<&WorkflowHubRowVm> = hub
         .workflows
         .iter()
         .filter(|w| w.project_id == Some(project_id))
         .collect();
     let shared_workflows = hub.workflows.len() - own_workflows.len();
+    let workflow_items: Vec<RailItem> = own_workflows
+        .iter()
+        .map(|w| RailItem {
+            name: w.name.clone(),
+            meta: w.source_label.to_string(),
+            sel: ComponentSel::Workflow(w.id),
+        })
+        .collect();
 
     let own_crons: Vec<_> = hub
         .cron_tasks
@@ -51,13 +91,29 @@ pub fn ProjectRail(project_id: ProjectId, hub: HubVm, on_pick: EventHandler<Hub>
         .filter(|c| c.project_id == Some(project_id))
         .collect();
     let cross_project_crons = hub.cron_tasks.len() - own_crons.len();
+    let cron_items: Vec<RailItem> = own_crons
+        .iter()
+        .map(|c| RailItem {
+            name: c.name.clone(),
+            meta: c.status_label.to_string(),
+            sel: ComponentSel::Cron(c.id),
+        })
+        .collect();
 
-    let own_connectors: Vec<_> = hub
+    let own_connectors: Vec<&ConnectorCardVm> = hub
         .connectors
         .iter()
         .filter(|c| c.project_id == Some(project_id))
         .collect();
     let global_connectors = hub.connectors.len() - own_connectors.len();
+    let connector_items: Vec<RailItem> = own_connectors
+        .iter()
+        .map(|c| RailItem {
+            name: c.name.clone(),
+            meta: c.status_label.to_string(),
+            sel: ComponentSel::Connector(c.id),
+        })
+        .collect();
 
     rsx! {
         div {
@@ -68,43 +124,43 @@ pub fn ProjectRail(project_id: ProjectId, hub: HubVm, on_pick: EventHandler<Hub>
             }
             RailGroup {
                 label: "技能",
-                items: own_skills.iter().map(|s| (s.name.clone(), s.maturity_label.to_string())).collect::<Vec<_>>(),
+                items: skill_items,
                 shared_count: shared_skills,
                 shared_label: "共享",
                 empty_hint: "本项目还没有自建的技能",
-                on_click: move |_| on_pick.call(Hub::Skill),
+                on_pick,
             }
             RailGroup {
                 label: "智能体",
-                items: own_agents.iter().map(|a| (a.name.clone(), a.maturity_label.to_string())).collect::<Vec<_>>(),
+                items: agent_items,
                 shared_count: shared_agents,
                 shared_label: "共享",
                 empty_hint: "本项目还没有自建的智能体",
-                on_click: move |_| on_pick.call(Hub::Agent),
+                on_pick,
             }
             RailGroup {
                 label: "工作流",
-                items: own_workflows.iter().map(|w| (w.name.clone(), w.source_label.to_string())).collect::<Vec<_>>(),
+                items: workflow_items,
                 shared_count: shared_workflows,
                 shared_label: "共享",
                 empty_hint: "本项目还没有自建的工作流",
-                on_click: move |_| on_pick.call(Hub::Workflow),
+                on_pick,
             }
             RailGroup {
                 label: "定时",
-                items: own_crons.iter().map(|c| (c.name.clone(), c.status_label.to_string())).collect::<Vec<_>>(),
+                items: cron_items,
                 shared_count: cross_project_crons,
                 shared_label: "全部项目",
                 empty_hint: "本项目还没有定时任务",
-                on_click: move |_| on_pick.call(Hub::Cron),
+                on_pick,
             }
             RailGroup {
                 label: "连接器",
-                items: own_connectors.iter().map(|c| (c.name.clone(), c.status_label.to_string())).collect::<Vec<_>>(),
+                items: connector_items,
                 shared_count: global_connectors,
                 shared_label: "全局",
                 empty_hint: "本项目还没有连接器",
-                on_click: move |_| on_pick.call(Hub::Connector),
+                on_pick,
             }
         }
     }
@@ -113,11 +169,11 @@ pub fn ProjectRail(project_id: ProjectId, hub: HubVm, on_pick: EventHandler<Hub>
 #[component]
 fn RailGroup(
     label: &'static str,
-    items: Vec<(String, String)>,
+    items: Vec<RailItem>,
     shared_count: usize,
     shared_label: &'static str,
     empty_hint: &'static str,
-    on_click: EventHandler<()>,
+    on_pick: EventHandler<ComponentSel>,
 ) -> Element {
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
@@ -127,8 +183,7 @@ fn RailGroup(
         div {
             style: "margin-bottom:16px;",
             div {
-                style: "display:flex;align-items:baseline;justify-content:space-between;cursor:pointer;margin-bottom:6px;",
-                onclick: move |_| on_click.call(()),
+                style: "display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;",
                 span { style: "font-size:12.5px;font-weight:500;color:{ink2};", "{label}" }
                 span { style: "font-size:11px;color:{ink3};", "{n}" }
             }
@@ -137,16 +192,18 @@ fn RailGroup(
             } else {
                 div {
                     style: "display:flex;flex-direction:column;gap:3px;",
-                    for (name , meta) in items.iter() {
-                        div {
-                            key: "{name}",
-                            style: "cursor:pointer;font-size:11.5px;color:{ink2};line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
-                            title: "{name} · {meta}",
-                            onclick: move |e| {
-                                e.stop_propagation();
-                                on_click.call(());
-                            },
-                            "{name}"
+                    for item in items.iter() {
+                        {
+                            let sel = item.sel;
+                            rsx! {
+                                div {
+                                    key: "{item.name}",
+                                    style: "cursor:pointer;font-size:11.5px;color:{ink2};line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
+                                    title: "{item.name} · {item.meta}",
+                                    onclick: move |_| on_pick.call(sel),
+                                    "{item.name}"
+                                }
+                            }
                         }
                     }
                 }

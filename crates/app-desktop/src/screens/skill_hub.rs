@@ -64,6 +64,12 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
                                 .project_id
                                 .and_then(|pid| projects.iter().find(|p| p.id == pid))
                                 .map(|p| p.name.clone());
+                            // L4: 出处可信度——蒸馏来源(真实来自哪件活 · 哪个
+                            // agent 产出),不是编的社会证明。
+                            let origin_agent_name = s
+                                .origin_agent
+                                .and_then(|aid| hub.agents.iter().find(|a| a.id == aid))
+                                .map(|a| a.name.clone());
                             rsx! {
                                 SkillCard {
                                     key: "{sid.uuid()}",
@@ -72,6 +78,7 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
                                     is_editing,
                                     used_by,
                                     owner_project,
+                                    origin_agent_name,
                                     on_toggle: move |_| {
                                         expanded.set(if is_open { None } else { Some(sid) });
                                         editing.set(None);
@@ -90,12 +97,25 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
 
 /// Real reverse lookup: which Hub workflows list this skill (by name — same
 /// free-text `SkillRef` convention as `SkillAgentPicker`, not a hard FK).
-fn workflows_using_skill(hub: &HubVm, skill_name: &str) -> Vec<String> {
+/// `pub(crate)`: L1's `component_detail.rs` reuses this for the project-rail
+/// skill detail card — one lookup, not two copies.
+pub(crate) fn workflows_using_skill(hub: &HubVm, skill_name: &str) -> Vec<String> {
     hub.workflow_details
         .iter()
         .filter(|d| d.skills.iter().any(|(name, _, _)| name == skill_name))
         .map(|d| d.row.name.clone())
         .collect()
+}
+
+/// Truncate a skill's real body to a one-line preview — never a synthesized
+/// summary, just the literal opening text so far as it fits.
+fn content_preview(content: &str) -> String {
+    let flat = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > 72 {
+        format!("{}…", flat.chars().take(72).collect::<String>())
+    } else {
+        flat
+    }
 }
 
 #[component]
@@ -107,6 +127,9 @@ fn SkillCard(
     /// 真实项目名(从 project_id 反查)——`None` = 共享/全局目录条目,不编
     /// 一个假归属出来。
     owner_project: Option<String>,
+    /// L4: 真实反查出的蒸馏产出 agent 名——`None` = 非蒸馏(目录条目)或
+    /// 蒸馏来源 agent 已不在库(诚实缺席,不补一个假名)。
+    origin_agent_name: Option<String>,
     on_toggle: EventHandler<()>,
     on_edit: EventHandler<()>,
     on_done_edit: EventHandler<()>,
@@ -117,11 +140,13 @@ fn SkillCard(
     let (chip_bg, chip_fg) = ("#EFE9DA", theme::INK_2);
     let chip = theme::chip(chip_bg, chip_fg);
     let span_style = if is_open { "grid-column:1/-1;" } else { "" };
+    let distilled = s.distilled_from_issue.is_some();
     rsx! {
         div {
             style: "{card} padding:16px 18px;{span_style}",
+            // ── 1. 身份行:名称 + 归属 + 成熟度 ──
             div {
-                style: "display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;",
+                style: "display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;",
                 onclick: move |_| on_toggle.call(()),
                 span { style: "font-family:{theme::MONO};font-size:13px;font-weight:500;", "{s.name}" }
                 if let Some(p) = &owner_project {
@@ -129,15 +154,40 @@ fn SkillCard(
                 }
                 span { style: "{chip} margin-left:auto;", "{s.maturity_label}" }
             }
+            // ── 2. 一句话价值主张:这个技能解决什么 ──
             if !s.desc.is_empty() {
-                div { style: "font-size:12px;color:{ink2};line-height:1.6;margin-bottom:10px;", "{s.desc}" }
+                div { style: "font-size:12px;color:{ink2};line-height:1.6;margin-bottom:8px;", "{s.desc}" }
             }
+            // ── 3. 社会证明:真实引用数 + 被多少工作流用 ──
             div {
-                style: "display:flex;align-items:center;gap:8px;font-size:11px;color:{ink3};",
+                style: "font-size:11px;color:{ink3};font-family:{theme::MONO};margin-bottom:6px;",
+                "{s.uses} 次引用 · 被 {used_by.len()} 个工作流使用"
+            }
+            // ── 4. 出处可信度:来源 + 真实蒸馏出处(非编造)──
+            div {
+                style: "display:flex;align-items:center;gap:8px;font-size:11px;color:{ink3};margin-bottom:8px;flex-wrap:wrap;",
                 span { "{s.category}" }
                 span { "·" }
                 span { "{s.source_label}" }
-                span { style: "margin-left:auto;", "{s.uses} 次引用" }
+                if distilled {
+                    span {
+                        style: "{theme::chip(\"#EAF0E2\", \"#4A5E42\")}",
+                        if let Some(a) = &origin_agent_name {
+                            "⚗ 蒸馏自实战 · {a}"
+                        } else {
+                            "⚗ 蒸馏自实战"
+                        }
+                    }
+                }
+            }
+            // ── 5. 结构预览:正文首句(有则给一眼,没有诚实说无)──
+            if s.content.trim().is_empty() {
+                div { style: "font-size:11px;color:{ink3};", "目录引用 · 无正文" }
+            } else {
+                div {
+                    style: "font-size:11px;color:{ink3};font-family:{theme::MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                    "{content_preview(&s.content)}"
+                }
             }
             if is_open {
                 div {

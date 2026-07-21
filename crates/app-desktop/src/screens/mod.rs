@@ -5,6 +5,7 @@
 pub mod activity_hub;
 pub mod agent_hub;
 pub mod chrome;
+pub mod component_detail;
 pub mod connector_hub;
 pub mod create;
 pub mod cron_hub;
@@ -15,4 +16,5 @@ pub mod project_rail;
 pub mod settings_hub;
 pub mod skill_hub;
 pub mod wall;
+pub mod workflow_flow;
 pub mod workflow_hub;

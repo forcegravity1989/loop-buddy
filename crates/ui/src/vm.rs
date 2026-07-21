@@ -509,6 +509,10 @@ pub struct WorkflowHubRowVm {
     pub phases_count: usize,
     /// Pre-formatted, e.g. `"重试1·迭代3"`.
     pub loop_label: String,
+    /// L3(plan/11): the real numbers behind `loop_label` — `WorkflowFlow`
+    /// needs them as data, not a string to re-parse.
+    pub loop_retries: u8,
+    pub loop_max_iter: u8,
     pub phases: Vec<String>,
     pub skills: Vec<String>,
     pub stage_ref: Option<u8>,
@@ -576,6 +580,8 @@ pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
             "重试{}·迭代{}",
             spec.loop_config.retries, spec.loop_config.max_iter
         ),
+        loop_retries: spec.loop_config.retries,
+        loop_max_iter: spec.loop_config.max_iter,
         phases: spec.phases.clone(),
         skills: spec.skills.iter().map(|s| s.name.clone()).collect(),
         stage_ref: spec.stage_ref,
@@ -787,6 +793,14 @@ pub struct SkillCardVm {
     pub content: String,
     /// `None` = 全局/共享;`Some` = 项目自建(plan/10 K1 侧边栏过滤用)。
     pub project_id: Option<ProjectId>,
+    /// L4(plan/11): the domain `SkillCard` has carried this since the
+    /// distillation feature landed, but no VM ever surfaced it — a real
+    /// provenance signal ("出处可信度") was sitting unused. `None` = catalog/
+    /// seeded skill, not distilled from a real Issue.
+    pub distilled_from_issue: Option<IssueId>,
+    /// The agent teammate credited for the issue behind `distilled_from_issue`
+    /// — `None` iff that field is `None` (same domain invariant).
+    pub origin_agent: Option<AgentId>,
 }
 
 pub fn skill_card(s: &SkillCard) -> SkillCardVm {
@@ -800,6 +814,8 @@ pub fn skill_card(s: &SkillCard) -> SkillCardVm {
         uses: s.uses,
         content: s.content.clone(),
         project_id: s.project_id,
+        distilled_from_issue: s.distilled_from_issue,
+        origin_agent: s.origin_agent,
     }
 }
 
@@ -959,6 +975,13 @@ pub struct CronRowVm {
     pub status_label: &'static str,
     pub last_run: String,
     pub next_run: String,
+    /// L1(plan/11): 到点做什么——`bw_core::model::CronMode` 一直在 domain
+    /// struct 上,此前从没有一个 VM 字段读出来过。
+    pub mode_label: &'static str,
+    /// `CreateIssue` 任务的 Issue 作用阶段;`RunWorkflow` 任务恒 `None`。
+    pub issue_stage_label: Option<&'static str>,
+    /// `CreateIssue` 任务的 Issue 指派对象名(自由文本,同全仓 by-name 约定)。
+    pub issue_assignee: Option<String>,
 }
 
 /// `project_names` resolves `CronTask.project_id` to a display name — pass
@@ -989,6 +1012,45 @@ pub fn cron_row(
         status_label: c.status.label(),
         last_run: c.last_run.clone(),
         next_run: bw_core::model::cron_next_run_label(&c.schedule, c.last_run_at, c.status, now),
+        mode_label: c.mode.label(),
+        issue_stage_label: c.issue_stage.map(|s| s.label()),
+        issue_assignee: c.issue_assignee.clone(),
+    }
+}
+
+/// L1(plan/11): a cron task's real fire history — `bw_core::model::
+/// CronEffectiveness` computed by the store (`Store::cron_effectiveness`) but
+/// never surfaced past it. Pre-formatted the same "no evidence, never a fake
+/// 0%" way every other rate in this app already reads.
+#[derive(Clone, PartialEq, Debug)]
+pub struct CronEffectivenessVm {
+    pub fires: u32,
+    pub ok_fires: u32,
+    pub failed_fires: u32,
+    /// `"67%"`, or `"—(尚无触发)"` when `fires == 0`.
+    pub effectiveness_label: String,
+    pub avg_duration_label: String,
+    /// `"最近 07-21"`, empty when never fired.
+    pub last_fire_label: String,
+}
+
+pub fn cron_effectiveness_vm(e: &bw_core::model::CronEffectiveness) -> CronEffectivenessVm {
+    let effectiveness_label = match e.effectiveness {
+        Some(r) => format!("{:.0}%", r * 100.0),
+        None => "—(尚无触发)".to_string(),
+    };
+    let last_fire_label = e
+        .last_fire_at
+        .and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok())
+        .map(|t| format!("最近 {:02}-{:02}", u8::from(t.month()), t.day()))
+        .unwrap_or_default();
+    CronEffectivenessVm {
+        fires: e.fires,
+        ok_fires: e.ok_fires,
+        failed_fires: e.failed_fires,
+        effectiveness_label,
+        avg_duration_label: duration_label(e.avg_duration_ms),
+        last_fire_label,
     }
 }
 

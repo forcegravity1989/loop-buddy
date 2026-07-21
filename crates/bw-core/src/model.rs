@@ -1060,6 +1060,17 @@ pub enum CronMode {
     CreateIssue,
 }
 
+impl CronMode {
+    /// L1(plan/11): cron 详情卡要如实标出「到点做什么」——运行一个 workflow
+    /// 还是只建一件活(autopilot,no-hijack)。
+    pub fn label(self) -> &'static str {
+        match self {
+            CronMode::RunWorkflow => "运行工作流",
+            CronMode::CreateIssue => "建活(autopilot · 不自动跑)",
+        }
+    }
+}
+
 impl CronStatus {
     pub fn label(self) -> &'static str {
         match self {

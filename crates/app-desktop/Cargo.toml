@@ -20,3 +20,4 @@ bw-app = { workspace = true }
 ui = { workspace = true }
 tokio = { workspace = true }
 time = { workspace = true, features = ["std"] }
+uuid = { workspace = true }
