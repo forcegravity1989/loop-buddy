@@ -13,10 +13,10 @@ use bw_app::Command;
 use bw_core::model::LibSource;
 use bw_core::SkillId;
 use dioxus::prelude::*;
-use ui::vm::SkillCardVm;
+use ui::vm::{ProjectCardVm, SkillCardVm};
 
 #[component]
-pub fn SkillHub(hub: HubVm) -> Element {
+pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let paper = theme::PAPER;
     let serif = theme::SERIF;
     let ink3 = theme::INK_3;
@@ -60,6 +60,10 @@ pub fn SkillHub(hub: HubVm) -> Element {
                             let is_open = expanded() == Some(sid);
                             let is_editing = editing() == Some(sid);
                             let used_by = workflows_using_skill(&hub, &s.name);
+                            let owner_project = s
+                                .project_id
+                                .and_then(|pid| projects.iter().find(|p| p.id == pid))
+                                .map(|p| p.name.clone());
                             rsx! {
                                 SkillCard {
                                     key: "{sid.uuid()}",
@@ -67,6 +71,7 @@ pub fn SkillHub(hub: HubVm) -> Element {
                                     is_open,
                                     is_editing,
                                     used_by,
+                                    owner_project,
                                     on_toggle: move |_| {
                                         expanded.set(if is_open { None } else { Some(sid) });
                                         editing.set(None);
@@ -99,6 +104,9 @@ fn SkillCard(
     is_open: bool,
     is_editing: bool,
     used_by: Vec<String>,
+    /// 真实项目名(从 project_id 反查)——`None` = 共享/全局目录条目,不编
+    /// 一个假归属出来。
+    owner_project: Option<String>,
     on_toggle: EventHandler<()>,
     on_edit: EventHandler<()>,
     on_done_edit: EventHandler<()>,
@@ -116,6 +124,9 @@ fn SkillCard(
                 style: "display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;",
                 onclick: move |_| on_toggle.call(()),
                 span { style: "font-family:{theme::MONO};font-size:13px;font-weight:500;", "{s.name}" }
+                if let Some(p) = &owner_project {
+                    span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)}", "◇ {p}" }
+                }
                 span { style: "{chip} margin-left:auto;", "{s.maturity_label}" }
             }
             if !s.desc.is_empty() {

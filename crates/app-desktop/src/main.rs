@@ -228,9 +228,9 @@ fn Root() -> Element {
                         on_run: move |_| hub.set(Hub::Workspace),
                     }
                 } else if hub() == Hub::Skill {
-                    SkillHub { hub: v.hub.clone() }
+                    SkillHub { hub: v.hub.clone(), projects: v.projects.clone() }
                 } else if hub() == Hub::Agent {
-                    AgentHub { hub: v.hub.clone() }
+                    AgentHub { hub: v.hub.clone(), projects: v.projects.clone() }
                 } else if hub() == Hub::Cron {
                     CronHub {
                         hub: v.hub.clone(),

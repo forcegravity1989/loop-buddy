@@ -218,6 +218,11 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
                                             let detail = details_by_id.get(&row_id).cloned();
                                             let skills_pool = hub.skills.clone();
                                             let agents_pool = hub.agents.clone();
+                                            // 真实项目名(从 project_id 反查)——`None` = 共享/内建阶段模板。
+                                            let owner_project = row
+                                                .project_id
+                                                .and_then(|pid| projects.iter().find(|p| p.id == pid))
+                                                .map(|p| p.name.clone());
                                             rsx! {
                                                 div {
                                                     key: "{row_id.uuid()}",
@@ -226,6 +231,9 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
                                                         style: "display:flex;align-items:center;gap:12px;cursor:pointer;",
                                                         onclick: move |_| expanded.set(if is_open { None } else { Some(row_id) }),
                                                         span { style: "font-size:13px;font-weight:500;flex:1;min-width:0;", "{row.name}" }
+                                                        if let Some(p) = &owner_project {
+                                                            span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)}", "◇ {p}" }
+                                                        }
                                                         span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.source_label}" }
                                                         span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.maturity_label}" }
                                                         if let Some(t) = &row.trigger {

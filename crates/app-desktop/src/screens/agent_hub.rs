@@ -13,10 +13,10 @@ use crate::theme;
 use bw_app::Command;
 use bw_core::AgentId;
 use dioxus::prelude::*;
-use ui::vm::AgentCardVm;
+use ui::vm::{AgentCardVm, ProjectCardVm};
 
 #[component]
-pub fn AgentHub(hub: HubVm) -> Element {
+pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let paper = theme::PAPER;
     let serif = theme::SERIF;
     let ink3 = theme::INK_3;
@@ -57,6 +57,10 @@ pub fn AgentHub(hub: HubVm) -> Element {
                             let is_open = expanded() == Some(aid);
                             let is_editing = editing() == Some(aid);
                             let used_by = workflows_using_agent(&hub, &a.name);
+                            let owner_project = a
+                                .project_id
+                                .and_then(|pid| projects.iter().find(|p| p.id == pid))
+                                .map(|p| p.name.clone());
                             rsx! {
                                 AgentCard {
                                     key: "{aid.uuid()}",
@@ -64,6 +68,7 @@ pub fn AgentHub(hub: HubVm) -> Element {
                                     is_open,
                                     is_editing,
                                     used_by,
+                                    owner_project,
                                     on_toggle: move |_| {
                                         expanded.set(if is_open { None } else { Some(aid) });
                                         editing.set(None);
@@ -97,6 +102,8 @@ fn AgentCard(
     is_open: bool,
     is_editing: bool,
     used_by: Vec<String>,
+    /// 真实项目名(从 project_id 反查)——`None` = 共享/五角色内置 agent。
+    owner_project: Option<String>,
     on_toggle: EventHandler<()>,
     on_edit: EventHandler<()>,
     on_done_edit: EventHandler<()>,
@@ -124,6 +131,9 @@ fn AgentCard(
                         style: if is_open { "font-size:11.5px;color:{ink3};line-height:1.5;".to_string() } else { "font-size:11.5px;color:{ink3};line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;".to_string() },
                         "{a.role}"
                     }
+                }
+                if let Some(p) = &owner_project {
+                    span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)} flex:none;", "◇ {p}" }
                 }
                 span { style: "{chip} flex:none;", "{a.maturity_label}" }
             }
