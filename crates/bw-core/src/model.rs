@@ -71,11 +71,13 @@ pub struct MetricSource {
 
 // ─────────────────────────── op stages ───────────────────────────
 
-/// The five stages of the operating loop (体系重构 v2 · 阶段=角色=方法论):
+/// The five stages of the project's lifecycle (体系重构 v2 · 阶段=角色=方法论):
 /// each stage is hosted by exactly one role, running exactly one methodology.
 /// The variant *is* the position — there is no way to construct a 6th stage or
-/// an out-of-range index. The loop closes: [`StageKind::next`] wraps
-/// `Ops → Prototype` (运维复盘回流原型 · 线闭成环).
+/// an out-of-range index. The five stages close into a loop-back, not a
+/// pipeline: [`StageKind::next`] wraps `Ops → Prototype`
+/// (运维复盘回流原型 · 闭环回流). Not to be confused with a workflow's own
+/// internal retry loop ([`LoopConfig`]) — that's a different "loop".
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageKind {
@@ -134,7 +136,7 @@ impl StageKind {
     pub fn role(self) -> &'static str {
         match self {
             StageKind::Prototype => "原型师 · Prototyper",
-            StageKind::Build => "构建师 · Builder",
+            StageKind::Build => "构建师 · Constructor",
             StageKind::Optimize => "优化师 · Optimizer",
             StageKind::Growth => "运营推广师 · Grower",
             StageKind::Ops => "运维师 · Maintainer",
@@ -452,7 +454,7 @@ pub enum SessionStatus {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Role {
+pub enum Author {
     /// Builder (the human) — right, dark bubble.
     Builder,
     /// Agent — left, white bubble.
@@ -461,7 +463,7 @@ pub enum Role {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
-    pub role: Role,
+    pub role: Author,
     pub text: String,
 }
 
@@ -1535,7 +1537,7 @@ pub struct Issue {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProjectPhase {
+pub enum Readiness {
     /// 运营中
     Running,
     /// 冷启动中(创建流程未完成确认)
@@ -1548,7 +1550,7 @@ pub enum ProjectPhase {
 /// biases nothing in the derive chain, only the wall's mix-bar display.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProjectCycle {
+pub enum MaturityPeriod {
     /// 探索期 · 0→1 · 未达 PMF
     Explore,
     /// 扩张期 · 1→N · 增长
@@ -1557,37 +1559,37 @@ pub enum ProjectCycle {
     Mature,
 }
 
-impl ProjectCycle {
+impl MaturityPeriod {
     pub fn label(self) -> &'static str {
         match self {
-            ProjectCycle::Explore => "探索期",
-            ProjectCycle::Expand => "扩张期",
-            ProjectCycle::Mature => "成熟期",
+            MaturityPeriod::Explore => "探索期",
+            MaturityPeriod::Expand => "扩张期",
+            MaturityPeriod::Mature => "成熟期",
         }
     }
 
     pub fn sub_label(self) -> &'static str {
         match self {
-            ProjectCycle::Explore => "0→1 · 未达 PMF",
-            ProjectCycle::Expand => "1→N · 增长",
-            ProjectCycle::Mature => "Sustain · 原「运维」期",
+            MaturityPeriod::Explore => "0→1 · 未达 PMF",
+            MaturityPeriod::Expand => "1→N · 增长",
+            MaturityPeriod::Mature => "Sustain · 原「运维」期",
         }
     }
 
     /// Percentage weight per [`StageKind::ALL`] stage, summing to 100.
     pub fn mix(self) -> [u8; 5] {
         match self {
-            ProjectCycle::Explore => [40, 30, 15, 10, 5],
-            ProjectCycle::Expand => [10, 25, 20, 30, 15],
-            ProjectCycle::Mature => [5, 10, 25, 25, 35],
+            MaturityPeriod::Explore => [40, 30, 15, 10, 5],
+            MaturityPeriod::Expand => [10, 25, 20, 30, 15],
+            MaturityPeriod::Mature => [5, 10, 25, 25, 35],
         }
     }
 
     pub fn main_loop_label(self) -> &'static str {
         match self {
-            ProjectCycle::Explore => "主环 · 原型 ↔ 构建 来回",
-            ProjectCycle::Expand => "主环 · 构建 → 优化 → 推广",
-            ProjectCycle::Mature => "主环 · 优化 ↔ 运维 · 推广保温",
+            MaturityPeriod::Explore => "主环 · 原型 ↔ 构建 来回",
+            MaturityPeriod::Expand => "主环 · 构建 → 优化 → 推广",
+            MaturityPeriod::Mature => "主环 · 优化 ↔ 运维 · 推广保温",
         }
     }
 }
@@ -1599,8 +1601,8 @@ pub struct Project {
     pub name: String,
     pub kind: String,
     pub desc: String,
-    pub phase: ProjectPhase,
-    pub cycle: ProjectCycle,
+    pub phase: Readiness,
+    pub cycle: MaturityPeriod,
     /// Which of the five stages is currently hosting the work.
     pub active_stage: StageKind,
     /// L6 cache — only [`crate::derive::reduce_worst_of`] can fill it.

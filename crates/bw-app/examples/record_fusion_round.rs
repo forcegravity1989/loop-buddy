@@ -10,7 +10,7 @@
 //! Run: `cargo run -p bw-app --example record_fusion_round -- demo-workspaces/bw-demo.db`
 
 use bw_app::{App, Command};
-use bw_core::model::{Cadence, IssuePriority, IssueStatus, ProjectCycle, StageKind};
+use bw_core::model::{Cadence, IssuePriority, IssueStatus, MaturityPeriod, StageKind};
 use bw_core::{IssueId, ProjectId, SkillId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{SqliteStore, Store};
@@ -75,7 +75,7 @@ async fn main() {
     .await
     .unwrap();
     app.dispatch(Command::SetCycle {
-        cycle: ProjectCycle::Explore,
+        cycle: MaturityPeriod::Explore,
     })
     .await
     .unwrap();

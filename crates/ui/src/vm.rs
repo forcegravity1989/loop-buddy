@@ -13,7 +13,7 @@ use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAtten
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
     AgentCard, Artifact, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, FeedLevel,
-    HubCard, HubKind, Issue, IssueStatus, KnowledgeSource, Maturity, ProjectCycle, ProjectPhase,
+    HubCard, HubKind, Issue, IssueStatus, KnowledgeSource, Maturity, MaturityPeriod, Readiness,
     RunChanges, RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SourceKind, StageKind,
     UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
@@ -58,14 +58,14 @@ pub fn project_card(
     name: &str,
     kind: &str,
     desc: &str,
-    phase: ProjectPhase,
-    cycle: ProjectCycle,
+    phase: Readiness,
+    cycle: MaturityPeriod,
     active_stage: StageKind,
     signal: Option<Signal>,
     stage_progresses: &[u8],
     open_issues: usize,
 ) -> ProjectCardVm {
-    let running = phase == ProjectPhase::Running;
+    let running = phase == Readiness::Running;
     let progress = if running {
         crate::overall_progress(stage_progresses)
     } else {

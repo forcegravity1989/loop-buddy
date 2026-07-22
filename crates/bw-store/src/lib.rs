@@ -19,10 +19,10 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronMode,
+    AgentCard, AgentRef, Author, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronMode,
     CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource,
-    LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus,
-    Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
+    LoopConfig, Maturity, MaturityPeriod, Readiness, RunStatus, RunTrigger, SessionStatus, Signal,
+    SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
     WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
@@ -284,8 +284,8 @@ pub struct ProjectRow {
     pub name: String,
     pub kind: String,
     pub desc: String,
-    pub phase: ProjectPhase,
-    pub cycle: ProjectCycle,
+    pub phase: Readiness,
+    pub cycle: MaturityPeriod,
     pub active_stage: StageKind,
     pub north_star: String,
     pub ns_def: String,
@@ -398,7 +398,7 @@ pub struct SessionRow {
 
 #[derive(Clone, Debug)]
 pub struct MessageRow {
-    pub role: Role,
+    pub role: Author,
     pub text: String,
 }
 
@@ -413,8 +413,8 @@ pub trait Store: Send + Sync {
     /// after-the-fact editing/correction. Irreversible; the caller is
     /// responsible for any user-facing confirmation.
     async fn delete_project(&self, id: ProjectId) -> Result<()>;
-    async fn set_project_phase(&self, id: ProjectId, phase: ProjectPhase) -> Result<()>;
-    async fn set_project_cycle(&self, id: ProjectId, cycle: ProjectCycle) -> Result<()>;
+    async fn set_project_phase(&self, id: ProjectId, phase: Readiness) -> Result<()>;
+    async fn set_project_cycle(&self, id: ProjectId, cycle: MaturityPeriod) -> Result<()>;
     async fn set_north_star(&self, id: ProjectId, north_star: &str, ns_def: &str) -> Result<()>;
     /// 对标竞品 + 机会缺口/三月成功标准 (creation-flow real inputs).
     async fn set_brief(&self, id: ProjectId, benchmark: &str, opportunity: &str) -> Result<()>;
@@ -470,7 +470,7 @@ pub trait Store: Send + Sync {
     ) -> Result<()>;
 
     async fn ensure_session(&self, s: NewSession) -> Result<()>;
-    async fn append_message(&self, session_id: SessionId, role: Role, text: &str) -> Result<()>;
+    async fn append_message(&self, session_id: SessionId, role: Author, text: &str) -> Result<()>;
 
     /// **The sole signal writer** — reads observations + targets, derives via
     /// `bw_core`, writes every `signal` / `hit` cache for the project.
@@ -725,19 +725,19 @@ pub(crate) fn parse_stage_kind(s: &str) -> Option<StageKind> {
         .find(|k| stage_kind_text(*k) == s)
 }
 
-pub(crate) fn cycle_text(c: ProjectCycle) -> &'static str {
+pub(crate) fn cycle_text(c: MaturityPeriod) -> &'static str {
     match c {
-        ProjectCycle::Explore => "explore",
-        ProjectCycle::Expand => "expand",
-        ProjectCycle::Mature => "mature",
+        MaturityPeriod::Explore => "explore",
+        MaturityPeriod::Expand => "expand",
+        MaturityPeriod::Mature => "mature",
     }
 }
 
-pub(crate) fn parse_cycle(s: &str) -> ProjectCycle {
+pub(crate) fn parse_cycle(s: &str) -> MaturityPeriod {
     match s {
-        "expand" => ProjectCycle::Expand,
-        "mature" => ProjectCycle::Mature,
-        _ => ProjectCycle::Explore,
+        "expand" => MaturityPeriod::Expand,
+        "mature" => MaturityPeriod::Mature,
+        _ => MaturityPeriod::Explore,
     }
 }
 
