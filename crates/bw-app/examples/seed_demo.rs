@@ -9,7 +9,7 @@
 //! Run: `cargo run -p bw-app --example seed_demo -- <output-db-path>`
 
 use bw_app::{App, Command, Event};
-use bw_core::model::{stage_workflow, Cadence, HubSource, ProjectCycle, StageKind};
+use bw_core::model::{stage_workflow, Cadence, HubSource, MaturityPeriod, StageKind};
 use bw_core::{MetricId, ProjectId, SessionId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{MetricRole, SessionKind, SqliteStore, Store};
@@ -20,7 +20,7 @@ struct ProjectPlan {
     name: &'static str,
     kind: &'static str,
     desc: &'static str,
-    cycle: ProjectCycle,
+    cycle: MaturityPeriod,
     benchmark: &'static str,
     opportunity: &'static str,
     north_star: &'static str,
@@ -42,7 +42,7 @@ const PROJECTS: [ProjectPlan; 2] = [
         name: "智能客服知识库",
         kind: "AI 助手 / 客服",
         desc: "把客服重复问题从人工坐席剥离，用可检索的知识条目自助解决",
-        cycle: ProjectCycle::Expand,
+        cycle: MaturityPeriod::Expand,
         benchmark: "Intercom Fin\nZendesk AI Agents",
         opportunity: "3 个月内把人工转接率打下来一半，知识条目本身能被复用而不是每次现改",
         north_star: "客服问题自助解决率",
@@ -58,7 +58,7 @@ const PROJECTS: [ProjectPlan; 2] = [
         name: "开发者体验仪表盘",
         kind: "内部工具 / 看板",
         desc: "让工程师不用问就能看到自己 PR 和服务的健康状态",
-        cycle: ProjectCycle::Explore,
+        cycle: MaturityPeriod::Explore,
         benchmark: "Datadog\nGrafana",
         opportunity: "把 CI 等待、告警、on-call 负载摆到一个屏,减少「问一嘴」的打断",
         north_star: "每周活跃查看仪表盘的工程师数",

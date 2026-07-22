@@ -20,10 +20,10 @@ use bw_core::derive::{
     evaluate_metric, measure, parse_target_with, reduce_worst_of, AmberBand, Measurement,
 };
 use bw_core::model::{
-    AgentCard, AgentRef, AgentSkillTag, Artifact, ArtifactKind, Connector, ConnectorStatus,
+    AgentCard, AgentRef, AgentSkillTag, Artifact, ArtifactKind, Author, Connector, ConnectorStatus,
     CronEffectiveness, CronStatus, CronTask, HubSource, Issue, IssueStatus, KnowledgeSource,
-    LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger,
-    Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
+    LibSource, LoopConfig, Maturity, MaturityPeriod, Readiness, RunStatus, RunTrigger, Signal,
+    SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
     WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
@@ -192,28 +192,28 @@ fn parse_uuid<T, F: Fn(Uuid) -> T>(s: &str, f: F) -> Result<T> {
         .map_err(|e| StoreError::Other(format!("bad uuid {s:?}: {e}")))
 }
 
-fn phase_text(p: ProjectPhase) -> &'static str {
+fn phase_text(p: Readiness) -> &'static str {
     match p {
-        ProjectPhase::Running => "running",
-        ProjectPhase::ColdStart => "cold_start",
+        Readiness::Running => "running",
+        Readiness::ColdStart => "cold_start",
     }
 }
-fn parse_phase(s: &str) -> ProjectPhase {
+fn parse_phase(s: &str) -> Readiness {
     match s {
-        "running" => ProjectPhase::Running,
-        _ => ProjectPhase::ColdStart,
+        "running" => Readiness::Running,
+        _ => Readiness::ColdStart,
     }
 }
-fn role_text(r: Role) -> &'static str {
+fn role_text(r: Author) -> &'static str {
     match r {
-        Role::Builder => "builder",
-        Role::Agent => "agent",
+        Author::Builder => "builder",
+        Author::Agent => "agent",
     }
 }
-fn parse_role(s: &str) -> Role {
+fn parse_role(s: &str) -> Author {
     match s {
-        "agent" => Role::Agent,
-        _ => Role::Builder,
+        "agent" => Author::Agent,
+        _ => Author::Builder,
     }
 }
 fn source_text(s: SourceKind) -> &'static str {
@@ -339,7 +339,7 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn set_project_phase(&self, id: ProjectId, phase: ProjectPhase) -> Result<()> {
+    async fn set_project_phase(&self, id: ProjectId, phase: Readiness) -> Result<()> {
         sqlx::query("UPDATE project SET phase=?, updated_at=?, rev=rev+1 WHERE id=?")
             .bind(phase_text(phase))
             .bind(now_unix())
@@ -349,7 +349,7 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn set_project_cycle(&self, id: ProjectId, cycle: ProjectCycle) -> Result<()> {
+    async fn set_project_cycle(&self, id: ProjectId, cycle: MaturityPeriod) -> Result<()> {
         sqlx::query("UPDATE project SET cycle=?, updated_at=?, rev=rev+1 WHERE id=?")
             .bind(cycle_text(cycle))
             .bind(now_unix())
@@ -601,7 +601,7 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn append_message(&self, session_id: SessionId, role: Role, text: &str) -> Result<()> {
+    async fn append_message(&self, session_id: SessionId, role: Author, text: &str) -> Result<()> {
         let sid = session_id.uuid().to_string();
         let seq: i64 = sqlx::query(
             "SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM message WHERE session_id=?",

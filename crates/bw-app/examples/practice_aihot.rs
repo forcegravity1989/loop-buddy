@@ -38,7 +38,7 @@
 
 use bw_core::model::{
     Cadence, CronMode, HubSource, IssuePriority, IssueStatus, LibSource, LoopConfig, Maturity,
-    ProjectCycle, SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
+    MaturityPeriod, SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{AgentId, CronTaskId, IssueId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
@@ -147,7 +147,7 @@ async fn find_or_create_project(app: &mut App) -> ProjectId {
     .await
     .expect("create aihot project");
     app.dispatch(Command::SetCycle {
-        cycle: ProjectCycle::Explore,
+        cycle: MaturityPeriod::Explore,
     })
     .await
     .expect("set cycle");
