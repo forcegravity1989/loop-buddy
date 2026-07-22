@@ -19,6 +19,9 @@ node_modules/
 /verification-report/
 demo-workspaces/
 
-# 2026-07-20 aihot 践行:真实 DB + 真实本地 git 工作区(自带嵌套 .git),
-# 不是源码,不进本仓——真实产物见 iterations/PRACTICE-AIHOT.md 的读回记录。
+# 2026-07-20 aihot 践行:践行过程中反复重跑产生的真实 DB + 真实本地 git 工作区
+# (自带嵌套 .git),不是源码,不进本仓——真实产物见 iterations/PRACTICE-AIHOT.md
+# 的读回记录。2026-07-22 补:践行收官的那一份 DB 本体已作为唯一样板间例外提交
+# 在 examples/aihot/bw-aihot.db(见 examples/README.md)——这条规则挡的是本地
+# 反复重跑的临时产物,不是那份挑选过的最终快照。
 /practice-aihot/

@@ -277,3 +277,19 @@ cargo run -p bw-app --example archive_aihot_evidence -- \
 Failed——3 次失败如实是 §0 记的账号级配额墙探测,不是被掩盖的缺陷)、60 条真实观测、
 0 次交棒、工作区 32 次真实提交 · 44 个受追踪文件 · 0 个未提交路径。
 
+**补记(同日,用户拍板)**:JSON 快照可读但不可"打开"——用户明确要一份能被
+BW 真实加载的样板间(show-flat),不只是文本证据。于是把这份 DB 本体真实复制进
+[`examples/aihot/bw-aihot.db`](../examples/aihot/bw-aihot.db)(见
+[`examples/README.md`](../examples/README.md)),`practice-aihot/` 本身仍按
+`.gitignore` 不进仓——这是**这一份**经过挑选的真实样板间的例外提交,不是把
+gitignore 规则撤销。深链验证过真的能打开:
+
+```
+BW_DB=examples/aihot/bw-aihot.db BW_OPEN="aihot 日报" BW_PANEL=issues \
+    cargo run -p app-desktop
+# stderr: [BW_OPEN] "aihot 日报" -> view=App panel=Issues projects=1 issues=31
+```
+
+真实项目工作区(带独立 `.git` 的 `aihot-b7971eca/`)没有一并提交——原因见
+`examples/README.md` 最后一节。
+
