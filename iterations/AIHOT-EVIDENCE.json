@@ -1,0 +1,147 @@
+{
+  "generated_at_unix": 1784692102,
+  "source_db": "practice-aihot/bw-aihot.db",
+  "source_workspace": "practice-aihot/workspaces/aihot-b7971eca",
+  "project": {
+    "name": "aihot 日报",
+    "kind": "Web 应用 · AI 热点日报",
+    "desc": "AI 热点圈信息过多——按用户自己的关注面(关键词配置),每天从多个真实来源(Hacker News、arXiv)聚合、去重、过滤,生成一份可读的每日 AI 热点摘要。",
+    "phase": "running",
+    "cycle": "explore",
+    "active_stage": "prototype",
+    "north_star": "连续 7 天,每天都真实生成一份包含 ≥5 条命中关注面的摘要,无需手动修正即可读",
+    "ns_def": "按「digests/YYYY-MM-DD.md 真实存在 且 该文件命中条目数 ≥5」逐日核验,统计连续满足的天数",
+    "benchmark": "Feedly/RSS 阅读器(需要自己订阅源,无 AI 相关性过滤);各类「AI 日报」公众号/newsletter(人工编辑,非自动化,更新看编辑心情)",
+    "opportunity": "三个月内:每天真实生成一份不需要手动修正的 AI 热点摘要,覆盖至少两类真实来源(社区热度 + 学术前沿),命中用户自定义的关注面。",
+    "created_at_unix": 1784556155
+  },
+  "issues": {
+    "total": 31,
+    "by_status": {
+      "done": 29,
+      "in_progress": 1,
+      "todo": 1
+    }
+  },
+  "agents": [
+    {
+      "name": "日报编辑",
+      "model": "claude CLI · 跟随执行器配置",
+      "runs": 2,
+      "win_rate": "100%"
+    }
+  ],
+  "skills": [
+    {
+      "name": "关键词关注面打分法",
+      "category": "aihot 方法论",
+      "uses": 0,
+      "distilled_from_a_real_issue": false
+    },
+    {
+      "name": "多源体量控制法",
+      "category": "aihot 方法论",
+      "uses": 3,
+      "distilled_from_a_real_issue": true
+    }
+  ],
+  "workflow_runs": {
+    "total": 4,
+    "by_status": {
+      "failed": 3,
+      "ok": 1
+    }
+  },
+  "metrics": [
+    {
+      "name": "工作区真实提交数",
+      "value_raw": "31",
+      "target_raw": "≥1/天",
+      "driver": "",
+      "signal": "unknown"
+    },
+    {
+      "name": "本周结算活数",
+      "value_raw": "22",
+      "target_raw": "≥5/周",
+      "driver": "",
+      "signal": "unknown"
+    },
+    {
+      "name": "累计生成日报天数",
+      "value_raw": "2",
+      "target_raw": "清零起步,逐日涨",
+      "driver": "",
+      "signal": "unknown"
+    },
+    {
+      "name": "每日命中率",
+      "value_raw": "32.9%",
+      "target_raw": "≥8%",
+      "driver": "",
+      "signal": "green"
+    },
+    {
+      "name": "连续产出日报天数",
+      "value_raw": "3",
+      "target_raw": "↑",
+      "driver": "",
+      "signal": "unknown"
+    },
+    {
+      "name": "阶段完成 Issue 数",
+      "value_raw": "7",
+      "target_raw": "",
+      "driver": "",
+      "signal": "unknown"
+    },
+    {
+      "name": "阶段完成 Issue 数",
+      "value_raw": "6",
+      "target_raw": "",
+      "driver": "",
+      "signal": "unknown"
+    },
+    {
+      "name": "阶段完成 Issue 数",
+      "value_raw": "4",
+      "target_raw": "",
+      "driver": "",
+      "signal": "unknown"
+    },
+    {
+      "name": "阶段完成 Issue 数",
+      "value_raw": "3",
+      "target_raw": "",
+      "driver": "",
+      "signal": "unknown"
+    },
+    {
+      "name": "阶段完成 Issue 数",
+      "value_raw": "9",
+      "target_raw": "",
+      "driver": "",
+      "signal": "unknown"
+    }
+  ],
+  "observations_count": 60,
+  "handoffs_count": 0,
+  "workspace": {
+    "commit_count": 32,
+    "tracked_files": 44,
+    "dirty_paths": 0,
+    "docs_files": 10,
+    "recent_subjects": [
+      "build: telemetry.json 真实产出快照(供 BW 侧引领/滞后指标真喂)",
+      "build: 按 SPEC 完成实现与测试",
+      "growth: 补 MIT LICENSE",
+      "ops: 零依赖语法门禁(scripts/lint.sh,py_compile)—— 真实执行退出码0",
+      "build: 多日运行真实验证(--date 覆盖模拟第二天,真实抓取+渲染,非伪造文件)",
+      "prototype: 第二圈假设2真实核验(fetch_limit)—— 100会让日报少填47%,不成立,保持200",
+      "prototype: 第二圈假设1真实核验(词边界匹配)—— 238条真实数据仅1处假阳性(0.4%),不修更划算",
+      "ops: 复盘回灌(docs/retro.md)—— 第一圈五阶段真实完成清单 + 教训 + 回流原型段的2条新假设,线闭成环",
+      "ops: 破坏性演练(docs/incident-drill.md)—— 修复2处真实 crash(裸traceback→ConfigError友好报错),4条新单测,共23/23",
+      "ops: 健康检查脚本(scripts/healthcheck.sh)+ 真实执行记录(docs/healthcheck-run.md)"
+    ]
+  }
+}
