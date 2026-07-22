@@ -16,9 +16,9 @@
 use bw_core::derive::AmberBand;
 use bw_core::model::{
     classify_artifact_path, cron_due, stage_workflow, stage_workflow_with_playbook, AgentCard,
-    AgentRef, Artifact, Cadence, Connector, ConnectorStatus, CronMode, CronStatus, CronTask,
-    HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig, Maturity,
-    ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
+    AgentRef, Artifact, Author, Cadence, Connector, ConnectorStatus, CronMode, CronStatus,
+    CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig,
+    Maturity, MaturityPeriod, Readiness, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
     SourceKind, StageKind, WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI,
     CONNECTOR_KIND_GIT_REPO,
 };
@@ -91,7 +91,7 @@ pub enum Command {
     },
     /// Creation flow step 2 (快速问题 · 周期).
     SetCycle {
-        cycle: ProjectCycle,
+        cycle: MaturityPeriod,
     },
     /// 对标竞品 + 三个月成功标准 (creation flow's free-text questions).
     UpdateBrief {
@@ -454,7 +454,7 @@ pub enum Event {
     ViewChanged(View),
     SessionMessageAdded {
         session: SessionId,
-        role: Role,
+        role: Author,
         text: String,
     },
     /// A run is really about to begin — carries the spec's own name/agents/
@@ -887,11 +887,11 @@ impl App {
         let phases_completed = completed.len() as u32;
         for output in completed {
             self.store
-                .append_message(session, Role::Agent, &output.text)
+                .append_message(session, Author::Agent, &output.text)
                 .await?;
             self.emit(Event::SessionMessageAdded {
                 session,
-                role: Role::Agent,
+                role: Author::Agent,
                 text: output.text,
             });
         }
@@ -1564,7 +1564,7 @@ impl App {
                 // the wall never shows a stale cache as fresh truth.
                 let projects = self.store.list_projects().await?;
                 for p in &projects {
-                    if p.phase == ProjectPhase::Running {
+                    if p.phase == Readiness::Running {
                         self.store.recompute_signals(p.id, now()).await?;
                     }
                 }
@@ -1850,9 +1850,7 @@ impl App {
 
             Command::CompleteCreation { cadence } => {
                 let p = self.active()?;
-                self.store
-                    .set_project_phase(p, ProjectPhase::Running)
-                    .await?;
+                self.store.set_project_phase(p, Readiness::Running).await?;
                 self.store
                     .materialize_stages(five_stages(p, cadence))
                     .await?;
@@ -2766,21 +2764,21 @@ impl App {
 
             Command::SendSessionMessage { session, text } => {
                 self.store
-                    .append_message(session, Role::Builder, &text)
+                    .append_message(session, Author::Builder, &text)
                     .await?;
                 self.emit(Event::SessionMessageAdded {
                     session,
-                    role: Role::Builder,
+                    role: Author::Builder,
                     text: text.clone(),
                 });
                 // Deterministic mock reply (the real agent reply arrives via Tier C).
                 let reply = format!("【mock】已收到:{text}");
                 self.store
-                    .append_message(session, Role::Agent, &reply)
+                    .append_message(session, Author::Agent, &reply)
                     .await?;
                 self.emit(Event::SessionMessageAdded {
                     session,
-                    role: Role::Agent,
+                    role: Author::Agent,
                     text: reply,
                 });
             }
@@ -2821,8 +2819,8 @@ impl App {
                 self.state.panel = Panel::Progress;
                 self.state.scope = Scope::All;
                 self.state.view = match proj.phase {
-                    ProjectPhase::ColdStart => View::Create,
-                    ProjectPhase::Running => {
+                    Readiness::ColdStart => View::Create,
+                    Readiness::Running => {
                         // Freshness is clock-relative — re-derive on open so a
                         // value that went stale since last time shows as such.
                         self.store.recompute_signals(id, now()).await?;

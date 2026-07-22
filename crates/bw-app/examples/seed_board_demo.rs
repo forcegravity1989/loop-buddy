@@ -7,7 +7,7 @@
 //! Then:  `BW_DB=<db-path> BW_OPEN='Builders' Workbench · 完整形态' cargo run -p app-desktop`
 
 use bw_app::{App, Command};
-use bw_core::model::{Cadence, IssuePriority, IssueStatus, ProjectCycle, StageKind};
+use bw_core::model::{Cadence, IssuePriority, IssueStatus, MaturityPeriod, StageKind};
 use bw_core::{AgentId, IssueId, ProjectId, SkillId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{SqliteStore, Store};
@@ -92,7 +92,7 @@ async fn main() {
     .await
     .unwrap();
     app.dispatch(Command::SetCycle {
-        cycle: ProjectCycle::Explore,
+        cycle: MaturityPeriod::Explore,
     })
     .await
     .unwrap();

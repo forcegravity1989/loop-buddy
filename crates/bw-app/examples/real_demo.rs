@@ -22,7 +22,7 @@
 
 use bw_app::{App, Command, Event};
 use bw_core::model::{
-    Cadence, ProjectCycle, SourceKind, StageKind, CONNECTOR_KIND_CLAUDE_CLI,
+    Cadence, MaturityPeriod, SourceKind, StageKind, CONNECTOR_KIND_CLAUDE_CLI,
     CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{ConnectorId, CronTaskId, MetricId, ProjectId, SessionId};
@@ -617,7 +617,7 @@ async fn main() {
                 .await
                 .expect("create project");
                 app.dispatch(Command::SetCycle {
-                    cycle: ProjectCycle::Explore,
+                    cycle: MaturityPeriod::Explore,
                 })
                 .await
                 .expect("set cycle");
