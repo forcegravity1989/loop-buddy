@@ -22,3 +22,4 @@ bw-engine = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 time = { workspace = true, features = ["std"] }
 async-trait = { workspace = true }
+serde = { workspace = true }
