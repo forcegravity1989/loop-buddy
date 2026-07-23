@@ -246,6 +246,9 @@ async fn cmd_setup(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
                     (那是构建师的活),只做「这条该不该上日报、摘要写得好不好」的判断。\
                     绝不为了凑数把不相关条目硬塞进日报。"
                     .into(),
+                tools: Vec::new(),
+                agent_cli: "claude-code".into(),
+                source: HubSource::SelfBuilt,
                 project_id: Some(project),
             })
             .await

@@ -213,6 +213,17 @@ pub struct NewAgent {
     pub model: String,
     /// Standing instructions (may be empty for a catalog reference entry).
     pub instructions: String,
+    /// T5 (2026-07-23, plan/12 §3): AllowedTools — real AGENT.md `tools`
+    /// frontmatter for an imported row; `[]` for a hand-authored
+    /// `CreateAgent` row or one of the five built-in stage-role agents (no
+    /// restriction declared).
+    pub tools: Vec<String>,
+    /// T5: which Agent CLI executes this agent. First version always
+    /// `"claude-code"` — the only one with a real executor.
+    pub agent_cli: String,
+    /// T5 (plan/12 §6/§8): provenance, the same [`HubSource`] Skill/Workflow
+    /// already carry.
+    pub source: HubSource,
     /// 践行最小切片(2026-07-20):`None` = hub library(全局);`Some` = 项目自有。
     /// 见 [`NewWorkflowSpec::project_id`]。
     pub project_id: Option<ProjectId>,
@@ -846,14 +857,17 @@ pub(crate) fn parse_maturity(s: &str) -> Maturity {
     }
 }
 
-/// `skill.source` (discriminant tag) + `skill.official_library` (sub-tag,
-/// meaningful only for `Official`) column values for a [`HubSource`] — T2's
-/// unification of Skill's provenance onto the same enum Workflow already
-/// uses (plan/12 §6). Mirrors `HubSource`'s own on-disk shape 1:1, just
-/// spread across two plain `TEXT` columns instead of one JSON blob (the
-/// `skill` table already had a dedicated `source TEXT` column pre-T2 — no
-/// reason to switch to JSON just to gain a struct variant).
-pub(crate) fn skill_source_columns(s: &HubSource) -> (&'static str, String) {
+/// `source` (discriminant tag) + `official_library` (sub-tag, meaningful only
+/// for `Official`) column values for a [`HubSource`] — T2's unification of
+/// Skill's provenance onto the same enum Workflow already uses (plan/12 §6),
+/// reused as-is by T5 for `agent` (same two-column shape, same enum — no
+/// reason to duplicate the mapping per hub table). Mirrors `HubSource`'s own
+/// on-disk shape 1:1, just spread across two plain `TEXT` columns instead of
+/// one JSON blob (the `skill` table already had a dedicated `source TEXT`
+/// column pre-T2 — no reason to switch to JSON just to gain a struct
+/// variant). Despite the generic name, still named after its first caller;
+/// renamed here to `hub_source_columns` now that a second table uses it.
+pub(crate) fn hub_source_columns(s: &HubSource) -> (&'static str, String) {
     match s {
         HubSource::Official { official_library } => ("official", official_library.clone()),
         HubSource::Adopted => ("adopted", String::new()),
@@ -862,7 +876,7 @@ pub(crate) fn skill_source_columns(s: &HubSource) -> (&'static str, String) {
     }
 }
 
-/// Inverse of [`skill_source_columns`]. Handles one legacy shape: pre-T2 rows
+/// Inverse of [`hub_source_columns`]. Handles one legacy shape: pre-T2 rows
 /// written by the retired `LibSource::Official` (the 5 built-in
 /// stage-methodology skills, seeded before this migration) have
 /// `source='official'` but no `official_library` value — old DBs never had
@@ -871,8 +885,12 @@ pub(crate) fn skill_source_columns(s: &HubSource) -> (&'static str, String) {
 /// app's own built-in methodology isn't one — the same call
 /// `stage_template_workflow` already made on the Workflow side. Old
 /// databases keep opening either way; nothing crashes, the label just
-/// becomes honest under the new, stricter definition of `Official`.
-pub(crate) fn parse_skill_source(tag: &str, official_library: &str) -> HubSource {
+/// becomes honest under the new, stricter definition of `Official`. T5
+/// reuses this unchanged for `agent.source`/`agent.official_library` — the
+/// five built-in stage-role agents predate any `source` column exactly like
+/// the five built-in stage-methodology skills did, so the same fallback
+/// (`SelfBuilt`) is the honest read for them too.
+pub(crate) fn parse_hub_source(tag: &str, official_library: &str) -> HubSource {
     match tag {
         "official" if !official_library.is_empty() => HubSource::Official {
             official_library: official_library.to_string(),

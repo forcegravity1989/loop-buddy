@@ -838,8 +838,33 @@ pub struct AgentCardVm {
     pub win_rate: String,
     /// Standing instructions. Empty = catalog reference.
     pub instructions: String,
+    /// T5 (plan/12 §3): AllowedTools — the card-face Tools chip row, at the
+    /// same tier as `skills` chips. Empty = no restriction declared (the
+    /// five built-in stage-role agents, or an unedited hand-authored row).
+    pub tools: Vec<String>,
+    /// T5: human-friendly label for `AgentCard.agent_cli`, e.g. `"Claude
+    /// Code"` for the real `"claude-code"` value — the detail panel's
+    /// "执行引擎" line. Any other raw value (future codex/cursor) passes
+    /// through unmapped rather than being guessed into a nicer label.
+    pub agent_cli_label: String,
+    /// T5 (plan/12 §6): provenance chip label, same vocabulary
+    /// `SkillCardVm::source_label` already surfaces.
+    pub source_label: &'static str,
     /// `None` = 全局/共享;`Some` = 项目自建(plan/10 K1 侧边栏过滤用)。
     pub project_id: Option<ProjectId>,
+}
+
+/// Human-friendly label for a real `AgentCard.agent_cli` value — T5's
+/// "执行引擎" detail line. First version: only `"claude-code"` has a real
+/// executor (`bw-engine::ClaudeCliExecutor`) behind it, so it's the only one
+/// worth a friendly name; anything else passes through as-is rather than
+/// inventing a translation for a CLI this app can't actually run yet (real
+/// routing lands in T6).
+pub fn agent_cli_label(agent_cli: &str) -> String {
+    match agent_cli {
+        "claude-code" => "Claude Code".to_string(),
+        other => other.to_string(),
+    }
 }
 
 pub fn agent_card(a: &AgentCard) -> AgentCardVm {
@@ -859,6 +884,9 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
         runs: a.runs,
         win_rate: a.win_rate.clone(),
         instructions: a.instructions.clone(),
+        tools: a.tools.clone(),
+        agent_cli_label: agent_cli_label(&a.agent_cli),
+        source_label: a.source.label(),
         project_id: a.project_id,
     }
 }

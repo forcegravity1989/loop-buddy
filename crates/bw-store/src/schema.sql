@@ -216,6 +216,19 @@ CREATE TABLE IF NOT EXISTS agent (
     model       TEXT NOT NULL DEFAULT '',
     runs        INTEGER NOT NULL DEFAULT 0,
     win_rate    TEXT NOT NULL DEFAULT '',     -- pre-formatted, e.g. '94%'
+    -- T5 (2026-07-23, plan/12 §3): "Agent" == AGENT.md real modeling.
+    -- AllowedTools JSON [String] — '[]' = no restriction declared (honest for
+    -- the five built-in stage-role agents and any hand-authored row).
+    tools       TEXT NOT NULL DEFAULT '[]',
+    -- Which Agent CLI executes this agent; first version only "claude-code"
+    -- has a real executor (bw-engine::ClaudeCliExecutor).
+    agent_cli   TEXT NOT NULL DEFAULT 'claude-code',
+    -- Provenance — same HubSource tag/sub-tag two-column scheme T2 gave
+    -- `skill` (plan/12 §6). 'self_built' = honest default for the five
+    -- built-in stage-role agents; ImportAgentDefinition's ECC rows write
+    -- 'official' + official_library='ecc'.
+    source      TEXT NOT NULL DEFAULT 'self_built',
+    official_library TEXT NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0

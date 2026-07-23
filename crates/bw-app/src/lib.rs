@@ -13,6 +13,7 @@
 
 #![forbid(unsafe_code)]
 
+mod agent_import;
 mod skill_import;
 
 use bw_core::derive::AmberBand;
@@ -371,6 +372,23 @@ pub enum Command {
         skills: Vec<String>,
         model: String,
         instructions: String,
+    },
+    /// Import a real, on-disk AGENT.md (T5, plan/12 §3): `source_path` must
+    /// be a file whose frontmatter has `name`/`description`, and may have
+    /// `tools` (→ AllowedTools)/`model`; the body becomes `instructions`.
+    /// Every other frontmatter key is read and silently ignored (same rule
+    /// `ImportSkillPackage` follows for SKILL.md). No file-tree concept here
+    /// unlike Skill — one AGENT.md is the entire definition, so this maps
+    /// straight onto `Store::create_agent`, no new store method needed.
+    ///
+    /// `official_library`: same shape as `ImportSkillPackage`'s field —
+    /// `None` = ad-hoc personal import → `HubSource::SelfBuilt`;
+    /// `Some(lib)` → `HubSource::Official { official_library: lib }`. The
+    /// 67-file ECC batch import threads `Some("ecc")` through this same
+    /// field for every file.
+    ImportAgentDefinition {
+        source_path: String,
+        official_library: Option<String>,
     },
     CreateCronTask {
         id: CronTaskId,
@@ -2544,6 +2562,14 @@ impl App {
                         skills,
                         model,
                         instructions,
+                        // T5 (plan/12 §3): a hand-authored Hub agent declares
+                        // no AllowedTools restriction yet (editable later,
+                        // same "empty = unset" honesty `ImportSkillPackage`'s
+                        // category follows) and runs on the one real executor
+                        // this app has; self-authored ⇒ `SelfBuilt`.
+                        tools: Vec::new(),
+                        agent_cli: "claude-code".to_string(),
+                        source: HubSource::SelfBuilt,
                         project_id: None, // Hub 创建口径不变,一律全局
                     })
                     .await?;
@@ -2573,6 +2599,49 @@ impl App {
                             instructions,
                         },
                     )
+                    .await?;
+                self.refresh_agents().await?;
+                self.emit(Event::AgentsChanged);
+            }
+
+            Command::ImportAgentDefinition {
+                source_path,
+                official_library,
+            } => {
+                let parsed = agent_import::import_agent_definition_from_disk(&source_path)
+                    .map_err(AppError::Invalid)?;
+                if parsed.name.trim().is_empty() {
+                    return Err(AppError::Invalid(
+                        "AGENT.md frontmatter 的 name 不能为空".into(),
+                    ));
+                }
+                let source = match official_library {
+                    Some(lib) => HubSource::Official {
+                        official_library: lib,
+                    },
+                    None => HubSource::SelfBuilt,
+                };
+                self.store
+                    .create_agent(NewAgent {
+                        id: AgentId::new(),
+                        name: parsed.name,
+                        role: parsed.description,
+                        // Real, already-written subagent definition — not
+                        // something drafted inside BW. Same call
+                        // `ImportSkillPackage` makes for an imported SKILL.md:
+                        // Mature, not Polishing (which means "just made,
+                        // unproven").
+                        maturity: Maturity::Mature,
+                        // ECC AGENT.md files don't declare skill tags of
+                        // their own; no predetermined mapping (no guessing).
+                        skills: Vec::new(),
+                        model: parsed.model,
+                        instructions: parsed.instructions,
+                        tools: parsed.tools,
+                        agent_cli: "claude-code".to_string(),
+                        source,
+                        project_id: None,
+                    })
                     .await?;
                 self.refresh_agents().await?;
                 self.emit(Event::AgentsChanged);

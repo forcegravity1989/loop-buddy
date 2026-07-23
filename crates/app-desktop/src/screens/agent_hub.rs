@@ -137,6 +137,7 @@ fn AgentCard(
                 if let Some(p) = &owner_project {
                     span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)} flex:none;", "◇ {p}" }
                 }
+                span { style: "{chip} flex:none;", "{a.source_label}" }
                 span { style: "{chip} flex:none;", "{a.maturity_label}" }
             }
             // ── 3. 社会证明:真实战绩(runs/胜率)+ 被多少工作流用 ──
@@ -159,12 +160,27 @@ fn AgentCard(
                     span { key: "{i}", style: "{theme::chip(\"#F4F0E7\", ink2)}", "{s}" }
                 }
             }
+            // T5(plan/12 §3):Tools chip 行——AllowedTools,与上面 skills
+            // chips 平级(同一卡片面,紧凑展示),而非折进详情。五角色内置
+            // agent/未编辑的手建 agent 诚实地空着(不声明限制),不渲染这行。
+            if !a.tools.is_empty() {
+                div {
+                    style: "display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;",
+                    span { style: "font-family:{mono};font-size:10.5px;color:{ink3};", "工具" }
+                    for (i , t) in a.tools.iter().enumerate() {
+                        span { key: "{i}", style: "{theme::chip(\"#E4EDF2\", \"#3E5A66\")} font-family:{mono};font-size:11px;", "{t}" }
+                    }
+                }
+            }
             if is_open {
                 div {
                     style: "margin-top:12px;padding-top:12px;border-top:1px dashed {theme::BORDER};",
                     if is_editing {
                         EditAgentForm { a: a.clone(), on_done: move |_| on_done_edit.call(()) }
                     } else {
+                        // T5(plan/12 §3):执行引擎——agent_cli 展示,首版诚实
+                        // 只有 Claude Code 真实可跑(真实路由留给 T6)。
+                        div { style: "font-size:11px;color:{ink3};margin-bottom:8px;", "执行引擎:{a.agent_cli_label}" }
                         if a.instructions.trim().is_empty() {
                             div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "目录引用 · 无本地指令(可「编辑」补充)" }
                         } else {

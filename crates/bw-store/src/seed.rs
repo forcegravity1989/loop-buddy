@@ -121,6 +121,17 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
                 skills: ra.skills,
                 model: ra.model.to_string(),
                 instructions: ra.instructions,
+                // T5 (plan/12 §3): the five built-in stage-role agents
+                // declare no AllowedTools restriction (honest — the
+                // playbook never specified one) and run on the one real
+                // executor this app has (`claude-code`). Their provenance
+                // is this app's own methodology, same call
+                // `stage_template_workflow`/`seed_stage_entities_if_missing`
+                // already made for the identical class of skill content
+                // (`HubSource::SelfBuilt`, plan/12 §6 acceptance criterion).
+                tools: Vec::new(),
+                agent_cli: "claude-code".to_string(),
+                source: HubSource::SelfBuilt,
                 // 同上:五角色是全局单例,不因这次践行的项目自有切片改变。
                 project_id: None,
             })

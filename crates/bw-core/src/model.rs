@@ -1069,6 +1069,30 @@ pub struct AgentCard {
     /// role gets told, `{var}` slots filled per project at run time.
     #[serde(default)]
     pub instructions: String,
+    /// T5 (2026-07-23, plan/12 §3): "Agent" == AGENT.md — this is that
+    /// definition's `tools` frontmatter field, i.e. **AllowedTools**, the same
+    /// vocabulary `claude` CLI's `--allowedTools` uses. Real at run time: the
+    /// CLI adapter translates this list, not the field itself (decoupled —
+    /// same reasoning as `agent_cli` below). Empty for the five built-in
+    /// stage-role agents (no restriction declared, honest) and for a
+    /// hand-authored `CreateAgent` row until edited.
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// T5 (2026-07-23, plan/12 §3): which Agent CLI executes this agent
+    /// ("claude-code" / "codex" / "cursor" / …). First version: only
+    /// `"claude-code"` has a real executor behind it (`bw-engine`'s
+    /// `ClaudeCliExecutor`); any other value is an honest label with no route
+    /// yet — selecting one must error "本机未安装 X CLI", never silently fall
+    /// back to Claude Code (real routing lands in T6).
+    #[serde(default)]
+    pub agent_cli: String,
+    /// T5 (2026-07-23, plan/12 §6/§8): provenance — the same [`HubSource`]
+    /// Skill/Workflow already carry. The five built-in stage-role agents (and
+    /// any pre-T5 row opened from an old DB with no `source` column) read back
+    /// as `SelfBuilt` (see the `agent` table's `add_column_if_missing`
+    /// default); `ImportAgentDefinition`'s 67 ECC rows are
+    /// `Official { official_library: "ecc" }`.
+    pub source: HubSource,
     /// `None` = 全局/共享(五角色内置 agent);`Some` = 这个项目自建的
     /// 专精 agent(plan/10 K1 项目侧边栏按这个字段过滤)。
     #[serde(default)]

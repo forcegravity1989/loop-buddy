@@ -5,15 +5,15 @@
 
 use crate::{
     cadence_text, connector_status_text, cron_mode_text, cron_status_text, cycle_text,
-    issue_priority_text, issue_status_text, maturity_text, parse_cadence, parse_connector_status,
-    parse_cron_mode, parse_cron_status, parse_cycle, parse_issue_priority, parse_issue_status,
-    parse_maturity, parse_session_status, parse_sig, parse_skill_source, parse_stage_kind,
-    session_status_text, sig_text, skill_source_columns, stage_kind_text, AgentEdit,
-    GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal, NewAgent, NewArtifact,
-    NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession,
-    NewSkill, NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow,
-    PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow,
-    StageRow, StageSignal, Store, StoreError, WorkflowEdit,
+    hub_source_columns, issue_priority_text, issue_status_text, maturity_text, parse_cadence,
+    parse_connector_status, parse_cron_mode, parse_cron_status, parse_cycle, parse_hub_source,
+    parse_issue_priority, parse_issue_status, parse_maturity, parse_session_status, parse_sig,
+    parse_stage_kind, session_status_text, sig_text, stage_kind_text, AgentEdit, GlobalHandoffRow,
+    HandoffRow, MessageRow, MetricRole, MetricSignal, NewAgent, NewArtifact, NewConnector,
+    NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
+    NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals,
+    ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow, StageRow, StageSignal,
+    Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -156,12 +156,41 @@ impl SqliteStore {
         // bare `source='official'`/`'self_built'` text values already match
         // the new tag vocabulary 1:1 (no rewrite needed) — only the new
         // `official_library` sub-tag column is missing on a pre-T2 DB.
-        // '' = no library sub-tag, which `parse_skill_source` reads as
+        // '' = no library sub-tag, which `parse_hub_source` reads as
         // "pre-T2 official row" → reclassified `SelfBuilt` (honest, see its
         // doc comment) for any row that predates this column.
         add_column_if_missing(
             &pool,
             "skill",
+            "official_library",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
+        // T5 (2026-07-23, plan/12 §3): "Agent" == AGENT.md real modeling —
+        // AllowedTools + which Agent CLI executes it, plus the same
+        // HubSource provenance T2 gave `skill`. A pre-T5 DB's existing 5
+        // built-in stage-role agent rows get '[]' tools, 'claude-code'
+        // agent_cli (the only real executor either way), and 'self_built'
+        // source (the acceptance-criterion default) — none of their
+        // runs/win_rate/instructions data is touched by these ADD COLUMNs.
+        add_column_if_missing(&pool, "agent", "tools", "TEXT NOT NULL DEFAULT '[]'").await?;
+        add_column_if_missing(
+            &pool,
+            "agent",
+            "agent_cli",
+            "TEXT NOT NULL DEFAULT 'claude-code'",
+        )
+        .await?;
+        add_column_if_missing(
+            &pool,
+            "agent",
+            "source",
+            "TEXT NOT NULL DEFAULT 'self_built'",
+        )
+        .await?;
+        add_column_if_missing(
+            &pool,
+            "agent",
             "official_library",
             "TEXT NOT NULL DEFAULT ''",
         )
@@ -1547,7 +1576,7 @@ impl Store for SqliteStore {
 
     async fn create_skill(&self, s: NewSkill) -> Result<()> {
         let t = now_unix();
-        let (source_tag, official_library) = skill_source_columns(&s.source);
+        let (source_tag, official_library) = hub_source_columns(&s.source);
         sqlx::query(
             "INSERT INTO skill (id, name, maturity, descr, category, source, official_library, uses, content, project_id, created_at, updated_at, rev)
              VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
@@ -1633,7 +1662,7 @@ impl Store for SqliteStore {
             .ok_or_else(|| StoreError::Other("distill: issue has no assignee".into()))?;
 
         let t = now_unix();
-        let (source_tag, official_library) = skill_source_columns(&HubSource::SelfBuilt);
+        let (source_tag, official_library) = hub_source_columns(&HubSource::SelfBuilt);
         sqlx::query(
             "INSERT INTO skill
                 (id, name, maturity, descr, category, source, official_library, uses, content,
@@ -1663,7 +1692,7 @@ impl Store for SqliteStore {
 
     async fn import_skill_package(&self, skill: NewSkill, files: Vec<NewSkillFile>) -> Result<()> {
         let t = now_unix();
-        let (source_tag, official_library) = skill_source_columns(&skill.source);
+        let (source_tag, official_library) = hub_source_columns(&skill.source);
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO skill (id, name, maturity, descr, category, source, official_library, uses, content, project_id, created_at, updated_at, rev)
@@ -1714,9 +1743,10 @@ impl Store for SqliteStore {
 
     async fn create_agent(&self, a: NewAgent) -> Result<()> {
         let t = now_unix();
+        let (source_tag, official_library) = hub_source_columns(&a.source);
         sqlx::query(
-            "INSERT INTO agent (id, name, role, maturity, skills, model, runs, win_rate, instructions, wins, project_id, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, 0, ?, ?, ?, 0)",
+            "INSERT INTO agent (id, name, role, maturity, skills, model, runs, win_rate, instructions, wins, tools, agent_cli, source, official_library, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, 0, ?, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(a.id.uuid().to_string())
         .bind(&a.name)
@@ -1725,6 +1755,10 @@ impl Store for SqliteStore {
         .bind(serde_json::to_string(&a.skills)?)
         .bind(&a.model)
         .bind(&a.instructions)
+        .bind(serde_json::to_string(&a.tools)?)
+        .bind(&a.agent_cli)
+        .bind(source_tag)
+        .bind(official_library)
         .bind(a.project_id.map(pid))
         .bind(t)
         .bind(t)
@@ -1751,7 +1785,7 @@ impl Store for SqliteStore {
 
     async fn list_agents(&self) -> Result<Vec<AgentCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions, project_id FROM agent ORDER BY created_at",
+            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions, tools, agent_cli, source, official_library, project_id FROM agent ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1760,7 +1794,7 @@ impl Store for SqliteStore {
 
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>> {
         let row = sqlx::query(
-            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions, project_id FROM agent WHERE id=?",
+            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions, tools, agent_cli, source, official_library, project_id FROM agent WHERE id=?",
         )
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
@@ -2246,7 +2280,7 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         maturity: parse_maturity(&r.get::<String, _>("maturity")),
         desc: r.get("descr"),
         category: r.get("category"),
-        source: parse_skill_source(
+        source: parse_hub_source(
             &r.get::<String, _>("source"),
             &r.get::<String, _>("official_library"),
         ),
@@ -2271,6 +2305,7 @@ fn skill_file_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillFileRow> {
 fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
     let id = parse_uuid(&r.get::<String, _>("id"), AgentId::from_uuid)?;
     let skills: Vec<String> = serde_json::from_str(&r.get::<String, _>("skills"))?;
+    let tools: Vec<String> = serde_json::from_str(&r.get::<String, _>("tools"))?;
     let project_id = opt_project_id(&r)?;
     Ok(AgentCard {
         id,
@@ -2285,6 +2320,12 @@ fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
         runs: r.get::<i64, _>("runs") as u32,
         win_rate: r.get("win_rate"),
         instructions: r.get("instructions"),
+        tools,
+        agent_cli: r.get("agent_cli"),
+        source: parse_hub_source(
+            &r.get::<String, _>("source"),
+            &r.get::<String, _>("official_library"),
+        ),
         project_id,
     })
 }
