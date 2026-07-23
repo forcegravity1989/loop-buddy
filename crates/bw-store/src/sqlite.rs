@@ -152,6 +152,15 @@ impl SqliteStore {
         add_column_if_missing(&pool, "workflow_spec", "project_id", "TEXT").await?;
         add_column_if_missing(&pool, "skill", "project_id", "TEXT").await?;
         add_column_if_missing(&pool, "agent", "project_id", "TEXT").await?;
+        // GitHub 为主体的创建流(2026-07-22):老库开出来 github_remote 是
+        // 空串,和"没挂 GitHub"这个真实状态一致,不需要额外语义。
+        add_column_if_missing(
+            &pool,
+            "project",
+            "github_remote",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
 
         Ok(Self { pool })
     }
@@ -395,6 +404,16 @@ impl Store for SqliteStore {
         .bind(pid(id))
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn set_github_remote(&self, id: ProjectId, github_remote: &str) -> Result<()> {
+        sqlx::query("UPDATE project SET github_remote=?, updated_at=?, rev=rev+1 WHERE id=?")
+            .bind(github_remote)
+            .bind(now_unix())
+            .bind(pid(id))
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -770,7 +789,7 @@ impl Store for SqliteStore {
 
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>> {
         let row = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal, created_at
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, signal, weekly_signal, created_at
              FROM project WHERE id=?",
         )
         .bind(pid(id))
@@ -781,7 +800,7 @@ impl Store for SqliteStore {
 
     async fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal, created_at
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, signal, weekly_signal, created_at
              FROM project ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -2111,6 +2130,7 @@ fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
         opportunity: r.get("opportunity"),
         workspace_path: r.get("workspace_path"),
         allow_commands: r.get::<i64, _>("allow_commands") != 0,
+        github_remote: r.get("github_remote"),
         signal: r
             .get::<Option<String>, _>("signal")
             .and_then(|s| parse_sig(&s)),

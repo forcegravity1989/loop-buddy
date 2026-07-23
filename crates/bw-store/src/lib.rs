@@ -298,6 +298,9 @@ pub struct ProjectRow {
     /// Whether the real executor may also run shell commands (Bash), not
     /// just edit files. Meaningless while `workspace_path` is empty.
     pub allow_commands: bool,
+    /// "owner/repo" — empty = not attached to GitHub (local-only workspace,
+    /// or GitHub attach failed and soft-degraded). Set once, at creation.
+    pub github_remote: String,
     /// Cached derived signal (read-only; recompute is authoritative).
     pub signal: Option<Signal>,
     pub weekly_signal: Option<Signal>,
@@ -422,6 +425,10 @@ pub trait Store: Send + Sync {
     /// shell commands. Empty `path` clears configuration (reverts to
     /// Mock-only). Does not touch any signal or observation.
     async fn set_workspace(&self, id: ProjectId, path: &str, allow_commands: bool) -> Result<()>;
+    /// Record the GitHub remote a project's workspace was created from or
+    /// adopted from ("owner/repo"). Called once, right after a successful
+    /// `bw_engine::github::create_repo`/`clone_repo` — never touched again.
+    async fn set_github_remote(&self, id: ProjectId, github_remote: &str) -> Result<()>;
 
     async fn upsert_metric(&self, m: NewMetric) -> Result<()>;
     /// Week-plan edit: update a metric's target + this week's driver, keeping
