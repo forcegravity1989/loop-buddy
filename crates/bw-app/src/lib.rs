@@ -345,6 +345,32 @@ pub enum Command {
         project_id: Option<ProjectId>,
         official_library: Option<String>,
     },
+    /// Batch-import every real skill folder under a library root (T3,
+    /// plan/12 §1/§2): finds every directory that directly contains a
+    /// `SKILL.md` (`node_modules`/`.git`/`target` pruned without
+    /// descending — real libraries don't nest skills inside these, it's
+    /// pure efficiency/safety insurance), and each hit goes through the
+    /// exact same disk-parsing path `ImportSkillPackage` uses — a batch
+    /// import and a hand-run single-package import of the same folder
+    /// produce byte-identical rows.
+    ///
+    /// Idempotent by `(name, official_library)`: a name already imported
+    /// from the same `official_library` is skipped, never overwritten —
+    /// re-running this (e.g. a library version bump) can't silently clobber
+    /// a row a user has since hand-edited (T11 territory: editing flips a
+    /// row to `SelfBuilt`, which this check's `official_library` filter
+    /// naturally no longer matches, so an edited row is never skipped-away
+    /// from re-import consideration by name collision with itself) or
+    /// double-insert a duplicate. `official_library` is required (not
+    /// `Option`, unlike `ImportSkillPackage`) — a library import is by
+    /// definition an official-selection provenance, never an ad-hoc
+    /// personal one. Emits `Event::SkillLibraryImported` with the real
+    /// imported/skipped tally.
+    ImportSkillLibrary {
+        root_path: String,
+        official_library: String,
+        project_id: Option<ProjectId>,
+    },
     /// SkillHub's detail-panel edit — content only (`maturity`/`uses` are
     /// lifecycle data, untouched).
     UpdateSkill {
@@ -524,6 +550,15 @@ pub enum Event {
     },
     WorkflowSpecsChanged,
     SkillsChanged,
+    /// A batch `Command::ImportSkillLibrary` just finished — the real tally,
+    /// not an assumption: `imported` = new rows this run actually inserted,
+    /// `skipped` = `(name, official_library)` matches that already existed
+    /// and were left untouched (idempotent re-run safety).
+    SkillLibraryImported {
+        official_library: String,
+        imported: u32,
+        skipped: u32,
+    },
     AgentsChanged,
     CronTasksChanged,
     /// A real, unattended auto-fire from `App::tick_scheduler` just finished
@@ -2758,6 +2793,84 @@ impl App {
                     .await?;
                 self.refresh_skills().await?;
                 self.emit(Event::SkillsChanged);
+            }
+
+            Command::ImportSkillLibrary {
+                root_path,
+                official_library,
+                project_id,
+            } => {
+                let dirs =
+                    skill_import::find_skill_package_dirs(&root_path).map_err(AppError::Invalid)?;
+
+                // Idempotency key: (name, official_library). Snapshot what
+                // already exists in this library once up front, then keep it
+                // updated locally as this loop inserts — catches a same-name
+                // collision *within* this run too, not just against rows
+                // that predate it.
+                self.refresh_skills().await?;
+                let mut existing_names: std::collections::HashSet<String> = self
+                    .state
+                    .skills
+                    .iter()
+                    .filter(|s| {
+                        matches!(&s.source, HubSource::Official { official_library: lib } if lib == &official_library)
+                    })
+                    .map(|s| s.name.clone())
+                    .collect();
+
+                let mut imported = 0u32;
+                let mut skipped = 0u32;
+                for dir in dirs {
+                    let source_path = dir.to_string_lossy().into_owned();
+                    let parsed = skill_import::import_skill_package_from_disk(&source_path)
+                        .map_err(AppError::Invalid)?;
+                    if parsed.name.trim().is_empty() {
+                        return Err(AppError::Invalid(format!(
+                            "{source_path}: SKILL.md frontmatter 的 name 不能为空"
+                        )));
+                    }
+                    if existing_names.contains(&parsed.name) {
+                        skipped += 1;
+                        continue;
+                    }
+                    self.store
+                        .import_skill_package(
+                            NewSkill {
+                                id: SkillId::new(),
+                                name: parsed.name.clone(),
+                                // Same reasoning as ImportSkillPackage: real,
+                                // already-written library content, not a
+                                // fresh in-app draft.
+                                maturity: Maturity::Mature,
+                                desc: parsed.desc,
+                                // T3 scope, same as T2: no predetermined
+                                // category on import.
+                                category: String::new(),
+                                source: HubSource::Official {
+                                    official_library: official_library.clone(),
+                                },
+                                content: parsed.content,
+                                project_id,
+                            },
+                            parsed
+                                .files
+                                .into_iter()
+                                .map(|(rel_path, content)| NewSkillFile { rel_path, content })
+                                .collect(),
+                        )
+                        .await?;
+                    existing_names.insert(parsed.name);
+                    imported += 1;
+                }
+
+                self.refresh_skills().await?;
+                self.emit(Event::SkillsChanged);
+                self.emit(Event::SkillLibraryImported {
+                    official_library,
+                    imported,
+                    skipped,
+                });
             }
 
             Command::UpdateSkill {

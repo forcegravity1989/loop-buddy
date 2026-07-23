@@ -1,12 +1,13 @@
 //! Real filesystem reading for `Command::ImportSkillPackage` (T2, plan/12
-//! §2). Deliberately isolated in its own module and kept synchronous/`std`-
-//! only: this is the one place in `bw-app` that reads real skill-folder
-//! bytes off disk before handing parsed, owned data to the store layer.
-//! `bw-core` must stay zero-IO/wasm32-compilable, so none of this can live
-//! there — it belongs in a native, IO-doing crate, and `bw-app` (not
-//! `bw-store`, which only knows SQL) is where `Command` handlers already do
-//! this kind of real-world reading (see `LoadVersionLog`'s `git log` shellout
-//! elsewhere in this crate).
+//! §2) and `Command::ImportSkillLibrary` (T3, plan/12 §1/§2). Deliberately
+//! isolated in its own module and kept synchronous/`std`-only: this is the
+//! one place in `bw-app` that reads real skill-folder bytes off disk before
+//! handing parsed, owned data to the store layer. `bw-core` must stay zero-
+//! IO/wasm32-compilable, so none of this can live there — it belongs in a
+//! native, IO-doing crate, and `bw-app` (not `bw-store`, which only knows
+//! SQL) is where `Command` handlers already do this kind of real-world
+//! reading (see `LoadVersionLog`'s `git log` shellout elsewhere in this
+//! crate).
 
 use std::path::{Path, PathBuf};
 
@@ -117,6 +118,60 @@ fn parse_frontmatter_fields(frontmatter: &str) -> Result<(String, String), Strin
         .map(str::to_string)
         .ok_or_else(|| "SKILL.md frontmatter 缺少 description 字段".to_string())?;
     Ok((name, description))
+}
+
+/// Recursively find every directory under `root_path` that directly contains
+/// a `SKILL.md` — a "skill package" per plan/12 §2's convention — for T3's
+/// batch `Command::ImportSkillLibrary`. Directories named `node_modules`,
+/// `.git`, or `target` are pruned without descending: a purely defensive/
+/// efficiency guard (real skill libraries don't nest `SKILL.md` inside any of
+/// these; they'd be skipped anyway for lacking one), not a hardcoded skill
+/// convention. Once a directory is recognised as a skill package it stops
+/// descending into its own subdirectories — real mattpocock/superpowers
+/// skills never nest a second `SKILL.md` inside an already-matched skill
+/// folder, and taking the shallowest match keeps "one directory = one skill"
+/// unambiguous if that ever changed. Returned paths are sorted for a
+/// deterministic import order.
+pub(crate) fn find_skill_package_dirs(root_path: &str) -> Result<Vec<PathBuf>, String> {
+    let root = Path::new(root_path);
+    if !root.is_dir() {
+        return Err(format!("root_path 不是一个存在的目录:{root_path}"));
+    }
+    let mut out = Vec::new();
+    walk_for_skill_dirs(root, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+/// Pruned directory names: never descended into while searching for
+/// `SKILL.md` folders. None of the two real libraries this app imports
+/// (mattpocock-skills, superpowers) contain any of these, but a library root
+/// pointed at an arbitrary checkout could — pruning here is cheap insurance,
+/// not a claim that real skill data lives here today.
+const PRUNED_DIR_NAMES: [&str; 3] = ["node_modules", ".git", "target"];
+
+fn walk_for_skill_dirs(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    if dir.join("SKILL.md").is_file() {
+        out.push(dir.to_path_buf());
+        // Shallowest match wins — don't look for a second SKILL.md nested
+        // underneath this one.
+        return Ok(());
+    }
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("无法读取目录 {}:{e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("读取 {} 下的目录项失败:{e}", dir.display()))?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if PRUNED_DIR_NAMES.contains(&name) {
+            continue;
+        }
+        walk_for_skill_dirs(&path, out)?;
+    }
+    Ok(())
 }
 
 /// Recursively collect every real file under `dir` (skipping `skip_path`,
