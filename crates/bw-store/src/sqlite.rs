@@ -5,15 +5,15 @@
 
 use crate::{
     cadence_text, connector_status_text, cron_mode_text, cron_status_text, cycle_text,
-    hub_source_columns, issue_priority_text, issue_status_text, maturity_text, parse_cadence,
-    parse_connector_status, parse_cron_mode, parse_cron_status, parse_cycle, parse_hub_source,
-    parse_issue_priority, parse_issue_status, parse_maturity, parse_session_status, parse_sig,
-    parse_stage_kind, session_status_text, sig_text, stage_kind_text, AgentEdit, GlobalHandoffRow,
-    HandoffRow, MessageRow, MetricRole, MetricSignal, NewAgent, NewArtifact, NewConnector,
-    NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
-    NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals,
-    ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow, StageRow, StageSignal,
-    Store, StoreError, WorkflowEdit,
+    hub_source_columns, issue_priority_text, issue_status_text, maturity_text, parse_adapted_from,
+    parse_cadence, parse_connector_status, parse_cron_mode, parse_cron_status, parse_cycle,
+    parse_hub_source, parse_issue_priority, parse_issue_status, parse_maturity,
+    parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
+    stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal,
+    NewAgent, NewArtifact, NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric,
+    NewProject, NewSession, NewSkill, NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec,
+    ObservationRow, PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, SkillEdit,
+    SkillFileRow, StageRow, StageSignal, Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -1624,17 +1624,35 @@ impl Store for SqliteStore {
     }
 
     async fn update_skill(&self, id: SkillId, edit: SkillEdit) -> Result<()> {
-        sqlx::query(
-            "UPDATE skill SET name=?, descr=?, category=?, content=?, updated_at=?, rev=rev+1 WHERE id=?",
-        )
-        .bind(&edit.name)
-        .bind(&edit.desc)
-        .bind(&edit.category)
-        .bind(&edit.content)
-        .bind(now_unix())
-        .bind(id.uuid().to_string())
-        .execute(&self.pool)
-        .await?;
+        // T11 (plan/12 §7): `flip_to_self_built` flips `source` in the same
+        // UPDATE — `official_library` is deliberately absent from either SET
+        // list, so it survives untouched either way (留痕; see
+        // `SkillEdit::flip_to_self_built`'s doc comment).
+        if edit.flip_to_self_built {
+            sqlx::query(
+                "UPDATE skill SET name=?, descr=?, category=?, content=?, source='self_built', updated_at=?, rev=rev+1 WHERE id=?",
+            )
+            .bind(&edit.name)
+            .bind(&edit.desc)
+            .bind(&edit.category)
+            .bind(&edit.content)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE skill SET name=?, descr=?, category=?, content=?, updated_at=?, rev=rev+1 WHERE id=?",
+            )
+            .bind(&edit.name)
+            .bind(&edit.desc)
+            .bind(&edit.category)
+            .bind(&edit.content)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        }
         Ok(())
     }
 
@@ -1810,18 +1828,35 @@ impl Store for SqliteStore {
     }
 
     async fn update_agent(&self, id: AgentId, edit: AgentEdit) -> Result<()> {
-        sqlx::query(
-            "UPDATE agent SET name=?, role=?, skills=?, model=?, instructions=?, updated_at=?, rev=rev+1 WHERE id=?",
-        )
-        .bind(&edit.name)
-        .bind(&edit.role)
-        .bind(serde_json::to_string(&edit.skills)?)
-        .bind(&edit.model)
-        .bind(&edit.instructions)
-        .bind(now_unix())
-        .bind(id.uuid().to_string())
-        .execute(&self.pool)
-        .await?;
+        // T11 (plan/12 §7): same flip-in-place scheme as `update_skill` —
+        // `official_library` stays untouched in both branches (留痕).
+        if edit.flip_to_self_built {
+            sqlx::query(
+                "UPDATE agent SET name=?, role=?, skills=?, model=?, instructions=?, source='self_built', updated_at=?, rev=rev+1 WHERE id=?",
+            )
+            .bind(&edit.name)
+            .bind(&edit.role)
+            .bind(serde_json::to_string(&edit.skills)?)
+            .bind(&edit.model)
+            .bind(&edit.instructions)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE agent SET name=?, role=?, skills=?, model=?, instructions=?, updated_at=?, rev=rev+1 WHERE id=?",
+            )
+            .bind(&edit.name)
+            .bind(&edit.role)
+            .bind(serde_json::to_string(&edit.skills)?)
+            .bind(&edit.model)
+            .bind(&edit.instructions)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        }
         Ok(())
     }
 
@@ -2332,6 +2367,8 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
     let stage_ref = r
         .get::<Option<i64>, _>("stage_ref")
         .and_then(|n| StageKind::from_index(n as u8));
+    let source_tag: String = r.get("source");
+    let official_library: String = r.get("official_library");
     Ok(SkillCard {
         id,
         name: r.get("name"),
@@ -2339,10 +2376,8 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         desc: r.get("descr"),
         category: r.get("category"),
         stage_ref,
-        source: parse_hub_source(
-            &r.get::<String, _>("source"),
-            &r.get::<String, _>("official_library"),
-        ),
+        source: parse_hub_source(&source_tag, &official_library),
+        adapted_from: parse_adapted_from(&source_tag, &official_library),
         uses: r.get::<i64, _>("uses") as u32,
         content: r.get("content"),
         distilled_from_issue,
@@ -2369,6 +2404,8 @@ fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
     let stage_ref = r
         .get::<Option<i64>, _>("stage_ref")
         .and_then(|n| StageKind::from_index(n as u8));
+    let source_tag: String = r.get("source");
+    let official_library: String = r.get("official_library");
     Ok(AgentCard {
         id,
         name: r.get("name"),
@@ -2385,10 +2422,8 @@ fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
         instructions: r.get("instructions"),
         tools,
         agent_cli: r.get("agent_cli"),
-        source: parse_hub_source(
-            &r.get::<String, _>("source"),
-            &r.get::<String, _>("official_library"),
-        ),
+        source: parse_hub_source(&source_tag, &official_library),
+        adapted_from: parse_adapted_from(&source_tag, &official_library),
         project_id,
     })
 }

@@ -112,6 +112,10 @@ fn SkillDetailCard(id: SkillId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
                 span { "{s.category}" }
                 span { "·" }
                 span { "{s.source_label}" }
+                // T11(plan/12 §7):同 SkillHub 卡片——脱离源头后如实留痕。
+                if let Some(lib) = &s.adapted_from {
+                    span { style: "color:{ink3};font-style:italic;", "改编自 {lib}" }
+                }
                 if s.distilled_from_issue.is_some() {
                     span {
                         style: "{theme::chip(\"#EAF0E2\", \"#4A5E42\")}",

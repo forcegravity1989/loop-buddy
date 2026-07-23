@@ -195,6 +195,12 @@ fn AgentCard(
                 span { style: "{chip} flex:none;", "{a.source_label}" }
                 span { style: "{chip} flex:none;", "{a.maturity_label}" }
             }
+            // T11(plan/12 §7):编辑脱离源头后的留痕——source_label 已随
+            // HubSource 翻转自动变「自建」,不再顶官方库徽记;如实补一句
+            // 「改编自 <库名>」,不假装这条从没来自过官方选型。
+            if let Some(lib) = &a.adapted_from {
+                div { style: "font-size:10.5px;color:{ink3};font-style:italic;margin:-4px 0 8px;", "改编自 {lib}" }
+            }
             // ── 3. 社会证明:真实战绩(runs/胜率)+ 被多少工作流用 ──
             div {
                 style: "display:flex;align-items:center;gap:10px;font-size:11px;color:{ink3};font-family:{mono};margin-bottom:8px;",

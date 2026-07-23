@@ -1253,6 +1253,20 @@ pub struct SkillCard {
     /// stage-methodology skills) read back as `SelfBuilt` — see
     /// `bw_store::parse_skill_source`'s doc comment for why.
     pub source: HubSource,
+    /// T11 (2026-07-23, plan/12 §7): "改编自 <库名>" provenance — set iff this
+    /// row was once `Official { official_library }` and a substantive edit
+    /// (`content`/`desc`/`category`) flipped `source` to `SelfBuilt` (T11's
+    /// "编辑即脱离源头"). The store deliberately leaves the raw
+    /// `official_library` column untouched when it flips `source` away from
+    /// `official` — this field is that surviving value read back, `None`
+    /// whenever the column is empty (never edited away from an official
+    /// origin) or the row is still `Official` itself (its library already
+    /// shows up in `source`, no need to duplicate it here). Also doubles as
+    /// the re-import dedup signal: `ImportSkillLibrary` skips a name match
+    /// on this field the same as a live `Official { official_library }`
+    /// match, so a flipped row is never silently re-created as a duplicate.
+    #[serde(default)]
+    pub adapted_from: Option<String>,
     pub uses: u32,
     /// The skill body — real instructions an executor can act on. Empty for
     /// catalog *references* (OMC/ECC entries whose full text lives in the
@@ -1332,6 +1346,13 @@ pub struct AgentCard {
     /// default); `ImportAgentDefinition`'s 67 ECC rows are
     /// `Official { official_library: "ecc" }`.
     pub source: HubSource,
+    /// T11 (2026-07-23, plan/12 §7): same "改编自 <库名>" provenance-survives-
+    /// the-flip field `SkillCard` carries — see its doc comment for the full
+    /// reasoning (edit flips `source` away from `Official`, the raw
+    /// `official_library` column stays, this is that surviving value; also
+    /// the re-import dedup signal `ImportAgentDefinition` checks).
+    #[serde(default)]
+    pub adapted_from: Option<String>,
     /// `None` = 全局/共享(五角色内置 agent);`Some` = 这个项目自建的
     /// 专精 agent(plan/10 K1 项目侧边栏按这个字段过滤)。
     #[serde(default)]

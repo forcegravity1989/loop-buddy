@@ -852,6 +852,11 @@ pub struct SkillCardVm {
     /// `SkillCard.stage_ref` already is one — no round-trip needed here.
     pub stage_ref: Option<StageKind>,
     pub source_label: &'static str,
+    /// T11 (plan/12 §7): "改编自 <库名>" — non-`None` iff an edit flipped
+    /// this row away from `Official`; the card face renders this as a small
+    /// provenance note alongside `source_label` rather than pretending the
+    /// row never had a curated origin. See `SkillCard::adapted_from`.
+    pub adapted_from: Option<String>,
     pub uses: u32,
     /// Executable body. Empty = catalog reference (the detail panel says so
     /// honestly instead of showing a blank that reads as broken).
@@ -891,6 +896,7 @@ pub fn skill_card(s: &SkillCard, files: Vec<SkillFileVm>) -> SkillCardVm {
         category: s.category.clone(),
         stage_ref: s.stage_ref,
         source_label: s.source.label(),
+        adapted_from: s.adapted_from.clone(),
         uses: s.uses,
         content: s.content.clone(),
         project_id: s.project_id,
@@ -1005,6 +1011,9 @@ pub struct AgentCardVm {
     /// T5 (plan/12 §6): provenance chip label, same vocabulary
     /// `SkillCardVm::source_label` already surfaces.
     pub source_label: &'static str,
+    /// T11 (plan/12 §7): "改编自 <库名>" — same field/reasoning as
+    /// `SkillCardVm::adapted_from`.
+    pub adapted_from: Option<String>,
     /// `None` = 全局/共享;`Some` = 项目自建(plan/10 K1 侧边栏过滤用)。
     pub project_id: Option<ProjectId>,
 }
@@ -1043,6 +1052,7 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
         tools: a.tools.clone(),
         agent_cli_label: agent_cli_label(&a.agent_cli),
         source_label: a.source.label(),
+        adapted_from: a.adapted_from.clone(),
         project_id: a.project_id,
     }
 }

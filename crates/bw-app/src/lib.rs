@@ -412,6 +412,19 @@ pub enum Command {
     /// `Some(lib)` → `HubSource::Official { official_library: lib }`. The
     /// 67-file ECC batch import threads `Some("ecc")` through this same
     /// field for every file.
+    ///
+    /// T11 (2026-07-23, plan/12 §7): unlike `ImportSkillPackage` (which stays
+    /// purely additive — dedup is `ImportSkillLibrary`'s job, a separate
+    /// batch command), Skill has no standalone "import one AGENT.md" caller
+    /// driving a real 67-file batch the way this command does (there is no
+    /// `ImportAgentLibrary`; the vendored-ECC example dispatches this command
+    /// once per file in a loop). So *this* singular command is where an
+    /// `official_library: Some(lib)` re-import's own idempotency has to
+    /// live: a name that already exists under `lib` (still `Official`, or
+    /// hand-edited and flipped to `SelfBuilt` — see `AgentCard::adapted_from`)
+    /// is silently skipped, never overwritten or duplicated. An ad-hoc
+    /// `None` import stays purely additive (no batch-reimport concept for a
+    /// personal one-off), matching `ImportSkillPackage`'s own rule.
     ImportAgentDefinition {
         source_path: String,
         official_library: Option<String>,
@@ -3021,6 +3034,18 @@ impl App {
                 // updated locally as this loop inserts — catches a same-name
                 // collision *within* this run too, not just against rows
                 // that predate it.
+                //
+                // T11 (plan/12 §7): a name counts as "already in this
+                // library" whether the row is still `Official { lib }` *or*
+                // has since been hand-edited and flipped to `SelfBuilt` —
+                // `adapted_from` is exactly the surviving `official_library`
+                // read-back for that second case (see its doc comment). Only
+                // matching the still-`Official` branch (the pre-T11 shape of
+                // this filter) would let a re-import mint a brand-new
+                // `Official` duplicate of a name the user has since made
+                // their own — both an overwrite risk if it raced a later
+                // `UpdateSkill` and a same-name-ambiguity risk either way,
+                // exactly the two failure modes T11 exists to prevent.
                 self.refresh_skills().await?;
                 let mut existing_names: std::collections::HashSet<String> = self
                     .state
@@ -3028,6 +3053,7 @@ impl App {
                     .iter()
                     .filter(|s| {
                         matches!(&s.source, HubSource::Official { official_library: lib } if lib == &official_library)
+                            || s.adapted_from.as_deref() == Some(official_library.as_str())
                     })
                     .map(|s| s.name.clone())
                     .collect();
@@ -3100,6 +3126,18 @@ impl App {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
                 }
+                // T11 (plan/12 §7): "编辑即脱离源头" — an `Official` row whose
+                // substantive fields (content/desc/category; `name` is
+                // identity, not content) really changed flips to `SelfBuilt`
+                // in this same update. Compared against the real pre-edit
+                // row, not the caller's own state cache, so a stale UI still
+                // decides correctly. A no-op edit (identical content
+                // resubmitted) or a rename-only edit never flips.
+                let existing = self.store.get_skill(id).await?;
+                let flip_to_self_built = existing.as_ref().is_some_and(|s| {
+                    matches!(s.source, HubSource::Official { .. })
+                        && (s.content != content || s.desc != desc || s.category != category)
+                });
                 self.store
                     .update_skill(
                         id,
@@ -3108,6 +3146,7 @@ impl App {
                             desc,
                             category,
                             content,
+                            flip_to_self_built,
                         },
                     )
                     .await?;
@@ -3165,6 +3204,20 @@ impl App {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
                 }
+                // T11 (plan/12 §7): same flip rule as `UpdateSkill` above.
+                // Substantive fields for an Agent are `instructions`/`role`/
+                // `model` — the ticket's own list also names `tools`, but
+                // `UpdateAgent`/`AgentEdit` carry no `tools` field to edit
+                // (AllowedTools isn't wired into this form), so it can never
+                // differ through this path and is correctly left out of the
+                // comparison. `name`/`skills` (tag list) are identity/
+                // structural, not content, same "rename alone doesn't flip"
+                // call `UpdateSkill` makes for its own `name`.
+                let existing = self.store.get_agent(id).await?;
+                let flip_to_self_built = existing.as_ref().is_some_and(|a| {
+                    matches!(a.source, HubSource::Official { .. })
+                        && (a.instructions != instructions || a.role != role || a.model != model)
+                });
                 self.store
                     .update_agent(
                         id,
@@ -3174,6 +3227,7 @@ impl App {
                             skills,
                             model,
                             instructions,
+                            flip_to_self_built,
                         },
                     )
                     .await?;
@@ -3192,37 +3246,55 @@ impl App {
                         "AGENT.md frontmatter 的 name 不能为空".into(),
                     ));
                 }
-                let source = match official_library {
+                let source = match &official_library {
                     Some(lib) => HubSource::Official {
-                        official_library: lib,
+                        official_library: lib.clone(),
                     },
                     None => HubSource::SelfBuilt,
                 };
-                self.store
-                    .create_agent(NewAgent {
-                        id: AgentId::new(),
-                        name: parsed.name,
-                        role: parsed.description,
-                        // T7: same 通用-until-classified rule as the Skill
-                        // import path — no guessing across 67 ECC agents.
-                        stage_ref: None,
-                        // Real, already-written subagent definition — not
-                        // something drafted inside BW. Same call
-                        // `ImportSkillPackage` makes for an imported SKILL.md:
-                        // Mature, not Polishing (which means "just made,
-                        // unproven").
-                        maturity: Maturity::Mature,
-                        // ECC AGENT.md files don't declare skill tags of
-                        // their own; no predetermined mapping (no guessing).
-                        skills: Vec::new(),
-                        model: parsed.model,
-                        instructions: parsed.instructions,
-                        tools: parsed.tools,
-                        agent_cli: "claude-code".to_string(),
-                        source,
-                        project_id: None,
+                // T11 (plan/12 §7): idempotent re-import, `official_library`
+                // path only — see this Command variant's doc comment for why
+                // the check lives here rather than in a separate batch
+                // command. `adapted_from` catches a name that has since been
+                // hand-edited and flipped away from `Official`, exactly the
+                // same union `ImportSkillLibrary` now checks.
+                let is_duplicate = if let Some(lib) = &official_library {
+                    self.refresh_agents().await?;
+                    self.state.agents.iter().any(|a| {
+                        a.name == parsed.name
+                            && (matches!(&a.source, HubSource::Official { official_library: l } if l == lib)
+                                || a.adapted_from.as_deref() == Some(lib.as_str()))
                     })
-                    .await?;
+                } else {
+                    false
+                };
+                if !is_duplicate {
+                    self.store
+                        .create_agent(NewAgent {
+                            id: AgentId::new(),
+                            name: parsed.name,
+                            role: parsed.description,
+                            // T7: same 通用-until-classified rule as the Skill
+                            // import path — no guessing across 67 ECC agents.
+                            stage_ref: None,
+                            // Real, already-written subagent definition — not
+                            // something drafted inside BW. Same call
+                            // `ImportSkillPackage` makes for an imported SKILL.md:
+                            // Mature, not Polishing (which means "just made,
+                            // unproven").
+                            maturity: Maturity::Mature,
+                            // ECC AGENT.md files don't declare skill tags of
+                            // their own; no predetermined mapping (no guessing).
+                            skills: Vec::new(),
+                            model: parsed.model,
+                            instructions: parsed.instructions,
+                            tools: parsed.tools,
+                            agent_cli: "claude-code".to_string(),
+                            source,
+                            project_id: None,
+                        })
+                        .await?;
+                }
                 self.refresh_agents().await?;
                 self.emit(Event::AgentsChanged);
             }

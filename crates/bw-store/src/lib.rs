@@ -201,12 +201,24 @@ pub struct NewSkillFile {
 
 /// Editable content fields for an existing skill — `maturity`/`source`/
 /// `uses` are lifecycle data untouched by an edit, same rule
-/// `WorkflowEdit`/`update_workflow_spec` already established.
+/// `WorkflowEdit`/`update_workflow_spec` already established. `source` is
+/// "untouched" with one T11 exception below.
 pub struct SkillEdit {
     pub name: String,
     pub desc: String,
     pub category: String,
     pub content: String,
+    /// T11 (2026-07-23, plan/12 §7): the caller (`bw-app`'s `UpdateSkill`
+    /// handler) has already compared this edit's substantive fields
+    /// (`content`/`desc`/`category`) against the row's pre-edit values and
+    /// found this row `Official` — `true` means "flip `source` to
+    /// `self_built` in this same UPDATE". `official_library` is
+    /// deliberately left untouched either way (留痕 — `parse_hub_source`
+    /// already ignores that column whenever the tag isn't `official`, so the
+    /// domain-level `HubSource` read-back is honestly `SelfBuilt` regardless;
+    /// the raw column survives for `SkillCard::adapted_from` / re-import
+    /// dedup to read).
+    pub flip_to_self_built: bool,
 }
 
 pub struct NewAgent {
@@ -245,6 +257,11 @@ pub struct AgentEdit {
     pub skills: Vec<String>,
     pub model: String,
     pub instructions: String,
+    /// T11 (2026-07-23, plan/12 §7): same flip signal as
+    /// `SkillEdit::flip_to_self_built` — see its doc comment. The caller has
+    /// already compared `instructions`/`role`/`model` against the row's
+    /// pre-edit values and found it `Official`.
+    pub flip_to_self_built: bool,
 }
 
 pub struct NewCronTask {
@@ -944,6 +961,26 @@ pub(crate) fn parse_hub_source(tag: &str, official_library: &str) -> HubSource {
         "adopted" => HubSource::Adopted,
         "within_session" => HubSource::WithinSession,
         _ => HubSource::SelfBuilt,
+    }
+}
+
+/// T11 (2026-07-23, plan/12 §7): `SkillCard::adapted_from` /
+/// `AgentCard::adapted_from` — the "改编自 <库名>" 留痕 read-back. `source`/
+/// `official_library` is a two-column scheme (see `hub_source_columns`); a
+/// T11 flip (`update_skill`/`update_agent` with `flip_to_self_built`)
+/// rewrites `source` to `'self_built'` but deliberately leaves the raw
+/// `official_library` column value in place. `parse_hub_source` above only
+/// ever reads that column when `tag == "official"`, so it never surfaces
+/// there post-flip — this is the sibling read that recovers it: non-`None`
+/// exactly when the tag has moved off `official` but the column still holds
+/// a value, i.e. exactly the flipped-away case. `None` for a still-`Official`
+/// row (its library already shows up in `source` itself, no duplication
+/// needed) and for a row that was never official (empty column).
+pub(crate) fn parse_adapted_from(tag: &str, official_library: &str) -> Option<String> {
+    if tag != "official" && !official_library.is_empty() {
+        Some(official_library.to_string())
+    } else {
+        None
     }
 }
 
