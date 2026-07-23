@@ -31,9 +31,9 @@ use bw_engine::{
     PermissionMode, RunCtx, RunEvent,
 };
 use bw_store::{
-    AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewArtifact, NewConnector, NewCronTask,
-    NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewStage,
-    NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
+    AgentEdit, GlobalHandoffRow, MetricDefSync, MetricRole, MetricsFileSync, NewAgent, NewArtifact,
+    NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession,
+    NewSkill, NewStage, NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -229,6 +229,19 @@ pub enum Command {
     SyncConnector {
         id: ConnectorId,
     },
+    /// C6 (plan/13 D5+D6): read the active project's `.bw/metrics.toml`
+    /// (metrics source of truth) and sync it into the SQLite cache — north
+    /// star name/def/collect plan updated in place, every lagging/leading
+    /// metric upserted by name (idempotent: re-syncing an unchanged file
+    /// inserts zero new rows). No configured workspace, or a workspace with
+    /// no file yet, is a deliberate silent no-op — same "nothing to report"
+    /// stance as a project that was never wired to GitHub. A file that fails
+    /// to parse emits `Event::ConnectorSynced { ok: false, .. }` and writes
+    /// nothing (parse succeeds in full or the cache stays untouched). Never
+    /// appends an observation or calls `recompute_signals` — this syncs
+    /// *definitions*, not values (collection execution is a later ticket,
+    /// C7).
+    SyncMetricsFile,
     StartSession {
         id: SessionId,
         stage_kind: Option<StageKind>,
@@ -2286,6 +2299,41 @@ impl App {
                 });
             }
 
+            Command::SyncMetricsFile => {
+                let p = self.active()?;
+                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+                match bw_engine::metrics_file::read(&proj.workspace_path) {
+                    // No configured workspace, or a workspace with no file
+                    // yet — 文件不存在:零动作零噪音,行为与今日完全一致
+                    // (no store write, no event; `read` folds both cases
+                    // into the same honest `Ok(None)`).
+                    Ok(None) => {}
+                    Ok(Some(file)) => {
+                        let sync = metrics_file_sync(p, &file);
+                        let summary = self.store.sync_metrics_file(sync).await?;
+                        self.emit(Event::ProjectUpdated(p));
+                        self.emit(Event::ConnectorSynced {
+                            name: "metrics.toml".into(),
+                            ok: true,
+                            detail: format!(
+                                "北极星 · {} 条滞后指标 · {} 条引领指标已同步",
+                                summary.lagging_synced, summary.leading_synced
+                            ),
+                        });
+                    }
+                    Err(e) => {
+                        // 坏 toml:如实报错,沿用 ConnectorSynced ok:false 惯例;
+                        // `read` only returns `Err` on a parse/IO failure — the
+                        // cache is untouched (nothing was written above).
+                        self.emit(Event::ConnectorSynced {
+                            name: "metrics.toml".into(),
+                            ok: false,
+                            detail: e.to_string(),
+                        });
+                    }
+                }
+            }
+
             Command::StartSession {
                 id,
                 stage_kind,
@@ -3321,6 +3369,32 @@ fn run_at_label(at: OffsetDateTime) -> String {
         at.hour(),
         at.minute()
     )
+}
+
+/// C6: `bw_engine::metrics_file::MetricsFile` (parsed toml) → `MetricsFileSync`
+/// (the store's write shape). Pure reshaping — no validation here, `read`
+/// already guaranteed every metric carries a `collect` plan by the time this
+/// runs (a file missing one fails to parse, never reaches this function).
+fn metrics_file_sync(
+    project_id: ProjectId,
+    file: &bw_engine::metrics_file::MetricsFile,
+) -> MetricsFileSync {
+    let to_def = |m: &bw_engine::metrics_file::MetricDef| MetricDefSync {
+        name: m.name.clone(),
+        def: m.def.clone(),
+        target_raw: m.target.clone(),
+        collect_kind: m.collect.kind.as_str().to_string(),
+        collect_query: m.collect.query.clone(),
+    };
+    MetricsFileSync {
+        project_id,
+        north_star_name: file.north_star.name.clone(),
+        north_star_def: file.north_star.def.clone(),
+        north_star_collect_kind: file.north_star.collect.kind.as_str().to_string(),
+        north_star_collect_query: file.north_star.collect.query.clone(),
+        lagging: file.lagging.iter().map(to_def).collect(),
+        leading: file.leading.iter().map(to_def).collect(),
+    }
 }
 
 /// Worse signals sort higher. `Unknown` sits between green and amber — more
