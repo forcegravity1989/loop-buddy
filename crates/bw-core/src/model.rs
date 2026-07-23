@@ -491,33 +491,84 @@ pub enum Maturity {
 /// on `WorkflowKind::Static` — a `Dynamic` (session-scoped, ad-hoc) workflow
 /// has no stable provenance to tag, so this stays off that variant entirely
 /// rather than becoming an always-present-but-sometimes-meaningless field.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+///
+/// T1 (2026-07-23, plan/12 §6): collapsed from 5 variants down to 4. Curated
+/// external libraries (OMC, ECC, mattpocock-skills, superpowers, …) are all
+/// the same kind of thing — "官方选型预置", an open-ended and ever-growing
+/// set — so they no longer get one enum variant each. `Omc`/`Ecc` merge into
+/// one `Official` variant carrying an `official_library` sub-tag instead.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HubSource {
-    /// oh-my-claudecode
-    Omc,
-    /// Everything Claude Code
-    Ecc,
+    /// 官方选型预置——BW 自己持续挑选、引入的高分精品库。`official_library`
+    /// 标具体是哪个:写作日真实取值 "ecc" / "mattpocock-skills" /
+    /// "superpowers";"omc" 是旧库迁移标签,暂无实例。
+    Official { official_library: String },
+    /// 预留:后期用户自选引入官方集之外的插件,今天无入口(plan/12 §6/§9)。
+    Adopted,
     /// 自建
     SelfBuilt,
     /// 会话内
     WithinSession,
-    /// 选型引入的外部 workflow 引擎/插件市场(如 superpowers)——不是本仓的
-    /// OMC/ECC 两个固定目录,也不是自建。真实来源名放调用方的 `scope` 字段或
-    /// 对应 `AgentRef`/`SkillRef.from`(2026-07-20 践行 aihot 时发现:此前只有
-    /// 四值,逼着"选型引入"要么误标 SelfBuilt 要么无值可选,如实补上)。
-    Adopted,
 }
 
 impl HubSource {
-    pub fn label(self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
-            HubSource::Omc => "OMC",
-            HubSource::Ecc => "ECC",
+            HubSource::Official { .. } => "官方选型",
+            HubSource::Adopted => "选型引入",
             HubSource::SelfBuilt => "自建",
             HubSource::WithinSession => "会话内",
-            HubSource::Adopted => "选型引入",
         }
+    }
+
+    /// Fixed chip-display order for the hub source filter row — every
+    /// category counted even at 0 rows, so a chip never silently disappears
+    /// just because nothing has that source yet. `Adopted` is deliberately
+    /// left off (no UI entry produces it yet — plan/12 §9), unchanged from
+    /// this list's pre-T1 shape (which also never surfaced a `选型引入` chip).
+    pub const FILTER_CHIP_LABELS: [&'static str; 3] = ["官方选型", "自建", "会话内"];
+}
+
+/// Hand-written: a pre-T1 database's `workflow_spec.kind_json` blobs may
+/// still hold the old bare-string `"omc"`/`"ecc"` unit-variant encoding.
+/// `Official` now carries data, so the derived `Deserialize` these two
+/// legacy strings used to satisfy no longer exists — without this impl,
+/// opening an old row would hard-fail instead of "老库打开不崩" (T1
+/// acceptance criterion). `self_built`/`within_session`/`adopted` keep
+/// their original unit-variant wire shape untouched, so they round-trip
+/// through ordinary derive-equivalent matching below; only `omc`/`ecc` need
+/// an explicit legacy mapping.
+impl<'de> Deserialize<'de> for HubSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum OnDisk {
+            Official {
+                official_library: String,
+            },
+            Adopted,
+            SelfBuilt,
+            WithinSession,
+            /// Legacy pre-T1 rows (deleted directory-only OMC/ECC seeds).
+            Omc,
+            Ecc,
+        }
+        Ok(match OnDisk::deserialize(deserializer)? {
+            OnDisk::Official { official_library } => HubSource::Official { official_library },
+            OnDisk::Adopted => HubSource::Adopted,
+            OnDisk::SelfBuilt => HubSource::SelfBuilt,
+            OnDisk::WithinSession => HubSource::WithinSession,
+            OnDisk::Omc => HubSource::Official {
+                official_library: "omc".to_string(),
+            },
+            OnDisk::Ecc => HubSource::Official {
+                official_library: "ecc".to_string(),
+            },
+        })
     }
 }
 

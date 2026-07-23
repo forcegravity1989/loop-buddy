@@ -13,9 +13,9 @@ use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAtten
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
     AgentCard, Artifact, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, FeedLevel,
-    HubCard, HubKind, Issue, IssueStatus, KnowledgeSource, Maturity, ProjectCycle, ProjectPhase,
-    RunChanges, RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SourceKind, StageKind,
-    UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
+    HubCard, HubKind, HubSource, Issue, IssueStatus, KnowledgeSource, Maturity, ProjectCycle,
+    ProjectPhase, RunChanges, RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SourceKind,
+    StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
@@ -613,9 +613,14 @@ pub fn group_by_stage(
 }
 
 /// Counts per source label, in a fixed display order — a filter-chip row.
+/// The order/labels come from `HubSource::FILTER_CHIP_LABELS` (bw-core), not
+/// a locally hardcoded list — T1 (plan/12 §6) retired the old per-library
+/// `Omc`/`Ecc` enum variants, so this can no longer name them directly.
 pub fn source_chip_counts(rows: &[WorkflowHubRowVm]) -> Vec<(&'static str, usize)> {
-    let mut counts: Vec<(&'static str, usize)> =
-        vec![("OMC", 0), ("ECC", 0), ("自建", 0), ("会话内", 0)];
+    let mut counts: Vec<(&'static str, usize)> = HubSource::FILTER_CHIP_LABELS
+        .iter()
+        .map(|&label| (label, 0))
+        .collect();
     for r in rows {
         if let Some(slot) = counts
             .iter_mut()

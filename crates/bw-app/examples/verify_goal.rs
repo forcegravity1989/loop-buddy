@@ -238,7 +238,7 @@ async fn main() {
             "workflow=「{}」(source={:?}) uses: {}→{} · 产生 {} 条真实 session message",
             real_wf.name,
             match &real_wf.kind {
-                bw_core::model::WorkflowKind::Static { source, .. } => *source,
+                bw_core::model::WorkflowKind::Static { source, .. } => source.clone(),
                 _ => HubSource::SelfBuilt,
             },
             uses_before,
