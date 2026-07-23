@@ -79,18 +79,23 @@ collect = { kind = "github" | "connector" | "bw" | "manual", query = "..." }
 **每条指标(含北极星)必须带 `collect`** —— 这是「对的指标」的硬约束
 (D6):没有采集方案不等于指标不对,但必须如实标注"这个数字暂时怎么来"。
 
-| `kind` | 语义 | `query` 怎么写 |
-|---|---|---|
-| `"github"` | GitHub 查询(issue/PR/release 等) | `gh` 风格查询串,如 `"repo:{owner}/{repo} is:pr is:merged merged:>=@{7d}"` |
-| `"connector"` | 走已配置的 BW Connector | Connector 的名字/scope,如 `"content-analytics"` |
-| `"bw"` | BW 自己的记账(issue 结算数、run 遥测等),不经外部系统 | 内部口径的简短描述,如 `"issue.settled_at within 7d"` |
-| `"manual"` | 暂时没有采集器,靠人手填 | 允许留空字符串 `""` |
+| `kind` | 语义 | `query` 怎么写 | 采集器 v1 状态 |
+|---|---|---|---|
+| `"github"` | GitHub 查询(issue/PR/release 等) | `gh` 风格查询串,如 `"repo:{owner}/{repo} is:pr is:merged merged:>=@{7d}"` | **已接**:C7 采集器跑 `gh api search/issues` 真取 total_count,`{owner}/{repo}`、`@{Nd}` 占位符按语义展开(release 等其它面 v1 未采) |
+| `"connector"` | 走已配置的 BW Connector | Connector 的名字/scope,如 `"content-analytics"` | **v1 未接,如实 Unknown**:采集器不碰,无观测、signal 保持 Unknown,绝不假绿 |
+| `"bw"` | BW 自己的记账(issue 结算数、run 遥测等),不经外部系统 | 内部口径的简短描述,如 `"issue.settled_at within 7d"` | **v1 未接,如实 Unknown**:同上,留给后续票接 BW 自记账口径 |
+| `"manual"` | 暂时没有采集器,靠人手填 | 允许留空字符串 `""` | 不归采集器管;值靠界面手填,戴「手填」徽记 |
 
 `kind` 是固定词表——文件里出现这四个之外的值,整份文件解析失败(结构性
 错误,不是"未知类型就忽略"式的静默宽容)。`query` 对非 `manual` 的 kind
 虽然不强制非空(解析器不做语义校验,只做结构校验),但一条采集不到值的
 "github"/"connector"/"bw" 指标是内容问题,留给「找指标」/「绑数据」
 Skill 处理,不是文件格式问题。
+
+**采集器 v1(C7)只真采 `github`**(外加既有 workspace evidence 覆盖的部分);
+`bw`/`connector` 两类如实留白——不采集、不写零值,看板上这些指标的 signal
+保持 Unknown 灰,徽记标「v1 未接」。「无数据 = Unknown ≠ 绿」是硬约束,采不到
+就如实说采不到,绝不为了点亮而伪造观测。
 
 ## 同步语义(`SyncMetricsFile` 命令)
 
