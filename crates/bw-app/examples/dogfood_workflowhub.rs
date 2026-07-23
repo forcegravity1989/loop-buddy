@@ -259,6 +259,7 @@ async fn main() {
                     .into(),
 
                 workspace: None,
+                github: None,
             })
             .await
             .expect("create project");

@@ -20,15 +20,15 @@ use bw_core::model::{
     HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig, Maturity,
     ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
     SourceKind, StageKind, WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI,
-    CONNECTOR_KIND_GIT_REPO,
+    CONNECTOR_KIND_GITHUB_REPO, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
     SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit, PermissionMode, RunCtx,
-    RunEvent,
+    evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit, GithubRepoSummary,
+    PermissionMode, RunCtx, RunEvent,
 };
 use bw_store::{
     AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewArtifact, NewConnector, NewCronTask,
@@ -71,6 +71,17 @@ pub enum Scope {
     Stage(StageKind),
 }
 
+/// Where a newly-created project's git remote comes from — the Repo 卡片的
+/// 选择,carried into `Command::CreateProject`. `New` mints a fresh GitHub
+/// repo (`gh repo create --clone`); `Existing` clones one the user already
+/// owns. `None` on the command (every pre-2026-07-22 caller) keeps every
+/// existing behavior — pure local mint or bound-local-path — untouched.
+#[derive(Clone, Debug)]
+pub enum GithubOrigin {
+    New { slug: String, private: bool },
+    Existing { owner: String, repo: String },
+}
+
 /// UI → kernel intents.
 pub enum Command {
     /// App start: load the project wall and re-derive every running project's
@@ -84,11 +95,20 @@ pub enum Command {
         name: String,
         kind: String,
         desc: String,
-        /// P1: optional pre-existing repo to bind (must contain `.git`). When
-        /// `None` and a workspaces root is configured, a fresh repo is minted
-        /// at creation. Bound repos are never rewritten by the workbench.
+        /// P1: optional pre-existing *local* repo to bind (must contain
+        /// `.git`). Mutually exclusive with `github` — the Repo 卡片 is the
+        /// sole UI entry point and only ever sets one of the two.
         workspace: Option<String>,
+        /// GitHub 为主体(2026-07-22): Repo 卡片的选择. `None` = neither
+        /// bound (`workspace` also `None`) → today's local-mint-if-configured
+        /// default, unchanged.
+        github: Option<GithubOrigin>,
     },
+    /// GitHub 为主体的创建流(2026-07-22): 读一次当前用户可接入的仓列表,
+    /// 填充 `AppState.github_repos`(Repo 卡片"接入已有仓"下拉的数据源)。
+    /// 显式加载,同 `LoadVersionLog`/`LoadArtifacts` 惯例——不在每次
+    /// rebuild 里打 GitHub API。
+    ListGithubRepos,
     /// Creation flow step 2 (快速问题 · 周期).
     SetCycle {
         cycle: ProjectCycle,
@@ -597,6 +617,10 @@ pub struct AppState {
     /// P4: the explicitly-opened Issue detail (board overlay) — same
     /// explicit-load pattern as `artifacts`. `None` = no overlay open.
     pub issue_detail: Option<IssueDetailData>,
+    /// GitHub 为主体的创建流: last `Command::ListGithubRepos` result. Process-
+    /// internal cache of live GitHub data, not persisted — it's a direct
+    /// read-through, not one of this app's own derived Signals.
+    pub github_repos: Vec<GithubRepoSummary>,
 }
 
 /// P4: everything the Issue-detail overlay shows, assembled read-only at
@@ -633,6 +657,7 @@ impl Default for AppState {
             artifacts: None,
             cron_effectiveness: None,
             issue_detail: None,
+            github_repos: Vec::new(),
         }
     }
 }
@@ -1599,6 +1624,7 @@ impl App {
                 kind,
                 desc,
                 workspace,
+                github,
             } => {
                 self.store
                     .create_project(NewProject {
@@ -1611,8 +1637,10 @@ impl App {
                 self.state.active_project = Some(id);
                 self.state.view = View::Create;
                 // P1: 建项目即建仓 —— 出生那一刻仓就存在(而非走完创建流才有)。
-                // 绑定已有仓:只校验含 .git,绝不动原文件;新建仓在 workspaces_root
-                // 下 mint,失败沿用既有降级(项目以 Mock 模式活着,创建本身不破)。
+                // 绑定已有本地仓:只校验含 .git,绝不动原文件。GitHub 为主体
+                // (2026-07-22): github 非空时改走 gh CLI 开仓/接入,新建失败
+                // 软降级回本地 mint,接入失败不兜底(不拿无关空仓冒充)。两条
+                // 路径都绝不让 CreateProject 本身失败——只有本地 bind 校验例外。
                 let bound = workspace
                     .as_deref()
                     .map(str::trim)
@@ -1622,8 +1650,8 @@ impl App {
                     .get_project(id)
                     .await?
                     .ok_or(AppError::NotFound)?;
-                match bound {
-                    Some(path) => {
+                match (bound, github) {
+                    (Some(path), _) => {
                         if !std::path::Path::new(path).join(".git").exists() {
                             return Err(AppError::Invalid(format!(
                                 "绑定的工作目录不是 git 仓库(无 .git):{path}"
@@ -1631,7 +1659,145 @@ impl App {
                         }
                         self.store.set_workspace(id, path, true).await?;
                     }
-                    None => {
+                    (None, Some(GithubOrigin::New { slug, private })) => {
+                        match self.workspaces_root.clone() {
+                            Some(root) => {
+                                let body = if proj.desc.trim().is_empty() {
+                                    "(创建流程未填写 brief)".to_string()
+                                } else {
+                                    proj.desc.trim().to_string()
+                                };
+                                match bw_engine::github::create_repo(
+                                    &slug, private, &root, &proj.name, &body,
+                                )
+                                .await
+                                {
+                                    Ok(r) => {
+                                        let path = root.join(&slug).to_string_lossy().into_owned();
+                                        self.store.set_workspace(id, &path, true).await?;
+                                        self.store
+                                            .set_github_remote(
+                                                id,
+                                                &format!("{}/{}", r.owner, r.repo),
+                                            )
+                                            .await?;
+                                        self.store
+                                            .create_connector(NewConnector {
+                                                id: ConnectorId::new(),
+                                                name: format!("{} · 代码仓", proj.name),
+                                                kind: CONNECTOR_KIND_GIT_REPO.into(),
+                                                scope: proj.name.clone(),
+                                                project_id: Some(id),
+                                                config: path.clone(),
+                                            })
+                                            .await?;
+                                        self.store
+                                            .create_connector(NewConnector {
+                                                id: ConnectorId::new(),
+                                                name: format!("{} · GitHub", proj.name),
+                                                kind: CONNECTOR_KIND_GITHUB_REPO.into(),
+                                                scope: proj.name.clone(),
+                                                project_id: Some(id),
+                                                config: format!("{}/{}", r.owner, r.repo),
+                                            })
+                                            .await?;
+                                    }
+                                    Err(e) => {
+                                        let mut detail =
+                                            format!("GitHub 建仓失败,已尝试改建本地仓:{e}");
+                                        match provision_workspace(&root, &proj).await {
+                                            Ok(path) => {
+                                                self.store.set_workspace(id, &path, true).await?;
+                                                self.store
+                                                    .create_connector(NewConnector {
+                                                        id: ConnectorId::new(),
+                                                        name: format!("{} · 代码仓", proj.name),
+                                                        kind: CONNECTOR_KIND_GIT_REPO.into(),
+                                                        scope: proj.name.clone(),
+                                                        project_id: Some(id),
+                                                        config: path.clone(),
+                                                    })
+                                                    .await?;
+                                            }
+                                            Err(local_e) => {
+                                                detail = format!(
+                                                    "GitHub 建仓失败:{e};本地兜底也失败:{local_e}"
+                                                );
+                                            }
+                                        }
+                                        self.emit(Event::ConnectorSynced {
+                                            name: format!("{} · GitHub", proj.name),
+                                            ok: false,
+                                            detail,
+                                        });
+                                    }
+                                }
+                            }
+                            None => {
+                                self.emit(Event::ConnectorSynced {
+                                    name: format!("{} · GitHub", proj.name),
+                                    ok: false,
+                                    detail: "未配置本地工作区根目录,无法建仓".into(),
+                                });
+                            }
+                        }
+                    }
+                    (None, Some(GithubOrigin::Existing { owner, repo })) => {
+                        match self.workspaces_root.clone() {
+                            Some(root) => {
+                                let dir = root.join(workspace_slug(&proj.name, id));
+                                match bw_engine::github::clone_repo(&owner, &repo, &dir).await {
+                                    Ok(r) => {
+                                        let path = dir.to_string_lossy().into_owned();
+                                        self.store.set_workspace(id, &path, true).await?;
+                                        self.store
+                                            .set_github_remote(
+                                                id,
+                                                &format!("{}/{}", r.owner, r.repo),
+                                            )
+                                            .await?;
+                                        self.store
+                                            .create_connector(NewConnector {
+                                                id: ConnectorId::new(),
+                                                name: format!("{} · 代码仓", proj.name),
+                                                kind: CONNECTOR_KIND_GIT_REPO.into(),
+                                                scope: proj.name.clone(),
+                                                project_id: Some(id),
+                                                config: path.clone(),
+                                            })
+                                            .await?;
+                                        self.store
+                                            .create_connector(NewConnector {
+                                                id: ConnectorId::new(),
+                                                name: format!("{} · GitHub", proj.name),
+                                                kind: CONNECTOR_KIND_GITHUB_REPO.into(),
+                                                scope: proj.name.clone(),
+                                                project_id: Some(id),
+                                                config: format!("{}/{}", r.owner, r.repo),
+                                            })
+                                            .await?;
+                                    }
+                                    Err(e) => {
+                                        // 不兜底本地 mint —— 拿一个跟用户选的仓无关
+                                        // 的空仓冒充"已接入",比"暂不挂仓库"更不诚实。
+                                        self.emit(Event::ConnectorSynced {
+                                            name: format!("{} · GitHub", proj.name),
+                                            ok: false,
+                                            detail: format!("接入 {owner}/{repo} 失败:{e}"),
+                                        });
+                                    }
+                                }
+                            }
+                            None => {
+                                self.emit(Event::ConnectorSynced {
+                                    name: format!("{} · GitHub", proj.name),
+                                    ok: false,
+                                    detail: "未配置本地工作区根目录,无法接入".into(),
+                                });
+                            }
+                        }
+                    }
+                    (None, None) => {
                         if let Some(root) = self.workspaces_root.clone() {
                             match provision_workspace(&root, &proj).await {
                                 Ok(path) => {
@@ -1668,6 +1834,21 @@ impl App {
                 self.refresh_connectors().await?;
                 self.emit(Event::ProjectsChanged);
                 self.emit(Event::ViewChanged(View::Create));
+            }
+
+            Command::ListGithubRepos => {
+                match bw_engine::github::list_repos(30).await {
+                    Ok(repos) => self.state.github_repos = repos,
+                    Err(e) => {
+                        self.state.github_repos = Vec::new();
+                        self.emit(Event::ConnectorSynced {
+                            name: "GitHub 仓库列表".into(),
+                            ok: false,
+                            detail: e.to_string(),
+                        });
+                    }
+                }
+                self.emit(Event::ProjectsChanged);
             }
 
             Command::SetCycle { cycle } => {

@@ -178,6 +178,7 @@ async fn run_project(app: &mut App, plan: &ProjectPlan) -> u64 {
         desc: plan.desc.into(),
 
         workspace: None,
+        github: None,
     })
     .await
     .expect("create project");

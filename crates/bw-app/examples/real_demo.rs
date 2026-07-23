@@ -613,6 +613,7 @@ async fn main() {
                     desc: req.desc.into(),
 
                     workspace: None,
+                    github: None,
                 })
                 .await
                 .expect("create project");

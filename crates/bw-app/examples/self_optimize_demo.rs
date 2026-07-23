@@ -29,6 +29,7 @@ async fn quick_project(app: &mut App, name: &str) -> ProjectId {
         desc: String::new(),
 
         workspace: None,
+        github: None,
     })
     .await
     .unwrap();

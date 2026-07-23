@@ -1213,6 +1213,10 @@ impl ConnectorStatus {
 /// unsynced). Matching is by the `Connector.kind` string.
 pub const CONNECTOR_KIND_GIT_REPO: &str = "git-repo";
 pub const CONNECTOR_KIND_CLAUDE_CLI: &str = "claude-cli";
+/// GitHub 为主体的创建流(2026-07-22)：记录一个项目挂的 GitHub 远端
+/// ("owner/repo" 进 `config`)。目前是诚实标注未同步的引用条目——不接
+/// `SyncConnector` 真探针,持续同步(issue/PR/CI 统计)是独立的后续功能。
+pub const CONNECTOR_KIND_GITHUB_REPO: &str = "github-repo";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Connector {

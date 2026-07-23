@@ -113,6 +113,11 @@ fn IntentCard(on_created: EventHandler<()>) -> Element {
             desc: brief().trim().to_string(),
 
             workspace: None,
+            // C1 只做后端(schema+gh shell-out+Command/handler)——Repo 卡片/
+            // slug 预览等 UI 是 plan/13 附注里排定的独立后续票(原实现计划
+            // Task 5),这里只补齐新增的必填字段以保持 app-desktop 编译通过,
+            // 不提前实现选择 UI。
+            github: None,
         });
         on_created.call(());
     };

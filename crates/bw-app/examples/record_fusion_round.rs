@@ -71,6 +71,7 @@ async fn main() {
             .into(),
 
         workspace: None,
+        github: None,
     })
     .await
     .unwrap();
