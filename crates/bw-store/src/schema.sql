@@ -179,6 +179,11 @@ CREATE TABLE IF NOT EXISTS skill (
     maturity    TEXT NOT NULL DEFAULT 'fresh',
     descr       TEXT NOT NULL DEFAULT '',
     category    TEXT NOT NULL DEFAULT '',
+    -- T7 (plan/12 §0/§2): which stage role this skill belongs to — same
+    -- 1..=5 nullable-INTEGER convention `workflow_spec.stage_ref` already
+    -- uses (interop via StageKind::index/from_index). NULL = 通用/跨阶段,
+    -- honest for every imported catalog skill (nobody has classified them).
+    stage_ref   INTEGER,
     source      TEXT NOT NULL DEFAULT 'self_built',
     -- T2 (plan/12 §6): sub-tag for source='official' only — which curated
     -- external library ("mattpocock-skills"/"superpowers"/"ecc"/…). '' for
@@ -207,6 +212,14 @@ CREATE TABLE IF NOT EXISTS skill_file (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_skill_file_skill ON skill_file(skill_id);
+-- T7: deliberately NO `CREATE INDEX ... ON skill(stage_ref)` here — this
+-- schema blob runs in full (via `open()`'s statement-by-statement replay)
+-- *before* `add_column_if_missing` adds this column to a pre-T7 on-disk
+-- `skill` table, so an index on it here would crash every existing database
+-- with "no such column: stage_ref" (real bug, caught by this ticket's own
+-- migration E2E — `CREATE TABLE IF NOT EXISTS` is the schema-blob's only
+-- safe-on-old-tables statement kind; `workflow_spec.stage_ref`'s index below
+-- never hit this because that whole table postdates its own column).
 
 CREATE TABLE IF NOT EXISTS agent (
     id          TEXT PRIMARY KEY,
@@ -214,6 +227,9 @@ CREATE TABLE IF NOT EXISTS agent (
     -- 践行最小切片(2026-07-20):NULL = hub library(全局);非 NULL = 项目自有。
     project_id  TEXT REFERENCES project(id),
     role        TEXT NOT NULL DEFAULT '',
+    -- T7 (plan/12 §0/§3): same classification dimension/convention as
+    -- `skill.stage_ref` above. NULL = 通用/跨阶段.
+    stage_ref   INTEGER,
     maturity    TEXT NOT NULL DEFAULT 'fresh',
     skills      TEXT NOT NULL DEFAULT '[]',   -- JSON [String] tag names
     model       TEXT NOT NULL DEFAULT '',
@@ -236,6 +252,8 @@ CREATE TABLE IF NOT EXISTS agent (
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0
 );
+-- T7: same "no index on a retrofitted column inside the raw schema blob"
+-- rule as `skill` above — see that comment for why.
 
 -- Global, except project_id which is nullable (NULL = 全部项目/all projects) —
 -- the one hub entity that legitimately optionally scopes to a project.

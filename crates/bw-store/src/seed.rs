@@ -64,23 +64,26 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
 /// separate from [`seed_hub_if_empty`]'s all-or-nothing gate: an existing,
 /// already-seeded database still gains these on first boot after the 完整形态
 /// upgrade — they're this app's own methodology, not external catalog data.
+///
+/// T7 (2026-07-23, plan/12 §0/§2/§3): also backfills `stage_ref` on a named
+/// row that already exists but still reads `None` — a database seeded by a
+/// pre-T7 binary has these five agents/skills with no `stage_ref` column
+/// value at all (honest NULL from `add_column_if_missing`); this call
+/// classifies them by the same by-name match already used to decide
+/// "already seeded", instead of leaving them permanently unclassified next
+/// to freshly-seeded rows that do carry a real value. Never touches a row
+/// whose `stage_ref` is already `Some` — there is no stage-editing UI yet, so
+/// today that can only be a value this same backfill wrote on an earlier boot.
 pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
-    let have_skills: std::collections::HashSet<String> = store
-        .list_skills()
-        .await?
-        .into_iter()
-        .map(|s| s.name)
-        .collect();
-    let have_agents: std::collections::HashSet<String> = store
-        .list_agents()
-        .await?
-        .into_iter()
-        .map(|a| a.name)
-        .collect();
+    let existing_skills = store.list_skills().await?;
+    let existing_agents = store.list_agents().await?;
 
     for kind in StageKind::ALL {
         for sk in bw_core::playbook::stage_skills(kind) {
-            if have_skills.contains(sk.name) {
+            if let Some(existing) = existing_skills.iter().find(|s| s.name == sk.name) {
+                if existing.stage_ref.is_none() {
+                    store.set_skill_stage_ref(existing.id, Some(kind)).await?;
+                }
                 continue;
             }
             store
@@ -98,6 +101,9 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
                     maturity: Maturity::Mature,
                     desc: sk.def.to_string(),
                     category: kind.label().to_string(),
+                    // T7: the built-in stage-methodology skill really is
+                    // this stage's role — a declared fact, not a guess.
+                    stage_ref: Some(kind),
                     source: HubSource::SelfBuilt,
                     content: sk.content.to_string(),
                     // 五阶段方法论技能是全局共享的(见本函数文档:「这个 app
@@ -108,8 +114,11 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
         }
     }
 
-    for (_kind, ra) in bw_core::playbook::role_agents() {
-        if have_agents.contains(ra.name) {
+    for (kind, ra) in bw_core::playbook::role_agents() {
+        if let Some(existing) = existing_agents.iter().find(|a| a.name == ra.name) {
+            if existing.stage_ref.is_none() {
+                store.set_agent_stage_ref(existing.id, Some(kind)).await?;
+            }
             continue;
         }
         store
@@ -117,6 +126,10 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
                 id: AgentId::new(),
                 name: ra.name.to_string(),
                 role: ra.role,
+                // T7: same "declared fact, not a guess" reasoning as the
+                // stage skill above — this is literally the agent `kind`'s
+                // own role.
+                stage_ref: Some(kind),
                 maturity: Maturity::Mature,
                 skills: ra.skills,
                 model: ra.model.to_string(),

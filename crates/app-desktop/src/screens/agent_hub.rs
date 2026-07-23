@@ -7,18 +7,22 @@
 //! references agents/skills), and an edit form dispatching
 //! `Command::UpdateAgent` — content only, `maturity`/`runs`/`win_rate` stay
 //! untouched, same rule `OptimizeWorkflowForm` established for workflows.
+//!
+//! T7 (2026-07-23, plan/12 §0/§3): the same stage-role filter chip row
+//! `SkillHub` gained — shared `ui::vm::RoleFilter`/`role_chip_counts`.
 
 use crate::kernel::{HubVm, Kernel};
 use crate::theme;
 use bw_app::Command;
 use bw_core::AgentId;
 use dioxus::prelude::*;
-use ui::vm::{AgentCardVm, ProjectCardVm};
+use ui::vm::{role_chip_counts, AgentCardVm, ProjectCardVm, RoleFilter};
 
 #[component]
 pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let paper = theme::PAPER;
     let serif = theme::SERIF;
+    let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
     let mono = theme::MONO;
     let n = hub.agents.len();
@@ -26,6 +30,16 @@ pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let mut creating = use_signal(|| false);
     let mut expanded = use_signal(|| None::<AgentId>);
     let mut editing = use_signal(|| None::<AgentId>);
+    let mut role_filter = use_signal(|| RoleFilter::All);
+
+    let (stage_counts, general_count) =
+        role_chip_counts(&hub.agents.iter().map(|a| a.stage_ref).collect::<Vec<_>>());
+    let filtered: Vec<AgentCardVm> = hub
+        .agents
+        .iter()
+        .filter(|a| role_filter().matches(a.stage_ref))
+        .cloned()
+        .collect();
 
     rsx! {
         div {
@@ -46,12 +60,53 @@ pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
             if creating() {
                 CreateAgentForm { on_done: move |_| creating.set(false) }
             }
+            div {
+                style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;",
+                {
+                    let active = role_filter() == RoleFilter::All;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(RoleFilter::All),
+                            "全部"
+                        }
+                    }
+                }
+                for (sk , count) in stage_counts {
+                    {
+                        let active = role_filter() == RoleFilter::Stage(sk);
+                        let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
+                        rsx! {
+                            button {
+                                key: "{sk.index()}",
+                                style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                                onclick: move |_| role_filter.set(RoleFilter::Stage(sk)),
+                                "{sk.role_short()} · {count}"
+                            }
+                        }
+                    }
+                }
+                {
+                    let active = role_filter() == RoleFilter::General;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(RoleFilter::General),
+                            "通用 · {general_count}"
+                        }
+                    }
+                }
+            }
             if hub.agents.is_empty() {
                 div { style: "color:{ink3};font-size:13px;padding:30px 0;", "还没有智能体——点「+ 配置智能体」录入第一个。" }
+            } else if filtered.is_empty() {
+                div { style: "color:{ink3};font-size:13px;padding:30px 0;", "没有符合筛选的智能体。" }
             } else {
                 div {
                     style: "display:grid;grid-template-columns:repeat(2,1fr);gap:14px;",
-                    for a in hub.agents.clone() {
+                    for a in filtered {
                         {
                             let aid = a.id;
                             let is_open = expanded() == Some(aid);

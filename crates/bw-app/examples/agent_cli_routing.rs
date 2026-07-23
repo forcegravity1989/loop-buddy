@@ -43,6 +43,7 @@ async fn make_agent(
             id,
             name: name.to_string(),
             role: format!("T6 E2E · {agent_cli}"),
+            stage_ref: None,
             maturity: Maturity::Fresh,
             skills: Vec::new(),
             model: "sonnet".to_string(),

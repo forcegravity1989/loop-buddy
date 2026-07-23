@@ -2905,6 +2905,10 @@ impl App {
                         maturity: Maturity::Polishing,
                         desc,
                         category,
+                        // T7: no stage selector on the hand-authored create
+                        // form yet (out of this ticket's scope) — honest
+                        // 通用 until an editor exists to classify it.
+                        stage_ref: None,
                         source,
                         content,
                         project_id: None, // Hub 创建口径不变,一律全局
@@ -2933,6 +2937,10 @@ impl App {
                             maturity: Maturity::Polishing,
                             desc,
                             category,
+                            // 忽略:store::distill_skill_from_issue 同样改从源
+                            // Issue 的真实 stage 派生(T7,与 project_id 同一
+                            // provenance-not-input 规则),不采用这里传入的值。
+                            stage_ref: None,
                             source: HubSource::SelfBuilt,
                             content,
                             // 忽略:store::distill_skill_from_issue 改从源 Issue
@@ -2982,6 +2990,9 @@ impl App {
                             // predetermined classification per plan/12 §2);
                             // stays empty, editable later via `UpdateSkill`.
                             category: String::new(),
+                            // T7 (plan/12 §0/§2): no stage guessing on import
+                            // either — 通用 until a human classifies it.
+                            stage_ref: None,
                             source,
                             content: parsed.content,
                             project_id,
@@ -3049,6 +3060,10 @@ impl App {
                                 // T3 scope, same as T2: no predetermined
                                 // category on import.
                                 category: String::new(),
+                                // T7: same 通用-until-classified rule as
+                                // `ImportSkillPackage` — no guessing across
+                                // 55 imported skills either.
+                                stage_ref: None,
                                 source: HubSource::Official {
                                     official_library: official_library.clone(),
                                 },
@@ -3116,6 +3131,10 @@ impl App {
                         id,
                         name,
                         role,
+                        // T7: no stage selector on the hand-authored create
+                        // form yet (out of this ticket's scope) — honest
+                        // 通用 until an editor exists to classify it.
+                        stage_ref: None,
                         maturity: Maturity::Polishing,
                         skills,
                         model,
@@ -3184,6 +3203,9 @@ impl App {
                         id: AgentId::new(),
                         name: parsed.name,
                         role: parsed.description,
+                        // T7: same 通用-until-classified rule as the Skill
+                        // import path — no guessing across 67 ECC agents.
+                        stage_ref: None,
                         // Real, already-written subagent definition — not
                         // something drafted inside BW. Same call
                         // `ImportSkillPackage` makes for an imported SKILL.md:

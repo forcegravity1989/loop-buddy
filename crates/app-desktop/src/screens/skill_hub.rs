@@ -6,6 +6,11 @@
 //! by-name convention as everywhere else this hub cross-references
 //! skills/agents), and an edit form dispatching `Command::UpdateSkill` —
 //! content only, `maturity`/`uses` stay untouched.
+//!
+//! T7 (2026-07-23, plan/12 §0/§2): a stage-role filter chip row — the same
+//! "全部/{五角色}/通用" dimension Workflow Hub already had (its stage
+//! chips), extended here with `ui::vm::RoleFilter`/`role_chip_counts` so all
+//! three Hub screens share one filter predicate instead of three ad hoc ones.
 
 use crate::kernel::{HubVm, Kernel};
 use crate::theme;
@@ -14,12 +19,15 @@ use bw_core::model::HubSource;
 use bw_core::SkillId;
 use dioxus::prelude::*;
 use std::collections::HashSet;
-use ui::vm::{skill_file_tree, ProjectCardVm, SkillCardVm, SkillTreeNode};
+use ui::vm::{
+    role_chip_counts, skill_file_tree, ProjectCardVm, RoleFilter, SkillCardVm, SkillTreeNode,
+};
 
 #[component]
 pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let paper = theme::PAPER;
     let serif = theme::SERIF;
+    let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
     let mono = theme::MONO;
     let n = hub.skills.len();
@@ -27,6 +35,16 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let mut creating = use_signal(|| false);
     let mut expanded = use_signal(|| None::<SkillId>);
     let mut editing = use_signal(|| None::<SkillId>);
+    let mut role_filter = use_signal(|| RoleFilter::All);
+
+    let (stage_counts, general_count) =
+        role_chip_counts(&hub.skills.iter().map(|s| s.stage_ref).collect::<Vec<_>>());
+    let filtered: Vec<SkillCardVm> = hub
+        .skills
+        .iter()
+        .filter(|s| role_filter().matches(s.stage_ref))
+        .cloned()
+        .collect();
 
     rsx! {
         div {
@@ -50,12 +68,53 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
             if creating() {
                 CreateSkillForm { on_done: move |_| creating.set(false) }
             }
+            div {
+                style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;",
+                {
+                    let active = role_filter() == RoleFilter::All;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(RoleFilter::All),
+                            "全部"
+                        }
+                    }
+                }
+                for (sk , count) in stage_counts {
+                    {
+                        let active = role_filter() == RoleFilter::Stage(sk);
+                        let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
+                        rsx! {
+                            button {
+                                key: "{sk.index()}",
+                                style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                                onclick: move |_| role_filter.set(RoleFilter::Stage(sk)),
+                                "{sk.role_short()} · {count}"
+                            }
+                        }
+                    }
+                }
+                {
+                    let active = role_filter() == RoleFilter::General;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(RoleFilter::General),
+                            "通用 · {general_count}"
+                        }
+                    }
+                }
+            }
             if hub.skills.is_empty() {
                 div { style: "color:{ink3};font-size:13px;padding:30px 0;", "还没有技能——点「+ 新建技能」录入第一个。" }
+            } else if filtered.is_empty() {
+                div { style: "color:{ink3};font-size:13px;padding:30px 0;", "没有符合筛选的技能。" }
             } else {
                 div {
                     style: "display:grid;grid-template-columns:repeat(3,1fr);gap:14px;",
-                    for s in hub.skills.clone() {
+                    for s in filtered {
                         {
                             let sid = s.id;
                             let is_open = expanded() == Some(sid);

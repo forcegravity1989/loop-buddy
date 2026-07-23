@@ -172,6 +172,11 @@ pub struct NewSkill {
     pub maturity: Maturity,
     pub desc: String,
     pub category: String,
+    /// T7 (plan/12 §0/§2): which stage role this skill belongs to; `None` =
+    /// general/cross-stage. See `bw_core::model::SkillCard::stage_ref`'s doc
+    /// comment for the `Option<StageKind>`-vs-`WorkflowSpec`'s-`Option<u8>`
+    /// alignment call.
+    pub stage_ref: Option<StageKind>,
     pub source: HubSource,
     /// Executable body (may be empty for a catalog reference entry). For a
     /// skill minted by `ImportSkillPackage`, this is SKILL.md's own body —
@@ -208,6 +213,9 @@ pub struct NewAgent {
     pub id: AgentId,
     pub name: String,
     pub role: String,
+    /// T7 (plan/12 §0/§3): same classification dimension as
+    /// `NewSkill::stage_ref` — `None` = general/cross-stage.
+    pub stage_ref: Option<StageKind>,
     pub maturity: Maturity,
     pub skills: Vec<String>,
     pub model: String,
@@ -656,11 +664,22 @@ pub trait Store: Send + Sync {
     /// Every real support file belonging to one skill, insertion order
     /// (oldest first) — the file-tree source for a Skill detail view (T4).
     async fn list_skill_files(&self, skill_id: SkillId) -> Result<Vec<SkillFileRow>>;
+    /// T7 (plan/12 §0/§2): narrow backfill setter — classifies an *existing*
+    /// row (not a content edit, so deliberately separate from `SkillEdit`,
+    /// same reasoning `record_skill_use_by_name` already established for
+    /// single-column, non-content updates). Used by
+    /// `seed_stage_entities_if_missing` to backfill `stage_ref` on the five
+    /// built-in stage skills when they were seeded by an older binary,
+    /// before this column carried real values.
+    async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()>;
 
     async fn create_agent(&self, a: NewAgent) -> Result<()>;
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>>;
     async fn update_agent(&self, id: AgentId, edit: AgentEdit) -> Result<()>;
+    /// T7: same backfill role as `set_skill_stage_ref`, for the five
+    /// built-in stage-role agents.
+    async fn set_agent_stage_ref(&self, id: AgentId, stage_ref: Option<StageKind>) -> Result<()>;
     /// Credit one settled run to every agent row named `name`: `runs += 1`,
     /// `wins += ok as int`, `win_rate` recomputed from the real counters.
     /// Returns how many rows matched (0 = unregistered ref, honest no-op).

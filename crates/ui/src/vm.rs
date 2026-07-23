@@ -640,6 +640,53 @@ pub fn source_chip_counts(rows: &[WorkflowHubRowVm]) -> Vec<(&'static str, usize
     counts
 }
 
+/// T7 (2026-07-23, plan/12 §0/§2/§3): the shared five-role classification
+/// filter every Hub screen (Skill/Agent/Workflow) now applies to its rows —
+/// one pure predicate instead of three copy-pasted per-screen closures.
+/// `General` is a real, selectable state (not merely "no filter"), matching
+/// the ticket's chip row 全部/原型师/构建师/优化师/运营推广师/运维师/通用 —
+/// a user can ask "show me only the honestly-unclassified rows" the same
+/// way they can ask for a specific stage.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RoleFilter {
+    All,
+    Stage(StageKind),
+    General,
+}
+
+impl RoleFilter {
+    /// Does `stage_ref` pass this filter?
+    pub fn matches(self, stage_ref: Option<StageKind>) -> bool {
+        match self {
+            RoleFilter::All => true,
+            RoleFilter::Stage(k) => stage_ref == Some(k),
+            RoleFilter::General => stage_ref.is_none(),
+        }
+    }
+}
+
+/// Real per-role counts for a stage-role filter chip row — shared by all
+/// three Hub screens now that Skill/Agent/Workflow carry the identical
+/// `Option<StageKind>` classification dimension (T7). Returns the five real
+/// stages in loop order plus a trailing 通用 (unclassified) count — never
+/// invented: a row with no `stage_ref` is honestly tallied there, never
+/// folded into a stage it was never assigned to.
+pub fn role_chip_counts(stage_refs: &[Option<StageKind>]) -> (Vec<(StageKind, usize)>, usize) {
+    let mut per_stage: Vec<(StageKind, usize)> = StageKind::ALL.iter().map(|&k| (k, 0)).collect();
+    let mut general = 0usize;
+    for sr in stage_refs {
+        match sr {
+            Some(k) => {
+                if let Some(slot) = per_stage.iter_mut().find(|(s, _)| s == k) {
+                    slot.1 += 1;
+                }
+            }
+            None => general += 1,
+        }
+    }
+    (per_stage, general)
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct WorkflowDetailVm {
     pub row: WorkflowHubRowVm,
@@ -799,6 +846,11 @@ pub struct SkillCardVm {
     pub maturity_label: &'static str,
     pub desc: String,
     pub category: String,
+    /// T7 (plan/12 §0/§2): the stage-role classification dimension shared
+    /// with `AgentCardVm`/`WorkflowHubRowVm` — `None` = 通用/跨阶段. Kept as
+    /// the real `StageKind` (not `WorkflowHubRowVm`'s `Option<u8>`), since
+    /// `SkillCard.stage_ref` already is one — no round-trip needed here.
+    pub stage_ref: Option<StageKind>,
     pub source_label: &'static str,
     pub uses: u32,
     /// Executable body. Empty = catalog reference (the detail panel says so
@@ -837,6 +889,7 @@ pub fn skill_card(s: &SkillCard, files: Vec<SkillFileVm>) -> SkillCardVm {
         maturity_label: maturity_label(s.maturity),
         desc: s.desc.clone(),
         category: s.category.clone(),
+        stage_ref: s.stage_ref,
         source_label: s.source.label(),
         uses: s.uses,
         content: s.content.clone(),
@@ -930,6 +983,8 @@ pub struct AgentCardVm {
     pub name: String,
     pub initial: String,
     pub role: String,
+    /// T7 (plan/12 §0/§3): same dimension as `SkillCardVm::stage_ref`.
+    pub stage_ref: Option<StageKind>,
     pub maturity_label: &'static str,
     pub skills: Vec<String>,
     pub model: String,
@@ -978,6 +1033,7 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
             .map(|c| c.to_string())
             .unwrap_or_default(),
         role: a.role.clone(),
+        stage_ref: a.stage_ref,
         maturity_label: maturity_label(a.maturity),
         skills: a.skills.iter().map(|t| t.name.clone()).collect(),
         model: a.model.clone(),

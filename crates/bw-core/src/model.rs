@@ -106,6 +106,17 @@ impl StageKind {
         Self::ALL.iter().position(|&k| k == self).unwrap() as u8 + 1
     }
 
+    /// Inverse of [`Self::index`] — `None` for `0` or `6..`. T7 (plan/12 §0):
+    /// the shared conversion `Skill`/`Agent` need to interop with
+    /// `WorkflowSpec.stage_ref`'s existing `Option<u8>` (1..=5) storage
+    /// convention while their own domain field stays `Option<StageKind>` —
+    /// same `StageKind::ALL.iter().find(|s| s.index() == n)` idiom
+    /// `bw_core::analysis` and `bw-store`'s workflow-side code already used
+    /// inline at several call sites, named once here instead of repeated.
+    pub fn from_index(n: u8) -> Option<StageKind> {
+        Self::ALL.iter().find(|k| k.index() == n).copied()
+    }
+
     /// The next stage in the loop. Wraps `Ops → Prototype` — the reflux that
     /// closes the line into a ring (a [`Command::HandoffStage`] dispatched from
     /// `Ops` is a *reflux*, not a dead end).
@@ -1219,6 +1230,19 @@ pub struct SkillCard {
     pub maturity: Maturity,
     pub desc: String,
     pub category: String,
+    /// T7 (2026-07-23, plan/12 §0/§2): which of the five stage roles this
+    /// skill belongs to — the same classification dimension `WorkflowSpec`
+    /// already carries (its `stage_ref: Option<u8>`, 1..=5). Here the domain
+    /// type is `Option<StageKind>` directly (the ticket's own alignment
+    /// call) rather than the bare `u8` `WorkflowSpec` was left with — that
+    /// field predates this ticket and stays untouched (T8/T9's workflow
+    /// chain reads it), so storage-level interop goes through
+    /// `StageKind::index`/`from_index`, not a shared Rust type. `None` =
+    /// cross-stage/general — honest for every imported catalog skill (no
+    /// one has manually classified them) and the default for a
+    /// hand-authored one until edited.
+    #[serde(default)]
+    pub stage_ref: Option<StageKind>,
     /// T2 (2026-07-23, plan/12 §6): unified onto the same 4-tier
     /// [`HubSource`] Workflow already uses, replacing the former standalone
     /// `LibSource { Official, SelfBuilt }` — "which curated library this
@@ -1262,6 +1286,13 @@ pub struct AgentCard {
     pub id: AgentId,
     pub name: String,
     pub role: String,
+    /// T7 (2026-07-23, plan/12 §0/§3): same classification dimension as
+    /// `SkillCard.stage_ref` — see that field's doc comment for the
+    /// `Option<StageKind>`-vs-`WorkflowSpec`'s-`Option<u8>` alignment call.
+    /// `None` = cross-stage/general (every imported ECC agent, honestly
+    /// unclassified); `Some` for the five built-in stage-role agents.
+    #[serde(default)]
+    pub stage_ref: Option<StageKind>,
     pub maturity: Maturity,
     pub skills: Vec<AgentSkillTag>,
     pub model: String,

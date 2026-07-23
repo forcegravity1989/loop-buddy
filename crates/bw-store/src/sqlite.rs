@@ -195,6 +195,31 @@ impl SqliteStore {
             "TEXT NOT NULL DEFAULT ''",
         )
         .await?;
+        // T7 (2026-07-23, plan/12 §0/§2/§3): Skill/Agent gain the same
+        // stage-role classification `workflow_spec.stage_ref` already has.
+        // NULL on every pre-T7 row (including the five built-in stage-role
+        // agents/skills) is honest until `seed_stage_entities_if_missing`
+        // (called on every boot) backfills the five real ones by name;
+        // every imported catalog row stays NULL = 通用/跨阶段 — nobody has
+        // manually classified those, so this never guesses.
+        add_column_if_missing(&pool, "skill", "stage_ref", "INTEGER").await?;
+        add_column_if_missing(&pool, "agent", "stage_ref", "INTEGER").await?;
+        // Indexes on `stage_ref` deliberately live here, *after* the two
+        // `add_column_if_missing` calls above, instead of in `schema.sql`'s
+        // `CREATE INDEX` blob (that whole blob replays unconditionally,
+        // before these guards run, against the real on-disk `skill`/`agent`
+        // tables — a pre-T7 DB doesn't have the column yet at that point, so
+        // an index on it there crashes with "no such column: stage_ref",
+        // caught by this ticket's own migration E2E against an old fixture
+        // DB). `workflow_spec.stage_ref`'s schema.sql-embedded index never
+        // hit this because that column has been part of the table's initial
+        // `CREATE TABLE` since before this ticket, not retrofitted.
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_skill_stage ON skill(stage_ref)")
+            .execute(&pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_agent_stage ON agent(stage_ref)")
+            .execute(&pool)
+            .await?;
 
         Ok(Self { pool })
     }
@@ -1578,14 +1603,15 @@ impl Store for SqliteStore {
         let t = now_unix();
         let (source_tag, official_library) = hub_source_columns(&s.source);
         sqlx::query(
-            "INSERT INTO skill (id, name, maturity, descr, category, source, official_library, uses, content, project_id, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
+            "INSERT INTO skill (id, name, maturity, descr, category, stage_ref, source, official_library, uses, content, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
         )
         .bind(s.id.uuid().to_string())
         .bind(&s.name)
         .bind(maturity_text(s.maturity))
         .bind(&s.desc)
         .bind(&s.category)
+        .bind(s.stage_ref.map(|k| i64::from(k.index())))
         .bind(source_tag)
         .bind(official_library)
         .bind(&s.content)
@@ -1612,9 +1638,19 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()> {
+        sqlx::query("UPDATE skill SET stage_ref=?, updated_at=?, rev=rev+1 WHERE id=?")
+            .bind(stage_ref.map(|k| i64::from(k.index())))
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, maturity, descr, category, source, official_library, uses, content,
+            "SELECT id, name, maturity, descr, category, stage_ref, source, official_library, uses, content,
                     distilled_from_issue, origin_agent, project_id
              FROM skill ORDER BY created_at",
         )
@@ -1625,7 +1661,7 @@ impl Store for SqliteStore {
 
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>> {
         let row = sqlx::query(
-            "SELECT id, name, maturity, descr, category, source, official_library, uses, content,
+            "SELECT id, name, maturity, descr, category, stage_ref, source, official_library, uses, content,
                     distilled_from_issue, origin_agent, project_id
              FROM skill WHERE id=?",
         )
@@ -1665,16 +1701,20 @@ impl Store for SqliteStore {
         let (source_tag, official_library) = hub_source_columns(&HubSource::SelfBuilt);
         sqlx::query(
             "INSERT INTO skill
-                (id, name, maturity, descr, category, source, official_library, uses, content,
+                (id, name, maturity, descr, category, stage_ref, source, official_library, uses, content,
                  distilled_from_issue, origin_agent, project_id,
                  created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(skill.id.uuid().to_string())
         .bind(&skill.name)
         .bind(maturity_text(Maturity::Polishing))
         .bind(&skill.desc)
         .bind(&skill.category)
+        // T7 (plan/12 §0): same provenance-not-input rule the line below
+        // already applies to `project_id` — a distilled skill really did
+        // arise from work in the issue's real stage, not a caller guess.
+        .bind(i64::from(issue.stage.index()))
         .bind(source_tag)
         .bind(official_library)
         .bind(&skill.content)
@@ -1695,14 +1735,15 @@ impl Store for SqliteStore {
         let (source_tag, official_library) = hub_source_columns(&skill.source);
         let mut tx = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO skill (id, name, maturity, descr, category, source, official_library, uses, content, project_id, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
+            "INSERT INTO skill (id, name, maturity, descr, category, stage_ref, source, official_library, uses, content, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
         )
         .bind(skill.id.uuid().to_string())
         .bind(&skill.name)
         .bind(maturity_text(skill.maturity))
         .bind(&skill.desc)
         .bind(&skill.category)
+        .bind(skill.stage_ref.map(|k| i64::from(k.index())))
         .bind(source_tag)
         .bind(official_library)
         .bind(&skill.content)
@@ -1745,12 +1786,13 @@ impl Store for SqliteStore {
         let t = now_unix();
         let (source_tag, official_library) = hub_source_columns(&a.source);
         sqlx::query(
-            "INSERT INTO agent (id, name, role, maturity, skills, model, runs, win_rate, instructions, wins, tools, agent_cli, source, official_library, project_id, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, '', ?, 0, ?, ?, ?, ?, ?, ?, ?, 0)",
+            "INSERT INTO agent (id, name, role, stage_ref, maturity, skills, model, runs, win_rate, instructions, wins, tools, agent_cli, source, official_library, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', ?, 0, ?, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(a.id.uuid().to_string())
         .bind(&a.name)
         .bind(&a.role)
+        .bind(a.stage_ref.map(|k| i64::from(k.index())))
         .bind(maturity_text(a.maturity))
         .bind(serde_json::to_string(&a.skills)?)
         .bind(&a.model)
@@ -1783,9 +1825,19 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn set_agent_stage_ref(&self, id: AgentId, stage_ref: Option<StageKind>) -> Result<()> {
+        sqlx::query("UPDATE agent SET stage_ref=?, updated_at=?, rev=rev+1 WHERE id=?")
+            .bind(stage_ref.map(|k| i64::from(k.index())))
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn list_agents(&self) -> Result<Vec<AgentCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions, tools, agent_cli, source, official_library, project_id FROM agent ORDER BY created_at",
+            "SELECT id, name, role, stage_ref, maturity, skills, model, runs, win_rate, instructions, tools, agent_cli, source, official_library, project_id FROM agent ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1794,7 +1846,7 @@ impl Store for SqliteStore {
 
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>> {
         let row = sqlx::query(
-            "SELECT id, name, role, maturity, skills, model, runs, win_rate, instructions, tools, agent_cli, source, official_library, project_id FROM agent WHERE id=?",
+            "SELECT id, name, role, stage_ref, maturity, skills, model, runs, win_rate, instructions, tools, agent_cli, source, official_library, project_id FROM agent WHERE id=?",
         )
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
@@ -2277,12 +2329,16 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         .map(|s| parse_uuid(&s, AgentId::from_uuid))
         .transpose()?;
     let project_id = opt_project_id(&r)?;
+    let stage_ref = r
+        .get::<Option<i64>, _>("stage_ref")
+        .and_then(|n| StageKind::from_index(n as u8));
     Ok(SkillCard {
         id,
         name: r.get("name"),
         maturity: parse_maturity(&r.get::<String, _>("maturity")),
         desc: r.get("descr"),
         category: r.get("category"),
+        stage_ref,
         source: parse_hub_source(
             &r.get::<String, _>("source"),
             &r.get::<String, _>("official_library"),
@@ -2310,10 +2366,14 @@ fn agent_row(r: sqlx::sqlite::SqliteRow) -> Result<AgentCard> {
     let skills: Vec<String> = serde_json::from_str(&r.get::<String, _>("skills"))?;
     let tools: Vec<String> = serde_json::from_str(&r.get::<String, _>("tools"))?;
     let project_id = opt_project_id(&r)?;
+    let stage_ref = r
+        .get::<Option<i64>, _>("stage_ref")
+        .and_then(|n| StageKind::from_index(n as u8));
     Ok(AgentCard {
         id,
         name: r.get("name"),
         role: r.get("role"),
+        stage_ref,
         maturity: parse_maturity(&r.get::<String, _>("maturity")),
         skills: skills
             .into_iter()

@@ -238,6 +238,7 @@ async fn cmd_setup(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
                 id: AgentId::new(),
                 name: "日报编辑".into(),
                 role: "aihot 专精 · 关注面判断与摘要质量把关".into(),
+                stage_ref: None,
                 maturity: Maturity::Fresh,
                 skills: vec!["关键词关注面打分法".into()],
                 model: "claude CLI · 跟随执行器配置".into(),
@@ -263,6 +264,7 @@ async fn cmd_setup(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
                 maturity: Maturity::Fresh,
                 desc: "按用户配置的关注面关键词给抓取条目打分,分数不够不上日报".into(),
                 category: "aihot 方法论".into(),
+                stage_ref: None,
                 source: HubSource::SelfBuilt,
                 content: "### 关键词关注面打分法\n\
                     1. 读 config.json 的 keywords 列表(用户真实配置的关注面,不是猜的)。\n\
