@@ -242,6 +242,18 @@ pub enum Command {
     /// *definitions*, not values (collection execution is a later ticket,
     /// C7).
     SyncMetricsFile,
+    /// C7 · 采集器 (plan/13 D7): pull real data into the active project's
+    /// metrics *right now* — the manual「立即采集」counterpart to the standard
+    /// daily collect cron. For every `collect.kind = "github"` metric it runs
+    /// a real `gh` count query against the project's remote and appends an
+    /// append-only observation *only when the value changed* (change-guard),
+    /// then re-derives signals. `bw`/`connector` kinds are v1 未接 — left
+    /// blank, their signal stays Unknown (无数据 ≠ 绿). A `gh` failure writes
+    /// nothing and surfaces an honest `ConnectorSynced { ok: false, .. }`
+    /// toast; the signal degrades on staleness instead of flashing a fake
+    /// zero. Never settles or runs anything — collection is observation, not
+    /// work.
+    CollectMetrics,
     StartSession {
         id: SessionId,
         stage_kind: Option<StageKind>,
@@ -1350,6 +1362,78 @@ impl App {
         Ok(())
     }
 
+    /// C7 · 采集器 (plan/13 D7): pull real data into `project`'s metrics as
+    /// append-only observations. Shared by the manual `Command::CollectMetrics`
+    /// and the standard collect cron (`tick_scheduler`), so both entrances walk
+    /// exactly one code path.
+    ///
+    /// v1 只真采一类:每条 `collect.kind = "github"` 指标跑一次真实 `gh` 计数
+    /// 查询,change-guard 命中(值未变)则不重复记点;值变了才 append 一个观测
+    /// 并 `recompute_signals`(唯一派生入口)。`bw`/`connector` 两类**如实留白**
+    /// ——不采集、不写零值,signal 保持既有(无数据即 Unknown,绝不假绿)。
+    /// `gh` 失败:零新观测、如实计入失败(供 ok:false toast),signal 靠既有
+    /// 过期降级自然变灰。北极星的采集方案落在 `project` 列(非 metric 行),没有
+    /// 可挂观测的 metric_id,v1 不采(留白见 docs/metrics-toml-format.md)。
+    async fn collect_project_metrics(
+        &mut self,
+        project: ProjectId,
+    ) -> Result<MetricCollectSummary, AppError> {
+        let proj = self
+            .store
+            .get_project(project)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let remote = proj.github_remote.trim().to_string();
+        let sigs = self.store.persisted_signals(project).await?;
+        let today = now().date();
+        let mut summary = MetricCollectSummary::default();
+        let mut touched = false;
+
+        for m in &sigs.metrics {
+            match m.collect_kind.as_str() {
+                "github" => {
+                    if remote.is_empty() {
+                        // No repo to pull from — honest, not a silent success.
+                        summary.no_remote_github = true;
+                        continue;
+                    }
+                    match bw_engine::github::collect_github_count(&remote, &m.collect_query, today)
+                        .await
+                    {
+                        Ok(count) => {
+                            let value = count.to_string();
+                            if m.value_raw == value {
+                                summary.unchanged += 1; // change-guard: not a new fact
+                            } else {
+                                self.store
+                                    .append_observation(m.id, SourceKind::Github, &value, now())
+                                    .await?;
+                                summary.changed += 1;
+                                touched = true;
+                            }
+                        }
+                        Err(e) => {
+                            summary.failed += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error = Some(format!("{}:{e}", m.name));
+                            }
+                        }
+                    }
+                }
+                // v1 未接:bw / connector 如实留白——不采集、不写零值。
+                "bw" | "connector" => summary.deferred += 1,
+                // manual(或空 collect_kind = 界面手建)不归采集器管。
+                _ => {}
+            }
+        }
+
+        if touched {
+            self.store.recompute_signals(project, now()).await?;
+            self.emit(Event::ProjectUpdated(project));
+        }
+        Ok(summary)
+    }
+
     /// Scan `workspace` (real `git ls-files` + `stat` + short HEAD) and
     /// register every tracked file as an artifact version. Idempotent at the
     /// store layer — returns only the genuinely-new count.
@@ -1450,6 +1534,34 @@ impl App {
                 self.refresh_issues().await?;
                 self.emit(Event::CronTasksChanged);
                 self.emit(Event::IssuesChanged);
+                self.emit(Event::CronAutoFired {
+                    id: c.id,
+                    name: c.name.clone(),
+                    ok,
+                });
+                fired.push(c.id);
+                continue;
+            }
+
+            // C7: the standard collector — pull real data into the project's
+            // metrics as append-only observations. No-hijack by construction:
+            // this branch never calls run_workflow_inner, never settles
+            // anything — collecting is observation, not work, so an unattended
+            // auto-fire can't breach 「Done 永不自动」.
+            if c.mode == CronMode::CollectMetrics {
+                self.store
+                    .record_cron_run(c.id, CronStatus::Running, run_at_label(now_ts))
+                    .await?;
+                let res = self.collect_project_metrics(pid).await;
+                let (ok, status) = match &res {
+                    Ok(s) => (s.failed == 0 && !s.no_remote_github, CronStatus::Normal),
+                    Err(_) => (false, CronStatus::Failed),
+                };
+                self.store
+                    .record_cron_run(c.id, status, run_at_label(now()))
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
                 self.emit(Event::CronAutoFired {
                     id: c.id,
                     name: c.name.clone(),
@@ -1902,6 +2014,34 @@ impl App {
                         }
                     }
                 }
+                // C7 · 标配采集 cron (plan/13 D7):挂了 GitHub 仓的项目出生即
+                // 带一条每日采集器,由现成 tick_scheduler 到点真实触发,把
+                // GitHub 数据拉成 append-only 观测。只有 github 项目挂(无 remote
+                // 即无 github 源可采);软降级回本地/接入失败的项目 github_remote
+                // 仍空,不挂——不给采不到的东西装一个空跑的 cron。no-hijack:
+                // CollectMetrics 只观测,绝不自动跑活/结算。
+                let github_backed = self
+                    .store
+                    .get_project(id)
+                    .await?
+                    .map(|pr| !pr.github_remote.trim().is_empty())
+                    .unwrap_or(false);
+                if github_backed {
+                    self.store
+                        .create_cron_task(NewCronTask {
+                            id: CronTaskId::new(),
+                            name: format!("{} · 指标采集", proj.name),
+                            target: String::new(),
+                            schedule: Cadence::Daily,
+                            project_id: Some(id),
+                            mode: CronMode::CollectMetrics,
+                            issue_stage: None,
+                            issue_assignee: None,
+                        })
+                        .await?;
+                    self.refresh_cron_tasks().await?;
+                    self.emit(Event::CronTasksChanged);
+                }
                 // 章程开篇(仅 owned 仓写;bound 仓尊重「不动原文件」)。
                 let _ = write_charter(self, id, "开篇").await;
                 // 模板能力(用户 2026-07-20 拍板):四份组件标准文件写进仓里,
@@ -2344,6 +2484,30 @@ impl App {
                         });
                     }
                 }
+            }
+
+            Command::CollectMetrics => {
+                let p = self.active()?;
+                let s = self.collect_project_metrics(p).await?;
+                // Honest toast: any gh failure — or a github metric with no
+                // remote to pull from — is ok:false. Never claim a green
+                // collection we didn't actually perform.
+                let ok = s.failed == 0 && !s.no_remote_github;
+                let mut detail = format!(
+                    "采集 · {} 更新 · {} 未变 · {} 未接(bw/connector 留白)",
+                    s.changed, s.unchanged, s.deferred
+                );
+                if s.no_remote_github {
+                    detail.push_str(";项目未挂 GitHub 仓,github 指标无法采集");
+                }
+                if let Some(err) = &s.first_error {
+                    detail.push_str(&format!(";首个失败:{err}"));
+                }
+                self.emit(Event::ConnectorSynced {
+                    name: "指标采集".into(),
+                    ok,
+                    detail,
+                });
             }
 
             Command::StartSession {
@@ -3325,6 +3489,22 @@ impl App {
 
 fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
+}
+
+/// C7 · 采集器 receipt — an honest tally of one collection pass (manual or
+/// cron). Real counts, so a caller can toast the truth and a failure is never
+/// silently swallowed. `changed` vs `unchanged` prove the change-guard held;
+/// `failed` with `first_error` prove a `gh` failure wrote nothing; `deferred`
+/// proves the bw/connector 留白; `no_remote_github` proves github can't be faked
+/// without a repo.
+#[derive(Default)]
+struct MetricCollectSummary {
+    changed: u32,
+    unchanged: u32,
+    failed: u32,
+    deferred: u32,
+    first_error: Option<String>,
+    no_remote_github: bool,
 }
 
 /// Standard workspace-derived metric names — the join keys between the
