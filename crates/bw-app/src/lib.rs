@@ -1244,6 +1244,53 @@ impl App {
         }
     }
 
+    /// C4 · issue 身份映射(plan/13 D2): a project with a `github_remote`
+    /// gets every BW-minted Issue mirrored as a real GitHub issue — the issue
+    /// number is the Issue's cross-system identity. Called AFTER the Issue
+    /// already exists in `bw-store`, so a `gh` failure never blocks the
+    /// BW-side create (创建不破): the Issue simply keeps `github_number = 0`
+    /// and an honest `ConnectorSynced { ok: false, .. }` toast fires — same
+    /// soft-degrade shape as the Repo 卡片's `create_repo`/`clone_repo`
+    /// paths. `github_remote` empty (no repo, or a 存量项目) short-circuits
+    /// before touching `gh` at all — today's behavior, byte-for-byte.
+    async fn sync_issue_to_github(
+        &mut self,
+        project_id: ProjectId,
+        issue_id: IssueId,
+        title: &str,
+        desc: &str,
+    ) -> Result<(), AppError> {
+        let proj = self
+            .store
+            .get_project(project_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let remote = proj.github_remote.trim();
+        if remote.is_empty() {
+            return Ok(());
+        }
+        let body = if desc.trim().is_empty() {
+            "(BW 建单同步,未填写详情)".to_string()
+        } else {
+            desc.trim().to_string()
+        };
+        match bw_engine::github::create_issue(remote, title, &body).await {
+            Ok(gh_number) => {
+                self.store
+                    .set_issue_github_number(issue_id, gh_number)
+                    .await?;
+            }
+            Err(e) => {
+                self.emit(Event::ConnectorSynced {
+                    name: format!("{title} · GitHub Issue"),
+                    ok: false,
+                    detail: format!("GitHub 开 issue 失败,BW 侧 Issue 已建立,号未映射:{e}"),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Feed a real workspace evidence reading into the project's matching
     /// metrics (`METRIC_WS_COMMITS` / `METRIC_WS_DOCS`) as
     /// `SourceKind::Connector` observations. Metrics the project hasn't
@@ -1450,19 +1497,25 @@ impl App {
         fired_at: OffsetDateTime,
     ) -> Result<IssueId, AppError> {
         let issue_id = IssueId::new();
+        let title = format!("[auto] {name}");
+        let desc = format!(
+            "Autopilot 建单(定时任务「{name}」于 {} 触发,{} 阶段)。",
+            run_at_label(fired_at),
+            stage.label()
+        );
         self.store
             .create_issue(NewIssue {
                 id: issue_id,
                 project_id: project,
                 stage,
-                title: format!("[auto] {name}"),
-                desc: format!(
-                    "Autopilot 建单(定时任务「{name}」于 {} 触发,{} 阶段)。",
-                    run_at_label(fired_at),
-                    stage.label()
-                ),
+                title: title.clone(),
+                desc: desc.clone(),
                 priority: IssuePriority::Medium,
             })
+            .await?;
+        // C4: Autopilot/cron 建单同样过身份映射 —— 建单入口不止手动创建一
+        // 处,漏一条就是"手动建的有号、定时建的没号"的诚实性缺口。
+        self.sync_issue_to_github(project, issue_id, &title, &desc)
             .await?;
         // Todo (committed work), not Backlog (the parking lot) — autopilot建单
         // is a commitment, and Backlog is the suppress-firing pile in multica.
@@ -2813,11 +2866,15 @@ impl App {
                         id,
                         project_id: p,
                         stage,
-                        title,
-                        desc,
+                        title: title.clone(),
+                        desc: desc.clone(),
                         priority,
                     })
                     .await?;
+                // C4: 项目挂了 GitHub 仓时,建单同时经 gh 真开一个 GitHub
+                // issue;github_remote 为空的项目在这里直接短路返回,今天的
+                // 行为一个字节不变。
+                self.sync_issue_to_github(p, id, &title, &desc).await?;
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
             }
