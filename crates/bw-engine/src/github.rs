@@ -165,6 +165,228 @@ pub async fn create_issue(owner_repo: &str, title: &str, body: &str) -> Result<u
         .ok_or_else(|| GithubError::Command(format!("无法从 gh 输出解析 issue 号:{url:?}")))
 }
 
+// ─────────────────────── C5 · PR 验收环 (plan/13 D3) ───────────────────────
+//
+// 三件套 + 收尾:提 PR / 查 PR 状态 / merge PR,外加 merge 后的 issue 补关。
+// 关键纪律:**执行器只提 PR、永不 merge**——`open_pr` 在执行器路径里被调用,
+// `merge_pr` 只从 bw-app 的人手命令(MergeIssuePr)里调用,两者物理隔离。
+// 验收=人 merge;issue 关闭是 merge 的后果(PR body 的 `Closes #<n>` 关键字让
+// GitHub 自动关单,`merge_pr` 后再幂等核对补关)。BW 绝不反向改写 GitHub:检测
+// 到的漂移(PR 已被网页 merge 等)只反映、不 reopen、不改写远端。
+
+/// The work branch a run's changes live on for a given GitHub issue —
+/// `bw/issue-<github_number>`. One deterministic branch per Issue so a retry
+/// re-uses the same branch (and the same PR), never fans out.
+pub fn issue_branch(github_number: u32) -> String {
+    format!("bw/issue-{github_number}")
+}
+
+fn git_err(prefix: &str, e: crate::workspace::ProvisionError) -> GithubError {
+    GithubError::Command(format!("{prefix}:{e}"))
+}
+
+/// Quarantine a run's work onto the Issue's branch **before** the executor
+/// touches anything (plan/13 D3: the executor must never advance the base
+/// branch — only a human merge does). Checks out `bw/issue-<n>`, creating it
+/// at the current HEAD the first time and re-using it on a retry. All of the
+/// run's edits then land on this branch by construction, whatever the executor
+/// does (dirty tree or its own commits), leaving the base branch untouched.
+pub async fn checkout_issue_branch(
+    workspace: &Path,
+    github_number: u32,
+) -> Result<String, GithubError> {
+    let branch = issue_branch(github_number);
+    // First run: create the branch at HEAD. Retry: the branch already exists,
+    // so `-b` fails and we plain-checkout it (keeping any prior branch work).
+    if git_in(workspace, &["checkout", "-b", &branch])
+        .await
+        .is_err()
+    {
+        git_in(workspace, &["checkout", &branch])
+            .await
+            .map_err(|e| git_err("切到活分支失败", e))?;
+    }
+    Ok(branch)
+}
+
+/// 提 PR (plan/13 D3): commit whatever the run produced on the Issue branch,
+/// push it, and open a pull request whose body carries `Closes #<github_number>`
+/// so a later human merge auto-closes the Issue — one action验收. Returns the
+/// PR number `gh` minted (parsed from the PR URL it prints, same idiom as
+/// `create_issue`). Every step is fallible and the caller treats any failure as
+/// "提 PR 失败不炸 run": the run's own accounting stands, `pr_number` stays 0,
+/// the Issue is retryable. **Never merges** — this only opens the PR.
+pub async fn open_pr(
+    workspace: &Path,
+    github_number: u32,
+    title: &str,
+) -> Result<u32, GithubError> {
+    let branch = issue_branch(github_number);
+    // Stage + commit the run's edits. The executor may have left a dirty tree
+    // (the common `acceptEdits` case) or committed itself; either way this
+    // makes the branch carry a real, mergeable diff. "nothing to commit" is the
+    // idempotent already-committed case, not a failure.
+    git_in(workspace, &["add", "-A"])
+        .await
+        .map_err(|e| git_err("暂存活分支改动失败", e))?;
+    let commit = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args([
+            "-c",
+            "user.name=Builders' Workbench",
+            "-c",
+            "user.email=workbench@local",
+            "commit",
+            "-qm",
+            &format!("issue #{github_number}: {title}"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !commit.status.success() {
+        let stderr = String::from_utf8_lossy(&commit.stderr);
+        if !(stderr.contains("nothing to commit") || stderr.contains("no changes")) {
+            return Err(GithubError::Command(format!(
+                "提交活分支改动失败:{}",
+                stderr.trim()
+            )));
+        }
+    }
+    git_in(workspace, &["push", "-u", "origin", &branch])
+        .await
+        .map_err(|e| git_err("推送活分支失败", e))?;
+    // gh infers the base repo + default base branch from the origin remote in
+    // `workspace`; `Closes #<n>` in the body is what auto-closes the Issue on
+    // merge (D3: issue 关闭是 merge 的后果).
+    let body = format!(
+        "BW 执行器为 Issue #{github_number} 提交的改动,等待人工 merge 验收。\n\nCloses #{github_number}"
+    );
+    let output = tokio::process::Command::new("gh")
+        .current_dir(workspace)
+        .args([
+            "pr", "create", "--head", &branch, "--title", title, "--body", &body,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    url.rsplit('/')
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .ok_or_else(|| GithubError::Command(format!("无法从 gh 输出解析 PR 号:{url:?}")))
+}
+
+/// 查 PR 状态 (plan/13 D3; C7 之前本票自用): `gh pr view --json state` → the
+/// raw state string (`OPEN` / `MERGED` / `CLOSED`). Read-only, no side effects
+/// — used to detect drift (a PR merged on the web) without ever rewriting it.
+pub async fn pr_state(owner_repo: &str, pr_number: u32) -> Result<String, GithubError> {
+    gh_json_field(&[
+        "pr",
+        "view",
+        &pr_number.to_string(),
+        "--repo",
+        owner_repo,
+        "--json",
+        "state",
+        "--jq",
+        ".state",
+    ])
+    .await
+}
+
+/// merge PR (plan/13 D3): the **human** verification action — merges the PR,
+/// which (via `Closes #<n>`) closes the Issue. Called only from bw-app's
+/// `MergeIssuePr` command, never from any executor/run path. Squash-merge keeps
+/// the base branch history one-commit-per-Issue.
+pub async fn merge_pr(owner_repo: &str, pr_number: u32) -> Result<(), GithubError> {
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "pr",
+            "merge",
+            &pr_number.to_string(),
+            "--repo",
+            owner_repo,
+            "--squash",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    Ok(())
+}
+
+/// `gh issue view --json state` → `OPEN` / `CLOSED`. Lets `MergeIssuePr` verify
+/// the `Closes #<n>` keyword actually closed the Issue and补关 idempotently if
+/// GitHub didn't (rare, but honest belt-and-suspenders).
+pub async fn issue_state(owner_repo: &str, github_number: u32) -> Result<String, GithubError> {
+    gh_json_field(&[
+        "issue",
+        "view",
+        &github_number.to_string(),
+        "--repo",
+        owner_repo,
+        "--json",
+        "state",
+        "--jq",
+        ".state",
+    ])
+    .await
+}
+
+/// Idempotent补关: close the GitHub issue directly. Only called after a merge
+/// when `issue_state` still reads `OPEN` (the `Closes` keyword should have done
+/// it). `gh issue close` on an already-closed issue is a no-op success.
+pub async fn close_issue(owner_repo: &str, github_number: u32) -> Result<(), GithubError> {
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "issue",
+            "close",
+            &github_number.to_string(),
+            "--repo",
+            owner_repo,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    Ok(())
+}
+
+/// Run a read-only `gh ... --json ... --jq ...` and return the trimmed stdout.
+async fn gh_json_field(args: &[&str]) -> Result<String, GithubError> {
+    let output = tokio::process::Command::new("gh")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RepoJson {
