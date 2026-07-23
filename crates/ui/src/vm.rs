@@ -691,6 +691,11 @@ pub struct IssueRunRowVm {
 pub struct IssueDetailVm {
     pub id: IssueId,
     pub number: u32,
+    /// C4: GitHub issue number, `0` = unmapped.
+    pub github_number: u32,
+    /// C5 · PR 验收环: the PR number a run opened, `0` = none. Non-zero +
+    /// InReview → the detail offers a merge button as the首选验收 path (D3).
+    pub pr_number: u32,
     pub title: String,
     pub desc: String,
     pub status: IssueStatus,
@@ -755,6 +760,8 @@ pub fn issue_detail_vm(
     IssueDetailVm {
         id: issue.id,
         number: issue.number,
+        github_number: issue.github_number,
+        pr_number: issue.pr_number,
         title: issue.title.clone(),
         desc: issue.desc.clone(),
         status: issue.status,
@@ -872,6 +879,10 @@ pub struct IssueVm {
     /// GitHub repo, or the real `gh issue create` call failed) — the card
     /// shows nothing extra in that case, zero noise.
     pub github_number: u32,
+    /// C5 · PR 验收环: the PR number a run opened for this Issue, `0` = none.
+    /// Non-zero renders a "PR #N" chip; combined with `InReview` it means the
+    /// card's验收 path is a merge, not a bare Done (plan/13 D3).
+    pub pr_number: u32,
     pub stage: StageKind,
     pub title: String,
     pub desc: String,
@@ -905,6 +916,7 @@ pub fn issue_card(i: &Issue, agents: &[AgentCard]) -> IssueVm {
         id: i.id,
         number: i.number,
         github_number: i.github_number,
+        pr_number: i.pr_number,
         stage: i.stage,
         title: i.title.clone(),
         desc: i.desc.clone(),

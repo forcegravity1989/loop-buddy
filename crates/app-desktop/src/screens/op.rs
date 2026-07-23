@@ -701,6 +701,7 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 let k_a = k.clone();
                                 let k_b = k.clone();
                                 let k_run = k.clone();
+                                let k_merge = k.clone();
                                 let k_detail = k.clone();
                                 let agents = agents.clone();
                                 let i_id = i.id;
@@ -734,6 +735,14 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                 } else {
                                                     "https://github.com/{op.github_remote}/issues/{i.github_number}"
                                                 }
+                                            }
+                                        }
+                                        // C5 · PR 验收环: 有 PR 号才渲染,如实展示
+                                        // 「PR #N」——验收=人 merge,号非 0 即有开放 PR。
+                                        if i.pr_number != 0 {
+                                            div {
+                                                style: "font-size:10.5px;color:{clay};font-family:{mono};margin-top:1px;",
+                                                "PR #{i.pr_number}"
                                             }
                                         }
                                         // P4: the title opens the evidence
@@ -831,6 +840,16 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                         "▶ 跑"
                                                     }
                                                 }
+                                                // C5 · PR 验收环: InReview + 有 PR 时,
+                                                // merge 是首选验收路径(人 merge → 关单)。
+                                                // 不硬拦下面的 →已完成(只留痕不拦人)。
+                                                if i.status == IssueStatus::InReview && i.pr_number != 0 {
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;font-weight:700;",
+                                                        onclick: move |_| k_merge.send(Command::MergeIssuePr { id: i_id }),
+                                                        "⛙ merge PR #{i.pr_number}"
+                                                    }
+                                                }
                                                 if let Some(ns) = advance {
                                                     button {
                                                         style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
@@ -884,6 +903,7 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm) -> Element {
     let k_done = k.clone();
     let k_back = k.clone();
     let k_run = k.clone();
+    let k_merge = k.clone();
     let k_distill = k.clone();
     let mut distilling = use_signal(|| false);
     let mut skill_name = use_signal(|| format!("{} · 做法", d.title));
@@ -916,6 +936,10 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm) -> Element {
                 }
                 div { style: "font-size:16px;color:{ink};margin:4px 0 2px;", "{d.title}" }
                 div { style: "font-size:12px;color:{ink2};margin-bottom:6px;", "指派:{assignee} · {d.priority_label}" }
+                // C5 · PR 验收环: 有 PR 号如实展示,验收=人 merge。
+                if d.pr_number != 0 {
+                    div { style: "font-size:11.5px;color:{clay};font-family:{mono};margin-bottom:6px;", "PR #{d.pr_number} · 等待人工 merge 验收" }
+                }
                 if let Some(reason) = d.blocked_reason.clone() {
                     div { style: "margin:6px 0;padding:6px 9px;background:#F2E4DD;border-radius:6px;font-size:12px;color:{alert};", "⛔ {reason}" }
                 }
@@ -997,13 +1021,27 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm) -> Element {
                         }
                     }
                     if in_review {
-                        button {
-                            style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
-                            onclick: move |_| {
-                                k_done.send(Command::TransitionIssue { id, status: IssueStatus::Done });
-                                k_done.send(Command::OpenIssueDetail(id));
-                            },
-                            "✓ 确认完成(人裁)"
+                        // C5 · PR 验收环 (D3): 有 PR → 首选「merge PR」(人 merge →
+                        // 关单 → 走现有 InReview→Done 记账)。无 PR(存量/无仓活)→
+                        // 保留裸「确认完成」路径(全活 PR 化是纪律不是硬闸)。
+                        if d.pr_number != 0 {
+                            button {
+                                style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
+                                onclick: move |_| {
+                                    k_merge.send(Command::MergeIssuePr { id });
+                                    k_merge.send(Command::OpenIssueDetail(id));
+                                },
+                                "⛙ merge PR #{d.pr_number}(验收)"
+                            }
+                        } else {
+                            button {
+                                style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
+                                onclick: move |_| {
+                                    k_done.send(Command::TransitionIssue { id, status: IssueStatus::Done });
+                                    k_done.send(Command::OpenIssueDetail(id));
+                                },
+                                "✓ 确认完成(人裁)"
+                            }
                         }
                         button {
                             style: "cursor:pointer;border:1px solid {border};border-radius:7px;background:transparent;color:{ink2};padding:7px 14px;font-size:12.5px;",
