@@ -1831,7 +1831,7 @@ impl Store for SqliteStore {
         .bind(&c.target)
         .bind(cadence_text(&c.schedule))
         .bind(c.project_id.map(pid))
-        .bind(cron_mode_text(c.mode))
+        .bind(cron_mode_text(&c.mode))
         .bind(c.issue_stage.map(stage_kind_text))
         .bind(&c.issue_assignee)
         .bind(t)
@@ -2340,10 +2340,13 @@ fn cron_task_row(r: sqlx::sqlite::SqliteRow) -> Result<CronTask> {
         .map(|s| parse_uuid(&s, ProjectId::from_uuid))
         .transpose()?;
     let last_run_at_raw: i64 = r.get("last_run_at");
+    let target: String = r.get("target");
+    let mode_text: String = r.get("mode");
+    let mode = parse_cron_mode(&mode_text, &target);
     Ok(CronTask {
         id,
         name: r.get("name"),
-        target: r.get("target"),
+        target,
         schedule: parse_cadence(&r.get::<String, _>("schedule")),
         project_id,
         status: parse_cron_status(&r.get::<String, _>("status")),
@@ -2352,7 +2355,7 @@ fn cron_task_row(r: sqlx::sqlite::SqliteRow) -> Result<CronTask> {
         last_run_at: (last_run_at_raw > 0)
             .then(|| OffsetDateTime::from_unix_timestamp(last_run_at_raw).ok())
             .flatten(),
-        mode: parse_cron_mode(&r.get::<String, _>("mode")),
+        mode,
         issue_stage: r
             .get::<Option<String>, _>("issue_stage")
             .as_deref()

@@ -303,6 +303,17 @@ fn CronDetailCard(
     let eff = cron_effectiveness
         .filter(|(eid, _)| *eid == id)
         .map(|(_, e)| e);
+    // T10 (plan/12 §5): the raw `target` column is a real `SkillId`/full
+    // prompt text for the two new modes — never show that opaque payload as
+    // "目标"; show the honest human-facing reading `CronRowVm` already
+    // derived instead (skill name / "(技能已删除)" / prompt preview).
+    let target_display = if let Some(skill_label) = &c.skill_target_label {
+        skill_label.clone()
+    } else if let Some(preview) = &c.prompt_preview {
+        preview.clone()
+    } else {
+        c.target.clone()
+    };
     rsx! {
         div {
             style: "{card} padding:22px 26px;max-width:680px;",
@@ -316,7 +327,13 @@ fn CronDetailCard(
                 }
                 span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{c.status_label}" }
             }
-            div { style: "font-size:13.5px;color:{ink2};margin-bottom:12px;", "到点:{c.mode_label} · 目标「{c.target}」" }
+            div { style: "font-size:13.5px;color:{ink2};margin-bottom:12px;",
+                if !c.mode_icon.is_empty() {
+                    "到点:{c.mode_icon} {c.mode_label} · 目标「{target_display}」"
+                } else {
+                    "到点:{c.mode_label} · 目标「{target_display}」"
+                }
+            }
             div {
                 style: "font-family:{mono};font-size:12px;color:{ink3};margin-bottom:6px;",
                 "{c.schedule_label} · 上次 {c.last_run} · 下次 {c.next_run}"

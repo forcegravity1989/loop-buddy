@@ -435,6 +435,26 @@ pub enum Command {
         stage: StageKind,
         assignee: Option<String>,
     },
+    /// T10 (plan/12 §5): a cron task that, when due, really runs a Skill's
+    /// `content` as the prompt — a genuine `SkillId` reference, resolved at
+    /// *fire* time (never at creation time), so an honest "技能已删除"
+    /// failure is possible without ever crashing.
+    CreateRunSkillCronTask {
+        id: CronTaskId,
+        name: String,
+        schedule: Cadence,
+        project_id: Option<ProjectId>,
+        skill_id: SkillId,
+    },
+    /// T10: a cron task that, when due, really runs a bare prompt — no
+    /// entity involved at all.
+    CreateRunPromptCronTask {
+        id: CronTaskId,
+        name: String,
+        schedule: Cadence,
+        project_id: Option<ProjectId>,
+        prompt: String,
+    },
     /// Pause/resume a cron task — the "人工介入" lever. Pure status flip;
     /// never touches `last_run` since nothing actually ran.
     SetCronStatus {
@@ -1638,6 +1658,116 @@ impl App {
                 self.refresh_issues().await?;
                 self.emit(Event::CronTasksChanged);
                 self.emit(Event::IssuesChanged);
+                self.emit(Event::CronAutoFired {
+                    id: c.id,
+                    name: c.name.clone(),
+                    ok,
+                });
+                fired.push(c.id);
+                continue;
+            }
+
+            // T10 (plan/12 §5): RunSkill / RunPrompt — both really execute,
+            // through the identical run_workflow_inner engine/executor path
+            // the RunWorkflow branch below uses, against a single ad-hoc
+            // prompt (`cron_prompt_workflow`) instead of a real hub
+            // workflow's phases. Resolved fresh on every fire, never cached:
+            // a RunSkill task whose skill was deleted since creation fails
+            // honestly right here — no crash, no silent no-op, no fabricated
+            // success.
+            let adhoc_spec = match &c.mode {
+                CronMode::RunSkill { skill_id } => {
+                    Some(match self.store.get_skill(*skill_id).await? {
+                        Some(skill) => Ok(cron_prompt_workflow(
+                            format!("⚙ 定时技能 · {}", skill.name),
+                            skill.content.clone(),
+                        )),
+                        None => Err("引用的技能已删除".to_string()),
+                    })
+                }
+                CronMode::RunPrompt { prompt } => Some(Ok(cron_prompt_workflow(
+                    format!("💬 定时 Prompt · {}", c.name),
+                    prompt.clone(),
+                ))),
+                _ => None,
+            };
+
+            if let Some(adhoc_spec) = adhoc_spec {
+                self.store
+                    .record_cron_run(c.id, CronStatus::Running, run_at_label(now_ts))
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+
+                let ok = match adhoc_spec {
+                    Err(reason) => {
+                        // Nothing to execute (referenced skill gone) — an
+                        // honest failed fire, recorded as a real workflow_run
+                        // row so CronEffectiveness reflects it exactly like an
+                        // engine failure would (settle-once, never a
+                        // fabricated success or a silently skipped fire).
+                        let started_at = OffsetDateTime::now_utc().unix_timestamp();
+                        let run_id = self
+                            .store
+                            .record_workflow_run_start(bw_store::NewWorkflowRun {
+                                workflow_id: WorkflowId::new(),
+                                workflow_name: &c.name,
+                                project_id: Some(pid),
+                                session_id: None,
+                                trigger: RunTrigger::Scheduled,
+                                started_at,
+                                cron_task_id: Some(c.id),
+                                params_json: "",
+                            })
+                            .await?;
+                        self.store
+                            .settle_workflow_run(
+                                run_id,
+                                RunStatus::Failed,
+                                OffsetDateTime::now_utc().unix_timestamp(),
+                                0,
+                                0,
+                                &reason,
+                            )
+                            .await?;
+                        false
+                    }
+                    Ok(spec) => {
+                        let session = SessionId::new();
+                        self.store
+                            .ensure_session(NewSession {
+                                id: session,
+                                project_id: pid,
+                                stage_kind: None,
+                                kind: SessionKind::Optimize,
+                                title: format!("⏰ 定时触发 · {}", c.name),
+                                snippet: String::new(),
+                            })
+                            .await?;
+                        let result = self
+                            .run_workflow_inner(
+                                pid,
+                                session,
+                                spec,
+                                RunTrigger::Scheduled,
+                                Some(c.id),
+                                None,
+                            )
+                            .await;
+                        matches!(result, Ok(RunOutcome::Completed))
+                    }
+                };
+
+                let outcome = if ok {
+                    CronStatus::Normal
+                } else {
+                    CronStatus::Failed
+                };
+                self.store
+                    .record_cron_run(c.id, outcome, run_at_label(now()))
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
                 self.emit(Event::CronAutoFired {
                     id: c.id,
                     name: c.name.clone(),
@@ -3056,6 +3186,65 @@ impl App {
                 self.emit(Event::CronTasksChanged);
             }
 
+            Command::CreateRunSkillCronTask {
+                id,
+                name,
+                schedule,
+                project_id,
+                skill_id,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .create_cron_task(NewCronTask {
+                        id,
+                        name,
+                        // T10: the real skill id is the payload — round-tripped
+                        // through `target` (see `bw_store::parse_cron_mode`).
+                        target: skill_id.uuid().to_string(),
+                        schedule,
+                        project_id,
+                        mode: CronMode::RunSkill { skill_id },
+                        issue_stage: None,
+                        issue_assignee: None,
+                    })
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+            }
+
+            Command::CreateRunPromptCronTask {
+                id,
+                name,
+                schedule,
+                project_id,
+                prompt,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                if prompt.trim().is_empty() {
+                    return Err(AppError::Invalid("Prompt 不能为空".into()));
+                }
+                self.store
+                    .create_cron_task(NewCronTask {
+                        id,
+                        name,
+                        // T10: the prompt text itself is the payload — same
+                        // `target` column `RunSkill`/`RunWorkflow` reuse.
+                        target: prompt.clone(),
+                        schedule,
+                        project_id,
+                        mode: CronMode::RunPrompt { prompt },
+                        issue_stage: None,
+                        issue_assignee: None,
+                    })
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+            }
+
             Command::SetCronStatus { id, status } => {
                 self.store.set_cron_status(id, status).await?;
                 self.refresh_cron_tasks().await?;
@@ -3584,6 +3773,36 @@ fn review_tail(text: &str) -> String {
         return t.to_string();
     }
     t.chars().skip(n - MAX).collect()
+}
+
+/// T10 (plan/12 §5): the ephemeral spec `tick_scheduler` runs a `RunSkill`/
+/// `RunPrompt` cron task through — same `run_workflow_inner` engine/executor
+/// path a `RunWorkflow` cron task uses (so evidence lands in `workflow_run`/
+/// `CronEffectiveness` identically), just one neutral phase carrying the
+/// skill's `content` or the bare prompt text instead of a real hub workflow's
+/// phases. Never persisted — minted fresh on every fire, like `stage_workflow`'s
+/// throwaway `Dynamic` specs.
+fn cron_prompt_workflow(name: String, prompt: String) -> WorkflowSpec {
+    WorkflowSpec {
+        id: WorkflowId::new(),
+        name,
+        kind: WorkflowKind::Dynamic {
+            origin: "定时任务".into(),
+            stage: String::new(),
+        },
+        prompt,
+        goal: "定时任务真实执行".into(),
+        stage_ref: None,
+        phases: vec![PhaseMeta::neutral("执行")],
+        phase_prompts: vec![],
+        agents: vec![],
+        skills: vec![],
+        loop_config: LoopConfig {
+            retries: 1,
+            max_iter: 1,
+        },
+        project_id: None,
+    }
 }
 
 fn run_params_snapshot(spec: &WorkflowSpec, trigger: RunTrigger) -> String {

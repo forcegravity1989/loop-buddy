@@ -1318,25 +1318,63 @@ pub enum CronStatus {
     Paused,
 }
 
-/// What a [`CronTask`] does when due (A1). `RunWorkflow` (the default) resolves
-/// `target` as a hub workflow and runs it — the original behavior; `CreateIssue`
-/// is autopilot: it mints a stage-scoped Issue. No-hijack by construction: a
-/// `CreateIssue` task never auto-runs anything, it only creates work.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+/// What a [`CronTask`] does when due (A1; extended T10, plan/12 §5).
+/// `RunWorkflow` (the default) resolves `target` as a hub workflow and runs
+/// it — the original behavior. `RunSkill`/`RunPrompt` (T10) also really
+/// execute (through the same engine/executor path `RunWorkflow` uses), just
+/// against a single ad-hoc prompt instead of a full hub workflow's phases:
+/// `RunSkill` takes its prompt from a real Skill's `content` (a genuine
+/// `SkillId` reference — never free-text name matching, so a deleted/renamed
+/// skill can never silently resolve to the wrong row); `RunPrompt` runs a bare
+/// prompt with no entity involved at all. `CreateIssue` is autopilot: it
+/// mints a stage-scoped Issue. No-hijack by construction: a `CreateIssue` task
+/// never auto-runs anything, it only creates work — unaffected by T10.
+///
+/// Wire note: `CronMode` itself is never serialized as JSON on disk — the
+/// `cron_task.mode`/`cron_task.target` TEXT columns already round-trip it by
+/// hand (`bw_store::cron_mode_text`/`parse_cron_mode`), so the two new
+/// variants need no schema migration: `target` (already free text, already
+/// unused by `CreateIssue`) doubles as the payload column — a skill's real
+/// id (text) for `RunSkill`, the raw prompt text for `RunPrompt`. The two
+/// pre-T10 modes' storage is untouched.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CronMode {
     #[default]
     RunWorkflow,
+    /// T10: run a real Skill's `content` as the prompt when due.
+    RunSkill {
+        skill_id: SkillId,
+    },
+    /// T10: run a bare prompt when due — no entity involved.
+    RunPrompt {
+        prompt: String,
+    },
     CreateIssue,
 }
 
 impl CronMode {
-    /// L1(plan/11): cron 详情卡要如实标出「到点做什么」——运行一个 workflow
-    /// 还是只建一件活(autopilot,no-hijack)。
-    pub fn label(self) -> &'static str {
+    /// L1(plan/11); extended T10. Cron 详情卡要如实标出「到点做什么」。
+    pub fn label(&self) -> &'static str {
         match self {
             CronMode::RunWorkflow => "运行工作流",
+            CronMode::RunSkill { .. } => "运行技能",
+            CronMode::RunPrompt { .. } => "运行 Prompt",
             CronMode::CreateIssue => "建活(autopilot · 不自动跑)",
+        }
+    }
+
+    /// T10(plan/12 §5): the row-front icon that lets CronHub's list tell the
+    /// four modes apart at a glance. `CreateIssue` deliberately keeps the
+    /// pre-T10 "no icon" look (the issue asked to leave it 沿用现状) — its
+    /// distinctiveness already comes from `label()`'s explicit "autopilot"
+    /// text, not an icon.
+    pub fn icon(&self) -> &'static str {
+        match self {
+            CronMode::RunWorkflow => "🔄",
+            CronMode::RunSkill { .. } => "⚙",
+            CronMode::RunPrompt { .. } => "💬",
+            CronMode::CreateIssue => "",
         }
     }
 }
@@ -1358,7 +1396,14 @@ pub struct CronTask {
     pub name: String,
     /// What it runs — free text (e.g. a workflow/routine name); not a hard FK
     /// since a cron target may be a hub workflow, a connector sync, or
-    /// something outside this app entirely.
+    /// something outside this app entirely. T10 (plan/12 §5): also doubles as
+    /// the payload column for the two new [`CronMode`] variants — a
+    /// `RunSkill` task stores its referenced `SkillId` here (as text), a
+    /// `RunPrompt` task stores its raw prompt text here. `mode` is always the
+    /// typed, authoritative read of "what this really is"; `target` is the
+    /// storage-level string both `mode` and this field derive from (see
+    /// `bw_store::parse_cron_mode`) — unused (empty) for `CreateIssue`, as
+    /// before.
     pub target: String,
     pub schedule: Cadence,
     /// `None` = 全部项目 (all projects), matching the prototype's own
@@ -1372,7 +1417,8 @@ pub struct CronTask {
     /// never a parsed-back label.
     pub last_run_at: Option<OffsetDateTime>,
     /// A1: what this task does when due. `RunWorkflow` (default) runs `target`;
-    /// `CreateIssue` mints a stage-scoped Issue (autopilot, no-hijack).
+    /// `CreateIssue` mints a stage-scoped Issue (autopilot, no-hijack);
+    /// `RunSkill`/`RunPrompt` (T10) really execute too — see `CronMode`'s doc.
     #[serde(default)]
     pub mode: CronMode,
     /// A1: the stage a `CreateIssue` task scopes its Issue to (`None` for

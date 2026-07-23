@@ -12,10 +12,10 @@
 use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAttention};
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
-    AgentCard, Artifact, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, FeedLevel,
-    HubCard, HubKind, HubSource, Issue, IssueStatus, KnowledgeSource, Maturity, PhaseMeta,
-    ProjectCycle, ProjectPhase, RunChanges, RunStatus, RunTrigger, SessionStatus, Signal,
-    SkillCard, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
+    AgentCard, Artifact, Cadence, Connector, ConnectorStatus, CronMode, CronStatus, CronTask,
+    FeedLevel, HubCard, HubKind, HubSource, Issue, IssueStatus, KnowledgeSource, Maturity,
+    PhaseMeta, ProjectCycle, ProjectPhase, RunChanges, RunStatus, RunTrigger, SessionStatus,
+    Signal, SkillCard, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
@@ -1111,19 +1111,55 @@ pub struct CronRowVm {
     /// L1(plan/11): 到点做什么——`bw_core::model::CronMode` 一直在 domain
     /// struct 上,此前从没有一个 VM 字段读出来过。
     pub mode_label: &'static str,
+    /// T10(plan/12 §5): row-front icon distinguishing all four modes at a
+    /// glance (🔄/⚙/💬; `CreateIssue` deliberately keeps no icon — see
+    /// `CronMode::icon`'s doc).
+    pub mode_icon: &'static str,
     /// `CreateIssue` 任务的 Issue 作用阶段;`RunWorkflow` 任务恒 `None`。
     pub issue_stage_label: Option<&'static str>,
     /// `CreateIssue` 任务的 Issue 指派对象名(自由文本,同全仓 by-name 约定)。
     pub issue_assignee: Option<String>,
+    /// T10: `RunSkill`'s target line — the real skill's current name, or the
+    /// honest `"(技能已删除)"` when the referenced `SkillId` no longer
+    /// resolves against the live Skill Hub. `None` for every other mode.
+    pub skill_target_label: Option<String>,
+    /// T10: `true` only for a `RunSkill` task whose referenced skill no
+    /// longer exists — CronHub's honest "失联" marker. The row still
+    /// renders, still lets the task be paused; it just can't fire for real
+    /// until re-pointed at a live skill (or deleted).
+    pub skill_missing: bool,
+    /// T10: `RunPrompt`'s first-40-character preview (a real truncation of
+    /// `prompt_full`, never a placeholder). `None` for every other mode.
+    pub prompt_preview: Option<String>,
+    /// T10: `RunPrompt`'s full text, for the "点击展开全文" affordance.
+    /// `None` for every other mode.
+    pub prompt_full: Option<String>,
+}
+
+/// A real, honest first-40-character preview — counts chars (not bytes), so
+/// CJK text truncates at a sane visual length instead of mid-codepoint.
+/// Appends `…` only when something was actually cut.
+fn preview_chars(s: &str, max: usize) -> String {
+    let trimmed = s.trim();
+    if trimmed.chars().count() <= max {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(max).collect();
+    out.push('…');
+    out
 }
 
 /// `project_names` resolves `CronTask.project_id` to a display name — pass
 /// the real project rows' `(id, name)` pairs, not a hand-maintained lookup.
-/// `now` feeds `cron_next_run_label` — the real scheduler's own due-check,
-/// not the always-empty `CronTask.next_run` column (nothing ever wrote it).
+/// `skills` resolves a `RunSkill` task's real `SkillId` to its current name
+/// (or an honest "deleted" reading if it no longer exists) — pass the live
+/// Skill Hub rows, not a cached/stale list. `now` feeds `cron_next_run_label`
+/// — the real scheduler's own due-check, not the always-empty
+/// `CronTask.next_run` column (nothing ever wrote it).
 pub fn cron_row(
     c: &CronTask,
     project_names: &[(ProjectId, String)],
+    skills: &[SkillCard],
     now: OffsetDateTime,
 ) -> CronRowVm {
     let project_label = match c.project_id {
@@ -1133,6 +1169,17 @@ pub fn cron_row(
             .find(|(id, _)| *id == pid)
             .map(|(_, name)| name.clone())
             .unwrap_or_else(|| "(项目已删除)".to_string()),
+    };
+    let (skill_target_label, skill_missing) = match &c.mode {
+        CronMode::RunSkill { skill_id } => match skills.iter().find(|s| s.id == *skill_id) {
+            Some(s) => (Some(s.name.clone()), false),
+            None => (Some("(技能已删除)".to_string()), true),
+        },
+        _ => (None, false),
+    };
+    let (prompt_preview, prompt_full) = match &c.mode {
+        CronMode::RunPrompt { prompt } => (Some(preview_chars(prompt, 40)), Some(prompt.clone())),
+        _ => (None, None),
     };
     CronRowVm {
         id: c.id,
@@ -1146,8 +1193,13 @@ pub fn cron_row(
         last_run: c.last_run.clone(),
         next_run: bw_core::model::cron_next_run_label(&c.schedule, c.last_run_at, c.status, now),
         mode_label: c.mode.label(),
+        mode_icon: c.mode.icon(),
         issue_stage_label: c.issue_stage.map(|s| s.label()),
         issue_assignee: c.issue_assignee.clone(),
+        skill_target_label,
+        skill_missing,
+        prompt_preview,
+        prompt_full,
     }
 }
 
@@ -1337,10 +1389,19 @@ pub fn notify_feed(
     let mut items = Vec::new();
     for c in cron_tasks {
         if c.status == CronStatus::Failed {
+            // T10: `target` is a real `SkillId`/full prompt text for the two
+            // new modes — never dump that raw payload into a notify line;
+            // `mode.label()` says honestly what kind of task this is instead.
+            let target_display = match &c.mode {
+                CronMode::RunSkill { .. } | CronMode::RunPrompt { .. } => {
+                    c.mode.label().to_string()
+                }
+                _ => c.target.clone(),
+            };
             items.push(NotifyItemVm {
                 level: NotifyLevel::Alert,
                 title: format!("定时任务「{}」失败", c.name),
-                detail: format!("目标：{} · 上次运行 {}", c.target, c.last_run),
+                detail: format!("目标：{} · 上次运行 {}", target_display, c.last_run),
                 time_label: c.last_run.clone(),
             });
         }

@@ -618,7 +618,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     let cron_tasks: Vec<CronRowVm> = state
         .cron_tasks
         .iter()
-        .map(|c| cron_row(c, &project_names, now))
+        .map(|c| cron_row(c, &project_names, &state.skills, now))
         .collect();
     let connectors: Vec<ConnectorCardVm> = state.connectors.iter().map(connector_card).collect();
     let knowledge_sources: Vec<KnowledgeRowVm> =

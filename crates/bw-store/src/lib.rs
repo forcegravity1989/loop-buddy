@@ -242,6 +242,10 @@ pub struct AgentEdit {
 pub struct NewCronTask {
     pub id: CronTaskId,
     pub name: String,
+    /// T10: for `RunSkill`/`RunPrompt`, the caller must set this to `mode`'s
+    /// own payload (the skill id as text / the raw prompt text respectively)
+    /// — `create_cron_task` just stores whatever is here; it does not
+    /// re-derive it from `mode`. See `bw_core::model::CronMode`'s doc.
     pub target: String,
     pub schedule: Cadence,
     pub project_id: Option<ProjectId>,
@@ -806,16 +810,38 @@ pub(crate) fn parse_session_status(s: &str) -> SessionStatus {
     }
 }
 
-pub(crate) fn cron_mode_text(m: CronMode) -> &'static str {
+/// The `cron_task.mode` discriminant text. T10: `RunSkill`/`RunPrompt` carry
+/// data now, but that data lives in `cron_task.target` (see `parse_cron_mode`
+/// below), so this stays a plain by-reference discriminant lookup — no
+/// column, no migration.
+pub(crate) fn cron_mode_text(m: &CronMode) -> &'static str {
     match m {
         CronMode::RunWorkflow => "run_workflow",
+        CronMode::RunSkill { .. } => "run_skill",
+        CronMode::RunPrompt { .. } => "run_prompt",
         CronMode::CreateIssue => "create_issue",
     }
 }
 
-pub(crate) fn parse_cron_mode(s: &str) -> CronMode {
-    match s {
+/// Reconstruct a full [`CronMode`] from the two raw columns that carry it:
+/// `mode` (the discriminant) and `target` (T10's payload column — a real
+/// `SkillId` as text for `run_skill`, the raw prompt for `run_prompt`; unused
+/// by the two pre-T10 variants, whose own `target` semantics are untouched).
+/// An unparseable `run_skill` target (should never happen — the id is only
+/// ever written by this same code) reads back as the nil id rather than
+/// panicking — `App::tick_scheduler`'s `get_skill` lookup then honestly
+/// reports "not found", same as an actually-deleted skill.
+pub(crate) fn parse_cron_mode(mode: &str, target: &str) -> CronMode {
+    match mode {
         "create_issue" => CronMode::CreateIssue,
+        "run_skill" => CronMode::RunSkill {
+            skill_id: uuid::Uuid::parse_str(target)
+                .map(SkillId::from_uuid)
+                .unwrap_or_else(|_| SkillId::from_uuid(uuid::Uuid::nil())),
+        },
+        "run_prompt" => CronMode::RunPrompt {
+            prompt: target.to_string(),
+        },
         _ => CronMode::RunWorkflow,
     }
 }
