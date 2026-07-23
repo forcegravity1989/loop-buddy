@@ -16,7 +16,7 @@
 //! 详见 `plan/09-aihot-practice-run.md`、`iterations/PRACTICE-AIHOT.md`(叙事汇总)
 //! ——本文件产出的 JSON 是它们的数字侧证据存档,两者互补,不重复。
 
-use bw_core::model::{IssueStatus, ProjectCycle, ProjectPhase, RunStatus, Signal, StageKind};
+use bw_core::model::{IssueStatus, MaturityPeriod, Readiness, RunStatus, Signal, StageKind};
 use bw_core::ProjectId;
 use bw_store::{SqliteStore, Store};
 use serde::Serialize;
@@ -136,13 +136,13 @@ async fn main() {
         kind: project.kind.clone(),
         desc: project.desc.clone(),
         phase: match project.phase {
-            ProjectPhase::Running => "running".into(),
-            ProjectPhase::ColdStart => "cold_start".into(),
+            Readiness::Running => "running".into(),
+            Readiness::ColdStart => "cold_start".into(),
         },
         cycle: match project.cycle {
-            ProjectCycle::Explore => "explore".into(),
-            ProjectCycle::Expand => "expand".into(),
-            ProjectCycle::Mature => "mature".into(),
+            MaturityPeriod::Explore => "explore".into(),
+            MaturityPeriod::Expand => "expand".into(),
+            MaturityPeriod::Mature => "mature".into(),
         },
         active_stage: stage_key(project.active_stage).into(),
         north_star: project.north_star.clone(),
