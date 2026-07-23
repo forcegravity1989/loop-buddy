@@ -1160,8 +1160,9 @@ impl App {
     /// by-name convention) against the Skill Hub catalog and render its real
     /// content as a prompt block, same shape as `distilled_skills_block`. An
     /// empty slug, or a slug that doesn't resolve to a content-bearing row
-    /// (竞品分析卡 doesn't exist until C10 lands), is an honest
-    /// `(empty, [])` — never an error, never a fabricated body. `record_skill_use_by_name` accounting only ever sees the one ref this
+    /// (none today — all three standard cards are seeded by C9+C10), is an
+    /// honest `(empty, [])` — never an error, never a fabricated body.
+    /// `record_skill_use_by_name` accounting only ever sees the one ref this
     /// returns, so a run that carries a standard skill records its `uses`
     /// exactly once.
     async fn standard_skill_block(&self, slug: &str) -> Result<(String, Vec<SkillRef>), AppError> {
@@ -1383,10 +1384,10 @@ impl App {
     /// `github_remote` 是否非空短路整批——无仓项目连 BW 侧的三张都不建,
     /// 不给建不了仓的项目发一套没处交付的活(如实留白)。
     ///
-    /// 每张携带一个稳定 `standard_skill` slug(C9 已按名种下两张:
-    /// `north-star-discovery` / `metrics-binding`;竞品分析卡是 C10 票,这里
-    /// 先建关联,`run_issue_now` 注入时按名查不到就如实跳过、零报错,C10
-    /// 落地后自动接上,不用回填这张 Issue)。
+    /// 每张携带一个稳定 `standard_skill` slug——三张卡均已由
+    /// `seed_standard_issue_skills_if_missing` 按名种下(C9 落地
+    /// `north-star-discovery` / `metrics-binding`,C10 补上
+    /// `competitive-analysis`),`run_issue_now` 注入时按名查到即真实注入。
     ///
     /// 返回①竞品分析那张的 `IssueId`,供「问一句就跑」路径直接开工;无仓
     /// 项目(未建任何标配票)返回 `None`。
@@ -1952,8 +1953,9 @@ impl App {
             "\n\n## 本件活(Issue #{})\n标题:{}\n描述:{}\n请用本阶段方法论完成它,产出落为工作区真实文件。\n",
             issue.number, issue.title, issue.desc
         );
-        // C8 · plan/13 D8: 标配 Issue 携带的稳定 Skill 关联(按 C9 的 slug)。
-        // 找不到(如竞品分析卡待 C10 落地前)如实跳过、零报错。
+        // C8 · plan/13 D8: 标配 Issue 携带的稳定 Skill 关联(按 C9+C10 种下
+        // 的 slug)。理论上仍可能查不到(例如 seed 尚未跑过的极早期状态),
+        // 那种情况如实跳过、零报错,不是本注入路径的正常状态。
         let (standard_block, standard_refs) =
             self.standard_skill_block(&issue.standard_skill).await?;
         // Distilled (compounded) skills from this project, same-stage
@@ -2115,10 +2117,11 @@ impl App {
                 // (bw_core::playbook projections) — by-name idempotent, so an
                 // already-seeded database gains them too.
                 bw_store::seed_stage_entities_if_missing(self.store.as_ref()).await?;
-                // C9 · plan/13 D8: the two standard-Issue-trio skills (找指标/
-                // 绑数据) — by-name idempotent, so an already-seeded database
-                // gains them too. Content is `include_str!`-ed straight from
-                // docs/skills/<slug>/SKILL.md (the real file in the repo).
+                // C9+C10 · plan/13 D8/D9: the three standard-Issue-trio
+                // skills (竞品分析/找指标/绑数据) — by-name idempotent, so an
+                // already-seeded database gains them too. Content is
+                // `include_str!`-ed straight from docs/skills/<slug>/SKILL.md
+                // (the real file in the repo).
                 bw_store::seed_standard_issue_skills_if_missing(self.store.as_ref()).await?;
                 // A4: backfill the per-stage "完成 Issue 数" metric for every
                 // project — pre-A4 projects gain it; already-seeded ones are

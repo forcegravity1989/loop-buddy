@@ -1568,8 +1568,8 @@ pub struct Issue {
     /// `""` = no association — every hand-created / autopilot Issue. Set once
     /// at creation, never rewritten. `RunIssue` resolves it against the Skill
     /// Hub *by name* and injects the real content when found; a slug that
-    /// doesn't resolve (the `competitive-analysis` card doesn't exist until
-    /// C10 lands) is an honest skip, never an error.
+    /// doesn't resolve (there is none today — all three standard cards are
+    /// seeded by C9+C10) is an honest skip, never an error.
     #[serde(default)]
     pub standard_skill: String,
     pub created_at: i64,

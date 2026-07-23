@@ -262,7 +262,8 @@ async fn main() {
         }
     });
 
-    // ── 找指标/绑数据 两张标配 Skill 的 seed 基线(C9,Boot 内已种)──
+    // ── 竞品分析/找指标/绑数据 三张标配 Skill 的 seed 基线(C9 种了后两
+    // 张,C10 补种第一张,Boot 内三张都已种)──
     let ns_skill_uses_before = store
         .list_skills()
         .await
@@ -272,6 +273,15 @@ async fn main() {
         .map(|s| s.uses)
         .unwrap_or(0);
     println!("\n[baseline] north-star-discovery.uses = {ns_skill_uses_before} (C9 seed)");
+    let ca_skill_uses_before = store
+        .list_skills()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.name == "competitive-analysis")
+        .map(|s| s.uses)
+        .unwrap_or(0);
+    println!("[baseline] competitive-analysis.uses = {ca_skill_uses_before} (C10 seed)");
 
     // ═══════════════ 项目 A · 挂仓 + run_first: true ═══════════════
     println!("\n① 项目 A(挂仓)· CreateProject github=New …");
@@ -439,6 +449,35 @@ async fn main() {
     assert!(
         claude_log_text.contains("north-star-discovery"),
         "stub claude 落盘的真实 prompt 里应包含标配 Skill 的名字/正文标记"
+    );
+
+    // C10 · 接线验证:项目 A 的 run_first=true 在①②步已经对①竞品分析
+    // (standard_skill = "competitive-analysis")真实 dispatch 过一次
+    // RunIssue——不需要本例再显式重跑,直接核验那次留下的证据:①stub
+    // claude 落盘的真实 prompt 包含 competitive-analysis SKILL.md 的一个
+    // 独有标记句(硬约束原文),证明全文注入到达了执行器;②该卡的 uses
+    // 恰好 +1,记账 settle-once。
+    assert!(
+        claude_log_text.contains("绝不由幻觉填充对标事实"),
+        "stub claude 落盘的真实 prompt 里应包含 competitive-analysis SKILL.md 的硬约束原文\
+         (证明是 C10 落地的真实文件内容,不是占位/裁剪)"
+    );
+    let ca_skill_uses_after = store
+        .list_skills()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.name == "competitive-analysis")
+        .map(|s| s.uses)
+        .unwrap();
+    assert_eq!(
+        ca_skill_uses_after,
+        ca_skill_uses_before + 1,
+        "competitive-analysis 的 uses 应恰好 +1(项目 A run_first=true 触发的那一次 RunIssue,记一次账,不重复)"
+    );
+    println!(
+        "\n[C10] competitive-analysis: prompt 含硬约束原文 = true · uses {} → {}",
+        ca_skill_uses_before, ca_skill_uses_after
     );
 
     println!("\n✓ verify_c8_standard_trio done");

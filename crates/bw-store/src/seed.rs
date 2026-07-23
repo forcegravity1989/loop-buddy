@@ -3038,11 +3038,12 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
     Ok(())
 }
 
-// ───────────────── C9 · 标配 Issue 三件套的 Skill 内容 (plan/13 D8) ─────────────────
+// ───────────────── C9+C10 · 标配 Issue 三件套的 Skill 内容 (plan/13 D8/D9) ─────────────────
 //
-// 「找指标」(north-star-discovery)+「绑数据」(metrics-binding)——创建流
-// 自动建的标配 Issue 三件套（竞品分析 → 找指标 → 绑数据）里挂 Skill 的那
-// 两件。正本是仓里的真实文件 `docs/skills/<slug>/SKILL.md`（给 plan/12 流
+// 「竞品分析」（competitive-analysis，C10 补全）+「找指标」
+// （north-star-discovery，C9）+「绑数据」（metrics-binding，C9）——创建流
+// 自动建的标配 Issue 三件套（竞品分析 → 找指标 → 绑数据）挂 Skill 的全部
+// 三件。正本是仓里的真实文件 `docs/skills/<slug>/SKILL.md`（给 plan/12 流
 // 合入后的 `ImportSkillPackage` 留吸收形态：文件树本身就是"包"）；这里用
 // `include_str!` 把文件内容原样编译进二进制作为 `SkillCard.content`，不是
 // 另抄一份会漂移的 Rust 字符串——文件才是唯一正本，Rust 端只是把它变成可
@@ -3054,9 +3055,9 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
 // - `seed_stage_entities_if_missing`（本文件上方）把 app 自带的方法论技能
 //   按名幂等地种成 `Maturity::Mature` + `LibSource::Official`——适合"app
 //   自己出品的标准打法"。
-// 找指标/绑数据是 plan/13 D8 拍板的标配流程的一部分，不是某次会话里用户
-// 现造的内容，性质更接近后者：跟随 `seed_stage_entities_if_missing` 的先
-// 例，Mature + Official + 独立种子函数、Boot 时调用。`category` 用新值
+// 竞品分析/找指标/绑数据是 plan/13 D8 拍板的标配流程的一部分，不是某次会
+// 话里用户现造的内容，性质更接近后者：跟随 `seed_stage_entities_if_missing`
+// 的先例，Mature + Official + 独立种子函数、Boot 时调用。`category` 用新值
 // "标配"——既不是 OMC/ECC 目录分类，也不挂在某个 `StageKind` 下（三件套发
 // 生在项目刚建好、进 Prototype 段之前的创建流末尾，不是某阶段的常规工作方
 // 法），"标配"如实反映它在 plan/13 里的身份。
@@ -3065,6 +3066,13 @@ const NORTH_STAR_DISCOVERY_SKILL_MD: &str =
     include_str!("../../../docs/skills/north-star-discovery/SKILL.md");
 const METRICS_BINDING_SKILL_MD: &str =
     include_str!("../../../docs/skills/metrics-binding/SKILL.md");
+// C10 · plan/13 D8/D9: 标配三件套的第一件(竞品分析→找指标→绑数据),
+// C9 落地时这张卡还不存在(见 lib.rs `seed_standard_issue_trio` 的注
+// 释:「竞品分析卡是 C10 票,这里先建关联,`run_issue_now` 注入时按名查
+// 不到就如实跳过、零报错」)——本票把文件与种子行都补上,C8 留的口自动
+// 接上,不用回填任何既有 Issue。
+const COMPETITIVE_ANALYSIS_SKILL_MD: &str =
+    include_str!("../../../docs/skills/competitive-analysis/SKILL.md");
 
 struct StandardIssueSkill {
     name: &'static str,
@@ -3073,6 +3081,11 @@ struct StandardIssueSkill {
 }
 
 const STANDARD_ISSUE_SKILLS: &[StandardIssueSkill] = &[
+    StandardIssueSkill {
+        name: "competitive-analysis",
+        desc: "起草对标名单、各家北极星猜测、差异定位、可借鉴打法,产出报告 PR 进仓——检索不可用时如实降级为「人喂材料+agent 整理」,绝不由幻觉填充对标事实",
+        content: COMPETITIVE_ANALYSIS_SKILL_MD,
+    },
     StandardIssueSkill {
         name: "north-star-discovery",
         desc: "结合项目意图与竞品分析报告推导北极星+滞后+引领三层指标,每条必附采集方案——先对后亮,北极星绝不为「采得到」退化成工程虚荣指标",
@@ -3085,9 +3098,10 @@ const STANDARD_ISSUE_SKILLS: &[StandardIssueSkill] = &[
     },
 ];
 
-/// 按名幂等地种下标配 Issue 三件套的两个 Skill(找指标/绑数据)——`name`
-/// 就是它们稳定可查的 slug,C8 票的标配 Issue 会按这个名字关联注入。已存
-/// 在(同名)就跳过,不覆盖——内容更新走 `UpdateSkill`,不是重新 seed。
+/// 按名幂等地种下标配 Issue 三件套的三个 Skill(竞品分析/找指标/绑数
+/// 据)——`name` 就是它们稳定可查的 slug,C8 票的标配 Issue 会按这个名字
+/// 关联注入。已存在(同名)就跳过,不覆盖——内容更新走 `UpdateSkill`,不
+/// 是重新 seed。
 pub async fn seed_standard_issue_skills_if_missing(store: &dyn Store) -> Result<()> {
     let have: std::collections::HashSet<String> = store
         .list_skills()
