@@ -98,6 +98,16 @@ pub async fn create_repo(
     })
 }
 
+/// 落地收拢推送(plan/13 D1,#31 记录的缺口):`create_repo` 只推首
+/// commit,创建流途中的章程/组件标准等提交一直停在本地。
+/// `CompleteCreation` 落地时调这里把 HEAD 一次推齐;无新提交时 push
+/// 天然 no-op,幂等可重跑。
+pub async fn push_head(dir: &Path) -> Result<(), GithubError> {
+    git_in(dir, &["push", "origin", "HEAD"])
+        .await
+        .map_err(|e| GithubError::Command(format!("推送失败:{e}")))
+}
+
 /// Clone an already-existing GitHub repo the user picked into `dest`.
 pub async fn clone_repo(
     owner: &str,

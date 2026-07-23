@@ -2634,6 +2634,26 @@ impl App {
                 let first_issue = self.seed_standard_issue_trio(p).await?;
                 self.store.recompute_signals(p, now()).await?;
                 let _ = write_charter(self, p, "完成创建").await;
+                // plan/13 D1(#31 记录的缺口):create_repo 只推了首 commit,
+                // 创建流途中的章程/组件标准提交停在本地——产品信息正本在
+                // 仓里,落地时把 HEAD 一次推齐。失败软降级 toast,不倒灌
+                // 创建(github_remote 非空 ⇒ workspace 在 CreateProject 就
+                // 已绑定,直接用)。
+                if !proj.github_remote.trim().is_empty() && !proj.workspace_path.trim().is_empty() {
+                    if let Err(e) = bw_engine::github::push_head(std::path::Path::new(
+                        proj.workspace_path.trim(),
+                    ))
+                    .await
+                    {
+                        self.emit(Event::ConnectorSynced {
+                            name: format!("{} · GitHub", proj.name),
+                            ok: false,
+                            detail: format!(
+                                "落地推送失败(章程等提交仍在本地,可稍后手动 git push):{e}"
+                            ),
+                        });
+                    }
+                }
                 self.state.view = View::App;
                 self.refresh_projects().await?;
                 self.refresh_issues().await?;
