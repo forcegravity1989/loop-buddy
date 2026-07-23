@@ -684,6 +684,11 @@ pub trait Store: Send + Sync {
     /// Stamp the FIRST settle time (COALESCE — later calls keep the original).
     /// The app's Done-edge accounting fires iff this was previously NULL.
     async fn mark_issue_settled(&self, id: IssueId, at: i64) -> Result<()>;
+    /// C4 · issue 身份映射: record the GitHub issue number `gh issue create`
+    /// minted for this Issue. The App layer calls this only after a real
+    /// success — a failed/skipped mapping simply never calls it, leaving the
+    /// honest `0` default in place.
+    async fn set_issue_github_number(&self, id: IssueId, github_number: u32) -> Result<()>;
     /// A5-F: the only way an issue reaches `Blocked` — sets status and reason
     /// together in one write. Legality (which source states may block) and
     /// the non-empty-reason rule are the App layer's job; the store just

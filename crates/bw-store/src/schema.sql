@@ -362,6 +362,11 @@ CREATE TABLE IF NOT EXISTS issue (
     project_id  TEXT NOT NULL REFERENCES project(id),
     stage       TEXT NOT NULL,                   -- StageKind (5 values)
     number      INTEGER NOT NULL,                -- per-project sequence: 1, 2, 3, …
+    -- C4 · issue 身份映射: the GitHub issue number `gh issue create` minted
+    -- (owning project's github_remote non-empty and the call succeeded).
+    -- 0 = unmapped — no GitHub repo, or the real gh call failed (BW-side
+    -- Issue still exists either way, 创建不破).
+    github_number INTEGER NOT NULL DEFAULT 0,
     title       TEXT NOT NULL,
     descr       TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'backlog', -- IssueStatus

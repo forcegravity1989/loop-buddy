@@ -1516,6 +1516,14 @@ pub struct Issue {
     pub project_id: ProjectId,
     pub stage: StageKind,
     pub number: u32,
+    /// C4 · issue 身份映射: the GitHub issue number `gh issue create` minted
+    /// for this Issue, when the owning project has a `github_remote`. `0` =
+    /// unmapped — either the project has no GitHub repo (存量无仓项目保持
+    /// 本地身份,如实留白), or the real `gh issue create` call failed
+    /// (创建不破: the BW-side Issue still exists, only the mapping is
+    /// missing). Never a fabricated number.
+    #[serde(default)]
+    pub github_number: u32,
     pub title: String,
     pub desc: String,
     pub status: IssueStatus,
