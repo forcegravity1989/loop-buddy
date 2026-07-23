@@ -1226,8 +1226,9 @@ impl ConnectorStatus {
 pub const CONNECTOR_KIND_GIT_REPO: &str = "git-repo";
 pub const CONNECTOR_KIND_CLAUDE_CLI: &str = "claude-cli";
 /// GitHub 为主体的创建流(2026-07-22)：记录一个项目挂的 GitHub 远端
-/// ("owner/repo" 进 `config`)。目前是诚实标注未同步的引用条目——不接
-/// `SyncConnector` 真探针,持续同步(issue/PR/CI 统计)是独立的后续功能。
+/// ("owner/repo" 进 `config`)。plan/13 D12 起接真探针:`SyncConnector`
+/// 走 `gh repo view` 真实探活;指标级统计采集由标配 Cron(collect_metrics)
+/// 负责,两者各管一段。
 pub const CONNECTOR_KIND_GITHUB_REPO: &str = "github-repo";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1321,6 +1321,19 @@ impl App {
                     Err(e) => Ok((false, e)),
                 }
             }
+            CONNECTOR_KIND_GITHUB_REPO => {
+                // plan/13 D12(code-review Spec 轴指出此前未落地):22 号设计
+                // 「不接真探针」的立场已被推翻——`gh repo view` 一次真实探活,
+                // 探不通如实 false,绝不伪造「已同步」。
+                let remote = c.config.trim();
+                if remote.is_empty() {
+                    return Ok((false, "连接器未记录 owner/repo,无法探活".into()));
+                }
+                match bw_engine::github::probe_repo(remote).await {
+                    Ok(detail) => Ok((true, detail)),
+                    Err(e) => Ok((false, e.to_string())),
+                }
+            }
             other => Err(AppError::Invalid(format!(
                 "连接器类型「{other}」没有真实探针——不支持同步(诚实拒绝,不伪造状态)"
             ))),
@@ -1493,6 +1506,45 @@ impl App {
     /// `gh` 失败:零新观测、如实计入失败(供 ok:false toast),signal 靠既有
     /// 过期降级自然变灰。北极星的采集方案落在 `project` 列(非 metric 行),没有
     /// 可挂观测的 metric_id,v1 不采(留白见 docs/metrics-toml-format.md)。
+    /// `.bw/metrics.toml` 正本 → SQLite 缓存的同步本体。两个入口共用:
+    /// `Command::SyncMetricsFile`(手动,active 项目)与 `MergeIssuePr`
+    /// (plan/13 D5「merge 后同步进 SQLite 作缓存」——code-review Spec 轴
+    /// 指出此前管线断在入口,全仓没有任何触发点)。
+    async fn sync_metrics_file_for(&mut self, p: ProjectId) -> Result<(), AppError> {
+        let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+        match bw_engine::metrics_file::read(&proj.workspace_path) {
+            // No configured workspace, or a workspace with no file
+            // yet — 文件不存在:零动作零噪音,行为与今日完全一致
+            // (no store write, no event; `read` folds both cases
+            // into the same honest `Ok(None)`).
+            Ok(None) => {}
+            Ok(Some(file)) => {
+                let sync = metrics_file_sync(p, &file);
+                let summary = self.store.sync_metrics_file(sync).await?;
+                self.emit(Event::ProjectUpdated(p));
+                self.emit(Event::ConnectorSynced {
+                    name: "metrics.toml".into(),
+                    ok: true,
+                    detail: format!(
+                        "北极星 · {} 条滞后指标 · {} 条引领指标已同步",
+                        summary.lagging_synced, summary.leading_synced
+                    ),
+                });
+            }
+            Err(e) => {
+                // 坏 toml:如实报错,沿用 ConnectorSynced ok:false 惯例;
+                // `read` only returns `Err` on a parse/IO failure — the
+                // cache is untouched (nothing was written above).
+                self.emit(Event::ConnectorSynced {
+                    name: "metrics.toml".into(),
+                    ok: false,
+                    detail: e.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     async fn collect_project_metrics(
         &mut self,
         project: ProjectId,
@@ -1521,8 +1573,20 @@ impl App {
                     {
                         Ok(count) => {
                             let value = count.to_string();
-                            if m.value_raw == value {
-                                summary.unchanged += 1; // change-guard: not a new fact
+                            // window-guard(code-review Standards #5 修正,取代
+                            // 纯 change-guard):值变了当然记;值没变但本采集
+                            // 窗口(UTC 日)还没有点,也要记——定时采集的每次
+                            // 测量都是真实观测,平台期的新鲜确认不落点的话,
+                            // 过期降级会把「今天测过没变」误判成「久无数据」
+                            // 压绿为黄。同窗口同值才跳过(防手动连点刷屏)。
+                            let last_ts = self.store.latest_observation_ts(m.id).await?;
+                            let same_window = last_ts.is_some_and(|t| {
+                                OffsetDateTime::from_unix_timestamp(t)
+                                    .map(|d| d.date() == today)
+                                    .unwrap_or(false)
+                            });
+                            if m.value_raw == value && same_window {
+                                summary.unchanged += 1;
                             } else {
                                 self.store
                                     .append_observation(m.id, SourceKind::Github, &value, now())
@@ -2843,37 +2907,7 @@ impl App {
 
             Command::SyncMetricsFile => {
                 let p = self.active()?;
-                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
-                match bw_engine::metrics_file::read(&proj.workspace_path) {
-                    // No configured workspace, or a workspace with no file
-                    // yet — 文件不存在:零动作零噪音,行为与今日完全一致
-                    // (no store write, no event; `read` folds both cases
-                    // into the same honest `Ok(None)`).
-                    Ok(None) => {}
-                    Ok(Some(file)) => {
-                        let sync = metrics_file_sync(p, &file);
-                        let summary = self.store.sync_metrics_file(sync).await?;
-                        self.emit(Event::ProjectUpdated(p));
-                        self.emit(Event::ConnectorSynced {
-                            name: "metrics.toml".into(),
-                            ok: true,
-                            detail: format!(
-                                "北极星 · {} 条滞后指标 · {} 条引领指标已同步",
-                                summary.lagging_synced, summary.leading_synced
-                            ),
-                        });
-                    }
-                    Err(e) => {
-                        // 坏 toml:如实报错,沿用 ConnectorSynced ok:false 惯例;
-                        // `read` only returns `Err` on a parse/IO failure — the
-                        // cache is untouched (nothing was written above).
-                        self.emit(Event::ConnectorSynced {
-                            name: "metrics.toml".into(),
-                            ok: false,
-                            detail: e.to_string(),
-                        });
-                    }
-                }
+                self.sync_metrics_file_for(p).await?;
             }
 
             Command::CollectMetrics => {
@@ -3565,6 +3599,31 @@ impl App {
                         issue.pr_number, issue.number
                     ),
                 });
+                // plan/13 D5: merge 后同步指标正本。先把工作区收拢回默认
+                // 分支(run 后还停在 bw/issue-N 活分支,merge 进主干的
+                // `.bw/metrics.toml` 只有 checkout+pull 之后才读得到),再
+                // 走同一条 sync 路径。收拢失败软降级 toast——验收已经完成,
+                // 不因同步不顺回滚任何东西;下次手动 SyncMetricsFile 可补。
+                if !proj.workspace_path.trim().is_empty() {
+                    match bw_engine::github::sync_default_branch(std::path::Path::new(
+                        proj.workspace_path.trim(),
+                    ))
+                    .await
+                    {
+                        Ok(()) => {
+                            self.sync_metrics_file_for(issue.project_id).await?;
+                        }
+                        Err(e) => {
+                            self.emit(Event::ConnectorSynced {
+                                name: "metrics.toml".into(),
+                                ok: false,
+                                detail: format!(
+                                    "merge 后工作区收拢默认分支失败,指标正本未同步(可手动重试):{e}"
+                                ),
+                            });
+                        }
+                    }
+                }
             }
 
             Command::AssignIssue { id, assignee } => {

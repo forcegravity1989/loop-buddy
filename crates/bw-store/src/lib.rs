@@ -532,6 +532,10 @@ pub trait Store: Send + Sync {
         raw: &str,
         ts: OffsetDateTime,
     ) -> Result<()>;
+    /// 该指标最近一次观测的 unix 秒(无观测 = None)。采集器 window-guard
+    /// 用:值平台期也要按窗口落新点,否则「今天真实测过没变」会被过期降级
+    /// 误判成「久无数据」(code-review Standards #5)。
+    async fn latest_observation_ts(&self, metric_id: MetricId) -> Result<Option<i64>>;
 
     /// Materializes all five stages at creation, `dod` all-unchecked.
     async fn materialize_stages(&self, stages: Vec<NewStage>) -> Result<()>;

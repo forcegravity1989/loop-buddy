@@ -642,6 +642,14 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn latest_observation_ts(&self, metric_id: MetricId) -> Result<Option<i64>> {
+        let row = sqlx::query("SELECT MAX(ts) AS ts FROM observation WHERE metric_id = ?")
+            .bind(metric_id.uuid().to_string())
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.try_get::<Option<i64>, _>("ts")?)
+    }
+
     async fn materialize_stages(&self, stages: Vec<NewStage>) -> Result<()> {
         let t = now_unix();
         for s in stages {

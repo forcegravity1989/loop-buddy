@@ -108,6 +108,85 @@ pub async fn push_head(dir: &Path) -> Result<(), GithubError> {
         .map_err(|e| GithubError::Command(format!("推送失败:{e}")))
 }
 
+/// plan/13 D12: github-repo 连接器的真探针——`gh repo view` 一次,回
+/// 可见性与最近推送时间。探不通就如实报错,绝不伪造"已同步"。
+pub async fn probe_repo(owner_repo: &str) -> Result<String, GithubError> {
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "repo",
+            "view",
+            owner_repo,
+            "--json",
+            "nameWithOwner,isPrivate,pushedAt",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| GithubError::Command(format!("解析 gh repo view 输出失败:{e}")))?;
+    let name = v["nameWithOwner"].as_str().unwrap_or(owner_repo);
+    let vis = if v["isPrivate"].as_bool().unwrap_or(true) {
+        "private"
+    } else {
+        "public"
+    };
+    let pushed = v["pushedAt"].as_str().unwrap_or("未知");
+    Ok(format!("{name} · {vis} · 最近推送 {pushed}"))
+}
+
+/// merge 后把本地工作区收拢回默认分支(plan/13 D5:merge 后同步指标正本
+/// 需要读到 merge 进主干的 `.bw/metrics.toml`,而 run 结束后工作区还停在
+/// `bw/issue-N` 活分支上)。fetch → 解析 origin/HEAD(拿不到就依次试
+/// main/master)→ checkout → `pull --ff-only`。只 ff,绝不在这里制造
+/// merge commit——工作区的主干只由远端事实前进。
+pub async fn sync_default_branch(dir: &Path) -> Result<(), GithubError> {
+    git_in(dir, &["fetch", "origin"])
+        .await
+        .map_err(|e| GithubError::Command(format!("fetch 失败:{e}")))?;
+    let head = tokio::process::Command::new("git")
+        .current_dir(dir)
+        .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    let mut candidates: Vec<String> = Vec::new();
+    if head.status.success() {
+        if let Ok(s) = String::from_utf8(head.stdout) {
+            // "origin/main" → "main"
+            if let Some(b) = s.trim().strip_prefix("origin/") {
+                candidates.push(b.to_string());
+            }
+        }
+    }
+    candidates.push("main".into());
+    candidates.push("master".into());
+    let mut last_err = String::new();
+    for b in &candidates {
+        match git_in(dir, &["checkout", b]).await {
+            Ok(()) => {
+                git_in(dir, &["pull", "--ff-only", "origin", b])
+                    .await
+                    .map_err(|e| GithubError::Command(format!("pull {b} 失败:{e}")))?;
+                return Ok(());
+            }
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+    Err(GithubError::Command(format!(
+        "找不到可检出的默认分支(试过 {}):{last_err}",
+        candidates.join("/")
+    )))
+}
+
 /// Clone an already-existing GitHub repo the user picked into `dest`.
 pub async fn clone_repo(
     owner: &str,
