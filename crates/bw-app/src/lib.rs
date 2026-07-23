@@ -2991,13 +2991,12 @@ impl App {
                         NewSkill {
                             id: SkillId::new(),
                             name: parsed.name,
-                            // Real, already-written content from an existing
-                            // skill folder — not something the user is
-                            // actively drafting inside BW. Same call
-                            // `seed_stage_entities_if_missing` makes for the
-                            // app's own built-in skills: Mature, not
-                            // Polishing (which means "just made, unproven").
-                            maturity: Maturity::Mature,
+                            // standards.rs 铁律:maturity 系统派生,新建一律
+                            // fresh——外部库再有名,在 BW 里的成熟度只能由
+                            // BW 本地真实使用挣出来,不从外部声誉继承。
+                            // (/code-review 硬违规修正:原 Mature 引 seed
+                            // 先例,但 seed 是内置角色路径,标准未为导入开例外。)
+                            maturity: Maturity::Fresh,
                             desc: parsed.desc,
                             // T2 scope: no category assignment on import (no
                             // predetermined classification per plan/12 §2);
@@ -3078,10 +3077,9 @@ impl App {
                             NewSkill {
                                 id: SkillId::new(),
                                 name: parsed.name.clone(),
-                                // Same reasoning as ImportSkillPackage: real,
-                                // already-written library content, not a
-                                // fresh in-app draft.
-                                maturity: Maturity::Mature,
+                                // 同 ImportSkillPackage:标准规定新建一律
+                                // fresh,成熟度由 BW 本地使用派生。
+                                maturity: Maturity::Fresh,
                                 desc: parsed.desc,
                                 // T3 scope, same as T2: no predetermined
                                 // category on import.
@@ -3277,12 +3275,9 @@ impl App {
                             // T7: same 通用-until-classified rule as the Skill
                             // import path — no guessing across 67 ECC agents.
                             stage_ref: None,
-                            // Real, already-written subagent definition — not
-                            // something drafted inside BW. Same call
-                            // `ImportSkillPackage` makes for an imported SKILL.md:
-                            // Mature, not Polishing (which means "just made,
-                            // unproven").
-                            maturity: Maturity::Mature,
+                            // 同 ImportSkillPackage:标准规定新建一律 fresh,
+                            // 成熟度由 BW 本地真实使用派生,不从外部继承。
+                            maturity: Maturity::Fresh,
                             // ECC AGENT.md files don't declare skill tags of
                             // their own; no predetermined mapping (no guessing).
                             skills: Vec::new(),
