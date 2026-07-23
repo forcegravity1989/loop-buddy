@@ -99,8 +99,9 @@ pub const SKILL_STANDARDS_MD: &str = r##"# Skill 标准(BW 组件规范 · skill
 每个 phase prompt 里。空字符串 = 纯目录条目(占位,还没写实操内容,允许存在但\
 `/code-review` 时应被质疑)。蒸馏出来的技能**不允许留空**——一个从真活蒸馏出来\
 的技能,正文必须是从那件真活里提炼的具体做法,不是空壳。 |
-| `source` | 作者 | `self_built`(自建)等 `LibSource` 枚举值——标注这条技能的来路,\
-不是编造出处。 |
+| `source` | 作者 | `self_built`(自建)等 `HubSource` 枚举值(T2 起与 Workflow \
+共用同一套 4 档:Official{official_library}/Adopted/SelfBuilt/WithinSession)——\
+标注这条技能的来路,不是编造出处。 |
 | `maturity` | **系统** | 同 agent:`fresh` / `polishing` / `mature`。新建一律 `fresh`。 |
 | `uses` | **系统派生** | 真实被注入使用的次数。新建 = 0,永不手填。 |
 | `distilled_from_issue` | **系统派生**(仅蒸馏路径) | 指回蒸馏它的那个真实已完成 Issue 的\

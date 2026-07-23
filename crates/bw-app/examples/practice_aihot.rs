@@ -37,8 +37,8 @@
 //! 环境变量: BW_DB(默认 practice-aihot/bw-aihot.db)· BW_WORKSPACES(默认 practice-aihot/workspaces)
 
 use bw_core::model::{
-    Cadence, CronMode, HubSource, IssuePriority, IssueStatus, LibSource, LoopConfig, Maturity,
-    ProjectCycle, SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
+    Cadence, CronMode, HubSource, IssuePriority, IssueStatus, LoopConfig, Maturity, ProjectCycle,
+    SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{AgentId, CronTaskId, IssueId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
@@ -260,7 +260,7 @@ async fn cmd_setup(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
                 maturity: Maturity::Fresh,
                 desc: "按用户配置的关注面关键词给抓取条目打分,分数不够不上日报".into(),
                 category: "aihot 方法论".into(),
-                source: LibSource::SelfBuilt,
+                source: HubSource::SelfBuilt,
                 content: "### 关键词关注面打分法\n\
                     1. 读 config.json 的 keywords 列表(用户真实配置的关注面,不是猜的)。\n\
                     2. 对每条真实抓取到的标题/摘要,逐关键词做子串匹配(忽略大小写),\

@@ -1002,28 +1002,6 @@ pub fn drafting_workflow() -> WorkflowSpec {
 
 // ─────────────────────────── skill / agent hub ───────────────────────────
 
-/// Binary provenance for Skill/Agent hub items — a library entry the
-/// platform ships (官方) or one a builder authored locally (自建). Distinct
-/// from [`HubSource`] (Workflow's 4-tier provenance): these are two
-/// independent, purpose-built vocabularies, not one shared enum.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LibSource {
-    /// 官方
-    Official,
-    /// 自建
-    SelfBuilt,
-}
-
-impl LibSource {
-    pub fn label(self) -> &'static str {
-        match self {
-            LibSource::Official => "官方",
-            LibSource::SelfBuilt => "自建",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SkillCard {
     pub id: SkillId,
@@ -1033,7 +1011,16 @@ pub struct SkillCard {
     pub maturity: Maturity,
     pub desc: String,
     pub category: String,
-    pub source: LibSource,
+    /// T2 (2026-07-23, plan/12 §6): unified onto the same 4-tier
+    /// [`HubSource`] Workflow already uses, replacing the former standalone
+    /// `LibSource { Official, SelfBuilt }` — "which curated library this
+    /// came from" is the same open-ended provenance question for every hub
+    /// entity, not a Skill-specific vocabulary. `Official { official_library
+    /// }` is populated by `ImportSkillPackage`/`ImportSkillLibrary`; bare
+    /// pre-T2 `official` rows with no library sub-tag (the 5 built-in
+    /// stage-methodology skills) read back as `SelfBuilt` — see
+    /// `bw_store::parse_skill_source`'s doc comment for why.
+    pub source: HubSource,
     pub uses: u32,
     /// The skill body — real instructions an executor can act on. Empty for
     /// catalog *references* (OMC/ECC entries whose full text lives in the

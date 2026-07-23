@@ -10,7 +10,7 @@
 use crate::kernel::{HubVm, Kernel};
 use crate::theme;
 use bw_app::Command;
-use bw_core::model::LibSource;
+use bw_core::model::HubSource;
 use bw_core::SkillId;
 use dioxus::prelude::*;
 use ui::vm::{ProjectCardVm, SkillCardVm};
@@ -323,7 +323,7 @@ fn CreateSkillForm(on_done: EventHandler<()>) -> Element {
             name: n,
             desc: desc().trim().to_string(),
             category: category().trim().to_string(),
-            source: LibSource::SelfBuilt,
+            source: HubSource::SelfBuilt,
             content: content().trim().to_string(),
         });
         name.set(String::new());

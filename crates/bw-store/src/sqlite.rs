@@ -5,15 +5,15 @@
 
 use crate::{
     cadence_text, connector_status_text, cron_mode_text, cron_status_text, cycle_text,
-    issue_priority_text, issue_status_text, lib_source_text, maturity_text, parse_cadence,
-    parse_connector_status, parse_cron_mode, parse_cron_status, parse_cycle, parse_issue_priority,
-    parse_issue_status, parse_lib_source, parse_maturity, parse_session_status, parse_sig,
-    parse_stage_kind, session_status_text, sig_text, stage_kind_text, AgentEdit, GlobalHandoffRow,
-    HandoffRow, MessageRow, MetricRole, MetricSignal, NewAgent, NewArtifact, NewConnector,
-    NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
-    NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectRow,
-    Result, SessionKind, SessionRow, SkillEdit, StageRow, StageSignal, Store, StoreError,
-    WorkflowEdit,
+    issue_priority_text, issue_status_text, maturity_text, parse_cadence, parse_connector_status,
+    parse_cron_mode, parse_cron_status, parse_cycle, parse_issue_priority, parse_issue_status,
+    parse_maturity, parse_session_status, parse_sig, parse_skill_source, parse_stage_kind,
+    session_status_text, sig_text, skill_source_columns, stage_kind_text, AgentEdit,
+    GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal, NewAgent, NewArtifact,
+    NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession,
+    NewSkill, NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow,
+    PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow,
+    StageRow, StageSignal, Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -22,13 +22,13 @@ use bw_core::derive::{
 use bw_core::model::{
     AgentCard, AgentRef, AgentSkillTag, Artifact, ArtifactKind, Connector, ConnectorStatus,
     CronEffectiveness, CronStatus, CronTask, HubSource, Issue, IssueStatus, KnowledgeSource,
-    LibSource, LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger,
-    Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
+    LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal,
+    SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
     WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
-    SessionId, SkillId, WorkflowId, WorkflowRunId,
+    SessionId, SkillFileId, SkillId, WorkflowId, WorkflowRunId,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
@@ -152,6 +152,20 @@ impl SqliteStore {
         add_column_if_missing(&pool, "workflow_spec", "project_id", "TEXT").await?;
         add_column_if_missing(&pool, "skill", "project_id", "TEXT").await?;
         add_column_if_missing(&pool, "agent", "project_id", "TEXT").await?;
+        // T2 (plan/12 §6): Skill's source unified onto HubSource. Old rows'
+        // bare `source='official'`/`'self_built'` text values already match
+        // the new tag vocabulary 1:1 (no rewrite needed) — only the new
+        // `official_library` sub-tag column is missing on a pre-T2 DB.
+        // '' = no library sub-tag, which `parse_skill_source` reads as
+        // "pre-T2 official row" → reclassified `SelfBuilt` (honest, see its
+        // doc comment) for any row that predates this column.
+        add_column_if_missing(
+            &pool,
+            "skill",
+            "official_library",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
 
         Ok(Self { pool })
     }
@@ -1533,16 +1547,18 @@ impl Store for SqliteStore {
 
     async fn create_skill(&self, s: NewSkill) -> Result<()> {
         let t = now_unix();
+        let (source_tag, official_library) = skill_source_columns(&s.source);
         sqlx::query(
-            "INSERT INTO skill (id, name, maturity, descr, category, source, uses, content, project_id, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
+            "INSERT INTO skill (id, name, maturity, descr, category, source, official_library, uses, content, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
         )
         .bind(s.id.uuid().to_string())
         .bind(&s.name)
         .bind(maturity_text(s.maturity))
         .bind(&s.desc)
         .bind(&s.category)
-        .bind(lib_source_text(s.source))
+        .bind(source_tag)
+        .bind(official_library)
         .bind(&s.content)
         .bind(s.project_id.map(pid))
         .bind(t)
@@ -1569,7 +1585,7 @@ impl Store for SqliteStore {
 
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, maturity, descr, category, source, uses, content,
+            "SELECT id, name, maturity, descr, category, source, official_library, uses, content,
                     distilled_from_issue, origin_agent, project_id
              FROM skill ORDER BY created_at",
         )
@@ -1580,7 +1596,7 @@ impl Store for SqliteStore {
 
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>> {
         let row = sqlx::query(
-            "SELECT id, name, maturity, descr, category, source, uses, content,
+            "SELECT id, name, maturity, descr, category, source, official_library, uses, content,
                     distilled_from_issue, origin_agent, project_id
              FROM skill WHERE id=?",
         )
@@ -1617,19 +1633,21 @@ impl Store for SqliteStore {
             .ok_or_else(|| StoreError::Other("distill: issue has no assignee".into()))?;
 
         let t = now_unix();
+        let (source_tag, official_library) = skill_source_columns(&HubSource::SelfBuilt);
         sqlx::query(
             "INSERT INTO skill
-                (id, name, maturity, descr, category, source, uses, content,
+                (id, name, maturity, descr, category, source, official_library, uses, content,
                  distilled_from_issue, origin_agent, project_id,
                  created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(skill.id.uuid().to_string())
         .bind(&skill.name)
         .bind(maturity_text(Maturity::Polishing))
         .bind(&skill.desc)
         .bind(&skill.category)
-        .bind(lib_source_text(LibSource::SelfBuilt))
+        .bind(source_tag)
+        .bind(official_library)
         .bind(&skill.content)
         .bind(from_issue.uuid().to_string())
         .bind(origin_agent.uuid().to_string())
@@ -1641,6 +1659,57 @@ impl Store for SqliteStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn import_skill_package(&self, skill: NewSkill, files: Vec<NewSkillFile>) -> Result<()> {
+        let t = now_unix();
+        let (source_tag, official_library) = skill_source_columns(&skill.source);
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO skill (id, name, maturity, descr, category, source, official_library, uses, content, project_id, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
+        )
+        .bind(skill.id.uuid().to_string())
+        .bind(&skill.name)
+        .bind(maturity_text(skill.maturity))
+        .bind(&skill.desc)
+        .bind(&skill.category)
+        .bind(source_tag)
+        .bind(official_library)
+        .bind(&skill.content)
+        .bind(skill.project_id.map(pid))
+        .bind(t)
+        .bind(t)
+        .execute(&mut *tx)
+        .await?;
+
+        for f in files {
+            sqlx::query(
+                "INSERT INTO skill_file (id, skill_id, rel_path, content, created_at)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(SkillFileId::new().uuid().to_string())
+            .bind(skill.id.uuid().to_string())
+            .bind(&f.rel_path)
+            .bind(&f.content)
+            .bind(t)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn list_skill_files(&self, skill_id: SkillId) -> Result<Vec<SkillFileRow>> {
+        let rows = sqlx::query(
+            "SELECT id, skill_id, rel_path, content, created_at
+             FROM skill_file WHERE skill_id=? ORDER BY created_at",
+        )
+        .bind(skill_id.uuid().to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(skill_file_row).collect()
     }
 
     async fn create_agent(&self, a: NewAgent) -> Result<()> {
@@ -2177,12 +2246,25 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         maturity: parse_maturity(&r.get::<String, _>("maturity")),
         desc: r.get("descr"),
         category: r.get("category"),
-        source: parse_lib_source(&r.get::<String, _>("source")),
+        source: parse_skill_source(
+            &r.get::<String, _>("source"),
+            &r.get::<String, _>("official_library"),
+        ),
         uses: r.get::<i64, _>("uses") as u32,
         content: r.get("content"),
         distilled_from_issue,
         origin_agent,
         project_id,
+    })
+}
+
+fn skill_file_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillFileRow> {
+    Ok(SkillFileRow {
+        id: parse_uuid(&r.get::<String, _>("id"), SkillFileId::from_uuid)?,
+        skill_id: parse_uuid(&r.get::<String, _>("skill_id"), SkillId::from_uuid)?,
+        rel_path: r.get("rel_path"),
+        content: r.get("content"),
+        created_at: r.get::<i64, _>("created_at"),
     })
 }
 

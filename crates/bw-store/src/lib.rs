@@ -20,14 +20,14 @@ use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
     AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronMode,
-    CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource,
+    CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource,
     LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus,
     Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
     WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
-    SkillId, WorkflowId, WorkflowRunId,
+    SkillFileId, SkillId, WorkflowId, WorkflowRunId,
 };
 use time::OffsetDateTime;
 
@@ -172,12 +172,26 @@ pub struct NewSkill {
     pub maturity: Maturity,
     pub desc: String,
     pub category: String,
-    pub source: LibSource,
-    /// Executable body (may be empty for a catalog reference entry).
+    pub source: HubSource,
+    /// Executable body (may be empty for a catalog reference entry). For a
+    /// skill minted by `ImportSkillPackage`, this is SKILL.md's own body —
+    /// every *other* file in the imported folder lands in `skill_file`
+    /// instead (see [`NewSkillFile`]).
     pub content: String,
     /// 践行最小切片(2026-07-20):`None` = hub library(全局);`Some` = 项目自有。
     /// 见 [`NewWorkflowSpec::project_id`]。
     pub project_id: Option<ProjectId>,
+}
+
+/// One real support file belonging to an imported skill folder (T2, plan/12
+/// §2) — copy-on-import: `content` is the file's real bytes at import time,
+/// completely decoupled from the source path afterward. `rel_path` is the
+/// real path relative to the skill folder's root (`"references/mocking.md"`,
+/// `"agents/openai.yaml"`, …) — no predetermined category/subfolder scheme,
+/// as-observed on disk.
+pub struct NewSkillFile {
+    pub rel_path: String,
+    pub content: String,
 }
 
 /// Editable content fields for an existing skill — `maturity`/`source`/
@@ -277,6 +291,18 @@ pub struct NewKnowledgeSource {
 }
 
 // ───────────────────────────── read DTOs ─────────────────────────────
+
+/// One persisted `skill_file` row, as read back — the real support-file
+/// contents an imported skill folder carried alongside its SKILL.md (T2,
+/// plan/12 §2).
+#[derive(Clone, Debug)]
+pub struct SkillFileRow {
+    pub id: SkillFileId,
+    pub skill_id: SkillId,
+    pub rel_path: String,
+    pub content: String,
+    pub created_at: i64,
+}
 
 #[derive(Clone, Debug)]
 pub struct ProjectRow {
@@ -603,6 +629,18 @@ pub trait Store: Send + Sync {
     /// skill row (distilling the same issue twice produces two skills, not an
     /// error).
     async fn distill_skill_from_issue(&self, skill: NewSkill, from_issue: IssueId) -> Result<()>;
+    /// Copy-on-import a real skill folder (T2, plan/12 §2): inserts the
+    /// `skill` row plus every `files` entry as a `skill_file` row, in one
+    /// transaction — either the whole package lands or none of it does.
+    /// `skill.content` must already be SKILL.md's own body; `files` is
+    /// everything else found in the folder (recursively, real relative
+    /// paths). Additive, like `distill_skill_from_issue`: re-importing the
+    /// same folder mints another skill row rather than upserting (dedup is
+    /// `ImportSkillLibrary`'s concern, T3).
+    async fn import_skill_package(&self, skill: NewSkill, files: Vec<NewSkillFile>) -> Result<()>;
+    /// Every real support file belonging to one skill, insertion order
+    /// (oldest first) — the file-tree source for a Skill detail view (T4).
+    async fn list_skill_files(&self, skill_id: SkillId) -> Result<Vec<SkillFileRow>>;
 
     async fn create_agent(&self, a: NewAgent) -> Result<()>;
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
@@ -808,17 +846,41 @@ pub(crate) fn parse_maturity(s: &str) -> Maturity {
     }
 }
 
-pub(crate) fn lib_source_text(s: LibSource) -> &'static str {
+/// `skill.source` (discriminant tag) + `skill.official_library` (sub-tag,
+/// meaningful only for `Official`) column values for a [`HubSource`] — T2's
+/// unification of Skill's provenance onto the same enum Workflow already
+/// uses (plan/12 §6). Mirrors `HubSource`'s own on-disk shape 1:1, just
+/// spread across two plain `TEXT` columns instead of one JSON blob (the
+/// `skill` table already had a dedicated `source TEXT` column pre-T2 — no
+/// reason to switch to JSON just to gain a struct variant).
+pub(crate) fn skill_source_columns(s: &HubSource) -> (&'static str, String) {
     match s {
-        LibSource::Official => "official",
-        LibSource::SelfBuilt => "self_built",
+        HubSource::Official { official_library } => ("official", official_library.clone()),
+        HubSource::Adopted => ("adopted", String::new()),
+        HubSource::SelfBuilt => ("self_built", String::new()),
+        HubSource::WithinSession => ("within_session", String::new()),
     }
 }
 
-pub(crate) fn parse_lib_source(s: &str) -> LibSource {
-    match s {
-        "official" => LibSource::Official,
-        _ => LibSource::SelfBuilt,
+/// Inverse of [`skill_source_columns`]. Handles one legacy shape: pre-T2 rows
+/// written by the retired `LibSource::Official` (the 5 built-in
+/// stage-methodology skills, seeded before this migration) have
+/// `source='official'` but no `official_library` value — old DBs never had
+/// that column. T2 reclassifies those as `SelfBuilt`: `Official` now means
+/// "a curated *external* library" (must carry a real sub-tag), and this
+/// app's own built-in methodology isn't one — the same call
+/// `stage_template_workflow` already made on the Workflow side. Old
+/// databases keep opening either way; nothing crashes, the label just
+/// becomes honest under the new, stricter definition of `Official`.
+pub(crate) fn parse_skill_source(tag: &str, official_library: &str) -> HubSource {
+    match tag {
+        "official" if !official_library.is_empty() => HubSource::Official {
+            official_library: official_library.to_string(),
+        },
+        "official" => HubSource::SelfBuilt,
+        "adopted" => HubSource::Adopted,
+        "within_session" => HubSource::WithinSession,
+        _ => HubSource::SelfBuilt,
     }
 }
 

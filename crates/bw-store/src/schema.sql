@@ -177,6 +177,10 @@ CREATE TABLE IF NOT EXISTS skill (
     descr       TEXT NOT NULL DEFAULT '',
     category    TEXT NOT NULL DEFAULT '',
     source      TEXT NOT NULL DEFAULT 'self_built',
+    -- T2 (plan/12 §6): sub-tag for source='official' only — which curated
+    -- external library ("mattpocock-skills"/"superpowers"/"ecc"/…). '' for
+    -- every other source value (see bw_store::parse_skill_source).
+    official_library TEXT NOT NULL DEFAULT '',
     uses        INTEGER NOT NULL DEFAULT 0,
     -- R2: provenance link from a real completed Issue. NULL = catalog/seeded
     -- skill (no real-work origin); populated only by distill_skill_from_issue.
@@ -186,6 +190,20 @@ CREATE TABLE IF NOT EXISTS skill (
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0
 );
+
+-- T2 (plan/12 §2): a skill's real support files, copy-on-import — the
+-- non-SKILL.md contents of an imported skill folder (SkillCard.content stays
+-- SKILL.md's own body only). No predetermined category/subfolder scheme:
+-- rel_path is the real path as found on disk ("references/mocking.md",
+-- "agents/openai.yaml", a bare "GLOSSARY.md", …).
+CREATE TABLE IF NOT EXISTS skill_file (
+    id         TEXT PRIMARY KEY,
+    skill_id   TEXT NOT NULL REFERENCES skill(id),
+    rel_path   TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skill_file_skill ON skill_file(skill_id);
 
 CREATE TABLE IF NOT EXISTS agent (
     id          TEXT PRIMARY KEY,

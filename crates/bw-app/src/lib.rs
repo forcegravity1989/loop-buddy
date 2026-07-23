@@ -13,11 +13,13 @@
 
 #![forbid(unsafe_code)]
 
+mod skill_import;
+
 use bw_core::derive::AmberBand;
 use bw_core::model::{
     classify_artifact_path, cron_due, stage_workflow, stage_workflow_with_playbook, AgentCard,
     AgentRef, Artifact, Cadence, Connector, ConnectorStatus, CronMode, CronStatus, CronTask,
-    HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig, Maturity,
+    HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LoopConfig, Maturity,
     ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
     SourceKind, StageKind, WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI,
     CONNECTOR_KIND_GIT_REPO,
@@ -32,8 +34,8 @@ use bw_engine::{
 };
 use bw_store::{
     AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewArtifact, NewConnector, NewCronTask,
-    NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewStage,
-    NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
+    NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewSkillFile,
+    NewStage, NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -301,7 +303,7 @@ pub enum Command {
         name: String,
         desc: String,
         category: String,
-        source: LibSource,
+        source: HubSource,
         /// Executable body (may be empty — a catalog reference entry).
         content: String,
     },
@@ -318,6 +320,29 @@ pub enum Command {
         desc: String,
         category: String,
         content: String,
+    },
+    /// Copy-on-import a real, on-disk skill folder (T2, plan/12 §2):
+    /// `source_path` must contain a `SKILL.md` whose frontmatter has
+    /// `name`/`description`; every other file underneath lands in
+    /// `skill_file` verbatim (real relative paths, no predetermined
+    /// category). Once imported, the new skill has zero dependency on
+    /// `source_path` — it can move, change, or vanish afterward.
+    ///
+    /// `official_library` is not part of plan/12 §2's headline
+    /// `{ source_path, project_id }` shorthand, but this command still needs
+    /// it: without an explicit sub-tag, a generic "import any SKILL.md
+    /// folder" command has no honest way to know whether the folder came
+    /// from a BW-curated library — inventing "mattpocock-skills" from a path
+    /// convention would be the exact kind of guessing this ticket's own
+    /// frontmatter-parsing rule forbids. `None` = ad-hoc personal import →
+    /// `HubSource::SelfBuilt`; `Some(lib)` → `HubSource::Official {
+    /// official_library: lib }`. T3's `ImportSkillLibrary` (batch) threads a
+    /// real `Some(..)` through this same field for every package it finds
+    /// under a library root.
+    ImportSkillPackage {
+        source_path: String,
+        project_id: Option<ProjectId>,
+        official_library: Option<String>,
     },
     /// SkillHub's detail-panel edit — content only (`maturity`/`uses` are
     /// lifecycle data, untouched).
@@ -2410,7 +2435,7 @@ impl App {
                             maturity: Maturity::Polishing,
                             desc,
                             category,
-                            source: LibSource::SelfBuilt,
+                            source: HubSource::SelfBuilt,
                             content,
                             // 忽略:store::distill_skill_from_issue 改从源 Issue
                             // 的真实 project_id 派生归属(provenance),不采用
@@ -2418,6 +2443,56 @@ impl App {
                             project_id: None,
                         },
                         issue_id,
+                    )
+                    .await?;
+                self.refresh_skills().await?;
+                self.emit(Event::SkillsChanged);
+            }
+
+            Command::ImportSkillPackage {
+                source_path,
+                project_id,
+                official_library,
+            } => {
+                let parsed = skill_import::import_skill_package_from_disk(&source_path)
+                    .map_err(AppError::Invalid)?;
+                if parsed.name.trim().is_empty() {
+                    return Err(AppError::Invalid(
+                        "SKILL.md frontmatter 的 name 不能为空".into(),
+                    ));
+                }
+                let source = match official_library {
+                    Some(lib) => HubSource::Official {
+                        official_library: lib,
+                    },
+                    None => HubSource::SelfBuilt,
+                };
+                self.store
+                    .import_skill_package(
+                        NewSkill {
+                            id: SkillId::new(),
+                            name: parsed.name,
+                            // Real, already-written content from an existing
+                            // skill folder — not something the user is
+                            // actively drafting inside BW. Same call
+                            // `seed_stage_entities_if_missing` makes for the
+                            // app's own built-in skills: Mature, not
+                            // Polishing (which means "just made, unproven").
+                            maturity: Maturity::Mature,
+                            desc: parsed.desc,
+                            // T2 scope: no category assignment on import (no
+                            // predetermined classification per plan/12 §2);
+                            // stays empty, editable later via `UpdateSkill`.
+                            category: String::new(),
+                            source,
+                            content: parsed.content,
+                            project_id,
+                        },
+                        parsed
+                            .files
+                            .into_iter()
+                            .map(|(rel_path, content)| NewSkillFile { rel_path, content })
+                            .collect(),
                     )
                     .await?;
                 self.refresh_skills().await?;

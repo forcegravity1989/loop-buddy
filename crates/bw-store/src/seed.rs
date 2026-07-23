@@ -20,7 +20,7 @@
 //! on the fly.
 
 use crate::{NewAgent, NewSkill, NewWorkflowSpec, Result, Store};
-use bw_core::model::{stage_template_workflow, LibSource, Maturity, StageKind};
+use bw_core::model::{stage_template_workflow, HubSource, Maturity, StageKind};
 use bw_core::{AgentId, SkillId};
 
 /// Seed the hub library's own stage-template workflows if it's currently
@@ -87,11 +87,18 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
                 .create_skill(NewSkill {
                     id: SkillId::new(),
                     name: sk.name.to_string(),
-                    // The methodology the app itself ships — Mature, 官方.
+                    // The methodology the app itself ships — Mature, but
+                    // T2 (plan/12 §6): under the unified HubSource this is
+                    // `SelfBuilt`, not `Official` — `Official` now means "a
+                    // curated *external* library" (carries `official_library`);
+                    // this app's own built-in methodology isn't one. Same
+                    // precedent `stage_template_workflow` already set on the
+                    // Workflow side (`HubSource::SelfBuilt` for the identical
+                    // class of content, unchanged by T1).
                     maturity: Maturity::Mature,
                     desc: sk.def.to_string(),
                     category: kind.label().to_string(),
-                    source: LibSource::Official,
+                    source: HubSource::SelfBuilt,
                     content: sk.content.to_string(),
                     // 五阶段方法论技能是全局共享的(见本函数文档:「这个 app
                     // 自己的方法论」),不是某个项目专属——project_id 留空。
