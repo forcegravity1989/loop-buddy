@@ -43,6 +43,10 @@ thiserror = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 async-trait = "0.1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+# C6 (plan/13 D5): `.bw/metrics.toml` parser (bw-engine only — file IO stays
+# out of bw-core). Already present transitively (system-deps → dioxus
+# desktop's build chain) at 0.8.x; pinning the same major keeps one copy.
+toml = "0.8"
 
 # --- Internal crates (path deps) ---
 # bw-core defaults to NO id-generation (no RNG) so pure consumers (ui) stay
