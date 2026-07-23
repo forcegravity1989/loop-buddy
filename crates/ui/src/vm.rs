@@ -868,6 +868,10 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
 pub struct IssueVm {
     pub id: IssueId,
     pub number: u32,
+    /// C4 · issue 身份映射: the GitHub issue number, `0` = unmapped (no
+    /// GitHub repo, or the real `gh issue create` call failed) — the card
+    /// shows nothing extra in that case, zero noise.
+    pub github_number: u32,
     pub stage: StageKind,
     pub title: String,
     pub desc: String,
@@ -900,6 +904,7 @@ pub fn issue_card(i: &Issue, agents: &[AgentCard]) -> IssueVm {
     IssueVm {
         id: i.id,
         number: i.number,
+        github_number: i.github_number,
         stage: i.stage,
         title: i.title.clone(),
         desc: i.desc.clone(),

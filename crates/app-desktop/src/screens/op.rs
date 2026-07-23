@@ -723,6 +723,19 @@ fn IssuesPanel(op: OpVm) -> Element {
                                         key: "{i.number}",
                                         style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {i.status_color};",
                                         div { style: "font-size:11px;color:{ink3};font-family:{mono};", "#{i.number} · {i.stage.label()}" }
+                                        // C4 · issue 身份映射: 号非 0 才渲染,
+                                        // 展示最小化——链接形态用 github_remote
+                                        // 拼纯文本 URL,不做点击跳转,如实即可。
+                                        if i.github_number != 0 {
+                                            div {
+                                                style: "font-size:10.5px;color:{ink3};font-family:{mono};margin-top:1px;",
+                                                if op.github_remote.trim().is_empty() {
+                                                    "GitHub #{i.github_number}"
+                                                } else {
+                                                    "https://github.com/{op.github_remote}/issues/{i.github_number}"
+                                                }
+                                            }
+                                        }
                                         // P4: the title opens the evidence
                                         // overlay (runs / diffs / artifacts).
                                         div {
