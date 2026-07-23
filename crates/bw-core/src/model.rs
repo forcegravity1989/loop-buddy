@@ -709,6 +709,100 @@ impl<'de> Deserialize<'de> for PhaseMeta {
     }
 }
 
+/// T9 (plan/12 §4): the real runtime verdict an **Evaluator** phase renders on
+/// the work it just reviewed — parsed from the phase's actual output text, never
+/// machine-guessed. This is the runtime companion to the design-time
+/// [`PhaseMeta`]/[`PhaseRole`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// The reviewed work passes the gate — the workflow proceeds.
+    Pass,
+    /// The reviewed work is rejected; the `u8` is the evaluator's **proposed**
+    /// 0-based target phase to restart from. A **Dynamic** workflow honours this
+    /// proposal; a **Static** one ignores it and uses the phase's declared
+    /// [`PhaseMeta::reject_to_phase`] instead (plan/12 §4).
+    RejectToPhase(u8),
+}
+
+/// The structured decision block an Evaluator phase must emit (verdict + a
+/// human-readable reason). Produced by [`parse_phase_outcome`] from real output.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhaseOutcome {
+    pub verdict: Verdict,
+    pub reason: String,
+}
+
+/// The machine-parseable verdict contract appended to every Evaluator phase's
+/// prompt (by `bw_engine`). It tells a real executor exactly how to render its
+/// decision so [`parse_phase_outcome`] can read it back. Kept next to the parser
+/// so the emit-side format and the parse-side format can never drift apart.
+pub fn verdict_contract_suffix() -> &'static str {
+    "\n\n────────────\n【评审裁决 · 机器解析(必须严格执行)】\n\
+     完成本次评审后,在输出的最末尾单独成行给出结构化裁决,二选一:\n\
+     • 通过 —— 输出一行:\n\
+     VERDICT: PASS\n\
+     • 打回 —— 输出两行(REJECT_TO_PHASE 后接要打回到的阶段的 0 基索引):\n\
+     VERDICT: REJECT_TO_PHASE=<阶段索引>\n\
+     REASON: <一句话说明打回原因>\n\
+     解析只认最后一次出现的 VERDICT / REASON 行。缺少可解析的 VERDICT 行会被判为\
+     评审失败(绝不会被当作通过)。\n"
+}
+
+/// Parse an Evaluator phase's real output for its structured [`PhaseOutcome`].
+///
+/// Robust to LLM chatter: scans every line and keeps the **last** line whose
+/// trimmed, case-insensitive form starts with `VERDICT:` (and likewise the last
+/// `REASON:` line) — so an evaluator that quotes the contract mid-output, then
+/// renders its true verdict at the end, still reads correctly.
+///
+/// Accepted forms (case-insensitive on the marker and the `PASS`/`REJECT`
+/// token): `VERDICT: PASS`; `VERDICT: REJECT_TO_PHASE=2` (also `= 2`, `:2`, or a
+/// bare trailing number). Returns **`None`** when there is no well-formed
+/// `VERDICT:` line, or a reject verdict carries no parseable target — an honest
+/// parse failure the caller MUST treat as a failed review, never a default pass
+/// (plan/12 §4, T9).
+pub fn parse_phase_outcome(text: &str) -> Option<PhaseOutcome> {
+    let mut verdict_value: Option<String> = None;
+    let mut reason: Option<String> = None;
+    for raw in text.lines() {
+        let line = raw.trim();
+        let upper = line.to_ascii_uppercase();
+        if upper.starts_with("VERDICT:") {
+            // Slice the ORIGINAL line after its first ':' so casing/spacing of
+            // the value is preserved for reason/target extraction.
+            if let Some(colon) = line.find(':') {
+                verdict_value = Some(line[colon + 1..].trim().to_string());
+            }
+        } else if upper.starts_with("REASON:") {
+            if let Some(colon) = line.find(':') {
+                reason = Some(line[colon + 1..].trim().to_string());
+            }
+        }
+    }
+    let value = verdict_value?;
+    let value_upper = value.to_ascii_uppercase();
+    if value_upper == "PASS" {
+        return Some(PhaseOutcome {
+            verdict: Verdict::Pass,
+            reason: reason.unwrap_or_default(),
+        });
+    }
+    if value_upper.starts_with("REJECT") {
+        // Extract the target index: the first contiguous run of ASCII digits in
+        // the value (`REJECT_TO_PHASE=2` → `2`). No digits ⇒ un-actionable
+        // reject ⇒ honest parse failure (never guess a target).
+        let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
+        let target = digits.parse::<u8>().ok()?;
+        return Some(PhaseOutcome {
+            verdict: Verdict::RejectToPhase(target),
+            reason: reason.unwrap_or_default(),
+        });
+    }
+    // A VERDICT line with an unrecognised token is not a pass — fail honestly.
+    None
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowSpec {
     pub id: WorkflowId,
@@ -1021,11 +1115,16 @@ pub fn stage_workflow_with_playbook(
             from: "阶段剧本(bw-core::playbook)".into(),
         })
         .collect();
-    // A playbook phase is a full, self-contained work order — one honest
-    // attempt each, no blind re-run of an identical prompt (real spend).
+    // A playbook phase is a full, self-contained work order: the executor
+    // reports `done` on its first attempt, so the engine's *per-phase* inner
+    // loop always runs exactly once — no blind re-run of an identical prompt
+    // (real spend), regardless of `max_iter`. T9: `max_iter` now also caps the
+    // *adversarial* review loop (Evaluator打回 → 重跑 → 重审); 1 would disable it
+    // outright, so the playbook path allows up to 3 review rounds before the
+    // Issue honestly parks in Blocked (Done 仍永不自动).
     spec.loop_config = LoopConfig {
         retries: 1,
-        max_iter: 1,
+        max_iter: 3,
     };
     spec
 }

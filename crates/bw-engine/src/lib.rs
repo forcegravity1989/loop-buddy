@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bw_core::model::{AgentRef, SkillRef, WorkflowSpec};
+use bw_core::model::{verdict_contract_suffix, AgentRef, PhaseRole, SkillRef, WorkflowSpec};
 use bw_core::{ProjectId, WorkflowId};
 
 pub mod claude_cli;
@@ -32,6 +32,10 @@ pub use workspace::{provision_git_workspace, ProvisionError};
 #[derive(Clone, Debug)]
 pub struct PhaseNode {
     pub name: String,
+    /// This phase's real role (T8). An [`Executor`] uses it to shape its
+    /// behavior — e.g. the [`MockExecutor`] renders a default `PASS` verdict for
+    /// an `Evaluator` phase so a gated workflow still completes on the mock.
+    pub role: PhaseRole,
     pub prompt: String,
     pub agents: Vec<AgentRef>,
     pub skills: Vec<SkillRef>,
@@ -104,30 +108,80 @@ impl Engine {
         Self { executor }
     }
 
-    /// Run every phase in order. Each phase loops until the executor reports
-    /// `done` or `max_iter` is hit (so a stuck phase can't spin forever). Emits a
-    /// [`RunEvent`] at each boundary via `on_event`.
+    /// Run every phase in order, once, then signal `WorkflowDone`. The
+    /// straight-pipeline convenience wrapper over [`run_phase_range`] — used for
+    /// workflows with no review gate. Each phase loops until the executor
+    /// reports `done` or `max_iter` is hit (so a stuck phase can't spin forever).
+    ///
+    /// The **adversarial** review loop (an Evaluator phase打回 → 重跑 → 重审) is
+    /// NOT driven here — that policy (parse the verdict, decide the reject
+    /// target, cap the rounds, park the Issue in Blocked) lives in `bw-app`,
+    /// which composes [`run_phase_range`] one round at a time so each round
+    /// leaves its own settled `workflow_run` row (plan/12 §4, T9).
     pub async fn run_workflow(
         &self,
         spec: &WorkflowSpec,
         ctx: &RunCtx,
         mut on_event: impl FnMut(RunEvent),
     ) -> Result<RunSummary, ExecError> {
-        let mut summary = RunSummary::default();
-        let mut baton: Option<String> = None;
+        let n = spec.phases.len();
+        let outputs = self
+            .run_phase_range(spec, ctx, 0..n, None, &mut on_event)
+            .await?;
+        let summary = RunSummary {
+            phases_run: outputs.len(),
+            final_output: outputs.last().map(|o| o.text.clone()).unwrap_or_default(),
+        };
+        on_event(RunEvent::WorkflowDone {
+            summary: summary.clone(),
+        });
+        Ok(summary)
+    }
 
-        for (idx, phase_name) in spec.phases.iter().enumerate() {
+    /// Run the phases in `range` (absolute 0-based indices into `spec.phases`),
+    /// in order, returning each phase's final [`PhaseOutput`]. `baton_in` seeds
+    /// the relay for the first phase of the range (an adversarial re-run passes
+    /// the evaluator's reject feedback here so the regenerating phase sees *why*
+    /// it was sent back). Emits `PhaseStarted`/`PhaseCompleted` with **absolute**
+    /// indices; does NOT emit `WorkflowDone` (the caller decides when the
+    /// workflow is truly finished). On an executor error it emits
+    /// `WorkflowFailed` and returns `Err`, exactly as the old full-run loop did.
+    ///
+    /// An `Evaluator` phase gets the machine-parseable
+    /// [`verdict_contract_suffix`] appended to its prompt so a real executor
+    /// knows to end its output with a `VERDICT:` line the caller can parse back.
+    pub async fn run_phase_range(
+        &self,
+        spec: &WorkflowSpec,
+        ctx: &RunCtx,
+        range: std::ops::Range<usize>,
+        baton_in: Option<String>,
+        mut on_event: impl FnMut(RunEvent),
+    ) -> Result<Vec<PhaseOutput>, ExecError> {
+        let mut outputs = Vec::new();
+        let mut baton = baton_in;
+
+        for idx in range {
+            let Some(phase) = spec.phases.get(idx) else {
+                break;
+            };
             // A phase runs its own instruction when the spec carries one
             // (playbook path); a missing/blank entry falls back to the shared
             // `prompt` — byte-for-byte the pre-playbook behavior.
-            let phase_prompt = spec
+            let mut phase_prompt = spec
                 .phase_prompts
                 .get(idx)
                 .filter(|p| !p.trim().is_empty())
                 .cloned()
                 .unwrap_or_else(|| spec.prompt.clone());
+            // A review gate carries the verdict output-contract so a real
+            // executor emits a parseable decision.
+            if phase.role == PhaseRole::Evaluator {
+                phase_prompt.push_str(verdict_contract_suffix());
+            }
             let node = PhaseNode {
-                name: phase_name.name.clone(),
+                name: phase.name.clone(),
+                role: phase.role,
                 prompt: phase_prompt,
                 agents: spec.agents.clone(),
                 skills: spec.skills.clone(),
@@ -163,15 +217,14 @@ impl Engine {
             // `cap >= 1` guarantees at least one iteration ran.
             let output = output.expect("phase loop runs at least once");
             baton = Some(relay_tail(&output.text));
-            summary.phases_run += 1;
-            summary.final_output = output.text.clone();
-            on_event(RunEvent::PhaseCompleted { idx, output });
+            on_event(RunEvent::PhaseCompleted {
+                idx,
+                output: output.clone(),
+            });
+            outputs.push(output);
         }
 
-        on_event(RunEvent::WorkflowDone {
-            summary: summary.clone(),
-        });
-        Ok(summary)
+        Ok(outputs)
     }
 }
 

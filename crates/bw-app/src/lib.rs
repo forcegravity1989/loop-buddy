@@ -18,12 +18,12 @@ mod skill_import;
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    classify_artifact_path, cron_due, stage_workflow, stage_workflow_with_playbook, AgentCard,
-    AgentRef, Artifact, Cadence, Connector, ConnectorStatus, CronMode, CronStatus, CronTask,
-    HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LoopConfig, Maturity, PhaseMeta,
-    ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
-    SourceKind, StageKind, WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI,
-    CONNECTOR_KIND_GIT_REPO,
+    classify_artifact_path, cron_due, parse_phase_outcome, stage_workflow,
+    stage_workflow_with_playbook, AgentCard, AgentRef, Artifact, Cadence, Connector,
+    ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus,
+    KnowledgeSource, LoopConfig, Maturity, PhaseMeta, PhaseRole, ProjectCycle, ProjectPhase, Role,
+    RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, Verdict,
+    WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
@@ -599,6 +599,40 @@ pub enum AppError {
     Invalid(String),
 }
 
+/// How a `run_workflow_inner` call resolved once its adversarial review loop
+/// settled (T9, plan/12 §4). An honest *failure* (executor error, or a review
+/// output with no parseable verdict) is NOT an outcome here — it surfaces as
+/// `Err(AppError)`, leaving any associated Issue untouched (RunIssue keeps it
+/// `InProgress` for a retry).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunOutcome {
+    /// The workflow ran to completion — a straight pipeline with no gate, or a
+    /// gated one whose Evaluator finally rendered `PASS`. The caller advances a
+    /// bound Issue to `InReview` (never `Done` — that stays a human decision).
+    Completed,
+    /// The Evaluator kept rejecting up to `loop_config.max_iter` rounds. Not a
+    /// failure and never auto-`Failed`: the caller parks a bound Issue in
+    /// `Blocked` (with this reason) for a human to decide (retry / rework the
+    /// workflow / drop). A run with no bound Issue just leaves its honest
+    /// per-round rows — no fabricated Issue (plan/12 §4).
+    BlockedAtCap { reason: String },
+}
+
+/// How the adversarial review loop in `run_workflow_inner` terminated —
+/// internal to that function (the outward-facing shape is [`RunOutcome`] /
+/// `Err`). Carried out of the `loop` as its break value so the after-loop
+/// accounting runs exactly once for every terminal path.
+enum LoopEnd {
+    /// The workflow passed (a gate rendered `PASS`, or there was no gate).
+    Passed,
+    /// The gate kept rejecting up to `max_iter` rounds — a Blocked outcome
+    /// (never auto-`Failed`).
+    Blocked(String),
+    /// An honest failure: an executor error, or a review output with no
+    /// parseable verdict. Surfaces as `Err`.
+    Failed(AppError),
+}
+
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub view: View,
@@ -808,7 +842,7 @@ impl App {
         trigger: RunTrigger,
         cron_task_id: Option<CronTaskId>,
         issue_id: Option<IssueId>,
-    ) -> Result<(), AppError> {
+    ) -> Result<RunOutcome, AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
 
@@ -845,34 +879,34 @@ impl App {
             evidence::head_commit(&heads_workspace).await.ok().flatten()
         };
 
-        let started_at = OffsetDateTime::now_utc().unix_timestamp();
-        let t0 = Instant::now();
         let params_json = run_params_snapshot(&spec, trigger);
-        let run_log_id = self
-            .store
-            .record_workflow_run_start(bw_store::NewWorkflowRun {
-                workflow_id: spec.id,
-                workflow_name: &spec.name,
-                project_id: Some(p),
-                session_id: Some(session),
-                trigger,
-                started_at,
-                cron_task_id,
-                params_json: &params_json,
-            })
-            .await?;
-        // A3: bind this run to the Issue it executes (RunIssue passes Some;
-        // every other caller passes None). Kept as a separate UPDATE so the
-        // run-creation DTO stays stable — the issue link is a RunIssue concern.
-        if let Some(iid) = issue_id {
-            self.store.set_run_issue(run_log_id, iid).await?;
-        }
 
-        // `workspace_path` is per-project runtime data, not something
-        // baked into a long-lived Engine at App::new time: unconfigured
-        // projects keep running on the shared Mock engine (byte-for-
-        // byte today's behavior, zero regression); a configured one
-        // gets a fresh, one-shot real executor built just for this call.
+        // The review gate: the FIRST Evaluator phase (T8's real `role`, not a
+        // name guess). A workflow with none is a straight pipeline — one round,
+        // all phases, byte-for-byte the pre-T9 behavior. (A single review gate
+        // per workflow is all the built-in playbooks model today; a second
+        // Evaluator, if authored, runs as a plain tail phase.)
+        let eval_idx = spec
+            .phases
+            .iter()
+            .position(|ph| ph.role == PhaseRole::Evaluator);
+        let num_phases = spec.phases.len();
+        let max_iter = spec.loop_config.max_iter.max(1) as u32;
+
+        // Announce once, before the first round — real name/agents/skills off
+        // `spec`, so a live subscriber can render "this run uses X/Y".
+        self.emit(Event::RunStarted {
+            workflow_name: spec.name.clone(),
+            agents: spec.agents.clone(),
+            skills: spec.skills.clone(),
+        });
+
+        // `workspace_path` is per-project runtime data, not baked into a
+        // long-lived Engine: unconfigured projects run on the shared Mock engine
+        // (byte-for-byte today's behavior); a configured one gets a fresh
+        // one-shot real executor for THIS call (shared across the call's rounds).
+        // Held immutably across the loop — every in-loop `self` touch is a shared
+        // borrow (`self.store` / `self.emit`), never `&mut self`, so this holds.
         let fresh_engine;
         let engine: &Engine = if proj.workspace_path.trim().is_empty() {
             &self.mock_engine
@@ -886,66 +920,100 @@ impl App {
             &fresh_engine
         };
 
-        // Announce what's actually about to run — real name/agents/skills
-        // straight off `spec`, before the first phase event — so a live
-        // subscriber can render "this run uses X/Y" without guessing.
-        self.emit(Event::RunStarted {
-            workflow_name: spec.name.clone(),
-            agents: spec.agents.clone(),
-            skills: spec.skills.clone(),
-        });
-
-        // Progress events are emitted LIVE from inside the engine
-        // callback (broadcast::send is sync), so a subscriber watches
-        // phases advance while the run is still going. Only persistence
-        // (async) is deferred to after the run.
+        // Live progress streams out of the engine callback (broadcast::send is
+        // sync); only persistence (async) is deferred to after each round.
         let live = self.events.clone();
-        let mut completed: Vec<bw_engine::PhaseOutput> = Vec::new();
-        let run = engine
-            .run_workflow(&spec, &ctx, |e| match e {
-                RunEvent::PhaseStarted { idx, name } => {
-                    let _ = live.send(Event::WorkflowProgress {
-                        phase_idx: idx,
-                        status: format!("started:{name}"),
-                    });
-                }
-                RunEvent::PhaseCompleted { idx, output } => {
-                    let _ = live.send(Event::WorkflowProgress {
-                        phase_idx: idx,
-                        status: "completed".into(),
-                    });
-                    completed.push(output);
-                }
-                RunEvent::WorkflowDone { .. } => {
-                    let _ = live.send(Event::WorkflowDone);
-                }
-                RunEvent::WorkflowFailed { error } => {
-                    let _ = live.send(Event::WorkflowFailed(error));
-                }
-            })
-            .await;
 
-        // Persist whatever phases completed, even on failure — the run
-        // history must not silently vanish.
-        let phases_completed = completed.len() as u32;
-        for output in completed {
-            self.store
-                .append_message(session, Role::Agent, &output.text)
+        // ── Adversarial review loop (plan/12 §4, T9) ────────────────────────
+        // Each round is its OWN settled `workflow_run` row: "多轮 run 记录" reads
+        // back as multiple rows, and settle-once holds because each row is
+        // settled exactly once. Round 1 runs from phase 0; each Evaluator打回
+        // restarts from the reject target and increments the round.
+        let range_end = match eval_idx {
+            Some(e) => e + 1, // through the gate, inclusive
+            None => num_phases,
+        };
+        let mut start = 0usize;
+        let mut round: u32 = 1;
+        let mut baton: Option<String> = None;
+        // Set at the top of every round (before any `break`), so it is
+        // definitely-assigned for the after-loop accounting — the last round's
+        // row is the one that produced the final state.
+        let mut last_run_log: WorkflowRunId;
+        let mut final_run_ok = false;
+
+        let end: LoopEnd = loop {
+            // Record this round's row start *before* the engine runs — a crash
+            // mid-round leaves an honest "started, never settled" row, never a
+            // fabricated success.
+            let started_at = OffsetDateTime::now_utc().unix_timestamp();
+            let t0 = Instant::now();
+            let run_log_id = self
+                .store
+                .record_workflow_run_start(bw_store::NewWorkflowRun {
+                    workflow_id: spec.id,
+                    workflow_name: &spec.name,
+                    project_id: Some(p),
+                    session_id: Some(session),
+                    trigger,
+                    started_at,
+                    cron_task_id,
+                    params_json: &params_json,
+                })
                 .await?;
-            self.emit(Event::SessionMessageAdded {
-                session,
-                role: Role::Agent,
-                text: output.text,
-            });
-        }
+            // A3: bind this round's run to the Issue it executes (RunIssue passes
+            // Some; every other caller None). Every round of an issue-run is
+            // bound, so `list_runs_for_issue` reads the whole loop back.
+            if let Some(iid) = issue_id {
+                self.store.set_run_issue(run_log_id, iid).await?;
+            }
+            last_run_log = run_log_id;
 
-        // Settle the run record with the real outcome + real elapsed time.
-        // `phases_completed` is the honest count of phases that finished — a
-        // partial run that died at phase 2 of 5 records `2`, not silence.
-        let finished_at = OffsetDateTime::now_utc().unix_timestamp();
-        let duration_ms = t0.elapsed().as_millis() as i64;
-        match &run {
-            Ok(_) => {
+            // Execute this round's phase range: through the gate for a gated
+            // workflow, or all phases for an ungated one. Outputs come back on
+            // the return value; live events stream via the callback.
+            let range_res = engine
+                .run_phase_range(&spec, &ctx, start..range_end, baton.clone(), |e| {
+                    forward_progress(&live, e)
+                })
+                .await;
+
+            let finished_at = OffsetDateTime::now_utc().unix_timestamp();
+            let duration_ms = t0.elapsed().as_millis() as i64;
+
+            let outputs = match range_res {
+                Ok(o) => o,
+                Err(e) => {
+                    // Honest executor failure — settle Failed, stop the loop.
+                    self.store
+                        .settle_workflow_run(
+                            run_log_id,
+                            RunStatus::Failed,
+                            finished_at,
+                            duration_ms,
+                            0,
+                            &e.to_string(),
+                        )
+                        .await?;
+                    break LoopEnd::Failed(AppError::Engine(e.to_string()));
+                }
+            };
+
+            // Persist this round's phase outputs as session messages (每阶段留痕).
+            let phases_completed = outputs.len() as u32;
+            for output in &outputs {
+                self.store
+                    .append_message(session, Role::Agent, &output.text)
+                    .await?;
+                self.emit(Event::SessionMessageAdded {
+                    session,
+                    role: Role::Agent,
+                    text: output.text.clone(),
+                });
+            }
+
+            // Ungated pipeline: this single round is the whole run.
+            let Some(e_idx) = eval_idx else {
                 self.store
                     .settle_workflow_run(
                         run_log_id,
@@ -956,8 +1024,21 @@ impl App {
                         "",
                     )
                     .await?;
-            }
-            Err(e) => {
+                let _ = live.send(Event::WorkflowDone);
+                final_run_ok = true;
+                break LoopEnd::Passed;
+            };
+
+            // Parse the gate's real verdict from its output (the range's last
+            // phase). No parseable verdict = honest review failure, NEVER a
+            // default pass (plan/12 §4).
+            let eval_text = outputs.last().map(|o| o.text.clone()).unwrap_or_default();
+            let Some(outcome) = parse_phase_outcome(&eval_text) else {
+                let msg = format!(
+                    "评审输出缺结构化裁决(阶段「{}」· 轮次 {round}/{max_iter}):{}",
+                    spec.phases[e_idx].name,
+                    review_tail(&eval_text)
+                );
                 self.store
                     .settle_workflow_run(
                         run_log_id,
@@ -965,28 +1046,157 @@ impl App {
                         finished_at,
                         duration_ms,
                         phases_completed,
-                        &e.to_string(),
+                        &msg,
                     )
                     .await?;
-            }
-        }
+                break LoopEnd::Failed(AppError::Engine(msg));
+            };
 
-        // P4: the "after" half of the change window — recorded on success AND
-        // failure alike (a failed run that still committed something must not
-        // hide it). Diffing happens lazily at detail-open time, never here.
+            match outcome.verdict {
+                Verdict::Pass => {
+                    // Gate passed. Run any phases AFTER the gate (built-ins have
+                    // none) in order — a genuine pass proceeds — then settle Ok.
+                    let mut total = phases_completed;
+                    if e_idx + 1 < num_phases {
+                        let tail_res = engine
+                            .run_phase_range(
+                                &spec,
+                                &ctx,
+                                (e_idx + 1)..num_phases,
+                                Some(review_tail(&eval_text)),
+                                |e| forward_progress(&live, e),
+                            )
+                            .await;
+                        match tail_res {
+                            Ok(tail) => {
+                                for output in &tail {
+                                    self.store
+                                        .append_message(session, Role::Agent, &output.text)
+                                        .await?;
+                                    self.emit(Event::SessionMessageAdded {
+                                        session,
+                                        role: Role::Agent,
+                                        text: output.text.clone(),
+                                    });
+                                }
+                                total += tail.len() as u32;
+                            }
+                            Err(e) => {
+                                self.store
+                                    .settle_workflow_run(
+                                        run_log_id,
+                                        RunStatus::Failed,
+                                        OffsetDateTime::now_utc().unix_timestamp(),
+                                        t0.elapsed().as_millis() as i64,
+                                        phases_completed,
+                                        &e.to_string(),
+                                    )
+                                    .await?;
+                                break LoopEnd::Failed(AppError::Engine(e.to_string()));
+                            }
+                        }
+                    }
+                    self.store
+                        .settle_workflow_run(
+                            run_log_id,
+                            RunStatus::Ok,
+                            OffsetDateTime::now_utc().unix_timestamp(),
+                            t0.elapsed().as_millis() as i64,
+                            total,
+                            "",
+                        )
+                        .await?;
+                    let _ = live.send(Event::WorkflowDone);
+                    final_run_ok = true;
+                    break LoopEnd::Passed;
+                }
+                Verdict::RejectToPhase(proposed) => {
+                    // Effective reject target: a declared `reject_to_phase`
+                    // (Static track) wins and the agent's proposal is IGNORED; an
+                    // undeclared one (Dynamic track) honours the agent's proposal.
+                    let target = match spec.phases[e_idx].reject_to_phase {
+                        Some(t) => t as usize,
+                        None => proposed as usize,
+                    };
+                    let reason = if outcome.reason.trim().is_empty() {
+                        "评审未通过".to_string()
+                    } else {
+                        outcome.reason.clone()
+                    };
+                    // A reject target must be a real phase strictly before the
+                    // gate (loop BACK, not forward/self). Anything else is an
+                    // un-actionable verdict → honest failure (never guess).
+                    if target >= num_phases || target > e_idx {
+                        let msg = format!(
+                            "评审打回目标越界(阶段索引 {target} / 共 {num_phases} 阶段 · 轮次 {round}/{max_iter}):{reason}"
+                        );
+                        self.store
+                            .settle_workflow_run(
+                                run_log_id,
+                                RunStatus::Failed,
+                                finished_at,
+                                duration_ms,
+                                phases_completed,
+                                &msg,
+                            )
+                            .await?;
+                        break LoopEnd::Failed(AppError::Engine(msg));
+                    }
+                    if round >= max_iter {
+                        // Cap hit: never auto-Failed, never auto-Done. Settle this
+                        // round Failed with the cap reason; hand a Blocked outcome
+                        // up (a bound Issue is parked Blocked by the caller).
+                        let cap_reason = format!("对抗循环 {round}/{max_iter} 仍未通过:{reason}");
+                        self.store
+                            .settle_workflow_run(
+                                run_log_id,
+                                RunStatus::Failed,
+                                finished_at,
+                                duration_ms,
+                                phases_completed,
+                                &cap_reason,
+                            )
+                            .await?;
+                        break LoopEnd::Blocked(cap_reason);
+                    }
+                    // Loop back: settle this round Failed (deliverable rejected),
+                    // carry the reject feedback forward as the next round's baton
+                    // (the regenerating phase sees WHY), restart from the target.
+                    let row_msg = format!(
+                        "评审打回阶段「{}」(轮次 {round}/{max_iter}):{reason}",
+                        spec.phases[target].name
+                    );
+                    self.store
+                        .settle_workflow_run(
+                            run_log_id,
+                            RunStatus::Failed,
+                            finished_at,
+                            duration_ms,
+                            phases_completed,
+                            &row_msg,
+                        )
+                        .await?;
+                    baton = Some(review_tail(&eval_text));
+                    start = target;
+                    round += 1;
+                }
+            }
+        };
+
+        // ── After the loop: change window + usage accounting, ONCE ──────────
+        // Attributed to the LAST round's row (the one that produced the final
+        // state). Runs on every terminal outcome (pass / block / honest failure)
+        // — a failed run's partial real output is still real output. Doing this
+        // once per issue-run (not per round) keeps agent win_rate / skill `uses`
+        // honest: one real work item = one agent run, one skill use.
+        let run_ok = final_run_ok;
+        let run_log_id = last_run_log;
         if !heads_workspace.is_empty() {
             let head_after = evidence::head_commit(&heads_workspace).await.ok().flatten();
             self.store
                 .set_run_heads(run_log_id, head_before, head_after)
                 .await?;
         }
-
-        // Usage accounting: the run really happened, so the entities it rode
-        // on get their real counters bumped — the agent that hosted it (ok
-        // AND failed both count; win_rate needs the losses) and every skill
-        // whose content/name it carried. Refs that don't resolve to a hub
-        // row are an honest 0-row no-op.
-        let run_ok = run.is_ok();
         for a in &spec.agents {
             self.store.record_agent_run_by_name(&a.name, run_ok).await?;
         }
@@ -1001,13 +1211,9 @@ impl App {
             self.refresh_skills().await?;
             self.emit(Event::SkillsChanged);
         }
-
-        // Artifact reflux: scan the real workspace the run just worked in and
-        // register any new file versions against this run. A failed run's
-        // partial output is still real output — scan regardless of outcome.
-        // Scan errors (e.g. git missing) must not turn a settled run into an
-        // error; they surface as a 0-fresh no-op with the run's own outcome
-        // untouched.
+        // Artifact reflux: scan the real workspace and register new file
+        // versions against the final round's run. Scan errors are a 0-fresh
+        // no-op — they never turn a settled run into an error.
         if !proj.workspace_path.trim().is_empty() {
             let stage_kind = spec
                 .stage_ref
@@ -1018,10 +1224,8 @@ impl App {
                     &proj.workspace_path,
                     Some(run_log_id),
                     stage_kind,
-                    // A2 原设计:「RunIssue 落 run 时写入」issue 归属——此前
-                    // 误传 None,导致活的产物只绑 run 不绑 issue,Done 边沿
-                    // 的幂等重扫(同 commit)又补不回来。P4 证据面测试暴露
-                    // 了这个偏差,修复即对齐冻结设计。
+                    // A2: run-time issue归属 — the活's产物 bind to both run
+                    // and issue so the Done edge's idempotent re-scan matches.
                     issue_id,
                 )
                 .await
@@ -1032,8 +1236,11 @@ impl App {
             }
         }
 
-        run.map_err(|e| AppError::Engine(e.to_string()))?;
-        Ok(())
+        match end {
+            LoopEnd::Passed => Ok(RunOutcome::Completed),
+            LoopEnd::Blocked(reason) => Ok(RunOutcome::BlockedAtCap { reason }),
+            LoopEnd::Failed(err) => Err(err),
+        }
     }
 
     /// Resolve skill refs against the hub and render the non-empty bodies as
@@ -1434,7 +1641,12 @@ impl App {
             let result = self
                 .run_workflow_inner(pid, session, spec, RunTrigger::Scheduled, Some(c.id), None)
                 .await;
-            let ok = result.is_ok();
+            // A scheduled run "succeeds" only when the workflow actually passed.
+            // A hit review cap (`BlockedAtCap`) has no bound Issue to park here
+            // (cron RunWorkflow passes `issue_id = None`) — its honest per-round
+            // rows already record "上限未通过", so we surface it as Failed rather
+            // than a fake green (no fabricated Issue — plan/12 §4).
+            let ok = matches!(result, Ok(RunOutcome::Completed));
             let outcome = if ok {
                 CronStatus::Normal
             } else {
@@ -2355,16 +2567,37 @@ impl App {
                     .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id))
                     .await;
                 match run {
-                    Ok(()) => {
+                    Ok(RunOutcome::Completed) => {
+                        // A completed run only reaches 评审中 — never 完成. Done
+                        // stays an explicit human `TransitionIssue` (铁律).
                         self.store
                             .transition_issue(id, IssueStatus::InReview)
                             .await?;
                         self.refresh_issues().await?;
                         self.emit(Event::IssuesChanged);
                     }
+                    Ok(RunOutcome::BlockedAtCap { reason }) => {
+                        // The adversarial loop hit its cap without passing. Never
+                        // auto-Done, never auto-Failed: park the work in Blocked
+                        // via the SAME guarded path `BlockIssue` uses (Blocked's
+                        // only entry) — `can_transition_to` is the single source
+                        // of truth. Re-read the current status (the run left it
+                        // InProgress); InProgress→Blocked is a legal edge.
+                        let cur = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                        if cur.status.can_transition_to(IssueStatus::Blocked) {
+                            self.store.block_issue(id, &reason).await?;
+                        }
+                        self.emit(Event::WorkflowFailed(format!(
+                            "Issue #{} {}",
+                            issue.number, reason
+                        )));
+                        self.refresh_issues().await?;
+                        self.emit(Event::IssuesChanged);
+                    }
                     Err(e) => {
                         // Honest failure: the issue stays InProgress (not faked
-                        // to InReview/Done). Done remains a human TransitionIssue.
+                        // to InReview/Done/Blocked). Done remains a human
+                        // TransitionIssue; a retry re-runs from InProgress.
                         self.emit(Event::WorkflowFailed(format!(
                             "Issue #{} 运行失败:{}",
                             issue.number, e
@@ -3203,6 +3436,43 @@ async fn write_component_standards(app: &App, p: ProjectId) -> Result<(), AppErr
 /// a later `UpdateWorkflowSpec` rewrites the phases, a past run's history
 /// still truthfully shows the phases it ran. Pure function of the spec +
 /// trigger; no IO, no secrets.
+/// Forward one engine [`RunEvent`] to the live UI stream (T9 helper — shared by
+/// every `run_phase_range` call inside the adversarial loop so a subscriber sees
+/// phases advance and re-advance across rounds). `WorkflowDone` is emitted by
+/// the loop itself once the whole run truly finishes, so it's a no-op here.
+fn forward_progress(live: &broadcast::Sender<Event>, e: RunEvent) {
+    match e {
+        RunEvent::PhaseStarted { idx, name } => {
+            let _ = live.send(Event::WorkflowProgress {
+                phase_idx: idx,
+                status: format!("started:{name}"),
+            });
+        }
+        RunEvent::PhaseCompleted { idx, .. } => {
+            let _ = live.send(Event::WorkflowProgress {
+                phase_idx: idx,
+                status: "completed".into(),
+            });
+        }
+        RunEvent::WorkflowFailed { error } => {
+            let _ = live.send(Event::WorkflowFailed(error));
+        }
+        RunEvent::WorkflowDone { .. } => {}
+    }
+}
+
+/// The tail slice of a review output — enough context to seed the next round's
+/// reject baton or an honest error message, without dragging a whole transcript.
+fn review_tail(text: &str) -> String {
+    const MAX: usize = 400;
+    let t = text.trim();
+    let n = t.chars().count();
+    if n <= MAX {
+        return t.to_string();
+    }
+    t.chars().skip(n - MAX).collect()
+}
+
 fn run_params_snapshot(spec: &WorkflowSpec, trigger: RunTrigger) -> String {
     // serde_json::Value keeps this stable as the spec grows — adding a field
     // later is additive, not a schema break on historical run rows.
