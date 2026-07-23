@@ -13,7 +13,8 @@ use bw_app::Command;
 use bw_core::model::HubSource;
 use bw_core::SkillId;
 use dioxus::prelude::*;
-use ui::vm::{ProjectCardVm, SkillCardVm};
+use std::collections::HashSet;
+use ui::vm::{skill_file_tree, ProjectCardVm, SkillCardVm, SkillTreeNode};
 
 #[component]
 pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
@@ -118,6 +119,183 @@ fn content_preview(content: &str) -> String {
     }
 }
 
+/// T4(plan/12 §2): the skill detail's real body — double-column file browser
+/// when the skill folder actually has support files (`skill_file` rows, T2),
+/// a plain single-column body when it doesn't. `SKILL.md` (`s.content`) is
+/// always the fixed, default-selected root entry; the rest of the tree is
+/// built purely off real `rel_path`s (`ui::vm::skill_file_tree`) — never a
+/// guessed structure. `pub(crate)`: `component_detail.rs`'s project-rail
+/// skill detail reuses this, same one-copy convention `workflows_using_skill`
+/// already established for this screen.
+#[component]
+pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+
+    // 优雅退化:没有 skill_file 子文件(自建/蒸馏/五阶段内置)——单栏正文,
+    // 不放一棵只有一个节点的假树。
+    if s.files.is_empty() {
+        return rsx! {
+            if s.content.trim().is_empty() {
+                div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "目录引用 · 无正文(全文在来源仓库;可「编辑」补充本地正文)" }
+            } else {
+                div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "技能正文(运行时注入 prompt)" }
+                pre {
+                    style: "font-family:{theme::MONO};font-size:11.5px;line-height:1.6;color:{ink2};background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:10px 12px;white-space:pre-wrap;margin:0 0 10px;",
+                    "{s.content}"
+                }
+            }
+        };
+    }
+
+    let tree = skill_file_tree(&s.files);
+    // 纯前端状态:选中文件路径(`None` = 固定置顶默认选中的 SKILL.md)+ 折叠的
+    // 目录集合——都是显示态,不需要新命令。
+    let mut selected = use_signal(|| None::<String>);
+    let collapsed = use_signal(HashSet::<String>::new);
+
+    let selected_path = selected();
+    let (selected_label, selected_content) = match &selected_path {
+        None => ("SKILL.md".to_string(), s.content.clone()),
+        Some(path) => {
+            let content = s
+                .files
+                .iter()
+                .find(|f| &f.rel_path == path)
+                .map(|f| f.content.clone())
+                .unwrap_or_default();
+            (path.clone(), content)
+        }
+    };
+    let root_selected = selected_path.is_none();
+    let (root_bg, root_fg): (&str, &str) = if root_selected {
+        (theme::CARD, theme::CLAY)
+    } else {
+        ("transparent", ink2)
+    };
+
+    rsx! {
+        div {
+            style: "font-size:11px;color:{ink3};margin-bottom:6px;",
+            "技能文件(SKILL.md + {s.files.len()} 个支撑文件)"
+        }
+        div {
+            style: "display:flex;border:1px solid {theme::BORDER};border-radius:8px;overflow:hidden;margin-bottom:10px;",
+            div {
+                style: "width:200px;flex:none;background:{theme::CARD_ALT};border-right:1px solid {theme::BORDER};max-height:360px;overflow-y:auto;padding:6px 0;",
+                div {
+                    style: "display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer;font-family:{theme::MONO};font-size:12px;background:{root_bg};color:{root_fg};",
+                    onclick: move |_| selected.set(None),
+                    span { "▤" }
+                    span { "SKILL.md" }
+                }
+                for node in tree.iter() {
+                    SkillTreeItem { node: node.clone(), depth: 1, selected, collapsed }
+                }
+            }
+            div {
+                style: "flex:1;min-width:0;display:flex;flex-direction:column;background:{theme::CARD};",
+                div {
+                    style: "font-family:{theme::MONO};font-size:11px;color:{ink3};padding:7px 14px;border-bottom:1px dashed {theme::BORDER};flex:none;",
+                    "{selected_label}"
+                }
+                if selected_content.trim().is_empty() {
+                    div { style: "font-size:12px;color:{ink3};padding:14px;", "(空文件)" }
+                } else {
+                    pre {
+                        style: "font-family:{theme::MONO};font-size:11.5px;line-height:1.6;color:{ink2};margin:0;padding:12px 14px;white-space:pre-wrap;overflow-y:auto;max-height:360px;",
+                        "{selected_content}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One row of `SkillFileBrowser`'s left-hand tree, recursing into its own
+/// children — a directory toggles its own collapse state (keyed by its full
+/// path, so two same-named dirs at different nesting never collide); a file
+/// selects itself into the right-hand preview.
+#[component]
+fn SkillTreeItem(
+    node: SkillTreeNode,
+    depth: usize,
+    selected: Signal<Option<String>>,
+    collapsed: Signal<HashSet<String>>,
+) -> Element {
+    let mut selected = selected;
+    let mut collapsed = collapsed;
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let indent = 12 + depth * 14;
+
+    match node {
+        SkillTreeNode::Dir {
+            name,
+            path,
+            children,
+        } => {
+            let is_collapsed = collapsed().contains(&path);
+            let arrow = if is_collapsed { "▸" } else { "▾" };
+            let toggle_path = path.clone();
+            rsx! {
+                div {
+                    style: "display:flex;align-items:center;gap:6px;padding:5px 12px 5px {indent}px;cursor:pointer;font-family:{theme::MONO};font-size:12px;color:{ink3};",
+                    onclick: move |_| {
+                        collapsed.with_mut(|set| {
+                            if !set.remove(&toggle_path) {
+                                set.insert(toggle_path.clone());
+                            }
+                        });
+                    },
+                    span { "{arrow}" }
+                    span { "{name}" }
+                }
+                if !is_collapsed {
+                    for child in children {
+                        SkillTreeItem { node: child, depth: depth + 1, selected, collapsed }
+                    }
+                }
+            }
+        }
+        SkillTreeNode::File { name, rel_path } => {
+            let is_sel = selected().as_deref() == Some(rel_path.as_str());
+            let icon = file_icon(&rel_path);
+            let (bg, fg): (&str, &str) = if is_sel {
+                (theme::CARD, theme::CLAY)
+            } else {
+                ("transparent", ink2)
+            };
+            let click_path = rel_path.clone();
+            rsx! {
+                div {
+                    style: "display:flex;align-items:center;gap:6px;padding:5px 12px 5px {indent}px;cursor:pointer;font-family:{theme::MONO};font-size:12px;background:{bg};color:{fg};",
+                    onclick: move |_| selected.set(Some(click_path.clone())),
+                    span { "{icon}" }
+                    span { "{name}" }
+                }
+            }
+        }
+    }
+}
+
+/// Extension → generic icon glyph — a "simple mapping" (plan/12 §2's own
+/// wording), not a MIME registry: the extensions the two real imported
+/// libraries (mattpocock/superpowers) actually carry get a distinguishing
+/// glyph, anything else honestly falls back to a plain generic-file mark
+/// instead of a guessed one.
+fn file_icon(rel_path: &str) -> &'static str {
+    match rel_path.rsplit('.').next().unwrap_or("") {
+        "md" | "mdx" => "▤",
+        "yaml" | "yml" => "⚙",
+        "sh" | "bash" => "$",
+        "cjs" | "js" | "mjs" | "ts" => "{}",
+        "json" | "toml" => "≡",
+        "py" => "λ",
+        _ => "▫",
+    }
+}
+
 #[component]
 fn SkillCard(
     s: SkillCardVm,
@@ -195,15 +373,7 @@ fn SkillCard(
                     if is_editing {
                         EditSkillForm { s: s.clone(), on_done: move |_| on_done_edit.call(()) }
                     } else {
-                        if s.content.trim().is_empty() {
-                            div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "目录引用 · 无正文(全文在来源仓库;可「编辑」补充本地正文)" }
-                        } else {
-                            div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "技能正文(运行时注入 prompt)" }
-                            pre {
-                                style: "font-family:{theme::MONO};font-size:11.5px;line-height:1.6;color:{ink2};background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:10px 12px;white-space:pre-wrap;margin:0 0 10px;",
-                                "{s.content}"
-                            }
-                        }
+                        SkillFileBrowser { s: s.clone() }
                         div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "被这些工作流使用" }
                         if used_by.is_empty() {
                             div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "还没有工作流引用这个技能。" }

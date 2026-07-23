@@ -814,9 +814,23 @@ pub struct SkillCardVm {
     /// The agent teammate credited for the issue behind `distilled_from_issue`
     /// — `None` iff that field is `None` (same domain invariant).
     pub origin_agent: Option<AgentId>,
+    /// T4(plan/12 §2): the skill folder's real support files (`skill_file`
+    /// rows, T2), verbatim — everything except `SKILL.md` itself, which
+    /// stays `content` above. Empty = flat skill (self-built/distilled/the
+    /// five built-in stage-role skills), the honest signal the detail panel
+    /// uses to skip the file tree instead of showing an empty one.
+    pub files: Vec<SkillFileVm>,
 }
 
-pub fn skill_card(s: &SkillCard) -> SkillCardVm {
+/// One real support file alongside a skill's `SKILL.md` — T2's `skill_file`
+/// table read back verbatim, no re-interpretation.
+#[derive(Clone, PartialEq, Debug)]
+pub struct SkillFileVm {
+    pub rel_path: String,
+    pub content: String,
+}
+
+pub fn skill_card(s: &SkillCard, files: Vec<SkillFileVm>) -> SkillCardVm {
     SkillCardVm {
         id: s.id,
         name: s.name.clone(),
@@ -829,7 +843,85 @@ pub fn skill_card(s: &SkillCard) -> SkillCardVm {
         project_id: s.project_id,
         distilled_from_issue: s.distilled_from_issue,
         origin_agent: s.origin_agent,
+        files,
     }
+}
+
+/// A skill folder's real directory structure, built purely off `rel_path`
+/// strings (T4, plan/12 §2) — no IO, no invented structure: a file at
+/// `"references/mocking.md"` nests under a `references` dir node exactly
+/// because that's the literal path, nothing more.
+#[derive(Clone, PartialEq, Debug)]
+pub enum SkillTreeNode {
+    Dir {
+        name: String,
+        /// Full path from the skill root (e.g. `"references"`, or
+        /// `"a/b"` when nested) — doubles as the collapse-state key so a
+        /// UI's "which dirs are collapsed" set can be plain `HashSet<String>`.
+        path: String,
+        children: Vec<SkillTreeNode>,
+    },
+    File {
+        name: String,
+        /// The real `skill_file.rel_path` — the lookup key back into
+        /// `SkillCardVm.files` when a click needs the file's content.
+        rel_path: String,
+    },
+}
+
+/// Build the nested tree `SkillFileBrowser` renders — dirs before files at
+/// each level, both alphabetical, for a stable IDE-like listing. Pure and
+/// wasm32-clean like every other `ui` selector, so it's the one place this
+/// logic exists (E2E can exercise it indirectly through the rendered tree
+/// without a second copy of the split-on-`/` logic living in `app-desktop`).
+pub fn skill_file_tree(files: &[SkillFileVm]) -> Vec<SkillTreeNode> {
+    #[derive(Default)]
+    struct Builder {
+        files: Vec<(String, String)>,
+        dirs: std::collections::BTreeMap<String, Builder>,
+    }
+
+    fn into_nodes(prefix: &str, b: Builder) -> Vec<SkillTreeNode> {
+        let mut out: Vec<SkillTreeNode> = b
+            .dirs
+            .into_iter()
+            .map(|(name, sub)| {
+                let path = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}/{name}")
+                };
+                let children = into_nodes(&path, sub);
+                SkillTreeNode::Dir {
+                    name,
+                    path,
+                    children,
+                }
+            })
+            .collect();
+        let mut files = b.files;
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        out.extend(
+            files
+                .into_iter()
+                .map(|(name, rel_path)| SkillTreeNode::File { name, rel_path }),
+        );
+        out
+    }
+
+    let mut root = Builder::default();
+    for f in files {
+        let parts: Vec<&str> = f.rel_path.split('/').filter(|p| !p.is_empty()).collect();
+        let Some(file_name) = parts.last() else {
+            continue;
+        };
+        let mut node = &mut root;
+        for dir in &parts[..parts.len() - 1] {
+            node = node.dirs.entry((*dir).to_string()).or_default();
+        }
+        node.files.push((file_name.to_string(), f.rel_path.clone()));
+    }
+    into_nodes("", root)
 }
 
 #[derive(Clone, PartialEq, Debug)]

@@ -12,7 +12,7 @@
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::agent_hub::workflows_using_agent;
-use crate::screens::skill_hub::workflows_using_skill;
+use crate::screens::skill_hub::{workflows_using_skill, SkillFileBrowser};
 use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
 use bw_app::Command;
@@ -123,15 +123,7 @@ fn SkillDetailCard(id: SkillId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
                     }
                 }
             }
-            div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "技能正文(运行时注入 prompt)" }
-            if s.content.trim().is_empty() {
-                div { style: "font-size:12.5px;color:{ink3};margin-bottom:14px;", "目录引用 · 无正文(全文在来源仓库)" }
-            } else {
-                pre {
-                    style: "font-family:{theme::MONO};font-size:12px;line-height:1.7;color:{ink2};background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:14px 16px;white-space:pre-wrap;margin:0 0 14px;",
-                    "{s.content}"
-                }
-            }
+            SkillFileBrowser { s: s.clone() }
             div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "被这些工作流使用" }
             if used_by.is_empty() {
                 div { style: "font-size:12.5px;color:{ink3};", "还没有工作流引用这个技能。" }
