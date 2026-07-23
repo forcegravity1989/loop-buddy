@@ -766,6 +766,11 @@ pub trait Store: Send + Sync {
     /// success — a failed/skipped mapping simply never calls it, leaving the
     /// honest `0` default in place.
     async fn set_issue_github_number(&self, id: IssueId, github_number: u32) -> Result<()>;
+    /// C5 · PR 验收环: record the pull-request number a run's `open_pr` opened
+    /// for this Issue. The App layer calls this only after a real `gh pr
+    /// create` success — a failed/skipped PR simply never calls it, leaving
+    /// the honest `0` default (提 PR 失败不炸 run). Never a fabricated number.
+    async fn set_issue_pr_number(&self, id: IssueId, pr_number: u32) -> Result<()>;
     /// A5-F: the only way an issue reaches `Blocked` — sets status and reason
     /// together in one write. Legality (which source states may block) and
     /// the non-empty-reason rule are the App layer's job; the store just

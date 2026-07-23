@@ -170,6 +170,9 @@ impl SqliteStore {
             "INTEGER NOT NULL DEFAULT 0",
         )
         .await?;
+        // C5 · PR 验收环: 老库开出来 pr_number 是 0,和"还没有 PR"这个真实
+        // 状态一致(存量 Issue、无仓项目 Issue 从不映射 PR,如实留白)。
+        add_column_if_missing(&pool, "issue", "pr_number", "INTEGER NOT NULL DEFAULT 0").await?;
         // C6(plan/13 D5+D6):指标正本 `.bw/metrics.toml` 同步进来的采集方案 +
         // 来源标注。老库开出来全是空串/'manual' —— 和"从未同步过正本文件、
         // 这行是界面手建的"这个真实状态完全一致。
@@ -2087,9 +2090,9 @@ impl Store for SqliteStore {
         .get("next");
         sqlx::query(
             "INSERT INTO issue
-                (id, project_id, stage, number, github_number, title, descr, status, priority,
-                 assignee, created_at, updated_at)
-             VALUES (?, ?, ?, ?, 0, ?, ?, 'backlog', ?, NULL, ?, ?)",
+                (id, project_id, stage, number, github_number, pr_number, title, descr, status,
+                 priority, assignee, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 0, 0, ?, ?, 'backlog', ?, NULL, ?, ?)",
         )
         .bind(i.id.uuid().to_string())
         .bind(pid(i.project_id))
@@ -2115,8 +2118,8 @@ impl Store for SqliteStore {
         // optional filters × the base WHERE keeps this readable without an
         // query-builder dependency.
         let mut sql = String::from(
-            "SELECT id, project_id, stage, number, github_number, title, descr, status, priority,
-                    assignee, settled_at, blocked_reason, created_at, updated_at
+            "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
+                    priority, assignee, settled_at, blocked_reason, created_at, updated_at
              FROM issue WHERE project_id=?",
         );
         if stage.is_some() {
@@ -2139,8 +2142,8 @@ impl Store for SqliteStore {
 
     async fn get_issue(&self, id: IssueId) -> Result<Option<Issue>> {
         let row = sqlx::query(
-            "SELECT id, project_id, stage, number, github_number, title, descr, status, priority,
-                    assignee, settled_at, blocked_reason,
+            "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
+                    priority, assignee, settled_at, blocked_reason,
                     created_at, updated_at
              FROM issue WHERE id=?",
         )
@@ -2203,6 +2206,16 @@ impl Store for SqliteStore {
         // the settle-once invariant is enforced in the DB, not just the app.
         sqlx::query("UPDATE issue SET settled_at=COALESCE(settled_at, ?) WHERE id=?")
             .bind(at)
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_issue_pr_number(&self, id: IssueId, pr_number: u32) -> Result<()> {
+        sqlx::query("UPDATE issue SET pr_number=?, updated_at=? WHERE id=?")
+            .bind(pr_number as i64)
+            .bind(now_unix())
             .bind(id.uuid().to_string())
             .execute(&self.pool)
             .await?;
@@ -2486,6 +2499,7 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
         stage,
         number: r.get::<i64, _>("number") as u32,
         github_number: r.get::<i64, _>("github_number") as u32,
+        pr_number: r.get::<i64, _>("pr_number") as u32,
         title: r.get("title"),
         desc: r.get("descr"),
         status: parse_issue_status(&r.get::<String, _>("status")),

@@ -1524,6 +1524,17 @@ pub struct Issue {
     /// missing). Never a fabricated number.
     #[serde(default)]
     pub github_number: u32,
+    /// C5 · PR 验收环: the pull-request number an executor run opened for this
+    /// Issue (`open_pr` pushed `bw/issue-<github_number>` and ran
+    /// `gh pr create`). `0` = no PR — either the project isn't repo-attached
+    /// / the Issue is unmapped, the run hasn't happened, or the PR submission
+    /// failed (提 PR 失败不炸 run: the run's own accounting stands, the Issue
+    /// stays retryable, only the mapping is missing). Never a fabricated
+    /// number. When non-zero the Issue's `InReview` state is *derived from an
+    /// open PR* (plan/13 D3) and human验收 is a `MergeIssuePr`, not a bare
+    /// `TransitionIssue`.
+    #[serde(default)]
+    pub pr_number: u32,
     pub title: String,
     pub desc: String,
     pub status: IssueStatus,

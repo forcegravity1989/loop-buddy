@@ -380,6 +380,12 @@ CREATE TABLE IF NOT EXISTS issue (
     -- 0 = unmapped — no GitHub repo, or the real gh call failed (BW-side
     -- Issue still exists either way, 创建不破).
     github_number INTEGER NOT NULL DEFAULT 0,
+    -- C5 · PR 验收环: the pull-request number an executor run opened for this
+    -- Issue (open_pr pushed bw/issue-<github_number> + gh pr create). 0 = no
+    -- PR (not repo-attached / unmapped / not run yet / PR submission failed —
+    -- 提 PR 失败不炸 run). Never fabricated. When non-zero, InReview is derived
+    -- from an open PR and human验收 is a merge (plan/13 D3).
+    pr_number   INTEGER NOT NULL DEFAULT 0,
     title       TEXT NOT NULL,
     descr       TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'backlog', -- IssueStatus
