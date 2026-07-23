@@ -9,11 +9,11 @@ use crate::{
     parse_connector_status, parse_cron_mode, parse_cron_status, parse_cycle, parse_issue_priority,
     parse_issue_status, parse_lib_source, parse_maturity, parse_session_status, parse_sig,
     parse_stage_kind, session_status_text, sig_text, stage_kind_text, AgentEdit, GlobalHandoffRow,
-    HandoffRow, MessageRow, MetricRole, MetricSignal, NewAgent, NewArtifact, NewConnector,
-    NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
-    NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectRow,
-    Result, SessionKind, SessionRow, SkillEdit, StageRow, StageSignal, Store, StoreError,
-    WorkflowEdit,
+    HandoffRow, MessageRow, MetricDefSync, MetricOrigin, MetricRole, MetricSignal, MetricsFileSync,
+    MetricsFileSyncSummary, NewAgent, NewArtifact, NewConnector, NewCronTask, NewIssue,
+    NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewStage, NewWorkflowRun,
+    NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectRow, Result, SessionKind, SessionRow,
+    SkillEdit, StageRow, StageSignal, Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -170,6 +170,26 @@ impl SqliteStore {
             "INTEGER NOT NULL DEFAULT 0",
         )
         .await?;
+        // C6(plan/13 D5+D6):指标正本 `.bw/metrics.toml` 同步进来的采集方案 +
+        // 来源标注。老库开出来全是空串/'manual' —— 和"从未同步过正本文件、
+        // 这行是界面手建的"这个真实状态完全一致。
+        add_column_if_missing(
+            &pool,
+            "project",
+            "north_star_collect_kind",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
+        add_column_if_missing(
+            &pool,
+            "project",
+            "north_star_collect_query",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
+        add_column_if_missing(&pool, "metric", "collect_kind", "TEXT NOT NULL DEFAULT ''").await?;
+        add_column_if_missing(&pool, "metric", "collect_query", "TEXT NOT NULL DEFAULT ''").await?;
+        add_column_if_missing(&pool, "metric", "origin", "TEXT NOT NULL DEFAULT 'manual'").await?;
 
         Ok(Self { pool })
     }
@@ -266,6 +286,18 @@ fn parse_metric_role(s: &str) -> MetricRole {
         _ => MetricRole::Leading,
     }
 }
+fn metric_origin_text(o: MetricOrigin) -> &'static str {
+    match o {
+        MetricOrigin::Manual => "manual",
+        MetricOrigin::File => "file",
+    }
+}
+fn parse_metric_origin(s: &str) -> MetricOrigin {
+    match s {
+        "file" => MetricOrigin::File,
+        _ => MetricOrigin::Manual,
+    }
+}
 fn session_kind_text(k: SessionKind) -> &'static str {
     match k {
         SessionKind::Create => "create",
@@ -289,6 +321,71 @@ fn amber_from(kind: &str, value: f64) -> AmberBand {
         "abs" => AmberBand::AbsPoints(value),
         _ => AmberBand::RelPct(value),
     }
+}
+
+/// C6: upsert-by-name for one `.bw/metrics.toml` metric. Looks the row up by
+/// `(project, role, name)` — the file's own identity, not a caller-minted
+/// id — and either UPDATEs its definition fields in place (keeping the
+/// existing row's id, so observation history stays attached) or INSERTs a
+/// fresh row with default operational fields (empty target-week plan, rel
+/// 10% amber — the same defaults a brand-new `UpsertManualMetric` row gets).
+/// Either way `origin` is stamped `File`.
+async fn sync_one_metric_definition(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    project_id: &str,
+    role: MetricRole,
+    m: &MetricDefSync,
+    t: i64,
+) -> Result<()> {
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT id FROM metric WHERE project_id=? AND role=? AND name=?")
+            .bind(project_id)
+            .bind(role_metric_text(role))
+            .bind(&m.name)
+            .fetch_optional(&mut **tx)
+            .await?;
+
+    match existing {
+        Some(id) => {
+            sqlx::query(
+                "UPDATE metric SET def=?, target_raw=?, collect_kind=?, collect_query=?,
+                    origin=?, updated_at=?, rev=rev+1 WHERE id=?",
+            )
+            .bind(&m.def)
+            .bind(&m.target_raw)
+            .bind(&m.collect_kind)
+            .bind(&m.collect_query)
+            .bind(metric_origin_text(MetricOrigin::File))
+            .bind(t)
+            .bind(&id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        None => {
+            let id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO metric
+                    (id, project_id, role, stage_kind, name, def, target_raw, amber_kind,
+                     amber_value, last_target, driver, pos, collect_kind, collect_query,
+                     origin, created_at, updated_at, rev)
+                 VALUES (?, ?, ?, NULL, ?, ?, ?, 'rel', 0.10, '', '', 0, ?, ?, ?, ?, ?, 0)",
+            )
+            .bind(&id)
+            .bind(project_id)
+            .bind(role_metric_text(role))
+            .bind(&m.name)
+            .bind(&m.def)
+            .bind(&m.target_raw)
+            .bind(&m.collect_kind)
+            .bind(&m.collect_query)
+            .bind(metric_origin_text(MetricOrigin::File))
+            .bind(t)
+            .bind(t)
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -458,6 +555,40 @@ impl Store for SqliteStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn sync_metrics_file(&self, sync: MetricsFileSync) -> Result<MetricsFileSyncSummary> {
+        let p = pid(sync.project_id);
+        let t = now_unix();
+        let mut tx = self.pool.begin().await?;
+
+        // North star: the exact same UPDATE `set_north_star` performs, plus
+        // its collect plan (the two columns that method doesn't touch).
+        sqlx::query(
+            "UPDATE project SET north_star=?, ns_def=?, north_star_collect_kind=?,
+                north_star_collect_query=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(&sync.north_star_name)
+        .bind(&sync.north_star_def)
+        .bind(&sync.north_star_collect_kind)
+        .bind(&sync.north_star_collect_query)
+        .bind(t)
+        .bind(&p)
+        .execute(&mut *tx)
+        .await?;
+
+        for m in &sync.lagging {
+            sync_one_metric_definition(&mut tx, &p, MetricRole::Lagging, m, t).await?;
+        }
+        for m in &sync.leading {
+            sync_one_metric_definition(&mut tx, &p, MetricRole::Leading, m, t).await?;
+        }
+
+        tx.commit().await?;
+        Ok(MetricsFileSyncSummary {
+            lagging_synced: sync.lagging.len() as u32,
+            leading_synced: sync.leading.len() as u32,
+        })
     }
 
     async fn update_week_plan(
@@ -798,7 +929,7 @@ impl Store for SqliteStore {
 
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>> {
         let row = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, signal, weekly_signal, created_at
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, north_star_collect_kind, north_star_collect_query, signal, weekly_signal, created_at
              FROM project WHERE id=?",
         )
         .bind(pid(id))
@@ -809,7 +940,7 @@ impl Store for SqliteStore {
 
     async fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, signal, weekly_signal, created_at
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, north_star_collect_kind, north_star_collect_query, signal, weekly_signal, created_at
              FROM project ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -843,6 +974,7 @@ impl Store for SqliteStore {
 
         let metric_rows = sqlx::query(
             "SELECT m.id, m.name, m.role, m.def, m.target_raw, m.last_target, m.driver, m.stage_kind, m.signal, m.hit,
+                    m.collect_kind, m.collect_query, m.origin,
                     (SELECT raw FROM observation o WHERE o.metric_id = m.id ORDER BY ts DESC, rowid DESC LIMIT 1) AS value_raw,
                     (SELECT source_kind FROM observation o WHERE o.metric_id = m.id ORDER BY ts DESC, rowid DESC LIMIT 1) AS src
              FROM metric m WHERE m.project_id=? ORDER BY m.pos",
@@ -871,6 +1003,9 @@ impl Store for SqliteStore {
                         .get::<Option<String>, _>("signal")
                         .and_then(|s| parse_sig(&s)),
                     hit: r.get::<Option<i64>, _>("hit").map(|v| v != 0),
+                    collect_kind: r.get("collect_kind"),
+                    collect_query: r.get("collect_query"),
+                    origin: parse_metric_origin(&r.get::<String, _>("origin")),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2150,6 +2285,8 @@ fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
         workspace_path: r.get("workspace_path"),
         allow_commands: r.get::<i64, _>("allow_commands") != 0,
         github_remote: r.get("github_remote"),
+        north_star_collect_kind: r.get("north_star_collect_kind"),
+        north_star_collect_query: r.get("north_star_collect_query"),
         signal: r
             .get::<Option<String>, _>("signal")
             .and_then(|s| parse_sig(&s)),

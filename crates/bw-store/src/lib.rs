@@ -56,6 +56,18 @@ pub enum MetricRole {
     Lagging,
 }
 
+/// Where a metric *definition* (not its value — that's [`bw_core::model::SourceKind`])
+/// came from. `Manual` is the byte-for-byte pre-C6 default: a row created by
+/// the UI's `UpsertManualMetric`. `File` marks a row whose definition (name/
+/// def/target/collect plan) was synced from the project's `.bw/metrics.toml`
+/// source of truth (plan/13 D5) — purely a provenance label, never read by
+/// the derive chain.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MetricOrigin {
+    Manual,
+    File,
+}
+
 /// Create (build) vs optimize (iterate) task session.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SessionKind {
@@ -84,6 +96,42 @@ pub struct NewMetric {
     pub last_target: String,
     pub driver: String,
     pub pos: i64,
+}
+
+/// C6 (plan/13 D5+D6): one metric's definition as read from
+/// `.bw/metrics.toml` — no id (the file has no id concept; identity for the
+/// upsert is `(project, role, name)`), no operational week-plan fields
+/// (`last_target`/`driver`/`pos`/`amber` aren't in the file's vocabulary and
+/// are left alone on an existing row, defaulted on a freshly inserted one).
+pub struct MetricDefSync {
+    pub name: String,
+    pub def: String,
+    pub target_raw: String,
+    /// `CollectKind::as_str()` text — `bw-store` doesn't depend on
+    /// `bw-engine`, so this arrives pre-stringified (already validated
+    /// against the fixed vocabulary at parse time).
+    pub collect_kind: String,
+    pub collect_query: String,
+}
+
+/// C6: the whole `.bw/metrics.toml` file, shaped for one atomic sync call.
+pub struct MetricsFileSync {
+    pub project_id: ProjectId,
+    pub north_star_name: String,
+    pub north_star_def: String,
+    pub north_star_collect_kind: String,
+    pub north_star_collect_query: String,
+    pub lagging: Vec<MetricDefSync>,
+    pub leading: Vec<MetricDefSync>,
+}
+
+/// C6: the honest receipt of one sync — real counts, not "however many were
+/// in the file" (a metric skipped for some future validation reason would
+/// make those differ).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MetricsFileSyncSummary {
+    pub lagging_synced: u32,
+    pub leading_synced: u32,
 }
 
 pub struct NewStage {
@@ -301,6 +349,11 @@ pub struct ProjectRow {
     /// "owner/repo" — empty = not attached to GitHub (local-only workspace,
     /// or GitHub attach failed and soft-degraded). Set once, at creation.
     pub github_remote: String,
+    /// C6: the north star's collection plan, synced from `.bw/metrics.toml`'s
+    /// `north_star.collect` (empty = never synced from a source-of-truth
+    /// file yet — the creation-flow-typed name/def has no collect plan).
+    pub north_star_collect_kind: String,
+    pub north_star_collect_query: String,
     /// Cached derived signal (read-only; recompute is authoritative).
     pub signal: Option<Signal>,
     pub weekly_signal: Option<Signal>,
@@ -323,6 +376,13 @@ pub struct MetricSignal {
     pub source: Option<SourceKind>,
     pub signal: Option<Signal>,
     pub hit: Option<bool>,
+    /// C6: this definition's collection plan (empty = never synced from
+    /// `.bw/metrics.toml`).
+    pub collect_kind: String,
+    pub collect_query: String,
+    /// C6: `Manual` (界面手建, the byte-for-byte pre-C6 default) or `File`
+    /// (synced from the project's metrics source-of-truth file).
+    pub origin: MetricOrigin,
 }
 
 /// One materialized stage, as the operating view reads it.
@@ -431,6 +491,23 @@ pub trait Store: Send + Sync {
     async fn set_github_remote(&self, id: ProjectId, github_remote: &str) -> Result<()>;
 
     async fn upsert_metric(&self, m: NewMetric) -> Result<()>;
+    /// C6 (plan/13 D5+D6): atomically sync `.bw/metrics.toml`'s definitions
+    /// into the cache. North star name/def go through the exact same UPDATE
+    /// `set_north_star` performs; its collect plan lands in the two
+    /// dedicated `project` columns. Each lagging/leading metric is upserted
+    /// by **(project, role, name)** — the file has no id concept, so name is
+    /// the join key; re-syncing an unchanged file inserts zero new rows. A
+    /// synced row (new or pre-existing) is stamped `origin = File`; if it
+    /// collides with a UI-typed row (same project/role/name), the file wins
+    /// the definition (def/target/collect) but keeps that row's identity, so
+    /// its observation history under `metric_id` is untouched. Never touches
+    /// `observation` and never calls `recompute_signals` — this is
+    /// definitions-only (collection execution is a later ticket, C7). All
+    /// writes run in one transaction: the caller is expected to have already
+    /// parsed the whole file successfully (parse-all-or-write-nothing lives
+    /// one layer up, in `bw-engine::metrics_file::read`), and this method
+    /// keeps its own partial-failure window closed too.
+    async fn sync_metrics_file(&self, sync: MetricsFileSync) -> Result<MetricsFileSyncSummary>;
     /// Week-plan edit: update a metric's target + this week's driver, keeping
     /// the previous target as `last_target`. Touches no value and no signal —
     /// recompute re-derives against the new target.
