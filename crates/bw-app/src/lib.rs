@@ -444,6 +444,18 @@ pub enum Command {
         id: IssueId,
         status: IssueStatus,
     },
+    /// C5 · PR 验收环 (plan/13 D3): the **human验收** entry point for an Issue
+    /// whose run opened a PR — merge the PR, which (via `Closes #<n>`) closes
+    /// the GitHub issue, then settle the Issue Done through the *existing*
+    /// `TransitionIssue` InReview→Done accounting path (settle-once reused, no
+    /// second accounting path). The executor never merges — this command is the
+    /// only place `gh pr merge` is ever called. Idempotent: a re-dispatch after
+    /// the Issue is already Done is a no-op that never re-merges or re-accounts.
+    /// Issues with no PR (no-repo/存量) keep using bare `TransitionIssue` to
+    /// Done — 全活 PR 化是纪律不是硬闸 (只留痕不拦人).
+    MergeIssuePr {
+        id: IssueId,
+    },
     /// Assign (or, with `None`, unassign) an issue to an agent teammate.
     AssignIssue {
         id: IssueId,
@@ -2584,15 +2596,91 @@ impl App {
                     self.emit(Event::IssuesChanged);
                 }
 
+                // C5 · PR 验收环 (plan/13 D3): a repo-attached, GitHub-mapped
+                // Issue quarantines the run onto `bw/issue-<n>` BEFORE the
+                // executor touches anything, so the executor never advances the
+                // base branch — only a human merge does. No-repo / unmapped
+                // projects (`pr_eligible` false) never touch git here → today's
+                // behavior byte-for-byte. A branch-checkout failure degrades
+                // honestly: the run proceeds on the current branch, no PR is
+                // opened (提 PR 失败不炸 run).
+                let pr_eligible = !proj.github_remote.trim().is_empty()
+                    && issue.github_number != 0
+                    && !proj.workspace_path.trim().is_empty();
+                let on_issue_branch = if pr_eligible {
+                    match bw_engine::github::checkout_issue_branch(
+                        std::path::Path::new(proj.workspace_path.trim()),
+                        issue.github_number,
+                    )
+                    .await
+                    {
+                        Ok(_) => true,
+                        Err(e) => {
+                            self.emit(Event::ConnectorSynced {
+                                name: format!("#{} · 活分支", issue.number),
+                                ok: false,
+                                detail: format!("开活分支失败,本次运行在当前分支、不提 PR:{e}"),
+                            });
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+
                 // Run through the same path as any run, bound to this issue.
                 let run = self
                     .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id))
                     .await;
                 match run {
                     Ok(()) => {
-                        self.store
-                            .transition_issue(id, IssueStatus::InReview)
-                            .await?;
+                        // C5: on the issue branch → try to open the PR (提 PR).
+                        // Success stores the PR number and lets the Issue reach
+                        // InReview (which now *derives from an open PR*, D3).
+                        // Failure fires an honest toast and leaves the Issue at
+                        // InProgress — retryable via RunIssue, never faked into
+                        // review with no PR behind it.
+                        let opened_pr = if on_issue_branch {
+                            match bw_engine::github::open_pr(
+                                std::path::Path::new(proj.workspace_path.trim()),
+                                issue.github_number,
+                                &issue.title,
+                            )
+                            .await
+                            {
+                                Ok(pr) => {
+                                    self.store.set_issue_pr_number(id, pr).await?;
+                                    self.emit(Event::ConnectorSynced {
+                                        name: format!("#{} · PR", issue.number),
+                                        ok: true,
+                                        detail: format!(
+                                            "已提 PR #{pr}(Closes #{}),等待人工 merge 验收",
+                                            issue.github_number
+                                        ),
+                                    });
+                                    true
+                                }
+                                Err(e) => {
+                                    self.emit(Event::ConnectorSynced {
+                                        name: format!("#{} · PR", issue.number),
+                                        ok: false,
+                                        detail: format!("提 PR 失败,活留在进行中可重试:{e}"),
+                                    });
+                                    false
+                                }
+                            }
+                        } else {
+                            false
+                        };
+                        // InReview iff there's really something to review: an
+                        // open PR (pr issues), or — for no-repo/unmapped issues
+                        // — the run succeeding (today's meaning, unchanged). A
+                        // pr_eligible issue whose PR failed stays InProgress.
+                        if !pr_eligible || opened_pr {
+                            self.store
+                                .transition_issue(id, IssueStatus::InReview)
+                                .await?;
+                        }
                         self.refresh_issues().await?;
                         self.emit(Event::IssuesChanged);
                     }
@@ -3016,6 +3104,92 @@ impl App {
                 }
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
+            }
+
+            Command::MergeIssuePr { id } => {
+                let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                // Idempotent short-circuit BEFORE any gh call: an already-Done
+                // / already-settled Issue is a no-op — a re-dispatch never
+                // re-merges (so `gh pr merge` stays called exactly once) and
+                // never re-accounts (settle-once already stands).
+                if issue.status == IssueStatus::Done || issue.settled_at.is_some() {
+                    return Ok(());
+                }
+                if issue.pr_number == 0 {
+                    return Err(AppError::Invalid(format!(
+                        "#{} 没有 PR,无法 merge;无 PR 的活用 TransitionIssue 显式完成",
+                        issue.number
+                    )));
+                }
+                // 评审中由开放 PR 派生 (D3): only an InReview PR issue is
+                // merge-acceptable.
+                if issue.status != IssueStatus::InReview {
+                    return Err(AppError::Invalid(format!(
+                        "#{} 处于{},不在评审中,不能 merge",
+                        issue.number,
+                        issue.status.label()
+                    )));
+                }
+                let proj = self
+                    .store
+                    .get_project(issue.project_id)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                let remote = proj.github_remote.trim().to_string();
+                if remote.is_empty() {
+                    return Err(AppError::Invalid(format!(
+                        "#{} 的项目未挂 GitHub 仓,无法 merge PR",
+                        issue.number
+                    )));
+                }
+                // merge PR — the human验收 action, the ONLY place `gh pr merge`
+                // is ever called (never from any executor/run path; plan/13
+                // D3+D11).
+                if let Err(e) = bw_engine::github::merge_pr(&remote, issue.pr_number).await {
+                    // 绝不反向改写:a merge failure (including the drift case of
+                    // a PR already merged on the web) is only reflected — the
+                    // Issue stays InReview and retryable, nothing is settled.
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("#{} · merge", issue.number),
+                        ok: false,
+                        detail: format!("merge PR #{} 失败,活留在评审中:{e}", issue.pr_number),
+                    });
+                    return Ok(());
+                }
+                // Settle Done through the EXISTING TransitionIssue InReview→Done
+                // path — settle-once accounting reused verbatim, no second
+                // accounting path. (Box::pin: `dispatch` recurses into itself;
+                // TransitionIssue never re-enters MergeIssuePr, so it's bounded.)
+                Box::pin(self.dispatch(Command::TransitionIssue {
+                    id,
+                    status: IssueStatus::Done,
+                }))
+                .await?;
+                // issue 关闭是 merge 的后果: `Closes #<n>` should have closed it;
+                // verify and补关 idempotently if GitHub didn't. Never reopen,
+                // never fight drift.
+                match bw_engine::github::issue_state(&remote, issue.github_number).await {
+                    Ok(state) if state.eq_ignore_ascii_case("OPEN") => {
+                        if let Err(e) =
+                            bw_engine::github::close_issue(&remote, issue.github_number).await
+                        {
+                            self.emit(Event::ConnectorSynced {
+                                name: format!("#{} · 关单", issue.number),
+                                ok: false,
+                                detail: format!("PR 已 merge,但补关 GitHub issue 失败:{e}"),
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+                self.emit(Event::ConnectorSynced {
+                    name: format!("#{} · 验收", issue.number),
+                    ok: true,
+                    detail: format!(
+                        "已 merge PR #{},#{} 验收完成",
+                        issue.pr_number, issue.number
+                    ),
+                });
             }
 
             Command::AssignIssue { id, assignee } => {
