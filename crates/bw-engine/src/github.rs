@@ -139,6 +139,32 @@ pub async fn clone_repo(
     })
 }
 
+/// C4 · issue 身份映射: 经 `gh issue create` 真开一个 GitHub issue,返回
+/// `gh` 铸造的 issue 号(这就是这张 Issue 的跨系统身份)。`gh issue create`
+/// 成功时把新 issue 的 URL 打到 stdout(如
+/// `https://github.com/owner/repo/issues/42`),号即 URL 末段。只做 create
+/// ——close/PR 是另一票的事。
+pub async fn create_issue(owner_repo: &str, title: &str, body: &str) -> Result<u32, GithubError> {
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "issue", "create", "--repo", owner_repo, "--title", title, "--body", body,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    url.rsplit('/')
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .ok_or_else(|| GithubError::Command(format!("无法从 gh 输出解析 issue 号:{url:?}")))
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RepoJson {
