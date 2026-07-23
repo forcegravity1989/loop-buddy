@@ -51,6 +51,11 @@ pub enum SourceKind {
     GitPr,
     Telemetry,
     Connector,
+    /// C7 · 采集器: a value the standard GitHub collector pulled by running a
+    /// real `gh` count query (issues/PRs) against the project's remote. A
+    /// non-manual source, so it never wears the 手填 badge — the number is
+    /// machine-collected and independently re-derivable from `gh`.
+    Github,
     /// Hand-entered. Carries a `手填 · 未接入度量源` badge in the UI until a real
     /// connector is bound (Tier D), at which point the badge auto-drops.
     Manual,
@@ -1058,15 +1063,22 @@ pub enum CronMode {
     #[default]
     RunWorkflow,
     CreateIssue,
+    /// C7 · 采集器 (plan/13 D7): pull real data (GitHub queries) into the
+    /// project's metrics as append-only observations. No-hijack like
+    /// `CreateIssue`: collecting is *observation*, never *work* — it never
+    /// runs a workflow and never settles anything, so it can auto-fire
+    /// without breaching 「Done 永不自动」.
+    CollectMetrics,
 }
 
 impl CronMode {
-    /// L1(plan/11): cron 详情卡要如实标出「到点做什么」——运行一个 workflow
-    /// 还是只建一件活(autopilot,no-hijack)。
+    /// L1(plan/11): cron 详情卡要如实标出「到点做什么」——运行一个 workflow、
+    /// 只建一件活(autopilot,no-hijack)、还是采集指标(pull → 观测)。
     pub fn label(self) -> &'static str {
         match self {
             CronMode::RunWorkflow => "运行工作流",
             CronMode::CreateIssue => "建活(autopilot · 不自动跑)",
+            CronMode::CollectMetrics => "采集指标(pull GitHub → 观测)",
         }
     }
 }

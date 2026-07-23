@@ -855,12 +855,14 @@ pub(crate) fn cron_mode_text(m: CronMode) -> &'static str {
     match m {
         CronMode::RunWorkflow => "run_workflow",
         CronMode::CreateIssue => "create_issue",
+        CronMode::CollectMetrics => "collect_metrics",
     }
 }
 
 pub(crate) fn parse_cron_mode(s: &str) -> CronMode {
     match s {
         "create_issue" => CronMode::CreateIssue,
+        "collect_metrics" => CronMode::CollectMetrics,
         _ => CronMode::RunWorkflow,
     }
 }

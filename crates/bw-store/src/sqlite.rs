@@ -264,6 +264,7 @@ fn source_text(s: SourceKind) -> &'static str {
         SourceKind::GitPr => "git_pr",
         SourceKind::Telemetry => "telemetry",
         SourceKind::Connector => "connector",
+        SourceKind::Github => "github",
         SourceKind::Manual => "manual",
     }
 }
@@ -274,6 +275,7 @@ fn parse_source(s: &str) -> SourceKind {
         "git_pr" => SourceKind::GitPr,
         "telemetry" => SourceKind::Telemetry,
         "connector" => SourceKind::Connector,
+        "github" => SourceKind::Github,
         _ => SourceKind::Manual,
     }
 }

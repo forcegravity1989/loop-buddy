@@ -5,6 +5,7 @@
 use crate::workspace::{commit_initial, git_in};
 use std::path::Path;
 use std::process::Stdio;
+use time::Date;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GithubError {
@@ -430,4 +431,99 @@ pub async fn list_repos(limit: u32) -> Result<Vec<GithubRepoSummary>, GithubErro
             })
         })
         .collect())
+}
+
+// ─────────────────────── C7 · 采集器 (plan/13 D7) ───────────────────────
+//
+// One `.bw/metrics.toml` `kind = "github"` query → a real count, pulled from
+// GitHub's search API via `gh`. Read-only, zero repo side effects. The caller
+// (bw-app) turns the count into an append-only observation *only when it
+// changed* (change-guard) and never fabricates a value on failure — an errored
+// query writes nothing, letting the metric's signal degrade honestly rather
+// than flash a fake zero.
+
+/// Expand BW placeholders in a github collect query against a project's
+/// `owner/repo` remote and a reference date:
+/// - `{owner}` / `{repo}` — from the remote (`{owner}/{repo}` therefore also
+///   expands correctly).
+/// - `@{<N>d}` — the ISO date `N` days before `today`, a rolling "past N days"
+///   window (e.g. `merged:>=@{7d}` on 2026-07-23 → `merged:>=2026-07-16`).
+///
+/// An unrecognized `@{…}` macro is left literal (a content problem for the
+/// 找指标/绑数据 skills, not a hard error here) — the scan advances past it so
+/// later valid macros still expand.
+fn expand_query(query: &str, remote: &str, today: Date) -> String {
+    let (owner, repo) = remote.split_once('/').unwrap_or((remote, ""));
+    let mut out = query.replace("{owner}", owner).replace("{repo}", repo);
+    let mut search_from = 0;
+    while let Some(rel) = out[search_from..].find("@{") {
+        let start = search_from + rel;
+        let after = start + 2;
+        let Some(end_rel) = out[after..].find('}') else {
+            break; // unterminated macro — stop, leave the rest literal
+        };
+        let end = after + end_rel; // index of the closing '}'
+        let token = &out[after..end];
+        match days_ago_iso(token, today) {
+            Some(date) => {
+                out.replace_range(start..=end, &date);
+                search_from = start + date.len();
+            }
+            None => {
+                search_from = end + 1; // skip an unknown macro, keep scanning
+            }
+        }
+    }
+    out
+}
+
+/// `"7d"` + a reference date → the ISO date 7 days earlier. `None` for any
+/// token that isn't `<digits>d`.
+fn days_ago_iso(token: &str, today: Date) -> Option<String> {
+    let n: i64 = token.strip_suffix('d')?.parse().ok()?;
+    let date = today.checked_sub(time::Duration::days(n))?;
+    Some(format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        u8::from(date.month()),
+        date.day()
+    ))
+}
+
+/// C7 · 采集器: run one `kind = "github"` metric query as a real count.
+/// Expands BW placeholders against `remote` (`owner/repo`) + `today`, then asks
+/// GitHub's search API for the total number of matches via `gh`. Uses the
+/// `search/issues` endpoint — it covers both issues and PRs (a query's own
+/// `is:pr` / `is:issue` narrows it); releases and other facets are out of v1
+/// scope. Read-only. Returns the count `gh` reported; the caller decides
+/// whether that count is a *new fact* worth recording.
+pub async fn collect_github_count(
+    remote: &str,
+    query: &str,
+    today: Date,
+) -> Result<u64, GithubError> {
+    let q = expand_query(query, remote, today);
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "api",
+            "-X",
+            "GET",
+            "search/issues",
+            "-f",
+            &format!("q={q}"),
+            "--jq",
+            ".total_count",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    text.parse::<u64>()
+        .map_err(|_| GithubError::Command(format!("无法解析 gh 计数输出:{text:?}")))
 }
