@@ -35,7 +35,9 @@ mod sqlite;
 pub use sqlite::SqliteStore;
 
 pub mod seed;
-pub use seed::{seed_hub_if_empty, seed_stage_entities_if_missing};
+pub use seed::{
+    seed_hub_if_empty, seed_stage_entities_if_missing, seed_standard_issue_skills_if_missing,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {

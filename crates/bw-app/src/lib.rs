@@ -1791,6 +1791,11 @@ impl App {
                 // (bw_core::playbook projections) — by-name idempotent, so an
                 // already-seeded database gains them too.
                 bw_store::seed_stage_entities_if_missing(self.store.as_ref()).await?;
+                // C9 · plan/13 D8: the two standard-Issue-trio skills (找指标/
+                // 绑数据) — by-name idempotent, so an already-seeded database
+                // gains them too. Content is `include_str!`-ed straight from
+                // docs/skills/<slug>/SKILL.md (the real file in the repo).
+                bw_store::seed_standard_issue_skills_if_missing(self.store.as_ref()).await?;
                 // A4: backfill the per-stage "完成 Issue 数" metric for every
                 // project — pre-A4 projects gain it; already-seeded ones are
                 // unchanged (by-name idempotent).
