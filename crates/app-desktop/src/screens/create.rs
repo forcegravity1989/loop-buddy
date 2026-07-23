@@ -14,9 +14,10 @@
 
 use crate::kernel::{CreateVm, Kernel, RunVm};
 use crate::theme;
-use bw_app::{Command, Panel, Scope};
+use bw_app::{Command, GithubOrigin, Panel, Scope};
 use bw_core::model::{drafting_workflow, Cadence, ProjectCycle, StageKind};
 use bw_core::{MetricId, ProjectId, SessionId};
+use bw_engine::GithubRepoSummary;
 use bw_store::{MetricRole, SessionKind};
 use dioxus::prelude::*;
 use ui::vm::MetricVm;
@@ -25,25 +26,41 @@ use ui::vm::MetricVm;
 /// draft lives in [`CreateVm`], sourced from the store.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Card {
+    Repo,
     Intent,
     Questions,
     Drafting,
     Review,
 }
 
+/// The Repo 卡片's local choice — turned into a `GithubOrigin` only at
+/// `IntentCard`'s submit time, once a project name exists to slugify.
+#[derive(Clone, Debug, PartialEq)]
+enum RepoChoice {
+    New { private: bool },
+    Existing { owner: String, repo: String },
+}
+
 #[component]
-pub fn Create(vm: Option<CreateVm>, run: RunVm, on_cancel: EventHandler<()>) -> Element {
+pub fn Create(
+    vm: Option<CreateVm>,
+    run: RunVm,
+    github_repos: Vec<GithubRepoSummary>,
+    on_cancel: EventHandler<()>,
+) -> Element {
     let has_project = vm.is_some();
     // Resuming an interrupted creation (OpenProject on a cold-start project)
-    // skips straight past Intent — the project row already exists.
+    // skips straight past Repo/Intent — the project row (and its repo, if
+    // any) already exists.
     let mut card = use_signal(move || {
         if has_project {
             Card::Questions
         } else {
-            Card::Intent
+            Card::Repo
         }
     });
     let cadence = use_signal(|| Cadence::Weekly);
+    let repo_choice = use_signal(|| RepoChoice::New { private: true });
 
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
@@ -54,7 +71,7 @@ pub fn Create(vm: Option<CreateVm>, run: RunVm, on_cancel: EventHandler<()>) -> 
             div {
                 style: "display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;",
                 span { style: "font-family:{serif};font-size:17px;font-weight:600;", "新建项目" }
-                if card() == Card::Intent {
+                if card() == Card::Repo || card() == Card::Intent {
                     button {
                         style: "background:transparent;border:none;color:{ink2};cursor:pointer;font-size:13px;",
                         onclick: move |_| on_cancel.call(()),
@@ -63,7 +80,12 @@ pub fn Create(vm: Option<CreateVm>, run: RunVm, on_cancel: EventHandler<()>) -> 
                 }
             }
             match (card(), vm) {
-                (Card::Intent, _) => rsx! { IntentCard { on_created: move |_| card.set(Card::Questions) } },
+                (Card::Repo, _) => rsx! {
+                    RepoCard { choice: repo_choice, github_repos: github_repos.clone(), on_next: move |_| card.set(Card::Intent) }
+                },
+                (Card::Intent, _) => rsx! {
+                    IntentCard { repo_choice, on_created: move |_| card.set(Card::Questions) }
+                },
                 (_, None) => rsx! { div { "…" } },
                 (Card::Questions, Some(v)) => rsx! {
                     QuestionsCard { vm: v, cadence, on_next: move |_| card.set(Card::Drafting) }
@@ -72,6 +94,101 @@ pub fn Create(vm: Option<CreateVm>, run: RunVm, on_cancel: EventHandler<()>) -> 
                     DraftingCard { run, on_next: move |_| card.set(Card::Review) }
                 },
                 (Card::Review, Some(v)) => rsx! { ReviewCard { vm: v, cadence } },
+            }
+        }
+    }
+}
+
+// ───────────────────────── 0 · 仓从哪来 ─────────────────────────
+
+#[component]
+fn RepoCard(
+    choice: Signal<RepoChoice>,
+    github_repos: Vec<GithubRepoSummary>,
+    on_next: EventHandler<()>,
+) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let serif = theme::SERIF;
+    let ink3 = theme::INK_3;
+    let is_new = matches!(choice(), RepoChoice::New { .. });
+    let existing_ready =
+        matches!(&choice(), RepoChoice::Existing { owner, .. } if !owner.is_empty());
+    let can_send = is_new || existing_ready;
+    let opacity = if can_send { "1" } else { ".45" };
+
+    rsx! {
+        div { style: "font-family:{serif};font-size:22px;font-weight:600;margin:14px 0 4px;", "仓从哪来？" }
+        p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;", "每个项目背后是一个真实的 GitHub 仓 —— 新建一个,或者接入你已有的。" }
+
+        {chip_question(
+            "起点",
+            vec![("新建仓", is_new), ("接入已有仓", !is_new)],
+            move |i| {
+                if i == 0 {
+                    choice.set(RepoChoice::New { private: true });
+                } else {
+                    k.send(Command::ListGithubRepos);
+                    choice.set(RepoChoice::Existing { owner: String::new(), repo: String::new() });
+                }
+            },
+        )}
+
+        div {
+            style: "{card} padding:18px 20px;margin-top:8px;",
+            if is_new {
+                {
+                    let private = matches!(choice(), RepoChoice::New { private: true });
+                    rsx! {
+                        {chip_question(
+                            "可见性",
+                            vec![("Private", private), ("Public", !private)],
+                            move |i| choice.set(RepoChoice::New { private: i == 0 }),
+                        )}
+                    }
+                }
+            } else {
+                label { style: "{theme::label()}", "选一个仓" }
+                select {
+                    style: "{theme::input()} margin-top:6px;",
+                    value: {
+                        if let RepoChoice::Existing { owner, repo } = &choice() {
+                            format!("{owner}/{repo}")
+                        } else {
+                            String::new()
+                        }
+                    },
+                    onchange: move |e| {
+                        if let Some((owner, repo)) = e.value().split_once('/') {
+                            choice.set(RepoChoice::Existing {
+                                owner: owner.to_string(),
+                                repo: repo.to_string(),
+                            });
+                        }
+                    },
+                    option { value: "", "请选择…" }
+                    for r in github_repos.iter() {
+                        {
+                            let value = format!("{}/{}", r.owner, r.repo);
+                            let vis = if r.private { "private" } else { "public" };
+                            rsx! {
+                                option { key: "{value}", value: "{value}", "{value} · {vis}" }
+                            }
+                        }
+                    }
+                }
+                if github_repos.is_empty() {
+                    p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 确认本机 gh 已登录(gh auth status)。" }
+                }
+            }
+        }
+        div {
+            style: "display:flex;justify-content:flex-end;margin-top:14px;",
+            button {
+                style: "{theme::btn_primary()} opacity:{opacity};",
+                disabled: !can_send,
+                onclick: move |_| on_next.call(()),
+                "下一步 →"
             }
         }
     }
@@ -87,12 +204,35 @@ const KINDS: [&str; 5] = [
     "其他",
 ];
 
+/// GitHub 仓名要求 ASCII + 连字符;项目显示名允许中文。两个独立字段(用户
+/// 已确认),这个纯函数只给"新建仓"分支的实时预览用——真正发去 `gh` 的值
+/// 是用户可能手改过的 `slug` 信号,不是每次都重新静默转写。
+fn slugify(name: &str) -> String {
+    let base: String = name
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if base.is_empty() {
+        "project".to_string()
+    } else {
+        base
+    }
+}
+
 #[component]
-fn IntentCard(on_created: EventHandler<()>) -> Element {
+fn IntentCard(repo_choice: Signal<RepoChoice>, on_created: EventHandler<()>) -> Element {
     let k = use_context::<Kernel>();
     let mut name = use_signal(String::new);
     let mut kind = use_signal(|| KINDS[0].to_string());
     let mut brief = use_signal(String::new);
+    let mut slug = use_signal(String::new);
+    let mut slug_touched = use_signal(|| false);
 
     let card = theme::card();
     let serif = theme::SERIF;
@@ -101,23 +241,30 @@ fn IntentCard(on_created: EventHandler<()>) -> Element {
     let label = theme::label();
     let can_send = !name().trim().is_empty() && !brief().trim().is_empty();
     let opacity = if can_send { "1" } else { ".45" };
+    let is_new_repo = matches!(repo_choice(), RepoChoice::New { .. });
 
     let send = move |_| {
         if !can_send {
             return;
         }
+        let github = match repo_choice() {
+            RepoChoice::New { private } => Some(GithubOrigin::New {
+                slug: if slug().trim().is_empty() {
+                    slugify(&name())
+                } else {
+                    slug().trim().to_string()
+                },
+                private,
+            }),
+            RepoChoice::Existing { owner, repo } => Some(GithubOrigin::Existing { owner, repo }),
+        };
         k.send(Command::CreateProject {
             id: ProjectId::new(),
             name: name().trim().to_string(),
             kind: kind(),
             desc: brief().trim().to_string(),
-
             workspace: None,
-            // C1 只做后端(schema+gh shell-out+Command/handler)——Repo 卡片/
-            // slug 预览等 UI 是 plan/13 附注里排定的独立后续票(原实现计划
-            // Task 5),这里只补齐新增的必填字段以保持 app-desktop 编译通过,
-            // 不提前实现选择 UI。
-            github: None,
+            github,
         });
         on_created.call(());
     };
@@ -135,7 +282,12 @@ fn IntentCard(on_created: EventHandler<()>) -> Element {
                         style: "{input}",
                         placeholder: "例:增长实验看板",
                         value: "{name}",
-                        oninput: move |e| name.set(e.value()),
+                        oninput: move |e| {
+                            name.set(e.value());
+                            if !slug_touched() {
+                                slug.set(slugify(&name()));
+                            }
+                        },
                     }
                 }
                 div {
@@ -156,6 +308,23 @@ fn IntentCard(on_created: EventHandler<()>) -> Element {
                 placeholder: "一句话即可,多写几句问题会更少。例:把 agent 会话里长出的工作流沉淀成可复用资产,导入即跑。",
                 value: "{brief}",
                 oninput: move |e| brief.set(e.value()),
+            }
+            if is_new_repo {
+                div {
+                    style: "margin-top:10px;",
+                    label { style: "{label}", "GitHub 仓名(可改)" }
+                    input {
+                        style: "{input} font-family:{theme::MONO};",
+                        placeholder: "growth-kanban",
+                        value: "{slug}",
+                        oninput: move |e| {
+                            slug_touched.set(true);
+                            slug.set(e.value());
+                        },
+                    }
+                }
+            } else if let RepoChoice::Existing { owner, repo } = repo_choice() {
+                p { style: "font-size:11.5px;color:{ink3};margin-top:10px;", "将接入 {owner}/{repo} ↗" }
             }
             div {
                 style: "display:flex;justify-content:flex-end;margin-top:14px;",

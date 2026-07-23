@@ -1106,6 +1106,12 @@ fn WorkspaceConfig(op: OpVm) -> Element {
                         style: "font-family:{mono};font-size:12.5px;color:{ink2};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
                         "{op.workspace_path}"
                     }
+                    if !op.github_remote.trim().is_empty() {
+                        span {
+                            style: "font-size:11px;color:{ink3};flex:none;",
+                            "GitHub · {op.github_remote}"
+                        }
+                    }
                     span { style: "font-size:11px;color:{ink3};flex:none;", "{permission_label}" }
                 } else {
                     span { style: "font-size:12.5px;color:{ink3};flex:1;", "未配置 —— 「▶ 运行」目前始终为模拟执行" }

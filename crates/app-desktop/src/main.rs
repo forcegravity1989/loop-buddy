@@ -319,6 +319,7 @@ fn Root() -> Element {
                     Create {
                         vm: v.create.clone(),
                         run: run(),
+                        github_repos: v.github_repos.clone(),
                         on_cancel: move |_| creating.set(false),
                     }
                 } else if show_op {
