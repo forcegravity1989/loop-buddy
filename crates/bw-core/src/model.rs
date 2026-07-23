@@ -612,6 +612,103 @@ pub struct SkillRef {
     pub from: String,
 }
 
+/// T8 (plan/12 §4): a phase's real role in the workflow's generator/evaluator
+/// loop — what `workflow_flow.rs` used to *guess* from the phase's Chinese
+/// name via a keyword heuristic. `Neutral` is the honest default for any
+/// phase that isn't a generator/evaluator/optimizer (and for every
+/// legacy/user-authored phase that never declared a role at all).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhaseRole {
+    /// Produces the deliverable this phase is responsible for.
+    Generator,
+    /// A judging/review gate — the only role `reject_to_phase` is meaningful
+    /// on.
+    Evaluator,
+    /// Refines/prunes an existing deliverable without adding new scope.
+    Optimizer,
+    #[default]
+    Neutral,
+}
+
+/// One phase in a [`WorkflowSpec`]'s pipeline — structured (plan/12 §4)
+/// replacement for the old bare phase name. `role` is real, declared data
+/// (built-in stage playbooks in `crate::playbook`; `Neutral` for everything
+/// user-authored today, since the create/edit UI doesn't yet expose role
+/// editing — that's follow-up UI work, not this ticket).
+///
+/// `reject_to_phase` is only meaningful when `role == Evaluator`:
+/// - `Some(i)` — a **Static** workflow's author fixed the reject target at
+///   design time; `i` is a 0-based index into the same `WorkflowSpec.phases`
+///   vector this `PhaseMeta` lives in (so a renderer can index straight into
+///   it with no off-by-one translation).
+/// - `None` — either this phase isn't a reject gate, or (for a **Dynamic**
+///   workflow) the target is deliberately left to the evaluator agent's real
+///   runtime verdict — see `PhaseOutcome` in plan/12 §4, built in T9, not
+///   here.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PhaseMeta {
+    pub name: String,
+    #[serde(default)]
+    pub role: PhaseRole,
+    #[serde(default)]
+    pub reject_to_phase: Option<u8>,
+}
+
+impl PhaseMeta {
+    /// A plain, role-less phase — what every user-authored/edited phase
+    /// (create/edit form, still name-only text) and every ad-hoc `Dynamic`
+    /// spec produces today. Real role declarations exist only for the
+    /// built-in stage playbooks (`crate::playbook::phase_metas`).
+    pub fn neutral(name: impl Into<String>) -> Self {
+        PhaseMeta {
+            name: name.into(),
+            role: PhaseRole::Neutral,
+            reject_to_phase: None,
+        }
+    }
+}
+
+/// Hand-written (mirrors `HubSource`'s legacy-compat impl just above in this
+/// file): a pre-T8 `workflow_spec.phases`/`workflow_version.phases` column
+/// holds a plain JSON string array (`["阶段A","阶段B"]`) — every phase ever
+/// created before this ticket. Each element deserializes as *either* a bare
+/// string (legacy ⇒ `role: Neutral, reject_to_phase: None`) *or* a full
+/// object (current shape) — per-element, not per-column, so a partially
+/// migrated array (should one ever exist) still reads honestly. Old DBs must
+/// not crash on open (repo-wide serde-compat rule).
+impl<'de> Deserialize<'de> for PhaseMeta {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OnDisk {
+            Legacy(String),
+            Full {
+                name: String,
+                #[serde(default)]
+                role: PhaseRole,
+                #[serde(default)]
+                reject_to_phase: Option<u8>,
+            },
+        }
+        Ok(match OnDisk::deserialize(deserializer)? {
+            OnDisk::Legacy(name) => PhaseMeta::neutral(name),
+            OnDisk::Full {
+                name,
+                role,
+                reject_to_phase,
+            } => PhaseMeta {
+                name,
+                role,
+                reject_to_phase,
+            },
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowSpec {
     pub id: WorkflowId,
@@ -621,7 +718,11 @@ pub struct WorkflowSpec {
     pub goal: String,
     /// Associated stage (1..=5), if any.
     pub stage_ref: Option<u8>,
-    pub phases: Vec<String>,
+    /// T8 (plan/12 §4): structured per-phase metadata (name + real role +
+    /// static reject target) — `Vec<String>` before this ticket. serde-compat
+    /// (see `PhaseMeta`'s `Deserialize` impl) reads old plain-string-array
+    /// rows in as `role: Neutral`, so an already-seeded DB never crashes.
+    pub phases: Vec<PhaseMeta>,
     /// Per-phase real instructions, index-aligned with `phases`. Empty (the
     /// pre-playbook default) or a missing/blank entry ⇒ that phase falls back
     /// to the shared `prompt` — byte-for-byte the old behavior. Rendered by
@@ -801,7 +902,9 @@ pub struct WorkflowVersion {
     pub name: String,
     pub prompt: String,
     pub goal: String,
-    pub phases: Vec<String>,
+    /// T8: structured (see `WorkflowSpec.phases`); same serde-compat with
+    /// pre-T8 plain-string-array snapshots.
+    pub phases: Vec<PhaseMeta>,
     /// Per-phase instructions frozen with the rest of the content — an
     /// evolution history that dropped them would misreport what old versions
     /// actually executed. Empty for pre-playbook snapshots.
@@ -872,7 +975,10 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
         prompt: kind.method_loop().join(" → "),
         goal: stage_goal(kind),
         stage_ref: Some(kind.index()),
-        phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
+        // Dynamic ⇒ any Evaluator's reject target is honestly left `None`
+        // (plan/12 §4: runtime evaluator decision, T9's job) — the same
+        // roles as the Static template, just with the fixed target cleared.
+        phases: crate::playbook::phase_metas_dynamic(kind),
         phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
@@ -955,7 +1061,10 @@ pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
         prompt: kind.method_loop().join(" → "),
         goal: stage_goal(kind),
         stage_ref: Some(kind.index()),
-        phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
+        // Static ⇒ real role + fixed reject target for the stage's
+        // review-gate phase (plan/12 §4; declared per-stage in
+        // `crate::playbook::phase_metas`, not machine-guessed).
+        phases: crate::playbook::phase_metas(kind),
         phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
@@ -984,10 +1093,10 @@ pub fn drafting_workflow() -> WorkflowSpec {
         goal: "产出可编辑的北极星候选 + 指标框架草案".into(),
         stage_ref: Some(StageKind::Prototype.index()),
         phases: vec![
-            "周期判定".into(),
-            "北极星起草".into(),
-            "指标框架".into(),
-            "阶段激活".into(),
+            PhaseMeta::neutral("周期判定"),
+            PhaseMeta::neutral("北极星起草"),
+            PhaseMeta::neutral("指标框架"),
+            PhaseMeta::neutral("阶段激活"),
         ],
         phase_prompts: vec![],
         agents: vec![],

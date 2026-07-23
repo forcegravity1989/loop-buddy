@@ -46,7 +46,8 @@
 
 use bw_app::{App, Command};
 use bw_core::model::{
-    AgentRef, Cadence, HubSource, LoopConfig, ProjectCycle, StageKind, WorkflowKind, WorkflowSpec,
+    AgentRef, Cadence, HubSource, LoopConfig, PhaseMeta, ProjectCycle, StageKind, WorkflowKind,
+    WorkflowSpec,
 };
 use bw_core::{CronTaskId, MetricId, ProjectId, SessionId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
@@ -93,7 +94,7 @@ async fn round_dynamic(
         prompt: evidence.to_string(),
         goal: "真实完成,且有可独立核验的证据".into(),
         stage_ref: Some(stage.index()),
-        phases: phases.iter().map(|s| s.to_string()).collect(),
+        phases: phases.iter().map(|s| PhaseMeta::neutral(*s)).collect(),
         phase_prompts: vec![],
         agents: vec![AgentRef {
             name: "Claude Code".into(),

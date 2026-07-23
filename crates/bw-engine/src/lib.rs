@@ -127,7 +127,7 @@ impl Engine {
                 .cloned()
                 .unwrap_or_else(|| spec.prompt.clone());
             let node = PhaseNode {
-                name: phase_name.clone(),
+                name: phase_name.name.clone(),
                 prompt: phase_prompt,
                 agents: spec.agents.clone(),
                 skills: spec.skills.clone(),

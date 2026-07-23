@@ -22,7 +22,7 @@ use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
 use bw_app::Command;
 use bw_core::model::{
-    AgentRef, Cadence, LoopConfig, SkillRef, StageKind, WorkflowKind, WorkflowSpec,
+    AgentRef, Cadence, LoopConfig, PhaseMeta, SkillRef, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{CronTaskId, SessionId, WorkflowId};
 use bw_store::SessionKind;
@@ -275,7 +275,7 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
                                                             div {
                                                                 style: "margin-bottom:10px;",
                                                                 WorkflowFlow {
-                                                                    phases: row.phases.clone(),
+                                                                    phases: row.phase_metas.clone(),
                                                                     loop_retries: row.loop_retries,
                                                                     loop_max_iter: row.loop_max_iter,
                                                                 }
@@ -843,7 +843,10 @@ fn AdHocWorkflowForm(
             prompt: p,
             goal: goal().trim().to_string(),
             stage_ref: kind.map(|s| s.index()),
-            phases,
+            // Ad-hoc text form — no role-editing UI, so every phase is
+            // honestly `Neutral` (same rule as `CreateWorkflowSpec`/
+            // `UpdateWorkflowSpec`'s handlers in bw-app).
+            phases: phases.into_iter().map(PhaseMeta::neutral).collect(),
             phase_prompts: vec![],
             agents: agent_refs,
             skills: skill_refs,

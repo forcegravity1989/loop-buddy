@@ -267,7 +267,7 @@ fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) 
             div {
                 style: "margin-bottom:14px;",
                 WorkflowFlow {
-                    phases: row.phases.clone(),
+                    phases: row.phase_metas.clone(),
                     loop_retries: row.loop_retries,
                     loop_max_iter: row.loop_max_iter,
                 }

@@ -13,9 +13,9 @@ use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAtten
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
     AgentCard, Artifact, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, FeedLevel,
-    HubCard, HubKind, HubSource, Issue, IssueStatus, KnowledgeSource, Maturity, ProjectCycle,
-    ProjectPhase, RunChanges, RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SourceKind,
-    StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
+    HubCard, HubKind, HubSource, Issue, IssueStatus, KnowledgeSource, Maturity, PhaseMeta,
+    ProjectCycle, ProjectPhase, RunChanges, RunStatus, RunTrigger, SessionStatus, Signal,
+    SkillCard, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
@@ -513,7 +513,14 @@ pub struct WorkflowHubRowVm {
     /// needs them as data, not a string to re-parse.
     pub loop_retries: u8,
     pub loop_max_iter: u8,
+    /// Bare phase names — the text-editing surface (`OptimizeWorkflowForm`'s
+    /// "阶段流程" input) still works with, and `phases_count` above.
     pub phases: Vec<String>,
+    /// T8 (plan/12 §4): the real per-phase role + static reject target —
+    /// same "give the component data, not a pre-formatted string" rule as
+    /// `loop_retries`/`loop_max_iter` above. `WorkflowFlow` reads this
+    /// directly instead of guessing a role from `phases[i]`'s name.
+    pub phase_metas: Vec<PhaseMeta>,
     pub skills: Vec<String>,
     pub stage_ref: Option<u8>,
     /// W1: the row's real run record, e.g. `"跑 3 次 · 成功 67%"` — or
@@ -582,7 +589,8 @@ pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
         ),
         loop_retries: spec.loop_config.retries,
         loop_max_iter: spec.loop_config.max_iter,
-        phases: spec.phases.clone(),
+        phases: spec.phases.iter().map(|p| p.name.clone()).collect(),
+        phase_metas: spec.phases.clone(),
         skills: spec.skills.iter().map(|s| s.name.clone()).collect(),
         stage_ref: spec.stage_ref,
         record_label: "暂无运行".into(),
@@ -663,7 +671,7 @@ pub fn workflow_detail(spec: &WorkflowSpec) -> Option<WorkflowDetailVm> {
         phases_numbered: spec
             .phases
             .iter()
-            .cloned()
+            .map(|p| p.name.clone())
             .enumerate()
             .map(|(i, p)| (i + 1, p))
             .collect(),

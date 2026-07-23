@@ -22,8 +22,8 @@ use bw_core::derive::{
 use bw_core::model::{
     AgentCard, AgentRef, AgentSkillTag, Artifact, ArtifactKind, Connector, ConnectorStatus,
     CronEffectiveness, CronStatus, CronTask, HubSource, Issue, IssueStatus, KnowledgeSource,
-    LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal,
-    SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
+    LoopConfig, Maturity, PhaseMeta, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger,
+    Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
     WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
@@ -2236,7 +2236,10 @@ fn opt_project_id(r: &sqlx::sqlite::SqliteRow) -> Result<Option<ProjectId>> {
 fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
     let id = parse_uuid(&r.get::<String, _>("id"), WorkflowId::from_uuid)?;
     let kind: WorkflowKind = serde_json::from_str(&r.get::<String, _>("kind_json"))?;
-    let phases: Vec<String> = serde_json::from_str(&r.get::<String, _>("phases"))?;
+    // T8: `PhaseMeta`'s `Deserialize` impl accepts both the pre-T8 plain
+    // string array and the new structured shape, per element — an old row
+    // reads in as `role: Neutral`, never a hard crash.
+    let phases: Vec<PhaseMeta> = serde_json::from_str(&r.get::<String, _>("phases"))?;
     let phase_prompts: Vec<String> =
         serde_json::from_str(&r.get::<String, _>("phase_prompts")).unwrap_or_default();
     let agents: Vec<AgentRef> = serde_json::from_str(&r.get::<String, _>("agents_json"))?;

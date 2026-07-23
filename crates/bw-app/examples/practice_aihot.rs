@@ -37,8 +37,8 @@
 //! 环境变量: BW_DB(默认 practice-aihot/bw-aihot.db)· BW_WORKSPACES(默认 practice-aihot/workspaces)
 
 use bw_core::model::{
-    Cadence, CronMode, HubSource, IssuePriority, IssueStatus, LoopConfig, Maturity, ProjectCycle,
-    SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
+    Cadence, CronMode, HubSource, IssuePriority, IssueStatus, LoopConfig, Maturity, PhaseMeta,
+    ProjectCycle, SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{AgentId, CronTaskId, IssueId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
@@ -300,10 +300,10 @@ async fn cmd_setup(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
                 goal: "每一件 aihot 的活都经这条主线的方法论落地,而不是随手写代码".into(),
                 stage_ref: None,
                 phases: vec![
-                    "头脑风暴".into(),
-                    "写计划".into(),
-                    "按计划实现(TDD)".into(),
-                    "请求评审".into(),
+                    PhaseMeta::neutral("头脑风暴"),
+                    PhaseMeta::neutral("写计划"),
+                    PhaseMeta::neutral("按计划实现(TDD)"),
+                    PhaseMeta::neutral("请求评审"),
                 ],
                 phase_prompts: vec![
                     "调用 superpowers 的 brainstorming 技能:针对当前这件活,先发散\

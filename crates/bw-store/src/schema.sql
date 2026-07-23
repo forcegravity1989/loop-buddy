@@ -155,7 +155,10 @@ CREATE TABLE IF NOT EXISTS workflow_spec (
     prompt         TEXT NOT NULL DEFAULT '',
     goal           TEXT NOT NULL DEFAULT '',
     stage_ref      INTEGER,                   -- 1..=5, nullable (metrics-layer / cross-cutting)
-    phases         TEXT NOT NULL DEFAULT '[]', -- JSON [String]
+    phases         TEXT NOT NULL DEFAULT '[]', -- JSON [PhaseMeta] (name+role+reject_to_phase);
+                                               -- T8: pre-T8 rows are plain JSON [String] —
+                                               -- PhaseMeta's Deserialize reads those in as
+                                               -- role=Neutral, no migration needed (still TEXT)
     phase_prompts  TEXT NOT NULL DEFAULT '[]', -- JSON [String], index-aligned with phases;
                                                -- '[]' = pre-playbook (all phases share prompt)
     agents_json    TEXT NOT NULL DEFAULT '[]', -- JSON [AgentRef]

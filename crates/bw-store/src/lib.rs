@@ -21,9 +21,9 @@ use bw_core::derive::AmberBand;
 use bw_core::model::{
     AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronMode,
     CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource,
-    LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus,
-    Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
-    WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
+    LoopConfig, Maturity, PhaseMeta, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger,
+    SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
+    WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
@@ -133,7 +133,7 @@ pub struct NewWorkflowSpec {
     pub prompt: String,
     pub goal: String,
     pub stage_ref: Option<u8>,
-    pub phases: Vec<String>,
+    pub phases: Vec<PhaseMeta>,
     /// Per-phase real instructions (playbook), index-aligned with `phases`.
     /// Empty = pre-playbook workflow (every phase shares `prompt`).
     pub phase_prompts: Vec<String>,
@@ -154,7 +154,7 @@ pub struct NewWorkflowSpec {
 pub struct WorkflowEdit {
     pub prompt: String,
     pub goal: String,
-    pub phases: Vec<String>,
+    pub phases: Vec<PhaseMeta>,
     /// Per-phase instructions, index-aligned with `phases` (may be empty —
     /// an edit that drops back to a single shared `prompt` is legal).
     pub phase_prompts: Vec<String>,

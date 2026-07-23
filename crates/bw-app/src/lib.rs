@@ -20,7 +20,7 @@ use bw_core::derive::AmberBand;
 use bw_core::model::{
     classify_artifact_path, cron_due, stage_workflow, stage_workflow_with_playbook, AgentCard,
     AgentRef, Artifact, Cadence, Connector, ConnectorStatus, CronMode, CronStatus, CronTask,
-    HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LoopConfig, Maturity,
+    HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LoopConfig, Maturity, PhaseMeta,
     ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
     SourceKind, StageKind, WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI,
     CONNECTOR_KIND_GIT_REPO,
@@ -2208,7 +2208,12 @@ impl App {
                         prompt,
                         goal,
                         stage_ref,
-                        phases,
+                        // The hub create form is still name-only text editing
+                        // (no role-declaration UI yet) — every phase it
+                        // authors is honestly `Neutral`. Built-in stage
+                        // playbooks are the only source of real roles today
+                        // (`bw_core::playbook::phase_metas`).
+                        phases: phases.into_iter().map(PhaseMeta::neutral).collect(),
                         phase_prompts,
                         agents,
                         skills,
@@ -2392,7 +2397,12 @@ impl App {
                         WorkflowEdit {
                             prompt,
                             goal,
-                            phases,
+                            // Same name-only-text-editing scope as
+                            // `CreateWorkflowSpec` above — an "优化" through
+                            // this form honestly resets every phase to
+                            // `Neutral` (a per-phase role editor is later UI
+                            // work, not this ticket).
+                            phases: phases.into_iter().map(PhaseMeta::neutral).collect(),
                             phase_prompts,
                             agents,
                             skills,

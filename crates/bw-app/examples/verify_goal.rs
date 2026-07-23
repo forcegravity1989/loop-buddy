@@ -11,7 +11,7 @@ use bw_app::{App, Command, Event};
 use bw_core::derive::{evaluate_metric, measure, parse_target};
 use bw_core::model::{
     stage_template_workflow, stage_workflow, AgentRef, Cadence, CronStatus, HubSource, LoopConfig,
-    ProjectCycle, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    PhaseMeta, ProjectCycle, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{CronTaskId, MetricId, ProjectId, SessionId, Signal, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
@@ -693,7 +693,7 @@ async fn main() {
         prompt: "验证 prompt".into(),
         goal: "验证 goal".into(),
         stage_ref: None,
-        phases: vec!["步骤一".into()],
+        phases: vec![PhaseMeta::neutral("步骤一")],
         phase_prompts: vec![],
         agents: vec![AgentRef {
             name: "验证 Agent".into(),
