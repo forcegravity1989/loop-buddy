@@ -722,6 +722,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
                 m.signal,
                 m.hit,
                 m.source,
+                &m.collect_kind,
                 series.get(&m.id).map(Vec::as_slice).unwrap_or(&[]),
             )
         })

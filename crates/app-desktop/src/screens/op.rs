@@ -1455,6 +1455,17 @@ fn MetricCard(m: MetricVm) -> Element {
     let color = ui::signal_color(m.signal).to_string();
     let dot = theme::dot(&color, 9);
     let spark = m.spark.clone();
+    // C7 · 采集来源徽记: label this metric's collection source. github is wired
+    // in v1 (real gh pull); bw/connector read「v1 未接」and stay dimmed —
+    // honest about what does and doesn't feed a real number yet. manual keeps
+    // its existing 手填 badge below (a different axis: the latest value's source).
+    let (collect_badge, collect_dim) = match m.collect_kind.as_str() {
+        "github" => ("采集 · GitHub".to_string(), false),
+        "bw" => ("采集 · BW 记账 · v1 未接".to_string(), true),
+        "connector" => ("采集 · Connector · v1 未接".to_string(), true),
+        _ => (String::new(), false),
+    };
+    let collect_dim_css = if collect_dim { "opacity:0.6;" } else { "" };
     rsx! {
         div {
             style: "{card} padding:16px 18px;",
@@ -1462,6 +1473,9 @@ fn MetricCard(m: MetricVm) -> Element {
                 style: "display:flex;align-items:center;gap:8px;margin-bottom:8px;",
                 span { style: "{dot}" }
                 span { style: "font-size:13px;font-weight:500;", "{m.name}" }
+                if !collect_badge.is_empty() {
+                    span { style: "margin-left:auto;font-size:10.5px;color:{ink3};border:1px solid #E2DCCF;border-radius:6px;padding:1px 6px;{collect_dim_css}", "{collect_badge}" }
+                }
                 if m.manual {
                     span { style: "margin-left:auto;font-size:10.5px;color:{ink3};border:1px solid #E2DCCF;border-radius:6px;padding:1px 6px;", "手填 · 未接入度量源" }
                 }
@@ -1618,6 +1632,9 @@ fn StageDetailCard(op: OpVm, s: StageVm) -> Element {
 #[component]
 fn ProgressStage(op: OpVm, s: StageVm) -> Element {
     let k = use_context::<Kernel>();
+    // C7 · 立即采集: a manual pull entrance alongside the standard daily cron.
+    // Cloned up front because `set_progress` below moves `k`.
+    let k_collect = k.clone();
     let card = theme::card();
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
@@ -1651,6 +1668,11 @@ fn ProgressStage(op: OpVm, s: StageVm) -> Element {
             span { style: "font-family:{serif};font-size:18px;font-weight:600;", "{s.n} {s.kind.label()}" }
             span { style: "{chip}", "{s.kind.role_short()}" }
             span { style: "font-size:12px;color:{ink3};", "体检节奏 · {s.schedule_label}" }
+            button {
+                style: "margin-left:auto;cursor:pointer;background:transparent;color:{clay};border:1px solid {clay};border-radius:7px;padding:5px 12px;font-size:12px;",
+                onclick: move |_| k_collect.send(Command::CollectMetrics),
+                "立即采集"
+            }
         }
         if empty {
             div {
