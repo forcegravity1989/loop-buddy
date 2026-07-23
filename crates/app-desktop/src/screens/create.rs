@@ -619,6 +619,9 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
             }
         }
     });
+    // C8 · plan/13 D8 末卡「立即让队友开工第一件?」—— 默认不勾,显式授权
+    // 才在落地后对标配三件套里的①竞品分析 dispatch 一次真实 RunIssue。
+    let mut run_first = use_signal(|| false);
 
     let card = theme::card();
     let serif = theme::SERIF;
@@ -673,7 +676,10 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
                     value: row.current.trim().to_string(),
                 });
             }
-            k.send(Command::CompleteCreation { cadence: cadence() });
+            k.send(Command::CompleteCreation {
+                cadence: cadence(),
+                run_first: run_first(),
+            });
             k.send(Command::SetPanel(Panel::Progress));
             k.send(Command::SetScope(Scope::All));
         }
@@ -755,6 +761,34 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
             div {
                 style: "font-size:11.5px;color:{ink3};line-height:1.7;margin-bottom:16px;",
                 "每{cadence_chip_label(&cadence())}一次体检定时任务 · 人只在五个交棒点介入(原型→构建→优化→推广→运维→回流原型)"
+            }
+
+            if !vm.github_remote.trim().is_empty() {
+                {
+                    let remote = vm.github_remote.clone();
+                    let (box_bg, box_bd, mark) = if run_first() {
+                        ("#C5654A", "#C5654A", "✓")
+                    } else {
+                        ("transparent", "#CFC7B6", "")
+                    };
+                    rsx! {
+                        div {
+                            style: "background:#F7F3EA;border:1px solid #E5DDCB;border-radius:8px;padding:12px 14px;margin-bottom:16px;",
+                            div {
+                                onclick: move |_| run_first.set(!run_first()),
+                                style: "cursor:pointer;display:flex;align-items:flex-start;gap:10px;",
+                                span { style: "width:16px;height:16px;margin-top:1px;border-radius:4px;border:1.5px solid {box_bd};background:{box_bg};color:#fff;font-size:10px;line-height:14px;text-align:center;flex:none;", "{mark}" }
+                                div {
+                                    div { style: "font-size:12.5px;font-weight:600;color:#3A3833;", "立即让队友开工第一件?" }
+                                    p {
+                                        style: "font-size:11px;color:{ink3};margin:4px 0 0;line-height:1.6;",
+                                        "落地后自动建「竞品分析 → 找指标 → 绑数据」三张标配 Issue,真开进 {remote} 的 GitHub Issues。勾选后立即对①竞品分析 dispatch 一次真实运行;不勾就只建票,开工时机由你自己定。"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             div {

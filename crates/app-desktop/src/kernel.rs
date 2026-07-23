@@ -107,6 +107,12 @@ pub struct CreateVm {
     pub ns_def: String,
     pub leading: Vec<MetricVm>,
     pub lagging: Vec<MetricVm>,
+    /// "owner/repo" — empty = this project isn't attached to GitHub (Repo 卡
+    /// 片选了本地/失败软降级). C8: the Review 卡's「立即让队友开工第一件?」
+    /// checkbox only renders when this is non-empty — a github_remote-empty
+    /// project gets zero standard Issues at `CompleteCreation`, so a visible
+    /// checkbox there would be dead UI.
+    pub github_remote: String,
 }
 
 #[derive(Clone, PartialEq)]
@@ -741,6 +747,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             ns_def: row.ns_def.clone(),
             leading: metrics.iter().filter(|m| m.leading).cloned().collect(),
             lagging: metrics.iter().filter(|m| !m.leading).cloned().collect(),
+            github_remote: row.github_remote.clone(),
         });
         return vm;
     }
