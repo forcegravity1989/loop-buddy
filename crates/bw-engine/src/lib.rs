@@ -1,11 +1,18 @@
 //! `bw-engine` — workflow execution engine.
 //!
 //! A workflow is a sequence of phases driven by a swappable [`Executor`]. We
-//! ship a deterministic [`MockExecutor`]; the real `AnthropicExecutor` is a
-//! *colleague team*'s job, plugged in through the same trait (Tier C). The trait
+//! ship a deterministic [`MockExecutor`]; the real backend today is
+//! [`ClaudeCliExecutor`] (shells out to the local `claude` CLI). The trait
 //! together with [`PhaseNode`] / [`PhaseOutput`] / [`RunEvent`] is the **frozen
 //! cross-team contract** (plan `00 §9`): a real impl that passes
 //! [`contract::check`] is hot-swappable for the mock with zero changes upstream.
+//!
+//! T6 (plan/12 §3): an [`Executor`] is selected per-run by the assigned
+//! Agent's declared `agent_cli` — `"claude-code"` routes to
+//! [`ClaudeCliExecutor`] (with its `tools` translated to `--allowedTools`,
+//! see [`claude_cli::allowed_tools_arg`]); anything else routes to
+//! [`UnsupportedCliExecutor`], an honest "not installed yet" stand-in that
+//! reuses this same trait seam instead of opening a new one.
 
 #![forbid(unsafe_code)]
 
@@ -20,12 +27,14 @@ pub mod contract;
 pub mod evidence;
 pub mod git_log;
 mod mock;
+mod unsupported_cli;
 pub mod workspace;
 
-pub use claude_cli::{ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
+pub use claude_cli::{allowed_tools_arg, ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
 pub use evidence::{EvidenceError, WorkspaceEvidence, WorkspaceFile};
 pub use git_log::{read_commits, GitCommit, GitLogError};
 pub use mock::MockExecutor;
+pub use unsupported_cli::UnsupportedCliExecutor;
 pub use workspace::{provision_git_workspace, ProvisionError};
 
 /// One executable phase, built from a [`WorkflowSpec`] phase.

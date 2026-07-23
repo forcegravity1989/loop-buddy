@@ -30,8 +30,8 @@ use bw_core::{
     SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit, PermissionMode, RunCtx,
-    RunEvent,
+    allowed_tools_arg, evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit,
+    PermissionMode, RunCtx, RunEvent, UnsupportedCliExecutor,
 };
 use bw_store::{
     AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewArtifact, NewConnector, NewCronTask,
@@ -934,7 +934,25 @@ impl App {
             evidence::head_commit(&heads_workspace).await.ok().flatten()
         };
 
-        let params_json = run_params_snapshot(&spec, trigger);
+        // T6 (plan/12 §3): resolve the executing Agent's CLI + tools BEFORE
+        // anything runs — routing is real, not a display label, and the
+        // decision must apply identically whether this project runs on the
+        // real `ClaudeCliExecutor` or the shared Mock engine (an unsupported
+        // CLI is never silently allowed through on a mock project).
+        let (agent_cli, agent_tools) = self.resolve_agent_route(issue_id).await?;
+        // The literal `--allowedTools` value `ClaudeCliExecutor` would pass —
+        // computed here, before any subprocess spawn, so it's recorded in
+        // `params_json` independent of whether the real `claude -p` call
+        // ever succeeds (gateway 抖动 is never a verification gate).
+        let allowed_tools = allowed_tools_arg(&agent_tools, proj.allow_commands);
+
+        let params_json = run_params_snapshot(
+            &spec,
+            trigger,
+            &agent_cli,
+            &agent_tools,
+            allowed_tools.as_deref(),
+        );
 
         // The review gate: the FIRST Evaluator phase (T8's real `role`, not a
         // name guess). A workflow with none is a straight pipeline — one round,
@@ -962,17 +980,38 @@ impl App {
         // one-shot real executor for THIS call (shared across the call's rounds).
         // Held immutably across the loop — every in-loop `self` touch is a shared
         // borrow (`self.store` / `self.emit`), never `&mut self`, so this holds.
+        //
+        // T6 (plan/12 §3): the `agent_cli` match happens FIRST, before the
+        // mock/real branch below — an unsupported CLI ("codex"/"cursor"/…)
+        // routes to the honest `UnsupportedCliExecutor` regardless of whether
+        // this project even has a real workspace configured. Only
+        // `"claude-code"` (the default for an unassigned issue or any other
+        // caller) reaches the existing mock-vs-real split, unchanged.
         let fresh_engine;
-        let engine: &Engine = if proj.workspace_path.trim().is_empty() {
-            &self.mock_engine
-        } else {
-            let executor = ClaudeCliExecutor::new(
-                self.state.claude_config.clone(),
-                PathBuf::from(proj.workspace_path.trim()),
-                proj.allow_commands,
-            );
-            fresh_engine = Engine::new(Arc::new(executor));
-            &fresh_engine
+        let engine: &Engine = match agent_cli.as_str() {
+            "claude-code" => {
+                if proj.workspace_path.trim().is_empty() {
+                    &self.mock_engine
+                } else {
+                    let executor = ClaudeCliExecutor::new(
+                        self.state.claude_config.clone(),
+                        PathBuf::from(proj.workspace_path.trim()),
+                        proj.allow_commands,
+                        agent_tools.clone(),
+                    );
+                    fresh_engine = Engine::new(Arc::new(executor));
+                    &fresh_engine
+                }
+            }
+            other => {
+                // 诚实报错,绝不静默回落到 claude-code:本机没有为 codex/cursor
+                // 等值接好真实执行器。Reuses the `Executor` trait seam — this
+                // executor's first (and only) call errors, and the existing
+                // "executor failed → settle Failed" path records it honestly.
+                let executor = UnsupportedCliExecutor::new(other.to_string());
+                fresh_engine = Engine::new(Arc::new(executor));
+                &fresh_engine
+            }
         };
 
         // Live progress streams out of the engine callback (broadcast::send is
@@ -1296,6 +1335,39 @@ impl App {
             LoopEnd::Blocked(reason) => Ok(RunOutcome::BlockedAtCap { reason }),
             LoopEnd::Failed(err) => Err(err),
         }
+    }
+
+    /// T6 (plan/12 §3): resolve which Agent CLI executes an issue-run and
+    /// what `tools` (AllowedTools) it declares. Only `RunIssue` has a
+    /// concrete assignee to route by — an issue with no assignee, an
+    /// assignee row that's since been deleted, or a blank `agent_cli`
+    /// (the five built-in stage-role rows) all read back as the honest
+    /// default: `"claude-code"` with no tools restriction, byte-for-byte
+    /// every other caller's (`RunHubWorkflow`, cron, stage playbook without
+    /// an issue) pre-T6 behavior.
+    async fn resolve_agent_route(
+        &self,
+        issue_id: Option<IssueId>,
+    ) -> Result<(String, Vec<String>), AppError> {
+        const DEFAULT_CLI: &str = "claude-code";
+        let Some(iid) = issue_id else {
+            return Ok((DEFAULT_CLI.to_string(), Vec::new()));
+        };
+        let Some(issue) = self.store.get_issue(iid).await? else {
+            return Ok((DEFAULT_CLI.to_string(), Vec::new()));
+        };
+        let Some(agent_id) = issue.assignee else {
+            return Ok((DEFAULT_CLI.to_string(), Vec::new()));
+        };
+        let Some(agent) = self.store.get_agent(agent_id).await? else {
+            return Ok((DEFAULT_CLI.to_string(), Vec::new()));
+        };
+        let cli = if agent.agent_cli.trim().is_empty() {
+            DEFAULT_CLI.to_string()
+        } else {
+            agent.agent_cli.clone()
+        };
+        Ok((cli, agent.tools.clone()))
     }
 
     /// Resolve skill refs against the hub and render the non-empty bodies as
@@ -3805,7 +3877,19 @@ fn cron_prompt_workflow(name: String, prompt: String) -> WorkflowSpec {
     }
 }
 
-fn run_params_snapshot(spec: &WorkflowSpec, trigger: RunTrigger) -> String {
+/// `agent_cli`/`tools`/`allowed_tools_arg` are T6 (plan/12 §3) additions: the
+/// resolved Agent-CLI route and the exact `--allowedTools` value it implies,
+/// snapshotted BEFORE the engine runs — so a run's real invocation
+/// parameters read back from `params_json` regardless of whether the
+/// executor call itself ever completes (an `UnsupportedCliExecutor` errors
+/// on its very first call; a real `claude -p` call may hit a flaky gateway).
+fn run_params_snapshot(
+    spec: &WorkflowSpec,
+    trigger: RunTrigger,
+    agent_cli: &str,
+    tools: &[String],
+    allowed_tools_arg: Option<&str>,
+) -> String {
     // serde_json::Value keeps this stable as the spec grows — adding a field
     // later is additive, not a schema break on historical run rows.
     let v = serde_json::json!({
@@ -3823,6 +3907,9 @@ fn run_params_snapshot(spec: &WorkflowSpec, trigger: RunTrigger) -> String {
             WorkflowKind::Static { version, .. } => format!("static:v{version}"),
             WorkflowKind::Dynamic { origin, .. } => format!("dynamic:{origin}"),
         },
+        "agent_cli": agent_cli,
+        "tools": tools,
+        "allowed_tools_arg": allowed_tools_arg,
     });
     v.to_string()
 }
