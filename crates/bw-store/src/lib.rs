@@ -287,6 +287,10 @@ pub struct NewIssue {
     pub title: String,
     pub desc: String,
     pub priority: IssuePriority,
+    /// C8 · plan/13 D8: stable Skill-Hub slug this Issue is wired to (`""` =
+    /// none — every hand-created / autopilot Issue). Only the standard-Issue
+    /// trio's seeder sets a real value.
+    pub standard_skill: String,
 }
 
 pub struct NewConnector {

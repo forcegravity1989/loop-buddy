@@ -193,6 +193,10 @@ impl SqliteStore {
         add_column_if_missing(&pool, "metric", "collect_kind", "TEXT NOT NULL DEFAULT ''").await?;
         add_column_if_missing(&pool, "metric", "collect_query", "TEXT NOT NULL DEFAULT ''").await?;
         add_column_if_missing(&pool, "metric", "origin", "TEXT NOT NULL DEFAULT 'manual'").await?;
+        // C8(plan/13 D8):标配 Issue 三件套与标配 Skill 的稳定关联。老库开出
+        // 来是空串,和"这张 Issue 没有标配 Skill 关联"这个真实状态完全一致
+        // ——存量 Issue 全部是手建/Autopilot 建,从未挂过标配 Skill。
+        add_column_if_missing(&pool, "issue", "standard_skill", "TEXT NOT NULL DEFAULT ''").await?;
 
         Ok(Self { pool })
     }
@@ -2093,8 +2097,8 @@ impl Store for SqliteStore {
         sqlx::query(
             "INSERT INTO issue
                 (id, project_id, stage, number, github_number, pr_number, title, descr, status,
-                 priority, assignee, created_at, updated_at)
-             VALUES (?, ?, ?, ?, 0, 0, ?, ?, 'backlog', ?, NULL, ?, ?)",
+                 priority, assignee, standard_skill, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 0, 0, ?, ?, 'backlog', ?, NULL, ?, ?, ?)",
         )
         .bind(i.id.uuid().to_string())
         .bind(pid(i.project_id))
@@ -2103,6 +2107,7 @@ impl Store for SqliteStore {
         .bind(&i.title)
         .bind(&i.desc)
         .bind(issue_priority_text(i.priority))
+        .bind(&i.standard_skill)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -2121,7 +2126,8 @@ impl Store for SqliteStore {
         // query-builder dependency.
         let mut sql = String::from(
             "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
-                    priority, assignee, settled_at, blocked_reason, created_at, updated_at
+                    priority, assignee, settled_at, blocked_reason, standard_skill, created_at,
+                    updated_at
              FROM issue WHERE project_id=?",
         );
         if stage.is_some() {
@@ -2145,7 +2151,7 @@ impl Store for SqliteStore {
     async fn get_issue(&self, id: IssueId) -> Result<Option<Issue>> {
         let row = sqlx::query(
             "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
-                    priority, assignee, settled_at, blocked_reason,
+                    priority, assignee, settled_at, blocked_reason, standard_skill,
                     created_at, updated_at
              FROM issue WHERE id=?",
         )
@@ -2511,6 +2517,7 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
         blocked_reason: r
             .get::<Option<String>, _>("blocked_reason")
             .filter(|s| !s.is_empty()),
+        standard_skill: r.get("standard_skill"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     })

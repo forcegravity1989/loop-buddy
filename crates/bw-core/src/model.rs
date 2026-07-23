@@ -1562,6 +1562,16 @@ pub struct Issue {
     /// unconditionally clearing it on every other move is safe and correct).
     #[serde(default)]
     pub blocked_reason: Option<String>,
+    /// C8 · 标配 Issue 三件套(plan/13 D8): stable slug of the standard
+    /// SkillCard this Issue is wired to (by C9's by-name convention, e.g.
+    /// `"north-star-discovery"`, `"metrics-binding"`, `"competitive-analysis"`).
+    /// `""` = no association — every hand-created / autopilot Issue. Set once
+    /// at creation, never rewritten. `RunIssue` resolves it against the Skill
+    /// Hub *by name* and injects the real content when found; a slug that
+    /// doesn't resolve (the `competitive-analysis` card doesn't exist until
+    /// C10 lands) is an honest skip, never an error.
+    #[serde(default)]
+    pub standard_skill: String,
     pub created_at: i64,
     pub updated_at: i64,
 }

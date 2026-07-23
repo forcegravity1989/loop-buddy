@@ -223,6 +223,7 @@ async fn run_project(app: &mut App, plan: &ProjectPlan) -> u64 {
     .expect("lagging metric");
     app.dispatch(Command::CompleteCreation {
         cadence: Cadence::Weekly,
+        run_first: false,
     })
     .await
     .expect("complete creation");

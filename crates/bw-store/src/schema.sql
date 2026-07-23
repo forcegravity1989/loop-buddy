@@ -398,6 +398,10 @@ CREATE TABLE IF NOT EXISTS issue (
     -- A5-F: non-empty only while status='blocked'; set exclusively via the
     -- BlockIssue command, cleared on every other transition.
     blocked_reason TEXT,
+    -- C8 · 标配 Issue 三件套(plan/13 D8): stable Skill-Hub slug (by C9's
+    -- by-name convention) this Issue is wired to. '' = no association (every
+    -- hand-created / autopilot Issue). Set once at creation, never rewritten.
+    standard_skill TEXT NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );

@@ -69,6 +69,7 @@ async fn main() {
     .unwrap();
     app.dispatch(Command::CompleteCreation {
         cadence: Cadence::Weekly,
+        run_first: false,
     })
     .await
     .unwrap();

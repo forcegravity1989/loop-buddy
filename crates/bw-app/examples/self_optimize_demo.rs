@@ -40,6 +40,7 @@ async fn quick_project(app: &mut App, name: &str) -> ProjectId {
     .unwrap();
     app.dispatch(Command::CompleteCreation {
         cadence: bw_core::model::Cadence::Weekly,
+        run_first: false,
     })
     .await
     .unwrap();

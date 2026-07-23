@@ -179,8 +179,20 @@ pub enum Command {
     },
     /// Confirms the creation-flow draft: materializes the five stages (each
     /// on the chosen review cadence) and switches the project into `Running`.
+    /// This is the creation flow's real *landing* point (读源码定,写明选择
+    /// — 不是 Repo/Intent 卡提交,是末卡「确认 · 建立项目」): a
+    /// github_remote-backed project gets its standard Issue trio
+    /// (竞品分析→找指标→绑数据, plan/13 D8) minted here, right alongside
+    /// `set_project_phase(Running)`.
     CompleteCreation {
         cadence: Cadence,
+        /// C8 · 末卡「立即让队友开工第一件?」勾选(plan/13 D8). Default
+        /// `false` — every pre-C8 caller. `true` dispatches a real
+        /// `RunIssue` against the standard trio's 竞品分析 Issue right after
+        /// landing, same explicit-authorization shape as any other
+        /// human-triggered run (never autopilot, never on a project with no
+        /// standard trio to run).
+        run_first: bool,
     },
     /// Configure (or, with an empty `path`, clear) the real-executor target
     /// directory + whether it may also run shell commands. `path` must be a
@@ -1143,6 +1155,39 @@ impl App {
         Ok((block, refs))
     }
 
+    /// C8 · 标配 Issue 三件套的 Skill 注入(plan/13 D8): resolve an Issue's
+    /// `standard_skill` slug (set once by `seed_standard_issue_trio`, C9's
+    /// by-name convention) against the Skill Hub catalog and render its real
+    /// content as a prompt block, same shape as `distilled_skills_block`. An
+    /// empty slug, or a slug that doesn't resolve to a content-bearing row
+    /// (竞品分析卡 doesn't exist until C10 lands), is an honest
+    /// `(empty, [])` — never an error, never a fabricated body. `record_skill_use_by_name` accounting only ever sees the one ref this
+    /// returns, so a run that carries a standard skill records its `uses`
+    /// exactly once.
+    async fn standard_skill_block(&self, slug: &str) -> Result<(String, Vec<SkillRef>), AppError> {
+        if slug.trim().is_empty() {
+            return Ok((String::new(), Vec::new()));
+        }
+        let catalog = self.store.list_skills().await?;
+        let Some(skill) = catalog
+            .iter()
+            .find(|s| s.name == slug && !s.content.trim().is_empty())
+        else {
+            return Ok((String::new(), Vec::new()));
+        };
+        let block = format!(
+            "\n\n## 标配技能(创建流关联,来自 {})\n{}\n",
+            skill.name,
+            skill.content.trim()
+        );
+        let refs = vec![SkillRef {
+            name: skill.name.clone(),
+            def: skill.desc.clone(),
+            from: skill.category.clone(),
+        }];
+        Ok((block, refs))
+    }
+
     /// A4: name of the machine-fed "完成 Issue 数" leading metric, seeded per
     /// project×stage with an EMPTY target so its signal stays Unknown (honest
     /// "no goal set") — never a fake green from a raw completion count.
@@ -1326,6 +1371,79 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// C8 · 标配 Issue 三件套(plan/13 D8): 创建流落地(`CompleteCreation`)
+    /// 时,挂仓项目自动建三张标配 Issue——竞品分析→找指标→绑数据,依赖序
+    /// 即建单序即编号序(`create_issue` 按项目内 `MAX(number)+1` 分配,这里
+    /// 是这个新项目的头三张 Issue,天然拿到 1/2/3)。每张都走既有
+    /// `sync_issue_to_github` 真开一个 GitHub issue——`github_remote` 为空
+    /// 的项目在那里短路返回,这里的 BW 侧建号仍然发生,只是 `github_number`
+    /// 留 0(和手动建单同一诚实口径),但本函数在调用前就已经用
+    /// `github_remote` 是否非空短路整批——无仓项目连 BW 侧的三张都不建,
+    /// 不给建不了仓的项目发一套没处交付的活(如实留白)。
+    ///
+    /// 每张携带一个稳定 `standard_skill` slug(C9 已按名种下两张:
+    /// `north-star-discovery` / `metrics-binding`;竞品分析卡是 C10 票,这里
+    /// 先建关联,`run_issue_now` 注入时按名查不到就如实跳过、零报错,C10
+    /// 落地后自动接上,不用回填这张 Issue)。
+    ///
+    /// 返回①竞品分析那张的 `IssueId`,供「问一句就跑」路径直接开工;无仓
+    /// 项目(未建任何标配票)返回 `None`。
+    async fn seed_standard_issue_trio(
+        &mut self,
+        project: ProjectId,
+    ) -> Result<Option<IssueId>, AppError> {
+        let proj = self
+            .store
+            .get_project(project)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if proj.github_remote.trim().is_empty() {
+            return Ok(None);
+        }
+        const TRIO: [(&str, &str, &str); 3] = [
+            (
+                "竞品分析",
+                "起草对标名单、各家北极星猜测、差异定位、可借鉴打法,产出报告 PR 进仓\
+                 (docs/competitive-analysis.md)。是「找指标」那张的输入。执行器联网检索\
+                 不通时如实降级为「人喂材料 + agent 整理」,报告绝不由幻觉填充。",
+                "competitive-analysis",
+            ),
+            (
+                "找指标",
+                "结合项目意图与「竞品分析」那张产出的 docs/competitive-analysis.md,\
+                 推导北极星 + 滞后 + 引领三层指标,每条附采集方案——先对后亮,北极星绝不为\
+                 「采得到」退化成工程虚荣指标。挂 Skill: north-star-discovery。",
+                "north-star-discovery",
+            ),
+            (
+                "绑数据",
+                "为「找指标」草拟的、绑不上数据的指标(.bw/metrics.toml)找到点亮的最便宜\
+                 路径——绝不伪造数据、绝不为了点亮而改指标定义。挂 Skill: metrics-binding。",
+                "metrics-binding",
+            ),
+        ];
+        let mut first: Option<IssueId> = None;
+        for (title, desc, skill_slug) in TRIO {
+            let id = IssueId::new();
+            self.store
+                .create_issue(NewIssue {
+                    id,
+                    project_id: project,
+                    stage: StageKind::Prototype,
+                    title: title.to_string(),
+                    desc: desc.to_string(),
+                    priority: IssuePriority::Medium,
+                    standard_skill: skill_slug.to_string(),
+                })
+                .await?;
+            self.sync_issue_to_github(project, id, title, desc).await?;
+            if first.is_none() {
+                first = Some(id);
+            }
+        }
+        Ok(first)
     }
 
     /// Feed a real workspace evidence reading into the project's matching
@@ -1648,6 +1766,7 @@ impl App {
                 title: title.clone(),
                 desc: desc.clone(),
                 priority: IssuePriority::Medium,
+                standard_skill: String::new(),
             })
             .await?;
         // C4: Autopilot/cron 建单同样过身份映射 —— 建单入口不止手动创建一
@@ -1769,6 +1888,211 @@ impl App {
             report: report.clone(),
         });
         Ok(report)
+    }
+
+    /// A3: run an Issue — assemble the issue's title/desc + its stage's role
+    /// playbook + any distilled (compounded) skills from the same project +
+    /// (C8) its `standard_skill` association into one real run through
+    /// `run_workflow_inner`. Extracted out of `Command::RunIssue`'s match arm
+    /// so `Command::CompleteCreation`'s「问一句就跑」(C8) can call the exact
+    /// same real path, not a parallel shortcut. See `Command::RunIssue`'s doc
+    /// for the state-machine contract (InProgress at start, InReview on
+    /// success via the PR-derive rule, never auto-Done).
+    async fn run_issue_now(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
+        let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+        // A5-F: only work not yet settled/parked/under-review/blocked
+        // can be (re)started this way. InProgress is a legal starting
+        // point too — it's the retry path after an honest failure
+        // (the issue stays InProgress on error, never faked forward).
+        if !matches!(
+            issue.status,
+            IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
+        ) {
+            return Err(AppError::Invalid(format!(
+                "#{} 处于{},不能直接运行",
+                issue.number,
+                issue.status.label()
+            )));
+        }
+        let p = issue.project_id;
+        let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+
+        // Same stage-playbook scaffolding as RunStagePlaybook (fills the
+        // role preamble + real project context), then the issue is
+        // stamped on top so the agent runs its stage methodology against
+        // THIS concrete work item.
+        let handoff_note = self
+            .store
+            .list_handoffs(p)
+            .await?
+            .first()
+            .map(|h| h.note.clone())
+            .unwrap_or_default();
+        let workspace_hint = if proj.workspace_path.trim().is_empty() {
+            "（未配置真实工作区 —— 本次运行在 MockExecutor 上,产出仅为流程演示）".to_string()
+        } else {
+            format!(
+                "工作区 {}（git 仓库）。产出落于此;先查看现状再动手。",
+                proj.workspace_path.trim()
+            )
+        };
+        let ctx = bw_core::playbook::PlaybookCtx {
+            project_name: proj.name.clone(),
+            project_kind: proj.kind.clone(),
+            project_desc: proj.desc.clone(),
+            benchmark: proj.benchmark.clone(),
+            opportunity: proj.opportunity.clone(),
+            north_star: proj.north_star.clone(),
+            ns_def: proj.ns_def.clone(),
+            handoff_note,
+            workspace_hint,
+        };
+        let mut spec = stage_workflow_with_playbook(issue.stage, &ctx);
+        let issue_brief = format!(
+            "\n\n## 本件活(Issue #{})\n标题:{}\n描述:{}\n请用本阶段方法论完成它,产出落为工作区真实文件。\n",
+            issue.number, issue.title, issue.desc
+        );
+        // C8 · plan/13 D8: 标配 Issue 携带的稳定 Skill 关联(按 C9 的 slug)。
+        // 找不到(如竞品分析卡待 C10 落地前)如实跳过、零报错。
+        let (standard_block, standard_refs) =
+            self.standard_skill_block(&issue.standard_skill).await?;
+        // Distilled (compounded) skills from this project, same-stage
+        // preferred, capped at 3.
+        let (distilled_block, distilled_refs) = self.distilled_skills_block(p, issue.stage).await?;
+        spec.name = format!("#{} {}", issue.number, issue.title);
+        let extra = format!("{issue_brief}{standard_block}{distilled_block}");
+        // 既有缺口(C8 顺带修复,非本票新增行为):`stage_workflow_with_playbook`
+        // 给每个 phase 都填了非空的 `phase_prompts[idx]`,而
+        // `Engine::run_workflow` 选 phase 的真实 prompt 时——`phase_prompts
+        // [idx]` 非空就直接用它,完全不读 `spec.prompt`(见
+        // bw-engine/src/lib.rs `run_workflow`)。之前这里只改了
+        // `spec.prompt`,对 playbook 跑法是死代码:issue 简介/复利技能从未
+        // 真正到达执行器。把 `extra` 同时贴进每个 `phase_prompts` 项才是真
+        // 注入;`spec.prompt` 仍然一并更新,兜底任何理论上仍为空的 phase。
+        spec.prompt = format!("{}{}", spec.prompt, extra);
+        for pp in spec.phase_prompts.iter_mut() {
+            pp.push_str(&extra);
+        }
+        // Put the injected skills on spec.skills so run_workflow_inner's
+        // usage accounting bumps each one's `uses` — the compounding
+        // loop closes here (a run that rides a distilled/standard skill →
+        // uses+1, exactly once per ref present).
+        spec.skills.extend(standard_refs);
+        spec.skills.extend(distilled_refs);
+
+        // Start: commit to the work (Backlog/Todo → InProgress). A
+        // retry (issue already InProgress from a prior failed run)
+        // skips this — X→X is not a legal table edge, and there's
+        // nothing to change anyway.
+        if issue.status != IssueStatus::InProgress {
+            self.store
+                .transition_issue(id, IssueStatus::InProgress)
+                .await?;
+            self.refresh_issues().await?;
+            self.emit(Event::IssuesChanged);
+        }
+
+        // C5 · PR 验收环 (plan/13 D3): a repo-attached, GitHub-mapped
+        // Issue quarantines the run onto `bw/issue-<n>` BEFORE the
+        // executor touches anything, so the executor never advances the
+        // base branch — only a human merge does. No-repo / unmapped
+        // projects (`pr_eligible` false) never touch git here → today's
+        // behavior byte-for-byte. A branch-checkout failure degrades
+        // honestly: the run proceeds on the current branch, no PR is
+        // opened (提 PR 失败不炸 run).
+        let pr_eligible = !proj.github_remote.trim().is_empty()
+            && issue.github_number != 0
+            && !proj.workspace_path.trim().is_empty();
+        let on_issue_branch = if pr_eligible {
+            match bw_engine::github::checkout_issue_branch(
+                std::path::Path::new(proj.workspace_path.trim()),
+                issue.github_number,
+            )
+            .await
+            {
+                Ok(_) => true,
+                Err(e) => {
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("#{} · 活分支", issue.number),
+                        ok: false,
+                        detail: format!("开活分支失败,本次运行在当前分支、不提 PR:{e}"),
+                    });
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
+        // Run through the same path as any run, bound to this issue.
+        let run = self
+            .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id))
+            .await;
+        match run {
+            Ok(()) => {
+                // C5: on the issue branch → try to open the PR (提 PR).
+                // Success stores the PR number and lets the Issue reach
+                // InReview (which now *derives from an open PR*, D3).
+                // Failure fires an honest toast and leaves the Issue at
+                // InProgress — retryable via RunIssue, never faked into
+                // review with no PR behind it.
+                let opened_pr = if on_issue_branch {
+                    match bw_engine::github::open_pr(
+                        std::path::Path::new(proj.workspace_path.trim()),
+                        issue.github_number,
+                        &issue.title,
+                    )
+                    .await
+                    {
+                        Ok(pr) => {
+                            self.store.set_issue_pr_number(id, pr).await?;
+                            self.emit(Event::ConnectorSynced {
+                                name: format!("#{} · PR", issue.number),
+                                ok: true,
+                                detail: format!(
+                                    "已提 PR #{pr}(Closes #{}),等待人工 merge 验收",
+                                    issue.github_number
+                                ),
+                            });
+                            true
+                        }
+                        Err(e) => {
+                            self.emit(Event::ConnectorSynced {
+                                name: format!("#{} · PR", issue.number),
+                                ok: false,
+                                detail: format!("提 PR 失败,活留在进行中可重试:{e}"),
+                            });
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+                // InReview iff there's really something to review: an
+                // open PR (pr issues), or — for no-repo/unmapped issues
+                // — the run succeeding (今天的意思,未变). A
+                // pr_eligible issue whose PR failed stays InProgress.
+                if !pr_eligible || opened_pr {
+                    self.store
+                        .transition_issue(id, IssueStatus::InReview)
+                        .await?;
+                }
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+                Ok(())
+            }
+            Err(e) => {
+                // Honest failure: the issue stays InProgress (not faked
+                // to InReview/Done). Done remains a human TransitionIssue.
+                self.emit(Event::WorkflowFailed(format!(
+                    "Issue #{} 运行失败:{}",
+                    issue.number, e
+                )));
+                self.refresh_issues().await?;
+                self.emit(Event::IssuesChanged);
+                Err(e)
+            }
+        }
     }
 
     pub async fn dispatch(&mut self, cmd: Command) -> Result<(), AppError> {
@@ -2252,7 +2576,7 @@ impl App {
                 self.emit(Event::ActivityChanged);
             }
 
-            Command::CompleteCreation { cadence } => {
+            Command::CompleteCreation { cadence, run_first } => {
                 let p = self.active()?;
                 self.store
                     .set_project_phase(p, ProjectPhase::Running)
@@ -2298,12 +2622,50 @@ impl App {
                         }
                     }
                 }
+                // C8 · plan/13 D8: 挂仓项目(github_remote 非空)创建流落地
+                // 即建标配 Issue 三件套(竞品分析→找指标→绑数据),依赖序即
+                // 建单序即编号序(1/2/3),都经既有 sync_issue_to_github 真开
+                // GitHub issue。无仓项目(github_remote 空——包括新建/接入
+                // 都失败、软降级回本地 mint 的项目)零标配票:不给建不了
+                // 仓、没有 PR 环可走的项目发一套没处交付的活,如实留白。
+                let first_issue = self.seed_standard_issue_trio(p).await?;
                 self.store.recompute_signals(p, now()).await?;
                 let _ = write_charter(self, p, "完成创建").await;
                 self.state.view = View::App;
                 self.refresh_projects().await?;
+                self.refresh_issues().await?;
                 self.emit(Event::ProjectUpdated(p));
                 self.emit(Event::ViewChanged(View::App));
+                self.emit(Event::IssuesChanged);
+                // C8 · 末卡「立即让队友开工第一件?」(plan/13 D8): 显式勾选
+                // 才跑,默认不跑——不勾是零摩擦的另一半,真的什么都不发生。
+                // 勾了就对标配三件套里的①竞品分析显式 dispatch 一次
+                // RunIssue(不是 hijack:用户在末卡亲手勾的框)。跑失败只是
+                // 一次诚实的失败 toast,不倒灌回 CompleteCreation 本身
+                // ——项目创建这件事本身已经落地,不能因为紧跟着的第一次
+                // 开工不顺就整体报错(同一份「创建永不因网络失败」的精神,
+                // 只是这次是"起跑"而不是"开仓")。
+                if run_first {
+                    if let Some(issue_id) = first_issue {
+                        let session = SessionId::new();
+                        self.store
+                            .ensure_session(NewSession {
+                                id: session,
+                                project_id: p,
+                                stage_kind: Some(StageKind::Prototype),
+                                kind: SessionKind::Create,
+                                title: "创建 · 立即开工竞品分析".into(),
+                                snippet: String::new(),
+                            })
+                            .await?;
+                        self.state.active_session = Some(session);
+                        if let Err(e) = self.run_issue_now(session, issue_id).await {
+                            self.emit(Event::WorkflowFailed(format!(
+                                "创建流「立即开工」失败,竞品分析活留在可重试状态:{e}"
+                            )));
+                        }
+                    }
+                }
             }
 
             Command::SetWorkspace {
@@ -2684,187 +3046,7 @@ impl App {
             }
 
             Command::RunIssue { session, id } => {
-                let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
-                // A5-F: only work not yet settled/parked/under-review/blocked
-                // can be (re)started this way. InProgress is a legal starting
-                // point too — it's the retry path after an honest failure
-                // (the issue stays InProgress on error, never faked forward).
-                if !matches!(
-                    issue.status,
-                    IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
-                ) {
-                    return Err(AppError::Invalid(format!(
-                        "#{} 处于{},不能直接运行",
-                        issue.number,
-                        issue.status.label()
-                    )));
-                }
-                let p = issue.project_id;
-                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
-
-                // Same stage-playbook scaffolding as RunStagePlaybook (fills the
-                // role preamble + real project context), then the issue is
-                // stamped on top so the agent runs its stage methodology against
-                // THIS concrete work item.
-                let handoff_note = self
-                    .store
-                    .list_handoffs(p)
-                    .await?
-                    .first()
-                    .map(|h| h.note.clone())
-                    .unwrap_or_default();
-                let workspace_hint = if proj.workspace_path.trim().is_empty() {
-                    "（未配置真实工作区 —— 本次运行在 MockExecutor 上,产出仅为流程演示）"
-                        .to_string()
-                } else {
-                    format!(
-                        "工作区 {}（git 仓库）。产出落于此;先查看现状再动手。",
-                        proj.workspace_path.trim()
-                    )
-                };
-                let ctx = bw_core::playbook::PlaybookCtx {
-                    project_name: proj.name.clone(),
-                    project_kind: proj.kind.clone(),
-                    project_desc: proj.desc.clone(),
-                    benchmark: proj.benchmark.clone(),
-                    opportunity: proj.opportunity.clone(),
-                    north_star: proj.north_star.clone(),
-                    ns_def: proj.ns_def.clone(),
-                    handoff_note,
-                    workspace_hint,
-                };
-                let mut spec = stage_workflow_with_playbook(issue.stage, &ctx);
-                let issue_brief = format!(
-                    "\n\n## 本件活(Issue #{})\n标题:{}\n描述:{}\n请用本阶段方法论完成它,产出落为工作区真实文件。\n",
-                    issue.number, issue.title, issue.desc
-                );
-                // Distilled (compounded) skills from this project, same-stage
-                // preferred, capped at 3. Appended to the prompt directly — a
-                // playbook spec has non-empty phase_prompts, so the generic
-                // skills injection in run_workflow_inner is skipped by design.
-                let (distilled_block, distilled_refs) =
-                    self.distilled_skills_block(p, issue.stage).await?;
-                spec.name = format!("#{} {}", issue.number, issue.title);
-                spec.prompt = format!("{}{}{}", spec.prompt, issue_brief, distilled_block);
-                // Put the injected skills on spec.skills so run_workflow_inner's
-                // usage accounting bumps each one's `uses` — the compounding
-                // loop closes here (a run that rides a distilled skill → uses+1).
-                // The content itself is already in the prompt via distilled_block;
-                // generic injection is skipped (playbook spec has phase_prompts).
-                spec.skills.extend(distilled_refs);
-
-                // Start: commit to the work (Backlog/Todo → InProgress). A
-                // retry (issue already InProgress from a prior failed run)
-                // skips this — X→X is not a legal table edge, and there's
-                // nothing to change anyway.
-                if issue.status != IssueStatus::InProgress {
-                    self.store
-                        .transition_issue(id, IssueStatus::InProgress)
-                        .await?;
-                    self.refresh_issues().await?;
-                    self.emit(Event::IssuesChanged);
-                }
-
-                // C5 · PR 验收环 (plan/13 D3): a repo-attached, GitHub-mapped
-                // Issue quarantines the run onto `bw/issue-<n>` BEFORE the
-                // executor touches anything, so the executor never advances the
-                // base branch — only a human merge does. No-repo / unmapped
-                // projects (`pr_eligible` false) never touch git here → today's
-                // behavior byte-for-byte. A branch-checkout failure degrades
-                // honestly: the run proceeds on the current branch, no PR is
-                // opened (提 PR 失败不炸 run).
-                let pr_eligible = !proj.github_remote.trim().is_empty()
-                    && issue.github_number != 0
-                    && !proj.workspace_path.trim().is_empty();
-                let on_issue_branch = if pr_eligible {
-                    match bw_engine::github::checkout_issue_branch(
-                        std::path::Path::new(proj.workspace_path.trim()),
-                        issue.github_number,
-                    )
-                    .await
-                    {
-                        Ok(_) => true,
-                        Err(e) => {
-                            self.emit(Event::ConnectorSynced {
-                                name: format!("#{} · 活分支", issue.number),
-                                ok: false,
-                                detail: format!("开活分支失败,本次运行在当前分支、不提 PR:{e}"),
-                            });
-                            false
-                        }
-                    }
-                } else {
-                    false
-                };
-
-                // Run through the same path as any run, bound to this issue.
-                let run = self
-                    .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id))
-                    .await;
-                match run {
-                    Ok(()) => {
-                        // C5: on the issue branch → try to open the PR (提 PR).
-                        // Success stores the PR number and lets the Issue reach
-                        // InReview (which now *derives from an open PR*, D3).
-                        // Failure fires an honest toast and leaves the Issue at
-                        // InProgress — retryable via RunIssue, never faked into
-                        // review with no PR behind it.
-                        let opened_pr = if on_issue_branch {
-                            match bw_engine::github::open_pr(
-                                std::path::Path::new(proj.workspace_path.trim()),
-                                issue.github_number,
-                                &issue.title,
-                            )
-                            .await
-                            {
-                                Ok(pr) => {
-                                    self.store.set_issue_pr_number(id, pr).await?;
-                                    self.emit(Event::ConnectorSynced {
-                                        name: format!("#{} · PR", issue.number),
-                                        ok: true,
-                                        detail: format!(
-                                            "已提 PR #{pr}(Closes #{}),等待人工 merge 验收",
-                                            issue.github_number
-                                        ),
-                                    });
-                                    true
-                                }
-                                Err(e) => {
-                                    self.emit(Event::ConnectorSynced {
-                                        name: format!("#{} · PR", issue.number),
-                                        ok: false,
-                                        detail: format!("提 PR 失败,活留在进行中可重试:{e}"),
-                                    });
-                                    false
-                                }
-                            }
-                        } else {
-                            false
-                        };
-                        // InReview iff there's really something to review: an
-                        // open PR (pr issues), or — for no-repo/unmapped issues
-                        // — the run succeeding (today's meaning, unchanged). A
-                        // pr_eligible issue whose PR failed stays InProgress.
-                        if !pr_eligible || opened_pr {
-                            self.store
-                                .transition_issue(id, IssueStatus::InReview)
-                                .await?;
-                        }
-                        self.refresh_issues().await?;
-                        self.emit(Event::IssuesChanged);
-                    }
-                    Err(e) => {
-                        // Honest failure: the issue stays InProgress (not faked
-                        // to InReview/Done). Done remains a human TransitionIssue.
-                        self.emit(Event::WorkflowFailed(format!(
-                            "Issue #{} 运行失败:{}",
-                            issue.number, e
-                        )));
-                        self.refresh_issues().await?;
-                        self.emit(Event::IssuesChanged);
-                        return Err(e);
-                    }
-                }
+                self.run_issue_now(session, id).await?;
             }
 
             Command::UpdateWorkflowSpec {
@@ -3174,6 +3356,7 @@ impl App {
                         title: title.clone(),
                         desc: desc.clone(),
                         priority,
+                        standard_skill: String::new(),
                     })
                     .await?;
                 // C4: 项目挂了 GitHub 仓时,建单同时经 gh 真开一个 GitHub

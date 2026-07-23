@@ -172,6 +172,7 @@ async fn find_or_create_project(app: &mut App) -> ProjectId {
     .expect("update north star");
     app.dispatch(Command::CompleteCreation {
         cadence: Cadence::Daily,
+        run_first: false,
     })
     .await
     .expect("complete creation");
