@@ -710,6 +710,20 @@ pub enum Event {
         ok: bool,
         detail: String,
     },
+    /// plan/14 C14 · a creation-flow background action (repo create/clone,
+    /// repo-list fetch, standard-Issue mint, landing push) really started or
+    /// finished — the "is this real or stuck" visibility the creation flow's
+    /// slow `gh`-backed calls lacked (体验规范条 2:后台动作永远有状态回显).
+    /// Emitted as a Started → Ok/Fail pair around each real network call,
+    /// `name` stable across the pair so a subscriber can correlate them.
+    /// Purely additive visibility, never a gate — 乐观推进哲学不变
+    /// (CLAUDE.md): the card the user sees has already advanced before this
+    /// fires, same as the pre-existing `ConnectorSynced` toasts these sit
+    /// alongside (kept unchanged — this doesn't replace them).
+    ActionProgress {
+        name: String,
+        state: ActionState,
+    },
     KnowledgeSourcesChanged,
     IssuesChanged,
     ActivityChanged,
@@ -732,6 +746,21 @@ pub enum Event {
     OptimizationCycleReported {
         report: OptimizationReport,
     },
+}
+
+/// Three-state visibility for one `Event::ActionProgress` — see that
+/// variant's doc comment. `bw-app`-local (not `bw-core`): this is UI-facing
+/// transient signal, not domain state, so it never touches the wasm-clean
+/// kernel crates.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ActionState {
+    /// The real call just started.
+    Started,
+    /// The real call really succeeded — a short honest summary, never
+    /// invented (e.g. the repo slug `gh` actually minted).
+    Ok(String),
+    /// The real call really failed — the real error text.
+    Fail(String),
 }
 
 /// The outcome of one self-driving optimization cycle (iter 18) — the
@@ -1792,12 +1821,21 @@ impl App {
     /// soft-degrade shape as the Repo 卡片's `create_repo`/`clone_repo`
     /// paths. `github_remote` empty (no repo, or a 存量项目) short-circuits
     /// before touching `gh` at all — today's behavior, byte-for-byte.
+    ///
+    /// `announce` (plan/14 C14): only the creation flow's standard-Issue trio
+    /// (`seed_standard_issue_trio`) opts into the pending/ok/fail
+    /// `Event::ActionProgress` triple — this function's other two callers
+    /// (`Command::CreateIssue`'s op-panel manual create, Autopilot's
+    /// cron-fired create) are out of C14's scope (CLAUDE.md: 范围收敛,op
+    /// 面板既有动作不动) and pass `false`, leaving their behavior
+    /// byte-for-byte unchanged.
     async fn sync_issue_to_github(
         &mut self,
         project_id: ProjectId,
         issue_id: IssueId,
         title: &str,
         desc: &str,
+        announce: bool,
     ) -> Result<(), AppError> {
         let proj = self
             .store
@@ -1813,11 +1851,24 @@ impl App {
         } else {
             desc.trim().to_string()
         };
+        let action_name = format!("{title} · 建单");
+        if announce {
+            self.emit(Event::ActionProgress {
+                name: action_name.clone(),
+                state: ActionState::Started,
+            });
+        }
         match bw_engine::github::create_issue(remote, title, &body).await {
             Ok(gh_number) => {
                 self.store
                     .set_issue_github_number(issue_id, gh_number)
                     .await?;
+                if announce {
+                    self.emit(Event::ActionProgress {
+                        name: action_name,
+                        state: ActionState::Ok(format!("#{gh_number}")),
+                    });
+                }
             }
             Err(e) => {
                 self.emit(Event::ConnectorSynced {
@@ -1825,6 +1876,12 @@ impl App {
                     ok: false,
                     detail: format!("GitHub 开 issue 失败,BW 侧 Issue 已建立,号未映射:{e}"),
                 });
+                if announce {
+                    self.emit(Event::ActionProgress {
+                        name: action_name,
+                        state: ActionState::Fail(e.to_string()),
+                    });
+                }
             }
         }
         Ok(())
@@ -1895,7 +1952,11 @@ impl App {
                     standard_skill: skill_slug.to_string(),
                 })
                 .await?;
-            self.sync_issue_to_github(project, id, title, desc).await?;
+            // announce=true (plan/14 C14): this is the creation-flow trio —
+            // the one `sync_issue_to_github` call site that should surface a
+            // pending/ok/fail `ActionProgress` triple.
+            self.sync_issue_to_github(project, id, title, desc, true)
+                .await?;
             if first.is_none() {
                 first = Some(id);
             }
@@ -2402,8 +2463,10 @@ impl App {
             })
             .await?;
         // C4: Autopilot/cron 建单同样过身份映射 —— 建单入口不止手动创建一
-        // 处,漏一条就是"手动建的有号、定时建的没号"的诚实性缺口。
-        self.sync_issue_to_github(project, issue_id, &title, &desc)
+        // 处,漏一条就是"手动建的有号、定时建的没号"的诚实性缺口。announce=
+        // false(plan/14 C14 范围收敛):Autopilot 建单不在本票覆盖的创建流
+        // 动作里,行为一个字节不变。
+        self.sync_issue_to_github(project, issue_id, &title, &desc, false)
             .await?;
         // Todo (committed work), not Backlog (the parking lot) — autopilot建单
         // is a commitment, and Backlog is the suppress-firing pile in multica.
@@ -2840,6 +2903,14 @@ impl App {
                         self.store.set_workspace(id, path, true).await?;
                     }
                     (None, Some(GithubOrigin::New { slug, private })) => {
+                        // plan/14 C14: 建仓是这个命令里最慢的一步(真实
+                        // `gh repo create` 网络调用,数秒)——Started 先发,
+                        // 唯一的 name 贯穿这一步的 Ok/Fail,UI 据此配对。
+                        let action_name = format!("{} · 建仓", proj.name);
+                        self.emit(Event::ActionProgress {
+                            name: action_name.clone(),
+                            state: ActionState::Started,
+                        });
                         match self.workspaces_root.clone() {
                             Some(root) => {
                                 let body = if proj.desc.trim().is_empty() {
@@ -2881,6 +2952,13 @@ impl App {
                                                 config: format!("{}/{}", r.owner, r.repo),
                                             })
                                             .await?;
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Ok(format!(
+                                                "{}/{}",
+                                                r.owner, r.repo
+                                            )),
+                                        });
                                     }
                                     Err(e) => {
                                         let mut detail =
@@ -2908,21 +2986,37 @@ impl App {
                                         self.emit(Event::ConnectorSynced {
                                             name: format!("{} · GitHub", proj.name),
                                             ok: false,
-                                            detail,
+                                            detail: detail.clone(),
+                                        });
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Fail(detail),
                                         });
                                     }
                                 }
                             }
                             None => {
+                                let detail = "未配置本地工作区根目录,无法建仓".to_string();
                                 self.emit(Event::ConnectorSynced {
                                     name: format!("{} · GitHub", proj.name),
                                     ok: false,
-                                    detail: "未配置本地工作区根目录,无法建仓".into(),
+                                    detail: detail.clone(),
+                                });
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail),
                                 });
                             }
                         }
                     }
                     (None, Some(GithubOrigin::Existing { owner, repo })) => {
+                        // plan/14 C14: 克隆同样是真实 `gh repo clone` 网络
+                        // 调用——同一套 Started→Ok/Fail 配对。
+                        let action_name = format!("{} · 克隆仓库", proj.name);
+                        self.emit(Event::ActionProgress {
+                            name: action_name.clone(),
+                            state: ActionState::Started,
+                        });
                         match self.workspaces_root.clone() {
                             Some(root) => {
                                 let dir = root.join(workspace_slug(&proj.name, id));
@@ -2956,23 +3050,40 @@ impl App {
                                                 config: format!("{}/{}", r.owner, r.repo),
                                             })
                                             .await?;
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Ok(format!(
+                                                "{}/{}",
+                                                r.owner, r.repo
+                                            )),
+                                        });
                                     }
                                     Err(e) => {
                                         // 不兜底本地 mint —— 拿一个跟用户选的仓无关
                                         // 的空仓冒充"已接入",比"暂不挂仓库"更不诚实。
+                                        let detail = format!("接入 {owner}/{repo} 失败:{e}");
                                         self.emit(Event::ConnectorSynced {
                                             name: format!("{} · GitHub", proj.name),
                                             ok: false,
-                                            detail: format!("接入 {owner}/{repo} 失败:{e}"),
+                                            detail: detail.clone(),
+                                        });
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Fail(detail),
                                         });
                                     }
                                 }
                             }
                             None => {
+                                let detail = "未配置本地工作区根目录,无法接入".to_string();
                                 self.emit(Event::ConnectorSynced {
                                     name: format!("{} · GitHub", proj.name),
                                     ok: false,
-                                    detail: "未配置本地工作区根目录,无法接入".into(),
+                                    detail: detail.clone(),
+                                });
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail),
                                 });
                             }
                         }
@@ -3045,14 +3156,31 @@ impl App {
             }
 
             Command::ListGithubRepos => {
+                // plan/14 C14: the Repo 卡片's「接入已有仓」picker triggers a
+                // real `gh repo list` call — same Started→Ok/Fail pairing.
+                const ACTION_NAME: &str = "GitHub 仓库列表";
+                self.emit(Event::ActionProgress {
+                    name: ACTION_NAME.into(),
+                    state: ActionState::Started,
+                });
                 match bw_engine::github::list_repos(30).await {
-                    Ok(repos) => self.state.github_repos = repos,
+                    Ok(repos) => {
+                        self.emit(Event::ActionProgress {
+                            name: ACTION_NAME.into(),
+                            state: ActionState::Ok(format!("{} 个仓库", repos.len())),
+                        });
+                        self.state.github_repos = repos;
+                    }
                     Err(e) => {
                         self.state.github_repos = Vec::new();
                         self.emit(Event::ConnectorSynced {
-                            name: "GitHub 仓库列表".into(),
+                            name: ACTION_NAME.into(),
                             ok: false,
                             detail: e.to_string(),
+                        });
+                        self.emit(Event::ActionProgress {
+                            name: ACTION_NAME.into(),
+                            state: ActionState::Fail(e.to_string()),
                         });
                     }
                 }
@@ -3296,18 +3424,37 @@ impl App {
                 // 创建(github_remote 非空 ⇒ workspace 在 CreateProject 就
                 // 已绑定,直接用)。
                 if !proj.github_remote.trim().is_empty() && !proj.workspace_path.trim().is_empty() {
-                    if let Err(e) = bw_engine::github::push_head(std::path::Path::new(
+                    // plan/14 C14: 落地推送同样是真实网络调用——Started 先
+                    // 发,pending→ok/fail 配对到底。
+                    let action_name = format!("{} · 落地推送", proj.name);
+                    self.emit(Event::ActionProgress {
+                        name: action_name.clone(),
+                        state: ActionState::Started,
+                    });
+                    match bw_engine::github::push_head(std::path::Path::new(
                         proj.workspace_path.trim(),
                     ))
                     .await
                     {
-                        self.emit(Event::ConnectorSynced {
-                            name: format!("{} · GitHub", proj.name),
-                            ok: false,
-                            detail: format!(
-                                "落地推送失败(章程等提交仍在本地,可稍后手动 git push):{e}"
-                            ),
-                        });
+                        Ok(()) => {
+                            self.emit(Event::ActionProgress {
+                                name: action_name,
+                                state: ActionState::Ok("已推送".into()),
+                            });
+                        }
+                        Err(e) => {
+                            let detail =
+                                format!("落地推送失败(章程等提交仍在本地,可稍后手动 git push):{e}");
+                            self.emit(Event::ConnectorSynced {
+                                name: format!("{} · GitHub", proj.name),
+                                ok: false,
+                                detail: detail.clone(),
+                            });
+                            self.emit(Event::ActionProgress {
+                                name: action_name,
+                                state: ActionState::Fail(detail),
+                            });
+                        }
                     }
                 }
                 self.state.view = View::App;
@@ -4343,8 +4490,10 @@ impl App {
                     .await?;
                 // C4: 项目挂了 GitHub 仓时,建单同时经 gh 真开一个 GitHub
                 // issue;github_remote 为空的项目在这里直接短路返回,今天的
-                // 行为一个字节不变。
-                self.sync_issue_to_github(p, id, &title, &desc).await?;
+                // 行为一个字节不变。announce=false(plan/14 C14 范围收敛):
+                // op 面板的手动建单不在本票覆盖范围,行为一个字节不变。
+                self.sync_issue_to_github(p, id, &title, &desc, false)
+                    .await?;
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
             }
