@@ -50,6 +50,7 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
                 skills: spec.skills,
                 loop_config: spec.loop_config,
                 project_id: None,
+                content: spec.content,
             })
             .await?;
     }

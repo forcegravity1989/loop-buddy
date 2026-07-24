@@ -230,6 +230,8 @@ async fn main() {
                     name: "实现".into(),
                     role: PhaseRole::Generator,
                     reject_to_phase: None,
+                    agent: None,
+                    skills: vec![],
                 },
                 PhaseMeta {
                     name: "评审".into(),
@@ -237,11 +239,15 @@ async fn main() {
                     // 声明打回到「实现」(0);运行时评审会提议一个越界目标,
                     // 静态轨必须忽略提议、按此声明打回。
                     reject_to_phase: Some(0),
+                    agent: None,
+                    skills: vec![],
                 },
                 PhaseMeta {
                     name: "合入".into(),
                     role: PhaseRole::Neutral,
                     reject_to_phase: None,
+                    agent: None,
+                    skills: vec![],
                 },
             ],
             phase_prompts: vec![],
@@ -252,6 +258,7 @@ async fn main() {
                 max_iter: 3,
             },
             project_id: Some(pid),
+            content: String::new(),
         };
         let wid = spec.id;
         let session = SessionId::new();

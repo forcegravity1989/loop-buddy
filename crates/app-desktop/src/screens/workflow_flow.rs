@@ -14,10 +14,19 @@
 //! playbook convention sets `max_iter: 1` for "one honest attempt, no blind
 //! rerun", and that draws as a straight line with no loop, honestly, even if
 //! a phase happens to carry the `Evaluator` role.
+//!
+//! T16 (plan/12 §10 v1.1#3) hangs each phase's real crew under its box: an
+//! agent avatar+name and up to a few skill chips, resolved by name against
+//! the real Agent/Skill Hub pools (`PhaseMeta.agent`/`.skills`) — nothing for
+//! a phase that declares no binding. Clicking either jumps to that
+//! component's detail via the same `ComponentSel` navigation `ProjectRail`
+//! already drives (no second navigation system).
 
+use crate::screens::component_detail::ComponentSel;
 use crate::theme;
 use bw_core::model::{PhaseMeta, PhaseRole};
 use dioxus::prelude::*;
+use ui::vm::{AgentCardVm, SkillCardVm};
 
 fn role_label(role: PhaseRole) -> &'static str {
     match role {
@@ -45,6 +54,21 @@ fn role_colors(role: PhaseRole) -> (&'static str, &'static str) {
     }
 }
 
+/// Resolve a phase's `agent` NAME against the real Agent Hub pool —
+/// `(id, initial, name)` for the avatar dot + label; `None` for an unset or
+/// dangling reference (never a guessed/invented agent).
+fn resolve_agent(name: &str, pool: &[AgentCardVm]) -> Option<(bw_core::AgentId, String, String)> {
+    pool.iter()
+        .find(|a| a.name == name)
+        .map(|a| (a.id, a.initial.clone(), a.name.clone()))
+}
+
+/// Resolve one skill NAME against the real Skill Hub pool — just the id (the
+/// chip's own label text is the phase's real `sname`, not a re-fetched copy).
+fn resolve_skill(name: &str, pool: &[SkillCardVm]) -> Option<bw_core::SkillId> {
+    pool.iter().find(|s| s.name == name).map(|s| s.id)
+}
+
 /// One phase, at what column, evaluating whether it needs a reject-arc row
 /// underneath it. `order` is this evaluator's position among all evaluators
 /// in the spec (0-based) — used only to stagger arc depth so two reject
@@ -59,9 +83,24 @@ struct RejectArc {
     order: usize,
 }
 
+/// T16 (plan/12 §10 v1.1#3): the two hub pools `agents`/`skills` resolve a
+/// phase's real by-NAME `agent`/`skills` references against — same
+/// resolve-by-name convention `SkillAgentPicker`/`resolve_refs` already use
+/// for `WorkflowSpec.agents`/`skills` itself, just applied per-phase.
+/// `on_select` reuses the app's one existing "jump to a component's detail"
+/// mechanism (`ComponentSel` + the root `sel`/`hub` signals `ProjectRail`'s
+/// `on_pick` already drives) — no second navigation system.
 #[component]
-pub fn WorkflowFlow(phases: Vec<PhaseMeta>, loop_retries: u8, loop_max_iter: u8) -> Element {
+pub fn WorkflowFlow(
+    phases: Vec<PhaseMeta>,
+    loop_retries: u8,
+    loop_max_iter: u8,
+    agents: Vec<AgentCardVm>,
+    skills: Vec<SkillCardVm>,
+    on_select: EventHandler<ComponentSel>,
+) -> Element {
     let ink3 = theme::INK_3;
+    let ink2 = theme::INK_2;
     let border = theme::BORDER;
     if phases.is_empty() {
         return rsx! { div { style: "font-size:12px;color:{ink3};", "没有定义的阶段。" } };
@@ -98,6 +137,20 @@ pub fn WorkflowFlow(phases: Vec<PhaseMeta>, loop_retries: u8, loop_max_iter: u8)
                     {
                         let (bg, fg) = role_colors(p.role);
                         let label = role_label(p.role);
+                        // T16 (plan/12 §10 v1.1#3): resolve this phase's
+                        // by-name `agent`/`skills` refs against the real hub
+                        // pools — `None`/dangling name ⇒ no chip, never a
+                        // placeholder (a phase with no real binding hangs
+                        // nothing under its box).
+                        let resolved_agent = p
+                            .agent
+                            .as_deref()
+                            .and_then(|name| resolve_agent(name, &agents));
+                        const MAX_SKILL_CHIPS: usize = 3;
+                        let shown_skills: Vec<(usize, &String)> =
+                            p.skills.iter().take(MAX_SKILL_CHIPS).enumerate().collect();
+                        let extra_skills = p.skills.len().saturating_sub(MAX_SKILL_CHIPS);
+                        let has_crew = resolved_agent.is_some() || !p.skills.is_empty();
                         rsx! {
                             div {
                                 key: "{i}",
@@ -107,6 +160,61 @@ pub fn WorkflowFlow(phases: Vec<PhaseMeta>, loop_retries: u8, loop_max_iter: u8)
                                     div { style: "font-size:12px;font-weight:500;", "{i + 1}. {p.name}" }
                                     if !label.is_empty() {
                                         div { style: "font-size:10px;opacity:.75;margin-top:2px;", "{label}" }
+                                    }
+                                }
+                                // T16: agent avatar + skill chips — only for
+                                // a phase that actually declares a binding;
+                                // no placeholder row for one that doesn't.
+                                if has_crew {
+                                    div {
+                                        style: "display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:3px;margin-top:4px;",
+                                        if let Some((aid, initial, aname)) = resolved_agent {
+                                            span {
+                                                title: "{aname} · 点击查看详情",
+                                                style: "cursor:pointer;display:inline-flex;align-items:center;gap:3px;max-width:100%;",
+                                                onclick: move |_| on_select.call(ComponentSel::Agent(aid)),
+                                                span {
+                                                    style: "width:14px;height:14px;border-radius:50%;background:{theme::AGENT};color:#FFF;display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;flex:none;",
+                                                    "{initial}"
+                                                }
+                                                span {
+                                                    style: "font-size:9.5px;color:{theme::AGENT};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70px;",
+                                                    "{aname}"
+                                                }
+                                            }
+                                        } else if let Some(name) = &p.agent {
+                                            span {
+                                                title: "「{name}」已不在智能体库中",
+                                                style: "font-size:9.5px;color:{ink3};",
+                                                "◆ {name}"
+                                            }
+                                        }
+                                        for (si , sname) in shown_skills {
+                                            {
+                                                match resolve_skill(sname, &skills) {
+                                                    Some(sid) => rsx! {
+                                                        span {
+                                                            key: "sk-{i}-{si}",
+                                                            title: "{sname} · 点击查看详情",
+                                                            style: "cursor:pointer;font-size:9px;padding:1px 5px;border-radius:5px;background:#EFE9DA;color:{ink2};white-space:nowrap;",
+                                                            onclick: move |_| on_select.call(ComponentSel::Skill(sid)),
+                                                            "{sname}"
+                                                        }
+                                                    },
+                                                    None => rsx! {
+                                                        span {
+                                                            key: "sk-{i}-{si}",
+                                                            title: "「{sname}」已不在技能库中",
+                                                            style: "font-size:9px;padding:1px 5px;border-radius:5px;color:{ink3};white-space:nowrap;",
+                                                            "{sname}"
+                                                        }
+                                                    },
+                                                }
+                                            }
+                                        }
+                                        if extra_skills > 0 {
+                                            span { style: "font-size:9px;color:{ink3};", "+{extra_skills}" }
+                                        }
                                     }
                                 }
                             }

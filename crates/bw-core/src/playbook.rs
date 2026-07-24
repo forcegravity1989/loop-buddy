@@ -240,6 +240,21 @@ pub fn phase_instructions(kind: StageKind) -> &'static [&'static str] {
 ///   this spec's own phase indices, not a same-workflow reject target. All
 ///   four stay `Neutral`, honestly — no evaluator gate is machine-stamped in
 ///   just to fill the variant.
+///
+/// T16 (plan/12 §10 v1.1#3) adds each phase's real `agent`/`skills` binding.
+/// Judged the same "read what actually happens" way as `role`/
+/// `reject_to_phase` above, not stamped mechanically — and what actually
+/// happens is uniform *within* a stage: [`rendered_phase_prompts`] injects
+/// the identical [`role_preamble`] + [`skills_block`] into **every** phase of
+/// the stage, including its Evaluator gate. A Build-stage "评审合入 · CI 门禁"
+/// phase is not handed off to a separate reviewer BW doesn't have — its own
+/// instruction says "以评审者身份**自查**": the *same* 构建师 wearing a
+/// reviewer hat for one phase, still 构建师. So the honest binding is: every
+/// phase's `agent` is this stage's real role agent
+/// ([`role_agents`]'s `RoleAgent.name`, e.g. 构建师), and every phase's
+/// `skills` are this stage's real working-method skills ([`stage_skills`]'s
+/// names) — not a guess, a direct readback of what the rendered prompt
+/// already injects into that exact phase.
 pub fn phase_metas(kind: StageKind) -> Vec<crate::model::PhaseMeta> {
     use crate::model::{PhaseMeta, PhaseRole};
     const NEUTRAL: (PhaseRole, Option<u8>) = (PhaseRole::Neutral, None);
@@ -276,6 +291,12 @@ pub fn phase_metas(kind: StageKind) -> Vec<crate::model::PhaseMeta> {
             NEUTRAL, // 复盘回灌(流向下一圈「原型」,跨 workflow,非本流程内打回目标)
         ],
     };
+    let agent_name = kind.role_short().to_string();
+    let skill_names: Vec<String> = stage_skills(kind)
+        .iter()
+        .map(|s| s.name.to_string())
+        .collect();
+
     kind.method_loop()
         .iter()
         .zip(specs.iter())
@@ -283,15 +304,20 @@ pub fn phase_metas(kind: StageKind) -> Vec<crate::model::PhaseMeta> {
             name: name.to_string(),
             role: *role,
             reject_to_phase: *reject_to_phase,
+            agent: Some(agent_name.clone()),
+            skills: skill_names.clone(),
         })
         .collect()
 }
 
 /// [`phase_metas`] for a **Dynamic** spec (`stage_workflow`/
-/// `stage_workflow_with_playbook`): identical names/roles, but every reject
-/// target is cleared to `None` — plan/12 §4's rule that a Dynamic workflow
-/// never fixes the reject target at design time; it's the (not-yet-built,
-/// T9) runtime evaluator's real verdict to make.
+/// `stage_workflow_with_playbook`): identical names/roles/agent/skills, but
+/// every reject target is cleared to `None` — plan/12 §4's rule that a
+/// Dynamic workflow never fixes the reject target at design time; it's the
+/// (not-yet-built, T9) runtime evaluator's real verdict to make. The T16
+/// `agent`/`skills` binding is untouched here — Static-vs-Dynamic is only a
+/// reject-target policy difference, not a "who's actually running this"
+/// difference (the same single agent runs either way).
 pub fn phase_metas_dynamic(kind: StageKind) -> Vec<crate::model::PhaseMeta> {
     phase_metas(kind)
         .into_iter()

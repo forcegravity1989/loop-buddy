@@ -302,6 +302,13 @@ fn Root() -> Element {
                         hub: v.hub.clone(),
                         projects: v.projects.clone(),
                         on_run: move |_| hub.set(Hub::Workspace),
+                        // T16 (plan/12 §10 v1.1#3): a phase's agent/skill
+                        // chip click — same `sel`/`hub` navigation
+                        // `ProjectRail`'s `on_pick` below already drives.
+                        on_select: move |s: ComponentSel| {
+                            sel.set(Some(s));
+                            hub.set(Hub::Workspace);
+                        },
                     }
                 } else if hub() == Hub::Skill {
                     SkillHub { hub: v.hub.clone(), projects: v.projects.clone() }
@@ -330,6 +337,9 @@ fn Root() -> Element {
                         projects: v.projects.clone(),
                         cron_effectiveness: v.cron_effectiveness.clone(),
                         on_close: move |_| sel.set(None),
+                        // T16: a workflow phase's agent/skill chip click
+                        // re-points this same `sel` at the clicked component.
+                        on_select: move |s: ComponentSel| sel.set(Some(s)),
                     }
                 } else if show_create {
                     Create {

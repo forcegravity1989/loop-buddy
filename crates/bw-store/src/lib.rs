@@ -197,6 +197,12 @@ pub struct NewWorkflowSpec {
     /// `Some` = 项目自有,只这一条项目自己看得见——查询收窄(P2 全量)不在本次范围,
     /// 这里只落列 + 落值,读回走 sqlite 直查。
     pub project_id: Option<ProjectId>,
+    /// T16 (plan/12 §10 v1.1#3): the workflow's main MD document — see
+    /// `bw_core::model::WorkflowSpec::content`'s doc comment. `''` for every
+    /// caller today (no create-form field yet); carried as a real DTO field
+    /// so a future content-authoring path has somewhere to write it without
+    /// another schema change.
+    pub content: String,
 }
 
 /// The editable content of an existing **Static** hub workflow — the "优化"
@@ -691,6 +697,23 @@ pub trait Store: Send + Sync {
     /// Bump a hub spec's `uses` counter by 1 — called when it's run via
     /// `RunHubWorkflow`.
     async fn record_workflow_use(&self, id: WorkflowId) -> Result<()>;
+    /// T16.5 (GH#54): raw `phases`/`phase_prompts` column overwrite for one
+    /// `workflow_spec` row — deliberately bypasses `update_workflow_spec`'s
+    /// "optimize" path (no version bump, no `workflow_version` snapshot
+    /// written, `kind_json`/`name`/`prompt`/`goal`/`agents_json`/
+    /// `skills_json` untouched). This is the one-shot legacy-migration's own
+    /// narrow tool: refresh a built-in stage template's phase metadata from
+    /// the current playbook without disturbing its `uses`/`version`/other
+    /// track-record columns. Business judgement (which row, which values)
+    /// lives in `bw-app`'s `legacy_migration` module, never here — this is a
+    /// dumb column write, same "store 无业务判断" rule every other `Store`
+    /// method already follows.
+    async fn refresh_workflow_template_phases(
+        &self,
+        id: WorkflowId,
+        phases: Vec<PhaseMeta>,
+        phase_prompts: Vec<String>,
+    ) -> Result<()>;
 
     // ── workflow_run: append-only execution telemetry (iter 1) ──────────────
     /// Insert a fresh run row at `status = Running`, returning the minted id
@@ -791,6 +814,13 @@ pub trait Store: Send + Sync {
     /// built-in stage skills when they were seeded by an older binary,
     /// before this column carried real values.
     async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()>;
+    /// T14 (2026-07-24, plan/12 §10 v1.1): delete one skill row plus its
+    /// `skill_file` children (a legacy shell has none, but a real imported
+    /// package might in general — this stays correct either way), in one
+    /// transaction. The *decision* of which rows are safe to delete is
+    /// bw-app's business judgement (this repo's "store 无业务判断" rule);
+    /// this is purely the mechanical delete once that decision is made.
+    async fn delete_skill(&self, id: SkillId) -> Result<()>;
 
     async fn create_agent(&self, a: NewAgent) -> Result<()>;
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
@@ -803,6 +833,11 @@ pub trait Store: Send + Sync {
     /// `wins += ok as int`, `win_rate` recomputed from the real counters.
     /// Returns how many rows matched (0 = unregistered ref, honest no-op).
     async fn record_agent_run_by_name(&self, name: &str, ok: bool) -> Result<u32>;
+    /// T14: delete one agent row. No table carries a real FK onto `agent(id)`
+    /// (`issue.assignee` is a plain, unconstrained id string) so this is a
+    /// single-table delete; same "mechanics only, decision lives in bw-app"
+    /// split as `delete_skill`.
+    async fn delete_agent(&self, id: AgentId) -> Result<()>;
 
     async fn create_cron_task(&self, c: NewCronTask) -> Result<()>;
     async fn list_cron_tasks(&self) -> Result<Vec<CronTask>>;
@@ -887,6 +922,16 @@ pub trait Store: Send + Sync {
     /// the project wall's "open work" badge. Same predicate as the A4 handoff
     /// risky-guard, so the two numbers never disagree.
     async fn count_open_issues(&self, project_id: ProjectId) -> Result<i64>;
+
+    // ── app_meta: tiny key/value table for one-shot app-level markers ──
+    /// T14 (2026-07-24, plan/12 §10 v1.1): read a marker's value, `None` if
+    /// never set (including "table exists but this key was never written" —
+    /// the honest default for every pre-T14 DB and every fresh one).
+    async fn get_app_meta(&self, key: &str) -> Result<Option<String>>;
+    /// Upsert a marker. Used by the legacy-shell migration to record
+    /// "already ran" so a second boot is a real zero-op, not a re-scan that
+    /// happens to find nothing.
+    async fn set_app_meta(&self, key: &str, value: &str) -> Result<()>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────

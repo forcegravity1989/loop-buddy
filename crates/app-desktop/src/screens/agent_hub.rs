@@ -12,6 +12,7 @@
 //! `SkillHub` gained — shared `ui::vm::RoleFilter`/`role_chip_counts`.
 
 use crate::kernel::{HubVm, Kernel};
+use crate::screens::markdown::MarkdownView;
 use crate::theme;
 use bw_app::Command;
 use bw_core::AgentId;
@@ -242,13 +243,13 @@ fn AgentCard(
                         // T5(plan/12 §3):执行引擎——agent_cli 展示,首版诚实
                         // 只有 Claude Code 真实可跑(真实路由留给 T6)。
                         div { style: "font-size:11px;color:{ink3};margin-bottom:8px;", "执行引擎:{a.agent_cli_label}" }
-                        if a.instructions.trim().is_empty() {
-                            div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "目录引用 · 无本地指令(可「编辑」补充)" }
-                        } else {
-                            div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "常驻指令(角色系统提示;{{var}} 槽位在运行时按项目填充)" }
-                            pre {
-                                style: "font-family:{mono};font-size:11.5px;line-height:1.6;color:{ink2};background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:10px 12px;white-space:pre-wrap;margin:0 0 10px;",
-                                "{a.instructions}"
+                        // T15:常驻指令(AGENT.md 正文)改走共用 MD 渲染组件。
+                        div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "常驻指令(角色系统提示;{{var}} 槽位在运行时按项目填充)" }
+                        div {
+                            style: "margin-bottom:10px;",
+                            MarkdownView {
+                                content: a.instructions.clone(),
+                                empty_label: "目录引用 · 无本地指令(可「编辑」补充)".to_string(),
                             }
                         }
                         div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "被这些工作流使用" }

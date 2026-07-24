@@ -18,6 +18,8 @@
 //!   defaults Cron Hub's own create form uses).
 
 use crate::kernel::{HubVm, Kernel};
+use crate::screens::component_detail::ComponentSel;
+use crate::screens::markdown::MarkdownView;
 use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
 use bw_app::Command;
@@ -31,7 +33,15 @@ use std::collections::{HashMap, HashSet};
 use ui::vm::{AgentCardVm, ProjectCardVm, SkillCardVm, WorkflowDetailVm, WorkflowHubRowVm};
 
 #[component]
-pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandler<()>) -> Element {
+pub fn WorkflowHub(
+    hub: HubVm,
+    projects: Vec<ProjectCardVm>,
+    on_run: EventHandler<()>,
+    // T16 (plan/12 §10 v1.1#3): a phase's agent/skill chip click, bubbled up
+    // to `main.rs` Root — reuses the exact `sel`/`hub` navigation
+    // `ProjectRail`'s `on_pick` already drives, no second mechanism.
+    on_select: EventHandler<ComponentSel>,
+) -> Element {
     let k = use_context::<Kernel>();
     let paper = theme::PAPER;
     let serif = theme::SERIF;
@@ -53,6 +63,10 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
     let mut optimizing = use_signal(|| None::<WorkflowId>);
     let mut import_target = use_signal(|| 0usize);
     let mut cron_added = use_signal(HashSet::<WorkflowId>::new);
+    // T16: per-row 文档⇄流程图 view toggle. Keyed by row id so switching one
+    // row's view doesn't affect any other expanded row; defaults to 流程图
+    // (unchanged pre-T16 layout for the common "no content yet" case).
+    let mut doc_view = use_signal(HashSet::<WorkflowId>::new);
 
     let n = hub.workflows.len();
     let chip_counts = ui::vm::source_chip_counts(&hub.workflows);
@@ -287,14 +301,78 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
                                                                     on_done: move |_| optimizing.set(None),
                                                                 }
                                                             }
-                                                        } else {
-                                                            div { style: "font-size:11.5px;color:{ink3};margin-bottom:8px;", "全流程" }
-                                                            div {
-                                                                style: "margin-bottom:10px;",
-                                                                WorkflowFlow {
-                                                                    phases: row.phase_metas.clone(),
-                                                                    loop_retries: row.loop_retries,
-                                                                    loop_max_iter: row.loop_max_iter,
+                                        } else {
+                                                            // T16(plan/12 §10 v1.1#3):文档⇄流程图双视图——
+                                                            // 折叠态摘要行的「解决:」一句话仍是纯文本(同
+                                                            // desc/role 的既有约定),这里切的是展开态的
+                                                            // 正文/全流程主区。
+                                                            {
+                                                                let is_doc = doc_view().contains(&row_id);
+                                                                let has_content = !row.content.trim().is_empty();
+                                                                let k = k.clone();
+                                                                rsx! {
+                                                                    div {
+                                                                        style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
+                                                                        span { style: "font-size:11.5px;color:{ink3};", if is_doc { "文档" } else { "全流程" } }
+                                                                        div {
+                                                                            style: "display:flex;gap:4px;align-items:center;",
+                                                                            // T17(plan/12 §10 v1.1#4):显式触发的解析动作——
+                                                                            // content 为空(结构化定义/未撰写正文)诚实禁用,
+                                                                            // 绝不假装能解析一份不存在的文档。
+                                                                            button {
+                                                                                style: if has_content {
+                                                                                    "cursor:pointer;background:transparent;border:1px solid {theme::CLAY};color:{theme::CLAY};border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                                                                                } else {
+                                                                                    "cursor:not-allowed;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;opacity:.55;"
+                                                                                },
+                                                                                disabled: !has_content,
+                                                                                title: if has_content { "读文档,真实执行解析,成功后覆盖流程图(先留版本快照)" } else { "无原始文档,无可解析" },
+                                                                                onclick: move |_| {
+                                                                                    if has_content {
+                                                                                        k.send(Command::ParseWorkflowContent { workflow_id: row_id });
+                                                                                        doc_view.write().remove(&row_id);
+                                                                                    }
+                                                                                },
+                                                                                "🔍 解析为流程图"
+                                                                            }
+                                                                            button {
+                                                                                style: if is_doc {
+                                                                                    "cursor:pointer;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                                                                                } else {
+                                                                                    "cursor:pointer;background:{theme::CLAY};border:1px solid {theme::CLAY};color:#FFF;border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                                                                                },
+                                                                                onclick: move |_| { doc_view.write().remove(&row_id); },
+                                                                                "流程图"
+                                                                            }
+                                                                            button {
+                                                                                style: if is_doc {
+                                                                                    "cursor:pointer;background:{theme::CLAY};border:1px solid {theme::CLAY};color:#FFF;border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                                                                                } else {
+                                                                                    "cursor:pointer;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                                                                                },
+                                                                                onclick: move |_| { doc_view.write().insert(row_id); },
+                                                                                "文档"
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    div {
+                                                                        style: "margin-bottom:10px;",
+                                                                        if is_doc {
+                                                                            MarkdownView {
+                                                                                content: row.content.clone(),
+                                                                                empty_label: "结构化定义,无原始文档".to_string(),
+                                                                            }
+                                                                        } else {
+                                                                            WorkflowFlow {
+                                                                                phases: row.phase_metas.clone(),
+                                                                                loop_retries: row.loop_retries,
+                                                                                loop_max_iter: row.loop_max_iter,
+                                                                                agents: agents_pool.clone(),
+                                                                                skills: skills_pool.clone(),
+                                                                                on_select,
+                                                                            }
+                                                                        }
+                                                                    }
                                                                 }
                                                             }
                                                             if let Some(d) = &detail {
@@ -874,6 +952,8 @@ fn AdHocWorkflowForm(
             // 临时任务不进 Hub 库(见下方 UI 文案),这个字段对持久化查询没有
             // 意义——但它确实是为 `target` 这个项目跑的,如实标注。
             project_id: Some(target),
+            // 临时任务文本表单没有正文录入——如实留空。
+            content: String::new(),
         };
         let session = SessionId::new();
         k.send(Command::OpenProject(target));

@@ -12,6 +12,7 @@
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::agent_hub::workflows_using_agent;
+use crate::screens::markdown::MarkdownView;
 use crate::screens::skill_hub::{workflows_using_skill, SkillFileBrowser};
 use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
@@ -48,6 +49,10 @@ pub fn ComponentDetail(
     projects: Vec<ProjectCardVm>,
     cron_effectiveness: Option<(CronTaskId, CronEffectivenessVm)>,
     on_close: EventHandler<()>,
+    // T16 (plan/12 §10 v1.1#3): a workflow phase's agent/skill chip click,
+    // re-pointing this very screen at a different `sel` — same `sel`/`hub`
+    // Root signals this screen's own `on_close` already reaches into.
+    on_select: EventHandler<ComponentSel>,
 ) -> Element {
     let paper = theme::PAPER;
     let ink3 = theme::INK_3;
@@ -67,7 +72,7 @@ pub fn ComponentDetail(
             match sel {
                 ComponentSel::Skill(id) => rsx! { SkillDetailCard { id, hub, projects } },
                 ComponentSel::Agent(id) => rsx! { AgentDetailCard { id, hub, projects } },
-                ComponentSel::Workflow(id) => rsx! { WorkflowDetailCard { id, hub, projects } },
+                ComponentSel::Workflow(id) => rsx! { WorkflowDetailCard { id, hub, projects, on_select } },
                 ComponentSel::Cron(id) => rsx! { CronDetailCard { id, hub, projects, cron_effectiveness } },
                 ComponentSel::Connector(id) => rsx! { ConnectorDetailCard { id, hub, projects } },
             }
@@ -192,12 +197,11 @@ fn AgentDetailCard(id: AgentId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
                 }
             }
             div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "常驻指令(角色系统提示;{{var}} 槽位在运行时按项目填充)" }
-            if a.instructions.trim().is_empty() {
-                div { style: "font-size:12.5px;color:{ink3};margin-bottom:14px;", "目录引用 · 无本地指令" }
-            } else {
-                pre {
-                    style: "font-family:{theme::MONO};font-size:12px;line-height:1.7;color:{ink2};background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:14px 16px;white-space:pre-wrap;margin:0 0 14px;",
-                    "{a.instructions}"
+            div {
+                style: "margin-bottom:14px;",
+                MarkdownView {
+                    content: a.instructions.clone(),
+                    empty_label: "目录引用 · 无本地指令".to_string(),
                 }
             }
             div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "被这些工作流使用" }
@@ -216,7 +220,13 @@ fn AgentDetailCard(id: AgentId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
 }
 
 #[component]
-fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
+fn WorkflowDetailCard(
+    id: WorkflowId,
+    hub: HubVm,
+    projects: Vec<ProjectCardVm>,
+    on_select: EventHandler<ComponentSel>,
+) -> Element {
+    let k = use_context::<Kernel>();
     let card = theme::card();
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
@@ -231,6 +241,10 @@ fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) 
     };
     let row = d.row.clone();
     let owner = owner_project_name(row.project_id, &projects);
+    let has_content = !row.content.trim().is_empty();
+    // T16 (plan/12 §10 v1.1#3): 文档⇄流程图双视图,默认流程图(与
+    // WorkflowHub 展开态默认一致)。
+    let mut show_doc = use_signal(|| false);
     rsx! {
         div {
             style: "{card} padding:22px 26px;max-width:800px;",
@@ -242,7 +256,8 @@ fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) 
                 }
                 span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.maturity_label}" }
             }
-            div { style: "font-size:13.5px;color:{ink2};line-height:1.7;margin-bottom:10px;", "解决:{row.goal}" }
+            div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "解决" }
+            div { style: "font-size:12.5px;color:{ink2};margin-bottom:10px;", "{row.goal}" }
             div {
                 style: "font-family:{mono};font-size:12px;color:{ink3};margin-bottom:10px;",
                 if row.last_run_label.is_empty() {
@@ -259,13 +274,67 @@ fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) 
                 }
                 span { style: "font-size:11.5px;color:{ink3};", "主责 {row.primary_agent}" }
             }
-            div { style: "font-size:11.5px;color:{ink3};margin-bottom:8px;", "全流程" }
+            div {
+                style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
+                span { style: "font-size:11.5px;color:{ink3};", if show_doc() { "文档" } else { "全流程" } }
+                div {
+                    style: "display:flex;gap:4px;align-items:center;",
+                    // T17(plan/12 §10 v1.1#4):显式触发的解析动作——content 为空
+                    // (结构化定义/未撰写正文)诚实禁用,绝不假装能解析一份不存在
+                    // 的文档;失败走 Kernel 通用错误 toast(`UiNote::Error`),
+                    // 可再次点击重试——从不自动重跑。
+                    button {
+                        style: if has_content {
+                            "cursor:pointer;background:transparent;border:1px solid {theme::CLAY};color:{theme::CLAY};border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                        } else {
+                            "cursor:not-allowed;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;opacity:.55;"
+                        },
+                        disabled: !has_content,
+                        title: if has_content { "读文档,真实执行解析,成功后覆盖流程图(先留版本快照)" } else { "无原始文档,无可解析" },
+                        onclick: move |_| {
+                            if has_content {
+                                k.send(Command::ParseWorkflowContent { workflow_id: id });
+                                show_doc.set(false);
+                            }
+                        },
+                        "🔍 解析为流程图"
+                    }
+                    button {
+                        style: if show_doc() {
+                            "cursor:pointer;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                        } else {
+                            "cursor:pointer;background:{theme::CLAY};border:1px solid {theme::CLAY};color:#FFF;border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                        },
+                        onclick: move |_| show_doc.set(false),
+                        "流程图"
+                    }
+                    button {
+                        style: if show_doc() {
+                            "cursor:pointer;background:{theme::CLAY};border:1px solid {theme::CLAY};color:#FFF;border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                        } else {
+                            "cursor:pointer;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                        },
+                        onclick: move |_| show_doc.set(true),
+                        "文档"
+                    }
+                }
+            }
             div {
                 style: "margin-bottom:14px;",
-                WorkflowFlow {
-                    phases: row.phase_metas.clone(),
-                    loop_retries: row.loop_retries,
-                    loop_max_iter: row.loop_max_iter,
+                if show_doc() {
+                    MarkdownView {
+                        content: row.content.clone(),
+                        empty_label: "结构化定义,无原始文档".to_string(),
+                    }
+                } else {
+                    WorkflowFlow {
+                        phases: row.phase_metas.clone(),
+                        loop_retries: row.loop_retries,
+                        loop_max_iter: row.loop_max_iter,
+                        agents: hub.agents.clone(),
+                        skills: hub.skills.clone(),
+                        on_select,
+                    }
                 }
             }
             if !d.agents.is_empty() {

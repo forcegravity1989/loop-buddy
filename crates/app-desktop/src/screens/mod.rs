@@ -10,6 +10,7 @@ pub mod connector_hub;
 pub mod create;
 pub mod cron_hub;
 pub mod knowledge_hub;
+pub mod markdown;
 pub mod notify_hub;
 pub mod op;
 pub mod project_rail;

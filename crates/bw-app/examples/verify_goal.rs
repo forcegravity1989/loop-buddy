@@ -727,6 +727,7 @@ async fn main() {
             max_iter: 1,
         },
         project_id: None,
+        content: String::new(),
     };
     app.dispatch(Command::RunWorkflow {
         session: adhoc_session,
