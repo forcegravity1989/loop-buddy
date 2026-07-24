@@ -91,6 +91,7 @@ async fn main() {
     println!("\n① CreateProject …");
     let pid = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: pid,
         name: "C12 退出流程演示".into(),
         kind: "CLI 工具 · Rust".into(),

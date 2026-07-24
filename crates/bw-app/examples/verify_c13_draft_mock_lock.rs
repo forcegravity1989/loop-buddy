@@ -188,6 +188,7 @@ async fn main() {
     println!("\n① 项目 A(挂仓,真实本地工作区)· CreateProject github=New …");
     let proj_a = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: proj_a,
         name: "C13 起草锁 mock 演示 A".into(),
         kind: "CLI 工具 · Rust".into(),
@@ -223,6 +224,7 @@ async fn main() {
     println!("\n③ 项目 B(无工作区)· CreateProject github=None → SetWorkspace(清空) …");
     let proj_b = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: proj_b,
         name: "C13 起草锁 mock 演示 B · 无工作区".into(),
         kind: "CLI 工具 · Rust".into(),

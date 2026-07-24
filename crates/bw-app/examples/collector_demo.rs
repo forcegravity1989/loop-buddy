@@ -164,6 +164,7 @@ async fn main() {
     println!("\n① CreateProject github=New …");
     let project = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: project,
         name: "采集器演示".into(),
         kind: "CLI 工具 · Rust".into(),

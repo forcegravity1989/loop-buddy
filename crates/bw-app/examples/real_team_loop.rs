@@ -50,6 +50,7 @@ async fn main() {
     // ── 1. 真实项目:BW 自己(完整形态自举)──
     let project = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: project,
         name: "Builders' Workbench · 完整形态".into(),
         kind: "开发者工作台 · multica 优点 × BW 设计初衷".into(),

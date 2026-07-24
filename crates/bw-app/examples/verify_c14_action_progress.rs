@@ -77,7 +77,10 @@ if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
 fi
 if [ "$1" = "repo" ] && [ "$2" = "list" ]; then
   sleep "$delay"
-  echo '[{"nameWithOwner":"testowner/demo-repo","isPrivate":false,"updatedAt":"2026-07-01T00:00:00Z"}]'
+  # C16(plan/14 规范条 4): --json 字段集扩到 description/defaultBranchRef/
+  # pushedAt(见 bw_engine::github::list_repos),stub 同步扩,不落后于真实
+  # 调用的字段集。
+  echo '[{"nameWithOwner":"testowner/demo-repo","isPrivate":false,"description":"C14 stub 演示仓","defaultBranchRef":{"name":"main"},"pushedAt":"2026-07-01T00:00:00Z"}]'
   exit 0
 fi
 if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
@@ -220,6 +223,7 @@ async fn main() {
     println!("\n① CreateProject(github=New, 正常 slug)…");
     let proj_ok = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: proj_ok,
         name: "C14 建仓正常".into(),
         kind: "CLI 工具 · Rust".into(),
@@ -237,6 +241,7 @@ async fn main() {
     println!("② CreateProject(github=New, 人为失败 slug={FAIL_SLUG:?})…");
     let proj_fail = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: proj_fail,
         name: "C14 建仓失败".into(),
         kind: "CLI 工具 · Rust".into(),
@@ -261,6 +266,7 @@ async fn main() {
     assert!(init.success(), "git init --bare failed");
     let proj_clone = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: proj_clone,
         name: "C14 克隆".into(),
         kind: "CLI 工具 · Rust".into(),

@@ -169,6 +169,7 @@ async fn main() {
     app.dispatch(Command::Boot).await.unwrap();
     let project_id = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: project_id,
         name: DEEP_LINK_PROJECT.to_string(),
         kind: "内部验证".to_string(),

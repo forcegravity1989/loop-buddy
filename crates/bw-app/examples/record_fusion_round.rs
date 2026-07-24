@@ -63,6 +63,7 @@ async fn main() {
     // ── 项目:工作台自举(它管理的是它自己的融合收口)──────────────────
     let project = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: project,
         name: PROJECT_NAME.into(),
         kind: "开发者工作台 · 自举".into(),

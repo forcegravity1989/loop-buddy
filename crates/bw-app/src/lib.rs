@@ -101,6 +101,11 @@ pub enum Command {
     /// rest of the flow (drafting run, resume-if-interrupted) has somewhere
     /// real to attach to. `desc` carries the free-text brief.
     CreateProject {
+        /// C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 今天恒 `"github"`
+        /// (唯一可选项,GitLab/Gitcode 灰置「未接」),从 `RepoCard` 顶部的平台
+        /// chip 传入,不在这里硬编码。留好字段语义:第二个平台真接时,这里
+        /// 已经是"选出来的"而不需要改 Command 形状。落进 `project.provider`。
+        provider: String,
         id: ProjectId,
         name: String,
         kind: String,
@@ -2862,6 +2867,7 @@ impl App {
             }
 
             Command::CreateProject {
+                provider,
                 id,
                 name,
                 kind,
@@ -2875,6 +2881,7 @@ impl App {
                         name,
                         kind,
                         desc,
+                        provider,
                     })
                     .await?;
                 self.state.active_project = Some(id);
