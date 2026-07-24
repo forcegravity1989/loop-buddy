@@ -15,7 +15,10 @@
 //! confirm: that gives the drafting run somewhere real to attach a session,
 //! and means an interrupted creation resumes instead of vanishing.
 
-use crate::kernel::{CreateVm, Kernel, RunVm};
+use crate::kernel::{
+    ActionItem, CreateVm, Kernel, RunVm, ACTION_FAIL_LINGER, ACTION_OK_LINGER,
+    ACTION_PENDING_THRESHOLD,
+};
 use crate::theme;
 use bw_app::{Command, GithubOrigin, Panel, Scope};
 use bw_core::model::{drafting_workflow, Cadence, MaturityPeriod, StageKind};
@@ -48,6 +51,12 @@ enum RepoChoice {
 pub fn Create(
     vm: Option<CreateVm>,
     run: RunVm,
+    // plan/14 C14: raw Started/Ok/Fail facts for this flow's background
+    // actions (建仓/克隆/仓列表加载/标配建单/落地推送) — rendered by
+    // `ActionsBanner` below, visible across every card since the action that
+    // started it may finish several cards later (e.g. 建仓 starts on
+    // Intent, resolves while the user is already answering Questions).
+    actions: Vec<ActionItem>,
     github_repos: Vec<GithubRepoSummary>,
     on_cancel: EventHandler<()>,
 ) -> Element {
@@ -84,6 +93,9 @@ pub fn Create(
                     "← 返回项目墙"
                 }
             }
+            // plan/14 C14(规范条 2): 后台动作永远有状态回显 —— 建仓/克隆/仓
+            // 列表加载/标配建单/落地推送不管走完哪张卡都在这里能看见。
+            ActionsBanner { items: actions }
             match (card(), vm) {
                 (Card::Repo, _) => rsx! {
                     RepoCard { choice: repo_choice, github_repos: github_repos.clone(), on_next: move |_| card.set(Card::Intent) }
@@ -99,6 +111,124 @@ pub fn Create(
                     DraftingCard { run, on_next: move |_| card.set(Card::Review), on_cancel }
                 },
                 (Card::Review, Some(v)) => rsx! { ReviewCard { vm: v, cadence } },
+            }
+        }
+    }
+}
+
+// ─────────────────── plan/14 C14 · 后台动作进度条 ───────────────────
+
+/// One [`ActionItem`] resolved into what the strip actually shows —
+/// recomputed every render against `Instant::now()`, never stored: see
+/// `visible_actions`.
+#[derive(Clone, PartialEq)]
+enum ActionView {
+    Pending { elapsed_secs: u64 },
+    Ok,
+    Fail(String),
+}
+
+/// Render-time visibility gate (体验规范条 2 + 阈值门槛,plan/14 C14): an
+/// action that starts *and* resolves inside `ACTION_PENDING_THRESHOLD` never
+/// appears at all — 秒级内完成的动作不闪烁噪音. One that does cross the
+/// threshold shows `Pending` with a live elapsed count, then transitions to
+/// `Ok`(短暂淡出) or `Fail`(带原因,停留更久 —— 与既有 `ConnectorSynced`
+/// toast 互为记录,那条不受这里的淡出影响) until its own linger window
+/// elapses.
+fn visible_actions(items: &[ActionItem], now: std::time::Instant) -> Vec<(String, ActionView)> {
+    items
+        .iter()
+        .filter_map(|it| match &it.resolved {
+            None => {
+                let elapsed = now.saturating_duration_since(it.started_at);
+                (elapsed >= ACTION_PENDING_THRESHOLD).then(|| {
+                    (
+                        it.name.clone(),
+                        ActionView::Pending {
+                            elapsed_secs: elapsed.as_secs(),
+                        },
+                    )
+                })
+            }
+            Some((ok, detail, resolved_at)) => {
+                let was_shown = resolved_at.saturating_duration_since(it.started_at)
+                    >= ACTION_PENDING_THRESHOLD;
+                if !was_shown {
+                    return None; // resolved before ever crossing the noise threshold
+                }
+                let since_resolved = now.saturating_duration_since(*resolved_at);
+                let linger = if *ok {
+                    ACTION_OK_LINGER
+                } else {
+                    ACTION_FAIL_LINGER
+                };
+                (since_resolved < linger).then(|| {
+                    let view = if *ok {
+                        ActionView::Ok
+                    } else {
+                        ActionView::Fail(detail.clone())
+                    };
+                    (it.name.clone(), view)
+                })
+            }
+        })
+        .collect()
+}
+
+/// The always-mounted-while-creating strip that turns raw `ActionItem`s into
+/// live "正在 X … 已 N 秒" / "✓ X" / "✕ X · 原因" rows (plan/14 C14,规范条
+/// 2). Self-ticks on a local signal — not driven by the parent re-rendering
+/// — because elapsed-seconds/linger-window visibility is wall-clock, not
+/// event-driven: without its own clock this would only refresh whenever a
+/// *new* Started/Ok/Fail note arrives, freezing the "已 N 秒" count between
+/// real events. Bounded lifetime: only mounted while the creation flow is on
+/// screen.
+#[component]
+fn ActionsBanner(items: Vec<ActionItem>) -> Element {
+    let mut tick = use_signal(|| 0u32);
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            tick.with_mut(|t| *t = t.wrapping_add(1));
+        }
+    });
+    let _ = tick(); // subscribe: forces this component to re-render on tick
+    let visible = visible_actions(&items, std::time::Instant::now());
+    let ink2 = theme::INK_2;
+    let clay = theme::CLAY;
+
+    rsx! {
+        if !visible.is_empty() {
+            div {
+                style: "display:flex;flex-direction:column;gap:4px;margin:-2px 0 6px;",
+                for (name, view) in visible {
+                    {
+                        match view {
+                            ActionView::Pending { elapsed_secs } => rsx! {
+                                div {
+                                    key: "{name}",
+                                    style: "display:flex;align-items:center;gap:8px;font-size:11.5px;color:{ink2};",
+                                    span { style: "width:6px;height:6px;border-radius:50%;background:{clay};flex:none;", "" }
+                                    span { "正在{name} … 已 {elapsed_secs} 秒" }
+                                }
+                            },
+                            ActionView::Ok => rsx! {
+                                div {
+                                    key: "{name}",
+                                    style: "display:flex;align-items:center;gap:8px;font-size:11.5px;color:#5F7355;",
+                                    span { "✓ {name}" }
+                                }
+                            },
+                            ActionView::Fail(detail) => rsx! {
+                                div {
+                                    key: "{name}",
+                                    style: "display:flex;align-items:center;gap:8px;font-size:11.5px;color:#B0503A;",
+                                    span { "✕ {name} · {detail}" }
+                                }
+                            },
+                        }
+                    }
+                }
             }
         }
     }
@@ -505,6 +635,16 @@ fn chip_question(
 
 // ───────────────────────── 3 · 起草中 ─────────────────────────
 
+/// plan/14 C14: a phase chip's real start/end `Instant`s, component-local to
+/// `DraftingCard` — `RunVm.phases` (shared with the Op screen's run banner)
+/// only carries `(name, done)`, so this latches timing alongside it without
+/// changing that shared shape.
+#[derive(Clone, Copy)]
+struct PhaseTiming {
+    started: std::time::Instant,
+    ended: Option<std::time::Instant>,
+}
+
 #[component]
 fn DraftingCard(run: RunVm, on_next: EventHandler<()>, on_cancel: EventHandler<()>) -> Element {
     let k = use_context::<Kernel>();
@@ -514,6 +654,46 @@ fn DraftingCard(run: RunVm, on_next: EventHandler<()>, on_cancel: EventHandler<(
     let clay = theme::CLAY;
     let done = !run.running && run.failed.is_none() && !run.phases.is_empty();
     let failed = run.failed.is_some();
+
+    // plan/14 C14(规范条 2): "补相位耗时显示即可,不重做" — the phase chips
+    // themselves (below) are untouched; this only latches a real start
+    // `Instant` per phase index (from `run.phases` growing, the same signal
+    // the chips already render off) so each chip can show how long it's
+    // actually been running/took. `run.phases` resets to a shorter/empty
+    // list on a retry (`RunVm::apply`'s `RunStarted` clears it) — caught
+    // below so a fresh attempt never inherits a stale `Instant`.
+    let mut phase_times = use_signal(Vec::<PhaseTiming>::new);
+    if run.phases.len() < phase_times.peek().len() {
+        phase_times.set(Vec::new());
+    }
+    if run.phases.len() > phase_times.peek().len() {
+        phase_times.with_mut(|pt| {
+            while pt.len() < run.phases.len() {
+                pt.push(PhaseTiming {
+                    started: std::time::Instant::now(),
+                    ended: None,
+                });
+            }
+        });
+    }
+    for (i, (_, ok)) in run.phases.iter().enumerate() {
+        if *ok && phase_times.peek().get(i).is_some_and(|t| t.ended.is_none()) {
+            phase_times.with_mut(|pt| {
+                if let Some(t) = pt.get_mut(i) {
+                    t.ended = Some(std::time::Instant::now());
+                }
+            });
+        }
+    }
+    // Self-ticking so a still-running phase's "已 Ns" visibly counts up
+    // between `WorkflowProgress` events, same rationale as
+    // `ActionsBanner` above. Bounded to this card's lifetime.
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            phase_times.with_mut(|_| {});
+        }
+    });
 
     rsx! {
         div {
@@ -535,11 +715,21 @@ fn DraftingCard(run: RunVm, on_next: EventHandler<()>, on_cancel: EventHandler<(
                     {
                         let color = if *ok { "#5F7355" } else { clay };
                         let mark = if *ok { "✓" } else { "…" };
+                        // 耗时:done 的相位显示定格用时,进行中的相位随
+                        // 上面的 tick 实时累加 —— 都是真实 Instant 差值。
+                        let secs = phase_times.peek().get(i).map(|t| {
+                            let end = t.ended.unwrap_or_else(std::time::Instant::now);
+                            end.saturating_duration_since(t.started).as_secs()
+                        });
                         rsx! {
                             span {
                                 key: "{i}",
                                 style: "border:1.4px solid {color};color:{color};border-radius:7px;padding:3px 10px;font-size:12px;",
-                                "{name} {mark}"
+                                if let Some(secs) = secs {
+                                    "{name} {mark} · {secs}s"
+                                } else {
+                                    "{name} {mark}"
+                                }
                             }
                         }
                     }
