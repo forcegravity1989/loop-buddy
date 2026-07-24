@@ -174,3 +174,98 @@ pub fn overview_attention(stages: &[StageAttention]) -> Attention {
     }
     a
 }
+
+// ───────────────────── plan/14 C15 · 失败说人话 ─────────────────────
+
+/// Which real failure shape a raw executor/action error text matched, driving
+/// which headline `explain_failure` picked. `Unknown` is not a failure of the
+/// classifier — it's the honest "we don't have a canned translation for this
+/// one yet" case (规范条 3: "其余类别不硬翻").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum FailureCategory {
+    /// `crates/bw-engine/src/claude_cli.rs`'s `CliResult::error_text` when
+    /// `result` is empty and `errors`/`subtype` carry
+    /// `subtype=error_max_budget_usd` — the real text a user hit
+    /// (plan/14 缘起台账 #3): `"Reached maximum budget ($0.5)
+    /// (subtype=error_max_budget_usd)"`.
+    BudgetExhausted,
+    /// `is_transient_gateway_error` in the same file: `"API Error: 529/503/
+    /// 502/504"`, or a message containing "overloaded"/"访问量过大". By the
+    /// time this reaches the UI the executor's own bounded retry
+    /// (`TRANSIENT_BACKOFF_SECS`) has already been exhausted.
+    GatewayTransient,
+    /// The `ATTEMPT_TIMEOUT_SECS` guard's own text: `"claude CLI attempt
+    /// exceeded {N}s (hung child killed)"`.
+    Timeout,
+    /// Any other real failure text (spawn failure, JSON parse failure, empty
+    /// workspace, `gh` CLI errors bubbled through `ActionState::Fail`, …) —
+    /// not guessed at, shown via a generic sentence + the untouched original.
+    Unknown,
+}
+
+/// A raw failure string translated into what a human should read first, with
+/// the original **never discarded** — `raw` always carries the exact text
+/// that came out of the executor/action, verbatim, so nothing is hidden, only
+/// deprioritized behind a fold (规范条 3: "如实,不隐藏").
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FailureExplanation {
+    pub category: FailureCategory,
+    /// One user-language sentence. For `Unknown` this is a generic "起草没
+    /// 走完" line, never a fabricated specific cause.
+    pub headline: String,
+    /// The untouched input to `explain_failure` — the technical-details fold
+    /// renders this, byte for byte.
+    pub raw: String,
+}
+
+/// Pure text classifier — no IO, no async, matches only against the real
+/// literal shapes `crates/bw-engine/src/claude_cli.rs` is confirmed to
+/// produce (see `FailureCategory`'s doc comments for each pattern's exact
+/// source). Never guesses at meaning for text it doesn't recognize: those
+/// fall through to `Unknown` with a generic headline, `raw` intact.
+///
+/// Shared by the drafting-run failure card and the `ActionsBanner` fail
+/// state (plan/14 C15, 规范条 3) — both hold a raw `String` from a real
+/// `Err`/`ActionState::Fail`, never a value this function invents.
+pub fn explain_failure(raw: &str) -> FailureExplanation {
+    let lower = raw.to_ascii_lowercase();
+
+    if raw.contains("subtype=error_max_budget_usd") || lower.contains("reached maximum budget") {
+        return FailureExplanation {
+            category: FailureCategory::BudgetExhausted,
+            headline: "预算到顶,起草没做完——重试会重新计费".to_string(),
+            raw: raw.to_string(),
+        };
+    }
+
+    let gateway_markers = [
+        "API Error: 529",
+        "API Error: 503",
+        "API Error: 502",
+        "API Error: 504",
+    ];
+    if gateway_markers.iter().any(|m| raw.contains(m))
+        || lower.contains("overloaded")
+        || raw.contains("访问量过大")
+    {
+        return FailureExplanation {
+            category: FailureCategory::GatewayTransient,
+            headline: "AI 网关暂时不可用,稍等重试通常就好".to_string(),
+            raw: raw.to_string(),
+        };
+    }
+
+    if raw.contains("hung child killed") {
+        return FailureExplanation {
+            category: FailureCategory::Timeout,
+            headline: "执行超时被终止,可重试".to_string(),
+            raw: raw.to_string(),
+        };
+    }
+
+    FailureExplanation {
+        category: FailureCategory::Unknown,
+        headline: "起草没走完,原因未归类——技术详情里是原始报错,可直接重试".to_string(),
+        raw: raw.to_string(),
+    }
+}

@@ -219,11 +219,19 @@ fn ActionsBanner(items: Vec<ActionItem>) -> Element {
                                     span { "✓ {name}" }
                                 }
                             },
-                            ActionView::Fail(detail) => rsx! {
-                                div {
-                                    key: "{name}",
-                                    style: "display:flex;align-items:center;gap:8px;font-size:11.5px;color:#B0503A;",
-                                    span { "✕ {name} · {detail}" }
+                            ActionView::Fail(detail) => {
+                                // plan/14 C15(规范条 3): 人话优先,原文不丢 ——
+                                // `explain_failure` 的 headline 上屏,`raw`(=
+                                // 原始 `detail`,逐字未改)进 `title` 悬浮,鼠标
+                                // 停留即见,不隐藏也不占版面。
+                                let x = ui::explain_failure(&detail);
+                                rsx! {
+                                    div {
+                                        key: "{name}",
+                                        title: "{x.raw}",
+                                        style: "display:flex;align-items:center;gap:8px;font-size:11.5px;color:#B0503A;",
+                                        span { "✕ {name} · {x.headline}" }
+                                    }
                                 }
                             },
                         }
@@ -704,7 +712,12 @@ fn DraftingCard(run: RunVm, on_next: EventHandler<()>, on_cancel: EventHandler<(
                     span { style: "width:7px;height:7px;border-radius:50%;background:{clay};", "" }
                     span { style: "font-size:12.5px;color:{ink3};", "正在按方法论起草体系 —— 北极星起草 · 指标框架 · 阶段激活…" }
                 } else if let Some(err) = run.failed.clone() {
-                    span { style: "font-size:12.5px;color:#B0503A;", "起草失败:{err}" }
+                    // plan/14 C15(规范条 3): 人话优先 —— headline 上屏,原文
+                    // `err` 一字不改地进下方「技术详情」折叠区(见 details 块)。
+                    {
+                        let x = ui::explain_failure(&err);
+                        rsx! { span { style: "font-size:12.5px;color:#B0503A;", "起草失败:{x.headline}" } }
+                    }
                 } else {
                     span { style: "font-size:12.5px;color:{ink2};", "起草完成 —— 以下候选均可编辑,确认前不算数。" }
                 }
@@ -745,11 +758,26 @@ fn DraftingCard(run: RunVm, on_next: EventHandler<()>, on_cancel: EventHandler<(
                     }
                 }
             }
-            // C12(plan/14 规范条 1): 失败态零按钮 = 死路 —— 至少两个可点出
-            // 路。「重试起草」复用同一条 dispatch_draft_run(新会话,同
-            // RunDraftWorkflow 命令,不新增语义);「返回项目墙」= 顶部同款
-            // on_cancel,已落库的项目/阶段留档不丢。三出路的完整版(含「先
-            // 用模板继续」+ 人话翻译)是 C15,本票只保证不死路。
+            // C12(plan/14 规范条 1)→ C15(规范条 3): 失败态从「零按钮死路」升
+            // 到三出路,原文永不丢。
+            if let Some(err) = run.failed.clone() {
+                {
+                    let raw = err.clone();
+                    rsx! {
+                        // 技术详情折叠:默认收起,只显示人话;展开见原始报错
+                        // 逐字文本(`FailureExplanation::raw`,未经改写)—— 如
+                        // 实,不隐藏(规范条 3)。
+                        details {
+                            style: "font-size:11.5px;color:{ink3};",
+                            summary { style: "cursor:pointer;color:{ink3};", "技术详情" }
+                            div {
+                                style: "margin-top:6px;padding:8px 10px;background:#F7F3EA;border:1px solid #E5DDCB;border-radius:6px;font-family:{theme::MONO};font-size:11px;color:{ink2};white-space:pre-wrap;word-break:break-word;",
+                                "{raw}"
+                            }
+                        }
+                    }
+                }
+            }
             if failed {
                 div {
                     style: "display:flex;justify-content:flex-end;gap:8px;",
@@ -757,6 +785,18 @@ fn DraftingCard(run: RunVm, on_next: EventHandler<()>, on_cancel: EventHandler<(
                         style: "background:transparent;border:1px solid #CFC7B6;color:{ink2};cursor:pointer;border-radius:8px;padding:9px 16px;font-size:12.5px;",
                         onclick: move |_| on_cancel.call(()),
                         "返回项目墙"
+                    }
+                    button {
+                        style: "background:transparent;border:1px solid #CFC7B6;color:{ink2};cursor:pointer;border-radius:8px;padding:9px 16px;font-size:12.5px;",
+                        // plan/14 C15(规范条 3)「先用模板继续」: 起草这一跑
+                        // (`RunDraftWorkflow`,C13 后已是 mock)失败不拦审阅 ——
+                        // `ReviewCard` 的字段来自 `CreateVm`/用户已填的
+                        // brief/问答(见本文件顶部注释),从不读这次跑的
+                        // transcript,所以「继续」= 原样推进到 Review,零新
+                        // 后端命令、零编造字段。与 `done` 分支的「查看起草结果」
+                        // 是同一条 `on_next`,只是失败也放行。
+                        onclick: move |_| on_next.call(()),
+                        "先用模板继续 →"
                     }
                     button {
                         style: "{theme::btn_primary()}",
