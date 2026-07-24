@@ -74,12 +74,14 @@ pub fn Create(
             div {
                 style: "display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;",
                 span { style: "font-family:{serif};font-size:17px;font-weight:600;", "新建项目" }
-                if card() == Card::Repo || card() == Card::Intent {
-                    button {
-                        style: "background:transparent;border:none;color:{ink2};cursor:pointer;font-size:13px;",
-                        onclick: move |_| on_cancel.call(()),
-                        "← 返回项目墙"
-                    }
+                // C12(plan/14 规范条 1): 永远退得出去 —— 全卡、全状态(含起草
+                // 进行中/失败、审阅)都有这条路,不再只挂 Repo/Intent 两卡。
+                // `on_cancel` 语义见 main.rs:只清活跃项目指针,不删项目、不回
+                // 滚已落库进度——已建的项目留在墙上,重开走 cold-start 续。
+                button {
+                    style: "background:transparent;border:none;color:{ink2};cursor:pointer;font-size:13px;",
+                    onclick: move |_| on_cancel.call(()),
+                    "← 返回项目墙"
                 }
             }
             match (card(), vm) {
@@ -94,7 +96,7 @@ pub fn Create(
                     QuestionsCard { vm: v, cadence, on_next: move |_| card.set(Card::Drafting) }
                 },
                 (Card::Drafting, Some(_)) => rsx! {
-                    DraftingCard { run, on_next: move |_| card.set(Card::Review) }
+                    DraftingCard { run, on_next: move |_| card.set(Card::Review), on_cancel }
                 },
                 (Card::Review, Some(v)) => rsx! { ReviewCard { vm: v, cadence } },
             }
@@ -343,6 +345,27 @@ fn IntentCard(repo_choice: Signal<RepoChoice>, on_created: EventHandler<()>) -> 
     }
 }
 
+/// Kicks off the drafting run — shared by `QuestionsCard`'s initial submit
+/// and `DraftingCard`'s「重试起草」on a failed run (C12, plan/14). Always a
+/// fresh `SessionId` + `StartSession`: `RunDraftWorkflow` (plan/14 C13, D8
+/// 回锁) hard-locks to the shared MockExecutor regardless of session
+/// identity, so a retry doesn't need the failed attempt's session — a new
+/// one keeps each attempt's record honest (a retry is a new real session,
+/// not a fabricated continuation of the one that failed).
+fn dispatch_draft_run(k: &Kernel) {
+    let session = SessionId::new();
+    k.send(Command::StartSession {
+        id: session,
+        stage_kind: Some(StageKind::Prototype),
+        kind: SessionKind::Create,
+        title: "创建 · 体系起草".into(),
+    });
+    k.send(Command::RunDraftWorkflow {
+        session,
+        spec: drafting_workflow(),
+    });
+}
+
 // ───────────────────────── 2 · 快速问题 ─────────────────────────
 
 #[component]
@@ -375,17 +398,7 @@ fn QuestionsCard(vm: CreateVm, cadence: Signal<Cadence>, on_next: EventHandler<(
         // transcript is honestly mock; nothing from it is copied into the
         // editable review fields. Real system-drafting work (竞品分析/找
         // 指标/绑数据) happens later, through the standard-Issue trio.
-        let session = SessionId::new();
-        k.send(Command::StartSession {
-            id: session,
-            stage_kind: Some(StageKind::Prototype),
-            kind: SessionKind::Create,
-            title: "创建 · 体系起草".into(),
-        });
-        k.send(Command::RunDraftWorkflow {
-            session,
-            spec: drafting_workflow(),
-        });
+        dispatch_draft_run(&k);
         on_next.call(());
     };
 
@@ -493,12 +506,14 @@ fn chip_question(
 // ───────────────────────── 3 · 起草中 ─────────────────────────
 
 #[component]
-fn DraftingCard(run: RunVm, on_next: EventHandler<()>) -> Element {
+fn DraftingCard(run: RunVm, on_next: EventHandler<()>, on_cancel: EventHandler<()>) -> Element {
+    let k = use_context::<Kernel>();
     let card = theme::card();
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
     let clay = theme::CLAY;
     let done = !run.running && run.failed.is_none() && !run.phases.is_empty();
+    let failed = run.failed.is_some();
 
     rsx! {
         div {
@@ -537,6 +552,26 @@ fn DraftingCard(run: RunVm, on_next: EventHandler<()>) -> Element {
                         style: "{theme::btn_primary()}",
                         onclick: move |_| on_next.call(()),
                         "查看起草结果 →"
+                    }
+                }
+            }
+            // C12(plan/14 规范条 1): 失败态零按钮 = 死路 —— 至少两个可点出
+            // 路。「重试起草」复用同一条 dispatch_draft_run(新会话,同
+            // RunDraftWorkflow 命令,不新增语义);「返回项目墙」= 顶部同款
+            // on_cancel,已落库的项目/阶段留档不丢。三出路的完整版(含「先
+            // 用模板继续」+ 人话翻译)是 C15,本票只保证不死路。
+            if failed {
+                div {
+                    style: "display:flex;justify-content:flex-end;gap:8px;",
+                    button {
+                        style: "background:transparent;border:1px solid #CFC7B6;color:{ink2};cursor:pointer;border-radius:8px;padding:9px 16px;font-size:12.5px;",
+                        onclick: move |_| on_cancel.call(()),
+                        "返回项目墙"
+                    }
+                    button {
+                        style: "{theme::btn_primary()}",
+                        onclick: move |_| dispatch_draft_run(&k),
+                        "重试起草"
                     }
                 }
             }

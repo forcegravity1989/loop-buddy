@@ -320,7 +320,20 @@ fn Root() -> Element {
                         vm: v.create.clone(),
                         run: run(),
                         github_repos: v.github_repos.clone(),
-                        on_cancel: move |_| creating.set(false),
+                        // C12(plan/14): every card/state of the creation flow
+                        // routes its exit here — including after a project row
+                        // already exists (kernel `state.view` is already
+                        // `View::Create` by then, so flipping the local
+                        // `creating` bridge alone wouldn't leave the screen).
+                        // `BackToProjects` is the real "回项目墙" semantics:
+                        // clears `active_project`/`active_session`, never
+                        // touches the store — the project (if minted) stays on
+                        // the wall exactly as `Command::CreateProject` left it,
+                        // resumable via cold-start `OpenProject`.
+                        on_cancel: move |_| {
+                            kernel.send(Command::BackToProjects);
+                            creating.set(false);
+                        },
                     }
                 } else if show_op {
                     if v.op.is_some() {
