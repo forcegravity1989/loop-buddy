@@ -331,6 +331,7 @@ async fn cmd_setup(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
                     max_iter: 3,
                 },
                 project_id: Some(project),
+                content: String::new(),
             })
             .await
             .expect("create workflow aihot 主 workflow");

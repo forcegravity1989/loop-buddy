@@ -49,6 +49,10 @@ pub fn ComponentDetail(
     projects: Vec<ProjectCardVm>,
     cron_effectiveness: Option<(CronTaskId, CronEffectivenessVm)>,
     on_close: EventHandler<()>,
+    // T16 (plan/12 §10 v1.1#3): a workflow phase's agent/skill chip click,
+    // re-pointing this very screen at a different `sel` — same `sel`/`hub`
+    // Root signals this screen's own `on_close` already reaches into.
+    on_select: EventHandler<ComponentSel>,
 ) -> Element {
     let paper = theme::PAPER;
     let ink3 = theme::INK_3;
@@ -68,7 +72,7 @@ pub fn ComponentDetail(
             match sel {
                 ComponentSel::Skill(id) => rsx! { SkillDetailCard { id, hub, projects } },
                 ComponentSel::Agent(id) => rsx! { AgentDetailCard { id, hub, projects } },
-                ComponentSel::Workflow(id) => rsx! { WorkflowDetailCard { id, hub, projects } },
+                ComponentSel::Workflow(id) => rsx! { WorkflowDetailCard { id, hub, projects, on_select } },
                 ComponentSel::Cron(id) => rsx! { CronDetailCard { id, hub, projects, cron_effectiveness } },
                 ComponentSel::Connector(id) => rsx! { ConnectorDetailCard { id, hub, projects } },
             }
@@ -216,7 +220,12 @@ fn AgentDetailCard(id: AgentId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
 }
 
 #[component]
-fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
+fn WorkflowDetailCard(
+    id: WorkflowId,
+    hub: HubVm,
+    projects: Vec<ProjectCardVm>,
+    on_select: EventHandler<ComponentSel>,
+) -> Element {
     let card = theme::card();
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
@@ -231,6 +240,9 @@ fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) 
     };
     let row = d.row.clone();
     let owner = owner_project_name(row.project_id, &projects);
+    // T16 (plan/12 §10 v1.1#3): 文档⇄流程图双视图,默认流程图(与
+    // WorkflowHub 展开态默认一致)。
+    let mut show_doc = use_signal(|| false);
     rsx! {
         div {
             style: "{card} padding:22px 26px;max-width:800px;",
@@ -242,10 +254,8 @@ fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) 
                 }
                 span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.maturity_label}" }
             }
-            // T15:goal 正文改走共用 MD 渲染组件——为 T16 的 content 双视图
-            // 打底(那一票会把这里换成 `WorkflowSpec.content` 全文)。
             div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "解决" }
-            div { style: "margin-bottom:10px;", MarkdownView { content: row.goal.clone() } }
+            div { style: "font-size:12.5px;color:{ink2};margin-bottom:10px;", "{row.goal}" }
             div {
                 style: "font-family:{mono};font-size:12px;color:{ink3};margin-bottom:10px;",
                 if row.last_run_label.is_empty() {
@@ -262,13 +272,47 @@ fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) 
                 }
                 span { style: "font-size:11.5px;color:{ink3};", "主责 {row.primary_agent}" }
             }
-            div { style: "font-size:11.5px;color:{ink3};margin-bottom:8px;", "全流程" }
+            div {
+                style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
+                span { style: "font-size:11.5px;color:{ink3};", if show_doc() { "文档" } else { "全流程" } }
+                div {
+                    style: "display:flex;gap:4px;",
+                    button {
+                        style: if show_doc() {
+                            "cursor:pointer;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                        } else {
+                            "cursor:pointer;background:{theme::CLAY};border:1px solid {theme::CLAY};color:#FFF;border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                        },
+                        onclick: move |_| show_doc.set(false),
+                        "流程图"
+                    }
+                    button {
+                        style: if show_doc() {
+                            "cursor:pointer;background:{theme::CLAY};border:1px solid {theme::CLAY};color:#FFF;border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                        } else {
+                            "cursor:pointer;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                        },
+                        onclick: move |_| show_doc.set(true),
+                        "文档"
+                    }
+                }
+            }
             div {
                 style: "margin-bottom:14px;",
-                WorkflowFlow {
-                    phases: row.phase_metas.clone(),
-                    loop_retries: row.loop_retries,
-                    loop_max_iter: row.loop_max_iter,
+                if show_doc() {
+                    MarkdownView {
+                        content: row.content.clone(),
+                        empty_label: "结构化定义,无原始文档".to_string(),
+                    }
+                } else {
+                    WorkflowFlow {
+                        phases: row.phase_metas.clone(),
+                        loop_retries: row.loop_retries,
+                        loop_max_iter: row.loop_max_iter,
+                        agents: hub.agents.clone(),
+                        skills: hub.skills.clone(),
+                        on_select,
+                    }
                 }
             }
             if !d.agents.is_empty() {

@@ -181,7 +181,14 @@ CREATE TABLE IF NOT EXISTS workflow_spec (
     loop_max_iter  INTEGER NOT NULL DEFAULT 3,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL,
-    rev            INTEGER NOT NULL DEFAULT 0
+    rev            INTEGER NOT NULL DEFAULT 0,
+    -- T16 (plan/12 §10 v1.1#3): main MD document, aligned with `skill.content`
+    -- — real authored text, not a display re-hash of goal/prompt. '' = no
+    -- original document (honest for the five built-in stage templates and
+    -- every workflow created before a content-authoring UI exists). A
+    -- `CREATE TABLE IF NOT EXISTS` above is a no-op on a real pre-existing
+    -- DB — see the matching `add_column_if_missing` guard in `sqlite.rs`.
+    content        TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_spec_stage ON workflow_spec(stage_ref);
 

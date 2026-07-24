@@ -3638,6 +3638,9 @@ impl App {
                         // 参数(那是 P2 全量的事,见 plan/08 §0)——Hub 创建口径
                         // 不变,一律全局。
                         project_id: None,
+                        // T16: 创建表单还没有正文录入 UI(那是未来内容创作路径
+                        // 的事)——如实留空,不假装有原始文档。
+                        content: String::new(),
                     })
                     .await?;
                 self.refresh_workflow_specs().await?;
@@ -5131,6 +5134,7 @@ fn cron_prompt_workflow(name: String, prompt: String) -> WorkflowSpec {
             max_iter: 1,
         },
         project_id: None,
+        content: String::new(),
     }
 }
 

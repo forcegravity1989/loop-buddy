@@ -194,6 +194,12 @@ pub struct NewWorkflowSpec {
     /// `Some` = 项目自有,只这一条项目自己看得见——查询收窄(P2 全量)不在本次范围,
     /// 这里只落列 + 落值,读回走 sqlite 直查。
     pub project_id: Option<ProjectId>,
+    /// T16 (plan/12 §10 v1.1#3): the workflow's main MD document — see
+    /// `bw_core::model::WorkflowSpec::content`'s doc comment. `''` for every
+    /// caller today (no create-form field yet); carried as a real DTO field
+    /// so a future content-authoring path has somewhere to write it without
+    /// another schema change.
+    pub content: String,
 }
 
 /// The editable content of an existing **Static** hub workflow — the "优化"

@@ -671,6 +671,27 @@ pub struct PhaseMeta {
     pub role: PhaseRole,
     #[serde(default)]
     pub reject_to_phase: Option<u8>,
+    /// T16 (plan/12 §10 v1.1#3): the real agent this phase actually runs
+    /// under — a NAME, same namespace as `AgentRef.name` /
+    /// `crate::playbook::RoleAgent.name` (a by-name reference, not a hard
+    /// FK, matching how `WorkflowSpec.agents`/`skills` already resolve).
+    /// `None` does **not** mean "no agent" — it means "falls back to the
+    /// workflow-level default" (`WorkflowSpec.agents.first()`), the same
+    /// fallback `phase_prompts`' empty-entry convention already uses for
+    /// prompts. Populated for the five built-in stage playbooks
+    /// (`crate::playbook::phase_metas`); `None` for every user-authored
+    /// phase today (the create/edit form is still name-only text, no
+    /// per-phase agent-assignment UI yet).
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// T16: real skill NAMEs injected into this phase specifically — same
+    /// namespace as `SkillRef.name`/`crate::playbook::StageSkill.name`. `[]`
+    /// does **not** mean "no skills" — it means "falls back to the
+    /// workflow-level default" (`WorkflowSpec.skills`). Populated for the
+    /// five built-in stage playbooks; `[]` for every user-authored phase
+    /// today.
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 impl PhaseMeta {
@@ -683,6 +704,8 @@ impl PhaseMeta {
             name: name.into(),
             role: PhaseRole::Neutral,
             reject_to_phase: None,
+            agent: None,
+            skills: Vec::new(),
         }
     }
 }
@@ -695,6 +718,11 @@ impl PhaseMeta {
 /// object (current shape) — per-element, not per-column, so a partially
 /// migrated array (should one ever exist) still reads honestly. Old DBs must
 /// not crash on open (repo-wide serde-compat rule).
+///
+/// T16 (plan/12 §10 v1.1#3) extends `Full` with `agent`/`skills`, both
+/// `#[serde(default)]` — a pre-T16 row's `Full` objects (T8-T15 real data,
+/// every one of them missing these two keys) read in as `None`/`[]`, never a
+/// hard failure; a fresh row round-trips its real bindings unchanged.
 impl<'de> Deserialize<'de> for PhaseMeta {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -710,6 +738,10 @@ impl<'de> Deserialize<'de> for PhaseMeta {
                 role: PhaseRole,
                 #[serde(default)]
                 reject_to_phase: Option<u8>,
+                #[serde(default)]
+                agent: Option<String>,
+                #[serde(default)]
+                skills: Vec<String>,
             },
         }
         Ok(match OnDisk::deserialize(deserializer)? {
@@ -718,10 +750,14 @@ impl<'de> Deserialize<'de> for PhaseMeta {
                 name,
                 role,
                 reject_to_phase,
+                agent,
+                skills,
             } => PhaseMeta {
                 name,
                 role,
                 reject_to_phase,
+                agent,
+                skills,
             },
         })
     }
@@ -848,6 +884,18 @@ pub struct WorkflowSpec {
     /// 项目自建的 workflow(plan/10 K1 项目侧边栏按这个字段过滤)。
     #[serde(default)]
     pub project_id: Option<ProjectId>,
+    /// T16 (plan/12 §10 v1.1#3): the workflow's main MD document — same
+    /// nature as `SkillCard.content` (real authored text a human wrote, not
+    /// a display re-hash of `goal`/`prompt`). This is T17's parse input:
+    /// the (not-yet-built) "🔍 解析为流程图" action reads this text and
+    /// derives `phases`' real `agent`/`skills` bindings from it. Empty for
+    /// the five built-in stage templates (`stage_template_workflow`) — their
+    /// phases are bound directly from `crate::playbook`, not parsed from
+    /// prose — and for every workflow created through today's still
+    /// name-only-text create/edit forms, honestly: `''` means "structured
+    /// definition, no original document", never a fabricated placeholder.
+    #[serde(default)]
+    pub content: String,
 }
 
 /// Outcome of one workflow execution — the data a later "should this workflow
@@ -1099,6 +1147,9 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
             max_iter: 3,
         },
         project_id: None,
+        // Dynamic session specs never carry a hand-authored document —
+        // real per-phase instructions already ride in `phase_prompts`.
+        content: String::new(),
     }
 }
 
@@ -1190,6 +1241,11 @@ pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
             max_iter: 3,
         },
         project_id: None,
+        // T16 (plan/12 §10 v1.1#3): built-in templates leave `content`
+        // honestly empty — their phases bind straight off `crate::playbook`,
+        // there is no authored MD document behind them yet. The detail UI
+        // says so plainly ("结构化定义，无原始文档") instead of faking one.
+        content: String::new(),
     }
 }
 
@@ -1223,6 +1279,7 @@ pub fn drafting_workflow() -> WorkflowSpec {
             max_iter: 1,
         },
         project_id: None,
+        content: String::new(),
     }
 }
 

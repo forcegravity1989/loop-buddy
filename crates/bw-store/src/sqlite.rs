@@ -250,6 +250,16 @@ impl SqliteStore {
         // manually classified those, so this never guesses.
         add_column_if_missing(&pool, "skill", "stage_ref", "INTEGER").await?;
         add_column_if_missing(&pool, "agent", "stage_ref", "INTEGER").await?;
+        // T16 (plan/12 §10 v1.1#3): workflow's main MD document, aligned
+        // with `skill.content`. '' on every pre-T16 row = honestly "no
+        // original document" (real pre-T16 workflows never had one to lose).
+        add_column_if_missing(
+            &pool,
+            "workflow_spec",
+            "content",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
         // Indexes on `stage_ref` deliberately live here, *after* the two
         // `add_column_if_missing` calls above, instead of in `schema.sql`'s
         // `CREATE INDEX` blob (that whole blob replays unconditionally,
@@ -1260,8 +1270,9 @@ impl Store for SqliteStore {
         sqlx::query(
             "INSERT INTO workflow_spec
                 (id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts, agents_json,
-                 skills_json, loop_retries, loop_max_iter, project_id, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                 skills_json, loop_retries, loop_max_iter, project_id, content, created_at,
+                 updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(w.id.uuid().to_string())
         .bind(&w.name)
@@ -1276,6 +1287,7 @@ impl Store for SqliteStore {
         .bind(i64::from(w.loop_config.retries))
         .bind(i64::from(w.loop_config.max_iter))
         .bind(w.project_id.map(pid))
+        .bind(&w.content)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1286,7 +1298,7 @@ impl Store for SqliteStore {
     async fn list_workflow_specs(&self) -> Result<Vec<WorkflowSpec>> {
         let rows = sqlx::query(
             "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts,
-                    agents_json, skills_json, loop_retries, loop_max_iter, project_id
+                    agents_json, skills_json, loop_retries, loop_max_iter, project_id, content
              FROM workflow_spec ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -1297,7 +1309,7 @@ impl Store for SqliteStore {
     async fn get_workflow_spec(&self, id: WorkflowId) -> Result<Option<WorkflowSpec>> {
         let row = sqlx::query(
             "SELECT id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts,
-                    agents_json, skills_json, loop_retries, loop_max_iter, project_id
+                    agents_json, skills_json, loop_retries, loop_max_iter, project_id, content
              FROM workflow_spec WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -1324,8 +1336,8 @@ impl Store for SqliteStore {
         sqlx::query(
             "INSERT INTO workflow_spec
                 (id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts, agents_json,
-                 skills_json, loop_retries, loop_max_iter, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                 skills_json, loop_retries, loop_max_iter, content, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(new_id.uuid().to_string())
         .bind(&from.name)
@@ -1339,6 +1351,7 @@ impl Store for SqliteStore {
         .bind(serde_json::to_string(&from.skills)?)
         .bind(i64::from(from.loop_config.retries))
         .bind(i64::from(from.loop_config.max_iter))
+        .bind(&from.content)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -2598,6 +2611,7 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
             max_iter: r.get::<i64, _>("loop_max_iter") as u8,
         },
         project_id,
+        content: r.get("content"),
     })
 }
 
