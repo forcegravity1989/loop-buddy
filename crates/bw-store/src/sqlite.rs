@@ -1408,6 +1408,14 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn delete_workflow_spec(&self, id: WorkflowId) -> Result<()> {
+        sqlx::query("DELETE FROM workflow_spec WHERE id=?")
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn record_workflow_run_start(&self, run: NewWorkflowRun<'_>) -> Result<WorkflowRunId> {
         let id = WorkflowRunId::from_uuid(Uuid::new_v4());
         sqlx::query(

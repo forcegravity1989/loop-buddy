@@ -17,6 +17,16 @@
 //! to have their `phases`/`phase_prompts` overwritten with the current
 //! playbook's real values. See [`matching_template_kind`] and
 //! [`is_pure_legacy_phases`].
+//!
+//! T14.5 (2026-07-24, GH#59): a third, independent piece — which
+//! `workflow_spec` rows are directory-import (ECC/Adopted) catalog shells
+//! safe to delete outright (not just have a column overwritten). Parent
+//! ticket to T14: T14 only ever looked at `skill`/`agent` shells, but a real
+//! daily DB's `workflow_spec` table carries the exact same kind of stale
+//! zero-trace catalog-import row (92 ECC directory shells + 1 adopted, real
+//! count on the DB this ticket targets) — 违反"mock 必须自我标注"纪律 if left
+//! sitting there looking like real content. See
+//! [`is_directory_import_source`] and [`workflow_uses`].
 
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
@@ -159,6 +169,18 @@ pub const LEGACY_MIGRATION_DONE_KEY: &str = "legacy_shells_migration_v1";
 ///    handler check/run each piece on its own idempotent terms.
 pub const TEMPLATE_PHASE_REFRESH_DONE_KEY: &str = "template_phase_refresh_v1";
 
+/// T14.5 (2026-07-24, GH#59): the app_meta key marking "the workflow_spec
+/// directory-import shell purge (Pass C) has run" — deliberately its OWN
+/// key, same rationale [`TEMPLATE_PHASE_REFRESH_DONE_KEY`]'s own doc comment
+/// already gives for being independent of [`LEGACY_MIGRATION_DONE_KEY`]: the
+/// real DB this ticket targets has run neither pass yet, so one real restart
+/// must do all three; a DB that already ran one or two of the three passes
+/// (a dev DB migrated before this ticket landed, or this ticket's own
+/// verification copy re-run after a partial state) must still be able to
+/// pick up whichever pass it hasn't run, on that pass's own idempotent
+/// terms, independent of the other two flags.
+pub const WORKFLOW_SHELL_PURGE_DONE_KEY: &str = "workflow_shell_purge_v1";
+
 /// T16.5: is `name` one of the five built-in stage templates
 /// (`bw_core::model::stage_template_workflow`'s real produced name, e.g.
 /// `「原型」标准工作流 · 原型师`)? Exact string match only — never a
@@ -189,6 +211,42 @@ pub(crate) fn is_pure_legacy_phases(phases: &[bw_core::model::PhaseMeta]) -> boo
         })
 }
 
+/// T14.5 (GH#59): is `kind` a directory-imported catalog entry —
+/// `HubSource::Official { .. }` (every real value observed on this machine
+/// is `official_library: "ecc"`, but any curated-library tag counts the same
+/// way) or `HubSource::Adopted` — as opposed to `HubSource::SelfBuilt` (the
+/// five built-in stage templates, and any hand-authored workflow) or
+/// `HubSource::WithinSession` (session-scoped, never a directory import)?
+/// `WorkflowKind::Dynamic` carries no `source` at all and always returns
+/// `false` — a session-scoped workflow was never a directory import to begin
+/// with.
+///
+/// This is Pass C's *first* gate only — narrows the candidate set down to
+/// "came from a directory import at all". A `true` result alone is never
+/// sufficient to purge a row; see the dispatch handler in `lib.rs` for the
+/// remaining independent gates (zero `workflow_run`, zero `uses`, not
+/// referenced by a `run_workflow`-mode cron target, not a built-in template
+/// name — belt-and-suspenders alongside this `source` check).
+pub(crate) fn is_directory_import_source(kind: &bw_core::model::WorkflowKind) -> bool {
+    match kind {
+        bw_core::model::WorkflowKind::Static { source, .. } => matches!(
+            source,
+            bw_core::model::HubSource::Official { .. } | bw_core::model::HubSource::Adopted
+        ),
+        bw_core::model::WorkflowKind::Dynamic { .. } => false,
+    }
+}
+
+/// T14.5 (GH#59): the real `uses` counter carried on a `Static` spec's
+/// `WorkflowKind` — `0` for `Dynamic` (no such field; a session-scoped
+/// workflow was never "used" as a catalog entry).
+pub(crate) fn workflow_uses(kind: &bw_core::model::WorkflowKind) -> u32 {
+    match kind {
+        bw_core::model::WorkflowKind::Static { uses, .. } => *uses,
+        bw_core::model::WorkflowKind::Dynamic { .. } => 0,
+    }
+}
+
 /// The real tally a migration run leaves behind — every field independently
 /// readable back from the DB (skill/agent row counts, `app_meta`), never just
 /// asserted. Returned by the `bw-app` dispatch handler and carried on
@@ -211,4 +269,9 @@ pub struct LegacyMigrationReport {
     /// playbook's real values — real names, not just a count, so a log
     /// subscriber can say exactly which of the five templates changed.
     pub refreshed_templates: Vec<String>,
+    /// T14.5 (GH#59): directory-import (ECC/Adopted) `workflow_spec` shells
+    /// just deleted outright — real names, not just a count, same
+    /// "log subscriber can say exactly which ones" contract
+    /// `refreshed_templates` already gives.
+    pub purged_workflows: Vec<String>,
 }
