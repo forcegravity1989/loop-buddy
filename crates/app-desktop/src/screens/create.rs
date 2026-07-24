@@ -2,11 +2,14 @@
 //! 8-step form wizard): 意图 → 快速问题 → 起草中 → 审阅确认.
 //!
 //! Nothing here fabricates project-specific content. The "起草" step is a
-//! real (mock) workflow run through the same `Engine`/`Executor` op.rs uses —
-//! its output is a clearly-mock transcript, never injected into the editable
-//! north-star/metric fields as fact. Those fields start from the user's own
-//! words (the brief) or blank, always editable, only becoming real project
-//! state when the user hits 确认.
+//! real workflow run through the same `Engine` op.rs uses, dispatched via
+//! `Command::RunDraftWorkflow` (plan/14 C13, D8 回锁) — that command hard-
+//! locks the run to the shared `MockExecutor` regardless of whether this
+//! project already has a real GitHub-cloned workspace, so it never spends a
+//! real `claude -p` call. Its output is a clearly-mock transcript, never
+//! injected into the editable north-star/metric fields as fact. Those
+//! fields start from the user's own words (the brief) or blank, always
+//! editable, only becoming real project state when the user hits 确认.
 //!
 //! The project row is minted at the *first* card (意图), not deferred to
 //! confirm: that gives the drafting run somewhere real to attach a session,
@@ -365,9 +368,13 @@ fn QuestionsCard(vm: CreateVm, cadence: Signal<Cadence>, on_next: EventHandler<(
         });
         cadence.set(cad());
 
-        // Kick off the drafting run — a real (mock) workflow, same Engine as
-        // any operating-view run. Its transcript is honestly mock; nothing
-        // from it is copied into the editable review fields.
+        // Kick off the drafting run — same Engine/progress-event path as any
+        // operating-view run, but `RunDraftWorkflow` (plan/14 C13, D8 回锁)
+        // hard-locks it to the shared MockExecutor regardless of whether
+        // this project already has a real GitHub-cloned workspace. Its
+        // transcript is honestly mock; nothing from it is copied into the
+        // editable review fields. Real system-drafting work (竞品分析/找
+        // 指标/绑数据) happens later, through the standard-Issue trio.
         let session = SessionId::new();
         k.send(Command::StartSession {
             id: session,
@@ -375,7 +382,7 @@ fn QuestionsCard(vm: CreateVm, cadence: Signal<Cadence>, on_next: EventHandler<(
             kind: SessionKind::Create,
             title: "创建 · 体系起草".into(),
         });
-        k.send(Command::RunWorkflow {
+        k.send(Command::RunDraftWorkflow {
             session,
             spec: drafting_workflow(),
         });
@@ -500,7 +507,7 @@ fn DraftingCard(run: RunVm, on_next: EventHandler<()>) -> Element {
                 style: "display:flex;align-items:center;gap:10px;",
                 if run.running {
                     span { style: "width:7px;height:7px;border-radius:50%;background:{clay};", "" }
-                    span { style: "font-size:12.5px;color:{ink3};", "正在按方法论起草体系 —— 周期判定 · 北极星起草 · 指标框架 · 阶段激活…" }
+                    span { style: "font-size:12.5px;color:{ink3};", "正在按方法论起草体系 —— 北极星起草 · 指标框架 · 阶段激活…" }
                 } else if let Some(err) = run.failed.clone() {
                     span { style: "font-size:12.5px;color:#B0503A;", "起草失败:{err}" }
                 } else {

@@ -10,6 +10,11 @@
 //! [`ClaudeCliExecutor`] per call for any project that HAS configured a
 //! workspace — `workspace_path`/`allow_commands` are per-project runtime data
 //! read from the store, not something fixed at [`App::new`] time.
+//! [`Command::RunDraftWorkflow`] is the one deliberate exception: the
+//! creation flow's 体系起草 run, hard-locked to the shared Mock `Engine`
+//! forever, independent of the project's `workspace_path` (plan/14 C13, D8
+//! 回锁 — real system-drafting work belongs to the standard-Issue trio, run
+//! through the ordinary `RunIssue`/`run_workflow_inner` route instead).
 
 #![forbid(unsafe_code)]
 
@@ -278,6 +283,29 @@ pub enum Command {
         title: String,
     },
     RunWorkflow {
+        session: SessionId,
+        spec: WorkflowSpec,
+    },
+    /// The creation flow's 体系起草 run (plan/14 C13, D8 回锁). Looks
+    /// identical to `RunWorkflow` from the UI's point of view — same
+    /// `Engine`/progress-event stream, same session-message trail — but
+    /// `run_workflow_inner` is told `force_mock = true`: the shared
+    /// `MockExecutor` runs it regardless of whether the active project
+    /// already has a real configured `workspace_path`.
+    ///
+    /// Without this, a project born through the GitHub-主体 creation flow
+    /// (P1 建项目即建仓, plan/13) already has a real workspace by the time
+    /// the Questions 卡 submits, so the ordinary `agent_cli == "claude-code"
+    /// && workspace_path non-empty` rule in `run_workflow_inner` would route
+    /// the drafting run to a *real* `claude -p` call — one real invocation
+    /// per phase, through the gateway, up to the $0.5/30min budget cap. That
+    /// silently violated plan/13 D8's "创建流不跑真 agent" ruling (root cause
+    /// plan/14 §「技术成因」). Real system-drafting work belongs to the
+    /// standard-Issue trio (竞品分析→找指标→绑数据, D8) instead, dispatched
+    /// through the ordinary `RunIssue`/`run_workflow_inner` route — this
+    /// command is the creation flow's *only* run path and stays mock-locked
+    /// on purpose, forever, independent of project workspace state.
+    RunDraftWorkflow {
         session: SessionId,
         spec: WorkflowSpec,
     },
@@ -971,13 +999,23 @@ impl App {
         Ok(())
     }
 
-    /// Shared by `Command::RunWorkflow`, `Command::RunHubWorkflow`, and
-    /// `tick_scheduler`'s real auto-fire — the first two differ only in how
-    /// `spec` was obtained (a hub lookup + a `uses` bump) and look identical
-    /// once they have one. `project` is explicit (not read off
-    /// `self.state.active_project`) so a background scheduler fire can run a
-    /// workflow against its *bound* project without touching — let alone
-    /// hijacking — whatever project the user currently has open.
+    /// Shared by `Command::RunWorkflow`, `Command::RunHubWorkflow`,
+    /// `Command::RunDraftWorkflow`, and `tick_scheduler`'s real auto-fire —
+    /// they differ only in how `spec` was obtained (a hub lookup + a `uses`
+    /// bump, or a hard mock lock) and look identical once they have one.
+    /// `project` is explicit (not read off `self.state.active_project`) so a
+    /// background scheduler fire can run a workflow against its *bound*
+    /// project without touching — let alone hijacking — whatever project the
+    /// user currently has open.
+    ///
+    /// `force_mock` (plan/14 C13, D8 回锁): when `true`, the engine-selection
+    /// step below is skipped entirely and this run executes on the shared
+    /// `MockExecutor` no matter what `agent_cli`/`workspace_path` would
+    /// otherwise select — the creation flow's *only* caller of this bool.
+    /// Every other caller passes `false`, preserving the pre-existing
+    /// "workspace configured → real executor" routing byte-for-byte (most
+    /// notably `RunIssue`, which must keep routing to the real executor).
+    #[allow(clippy::too_many_arguments)]
     async fn run_workflow_inner(
         &mut self,
         project: ProjectId,
@@ -986,6 +1024,7 @@ impl App {
         trigger: RunTrigger,
         cron_task_id: Option<CronTaskId>,
         issue_id: Option<IssueId>,
+        force_mock: bool,
     ) -> Result<RunOutcome, AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
@@ -1041,6 +1080,7 @@ impl App {
             &agent_cli,
             &agent_tools,
             allowed_tools.as_deref(),
+            force_mock,
         );
 
         // The review gate: the FIRST Evaluator phase (T8's real `role`, not a
@@ -1070,36 +1110,47 @@ impl App {
         // Held immutably across the loop — every in-loop `self` touch is a shared
         // borrow (`self.store` / `self.emit`), never `&mut self`, so this holds.
         //
-        // T6 (plan/12 §3): the `agent_cli` match happens FIRST, before the
-        // mock/real branch below — an unsupported CLI ("codex"/"cursor"/…)
-        // routes to the honest `UnsupportedCliExecutor` regardless of whether
-        // this project even has a real workspace configured. Only
-        // `"claude-code"` (the default for an unassigned issue or any other
-        // caller) reaches the existing mock-vs-real split, unchanged.
+        // plan/14 C13 (D8 回锁): `force_mock` short-circuits everything below —
+        // checked BEFORE the `agent_cli` match, so the creation flow's drafting
+        // run never reaches real-executor selection no matter what workspace
+        // the active project has. Every other caller (`RunIssue` included)
+        // passes `force_mock = false` and falls through unchanged.
+        //
+        // T6 (plan/12 §3): the `agent_cli` match happens FIRST (once past the
+        // force_mock gate), before the mock/real branch below — an unsupported
+        // CLI ("codex"/"cursor"/…) routes to the honest `UnsupportedCliExecutor`
+        // regardless of whether this project even has a real workspace
+        // configured. Only `"claude-code"` (the default for an unassigned
+        // issue or any other caller) reaches the existing mock-vs-real split,
+        // unchanged.
         let fresh_engine;
-        let engine: &Engine = match agent_cli.as_str() {
-            "claude-code" => {
-                if proj.workspace_path.trim().is_empty() {
-                    &self.mock_engine
-                } else {
-                    let executor = ClaudeCliExecutor::new(
-                        self.state.claude_config.clone(),
-                        PathBuf::from(proj.workspace_path.trim()),
-                        proj.allow_commands,
-                        agent_tools.clone(),
-                    );
+        let engine: &Engine = if force_mock {
+            &self.mock_engine
+        } else {
+            match agent_cli.as_str() {
+                "claude-code" => {
+                    if proj.workspace_path.trim().is_empty() {
+                        &self.mock_engine
+                    } else {
+                        let executor = ClaudeCliExecutor::new(
+                            self.state.claude_config.clone(),
+                            PathBuf::from(proj.workspace_path.trim()),
+                            proj.allow_commands,
+                            agent_tools.clone(),
+                        );
+                        fresh_engine = Engine::new(Arc::new(executor));
+                        &fresh_engine
+                    }
+                }
+                other => {
+                    // 诚实报错,绝不静默回落到 claude-code:本机没有为 codex/cursor
+                    // 等值接好真实执行器。Reuses the `Executor` trait seam — this
+                    // executor's first (and only) call errors, and the existing
+                    // "executor failed → settle Failed" path records it honestly.
+                    let executor = UnsupportedCliExecutor::new(other.to_string());
                     fresh_engine = Engine::new(Arc::new(executor));
                     &fresh_engine
                 }
-            }
-            other => {
-                // 诚实报错,绝不静默回落到 claude-code:本机没有为 codex/cursor
-                // 等值接好真实执行器。Reuses the `Executor` trait seam — this
-                // executor's first (and only) call errors, and the existing
-                // "executor failed → settle Failed" path records it honestly.
-                let executor = UnsupportedCliExecutor::new(other.to_string());
-                fresh_engine = Engine::new(Arc::new(executor));
-                &fresh_engine
             }
         };
 
@@ -2231,6 +2282,7 @@ impl App {
                                 RunTrigger::Scheduled,
                                 Some(c.id),
                                 None,
+                                false,
                             )
                             .await;
                         matches!(result, Ok(RunOutcome::Completed))
@@ -2283,7 +2335,15 @@ impl App {
             self.refresh_workflow_specs().await?;
 
             let result = self
-                .run_workflow_inner(pid, session, spec, RunTrigger::Scheduled, Some(c.id), None)
+                .run_workflow_inner(
+                    pid,
+                    session,
+                    spec,
+                    RunTrigger::Scheduled,
+                    Some(c.id),
+                    None,
+                    false,
+                )
                 .await;
             // A scheduled run "succeeds" only when the workflow actually passed.
             // A hit review cap (`BlockedAtCap`) has no bound Issue to park here
@@ -2597,9 +2657,13 @@ impl App {
             false
         };
 
-        // Run through the same path as any run, bound to this issue.
+        // Run through the same path as any run, bound to this issue. C13
+        // (plan/14): `force_mock = false` — a standard/normal Issue's real
+        // work is the one path the creation flow's mock lock must NEVER
+        // touch; this keeps routing to the real executor whenever the
+        // project has a configured workspace, byte-for-byte unchanged.
         let run = self
-            .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id))
+            .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id), false)
             .await;
         match run {
             // A completed run only reaches 评审中 — never 完成. Done stays an
@@ -3484,7 +3548,16 @@ impl App {
 
             Command::RunWorkflow { session, spec } => {
                 let p = self.active()?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
+                    .await?;
+            }
+
+            // plan/14 C13 (D8 回锁): the creation flow's drafting run —
+            // force_mock=true is the ONLY thing that distinguishes this from
+            // `RunWorkflow` above; see the command's doc comment for why.
+            Command::RunDraftWorkflow { session, spec } => {
+                let p = self.active()?;
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, true)
                     .await?;
             }
 
@@ -3526,7 +3599,7 @@ impl App {
                     workspace_hint,
                 };
                 let spec = stage_workflow_with_playbook(stage_kind, &ctx);
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
                     .await?;
             }
 
@@ -3631,7 +3704,7 @@ impl App {
                     .ok_or(AppError::NotFound)?;
                 self.store.record_workflow_use(workflow_id).await?;
                 self.refresh_workflow_specs().await?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
                     .await?;
             }
 
@@ -4884,12 +4957,19 @@ fn cron_prompt_workflow(name: String, prompt: String) -> WorkflowSpec {
 /// parameters read back from `params_json` regardless of whether the
 /// executor call itself ever completes (an `UnsupportedCliExecutor` errors
 /// on its very first call; a real `claude -p` call may hit a flaky gateway).
+///
+/// `force_mock` (plan/14 C13) is recorded verbatim so an E2E readback can
+/// prove a creation-flow drafting run never had a chance to reach the real
+/// executor, independent of what `agent_cli`/`workspace_path` say — "报告不
+/// 代答,读回为证" applies to the routing decision itself, not just the run's
+/// outcome.
 fn run_params_snapshot(
     spec: &WorkflowSpec,
     trigger: RunTrigger,
     agent_cli: &str,
     tools: &[String],
     allowed_tools_arg: Option<&str>,
+    force_mock: bool,
 ) -> String {
     // serde_json::Value keeps this stable as the spec grows — adding a field
     // later is additive, not a schema break on historical run rows.
@@ -4911,6 +4991,7 @@ fn run_params_snapshot(
         "agent_cli": agent_cli,
         "tools": tools,
         "allowed_tools_arg": allowed_tools_arg,
+        "force_mock": force_mock,
     });
     v.to_string()
 }
