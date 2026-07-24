@@ -26,6 +26,8 @@ pub mod claude_cli;
 pub mod contract;
 pub mod evidence;
 pub mod git_log;
+pub mod github;
+pub mod metrics_file;
 mod mock;
 mod unsupported_cli;
 pub mod workspace;
@@ -33,6 +35,10 @@ pub mod workspace;
 pub use claude_cli::{allowed_tools_arg, ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
 pub use evidence::{EvidenceError, WorkspaceEvidence, WorkspaceFile};
 pub use git_log::{read_commits, GitCommit, GitLogError};
+pub use github::{GithubError, GithubRepoRef, GithubRepoSummary};
+pub use metrics_file::{
+    CollectKind, CollectPlan, MetricDef, MetricsFile, MetricsFileError, NorthStarDef,
+};
 pub use mock::MockExecutor;
 pub use unsupported_cli::UnsupportedCliExecutor;
 pub use workspace::{provision_git_workspace, ProvisionError};

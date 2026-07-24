@@ -12,6 +12,12 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# C6 (plan/13 D5): `.bw/metrics.toml` parser.
+toml = { workspace = true }
+# C7 (plan/13 D7): rolling-window date macros (`@{7d}`) in github collect
+# queries — types + Date arithmetic only, no wall-clock (`today` is passed in
+# by the caller, keeping collection deterministic).
+time = { workspace = true }
 # MockExecutor's optional simulated latency (tokio::time); ClaudeCliExecutor
 # shells out to the `claude` CLI (tokio::process). bw-engine is a native
 # runtime crate (not in the wasm32 keepalive set), so this is consistent.

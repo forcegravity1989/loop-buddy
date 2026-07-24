@@ -260,6 +260,7 @@ async fn main() {
                     .into(),
 
                 workspace: None,
+                github: None,
             })
             .await
             .expect("create project");
@@ -288,6 +289,7 @@ async fn main() {
             .expect("update north star");
             app.dispatch(Command::CompleteCreation {
                 cadence: Cadence::Weekly,
+                run_first: false,
             })
             .await
             .expect("complete creation");

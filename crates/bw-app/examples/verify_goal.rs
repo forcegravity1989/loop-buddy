@@ -98,6 +98,7 @@ async fn main() {
         desc: "把人工排班的冲突检测自动化".into(),
 
         workspace: None,
+        github: None,
     })
     .await
     .unwrap();
@@ -138,6 +139,7 @@ async fn main() {
     .unwrap();
     app.dispatch(Command::CompleteCreation {
         cadence: Cadence::Weekly,
+        run_first: false,
     })
     .await
     .unwrap();
@@ -166,11 +168,13 @@ async fn main() {
         desc: "会议结束自动生成结构化纪要并归档".into(),
 
         workspace: None,
+        github: None,
     })
     .await
     .unwrap();
     app.dispatch(Command::CompleteCreation {
         cadence: Cadence::Weekly,
+        run_first: false,
     })
     .await
     .unwrap();
@@ -764,11 +768,13 @@ async fn main() {
         desc: String::new(),
 
         workspace: None,
+        github: None,
     })
     .await
     .unwrap();
     app.dispatch(Command::CompleteCreation {
         cadence: Cadence::Weekly,
+        run_first: false,
     })
     .await
     .unwrap();

@@ -18,7 +18,7 @@ use bw_core::model::{
     StageKind,
 };
 use bw_core::{MetricId, SessionId};
-use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
+use bw_engine::{ClaudeCliConfig, Engine, GithubRepoSummary, MockExecutor, PermissionMode};
 use bw_store::{MetricRole, SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -58,6 +58,11 @@ pub struct Vm {
     /// shows it is rendered outside any one project's `Op` tree, same as
     /// `hub`. `None` until `Command::LoadCronEffectiveness` runs for a task.
     pub cron_effectiveness: Option<(bw_core::CronTaskId, ui::vm::CronEffectivenessVm)>,
+    /// GitHub 为主体的创建流: last `Command::ListGithubRepos` result — lives
+    /// at the top level (not `CreateVm`) because the Repo 卡片 renders before
+    /// any project row exists. Empty until the Repo 卡片 first dispatches
+    /// `ListGithubRepos` (switching to "接入已有仓").
+    pub github_repos: Vec<GithubRepoSummary>,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -103,6 +108,12 @@ pub struct CreateVm {
     pub ns_def: String,
     pub leading: Vec<MetricVm>,
     pub lagging: Vec<MetricVm>,
+    /// "owner/repo" — empty = this project isn't attached to GitHub (Repo 卡
+    /// 片选了本地/失败软降级). C8: the Review 卡's「立即让队友开工第一件?」
+    /// checkbox only renders when this is non-empty — a github_remote-empty
+    /// project gets zero standard Issues at `CompleteCreation`, so a visible
+    /// checkbox there would be dead UI.
+    pub github_remote: String,
 }
 
 #[derive(Clone, PartialEq)]
@@ -146,6 +157,9 @@ pub struct OpVm {
     /// only ever runs `RunWorkflow` on `MockExecutor`.
     pub workspace_path: String,
     pub allow_commands: bool,
+    /// "owner/repo" — empty = this project isn't attached to GitHub (local-
+    /// only workspace, or the GitHub attach attempt failed and soft-degraded).
+    pub github_remote: String,
     pub panel: Panel,
     pub scope: Scope,
     pub nav: Vec<StageNavItemVm>,
@@ -687,6 +701,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         hub: hub.clone(),
         settings,
         cron_effectiveness,
+        github_repos: state.github_repos.clone(),
     };
 
     let Some(pid) = state.active_project else {
@@ -733,6 +748,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
                 m.signal,
                 m.hit,
                 m.source,
+                &m.collect_kind,
                 series.get(&m.id).map(Vec::as_slice).unwrap_or(&[]),
             )
         })
@@ -751,6 +767,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             ns_def: row.ns_def.clone(),
             leading: metrics.iter().filter(|m| m.leading).cloned().collect(),
             lagging: metrics.iter().filter(|m| !m.leading).cloned().collect(),
+            github_remote: row.github_remote.clone(),
         });
         return vm;
     }
@@ -952,6 +969,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         ns_def: row.ns_def.clone(),
         workspace_path: row.workspace_path.clone(),
         allow_commands: row.allow_commands,
+        github_remote: row.github_remote.clone(),
         panel: state.panel,
         scope: state.scope,
         nav: stage_nav(&stage_sigs, &session_flags),

@@ -701,6 +701,7 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 let k_a = k.clone();
                                 let k_b = k.clone();
                                 let k_run = k.clone();
+                                let k_merge = k.clone();
                                 let k_detail = k.clone();
                                 let agents = agents.clone();
                                 let i_id = i.id;
@@ -723,6 +724,27 @@ fn IssuesPanel(op: OpVm) -> Element {
                                         key: "{i.number}",
                                         style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {i.status_color};",
                                         div { style: "font-size:11px;color:{ink3};font-family:{mono};", "#{i.number} · {i.stage.label()}" }
+                                        // C4 · issue 身份映射: 号非 0 才渲染,
+                                        // 展示最小化——链接形态用 github_remote
+                                        // 拼纯文本 URL,不做点击跳转,如实即可。
+                                        if i.github_number != 0 {
+                                            div {
+                                                style: "font-size:10.5px;color:{ink3};font-family:{mono};margin-top:1px;",
+                                                if op.github_remote.trim().is_empty() {
+                                                    "GitHub #{i.github_number}"
+                                                } else {
+                                                    "https://github.com/{op.github_remote}/issues/{i.github_number}"
+                                                }
+                                            }
+                                        }
+                                        // C5 · PR 验收环: 有 PR 号才渲染,如实展示
+                                        // 「PR #N」——验收=人 merge,号非 0 即有开放 PR。
+                                        if i.pr_number != 0 {
+                                            div {
+                                                style: "font-size:10.5px;color:{clay};font-family:{mono};margin-top:1px;",
+                                                "PR #{i.pr_number}"
+                                            }
+                                        }
                                         // P4: the title opens the evidence
                                         // overlay (runs / diffs / artifacts).
                                         div {
@@ -818,6 +840,16 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                         "▶ 跑"
                                                     }
                                                 }
+                                                // C5 · PR 验收环: InReview + 有 PR 时,
+                                                // merge 是首选验收路径(人 merge → 关单)。
+                                                // 不硬拦下面的 →已完成(只留痕不拦人)。
+                                                if i.status == IssueStatus::InReview && i.pr_number != 0 {
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;font-weight:700;",
+                                                        onclick: move |_| k_merge.send(Command::MergeIssuePr { id: i_id }),
+                                                        "⛙ merge PR #{i.pr_number}"
+                                                    }
+                                                }
                                                 if let Some(ns) = advance {
                                                     button {
                                                         style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;",
@@ -871,6 +903,7 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm) -> Element {
     let k_done = k.clone();
     let k_back = k.clone();
     let k_run = k.clone();
+    let k_merge = k.clone();
     let k_distill = k.clone();
     let mut distilling = use_signal(|| false);
     let mut skill_name = use_signal(|| format!("{} · 做法", d.title));
@@ -903,6 +936,10 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm) -> Element {
                 }
                 div { style: "font-size:16px;color:{ink};margin:4px 0 2px;", "{d.title}" }
                 div { style: "font-size:12px;color:{ink2};margin-bottom:6px;", "指派:{assignee} · {d.priority_label}" }
+                // C5 · PR 验收环: 有 PR 号如实展示,验收=人 merge。
+                if d.pr_number != 0 {
+                    div { style: "font-size:11.5px;color:{clay};font-family:{mono};margin-bottom:6px;", "PR #{d.pr_number} · 等待人工 merge 验收" }
+                }
                 if let Some(reason) = d.blocked_reason.clone() {
                     div { style: "margin:6px 0;padding:6px 9px;background:#F2E4DD;border-radius:6px;font-size:12px;color:{alert};", "⛔ {reason}" }
                 }
@@ -984,13 +1021,27 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm) -> Element {
                         }
                     }
                     if in_review {
-                        button {
-                            style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
-                            onclick: move |_| {
-                                k_done.send(Command::TransitionIssue { id, status: IssueStatus::Done });
-                                k_done.send(Command::OpenIssueDetail(id));
-                            },
-                            "✓ 确认完成(人裁)"
+                        // C5 · PR 验收环 (D3): 有 PR → 首选「merge PR」(人 merge →
+                        // 关单 → 走现有 InReview→Done 记账)。无 PR(存量/无仓活)→
+                        // 保留裸「确认完成」路径(全活 PR 化是纪律不是硬闸)。
+                        if d.pr_number != 0 {
+                            button {
+                                style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
+                                onclick: move |_| {
+                                    k_merge.send(Command::MergeIssuePr { id });
+                                    k_merge.send(Command::OpenIssueDetail(id));
+                                },
+                                "⛙ merge PR #{d.pr_number}(验收)"
+                            }
+                        } else {
+                            button {
+                                style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
+                                onclick: move |_| {
+                                    k_done.send(Command::TransitionIssue { id, status: IssueStatus::Done });
+                                    k_done.send(Command::OpenIssueDetail(id));
+                                },
+                                "✓ 确认完成(人裁)"
+                            }
                         }
                         button {
                             style: "cursor:pointer;border:1px solid {border};border-radius:7px;background:transparent;color:{ink2};padding:7px 14px;font-size:12.5px;",
@@ -1105,6 +1156,12 @@ fn WorkspaceConfig(op: OpVm) -> Element {
                     span {
                         style: "font-family:{mono};font-size:12.5px;color:{ink2};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
                         "{op.workspace_path}"
+                    }
+                    if !op.github_remote.trim().is_empty() {
+                        span {
+                            style: "font-size:11px;color:{ink3};flex:none;",
+                            "GitHub · {op.github_remote}"
+                        }
                     }
                     span { style: "font-size:11px;color:{ink3};flex:none;", "{permission_label}" }
                 } else {
@@ -1398,6 +1455,17 @@ fn MetricCard(m: MetricVm) -> Element {
     let color = ui::signal_color(m.signal).to_string();
     let dot = theme::dot(&color, 9);
     let spark = m.spark.clone();
+    // C7 · 采集来源徽记: label this metric's collection source. github is wired
+    // in v1 (real gh pull); bw/connector read「v1 未接」and stay dimmed —
+    // honest about what does and doesn't feed a real number yet. manual keeps
+    // its existing 手填 badge below (a different axis: the latest value's source).
+    let (collect_badge, collect_dim) = match m.collect_kind.as_str() {
+        "github" => ("采集 · GitHub".to_string(), false),
+        "bw" => ("采集 · BW 记账 · v1 未接".to_string(), true),
+        "connector" => ("采集 · Connector · v1 未接".to_string(), true),
+        _ => (String::new(), false),
+    };
+    let collect_dim_css = if collect_dim { "opacity:0.6;" } else { "" };
     rsx! {
         div {
             style: "{card} padding:16px 18px;",
@@ -1405,6 +1473,9 @@ fn MetricCard(m: MetricVm) -> Element {
                 style: "display:flex;align-items:center;gap:8px;margin-bottom:8px;",
                 span { style: "{dot}" }
                 span { style: "font-size:13px;font-weight:500;", "{m.name}" }
+                if !collect_badge.is_empty() {
+                    span { style: "margin-left:auto;font-size:10.5px;color:{ink3};border:1px solid #E2DCCF;border-radius:6px;padding:1px 6px;{collect_dim_css}", "{collect_badge}" }
+                }
                 if m.manual {
                     span { style: "margin-left:auto;font-size:10.5px;color:{ink3};border:1px solid #E2DCCF;border-radius:6px;padding:1px 6px;", "手填 · 未接入度量源" }
                 }
@@ -1561,6 +1632,9 @@ fn StageDetailCard(op: OpVm, s: StageVm) -> Element {
 #[component]
 fn ProgressStage(op: OpVm, s: StageVm) -> Element {
     let k = use_context::<Kernel>();
+    // C7 · 立即采集: a manual pull entrance alongside the standard daily cron.
+    // Cloned up front because `set_progress` below moves `k`.
+    let k_collect = k.clone();
     let card = theme::card();
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
@@ -1594,6 +1668,11 @@ fn ProgressStage(op: OpVm, s: StageVm) -> Element {
             span { style: "font-family:{serif};font-size:18px;font-weight:600;", "{s.n} {s.kind.label()}" }
             span { style: "{chip}", "{s.kind.role_short()}" }
             span { style: "font-size:12px;color:{ink3};", "体检节奏 · {s.schedule_label}" }
+            button {
+                style: "margin-left:auto;cursor:pointer;background:transparent;color:{clay};border:1px solid {clay};border-radius:7px;padding:5px 12px;font-size:12px;",
+                onclick: move |_| k_collect.send(Command::CollectMetrics),
+                "立即采集"
+            }
         }
         if empty {
             div {

@@ -29,6 +29,13 @@ CREATE TABLE IF NOT EXISTS project (
     opportunity        TEXT NOT NULL DEFAULT '', -- 机会缺口/三月成功标准(创建流程真输入)
     workspace_path     TEXT NOT NULL DEFAULT '', -- 真执行器目标目录;空=未配置,只跑 Mock
     allow_commands     INTEGER NOT NULL DEFAULT 0, -- 真执行器是否额外放行 Bash(不只编辑文件)
+    github_remote      TEXT NOT NULL DEFAULT '', -- "owner/repo";空=未挂 GitHub(本地仓或还没建)
+    -- C6(plan/13 D5+D6):北极星的采集方案(kind+query),来自 `.bw/metrics.toml`
+    -- 正本的 `north_star.collect`;空串=正本从未同步过(老库/新建项目一致)。
+    -- name/def 走既有 north_star/ns_def 两列(SyncMetricsFile 复用 set_north_star
+    -- 的同一条 UPDATE),这里只加正本独有的采集方案两列。
+    north_star_collect_kind  TEXT NOT NULL DEFAULT '', -- 'github'|'connector'|'bw'|'manual'|''
+    north_star_collect_query TEXT NOT NULL DEFAULT '',
     signal             TEXT,                     -- derived cache (L6)
     weekly_signal      TEXT,                     -- derived snapshot
     signal_derived_rev INTEGER,
@@ -50,6 +57,13 @@ CREATE TABLE IF NOT EXISTS metric (
     amber_value        REAL NOT NULL DEFAULT 0.10,
     last_target        TEXT NOT NULL DEFAULT '',
     driver             TEXT NOT NULL DEFAULT '',
+    -- C6(plan/13 D5+D6):采集方案 + 定义来源标注,来自 `.bw/metrics.toml` 正本
+    -- 的 SyncMetricsFile 命令(kind/query 语义见该模块文档)。老行(含界面
+    -- UpsertManualMetric 手建的)一律 ''/''/'manual' —— 和"没有采集方案、手建"
+    -- 这个真实状态完全一致,不是编出来的默认值。
+    collect_kind       TEXT NOT NULL DEFAULT '', -- 'github'|'connector'|'bw'|'manual'|''
+    collect_query      TEXT NOT NULL DEFAULT '',
+    origin             TEXT NOT NULL DEFAULT 'manual', -- 'manual'(界面手建) | 'file'(正本文件同步)
     signal             TEXT,                     -- derived cache (L2/L3)
     hit                INTEGER,                  -- derived cache (= signal==green)
     signal_derived_rev INTEGER,
@@ -413,6 +427,17 @@ CREATE TABLE IF NOT EXISTS issue (
     project_id  TEXT NOT NULL REFERENCES project(id),
     stage       TEXT NOT NULL,                   -- StageKind (5 values)
     number      INTEGER NOT NULL,                -- per-project sequence: 1, 2, 3, …
+    -- C4 · issue 身份映射: the GitHub issue number `gh issue create` minted
+    -- (owning project's github_remote non-empty and the call succeeded).
+    -- 0 = unmapped — no GitHub repo, or the real gh call failed (BW-side
+    -- Issue still exists either way, 创建不破).
+    github_number INTEGER NOT NULL DEFAULT 0,
+    -- C5 · PR 验收环: the pull-request number an executor run opened for this
+    -- Issue (open_pr pushed bw/issue-<github_number> + gh pr create). 0 = no
+    -- PR (not repo-attached / unmapped / not run yet / PR submission failed —
+    -- 提 PR 失败不炸 run). Never fabricated. When non-zero, InReview is derived
+    -- from an open PR and human验收 is a merge (plan/13 D3).
+    pr_number   INTEGER NOT NULL DEFAULT 0,
     title       TEXT NOT NULL,
     descr       TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'backlog', -- IssueStatus
@@ -425,6 +450,10 @@ CREATE TABLE IF NOT EXISTS issue (
     -- A5-F: non-empty only while status='blocked'; set exclusively via the
     -- BlockIssue command, cleared on every other transition.
     blocked_reason TEXT,
+    -- C8 · 标配 Issue 三件套(plan/13 D8): stable Skill-Hub slug (by C9's
+    -- by-name convention) this Issue is wired to. '' = no association (every
+    -- hand-created / autopilot Issue). Set once at creation, never rewritten.
+    standard_skill TEXT NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );

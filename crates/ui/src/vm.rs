@@ -178,6 +178,11 @@ pub struct MetricVm {
     pub hit: Option<bool>,
     /// Latest source is Manual ⇒ carries the「手填 · 未接入度量源」badge.
     pub manual: bool,
+    /// C7 · 采集来源徽记: this metric's collection plan kind from
+    /// `.bw/metrics.toml` (`github`/`bw`/`connector`/`manual`; empty = 界面手建,
+    /// never synced from a file). Drives the per-metric source badge — github
+    /// is wired in v1, bw/connector read「v1 未接」.
+    pub collect_kind: String,
     /// Real observation magnitudes, oldest→newest. One point per recorded value.
     pub trend: Vec<f32>,
     /// Sparkline geometry over the trend (empty polyline when <1 point).
@@ -202,6 +207,7 @@ pub fn metric_vm(
     signal: Option<Signal>,
     hit: Option<bool>,
     source: Option<SourceKind>,
+    collect_kind: &str,
     observation_raws: &[String],
 ) -> MetricVm {
     let trend: Vec<f32> = observation_raws
@@ -221,6 +227,7 @@ pub fn metric_vm(
         signal: resolved(signal),
         hit,
         manual: source.map(|s| s.is_manual()).unwrap_or(false),
+        collect_kind: collect_kind.into(),
         spark: sparkline_path(&trend, SPARK_W, SPARK_H),
         trend,
     }
@@ -751,6 +758,11 @@ pub struct IssueRunRowVm {
 pub struct IssueDetailVm {
     pub id: IssueId,
     pub number: u32,
+    /// C4: GitHub issue number, `0` = unmapped.
+    pub github_number: u32,
+    /// C5 · PR 验收环: the PR number a run opened, `0` = none. Non-zero +
+    /// InReview → the detail offers a merge button as the首选验收 path (D3).
+    pub pr_number: u32,
     pub title: String,
     pub desc: String,
     pub status: IssueStatus,
@@ -815,6 +827,8 @@ pub fn issue_detail_vm(
     IssueDetailVm {
         id: issue.id,
         number: issue.number,
+        github_number: issue.github_number,
+        pr_number: issue.pr_number,
         title: issue.title.clone(),
         desc: issue.desc.clone(),
         status: issue.status,
@@ -1067,6 +1081,14 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
 pub struct IssueVm {
     pub id: IssueId,
     pub number: u32,
+    /// C4 · issue 身份映射: the GitHub issue number, `0` = unmapped (no
+    /// GitHub repo, or the real `gh issue create` call failed) — the card
+    /// shows nothing extra in that case, zero noise.
+    pub github_number: u32,
+    /// C5 · PR 验收环: the PR number a run opened for this Issue, `0` = none.
+    /// Non-zero renders a "PR #N" chip; combined with `InReview` it means the
+    /// card's验收 path is a merge, not a bare Done (plan/13 D3).
+    pub pr_number: u32,
     pub stage: StageKind,
     pub title: String,
     pub desc: String,
@@ -1099,6 +1121,8 @@ pub fn issue_card(i: &Issue, agents: &[AgentCard]) -> IssueVm {
     IssueVm {
         id: i.id,
         number: i.number,
+        github_number: i.github_number,
+        pr_number: i.pr_number,
         stage: i.stage,
         title: i.title.clone(),
         desc: i.desc.clone(),

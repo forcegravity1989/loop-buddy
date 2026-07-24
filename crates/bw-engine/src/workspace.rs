@@ -18,7 +18,7 @@ pub enum ProvisionError {
     Write(String),
 }
 
-async fn git_in(dir: &Path, args: &[&str]) -> Result<(), ProvisionError> {
+pub(crate) async fn git_in(dir: &Path, args: &[&str]) -> Result<(), ProvisionError> {
     let output = tokio::process::Command::new("git")
         .current_dir(dir)
         .args(args)
@@ -55,6 +55,20 @@ pub async fn provision_git_workspace(
     }
     std::fs::create_dir_all(dir).map_err(|e| ProvisionError::CreateDir(e.to_string()))?;
     git_in(dir, &["init", "-q"]).await?;
+    commit_initial(dir, readme_title, readme_body).await
+}
+
+/// Write the workbench's opening README/.gitignore and make the first
+/// commit, authored as the workbench. Split out of `provision_git_workspace`
+/// so `bw_engine::github::create_repo` can reuse the exact same first-commit
+/// authorship on a directory `gh repo create --clone` already initialized
+/// (the `.git`-exists early return above doesn't apply there — the repo is
+/// real but has zero commits yet).
+pub(crate) async fn commit_initial(
+    dir: &Path,
+    readme_title: &str,
+    readme_body: &str,
+) -> Result<(), ProvisionError> {
     let readme = format!("# {readme_title}\n\n{readme_body}\n");
     std::fs::write(dir.join("README.md"), readme)
         .map_err(|e| ProvisionError::Write(e.to_string()))?;

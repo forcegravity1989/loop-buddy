@@ -71,6 +71,7 @@ async fn main() {
             .into(),
 
         workspace: None,
+        github: None,
     })
     .await
     .unwrap();
@@ -82,6 +83,7 @@ async fn main() {
     // CompleteCreation 真实开仓(git init + README 首提交)并绑 git-repo 连接器。
     app.dispatch(Command::CompleteCreation {
         cadence: Cadence::Weekly,
+        run_first: false,
     })
     .await
     .unwrap();

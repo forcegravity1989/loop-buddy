@@ -9,11 +9,12 @@ use crate::{
     parse_cadence, parse_connector_status, parse_cron_mode, parse_cron_status, parse_cycle,
     parse_hub_source, parse_issue_priority, parse_issue_status, parse_maturity,
     parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
-    stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow, MessageRow, MetricRole, MetricSignal,
-    NewAgent, NewArtifact, NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric,
-    NewProject, NewSession, NewSkill, NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec,
-    ObservationRow, PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, SkillEdit,
-    SkillFileRow, StageRow, StageSignal, Store, StoreError, WorkflowEdit,
+    stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow, MessageRow, MetricDefSync,
+    MetricOrigin, MetricRole, MetricSignal, MetricsFileSync, MetricsFileSyncSummary, NewAgent,
+    NewArtifact, NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject,
+    NewSession, NewSkill, NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow,
+    PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow,
+    StageRow, StageSignal, Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -152,6 +153,51 @@ impl SqliteStore {
         add_column_if_missing(&pool, "workflow_spec", "project_id", "TEXT").await?;
         add_column_if_missing(&pool, "skill", "project_id", "TEXT").await?;
         add_column_if_missing(&pool, "agent", "project_id", "TEXT").await?;
+        // GitHub 为主体的创建流(2026-07-22):老库开出来 github_remote 是
+        // 空串,和"没挂 GitHub"这个真实状态一致,不需要额外语义。
+        add_column_if_missing(
+            &pool,
+            "project",
+            "github_remote",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
+        // C4 · issue 身份映射: 老库开出来 github_number 是 0,和"未映射"这个
+        // 真实状态一致(存量无仓项目 Issue 保持本地身份,如实留白)。
+        add_column_if_missing(
+            &pool,
+            "issue",
+            "github_number",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        // C5 · PR 验收环: 老库开出来 pr_number 是 0,和"还没有 PR"这个真实
+        // 状态一致(存量 Issue、无仓项目 Issue 从不映射 PR,如实留白)。
+        add_column_if_missing(&pool, "issue", "pr_number", "INTEGER NOT NULL DEFAULT 0").await?;
+        // C6(plan/13 D5+D6):指标正本 `.bw/metrics.toml` 同步进来的采集方案 +
+        // 来源标注。老库开出来全是空串/'manual' —— 和"从未同步过正本文件、
+        // 这行是界面手建的"这个真实状态完全一致。
+        add_column_if_missing(
+            &pool,
+            "project",
+            "north_star_collect_kind",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
+        add_column_if_missing(
+            &pool,
+            "project",
+            "north_star_collect_query",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
+        add_column_if_missing(&pool, "metric", "collect_kind", "TEXT NOT NULL DEFAULT ''").await?;
+        add_column_if_missing(&pool, "metric", "collect_query", "TEXT NOT NULL DEFAULT ''").await?;
+        add_column_if_missing(&pool, "metric", "origin", "TEXT NOT NULL DEFAULT 'manual'").await?;
+        // C8(plan/13 D8):标配 Issue 三件套与标配 Skill 的稳定关联。老库开出
+        // 来是空串,和"这张 Issue 没有标配 Skill 关联"这个真实状态完全一致
+        // ——存量 Issue 全部是手建/Autopilot 建,从未挂过标配 Skill。
+        add_column_if_missing(&pool, "issue", "standard_skill", "TEXT NOT NULL DEFAULT ''").await?;
         // T2 (plan/12 §6): Skill's source unified onto HubSource. Old rows'
         // bare `source='official'`/`'self_built'` text values already match
         // the new tag vocabulary 1:1 (no rewrite needed) — only the new
@@ -291,6 +337,7 @@ fn source_text(s: SourceKind) -> &'static str {
         SourceKind::GitPr => "git_pr",
         SourceKind::Telemetry => "telemetry",
         SourceKind::Connector => "connector",
+        SourceKind::Github => "github",
         SourceKind::Manual => "manual",
     }
 }
@@ -301,6 +348,7 @@ fn parse_source(s: &str) -> SourceKind {
         "git_pr" => SourceKind::GitPr,
         "telemetry" => SourceKind::Telemetry,
         "connector" => SourceKind::Connector,
+        "github" => SourceKind::Github,
         _ => SourceKind::Manual,
     }
 }
@@ -314,6 +362,18 @@ fn parse_metric_role(s: &str) -> MetricRole {
     match s {
         "lagging" => MetricRole::Lagging,
         _ => MetricRole::Leading,
+    }
+}
+fn metric_origin_text(o: MetricOrigin) -> &'static str {
+    match o {
+        MetricOrigin::Manual => "manual",
+        MetricOrigin::File => "file",
+    }
+}
+fn parse_metric_origin(s: &str) -> MetricOrigin {
+    match s {
+        "file" => MetricOrigin::File,
+        _ => MetricOrigin::Manual,
     }
 }
 fn session_kind_text(k: SessionKind) -> &'static str {
@@ -339,6 +399,71 @@ fn amber_from(kind: &str, value: f64) -> AmberBand {
         "abs" => AmberBand::AbsPoints(value),
         _ => AmberBand::RelPct(value),
     }
+}
+
+/// C6: upsert-by-name for one `.bw/metrics.toml` metric. Looks the row up by
+/// `(project, role, name)` — the file's own identity, not a caller-minted
+/// id — and either UPDATEs its definition fields in place (keeping the
+/// existing row's id, so observation history stays attached) or INSERTs a
+/// fresh row with default operational fields (empty target-week plan, rel
+/// 10% amber — the same defaults a brand-new `UpsertManualMetric` row gets).
+/// Either way `origin` is stamped `File`.
+async fn sync_one_metric_definition(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    project_id: &str,
+    role: MetricRole,
+    m: &MetricDefSync,
+    t: i64,
+) -> Result<()> {
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT id FROM metric WHERE project_id=? AND role=? AND name=?")
+            .bind(project_id)
+            .bind(role_metric_text(role))
+            .bind(&m.name)
+            .fetch_optional(&mut **tx)
+            .await?;
+
+    match existing {
+        Some(id) => {
+            sqlx::query(
+                "UPDATE metric SET def=?, target_raw=?, collect_kind=?, collect_query=?,
+                    origin=?, updated_at=?, rev=rev+1 WHERE id=?",
+            )
+            .bind(&m.def)
+            .bind(&m.target_raw)
+            .bind(&m.collect_kind)
+            .bind(&m.collect_query)
+            .bind(metric_origin_text(MetricOrigin::File))
+            .bind(t)
+            .bind(&id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        None => {
+            let id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO metric
+                    (id, project_id, role, stage_kind, name, def, target_raw, amber_kind,
+                     amber_value, last_target, driver, pos, collect_kind, collect_query,
+                     origin, created_at, updated_at, rev)
+                 VALUES (?, ?, ?, NULL, ?, ?, ?, 'rel', 0.10, '', '', 0, ?, ?, ?, ?, ?, 0)",
+            )
+            .bind(&id)
+            .bind(project_id)
+            .bind(role_metric_text(role))
+            .bind(&m.name)
+            .bind(&m.def)
+            .bind(&m.target_raw)
+            .bind(&m.collect_kind)
+            .bind(&m.collect_query)
+            .bind(metric_origin_text(MetricOrigin::File))
+            .bind(t)
+            .bind(t)
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -466,6 +591,16 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn set_github_remote(&self, id: ProjectId, github_remote: &str) -> Result<()> {
+        sqlx::query("UPDATE project SET github_remote=?, updated_at=?, rev=rev+1 WHERE id=?")
+            .bind(github_remote)
+            .bind(now_unix())
+            .bind(pid(id))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn upsert_metric(&self, m: NewMetric) -> Result<()> {
         let (ak, av) = amber_parts(m.amber);
         let t = now_unix();
@@ -498,6 +633,40 @@ impl Store for SqliteStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn sync_metrics_file(&self, sync: MetricsFileSync) -> Result<MetricsFileSyncSummary> {
+        let p = pid(sync.project_id);
+        let t = now_unix();
+        let mut tx = self.pool.begin().await?;
+
+        // North star: the exact same UPDATE `set_north_star` performs, plus
+        // its collect plan (the two columns that method doesn't touch).
+        sqlx::query(
+            "UPDATE project SET north_star=?, ns_def=?, north_star_collect_kind=?,
+                north_star_collect_query=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(&sync.north_star_name)
+        .bind(&sync.north_star_def)
+        .bind(&sync.north_star_collect_kind)
+        .bind(&sync.north_star_collect_query)
+        .bind(t)
+        .bind(&p)
+        .execute(&mut *tx)
+        .await?;
+
+        for m in &sync.lagging {
+            sync_one_metric_definition(&mut tx, &p, MetricRole::Lagging, m, t).await?;
+        }
+        for m in &sync.leading {
+            sync_one_metric_definition(&mut tx, &p, MetricRole::Leading, m, t).await?;
+        }
+
+        tx.commit().await?;
+        Ok(MetricsFileSyncSummary {
+            lagging_synced: sync.lagging.len() as u32,
+            leading_synced: sync.leading.len() as u32,
+        })
     }
 
     async fn update_week_plan(
@@ -540,6 +709,14 @@ impl Store for SqliteStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn latest_observation_ts(&self, metric_id: MetricId) -> Result<Option<i64>> {
+        let row = sqlx::query("SELECT MAX(ts) AS ts FROM observation WHERE metric_id = ?")
+            .bind(metric_id.uuid().to_string())
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.try_get::<Option<i64>, _>("ts")?)
     }
 
     async fn materialize_stages(&self, stages: Vec<NewStage>) -> Result<()> {
@@ -838,7 +1015,7 @@ impl Store for SqliteStore {
 
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>> {
         let row = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal, created_at
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, north_star_collect_kind, north_star_collect_query, signal, weekly_signal, created_at
              FROM project WHERE id=?",
         )
         .bind(pid(id))
@@ -849,7 +1026,7 @@ impl Store for SqliteStore {
 
     async fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, signal, weekly_signal, created_at
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, north_star_collect_kind, north_star_collect_query, signal, weekly_signal, created_at
              FROM project ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -883,6 +1060,7 @@ impl Store for SqliteStore {
 
         let metric_rows = sqlx::query(
             "SELECT m.id, m.name, m.role, m.def, m.target_raw, m.last_target, m.driver, m.stage_kind, m.signal, m.hit,
+                    m.collect_kind, m.collect_query, m.origin,
                     (SELECT raw FROM observation o WHERE o.metric_id = m.id ORDER BY ts DESC, rowid DESC LIMIT 1) AS value_raw,
                     (SELECT source_kind FROM observation o WHERE o.metric_id = m.id ORDER BY ts DESC, rowid DESC LIMIT 1) AS src
              FROM metric m WHERE m.project_id=? ORDER BY m.pos",
@@ -911,6 +1089,9 @@ impl Store for SqliteStore {
                         .get::<Option<String>, _>("signal")
                         .and_then(|s| parse_sig(&s)),
                     hit: r.get::<Option<i64>, _>("hit").map(|v| v != 0),
+                    collect_kind: r.get("collect_kind"),
+                    collect_query: r.get("collect_query"),
+                    origin: parse_metric_origin(&r.get::<String, _>("origin")),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2114,9 +2295,9 @@ impl Store for SqliteStore {
         .get("next");
         sqlx::query(
             "INSERT INTO issue
-                (id, project_id, stage, number, title, descr, status, priority, assignee,
-                 created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, 'backlog', ?, NULL, ?, ?)",
+                (id, project_id, stage, number, github_number, pr_number, title, descr, status,
+                 priority, assignee, standard_skill, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 0, 0, ?, ?, 'backlog', ?, NULL, ?, ?, ?)",
         )
         .bind(i.id.uuid().to_string())
         .bind(pid(i.project_id))
@@ -2125,6 +2306,7 @@ impl Store for SqliteStore {
         .bind(&i.title)
         .bind(&i.desc)
         .bind(issue_priority_text(i.priority))
+        .bind(&i.standard_skill)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -2142,8 +2324,9 @@ impl Store for SqliteStore {
         // optional filters × the base WHERE keeps this readable without an
         // query-builder dependency.
         let mut sql = String::from(
-            "SELECT id, project_id, stage, number, title, descr, status, priority, assignee,
-                    settled_at, blocked_reason, created_at, updated_at
+            "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
+                    priority, assignee, settled_at, blocked_reason, standard_skill, created_at,
+                    updated_at
              FROM issue WHERE project_id=?",
         );
         if stage.is_some() {
@@ -2166,8 +2349,8 @@ impl Store for SqliteStore {
 
     async fn get_issue(&self, id: IssueId) -> Result<Option<Issue>> {
         let row = sqlx::query(
-            "SELECT id, project_id, stage, number, title, descr, status, priority, assignee,
-                    settled_at, blocked_reason,
+            "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
+                    priority, assignee, settled_at, blocked_reason, standard_skill,
                     created_at, updated_at
              FROM issue WHERE id=?",
         )
@@ -2230,6 +2413,26 @@ impl Store for SqliteStore {
         // the settle-once invariant is enforced in the DB, not just the app.
         sqlx::query("UPDATE issue SET settled_at=COALESCE(settled_at, ?) WHERE id=?")
             .bind(at)
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_issue_pr_number(&self, id: IssueId, pr_number: u32) -> Result<()> {
+        sqlx::query("UPDATE issue SET pr_number=?, updated_at=? WHERE id=?")
+            .bind(pr_number as i64)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_issue_github_number(&self, id: IssueId, github_number: u32) -> Result<()> {
+        sqlx::query("UPDATE issue SET github_number=?, updated_at=? WHERE id=?")
+            .bind(github_number as i64)
+            .bind(now_unix())
             .bind(id.uuid().to_string())
             .execute(&self.pool)
             .await?;
@@ -2301,6 +2504,9 @@ fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
         opportunity: r.get("opportunity"),
         workspace_path: r.get("workspace_path"),
         allow_commands: r.get::<i64, _>("allow_commands") != 0,
+        github_remote: r.get("github_remote"),
+        north_star_collect_kind: r.get("north_star_collect_kind"),
+        north_star_collect_query: r.get("north_star_collect_query"),
         signal: r
             .get::<Option<String>, _>("signal")
             .and_then(|s| parse_sig(&s)),
@@ -2533,6 +2739,8 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
         project_id,
         stage,
         number: r.get::<i64, _>("number") as u32,
+        github_number: r.get::<i64, _>("github_number") as u32,
+        pr_number: r.get::<i64, _>("pr_number") as u32,
         title: r.get("title"),
         desc: r.get("descr"),
         status: parse_issue_status(&r.get::<String, _>("status")),
@@ -2542,6 +2750,7 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
         blocked_reason: r
             .get::<Option<String>, _>("blocked_reason")
             .filter(|s| !s.is_empty()),
+        standard_skill: r.get("standard_skill"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     })

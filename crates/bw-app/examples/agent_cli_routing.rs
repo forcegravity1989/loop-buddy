@@ -170,6 +170,7 @@ async fn main() {
         kind: "demo".into(),
         desc: "agent_cli routing E2E — 全程 MockExecutor(无真实工作区)".into(),
         workspace: None,
+        github: None,
     })
     .await
     .expect("create project");

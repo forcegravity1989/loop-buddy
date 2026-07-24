@@ -613,6 +613,7 @@ async fn main() {
                     desc: req.desc.into(),
 
                     workspace: None,
+                    github: None,
                 })
                 .await
                 .expect("create project");
@@ -635,6 +636,7 @@ async fn main() {
                 .expect("north star");
                 app.dispatch(Command::CompleteCreation {
                     cadence: Cadence::Daily,
+                    run_first: false,
                 })
                 .await
                 .expect("complete creation");

@@ -35,7 +35,9 @@ mod sqlite;
 pub use sqlite::SqliteStore;
 
 pub mod seed;
-pub use seed::{seed_hub_if_empty, seed_stage_entities_if_missing};
+pub use seed::{
+    seed_hub_if_empty, seed_stage_entities_if_missing, seed_standard_issue_skills_if_missing,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -54,6 +56,18 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 pub enum MetricRole {
     Leading,
     Lagging,
+}
+
+/// Where a metric *definition* (not its value — that's [`bw_core::model::SourceKind`])
+/// came from. `Manual` is the byte-for-byte pre-C6 default: a row created by
+/// the UI's `UpsertManualMetric`. `File` marks a row whose definition (name/
+/// def/target/collect plan) was synced from the project's `.bw/metrics.toml`
+/// source of truth (plan/13 D5) — purely a provenance label, never read by
+/// the derive chain.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MetricOrigin {
+    Manual,
+    File,
 }
 
 /// Create (build) vs optimize (iterate) task session.
@@ -84,6 +98,42 @@ pub struct NewMetric {
     pub last_target: String,
     pub driver: String,
     pub pos: i64,
+}
+
+/// C6 (plan/13 D5+D6): one metric's definition as read from
+/// `.bw/metrics.toml` — no id (the file has no id concept; identity for the
+/// upsert is `(project, role, name)`), no operational week-plan fields
+/// (`last_target`/`driver`/`pos`/`amber` aren't in the file's vocabulary and
+/// are left alone on an existing row, defaulted on a freshly inserted one).
+pub struct MetricDefSync {
+    pub name: String,
+    pub def: String,
+    pub target_raw: String,
+    /// `CollectKind::as_str()` text — `bw-store` doesn't depend on
+    /// `bw-engine`, so this arrives pre-stringified (already validated
+    /// against the fixed vocabulary at parse time).
+    pub collect_kind: String,
+    pub collect_query: String,
+}
+
+/// C6: the whole `.bw/metrics.toml` file, shaped for one atomic sync call.
+pub struct MetricsFileSync {
+    pub project_id: ProjectId,
+    pub north_star_name: String,
+    pub north_star_def: String,
+    pub north_star_collect_kind: String,
+    pub north_star_collect_query: String,
+    pub lagging: Vec<MetricDefSync>,
+    pub leading: Vec<MetricDefSync>,
+}
+
+/// C6: the honest receipt of one sync — real counts, not "however many were
+/// in the file" (a metric skipped for some future validation reason would
+/// make those differ).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MetricsFileSyncSummary {
+    pub lagging_synced: u32,
+    pub leading_synced: u32,
 }
 
 pub struct NewStage {
@@ -291,6 +341,10 @@ pub struct NewIssue {
     pub title: String,
     pub desc: String,
     pub priority: IssuePriority,
+    /// C8 · plan/13 D8: stable Skill-Hub slug this Issue is wired to (`""` =
+    /// none — every hand-created / autopilot Issue). Only the standard-Issue
+    /// trio's seeder sets a real value.
+    pub standard_skill: String,
 }
 
 pub struct NewConnector {
@@ -364,6 +418,14 @@ pub struct ProjectRow {
     /// Whether the real executor may also run shell commands (Bash), not
     /// just edit files. Meaningless while `workspace_path` is empty.
     pub allow_commands: bool,
+    /// "owner/repo" — empty = not attached to GitHub (local-only workspace,
+    /// or GitHub attach failed and soft-degraded). Set once, at creation.
+    pub github_remote: String,
+    /// C6: the north star's collection plan, synced from `.bw/metrics.toml`'s
+    /// `north_star.collect` (empty = never synced from a source-of-truth
+    /// file yet — the creation-flow-typed name/def has no collect plan).
+    pub north_star_collect_kind: String,
+    pub north_star_collect_query: String,
     /// Cached derived signal (read-only; recompute is authoritative).
     pub signal: Option<Signal>,
     pub weekly_signal: Option<Signal>,
@@ -386,6 +448,13 @@ pub struct MetricSignal {
     pub source: Option<SourceKind>,
     pub signal: Option<Signal>,
     pub hit: Option<bool>,
+    /// C6: this definition's collection plan (empty = never synced from
+    /// `.bw/metrics.toml`).
+    pub collect_kind: String,
+    pub collect_query: String,
+    /// C6: `Manual` (界面手建, the byte-for-byte pre-C6 default) or `File`
+    /// (synced from the project's metrics source-of-truth file).
+    pub origin: MetricOrigin,
 }
 
 /// One materialized stage, as the operating view reads it.
@@ -488,8 +557,29 @@ pub trait Store: Send + Sync {
     /// shell commands. Empty `path` clears configuration (reverts to
     /// Mock-only). Does not touch any signal or observation.
     async fn set_workspace(&self, id: ProjectId, path: &str, allow_commands: bool) -> Result<()>;
+    /// Record the GitHub remote a project's workspace was created from or
+    /// adopted from ("owner/repo"). Called once, right after a successful
+    /// `bw_engine::github::create_repo`/`clone_repo` — never touched again.
+    async fn set_github_remote(&self, id: ProjectId, github_remote: &str) -> Result<()>;
 
     async fn upsert_metric(&self, m: NewMetric) -> Result<()>;
+    /// C6 (plan/13 D5+D6): atomically sync `.bw/metrics.toml`'s definitions
+    /// into the cache. North star name/def go through the exact same UPDATE
+    /// `set_north_star` performs; its collect plan lands in the two
+    /// dedicated `project` columns. Each lagging/leading metric is upserted
+    /// by **(project, role, name)** — the file has no id concept, so name is
+    /// the join key; re-syncing an unchanged file inserts zero new rows. A
+    /// synced row (new or pre-existing) is stamped `origin = File`; if it
+    /// collides with a UI-typed row (same project/role/name), the file wins
+    /// the definition (def/target/collect) but keeps that row's identity, so
+    /// its observation history under `metric_id` is untouched. Never touches
+    /// `observation` and never calls `recompute_signals` — this is
+    /// definitions-only (collection execution is a later ticket, C7). All
+    /// writes run in one transaction: the caller is expected to have already
+    /// parsed the whole file successfully (parse-all-or-write-nothing lives
+    /// one layer up, in `bw-engine::metrics_file::read`), and this method
+    /// keeps its own partial-failure window closed too.
+    async fn sync_metrics_file(&self, sync: MetricsFileSync) -> Result<MetricsFileSyncSummary>;
     /// Week-plan edit: update a metric's target + this week's driver, keeping
     /// the previous target as `last_target`. Touches no value and no signal —
     /// recompute re-derives against the new target.
@@ -508,6 +598,10 @@ pub trait Store: Send + Sync {
         raw: &str,
         ts: OffsetDateTime,
     ) -> Result<()>;
+    /// 该指标最近一次观测的 unix 秒(无观测 = None)。采集器 window-guard
+    /// 用:值平台期也要按窗口落新点,否则「今天真实测过没变」会被过期降级
+    /// 误判成「久无数据」(code-review Standards #5)。
+    async fn latest_observation_ts(&self, metric_id: MetricId) -> Result<Option<i64>>;
 
     /// Materializes all five stages at creation, `dod` all-unchecked.
     async fn materialize_stages(&self, stages: Vec<NewStage>) -> Result<()>;
@@ -766,6 +860,16 @@ pub trait Store: Send + Sync {
     /// Stamp the FIRST settle time (COALESCE — later calls keep the original).
     /// The app's Done-edge accounting fires iff this was previously NULL.
     async fn mark_issue_settled(&self, id: IssueId, at: i64) -> Result<()>;
+    /// C4 · issue 身份映射: record the GitHub issue number `gh issue create`
+    /// minted for this Issue. The App layer calls this only after a real
+    /// success — a failed/skipped mapping simply never calls it, leaving the
+    /// honest `0` default in place.
+    async fn set_issue_github_number(&self, id: IssueId, github_number: u32) -> Result<()>;
+    /// C5 · PR 验收环: record the pull-request number a run's `open_pr` opened
+    /// for this Issue. The App layer calls this only after a real `gh pr
+    /// create` success — a failed/skipped PR simply never calls it, leaving
+    /// the honest `0` default (提 PR 失败不炸 run). Never a fabricated number.
+    async fn set_issue_pr_number(&self, id: IssueId, pr_number: u32) -> Result<()>;
     /// A5-F: the only way an issue reaches `Blocked` — sets status and reason
     /// together in one write. Legality (which source states may block) and
     /// the non-empty-reason rule are the App layer's job; the store just
@@ -856,6 +960,7 @@ pub(crate) fn cron_mode_text(m: &CronMode) -> &'static str {
         CronMode::RunSkill { .. } => "run_skill",
         CronMode::RunPrompt { .. } => "run_prompt",
         CronMode::CreateIssue => "create_issue",
+        CronMode::CollectMetrics => "collect_metrics",
     }
 }
 
@@ -870,6 +975,7 @@ pub(crate) fn cron_mode_text(m: &CronMode) -> &'static str {
 pub(crate) fn parse_cron_mode(mode: &str, target: &str) -> CronMode {
     match mode {
         "create_issue" => CronMode::CreateIssue,
+        "collect_metrics" => CronMode::CollectMetrics,
         "run_skill" => CronMode::RunSkill {
             skill_id: uuid::Uuid::parse_str(target)
                 .map(SkillId::from_uuid)
