@@ -68,11 +68,13 @@ async fn main() {
         kind: "内部工具".into(),
         desc: String::new(),
         workspace: None,
+        github: None,
     })
     .await
     .unwrap();
     app.dispatch(Command::CompleteCreation {
         cadence: Cadence::Weekly,
+        run_first: false,
     })
     .await
     .unwrap();

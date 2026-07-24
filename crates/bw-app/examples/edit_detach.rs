@@ -67,6 +67,7 @@ async fn main() {
         kind: "内部验证".to_string(),
         desc: "T11 深链渲染证明用的占位项目".to_string(),
         workspace: None,
+        github: None,
     })
     .await
     .expect("CreateProject(deep-link placeholder) should succeed");
