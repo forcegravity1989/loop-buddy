@@ -308,12 +308,33 @@ pub fn WorkflowHub(
                                                             // 正文/全流程主区。
                                                             {
                                                                 let is_doc = doc_view().contains(&row_id);
+                                                                let has_content = !row.content.trim().is_empty();
+                                                                let k = k.clone();
                                                                 rsx! {
                                                                     div {
                                                                         style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
                                                                         span { style: "font-size:11.5px;color:{ink3};", if is_doc { "文档" } else { "全流程" } }
                                                                         div {
-                                                                            style: "display:flex;gap:4px;",
+                                                                            style: "display:flex;gap:4px;align-items:center;",
+                                                                            // T17(plan/12 §10 v1.1#4):显式触发的解析动作——
+                                                                            // content 为空(结构化定义/未撰写正文)诚实禁用,
+                                                                            // 绝不假装能解析一份不存在的文档。
+                                                                            button {
+                                                                                style: if has_content {
+                                                                                    "cursor:pointer;background:transparent;border:1px solid {theme::CLAY};color:{theme::CLAY};border-radius:6px;padding:2px 10px;font-size:10.5px;"
+                                                                                } else {
+                                                                                    "cursor:not-allowed;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;opacity:.55;"
+                                                                                },
+                                                                                disabled: !has_content,
+                                                                                title: if has_content { "读文档,真实执行解析,成功后覆盖流程图(先留版本快照)" } else { "无原始文档,无可解析" },
+                                                                                onclick: move |_| {
+                                                                                    if has_content {
+                                                                                        k.send(Command::ParseWorkflowContent { workflow_id: row_id });
+                                                                                        doc_view.write().remove(&row_id);
+                                                                                    }
+                                                                                },
+                                                                                "🔍 解析为流程图"
+                                                                            }
                                                                             button {
                                                                                 style: if is_doc {
                                                                                     "cursor:pointer;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;"

@@ -857,6 +857,140 @@ pub fn parse_phase_outcome(text: &str) -> Option<PhaseOutcome> {
     None
 }
 
+/// T17 (plan/12 §10 v1.1#4): marker lines wrapping the JSON payload a
+/// "解析为流程图" parse call must emit — the multi-line analogue of T9's
+/// single-line `VERDICT:` marker (a `phases` array can't fit the "last
+/// matching line" scheme a scalar verdict uses). [`parse_workflow_phases`]
+/// takes the **last** `WORKFLOW_PHASES_BEGIN…WORKFLOW_PHASES_END` block in the
+/// output, so an executor that echoes the contract's own worked example
+/// before rendering its real answer still reads back correctly.
+pub const WORKFLOW_PHASES_BEGIN: &str = "WORKFLOW_PHASES_BEGIN";
+pub const WORKFLOW_PHASES_END: &str = "WORKFLOW_PHASES_END";
+
+/// The machine-parseable phase-structure contract appended to a workflow-
+/// parse call's prompt (by `bw-app`'s `App::parse_workflow_content`) — the
+/// T17 counterpart to [`verdict_contract_suffix`]. Kept next to
+/// [`parse_workflow_phases`] so the emit-side format and the parse-side
+/// format can never drift apart.
+pub fn workflow_parse_contract_suffix() -> &'static str {
+    "\n\n────────────\n【工作流阶段解析 · 机器解析(必须严格执行)】\n\
+     阅读以上文档的真实内容,识别工作流的阶段序列,在输出的最末尾单独一段给出下面\
+     两条标记行包裹的 JSON(只这一段,不要额外解释,不要 Markdown 代码块围栏):\n\
+     WORKFLOW_PHASES_BEGIN\n\
+     {\"phases\":[{\"name\":\"阶段名\",\"role\":\"generator\",\"reject_to_phase\":null,\"agent\":null,\"skills\":[]}]}\n\
+     WORKFLOW_PHASES_END\n\
+     字段值域(严格,不接受值域外的任何变体):\n\
+     • name:阶段名称,字符串,不能为空\n\
+     • role:必须是以下四个英文小写值之一:generator(产出)/ evaluator(评审门,\
+     唯一允许带 reject_to_phase 的角色)/ optimizer(打磨已有产出)/ neutral(其余情况)\n\
+     • reject_to_phase:只有 role=evaluator 时才允许非 null,值为打回目标阶段在\
+     phases 数组里的 0 基索引(整数,必须落在数组范围内);role 不是 evaluator 时必\
+     须是 null\n\
+     • agent:该阶段真实绑定的 Agent 名称(字符串),或 null 表示沿用工作流默认执行者\n\
+     • skills:该阶段真实绑定的 Skill 名称数组,可以是空数组 [] 表示沿用工作流默认技能\n\
+     示例(两阶段:「起草」生成,「评审」打回第 0 阶段):\n\
+     WORKFLOW_PHASES_BEGIN\n\
+     {\"phases\":[{\"name\":\"起草\",\"role\":\"generator\",\"reject_to_phase\":null,\"agent\":\"writer\",\"skills\":[\"drafting\"]},{\"name\":\"评审\",\"role\":\"evaluator\",\"reject_to_phase\":0,\"agent\":null,\"skills\":[]}]}\n\
+     WORKFLOW_PHASES_END\n\
+     解析只认最后一次出现的 WORKFLOW_PHASES_BEGIN…WORKFLOW_PHASES_END 区块。区块缺\
+     失、JSON 不合法、或任何字段值域不合法,都会被判为解析失败——绝不会被当作部分\
+     成功采纳,绝不会被按关键词猜测结构。\n"
+}
+
+/// One phase entry as it appears on the wire inside a
+/// `WORKFLOW_PHASES_BEGIN`/`END` block — `role` reuses [`PhaseRole`]'s own
+/// `Deserialize` (already `#[serde(rename_all = "snake_case")]`), so an
+/// out-of-domain `role` string fails with serde's own honest "unknown
+/// variant" message instead of a hand-rolled one.
+#[derive(Deserialize)]
+struct ParsedPhaseOnDisk {
+    name: String,
+    role: PhaseRole,
+    #[serde(default)]
+    reject_to_phase: Option<u8>,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    skills: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ParsedPhasesPayload {
+    phases: Vec<ParsedPhaseOnDisk>,
+}
+
+/// Parse a workflow-parse call's real output for its structured phase list
+/// (T17, plan/12 §10 v1.1#4) — the JSON-block analogue of
+/// [`parse_phase_outcome`]. Takes the **last**
+/// `WORKFLOW_PHASES_BEGIN…WORKFLOW_PHASES_END` block in `text` (robust to an
+/// executor that quotes the contract's own worked example before rendering
+/// its real answer), strict-parses the JSON inside, then validates every
+/// field's value domain. Returns `Err(reason)` — a human-readable, honest
+/// failure description — on ANY problem: no block found, no paired end
+/// marker, malformed JSON, an empty `phases` array, a blank `name`, an
+/// out-of-domain `role` (surfaced by serde itself), a `reject_to_phase` on a
+/// non-`evaluator` phase, or a `reject_to_phase` index outside the array's
+/// own bounds. The caller MUST treat `Err` as "未解析,仅文本" and leave the
+/// workflow's stored `phases` completely untouched — never a partial
+/// adoption, never a keyword-guessed default structure.
+pub fn parse_workflow_phases(text: &str) -> Result<Vec<PhaseMeta>, String> {
+    let Some(begin_at) = text.rfind(WORKFLOW_PHASES_BEGIN) else {
+        return Err(format!(
+            "输出中没有找到 {WORKFLOW_PHASES_BEGIN} 标记 —— 未解析,仅文本"
+        ));
+    };
+    let after_begin = &text[begin_at + WORKFLOW_PHASES_BEGIN.len()..];
+    let Some(end_rel) = after_begin.find(WORKFLOW_PHASES_END) else {
+        return Err(format!(
+            "找到 {WORKFLOW_PHASES_BEGIN} 但没有找到配对的 {WORKFLOW_PHASES_END} —— 未解析,仅文本"
+        ));
+    };
+    let json_str = after_begin[..end_rel].trim();
+    if json_str.is_empty() {
+        return Err(format!(
+            "{WORKFLOW_PHASES_BEGIN}/{WORKFLOW_PHASES_END} 区块为空 —— 未解析,仅文本"
+        ));
+    }
+    let payload: ParsedPhasesPayload = serde_json::from_str(json_str)
+        .map_err(|e| format!("JSON 解析失败:{e} —— 未解析,仅文本"))?;
+    if payload.phases.is_empty() {
+        return Err("phases 数组为空 —— 未解析,仅文本".to_string());
+    }
+    let n = payload.phases.len();
+    let mut out = Vec::with_capacity(n);
+    for (i, p) in payload.phases.into_iter().enumerate() {
+        let name = p.name.trim().to_string();
+        if name.is_empty() {
+            return Err(format!("第 {i} 项 name 为空 —— 未解析,仅文本"));
+        }
+        let role = p.role;
+        if let Some(idx) = p.reject_to_phase {
+            if role != PhaseRole::Evaluator {
+                return Err(format!(
+                    "第 {i} 项「{name}」role={role:?} 但携带 reject_to_phase —— 只有 evaluator 阶段允许 —— 未解析,仅文本"
+                ));
+            }
+            if idx as usize >= n {
+                return Err(format!(
+                    "第 {i} 项「{name}」reject_to_phase={idx} 越界(阶段总数 {n})—— 未解析,仅文本"
+                ));
+            }
+        }
+        out.push(PhaseMeta {
+            name,
+            role,
+            reject_to_phase: p.reject_to_phase,
+            agent: p.agent.filter(|a| !a.trim().is_empty()),
+            skills: p
+                .skills
+                .into_iter()
+                .filter(|s| !s.trim().is_empty())
+                .collect(),
+        });
+    }
+    Ok(out)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowSpec {
     pub id: WorkflowId,

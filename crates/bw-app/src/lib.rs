@@ -21,8 +21,9 @@ pub use legacy_migration::LegacyMigrationReport;
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    classify_artifact_path, cron_due, parse_phase_outcome, stage_template_workflow, stage_workflow,
-    stage_workflow_with_playbook, AgentCard, AgentRef, Artifact, Author, Cadence, Connector,
+    classify_artifact_path, cron_due, parse_phase_outcome, parse_workflow_phases,
+    stage_template_workflow, stage_workflow, stage_workflow_with_playbook,
+    workflow_parse_contract_suffix, AgentCard, AgentRef, Artifact, Author, Cadence, Connector,
     ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus,
     KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, PhaseRole, Readiness,
     RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, Verdict,
@@ -35,7 +36,7 @@ use bw_core::{
 };
 use bw_engine::{
     allowed_tools_arg, evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit,
-    GithubRepoSummary, PermissionMode, RunCtx, RunEvent, UnsupportedCliExecutor,
+    GithubRepoSummary, PermissionMode, PhaseNode, RunCtx, RunEvent, UnsupportedCliExecutor,
 };
 use bw_store::{
     AgentEdit, GlobalHandoffRow, MetricDefSync, MetricRole, MetricsFileSync, NewAgent, NewArtifact,
@@ -360,6 +361,23 @@ pub enum Command {
         skills: Vec<SkillRef>,
         /// Why this "优化" happened — frozen onto the version snapshot (iter 5).
         note: String,
+    },
+    /// T17 (plan/12 §10 v1.1#4): "🔍 解析为流程图" — read `WorkflowSpec.content`
+    /// (the workflow's real authored MD document) through the SAME
+    /// Executor/agent_cli routing seam every real run goes through, and
+    /// strict-parse the executor's real output for a structured `phases`
+    /// list (name/role/reject_to_phase/agent/skills), same output-contract
+    /// discipline as T9's evaluator verdict. On a valid contract block that
+    /// passes every value-domain check, the workflow's `phases` are
+    /// overwritten (with a `WorkflowVersion` snapshot taken first, reusing
+    /// the same mechanism `UpdateWorkflowSpec` already uses — "解析一次用
+    /// 一世", re-running this command later re-parses and snapshots again).
+    /// On ANY problem (missing content, executor failure, missing/malformed
+    /// contract block, an out-of-domain field) this returns `Err` and
+    /// leaves `phases` completely untouched — an honest "未解析,仅文本",
+    /// never a partial or guessed adoption.
+    ParseWorkflowContent {
+        workflow_id: WorkflowId,
     },
     CreateSkill {
         id: SkillId,
@@ -1524,6 +1542,124 @@ impl App {
             agent.agent_cli.clone()
         };
         Ok((cli, agent.tools.clone()))
+    }
+
+    /// T17 (plan/12 §10 v1.1#4): `Command::ParseWorkflowContent`'s real work —
+    /// see that variant's doc comment for the full contract. One-shot (no
+    /// session, no `workflow_run` row — this isn't a workflow *run*, it's a
+    /// single document-understanding call), routed through the same
+    /// mock/real `Engine` split `run_workflow_inner` uses, keyed off the
+    /// workflow's OWN `project_id` binding rather than `self.active()`:
+    /// this is a Hub-reachable action (`BW_SEL` can deep-link straight into
+    /// a `ComponentDetail` with no project open at all), so it must not
+    /// require one. A hub-library workflow (`project_id: None`) — the
+    /// common case, every built-in template and every hand-authored hub
+    /// entry today — always runs on the shared Mock engine, honestly
+    /// self-labelled; a project-owned workflow with a configured
+    /// `workspace_path` gets a real one-shot `ClaudeCliExecutor`, exactly
+    /// like a real workflow run would.
+    async fn parse_workflow_content(&mut self, workflow_id: WorkflowId) -> Result<(), AppError> {
+        let spec = self
+            .store
+            .get_workflow_spec(workflow_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if spec.content.trim().is_empty() {
+            return Err(AppError::Invalid(
+                "没有原始文档,无可解析(content 为空)".into(),
+            ));
+        }
+
+        // No issue is involved in a Hub-level parse call, so this always
+        // resolves to the honest default ("claude-code", no tools) unless a
+        // future caller threads one through — kept as a real call (not a
+        // hardcoded literal) so a later change to the default lands here
+        // for free, same discipline `run_workflow_inner` follows.
+        let (agent_cli, agent_tools) = self.resolve_agent_route(None).await?;
+        let fresh_engine;
+        let engine: &Engine = match agent_cli.as_str() {
+            "claude-code" => {
+                let real_workspace = match spec.project_id {
+                    Some(pid) => self
+                        .store
+                        .get_project(pid)
+                        .await?
+                        .map(|p| (p.workspace_path, p.allow_commands)),
+                    None => None,
+                };
+                match real_workspace {
+                    Some((path, allow_commands)) if !path.trim().is_empty() => {
+                        let executor = ClaudeCliExecutor::new(
+                            self.state.claude_config.clone(),
+                            PathBuf::from(path.trim()),
+                            allow_commands,
+                            agent_tools.clone(),
+                        );
+                        fresh_engine = Engine::new(Arc::new(executor));
+                        &fresh_engine
+                    }
+                    _ => &self.mock_engine,
+                }
+            }
+            other => {
+                // 诚实报错,同 `run_workflow_inner`:不给未接好的 CLI 静默
+                // 回落到 claude-code。
+                let executor = UnsupportedCliExecutor::new(other.to_string());
+                fresh_engine = Engine::new(Arc::new(executor));
+                &fresh_engine
+            }
+        };
+
+        let mut prompt = spec.content.clone();
+        prompt.push_str(workflow_parse_contract_suffix());
+        let node = PhaseNode {
+            name: "解析工作流文档".to_string(),
+            role: PhaseRole::Neutral,
+            prompt,
+            agents: spec.agents.clone(),
+            skills: spec.skills.clone(),
+            max_iter: 1,
+            retries: 0,
+            prior_summary: None,
+        };
+        let ctx = RunCtx {
+            project: spec.project_id.unwrap_or(ProjectId::nil()),
+            workflow: spec.id,
+        };
+        let output = engine
+            .run_adhoc(node, &ctx)
+            .await
+            .map_err(|e| AppError::Engine(e.to_string()))?;
+
+        // Honest parse: no keyword guessing, no partial adoption. On ANY
+        // problem `phases` stays exactly what it was before this call — the
+        // caller (UI) shows the real reason and lets the user retry.
+        let phases = parse_workflow_phases(&output.text).map_err(AppError::Invalid)?;
+
+        self.store
+            .update_workflow_spec(
+                workflow_id,
+                WorkflowEdit {
+                    prompt: spec.prompt.clone(),
+                    goal: spec.goal.clone(),
+                    phases,
+                    // A freshly-parsed phase carries its own real per-phase
+                    // binding (name/role/reject_to_phase/agent/skills) but
+                    // no per-phase INSTRUCTION text — same "empty = shared
+                    // `prompt`" fallback every other phase-editing path
+                    // already honors (`UpdateWorkflowSpec`'s hand-edit form
+                    // included). A per-phase-instruction authoring UI is
+                    // later work, not this ticket.
+                    phase_prompts: Vec::new(),
+                    agents: spec.agents.clone(),
+                    skills: spec.skills.clone(),
+                    note: "T17 · 解析为流程图".to_string(),
+                },
+            )
+            .await?;
+        self.refresh_workflow_specs().await?;
+        self.emit(Event::WorkflowSpecsChanged);
+        Ok(())
     }
 
     /// Resolve skill refs against the hub and render the non-empty bodies as
@@ -3745,6 +3881,10 @@ impl App {
                     .await?;
                 self.refresh_workflow_specs().await?;
                 self.emit(Event::WorkflowSpecsChanged);
+            }
+
+            Command::ParseWorkflowContent { workflow_id } => {
+                self.parse_workflow_content(workflow_id).await?;
             }
 
             Command::CreateSkill {
