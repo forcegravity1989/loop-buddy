@@ -12,6 +12,7 @@
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::agent_hub::workflows_using_agent;
+use crate::screens::markdown::MarkdownView;
 use crate::screens::skill_hub::{workflows_using_skill, SkillFileBrowser};
 use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
@@ -192,12 +193,11 @@ fn AgentDetailCard(id: AgentId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
                 }
             }
             div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "常驻指令(角色系统提示;{{var}} 槽位在运行时按项目填充)" }
-            if a.instructions.trim().is_empty() {
-                div { style: "font-size:12.5px;color:{ink3};margin-bottom:14px;", "目录引用 · 无本地指令" }
-            } else {
-                pre {
-                    style: "font-family:{theme::MONO};font-size:12px;line-height:1.7;color:{ink2};background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:14px 16px;white-space:pre-wrap;margin:0 0 14px;",
-                    "{a.instructions}"
+            div {
+                style: "margin-bottom:14px;",
+                MarkdownView {
+                    content: a.instructions.clone(),
+                    empty_label: "目录引用 · 无本地指令".to_string(),
                 }
             }
             div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "被这些工作流使用" }
@@ -242,7 +242,10 @@ fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) 
                 }
                 span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.maturity_label}" }
             }
-            div { style: "font-size:13.5px;color:{ink2};line-height:1.7;margin-bottom:10px;", "解决:{row.goal}" }
+            // T15:goal 正文改走共用 MD 渲染组件——为 T16 的 content 双视图
+            // 打底(那一票会把这里换成 `WorkflowSpec.content` 全文)。
+            div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "解决" }
+            div { style: "margin-bottom:10px;", MarkdownView { content: row.goal.clone() } }
             div {
                 style: "font-family:{mono};font-size:12px;color:{ink3};margin-bottom:10px;",
                 if row.last_run_label.is_empty() {

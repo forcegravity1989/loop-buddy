@@ -18,6 +18,7 @@
 //!   defaults Cron Hub's own create form uses).
 
 use crate::kernel::{HubVm, Kernel};
+use crate::screens::markdown::MarkdownView;
 use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
 use bw_app::Command;
@@ -296,6 +297,18 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
                                                                     loop_retries: row.loop_retries,
                                                                     loop_max_iter: row.loop_max_iter,
                                                                 }
+                                                            }
+                                                            // T15(plan/12 §10 v1.1#2):正文改走共用 MD 渲染
+                                                            // 组件——同 Skill「技能正文」/Agent「常驻指令」
+                                                            // 详情区一样的位置,为 T16 的 content 双视图
+                                                            // (文档⇄流程图)打底(那一票会把这里换成
+                                                            // `WorkflowSpec.content` 全文,现在先接上现有的
+                                                            // `goal` 字段)。折叠态摘要行的「解决:」一句话
+                                                            // 保持纯文本,同 desc/role 的既有约定。
+                                                            div { style: "font-size:11.5px;color:{ink3};margin-bottom:6px;", "正文" }
+                                                            div {
+                                                                style: "margin-bottom:10px;",
+                                                                MarkdownView { content: row.goal.clone() }
                                                             }
                                                             if let Some(d) = &detail {
                                                                 if !d.agents.is_empty() {

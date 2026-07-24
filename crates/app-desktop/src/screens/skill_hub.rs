@@ -13,6 +13,7 @@
 //! three Hub screens share one filter predicate instead of three ad hoc ones.
 
 use crate::kernel::{HubVm, Kernel};
+use crate::screens::markdown::MarkdownView;
 use crate::theme;
 use bw_app::Command;
 use bw_core::model::HubSource;
@@ -192,16 +193,16 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
     let ink3 = theme::INK_3;
 
     // 优雅退化:没有 skill_file 子文件(自建/蒸馏/五阶段内置)——单栏正文,
-    // 不放一棵只有一个节点的假树。
+    // 不放一棵只有一个节点的假树。T15:正文改走共用 MD 渲染组件(SKILL.md
+    // 一定是 .md,`s.content` 就是它导入时已剥离 frontmatter 的正文)。
     if s.files.is_empty() {
         return rsx! {
-            if s.content.trim().is_empty() {
-                div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "目录引用 · 无正文(全文在来源仓库;可「编辑」补充本地正文)" }
-            } else {
-                div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "技能正文(运行时注入 prompt)" }
-                pre {
-                    style: "font-family:{theme::MONO};font-size:11.5px;line-height:1.6;color:{ink2};background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:10px 12px;white-space:pre-wrap;margin:0 0 10px;",
-                    "{s.content}"
+            div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "技能正文(运行时注入 prompt)" }
+            div {
+                style: "margin-bottom:10px;",
+                MarkdownView {
+                    content: s.content.clone(),
+                    empty_label: "目录引用 · 无正文(全文在来源仓库;可「编辑」补充本地正文)".to_string(),
                 }
             }
         };
@@ -232,6 +233,13 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
     } else {
         ("transparent", ink2)
     };
+    // T15:.md 文件(含固定置顶的 SKILL.md 本身)走共用 MD 渲染组件;非 .md
+    // 支撑文件(yaml/sh/cjs/json/py …)保持现有等宽原文——不猜测它是不是
+    // "看起来像 markdown"。
+    let is_md = selected_path
+        .as_deref()
+        .map(|p| matches!(p.rsplit('.').next().unwrap_or(""), "md" | "mdx"))
+        .unwrap_or(true);
 
     rsx! {
         div {
@@ -258,7 +266,15 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
                     style: "font-family:{theme::MONO};font-size:11px;color:{ink3};padding:7px 14px;border-bottom:1px dashed {theme::BORDER};flex:none;",
                     "{selected_label}"
                 }
-                if selected_content.trim().is_empty() {
+                if is_md {
+                    div {
+                        style: "padding:12px 14px;overflow-y:auto;max-height:360px;",
+                        MarkdownView {
+                            content: selected_content.clone(),
+                            empty_label: "(空文件)".to_string(),
+                        }
+                    }
+                } else if selected_content.trim().is_empty() {
                     div { style: "font-size:12px;color:{ink3};padding:14px;", "(空文件)" }
                 } else {
                     pre {
