@@ -84,6 +84,9 @@ pub struct NewProject {
     pub name: String,
     pub kind: String,
     pub desc: String,
+    /// C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 今天恒 `"github"`
+    /// (唯一可选项)。落进 `project.provider`,不派生也不重算。
+    pub provider: String,
 }
 
 pub struct NewMetric {
@@ -421,6 +424,11 @@ pub struct ProjectRow {
     /// "owner/repo" — empty = not attached to GitHub (local-only workspace,
     /// or GitHub attach failed and soft-degraded). Set once, at creation.
     pub github_remote: String,
+    /// C16(plan/14 规范条 4): 仓平台选择器的选中值(`"github"` 今天唯一可能
+    /// 的取值)。老库开出来的存量行经 `add_column_if_missing` 默认 `'github'`
+    /// ——和"这仓当时就是接 GitHub 建的"这个真实状态一致(pre-C16 没有别的
+    /// 平台可选)。
+    pub provider: String,
     /// C6: the north star's collection plan, synced from `.bw/metrics.toml`'s
     /// `north_star.collect` (empty = never synced from a source-of-truth
     /// file yet — the creation-flow-typed name/def has no collect plan).
