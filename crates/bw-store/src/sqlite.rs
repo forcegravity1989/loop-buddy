@@ -1847,6 +1847,21 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn delete_skill(&self, id: SkillId) -> Result<()> {
+        let sid = id.uuid().to_string();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM skill_file WHERE skill_id=?")
+            .bind(&sid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM skill WHERE id=?")
+            .bind(&sid)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
             "SELECT id, name, maturity, descr, category, stage_ref, source, official_library, uses, content,
@@ -2086,6 +2101,14 @@ impl Store for SqliteStore {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() as u32)
+    }
+
+    async fn delete_agent(&self, id: AgentId) -> Result<()> {
+        sqlx::query("DELETE FROM agent WHERE id=?")
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     async fn create_cron_task(&self, c: NewCronTask) -> Result<()> {
@@ -2436,6 +2459,27 @@ impl Store for SqliteStore {
             .bind(id.uuid().to_string())
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    async fn get_app_meta(&self, key: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT value FROM app_meta WHERE key=?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.get::<String, _>("value")))
+    }
+
+    async fn set_app_meta(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO app_meta (key, value, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        )
+        .bind(key)
+        .bind(value)
+        .bind(now_unix())
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }

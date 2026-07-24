@@ -783,6 +783,13 @@ pub trait Store: Send + Sync {
     /// built-in stage skills when they were seeded by an older binary,
     /// before this column carried real values.
     async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()>;
+    /// T14 (2026-07-24, plan/12 §10 v1.1): delete one skill row plus its
+    /// `skill_file` children (a legacy shell has none, but a real imported
+    /// package might in general — this stays correct either way), in one
+    /// transaction. The *decision* of which rows are safe to delete is
+    /// bw-app's business judgement (this repo's "store 无业务判断" rule);
+    /// this is purely the mechanical delete once that decision is made.
+    async fn delete_skill(&self, id: SkillId) -> Result<()>;
 
     async fn create_agent(&self, a: NewAgent) -> Result<()>;
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
@@ -795,6 +802,11 @@ pub trait Store: Send + Sync {
     /// `wins += ok as int`, `win_rate` recomputed from the real counters.
     /// Returns how many rows matched (0 = unregistered ref, honest no-op).
     async fn record_agent_run_by_name(&self, name: &str, ok: bool) -> Result<u32>;
+    /// T14: delete one agent row. No table carries a real FK onto `agent(id)`
+    /// (`issue.assignee` is a plain, unconstrained id string) so this is a
+    /// single-table delete; same "mechanics only, decision lives in bw-app"
+    /// split as `delete_skill`.
+    async fn delete_agent(&self, id: AgentId) -> Result<()>;
 
     async fn create_cron_task(&self, c: NewCronTask) -> Result<()>;
     async fn list_cron_tasks(&self) -> Result<Vec<CronTask>>;
@@ -879,6 +891,16 @@ pub trait Store: Send + Sync {
     /// the project wall's "open work" badge. Same predicate as the A4 handoff
     /// risky-guard, so the two numbers never disagree.
     async fn count_open_issues(&self, project_id: ProjectId) -> Result<i64>;
+
+    // ── app_meta: tiny key/value table for one-shot app-level markers ──
+    /// T14 (2026-07-24, plan/12 §10 v1.1): read a marker's value, `None` if
+    /// never set (including "table exists but this key was never written" —
+    /// the honest default for every pre-T14 DB and every fresh one).
+    async fn get_app_meta(&self, key: &str) -> Result<Option<String>>;
+    /// Upsert a marker. Used by the legacy-shell migration to record
+    /// "already ran" so a second boot is a real zero-op, not a re-scan that
+    /// happens to find nothing.
+    async fn set_app_meta(&self, key: &str, value: &str) -> Result<()>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────

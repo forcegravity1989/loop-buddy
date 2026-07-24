@@ -14,7 +14,10 @@
 #![forbid(unsafe_code)]
 
 mod agent_import;
+mod legacy_migration;
 mod skill_import;
+
+pub use legacy_migration::LegacyMigrationReport;
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
@@ -488,6 +491,46 @@ pub enum Command {
         source_path: String,
         official_library: Option<String>,
     },
+    /// T14 (2026-07-24, plan/12 §10 v1.1): the real-daily-DB one-shot
+    /// migration — clears pre-T1 empty-body OMC/ECC catalog shells (see
+    /// `bw_store::seed_hub_if_empty`'s doc comment: T1 stopped *seeding* new
+    /// ones but a database seeded by an older binary still has the old rows
+    /// sitting in it) and auto-imports the real content that
+    /// replaced them: the two on-disk skill libraries (T2/T3's
+    /// `ImportSkillLibrary`) + the 67 vendored ECC agents (T5's
+    /// `ImportAgentDefinition`, one dispatch per file).
+    ///
+    /// `db_path` — the raw DB file path — is threaded in explicitly rather
+    /// than read off `self.store` because `Store` is deliberately
+    /// engine-agnostic (no `db_path()` method); the caller (`app-desktop`'s
+    /// `kernel.rs`, or a headless verification example) already has this
+    /// path from its own `SqliteStore::open(&db_path)` call moments earlier,
+    /// so passing it along costs nothing and matches the existing precedent
+    /// of `Command` variants carrying real filesystem paths
+    /// (`ImportSkillPackage::source_path`, `ImportSkillLibrary::root_path`).
+    ///
+    /// Deliberately its OWN command, dispatched by a caller right after
+    /// `Command::Boot` rather than folded into `Boot` itself: `Boot` is a
+    /// unit variant dispatched unconditionally by ~20 existing headless
+    /// examples (including `verify_goal`'s 18-hypothesis fresh-DB run) that
+    /// have no `db_path` to give it and must stay byte-for-byte unaffected —
+    /// this ticket's own acceptance criterion. A fresh DB dispatching this
+    /// command anyway is still a correct, harmless no-op (see the dispatch
+    /// handler): the trigger check finds no empty-content/-instructions
+    /// rows and returns without writing anything, `app_meta` included — but
+    /// no existing example dispatches it at all, so the question never
+    /// arises for them.
+    ///
+    /// Idempotent by design, not just by accident: a first successful run
+    /// (whether it deleted 0 or N rows) stamps
+    /// `app_meta[legacy_shells_migration_v1] = "done"`; every later
+    /// dispatch — including one against a DB whose retained "有痕迹" shells
+    /// still look empty-bodied, since deletion is deliberately conservative
+    /// — short-circuits on that flag before touching a single skill/agent
+    /// row again.
+    MigrateLegacyShellsIfNeeded {
+        db_path: String,
+    },
     CreateCronTask {
         id: CronTaskId,
         name: String,
@@ -703,6 +746,12 @@ pub enum Event {
     /// having changed anything destructive.
     OptimizationCycleReported {
         report: OptimizationReport,
+    },
+    /// T14 (2026-07-24, plan/12 §10 v1.1): `Command::MigrateLegacyShellsIfNeeded`
+    /// actually ran the migration this dispatch (not the already-done/
+    /// nothing-to-do no-op path) — carries the real tally.
+    LegacyShellsMigrated {
+        report: LegacyMigrationReport,
     },
 }
 
@@ -4072,6 +4121,213 @@ impl App {
                 }
                 self.refresh_agents().await?;
                 self.emit(Event::AgentsChanged);
+            }
+
+            Command::MigrateLegacyShellsIfNeeded { db_path } => {
+                // 1. Idempotency gate — a real second boot is a true zero-op:
+                // one cheap key read, nothing else touched.
+                let already_done = self
+                    .store
+                    .get_app_meta(legacy_migration::LEGACY_MIGRATION_DONE_KEY)
+                    .await?
+                    .as_deref()
+                    == Some("done");
+                if already_done {
+                    return Ok(());
+                }
+
+                // 2. Trigger detection: does this DB actually have any
+                // empty-body catalog shell at all? Owned reads straight off
+                // the store (not `self.state`) — same "no self-borrow
+                // entanglement across an .await" idiom `Command::Boot`
+                // already uses for its own per-project loop above.
+                let skills = self.store.list_skills().await?;
+                let agents = self.store.list_agents().await?;
+                let has_shell_skill = skills.iter().any(|s| s.content.trim().is_empty());
+                let has_shell_agent = agents.iter().any(|a| a.instructions.trim().is_empty());
+                if !has_shell_skill && !has_shell_agent {
+                    // Fresh DB (or one that never had shells to begin with):
+                    // honest no-op — no app_meta write either, so this
+                    // dispatch leaves a fresh DB byte-for-byte as if it had
+                    // never been called (T14's own "不改 examples 的种子
+                    // 基线" acceptance criterion, satisfied even though no
+                    // existing example actually dispatches this command).
+                    return Ok(());
+                }
+
+                // 3. Backup, strictly before any deletion below. Deliberate
+                // tradeoff (documented in `legacy_migration::backup_db_file`
+                // and this ticket's commit message): this runs *after*
+                // `SqliteStore::open`'s own additive-only schema migration
+                // (ADD COLUMN/CREATE TABLE/INDEX — already committed to disk
+                // by the time any caller can even dispatch this command),
+                // not before any SQLite connection is ever opened — the
+                // trigger check just above needs a live query, so a true
+                // pre-connection backup would need a second, separate
+                // detection connection first, which doesn't remove the "was
+                // a connection ever opened against this file" concern the
+                // suggestion is trying to avoid, only relocates it. What
+                // this DOES guarantee: the backup file is written before the
+                // one truly destructive step (deleting rows), and this app
+                // is single-connection/single-writer (`max_connections(1)`,
+                // no observed WAL sidecar on the real on-disk DB) so there is
+                // no concurrent writer that could leave the file
+                // mid-transaction at copy time.
+                let backup_path =
+                    legacy_migration::backup_db_file(&db_path).map_err(AppError::Invalid)?;
+
+                // 4. Exclusion sets for the delete pass: names referenced by
+                // any workflow spec (by name — real `SkillRef`/`AgentRef`
+                // usage, not just an id FK) and the 5 built-in stage-role
+                // agent names (playbook truth, never eligible regardless of
+                // their real `instructions` — but checked by name too as
+                // defense-in-depth against a future hand-edit that blanks
+                // one out).
+                let specs = self.store.list_workflow_specs().await?;
+                let mut referenced_skill_names: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let mut referenced_agent_names: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                for spec in &specs {
+                    for s in &spec.skills {
+                        referenced_skill_names.insert(s.name.clone());
+                    }
+                    for a in &spec.agents {
+                        referenced_agent_names.insert(a.name.clone());
+                    }
+                }
+                let role_agent_names: std::collections::HashSet<&str> =
+                    bw_core::playbook::role_agents()
+                        .iter()
+                        .map(|(_, ra)| ra.name)
+                        .collect();
+
+                // 5. Delete pass — skill. Conservative per this ticket's own
+                // acceptance criterion: only a shell (empty `content`) that
+                // also has zero real `uses` and is unreferenced by any
+                // workflow is eligible; anything else is a shell with a real
+                // trace and stays, untouched, honestly counted.
+                let mut deleted_skills = 0u32;
+                let mut kept_skills_with_trace = 0u32;
+                for s in &skills {
+                    if !s.content.trim().is_empty() {
+                        continue;
+                    }
+                    if s.uses == 0 && !referenced_skill_names.contains(&s.name) {
+                        self.store.delete_skill(s.id).await?;
+                        deleted_skills += 1;
+                    } else {
+                        kept_skills_with_trace += 1;
+                    }
+                }
+
+                // 6. Delete pass — agent. Same conservatism, plus the 5
+                // built-in stage-role names are never eligible.
+                let mut deleted_agents = 0u32;
+                let mut kept_agents_with_trace = 0u32;
+                for a in &agents {
+                    if !a.instructions.trim().is_empty() {
+                        continue;
+                    }
+                    let eligible = a.runs == 0
+                        && !referenced_agent_names.contains(&a.name)
+                        && !role_agent_names.contains(a.name.as_str());
+                    if eligible {
+                        self.store.delete_agent(a.id).await?;
+                        deleted_agents += 1;
+                    } else {
+                        kept_agents_with_trace += 1;
+                    }
+                }
+
+                // 7. Import pass — the two real on-disk skill libraries,
+                // reusing T3's `ImportSkillLibrary` command path verbatim
+                // (its own by-`(name, official_library)` idempotency is what
+                // makes a second migration attempt, or a library re-scan
+                // after a version bump, safe on its own terms too). Missing
+                // library root ⇒ an honest skip, never a hard failure — a
+                // Builder without one of these two plugins installed still
+                // gets everything else this migration does.
+                let mut skipped_sources = Vec::new();
+                let skills_before_import = self.store.list_skills().await?.len();
+                match legacy_migration::mattpocock_skills_root() {
+                    Some(root) => {
+                        Box::pin(self.dispatch(Command::ImportSkillLibrary {
+                            root_path: root.to_string_lossy().into_owned(),
+                            official_library: "mattpocock-skills".to_string(),
+                            project_id: None,
+                        }))
+                        .await?;
+                    }
+                    None => skipped_sources.push(
+                        "mattpocock-skills: 本机未找到 ~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills"
+                            .to_string(),
+                    ),
+                }
+                match legacy_migration::superpowers_skills_root() {
+                    Some(root) => {
+                        Box::pin(self.dispatch(Command::ImportSkillLibrary {
+                            root_path: root.to_string_lossy().into_owned(),
+                            official_library: "superpowers".to_string(),
+                            project_id: None,
+                        }))
+                        .await?;
+                    }
+                    None => skipped_sources.push(
+                        "superpowers: 本机未找到 ~/.claude/plugins/cache/superpowers-dev/superpowers/*/skills"
+                            .to_string(),
+                    ),
+                }
+                let skills_after_import = self.store.list_skills().await?.len();
+                let imported_skills =
+                    skills_after_import.saturating_sub(skills_before_import) as u32;
+
+                // 8. Import pass — the 67 vendored real ECC AGENT.md files
+                // (T5's precedent, `examples/import_ecc_agents.rs`: one
+                // `ImportAgentDefinition` dispatch per file). Missing vendor
+                // dir ⇒ honest skip (defensive; the dir is committed to this
+                // repo, so this should never actually fire), not a failure.
+                let agents_before_import = self.store.list_agents().await?.len();
+                let ecc_dir = legacy_migration::ecc_agents_vendor_dir();
+                let ecc_files = legacy_migration::list_md_files(&ecc_dir);
+                if ecc_files.is_empty() {
+                    skipped_sources.push(format!(
+                        "ecc agents: vendor 目录为空或不存在:{}",
+                        ecc_dir.display()
+                    ));
+                }
+                for f in &ecc_files {
+                    Box::pin(self.dispatch(Command::ImportAgentDefinition {
+                        source_path: f.to_string_lossy().into_owned(),
+                        official_library: Some("ecc".to_string()),
+                    }))
+                    .await?;
+                }
+                let agents_after_import = self.store.list_agents().await?.len();
+                let imported_agents =
+                    agents_after_import.saturating_sub(agents_before_import) as u32;
+
+                // 9. Stamp done — from here on, every future boot's check is
+                // the one cheap `get_app_meta` read in step 1.
+                self.store
+                    .set_app_meta(legacy_migration::LEGACY_MIGRATION_DONE_KEY, "done")
+                    .await?;
+
+                self.refresh_skills().await?;
+                self.refresh_agents().await?;
+                self.emit(Event::SkillsChanged);
+                self.emit(Event::AgentsChanged);
+                let report = LegacyMigrationReport {
+                    backup_path: Some(backup_path),
+                    deleted_skills,
+                    kept_skills_with_trace,
+                    deleted_agents,
+                    kept_agents_with_trace,
+                    imported_skills,
+                    imported_agents,
+                    skipped_sources,
+                };
+                self.emit(Event::LegacyShellsMigrated { report });
             }
 
             Command::CreateCronTask {

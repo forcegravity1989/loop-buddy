@@ -459,3 +459,16 @@ CREATE TABLE IF NOT EXISTS issue (
 );
 CREATE INDEX IF NOT EXISTS idx_issue_project_number ON issue(project_id, number);
 CREATE INDEX IF NOT EXISTS idx_issue_project_stage ON issue(project_id, stage);
+
+-- T14 (2026-07-24, plan/12 §10 v1.1): tiny app-scoped key/value table for
+-- one-shot migration markers — starting with the legacy-shell migration's
+-- "already ran" flag (`legacy_shells_migration_v1` = 'done'). A brand-new
+-- table, not a retrofitted column, so `CREATE TABLE IF NOT EXISTS` alone is
+-- the correct/sufficient guard for an old on-disk DB (no `add_column_if_missing`
+-- needed — see sqlite.rs's migration-guard doc comment for why that guard
+-- only exists for ALTER-TABLE-shaped changes).
+CREATE TABLE IF NOT EXISTS app_meta (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
