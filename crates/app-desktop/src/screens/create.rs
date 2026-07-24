@@ -73,6 +73,11 @@ pub fn Create(
     });
     let cadence = use_signal(|| Cadence::Weekly);
     let repo_choice = use_signal(|| RepoChoice::New { private: true });
+    // C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 今天恒 "github"(唯一
+    // 可点的选项),`RepoCard` 渲染 chip、`IntentCard` 提交时把它带进
+    // `Command::CreateProject.provider`。纯 UI 状态,与 `repo_choice`(起点:
+    // 新建/接入)并存、互不影响。
+    let platform = use_signal(|| "github".to_string());
 
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
@@ -98,10 +103,10 @@ pub fn Create(
             ActionsBanner { items: actions }
             match (card(), vm) {
                 (Card::Repo, _) => rsx! {
-                    RepoCard { choice: repo_choice, github_repos: github_repos.clone(), on_next: move |_| card.set(Card::Intent) }
+                    RepoCard { platform, choice: repo_choice, github_repos: github_repos.clone(), on_next: move |_| card.set(Card::Intent) }
                 },
                 (Card::Intent, _) => rsx! {
-                    IntentCard { repo_choice, on_created: move |_| card.set(Card::Questions) }
+                    IntentCard { platform, repo_choice, on_created: move |_| card.set(Card::Questions) }
                 },
                 (_, None) => rsx! { div { "…" } },
                 (Card::Questions, Some(v)) => rsx! {
@@ -246,6 +251,7 @@ fn ActionsBanner(items: Vec<ActionItem>) -> Element {
 
 #[component]
 fn RepoCard(
+    platform: Signal<String>,
     choice: Signal<RepoChoice>,
     github_repos: Vec<GithubRepoSummary>,
     on_next: EventHandler<()>,
@@ -259,10 +265,26 @@ fn RepoCard(
         matches!(&choice(), RepoChoice::Existing { owner, .. } if !owner.is_empty());
     let can_send = is_new || existing_ready;
     let opacity = if can_send { "1" } else { ".45" };
+    // C16(plan/14 规范条 4): 选中已有仓时,在下拉下方回显它的完整真实
+    // metadata(不只是下拉一行 owner/repo · private)。找不到(仓列表还没
+    // 加载完/选择已清空)就不渲染这块 —— 不拿假数据充数。
+    let selected_meta = if let RepoChoice::Existing { owner, repo } = &choice() {
+        github_repos
+            .iter()
+            .find(|r| &r.owner == owner && &r.repo == repo)
+            .cloned()
+    } else {
+        None
+    };
 
     rsx! {
         div { style: "font-family:{serif};font-size:22px;font-weight:600;margin:14px 0 4px;", "仓从哪来？" }
-        p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;", "每个项目背后是一个真实的 GitHub 仓 —— 新建一个,或者接入你已有的。" }
+        p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;", "每个项目背后是一个真实的代码仓 —— 新建一个,或者接入你已有的。" }
+
+        // C16(plan/14 规范条 4): 仓平台是一个选择器 —— 今天只有 GitHub 一个
+        // 选项没关系,但它必须是「选出来的」。GitLab/Gitcode 如实灰置
+        // 「未接」,不可点、视觉明确禁用,绝不假装可用。
+        {platform_selector(platform)}
 
         {chip_question(
             "起点",
@@ -314,14 +336,22 @@ fn RepoCard(
                         {
                             let value = format!("{}/{}", r.owner, r.repo);
                             let vis = if r.private { "private" } else { "public" };
+                            let branch = if r.default_branch.trim().is_empty() {
+                                "?".to_string()
+                            } else {
+                                r.default_branch.clone()
+                            };
                             rsx! {
-                                option { key: "{value}", value: "{value}", "{value} · {vis}" }
+                                option { key: "{value}", value: "{value}", "{value} · {vis} · {branch}" }
                             }
                         }
                     }
                 }
                 if github_repos.is_empty() {
                     p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 确认本机 gh 已登录(gh auth status)。" }
+                }
+                if let Some(meta) = selected_meta {
+                    {repo_metadata_block(&meta)}
                 }
             }
         }
@@ -332,6 +362,76 @@ fn RepoCard(
                 disabled: !can_send,
                 onclick: move |_| on_next.call(()),
                 "下一步 →"
+            }
+        }
+    }
+}
+
+/// C16(plan/14 规范条 4): 仓平台选择器 —— GitHub 今天唯一可点、默认选中;
+/// GitLab/Gitcode 如实灰置「未接」(虚线边框、无 onclick、不可点),绝不假装
+/// 可用。纯 UI 状态(`platform` 信号),与「起点」chip 并存、互不影响。
+fn platform_selector(mut platform: Signal<String>) -> Element {
+    let ink2 = theme::INK_2;
+    let selected = platform() == "github";
+    let (bd, bg, fg) = if selected {
+        ("1.5px solid #C5654A", "#C5654A", "#fff")
+    } else {
+        ("1px solid #DDD5C5", "transparent", "#57534A")
+    };
+    rsx! {
+        div {
+            style: "margin-bottom:6px;",
+            div { style: "font-size:12.5px;font-weight:600;color:{ink2};margin-bottom:8px;", "仓平台" }
+            div {
+                style: "display:flex;gap:6px;flex-wrap:wrap;",
+                div {
+                    onclick: move |_| platform.set("github".to_string()),
+                    style: "cursor:pointer;border:{bd};background:{bg};color:{fg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                    "GitHub"
+                }
+                for name in ["GitLab", "Gitcode"] {
+                    div {
+                        key: "{name}",
+                        title: "未接 —— 需要 token 管理/API 适配,留白如实,不假装可用(plan/14 留白台账)",
+                        style: "cursor:not-allowed;border:1px dashed #DDD5C5;background:transparent;color:#B5AD9C;border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                        "{name} · 未接"
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// C16(plan/14 规范条 4): 接入已有仓时的完整真实 metadata 回显 —— 描述/
+/// 可见性/默认分支/最近推送,全部来自 `gh repo list` 的真实字段(见
+/// `bw_engine::github::list_repos`),不是"owner/repo · private"一行糊弄。
+fn repo_metadata_block(meta: &GithubRepoSummary) -> Element {
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+    let desc = if meta.description.trim().is_empty() {
+        "(无描述)".to_string()
+    } else {
+        meta.description.clone()
+    };
+    let vis = if meta.private { "private" } else { "public" };
+    let branch = if meta.default_branch.trim().is_empty() {
+        "(未知)".to_string()
+    } else {
+        meta.default_branch.clone()
+    };
+    let pushed = if meta.pushed_at.trim().is_empty() {
+        "(未知)".to_string()
+    } else {
+        meta.pushed_at.clone()
+    };
+    rsx! {
+        div {
+            style: "margin-top:10px;padding:11px 13px;background:#F7F3EA;border:1px solid #E5DDCB;border-radius:8px;",
+            div { style: "font-family:{mono};font-size:12px;font-weight:600;color:#3A3833;margin-bottom:6px;", "{meta.owner}/{meta.repo}" }
+            div { style: "font-size:11.5px;color:{ink3};line-height:1.9;",
+                div { "描述:{desc}" }
+                div { "可见性:{vis} · 默认分支:{branch}" }
+                div { "最近推送:{pushed}" }
             }
         }
     }
@@ -369,7 +469,11 @@ fn slugify(name: &str) -> String {
 }
 
 #[component]
-fn IntentCard(repo_choice: Signal<RepoChoice>, on_created: EventHandler<()>) -> Element {
+fn IntentCard(
+    platform: Signal<String>,
+    repo_choice: Signal<RepoChoice>,
+    on_created: EventHandler<()>,
+) -> Element {
     let k = use_context::<Kernel>();
     let mut name = use_signal(String::new);
     let mut kind = use_signal(|| KINDS[0].to_string());
@@ -402,6 +506,7 @@ fn IntentCard(repo_choice: Signal<RepoChoice>, on_created: EventHandler<()>) -> 
             RepoChoice::Existing { owner, repo } => Some(GithubOrigin::Existing { owner, repo }),
         };
         k.send(Command::CreateProject {
+            provider: platform(),
             id: ProjectId::new(),
             name: name().trim().to_string(),
             kind: kind(),
