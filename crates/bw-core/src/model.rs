@@ -671,6 +671,27 @@ pub struct PhaseMeta {
     pub role: PhaseRole,
     #[serde(default)]
     pub reject_to_phase: Option<u8>,
+    /// T16 (plan/12 §10 v1.1#3): the real agent this phase actually runs
+    /// under — a NAME, same namespace as `AgentRef.name` /
+    /// `crate::playbook::RoleAgent.name` (a by-name reference, not a hard
+    /// FK, matching how `WorkflowSpec.agents`/`skills` already resolve).
+    /// `None` does **not** mean "no agent" — it means "falls back to the
+    /// workflow-level default" (`WorkflowSpec.agents.first()`), the same
+    /// fallback `phase_prompts`' empty-entry convention already uses for
+    /// prompts. Populated for the five built-in stage playbooks
+    /// (`crate::playbook::phase_metas`); `None` for every user-authored
+    /// phase today (the create/edit form is still name-only text, no
+    /// per-phase agent-assignment UI yet).
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// T16: real skill NAMEs injected into this phase specifically — same
+    /// namespace as `SkillRef.name`/`crate::playbook::StageSkill.name`. `[]`
+    /// does **not** mean "no skills" — it means "falls back to the
+    /// workflow-level default" (`WorkflowSpec.skills`). Populated for the
+    /// five built-in stage playbooks; `[]` for every user-authored phase
+    /// today.
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 impl PhaseMeta {
@@ -683,6 +704,8 @@ impl PhaseMeta {
             name: name.into(),
             role: PhaseRole::Neutral,
             reject_to_phase: None,
+            agent: None,
+            skills: Vec::new(),
         }
     }
 }
@@ -695,6 +718,11 @@ impl PhaseMeta {
 /// object (current shape) — per-element, not per-column, so a partially
 /// migrated array (should one ever exist) still reads honestly. Old DBs must
 /// not crash on open (repo-wide serde-compat rule).
+///
+/// T16 (plan/12 §10 v1.1#3) extends `Full` with `agent`/`skills`, both
+/// `#[serde(default)]` — a pre-T16 row's `Full` objects (T8-T15 real data,
+/// every one of them missing these two keys) read in as `None`/`[]`, never a
+/// hard failure; a fresh row round-trips its real bindings unchanged.
 impl<'de> Deserialize<'de> for PhaseMeta {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -710,6 +738,10 @@ impl<'de> Deserialize<'de> for PhaseMeta {
                 role: PhaseRole,
                 #[serde(default)]
                 reject_to_phase: Option<u8>,
+                #[serde(default)]
+                agent: Option<String>,
+                #[serde(default)]
+                skills: Vec<String>,
             },
         }
         Ok(match OnDisk::deserialize(deserializer)? {
@@ -718,10 +750,14 @@ impl<'de> Deserialize<'de> for PhaseMeta {
                 name,
                 role,
                 reject_to_phase,
+                agent,
+                skills,
             } => PhaseMeta {
                 name,
                 role,
                 reject_to_phase,
+                agent,
+                skills,
             },
         })
     }
@@ -821,6 +857,140 @@ pub fn parse_phase_outcome(text: &str) -> Option<PhaseOutcome> {
     None
 }
 
+/// T17 (plan/12 §10 v1.1#4): marker lines wrapping the JSON payload a
+/// "解析为流程图" parse call must emit — the multi-line analogue of T9's
+/// single-line `VERDICT:` marker (a `phases` array can't fit the "last
+/// matching line" scheme a scalar verdict uses). [`parse_workflow_phases`]
+/// takes the **last** `WORKFLOW_PHASES_BEGIN…WORKFLOW_PHASES_END` block in the
+/// output, so an executor that echoes the contract's own worked example
+/// before rendering its real answer still reads back correctly.
+pub const WORKFLOW_PHASES_BEGIN: &str = "WORKFLOW_PHASES_BEGIN";
+pub const WORKFLOW_PHASES_END: &str = "WORKFLOW_PHASES_END";
+
+/// The machine-parseable phase-structure contract appended to a workflow-
+/// parse call's prompt (by `bw-app`'s `App::parse_workflow_content`) — the
+/// T17 counterpart to [`verdict_contract_suffix`]. Kept next to
+/// [`parse_workflow_phases`] so the emit-side format and the parse-side
+/// format can never drift apart.
+pub fn workflow_parse_contract_suffix() -> &'static str {
+    "\n\n────────────\n【工作流阶段解析 · 机器解析(必须严格执行)】\n\
+     阅读以上文档的真实内容,识别工作流的阶段序列,在输出的最末尾单独一段给出下面\
+     两条标记行包裹的 JSON(只这一段,不要额外解释,不要 Markdown 代码块围栏):\n\
+     WORKFLOW_PHASES_BEGIN\n\
+     {\"phases\":[{\"name\":\"阶段名\",\"role\":\"generator\",\"reject_to_phase\":null,\"agent\":null,\"skills\":[]}]}\n\
+     WORKFLOW_PHASES_END\n\
+     字段值域(严格,不接受值域外的任何变体):\n\
+     • name:阶段名称,字符串,不能为空\n\
+     • role:必须是以下四个英文小写值之一:generator(产出)/ evaluator(评审门,\
+     唯一允许带 reject_to_phase 的角色)/ optimizer(打磨已有产出)/ neutral(其余情况)\n\
+     • reject_to_phase:只有 role=evaluator 时才允许非 null,值为打回目标阶段在\
+     phases 数组里的 0 基索引(整数,必须落在数组范围内);role 不是 evaluator 时必\
+     须是 null\n\
+     • agent:该阶段真实绑定的 Agent 名称(字符串),或 null 表示沿用工作流默认执行者\n\
+     • skills:该阶段真实绑定的 Skill 名称数组,可以是空数组 [] 表示沿用工作流默认技能\n\
+     示例(两阶段:「起草」生成,「评审」打回第 0 阶段):\n\
+     WORKFLOW_PHASES_BEGIN\n\
+     {\"phases\":[{\"name\":\"起草\",\"role\":\"generator\",\"reject_to_phase\":null,\"agent\":\"writer\",\"skills\":[\"drafting\"]},{\"name\":\"评审\",\"role\":\"evaluator\",\"reject_to_phase\":0,\"agent\":null,\"skills\":[]}]}\n\
+     WORKFLOW_PHASES_END\n\
+     解析只认最后一次出现的 WORKFLOW_PHASES_BEGIN…WORKFLOW_PHASES_END 区块。区块缺\
+     失、JSON 不合法、或任何字段值域不合法,都会被判为解析失败——绝不会被当作部分\
+     成功采纳,绝不会被按关键词猜测结构。\n"
+}
+
+/// One phase entry as it appears on the wire inside a
+/// `WORKFLOW_PHASES_BEGIN`/`END` block — `role` reuses [`PhaseRole`]'s own
+/// `Deserialize` (already `#[serde(rename_all = "snake_case")]`), so an
+/// out-of-domain `role` string fails with serde's own honest "unknown
+/// variant" message instead of a hand-rolled one.
+#[derive(Deserialize)]
+struct ParsedPhaseOnDisk {
+    name: String,
+    role: PhaseRole,
+    #[serde(default)]
+    reject_to_phase: Option<u8>,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    skills: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ParsedPhasesPayload {
+    phases: Vec<ParsedPhaseOnDisk>,
+}
+
+/// Parse a workflow-parse call's real output for its structured phase list
+/// (T17, plan/12 §10 v1.1#4) — the JSON-block analogue of
+/// [`parse_phase_outcome`]. Takes the **last**
+/// `WORKFLOW_PHASES_BEGIN…WORKFLOW_PHASES_END` block in `text` (robust to an
+/// executor that quotes the contract's own worked example before rendering
+/// its real answer), strict-parses the JSON inside, then validates every
+/// field's value domain. Returns `Err(reason)` — a human-readable, honest
+/// failure description — on ANY problem: no block found, no paired end
+/// marker, malformed JSON, an empty `phases` array, a blank `name`, an
+/// out-of-domain `role` (surfaced by serde itself), a `reject_to_phase` on a
+/// non-`evaluator` phase, or a `reject_to_phase` index outside the array's
+/// own bounds. The caller MUST treat `Err` as "未解析,仅文本" and leave the
+/// workflow's stored `phases` completely untouched — never a partial
+/// adoption, never a keyword-guessed default structure.
+pub fn parse_workflow_phases(text: &str) -> Result<Vec<PhaseMeta>, String> {
+    let Some(begin_at) = text.rfind(WORKFLOW_PHASES_BEGIN) else {
+        return Err(format!(
+            "输出中没有找到 {WORKFLOW_PHASES_BEGIN} 标记 —— 未解析,仅文本"
+        ));
+    };
+    let after_begin = &text[begin_at + WORKFLOW_PHASES_BEGIN.len()..];
+    let Some(end_rel) = after_begin.find(WORKFLOW_PHASES_END) else {
+        return Err(format!(
+            "找到 {WORKFLOW_PHASES_BEGIN} 但没有找到配对的 {WORKFLOW_PHASES_END} —— 未解析,仅文本"
+        ));
+    };
+    let json_str = after_begin[..end_rel].trim();
+    if json_str.is_empty() {
+        return Err(format!(
+            "{WORKFLOW_PHASES_BEGIN}/{WORKFLOW_PHASES_END} 区块为空 —— 未解析,仅文本"
+        ));
+    }
+    let payload: ParsedPhasesPayload = serde_json::from_str(json_str)
+        .map_err(|e| format!("JSON 解析失败:{e} —— 未解析,仅文本"))?;
+    if payload.phases.is_empty() {
+        return Err("phases 数组为空 —— 未解析,仅文本".to_string());
+    }
+    let n = payload.phases.len();
+    let mut out = Vec::with_capacity(n);
+    for (i, p) in payload.phases.into_iter().enumerate() {
+        let name = p.name.trim().to_string();
+        if name.is_empty() {
+            return Err(format!("第 {i} 项 name 为空 —— 未解析,仅文本"));
+        }
+        let role = p.role;
+        if let Some(idx) = p.reject_to_phase {
+            if role != PhaseRole::Evaluator {
+                return Err(format!(
+                    "第 {i} 项「{name}」role={role:?} 但携带 reject_to_phase —— 只有 evaluator 阶段允许 —— 未解析,仅文本"
+                ));
+            }
+            if idx as usize >= n {
+                return Err(format!(
+                    "第 {i} 项「{name}」reject_to_phase={idx} 越界(阶段总数 {n})—— 未解析,仅文本"
+                ));
+            }
+        }
+        out.push(PhaseMeta {
+            name,
+            role,
+            reject_to_phase: p.reject_to_phase,
+            agent: p.agent.filter(|a| !a.trim().is_empty()),
+            skills: p
+                .skills
+                .into_iter()
+                .filter(|s| !s.trim().is_empty())
+                .collect(),
+        });
+    }
+    Ok(out)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowSpec {
     pub id: WorkflowId,
@@ -848,6 +1018,18 @@ pub struct WorkflowSpec {
     /// 项目自建的 workflow(plan/10 K1 项目侧边栏按这个字段过滤)。
     #[serde(default)]
     pub project_id: Option<ProjectId>,
+    /// T16 (plan/12 §10 v1.1#3): the workflow's main MD document — same
+    /// nature as `SkillCard.content` (real authored text a human wrote, not
+    /// a display re-hash of `goal`/`prompt`). This is T17's parse input:
+    /// the (not-yet-built) "🔍 解析为流程图" action reads this text and
+    /// derives `phases`' real `agent`/`skills` bindings from it. Empty for
+    /// the five built-in stage templates (`stage_template_workflow`) — their
+    /// phases are bound directly from `crate::playbook`, not parsed from
+    /// prose — and for every workflow created through today's still
+    /// name-only-text create/edit forms, honestly: `''` means "structured
+    /// definition, no original document", never a fabricated placeholder.
+    #[serde(default)]
+    pub content: String,
 }
 
 /// Outcome of one workflow execution — the data a later "should this workflow
@@ -1099,6 +1281,9 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
             max_iter: 3,
         },
         project_id: None,
+        // Dynamic session specs never carry a hand-authored document —
+        // real per-phase instructions already ride in `phase_prompts`.
+        content: String::new(),
     }
 }
 
@@ -1190,6 +1375,11 @@ pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
             max_iter: 3,
         },
         project_id: None,
+        // T16 (plan/12 §10 v1.1#3): built-in templates leave `content`
+        // honestly empty — their phases bind straight off `crate::playbook`,
+        // there is no authored MD document behind them yet. The detail UI
+        // says so plainly ("结构化定义，无原始文档") instead of faking one.
+        content: String::new(),
     }
 }
 
@@ -1223,6 +1413,7 @@ pub fn drafting_workflow() -> WorkflowSpec {
             max_iter: 1,
         },
         project_id: None,
+        content: String::new(),
     }
 }
 

@@ -241,6 +241,21 @@ impl Engine {
 
         Ok(outputs)
     }
+
+    /// T17 (plan/12 §10 v1.1#4): run ONE ad-hoc phase that is not backed by
+    /// any `WorkflowSpec.phases` entry — the seam `bw-app`'s
+    /// `Command::ParseWorkflowContent` uses to feed a workflow's raw
+    /// `content` MD (plus `workflow_parse_contract_suffix`) through the SAME
+    /// swappable [`Executor`] every real phase run already goes through
+    /// (mock projects self-label, real projects really call `claude -p`),
+    /// with none of [`run_phase_range`]'s per-spec-index bookkeeping — there
+    /// is no phase index to advance and no `RunEvent` stream to drive since
+    /// this isn't part of the workflow's own pipeline, just a one-shot
+    /// "read this document" call. No retry loop, no relay baton: one call,
+    /// one honest result (the caller decides success/failure from the text).
+    pub async fn run_adhoc(&self, node: PhaseNode, ctx: &RunCtx) -> Result<PhaseOutput, ExecError> {
+        self.executor.run_phase(&node, ctx).await
+    }
 }
 
 /// The relay baton passed between phases: the **tail** of the previous

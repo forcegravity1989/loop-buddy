@@ -530,6 +530,12 @@ pub struct WorkflowHubRowVm {
     pub phase_metas: Vec<PhaseMeta>,
     pub skills: Vec<String>,
     pub stage_ref: Option<u8>,
+    /// T16 (plan/12 §10 v1.1#3): the workflow's main MD document — `''` = no
+    /// original document (honest for every built-in stage template and any
+    /// workflow created before a content-authoring UI exists). The detail
+    /// screen's "文档" view renders this through `MarkdownView`, which shows
+    /// its own honest empty-state label when this is blank.
+    pub content: String,
     /// W1: the row's real run record, e.g. `"跑 3 次 · 成功 67%"` — or
     /// `"暂无运行"` when nothing ever ran (never a fabricated `0%`).
     pub record_label: String,
@@ -600,6 +606,7 @@ pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
         phase_metas: spec.phases.clone(),
         skills: spec.skills.iter().map(|s| s.name.clone()).collect(),
         stage_ref: spec.stage_ref,
+        content: spec.content.clone(),
         record_label: "暂无运行".into(),
         last_run_label: String::new(),
         project_id: spec.project_id,

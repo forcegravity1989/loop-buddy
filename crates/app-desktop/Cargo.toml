@@ -21,3 +21,9 @@ ui = { workspace = true }
 tokio = { workspace = true }
 time = { workspace = true, features = ["std"] }
 uuid = { workspace = true }
+# T15 (plan/12 §10 v1.1#2): MD 富文本渲染——纯 Rust CommonMark 解析器,只进
+# 这个 crate(内核五个 crate 零新增依赖,见 CLAUDE.md 门禁)。
+pulldown-cmark = { version = "0.13.4", default-features = false }
+# T15:frontmatter 属性卡复用 T2(skill_import.rs)已经选定的真实 YAML
+# 解析器——workspace 里本就有(bw-app 已用),不是新引入的第三方依赖。
+serde_yaml = { workspace = true }
