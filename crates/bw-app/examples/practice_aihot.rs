@@ -37,8 +37,8 @@
 //! 环境变量: BW_DB(默认 practice-aihot/bw-aihot.db)· BW_WORKSPACES(默认 practice-aihot/workspaces)
 
 use bw_core::model::{
-    Cadence, CronMode, HubSource, IssuePriority, IssueStatus, LibSource, LoopConfig, Maturity,
-    MaturityPeriod, SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
+    Cadence, CronMode, HubSource, IssuePriority, IssueStatus, LoopConfig, Maturity, MaturityPeriod,
+    PhaseMeta, SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{AgentId, CronTaskId, IssueId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
@@ -238,6 +238,7 @@ async fn cmd_setup(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
                 id: AgentId::new(),
                 name: "日报编辑".into(),
                 role: "aihot 专精 · 关注面判断与摘要质量把关".into(),
+                stage_ref: None,
                 maturity: Maturity::Fresh,
                 skills: vec!["关键词关注面打分法".into()],
                 model: "claude CLI · 跟随执行器配置".into(),
@@ -246,6 +247,9 @@ async fn cmd_setup(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
                     (那是构建师的活),只做「这条该不该上日报、摘要写得好不好」的判断。\
                     绝不为了凑数把不相关条目硬塞进日报。"
                     .into(),
+                tools: Vec::new(),
+                agent_cli: "claude-code".into(),
+                source: HubSource::SelfBuilt,
                 project_id: Some(project),
             })
             .await
@@ -260,7 +264,8 @@ async fn cmd_setup(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
                 maturity: Maturity::Fresh,
                 desc: "按用户配置的关注面关键词给抓取条目打分,分数不够不上日报".into(),
                 category: "aihot 方法论".into(),
-                source: LibSource::SelfBuilt,
+                stage_ref: None,
+                source: HubSource::SelfBuilt,
                 content: "### 关键词关注面打分法\n\
                     1. 读 config.json 的 keywords 列表(用户真实配置的关注面,不是猜的)。\n\
                     2. 对每条真实抓取到的标题/摘要,逐关键词做子串匹配(忽略大小写),\
@@ -297,10 +302,10 @@ async fn cmd_setup(app: &mut App, store: &Arc<dyn Store>, project: ProjectId) {
                 goal: "每一件 aihot 的活都经这条主线的方法论落地,而不是随手写代码".into(),
                 stage_ref: None,
                 phases: vec![
-                    "头脑风暴".into(),
-                    "写计划".into(),
-                    "按计划实现(TDD)".into(),
-                    "请求评审".into(),
+                    PhaseMeta::neutral("头脑风暴"),
+                    PhaseMeta::neutral("写计划"),
+                    PhaseMeta::neutral("按计划实现(TDD)"),
+                    PhaseMeta::neutral("请求评审"),
                 ],
                 phase_prompts: vec![
                     "调用 superpowers 的 brainstorming 技能:针对当前这件活,先发散\

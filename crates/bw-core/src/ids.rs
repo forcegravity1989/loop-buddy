@@ -69,6 +69,12 @@ id_newtype!(
     SkillId
 );
 id_newtype!(
+    /// Stable identity of one real file belonging to an imported skill
+    /// folder (T2, plan/12 §2) — a `skill_file` row (`references/mocking.md`,
+    /// `agents/openai.yaml`, …). Distinct from `SkillId`: a skill has many.
+    SkillFileId
+);
+id_newtype!(
     /// Stable identity of a [`crate::model::AgentCard`].
     AgentId
 );

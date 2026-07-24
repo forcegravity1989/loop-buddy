@@ -13,27 +13,30 @@
 
 #![forbid(unsafe_code)]
 
+mod agent_import;
+mod skill_import;
+
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    classify_artifact_path, cron_due, stage_workflow, stage_workflow_with_playbook, AgentCard,
-    AgentRef, Artifact, Author, Cadence, Connector, ConnectorStatus, CronMode, CronStatus,
-    CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource, LoopConfig,
-    Maturity, MaturityPeriod, Readiness, RunStatus, RunTrigger, Signal, SkillCard, SkillRef,
-    SourceKind, StageKind, WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI,
-    CONNECTOR_KIND_GIT_REPO,
+    classify_artifact_path, cron_due, parse_phase_outcome, stage_workflow,
+    stage_workflow_with_playbook, AgentCard, AgentRef, Artifact, Author, Cadence, Connector,
+    ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus,
+    KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, PhaseRole, Readiness,
+    RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, Verdict,
+    WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
     SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit, PermissionMode, RunCtx,
-    RunEvent,
+    allowed_tools_arg, evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit,
+    PermissionMode, RunCtx, RunEvent, UnsupportedCliExecutor,
 };
 use bw_store::{
     AgentEdit, GlobalHandoffRow, MetricRole, NewAgent, NewArtifact, NewConnector, NewCronTask,
-    NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewStage,
-    NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
+    NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewSkillFile,
+    NewStage, NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -301,7 +304,7 @@ pub enum Command {
         name: String,
         desc: String,
         category: String,
-        source: LibSource,
+        source: HubSource,
         /// Executable body (may be empty — a catalog reference entry).
         content: String,
     },
@@ -318,6 +321,55 @@ pub enum Command {
         desc: String,
         category: String,
         content: String,
+    },
+    /// Copy-on-import a real, on-disk skill folder (T2, plan/12 §2):
+    /// `source_path` must contain a `SKILL.md` whose frontmatter has
+    /// `name`/`description`; every other file underneath lands in
+    /// `skill_file` verbatim (real relative paths, no predetermined
+    /// category). Once imported, the new skill has zero dependency on
+    /// `source_path` — it can move, change, or vanish afterward.
+    ///
+    /// `official_library` is not part of plan/12 §2's headline
+    /// `{ source_path, project_id }` shorthand, but this command still needs
+    /// it: without an explicit sub-tag, a generic "import any SKILL.md
+    /// folder" command has no honest way to know whether the folder came
+    /// from a BW-curated library — inventing "mattpocock-skills" from a path
+    /// convention would be the exact kind of guessing this ticket's own
+    /// frontmatter-parsing rule forbids. `None` = ad-hoc personal import →
+    /// `HubSource::SelfBuilt`; `Some(lib)` → `HubSource::Official {
+    /// official_library: lib }`. T3's `ImportSkillLibrary` (batch) threads a
+    /// real `Some(..)` through this same field for every package it finds
+    /// under a library root.
+    ImportSkillPackage {
+        source_path: String,
+        project_id: Option<ProjectId>,
+        official_library: Option<String>,
+    },
+    /// Batch-import every real skill folder under a library root (T3,
+    /// plan/12 §1/§2): finds every directory that directly contains a
+    /// `SKILL.md` (`node_modules`/`.git`/`target` pruned without
+    /// descending — real libraries don't nest skills inside these, it's
+    /// pure efficiency/safety insurance), and each hit goes through the
+    /// exact same disk-parsing path `ImportSkillPackage` uses — a batch
+    /// import and a hand-run single-package import of the same folder
+    /// produce byte-identical rows.
+    ///
+    /// Idempotent by `(name, official_library)`: a name already imported
+    /// from the same `official_library` is skipped, never overwritten —
+    /// re-running this (e.g. a library version bump) can't silently clobber
+    /// a row a user has since hand-edited (T11 territory: editing flips a
+    /// row to `SelfBuilt`, which this check's `official_library` filter
+    /// naturally no longer matches, so an edited row is never skipped-away
+    /// from re-import consideration by name collision with itself) or
+    /// double-insert a duplicate. `official_library` is required (not
+    /// `Option`, unlike `ImportSkillPackage`) — a library import is by
+    /// definition an official-selection provenance, never an ad-hoc
+    /// personal one. Emits `Event::SkillLibraryImported` with the real
+    /// imported/skipped tally.
+    ImportSkillLibrary {
+        root_path: String,
+        official_library: String,
+        project_id: Option<ProjectId>,
     },
     /// SkillHub's detail-panel edit — content only (`maturity`/`uses` are
     /// lifecycle data, untouched).
@@ -347,6 +399,36 @@ pub enum Command {
         model: String,
         instructions: String,
     },
+    /// Import a real, on-disk AGENT.md (T5, plan/12 §3): `source_path` must
+    /// be a file whose frontmatter has `name`/`description`, and may have
+    /// `tools` (→ AllowedTools)/`model`; the body becomes `instructions`.
+    /// Every other frontmatter key is read and silently ignored (same rule
+    /// `ImportSkillPackage` follows for SKILL.md). No file-tree concept here
+    /// unlike Skill — one AGENT.md is the entire definition, so this maps
+    /// straight onto `Store::create_agent`, no new store method needed.
+    ///
+    /// `official_library`: same shape as `ImportSkillPackage`'s field —
+    /// `None` = ad-hoc personal import → `HubSource::SelfBuilt`;
+    /// `Some(lib)` → `HubSource::Official { official_library: lib }`. The
+    /// 67-file ECC batch import threads `Some("ecc")` through this same
+    /// field for every file.
+    ///
+    /// T11 (2026-07-23, plan/12 §7): unlike `ImportSkillPackage` (which stays
+    /// purely additive — dedup is `ImportSkillLibrary`'s job, a separate
+    /// batch command), Skill has no standalone "import one AGENT.md" caller
+    /// driving a real 67-file batch the way this command does (there is no
+    /// `ImportAgentLibrary`; the vendored-ECC example dispatches this command
+    /// once per file in a loop). So *this* singular command is where an
+    /// `official_library: Some(lib)` re-import's own idempotency has to
+    /// live: a name that already exists under `lib` (still `Official`, or
+    /// hand-edited and flipped to `SelfBuilt` — see `AgentCard::adapted_from`)
+    /// is silently skipped, never overwritten or duplicated. An ad-hoc
+    /// `None` import stays purely additive (no batch-reimport concept for a
+    /// personal one-off), matching `ImportSkillPackage`'s own rule.
+    ImportAgentDefinition {
+        source_path: String,
+        official_library: Option<String>,
+    },
     CreateCronTask {
         id: CronTaskId,
         name: String,
@@ -365,6 +447,26 @@ pub enum Command {
         project_id: Option<ProjectId>,
         stage: StageKind,
         assignee: Option<String>,
+    },
+    /// T10 (plan/12 §5): a cron task that, when due, really runs a Skill's
+    /// `content` as the prompt — a genuine `SkillId` reference, resolved at
+    /// *fire* time (never at creation time), so an honest "技能已删除"
+    /// failure is possible without ever crashing.
+    CreateRunSkillCronTask {
+        id: CronTaskId,
+        name: String,
+        schedule: Cadence,
+        project_id: Option<ProjectId>,
+        skill_id: SkillId,
+    },
+    /// T10: a cron task that, when due, really runs a bare prompt — no
+    /// entity involved at all.
+    CreateRunPromptCronTask {
+        id: CronTaskId,
+        name: String,
+        schedule: Cadence,
+        project_id: Option<ProjectId>,
+        prompt: String,
     },
     /// Pause/resume a cron task — the "人工介入" lever. Pure status flip;
     /// never touches `last_run` since nothing actually ran.
@@ -481,6 +583,15 @@ pub enum Event {
     },
     WorkflowSpecsChanged,
     SkillsChanged,
+    /// A batch `Command::ImportSkillLibrary` just finished — the real tally,
+    /// not an assumption: `imported` = new rows this run actually inserted,
+    /// `skipped` = `(name, official_library)` matches that already existed
+    /// and were left untouched (idempotent re-run safety).
+    SkillLibraryImported {
+        official_library: String,
+        imported: u32,
+        skipped: u32,
+    },
     AgentsChanged,
     CronTasksChanged,
     /// A real, unattended auto-fire from `App::tick_scheduler` just finished
@@ -554,6 +665,40 @@ pub enum AppError {
     NotFound,
     #[error("invalid: {0}")]
     Invalid(String),
+}
+
+/// How a `run_workflow_inner` call resolved once its adversarial review loop
+/// settled (T9, plan/12 §4). An honest *failure* (executor error, or a review
+/// output with no parseable verdict) is NOT an outcome here — it surfaces as
+/// `Err(AppError)`, leaving any associated Issue untouched (RunIssue keeps it
+/// `InProgress` for a retry).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunOutcome {
+    /// The workflow ran to completion — a straight pipeline with no gate, or a
+    /// gated one whose Evaluator finally rendered `PASS`. The caller advances a
+    /// bound Issue to `InReview` (never `Done` — that stays a human decision).
+    Completed,
+    /// The Evaluator kept rejecting up to `loop_config.max_iter` rounds. Not a
+    /// failure and never auto-`Failed`: the caller parks a bound Issue in
+    /// `Blocked` (with this reason) for a human to decide (retry / rework the
+    /// workflow / drop). A run with no bound Issue just leaves its honest
+    /// per-round rows — no fabricated Issue (plan/12 §4).
+    BlockedAtCap { reason: String },
+}
+
+/// How the adversarial review loop in `run_workflow_inner` terminated —
+/// internal to that function (the outward-facing shape is [`RunOutcome`] /
+/// `Err`). Carried out of the `loop` as its break value so the after-loop
+/// accounting runs exactly once for every terminal path.
+enum LoopEnd {
+    /// The workflow passed (a gate rendered `PASS`, or there was no gate).
+    Passed,
+    /// The gate kept rejecting up to `max_iter` rounds — a Blocked outcome
+    /// (never auto-`Failed`).
+    Blocked(String),
+    /// An honest failure: an executor error, or a review output with no
+    /// parseable verdict. Surfaces as `Err`.
+    Failed(AppError),
 }
 
 #[derive(Clone, Debug)]
@@ -765,7 +910,7 @@ impl App {
         trigger: RunTrigger,
         cron_task_id: Option<CronTaskId>,
         issue_id: Option<IssueId>,
-    ) -> Result<(), AppError> {
+    ) -> Result<RunOutcome, AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
 
@@ -802,107 +947,180 @@ impl App {
             evidence::head_commit(&heads_workspace).await.ok().flatten()
         };
 
-        let started_at = OffsetDateTime::now_utc().unix_timestamp();
-        let t0 = Instant::now();
-        let params_json = run_params_snapshot(&spec, trigger);
-        let run_log_id = self
-            .store
-            .record_workflow_run_start(bw_store::NewWorkflowRun {
-                workflow_id: spec.id,
-                workflow_name: &spec.name,
-                project_id: Some(p),
-                session_id: Some(session),
-                trigger,
-                started_at,
-                cron_task_id,
-                params_json: &params_json,
-            })
-            .await?;
-        // A3: bind this run to the Issue it executes (RunIssue passes Some;
-        // every other caller passes None). Kept as a separate UPDATE so the
-        // run-creation DTO stays stable — the issue link is a RunIssue concern.
-        if let Some(iid) = issue_id {
-            self.store.set_run_issue(run_log_id, iid).await?;
-        }
+        // T6 (plan/12 §3): resolve the executing Agent's CLI + tools BEFORE
+        // anything runs — routing is real, not a display label, and the
+        // decision must apply identically whether this project runs on the
+        // real `ClaudeCliExecutor` or the shared Mock engine (an unsupported
+        // CLI is never silently allowed through on a mock project).
+        let (agent_cli, agent_tools) = self.resolve_agent_route(issue_id).await?;
+        // The literal `--allowedTools` value `ClaudeCliExecutor` would pass —
+        // computed here, before any subprocess spawn, so it's recorded in
+        // `params_json` independent of whether the real `claude -p` call
+        // ever succeeds (gateway 抖动 is never a verification gate).
+        let allowed_tools = allowed_tools_arg(&agent_tools, proj.allow_commands);
 
-        // `workspace_path` is per-project runtime data, not something
-        // baked into a long-lived Engine at App::new time: unconfigured
-        // projects keep running on the shared Mock engine (byte-for-
-        // byte today's behavior, zero regression); a configured one
-        // gets a fresh, one-shot real executor built just for this call.
-        let fresh_engine;
-        let engine: &Engine = if proj.workspace_path.trim().is_empty() {
-            &self.mock_engine
-        } else {
-            let executor = ClaudeCliExecutor::new(
-                self.state.claude_config.clone(),
-                PathBuf::from(proj.workspace_path.trim()),
-                proj.allow_commands,
-            );
-            fresh_engine = Engine::new(Arc::new(executor));
-            &fresh_engine
-        };
+        let params_json = run_params_snapshot(
+            &spec,
+            trigger,
+            &agent_cli,
+            &agent_tools,
+            allowed_tools.as_deref(),
+        );
 
-        // Announce what's actually about to run — real name/agents/skills
-        // straight off `spec`, before the first phase event — so a live
-        // subscriber can render "this run uses X/Y" without guessing.
+        // The review gate: the FIRST Evaluator phase (T8's real `role`, not a
+        // name guess). A workflow with none is a straight pipeline — one round,
+        // all phases, byte-for-byte the pre-T9 behavior. (A single review gate
+        // per workflow is all the built-in playbooks model today; a second
+        // Evaluator, if authored, runs as a plain tail phase.)
+        let eval_idx = spec
+            .phases
+            .iter()
+            .position(|ph| ph.role == PhaseRole::Evaluator);
+        let num_phases = spec.phases.len();
+        let max_iter = spec.loop_config.max_iter.max(1) as u32;
+
+        // Announce once, before the first round — real name/agents/skills off
+        // `spec`, so a live subscriber can render "this run uses X/Y".
         self.emit(Event::RunStarted {
             workflow_name: spec.name.clone(),
             agents: spec.agents.clone(),
             skills: spec.skills.clone(),
         });
 
-        // Progress events are emitted LIVE from inside the engine
-        // callback (broadcast::send is sync), so a subscriber watches
-        // phases advance while the run is still going. Only persistence
-        // (async) is deferred to after the run.
+        // `workspace_path` is per-project runtime data, not baked into a
+        // long-lived Engine: unconfigured projects run on the shared Mock engine
+        // (byte-for-byte today's behavior); a configured one gets a fresh
+        // one-shot real executor for THIS call (shared across the call's rounds).
+        // Held immutably across the loop — every in-loop `self` touch is a shared
+        // borrow (`self.store` / `self.emit`), never `&mut self`, so this holds.
+        //
+        // T6 (plan/12 §3): the `agent_cli` match happens FIRST, before the
+        // mock/real branch below — an unsupported CLI ("codex"/"cursor"/…)
+        // routes to the honest `UnsupportedCliExecutor` regardless of whether
+        // this project even has a real workspace configured. Only
+        // `"claude-code"` (the default for an unassigned issue or any other
+        // caller) reaches the existing mock-vs-real split, unchanged.
+        let fresh_engine;
+        let engine: &Engine = match agent_cli.as_str() {
+            "claude-code" => {
+                if proj.workspace_path.trim().is_empty() {
+                    &self.mock_engine
+                } else {
+                    let executor = ClaudeCliExecutor::new(
+                        self.state.claude_config.clone(),
+                        PathBuf::from(proj.workspace_path.trim()),
+                        proj.allow_commands,
+                        agent_tools.clone(),
+                    );
+                    fresh_engine = Engine::new(Arc::new(executor));
+                    &fresh_engine
+                }
+            }
+            other => {
+                // 诚实报错,绝不静默回落到 claude-code:本机没有为 codex/cursor
+                // 等值接好真实执行器。Reuses the `Executor` trait seam — this
+                // executor's first (and only) call errors, and the existing
+                // "executor failed → settle Failed" path records it honestly.
+                let executor = UnsupportedCliExecutor::new(other.to_string());
+                fresh_engine = Engine::new(Arc::new(executor));
+                &fresh_engine
+            }
+        };
+
+        // Live progress streams out of the engine callback (broadcast::send is
+        // sync); only persistence (async) is deferred to after each round.
         let live = self.events.clone();
-        let mut completed: Vec<bw_engine::PhaseOutput> = Vec::new();
-        let run = engine
-            .run_workflow(&spec, &ctx, |e| match e {
-                RunEvent::PhaseStarted { idx, name } => {
-                    let _ = live.send(Event::WorkflowProgress {
-                        phase_idx: idx,
-                        status: format!("started:{name}"),
-                    });
-                }
-                RunEvent::PhaseCompleted { idx, output } => {
-                    let _ = live.send(Event::WorkflowProgress {
-                        phase_idx: idx,
-                        status: "completed".into(),
-                    });
-                    completed.push(output);
-                }
-                RunEvent::WorkflowDone { .. } => {
-                    let _ = live.send(Event::WorkflowDone);
-                }
-                RunEvent::WorkflowFailed { error } => {
-                    let _ = live.send(Event::WorkflowFailed(error));
-                }
-            })
-            .await;
 
-        // Persist whatever phases completed, even on failure — the run
-        // history must not silently vanish.
-        let phases_completed = completed.len() as u32;
-        for output in completed {
-            self.store
-                .append_message(session, Author::Agent, &output.text)
+        // ── Adversarial review loop (plan/12 §4, T9) ────────────────────────
+        // Each round is its OWN settled `workflow_run` row: "多轮 run 记录" reads
+        // back as multiple rows, and settle-once holds because each row is
+        // settled exactly once. Round 1 runs from phase 0; each Evaluator打回
+        // restarts from the reject target and increments the round.
+        let range_end = match eval_idx {
+            Some(e) => e + 1, // through the gate, inclusive
+            None => num_phases,
+        };
+        let mut start = 0usize;
+        let mut round: u32 = 1;
+        let mut baton: Option<String> = None;
+        // Set at the top of every round (before any `break`), so it is
+        // definitely-assigned for the after-loop accounting — the last round's
+        // row is the one that produced the final state.
+        let mut last_run_log: WorkflowRunId;
+        let mut final_run_ok = false;
+
+        let end: LoopEnd = loop {
+            // Record this round's row start *before* the engine runs — a crash
+            // mid-round leaves an honest "started, never settled" row, never a
+            // fabricated success.
+            let started_at = OffsetDateTime::now_utc().unix_timestamp();
+            let t0 = Instant::now();
+            let run_log_id = self
+                .store
+                .record_workflow_run_start(bw_store::NewWorkflowRun {
+                    workflow_id: spec.id,
+                    workflow_name: &spec.name,
+                    project_id: Some(p),
+                    session_id: Some(session),
+                    trigger,
+                    started_at,
+                    cron_task_id,
+                    params_json: &params_json,
+                })
                 .await?;
-            self.emit(Event::SessionMessageAdded {
-                session,
-                role: Author::Agent,
-                text: output.text,
-            });
-        }
+            // A3: bind this round's run to the Issue it executes (RunIssue passes
+            // Some; every other caller None). Every round of an issue-run is
+            // bound, so `list_runs_for_issue` reads the whole loop back.
+            if let Some(iid) = issue_id {
+                self.store.set_run_issue(run_log_id, iid).await?;
+            }
+            last_run_log = run_log_id;
 
-        // Settle the run record with the real outcome + real elapsed time.
-        // `phases_completed` is the honest count of phases that finished — a
-        // partial run that died at phase 2 of 5 records `2`, not silence.
-        let finished_at = OffsetDateTime::now_utc().unix_timestamp();
-        let duration_ms = t0.elapsed().as_millis() as i64;
-        match &run {
-            Ok(_) => {
+            // Execute this round's phase range: through the gate for a gated
+            // workflow, or all phases for an ungated one. Outputs come back on
+            // the return value; live events stream via the callback.
+            let range_res = engine
+                .run_phase_range(&spec, &ctx, start..range_end, baton.clone(), |e| {
+                    forward_progress(&live, e)
+                })
+                .await;
+
+            let finished_at = OffsetDateTime::now_utc().unix_timestamp();
+            let duration_ms = t0.elapsed().as_millis() as i64;
+
+            let outputs = match range_res {
+                Ok(o) => o,
+                Err(e) => {
+                    // Honest executor failure — settle Failed, stop the loop.
+                    self.store
+                        .settle_workflow_run(
+                            run_log_id,
+                            RunStatus::Failed,
+                            finished_at,
+                            duration_ms,
+                            0,
+                            &e.to_string(),
+                        )
+                        .await?;
+                    break LoopEnd::Failed(AppError::Engine(e.to_string()));
+                }
+            };
+
+            // Persist this round's phase outputs as session messages (每阶段留痕).
+            let phases_completed = outputs.len() as u32;
+            for output in &outputs {
+                self.store
+                    .append_message(session, Author::Agent, &output.text)
+                    .await?;
+                self.emit(Event::SessionMessageAdded {
+                    session,
+                    role: Author::Agent,
+                    text: output.text.clone(),
+                });
+            }
+
+            // Ungated pipeline: this single round is the whole run.
+            let Some(e_idx) = eval_idx else {
                 self.store
                     .settle_workflow_run(
                         run_log_id,
@@ -913,8 +1131,21 @@ impl App {
                         "",
                     )
                     .await?;
-            }
-            Err(e) => {
+                let _ = live.send(Event::WorkflowDone);
+                final_run_ok = true;
+                break LoopEnd::Passed;
+            };
+
+            // Parse the gate's real verdict from its output (the range's last
+            // phase). No parseable verdict = honest review failure, NEVER a
+            // default pass (plan/12 §4).
+            let eval_text = outputs.last().map(|o| o.text.clone()).unwrap_or_default();
+            let Some(outcome) = parse_phase_outcome(&eval_text) else {
+                let msg = format!(
+                    "评审输出缺结构化裁决(阶段「{}」· 轮次 {round}/{max_iter}):{}",
+                    spec.phases[e_idx].name,
+                    review_tail(&eval_text)
+                );
                 self.store
                     .settle_workflow_run(
                         run_log_id,
@@ -922,28 +1153,157 @@ impl App {
                         finished_at,
                         duration_ms,
                         phases_completed,
-                        &e.to_string(),
+                        &msg,
                     )
                     .await?;
-            }
-        }
+                break LoopEnd::Failed(AppError::Engine(msg));
+            };
 
-        // P4: the "after" half of the change window — recorded on success AND
-        // failure alike (a failed run that still committed something must not
-        // hide it). Diffing happens lazily at detail-open time, never here.
+            match outcome.verdict {
+                Verdict::Pass => {
+                    // Gate passed. Run any phases AFTER the gate (built-ins have
+                    // none) in order — a genuine pass proceeds — then settle Ok.
+                    let mut total = phases_completed;
+                    if e_idx + 1 < num_phases {
+                        let tail_res = engine
+                            .run_phase_range(
+                                &spec,
+                                &ctx,
+                                (e_idx + 1)..num_phases,
+                                Some(review_tail(&eval_text)),
+                                |e| forward_progress(&live, e),
+                            )
+                            .await;
+                        match tail_res {
+                            Ok(tail) => {
+                                for output in &tail {
+                                    self.store
+                                        .append_message(session, Author::Agent, &output.text)
+                                        .await?;
+                                    self.emit(Event::SessionMessageAdded {
+                                        session,
+                                        role: Author::Agent,
+                                        text: output.text.clone(),
+                                    });
+                                }
+                                total += tail.len() as u32;
+                            }
+                            Err(e) => {
+                                self.store
+                                    .settle_workflow_run(
+                                        run_log_id,
+                                        RunStatus::Failed,
+                                        OffsetDateTime::now_utc().unix_timestamp(),
+                                        t0.elapsed().as_millis() as i64,
+                                        phases_completed,
+                                        &e.to_string(),
+                                    )
+                                    .await?;
+                                break LoopEnd::Failed(AppError::Engine(e.to_string()));
+                            }
+                        }
+                    }
+                    self.store
+                        .settle_workflow_run(
+                            run_log_id,
+                            RunStatus::Ok,
+                            OffsetDateTime::now_utc().unix_timestamp(),
+                            t0.elapsed().as_millis() as i64,
+                            total,
+                            "",
+                        )
+                        .await?;
+                    let _ = live.send(Event::WorkflowDone);
+                    final_run_ok = true;
+                    break LoopEnd::Passed;
+                }
+                Verdict::RejectToPhase(proposed) => {
+                    // Effective reject target: a declared `reject_to_phase`
+                    // (Static track) wins and the agent's proposal is IGNORED; an
+                    // undeclared one (Dynamic track) honours the agent's proposal.
+                    let target = match spec.phases[e_idx].reject_to_phase {
+                        Some(t) => t as usize,
+                        None => proposed as usize,
+                    };
+                    let reason = if outcome.reason.trim().is_empty() {
+                        "评审未通过".to_string()
+                    } else {
+                        outcome.reason.clone()
+                    };
+                    // A reject target must be a real phase strictly before the
+                    // gate (loop BACK, not forward/self). Anything else is an
+                    // un-actionable verdict → honest failure (never guess).
+                    if target >= num_phases || target > e_idx {
+                        let msg = format!(
+                            "评审打回目标越界(阶段索引 {target} / 共 {num_phases} 阶段 · 轮次 {round}/{max_iter}):{reason}"
+                        );
+                        self.store
+                            .settle_workflow_run(
+                                run_log_id,
+                                RunStatus::Failed,
+                                finished_at,
+                                duration_ms,
+                                phases_completed,
+                                &msg,
+                            )
+                            .await?;
+                        break LoopEnd::Failed(AppError::Engine(msg));
+                    }
+                    if round >= max_iter {
+                        // Cap hit: never auto-Failed, never auto-Done. Settle this
+                        // round Failed with the cap reason; hand a Blocked outcome
+                        // up (a bound Issue is parked Blocked by the caller).
+                        let cap_reason = format!("对抗循环 {round}/{max_iter} 仍未通过:{reason}");
+                        self.store
+                            .settle_workflow_run(
+                                run_log_id,
+                                RunStatus::Failed,
+                                finished_at,
+                                duration_ms,
+                                phases_completed,
+                                &cap_reason,
+                            )
+                            .await?;
+                        break LoopEnd::Blocked(cap_reason);
+                    }
+                    // Loop back: settle this round Failed (deliverable rejected),
+                    // carry the reject feedback forward as the next round's baton
+                    // (the regenerating phase sees WHY), restart from the target.
+                    let row_msg = format!(
+                        "评审打回阶段「{}」(轮次 {round}/{max_iter}):{reason}",
+                        spec.phases[target].name
+                    );
+                    self.store
+                        .settle_workflow_run(
+                            run_log_id,
+                            RunStatus::Failed,
+                            finished_at,
+                            duration_ms,
+                            phases_completed,
+                            &row_msg,
+                        )
+                        .await?;
+                    baton = Some(review_tail(&eval_text));
+                    start = target;
+                    round += 1;
+                }
+            }
+        };
+
+        // ── After the loop: change window + usage accounting, ONCE ──────────
+        // Attributed to the LAST round's row (the one that produced the final
+        // state). Runs on every terminal outcome (pass / block / honest failure)
+        // — a failed run's partial real output is still real output. Doing this
+        // once per issue-run (not per round) keeps agent win_rate / skill `uses`
+        // honest: one real work item = one agent run, one skill use.
+        let run_ok = final_run_ok;
+        let run_log_id = last_run_log;
         if !heads_workspace.is_empty() {
             let head_after = evidence::head_commit(&heads_workspace).await.ok().flatten();
             self.store
                 .set_run_heads(run_log_id, head_before, head_after)
                 .await?;
         }
-
-        // Usage accounting: the run really happened, so the entities it rode
-        // on get their real counters bumped — the agent that hosted it (ok
-        // AND failed both count; win_rate needs the losses) and every skill
-        // whose content/name it carried. Refs that don't resolve to a hub
-        // row are an honest 0-row no-op.
-        let run_ok = run.is_ok();
         for a in &spec.agents {
             self.store.record_agent_run_by_name(&a.name, run_ok).await?;
         }
@@ -958,13 +1318,9 @@ impl App {
             self.refresh_skills().await?;
             self.emit(Event::SkillsChanged);
         }
-
-        // Artifact reflux: scan the real workspace the run just worked in and
-        // register any new file versions against this run. A failed run's
-        // partial output is still real output — scan regardless of outcome.
-        // Scan errors (e.g. git missing) must not turn a settled run into an
-        // error; they surface as a 0-fresh no-op with the run's own outcome
-        // untouched.
+        // Artifact reflux: scan the real workspace and register new file
+        // versions against the final round's run. Scan errors are a 0-fresh
+        // no-op — they never turn a settled run into an error.
         if !proj.workspace_path.trim().is_empty() {
             let stage_kind = spec
                 .stage_ref
@@ -975,10 +1331,8 @@ impl App {
                     &proj.workspace_path,
                     Some(run_log_id),
                     stage_kind,
-                    // A2 原设计:「RunIssue 落 run 时写入」issue 归属——此前
-                    // 误传 None,导致活的产物只绑 run 不绑 issue,Done 边沿
-                    // 的幂等重扫(同 commit)又补不回来。P4 证据面测试暴露
-                    // 了这个偏差,修复即对齐冻结设计。
+                    // A2: run-time issue归属 — the活's产物 bind to both run
+                    // and issue so the Done edge's idempotent re-scan matches.
                     issue_id,
                 )
                 .await
@@ -989,8 +1343,44 @@ impl App {
             }
         }
 
-        run.map_err(|e| AppError::Engine(e.to_string()))?;
-        Ok(())
+        match end {
+            LoopEnd::Passed => Ok(RunOutcome::Completed),
+            LoopEnd::Blocked(reason) => Ok(RunOutcome::BlockedAtCap { reason }),
+            LoopEnd::Failed(err) => Err(err),
+        }
+    }
+
+    /// T6 (plan/12 §3): resolve which Agent CLI executes an issue-run and
+    /// what `tools` (AllowedTools) it declares. Only `RunIssue` has a
+    /// concrete assignee to route by — an issue with no assignee, an
+    /// assignee row that's since been deleted, or a blank `agent_cli`
+    /// (the five built-in stage-role rows) all read back as the honest
+    /// default: `"claude-code"` with no tools restriction, byte-for-byte
+    /// every other caller's (`RunHubWorkflow`, cron, stage playbook without
+    /// an issue) pre-T6 behavior.
+    async fn resolve_agent_route(
+        &self,
+        issue_id: Option<IssueId>,
+    ) -> Result<(String, Vec<String>), AppError> {
+        const DEFAULT_CLI: &str = "claude-code";
+        let Some(iid) = issue_id else {
+            return Ok((DEFAULT_CLI.to_string(), Vec::new()));
+        };
+        let Some(issue) = self.store.get_issue(iid).await? else {
+            return Ok((DEFAULT_CLI.to_string(), Vec::new()));
+        };
+        let Some(agent_id) = issue.assignee else {
+            return Ok((DEFAULT_CLI.to_string(), Vec::new()));
+        };
+        let Some(agent) = self.store.get_agent(agent_id).await? else {
+            return Ok((DEFAULT_CLI.to_string(), Vec::new()));
+        };
+        let cli = if agent.agent_cli.trim().is_empty() {
+            DEFAULT_CLI.to_string()
+        } else {
+            agent.agent_cli.clone()
+        };
+        Ok((cli, agent.tools.clone()))
     }
 
     /// Resolve skill refs against the hub and render the non-empty bodies as
@@ -1362,6 +1752,116 @@ impl App {
                 continue;
             }
 
+            // T10 (plan/12 §5): RunSkill / RunPrompt — both really execute,
+            // through the identical run_workflow_inner engine/executor path
+            // the RunWorkflow branch below uses, against a single ad-hoc
+            // prompt (`cron_prompt_workflow`) instead of a real hub
+            // workflow's phases. Resolved fresh on every fire, never cached:
+            // a RunSkill task whose skill was deleted since creation fails
+            // honestly right here — no crash, no silent no-op, no fabricated
+            // success.
+            let adhoc_spec = match &c.mode {
+                CronMode::RunSkill { skill_id } => {
+                    Some(match self.store.get_skill(*skill_id).await? {
+                        Some(skill) => Ok(cron_prompt_workflow(
+                            format!("⚙ 定时技能 · {}", skill.name),
+                            skill.content.clone(),
+                        )),
+                        None => Err("引用的技能已删除".to_string()),
+                    })
+                }
+                CronMode::RunPrompt { prompt } => Some(Ok(cron_prompt_workflow(
+                    format!("💬 定时 Prompt · {}", c.name),
+                    prompt.clone(),
+                ))),
+                _ => None,
+            };
+
+            if let Some(adhoc_spec) = adhoc_spec {
+                self.store
+                    .record_cron_run(c.id, CronStatus::Running, run_at_label(now_ts))
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+
+                let ok = match adhoc_spec {
+                    Err(reason) => {
+                        // Nothing to execute (referenced skill gone) — an
+                        // honest failed fire, recorded as a real workflow_run
+                        // row so CronEffectiveness reflects it exactly like an
+                        // engine failure would (settle-once, never a
+                        // fabricated success or a silently skipped fire).
+                        let started_at = OffsetDateTime::now_utc().unix_timestamp();
+                        let run_id = self
+                            .store
+                            .record_workflow_run_start(bw_store::NewWorkflowRun {
+                                workflow_id: WorkflowId::new(),
+                                workflow_name: &c.name,
+                                project_id: Some(pid),
+                                session_id: None,
+                                trigger: RunTrigger::Scheduled,
+                                started_at,
+                                cron_task_id: Some(c.id),
+                                params_json: "",
+                            })
+                            .await?;
+                        self.store
+                            .settle_workflow_run(
+                                run_id,
+                                RunStatus::Failed,
+                                OffsetDateTime::now_utc().unix_timestamp(),
+                                0,
+                                0,
+                                &reason,
+                            )
+                            .await?;
+                        false
+                    }
+                    Ok(spec) => {
+                        let session = SessionId::new();
+                        self.store
+                            .ensure_session(NewSession {
+                                id: session,
+                                project_id: pid,
+                                stage_kind: None,
+                                kind: SessionKind::Optimize,
+                                title: format!("⏰ 定时触发 · {}", c.name),
+                                snippet: String::new(),
+                            })
+                            .await?;
+                        let result = self
+                            .run_workflow_inner(
+                                pid,
+                                session,
+                                spec,
+                                RunTrigger::Scheduled,
+                                Some(c.id),
+                                None,
+                            )
+                            .await;
+                        matches!(result, Ok(RunOutcome::Completed))
+                    }
+                };
+
+                let outcome = if ok {
+                    CronStatus::Normal
+                } else {
+                    CronStatus::Failed
+                };
+                self.store
+                    .record_cron_run(c.id, outcome, run_at_label(now()))
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+                self.emit(Event::CronAutoFired {
+                    id: c.id,
+                    name: c.name.clone(),
+                    ok,
+                });
+                fired.push(c.id);
+                continue;
+            }
+
             let Some(spec) = specs.iter().find(|w| w.name == c.target).cloned() else {
                 continue; // target doesn't (yet) name a real hub workflow — same rule as the manual trigger.
             };
@@ -1391,7 +1891,12 @@ impl App {
             let result = self
                 .run_workflow_inner(pid, session, spec, RunTrigger::Scheduled, Some(c.id), None)
                 .await;
-            let ok = result.is_ok();
+            // A scheduled run "succeeds" only when the workflow actually passed.
+            // A hit review cap (`BlockedAtCap`) has no bound Issue to park here
+            // (cron RunWorkflow passes `issue_id = None`) — its honest per-round
+            // rows already record "上限未通过", so we surface it as Failed rather
+            // than a fake green (no fabricated Issue — plan/12 §4).
+            let ok = matches!(result, Ok(RunOutcome::Completed));
             let outcome = if ok {
                 CronStatus::Normal
             } else {
@@ -2163,7 +2668,12 @@ impl App {
                         prompt,
                         goal,
                         stage_ref,
-                        phases,
+                        // The hub create form is still name-only text editing
+                        // (no role-declaration UI yet) — every phase it
+                        // authors is honestly `Neutral`. Built-in stage
+                        // playbooks are the only source of real roles today
+                        // (`bw_core::playbook::phase_metas`).
+                        phases: phases.into_iter().map(PhaseMeta::neutral).collect(),
                         phase_prompts,
                         agents,
                         skills,
@@ -2305,16 +2815,37 @@ impl App {
                     .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id))
                     .await;
                 match run {
-                    Ok(()) => {
+                    Ok(RunOutcome::Completed) => {
+                        // A completed run only reaches 评审中 — never 完成. Done
+                        // stays an explicit human `TransitionIssue` (铁律).
                         self.store
                             .transition_issue(id, IssueStatus::InReview)
                             .await?;
                         self.refresh_issues().await?;
                         self.emit(Event::IssuesChanged);
                     }
+                    Ok(RunOutcome::BlockedAtCap { reason }) => {
+                        // The adversarial loop hit its cap without passing. Never
+                        // auto-Done, never auto-Failed: park the work in Blocked
+                        // via the SAME guarded path `BlockIssue` uses (Blocked's
+                        // only entry) — `can_transition_to` is the single source
+                        // of truth. Re-read the current status (the run left it
+                        // InProgress); InProgress→Blocked is a legal edge.
+                        let cur = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                        if cur.status.can_transition_to(IssueStatus::Blocked) {
+                            self.store.block_issue(id, &reason).await?;
+                        }
+                        self.emit(Event::WorkflowFailed(format!(
+                            "Issue #{} {}",
+                            issue.number, reason
+                        )));
+                        self.refresh_issues().await?;
+                        self.emit(Event::IssuesChanged);
+                    }
                     Err(e) => {
                         // Honest failure: the issue stays InProgress (not faked
-                        // to InReview/Done). Done remains a human TransitionIssue.
+                        // to InReview/Done/Blocked). Done remains a human
+                        // TransitionIssue; a retry re-runs from InProgress.
                         self.emit(Event::WorkflowFailed(format!(
                             "Issue #{} 运行失败:{}",
                             issue.number, e
@@ -2347,7 +2878,12 @@ impl App {
                         WorkflowEdit {
                             prompt,
                             goal,
-                            phases,
+                            // Same name-only-text-editing scope as
+                            // `CreateWorkflowSpec` above — an "优化" through
+                            // this form honestly resets every phase to
+                            // `Neutral` (a per-phase role editor is later UI
+                            // work, not this ticket).
+                            phases: phases.into_iter().map(PhaseMeta::neutral).collect(),
                             phase_prompts,
                             agents,
                             skills,
@@ -2380,6 +2916,10 @@ impl App {
                         maturity: Maturity::Polishing,
                         desc,
                         category,
+                        // T7: no stage selector on the hand-authored create
+                        // form yet (out of this ticket's scope) — honest
+                        // 通用 until an editor exists to classify it.
+                        stage_ref: None,
                         source,
                         content,
                         project_id: None, // Hub 创建口径不变,一律全局
@@ -2408,7 +2948,11 @@ impl App {
                             maturity: Maturity::Polishing,
                             desc,
                             category,
-                            source: LibSource::SelfBuilt,
+                            // 忽略:store::distill_skill_from_issue 同样改从源
+                            // Issue 的真实 stage 派生(T7,与 project_id 同一
+                            // provenance-not-input 规则),不采用这里传入的值。
+                            stage_ref: None,
+                            source: HubSource::SelfBuilt,
                             content,
                             // 忽略:store::distill_skill_from_issue 改从源 Issue
                             // 的真实 project_id 派生归属(provenance),不采用
@@ -2422,6 +2966,152 @@ impl App {
                 self.emit(Event::SkillsChanged);
             }
 
+            Command::ImportSkillPackage {
+                source_path,
+                project_id,
+                official_library,
+            } => {
+                let parsed = skill_import::import_skill_package_from_disk(&source_path)
+                    .map_err(AppError::Invalid)?;
+                if parsed.name.trim().is_empty() {
+                    return Err(AppError::Invalid(
+                        "SKILL.md frontmatter 的 name 不能为空".into(),
+                    ));
+                }
+                let source = match official_library {
+                    Some(lib) => HubSource::Official {
+                        official_library: lib,
+                    },
+                    None => HubSource::SelfBuilt,
+                };
+                self.store
+                    .import_skill_package(
+                        NewSkill {
+                            id: SkillId::new(),
+                            name: parsed.name,
+                            // standards.rs 铁律:maturity 系统派生,新建一律
+                            // fresh——外部库再有名,在 BW 里的成熟度只能由
+                            // BW 本地真实使用挣出来,不从外部声誉继承。
+                            // (/code-review 硬违规修正:原 Mature 引 seed
+                            // 先例,但 seed 是内置角色路径,标准未为导入开例外。)
+                            maturity: Maturity::Fresh,
+                            desc: parsed.desc,
+                            // T2 scope: no category assignment on import (no
+                            // predetermined classification per plan/12 §2);
+                            // stays empty, editable later via `UpdateSkill`.
+                            category: String::new(),
+                            // T7 (plan/12 §0/§2): no stage guessing on import
+                            // either — 通用 until a human classifies it.
+                            stage_ref: None,
+                            source,
+                            content: parsed.content,
+                            project_id,
+                        },
+                        parsed
+                            .files
+                            .into_iter()
+                            .map(|(rel_path, content)| NewSkillFile { rel_path, content })
+                            .collect(),
+                    )
+                    .await?;
+                self.refresh_skills().await?;
+                self.emit(Event::SkillsChanged);
+            }
+
+            Command::ImportSkillLibrary {
+                root_path,
+                official_library,
+                project_id,
+            } => {
+                let dirs =
+                    skill_import::find_skill_package_dirs(&root_path).map_err(AppError::Invalid)?;
+
+                // Idempotency key: (name, official_library). Snapshot what
+                // already exists in this library once up front, then keep it
+                // updated locally as this loop inserts — catches a same-name
+                // collision *within* this run too, not just against rows
+                // that predate it.
+                //
+                // T11 (plan/12 §7): a name counts as "already in this
+                // library" whether the row is still `Official { lib }` *or*
+                // has since been hand-edited and flipped to `SelfBuilt` —
+                // `adapted_from` is exactly the surviving `official_library`
+                // read-back for that second case (see its doc comment). Only
+                // matching the still-`Official` branch (the pre-T11 shape of
+                // this filter) would let a re-import mint a brand-new
+                // `Official` duplicate of a name the user has since made
+                // their own — both an overwrite risk if it raced a later
+                // `UpdateSkill` and a same-name-ambiguity risk either way,
+                // exactly the two failure modes T11 exists to prevent.
+                self.refresh_skills().await?;
+                let mut existing_names: std::collections::HashSet<String> = self
+                    .state
+                    .skills
+                    .iter()
+                    .filter(|s| {
+                        matches!(&s.source, HubSource::Official { official_library: lib } if lib == &official_library)
+                            || s.adapted_from.as_deref() == Some(official_library.as_str())
+                    })
+                    .map(|s| s.name.clone())
+                    .collect();
+
+                let mut imported = 0u32;
+                let mut skipped = 0u32;
+                for dir in dirs {
+                    let source_path = dir.to_string_lossy().into_owned();
+                    let parsed = skill_import::import_skill_package_from_disk(&source_path)
+                        .map_err(AppError::Invalid)?;
+                    if parsed.name.trim().is_empty() {
+                        return Err(AppError::Invalid(format!(
+                            "{source_path}: SKILL.md frontmatter 的 name 不能为空"
+                        )));
+                    }
+                    if existing_names.contains(&parsed.name) {
+                        skipped += 1;
+                        continue;
+                    }
+                    self.store
+                        .import_skill_package(
+                            NewSkill {
+                                id: SkillId::new(),
+                                name: parsed.name.clone(),
+                                // 同 ImportSkillPackage:标准规定新建一律
+                                // fresh,成熟度由 BW 本地使用派生。
+                                maturity: Maturity::Fresh,
+                                desc: parsed.desc,
+                                // T3 scope, same as T2: no predetermined
+                                // category on import.
+                                category: String::new(),
+                                // T7: same 通用-until-classified rule as
+                                // `ImportSkillPackage` — no guessing across
+                                // 55 imported skills either.
+                                stage_ref: None,
+                                source: HubSource::Official {
+                                    official_library: official_library.clone(),
+                                },
+                                content: parsed.content,
+                                project_id,
+                            },
+                            parsed
+                                .files
+                                .into_iter()
+                                .map(|(rel_path, content)| NewSkillFile { rel_path, content })
+                                .collect(),
+                        )
+                        .await?;
+                    existing_names.insert(parsed.name);
+                    imported += 1;
+                }
+
+                self.refresh_skills().await?;
+                self.emit(Event::SkillsChanged);
+                self.emit(Event::SkillLibraryImported {
+                    official_library,
+                    imported,
+                    skipped,
+                });
+            }
+
             Command::UpdateSkill {
                 id,
                 name,
@@ -2432,6 +3122,18 @@ impl App {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
                 }
+                // T11 (plan/12 §7): "编辑即脱离源头" — an `Official` row whose
+                // substantive fields (content/desc/category; `name` is
+                // identity, not content) really changed flips to `SelfBuilt`
+                // in this same update. Compared against the real pre-edit
+                // row, not the caller's own state cache, so a stale UI still
+                // decides correctly. A no-op edit (identical content
+                // resubmitted) or a rename-only edit never flips.
+                let existing = self.store.get_skill(id).await?;
+                let flip_to_self_built = existing.as_ref().is_some_and(|s| {
+                    matches!(s.source, HubSource::Official { .. })
+                        && (s.content != content || s.desc != desc || s.category != category)
+                });
                 self.store
                     .update_skill(
                         id,
@@ -2440,6 +3142,7 @@ impl App {
                             desc,
                             category,
                             content,
+                            flip_to_self_built,
                         },
                     )
                     .await?;
@@ -2463,10 +3166,22 @@ impl App {
                         id,
                         name,
                         role,
+                        // T7: no stage selector on the hand-authored create
+                        // form yet (out of this ticket's scope) — honest
+                        // 通用 until an editor exists to classify it.
+                        stage_ref: None,
                         maturity: Maturity::Polishing,
                         skills,
                         model,
                         instructions,
+                        // T5 (plan/12 §3): a hand-authored Hub agent declares
+                        // no AllowedTools restriction yet (editable later,
+                        // same "empty = unset" honesty `ImportSkillPackage`'s
+                        // category follows) and runs on the one real executor
+                        // this app has; self-authored ⇒ `SelfBuilt`.
+                        tools: Vec::new(),
+                        agent_cli: "claude-code".to_string(),
+                        source: HubSource::SelfBuilt,
                         project_id: None, // Hub 创建口径不变,一律全局
                     })
                     .await?;
@@ -2485,6 +3200,20 @@ impl App {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
                 }
+                // T11 (plan/12 §7): same flip rule as `UpdateSkill` above.
+                // Substantive fields for an Agent are `instructions`/`role`/
+                // `model` — the ticket's own list also names `tools`, but
+                // `UpdateAgent`/`AgentEdit` carry no `tools` field to edit
+                // (AllowedTools isn't wired into this form), so it can never
+                // differ through this path and is correctly left out of the
+                // comparison. `name`/`skills` (tag list) are identity/
+                // structural, not content, same "rename alone doesn't flip"
+                // call `UpdateSkill` makes for its own `name`.
+                let existing = self.store.get_agent(id).await?;
+                let flip_to_self_built = existing.as_ref().is_some_and(|a| {
+                    matches!(a.source, HubSource::Official { .. })
+                        && (a.instructions != instructions || a.role != role || a.model != model)
+                });
                 self.store
                     .update_agent(
                         id,
@@ -2494,9 +3223,71 @@ impl App {
                             skills,
                             model,
                             instructions,
+                            flip_to_self_built,
                         },
                     )
                     .await?;
+                self.refresh_agents().await?;
+                self.emit(Event::AgentsChanged);
+            }
+
+            Command::ImportAgentDefinition {
+                source_path,
+                official_library,
+            } => {
+                let parsed = agent_import::import_agent_definition_from_disk(&source_path)
+                    .map_err(AppError::Invalid)?;
+                if parsed.name.trim().is_empty() {
+                    return Err(AppError::Invalid(
+                        "AGENT.md frontmatter 的 name 不能为空".into(),
+                    ));
+                }
+                let source = match &official_library {
+                    Some(lib) => HubSource::Official {
+                        official_library: lib.clone(),
+                    },
+                    None => HubSource::SelfBuilt,
+                };
+                // T11 (plan/12 §7): idempotent re-import, `official_library`
+                // path only — see this Command variant's doc comment for why
+                // the check lives here rather than in a separate batch
+                // command. `adapted_from` catches a name that has since been
+                // hand-edited and flipped away from `Official`, exactly the
+                // same union `ImportSkillLibrary` now checks.
+                let is_duplicate = if let Some(lib) = &official_library {
+                    self.refresh_agents().await?;
+                    self.state.agents.iter().any(|a| {
+                        a.name == parsed.name
+                            && (matches!(&a.source, HubSource::Official { official_library: l } if l == lib)
+                                || a.adapted_from.as_deref() == Some(lib.as_str()))
+                    })
+                } else {
+                    false
+                };
+                if !is_duplicate {
+                    self.store
+                        .create_agent(NewAgent {
+                            id: AgentId::new(),
+                            name: parsed.name,
+                            role: parsed.description,
+                            // T7: same 通用-until-classified rule as the Skill
+                            // import path — no guessing across 67 ECC agents.
+                            stage_ref: None,
+                            // 同 ImportSkillPackage:标准规定新建一律 fresh,
+                            // 成熟度由 BW 本地真实使用派生,不从外部继承。
+                            maturity: Maturity::Fresh,
+                            // ECC AGENT.md files don't declare skill tags of
+                            // their own; no predetermined mapping (no guessing).
+                            skills: Vec::new(),
+                            model: parsed.model,
+                            instructions: parsed.instructions,
+                            tools: parsed.tools,
+                            agent_cli: "claude-code".to_string(),
+                            source,
+                            project_id: None,
+                        })
+                        .await?;
+                }
                 self.refresh_agents().await?;
                 self.emit(Event::AgentsChanged);
             }
@@ -2548,6 +3339,65 @@ impl App {
                         mode: CronMode::CreateIssue,
                         issue_stage: Some(stage),
                         issue_assignee: assignee,
+                    })
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+            }
+
+            Command::CreateRunSkillCronTask {
+                id,
+                name,
+                schedule,
+                project_id,
+                skill_id,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .create_cron_task(NewCronTask {
+                        id,
+                        name,
+                        // T10: the real skill id is the payload — round-tripped
+                        // through `target` (see `bw_store::parse_cron_mode`).
+                        target: skill_id.uuid().to_string(),
+                        schedule,
+                        project_id,
+                        mode: CronMode::RunSkill { skill_id },
+                        issue_stage: None,
+                        issue_assignee: None,
+                    })
+                    .await?;
+                self.refresh_cron_tasks().await?;
+                self.emit(Event::CronTasksChanged);
+            }
+
+            Command::CreateRunPromptCronTask {
+                id,
+                name,
+                schedule,
+                project_id,
+                prompt,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                if prompt.trim().is_empty() {
+                    return Err(AppError::Invalid("Prompt 不能为空".into()));
+                }
+                self.store
+                    .create_cron_task(NewCronTask {
+                        id,
+                        name,
+                        // T10: the prompt text itself is the payload — same
+                        // `target` column `RunSkill`/`RunWorkflow` reuse.
+                        target: prompt.clone(),
+                        schedule,
+                        project_id,
+                        mode: CronMode::RunPrompt { prompt },
+                        issue_stage: None,
+                        issue_assignee: None,
                     })
                     .await?;
                 self.refresh_cron_tasks().await?;
@@ -3047,7 +3897,86 @@ async fn write_component_standards(app: &App, p: ProjectId) -> Result<(), AppErr
 /// a later `UpdateWorkflowSpec` rewrites the phases, a past run's history
 /// still truthfully shows the phases it ran. Pure function of the spec +
 /// trigger; no IO, no secrets.
-fn run_params_snapshot(spec: &WorkflowSpec, trigger: RunTrigger) -> String {
+/// Forward one engine [`RunEvent`] to the live UI stream (T9 helper — shared by
+/// every `run_phase_range` call inside the adversarial loop so a subscriber sees
+/// phases advance and re-advance across rounds). `WorkflowDone` is emitted by
+/// the loop itself once the whole run truly finishes, so it's a no-op here.
+fn forward_progress(live: &broadcast::Sender<Event>, e: RunEvent) {
+    match e {
+        RunEvent::PhaseStarted { idx, name } => {
+            let _ = live.send(Event::WorkflowProgress {
+                phase_idx: idx,
+                status: format!("started:{name}"),
+            });
+        }
+        RunEvent::PhaseCompleted { idx, .. } => {
+            let _ = live.send(Event::WorkflowProgress {
+                phase_idx: idx,
+                status: "completed".into(),
+            });
+        }
+        RunEvent::WorkflowFailed { error } => {
+            let _ = live.send(Event::WorkflowFailed(error));
+        }
+        RunEvent::WorkflowDone { .. } => {}
+    }
+}
+
+/// The tail slice of a review output — enough context to seed the next round's
+/// reject baton or an honest error message, without dragging a whole transcript.
+fn review_tail(text: &str) -> String {
+    const MAX: usize = 400;
+    let t = text.trim();
+    let n = t.chars().count();
+    if n <= MAX {
+        return t.to_string();
+    }
+    t.chars().skip(n - MAX).collect()
+}
+
+/// T10 (plan/12 §5): the ephemeral spec `tick_scheduler` runs a `RunSkill`/
+/// `RunPrompt` cron task through — same `run_workflow_inner` engine/executor
+/// path a `RunWorkflow` cron task uses (so evidence lands in `workflow_run`/
+/// `CronEffectiveness` identically), just one neutral phase carrying the
+/// skill's `content` or the bare prompt text instead of a real hub workflow's
+/// phases. Never persisted — minted fresh on every fire, like `stage_workflow`'s
+/// throwaway `Dynamic` specs.
+fn cron_prompt_workflow(name: String, prompt: String) -> WorkflowSpec {
+    WorkflowSpec {
+        id: WorkflowId::new(),
+        name,
+        kind: WorkflowKind::Dynamic {
+            origin: "定时任务".into(),
+            stage: String::new(),
+        },
+        prompt,
+        goal: "定时任务真实执行".into(),
+        stage_ref: None,
+        phases: vec![PhaseMeta::neutral("执行")],
+        phase_prompts: vec![],
+        agents: vec![],
+        skills: vec![],
+        loop_config: LoopConfig {
+            retries: 1,
+            max_iter: 1,
+        },
+        project_id: None,
+    }
+}
+
+/// `agent_cli`/`tools`/`allowed_tools_arg` are T6 (plan/12 §3) additions: the
+/// resolved Agent-CLI route and the exact `--allowedTools` value it implies,
+/// snapshotted BEFORE the engine runs — so a run's real invocation
+/// parameters read back from `params_json` regardless of whether the
+/// executor call itself ever completes (an `UnsupportedCliExecutor` errors
+/// on its very first call; a real `claude -p` call may hit a flaky gateway).
+fn run_params_snapshot(
+    spec: &WorkflowSpec,
+    trigger: RunTrigger,
+    agent_cli: &str,
+    tools: &[String],
+    allowed_tools_arg: Option<&str>,
+) -> String {
     // serde_json::Value keeps this stable as the spec grows — adding a field
     // later is additive, not a schema break on historical run rows.
     let v = serde_json::json!({
@@ -3065,6 +3994,9 @@ fn run_params_snapshot(spec: &WorkflowSpec, trigger: RunTrigger) -> String {
             WorkflowKind::Static { version, .. } => format!("static:v{version}"),
             WorkflowKind::Dynamic { origin, .. } => format!("dynamic:{origin}"),
         },
+        "agent_cli": agent_cli,
+        "tools": tools,
+        "allowed_tools_arg": allowed_tools_arg,
     });
     v.to_string()
 }

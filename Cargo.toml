@@ -43,6 +43,12 @@ thiserror = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 async-trait = "0.1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+# T2 (plan/12 §2): real YAML frontmatter parsing for SKILL.md import — a
+# proper parser (not a hand-rolled line scanner) so quotes/multi-line
+# descriptions/unknown fields (disable-model-invocation, …) are handled
+# correctly instead of guessed at. bw-app only (native, IO-doing crate) —
+# never touches the wasm32-checked kernel crates.
+serde_yaml = "0.9"
 
 # --- Internal crates (path deps) ---
 # bw-core defaults to NO id-generation (no RNG) so pure consumers (ui) stay

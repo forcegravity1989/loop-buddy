@@ -25,3 +25,6 @@ demo-workspaces/
 # 在 examples/aihot/bw-aihot.db(见 examples/README.md)——这条规则挡的是本地
 # 反复重跑的临时产物,不是那份挑选过的最终快照。
 /practice-aihot/
+
+# subagent-driven-development 隔离工作区(git worktree),不是源码。
+/.worktrees/

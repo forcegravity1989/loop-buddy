@@ -155,7 +155,10 @@ CREATE TABLE IF NOT EXISTS workflow_spec (
     prompt         TEXT NOT NULL DEFAULT '',
     goal           TEXT NOT NULL DEFAULT '',
     stage_ref      INTEGER,                   -- 1..=5, nullable (metrics-layer / cross-cutting)
-    phases         TEXT NOT NULL DEFAULT '[]', -- JSON [String]
+    phases         TEXT NOT NULL DEFAULT '[]', -- JSON [PhaseMeta] (name+role+reject_to_phase);
+                                               -- T8: pre-T8 rows are plain JSON [String] —
+                                               -- PhaseMeta's Deserialize reads those in as
+                                               -- role=Neutral, no migration needed (still TEXT)
     phase_prompts  TEXT NOT NULL DEFAULT '[]', -- JSON [String], index-aligned with phases;
                                                -- '[]' = pre-playbook (all phases share prompt)
     agents_json    TEXT NOT NULL DEFAULT '[]', -- JSON [AgentRef]
@@ -176,7 +179,16 @@ CREATE TABLE IF NOT EXISTS skill (
     maturity    TEXT NOT NULL DEFAULT 'fresh',
     descr       TEXT NOT NULL DEFAULT '',
     category    TEXT NOT NULL DEFAULT '',
+    -- T7 (plan/12 §0/§2): which stage role this skill belongs to — same
+    -- 1..=5 nullable-INTEGER convention `workflow_spec.stage_ref` already
+    -- uses (interop via StageKind::index/from_index). NULL = 通用/跨阶段,
+    -- honest for every imported catalog skill (nobody has classified them).
+    stage_ref   INTEGER,
     source      TEXT NOT NULL DEFAULT 'self_built',
+    -- T2 (plan/12 §6): sub-tag for source='official' only — which curated
+    -- external library ("mattpocock-skills"/"superpowers"/"ecc"/…). '' for
+    -- every other source value (see bw_store::parse_skill_source).
+    official_library TEXT NOT NULL DEFAULT '',
     uses        INTEGER NOT NULL DEFAULT 0,
     -- R2: provenance link from a real completed Issue. NULL = catalog/seeded
     -- skill (no real-work origin); populated only by distill_skill_from_issue.
@@ -187,21 +199,61 @@ CREATE TABLE IF NOT EXISTS skill (
     rev         INTEGER NOT NULL DEFAULT 0
 );
 
+-- T2 (plan/12 §2): a skill's real support files, copy-on-import — the
+-- non-SKILL.md contents of an imported skill folder (SkillCard.content stays
+-- SKILL.md's own body only). No predetermined category/subfolder scheme:
+-- rel_path is the real path as found on disk ("references/mocking.md",
+-- "agents/openai.yaml", a bare "GLOSSARY.md", …).
+CREATE TABLE IF NOT EXISTS skill_file (
+    id         TEXT PRIMARY KEY,
+    skill_id   TEXT NOT NULL REFERENCES skill(id),
+    rel_path   TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skill_file_skill ON skill_file(skill_id);
+-- T7: deliberately NO `CREATE INDEX ... ON skill(stage_ref)` here — this
+-- schema blob runs in full (via `open()`'s statement-by-statement replay)
+-- *before* `add_column_if_missing` adds this column to a pre-T7 on-disk
+-- `skill` table, so an index on it here would crash every existing database
+-- with "no such column: stage_ref" (real bug, caught by this ticket's own
+-- migration E2E — `CREATE TABLE IF NOT EXISTS` is the schema-blob's only
+-- safe-on-old-tables statement kind; `workflow_spec.stage_ref`'s index below
+-- never hit this because that whole table postdates its own column).
+
 CREATE TABLE IF NOT EXISTS agent (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     -- 践行最小切片(2026-07-20):NULL = hub library(全局);非 NULL = 项目自有。
     project_id  TEXT REFERENCES project(id),
     role        TEXT NOT NULL DEFAULT '',
+    -- T7 (plan/12 §0/§3): same classification dimension/convention as
+    -- `skill.stage_ref` above. NULL = 通用/跨阶段.
+    stage_ref   INTEGER,
     maturity    TEXT NOT NULL DEFAULT 'fresh',
     skills      TEXT NOT NULL DEFAULT '[]',   -- JSON [String] tag names
     model       TEXT NOT NULL DEFAULT '',
     runs        INTEGER NOT NULL DEFAULT 0,
     win_rate    TEXT NOT NULL DEFAULT '',     -- pre-formatted, e.g. '94%'
+    -- T5 (2026-07-23, plan/12 §3): "Agent" == AGENT.md real modeling.
+    -- AllowedTools JSON [String] — '[]' = no restriction declared (honest for
+    -- the five built-in stage-role agents and any hand-authored row).
+    tools       TEXT NOT NULL DEFAULT '[]',
+    -- Which Agent CLI executes this agent; first version only "claude-code"
+    -- has a real executor (bw-engine::ClaudeCliExecutor).
+    agent_cli   TEXT NOT NULL DEFAULT 'claude-code',
+    -- Provenance — same HubSource tag/sub-tag two-column scheme T2 gave
+    -- `skill` (plan/12 §6). 'self_built' = honest default for the five
+    -- built-in stage-role agents; ImportAgentDefinition's ECC rows write
+    -- 'official' + official_library='ecc'.
+    source      TEXT NOT NULL DEFAULT 'self_built',
+    official_library TEXT NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0
 );
+-- T7: same "no index on a retrofitted column inside the raw schema blob"
+-- rule as `skill` above — see that comment for why.
 
 -- Global, except project_id which is nullable (NULL = 全部项目/all projects) —
 -- the one hub entity that legitimately optionally scopes to a project.

@@ -22,7 +22,7 @@ use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
 use bw_app::Command;
 use bw_core::model::{
-    AgentRef, Cadence, LoopConfig, SkillRef, StageKind, WorkflowKind, WorkflowSpec,
+    AgentRef, Cadence, LoopConfig, PhaseMeta, SkillRef, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{CronTaskId, SessionId, WorkflowId};
 use bw_store::SessionKind;
@@ -42,7 +42,11 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
 
     let mut creating = use_signal(|| false);
     let mut adhoc = use_signal(|| false);
-    let mut stage_filter = use_signal(|| None::<StageKind>);
+    // T7 (plan/12 §0/§2/§3): shared `RoleFilter` — same "全部/五角色/通用"
+    // dimension `SkillHub`/`AgentHub` now filter by too (`ui::vm::RoleFilter`),
+    // replacing the bare `Option<StageKind>` this signal used to be (which had
+    // no way to select "只看通用" — `None` meant "no filter" instead).
+    let mut role_filter = use_signal(|| ui::vm::RoleFilter::All);
     let mut source_filter = use_signal(|| None::<&'static str>);
     let mut expanded = use_signal(|| None::<WorkflowId>);
     let mut importing = use_signal(|| None::<WorkflowId>);
@@ -52,6 +56,12 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
 
     let n = hub.workflows.len();
     let chip_counts = ui::vm::source_chip_counts(&hub.workflows);
+    let (role_stage_counts, role_general_count) = ui::vm::role_chip_counts(
+        &hub.workflows
+            .iter()
+            .map(|r| r.stage_ref.and_then(StageKind::from_index))
+            .collect::<Vec<_>>(),
+    );
     let details_by_id: HashMap<WorkflowId, WorkflowDetailVm> = hub
         .workflow_details
         .iter()
@@ -62,11 +72,7 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
     let filtered: Vec<WorkflowHubRowVm> = hub
         .workflows
         .iter()
-        .filter(|r| {
-            stage_filter()
-                .map(|sf| r.stage_ref == Some(sf.index()))
-                .unwrap_or(true)
-        })
+        .filter(|r| role_filter().matches(r.stage_ref.and_then(StageKind::from_index)))
         .filter(|r| {
             source_filter()
                 .map(|sf| r.source_label == sf)
@@ -128,27 +134,38 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
             div {
                 style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;",
                 {
-                    let active = stage_filter().is_none();
+                    let active = role_filter() == ui::vm::RoleFilter::All;
                     let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
                     rsx! {
                         button {
                             style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                            onclick: move |_| stage_filter.set(None),
-                            "全部阶段"
+                            onclick: move |_| role_filter.set(ui::vm::RoleFilter::All),
+                            "全部"
                         }
                     }
                 }
-                for sk in StageKind::ALL {
+                for (sk , count) in role_stage_counts {
                     {
-                        let active = stage_filter() == Some(sk);
+                        let active = role_filter() == ui::vm::RoleFilter::Stage(sk);
                         let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
                         rsx! {
                             button {
                                 key: "{sk.index()}",
                                 style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                                onclick: move |_| stage_filter.set(Some(sk)),
-                                "{sk.label()}"
+                                onclick: move |_| role_filter.set(ui::vm::RoleFilter::Stage(sk)),
+                                "{sk.role_short()} · {count}"
                             }
+                        }
+                    }
+                }
+                {
+                    let active = role_filter() == ui::vm::RoleFilter::General;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(ui::vm::RoleFilter::General),
+                            "通用 · {role_general_count}"
                         }
                     }
                 }
@@ -275,7 +292,7 @@ pub fn WorkflowHub(hub: HubVm, projects: Vec<ProjectCardVm>, on_run: EventHandle
                                                             div {
                                                                 style: "margin-bottom:10px;",
                                                                 WorkflowFlow {
-                                                                    phases: row.phases.clone(),
+                                                                    phases: row.phase_metas.clone(),
                                                                     loop_retries: row.loop_retries,
                                                                     loop_max_iter: row.loop_max_iter,
                                                                 }
@@ -843,7 +860,10 @@ fn AdHocWorkflowForm(
             prompt: p,
             goal: goal().trim().to_string(),
             stage_ref: kind.map(|s| s.index()),
-            phases,
+            // Ad-hoc text form — no role-editing UI, so every phase is
+            // honestly `Neutral` (same rule as `CreateWorkflowSpec`/
+            // `UpdateWorkflowSpec`'s handlers in bw-app).
+            phases: phases.into_iter().map(PhaseMeta::neutral).collect(),
             phase_prompts: vec![],
             agents: agent_refs,
             skills: skill_refs,

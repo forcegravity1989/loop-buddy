@@ -13,6 +13,7 @@
 //! of the system relies on.
 
 use crate::{Executor, PhaseNode, RunCtx};
+use bw_core::model::PhaseRole;
 use bw_core::{ProjectId, WorkflowId};
 
 /// Run a representative phase through `exec` and assert the invariants every
@@ -24,6 +25,7 @@ pub async fn check<E: Executor>(exec: &E) -> Result<(), String> {
     };
     let phase = PhaseNode {
         name: "契约自检".into(),
+        role: PhaseRole::Neutral,
         prompt: "确认产出结构合约".into(),
         agents: Vec::new(),
         skills: Vec::new(),

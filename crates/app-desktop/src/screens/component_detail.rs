@@ -12,7 +12,7 @@
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::agent_hub::workflows_using_agent;
-use crate::screens::skill_hub::workflows_using_skill;
+use crate::screens::skill_hub::{workflows_using_skill, SkillFileBrowser};
 use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
 use bw_app::Command;
@@ -112,6 +112,10 @@ fn SkillDetailCard(id: SkillId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
                 span { "{s.category}" }
                 span { "·" }
                 span { "{s.source_label}" }
+                // T11(plan/12 §7):同 SkillHub 卡片——脱离源头后如实留痕。
+                if let Some(lib) = &s.adapted_from {
+                    span { style: "color:{ink3};font-style:italic;", "改编自 {lib}" }
+                }
                 if s.distilled_from_issue.is_some() {
                     span {
                         style: "{theme::chip(\"#EAF0E2\", \"#4A5E42\")}",
@@ -123,15 +127,7 @@ fn SkillDetailCard(id: SkillId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
                     }
                 }
             }
-            div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "技能正文(运行时注入 prompt)" }
-            if s.content.trim().is_empty() {
-                div { style: "font-size:12.5px;color:{ink3};margin-bottom:14px;", "目录引用 · 无正文(全文在来源仓库)" }
-            } else {
-                pre {
-                    style: "font-family:{theme::MONO};font-size:12px;line-height:1.7;color:{ink2};background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:14px 16px;white-space:pre-wrap;margin:0 0 14px;",
-                    "{s.content}"
-                }
-            }
+            SkillFileBrowser { s: s.clone() }
             div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "被这些工作流使用" }
             if used_by.is_empty() {
                 div { style: "font-size:12.5px;color:{ink3};", "还没有工作流引用这个技能。" }
@@ -267,7 +263,7 @@ fn WorkflowDetailCard(id: WorkflowId, hub: HubVm, projects: Vec<ProjectCardVm>) 
             div {
                 style: "margin-bottom:14px;",
                 WorkflowFlow {
-                    phases: row.phases.clone(),
+                    phases: row.phase_metas.clone(),
                     loop_retries: row.loop_retries,
                     loop_max_iter: row.loop_max_iter,
                 }
@@ -311,6 +307,17 @@ fn CronDetailCard(
     let eff = cron_effectiveness
         .filter(|(eid, _)| *eid == id)
         .map(|(_, e)| e);
+    // T10 (plan/12 §5): the raw `target` column is a real `SkillId`/full
+    // prompt text for the two new modes — never show that opaque payload as
+    // "目标"; show the honest human-facing reading `CronRowVm` already
+    // derived instead (skill name / "(技能已删除)" / prompt preview).
+    let target_display = if let Some(skill_label) = &c.skill_target_label {
+        skill_label.clone()
+    } else if let Some(preview) = &c.prompt_preview {
+        preview.clone()
+    } else {
+        c.target.clone()
+    };
     rsx! {
         div {
             style: "{card} padding:22px 26px;max-width:680px;",
@@ -324,7 +331,13 @@ fn CronDetailCard(
                 }
                 span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{c.status_label}" }
             }
-            div { style: "font-size:13.5px;color:{ink2};margin-bottom:12px;", "到点:{c.mode_label} · 目标「{c.target}」" }
+            div { style: "font-size:13.5px;color:{ink2};margin-bottom:12px;",
+                if !c.mode_icon.is_empty() {
+                    "到点:{c.mode_icon} {c.mode_label} · 目标「{target_display}」"
+                } else {
+                    "到点:{c.mode_label} · 目标「{target_display}」"
+                }
+            }
             div {
                 style: "font-family:{mono};font-size:12px;color:{ink3};margin-bottom:6px;",
                 "{c.schedule_label} · 上次 {c.last_run} · 下次 {c.next_run}"

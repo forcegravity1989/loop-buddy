@@ -1833,7 +1833,12 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
     let ink3 = theme::INK_3;
     let primary = theme::btn_primary();
     let spec_preview = stage_workflow(s.kind);
-    let phases = spec_preview.phases.join(" → ");
+    let phases = spec_preview
+        .phases
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(" → ");
     let goal = spec_preview.goal.clone();
     let stage_kind = s.kind;
     let round = op

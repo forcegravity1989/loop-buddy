@@ -590,7 +590,26 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         .iter()
         .filter_map(ui::vm::workflow_detail)
         .collect();
-    let skills: Vec<SkillCardVm> = state.skills.iter().map(skill_card).collect();
+    // T4(plan/12 §2): fold each skill's real `skill_file` rows in — one
+    // indexed-by-`skill_id` read per skill (`idx_skill_file_skill`), same
+    // eager-per-row-in-`build_vm` convention `usage_ranking`/`connectors`/
+    // etc. already use above; a skill with none gets an honest empty `files`
+    // (`skill_card`'s own graceful-degradation signal), not a wasted query
+    // guard.
+    let mut skills: Vec<SkillCardVm> = Vec::with_capacity(state.skills.len());
+    for s in &state.skills {
+        let files = store
+            .list_skill_files(s.id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| ui::vm::SkillFileVm {
+                rel_path: f.rel_path,
+                content: f.content,
+            })
+            .collect();
+        skills.push(skill_card(s, files));
+    }
     let agents: Vec<AgentCardVm> = state.agents.iter().map(agent_card).collect();
     let project_names: Vec<(bw_core::ProjectId, String)> = state
         .projects
@@ -600,7 +619,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     let cron_tasks: Vec<CronRowVm> = state
         .cron_tasks
         .iter()
-        .map(|c| cron_row(c, &project_names, now))
+        .map(|c| cron_row(c, &project_names, &state.skills, now))
         .collect();
     let connectors: Vec<ConnectorCardVm> = state.connectors.iter().map(connector_card).collect();
     let knowledge_sources: Vec<KnowledgeRowVm> =

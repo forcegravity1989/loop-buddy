@@ -12,10 +12,10 @@
 use crate::{overview_attention, sparkline_path, Attention, SparkPath, StageAttention};
 use bw_core::derive::parse_magnitude;
 use bw_core::model::{
-    AgentCard, Artifact, Cadence, Connector, ConnectorStatus, CronStatus, CronTask, FeedLevel,
-    HubCard, HubKind, Issue, IssueStatus, KnowledgeSource, Maturity, MaturityPeriod, Readiness,
-    RunChanges, RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SourceKind, StageKind,
-    UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
+    AgentCard, Artifact, Cadence, Connector, ConnectorStatus, CronMode, CronStatus, CronTask,
+    FeedLevel, HubCard, HubKind, HubSource, Issue, IssueStatus, KnowledgeSource, Maturity,
+    MaturityPeriod, PhaseMeta, Readiness, RunChanges, RunStatus, RunTrigger, SessionStatus, Signal,
+    SkillCard, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
@@ -513,7 +513,14 @@ pub struct WorkflowHubRowVm {
     /// needs them as data, not a string to re-parse.
     pub loop_retries: u8,
     pub loop_max_iter: u8,
+    /// Bare phase names — the text-editing surface (`OptimizeWorkflowForm`'s
+    /// "阶段流程" input) still works with, and `phases_count` above.
     pub phases: Vec<String>,
+    /// T8 (plan/12 §4): the real per-phase role + static reject target —
+    /// same "give the component data, not a pre-formatted string" rule as
+    /// `loop_retries`/`loop_max_iter` above. `WorkflowFlow` reads this
+    /// directly instead of guessing a role from `phases[i]`'s name.
+    pub phase_metas: Vec<PhaseMeta>,
     pub skills: Vec<String>,
     pub stage_ref: Option<u8>,
     /// W1: the row's real run record, e.g. `"跑 3 次 · 成功 67%"` — or
@@ -582,7 +589,8 @@ pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
         ),
         loop_retries: spec.loop_config.retries,
         loop_max_iter: spec.loop_config.max_iter,
-        phases: spec.phases.clone(),
+        phases: spec.phases.iter().map(|p| p.name.clone()).collect(),
+        phase_metas: spec.phases.clone(),
         skills: spec.skills.iter().map(|s| s.name.clone()).collect(),
         stage_ref: spec.stage_ref,
         record_label: "暂无运行".into(),
@@ -613,9 +621,14 @@ pub fn group_by_stage(
 }
 
 /// Counts per source label, in a fixed display order — a filter-chip row.
+/// The order/labels come from `HubSource::FILTER_CHIP_LABELS` (bw-core), not
+/// a locally hardcoded list — T1 (plan/12 §6) retired the old per-library
+/// `Omc`/`Ecc` enum variants, so this can no longer name them directly.
 pub fn source_chip_counts(rows: &[WorkflowHubRowVm]) -> Vec<(&'static str, usize)> {
-    let mut counts: Vec<(&'static str, usize)> =
-        vec![("OMC", 0), ("ECC", 0), ("自建", 0), ("会话内", 0)];
+    let mut counts: Vec<(&'static str, usize)> = HubSource::FILTER_CHIP_LABELS
+        .iter()
+        .map(|&label| (label, 0))
+        .collect();
     for r in rows {
         if let Some(slot) = counts
             .iter_mut()
@@ -625,6 +638,53 @@ pub fn source_chip_counts(rows: &[WorkflowHubRowVm]) -> Vec<(&'static str, usize
         }
     }
     counts
+}
+
+/// T7 (2026-07-23, plan/12 §0/§2/§3): the shared five-role classification
+/// filter every Hub screen (Skill/Agent/Workflow) now applies to its rows —
+/// one pure predicate instead of three copy-pasted per-screen closures.
+/// `General` is a real, selectable state (not merely "no filter"), matching
+/// the ticket's chip row 全部/原型师/构建师/优化师/运营推广师/运维师/通用 —
+/// a user can ask "show me only the honestly-unclassified rows" the same
+/// way they can ask for a specific stage.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RoleFilter {
+    All,
+    Stage(StageKind),
+    General,
+}
+
+impl RoleFilter {
+    /// Does `stage_ref` pass this filter?
+    pub fn matches(self, stage_ref: Option<StageKind>) -> bool {
+        match self {
+            RoleFilter::All => true,
+            RoleFilter::Stage(k) => stage_ref == Some(k),
+            RoleFilter::General => stage_ref.is_none(),
+        }
+    }
+}
+
+/// Real per-role counts for a stage-role filter chip row — shared by all
+/// three Hub screens now that Skill/Agent/Workflow carry the identical
+/// `Option<StageKind>` classification dimension (T7). Returns the five real
+/// stages in loop order plus a trailing 通用 (unclassified) count — never
+/// invented: a row with no `stage_ref` is honestly tallied there, never
+/// folded into a stage it was never assigned to.
+pub fn role_chip_counts(stage_refs: &[Option<StageKind>]) -> (Vec<(StageKind, usize)>, usize) {
+    let mut per_stage: Vec<(StageKind, usize)> = StageKind::ALL.iter().map(|&k| (k, 0)).collect();
+    let mut general = 0usize;
+    for sr in stage_refs {
+        match sr {
+            Some(k) => {
+                if let Some(slot) = per_stage.iter_mut().find(|(s, _)| s == k) {
+                    slot.1 += 1;
+                }
+            }
+            None => general += 1,
+        }
+    }
+    (per_stage, general)
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -658,7 +718,7 @@ pub fn workflow_detail(spec: &WorkflowSpec) -> Option<WorkflowDetailVm> {
         phases_numbered: spec
             .phases
             .iter()
-            .cloned()
+            .map(|p| p.name.clone())
             .enumerate()
             .map(|(i, p)| (i + 1, p))
             .collect(),
@@ -786,7 +846,17 @@ pub struct SkillCardVm {
     pub maturity_label: &'static str,
     pub desc: String,
     pub category: String,
+    /// T7 (plan/12 §0/§2): the stage-role classification dimension shared
+    /// with `AgentCardVm`/`WorkflowHubRowVm` — `None` = 通用/跨阶段. Kept as
+    /// the real `StageKind` (not `WorkflowHubRowVm`'s `Option<u8>`), since
+    /// `SkillCard.stage_ref` already is one — no round-trip needed here.
+    pub stage_ref: Option<StageKind>,
     pub source_label: &'static str,
+    /// T11 (plan/12 §7): "改编自 <库名>" — non-`None` iff an edit flipped
+    /// this row away from `Official`; the card face renders this as a small
+    /// provenance note alongside `source_label` rather than pretending the
+    /// row never had a curated origin. See `SkillCard::adapted_from`.
+    pub adapted_from: Option<String>,
     pub uses: u32,
     /// Executable body. Empty = catalog reference (the detail panel says so
     /// honestly instead of showing a blank that reads as broken).
@@ -801,22 +871,116 @@ pub struct SkillCardVm {
     /// The agent teammate credited for the issue behind `distilled_from_issue`
     /// — `None` iff that field is `None` (same domain invariant).
     pub origin_agent: Option<AgentId>,
+    /// T4(plan/12 §2): the skill folder's real support files (`skill_file`
+    /// rows, T2), verbatim — everything except `SKILL.md` itself, which
+    /// stays `content` above. Empty = flat skill (self-built/distilled/the
+    /// five built-in stage-role skills), the honest signal the detail panel
+    /// uses to skip the file tree instead of showing an empty one.
+    pub files: Vec<SkillFileVm>,
 }
 
-pub fn skill_card(s: &SkillCard) -> SkillCardVm {
+/// One real support file alongside a skill's `SKILL.md` — T2's `skill_file`
+/// table read back verbatim, no re-interpretation.
+#[derive(Clone, PartialEq, Debug)]
+pub struct SkillFileVm {
+    pub rel_path: String,
+    pub content: String,
+}
+
+pub fn skill_card(s: &SkillCard, files: Vec<SkillFileVm>) -> SkillCardVm {
     SkillCardVm {
         id: s.id,
         name: s.name.clone(),
         maturity_label: maturity_label(s.maturity),
         desc: s.desc.clone(),
         category: s.category.clone(),
+        stage_ref: s.stage_ref,
         source_label: s.source.label(),
+        adapted_from: s.adapted_from.clone(),
         uses: s.uses,
         content: s.content.clone(),
         project_id: s.project_id,
         distilled_from_issue: s.distilled_from_issue,
         origin_agent: s.origin_agent,
+        files,
     }
+}
+
+/// A skill folder's real directory structure, built purely off `rel_path`
+/// strings (T4, plan/12 §2) — no IO, no invented structure: a file at
+/// `"references/mocking.md"` nests under a `references` dir node exactly
+/// because that's the literal path, nothing more.
+#[derive(Clone, PartialEq, Debug)]
+pub enum SkillTreeNode {
+    Dir {
+        name: String,
+        /// Full path from the skill root (e.g. `"references"`, or
+        /// `"a/b"` when nested) — doubles as the collapse-state key so a
+        /// UI's "which dirs are collapsed" set can be plain `HashSet<String>`.
+        path: String,
+        children: Vec<SkillTreeNode>,
+    },
+    File {
+        name: String,
+        /// The real `skill_file.rel_path` — the lookup key back into
+        /// `SkillCardVm.files` when a click needs the file's content.
+        rel_path: String,
+    },
+}
+
+/// Build the nested tree `SkillFileBrowser` renders — dirs before files at
+/// each level, both alphabetical, for a stable IDE-like listing. Pure and
+/// wasm32-clean like every other `ui` selector, so it's the one place this
+/// logic exists (E2E can exercise it indirectly through the rendered tree
+/// without a second copy of the split-on-`/` logic living in `app-desktop`).
+pub fn skill_file_tree(files: &[SkillFileVm]) -> Vec<SkillTreeNode> {
+    #[derive(Default)]
+    struct Builder {
+        files: Vec<(String, String)>,
+        dirs: std::collections::BTreeMap<String, Builder>,
+    }
+
+    fn into_nodes(prefix: &str, b: Builder) -> Vec<SkillTreeNode> {
+        let mut out: Vec<SkillTreeNode> = b
+            .dirs
+            .into_iter()
+            .map(|(name, sub)| {
+                let path = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}/{name}")
+                };
+                let children = into_nodes(&path, sub);
+                SkillTreeNode::Dir {
+                    name,
+                    path,
+                    children,
+                }
+            })
+            .collect();
+        let mut files = b.files;
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        out.extend(
+            files
+                .into_iter()
+                .map(|(name, rel_path)| SkillTreeNode::File { name, rel_path }),
+        );
+        out
+    }
+
+    let mut root = Builder::default();
+    for f in files {
+        let parts: Vec<&str> = f.rel_path.split('/').filter(|p| !p.is_empty()).collect();
+        let Some(file_name) = parts.last() else {
+            continue;
+        };
+        let mut node = &mut root;
+        for dir in &parts[..parts.len() - 1] {
+            node = node.dirs.entry((*dir).to_string()).or_default();
+        }
+        node.files.push((file_name.to_string(), f.rel_path.clone()));
+    }
+    into_nodes("", root)
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -825,6 +989,8 @@ pub struct AgentCardVm {
     pub name: String,
     pub initial: String,
     pub role: String,
+    /// T7 (plan/12 §0/§3): same dimension as `SkillCardVm::stage_ref`.
+    pub stage_ref: Option<StageKind>,
     pub maturity_label: &'static str,
     pub skills: Vec<String>,
     pub model: String,
@@ -833,8 +999,36 @@ pub struct AgentCardVm {
     pub win_rate: String,
     /// Standing instructions. Empty = catalog reference.
     pub instructions: String,
+    /// T5 (plan/12 §3): AllowedTools — the card-face Tools chip row, at the
+    /// same tier as `skills` chips. Empty = no restriction declared (the
+    /// five built-in stage-role agents, or an unedited hand-authored row).
+    pub tools: Vec<String>,
+    /// T5: human-friendly label for `AgentCard.agent_cli`, e.g. `"Claude
+    /// Code"` for the real `"claude-code"` value — the detail panel's
+    /// "执行引擎" line. Any other raw value (future codex/cursor) passes
+    /// through unmapped rather than being guessed into a nicer label.
+    pub agent_cli_label: String,
+    /// T5 (plan/12 §6): provenance chip label, same vocabulary
+    /// `SkillCardVm::source_label` already surfaces.
+    pub source_label: &'static str,
+    /// T11 (plan/12 §7): "改编自 <库名>" — same field/reasoning as
+    /// `SkillCardVm::adapted_from`.
+    pub adapted_from: Option<String>,
     /// `None` = 全局/共享;`Some` = 项目自建(plan/10 K1 侧边栏过滤用)。
     pub project_id: Option<ProjectId>,
+}
+
+/// Human-friendly label for a real `AgentCard.agent_cli` value — T5's
+/// "执行引擎" detail line. First version: only `"claude-code"` has a real
+/// executor (`bw-engine::ClaudeCliExecutor`) behind it, so it's the only one
+/// worth a friendly name; anything else passes through as-is rather than
+/// inventing a translation for a CLI this app can't actually run yet (real
+/// routing lands in T6).
+pub fn agent_cli_label(agent_cli: &str) -> String {
+    match agent_cli {
+        "claude-code" => "Claude Code".to_string(),
+        other => other.to_string(),
+    }
 }
 
 pub fn agent_card(a: &AgentCard) -> AgentCardVm {
@@ -848,12 +1042,17 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
             .map(|c| c.to_string())
             .unwrap_or_default(),
         role: a.role.clone(),
+        stage_ref: a.stage_ref,
         maturity_label: maturity_label(a.maturity),
         skills: a.skills.iter().map(|t| t.name.clone()).collect(),
         model: a.model.clone(),
         runs: a.runs,
         win_rate: a.win_rate.clone(),
         instructions: a.instructions.clone(),
+        tools: a.tools.clone(),
+        agent_cli_label: agent_cli_label(&a.agent_cli),
+        source_label: a.source.label(),
+        adapted_from: a.adapted_from.clone(),
         project_id: a.project_id,
     }
 }
@@ -978,19 +1177,55 @@ pub struct CronRowVm {
     /// L1(plan/11): 到点做什么——`bw_core::model::CronMode` 一直在 domain
     /// struct 上,此前从没有一个 VM 字段读出来过。
     pub mode_label: &'static str,
+    /// T10(plan/12 §5): row-front icon distinguishing all four modes at a
+    /// glance (🔄/⚙/💬; `CreateIssue` deliberately keeps no icon — see
+    /// `CronMode::icon`'s doc).
+    pub mode_icon: &'static str,
     /// `CreateIssue` 任务的 Issue 作用阶段;`RunWorkflow` 任务恒 `None`。
     pub issue_stage_label: Option<&'static str>,
     /// `CreateIssue` 任务的 Issue 指派对象名(自由文本,同全仓 by-name 约定)。
     pub issue_assignee: Option<String>,
+    /// T10: `RunSkill`'s target line — the real skill's current name, or the
+    /// honest `"(技能已删除)"` when the referenced `SkillId` no longer
+    /// resolves against the live Skill Hub. `None` for every other mode.
+    pub skill_target_label: Option<String>,
+    /// T10: `true` only for a `RunSkill` task whose referenced skill no
+    /// longer exists — CronHub's honest "失联" marker. The row still
+    /// renders, still lets the task be paused; it just can't fire for real
+    /// until re-pointed at a live skill (or deleted).
+    pub skill_missing: bool,
+    /// T10: `RunPrompt`'s first-40-character preview (a real truncation of
+    /// `prompt_full`, never a placeholder). `None` for every other mode.
+    pub prompt_preview: Option<String>,
+    /// T10: `RunPrompt`'s full text, for the "点击展开全文" affordance.
+    /// `None` for every other mode.
+    pub prompt_full: Option<String>,
+}
+
+/// A real, honest first-40-character preview — counts chars (not bytes), so
+/// CJK text truncates at a sane visual length instead of mid-codepoint.
+/// Appends `…` only when something was actually cut.
+fn preview_chars(s: &str, max: usize) -> String {
+    let trimmed = s.trim();
+    if trimmed.chars().count() <= max {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(max).collect();
+    out.push('…');
+    out
 }
 
 /// `project_names` resolves `CronTask.project_id` to a display name — pass
 /// the real project rows' `(id, name)` pairs, not a hand-maintained lookup.
-/// `now` feeds `cron_next_run_label` — the real scheduler's own due-check,
-/// not the always-empty `CronTask.next_run` column (nothing ever wrote it).
+/// `skills` resolves a `RunSkill` task's real `SkillId` to its current name
+/// (or an honest "deleted" reading if it no longer exists) — pass the live
+/// Skill Hub rows, not a cached/stale list. `now` feeds `cron_next_run_label`
+/// — the real scheduler's own due-check, not the always-empty
+/// `CronTask.next_run` column (nothing ever wrote it).
 pub fn cron_row(
     c: &CronTask,
     project_names: &[(ProjectId, String)],
+    skills: &[SkillCard],
     now: OffsetDateTime,
 ) -> CronRowVm {
     let project_label = match c.project_id {
@@ -1000,6 +1235,17 @@ pub fn cron_row(
             .find(|(id, _)| *id == pid)
             .map(|(_, name)| name.clone())
             .unwrap_or_else(|| "(项目已删除)".to_string()),
+    };
+    let (skill_target_label, skill_missing) = match &c.mode {
+        CronMode::RunSkill { skill_id } => match skills.iter().find(|s| s.id == *skill_id) {
+            Some(s) => (Some(s.name.clone()), false),
+            None => (Some("(技能已删除)".to_string()), true),
+        },
+        _ => (None, false),
+    };
+    let (prompt_preview, prompt_full) = match &c.mode {
+        CronMode::RunPrompt { prompt } => (Some(preview_chars(prompt, 40)), Some(prompt.clone())),
+        _ => (None, None),
     };
     CronRowVm {
         id: c.id,
@@ -1013,8 +1259,13 @@ pub fn cron_row(
         last_run: c.last_run.clone(),
         next_run: bw_core::model::cron_next_run_label(&c.schedule, c.last_run_at, c.status, now),
         mode_label: c.mode.label(),
+        mode_icon: c.mode.icon(),
         issue_stage_label: c.issue_stage.map(|s| s.label()),
         issue_assignee: c.issue_assignee.clone(),
+        skill_target_label,
+        skill_missing,
+        prompt_preview,
+        prompt_full,
     }
 }
 
@@ -1204,10 +1455,19 @@ pub fn notify_feed(
     let mut items = Vec::new();
     for c in cron_tasks {
         if c.status == CronStatus::Failed {
+            // T10: `target` is a real `SkillId`/full prompt text for the two
+            // new modes — never dump that raw payload into a notify line;
+            // `mode.label()` says honestly what kind of task this is instead.
+            let target_display = match &c.mode {
+                CronMode::RunSkill { .. } | CronMode::RunPrompt { .. } => {
+                    c.mode.label().to_string()
+                }
+                _ => c.target.clone(),
+            };
             items.push(NotifyItemVm {
                 level: NotifyLevel::Alert,
                 title: format!("定时任务「{}」失败", c.name),
-                detail: format!("目标：{} · 上次运行 {}", c.target, c.last_run),
+                detail: format!("目标：{} · 上次运行 {}", target_display, c.last_run),
                 time_label: c.last_run.clone(),
             });
         }

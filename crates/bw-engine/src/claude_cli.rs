@@ -69,15 +69,50 @@ pub struct ClaudeCliExecutor {
     config: ClaudeCliConfig,
     workspace: PathBuf,
     allow_commands: bool,
+    /// T6 (plan/12 §3): the assigned Agent's declared `tools`
+    /// (`AgentCard.tools`, == AllowedTools) — translated to `--allowedTools`
+    /// by this adapter, never by the caller. Empty = no restriction declared,
+    /// byte-for-byte the pre-T6 behavior when `allow_commands` is also false.
+    tools: Vec<String>,
 }
 
 impl ClaudeCliExecutor {
-    pub fn new(config: ClaudeCliConfig, workspace: PathBuf, allow_commands: bool) -> Self {
+    pub fn new(
+        config: ClaudeCliConfig,
+        workspace: PathBuf,
+        allow_commands: bool,
+        tools: Vec<String>,
+    ) -> Self {
         Self {
             config,
             workspace,
             allow_commands,
+            tools,
         }
+    }
+}
+
+/// T6 (plan/12 §3): the exact `--allowedTools` value this executor would
+/// pass the `claude` CLI for a given `tools`/`allow_commands` pair — pure and
+/// deterministic (no IO), so a caller (`bw-app`'s run-params snapshot) can
+/// record the real invocation argument BEFORE the subprocess is even
+/// spawned. That's what makes the value verifiable without depending on the
+/// real `claude -p` call succeeding (gateway 抖动 is never a verification
+/// gate here).
+///
+/// `allow_commands` (a per-project opt-in, unrelated to any one Agent's
+/// declared `tools`) always implies `Bash` — merged in, never duplicated.
+/// `None` = no `--allowedTools` flag at all: the honest pre-T6 behavior when
+/// `tools` is empty and the project hasn't opted into command execution.
+pub fn allowed_tools_arg(tools: &[String], allow_commands: bool) -> Option<String> {
+    let mut merged: Vec<String> = tools.to_vec();
+    if allow_commands && !merged.iter().any(|t| t == "Bash") {
+        merged.push("Bash".to_string());
+    }
+    if merged.is_empty() {
+        None
+    } else {
+        Some(merged.join(","))
     }
 }
 
@@ -225,8 +260,8 @@ impl Executor for ClaudeCliExecutor {
                 // 子 claude 进程会泄漏并继续烧预算。
                 .kill_on_drop(true);
 
-            if self.allow_commands {
-                cmd.arg("--allowedTools").arg("Bash");
+            if let Some(arg) = allowed_tools_arg(&self.tools, self.allow_commands) {
+                cmd.arg("--allowedTools").arg(arg);
             }
 
             let output = tokio::time::timeout(
