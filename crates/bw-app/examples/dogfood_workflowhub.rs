@@ -46,7 +46,7 @@
 
 use bw_app::{App, Command};
 use bw_core::model::{
-    AgentRef, Cadence, HubSource, LoopConfig, PhaseMeta, ProjectCycle, StageKind, WorkflowKind,
+    AgentRef, Cadence, HubSource, LoopConfig, MaturityPeriod, PhaseMeta, StageKind, WorkflowKind,
     WorkflowSpec,
 };
 use bw_core::{CronTaskId, MetricId, ProjectId, SessionId, WorkflowId};
@@ -264,7 +264,7 @@ async fn main() {
             .await
             .expect("create project");
             app.dispatch(Command::SetCycle {
-                cycle: ProjectCycle::Explore,
+                cycle: MaturityPeriod::Explore,
             })
             .await
             .expect("set cycle");

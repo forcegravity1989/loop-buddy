@@ -11,7 +11,7 @@ use bw_app::{App, Command, Event};
 use bw_core::derive::{evaluate_metric, measure, parse_target};
 use bw_core::model::{
     stage_template_workflow, stage_workflow, AgentRef, Cadence, CronStatus, HubSource, LoopConfig,
-    PhaseMeta, ProjectCycle, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    MaturityPeriod, PhaseMeta, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{CronTaskId, MetricId, ProjectId, SessionId, Signal, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
@@ -102,7 +102,7 @@ async fn main() {
     .await
     .unwrap();
     app.dispatch(Command::SetCycle {
-        cycle: ProjectCycle::Explore,
+        cycle: MaturityPeriod::Explore,
     })
     .await
     .unwrap();
@@ -148,7 +148,7 @@ async fn main() {
     h.push(Hyp {
         id: "H2",
         title: "创建向导 → 项目真实进入 Running,5 段落库",
-        passed: proj1.phase == bw_core::model::ProjectPhase::Running && stages1.len() == 5,
+        passed: proj1.phase == bw_core::model::Readiness::Running && stages1.len() == 5,
         evidence: format!(
             "project.phase={:?} active_stage={:?} materialized_stages={}",
             proj1.phase,

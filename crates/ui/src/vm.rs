@@ -14,8 +14,8 @@ use bw_core::derive::parse_magnitude;
 use bw_core::model::{
     AgentCard, Artifact, Cadence, Connector, ConnectorStatus, CronMode, CronStatus, CronTask,
     FeedLevel, HubCard, HubKind, HubSource, Issue, IssueStatus, KnowledgeSource, Maturity,
-    PhaseMeta, ProjectCycle, ProjectPhase, RunChanges, RunStatus, RunTrigger, SessionStatus,
-    Signal, SkillCard, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
+    MaturityPeriod, PhaseMeta, Readiness, RunChanges, RunStatus, RunTrigger, SessionStatus, Signal,
+    SkillCard, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
@@ -58,14 +58,14 @@ pub fn project_card(
     name: &str,
     kind: &str,
     desc: &str,
-    phase: ProjectPhase,
-    cycle: ProjectCycle,
+    phase: Readiness,
+    cycle: MaturityPeriod,
     active_stage: StageKind,
     signal: Option<Signal>,
     stage_progresses: &[u8],
     open_issues: usize,
 ) -> ProjectCardVm {
-    let running = phase == ProjectPhase::Running;
+    let running = phase == Readiness::Running;
     let progress = if running {
         crate::overall_progress(stage_progresses)
     } else {

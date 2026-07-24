@@ -1945,7 +1945,7 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
 /// "结果呈现": pairs the run's real phase names (from `RunVm`, so it reflects
 /// whatever actually ran — the stage's own template, an imported hub
 /// workflow, or an ad-hoc dynamic one — not just the stage's default
-/// preview) with the real `Role::Agent` session messages, in order. A
+/// preview) with the real `Author::Agent` session messages, in order. A
 /// best-effort zip (agent messages are appended in completion order, one per
 /// phase, by `run_workflow_inner`) — honestly labeled as such, not a hard
 /// per-phase binding the store actually tracks.

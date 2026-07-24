@@ -13,7 +13,7 @@ use bw_app::{App, Command};
 use bw_core::analysis::{
     ab_compare, propose_optimizations, summarize_effectiveness, workflow_health,
 };
-use bw_core::model::{HubSource, LoopConfig, Maturity, ProjectCycle, RunStatus, RunTrigger};
+use bw_core::model::{HubSource, LoopConfig, Maturity, MaturityPeriod, RunStatus, RunTrigger};
 use bw_core::{ProjectId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{NewWorkflowRun, SqliteStore, Store};
@@ -33,7 +33,7 @@ async fn quick_project(app: &mut App, name: &str) -> ProjectId {
     .await
     .unwrap();
     app.dispatch(Command::SetCycle {
-        cycle: ProjectCycle::Explore,
+        cycle: MaturityPeriod::Explore,
     })
     .await
     .unwrap();

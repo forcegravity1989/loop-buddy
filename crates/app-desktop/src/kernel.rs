@@ -14,7 +14,8 @@
 
 use bw_app::{App, Command, Event, Panel, Scope, View};
 use bw_core::model::{
-    AgentRef, HubCard, ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, SkillRef, StageKind,
+    AgentRef, Author, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal, SkillRef,
+    StageKind,
 };
 use bw_core::{MetricId, SessionId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
@@ -94,7 +95,7 @@ pub struct CreateVm {
     pub kind: String,
     /// The free-text brief (stored as the project's `desc`).
     pub brief: String,
-    pub cycle: ProjectCycle,
+    pub cycle: MaturityPeriod,
     pub benchmark: String,
     /// 三个月后怎样算成 (stored in the `opportunity` column).
     pub win: String,
@@ -137,7 +138,7 @@ pub struct OpVm {
     pub name: String,
     pub kind: String,
     pub project_signal: Signal,
-    pub cycle: ProjectCycle,
+    pub cycle: MaturityPeriod,
     pub active_stage: StageKind,
     pub north_star: String,
     pub ns_def: String,
@@ -540,7 +541,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // materializes until confirm), mean of hand-set stage progress once running.
     let mut cards = Vec::with_capacity(state.projects.len() + 1);
     for p in &state.projects {
-        let stage_progresses: Vec<u8> = if p.phase == ProjectPhase::Running {
+        let stage_progresses: Vec<u8> = if p.phase == Readiness::Running {
             match store.list_stages(p.id).await {
                 Ok(stages) => stages.iter().map(|s| s.progress).collect(),
                 Err(_) => Vec::new(),
@@ -858,7 +859,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|m| MsgVm {
-                    agent: m.role == Role::Agent,
+                    agent: m.role == Author::Agent,
                     text: m.text,
                 })
                 .collect();

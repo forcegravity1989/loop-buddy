@@ -37,8 +37,8 @@
 //! 环境变量: BW_DB(默认 practice-aihot/bw-aihot.db)· BW_WORKSPACES(默认 practice-aihot/workspaces)
 
 use bw_core::model::{
-    Cadence, CronMode, HubSource, IssuePriority, IssueStatus, LoopConfig, Maturity, PhaseMeta,
-    ProjectCycle, SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
+    Cadence, CronMode, HubSource, IssuePriority, IssueStatus, LoopConfig, Maturity, MaturityPeriod,
+    PhaseMeta, SourceKind, StageKind, WorkflowKind, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{AgentId, CronTaskId, IssueId, MetricId, ProjectId, SessionId, SkillId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
@@ -147,7 +147,7 @@ async fn find_or_create_project(app: &mut App) -> ProjectId {
     .await
     .expect("create aihot project");
     app.dispatch(Command::SetCycle {
-        cycle: ProjectCycle::Explore,
+        cycle: MaturityPeriod::Explore,
     })
     .await
     .expect("set cycle");
