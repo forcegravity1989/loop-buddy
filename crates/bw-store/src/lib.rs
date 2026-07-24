@@ -689,6 +689,23 @@ pub trait Store: Send + Sync {
     /// Bump a hub spec's `uses` counter by 1 — called when it's run via
     /// `RunHubWorkflow`.
     async fn record_workflow_use(&self, id: WorkflowId) -> Result<()>;
+    /// T16.5 (GH#54): raw `phases`/`phase_prompts` column overwrite for one
+    /// `workflow_spec` row — deliberately bypasses `update_workflow_spec`'s
+    /// "optimize" path (no version bump, no `workflow_version` snapshot
+    /// written, `kind_json`/`name`/`prompt`/`goal`/`agents_json`/
+    /// `skills_json` untouched). This is the one-shot legacy-migration's own
+    /// narrow tool: refresh a built-in stage template's phase metadata from
+    /// the current playbook without disturbing its `uses`/`version`/other
+    /// track-record columns. Business judgement (which row, which values)
+    /// lives in `bw-app`'s `legacy_migration` module, never here — this is a
+    /// dumb column write, same "store 无业务判断" rule every other `Store`
+    /// method already follows.
+    async fn refresh_workflow_template_phases(
+        &self,
+        id: WorkflowId,
+        phases: Vec<PhaseMeta>,
+        phase_prompts: Vec<String>,
+    ) -> Result<()>;
 
     // ── workflow_run: append-only execution telemetry (iter 1) ──────────────
     /// Insert a fresh run row at `status = Running`, returning the minted id

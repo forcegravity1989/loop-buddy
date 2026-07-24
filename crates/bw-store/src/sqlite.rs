@@ -1378,6 +1378,25 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn refresh_workflow_template_phases(
+        &self,
+        id: WorkflowId,
+        phases: Vec<PhaseMeta>,
+        phase_prompts: Vec<String>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE workflow_spec SET phases=?, phase_prompts=?, updated_at=?, rev=rev+1
+             WHERE id=?",
+        )
+        .bind(serde_json::to_string(&phases)?)
+        .bind(serde_json::to_string(&phase_prompts)?)
+        .bind(now_unix())
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn record_workflow_run_start(&self, run: NewWorkflowRun<'_>) -> Result<WorkflowRunId> {
         let id = WorkflowRunId::from_uuid(Uuid::new_v4());
         sqlx::query(

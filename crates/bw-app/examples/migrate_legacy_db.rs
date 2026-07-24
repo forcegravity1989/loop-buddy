@@ -4,6 +4,15 @@
 //! same command-layer path `app-desktop`'s `kernel.rs` drives at real boot,
 //! no mocked assertions.
 //!
+//! T16.5 (2026-07-24, GH#54) folded a second pass into this same command:
+//! the five built-in stage-template `workflow_spec` rows' `phases`/
+//! `phase_prompts` get refreshed from the current playbook if (and only if)
+//! they're still the pure pre-T8 legacy shape — see
+//! `bw_app::legacy_migration::is_pure_legacy_phases`'s doc comment. This
+//! example's printed `refreshed_templates` list and the
+//! `app_meta[template_phase_refresh_v1]` readback are that pass's own
+//! independent proof, alongside the pre-existing shell-migration tally.
+//!
 //! **This is meant to run against a throwaway COPY of a real daily DB**, per
 //! this ticket's own acceptance criterion: the caller is responsible for
 //! `cp`-ing `~/Library/Application Support/BuildersWorkbench/workbench.db`
@@ -92,6 +101,10 @@ async fn main() {
         .get_app_meta("legacy_shells_migration_v1")
         .await
         .unwrap();
+    let phase_refresh_flag = store
+        .get_app_meta("template_phase_refresh_v1")
+        .await
+        .unwrap();
 
     println!("----------------------------------------------------------");
     match &report {
@@ -116,6 +129,11 @@ async fn main() {
                     println!("    - {s}");
                 }
             }
+            println!(
+                "  refreshed_templates ({}): {:?}",
+                r.refreshed_templates.len(),
+                r.refreshed_templates
+            );
         }
         None => println!("migration did NOT run this dispatch (already-done / no-op path)"),
     }
@@ -132,6 +150,7 @@ async fn main() {
     );
     println!("skill_file rows after: {skill_files_after}");
     println!("app_meta[legacy_shells_migration_v1] = {done_flag:?}");
+    println!("app_meta[template_phase_refresh_v1] = {phase_refresh_flag:?}");
     if let Some(r) = &report {
         if let Some(bak) = &r.backup_path {
             println!(
