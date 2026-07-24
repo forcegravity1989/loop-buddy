@@ -88,6 +88,7 @@ async fn main() {
         desc: "完整形态:五角色环 × 真实 agent 队友 × 度量诚实".into(),
 
         workspace: None,
+        github: None,
     })
     .await
     .unwrap();
@@ -98,6 +99,7 @@ async fn main() {
     .unwrap();
     app.dispatch(Command::CompleteCreation {
         cadence: Cadence::Weekly,
+        run_first: false,
     })
     .await
     .unwrap();

@@ -1,0 +1,48 @@
+# .bw/metrics.toml — 指标正本(plan/13 D5+D6 · C6 票落地)
+#
+# 这份文件是「这个项目的指标是什么」的唯一正本;merge 进 main 后,BW 的
+# SyncMetricsFile 命令(dispatch 一次,或后续 Cron/按钮触发)把它同步进
+# SQLite 作只读缓存——库里的值随时能由这份文件重新推导,文件本身才是权威。
+# 改指标定义 = 改这份文件 = 走 PR,和改代码一个审核门槛(plan/13 D5)。
+#
+# 完整格式说明见 docs/metrics-toml-format.md;这份是可以直接复制进
+# `<项目工作区>/.bw/metrics.toml` 的完整可用样例。
+
+schema_version = 1
+
+# ── 北极星(单数,一个项目一个) ──────────────────────────────────
+[north_star]
+name = "周活跃创作者数"
+def  = "过去 7 天内至少发布过一篇正式内容(非草稿)的注册用户数"
+# collect 是这条指标的采集方案——回答"这个数字打哪来":
+#   kind  = "github" | "connector" | "bw" | "manual"(语义见下方字段说明)
+#   query = 按 kind 语义写的查询串;manual 允许留空
+collect = { kind = "connector", query = "content-analytics" }
+
+# ── 滞后指标(结果性,滞后于动作才看得出好坏) ─────────────────────
+[[lagging]]
+name   = "月流失率"
+def    = "上月活跃、本月零发布的用户占上月活跃用户的比例"
+target = "≤8%"
+collect = { kind = "connector", query = "content-analytics" }
+
+[[lagging]]
+name   = "首月留存率"
+def    = "注册后 30 天内仍至少发布一次的用户占比"
+target = "≥35%"
+# 暂时没有埋点/连接器——如实标 manual,query 留空。BW 不会因为"暂时采不到"
+# 就把这条指标从正本里拿掉或退化成别的东西;"绑数据" Skill 以后再点亮它。
+collect = { kind = "manual", query = "" }
+
+# ── 引领指标(过程性,当下可控、驱动滞后指标的先行量) ───────────────
+[[leading]]
+name   = "每周合并 PR 数"
+def    = "过去 7 天内 merge 进 main 的 PR 数——研发产出的先行信号"
+target = "≥5"
+collect = { kind = "github", query = "repo:{owner}/{repo} is:pr is:merged merged:>=@{7d}" }
+
+[[leading]]
+name   = "队友结算 Issue 数"
+def    = "过去 7 天内被人 merge 关闭(settle)的 Issue 数——交付节奏的先行信号"
+target = "≥3"
+collect = { kind = "bw", query = "issue.settled_at within 7d" }

@@ -51,6 +51,11 @@ pub enum SourceKind {
     GitPr,
     Telemetry,
     Connector,
+    /// C7 · 采集器: a value the standard GitHub collector pulled by running a
+    /// real `gh` count query (issues/PRs) against the project's remote. A
+    /// non-manual source, so it never wears the 手填 badge — the number is
+    /// machine-collected and independently re-derivable from `gh`.
+    Github,
     /// Hand-entered. Carries a `手填 · 未接入度量源` badge in the UI until a real
     /// connector is bound (Tier D), at which point the badge auto-drops.
     Manual,
@@ -1405,16 +1410,25 @@ pub enum CronMode {
         prompt: String,
     },
     CreateIssue,
+    /// C7 · 采集器 (plan/13 D7): pull real data (GitHub queries) into the
+    /// project's metrics as append-only observations. No-hijack like
+    /// `CreateIssue`: collecting is *observation*, never *work* — it never
+    /// runs a workflow and never settles anything, so it can auto-fire
+    /// without breaching 「Done 永不自动」.
+    CollectMetrics,
 }
 
 impl CronMode {
-    /// L1(plan/11); extended T10. Cron 详情卡要如实标出「到点做什么」。
+    /// L1(plan/11); extended T10(RunSkill/RunPrompt)+ C7(CollectMetrics)。
+    /// Cron 详情卡要如实标出「到点做什么」——运行工作流/技能/Prompt、只建
+    /// 一件活(autopilot,no-hijack)、还是采集指标(pull → 观测)。
     pub fn label(&self) -> &'static str {
         match self {
             CronMode::RunWorkflow => "运行工作流",
             CronMode::RunSkill { .. } => "运行技能",
             CronMode::RunPrompt { .. } => "运行 Prompt",
             CronMode::CreateIssue => "建活(autopilot · 不自动跑)",
+            CronMode::CollectMetrics => "采集指标(pull GitHub → 观测)",
         }
     }
 
@@ -1429,6 +1443,8 @@ impl CronMode {
             CronMode::RunSkill { .. } => "⚙",
             CronMode::RunPrompt { .. } => "💬",
             CronMode::CreateIssue => "",
+            // C7(合流): 采集是观测不是活,用与「立即同步」同族的图标。
+            CronMode::CollectMetrics => "📈",
         }
     }
 }
@@ -1583,6 +1599,11 @@ impl ConnectorStatus {
 /// unsynced). Matching is by the `Connector.kind` string.
 pub const CONNECTOR_KIND_GIT_REPO: &str = "git-repo";
 pub const CONNECTOR_KIND_CLAUDE_CLI: &str = "claude-cli";
+/// GitHub 为主体的创建流(2026-07-22)：记录一个项目挂的 GitHub 远端
+/// ("owner/repo" 进 `config`)。plan/13 D12 起接真探针:`SyncConnector`
+/// 走 `gh repo view` 真实探活;指标级统计采集由标配 Cron(collect_metrics)
+/// 负责,两者各管一段。
+pub const CONNECTOR_KIND_GITHUB_REPO: &str = "github-repo";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Connector {
@@ -1882,6 +1903,25 @@ pub struct Issue {
     pub project_id: ProjectId,
     pub stage: StageKind,
     pub number: u32,
+    /// C4 · issue 身份映射: the GitHub issue number `gh issue create` minted
+    /// for this Issue, when the owning project has a `github_remote`. `0` =
+    /// unmapped — either the project has no GitHub repo (存量无仓项目保持
+    /// 本地身份,如实留白), or the real `gh issue create` call failed
+    /// (创建不破: the BW-side Issue still exists, only the mapping is
+    /// missing). Never a fabricated number.
+    #[serde(default)]
+    pub github_number: u32,
+    /// C5 · PR 验收环: the pull-request number an executor run opened for this
+    /// Issue (`open_pr` pushed `bw/issue-<github_number>` and ran
+    /// `gh pr create`). `0` = no PR — either the project isn't repo-attached
+    /// / the Issue is unmapped, the run hasn't happened, or the PR submission
+    /// failed (提 PR 失败不炸 run: the run's own accounting stands, the Issue
+    /// stays retryable, only the mapping is missing). Never a fabricated
+    /// number. When non-zero the Issue's `InReview` state is *derived from an
+    /// open PR* (plan/13 D3) and human验收 is a `MergeIssuePr`, not a bare
+    /// `TransitionIssue`.
+    #[serde(default)]
+    pub pr_number: u32,
     pub title: String,
     pub desc: String,
     pub status: IssueStatus,
@@ -1897,6 +1937,16 @@ pub struct Issue {
     /// unconditionally clearing it on every other move is safe and correct).
     #[serde(default)]
     pub blocked_reason: Option<String>,
+    /// C8 · 标配 Issue 三件套(plan/13 D8): stable slug of the standard
+    /// SkillCard this Issue is wired to (by C9's by-name convention, e.g.
+    /// `"north-star-discovery"`, `"metrics-binding"`, `"competitive-analysis"`).
+    /// `""` = no association — every hand-created / autopilot Issue. Set once
+    /// at creation, never rewritten. `RunIssue` resolves it against the Skill
+    /// Hub *by name* and injects the real content when found; a slug that
+    /// doesn't resolve (there is none today — all three standard cards are
+    /// seeded by C9+C10) is an honest skip, never an error.
+    #[serde(default)]
+    pub standard_skill: String,
     pub created_at: i64,
     pub updated_at: i64,
 }

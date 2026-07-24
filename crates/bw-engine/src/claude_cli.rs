@@ -263,6 +263,13 @@ impl Executor for ClaudeCliExecutor {
             if let Some(arg) = allowed_tools_arg(&self.tools, self.allow_commands) {
                 cmd.arg("--allowedTools").arg(arg);
             }
+            // plan/13 D11: merge 门守在 BW 层——执行器权限配置里显式禁
+            // `gh pr merge`(验收=人 merge,队友只提不合)。这是纵深防御的
+            // 第二半:第一半是代码隔离(`github::merge_pr` 唯一调用点在人手
+            // 命令里);deny 规则在权限模式为 bypass 时是否被 CLI 强制取决
+            // 于 CLI 版本行为,所以两半都要在,不能只靠这一条。
+            cmd.arg("--disallowedTools")
+                .arg("Bash(gh pr merge),Bash(gh pr merge:*)");
 
             let output = tokio::time::timeout(
                 std::time::Duration::from_secs(ATTEMPT_TIMEOUT_SECS),
