@@ -345,11 +345,18 @@ pub async fn open_pr(
         .await
         .map_err(spawn_err)?;
     if !commit.status.success() {
+        // git prints "nothing to commit, working tree clean" on STDOUT, not
+        // stderr — an executor that committed its own work leaves a clean
+        // tree, and that idempotent case must not read as a failure
+        // (F5, 2026-07-24 首次全真闭环践行实测:干净树被误判成
+        // 「提交活分支改动失败:<空>」,PR 环整段被卡死).
         let stderr = String::from_utf8_lossy(&commit.stderr);
-        if !(stderr.contains("nothing to commit") || stderr.contains("no changes")) {
+        let stdout = String::from_utf8_lossy(&commit.stdout);
+        let combined = format!("{stdout}\n{stderr}");
+        if !(combined.contains("nothing to commit") || combined.contains("no changes")) {
             return Err(GithubError::Command(format!(
                 "提交活分支改动失败:{}",
-                stderr.trim()
+                combined.trim()
             )));
         }
     }
