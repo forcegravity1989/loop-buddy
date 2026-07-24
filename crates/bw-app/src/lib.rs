@@ -564,6 +564,20 @@ pub enum Command {
     /// shell-migration flag above — see that constant's own doc comment for
     /// why a single shared flag would be wrong (a DB that already ran the
     /// shell pass must still be able to pick up this one independently).
+    ///
+    /// T14.5 (2026-07-24, GH#59) folds in a third, independent step: T14
+    /// only ever looked at `skill`/`agent` shells, but a real daily DB's
+    /// `workflow_spec` table carries the same kind of stale zero-trace
+    /// catalog-import row — a directory-imported (`HubSource::Official`/
+    /// `Adopted`) `Static` spec with zero `workflow_run` rows, zero `uses`,
+    /// and no `run_workflow`-mode `cron_task` referencing it by name — and
+    /// this pass deletes those rows outright (not just overwrites a column,
+    /// unlike Pass B). A row whose name matches one of the five built-in
+    /// stage templates is never eligible (defense-in-depth; its `source` is
+    /// already `SelfBuilt`, so Gate 1 alone already excludes it) and neither
+    /// is any row carrying even one real trace. Guarded by its OWN app_meta
+    /// flag (`legacy_migration::WORKFLOW_SHELL_PURGE_DONE_KEY`) for the same
+    /// independence reason as Pass B's own flag.
     MigrateLegacyShellsIfNeeded {
         db_path: String,
     },
@@ -4285,14 +4299,15 @@ impl App {
             }
 
             Command::MigrateLegacyShellsIfNeeded { db_path } => {
-                // 1. Idempotency gates — TWO independent flags (T16.5,
-                // GH#54): the T14 shell-migration flag and this ticket's own
-                // template-phase-refresh flag, checked separately so a DB
-                // that already finished one can still pick up the other (see
-                // `TEMPLATE_PHASE_REFRESH_DONE_KEY`'s own doc comment for
+                // 1. Idempotency gates — THREE independent flags (T14.5,
+                // GH#59, adds the third): the T14 shell-migration flag, T16.5's
+                // template-phase-refresh flag, and this ticket's own
+                // workflow-shell-purge flag, checked separately so a DB that
+                // already finished some subset can still pick up the rest
+                // (see `TEMPLATE_PHASE_REFRESH_DONE_KEY`'s own doc comment for
                 // why one shared flag would be wrong). A real Nth boot after
-                // both are done is a true zero-op: two cheap key reads,
-                // nothing else touched.
+                // all three are done is a true zero-op: three cheap key
+                // reads, nothing else touched.
                 let shells_done = self
                     .store
                     .get_app_meta(legacy_migration::LEGACY_MIGRATION_DONE_KEY)
@@ -4305,7 +4320,13 @@ impl App {
                     .await?
                     .as_deref()
                     == Some("done");
-                if shells_done && phase_refresh_done {
+                let shell_purge_done = self
+                    .store
+                    .get_app_meta(legacy_migration::WORKFLOW_SHELL_PURGE_DONE_KEY)
+                    .await?
+                    .as_deref()
+                    == Some("done");
+                if shells_done && phase_refresh_done && shell_purge_done {
                     return Ok(());
                 }
 
@@ -4318,6 +4339,7 @@ impl App {
                 let mut imported_agents = 0u32;
                 let mut skipped_sources: Vec<String> = Vec::new();
                 let mut refreshed_templates: Vec<String> = Vec::new();
+                let mut purged_workflows: Vec<String> = Vec::new();
 
                 // Shared backup helper: at most one real `.bak-<stamp>` file
                 // per dispatch, made lazily right before the first real
@@ -4584,10 +4606,119 @@ impl App {
                     // seeding) can still pick this up.
                 }
 
+                // ── Pass C (T14.5, GH#59): workflow_spec directory-import
+                // shell purge. ──
+                if !shell_purge_done {
+                    let specs = self.store.list_workflow_specs().await?;
+
+                    // C2. Exclusion set #1: every workflow name referenced by
+                    // a `run_workflow`-mode cron task's `target` — same
+                    // by-name matching convention `tick_scheduler`/cron-
+                    // effectiveness already use (`cron_tasks.iter().find(|c|
+                    // c.target == spec.name)`), just collected as a set here
+                    // since Pass C checks every spec against it.
+                    let cron_tasks = self.store.list_cron_tasks().await?;
+                    let run_workflow_targets: std::collections::HashSet<String> = cron_tasks
+                        .iter()
+                        .filter(|c| c.mode == CronMode::RunWorkflow)
+                        .map(|c| c.target.clone())
+                        .collect();
+
+                    // C3. Exclusion set #2: every `workflow_spec.id` with at
+                    // least one real `workflow_run` row — one query for the
+                    // whole DB's run history (this repo's real run history is
+                    // small; a per-candidate `list_workflow_runs` call would
+                    // be N round-trips for the same answer `u32::MAX` gets in
+                    // one).
+                    let run_workflow_ids: std::collections::HashSet<WorkflowId> = self
+                        .store
+                        .list_all_workflow_runs(u32::MAX)
+                        .await?
+                        .iter()
+                        .map(|r| r.workflow_id)
+                        .collect();
+
+                    // C4. Trigger + eligibility in one pass, same
+                    // saw_candidate/to_* shape Pass B already uses: a row is
+                    // even a *candidate* only if Gate 1 (directory-import
+                    // source) holds; it's actually purged only if every
+                    // remaining gate holds too. The *presence* of at least
+                    // one Gate-1 candidate (not "was anything actually
+                    // purged") is what marks this pass as "checked" below.
+                    let mut saw_candidate = false;
+                    let mut to_purge: Vec<(WorkflowId, String)> = Vec::new();
+                    for spec in &specs {
+                        // Gate 1: only a directory-imported (ECC/Adopted)
+                        // Static spec is even a candidate — SelfBuilt (the
+                        // five built-in templates, any hand-authored
+                        // workflow) and WithinSession are never touched no
+                        // matter how zero-trace they look.
+                        if !legacy_migration::is_directory_import_source(&spec.kind) {
+                            continue;
+                        }
+                        saw_candidate = true;
+                        // Gate 2 (defense-in-depth): never purge a row whose
+                        // name exactly matches one of the five built-in stage
+                        // templates. In practice unreachable — a template's
+                        // `source` is always `SelfBuilt`, already excluded by
+                        // Gate 1 — but checked independently anyway, the same
+                        // belt-and-suspenders style Pass A's `role_agent_names`
+                        // check already applies to the five stage-role agents.
+                        if legacy_migration::matching_template_kind(&spec.name).is_some() {
+                            continue;
+                        }
+                        // Gate 3: zero real `workflow_run` rows.
+                        if run_workflow_ids.contains(&spec.id) {
+                            continue;
+                        }
+                        // Gate 4: zero `uses`.
+                        if legacy_migration::workflow_uses(&spec.kind) > 0 {
+                            continue;
+                        }
+                        // Gate 5: not referenced by name from any
+                        // `run_workflow`-mode cron task.
+                        if run_workflow_targets.contains(&spec.name) {
+                            continue;
+                        }
+                        to_purge.push((spec.id, spec.name.clone()));
+                    }
+
+                    if !to_purge.is_empty() {
+                        ensure_backup!();
+                        // C5. Delete pass. Deliberately does NOT touch
+                        // `workflow_run`/`workflow_version` rows for the
+                        // purged ids — both tables already document their own
+                        // no-FK "a run/version outlives its spec being
+                        // deleted" design (`schema.sql`: "the history is the
+                        // point"), and every purge candidate here was already
+                        // gated on zero real `workflow_run` rows (Gate 3)
+                        // above, so no orphan is actually created on the real
+                        // DB this ticket verified against (nor could one be,
+                        // by construction of the gate).
+                        for (id, name) in to_purge {
+                            self.store.delete_workflow_spec(id).await?;
+                            purged_workflows.push(name);
+                        }
+                        self.refresh_workflow_specs().await?;
+                        self.emit(Event::WorkflowSpecsChanged);
+                    }
+                    if saw_candidate {
+                        // C6. Stamp done — at least one directory-import spec
+                        // exists (this DB has real catalog-import content)
+                        // and every one has now been checked, purged or kept
+                        // for cause; a DB with none (never imported ECC/
+                        // Adopted content) leaves the flag unset so a future
+                        // boot (after a real import) can still pick this up.
+                        self.store
+                            .set_app_meta(legacy_migration::WORKFLOW_SHELL_PURGE_DONE_KEY, "done")
+                            .await?;
+                    }
+                }
+
                 // Only emit a report when this dispatch actually did real,
-                // visible work — a DB where neither pass found anything to
-                // touch stays silent, same "no report on a no-op" contract
-                // T14 established.
+                // visible work — a DB where none of the three passes found
+                // anything to touch stays silent, same "no report on a
+                // no-op" contract T14 established.
                 if backup_path.is_some() {
                     let report = LegacyMigrationReport {
                         backup_path,
@@ -4599,6 +4730,7 @@ impl App {
                         imported_agents,
                         skipped_sources,
                         refreshed_templates,
+                        purged_workflows,
                     };
                     self.emit(Event::LegacyShellsMigrated { report });
                 }

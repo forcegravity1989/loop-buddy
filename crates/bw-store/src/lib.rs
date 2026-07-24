@@ -706,6 +706,18 @@ pub trait Store: Send + Sync {
         phases: Vec<PhaseMeta>,
         phase_prompts: Vec<String>,
     ) -> Result<()>;
+    /// T14.5 (2026-07-24, GH#59): delete one `workflow_spec` row outright.
+    /// Mechanics only — same "store 无业务判断" split as `delete_skill`/
+    /// `delete_agent`: bw-app decides which rows are safe (directory-import
+    /// source, zero `workflow_run` rows, zero `uses`, unreferenced by any
+    /// `run_workflow`-mode cron target, not a built-in stage template), this
+    /// is purely the mechanical single-table delete once that decision is
+    /// made. Deliberately does NOT cascade into `workflow_run`/
+    /// `workflow_version` — both already document their own no-FK "outlives
+    /// its spec being deleted" design (see `schema.sql`: "the history is the
+    /// point"), the same real precedent `delete_agent`'s own doc comment
+    /// notes for `issue.assignee`.
+    async fn delete_workflow_spec(&self, id: WorkflowId) -> Result<()>;
 
     // ── workflow_run: append-only execution telemetry (iter 1) ──────────────
     /// Insert a fresh run row at `status = Running`, returning the minted id
