@@ -24,3 +24,9 @@ uuid = { workspace = true, features = ["v4"] }
 time = { workspace = true, features = ["std"] }
 async-trait = { workspace = true }
 serde = { workspace = true }
+# C15(plan/14): example-only — the headless verifier for `ui::explain_failure`
+# reuses the real pure function rather than re-implementing its match rules.
+# dev-dependency only (examples/tests), so `bw-app`'s normal build/guard
+# stays untouched — see `scripts/guard-kernel-ui-free.sh` (checks `--edges
+# normal`, i.e. `[dependencies]`, not this).
+ui = { workspace = true }

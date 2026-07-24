@@ -1385,8 +1385,21 @@ pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
 
 /// The drafting run for the creation flow: one workflow, phases matching the
 /// "正在按方法论起草体系" loading copy. Runs through the same `Engine` as any
-/// other workflow — `MockExecutor` produces a clearly-labeled mock transcript;
+/// other workflow, but dispatched via `Command::RunDraftWorkflow` (plan/14
+/// C13, D8 回锁) — that command *always* forces the shared `MockExecutor`
+/// regardless of whether the active project has a real configured
+/// workspace, so this never routes to a real `claude -p` call; the true
+/// system-drafting agent work belongs to the standard-Issue trio (plan/13
+/// D8) instead. `MockExecutor` produces a clearly-labeled mock transcript;
 /// nothing here is injected into the editable draft fields as fact.
+///
+/// Phases (2026-07-24, plan/14 C13): the maturity period (`MaturityPeriod`)
+/// is a chip the user picks by hand on the Questions 卡 *before* this run
+/// even starts — it is never a phase the machine "judges", so there is no
+/// "周期判定" phase here. The three phases below are an honest description
+/// of what the Review 卡 that follows actually shows: a north-star
+/// candidate, a leading/lagging metric framework, and the Prototype stage
+/// lighting up as active.
 #[cfg(feature = "idgen")]
 pub fn drafting_workflow() -> WorkflowSpec {
     WorkflowSpec {
@@ -1396,11 +1409,10 @@ pub fn drafting_workflow() -> WorkflowSpec {
             origin: "创建流程".into(),
             stage: StageKind::Prototype.label().into(),
         },
-        prompt: "周期判定 → 北极星起草 → 指标框架 → 阶段激活".into(),
+        prompt: "北极星起草 → 指标框架 → 阶段激活".into(),
         goal: "产出可编辑的北极星候选 + 指标框架草案".into(),
         stage_ref: Some(StageKind::Prototype.index()),
         phases: vec![
-            PhaseMeta::neutral("周期判定"),
             PhaseMeta::neutral("北极星起草"),
             PhaseMeta::neutral("指标框架"),
             PhaseMeta::neutral("阶段激活"),

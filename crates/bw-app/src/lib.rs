@@ -10,6 +10,11 @@
 //! [`ClaudeCliExecutor`] per call for any project that HAS configured a
 //! workspace — `workspace_path`/`allow_commands` are per-project runtime data
 //! read from the store, not something fixed at [`App::new`] time.
+//! [`Command::RunDraftWorkflow`] is the one deliberate exception: the
+//! creation flow's 体系起草 run, hard-locked to the shared Mock `Engine`
+//! forever, independent of the project's `workspace_path` (plan/14 C13, D8
+//! 回锁 — real system-drafting work belongs to the standard-Issue trio, run
+//! through the ordinary `RunIssue`/`run_workflow_inner` route instead).
 
 #![forbid(unsafe_code)]
 
@@ -100,6 +105,11 @@ pub enum Command {
     /// rest of the flow (drafting run, resume-if-interrupted) has somewhere
     /// real to attach to. `desc` carries the free-text brief.
     CreateProject {
+        /// C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 今天恒 `"github"`
+        /// (唯一可选项,GitLab/Gitcode 灰置「未接」),从 `RepoCard` 顶部的平台
+        /// chip 传入,不在这里硬编码。留好字段语义:第二个平台真接时,这里
+        /// 已经是"选出来的"而不需要改 Command 形状。落进 `project.provider`。
+        provider: String,
         id: ProjectId,
         name: String,
         kind: String,
@@ -282,6 +292,29 @@ pub enum Command {
         title: String,
     },
     RunWorkflow {
+        session: SessionId,
+        spec: WorkflowSpec,
+    },
+    /// The creation flow's 体系起草 run (plan/14 C13, D8 回锁). Looks
+    /// identical to `RunWorkflow` from the UI's point of view — same
+    /// `Engine`/progress-event stream, same session-message trail — but
+    /// `run_workflow_inner` is told `force_mock = true`: the shared
+    /// `MockExecutor` runs it regardless of whether the active project
+    /// already has a real configured `workspace_path`.
+    ///
+    /// Without this, a project born through the GitHub-主体 creation flow
+    /// (P1 建项目即建仓, plan/13) already has a real workspace by the time
+    /// the Questions 卡 submits, so the ordinary `agent_cli == "claude-code"
+    /// && workspace_path non-empty` rule in `run_workflow_inner` would route
+    /// the drafting run to a *real* `claude -p` call — one real invocation
+    /// per phase, through the gateway, up to the $0.5/30min budget cap. That
+    /// silently violated plan/13 D8's "创建流不跑真 agent" ruling (root cause
+    /// plan/14 §「技术成因」). Real system-drafting work belongs to the
+    /// standard-Issue trio (竞品分析→找指标→绑数据, D8) instead, dispatched
+    /// through the ordinary `RunIssue`/`run_workflow_inner` route — this
+    /// command is the creation flow's *only* run path and stays mock-locked
+    /// on purpose, forever, independent of project workspace state.
+    RunDraftWorkflow {
         session: SessionId,
         spec: WorkflowSpec,
     },
@@ -761,6 +794,20 @@ pub enum Event {
         ok: bool,
         detail: String,
     },
+    /// plan/14 C14 · a creation-flow background action (repo create/clone,
+    /// repo-list fetch, standard-Issue mint, landing push) really started or
+    /// finished — the "is this real or stuck" visibility the creation flow's
+    /// slow `gh`-backed calls lacked (体验规范条 2:后台动作永远有状态回显).
+    /// Emitted as a Started → Ok/Fail pair around each real network call,
+    /// `name` stable across the pair so a subscriber can correlate them.
+    /// Purely additive visibility, never a gate — 乐观推进哲学不变
+    /// (CLAUDE.md): the card the user sees has already advanced before this
+    /// fires, same as the pre-existing `ConnectorSynced` toasts these sit
+    /// alongside (kept unchanged — this doesn't replace them).
+    ActionProgress {
+        name: String,
+        state: ActionState,
+    },
     KnowledgeSourcesChanged,
     IssuesChanged,
     ActivityChanged,
@@ -789,6 +836,21 @@ pub enum Event {
     LegacyShellsMigrated {
         report: LegacyMigrationReport,
     },
+}
+
+/// Three-state visibility for one `Event::ActionProgress` — see that
+/// variant's doc comment. `bw-app`-local (not `bw-core`): this is UI-facing
+/// transient signal, not domain state, so it never touches the wasm-clean
+/// kernel crates.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ActionState {
+    /// The real call just started.
+    Started,
+    /// The real call really succeeded — a short honest summary, never
+    /// invented (e.g. the repo slug `gh` actually minted).
+    Ok(String),
+    /// The real call really failed — the real error text.
+    Fail(String),
 }
 
 /// The outcome of one self-driving optimization cycle (iter 18) — the
@@ -1056,13 +1118,23 @@ impl App {
         Ok(())
     }
 
-    /// Shared by `Command::RunWorkflow`, `Command::RunHubWorkflow`, and
-    /// `tick_scheduler`'s real auto-fire — the first two differ only in how
-    /// `spec` was obtained (a hub lookup + a `uses` bump) and look identical
-    /// once they have one. `project` is explicit (not read off
-    /// `self.state.active_project`) so a background scheduler fire can run a
-    /// workflow against its *bound* project without touching — let alone
-    /// hijacking — whatever project the user currently has open.
+    /// Shared by `Command::RunWorkflow`, `Command::RunHubWorkflow`,
+    /// `Command::RunDraftWorkflow`, and `tick_scheduler`'s real auto-fire —
+    /// they differ only in how `spec` was obtained (a hub lookup + a `uses`
+    /// bump, or a hard mock lock) and look identical once they have one.
+    /// `project` is explicit (not read off `self.state.active_project`) so a
+    /// background scheduler fire can run a workflow against its *bound*
+    /// project without touching — let alone hijacking — whatever project the
+    /// user currently has open.
+    ///
+    /// `force_mock` (plan/14 C13, D8 回锁): when `true`, the engine-selection
+    /// step below is skipped entirely and this run executes on the shared
+    /// `MockExecutor` no matter what `agent_cli`/`workspace_path` would
+    /// otherwise select — the creation flow's *only* caller of this bool.
+    /// Every other caller passes `false`, preserving the pre-existing
+    /// "workspace configured → real executor" routing byte-for-byte (most
+    /// notably `RunIssue`, which must keep routing to the real executor).
+    #[allow(clippy::too_many_arguments)]
     async fn run_workflow_inner(
         &mut self,
         project: ProjectId,
@@ -1071,6 +1143,7 @@ impl App {
         trigger: RunTrigger,
         cron_task_id: Option<CronTaskId>,
         issue_id: Option<IssueId>,
+        force_mock: bool,
     ) -> Result<RunOutcome, AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
@@ -1126,6 +1199,7 @@ impl App {
             &agent_cli,
             &agent_tools,
             allowed_tools.as_deref(),
+            force_mock,
         );
 
         // The review gate: the FIRST Evaluator phase (T8's real `role`, not a
@@ -1155,36 +1229,47 @@ impl App {
         // Held immutably across the loop — every in-loop `self` touch is a shared
         // borrow (`self.store` / `self.emit`), never `&mut self`, so this holds.
         //
-        // T6 (plan/12 §3): the `agent_cli` match happens FIRST, before the
-        // mock/real branch below — an unsupported CLI ("codex"/"cursor"/…)
-        // routes to the honest `UnsupportedCliExecutor` regardless of whether
-        // this project even has a real workspace configured. Only
-        // `"claude-code"` (the default for an unassigned issue or any other
-        // caller) reaches the existing mock-vs-real split, unchanged.
+        // plan/14 C13 (D8 回锁): `force_mock` short-circuits everything below —
+        // checked BEFORE the `agent_cli` match, so the creation flow's drafting
+        // run never reaches real-executor selection no matter what workspace
+        // the active project has. Every other caller (`RunIssue` included)
+        // passes `force_mock = false` and falls through unchanged.
+        //
+        // T6 (plan/12 §3): the `agent_cli` match happens FIRST (once past the
+        // force_mock gate), before the mock/real branch below — an unsupported
+        // CLI ("codex"/"cursor"/…) routes to the honest `UnsupportedCliExecutor`
+        // regardless of whether this project even has a real workspace
+        // configured. Only `"claude-code"` (the default for an unassigned
+        // issue or any other caller) reaches the existing mock-vs-real split,
+        // unchanged.
         let fresh_engine;
-        let engine: &Engine = match agent_cli.as_str() {
-            "claude-code" => {
-                if proj.workspace_path.trim().is_empty() {
-                    &self.mock_engine
-                } else {
-                    let executor = ClaudeCliExecutor::new(
-                        self.state.claude_config.clone(),
-                        PathBuf::from(proj.workspace_path.trim()),
-                        proj.allow_commands,
-                        agent_tools.clone(),
-                    );
+        let engine: &Engine = if force_mock {
+            &self.mock_engine
+        } else {
+            match agent_cli.as_str() {
+                "claude-code" => {
+                    if proj.workspace_path.trim().is_empty() {
+                        &self.mock_engine
+                    } else {
+                        let executor = ClaudeCliExecutor::new(
+                            self.state.claude_config.clone(),
+                            PathBuf::from(proj.workspace_path.trim()),
+                            proj.allow_commands,
+                            agent_tools.clone(),
+                        );
+                        fresh_engine = Engine::new(Arc::new(executor));
+                        &fresh_engine
+                    }
+                }
+                other => {
+                    // 诚实报错,绝不静默回落到 claude-code:本机没有为 codex/cursor
+                    // 等值接好真实执行器。Reuses the `Executor` trait seam — this
+                    // executor's first (and only) call errors, and the existing
+                    // "executor failed → settle Failed" path records it honestly.
+                    let executor = UnsupportedCliExecutor::new(other.to_string());
                     fresh_engine = Engine::new(Arc::new(executor));
                     &fresh_engine
                 }
-            }
-            other => {
-                // 诚实报错,绝不静默回落到 claude-code:本机没有为 codex/cursor
-                // 等值接好真实执行器。Reuses the `Executor` trait seam — this
-                // executor's first (and only) call errors, and the existing
-                // "executor failed → settle Failed" path records it honestly.
-                let executor = UnsupportedCliExecutor::new(other.to_string());
-                fresh_engine = Engine::new(Arc::new(executor));
-                &fresh_engine
             }
         };
 
@@ -1944,12 +2029,21 @@ impl App {
     /// soft-degrade shape as the Repo 卡片's `create_repo`/`clone_repo`
     /// paths. `github_remote` empty (no repo, or a 存量项目) short-circuits
     /// before touching `gh` at all — today's behavior, byte-for-byte.
+    ///
+    /// `announce` (plan/14 C14): only the creation flow's standard-Issue trio
+    /// (`seed_standard_issue_trio`) opts into the pending/ok/fail
+    /// `Event::ActionProgress` triple — this function's other two callers
+    /// (`Command::CreateIssue`'s op-panel manual create, Autopilot's
+    /// cron-fired create) are out of C14's scope (CLAUDE.md: 范围收敛,op
+    /// 面板既有动作不动) and pass `false`, leaving their behavior
+    /// byte-for-byte unchanged.
     async fn sync_issue_to_github(
         &mut self,
         project_id: ProjectId,
         issue_id: IssueId,
         title: &str,
         desc: &str,
+        announce: bool,
     ) -> Result<(), AppError> {
         let proj = self
             .store
@@ -1965,11 +2059,24 @@ impl App {
         } else {
             desc.trim().to_string()
         };
+        let action_name = format!("{title} · 建单");
+        if announce {
+            self.emit(Event::ActionProgress {
+                name: action_name.clone(),
+                state: ActionState::Started,
+            });
+        }
         match bw_engine::github::create_issue(remote, title, &body).await {
             Ok(gh_number) => {
                 self.store
                     .set_issue_github_number(issue_id, gh_number)
                     .await?;
+                if announce {
+                    self.emit(Event::ActionProgress {
+                        name: action_name,
+                        state: ActionState::Ok(format!("#{gh_number}")),
+                    });
+                }
             }
             Err(e) => {
                 self.emit(Event::ConnectorSynced {
@@ -1977,6 +2084,12 @@ impl App {
                     ok: false,
                     detail: format!("GitHub 开 issue 失败,BW 侧 Issue 已建立,号未映射:{e}"),
                 });
+                if announce {
+                    self.emit(Event::ActionProgress {
+                        name: action_name,
+                        state: ActionState::Fail(e.to_string()),
+                    });
+                }
             }
         }
         Ok(())
@@ -2047,7 +2160,11 @@ impl App {
                     standard_skill: skill_slug.to_string(),
                 })
                 .await?;
-            self.sync_issue_to_github(project, id, title, desc).await?;
+            // announce=true (plan/14 C14): this is the creation-flow trio —
+            // the one `sync_issue_to_github` call site that should surface a
+            // pending/ok/fail `ActionProgress` triple.
+            self.sync_issue_to_github(project, id, title, desc, true)
+                .await?;
             if first.is_none() {
                 first = Some(id);
             }
@@ -2434,6 +2551,7 @@ impl App {
                                 RunTrigger::Scheduled,
                                 Some(c.id),
                                 None,
+                                false,
                             )
                             .await;
                         matches!(result, Ok(RunOutcome::Completed))
@@ -2486,7 +2604,15 @@ impl App {
             self.refresh_workflow_specs().await?;
 
             let result = self
-                .run_workflow_inner(pid, session, spec, RunTrigger::Scheduled, Some(c.id), None)
+                .run_workflow_inner(
+                    pid,
+                    session,
+                    spec,
+                    RunTrigger::Scheduled,
+                    Some(c.id),
+                    None,
+                    false,
+                )
                 .await;
             // A scheduled run "succeeds" only when the workflow actually passed.
             // A hit review cap (`BlockedAtCap`) has no bound Issue to park here
@@ -2545,8 +2671,10 @@ impl App {
             })
             .await?;
         // C4: Autopilot/cron 建单同样过身份映射 —— 建单入口不止手动创建一
-        // 处,漏一条就是"手动建的有号、定时建的没号"的诚实性缺口。
-        self.sync_issue_to_github(project, issue_id, &title, &desc)
+        // 处,漏一条就是"手动建的有号、定时建的没号"的诚实性缺口。announce=
+        // false(plan/14 C14 范围收敛):Autopilot 建单不在本票覆盖的创建流
+        // 动作里,行为一个字节不变。
+        self.sync_issue_to_github(project, issue_id, &title, &desc, false)
             .await?;
         // Todo (committed work), not Backlog (the parking lot) — autopilot建单
         // is a commitment, and Backlog is the suppress-firing pile in multica.
@@ -2800,9 +2928,13 @@ impl App {
             false
         };
 
-        // Run through the same path as any run, bound to this issue.
+        // Run through the same path as any run, bound to this issue. C13
+        // (plan/14): `force_mock = false` — a standard/normal Issue's real
+        // work is the one path the creation flow's mock lock must NEVER
+        // touch; this keeps routing to the real executor whenever the
+        // project has a configured workspace, byte-for-byte unchanged.
         let run = self
-            .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id))
+            .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id), false)
             .await;
         match run {
             // A completed run only reaches 评审中 — never 完成. Done stays an
@@ -2938,6 +3070,7 @@ impl App {
             }
 
             Command::CreateProject {
+                provider,
                 id,
                 name,
                 kind,
@@ -2951,6 +3084,7 @@ impl App {
                         name,
                         kind,
                         desc,
+                        provider,
                     })
                     .await?;
                 self.state.active_project = Some(id);
@@ -2979,6 +3113,14 @@ impl App {
                         self.store.set_workspace(id, path, true).await?;
                     }
                     (None, Some(GithubOrigin::New { slug, private })) => {
+                        // plan/14 C14: 建仓是这个命令里最慢的一步(真实
+                        // `gh repo create` 网络调用,数秒)——Started 先发,
+                        // 唯一的 name 贯穿这一步的 Ok/Fail,UI 据此配对。
+                        let action_name = format!("{} · 建仓", proj.name);
+                        self.emit(Event::ActionProgress {
+                            name: action_name.clone(),
+                            state: ActionState::Started,
+                        });
                         match self.workspaces_root.clone() {
                             Some(root) => {
                                 let body = if proj.desc.trim().is_empty() {
@@ -3020,6 +3162,13 @@ impl App {
                                                 config: format!("{}/{}", r.owner, r.repo),
                                             })
                                             .await?;
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Ok(format!(
+                                                "{}/{}",
+                                                r.owner, r.repo
+                                            )),
+                                        });
                                     }
                                     Err(e) => {
                                         let mut detail =
@@ -3047,21 +3196,37 @@ impl App {
                                         self.emit(Event::ConnectorSynced {
                                             name: format!("{} · GitHub", proj.name),
                                             ok: false,
-                                            detail,
+                                            detail: detail.clone(),
+                                        });
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Fail(detail),
                                         });
                                     }
                                 }
                             }
                             None => {
+                                let detail = "未配置本地工作区根目录,无法建仓".to_string();
                                 self.emit(Event::ConnectorSynced {
                                     name: format!("{} · GitHub", proj.name),
                                     ok: false,
-                                    detail: "未配置本地工作区根目录,无法建仓".into(),
+                                    detail: detail.clone(),
+                                });
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail),
                                 });
                             }
                         }
                     }
                     (None, Some(GithubOrigin::Existing { owner, repo })) => {
+                        // plan/14 C14: 克隆同样是真实 `gh repo clone` 网络
+                        // 调用——同一套 Started→Ok/Fail 配对。
+                        let action_name = format!("{} · 克隆仓库", proj.name);
+                        self.emit(Event::ActionProgress {
+                            name: action_name.clone(),
+                            state: ActionState::Started,
+                        });
                         match self.workspaces_root.clone() {
                             Some(root) => {
                                 let dir = root.join(workspace_slug(&proj.name, id));
@@ -3095,23 +3260,40 @@ impl App {
                                                 config: format!("{}/{}", r.owner, r.repo),
                                             })
                                             .await?;
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Ok(format!(
+                                                "{}/{}",
+                                                r.owner, r.repo
+                                            )),
+                                        });
                                     }
                                     Err(e) => {
                                         // 不兜底本地 mint —— 拿一个跟用户选的仓无关
                                         // 的空仓冒充"已接入",比"暂不挂仓库"更不诚实。
+                                        let detail = format!("接入 {owner}/{repo} 失败:{e}");
                                         self.emit(Event::ConnectorSynced {
                                             name: format!("{} · GitHub", proj.name),
                                             ok: false,
-                                            detail: format!("接入 {owner}/{repo} 失败:{e}"),
+                                            detail: detail.clone(),
+                                        });
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Fail(detail),
                                         });
                                     }
                                 }
                             }
                             None => {
+                                let detail = "未配置本地工作区根目录,无法接入".to_string();
                                 self.emit(Event::ConnectorSynced {
                                     name: format!("{} · GitHub", proj.name),
                                     ok: false,
-                                    detail: "未配置本地工作区根目录,无法接入".into(),
+                                    detail: detail.clone(),
+                                });
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail),
                                 });
                             }
                         }
@@ -3184,14 +3366,31 @@ impl App {
             }
 
             Command::ListGithubRepos => {
+                // plan/14 C14: the Repo 卡片's「接入已有仓」picker triggers a
+                // real `gh repo list` call — same Started→Ok/Fail pairing.
+                const ACTION_NAME: &str = "GitHub 仓库列表";
+                self.emit(Event::ActionProgress {
+                    name: ACTION_NAME.into(),
+                    state: ActionState::Started,
+                });
                 match bw_engine::github::list_repos(30).await {
-                    Ok(repos) => self.state.github_repos = repos,
+                    Ok(repos) => {
+                        self.emit(Event::ActionProgress {
+                            name: ACTION_NAME.into(),
+                            state: ActionState::Ok(format!("{} 个仓库", repos.len())),
+                        });
+                        self.state.github_repos = repos;
+                    }
                     Err(e) => {
                         self.state.github_repos = Vec::new();
                         self.emit(Event::ConnectorSynced {
-                            name: "GitHub 仓库列表".into(),
+                            name: ACTION_NAME.into(),
                             ok: false,
                             detail: e.to_string(),
+                        });
+                        self.emit(Event::ActionProgress {
+                            name: ACTION_NAME.into(),
+                            state: ActionState::Fail(e.to_string()),
                         });
                     }
                 }
@@ -3435,18 +3634,37 @@ impl App {
                 // 创建(github_remote 非空 ⇒ workspace 在 CreateProject 就
                 // 已绑定,直接用)。
                 if !proj.github_remote.trim().is_empty() && !proj.workspace_path.trim().is_empty() {
-                    if let Err(e) = bw_engine::github::push_head(std::path::Path::new(
+                    // plan/14 C14: 落地推送同样是真实网络调用——Started 先
+                    // 发,pending→ok/fail 配对到底。
+                    let action_name = format!("{} · 落地推送", proj.name);
+                    self.emit(Event::ActionProgress {
+                        name: action_name.clone(),
+                        state: ActionState::Started,
+                    });
+                    match bw_engine::github::push_head(std::path::Path::new(
                         proj.workspace_path.trim(),
                     ))
                     .await
                     {
-                        self.emit(Event::ConnectorSynced {
-                            name: format!("{} · GitHub", proj.name),
-                            ok: false,
-                            detail: format!(
-                                "落地推送失败(章程等提交仍在本地,可稍后手动 git push):{e}"
-                            ),
-                        });
+                        Ok(()) => {
+                            self.emit(Event::ActionProgress {
+                                name: action_name,
+                                state: ActionState::Ok("已推送".into()),
+                            });
+                        }
+                        Err(e) => {
+                            let detail =
+                                format!("落地推送失败(章程等提交仍在本地,可稍后手动 git push):{e}");
+                            self.emit(Event::ConnectorSynced {
+                                name: format!("{} · GitHub", proj.name),
+                                ok: false,
+                                detail: detail.clone(),
+                            });
+                            self.emit(Event::ActionProgress {
+                                name: action_name,
+                                state: ActionState::Fail(detail),
+                            });
+                        }
                     }
                 }
                 self.state.view = View::App;
@@ -3687,7 +3905,16 @@ impl App {
 
             Command::RunWorkflow { session, spec } => {
                 let p = self.active()?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
+                    .await?;
+            }
+
+            // plan/14 C13 (D8 回锁): the creation flow's drafting run —
+            // force_mock=true is the ONLY thing that distinguishes this from
+            // `RunWorkflow` above; see the command's doc comment for why.
+            Command::RunDraftWorkflow { session, spec } => {
+                let p = self.active()?;
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, true)
                     .await?;
             }
 
@@ -3729,7 +3956,7 @@ impl App {
                     workspace_hint,
                 };
                 let spec = stage_workflow_with_playbook(stage_kind, &ctx);
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
                     .await?;
             }
 
@@ -3837,7 +4064,7 @@ impl App {
                     .ok_or(AppError::NotFound)?;
                 self.store.record_workflow_use(workflow_id).await?;
                 self.refresh_workflow_specs().await?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
                     .await?;
             }
 
@@ -4800,8 +5027,10 @@ impl App {
                     .await?;
                 // C4: 项目挂了 GitHub 仓时,建单同时经 gh 真开一个 GitHub
                 // issue;github_remote 为空的项目在这里直接短路返回,今天的
-                // 行为一个字节不变。
-                self.sync_issue_to_github(p, id, &title, &desc).await?;
+                // 行为一个字节不变。announce=false(plan/14 C14 范围收敛):
+                // op 面板的手动建单不在本票覆盖范围,行为一个字节不变。
+                self.sync_issue_to_github(p, id, &title, &desc, false)
+                    .await?;
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
             }
@@ -5415,12 +5644,19 @@ fn cron_prompt_workflow(name: String, prompt: String) -> WorkflowSpec {
 /// parameters read back from `params_json` regardless of whether the
 /// executor call itself ever completes (an `UnsupportedCliExecutor` errors
 /// on its very first call; a real `claude -p` call may hit a flaky gateway).
+///
+/// `force_mock` (plan/14 C13) is recorded verbatim so an E2E readback can
+/// prove a creation-flow drafting run never had a chance to reach the real
+/// executor, independent of what `agent_cli`/`workspace_path` say — "报告不
+/// 代答,读回为证" applies to the routing decision itself, not just the run's
+/// outcome.
 fn run_params_snapshot(
     spec: &WorkflowSpec,
     trigger: RunTrigger,
     agent_cli: &str,
     tools: &[String],
     allowed_tools_arg: Option<&str>,
+    force_mock: bool,
 ) -> String {
     // serde_json::Value keeps this stable as the spec grows — adding a field
     // later is additive, not a schema break on historical run rows.
@@ -5442,6 +5678,7 @@ fn run_params_snapshot(
         "agent_cli": agent_cli,
         "tools": tools,
         "allowed_tools_arg": allowed_tools_arg,
+        "force_mock": force_mock,
     });
     v.to_string()
 }

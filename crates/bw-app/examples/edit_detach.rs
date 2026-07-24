@@ -62,6 +62,7 @@ async fn main() {
     // example configures no `workspaces_root`), so it degrades gracefully to
     // Mock-executor mode, same as every other headless example's projects.
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: ProjectId::new(),
         name: DEEP_LINK_PROJECT.to_string(),
         kind: "内部验证".to_string(),

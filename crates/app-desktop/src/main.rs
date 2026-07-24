@@ -15,7 +15,7 @@ use bw_core::model::{CronStatus, HubKind, StageKind};
 use bw_core::{CronTaskId, SessionId};
 use bw_store::SessionKind;
 use dioxus::prelude::*;
-use kernel::{RunVm, UiNote, Vm};
+use kernel::{ActionsVm, RunVm, UiNote, Vm};
 use screens::activity_hub::ActivityHub;
 use screens::agent_hub::AgentHub;
 use screens::chrome::{BootFrame, FatalFrame, Hub, IconRail, Toast};
@@ -113,6 +113,13 @@ fn Root() -> Element {
     let mut creating = use_signal(|| false);
     let mut toast = use_signal(|| None::<String>);
     let mut run = use_signal(RunVm::default);
+    // plan/14 C14: raw Started/Ok/Fail facts for the creation flow's
+    // background actions (repo create/clone, repo list, standard-Issue
+    // trio, landing push) — `screens::create::ActionsBanner` turns this into
+    // the pending/ok/fail strip, gating "pending" behind
+    // `kernel::ACTION_PENDING_THRESHOLD` itself (render-time, from real
+    // `Instant`s — see that component).
+    let mut actions = use_signal(ActionsVm::default);
     // Set right before a Cron Hub "▶ 立即执行" trigger fires; consumed (and
     // cleared) by the notes listener below once that run's real `RunDone`/
     // `RunFailed` arrives, closing the loop with a real `MarkCronRun`. Lives
@@ -187,6 +194,15 @@ fn Root() -> Element {
                             UiNote::ConnectorSynced { name, ok, detail } => {
                                 let mark = if *ok { "✓" } else { "✕" };
                                 toast.set(Some(format!("🔌 {name} 同步 {mark} · {detail}")));
+                            }
+                            // plan/14 C14: raw fact only — `ActionsBanner`
+                            // decides at render time whether enough real
+                            // wall-clock time has passed to actually show it
+                            // (the pending-noise threshold), so no toast
+                            // here; the paired `ConnectorSynced` above still
+                            // covers the always-fires failure record.
+                            UiNote::ActionProgress { .. } => {
+                                actions.with_mut(|a| a.apply(&note));
                             }
                             _ => run.with_mut(|r| r.apply(&note)),
                         },
@@ -329,8 +345,24 @@ fn Root() -> Element {
                     Create {
                         vm: v.create.clone(),
                         run: run(),
+                        // plan/14 C14: raw action-progress facts — `Create`
+                        // renders the pending/ok/fail strip from these.
+                        actions: actions().items,
                         github_repos: v.github_repos.clone(),
-                        on_cancel: move |_| creating.set(false),
+                        // C12(plan/14): every card/state of the creation flow
+                        // routes its exit here — including after a project row
+                        // already exists (kernel `state.view` is already
+                        // `View::Create` by then, so flipping the local
+                        // `creating` bridge alone wouldn't leave the screen).
+                        // `BackToProjects` is the real "回项目墙" semantics:
+                        // clears `active_project`/`active_session`, never
+                        // touches the store — the project (if minted) stays on
+                        // the wall exactly as `Command::CreateProject` left it,
+                        // resumable via cold-start `OpenProject`.
+                        on_cancel: move |_| {
+                            kernel.send(Command::BackToProjects);
+                            creating.set(false);
+                        },
                     }
                 } else if show_op {
                     if v.op.is_some() {

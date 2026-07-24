@@ -276,6 +276,16 @@ impl SqliteStore {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_agent_stage ON agent(stage_ref)")
             .execute(&pool)
             .await?;
+        // C16(plan/14 规范条 4):仓平台选择器落库。老库开出来是 'github' ——
+        // 和"这些存量项目当时就是接 GitHub 建的"这个真实状态一致(pre-C16
+        // 没有别的平台可选,不是编出来的默认值)。
+        add_column_if_missing(
+            &pool,
+            "project",
+            "provider",
+            "TEXT NOT NULL DEFAULT 'github'",
+        )
+        .await?;
 
         Ok(Self { pool })
     }
@@ -481,13 +491,14 @@ impl Store for SqliteStore {
     async fn create_project(&self, p: NewProject) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO project (id, name, kind, descr, phase, cycle, active_stage, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, 'cold_start', 'explore', 'prototype', ?, ?, 0)",
+            "INSERT INTO project (id, name, kind, descr, phase, cycle, active_stage, provider, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, 'cold_start', 'explore', 'prototype', ?, ?, ?, 0)",
         )
         .bind(pid(p.id))
         .bind(&p.name)
         .bind(&p.kind)
         .bind(&p.desc)
+        .bind(&p.provider)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1025,7 +1036,7 @@ impl Store for SqliteStore {
 
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>> {
         let row = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, north_star_collect_kind, north_star_collect_query, signal, weekly_signal, created_at
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, north_star_collect_kind, north_star_collect_query, provider, signal, weekly_signal, created_at
              FROM project WHERE id=?",
         )
         .bind(pid(id))
@@ -1036,7 +1047,7 @@ impl Store for SqliteStore {
 
     async fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, north_star_collect_kind, north_star_collect_query, signal, weekly_signal, created_at
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, north_star_collect_kind, north_star_collect_query, provider, signal, weekly_signal, created_at
              FROM project ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -2583,6 +2594,7 @@ fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
         github_remote: r.get("github_remote"),
         north_star_collect_kind: r.get("north_star_collect_kind"),
         north_star_collect_query: r.get("north_star_collect_query"),
+        provider: r.get("provider"),
         signal: r
             .get::<Option<String>, _>("signal")
             .and_then(|s| parse_sig(&s)),
