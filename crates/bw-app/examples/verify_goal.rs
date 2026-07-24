@@ -92,6 +92,7 @@ async fn main() {
     let m1_lead = MetricId::new();
     let m1_lag = MetricId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: p1,
         name: "验证项目 A · 智能排班助手".into(),
         kind: "AI 助手 / 内部工具".into(),
@@ -162,6 +163,7 @@ async fn main() {
     // 第二个真实项目 —— 给 H6/H7 的跨项目审计流用
     let p2 = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: p2,
         name: "验证项目 B · 会议纪要归档".into(),
         kind: "内部工具".into(),
@@ -762,6 +764,7 @@ async fn main() {
     //    必须保持原样不被触碰 ──
     let scheduler_target_project = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: scheduler_target_project,
         name: "验证项目 C · 调度目标".into(),
         kind: "内部工具".into(),

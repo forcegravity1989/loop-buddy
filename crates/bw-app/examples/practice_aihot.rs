@@ -136,6 +136,7 @@ async fn find_or_create_project(app: &mut App) -> ProjectId {
     }
     let id = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id,
         name: PROJECT_NAME.into(),
         kind: "Web 应用 · AI 热点日报".into(),
