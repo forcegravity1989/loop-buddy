@@ -253,3 +253,44 @@ UI 筛选栏:`[官方选型 ▾]` 可展开按 official_library 二次分组
 - **Codex / Cursor 真实执行**:路由已留,本机无二进制,诚实报错——未建真实路径。
 - **Adopted 入口**:语义已定(用户自选引入),无 UI 入口——未建。
 - **plan/08 §避免重做**:cron 暂停/恢复/上次/下次已完整,本文不动它。
+
+---
+
+## 10. v1.1 增补:真实感落地批(2026-07-24 grilling 拍板)
+
+**起因(如实记录)**:plan/12 T1-T11 交付合入 main 后,用户在日常应用里看到的
+Skill/Agent/Workflow 展示**与改造前无异**。排查结论:**代码全在,数据不在**——
+日常库 `~/Library/Application Support/BuildersWorkbench/workbench.db` 读回
+skill=354(其中 344 条旧空壳仅 10 条有正文)、skill_file=0、agent=110。
+T1 只停了空壳**播种**,没清**存量**;55+67 真实内容只进过 E2E 临时库
+(导入 UI 即 T12 尚未建,应用内无入口);文件树组件对 skill_file=0 诚实降级
+单栏,于是"看起来没变"。教训:**验收要在用户真实打开的库上走一遍,
+临时库全绿≠用户可见**。
+
+六条拍板:
+
+1. **T14 · 存量库一次性迁移(最先)**:带迁移标记只跑一次——备份 DB 后
+   ① 删除无正文且无真实使用痕迹(uses=0 且未被 workflow 按名引用)的旧空壳
+   skill/agent 目录行,有痕迹的保留并如实标注;② 自动从本机两库
+   (mattpocock-skills/superpowers)+ vendored ECC agents 导入 55+67 真实内容。
+   重启即见真实文件树。
+2. **T15 · MD 富文本渲染**:SKILL.md/AGENT.md/Workflow MD 正文用 pulldown-cmark
+   渲染(标题/列表/代码块/表格,正文 Noto Serif、代码 JetBrains Mono),
+   frontmatter 单独属性卡,右上角「原文」开关切回 `<pre>`。只进 app-desktop,
+   不碰内核。
+3. **T16 · Workflow=复杂系统的数据地基**:`WorkflowSpec` 新增 `content`(主 MD
+   全文,对齐 SkillCard.content;内置五模板留空如实标注「结构化定义,无原始
+   文档」);`PhaseMeta` 扩展 `agent: Option<String>` + `skills: Vec<String>`
+   (按名引用,空=沿用 workflow 级默认);内置五模板每个 phase 从 playbook
+   既有对应关系落真值;流程图每阶段方块挂 agent 头像+skill chips,点击跳
+   对应 Hub 详情;详情页双视图:文档(MD)⇄ 流程图。serde 兼容老数据。
+4. **T17 · 解析 Agent(文本→图像语言)**:phase 结构不能寄希望于创建/导入时
+   自带——Workflow 详情页「🔍 解析为流程图」显式按钮,走 agent_cli 真实执行,
+   严格 JSON 输出契约(同 T9 裁决块模式),成功则 PhaseMeta+绑定持久化
+   (解析一次用一世,人可再编辑/重解);失败/网关抖动诚实挂「未解析,仅文本」
+   可重试,绝不自动重跑、绝不关键词猜。
+5. 执行模式延续上批:子 agent 串行 + 主 agent 逐票独立验收;顺序
+   T14→T15→T16→T17,已开的 T12(导入 UI)/T13(stage_ref 编辑+来源二级筛选)
+   排其后。
+6. **验收纪律修正**:每票除临时库 E2E 外,增加一条「用户真实日常库(或其
+   副本)上深链读回」的验收项——治本条「代码全绿数据不在」的盲区。
