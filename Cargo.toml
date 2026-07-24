@@ -47,6 +47,12 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 # out of bw-core). Already present transitively (system-deps → dioxus
 # desktop's build chain) at 0.8.x; pinning the same major keeps one copy.
 toml = "0.8"
+# T2 (plan/12 §2): real YAML frontmatter parsing for SKILL.md import — a
+# proper parser (not a hand-rolled line scanner) so quotes/multi-line
+# descriptions/unknown fields (disable-model-invocation, …) are handled
+# correctly instead of guessed at. bw-app only (native, IO-doing crate) —
+# never touches the wasm32-checked kernel crates.
+serde_yaml = "0.9"
 
 # --- Internal crates (path deps) ---
 # bw-core defaults to NO id-generation (no RNG) so pure consumers (ui) stay

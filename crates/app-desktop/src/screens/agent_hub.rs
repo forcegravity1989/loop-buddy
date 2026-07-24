@@ -7,18 +7,22 @@
 //! references agents/skills), and an edit form dispatching
 //! `Command::UpdateAgent` — content only, `maturity`/`runs`/`win_rate` stay
 //! untouched, same rule `OptimizeWorkflowForm` established for workflows.
+//!
+//! T7 (2026-07-23, plan/12 §0/§3): the same stage-role filter chip row
+//! `SkillHub` gained — shared `ui::vm::RoleFilter`/`role_chip_counts`.
 
 use crate::kernel::{HubVm, Kernel};
 use crate::theme;
 use bw_app::Command;
 use bw_core::AgentId;
 use dioxus::prelude::*;
-use ui::vm::{AgentCardVm, ProjectCardVm};
+use ui::vm::{role_chip_counts, AgentCardVm, ProjectCardVm, RoleFilter};
 
 #[component]
 pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let paper = theme::PAPER;
     let serif = theme::SERIF;
+    let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
     let mono = theme::MONO;
     let n = hub.agents.len();
@@ -26,6 +30,16 @@ pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let mut creating = use_signal(|| false);
     let mut expanded = use_signal(|| None::<AgentId>);
     let mut editing = use_signal(|| None::<AgentId>);
+    let mut role_filter = use_signal(|| RoleFilter::All);
+
+    let (stage_counts, general_count) =
+        role_chip_counts(&hub.agents.iter().map(|a| a.stage_ref).collect::<Vec<_>>());
+    let filtered: Vec<AgentCardVm> = hub
+        .agents
+        .iter()
+        .filter(|a| role_filter().matches(a.stage_ref))
+        .cloned()
+        .collect();
 
     rsx! {
         div {
@@ -46,12 +60,53 @@ pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
             if creating() {
                 CreateAgentForm { on_done: move |_| creating.set(false) }
             }
+            div {
+                style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;",
+                {
+                    let active = role_filter() == RoleFilter::All;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(RoleFilter::All),
+                            "全部"
+                        }
+                    }
+                }
+                for (sk , count) in stage_counts {
+                    {
+                        let active = role_filter() == RoleFilter::Stage(sk);
+                        let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
+                        rsx! {
+                            button {
+                                key: "{sk.index()}",
+                                style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                                onclick: move |_| role_filter.set(RoleFilter::Stage(sk)),
+                                "{sk.role_short()} · {count}"
+                            }
+                        }
+                    }
+                }
+                {
+                    let active = role_filter() == RoleFilter::General;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(RoleFilter::General),
+                            "通用 · {general_count}"
+                        }
+                    }
+                }
+            }
             if hub.agents.is_empty() {
                 div { style: "color:{ink3};font-size:13px;padding:30px 0;", "还没有智能体——点「+ 配置智能体」录入第一个。" }
+            } else if filtered.is_empty() {
+                div { style: "color:{ink3};font-size:13px;padding:30px 0;", "没有符合筛选的智能体。" }
             } else {
                 div {
                     style: "display:grid;grid-template-columns:repeat(2,1fr);gap:14px;",
-                    for a in hub.agents.clone() {
+                    for a in filtered {
                         {
                             let aid = a.id;
                             let is_open = expanded() == Some(aid);
@@ -137,7 +192,14 @@ fn AgentCard(
                 if let Some(p) = &owner_project {
                     span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)} flex:none;", "◇ {p}" }
                 }
+                span { style: "{chip} flex:none;", "{a.source_label}" }
                 span { style: "{chip} flex:none;", "{a.maturity_label}" }
+            }
+            // T11(plan/12 §7):编辑脱离源头后的留痕——source_label 已随
+            // HubSource 翻转自动变「自建」,不再顶官方库徽记;如实补一句
+            // 「改编自 <库名>」,不假装这条从没来自过官方选型。
+            if let Some(lib) = &a.adapted_from {
+                div { style: "font-size:10.5px;color:{ink3};font-style:italic;margin:-4px 0 8px;", "改编自 {lib}" }
             }
             // ── 3. 社会证明:真实战绩(runs/胜率)+ 被多少工作流用 ──
             div {
@@ -159,12 +221,27 @@ fn AgentCard(
                     span { key: "{i}", style: "{theme::chip(\"#F4F0E7\", ink2)}", "{s}" }
                 }
             }
+            // T5(plan/12 §3):Tools chip 行——AllowedTools,与上面 skills
+            // chips 平级(同一卡片面,紧凑展示),而非折进详情。五角色内置
+            // agent/未编辑的手建 agent 诚实地空着(不声明限制),不渲染这行。
+            if !a.tools.is_empty() {
+                div {
+                    style: "display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;",
+                    span { style: "font-family:{mono};font-size:10.5px;color:{ink3};", "工具" }
+                    for (i , t) in a.tools.iter().enumerate() {
+                        span { key: "{i}", style: "{theme::chip(\"#E4EDF2\", \"#3E5A66\")} font-family:{mono};font-size:11px;", "{t}" }
+                    }
+                }
+            }
             if is_open {
                 div {
                     style: "margin-top:12px;padding-top:12px;border-top:1px dashed {theme::BORDER};",
                     if is_editing {
                         EditAgentForm { a: a.clone(), on_done: move |_| on_done_edit.call(()) }
                     } else {
+                        // T5(plan/12 §3):执行引擎——agent_cli 展示,首版诚实
+                        // 只有 Claude Code 真实可跑(真实路由留给 T6)。
+                        div { style: "font-size:11px;color:{ink3};margin-bottom:8px;", "执行引擎:{a.agent_cli_label}" }
                         if a.instructions.trim().is_empty() {
                             div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "目录引用 · 无本地指令(可「编辑」补充)" }
                         } else {

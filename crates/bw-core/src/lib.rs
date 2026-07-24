@@ -26,6 +26,6 @@ pub mod standards;
 
 pub use ids::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
-    RoutineId, SessionId, SkillId, WorkflowId, WorkflowRunId,
+    RoutineId, SessionId, SkillFileId, SkillId, WorkflowId, WorkflowRunId,
 };
 pub use model::*;

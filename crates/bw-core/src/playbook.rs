@@ -209,6 +209,99 @@ pub fn phase_instructions(kind: StageKind) -> &'static [&'static str] {
     }
 }
 
+/// T8 (plan/12 §4): real per-phase `role` + (Static-only) fixed
+/// `reject_to_phase` for one stage's method loop — index-aligned with
+/// [`StageKind::method_loop`]/[`phase_instructions`]. Judged phase by phase
+/// against what [`phase_instructions`] actually has that phase do, not
+/// stamped mechanically:
+///
+/// - **Prototype** (证据/洞察/假设/原型/验证): 证据/洞察 are research inputs
+///   (`Neutral`); 假设/原型 each produce a deliverable (`Generator`); 验证 is
+///   the real-usage judgment gate (`Evaluator`) — a failed validation is a
+///   bad hypothesis, so it rejects back to 假设 (index 2), not all the way to
+///   证据.
+/// - **Build** (规格/任务分解/实现/评审合入·CI门禁): 规格 generates the intent
+///   artifact, 任务分解 is pure planning (`Neutral`), 实现 generates the code
+///   (`Generator`), 评审合入·CI门禁 is an explicit self-review gate
+///   (`Evaluator`) that rejects back to 实现 (index 2) to fix.
+/// - **Optimize** (基线测量/瓶颈定位/优化删减/回归验证): measurement and
+///   diagnosis are `Neutral`; 优化/删减 is literally the optimizer role
+///   (`Optimizer`); 回归验证 is the regression gate (`Evaluator`), rejecting
+///   back to 优化/删减 (index 2).
+/// - **Growth** (漏斗诊断/实验设计/A-B上线/放大或废弃): diagnosis is
+///   `Neutral`; 实验设计 and 上线改动 each produce something new
+///   (`Generator`); 放大或废弃 is the verdict gate (`Evaluator`) — "废弃"
+///   means the experiment design was wrong, so it rejects back to 实验设计
+///   (index 1).
+/// - **Ops** (SLO/监控告警/事故响应/复盘回灌): none of these four is a
+///   generate-then-judge pair within this one workflow — 复盘回灌 flows
+///   forward into the *next* cycle's Prototype stage (the macro stage-loop
+///   CLAUDE.md calls "运维复盘回流原型"), which is cross-workflow and out of
+///   this spec's own phase indices, not a same-workflow reject target. All
+///   four stay `Neutral`, honestly — no evaluator gate is machine-stamped in
+///   just to fill the variant.
+pub fn phase_metas(kind: StageKind) -> Vec<crate::model::PhaseMeta> {
+    use crate::model::{PhaseMeta, PhaseRole};
+    const NEUTRAL: (PhaseRole, Option<u8>) = (PhaseRole::Neutral, None);
+    let specs: &[(PhaseRole, Option<u8>)] = match kind {
+        StageKind::Prototype => &[
+            NEUTRAL,                         // 证据
+            NEUTRAL,                         // 洞察
+            (PhaseRole::Generator, None),    // 假设
+            (PhaseRole::Generator, None),    // 原型
+            (PhaseRole::Evaluator, Some(2)), // 验证 → 打回「假设」
+        ],
+        StageKind::Build => &[
+            (PhaseRole::Generator, None),    // 规格 Spec
+            NEUTRAL,                         // 任务分解
+            (PhaseRole::Generator, None),    // Agent 并行实现
+            (PhaseRole::Evaluator, Some(2)), // 评审合入 · CI 门禁 → 打回「实现」
+        ],
+        StageKind::Optimize => &[
+            NEUTRAL,                         // 基线测量
+            NEUTRAL,                         // 瓶颈定位
+            (PhaseRole::Optimizer, None),    // 优化 / 删减
+            (PhaseRole::Evaluator, Some(2)), // 回归验证 → 打回「优化/删减」
+        ],
+        StageKind::Growth => &[
+            NEUTRAL,                         // 漏斗诊断
+            (PhaseRole::Generator, None),    // 实验设计
+            (PhaseRole::Generator, None),    // A/B 上线
+            (PhaseRole::Evaluator, Some(1)), // 放大或废弃 → 打回「实验设计」
+        ],
+        StageKind::Ops => &[
+            NEUTRAL, // SLO / 错误预算
+            NEUTRAL, // 监控告警
+            NEUTRAL, // 事故响应
+            NEUTRAL, // 复盘回灌(流向下一圈「原型」,跨 workflow,非本流程内打回目标)
+        ],
+    };
+    kind.method_loop()
+        .iter()
+        .zip(specs.iter())
+        .map(|(name, (role, reject_to_phase))| PhaseMeta {
+            name: name.to_string(),
+            role: *role,
+            reject_to_phase: *reject_to_phase,
+        })
+        .collect()
+}
+
+/// [`phase_metas`] for a **Dynamic** spec (`stage_workflow`/
+/// `stage_workflow_with_playbook`): identical names/roles, but every reject
+/// target is cleared to `None` — plan/12 §4's rule that a Dynamic workflow
+/// never fixes the reject target at design time; it's the (not-yet-built,
+/// T9) runtime evaluator's real verdict to make.
+pub fn phase_metas_dynamic(kind: StageKind) -> Vec<crate::model::PhaseMeta> {
+    phase_metas(kind)
+        .into_iter()
+        .map(|mut p| {
+            p.reject_to_phase = None;
+            p
+        })
+        .collect()
+}
+
 /// One stage's working-method skill: a real, compact markdown instruction
 /// block a real executor follows — the *executable* counterpart of the Skill
 /// Hub's catalog cards. Same nature as [`phase_instructions`]: methodology in

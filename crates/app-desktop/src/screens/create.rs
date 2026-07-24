@@ -15,7 +15,7 @@
 use crate::kernel::{CreateVm, Kernel, RunVm};
 use crate::theme;
 use bw_app::{Command, GithubOrigin, Panel, Scope};
-use bw_core::model::{drafting_workflow, Cadence, ProjectCycle, StageKind};
+use bw_core::model::{drafting_workflow, Cadence, MaturityPeriod, StageKind};
 use bw_core::{MetricId, ProjectId, SessionId};
 use bw_engine::GithubRepoSummary;
 use bw_store::{MetricRole, SessionKind};
@@ -387,10 +387,10 @@ fn QuestionsCard(vm: CreateVm, cadence: Signal<Cadence>, on_next: EventHandler<(
 
         {chip_question(
             "项目处在什么周期？",
-            [ProjectCycle::Explore, ProjectCycle::Expand, ProjectCycle::Mature]
+            [MaturityPeriod::Explore, MaturityPeriod::Expand, MaturityPeriod::Mature]
                 .map(|c| (c.label(), c == cycle()))
                 .to_vec(),
-            move |i| cycle.set([ProjectCycle::Explore, ProjectCycle::Expand, ProjectCycle::Mature][i]),
+            move |i| cycle.set([MaturityPeriod::Explore, MaturityPeriod::Expand, MaturityPeriod::Mature][i]),
         )}
         p { style: "font-size:11px;color:{ink3};margin:-6px 0 14px;", "{cycle().sub_label()} —— 决定五段的初始精力配比。" }
 

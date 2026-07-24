@@ -1912,7 +1912,12 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
     let ink3 = theme::INK_3;
     let primary = theme::btn_primary();
     let spec_preview = stage_workflow(s.kind);
-    let phases = spec_preview.phases.join(" → ");
+    let phases = spec_preview
+        .phases
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(" → ");
     let goal = spec_preview.goal.clone();
     let stage_kind = s.kind;
     let round = op
@@ -2019,7 +2024,7 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
 /// "结果呈现": pairs the run's real phase names (from `RunVm`, so it reflects
 /// whatever actually ran — the stage's own template, an imported hub
 /// workflow, or an ad-hoc dynamic one — not just the stage's default
-/// preview) with the real `Role::Agent` session messages, in order. A
+/// preview) with the real `Author::Agent` session messages, in order. A
 /// best-effort zip (agent messages are appended in completion order, one per
 /// phase, by `run_workflow_inner`) — honestly labeled as such, not a hard
 /// per-phase binding the store actually tracks.

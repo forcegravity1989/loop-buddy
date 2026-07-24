@@ -11,7 +11,7 @@ use bw_app::{App, Command, Event};
 use bw_core::derive::{evaluate_metric, measure, parse_target};
 use bw_core::model::{
     stage_template_workflow, stage_workflow, AgentRef, Cadence, CronStatus, HubSource, LoopConfig,
-    ProjectCycle, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
+    MaturityPeriod, PhaseMeta, SkillRef, SourceKind, StageKind, WorkflowKind, WorkflowSpec,
 };
 use bw_core::{CronTaskId, MetricId, ProjectId, SessionId, Signal, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
@@ -60,19 +60,30 @@ async fn main() {
 
     app.dispatch(Command::Boot).await.unwrap();
 
-    // ── H1: 真实 ECC/OMC hub 数据 seed 到位,数字与源数据吻合 ──
+    // ── H1: boot 时 hub 三库真实 seed 到位——T1(0b5cbb2)起 ECC/OMC 目录空壳
+    //    (540 条只有名字无正文的占位行)已退场,新基线是 app 自建的五阶段模板
+    //    方法论(每个 StageKind 各一份 workflow/skill/agent,来自
+    //    seed_hub_if_empty + seed_stage_entities_if_missing),数字与实际
+    //    seed 吻合,非编造 ──
     let (workflows, skills, agents) = (
         store.list_workflow_specs().await.unwrap(),
         store.list_skills().await.unwrap(),
         store.list_agents().await.unwrap(),
     );
+    let stage_count = StageKind::ALL.len();
     h.push(Hyp {
         id: "H1",
-        title: "真实 ECC/OMC hub 数据加载(非编造)",
-        passed: workflows.len() >= 90 && skills.len() >= 300 && agents.len() >= 100,
+        title: "真实 hub 数据 seed 到位(app 自建五阶段方法论,非编造)",
+        passed: workflows.len() >= stage_count
+            && skills.len() >= stage_count
+            && agents.len() >= stage_count,
         evidence: format!(
-            "workflow_spec={} skill={} agent={}(全部来自 omc-roles.html/everything-claude-code-roles.html 真实解析)",
-            workflows.len(), skills.len(), agents.len()
+            "workflow_spec={} skill={} agent={}(≥{stage_count},五阶段各一份 workflow/skill/agent,\
+             来自 seed_hub_if_empty/seed_stage_entities_if_missing 真实写入;非外部 ECC/OMC 解析——\
+             该目录空壳种子路径 T1 起已退场)",
+            workflows.len(),
+            skills.len(),
+            agents.len()
         ),
     });
 
@@ -92,7 +103,7 @@ async fn main() {
     .await
     .unwrap();
     app.dispatch(Command::SetCycle {
-        cycle: ProjectCycle::Explore,
+        cycle: MaturityPeriod::Explore,
     })
     .await
     .unwrap();
@@ -139,7 +150,7 @@ async fn main() {
     h.push(Hyp {
         id: "H2",
         title: "创建向导 → 项目真实进入 Running,5 段落库",
-        passed: proj1.phase == bw_core::model::ProjectPhase::Running && stages1.len() == 5,
+        passed: proj1.phase == bw_core::model::Readiness::Running && stages1.len() == 5,
         evidence: format!(
             "project.phase={:?} active_stage={:?} materialized_stages={}",
             proj1.phase,
@@ -242,7 +253,7 @@ async fn main() {
             "workflow=「{}」(source={:?}) uses: {}→{} · 产生 {} 条真实 session message",
             real_wf.name,
             match &real_wf.kind {
-                bw_core::model::WorkflowKind::Static { source, .. } => *source,
+                bw_core::model::WorkflowKind::Static { source, .. } => source.clone(),
                 _ => HubSource::SelfBuilt,
             },
             uses_before,
@@ -697,7 +708,7 @@ async fn main() {
         prompt: "验证 prompt".into(),
         goal: "验证 goal".into(),
         stage_ref: None,
-        phases: vec!["步骤一".into()],
+        phases: vec![PhaseMeta::neutral("步骤一")],
         phase_prompts: vec![],
         agents: vec![AgentRef {
             name: "验证 Agent".into(),

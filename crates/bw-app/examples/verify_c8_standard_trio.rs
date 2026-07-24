@@ -84,7 +84,7 @@ prompt="$2"
   echo "===PHASE $(date +%s%N)==="
   printf '%s\n' "$prompt"
 } >> "$STUB_CLAUDE_LOG"
-printf '{"result":"【mock】stub claude phase output (C8 verify).","is_error":false}\n'
+printf '{"result":"【mock】stub claude phase output (C8 verify).\\nVERDICT: PASS\\nREASON: 【mock】E2E stub 放行(T9 评审门要求结构化裁决,合流后补齐)","is_error":false}\n'
 exit 0
 "#;
 

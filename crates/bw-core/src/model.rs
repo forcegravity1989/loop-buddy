@@ -76,11 +76,13 @@ pub struct MetricSource {
 
 // ─────────────────────────── op stages ───────────────────────────
 
-/// The five stages of the operating loop (体系重构 v2 · 阶段=角色=方法论):
+/// The five stages of the project's lifecycle (体系重构 v2 · 阶段=角色=方法论):
 /// each stage is hosted by exactly one role, running exactly one methodology.
 /// The variant *is* the position — there is no way to construct a 6th stage or
-/// an out-of-range index. The loop closes: [`StageKind::next`] wraps
-/// `Ops → Prototype` (运维复盘回流原型 · 线闭成环).
+/// an out-of-range index. The five stages close into a loop-back, not a
+/// pipeline: [`StageKind::next`] wraps `Ops → Prototype`
+/// (运维复盘回流原型 · 闭环回流). Not to be confused with a workflow's own
+/// internal retry loop ([`LoopConfig`]) — that's a different "loop".
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageKind {
@@ -111,6 +113,17 @@ impl StageKind {
         Self::ALL.iter().position(|&k| k == self).unwrap() as u8 + 1
     }
 
+    /// Inverse of [`Self::index`] — `None` for `0` or `6..`. T7 (plan/12 §0):
+    /// the shared conversion `Skill`/`Agent` need to interop with
+    /// `WorkflowSpec.stage_ref`'s existing `Option<u8>` (1..=5) storage
+    /// convention while their own domain field stays `Option<StageKind>` —
+    /// same `StageKind::ALL.iter().find(|s| s.index() == n)` idiom
+    /// `bw_core::analysis` and `bw-store`'s workflow-side code already used
+    /// inline at several call sites, named once here instead of repeated.
+    pub fn from_index(n: u8) -> Option<StageKind> {
+        Self::ALL.iter().find(|k| k.index() == n).copied()
+    }
+
     /// The next stage in the loop. Wraps `Ops → Prototype` — the reflux that
     /// closes the line into a ring (a [`Command::HandoffStage`] dispatched from
     /// `Ops` is a *reflux*, not a dead end).
@@ -139,7 +152,7 @@ impl StageKind {
     pub fn role(self) -> &'static str {
         match self {
             StageKind::Prototype => "原型师 · Prototyper",
-            StageKind::Build => "构建师 · Builder",
+            StageKind::Build => "构建师 · Constructor",
             StageKind::Optimize => "优化师 · Optimizer",
             StageKind::Growth => "运营推广师 · Grower",
             StageKind::Ops => "运维师 · Maintainer",
@@ -457,7 +470,7 @@ pub enum SessionStatus {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Role {
+pub enum Author {
     /// Builder (the human) — right, dark bubble.
     Builder,
     /// Agent — left, white bubble.
@@ -466,7 +479,7 @@ pub enum Role {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
-    pub role: Role,
+    pub role: Author,
     pub text: String,
 }
 
@@ -496,33 +509,84 @@ pub enum Maturity {
 /// on `WorkflowKind::Static` — a `Dynamic` (session-scoped, ad-hoc) workflow
 /// has no stable provenance to tag, so this stays off that variant entirely
 /// rather than becoming an always-present-but-sometimes-meaningless field.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+///
+/// T1 (2026-07-23, plan/12 §6): collapsed from 5 variants down to 4. Curated
+/// external libraries (OMC, ECC, mattpocock-skills, superpowers, …) are all
+/// the same kind of thing — "官方选型预置", an open-ended and ever-growing
+/// set — so they no longer get one enum variant each. `Omc`/`Ecc` merge into
+/// one `Official` variant carrying an `official_library` sub-tag instead.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HubSource {
-    /// oh-my-claudecode
-    Omc,
-    /// Everything Claude Code
-    Ecc,
+    /// 官方选型预置——BW 自己持续挑选、引入的高分精品库。`official_library`
+    /// 标具体是哪个:写作日真实取值 "ecc" / "mattpocock-skills" /
+    /// "superpowers";"omc" 是旧库迁移标签,暂无实例。
+    Official { official_library: String },
+    /// 预留:后期用户自选引入官方集之外的插件,今天无入口(plan/12 §6/§9)。
+    Adopted,
     /// 自建
     SelfBuilt,
     /// 会话内
     WithinSession,
-    /// 选型引入的外部 workflow 引擎/插件市场(如 superpowers)——不是本仓的
-    /// OMC/ECC 两个固定目录,也不是自建。真实来源名放调用方的 `scope` 字段或
-    /// 对应 `AgentRef`/`SkillRef.from`(2026-07-20 践行 aihot 时发现:此前只有
-    /// 四值,逼着"选型引入"要么误标 SelfBuilt 要么无值可选,如实补上)。
-    Adopted,
 }
 
 impl HubSource {
-    pub fn label(self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
-            HubSource::Omc => "OMC",
-            HubSource::Ecc => "ECC",
+            HubSource::Official { .. } => "官方选型",
+            HubSource::Adopted => "选型引入",
             HubSource::SelfBuilt => "自建",
             HubSource::WithinSession => "会话内",
-            HubSource::Adopted => "选型引入",
         }
+    }
+
+    /// Fixed chip-display order for the hub source filter row — every
+    /// category counted even at 0 rows, so a chip never silently disappears
+    /// just because nothing has that source yet. `Adopted` is deliberately
+    /// left off (no UI entry produces it yet — plan/12 §9), unchanged from
+    /// this list's pre-T1 shape (which also never surfaced a `选型引入` chip).
+    pub const FILTER_CHIP_LABELS: [&'static str; 3] = ["官方选型", "自建", "会话内"];
+}
+
+/// Hand-written: a pre-T1 database's `workflow_spec.kind_json` blobs may
+/// still hold the old bare-string `"omc"`/`"ecc"` unit-variant encoding.
+/// `Official` now carries data, so the derived `Deserialize` these two
+/// legacy strings used to satisfy no longer exists — without this impl,
+/// opening an old row would hard-fail instead of "老库打开不崩" (T1
+/// acceptance criterion). `self_built`/`within_session`/`adopted` keep
+/// their original unit-variant wire shape untouched, so they round-trip
+/// through ordinary derive-equivalent matching below; only `omc`/`ecc` need
+/// an explicit legacy mapping.
+impl<'de> Deserialize<'de> for HubSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum OnDisk {
+            Official {
+                official_library: String,
+            },
+            Adopted,
+            SelfBuilt,
+            WithinSession,
+            /// Legacy pre-T1 rows (deleted directory-only OMC/ECC seeds).
+            Omc,
+            Ecc,
+        }
+        Ok(match OnDisk::deserialize(deserializer)? {
+            OnDisk::Official { official_library } => HubSource::Official { official_library },
+            OnDisk::Adopted => HubSource::Adopted,
+            OnDisk::SelfBuilt => HubSource::SelfBuilt,
+            OnDisk::WithinSession => HubSource::WithinSession,
+            OnDisk::Omc => HubSource::Official {
+                official_library: "omc".to_string(),
+            },
+            OnDisk::Ecc => HubSource::Official {
+                official_library: "ecc".to_string(),
+            },
+        })
     }
 }
 
@@ -566,6 +630,197 @@ pub struct SkillRef {
     pub from: String,
 }
 
+/// T8 (plan/12 §4): a phase's real role in the workflow's generator/evaluator
+/// loop — what `workflow_flow.rs` used to *guess* from the phase's Chinese
+/// name via a keyword heuristic. `Neutral` is the honest default for any
+/// phase that isn't a generator/evaluator/optimizer (and for every
+/// legacy/user-authored phase that never declared a role at all).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhaseRole {
+    /// Produces the deliverable this phase is responsible for.
+    Generator,
+    /// A judging/review gate — the only role `reject_to_phase` is meaningful
+    /// on.
+    Evaluator,
+    /// Refines/prunes an existing deliverable without adding new scope.
+    Optimizer,
+    #[default]
+    Neutral,
+}
+
+/// One phase in a [`WorkflowSpec`]'s pipeline — structured (plan/12 §4)
+/// replacement for the old bare phase name. `role` is real, declared data
+/// (built-in stage playbooks in `crate::playbook`; `Neutral` for everything
+/// user-authored today, since the create/edit UI doesn't yet expose role
+/// editing — that's follow-up UI work, not this ticket).
+///
+/// `reject_to_phase` is only meaningful when `role == Evaluator`:
+/// - `Some(i)` — a **Static** workflow's author fixed the reject target at
+///   design time; `i` is a 0-based index into the same `WorkflowSpec.phases`
+///   vector this `PhaseMeta` lives in (so a renderer can index straight into
+///   it with no off-by-one translation).
+/// - `None` — either this phase isn't a reject gate, or (for a **Dynamic**
+///   workflow) the target is deliberately left to the evaluator agent's real
+///   runtime verdict — see `PhaseOutcome` in plan/12 §4, built in T9, not
+///   here.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PhaseMeta {
+    pub name: String,
+    #[serde(default)]
+    pub role: PhaseRole,
+    #[serde(default)]
+    pub reject_to_phase: Option<u8>,
+}
+
+impl PhaseMeta {
+    /// A plain, role-less phase — what every user-authored/edited phase
+    /// (create/edit form, still name-only text) and every ad-hoc `Dynamic`
+    /// spec produces today. Real role declarations exist only for the
+    /// built-in stage playbooks (`crate::playbook::phase_metas`).
+    pub fn neutral(name: impl Into<String>) -> Self {
+        PhaseMeta {
+            name: name.into(),
+            role: PhaseRole::Neutral,
+            reject_to_phase: None,
+        }
+    }
+}
+
+/// Hand-written (mirrors `HubSource`'s legacy-compat impl just above in this
+/// file): a pre-T8 `workflow_spec.phases`/`workflow_version.phases` column
+/// holds a plain JSON string array (`["阶段A","阶段B"]`) — every phase ever
+/// created before this ticket. Each element deserializes as *either* a bare
+/// string (legacy ⇒ `role: Neutral, reject_to_phase: None`) *or* a full
+/// object (current shape) — per-element, not per-column, so a partially
+/// migrated array (should one ever exist) still reads honestly. Old DBs must
+/// not crash on open (repo-wide serde-compat rule).
+impl<'de> Deserialize<'de> for PhaseMeta {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OnDisk {
+            Legacy(String),
+            Full {
+                name: String,
+                #[serde(default)]
+                role: PhaseRole,
+                #[serde(default)]
+                reject_to_phase: Option<u8>,
+            },
+        }
+        Ok(match OnDisk::deserialize(deserializer)? {
+            OnDisk::Legacy(name) => PhaseMeta::neutral(name),
+            OnDisk::Full {
+                name,
+                role,
+                reject_to_phase,
+            } => PhaseMeta {
+                name,
+                role,
+                reject_to_phase,
+            },
+        })
+    }
+}
+
+/// T9 (plan/12 §4): the real runtime verdict an **Evaluator** phase renders on
+/// the work it just reviewed — parsed from the phase's actual output text, never
+/// machine-guessed. This is the runtime companion to the design-time
+/// [`PhaseMeta`]/[`PhaseRole`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// The reviewed work passes the gate — the workflow proceeds.
+    Pass,
+    /// The reviewed work is rejected; the `u8` is the evaluator's **proposed**
+    /// 0-based target phase to restart from. A **Dynamic** workflow honours this
+    /// proposal; a **Static** one ignores it and uses the phase's declared
+    /// [`PhaseMeta::reject_to_phase`] instead (plan/12 §4).
+    RejectToPhase(u8),
+}
+
+/// The structured decision block an Evaluator phase must emit (verdict + a
+/// human-readable reason). Produced by [`parse_phase_outcome`] from real output.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhaseOutcome {
+    pub verdict: Verdict,
+    pub reason: String,
+}
+
+/// The machine-parseable verdict contract appended to every Evaluator phase's
+/// prompt (by `bw_engine`). It tells a real executor exactly how to render its
+/// decision so [`parse_phase_outcome`] can read it back. Kept next to the parser
+/// so the emit-side format and the parse-side format can never drift apart.
+pub fn verdict_contract_suffix() -> &'static str {
+    "\n\n────────────\n【评审裁决 · 机器解析(必须严格执行)】\n\
+     完成本次评审后,在输出的最末尾单独成行给出结构化裁决,二选一:\n\
+     • 通过 —— 输出一行:\n\
+     VERDICT: PASS\n\
+     • 打回 —— 输出两行(REJECT_TO_PHASE 后接要打回到的阶段的 0 基索引):\n\
+     VERDICT: REJECT_TO_PHASE=<阶段索引>\n\
+     REASON: <一句话说明打回原因>\n\
+     解析只认最后一次出现的 VERDICT / REASON 行。缺少可解析的 VERDICT 行会被判为\
+     评审失败(绝不会被当作通过)。\n"
+}
+
+/// Parse an Evaluator phase's real output for its structured [`PhaseOutcome`].
+///
+/// Robust to LLM chatter: scans every line and keeps the **last** line whose
+/// trimmed, case-insensitive form starts with `VERDICT:` (and likewise the last
+/// `REASON:` line) — so an evaluator that quotes the contract mid-output, then
+/// renders its true verdict at the end, still reads correctly.
+///
+/// Accepted forms (case-insensitive on the marker and the `PASS`/`REJECT`
+/// token): `VERDICT: PASS`; `VERDICT: REJECT_TO_PHASE=2` (also `= 2`, `:2`, or a
+/// bare trailing number). Returns **`None`** when there is no well-formed
+/// `VERDICT:` line, or a reject verdict carries no parseable target — an honest
+/// parse failure the caller MUST treat as a failed review, never a default pass
+/// (plan/12 §4, T9).
+pub fn parse_phase_outcome(text: &str) -> Option<PhaseOutcome> {
+    let mut verdict_value: Option<String> = None;
+    let mut reason: Option<String> = None;
+    for raw in text.lines() {
+        let line = raw.trim();
+        let upper = line.to_ascii_uppercase();
+        if upper.starts_with("VERDICT:") {
+            // Slice the ORIGINAL line after its first ':' so casing/spacing of
+            // the value is preserved for reason/target extraction.
+            if let Some(colon) = line.find(':') {
+                verdict_value = Some(line[colon + 1..].trim().to_string());
+            }
+        } else if upper.starts_with("REASON:") {
+            if let Some(colon) = line.find(':') {
+                reason = Some(line[colon + 1..].trim().to_string());
+            }
+        }
+    }
+    let value = verdict_value?;
+    let value_upper = value.to_ascii_uppercase();
+    if value_upper == "PASS" {
+        return Some(PhaseOutcome {
+            verdict: Verdict::Pass,
+            reason: reason.unwrap_or_default(),
+        });
+    }
+    if value_upper.starts_with("REJECT") {
+        // Extract the target index: the first contiguous run of ASCII digits in
+        // the value (`REJECT_TO_PHASE=2` → `2`). No digits ⇒ un-actionable
+        // reject ⇒ honest parse failure (never guess a target).
+        let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
+        let target = digits.parse::<u8>().ok()?;
+        return Some(PhaseOutcome {
+            verdict: Verdict::RejectToPhase(target),
+            reason: reason.unwrap_or_default(),
+        });
+    }
+    // A VERDICT line with an unrecognised token is not a pass — fail honestly.
+    None
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowSpec {
     pub id: WorkflowId,
@@ -575,7 +830,11 @@ pub struct WorkflowSpec {
     pub goal: String,
     /// Associated stage (1..=5), if any.
     pub stage_ref: Option<u8>,
-    pub phases: Vec<String>,
+    /// T8 (plan/12 §4): structured per-phase metadata (name + real role +
+    /// static reject target) — `Vec<String>` before this ticket. serde-compat
+    /// (see `PhaseMeta`'s `Deserialize` impl) reads old plain-string-array
+    /// rows in as `role: Neutral`, so an already-seeded DB never crashes.
+    pub phases: Vec<PhaseMeta>,
     /// Per-phase real instructions, index-aligned with `phases`. Empty (the
     /// pre-playbook default) or a missing/blank entry ⇒ that phase falls back
     /// to the shared `prompt` — byte-for-byte the old behavior. Rendered by
@@ -755,7 +1014,9 @@ pub struct WorkflowVersion {
     pub name: String,
     pub prompt: String,
     pub goal: String,
-    pub phases: Vec<String>,
+    /// T8: structured (see `WorkflowSpec.phases`); same serde-compat with
+    /// pre-T8 plain-string-array snapshots.
+    pub phases: Vec<PhaseMeta>,
     /// Per-phase instructions frozen with the rest of the content — an
     /// evolution history that dropped them would misreport what old versions
     /// actually executed. Empty for pre-playbook snapshots.
@@ -826,7 +1087,10 @@ pub fn stage_workflow(kind: StageKind) -> WorkflowSpec {
         prompt: kind.method_loop().join(" → "),
         goal: stage_goal(kind),
         stage_ref: Some(kind.index()),
-        phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
+        // Dynamic ⇒ any Evaluator's reject target is honestly left `None`
+        // (plan/12 §4: runtime evaluator decision, T9's job) — the same
+        // roles as the Static template, just with the fixed target cleared.
+        phases: crate::playbook::phase_metas_dynamic(kind),
         phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
@@ -869,11 +1133,16 @@ pub fn stage_workflow_with_playbook(
             from: "阶段剧本(bw-core::playbook)".into(),
         })
         .collect();
-    // A playbook phase is a full, self-contained work order — one honest
-    // attempt each, no blind re-run of an identical prompt (real spend).
+    // A playbook phase is a full, self-contained work order: the executor
+    // reports `done` on its first attempt, so the engine's *per-phase* inner
+    // loop always runs exactly once — no blind re-run of an identical prompt
+    // (real spend), regardless of `max_iter`. T9: `max_iter` now also caps the
+    // *adversarial* review loop (Evaluator打回 → 重跑 → 重审); 1 would disable it
+    // outright, so the playbook path allows up to 3 review rounds before the
+    // Issue honestly parks in Blocked (Done 仍永不自动).
     spec.loop_config = LoopConfig {
         retries: 1,
-        max_iter: 1,
+        max_iter: 3,
     };
     spec
 }
@@ -909,7 +1178,10 @@ pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
         prompt: kind.method_loop().join(" → "),
         goal: stage_goal(kind),
         stage_ref: Some(kind.index()),
-        phases: kind.method_loop().iter().map(|s| s.to_string()).collect(),
+        // Static ⇒ real role + fixed reject target for the stage's
+        // review-gate phase (plan/12 §4; declared per-stage in
+        // `crate::playbook::phase_metas`, not machine-guessed).
+        phases: crate::playbook::phase_metas(kind),
         phase_prompts: vec![],
         agents: vec![],
         skills: vec![],
@@ -938,10 +1210,10 @@ pub fn drafting_workflow() -> WorkflowSpec {
         goal: "产出可编辑的北极星候选 + 指标框架草案".into(),
         stage_ref: Some(StageKind::Prototype.index()),
         phases: vec![
-            "周期判定".into(),
-            "北极星起草".into(),
-            "指标框架".into(),
-            "阶段激活".into(),
+            PhaseMeta::neutral("周期判定"),
+            PhaseMeta::neutral("北极星起草"),
+            PhaseMeta::neutral("指标框架"),
+            PhaseMeta::neutral("阶段激活"),
         ],
         phase_prompts: vec![],
         agents: vec![],
@@ -956,28 +1228,6 @@ pub fn drafting_workflow() -> WorkflowSpec {
 
 // ─────────────────────────── skill / agent hub ───────────────────────────
 
-/// Binary provenance for Skill/Agent hub items — a library entry the
-/// platform ships (官方) or one a builder authored locally (自建). Distinct
-/// from [`HubSource`] (Workflow's 4-tier provenance): these are two
-/// independent, purpose-built vocabularies, not one shared enum.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LibSource {
-    /// 官方
-    Official,
-    /// 自建
-    SelfBuilt,
-}
-
-impl LibSource {
-    pub fn label(self) -> &'static str {
-        match self {
-            LibSource::Official => "官方",
-            LibSource::SelfBuilt => "自建",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SkillCard {
     pub id: SkillId,
@@ -987,7 +1237,43 @@ pub struct SkillCard {
     pub maturity: Maturity,
     pub desc: String,
     pub category: String,
-    pub source: LibSource,
+    /// T7 (2026-07-23, plan/12 §0/§2): which of the five stage roles this
+    /// skill belongs to — the same classification dimension `WorkflowSpec`
+    /// already carries (its `stage_ref: Option<u8>`, 1..=5). Here the domain
+    /// type is `Option<StageKind>` directly (the ticket's own alignment
+    /// call) rather than the bare `u8` `WorkflowSpec` was left with — that
+    /// field predates this ticket and stays untouched (T8/T9's workflow
+    /// chain reads it), so storage-level interop goes through
+    /// `StageKind::index`/`from_index`, not a shared Rust type. `None` =
+    /// cross-stage/general — honest for every imported catalog skill (no
+    /// one has manually classified them) and the default for a
+    /// hand-authored one until edited.
+    #[serde(default)]
+    pub stage_ref: Option<StageKind>,
+    /// T2 (2026-07-23, plan/12 §6): unified onto the same 4-tier
+    /// [`HubSource`] Workflow already uses, replacing the former standalone
+    /// `LibSource { Official, SelfBuilt }` — "which curated library this
+    /// came from" is the same open-ended provenance question for every hub
+    /// entity, not a Skill-specific vocabulary. `Official { official_library
+    /// }` is populated by `ImportSkillPackage`/`ImportSkillLibrary`; bare
+    /// pre-T2 `official` rows with no library sub-tag (the 5 built-in
+    /// stage-methodology skills) read back as `SelfBuilt` — see
+    /// `bw_store::parse_skill_source`'s doc comment for why.
+    pub source: HubSource,
+    /// T11 (2026-07-23, plan/12 §7): "改编自 <库名>" provenance — set iff this
+    /// row was once `Official { official_library }` and a substantive edit
+    /// (`content`/`desc`/`category`) flipped `source` to `SelfBuilt` (T11's
+    /// "编辑即脱离源头"). The store deliberately leaves the raw
+    /// `official_library` column untouched when it flips `source` away from
+    /// `official` — this field is that surviving value read back, `None`
+    /// whenever the column is empty (never edited away from an official
+    /// origin) or the row is still `Official` itself (its library already
+    /// shows up in `source`, no need to duplicate it here). Also doubles as
+    /// the re-import dedup signal: `ImportSkillLibrary` skips a name match
+    /// on this field the same as a live `Official { official_library }`
+    /// match, so a flipped row is never silently re-created as a duplicate.
+    #[serde(default)]
+    pub adapted_from: Option<String>,
     pub uses: u32,
     /// The skill body — real instructions an executor can act on. Empty for
     /// catalog *references* (OMC/ECC entries whose full text lives in the
@@ -1021,6 +1307,13 @@ pub struct AgentCard {
     pub id: AgentId,
     pub name: String,
     pub role: String,
+    /// T7 (2026-07-23, plan/12 §0/§3): same classification dimension as
+    /// `SkillCard.stage_ref` — see that field's doc comment for the
+    /// `Option<StageKind>`-vs-`WorkflowSpec`'s-`Option<u8>` alignment call.
+    /// `None` = cross-stage/general (every imported ECC agent, honestly
+    /// unclassified); `Some` for the five built-in stage-role agents.
+    #[serde(default)]
+    pub stage_ref: Option<StageKind>,
     pub maturity: Maturity,
     pub skills: Vec<AgentSkillTag>,
     pub model: String,
@@ -1036,6 +1329,37 @@ pub struct AgentCard {
     /// role gets told, `{var}` slots filled per project at run time.
     #[serde(default)]
     pub instructions: String,
+    /// T5 (2026-07-23, plan/12 §3): "Agent" == AGENT.md — this is that
+    /// definition's `tools` frontmatter field, i.e. **AllowedTools**, the same
+    /// vocabulary `claude` CLI's `--allowedTools` uses. Real at run time: the
+    /// CLI adapter translates this list, not the field itself (decoupled —
+    /// same reasoning as `agent_cli` below). Empty for the five built-in
+    /// stage-role agents (no restriction declared, honest) and for a
+    /// hand-authored `CreateAgent` row until edited.
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// T5 (2026-07-23, plan/12 §3): which Agent CLI executes this agent
+    /// ("claude-code" / "codex" / "cursor" / …). First version: only
+    /// `"claude-code"` has a real executor behind it (`bw-engine`'s
+    /// `ClaudeCliExecutor`); any other value is an honest label with no route
+    /// yet — selecting one must error "本机未安装 X CLI", never silently fall
+    /// back to Claude Code (real routing lands in T6).
+    #[serde(default)]
+    pub agent_cli: String,
+    /// T5 (2026-07-23, plan/12 §6/§8): provenance — the same [`HubSource`]
+    /// Skill/Workflow already carry. The five built-in stage-role agents (and
+    /// any pre-T5 row opened from an old DB with no `source` column) read back
+    /// as `SelfBuilt` (see the `agent` table's `add_column_if_missing`
+    /// default); `ImportAgentDefinition`'s 67 ECC rows are
+    /// `Official { official_library: "ecc" }`.
+    pub source: HubSource,
+    /// T11 (2026-07-23, plan/12 §7): same "改编自 <库名>" provenance-survives-
+    /// the-flip field `SkillCard` carries — see its doc comment for the full
+    /// reasoning (edit flips `source` away from `Official`, the raw
+    /// `official_library` column stays, this is that surviving value; also
+    /// the re-import dedup signal `ImportAgentDefinition` checks).
+    #[serde(default)]
+    pub adapted_from: Option<String>,
     /// `None` = 全局/共享(五角色内置 agent);`Some` = 这个项目自建的
     /// 专精 agent(plan/10 K1 项目侧边栏按这个字段过滤)。
     #[serde(default)]
@@ -1053,15 +1377,38 @@ pub enum CronStatus {
     Paused,
 }
 
-/// What a [`CronTask`] does when due (A1). `RunWorkflow` (the default) resolves
-/// `target` as a hub workflow and runs it — the original behavior; `CreateIssue`
-/// is autopilot: it mints a stage-scoped Issue. No-hijack by construction: a
-/// `CreateIssue` task never auto-runs anything, it only creates work.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+/// What a [`CronTask`] does when due (A1; extended T10, plan/12 §5).
+/// `RunWorkflow` (the default) resolves `target` as a hub workflow and runs
+/// it — the original behavior. `RunSkill`/`RunPrompt` (T10) also really
+/// execute (through the same engine/executor path `RunWorkflow` uses), just
+/// against a single ad-hoc prompt instead of a full hub workflow's phases:
+/// `RunSkill` takes its prompt from a real Skill's `content` (a genuine
+/// `SkillId` reference — never free-text name matching, so a deleted/renamed
+/// skill can never silently resolve to the wrong row); `RunPrompt` runs a bare
+/// prompt with no entity involved at all. `CreateIssue` is autopilot: it
+/// mints a stage-scoped Issue. No-hijack by construction: a `CreateIssue` task
+/// never auto-runs anything, it only creates work — unaffected by T10.
+///
+/// Wire note: `CronMode` itself is never serialized as JSON on disk — the
+/// `cron_task.mode`/`cron_task.target` TEXT columns already round-trip it by
+/// hand (`bw_store::cron_mode_text`/`parse_cron_mode`), so the two new
+/// variants need no schema migration: `target` (already free text, already
+/// unused by `CreateIssue`) doubles as the payload column — a skill's real
+/// id (text) for `RunSkill`, the raw prompt text for `RunPrompt`. The two
+/// pre-T10 modes' storage is untouched.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CronMode {
     #[default]
     RunWorkflow,
+    /// T10: run a real Skill's `content` as the prompt when due.
+    RunSkill {
+        skill_id: SkillId,
+    },
+    /// T10: run a bare prompt when due — no entity involved.
+    RunPrompt {
+        prompt: String,
+    },
     CreateIssue,
     /// C7 · 采集器 (plan/13 D7): pull real data (GitHub queries) into the
     /// project's metrics as append-only observations. No-hijack like
@@ -1072,13 +1419,32 @@ pub enum CronMode {
 }
 
 impl CronMode {
-    /// L1(plan/11): cron 详情卡要如实标出「到点做什么」——运行一个 workflow、
-    /// 只建一件活(autopilot,no-hijack)、还是采集指标(pull → 观测)。
-    pub fn label(self) -> &'static str {
+    /// L1(plan/11); extended T10(RunSkill/RunPrompt)+ C7(CollectMetrics)。
+    /// Cron 详情卡要如实标出「到点做什么」——运行工作流/技能/Prompt、只建
+    /// 一件活(autopilot,no-hijack)、还是采集指标(pull → 观测)。
+    pub fn label(&self) -> &'static str {
         match self {
             CronMode::RunWorkflow => "运行工作流",
+            CronMode::RunSkill { .. } => "运行技能",
+            CronMode::RunPrompt { .. } => "运行 Prompt",
             CronMode::CreateIssue => "建活(autopilot · 不自动跑)",
             CronMode::CollectMetrics => "采集指标(pull GitHub → 观测)",
+        }
+    }
+
+    /// T10(plan/12 §5): the row-front icon that lets CronHub's list tell the
+    /// four modes apart at a glance. `CreateIssue` deliberately keeps the
+    /// pre-T10 "no icon" look (the issue asked to leave it 沿用现状) — its
+    /// distinctiveness already comes from `label()`'s explicit "autopilot"
+    /// text, not an icon.
+    pub fn icon(&self) -> &'static str {
+        match self {
+            CronMode::RunWorkflow => "🔄",
+            CronMode::RunSkill { .. } => "⚙",
+            CronMode::RunPrompt { .. } => "💬",
+            CronMode::CreateIssue => "",
+            // C7(合流): 采集是观测不是活,用与「立即同步」同族的图标。
+            CronMode::CollectMetrics => "📈",
         }
     }
 }
@@ -1100,7 +1466,14 @@ pub struct CronTask {
     pub name: String,
     /// What it runs — free text (e.g. a workflow/routine name); not a hard FK
     /// since a cron target may be a hub workflow, a connector sync, or
-    /// something outside this app entirely.
+    /// something outside this app entirely. T10 (plan/12 §5): also doubles as
+    /// the payload column for the two new [`CronMode`] variants — a
+    /// `RunSkill` task stores its referenced `SkillId` here (as text), a
+    /// `RunPrompt` task stores its raw prompt text here. `mode` is always the
+    /// typed, authoritative read of "what this really is"; `target` is the
+    /// storage-level string both `mode` and this field derive from (see
+    /// `bw_store::parse_cron_mode`) — unused (empty) for `CreateIssue`, as
+    /// before.
     pub target: String,
     pub schedule: Cadence,
     /// `None` = 全部项目 (all projects), matching the prototype's own
@@ -1114,7 +1487,8 @@ pub struct CronTask {
     /// never a parsed-back label.
     pub last_run_at: Option<OffsetDateTime>,
     /// A1: what this task does when due. `RunWorkflow` (default) runs `target`;
-    /// `CreateIssue` mints a stage-scoped Issue (autopilot, no-hijack).
+    /// `CreateIssue` mints a stage-scoped Issue (autopilot, no-hijack);
+    /// `RunSkill`/`RunPrompt` (T10) really execute too — see `CronMode`'s doc.
     #[serde(default)]
     pub mode: CronMode,
     /// A1: the stage a `CreateIssue` task scopes its Issue to (`None` for
@@ -1581,7 +1955,7 @@ pub struct Issue {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProjectPhase {
+pub enum Readiness {
     /// 运营中
     Running,
     /// 冷启动中(创建流程未完成确认)
@@ -1594,7 +1968,7 @@ pub enum ProjectPhase {
 /// biases nothing in the derive chain, only the wall's mix-bar display.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProjectCycle {
+pub enum MaturityPeriod {
     /// 探索期 · 0→1 · 未达 PMF
     Explore,
     /// 扩张期 · 1→N · 增长
@@ -1603,37 +1977,37 @@ pub enum ProjectCycle {
     Mature,
 }
 
-impl ProjectCycle {
+impl MaturityPeriod {
     pub fn label(self) -> &'static str {
         match self {
-            ProjectCycle::Explore => "探索期",
-            ProjectCycle::Expand => "扩张期",
-            ProjectCycle::Mature => "成熟期",
+            MaturityPeriod::Explore => "探索期",
+            MaturityPeriod::Expand => "扩张期",
+            MaturityPeriod::Mature => "成熟期",
         }
     }
 
     pub fn sub_label(self) -> &'static str {
         match self {
-            ProjectCycle::Explore => "0→1 · 未达 PMF",
-            ProjectCycle::Expand => "1→N · 增长",
-            ProjectCycle::Mature => "Sustain · 原「运维」期",
+            MaturityPeriod::Explore => "0→1 · 未达 PMF",
+            MaturityPeriod::Expand => "1→N · 增长",
+            MaturityPeriod::Mature => "Sustain · 原「运维」期",
         }
     }
 
     /// Percentage weight per [`StageKind::ALL`] stage, summing to 100.
     pub fn mix(self) -> [u8; 5] {
         match self {
-            ProjectCycle::Explore => [40, 30, 15, 10, 5],
-            ProjectCycle::Expand => [10, 25, 20, 30, 15],
-            ProjectCycle::Mature => [5, 10, 25, 25, 35],
+            MaturityPeriod::Explore => [40, 30, 15, 10, 5],
+            MaturityPeriod::Expand => [10, 25, 20, 30, 15],
+            MaturityPeriod::Mature => [5, 10, 25, 25, 35],
         }
     }
 
     pub fn main_loop_label(self) -> &'static str {
         match self {
-            ProjectCycle::Explore => "主环 · 原型 ↔ 构建 来回",
-            ProjectCycle::Expand => "主环 · 构建 → 优化 → 推广",
-            ProjectCycle::Mature => "主环 · 优化 ↔ 运维 · 推广保温",
+            MaturityPeriod::Explore => "主环 · 原型 ↔ 构建 来回",
+            MaturityPeriod::Expand => "主环 · 构建 → 优化 → 推广",
+            MaturityPeriod::Mature => "主环 · 优化 ↔ 运维 · 推广保温",
         }
     }
 }
@@ -1645,8 +2019,8 @@ pub struct Project {
     pub name: String,
     pub kind: String,
     pub desc: String,
-    pub phase: ProjectPhase,
-    pub cycle: ProjectCycle,
+    pub phase: Readiness,
+    pub cycle: MaturityPeriod,
     /// Which of the five stages is currently hosting the work.
     pub active_stage: StageKind,
     /// L6 cache — only [`crate::derive::reduce_worst_of`] can fill it.

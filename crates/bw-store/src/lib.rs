@@ -19,15 +19,15 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    AgentCard, AgentRef, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronMode,
-    CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource, LibSource,
-    LoopConfig, Maturity, ProjectCycle, ProjectPhase, Role, RunStatus, RunTrigger, SessionStatus,
-    Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
-    WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
+    AgentCard, AgentRef, Author, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronMode,
+    CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource,
+    LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness, RunStatus, RunTrigger,
+    SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
+    WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
-    SkillId, WorkflowId, WorkflowRunId,
+    SkillFileId, SkillId, WorkflowId, WorkflowRunId,
 };
 use time::OffsetDateTime;
 
@@ -183,7 +183,7 @@ pub struct NewWorkflowSpec {
     pub prompt: String,
     pub goal: String,
     pub stage_ref: Option<u8>,
-    pub phases: Vec<String>,
+    pub phases: Vec<PhaseMeta>,
     /// Per-phase real instructions (playbook), index-aligned with `phases`.
     /// Empty = pre-playbook workflow (every phase shares `prompt`).
     pub phase_prompts: Vec<String>,
@@ -204,7 +204,7 @@ pub struct NewWorkflowSpec {
 pub struct WorkflowEdit {
     pub prompt: String,
     pub goal: String,
-    pub phases: Vec<String>,
+    pub phases: Vec<PhaseMeta>,
     /// Per-phase instructions, index-aligned with `phases` (may be empty —
     /// an edit that drops back to a single shared `prompt` is legal).
     pub phase_prompts: Vec<String>,
@@ -222,33 +222,78 @@ pub struct NewSkill {
     pub maturity: Maturity,
     pub desc: String,
     pub category: String,
-    pub source: LibSource,
-    /// Executable body (may be empty for a catalog reference entry).
+    /// T7 (plan/12 §0/§2): which stage role this skill belongs to; `None` =
+    /// general/cross-stage. See `bw_core::model::SkillCard::stage_ref`'s doc
+    /// comment for the `Option<StageKind>`-vs-`WorkflowSpec`'s-`Option<u8>`
+    /// alignment call.
+    pub stage_ref: Option<StageKind>,
+    pub source: HubSource,
+    /// Executable body (may be empty for a catalog reference entry). For a
+    /// skill minted by `ImportSkillPackage`, this is SKILL.md's own body —
+    /// every *other* file in the imported folder lands in `skill_file`
+    /// instead (see [`NewSkillFile`]).
     pub content: String,
     /// 践行最小切片(2026-07-20):`None` = hub library(全局);`Some` = 项目自有。
     /// 见 [`NewWorkflowSpec::project_id`]。
     pub project_id: Option<ProjectId>,
 }
 
+/// One real support file belonging to an imported skill folder (T2, plan/12
+/// §2) — copy-on-import: `content` is the file's real bytes at import time,
+/// completely decoupled from the source path afterward. `rel_path` is the
+/// real path relative to the skill folder's root (`"references/mocking.md"`,
+/// `"agents/openai.yaml"`, …) — no predetermined category/subfolder scheme,
+/// as-observed on disk.
+pub struct NewSkillFile {
+    pub rel_path: String,
+    pub content: String,
+}
+
 /// Editable content fields for an existing skill — `maturity`/`source`/
 /// `uses` are lifecycle data untouched by an edit, same rule
-/// `WorkflowEdit`/`update_workflow_spec` already established.
+/// `WorkflowEdit`/`update_workflow_spec` already established. `source` is
+/// "untouched" with one T11 exception below.
 pub struct SkillEdit {
     pub name: String,
     pub desc: String,
     pub category: String,
     pub content: String,
+    /// T11 (2026-07-23, plan/12 §7): the caller (`bw-app`'s `UpdateSkill`
+    /// handler) has already compared this edit's substantive fields
+    /// (`content`/`desc`/`category`) against the row's pre-edit values and
+    /// found this row `Official` — `true` means "flip `source` to
+    /// `self_built` in this same UPDATE". `official_library` is
+    /// deliberately left untouched either way (留痕 — `parse_hub_source`
+    /// already ignores that column whenever the tag isn't `official`, so the
+    /// domain-level `HubSource` read-back is honestly `SelfBuilt` regardless;
+    /// the raw column survives for `SkillCard::adapted_from` / re-import
+    /// dedup to read).
+    pub flip_to_self_built: bool,
 }
 
 pub struct NewAgent {
     pub id: AgentId,
     pub name: String,
     pub role: String,
+    /// T7 (plan/12 §0/§3): same classification dimension as
+    /// `NewSkill::stage_ref` — `None` = general/cross-stage.
+    pub stage_ref: Option<StageKind>,
     pub maturity: Maturity,
     pub skills: Vec<String>,
     pub model: String,
     /// Standing instructions (may be empty for a catalog reference entry).
     pub instructions: String,
+    /// T5 (2026-07-23, plan/12 §3): AllowedTools — real AGENT.md `tools`
+    /// frontmatter for an imported row; `[]` for a hand-authored
+    /// `CreateAgent` row or one of the five built-in stage-role agents (no
+    /// restriction declared).
+    pub tools: Vec<String>,
+    /// T5: which Agent CLI executes this agent. First version always
+    /// `"claude-code"` — the only one with a real executor.
+    pub agent_cli: String,
+    /// T5 (plan/12 §6/§8): provenance, the same [`HubSource`] Skill/Workflow
+    /// already carry.
+    pub source: HubSource,
     /// 践行最小切片(2026-07-20):`None` = hub library(全局);`Some` = 项目自有。
     /// 见 [`NewWorkflowSpec::project_id`]。
     pub project_id: Option<ProjectId>,
@@ -262,11 +307,20 @@ pub struct AgentEdit {
     pub skills: Vec<String>,
     pub model: String,
     pub instructions: String,
+    /// T11 (2026-07-23, plan/12 §7): same flip signal as
+    /// `SkillEdit::flip_to_self_built` — see its doc comment. The caller has
+    /// already compared `instructions`/`role`/`model` against the row's
+    /// pre-edit values and found it `Official`.
+    pub flip_to_self_built: bool,
 }
 
 pub struct NewCronTask {
     pub id: CronTaskId,
     pub name: String,
+    /// T10: for `RunSkill`/`RunPrompt`, the caller must set this to `mode`'s
+    /// own payload (the skill id as text / the raw prompt text respectively)
+    /// — `create_cron_task` just stores whatever is here; it does not
+    /// re-derive it from `mode`. See `bw_core::model::CronMode`'s doc.
     pub target: String,
     pub schedule: Cadence,
     pub project_id: Option<ProjectId>,
@@ -332,14 +386,26 @@ pub struct NewKnowledgeSource {
 
 // ───────────────────────────── read DTOs ─────────────────────────────
 
+/// One persisted `skill_file` row, as read back — the real support-file
+/// contents an imported skill folder carried alongside its SKILL.md (T2,
+/// plan/12 §2).
+#[derive(Clone, Debug)]
+pub struct SkillFileRow {
+    pub id: SkillFileId,
+    pub skill_id: SkillId,
+    pub rel_path: String,
+    pub content: String,
+    pub created_at: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct ProjectRow {
     pub id: ProjectId,
     pub name: String,
     pub kind: String,
     pub desc: String,
-    pub phase: ProjectPhase,
-    pub cycle: ProjectCycle,
+    pub phase: Readiness,
+    pub cycle: MaturityPeriod,
     pub active_stage: StageKind,
     pub north_star: String,
     pub ns_def: String,
@@ -467,7 +533,7 @@ pub struct SessionRow {
 
 #[derive(Clone, Debug)]
 pub struct MessageRow {
-    pub role: Role,
+    pub role: Author,
     pub text: String,
 }
 
@@ -482,8 +548,8 @@ pub trait Store: Send + Sync {
     /// after-the-fact editing/correction. Irreversible; the caller is
     /// responsible for any user-facing confirmation.
     async fn delete_project(&self, id: ProjectId) -> Result<()>;
-    async fn set_project_phase(&self, id: ProjectId, phase: ProjectPhase) -> Result<()>;
-    async fn set_project_cycle(&self, id: ProjectId, cycle: ProjectCycle) -> Result<()>;
+    async fn set_project_phase(&self, id: ProjectId, phase: Readiness) -> Result<()>;
+    async fn set_project_cycle(&self, id: ProjectId, cycle: MaturityPeriod) -> Result<()>;
     async fn set_north_star(&self, id: ProjectId, north_star: &str, ns_def: &str) -> Result<()>;
     /// 对标竞品 + 机会缺口/三月成功标准 (creation-flow real inputs).
     async fn set_brief(&self, id: ProjectId, benchmark: &str, opportunity: &str) -> Result<()>;
@@ -564,7 +630,7 @@ pub trait Store: Send + Sync {
     ) -> Result<()>;
 
     async fn ensure_session(&self, s: NewSession) -> Result<()>;
-    async fn append_message(&self, session_id: SessionId, role: Role, text: &str) -> Result<()>;
+    async fn append_message(&self, session_id: SessionId, role: Author, text: &str) -> Result<()>;
 
     /// **The sole signal writer** — reads observations + targets, derives via
     /// `bw_core`, writes every `signal` / `hit` cache for the project.
@@ -697,11 +763,34 @@ pub trait Store: Send + Sync {
     /// skill row (distilling the same issue twice produces two skills, not an
     /// error).
     async fn distill_skill_from_issue(&self, skill: NewSkill, from_issue: IssueId) -> Result<()>;
+    /// Copy-on-import a real skill folder (T2, plan/12 §2): inserts the
+    /// `skill` row plus every `files` entry as a `skill_file` row, in one
+    /// transaction — either the whole package lands or none of it does.
+    /// `skill.content` must already be SKILL.md's own body; `files` is
+    /// everything else found in the folder (recursively, real relative
+    /// paths). Additive, like `distill_skill_from_issue`: re-importing the
+    /// same folder mints another skill row rather than upserting (dedup is
+    /// `ImportSkillLibrary`'s concern, T3).
+    async fn import_skill_package(&self, skill: NewSkill, files: Vec<NewSkillFile>) -> Result<()>;
+    /// Every real support file belonging to one skill, insertion order
+    /// (oldest first) — the file-tree source for a Skill detail view (T4).
+    async fn list_skill_files(&self, skill_id: SkillId) -> Result<Vec<SkillFileRow>>;
+    /// T7 (plan/12 §0/§2): narrow backfill setter — classifies an *existing*
+    /// row (not a content edit, so deliberately separate from `SkillEdit`,
+    /// same reasoning `record_skill_use_by_name` already established for
+    /// single-column, non-content updates). Used by
+    /// `seed_stage_entities_if_missing` to backfill `stage_ref` on the five
+    /// built-in stage skills when they were seeded by an older binary,
+    /// before this column carried real values.
+    async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()>;
 
     async fn create_agent(&self, a: NewAgent) -> Result<()>;
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>>;
     async fn update_agent(&self, id: AgentId, edit: AgentEdit) -> Result<()>;
+    /// T7: same backfill role as `set_skill_stage_ref`, for the five
+    /// built-in stage-role agents.
+    async fn set_agent_stage_ref(&self, id: AgentId, stage_ref: Option<StageKind>) -> Result<()>;
     /// Credit one settled run to every agent row named `name`: `runs += 1`,
     /// `wins += ok as int`, `win_rate` recomputed from the real counters.
     /// Returns how many rows matched (0 = unregistered ref, honest no-op).
@@ -829,19 +918,19 @@ pub(crate) fn parse_stage_kind(s: &str) -> Option<StageKind> {
         .find(|k| stage_kind_text(*k) == s)
 }
 
-pub(crate) fn cycle_text(c: ProjectCycle) -> &'static str {
+pub(crate) fn cycle_text(c: MaturityPeriod) -> &'static str {
     match c {
-        ProjectCycle::Explore => "explore",
-        ProjectCycle::Expand => "expand",
-        ProjectCycle::Mature => "mature",
+        MaturityPeriod::Explore => "explore",
+        MaturityPeriod::Expand => "expand",
+        MaturityPeriod::Mature => "mature",
     }
 }
 
-pub(crate) fn parse_cycle(s: &str) -> ProjectCycle {
+pub(crate) fn parse_cycle(s: &str) -> MaturityPeriod {
     match s {
-        "expand" => ProjectCycle::Expand,
-        "mature" => ProjectCycle::Mature,
-        _ => ProjectCycle::Explore,
+        "expand" => MaturityPeriod::Expand,
+        "mature" => MaturityPeriod::Mature,
+        _ => MaturityPeriod::Explore,
     }
 }
 
@@ -861,18 +950,40 @@ pub(crate) fn parse_session_status(s: &str) -> SessionStatus {
     }
 }
 
-pub(crate) fn cron_mode_text(m: CronMode) -> &'static str {
+/// The `cron_task.mode` discriminant text. T10: `RunSkill`/`RunPrompt` carry
+/// data now, but that data lives in `cron_task.target` (see `parse_cron_mode`
+/// below), so this stays a plain by-reference discriminant lookup — no
+/// column, no migration.
+pub(crate) fn cron_mode_text(m: &CronMode) -> &'static str {
     match m {
         CronMode::RunWorkflow => "run_workflow",
+        CronMode::RunSkill { .. } => "run_skill",
+        CronMode::RunPrompt { .. } => "run_prompt",
         CronMode::CreateIssue => "create_issue",
         CronMode::CollectMetrics => "collect_metrics",
     }
 }
 
-pub(crate) fn parse_cron_mode(s: &str) -> CronMode {
-    match s {
+/// Reconstruct a full [`CronMode`] from the two raw columns that carry it:
+/// `mode` (the discriminant) and `target` (T10's payload column — a real
+/// `SkillId` as text for `run_skill`, the raw prompt for `run_prompt`; unused
+/// by the two pre-T10 variants, whose own `target` semantics are untouched).
+/// An unparseable `run_skill` target (should never happen — the id is only
+/// ever written by this same code) reads back as the nil id rather than
+/// panicking — `App::tick_scheduler`'s `get_skill` lookup then honestly
+/// reports "not found", same as an actually-deleted skill.
+pub(crate) fn parse_cron_mode(mode: &str, target: &str) -> CronMode {
+    match mode {
         "create_issue" => CronMode::CreateIssue,
         "collect_metrics" => CronMode::CollectMetrics,
+        "run_skill" => CronMode::RunSkill {
+            skill_id: uuid::Uuid::parse_str(target)
+                .map(SkillId::from_uuid)
+                .unwrap_or_else(|_| SkillId::from_uuid(uuid::Uuid::nil())),
+        },
+        "run_prompt" => CronMode::RunPrompt {
+            prompt: target.to_string(),
+        },
         _ => CronMode::RunWorkflow,
     }
 }
@@ -914,17 +1025,68 @@ pub(crate) fn parse_maturity(s: &str) -> Maturity {
     }
 }
 
-pub(crate) fn lib_source_text(s: LibSource) -> &'static str {
+/// `source` (discriminant tag) + `official_library` (sub-tag, meaningful only
+/// for `Official`) column values for a [`HubSource`] — T2's unification of
+/// Skill's provenance onto the same enum Workflow already uses (plan/12 §6),
+/// reused as-is by T5 for `agent` (same two-column shape, same enum — no
+/// reason to duplicate the mapping per hub table). Mirrors `HubSource`'s own
+/// on-disk shape 1:1, just spread across two plain `TEXT` columns instead of
+/// one JSON blob (the `skill` table already had a dedicated `source TEXT`
+/// column pre-T2 — no reason to switch to JSON just to gain a struct
+/// variant). Despite the generic name, still named after its first caller;
+/// renamed here to `hub_source_columns` now that a second table uses it.
+pub(crate) fn hub_source_columns(s: &HubSource) -> (&'static str, String) {
     match s {
-        LibSource::Official => "official",
-        LibSource::SelfBuilt => "self_built",
+        HubSource::Official { official_library } => ("official", official_library.clone()),
+        HubSource::Adopted => ("adopted", String::new()),
+        HubSource::SelfBuilt => ("self_built", String::new()),
+        HubSource::WithinSession => ("within_session", String::new()),
     }
 }
 
-pub(crate) fn parse_lib_source(s: &str) -> LibSource {
-    match s {
-        "official" => LibSource::Official,
-        _ => LibSource::SelfBuilt,
+/// Inverse of [`hub_source_columns`]. Handles one legacy shape: pre-T2 rows
+/// written by the retired `LibSource::Official` (the 5 built-in
+/// stage-methodology skills, seeded before this migration) have
+/// `source='official'` but no `official_library` value — old DBs never had
+/// that column. T2 reclassifies those as `SelfBuilt`: `Official` now means
+/// "a curated *external* library" (must carry a real sub-tag), and this
+/// app's own built-in methodology isn't one — the same call
+/// `stage_template_workflow` already made on the Workflow side. Old
+/// databases keep opening either way; nothing crashes, the label just
+/// becomes honest under the new, stricter definition of `Official`. T5
+/// reuses this unchanged for `agent.source`/`agent.official_library` — the
+/// five built-in stage-role agents predate any `source` column exactly like
+/// the five built-in stage-methodology skills did, so the same fallback
+/// (`SelfBuilt`) is the honest read for them too.
+pub(crate) fn parse_hub_source(tag: &str, official_library: &str) -> HubSource {
+    match tag {
+        "official" if !official_library.is_empty() => HubSource::Official {
+            official_library: official_library.to_string(),
+        },
+        "official" => HubSource::SelfBuilt,
+        "adopted" => HubSource::Adopted,
+        "within_session" => HubSource::WithinSession,
+        _ => HubSource::SelfBuilt,
+    }
+}
+
+/// T11 (2026-07-23, plan/12 §7): `SkillCard::adapted_from` /
+/// `AgentCard::adapted_from` — the "改编自 <库名>" 留痕 read-back. `source`/
+/// `official_library` is a two-column scheme (see `hub_source_columns`); a
+/// T11 flip (`update_skill`/`update_agent` with `flip_to_self_built`)
+/// rewrites `source` to `'self_built'` but deliberately leaves the raw
+/// `official_library` column value in place. `parse_hub_source` above only
+/// ever reads that column when `tag == "official"`, so it never surfaces
+/// there post-flip — this is the sibling read that recovers it: non-`None`
+/// exactly when the tag has moved off `official` but the column still holds
+/// a value, i.e. exactly the flipped-away case. `None` for a still-`Official`
+/// row (its library already shows up in `source` itself, no duplication
+/// needed) and for a row that was never official (empty column).
+pub(crate) fn parse_adapted_from(tag: &str, official_library: &str) -> Option<String> {
+    if tag != "official" && !official_library.is_empty() {
+        Some(official_library.to_string())
+    } else {
+        None
     }
 }
 

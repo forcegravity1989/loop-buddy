@@ -14,7 +14,8 @@
 
 use bw_app::{App, Command, Event, Panel, Scope, View};
 use bw_core::model::{
-    AgentRef, HubCard, ProjectCycle, ProjectPhase, Role, SessionStatus, Signal, SkillRef, StageKind,
+    AgentRef, Author, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal, SkillRef,
+    StageKind,
 };
 use bw_core::{MetricId, SessionId};
 use bw_engine::{ClaudeCliConfig, Engine, GithubRepoSummary, MockExecutor, PermissionMode};
@@ -99,7 +100,7 @@ pub struct CreateVm {
     pub kind: String,
     /// The free-text brief (stored as the project's `desc`).
     pub brief: String,
-    pub cycle: ProjectCycle,
+    pub cycle: MaturityPeriod,
     pub benchmark: String,
     /// 三个月后怎样算成 (stored in the `opportunity` column).
     pub win: String,
@@ -148,7 +149,7 @@ pub struct OpVm {
     pub name: String,
     pub kind: String,
     pub project_signal: Signal,
-    pub cycle: ProjectCycle,
+    pub cycle: MaturityPeriod,
     pub active_stage: StageKind,
     pub north_star: String,
     pub ns_def: String,
@@ -554,7 +555,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // materializes until confirm), mean of hand-set stage progress once running.
     let mut cards = Vec::with_capacity(state.projects.len() + 1);
     for p in &state.projects {
-        let stage_progresses: Vec<u8> = if p.phase == ProjectPhase::Running {
+        let stage_progresses: Vec<u8> = if p.phase == Readiness::Running {
             match store.list_stages(p.id).await {
                 Ok(stages) => stages.iter().map(|s| s.progress).collect(),
                 Err(_) => Vec::new(),
@@ -603,7 +604,26 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         .iter()
         .filter_map(ui::vm::workflow_detail)
         .collect();
-    let skills: Vec<SkillCardVm> = state.skills.iter().map(skill_card).collect();
+    // T4(plan/12 §2): fold each skill's real `skill_file` rows in — one
+    // indexed-by-`skill_id` read per skill (`idx_skill_file_skill`), same
+    // eager-per-row-in-`build_vm` convention `usage_ranking`/`connectors`/
+    // etc. already use above; a skill with none gets an honest empty `files`
+    // (`skill_card`'s own graceful-degradation signal), not a wasted query
+    // guard.
+    let mut skills: Vec<SkillCardVm> = Vec::with_capacity(state.skills.len());
+    for s in &state.skills {
+        let files = store
+            .list_skill_files(s.id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| ui::vm::SkillFileVm {
+                rel_path: f.rel_path,
+                content: f.content,
+            })
+            .collect();
+        skills.push(skill_card(s, files));
+    }
     let agents: Vec<AgentCardVm> = state.agents.iter().map(agent_card).collect();
     let project_names: Vec<(bw_core::ProjectId, String)> = state
         .projects
@@ -613,7 +633,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     let cron_tasks: Vec<CronRowVm> = state
         .cron_tasks
         .iter()
-        .map(|c| cron_row(c, &project_names, now))
+        .map(|c| cron_row(c, &project_names, &state.skills, now))
         .collect();
     let connectors: Vec<ConnectorCardVm> = state.connectors.iter().map(connector_card).collect();
     let knowledge_sources: Vec<KnowledgeRowVm> =
@@ -856,7 +876,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|m| MsgVm {
-                    agent: m.role == Role::Agent,
+                    agent: m.role == Author::Agent,
                     text: m.text,
                 })
                 .collect();
