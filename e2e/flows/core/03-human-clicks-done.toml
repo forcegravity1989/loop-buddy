@@ -1,0 +1,37 @@
+name    = "human-clicks-done"
+purpose = "铁律:Done 的入边只有 InReview,且永远由人显式点击——绝不是任何自动化的产物"
+db      = "fixture:demo"
+launch  = { BW_OPEN = "linkcheck-md", BW_PANEL = "issues" }
+
+# 作用于 fixture 三卡里 InReview 的那张(#2)——与流 02 动的 #1 是不同的卡,
+# 互不干扰。标题本身就是看板卡片上唯一可点开评审细节的入口
+# (crates/app-desktop/src/screens/op.rs IssuesPanel:
+#  onclick: OpenIssueDetail,「{i.title}」)。
+[[step]]
+do     = "click"
+arg    = "【fixture】修复相对路径链接在反斜杠路径分隔符下的误报"
+snap   = "detail-opened"
+wait_s = 3
+
+# 「✓ 确认完成(人裁)」只在 IssueDetailOverlay、status=InReview 且无 PR 号时
+# 渲染(fixture Issue 从不接真 GitHub PR)——渲染出来即证明打开的是正确的卡。
+[[step]]
+do     = "assert_text"
+arg    = "✓ 确认完成(人裁)"
+wait_s = 2
+
+[[step]]
+do     = "click"
+arg    = "✓ 确认完成(人裁)"
+snap   = "human-done-clicked"
+wait_s = 3
+
+[[step]]
+do     = "assert_text"
+arg    = "已记账(同一件活绝不记两次)"
+snap   = "settled"
+wait_s = 2
+
+[[verify]]
+sql    = "SELECT status, settled_at, (settled_at IS NOT NULL) AS settled_ok FROM issue WHERE title='【fixture】修复相对路径链接在反斜杠路径分隔符下的误报'"
+expect = "done 且 settled_ok=1 —— TransitionIssue 到 Done 是人在评审细节里点「✓ 确认完成」显式触发的,settle-once 记账真实打点"

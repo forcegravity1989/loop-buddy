@@ -71,6 +71,15 @@ $ sqlite3 e2e/fixtures/demo.db "SELECT number, title, settled_at, (settled_at IS
 无。上一版记录的缺口(`real_demo` 从不创建 Issue,fixture 里 `issue` 表为
 空)已由 `seed_fixture` 关闭——见上面的真实读回。
 
+**2026-07-25(plan/15 flow-4 实跑发现并补齐)**:`distill_skill_from_issue`
+(`crates/bw-store/src/sqlite.rs`)硬性要求 `issue.assignee` 非空,而
+`seed_fixture` 原先从不指派——这会让「⚗ 蒸馏为技能」常青流在真实 UI 上永远
+失败(「确认蒸馏」派发的 `Command` 会以「distill: issue has no assignee」
+出错,不落一行 skill)。`seed_fixture` 现在对每张 fixture Issue 都真实派发
+`Command::AssignIssue`,指派给 `stage_ref` 与该 Issue 阶段匹配的内置阶段角色
+Agent(三张卡都是 `StageKind::Build` → 全部指派给「构建师」)——同一份
+「真实 Command 播种,零裸 SQL」纪律,不是走后门塞值。
+
 ## 只跑副本的纪律
 
 任何验收流**绝不**直接打开这份 `demo.db`(更不会打开用户真实的日常库)。

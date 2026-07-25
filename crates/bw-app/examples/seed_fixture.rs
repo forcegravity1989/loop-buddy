@@ -147,6 +147,34 @@ async fn ensure_issue(app: &mut App, store: &Arc<dyn Store>, spec: &FixtureIssue
         status = *next;
         println!("    → {}", status.label());
     }
+
+    // plan/15 §4 flow-4 dry-run gap (2026-07-25): `distill_skill_from_issue`
+    // hard-requires `issue.assignee` (crates/bw-store/src/sqlite.rs) — this
+    // example never assigned one, which silently makes the Done fixture
+    // issue impossible to distill through the real UI ("确认蒸馏" dispatches
+    // a Command that errors "distill: issue has no assignee", never inserting
+    // a skill row). No raw-SQL shortcut: assign for real via
+    // `Command::AssignIssue`, matched to the built-in stage-role agent whose
+    // `stage_ref` equals this fixture Issue's stage — same "real Command,
+    // never a裸 SQL patch" discipline as everything else in this file.
+    let current = store.get_issue(id).await.expect("get issue");
+    if current.and_then(|i| i.assignee).is_none() {
+        if let Some(agent) = store
+            .list_agents()
+            .await
+            .expect("list agents")
+            .into_iter()
+            .find(|a| a.stage_ref == Some(spec.stage))
+        {
+            app.dispatch(Command::AssignIssue {
+                id,
+                assignee: Some(agent.id),
+            })
+            .await
+            .expect("assign issue");
+            println!("    [指派] → {}", agent.name);
+        }
+    }
 }
 
 #[tokio::main]
