@@ -291,14 +291,26 @@ async fn run_snap(seq: usize, name: &str, cmd_path: &Path) -> (bool, String) {
         },
         Err(e) => {
             // Same re-render race `run_command` documents for click/fill —
-            // but the stash for `snap` deliberately never carries `data`
-            // (see `snap_stash_wrap`), so even a successful read-back can't
-            // recover the PNG bytes. Reporting a truncated/blank file here
-            // would be worse than reporting the honest gap.
-            match document::eval(&readback_script(seq)).await {
-                Ok(v) => match stash_result(&v) {
-                    Some((true, _)) => return (false, "unknown: 截图数据丢失(重渲染)".to_string()),
-                    Some((false, reason)) => return (false, reason),
+            // but a lost `snap` eval also loses the PNG payload the direct
+            // return would have carried. Unlike click/fill, the fix here
+            // isn't to dodge the race (root cause: InReview→Done settle-once
+            // accounting + recompute_signals + artifact registration each
+            // push a fresh Vm, so re-renders keep firing for a while — that's
+            // normal product behavior, not something a longer sleep avoids)
+            // — it's to let the payload survive it. `snap_script` stashes the
+            // data separately on `window.__bw_flow_snap` (kept apart from the
+            // small `window.__bw_flow` so *that* stash stays cheap); this
+            // non-mutating read-back recovers it and clears the snap stash in
+            // the same round-trip so a later command can never pick up a
+            // stale image — reusing one would be a fabricated screenshot,
+            // worse than reporting no image at all.
+            match document::eval(&snap_readback_script(seq)).await {
+                Ok(v) => match snap_readback_result(&v) {
+                    Some(SnapReadback::Ok(data)) => data,
+                    Some(SnapReadback::JsFail(reason)) => return (false, reason),
+                    Some(SnapReadback::OkButNoData) => {
+                        return (false, "unknown: 截图数据丢失(重渲染)".to_string())
+                    }
                     None => {
                         return (
                             false,
@@ -316,6 +328,64 @@ async fn run_snap(seq: usize, name: &str, cmd_path: &Path) -> (bool, String) {
         }
     };
     write_snap(cmd_path, name, &data_url)
+}
+
+/// Outcome of `snap_readback_script`: `Ok(data_url)` when the payload made it
+/// back, `JsFail(reason)` when the JS side itself reported failure (real
+/// reason, not a race), `OkButNoData` when the small stash confirms success
+/// but the snap-data stash didn't match — the payload is genuinely gone, so
+/// this must NOT be treated as success.
+enum SnapReadback {
+    Ok(String),
+    JsFail(String),
+    OkButNoData,
+}
+
+/// Parses `snap_readback_script`'s return value. `None` covers both JSON
+/// `null` (no matching `{seq, ok, reason}` stash at all — `Value::get` on
+/// `Null` already returns `None`, no explicit check needed) and any
+/// unexpected shape; never guessed into a result.
+fn snap_readback_result(v: &serde_json::Value) -> Option<SnapReadback> {
+    let ok = v.get("ok")?.as_bool()?;
+    if !ok {
+        let reason = v
+            .get("reason")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        return Some(SnapReadback::JsFail(reason));
+    }
+    match v.get("data").and_then(|x| x.as_str()) {
+        Some(data) => Some(SnapReadback::Ok(data.to_string())),
+        None => Some(SnapReadback::OkButNoData),
+    }
+}
+
+/// Non-mutating companion to `snap_script`, parallel to `readback_script`
+/// but snap-specific: it also recovers the PNG payload from the separate
+/// `window.__bw_flow_snap` stash (see `snap_stash_wrap`) when its `seq`
+/// matches, AND unconditionally clears that stash to `null` in the same
+/// round-trip — so whether this read was a hit or a miss, no later `snap`
+/// command's read-back can ever pick up this data again under a different
+/// name. Being non-mutating (it doesn't touch the DOM), issuing it can't
+/// itself trigger a re-render and so isn't subject to the race it's working
+/// around.
+fn snap_readback_script(seq: usize) -> String {
+    format!(
+        r#"
+let stash = window.__bw_flow;
+let snapStash = window.__bw_flow_snap;
+let result = null;
+if (stash && stash.seq === {seq}) {{
+    result = {{seq: {seq}, ok: stash.ok, reason: stash.reason}};
+    if (snapStash && snapStash.seq === {seq} && snapStash.data) {{
+        result.data = snapStash.data;
+    }}
+}}
+window.__bw_flow_snap = null;
+return result;
+"#
+    )
 }
 
 /// Command-line snap names become file names directly (`snaps/<name>.png`)
@@ -457,22 +527,25 @@ try {{
     snap_stash_wrap(seq, &action_js)
 }
 
-/// Like `stash_wrap`, but for `snap`: the returned value carries the full
-/// `{seq, ok, reason, data}` (the PNG data URL travels once, over the same
-/// eval round-trip already carrying it), while `window.__bw_flow` stashes
-/// only `{seq, ok, reason}` — deliberately WITHOUT `data`. A multi-MB data
-/// URL sitting on `window.__bw_flow` would itself bloat every future
-/// `readback_script` round-trip, and the read-back path only ever needs to
-/// answer "did it succeed", not "here are the bytes again" — if the
-/// happy-path return is lost to the re-render race, `run_snap` reports the
-/// honest `截图数据丢失(重渲染)` rather than trying to recover bytes that
-/// were never stashed.
+/// Like `stash_wrap`, but for `snap`, and split across TWO stashes so the
+/// cheap one stays cheap:
+/// - `window.__bw_flow` gets only `{seq, ok, reason}` — same small shape
+///   every other command stashes there, read by the ordinary `ok`/`reason`
+///   bookkeeping.
+/// - `window.__bw_flow_snap` gets `{seq, data}` — the (possibly multi-MB)
+///   PNG data URL, kept off the shared stash entirely so it never bloats an
+///   unrelated command's read-back.
+/// The direct return value still carries everything (`{seq, ok, reason,
+/// data}`) for the common happy path where the eval's `await` survives. When
+/// it doesn't, `snap_readback_script` is what recovers `data` from the
+/// second stash — see `run_snap`.
 fn snap_stash_wrap(seq: usize, action_js: &str) -> String {
     format!(
         r#"
 let __bw_result;
 {action_js}
 window.__bw_flow = {{seq: {seq}, ok: __bw_result.ok, reason: __bw_result.reason}};
+window.__bw_flow_snap = {{seq: {seq}, data: __bw_result.data || null}};
 return Object.assign({{seq: {seq}}}, __bw_result);
 "#
     )
