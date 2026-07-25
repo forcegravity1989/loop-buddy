@@ -17,8 +17,10 @@
 
 ## 1 · 总架构
 
+> 下图为原始设计;驱动环节按 §2.1 转向后为:**Fable 用深链 + `BW_FLOW` 应用内注入驱动,用 MCP 真窗口截图取证**。
+
 ```
-流文件(考卷 TOML, e2e/flows/) ──> Fable 用 computer-use 亲手驾驶打包后的 BW.app
+流文件(考卷 TOML, e2e/flows/) ──> Fable 亲自驾驶打包后的 BW.app
                                     │  每步:截图→定位→动作→截图→对照预期→记 verdict
                                     ▼
                     e2e/reports/<UTC时间戳>-<批次>/ (gitignored)
@@ -40,6 +42,23 @@
 | G-3 截图落盘 | `screencapture -l <窗口ID>` 出 PNG 文件 | 终端宿主无屏幕录制权限→只拍到墙纸 | 含 BW 窗口内容的 PNG 文件;需用户在系统设置一次性授权 |
 
 任何一关卡死:停下,拿实测证据找用户定夺(备选=A 路线应用内自截做落盘、B 路线做驱动的混合),**绝不静默换路线**。
+
+### 2.1 实测结果与路线转向(2026-07-24 Fable 亲驾,证据 `iterations/evidence/gate-2026-07-24/GATE.md`)
+
+| 关 | 裁决 | 实况 |
+|---|---|---|
+| G-1 | ✓ 过 | 打包 .app 后 MCP `screenshot` 清晰拍到 BW 真窗口(标题栏+首页文案可读)。**历史「裸 debug 二进制拿不到窗口」暗礁排除**——相对过去会话的真实进展 |
+| G-2 | ✗ 环境受阻 | 对窗口内**任意**坐标点击一律被拦:`lands on "程序坞", not in allowed applications`。穷尽自查无效(BW 已授权 tier=full、`open_application` 激活 frontmost、改 `open --env` 以 .app 身份启动、多坐标、试授权程序坞但系统组件不可授权)。根因=本机 computer-use 点击 hit-test 把 BW 窗口区 ownership 误判归 Dock,非 BW/打包侧;与既往跨会话「clicks blocked」复现一致 |
+| G-3 | ✗ 权限降级 | CLI `screencapture -l<窗口ID>` 报 could not create image;`-R`/全屏虽落盘但**内容是纯墙纸**(全屏图菜单栏显示「Claude」=宿主进程缺屏幕录制权限)。对照:MCP `screenshot` 有独立 compositor 级授权,拍得到真窗口 |
+
+**用户拍板(2026-07-24):A+B 混合。** 理由:B 路线的初衷「证据链就该是人眼看到的东西」由 **MCP 真窗口截图**完全满足(G-1 已证),卡住的只是模拟点击这一环——那就把驱动换成应用内,证据仍留在真窗口。
+
+修订后的路线:
+
+- **证据(人眼)= MCP computer-use `screenshot` 拍打包后 BW.app 真窗口**,每个检查点一张。
+- **驱动 = 应用内**:既有深链(`BW_DB/BW_OPEN/BW_PANEL/BW_HUB/BW_SEL`)直达面板,外加**新增 `BW_FLOW` 注入口**(`document::eval` 在 webview 内派发真实 DOM 事件,走与人手点击完全相同的 onclick→Command→kernel→DB 链路)。
+- **破例记账**:原计划「本批零 Rust 改动」作废——`BW_FLOW` 驱动需要 app-desktop 侧少量新代码。如实记入偏差,不假装无改动。
+- **不做的**:不修 computer-use 点击环境(跨会话顽疾,不在本批射程);不自研应用内截图(MCP 截图已满足人眼证据,A 路线的自截仅作 MCP 不可用时的后备,本批不建)。
 
 ## 3 · 流文件格式(考卷)
 
@@ -120,7 +139,9 @@ expect = "Done 且 settled_at 非空"               # 预期陈述;报告永远�
 | 打包 | `scripts/bundle-desktop.sh`(dx bundle) |
 | 报告生成 | `scripts/gen-flow-report.py` |
 | 证据落盘 | `e2e/reports/`(gitignored)+ `iterations/evidence/`(归档进 git) |
-| 深链启动 | 复用 `BW_DB/BW_OPEN/BW_PANEL/BW_HUB`(main.rs 既有) |
+| 深链启动 | 复用 `BW_DB/BW_OPEN/BW_PANEL/BW_HUB/BW_SEL`(main.rs 既有) |
+| 点击驱动 | `BW_FLOW` 应用内注入(§2.1 转向后新增,app-desktop 侧) |
+| 人眼证据 | MCP computer-use `screenshot` 拍 BW.app 真窗口 |
 | 读回 | `sqlite3` 直查,CLAUDE.md 纪律 1 |
 
 ## 9 · 反蔓延(本批不做)
