@@ -32,3 +32,7 @@ demo-workspaces/
 # 验收动作流(plan/15)执行产物:步骤截图/run.log/readback——现场证据,
 # 不是源码。终审通过后由人挑选归档进 iterations/evidence/(那份进 git)。
 e2e/reports/
+
+# 验收报告是给人看的,不进仓:仓里的东西会变成 agent 上下文,而报告是
+# 人工终审用的大件(带图 4MB+)。报告留在 e2e/reports/ 本地,或挂到 PR/Release。
+iterations/evidence/**/*.html
