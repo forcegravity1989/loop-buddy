@@ -28,3 +28,7 @@ demo-workspaces/
 
 # subagent-driven-development 隔离工作区(git worktree),不是源码。
 /.worktrees/
+
+# 验收动作流(plan/15)执行产物:步骤截图/run.log/readback——现场证据,
+# 不是源码。终审通过后由人挑选归档进 iterations/evidence/(那份进 git)。
+e2e/reports/
