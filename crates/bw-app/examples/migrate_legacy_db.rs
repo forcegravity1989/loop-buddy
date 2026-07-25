@@ -13,6 +13,15 @@
 //! `app_meta[template_phase_refresh_v1]` readback are that pass's own
 //! independent proof, alongside the pre-existing shell-migration tally.
 //!
+//! T14.5 (2026-07-24, GH#59) folds in a THIRD pass: directory-import
+//! (ECC/Adopted) `workflow_spec` catalog shells with zero real trace (no
+//! `workflow_run`, `uses=0`, unreferenced by any `run_workflow`-mode
+//! `cron_task`) get deleted outright — see
+//! `bw_app::legacy_migration::is_directory_import_source`'s doc comment.
+//! This example's printed `purged_workflows` list, the `workflow_spec`
+//! before/after row count, and the `app_meta[workflow_shell_purge_v1]`
+//! readback are that pass's own independent proof.
+//!
 //! **This is meant to run against a throwaway COPY of a real daily DB**, per
 //! this ticket's own acceptance criterion: the caller is responsible for
 //! `cp`-ing `~/Library/Application Support/BuildersWorkbench/workbench.db`
@@ -64,10 +73,12 @@ async fn main() {
 
     let skills_before = store.list_skills().await.unwrap();
     let agents_before = store.list_agents().await.unwrap();
+    let workflows_before = store.list_workflow_specs().await.unwrap();
     println!(
-        "before Boot: skill={} agent={}",
+        "before Boot: skill={} agent={} workflow_spec={}",
         skills_before.len(),
-        agents_before.len()
+        agents_before.len(),
+        workflows_before.len()
     );
 
     app.dispatch(Command::Boot).await.unwrap();
@@ -90,6 +101,7 @@ async fn main() {
 
     let skills_after = store.list_skills().await.unwrap();
     let agents_after = store.list_agents().await.unwrap();
+    let workflows_after = store.list_workflow_specs().await.unwrap();
     let skill_files_after = {
         let mut n = 0usize;
         for s in &skills_after {
@@ -105,6 +117,7 @@ async fn main() {
         .get_app_meta("template_phase_refresh_v1")
         .await
         .unwrap();
+    let shell_purge_flag = store.get_app_meta("workflow_shell_purge_v1").await.unwrap();
 
     println!("----------------------------------------------------------");
     match &report {
@@ -134,6 +147,11 @@ async fn main() {
                 r.refreshed_templates.len(),
                 r.refreshed_templates
             );
+            println!(
+                "  purged_workflows ({}): {:?}",
+                r.purged_workflows.len(),
+                r.purged_workflows
+            );
         }
         None => println!("migration did NOT run this dispatch (already-done / no-op path)"),
     }
@@ -148,9 +166,15 @@ async fn main() {
         agents_before.len(),
         agents_after.len()
     );
+    println!(
+        "workflow_spec: before={} after={}",
+        workflows_before.len(),
+        workflows_after.len()
+    );
     println!("skill_file rows after: {skill_files_after}");
     println!("app_meta[legacy_shells_migration_v1] = {done_flag:?}");
     println!("app_meta[template_phase_refresh_v1] = {phase_refresh_flag:?}");
+    println!("app_meta[workflow_shell_purge_v1] = {shell_purge_flag:?}");
     if let Some(r) = &report {
         if let Some(bak) = &r.backup_path {
             println!(
