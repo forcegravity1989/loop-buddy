@@ -16,7 +16,8 @@
     <run-dir>/flows/<考卷名>/cmds             实际下发的命令(人可读)
     <run-dir>/flows/<考卷名>/cmds.log         驱动自产结果日志(主证据)
     <run-dir>/flows/<考卷名>/readback.jsonl   每行 {"sql","raw"},sqlite3 原始输出
-    <run-dir>/flows/<考卷名>/snaps/           截图(本脚本不拍,由操作者放入)
+    <run-dir>/flows/<考卷名>/snaps/           截图(考卷 step 带 snap 字段时,本脚本下发对应
+                                               `snap <name>` 命令,由驱动器应用内自截并写出)
 """
 
 import json
@@ -32,6 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "dist" / "BW.app" / "Contents" / "MacOS" / "builders-workbench"
 BOOT_WAIT_S = 13
 DEFAULT_WAIT_S = 2
+SNAP_WAIT_S = 2  # 步骤自身 wait_s 之后再给 snap 命令的独立结算时间
 
 
 def die(msg):
@@ -190,6 +192,13 @@ def run_phase(phase, db_path, flow_dir, idx):
         with cmd_file.open("a") as f:
             f.write(line + "\n")
         time.sleep(st.get("wait_s", DEFAULT_WAIT_S))
+        snap_name = st.get("snap")
+        if snap_name:
+            snap_line = f"snap {snap_name}"
+            lines.append(snap_line)
+            with cmd_file.open("a") as f:
+                f.write(snap_line + "\n")
+            time.sleep(SNAP_WAIT_S)
     time.sleep(2)
     proc.terminate()
     kill_app()

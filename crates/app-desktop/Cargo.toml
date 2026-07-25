@@ -31,3 +31,8 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 # T15:frontmatter 属性卡复用 T2(skill_import.rs)已经选定的真实 YAML
 # 解析器——workspace 里本就有(bw-app 已用),不是新引入的第三方依赖。
 serde_yaml = { workspace = true }
+# flow.rs `snap` command: decodes the base64 PNG payload the in-webview
+# capture script hands back over the eval channel. Already present
+# transitively (via the dioxus/wry dependency chain, see Cargo.lock) — this
+# just names it directly so app-desktop can call it.
+base64 = "0.22"
