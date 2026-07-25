@@ -21,6 +21,10 @@ ui = { workspace = true }
 tokio = { workspace = true }
 time = { workspace = true, features = ["std"] }
 uuid = { workspace = true }
+# flow.rs (BW_FLOW driver): parses the {ok, reason} JSON that document::eval
+# hands back from the webview — not a new capability, just naming the type
+# `bw-app` already pulls in transitively.
+serde_json = { workspace = true }
 # T15 (plan/12 §10 v1.1#2): MD 富文本渲染——纯 Rust CommonMark 解析器,只进
 # 这个 crate(内核五个 crate 零新增依赖,见 CLAUDE.md 门禁)。
 pulldown-cmark = { version = "0.13.4", default-features = false }

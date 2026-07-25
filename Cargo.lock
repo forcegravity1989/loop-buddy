@@ -57,6 +57,7 @@ dependencies = [
  "bw-store",
  "dioxus",
  "pulldown-cmark",
+ "serde_json",
  "serde_yaml",
  "time",
  "tokio",

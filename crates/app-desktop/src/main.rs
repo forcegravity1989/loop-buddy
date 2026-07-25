@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod flow;
 mod kernel;
 mod screens;
 mod theme;
@@ -197,6 +198,14 @@ fn Root() -> Element {
             }
         }
     });
+
+    // BW_FLOW=<command-file> mounts an in-process click/fill/assert driver
+    // (see `flow.rs` for why: OS-level computer-use is blocked on the dev
+    // machine, so verification clicks are dispatched as real DOM events from
+    // inside the webview instead). Same verification-only discipline as
+    // BW_HUB/BW_SEL above — always mounted (no-op unless BW_FLOW is set) so
+    // hook order stays stable across renders.
+    flow::spawn_driver();
 
     let v = vm();
     let paper = theme::PAPER;
