@@ -278,6 +278,52 @@ if __name__ == "__main__":
 
 ---
 
+---
+
+## 修订 R1(2026-07-24 闸门后路线转向,A+B 混合)
+
+闸门实测(commit 467e3d1 / `iterations/evidence/gate-2026-07-24/GATE.md`):G-1 过(打包 .app 后 MCP 截图拍到真窗口);G-2 受阻(本机 computer-use 点击 hit-test 把 BW 窗口误判归 Dock,穷尽自查无效);G-3 CLI 截图只拍到墙纸(宿主缺屏幕录制权限)。用户拍板 **A+B 混合**:证据仍用 MCP 真窗口截图,驱动改应用内。
+
+**Global Constraints 修订**:「本批零 Rust 改动」**作废** —— `BW_FLOW` 驱动需 app-desktop 新代码(如实记录,不假装无改动)。其余约束不变。
+
+**新增 Task 3 · BW_FLOW 应用内驱动**(以下为完整任务,插在原 Task 3 之前;原 Task 3/4/5/6 顺延为 4/5/6/7,commit 代号仍按 V1-n 递增):
+
+**Files:** Create `crates/app-desktop/src/flow.rs` · Modify `crates/app-desktop/src/main.rs`(挂载驱动 + `mod flow;`)
+
+**Interfaces — Produces:** `BW_FLOW=<命令文件路径>` 启动模式。驱动轮询该文件(300ms),**每出现一行新行 = 一条命令**,执行后把结果**追加写 `<路径>.log` 并同时打到 stderr**(与 `[BW_OPEN]` 同一留痕纪律)。日志行格式:`[BW_FLOW] <行号> <原命令> ok` 或 `[BW_FLOW] <行号> <原命令> fail: <原因>`。三条命令(YAGNI,不多做):
+
+| 命令 | 语义 | JS 实现要点 |
+|---|---|---|
+| `click <可见文字>` | 点击含该文字的最内层元素 | 遍历元素取 `textContent.trim()` 命中且子元素最少者,调 `el.click()`(冒泡到 Dioxus 委托监听) |
+| `fill <placeholder>\|<值>` | 按 placeholder 找 input 填值 | `el.value=v` 后 `dispatchEvent(new Event('input',{bubbles:true}))`,Dioxus `oninput` 才收得到 |
+| `assert_text <文字>` | 文字在 DOM 中存在则 ok,否则 fail | 读 `document.body.innerText` 判包含 |
+
+**Dioxus 0.7.9 API 事实**(已核 vendored 源码,直接用别再查):`document::eval(&script) -> Eval`;脚本内可用顶层 `return`;`eval.await` 得 `Result<serde_json::Value, EvalError>`;**必须在 mount 之后跑**(放 `use_future`,勿放组件体)。
+
+- [ ] **Step 1: 写 `flow.rs`** —— 一个 `pub fn spawn_driver()`(或等价 hook 封装),仅当 `BW_FLOW` 存在时激活:读文件行数游标,新行→按上表转成 JS→`document::eval` 取回 `{ok, reason}`→写日志。轮询用 `tokio::time::sleep`(tokio 已是依赖),读文件用 `std::fs`。文件不存在时视为空(等它出现),绝不 panic。
+- [ ] **Step 2: 挂进 `main.rs`** —— `mod flow;` + 在 `Root` 里与既有两个 `use_future` 并列启动;仿照 `BW_HUB`/`BW_SEL` 既有注释风格写一段「为什么存在」的注释(验证纪律,非产品功能)。
+- [ ] **Step 3: 实跑验证(硬验收标准,四步全绿才算过)**
+
+```bash
+./scripts/bundle-desktop.sh
+T=$(mktemp -d); : > "$T/cmds"
+open --env BW_DB="$T/v.db" --env BW_FLOW="$T/cmds" "$(pwd)/dist/BW.app"; sleep 8
+echo 'assert_text 我的项目'   >> "$T/cmds"; sleep 2   # ① 驱动能读命令 + 能看见 DOM
+echo 'click 新建项目'         >> "$T/cmds"; sleep 3   # ② 真点击
+echo 'assert_text 我的项目'   >> "$T/cmds"; sleep 2   # ③ 已离开首页 → 必须 fail(阴性对照)
+cat "$T/cmds.log"
+pkill -f 'BW.app/Contents/MacOS/builders-workbench'
+```
+Expected:① ok ② ok ③ **fail**(③ 若为 ok 说明点击没生效,任务未过 —— 这条阴性对照是防「假绿」的关键,绝不可省)。另外附一条正向对照:③ 换成创建向导里的真实文案 `assert_text` 得 ok(文案从 `crates/app-desktop/src/screens/create.rs` 读回,不许猜)。
+- [ ] **Step 4:** 完整门禁(含 `cargo clippy --workspace --exclude app-desktop -- -D warnings`、`./scripts/guard-kernel-ui-free.sh`、`cargo check -p app-desktop`);commit `V1-3 · BW_FLOW 应用内驱动(命令文件+结果日志,含阴性对照)`
+
+**对顺延后各任务的增量修订**:
+
+- **Task 4(原 3,e2e 脚手架+fixture)**:不变。
+- **Task 5(原 4,五条考卷)**:考卷 `[[step]]` 的 `do` 收敛为驱动三命令(`click`/`fill`/`assert_text`)+ `snap`(Fable 用 MCP 截图,不进命令文件);`where` 仍写语义文字但**必须是驱动能匹配到的真实可见文案**。
+- **Task 6(原 5,报告生成器)**:不变(仍读 `steps.jsonl`/`readback.jsonl` + 磁盘 PNG)。
+- **Task 7(原 6,首次验收跑)**:驱动方式改为「深链启动 + 追加命令到 `BW_FLOW` 文件 + 读 `.log` 对照」;截图仍取 MCP 真窗口。**待解**:MCP 截图不落盘(已实测搜遍容器/缓存/临时目录无产物),报告要嵌图需用户在 系统设置→隐私与安全性→屏幕录制 给 Claude 宿主授权一次(授权后 CLI `screencapture` 即可落真窗口 PNG);未授权则报告只能给步骤日志+SQL 读回,截图列如实标「环境未授权」。此项在 Task 7 开工前向用户确认。
+
 ## Self-Review 备忘
 
 - 覆盖:plan/15 §2 三关→Task 1/2;§3 考卷→Task 4;§4 五条→Task 4;§5 协议+报告→Task 5/6;§10 DoD→Task 6。§6 工作流本体:本批以「Task 3-5 可派 Sonnet、Task 2/6 Fable 亲驾、用户终审」的执行方式自证,不另立任务。
