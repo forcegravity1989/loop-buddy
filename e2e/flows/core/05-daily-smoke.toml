@@ -1,0 +1,181 @@
+name    = "daily-smoke"
+purpose = "真实库冒烟巡检:copy:daily 副本上逐个 Hub 深链导航,证明真实数据渲染、不是空壳——只读,零写命令(click/fill 全程不用)"
+db      = "copy:daily"
+
+# 与其余四条流不同:这条只读巡检要走遍 9 个 BW_HUB 深链,而 BW_HUB 只在进程
+# 启动时读一次(main.rs Root,不是运行期可切换的状态)——IconRail 的图标按钮
+# 本身也无法作为驱动目标(纯 SVG,textContent 为空,BW_FLOW 的 click 靠精确
+# 文本匹配,点不了它)。所以本流是唯一一份"多阶段、每阶段各自 launch"的考卷:
+# `db` 只 prep 一次(scripts/flow-prep.sh copy:daily <run-dir>,一次 cp),
+# 之后每个 [[phase]] 用同一份副本路径、不同 BW_HUB 重新拉起一次 app——原库
+# 全程只被 cp 读过那一次,不曾被任何一次启动直接打开。
+#
+# 实跑发现(如实记录,不是本流的锅):这份 codebase 目前有一个待执行一次的
+# 存量迁移 Command::MigrateLegacyShellsIfNeeded(T14/T16.5,plan/12)——对
+# 「内容为空、零 uses、未被任何工作流引用」的技能/智能体目录壳做清理,首次
+# 对一个尚未跑过此迁移的库启动时会真的删几行(本次实测:技能 354→65、
+# 智能体 110→73),删前会先真实写一份 .bak-<时间戳> 备份(legacy_migration::
+# backup_db_file,已有先例可查 ~/Library/.../workbench.db.bak-*)。这在
+# **副本**上发生,原库分毫未动(cp 前后 md5 一致,已核验)——但也意味着:
+# 数字断言绝不能写死某个"当前"计数(下次真实库本身升级到带这条迁移的版本
+# 首次启动、或用户继续导入技能库,数字都会变)。所以下面全程只断言"面板标
+# 题渲染出来"这种稳定字符串,真实"非空壳"的证据交给每个 [[phase.verify]]
+# 的 SQL 原值——报告读者自己对照当次读数,不跟界面上的动态数字做字符串相等。
+
+[[phase]]
+name   = "workspace"
+launch = {}
+
+[[phase.step]]
+do     = "assert_text"
+arg    = "我的项目"
+snap   = "wall"
+wait_s = 2
+
+[[phase.verify]]
+sql    = "SELECT count(*) FROM project"
+expect = "真实项目数,非零即证明墙上渲染的不是空数组(读者对照墙面卡片数)"
+
+[[phase]]
+name   = "skill"
+launch = { BW_HUB = "skill" }
+
+[[phase.step]]
+do     = "assert_text"
+arg    = "技能库"
+snap   = "skill-hub"
+wait_s = 2
+
+[[phase.verify]]
+sql    = "SELECT count(*) FROM skill"
+expect = "真实技能库行数(经上述存量迁移清理后的当次真值,非零)"
+
+[[phase]]
+name   = "agent"
+launch = { BW_HUB = "agent" }
+
+[[phase.step]]
+do     = "assert_text"
+arg    = "智能体库"
+snap   = "agent-hub"
+wait_s = 2
+
+[[phase.verify]]
+sql    = "SELECT count(*) FROM agent"
+expect = "真实智能体库行数(经上述存量迁移清理后的当次真值,非零)"
+
+[[phase]]
+name   = "workflow"
+launch = { BW_HUB = "workflow" }
+
+[[phase.step]]
+do     = "assert_text"
+arg    = "工作流库"
+snap   = "workflow-hub"
+wait_s = 2
+
+[[phase.verify]]
+sql    = "SELECT count(*) FROM workflow_spec"
+expect = "真实工作流库行数,非零"
+
+[[phase]]
+name   = "cron"
+launch = { BW_HUB = "cron" }
+
+[[phase.step]]
+do     = "assert_text"
+arg    = "定时任务"
+snap   = "cron-hub"
+wait_s = 2
+
+[[phase.verify]]
+sql    = "SELECT count(*) FROM cron_task"
+expect = "真实定时任务行数,非零"
+
+[[phase]]
+name   = "connector"
+launch = { BW_HUB = "connector" }
+
+[[phase.step]]
+do     = "assert_text"
+arg    = "数据连接器"
+snap   = "connector-hub"
+wait_s = 2
+
+[[phase.verify]]
+sql    = "SELECT count(*) FROM connector"
+expect = "真实数据连接器行数,非零"
+
+[[phase]]
+name   = "knowledge"
+launch = { BW_HUB = "knowledge" }
+
+[[phase.step]]
+do     = "assert_text"
+arg    = "知识源"
+snap   = "knowledge-hub"
+wait_s = 2
+
+# 如实:这个用户真实库当前没有录入任何知识源——渲染的是真实空状态文案,
+# 不是崩溃/空壳(区别在于:空壳是该显示东西的地方什么都没画;这里是真的
+# 读到了 0 行,并诚实地说"还没有")。两条 assert 一起过,才证明是"读到了
+# 真数据、真数据恰好是 0",不是"面板压根没接上数据源"。
+[[phase.step]]
+do  = "assert_text"
+arg = "还没有知识源——点「+ 添加来源」录入第一个。"
+
+[[phase.verify]]
+sql    = "SELECT count(*) FROM knowledge_source"
+expect = "如实读数(可能是 0——0 不代表面板空壳,代表用户确实还没录入任何知识源;上面两条 assert 一起过已经证明这不是空壳)"
+
+[[phase]]
+name   = "activity"
+launch = { BW_HUB = "activity" }
+
+[[phase.step]]
+do     = "assert_text"
+arg    = "活动"
+snap   = "activity-hub"
+wait_s = 2
+
+[[phase.verify]]
+sql    = "SELECT count(*) FROM handoff"
+expect = "真实交接记录行数(ActivityHub 直接读 handoff 表,append-only 审计源)"
+
+[[phase]]
+name   = "notify"
+launch = { BW_HUB = "notify" }
+
+[[phase.step]]
+do     = "assert_text"
+arg    = "通知"
+snap   = "notify-hub"
+wait_s = 2
+
+# notify_feed(crates/ui/src/vm.rs)三路真实并集:失败的定时任务 + 异常的
+# 连接器 + 每一条交接(风险的记「告警」,非风险的记「已完成」——不是只挑
+# 风险条,是每条交接都上榜,标记不同)。SQL 原样复算这三路之和作为读者
+# 对照用的原值,不是猜的常数。
+[[phase.verify]]
+sql    = "SELECT (SELECT count(*) FROM cron_task WHERE status='failed') + (SELECT count(*) FROM connector WHERE status='error') + (SELECT count(*) FROM handoff) AS notify_item_count"
+expect = "notify_feed 的真实并集之和(失败定时任务 + 异常连接器 + 全部交接行,不管风险与否)"
+
+[[phase]]
+name   = "settings"
+launch = { BW_HUB = "settings" }
+
+# 设置屏不挂表——ClaudeCliConfig 是进程内配置(env 播种,可编辑),
+# 静态渲染,不需要 SQL 读回;渲染出真实字段名本身就是证据。
+[[phase.step]]
+do  = "assert_text"
+arg = "设置"
+
+[[phase.step]]
+do  = "assert_text"
+arg = "模型与额度"
+
+[[phase.step]]
+do     = "assert_text"
+arg    = "claude 二进制"
+snap   = "settings-hub"
+wait_s = 2

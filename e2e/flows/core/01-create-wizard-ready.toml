@@ -1,0 +1,33 @@
+name    = "create-wizard-ready"
+purpose = "创建链路 UI 端到端可达,止步于不可逆边界——绝不点击「开始 ↑」(CreateProject 会真调 bw_engine::github::create_repo,在用户真实 GitHub 账号下开仓)"
+db      = "fixture:empty"
+launch  = {}
+
+# 从项目墙起步:全新空库,首屏必是「我的项目」墙 + 虚线新建卡。
+[[step]]
+do     = "assert_text"
+arg    = "我的项目"
+snap   = "wall-empty"
+wait_s = 2
+
+[[step]]
+do     = "click"
+arg    = "新建项目"
+snap   = "wizard-repo-card"
+wait_s = 3
+
+# 向导第一屏 = 仓从哪来(RepoCard,crates/app-desktop/src/screens/create.rs)。
+# 到此为止——「开始 ↑」在 IntentCard(下一步),本流绝不点它。
+[[step]]
+do     = "assert_text"
+arg    = "仓从哪来？"
+snap   = "wizard-ready"
+wait_s = 2
+
+[[step]]
+do  = "assert_text"
+arg = "每个项目背后是一个真实的 GitHub 仓 —— 新建一个,或者接入你已有的。"
+
+[[verify]]
+sql    = "SELECT count(*) FROM project"
+expect = "0 —— 向导只到「仓从哪来」为止,未点「开始 ↑」,没有 CreateProject 派发,project 表不应新增任何行(也就绝不会真调 gh 建仓)"

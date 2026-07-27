@@ -21,9 +21,18 @@ ui = { workspace = true }
 tokio = { workspace = true }
 time = { workspace = true, features = ["std"] }
 uuid = { workspace = true }
+# flow.rs (BW_FLOW driver): parses the {ok, reason} JSON that document::eval
+# hands back from the webview — not a new capability, just naming the type
+# `bw-app` already pulls in transitively.
+serde_json = { workspace = true }
 # T15 (plan/12 §10 v1.1#2): MD 富文本渲染——纯 Rust CommonMark 解析器,只进
 # 这个 crate(内核五个 crate 零新增依赖,见 CLAUDE.md 门禁)。
 pulldown-cmark = { version = "0.13.4", default-features = false }
 # T15:frontmatter 属性卡复用 T2(skill_import.rs)已经选定的真实 YAML
 # 解析器——workspace 里本就有(bw-app 已用),不是新引入的第三方依赖。
 serde_yaml = { workspace = true }
+# flow.rs `snap` command: decodes the base64 PNG payload the in-webview
+# capture script hands back over the eval channel. Already present
+# transitively (via the dioxus/wry dependency chain, see Cargo.lock) — this
+# just names it directly so app-desktop can call it.
+base64 = "0.22"

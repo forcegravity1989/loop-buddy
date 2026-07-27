@@ -1,0 +1,29 @@
+name    = "issue-run-to-review"
+purpose = "铁律:跑 Issue(Mock)只推 InReview,绝不自动 Done"
+db      = "fixture:demo"
+launch  = { BW_OPEN = "linkcheck-md", BW_PANEL = "issues" }
+
+# fixture 三卡里唯一 Todo 状态的一张——「▶ 跑」只在 Backlog/Todo/InProgress
+# 才渲染,此刻整张看板只有这一处「▶ 跑」按钮(其余两卡分别是 InReview/Done)。
+[[step]]
+do     = "assert_text"
+arg    = "【fixture】支持 --ignore-pattern 排除白名单路径的死链检查"
+snap   = "board-before"
+wait_s = 2
+
+[[step]]
+do     = "click"
+arg    = "▶ 跑"
+snap   = "run-clicked"
+wait_s = 3
+
+# MockExecutor 走完全部阶段是流式的,给它多一点时间收尾到 InReview。
+[[step]]
+do     = "assert_text"
+arg    = "评审中 · 2"
+snap   = "run-in-review"
+wait_s = 8
+
+[[verify]]
+sql    = "SELECT status, settled_at FROM issue WHERE title='【fixture】支持 --ignore-pattern 排除白名单路径的死链检查'"
+expect = "in_review 且 settled_at 为 NULL —— run 成功只推 InReview,Done 永远由人显式点击,绝不自动结算"
