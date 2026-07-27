@@ -30,8 +30,14 @@ use std::sync::Arc;
 /// something real to find.
 const DEEP_LINK_PROJECT: &str = "T11-验证";
 
-const MATTPOCOCK_ROOT: &str =
-    "/Users/gravity/.claude/plugins/cache/mattpocock/mattpocock-skills/1.2.0/skills";
+/// The in-repo vendored copy (MIT; see `examples/skill-libraries/README.md`)
+/// rather than a machine-local plugin cache — same reason `ECC_VENDOR_DIR`
+/// below is repo-relative: an example that only runs on one laptop isn't a
+/// verification anybody else can repeat.
+const MATTPOCOCK_ROOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../examples/skill-libraries/mattpocock-skills/skills"
+);
 const ECC_VENDOR_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../bw-store/vendor/ecc-agents");
 
 #[tokio::main]

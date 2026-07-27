@@ -26,9 +26,15 @@ async fn main() {
             .to_string_lossy()
             .into_owned()
     });
+    // Defaults to one real skill inside the in-repo vendored copy (MIT; see
+    // `examples/skill-libraries/README.md`) instead of a machine-local plugin
+    // cache path that only existed on one laptop.
     let source_dir = args.next().unwrap_or_else(|| {
-        "/Users/gravity/.claude/plugins/cache/mattpocock/mattpocock-skills/1.2.0/skills/engineering/tdd"
-            .to_string()
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/skill-libraries/mattpocock-skills/skills/engineering/tdd"
+        )
+        .to_string()
     });
 
     let _ = std::fs::remove_file(&db_path);

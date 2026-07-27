@@ -22,12 +22,22 @@ use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{SqliteStore, Store};
 use std::sync::Arc;
 
-/// Real, on-disk library roots (plan/12 §1's table + this ticket's own
-/// instruction to trust `find`, not `plugin.json`, for the true count).
-const MATTPOCOCK_ROOT: &str =
-    "/Users/gravity/.claude/plugins/cache/mattpocock/mattpocock-skills/1.2.0/skills";
-const SUPERPOWERS_ROOT: &str =
-    "/Users/gravity/.claude/plugins/cache/superpowers-dev/superpowers/6.1.1/skills";
+/// Real, on-disk library roots — the copies vendored into this repo
+/// (`examples/skill-libraries/`, both MIT; see that folder's README for
+/// provenance and upstream versions), *not* a machine-local plugin cache.
+/// These used to point at `/Users/<someone>/.claude/plugins/cache/...`, which
+/// meant this example only ran on the one laptop those paths existed on —
+/// anybody else cloning the repo got "root_path 不是一个存在的目录".
+/// Resolved off `CARGO_MANIFEST_DIR` (same idiom as `edit_detach`'s
+/// `ECC_VENDOR_DIR`) so it works from any working directory.
+const MATTPOCOCK_ROOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../examples/skill-libraries/mattpocock-skills/skills"
+);
+const SUPERPOWERS_ROOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../examples/skill-libraries/superpowers/skills"
+);
 
 #[tokio::main]
 async fn main() {

@@ -13,6 +13,13 @@
 //!     <db-path> <workspace-path> <output-json-path>
 //! ```
 //!
+//! **重跑前须知(2026-07-27)**:已提交的 `iterations/AIHOT-EVIDENCE.json` 是
+//! 对着**原始工作区**(带自己的 `.git`)生成的,所以其 `workspace` 段有真实的
+//! 32 次提交。仓内后来放了一份同样文件的副本(`examples/aihot/workspace/`),
+//! 但它**不含 `.git`**(嵌套 `.git` 会变 gitlink)。拿仓内副本重跑这个 example,
+//! git 相关字段会如实变成 0 ——那不是数据坏了,是那份副本真的没有历史。
+//! 想复现 JSON 里那 32 次提交,得指向原始工作区。
+//!
 //! 详见 `plan/09-aihot-practice-run.md`、`iterations/PRACTICE-AIHOT.md`(叙事汇总)
 //! ——本文件产出的 JSON 是它们的数字侧证据存档,两者互补,不重复。
 
