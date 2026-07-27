@@ -166,6 +166,7 @@ async fn main() {
         app.dispatch(Command::Boot).await.expect("boot");
         let id = ProjectId::new();
         app.dispatch(Command::CreateProject {
+            provider: "github".to_string(),
             id,
             name: name.clone(),
             kind: "CLI 工具 · Rust".into(),
@@ -287,6 +288,7 @@ async fn main() {
     println!("\n① 项目 A(挂仓)· CreateProject github=New …");
     let proj_a = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: proj_a,
         name: "标配三件套演示 A".into(),
         kind: "CLI 工具 · Rust".into(),
@@ -340,6 +342,7 @@ async fn main() {
     println!("\n④ 项目 B(挂仓)· CreateProject github=New …");
     let proj_b = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: proj_b,
         name: "标配三件套演示 B".into(),
         kind: "CLI 工具 · Rust".into(),
@@ -366,6 +369,7 @@ async fn main() {
     println!("\n⑥ 项目 C(无仓)· CreateProject github=None …");
     let proj_c = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: proj_c,
         name: "标配三件套演示 C · 无仓".into(),
         kind: "CLI 工具 · Rust".into(),

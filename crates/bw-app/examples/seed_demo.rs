@@ -172,6 +172,7 @@ async fn run_project(app: &mut App, plan: &ProjectPlan) -> u64 {
     let lagging = MetricId::new();
 
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: project,
         name: plan.name.into(),
         kind: plan.kind.into(),

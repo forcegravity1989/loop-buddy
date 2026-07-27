@@ -63,6 +63,7 @@ async fn main() {
     // ── 一个真实项目(走完整创建向导命令序列,不是直接插库) ──
     let pid = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: pid,
         name: "T10 验证项目".into(),
         kind: "内部工具".into(),

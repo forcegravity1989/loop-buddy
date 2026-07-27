@@ -607,6 +607,7 @@ async fn main() {
             None => {
                 let id = ProjectId::new();
                 app.dispatch(Command::CreateProject {
+                    provider: "github".to_string(),
                     id,
                     name: req.name.into(),
                     kind: req.kind.into(),

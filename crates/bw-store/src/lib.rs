@@ -84,6 +84,9 @@ pub struct NewProject {
     pub name: String,
     pub kind: String,
     pub desc: String,
+    /// C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 今天恒 `"github"`
+    /// (唯一可选项)。落进 `project.provider`,不派生也不重算。
+    pub provider: String,
 }
 
 pub struct NewMetric {
@@ -427,6 +430,11 @@ pub struct ProjectRow {
     /// "owner/repo" — empty = not attached to GitHub (local-only workspace,
     /// or GitHub attach failed and soft-degraded). Set once, at creation.
     pub github_remote: String,
+    /// C16(plan/14 规范条 4): 仓平台选择器的选中值(`"github"` 今天唯一可能
+    /// 的取值)。老库开出来的存量行经 `add_column_if_missing` 默认 `'github'`
+    /// ——和"这仓当时就是接 GitHub 建的"这个真实状态一致(pre-C16 没有别的
+    /// 平台可选)。
+    pub provider: String,
     /// C6: the north star's collection plan, synced from `.bw/metrics.toml`'s
     /// `north_star.collect` (empty = never synced from a source-of-truth
     /// file yet — the creation-flow-typed name/def has no collect plan).
@@ -706,6 +714,18 @@ pub trait Store: Send + Sync {
         phases: Vec<PhaseMeta>,
         phase_prompts: Vec<String>,
     ) -> Result<()>;
+    /// T14.5 (2026-07-24, GH#59): delete one `workflow_spec` row outright.
+    /// Mechanics only — same "store 无业务判断" split as `delete_skill`/
+    /// `delete_agent`: bw-app decides which rows are safe (directory-import
+    /// source, zero `workflow_run` rows, zero `uses`, unreferenced by any
+    /// `run_workflow`-mode cron target, not a built-in stage template), this
+    /// is purely the mechanical single-table delete once that decision is
+    /// made. Deliberately does NOT cascade into `workflow_run`/
+    /// `workflow_version` — both already document their own no-FK "outlives
+    /// its spec being deleted" design (see `schema.sql`: "the history is the
+    /// point"), the same real precedent `delete_agent`'s own doc comment
+    /// notes for `issue.assignee`.
+    async fn delete_workflow_spec(&self, id: WorkflowId) -> Result<()>;
 
     // ── workflow_run: append-only execution telemetry (iter 1) ──────────────
     /// Insert a fresh run row at `status = Running`, returning the minted id

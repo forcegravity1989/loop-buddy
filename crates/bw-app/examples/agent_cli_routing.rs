@@ -165,6 +165,7 @@ async fn main() {
 
     let pid = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id: pid,
         name: "T6 agent_cli 路由演示项目".into(),
         kind: "demo".into(),

@@ -28,7 +28,15 @@ pub struct GithubRepoSummary {
     pub owner: String,
     pub repo: String,
     pub private: bool,
-    pub updated_at: String,
+    /// C16(plan/14 规范条 4): 仓描述 —— `gh repo list --json description` 的
+    /// 原文;空串 = 仓本身没填描述(真实状态),不是"没取到"。
+    pub description: String,
+    /// 默认分支名(如 `main`)—— `defaultBranchRef.name`;空 = 空仓无提交这类
+    /// 边缘情况下 gh 拿不到,如实留白。
+    pub default_branch: String,
+    /// 最近一次 push 的 ISO8601 时间戳(`pushedAt`);空 = gh 未回(同上边缘
+    /// 情况),不臆造一个时间。
+    pub pushed_at: String,
 }
 
 fn spawn_err(e: std::io::Error) -> GithubError {
@@ -337,11 +345,18 @@ pub async fn open_pr(
         .await
         .map_err(spawn_err)?;
     if !commit.status.success() {
+        // git prints "nothing to commit, working tree clean" on STDOUT, not
+        // stderr — an executor that committed its own work leaves a clean
+        // tree, and that idempotent case must not read as a failure
+        // (F5, 2026-07-24 首次全真闭环践行实测:干净树被误判成
+        // 「提交活分支改动失败:<空>」,PR 环整段被卡死).
         let stderr = String::from_utf8_lossy(&commit.stderr);
-        if !(stderr.contains("nothing to commit") || stderr.contains("no changes")) {
+        let stdout = String::from_utf8_lossy(&commit.stdout);
+        let combined = format!("{stdout}\n{stderr}");
+        if !(combined.contains("nothing to commit") || combined.contains("no changes")) {
             return Err(GithubError::Command(format!(
                 "提交活分支改动失败:{}",
-                stderr.trim()
+                combined.trim()
             )));
         }
     }
@@ -477,23 +492,47 @@ async fn gh_json_field(args: &[&str]) -> Result<String, GithubError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// C16: `defaultBranchRef` comes back as a nested object (`{"name":"main"}`),
+/// not a bare string — `gh repo list --json defaultBranchRef` shape per its
+/// own JSON FIELDS reference (`gh repo list --help`). An empty repo with no
+/// commits has no default branch ref at all, hence `Option`.
+#[derive(serde::Deserialize)]
+struct DefaultBranchRefJson {
+    name: String,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RepoJson {
     name_with_owner: String,
     is_private: bool,
-    updated_at: String,
+    // C16: `description` is nullable in the underlying GraphQL schema (no
+    // description set ⇒ JSON `null`, not `""`) — `Option` here, flattened to
+    // `""` at the call site (empty-string 是"没填",不是"没读到").
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    default_branch_ref: Option<DefaultBranchRefJson>,
+    #[serde(default)]
+    pushed_at: Option<String>,
 }
 
 /// List repos owned by the authenticated user — the "接入已有仓" picker's
 /// data source. Read-only, no local filesystem side effects.
+///
+/// C16(plan/14 规范条 4): `--json` 字段集从 `nameWithOwner,isPrivate,updatedAt`
+/// 扩到 `nameWithOwner,isPrivate,description,defaultBranchRef,pushedAt` ——
+/// 字段名核实自 `gh repo list --help`(`gh` 2.95.0)的 JSON FIELDS 清单,均在
+/// 表中:`description`、`defaultBranchRef`、`isPrivate`、`pushedAt`、
+/// `nameWithOwner`。回显真实 metadata(描述/可见性/默认分支/最近推送),不再
+/// 只是干巴巴一个仓名。
 pub async fn list_repos(limit: u32) -> Result<Vec<GithubRepoSummary>, GithubError> {
     let output = tokio::process::Command::new("gh")
         .args([
             "repo",
             "list",
             "--json",
-            "nameWithOwner,isPrivate,updatedAt",
+            "nameWithOwner,isPrivate,description,defaultBranchRef,pushedAt",
             "--limit",
             &limit.to_string(),
         ])
@@ -516,7 +555,9 @@ pub async fn list_repos(limit: u32) -> Result<Vec<GithubRepoSummary>, GithubErro
                 owner: owner.to_string(),
                 repo: repo.to_string(),
                 private: r.is_private,
-                updated_at: r.updated_at,
+                description: r.description.unwrap_or_default(),
+                default_branch: r.default_branch_ref.map(|b| b.name).unwrap_or_default(),
+                pushed_at: r.pushed_at.unwrap_or_default(),
             })
         })
         .collect())

@@ -10,6 +10,11 @@
 //! [`ClaudeCliExecutor`] per call for any project that HAS configured a
 //! workspace — `workspace_path`/`allow_commands` are per-project runtime data
 //! read from the store, not something fixed at [`App::new`] time.
+//! [`Command::RunDraftWorkflow`] is the one deliberate exception: the
+//! creation flow's 体系起草 run, hard-locked to the shared Mock `Engine`
+//! forever, independent of the project's `workspace_path` (plan/14 C13, D8
+//! 回锁 — real system-drafting work belongs to the standard-Issue trio, run
+//! through the ordinary `RunIssue`/`run_workflow_inner` route instead).
 
 #![forbid(unsafe_code)]
 
@@ -100,6 +105,11 @@ pub enum Command {
     /// rest of the flow (drafting run, resume-if-interrupted) has somewhere
     /// real to attach to. `desc` carries the free-text brief.
     CreateProject {
+        /// C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 今天恒 `"github"`
+        /// (唯一可选项,GitLab/Gitcode 灰置「未接」),从 `RepoCard` 顶部的平台
+        /// chip 传入,不在这里硬编码。留好字段语义:第二个平台真接时,这里
+        /// 已经是"选出来的"而不需要改 Command 形状。落进 `project.provider`。
+        provider: String,
         id: ProjectId,
         name: String,
         kind: String,
@@ -282,6 +292,29 @@ pub enum Command {
         title: String,
     },
     RunWorkflow {
+        session: SessionId,
+        spec: WorkflowSpec,
+    },
+    /// The creation flow's 体系起草 run (plan/14 C13, D8 回锁). Looks
+    /// identical to `RunWorkflow` from the UI's point of view — same
+    /// `Engine`/progress-event stream, same session-message trail — but
+    /// `run_workflow_inner` is told `force_mock = true`: the shared
+    /// `MockExecutor` runs it regardless of whether the active project
+    /// already has a real configured `workspace_path`.
+    ///
+    /// Without this, a project born through the GitHub-主体 creation flow
+    /// (P1 建项目即建仓, plan/13) already has a real workspace by the time
+    /// the Questions 卡 submits, so the ordinary `agent_cli == "claude-code"
+    /// && workspace_path non-empty` rule in `run_workflow_inner` would route
+    /// the drafting run to a *real* `claude -p` call — one real invocation
+    /// per phase, through the gateway, up to the $0.5/30min budget cap. That
+    /// silently violated plan/13 D8's "创建流不跑真 agent" ruling (root cause
+    /// plan/14 §「技术成因」). Real system-drafting work belongs to the
+    /// standard-Issue trio (竞品分析→找指标→绑数据, D8) instead, dispatched
+    /// through the ordinary `RunIssue`/`run_workflow_inner` route — this
+    /// command is the creation flow's *only* run path and stays mock-locked
+    /// on purpose, forever, independent of project workspace state.
+    RunDraftWorkflow {
         session: SessionId,
         spec: WorkflowSpec,
     },
@@ -564,6 +597,20 @@ pub enum Command {
     /// shell-migration flag above — see that constant's own doc comment for
     /// why a single shared flag would be wrong (a DB that already ran the
     /// shell pass must still be able to pick up this one independently).
+    ///
+    /// T14.5 (2026-07-24, GH#59) folds in a third, independent step: T14
+    /// only ever looked at `skill`/`agent` shells, but a real daily DB's
+    /// `workflow_spec` table carries the same kind of stale zero-trace
+    /// catalog-import row — a directory-imported (`HubSource::Official`/
+    /// `Adopted`) `Static` spec with zero `workflow_run` rows, zero `uses`,
+    /// and no `run_workflow`-mode `cron_task` referencing it by name — and
+    /// this pass deletes those rows outright (not just overwrites a column,
+    /// unlike Pass B). A row whose name matches one of the five built-in
+    /// stage templates is never eligible (defense-in-depth; its `source` is
+    /// already `SelfBuilt`, so Gate 1 alone already excludes it) and neither
+    /// is any row carrying even one real trace. Guarded by its OWN app_meta
+    /// flag (`legacy_migration::WORKFLOW_SHELL_PURGE_DONE_KEY`) for the same
+    /// independence reason as Pass B's own flag.
     MigrateLegacyShellsIfNeeded {
         db_path: String,
     },
@@ -761,6 +808,20 @@ pub enum Event {
         ok: bool,
         detail: String,
     },
+    /// plan/14 C14 · a creation-flow background action (repo create/clone,
+    /// repo-list fetch, standard-Issue mint, landing push) really started or
+    /// finished — the "is this real or stuck" visibility the creation flow's
+    /// slow `gh`-backed calls lacked (体验规范条 2:后台动作永远有状态回显).
+    /// Emitted as a Started → Ok/Fail pair around each real network call,
+    /// `name` stable across the pair so a subscriber can correlate them.
+    /// Purely additive visibility, never a gate — 乐观推进哲学不变
+    /// (CLAUDE.md): the card the user sees has already advanced before this
+    /// fires, same as the pre-existing `ConnectorSynced` toasts these sit
+    /// alongside (kept unchanged — this doesn't replace them).
+    ActionProgress {
+        name: String,
+        state: ActionState,
+    },
     KnowledgeSourcesChanged,
     IssuesChanged,
     ActivityChanged,
@@ -789,6 +850,21 @@ pub enum Event {
     LegacyShellsMigrated {
         report: LegacyMigrationReport,
     },
+}
+
+/// Three-state visibility for one `Event::ActionProgress` — see that
+/// variant's doc comment. `bw-app`-local (not `bw-core`): this is UI-facing
+/// transient signal, not domain state, so it never touches the wasm-clean
+/// kernel crates.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ActionState {
+    /// The real call just started.
+    Started,
+    /// The real call really succeeded — a short honest summary, never
+    /// invented (e.g. the repo slug `gh` actually minted).
+    Ok(String),
+    /// The real call really failed — the real error text.
+    Fail(String),
 }
 
 /// The outcome of one self-driving optimization cycle (iter 18) — the
@@ -1056,13 +1132,23 @@ impl App {
         Ok(())
     }
 
-    /// Shared by `Command::RunWorkflow`, `Command::RunHubWorkflow`, and
-    /// `tick_scheduler`'s real auto-fire — the first two differ only in how
-    /// `spec` was obtained (a hub lookup + a `uses` bump) and look identical
-    /// once they have one. `project` is explicit (not read off
-    /// `self.state.active_project`) so a background scheduler fire can run a
-    /// workflow against its *bound* project without touching — let alone
-    /// hijacking — whatever project the user currently has open.
+    /// Shared by `Command::RunWorkflow`, `Command::RunHubWorkflow`,
+    /// `Command::RunDraftWorkflow`, and `tick_scheduler`'s real auto-fire —
+    /// they differ only in how `spec` was obtained (a hub lookup + a `uses`
+    /// bump, or a hard mock lock) and look identical once they have one.
+    /// `project` is explicit (not read off `self.state.active_project`) so a
+    /// background scheduler fire can run a workflow against its *bound*
+    /// project without touching — let alone hijacking — whatever project the
+    /// user currently has open.
+    ///
+    /// `force_mock` (plan/14 C13, D8 回锁): when `true`, the engine-selection
+    /// step below is skipped entirely and this run executes on the shared
+    /// `MockExecutor` no matter what `agent_cli`/`workspace_path` would
+    /// otherwise select — the creation flow's *only* caller of this bool.
+    /// Every other caller passes `false`, preserving the pre-existing
+    /// "workspace configured → real executor" routing byte-for-byte (most
+    /// notably `RunIssue`, which must keep routing to the real executor).
+    #[allow(clippy::too_many_arguments)]
     async fn run_workflow_inner(
         &mut self,
         project: ProjectId,
@@ -1071,6 +1157,7 @@ impl App {
         trigger: RunTrigger,
         cron_task_id: Option<CronTaskId>,
         issue_id: Option<IssueId>,
+        force_mock: bool,
     ) -> Result<RunOutcome, AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
@@ -1126,6 +1213,7 @@ impl App {
             &agent_cli,
             &agent_tools,
             allowed_tools.as_deref(),
+            force_mock,
         );
 
         // The review gate: the FIRST Evaluator phase (T8's real `role`, not a
@@ -1155,36 +1243,47 @@ impl App {
         // Held immutably across the loop — every in-loop `self` touch is a shared
         // borrow (`self.store` / `self.emit`), never `&mut self`, so this holds.
         //
-        // T6 (plan/12 §3): the `agent_cli` match happens FIRST, before the
-        // mock/real branch below — an unsupported CLI ("codex"/"cursor"/…)
-        // routes to the honest `UnsupportedCliExecutor` regardless of whether
-        // this project even has a real workspace configured. Only
-        // `"claude-code"` (the default for an unassigned issue or any other
-        // caller) reaches the existing mock-vs-real split, unchanged.
+        // plan/14 C13 (D8 回锁): `force_mock` short-circuits everything below —
+        // checked BEFORE the `agent_cli` match, so the creation flow's drafting
+        // run never reaches real-executor selection no matter what workspace
+        // the active project has. Every other caller (`RunIssue` included)
+        // passes `force_mock = false` and falls through unchanged.
+        //
+        // T6 (plan/12 §3): the `agent_cli` match happens FIRST (once past the
+        // force_mock gate), before the mock/real branch below — an unsupported
+        // CLI ("codex"/"cursor"/…) routes to the honest `UnsupportedCliExecutor`
+        // regardless of whether this project even has a real workspace
+        // configured. Only `"claude-code"` (the default for an unassigned
+        // issue or any other caller) reaches the existing mock-vs-real split,
+        // unchanged.
         let fresh_engine;
-        let engine: &Engine = match agent_cli.as_str() {
-            "claude-code" => {
-                if proj.workspace_path.trim().is_empty() {
-                    &self.mock_engine
-                } else {
-                    let executor = ClaudeCliExecutor::new(
-                        self.state.claude_config.clone(),
-                        PathBuf::from(proj.workspace_path.trim()),
-                        proj.allow_commands,
-                        agent_tools.clone(),
-                    );
+        let engine: &Engine = if force_mock {
+            &self.mock_engine
+        } else {
+            match agent_cli.as_str() {
+                "claude-code" => {
+                    if proj.workspace_path.trim().is_empty() {
+                        &self.mock_engine
+                    } else {
+                        let executor = ClaudeCliExecutor::new(
+                            self.state.claude_config.clone(),
+                            PathBuf::from(proj.workspace_path.trim()),
+                            proj.allow_commands,
+                            agent_tools.clone(),
+                        );
+                        fresh_engine = Engine::new(Arc::new(executor));
+                        &fresh_engine
+                    }
+                }
+                other => {
+                    // 诚实报错,绝不静默回落到 claude-code:本机没有为 codex/cursor
+                    // 等值接好真实执行器。Reuses the `Executor` trait seam — this
+                    // executor's first (and only) call errors, and the existing
+                    // "executor failed → settle Failed" path records it honestly.
+                    let executor = UnsupportedCliExecutor::new(other.to_string());
                     fresh_engine = Engine::new(Arc::new(executor));
                     &fresh_engine
                 }
-            }
-            other => {
-                // 诚实报错,绝不静默回落到 claude-code:本机没有为 codex/cursor
-                // 等值接好真实执行器。Reuses the `Executor` trait seam — this
-                // executor's first (and only) call errors, and the existing
-                // "executor failed → settle Failed" path records it honestly.
-                let executor = UnsupportedCliExecutor::new(other.to_string());
-                fresh_engine = Engine::new(Arc::new(executor));
-                &fresh_engine
             }
         };
 
@@ -1944,12 +2043,21 @@ impl App {
     /// soft-degrade shape as the Repo 卡片's `create_repo`/`clone_repo`
     /// paths. `github_remote` empty (no repo, or a 存量项目) short-circuits
     /// before touching `gh` at all — today's behavior, byte-for-byte.
+    ///
+    /// `announce` (plan/14 C14): only the creation flow's standard-Issue trio
+    /// (`seed_standard_issue_trio`) opts into the pending/ok/fail
+    /// `Event::ActionProgress` triple — this function's other two callers
+    /// (`Command::CreateIssue`'s op-panel manual create, Autopilot's
+    /// cron-fired create) are out of C14's scope (CLAUDE.md: 范围收敛,op
+    /// 面板既有动作不动) and pass `false`, leaving their behavior
+    /// byte-for-byte unchanged.
     async fn sync_issue_to_github(
         &mut self,
         project_id: ProjectId,
         issue_id: IssueId,
         title: &str,
         desc: &str,
+        announce: bool,
     ) -> Result<(), AppError> {
         let proj = self
             .store
@@ -1965,11 +2073,24 @@ impl App {
         } else {
             desc.trim().to_string()
         };
+        let action_name = format!("{title} · 建单");
+        if announce {
+            self.emit(Event::ActionProgress {
+                name: action_name.clone(),
+                state: ActionState::Started,
+            });
+        }
         match bw_engine::github::create_issue(remote, title, &body).await {
             Ok(gh_number) => {
                 self.store
                     .set_issue_github_number(issue_id, gh_number)
                     .await?;
+                if announce {
+                    self.emit(Event::ActionProgress {
+                        name: action_name,
+                        state: ActionState::Ok(format!("#{gh_number}")),
+                    });
+                }
             }
             Err(e) => {
                 self.emit(Event::ConnectorSynced {
@@ -1977,6 +2098,12 @@ impl App {
                     ok: false,
                     detail: format!("GitHub 开 issue 失败,BW 侧 Issue 已建立,号未映射:{e}"),
                 });
+                if announce {
+                    self.emit(Event::ActionProgress {
+                        name: action_name,
+                        state: ActionState::Fail(e.to_string()),
+                    });
+                }
             }
         }
         Ok(())
@@ -2047,7 +2174,11 @@ impl App {
                     standard_skill: skill_slug.to_string(),
                 })
                 .await?;
-            self.sync_issue_to_github(project, id, title, desc).await?;
+            // announce=true (plan/14 C14): this is the creation-flow trio —
+            // the one `sync_issue_to_github` call site that should surface a
+            // pending/ok/fail `ActionProgress` triple.
+            self.sync_issue_to_github(project, id, title, desc, true)
+                .await?;
             if first.is_none() {
                 first = Some(id);
             }
@@ -2434,6 +2565,7 @@ impl App {
                                 RunTrigger::Scheduled,
                                 Some(c.id),
                                 None,
+                                false,
                             )
                             .await;
                         matches!(result, Ok(RunOutcome::Completed))
@@ -2486,7 +2618,15 @@ impl App {
             self.refresh_workflow_specs().await?;
 
             let result = self
-                .run_workflow_inner(pid, session, spec, RunTrigger::Scheduled, Some(c.id), None)
+                .run_workflow_inner(
+                    pid,
+                    session,
+                    spec,
+                    RunTrigger::Scheduled,
+                    Some(c.id),
+                    None,
+                    false,
+                )
                 .await;
             // A scheduled run "succeeds" only when the workflow actually passed.
             // A hit review cap (`BlockedAtCap`) has no bound Issue to park here
@@ -2545,8 +2685,10 @@ impl App {
             })
             .await?;
         // C4: Autopilot/cron 建单同样过身份映射 —— 建单入口不止手动创建一
-        // 处,漏一条就是"手动建的有号、定时建的没号"的诚实性缺口。
-        self.sync_issue_to_github(project, issue_id, &title, &desc)
+        // 处,漏一条就是"手动建的有号、定时建的没号"的诚实性缺口。announce=
+        // false(plan/14 C14 范围收敛):Autopilot 建单不在本票覆盖的创建流
+        // 动作里,行为一个字节不变。
+        self.sync_issue_to_github(project, issue_id, &title, &desc, false)
             .await?;
         // Todo (committed work), not Backlog (the parking lot) — autopilot建单
         // is a commitment, and Backlog is the suppress-firing pile in multica.
@@ -2800,9 +2942,13 @@ impl App {
             false
         };
 
-        // Run through the same path as any run, bound to this issue.
+        // Run through the same path as any run, bound to this issue. C13
+        // (plan/14): `force_mock = false` — a standard/normal Issue's real
+        // work is the one path the creation flow's mock lock must NEVER
+        // touch; this keeps routing to the real executor whenever the
+        // project has a configured workspace, byte-for-byte unchanged.
         let run = self
-            .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id))
+            .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id), false)
             .await;
         match run {
             // A completed run only reaches 评审中 — never 完成. Done stays an
@@ -2938,6 +3084,7 @@ impl App {
             }
 
             Command::CreateProject {
+                provider,
                 id,
                 name,
                 kind,
@@ -2951,6 +3098,7 @@ impl App {
                         name,
                         kind,
                         desc,
+                        provider,
                     })
                     .await?;
                 self.state.active_project = Some(id);
@@ -2979,6 +3127,14 @@ impl App {
                         self.store.set_workspace(id, path, true).await?;
                     }
                     (None, Some(GithubOrigin::New { slug, private })) => {
+                        // plan/14 C14: 建仓是这个命令里最慢的一步(真实
+                        // `gh repo create` 网络调用,数秒)——Started 先发,
+                        // 唯一的 name 贯穿这一步的 Ok/Fail,UI 据此配对。
+                        let action_name = format!("{} · 建仓", proj.name);
+                        self.emit(Event::ActionProgress {
+                            name: action_name.clone(),
+                            state: ActionState::Started,
+                        });
                         match self.workspaces_root.clone() {
                             Some(root) => {
                                 let body = if proj.desc.trim().is_empty() {
@@ -3020,6 +3176,13 @@ impl App {
                                                 config: format!("{}/{}", r.owner, r.repo),
                                             })
                                             .await?;
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Ok(format!(
+                                                "{}/{}",
+                                                r.owner, r.repo
+                                            )),
+                                        });
                                     }
                                     Err(e) => {
                                         let mut detail =
@@ -3047,21 +3210,37 @@ impl App {
                                         self.emit(Event::ConnectorSynced {
                                             name: format!("{} · GitHub", proj.name),
                                             ok: false,
-                                            detail,
+                                            detail: detail.clone(),
+                                        });
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Fail(detail),
                                         });
                                     }
                                 }
                             }
                             None => {
+                                let detail = "未配置本地工作区根目录,无法建仓".to_string();
                                 self.emit(Event::ConnectorSynced {
                                     name: format!("{} · GitHub", proj.name),
                                     ok: false,
-                                    detail: "未配置本地工作区根目录,无法建仓".into(),
+                                    detail: detail.clone(),
+                                });
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail),
                                 });
                             }
                         }
                     }
                     (None, Some(GithubOrigin::Existing { owner, repo })) => {
+                        // plan/14 C14: 克隆同样是真实 `gh repo clone` 网络
+                        // 调用——同一套 Started→Ok/Fail 配对。
+                        let action_name = format!("{} · 克隆仓库", proj.name);
+                        self.emit(Event::ActionProgress {
+                            name: action_name.clone(),
+                            state: ActionState::Started,
+                        });
                         match self.workspaces_root.clone() {
                             Some(root) => {
                                 let dir = root.join(workspace_slug(&proj.name, id));
@@ -3095,23 +3274,40 @@ impl App {
                                                 config: format!("{}/{}", r.owner, r.repo),
                                             })
                                             .await?;
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Ok(format!(
+                                                "{}/{}",
+                                                r.owner, r.repo
+                                            )),
+                                        });
                                     }
                                     Err(e) => {
                                         // 不兜底本地 mint —— 拿一个跟用户选的仓无关
                                         // 的空仓冒充"已接入",比"暂不挂仓库"更不诚实。
+                                        let detail = format!("接入 {owner}/{repo} 失败:{e}");
                                         self.emit(Event::ConnectorSynced {
                                             name: format!("{} · GitHub", proj.name),
                                             ok: false,
-                                            detail: format!("接入 {owner}/{repo} 失败:{e}"),
+                                            detail: detail.clone(),
+                                        });
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Fail(detail),
                                         });
                                     }
                                 }
                             }
                             None => {
+                                let detail = "未配置本地工作区根目录,无法接入".to_string();
                                 self.emit(Event::ConnectorSynced {
                                     name: format!("{} · GitHub", proj.name),
                                     ok: false,
-                                    detail: "未配置本地工作区根目录,无法接入".into(),
+                                    detail: detail.clone(),
+                                });
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail),
                                 });
                             }
                         }
@@ -3184,14 +3380,31 @@ impl App {
             }
 
             Command::ListGithubRepos => {
+                // plan/14 C14: the Repo 卡片's「接入已有仓」picker triggers a
+                // real `gh repo list` call — same Started→Ok/Fail pairing.
+                const ACTION_NAME: &str = "GitHub 仓库列表";
+                self.emit(Event::ActionProgress {
+                    name: ACTION_NAME.into(),
+                    state: ActionState::Started,
+                });
                 match bw_engine::github::list_repos(30).await {
-                    Ok(repos) => self.state.github_repos = repos,
+                    Ok(repos) => {
+                        self.emit(Event::ActionProgress {
+                            name: ACTION_NAME.into(),
+                            state: ActionState::Ok(format!("{} 个仓库", repos.len())),
+                        });
+                        self.state.github_repos = repos;
+                    }
                     Err(e) => {
                         self.state.github_repos = Vec::new();
                         self.emit(Event::ConnectorSynced {
-                            name: "GitHub 仓库列表".into(),
+                            name: ACTION_NAME.into(),
                             ok: false,
                             detail: e.to_string(),
+                        });
+                        self.emit(Event::ActionProgress {
+                            name: ACTION_NAME.into(),
+                            state: ActionState::Fail(e.to_string()),
                         });
                     }
                 }
@@ -3435,18 +3648,37 @@ impl App {
                 // 创建(github_remote 非空 ⇒ workspace 在 CreateProject 就
                 // 已绑定,直接用)。
                 if !proj.github_remote.trim().is_empty() && !proj.workspace_path.trim().is_empty() {
-                    if let Err(e) = bw_engine::github::push_head(std::path::Path::new(
+                    // plan/14 C14: 落地推送同样是真实网络调用——Started 先
+                    // 发,pending→ok/fail 配对到底。
+                    let action_name = format!("{} · 落地推送", proj.name);
+                    self.emit(Event::ActionProgress {
+                        name: action_name.clone(),
+                        state: ActionState::Started,
+                    });
+                    match bw_engine::github::push_head(std::path::Path::new(
                         proj.workspace_path.trim(),
                     ))
                     .await
                     {
-                        self.emit(Event::ConnectorSynced {
-                            name: format!("{} · GitHub", proj.name),
-                            ok: false,
-                            detail: format!(
-                                "落地推送失败(章程等提交仍在本地,可稍后手动 git push):{e}"
-                            ),
-                        });
+                        Ok(()) => {
+                            self.emit(Event::ActionProgress {
+                                name: action_name,
+                                state: ActionState::Ok("已推送".into()),
+                            });
+                        }
+                        Err(e) => {
+                            let detail =
+                                format!("落地推送失败(章程等提交仍在本地,可稍后手动 git push):{e}");
+                            self.emit(Event::ConnectorSynced {
+                                name: format!("{} · GitHub", proj.name),
+                                ok: false,
+                                detail: detail.clone(),
+                            });
+                            self.emit(Event::ActionProgress {
+                                name: action_name,
+                                state: ActionState::Fail(detail),
+                            });
+                        }
                     }
                 }
                 self.state.view = View::App;
@@ -3687,7 +3919,16 @@ impl App {
 
             Command::RunWorkflow { session, spec } => {
                 let p = self.active()?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
+                    .await?;
+            }
+
+            // plan/14 C13 (D8 回锁): the creation flow's drafting run —
+            // force_mock=true is the ONLY thing that distinguishes this from
+            // `RunWorkflow` above; see the command's doc comment for why.
+            Command::RunDraftWorkflow { session, spec } => {
+                let p = self.active()?;
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, true)
                     .await?;
             }
 
@@ -3729,7 +3970,7 @@ impl App {
                     workspace_hint,
                 };
                 let spec = stage_workflow_with_playbook(stage_kind, &ctx);
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
                     .await?;
             }
 
@@ -3837,7 +4078,7 @@ impl App {
                     .ok_or(AppError::NotFound)?;
                 self.store.record_workflow_use(workflow_id).await?;
                 self.refresh_workflow_specs().await?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None)
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
                     .await?;
             }
 
@@ -4285,14 +4526,15 @@ impl App {
             }
 
             Command::MigrateLegacyShellsIfNeeded { db_path } => {
-                // 1. Idempotency gates — TWO independent flags (T16.5,
-                // GH#54): the T14 shell-migration flag and this ticket's own
-                // template-phase-refresh flag, checked separately so a DB
-                // that already finished one can still pick up the other (see
-                // `TEMPLATE_PHASE_REFRESH_DONE_KEY`'s own doc comment for
+                // 1. Idempotency gates — THREE independent flags (T14.5,
+                // GH#59, adds the third): the T14 shell-migration flag, T16.5's
+                // template-phase-refresh flag, and this ticket's own
+                // workflow-shell-purge flag, checked separately so a DB that
+                // already finished some subset can still pick up the rest
+                // (see `TEMPLATE_PHASE_REFRESH_DONE_KEY`'s own doc comment for
                 // why one shared flag would be wrong). A real Nth boot after
-                // both are done is a true zero-op: two cheap key reads,
-                // nothing else touched.
+                // all three are done is a true zero-op: three cheap key
+                // reads, nothing else touched.
                 let shells_done = self
                     .store
                     .get_app_meta(legacy_migration::LEGACY_MIGRATION_DONE_KEY)
@@ -4305,7 +4547,13 @@ impl App {
                     .await?
                     .as_deref()
                     == Some("done");
-                if shells_done && phase_refresh_done {
+                let shell_purge_done = self
+                    .store
+                    .get_app_meta(legacy_migration::WORKFLOW_SHELL_PURGE_DONE_KEY)
+                    .await?
+                    .as_deref()
+                    == Some("done");
+                if shells_done && phase_refresh_done && shell_purge_done {
                     return Ok(());
                 }
 
@@ -4318,6 +4566,7 @@ impl App {
                 let mut imported_agents = 0u32;
                 let mut skipped_sources: Vec<String> = Vec::new();
                 let mut refreshed_templates: Vec<String> = Vec::new();
+                let mut purged_workflows: Vec<String> = Vec::new();
 
                 // Shared backup helper: at most one real `.bak-<stamp>` file
                 // per dispatch, made lazily right before the first real
@@ -4584,10 +4833,119 @@ impl App {
                     // seeding) can still pick this up.
                 }
 
+                // ── Pass C (T14.5, GH#59): workflow_spec directory-import
+                // shell purge. ──
+                if !shell_purge_done {
+                    let specs = self.store.list_workflow_specs().await?;
+
+                    // C2. Exclusion set #1: every workflow name referenced by
+                    // a `run_workflow`-mode cron task's `target` — same
+                    // by-name matching convention `tick_scheduler`/cron-
+                    // effectiveness already use (`cron_tasks.iter().find(|c|
+                    // c.target == spec.name)`), just collected as a set here
+                    // since Pass C checks every spec against it.
+                    let cron_tasks = self.store.list_cron_tasks().await?;
+                    let run_workflow_targets: std::collections::HashSet<String> = cron_tasks
+                        .iter()
+                        .filter(|c| c.mode == CronMode::RunWorkflow)
+                        .map(|c| c.target.clone())
+                        .collect();
+
+                    // C3. Exclusion set #2: every `workflow_spec.id` with at
+                    // least one real `workflow_run` row — one query for the
+                    // whole DB's run history (this repo's real run history is
+                    // small; a per-candidate `list_workflow_runs` call would
+                    // be N round-trips for the same answer `u32::MAX` gets in
+                    // one).
+                    let run_workflow_ids: std::collections::HashSet<WorkflowId> = self
+                        .store
+                        .list_all_workflow_runs(u32::MAX)
+                        .await?
+                        .iter()
+                        .map(|r| r.workflow_id)
+                        .collect();
+
+                    // C4. Trigger + eligibility in one pass, same
+                    // saw_candidate/to_* shape Pass B already uses: a row is
+                    // even a *candidate* only if Gate 1 (directory-import
+                    // source) holds; it's actually purged only if every
+                    // remaining gate holds too. The *presence* of at least
+                    // one Gate-1 candidate (not "was anything actually
+                    // purged") is what marks this pass as "checked" below.
+                    let mut saw_candidate = false;
+                    let mut to_purge: Vec<(WorkflowId, String)> = Vec::new();
+                    for spec in &specs {
+                        // Gate 1: only a directory-imported (ECC/Adopted)
+                        // Static spec is even a candidate — SelfBuilt (the
+                        // five built-in templates, any hand-authored
+                        // workflow) and WithinSession are never touched no
+                        // matter how zero-trace they look.
+                        if !legacy_migration::is_directory_import_source(&spec.kind) {
+                            continue;
+                        }
+                        saw_candidate = true;
+                        // Gate 2 (defense-in-depth): never purge a row whose
+                        // name exactly matches one of the five built-in stage
+                        // templates. In practice unreachable — a template's
+                        // `source` is always `SelfBuilt`, already excluded by
+                        // Gate 1 — but checked independently anyway, the same
+                        // belt-and-suspenders style Pass A's `role_agent_names`
+                        // check already applies to the five stage-role agents.
+                        if legacy_migration::matching_template_kind(&spec.name).is_some() {
+                            continue;
+                        }
+                        // Gate 3: zero real `workflow_run` rows.
+                        if run_workflow_ids.contains(&spec.id) {
+                            continue;
+                        }
+                        // Gate 4: zero `uses`.
+                        if legacy_migration::workflow_uses(&spec.kind) > 0 {
+                            continue;
+                        }
+                        // Gate 5: not referenced by name from any
+                        // `run_workflow`-mode cron task.
+                        if run_workflow_targets.contains(&spec.name) {
+                            continue;
+                        }
+                        to_purge.push((spec.id, spec.name.clone()));
+                    }
+
+                    if !to_purge.is_empty() {
+                        ensure_backup!();
+                        // C5. Delete pass. Deliberately does NOT touch
+                        // `workflow_run`/`workflow_version` rows for the
+                        // purged ids — both tables already document their own
+                        // no-FK "a run/version outlives its spec being
+                        // deleted" design (`schema.sql`: "the history is the
+                        // point"), and every purge candidate here was already
+                        // gated on zero real `workflow_run` rows (Gate 3)
+                        // above, so no orphan is actually created on the real
+                        // DB this ticket verified against (nor could one be,
+                        // by construction of the gate).
+                        for (id, name) in to_purge {
+                            self.store.delete_workflow_spec(id).await?;
+                            purged_workflows.push(name);
+                        }
+                        self.refresh_workflow_specs().await?;
+                        self.emit(Event::WorkflowSpecsChanged);
+                    }
+                    if saw_candidate {
+                        // C6. Stamp done — at least one directory-import spec
+                        // exists (this DB has real catalog-import content)
+                        // and every one has now been checked, purged or kept
+                        // for cause; a DB with none (never imported ECC/
+                        // Adopted content) leaves the flag unset so a future
+                        // boot (after a real import) can still pick this up.
+                        self.store
+                            .set_app_meta(legacy_migration::WORKFLOW_SHELL_PURGE_DONE_KEY, "done")
+                            .await?;
+                    }
+                }
+
                 // Only emit a report when this dispatch actually did real,
-                // visible work — a DB where neither pass found anything to
-                // touch stays silent, same "no report on a no-op" contract
-                // T14 established.
+                // visible work — a DB where none of the three passes found
+                // anything to touch stays silent, same "no report on a
+                // no-op" contract T14 established.
                 if backup_path.is_some() {
                     let report = LegacyMigrationReport {
                         backup_path,
@@ -4599,6 +4957,7 @@ impl App {
                         imported_agents,
                         skipped_sources,
                         refreshed_templates,
+                        purged_workflows,
                     };
                     self.emit(Event::LegacyShellsMigrated { report });
                 }
@@ -4800,8 +5159,10 @@ impl App {
                     .await?;
                 // C4: 项目挂了 GitHub 仓时,建单同时经 gh 真开一个 GitHub
                 // issue;github_remote 为空的项目在这里直接短路返回,今天的
-                // 行为一个字节不变。
-                self.sync_issue_to_github(p, id, &title, &desc).await?;
+                // 行为一个字节不变。announce=false(plan/14 C14 范围收敛):
+                // op 面板的手动建单不在本票覆盖范围,行为一个字节不变。
+                self.sync_issue_to_github(p, id, &title, &desc, false)
+                    .await?;
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
             }
@@ -5415,12 +5776,19 @@ fn cron_prompt_workflow(name: String, prompt: String) -> WorkflowSpec {
 /// parameters read back from `params_json` regardless of whether the
 /// executor call itself ever completes (an `UnsupportedCliExecutor` errors
 /// on its very first call; a real `claude -p` call may hit a flaky gateway).
+///
+/// `force_mock` (plan/14 C13) is recorded verbatim so an E2E readback can
+/// prove a creation-flow drafting run never had a chance to reach the real
+/// executor, independent of what `agent_cli`/`workspace_path` say — "报告不
+/// 代答,读回为证" applies to the routing decision itself, not just the run's
+/// outcome.
 fn run_params_snapshot(
     spec: &WorkflowSpec,
     trigger: RunTrigger,
     agent_cli: &str,
     tools: &[String],
     allowed_tools_arg: Option<&str>,
+    force_mock: bool,
 ) -> String {
     // serde_json::Value keeps this stable as the spec grows — adding a field
     // later is additive, not a schema break on historical run rows.
@@ -5442,6 +5810,7 @@ fn run_params_snapshot(
         "agent_cli": agent_cli,
         "tools": tools,
         "allowed_tools_arg": allowed_tools_arg,
+        "force_mock": force_mock,
     });
     v.to_string()
 }

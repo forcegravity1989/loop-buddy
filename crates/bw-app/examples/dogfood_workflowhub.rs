@@ -252,6 +252,7 @@ async fn main() {
         None => {
             let project = ProjectId::new();
             app.dispatch(Command::CreateProject {
+                provider: "github".to_string(),
                 id: project,
                 name: "WorkflowHub".into(),
                 kind: "内部平台组件 · workflow 全生命周期库".into(),

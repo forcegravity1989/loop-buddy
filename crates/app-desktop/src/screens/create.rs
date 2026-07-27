@@ -2,17 +2,23 @@
 //! 8-step form wizard): 意图 → 快速问题 → 起草中 → 审阅确认.
 //!
 //! Nothing here fabricates project-specific content. The "起草" step is a
-//! real (mock) workflow run through the same `Engine`/`Executor` op.rs uses —
-//! its output is a clearly-mock transcript, never injected into the editable
-//! north-star/metric fields as fact. Those fields start from the user's own
-//! words (the brief) or blank, always editable, only becoming real project
-//! state when the user hits 确认.
+//! real workflow run through the same `Engine` op.rs uses, dispatched via
+//! `Command::RunDraftWorkflow` (plan/14 C13, D8 回锁) — that command hard-
+//! locks the run to the shared `MockExecutor` regardless of whether this
+//! project already has a real GitHub-cloned workspace, so it never spends a
+//! real `claude -p` call. Its output is a clearly-mock transcript, never
+//! injected into the editable north-star/metric fields as fact. Those
+//! fields start from the user's own words (the brief) or blank, always
+//! editable, only becoming real project state when the user hits 确认.
 //!
 //! The project row is minted at the *first* card (意图), not deferred to
 //! confirm: that gives the drafting run somewhere real to attach a session,
 //! and means an interrupted creation resumes instead of vanishing.
 
-use crate::kernel::{CreateVm, Kernel, RunVm};
+use crate::kernel::{
+    ActionItem, CreateVm, Kernel, RunVm, ACTION_FAIL_LINGER, ACTION_OK_LINGER,
+    ACTION_PENDING_THRESHOLD,
+};
 use crate::theme;
 use bw_app::{Command, GithubOrigin, Panel, Scope};
 use bw_core::model::{drafting_workflow, Cadence, MaturityPeriod, StageKind};
@@ -45,6 +51,12 @@ enum RepoChoice {
 pub fn Create(
     vm: Option<CreateVm>,
     run: RunVm,
+    // plan/14 C14: raw Started/Ok/Fail facts for this flow's background
+    // actions (建仓/克隆/仓列表加载/标配建单/落地推送) — rendered by
+    // `ActionsBanner` below, visible across every card since the action that
+    // started it may finish several cards later (e.g. 建仓 starts on
+    // Intent, resolves while the user is already answering Questions).
+    actions: Vec<ActionItem>,
     github_repos: Vec<GithubRepoSummary>,
     on_cancel: EventHandler<()>,
 ) -> Element {
@@ -61,6 +73,11 @@ pub fn Create(
     });
     let cadence = use_signal(|| Cadence::Weekly);
     let repo_choice = use_signal(|| RepoChoice::New { private: true });
+    // C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 今天恒 "github"(唯一
+    // 可点的选项),`RepoCard` 渲染 chip、`IntentCard` 提交时把它带进
+    // `Command::CreateProject.provider`。纯 UI 状态,与 `repo_choice`(起点:
+    // 新建/接入)并存、互不影响。
+    let platform = use_signal(|| "github".to_string());
 
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
@@ -71,29 +88,160 @@ pub fn Create(
             div {
                 style: "display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;",
                 span { style: "font-family:{serif};font-size:17px;font-weight:600;", "新建项目" }
-                if card() == Card::Repo || card() == Card::Intent {
-                    button {
-                        style: "background:transparent;border:none;color:{ink2};cursor:pointer;font-size:13px;",
-                        onclick: move |_| on_cancel.call(()),
-                        "← 返回项目墙"
-                    }
+                // C12(plan/14 规范条 1): 永远退得出去 —— 全卡、全状态(含起草
+                // 进行中/失败、审阅)都有这条路,不再只挂 Repo/Intent 两卡。
+                // `on_cancel` 语义见 main.rs:只清活跃项目指针,不删项目、不回
+                // 滚已落库进度——已建的项目留在墙上,重开走 cold-start 续。
+                button {
+                    style: "background:transparent;border:none;color:{ink2};cursor:pointer;font-size:13px;",
+                    onclick: move |_| on_cancel.call(()),
+                    "← 返回项目墙"
                 }
             }
+            // plan/14 C14(规范条 2): 后台动作永远有状态回显 —— 建仓/克隆/仓
+            // 列表加载/标配建单/落地推送不管走完哪张卡都在这里能看见。
+            ActionsBanner { items: actions }
             match (card(), vm) {
                 (Card::Repo, _) => rsx! {
-                    RepoCard { choice: repo_choice, github_repos: github_repos.clone(), on_next: move |_| card.set(Card::Intent) }
+                    RepoCard { platform, choice: repo_choice, github_repos: github_repos.clone(), on_next: move |_| card.set(Card::Intent) }
                 },
                 (Card::Intent, _) => rsx! {
-                    IntentCard { repo_choice, on_created: move |_| card.set(Card::Questions) }
+                    IntentCard { platform, repo_choice, on_created: move |_| card.set(Card::Questions) }
                 },
                 (_, None) => rsx! { div { "…" } },
                 (Card::Questions, Some(v)) => rsx! {
                     QuestionsCard { vm: v, cadence, on_next: move |_| card.set(Card::Drafting) }
                 },
                 (Card::Drafting, Some(_)) => rsx! {
-                    DraftingCard { run, on_next: move |_| card.set(Card::Review) }
+                    DraftingCard { run, on_next: move |_| card.set(Card::Review), on_cancel }
                 },
                 (Card::Review, Some(v)) => rsx! { ReviewCard { vm: v, cadence } },
+            }
+        }
+    }
+}
+
+// ─────────────────── plan/14 C14 · 后台动作进度条 ───────────────────
+
+/// One [`ActionItem`] resolved into what the strip actually shows —
+/// recomputed every render against `Instant::now()`, never stored: see
+/// `visible_actions`.
+#[derive(Clone, PartialEq)]
+enum ActionView {
+    Pending { elapsed_secs: u64 },
+    Ok,
+    Fail(String),
+}
+
+/// Render-time visibility gate (体验规范条 2 + 阈值门槛,plan/14 C14): an
+/// action that starts *and* resolves inside `ACTION_PENDING_THRESHOLD` never
+/// appears at all — 秒级内完成的动作不闪烁噪音. One that does cross the
+/// threshold shows `Pending` with a live elapsed count, then transitions to
+/// `Ok`(短暂淡出) or `Fail`(带原因,停留更久 —— 与既有 `ConnectorSynced`
+/// toast 互为记录,那条不受这里的淡出影响) until its own linger window
+/// elapses.
+fn visible_actions(items: &[ActionItem], now: std::time::Instant) -> Vec<(String, ActionView)> {
+    items
+        .iter()
+        .filter_map(|it| match &it.resolved {
+            None => {
+                let elapsed = now.saturating_duration_since(it.started_at);
+                (elapsed >= ACTION_PENDING_THRESHOLD).then(|| {
+                    (
+                        it.name.clone(),
+                        ActionView::Pending {
+                            elapsed_secs: elapsed.as_secs(),
+                        },
+                    )
+                })
+            }
+            Some((ok, detail, resolved_at)) => {
+                let was_shown = resolved_at.saturating_duration_since(it.started_at)
+                    >= ACTION_PENDING_THRESHOLD;
+                if !was_shown {
+                    return None; // resolved before ever crossing the noise threshold
+                }
+                let since_resolved = now.saturating_duration_since(*resolved_at);
+                let linger = if *ok {
+                    ACTION_OK_LINGER
+                } else {
+                    ACTION_FAIL_LINGER
+                };
+                (since_resolved < linger).then(|| {
+                    let view = if *ok {
+                        ActionView::Ok
+                    } else {
+                        ActionView::Fail(detail.clone())
+                    };
+                    (it.name.clone(), view)
+                })
+            }
+        })
+        .collect()
+}
+
+/// The always-mounted-while-creating strip that turns raw `ActionItem`s into
+/// live "正在 X … 已 N 秒" / "✓ X" / "✕ X · 原因" rows (plan/14 C14,规范条
+/// 2). Self-ticks on a local signal — not driven by the parent re-rendering
+/// — because elapsed-seconds/linger-window visibility is wall-clock, not
+/// event-driven: without its own clock this would only refresh whenever a
+/// *new* Started/Ok/Fail note arrives, freezing the "已 N 秒" count between
+/// real events. Bounded lifetime: only mounted while the creation flow is on
+/// screen.
+#[component]
+fn ActionsBanner(items: Vec<ActionItem>) -> Element {
+    let mut tick = use_signal(|| 0u32);
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            tick.with_mut(|t| *t = t.wrapping_add(1));
+        }
+    });
+    let _ = tick(); // subscribe: forces this component to re-render on tick
+    let visible = visible_actions(&items, std::time::Instant::now());
+    let ink2 = theme::INK_2;
+    let clay = theme::CLAY;
+
+    rsx! {
+        if !visible.is_empty() {
+            div {
+                style: "display:flex;flex-direction:column;gap:4px;margin:-2px 0 6px;",
+                for (name, view) in visible {
+                    {
+                        match view {
+                            ActionView::Pending { elapsed_secs } => rsx! {
+                                div {
+                                    key: "{name}",
+                                    style: "display:flex;align-items:center;gap:8px;font-size:11.5px;color:{ink2};",
+                                    span { style: "width:6px;height:6px;border-radius:50%;background:{clay};flex:none;", "" }
+                                    span { "正在{name} … 已 {elapsed_secs} 秒" }
+                                }
+                            },
+                            ActionView::Ok => rsx! {
+                                div {
+                                    key: "{name}",
+                                    style: "display:flex;align-items:center;gap:8px;font-size:11.5px;color:#5F7355;",
+                                    span { "✓ {name}" }
+                                }
+                            },
+                            ActionView::Fail(detail) => {
+                                // plan/14 C15(规范条 3): 人话优先,原文不丢 ——
+                                // `explain_failure` 的 headline 上屏,`raw`(=
+                                // 原始 `detail`,逐字未改)进 `title` 悬浮,鼠标
+                                // 停留即见,不隐藏也不占版面。
+                                let x = ui::explain_failure(&detail);
+                                rsx! {
+                                    div {
+                                        key: "{name}",
+                                        title: "{x.raw}",
+                                        style: "display:flex;align-items:center;gap:8px;font-size:11.5px;color:#B0503A;",
+                                        span { "✕ {name} · {x.headline}" }
+                                    }
+                                }
+                            },
+                        }
+                    }
+                }
             }
         }
     }
@@ -103,6 +251,7 @@ pub fn Create(
 
 #[component]
 fn RepoCard(
+    platform: Signal<String>,
     choice: Signal<RepoChoice>,
     github_repos: Vec<GithubRepoSummary>,
     on_next: EventHandler<()>,
@@ -116,10 +265,26 @@ fn RepoCard(
         matches!(&choice(), RepoChoice::Existing { owner, .. } if !owner.is_empty());
     let can_send = is_new || existing_ready;
     let opacity = if can_send { "1" } else { ".45" };
+    // C16(plan/14 规范条 4): 选中已有仓时,在下拉下方回显它的完整真实
+    // metadata(不只是下拉一行 owner/repo · private)。找不到(仓列表还没
+    // 加载完/选择已清空)就不渲染这块 —— 不拿假数据充数。
+    let selected_meta = if let RepoChoice::Existing { owner, repo } = &choice() {
+        github_repos
+            .iter()
+            .find(|r| &r.owner == owner && &r.repo == repo)
+            .cloned()
+    } else {
+        None
+    };
 
     rsx! {
         div { style: "font-family:{serif};font-size:22px;font-weight:600;margin:14px 0 4px;", "仓从哪来？" }
-        p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;", "每个项目背后是一个真实的 GitHub 仓 —— 新建一个,或者接入你已有的。" }
+        p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;", "每个项目背后是一个真实的代码仓 —— 新建一个,或者接入你已有的。" }
+
+        // C16(plan/14 规范条 4): 仓平台是一个选择器 —— 今天只有 GitHub 一个
+        // 选项没关系,但它必须是「选出来的」。GitLab/Gitcode 如实灰置
+        // 「未接」,不可点、视觉明确禁用,绝不假装可用。
+        {platform_selector(platform)}
 
         {chip_question(
             "起点",
@@ -171,14 +336,22 @@ fn RepoCard(
                         {
                             let value = format!("{}/{}", r.owner, r.repo);
                             let vis = if r.private { "private" } else { "public" };
+                            let branch = if r.default_branch.trim().is_empty() {
+                                "?".to_string()
+                            } else {
+                                r.default_branch.clone()
+                            };
                             rsx! {
-                                option { key: "{value}", value: "{value}", "{value} · {vis}" }
+                                option { key: "{value}", value: "{value}", "{value} · {vis} · {branch}" }
                             }
                         }
                     }
                 }
                 if github_repos.is_empty() {
                     p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 确认本机 gh 已登录(gh auth status)。" }
+                }
+                if let Some(meta) = selected_meta {
+                    {repo_metadata_block(&meta)}
                 }
             }
         }
@@ -189,6 +362,76 @@ fn RepoCard(
                 disabled: !can_send,
                 onclick: move |_| on_next.call(()),
                 "下一步 →"
+            }
+        }
+    }
+}
+
+/// C16(plan/14 规范条 4): 仓平台选择器 —— GitHub 今天唯一可点、默认选中;
+/// GitLab/Gitcode 如实灰置「未接」(虚线边框、无 onclick、不可点),绝不假装
+/// 可用。纯 UI 状态(`platform` 信号),与「起点」chip 并存、互不影响。
+fn platform_selector(mut platform: Signal<String>) -> Element {
+    let ink2 = theme::INK_2;
+    let selected = platform() == "github";
+    let (bd, bg, fg) = if selected {
+        ("1.5px solid #C5654A", "#C5654A", "#fff")
+    } else {
+        ("1px solid #DDD5C5", "transparent", "#57534A")
+    };
+    rsx! {
+        div {
+            style: "margin-bottom:6px;",
+            div { style: "font-size:12.5px;font-weight:600;color:{ink2};margin-bottom:8px;", "仓平台" }
+            div {
+                style: "display:flex;gap:6px;flex-wrap:wrap;",
+                div {
+                    onclick: move |_| platform.set("github".to_string()),
+                    style: "cursor:pointer;border:{bd};background:{bg};color:{fg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                    "GitHub"
+                }
+                for name in ["GitLab", "Gitcode"] {
+                    div {
+                        key: "{name}",
+                        title: "未接 —— 需要 token 管理/API 适配,留白如实,不假装可用(plan/14 留白台账)",
+                        style: "cursor:not-allowed;border:1px dashed #DDD5C5;background:transparent;color:#B5AD9C;border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                        "{name} · 未接"
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// C16(plan/14 规范条 4): 接入已有仓时的完整真实 metadata 回显 —— 描述/
+/// 可见性/默认分支/最近推送,全部来自 `gh repo list` 的真实字段(见
+/// `bw_engine::github::list_repos`),不是"owner/repo · private"一行糊弄。
+fn repo_metadata_block(meta: &GithubRepoSummary) -> Element {
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+    let desc = if meta.description.trim().is_empty() {
+        "(无描述)".to_string()
+    } else {
+        meta.description.clone()
+    };
+    let vis = if meta.private { "private" } else { "public" };
+    let branch = if meta.default_branch.trim().is_empty() {
+        "(未知)".to_string()
+    } else {
+        meta.default_branch.clone()
+    };
+    let pushed = if meta.pushed_at.trim().is_empty() {
+        "(未知)".to_string()
+    } else {
+        meta.pushed_at.clone()
+    };
+    rsx! {
+        div {
+            style: "margin-top:10px;padding:11px 13px;background:#F7F3EA;border:1px solid #E5DDCB;border-radius:8px;",
+            div { style: "font-family:{mono};font-size:12px;font-weight:600;color:#3A3833;margin-bottom:6px;", "{meta.owner}/{meta.repo}" }
+            div { style: "font-size:11.5px;color:{ink3};line-height:1.9;",
+                div { "描述:{desc}" }
+                div { "可见性:{vis} · 默认分支:{branch}" }
+                div { "最近推送:{pushed}" }
             }
         }
     }
@@ -226,7 +469,11 @@ fn slugify(name: &str) -> String {
 }
 
 #[component]
-fn IntentCard(repo_choice: Signal<RepoChoice>, on_created: EventHandler<()>) -> Element {
+fn IntentCard(
+    platform: Signal<String>,
+    repo_choice: Signal<RepoChoice>,
+    on_created: EventHandler<()>,
+) -> Element {
     let k = use_context::<Kernel>();
     let mut name = use_signal(String::new);
     let mut kind = use_signal(|| KINDS[0].to_string());
@@ -259,6 +506,7 @@ fn IntentCard(repo_choice: Signal<RepoChoice>, on_created: EventHandler<()>) -> 
             RepoChoice::Existing { owner, repo } => Some(GithubOrigin::Existing { owner, repo }),
         };
         k.send(Command::CreateProject {
+            provider: platform(),
             id: ProjectId::new(),
             name: name().trim().to_string(),
             kind: kind(),
@@ -340,6 +588,27 @@ fn IntentCard(repo_choice: Signal<RepoChoice>, on_created: EventHandler<()>) -> 
     }
 }
 
+/// Kicks off the drafting run — shared by `QuestionsCard`'s initial submit
+/// and `DraftingCard`'s「重试起草」on a failed run (C12, plan/14). Always a
+/// fresh `SessionId` + `StartSession`: `RunDraftWorkflow` (plan/14 C13, D8
+/// 回锁) hard-locks to the shared MockExecutor regardless of session
+/// identity, so a retry doesn't need the failed attempt's session — a new
+/// one keeps each attempt's record honest (a retry is a new real session,
+/// not a fabricated continuation of the one that failed).
+fn dispatch_draft_run(k: &Kernel) {
+    let session = SessionId::new();
+    k.send(Command::StartSession {
+        id: session,
+        stage_kind: Some(StageKind::Prototype),
+        kind: SessionKind::Create,
+        title: "创建 · 体系起草".into(),
+    });
+    k.send(Command::RunDraftWorkflow {
+        session,
+        spec: drafting_workflow(),
+    });
+}
+
 // ───────────────────────── 2 · 快速问题 ─────────────────────────
 
 #[component]
@@ -365,20 +634,14 @@ fn QuestionsCard(vm: CreateVm, cadence: Signal<Cadence>, on_next: EventHandler<(
         });
         cadence.set(cad());
 
-        // Kick off the drafting run — a real (mock) workflow, same Engine as
-        // any operating-view run. Its transcript is honestly mock; nothing
-        // from it is copied into the editable review fields.
-        let session = SessionId::new();
-        k.send(Command::StartSession {
-            id: session,
-            stage_kind: Some(StageKind::Prototype),
-            kind: SessionKind::Create,
-            title: "创建 · 体系起草".into(),
-        });
-        k.send(Command::RunWorkflow {
-            session,
-            spec: drafting_workflow(),
-        });
+        // Kick off the drafting run — same Engine/progress-event path as any
+        // operating-view run, but `RunDraftWorkflow` (plan/14 C13, D8 回锁)
+        // hard-locks it to the shared MockExecutor regardless of whether
+        // this project already has a real GitHub-cloned workspace. Its
+        // transcript is honestly mock; nothing from it is copied into the
+        // editable review fields. Real system-drafting work (竞品分析/找
+        // 指标/绑数据) happens later, through the standard-Issue trio.
+        dispatch_draft_run(&k);
         on_next.call(());
     };
 
@@ -485,13 +748,65 @@ fn chip_question(
 
 // ───────────────────────── 3 · 起草中 ─────────────────────────
 
+/// plan/14 C14: a phase chip's real start/end `Instant`s, component-local to
+/// `DraftingCard` — `RunVm.phases` (shared with the Op screen's run banner)
+/// only carries `(name, done)`, so this latches timing alongside it without
+/// changing that shared shape.
+#[derive(Clone, Copy)]
+struct PhaseTiming {
+    started: std::time::Instant,
+    ended: Option<std::time::Instant>,
+}
+
 #[component]
-fn DraftingCard(run: RunVm, on_next: EventHandler<()>) -> Element {
+fn DraftingCard(run: RunVm, on_next: EventHandler<()>, on_cancel: EventHandler<()>) -> Element {
+    let k = use_context::<Kernel>();
     let card = theme::card();
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
     let clay = theme::CLAY;
     let done = !run.running && run.failed.is_none() && !run.phases.is_empty();
+    let failed = run.failed.is_some();
+
+    // plan/14 C14(规范条 2): "补相位耗时显示即可,不重做" — the phase chips
+    // themselves (below) are untouched; this only latches a real start
+    // `Instant` per phase index (from `run.phases` growing, the same signal
+    // the chips already render off) so each chip can show how long it's
+    // actually been running/took. `run.phases` resets to a shorter/empty
+    // list on a retry (`RunVm::apply`'s `RunStarted` clears it) — caught
+    // below so a fresh attempt never inherits a stale `Instant`.
+    let mut phase_times = use_signal(Vec::<PhaseTiming>::new);
+    if run.phases.len() < phase_times.peek().len() {
+        phase_times.set(Vec::new());
+    }
+    if run.phases.len() > phase_times.peek().len() {
+        phase_times.with_mut(|pt| {
+            while pt.len() < run.phases.len() {
+                pt.push(PhaseTiming {
+                    started: std::time::Instant::now(),
+                    ended: None,
+                });
+            }
+        });
+    }
+    for (i, (_, ok)) in run.phases.iter().enumerate() {
+        if *ok && phase_times.peek().get(i).is_some_and(|t| t.ended.is_none()) {
+            phase_times.with_mut(|pt| {
+                if let Some(t) = pt.get_mut(i) {
+                    t.ended = Some(std::time::Instant::now());
+                }
+            });
+        }
+    }
+    // Self-ticking so a still-running phase's "已 Ns" visibly counts up
+    // between `WorkflowProgress` events, same rationale as
+    // `ActionsBanner` above. Bounded to this card's lifetime.
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            phase_times.with_mut(|_| {});
+        }
+    });
 
     rsx! {
         div {
@@ -500,9 +815,14 @@ fn DraftingCard(run: RunVm, on_next: EventHandler<()>) -> Element {
                 style: "display:flex;align-items:center;gap:10px;",
                 if run.running {
                     span { style: "width:7px;height:7px;border-radius:50%;background:{clay};", "" }
-                    span { style: "font-size:12.5px;color:{ink3};", "正在按方法论起草体系 —— 周期判定 · 北极星起草 · 指标框架 · 阶段激活…" }
+                    span { style: "font-size:12.5px;color:{ink3};", "正在按方法论起草体系 —— 北极星起草 · 指标框架 · 阶段激活…" }
                 } else if let Some(err) = run.failed.clone() {
-                    span { style: "font-size:12.5px;color:#B0503A;", "起草失败:{err}" }
+                    // plan/14 C15(规范条 3): 人话优先 —— headline 上屏,原文
+                    // `err` 一字不改地进下方「技术详情」折叠区(见 details 块)。
+                    {
+                        let x = ui::explain_failure(&err);
+                        rsx! { span { style: "font-size:12.5px;color:#B0503A;", "起草失败:{x.headline}" } }
+                    }
                 } else {
                     span { style: "font-size:12.5px;color:{ink2};", "起草完成 —— 以下候选均可编辑,确认前不算数。" }
                 }
@@ -513,11 +833,21 @@ fn DraftingCard(run: RunVm, on_next: EventHandler<()>) -> Element {
                     {
                         let color = if *ok { "#5F7355" } else { clay };
                         let mark = if *ok { "✓" } else { "…" };
+                        // 耗时:done 的相位显示定格用时,进行中的相位随
+                        // 上面的 tick 实时累加 —— 都是真实 Instant 差值。
+                        let secs = phase_times.peek().get(i).map(|t| {
+                            let end = t.ended.unwrap_or_else(std::time::Instant::now);
+                            end.saturating_duration_since(t.started).as_secs()
+                        });
                         rsx! {
                             span {
                                 key: "{i}",
                                 style: "border:1.4px solid {color};color:{color};border-radius:7px;padding:3px 10px;font-size:12px;",
-                                "{name} {mark}"
+                                if let Some(secs) = secs {
+                                    "{name} {mark} · {secs}s"
+                                } else {
+                                    "{name} {mark}"
+                                }
                             }
                         }
                     }
@@ -530,6 +860,53 @@ fn DraftingCard(run: RunVm, on_next: EventHandler<()>) -> Element {
                         style: "{theme::btn_primary()}",
                         onclick: move |_| on_next.call(()),
                         "查看起草结果 →"
+                    }
+                }
+            }
+            // C12(plan/14 规范条 1)→ C15(规范条 3): 失败态从「零按钮死路」升
+            // 到三出路,原文永不丢。
+            if let Some(err) = run.failed.clone() {
+                {
+                    let raw = err.clone();
+                    rsx! {
+                        // 技术详情折叠:默认收起,只显示人话;展开见原始报错
+                        // 逐字文本(`FailureExplanation::raw`,未经改写)—— 如
+                        // 实,不隐藏(规范条 3)。
+                        details {
+                            style: "font-size:11.5px;color:{ink3};",
+                            summary { style: "cursor:pointer;color:{ink3};", "技术详情" }
+                            div {
+                                style: "margin-top:6px;padding:8px 10px;background:#F7F3EA;border:1px solid #E5DDCB;border-radius:6px;font-family:{theme::MONO};font-size:11px;color:{ink2};white-space:pre-wrap;word-break:break-word;",
+                                "{raw}"
+                            }
+                        }
+                    }
+                }
+            }
+            if failed {
+                div {
+                    style: "display:flex;justify-content:flex-end;gap:8px;",
+                    button {
+                        style: "background:transparent;border:1px solid #CFC7B6;color:{ink2};cursor:pointer;border-radius:8px;padding:9px 16px;font-size:12.5px;",
+                        onclick: move |_| on_cancel.call(()),
+                        "返回项目墙"
+                    }
+                    button {
+                        style: "background:transparent;border:1px solid #CFC7B6;color:{ink2};cursor:pointer;border-radius:8px;padding:9px 16px;font-size:12.5px;",
+                        // plan/14 C15(规范条 3)「先用模板继续」: 起草这一跑
+                        // (`RunDraftWorkflow`,C13 后已是 mock)失败不拦审阅 ——
+                        // `ReviewCard` 的字段来自 `CreateVm`/用户已填的
+                        // brief/问答(见本文件顶部注释),从不读这次跑的
+                        // transcript,所以「继续」= 原样推进到 Review,零新
+                        // 后端命令、零编造字段。与 `done` 分支的「查看起草结果」
+                        // 是同一条 `on_next`,只是失败也放行。
+                        onclick: move |_| on_next.call(()),
+                        "先用模板继续 →"
+                    }
+                    button {
+                        style: "{theme::btn_primary()}",
+                        onclick: move |_| dispatch_draft_run(&k),
+                        "重试起草"
                     }
                 }
             }

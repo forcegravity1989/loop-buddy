@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS project (
     workspace_path     TEXT NOT NULL DEFAULT '', -- 真执行器目标目录;空=未配置,只跑 Mock
     allow_commands     INTEGER NOT NULL DEFAULT 0, -- 真执行器是否额外放行 Bash(不只编辑文件)
     github_remote      TEXT NOT NULL DEFAULT '', -- "owner/repo";空=未挂 GitHub(本地仓或还没建)
+    -- C16(plan/14 规范条 4):仓平台选择器的选中值。今天唯一可选 'github'
+    -- (GitLab/Gitcode 灰置「未接」,选不了)——字段先落好语义,第二个平台真
+    -- 接时无需再改表结构。
+    provider           TEXT NOT NULL DEFAULT 'github',
     -- C6(plan/13 D5+D6):北极星的采集方案(kind+query),来自 `.bw/metrics.toml`
     -- 正本的 `north_star.collect`;空串=正本从未同步过(老库/新建项目一致)。
     -- name/def 走既有 north_star/ns_def 两列(SyncMetricsFile 复用 set_north_star

@@ -117,6 +117,7 @@ async fn main() {
     {
         let mut app = app_with_script(store.clone(), vec![]).await;
         app.dispatch(Command::CreateProject {
+            provider: "github".to_string(),
             id: pid,
             name: "T9 对抗演示项目".into(),
             kind: "demo".into(),

@@ -23,6 +23,7 @@ use time::OffsetDateTime;
 async fn quick_project(app: &mut App, name: &str) -> ProjectId {
     let id = ProjectId::new();
     app.dispatch(Command::CreateProject {
+        provider: "github".to_string(),
         id,
         name: name.into(),
         kind: "自驱".into(),

@@ -1,0 +1,40 @@
+name    = "distill-skill"
+purpose = "复利链:Done 的 Issue 一键蒸馏成带正文的技能,skill 行真实归属到来源 Issue(distilled_from_issue),下次同类活可注入"
+db      = "fixture:demo"
+launch  = { BW_OPEN = "linkcheck-md", BW_PANEL = "issues" }
+
+# 作用于 fixture 三卡里 Done 的那张(#3)——「⚗ 蒸馏为技能」只在
+# IssueDetailOverlay、status=Done 时渲染(op.rs IssueDetailOverlay)。
+[[step]]
+do     = "click"
+arg    = "【fixture】为死链检查器加 --version 参数"
+snap   = "detail-opened"
+wait_s = 3
+
+[[step]]
+do  = "assert_text"
+arg = "⚗ 蒸馏为技能"
+
+[[step]]
+do     = "click"
+arg    = "⚗ 蒸馏为技能"
+snap   = "distill-form-open"
+wait_s = 2
+
+# 名称/描述有默认值(「{标题} · 做法」/「来自 Issue #{号} 的实战沉淀」),
+# 正文(必填,人写)默认为空——蒸馏这一步"做法怎么写"必须是人的判断,
+# 表单不代填,所以驱动脚本必须真填一段文字才能推进,不能绕过必填校验。
+[[step]]
+do     = "fill"
+arg    = "正文(必填,人写):这件活的可复用做法——下次同类活会被真实注入…|【E2E 常青流 04】死链检查器加 --version 参数的做法:解析 argv 时优先匹配 --version/-v,直接打印版本号并 exit(0),不进入正常扫描路径;版本号来自 Cargo.toml 的 CARGO_PKG_VERSION,不手写字符串。"
+wait_s = 1
+
+[[step]]
+do     = "click"
+arg    = "确认蒸馏"
+snap   = "distilled"
+wait_s = 3
+
+[[verify]]
+sql    = "SELECT s.name, s.distilled_from_issue, (s.distilled_from_issue = i.id) AS attributed_ok FROM skill s JOIN issue i ON i.title='【fixture】为死链检查器加 --version 参数' WHERE s.distilled_from_issue = i.id"
+expect = "恰好一行,attributed_ok=1 —— 新技能行真实归属到源 Issue(distilled_from_issue 指回 issue.id),不是裸造的技能卡"

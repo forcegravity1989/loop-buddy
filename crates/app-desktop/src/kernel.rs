@@ -12,7 +12,7 @@
 //! persisted derive cache (`None` ⇒ Unknown), feeds are real records, stage
 //! methodology text is `StageKind`'s own static metadata.
 
-use bw_app::{App, Command, Event, Panel, Scope, View};
+use bw_app::{ActionState, App, Command, Event, Panel, Scope, View};
 use bw_core::model::{
     AgentRef, Author, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal, SkillRef,
     StageKind,
@@ -239,6 +239,12 @@ pub enum UiNote {
         ok: bool,
         detail: String,
     },
+    /// plan/14 C14 · mirrors `bw_app::Event::ActionProgress` verbatim — see
+    /// its doc comment. Folded into [`ActionsVm`] by `ActionsVm::apply`.
+    ActionProgress {
+        name: String,
+        state: ActionState,
+    },
 }
 
 /// Folded run-progress state the UI renders as the live banner. Fed purely by
@@ -291,7 +297,81 @@ impl RunVm {
             | UiNote::Error(_)
             | UiNote::CronAutoFired { .. }
             | UiNote::ArtifactsRegistered { .. }
-            | UiNote::ConnectorSynced { .. } => {}
+            | UiNote::ConnectorSynced { .. }
+            | UiNote::ActionProgress { .. } => {}
+        }
+    }
+}
+
+// ─────────────────────── plan/14 C14 · action progress ───────────────────────
+
+/// The "how long is too long to stay silent" line for a creation-flow
+/// background action (体验规范条 2). An action that starts *and* resolves
+/// before this elapses never renders a pending indicator at all — 秒级内
+/// 完成的动作不闪烁噪音. Shared by every render-time visibility decision
+/// over [`ActionItem`] (see `screens::create::visible_actions`).
+pub const ACTION_PENDING_THRESHOLD: Duration = Duration::from_millis(800);
+/// How long a resolved-`Ok` indicator lingers before the render layer stops
+/// showing it (可淡出) — short, since success needs no reading time.
+pub const ACTION_OK_LINGER: Duration = Duration::from_millis(2200);
+/// How long a resolved-`Fail` indicator lingers — longer than `Ok`'s, so
+/// there's real time to read the reason (原因入口); the paired
+/// `UiNote::ConnectorSynced` toast (unchanged, still fires) is the
+/// persistent, dismissible record once this fades.
+pub const ACTION_FAIL_LINGER: Duration = Duration::from_secs(6);
+
+/// One creation-flow background action's raw progress — the real facts a
+/// `Started`/`Ok`/`Fail` triple reported, with real wall-clock timestamps.
+/// Visibility (is it past the pending threshold? has its linger window
+/// expired?) is a render-time decision computed from these against
+/// `Instant::now()` — this struct never decides, only records.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActionItem {
+    pub name: String,
+    pub started_at: std::time::Instant,
+    /// `(ok, detail, resolved_at)` once the real call has finished; `None`
+    /// while still running.
+    pub resolved: Option<(bool, String, std::time::Instant)>,
+}
+
+/// Folded background-action state the creation flow's progress strip
+/// renders (plan/14 C14). Fed purely by `UiNote::ActionProgress` — every
+/// entry is a real Started/Ok/Fail triple from a real `gh`-backed call,
+/// never synthesized. Bounded in practice to the handful of actions one
+/// creation flow fires (repo create/clone, repo list, the 3-Issue trio,
+/// landing push) — no pruning needed for a single session.
+#[derive(Clone, PartialEq, Default)]
+pub struct ActionsVm {
+    pub items: Vec<ActionItem>,
+}
+
+impl ActionsVm {
+    pub fn apply(&mut self, note: &UiNote) {
+        let UiNote::ActionProgress { name, state } = note else {
+            return;
+        };
+        match state {
+            ActionState::Started => {
+                // A retry reuses the same `name` — replace, don't duplicate,
+                // so the strip never shows a stale failed attempt alongside
+                // its retry.
+                self.items.retain(|i| &i.name != name);
+                self.items.push(ActionItem {
+                    name: name.clone(),
+                    started_at: std::time::Instant::now(),
+                    resolved: None,
+                });
+            }
+            ActionState::Ok(detail) => {
+                if let Some(i) = self.items.iter_mut().find(|i| &i.name == name) {
+                    i.resolved = Some((true, detail.clone(), std::time::Instant::now()));
+                }
+            }
+            ActionState::Fail(detail) => {
+                if let Some(i) = self.items.iter_mut().find(|i| &i.name == name) {
+                    i.resolved = Some((false, detail.clone(), std::time::Instant::now()));
+                }
+            }
         }
     }
 }
@@ -457,6 +537,9 @@ pub fn spawn() -> Kernel {
                             }
                             Event::ConnectorSynced { name, ok, detail } => {
                                 UiNote::ConnectorSynced { name, ok, detail }
+                            }
+                            Event::ActionProgress { name, state } => {
+                                UiNote::ActionProgress { name, state }
                             }
                             _ => continue,
                         };
