@@ -1219,6 +1219,71 @@ fn WorkspaceConfig(op: OpVm) -> Element {
     }
 }
 
+/// P1(loop-buddy↔aihot 接线 spec):给「绑定本地目录」建的存量项目补一个
+/// 接入 GitHub 仓的入口 —— `CreateProject` 只有「新建仓」「克隆已有仓」两条
+/// 路径会写 `github_remote`,绑定本地目录那条从不写,产品里此前没有补救
+/// 入口。只在 `github_remote` 为空时渲染;成功后 `op.github_remote` 变
+/// 非空,这张卡片自然消失,不需要额外状态。真实网络调用(`gh repo
+/// view`),Started→Ok/Fail 的进度靠既有 `ActionProgress` toast 显示,失败
+/// 走通用 `UiNote::Error`(`AttachRepo` 探活失败/远端不符时 dispatch 直接
+/// 返回 `Err`)。
+#[component]
+fn AttachRepoCard(op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let ink3 = theme::INK_3;
+    let clay = theme::CLAY;
+    let input_style = theme::input();
+
+    let mut owner_repo = use_signal(String::new);
+    let mut push_local = use_signal(|| false);
+    let (owner, repo) = owner_repo()
+        .split_once('/')
+        .map(|(o, r)| (o.trim().to_string(), r.trim().to_string()))
+        .unwrap_or_default();
+    let can_send = !owner.is_empty() && !repo.is_empty();
+    let has_workspace = !op.workspace_path.trim().is_empty();
+    let opacity = if can_send { "1" } else { ".45" };
+
+    rsx! {
+        div {
+            style: "{card} padding:14px 18px;margin-bottom:16px;",
+            div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "接入仓库 —— 这个项目还没挂 GitHub 仓" }
+            div {
+                style: "display:flex;align-items:center;gap:8px;",
+                input {
+                    style: "{input_style} flex:1;padding:6px 9px;font-size:12px;",
+                    placeholder: "owner/repo(例如 forcegravity1989/aihot)",
+                    value: "{owner_repo}",
+                    oninput: move |e| owner_repo.set(e.value()),
+                }
+                button {
+                    style: "cursor:pointer;background:{clay};color:#FFF;border:none;border-radius:7px;padding:6px 14px;font-size:12px;opacity:{opacity};flex:none;",
+                    disabled: !can_send,
+                    onclick: move |_| {
+                        k.send(Command::AttachRepo {
+                            owner: owner.clone(),
+                            repo: repo.clone(),
+                            push_local: push_local(),
+                        });
+                        owner_repo.set(String::new());
+                    },
+                    "接入"
+                }
+            }
+            if has_workspace {
+                button {
+                    style: "cursor:pointer;background:transparent;border:none;padding:0;margin-top:8px;font-size:12px;color:{ink3};display:flex;align-items:center;gap:6px;",
+                    onclick: move |_| push_local.set(!push_local()),
+                    span { if push_local() { "☑" } else { "☐" } }
+                    "同时推送本地提交"
+                }
+            }
+            div { style: "font-size:11px;color:{ink3};margin-top:8px;", "先真探活(gh repo view)——仓不存在或无权限,不写任何东西。" }
+        }
+    }
+}
+
 #[component]
 fn ProgressAll(op: OpVm) -> Element {
     let k = use_context::<Kernel>();
@@ -1277,6 +1342,9 @@ fn ProgressAll(op: OpVm) -> Element {
             }
         }
         WorkspaceConfig { op: op.clone() }
+        if op.github_remote.trim().is_empty() {
+            AttachRepoCard { op: op.clone() }
+        }
         div {
             style: "{card} padding:20px 22px;margin-bottom:16px;",
             div { style: "display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;",

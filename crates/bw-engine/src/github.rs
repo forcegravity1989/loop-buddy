@@ -148,6 +148,128 @@ pub async fn probe_repo(owner_repo: &str) -> Result<String, GithubError> {
     Ok(format!("{name} · {vis} · 最近推送 {pushed}"))
 }
 
+// ─────────────── P1 · 存量项目接仓 (loop-buddy↔aihot 接线 spec) ───────────────
+//
+// `Command::AttachRepo` 给「绑定本地目录」建的项目补上 GitHub 远端。这里只管
+// 本地 `origin` 这一侧的真实读写;探活(`probe_repo`)、写 `github_remote`、
+// 补 connector 都是 bw-app 的编排职责,不下沉到这层。
+
+/// 读一个工作区的 `origin` 远端 URL。`Ok(None)` = 没配 `origin`(绑定本地
+/// 目录建的项目的常态——`git remote get-url origin` 以非零退出,这不是
+/// bug);其余 git 失败照实报错,这是一次真读,不吞错误。
+pub async fn origin_remote_url(workspace: &Path) -> Result<Option<String>, GithubError> {
+    let output = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(["remote", "get-url", "origin"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        // "fatal: No such remote 'origin'" — 没配远端,不是错误。
+        return Ok(None);
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(if url.is_empty() { None } else { Some(url) })
+}
+
+/// 一个已存在的 `origin` URL 是否已经指向 `owner/repo`?兼容 `gh repo
+/// create/clone` 常写的 SSH(`git@github.com:owner/repo.git`)与 HTTPS
+/// (`https://github.com/owner/repo[.git]`)两种写法,归一化后比较,免得
+/// 同一个仓因协议不同被误判成「不符」。
+pub fn remote_matches(url: &str, owner: &str, repo: &str) -> bool {
+    let normalized = url
+        .trim()
+        .trim_end_matches(".git")
+        .replace("git@github.com:", "github.com/")
+        .replace("ssh://git@github.com/", "github.com/")
+        .replace("https://github.com/", "github.com/")
+        .replace("http://github.com/", "github.com/");
+    normalized.eq_ignore_ascii_case(&format!("github.com/{owner}/{repo}"))
+}
+
+/// 结果:接线时给本地工作区新加了 `origin`,还是它本来就已经指对了仓。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteReconcile {
+    Added,
+    AlreadyMatched,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RemoteReconcileError {
+    /// 工作区已有 `origin`,但指向别的仓——**绝不覆盖**用户的 git 配置,
+    /// 如实报错让人自己决定。
+    #[error("工作区已有 origin({existing}),与目标仓 {owner}/{repo} 不符,拒绝覆盖")]
+    Mismatch {
+        existing: String,
+        owner: String,
+        repo: String,
+    },
+    #[error(transparent)]
+    Github(#[from] GithubError),
+}
+
+/// P1 核心动作:给一个此前没有 `origin`(或 `origin` 已经指对)的工作区接上
+/// `owner/repo`。空 → 真的 `git remote add`;已指对 → no-op 视为就绪;指向
+/// 别的仓 → `Mismatch`,调用方据此中止,不静默改写。
+pub async fn reconcile_local_remote(
+    workspace: &Path,
+    owner: &str,
+    repo: &str,
+) -> Result<RemoteReconcile, RemoteReconcileError> {
+    match origin_remote_url(workspace).await? {
+        None => {
+            git_in(
+                workspace,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    &format!("git@github.com:{owner}/{repo}.git"),
+                ],
+            )
+            .await
+            .map_err(|e| git_err("添加 origin 失败", e))?;
+            Ok(RemoteReconcile::Added)
+        }
+        Some(url) if remote_matches(&url, owner, repo) => Ok(RemoteReconcile::AlreadyMatched),
+        Some(existing) => Err(RemoteReconcileError::Mismatch {
+            existing,
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+        }),
+    }
+}
+
+/// 当前检出的分支名(`git branch --show-current`)——detached HEAD 时为空,
+/// 调用方把「空」当成「没有可推的分支」处理,不是硬错误、更不会瞎编一个
+/// 分支名去推。
+pub async fn current_branch(workspace: &Path) -> Result<String, GithubError> {
+    let output = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(["branch", "--show-current"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// `push_local=true` 路径:把当前分支推到 `origin` 并建立 tracking
+/// (`git push -u origin <branch>`)。
+pub async fn push_current_branch(workspace: &Path, branch: &str) -> Result<(), GithubError> {
+    git_in(workspace, &["push", "-u", "origin", branch])
+        .await
+        .map_err(|e| git_err("推送失败", e))
+}
+
 /// merge 后把本地工作区收拢回默认分支(plan/13 D5:merge 后同步指标正本
 /// 需要读到 merge 进主干的 `.bw/metrics.toml`,而 run 结束后工作区还停在
 /// `bw/issue-N` 活分支上)。fetch → 解析 origin/HEAD(拿不到就依次试

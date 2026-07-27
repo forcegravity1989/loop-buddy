@@ -221,6 +221,19 @@ pub enum Command {
         path: String,
         allow_commands: bool,
     },
+    /// P1(loop-buddy↔aihot 接线 spec):给一个**存量**项目补上 GitHub 远端
+    /// —— `CreateProject` 的「绑定本地目录」分支([lib.rs:3121] 附近)只
+    /// `set_workspace`,从不写 `github_remote`,产品里此前没有补救入口。
+    /// 对活跃项目生效(`self.active()`)。`gh repo view` 先探活,探不到就
+    /// 如实报错、一个字节不写库;探到之后依次写 `github_remote`、补建
+    /// (幂等)`github-repo` connector、再接线本地工作区的 `origin`(工作区
+    /// 已有 remote 且不符目标 → 拒绝覆盖,不静默改写用户的 git 配置)。
+    /// `push_local=true` 时额外推当前分支。
+    AttachRepo {
+        owner: String,
+        repo: String,
+        push_local: bool,
+    },
     /// Replace the process-wide `ClaudeCliConfig` outright (Settings hub).
     /// In-memory only — same persistence tier it already had (env-var-seeded
     /// once at boot); this just makes it editable for the rest of the
@@ -3728,6 +3741,118 @@ impl App {
                     return Err(AppError::Invalid(format!("工作目录不存在:{trimmed}")));
                 }
                 self.store.set_workspace(p, trimmed, allow_commands).await?;
+                self.refresh_projects().await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::AttachRepo {
+                owner,
+                repo,
+                push_local,
+            } => {
+                let p = self.active()?;
+                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+                let owner = owner.trim().to_string();
+                let repo = repo.trim().to_string();
+                let owner_repo = format!("{owner}/{repo}");
+                let action_name = format!("{} · 接入仓库", proj.name);
+                self.emit(Event::ActionProgress {
+                    name: action_name.clone(),
+                    state: ActionState::Started,
+                });
+
+                // 1) 先探活——仓不存在或无权限,如实报错、一个字节不写库
+                // (D12 软降级:失败不伪造)。
+                if let Err(e) = bw_engine::github::probe_repo(&owner_repo).await {
+                    let detail = format!("探活失败:{e}");
+                    self.emit(Event::ActionProgress {
+                        name: action_name,
+                        state: ActionState::Fail(detail.clone()),
+                    });
+                    return Err(AppError::Invalid(detail));
+                }
+
+                // 2) 写 github_remote。
+                self.store.set_github_remote(p, &owner_repo).await?;
+
+                // 3) 补建 github-repo connector —— 幂等:同项目已有同 kind
+                // 就不重复建(`CreateProject` 的另两条分支都建了它,绑定
+                // 分支此前漏了,这里补齐)。
+                let has_github_connector = self
+                    .store
+                    .list_connectors()
+                    .await?
+                    .iter()
+                    .any(|c| c.kind == CONNECTOR_KIND_GITHUB_REPO && c.project_id == Some(p));
+                if !has_github_connector {
+                    self.store
+                        .create_connector(NewConnector {
+                            id: ConnectorId::new(),
+                            name: format!("{} · GitHub", proj.name),
+                            kind: CONNECTOR_KIND_GITHUB_REPO.into(),
+                            scope: proj.name.clone(),
+                            project_id: Some(p),
+                            config: owner_repo.clone(),
+                        })
+                        .await?;
+                }
+
+                // 4) 项目已有工作区时接线本地 origin;没有工作区就跳过这
+                // 一整步(不是错误——纯身份挂靠,后续 SetWorkspace 再补)。
+                if !proj.workspace_path.trim().is_empty() {
+                    let workspace = std::path::Path::new(proj.workspace_path.trim());
+                    match bw_engine::github::reconcile_local_remote(workspace, &owner, &repo).await
+                    {
+                        Err(e) => {
+                            let detail = e.to_string();
+                            self.emit(Event::ActionProgress {
+                                name: action_name,
+                                state: ActionState::Fail(detail.clone()),
+                            });
+                            return Err(AppError::Invalid(detail));
+                        }
+                        Ok(_) if push_local => {
+                            let branch = match bw_engine::github::current_branch(workspace).await {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    let detail = format!("读取当前分支失败:{e}");
+                                    self.emit(Event::ActionProgress {
+                                        name: action_name,
+                                        state: ActionState::Fail(detail.clone()),
+                                    });
+                                    return Err(AppError::Invalid(detail));
+                                }
+                            };
+                            if branch.trim().is_empty() {
+                                let detail =
+                                    "工作区处于 detached HEAD,无法确定要推送的分支".to_string();
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail.clone()),
+                                });
+                                return Err(AppError::Invalid(detail));
+                            }
+                            if let Err(e) =
+                                bw_engine::github::push_current_branch(workspace, &branch).await
+                            {
+                                let detail = format!("推送 {branch} 失败:{e}");
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail.clone()),
+                                });
+                                return Err(AppError::Invalid(detail));
+                            }
+                        }
+                        Ok(_) => {}
+                    }
+                }
+
+                // 5) 收尾:成功配对 + 刷新。
+                self.emit(Event::ActionProgress {
+                    name: action_name,
+                    state: ActionState::Ok(owner_repo),
+                });
+                self.refresh_connectors().await?;
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectUpdated(p));
             }
