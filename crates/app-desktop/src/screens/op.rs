@@ -1222,11 +1222,13 @@ fn WorkspaceConfig(op: OpVm) -> Element {
 /// P1(loop-buddy↔aihot 接线 spec):给「绑定本地目录」建的存量项目补一个
 /// 接入 GitHub 仓的入口 —— `CreateProject` 只有「新建仓」「克隆已有仓」两条
 /// 路径会写 `github_remote`,绑定本地目录那条从不写,产品里此前没有补救
-/// 入口。只在 `github_remote` 为空时渲染;成功后 `op.github_remote` 变
-/// 非空,这张卡片自然消失,不需要额外状态。真实网络调用(`gh repo
-/// view`),Started→Ok/Fail 的进度靠既有 `ActionProgress` toast 显示,失败
-/// 走通用 `UiNote::Error`(`AttachRepo` 探活失败/远端不符时 dispatch 直接
-/// 返回 `Err`)。
+/// 入口。只在 `github_remote` 为空时渲染;`AttachRepo` dispatch(bw-app)
+/// 把「接本地 origin」排在任何写库动作之前(P1-fix),所以只有真正接成
+/// 才会写 `github_remote`、卡片才会随之消失 —— 半途失败(如本地 origin
+/// 已指向别的仓)时一个字节都还没进库,卡片原样留在原地,用户可以就地
+/// 重试,不会被冲进死路。真实网络调用(`gh repo view`),Started→Ok/Fail
+/// 的进度靠既有 `ActionProgress` toast 显示,失败走通用 `UiNote::Error`
+/// (`AttachRepo` 探活失败/本地 origin 不符时 dispatch 直接返回 `Err`)。
 #[component]
 fn AttachRepoCard(op: OpVm) -> Element {
     let k = use_context::<Kernel>();
