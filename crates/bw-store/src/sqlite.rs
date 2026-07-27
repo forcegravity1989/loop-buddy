@@ -525,6 +525,47 @@ impl Store for SqliteStore {
         .bind(&p)
         .execute(&mut *tx)
         .await?;
+        // A project-owned skill's extra files, and a project-owned workflow's
+        // version history — children of rows this fn deletes below, so they
+        // have to go first or they outlive their parent as orphans. Global
+        // (`project_id IS NULL`) skills/workflows are the shared library and
+        // are never touched here.
+        sqlx::query(
+            "DELETE FROM skill_file WHERE skill_id IN (SELECT id FROM skill WHERE project_id=?)",
+        )
+        .bind(&p)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "DELETE FROM workflow_version WHERE workflow_id IN \
+             (SELECT id FROM workflow_spec WHERE project_id=?)",
+        )
+        .bind(&p)
+        .execute(&mut *tx)
+        .await?;
+        // Direct `project_id` children that this fn used to leave behind
+        // entirely: deleting a project stranded its Issues, artifacts, runs,
+        // connectors, cron tasks and project-owned components as rows whose
+        // `project_id` pointed at a project that no longer existed. They were
+        // invisible in the UI (every read filters by a live project) but real
+        // in the file — real Issue titles and artifact paths surviving a
+        // "delete", which is both wrong and a privacy leak when a DB is
+        // shared. Global agents/skills/workflows (`project_id IS NULL`) stay.
+        for table in [
+            "issue",
+            "artifact",
+            "workflow_run",
+            "cron_task",
+            "connector",
+            "agent",
+            "skill",
+            "workflow_spec",
+        ] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE project_id=?"))
+                .bind(&p)
+                .execute(&mut *tx)
+                .await?;
+        }
         sqlx::query("DELETE FROM metric WHERE project_id=?")
             .bind(&p)
             .execute(&mut *tx)
