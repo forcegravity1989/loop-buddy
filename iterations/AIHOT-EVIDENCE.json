@@ -1,7 +1,7 @@
 {
-  "generated_at_unix": 1784692102,
-  "source_db": "practice-aihot/bw-aihot.db",
-  "source_workspace": "practice-aihot/workspaces/aihot-b7971eca",
+  "generated_at_unix": 1785149617,
+  "source_db": "examples/aihot/bw-aihot.db",
+  "source_workspace": "https://github.com/forcegravity1989/aihot",
   "project": {
     "name": "aihot 日报",
     "kind": "Web 应用 · AI 热点日报",
@@ -19,8 +19,7 @@
     "total": 31,
     "by_status": {
       "done": 29,
-      "in_progress": 1,
-      "todo": 1
+      "in_progress": 2
     }
   },
   "agents": [
@@ -41,15 +40,15 @@
     {
       "name": "多源体量控制法",
       "category": "aihot 方法论",
-      "uses": 3,
+      "uses": 5,
       "distilled_from_a_real_issue": true
     }
   ],
   "workflow_runs": {
-    "total": 4,
+    "total": 6,
     "by_status": {
-      "failed": 3,
-      "ok": 1
+      "failed": 4,
+      "ok": 2
     }
   },
   "metrics": [
@@ -79,7 +78,7 @@
       "value_raw": "32.9%",
       "target_raw": "≥8%",
       "driver": "",
-      "signal": "green"
+      "signal": "amber"
     },
     {
       "name": "连续产出日报天数",

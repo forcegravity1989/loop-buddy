@@ -13,12 +13,16 @@
 //!     <db-path> <workspace-path> <output-json-path>
 //! ```
 //!
-//! **重跑前须知(2026-07-27)**:已提交的 `iterations/AIHOT-EVIDENCE.json` 是
-//! 对着**原始工作区**(带自己的 `.git`)生成的,所以其 `workspace` 段有真实的
-//! 32 次提交。仓内后来放了一份同样文件的副本(`examples/aihot/workspace/`),
-//! 但它**不含 `.git`**(嵌套 `.git` 会变 gitlink)。拿仓内副本重跑这个 example,
-//! git 相关字段会如实变成 0 ——那不是数据坏了,是那份副本真的没有历史。
-//! 想复现 JSON 里那 32 次提交,得指向原始工作区。
+//! **重跑须知(2026-07-27)**:那个工作区现在是独立公开仓
+//! <https://github.com/forcegravity1989/aihot>(完整 32 次提交历史)。想复现
+//! 已提交的 `iterations/AIHOT-EVIDENCE.json` 里 `workspace` 段的数字,先克隆
+//! 它再把路径传进来:
+//!
+//! ```text
+//! git clone https://github.com/forcegravity1989/aihot /tmp/aihot
+//! cargo run -p bw-app --example archive_aihot_evidence -- \
+//!     examples/aihot/bw-aihot.db /tmp/aihot iterations/AIHOT-EVIDENCE.json
+//! ```
 //!
 //! 详见 `plan/09-aihot-practice-run.md`、`iterations/PRACTICE-AIHOT.md`(叙事汇总)
 //! ——本文件产出的 JSON 是它们的数字侧证据存档,两者互补,不重复。
@@ -299,18 +303,39 @@ async fn main() {
     println!("╚═══════════════════════════╝");
 }
 
-/// Strips the run-time machine-local prefix down to the canonical
-/// `practice-aihot/...` path documented in `.gitignore` — the source path
-/// actually passed on the CLI is wherever this one-off archival happened to
-/// find the real data (a specific worktree's absolute path), which is
-/// meaningless to anyone else and leaks a local username into a committed
-/// file. What's worth recording is *which* pilot dataset this is, not *where
-/// on disk* it happened to sit at archive time.
+/// What gets recorded as this snapshot's source. The path actually passed on
+/// the CLI is wherever this run happened to find the data — someone's home
+/// directory, a scratch clone under `/tmp` — which is meaningless to every
+/// other reader and leaks a local username into a committed file. What's
+/// worth recording is *which dataset* this is:
+///
+/// 1. a git remote, if the directory has one (the aihot workspace is now the
+///    public repo `forcegravity1989/aihot`, so a scratch clone of it records
+///    as that URL rather than `/tmp/whatever`);
+/// 2. else the canonical `practice-aihot/...` / `examples/...` tail;
+/// 3. else the path as given — no guessing.
 fn canonical_label(path: &str) -> String {
-    match path.find("practice-aihot") {
-        Some(i) => path[i..].to_string(),
-        None => path.to_string(),
+    if let Some(remote) = git_remote_url(path) {
+        return remote;
     }
+    for anchor in ["examples/", "practice-aihot"] {
+        if let Some(i) = path.find(anchor) {
+            return path[i..].to_string();
+        }
+    }
+    path.to_string()
+}
+
+fn git_remote_url(path: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["-C", path, "remote", "get-url", "origin"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!url.is_empty()).then_some(url)
 }
 
 fn stage_key(s: StageKind) -> &'static str {

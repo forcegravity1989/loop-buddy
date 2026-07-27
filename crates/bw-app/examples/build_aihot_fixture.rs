@@ -9,9 +9,10 @@
 //! 1. **复制**源库到输出路径——源库(用户日常库)只读,绝不就地改。
 //! 2. **裁剪**:除「aihot 日报」外的项目全部 `Command::DeleteProject`。这是
 //!    隐私边界:日常库里还有用户自己的其它项目,不进公开仓。
-//! 3. **重接工作区**:`Command::SetWorkspace` 把 `workspace_path` 指到仓内的
-//!    `examples/aihot/workspace`(相对路径,与应用从仓根启动的约定一致),
-//!    取代原先指向本机 `~/Library/.../workspaces/aihot-b7971eca` 的死路径。
+//! 3. **接仓**:清掉只在原作者机器上成立的 `workspace_path`,记上真实公开仓
+//!    `github_remote`。样板间因此诚实地处在"有仓、还没克隆到本地"的状态——
+//!    使用者点一次「克隆仓库」(`bw_engine::github::clone_repo`,产品已有能力)
+//!    就能把带完整 32 次提交历史的真实工作区落到本地。
 //! 4. **确认技能库自足**:对仓内 vendor 的两个官方库各跑一次
 //!    `Command::ImportSkillLibrary`。因为幂等键是 `(name, official_library)`,
 //!    正常结果应是 **imported=0 / skipped=全部**——这恰好**证明**仓内 vendor
@@ -33,7 +34,12 @@ use bw_store::{SqliteStore, Store};
 use std::sync::Arc;
 
 const KEEP_PROJECT: &str = "aihot 日报";
-const WORKSPACE_REL: &str = "examples/aihot/workspace";
+/// 样板间项目的真实公开仓。样板间**不再夹带一份工作区文件副本**:那份副本
+/// 没有 git 历史(嵌套 `.git` 会变 gitlink),而且真仓每多一次提交它就旧一分。
+/// 记 `github_remote` 才是单一事实源,也才是产品自己的形态——plan/13
+/// 「GitHub 主体化」整套(issue=GitHub issue、验收=merge)都建在这个字段上,
+/// 之前它是空的,等于样板间在展示产品的降级形态。
+const GITHUB_REMOTE: &str = "forcegravity1989/aihot";
 const DEFAULT_OUT: &str = "examples/aihot/bw-aihot.db";
 /// 仓内 vendor 的官方库(见 `examples/skill-libraries/README.md`)。用
 /// `CARGO_MANIFEST_DIR` 解析,不再是 `/Users/<某人>/.claude/plugins/cache/...`
@@ -71,14 +77,6 @@ async fn main() {
         eprintln!("源库不存在:{src}");
         std::process::exit(1);
     }
-    if !std::path::Path::new(WORKSPACE_REL).is_dir() {
-        eprintln!(
-            "仓内工作区不存在:{WORKSPACE_REL}(请从仓根运行本 example,\
-             它按仓相对路径写 workspace_path)"
-        );
-        std::process::exit(1);
-    }
-
     println!("源库(只读):{src}");
     println!("输出:{out}");
 
@@ -117,17 +115,25 @@ async fn main() {
         println!("  已删除:{}", p.name);
     }
 
-    // 3 · 重接工作区到仓内路径。
+    // 3 · 接上真实公开仓,并清掉那条只在原作者机器上成立的本地路径。
+    //     顺序要紧:先清 workspace_path 再记 github_remote —— 让样板间的状态
+    //     诚实地是"有仓、还没克隆到本地",而不是指着一个别人机器上不存在的目录。
     app.dispatch(Command::OpenProject(keep_id))
         .await
         .expect("open kept project");
     app.dispatch(Command::SetWorkspace {
-        path: WORKSPACE_REL.to_string(),
+        path: String::new(),
         allow_commands: false,
     })
     .await
-    .expect("point workspace at the in-repo copy");
-    println!("\n── 工作区 ──\n  workspace_path -> {WORKSPACE_REL}");
+    .expect("clear the origin machine's local workspace path");
+    store
+        .set_github_remote(keep_id, GITHUB_REMOTE)
+        .await
+        .expect("record the real public repo");
+    println!("\n── 代码仓 ──");
+    println!("  github_remote -> {GITHUB_REMOTE}");
+    println!("  workspace_path -> (空:等使用者自己克隆,不假装本地有)");
 
     // 4 · 用仓内 vendor 的副本各导一次,验证自足。
     println!("\n── 技能库(仓内 vendor 副本)──");
@@ -198,10 +204,19 @@ async fn readback(db: &str) {
             .await
             .expect("list_issues");
         println!(
-            "    ·{} · issue={} · workspace_path={}",
+            "    ·{} · issue={} · github_remote={} · workspace_path={}",
             p.name,
             issues.len(),
-            p.workspace_path
+            if p.github_remote.trim().is_empty() {
+                "(空)"
+            } else {
+                &p.github_remote
+            },
+            if p.workspace_path.trim().is_empty() {
+                "(空 · 待克隆)"
+            } else {
+                &p.workspace_path
+            }
         );
     }
     let mut by_lib: std::collections::BTreeMap<String, (u32, u32)> = Default::default();

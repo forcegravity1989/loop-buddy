@@ -293,3 +293,26 @@ BW_DB=examples/aihot/bw-aihot.db BW_OPEN="aihot 日报" BW_PANEL=issues \
 真实项目工作区(带独立 `.git` 的 `aihot-b7971eca/`)没有一并提交——原因见
 `examples/README.md` 最后一节。
 
+## 7. aihot 独立成公开仓(2026-07-27,用户拍板)
+
+多人协作时对方 clone 完打不开样板间。中途试过"把工作区文件复制进本仓"的办法,
+被用户一句话点破更对的解法:**把 aihot 做成 public 仓就行了**。确实更对,而且
+更对一层——查证发现 `project.github_remote` 是一等字段,plan/13「GitHub 主体化」
+整套(issue=GitHub issue、验收=merge)都建在它上面,而 aihot 的这个字段一直是空的:
+样板间等于在展示产品的**降级形态**。
+
+于是:
+
+- 工作区连同**完整 32 次提交历史**推成公开仓
+  **<https://github.com/forcegravity1989/aihot>**(匿名可克隆,已验证)。
+  推之前扫过密钥:无明文凭证,`config.json` 只有关键词配置。
+- 样板间 DB 记 `github_remote = forcegravity1989/aihot`,`workspace_path` 置空——
+  状态诚实地是「有仓、还没克隆到本地」,不再指着一个别人机器上不存在的目录,
+  也不夹带一份会随真仓提交而变旧的副本。落地靠产品自己的
+  `bw_engine::github::clone_repo`(plan/14 C14 已接通的真实能力)。
+- 复现路径已验证:克隆公开仓后重跑 `archive_aihot_evidence`,`workspace` 段
+  与本文件 §6 记的 32 次提交 / 44 个受追踪文件 / 0 未提交路径**逐字节一致**。
+
+§6 说的"工作区没一并提交"依然成立,但理由变了:不是"没法带",而是**不该带**——
+它现在有自己的仓,那才是单一事实源。
+
