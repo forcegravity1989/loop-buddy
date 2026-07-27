@@ -3,6 +3,12 @@
 node_modules/
 .vscode/
 .claude/
+# 例外:样板间工作区里的 .claude/standards/ 是 BW 自己在项目出生时写入的四份
+# 组件标准文件(见 bw_core::standards),是产品能力的真实展示,不是本仓的编辑器
+# 配置。上面那条裸 `.claude/` 会把它一并挡掉,导致 clone 出来的样板间工作区
+# 少 4 个文件——定向豁免,而不是放宽整条规则。
+!examples/aihot/workspace/.claude/
+!examples/aihot/workspace/.claude/**
 
 # Rust
 /target/
