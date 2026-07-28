@@ -316,12 +316,30 @@ cargo check -p app-desktop
 
 - **实施**:sonnet subagent,一票一个,独立 commit,代号前缀 `P1-`…`P6-`。
 - **Opus(主 agent)**:设计、拆票、监理、门禁与读回验收、`/code-review`。不亲自实施。
-- **串行约束**:P1 → P3 → P4 → P5 → P6 必须串行(共享 `bw-app/src/lib.rs`、
-  `app-desktop` 热点文件)。**P2 可与 P1 并行**(只碰 `docs/skills/*.md` +
-  `bw-app/src/legacy_migration.rs` + `bw-store/src/seed.rs`,与 P1 无重叠)。
+- **串行约束**:P1 → P2 → P3 → P4 → P5 → P6 **全部串行**。
+  ~~P2 可与 P1 并行~~ —— **实施时推翻**(见「实施偏差」E1):P2 的 Boot 回填必须
+  在 `bw-app/src/lib.rs` 挂钩,与 P1 改 `Command` 枚举/dispatch 在同一文件,
+  同 worktree 并发会互相覆盖。
 - P5 两张真活需要用户在场点 merge,不可无人值守跑完。
 
 ---
+
+## 实施偏差(落地后回填,以源码为准)
+
+| # | 票 | spec 原文 | 实际做法与原因 | commit |
+|---|---|---|---|---|
+| E1 | P2 | 「P2 可与 P1 并行」 | **推翻,全串行**。P2 的 Boot 回填要挂在 `bw-app/src/lib.rs`,与 P1 改 `Command` 枚举/dispatch 同文件,同 worktree 并发会互相覆盖 | — |
+| E2 | P1 | 顺序 `探活→写 github_remote→建 connector→接本地 origin` | **改成 `探活→接本地 origin→写 github_remote→建 connector→推送`**。原顺序下第 4 步撞 `Mismatch` 时前两步已写库,而 `AttachRepoCard` 只在 `github_remote` 为空时渲染 ⇒ 卡片消失、**用户再无 UI 入口重试**,是死路。改后「失败即零写库」覆盖到 Mismatch。**推送仍在写库之后**是有意保留:推送失败时 `github_remote` 已设是事实正确的(仓确实关联上了),用户可自己 `git push` | `94c8ed4` |
+| E3 | P2 | 「Boot 时……`UpdateSkill` 覆盖」 | 不走 `Command::UpdateSkill` 的 dispatch,直接 `store.update_skill(.., flip_to_self_built: false)`。后者的 T11「编辑即脱离源头」会在 content 变化时把 `Official → SelfBuilt` —— 那条规则是给**人**从官方正文分叉出去用的,这次方向相反(官方正文追平自己),翻转是错的 | `f101cf4` |
+| E4 | P2 | (未规定) | 回填不做 `db_path` 线程化与文件备份(三个 `MigrateLegacyShellsIfNeeded` 先例都做了):这次是对 ≤3 行做定向 `content` UPDATE,不是破坏性删除/清洗通道 | `f101cf4` |
+
+E2 的读回验证:`probe_repo(19) → reconcile_local_remote(42) → set_github_remote(54) → create_connector(67) → push_current_branch(105) → ActionState::Ok(119)`(行号为 `AttachRepo` 块内相对行)。
+
+E3/E4 的读回验证(独立复核,非 agent 自报):真实日常库副本跑 Boot 前后 ——
+`north-star-discovery` `length(content)` 4963→**6305**;三条标配 Skill 的 `uses`
+**一个都没变**(`competitive-analysis` 仍是 4);`source` 仍 `official`/`bw-standard`;
+自建技能(`关键词关注面打分法`/`多源体量控制法`)字节未变;
+`app_meta[standard_skill_content_refresh_v1] = done`;二次跑幂等。
 
 ## 留白与偏差(如实记录)
 
