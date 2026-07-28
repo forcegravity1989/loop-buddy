@@ -565,6 +565,19 @@ pub trait Store: Send + Sync {
     async fn delete_project(&self, id: ProjectId) -> Result<()>;
     async fn set_project_phase(&self, id: ProjectId, phase: Readiness) -> Result<()>;
     async fn set_project_cycle(&self, id: ProjectId, cycle: MaturityPeriod) -> Result<()>;
+    /// P9: `name`/`kind`/`descr` — the three identity fields `create_project`
+    /// writes once and, until this method existed, nothing ever touched
+    /// again (a typo'd name was permanently stuck short of deleting the
+    /// whole project, which also takes every Issue/run/artifact with it).
+    /// Same one-UPDATE-one-`rev`-bump shape as `set_brief`. Caller (bw-app)
+    /// owns validation — this method writes whatever it's given.
+    async fn set_project_identity(
+        &self,
+        id: ProjectId,
+        name: &str,
+        kind: &str,
+        descr: &str,
+    ) -> Result<()>;
     async fn set_north_star(&self, id: ProjectId, north_star: &str, ns_def: &str) -> Result<()>;
     /// 对标竞品 + 机会缺口/三月成功标准 (creation-flow real inputs).
     async fn set_brief(&self, id: ProjectId, benchmark: &str, opportunity: &str) -> Result<()>;

@@ -614,6 +614,26 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn set_project_identity(
+        &self,
+        id: ProjectId,
+        name: &str,
+        kind: &str,
+        descr: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE project SET name=?, kind=?, descr=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(name)
+        .bind(kind)
+        .bind(descr)
+        .bind(now_unix())
+        .bind(pid(id))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn set_north_star(&self, id: ProjectId, north_star: &str, ns_def: &str) -> Result<()> {
         sqlx::query(
             "UPDATE project SET north_star=?, ns_def=?, updated_at=?, rev=rev+1 WHERE id=?",

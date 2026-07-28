@@ -18,7 +18,8 @@ use crate::screens::chrome::Toast;
 use crate::theme;
 use bw_app::{Command, Panel, Scope};
 use bw_core::model::{
-    stage_workflow, FeedLevel, HubKind, HubSource, IssuePriority, IssueStatus, Signal, StageKind,
+    stage_workflow, FeedLevel, HubKind, HubSource, IssuePriority, IssueStatus, MaturityPeriod,
+    Signal, StageKind,
 };
 use bw_core::{IssueId, SessionId, SkillId, WorkflowId};
 use bw_store::SessionKind;
@@ -1145,6 +1146,240 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm) -> Element {
 
 // ── progress · all ──
 
+/// P9(项目编辑缺口): CRUD 里的 U 这一档——建完项目后,`name`/`kind`/`descr`
+/// 此前连 store 层 setter 都没有(改个项目名只能删了重建,而删除会带走这个
+/// 项目的全部 Issue/run/产物/记账);`benchmark`/`opportunity`/`cycle` 有
+/// Command 但只在创建流(`create.rs`)可达,建完就够不着。这张卡把三组都接
+/// 到运营面板「进度 · 全部」的常驻位置。
+///
+/// 重名口径:查过 `CreateProject`——它对项目名**不做任何唯一性校验**
+/// (schema 里 `project.name` 没有 `UNIQUE`,命令层和 UI 层都没有查重;UI 唯一
+/// 的门是 create.rs 的 `can_send = !name().trim().is_empty()`,只挡空名,不挡
+/// 重名)。改名要和建项目同一口径,所以这里也不做重名校验——只有空名会被
+/// `Command::UpdateProjectIdentity` 在 bw-app 命令层如实拒绝(`AppError::Invalid`),
+/// 同 UI 门槛,但真正生效(UI 按钮 disabled 不是防线)。
+#[component]
+fn EditProjectCard(op: OpVm) -> Element {
+    let k = use_context::<Kernel>();
+    let card = theme::card();
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let clay = theme::CLAY;
+    let input_style = theme::input();
+    let label_style = theme::label();
+
+    let mut editing = use_signal(|| false);
+    let mut name = use_signal(|| op.name.clone());
+    let mut kind = use_signal(|| op.kind.clone());
+    let mut desc = use_signal(|| op.desc.clone());
+    let mut benchmark = use_signal(|| op.benchmark.clone());
+    let mut opportunity = use_signal(|| op.opportunity.clone());
+    let mut cycle = use_signal(|| op.cycle);
+    // 起草(创建流)之后北极星的两个字段还能不能编,取决于这个项目有没有挂仓
+    // ——见下方分叉的完整理由。
+    let mut ns_value = use_signal(|| op.north_star.clone());
+    let mut ns_def = use_signal(|| op.ns_def.clone());
+
+    let has_repo = !op.github_remote.trim().is_empty();
+    let can_save = !name().trim().is_empty();
+    let opacity = if can_save { "1" } else { ".45" };
+
+    let name0 = op.name.clone();
+    let kind0 = op.kind.clone();
+    let desc0 = op.desc.clone();
+    let benchmark0 = op.benchmark.clone();
+    let opportunity0 = op.opportunity.clone();
+    let cycle0 = op.cycle;
+    let ns_value0 = op.north_star.clone();
+    let ns_def0 = op.ns_def.clone();
+
+    if !editing() {
+        rsx! {
+            div {
+                style: "{card} padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px;",
+                div {
+                    style: "flex:1;min-width:0;",
+                    div {
+                        style: "font-size:12.5px;color:{ink2};display:flex;align-items:center;gap:8px;",
+                        span { style: "font-weight:600;", "{op.name}" }
+                        span { style: "color:{ink3};", "{op.kind} · {op.cycle.label()}" }
+                    }
+                    if !op.desc.trim().is_empty() {
+                        div {
+                            style: "font-size:11.5px;color:{ink3};margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                            "{op.desc}"
+                        }
+                    }
+                }
+                button {
+                    style: "cursor:pointer;background:transparent;color:{clay};border:1px solid {clay};border-radius:7px;padding:5px 12px;font-size:12px;flex:none;",
+                    onclick: move |_| {
+                        name.set(name0.clone());
+                        kind.set(kind0.clone());
+                        desc.set(desc0.clone());
+                        benchmark.set(benchmark0.clone());
+                        opportunity.set(opportunity0.clone());
+                        cycle.set(cycle0);
+                        ns_value.set(ns_value0.clone());
+                        ns_def.set(ns_def0.clone());
+                        editing.set(true);
+                    },
+                    "编辑项目"
+                }
+            }
+        }
+    } else {
+        rsx! {
+            div {
+                style: "{card} padding:16px 18px;margin-bottom:16px;",
+                div { style: "font-family:{theme::SERIF};font-size:15px;font-weight:600;margin-bottom:12px;", "编辑项目" }
+
+                label { style: "{label_style}", "项目名" }
+                input {
+                    style: "{input_style} margin-bottom:10px;",
+                    value: "{name}",
+                    oninput: move |e| name.set(e.value()),
+                }
+                label { style: "{label_style}", "类型" }
+                input {
+                    style: "{input_style} margin-bottom:10px;",
+                    value: "{kind}",
+                    oninput: move |e| kind.set(e.value()),
+                }
+                label { style: "{label_style}", "一句话说明" }
+                textarea {
+                    style: "{input_style} min-height:48px;margin-bottom:14px;",
+                    value: "{desc}",
+                    oninput: move |e| desc.set(e.value()),
+                }
+
+                div {
+                    style: "font-size:11px;color:{ink3};letter-spacing:.05em;margin-bottom:8px;",
+                    "定位与机会"
+                }
+                label { style: "{label_style}", "对标竞品" }
+                textarea {
+                    style: "{input_style} min-height:48px;margin-bottom:10px;",
+                    value: "{benchmark}",
+                    oninput: move |e| benchmark.set(e.value()),
+                }
+                label { style: "{label_style}", "机会缺口 / 三个月成功标准" }
+                textarea {
+                    style: "{input_style} min-height:48px;margin-bottom:14px;",
+                    value: "{opportunity}",
+                    oninput: move |e| opportunity.set(e.value()),
+                }
+
+                div {
+                    style: "font-size:11px;color:{ink3};letter-spacing:.05em;margin-bottom:8px;",
+                    "项目所处周期"
+                }
+                div {
+                    style: "display:flex;gap:6px;margin-bottom:14px;",
+                    for opt in [MaturityPeriod::Explore, MaturityPeriod::Expand, MaturityPeriod::Mature] {
+                        {
+                            let sel = cycle() == opt;
+                            let (bd, bg, fg) = if sel {
+                                ("1.5px solid #C5654A", "#C5654A", "#fff")
+                            } else {
+                                ("1px solid #DDD5C5", "transparent", "#57534A")
+                            };
+                            rsx! {
+                                div {
+                                    key: "{opt.label()}",
+                                    onclick: move |_| cycle.set(opt),
+                                    style: "cursor:pointer;border:{bd};background:{bg};color:{fg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                                    "{opt.label()}"
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 北极星:必须按有无仓分叉,不是漏做。
+                //
+                // 有仓项目(github_remote 非空)—— D1「产品信息正本在仓、BW=
+                // 操作台+信息转化层」+ D5「指标正本机读:仓里 .bw/metrics.toml
+                // 承载北极星+滞后+引领指标定义,merge 后才同步进 SQLite 作
+                // 缓存」。这里的 north_star/ns_def 就是那份缓存,如果在这给
+                // 一个编辑口,用户改的是缓存,不是正本——SQLite 和
+                // metrics.toml 从此各说各话,两份正本打架,直接撞 D1。所以
+                // 有仓项目只读展示 + 一句诚实提示指去仓里改,不给输入框。
+                //
+                // 无仓项目(github_remote 为空)—— 没有 metrics.toml 这回事,
+                // SQLite 里的 north_star/ns_def 本身就是唯一正本(存量本地
+                // 项目、纯本地项目一直如此)。不给编辑口就是死路——同
+                // benchmark/opportunity/cycle 一样,只在创建流可达,建完就
+                // 锁死。所以走 `Command::UpdateNorthStar` 的编辑口。
+                div {
+                    style: "font-size:11px;color:{ink3};letter-spacing:.05em;margin-bottom:8px;",
+                    "北极星"
+                }
+                if has_repo {
+                    div {
+                        style: "background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:8px;padding:10px 12px;margin-bottom:14px;",
+                        div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;",
+                            if op.north_star.trim().is_empty() { "(尚未同步)" } else { "{op.north_star}" }
+                        }
+                        if !op.ns_def.trim().is_empty() {
+                            div { style: "font-size:11.5px;color:{ink3};margin-bottom:6px;", "{op.ns_def}" }
+                        }
+                        div { style: "font-size:11px;color:{ink3};",
+                            "指标正本在仓里的 .bw/metrics.toml —— 改指标走 PR,和改代码同一道验收门,这里只读。"
+                        }
+                    }
+                } else {
+                    textarea {
+                        style: "{input_style} min-height:40px;margin-bottom:8px;",
+                        placeholder: "北极星(三个月成功标准)",
+                        value: "{ns_value}",
+                        oninput: move |e| ns_value.set(e.value()),
+                    }
+                    textarea {
+                        style: "{input_style} min-height:40px;margin-bottom:14px;",
+                        placeholder: "定义:怎么算、数据从哪来",
+                        value: "{ns_def}",
+                        oninput: move |e| ns_def.set(e.value()),
+                    }
+                }
+
+                div {
+                    style: "display:flex;gap:8px;",
+                    button {
+                        style: "cursor:pointer;background:{clay};color:#FFF;border:none;border-radius:7px;padding:6px 14px;font-size:12px;opacity:{opacity};",
+                        disabled: !can_save,
+                        onclick: move |_| {
+                            k.send(Command::UpdateProjectIdentity {
+                                name: name().trim().to_string(),
+                                kind: kind().trim().to_string(),
+                                descr: desc().trim().to_string(),
+                            });
+                            k.send(Command::UpdateBrief {
+                                benchmark: benchmark().trim().to_string(),
+                                opportunity: opportunity().trim().to_string(),
+                            });
+                            k.send(Command::SetCycle { cycle: cycle() });
+                            if !has_repo {
+                                k.send(Command::UpdateNorthStar {
+                                    value: ns_value().trim().to_string(),
+                                    def: ns_def().trim().to_string(),
+                                });
+                            }
+                            editing.set(false);
+                        },
+                        "保存"
+                    }
+                    button {
+                        style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid #E2DCCF;border-radius:7px;padding:6px 14px;font-size:12px;",
+                        onclick: move |_| editing.set(false),
+                        "取消"
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Real-executor workspace config — a persistent strip at the top of
 /// 「进度 · 全部」. Unconfigured (empty `workspace_path`) shows a plain
 /// "未配置" state (every run stays on `MockExecutor`); configured shows the
@@ -1370,6 +1605,7 @@ fn ProgressAll(op: OpVm) -> Element {
                 "全从已记录的数据算:本周结算的 Issue、未结 Issue、本周无观测的指标、距创建日 90 天。"
             }
         }
+        EditProjectCard { op: op.clone() }
         WorkspaceConfig { op: op.clone() }
         if op.github_remote.trim().is_empty() {
             AttachRepoCard { op: op.clone() }

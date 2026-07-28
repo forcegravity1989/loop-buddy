@@ -141,6 +141,24 @@ pub enum Command {
         value: String,
         def: String,
     },
+    /// P9(项目编辑缺口): `name`/`kind`/`descr` — the three fields
+    /// `CreateProject` writes once and, before this command existed, had no
+    /// setter anywhere in `bw-store`, so a typo'd name was permanently
+    /// stuck (only `DeleteProject` could touch it, and that takes every
+    /// Issue/run/artifact with it). Same duplicate-name policy as
+    /// `CreateProject`: names aren't unique in this product (no `UNIQUE`
+    /// constraint, no dedup check at either the command or UI layer), so
+    /// renaming to a name that collides with another project is allowed —
+    /// rejecting it here would be a stricter bar than creation itself.
+    /// `name` is still required non-empty (creation's UI-only `can_send`
+    /// gate, enforced here for real since a UI button being disabled is not
+    /// a guard). Writes through `self.active()`, same as `UpdateBrief`/
+    /// `SetCycle`/`UpdateNorthStar`.
+    UpdateProjectIdentity {
+        name: String,
+        kind: String,
+        descr: String,
+    },
     /// Record a metric + its current value as an append-only Manual observation
     /// (creation-flow review, or later while operating a stage). Signal is
     /// derived, never set here.
@@ -3675,6 +3693,20 @@ impl App {
                 let p = self.active()?;
                 self.store.set_north_star(p, &value, &def).await?;
                 let _ = write_charter(self, p, "北极星").await;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::UpdateProjectIdentity { name, kind, descr } => {
+                let p = self.active()?;
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .set_project_identity(p, &name, kind.trim(), descr.trim())
+                    .await?;
+                let _ = write_charter(self, p, "项目信息").await;
+                self.refresh_projects().await?;
                 self.emit(Event::ProjectUpdated(p));
             }
 
