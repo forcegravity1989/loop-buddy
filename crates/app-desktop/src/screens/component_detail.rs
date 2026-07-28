@@ -13,7 +13,7 @@
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::agent_hub::workflows_using_agent;
 use crate::screens::markdown::MarkdownView;
-use crate::screens::skill_hub::{workflows_using_skill, SkillFileBrowser};
+use crate::screens::skill_hub::{workflows_using_skill, SkillFileBrowser, SkillSpecNotes};
 use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
 use bw_app::Command;
@@ -103,6 +103,7 @@ fn SkillDetailCard(id: SkillId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
                 if let Some(p) = &owner {
                     span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)}", "◇ {p}" }
                 }
+                SkillSpecNotes { s: s.clone(), compact: true }
                 span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{s.maturity_label}" }
             }
             if !s.desc.is_empty() {
@@ -133,6 +134,7 @@ fn SkillDetailCard(id: SkillId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
                 }
             }
             SkillFileBrowser { s: s.clone() }
+            SkillSpecNotes { s: s.clone(), compact: false }
             div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "被这些工作流使用" }
             if used_by.is_empty() {
                 div { style: "font-size:12.5px;color:{ink3};", "还没有工作流引用这个技能。" }

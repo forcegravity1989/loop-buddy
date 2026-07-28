@@ -158,14 +158,67 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
 
 /// Real reverse lookup: which Hub workflows list this skill (by name — same
 /// free-text `SkillRef` convention as `SkillAgentPicker`, not a hard FK).
-/// `pub(crate)`: L1's `component_detail.rs` reuses this for the project-rail
-/// skill detail card — one lookup, not two copies.
+/// plan/16 §5: counts both the top-level `SkillRef` list *and* the T16
+/// phase-level binding (`phase_skills`) — the five standard workflows carry
+/// their stage skill on every phase and nothing at the top level, so reading
+/// only `skills` reported "被 0 个工作流使用" for exactly the skills the app
+/// itself injects on every run. `pub(crate)`: L1's `component_detail.rs`
+/// reuses this for the project-rail skill detail card — one lookup, not two
+/// copies.
 pub(crate) fn workflows_using_skill(hub: &HubVm, skill_name: &str) -> Vec<String> {
     hub.workflow_details
         .iter()
-        .filter(|d| d.skills.iter().any(|(name, _, _)| name == skill_name))
+        .filter(|d| {
+            d.skills.iter().any(|(name, _, _)| name == skill_name)
+                || d.phase_skills.iter().any(|name| name == skill_name)
+        })
         .map(|d| d.row.name.clone())
         .collect()
+}
+
+/// plan/16 §2 防线 3 · the one spec-compliance visual, shared by the SkillHub
+/// card and the project-rail component detail (可视化一致 = one component,
+/// not two styles). Renders **nothing** when compliant — 绿色隐身,只有
+/// 待校正出声(黄) — and lists every finding verbatim in the detail context.
+#[component]
+pub(crate) fn SkillSpecNotes(s: SkillCardVm, compact: bool) -> Element {
+    let amber = ui::signal_color(bw_core::model::Signal::Amber);
+    let ink3 = theme::INK_3;
+    if s.spec_findings.is_empty() {
+        return rsx! {};
+    }
+    if compact {
+        // 卡面:只在有硬规违规时出声;纯 Advisory 不点黄灯。
+        if s.spec_must_fix == 0 {
+            return rsx! {};
+        }
+        return rsx! {
+            span {
+                style: "{theme::chip(\"#F2E8D2\", amber)}",
+                "规范 · 待校正 {s.spec_must_fix}"
+            }
+        };
+    }
+    rsx! {
+        div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "规范核对(plan/16)" }
+        div {
+            style: "display:flex;flex-direction:column;gap:4px;margin-bottom:10px;",
+            for (i , f) in s.spec_findings.iter().enumerate() {
+                {
+                    let must_fix = f.severity == bw_core::skill_spec::SpecSeverity::MustFix;
+                    let (mark, color) = if must_fix { ("待校正", amber) } else { ("提示", ink3) };
+                    rsx! {
+                        div {
+                            key: "{i}",
+                            style: "font-size:11.5px;line-height:1.6;color:{ink3};",
+                            span { style: "color:{color};font-weight:600;", "{f.rule} · {mark} " }
+                            span { "{f.message}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Truncate a skill's real body to a one-line preview — never a synthesized
@@ -405,6 +458,7 @@ fn SkillCard(
                 if let Some(p) = &owner_project {
                     span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)}", "◇ {p}" }
                 }
+                SkillSpecNotes { s: s.clone(), compact: true }
                 span { style: "{chip} margin-left:auto;", "{s.maturity_label}" }
             }
             // ── 2. 一句话价值主张:这个技能解决什么 ──
@@ -455,6 +509,7 @@ fn SkillCard(
                         EditSkillForm { s: s.clone(), on_done: move |_| on_done_edit.call(()) }
                     } else {
                         SkillFileBrowser { s: s.clone() }
+                        SkillSpecNotes { s: s.clone(), compact: false }
                         div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "被这些工作流使用" }
                         if used_by.is_empty() {
                             div { style: "font-size:12px;color:{ink3};margin-bottom:10px;", "还没有工作流引用这个技能。" }
