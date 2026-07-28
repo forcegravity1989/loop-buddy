@@ -2310,6 +2310,14 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn delete_connector(&self, id: ConnectorId) -> Result<()> {
+        sqlx::query("DELETE FROM connector WHERE id=?")
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn create_knowledge_source(&self, k: NewKnowledgeSource) -> Result<()> {
         let t = now_unix();
         sqlx::query(

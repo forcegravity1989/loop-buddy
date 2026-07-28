@@ -880,6 +880,13 @@ pub trait Store: Send + Sync {
         status: ConnectorStatus,
         last_sync: &str,
     ) -> Result<()>;
+    /// Delete one connector row by id. `delete_project` already deletes
+    /// connectors in bulk by `project_id` as part of tearing down a whole
+    /// project; this is the single-row primitive for the narrower case —
+    /// removing one connector without touching the project it belongs to
+    /// (e.g. the aihot fixture cutter dropping a stale `git-repo` connector
+    /// while keeping the project and its `github-repo` connector intact).
+    async fn delete_connector(&self, id: ConnectorId) -> Result<()>;
 
     async fn create_knowledge_source(&self, k: NewKnowledgeSource) -> Result<()>;
     async fn list_knowledge_sources(&self) -> Result<Vec<KnowledgeSource>>;
