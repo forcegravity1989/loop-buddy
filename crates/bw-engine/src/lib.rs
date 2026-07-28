@@ -23,6 +23,7 @@ use bw_core::model::{verdict_contract_suffix, AgentRef, PhaseRole, SkillRef, Wor
 use bw_core::{ProjectId, WorkflowId};
 
 pub mod claude_cli;
+pub mod codehub;
 pub mod contract;
 pub mod evidence;
 pub mod git_log;

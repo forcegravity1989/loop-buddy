@@ -10,6 +10,7 @@
 //! dispatch shape land now so P3 is "fill the arm", not "revisit every call
 //! site".
 
+use crate::codehub::{self, CodehubError};
 use crate::github::{self, GithubError};
 use time::Date;
 
@@ -17,11 +18,8 @@ use time::Date;
 pub enum RemoteError {
     #[error(transparent)]
     Github(#[from] GithubError),
-    /// CodeHub arm not wired yet (P3). Reaching this means a codehub project
-    /// hit a Remote method before `codehub.rs` existed — honest refusal, not a
-    /// silent fake.
-    #[error("codehub 远端尚未接线(P3):{0}")]
-    CodehubUnwired(&'static str),
+    #[error(transparent)]
+    Codehub(#[from] CodehubError),
 }
 
 /// A project's remote repo, provider-dispatched. Build via
@@ -65,7 +63,7 @@ impl Remote {
     pub async fn probe(&self) -> Result<String, RemoteError> {
         match self {
             Remote::Github(r) => Ok(github::probe_repo(r).await?),
-            Remote::Codehub { .. } => Err(RemoteError::CodehubUnwired("probe")),
+            Remote::Codehub { host, path } => Ok(codehub::probe(host, path).await?),
         }
     }
 
@@ -74,16 +72,22 @@ impl Remote {
     pub async fn create_issue(&self, title: &str, body: &str) -> Result<u32, RemoteError> {
         match self {
             Remote::Github(r) => Ok(github::create_issue(r, title, body).await?),
-            Remote::Codehub { .. } => Err(RemoteError::CodehubUnwired("create_issue")),
+            Remote::Codehub { host, path } => {
+                Ok(codehub::create_issue(host, path, title, body).await?)
+            }
         }
     }
 
     /// `gh api search/issues` total_count (github) / `codehub-cli issue|mr
-    /// list` paginated count (codehub, P3). Read-only.
+    /// list --jq length` count (codehub). Read-only. codehub 查询口径见
+    /// [`codehub::collect_count`](crate::codehub::collect_count)(P3 最小词汇
+    /// `issues:<state>`/`mrs:<state>`,复杂窗口留 P5)。
     pub async fn collect_count(&self, query: &str, today: Date) -> Result<u64, RemoteError> {
         match self {
             Remote::Github(r) => Ok(github::collect_github_count(r, query, today).await?),
-            Remote::Codehub { .. } => Err(RemoteError::CodehubUnwired("collect_count")),
+            Remote::Codehub { host, path } => {
+                Ok(codehub::collect_count(host, path, query, today).await?)
+            }
         }
     }
 }
