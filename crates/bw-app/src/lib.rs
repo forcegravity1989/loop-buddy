@@ -3258,23 +3258,42 @@ impl App {
                 // `include_str!`-ed straight from docs/skills/<slug>/SKILL.md
                 // (the real file in the repo).
                 bw_store::seed_standard_issue_skills_if_missing(self.store.as_ref()).await?;
-                // P2 (2026-07-27, `docs/superpowers/specs/2026-07-27-loopbuddy-aihot-integration-design.md`):
-                // `seed_standard_issue_skills_if_missing` is by-name
-                // idempotent — it only ever plants a fresh row, never
-                // overwrites an existing one (that function's own doc
-                // comment: "内容更新走 UpdateSkill,不是重新 seed"). That
-                // means a later edit to `docs/skills/<slug>/SKILL.md` (e.g.
-                // this ticket's north-star-discovery hardening) only reaches
-                // brand-new databases — every existing database keeps the
-                // stale content forever unless something explicitly
-                // backfills it. One-time backfill, guarded so it runs at
-                // most once per database:
-                if self
-                    .store
-                    .get_app_meta(legacy_migration::STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY)
-                    .await?
-                    .as_deref()
-                    != Some("done")
+                // P8 (2026-07-28): standard-issue-trio skill content is
+                // reconciled against `docs/skills/<slug>/SKILL.md` on every
+                // Boot, unconditionally — not gated behind a one-time
+                // migration flag. `seed_standard_issue_skills_if_missing`
+                // above is by-name idempotent — it only ever plants a fresh
+                // row, never overwrites an existing one (that function's own
+                // doc comment: "内容更新走 UpdateSkill,不是重新 seed") — so
+                // an existing row on an older database never picks up a
+                // later edit to the SKILL.md source on its own. P2
+                // originally closed that gap with a one-shot
+                // `STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY` app_meta guard,
+                // but that shape is a treadmill: every future SKILL.md edit
+                // would need its own new guard key (`_v2`, `_v3`, …) to ever
+                // reach existing databases. Replaced with unconditional
+                // reconciliation instead, because the invariant licensing it
+                // is permanent, not one-time: a `skill` row whose
+                // `source == Official { official_library: "bw-standard" }`
+                // is *by definition* stale the moment its `content` diverges
+                // from the compiled-in SKILL.md text — the instant a human
+                // edits that row, T11 ("编辑即脱离源头") flips it to
+                // `SelfBuilt` and it stops being a `bw-standard` row at all.
+                // So there is no legitimate case of an `Official
+                // { official_library: "bw-standard" }` row intentionally
+                // holding content that differs from the source file — no
+                // divergence worth preserving, nothing to gate. Every Boot
+                // re-diffs and, only when different, overwrites. Cost is
+                // negligible: `list_skills()` is a call this same Boot path
+                // already makes right above for
+                // `seed_standard_issue_skills_if_missing`.
+                // The `STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY` app_meta
+                // guard this replaced is gone from `legacy_migration.rs`
+                // entirely (see that module's own historical-note comment at
+                // the old declaration site); the stray `app_meta` row it
+                // left behind in any database that already ran P2 is
+                // harmless and deliberately not migrated away (no
+                // destructive DELETE for a row nothing reads anymore).
                 {
                     let existing_skills = self.store.list_skills().await?;
                     for (name, content) in bw_store::standard_issue_skill_contents() {
@@ -3321,12 +3340,6 @@ impl App {
                             )
                             .await?;
                     }
-                    self.store
-                        .set_app_meta(
-                            legacy_migration::STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY,
-                            "done",
-                        )
-                        .await?;
                 }
                 // A4: backfill the per-stage "完成 Issue 数" metric for every
                 // project — pre-A4 projects gain it; already-seeded ones are
