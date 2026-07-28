@@ -37,7 +37,7 @@ pub use sqlite::SqliteStore;
 pub mod seed;
 pub use seed::{
     seed_hub_if_empty, seed_stage_entities_if_missing, seed_standard_issue_skills_if_missing,
-    standard_issue_skill_contents,
+    standard_issue_skill_canon,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -840,6 +840,13 @@ pub trait Store: Send + Sync {
     /// built-in stage skills when they were seeded by an older binary,
     /// before this column carried real values.
     async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()>;
+    /// plan/16 §2 防线 2: same narrow single-concern setter shape as
+    /// `set_skill_stage_ref`, for the `source`/`official_library` column
+    /// pair. Used by Boot's pristine promotion — a legacy-encoded built-in
+    /// stage-skill row whose `content` still matches the code canon
+    /// byte-for-byte gets re-labelled `Official { "bw-standard" }`. The
+    /// *decision* (which row, why it's safe) is bw-app's; this is mechanics.
+    async fn set_skill_source(&self, id: SkillId, source: HubSource) -> Result<()>;
     /// T14 (2026-07-24, plan/12 §10 v1.1): delete one skill row plus its
     /// `skill_file` children (a legacy shell has none, but a real imported
     /// package might in general — this stays correct either way), in one

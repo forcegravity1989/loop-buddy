@@ -91,21 +91,24 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
                 .create_skill(NewSkill {
                     id: SkillId::new(),
                     name: sk.name.to_string(),
-                    // The methodology the app itself ships — Mature, but
-                    // T2 (plan/12 §6): under the unified HubSource this is
-                    // `SelfBuilt`, not `Official` — `Official` now means "a
-                    // curated *external* library" (carries `official_library`);
-                    // this app's own built-in methodology isn't one. Same
-                    // precedent `stage_template_workflow` already set on the
-                    // Workflow side (`HubSource::SelfBuilt` for the identical
-                    // class of content, unchanged by T1).
+                    // The methodology the app itself ships — Mature. plan/16
+                    // §4: source unified onto `Official { "bw-standard" }`,
+                    // superseding T2's `SelfBuilt` call for this row class —
+                    // the trio below (plan/13 合流注) already established
+                    // "bw-standard" as the honest label for BW's own standard
+                    // library, and only an `Official` row gets the two
+                    // protections the spec wants here: Boot self-healing
+                    // reconciliation against the code canon, and T11's
+                    // edit-detaches-provenance flip (改编自 留痕).
                     maturity: Maturity::Mature,
                     desc: sk.def.to_string(),
                     category: kind.label().to_string(),
                     // T7: the built-in stage-methodology skill really is
                     // this stage's role — a declared fact, not a guess.
                     stage_ref: Some(kind),
-                    source: HubSource::SelfBuilt,
+                    source: HubSource::Official {
+                        official_library: "bw-standard".to_string(),
+                    },
                     content: sk.content.to_string(),
                     // 五阶段方法论技能是全局共享的(见本函数文档:「这个 app
                     // 自己的方法论」),不是某个项目专属——project_id 留空。
@@ -201,35 +204,36 @@ struct StandardIssueSkill {
 const STANDARD_ISSUE_SKILLS: &[StandardIssueSkill] = &[
     StandardIssueSkill {
         name: "competitive-analysis",
-        desc: "起草对标名单、各家北极星猜测、差异定位、可借鉴打法,产出报告 PR 进仓——检索不可用时如实降级为「人喂材料+agent 整理」,绝不由幻觉填充对标事实",
+        desc: "起草对标名单、各家北极星猜测、差异定位、可借鉴打法,产出报告 PR 进仓——检索不可用时如实降级为「人喂材料+agent 整理」,绝不由幻觉填充对标事实。适用:项目创建后的标配起手活「竞品分析」,或任何需要重摸对标的时点",
         content: COMPETITIVE_ANALYSIS_SKILL_MD,
     },
     StandardIssueSkill {
         name: "north-star-discovery",
-        desc: "结合项目意图与竞品分析报告推导北极星+滞后+引领三层指标,每条必附采集方案——先对后亮,北极星绝不为「采得到」退化成工程虚荣指标",
+        desc: "结合项目意图与竞品分析报告推导北极星+滞后+引领三层指标,每条必附采集方案——先对后亮,北极星绝不为「采得到」退化成工程虚荣指标。适用:标配 Issue「找指标」,或北极星需要重推的时点",
         content: NORTH_STAR_DISCOVERY_SKILL_MD,
     },
     StandardIssueSkill {
         name: "metrics-binding",
-        desc: "为 .bw/metrics.toml 里绑不上的指标找到点亮的最便宜路径——绝不伪造数据、绝不为了点亮而改指标定义",
+        desc: "为 .bw/metrics.toml 里绑不上的指标找到点亮的最便宜路径——绝不伪造数据、绝不为了点亮而改指标定义。适用:标配 Issue「绑数据」,或健康灯长期 Unknown 需要接真数据源的时点",
         content: METRICS_BINDING_SKILL_MD,
     },
 ];
 
-/// (name, content) pairs for the three standard-issue-trio skills, straight
-/// off the same `STANDARD_ISSUE_SKILLS` table `seed_standard_issue_skills_if_missing`
-/// reads — exposed for `bw-app`'s one-time content-refresh backfill (P2,
-/// `docs/superpowers/specs/2026-07-27-loopbuddy-aihot-integration-design.md`):
-/// a by-name-idempotent seed only ever plants a fresh row, so an existing
-/// row on a pre-refresh database never picks up a later edit to
-/// `docs/skills/<slug>/SKILL.md` on its own — the caller diffs `content`
-/// against what's already in the DB and overwrites in place when they
-/// differ. Not used by the seed function itself; both simply read the same
-/// source-of-truth table.
-pub fn standard_issue_skill_contents() -> Vec<(&'static str, &'static str)> {
+/// (name, desc, content) triples for the three standard-issue-trio skills,
+/// straight off the same `STANDARD_ISSUE_SKILLS` table
+/// `seed_standard_issue_skills_if_missing` reads — exposed for `bw-app`'s
+/// Boot self-healing reconciliation (P8; desc joined the diff in plan/16 §2
+/// so a canonical description fix reaches existing rows the same way a
+/// SKILL.md edit does): a by-name-idempotent seed only ever plants a fresh
+/// row, so an existing row on a pre-refresh database never picks up a later
+/// edit to `docs/skills/<slug>/SKILL.md` (or to the desc column here) on its
+/// own — the caller diffs `desc`+`content` against what's already in the DB
+/// and overwrites in place when they differ. Not used by the seed function
+/// itself; both simply read the same source-of-truth table.
+pub fn standard_issue_skill_canon() -> Vec<(&'static str, &'static str, &'static str)> {
     STANDARD_ISSUE_SKILLS
         .iter()
-        .map(|s| (s.name, s.content))
+        .map(|s| (s.name, s.desc, s.content))
         .collect()
 }
 

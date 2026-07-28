@@ -1959,6 +1959,20 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn set_skill_source(&self, id: SkillId, source: HubSource) -> Result<()> {
+        let (source_tag, official_library) = hub_source_columns(&source);
+        sqlx::query(
+            "UPDATE skill SET source=?, official_library=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(source_tag)
+        .bind(official_library)
+        .bind(now_unix())
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn delete_skill(&self, id: SkillId) -> Result<()> {
         let sid = id.uuid().to_string();
         let mut tx = self.pool.begin().await?;

@@ -351,7 +351,7 @@ pub fn stage_skills(kind: StageKind) -> &'static [StageSkill] {
     match kind {
         StageKind::Prototype => &[StageSkill {
             name: "evidence-first",
-            def: "证据先行:只写站得住的内容,标注未核实",
+            def: "证据先行:只写站得住的内容,先验知识标注「未核实」。适用:原型段整理证据与调研文档,或任何需要引用事实与数字的产出",
             content: "### 证据先行 (evidence-first)\n\
                  1. 只记录两类内容:(a) 你直接验证过的事实(真实命令输出、真实文件内容);\
                  (b) 你的先验知识——必须标注「未核实」。\n\
@@ -361,7 +361,7 @@ pub fn stage_skills(kind: StageKind) -> &'static [StageSkill] {
         }],
         StageKind::Build => &[StageSkill {
             name: "spec-to-tests",
-            def: "规格即测试:每条验收标准落成一个可跑的用例",
+            def: "规格即测试:每条验收标准落成一个可跑的用例。适用:构建段从 SPEC 落实现之前,以及评审时逐条核对验收标准",
             content: "### 规格即测试 (spec-to-tests)\n\
                  1. SPEC 里每条验收标准编号(AC-1, AC-2, …);写实现前先把它翻译成测试名\
                  (如 `ac1_reports_dead_relative_link`)。\n\
@@ -371,7 +371,7 @@ pub fn stage_skills(kind: StageKind) -> &'static [StageSkill] {
         }],
         StageKind::Optimize => &[StageSkill {
             name: "baseline-before-touch",
-            def: "先测基线再动手:无基线不优化,删减优先",
+            def: "先测基线再动手:无基线不优化,删减优先。适用:优化段动手重构或调性能之前,以及收尾时报基线 delta",
             content: "### 先测基线再动手 (baseline-before-touch)\n\
                  1. 动手前先真实测量并落盘:测试数、clippy 警告数、代码行数、构建耗时——\
                  全部来自真实命令输出的原样摘录。\n\
@@ -381,7 +381,7 @@ pub fn stage_skills(kind: StageKind) -> &'static [StageSkill] {
         }],
         StageKind::Growth => &[StageSkill {
             name: "fresh-eyes-funnel",
-            def: "新用户漏斗走查:亲手走一遍,只记录真实摩擦",
+            def: "新用户漏斗走查:以新人视角亲手走一遍,只记录真实摩擦。适用:运营推广段诊断「发现→安装→首用→复用」漏斗,或对照验证上线改动",
             content: "### 新用户漏斗走查 (fresh-eyes-funnel)\n\
                  1. 以从未见过本项目的人的视角,真实执行「发现 → 安装 → 首次使用 → 再次使用」\
                  每一步,不跳步、不脑补。\n\
@@ -391,7 +391,7 @@ pub fn stage_skills(kind: StageKind) -> &'static [StageSkill] {
         }],
         StageKind::Ops => &[StageSkill {
             name: "breaking-drill",
-            def: "破坏性演练:拿坏输入砸,坏行为当场修",
+            def: "破坏性演练:系统性喂坏输入,坏行为当场修复。适用:运维段事故演练、健康检查脚本落地,或发布前的稳健性检查",
             content: "### 破坏性演练 (breaking-drill)\n\
                  1. 系统性地喂坏输入:不存在的路径、空输入、超长输入、坏参数、坏编码——\
                  逐个真实执行并原样记录行为。\n\
