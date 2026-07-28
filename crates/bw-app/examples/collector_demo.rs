@@ -183,6 +183,7 @@ async fn main() {
             slug: SLUG.into(),
             private: true,
         }),
+        codehub: None,
     })
     .await
     .expect("create project");

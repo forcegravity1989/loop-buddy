@@ -32,8 +32,8 @@ use bw_core::model::{
     ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus,
     KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, PhaseRole, Readiness,
     RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, Verdict,
-    WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_GITHUB_REPO,
-    CONNECTOR_KIND_GIT_REPO,
+    WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_CODEHUB_REPO,
+    CONNECTOR_KIND_GITHUB_REPO, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
@@ -96,6 +96,16 @@ pub enum GithubOrigin {
     Existing { owner: String, repo: String },
 }
 
+/// CodeHub 为主体的创建流(2026-07-28):Repo 卡片选 codehub 平台时的远端
+/// 身份。`host` = API 域名(open.codehub.huawei.com 等,绿/黄/内源三域名);
+/// `path` = org/repo(innersource/AI-Coding_G/maas)。身份用户输入即已知,
+/// clone 不回 ref(区别于 GithubOrigin.Existing 的 owner/repo 拆分)。
+#[derive(Clone, Debug)]
+pub struct CodehubOrigin {
+    pub host: String,
+    pub path: String,
+}
+
 /// UI → kernel intents.
 pub enum Command {
     /// App start: load the project wall and re-derive every running project's
@@ -122,6 +132,10 @@ pub enum Command {
         /// bound (`workspace` also `None`) → today's local-mint-if-configured
         /// default, unchanged.
         github: Option<GithubOrigin>,
+        /// CodeHub 为主体(2026-07-28):Repo 卡片选 codehub 平台时的远端身份。
+        /// 与 `github`/`workspace` 三选一(UI 只设其一)。`None` = 没选 codehub
+        /// (走 github 或本地)。maas 这类已有 codehub 仓走这条(clone,不建新)。
+        codehub: Option<CodehubOrigin>,
     },
     /// GitHub 为主体的创建流(2026-07-22): 读一次当前用户可接入的仓列表,
     /// 填充 `AppState.github_repos`(Repo 卡片"接入已有仓"下拉的数据源)。
@@ -2208,6 +2222,23 @@ impl App {
                     Err(e) => Ok((false, e.to_string())),
                 }
             }
+            CONNECTOR_KIND_CODEHUB_REPO => {
+                // codehub 真探针:`codehub-cli project view` 经 Remote::Codehub。
+                // config = "host/path"(创建时 mint 进来),split_once('/') 拆出
+                // host + path(path 自带 /,只切第一段)。探不通如实 false。
+                let cfg = c.config.trim();
+                let Some((host, path)) = cfg.split_once('/') else {
+                    return Ok((false, "codehub 连器 config 需 'host/path',无法探活".into()));
+                };
+                let remote = bw_engine::remote::Remote::Codehub {
+                    host: host.to_string(),
+                    path: path.to_string(),
+                };
+                match remote.probe().await {
+                    Ok(detail) => Ok((true, detail)),
+                    Err(e) => Ok((false, e.to_string())),
+                }
+            }
             other => Err(AppError::Invalid(format!(
                 "连接器类型「{other}」没有真实探针——不支持同步(诚实拒绝,不伪造状态)"
             ))),
@@ -3381,6 +3412,7 @@ impl App {
                 desc,
                 workspace,
                 github,
+                codehub,
             } => {
                 self.store
                     .create_project(NewProject {
@@ -3407,8 +3439,8 @@ impl App {
                     .get_project(id)
                     .await?
                     .ok_or(AppError::NotFound)?;
-                match (bound, github) {
-                    (Some(path), _) => {
+                match (bound, github, codehub) {
+                    (Some(path), _, _) => {
                         if !std::path::Path::new(path).join(".git").exists() {
                             return Err(AppError::Invalid(format!(
                                 "绑定的工作目录不是 git 仓库(无 .git):{path}"
@@ -3416,7 +3448,7 @@ impl App {
                         }
                         self.store.set_workspace(id, path, true).await?;
                     }
-                    (None, Some(GithubOrigin::New { slug, private })) => {
+                    (None, Some(GithubOrigin::New { slug, private }), _) => {
                         // plan/14 C14: 建仓是这个命令里最慢的一步(真实
                         // `gh repo create` 网络调用,数秒)——Started 先发,
                         // 唯一的 name 贯穿这一步的 Ok/Fail,UI 据此配对。
@@ -3524,7 +3556,7 @@ impl App {
                             }
                         }
                     }
-                    (None, Some(GithubOrigin::Existing { owner, repo })) => {
+                    (None, Some(GithubOrigin::Existing { owner, repo }), _) => {
                         // plan/14 C14: 克隆同样是真实 `gh repo clone` 网络
                         // 调用——同一套 Started→Ok/Fail 配对。
                         let action_name = format!("{} · 克隆仓库", proj.name);
@@ -3604,7 +3636,76 @@ impl App {
                             }
                         }
                     }
-                    (None, None) => {
+                    (None, None, Some(CodehubOrigin { host, path })) => {
+                        // codehub 接入已有仓(对标 github Existing):真实
+                        // `codehub-cli repo clone` 网络调用,同一套 Started→Ok/Fail。
+                        let action_name = format!("{} · 克隆 codehub 仓", proj.name);
+                        self.emit(Event::ActionProgress {
+                            name: action_name.clone(),
+                            state: ActionState::Started,
+                        });
+                        match self.workspaces_root.clone() {
+                            Some(root) => {
+                                let dir = root.join(workspace_slug(&proj.name, id));
+                                match bw_engine::codehub::clone_repo(&host, &path, &dir).await {
+                                    Ok(()) => {
+                                        let p = dir.to_string_lossy().into_owned();
+                                        self.store.set_workspace(id, &p, true).await?;
+                                        self.store.set_remote(id, &host, &path).await?;
+                                        self.store
+                                            .create_connector(NewConnector {
+                                                id: ConnectorId::new(),
+                                                name: format!("{} · 代码仓", proj.name),
+                                                kind: CONNECTOR_KIND_GIT_REPO.into(),
+                                                scope: proj.name.clone(),
+                                                project_id: Some(id),
+                                                config: p.clone(),
+                                            })
+                                            .await?;
+                                        self.store
+                                            .create_connector(NewConnector {
+                                                id: ConnectorId::new(),
+                                                name: format!("{} · CodeHub", proj.name),
+                                                kind: CONNECTOR_KIND_CODEHUB_REPO.into(),
+                                                scope: proj.name.clone(),
+                                                project_id: Some(id),
+                                                config: format!("{host}/{path}"),
+                                            })
+                                            .await?;
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Ok(path.clone()),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let detail = format!("接入 codehub {host}/{path} 失败:{e}");
+                                        self.emit(Event::ConnectorSynced {
+                                            name: format!("{} · CodeHub", proj.name),
+                                            ok: false,
+                                            detail: detail.clone(),
+                                        });
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Fail(detail),
+                                        });
+                                    }
+                                }
+                            }
+                            None => {
+                                let detail = "未配置本地工作区根目录,无法克隆".to_string();
+                                self.emit(Event::ConnectorSynced {
+                                    name: format!("{} · CodeHub", proj.name),
+                                    ok: false,
+                                    detail: detail.clone(),
+                                });
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail),
+                                });
+                            }
+                        }
+                    }
+                    (None, None, None) => {
                         if let Some(root) = self.workspaces_root.clone() {
                             match provision_workspace(&root, &proj).await {
                                 Ok(path) => {

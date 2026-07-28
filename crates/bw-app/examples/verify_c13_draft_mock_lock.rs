@@ -207,6 +207,7 @@ async fn main() {
             slug: "c13-draft-mock-demo-a".into(),
             private: true,
         }),
+        codehub: None,
     })
     .await
     .expect("create project A");
@@ -240,6 +241,7 @@ async fn main() {
         desc: "C13 headless E2E · 无工作区项目,起草行为应与项目 A 一致".into(),
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .expect("create project B");

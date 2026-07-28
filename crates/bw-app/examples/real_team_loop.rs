@@ -60,6 +60,7 @@ async fn main() {
 
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .unwrap();

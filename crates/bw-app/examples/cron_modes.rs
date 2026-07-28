@@ -70,6 +70,7 @@ async fn main() {
         desc: String::new(),
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .unwrap();

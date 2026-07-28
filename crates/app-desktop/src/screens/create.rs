@@ -20,7 +20,7 @@ use crate::kernel::{
     ACTION_PENDING_THRESHOLD,
 };
 use crate::theme;
-use bw_app::{Command, GithubOrigin, Panel, Scope};
+use bw_app::{CodehubOrigin, Command, GithubOrigin, Panel, Scope};
 use bw_core::model::{drafting_workflow, Cadence, MaturityPeriod, StageKind};
 use bw_core::{MetricId, ProjectId, SessionId};
 use bw_engine::GithubRepoSummary;
@@ -78,6 +78,10 @@ pub fn Create(
     // `Command::CreateProject.provider`。纯 UI 状态,与 `repo_choice`(起点:
     // 新建/接入)并存、互不影响。
     let platform = use_signal(|| "github".to_string());
+    // P4:codehub 平台的仓身份(host+path)。与 platform 并存,platform=="codehub"
+    // 时才有意义,传给 RepoCard(UI 卡)+ IntentCard(send 建 CreateProject)。
+    let codehub_host = use_signal(|| "open.codehub.huawei.com".to_string());
+    let codehub_path = use_signal(String::new);
 
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
@@ -103,10 +107,10 @@ pub fn Create(
             ActionsBanner { items: actions }
             match (card(), vm) {
                 (Card::Repo, _) => rsx! {
-                    RepoCard { platform, choice: repo_choice, github_repos: github_repos.clone(), on_next: move |_| card.set(Card::Intent) }
+                    RepoCard { platform, choice: repo_choice, github_repos: github_repos.clone(), codehub_host, codehub_path, on_next: move |_| card.set(Card::Intent) }
                 },
                 (Card::Intent, _) => rsx! {
-                    IntentCard { platform, repo_choice, on_created: move |_| card.set(Card::Questions) }
+                    IntentCard { platform, repo_choice, codehub_host, codehub_path, on_created: move |_| card.set(Card::Questions) }
                 },
                 (_, None) => rsx! { div { "…" } },
                 (Card::Questions, Some(v)) => rsx! {
@@ -254,6 +258,8 @@ fn RepoCard(
     platform: Signal<String>,
     choice: Signal<RepoChoice>,
     github_repos: Vec<GithubRepoSummary>,
+    codehub_host: Signal<String>,
+    codehub_path: Signal<String>,
     on_next: EventHandler<()>,
 ) -> Element {
     let k = use_context::<Kernel>();
@@ -261,9 +267,12 @@ fn RepoCard(
     let serif = theme::SERIF;
     let ink3 = theme::INK_3;
     let is_new = matches!(choice(), RepoChoice::New { .. });
+    // P4:platform=="codehub" 时走 codehub_origin_card(host/path 来自父组件信号),
+    // github 平台时 is_codehub=false,走下面的 github 起点 chip + 仓选择器。
+    let is_codehub = platform() == "codehub";
     let existing_ready =
         matches!(&choice(), RepoChoice::Existing { owner, .. } if !owner.is_empty());
-    let can_send = is_new || existing_ready;
+    let can_send = is_codehub && !codehub_path().trim().is_empty() || is_new || existing_ready;
     let opacity = if can_send { "1" } else { ".45" };
     // C16(plan/14 规范条 4): 选中已有仓时,在下拉下方回显它的完整真实
     // metadata(不只是下拉一行 owner/repo · private)。找不到(仓列表还没
@@ -286,6 +295,10 @@ fn RepoCard(
         // 「未接」,不可点、视觉明确禁用,绝不假装可用。
         {platform_selector(platform)}
 
+        if is_codehub {
+            {codehub_origin_card(codehub_host, codehub_path)}
+        }
+        if !is_codehub {
         {chip_question(
             "起点",
             vec![("新建仓", is_new), ("接入已有仓", !is_new)],
@@ -355,6 +368,7 @@ fn RepoCard(
                 }
             }
         }
+        }
         div {
             style: "display:flex;justify-content:flex-end;margin-top:14px;",
             button {
@@ -372,12 +386,17 @@ fn RepoCard(
 /// 可用。纯 UI 状态(`platform` 信号),与「起点」chip 并存、互不影响。
 fn platform_selector(mut platform: Signal<String>) -> Element {
     let ink2 = theme::INK_2;
-    let selected = platform() == "github";
-    let (bd, bg, fg) = if selected {
-        ("1.5px solid #C5654A", "#C5654A", "#fff")
-    } else {
-        ("1px solid #DDD5C5", "transparent", "#57534A")
+    let gh = platform() == "github";
+    let ch = platform() == "codehub";
+    let chip = |sel: bool| -> (&'static str, &'static str, &'static str) {
+        if sel {
+            ("1.5px solid #C5654A", "#C5654A", "#fff")
+        } else {
+            ("1px solid #DDD5C5", "transparent", "#57534A")
+        }
     };
+    let (gbd, gbg, gfg) = chip(gh);
+    let (cbd, cbg, cfg) = chip(ch);
     rsx! {
         div {
             style: "margin-bottom:6px;",
@@ -386,8 +405,13 @@ fn platform_selector(mut platform: Signal<String>) -> Element {
                 style: "display:flex;gap:6px;flex-wrap:wrap;",
                 div {
                     onclick: move |_| platform.set("github".to_string()),
-                    style: "cursor:pointer;border:{bd};background:{bg};color:{fg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                    style: "cursor:pointer;border:{gbd};background:{gbg};color:{gfg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
                     "GitHub"
+                }
+                div {
+                    onclick: move |_| platform.set("codehub".to_string()),
+                    style: "cursor:pointer;border:{cbd};background:{cbg};color:{cfg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                    "CodeHub"
                 }
                 for name in ["GitLab", "Gitcode"] {
                     div {
@@ -397,6 +421,38 @@ fn platform_selector(mut platform: Signal<String>) -> Element {
                         "{name} · 未接"
                     }
                 }
+            }
+        }
+    }
+}
+
+/// P4(2026-07-28):codehub 平台的仓身份输入 —— host(API 域名,绿/黄/内源)
+/// + path(org/repo)。token 走本机 `codehub-cli` keyring,UI 不收凭据。
+/// maas 这类已有 codehub 仓走这条(对标 github 的"接入已有仓"下拉,但
+/// codehub 没 list_repos,直接填 host+path)。
+fn codehub_origin_card(mut host: Signal<String>, mut path: Signal<String>) -> Element {
+    let label = theme::label();
+    let input = theme::input();
+    let card = theme::card();
+    let ink3 = theme::INK_3;
+    rsx! {
+        div {
+            style: "{card} padding:18px 20px;margin-top:8px;",
+            label { style: "{label}", "CodeHub 仓" }
+            p { style: "font-size:11.5px;color:{ink3};margin:4px 0 12px;line-height:1.6;", "填 host(API 域名)+ path(org/repo)。token 走本机 codehub-cli keyring,这里不收凭据。" }
+            label { style: "{label}", "host" }
+            input {
+                style: "{input}",
+                placeholder: "open.codehub.huawei.com",
+                value: "{host}",
+                oninput: move |e| host.set(e.value()),
+            }
+            label { style: "{label};margin-top:10px;", "path" }
+            input {
+                style: "{input};margin-top:6px;",
+                placeholder: "innersource/AI-Coding_G/maas",
+                value: "{path}",
+                oninput: move |e| path.set(e.value()),
             }
         }
     }
@@ -472,6 +528,8 @@ fn slugify(name: &str) -> String {
 fn IntentCard(
     platform: Signal<String>,
     repo_choice: Signal<RepoChoice>,
+    codehub_host: Signal<String>,
+    codehub_path: Signal<String>,
     on_created: EventHandler<()>,
 ) -> Element {
     let k = use_context::<Kernel>();
@@ -494,16 +552,31 @@ fn IntentCard(
         if !can_send {
             return;
         }
-        let github = match repo_choice() {
-            RepoChoice::New { private } => Some(GithubOrigin::New {
-                slug: if slug().trim().is_empty() {
-                    slugify(&name())
-                } else {
-                    slug().trim().to_string()
+        let (github, codehub) = if platform() == "codehub" {
+            (
+                None,
+                Some(CodehubOrigin {
+                    host: codehub_host().trim().to_string(),
+                    path: codehub_path().trim().to_string(),
+                }),
+            )
+        } else {
+            (
+                match repo_choice() {
+                    RepoChoice::New { private } => Some(GithubOrigin::New {
+                        slug: if slug().trim().is_empty() {
+                            slugify(&name())
+                        } else {
+                            slug().trim().to_string()
+                        },
+                        private,
+                    }),
+                    RepoChoice::Existing { owner, repo } => {
+                        Some(GithubOrigin::Existing { owner, repo })
+                    }
                 },
-                private,
-            }),
-            RepoChoice::Existing { owner, repo } => Some(GithubOrigin::Existing { owner, repo }),
+                None,
+            )
         };
         k.send(Command::CreateProject {
             provider: platform(),
@@ -513,6 +586,7 @@ fn IntentCard(
             desc: brief().trim().to_string(),
             workspace: None,
             github,
+            codehub,
         });
         on_created.call(());
     };

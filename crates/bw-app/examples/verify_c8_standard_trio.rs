@@ -185,6 +185,7 @@ async fn main() {
                 slug: "c8-coldstart-fixture".into(),
                 private: true,
             }),
+            codehub: None,
         })
         .await
         .expect("create project (coldstart fixture)");
@@ -307,6 +308,7 @@ async fn main() {
             slug: "c8-trio-demo-a".into(),
             private: true,
         }),
+        codehub: None,
     })
     .await
     .expect("create project A");
@@ -361,6 +363,7 @@ async fn main() {
             slug: "c8-trio-demo-b".into(),
             private: true,
         }),
+        codehub: None,
     })
     .await
     .expect("create project B");
@@ -385,6 +388,7 @@ async fn main() {
         desc: "C8 headless E2E · 无仓项目零标配票".into(),
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .expect("create project C");

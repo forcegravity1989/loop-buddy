@@ -8,6 +8,7 @@
 //! 不进 `Executor` 体系——`codehub-cli` 是 VCS 远端 API 客户端(对标 `gh`),
 //! 不是 agent 执行器(对标 `claude`)。两种 shell-out 模式别混。
 
+use std::path::Path;
 use std::process::Stdio;
 use time::Date;
 
@@ -152,4 +153,23 @@ pub async fn collect_count(
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     text.parse::<u64>()
         .map_err(|_| CodehubError::Parse(format!("无法解析 codehub 计数:{text:?}")))
+}
+
+/// `codehub-cli repo clone <path> <dest> -H <host>` — 把 codehub 仓 clone 进
+/// `dest`。token 走 keyring(profile/CODEHUB_TOKEN),Rust 侧不管。身份(host+path)
+/// 调用方已知,这里只 clone,**不回远端身份**(区别于 github::clone_repo 回
+/// GithubRepoRef:codehub 身份从用户输入来,不需要 clone 告诉你)。
+pub async fn clone_repo(host: &str, path: &str, dest: &Path) -> Result<(), CodehubError> {
+    let out = tokio::process::Command::new("codehub-cli")
+        .args(["repo", "clone", path, &dest.to_string_lossy(), "-H", host])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    Ok(())
 }

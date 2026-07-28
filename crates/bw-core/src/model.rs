@@ -1807,6 +1807,11 @@ pub const CONNECTOR_KIND_CLAUDE_CLI: &str = "claude-cli";
 /// 走 `gh repo view` 真实探活;指标级统计采集由标配 Cron(collect_metrics)
 /// 负责,两者各管一段。
 pub const CONNECTOR_KIND_GITHUB_REPO: &str = "github-repo";
+/// CodeHub(GitLab v4 兼容,绿/黄/内源三域名)为主体的创建流(2026-07-28):
+/// 记录一个项目挂的 CodeHub 远端。`config` 存 `host\0path`(host=API 域名如
+/// open.codehub.huawei.com,path=org/repo)。真探针走 `codehub-cli project view`
+/// (Remote::Codehub.probe,P3 已通);issue/MR 计数采集由 collect arm(P5)负责。
+pub const CONNECTOR_KIND_CODEHUB_REPO: &str = "codehub-repo";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Connector {

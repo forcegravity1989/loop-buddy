@@ -180,6 +180,7 @@ async fn run_project(app: &mut App, plan: &ProjectPlan) -> u64 {
 
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .expect("create project");

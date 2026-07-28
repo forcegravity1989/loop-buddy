@@ -242,6 +242,7 @@ async fn main() {
             slug: "c14-progress-demo".into(),
             private: true,
         }),
+        codehub: None,
     })
     .await
     .expect("create project (github new, ok path)");
@@ -260,6 +261,7 @@ async fn main() {
             slug: FAIL_SLUG.into(),
             private: true,
         }),
+        codehub: None,
     })
     .await
     .expect("create project (github new, fail path) — CreateProject itself must not error");
@@ -285,6 +287,7 @@ async fn main() {
             owner: "testowner".into(),
             repo: "demo-existing".into(),
         }),
+        codehub: None,
     })
     .await
     .expect("create project (github existing / clone)");

@@ -150,6 +150,7 @@ async fn main() {
         desc: "C16 headless E2E · provider 写入路径".into(),
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .expect("CreateProject should succeed");
