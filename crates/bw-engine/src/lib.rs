@@ -29,6 +29,7 @@ pub mod git_log;
 pub mod github;
 pub mod metrics_file;
 mod mock;
+pub mod remote;
 mod unsupported_cli;
 pub mod workspace;
 

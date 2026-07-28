@@ -947,6 +947,15 @@ pub enum AppError {
     Invalid(String),
 }
 
+/// codehub 对接(P2):bw-app 调 `Remote::for_project` / `Remote::xxx` 时把
+/// [`bw_engine::remote::RemoteError`] 归进既有 `Engine(String)` 口径——
+/// github 臂的 `GithubError` 与 codehub 臂的未接线拒斥都走这一条。
+impl From<bw_engine::remote::RemoteError> for AppError {
+    fn from(e: bw_engine::remote::RemoteError) -> Self {
+        AppError::Engine(e.to_string())
+    }
+}
+
 /// How a `run_workflow_inner` call resolved once its adversarial review loop
 /// settled (T9, plan/12 §4). An honest *failure* (executor error, or a review
 /// output with no parseable verdict) is NOT an outcome here — it surfaces as
@@ -2186,14 +2195,15 @@ impl App {
                 }
             }
             CONNECTOR_KIND_GITHUB_REPO => {
-                // plan/13 D12(code-review Spec 轴指出此前未落地):22 号设计
-                // 「不接真探针」的立场已被推翻——`gh repo view` 一次真实探活,
-                // 探不通如实 false,绝不伪造「已同步」。
-                let remote = c.config.trim();
-                if remote.is_empty() {
+                // plan/13 D12: 真探针一次,探不通如实 false,绝不伪造「已同步」。
+                // 经 Remote 分发:github-repo 连器 → Remote::Github(config);
+                // codehub-repo 连器(P4)另有 arm → Remote::Codehub{host,path}。
+                let cfg = c.config.trim();
+                if cfg.is_empty() {
                     return Ok((false, "连接器未记录 owner/repo,无法探活".into()));
                 }
-                match bw_engine::github::probe_repo(remote).await {
+                let remote = bw_engine::remote::Remote::Github(cfg.to_string());
+                match remote.probe().await {
                     Ok(detail) => Ok((true, detail)),
                     Err(e) => Ok((false, e.to_string())),
                 }
@@ -2234,10 +2244,12 @@ impl App {
             .get_project(project_id)
             .await?
             .ok_or(AppError::NotFound)?;
-        let remote = proj.remote_path.trim();
-        if remote.is_empty() {
+        let path = proj.remote_path.trim();
+        if path.is_empty() {
             return Ok(());
         }
+        let remote =
+            bw_engine::remote::Remote::for_project(&proj.provider, &proj.remote_host, path)?;
         let body = if desc.trim().is_empty() {
             "(BW 建单同步,未填写详情)".to_string()
         } else {
@@ -2250,7 +2262,7 @@ impl App {
                 state: ActionState::Started,
             });
         }
-        match bw_engine::github::create_issue(remote, title, &body).await {
+        match remote.create_issue(title, &body).await {
             Ok(gh_number) => {
                 self.store
                     .set_issue_github_number(issue_id, gh_number)
@@ -2450,7 +2462,12 @@ impl App {
             .get_project(project)
             .await?
             .ok_or(AppError::NotFound)?;
-        let remote = proj.remote_path.trim().to_string();
+        let remote_path = proj.remote_path.trim().to_string();
+        let remote = bw_engine::remote::Remote::for_project(
+            &proj.provider,
+            &proj.remote_host,
+            &remote_path,
+        )?;
         let sigs = self.store.persisted_signals(project).await?;
         let today = now().date();
         let mut summary = MetricCollectSummary::default();
@@ -2459,14 +2476,12 @@ impl App {
         for m in &sigs.metrics {
             match m.collect_kind.as_str() {
                 "github" => {
-                    if remote.is_empty() {
+                    if remote_path.is_empty() {
                         // No repo to pull from — honest, not a silent success.
                         summary.no_remote_github = true;
                         continue;
                     }
-                    match bw_engine::github::collect_github_count(&remote, &m.collect_query, today)
-                        .await
-                    {
+                    match remote.collect_count(&m.collect_query, today).await {
                         Ok(count) => {
                             let value = count.to_string();
                             // window-guard(code-review Standards #5 修正,取代
