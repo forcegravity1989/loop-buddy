@@ -747,8 +747,13 @@ pub enum Command {
         id: IssueId,
         reason: String,
     },
-    /// Reload the active project's issues from the store (mirrors
-    /// `RefreshHubs` for the hub library, but project-scoped).
+    /// P7-7B (plan/13 D22): for a repo-attached project, first pulls real
+    /// GitHub state (open PRs / issue state) for its mapped, unsettled
+    /// Issues and backfills `pr_number` / derives `InReview` — **read-only**,
+    /// never rewrites GitHub, never reaches `Done` — then reloads from the
+    /// store (mirrors `RefreshHubs` for the hub library, but project-scoped).
+    /// No active project / no `github_remote` ⇒ the GitHub step is skipped
+    /// and this is the same bare local reload it always was.
     RefreshIssues,
     SendSessionMessage {
         session: SessionId,
@@ -1148,6 +1153,107 @@ impl App {
                 self.state.issues = self.store.list_issues(p, None, None).await?;
             }
             None => self.state.issues.clear(),
+        }
+        Ok(())
+    }
+
+    /// P7-7B(plan/13 用户故事 22, D22 「BW 与 GitHub 永不打架」): `RefreshIssues`
+    /// used to be a bare local reload — it never looked at GitHub, so a PR a
+    /// teammate opened on its own (executors may run `gh pr create`; only
+    /// `gh pr merge` is disallowed) was invisible to BW and `MergeIssuePr`'s
+    /// two guards (`pr_number == 0` / `status != InReview`) blocked the
+    /// human's only accounting-safe merge path. This pulls real GitHub state
+    /// for the project's repo-mapped Issues and backfills it — **read-only**:
+    /// it never calls a GitHub write endpoint, never reopens/closes anything,
+    /// and never rewrites what a human did on github.com (D22: 漂移只采集、
+    /// 只展示,不反向改写). It also never reaches `Done` — that edge stays
+    /// exclusively a human `MergeIssuePr`/`TransitionIssue`; this collector's
+    /// only write is a `pr_number` backfill plus, at most, one push to
+    /// `InReview` (D3: 评审中由存在开放 PR 派生).
+    ///
+    /// 采集范围(性能口径,如实写清楚,不是"少采装作采全"): 只查
+    /// `github_number != 0 && settled_at.is_none()` 的 Issue —— 未映射到
+    /// GitHub 的 Issue 没有可采的远端状态,已 settle(Done/Cancelled 走过
+    /// 结算)的 Issue 无论采到什么都不会再改变任何东西,采了也是白跑
+    /// `gh`。这不是采样,是这个命令定义下的**全部**有意义范围;项目里
+    /// 未结算的挂仓 Issue 再多,也是逐个真实查询,不做上限截断。
+    ///
+    /// 每张候选 Issue 最多打两次 `gh`:先查活分支(`issue_branch`)是否有
+    /// 开放 PR(`open_pr_for_branch`,`--repo` 寻址,不碰本地工作区);只有
+    /// 「查到开放 PR 且当前是 InProgress」这一条真分支才会再查一次
+    /// `issue_state` 来确认 GitHub 侧的 issue 本身仍是 OPEN(不是被绕过 BW
+    /// 直接在网页关闭/wontfix)——这一步只在真要做转移判断时才发生,不对
+    /// 每张 Issue 都白打第二枪。
+    async fn collect_github_issue_drift(&mut self, project: ProjectId) -> Result<(), AppError> {
+        let proj = self
+            .store
+            .get_project(project)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let remote = proj.github_remote.trim().to_string();
+        if remote.is_empty() {
+            // 无仓项目:整段跳过,今天的行为逐字节不变。
+            return Ok(());
+        }
+        let candidates: Vec<_> = self
+            .store
+            .list_issues(project, None, None)
+            .await?
+            .into_iter()
+            .filter(|i| i.github_number != 0 && i.settled_at.is_none())
+            .collect();
+        for issue in candidates {
+            let branch = bw_engine::github::issue_branch(issue.github_number);
+            let open_pr = match bw_engine::github::open_pr_for_branch(&remote, &branch).await {
+                Ok(v) => v,
+                Err(e) => {
+                    // gh 调用失败 = 如实降级:该 issue 保持原状,诚实 toast,
+                    // 不阻断这一轮其它 issue 的采集(同 sync_issue_to_github
+                    // 的软降级口径)。
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("#{} · GitHub 采集", issue.number),
+                        ok: false,
+                        detail: format!("查活分支 PR 状态失败,该活保持原状:{e}"),
+                    });
+                    continue;
+                }
+            };
+            let Some(pr) = open_pr else {
+                continue; // 没有开放 PR——真实状态,什么都不改。
+            };
+            if pr != issue.pr_number {
+                self.store.set_issue_pr_number(issue.id, pr).await?;
+            }
+            if issue.status != IssueStatus::InProgress {
+                // 已经在评审中/其它状态,pr_number 已经如实回填,不需要再
+                // 判断转移(且绝不会从这里走到 Done)。
+                continue;
+            }
+            match bw_engine::github::issue_state(&remote, issue.github_number).await {
+                Ok(state) if state.eq_ignore_ascii_case("OPEN") => {
+                    // D3: 评审中由「存在开放 PR」派生。走既有 TransitionIssue
+                    // 命令复用其 can_transition_to 守卫,不新开一条转移路径。
+                    Box::pin(self.dispatch(Command::TransitionIssue {
+                        id: issue.id,
+                        status: IssueStatus::InReview,
+                    }))
+                    .await?;
+                }
+                Ok(_) => {
+                    // GitHub 侧 issue 已经不是 OPEN(例如被人绕过 BW 直接在
+                    // 网页关闭)——只展示、不处理:D22 铁律,漂移只采集不
+                    // 反向改写,也不擅自把它推进 InReview。
+                }
+                Err(e) => {
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("#{} · GitHub 采集", issue.number),
+                        ok: false,
+                        detail: format!(
+                            "pr_number 已回填,但核对 issue 状态失败,暂不转评审中,可重试:{e}"
+                        ),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -3019,13 +3125,30 @@ impl App {
                     )
                     .await
                     {
-                        Ok(pr) => {
+                        Ok(bw_engine::github::PrOpened::Created(pr)) => {
                             self.store.set_issue_pr_number(id, pr).await?;
                             self.emit(Event::ConnectorSynced {
                                 name: format!("#{} · PR", issue.number),
                                 ok: true,
                                 detail: format!(
                                     "已提 PR #{pr}(Closes #{}),等待人工 merge 验收",
+                                    issue.github_number
+                                ),
+                            });
+                            true
+                        }
+                        // 7A(真实践行暴露的缺口): 队友自己在 run 里跑了
+                        // `gh pr create`(允许,禁的只有 `gh pr merge`),BW
+                        // 再提一次时撞见"已存在"——不是失败,是提 PR 幂等。
+                        // 认领到的号是 `open_pr` 独立读回的真实号,诚实告知
+                        // 用户"这是认领来的",不混同成 BW 自己提的。
+                        Ok(bw_engine::github::PrOpened::Adopted(pr)) => {
+                            self.store.set_issue_pr_number(id, pr).await?;
+                            self.emit(Event::ConnectorSynced {
+                                name: format!("#{} · PR", issue.number),
+                                ok: true,
+                                detail: format!(
+                                    "已认领队友提的 PR #{pr}(Closes #{}),等待人工 merge 验收",
                                     issue.github_number
                                 ),
                             });
@@ -5649,6 +5772,12 @@ impl App {
             }
 
             Command::RefreshIssues => {
+                // P7-7B (D22): 先真采 GitHub、再本地刷新——无活跃项目/无
+                // github_remote 的项目在 collect_github_issue_drift 内部短
+                // 路跳过,行为与升级前逐字节一致。
+                if let Some(p) = self.state.active_project {
+                    self.collect_github_issue_drift(p).await?;
+                }
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
             }
