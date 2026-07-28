@@ -28,8 +28,18 @@ use bw_app::{App, Command};
 use bw_core::ProjectId;
 use bw_engine::{ClaudeCliConfig, Engine, GithubRepoSummary, MockExecutor};
 use bw_store::{SqliteStore, Store};
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
+
+/// 给 stub 二进制加可执行位。非 unix 上 no-op(Windows 按扩展名执行;此处
+/// `#!/bin/sh` stub 本是 unix 向 E2E,Windows 上跑不动,但 cfg-gate 让 example
+/// 至少能跨平台编译)。
+#[cfg(unix)]
+fn make_executable(p: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755));
+}
+#[cfg(not(unix))]
+fn make_executable(_p: &std::path::Path) {}
 
 /// 【mock】stub `gh` — 不是真实 GitHub。只答 `repo list`(本例唯一用到的
 /// 子命令),回一条带 C16 扩展字段的真实形状 JSON。
@@ -162,7 +172,7 @@ async fn main() {
     std::fs::create_dir_all(&stub_dir).unwrap();
     let gh = stub_dir.join("gh");
     std::fs::write(&gh, STUB_GH).unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    make_executable(&gh);
     let old_path = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", stub_dir.display(), old_path));
     println!("[stub] gh → {} (【mock】, NOT real GitHub)", gh.display());
