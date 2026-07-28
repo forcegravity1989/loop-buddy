@@ -1827,10 +1827,25 @@ impl App {
     /// usage accounting bump each one's `uses` — closing the compounding loop
     /// (a distilled skill used by a run → uses+1). Honest `(empty, [])` when the
     /// project has no compounded skill yet.
+    ///
+    /// `exclude_name` skips a skill already carried by another block on the
+    /// same run (in practice: the Issue's `standard_skill`). P3 opened the
+    /// skill-choice dropdown to every content-bearing row, including distilled
+    /// ones (`crates/app-desktop/src/screens/op.rs` `skill_choices`), so a
+    /// project's own distilled skill can now be picked as `standard_skill`
+    /// AND still be the top-scored candidate here (same project, same stage).
+    /// Without this exclusion the caller would push the same name onto
+    /// `spec.skills` twice — `run_workflow_inner`'s by-name, no-dedup
+    /// accounting (`record_skill_use_by_name` in the `for s in &spec.skills`
+    /// loop) would then bump that one skill's `uses` by 2 for one run,
+    /// breaking settle-once, and the prompt would carry its body twice. Fixing
+    /// it here (source) rather than de-duping `spec.skills` after the fact
+    /// keeps the prompt honest too — the body is injected once, not twice.
     async fn distilled_skills_block(
         &self,
         project: ProjectId,
         stage: StageKind,
+        exclude_name: &str,
     ) -> Result<(String, Vec<SkillRef>), AppError> {
         const MAX: usize = 3;
         let catalog = self.store.list_skills().await?;
@@ -1838,6 +1853,9 @@ impl App {
         // origin issue's project+stage to scope the compounding to this project.
         let mut scored: Vec<(u32, bool, SkillCard)> = Vec::new();
         for s in catalog {
+            if !exclude_name.trim().is_empty() && s.name == exclude_name {
+                continue; // already carried by standard_skill_block — avoid a double count/body
+            }
             let Some(iid) = s.distilled_from_issue else {
                 continue;
             };
@@ -1881,9 +1899,12 @@ impl App {
     /// empty slug, or a slug that doesn't resolve to a content-bearing row
     /// (none today — all three standard cards are seeded by C9+C10), is an
     /// honest `(empty, [])` — never an error, never a fabricated body.
-    /// `record_skill_use_by_name` accounting only ever sees the one ref this
-    /// returns, so a run that carries a standard skill records its `uses`
-    /// exactly once.
+    /// This always returns at most one ref; `distilled_skills_block` is
+    /// called with this slug as its `exclude_name` so it can't pick the same
+    /// skill again (P3 let a distilled skill be chosen as `standard_skill`
+    /// too — see that function's doc comment). With the exclusion in place,
+    /// `record_skill_use_by_name` accounting sees each skill exactly once
+    /// per run.
     async fn standard_skill_block(&self, slug: &str) -> Result<(String, Vec<SkillRef>), AppError> {
         if slug.trim().is_empty() {
             return Ok((String::new(), Vec::new()));
@@ -2900,8 +2921,13 @@ impl App {
         let (standard_block, standard_refs) =
             self.standard_skill_block(&issue.standard_skill).await?;
         // Distilled (compounded) skills from this project, same-stage
-        // preferred, capped at 3.
-        let (distilled_block, distilled_refs) = self.distilled_skills_block(p, issue.stage).await?;
+        // preferred, capped at 3. Exclude `issue.standard_skill` by name —
+        // since P3 a distilled skill can itself be picked as the standard
+        // slug, and without the exclusion it would double-count (see
+        // `distilled_skills_block`'s doc comment).
+        let (distilled_block, distilled_refs) = self
+            .distilled_skills_block(p, issue.stage, &issue.standard_skill)
+            .await?;
         spec.name = format!("#{} {}", issue.number, issue.title);
         let extra = format!("{issue_brief}{standard_block}{distilled_block}");
         // 既有缺口(C8 顺带修复,非本票新增行为):`stage_workflow_with_playbook`
