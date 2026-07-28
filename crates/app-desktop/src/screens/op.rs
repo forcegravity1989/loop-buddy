@@ -610,6 +610,16 @@ fn IssuesPanel(op: OpVm) -> Element {
     let initial_stage = op.active_stage;
     let mut new_title = use_signal(String::new);
     let mut new_stage = use_signal(move || initial_stage);
+    // P3: 关联技能选择器只列 content 非空的行 —— 空壳技能选了也注入不了
+    // (`standard_skill_block` 的诚实降级口径),不该出现在选项里。
+    let skill_choices: Vec<_> = op
+        .hub
+        .skills
+        .iter()
+        .filter(|s| !s.content.trim().is_empty())
+        .cloned()
+        .collect();
+    let mut new_skill = use_signal(String::new);
     let agents = op.hub.agents.clone();
     // Board-wide: at most one card is "entering a block reason" at a time.
     // Fully qualified: `Signal` bare would resolve to `bw_core::model::Signal`
@@ -664,6 +674,21 @@ fn IssuesPanel(op: OpVm) -> Element {
                         }
                     }
                 }
+                select {
+                    style: "border:1px solid {border};border-radius:7px;padding:7px 9px;font-size:12px;background:#FFF;color:{ink2};max-width:200px;",
+                    title: "关联技能(可空)——选中后该 Issue 开工时会带着这条方法",
+                    value: "{new_skill}",
+                    onchange: move |e| new_skill.set(e.value()),
+                    option { value: "", "不关联技能" }
+                    for s in skill_choices.iter() {
+                        option {
+                            key: "{s.id:?}",
+                            value: "{s.name}",
+                            title: "{s.desc}",
+                            "{s.name}"
+                        }
+                    }
+                }
                 button {
                     style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:8px 16px;font-size:13px;flex:none;",
                     onclick: move |_| {
@@ -675,8 +700,10 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 title: t,
                                 desc: String::new(),
                                 priority: IssuePriority::Medium,
+                                standard_skill: new_skill(),
                             });
                             new_title.set(String::new());
+                            new_skill.set(String::new());
                         }
                     },
                     "＋ 创建 Issue"

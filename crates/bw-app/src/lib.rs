@@ -699,12 +699,24 @@ pub enum Command {
     },
     /// Create a new issue in the active project (defaults to `Backlog`,
     /// auto-assigned per-project number). Scoped to the given stage.
+    ///
+    /// P3 (loop-buddy↔aihot spec): `standard_skill` names a skill-library
+    /// slug to carry on the issue from the moment it's created — the same
+    /// field `seed_standard_issue_trio` sets for the three creation-flow
+    /// standard cards, now reachable from this manual entry too (the
+    /// op-panel create strip; `autopilot_fire`'s cron-minted issues still
+    /// call `store.create_issue` directly and are untouched by this field).
+    /// Empty (every pre-existing call site) means "no method chosen",
+    /// byte-identical to today's behavior. Resolution is honest-by-name at
+    /// run time via `standard_skill_block` — an unknown or content-less
+    /// slug never fails issue creation, it just injects nothing.
     CreateIssue {
         id: IssueId,
         stage: StageKind,
         title: String,
         desc: String,
         priority: IssuePriority,
+        standard_skill: String,
     },
     /// Move an issue to a new kanban status (the kanban lifecycle transition).
     TransitionIssue {
@@ -5349,11 +5361,17 @@ impl App {
                 title,
                 desc,
                 priority,
+                standard_skill,
             } => {
                 let p = self.active()?;
                 if title.trim().is_empty() {
                     return Err(AppError::Invalid("标题不能为空".into()));
                 }
+                // P3: pass the slug through as-is — no validation that could
+                // fail issue creation over it. `standard_skill_block` (run
+                // time) already resolves an unknown/content-less slug to an
+                // honest no-op, so a typo or a since-deleted skill here is
+                // never a reason to reject the issue.
                 self.store
                     .create_issue(NewIssue {
                         id,
@@ -5362,7 +5380,7 @@ impl App {
                         title: title.clone(),
                         desc: desc.clone(),
                         priority,
-                        standard_skill: String::new(),
+                        standard_skill,
                     })
                     .await?;
                 // C4: 项目挂了 GitHub 仓时,建单同时经 gh 真开一个 GitHub

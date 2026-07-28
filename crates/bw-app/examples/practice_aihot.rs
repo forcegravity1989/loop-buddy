@@ -375,6 +375,7 @@ async fn cmd_open_issue(app: &mut App, project: ProjectId, args: &[String]) {
         title: title.clone(),
         desc: desc.clone(),
         priority: parse_priority(priority),
+        standard_skill: String::new(),
     })
     .await
     .expect("create issue");

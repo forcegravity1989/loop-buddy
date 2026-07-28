@@ -117,6 +117,7 @@ async fn ensure_issue(app: &mut App, store: &Arc<dyn Store>, spec: &FixtureIssue
                 title: spec.title.to_string(),
                 desc: spec.desc.to_string(),
                 priority: spec.priority,
+                standard_skill: String::new(),
             })
             .await
             .expect("create issue");

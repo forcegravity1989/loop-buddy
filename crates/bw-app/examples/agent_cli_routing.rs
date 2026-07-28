@@ -94,6 +94,7 @@ async fn run_one(
         title: format!("T6 · {label}"),
         desc: "agent_cli 路由 E2E 演示件".into(),
         priority: IssuePriority::Medium,
+        standard_skill: String::new(),
     })
     .await
     .expect("create issue");
