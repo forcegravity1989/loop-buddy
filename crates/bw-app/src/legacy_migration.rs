@@ -181,6 +181,23 @@ pub const TEMPLATE_PHASE_REFRESH_DONE_KEY: &str = "template_phase_refresh_v1";
 /// terms, independent of the other two flags.
 pub const WORKFLOW_SHELL_PURGE_DONE_KEY: &str = "workflow_shell_purge_v1";
 
+/// P2 (2026-07-27, `docs/superpowers/specs/2026-07-27-loopbuddy-aihot-integration-design.md`):
+/// the app_meta key marking "the one-time standard-issue-trio skill
+/// content refresh has run" — same independent-flag rationale
+/// [`TEMPLATE_PHASE_REFRESH_DONE_KEY`]'s doc comment already gives: this is
+/// a fourth, unrelated piece of business judgement (which `skill` rows are
+/// safe to have their `content` overwritten with the current
+/// `docs/skills/<slug>/SKILL.md` text), gated on its own key so a DB that
+/// has already run some subset of the other three passes — or none of them
+/// — can still pick this one up independently, on a real boot, exactly
+/// once. Unlike the other three passes this one never touches the DB file
+/// itself (no `backup_db_file` call) — it's a targeted `UPDATE` of a
+/// `content` column on at most three named rows, not a destructive
+/// delete/purge pass, so the dispatch handler runs it straight out of
+/// `Command::Boot` rather than threading a `db_path` through a dedicated
+/// `Command::MigrateLegacyShellsIfNeeded`-style call.
+pub const STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY: &str = "standard_skill_content_refresh_v1";
+
 /// T16.5: is `name` one of the five built-in stage templates
 /// (`bw_core::model::stage_template_workflow`'s real produced name, e.g.
 /// `「原型」标准工作流 · 原型师`)? Exact string match only — never a

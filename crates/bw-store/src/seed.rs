@@ -216,6 +216,23 @@ const STANDARD_ISSUE_SKILLS: &[StandardIssueSkill] = &[
     },
 ];
 
+/// (name, content) pairs for the three standard-issue-trio skills, straight
+/// off the same `STANDARD_ISSUE_SKILLS` table `seed_standard_issue_skills_if_missing`
+/// reads — exposed for `bw-app`'s one-time content-refresh backfill (P2,
+/// `docs/superpowers/specs/2026-07-27-loopbuddy-aihot-integration-design.md`):
+/// a by-name-idempotent seed only ever plants a fresh row, so an existing
+/// row on a pre-refresh database never picks up a later edit to
+/// `docs/skills/<slug>/SKILL.md` on its own — the caller diffs `content`
+/// against what's already in the DB and overwrites in place when they
+/// differ. Not used by the seed function itself; both simply read the same
+/// source-of-truth table.
+pub fn standard_issue_skill_contents() -> Vec<(&'static str, &'static str)> {
+    STANDARD_ISSUE_SKILLS
+        .iter()
+        .map(|s| (s.name, s.content))
+        .collect()
+}
+
 /// 按名幂等地种下标配 Issue 三件套的三个 Skill(竞品分析/找指标/绑数
 /// 据)——`name` 就是它们稳定可查的 slug,C8 票的标配 Issue 会按这个名字
 /// 关联注入。已存在(同名)就跳过,不覆盖——内容更新走 `UpdateSkill`,不

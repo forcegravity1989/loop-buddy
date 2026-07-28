@@ -3079,6 +3079,76 @@ impl App {
                 // `include_str!`-ed straight from docs/skills/<slug>/SKILL.md
                 // (the real file in the repo).
                 bw_store::seed_standard_issue_skills_if_missing(self.store.as_ref()).await?;
+                // P2 (2026-07-27, `docs/superpowers/specs/2026-07-27-loopbuddy-aihot-integration-design.md`):
+                // `seed_standard_issue_skills_if_missing` is by-name
+                // idempotent — it only ever plants a fresh row, never
+                // overwrites an existing one (that function's own doc
+                // comment: "内容更新走 UpdateSkill,不是重新 seed"). That
+                // means a later edit to `docs/skills/<slug>/SKILL.md` (e.g.
+                // this ticket's north-star-discovery hardening) only reaches
+                // brand-new databases — every existing database keeps the
+                // stale content forever unless something explicitly
+                // backfills it. One-time backfill, guarded so it runs at
+                // most once per database:
+                if self
+                    .store
+                    .get_app_meta(legacy_migration::STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY)
+                    .await?
+                    .as_deref()
+                    != Some("done")
+                {
+                    let existing_skills = self.store.list_skills().await?;
+                    for (name, content) in bw_store::standard_issue_skill_contents() {
+                        // Only ever touch the real official-library row —
+                        // a user's own self-built or distilled skill that
+                        // happens to share the name (however unlikely) is
+                        // never a candidate. Deliberately NOT
+                        // `Command::UpdateSkill`/`self.store.update_skill`
+                        // with `flip_to_self_built: true`: that flip rule
+                        // (T11, "编辑即脱离源头") exists for a *human*
+                        // diverging a skill from its official origin — this
+                        // is the opposite motion, the official origin
+                        // catching a row back up to itself, so `source`
+                        // must stay `Official { official_library:
+                        // "bw-standard" }` unchanged.
+                        let Some(existing) = existing_skills.iter().find(|s| {
+                            s.name == name
+                                && matches!(
+                                    &s.source,
+                                    HubSource::Official { official_library }
+                                        if official_library == "bw-standard"
+                                )
+                        }) else {
+                            continue;
+                        };
+                        if existing.content == content {
+                            continue;
+                        }
+                        // `uses` / `distilled_from_issue` / `origin_agent`
+                        // are derived lifecycle fields (skill-standards:
+                        // "永不手填") — `SkillEdit` has no fields for them at
+                        // all, so there is no way this call could touch
+                        // them even by accident.
+                        self.store
+                            .update_skill(
+                                existing.id,
+                                SkillEdit {
+                                    name: existing.name.clone(),
+                                    desc: existing.desc.clone(),
+                                    category: existing.category.clone(),
+                                    content: content.to_string(),
+                                    flip_to_self_built: false,
+                                },
+                            )
+                            .await?;
+                    }
+                    self.store
+                        .set_app_meta(
+                            legacy_migration::STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY,
+                            "done",
+                        )
+                        .await?;
+                }
                 // A4: backfill the per-stage "完成 Issue 数" metric for every
                 // project — pre-A4 projects gain it; already-seeded ones are
                 // unchanged (by-name idempotent).
