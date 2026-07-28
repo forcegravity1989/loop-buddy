@@ -1208,7 +1208,7 @@ impl App {
             .get_project(project)
             .await?
             .ok_or(AppError::NotFound)?;
-        let remote = proj.github_remote.trim().to_string();
+        let remote = proj.remote_path.trim().to_string();
         if remote.is_empty() {
             // 无仓项目:整段跳过,今天的行为逐字节不变。
             return Ok(());
@@ -2234,7 +2234,7 @@ impl App {
             .get_project(project_id)
             .await?
             .ok_or(AppError::NotFound)?;
-        let remote = proj.github_remote.trim();
+        let remote = proj.remote_path.trim();
         if remote.is_empty() {
             return Ok(());
         }
@@ -2305,7 +2305,7 @@ impl App {
             .get_project(project)
             .await?
             .ok_or(AppError::NotFound)?;
-        if proj.github_remote.trim().is_empty() {
+        if proj.remote_path.trim().is_empty() {
             return Ok(None);
         }
         const TRIO: [(&str, &str, &str); 3] = [
@@ -2450,7 +2450,7 @@ impl App {
             .get_project(project)
             .await?
             .ok_or(AppError::NotFound)?;
-        let remote = proj.github_remote.trim().to_string();
+        let remote = proj.remote_path.trim().to_string();
         let sigs = self.store.persisted_signals(project).await?;
         let today = now().date();
         let mut summary = MetricCollectSummary::default();
@@ -3093,7 +3093,7 @@ impl App {
         // behavior byte-for-byte. A branch-checkout failure degrades
         // honestly: the run proceeds on the current branch, no PR is
         // opened (提 PR 失败不炸 run).
-        let pr_eligible = !proj.github_remote.trim().is_empty()
+        let pr_eligible = !proj.remote_path.trim().is_empty()
             && issue.github_number != 0
             && !proj.workspace_path.trim().is_empty();
         let on_issue_branch = if pr_eligible {
@@ -3426,8 +3426,9 @@ impl App {
                                         let path = root.join(&slug).to_string_lossy().into_owned();
                                         self.store.set_workspace(id, &path, true).await?;
                                         self.store
-                                            .set_github_remote(
+                                            .set_remote(
                                                 id,
+                                                "github.com",
                                                 &format!("{}/{}", r.owner, r.repo),
                                             )
                                             .await?;
@@ -3524,8 +3525,9 @@ impl App {
                                         let path = dir.to_string_lossy().into_owned();
                                         self.store.set_workspace(id, &path, true).await?;
                                         self.store
-                                            .set_github_remote(
+                                            .set_remote(
                                                 id,
+                                                "github.com",
                                                 &format!("{}/{}", r.owner, r.repo),
                                             )
                                             .await?;
@@ -3624,7 +3626,7 @@ impl App {
                     .store
                     .get_project(id)
                     .await?
-                    .map(|pr| !pr.github_remote.trim().is_empty())
+                    .map(|pr| !pr.remote_path.trim().is_empty())
                     .unwrap_or(false);
                 if github_backed {
                     self.store
@@ -3936,7 +3938,7 @@ impl App {
                 // 仓里,落地时把 HEAD 一次推齐。失败软降级 toast,不倒灌
                 // 创建(github_remote 非空 ⇒ workspace 在 CreateProject 就
                 // 已绑定,直接用)。
-                if !proj.github_remote.trim().is_empty() && !proj.workspace_path.trim().is_empty() {
+                if !proj.remote_path.trim().is_empty() && !proj.workspace_path.trim().is_empty() {
                     // plan/14 C14: 落地推送同样是真实网络调用——Started 先
                     // 发,pending→ok/fail 配对到底。
                     let action_name = format!("{} · 落地推送", proj.name);
@@ -4073,8 +4075,8 @@ impl App {
                     }
                 }
 
-                // 3) 写 github_remote。
-                self.store.set_github_remote(p, &owner_repo).await?;
+                // 3) 写 remote_path / remote_host。
+                self.store.set_remote(p, "github.com", &owner_repo).await?;
 
                 // 4) 补建 github-repo connector —— 幂等:同项目已有同 kind
                 // 就不重复建(`CreateProject` 的另两条分支都建了它,绑定
@@ -5707,7 +5709,7 @@ impl App {
                     .get_project(issue.project_id)
                     .await?
                     .ok_or(AppError::NotFound)?;
-                let remote = proj.github_remote.trim().to_string();
+                let remote = proj.remote_path.trim().to_string();
                 if remote.is_empty() {
                     return Err(AppError::Invalid(format!(
                         "#{} 的项目未挂 GitHub 仓,无法 merge PR",

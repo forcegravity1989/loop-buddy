@@ -113,7 +113,8 @@ pub struct CreateVm {
     /// checkbox only renders when this is non-empty — a github_remote-empty
     /// project gets zero standard Issues at `CompleteCreation`, so a visible
     /// checkbox there would be dead UI.
-    pub github_remote: String,
+    pub remote_path: String,
+    pub remote_host: String,
 }
 
 #[derive(Clone, PartialEq)]
@@ -169,7 +170,8 @@ pub struct OpVm {
     pub allow_commands: bool,
     /// "owner/repo" — empty = this project isn't attached to GitHub (local-
     /// only workspace, or the GitHub attach attempt failed and soft-degraded).
-    pub github_remote: String,
+    pub remote_path: String,
+    pub remote_host: String,
     pub panel: Panel,
     pub scope: Scope,
     pub nav: Vec<StageNavItemVm>,
@@ -888,7 +890,8 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             ns_def: row.ns_def.clone(),
             leading: metrics.iter().filter(|m| m.leading).cloned().collect(),
             lagging: metrics.iter().filter(|m| !m.leading).cloned().collect(),
-            github_remote: row.github_remote.clone(),
+            remote_path: row.remote_path.clone(),
+            remote_host: row.remote_host.clone(),
         });
         return vm;
     }
@@ -1093,7 +1096,8 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         opportunity: row.opportunity.clone(),
         workspace_path: row.workspace_path.clone(),
         allow_commands: row.allow_commands,
-        github_remote: row.github_remote.clone(),
+        remote_path: row.remote_path.clone(),
+        remote_host: row.remote_host.clone(),
         panel: state.panel,
         scope: state.scope,
         nav: stage_nav(&stage_sigs, &session_flags),

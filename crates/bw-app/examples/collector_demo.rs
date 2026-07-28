@@ -179,7 +179,7 @@ async fn main() {
     .expect("create project");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let proj = store.get_project(project).await.unwrap().unwrap();
-    println!("  github_remote = {:?}", proj.github_remote);
+    println!("  github_remote = {:?}", proj.remote_path);
     println!("  workspace     = {:?}", proj.workspace_path);
 
     // ② SyncMetricsFile — write the sample metrics.toml into the real workspace.

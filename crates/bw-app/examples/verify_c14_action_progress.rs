@@ -337,12 +337,12 @@ async fn main() {
         "建仓失败后应软降级到本地兜底仓,workspace_path 不应为空"
     );
     assert!(
-        proj_fail_row.github_remote.trim().is_empty(),
+        proj_fail_row.remote_path.trim().is_empty(),
         "建仓失败的项目不应有 github_remote(本地兜底≠已挂 GitHub 仓)"
     );
     println!(
         "  ✓ 建仓失败项目本地兜底落地:workspace_path={:?} github_remote={:?}",
-        proj_fail_row.workspace_path, proj_fail_row.github_remote
+        proj_fail_row.workspace_path, proj_fail_row.remote_path
     );
 
     println!("\n✓ verify_c14_action_progress done — every Started really preceded its Ok/Fail, with a real elapsed gap.");

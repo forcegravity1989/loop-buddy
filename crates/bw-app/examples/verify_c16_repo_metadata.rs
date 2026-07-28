@@ -208,10 +208,22 @@ async fn main() {
     check(
         &mut all_ok,
         "老库存量行其余字段原样保留(不是新建的空行)",
-        old_row.name == "C16-老库存量项目" && old_row.github_remote == "testowner/pre-c16-repo",
+        old_row.name == "C16-老库存量项目" && old_row.remote_path == "testowner/pre-c16-repo",
         &format!(
-            "name={:?} github_remote={:?}",
-            old_row.name, old_row.github_remote
+            "name={:?} remote_path={:?}",
+            old_row.name, old_row.remote_path
+        ),
+    );
+    // codehub 对接(2026-07-28):老库 github_remote 改名成 remote_path 后,
+    // 值原样保留(改名迁移不丢数据);新加的 remote_host 对存量 github 行
+    // 回填 'github.com'(隐含 host 显式化)。
+    check(
+        &mut all_ok,
+        "github_remote 改名成 remote_path + remote_host 回填 github.com",
+        old_row.remote_path == "testowner/pre-c16-repo" && old_row.remote_host == "github.com",
+        &format!(
+            "remote_path={:?} remote_host={:?}",
+            old_row.remote_path, old_row.remote_host
         ),
     );
 

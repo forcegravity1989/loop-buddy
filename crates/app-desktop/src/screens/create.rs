@@ -1140,9 +1140,9 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
                 "每{cadence_chip_label(&cadence())}一次体检定时任务 · 人只在五个交棒点介入(原型→构建→优化→推广→运维→回流原型)"
             }
 
-            if !vm.github_remote.trim().is_empty() {
+            if !vm.remote_path.trim().is_empty() {
                 {
-                    let remote = vm.github_remote.clone();
+                    let remote = vm.remote_path.clone();
                     let (box_bg, box_bd, mark) = if run_first() {
                         ("#C5654A", "#C5654A", "✓")
                     } else {

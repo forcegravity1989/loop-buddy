@@ -154,7 +154,7 @@ async fn main() {
             .unwrap_or_else(|e| panic!("删除本地仓 connector 失败:{e}"));
     }
     store
-        .set_github_remote(keep_id, GITHUB_REMOTE)
+        .set_remote(keep_id, "github.com", GITHUB_REMOTE)
         .await
         .expect("record the real public repo");
     println!("\n── 代码仓 ──");
@@ -233,10 +233,10 @@ async fn readback(db: &str) {
             "    ·{} · issue={} · github_remote={} · workspace_path={}",
             p.name,
             issues.len(),
-            if p.github_remote.trim().is_empty() {
+            if p.remote_path.trim().is_empty() {
                 "(空)"
             } else {
-                &p.github_remote
+                &p.remote_path
             },
             if p.workspace_path.trim().is_empty() {
                 "(空 · 待克隆)"

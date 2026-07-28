@@ -758,10 +758,10 @@ fn IssuesPanel(op: OpVm) -> Element {
                                         if i.github_number != 0 {
                                             div {
                                                 style: "font-size:10.5px;color:{ink3};font-family:{mono};margin-top:1px;",
-                                                if op.github_remote.trim().is_empty() {
+                                                if op.remote_path.trim().is_empty() {
                                                     "GitHub #{i.github_number}"
                                                 } else {
-                                                    "https://github.com/{op.github_remote}/issues/{i.github_number}"
+                                                    "https://github.com/{op.remote_path}/issues/{i.github_number}"
                                                 }
                                             }
                                         }
@@ -1180,7 +1180,7 @@ fn EditProjectCard(op: OpVm) -> Element {
     let mut ns_value = use_signal(|| op.north_star.clone());
     let mut ns_def = use_signal(|| op.ns_def.clone());
 
-    let has_repo = !op.github_remote.trim().is_empty();
+    let has_repo = !op.remote_path.trim().is_empty();
     let can_save = !name().trim().is_empty();
     let opacity = if can_save { "1" } else { ".45" };
 
@@ -1419,10 +1419,10 @@ fn WorkspaceConfig(op: OpVm) -> Element {
                         style: "font-family:{mono};font-size:12.5px;color:{ink2};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
                         "{op.workspace_path}"
                     }
-                    if !op.github_remote.trim().is_empty() {
+                    if !op.remote_path.trim().is_empty() {
                         span {
                             style: "font-size:11px;color:{ink3};flex:none;",
-                            "GitHub · {op.github_remote}"
+                            "GitHub · {op.remote_path}"
                         }
                     }
                     span { style: "font-size:11px;color:{ink3};flex:none;", "{permission_label}" }
@@ -1607,7 +1607,7 @@ fn ProgressAll(op: OpVm) -> Element {
         }
         EditProjectCard { op: op.clone() }
         WorkspaceConfig { op: op.clone() }
-        if op.github_remote.trim().is_empty() {
+        if op.remote_path.trim().is_empty() {
             AttachRepoCard { op: op.clone() }
         }
         div {

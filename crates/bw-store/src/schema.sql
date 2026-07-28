@@ -29,9 +29,14 @@ CREATE TABLE IF NOT EXISTS project (
     opportunity        TEXT NOT NULL DEFAULT '', -- 机会缺口/三月成功标准(创建流程真输入)
     workspace_path     TEXT NOT NULL DEFAULT '', -- 真执行器目标目录;空=未配置,只跑 Mock
     allow_commands     INTEGER NOT NULL DEFAULT 0, -- 真执行器是否额外放行 Bash(不只编辑文件)
-    github_remote      TEXT NOT NULL DEFAULT '', -- "owner/repo";空=未挂 GitHub(本地仓或还没建)
-    -- C16(plan/14 规范条 4):仓平台选择器的选中值。今天唯一可选 'github'
-    -- (GitLab/Gitcode 灰置「未接」,选不了)——字段先落好语义,第二个平台真
+    -- 远端身份二元组 (host, path),对所有 provider 均匀对称(不是 github
+    -- 不需要 host,是当时把 github.com 隐式默认了、漏存一列)。github 存
+    -- path="owner/repo" + host="github.com";codehub 存 path="org/repo" +
+    -- host=<域名,绿/黄/内源>。空 path = 未挂远端(本地仓或还没建)。
+    remote_path        TEXT NOT NULL DEFAULT '', -- "owner/repo"(github)或 "org/repo"(codehub)
+    remote_host        TEXT NOT NULL DEFAULT 'github.com', -- 远端 API host;github="github.com"
+    -- C16(plan/14 规范条 4):仓平台选择器的选中值。'github' | 'codehub'
+    -- (GitLab/Gitcode 灰置「未接」,选不了)——字段语义先落好,新平台真
     -- 接时无需再改表结构。
     provider           TEXT NOT NULL DEFAULT 'github',
     -- C6(plan/13 D5+D6):北极星的采集方案(kind+query),来自 `.bw/metrics.toml`

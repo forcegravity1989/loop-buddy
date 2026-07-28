@@ -182,7 +182,7 @@ async fn main() {
         let proj = store.get_project(id).await.unwrap().unwrap();
         println!(
             "✓ coldstart fixture ready: name={name:?} phase={:?} github_remote={:?}",
-            proj.phase, proj.github_remote
+            proj.phase, proj.remote_path
         );
         return;
     }

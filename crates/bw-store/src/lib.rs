@@ -428,9 +428,12 @@ pub struct ProjectRow {
     /// Whether the real executor may also run shell commands (Bash), not
     /// just edit files. Meaningless while `workspace_path` is empty.
     pub allow_commands: bool,
-    /// "owner/repo" — empty = not attached to GitHub (local-only workspace,
-    /// or GitHub attach failed and soft-degraded). Set once, at creation.
-    pub github_remote: String,
+    /// 远端身份二元组 (host, path),所有 provider 均匀对称(不是 github
+    /// 不需要 host,是当时把 github.com 隐式默认了、漏存一列)。github:
+    /// path="owner/repo" + host="github.com";codehub: path="org/repo" +
+    /// host=<域名>。空 path = 未挂远端(本地仓或接入失败)。Set once, at creation.
+    pub remote_path: String,
+    pub remote_host: String,
     /// C16(plan/14 规范条 4): 仓平台选择器的选中值(`"github"` 今天唯一可能
     /// 的取值)。老库开出来的存量行经 `add_column_if_missing` 默认 `'github'`
     /// ——和"这仓当时就是接 GitHub 建的"这个真实状态一致(pre-C16 没有别的
@@ -585,10 +588,13 @@ pub trait Store: Send + Sync {
     /// shell commands. Empty `path` clears configuration (reverts to
     /// Mock-only). Does not touch any signal or observation.
     async fn set_workspace(&self, id: ProjectId, path: &str, allow_commands: bool) -> Result<()>;
-    /// Record the GitHub remote a project's workspace was created from or
-    /// adopted from ("owner/repo"). Called once, right after a successful
-    /// `bw_engine::github::create_repo`/`clone_repo` — never touched again.
-    async fn set_github_remote(&self, id: ProjectId, github_remote: &str) -> Result<()>;
+    /// Record the remote identity a project's workspace was created from or
+    /// adopted from — uniform `(host, path)` for every provider. github calls
+    /// with host="github.com" + path="owner/repo"; codehub with its domain +
+    /// "org/repo". Called once, right after a successful
+    /// `bw_engine::github::create_repo`/`clone_repo` (or the codehub analog)
+    /// — never touched again.
+    async fn set_remote(&self, id: ProjectId, host: &str, path: &str) -> Result<()>;
 
     async fn upsert_metric(&self, m: NewMetric) -> Result<()>;
     /// C6 (plan/13 D5+D6): atomically sync `.bw/metrics.toml`'s definitions
