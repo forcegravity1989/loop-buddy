@@ -29,6 +29,7 @@
 //! ```
 
 use bw_app::{App, Command, Event};
+use bw_core::model::CONNECTOR_KIND_GIT_REPO;
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{SqliteStore, Store};
 use std::sync::Arc;
@@ -127,6 +128,31 @@ async fn main() {
     })
     .await
     .expect("clear the origin machine's local workspace path");
+    // 紧跟着清 workspace_path:同一个漏洞的第二半。样板间的诚实状态是
+    // "有仓、还没克隆到本地"——既然没有本地工作区,就不该留一条"本地代码仓"
+    // connector。留着它(config 是原作者机器上的绝对路径,例如
+    // `/Users/gravity/Library/Application Support/BuildersWorkbench/workspaces/
+    // aihot-b7971eca`)和留一个别人机器上不存在的 workspace_path 是同一类问题,
+    // 只是更安静——UI 上没人会看见这条路径,但 `sqlite3` 一读就穿帮。
+    // `github-repo` connector(`config = owner/repo`)不碰:它在任何机器上都
+    // 成立,必须保留。
+    //
+    // 这一刀没有放进上面的 `Command::SetWorkspace("")`:那是"临时清空工作区"
+    // 这个看起来无害的产品动作,给它加上"顺带删 connector 及其 last_sync 历史"
+    // 的副作用会是静默的、意料之外的。样板间发布前的擦除是裁剪刀自己的有意
+    // 动作(与本文件末尾的 `VACUUM` 同类),该留在裁剪刀里,不该混进产品命令
+    // 的语义。
+    let connectors = store.list_connectors().await.expect("list_connectors");
+    for c in connectors
+        .iter()
+        .filter(|c| c.project_id == Some(keep_id) && c.kind == CONNECTOR_KIND_GIT_REPO)
+    {
+        println!("  删除本地仓 connector:{}(config={})", c.name, c.config);
+        store
+            .delete_connector(c.id)
+            .await
+            .unwrap_or_else(|e| panic!("删除本地仓 connector 失败:{e}"));
+    }
     store
         .set_github_remote(keep_id, GITHUB_REMOTE)
         .await

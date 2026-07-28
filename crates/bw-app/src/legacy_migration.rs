@@ -181,6 +181,22 @@ pub const TEMPLATE_PHASE_REFRESH_DONE_KEY: &str = "template_phase_refresh_v1";
 /// terms, independent of the other two flags.
 pub const WORKFLOW_SHELL_PURGE_DONE_KEY: &str = "workflow_shell_purge_v1";
 
+// P2 (2026-07-27) originally added a `STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY`
+// app_meta guard here (`"standard_skill_content_refresh_v1"`) so the
+// standard-issue-trio skill content refresh in `Command::Boot` ran at most
+// once per database. P8 (2026-07-28) removed the guard and the constant:
+// gating this refresh behind a one-shot flag meant every future edit to one
+// of the three `docs/skills/<slug>/SKILL.md` files would need its own new
+// guard key (`_v2`, `_v3`, …) to ever reach an existing database — a
+// treadmill. The refresh is now unconditional on every `Boot` (see that
+// handler's own comment in `lib.rs` for the full rationale: an `Official
+// { official_library: "bw-standard" }` skill row is *by definition* stale
+// the moment its content differs from the compiled-in source, so there is
+// nothing to gate). Any database that ran P2 before this change still has a
+// stray `app_meta` row with this key — harmless, intentionally left in
+// place rather than migrated away (no destructive DELETE for a row nothing
+// reads anymore), a historical trace only.
+
 /// T16.5: is `name` one of the five built-in stage templates
 /// (`bw_core::model::stage_template_workflow`'s real produced name, e.g.
 /// `「原型」标准工作流 · 原型师`)? Exact string match only — never a

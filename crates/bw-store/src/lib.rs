@@ -37,6 +37,7 @@ pub use sqlite::SqliteStore;
 pub mod seed;
 pub use seed::{
     seed_hub_if_empty, seed_stage_entities_if_missing, seed_standard_issue_skills_if_missing,
+    standard_issue_skill_contents,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -564,6 +565,19 @@ pub trait Store: Send + Sync {
     async fn delete_project(&self, id: ProjectId) -> Result<()>;
     async fn set_project_phase(&self, id: ProjectId, phase: Readiness) -> Result<()>;
     async fn set_project_cycle(&self, id: ProjectId, cycle: MaturityPeriod) -> Result<()>;
+    /// P9: `name`/`kind`/`descr` — the three identity fields `create_project`
+    /// writes once and, until this method existed, nothing ever touched
+    /// again (a typo'd name was permanently stuck short of deleting the
+    /// whole project, which also takes every Issue/run/artifact with it).
+    /// Same one-UPDATE-one-`rev`-bump shape as `set_brief`. Caller (bw-app)
+    /// owns validation — this method writes whatever it's given.
+    async fn set_project_identity(
+        &self,
+        id: ProjectId,
+        name: &str,
+        kind: &str,
+        descr: &str,
+    ) -> Result<()>;
     async fn set_north_star(&self, id: ProjectId, north_star: &str, ns_def: &str) -> Result<()>;
     /// 对标竞品 + 机会缺口/三月成功标准 (creation-flow real inputs).
     async fn set_brief(&self, id: ProjectId, benchmark: &str, opportunity: &str) -> Result<()>;
@@ -879,6 +893,13 @@ pub trait Store: Send + Sync {
         status: ConnectorStatus,
         last_sync: &str,
     ) -> Result<()>;
+    /// Delete one connector row by id. `delete_project` already deletes
+    /// connectors in bulk by `project_id` as part of tearing down a whole
+    /// project; this is the single-row primitive for the narrower case —
+    /// removing one connector without touching the project it belongs to
+    /// (e.g. the aihot fixture cutter dropping a stale `git-repo` connector
+    /// while keeping the project and its `github-repo` connector intact).
+    async fn delete_connector(&self, id: ConnectorId) -> Result<()>;
 
     async fn create_knowledge_source(&self, k: NewKnowledgeSource) -> Result<()>;
     async fn list_knowledge_sources(&self) -> Result<Vec<KnowledgeSource>>;

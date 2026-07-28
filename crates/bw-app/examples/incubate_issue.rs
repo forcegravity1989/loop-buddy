@@ -123,6 +123,7 @@ async fn main() {
                 title,
                 desc,
                 priority: IssuePriority::Medium,
+                standard_skill: String::new(),
             })
             .await
             .expect("create issue");

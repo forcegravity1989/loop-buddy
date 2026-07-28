@@ -30,6 +30,7 @@ async fn mk(
         title: title.into(),
         desc: String::new(),
         priority: prio,
+        standard_skill: String::new(),
     })
     .await
     .unwrap();

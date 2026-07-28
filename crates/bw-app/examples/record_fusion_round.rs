@@ -145,6 +145,7 @@ async fn main() {
             title: w.title.into(),
             desc: w.desc.into(),
             priority: w.priority,
+            standard_skill: String::new(),
         })
         .await
         .unwrap();

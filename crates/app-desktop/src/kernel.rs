@@ -148,11 +148,21 @@ pub struct OpVm {
     pub id: bw_core::ProjectId,
     pub name: String,
     pub kind: String,
+    /// P9: one-line project description (`project.descr`) — was written once
+    /// at `CreateProject` and never surfaced back to the operating view;
+    /// needed so the「编辑项目」card can show + edit it.
+    pub desc: String,
     pub project_signal: Signal,
     pub cycle: MaturityPeriod,
     pub active_stage: StageKind,
     pub north_star: String,
     pub ns_def: String,
+    /// P9: 对标竞品 / 机会缺口 —— real creation-flow inputs, editable via
+    /// `Command::UpdateBrief`. Surfaced here so 「编辑项目」 has something to
+    /// show/edit outside the creation flow (previously only reachable from
+    /// `create.rs`, unreachable post-creation).
+    pub benchmark: String,
+    pub opportunity: String,
     /// Real-executor target directory. Empty = unconfigured — this project
     /// only ever runs `RunWorkflow` on `MockExecutor`.
     pub workspace_path: String,
@@ -1073,11 +1083,14 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         id: pid,
         name: row.name.clone(),
         kind: row.kind.clone(),
+        desc: row.desc.clone(),
         project_signal: ui::vm::resolved(sigs.project),
         cycle: row.cycle,
         active_stage: row.active_stage,
         north_star: row.north_star.clone(),
         ns_def: row.ns_def.clone(),
+        benchmark: row.benchmark.clone(),
+        opportunity: row.opportunity.clone(),
         workspace_path: row.workspace_path.clone(),
         allow_commands: row.allow_commands,
         github_remote: row.github_remote.clone(),

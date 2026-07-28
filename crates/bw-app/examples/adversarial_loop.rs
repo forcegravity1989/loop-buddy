@@ -79,6 +79,7 @@ async fn make_build_issue(app: &mut App, title: &str) -> IssueId {
         title: title.into(),
         desc: "T9 对抗循环 E2E 演示件".into(),
         priority: IssuePriority::Medium,
+        standard_skill: String::new(),
     })
     .await
     .expect("create issue");

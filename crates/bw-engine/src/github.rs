@@ -148,6 +148,128 @@ pub async fn probe_repo(owner_repo: &str) -> Result<String, GithubError> {
     Ok(format!("{name} · {vis} · 最近推送 {pushed}"))
 }
 
+// ─────────────── P1 · 存量项目接仓 (loop-buddy↔aihot 接线 spec) ───────────────
+//
+// `Command::AttachRepo` 给「绑定本地目录」建的项目补上 GitHub 远端。这里只管
+// 本地 `origin` 这一侧的真实读写;探活(`probe_repo`)、写 `github_remote`、
+// 补 connector 都是 bw-app 的编排职责,不下沉到这层。
+
+/// 读一个工作区的 `origin` 远端 URL。`Ok(None)` = 没配 `origin`(绑定本地
+/// 目录建的项目的常态——`git remote get-url origin` 以非零退出,这不是
+/// bug);其余 git 失败照实报错,这是一次真读,不吞错误。
+pub async fn origin_remote_url(workspace: &Path) -> Result<Option<String>, GithubError> {
+    let output = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(["remote", "get-url", "origin"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        // "fatal: No such remote 'origin'" — 没配远端,不是错误。
+        return Ok(None);
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(if url.is_empty() { None } else { Some(url) })
+}
+
+/// 一个已存在的 `origin` URL 是否已经指向 `owner/repo`?兼容 `gh repo
+/// create/clone` 常写的 SSH(`git@github.com:owner/repo.git`)与 HTTPS
+/// (`https://github.com/owner/repo[.git]`)两种写法,归一化后比较,免得
+/// 同一个仓因协议不同被误判成「不符」。
+pub fn remote_matches(url: &str, owner: &str, repo: &str) -> bool {
+    let normalized = url
+        .trim()
+        .trim_end_matches(".git")
+        .replace("git@github.com:", "github.com/")
+        .replace("ssh://git@github.com/", "github.com/")
+        .replace("https://github.com/", "github.com/")
+        .replace("http://github.com/", "github.com/");
+    normalized.eq_ignore_ascii_case(&format!("github.com/{owner}/{repo}"))
+}
+
+/// 结果:接线时给本地工作区新加了 `origin`,还是它本来就已经指对了仓。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteReconcile {
+    Added,
+    AlreadyMatched,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RemoteReconcileError {
+    /// 工作区已有 `origin`,但指向别的仓——**绝不覆盖**用户的 git 配置,
+    /// 如实报错让人自己决定。
+    #[error("工作区已有 origin({existing}),与目标仓 {owner}/{repo} 不符,拒绝覆盖")]
+    Mismatch {
+        existing: String,
+        owner: String,
+        repo: String,
+    },
+    #[error(transparent)]
+    Github(#[from] GithubError),
+}
+
+/// P1 核心动作:给一个此前没有 `origin`(或 `origin` 已经指对)的工作区接上
+/// `owner/repo`。空 → 真的 `git remote add`;已指对 → no-op 视为就绪;指向
+/// 别的仓 → `Mismatch`,调用方据此中止,不静默改写。
+pub async fn reconcile_local_remote(
+    workspace: &Path,
+    owner: &str,
+    repo: &str,
+) -> Result<RemoteReconcile, RemoteReconcileError> {
+    match origin_remote_url(workspace).await? {
+        None => {
+            git_in(
+                workspace,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    &format!("git@github.com:{owner}/{repo}.git"),
+                ],
+            )
+            .await
+            .map_err(|e| git_err("添加 origin 失败", e))?;
+            Ok(RemoteReconcile::Added)
+        }
+        Some(url) if remote_matches(&url, owner, repo) => Ok(RemoteReconcile::AlreadyMatched),
+        Some(existing) => Err(RemoteReconcileError::Mismatch {
+            existing,
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+        }),
+    }
+}
+
+/// 当前检出的分支名(`git branch --show-current`)——detached HEAD 时为空,
+/// 调用方把「空」当成「没有可推的分支」处理,不是硬错误、更不会瞎编一个
+/// 分支名去推。
+pub async fn current_branch(workspace: &Path) -> Result<String, GithubError> {
+    let output = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(["branch", "--show-current"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// `push_local=true` 路径:把当前分支推到 `origin` 并建立 tracking
+/// (`git push -u origin <branch>`)。
+pub async fn push_current_branch(workspace: &Path, branch: &str) -> Result<(), GithubError> {
+    git_in(workspace, &["push", "-u", "origin", branch])
+        .await
+        .map_err(|e| git_err("推送失败", e))
+}
+
 /// merge 后把本地工作区收拢回默认分支(plan/13 D5:merge 后同步指标正本
 /// 需要读到 merge 进主干的 `.bw/metrics.toml`,而 run 结束后工作区还停在
 /// `bw/issue-N` 活分支上)。fetch → 解析 origin/HEAD(拿不到就依次试
@@ -307,6 +429,29 @@ pub async fn checkout_issue_branch(
     Ok(branch)
 }
 
+/// P7-7A: distinguishes a brand-new PR from one `open_pr` merely *adopted*
+/// because the executor already opened it itself (executors are allowed
+/// `gh pr create` — only `gh pr merge` is disallowed,`claude_cli.rs`'s
+/// `--disallowedTools`). Both carry a **real, read-back** PR number — the
+/// `Adopted` case is never guessed or constructed, it comes from a fresh
+/// `gh pr view` on the branch. Callers that don't care about the distinction
+/// can match `Created(n) | Adopted(n) => n`; `run_issue_now` uses it to emit
+/// an honest toast ("已提 PR" vs "已认领队友提的 PR") instead of blurring the
+/// two into one message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrOpened {
+    Created(u32),
+    Adopted(u32),
+}
+
+impl PrOpened {
+    pub fn number(self) -> u32 {
+        match self {
+            PrOpened::Created(n) | PrOpened::Adopted(n) => n,
+        }
+    }
+}
+
 /// 提 PR (plan/13 D3): commit whatever the run produced on the Issue branch,
 /// push it, and open a pull request whose body carries `Closes #<github_number>`
 /// so a later human merge auto-closes the Issue — one action验收. Returns the
@@ -314,11 +459,23 @@ pub async fn checkout_issue_branch(
 /// `create_issue`). Every step is fallible and the caller treats any failure as
 /// "提 PR 失败不炸 run": the run's own accounting stands, `pr_number` stays 0,
 /// the Issue is retryable. **Never merges** — this only opens the PR.
+///
+/// P7-7A (真实践行暴露的缺口): an executor is allowed to run `gh pr create`
+/// itself (only `gh pr merge` is denied) — a teammate that does this before
+/// BW calls `open_pr` leaves `gh pr create` here failing with "a pull request
+/// ... already exists". That failure is not a real error, it's **提 PR 幂
+/// 等**: the PR the run needed already exists, just opened by someone else.
+/// Only that one failure shape is adopted — anything else (no permission, no
+/// network, branch never pushed, …) still returns `Err` unchanged; this must
+/// never turn into "swallow every failure and pretend success" (that would be
+/// fabricating success, the thing this whole codebase refuses to do). The
+/// adopted number is **read back for real** via `gh pr view <branch>`, never
+/// parsed out of the error text and never guessed.
 pub async fn open_pr(
     workspace: &Path,
     github_number: u32,
     title: &str,
-) -> Result<u32, GithubError> {
+) -> Result<PrOpened, GithubError> {
     let branch = issue_branch(github_number);
     // Stage + commit the run's edits. The executor may have left a dirty tree
     // (the common `acceptEdits` case) or committed itself; either way this
@@ -381,13 +538,54 @@ pub async fn open_pr(
         .await
         .map_err(spawn_err)?;
     if !output.status.success() {
-        return Err(GithubError::Command(stderr_text(&output)));
+        let stderr = stderr_text(&output);
+        // 只认领这一种失败形状:gh 的措辞在 2.x 上稳定为
+        // `a pull request for branch "<head>" into branch "<base>" already
+        // exists:`(gh 不做本地化,英文文案是唯一形态)。命中就说明 PR 真的
+        // 已经存在——多半是执行器自己在 run 里跑了 `gh pr create`(允许:
+        // 禁的只有 `gh pr merge`)。任何其它失败(无权限/网络/分支没推……)
+        // 原样 `Err`,绝不吞掉当"提 PR 幂等"处理。
+        if stderr.contains("already exists") {
+            match adopt_existing_pr(workspace, &branch).await {
+                Ok(pr) => return Ok(PrOpened::Adopted(pr)),
+                // 读回也失败(罕见的竞态/权限边缘情况)——如实把原始
+                // create 失败信息交回,不假装认领成功。
+                Err(_) => return Err(GithubError::Command(stderr)),
+            }
+        }
+        return Err(GithubError::Command(stderr));
     }
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
     url.rsplit('/')
         .next()
         .and_then(|s| s.parse::<u32>().ok())
+        .map(PrOpened::Created)
         .ok_or_else(|| GithubError::Command(format!("无法从 gh 输出解析 PR 号:{url:?}")))
+}
+
+/// P7-7A helper: read back the **real** PR number already open on `branch` —
+/// called only from `open_pr`'s "already exists" adoption path. `gh pr view
+/// <branch>` resolves the repo from `workspace`'s origin remote, same as the
+/// `gh pr create` call that just failed, so this asks the same repo the same
+/// question `gh` itself just answered in its error message — but by an
+/// independent read, not by parsing that error text.
+async fn adopt_existing_pr(workspace: &Path, branch: &str) -> Result<u32, GithubError> {
+    let output = tokio::process::Command::new("gh")
+        .current_dir(workspace)
+        .args(["pr", "view", branch, "--json", "number", "--jq", ".number"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| GithubError::Command("认领已存在 PR 时读回号码失败".to_string()))
 }
 
 /// 查 PR 状态 (plan/13 D3; C7 之前本票自用): `gh pr view --json state` → the
@@ -450,6 +648,56 @@ pub async fn issue_state(owner_repo: &str, github_number: u32) -> Result<String,
         ".state",
     ])
     .await
+}
+
+/// P7-7B (plan/13 用户故事 22, D22): read-only probe for whether an Issue's
+/// deterministic work branch (`issue_branch`) currently has an OPEN PR
+/// against it — `RefreshIssues`' GitHub drift collector uses this to catch a
+/// PR a teammate opened on their own (executors are allowed `gh pr create`;
+/// only `gh pr merge` is disallowed) without BW ever calling `open_pr` for
+/// it. Addressed purely via `--repo`, unlike `open_pr`/`adopt_existing_pr`
+/// which run from inside a checked-out workspace — this never touches the
+/// local git state, so it's safe to call for an issue whose branch the
+/// caller hasn't (and may never) check out. `Ok(None)` = no open PR for that
+/// branch — the honest "nothing to review yet" answer, not an error.
+pub async fn open_pr_for_branch(
+    owner_repo: &str,
+    head_branch: &str,
+) -> Result<Option<u32>, GithubError> {
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--repo",
+            owner_repo,
+            "--head",
+            head_branch,
+            "--state",
+            "open",
+            "--json",
+            "number",
+            "--jq",
+            // `// empty` (jq idiom) prints nothing at all when there's no
+            // open PR, instead of the literal text "null" — collapses
+            // cleanly to `Ok(None)` below without a separate null check.
+            ".[0].number // empty",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    text.parse::<u32>()
+        .map(Some)
+        .map_err(|_| GithubError::Command(format!("无法解析 PR 号:{text:?}")))
 }
 
 /// Idempotent补关: close the GitHub issue directly. Only called after a merge

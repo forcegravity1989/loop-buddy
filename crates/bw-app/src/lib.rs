@@ -141,6 +141,24 @@ pub enum Command {
         value: String,
         def: String,
     },
+    /// P9(项目编辑缺口): `name`/`kind`/`descr` — the three fields
+    /// `CreateProject` writes once and, before this command existed, had no
+    /// setter anywhere in `bw-store`, so a typo'd name was permanently
+    /// stuck (only `DeleteProject` could touch it, and that takes every
+    /// Issue/run/artifact with it). Same duplicate-name policy as
+    /// `CreateProject`: names aren't unique in this product (no `UNIQUE`
+    /// constraint, no dedup check at either the command or UI layer), so
+    /// renaming to a name that collides with another project is allowed —
+    /// rejecting it here would be a stricter bar than creation itself.
+    /// `name` is still required non-empty (creation's UI-only `can_send`
+    /// gate, enforced here for real since a UI button being disabled is not
+    /// a guard). Writes through `self.active()`, same as `UpdateBrief`/
+    /// `SetCycle`/`UpdateNorthStar`.
+    UpdateProjectIdentity {
+        name: String,
+        kind: String,
+        descr: String,
+    },
     /// Record a metric + its current value as an append-only Manual observation
     /// (creation-flow review, or later while operating a stage). Signal is
     /// derived, never set here.
@@ -220,6 +238,19 @@ pub enum Command {
     SetWorkspace {
         path: String,
         allow_commands: bool,
+    },
+    /// P1(loop-buddy↔aihot 接线 spec):给一个**存量**项目补上 GitHub 远端
+    /// —— `CreateProject` 的「绑定本地目录」分支([lib.rs:3121] 附近)只
+    /// `set_workspace`,从不写 `github_remote`,产品里此前没有补救入口。
+    /// 对活跃项目生效(`self.active()`)。`gh repo view` 先探活,探不到就
+    /// 如实报错、一个字节不写库;探到之后依次写 `github_remote`、补建
+    /// (幂等)`github-repo` connector、再接线本地工作区的 `origin`(工作区
+    /// 已有 remote 且不符目标 → 拒绝覆盖,不静默改写用户的 git 配置)。
+    /// `push_local=true` 时额外推当前分支。
+    AttachRepo {
+        owner: String,
+        repo: String,
+        push_local: bool,
     },
     /// Replace the process-wide `ClaudeCliConfig` outright (Settings hub).
     /// In-memory only — same persistence tier it already had (env-var-seeded
@@ -686,12 +717,24 @@ pub enum Command {
     },
     /// Create a new issue in the active project (defaults to `Backlog`,
     /// auto-assigned per-project number). Scoped to the given stage.
+    ///
+    /// P3 (loop-buddy↔aihot spec): `standard_skill` names a skill-library
+    /// slug to carry on the issue from the moment it's created — the same
+    /// field `seed_standard_issue_trio` sets for the three creation-flow
+    /// standard cards, now reachable from this manual entry too (the
+    /// op-panel create strip; `autopilot_fire`'s cron-minted issues still
+    /// call `store.create_issue` directly and are untouched by this field).
+    /// Empty (every pre-existing call site) means "no method chosen",
+    /// byte-identical to today's behavior. Resolution is honest-by-name at
+    /// run time via `standard_skill_block` — an unknown or content-less
+    /// slug never fails issue creation, it just injects nothing.
     CreateIssue {
         id: IssueId,
         stage: StageKind,
         title: String,
         desc: String,
         priority: IssuePriority,
+        standard_skill: String,
     },
     /// Move an issue to a new kanban status (the kanban lifecycle transition).
     TransitionIssue {
@@ -722,8 +765,13 @@ pub enum Command {
         id: IssueId,
         reason: String,
     },
-    /// Reload the active project's issues from the store (mirrors
-    /// `RefreshHubs` for the hub library, but project-scoped).
+    /// P7-7B (plan/13 D22): for a repo-attached project, first pulls real
+    /// GitHub state (open PRs / issue state) for its mapped, unsettled
+    /// Issues and backfills `pr_number` / derives `InReview` — **read-only**,
+    /// never rewrites GitHub, never reaches `Done` — then reloads from the
+    /// store (mirrors `RefreshHubs` for the hub library, but project-scoped).
+    /// No active project / no `github_remote` ⇒ the GitHub step is skipped
+    /// and this is the same bare local reload it always was.
     RefreshIssues,
     SendSessionMessage {
         session: SessionId,
@@ -1123,6 +1171,107 @@ impl App {
                 self.state.issues = self.store.list_issues(p, None, None).await?;
             }
             None => self.state.issues.clear(),
+        }
+        Ok(())
+    }
+
+    /// P7-7B(plan/13 用户故事 22, D22 「BW 与 GitHub 永不打架」): `RefreshIssues`
+    /// used to be a bare local reload — it never looked at GitHub, so a PR a
+    /// teammate opened on its own (executors may run `gh pr create`; only
+    /// `gh pr merge` is disallowed) was invisible to BW and `MergeIssuePr`'s
+    /// two guards (`pr_number == 0` / `status != InReview`) blocked the
+    /// human's only accounting-safe merge path. This pulls real GitHub state
+    /// for the project's repo-mapped Issues and backfills it — **read-only**:
+    /// it never calls a GitHub write endpoint, never reopens/closes anything,
+    /// and never rewrites what a human did on github.com (D22: 漂移只采集、
+    /// 只展示,不反向改写). It also never reaches `Done` — that edge stays
+    /// exclusively a human `MergeIssuePr`/`TransitionIssue`; this collector's
+    /// only write is a `pr_number` backfill plus, at most, one push to
+    /// `InReview` (D3: 评审中由存在开放 PR 派生).
+    ///
+    /// 采集范围(性能口径,如实写清楚,不是"少采装作采全"): 只查
+    /// `github_number != 0 && settled_at.is_none()` 的 Issue —— 未映射到
+    /// GitHub 的 Issue 没有可采的远端状态,已 settle(Done/Cancelled 走过
+    /// 结算)的 Issue 无论采到什么都不会再改变任何东西,采了也是白跑
+    /// `gh`。这不是采样,是这个命令定义下的**全部**有意义范围;项目里
+    /// 未结算的挂仓 Issue 再多,也是逐个真实查询,不做上限截断。
+    ///
+    /// 每张候选 Issue 最多打两次 `gh`:先查活分支(`issue_branch`)是否有
+    /// 开放 PR(`open_pr_for_branch`,`--repo` 寻址,不碰本地工作区);只有
+    /// 「查到开放 PR 且当前是 InProgress」这一条真分支才会再查一次
+    /// `issue_state` 来确认 GitHub 侧的 issue 本身仍是 OPEN(不是被绕过 BW
+    /// 直接在网页关闭/wontfix)——这一步只在真要做转移判断时才发生,不对
+    /// 每张 Issue 都白打第二枪。
+    async fn collect_github_issue_drift(&mut self, project: ProjectId) -> Result<(), AppError> {
+        let proj = self
+            .store
+            .get_project(project)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let remote = proj.github_remote.trim().to_string();
+        if remote.is_empty() {
+            // 无仓项目:整段跳过,今天的行为逐字节不变。
+            return Ok(());
+        }
+        let candidates: Vec<_> = self
+            .store
+            .list_issues(project, None, None)
+            .await?
+            .into_iter()
+            .filter(|i| i.github_number != 0 && i.settled_at.is_none())
+            .collect();
+        for issue in candidates {
+            let branch = bw_engine::github::issue_branch(issue.github_number);
+            let open_pr = match bw_engine::github::open_pr_for_branch(&remote, &branch).await {
+                Ok(v) => v,
+                Err(e) => {
+                    // gh 调用失败 = 如实降级:该 issue 保持原状,诚实 toast,
+                    // 不阻断这一轮其它 issue 的采集(同 sync_issue_to_github
+                    // 的软降级口径)。
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("#{} · GitHub 采集", issue.number),
+                        ok: false,
+                        detail: format!("查活分支 PR 状态失败,该活保持原状:{e}"),
+                    });
+                    continue;
+                }
+            };
+            let Some(pr) = open_pr else {
+                continue; // 没有开放 PR——真实状态,什么都不改。
+            };
+            if pr != issue.pr_number {
+                self.store.set_issue_pr_number(issue.id, pr).await?;
+            }
+            if issue.status != IssueStatus::InProgress {
+                // 已经在评审中/其它状态,pr_number 已经如实回填,不需要再
+                // 判断转移(且绝不会从这里走到 Done)。
+                continue;
+            }
+            match bw_engine::github::issue_state(&remote, issue.github_number).await {
+                Ok(state) if state.eq_ignore_ascii_case("OPEN") => {
+                    // D3: 评审中由「存在开放 PR」派生。走既有 TransitionIssue
+                    // 命令复用其 can_transition_to 守卫,不新开一条转移路径。
+                    Box::pin(self.dispatch(Command::TransitionIssue {
+                        id: issue.id,
+                        status: IssueStatus::InReview,
+                    }))
+                    .await?;
+                }
+                Ok(_) => {
+                    // GitHub 侧 issue 已经不是 OPEN(例如被人绕过 BW 直接在
+                    // 网页关闭)——只展示、不处理:D22 铁律,漂移只采集不
+                    // 反向改写,也不擅自把它推进 InReview。
+                }
+                Err(e) => {
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("#{} · GitHub 采集", issue.number),
+                        ok: false,
+                        detail: format!(
+                            "pr_number 已回填,但核对 issue 状态失败,暂不转评审中,可重试:{e}"
+                        ),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -1802,10 +1951,25 @@ impl App {
     /// usage accounting bump each one's `uses` — closing the compounding loop
     /// (a distilled skill used by a run → uses+1). Honest `(empty, [])` when the
     /// project has no compounded skill yet.
+    ///
+    /// `exclude_name` skips a skill already carried by another block on the
+    /// same run (in practice: the Issue's `standard_skill`). P3 opened the
+    /// skill-choice dropdown to every content-bearing row, including distilled
+    /// ones (`crates/app-desktop/src/screens/op.rs` `skill_choices`), so a
+    /// project's own distilled skill can now be picked as `standard_skill`
+    /// AND still be the top-scored candidate here (same project, same stage).
+    /// Without this exclusion the caller would push the same name onto
+    /// `spec.skills` twice — `run_workflow_inner`'s by-name, no-dedup
+    /// accounting (`record_skill_use_by_name` in the `for s in &spec.skills`
+    /// loop) would then bump that one skill's `uses` by 2 for one run,
+    /// breaking settle-once, and the prompt would carry its body twice. Fixing
+    /// it here (source) rather than de-duping `spec.skills` after the fact
+    /// keeps the prompt honest too — the body is injected once, not twice.
     async fn distilled_skills_block(
         &self,
         project: ProjectId,
         stage: StageKind,
+        exclude_name: &str,
     ) -> Result<(String, Vec<SkillRef>), AppError> {
         const MAX: usize = 3;
         let catalog = self.store.list_skills().await?;
@@ -1813,6 +1977,9 @@ impl App {
         // origin issue's project+stage to scope the compounding to this project.
         let mut scored: Vec<(u32, bool, SkillCard)> = Vec::new();
         for s in catalog {
+            if !exclude_name.trim().is_empty() && s.name == exclude_name {
+                continue; // already carried by standard_skill_block — avoid a double count/body
+            }
             let Some(iid) = s.distilled_from_issue else {
                 continue;
             };
@@ -1856,9 +2023,12 @@ impl App {
     /// empty slug, or a slug that doesn't resolve to a content-bearing row
     /// (none today — all three standard cards are seeded by C9+C10), is an
     /// honest `(empty, [])` — never an error, never a fabricated body.
-    /// `record_skill_use_by_name` accounting only ever sees the one ref this
-    /// returns, so a run that carries a standard skill records its `uses`
-    /// exactly once.
+    /// This always returns at most one ref; `distilled_skills_block` is
+    /// called with this slug as its `exclude_name` so it can't pick the same
+    /// skill again (P3 let a distilled skill be chosen as `standard_skill`
+    /// too — see that function's doc comment). With the exclusion in place,
+    /// `record_skill_use_by_name` accounting sees each skill exactly once
+    /// per run.
     async fn standard_skill_block(&self, slug: &str) -> Result<(String, Vec<SkillRef>), AppError> {
         if slug.trim().is_empty() {
             return Ok((String::new(), Vec::new()));
@@ -2875,8 +3045,13 @@ impl App {
         let (standard_block, standard_refs) =
             self.standard_skill_block(&issue.standard_skill).await?;
         // Distilled (compounded) skills from this project, same-stage
-        // preferred, capped at 3.
-        let (distilled_block, distilled_refs) = self.distilled_skills_block(p, issue.stage).await?;
+        // preferred, capped at 3. Exclude `issue.standard_skill` by name —
+        // since P3 a distilled skill can itself be picked as the standard
+        // slug, and without the exclusion it would double-count (see
+        // `distilled_skills_block`'s doc comment).
+        let (distilled_block, distilled_refs) = self
+            .distilled_skills_block(p, issue.stage, &issue.standard_skill)
+            .await?;
         spec.name = format!("#{} {}", issue.number, issue.title);
         let extra = format!("{issue_brief}{standard_block}{distilled_block}");
         // 既有缺口(C8 顺带修复,非本票新增行为):`stage_workflow_with_playbook`
@@ -2968,13 +3143,30 @@ impl App {
                     )
                     .await
                     {
-                        Ok(pr) => {
+                        Ok(bw_engine::github::PrOpened::Created(pr)) => {
                             self.store.set_issue_pr_number(id, pr).await?;
                             self.emit(Event::ConnectorSynced {
                                 name: format!("#{} · PR", issue.number),
                                 ok: true,
                                 detail: format!(
                                     "已提 PR #{pr}(Closes #{}),等待人工 merge 验收",
+                                    issue.github_number
+                                ),
+                            });
+                            true
+                        }
+                        // 7A(真实践行暴露的缺口): 队友自己在 run 里跑了
+                        // `gh pr create`(允许,禁的只有 `gh pr merge`),BW
+                        // 再提一次时撞见"已存在"——不是失败,是提 PR 幂等。
+                        // 认领到的号是 `open_pr` 独立读回的真实号,诚实告知
+                        // 用户"这是认领来的",不混同成 BW 自己提的。
+                        Ok(bw_engine::github::PrOpened::Adopted(pr)) => {
+                            self.store.set_issue_pr_number(id, pr).await?;
+                            self.emit(Event::ConnectorSynced {
+                                name: format!("#{} · PR", issue.number),
+                                ok: true,
+                                detail: format!(
+                                    "已认领队友提的 PR #{pr}(Closes #{}),等待人工 merge 验收",
                                     issue.github_number
                                 ),
                             });
@@ -3066,6 +3258,89 @@ impl App {
                 // `include_str!`-ed straight from docs/skills/<slug>/SKILL.md
                 // (the real file in the repo).
                 bw_store::seed_standard_issue_skills_if_missing(self.store.as_ref()).await?;
+                // P8 (2026-07-28): standard-issue-trio skill content is
+                // reconciled against `docs/skills/<slug>/SKILL.md` on every
+                // Boot, unconditionally — not gated behind a one-time
+                // migration flag. `seed_standard_issue_skills_if_missing`
+                // above is by-name idempotent — it only ever plants a fresh
+                // row, never overwrites an existing one (that function's own
+                // doc comment: "内容更新走 UpdateSkill,不是重新 seed") — so
+                // an existing row on an older database never picks up a
+                // later edit to the SKILL.md source on its own. P2
+                // originally closed that gap with a one-shot
+                // `STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY` app_meta guard,
+                // but that shape is a treadmill: every future SKILL.md edit
+                // would need its own new guard key (`_v2`, `_v3`, …) to ever
+                // reach existing databases. Replaced with unconditional
+                // reconciliation instead, because the invariant licensing it
+                // is permanent, not one-time: a `skill` row whose
+                // `source == Official { official_library: "bw-standard" }`
+                // is *by definition* stale the moment its `content` diverges
+                // from the compiled-in SKILL.md text — the instant a human
+                // edits that row, T11 ("编辑即脱离源头") flips it to
+                // `SelfBuilt` and it stops being a `bw-standard` row at all.
+                // So there is no legitimate case of an `Official
+                // { official_library: "bw-standard" }` row intentionally
+                // holding content that differs from the source file — no
+                // divergence worth preserving, nothing to gate. Every Boot
+                // re-diffs and, only when different, overwrites. Cost is
+                // negligible: `list_skills()` is a call this same Boot path
+                // already makes right above for
+                // `seed_standard_issue_skills_if_missing`.
+                // The `STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY` app_meta
+                // guard this replaced is gone from `legacy_migration.rs`
+                // entirely (see that module's own historical-note comment at
+                // the old declaration site); the stray `app_meta` row it
+                // left behind in any database that already ran P2 is
+                // harmless and deliberately not migrated away (no
+                // destructive DELETE for a row nothing reads anymore).
+                {
+                    let existing_skills = self.store.list_skills().await?;
+                    for (name, content) in bw_store::standard_issue_skill_contents() {
+                        // Only ever touch the real official-library row —
+                        // a user's own self-built or distilled skill that
+                        // happens to share the name (however unlikely) is
+                        // never a candidate. Deliberately NOT
+                        // `Command::UpdateSkill`/`self.store.update_skill`
+                        // with `flip_to_self_built: true`: that flip rule
+                        // (T11, "编辑即脱离源头") exists for a *human*
+                        // diverging a skill from its official origin — this
+                        // is the opposite motion, the official origin
+                        // catching a row back up to itself, so `source`
+                        // must stay `Official { official_library:
+                        // "bw-standard" }` unchanged.
+                        let Some(existing) = existing_skills.iter().find(|s| {
+                            s.name == name
+                                && matches!(
+                                    &s.source,
+                                    HubSource::Official { official_library }
+                                        if official_library == "bw-standard"
+                                )
+                        }) else {
+                            continue;
+                        };
+                        if existing.content == content {
+                            continue;
+                        }
+                        // `uses` / `distilled_from_issue` / `origin_agent`
+                        // are derived lifecycle fields (skill-standards:
+                        // "永不手填") — `SkillEdit` has no fields for them at
+                        // all, so there is no way this call could touch
+                        // them even by accident.
+                        self.store
+                            .update_skill(
+                                existing.id,
+                                SkillEdit {
+                                    name: existing.name.clone(),
+                                    desc: existing.desc.clone(),
+                                    category: existing.category.clone(),
+                                    content: content.to_string(),
+                                    flip_to_self_built: false,
+                                },
+                            )
+                            .await?;
+                    }
+                }
                 // A4: backfill the per-stage "完成 Issue 数" metric for every
                 // project — pre-A4 projects gain it; already-seeded ones are
                 // unchanged (by-name idempotent).
@@ -3434,6 +3709,20 @@ impl App {
                 self.emit(Event::ProjectUpdated(p));
             }
 
+            Command::UpdateProjectIdentity { name, kind, descr } => {
+                let p = self.active()?;
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return Err(AppError::Invalid("名称不能为空".into()));
+                }
+                self.store
+                    .set_project_identity(p, &name, kind.trim(), descr.trim())
+                    .await?;
+                let _ = write_charter(self, p, "项目信息").await;
+                self.refresh_projects().await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
             Command::UpsertManualMetric {
                 id,
                 name,
@@ -3728,6 +4017,131 @@ impl App {
                     return Err(AppError::Invalid(format!("工作目录不存在:{trimmed}")));
                 }
                 self.store.set_workspace(p, trimmed, allow_commands).await?;
+                self.refresh_projects().await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::AttachRepo {
+                owner,
+                repo,
+                push_local,
+            } => {
+                let p = self.active()?;
+                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+                let owner = owner.trim().to_string();
+                let repo = repo.trim().to_string();
+                let owner_repo = format!("{owner}/{repo}");
+                let action_name = format!("{} · 接入仓库", proj.name);
+                self.emit(Event::ActionProgress {
+                    name: action_name.clone(),
+                    state: ActionState::Started,
+                });
+
+                // 1) 先探活——仓不存在或无权限,如实报错、一个字节不写库
+                // (D12 软降级:失败不伪造)。
+                if let Err(e) = bw_engine::github::probe_repo(&owner_repo).await {
+                    let detail = format!("探活失败:{e}");
+                    self.emit(Event::ActionProgress {
+                        name: action_name,
+                        state: ActionState::Fail(detail.clone()),
+                    });
+                    return Err(AppError::Invalid(detail));
+                }
+
+                // 2) P1-fix(复核 P1 时读回发现的重试死路):项目已有工作区时,
+                // 先把本地 origin 接上 —— 必须排在任何写库动作之前。探活通过
+                // 之后,`Mismatch`(工作区已挂着别的 origin)是这条命令唯一
+                // 还可能失败的分支;若先写了 github_remote/建了 connector 再
+                // 撞上 Mismatch,产品侧就没有 UI 重试入口了 ——
+                // `AttachRepoCard`(app-desktop/src/screens/op.rs)只在
+                // `github_remote` 为空时渲染,写库后卡片消失,用户再点不到
+                // 这个动作,只能手改 SQL。先做这步 ⇒ 失败时一个字节都还没
+                // 进库,再次调用同一条命令天然就是重试。没有工作区就跳过整步
+                // (不是错误——纯身份挂靠,后续 SetWorkspace 再补)。
+                let workspace_path = proj.workspace_path.trim().to_string();
+                if !workspace_path.is_empty() {
+                    let workspace = std::path::Path::new(&workspace_path);
+                    if let Err(e) =
+                        bw_engine::github::reconcile_local_remote(workspace, &owner, &repo).await
+                    {
+                        let detail = e.to_string();
+                        self.emit(Event::ActionProgress {
+                            name: action_name,
+                            state: ActionState::Fail(detail.clone()),
+                        });
+                        return Err(AppError::Invalid(detail));
+                    }
+                }
+
+                // 3) 写 github_remote。
+                self.store.set_github_remote(p, &owner_repo).await?;
+
+                // 4) 补建 github-repo connector —— 幂等:同项目已有同 kind
+                // 就不重复建(`CreateProject` 的另两条分支都建了它,绑定
+                // 分支此前漏了,这里补齐)。
+                let has_github_connector = self
+                    .store
+                    .list_connectors()
+                    .await?
+                    .iter()
+                    .any(|c| c.kind == CONNECTOR_KIND_GITHUB_REPO && c.project_id == Some(p));
+                if !has_github_connector {
+                    self.store
+                        .create_connector(NewConnector {
+                            id: ConnectorId::new(),
+                            name: format!("{} · GitHub", proj.name),
+                            kind: CONNECTOR_KIND_GITHUB_REPO.into(),
+                            scope: proj.name.clone(),
+                            project_id: Some(p),
+                            config: owner_repo.clone(),
+                        })
+                        .await?;
+                }
+
+                // 5) push_local=true 且第 2 步真的跑过(有工作区)时推当前
+                // 分支。这一步刻意留在写库之后,不是疏漏:推送失败时
+                // github_remote 已经设对是事实正确的(仓确实接上了,只是这
+                // 次本地提交没推上去),用户可以自己 `git push` 补,不必也
+                // 不该把整条「接仓」判失败重来 —— 那样反而会在下次重试时对
+                // 已经正确的 github_remote/connector 做多余的幂等检查。
+                if !workspace_path.is_empty() && push_local {
+                    let workspace = std::path::Path::new(&workspace_path);
+                    let branch = match bw_engine::github::current_branch(workspace).await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            let detail = format!("读取当前分支失败:{e}");
+                            self.emit(Event::ActionProgress {
+                                name: action_name,
+                                state: ActionState::Fail(detail.clone()),
+                            });
+                            return Err(AppError::Invalid(detail));
+                        }
+                    };
+                    if branch.trim().is_empty() {
+                        let detail = "工作区处于 detached HEAD,无法确定要推送的分支".to_string();
+                        self.emit(Event::ActionProgress {
+                            name: action_name,
+                            state: ActionState::Fail(detail.clone()),
+                        });
+                        return Err(AppError::Invalid(detail));
+                    }
+                    if let Err(e) = bw_engine::github::push_current_branch(workspace, &branch).await
+                    {
+                        let detail = format!("推送 {branch} 失败:{e}");
+                        self.emit(Event::ActionProgress {
+                            name: action_name,
+                            state: ActionState::Fail(detail.clone()),
+                        });
+                        return Err(AppError::Invalid(detail));
+                    }
+                }
+
+                // 6) 收尾:成功配对 + 刷新。
+                self.emit(Event::ActionProgress {
+                    name: action_name,
+                    state: ActionState::Ok(owner_repo),
+                });
+                self.refresh_connectors().await?;
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectUpdated(p));
             }
@@ -5141,11 +5555,17 @@ impl App {
                 title,
                 desc,
                 priority,
+                standard_skill,
             } => {
                 let p = self.active()?;
                 if title.trim().is_empty() {
                     return Err(AppError::Invalid("标题不能为空".into()));
                 }
+                // P3: pass the slug through as-is — no validation that could
+                // fail issue creation over it. `standard_skill_block` (run
+                // time) already resolves an unknown/content-less slug to an
+                // honest no-op, so a typo or a since-deleted skill here is
+                // never a reason to reject the issue.
                 self.store
                     .create_issue(NewIssue {
                         id,
@@ -5154,7 +5574,7 @@ impl App {
                         title: title.clone(),
                         desc: desc.clone(),
                         priority,
-                        standard_skill: String::new(),
+                        standard_skill,
                     })
                     .await?;
                 // C4: 项目挂了 GitHub 仓时,建单同时经 gh 真开一个 GitHub
@@ -5397,6 +5817,12 @@ impl App {
             }
 
             Command::RefreshIssues => {
+                // P7-7B (D22): 先真采 GitHub、再本地刷新——无活跃项目/无
+                // github_remote 的项目在 collect_github_issue_drift 内部短
+                // 路跳过,行为与升级前逐字节一致。
+                if let Some(p) = self.state.active_project {
+                    self.collect_github_issue_drift(p).await?;
+                }
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
             }
