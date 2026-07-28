@@ -341,6 +341,63 @@ E3/E4 的读回验证(独立复核,非 agent 自报):真实日常库副本跑 Bo
 自建技能(`关键词关注面打分法`/`多源体量控制法`)字节未变;
 `app_meta[standard_skill_content_refresh_v1] = done`;二次跑幂等。
 
+## 真活跑出来的新票(P7-P9,spec 定稿时未预见)
+
+P5 第一张真活在真项目上跑完后,暴露了三个原设计没看到的缺口。它们不是偏差,
+是**只有真跑才会掉出来的东西** —— 这正是「一切实跑」纪律的价值,如实记在这里。
+
+### P7 · 提 PR 幂等 + `RefreshIssues` 真采(`3f65e20`)
+
+**怎么暴露的**:队友干完活**自己跑了 `gh pr create`**(它被允许 —— 执行器禁的只有
+`gh pr merge`,见 `claude_cli.rs` 的 `--disallowedTools`)。BW 随后调自己的 `open_pr`
+撞上「PR 已存在」→ 如实失败 → issue 留在 `InProgress`、`pr_number = 0`。
+后果:`MergeIssuePr` 的两道守卫(`pr_number == 0`、`status != InReview`)都拒,
+**人没法用 BW 的验收路径合一个真实存在的 PR**,只能去 GitHub 直接合,那样绕过 settle-once 记账。
+
+**更根上的**:`Command::RefreshIssues` 当时只有两行本地刷新,根本不碰 GitHub ——
+plan/13 **D22**「GitHub 上不经 BW 发生的状态变化被如实采集展示」**一直没实现**,
+用户故事 #22「BW 与 GitHub 永不打架」当场就在打架。
+
+**做法**:①`open_pr` 只在「已存在」这一种失败上认领(真实 `gh pr view` 读回号,
+其它失败仍如实 `Err` —— 全吞就成了伪造成功),返回值区分 `Created`/`Adopted` 让 toast 诚实;
+②`RefreshIssues` 升级为「先只读采 GitHub、再本地刷新」,回填 `pr_number`,
+`InProgress → InReview` 只经既有 `TransitionIssue` 复用其守卫。
+**绝不反向改写 GitHub、绝不自动到 Done**,采集最多推到 InReview。
+
+### P8 · Skill 反例匿名化 + 标配正文改为 Boot 自愈对账(`8dec973`)
+
+**怎么暴露的**:P2 补硬时把 aihot 的具体北极星写成了 Skill 正文里的**具名反例**。
+真跑时队友在 `docs/metrics-rationale.md` 里写「这正是 Skill 文档里作为反例点名的这条
+北极星」—— **它识破 aihot 有一部分是照答案抄**,削弱了验证强度。且一条通用标配 Skill
+硬编某个具体项目的错误是耦合,会随该项目演进而过时。
+
+**做法**:①匿名化为「某内容日更类项目」,三条判据(落在供给段 / 挂 cron 即永久满分 /
+阈值守了条真实值远超的下限)原样保留 —— 匿名化 ≠ 稀释;
+②**一次性守卫换成 Boot 无条件自愈对账**:P2 的 `standard_skill_content_refresh_v1`
+已是 `done`,再改正文根本下发不到存量库;加 `_v2` 是跑步机(每改一次正文加一个键)。
+换成每次 Boot 按名比对 `content`、不同则覆盖 —— 因为一行 `bw-standard` 技能的内容
+一旦与编译进二进制的正本分歧,**按定义就是陈旧的**(人一旦编辑过,T11「编辑即脱离源头」
+会把它翻成 `SelfBuilt`,就不再是 bw-standard 行),不存在「想保留这份分歧」的情形。
+内容相同即跳过,不 bump `rev`。
+
+### P9 · 补齐项目编辑(`dd2350e`)
+
+**怎么暴露的**:用户在真实使用中发现项目实体的 CRUD 里 **U 这一档基本是空的**。
+核实:`name`/`kind`/`descr` **store 层连 setter 都没有**(建完永久锁死,改名只能删了重建,
+而删会带走该项目全部 issue/run/产物/记账);`benchmark`/`opportunity`/`cycle`/`north_star`
+有命令但**只在 `create.rs` 可达**,`op.rs` 运营面板里够不着。
+(C/R/D 三档核实是好的:删有二次确认,`delete_project` 清理干净 ——
+已发布样板间实测**零孤儿行**。)
+
+**做法**:`set_project_identity` + `Command::UpdateProjectIdentity`(空名如实拒、零写库;
+重名照 `CreateProject` 的既有口径 —— 查证结果是允许重名,不一边禁一边放)+
+`op.rs` 的「编辑项目」区块把 `UpdateBrief`/`SetCycle` 一并接出来 + 章程 best-effort 回写。
+
+**北极星按有无仓分叉**(本票唯一需要判断力的地方):有仓项目正本在 `.bw/metrics.toml`
+(D5),UI **只读展示 + 提示「改指标走 PR」** —— 给编辑口就等于 SQLite 与 metrics.toml
+两份正本打架,正撞 **D1**「BW 不是又一份正本」;无仓项目才给 `UpdateNorthStar` 编辑口
+(存量本地项目没有仓,不给口就是死路)。理由写进了代码注释,免得被当成漏做。
+
 ## 留白与偏差(如实记录)
 
 - `docs/competitive-analysis.md` 在 aihot 仓里**不存在**,P5 第一张活按 Skill 自身规定
