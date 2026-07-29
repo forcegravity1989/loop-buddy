@@ -240,34 +240,24 @@ fn content_preview(content: &str) -> String {
     }
 }
 
-/// T4(plan/12 §2): the skill detail's real body — double-column file browser
-/// when the skill folder actually has support files (`skill_file` rows, T2),
-/// a plain single-column body when it doesn't. `SKILL.md` (`s.content`) is
+/// T4(plan/12 §2)/T18: the skill detail's real body — always the same
+/// double-column「文件树 + 预览」包浏览器, whether the skill folder has
+/// support files (`skill_file` rows, T2, mattpocock/superpowers imports) or
+/// not (自建/蒸馏/五阶段内置). Every skill's real unit is a package (at
+/// least one `SKILL.md`), so a one-node tree for a support-file-less skill
+/// is honest, not a "fake tree" — the previous single-column early-return
+/// (removed here) was the last spot rendering skills through two different
+/// visual systems depending on import source. `SKILL.md` (`s.content`) is
 /// always the fixed, default-selected root entry; the rest of the tree is
-/// built purely off real `rel_path`s (`ui::vm::skill_file_tree`) — never a
-/// guessed structure. `pub(crate)`: `component_detail.rs`'s project-rail
-/// skill detail reuses this, same one-copy convention `workflows_using_skill`
-/// already established for this screen.
+/// built purely off real `rel_path`s (`ui::vm::skill_file_tree`, empty when
+/// `s.files` is empty — never a guessed structure). `pub(crate)`:
+/// `component_detail.rs`'s project-rail skill detail reuses this, same
+/// one-copy convention `workflows_using_skill` already established for this
+/// screen.
 #[component]
 pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
-
-    // 优雅退化:没有 skill_file 子文件(自建/蒸馏/五阶段内置)——单栏正文,
-    // 不放一棵只有一个节点的假树。T15:正文改走共用 MD 渲染组件(SKILL.md
-    // 一定是 .md,`s.content` 就是它导入时已剥离 frontmatter 的正文)。
-    if s.files.is_empty() {
-        return rsx! {
-            div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "技能正文(运行时注入 prompt)" }
-            div {
-                style: "margin-bottom:10px;",
-                MarkdownView {
-                    content: s.content.clone(),
-                    empty_label: "目录引用 · 无正文(全文在来源仓库;可「编辑」补充本地正文)".to_string(),
-                }
-            }
-        };
-    }
 
     let tree = skill_file_tree(&s.files);
     // 纯前端状态:选中文件路径(`None` = 固定置顶默认选中的 SKILL.md)+ 折叠的
@@ -302,10 +292,26 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
         .map(|p| matches!(p.rsplit('.').next().unwrap_or(""), "md" | "mdx"))
         .unwrap_or(true);
 
+    // T18:统一句式——不管有没有支撑文件,都是同一个「技能包(SKILL.md […])」
+    // 句式,不再是「技能正文」/「技能文件」两套措辞对应两套可视化。
+    let package_label = if s.files.is_empty() {
+        "技能包(SKILL.md)".to_string()
+    } else {
+        format!("技能包(SKILL.md + {} 个支撑文件)", s.files.len())
+    };
+    // 空正文占位说明:root(SKILL.md 本身)沿用旧分支更具体的措辞——它多半
+    // 是纯目录引用(全文在来源仓库),值得提示「可编辑补充」;子文件的空则是
+    // 普通空文件,不套同一句诚不实的话。
+    let content_empty_label = if selected_path.is_none() {
+        "目录引用 · 无正文(全文在来源仓库;可「编辑」补充本地正文)".to_string()
+    } else {
+        "(空文件)".to_string()
+    };
+
     rsx! {
         div {
             style: "font-size:11px;color:{ink3};margin-bottom:6px;",
-            "技能文件(SKILL.md + {s.files.len()} 个支撑文件)"
+            "{package_label}"
         }
         div {
             style: "display:flex;border:1px solid {theme::BORDER};border-radius:8px;overflow:hidden;margin-bottom:10px;",
@@ -332,7 +338,7 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
                         style: "padding:12px 14px;overflow-y:auto;max-height:360px;",
                         MarkdownView {
                             content: selected_content.clone(),
-                            empty_label: "(空文件)".to_string(),
+                            empty_label: content_empty_label.clone(),
                         }
                     }
                 } else if selected_content.trim().is_empty() {
