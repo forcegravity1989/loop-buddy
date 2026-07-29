@@ -56,6 +56,11 @@ pub enum SourceKind {
     /// non-manual source, so it never wears the 手填 badge — the number is
     /// machine-collected and independently re-derivable from `gh`.
     Github,
+    /// P5 · codehub 采集器: a value pulled by `codehub-cli issue|mr list
+    /// --jq length` against the project's codehub remote. Same honesty as
+    /// Github — machine-collected, no 手填 badge, independently re-derivable
+    /// from codehub-cli.
+    Codehub,
     /// Hand-entered. Carries a `手填 · 未接入度量源` badge in the UI until a real
     /// connector is bound (Tier D), at which point the badge auto-drops.
     Manual,

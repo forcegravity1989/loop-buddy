@@ -102,6 +102,13 @@ pub struct NewMetric {
     pub last_target: String,
     pub driver: String,
     pub pos: i64,
+    /// C6/P5: 该 metric 的采集方案(kind+query)。`upsert_metric` 只在 INSERT
+    /// 时写入(UPDATE 不动,保留存量行原值——手建/编辑不抹掉已有采集方案)。
+    /// 空 kind = 无自动采集(stage_done 由 feed_*_count 直接喂观测;界面手建
+    /// metric 默认 manual)。`"github"`/`"codehub"` 进 collect_project_metrics
+    /// 的对应 arm 真采。对标 metrics.toml 的 collect.kind/query。
+    pub collect_kind: String,
+    pub collect_query: String,
 }
 
 /// C6 (plan/13 D5+D6): one metric's definition as read from

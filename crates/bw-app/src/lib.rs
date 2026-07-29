@@ -2113,6 +2113,72 @@ impl App {
                     last_target: String::new(),
                     driver: String::new(),
                     pos: 100 + kind.index() as i64,
+                    collect_kind: String::new(),
+                    collect_query: String::new(),
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// P5 · codehub 公共指标 seed(对标 `seed_stage_done_metrics` 的幂等套路):
+    /// 给 `provider=codehub` 且 `remote_path` 非空的项目种两条默认公共指标
+    /// ——开放 Issue 数 + 已合入 MR 数,`kind=codehub` 走 `collect_project_metrics`
+    /// 的 codehub arm 真采(`codehub-cli issue|mr list --jq length`)。**不用
+    /// 定义**——V3 规划里「公共指标默认有」的落地。非 codehub / 没接远端 →
+    /// no-op(留 github 的既有口径不动)。口径先用最小词汇 `issues:opened` /
+    /// `mrs:merged`,复杂窗口(本周合入)留后续按真实需求扩。
+    async fn seed_codehub_public_metrics(&self, project: ProjectId) -> Result<(), AppError> {
+        let proj = self
+            .store
+            .get_project(project)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if proj.provider != "codehub" || proj.remote_path.trim().is_empty() {
+            return Ok(());
+        }
+        // by-name 幂等:已有同名不重种(不抹既有值)。
+        let have: std::collections::HashSet<String> = self
+            .store
+            .persisted_signals(project)
+            .await?
+            .metrics
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
+        // (name, def, query) —— 公共计数,滞后指标(Lagging),空 target 保持
+        // signal Unknown(计数不是目标,只为点亮「有数据」)。
+        const PAIR: [(&str, &str, &str); 2] = [
+            (
+                "开放 Issue 数",
+                "codehub 仓当前 state=opened 的 issue 计数(机器源,codehub-cli issue list --jq length)",
+                "issues:opened",
+            ),
+            (
+                "已合入 MR 数",
+                "codehub 仓累计 state=merged 的 MR 计数(机器源,codehub-cli mr list --jq length)",
+                "mrs:merged",
+            ),
+        ];
+        for (idx, (name, def, query)) in PAIR.iter().copied().enumerate() {
+            if have.contains(name) {
+                continue;
+            }
+            self.store
+                .upsert_metric(NewMetric {
+                    id: MetricId::new(),
+                    project_id: project,
+                    role: MetricRole::Lagging,
+                    stage_kind: None,
+                    name: name.to_string(),
+                    def: def.to_string(),
+                    target_raw: String::new(),
+                    amber: AmberBand::default(),
+                    last_target: String::new(),
+                    driver: String::new(),
+                    pos: 200 + idx as i64,
+                    collect_kind: "codehub".into(),
+                    collect_query: query.to_string(),
                 })
                 .await?;
         }
@@ -2532,6 +2598,42 @@ impl App {
                             } else {
                                 self.store
                                     .append_observation(m.id, SourceKind::Github, &value, now())
+                                    .await?;
+                                summary.changed += 1;
+                                touched = true;
+                            }
+                        }
+                        Err(e) => {
+                            summary.failed += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error = Some(format!("{}:{e}", m.name));
+                            }
+                        }
+                    }
+                }
+                "codehub" => {
+                    // P5:codehub 采集,镜像 github arm。Remote::Codehub 由 remote
+                    // 变量(project 的 provider 派生)分发到 codehub::collect_count
+                    // (issue|mr list --jq length)。查询口径见 codehub::collect_count
+                    // (issues:<state> / mrs:<state>)。
+                    if remote_path.is_empty() {
+                        summary.no_remote_codehub = true;
+                        continue;
+                    }
+                    match remote.collect_count(&m.collect_query, today).await {
+                        Ok(count) => {
+                            let value = count.to_string();
+                            let last_ts = self.store.latest_observation_ts(m.id).await?;
+                            let same_window = last_ts.is_some_and(|t| {
+                                OffsetDateTime::from_unix_timestamp(t)
+                                    .map(|d| d.date() == today)
+                                    .unwrap_or(false)
+                            });
+                            if m.value_raw == value && same_window {
+                                summary.unchanged += 1;
+                            } else {
+                                self.store
+                                    .append_observation(m.id, SourceKind::Codehub, &value, now())
                                     .await?;
                                 summary.changed += 1;
                                 touched = true;
@@ -3392,6 +3494,7 @@ impl App {
                 // unchanged (by-name idempotent).
                 for p in &projects {
                     self.seed_stage_done_metrics(p.id).await?;
+                    self.seed_codehub_public_metrics(p.id).await?;
                 }
                 self.refresh_workflow_specs().await?;
                 self.refresh_skills().await?;
@@ -3875,6 +3978,8 @@ impl App {
                         last_target: String::new(),
                         driver: String::new(),
                         pos: 0,
+                        collect_kind: "manual".into(),
+                        collect_query: String::new(),
                     })
                     .await?;
                 // The value is born as an explicit Manual observation; the signal
@@ -4006,6 +4111,9 @@ impl App {
                 // target ⇒ honest Unknown) so Done-edge feeds have a home. The
                 // recompute at the end of CompleteCreation derives its signal.
                 self.seed_stage_done_metrics(p).await?;
+                // P5:codehub 公共指标(开放 Issue 数 / 已合入 MR 数)随创建流
+                // 种下,走 collect_project_metrics 的 codehub arm 真采点亮。
+                self.seed_codehub_public_metrics(p).await?;
                 // All-in-one-codebase default: a project completing creation
                 // gets its own real git repo (when a workspaces root is
                 // configured and no workspace was set by hand), plus a bound
@@ -6062,6 +6170,7 @@ struct MetricCollectSummary {
     deferred: u32,
     first_error: Option<String>,
     no_remote_github: bool,
+    no_remote_codehub: bool,
 }
 
 /// Standard workspace-derived metric names — the join keys between the

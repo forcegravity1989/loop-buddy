@@ -390,6 +390,7 @@ fn source_text(s: SourceKind) -> &'static str {
         SourceKind::Telemetry => "telemetry",
         SourceKind::Connector => "connector",
         SourceKind::Github => "github",
+        SourceKind::Codehub => "codehub",
         SourceKind::Manual => "manual",
     }
 }
@@ -401,6 +402,7 @@ fn parse_source(s: &str) -> SourceKind {
         "telemetry" => SourceKind::Telemetry,
         "connector" => SourceKind::Connector,
         "github" => SourceKind::Github,
+        "codehub" => SourceKind::Codehub,
         _ => SourceKind::Manual,
     }
 }
@@ -724,8 +726,8 @@ impl Store for SqliteStore {
         sqlx::query(
             "INSERT INTO metric
                 (id, project_id, role, stage_kind, name, def, target_raw, amber_kind, amber_value,
-                 last_target, driver, pos, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                 last_target, driver, pos, collect_kind, collect_query, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
              ON CONFLICT(id) DO UPDATE SET
                 role=excluded.role, stage_kind=excluded.stage_kind, name=excluded.name,
                 def=excluded.def, target_raw=excluded.target_raw, amber_kind=excluded.amber_kind,
@@ -745,6 +747,8 @@ impl Store for SqliteStore {
         .bind(&m.last_target)
         .bind(&m.driver)
         .bind(m.pos)
+        .bind(&m.collect_kind)
+        .bind(&m.collect_query)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
