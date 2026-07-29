@@ -51,6 +51,12 @@ enum RepoChoice {
 pub fn Create(
     vm: Option<CreateVm>,
     run: RunVm,
+    // Bug B: the末卡 confirm button's pending guard. Set true on click in
+    // `ReviewCard`; released by `main.rs` on a real `UiNote::Error` (failure →
+    // retry), or naturally when the kernel flips `view` to App on success
+    // (this screen unmounts). Local signal passed down, not a global busy
+    // state — buddy keeps no such global.
+    submitting: Signal<bool>,
     // plan/14 C14: raw Started/Ok/Fail facts for this flow's background
     // actions (建仓/克隆/仓列表加载/标配建单/落地推送) — rendered by
     // `ActionsBanner` below, visible across every card since the action that
@@ -119,7 +125,9 @@ pub fn Create(
                 (Card::Drafting, Some(_)) => rsx! {
                     DraftingCard { run, on_next: move |_| card.set(Card::Review), on_cancel }
                 },
-                (Card::Review, Some(v)) => rsx! { ReviewCard { vm: v, cadence } },
+                (Card::Review, Some(v)) => rsx! {
+                    ReviewCard { vm: v, cadence, submitting }
+                },
             }
         }
     }
@@ -1043,7 +1051,7 @@ fn ns_candidate(idx: usize, brief: &str, win: &str) -> (String, String) {
 }
 
 #[component]
-fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
+fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>, submitting: Signal<bool>) -> Element {
     let k = use_context::<Kernel>();
     let mut ns_idx = use_signal(|| 0usize);
     let mut ns = use_signal(|| {
@@ -1078,6 +1086,21 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
     // 才在落地后对标配三件套里的①竞品分析 dispatch 一次真实 RunIssue。
     let mut run_first = use_signal(|| false);
 
+    // Bug B: 按钮置灰 + 文案 + cursor 由 pending 派生(对齐 op.rs 灰点表
+    // pending 的既有约定:pending = 不可再点、视觉发暗)。读 submitting() 在
+    // 组件体里建订阅,pending 一变本卡重渲。
+    let pending = submitting();
+    let (btn_label, btn_bg, btn_shadow, btn_cursor) = if pending {
+        ("建立中…", "#B89A8E", "none", "not-allowed")
+    } else {
+        (
+            "确认 · 建立项目",
+            "#C5654A",
+            "0 3px 10px rgba(197,101,74,.25)",
+            "pointer",
+        )
+    };
+
     let card = theme::card();
     let serif = theme::SERIF;
     let ink3 = theme::INK_3;
@@ -1097,6 +1120,15 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
     let confirm = {
         let k = k.clone();
         move |_| {
+            // Bug B: 防连点 —— 后台建项目是真在干活(sync 三件套 / 落地推送),
+            // 但按钮没反馈时人会觉得点击无效连点 N 次 = 重跑 N 遍
+            // CompleteCreation(非幂等,污染远端)。起手即置 pending,后续
+            // 连点在此 no-op。成功由 kernel 翻 view→App 卸载本屏;失败由
+            // main.rs 收 UiNote::Error 复位,可重试。
+            if submitting() {
+                return;
+            }
+            submitting.set(true);
             k.send(Command::UpdateNorthStar {
                 value: ns().trim().to_string(),
                 def: ns_def().trim().to_string(),
@@ -1249,9 +1281,10 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
             div {
                 style: "display:flex;justify-content:flex-end;",
                 button {
-                    style: "cursor:pointer;background:#C5654A;color:#fff;border:none;border-radius:8px;padding:10px 22px;font:600 13px/1 inherit;box-shadow:0 3px 10px rgba(197,101,74,.25);",
+                    disabled: pending,
+                    style: "cursor:{btn_cursor};background:{btn_bg};color:#fff;border:none;border-radius:8px;padding:10px 22px;font:600 13px/1 inherit;box-shadow:{btn_shadow};",
                     onclick: confirm,
-                    "确认 · 建立项目"
+                    "{btn_label}"
                 }
             }
         }

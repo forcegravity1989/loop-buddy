@@ -112,6 +112,16 @@ fn Root() -> Element {
     }
     let mut sel = use_signal(move || initial_sel);
     let mut creating = use_signal(|| false);
+    // Bug B: the末卡「确认·建立项目」button's local pending guard — set true
+    // the instant the user clicks (so a fast second click is a no-op, not a
+    // second `CompleteCreation` dispatch), released when that creation
+    // attempt truly ends. Success ends it by the kernel flipping `view` to
+    // App (the Create screen unmounts, same optimistic-flip spirit as
+    // IntentCard); failure ends it here, on the real `UiNote::Error` that
+    // the dispatch-error path already raises — re-enabling the button for an
+    // honest retry. Sibling to `creating`/`pending_cron`: client-side
+    // orchestration knowledge the kernel doesn't carry.
+    let mut submitting = use_signal(|| false);
     let mut toast = use_signal(|| None::<String>);
     let mut run = use_signal(RunVm::default);
     // plan/14 C14: raw Started/Ok/Fail facts for the creation flow's
@@ -158,7 +168,18 @@ fn Root() -> Element {
                 loop {
                     match rx.recv().await {
                         Ok(note) => match &note {
-                            UiNote::Error(e) => toast.set(Some(e.clone())),
+                            UiNote::Error(e) => {
+                                toast.set(Some(e.clone()));
+                                // Bug B: a dispatch error during creation is
+                                // the real "this attempt failed" signal —
+                                // re-enable the button so the user can retry,
+                                // not stuck on 「建立中…」forever. (Success
+                                // never reaches here: it flips view→App and
+                                // unmounts the Create screen instead.)
+                                if submitting() {
+                                    submitting.set(false);
+                                }
+                            }
                             UiNote::RunFailed(e) => {
                                 toast.set(Some(format!("工作流失败:{e}")));
                                 run.with_mut(|r| r.apply(&note));
@@ -354,6 +375,11 @@ fn Root() -> Element {
                     Create {
                         vm: v.create.clone(),
                         run: run(),
+                        // Bug B: pending guard for the末卡 confirm button —
+                        // set on click in ReviewCard, released on real
+                        // Error (above) or by the screen unmounting on
+                        // success.
+                        submitting,
                         // plan/14 C14: raw action-progress facts — `Create`
                         // renders the pending/ok/fail strip from these.
                         actions: actions().items,
