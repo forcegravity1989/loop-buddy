@@ -63,7 +63,7 @@ async fn main() {
     // ── H1: boot 时 hub 三库真实 seed 到位——T1(0b5cbb2)起 ECC/OMC 目录空壳
     //    (540 条只有名字无正文的占位行)已退场,新基线是 app 自建的五阶段模板
     //    方法论(每个 StageKind 各一份 workflow/skill/agent,来自
-    //    seed_hub_if_empty + seed_stage_entities_if_missing),数字与实际
+    //    seed_hub_if_empty + seed_bw_standard_skills_if_missing + seed_stage_role_agents_if_missing),数字与实际
     //    seed 吻合,非编造 ──
     let (workflows, skills, agents) = (
         store.list_workflow_specs().await.unwrap(),
@@ -79,7 +79,7 @@ async fn main() {
             && agents.len() >= stage_count,
         evidence: format!(
             "workflow_spec={} skill={} agent={}(≥{stage_count},五阶段各一份 workflow/skill/agent,\
-             来自 seed_hub_if_empty/seed_stage_entities_if_missing 真实写入;非外部 ECC/OMC 解析——\
+             来自 seed_hub_if_empty/seed_bw_standard_skills_if_missing/seed_stage_role_agents_if_missing 真实写入;非外部 ECC/OMC 解析——\
              该目录空壳种子路径 T1 起已退场)",
             workflows.len(),
             skills.len(),

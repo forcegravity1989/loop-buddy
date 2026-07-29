@@ -36,8 +36,8 @@ pub use sqlite::SqliteStore;
 
 pub mod seed;
 pub use seed::{
-    seed_hub_if_empty, seed_stage_entities_if_missing, seed_standard_issue_skills_if_missing,
-    standard_issue_skill_canon, CanonicalSkill,
+    seed_bw_standard_skills_if_missing, seed_hub_if_empty, seed_stage_role_agents_if_missing,
+    CanonicalSkill,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -836,8 +836,8 @@ pub trait Store: Send + Sync {
     /// row (not a content edit, so deliberately separate from `SkillEdit`,
     /// same reasoning `record_skill_use_by_name` already established for
     /// single-column, non-content updates). Used by
-    /// `seed_stage_entities_if_missing` to backfill `stage_ref` on the five
-    /// built-in stage skills when they were seeded by an older binary,
+    /// `seed_bw_standard_skills_if_missing` to backfill `stage_ref` on the
+    /// built-in bw-standard skills when they were seeded by an older binary,
     /// before this column carried real values.
     async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()>;
     /// plan/16 §2 防线 2: same narrow single-concern setter shape as

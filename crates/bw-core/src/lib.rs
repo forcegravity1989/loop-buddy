@@ -18,6 +18,7 @@
 //! - [`derive`] — the metric→signal→health chain + the sealed [`derive::Derived`].
 
 pub mod analysis;
+pub mod bw_library;
 pub mod derive;
 pub mod ids;
 pub mod model;

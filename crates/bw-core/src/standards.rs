@@ -124,8 +124,9 @@ assignee、状态为 Done)。`content` 应该回答:「做完这件事之后,下
 
 ## 项目自带的五条方法论技能(参照范例)
 
-正本在 `bw-core::playbook::stage_skills`(desc 均含「适用:…」触发段,此处只列 name,\
-不抄一份会漂移的副本):evidence-first / spec-to-tests / baseline-before-touch / \
+正本是 `docs/skills/<slug>/SKILL.md` 包文件(经 `bw-core::bw_library` 编译进二进制,\
+Boot 由与导入路径同一个解析器解析后播种/对账;desc 均含「适用:…」触发段,此处只列 \
+name,不抄一份会漂移的副本):evidence-first / spec-to-tests / baseline-before-touch / \
 fresh-eyes-funnel / breaking-drill——连同标配三件套(competitive-analysis / \
 north-star-discovery / metrics-binding)同属 `Official { official_library: \
 "bw-standard" }`,desc+content 每次 Boot 与代码正本自愈对账,编辑即脱离源头(翻 \

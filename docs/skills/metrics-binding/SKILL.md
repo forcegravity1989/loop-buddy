@@ -1,7 +1,7 @@
 ---
 name: metrics-binding
 slug: metrics-binding
-description: 读现有 .bw/metrics.toml,为每条绑不上的指标给出点亮它的最便宜路径;绝不伪造数据、绝不为了点亮而改指标定义。
+description: 为 .bw/metrics.toml 里绑不上的指标找到点亮的最便宜路径——绝不伪造数据、绝不为了点亮而改指标定义。适用:标配 Issue「绑数据」,或健康灯长期 Unknown 需要接真数据源的时点
 category: 标配
 source: 官方(标配 Issue 三件套第三件,plan/13 D8)
 ---

@@ -125,7 +125,7 @@ async fn main() {
         },
     ];
 
-    // 五角色 agent 实体按名解析(seed_stage_entities_if_missing 播种的真实实体)。
+    // 五角色 agent 实体按名解析(seed_stage_role_agents_if_missing 播种的真实实体)。
     let agents = app.snapshot().agents.clone();
     let agent_by_name = |name: &str| {
         agents

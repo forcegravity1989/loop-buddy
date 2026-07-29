@@ -60,65 +60,30 @@ pub async fn seed_hub_if_empty(store: &dyn Store) -> Result<()> {
     Ok(())
 }
 
-/// Seed the five stage-role agents and the stage working-method skills —
-/// the *executable* entities behind 五角色真实执行, projected straight from
-/// `bw_core::playbook` (instructions = the real preamble template, skill
-/// content = the real injected body). By-name idempotent, and deliberately
-/// separate from [`seed_hub_if_empty`]'s all-or-nothing gate: an existing,
-/// already-seeded database still gains these on first boot after the 完整形态
-/// upgrade — they're this app's own methodology, not external catalog data.
+/// Seed the five stage-role agents — the *executable* entities behind
+/// 五角色真实执行, projected straight from `bw_core::playbook`
+/// (instructions = the real preamble template). By-name idempotent, and
+/// deliberately separate from [`seed_hub_if_empty`]'s all-or-nothing gate: an
+/// existing, already-seeded database still gains these on first boot after
+/// the 完整形态 upgrade — they're this app's own methodology, not external
+/// catalog data.
+///
+/// plan/17: the stage working-method *skills* that used to ride along here
+/// now enter through the unified package-document path instead —
+/// [`seed_bw_standard_skills_if_missing`], fed by bw-app's single SKILL.md
+/// parser over `bw_core::bw_library`'s vendored docs — so skill 装载只剩一条链.
 ///
 /// T7 (2026-07-23, plan/12 §0/§2/§3): also backfills `stage_ref` on a named
 /// row that already exists but still reads `None` — a database seeded by a
-/// pre-T7 binary has these five agents/skills with no `stage_ref` column
+/// pre-T7 binary has these five agents with no `stage_ref` column
 /// value at all (honest NULL from `add_column_if_missing`); this call
 /// classifies them by the same by-name match already used to decide
 /// "already seeded", instead of leaving them permanently unclassified next
 /// to freshly-seeded rows that do carry a real value. Never touches a row
 /// whose `stage_ref` is already `Some` — there is no stage-editing UI yet, so
 /// today that can only be a value this same backfill wrote on an earlier boot.
-pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
-    let existing_skills = store.list_skills().await?;
+pub async fn seed_stage_role_agents_if_missing(store: &dyn Store) -> Result<()> {
     let existing_agents = store.list_agents().await?;
-
-    for kind in StageKind::ALL {
-        for sk in bw_core::playbook::stage_skills(kind) {
-            if let Some(existing) = existing_skills.iter().find(|s| s.name == sk.name) {
-                if existing.stage_ref.is_none() {
-                    store.set_skill_stage_ref(existing.id, Some(kind)).await?;
-                }
-                continue;
-            }
-            store
-                .create_skill(NewSkill {
-                    id: SkillId::new(),
-                    name: sk.name.to_string(),
-                    // The methodology the app itself ships — Mature. plan/16
-                    // §4: source unified onto `Official { "bw-standard" }`,
-                    // superseding T2's `SelfBuilt` call for this row class —
-                    // the trio below (plan/13 合流注) already established
-                    // "bw-standard" as the honest label for BW's own standard
-                    // library, and only an `Official` row gets the two
-                    // protections the spec wants here: Boot self-healing
-                    // reconciliation against the code canon, and T11's
-                    // edit-detaches-provenance flip (改编自 留痕).
-                    maturity: Maturity::Mature,
-                    desc: sk.def.to_string(),
-                    category: kind.label().to_string(),
-                    // T7: the built-in stage-methodology skill really is
-                    // this stage's role — a declared fact, not a guess.
-                    stage_ref: Some(kind),
-                    source: HubSource::Official {
-                        official_library: BW_STANDARD_LIBRARY.to_string(),
-                    },
-                    content: sk.content.to_string(),
-                    // 五阶段方法论技能是全局共享的(见本函数文档:「这个 app
-                    // 自己的方法论」),不是某个项目专属——project_id 留空。
-                    project_id: None,
-                })
-                .await?;
-        }
-    }
 
     for (kind, ra) in bw_core::playbook::role_agents() {
         if let Some(existing) = existing_agents.iter().find(|a| a.name == ra.name) {
@@ -159,144 +124,73 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
     Ok(())
 }
 
-// ───────────────── C9+C10 · 标配 Issue 三件套的 Skill 内容 (plan/13 D8/D9) ─────────────────
+// ───────────────── plan/17 · bw-standard 技能库的统一播种 ─────────────────
 //
-// 「竞品分析」（competitive-analysis，C10 补全）+「找指标」
-// （north-star-discovery，C9）+「绑数据」（metrics-binding，C9）——创建流
-// 自动建的标配 Issue 三件套（竞品分析 → 找指标 → 绑数据）挂 Skill 的全部
-// 三件。正本是仓里的真实文件 `docs/skills/<slug>/SKILL.md`（给 plan/12 流
-// 合入后的 `ImportSkillPackage` 留吸收形态：文件树本身就是"包"）；这里用
-// `include_str!` 把文件内容原样编译进二进制作为 `SkillCard.content`，不是
-// 另抄一份会漂移的 Rust 字符串——文件才是唯一正本，Rust 端只是把它变成可
-// 查询的一行。
+// 正本是仓里的真实包文件 `docs/skills/<slug>/SKILL.md`(五阶段方法论技能 +
+// 标配 Issue 三件套,经 `bw_core::bw_library` 以 `include_str!` 编译进二进
+// 制)。这里**不再持有任何 desc/content 抄本、也不解析**:bw-app 的 canon
+// 构建器(`bw_canon`)用与 `ImportSkillPackage` 同一个解析器把 vendored 文
+// 档解析成 [`CanonicalSkill`] 行传进来——装载系统只有一条:SKILL.md 文档 →
+// 解析 → 行。此前这里的 `STANDARD_ISSUE_SKILLS` 静态表(desc 手抄 + 整文件
+// include_str)与 `seed_stage_entities_if_missing` 里的 playbook 投影是
+// 「第二形态」的最后两处,随本轮删除。
 //
-// 归属选择（对照仓内既有惯例，两条先例二选一）：
-// - `Command::CreateSkill`（UI"新建"路径）新建即 `Maturity::Polishing`——
-//   适合"刚做的、还没验证过"的用户自建技能。
-// - `seed_stage_entities_if_missing`（本文件上方）把 app 自带的方法论技能
-//   按名幂等地种成 `Maturity::Mature` + 官方来源——适合"app 自己出品的标准
-//   打法"。（合流注:T1 把 LibSource 统一成 HubSource,标配卡挂
-//   `Official { official_library: "bw-standard" }`——BW 自带标准库的诚实标签,
-//   与 ecc/mattpocock-skills/superpowers 并列。）
-// 竞品分析/找指标/绑数据是 plan/13 D8 拍板的标配流程的一部分，不是某次会
-// 话里用户现造的内容，性质更接近后者：跟随 `seed_stage_entities_if_missing`
-// 的先例，Mature + Official + 独立种子函数、Boot 时调用。`category` 用新值
-// "标配"——既不是 OMC/ECC 目录分类，也不挂在某个 `StageKind` 下（三件套发
-// 生在项目刚建好、进 Prototype 段之前的创建流末尾，不是某阶段的常规工作方
-// 法），"标配"如实反映它在 plan/13 里的身份。
-
-const NORTH_STAR_DISCOVERY_SKILL_MD: &str =
-    include_str!("../../../docs/skills/north-star-discovery/SKILL.md");
-const METRICS_BINDING_SKILL_MD: &str =
-    include_str!("../../../docs/skills/metrics-binding/SKILL.md");
-// C10 · plan/13 D8/D9: 标配三件套的第一件(竞品分析→找指标→绑数据),
-// C9 落地时这张卡还不存在(见 lib.rs `seed_standard_issue_trio` 的注
-// 释:「竞品分析卡是 C10 票,这里先建关联,`run_issue_now` 注入时按名查
-// 不到就如实跳过、零报错」)——本票把文件与种子行都补上,C8 留的口自动
-// 接上,不用回填任何既有 Issue。
-const COMPETITIVE_ANALYSIS_SKILL_MD: &str =
-    include_str!("../../../docs/skills/competitive-analysis/SKILL.md");
-
-struct StandardIssueSkill {
-    name: &'static str,
-    desc: &'static str,
-    /// The **raw** `SKILL.md` file text, frontmatter and all — never stored
-    /// as-is (see [`CanonicalSkill`]).
-    raw_md: &'static str,
-}
+// 归属沿革(plan/13 D8 + plan/16 §4 拍板,不变):八件都是 app 自己出品的
+// 标准打法 —— `Maturity::Mature` + `Official { "bw-standard" }`;编辑即脱离
+// 源头(T11 翻 `SelfBuilt` + 留痕「改编自」),Boot 对账只追 Official 行。
 
 /// One bw-standard library row's canonical shape, ready to compare against or
-/// write into the `skill` table. Named fields, not a positional
-/// `(name, desc, content)` tuple — desc and content are both `String`, and a
-/// swap must not compile silently.
+/// write into the `skill` table — the parsed projection of one vendored
+/// `SKILL.md` package document. Named fields, not a positional tuple — desc
+/// and content are both `String`, and a swap must not compile silently.
 pub struct CanonicalSkill {
     pub name: String,
+    /// Frontmatter `description`, via bw-app's single strict parser.
     pub desc: String,
-    /// plan/16 S7: the SKILL.md **body**, YAML frontmatter already stripped
-    /// by `bw_core::skill_body::strip_frontmatter` — the same shape
-    /// `ImportSkillPackage` has always stored for external libraries. Before
-    /// this, the trio was `include_str!`'d whole, so BW's own standard
-    /// library was the only thing in the hub whose 正文 opened with a raw
-    /// `--- name: … ---` block — visible in the detail panel and injected
-    /// verbatim into every prompt that used it.
+    /// plan/16 S7: the SKILL.md **body**, YAML frontmatter already stripped —
+    /// the same shape `ImportSkillPackage` has always stored for external
+    /// libraries(详情展示与 prompt 注入共用这一形态).
     pub content: String,
+    /// 归类徽记:五阶段技能 = `kind.label()`(原型/构建/…),三件套 = 「标配」
+    /// —— 由 `bw_library` 的 `BwSkillDocKind` 拍板派生,不是猜测。
+    pub category: String,
+    /// 每件 bw-standard 技能都有阶段锚(五阶段技能挂本阶段;标配三件套钉
+    /// 原型段 —— plan/13 D8 拍板:创建流落地后原型阶段的起手活)。
+    pub stage_ref: StageKind,
 }
 
-const STANDARD_ISSUE_SKILLS: &[StandardIssueSkill] = &[
-    StandardIssueSkill {
-        name: "competitive-analysis",
-        desc: "起草对标名单、各家北极星猜测、差异定位、可借鉴打法,产出报告 PR 进仓——检索不可用时如实降级为「人喂材料+agent 整理」,绝不由幻觉填充对标事实。适用:项目创建后的标配起手活「竞品分析」,或任何需要重摸对标的时点",
-        raw_md: COMPETITIVE_ANALYSIS_SKILL_MD,
-    },
-    StandardIssueSkill {
-        name: "north-star-discovery",
-        desc: "结合项目意图与竞品分析报告推导北极星+滞后+引领三层指标,每条必附采集方案——先对后亮,北极星绝不为「采得到」退化成工程虚荣指标。适用:标配 Issue「找指标」,或北极星需要重推的时点",
-        raw_md: NORTH_STAR_DISCOVERY_SKILL_MD,
-    },
-    StandardIssueSkill {
-        name: "metrics-binding",
-        desc: "为 .bw/metrics.toml 里绑不上的指标找到点亮的最便宜路径——绝不伪造数据、绝不为了点亮而改指标定义。适用:标配 Issue「绑数据」,或健康灯长期 Unknown 需要接真数据源的时点",
-        raw_md: METRICS_BINDING_SKILL_MD,
-    },
-];
-
-/// The three standard-issue-trio skills' canonical rows (named fields, not
-/// positional tuples — a desc/content swap must not compile silently),
-/// straight off the same `STANDARD_ISSUE_SKILLS` table
-/// `seed_standard_issue_skills_if_missing` reads — exposed for `bw-app`'s
-/// Boot self-healing reconciliation (P8; desc joined the diff in plan/16 §2
-/// so a canonical description fix reaches existing rows the same way a
-/// SKILL.md edit does): a by-name-idempotent seed only ever plants a fresh
-/// row, so an existing row on a pre-refresh database never picks up a later
-/// edit to `docs/skills/<slug>/SKILL.md` (or to the desc column here) on its
-/// own — the caller diffs `desc`+`content` against what's already in the DB
-/// and overwrites in place when they differ. Not used by the seed function
-/// itself; both simply read the same source-of-truth table.
-pub fn standard_issue_skill_canon() -> Vec<CanonicalSkill> {
-    STANDARD_ISSUE_SKILLS
-        .iter()
-        .map(|s| CanonicalSkill {
-            name: s.name.to_string(),
-            desc: s.desc.to_string(),
-            content: bw_core::skill_body::strip_frontmatter(s.raw_md),
-        })
-        .collect()
-}
-
-/// 按名幂等地种下标配 Issue 三件套的三个 Skill(竞品分析/找指标/绑数
-/// 据)——`name` 就是它们稳定可查的 slug,C8 票的标配 Issue 会按这个名字
-/// 关联注入。已存在(同名)就跳过,不覆盖——内容更新走 `UpdateSkill`,不
-/// 是重新 seed。
-pub async fn seed_standard_issue_skills_if_missing(store: &dyn Store) -> Result<()> {
-    let have: std::collections::HashSet<String> = store
-        .list_skills()
-        .await?
-        .into_iter()
-        .map(|s| s.name)
-        .collect();
-
-    for s in standard_issue_skill_canon() {
-        if have.contains(&s.name) {
+/// 按名幂等地种下 bw-standard 技能库(五阶段方法论 + 标配三件套)。已存在
+/// (同名)只回填缺失的 `stage_ref`(T7 语义:pre-T7 库的诚实 NULL 按既有
+/// 拍板补上,已有值绝不动),不覆盖 desc/content——内容对账是 bw-app Boot
+/// 的 Pass 2(只追 `Official { "bw-standard" }` 行),不是重新 seed。
+pub async fn seed_bw_standard_skills_if_missing(
+    store: &dyn Store,
+    canon: &[CanonicalSkill],
+) -> Result<()> {
+    let existing_skills = store.list_skills().await?;
+    for c in canon {
+        if let Some(existing) = existing_skills.iter().find(|s| s.name == c.name) {
+            if existing.stage_ref.is_none() {
+                store
+                    .set_skill_stage_ref(existing.id, Some(c.stage_ref))
+                    .await?;
+            }
             continue;
         }
         store
             .create_skill(NewSkill {
                 id: SkillId::new(),
-                name: s.name.clone(),
+                name: c.name.clone(),
                 maturity: Maturity::Mature,
-                desc: s.desc.clone(),
-                category: "标配".to_string(),
+                desc: c.desc.clone(),
+                category: c.category.clone(),
+                stage_ref: Some(c.stage_ref),
                 source: HubSource::Official {
                     official_library: BW_STANDARD_LIBRARY.to_string(),
                 },
-                // plan/13 D8: 标配三件套是创建流落地后原型阶段的起手活,
-                // stage_ref 钉原型阶段——这是拍板不是猜测(T7 的「不猜」
-                // 约束针对无人分类的导入目录行,不适用于此)。
-                stage_ref: Some(StageKind::Prototype),
-                // plan/16 S7: frontmatter 已剥离(见 `CanonicalSkill.content`)。
-                content: s.content.clone(),
-                // 标配 Skill 全局共享(任何项目的标配 Issue 都能挂),同
-                // seed_stage_entities_if_missing 的方法论技能一致口径。
+                content: c.content.clone(),
+                // bw-standard 技能全局共享(方法论/标配都不是某项目专属),
+                // project_id 留空。
                 project_id: None,
             })
             .await?;

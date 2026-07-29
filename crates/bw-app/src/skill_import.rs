@@ -26,6 +26,26 @@ pub(crate) struct ParsedSkillPackage {
     pub files: Vec<(String, String)>,
 }
 
+/// One parsed `SKILL.md` document: strict frontmatter `name`/`description` +
+/// the body after the closing `---` (leading blank lines trimmed).
+pub(crate) struct ParsedSkillMd {
+    pub name: String,
+    pub desc: String,
+    pub body: String,
+}
+
+/// plan/17 · **the** one SKILL.md text parser — the disk import path
+/// ([`import_skill_package_from_disk`]) and the bw-standard canon builder
+/// (`crate::bw_canon`, over `bw_core::bw_library`'s vendored docs) both go
+/// through here, so 装载系统只有一条:SKILL.md 文档 → 解析 → 行. Takes raw
+/// text, not a path: where the bytes come from (disk vs `include_str!`) is
+/// the caller's business.
+pub(crate) fn parse_skill_md(raw: &str) -> Result<ParsedSkillMd, String> {
+    let (frontmatter, body) = split_frontmatter(raw)?;
+    let (name, desc) = parse_frontmatter_fields(&frontmatter)?;
+    Ok(ParsedSkillMd { name, desc, body })
+}
+
 /// Read and parse a real skill folder. Fails honestly (no guessing) when:
 /// `source_path` isn't a directory, it has no `SKILL.md`, the frontmatter
 /// block is missing/unclosed, the frontmatter isn't valid YAML, it isn't a
@@ -54,17 +74,16 @@ pub(crate) fn import_skill_package_from_disk(
             skill_md_path.display()
         )
     })?;
-    let (frontmatter, body) = split_frontmatter(&raw)?;
-    let (name, desc) = parse_frontmatter_fields(&frontmatter)?;
+    let parsed = parse_skill_md(&raw)?;
 
     let mut files = Vec::new();
     collect_files(dir, dir, &skill_md_path, &mut files)?;
     files.sort_by(|a, b| a.0.cmp(&b.0));
 
     Ok(ParsedSkillPackage {
-        name,
-        desc,
-        content: body,
+        name: parsed.name,
+        desc: parsed.desc,
+        content: parsed.body,
         files,
     })
 }

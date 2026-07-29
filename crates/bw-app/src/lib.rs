@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 mod agent_import;
+mod bw_canon;
 mod legacy_migration;
 mod skill_import;
 
@@ -2339,10 +2340,11 @@ impl App {
     /// `github_remote` 是否非空短路整批——无仓项目连 BW 侧的三张都不建,
     /// 不给建不了仓的项目发一套没处交付的活(如实留白)。
     ///
-    /// 每张携带一个稳定 `standard_skill` slug——三张卡均已由
-    /// `seed_standard_issue_skills_if_missing` 按名种下(C9 落地
+    /// 每张携带一个稳定 `standard_skill` slug——三张卡均已由 Boot 的
+    /// `seed_bw_standard_skills_if_missing` 按名种下(C9 落地
     /// `north-star-discovery` / `metrics-binding`,C10 补上
-    /// `competitive-analysis`),`run_issue_now` 注入时按名查到即真实注入。
+    /// `competitive-analysis`,plan/17 起统一走包文档解析播种),
+    /// `run_issue_now` 注入时按名查到即真实注入。
     ///
     /// 返回①竞品分析那张的 `IssueId`,供「问一句就跑」路径直接开工;无仓
     /// 项目(未建任何标配票)返回 `None`。
@@ -3298,24 +3300,34 @@ impl App {
                 // Real OMC/ECC catalog, not fabricated sample data — a no-op
                 // once the hub tables are non-empty (checked inside).
                 bw_store::seed_hub_if_empty(self.store.as_ref()).await?;
-                // The five stage-role agents + stage working-method skills
-                // (bw_core::playbook projections) — by-name idempotent, so an
-                // already-seeded database gains them too.
-                bw_store::seed_stage_entities_if_missing(self.store.as_ref()).await?;
-                // C9+C10 · plan/13 D8/D9: the three standard-Issue-trio
-                // skills (竞品分析/找指标/绑数据) — by-name idempotent, so an
-                // already-seeded database gains them too. Content is
-                // `include_str!`-ed straight from docs/skills/<slug>/SKILL.md
-                // (the real file in the repo).
-                bw_store::seed_standard_issue_skills_if_missing(self.store.as_ref()).await?;
+                // plan/17 · 装载统一: the bw-standard skill library (five
+                // stage working-method skills + the standard-issue trio) is
+                // parsed from its vendored package documents
+                // (`bw_core::bw_library` — the real docs/skills/<slug>/
+                // SKILL.md files compiled in) through THE import parser
+                // (`bw_canon`, name==slug + kernel-desc guards inside), so
+                // BW's own skills and every external import enter through
+                // one loading chain. Seeding is by-name idempotent (an
+                // already-seeded database gains missing rows too); a
+                // malformed vendored doc fails Boot loudly instead of
+                // seeding a wrong row.
+                let skill_canon =
+                    crate::bw_canon::bw_standard_skill_canon().map_err(AppError::Invalid)?;
+                bw_store::seed_bw_standard_skills_if_missing(self.store.as_ref(), &skill_canon)
+                    .await?;
+                // The five stage-role agents (bw_core::playbook projections)
+                // — by-name idempotent, so an already-seeded database gains
+                // them too.
+                bw_store::seed_stage_role_agents_if_missing(self.store.as_ref()).await?;
                 // P8 (2026-07-28, widened by plan/16 §2): the bw-standard
                 // skill library (issue trio + five playbook stage skills) is
-                // reconciled — `desc`+`content` — against its code canon on
-                // every Boot, unconditionally — not gated behind a one-time
-                // migration flag. `seed_standard_issue_skills_if_missing`
+                // reconciled — `desc`+`content` — against its canon (plan/17
+                // 起 = the parsed vendored package documents, `skill_canon`
+                // above) on every Boot, unconditionally — not gated behind a
+                // one-time migration flag. `seed_bw_standard_skills_if_missing`
                 // above is by-name idempotent — it only ever plants a fresh
                 // row, never overwrites an existing one (that function's own
-                // doc comment: "内容更新走 UpdateSkill,不是重新 seed") — so
+                // doc comment: "内容对账是 Pass 2,不是重新 seed") — so
                 // an existing row on an older database never picks up a
                 // later edit to the SKILL.md source on its own. P2
                 // originally closed that gap with a one-shot
@@ -3337,7 +3349,7 @@ impl App {
                 // re-diffs and, only when different, overwrites. Cost is
                 // negligible: `list_skills()` is a call this same Boot path
                 // already makes right above for
-                // `seed_standard_issue_skills_if_missing`.
+                // `seed_bw_standard_skills_if_missing`.
                 // The `STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY` app_meta
                 // guard this replaced is gone from `legacy_migration.rs`
                 // entirely (see that module's own historical-note comment at
@@ -3346,29 +3358,16 @@ impl App {
                 // harmless and deliberately not migrated away (no
                 // destructive DELETE for a row nothing reads anymore).
                 {
-                    // plan/16 §2 防线 2: the reconciled canon is now the
-                    // whole bw-standard library — the issue trio (from
-                    // `docs/skills/<slug>/SKILL.md` via seed's include_str)
-                    // *plus* the five playbook stage-methodology skills
-                    // (from `bw_core::playbook::stage_skills`), and the
-                    // diff covers `desc` as well as `content` (a canonical
-                    // description fix must reach existing rows the same way
-                    // a SKILL.md edit does).
-                    // `bw_store::CanonicalSkill` — named fields, and its
-                    // `content` is already frontmatter-stripped (plan/16 S7),
-                    // so what Boot compares against is exactly what the hub
-                    // should store and show.
-                    let mut canon: Vec<bw_store::CanonicalSkill> =
-                        bw_store::standard_issue_skill_canon();
-                    for kind in StageKind::ALL {
-                        for sk in bw_core::playbook::stage_skills(kind) {
-                            canon.push(bw_store::CanonicalSkill {
-                                name: sk.name.to_string(),
-                                desc: sk.def.to_string(),
-                                content: sk.content.to_string(),
-                            });
-                        }
-                    }
+                    // plan/16 §2 防线 2, plan/17 合流: the reconciled canon
+                    // is the whole bw-standard library — `skill_canon`, the
+                    // same parsed-package-document rows the seed above ate
+                    // (装载与对账不再各建一份) — and the diff covers `desc`
+                    // as well as `content` (a canonical description fix must
+                    // reach existing rows the same way a SKILL.md edit
+                    // does). `CanonicalSkill.content` is the parser's body
+                    // output, frontmatter already gone (plan/16 S7), so what
+                    // Boot compares against is exactly what the hub should
+                    // store and show.
 
                     // The five playbook skills' pre-plan/16 canonical descs —
                     // a *bounded* migration aid, not a version treadmill:
@@ -3405,7 +3404,7 @@ impl App {
                     // with content untouched → naive Pass 1 re-promotes →
                     // Pass 2 clobbers the desc).
                     let existing_skills = self.store.list_skills().await?;
-                    for c in &canon {
+                    for c in &skill_canon {
                         for row in existing_skills.iter().filter(|s| {
                             s.name == c.name
                                 && s.source == HubSource::SelfBuilt
@@ -3437,7 +3436,7 @@ impl App {
                     // origin catching a row back up to itself, so `source`
                     // must stay `Official { "bw-standard" }` unchanged.
                     let existing_skills = self.store.list_skills().await?;
-                    for c in &canon {
+                    for c in &skill_canon {
                         let Some(existing) = existing_skills.iter().find(|s| {
                             s.name == c.name
                                 && matches!(

@@ -1329,7 +1329,9 @@ pub fn stage_workflow_with_playbook(
         .iter()
         .map(|s| SkillRef {
             name: s.name.to_string(),
-            def: s.def.to_string(),
+            // plan/17: desc 正本在包文档 frontmatter 里;内核用同规则的宽容
+            // 提取器取一句话,Boot canon 构建器守卫它与严格解析一致。
+            def: crate::skill_body::frontmatter_description(s.raw_md).unwrap_or_default(),
             from: "阶段剧本(bw-core::playbook)".into(),
         })
         .collect();
