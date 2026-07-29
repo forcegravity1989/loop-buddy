@@ -179,6 +179,20 @@ pub fn check_skill(input: SkillSpecInput<'_>) -> Vec<SpecFinding> {
     out
 }
 
+/// [`check_skill`] straight off a domain [`crate::model::SkillCard`] — the
+/// one place the 分域 discriminator + provenance flags are projected, so the
+/// VM and the audit loop can't drift apart on the mapping.
+pub fn check_skill_card(card: &crate::model::SkillCard) -> Vec<SpecFinding> {
+    check_skill(SkillSpecInput {
+        name: &card.name,
+        desc: &card.desc,
+        content: &card.content,
+        official_import: card.source.is_external_official(),
+        distilled: card.distilled_from_issue.is_some(),
+        has_origin_agent: card.origin_agent.is_some(),
+    })
+}
+
 /// 徽记口径:待校正数 = MustFix 条数(Advisory 不点黄灯,详情里如实列出)。
 pub fn must_fix_count(findings: &[SpecFinding]) -> usize {
     findings

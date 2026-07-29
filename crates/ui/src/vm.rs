@@ -931,21 +931,9 @@ pub struct SkillFileVm {
 }
 
 pub fn skill_card(s: &SkillCard, files: Vec<SkillFileVm>) -> SkillCardVm {
-    // 分域执行 (plan/16 §1): an external official-library import gets
-    // Advisory-only findings (原文如实保留); BW 自带标准库 bw-standard is
-    // BW 自产 — hard rules apply to it like any self-built row.
-    let official_import = matches!(
-        &s.source,
-        HubSource::Official { official_library } if official_library != "bw-standard"
-    );
-    let spec_findings = bw_core::skill_spec::check_skill(bw_core::skill_spec::SkillSpecInput {
-        name: &s.name,
-        desc: &s.desc,
-        content: &s.content,
-        official_import,
-        distilled: s.distilled_from_issue.is_some(),
-        has_origin_agent: s.origin_agent.is_some(),
-    });
+    // 分域执行 (plan/16 §1) is inside `check_skill_card` — one projection,
+    // shared with the audit loop, so the two can't drift.
+    let spec_findings = bw_core::skill_spec::check_skill_card(s);
     let spec_must_fix = bw_core::skill_spec::must_fix_count(&spec_findings);
     SkillCardVm {
         id: s.id,

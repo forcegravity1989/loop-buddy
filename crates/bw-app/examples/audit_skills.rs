@@ -23,7 +23,7 @@
 
 use bw_app::{App, Command};
 use bw_core::model::HubSource;
-use bw_core::skill_spec::{check_skill, must_fix_count, SkillSpecInput, SpecSeverity};
+use bw_core::skill_spec::{check_skill_card, must_fix_count, SpecSeverity};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{SqliteStore, Store};
 use std::collections::HashMap;
@@ -44,21 +44,6 @@ const RENAMES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-fn spec_input<'a>(s: &'a bw_core::model::SkillCard) -> SkillSpecInput<'a> {
-    let official_import = matches!(
-        &s.source,
-        HubSource::Official { official_library } if official_library != "bw-standard"
-    );
-    SkillSpecInput {
-        name: &s.name,
-        desc: &s.desc,
-        content: &s.content,
-        official_import,
-        distilled: s.distilled_from_issue.is_some(),
-        has_origin_agent: s.origin_agent.is_some(),
-    }
-}
-
 /// 全量机检 + S2 重名扫描,打印报告,返回 (硬规违规技能数, 提示技能数)。
 async fn report(store: &Arc<dyn Store>, banner: &str) -> (usize, usize) {
     let skills = store.list_skills().await.unwrap();
@@ -71,11 +56,21 @@ async fn report(store: &Arc<dyn Store>, banner: &str) -> (usize, usize) {
     let mut advisory_skills = 0usize;
     println!("---------------- {banner} ----------------");
     for s in &skills {
-        let mut findings = check_skill(spec_input(s));
+        let mut findings = check_skill_card(s);
         if name_counts[s.name.as_str()] > 1 {
+            // 分域同 per-skill 规则:重名组里只要有一条 BW 自产,就是硬规
+            // 违规;全组皆官方外库导入则如实降为提示(原文不改写)。
+            let any_bw_authored = skills
+                .iter()
+                .filter(|x| x.name == s.name)
+                .any(|x| !x.source.is_external_official());
             findings.push(bw_core::skill_spec::SpecFinding {
                 rule: "S2",
-                severity: SpecSeverity::MustFix,
+                severity: if any_bw_authored {
+                    SpecSeverity::MustFix
+                } else {
+                    SpecSeverity::Advisory
+                },
                 message: format!(
                     "名称「{}」在库内重复 {} 次",
                     s.name,
@@ -196,7 +191,7 @@ async fn main() {
             .unwrap();
             println!("fix · 「{old_name}」 → 「{new_name}」(desc 补「适用」触发段)");
 
-            // 按名引用旧技能名的 agent 同步改引,联合键不留悬空。
+            // 按名引用旧技能名的队友同步改引,联合键不留悬空。
             for a in agents
                 .iter()
                 .filter(|a| a.skills.iter().any(|k| k.name == *old_name))
@@ -222,9 +217,36 @@ async fn main() {
                 })
                 .await
                 .unwrap();
-                println!("fix · agent「{}」的技能引用同步改为「{new_name}」", a.name);
+                println!("fix · 队友「{}」的技能引用同步改为「{new_name}」", a.name);
             }
         }
+    }
+
+    if fix {
+        // S6 顽固行校正:Boot 的 pristine 升源只收编「与正本逐字一致」的
+        // 行;正文被人改过的旧编码行(source='official' 且空库名)诚实留在
+        // 自建域,但原始列还挂着 official——把原始编码归一为 self_built,
+        // 与 parse_hub_source 早已在读的语义完全一致,零行为变化,纯编码
+        // 卫生(plan/16 §4 台账)。
+        use sqlx::Row as _;
+        let url = format!("sqlite://{db_path}");
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let n = sqlx::query(
+            "UPDATE skill SET source='self_built', updated_at=unixepoch(), rev=rev+1
+             WHERE source='official' AND official_library=''",
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .rows_affected();
+        if n > 0 {
+            println!("fix · S6 顽固行原始编码归一 self_built:{n} 行(语义不变,纯卫生)");
+        }
+        let _ = pool;
     }
 
     let (must_fix_after, _) = report(

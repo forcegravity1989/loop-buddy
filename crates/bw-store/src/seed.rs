@@ -20,7 +20,9 @@
 //! on the fly.
 
 use crate::{NewAgent, NewSkill, NewWorkflowSpec, Result, Store};
-use bw_core::model::{stage_template_workflow, HubSource, Maturity, StageKind};
+use bw_core::model::{
+    stage_template_workflow, HubSource, Maturity, StageKind, BW_STANDARD_LIBRARY,
+};
 use bw_core::{AgentId, SkillId};
 
 /// Seed the hub library's own stage-template workflows if it's currently
@@ -107,7 +109,7 @@ pub async fn seed_stage_entities_if_missing(store: &dyn Store) -> Result<()> {
                     // this stage's role — a declared fact, not a guess.
                     stage_ref: Some(kind),
                     source: HubSource::Official {
-                        official_library: "bw-standard".to_string(),
+                        official_library: BW_STANDARD_LIBRARY.to_string(),
                     },
                     content: sk.content.to_string(),
                     // 五阶段方法论技能是全局共享的(见本函数文档:「这个 app
@@ -195,10 +197,10 @@ const METRICS_BINDING_SKILL_MD: &str =
 const COMPETITIVE_ANALYSIS_SKILL_MD: &str =
     include_str!("../../../docs/skills/competitive-analysis/SKILL.md");
 
-struct StandardIssueSkill {
-    name: &'static str,
-    desc: &'static str,
-    content: &'static str,
+pub struct StandardIssueSkill {
+    pub name: &'static str,
+    pub desc: &'static str,
+    pub content: &'static str,
 }
 
 const STANDARD_ISSUE_SKILLS: &[StandardIssueSkill] = &[
@@ -219,7 +221,8 @@ const STANDARD_ISSUE_SKILLS: &[StandardIssueSkill] = &[
     },
 ];
 
-/// (name, desc, content) triples for the three standard-issue-trio skills,
+/// The three standard-issue-trio skills' canonical rows (named fields, not
+/// positional tuples — a desc/content swap must not compile silently),
 /// straight off the same `STANDARD_ISSUE_SKILLS` table
 /// `seed_standard_issue_skills_if_missing` reads — exposed for `bw-app`'s
 /// Boot self-healing reconciliation (P8; desc joined the diff in plan/16 §2
@@ -230,11 +233,8 @@ const STANDARD_ISSUE_SKILLS: &[StandardIssueSkill] = &[
 /// own — the caller diffs `desc`+`content` against what's already in the DB
 /// and overwrites in place when they differ. Not used by the seed function
 /// itself; both simply read the same source-of-truth table.
-pub fn standard_issue_skill_canon() -> Vec<(&'static str, &'static str, &'static str)> {
+pub fn standard_issue_skill_canon() -> &'static [StandardIssueSkill] {
     STANDARD_ISSUE_SKILLS
-        .iter()
-        .map(|s| (s.name, s.desc, s.content))
-        .collect()
 }
 
 /// 按名幂等地种下标配 Issue 三件套的三个 Skill(竞品分析/找指标/绑数
@@ -261,7 +261,7 @@ pub async fn seed_standard_issue_skills_if_missing(store: &dyn Store) -> Result<
                 desc: s.desc.to_string(),
                 category: "标配".to_string(),
                 source: HubSource::Official {
-                    official_library: "bw-standard".to_string(),
+                    official_library: BW_STANDARD_LIBRARY.to_string(),
                 },
                 // plan/13 D8: 标配三件套是创建流落地后原型阶段的起手活,
                 // stage_ref 钉原型阶段——这是拍板不是猜测(T7 的「不猜」

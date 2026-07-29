@@ -28,11 +28,11 @@ agent `skills` 列表、蒸馏溯源都按名 join),对应开放标准里「name
 | # | 规则 | 出处 |
 |---|---|---|
 | S1 | `name` 匹配 `^[a-z0-9]+(-[a-z0-9]+)*$`,1-64 字符(小写字母/数字/单连字符;不以连字符开头结尾;无连续连字符) | agentskills.io |
-| S2 | `name` 在技能库内唯一(联合键不容歧义) | BW join-key 约束 |
+| S2 | `name` 在技能库内唯一(联合键不容歧义)。全库级规则:命令层守卫拒绝重名新建/改名,审计全量扫描;卡面徽记只跑 per-skill 机检,不测此条 | BW join-key 约束 |
 | S3 | `descr` 非空且 ≤ 1024 字符 | agentskills.io |
-| S4 | `descr` 同时说清「做什么」+「何时用」——机检口径:含显式触发段(中文「适用」/英文 "use when/use this") | 两份 Anthropic 文档均列为 description 首要要求 |
+| S4 | `descr` 同时说清「做什么」+「何时用」——机检口径:含显式触发段(中文「适用」,或英文 "use when" / "use this" / "use it",大小写不敏感) | 两份 Anthropic 文档均列为 description 首要要求 |
 | S5 | `content`(正文)非空——技能是可执行的方法,不是收藏夹书签;蒸馏技能尤其不允许空壳 | skill-standards.md 既有铁律 |
-| S6 | 来源标注一致:存储层 `source='official'` ⟺ `official_library` 非空(旧编码 `official`+空库名 = 待归一) | BW `parse_hub_source` 语义 |
+| S6 | 来源标注一致(存储层原始列级,徽记不测):`source='official'` 必须带非空 `official_library`;反向唯一的合法例外是 `self_built`+非空库名 = T11「改编自」留痕。旧编码 `official`+空库名 = 待归一 | BW `parse_hub_source` / `parse_adapted_from` 语义 |
 
 ### A 系列(提示,如实报告、不自动改写)
 
@@ -53,15 +53,20 @@ agent `skills` 列表、蒸馏溯源都按名 join),对应开放标准里「name
 ## 2. 防线四层(规范不靠自觉,靠机器)
 
 1. **命令层守卫**(`bw-app`):`CreateSkill` / `UpdateSkill` / `DistillSkillFromIssue` 对
-   S1 名称格式硬拒(诚实报错,与「名称不能为空」同一通道)。`ImportSkillPackage` 不拒
-   ——外库原文如实进(分域规则),违规靠徽记与审计可见。
+   S1 名称格式与 S2 重名硬拒(诚实报错,与「名称不能为空」同一通道;三处共用同一个
+   守卫函数,不各抄一份)。`ImportSkillPackage` 不拒——外库原文如实进(分域规则),
+   违规靠徽记与审计可见。
 2. **Boot 自愈对账**(`bw-app` Boot,扩展既有 P8 机制):`Official{"bw-standard"}` 行的
    `desc`+`content` 每次启动与代码正本(playbook `stage_skills` + seed 三件套常量表)
    re-diff,漂移即覆写——该库的行「与正本不一致即过期」是永久不变式(人一编辑,T11 就
-   把它翻成 SelfBuilt,不再是 bw-standard 行)。另:五条 playbook 技能的存量行若仍是
-   旧编码(域读回 SelfBuilt)且 `content` 与正本逐字一致(pristine),Boot 升源为
-   `Official{"bw-standard"}`;被人改过正文的行诚实留在 SelfBuilt,绝不清洗用户编辑。
-3. **SkillHub 徽记**(可视化一致):每张技能卡跑同一份 `bw-core::skill_spec` 机检——
+   把它翻成 SelfBuilt,不再是 bw-standard 行)。另:bw-standard 全库(playbook 五 +
+   标配三)的存量行若域读回 SelfBuilt 且 **pristine**——`content` 与正本逐字一致、
+   `desc` 为今日正本或台账所载 pre-plan/16 旧正本(有界历史,非版本跑步机)、无
+   `adapted_from` 留痕(T11 翻转过的行绝不回收,否则 desc-only 编辑会被洗掉)、非
+   蒸馏行——Boot 升源为 `Official{"bw-standard"}`;其余诚实留在 SelfBuilt,绝不清洗
+   用户编辑。
+3. **SkillHub 徽记**(可视化一致):每张技能卡跑同一份 `bw-core::skill_spec` per-skill
+   机检(S2/S6 是全库/存储层规则,由防线 1/2/4 负责,徽记不测)——
    有硬规违规,卡面出黄徽记「规范 · 待校正 n」;详情逐条列出(含 A 系列提示,弱化样式)。
    **合规=绿色隐身,不出声**(设计系统既有纪律)。SkillHub 卡片与项目栏组件详情共用同
    一组件,两处展示一致。
@@ -93,6 +98,7 @@ agent `skills` 列表、蒸馏溯源都按名 join),对应开放标准里「name
 | `关键词关注面打分法` | 改名 `keyword-focus-scoring`,desc 补触发段;同步更新 agent「日报编辑」的 skills 引用;中文原名保留在正文标题 | §1 S1/S4;audit --fix 台账内置映射,非运行时编造 |
 | `多源体量控制法` | 改名 `per-source-volume-cap`,desc 补触发段;蒸馏溯源字段不动(SkillEdit 无此字段,结构上碰不到) | 同上 |
 | 官方外库违规(保留字名/超长正文等) | 不改写,徽记+审计如实提示 | §1 分域 |
+| S6 顽固行(旧编码 `official`+空库名且正文已被人改,pristine 升源不收) | audit --fix 把原始编码归一 `self_built`——与 `parse_hub_source` 已在读的语义完全一致,零行为变化,纯编码卫生 | §1 S6 |
 
 ## 5. 展示一致与工作流关联(「一开始的设想」落地核验)
 

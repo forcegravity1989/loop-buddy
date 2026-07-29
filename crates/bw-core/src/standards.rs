@@ -92,8 +92,9 @@ pub const SKILL_STANDARDS_MD: &str = r##"# Skill 标准(BW 组件规范 · skill
 | 字段 | 谁填 | 说明 |
 |---|---|---|
 | `name` | 作者 | 稳定短名,是 workflow 的 `SkillRef` 与 agent 的 `skills` 列表的联合键。\
-**硬规**(plan/16 S1,取自 agentskills.io 规范):1-64 字符,仅小写字母/数字/连字符,\
-不以连字符开头结尾、无连续连字符(如 `evidence-first`)。命令层会硬拒不合规的名字。 |
+**硬规**(plan/16 S1/S2,取自 agentskills.io 规范):1-64 字符,仅小写字母/数字/连字符,\
+不以连字符开头结尾、无连续连字符(如 `evidence-first`),且同库唯一。命令层会硬拒\
+不合规或重名的名字。 |
 | `descr` | 作者 | 一句话说清"这个技能**做什么**、**何时用**"(plan/16 S3/S4,取自 \
 Claude Code 最佳实践:description 是 agent 决定何时加载技能的唯一依据)。≤1024 字符;\
 BW 自产技能必须含显式触发段——中文用「适用:…」,英文用 "Use when …"。第三人称,\
