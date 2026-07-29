@@ -1,9 +1,7 @@
 ---
 name: competitive-analysis
-slug: competitive-analysis
 description: 起草对标名单、各家北极星猜测、差异定位、可借鉴打法,产出报告 PR 进仓——检索不可用时如实降级为「人喂材料+agent 整理」,绝不由幻觉填充对标事实。适用:项目创建后的标配起手活「竞品分析」,或任何需要重摸对标的时点
 category: 标配
-source: 官方(标配 Issue 三件套第一件,plan/13 D8/D9)
 ---
 
 # 竞品分析(competitive-analysis)

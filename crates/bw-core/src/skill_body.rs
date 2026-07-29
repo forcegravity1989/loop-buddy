@@ -55,53 +55,15 @@ pub fn strip_frontmatter(raw: &str) -> String {
         .to_string()
 }
 
-/// plan/17 · 从 SKILL.md 原文的 frontmatter 块里**宽容地**取出单行
-/// `description:` 的值——供内核侧需要一句话描述的投影使用(今天只有
-/// [`crate::model::stage_workflow_with_playbook`] 的 `SkillRef.def`:desc 的
-/// 正本随包文档进了 frontmatter,而 YAML 解析器不进内核)。
-///
-/// 与 bw-app 唯一严格解析器(serde_yaml)的关系,同 [`strip_frontmatter`]
-/// 的约定:块判定规则一致(第一行 `---`,首个独占一行的 `---` 闭合,未闭合
-/// = 不是 frontmatter);字段判定只认**顶格**的 `description:` 单行普通标量
-/// (成对引号会剥掉)。块标量(`|`/`>`)、空值、缩进键一律诚实返回 `None`,
-/// 绝不截半句装懂。bw-app 的 canon 构建器在 Boot 时用严格解析结果守卫这里
-/// 的输出一致——两个实现谁漂移谁被当场抓住,而 vendored 文档因此被约束在
-/// 这个宽容器读得懂的子集内。
-pub fn frontmatter_description(raw: &str) -> Option<String> {
-    let mut lines = raw.lines();
-    if lines.next()?.trim() != "---" {
-        return None;
-    }
-    let mut fm: Vec<&str> = Vec::new();
-    let mut closed = false;
-    for line in lines {
-        if line.trim() == "---" {
-            closed = true;
-            break;
-        }
-        fm.push(line);
-    }
-    if !closed {
-        return None;
-    }
-    for line in fm {
-        // 顶格键才算数:缩进的同名键属于某个嵌套映射,不是它。
-        let Some(rest) = line.strip_prefix("description:") else {
-            continue;
-        };
-        let v = rest.trim();
-        if v.is_empty() || v.starts_with('|') || v.starts_with('>') {
-            return None;
-        }
-        let v = v
-            .strip_prefix('"')
-            .and_then(|s| s.strip_suffix('"'))
-            .or_else(|| v.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-            .unwrap_or(v);
-        return Some(v.to_string());
-    }
-    None
-}
+// plan/17 收尾注:这里一度还有个「宽容取 frontmatter description」的
+// `frontmatter_description`,给 `SkillRef.def` 供一句话描述。它已删除——
+// 手写一个第二解析器换来两个真问题:(1) 它只认顶格单行普通标量,而
+// `description : x`(冒号前空格)、折叠/块标量、跨行续写都是合法 YAML,
+// serde_yaml 照常解析、它却返回 None,于是一次无害的文案排版就能让 Boot
+// 守卫判定「两个实现不一致」;(2) 调用点用 `unwrap_or_default()` 兜底,
+// None 会静默变成空 def 写进 skills_json。现在 desc 由
+// [`crate::bw_library::BwSkillDoc::desc`] 直接声明(canon 构建器用严格解析
+// 守卫它与文件逐字相等),内核不再需要任何 YAML 猜测。
 
 /// 把正文里每个 ATX markdown 标题下沉 `by` 级(`#` → `###` when `by == 2`),
 /// 供注入器把一份规范正文嵌进 prompt 的某个小节之下。

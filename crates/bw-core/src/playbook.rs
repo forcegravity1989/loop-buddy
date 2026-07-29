@@ -340,6 +340,9 @@ pub struct StageSkill {
     /// the seeded Skill-Hub row, and run-time usage accounting. Must equal
     /// the package's frontmatter `name` (canon 构建器守卫).
     pub name: &'static str,
+    /// The package's frontmatter `description`, declared (not re-scanned) —
+    /// see [`crate::bw_library::BwSkillDoc::desc`].
+    pub desc: &'static str,
     /// The raw `SKILL.md` package text, frontmatter included — see
     /// [`crate::bw_library`].
     pub raw_md: &'static str,
@@ -352,22 +355,27 @@ pub fn stage_skills(kind: StageKind) -> &'static [StageSkill] {
     match kind {
         StageKind::Prototype => &[StageSkill {
             name: "evidence-first",
+            desc: crate::bw_library::EVIDENCE_FIRST_DESC,
             raw_md: crate::bw_library::EVIDENCE_FIRST_MD,
         }],
         StageKind::Build => &[StageSkill {
             name: "spec-to-tests",
+            desc: crate::bw_library::SPEC_TO_TESTS_DESC,
             raw_md: crate::bw_library::SPEC_TO_TESTS_MD,
         }],
         StageKind::Optimize => &[StageSkill {
             name: "baseline-before-touch",
+            desc: crate::bw_library::BASELINE_BEFORE_TOUCH_DESC,
             raw_md: crate::bw_library::BASELINE_BEFORE_TOUCH_MD,
         }],
         StageKind::Growth => &[StageSkill {
             name: "fresh-eyes-funnel",
+            desc: crate::bw_library::FRESH_EYES_FUNNEL_DESC,
             raw_md: crate::bw_library::FRESH_EYES_FUNNEL_MD,
         }],
         StageKind::Ops => &[StageSkill {
             name: "breaking-drill",
+            desc: crate::bw_library::BREAKING_DRILL_DESC,
             raw_md: crate::bw_library::BREAKING_DRILL_MD,
         }],
     }

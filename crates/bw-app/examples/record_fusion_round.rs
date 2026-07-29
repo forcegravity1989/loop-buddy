@@ -184,7 +184,8 @@ async fn main() {
     app.dispatch(Command::DistillSkillFromIssue {
         skill_id: SkillId::new(),
         issue_id: first_build_issue.expect("merge issue exists"),
-        name: "同源双分支合并消解法".into(),
+        // S1(plan/16):名字走 kebab-case,中文标题留在正文小节。
+        name: "same-source-branch-merge".into(),
         desc: "从本轮 multica×BW 真实合并蒸馏:加法冲突的系统化消解手法。".into(),
         category: "方法论".into(),
         content: "\

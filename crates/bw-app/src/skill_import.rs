@@ -32,6 +32,11 @@ pub(crate) struct ParsedSkillMd {
     pub name: String,
     pub desc: String,
     pub body: String,
+    /// The optional frontmatter `category` — read so `crate::bw_canon` can
+    /// guard it against the kind-derived value (plan/17: a key the vendored
+    /// docs carry must not be a silent no-op). External imports keep their
+    /// own category logic and ignore this.
+    pub category: Option<String>,
 }
 
 /// plan/17 · **the** one SKILL.md text parser — the disk import path
@@ -43,7 +48,32 @@ pub(crate) struct ParsedSkillMd {
 pub(crate) fn parse_skill_md(raw: &str) -> Result<ParsedSkillMd, String> {
     let (frontmatter, body) = split_frontmatter(raw)?;
     let (name, desc) = parse_frontmatter_fields(&frontmatter)?;
-    Ok(ParsedSkillMd { name, desc, body })
+    let category = parse_optional_frontmatter_str(&frontmatter, "category")?;
+    Ok(ParsedSkillMd {
+        name,
+        desc,
+        body,
+        category,
+    })
+}
+
+/// Read one optional string key out of an already-split frontmatter block,
+/// through the same `serde_yaml` parser the required fields use. `Ok(None)`
+/// = the key is absent (legitimate); `Err` = it is present but not a string
+/// (a malformed doc, never silently ignored).
+fn parse_optional_frontmatter_str(frontmatter: &str, key: &str) -> Result<Option<String>, String> {
+    let value: serde_yaml::Value = serde_yaml::from_str(frontmatter)
+        .map_err(|e| format!("SKILL.md frontmatter 不是合法 YAML:{e}"))?;
+    let Some(mapping) = value.as_mapping() else {
+        return Ok(None);
+    };
+    match mapping.get(key) {
+        None => Ok(None),
+        Some(v) => v
+            .as_str()
+            .map(|s| Some(s.to_string()))
+            .ok_or_else(|| format!("SKILL.md frontmatter 的 {key} 不是字符串")),
+    }
 }
 
 /// Read and parse a real skill folder. Fails honestly (no guessing) when:

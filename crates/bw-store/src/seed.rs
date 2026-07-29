@@ -170,7 +170,21 @@ pub async fn seed_bw_standard_skills_if_missing(
     let existing_skills = store.list_skills().await?;
     for c in canon {
         if let Some(existing) = existing_skills.iter().find(|s| s.name == c.name) {
-            if existing.stage_ref.is_none() {
+            // stage_ref 回填只认**确实是我们这一行**的行(Official
+            // {bw-standard})。纯按名匹配会把用户自建的同名技能(比如他自
+            // 己那条 metrics-binding,stage_ref 为 NULL = 通用/跨阶段,是既
+            // 有的诚实语义)误当成「已种下的标配」,悄悄改掉他的归类——用户
+            // 什么都没做,自己的技能被系统动了。被本函数替换掉的三件套种
+            // 子路径在命中同名时就是什么都不碰,这里跟随那条更保守的先例。
+            // 老库里读回 SelfBuilt 的那批真·内置行由 Boot 的 Pass 1 升源,
+            // 下一次 Boot 走到这里就满足条件、照常补上。
+            if existing.stage_ref.is_none()
+                && matches!(
+                    &existing.source,
+                    HubSource::Official { official_library }
+                        if official_library == BW_STANDARD_LIBRARY
+                )
+            {
                 store
                     .set_skill_stage_ref(existing.id, Some(c.stage_ref))
                     .await?;

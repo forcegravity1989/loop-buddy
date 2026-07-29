@@ -5,15 +5,19 @@
 //! (`bw_store::seed_bw_standard_skills_if_missing`)与自愈对账(Pass 1/2)
 //! 都吃这一份输出,Rust 端不再有第二份 desc/content 抄本。
 //!
-//! 两道守卫(vendored 文档是编译进二进制的开发者产物,坏了就该 Boot 当场
-//! 报错拒绝启动,绝不静默播错行):
+//! 三道守卫。vendored 文档是编译进二进制的开发者产物,坏了就是开发者错误,
+//! 必须报出来而不是静默播错行——但**如实说清后果**:Boot 的 Err 被桌面壳
+//! (`kernel.rs`)吞成一条 toast,应用照常开窗,所以调用方拿到 `Err` 后
+//! 不能提前 `?` 掉后面的初始化(见 `App::dispatch` 的 `Command::Boot`:
+//! 跳过 bw-standard 播种/对账,其余照跑,错误留到 Boot 末尾抛出)。
 //!
 //! 1. 解析出的 frontmatter `name` 必须等于包目录名 `slug`——`bw_library` 里
 //!    的 slug 是目录名的复述,这条守卫钉死两者不漂移;
-//! 2. 内核宽容提取器 `bw_core::skill_body::frontmatter_description`(喂
-//!    `SkillRef.def` 的那只,YAML 解析器不进内核)的输出必须与严格解析出的
-//!    `description` 一致——两个实现谁漂移谁被当场抓住,vendored 文档也因此
-//!    被约束在宽容器读得懂的子集内(顶格单行普通标量)。
+//! 2. `bw_library` 声明的 `desc` 必须与严格解析出的 `description` 逐字相
+//!    等——声明是复述,文件是正本,漂了就报;
+//! 3. 文件里的 `category`(若写了)必须与 `BwSkillDocKind` 派生出的归类一
+//!    致——否则改文件那个键就是个不报错也不生效的空操作,正是本轮要消灭的
+//!    「同一事实两处存放」。
 
 use bw_core::bw_library::{bw_standard_skill_docs, BwSkillDocKind};
 use bw_core::model::StageKind;
@@ -34,11 +38,10 @@ pub(crate) fn bw_standard_skill_canon() -> Result<Vec<CanonicalSkill>, String> {
                     doc.slug, parsed.name
                 ));
             }
-            let kernel_desc = bw_core::skill_body::frontmatter_description(doc.raw);
-            if kernel_desc.as_deref() != Some(parsed.desc.as_str()) {
+            if doc.desc != parsed.desc {
                 return Err(format!(
-                    "bw-standard 包 {}:内核宽容提取的 description 与严格解析不一致\
-                     (SkillRef.def 会漂移;description 须为顶格单行普通标量)",
+                    "bw-standard 包 {}:bw_library 声明的 desc 与文件 frontmatter \
+                     description 不一致(声明是复述,文件是正本)",
                     doc.slug
                 ));
             }
@@ -50,6 +53,15 @@ pub(crate) fn bw_standard_skill_canon() -> Result<Vec<CanonicalSkill>, String> {
                 // stage_ref 钉原型段。
                 BwSkillDocKind::StandardIssue => ("标配".to_string(), StageKind::Prototype),
             };
+            if let Some(file_category) = &parsed.category {
+                if file_category != &category {
+                    return Err(format!(
+                        "bw-standard 包 {}:文件 frontmatter category「{file_category}」\
+                         与 BwSkillDocKind 派生的「{category}」不一致",
+                        doc.slug
+                    ));
+                }
+            }
             Ok(CanonicalSkill {
                 name: parsed.name,
                 desc: parsed.desc,

@@ -294,11 +294,18 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
 
     // T18:统一句式——不管有没有支撑文件,都是同一个「技能包(SKILL.md […])」
     // 句式,不再是「技能正文」/「技能文件」两套措辞对应两套可视化。
-    let package_label = if s.files.is_empty() {
-        "技能包(SKILL.md)".to_string()
-    } else {
+    let has_files = !s.files.is_empty();
+    let package_label = if has_files {
         format!("技能包(SKILL.md + {} 个支撑文件)", s.files.len())
+    } else {
+        "技能包(SKILL.md)".to_string()
     };
+    // 一个包只有 SKILL.md 时(库里多数:五条阶段技能与全部蒸馏技能),左侧
+    // 文件树只会有一个节点——它不提供任何导航价值,却吃掉 200px 可读宽度,
+    // 再把正文压进 360px 滚动框。此时收起侧栏、去掉高度上限,让正文按内容
+    // 自然展开(T18 之前单栏分支的可读性,不必为了「统一」赔进去)。统一的
+    // 是句式与组件,不是在没有第二个文件时也硬摆一个浏览器骨架。
+    let preview_cap = if has_files { "max-height:360px;" } else { "" };
     // 空正文占位说明:root(SKILL.md 本身)沿用旧分支更具体的措辞——它多半
     // 是纯目录引用(全文在来源仓库),值得提示「可编辑补充」;子文件的空则是
     // 普通空文件,不套同一句诚不实的话。
@@ -315,16 +322,18 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
         }
         div {
             style: "display:flex;border:1px solid {theme::BORDER};border-radius:8px;overflow:hidden;margin-bottom:10px;",
-            div {
-                style: "width:200px;flex:none;background:{theme::CARD_ALT};border-right:1px solid {theme::BORDER};max-height:360px;overflow-y:auto;padding:6px 0;",
+            if has_files {
                 div {
-                    style: "display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer;font-family:{theme::MONO};font-size:12px;background:{root_bg};color:{root_fg};",
-                    onclick: move |_| selected.set(None),
-                    span { "▤" }
-                    span { "SKILL.md" }
-                }
-                for node in tree.iter() {
-                    SkillTreeItem { node: node.clone(), depth: 1, selected, collapsed }
+                    style: "width:200px;flex:none;background:{theme::CARD_ALT};border-right:1px solid {theme::BORDER};max-height:360px;overflow-y:auto;padding:6px 0;",
+                    div {
+                        style: "display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer;font-family:{theme::MONO};font-size:12px;background:{root_bg};color:{root_fg};",
+                        onclick: move |_| selected.set(None),
+                        span { "▤" }
+                        span { "SKILL.md" }
+                    }
+                    for node in tree.iter() {
+                        SkillTreeItem { node: node.clone(), depth: 1, selected, collapsed }
+                    }
                 }
             }
             div {
@@ -335,7 +344,7 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
                 }
                 if is_md {
                     div {
-                        style: "padding:12px 14px;overflow-y:auto;max-height:360px;",
+                        style: "padding:12px 14px;overflow-y:auto;{preview_cap}",
                         MarkdownView {
                             content: selected_content.clone(),
                             empty_label: content_empty_label.clone(),
@@ -345,7 +354,7 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
                     div { style: "font-size:12px;color:{ink3};padding:14px;", "(空文件)" }
                 } else {
                     pre {
-                        style: "font-family:{theme::MONO};font-size:11.5px;line-height:1.6;color:{ink2};margin:0;padding:12px 14px;white-space:pre-wrap;overflow-y:auto;max-height:360px;",
+                        style: "font-family:{theme::MONO};font-size:11.5px;line-height:1.6;color:{ink2};margin:0;padding:12px 14px;white-space:pre-wrap;overflow-y:auto;{preview_cap}",
                         "{selected_content}"
                     }
                 }

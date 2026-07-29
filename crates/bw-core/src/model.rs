@@ -1329,9 +1329,11 @@ pub fn stage_workflow_with_playbook(
         .iter()
         .map(|s| SkillRef {
             name: s.name.to_string(),
-            // plan/17: desc 正本在包文档 frontmatter 里;内核用同规则的宽容
-            // 提取器取一句话,Boot canon 构建器守卫它与严格解析一致。
-            def: crate::skill_body::frontmatter_description(s.raw_md).unwrap_or_default(),
+            // plan/17: desc 正本在包文档 frontmatter 里,`bw_library` 把它
+            // 与 raw 一起声明(Boot canon 构建器守卫两者逐字相等)——这里直接
+            // 取,不现扫原文:扫描既是每次调用的重复功,又会在写法合法但扫
+            // 不动时静默退化成空 def 写进 skills_json。
+            def: s.desc.to_string(),
             from: "阶段剧本(bw-core::playbook)".into(),
         })
         .collect();
