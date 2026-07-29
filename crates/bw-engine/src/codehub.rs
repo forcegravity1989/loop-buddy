@@ -155,13 +155,59 @@ pub async fn collect_count(
         .map_err(|_| CodehubError::Parse(format!("无法解析 codehub 计数:{text:?}")))
 }
 
-/// `codehub-cli repo clone <path> <dest> -H <host>` — 把 codehub 仓 clone 进
-/// `dest`。token 走 keyring(profile/CODEHUB_TOKEN),Rust 侧不管。身份(host+path)
-/// 调用方已知,这里只 clone,**不回远端身份**(区别于 github::clone_repo 回
-/// GithubRepoRef:codehub 身份从用户输入来,不需要 clone 告诉你)。
+/// Clone a codehub repo into `dest` over **SSH**. codehub 是局域网平台,HTTPS
+/// `git clone` 经代理隧道被拦(实测 504);SSH 走 SSH key、不经代理、不要
+/// token——开发者手敲 `git clone ssh://git@szv-open...:2222/.../maas.git` 就是
+/// 这条路,常规、不特立独行。
+///
+/// SSH host(`szv-open.codehub.huawei.com:2222`)≠ API host
+/// (`open.codehub.huawei.com`),不能从 (host,path) 手拼——从 `project view`
+/// 的 `ssh_url_to_repo` 字段取准确地址(`--template` 出裸串;`--jq` 带引号且
+/// 无 `-r`)。拿到后 raw `git clone`(codehub-cli 的 `repo clone` 对 SSH 输入
+/// 是纯透传,无增益,故绕过)。
+///
+/// `GIT_SSH_COMMAND` 带 `accept-new`(首次 host key 自动接受写 known_hosts,
+/// 免非交互卡死)+ `BatchMode=yes`(只走 key、不弹密码,密码会挂死非交互进程)。
 pub async fn clone_repo(host: &str, path: &str, dest: &Path) -> Result<(), CodehubError> {
+    // 1. 取 ssh_url(--template 出裸串,无引号)
     let out = tokio::process::Command::new("codehub-cli")
-        .args(["repo", "clone", path, &dest.to_string_lossy(), "-H", host])
+        .args([
+            "project",
+            "view",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--template",
+            "{{.ssh_url_to_repo}}",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(format!(
+            "取 ssh_url 失败(project view):{}",
+            stderr_text(&out)
+        )));
+    }
+    let ssh_url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // --template 对 null 字段输出 "<no value>";空/非 ssh:// 不喂给 git
+    // (老仓/无 SSH 配置的仓 ssh_url_to_repo 会是空)。
+    if !ssh_url.starts_with("ssh://") {
+        return Err(CodehubError::Command(format!(
+            "codehub 仓无 SSH clone 地址(ssh_url_to_repo 为空或老仓?):{ssh_url:?}"
+        )));
+    }
+    // 2. raw git clone(SSH key 认证,不经代理)
+    let out = tokio::process::Command::new("git")
+        .args(["clone", &ssh_url, &dest.to_string_lossy()])
+        .env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

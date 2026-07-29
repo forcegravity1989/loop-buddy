@@ -544,7 +544,11 @@ fn IntentCard(
     let ink3 = theme::INK_3;
     let input = theme::input();
     let label = theme::label();
-    let can_send = !name().trim().is_empty() && !brief().trim().is_empty();
+    // P4-fix:codehub 平台额外要求 path 非空(placeholder 不是值,空 path
+    // 不能提交——否则 clone 一个空 repo 失败 + remote 空 + trio 不建)。
+    let can_send = !name().trim().is_empty()
+        && !brief().trim().is_empty()
+        && (platform() != "codehub" || !codehub_path().trim().is_empty());
     let opacity = if can_send { "1" } else { ".45" };
     let is_new_repo = matches!(repo_choice(), RepoChoice::New { .. });
 
