@@ -20,6 +20,10 @@ pub enum RemoteError {
     Github(#[from] GithubError),
     #[error(transparent)]
     Codehub(#[from] CodehubError),
+    /// `for_project` 收到一个既非 `github` 也非 `codehub` 的 provider 串——配置
+    /// 错(不是 github/codehub 侧的运行时错),独立 variant,不冒充 GithubError。
+    #[error("未知 provider(既非 github 也非 codehub):{0}")]
+    UnknownProvider(String),
 }
 
 /// A project's remote repo, provider-dispatched. Build via
@@ -52,9 +56,7 @@ impl Remote {
                 host: host.trim().to_string(),
                 path: path.to_string(),
             }),
-            other => Err(RemoteError::Github(GithubError::Command(format!(
-                "未知 provider: {other}"
-            )))),
+            other => Err(RemoteError::UnknownProvider(other.to_string())),
         }
     }
 

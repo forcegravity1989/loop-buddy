@@ -101,6 +101,9 @@ pub async fn create_issue(
 /// → 计数。codehub 无 GitHub 的 `search/issues total_count`,改用分页 list 的
 /// `--jq length` 让 CLI 端计数(P3 实测:maas opened issues=6、merged MRs=9)。
 ///
+/// **`-l 0` = 全量**(实测:codehub-cli 把 0 当"不限"取全部页,不是"取 0 条")。
+/// 若 CLI 升级改了语义(0 被解读成 limit=0 → 计数恒 0 静默出错),要复核。
+///
 /// **查询口径**(P5 定稿):P3 只认最小词汇 `issues:<state>` / `mrs:<state>`
 /// (state=opened|closed|merged|all)。复杂窗口(本周合入、按标签筛)留 P5
 /// ——口径等 P4 用户导入 maas 看真实需求再定,骨架先搭。`today` 参数留给

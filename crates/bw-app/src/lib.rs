@@ -232,7 +232,7 @@ pub enum Command {
     /// on the chosen review cadence) and switches the project into `Running`.
     /// This is the creation flow's real *landing* point (读源码定,写明选择
     /// — 不是 Repo/Intent 卡提交,是末卡「确认 · 建立项目」): a
-    /// github_remote-backed project gets its standard Issue trio
+    /// remote_path-backed project gets its standard Issue trio
     /// (竞品分析→找指标→绑数据, plan/13 D8) minted here, right alongside
     /// `set_project_phase(Running)`.
     CompleteCreation {
@@ -255,9 +255,9 @@ pub enum Command {
     },
     /// P1(loop-buddy↔aihot 接线 spec):给一个**存量**项目补上 GitHub 远端
     /// —— `CreateProject` 的「绑定本地目录」分支([lib.rs:3121] 附近)只
-    /// `set_workspace`,从不写 `github_remote`,产品里此前没有补救入口。
+    /// `set_workspace`,从不写 `remote_path`,产品里此前没有补救入口。
     /// 对活跃项目生效(`self.active()`)。`gh repo view` 先探活,探不到就
-    /// 如实报错、一个字节不写库;探到之后依次写 `github_remote`、补建
+    /// 如实报错、一个字节不写库;探到之后依次写 `remote_path`、补建
     /// (幂等)`github-repo` connector、再接线本地工作区的 `origin`(工作区
     /// 已有 remote 且不符目标 → 拒绝覆盖,不静默改写用户的 git 配置)。
     /// `push_local=true` 时额外推当前分支。
@@ -784,7 +784,7 @@ pub enum Command {
     /// Issues and backfills `pr_number` / derives `InReview` — **read-only**,
     /// never rewrites GitHub, never reaches `Done` — then reloads from the
     /// store (mirrors `RefreshHubs` for the hub library, but project-scoped).
-    /// No active project / no `github_remote` ⇒ the GitHub step is skipped
+    /// No active project / no `remote_path` ⇒ the GitHub step is skipped
     /// and this is the same bare local reload it always was.
     RefreshIssues,
     SendSessionMessage {
@@ -2311,14 +2311,14 @@ impl App {
         }
     }
 
-    /// C4 · issue 身份映射(plan/13 D2): a project with a `github_remote`
+    /// C4 · issue 身份映射(plan/13 D2): a project with a `remote_path`
     /// gets every BW-minted Issue mirrored as a real GitHub issue — the issue
     /// number is the Issue's cross-system identity. Called AFTER the Issue
     /// already exists in `bw-store`, so a `gh` failure never blocks the
     /// BW-side create (创建不破): the Issue simply keeps `github_number = 0`
     /// and an honest `ConnectorSynced { ok: false, .. }` toast fires — same
     /// soft-degrade shape as the Repo 卡片's `create_repo`/`clone_repo`
-    /// paths. `github_remote` empty (no repo, or a 存量项目) short-circuits
+    /// paths. `remote_path` empty (no repo, or a 存量项目) short-circuits
     /// before touching `gh` at all — today's behavior, byte-for-byte.
     ///
     /// `announce` (plan/14 C14): only the creation flow's standard-Issue trio
@@ -2392,10 +2392,10 @@ impl App {
     /// 时,挂仓项目自动建三张标配 Issue——竞品分析→找指标→绑数据,依赖序
     /// 即建单序即编号序(`create_issue` 按项目内 `MAX(number)+1` 分配,这里
     /// 是这个新项目的头三张 Issue,天然拿到 1/2/3)。每张都走既有
-    /// `sync_issue_to_github` 真开一个 GitHub issue——`github_remote` 为空
+    /// `sync_issue_to_github` 真开一个 GitHub issue——`remote_path` 为空
     /// 的项目在那里短路返回,这里的 BW 侧建号仍然发生,只是 `github_number`
     /// 留 0(和手动建单同一诚实口径),但本函数在调用前就已经用
-    /// `github_remote` 是否非空短路整批——无仓项目连 BW 侧的三张都不建,
+    /// `remote_path` 是否非空短路整批——无仓项目连 BW 侧的三张都不建,
     /// 不给建不了仓的项目发一套没处交付的活(如实留白)。
     ///
     /// 每张携带一个稳定 `standard_skill` slug——三张卡均已由
@@ -3838,7 +3838,7 @@ impl App {
                 // C7 · 标配采集 cron (plan/13 D7):挂了 GitHub 仓的项目出生即
                 // 带一条每日采集器,由现成 tick_scheduler 到点真实触发,把
                 // GitHub 数据拉成 append-only 观测。只有 github 项目挂(无 remote
-                // 即无 github 源可采);软降级回本地/接入失败的项目 github_remote
+                // 即无 github 源可采);软降级回本地/接入失败的项目 remote_path
                 // 仍空,不挂——不给采不到的东西装一个空跑的 cron。no-hijack:
                 // CollectMetrics 只观测,绝不自动跑活/结算。
                 let github_backed = self
@@ -4148,10 +4148,10 @@ impl App {
                         }
                     }
                 }
-                // C8 · plan/13 D8: 挂仓项目(github_remote 非空)创建流落地
+                // C8 · plan/13 D8: 挂仓项目(remote_path 非空)创建流落地
                 // 即建标配 Issue 三件套(竞品分析→找指标→绑数据),依赖序即
                 // 建单序即编号序(1/2/3),都经既有 sync_issue_to_github 真开
-                // GitHub issue。无仓项目(github_remote 空——包括新建/接入
+                // GitHub issue。无仓项目(remote_path 空——包括新建/接入
                 // 都失败、软降级回本地 mint 的项目)零标配票:不给建不了
                 // 仓、没有 PR 环可走的项目发一套没处交付的活,如实留白。
                 let first_issue = self.seed_standard_issue_trio(p).await?;
@@ -4160,7 +4160,7 @@ impl App {
                 // plan/13 D1(#31 记录的缺口):create_repo 只推了首 commit,
                 // 创建流途中的章程/组件标准提交停在本地——产品信息正本在
                 // 仓里,落地时把 HEAD 一次推齐。失败软降级 toast,不倒灌
-                // 创建(github_remote 非空 ⇒ workspace 在 CreateProject 就
+                // 创建(remote_path 非空 ⇒ workspace 在 CreateProject 就
                 // 已绑定,直接用)。
                 if !proj.remote_path.trim().is_empty() && !proj.workspace_path.trim().is_empty() {
                     // plan/14 C14: 落地推送同样是真实网络调用——Started 先
@@ -4277,10 +4277,10 @@ impl App {
                 // 2) P1-fix(复核 P1 时读回发现的重试死路):项目已有工作区时,
                 // 先把本地 origin 接上 —— 必须排在任何写库动作之前。探活通过
                 // 之后,`Mismatch`(工作区已挂着别的 origin)是这条命令唯一
-                // 还可能失败的分支;若先写了 github_remote/建了 connector 再
+                // 还可能失败的分支;若先写了 remote_path/建了 connector 再
                 // 撞上 Mismatch,产品侧就没有 UI 重试入口了 ——
                 // `AttachRepoCard`(app-desktop/src/screens/op.rs)只在
-                // `github_remote` 为空时渲染,写库后卡片消失,用户再点不到
+                // `remote_path` 为空时渲染,写库后卡片消失,用户再点不到
                 // 这个动作,只能手改 SQL。先做这步 ⇒ 失败时一个字节都还没
                 // 进库,再次调用同一条命令天然就是重试。没有工作区就跳过整步
                 // (不是错误——纯身份挂靠,后续 SetWorkspace 再补)。
@@ -4326,10 +4326,10 @@ impl App {
 
                 // 5) push_local=true 且第 2 步真的跑过(有工作区)时推当前
                 // 分支。这一步刻意留在写库之后,不是疏漏:推送失败时
-                // github_remote 已经设对是事实正确的(仓确实接上了,只是这
+                // remote_path 已经设对是事实正确的(仓确实接上了,只是这
                 // 次本地提交没推上去),用户可以自己 `git push` 补,不必也
                 // 不该把整条「接仓」判失败重来 —— 那样反而会在下次重试时对
-                // 已经正确的 github_remote/connector 做多余的幂等检查。
+                // 已经正确的 remote_path/connector 做多余的幂等检查。
                 if !workspace_path.is_empty() && push_local {
                     let workspace = std::path::Path::new(&workspace_path);
                     let branch = match bw_engine::github::current_branch(workspace).await {
@@ -5804,7 +5804,7 @@ impl App {
                     })
                     .await?;
                 // C4: 项目挂了 GitHub 仓时,建单同时经 gh 真开一个 GitHub
-                // issue;github_remote 为空的项目在这里直接短路返回,今天的
+                // issue;remote_path 为空的项目在这里直接短路返回,今天的
                 // 行为一个字节不变。announce=false(plan/14 C14 范围收敛):
                 // op 面板的手动建单不在本票覆盖范围,行为一个字节不变。
                 self.sync_issue_to_github(p, id, &title, &desc, false)
@@ -6044,7 +6044,7 @@ impl App {
 
             Command::RefreshIssues => {
                 // P7-7B (D22): 先真采 GitHub、再本地刷新——无活跃项目/无
-                // github_remote 的项目在 collect_github_issue_drift 内部短
+                // remote_path 的项目在 collect_github_issue_drift 内部短
                 // 路跳过,行为与升级前逐字节一致。
                 if let Some(p) = self.state.active_project {
                     self.collect_github_issue_drift(p).await?;

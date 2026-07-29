@@ -37,7 +37,7 @@
 - **`crates/bw-app/src/lib.rs`** call-site: `probe_connector`:1955(GITHUB_REPO arm 2018 / `probe_repo` 2026)/ `sync_issue_to_github`(`create_issue` 2083,gate 2138)/ `collect_project_metrics`(github arm 2290-2297)/ `seed_standard_issue_trio`:2129(gate 2138)/ `CreateProject`(`create_repo` 3145 / `clone_repo` 3247 / `list_repos` 3390)/ `run`(`checkout_issue_branch` 2925 / `open_pr` 2964)/ `MergeIssuePr`(`merge_pr` 5300 / `issue_state` 5323 / `close_issue` 5326 / `sync_default_branch` 5351)/ `CompleteCreation`(`push_head` 3658)/ `tick_scheduler`:2405(collect cron)。
 - **`crates/bw-core/src/model.rs`:~1803** `CONNECTOR_KIND_*`(GITHUB_REPO const ~1812)——P4 加 `CONNECTOR_KIND_CODEHUB_REPO`。
 - **`crates/bw-store/src/schema.sql`**(projects 表 `provider` :36, `github_remote` 待改名)+ **`sqlite.rs`**(`set_github_remote`:656 / provider bind 501 / SELECT 1080,1091 / struct 2646)。
-- **`crates/app-desktop/src/screens/connector_hub.rs`**:P4 connector syncable UI。
+- **`crates/app-desktop/src/screens/connector_hub.rs`**:connector syncable UI——**对齐 github-repo 不做**(github-repo 也不 syncable,codehub-repo 同样,非回归,不留 TODO)。
 - **CodeHub API 范本**:`D:\2026\code\maas\governance\workspace\codehub\codehub_client.py`(stdlib urllib,GitLab v4 + PRIVATE-TOKEN,已验证)——codehub.rs 不直调,但端点形状/字段(`iid`/`web_url`/分页 `per_page+page` 默认 20 静默截断)可参照拼 CLI 命令。
 
 ## 门禁(每 phase commit 前全过)
@@ -116,11 +116,11 @@ cargo check -p app-desktop
 - `crates/bw-app/src/lib.rs`(`GithubOrigin` 泛化成 `RepoOrigin` 加 codehub 变体,或并列 `CodehubOrigin{host,path}`;`CreateProject` 加 codehub 分支:clone maas 进 workspaces → `set_remote_path`+`set_remote_host` → 建 `CONNECTOR_KIND_CODEHUB_REPO` connector(config 存 `host:path` 或 JSON);`CompleteCreation` 触发 `seed_standard_issue_trio` → 调 `Remote::Codehub.create_issue` 真在 maas 建 3 issue)
 - `crates/bw-core/src/model.rs`(加 `CONNECTOR_KIND_CODEHUB_REPO` const + `Connector` 文档)
 - `crates/bw-app/src/lib.rs` `probe_connector`(加 `CONNECTOR_KIND_CODEHUB_REPO` arm → `Remote::probe`)
-- `crates/app-desktop/src/screens/create.rs`(平台选择器点亮 codehub 项)+ `connector_hub.rs`(syncable)
+- `crates/app-desktop/src/screens/create.rs`(平台选择器点亮 codehub 项;connector syncable 对齐 github-repo 不做)
 
 - [ ] Step 1: model.rs 加 `CONNECTOR_KIND_CODEHUB_REPO`
 - [ ] Step 2: `CreateProject` codehub 分支 + origin 泛化 + connector mint
-- [ ] Step 3: `probe_connector` 加 codehub arm + `connector_hub.rs` syncable + `create.rs` 选择器
+- [ ] Step 3: `probe_connector` 加 codehub arm + `create.rs` 选择器(connector syncable 对齐 github-repo 不做)
 - [ ] Step 4: 门禁全绿;**live 验证留用户**(录 maas,见下)
 
 > **P4 用户 live 验证(交用户做):** `cargo run -p app-desktop` → 「接入已有 codehub 仓」导 maas → 看 clone 落地、connector Connected、深链 issues 屏渲染、**maas 仓里真建了 3 张标配卡**。sqlite 读回项目 `remote_path/remote_host` + connector + 3 issue 的 codehub iid。看真实渲染缺口反馈步2。

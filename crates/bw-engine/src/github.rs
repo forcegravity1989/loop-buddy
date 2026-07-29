@@ -151,7 +151,7 @@ pub async fn probe_repo(owner_repo: &str) -> Result<String, GithubError> {
 // ─────────────── P1 · 存量项目接仓 (loop-buddy↔aihot 接线 spec) ───────────────
 //
 // `Command::AttachRepo` 给「绑定本地目录」建的项目补上 GitHub 远端。这里只管
-// 本地 `origin` 这一侧的真实读写;探活(`probe_repo`)、写 `github_remote`、
+// 本地 `origin` 这一侧的真实读写;探活(`probe_repo`)、写 `remote_path`、
 // 补 connector 都是 bw-app 的编排职责,不下沉到这层。
 
 /// 读一个工作区的 `origin` 远端 URL。`Ok(None)` = 没配 `origin`(绑定本地

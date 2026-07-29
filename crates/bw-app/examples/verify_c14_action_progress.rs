@@ -350,10 +350,10 @@ async fn main() {
     );
     assert!(
         proj_fail_row.remote_path.trim().is_empty(),
-        "建仓失败的项目不应有 github_remote(本地兜底≠已挂 GitHub 仓)"
+        "建仓失败的项目不应有 remote_path(本地兜底≠已挂 GitHub 仓)"
     );
     println!(
-        "  ✓ 建仓失败项目本地兜底落地:workspace_path={:?} github_remote={:?}",
+        "  ✓ 建仓失败项目本地兜底落地:workspace_path={:?} remote_path={:?}",
         proj_fail_row.workspace_path, proj_fail_row.remote_path
     );
 

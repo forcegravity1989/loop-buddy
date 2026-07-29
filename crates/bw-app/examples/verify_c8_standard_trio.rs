@@ -191,7 +191,7 @@ async fn main() {
         .expect("create project (coldstart fixture)");
         let proj = store.get_project(id).await.unwrap().unwrap();
         println!(
-            "✓ coldstart fixture ready: name={name:?} phase={:?} github_remote={:?}",
+            "✓ coldstart fixture ready: name={name:?} phase={:?} remote_path={:?}",
             proj.phase, proj.remote_path
         );
         return;

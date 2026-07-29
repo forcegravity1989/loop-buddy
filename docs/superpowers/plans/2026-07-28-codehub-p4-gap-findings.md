@@ -1,6 +1,20 @@
 # P4 GAP 诊断记录(2026-07-28,用户录 maas 后)
 
-> **只记录,未修。** 用户录 maas 后:maas-locate 项目没有初始 3 张标配卡、issue 看板空。诊断到根因。
+> **状态(2026-07-29 更新):已解决。** 本件记录的 clone HTTPS 504 根因,由
+> 后续 `P4-fix` commit 修掉——**走 SSH clone(本件「候选修复方向 A」)**:`codehub::clone_repo`
+> 先 `project view --template .ssh_url_to_repo` 取 SSH URL(SSH host szv-open:2222
+> ≠ API host open,不手拼),再 raw `git clone` + `GIT_SSH_COMMAND` accept-new。
+> scratch + 用户真实录双验证:clone Ok、remote 设、CODEHUB connector mint、
+> trio 同步 codehub(iid 16/17/18)。**方向 B/C 排除**(504 非代理配置/非 token)。
+>
+> 下面的「候选修复方向」+「auto-mint 行为 GAP」段是**修前快照**(历史)。其中
+> auto-mint 那条:**决议 = 对齐 github、不搞特例**——github Existing clone 失败在
+> `CompleteCreation` 也走 auto-mint(`lib.rs` 的 provision_workspace 对所有 workspace 空项目),
+> codehub 同样即「对齐」,clone SSH 修好后 workspace 非空 auto-mint 不触发、假象消失;
+> 真「clone 失败就停『未接上』」需持久化「尝试过远端」标志位,**转长期 TODO,非步1**。
+>
+> 另:claude CLI spawn「program not found」是**另一个独立 gap**(agent 步3),根因
+> `BW_CLAUDE_BIN` 没设(Rust Windows 不做 PATHEXT),已配 env 解决,非本件 scope。
 
 ## 症状(用户 DB `AppData/Roaming/BuildersWorkbench/workbench.db` 读回为证)
 
