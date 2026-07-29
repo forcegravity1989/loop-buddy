@@ -106,7 +106,16 @@ pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
                 div { style: "color:{ink3};font-size:13px;padding:30px 0;", "没有符合筛选的智能体。" }
             } else {
                 div {
-                    style: "display:grid;grid-template-columns:repeat(2,1fr);gap:14px;",
+                    // 同 SkillHub(见其网格样式旁注):固定列数在宽屏下把每列拉
+                    // 到失真,换成 auto-fill + minmax 让列数随可用宽度自适应。
+                    // 340px 下限比 SkillHub 的 300px 更宽,因为身份行内容更
+                    // 挤:36px 头像 + 10px 间距 + 名称/角色两行文字之后,还要
+                    // 在同一行(无换行)放下最多三个 flex:none 的 chip(项目
+                    // 归属「◇ …」~70-90px + 来源 chip ~50px + 成熟度 chip
+                    // ~55-70px);18px×2 卡内边距下,340px(内容区≈304px)是
+                    // 头像+chips 固定开销(约 220-260px)之外还能留给名称文字
+                    // 的最小整数下限。
+                    style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;",
                     for a in filtered {
                         {
                             let aid = a.id;
@@ -171,7 +180,15 @@ fn AgentCard(
     let mono = theme::MONO;
     let agent_color = theme::AGENT;
     let chip = theme::chip("#EFE9DA", theme::INK_2);
-    let span_style = if is_open { "grid-column:1/-1;" } else { "" };
+    // 展开态同 SkillCard:横跨整行取版面,但正文(常驻指令 Markdown)可读宽度
+    // 封顶在 760px,与 `component_detail.rs` 的 `AgentDetailCard`(同一份
+    // MarkdownView 内容)对齐——不另定数值。网格默认 stretch,加了 max-width
+    // 后退化为从列起始边对齐,等价左对齐,不需要额外居中样式。
+    let span_style = if is_open {
+        "grid-column:1/-1;max-width:760px;"
+    } else {
+        ""
+    };
     rsx! {
         div {
             style: "{card} padding:16px 18px;{span_style}",

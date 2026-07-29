@@ -114,7 +114,15 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
                 div { style: "color:{ink3};font-size:13px;padding:30px 0;", "没有符合筛选的技能。" }
             } else {
                 div {
-                    style: "display:grid;grid-template-columns:repeat(3,1fr);gap:14px;",
+                    // 宽度自适应,不再固定 3 列——固定列数在宽屏(如 2560px 窗口)
+                    // 下每列被无限拉宽,长文本一行变成几百字符,没法读。改用
+                    // auto-fill + minmax:窄窗口自动减列、宽窗口自动加列,单张
+                    // 卡永远落在 [300px, 一列可用宽度] 区间。300px 下限按卡面
+                    // 身份行实测:等宽字体技能名(~12-16 字符 ≈ 100-130px)+
+                    // 「◇ 项目名」归属 chip(~70-90px)+ 成熟度 chip(~55-70px)
+                    // 在 18px×2 卡内边距之后仍需单行放下,300px(内容区
+                    // ≈264px)是这一行常见组合不换行挤爆的最小整数下限。
+                    style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;",
                     for s in filtered {
                         {
                             let sid = s.id;
@@ -445,7 +453,17 @@ fn SkillCard(
     let ink3 = theme::INK_3;
     let (chip_bg, chip_fg) = ("#EFE9DA", theme::INK_2);
     let chip = theme::chip(chip_bg, chip_fg);
-    let span_style = if is_open { "grid-column:1/-1;" } else { "" };
+    // 展开态横跨整行取版面,但正文可读宽度必须封顶——否则 span 到整个宽屏窗
+    // 口后,SkillFileBrowser 的正文/Markdown 一行变成几百字符。760px 与
+    // `component_detail.rs` 的 `SkillDetailCard`(同一份 SkillFileBrowser 内容)
+    // 对齐,而不是另定一套数值;那边已验证 200px 文件树 + 双栏预览在这个宽
+    // 度下不挤不溢出。网格默认 `justify-items:stretch`,给了 max-width 之后
+    // 会退化成从列起始边对齐、不撑满——效果等价于左对齐,不需要额外居中。
+    let span_style = if is_open {
+        "grid-column:1/-1;max-width:760px;"
+    } else {
+        ""
+    };
     let distilled = s.distilled_from_issue.is_some();
     rsx! {
         div {

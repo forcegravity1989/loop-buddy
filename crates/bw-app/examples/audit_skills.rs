@@ -29,19 +29,79 @@ use bw_store::{SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// plan/16 §4 校正台账:两条既有中文名自建技能的改名映射。
-/// (旧名, 新名, 新 desc——补齐 S4「适用:…」触发段,中文原名留痕)。
-const RENAMES: &[(&str, &str, &str)] = &[
-    (
-        "关键词关注面打分法",
-        "keyword-focus-scoring",
-        "按用户配置的关注面关键词给抓取条目打分,分数不够不上日报——0 分零容忍,不为凑量降门槛。适用:日报编辑筛选抓取条目,或任何按关键词相关性过滤内容源的活(原名「关键词关注面打分法」)",
-    ),
-    (
-        "多源体量控制法",
-        "per-source-volume-cap",
-        "多来源合并输出限量时必须按源分别限(cap_per_source),绝不对合并列表整体截断——量大的源会挤占量小的源。适用:聚合多个来源出日报/榜单等限量输出的实现与评审(蒸馏自真实修复,原名「多源体量控制法」)",
-    ),
+/// plan/16 §4 校正台账:两条 aihot 项目自建/蒸馏技能的**确定性**校正——
+/// 改名(S1)+ desc 补触发段(S4)+ 正文归一为规范 SKILL 形态(S7)。
+///
+/// 三条纪律钉在这里,不在运行时临场发挥:
+/// - **正文是重排,不是重写**:原正文的每一条步骤原样保留(措辞不动),只补
+///   `# 标题` / `## 何时用` / `## 反例` 的结构外壳——把「一段裸提示词」变成
+///   一份合规 SKILL 正文,不新增任何原文没有的做法主张。
+/// - **悬空引用如实删掉**:原 `keyword-focus-scoring` 正文里的「(见去重技
+///   能)」指向一个技能库里**不存在**的技能(SQL 核过:无任何 去重/dedup 命名
+///   的行)——最佳实践要求引用一级可达,一个指不到东西的指针不如没有。
+/// - **蒸馏溯源不碰**:`per-source-volume-cap` 是从真实 Issue 蒸馏来的,
+///   `distilled_from_issue`/`origin_agent`/`uses` 全部保持原值(`SkillEdit`
+///   根本没有这些字段,结构上碰不到)。
+struct Correction {
+    old_name: &'static str,
+    new_name: &'static str,
+    new_desc: &'static str,
+    new_content: &'static str,
+}
+
+const CORRECTIONS: &[Correction] = &[
+    Correction {
+        old_name: "关键词关注面打分法",
+        new_name: "keyword-focus-scoring",
+        new_desc: "按用户配置的关注面关键词给抓取条目打分,分数不够不上日报——0 分零容忍,不为凑量降门槛。适用:日报编辑筛选抓取条目,或任何按关键词相关性过滤内容源的活(原名「关键词关注面打分法」)",
+        new_content: "# 关键词关注面打分法 (keyword-focus-scoring)\n\
+             \n\
+             ## 何时用\n\
+             \n\
+             aihot 日报(或任何按关注面筛选内容源的项目)决定「哪些抓取条目够格\
+             上日报」时。\n\
+             \n\
+             ## 步骤\n\
+             \n\
+             1. 读 config.json 的 keywords 列表(用户真实配置的关注面,不是猜的)。\n\
+             2. 对每条真实抓取到的标题/摘要,逐关键词做子串匹配(忽略大小写),\
+             命中数 = 分数。\n\
+             3. 分数为 0 的条目不上日报——没有例外,不为了「凑够数量」降低门槛。\n\
+             4. 命中多个关键词的条目排在日报前面(分数降序)。\n\
+             5. 同一天多条命中同一实际事件的,去重只留一条,不是「都留着凑数」。\n\
+             \n\
+             ## 反例\n\
+             \n\
+             为了让今天的日报「看起来有内容」而放宽 0 分门槛——那是把噪音当产出,\
+             读者下次就不信这份日报了。",
+    },
+    Correction {
+        old_name: "多源体量控制法",
+        new_name: "per-source-volume-cap",
+        new_desc: "多来源合并输出限量时必须按源分别限(cap_per_source),绝不对合并列表整体截断——量大的源会挤占量小的源。适用:聚合多个来源出日报/榜单等限量输出的实现与评审(蒸馏自真实修复,原名「多源体量控制法」)",
+        new_content: "# 多源体量控制法 (per-source-volume-cap)\n\
+             \n\
+             ## 何时用\n\
+             \n\
+             多个来源合并成一份限量输出(日报/榜单/摘要)时——设计阶段与评审阶段\
+             都适用。本技能蒸馏自本项目真实修复 #11。\n\
+             \n\
+             ## 步骤\n\
+             \n\
+             1. 多个来源合并后按分数/时间统一排序前,先想清楚:排序对合并结果\
+             **没有来源公平性**——量大的来源天然会挤占量小的来源,即便后者同样相关。\n\
+             2. 因此「限量」必须**按来源分别限**(cap_per_source),不是对合并后的\
+             列表整体截断(`items[:N]`)——后者是本项目真实踩过的坑。\n\
+             3. 先用真实数据测量「截断前 vs 截断后」每个来源各剩多少条,确认改动\
+             方向对(见 docs/regression.md 的方法),而不是改完就假设它对了。\n\
+             4. 时间维度的重复浪费(如同时抓 topstories+newstories)优先合并同类项\
+             而不是加并发数掩盖——先问「这两份真的都要吗」,再问「怎么让它更快」。\n\
+             \n\
+             ## 反例\n\
+             \n\
+             对合并列表整体 `items[:N]`——这正是 #11 的原始 bug:小来源被大来源挤到\
+             截断线以下,输出看起来「有量」,覆盖面却丢了。",
+    },
 ];
 
 /// 全量机检 + S2 重名扫描,打印报告,返回 (硬规违规技能数, 提示技能数)。
@@ -171,25 +231,39 @@ async fn main() {
     if fix {
         let skills = store.list_skills().await.unwrap();
         let agents = store.list_agents().await.unwrap();
-        for (old_name, new_name, new_desc) in RENAMES {
-            let Some(s) = skills.iter().find(|s| s.name == *old_name) else {
+        for c in CORRECTIONS {
+            let (old_name, new_name) = (c.old_name, c.new_name);
+            // 认「改名前」也认「已改名」——台账要能在一条已经改过名、但正文
+            // 还没归一的行上继续把剩下的校正做完(真实日常库正是这个状态:
+            // 改名先落了一轮,S7 正文规则是后来才有的)。
+            let Some(s) = skills
+                .iter()
+                .find(|s| s.name == old_name || s.name == new_name)
+            else {
                 println!("fix · 「{old_name}」不在库中(已改名或不存在),跳过");
                 continue;
             };
-            if skills.iter().any(|x| x.name == *new_name) {
-                println!("fix · 目标名「{new_name}」已被占用,拒绝改名(人工裁决)");
+            if skills.iter().any(|x| x.name == new_name && x.id != s.id) {
+                println!("fix · 目标名「{new_name}」已被别的行占用,拒绝改名(人工裁决)");
+                continue;
+            }
+            if s.name == new_name && s.desc == c.new_desc && s.content == c.new_content {
+                println!("fix · 「{new_name}」已合规,零操作");
                 continue;
             }
             app.dispatch(Command::UpdateSkill {
                 id: s.id,
                 name: new_name.to_string(),
-                desc: new_desc.to_string(),
+                desc: c.new_desc.to_string(),
                 category: s.category.clone(),
-                content: s.content.clone(),
+                content: c.new_content.to_string(),
             })
             .await
             .unwrap();
-            println!("fix · 「{old_name}」 → 「{new_name}」(desc 补「适用」触发段)");
+            println!(
+                "fix · 「{}」→「{new_name}」:desc 补触发段(S4)+ 正文归一为规范 SKILL 形态(S7,步骤原样保留)",
+                s.name
+            );
 
             // 按名引用旧技能名的队友同步改引,联合键不留悬空。
             for a in agents

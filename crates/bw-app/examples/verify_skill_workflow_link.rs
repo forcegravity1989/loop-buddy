@@ -149,5 +149,35 @@ async fn main() {
         official_advisories.len()
     );
 
-    println!("ALL OK — 三段验证全部真实读回通过");
+    // ── 4 · S7 注入层:规范正文(# 标题)嵌进 prompt 时整体降级两级 ──
+    // 展示端与执行端不能二选一:Skill Hub 要看到一份合规 SKILL 正文,prompt
+    // 里同一份正文必须落在 `## 技能(工作方法…)` 之下且层级正确。
+    let prompts = bw_core::playbook::rendered_phase_prompts(
+        bw_core::model::StageKind::Prototype,
+        &bw_core::playbook::PlaybookCtx {
+            project_name: "E2E".into(),
+            ..Default::default()
+        },
+    );
+    let first = prompts.first().expect("原型段必有 phase prompt");
+    assert!(
+        first.contains("## 技能(工作方法,本阶段全程适用)"),
+        "技能块标题应在 prompt 里"
+    );
+    assert!(
+        first.contains("### 证据先行 (evidence-first)"),
+        "正文的 `# 标题` 应被降级为 `###` 嵌在技能块之下,实际 prompt 片段:\n{}",
+        first
+            .lines()
+            .filter(|l| l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(
+        !first.contains("\n# 证据先行"),
+        "prompt 里不应残留未降级的 H1"
+    );
+    println!("4) S7 注入层 OK: `# 证据先行` 在 prompt 中降级为 `### `,技能块层级正确");
+
+    println!("ALL OK — 四段验证全部真实读回通过");
 }
