@@ -197,27 +197,46 @@ const METRICS_BINDING_SKILL_MD: &str =
 const COMPETITIVE_ANALYSIS_SKILL_MD: &str =
     include_str!("../../../docs/skills/competitive-analysis/SKILL.md");
 
-pub struct StandardIssueSkill {
-    pub name: &'static str,
-    pub desc: &'static str,
-    pub content: &'static str,
+struct StandardIssueSkill {
+    name: &'static str,
+    desc: &'static str,
+    /// The **raw** `SKILL.md` file text, frontmatter and all — never stored
+    /// as-is (see [`CanonicalSkill`]).
+    raw_md: &'static str,
+}
+
+/// One bw-standard library row's canonical shape, ready to compare against or
+/// write into the `skill` table. Named fields, not a positional
+/// `(name, desc, content)` tuple — desc and content are both `String`, and a
+/// swap must not compile silently.
+pub struct CanonicalSkill {
+    pub name: String,
+    pub desc: String,
+    /// plan/16 S7: the SKILL.md **body**, YAML frontmatter already stripped
+    /// by `bw_core::skill_body::strip_frontmatter` — the same shape
+    /// `ImportSkillPackage` has always stored for external libraries. Before
+    /// this, the trio was `include_str!`'d whole, so BW's own standard
+    /// library was the only thing in the hub whose 正文 opened with a raw
+    /// `--- name: … ---` block — visible in the detail panel and injected
+    /// verbatim into every prompt that used it.
+    pub content: String,
 }
 
 const STANDARD_ISSUE_SKILLS: &[StandardIssueSkill] = &[
     StandardIssueSkill {
         name: "competitive-analysis",
         desc: "起草对标名单、各家北极星猜测、差异定位、可借鉴打法,产出报告 PR 进仓——检索不可用时如实降级为「人喂材料+agent 整理」,绝不由幻觉填充对标事实。适用:项目创建后的标配起手活「竞品分析」,或任何需要重摸对标的时点",
-        content: COMPETITIVE_ANALYSIS_SKILL_MD,
+        raw_md: COMPETITIVE_ANALYSIS_SKILL_MD,
     },
     StandardIssueSkill {
         name: "north-star-discovery",
         desc: "结合项目意图与竞品分析报告推导北极星+滞后+引领三层指标,每条必附采集方案——先对后亮,北极星绝不为「采得到」退化成工程虚荣指标。适用:标配 Issue「找指标」,或北极星需要重推的时点",
-        content: NORTH_STAR_DISCOVERY_SKILL_MD,
+        raw_md: NORTH_STAR_DISCOVERY_SKILL_MD,
     },
     StandardIssueSkill {
         name: "metrics-binding",
         desc: "为 .bw/metrics.toml 里绑不上的指标找到点亮的最便宜路径——绝不伪造数据、绝不为了点亮而改指标定义。适用:标配 Issue「绑数据」,或健康灯长期 Unknown 需要接真数据源的时点",
-        content: METRICS_BINDING_SKILL_MD,
+        raw_md: METRICS_BINDING_SKILL_MD,
     },
 ];
 
@@ -233,8 +252,15 @@ const STANDARD_ISSUE_SKILLS: &[StandardIssueSkill] = &[
 /// own — the caller diffs `desc`+`content` against what's already in the DB
 /// and overwrites in place when they differ. Not used by the seed function
 /// itself; both simply read the same source-of-truth table.
-pub fn standard_issue_skill_canon() -> &'static [StandardIssueSkill] {
+pub fn standard_issue_skill_canon() -> Vec<CanonicalSkill> {
     STANDARD_ISSUE_SKILLS
+        .iter()
+        .map(|s| CanonicalSkill {
+            name: s.name.to_string(),
+            desc: s.desc.to_string(),
+            content: bw_core::skill_body::strip_frontmatter(s.raw_md),
+        })
+        .collect()
 }
 
 /// 按名幂等地种下标配 Issue 三件套的三个 Skill(竞品分析/找指标/绑数
@@ -249,16 +275,16 @@ pub async fn seed_standard_issue_skills_if_missing(store: &dyn Store) -> Result<
         .map(|s| s.name)
         .collect();
 
-    for s in STANDARD_ISSUE_SKILLS {
-        if have.contains(s.name) {
+    for s in standard_issue_skill_canon() {
+        if have.contains(&s.name) {
             continue;
         }
         store
             .create_skill(NewSkill {
                 id: SkillId::new(),
-                name: s.name.to_string(),
+                name: s.name.clone(),
                 maturity: Maturity::Mature,
-                desc: s.desc.to_string(),
+                desc: s.desc.clone(),
                 category: "标配".to_string(),
                 source: HubSource::Official {
                     official_library: BW_STANDARD_LIBRARY.to_string(),
@@ -267,7 +293,8 @@ pub async fn seed_standard_issue_skills_if_missing(store: &dyn Store) -> Result<
                 // stage_ref 钉原型阶段——这是拍板不是猜测(T7 的「不猜」
                 // 约束针对无人分类的导入目录行,不适用于此)。
                 stage_ref: Some(StageKind::Prototype),
-                content: s.content.to_string(),
+                // plan/16 S7: frontmatter 已剥离(见 `CanonicalSkill.content`)。
+                content: s.content.clone(),
                 // 标配 Skill 全局共享(任何项目的标配 Issue 都能挂),同
                 // seed_stage_entities_if_missing 的方法论技能一致口径。
                 project_id: None,

@@ -1971,7 +1971,14 @@ impl App {
                 break;
             }
             total += chars;
-            bodies.push(skill.content.trim().to_string());
+            // plan/16 S7: bodies are spec-shaped SKILL.md text opening at
+            // `#`; the injector nests them two levels down so they sit
+            // correctly under this block's own H2 (see
+            // `bw_core::skill_body::demote_headings`).
+            bodies.push(bw_core::skill_body::demote_headings(
+                skill.content.trim(),
+                2,
+            ));
         }
         if bodies.is_empty() {
             return Ok(String::new());
@@ -2084,7 +2091,9 @@ impl App {
         let block = format!(
             "\n\n## 标配技能(创建流关联,来自 {})\n{}\n",
             skill.name,
-            skill.content.trim()
+            // plan/16 S7: same nesting rule as `skills_prompt_block` — the
+            // stored body is spec-shaped (`#` title), the injector demotes.
+            bw_core::skill_body::demote_headings(skill.content.trim(), 2)
         );
         let refs = vec![SkillRef {
             name: skill.name.clone(),
@@ -3345,25 +3354,15 @@ impl App {
                     // diff covers `desc` as well as `content` (a canonical
                     // description fix must reach existing rows the same way
                     // a SKILL.md edit does).
-                    // Named fields on purpose — desc and content are both
-                    // strings, and a positional (name, desc, content) tuple
-                    // would let a swap compile silently.
-                    struct CanonSkill {
-                        name: String,
-                        desc: String,
-                        content: String,
-                    }
-                    let mut canon: Vec<CanonSkill> = bw_store::standard_issue_skill_canon()
-                        .iter()
-                        .map(|s| CanonSkill {
-                            name: s.name.to_string(),
-                            desc: s.desc.to_string(),
-                            content: s.content.to_string(),
-                        })
-                        .collect();
+                    // `bw_store::CanonicalSkill` — named fields, and its
+                    // `content` is already frontmatter-stripped (plan/16 S7),
+                    // so what Boot compares against is exactly what the hub
+                    // should store and show.
+                    let mut canon: Vec<bw_store::CanonicalSkill> =
+                        bw_store::standard_issue_skill_canon();
                     for kind in StageKind::ALL {
                         for sk in bw_core::playbook::stage_skills(kind) {
-                            canon.push(CanonSkill {
+                            canon.push(bw_store::CanonicalSkill {
                                 name: sk.name.to_string(),
                                 desc: sk.def.to_string(),
                                 content: sk.content.to_string(),

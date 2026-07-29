@@ -4,12 +4,13 @@
 //! same "one source of truth, no second copy" rule `ui::skill_file_tree`
 //! already follows.
 //!
-//! Rule numbers (S1/S3/S4/S5, A1/A2/A3) are plan/16 §1's own table — the
+//! Rule numbers (S1/S3/S4/S5/S7, A1/A2/A3) are plan/16 §1's own table — the
 //! spec doc and this module must move together. S2 (name uniqueness) and S6
 //! (raw source-tag consistency) are deliberately absent here: both need
 //! whole-library / raw-storage context a per-skill pure function honestly
 //! doesn't have — they live in `audit_skills` (and S6 additionally in Boot's
-//! pristine promotion).
+//! pristine promotion). S7's two *transforms* (frontmatter 剥离 / 注入前标题
+//! 降级) live in [`crate::skill_body`]; only the judgment lives here.
 //!
 //! 分域执行 (plan/16 §1): findings against an **official-library import**
 //! are all [`SpecSeverity::Advisory`] — the body/metadata is another
@@ -145,6 +146,32 @@ pub fn check_skill(input: SkillSpecInput<'_>) -> Vec<SpecFinding> {
             "S5",
             "正文为空——技能是可执行的方法,不是收藏夹书签".to_string(),
         );
+    } else {
+        // ── S7 · 正文形态(非空才谈形态,空正文 S5 已报,不叠报) ──
+        let body = input.content.trim();
+        if body.starts_with("---") {
+            hard(
+                &mut out,
+                "S7",
+                "正文含 YAML frontmatter——元数据属于 name/描述两列,正文只存剥离后的 body(导入路径一直如此,自带库须同口径)"
+                    .to_string(),
+            );
+        } else if !body.starts_with("# ") {
+            hard(
+                &mut out,
+                "S7",
+                "正文未以一级标题(`# 标题`)开头——SKILL.md 正文的既定形态,不是一段裸提示词"
+                    .to_string(),
+            );
+        }
+        if !body.lines().any(|l| l.starts_with("## ")) {
+            hard(
+                &mut out,
+                "S7",
+                "正文没有任何 `## ` 小节——最佳实践要求技能有结构化步骤/适用条件,至少一节「何时用」"
+                    .to_string(),
+            );
+        }
     }
 
     // ── A1 · 正文 ≤500 行 ──

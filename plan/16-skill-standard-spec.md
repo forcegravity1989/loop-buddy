@@ -32,6 +32,7 @@ agent `skills` 列表、蒸馏溯源都按名 join),对应开放标准里「name
 | S3 | `descr` 非空且 ≤ 1024 字符 | agentskills.io |
 | S4 | `descr` 同时说清「做什么」+「何时用」——机检口径:含显式触发段(中文「适用」,或英文 "use when" / "use this" / "use it",大小写不敏感) | 两份 Anthropic 文档均列为 description 首要要求 |
 | S5 | `content`(正文)非空——技能是可执行的方法,不是收藏夹书签;蒸馏技能尤其不允许空壳 | skill-standards.md 既有铁律 |
+| S7 | **正文形态**:正文不得含 YAML frontmatter(元数据在 name/descr 两列;导入路径一直剥离,自带库须同口径)、须以 `# 标题` 开头、须至少一个 `## ` 小节(「何时用」是最低配)——一段裸提示词不算 skill 正文 | agentskills.io 正文约定 + best-practices「Workflows have clear steps / 结构化」 |
 | S6 | 来源标注一致(存储层原始列级,徽记不测):`source='official'` 必须带非空 `official_library`;反向唯一的合法例外是 `self_built`+非空库名 = T11「改编自」留痕。旧编码 `official`+空库名 = 待归一 | BW `parse_hub_source` / `parse_adapted_from` 语义 |
 
 ### A 系列(提示,如实报告、不自动改写)
@@ -73,6 +74,15 @@ agent `skills` 列表、蒸馏溯源都按名 join),对应开放标准里「name
 4. **审计指挥器**(`examples/audit_skills.rs`):对任意 DB 全量机检出报告;`--fix` 只做
    确定性校正(见 §4 台账),幂等可重跑;逐条 sqlite 读回为证。
 
+**S7 的两个纯变换**(`bw-core::skill_body`,与判定分离,一份逻辑多处共用):
+- `strip_frontmatter`:存库前剥离——`ImportSkillPackage` 一直这么做,自带库三件套
+  过去走 `include_str!` 整文件没剥,于是全库唯一一批正文顶着 `--- name: … ---`,
+  详情面板可见、注入 prompt 也照喂。已归一。
+- `demote_headings`:注入前把正文标题整体下沉两级,让 `# 标题` 落成 `###` 嵌在
+  `## 技能(工作方法…)` 之下。**责任在注入器,不在正文**——反过来要求正文写成
+  `###` 迁就注入点,就会让展示端看到一份不合规范的正文(playbook 五条此前正是
+  如此)。围栏代码块内的 `#` 不碰(那是 shell/python 注释,不是标题)。
+
 ## 3. 真实库现状(2026-07-28 `workbench.db` SQL 读回,不是估算)
 
 - 65 条 skill:63 official(mattpocock-skills 41 / superpowers 14 / bw-standard 3 /
@@ -97,6 +107,9 @@ agent `skills` 列表、蒸馏溯源都按名 join),对应开放标准里「name
 | bw-standard 三件套 | desc 补「适用:…」;Boot 对账从 content-only 扩到 desc+content | §1 S4 |
 | `关键词关注面打分法` | 改名 `keyword-focus-scoring`,desc 补触发段;同步更新 agent「日报编辑」的 skills 引用;中文原名保留在正文标题 | §1 S1/S4;audit --fix 台账内置映射,非运行时编造 |
 | `多源体量控制法` | 改名 `per-source-volume-cap`,desc 补触发段;蒸馏溯源字段不动(SkillEdit 无此字段,结构上碰不到) | 同上 |
+| bw-standard 三件套正文 | 存库前剥 frontmatter(与导入路径同一份 `strip_frontmatter`);Boot 自愈把存量行推平 | §1 S7 |
+| playbook 五条正文 | 由 `### 名 + 裸编号列表` 归一为 `# 标题 / ## 何时用 / ## 步骤 / ## 反例`;注入层改为标题降级承担嵌套 | §1 S7 |
+| aihot 两条(keyword-focus-scoring / per-source-volume-cap) | 正文归一为规范形态:**步骤原文逐条保留**,只补结构外壳;悬空引用「(见去重技能)」删除(SQL 核过库里无此技能);蒸馏溯源/uses 不碰 | §1 S7 + 最佳实践「引用一级可达」 |
 | 官方外库违规(保留字名/超长正文等) | 不改写,徽记+审计如实提示 | §1 分域 |
 | S6 顽固行(旧编码 `official`+空库名且正文已被人改,pristine 升源不收) | audit --fix 把原始编码归一 `self_built`——与 `parse_hub_source` 已在读的语义完全一致,零行为变化,纯编码卫生 | §1 S6 |
 
@@ -105,6 +118,10 @@ agent `skills` 列表、蒸馏溯源都按名 join),对应开放标准里「name
 - **反查修复**:`ui::vm::WorkflowDetailVm` 增 phase 层技能并集;SkillHub「被这些工作流
   使用」同时统计顶层 `SkillRef` 与 phase 绑定——五条 playbook 技能从「被 0 个工作流使用」
   回到真实(各被其标准工作流全 phase 注入)。
+- **展开详情宽度**:SkillHub/AgentHub 的卡片网格由固定列数改为 `auto-fill+minmax`
+  随窗口自适应;展开态详情加 `max-width:760px` 上限(与 `component_detail.rs` 既有
+  详情卡同值)——此前展开卡 `grid-column:1/-1` 撑满整行,2560px 窗口下正文一行几百
+  字符,违背「在已有界面查看完整信息」。
 - **创建工作流选技能**:WorkflowHub 创建/优化/临时任务三个表单已挂 `SkillAgentPicker`
   (真实 SkillHub 目录、输入筛选、点击切换,按名落 `SkillRef{from:"SkillHub"}`)。
   E2E 证据:命令层建带技能引用的 workflow → sqlite 读回 `skills_json` 非空;
