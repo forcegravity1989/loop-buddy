@@ -254,6 +254,15 @@ fn content_preview(content: &str) -> String {
 /// `component_detail.rs`'s project-rail skill detail reuses this, same
 /// one-copy convention `workflows_using_skill` already established for this
 /// screen.
+///
+/// Product decision (locked, don't re-derive): a code-review pass once
+/// collapsed the 200px sidebar + 360px height cap for support-file-less
+/// skills on readability grounds (more of them get to use full width). The
+/// Builder overruled that — every skill card, including the vast majority
+/// with zero support files, must render through the *exact same* box shape
+/// as a real multi-file package (reference: `writing-skills`, SKILL.md + 6
+/// files). Template alignment outranks the readability win here; don't
+/// reintroduce the conditional.
 #[component]
 pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
     let ink2 = theme::INK_2;
@@ -292,20 +301,18 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
         .map(|p| matches!(p.rsplit('.').next().unwrap_or(""), "md" | "mdx"))
         .unwrap_or(true);
 
-    // T18:统一句式——不管有没有支撑文件,都是同一个「技能包(SKILL.md […])」
-    // 句式,不再是「技能正文」/「技能文件」两套措辞对应两套可视化。
+    // T18(用户复核收紧):模板对齐——不是「有支撑文件才配得上文件夹外观」,
+    // 而是每个技能包(哪怕只有 SKILL.md 一个文件)都按同一套「文件树 + 预览」
+    // 外壳渲染,与 writing-skills(SKILL.md + 6 支撑文件)那种真有多文件的
+    // 包**完全同一个模板**——侧栏、句式、高度上限一律不因文件数分叉。此前
+    // 一度按文件数收起过侧栏(读起来更宽),但那等于又长出第二套展示,正是
+    // 「所有 Skill 可视化一致」要消灭的东西;宽度代价接受,一致性优先。
     let has_files = !s.files.is_empty();
     let package_label = if has_files {
         format!("技能包(SKILL.md + {} 个支撑文件)", s.files.len())
     } else {
         "技能包(SKILL.md)".to_string()
     };
-    // 一个包只有 SKILL.md 时(库里多数:五条阶段技能与全部蒸馏技能),左侧
-    // 文件树只会有一个节点——它不提供任何导航价值,却吃掉 200px 可读宽度,
-    // 再把正文压进 360px 滚动框。此时收起侧栏、去掉高度上限,让正文按内容
-    // 自然展开(T18 之前单栏分支的可读性,不必为了「统一」赔进去)。统一的
-    // 是句式与组件,不是在没有第二个文件时也硬摆一个浏览器骨架。
-    let preview_cap = if has_files { "max-height:360px;" } else { "" };
     // 空正文占位说明:root(SKILL.md 本身)沿用旧分支更具体的措辞——它多半
     // 是纯目录引用(全文在来源仓库),值得提示「可编辑补充」;子文件的空则是
     // 普通空文件,不套同一句诚不实的话。
@@ -322,18 +329,18 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
         }
         div {
             style: "display:flex;border:1px solid {theme::BORDER};border-radius:8px;overflow:hidden;margin-bottom:10px;",
-            if has_files {
+            div {
+                style: "width:200px;flex:none;background:{theme::CARD_ALT};border-right:1px solid {theme::BORDER};max-height:360px;overflow-y:auto;padding:6px 0;",
                 div {
-                    style: "width:200px;flex:none;background:{theme::CARD_ALT};border-right:1px solid {theme::BORDER};max-height:360px;overflow-y:auto;padding:6px 0;",
-                    div {
-                        style: "display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer;font-family:{theme::MONO};font-size:12px;background:{root_bg};color:{root_fg};",
-                        onclick: move |_| selected.set(None),
-                        span { "▤" }
-                        span { "SKILL.md" }
-                    }
-                    for node in tree.iter() {
-                        SkillTreeItem { node: node.clone(), depth: 1, selected, collapsed }
-                    }
+                    style: "display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer;font-family:{theme::MONO};font-size:12px;background:{root_bg};color:{root_fg};",
+                    onclick: move |_| selected.set(None),
+                    span { "▤" }
+                    span { "SKILL.md" }
+                }
+                // has_files == false ⇒ tree 为空,侧栏就只剩上面这一行固定
+                // 的 SKILL.md——一个只有一个文件的文件夹,如实,不是假树。
+                for node in tree.iter() {
+                    SkillTreeItem { node: node.clone(), depth: 1, selected, collapsed }
                 }
             }
             div {
@@ -344,7 +351,7 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
                 }
                 if is_md {
                     div {
-                        style: "padding:12px 14px;overflow-y:auto;{preview_cap}",
+                        style: "padding:12px 14px;overflow-y:auto;max-height:360px;",
                         MarkdownView {
                             content: selected_content.clone(),
                             empty_label: content_empty_label.clone(),
@@ -354,7 +361,7 @@ pub(crate) fn SkillFileBrowser(s: SkillCardVm) -> Element {
                     div { style: "font-size:12px;color:{ink3};padding:14px;", "(空文件)" }
                 } else {
                     pre {
-                        style: "font-family:{theme::MONO};font-size:11.5px;line-height:1.6;color:{ink2};margin:0;padding:12px 14px;white-space:pre-wrap;overflow-y:auto;{preview_cap}",
+                        style: "font-family:{theme::MONO};font-size:11.5px;line-height:1.6;color:{ink2};margin:0;padding:12px 14px;white-space:pre-wrap;overflow-y:auto;max-height:360px;",
                         "{selected_content}"
                     }
                 }

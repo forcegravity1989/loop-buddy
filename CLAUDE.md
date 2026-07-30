@@ -87,6 +87,8 @@ app-web     非 workspace 成员,"以后也许"留口,不编译
    演示/报告里的每个数字都从真实 DB 读出,绝不硬编码(`real_demo` 的 evidence JSON 模式)。
 2. **mock 必须自我标注**。MockExecutor 路径的产出带【mock】/「流程演示」字样,文档如实注明;mock 存在的唯一目的是廉价验证管线本身,绝不冒充真实执行。
 3. **E2E 验证绝不依赖网关**。验证动作 = 临时/演示 DB + 深链启动到目标面板(stderr 见 `[BW_OPEN]` 即渲染成功、无 panic)→ `sqlite3` 读回核数 → 截图存档;必要时 computer-use 驱动交互。真实 `claude -p` 执行受 GLM 网关 529 抖动影响,只在 example/监理脚本里跑,幂等可重试,**不作为常绿验证手段**。
+
+   **computer-use 摸桌面应用(2026-07-30 踩出来的坑,别重踩)**:`~/Applications/BWDev.app`(bundle id `dev.buildersworkbench.bwdev`)是长期稳定的验证壳,任何 worktree 跑一次 `./scripts/point-bwdev-here.sh`(编译 + 把最新二进制拷进这个 app)即可接上,不需要新建/重注册 app——computer-use 的 `request_access` 认的"已安装应用"名单在同一次会话里现造的新 app 认不出来,必须提前存在。**screenshot 真实可用,click/key 永久受阻**(两种打包方式——exec 转符号链接、直接拷二进制进 bundle——都测过,结果一样,是 Dioxus/wry 这层更深的窗口限制,不是权限或封装问题):验证手段因此是 `BW_HUB=<hub>` / `BW_SEL=skill:<uuid>` 等 env 深链**直接终端调用** `Contents/MacOS/bwdev-launcher`(不要用 `open -a`,env 传不进去)把目标视图摆到位,再截图,不要指望点击导航。另外,agent 自身的 `screencapture`/`Read` 拿不到真实桌面像素(sandbox 只看得到壁纸)——真实证据只能靠 computer-use 自己截图当场看,或者把上面那条命令原样给用户,让用户在自己屏幕上核验。
 4. **Done 永不自动,破坏性永不自动**(产品铁律)。run 成功只推 InReview;InReview→Done 必须来自显式 `TransitionIssue` 命令(状态机 `can_transition_to` 守卫锁死,E2E 读回 `settled_at` 抽查)。
 5. **schema 迁移双守卫**(踩过的真坑):`CREATE TABLE IF NOT EXISTS` 对存量表**不会**加新列 —— 每加一列必须同时改 `schema.sql` 并在 `sqlite.rs` 加 `add_column_if_missing(...)`,否则存量 DB 直接崩。
 6. **代码质量靠 `/code-review`,不靠测试基线**。每件功能实现后过 `/code-review`;产品铁律(Done 永不自动、settle-once、Signal derive-only、状态机合法转移表)由类型/守卫在编译期守住,E2E 读回抽查。UI(Dioxus 组件)编译过即可,行为在 bw-app 命令层 + E2E 兜底 —— 如实,不假装 UI 测试。
