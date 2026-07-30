@@ -126,7 +126,7 @@ async fn main() {
         },
     ];
 
-    // 五角色 agent 实体按名解析(seed_stage_entities_if_missing 播种的真实实体)。
+    // 五角色 agent 实体按名解析(seed_stage_role_agents_if_missing 播种的真实实体)。
     let agents = app.snapshot().agents.clone();
     let agent_by_name = |name: &str| {
         agents
@@ -185,7 +185,8 @@ async fn main() {
     app.dispatch(Command::DistillSkillFromIssue {
         skill_id: SkillId::new(),
         issue_id: first_build_issue.expect("merge issue exists"),
-        name: "同源双分支合并消解法".into(),
+        // S1(plan/16):名字走 kebab-case,中文标题留在正文小节。
+        name: "same-source-branch-merge".into(),
         desc: "从本轮 multica×BW 真实合并蒸馏:加法冲突的系统化消解手法。".into(),
         category: "方法论".into(),
         content: "\

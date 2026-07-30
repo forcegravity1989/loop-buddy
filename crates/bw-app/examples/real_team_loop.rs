@@ -209,7 +209,9 @@ async fn main() {
     app.dispatch(Command::DistillSkillFromIssue {
         skill_id: skill,
         issue_id: distill_from,
-        name: "五角色环 · 真实交付法".into(),
+        // S1(plan/16):技能名是全库联合键,须为 kebab-case;中文标题留在
+        // 正文小节里,不做名字。
+        name: "five-role-ring-delivery".into(),
         desc: "从一件真实完成的 Issue 蒸馏:五角色各一轮、门禁每圈绿、证据可核验、不 mock。".into(),
         category: "方法论".into(),
         content: "\

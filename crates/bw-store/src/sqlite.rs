@@ -252,8 +252,9 @@ impl SqliteStore {
         // T7 (2026-07-23, plan/12 §0/§2/§3): Skill/Agent gain the same
         // stage-role classification `workflow_spec.stage_ref` already has.
         // NULL on every pre-T7 row (including the five built-in stage-role
-        // agents/skills) is honest until `seed_stage_entities_if_missing`
-        // (called on every boot) backfills the five real ones by name;
+        // agents/skills) is honest until the boot-time by-name backfill
+        // (`seed_stage_role_agents_if_missing` / plan/17 起 skills 走
+        // `seed_bw_standard_skills_if_missing`) fills the real ones in;
         // every imported catalog row stays NULL = 通用/跨阶段 — nobody has
         // manually classified those, so this never guesses.
         add_column_if_missing(&pool, "skill", "stage_ref", "INTEGER").await?;
@@ -1995,6 +1996,20 @@ impl Store for SqliteStore {
             .bind(id.uuid().to_string())
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    async fn set_skill_source(&self, id: SkillId, source: HubSource) -> Result<()> {
+        let (source_tag, official_library) = hub_source_columns(&source);
+        sqlx::query(
+            "UPDATE skill SET source=?, official_library=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(source_tag)
+        .bind(official_library)
+        .bind(now_unix())
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

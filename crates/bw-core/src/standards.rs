@@ -91,9 +91,14 @@ pub const SKILL_STANDARDS_MD: &str = r##"# Skill 标准(BW 组件规范 · skill
 
 | 字段 | 谁填 | 说明 |
 |---|---|---|
-| `name` | 作者 | 稳定短名(kebab-case 建议,如 `evidence-first`),是 workflow 的 \
-`SkillRef` 与 agent 的 `skills` 列表的联合键。 |
-| `descr` | 作者 | 一句话说清"这个技能是什么、什么时候用",不超过一行。 |
+| `name` | 作者 | 稳定短名,是 workflow 的 `SkillRef` 与 agent 的 `skills` 列表的联合键。\
+**硬规**(plan/16 S1/S2,取自 agentskills.io 规范):1-64 字符,仅小写字母/数字/连字符,\
+不以连字符开头结尾、无连续连字符(如 `evidence-first`),且同库唯一。命令层会硬拒\
+不合规或重名的名字。 |
+| `descr` | 作者 | 一句话说清"这个技能**做什么**、**何时用**"(plan/16 S3/S4,取自 \
+Claude Code 最佳实践:description 是 agent 决定何时加载技能的唯一依据)。≤1024 字符;\
+BW 自产技能必须含显式触发段——中文用「适用:…」,英文用 "Use when …"。第三人称,\
+不写"我可以帮你…"。 |
 | `category` | 作者 | 归类标签(如「方法论」),自由文本,用于人浏览技能库时分组。 |
 | `content` | 作者(或蒸馏时由证据生成) | **正文——真实可执行的指令**,注入到用到它的 \
 每个 phase prompt 里。空字符串 = 纯目录条目(占位,还没写实操内容,允许存在但\
@@ -119,20 +124,26 @@ assignee、状态为 Done)。`content` 应该回答:「做完这件事之后,下
 
 ## 项目自带的五条方法论技能(参照范例)
 
-| name | descr |
-|---|---|
-| evidence-first | 证据先行:只写站得住的内容,标注未核实 |
-| spec-to-tests | 规格即测试:每条验收标准落成一个可跑的用例 |
-| baseline-before-touch | 先测基线再动手:无基线不优化,删减优先 |
-| fresh-eyes-funnel | 新用户漏斗走查:亲手走一遍,只记录真实摩擦 |
-| breaking-drill | 破坏性演练:拿坏输入砸,坏行为当场修 |
+正本是 `docs/skills/<slug>/SKILL.md` 包文件(经 `bw-core::bw_library` 编译进二进制,\
+Boot 由与导入路径同一个解析器解析后播种/对账;desc 均含「适用:…」触发段,此处只列 \
+name,不抄一份会漂移的副本):evidence-first / spec-to-tests / baseline-before-touch / \
+fresh-eyes-funnel / breaking-drill——连同标配三件套(competitive-analysis / \
+north-star-discovery / metrics-binding)同属 `Official { official_library: \
+"bw-standard" }`,desc+content 每次 Boot 与代码正本自愈对账,编辑即脱离源头(翻 \
+`SelfBuilt` + 留痕「改编自」)。
+
+## 正文规范(plan/16 A1,取自 Claude Code 最佳实践)
+
+- 正文 ≤ 500 行;更长的细节拆进技能的支撑文件(`skill_file`),按需加载。
+- 精简为王:只写 agent 不知道的内容,术语全文一致,不写会过期的时效性内容。
 
 ## 创建前自查清单
 
-1. `content` 是不是空的?如果是,这条技能对现在的 workflow 有实际价值吗——\
+1. `name` 合规吗(小写 kebab-case)?`descr` 说清「做什么+何时用」了吗?
+2. `content` 是不是空的?如果是,这条技能对现在的 workflow 有实际价值吗——\
 还是该等真活跑完再蒸馏?
-2. 如果是蒸馏:`distilled_from_issue` 指向的 Issue 真的是 Done 状态吗?
-3. `uses` 是不是留空/零——**没有例外**?
+3. 如果是蒸馏:`distilled_from_issue` 指向的 Issue 真的是 Done 状态吗?
+4. `uses` 是不是留空/零——**没有例外**?
 "##;
 
 /// `.claude/standards/workflow-standards.md`

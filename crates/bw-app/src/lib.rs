@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 mod agent_import;
+mod bw_canon;
 mod legacy_migration;
 mod skill_import;
 
@@ -32,7 +33,8 @@ use bw_core::model::{
     ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus,
     KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, PhaseRole, Readiness,
     RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, Verdict,
-    WorkflowKind, WorkflowSpec, CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_CODEHUB_REPO,
+    WorkflowKind, WorkflowSpec, BW_STANDARD_LIBRARY, CONNECTOR_KIND_CLAUDE_CLI,
+    CONNECTOR_KIND_CODEHUB_REPO,
     CONNECTOR_KIND_GITHUB_REPO, CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{
@@ -970,6 +972,22 @@ impl From<bw_engine::remote::RemoteError> for AppError {
     }
 }
 
+/// plan/16 §2 防线 1 (S1): the one name-format guard all three skill-writing
+/// commands (`CreateSkill`/`UpdateSkill`/`DistillSkillFromIssue`) share — one
+/// rule, one error message, no hand-copied variants drifting apart.
+/// `ImportSkillPackage`/`ImportSkillLibrary` deliberately do NOT call this:
+/// external library text enters verbatim (分域规则), its violations surface
+/// as Advisory findings instead.
+fn guard_skill_name(name: &str) -> Result<(), AppError> {
+    if !bw_core::skill_spec::is_valid_skill_name(name) {
+        return Err(AppError::Invalid(
+            "技能名须为 1-64 字符的小写 kebab-case(字母/数字/单连字符,如 evidence-first)——plan/16 S1"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 /// How a `run_workflow_inner` call resolved once its adversarial review loop
 /// settled (T9, plan/12 §4). An honest *failure* (executor error, or a review
 /// output with no parseable verdict) is NOT an outcome here — it surfaces as
@@ -1163,6 +1181,31 @@ impl App {
 
     async fn refresh_skills(&mut self) -> Result<(), AppError> {
         self.state.skills = self.store.list_skills().await?;
+        Ok(())
+    }
+
+    /// plan/16 §2 防线 1 (S2): the skill name is the hub-wide join key
+    /// (`SkillRef` / `agent.skills` / 蒸馏溯源 all match by name), so a
+    /// duplicate is ambiguity, not a style problem. `exempt` = the row being
+    /// renamed itself (an unchanged-name `UpdateSkill` must not self-collide).
+    /// Read against the store, not `self.state` — same stale-UI reasoning as
+    /// `UpdateSkill`'s T11 flip check.
+    async fn guard_skill_name_unique(
+        &self,
+        name: &str,
+        exempt: Option<SkillId>,
+    ) -> Result<(), AppError> {
+        let taken = self
+            .store
+            .list_skills()
+            .await?
+            .iter()
+            .any(|s| s.name == name && Some(s.id) != exempt);
+        if taken {
+            return Err(AppError::Invalid(format!(
+                "技能名「{name}」已存在——名字是联合键,不容歧义(plan/16 S2)"
+            )));
+        }
         Ok(())
     }
 
@@ -1948,12 +1991,19 @@ impl App {
             else {
                 continue;
             };
-            let chars = skill.content.chars().count();
+            // plan/16 S7: bodies are spec-shaped SKILL.md text opening at
+            // `#`; the injector nests them two levels down so they sit
+            // correctly under this block's own H2 (see
+            // `bw_core::skill_body::demote_headings`). 变换**先做**再记账:
+            // 降级每个标题多两个 `#`,按变换前的长度记账会让这道「病态目录
+            // 不许淹掉任务」的护栏不再是它声称的那个硬上限。
+            let body = bw_core::skill_body::demote_headings(skill.content.trim(), 2);
+            let chars = body.chars().count();
             if total + chars > MAX_BLOCK_CHARS {
                 break;
             }
             total += chars;
-            bodies.push(skill.content.trim().to_string());
+            bodies.push(body);
         }
         if bodies.is_empty() {
             return Ok(String::new());
@@ -2066,7 +2116,9 @@ impl App {
         let block = format!(
             "\n\n## 标配技能(创建流关联,来自 {})\n{}\n",
             skill.name,
-            skill.content.trim()
+            // plan/16 S7: same nesting rule as `skills_prompt_block` — the
+            // stored body is spec-shaped (`#` title), the injector demotes.
+            bw_core::skill_body::demote_headings(skill.content.trim(), 2)
         );
         let refs = vec![SkillRef {
             name: skill.name.clone(),
@@ -2398,10 +2450,11 @@ impl App {
     /// `remote_path` 是否非空短路整批——无仓项目连 BW 侧的三张都不建,
     /// 不给建不了仓的项目发一套没处交付的活(如实留白)。
     ///
-    /// 每张携带一个稳定 `standard_skill` slug——三张卡均已由
-    /// `seed_standard_issue_skills_if_missing` 按名种下(C9 落地
+    /// 每张携带一个稳定 `standard_skill` slug——三张卡均已由 Boot 的
+    /// `seed_bw_standard_skills_if_missing` 按名种下(C9 落地
     /// `north-star-discovery` / `metrics-binding`,C10 补上
-    /// `competitive-analysis`),`run_issue_now` 注入时按名查到即真实注入。
+    /// `competitive-analysis`,plan/17 起统一走包文档解析播种),
+    /// `run_issue_now` 注入时按名查到即真实注入。
     ///
     /// 返回①竞品分析那张的 `IssueId`,供「问一句就跑」路径直接开工;无仓
     /// 项目(未建任何标配票)返回 `None`。
@@ -3396,23 +3449,43 @@ impl App {
                 // Real OMC/ECC catalog, not fabricated sample data — a no-op
                 // once the hub tables are non-empty (checked inside).
                 bw_store::seed_hub_if_empty(self.store.as_ref()).await?;
-                // The five stage-role agents + stage working-method skills
-                // (bw_core::playbook projections) — by-name idempotent, so an
-                // already-seeded database gains them too.
-                bw_store::seed_stage_entities_if_missing(self.store.as_ref()).await?;
-                // C9+C10 · plan/13 D8/D9: the three standard-Issue-trio
-                // skills (竞品分析/找指标/绑数据) — by-name idempotent, so an
-                // already-seeded database gains them too. Content is
-                // `include_str!`-ed straight from docs/skills/<slug>/SKILL.md
-                // (the real file in the repo).
-                bw_store::seed_standard_issue_skills_if_missing(self.store.as_ref()).await?;
-                // P8 (2026-07-28): standard-issue-trio skill content is
-                // reconciled against `docs/skills/<slug>/SKILL.md` on every
-                // Boot, unconditionally — not gated behind a one-time
-                // migration flag. `seed_standard_issue_skills_if_missing`
+                // plan/17 · 装载统一: the bw-standard skill library (five
+                // stage working-method skills + the standard-issue trio) is
+                // parsed from its vendored package documents
+                // (`bw_core::bw_library` — the real docs/skills/<slug>/
+                // SKILL.md files compiled in) through THE import parser
+                // (`bw_canon`, name==slug + kernel-desc guards inside), so
+                // BW's own skills and every external import enter through
+                // one loading chain. Seeding is by-name idempotent (an
+                // already-seeded database gains missing rows too).
+                //
+                // A malformed vendored doc must NOT `?` out here. 桌面壳
+                // (`kernel.rs`)把 Boot 的 Err 吞成一条 toast 后照常开窗,
+                // 所以提前返回不是「拒绝启动」,而是静默跳过它后面的全部
+                // 初始化(五角色 agent 播种、阶段吞吐指标回填、workflow/
+                // skill 刷新)——用户看到的会是一个空 Hub 加一条转瞬的提
+                // 示。改为:canon 坏了就跳过 bw-standard 的播种与对账(空
+                // canon 让下面几个循环自然 no-op),其余初始化照跑,错误
+                // 留到 Boot 末尾原样抛出。
+                let (skill_canon, canon_err) = match crate::bw_canon::bw_standard_skill_canon() {
+                    Ok(canon) => (canon, None),
+                    Err(e) => (Vec::new(), Some(e)),
+                };
+                bw_store::seed_bw_standard_skills_if_missing(self.store.as_ref(), &skill_canon)
+                    .await?;
+                // The five stage-role agents (bw_core::playbook projections)
+                // — by-name idempotent, so an already-seeded database gains
+                // them too.
+                bw_store::seed_stage_role_agents_if_missing(self.store.as_ref()).await?;
+                // P8 (2026-07-28, widened by plan/16 §2): the bw-standard
+                // skill library (issue trio + five playbook stage skills) is
+                // reconciled — `desc`+`content` — against its canon (plan/17
+                // 起 = the parsed vendored package documents, `skill_canon`
+                // above) on every Boot, unconditionally — not gated behind a
+                // one-time migration flag. `seed_bw_standard_skills_if_missing`
                 // above is by-name idempotent — it only ever plants a fresh
                 // row, never overwrites an existing one (that function's own
-                // doc comment: "内容更新走 UpdateSkill,不是重新 seed") — so
+                // doc comment: "内容对账是 Pass 2,不是重新 seed") — so
                 // an existing row on an older database never picks up a
                 // later edit to the SKILL.md source on its own. P2
                 // originally closed that gap with a one-shot
@@ -3434,7 +3507,7 @@ impl App {
                 // re-diffs and, only when different, overwrites. Cost is
                 // negligible: `list_skills()` is a call this same Boot path
                 // already makes right above for
-                // `seed_standard_issue_skills_if_missing`.
+                // `seed_bw_standard_skills_if_missing`.
                 // The `STANDARD_SKILL_CONTENT_REFRESH_DONE_KEY` app_meta
                 // guard this replaced is gone from `legacy_migration.rs`
                 // entirely (see that module's own historical-note comment at
@@ -3443,50 +3516,162 @@ impl App {
                 // harmless and deliberately not migrated away (no
                 // destructive DELETE for a row nothing reads anymore).
                 {
+                    // plan/16 §2 防线 2, plan/17 合流: the reconciled canon
+                    // is the whole bw-standard library — `skill_canon`, the
+                    // same parsed-package-document rows the seed above ate
+                    // (装载与对账不再各建一份) — and the diff covers `desc`
+                    // as well as `content` (a canonical description fix must
+                    // reach existing rows the same way a SKILL.md edit
+                    // does). `CanonicalSkill.content` is the parser's body
+                    // output, frontmatter already gone (plan/16 S7), so what
+                    // Boot compares against is exactly what the hub should
+                    // store and show.
+
+                    // The five playbook skills' pre-plan/16 canonical descs —
+                    // a *bounded* migration aid, not a version treadmill:
+                    // Pass 1 only ever matters for the pre-plan/16 row
+                    // population (fresh seeds are born `Official`), and that
+                    // population's canonical descs are fixed history. A row
+                    // whose desc is neither today's canon nor one of these
+                    // is a real user edit and must not be promoted.
+                    const LEGACY_CANON_DESCS: [&str; 5] = [
+                        "证据先行:只写站得住的内容,标注未核实",
+                        "规格即测试:每条验收标准落成一个可跑的用例",
+                        "先测基线再动手:无基线不优化,删减优先",
+                        "新用户漏斗走查:亲手走一遍,只记录真实摩擦",
+                        "破坏性演练:拿坏输入砸,坏行为当场修",
+                    ];
+
+                    // 同理的**正文**台账,而且没有它 Pass 1 就是死代码:
+                    // plan/16/17 把这五条的正文整个重写了(裸 `###` 提示词 →
+                    // 规范 SKILL.md body),于是「pristine = content 与今日
+                    // canon 逐字节相等」对它要迁移的那批老行永远为假 ——
+                    // 老行既升不了源、也就永远轮不到 Pass 2 对账,会一直顶
+                    // 着旧正文停在 SelfBuilt,还被 SkillHub 点上「规范 ·
+                    // 待校正」黄徽记。这里逐字收录改写前的正本正文(与
+                    // LEGACY_CANON_DESCS 同一性质:一份有界的历史台账,不是
+                    // 版本跑步机——它是固定的历史,不随以后每次改写增长)。
+                    const LEGACY_CANON_CONTENTS: [&str; 5] = [
+                        "### 证据先行 (evidence-first)\n\
+                 1. 只记录两类内容:(a) 你直接验证过的事实(真实命令输出、真实文件内容);\
+                 (b) 你的先验知识——必须标注「未核实」。\n\
+                 2. 每条证据注明来源:文件路径、命令、或「知识截止内记忆,未核实」。\n\
+                 3. 禁止编造统计数字与引用;没有可靠数字就写「无可靠数字」。\n\
+                 4. 结论按「证据 → 洞察 → 假设」链书写,断链处如实标断。",
+                        "### 规格即测试 (spec-to-tests)\n\
+                 1. SPEC 里每条验收标准编号(AC-1, AC-2, …);写实现前先把它翻译成测试名\
+                 (如 `ac1_reports_dead_relative_link`)。\n\
+                 2. 无法翻译成测试的验收标准是坏标准——回头改写它,而不是跳过。\n\
+                 3. 实现只做到让测试通过为止,不做规格外功能。\n\
+                 4. 提交前 `cargo test` 全绿是硬门禁;失败输出原样留档,不美化。",
+                        "### 先测基线再动手 (baseline-before-touch)\n\
+                 1. 动手前先真实测量并落盘:测试数、clippy 警告数、代码行数、构建耗时——\
+                 全部来自真实命令输出的原样摘录。\n\
+                 2. 每步重构保持测试全绿;一步只做一类等价变换。\n\
+                 3. 删减优先:能删的代码是最好的优化,删除行数计入成果。\n\
+                 4. 结束时用与基线完全相同的命令重测,报 delta;无 delta 也如实报。",
+                        "### 新用户漏斗走查 (fresh-eyes-funnel)\n\
+                 1. 以从未见过本项目的人的视角,真实执行「发现 → 安装 → 首次使用 → 再次使用」\
+                 每一步,不跳步、不脑补。\n\
+                 2. 只记录你真实遇到的摩擦(命令报错、文档缺失、参数不明),不臆想用户。\n\
+                 3. 一次实验只改一个变量,改动前后用同一条真实命令对照。\n\
+                 4. 没有真实流量就如实做「前后对照」,不假装有 A/B 分流。",
+                        "### 破坏性演练 (breaking-drill)\n\
+                 1. 系统性地喂坏输入:不存在的路径、空输入、超长输入、坏参数、坏编码——\
+                 逐个真实执行并原样记录行为。\n\
+                 2. 任何 panic 或不知所云的报错都算事故:当场修复成友好报错,修后重测。\n\
+                 3. 健康检查脚本必须一键可跑、任何失败以非零码退出;写完真实执行一遍留档。\n\
+                 4. 复盘只引用真实存在的文件与提交号(写之前 ls / git log 核实)。",
+                    ];
+
+                    // Pass 1 · pristine promotion (plan/16 §4): a stage-skill
+                    // row seeded by a pre-T2/pre-plan/16 binary reads back
+                    // `SelfBuilt` (legacy `official`+空库名 encoding, or the
+                    // T2-era `SelfBuilt` seed). Pristine = `content` equals
+                    // the code canon byte-for-byte AND `desc` is a canonical
+                    // text (today's or the fixed pre-plan/16 one) — then
+                    // nobody made it their own, and it gets the label fresh
+                    // seeds now carry: `Official { "bw-standard" }`, which is
+                    // what licenses Pass 2 to reconcile it. Anything else
+                    // stays `SelfBuilt`, honestly: that's a user edit, never
+                    // to be washed away by Boot. Two hard exclusions:
+                    // distilled rows (provenance beats relabelling), and
+                    // rows carrying `adapted_from` — that trace means a
+                    // human already detached this row from an official
+                    // origin via T11, so re-promoting it would wash a
+                    // desc/category-only edit right back out (the flip loop
+                    // /code-review caught: edit desc → T11 flips SelfBuilt
+                    // with content untouched → naive Pass 1 re-promotes →
+                    // Pass 2 clobbers the desc).
                     let existing_skills = self.store.list_skills().await?;
-                    for (name, content) in bw_store::standard_issue_skill_contents() {
-                        // Only ever touch the real official-library row —
-                        // a user's own self-built or distilled skill that
-                        // happens to share the name (however unlikely) is
-                        // never a candidate. Deliberately NOT
-                        // `Command::UpdateSkill`/`self.store.update_skill`
-                        // with `flip_to_self_built: true`: that flip rule
-                        // (T11, "编辑即脱离源头") exists for a *human*
-                        // diverging a skill from its official origin — this
-                        // is the opposite motion, the official origin
-                        // catching a row back up to itself, so `source`
-                        // must stay `Official { official_library:
-                        // "bw-standard" }` unchanged.
-                        let Some(existing) = existing_skills.iter().find(|s| {
-                            s.name == name
+                    for c in &skill_canon {
+                        for row in existing_skills.iter().filter(|s| {
+                            s.name == c.name
+                                && s.source == HubSource::SelfBuilt
+                                && s.adapted_from.is_none()
+                                && s.distilled_from_issue.is_none()
+                                && (s.content == c.content
+                                    || LEGACY_CANON_CONTENTS.contains(&s.content.as_str()))
+                                && (s.desc == c.desc
+                                    || LEGACY_CANON_DESCS.contains(&s.desc.as_str()))
+                        }) {
+                            self.store
+                                .set_skill_source(
+                                    row.id,
+                                    HubSource::Official {
+                                        official_library: BW_STANDARD_LIBRARY.to_string(),
+                                    },
+                                )
+                                .await?;
+                        }
+                    }
+
+                    // Pass 2 · reconcile. Only ever touches the real
+                    // bw-standard row — a user's own self-built or distilled
+                    // skill that happens to share the name is never a
+                    // candidate. Deliberately NOT `Command::UpdateSkill`/
+                    // `self.store.update_skill` with `flip_to_self_built:
+                    // true`: that flip rule (T11, "编辑即脱离源头") exists
+                    // for a *human* diverging a skill from its official
+                    // origin — this is the opposite motion, the official
+                    // origin catching a row back up to itself, so `source`
+                    // must stay `Official { "bw-standard" }` unchanged.
+                    // `filter` 而非 `find`:与 Pass 1 同口径。唯一性守卫
+                    // (S2)是本轮才加的,只管新写入——存量库里若有两行同名
+                    // 且都被 Pass 1 升成 Official{bw-standard},`find` 只会
+                    // 追平其中一行,另一行顶着官方徽记停在旧内容,而 UI 分
+                    // 不出二者。
+                    let existing_skills = self.store.list_skills().await?;
+                    for c in &skill_canon {
+                        for existing in existing_skills.iter().filter(|s| {
+                            s.name == c.name
                                 && matches!(
                                     &s.source,
                                     HubSource::Official { official_library }
-                                        if official_library == "bw-standard"
+                                        if official_library == BW_STANDARD_LIBRARY
                                 )
-                        }) else {
-                            continue;
-                        };
-                        if existing.content == content {
-                            continue;
+                        }) {
+                            if existing.content == c.content && existing.desc == c.desc {
+                                continue;
+                            }
+                            // `uses` / `distilled_from_issue` / `origin_agent`
+                            // are derived lifecycle fields (skill-standards:
+                            // "永不手填") — `SkillEdit` has no fields for them at
+                            // all, so there is no way this call could touch
+                            // them even by accident.
+                            self.store
+                                .update_skill(
+                                    existing.id,
+                                    SkillEdit {
+                                        name: existing.name.clone(),
+                                        desc: c.desc.clone(),
+                                        category: existing.category.clone(),
+                                        content: c.content.clone(),
+                                        flip_to_self_built: false,
+                                    },
+                                )
+                                .await?;
                         }
-                        // `uses` / `distilled_from_issue` / `origin_agent`
-                        // are derived lifecycle fields (skill-standards:
-                        // "永不手填") — `SkillEdit` has no fields for them at
-                        // all, so there is no way this call could touch
-                        // them even by accident.
-                        self.store
-                            .update_skill(
-                                existing.id,
-                                SkillEdit {
-                                    name: existing.name.clone(),
-                                    desc: existing.desc.clone(),
-                                    category: existing.category.clone(),
-                                    content: content.to_string(),
-                                    flip_to_self_built: false,
-                                },
-                            )
-                            .await?;
                     }
                 }
                 // A4: backfill the per-stage "完成 Issue 数" metric for every
@@ -3505,6 +3690,12 @@ impl App {
                 self.refresh_activity().await?;
                 self.refresh_issues().await?;
                 self.emit(Event::ProjectsChanged);
+                // vendored 包文档坏了(开发者错误)的诚实归宿:整个 Boot 的
+                // 其余部分已经跑完、状态不半初始化,错误在这里原样抛出,由
+                // 桌面壳呈现。
+                if let Some(e) = canon_err {
+                    return Err(AppError::Invalid(e));
+                }
             }
 
             Command::CreateProject {
@@ -4812,6 +5003,12 @@ impl App {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
                 }
+                // plan/16 §2 防线 1 (S1+S2): a hand-authored skill must be
+                // born spec-compliant — the name is the hub-wide join key
+                // (SkillRef / agent.skills / 蒸馏溯源), so a bad or
+                // ambiguous one spreads.
+                guard_skill_name(&name)?;
+                self.guard_skill_name_unique(&name, None).await?;
                 self.store
                     .create_skill(NewSkill {
                         id,
@@ -4846,6 +5043,12 @@ impl App {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
                 }
+                // plan/16 §2 防线 1 (S1+S2): distilled skills are BW 自产 —
+                // the compounding loop must mint spec-compliant names from
+                // day one (the two legacy Chinese-named rows are exactly the
+                // stock this guard prevents regrowing).
+                guard_skill_name(&name)?;
+                self.guard_skill_name_unique(&name, None).await?;
                 self.store
                     .distill_skill_from_issue(
                         NewSkill {
@@ -5028,6 +5231,12 @@ impl App {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
                 }
+                // plan/16 §2 防线 1 (S1+S2): renames must land on a
+                // spec-compliant, unoccupied name too — this is also the
+                // exact door the audit's curated corrections walk through
+                // (中文名 → kebab), so the guard and the fix share one rule.
+                guard_skill_name(&name)?;
+                self.guard_skill_name_unique(&name, Some(id)).await?;
                 // T11 (plan/12 §7): "编辑即脱离源头" — an `Official` row whose
                 // substantive fields (content/desc/category; `name` is
                 // identity, not content) really changed flips to `SelfBuilt`

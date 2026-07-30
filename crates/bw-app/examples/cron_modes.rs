@@ -82,7 +82,7 @@ async fn main() {
     .unwrap();
 
     // 一个真实、带正文的 skill —— Boot 已经 seed 了五阶段方法论 skill(真实
-    // content,来自 bw_core::playbook::stage_skills),挑一个真实 id 引用,
+    // content,来自 vendored 包文档 bw_core::bw_library 经唯一解析器播种),挑一个真实 id 引用,
     // 绝不按名字匹配。
     let skills = store.list_skills().await.unwrap();
     let real_skill = skills
