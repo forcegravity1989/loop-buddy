@@ -280,8 +280,24 @@ fn RepoCard(
     let is_codehub = platform() == "codehub";
     let existing_ready =
         matches!(&choice(), RepoChoice::Existing { owner, .. } if !owner.is_empty());
-    let can_send = is_codehub && !codehub_path().trim().is_empty() || is_new || existing_ready;
+    // Q1-fix: codehub 时 path 必填,不被 is_new/existing_ready 的 || 盖过——
+    // 原写法 `is_codehub && !path.empty || is_new || existing_ready` 因 || 优先
+    // 级,codehub 下 is_new(默认新建)为真就放行空 path,用户过去后到 Intent
+    // 才被正确 gate 挡住,摸不着头脑是上一步 path 没填。gate 放源头(这里)。
+    let can_send = if is_codehub {
+        !codehub_path().trim().is_empty()
+    } else {
+        is_new || existing_ready
+    };
     let opacity = if can_send { "1" } else { ".45" };
+    // 置灰时讲清原因,别让人猜。
+    let hint: &str = if can_send {
+        ""
+    } else if is_codehub {
+        "codehub 仓库 path 未填(输入框要填值,不是 placeholder)"
+    } else {
+        "选一个已有仓,或点「接入已有仓」从列表选"
+    };
     // C16(plan/14 规范条 4): 选中已有仓时,在下拉下方回显它的完整真实
     // metadata(不只是下拉一行 owner/repo · private)。找不到(仓列表还没
     // 加载完/选择已清空)就不渲染这块 —— 不拿假数据充数。
@@ -378,7 +394,10 @@ fn RepoCard(
         }
         }
         div {
-            style: "display:flex;justify-content:flex-end;margin-top:14px;",
+            style: "display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:14px;",
+            if !can_send {
+                span { style: "font-size:11.5px;color:#B0503A;", "{hint}" }
+            }
             button {
                 style: "{theme::btn_primary()} opacity:{opacity};",
                 disabled: !can_send,
