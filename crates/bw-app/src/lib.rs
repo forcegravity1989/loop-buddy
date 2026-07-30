@@ -4199,6 +4199,39 @@ impl App {
                 self.state.view = View::App;
                 self.refresh_projects().await?;
                 self.refresh_issues().await?;
+                // 创建即探活(§6.5 GAP,用户实践点破):建完的连接器就地 probe
+                // 一遍——git-repo 顺带喂工作区指标(commits/docs)、codehub/github-
+                // repo 翻 Connected。用户不用再为每个项目去 Hub 点「立即同步」。
+                // 探活失败软降级留 Error,如实,不倒灌创建(创建本身已落地)。
+                let minted: Vec<_> = self
+                    .store
+                    .list_connectors()
+                    .await?
+                    .into_iter()
+                    .filter(|c| c.project_id == Some(p))
+                    .collect();
+                for c in minted {
+                    let (ok, detail) = self
+                        .probe_connector(&c)
+                        .await
+                        .unwrap_or((false, "探活异常,跳过".into()));
+                    let status = if ok {
+                        ConnectorStatus::Connected
+                    } else {
+                        ConnectorStatus::Error
+                    };
+                    let _ = self
+                        .store
+                        .set_connector_sync(c.id, status, &run_at_label(now()))
+                        .await;
+                    self.emit(Event::ConnectorSynced {
+                        name: c.name.clone(),
+                        ok,
+                        detail,
+                    });
+                }
+                self.refresh_connectors().await?;
+                self.emit(Event::ConnectorsChanged);
                 self.emit(Event::ProjectUpdated(p));
                 self.emit(Event::ViewChanged(View::App));
                 self.emit(Event::IssuesChanged);
