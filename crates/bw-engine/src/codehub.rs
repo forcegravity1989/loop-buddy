@@ -2,8 +2,9 @@
 //! JSON 输出,token 存 OS keyring)。与 [`crate::github`] 对称:无状态自由
 //! 函数 + `tokio::process` shell-out,**零 HTTP 依赖**。token 不管(keyring
 //! 里 `auth login` 存好),`host`/`path` 按 project 的 `(remote_host,
-//! remote_path)` 显式带 `-H`/`-p` 消歧(绿/黄/内源三 host 同名 path 会抛
-//! `AmbiguousRemoteError`,显式 host 守住)。
+//! remote_path)` 显式带 `-H`/`-p`——绿/黄/内源三 host 同名 path 也不会混,
+//! 因为每次调用都带显式 host,不存在「猜 host」的歧义分支,也没有对应的
+//! 错误类型(`CodehubError` 只认 NotInstalled/Command/Parse)。
 //!
 //! 不进 `Executor` 体系——`codehub-cli` 是 VCS 远端 API 客户端(对标 `gh`),
 //! 不是 agent 执行器(对标 `claude`)。两种 shell-out 模式别混。

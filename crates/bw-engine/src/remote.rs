@@ -4,11 +4,13 @@
 //! [`Remote`]; the provider branch lives here (one `match` per method),
 //! not scattered across N call sites in `bw-app`.
 //!
-//! Pure seam today: only the GitHub arm is wired (delegating to
-//! [`crate::github`]). The CodeHub arms return [`RemoteError::CodehubUnwired`]
-//! until P3 fills them with real `codehub-cli` shell-outs — the type + the
-//! dispatch shape land now so P3 is "fill the arm", not "revisit every call
-//! site".
+//! Both arms are wired: GitHub delegates to [`crate::github`] (`gh`), CodeHub
+//! delegates to [`crate::codehub`] (`codehub-cli`). The type + dispatch shape
+//! landed in P2 with only the GitHub arm filled; P3 filled the CodeHub arm
+//! with real `codehub-cli` shell-outs — no `CodehubUnwired` variant remains
+//! (call sites never match on `Remote`; they call methods, so adding a
+//! provider means filling the arm here, not revisiting N call sites in
+//! `bw-app`).
 
 use crate::codehub::{self, CodehubError};
 use crate::github::{self, GithubError};
@@ -36,8 +38,10 @@ pub enum Remote {
     /// carried for symmetry/Enterprise-future but unused by every github call.
     Github(String),
     /// `host` (green/yellow/inner-source domain) + `path` (`"org/repo"`).
-    /// P3 swaps this for a stateful `CodehubClient { host, path }` holding a
-    /// resolved `project_id`; the arms below stay `CodehubUnwired` until then.
+    /// Stateless today: every method re-passes `host`/`path` to the matching
+    /// `codehub::xxx` shell-out (P3 wired all three arms). A future stateful
+    /// `CodehubClient { host, path }` holding a resolved `project_id` would
+    /// save the per-call `project view`, but the arms work as-is without it.
     Codehub { host: String, path: String },
 }
 
