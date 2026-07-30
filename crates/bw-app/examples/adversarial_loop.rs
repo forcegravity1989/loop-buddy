@@ -125,6 +125,7 @@ async fn main() {
             desc: "adversarial loop E2E".into(),
             workspace: None,
             github: None,
+            codehub: None,
         })
         .await
         .expect("create project");

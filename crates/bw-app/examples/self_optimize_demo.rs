@@ -31,6 +31,7 @@ async fn quick_project(app: &mut App, name: &str) -> ProjectId {
 
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .unwrap();

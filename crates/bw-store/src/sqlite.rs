@@ -153,13 +153,21 @@ impl SqliteStore {
         add_column_if_missing(&pool, "workflow_spec", "project_id", "TEXT").await?;
         add_column_if_missing(&pool, "skill", "project_id", "TEXT").await?;
         add_column_if_missing(&pool, "agent", "project_id", "TEXT").await?;
-        // GitHub 为主体的创建流(2026-07-22):老库开出来 github_remote 是
-        // 空串,和"没挂 GitHub"这个真实状态一致,不需要额外语义。
+        // codehub 对接(2026-07-28):远端身份二元组 (host, path) 均匀对称
+        // —— 不是 github 不需要 host,是当时把 github.com 隐式默认了、漏存
+        // 一列。老库若仍有 github_remote 列(2026-07-22 那波 ADD COLUMN 加的),
+        // 改名成 remote_path(仓库首次列改名迁移,RENAME COLUMN,sqlite ≥3.25,
+        // 数据原样保留:owner/repo 值不动,只是列名换了)。新库 schema.sql 直接
+        // 建 remote_path,这里 no-op。
+        rename_column_if_exists(&pool, "project", "github_remote", "remote_path").await?;
+        // remote_host:github 隐含 github.com(NOT NULL DEFAULT 让老行直接拿到,
+        // 和"这些仓当时就是接 GitHub 建的"这个真实状态一致);codehub 各填自己
+        // 的域名(绿/黄/内源)。
         add_column_if_missing(
             &pool,
             "project",
-            "github_remote",
-            "TEXT NOT NULL DEFAULT ''",
+            "remote_host",
+            "TEXT NOT NULL DEFAULT 'github.com'",
         )
         .await?;
         // C4 · issue 身份映射: 老库开出来 github_number 是 0,和"未映射"这个
@@ -313,6 +321,30 @@ async fn add_column_if_missing(
     Ok(())
 }
 
+/// `ALTER TABLE ... RENAME COLUMN` has no `IF EXISTS` clause, and a fresh DB
+/// (whose `schema.sql` already defines the *new* column name) has no *old*
+/// column to rename — so check `PRAGMA table_info` first: rename only when the
+/// old column is still present. Safe to call on every `open()`. The codebase's
+/// first column-rename migration (codehub 对接 2026-07-28: `github_remote`→
+/// `remote_path`) — prior migrations were all additive `ADD COLUMN`.
+async fn rename_column_if_exists(
+    pool: &SqlitePool,
+    table: &str,
+    old: &str,
+    new: &str,
+) -> Result<()> {
+    let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
+        .fetch_all(pool)
+        .await?;
+    let old_exists = rows.iter().any(|r| r.get::<String, _>("name") == old);
+    if old_exists {
+        sqlx::query(&format!("ALTER TABLE {table} RENAME COLUMN {old} TO {new}"))
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
 fn now_unix() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
 }
@@ -359,6 +391,7 @@ fn source_text(s: SourceKind) -> &'static str {
         SourceKind::Telemetry => "telemetry",
         SourceKind::Connector => "connector",
         SourceKind::Github => "github",
+        SourceKind::Codehub => "codehub",
         SourceKind::Manual => "manual",
     }
 }
@@ -370,6 +403,7 @@ fn parse_source(s: &str) -> SourceKind {
         "telemetry" => SourceKind::Telemetry,
         "connector" => SourceKind::Connector,
         "github" => SourceKind::Github,
+        "codehub" => SourceKind::Codehub,
         _ => SourceKind::Manual,
     }
 }
@@ -674,13 +708,16 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn set_github_remote(&self, id: ProjectId, github_remote: &str) -> Result<()> {
-        sqlx::query("UPDATE project SET github_remote=?, updated_at=?, rev=rev+1 WHERE id=?")
-            .bind(github_remote)
-            .bind(now_unix())
-            .bind(pid(id))
-            .execute(&self.pool)
-            .await?;
+    async fn set_remote(&self, id: ProjectId, host: &str, path: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE project SET remote_path=?, remote_host=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(path)
+        .bind(host)
+        .bind(now_unix())
+        .bind(pid(id))
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -690,8 +727,8 @@ impl Store for SqliteStore {
         sqlx::query(
             "INSERT INTO metric
                 (id, project_id, role, stage_kind, name, def, target_raw, amber_kind, amber_value,
-                 last_target, driver, pos, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                 last_target, driver, pos, collect_kind, collect_query, created_at, updated_at, rev)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
              ON CONFLICT(id) DO UPDATE SET
                 role=excluded.role, stage_kind=excluded.stage_kind, name=excluded.name,
                 def=excluded.def, target_raw=excluded.target_raw, amber_kind=excluded.amber_kind,
@@ -711,6 +748,8 @@ impl Store for SqliteStore {
         .bind(&m.last_target)
         .bind(&m.driver)
         .bind(m.pos)
+        .bind(&m.collect_kind)
+        .bind(&m.collect_query)
         .bind(t)
         .bind(t)
         .execute(&self.pool)
@@ -1098,7 +1137,7 @@ impl Store for SqliteStore {
 
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>> {
         let row = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, north_star_collect_kind, north_star_collect_query, provider, signal, weekly_signal, created_at
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, remote_path, remote_host, north_star_collect_kind, north_star_collect_query, provider, signal, weekly_signal, created_at
              FROM project WHERE id=?",
         )
         .bind(pid(id))
@@ -1109,7 +1148,7 @@ impl Store for SqliteStore {
 
     async fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, github_remote, north_star_collect_kind, north_star_collect_query, provider, signal, weekly_signal, created_at
+            "SELECT id, name, kind, descr, phase, cycle, active_stage, north_star, ns_def, benchmark, opportunity, workspace_path, allow_commands, remote_path, remote_host, north_star_collect_kind, north_star_collect_query, provider, signal, weekly_signal, created_at
              FROM project ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -2683,7 +2722,8 @@ fn project_row(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
         opportunity: r.get("opportunity"),
         workspace_path: r.get("workspace_path"),
         allow_commands: r.get::<i64, _>("allow_commands") != 0,
-        github_remote: r.get("github_remote"),
+        remote_path: r.get("remote_path"),
+        remote_host: r.get("remote_host"),
         north_star_collect_kind: r.get("north_star_collect_kind"),
         north_star_collect_query: r.get("north_star_collect_query"),
         provider: r.get("provider"),

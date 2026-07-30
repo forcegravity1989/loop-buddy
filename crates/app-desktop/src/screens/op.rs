@@ -753,15 +753,15 @@ fn IssuesPanel(op: OpVm) -> Element {
                                         style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {i.status_color};",
                                         div { style: "font-size:11px;color:{ink3};font-family:{mono};", "#{i.number} · {i.stage.label()}" }
                                         // C4 · issue 身份映射: 号非 0 才渲染,
-                                        // 展示最小化——链接形态用 github_remote
+                                        // 展示最小化——链接形态用 remote_path
                                         // 拼纯文本 URL,不做点击跳转,如实即可。
                                         if i.github_number != 0 {
                                             div {
                                                 style: "font-size:10.5px;color:{ink3};font-family:{mono};margin-top:1px;",
-                                                if op.github_remote.trim().is_empty() {
+                                                if op.remote_path.trim().is_empty() {
                                                     "GitHub #{i.github_number}"
                                                 } else {
-                                                    "https://github.com/{op.github_remote}/issues/{i.github_number}"
+                                                    "https://github.com/{op.remote_path}/issues/{i.github_number}"
                                                 }
                                             }
                                         }
@@ -1180,7 +1180,7 @@ fn EditProjectCard(op: OpVm) -> Element {
     let mut ns_value = use_signal(|| op.north_star.clone());
     let mut ns_def = use_signal(|| op.ns_def.clone());
 
-    let has_repo = !op.github_remote.trim().is_empty();
+    let has_repo = !op.remote_path.trim().is_empty();
     let can_save = !name().trim().is_empty();
     let opacity = if can_save { "1" } else { ".45" };
 
@@ -1298,7 +1298,7 @@ fn EditProjectCard(op: OpVm) -> Element {
 
                 // 北极星:必须按有无仓分叉,不是漏做。
                 //
-                // 有仓项目(github_remote 非空)—— D1「产品信息正本在仓、BW=
+                // 有仓项目(remote_path 非空)—— D1「产品信息正本在仓、BW=
                 // 操作台+信息转化层」+ D5「指标正本机读:仓里 .bw/metrics.toml
                 // 承载北极星+滞后+引领指标定义,merge 后才同步进 SQLite 作
                 // 缓存」。这里的 north_star/ns_def 就是那份缓存,如果在这给
@@ -1306,7 +1306,7 @@ fn EditProjectCard(op: OpVm) -> Element {
                 // metrics.toml 从此各说各话,两份正本打架,直接撞 D1。所以
                 // 有仓项目只读展示 + 一句诚实提示指去仓里改,不给输入框。
                 //
-                // 无仓项目(github_remote 为空)—— 没有 metrics.toml 这回事,
+                // 无仓项目(remote_path 为空)—— 没有 metrics.toml 这回事,
                 // SQLite 里的 north_star/ns_def 本身就是唯一正本(存量本地
                 // 项目、纯本地项目一直如此)。不给编辑口就是死路——同
                 // benchmark/opportunity/cycle 一样,只在创建流可达,建完就
@@ -1419,10 +1419,10 @@ fn WorkspaceConfig(op: OpVm) -> Element {
                         style: "font-family:{mono};font-size:12.5px;color:{ink2};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
                         "{op.workspace_path}"
                     }
-                    if !op.github_remote.trim().is_empty() {
+                    if !op.remote_path.trim().is_empty() {
                         span {
                             style: "font-size:11px;color:{ink3};flex:none;",
-                            "GitHub · {op.github_remote}"
+                            "GitHub · {op.remote_path}"
                         }
                     }
                     span { style: "font-size:11px;color:{ink3};flex:none;", "{permission_label}" }
@@ -1483,10 +1483,10 @@ fn WorkspaceConfig(op: OpVm) -> Element {
 
 /// P1(loop-buddy↔aihot 接线 spec):给「绑定本地目录」建的存量项目补一个
 /// 接入 GitHub 仓的入口 —— `CreateProject` 只有「新建仓」「克隆已有仓」两条
-/// 路径会写 `github_remote`,绑定本地目录那条从不写,产品里此前没有补救
-/// 入口。只在 `github_remote` 为空时渲染;`AttachRepo` dispatch(bw-app)
+/// 路径会写 `remote_path`,绑定本地目录那条从不写,产品里此前没有补救
+/// 入口。只在 `remote_path` 为空时渲染;`AttachRepo` dispatch(bw-app)
 /// 把「接本地 origin」排在任何写库动作之前(P1-fix),所以只有真正接成
-/// 才会写 `github_remote`、卡片才会随之消失 —— 半途失败(如本地 origin
+/// 才会写 `remote_path`、卡片才会随之消失 —— 半途失败(如本地 origin
 /// 已指向别的仓)时一个字节都还没进库,卡片原样留在原地,用户可以就地
 /// 重试,不会被冲进死路。真实网络调用(`gh repo view`),Started→Ok/Fail
 /// 的进度靠既有 `ActionProgress` toast 显示,失败走通用 `UiNote::Error`
@@ -1607,7 +1607,7 @@ fn ProgressAll(op: OpVm) -> Element {
         }
         EditProjectCard { op: op.clone() }
         WorkspaceConfig { op: op.clone() }
-        if op.github_remote.trim().is_empty() {
+        if op.remote_path.trim().is_empty() {
             AttachRepoCard { op: op.clone() }
         }
         div {

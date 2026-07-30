@@ -176,6 +176,7 @@ async fn main() {
         desc: "C15 深链渲染证明用的占位项目(ColdStart,未 CompleteCreation)".to_string(),
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .expect("CreateProject(ColdStart placeholder) should succeed");

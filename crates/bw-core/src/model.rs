@@ -56,6 +56,11 @@ pub enum SourceKind {
     /// non-manual source, so it never wears the 手填 badge — the number is
     /// machine-collected and independently re-derivable from `gh`.
     Github,
+    /// P5 · codehub 采集器: a value pulled by `codehub-cli issue|mr list
+    /// --jq length` against the project's codehub remote. Same honesty as
+    /// Github — machine-collected, no 手填 badge, independently re-derivable
+    /// from codehub-cli.
+    Codehub,
     /// Hand-entered. Carries a `手填 · 未接入度量源` badge in the UI until a real
     /// connector is bound (Tier D), at which point the badge auto-drops.
     Manual,
@@ -1826,6 +1831,11 @@ pub const CONNECTOR_KIND_CLAUDE_CLI: &str = "claude-cli";
 /// 走 `gh repo view` 真实探活;指标级统计采集由标配 Cron(collect_metrics)
 /// 负责,两者各管一段。
 pub const CONNECTOR_KIND_GITHUB_REPO: &str = "github-repo";
+/// CodeHub(GitLab v4 兼容,绿/黄/内源三域名)为主体的创建流(2026-07-28):
+/// 记录一个项目挂的 CodeHub 远端。`config` 存 `host\0path`(host=API 域名如
+/// open.codehub.huawei.com,path=org/repo)。真探针走 `codehub-cli project view`
+/// (Remote::Codehub.probe,P3 已通);issue/MR 计数采集由 collect arm(P5)负责。
+pub const CONNECTOR_KIND_CODEHUB_REPO: &str = "codehub-repo";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Connector {
@@ -2126,7 +2136,7 @@ pub struct Issue {
     pub stage: StageKind,
     pub number: u32,
     /// C4 · issue 身份映射: the GitHub issue number `gh issue create` minted
-    /// for this Issue, when the owning project has a `github_remote`. `0` =
+    /// for this Issue, when the owning project has a `remote_path`. `0` =
     /// unmapped — either the project has no GitHub repo (存量无仓项目保持
     /// 本地身份,如实留白), or the real `gh issue create` call failed
     /// (创建不破: the BW-side Issue still exists, only the mapping is

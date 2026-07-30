@@ -29,7 +29,16 @@ use bw_app::{App, Command, Event, GithubOrigin};
 use bw_core::{ProjectId, SessionId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
 use bw_store::{SessionKind, SqliteStore, Store};
-use std::os::unix::fs::PermissionsExt;
+/// 给 stub 二进制加可执行位。非 unix 上 no-op(Windows 按扩展名执行;此处
+/// `#!/bin/sh` stub 本是 unix 向 E2E,Windows 上跑不动,但 cfg-gate 让 example
+/// 至少能跨平台编译)。
+#[cfg(unix)]
+fn make_executable(p: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755));
+}
+#[cfg(not(unix))]
+fn make_executable(_p: &std::path::Path) {}
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -145,7 +154,7 @@ async fn main() {
         std::fs::create_dir_all(&stub_bin).unwrap();
         let gh = stub_bin.join("gh");
         std::fs::write(&gh, STUB_GH).unwrap();
-        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        make_executable(&gh);
         let old_path = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", format!("{}:{}", stub_bin.display(), old_path));
         std::env::set_var(
@@ -176,13 +185,14 @@ async fn main() {
                 slug: "c8-coldstart-fixture".into(),
                 private: true,
             }),
+            codehub: None,
         })
         .await
         .expect("create project (coldstart fixture)");
         let proj = store.get_project(id).await.unwrap().unwrap();
         println!(
-            "✓ coldstart fixture ready: name={name:?} phase={:?} github_remote={:?}",
-            proj.phase, proj.github_remote
+            "✓ coldstart fixture ready: name={name:?} phase={:?} remote_path={:?}",
+            proj.phase, proj.remote_path
         );
         return;
     }
@@ -203,10 +213,10 @@ async fn main() {
     std::fs::create_dir_all(&stub_bin).unwrap();
     let gh = stub_bin.join("gh");
     std::fs::write(&gh, STUB_GH).unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    make_executable(&gh);
     let claude = stub_bin.join("claude");
     std::fs::write(&claude, STUB_CLAUDE).unwrap();
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    make_executable(&claude);
     let old_path = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", stub_bin.display(), old_path));
     std::env::set_var(
@@ -298,6 +308,7 @@ async fn main() {
             slug: "c8-trio-demo-a".into(),
             private: true,
         }),
+        codehub: None,
     })
     .await
     .expect("create project A");
@@ -352,6 +363,7 @@ async fn main() {
             slug: "c8-trio-demo-b".into(),
             private: true,
         }),
+        codehub: None,
     })
     .await
     .expect("create project B");
@@ -376,6 +388,7 @@ async fn main() {
         desc: "C8 headless E2E · 无仓项目零标配票".into(),
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .expect("create project C");

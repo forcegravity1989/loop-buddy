@@ -20,7 +20,7 @@ use crate::kernel::{
     ACTION_PENDING_THRESHOLD,
 };
 use crate::theme;
-use bw_app::{Command, GithubOrigin, Panel, Scope};
+use bw_app::{CodehubOrigin, Command, GithubOrigin, Panel, Scope};
 use bw_core::model::{drafting_workflow, Cadence, MaturityPeriod, StageKind};
 use bw_core::{MetricId, ProjectId, SessionId};
 use bw_engine::GithubRepoSummary;
@@ -51,6 +51,12 @@ enum RepoChoice {
 pub fn Create(
     vm: Option<CreateVm>,
     run: RunVm,
+    // Bug B: the末卡 confirm button's pending guard. Set true on click in
+    // `ReviewCard`; released by `main.rs` on a real `UiNote::Error` (failure →
+    // retry), or naturally when the kernel flips `view` to App on success
+    // (this screen unmounts). Local signal passed down, not a global busy
+    // state — buddy keeps no such global.
+    submitting: Signal<bool>,
     // plan/14 C14: raw Started/Ok/Fail facts for this flow's background
     // actions (建仓/克隆/仓列表加载/标配建单/落地推送) — rendered by
     // `ActionsBanner` below, visible across every card since the action that
@@ -73,11 +79,16 @@ pub fn Create(
     });
     let cadence = use_signal(|| Cadence::Weekly);
     let repo_choice = use_signal(|| RepoChoice::New { private: true });
-    // C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 今天恒 "github"(唯一
-    // 可点的选项),`RepoCard` 渲染 chip、`IntentCard` 提交时把它带进
-    // `Command::CreateProject.provider`。纯 UI 状态,与 `repo_choice`(起点:
-    // 新建/接入)并存、互不影响。
+    // C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 默认 "github"(P4 后
+    // codehub 也是可点选项,默认仍 github 因更常见;codehub 用户点 CodeHub
+    // chip 切换即可,github 块的 gh 调用已改懒触发,不再因默认 github 而误触)。
+    // `RepoCard` 渲染 chip、`IntentCard` 提交时把它带进 `Command::CreateProject.provider`。
+    // 纯 UI 状态,与 `repo_choice`(起点:新建/接入)并存、互不影响。
     let platform = use_signal(|| "github".to_string());
+    // P4:codehub 平台的仓身份(host+path)。与 platform 并存,platform=="codehub"
+    // 时才有意义,传给 RepoCard(UI 卡)+ IntentCard(send 建 CreateProject)。
+    let codehub_host = use_signal(|| "open.codehub.huawei.com".to_string());
+    let codehub_path = use_signal(String::new);
 
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
@@ -103,10 +114,10 @@ pub fn Create(
             ActionsBanner { items: actions }
             match (card(), vm) {
                 (Card::Repo, _) => rsx! {
-                    RepoCard { platform, choice: repo_choice, github_repos: github_repos.clone(), on_next: move |_| card.set(Card::Intent) }
+                    RepoCard { platform, choice: repo_choice, github_repos: github_repos.clone(), codehub_host, codehub_path, on_next: move |_| card.set(Card::Intent) }
                 },
                 (Card::Intent, _) => rsx! {
-                    IntentCard { platform, repo_choice, on_created: move |_| card.set(Card::Questions) }
+                    IntentCard { platform, repo_choice, codehub_host, codehub_path, on_created: move |_| card.set(Card::Questions) }
                 },
                 (_, None) => rsx! { div { "…" } },
                 (Card::Questions, Some(v)) => rsx! {
@@ -115,7 +126,9 @@ pub fn Create(
                 (Card::Drafting, Some(_)) => rsx! {
                     DraftingCard { run, on_next: move |_| card.set(Card::Review), on_cancel }
                 },
-                (Card::Review, Some(v)) => rsx! { ReviewCard { vm: v, cadence } },
+                (Card::Review, Some(v)) => rsx! {
+                    ReviewCard { vm: v, cadence, submitting }
+                },
             }
         }
     }
@@ -254,6 +267,8 @@ fn RepoCard(
     platform: Signal<String>,
     choice: Signal<RepoChoice>,
     github_repos: Vec<GithubRepoSummary>,
+    codehub_host: Signal<String>,
+    codehub_path: Signal<String>,
     on_next: EventHandler<()>,
 ) -> Element {
     let k = use_context::<Kernel>();
@@ -261,10 +276,29 @@ fn RepoCard(
     let serif = theme::SERIF;
     let ink3 = theme::INK_3;
     let is_new = matches!(choice(), RepoChoice::New { .. });
+    // P4:platform=="codehub" 时走 codehub_origin_card(host/path 来自父组件信号),
+    // github 平台时 is_codehub=false,走下面的 github 起点 chip + 仓选择器。
+    let is_codehub = platform() == "codehub";
     let existing_ready =
         matches!(&choice(), RepoChoice::Existing { owner, .. } if !owner.is_empty());
-    let can_send = is_new || existing_ready;
+    // Q1-fix: codehub 时 path 必填,不被 is_new/existing_ready 的 || 盖过——
+    // 原写法 `is_codehub && !path.empty || is_new || existing_ready` 因 || 优先
+    // 级,codehub 下 is_new(默认新建)为真就放行空 path,用户过去后到 Intent
+    // 才被正确 gate 挡住,摸不着头脑是上一步 path 没填。gate 放源头(这里)。
+    let can_send = if is_codehub {
+        !codehub_path().trim().is_empty()
+    } else {
+        is_new || existing_ready
+    };
     let opacity = if can_send { "1" } else { ".45" };
+    // 置灰时讲清原因,别让人猜。
+    let hint: &str = if can_send {
+        ""
+    } else if is_codehub {
+        "codehub 仓库 path 未填(输入框要填值,不是 placeholder)"
+    } else {
+        "选一个已有仓,或点「接入已有仓」从列表选"
+    };
     // C16(plan/14 规范条 4): 选中已有仓时,在下拉下方回显它的完整真实
     // metadata(不只是下拉一行 owner/repo · private)。找不到(仓列表还没
     // 加载完/选择已清空)就不渲染这块 —— 不拿假数据充数。
@@ -286,6 +320,10 @@ fn RepoCard(
         // 「未接」,不可点、视觉明确禁用,绝不假装可用。
         {platform_selector(platform)}
 
+        if is_codehub {
+            {codehub_origin_card(codehub_host, codehub_path)}
+        }
+        if !is_codehub {
         {chip_question(
             "起点",
             vec![("新建仓", is_new), ("接入已有仓", !is_new)],
@@ -293,8 +331,14 @@ fn RepoCard(
                 if i == 0 {
                     choice.set(RepoChoice::New { private: true });
                 } else {
-                    k.send(Command::ListGithubRepos);
-                    choice.set(RepoChoice::Existing { owner: String::new(), repo: String::new() });
+                    // Q2-fix: 不在 chip 点击急触发 gh repo list——原写法让 codehub
+                    // 用户停在 github 默认时一点「接入已有仓」就 fire gh,gh 没装
+                    // 就报错(codehub 流本不该碰 github)。改懒触发:只在下面
+                    // 「↻ 刷新列表」按钮才拉,codehub 用户根本不碰 github 这块。
+                    choice.set(RepoChoice::Existing {
+                        owner: String::new(),
+                        repo: String::new(),
+                    });
                 }
             },
         )}
@@ -313,7 +357,15 @@ fn RepoCard(
                     }
                 }
             } else {
-                label { style: "{theme::label()}", "选一个仓" }
+                div {
+                    style: "display:flex;align-items:center;justify-content:space-between;gap:8px;",
+                    label { style: "{theme::label()}", "选一个仓" }
+                    button {
+                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:6px;padding:3px 10px;font-size:11px;",
+                        onclick: move |_| k.send(Command::ListGithubRepos),
+                        "↻ 刷新列表"
+                    }
+                }
                 select {
                     style: "{theme::input()} margin-top:6px;",
                     value: {
@@ -348,15 +400,19 @@ fn RepoCard(
                     }
                 }
                 if github_repos.is_empty() {
-                    p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 确认本机 gh 已登录(gh auth status)。" }
+                    p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 点「↻ 刷新列表」加载(需本机 gh 已登录:gh auth status)。" }
                 }
                 if let Some(meta) = selected_meta {
                     {repo_metadata_block(&meta)}
                 }
             }
         }
+        }
         div {
-            style: "display:flex;justify-content:flex-end;margin-top:14px;",
+            style: "display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:14px;",
+            if !can_send {
+                span { style: "font-size:11.5px;color:#B0503A;", "{hint}" }
+            }
             button {
                 style: "{theme::btn_primary()} opacity:{opacity};",
                 disabled: !can_send,
@@ -367,17 +423,23 @@ fn RepoCard(
     }
 }
 
-/// C16(plan/14 规范条 4): 仓平台选择器 —— GitHub 今天唯一可点、默认选中;
-/// GitLab/Gitcode 如实灰置「未接」(虚线边框、无 onclick、不可点),绝不假装
-/// 可用。纯 UI 状态(`platform` 信号),与「起点」chip 并存、互不影响。
+/// C16(plan/14 规范条 4): 仓平台选择器 —— GitHub / CodeHub 都可点
+/// (github 默认选中,codehub 后加);GitLab/Gitcode 如实灰置「未接」(虚线
+/// 边框、无 onclick、不可点),绝不假装可用。纯 UI 状态(`platform` 信号),
+/// 与「起点」chip 并存、互不影响。
 fn platform_selector(mut platform: Signal<String>) -> Element {
     let ink2 = theme::INK_2;
-    let selected = platform() == "github";
-    let (bd, bg, fg) = if selected {
-        ("1.5px solid #C5654A", "#C5654A", "#fff")
-    } else {
-        ("1px solid #DDD5C5", "transparent", "#57534A")
+    let gh = platform() == "github";
+    let ch = platform() == "codehub";
+    let chip = |sel: bool| -> (&'static str, &'static str, &'static str) {
+        if sel {
+            ("1.5px solid #C5654A", "#C5654A", "#fff")
+        } else {
+            ("1px solid #DDD5C5", "transparent", "#57534A")
+        }
     };
+    let (gbd, gbg, gfg) = chip(gh);
+    let (cbd, cbg, cfg) = chip(ch);
     rsx! {
         div {
             style: "margin-bottom:6px;",
@@ -386,8 +448,13 @@ fn platform_selector(mut platform: Signal<String>) -> Element {
                 style: "display:flex;gap:6px;flex-wrap:wrap;",
                 div {
                     onclick: move |_| platform.set("github".to_string()),
-                    style: "cursor:pointer;border:{bd};background:{bg};color:{fg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                    style: "cursor:pointer;border:{gbd};background:{gbg};color:{gfg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
                     "GitHub"
+                }
+                div {
+                    onclick: move |_| platform.set("codehub".to_string()),
+                    style: "cursor:pointer;border:{cbd};background:{cbg};color:{cfg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                    "CodeHub"
                 }
                 for name in ["GitLab", "Gitcode"] {
                     div {
@@ -397,6 +464,38 @@ fn platform_selector(mut platform: Signal<String>) -> Element {
                         "{name} · 未接"
                     }
                 }
+            }
+        }
+    }
+}
+
+/// P4(2026-07-28):codehub 平台的仓身份输入 —— host(API 域名,绿/黄/内源)
+/// + path(org/repo)。token 走本机 `codehub-cli` keyring,UI 不收凭据。
+/// maas 这类已有 codehub 仓走这条(对标 github 的"接入已有仓"下拉,但
+/// codehub 没 list_repos,直接填 host+path)。
+fn codehub_origin_card(mut host: Signal<String>, mut path: Signal<String>) -> Element {
+    let label = theme::label();
+    let input = theme::input();
+    let card = theme::card();
+    let ink3 = theme::INK_3;
+    rsx! {
+        div {
+            style: "{card} padding:18px 20px;margin-top:8px;",
+            label { style: "{label}", "CodeHub 仓" }
+            p { style: "font-size:11.5px;color:{ink3};margin:4px 0 12px;line-height:1.6;", "填 host(API 域名)+ path(org/repo)。token 走本机 codehub-cli keyring,这里不收凭据。" }
+            label { style: "{label}", "host" }
+            input {
+                style: "{input}",
+                placeholder: "open.codehub.huawei.com",
+                value: "{host}",
+                oninput: move |e| host.set(e.value()),
+            }
+            label { style: "{label};margin-top:10px;", "path" }
+            input {
+                style: "{input};margin-top:6px;",
+                placeholder: "innersource/AI-Coding_G/maas",
+                value: "{path}",
+                oninput: move |e| path.set(e.value()),
             }
         }
     }
@@ -472,6 +571,8 @@ fn slugify(name: &str) -> String {
 fn IntentCard(
     platform: Signal<String>,
     repo_choice: Signal<RepoChoice>,
+    codehub_host: Signal<String>,
+    codehub_path: Signal<String>,
     on_created: EventHandler<()>,
 ) -> Element {
     let k = use_context::<Kernel>();
@@ -486,7 +587,11 @@ fn IntentCard(
     let ink3 = theme::INK_3;
     let input = theme::input();
     let label = theme::label();
-    let can_send = !name().trim().is_empty() && !brief().trim().is_empty();
+    // P4-fix:codehub 平台额外要求 path 非空(placeholder 不是值,空 path
+    // 不能提交——否则 clone 一个空 repo 失败 + remote 空 + trio 不建)。
+    let can_send = !name().trim().is_empty()
+        && !brief().trim().is_empty()
+        && (platform() != "codehub" || !codehub_path().trim().is_empty());
     let opacity = if can_send { "1" } else { ".45" };
     let is_new_repo = matches!(repo_choice(), RepoChoice::New { .. });
 
@@ -494,16 +599,31 @@ fn IntentCard(
         if !can_send {
             return;
         }
-        let github = match repo_choice() {
-            RepoChoice::New { private } => Some(GithubOrigin::New {
-                slug: if slug().trim().is_empty() {
-                    slugify(&name())
-                } else {
-                    slug().trim().to_string()
+        let (github, codehub) = if platform() == "codehub" {
+            (
+                None,
+                Some(CodehubOrigin {
+                    host: codehub_host().trim().to_string(),
+                    path: codehub_path().trim().to_string(),
+                }),
+            )
+        } else {
+            (
+                match repo_choice() {
+                    RepoChoice::New { private } => Some(GithubOrigin::New {
+                        slug: if slug().trim().is_empty() {
+                            slugify(&name())
+                        } else {
+                            slug().trim().to_string()
+                        },
+                        private,
+                    }),
+                    RepoChoice::Existing { owner, repo } => {
+                        Some(GithubOrigin::Existing { owner, repo })
+                    }
                 },
-                private,
-            }),
-            RepoChoice::Existing { owner, repo } => Some(GithubOrigin::Existing { owner, repo }),
+                None,
+            )
         };
         k.send(Command::CreateProject {
             provider: platform(),
@@ -513,6 +633,7 @@ fn IntentCard(
             desc: brief().trim().to_string(),
             workspace: None,
             github,
+            codehub,
         });
         on_created.call(());
     };
@@ -965,7 +1086,7 @@ fn ns_candidate(idx: usize, brief: &str, win: &str) -> (String, String) {
 }
 
 #[component]
-fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
+fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>, submitting: Signal<bool>) -> Element {
     let k = use_context::<Kernel>();
     let mut ns_idx = use_signal(|| 0usize);
     let mut ns = use_signal(|| {
@@ -1000,6 +1121,21 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
     // 才在落地后对标配三件套里的①竞品分析 dispatch 一次真实 RunIssue。
     let mut run_first = use_signal(|| false);
 
+    // Bug B: 按钮置灰 + 文案 + cursor 由 pending 派生(对齐 op.rs 灰点表
+    // pending 的既有约定:pending = 不可再点、视觉发暗)。读 submitting() 在
+    // 组件体里建订阅,pending 一变本卡重渲。
+    let pending = submitting();
+    let (btn_label, btn_bg, btn_shadow, btn_cursor) = if pending {
+        ("建立中…", "#B89A8E", "none", "not-allowed")
+    } else {
+        (
+            "确认 · 建立项目",
+            "#C5654A",
+            "0 3px 10px rgba(197,101,74,.25)",
+            "pointer",
+        )
+    };
+
     let card = theme::card();
     let serif = theme::SERIF;
     let ink3 = theme::INK_3;
@@ -1019,6 +1155,15 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
     let confirm = {
         let k = k.clone();
         move |_| {
+            // Bug B: 防连点 —— 后台建项目是真在干活(sync 三件套 / 落地推送),
+            // 但按钮没反馈时人会觉得点击无效连点 N 次 = 重跑 N 遍
+            // CompleteCreation(非幂等,污染远端)。起手即置 pending,后续
+            // 连点在此 no-op。成功由 kernel 翻 view→App 卸载本屏;失败由
+            // main.rs 收 UiNote::Error 复位,可重试。
+            if submitting() {
+                return;
+            }
+            submitting.set(true);
             k.send(Command::UpdateNorthStar {
                 value: ns().trim().to_string(),
                 def: ns_def().trim().to_string(),
@@ -1140,9 +1285,9 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
                 "每{cadence_chip_label(&cadence())}一次体检定时任务 · 人只在五个交棒点介入(原型→构建→优化→推广→运维→回流原型)"
             }
 
-            if !vm.github_remote.trim().is_empty() {
+            if !vm.remote_path.trim().is_empty() {
                 {
-                    let remote = vm.github_remote.clone();
+                    let remote = vm.remote_path.clone();
                     let (box_bg, box_bd, mark) = if run_first() {
                         ("#C5654A", "#C5654A", "✓")
                     } else {
@@ -1171,9 +1316,10 @@ fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>) -> Element {
             div {
                 style: "display:flex;justify-content:flex-end;",
                 button {
-                    style: "cursor:pointer;background:#C5654A;color:#fff;border:none;border-radius:8px;padding:10px 22px;font:600 13px/1 inherit;box-shadow:0 3px 10px rgba(197,101,74,.25);",
+                    disabled: pending,
+                    style: "cursor:{btn_cursor};background:{btn_bg};color:#fff;border:none;border-radius:8px;padding:10px 22px;font:600 13px/1 inherit;box-shadow:{btn_shadow};",
                     onclick: confirm,
-                    "确认 · 建立项目"
+                    "{btn_label}"
                 }
             }
         }
