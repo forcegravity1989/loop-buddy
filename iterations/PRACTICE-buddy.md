@@ -271,4 +271,4 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 - **现状**:连接器状态 Connected/Syncing/Error/**Disconnected**(model.rs:1797-1800);新建默认 Disconnected。翻成"已连接"要 `SyncConnector` 真探针(`codehub-cli project view`/`gh repo view`)跑过(lib.rs:4495-4500),由 cron collect_metrics 或手动同步触发。刚建完没同步 → 显示"未连接"。**不是坏了**。
 - **作用**:代码仓(git-repo)= 本地工作区 git,供版本日志/变更对比/推送;CodeHub(codehub-repo)= codehub 远端,供 issue/MR 计数采集。
-- **GAP(体验)**:建连接器时就地探一次活翻"已连接"更友好(现在得等同步/手动触发)。待实践想明白要不要做。
+- **已改(2026-07-30)**:CompleteCreation 末尾对建完的项目连接器就地 `probe_connector` 一遍——git-repo 顺带喂工作区指标(commits/docs)、codehub/github-repo 翻 Connected。用户建完项目即健康 + 即有工作区数据,不用再去 Hub 点「立即同步」(Hub 的同步留作后续手动刷新)。探活失败软降级留 Error,不倒灌创建。过门禁,**待 live 验证**(下次创建项目看连接器是否自动 Connected、工作区指标是否当场点亮)。
