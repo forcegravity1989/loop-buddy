@@ -1346,9 +1346,12 @@ pub struct ConnectorCardVm {
     pub status_label: &'static str,
     pub last_sync: String,
     pub scope: String,
-    /// `true` only for kinds with a *real* probe (`git-repo`/`claude-cli`) —
-    /// the sync button renders only where syncing really does something;
-    /// reference entries honestly show none.
+    /// `true` only for kinds with a *real* probe
+    /// (`git-repo`/`claude-cli`/`github-repo`/`codehub-repo`) — the sync button
+    /// renders only where syncing really does something; reference entries
+    /// honestly show none. (`github-repo`/`codehub-repo` 的真探针在
+    /// `bw-app` `probe_connector` 各有 arm;之前漏认导致它们被当登记项、
+    /// 无同步按钮、永远未连接——codehub/github 特性漏改,此处补齐。)
     pub syncable: bool,
     /// `None` = 全局(如 claude-cli 探针);`Some` = 项目自有(plan/10 K1
     /// 侧边栏过滤用)。
@@ -1372,7 +1375,10 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
         scope: c.scope.clone(),
         syncable: matches!(
             c.kind.as_str(),
-            bw_core::model::CONNECTOR_KIND_GIT_REPO | bw_core::model::CONNECTOR_KIND_CLAUDE_CLI
+            bw_core::model::CONNECTOR_KIND_GIT_REPO
+                | bw_core::model::CONNECTOR_KIND_CLAUDE_CLI
+                | bw_core::model::CONNECTOR_KIND_GITHUB_REPO
+                | bw_core::model::CONNECTOR_KIND_CODEHUB_REPO
         ),
         project_id: c.project_id,
     }

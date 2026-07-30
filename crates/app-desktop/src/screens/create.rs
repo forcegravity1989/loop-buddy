@@ -79,10 +79,11 @@ pub fn Create(
     });
     let cadence = use_signal(|| Cadence::Weekly);
     let repo_choice = use_signal(|| RepoChoice::New { private: true });
-    // C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 今天恒 "github"(唯一
-    // 可点的选项),`RepoCard` 渲染 chip、`IntentCard` 提交时把它带进
-    // `Command::CreateProject.provider`。纯 UI 状态,与 `repo_choice`(起点:
-    // 新建/接入)并存、互不影响。
+    // C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 默认 "github"(P4 后
+    // codehub 也是可点选项,默认仍 github 因更常见;codehub 用户点 CodeHub
+    // chip 切换即可,github 块的 gh 调用已改懒触发,不再因默认 github 而误触)。
+    // `RepoCard` 渲染 chip、`IntentCard` 提交时把它带进 `Command::CreateProject.provider`。
+    // 纯 UI 状态,与 `repo_choice`(起点:新建/接入)并存、互不影响。
     let platform = use_signal(|| "github".to_string());
     // P4:codehub 平台的仓身份(host+path)。与 platform 并存,platform=="codehub"
     // 时才有意义,传给 RepoCard(UI 卡)+ IntentCard(send 建 CreateProject)。
@@ -330,8 +331,14 @@ fn RepoCard(
                 if i == 0 {
                     choice.set(RepoChoice::New { private: true });
                 } else {
-                    k.send(Command::ListGithubRepos);
-                    choice.set(RepoChoice::Existing { owner: String::new(), repo: String::new() });
+                    // Q2-fix: 不在 chip 点击急触发 gh repo list——原写法让 codehub
+                    // 用户停在 github 默认时一点「接入已有仓」就 fire gh,gh 没装
+                    // 就报错(codehub 流本不该碰 github)。改懒触发:只在下面
+                    // 「↻ 刷新列表」按钮才拉,codehub 用户根本不碰 github 这块。
+                    choice.set(RepoChoice::Existing {
+                        owner: String::new(),
+                        repo: String::new(),
+                    });
                 }
             },
         )}
@@ -350,7 +357,15 @@ fn RepoCard(
                     }
                 }
             } else {
-                label { style: "{theme::label()}", "选一个仓" }
+                div {
+                    style: "display:flex;align-items:center;justify-content:space-between;gap:8px;",
+                    label { style: "{theme::label()}", "选一个仓" }
+                    button {
+                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:6px;padding:3px 10px;font-size:11px;",
+                        onclick: move |_| k.send(Command::ListGithubRepos),
+                        "↻ 刷新列表"
+                    }
+                }
                 select {
                     style: "{theme::input()} margin-top:6px;",
                     value: {
@@ -385,7 +400,7 @@ fn RepoCard(
                     }
                 }
                 if github_repos.is_empty() {
-                    p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 确认本机 gh 已登录(gh auth status)。" }
+                    p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 点「↻ 刷新列表」加载(需本机 gh 已登录:gh auth status)。" }
                 }
                 if let Some(meta) = selected_meta {
                     {repo_metadata_block(&meta)}
@@ -408,9 +423,10 @@ fn RepoCard(
     }
 }
 
-/// C16(plan/14 规范条 4): 仓平台选择器 —— GitHub 今天唯一可点、默认选中;
-/// GitLab/Gitcode 如实灰置「未接」(虚线边框、无 onclick、不可点),绝不假装
-/// 可用。纯 UI 状态(`platform` 信号),与「起点」chip 并存、互不影响。
+/// C16(plan/14 规范条 4): 仓平台选择器 —— GitHub / CodeHub 都可点
+/// (github 默认选中,codehub 后加);GitLab/Gitcode 如实灰置「未接」(虚线
+/// 边框、无 onclick、不可点),绝不假装可用。纯 UI 状态(`platform` 信号),
+/// 与「起点」chip 并存、互不影响。
 fn platform_selector(mut platform: Signal<String>) -> Element {
     let ink2 = theme::INK_2;
     let gh = platform() == "github";
