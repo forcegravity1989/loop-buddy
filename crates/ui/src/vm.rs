@@ -709,6 +709,13 @@ pub struct WorkflowDetailVm {
     /// provenance tag, not just a bare name.
     pub agents: Vec<(String, String, String)>,
     pub skills: Vec<(String, String, String)>,
+    /// plan/16 §5: the deduped union of every phase's `PhaseMeta.skills` —
+    /// the T16 phase-level binding the five standard workflows carry
+    /// *instead of* top-level `SkillRef`s. Without this, SkillHub's
+    /// "被这些工作流使用" reverse lookup honestly read only `skills` above
+    /// and reported the built-in stage skills as used by 0 workflows — a
+    /// truthful query over the wrong column, i.e. a display lie.
+    pub phase_skills: Vec<String>,
     pub phases_numbered: Vec<(usize, String)>,
 }
 
@@ -729,6 +736,15 @@ pub fn workflow_detail(spec: &WorkflowSpec) -> Option<WorkflowDetailVm> {
             .iter()
             .map(|s| (s.name.clone(), s.def.clone(), s.from.clone()))
             .collect(),
+        phase_skills: {
+            let mut seen = std::collections::HashSet::new();
+            spec.phases
+                .iter()
+                .flat_map(|p| p.skills.iter())
+                .filter(|n| seen.insert((*n).clone()))
+                .cloned()
+                .collect()
+        },
         phases_numbered: spec
             .phases
             .iter()
@@ -898,6 +914,12 @@ pub struct SkillCardVm {
     /// five built-in stage-role skills), the honest signal the detail panel
     /// uses to skip the file tree instead of showing an empty one.
     pub files: Vec<SkillFileVm>,
+    /// plan/16 §2 防线 3: this skill's real rule violations, straight off
+    /// `bw_core::skill_spec::check_skill` — the same single checker the
+    /// command guard and `audit_skills` run. Empty = 合规(徽记不出声).
+    pub spec_findings: Vec<bw_core::skill_spec::SpecFinding>,
+    /// MustFix count — the yellow badge's number (Advisory 不点黄灯).
+    pub spec_must_fix: usize,
 }
 
 /// One real support file alongside a skill's `SKILL.md` — T2's `skill_file`
@@ -909,6 +931,10 @@ pub struct SkillFileVm {
 }
 
 pub fn skill_card(s: &SkillCard, files: Vec<SkillFileVm>) -> SkillCardVm {
+    // 分域执行 (plan/16 §1) is inside `check_skill_card` — one projection,
+    // shared with the audit loop, so the two can't drift.
+    let spec_findings = bw_core::skill_spec::check_skill_card(s);
+    let spec_must_fix = bw_core::skill_spec::must_fix_count(&spec_findings);
     SkillCardVm {
         id: s.id,
         name: s.name.clone(),
@@ -924,6 +950,8 @@ pub fn skill_card(s: &SkillCard, files: Vec<SkillFileVm>) -> SkillCardVm {
         distilled_from_issue: s.distilled_from_issue,
         origin_agent: s.origin_agent,
         files,
+        spec_findings,
+        spec_must_fix,
     }
 }
 

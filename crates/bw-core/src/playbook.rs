@@ -328,20 +328,24 @@ pub fn phase_metas_dynamic(kind: StageKind) -> Vec<crate::model::PhaseMeta> {
         .collect()
 }
 
-/// One stage's working-method skill: a real, compact markdown instruction
-/// block a real executor follows — the *executable* counterpart of the Skill
-/// Hub's catalog cards. Same nature as [`phase_instructions`]: methodology in
-/// code, generic across projects, never per-project content.
+/// One stage's working-method skill: the join key + the vendored package
+/// document. plan/17: the canon is no longer a Rust string pair — it is the
+/// real `docs/skills/<slug>/SKILL.md` **package file** (`bw_library`), the
+/// exact same form every external library enters through. This struct only
+/// points at it; desc lives in the file's frontmatter (parsed by bw-app's
+/// single parser), the prompt-injected body is derived from the same file.
 #[derive(Clone, Copy, Debug)]
 pub struct StageSkill {
     /// Stable kebab-case name — the join key between the spec's `SkillRef`,
-    /// the seeded Skill-Hub row, and run-time usage accounting.
+    /// the seeded Skill-Hub row, and run-time usage accounting. Must equal
+    /// the package's frontmatter `name` (canon 构建器守卫).
     pub name: &'static str,
-    /// One-line description (the hub card's `desc`).
-    pub def: &'static str,
-    /// The skill body — real instructions, injected verbatim into every
-    /// phase prompt of the stage that carries it.
-    pub content: &'static str,
+    /// The package's frontmatter `description`, declared (not re-scanned) —
+    /// see [`crate::bw_library::BwSkillDoc::desc`].
+    pub desc: &'static str,
+    /// The raw `SKILL.md` package text, frontmatter included — see
+    /// [`crate::bw_library`].
+    pub raw_md: &'static str,
 }
 
 /// The working-method skills each stage's role brings to a run. Small on
@@ -351,53 +355,28 @@ pub fn stage_skills(kind: StageKind) -> &'static [StageSkill] {
     match kind {
         StageKind::Prototype => &[StageSkill {
             name: "evidence-first",
-            def: "证据先行:只写站得住的内容,标注未核实",
-            content: "### 证据先行 (evidence-first)\n\
-                 1. 只记录两类内容:(a) 你直接验证过的事实(真实命令输出、真实文件内容);\
-                 (b) 你的先验知识——必须标注「未核实」。\n\
-                 2. 每条证据注明来源:文件路径、命令、或「知识截止内记忆,未核实」。\n\
-                 3. 禁止编造统计数字与引用;没有可靠数字就写「无可靠数字」。\n\
-                 4. 结论按「证据 → 洞察 → 假设」链书写,断链处如实标断。",
+            desc: crate::bw_library::EVIDENCE_FIRST_DESC,
+            raw_md: crate::bw_library::EVIDENCE_FIRST_MD,
         }],
         StageKind::Build => &[StageSkill {
             name: "spec-to-tests",
-            def: "规格即测试:每条验收标准落成一个可跑的用例",
-            content: "### 规格即测试 (spec-to-tests)\n\
-                 1. SPEC 里每条验收标准编号(AC-1, AC-2, …);写实现前先把它翻译成测试名\
-                 (如 `ac1_reports_dead_relative_link`)。\n\
-                 2. 无法翻译成测试的验收标准是坏标准——回头改写它,而不是跳过。\n\
-                 3. 实现只做到让测试通过为止,不做规格外功能。\n\
-                 4. 提交前 `cargo test` 全绿是硬门禁;失败输出原样留档,不美化。",
+            desc: crate::bw_library::SPEC_TO_TESTS_DESC,
+            raw_md: crate::bw_library::SPEC_TO_TESTS_MD,
         }],
         StageKind::Optimize => &[StageSkill {
             name: "baseline-before-touch",
-            def: "先测基线再动手:无基线不优化,删减优先",
-            content: "### 先测基线再动手 (baseline-before-touch)\n\
-                 1. 动手前先真实测量并落盘:测试数、clippy 警告数、代码行数、构建耗时——\
-                 全部来自真实命令输出的原样摘录。\n\
-                 2. 每步重构保持测试全绿;一步只做一类等价变换。\n\
-                 3. 删减优先:能删的代码是最好的优化,删除行数计入成果。\n\
-                 4. 结束时用与基线完全相同的命令重测,报 delta;无 delta 也如实报。",
+            desc: crate::bw_library::BASELINE_BEFORE_TOUCH_DESC,
+            raw_md: crate::bw_library::BASELINE_BEFORE_TOUCH_MD,
         }],
         StageKind::Growth => &[StageSkill {
             name: "fresh-eyes-funnel",
-            def: "新用户漏斗走查:亲手走一遍,只记录真实摩擦",
-            content: "### 新用户漏斗走查 (fresh-eyes-funnel)\n\
-                 1. 以从未见过本项目的人的视角,真实执行「发现 → 安装 → 首次使用 → 再次使用」\
-                 每一步,不跳步、不脑补。\n\
-                 2. 只记录你真实遇到的摩擦(命令报错、文档缺失、参数不明),不臆想用户。\n\
-                 3. 一次实验只改一个变量,改动前后用同一条真实命令对照。\n\
-                 4. 没有真实流量就如实做「前后对照」,不假装有 A/B 分流。",
+            desc: crate::bw_library::FRESH_EYES_FUNNEL_DESC,
+            raw_md: crate::bw_library::FRESH_EYES_FUNNEL_MD,
         }],
         StageKind::Ops => &[StageSkill {
             name: "breaking-drill",
-            def: "破坏性演练:拿坏输入砸,坏行为当场修",
-            content: "### 破坏性演练 (breaking-drill)\n\
-                 1. 系统性地喂坏输入:不存在的路径、空输入、超长输入、坏参数、坏编码——\
-                 逐个真实执行并原样记录行为。\n\
-                 2. 任何 panic 或不知所云的报错都算事故:当场修复成友好报错,修后重测。\n\
-                 3. 健康检查脚本必须一键可跑、任何失败以非零码退出;写完真实执行一遍留档。\n\
-                 4. 复盘只引用真实存在的文件与提交号(写之前 ls / git log 核实)。",
+            desc: crate::bw_library::BREAKING_DRILL_DESC,
+            raw_md: crate::bw_library::BREAKING_DRILL_MD,
         }],
     }
 }
@@ -441,9 +420,37 @@ pub fn role_agents() -> Vec<(StageKind, RoleAgent)> {
         .collect()
 }
 
+/// plan/17: one stage's role agent rendered as a full `AGENT.md` document —
+/// the exact same format ECC agent files arrive in (frontmatter `name` /
+/// `description` / `model` + body = instructions), so bw-app's **single**
+/// agent parser ingests the five built-in roles and every external import
+/// through one code path. The five's真本 stays this code projection
+/// (StageKind 元数据驱动,方法论「versioned in code」不变);统一的是**装载
+/// 形态与解析器**,不是把活的元数据冻成会漂移的静态文件。
+///
+/// The body is [`role_preamble`]'s template verbatim — `{var}` slots and all
+/// (they are honestly part of the standing instructions; run time fills
+/// them via [`render`]).
+pub fn role_agent_md(kind: StageKind) -> String {
+    let role = format!("{} · {}段执行者", kind.methodology(), kind.label());
+    format!(
+        "---\nname: {name}\ndescription: {role}\nmodel: claude CLI · 跟随执行器配置\n---\n\n{body}",
+        name = kind.role_short(),
+        body = role_preamble(kind),
+    )
+}
+
 /// The "## 技能(工作方法)" block appended to each phase prompt — the stage's
 /// skills made *operative* (real content in the real prompt), not a name-only
 /// advisory hint. Empty string when the stage has no skills.
+///
+/// plan/16 S7: each skill body is a spec-shaped SKILL.md body opening at `#`
+/// (that is what the Skill Hub shows and what the standard requires), so the
+/// injector — not the body — takes responsibility for nesting: every heading
+/// is demoted two levels so an H1 title lands as an H3 *under* this block's
+/// own H2. The old shape (bodies hand-written as `###` to fit this call site)
+/// made the injection point dictate the stored content, which is exactly the
+/// non-normalized state this rule removes.
 fn skills_block(kind: StageKind) -> String {
     let skills = stage_skills(kind);
     if skills.is_empty() {
@@ -451,7 +458,9 @@ fn skills_block(kind: StageKind) -> String {
     }
     let body = skills
         .iter()
-        .map(|s| s.content)
+        .map(|s| {
+            crate::skill_body::demote_headings(&crate::skill_body::strip_frontmatter(s.raw_md), 2)
+        })
         .collect::<Vec<_>>()
         .join("\n\n");
     format!("\n## 技能(工作方法,本阶段全程适用)\n{body}\n")

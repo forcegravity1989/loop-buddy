@@ -530,6 +530,12 @@ pub enum HubSource {
     WithinSession,
 }
 
+/// plan/16: the `official_library` sub-tag of BW's own built-in standard
+/// skill library (playbook 五 + 标配三) — the one `Official` library that is
+/// BW 自产, not an external import. One const, not a string literal scattered
+/// per call site.
+pub const BW_STANDARD_LIBRARY: &str = "bw-standard";
+
 impl HubSource {
     pub fn label(&self) -> &'static str {
         match self {
@@ -538,6 +544,15 @@ impl HubSource {
             HubSource::SelfBuilt => "自建",
             HubSource::WithinSession => "会话内",
         }
+    }
+
+    /// plan/16 分域执行's discriminator: `true` = an *external* curated
+    /// library import (mattpocock-skills/superpowers/ecc/…) whose text is
+    /// another library's verbatim — spec findings degrade to Advisory.
+    /// `false` for everything BW-authored, including the `Official`-labelled
+    /// bw-standard library itself.
+    pub fn is_external_official(&self) -> bool {
+        matches!(self, HubSource::Official { official_library } if official_library != BW_STANDARD_LIBRARY)
     }
 
     /// Fixed chip-display order for the hub source filter row — every
@@ -1314,7 +1329,11 @@ pub fn stage_workflow_with_playbook(
         .iter()
         .map(|s| SkillRef {
             name: s.name.to_string(),
-            def: s.def.to_string(),
+            // plan/17: desc 正本在包文档 frontmatter 里,`bw_library` 把它
+            // 与 raw 一起声明(Boot canon 构建器守卫两者逐字相等)——这里直接
+            // 取,不现扫原文:扫描既是每次调用的重复功,又会在写法合法但扫
+            // 不动时静默退化成空 def 写进 skills_json。
+            def: s.desc.to_string(),
             from: "阶段剧本(bw-core::playbook)".into(),
         })
         .collect();

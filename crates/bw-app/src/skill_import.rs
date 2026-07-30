@@ -26,6 +26,56 @@ pub(crate) struct ParsedSkillPackage {
     pub files: Vec<(String, String)>,
 }
 
+/// One parsed `SKILL.md` document: strict frontmatter `name`/`description` +
+/// the body after the closing `---` (leading blank lines trimmed).
+pub(crate) struct ParsedSkillMd {
+    pub name: String,
+    pub desc: String,
+    pub body: String,
+    /// The optional frontmatter `category` — read so `crate::bw_canon` can
+    /// guard it against the kind-derived value (plan/17: a key the vendored
+    /// docs carry must not be a silent no-op). External imports keep their
+    /// own category logic and ignore this.
+    pub category: Option<String>,
+}
+
+/// plan/17 · **the** one SKILL.md text parser — the disk import path
+/// ([`import_skill_package_from_disk`]) and the bw-standard canon builder
+/// (`crate::bw_canon`, over `bw_core::bw_library`'s vendored docs) both go
+/// through here, so 装载系统只有一条:SKILL.md 文档 → 解析 → 行. Takes raw
+/// text, not a path: where the bytes come from (disk vs `include_str!`) is
+/// the caller's business.
+pub(crate) fn parse_skill_md(raw: &str) -> Result<ParsedSkillMd, String> {
+    let (frontmatter, body) = split_frontmatter(raw)?;
+    let (name, desc) = parse_frontmatter_fields(&frontmatter)?;
+    let category = parse_optional_frontmatter_str(&frontmatter, "category")?;
+    Ok(ParsedSkillMd {
+        name,
+        desc,
+        body,
+        category,
+    })
+}
+
+/// Read one optional string key out of an already-split frontmatter block,
+/// through the same `serde_yaml` parser the required fields use. `Ok(None)`
+/// = the key is absent (legitimate); `Err` = it is present but not a string
+/// (a malformed doc, never silently ignored).
+fn parse_optional_frontmatter_str(frontmatter: &str, key: &str) -> Result<Option<String>, String> {
+    let value: serde_yaml::Value = serde_yaml::from_str(frontmatter)
+        .map_err(|e| format!("SKILL.md frontmatter 不是合法 YAML:{e}"))?;
+    let Some(mapping) = value.as_mapping() else {
+        return Ok(None);
+    };
+    match mapping.get(key) {
+        None => Ok(None),
+        Some(v) => v
+            .as_str()
+            .map(|s| Some(s.to_string()))
+            .ok_or_else(|| format!("SKILL.md frontmatter 的 {key} 不是字符串")),
+    }
+}
+
 /// Read and parse a real skill folder. Fails honestly (no guessing) when:
 /// `source_path` isn't a directory, it has no `SKILL.md`, the frontmatter
 /// block is missing/unclosed, the frontmatter isn't valid YAML, it isn't a
@@ -54,17 +104,16 @@ pub(crate) fn import_skill_package_from_disk(
             skill_md_path.display()
         )
     })?;
-    let (frontmatter, body) = split_frontmatter(&raw)?;
-    let (name, desc) = parse_frontmatter_fields(&frontmatter)?;
+    let parsed = parse_skill_md(&raw)?;
 
     let mut files = Vec::new();
     collect_files(dir, dir, &skill_md_path, &mut files)?;
     files.sort_by(|a, b| a.0.cmp(&b.0));
 
     Ok(ParsedSkillPackage {
-        name,
-        desc,
-        content: body,
+        name: parsed.name,
+        desc: parsed.desc,
+        content: parsed.body,
         files,
     })
 }

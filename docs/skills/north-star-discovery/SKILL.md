@@ -1,9 +1,7 @@
 ---
 name: north-star-discovery
-slug: north-star-discovery
-description: 结合项目意图/类型与竞品分析报告,推导北极星+滞后+引领三层指标;每条必附采集方案;北极星绝不为「采得到」退化成工程虚荣指标。
+description: 结合项目意图与竞品分析报告推导北极星+滞后+引领三层指标,每条必附采集方案——先对后亮,北极星绝不为「采得到」退化成工程虚荣指标。适用:标配 Issue「找指标」,或北极星需要重推的时点
 category: 标配
-source: 官方(标配 Issue 三件套第二件,plan/13 D8)
 ---
 
 # 找指标(north-star-discovery)

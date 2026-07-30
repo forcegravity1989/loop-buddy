@@ -193,7 +193,8 @@ async fn main() {
     app.dispatch(Command::DistillSkillFromIssue {
         skill_id: SkillId::new(),
         issue_id: i_test,
-        name: "五角色环 · 真实交付法".into(),
+        // S1(plan/16):同 real_team_loop —— 名字走 kebab-case。
+        name: "five-role-ring-delivery".into(),
         desc: "从一件真实完成的 Issue 蒸馏:五角色各一轮、门禁每圈绿、不 mock。".into(),
         category: "方法论".into(),
         content: "\
