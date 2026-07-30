@@ -22,7 +22,7 @@
 
 ## 关键事实(已核实)
 
-- **codehub-cli**:v1.3.4,装在 `C:\Users\z30026659\bin\codehub-cli.exe`(已在 PATH)。profiles:green→`codehub-g.huawei.com`、open→`open.codehub.huawei.com`(内源);token 存 Windows 凭据管理器(keyring)。yellow profile 建了但 token 没存(不管)。
+- **codehub-cli**:v1.3.4,装在 `C:\Users\<你>\bin\codehub-cli.exe`(已在 PATH)。profiles:green→`codehub-g.huawei.com`、open→`open.codehub.huawei.com`(内源);token 存 Windows 凭据管理器(keyring)。yellow profile 建了但 token 没存(不管)。
 - **maas = 内源仓**:`innersource/AI-Coding_G/maas` @ `open.codehub.huawei.com`,project_id=1912112。SSH:`ssh://git@szv-open.codehub.huawei.com:2222/innersource/AI-Coding_G/maas.git`。
 - **CLI 端到端已验证**:`codehub-cli project view -p innersource/AI-Coding_G/maas` 回完整项目 JSON;`codehub-cli issue list -p <repo> --state opened -l 3` 回真实 issue 数组(iid 15…)。collect 路径(`issue list`/`mr list` 分页计数)真通。
 - **CLI 行为**:不带 `-H` 也能查到 maas(按 profile/keyring 解析),但绿/黄/内源三 host 同名 path 会抛 `AmbiguousRemoteError` → **codehub.rs 必须显式带 `-H <host>`** 按项目存的 host 走。认证优先级:`--token > CODEHUB_TOKEN env > auth login(Keychain)`。Rust 侧不管 token(Keychain)。

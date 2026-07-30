@@ -62,5 +62,5 @@ clone 失败后项目变「裸(provider=codehub 但无 remote/workspace)+ 后续
 ## 环境备注
 
 - scratch example 已删(不进仓)。诊断用 throwaway DB + temp ws。
-- mingw(dlltool+as)在 `C:\Users\z30026659\mingw64\bin`,新终端要重开 / `export PATH` 才见。
+- mingw(dlltool+as)在 `C:\Users\<你>\mingw64\bin`,新终端要重开 / `export PATH` 才见。
 - codehub-cli v1.3.4、token keyring(green/open 两区),maas=内源 open。
