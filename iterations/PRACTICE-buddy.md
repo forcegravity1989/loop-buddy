@@ -119,18 +119,22 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - ⚠ **bug⑤ 发送框是 mock 占位**(留白):工作流面板发送框 = `Command::SendSessionMessage`,handler 只回写死 `【mock】已收到:{text}`(真 agent 回复走 Tier C 未实现)。run 是 `claude -p --no-session-persistence` 每阶段一次性调用、无持久对话;要 agent 重调得重新 RunIssue。如实标注留白,不是坏。
 - ⚠ **④ 两个 MR 内容重叠**(工作流,见 §4.3):找指标+绑数据并行跑(都从 master 出分支、都改 `.bw/metrics.toml`)→ MR 冲突。正路串行:先 merge 找指标再跑绑数据。buddy 没强制依赖 + 无 worktree 隔离。
 
-### 步6·跑绑数据(metrics-binding)
+### 步6·跑绑数据(metrics-binding,实测 run ok ~19min)
 
-> 让「找指标」定义的指标真正可采、可点亮。⚠ 绑数据的完整实测由另一个窗口补(见末尾待补)。
-- buddy 后台干:把**绑数据 skill 正文** + 项目意图经 `PlaybookCtx` 拼进 prompt → spawn claude → agent 给 `.bw/metrics.toml` 里每条指标接**采集方案**(`collect_kind` 四类:github/connector/bw/manual,见 §3 Op·metrics),把 manual 的接成可采的,写回 `metrics.toml` + 产出绑数据文档 + commit/push/MR。
-- 看到:指标卡从 manual「手填」徽变成有采集路径;后续 cron tick / 连接器同步 → observation → recompute_signals → 健康灯亮(无数据=Unknown≠绿)。
-- _待补(另一个窗口补):绑数据实测 run 的读回证据 + collect_kind 四类的实战填法。_
+> 让「找指标」定义的指标真正可采、可点亮。实测(2026-07-31,DB/工作区同步5,分支 `bw/issue-33`、MR 12)。
+- 你做:issues 面板 →「绑数据」卡 → 点「▶ 跑」。
+- buddy 后台干:把**绑数据 skill 正文** + 项目意图经 `PlaybookCtx` 拼进 prompt → spawn claude → agent 给 `.bw/metrics.toml` 里每条指标接**采集方案**(`collect_kind` 四类,见 §3.2 metrics),把 manual 的接成可采的,写回 `metrics.toml`(commit `1d96c3e issue #3: 绑数据`)+ 产出绑数据文档 + commit/push/MR 12(`origin/bw/issue-33`)。
+- **实测读回(collect_query 精修进表)**:绑数据把找指标的 collect 字段精修成具体采集节奏——`每周合并 PR 数`(manual)「每周一 `git log --merges --since='7 days ago'` 手填」· `经验资产周增长`(bw)「`governance derive_data 扫描 skills/issue-analysis/{decision-trees,knowledge}`」· `每周结算 Issue 数`(bw)「`issue.settled_at within 7d`」· `客户端问题拦截准确率`(manual)「每月末运维专家核对 auto-ticket 按『Apifabric/网关无会话记录』判...」· `平均定界闭环时长`(manual)「录入+审结时点手填」· `定界结论未采纳率`(manual)「每月末运维专家对照已审结论数驳回数手填」· 北极星(定界结论采纳率)= manual(采纳须人判,评估器留白不假装自动)。
+- **所以**:找指标 = 定「指标是什么」(name/def/target),绑数据 = 定「怎么采」(collect_kind + collect_query)。两件都进 `.bw/metrics.toml`,merge 后 `SyncMetricsFile` 装进 metric 表(读回:metric 表 7→13)。
+- ⚠ **④ MR 重叠**:绑数据 MR 12 跟找指标 MR 11 冲突(都改 metrics.toml,见步5 ④/§4.3)——实测中手解冲突(codehub 上取绑数据那版=找指标+绑数据合集)后合入。
+- ⚠ **滞后指标 UI 渲染 GAP**:trio 指标 `stage_kind=NULL`(项目级),ProgressStage 只显绑阶段的(`kernel.rs:970` `filter(stage_kind==Some)`),ProgressAll 只有「本周计划=引领」——**项目级滞后指标装进表了但 UI 没渲染段**,看不见。北极星在顶栏 TopBar(不在进度正文)。引领能看见是因为 `week_plan` 单独拉。见 §4.11。
 
 ### 步7·交棒 / merge
 
 - 你做:InReview 卡点「merge」(或 codehub 网页 merge)。
 - buddy 干:`MergeIssuePr` → `Remote.merge_mr`(codehub `codehub-cli mr merge <iid> --squash -y`)→ merge 成功推 Done(InReview→Done,人点的 merge 触发,非自动)。
 - ⚠ **merge 403 不是 buddy bug**:`merge_mr` 命令对(真打 codehub 拿 403「target branch is protected, you do not have MERGE permission」)——是 maas master 保护分支 + CLI token 无 merge 权限的治理问题。buddy 如实报错、issue 留 InReview 可重试。解法在 codehub 侧:网页有权限账号 merge / 解保 master / target 真实开发分支(`a_develop`)。
+- **实测(2026-07-31,trio 走通)**:找指标 MR 11 + 绑数据 MR 12(冲突手解)都 codehub 网页合入 → buddy 点「⬇ merge PR」(`MergeIssuePr`)→ `merge_mr` 读回 state==merged(见步5 `b02047b`,不看退出码)→ Done + `SyncMetricsFile` 拉 master + 装 trio 指标(metric 表 7→13,北极星+3滞后+3引领进表,全 unknown 诚实)。**trio 生命周期(跳过竞品分析)端到端走通**:定义(找指标)→采集方案(绑数据)→merge→Done→指标进表。⚠ 实测中撞过 merge_mr 假 Done bug(`codehub-cli mr merge` 退出码靠不住→假成功→Done 但 MR 没合+没装指标),手动 reset 两 issue 回 InReview(清 settled_at),`b02047b` 修好后重试真合。
 
 ### 闭环验证(读回为证)
 
@@ -254,8 +258,14 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 ### 4.10 auto-mint「失败就停」需持久化标志位(指回步2)
 - clone 失败时 buddy 悄悄本地 mint 一个空 workspace(像接上了)——对齐 github 行为(Existing clone 失败 CompleteCreation 也 auto-mint 空项目),clone SSH 修好后 workspace 非空不触发。真要做到「远端失败就停、不假接上」,需持久化「尝试过远端」标志位(当前无)。**决议:先不动**,记 TODO——低频(clone 修好后不中),等撞到再说。
 
+### 4.11 滞后指标 UI 渲染 GAP(指回步6 / §3.2 metrics)
+- trio 指标(北极星+滞后+引领)是项目级(`stage_kind=NULL`,不绑阶段)。`SyncMetricsFile` 装进 metric 表了,但 UI 渲染有缝:
+  - **北极星**:在顶栏 TopBar(`op.rs:104`,不在进度面板正文,小字最右易漏看)。
+  - **引领**:ProgressAll「本周计划」段显(`week_plan` 单独拉引领,不分 stage)。
+  - **滞后**:**没有任何渲染路径**——ProgressStage 只显 `stage_kind==Some(阶段)` 的(`kernel.rs:970` 过滤掉 NULL),ProgressAll 没滞后段。→ 项目级滞后指标装了也看不见,只能 `sqlite3` 查。
+- **决议:先不修**(用户 2026-07-31 说先不急)。修法方向:给 ProgressAll 加「滞后指标」段渲染项目级 `role=lagging` MetricCard;或 SyncMetricsFile 给 trio 指标设 stage_kind(但 trio 是项目级不绑阶段,语义不对)。待实践想明白。
+
 ### 待记(后续会话补)
-- _待补:绑数据(步6)实测 run 的读回证据 + collect_kind 四类实战填法(另一个窗口补)。_
 - _待补:步3 agent 真跑——bug① 修好后竞品分析能不能真联网出报告 + 产出 PR?_
 - _待补:推广给别人时,别人的前置装/配跟我的差异。_
 
