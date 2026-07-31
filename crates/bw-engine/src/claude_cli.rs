@@ -248,7 +248,14 @@ impl Executor for ClaudeCliExecutor {
                 .arg(&prompt)
                 .arg("--output-format")
                 .arg("json")
-                .arg("--no-session-persistence")
+                // plan/17 S4: dropped `--no-session-persistence` so claude
+                // writes a session.jsonl under ~/.claude/projects/... — an
+                // auditable trail of what the agent actually did. buddy does
+                // NOT pass `--resume`, so each phase is still a fresh one-shot
+                // call and the relay baton (lib.rs run_workflow_inner) stays
+                // the only cross-phase context. Weakening plan/05:89's strict
+                // "explicit baton vs opaque session" split, but only by leaving
+                // a read-only audit file — run behavior is unchanged.
                 .arg("--max-budget-usd")
                 .arg(self.config.max_budget_usd.to_string())
                 .arg("--permission-mode")
