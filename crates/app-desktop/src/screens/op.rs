@@ -643,11 +643,17 @@ fn IssuesPanel(op: OpVm) -> Element {
         .hub
         .skills
         .iter()
-        .filter(|s| !s.content.trim().is_empty())
+        .filter(|s| !s.content.trim().is_empty() && !s.is_project_assets)
         .cloned()
         .collect();
     let mut new_skill = use_signal(String::new);
-    let agents = op.hub.agents.clone();
+    let agents: Vec<_> = op
+        .hub
+        .agents
+        .iter()
+        .filter(|a| !a.is_project_assets)
+        .cloned()
+        .collect();
     // Board-wide: at most one card is "entering a block reason" at a time.
     // Fully qualified: `Signal` bare would resolve to `bw_core::model::Signal`
     // (the derived-health enum), already imported unqualified above.

@@ -33,8 +33,9 @@ use bw_core::model::{
     ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus,
     KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, PhaseRole, Readiness,
     RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, Verdict,
-    WorkflowKind, WorkflowSpec, BW_STANDARD_LIBRARY, CONNECTOR_KIND_CLAUDE_CLI,
-    CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO, CONNECTOR_KIND_GIT_REPO,
+    WorkflowKind, WorkflowSpec, BW_PROJECT_ASSETS_LIBRARY, BW_STANDARD_LIBRARY,
+    CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO,
+    CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
@@ -2298,6 +2299,7 @@ impl App {
                         // value really changed — no observation spam).
                         if let Some(p) = c.project_id {
                             self.feed_workspace_metrics(p, &ev).await?;
+                            self.sync_project_assets(p, &workspace).await;
                         }
                         Ok((
                             true,
@@ -2360,6 +2362,137 @@ impl App {
                 "连接器类型「{other}」没有真实探针——不支持同步(诚实拒绝,不伪造状态)"
             ))),
         }
+    }
+
+    /// plan/渠道6 · sync a project's own `skills/` + `agents/` from its
+    /// workspace into the hub as 种A (registered-visible, never injected).
+    /// Re-scanned on every git-repo connector probe (build-time probe-at-
+    /// creation + manual「立即同步」). 项目仓是正本, buddy DB is a mirror, so
+    /// this is a **full rebuild** of the project's project-assets batch:
+    /// delete the existing batch then re-import everything on disk. The
+    /// delete gate is `project_id == project && source.is_project_assets()`
+    /// — never touches distilled `SelfBuilt` rows or global libraries.
+    ///
+    /// 种A rows have no consumers (excluded from every injection picker via
+    /// `is_project_assets`) and `uses`/`runs` stay 0, so the id churn from
+    /// delete+recreate is harmless. Soft-degrade: every store error is
+    /// logged to stderr (`[BW]`) and swallowed — scanning skills is a side-
+    /// product of the connector probe and must never block the主功能 (git
+    /// evidence + workspace metrics). A missing `skills/`/`agents/` dir is a
+    /// normal empty scan, not an error.
+    async fn sync_project_assets(&mut self, project: ProjectId, workspace: &str) {
+        let source = HubSource::Official {
+            official_library: BW_PROJECT_ASSETS_LIBRARY.to_string(),
+        };
+
+        // ── skills: full rebuild (delete the project-assets batch, re-import scanned) ──
+        // `import_skill_package` (not `create_skill`) so the folder's support
+        // files land in `skill_file` too — `create_skill` would drop the file
+        // tree. Maas skills carry references/scripts/knowledge dirs.
+        let scanned_skills = skill_import::scan_project_skills_dir(workspace);
+        let existing_skills: Vec<SkillCard> = match self.store.list_skills().await {
+            Ok(all) => all
+                .into_iter()
+                .filter(|s| s.project_id == Some(project) && s.source.is_project_assets())
+                .collect(),
+            Err(e) => {
+                eprintln!("[BW] sync_project_assets: list_skills 失败,跳过 skill 同步:{e}");
+                return;
+            }
+        };
+        for s in &existing_skills {
+            if let Err(e) = self.store.delete_skill(s.id).await {
+                eprintln!(
+                    "[BW] sync_project_assets: delete_skill「{}」失败:{e}",
+                    s.name
+                );
+            }
+        }
+        for pkg in &scanned_skills {
+            if let Err(e) = self
+                .store
+                .import_skill_package(
+                    NewSkill {
+                        id: SkillId::new(),
+                        name: pkg.name.clone(),
+                        // 同 ImportSkillPackage:外部资产,成熟度由本地真实使用派生,不从外部声誉继承。
+                        maturity: Maturity::Fresh,
+                        desc: pkg.desc.clone(),
+                        category: String::new(),
+                        stage_ref: None,
+                        source: source.clone(),
+                        content: pkg.content.clone(),
+                        project_id: Some(project),
+                    },
+                    pkg.files
+                        .iter()
+                        .map(|(rel_path, content)| NewSkillFile {
+                            rel_path: rel_path.clone(),
+                            content: content.clone(),
+                        })
+                        .collect(),
+                )
+                .await
+            {
+                eprintln!(
+                    "[BW] sync_project_assets: import skill「{}」失败:{e}",
+                    pkg.name
+                );
+            }
+        }
+
+        // ── agents: full rebuild (single AGENT.md files, no skill_file equivalent) ──
+        let scanned_agents = agent_import::scan_project_agents_dir(workspace);
+        let existing_agents: Vec<AgentCard> = self
+            .store
+            .list_agents()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.project_id == Some(project) && a.source.is_project_assets())
+            .collect();
+        for a in &existing_agents {
+            if let Err(e) = self.store.delete_agent(a.id).await {
+                eprintln!(
+                    "[BW] sync_project_assets: delete_agent「{}」失败:{e}",
+                    a.name
+                );
+            }
+        }
+        for def in &scanned_agents {
+            if let Err(e) = self
+                .store
+                .create_agent(NewAgent {
+                    id: AgentId::new(),
+                    name: def.name.clone(),
+                    role: def.description.clone(),
+                    stage_ref: None,
+                    maturity: Maturity::Fresh,
+                    skills: Vec::new(),
+                    model: def.model.clone(),
+                    instructions: def.instructions.clone(),
+                    tools: def.tools.clone(),
+                    agent_cli: "claude-code".to_string(),
+                    source: source.clone(),
+                    project_id: Some(project),
+                })
+                .await
+            {
+                eprintln!(
+                    "[BW] sync_project_assets: create_agent「{}」失败:{e}",
+                    def.name
+                );
+            }
+        }
+
+        if let Err(e) = self.refresh_skills().await {
+            eprintln!("[BW] sync_project_assets: refresh_skills 失败:{e}");
+        }
+        if let Err(e) = self.refresh_agents().await {
+            eprintln!("[BW] sync_project_assets: refresh_agents 失败:{e}");
+        }
+        self.emit(Event::SkillsChanged);
+        self.emit(Event::AgentsChanged);
     }
 
     /// C4 · issue 身份映射(plan/13 D2): a project with a `remote_path`

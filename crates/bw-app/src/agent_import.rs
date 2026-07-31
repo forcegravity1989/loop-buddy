@@ -76,6 +76,38 @@ pub(crate) fn import_agent_definition_from_disk(
     })
 }
 
+/// plan/渠道6: scan a project workspace's own `agents/` dir for agent
+/// definitions — each a single `AGENT.md`-ish file (ECC subagent format:
+/// frontmatter `name`/`description` [+ `tools`/`model`] + body). Unlike a
+/// skill folder, an agent is a single file with no sibling files, so there is
+/// no `skill_file`-equivalent table to fill. Reuses
+/// `import_agent_definition_from_disk` (the one parser) per file.
+///
+/// Soft-degrade: `workspace/agents/` missing → empty vec; a non-`.md` entry
+/// or a file that fails to parse (e.g. a `README.md` without frontmatter) is
+/// skipped, not fatal. Flat one-level scan of `agents/*.md` — a project that
+/// nests agents under subdirectories (e.g. `.claude/agents/`) isn't picked up
+/// here; that's a deliberate starting scope, not a guessed convention.
+pub(crate) fn scan_project_agents_dir(workspace: &str) -> Vec<ParsedAgentDefinition> {
+    let dir = Path::new(workspace).join("agents");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new(); // no agents/ dir = normal, not an error
+    };
+    entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let p = e.path();
+            if !p.is_file() {
+                return None;
+            }
+            if p.extension().and_then(|x| x.to_str()) != Some("md") {
+                return None;
+            }
+            import_agent_definition_from_disk(&p.to_string_lossy()).ok()
+        })
+        .collect()
+}
+
 /// Split an AGENT.md's leading `---\n...\n---\n` YAML frontmatter block from
 /// its body. Errors honestly if the file doesn't start with `---` or the
 /// block is never closed, instead of silently treating the whole file as

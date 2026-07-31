@@ -541,6 +541,17 @@ pub enum HubSource {
 /// per call site.
 pub const BW_STANDARD_LIBRARY: &str = "bw-standard";
 
+/// plan/渠道6: the `official_library` sub-tag for skills/agents scanned in
+/// from a project's own workspace (`skills/<slug>/SKILL.md`,
+/// `agents/<name>.md`) — the project's own runtime/maintenance assets, not a
+/// BW-authored library and not an external curated import. Scoped to the
+/// project by `project_id`; registered-visible only (种A: 不进任何注入下拉
+/// — issue standard_skill / issue assignee / workflow crew / cron RunSkill).
+/// Like any `Official` library other than `bw-standard`, it counts as
+/// `is_external_official()` → plan/16 spec findings degrade to Advisory
+/// (project's own text, honestly shown, never rewritten in place).
+pub const BW_PROJECT_ASSETS_LIBRARY: &str = "project-assets";
+
 impl HubSource {
     pub fn label(&self) -> &'static str {
         match self {
@@ -558,6 +569,17 @@ impl HubSource {
     /// bw-standard library itself.
     pub fn is_external_official(&self) -> bool {
         matches!(self, HubSource::Official { official_library } if official_library != BW_STANDARD_LIBRARY)
+    }
+
+    /// plan/渠道6: `true` iff this row was scanned in from a project's own
+    /// workspace (`BW_PROJECT_ASSETS_LIBRARY`). Such rows are registered-
+    /// visible only (种A) — they must not appear in any injection picker
+    /// (issue standard_skill / assignee / workflow crew / cron RunSkill). A
+    /// VM projects this onto an `is_project_assets` bool because the UI tier
+    /// doesn't see `HubSource`, only `source_label` (which is "官方选型" for
+    /// every `Official` library and can't discriminate this one).
+    pub fn is_project_assets(&self) -> bool {
+        matches!(self, HubSource::Official { official_library } if official_library == BW_PROJECT_ASSETS_LIBRARY)
     }
 
     /// Fixed chip-display order for the hub source filter row — every
