@@ -249,10 +249,50 @@ pub async fn merge_mr(host: &str, path: &str, mr_iid: u32) -> Result<(), Codehub
         .output()
         .await
         .map_err(spawn_err)?;
+    let merge_stderr = stderr_text(&out);
     if !out.status.success() {
-        return Err(CodehubError::Command(stderr_text(&out)));
+        return Err(CodehubError::Command(merge_stderr));
     }
-    Ok(())
+    // 读回为证: codehub-cli mr merge 的退出码靠不住——2026-07-31 实测 403
+    // (protected-branch / 无 merge 权限)时,首次调用可退出 0(error 只打到
+    // stderr)、MR 实际没合(state 仍 "opened")。只信「MR state 真变 merged」
+    // 才算成功,绝不假 Done。复跑 mr view 拿 state(`--jq .merged` 对未合 MR
+    // 返 null,故用 `.state`)。
+    let verify = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "view",
+            &mr_iid.to_string(),
+            "-p",
+            path,
+            "-H",
+            host,
+            "--jq",
+            ".state",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !verify.status.success() {
+        return Err(CodehubError::Command(format!(
+            "merge 后读回 MR 状态失败:{} | merge stderr: {merge_stderr}",
+            stderr_text(&verify)
+        )));
+    }
+    let state = String::from_utf8_lossy(&verify.stdout)
+        .trim()
+        .trim_matches('"')
+        .to_string();
+    if state == "merged" {
+        Ok(())
+    } else {
+        Err(CodehubError::Command(format!(
+            "merge 未生效(MR state={state},应 merged):{merge_stderr}"
+        )))
+    }
 }
 
 /// `codehub-cli issue|mr list -p <path> -H <host> --state <state> -l 0 --jq length`
