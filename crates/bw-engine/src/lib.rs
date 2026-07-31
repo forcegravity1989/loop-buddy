@@ -43,7 +43,9 @@ pub use metrics_file::{
 };
 pub use mock::MockExecutor;
 pub use unsupported_cli::UnsupportedCliExecutor;
-pub use workspace::{provision_git_workspace, ProvisionError};
+pub use workspace::{
+    provision_git_workspace, provision_issue_worktree, IssueWorktreeGuard, ProvisionError,
+};
 
 /// One executable phase, built from a [`WorkflowSpec`] phase.
 #[derive(Clone, Debug)]

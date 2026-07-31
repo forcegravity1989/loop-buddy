@@ -51,7 +51,7 @@ use bw_store::{
     NewSkill, NewSkillFile, NewStage, NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store,
     WorkflowEdit,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use time::OffsetDateTime;
@@ -1383,6 +1383,12 @@ impl App {
         cron_task_id: Option<CronTaskId>,
         issue_id: Option<IssueId>,
         force_mock: bool,
+        // plan/17 S2: isolated per-issue worktree for the executor + evidence
+        // + PR tail. None = main workspace (pre-S2 behavior; every caller
+        // except run_issue_body passes None). run_issue_body passes its
+        // provisioned IssueWorktreeGuard's path so the agent works + commits
+        // in isolation, decoupling InReview-window collisions.
+        issue_worktree: Option<&Path>,
     ) -> Result<RunOutcome, AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
@@ -1413,7 +1419,10 @@ impl App {
         // P4: capture the workspace HEAD before the engine touches anything —
         // the "before" half of this run's recorded change window. Mock runs
         // (no workspace) record nothing: no files were ever at stake.
-        let heads_workspace = proj.workspace_path.trim().to_string();
+        let heads_workspace = match issue_worktree {
+            Some(p) => p.to_string_lossy().to_string(),
+            None => proj.workspace_path.trim().to_string(),
+        };
         let head_before = if heads_workspace.is_empty() {
             None
         } else {
@@ -1492,7 +1501,9 @@ impl App {
                     } else {
                         let executor = ClaudeCliExecutor::new(
                             self.state.claude_config.clone(),
-                            PathBuf::from(proj.workspace_path.trim()),
+                            issue_worktree
+                                .map(PathBuf::from)
+                                .unwrap_or_else(|| PathBuf::from(proj.workspace_path.trim())),
                             proj.allow_commands,
                             agent_tools.clone(),
                         );
@@ -3079,6 +3090,7 @@ impl App {
                                 Some(c.id),
                                 None,
                                 false,
+                                None,
                             )
                             .await;
                         matches!(result, Ok(RunOutcome::Completed))
@@ -3139,6 +3151,7 @@ impl App {
                     Some(c.id),
                     None,
                     false,
+                    None,
                 )
                 .await;
             // A scheduled run "succeeds" only when the workflow actually passed.
@@ -3468,34 +3481,60 @@ impl App {
         let pr_eligible = !proj.remote_path.trim().is_empty()
             && issue.github_number != 0
             && !proj.workspace_path.trim().is_empty();
-        let on_issue_branch = if pr_eligible {
-            match bw_engine::github::checkout_issue_branch(
+        // plan/17 S2: isolate this run in its own git worktree off the main
+        // workspace (master), so concurrent/back-to-back issue runs in one
+        // project never collide on the shared working tree. Main workspace
+        // stays on master; only this worktree carries `bw/issue-<n>`. A
+        // provisioning failure degrades honestly (run on main workspace, no
+        // PR) — same fallback shape as the old `checkout_issue_branch` path,
+        // just isolated when it succeeds.
+        let issue_ws: Option<PathBuf> = if pr_eligible {
+            match bw_engine::workspace::provision_issue_worktree(
                 std::path::Path::new(proj.workspace_path.trim()),
                 issue.github_number,
             )
             .await
             {
-                Ok(_) => true,
+                Ok(p) => Some(p),
                 Err(e) => {
                     self.emit(Event::ConnectorSynced {
                         name: format!("#{} · 活分支", issue.number),
                         ok: false,
-                        detail: format!("开活分支失败,本次运行在当前分支、不提 PR:{e}"),
+                        detail: format!("开 issue worktree 失败,本次运行在主工作区、不提 PR:{e}"),
                     });
-                    false
+                    None
                 }
             }
         } else {
-            false
+            None
         };
+        // RAII: remove the worktree on EVERY exit path (early `?`/Ok/Err/
+        // panic). The branch stays on `origin` (pushed by `stage_commit_push`)
+        // for review/merge — only the local working dir is dropped.
+        let _worktree_guard = bw_engine::workspace::IssueWorktreeGuard::new(
+            PathBuf::from(proj.workspace_path.trim()),
+            issue_ws.clone(),
+        );
+        let on_issue_branch = issue_ws.is_some();
 
         // Run through the same path as any run, bound to this issue. C13
         // (plan/14): `force_mock = false` — a standard/normal Issue's real
         // work is the one path the creation flow's mock lock must NEVER
         // touch; this keeps routing to the real executor whenever the
         // project has a configured workspace, byte-for-byte unchanged.
+        // plan/17 S2: pass the issue worktree path so the executor + evidence
+        // run against the isolated worktree, not the shared main workspace.
         let run = self
-            .run_workflow_inner(p, session, spec, RunTrigger::Manual, None, Some(id), false)
+            .run_workflow_inner(
+                p,
+                session,
+                spec,
+                RunTrigger::Manual,
+                None,
+                Some(id),
+                false,
+                issue_ws.as_deref(),
+            )
             .await;
         match run {
             // A completed run only reaches 评审中 — never 完成. Done stays an
@@ -3522,7 +3561,14 @@ impl App {
                     let res: Result<bw_engine::github::PrOpened, String> = match remote {
                         Ok(r) => r
                             .create_mr(
-                                std::path::Path::new(proj.workspace_path.trim()),
+                                // plan/17 S2: open the MR from the issue's
+                                // isolated worktree (guaranteed Some by
+                                // `on_issue_branch`), not the shared main
+                                // workspace — `stage_commit_push` inside
+                                // commits the worktree's edits to `bw/issue-N`.
+                                issue_ws.as_deref().unwrap_or_else(|| {
+                                    std::path::Path::new(proj.workspace_path.trim())
+                                }),
                                 issue.github_number,
                                 &issue.title,
                             )
@@ -4970,8 +5016,17 @@ impl App {
 
             Command::RunWorkflow { session, spec } => {
                 let p = self.active()?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
-                    .await?;
+                self.run_workflow_inner(
+                    p,
+                    session,
+                    spec,
+                    RunTrigger::Manual,
+                    None,
+                    None,
+                    false,
+                    None,
+                )
+                .await?;
             }
 
             // plan/14 C13 (D8 回锁): the creation flow's drafting run —
@@ -4979,8 +5034,17 @@ impl App {
             // `RunWorkflow` above; see the command's doc comment for why.
             Command::RunDraftWorkflow { session, spec } => {
                 let p = self.active()?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, true)
-                    .await?;
+                self.run_workflow_inner(
+                    p,
+                    session,
+                    spec,
+                    RunTrigger::Manual,
+                    None,
+                    None,
+                    true,
+                    None,
+                )
+                .await?;
             }
 
             Command::RunStagePlaybook {
@@ -5021,8 +5085,17 @@ impl App {
                     workspace_hint,
                 };
                 let spec = stage_workflow_with_playbook(stage_kind, &ctx);
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
-                    .await?;
+                self.run_workflow_inner(
+                    p,
+                    session,
+                    spec,
+                    RunTrigger::Manual,
+                    None,
+                    None,
+                    false,
+                    None,
+                )
+                .await?;
             }
 
             Command::RefreshHubs => {
@@ -5129,8 +5202,17 @@ impl App {
                     .ok_or(AppError::NotFound)?;
                 self.store.record_workflow_use(workflow_id).await?;
                 self.refresh_workflow_specs().await?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, false)
-                    .await?;
+                self.run_workflow_inner(
+                    p,
+                    session,
+                    spec,
+                    RunTrigger::Manual,
+                    None,
+                    None,
+                    false,
+                    None,
+                )
+                .await?;
             }
 
             Command::RunIssue { session, id } => {
