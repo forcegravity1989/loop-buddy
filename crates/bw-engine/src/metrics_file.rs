@@ -46,6 +46,12 @@ pub enum CollectKind {
     /// BW's own bookkeeping (issue settle-count, run telemetry, …) — no
     /// external system involved.
     Bw,
+    /// plan18-③ · A project-side collection script (e.g. `derive_*.py` that
+    /// mechanically parses a real data source into a `data.json`). buddy
+    /// shell-outs the script and reads the named field — the script's own
+    /// deps (Playwright/SSO/…) are the project's responsibility. NOT
+    /// `Manual`: this is automated collection, not hand-typed.
+    Script,
     /// Hand-typed; no collector will ever fill this automatically.
     Manual,
 }
@@ -56,6 +62,7 @@ impl CollectKind {
             CollectKind::Github => "github",
             CollectKind::Connector => "connector",
             CollectKind::Bw => "bw",
+            CollectKind::Script => "script",
             CollectKind::Manual => "manual",
         }
     }

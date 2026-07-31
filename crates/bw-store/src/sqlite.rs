@@ -392,6 +392,7 @@ fn source_text(s: SourceKind) -> &'static str {
         SourceKind::Connector => "connector",
         SourceKind::Github => "github",
         SourceKind::Codehub => "codehub",
+        SourceKind::Script => "script",
         SourceKind::Manual => "manual",
     }
 }
@@ -404,6 +405,7 @@ fn parse_source(s: &str) -> SourceKind {
         "connector" => SourceKind::Connector,
         "github" => SourceKind::Github,
         "codehub" => SourceKind::Codehub,
+        "script" => SourceKind::Script,
         _ => SourceKind::Manual,
     }
 }
