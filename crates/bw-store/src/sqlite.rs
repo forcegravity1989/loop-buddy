@@ -1020,6 +1020,11 @@ impl Store for SqliteStore {
         .fetch_all(&self.pool)
         .await?;
         let mut by_stage: HashMap<StageKind, Vec<Signal>> = HashMap::new();
+        // plan18-④ · 项目级指标(stage_kind=NULL,如北极星/项目级引领·滞后)
+        // 的 signal 收集——L6 项目健康灯要把它们也卷入(否则业务北极星点亮
+        // 了项目卡还是灰,违背"北极星驱动项目健康"的产品哲学)。补缝,非原
+        // 设计:derive-only/recompute 唯一写入者不变,只是聚合多卷一组。
+        let mut by_project: Vec<Signal> = Vec::new();
         for m in &metric_rows {
             let mid: String = m.get("id");
             let stage_kind = m
@@ -1076,6 +1081,9 @@ impl Store for SqliteStore {
 
             if let Some(k) = stage_kind {
                 by_stage.entry(k).or_default().push(signal);
+            } else {
+                // plan18-④:项目级指标进 by_project,供 L6 上卷。
+                by_project.push(signal);
             }
         }
 
@@ -1096,8 +1104,15 @@ impl Store for SqliteStore {
             .await?;
         }
 
-        // L6: project signal = worst-of its stages; weekly_signal = snapshot.
-        let proj = reduce_worst_of(stages.iter().map(|(k, _)| stage_signal[k])).into_inner();
+        // L6: project signal = worst-of(各阶段聚合 + 项目级业务指标);
+        // weekly_signal = snapshot。plan18-④:项目级指标(北极星/L1/L2/L3
+        // 等业务指标)原本不上卷(只更新自己那行),导致业务北极星点亮了
+        // 项目卡还是灰——补:把 by_project 也卷入 worst-of。reduce_worst_of
+        // 有 Green 就不 Unknown,北极星 Green 能拉亮项目灯;北极星 Red→项目
+        // Red,语义对(业务北极星该驱动项目健康)。
+        let mut proj_inputs: Vec<Signal> = stages.iter().map(|(k, _)| stage_signal[k]).collect();
+        proj_inputs.extend(by_project.iter().copied());
+        let proj = reduce_worst_of(proj_inputs).into_inner();
         sqlx::query(
             "UPDATE project SET signal=?, weekly_signal=?, signal_derived_rev=COALESCE(signal_derived_rev,0)+1,
                                 signal_derived_at=?, updated_at=?, rev=rev+1 WHERE id=?",
