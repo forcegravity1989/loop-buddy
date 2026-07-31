@@ -135,6 +135,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - buddy 干:`MergeIssuePr` → `Remote.merge_mr`(codehub `codehub-cli mr merge <iid> --squash -y`)→ merge 成功推 Done(InReview→Done,人点的 merge 触发,非自动)。
 - ⚠ **merge 403 不是 buddy bug**:`merge_mr` 命令对(真打 codehub 拿 403「target branch is protected, you do not have MERGE permission」)——是 maas master 保护分支 + CLI token 无 merge 权限的治理问题。buddy 如实报错、issue 留 InReview 可重试。解法在 codehub 侧:网页有权限账号 merge / 解保 master / target 真实开发分支(`a_develop`)。
 - **实测(2026-07-31,trio 走通)**:找指标 MR 11 + 绑数据 MR 12(冲突手解)都 codehub 网页合入 → buddy 点「⬇ merge PR」(`MergeIssuePr`)→ `merge_mr` 读回 state==merged(见步5 `b02047b`,不看退出码)→ Done + `SyncMetricsFile` 拉 master + 装 trio 指标(metric 表 7→13,北极星+3滞后+3引领进表,全 unknown 诚实)。**trio 生命周期(跳过竞品分析)端到端走通**:定义(找指标)→采集方案(绑数据)→merge→Done→指标进表。⚠ 实测中撞过 merge_mr 假 Done bug(`codehub-cli mr merge` 退出码靠不住→假成功→Done 但 MR 没合+没装指标),手动 reset 两 issue 回 InReview(清 settled_at),`b02047b` 修好后重试真合。
+- **【归正·codehub issue 自动关单】**(`a76c6c5`):实测 issue 31/32/33 merge 后仍 `opened`——**`--issue-nums` 只 link MR↔issue,不触发自动关单**(我之前假设它自动关,错了)。codehub(GitLab)自动关单靠 **MR description 里的 `Closes #<iid>`**(和 github `Closes #n` 一样,merge 时自动关引用的 issue)。**改**:`codehub::create_mr` body 加 `Closes #<iid>`;`MergeIssuePr` 的 gh issue 补关仍 gate github-only(codehub 靠 body Closes,不走 gh 补关)。现有 31/32/33 历史 MR body 没 Closes、issue 仍开(可 codehub 网页手关);未来 codehub MR 会自动关。**未验**(`Closes #` 在 codehub body 是否真触发自动关,待下次 codehub MR merge 实测;GitLab 标准行为,默认 ON)。
 
 ### 闭环验证(读回为证)
 
