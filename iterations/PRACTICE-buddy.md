@@ -145,7 +145,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - ⚠️ **merge 403 不是 buddy bug**:`merge_mr` 命令对(`codehub-cli mr merge 11 --squash -y` 真打 codehub 拿 403「target branch is protected, you do not have MERGE permission」)——是 maas master 保护分支 + CLI token 无 merge 权限的治理问题。buddy 如实报错、issue 留 InReview 可重试。解法在 codehub 侧:网页有权限账号 merge / 解保 master / target 真实开发分支(`a_develop`)。
 - 🐞 **④ 两个 MR 内容重叠(工作流)**:三件套是流水线(绑数据读找指标产出),但**并行跑了**找指标+绑数据(都从 master 出分支、都改 `.bw/metrics.toml`)→ MR 冲突。正路串行:先 merge 找指标,master 拿到 metrics.toml,再跑绑数据。buddy 没强制依赖 + 没 worktree 隔离(我以为开发搞了 worktree 隔离,实际没有——run 共用一个 workspace 目录)。**归类 bug① 窗口一起看**(见 §6.7)。
 
-**验证状态**:烟测 + 编译门禁全绿;完整 buddy retry E2E 延后(撞 bug①);UI fix 待 app 重编重启后看(link 是否对、跳不跳)。
+**验证状态**:烟测 + 编译门禁全绿;完整 buddy retry E2E 延后(撞 bug①);**UI fix 已 live 验证(2026-07-31,user 重编重启后):issue 卡「远端 #N ↗」「PR #N ↗」provider-aware 可点击 link,跳 codehub issue/MR 页**。
 
 ---
 
