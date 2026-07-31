@@ -147,6 +147,23 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 **验证状态**:烟测 + 编译门禁全绿;完整 buddy retry E2E 延后(撞 bug①);**UI fix 已 live 验证(2026-07-31,user 重编重启后):issue 卡「远端 #N ↗」「PR #N ↗」provider-aware 可点击 link,跳 codehub issue/MR 页**。
 
+### 2026-07-31 · 渠道6 skill/agent 项目自带资产扫导(种A,已开发+验证)
+
+> 接 skill/agent 套件共同规范讨论(§5 形态归宿 + §6.8 渠道6 规范)。把 maas 仓自带的 `skills/` 扫进 buddy,登记可见不注入。**已开发+提交 `5583381`**。
+
+**改了什么(9 文件,不动 store/sqlite/schema):**
+- `probe_connector` 的 git-repo arm(`lib.rs`):`evidence::collect` + `feed_workspace_metrics` 后顺带 `sync_project_assets(p, &workspace)`。创建即探活 + Hub「立即同步」都自动扫。
+- `sync_project_assets`:scan `workspace/skills/` + `agents/` → 全量重建本项目 `source=Official{project-assets}` 那批(删现有同批 + re-import scanned);清孤儿双重 gate `project_id+source.is_project_assets()`,不碰蒸馏 SelfBuilt/全局。skill 用 `import_skill_package`(带 references/scripts 支撑文件);agent 单文件 AGENT.md 无 skill_file。stderr 留痕软降级,不阻断连接器探活。
+- 6 处注入点 filter 排除种A(issue standard_skill / assignee / workflow crew / cron RunSkill);`is_project_assets: bool` 加到 `SkillCardVm`/`AgentCardVm`(UI 层只见 source_label="官方选型" 区分不了,须投影 bool)。
+- 规范冲突分域:`project-assets` 自动算外库(`is_external_official`)→ Advisory 不点黄不强制改;解析层 SKILL.md+name+desc 硬门槛,过不了诚实跳过。
+
+**怎么用(读回为证,DB=workbench.db,project=maas-locate cce215a7):**
+- 你做:Hub → 代码仓连接器 →「立即同步」(或建项目时创建即探活顺带扫)。
+- buddy 干:扫 `workspaces/maas-locate-cce215a7/skills/` → 5 个 skill 包各 SKILL.md+支撑文件 → 写进 skill 表 project_id=本项目 source=project-assets;`agents/` 只有 README(无 AGENT.md)→ 0 agent。
+- 看到:Op 侧边栏「技能」本项目自有 +5(全局 8 仍在,没误删);SkillHub 卡片带 `◇ maas-locate` 归属 chip;issue 关联技能下拉 / assignee 下拉 / workflow crew / cron RunSkill **不列**这 5 个(种A 不注入)。
+- sqlite 读回:`SELECT name,official_library FROM skill WHERE project_id IS NOT NULL` → auto-ticket/issue-analysis/issue-collect/link-analysis/refresh-indicators 各 project-assets;`skill_file` 各 9/8/17/5/5 支撑文件;全局 `count WHERE project_id IS NULL`=8 未动。
+- 验证:headless example `verify_project_assets_sync` + sqlite 独立读回 + 门禁全绿(fmt/clippy -D warnings/wasm-both/guard-kernel-ui-free/app-desktop)。
+
 ---
 
 ## 3. 正式怎么用:每步操作后 buddy 干了什么 + 能看到啥
@@ -314,6 +331,13 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - 不是云服务(AI 执行=本机 `claude` CLI,单次花费封顶)。
 - 永远不替用户捏造健康。
 
+### skill / agent 形态归宿(2026-07-31 钉死)
+
+- **三档**:全局共享进 buddy 仓(bw-standard 编译进二进制 / 五角色 agent 全局单例);项目级进**项目仓**(`skills/<slug>/SKILL.md` 文件夹、`agents/<name>.md` 单文件),git 即跨人共享正本;DB 只是运行时副本,导入(4/5)是本地一次性 copy 不构成共享。
+- **种A 登记可见不注入**:项目自带 skill/agent 扫进来只登记可见,不进任何注入下拉(issue standard_skill / assignee / workflow crew / cron RunSkill)。执行/战绩归属是归属反转半破口,先不碰;项目级可注入留归属反转后。
+- **种B(运行资产 vs 维护资产、维护类可注入)留未来想法**:maas 的 auto-ticket(运行资产)/ refresh-indicators(维护资产)当前都按种A 登记不注入,不预设区分。等归属反转线理清再回头。
+- **规范未拉通前两边都不改**:扫到能解析的 SKILL.md(name+desc)就如实呈现字段,缺的按 buddy 诚实空态;规范不符出 Advisory 灰提示不阻断。未来拉通两边规范再收紧。
+
 ---
 
 ## 6. 往下推进的未决事项(讨论有价值、但非当前主要矛盾,记下待实践想明白再回头)
@@ -367,3 +391,20 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 **给 bug① 窗口的 prompt(可直接粘过去):**
 > 在 buddy(loop-buddy 仓)修 bug①「RunIssue 内联 await 堵死单线程 UI」时,一并看这个同源问题:run 共用一个 workspace 目录、无 worktree-per-run 隔离,导致并行/连续跑多个 issue(如三件套 找指标→绑数据)时 MR 内容重叠(都从 master 出分支、都改同一文件)。请一起设计:① RunIssue 甩后台 detached(解冻 UI,根因见 PRACTICE §2 bug① + §4「UI 冻死根因钉死」);② 每个 run 用独立 git worktree 隔离(`git worktree add` per issue,不在主 workspace 切分支);③ 三件套串行依赖(绑数据要求找指标先 merge)要不要在状态机/调度层强制——待实践定,别基于猜测改设计。codehub PR 回流(create_mr/merge_mr/Adopted)已在 `0c70775` 修好,本窗口不用重做;只看 run 调度层。背景见 `iterations/PRACTICE-buddy.md` §2(2026-07-31 块)+ §6.7。
+
+### 6.8 skill/agent 渠道6 共同规范(2026-07-31 定,已开发 `5583381`)
+
+- **正本**:项目仓 `skills/<slug>/SKILL.md` + `agents/<name>.md`;git 即跨人共享。
+- **进 buddy**:扫导 `project_id=本项目` `source=Official{project-assets}`。
+- **触发**:挂代码仓连接器同步(建项目扫一次 + 每次同步 re-scan 全量对账),不单开 cron,不挂 CodeHub 连接器/指标采集 cron(skills/ 在本地工作区,那两个管远端)。
+- **对齐**:项目仓正本、buddy 镜像;全量重建那批扫进来的(种A 无引用无 uses,id 变无害);清孤儿双重 gate `project_id+source`;不碰蒸馏/全局;不在 buddy 手改项目级 skill(要改回项目仓 git)。
+- **buddy 角色**:种A 登记可见不注入(不进 6 处注入下拉:issue standard_skill / assignee / workflow crew / cron RunSkill)。
+- **规范冲突**:分域 Advisory(project-assets 算外库)不强制改;解析层 SKILL.md+name+desc 硬门槛。
+- **不依赖归属反转**(project_id 列已在、project_rail 按 project_id 过滤、is_external_official 自动外库),可独立做,已实现。
+- **归属反转(list_skills/list_agents 收窄、Hub 项目筛、agent 战绩跨项目混算)仍未做**,plan/09 墙B「不在本次」,等后续 step。
+
+### 6.9 cron / workflow / connector 定位 gap 搁置(2026-07-31 打结)
+
+- 和 skill/agent(方法文档,登记可见即完事)不同,这三者是**运行体系**(要 buddy 执行/调度),和 buddy 的 `cron_task`/`workflow_spec`/`connector` 表是两套执行模型。扫进来登记没意义(buddy 不按 maas 格式执行),要执行就得对齐模型=大改。
+- maas 的 `cron-registry.yaml` / `connectors/<system>_client.*` / `data-sources/*.yaml` 对不上 buddy 模型,**不硬塞**。
+- **先打结搁置**:等 skill/agent 项目级登记跑通 + 归属反转线理清,再决定接不接(可能根本不接——maas 运行体系留给 maas,buddy 只看它跑得好不好)。
