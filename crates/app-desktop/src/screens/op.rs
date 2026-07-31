@@ -27,6 +27,32 @@ use dioxus::prelude::*;
 use ui::vm::{MetricVm, SessionCardVm, VersionLogVm};
 use ui::{sparkline_path, SparkPath, WowDir};
 
+/// Provider-aware web URL for a remote issue. codehub →
+/// `https://{host}/{path}/issues/{iid}`; github → the canonical `github.com`
+/// path. Empty path = no remote attached → empty string (caller renders plain
+/// text). Bug③+UI: was a hardcoded `github.com` URL even for codehub projects.
+fn remote_issue_url(provider: &str, host: &str, path: &str, n: u32) -> String {
+    if path.trim().is_empty() {
+        return String::new();
+    }
+    match provider.trim() {
+        "codehub" => format!("https://{host}/{path}/issues/{n}"),
+        _ => format!("https://github.com/{path}/issues/{n}"),
+    }
+}
+
+/// Provider-aware web URL for a PR/MR. codehub → GitLab-style
+/// `/-/merge_requests/{iid}`; github → `/pull/{n}`. Empty path = no remote.
+fn remote_mr_url(provider: &str, host: &str, path: &str, n: u32) -> String {
+    if path.trim().is_empty() {
+        return String::new();
+    }
+    match provider.trim() {
+        "codehub" => format!("https://{host}/{path}/-/merge_requests/{n}"),
+        _ => format!("https://github.com/{path}/pull/{n}"),
+    }
+}
+
 #[component]
 pub fn Op(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     let paper = theme::PAPER;
@@ -752,25 +778,43 @@ fn IssuesPanel(op: OpVm) -> Element {
                                         key: "{i.number}",
                                         style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {i.status_color};",
                                         div { style: "font-size:11px;color:{ink3};font-family:{mono};", "#{i.number} · {i.stage.label()}" }
-                                        // C4 · issue 身份映射: 号非 0 才渲染,
-                                        // 展示最小化——链接形态用 remote_path
-                                        // 拼纯文本 URL,不做点击跳转,如实即可。
+                                        // C4 · issue 身份映射: 号非 0 才渲染。
+                                        // Bug③+UI: provider-aware link to the
+                                        // remote issue (codehub `{host}/{path}/issues`
+                                        // / github `github.com/.../issues`), shown
+                                        // as a short label not a raw URL. Empty path
+                                        // = no remote → plain text.
                                         if i.github_number != 0 {
                                             div {
                                                 style: "font-size:10.5px;color:{ink3};font-family:{mono};margin-top:1px;",
                                                 if op.remote_path.trim().is_empty() {
-                                                    "GitHub #{i.github_number}"
+                                                    "远端 #{i.github_number}"
                                                 } else {
-                                                    "https://github.com/{op.remote_path}/issues/{i.github_number}"
+                                                    a {
+                                                        href: "{remote_issue_url(&op.provider, &op.remote_host, &op.remote_path, i.github_number)}",
+                                                        target: "_blank",
+                                                        style: "color:{ink3};text-decoration:none;",
+                                                        "远端 #{i.github_number} ↗"
+                                                    }
                                                 }
                                             }
                                         }
                                         // C5 · PR 验收环: 有 PR 号才渲染,如实展示
                                         // 「PR #N」——验收=人 merge,号非 0 即有开放 PR。
+                                        // Bug③+UI: link to the MR/PR web URL.
                                         if i.pr_number != 0 {
                                             div {
                                                 style: "font-size:10.5px;color:{clay};font-family:{mono};margin-top:1px;",
-                                                "PR #{i.pr_number}"
+                                                if op.remote_path.trim().is_empty() {
+                                                    "PR #{i.pr_number}"
+                                                } else {
+                                                    a {
+                                                        href: "{remote_mr_url(&op.provider, &op.remote_host, &op.remote_path, i.pr_number)}",
+                                                        target: "_blank",
+                                                        style: "color:{clay};text-decoration:none;",
+                                                        "PR #{i.pr_number} ↗"
+                                                    }
+                                                }
                                             }
                                         }
                                         // P4: the title opens the evidence

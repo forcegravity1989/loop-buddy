@@ -98,6 +98,163 @@ pub async fn create_issue(
         .map_err(|_| CodehubError::Parse(format!("无法解析 codehub issue iid:{text:?}")))
 }
 
+/// `codehub-cli mr create` — the codehub parity of [`crate::github::open_pr`]:
+/// stage + commit + push the run's edits on `bw/issue-<n>` (shared
+/// [`crate::workspace::stage_commit_push`]), then open a merge request from
+/// `bw/issue-<n>` → the project's default branch, linked to codehub issue
+/// `<n>` via `--issue-nums` (merge auto-closes the issue — same role as
+/// github's `Closes #<n>`). Returns the new MR's iid wrapped as
+/// `PrOpened::Created`.
+///
+/// **No `Adopted` path** (unlike github): if an MR for the branch already
+/// exists, `mr create` fails and the issue stays `InProgress` retryable —
+/// honest, never fabricates success. The full buddy-run E2E uses a fresh
+/// branch (`bw/issue-<n>` per issue), so a retry hits no pre-existing MR.
+///
+/// `target_branch` is resolved at runtime from `origin/HEAD` — **not**
+/// hardcoded (maas is `master`, other projects `main`/`develop`). Smoke-
+/// tested 2026-07-30: `git symbolic-ref refs/remotes/origin/HEAD` →
+/// `refs/remotes/origin/master`; `--short` wrongly yields `origin/master`
+/// (codehub-cli 404s on "origin/master"), so we strip the `refs/remotes/
+/// origin/` prefix by hand. **Never merges** — only opens the MR.
+pub async fn create_mr(
+    host: &str,
+    path: &str,
+    workspace: &Path,
+    issue_number: u32,
+    title: &str,
+) -> Result<crate::github::PrOpened, CodehubError> {
+    let branch = format!("bw/issue-{issue_number}");
+    crate::workspace::stage_commit_push(workspace, &branch, issue_number, title)
+        .await
+        .map_err(|e| CodehubError::Command(format!("git 准备失败:{e}")))?;
+    // target-branch = project default, resolved at runtime (see doc comment).
+    let tgt = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    // `symbolic-ref` exits non-zero with empty stdout when the clone has no
+    // `origin/HEAD` set (rare for a normal clone). Fall back to `master`
+    // rather than hard-failing: for a wrong-base non-master project this
+    // surfaces honestly as codehub-cli's "branch not found" — never
+    // fabricated success. (Code-review 2026-07-30: the prior early `Err`
+    // made the doc's promised master fallback unreachable on this path.)
+    let target = String::from_utf8_lossy(&tgt.stdout)
+        .trim()
+        .strip_prefix("refs/remotes/origin/")
+        .unwrap_or("master")
+        .to_string();
+    // P7-7A parity: adopt an already-open MR for this branch if one exists.
+    // A prior run (or a manual smoke) may have opened an MR that BW didn't
+    // record — `mr create` would then fail "already exists". Read the real
+    // iid back via `mr list --source-branch` (never guessed, same honesty as
+    // github's `adopt_existing_pr`). Falls through to `mr create` when no
+    // existing MR (or the list call itself fails — then `mr create` reports).
+    let list = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "list",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--source-branch",
+            &branch,
+            "--state",
+            "opened",
+            "--jq",
+            ".[0].iid",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if list.status.success() {
+        let text = String::from_utf8_lossy(&list.stdout).trim().to_string();
+        if !text.is_empty() && text != "null" {
+            if let Ok(iid) = text.parse::<u32>() {
+                return Ok(crate::github::PrOpened::Adopted(iid));
+            }
+        }
+    }
+    let body = format!("BW 执行器为 Issue #{issue_number} 提交的改动,等待人工 merge 验收。");
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "create",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--source-branch",
+            &branch,
+            "--target-branch",
+            &target,
+            "--title",
+            title,
+            "--description",
+            &body,
+            "--issue-nums",
+            &format!("issue{issue_number}"),
+            "--jq",
+            ".iid",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let iid = text
+        .parse::<u32>()
+        .map_err(|_| CodehubError::Parse(format!("无法解析 codehub MR iid:{text:?}")))?;
+    Ok(crate::github::PrOpened::Created(iid))
+}
+
+/// `codehub-cli mr merge <iid> --squash -y` — the codehub parity of
+/// [`crate::github::merge_pr`]: the human验收 action that integrates the
+/// source branch into the target. Squash-merges (matches github's `--squash`).
+/// The caller ([`crate::Remote::merge_mr`] ← `MergeIssuePr`) settles the
+/// Issue `Done` on `Ok` via the existing `TransitionIssue` InReview→Done path;
+/// on `Err` the Issue stays `InReview` retryable — never reverse-settled,
+/// never fabricated. **Only ever called from `MergeIssuePr` (a human click),
+/// never from any run/executor path** (plan/13 D3+D11).
+pub async fn merge_mr(host: &str, path: &str, mr_iid: u32) -> Result<(), CodehubError> {
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "merge",
+            &mr_iid.to_string(),
+            "-p",
+            path,
+            "-H",
+            host,
+            "--squash",
+            "-y",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    Ok(())
+}
+
 /// `codehub-cli issue|mr list -p <path> -H <host> --state <state> -l 0 --jq length`
 /// → 计数。codehub 无 GitHub 的 `search/issues total_count`,改用分页 list 的
 /// `--jq length` 让 CLI 端计数(P3 实测:maas opened issues=6、merged MRs=9)。

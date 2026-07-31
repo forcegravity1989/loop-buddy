@@ -3336,20 +3336,36 @@ impl App {
                 // InProgress — retryable via RunIssue, never faked into
                 // review with no PR behind it.
                 let opened_pr = if on_issue_branch {
-                    match bw_engine::github::open_pr(
-                        std::path::Path::new(proj.workspace_path.trim()),
-                        issue.github_number,
-                        &issue.title,
-                    )
-                    .await
-                    {
+                    // Bug③ (2026-07-30): route PR/MR creation through the
+                    // Remote factory so codehub projects open a codehub MR
+                    // (`codehub-cli mr create`) instead of crashing `gh pr
+                    // create` (gh doesn't know codehub → issue stuck
+                    // InProgress, no InReview, SyncMetricsFile never ran).
+                    // Github projects delegate to `github::open_pr` unchanged.
+                    let remote = bw_engine::remote::Remote::for_project(
+                        &proj.provider,
+                        &proj.remote_host,
+                        &proj.remote_path,
+                    );
+                    let res: Result<bw_engine::github::PrOpened, String> = match remote {
+                        Ok(r) => r
+                            .create_mr(
+                                std::path::Path::new(proj.workspace_path.trim()),
+                                issue.github_number,
+                                &issue.title,
+                            )
+                            .await
+                            .map_err(|e| e.to_string()),
+                        Err(e) => Err(e.to_string()),
+                    };
+                    match res {
                         Ok(bw_engine::github::PrOpened::Created(pr)) => {
                             self.store.set_issue_pr_number(id, pr).await?;
                             self.emit(Event::ConnectorSynced {
                                 name: format!("#{} · PR", issue.number),
                                 ok: true,
                                 detail: format!(
-                                    "已提 PR #{pr}(Closes #{}),等待人工 merge 验收",
+                                    "已提 PR/MR #{pr}(关联 Issue #{}),等待人工 merge 验收",
                                     issue.github_number
                                 ),
                             });
@@ -3366,7 +3382,7 @@ impl App {
                                 name: format!("#{} · PR", issue.number),
                                 ok: true,
                                 detail: format!(
-                                    "已认领队友提的 PR #{pr}(Closes #{}),等待人工 merge 验收",
+                                    "已认领队友提的 PR/MR #{pr}(关联 Issue #{}),等待人工 merge 验收",
                                     issue.github_number
                                 ),
                             });
@@ -3376,7 +3392,7 @@ impl App {
                             self.emit(Event::ConnectorSynced {
                                 name: format!("#{} · PR", issue.number),
                                 ok: false,
-                                detail: format!("提 PR 失败,活留在进行中可重试:{e}"),
+                                detail: format!("提 PR/MR 失败,活留在进行中可重试:{e}"),
                             });
                             false
                         }
@@ -6174,24 +6190,34 @@ impl App {
                     .get_project(issue.project_id)
                     .await?
                     .ok_or(AppError::NotFound)?;
-                let remote = proj.remote_path.trim().to_string();
-                if remote.is_empty() {
+                if proj.remote_path.trim().is_empty() {
                     return Err(AppError::Invalid(format!(
-                        "#{} 的项目未挂 GitHub 仓,无法 merge PR",
+                        "#{} 的项目未挂远端仓,无法 merge PR/MR",
                         issue.number
                     )));
                 }
-                // merge PR — the human验收 action, the ONLY place `gh pr merge`
-                // is ever called (never from any executor/run path; plan/13
-                // D3+D11).
-                if let Err(e) = bw_engine::github::merge_pr(&remote, issue.pr_number).await {
+                // merge PR/MR — the human验收 action, the ONLY place a merge is
+                // ever called (never from any executor/run path; plan/13
+                // D3+D11). Routed through the Remote factory (bug③ 2026-07-30):
+                // codehub projects merge via `codehub-cli mr merge`, github via
+                // `gh pr merge` — before this, MergeIssuePr crashed `gh pr
+                // merge` on codehub.
+                let merge_result = match bw_engine::remote::Remote::for_project(
+                    &proj.provider,
+                    &proj.remote_host,
+                    &proj.remote_path,
+                ) {
+                    Ok(r) => r.merge_mr(issue.pr_number).await,
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = merge_result {
                     // 绝不反向改写:a merge failure (including the drift case of
-                    // a PR already merged on the web) is only reflected — the
+                    // a PR/MR already merged on the web) is only reflected — the
                     // Issue stays InReview and retryable, nothing is settled.
                     self.emit(Event::ConnectorSynced {
                         name: format!("#{} · merge", issue.number),
                         ok: false,
-                        detail: format!("merge PR #{} 失败,活留在评审中:{e}", issue.pr_number),
+                        detail: format!("merge PR/MR #{} 失败,活留在评审中:{e}", issue.pr_number),
                     });
                     return Ok(());
                 }
@@ -6204,22 +6230,28 @@ impl App {
                     status: IssueStatus::Done,
                 }))
                 .await?;
-                // issue 关闭是 merge 的后果: `Closes #<n>` should have closed it;
-                // verify and补关 idempotently if GitHub didn't. Never reopen,
-                // never fight drift.
-                match bw_engine::github::issue_state(&remote, issue.github_number).await {
-                    Ok(state) if state.eq_ignore_ascii_case("OPEN") => {
-                        if let Err(e) =
-                            bw_engine::github::close_issue(&remote, issue.github_number).await
-                        {
-                            self.emit(Event::ConnectorSynced {
-                                name: format!("#{} · 关单", issue.number),
-                                ok: false,
-                                detail: format!("PR 已 merge,但补关 GitHub issue 失败:{e}"),
-                            });
+                // issue 关闭是 merge 的后果. github: `Closes #<n>` should have
+                // closed it; verify + 补关 idempotently if GitHub didn't.
+                // codehub: the MR's `--issue-nums` link closes the issue on
+                // merge — this gh-only补关 block is skipped (never reopen,
+                // never fight drift). Bug③: was unconditional → `gh issue`
+                // crashed on codehub; now github-only.
+                if matches!(proj.provider.as_str(), "github" | "") {
+                    let remote = proj.remote_path.trim().to_string();
+                    match bw_engine::github::issue_state(&remote, issue.github_number).await {
+                        Ok(state) if state.eq_ignore_ascii_case("OPEN") => {
+                            if let Err(e) =
+                                bw_engine::github::close_issue(&remote, issue.github_number).await
+                            {
+                                self.emit(Event::ConnectorSynced {
+                                    name: format!("#{} · 关单", issue.number),
+                                    ok: false,
+                                    detail: format!("PR 已 merge,但补关 GitHub issue 失败:{e}"),
+                                });
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
                 self.emit(Event::ConnectorSynced {
                     name: format!("#{} · 验收", issue.number),

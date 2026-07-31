@@ -14,6 +14,7 @@
 
 use crate::codehub::{self, CodehubError};
 use crate::github::{self, GithubError};
+use std::path::Path;
 use time::Date;
 
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +95,47 @@ impl Remote {
             Remote::Codehub { host, path } => {
                 Ok(codehub::collect_count(host, path, query, today).await?)
             }
+        }
+    }
+
+    /// Open a merge/pull request on the remote for the run's `bw/issue-<n>`
+    /// branch — the **return-path** counterpart of [`Self::create_issue`]:
+    /// stage + commit + push the run's edits, then open a PR (github) or MR
+    /// (codehub) a human later merges to reach `InReview`→`Done`. Github
+    /// delegates to [`github::open_pr`] (`Created`/`Adopted` preserved);
+    /// codehub shells `codehub-cli mr create` (`Created` only — no `Adopted`,
+    /// fails honestly if an MR already exists). **Never merges.**
+    ///
+    /// Bug③ (2026-07-30): before this, `run_issue_now` called
+    /// `github::open_pr` directly → `gh pr create` crashed on codehub remotes
+    /// (gh doesn't know codehub) → issue stuck `InProgress`, no `InReview`,
+    /// and the post-merge `SyncMetricsFile` never ran → trio metrics never
+    /// loaded. Routing through the factory makes codehub open a real MR.
+    pub async fn create_mr(
+        &self,
+        workspace: &Path,
+        issue_number: u32,
+        title: &str,
+    ) -> Result<github::PrOpened, RemoteError> {
+        match self {
+            Remote::Github(_) => Ok(github::open_pr(workspace, issue_number, title).await?),
+            Remote::Codehub { host, path } => {
+                Ok(codehub::create_mr(host, path, workspace, issue_number, title).await?)
+            }
+        }
+    }
+
+    /// Merge the open PR/MR — the **human验收** action (one-click merge → the
+    /// caller settles `Done`). Github: `gh pr merge --squash`; codehub:
+    /// `codehub-cli mr merge <iid> --squash -y`. On `Err` the Issue stays
+    /// `InReview` retryable — never fabricated, never reverse-settled. Only
+    /// ever called from `MergeIssuePr` (a human click), never from any
+    /// run/executor path. Bug③ (2026-07-30): before this, `MergeIssuePr`
+    /// crashed `gh pr merge` on codehub remotes.
+    pub async fn merge_mr(&self, pr_number: u32) -> Result<(), RemoteError> {
+        match self {
+            Remote::Github(r) => Ok(github::merge_pr(r, pr_number).await?),
+            Remote::Codehub { host, path } => Ok(codehub::merge_mr(host, path, pr_number).await?),
         }
     }
 }

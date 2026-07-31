@@ -140,6 +140,58 @@ pub async fn commit_file(
     }
 }
 
+/// Stage **all** of a run's edits on its work branch, commit them (idempotent
+/// — a clean tree left by an executor that committed its own work is *not* a
+/// failure), and push the branch to `origin` so a PR/MR can be opened on it.
+/// Shared by [`crate::github::open_pr`] and [`crate::codehub::create_mr`] so
+/// the F5 nothing-to-commit footgun (2026-07-24: 干净树被误判成「提交活分支
+/// 改动失败」,PR 环整段被卡死) lives in `stage_commit_push` (the older
+/// [`commit_file`] path still uses a pre-F5 stderr-only check — a known
+/// pre-existing gap, left untouched here). The commit is authored as the
+/// workbench; `issue_number` + `title` form its message (`issue #<n>:
+/// <title>`). Never merges — opening the PR/MR is the caller's next step.
+pub(crate) async fn stage_commit_push(
+    workspace: &Path,
+    branch: &str,
+    issue_number: u32,
+    title: &str,
+) -> Result<(), ProvisionError> {
+    git_in(workspace, &["add", "-A"]).await?;
+    let commit = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args([
+            "-c",
+            "user.name=Builders' Workbench",
+            "-c",
+            "user.email=workbench@local",
+            "commit",
+            "-qm",
+            &format!("issue #{issue_number}: {title}"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| ProvisionError::Git(e.to_string()))?;
+    if !commit.status.success() {
+        // git prints "nothing to commit, working tree clean" on STDOUT, not
+        // stderr — an executor that committed its own work leaves a clean
+        // tree, and that idempotent case must not read as a failure (F5).
+        let stderr = String::from_utf8_lossy(&commit.stderr);
+        let stdout = String::from_utf8_lossy(&commit.stdout);
+        let combined = format!("{stdout}\n{stderr}");
+        if !(combined.contains("nothing to commit") || combined.contains("no changes")) {
+            return Err(ProvisionError::Git(format!(
+                "提交活分支改动失败:{}",
+                combined.trim()
+            )));
+        }
+    }
+    git_in(workspace, &["push", "-u", "origin", branch]).await?;
+    Ok(())
+}
+
 /// Is this a workspace the workbench owns — i.e. it minted the repo and
 /// authored a root commit? Bound, pre-existing repos are never owned, so the
 /// workbench must not rewrite their files. False on any doubt (no `.git`, no
