@@ -79,7 +79,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
   - **codehub 录入却碰 github**(Q2,已修):Repo 卡 `platform` 默认 github + chip 一点就 fire `gh repo list` → codehub 用户没切平台就碰 github → **改** `ListGithubRepos` 从 chip 急触发改「↻ 刷新列表」按钮懒触发(codehub 用户根本不碰 github 块)。
   - **claude spawn "program not found"**:默认裸 `"claude"` → Windows Rust `Command::new` 不做 PATHEXT → os error 193 → **改**(不碰代码)设 `BW_CLAUDE_BIN=…\claude.exe`(持久 User env);config gap 非代码 bug。自动探测留后续。
   - **重复点「建立项目」非幂等**(Bug B,`1dbd76c`):confirm 按钮无 pending 守卫 → 多点建多套 trio + codehub 孤儿 issue → **改** confirm 起手置 `creating=true` 置灰「建立中…」,完成/失败后翻页/解禁。
-  - **auto-mint(clone 失败悄悄本地 mint 像接上了)**:**判断**对齐 github(Existing clone 失败 CompleteCreation 也 auto-mint 空项目)→ clone SSH 修好后非空不触发。真「失败就停」需持久化「尝试过远端」标志位 → ⚠ 长期 TODO,见 §4。
+  - **auto-mint(clone 失败悄悄本地 mint 像接上了)**:**判断**对齐 github(Existing clone 失败 CompleteCreation 也 auto-mint 空项目)→ clone SSH 修好后非空不触发。真「失败就停」需持久化「尝试过远端」标志位 → ⚠ 长期 TODO,见 §4.10。
 
 ### 步3·进 Op 侧边栏(看本项目有什么)
 
@@ -250,6 +250,9 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 ### 4.9 cron / workflow / connector(运行体系)定位 gap 搁置(指回 §3)
 - 和 skill/agent(方法文档,登记可见即完事)不同,这三者是**运行体系**(要 buddy 执行/调度),和 buddy 的 `cron_task`/`workflow_spec`/`connector` 表是两套执行模型。maas 的 `cron-registry.yaml`/`connectors/<system>_client.*`/`data-sources/*.yaml` 对不上 buddy 模型,**不硬塞**。**先打结搁置**:等 skill/agent 项目级登记跑通 + 归属反转线理清,再决定接不接(可能根本不接——maas 运行体系留给 maas,buddy 只看它跑得好不好)。
+
+### 4.10 auto-mint「失败就停」需持久化标志位(指回步2)
+- clone 失败时 buddy 悄悄本地 mint 一个空 workspace(像接上了)——对齐 github 行为(Existing clone 失败 CompleteCreation 也 auto-mint 空项目),clone SSH 修好后 workspace 非空不触发。真要做到「远端失败就停、不假接上」,需持久化「尝试过远端」标志位(当前无)。**决议:先不动**,记 TODO——低频(clone 修好后不中),等撞到再说。
 
 ### 待记(后续会话补)
 - _待补:绑数据(步6)实测 run 的读回证据 + collect_kind 四类实战填法(另一个窗口补)。_
