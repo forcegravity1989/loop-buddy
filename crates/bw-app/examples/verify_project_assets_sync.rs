@@ -35,10 +35,12 @@ async fn main() {
         .find(|c| c.kind == "git-repo" && c.project_id.is_some())
         .expect("no project-bound git-repo connector in this DB");
     let pid = git.project_id.unwrap();
+    println!("================ 渠道6 sync E2E ================");
     println!(
-        "================ 渠道6 sync E2E ================"
+        "git-repo connector: {} (project={})",
+        git.id.uuid(),
+        pid.uuid()
     );
-    println!("git-repo connector: {} (project={})", git.id.uuid(), pid.uuid());
 
     let before_skills = store.list_skills().await.unwrap();
     let before_owned = before_skills
@@ -52,7 +54,9 @@ async fn main() {
     // so by the time this returns the scan is done.
     match app.dispatch(Command::SyncConnector { id: git.id }).await {
         Ok(_) => {}
-        Err(e) => println!("SyncConnector returned error (probe may have failed; sync is best-effort): {e}"),
+        Err(e) => println!(
+            "SyncConnector returned error (probe may have failed; sync is best-effort): {e}"
+        ),
     }
 
     // Drain any pending events so the channel doesn't back up.
@@ -66,8 +70,14 @@ async fn main() {
 
     let skills = store.list_skills().await.unwrap();
     let agents = store.list_agents().await.unwrap();
-    let p_skills: Vec<_> = skills.iter().filter(|s| s.project_id == Some(pid)).collect();
-    let p_agents: Vec<_> = agents.iter().filter(|a| a.project_id == Some(pid)).collect();
+    let p_skills: Vec<_> = skills
+        .iter()
+        .filter(|s| s.project_id == Some(pid))
+        .collect();
+    let p_agents: Vec<_> = agents
+        .iter()
+        .filter(|a| a.project_id == Some(pid))
+        .collect();
     println!("after sync: project-owned skills = {}", p_skills.len());
     for s in &p_skills {
         println!("  skill: {} (source={:?})", s.name, s.source);
