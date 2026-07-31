@@ -92,6 +92,61 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - **syncable 漏认(已修+已验证)**:`connector_card`(ui/vm.rs:1373)`syncable` 只认 `git-repo`/`claude-cli`,**漏认 `github-repo`/`codehub-repo`** → 后两者被当"登记项·无真实探针"、无同步按钮、永远未连接。但 `probe_connector`(lib.rs:2277/2291)其实有 github/codehub 真探针(`gh repo view`/`codehub-cli project view`)。kind+探针加了、UI syncable 没跟上——codehub/github 特性漏改。**已修**:syncable match 补认两 kind。**已 live 验证**:CodeHub 连接器出「立即同步」按钮、点后探活翻已连接。
 - **zombie exe 坑(env,非 buddy 代码)**:TaskStop 杀 `cargo run -p app-desktop` 父进程后,子 `builders-workbench.exe` **可能不死**(锁住 `target/debug/builders-workbench.exe`)→ 下次 `cargo run` rebuild 报 `failed to remove file ... 拒绝访问 (os error 5)`。修法:`taskkill //F //IM builders-workbench.exe` 显式杀 exe 再 rebuild。
 
+### 2026-07-30 · 竞品分析真跑 → 两个 bug 现形(UI 冻死 + 联网墙复现)
+
+> 真实 codehub 项目 maas-locate 上单次点「▶ 跑」的实测。读回为证(DB=`…/BuildersWorkbench/workbench.db`)。本轮只取证 + 落 PRACTICE,**不改代码**。
+> 注:PR #67(skill 标准 v1)已合入,未碰 `bw-engine`/`kernel.rs`/`claude_cli.rs`(step1 窗口已核 + 本窗 git 侧证实),本块冻死链路/联网墙结论不受影响。
+
+- **你做**:issues 面板 →「竞品分析」卡(codehub iid 31)→ 点「▶ 跑」。
+- **后台真干啥(读回)**:
+  - 竞品分析 issue `backlog → in_progress`(状态机起手转移)。
+  - `workflow_run` 落新行 `000f3fb2…` 状态 `running`;`params_json` = `force_mock:false`(真执行器非 mock)、`allowed_tools_arg:Bash`(只给了 Bash,**没给联网工具**)、5 阶段(证据/洞察/假设/原型/验证)、`max_iter 3 retries 1`。
+  - 执行器 spawn 真 `claude.exe`(父进程 = builders-workbench),在工作区目录里跑,带 `--permission-mode acceptEdits --allowedTools Bash`,预算封顶 $1000 往上烧。
+  - 工作区 git 干净、**没冒 `docs/competitive-analysis.md`**——run 卡在头几阶段(「证据」阶段联网检索被拒、反复重试空转)。
+- **🐞 bug①·界面冻死(新,比联网墙更要先修)**:点完跑,侧边栏冒出「竞品分析 进行中」一帧,然后**整个界面卡死**,后续点啥都没反应。根因:buddy 的「大脑」跑在**一条单线程**上(`kernel.rs:479` 故意只用一个线程——App 状态单线程独占);主循环里 `kernel.rs:641` 那行 `app.dispatch(cmd).await` 会**一直等到整件事干完才返回**,而 RunIssue 最长 30 分钟。期间 UI 后续点的按钮全堆通道里没人取 → 界面拿不到新状态 → 冻死;定时调度也停。执行器本身是异步的(`claude_cli.rs:231` 用 `tokio::process`),所以进度 toast 理论上能在 await 点流出,但**驱动列表/状态/导航的 Vm 只在 dispatch 返回后重发**(`kernel.rs:644`)→ 视觉上就是冻死。`kernel.rs:627-633` 注释自己也承认「App 单线程独占,只能 select 交错,不能 spawn 独立 task」——这就是代价。**这不是 GLM 的锅,是 buddy 自己的架构问题。**
+- **🐞 bug②·联网墙(Bug A 复现,预期内)**:真执行器只给 Bash、没给联网工具,claude 在「检索被拒→硬编」里空转烧预算——和 §6.3 钉的根因一致,这次用真实 codehub 项目复现了一遍(不是 mock、不是猜测)。
+- **处置**:杀掉 buddy 起的那个 claude 子进程(**只杀父进程=builders-workbench 的那个,不动别的 Claude 会话**——用 `Get-CimInstance Win32_Process` 查 ParentProcessId 精确定位,别裸 `taskkill claude.exe` 误杀)。杀完 run 结算 `failed`,error = `executor failed: claude CLI exited with exit code: 0xffffffff`(这是杀进程造成的 exit code,不是自然报错;自然报错应是「烧到封顶」或冒幻觉报告)。竞品分析 issue 停 `in_progress`、`settled_at` 空——**没自动 Done,铁律守住**,可重试。界面解冻。
+- **决议**:**先修 bug①(界面冻死)**——不修它,根本没法在 UI 里驱动小队(一跑就冻)。bug② 联网墙留 §6.3 待定,bug① 修好后再回头调(到时界面不冻了才能在 UI 里观察 bug② 的真实终端报错)。
+
+### 2026-07-30 · 找指标 run 实跑全链路(读回为证)+ 三个 bug 现形
+
+> 真实 codehub 项目 maas-locate 上单次点「▶ 跑」找指标卡(north-star-discovery,不联网)。run `ok`(约 21 分钟,7 commit)。DB=`…/BuildersWorkbench/workbench.db`、工作区=`…/workspaces/maas-locate-cce215a7`、分支 `bw/issue-32`。
+
+**跑通的(成功):**
+- ✅ **联网墙绕开**:north-star-discovery 不联网,只用 Read/Write/Bash;`--allowedTools Bash` + acceptEdits 下 **Read/Write 真能写文件**(不是只有 Bash)——这道工具白名单墙没中,bug② 对不联网技能不成立。
+- ✅ **agent 真出活**:产出 `.bw/metrics.toml`(机读指标定义:北极星=定界结论采纳率 manual + 滞后未采纳率/闭环时长)+ `docs/metrics-rationale.md`(11.7KB 推导)+ `evidence/insights/hypothesis/validation/competitive-analysis(Path B)`;agent 自己 git commit 7 个(规范信息带技能名+issue 号),分支 push 到 codehub(`origin/bw/issue-32`)。
+- ✅ **message 落账是通的(更正早前过早结论)**:我 run 中途查 session 0 message,以为是 bug;**run 跑完后 session `#2 找指标` 有 5 条 message**(每阶段一条 agent 自述)。所以 message 表是按 phase 完成增量落账的,不是不落账——只是 run 期间(界面冻死)看不到增量。
+
+**三个 bug/Gap 现形:**
+- 🐞 **bug① 冻死(已知,坐实)**:run 期间界面整场冻死 ~21 分钟。根因 `Command::RunIssue` handler(`lib.rs:4948-4950`)直接 `self.run_issue_now().await`、没 `tokio::spawn` 甩后台;`run_issue_now` 是 `&mut self`,整段(含 spawn claude + 等输出,最长 30 分钟)内联在 kernel 单线程命令循环 `app.dispatch(cmd).await`(`kernel.rs:641`)里,循环一卡、Vm 不重发(`kernel.rs:644` 只在 dispatch 返回后发)→ 界面冻死。**反证它不该这样**:run 中段(真长的 claude spawn)其实只用共享借用(`lib.rs:1457` 注释「never &mut self」),不需要独占 App——冻死是「连不需要 &mut 的 IO 段也内联占着」造成,不是单线程 App 设计的必然代价。修法:把 run 的 IO 段甩出去、起手/收尾回 kernel 线程改状态;拦路虎是 App 单线程独占非 Arc<Mutex>(`kernel.rs:627`)。**>2 行,留下一棒**。
+- 🐞 **bug③ codehub MR 回流断(新)**:run `ok` 但 issue 卡 `in_progress`、pr_number=0、没推 InReview。根因:`github::open_pr`(`bw-engine/src/github.rs:474`)干 `git add -A + commit + push + gh pr create`;对 codehub,push(SSH)成功 → 分支上 codehub,但 **`gh pr create` 失败**(gh 不认 codehub)→ open_pr 返 Err → 没回写 pr_number、没 InReview(`lib.rs:3391 opened_pr=false`)。UI toast 如实报「🔌 #2 · PR 同步 ✕ · 提 PR 失败,活留在进行中可重试:gh 未安装或不在 PATH」。**为什么 step1 工厂改造漏了它**:`Remote` 工厂(`bw-engine/src/remote.rs`)只有 `for_project`/`probe`/`create_issue`/`collect_count` 4 个方法,**没有 `open_pr`/`create_mr`**——MR 回流是老的 `bw_engine::github::open_pr` 直接调(`lib.rs:3339`),从没折进工厂;step1 范围是 clone+project+connector+issue 同步(全「出」方向),MR「回」方向不在范围。修法:给 `Remote` 加 `create_mr`,codehub arm 走 `codehub-cli mr create`(对称 `gh pr create`)。
+- 🐞 **bug⑤ 发送框是 mock 占位(新,留白)**:工作流面板下面那个发送框 = `Command::SendSessionMessage`(`lib.rs:791`),handler(`lib.rs:6297`)只把你的话存进 session 然后回写死的 `【mock】已收到:{text}`——注释明说「真 agent 回复走 Tier C,未实现」。**所以「跟 agent 对话调整指标」没建**:run 本身是 `claude -p --no-session-persistence` 每阶段一次性调用、无持久对话,没有「同一上下文」可续;要 agent 重调得重新 RunIssue(retry 一次性新调用)。如实标注的留白(带【mock】),不是坏。
+
+**认知(三件套流水线 + 监控时机)**:找指标只「定义」指标(写 `.bw/metrics.toml`,大部分 manual 因 codehub 远端+评估器留白采不到);**真监控在绑数据之后**——绑数据给每条指标接点亮路径、cron/连接器采 → observation → recompute_signals → 健康灯亮。找指标跑完 ≠ 开始监控。北极星(采纳率)是 manual,只能人定期填亮,这诚实。
+
+### 2026-07-31 · bug③ 修复(codehub PR/MR 全生命周期)+ UI + 新发现
+
+> bug③ = codehub MR 回流断(`github::open_pr`/`merge_pr` 写死 gh,codehub 上 gh 失败 → issue 卡 InProgress、走不到 InReview、SyncMetricsFile 不跑、trio 指标不进表)。**已修+提交 `0c70775`**。读回为证:烟测 `codehub-cli mr create` 真开 MR(iid 11/12),`merge_mr` 真打到 codehub 拿真实 403(证明命令对)。
+
+**修了什么(7 文件):**
+- `Remote` 工厂加 `create_mr`(github 透传 `open_pr` / codehub `codehub-cli mr create --source-branch --target-branch <动态取> --issue-nums issue<n> --jq .iid`)+ `merge_mr`(github `gh pr merge` / codehub `codehub-cli mr merge <iid> --squash -y`);codehub `create_mr` 加 **Adopted**(`mr list --source-branch` 认领已存在 MR,parity github 的 `adopt_existing_pr`)。
+- 抽 `workspace::stage_commit_push`(add+幂等 commit+push,F5 逻辑一份),`open_pr` 与 `codehub::create_mr` 共用,不复制踩 F5 坑。
+- `run_issue_now` / `MergeIssuePr` 收尾改走 Remote 工厂;`MergeIssuePr` 的 gh issue 补关 gate 到 github provider(codehub 用 `--issue-nums` 关联,merge 自动关单)。
+- **UI**:`OpVm` 加 `provider`;issue 卡 issue 地址 + PR 号改 provider-aware 可点击 link(codehub `{host}/{path}/issues`|`/-/merge_requests`,github `github.com/...`),不再写死 `github.com` 裸 URL(`op.rs` 旧代码硬编 github URL + 纯文本无 link)。
+
+**实践操作(对账让找指标/绑数据走到 InReview,绕开 bug① 冻死):**
+- 找指标(#32)烟测时已建 codehub MR 11;绑数据(#33)无 MR → 手动 `codehub-cli mr create` 建 MR 12(同 create_mr 命令)。
+- 停 app → `sqlite3` 对账:`UPDATE issue SET pr_number=11/12, status='in_review'`(诚实:MR 真存在,legal 转移 in_progress→in_review)→ 重编重启 app → 两张卡显 InReview + merge 按钮。
+- **背后**:这是「手动对账」快捷路径,避 bug① 的 20min retry 冻死;正路是 retry(等 bug① 修好),retry 会走 create_mr/Adopted 自动建/认领 MR。
+
+**新发现(不是 bug③ 的 bug,是治理/工作流/UI):**
+- 🐞 **UI① issue 卡 issue 地址写死 `github.com` + 裸 URL**:已修(provider-aware link)。codehub issue URL = `https://{host}/{path}/issues/{iid}`(实测 issue_link)。
+- 🐞 **UI② PR #N 纯文本无 link**:已修(link 到 `/-/merge_requests/{iid}`)。
+- ⚠️ **merge 403 不是 buddy bug**:`merge_mr` 命令对(`codehub-cli mr merge 11 --squash -y` 真打 codehub 拿 403「target branch is protected, you do not have MERGE permission」)——是 maas master 保护分支 + CLI token 无 merge 权限的治理问题。buddy 如实报错、issue 留 InReview 可重试。解法在 codehub 侧:网页有权限账号 merge / 解保 master / target 真实开发分支(`a_develop`)。
+- 🐞 **④ 两个 MR 内容重叠(工作流)**:三件套是流水线(绑数据读找指标产出),但**并行跑了**找指标+绑数据(都从 master 出分支、都改 `.bw/metrics.toml`)→ MR 冲突。正路串行:先 merge 找指标,master 拿到 metrics.toml,再跑绑数据。buddy 没强制依赖 + 没 worktree 隔离(我以为开发搞了 worktree 隔离,实际没有——run 共用一个 workspace 目录)。**归类 bug① 窗口一起看**(见 §6.7)。
+
+**验证状态**:烟测 + 编译门禁全绿;完整 buddy retry E2E 延后(撞 bug①);UI fix 待 app 重编重启后看(link 是否对、跳不跳)。
+
 ---
 
 ## 3. 正式怎么用:每步操作后 buddy 干了什么 + 能看到啥
@@ -134,6 +189,20 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
   3. 跑完推到 `InReview`;**Done 永远由你点**(铁律)。
 - 看到:issue 状态 → InReview(或预算超了停在 `in_progress` 可重试);工作区里 agent 留的真改动。
 - 前提:`BW_CLAUDE_BIN` 配对 + **权限给够**(web_search 要预批或用 bypassPermissions)+ 预算够这活。竞品分析要联网检索,acceptEdits 下 web_search 被拒 → 烧预算空转(见 §4 实测)。
+
+### 2026-07-30 实测·竞品分析真跑(maas-locate,读回为证)
+
+> 单次点「▶ 跑」的真实记录,不是创建流 run_first、不是 mock。**结论:当前别在 UI 里点真 run——会冻死(见 §2 bug①)。**
+
+- **你做**:issues 面板 →「竞品分析」卡 → 点「▶ 跑」。
+- **buddy 后台干了啥(可看见)**:
+  1. 起一个新 session(标题带「竞品分析」),侧边栏冒一行「进行中」——这是 run 起手推出去的**最后一帧 Vm**,之后就再没新帧。
+  2. issue 状态 `backlog → in_progress`;`workflow_run` 表落一行 `running`(params:`force_mock:false`、`allowed_tools_arg:Bash`、5 阶段)。
+  3. spawn 真 `claude.exe`(在工作区目录里),把竞品分析技能正文 + 项目意图喂给它,`--allowedTools Bash`、预算封顶 $1000、`acceptEdits`。
+  4. claude 在工作区干活——但联网检索被拒,空转烧预算,没产出文件。
+- **你看到啥**:侧边栏「竞品分析 进行中」一帧 → **整个界面冻死**(后续点啥都没反应)。没有 toast、没有 PR、没有 InReview。
+- **杀 claude 后**:run 结算 `failed`;issue 停 `in_progress` 可重试;界面解冻。
+- **结论**:「点跑 → 界面冻死」是当前确定行为,根因 §2 bug①(单线程命令循环被长 run 阻塞)。bug① 修好前,要复现/调 bug② 得走 headless(example),别在 UI 里点。
 
 ### 创建后 Op 侧边栏:看到啥 + 为什么 + 各干啥(maas-locate 实测)
 
@@ -200,6 +269,13 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 **Q4 · hub vs Op 边界(认知 + GAP,待理清)**:实际设计——**Hub=全局库**(skills/agents/workflows/cron/connectors/knowledge_sources,公共可浏览);**Op=活跃项目的运营面**(本项目的 stages/issues/metrics + connectors 只读卡)。实体有 `project_id`(可空):NULL=全局,set=项目级。plan/09 §墙B 明说"Hub 全局视图、复制共享等全量归属反转**不在本次**"——即"项目级的东西完全在 Op 管、Hub 只留全局"这个反转未做。**缝点**:连接器是项目级数据,但它的管理动作(同步)在 Hub 而非 Op——这是用户在 Op 找不到同步按钮的原因。用户心智模型(hub=公共库、op=本项目操作闭环)与设计意图一致;差异在连接器这个项目级实体的动作位置。**待决定**:要不要把本项目连接器的同步动作挪到 Op(项目闭环),Hub 只留全局库浏览。
 
+### 2026-07-30 · UI 冻死根因钉死(归正旧猜)+ 杀进程验证
+
+- **归正**:§4 2026-07-29 块对冻死的猜是「多次连点 → 多个 CompleteCreation 并发 spawn → 内核线程被占窗口内堵」。**今天单次点「▶ 跑」(非创建流、非连点)照样冻死** → 推翻「多连点」假设。真根因:**任意长 RunIssue 都会冻**——`app.dispatch(cmd).await`(`kernel.rs:641`)内联在单线程命令循环里,run 不返回循环就不转,UI 状态一帧不更新。多连点只是让事情更早发生,不是根因。
+- **执行器是异步的**(`claude_cli.rs:231` `tokio::process`),所以进度 toast 理论上能在 await 点流出;但驱动界面列表/状态/导航的 Vm 只在 dispatch 返回后重发(`kernel.rs:644`)→ 视觉上=冻死。buddy 进程仍标 `Responding=True`(Windows 还能回消息),但画面不动、输入不响应。
+- **杀进程验证(证明冻死=等 run 返回,不是死锁)**:精确定位父进程=builders-workbench 的 claude 子进程(`Get-CimInstance Win32_Process` 查 ParentProcessId,别裸 `taskkill claude.exe` 误杀别的会话)→ `Stop-Process -Id <pid> -Force` → spawn future 返回(exit `0xffffffff`)→ run 结算 `failed` → 循环解冻、界面能动。**没自动 Done**(`settled_at` 空,铁律守住)。
+- **修法方向(待定,本轮不动)**:RunIssue 得甩后台 detached,但 `&mut App` 单线程独占是拦路虎(`kernel.rs:627` 注释点明「不能 spawn 独立 task」);退一步,Vm 在 run 期间按事件/定时重发也能解冻视觉。**>2 行,设计决定,留下一棒**。先修它,再回头调 bug② 联网墙(界面不冻了才能在 UI 里观察 bug② 的真实终端报错)。
+
 ### 待记(后续会话补)
 
 - _待记:步3 agent 真跑——权限修好后(bypassPermissions / WebSearch 预批)竞品分析能不能真联网出报告 + 产出 PR?_
@@ -259,7 +335,17 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 ### 6.3 Bug A(竞品分析跑不动)修法
 
-- 真根因 = GLM 网关不支持内置 web 工具 + glm-5.2 不老实降级、烧预算到 $0.5。修法待定(诚实降级 prompt 硬停止 / 接 web-access skill / 换真 Anthropic 端点)。**留到实践「竞品分析」卡时再调**(AI 小队调试不在创建阶段)。权限没修前别重跑竞品分析——重跑只会烧更多钱 / 产出空报告。
+- 真根因 = GLM 网关不支持内置 web 工具 + glm-5.2 不老实降级、烧预算到 $0.5。修法待定(诚实降级 prompt 硬停止 / 接 web-access skill / 换真 Anthropic 端点)。
+- **【2026-07-30 归正·已实践】**:今天在真实 codehub 项目 maas-locate 上单次点「▶ 跑」复现了 bug②(联网墙:真执行器只给 Bash、没给联网工具,claude 空转烧预算,见 §2)。但实践暴露出**更该先修的 bug①(界面冻死)**:单次 RunIssue 就把单线程命令循环堵死、UI 冻死(根因 §2/§4 钉死)。**bug① 不修,根本没法在 UI 里驱动小队,也观察不到 bug② 的真实终端报错**。所以顺序调:**先修 bug① 冻死,再回头调 bug② 联网墙**。bug② 修法仍待定,但要在 bug① 修好后、界面不冻时,才能在 UI 里真跑观察终端报错(烧到封顶 / 冒幻觉报告)来定方案。
+- 权限没修前别在 UI 里重跑竞品分析——会冻死 + 烧预算空转。要复现走 headless example。
+- **【2026-07-30 决议·绕法 + 跳过】**:竞品分析模块**暂时跳过**,不碰原竞品分析技能(它的联网墙留 bug② 待定)。绕法已想清(暂不实施):用「项目集自身技能」——在 Hub 技能屏用 `CreateSkill` 建一个「不联网版」竞品分析技能(人喂对标材料 + agent 整理成报告,只用 Read/Write/Bash)→ 建新 issue 时「关联技能」选它 → 跑。这样绕开联网墙。**注意:不能改已 seed 的竞品分析卡的技能**——没有 `UpdateIssue` 命令,「关联技能」下拉只在 `CreateIssue` 表单里(见 §6.6 GAP)。所以真要做竞品分析,得建新卡绑新技能,不是改老卡。
+- **实践顺序调整**:先在**不联网**的 `找指标`(north-star-discovery)卡上练「issue 处理 + 驱动 AI + 界面显示」全链路——它只读项目意图 + 工作区文件、写 `docs/metrics-rationale.md`,不碰 web,天然绕开 bug②。bug①(冻死)仍会中,但短 run 冻的时间短。跑通后再回头处理竞品分析(走上面的绕法)和 bug① 修法。
+
+### 6.6 issue 技能绑死·无 UpdateIssue 命令(GAP,2026-07-30)
+
+- **现状**:issue 的 `standard_skill` 在 `CreateIssue` 时一次性写入(`lib.rs:752`),之后**没有命令改**——Command 枚举里 issue 变更只有 `CreateIssue`/`TransitionIssue`/`AssignIssue`/`BlockIssue`/`MergeIssuePr`/`RefreshIssues`,无 `UpdateIssue`/`SetIssueSkill`。UI「关联技能」下拉只在建新 issue 的表单里(`op.rs:704`)。
+- **影响**:seed 出来的三件套卡(竞品分析/找指标/绑数据)技能绑死后改不了;想给已有 issue 换技能(如把竞品分析换成不联网版)做不到,只能建新卡。
+- **决议:先不动,记 GAP**。当前实践用建新卡绑新技能绕;要不要加 `UpdateIssue` 命令留后续(和「issue 卡是 buddy 工作单元」的设计命题相关,别轻改)。
 
 ### 6.4 issue 看板要不要从仓库取(2026-07-29 困惑)
 
@@ -272,3 +358,12 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - **现状**:连接器状态 Connected/Syncing/Error/**Disconnected**(model.rs:1797-1800);新建默认 Disconnected。翻成"已连接"要 `SyncConnector` 真探针(`codehub-cli project view`/`gh repo view`)跑过(lib.rs:4495-4500),由 cron collect_metrics 或手动同步触发。刚建完没同步 → 显示"未连接"。**不是坏了**。
 - **作用**:代码仓(git-repo)= 本地工作区 git,供版本日志/变更对比/推送;CodeHub(codehub-repo)= codehub 远端,供 issue/MR 计数采集。
 - **已改(2026-07-30)**:CompleteCreation 末尾对建完的项目连接器就地 `probe_connector` 一遍——git-repo 顺带喂工作区指标(commits/docs)、codehub/github-repo 翻 Connected。用户建完项目即健康 + 即有工作区数据,不用再去 Hub 点「立即同步」(Hub 的同步留作后续手动刷新)。探活失败软降级留 Error,不倒灌创建。过门禁,**待 live 验证**(下次创建项目看连接器是否自动 Connected、工作区指标是否当场点亮)。
+
+### 6.7 并行 run 不支持 + 无 worktree 隔离(2026-07-31,归类 bug① 窗口)
+
+- **发现**:跑找指标+绑数据两件活,两个 MR(bw/issue-32 / bw/issue-33)内容大量重叠——都从 master 出分支、都改 `.bw/metrics.toml`。根因:**run 共用一个 workspace 目录、无 worktree 隔离**;三件套是流水线(绑数据读找指标产出)但没强制串行,并行跑就互相踩。
+- **以为开发搞了 worktree 隔离,实际没有**——每个 issue 的 run 在同一个 `workspaces/<project>-<id>` 目录里干活、切 `bw/issue-<n>` 分支,分支隔离了 commit 但**工作区文件不隔离**(找指标写的 metrics.toml 留在工作区,绑数据接着改 → 两个分支的 diff 都含对 metrics.toml 的改动 → MR 重叠)。
+- **与 bug① 同源**:bug① = 单线程命令循环内联 await 堵死 UI;这条 = 单 workspace 无隔离导致并行 run 互相踩。**两件都在「run 调度」层**,归类 bug① 窗口一起设计:甩后台 + worktree-per-run 隔离 + (可选)三件套串行依赖。
+
+**给 bug① 窗口的 prompt(可直接粘过去):**
+> 在 buddy(loop-buddy 仓)修 bug①「RunIssue 内联 await 堵死单线程 UI」时,一并看这个同源问题:run 共用一个 workspace 目录、无 worktree-per-run 隔离,导致并行/连续跑多个 issue(如三件套 找指标→绑数据)时 MR 内容重叠(都从 master 出分支、都改同一文件)。请一起设计:① RunIssue 甩后台 detached(解冻 UI,根因见 PRACTICE §2 bug① + §4「UI 冻死根因钉死」);② 每个 run 用独立 git worktree 隔离(`git worktree add` per issue,不在主 workspace 切分支);③ 三件套串行依赖(绑数据要求找指标先 merge)要不要在状态机/调度层强制——待实践定,别基于猜测改设计。codehub PR 回流(create_mr/merge_mr/Adopted)已在 `0c70775` 修好,本窗口不用重做;只看 run 调度层。背景见 `iterations/PRACTICE-buddy.md` §2(2026-07-31 块)+ §6.7。
