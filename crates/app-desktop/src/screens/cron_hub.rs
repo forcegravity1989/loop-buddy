@@ -384,7 +384,7 @@ fn CreateCronForm(hub: HubVm, projects: Vec<ProjectCardVm>, on_done: EventHandle
                         }
                         if picker_open() {
                             SkillPicker {
-                                skills: hub.skills.clone(),
+                                skills: hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect(),
                                 on_pick: move |s: SkillCardVm| {
                                     picked_skill.set(Some(s));
                                     picker_open.set(false);

@@ -172,6 +172,10 @@ pub struct OpVm {
     /// only workspace, or the GitHub attach attempt failed and soft-degraded).
     pub remote_path: String,
     pub remote_host: String,
+    /// `"github"` / `"codehub"` — drives provider-aware remote links in the
+    /// issue board (issue/MR web URLs) so a codehub project doesn't show a
+    /// hardcoded `github.com` link. Empty = legacy default (treated as github).
+    pub provider: String,
     pub panel: Panel,
     pub scope: Scope,
     pub nav: Vec<StageNavItemVm>,
@@ -1098,6 +1102,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         allow_commands: row.allow_commands,
         remote_path: row.remote_path.clone(),
         remote_host: row.remote_host.clone(),
+        provider: row.provider.clone(),
         panel: state.panel,
         scope: state.scope,
         nav: stage_nav(&stage_sigs, &session_flags),

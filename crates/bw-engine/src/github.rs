@@ -2,7 +2,7 @@
 //! subprocess pattern `workspace.rs` uses for local git. Relies entirely on
 //! the user's own `gh auth login` on this machine; no token handling here.
 
-use crate::workspace::{commit_initial, git_in};
+use crate::workspace::{commit_initial, git_in, stage_commit_push};
 use std::path::Path;
 use std::process::Stdio;
 use time::Date;
@@ -477,49 +477,14 @@ pub async fn open_pr(
     title: &str,
 ) -> Result<PrOpened, GithubError> {
     let branch = issue_branch(github_number);
-    // Stage + commit the run's edits. The executor may have left a dirty tree
-    // (the common `acceptEdits` case) or committed itself; either way this
-    // makes the branch carry a real, mergeable diff. "nothing to commit" is the
-    // idempotent already-committed case, not a failure.
-    git_in(workspace, &["add", "-A"])
+    // Stage + commit + push the run's edits on the Issue branch. The executor
+    // may have left a dirty tree (the common `acceptEdits` case) or committed
+    // itself; either way this makes the branch carry a real, mergeable diff.
+    // "nothing to commit" is the idempotent already-committed case, not a
+    // failure (F5 logic lives in `stage_commit_push`, shared with codehub).
+    stage_commit_push(workspace, &branch, github_number, title)
         .await
-        .map_err(|e| git_err("暂存活分支改动失败", e))?;
-    let commit = tokio::process::Command::new("git")
-        .current_dir(workspace)
-        .args([
-            "-c",
-            "user.name=Builders' Workbench",
-            "-c",
-            "user.email=workbench@local",
-            "commit",
-            "-qm",
-            &format!("issue #{github_number}: {title}"),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(spawn_err)?;
-    if !commit.status.success() {
-        // git prints "nothing to commit, working tree clean" on STDOUT, not
-        // stderr — an executor that committed its own work leaves a clean
-        // tree, and that idempotent case must not read as a failure
-        // (F5, 2026-07-24 首次全真闭环践行实测:干净树被误判成
-        // 「提交活分支改动失败:<空>」,PR 环整段被卡死).
-        let stderr = String::from_utf8_lossy(&commit.stderr);
-        let stdout = String::from_utf8_lossy(&commit.stdout);
-        let combined = format!("{stdout}\n{stderr}");
-        if !(combined.contains("nothing to commit") || combined.contains("no changes")) {
-            return Err(GithubError::Command(format!(
-                "提交活分支改动失败:{}",
-                combined.trim()
-            )));
-        }
-    }
-    git_in(workspace, &["push", "-u", "origin", &branch])
-        .await
-        .map_err(|e| git_err("推送活分支失败", e))?;
+        .map_err(|e| git_err("暂存/提交/推送活分支失败", e))?;
     // gh infers the base repo + default base branch from the origin remote in
     // `workspace`; `Closes #<n>` in the body is what auto-closes the Issue on
     // merge (D3: issue 关闭是 merge 的后果).

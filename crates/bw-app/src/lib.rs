@@ -33,8 +33,9 @@ use bw_core::model::{
     ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus,
     KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, PhaseRole, Readiness,
     RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, Verdict,
-    WorkflowKind, WorkflowSpec, BW_STANDARD_LIBRARY, CONNECTOR_KIND_CLAUDE_CLI,
-    CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO, CONNECTOR_KIND_GIT_REPO,
+    WorkflowKind, WorkflowSpec, BW_PROJECT_ASSETS_LIBRARY, BW_STANDARD_LIBRARY,
+    CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO,
+    CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
@@ -2298,6 +2299,7 @@ impl App {
                         // value really changed — no observation spam).
                         if let Some(p) = c.project_id {
                             self.feed_workspace_metrics(p, &ev).await?;
+                            self.sync_project_assets(p, &workspace).await;
                         }
                         Ok((
                             true,
@@ -2360,6 +2362,137 @@ impl App {
                 "连接器类型「{other}」没有真实探针——不支持同步(诚实拒绝,不伪造状态)"
             ))),
         }
+    }
+
+    /// plan/渠道6 · sync a project's own `skills/` + `agents/` from its
+    /// workspace into the hub as 种A (registered-visible, never injected).
+    /// Re-scanned on every git-repo connector probe (build-time probe-at-
+    /// creation + manual「立即同步」). 项目仓是正本, buddy DB is a mirror, so
+    /// this is a **full rebuild** of the project's project-assets batch:
+    /// delete the existing batch then re-import everything on disk. The
+    /// delete gate is `project_id == project && source.is_project_assets()`
+    /// — never touches distilled `SelfBuilt` rows or global libraries.
+    ///
+    /// 种A rows have no consumers (excluded from every injection picker via
+    /// `is_project_assets`) and `uses`/`runs` stay 0, so the id churn from
+    /// delete+recreate is harmless. Soft-degrade: every store error is
+    /// logged to stderr (`[BW]`) and swallowed — scanning skills is a side-
+    /// product of the connector probe and must never block the主功能 (git
+    /// evidence + workspace metrics). A missing `skills/`/`agents/` dir is a
+    /// normal empty scan, not an error.
+    async fn sync_project_assets(&mut self, project: ProjectId, workspace: &str) {
+        let source = HubSource::Official {
+            official_library: BW_PROJECT_ASSETS_LIBRARY.to_string(),
+        };
+
+        // ── skills: full rebuild (delete the project-assets batch, re-import scanned) ──
+        // `import_skill_package` (not `create_skill`) so the folder's support
+        // files land in `skill_file` too — `create_skill` would drop the file
+        // tree. Maas skills carry references/scripts/knowledge dirs.
+        let scanned_skills = skill_import::scan_project_skills_dir(workspace);
+        let existing_skills: Vec<SkillCard> = match self.store.list_skills().await {
+            Ok(all) => all
+                .into_iter()
+                .filter(|s| s.project_id == Some(project) && s.source.is_project_assets())
+                .collect(),
+            Err(e) => {
+                eprintln!("[BW] sync_project_assets: list_skills 失败,跳过 skill 同步:{e}");
+                return;
+            }
+        };
+        for s in &existing_skills {
+            if let Err(e) = self.store.delete_skill(s.id).await {
+                eprintln!(
+                    "[BW] sync_project_assets: delete_skill「{}」失败:{e}",
+                    s.name
+                );
+            }
+        }
+        for pkg in &scanned_skills {
+            if let Err(e) = self
+                .store
+                .import_skill_package(
+                    NewSkill {
+                        id: SkillId::new(),
+                        name: pkg.name.clone(),
+                        // 同 ImportSkillPackage:外部资产,成熟度由本地真实使用派生,不从外部声誉继承。
+                        maturity: Maturity::Fresh,
+                        desc: pkg.desc.clone(),
+                        category: String::new(),
+                        stage_ref: None,
+                        source: source.clone(),
+                        content: pkg.content.clone(),
+                        project_id: Some(project),
+                    },
+                    pkg.files
+                        .iter()
+                        .map(|(rel_path, content)| NewSkillFile {
+                            rel_path: rel_path.clone(),
+                            content: content.clone(),
+                        })
+                        .collect(),
+                )
+                .await
+            {
+                eprintln!(
+                    "[BW] sync_project_assets: import skill「{}」失败:{e}",
+                    pkg.name
+                );
+            }
+        }
+
+        // ── agents: full rebuild (single AGENT.md files, no skill_file equivalent) ──
+        let scanned_agents = agent_import::scan_project_agents_dir(workspace);
+        let existing_agents: Vec<AgentCard> = self
+            .store
+            .list_agents()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.project_id == Some(project) && a.source.is_project_assets())
+            .collect();
+        for a in &existing_agents {
+            if let Err(e) = self.store.delete_agent(a.id).await {
+                eprintln!(
+                    "[BW] sync_project_assets: delete_agent「{}」失败:{e}",
+                    a.name
+                );
+            }
+        }
+        for def in &scanned_agents {
+            if let Err(e) = self
+                .store
+                .create_agent(NewAgent {
+                    id: AgentId::new(),
+                    name: def.name.clone(),
+                    role: def.description.clone(),
+                    stage_ref: None,
+                    maturity: Maturity::Fresh,
+                    skills: Vec::new(),
+                    model: def.model.clone(),
+                    instructions: def.instructions.clone(),
+                    tools: def.tools.clone(),
+                    agent_cli: "claude-code".to_string(),
+                    source: source.clone(),
+                    project_id: Some(project),
+                })
+                .await
+            {
+                eprintln!(
+                    "[BW] sync_project_assets: create_agent「{}」失败:{e}",
+                    def.name
+                );
+            }
+        }
+
+        if let Err(e) = self.refresh_skills().await {
+            eprintln!("[BW] sync_project_assets: refresh_skills 失败:{e}");
+        }
+        if let Err(e) = self.refresh_agents().await {
+            eprintln!("[BW] sync_project_assets: refresh_agents 失败:{e}");
+        }
+        self.emit(Event::SkillsChanged);
+        self.emit(Event::AgentsChanged);
     }
 
     /// C4 · issue 身份映射(plan/13 D2): a project with a `remote_path`
@@ -3336,20 +3469,36 @@ impl App {
                 // InProgress — retryable via RunIssue, never faked into
                 // review with no PR behind it.
                 let opened_pr = if on_issue_branch {
-                    match bw_engine::github::open_pr(
-                        std::path::Path::new(proj.workspace_path.trim()),
-                        issue.github_number,
-                        &issue.title,
-                    )
-                    .await
-                    {
+                    // Bug③ (2026-07-30): route PR/MR creation through the
+                    // Remote factory so codehub projects open a codehub MR
+                    // (`codehub-cli mr create`) instead of crashing `gh pr
+                    // create` (gh doesn't know codehub → issue stuck
+                    // InProgress, no InReview, SyncMetricsFile never ran).
+                    // Github projects delegate to `github::open_pr` unchanged.
+                    let remote = bw_engine::remote::Remote::for_project(
+                        &proj.provider,
+                        &proj.remote_host,
+                        &proj.remote_path,
+                    );
+                    let res: Result<bw_engine::github::PrOpened, String> = match remote {
+                        Ok(r) => r
+                            .create_mr(
+                                std::path::Path::new(proj.workspace_path.trim()),
+                                issue.github_number,
+                                &issue.title,
+                            )
+                            .await
+                            .map_err(|e| e.to_string()),
+                        Err(e) => Err(e.to_string()),
+                    };
+                    match res {
                         Ok(bw_engine::github::PrOpened::Created(pr)) => {
                             self.store.set_issue_pr_number(id, pr).await?;
                             self.emit(Event::ConnectorSynced {
                                 name: format!("#{} · PR", issue.number),
                                 ok: true,
                                 detail: format!(
-                                    "已提 PR #{pr}(Closes #{}),等待人工 merge 验收",
+                                    "已提 PR/MR #{pr}(关联 Issue #{}),等待人工 merge 验收",
                                     issue.github_number
                                 ),
                             });
@@ -3366,7 +3515,7 @@ impl App {
                                 name: format!("#{} · PR", issue.number),
                                 ok: true,
                                 detail: format!(
-                                    "已认领队友提的 PR #{pr}(Closes #{}),等待人工 merge 验收",
+                                    "已认领队友提的 PR/MR #{pr}(关联 Issue #{}),等待人工 merge 验收",
                                     issue.github_number
                                 ),
                             });
@@ -3376,7 +3525,7 @@ impl App {
                             self.emit(Event::ConnectorSynced {
                                 name: format!("#{} · PR", issue.number),
                                 ok: false,
-                                detail: format!("提 PR 失败,活留在进行中可重试:{e}"),
+                                detail: format!("提 PR/MR 失败,活留在进行中可重试:{e}"),
                             });
                             false
                         }
@@ -6174,24 +6323,34 @@ impl App {
                     .get_project(issue.project_id)
                     .await?
                     .ok_or(AppError::NotFound)?;
-                let remote = proj.remote_path.trim().to_string();
-                if remote.is_empty() {
+                if proj.remote_path.trim().is_empty() {
                     return Err(AppError::Invalid(format!(
-                        "#{} 的项目未挂 GitHub 仓,无法 merge PR",
+                        "#{} 的项目未挂远端仓,无法 merge PR/MR",
                         issue.number
                     )));
                 }
-                // merge PR — the human验收 action, the ONLY place `gh pr merge`
-                // is ever called (never from any executor/run path; plan/13
-                // D3+D11).
-                if let Err(e) = bw_engine::github::merge_pr(&remote, issue.pr_number).await {
+                // merge PR/MR — the human验收 action, the ONLY place a merge is
+                // ever called (never from any executor/run path; plan/13
+                // D3+D11). Routed through the Remote factory (bug③ 2026-07-30):
+                // codehub projects merge via `codehub-cli mr merge`, github via
+                // `gh pr merge` — before this, MergeIssuePr crashed `gh pr
+                // merge` on codehub.
+                let merge_result = match bw_engine::remote::Remote::for_project(
+                    &proj.provider,
+                    &proj.remote_host,
+                    &proj.remote_path,
+                ) {
+                    Ok(r) => r.merge_mr(issue.pr_number).await,
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = merge_result {
                     // 绝不反向改写:a merge failure (including the drift case of
-                    // a PR already merged on the web) is only reflected — the
+                    // a PR/MR already merged on the web) is only reflected — the
                     // Issue stays InReview and retryable, nothing is settled.
                     self.emit(Event::ConnectorSynced {
                         name: format!("#{} · merge", issue.number),
                         ok: false,
-                        detail: format!("merge PR #{} 失败,活留在评审中:{e}", issue.pr_number),
+                        detail: format!("merge PR/MR #{} 失败,活留在评审中:{e}", issue.pr_number),
                     });
                     return Ok(());
                 }
@@ -6204,22 +6363,30 @@ impl App {
                     status: IssueStatus::Done,
                 }))
                 .await?;
-                // issue 关闭是 merge 的后果: `Closes #<n>` should have closed it;
-                // verify and补关 idempotently if GitHub didn't. Never reopen,
-                // never fight drift.
-                match bw_engine::github::issue_state(&remote, issue.github_number).await {
-                    Ok(state) if state.eq_ignore_ascii_case("OPEN") => {
-                        if let Err(e) =
-                            bw_engine::github::close_issue(&remote, issue.github_number).await
-                        {
-                            self.emit(Event::ConnectorSynced {
-                                name: format!("#{} · 关单", issue.number),
-                                ok: false,
-                                detail: format!("PR 已 merge,但补关 GitHub issue 失败:{e}"),
-                            });
+                // issue 关闭是 merge 的后果. github: `Closes #<n>` should have
+                // closed it; verify + 补关 idempotently if GitHub didn't.
+                // codehub: the MR body's `Closes #<n>` auto-closes on merge
+                // (GitLab standard, set in `codehub::create_mr`); `--issue-nums`
+                // only links, doesn't auto-close (2026-07-31 实测). So codehub
+                // issues close via the MR body, not this gh-only补关 block —
+                // skip it for codehub (never reopen, never fight drift). Bug③:
+                // was unconditional → `gh issue` crashed on codehub; now github-only.
+                if matches!(proj.provider.as_str(), "github" | "") {
+                    let remote = proj.remote_path.trim().to_string();
+                    match bw_engine::github::issue_state(&remote, issue.github_number).await {
+                        Ok(state) if state.eq_ignore_ascii_case("OPEN") => {
+                            if let Err(e) =
+                                bw_engine::github::close_issue(&remote, issue.github_number).await
+                            {
+                                self.emit(Event::ConnectorSynced {
+                                    name: format!("#{} · 关单", issue.number),
+                                    ok: false,
+                                    detail: format!("PR 已 merge,但补关 GitHub issue 失败:{e}"),
+                                });
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
                 self.emit(Event::ConnectorSynced {
                     name: format!("#{} · 验收", issue.number),
