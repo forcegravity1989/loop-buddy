@@ -1029,6 +1029,15 @@ pub struct AppState {
     pub scope: Scope,
     pub active_project: Option<ProjectId>,
     pub active_session: Option<SessionId>,
+    /// plan/17 S1: same-project serial run lock. `Some` while a run is
+    /// in-flight on that project — blocks a second `RunIssue` (or C8
+    /// 「立即开工」) on the SAME project until the in-flight run settles.
+    /// Cross-project parallel stays allowed (`plan/05` §3.5 models
+    /// project-level parallelism only; single-project multi-issue was never
+    /// designed). Dormant while runs are inline (the inline `await` already
+    /// serializes); S3's backgrounding makes this the real guard. In-memory
+    /// only — a crashed run leaves it set, but a restart re-seeds `None`.
+    pub active_run: Option<(ProjectId, IssueId)>,
     pub projects: Vec<ProjectRow>,
     /// Hub library — global, loaded independent of any active project.
     pub workflow_specs: Vec<WorkflowSpec>,
@@ -1089,6 +1098,7 @@ impl Default for AppState {
             scope: Scope::All,
             active_project: None,
             active_session: None,
+            active_run: None,
             projects: Vec::new(),
             workflow_specs: Vec::new(),
             skills: Vec::new(),
@@ -3310,6 +3320,35 @@ impl App {
         Ok(report)
     }
 
+    /// plan/17 S1: entry guard + lifecycle for the same-project serial run
+    /// lock (`AppState::active_run`). Delegates the real work to
+    /// [`run_issue_body`]. The check is dormant while runs are inline (the
+    /// inline `await` already serializes dispatch); S3's backgrounding makes
+    /// this the actual concurrency guard. `active_run` is set here and cleared
+    /// on return — S3 moves the clear to the background settle. Both callers
+    /// (`Command::RunIssue` and C8 「立即开工」) route here, so the lock
+    /// applies uniformly.
+    async fn run_issue_now(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
+        // Fail fast on a same-project in-flight run before touching anything.
+        let p = self
+            .store
+            .get_issue(id)
+            .await?
+            .ok_or(AppError::NotFound)?
+            .project_id;
+        if let Some((active_pid, _)) = self.state.active_run {
+            if active_pid == p {
+                return Err(AppError::Invalid(
+                    "该项目有活正在跑，等它到评审中/干完再开下一张".into(),
+                ));
+            }
+        }
+        self.state.active_run = Some((p, id));
+        let res = self.run_issue_body(session, id).await;
+        self.state.active_run = None;
+        res
+    }
+
     /// A3: run an Issue — assemble the issue's title/desc + its stage's role
     /// playbook + any distilled (compounded) skills from the same project +
     /// (C8) its `standard_skill` association into one real run through
@@ -3318,7 +3357,7 @@ impl App {
     /// same real path, not a parallel shortcut. See `Command::RunIssue`'s doc
     /// for the state-machine contract (InProgress at start, InReview on
     /// success via the PR-derive rule, never auto-Done).
-    async fn run_issue_now(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
+    async fn run_issue_body(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
         let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
         // A5-F: only work not yet settled/parked/under-review/blocked
         // can be (re)started this way. InProgress is a legal starting
