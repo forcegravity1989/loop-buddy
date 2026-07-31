@@ -55,7 +55,7 @@ category: 标配
 |---|---|---|
 | `kind = "github"`,`query` 为空或明显查不出预期结果 | 查询串没写对,不是数据源的问题 | 按 `docs/metrics-toml-format.md` 的占位符语法重写 `query`(`repo:{owner}/{repo} …`、时间窗用 `@{Nd}`),优先复用北极星/其它指标里已验证过的查询模式;写完在本地用 `gh api search/issues -f q="<展开后的真实查询串>"` 真实跑一次确认有意义结果(不是本 Skill 的采集职责,只是校验查询没写错)。 |
 | `kind = "connector"` | **采集器 v1 未接**(`docs/metrics-toml-format.md` 明确标注),不是配置问题 | 如实标注"等 BW Connector 采集器接上这一 kind"。**如果项目其实已经有自动采集脚本在机械解析真实数据源(如 `derive_*.py` 解析缺陷 reason 字段、产出 `data.json`),这不是 `manual`——改成 `script`,`query` 写脚本路径+输出字段,保持自动采集语义不降级**。只有"人定期从后台手抄一个数"才降级 `manual`——项目侧脚本是自动采集,降级 `manual` 等于把自动谎报成人填。 |
-| `kind = "script"` | 项目侧自采脚本(buddy shell-out 调它读结果) | 确认脚本能独立跑(脚本自身依赖如 Playwright/SSO 由项目侧管,buddy 只调);`query` 写清脚本路径+输出 JSON 字段路径(如 `script:governance/refresh.py; field:data.json:north_star.adoption_rate`)。这是已自动采集的指标,点亮只待 buddy 到点 shell-out。 |
+| `kind = "script"` | 项目侧自采脚本(buddy shell-out 调它读结果) | 确认脚本能独立跑(脚本自身依赖如 Playwright/SSO 由项目侧管,buddy 只调);`query` 只写字段在脚本输出 JSON 里的点分路径(如 `leading.L1` / `north_star.adoption_rate`,脚本路径+输出文件由项目的 `script` connector 配置,`query` 不含脚本路径、不带 `script:`/`;`/`field:` 前缀)。这是已自动采集的指标,点亮只待 buddy 到点 shell-out。 |
 | `kind = "bw"` | **采集器 v1 未接**,同上 | 如实标注"等 BW 自记账采集器接上这一口径";BW 侧已有的等价真实数据(如 issue 结算数、run 遥测)如果界面/sqlite 已经能查到,可以在 `docs/metrics-rationale.md` 里补一句"当前可用 `sqlite3 <db> \"SELECT …\"` 手动核对,自动采集器接上前先靠这条路径人工核实",但**不要**在 `.bw/metrics.toml` 里编一个假的 collect 方案掩盖"暂未自动化"的事实。 |
 | `kind = "manual"` | 靠人手填,可能没有节奏 | 给出一个具体、可持续的手填节奏建议(如"每周一 5 分钟,从 XX 后台截一次数填进指标手填框"),并在 `docs/metrics-rationale.md` 记录这个节奏——手填节奏本身也是"点亮路径",不是无解。 |
 | `github`/`connector`/`bw` 但对应的外部系统压根不存在(比如没有真实竞品数据源) | 指标定义本身的问题,不是绑定问题 | 如实标注"这条指标的采集依赖尚不存在,建议改 `manual` 过渡或回头找指标 Skill 重新评估这条指标是否成立",**不代为改写定义**——只指出问题,决策权留给下一轮找指标。 |

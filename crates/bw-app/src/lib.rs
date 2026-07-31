@@ -2383,6 +2383,9 @@ impl App {
                 if cfg.script.trim().is_empty() {
                     return Ok((false, "script 连接器未记录脚本路径".into()));
                 }
+                if Path::new(cfg.script.trim()).is_absolute() {
+                    return Ok((false, "script 连接器 config 用绝对路径,需相对工作区".into()));
+                }
                 let script_path = Path::new(&workspace).join(&cfg.script);
                 match std::fs::metadata(&script_path) {
                     Ok(_) => Ok((
@@ -2824,6 +2827,16 @@ impl App {
                 } else {
                     cfg.command.trim().to_string()
                 };
+                if Path::new(&cfg.script).is_absolute() {
+                    summary.failed += 1;
+                    if summary.first_error.is_none() {
+                        summary.first_error = Some(format!(
+                            "script {} config 用绝对路径,需相对工作区",
+                            cfg.script
+                        ));
+                    }
+                    continue;
+                }
                 let script_path = Path::new(&proj.workspace_path).join(&cfg.script);
                 let run = tokio::process::Command::new(&command)
                     .arg(&script_path)
@@ -2835,11 +2848,34 @@ impl App {
                 let out = match tokio::time::timeout(std::time::Duration::from_secs(300), run).await
                 {
                     Ok(Ok(o)) if o.status.success() => o,
+                    Ok(Ok(o)) => {
+                        // 非零退出:stderr 尾部入错因(读回为证,运维能从 buddy 内判根因)
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        let tail: String = stderr
+                            .chars()
+                            .rev()
+                            .take(500)
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect();
+                        summary.failed += 1;
+                        if summary.first_error.is_none() {
+                            summary.first_error = Some(format!(
+                                "script {} 非零退出:{}",
+                                cfg.script,
+                                tail.trim_end()
+                            ));
+                        }
+                        continue;
+                    }
                     _ => {
                         summary.failed += 1;
                         if summary.first_error.is_none() {
-                            summary.first_error =
-                                Some(format!("script {} 跑失败(超时或非零退出)", cfg.script));
+                            summary.first_error = Some(format!(
+                                "script {} 跑失败(超时>300s 或 spawn 失败)",
+                                cfg.script
+                            ));
                         }
                         continue;
                     }

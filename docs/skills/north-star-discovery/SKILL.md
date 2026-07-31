@@ -110,8 +110,10 @@ category: 标配
    `"connector"` + connector 名字;BW 自己记账(issue 结算数、run 遥测)写
    `"bw"` + 简短口径描述;**项目仓里已有自动采集脚本(如 `derive_*.py`
    机械解析真实数据源、产出 `data.json` 之类)的,写 `"script"` + `query`
-   指明脚本路径与输出字段**(如 `script:governance/workspace/clouddragon/
-   refresh_data.py; field:data.json:leading.L1`),`script` kind 由 buddy
+   只写字段在脚本输出 JSON 里的点分路径**(如 `leading.L1` / `north_star.adoption_rate`)——
+   脚本路径与输出文件由项目的 `script` connector 配置(见 `docs/metrics-toml-format.md`),
+   buddy 跑脚本后按 `query` 字段路径取值,`query` 不含脚本路径、不带 `script:`/`;`/`field:` 前缀。
+   `script` kind 由 buddy
    shell-out 调脚本读结果——项目侧自采脚本**不是 `manual`**;暂时没有
    埋点/连接器、也没项目侧脚本的才诚实写 `"manual"` + `query = ""`。
    **不为了显得"采得到"而编一个查不出真实数字的 query,也不为了显得体面
