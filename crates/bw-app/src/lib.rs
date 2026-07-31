@@ -4150,28 +4150,15 @@ impl App {
                                         });
                                     }
                                     Err(e) => {
-                                        let mut detail =
-                                            format!("GitHub 建仓失败,已尝试改建本地仓:{e}");
-                                        match provision_workspace(&root, &proj).await {
-                                            Ok(path) => {
-                                                self.store.set_workspace(id, &path, true).await?;
-                                                self.store
-                                                    .create_connector(NewConnector {
-                                                        id: ConnectorId::new(),
-                                                        name: format!("{} · 代码仓", proj.name),
-                                                        kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                                        scope: proj.name.clone(),
-                                                        project_id: Some(id),
-                                                        config: path.clone(),
-                                                    })
-                                                    .await?;
-                                            }
-                                            Err(local_e) => {
-                                                detail = format!(
-                                                    "GitHub 建仓失败:{e};本地兜底也失败:{local_e}"
-                                                );
-                                            }
-                                        }
+                                        // plan18-⑧:建仓失败就停、如实报,不兜底
+                                        // 本地 mint 空仓装接上(缺口 E:悄悄本地 mint
+                                        // → remote_path 空 → 不建 trio/不挂 cron/不扫
+                                        // skill,用户以为建好了实际远端没仓)。项目行
+                                        // 已落库但无远端仓,用户看到 Fail 可删项目重
+                                        // 来或重试——和"不假装健康"同精神。
+                                        let detail = format!(
+                                            "GitHub 建仓失败:{e}(未接上,无远端仓,请重试或检查权限)"
+                                        );
                                         self.emit(Event::ConnectorSynced {
                                             name: format!("{} · GitHub", proj.name),
                                             ok: false,
@@ -4659,7 +4646,16 @@ impl App {
                 // `git-repo` connector. Provisioning failure degrades to the
                 // old Mock-only behavior — creation itself never breaks.
                 let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
-                if self.workspaces_root.is_some() && proj.workspace_path.trim().is_empty() {
+                // plan18-⑧:只对纯本地项目(remote_path 也空)兜底开本地仓;
+                // 挂了远端但 clone 失败导致 workspace_path 空的,不兜底本地
+                // mint 装接上(缺口 C:否则用户以为接了远端实际是个本地空仓,
+                // remote_path 非空还会建 trio/cron 但无 workspace 跑不了)。
+                // 挂远端失败的项目停在"有 remote 无 workspace"——用户看到无
+                // 代码仓 connector 知道没接上,可删项目重来,比悄悄 mint 诚实。
+                if self.workspaces_root.is_some()
+                    && proj.workspace_path.trim().is_empty()
+                    && proj.remote_path.trim().is_empty()
+                {
                     let root = self.workspaces_root.clone().expect("checked above");
                     match provision_workspace(&root, &proj).await {
                         Ok(path) => {
