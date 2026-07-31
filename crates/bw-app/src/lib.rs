@@ -6365,10 +6365,12 @@ impl App {
                 .await?;
                 // issue 关闭是 merge 的后果. github: `Closes #<n>` should have
                 // closed it; verify + 补关 idempotently if GitHub didn't.
-                // codehub: the MR's `--issue-nums` link closes the issue on
-                // merge — this gh-only补关 block is skipped (never reopen,
-                // never fight drift). Bug③: was unconditional → `gh issue`
-                // crashed on codehub; now github-only.
+                // codehub: the MR body's `Closes #<n>` auto-closes on merge
+                // (GitLab standard, set in `codehub::create_mr`); `--issue-nums`
+                // only links, doesn't auto-close (2026-07-31 实测). So codehub
+                // issues close via the MR body, not this gh-only补关 block —
+                // skip it for codehub (never reopen, never fight drift). Bug③:
+                // was unconditional → `gh issue` crashed on codehub; now github-only.
                 if matches!(proj.provider.as_str(), "github" | "") {
                     let remote = proj.remote_path.trim().to_string();
                     match bw_engine::github::issue_state(&remote, issue.github_number).await {

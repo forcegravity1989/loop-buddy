@@ -101,9 +101,12 @@ pub async fn create_issue(
 /// `codehub-cli mr create` — the codehub parity of [`crate::github::open_pr`]:
 /// stage + commit + push the run's edits on `bw/issue-<n>` (shared
 /// [`crate::workspace::stage_commit_push`]), then open a merge request from
-/// `bw/issue-<n>` → the project's default branch, linked to codehub issue
-/// `<n>` via `--issue-nums` (merge auto-closes the issue — same role as
-/// github's `Closes #<n>`). Returns the new MR's iid wrapped as
+/// `bw/issue-<n>` → the project's default branch. The MR body carries
+/// `Closes #<n>` so merging it auto-closes codehub issue `<n>` (GitLab
+/// standard, same role as github's `Closes #<n>`); `--issue-nums issue<n>`
+/// additionally links the MR↔issue (visible in codehub's "linked issues",
+/// but the link alone does NOT auto-close — 2026-07-31 实测 issue 31/32/33
+/// merge 后仍 opened,故靠 body 的 Closes). Returns the new MR's iid as
 /// `PrOpened::Created`.
 ///
 /// **No `Adopted` path** (unlike github): if an MR for the branch already
@@ -184,7 +187,9 @@ pub async fn create_mr(
             }
         }
     }
-    let body = format!("BW 执行器为 Issue #{issue_number} 提交的改动,等待人工 merge 验收。");
+    let body = format!(
+        "BW 执行器为 Issue #{issue_number} 提交的改动,等待人工 merge 验收。\n\nCloses #{issue_number}"
+    );
     let out = tokio::process::Command::new("codehub-cli")
         .args([
             "mr",
