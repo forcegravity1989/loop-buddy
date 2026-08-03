@@ -52,8 +52,9 @@ collect = { kind = "bw", query = "issue.settled_at within 7d" }
 # script kind:项目仓里既有采集脚本(如 derive_*.py 机械解析真实数据源、产出
 # data.json)的指标。buddy 到点 shell-out 跑脚本、读输出 JSON、按 query 点分
 # 路径取值。脚本路径+输出文件由项目的 script connector 配置,query 不含脚本路径。
+# query 只写字段在脚本输出 JSON 里的点分路径(项目侧脚本输出要扁平可寻址)。
 [[leading]]
-name   = "自动规范问题数"
-def    = "累计 defect 中 title 含上报标记的条数——项目自采脚本派生"
-target = "≥3"
-collect = { kind = "script", query = "leading.L1" }
+name   = "日均同步成功数"
+def    = "过去 7 天日均成功完成跨设备同步的次数——项目侧 sync_log 脚本派生"
+target = "≥100"
+collect = { kind = "script", query = "sync.daily_success_avg" }
