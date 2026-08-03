@@ -105,6 +105,27 @@ app-web     非 workspace 成员,"以后也许"留口,不编译
 | schema 迁移不崩老库 | `schema.sql` + `add_column_if_missing` 双守卫;开老库 `PRAGMA` 读回新列 |
 | cron 真实调度 tick、自动建单 no-hijack | E2E:到点 tick 后 sqlite 读回新建 Issue,状态 Normal |
 
+## 固定交付流水线(铁律,2026-07-30 起)
+
+较大的新特性/方向性改动一律走同一条流水线,不逐次现编流程(技能来自 mattpocock-skills 插件;修 bug、小修补不强制,照常走 systematic-debugging/直接改):
+
+1. **磨透** `/mattpocock-skills:grill-with-docs`:把想法磨到拍板。过程中按 domain-modeling 纪律随手更新根 `CONTEXT.md` 词表(词表只放语言,绝不放实现);ADR 三条全中才立(难逆转 + 日后费解 + 真取舍),入 `docs/adr/`。
+2. **成规格** `/mattpocock-skills:to-spec`:从对话直接合成 spec(不重新采访人);先与人对齐测试 seam(优先现有 seam、位置尽量高、越少越好),然后发成 GitHub issue。
+3. **拆票** `/mattpocock-skills:to-tickets`:拆成 tracer-bullet 垂直切片——每张票纵切一条完整路径(schema→bw-app 命令层→UI),单独可演示;粒度 = 一个新鲜上下文窗口干得完;每张票声明 Blocked by 边。人点头后按依赖序发 issue。
+4. **分派执行**:主 agent 当 advisor/监理,不亲自实现。沿 frontier(阻塞已清的票)每张票起一个 subagent,模型默认 `sonnet`(spec 已澄清设计的实现票都归它),守门/架构/难票才用主模型;实现内规 = `/mattpocock-skills:implement`,其中 TDD 段按本仓 no-UT 纪律裁剪——行为正确性走 E2E 读回,不写单元测试。
+5. **每票验收出「给人看的报告」**(不是每批一份):门禁全过(见上)+ 按 spec 验收点逐点走 UI 流程——click 受阻是实况(核心纪律 3),点击流用 env 深链逐步摆位 + computer-use 截图串成——加 `sqlite3` 读回。汇成一份 markdown 报告:每个验收点 = 深链命令 + 截图 + 读回数字,一一对应,随 PR/交接件交付;报告里的数字一律读回,绝不硬编。
+6. **收口**:批次过 `/code-review`;merge 由人显式点——Done 永不自动,对本仓自身与 BW 管的项目同样成立。
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues(`gh` CLI,remote 即本仓)。见 `docs/agents/issue-tracker.md`。
+
+### Domain docs
+
+单上下文:根 `CONTEXT.md` 词表 + `docs/adr/`。消费规则见 `docs/agents/domain.md`。
+
 ## 文档与协作约定
 
 - **设计唯一事实源**:`plan/06-overall-alignment.md`(缺口台账 G1-G11/R1-R4 + 执行队列);**产品命题**:`plan/07-product-proposition.md`(引子页命题原文 + 用户语言拆解 + 工程对照表——命题正文用人话,源码/测试锚点只进对照表);**MVP 执行计划**:`plan/08-mvp-execution-plan.md`(MVP=项目的生命周期 × workflow 的生命周期,两线四棒 P/W 队列,目标用人话、锚点在各件「工程对照」——当前接棒入口)。`DEVELOPMENT.md` 是开发指南;`plan/00~05` 是路线与选型背景;`iterations/HANDOFF-*.md` 是棒次交接件(自足,不读对话也能接手)。
