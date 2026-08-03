@@ -233,6 +233,14 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - 竞品分析不该创建时默认跑,由人创建后在 issue 卡触发。已对齐:`run_first` 默认 false(`create.rs`)。保留末卡「立即开工」框、默认不勾。
 
 ### 4.3 bug① 冻死·RunIssue 甩后台 + 并行 run 无 worktree(指回步4/5/6)
+
+> **【2026-08-03 归正·bug①+④ S1-S5 已实施】**(plan17 worktree 5 commit,合体进整合分支 `merge-run-scheduling-step3-metric-loop`,git auto-merge(ort)零冲突,门禁 6/6 绿,SubAgent 检视「可提交」):bug① 冻死 + ④ worktree 隔离**本窗已落地**,下面的「未决/修法待定」原文保留作过程记录。要点:
+> - **① 解冻靠三段拆**:`run_workflow_inner` 拆 `prepare_run`(&self 起手,返 owned `PreparedRun`)/ `Self::run_round_loop`(关联 fn 无 self,长对抗循环;`self.store`→`store:Arc`,`self.emit(X)`→`live.send(X)`)/ `finalize_run`(&mut self 收尾记账);issue 路径 `tokio::spawn(run_round_loop)` 甩后台、经 settle mpsc 回灌主线程跑 finalize+tail,**不动 App 所有权**(单线程 `current_thread` runtime 靠 await 点交错推进,零 `Arc<Mutex>`)。
+> - **串行锁 S1**(`198294a`)从 dormant 变真守卫:`active_run` 从 `(ProjectId,IssueId)` 扩成 `ActiveRun{JoinHandle,guard,finalize,issue,proj,issue_ws,...}`(同项目串行,跨项目可并发)。
+> - **S2**(`b9b28ad`)每 issue 独立 git worktree 隔离(`IssueWorktreeGuard`,Drop 拆);**S3**(`93c7a33`)三段拆 + `Command::CancelRun`(abort JoinHandle + `kill_on_drop` 杀 claude 子进程,issue 留 InProgress + `settled_at` 空,铁律守);**S4**(`2e607a3`)去 `--no-session-persistence`。
+> - **偏差(如实)**:cancel 不走 finalize 记账(无 last_run_log,中止轮 `workflow_run` 行留 started-never-settled 即诚实留痕,agent/skill uses 不+1)——留读回 `artifact_version` 表核复利链是否断。scan_and_register_artifacts 即时登记=0 的复利链 gap:S2 后 run 产物在 issue worktree 未 merge,即时扫主工作区恒 0(诚实),推迟到 merge 后补登记。
+> - L1 非阻塞(已修 commit `bacae9a`):`schema.sql` 三处注释(north_star_collect_kind/collect_kind/source_kind)漏列 `script` 枚举值,补注释(schema 双守卫口径,纯注释)。
+
 - **bug①**:任意长 RunIssue 都冻死单线程 UI(根因见步4)。修法:RunIssue 甩后台 detached,拦路虎是 App 单线程独占非 `Arc<Mutex>`(`kernel.rs:627`);退一步 Vm 在 run 期间按事件/定时重发也能解冻视觉。>2 行,设计决定,留下一棒。**先修它,再回头调 bug②**(界面不冻了才能在 UI 观察 bug② 真实终端报错)。
 - **并行 run 无 worktree(同源)**:run 共用一个 workspace 目录、无 worktree-per-run 隔离 → 并行/连续跑多个 issue(三件套 找指标→绑数据)时 MR 内容重叠(都从 master 出分支、都改同一文件)。**两件都在「run 调度」层**一起设计:甩后台 + worktree-per-run(`git worktree add` per issue)+ (可选)三件套串行依赖(绑数据要求找指标先 merge)——待实践定,别基于猜测改。
 - **给修 bug① 窗口的 prompt(可粘)**:在 buddy 修 bug①「RunIssue 内联 await 堵死单线程 UI」时,一并看这个同源问题:run 共用一个 workspace、无 worktree-per-run 隔离,导致并行/连续跑多个 issue(三件套 找指标→绑数据)时 MR 内容重叠。请一起设计:① RunIssue 甩后台 detached(根因见本节 + 步4);② 每个 run 用独立 git worktree 隔离;③ 三件套串行依赖要不要在状态机/调度层强制——待实践定。codehub PR 回流(create_mr/merge_mr/Adopted)已在 `0c70775` 修好,不用重做;只看 run 调度层。
@@ -290,6 +298,18 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 **task2 管线验证**(SubAgent):maas 脚本加 adoption_rate+扁平镜像(因 buddy `json_field_by_path` 只走点分对象键不数数组)→worktree 编译 buddy OK→SQL 建 script connector+4 metric 行(北极星/L1/L2/L3 collect_kind=script)→深链渲染 `[BW_OPEN]` 无 panic→采集点亮留主窗口(GUI CollectMetrics)。**SQL 直改 DB 绕法非终态**,终态走 metrics.toml+SyncMetricsFile 按钮。
 
+**【2026-08-03 合体落定 + maas 回显验证】**:plan17(5 commit)+ plan18(11 commit)合体进整合分支 `merge-run-scheduling-step3-metric-loop`,git auto-merge(ort)**零冲突**(两边唯一重叠 `bw-app/src/lib.rs` use-import 块,对 `PathBuf→{Path,PathBuf}` 做了完全相同编辑被自动接受;plan18 加 `CONNECTOR_KIND_SCRIPT`/plan17 加 `mpsc`/`JoinHandle` 在不同子区;`app-desktop/screens/op.rs` 零重叠——plan17 改 `IssuesPanel`/plan18 改 `ProgressAll`+`MetricCard`;PRACTICE 仅 plan18 碰,plan17 未碰、main 的 +9 归正草稿已回退)。全门禁 6/6 绿(fmt/clippy -D warnings/wasm32 bw-core/wasm32 ui/guard-kernel-ui-free/check app-desktop)。SubAgent 代码检视「可提交」(合体接缝干净:import 两边齐无重复、plan17 run 路径与 plan18 probe/collect 不互引用、op.rs 两函数共字段无错位;四铁律全守——Done 入边仅 InReview、cancel 留 InProgress+settled_at 空、Signal derive-only、settle-once `take()` 防护、UI 无关内核、schema 不加列、cron 不碰;设计决策保全——无硬编项目名、两层分层、skill 读项目体系、创建流 C/E 失败就停、北极星方案A 无半截实现、cancel 不走 finalize 诚实留痕)。
+
+**maas 回显验证**(深链 `BW_OPEN=maas-locate BW_PANEL=progress`,DB=`…/workbench.db`):stderr `[BW_OPEN] "maas-locate" -> view=App panel=Progress projects=1 issues=3` + **无 panic**;启动 recompute_signals 整链跑通(`signal_derived_rev` 从基线累到 40),含 plan18-④ L6 `UPDATE project SET signal` 上卷路径,**无崩**。sqlite 读回真实态(纠正第三窗口不准):
+- **17 metric 全 unknown**(非第三窗口报的"13"——17 = plan18 task2 SQL 直插的 4 script metric + 既有 13)。
+- observation codehub 8 + telemetry 4 = **12**(非"11/9+1/2"——那是 raw observation 值被误当计数)。
+- 3 connector(含 plan18-③ kind=script「maas·指标脚本」connector,config 指 `governance/workspace/clouddragon/derive_leading.py`→`data.json`,SubAgent task2 SQL 直插绕法建,非正规 SyncMetricsFile 路径)。
+- 3 issue:**#1 竞品分析 in_progress、#2 找指标 done、#3 绑数据 done**(非第三窗口说的 #31/#32/#33——那是 codehub iid,DB issue id 是 #1/2/3)。
+- project.signal=unknown **诚实**(codehub 指标有观测无 target 阈值→unknown;script 指标无观测→unknown;未造假绿,铁律守)。
+- plan18-⑤「项目级业务指标」区段 + ⑦ SyncMetricsFile 按钮:**代码级确认渲染**——`op.rs:1771` `if op.metrics.iter().any(|m| m.stage_kind.is_none())` 条件成立(maas 有 4 个 stage_kind=NULL metric:L1/L2/L3/北极星)→区段 + ⑦ 按钮(`op.rs:1787` `k_sync.send(Command::SyncMetricsFile)` "↻ 同步指标文件",在⑤ 区段头)随区段渲染。截图(Powershell `CopyFromScreen` + `claude -p --model haiku` 读图)只抓到 Progress 面板**可视顶部**(健康概览/本周复盘/项目信息/真执行工作目录/总进度+底部计数卡),区段在折叠下方;haiku 读图 180s+ 触发 Windows 自动锁屏致后续全抓锁屏壁纸、SendKeys 滚 buddy webview 发错窗口——**下方折叠区视觉肉眼未核(环境限制非 buddy bug)**,留用户解锁后滚到底核一眼(非阻塞)。正面:连接器导航可见「maas·指标脚本」(plan18-③ script connector 注册可见);haiku 读到「本周未记指标:17 个」与 DB 吻合。
+
+**北极星方案A 维持 deferred**:本次合体**不做**方案A(§4.12 已标)。正规路径北极星不采集/不上卷/项目灯不亮属已知 gap,留主窗口稳做。
+
 ### 待记(后续会话补)
 - _待补:步3 agent 真跑——bug① 修好后竞品分析能不能真联网出报告 + 产出 PR?_
 - _待补:推广给别人时,别人的前置装/配跟我的差异。_
@@ -334,6 +354,16 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - **北极星位置差异**(plan18-⑨ 留主窗口):北极星在 buddy 原设计存 `project` 列(项目唯一顶层目标单独存),非 metric 表行。引领/滞后一开始就是 metric 表行→采集/上卷天然通;北极星位置不同→要迁移 + 补 target + 界面两套。这是我 plan §1.2 写"北极星给 metric 行"时低估原设计位置差异的偏差,诚实记。
 - **buddy 通用采要项目脚本输出扁平 JSON**:`json_field_by_path` 只走点分对象键不数数组,maas 原 data.json 的 `leading_indicators` 是对象数组取不到,补扁平镜像 `leading.{L1,L2,L3}`。印证"项目侧脚本按 buddy 通用契约适配"——buddy 保持通用,项目侧保证输出扁平可寻址。
 - **skill 不读项目既有体系是指标对不上根因**:三件套 agent 造指标和 maas 真实对不上(phantom/误标 manual/漏造),不是 agent 跑错,是 skill Step1 不读项目仓 governance/derive_*.py。调 skill 让 agent 读项目体系优先对齐,可复制。
+
+### run 调度层认知(2026-08-03,plan17 S1-S5 落地钉)
+
+> bug① 冻死 + ④ worktree 隔离在 plan17 落地(§4.3 归正),机理记这里。
+
+- **单线程 `current_thread` runtime 能跑后台 spawn**:`tokio::spawn` 在 `current_thread` 上不另起线程,排同线程队列,在主 `block_on` 的 await 点(`select!` 的 `cmd_rx.recv()`/`settle_rx.recv()`/`ticker.tick()`)交错 poll 推进,无锁无并发。① 解冻的机理——run 甩后台不冻 UI,靠的就是 spawn future 与主循环在同线程 await 点交错推进,不是另起线程。
+- **回灌靠 mpsc 不靠 await JoinHandle**:后台 spawn 完成经 `mpsc::UnboundedSender<SettleReq>` 发回,主循环 `select!` 加第三臂收;JoinHandle 只用来 `abort`;双 settle 防护靠 `Option::take()` active_run 先到先做。
+- **abort 不发 settle,自走 failed 尾**:`JoinHandle::abort()` drop spawn future → `kill_on_drop(true)` 杀 claude 子进程,无泄漏;abort 后 spawn 不发 SettleReq,`CancelRun` 自造 failed outcome 跑尾,issue 留 InProgress、不自动 Done(铁律守)。
+- **worktree guard 跨 spawn→settle 边界**:`IssueWorktreeGuard` 移进 `ActiveRun` 持有,在 `run_issue_settle` 里 `finalize_run` 读 `head_after` 之后、`issue_run_tail` 的 `create_mr`(`stage_commit_push`)之后才 Drop 拆 worktree——保证产物登记/MR 创建读得到 worktree 内容。
+- **`settle_tx: Option` 的边界收口**:examples/headless 调 `dispatch(RunIssue).await` 期望同步跑完,不接 settle_tx(default None)→ `run_issue_now` 走 inline `run_issue_body` 字节级不变;只有桌面 kernel `with_settle_channel` 接上才 background,S3 blast radius 收桌面一处。
 
 ### 反命题(buddy 不是什么)
 - 不是团队协作平台(无成员/群聊/收件箱)。
