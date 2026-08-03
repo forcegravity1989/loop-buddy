@@ -283,8 +283,8 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 **未决**(留主窗口/§4):
 - 🔴 **北极星 metric 行缝(方案A,留主窗口)**:北极星在 buddy 原设计存 `project.north_star` 列(**非 metric 表行**),collect/L6 都从 metric 表读→正规路径北极星不采集/不上卷/项目灯亮不了。SubAgent task2 验证 SQL 直插北极星 metric 行绕过通了,但正规 SyncMetricsFile 不建北极星 metric 行。修法 A:SyncMetricsFile 给北极星建 metric 行(role=north_star)+ `NorthStarDef` 加 target 字段(metrics.toml 格式契约改)+ EditNorthStar 同步 + UI 两套。**卡点不是逻辑难,是北极星位置迁移(project 列→metric 行)+ 补 target + 界面两套同步**——引领/滞后一开始就是 metric 行所以没卡,北极星位置不同。留主窗口和 plan17 汇总稳做。核心闭环"北极星点亮项目灯"最后一环。
 - 创建流缺口 C 没完全修:CompleteCreation 兜底条件 `&& remote_path.is_empty()` 无效(`set_remote` 只成功调,失败 remote_path 本就空→本地 mint 兜底仍触发)。边缘(挂远端失败才触发),正常对接不撞,按"没问题的不强行修"标 §4 留撞到再修。
-- task6 墙移植不开发(plan§1.4 vs memory 2026-07-28"项目健康总览先不补"冲突,没对齐不开发);层 B 来源徽未做(补充暂不开发)
-- task7 UpdateWeekPlan 接 UI 未做(plan 内但非核心——改周计划非改指标值/采集,标 §4)
+- task6 墙移植不开发(plan§1.4 vs memory 2026-07-28"项目健康总览先不补"冲突,没对齐不开发);层 B 来源徽未做(补充暂不开发)。**待什么条件回头**:哪天重判"项目健康总览要做"(推翻 07-28 memory 决议)+ 层B徽要值做时补
+- task7 UpdateWeekPlan 接 UI 未做(plan 内但非核心——改周计划非改指标值/采集)。**待什么条件回头**:下一会话续或主窗口汇总时做(dioxus inline edit 细活,token 不够稳做时别赶)
 - maas 侧:`clouddragon_cache.json` 被 cron 跑空(采集产零,maas 侧重跑 refresh_data.py 恢复)+ `derive_leading.py`/`data.json` 改(adoption_rate+扁平镜像)未 commit maas 仓
 - script connector:300s 超时硬编码 / probe 不查 command 可用 / 多 connector 字段重叠语义(非阻塞标后续)
 
