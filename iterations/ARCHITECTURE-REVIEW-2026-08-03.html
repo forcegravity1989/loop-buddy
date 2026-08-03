@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>Architecture review — builders-workbench</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+    </script>
+    <style>
+      .seam { stroke-dasharray: 4 4; }
+      .band { height: 26px; display:flex; align-items:center; padding:0 10px; font-size:11px; letter-spacing:.05em; }
+      .deepbox { background: linear-gradient(135deg, #0f172a, #1e293b); color:#e2e8f0; }
+      .modlabel { font-size:10px; text-transform:uppercase; letter-spacing:.12em; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+
+      <header class="space-y-2">
+        <h1 class="font-serif text-3xl">Architecture review — builders-workbench</h1>
+        <p class="text-sm text-slate-500">2026-07-30 · 勘查范围:全部 6 crate(4 个并行勘查,file:line 全部实核,标题数字已 grep 复验)</p>
+        <p class="text-xs text-slate-500">
+          <span class="inline-block border border-slate-400 px-1.5 py-0.5 mr-2">实线框 = module</span>
+          <span class="inline-block border border-slate-400 border-dashed px-1.5 py-0.5 mr-2">虚线 = seam</span>
+          <span class="inline-block text-red-600 border border-red-400 px-1.5 py-0.5 mr-2">红 = 泄漏 / 已漂移</span>
+          <span class="inline-block deepbox px-1.5 py-0.5">深色粗框 = deep module</span>
+        </p>
+      </header>
+
+      <section id="candidates" class="space-y-10">
+
+        <!-- ══════════ C1 ══════════ -->
+        <article id="c1" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h2 class="font-serif text-xl">C1 · 给 gh / git 立 adapter seam</h2>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-medium">Strong</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">ports &amp; adapters</span>
+          </div>
+          <div class="font-mono text-sm text-slate-600">bw-engine/src/github.rs (907 行, 0 trait) · workspace.rs · evidence.rs · git_log.rs · bw-app/src/lib.rs (22 处直调)</div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">Before</div>
+              <pre class="mermaid">
+flowchart TB
+  APP["bw-app · 22 个调用点"] --> GH["github.rs<br/>19 个自由函数 · 六职责"]
+  APP -.-> PROBE["lib.rs:6167<br/>自己 spawn claude"]
+  GH --> SH["shell 出 gh / git"]
+  WS["workspace.rs"] --> SH2["git ×4"]
+  EV["evidence.rs"] --> SH3["git ×5"]
+  GL["git_log.rs"] --> SH4["git ×1"]
+  EX["5 个验收指挥器"] -.PATH 垫 bash 假 gh ×5.-> SH
+  classDef leak stroke:#dc2626,stroke-width:2px,color:#dc2626;
+  class PROBE,EX leak
+              </pre>
+              <p class="text-xs text-slate-500 mt-1">git_in 吞 stdout → F5 真炸过(aabc989);4 个 module 各养一套 spawn+错误类型(共 5 个)</p>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">After</div>
+              <pre class="mermaid">
+flowchart TB
+  APP["bw-app"] --> I["「仓那一侧」interface"]
+  I === REAL["真 adapter:shell gh/git<br/>stdout 教训只学一次"]
+  I === FAKE["假 adapter:内存<br/>失败路径可编排"]
+  EX["验收指挥器"] --> FAKE
+  classDef deep fill:#0f172a,color:#e2e8f0,stroke:#0f172a,stroke-width:3px;
+  class REAL deep
+  linkStyle 0 stroke-dasharray:4 4;
+              </pre>
+              <p class="text-xs text-slate-500 mt-1">库内已有示范:Executor seam = 1 方法 · 3 adapter · contract::check——同一形状复制过来即可</p>
+            </div>
+          </div>
+          <p class="text-sm"><span class="font-medium">Problem:</span>907 行 GitHub 面(探活/建仓/接仓/开 PR/merge/采集)零 seam,验证被逼成 5 份各自维护的 ~155 行 bash 假 gh 垫 PATH,连 claude 探活都绕开 bw-engine 自己开进程。</p>
+          <p class="text-sm"><span class="font-medium">Solution:</span>照 Executor 的样子给仓那一侧立 interface(真 shell adapter + 假内存 adapter),git 子进程收进一个共享 module,五个错误类型合一。</p>
+          <ul class="text-sm text-slate-700 list-disc list-inside space-y-0.5">
+            <li>leverage:1 个假 adapter 换 5 份 bash 桩</li>
+            <li>locality:F5 这类 bug 只修一次</li>
+            <li>失败路径(PR 已存在/探活失败)可诚实驱动</li>
+            <li>PR 验收环是当前主线,最常改的面</li>
+          </ul>
+          <div class="text-xs bg-amber-50 border border-amber-200 rounded px-3 py-2 text-amber-800">no-UT 纪律不变:假 adapter 服务的是 34 个 example 指挥器,不是单元测试基线。</div>
+        </article>
+
+        <!-- ══════════ C2 ══════════ -->
+        <article id="c2" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h2 class="font-serif text-xl">C2 · 命令收尾仪式收进一个 module</h2>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-medium">Strong</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">in-process</span>
+          </div>
+          <div class="font-mono text-sm text-slate-600">bw-app/src/lib.rs — dispatch 2,849 行 / 69 臂;≈48 处 refresh+emit 手抄 · 146 处 emit · 9 处 recompute_signals</div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">Before — 每臂手抄四步,已漏三处</div>
+              <table class="w-full text-xs mt-1">
+                <tr class="text-slate-400"><td class="py-1"></td><td class="text-center">写库</td><td class="text-center">重算</td><td class="text-center">重载</td><td class="text-center">播报</td></tr>
+                <tr class="border-t"><td class="py-1 font-mono">RecordObservation</td><td class="text-center text-emerald-600">✓</td><td class="text-center text-emerald-600">✓</td><td class="text-center text-emerald-600">✓</td><td class="text-center text-emerald-600">✓</td></tr>
+                <tr class="border-t bg-red-50"><td class="py-1 font-mono">UpsertManualMetric <span class="text-red-600">:3956</span></td><td class="text-center text-emerald-600">✓</td><td class="text-center text-red-600 font-bold">✗</td><td class="text-center text-emerald-600">✓</td><td class="text-center text-emerald-600">✓</td></tr>
+                <tr class="border-t bg-red-50"><td class="py-1 font-mono">tick_scheduler 分支1/2</td><td class="text-center text-emerald-600">✓</td><td class="text-center text-slate-300">—</td><td class="text-center text-red-600 font-bold">✗</td><td class="text-center text-red-600 font-bold">✗</td></tr>
+                <tr class="border-t bg-red-50"><td class="py-1 font-mono">SetStageProgress/ToggleDod</td><td class="text-center text-emerald-600">✓</td><td class="text-center text-slate-300">—</td><td class="text-center text-red-600 font-bold">✗</td><td class="text-center text-emerald-600">✓</td></tr>
+              </table>
+              <p class="text-xs text-slate-500 mt-2">漏 recompute 今天没爆,是 CompleteCreation 顺路补了一次——靠调用顺序遮丑,不靠结构</p>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-3 flex flex-col justify-center">
+              <div class="modlabel text-slate-400 mb-2">After</div>
+              <div class="deepbox rounded-lg p-4 text-center">
+                <div class="text-sm font-medium">命令收尾 module</div>
+                <div class="text-xs text-slate-300 mt-1">臂只声明「动了哪些聚合」;<br/>重算/重载/播报由声明派生,一处执行</div>
+              </div>
+              <p class="text-xs text-slate-500 mt-2 text-center">忘一步从「E2E 恰好读回那列才红」变成「写不出来」</p>
+            </div>
+          </div>
+          <p class="text-sm"><span class="font-medium">Problem:</span>「写库→重算→重载→播报」这个仪式没有 module,是 48 份拷贝,已漏出三处真实不对称——其中一处正对着「信号只派生」铁律的这层唯一杠杆。</p>
+          <p class="text-sm"><span class="font-medium">Solution:</span>命令声明所动聚合,收尾动作由声明派生;69 个臂退成纯业务判断。</p>
+          <ul class="text-sm text-slate-700 list-disc list-inside space-y-0.5">
+            <li>locality:漏一步 48 臂 → 1 处</li>
+            <li>铁律护栏不再靠调用顺序</li>
+            <li>interface:臂身只剩业务</li>
+          </ul>
+        </article>
+
+        <!-- ══════════ C3 ══════════ -->
+        <article id="c3" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h2 class="font-serif text-xl">C3 · schema 列的单一声明</h2>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-medium">Strong</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">in-process</span>
+          </div>
+          <div class="font-mono text-sm text-slate-600">bw-store/src/schema.sql (241 列) · sqlite.rs (66% 机械:迁移块 248 + mapper 317 + 直通 1235 行) · lib.rs (31 DTO / 39 codec 劈两处)</div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">Before — 一列真相住 9 处(实测 commit 539a916)</div>
+              <div class="relative flex items-center justify-center py-3">
+                <div class="border-2 border-slate-700 rounded px-3 py-1.5 text-xs font-mono z-10 bg-white">project.provider</div>
+              </div>
+              <div class="grid grid-cols-3 gap-1.5 text-[10px] font-mono">
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-center">schema.sql</div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-center">add_column_if_missing</div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-center">NewProject 字段</div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-center">ProjectRow 字段</div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-center">INSERT 列表 + bind</div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-center">SELECT ×2(逐字节双抄)</div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-center">project_row() 解码</div>
+                <div class="border border-red-400 text-red-700 rounded px-1.5 py-1 text-center">delete_project 级联(隐形第 10 步)</div>
+                <div class="border border-red-400 text-red-700 rounded px-1.5 py-1 text-center">6 列已只剩守卫半边:schema.sql 没有它们</div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-3 flex flex-col justify-center">
+              <div class="modlabel text-slate-400 mb-2">After</div>
+              <div class="deepbox rounded-lg p-4 text-center">
+                <div class="text-sm font-medium">每列一处声明</div>
+                <div class="text-xs text-slate-300 mt-1">CREATE TABLE · 迁移守卫 · SELECT 投影 ·<br/>bind 顺序 · 解码字段 · 级联名单 —— 全部派生</div>
+              </div>
+              <p class="text-xs text-slate-500 mt-2 text-center">守卫/schema 漂移成为写不出来的状态</p>
+            </div>
+          </div>
+          <p class="text-sm"><span class="font-medium">Problem:</span>加一列要改 3-4 个文件 9-10 处、CLAUDE.md 只写了前 2 处,而且「双守卫」已在 6 列上静默失守——connector.project_id/config、agent.instructions/wins、skill.content、workflow_run.cron_task_id 只存在于守卫里(拿 fixture DB PRAGMA 实证)。</p>
+          <p class="text-sm"><span class="font-medium">Solution:</span>列的全部下游形态从一处声明派生,15 份 SELECT 抄本与 317 行手写 mapper 蒸发。</p>
+          <ul class="text-sm text-slate-700 list-disc list-inside space-y-0.5">
+            <li>加一列:9 处 → 1 处</li>
+            <li>守卫/schema 分叉 unrepresentable</li>
+            <li>删除测试:复杂度消失非搬家</li>
+          </ul>
+          <div class="text-xs bg-amber-50 border border-amber-200 rounded px-3 py-2 text-amber-800">老库兼容是铁律:派生出的迁移必须保持 add_column_if_missing 语义,老库 PRAGMA 读回抽查照旧。</div>
+        </article>
+
+        <!-- ══════════ C4 ══════════ -->
+        <article id="c4" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h2 class="font-serif text-xl">C4 · Issue 状态流转只留一个闸口</h2>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-medium">Strong</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">in-process</span>
+          </div>
+          <div class="font-mono text-sm text-slate-600">bw-core/src/model.rs:2069 (can_transition_to, 20 条合法边) · bw-store/src/sqlite.rs:2521 (裸 UPDATE) · bw-app 4 调 2 查 · app-desktop/screens/op.rs:571-599 (私抄状态表)</div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">Before</div>
+              <pre class="mermaid">
+flowchart TB
+  A["TransitionIssue :5822"] -->|查表| T["can_transition_to"]
+  B["run_issue_now :3261"] -->|查表| T
+  C["另 2 处调用"] -.绕过.-> S
+  T --> S["store.transition_issue<br/>裸 UPDATE 无守卫"]
+  O["op.rs:571-599<br/>手抄第 2 份状态表"] -.-> S
+  classDef leak stroke:#dc2626,stroke-width:2px,color:#dc2626;
+  class C,O leak
+              </pre>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">After</div>
+              <pre class="mermaid">
+flowchart TB
+  ALL["所有转移路径"] --> G["转移闸口:查表通过才可得的凭证"]
+  G --> S["store(只认凭证)"]
+  V["op.rs 改读 VM 携带的合法出边"] --> ALL
+  classDef deep fill:#0f172a,color:#e2e8f0,stroke:#0f172a,stroke-width:3px;
+  class G deep
+              </pre>
+            </div>
+          </div>
+          <p class="text-sm"><span class="font-medium">Problem:</span>「Done 永不自动」今天是 locality 性质不是类型性质——store 裸 UPDATE、4 个调用点只有 2 个查表、渲染模块里还有第 3 份手抄状态表。</p>
+          <p class="text-sm"><span class="font-medium">Solution:</span>转移收进唯一闸口,合法出边由 VM 携带给 UI;铁律从「恰好没绕过」升级为编译期事实。</p>
+          <ul class="text-sm text-slate-700 list-disc list-inside space-y-0.5">
+            <li>铁律从注释升级为类型</li>
+            <li>状态表 3 份 → 1 份</li>
+            <li>E2E settled_at 读回口径不变</li>
+          </ul>
+        </article>
+
+        <!-- ══════════ C5 ══════════ -->
+        <article id="c5" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h2 class="font-serif text-xl">C5 · 资产目录 Hub 的壳成为 module</h2>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-medium">Strong</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">in-process</span>
+          </div>
+          <div class="font-mono text-sm text-slate-600">app-desktop/screens/{skill,agent,workflow,cron,connector,knowledge,activity,notify}_hub.rs · component_detail.rs · 10 个表单 ≈1047 行</div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">Before — 8 屏同形,零共享代码</div>
+              <div class="flex gap-1 items-end">
+                <!-- repeated screens -->
+                <div class="flex-1 space-y-0.5"><div class="band bg-slate-200">壳×10</div><div class="band bg-slate-300">表头×5</div><div class="band bg-slate-400 text-white">chip 行(diff=0)</div><div class="band bg-slate-200">网格</div><div class="band bg-slate-300">表单 75% 同</div></div>
+                <div class="flex-1 space-y-0.5"><div class="band bg-slate-200"></div><div class="band bg-slate-300"></div><div class="band bg-slate-400"></div><div class="band bg-slate-200"></div><div class="band bg-slate-300"></div></div>
+                <div class="flex-1 space-y-0.5"><div class="band bg-slate-200"></div><div class="band bg-slate-300"></div><div class="band bg-slate-400"></div><div class="band bg-red-200 text-red-700 text-[9px]">connector 漏修</div><div class="band bg-slate-300"></div></div>
+                <div class="flex-1 space-y-0.5"><div class="band bg-slate-200"></div><div class="band bg-slate-300"></div><div class="band bg-slate-400"></div><div class="band bg-slate-200"></div><div class="band bg-slate-300"></div></div>
+              </div>
+              <p class="text-xs text-slate-500 mt-2">页壳样式串逐字节 10 份;skill↔agent chip 行 diff 零差异;auto-fill 修复手改两处、第三处(connector_hub:46)漏掉;760px 上限靠注释互指对齐</p>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-3 flex flex-col justify-center">
+              <div class="modlabel text-slate-400 mb-2">After</div>
+              <div class="deepbox rounded-lg p-4 text-center">
+                <div class="text-sm font-medium">hub_shell module(app-desktop 内)</div>
+                <div class="text-xs text-slate-300 mt-1">壳 · 表头 · 筛选行 · 网格/空态 · 展开 760px 规则</div>
+              </div>
+              <div class="flex gap-1 mt-2">
+                <div class="flex-1 border border-slate-300 rounded text-center text-[10px] py-1">技能屏=字段清单</div>
+                <div class="flex-1 border border-slate-300 rounded text-center text-[10px] py-1">队友屏=字段清单</div>
+                <div class="flex-1 border border-slate-300 rounded text-center text-[10px] py-1">…</div>
+              </div>
+            </div>
+          </div>
+          <p class="text-sm"><span class="font-medium">Problem:</span>S17-D 统一的是行为约定不是代码——8 个 hub 屏共享一个形状,但每条版式不变量(网格 minmax、760px、空态两义)都靠 3-10 份手抄保持一致,且已经漂过一次。</p>
+          <p class="text-sm"><span class="font-medium">Solution:</span>壳成为 deep module,各屏退成字段清单 + Command 构造;表单的草稿↔信号↔trim↔守卫生命周期一并吸收。</p>
+          <ul class="text-sm text-slate-700 list-disc list-inside space-y-0.5">
+            <li>locality:改版式 1 处而非 3-8 处</li>
+            <li>760px 从注释约定变常量</li>
+            <li>新 hub 屏成本 ≈ 字段清单</li>
+          </ul>
+          <div class="text-xs bg-amber-50 border border-amber-200 rounded px-3 py-2 text-amber-800">约束照旧:ui crate 保持 dioxus-free,壳 module 落 app-desktop,guard-kernel-ui-free 不动。</div>
+        </article>
+
+        <!-- ══════════ C6 ══════════ -->
+        <article id="c6" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h2 class="font-serif text-xl">C6 · 删掉没人叫的 interface</h2>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-medium">Strong</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">in-process · 纯删除</span>
+          </div>
+          <div class="font-mono text-sm text-slate-600">bw-core/src/analysis.rs (526/1061 行零调用) · bw-store trait 的 delete_connector / list_workflow_versions (仅 example 调) · weekly_review 表 (只写不读)</div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">Before — analysis.rs 1061 行</div>
+              <div class="w-full h-40 flex flex-col rounded overflow-hidden border border-slate-300">
+                <div class="bg-slate-700 text-white text-xs flex items-center px-2" style="height:50.4%">真实判断链(5 函数,有调用者)</div>
+                <div class="bg-slate-200 text-slate-400 text-xs flex items-center px-2" style="height:49.6%">8 个 pub 函数 · 全仓 0 引用(infer_defaults 连输入生产者都没人调)</div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">After — 535 行</div>
+              <div class="w-full h-40 flex flex-col rounded overflow-hidden">
+                <div class="deepbox text-xs flex items-center px-2 rounded" style="height:50.4%">failure_modes → propose_optimizations → review_proposal → ab_compare → summarize_effectiveness,首次单独可读</div>
+              </div>
+            </div>
+          </div>
+          <p class="text-sm"><span class="font-medium">Problem:</span>depth 是「有人用的 interface 背后的行为」——8 个无人调用的 pub 函数是纯负资产,只稀释真实判断链的可读性。</p>
+          <p class="text-sm"><span class="font-medium">Solution:</span>删函数、瘦 trait(93→91);weekly_review 要么补读路径、要么按「留白如实标注」写明未接。</p>
+          <ul class="text-sm text-slate-700 list-disc list-inside space-y-0.5">
+            <li>删除测试:复杂度直接消失</li>
+            <li>当天可完成的最小赢</li>
+            <li>ui/lib.rs 顺手修掉「unit-tested」失实 doc</li>
+          </ul>
+        </article>
+
+        <!-- ══════════ C7 ══════════ -->
+        <article id="c7" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h2 class="font-serif text-xl">C7 · VM seam 补全:屏幕只读,不算</h2>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">Worth exploring</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">in-process</span>
+          </div>
+          <div class="font-mono text-sm text-slate-600">ui/src/vm.rs (1804 行扁平 / 15 条注释分隔线) · app-desktop/kernel.rs:73-93 (HubVm 住错边) · 23 处屏内自算 · build_vm 458 行含 per-skill N+1</div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">Before</div>
+              <pre class="mermaid">
+flowchart LR
+  subgraph UI["ui(wasm32 门)"]
+    VM["vm.rs 41 纯函数"]
+  end
+  subgraph D["app-desktop"]
+    HV["HubVm 声明在 kernel.rs"]
+    S["屏幕 ×8"]
+  end
+  S -.23 处自算 join/谓词.-> S
+  S -->|"OpVm 32 字段整传 ×22"| HV
+  classDef leak stroke:#dc2626,stroke-width:2px,color:#dc2626;
+  class HV,S leak
+              </pre>
+              <p class="text-xs text-slate-500 mt-1">pid→项目名抄 4 份;find-else-已不存在抄 5 份;preview_chars 被屏幕重实现;build_vm 每次派发 per-skill 一查(库到 300 资产=每次点击 ~300 次 SQLite 往返)</p>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">After</div>
+              <pre class="mermaid">
+flowchart LR
+  subgraph UI["ui(wasm32 门重新有牙)"]
+    HV2["vm::hub 收编 HubVm + 按名解析集"]
+  end
+  subgraph D["app-desktop"]
+    S2["屏幕:读字段,按所读切片收窄 props"]
+  end
+  HV2 --> S2
+  classDef deep fill:#0f172a,color:#e2e8f0,stroke:#0f172a,stroke-width:3px;
+  class HV2 deep
+              </pre>
+            </div>
+          </div>
+          <p class="text-sm"><span class="font-medium">Problem:</span>seam 在但常被绕过:23 处 join/谓词在渲染模块现算(其中 8 处本就是纯的、wasm-safe 的,只是住错边),连一条产品铁律(状态表)也随之落进了 op.rs。</p>
+          <p class="text-sm"><span class="font-medium">Solution:</span>HubVm 迁入 ui、查询集归 vm、CardVm 自带 owner 标签、组件 props 收窄到所读切片。</p>
+          <ul class="text-sm text-slate-700 list-disc list-inside space-y-0.5">
+            <li>leverage:查一次,8 屏受益</li>
+            <li>memo 比 3 个字段不比 32</li>
+            <li>N+1 顺手消掉</li>
+          </ul>
+        </article>
+
+        <!-- ══════════ C8 ══════════ -->
+        <article id="c8" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h2 class="font-serif text-xl">C8 · 播种 / 对账一处安家</h2>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">Worth exploring</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">in-process</span>
+          </div>
+          <div class="font-mono text-sm text-slate-600">bw-store/src/seed.rs (3 种幂等策略) · bw-app/src/bw_canon.rs (74 行,已深) · bw-app/src/lib.rs:3289-3550 (Boot Pass 1/2 + 两份 5 元素历史台账贴在 match 臂里)</div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">Before</div>
+              <pre class="mermaid">
+flowchart TB
+  subgraph ST["bw-store"]
+    SE["seed.rs:种一半<br/>(拒绝更新存量)"]
+  end
+  subgraph AP["bw-app"]
+    CA["bw_canon.rs 解析+3 守卫"]
+    P["Boot Pass1/2:对账另一半<br/>+32 行历史正文进 match 臂"]
+  end
+  SE -.doc 互相指路.-> P
+  CA --> P
+  classDef leak stroke:#dc2626,stroke-width:2px,color:#dc2626;
+  class SE,P leak
+              </pre>
+              <p class="text-xs text-slate-500 mt-1">近 20 次 lib.rs 提交有 4 次都在改这同一块;每次 Boot 全表扫 skill 4 遍</p>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-3 flex flex-col justify-center">
+              <div class="modlabel text-slate-400 mb-2">After</div>
+              <div class="deepbox rounded-lg p-4 text-center">
+                <div class="text-sm font-medium">对账 module(bw-app)</div>
+                <div class="text-xs text-slate-300 mt-1">plant-if-missing + catch-up-if-diverged 同居一处;<br/>历史台账是它的有界数据;扫一遍表</div>
+              </div>
+              <p class="text-xs text-slate-500 mt-2 text-center">删除测试:seed.rs 零 SQL 全是薄循环——搬家即减接口(set_*_stage_ref 几乎专为它存在)</p>
+            </div>
+          </div>
+          <p class="text-sm"><span class="font-medium">Problem:</span>「bw 标准库落地并追平」一件事被劈在 2 crate 5 处,种/对账各拿一半,靠互相指路的 doc comment 缝合,谁都无法单独读懂。</p>
+          <p class="text-sm"><span class="font-medium">Solution:</span>一个对账 module 同时拥有两半;seed.rs 的三个薄循环搬来同住,幂等策略从 3 种收敛。</p>
+          <ul class="text-sm text-slate-700 list-disc list-inside space-y-0.5">
+            <li>locality:4 次提交改 1 处</li>
+            <li>Boot 臂卸掉 262 行里的大半</li>
+            <li>全表扫描 4 次 → 1 次</li>
+          </ul>
+        </article>
+
+        <!-- ══════════ C9 ══════════ -->
+        <article id="c9" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h2 class="font-serif text-xl">C9 · 「真跑 / 演示」成为名词</h2>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">Worth exploring</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">in-process</span>
+          </div>
+          <div class="font-mono text-sm text-slate-600">bw-app/src/lib.rs — workspace_path.trim().is_empty() ×10 · op.rs ×5 · 执行器选择梯子双抄 (1449-1481 / 1869-1902) · mock 披露串双抄 (3071 / 4557) · PlaybookCtx 双抄 (3063 / 4549)</div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-3">
+              <div class="modlabel text-slate-400 mb-1">Before — 16 处从裸字符串现推</div>
+              <div class="flex flex-wrap gap-1 py-2">
+                <span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">:1456</span><span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">:1775</span><span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">:3070</span><span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">:3150</span><span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">:4087</span><span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">:4129</span><span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">:4435</span><span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">:4556</span><span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">:5863</span><span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">:5978</span><span class="text-[9px] font-mono border border-red-300 text-red-600 rounded px-1 py-0.5">op.rs ×5</span><span class="text-[9px] font-mono border border-slate-300 rounded px-1 py-0.5">git_log.rs:45</span>
+              </div>
+              <div class="bg-red-50 border border-red-200 rounded p-2 text-xs font-mono">
+                :3071 「…MockExecutor 上<span class="text-red-600 font-bold">,</span>」(半角)<br/>
+                :4557 「…MockExecutor 上<span class="text-red-600 font-bold">，</span>」(全角)
+              </div>
+              <p class="text-xs text-slate-500 mt-1">同一句用户可见的实话,两份抄本,已漂一个标点</p>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-3 flex flex-col justify-center">
+              <div class="modlabel text-slate-400 mb-2">After</div>
+              <div class="deepbox rounded-lg p-4 text-center">
+                <div class="text-sm font-medium">执行路线:一次判定,处处携带</div>
+                <div class="text-xs text-slate-300 mt-1">真跑 / 演示(mock 自我标注单点产出)/ 诚实报错;<br/>PlaybookCtx 组装顺手合一</div>
+              </div>
+            </div>
+          </div>
+          <p class="text-sm"><span class="font-medium">Problem:</span>「这一次是真执行还是流程演示」是产品纪律 2 的承重概念,却从未成为领域名词——16 处现推、两份选择梯子靠散文互述、披露串已实测漂移。</p>
+          <p class="text-sm"><span class="font-medium">Solution:</span>判定收进一个命名概念,mock 自我标注由它单点产出;顺带吸收 PlaybookCtx 双抄。</p>
+          <ul class="text-sm text-slate-700 list-disc list-inside space-y-0.5">
+            <li>判定 16 处 → 1 处</li>
+            <li>披露串不可能再漂</li>
+            <li>词表候选新词(留给 /domain-modeling)</li>
+          </ul>
+        </article>
+
+      </section>
+
+      <!-- ══════════ 记录在案,未开卡 ══════════ -->
+      <section class="text-sm text-slate-600 space-y-1 border-t border-slate-200 pt-6">
+        <h3 class="font-serif text-lg text-slate-800">记录在案,本轮未开卡</h3>
+        <ul class="list-disc list-inside space-y-1">
+          <li>model.rs「workflow」标记下 956 行实为六簇混居,Hub 类型错档在 1700 行外;文本协议对(契约后缀+解析器)是真 deep module,值得独立安家 —— 与 C6 后再看。</li>
+          <li>StageKind::color()/default_view() 把十六进制色值与视图文案带出内核:guard-kernel-ui-free 查的是依赖不是概念,展示数据穿墙未被拦。</li>
+          <li>recompute_signals(sqlite.rs:955)与 handoff_stage(:880)非事务:崩在半程会留下派生一半的信号 / 交棒日志与 active_stage 不同步。</li>
+          <li>ADR-0001 R5(OpStage 改名)仍留白 —— C7 若动 OpVm,别顺手拍名字,规范词未定。</li>
+        </ul>
+      </section>
+
+      <!-- ══════════ Top recommendation ══════════ -->
+      <section id="top-recommendation" class="deepbox rounded-xl p-8">
+        <div class="modlabel text-slate-400 mb-2">Top recommendation</div>
+        <h2 class="font-serif text-2xl mb-2"><a href="#c1" class="underline decoration-slate-500 underline-offset-4">C1 · 给 gh / git 立 adapter seam</a></h2>
+        <p class="text-sm text-slate-300">库内已有满分示范(Executor:1 方法 · 3 adapter · 可跑契约),把同一形状复制给「仓那一侧」,落地当天即可删掉 5 份手养 bash 假 gh,而它正对着当前主线(PR 验收环 / GitHub 主体化)最常改的面。</p>
+        <p class="text-xs text-slate-400 mt-3">想要当天见效的小赢:先做 <a href="#c6" class="underline">C6(纯删除)</a>,半小时级。</p>
+      </section>
+
+    </main>
+  </body>
+</html>
