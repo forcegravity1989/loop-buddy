@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS project (
     -- 正本的 `north_star.collect`;空串=正本从未同步过(老库/新建项目一致)。
     -- name/def 走既有 north_star/ns_def 两列(SyncMetricsFile 复用 set_north_star
     -- 的同一条 UPDATE),这里只加正本独有的采集方案两列。
-    north_star_collect_kind  TEXT NOT NULL DEFAULT '', -- 'github'|'connector'|'bw'|'manual'|''
+    north_star_collect_kind  TEXT NOT NULL DEFAULT '', -- 'github'|'connector'|'bw'|'manual'|'script'|''
     north_star_collect_query TEXT NOT NULL DEFAULT '',
     signal             TEXT,                     -- derived cache (L6)
     weekly_signal      TEXT,                     -- derived snapshot
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS metric (
     -- 的 SyncMetricsFile 命令(kind/query 语义见该模块文档)。老行(含界面
     -- UpsertManualMetric 手建的)一律 ''/''/'manual' —— 和"没有采集方案、手建"
     -- 这个真实状态完全一致,不是编出来的默认值。
-    collect_kind       TEXT NOT NULL DEFAULT '', -- 'github'|'connector'|'bw'|'manual'|''
+    collect_kind       TEXT NOT NULL DEFAULT '', -- 'github'|'connector'|'bw'|'manual'|'script'|''
     collect_query      TEXT NOT NULL DEFAULT '',
     origin             TEXT NOT NULL DEFAULT 'manual', -- 'manual'(界面手建) | 'file'(正本文件同步)
     signal             TEXT,                     -- derived cache (L2/L3)
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS observation (
     id            TEXT PRIMARY KEY,
     metric_id     TEXT NOT NULL REFERENCES metric(id),
     ts            INTEGER NOT NULL,              -- unix seconds, as_of
-    source_kind   TEXT NOT NULL,                -- 'manual' | 'connector' | …
+    source_kind   TEXT NOT NULL,                -- 'manual' | 'connector' | 'script' | …
     raw           TEXT NOT NULL,                -- display value: '60%' '5/7' '842ms'
     source_run_id TEXT,
     created_at    INTEGER NOT NULL
