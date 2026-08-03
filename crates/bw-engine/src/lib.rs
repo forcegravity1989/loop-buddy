@@ -43,7 +43,9 @@ pub use metrics_file::{
 };
 pub use mock::MockExecutor;
 pub use unsupported_cli::UnsupportedCliExecutor;
-pub use workspace::{provision_git_workspace, ProvisionError};
+pub use workspace::{
+    provision_git_workspace, provision_issue_worktree, IssueWorktreeGuard, ProvisionError,
+};
 
 /// One executable phase, built from a [`WorkflowSpec`] phase.
 #[derive(Clone, Debug)]
@@ -116,6 +118,12 @@ pub struct RunSummary {
 /// [`ClaudeCliExecutor`] for a configured project, and reuses one long-lived
 /// [`Engine`] around [`MockExecutor`] otherwise. `#[async_trait]`'s expansion
 /// already boxes the futures, so `Executor` is dyn-safe with no wrapper enum.
+//
+// plan/17 S3: `Clone` so the backgrounded issue-run path can move an owned
+// `Engine` into a `tokio::spawn` (mock path clones the long-lived shared
+// engine's `Arc`; real path clones a fresh one-shot executor's `Arc` — both
+// cheap). The inline path still borrows it by `&Engine`, unchanged.
+#[derive(Clone)]
 pub struct Engine {
     executor: Arc<dyn Executor>,
 }
