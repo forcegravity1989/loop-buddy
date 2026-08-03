@@ -118,6 +118,28 @@ pub(crate) fn import_skill_package_from_disk(
     })
 }
 
+/// plan/渠道6: scan a project workspace's own `skills/` dir for skill
+/// packages — each a folder with a `SKILL.md` (+ optional support files),
+/// the same shape `find_skill_package_dirs` + `import_skill_package_from_disk`
+/// already handle for external libraries. `project_id`/`source` are filled by
+/// the caller (`App::sync_project_assets`), not here — this helper stays
+/// pure-IO, matching `import_skill_package_from_disk`.
+///
+/// Soft-degrade by design (a project without its own `skills/` is normal, not
+/// an error): `workspace/skills/` missing → empty vec; a single package that
+/// fails to parse is skipped, not fatal — one malformed folder doesn't sink
+/// the rest, and the project's good skills still register.
+pub(crate) fn scan_project_skills_dir(workspace: &str) -> Vec<ParsedSkillPackage> {
+    let root = Path::new(workspace).join("skills");
+    match find_skill_package_dirs(&root.to_string_lossy()) {
+        Ok(dirs) => dirs
+            .iter()
+            .filter_map(|d| import_skill_package_from_disk(&d.to_string_lossy()).ok())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Split a SKILL.md's leading `---\n...\n---\n` YAML frontmatter block from
 /// its body. Errors honestly if the file doesn't start with `---` or the
 /// block is never closed, instead of silently treating the whole file as

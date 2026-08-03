@@ -889,6 +889,12 @@ pub struct SkillCardVm {
     /// `SkillCard.stage_ref` already is one — no round-trip needed here.
     pub stage_ref: Option<StageKind>,
     pub source_label: &'static str,
+    /// plan/渠道6: `true` iff scanned in from the project's own workspace
+    /// (`BW_PROJECT_ASSETS_LIBRARY`) — 种A, registered-visible only, excluded
+    /// from every injection picker (issue standard_skill / assignee /
+    /// workflow crew / cron RunSkill). Projected here because the UI tier sees
+    /// `source_label` (="官方选型" for every Official library), not `HubSource`.
+    pub is_project_assets: bool,
     /// T11 (plan/12 §7): "改编自 <库名>" — non-`None` iff an edit flipped
     /// this row away from `Official`; the card face renders this as a small
     /// provenance note alongside `source_label` rather than pretending the
@@ -943,6 +949,7 @@ pub fn skill_card(s: &SkillCard, files: Vec<SkillFileVm>) -> SkillCardVm {
         category: s.category.clone(),
         stage_ref: s.stage_ref,
         source_label: s.source.label(),
+        is_project_assets: s.source.is_project_assets(),
         adapted_from: s.adapted_from.clone(),
         uses: s.uses,
         content: s.content.clone(),
@@ -1060,6 +1067,9 @@ pub struct AgentCardVm {
     /// T5 (plan/12 §6): provenance chip label, same vocabulary
     /// `SkillCardVm::source_label` already surfaces.
     pub source_label: &'static str,
+    /// plan/渠道6: 种A flag, same as `SkillCardVm::is_project_assets` —
+    /// registered-visible only, excluded from assignee / workflow crew pickers.
+    pub is_project_assets: bool,
     /// T11 (plan/12 §7): "改编自 <库名>" — same field/reasoning as
     /// `SkillCardVm::adapted_from`.
     pub adapted_from: Option<String>,
@@ -1101,6 +1111,7 @@ pub fn agent_card(a: &AgentCard) -> AgentCardVm {
         tools: a.tools.clone(),
         agent_cli_label: agent_cli_label(&a.agent_cli),
         source_label: a.source.label(),
+        is_project_assets: a.source.is_project_assets(),
         adapted_from: a.adapted_from.clone(),
         project_id: a.project_id,
     }
@@ -1374,9 +1385,12 @@ pub struct ConnectorCardVm {
     pub status_label: &'static str,
     pub last_sync: String,
     pub scope: String,
-    /// `true` only for kinds with a *real* probe (`git-repo`/`claude-cli`) —
-    /// the sync button renders only where syncing really does something;
-    /// reference entries honestly show none.
+    /// `true` only for kinds with a *real* probe
+    /// (`git-repo`/`claude-cli`/`github-repo`/`codehub-repo`) — the sync button
+    /// renders only where syncing really does something; reference entries
+    /// honestly show none. (`github-repo`/`codehub-repo` 的真探针在
+    /// `bw-app` `probe_connector` 各有 arm;之前漏认导致它们被当登记项、
+    /// 无同步按钮、永远未连接——codehub/github 特性漏改,此处补齐。)
     pub syncable: bool,
     /// `None` = 全局(如 claude-cli 探针);`Some` = 项目自有(plan/10 K1
     /// 侧边栏过滤用)。
@@ -1400,7 +1414,10 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
         scope: c.scope.clone(),
         syncable: matches!(
             c.kind.as_str(),
-            bw_core::model::CONNECTOR_KIND_GIT_REPO | bw_core::model::CONNECTOR_KIND_CLAUDE_CLI
+            bw_core::model::CONNECTOR_KIND_GIT_REPO
+                | bw_core::model::CONNECTOR_KIND_CLAUDE_CLI
+                | bw_core::model::CONNECTOR_KIND_GITHUB_REPO
+                | bw_core::model::CONNECTOR_KIND_CODEHUB_REPO
         ),
         project_id: c.project_id,
     }

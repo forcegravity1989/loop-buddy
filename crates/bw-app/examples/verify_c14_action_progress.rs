@@ -30,7 +30,16 @@ use bw_core::model::Cadence;
 use bw_core::ProjectId;
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{SqliteStore, Store};
-use std::os::unix::fs::PermissionsExt;
+/// 给 stub 二进制加可执行位。非 unix 上 no-op(Windows 按扩展名执行;此处
+/// `#!/bin/sh` stub 本是 unix 向 E2E,Windows 上跑不动,但 cfg-gate 让 example
+/// 至少能跨平台编译)。
+#[cfg(unix)]
+fn make_executable(p: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755));
+}
+#[cfg(not(unix))]
+fn make_executable(_p: &std::path::Path) {}
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -171,7 +180,7 @@ async fn main() {
     std::fs::create_dir_all(&stub_bin).unwrap();
     let gh = stub_bin.join("gh");
     std::fs::write(&gh, STUB_GH).unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    make_executable(&gh);
     let old_path = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", stub_bin.display(), old_path));
     let remotes = ws_root.join(".stub-remotes");
@@ -233,6 +242,7 @@ async fn main() {
             slug: "c14-progress-demo".into(),
             private: true,
         }),
+        codehub: None,
     })
     .await
     .expect("create project (github new, ok path)");
@@ -251,6 +261,7 @@ async fn main() {
             slug: FAIL_SLUG.into(),
             private: true,
         }),
+        codehub: None,
     })
     .await
     .expect("create project (github new, fail path) — CreateProject itself must not error");
@@ -276,6 +287,7 @@ async fn main() {
             owner: "testowner".into(),
             repo: "demo-existing".into(),
         }),
+        codehub: None,
     })
     .await
     .expect("create project (github existing / clone)");
@@ -337,12 +349,12 @@ async fn main() {
         "建仓失败后应软降级到本地兜底仓,workspace_path 不应为空"
     );
     assert!(
-        proj_fail_row.github_remote.trim().is_empty(),
-        "建仓失败的项目不应有 github_remote(本地兜底≠已挂 GitHub 仓)"
+        proj_fail_row.remote_path.trim().is_empty(),
+        "建仓失败的项目不应有 remote_path(本地兜底≠已挂 GitHub 仓)"
     );
     println!(
-        "  ✓ 建仓失败项目本地兜底落地:workspace_path={:?} github_remote={:?}",
-        proj_fail_row.workspace_path, proj_fail_row.github_remote
+        "  ✓ 建仓失败项目本地兜底落地:workspace_path={:?} remote_path={:?}",
+        proj_fail_row.workspace_path, proj_fail_row.remote_path
     );
 
     println!("\n✓ verify_c14_action_progress done — every Started really preceded its Ok/Fail, with a real elapsed gap.");

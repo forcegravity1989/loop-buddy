@@ -128,8 +128,8 @@ pub fn WorkflowHub(
             }
             if adhoc() {
                 AdHocWorkflowForm {
-                    skills: hub.skills.clone(),
-                    agents: hub.agents.clone(),
+                    skills: hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect(),
+                    agents: hub.agents.iter().filter(|a| !a.is_project_assets).cloned().collect(),
                     projects: projects.clone(),
                     on_run: move |_| {
                         adhoc.set(false);
@@ -139,8 +139,8 @@ pub fn WorkflowHub(
             }
             if creating() {
                 CreateWorkflowForm {
-                    skills: hub.skills.clone(),
-                    agents: hub.agents.clone(),
+                    skills: hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect(),
+                    agents: hub.agents.iter().filter(|a| !a.is_project_assets).cloned().collect(),
                     on_done: move |_| creating.set(false),
                 }
             }
@@ -248,8 +248,8 @@ pub fn WorkflowHub(
                                         let stage_ref = row.stage_ref;
                                         let row_name = row.name.clone();
                                         let detail = details_by_id.get(&row_id).cloned();
-                                        let skills_pool = hub.skills.clone();
-                                        let agents_pool = hub.agents.clone();
+                                        let skills_pool = hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect();
+                                        let agents_pool = hub.agents.iter().filter(|a| !a.is_project_assets).cloned().collect();
                                         // 真实项目名(从 project_id 反查)——`None` = 共享/内建阶段模板。
                                         let owner_project = row
                                             .project_id

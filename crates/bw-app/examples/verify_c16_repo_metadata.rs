@@ -28,8 +28,18 @@ use bw_app::{App, Command};
 use bw_core::ProjectId;
 use bw_engine::{ClaudeCliConfig, Engine, GithubRepoSummary, MockExecutor};
 use bw_store::{SqliteStore, Store};
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
+
+/// 给 stub 二进制加可执行位。非 unix 上 no-op(Windows 按扩展名执行;此处
+/// `#!/bin/sh` stub 本是 unix 向 E2E,Windows 上跑不动,但 cfg-gate 让 example
+/// 至少能跨平台编译)。
+#[cfg(unix)]
+fn make_executable(p: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755));
+}
+#[cfg(not(unix))]
+fn make_executable(_p: &std::path::Path) {}
 
 /// 【mock】stub `gh` — 不是真实 GitHub。只答 `repo list`(本例唯一用到的
 /// 子命令),回一条带 C16 扩展字段的真实形状 JSON。
@@ -140,6 +150,7 @@ async fn main() {
         desc: "C16 headless E2E · provider 写入路径".into(),
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .expect("CreateProject should succeed");
@@ -162,7 +173,7 @@ async fn main() {
     std::fs::create_dir_all(&stub_dir).unwrap();
     let gh = stub_dir.join("gh");
     std::fs::write(&gh, STUB_GH).unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    make_executable(&gh);
     let old_path = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", stub_dir.display(), old_path));
     println!("[stub] gh → {} (【mock】, NOT real GitHub)", gh.display());
@@ -208,10 +219,22 @@ async fn main() {
     check(
         &mut all_ok,
         "老库存量行其余字段原样保留(不是新建的空行)",
-        old_row.name == "C16-老库存量项目" && old_row.github_remote == "testowner/pre-c16-repo",
+        old_row.name == "C16-老库存量项目" && old_row.remote_path == "testowner/pre-c16-repo",
         &format!(
-            "name={:?} github_remote={:?}",
-            old_row.name, old_row.github_remote
+            "name={:?} remote_path={:?}",
+            old_row.name, old_row.remote_path
+        ),
+    );
+    // codehub 对接(2026-07-28):老库 github_remote 改名成 remote_path 后,
+    // 值原样保留(改名迁移不丢数据);新加的 remote_host 对存量 github 行
+    // 回填 'github.com'(隐含 host 显式化)。
+    check(
+        &mut all_ok,
+        "github_remote 改名成 remote_path + remote_host 回填 github.com",
+        old_row.remote_path == "testowner/pre-c16-repo" && old_row.remote_host == "github.com",
+        &format!(
+            "remote_path={:?} remote_host={:?}",
+            old_row.remote_path, old_row.remote_host
         ),
     );
 

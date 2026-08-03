@@ -1,0 +1,427 @@
+//! CodeHub remote — shell-out `codehub-cli`(Go CLI,GitLab v4 同构封装,默认
+//! JSON 输出,token 存 OS keyring)。与 [`crate::github`] 对称:无状态自由
+//! 函数 + `tokio::process` shell-out,**零 HTTP 依赖**。token 不管(keyring
+//! 里 `auth login` 存好),`host`/`path` 按 project 的 `(remote_host,
+//! remote_path)` 显式带 `-H`/`-p`——绿/黄/内源三 host 同名 path 也不会混,
+//! 因为每次调用都带显式 host,不存在「猜 host」的歧义分支,也没有对应的
+//! 错误类型(`CodehubError` 只认 NotInstalled/Command/Parse)。
+//!
+//! 不进 `Executor` 体系——`codehub-cli` 是 VCS 远端 API 客户端(对标 `gh`),
+//! 不是 agent 执行器(对标 `claude`)。两种 shell-out 模式别混。
+
+use std::path::Path;
+use std::process::Stdio;
+use time::Date;
+
+#[derive(Debug, thiserror::Error)]
+pub enum CodehubError {
+    #[error("codehub-cli 未安装或不在 PATH")]
+    NotInstalled,
+    #[error("codehub-cli 失败:{0}")]
+    Command(String),
+    #[error("解析 codehub-cli 输出失败:{0}")]
+    Parse(String),
+}
+
+fn spawn_err(e: std::io::Error) -> CodehubError {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        CodehubError::NotInstalled
+    } else {
+        CodehubError::Command(e.to_string())
+    }
+}
+
+fn stderr_text(o: &std::process::Output) -> String {
+    String::from_utf8_lossy(&o.stderr).trim().to_string()
+}
+
+/// `codehub-cli project view -p <path> -H <host>` → 一行人话详情
+/// (`path · 可见性[ · 已归档] · 最近活跃`)。Read-only,零仓副作用。
+pub async fn probe(host: &str, path: &str) -> Result<String, CodehubError> {
+    let out = tokio::process::Command::new("codehub-cli")
+        .args(["project", "view", "-p", path, "-H", host])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| CodehubError::Parse(format!("project view JSON:{e}")))?;
+    let pns = v["path_with_namespace"].as_str().unwrap_or(path);
+    let vis = v["visibility"].as_str().unwrap_or("未知");
+    let archived = v["archived"].as_bool().unwrap_or(false);
+    let last = v["last_activity_at"].as_str().unwrap_or("未知");
+    let arch = if archived { " · 已归档" } else { "" };
+    Ok(format!("{pns} · {vis}{arch} · 最近活跃 {last}"))
+}
+
+/// `codehub-cli issue create -p <path> -H <host> --title … --description … --jq .iid`
+/// → 新 issue 的 `iid`(这就是这张 Issue 的跨系统身份,对标 github 的 issue
+/// 号)。调它会在 codehub 仓里**真开一个 issue**——只在创建流/trio 同步路径
+/// 调,绝不自动。`body` 进 `--description`。
+pub async fn create_issue(
+    host: &str,
+    path: &str,
+    title: &str,
+    body: &str,
+) -> Result<u32, CodehubError> {
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "issue",
+            "create",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--title",
+            title,
+            "--description",
+            body,
+            "--jq",
+            ".iid",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    text.parse::<u32>()
+        .map_err(|_| CodehubError::Parse(format!("无法解析 codehub issue iid:{text:?}")))
+}
+
+/// `codehub-cli mr create` — the codehub parity of [`crate::github::open_pr`]:
+/// stage + commit + push the run's edits on `bw/issue-<n>` (shared
+/// [`crate::workspace::stage_commit_push`]), then open a merge request from
+/// `bw/issue-<n>` → the project's default branch. The MR body carries
+/// `Closes #<n>` so merging it auto-closes codehub issue `<n>` (GitLab
+/// standard, same role as github's `Closes #<n>`); `--issue-nums issue<n>`
+/// additionally links the MR↔issue (visible in codehub's "linked issues",
+/// but the link alone does NOT auto-close — 2026-07-31 实测 issue 31/32/33
+/// merge 后仍 opened,故靠 body 的 Closes). Returns the new MR's iid as
+/// `PrOpened::Created`.
+///
+/// **No `Adopted` path** (unlike github): if an MR for the branch already
+/// exists, `mr create` fails and the issue stays `InProgress` retryable —
+/// honest, never fabricates success. The full buddy-run E2E uses a fresh
+/// branch (`bw/issue-<n>` per issue), so a retry hits no pre-existing MR.
+///
+/// `target_branch` is resolved at runtime from `origin/HEAD` — **not**
+/// hardcoded (maas is `master`, other projects `main`/`develop`). Smoke-
+/// tested 2026-07-30: `git symbolic-ref refs/remotes/origin/HEAD` →
+/// `refs/remotes/origin/master`; `--short` wrongly yields `origin/master`
+/// (codehub-cli 404s on "origin/master"), so we strip the `refs/remotes/
+/// origin/` prefix by hand. **Never merges** — only opens the MR.
+pub async fn create_mr(
+    host: &str,
+    path: &str,
+    workspace: &Path,
+    issue_number: u32,
+    title: &str,
+) -> Result<crate::github::PrOpened, CodehubError> {
+    let branch = format!("bw/issue-{issue_number}");
+    crate::workspace::stage_commit_push(workspace, &branch, issue_number, title)
+        .await
+        .map_err(|e| CodehubError::Command(format!("git 准备失败:{e}")))?;
+    // target-branch = project default, resolved at runtime (see doc comment).
+    let tgt = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    // `symbolic-ref` exits non-zero with empty stdout when the clone has no
+    // `origin/HEAD` set (rare for a normal clone). Fall back to `master`
+    // rather than hard-failing: for a wrong-base non-master project this
+    // surfaces honestly as codehub-cli's "branch not found" — never
+    // fabricated success. (Code-review 2026-07-30: the prior early `Err`
+    // made the doc's promised master fallback unreachable on this path.)
+    let target = String::from_utf8_lossy(&tgt.stdout)
+        .trim()
+        .strip_prefix("refs/remotes/origin/")
+        .unwrap_or("master")
+        .to_string();
+    // P7-7A parity: adopt an already-open MR for this branch if one exists.
+    // A prior run (or a manual smoke) may have opened an MR that BW didn't
+    // record — `mr create` would then fail "already exists". Read the real
+    // iid back via `mr list --source-branch` (never guessed, same honesty as
+    // github's `adopt_existing_pr`). Falls through to `mr create` when no
+    // existing MR (or the list call itself fails — then `mr create` reports).
+    let list = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "list",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--source-branch",
+            &branch,
+            "--state",
+            "opened",
+            "--jq",
+            ".[0].iid",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if list.status.success() {
+        let text = String::from_utf8_lossy(&list.stdout).trim().to_string();
+        if !text.is_empty() && text != "null" {
+            if let Ok(iid) = text.parse::<u32>() {
+                return Ok(crate::github::PrOpened::Adopted(iid));
+            }
+        }
+    }
+    let body = format!(
+        "BW 执行器为 Issue #{issue_number} 提交的改动,等待人工 merge 验收。\n\nCloses #{issue_number}"
+    );
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "create",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--source-branch",
+            &branch,
+            "--target-branch",
+            &target,
+            "--title",
+            title,
+            "--description",
+            &body,
+            "--issue-nums",
+            &format!("issue{issue_number}"),
+            "--jq",
+            ".iid",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let iid = text
+        .parse::<u32>()
+        .map_err(|_| CodehubError::Parse(format!("无法解析 codehub MR iid:{text:?}")))?;
+    Ok(crate::github::PrOpened::Created(iid))
+}
+
+/// `codehub-cli mr merge <iid> --squash -y` — the codehub parity of
+/// [`crate::github::merge_pr`]: the human验收 action that integrates the
+/// source branch into the target. Squash-merges (matches github's `--squash`).
+/// The caller ([`crate::Remote::merge_mr`] ← `MergeIssuePr`) settles the
+/// Issue `Done` on `Ok` via the existing `TransitionIssue` InReview→Done path;
+/// on `Err` the Issue stays `InReview` retryable — never reverse-settled,
+/// never fabricated. **Only ever called from `MergeIssuePr` (a human click),
+/// never from any run/executor path** (plan/13 D3+D11).
+pub async fn merge_mr(host: &str, path: &str, mr_iid: u32) -> Result<(), CodehubError> {
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "merge",
+            &mr_iid.to_string(),
+            "-p",
+            path,
+            "-H",
+            host,
+            "--squash",
+            "-y",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    let merge_stderr = stderr_text(&out);
+    if !out.status.success() {
+        return Err(CodehubError::Command(merge_stderr));
+    }
+    // 读回为证: codehub-cli mr merge 的退出码靠不住——2026-07-31 实测 403
+    // (protected-branch / 无 merge 权限)时,首次调用可退出 0(error 只打到
+    // stderr)、MR 实际没合(state 仍 "opened")。只信「MR state 真变 merged」
+    // 才算成功,绝不假 Done。复跑 mr view 拿 state(`--jq .merged` 对未合 MR
+    // 返 null,故用 `.state`)。
+    let verify = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "view",
+            &mr_iid.to_string(),
+            "-p",
+            path,
+            "-H",
+            host,
+            "--jq",
+            ".state",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !verify.status.success() {
+        return Err(CodehubError::Command(format!(
+            "merge 后读回 MR 状态失败:{} | merge stderr: {merge_stderr}",
+            stderr_text(&verify)
+        )));
+    }
+    let state = String::from_utf8_lossy(&verify.stdout)
+        .trim()
+        .trim_matches('"')
+        .to_string();
+    if state == "merged" {
+        Ok(())
+    } else {
+        Err(CodehubError::Command(format!(
+            "merge 未生效(MR state={state},应 merged):{merge_stderr}"
+        )))
+    }
+}
+
+/// `codehub-cli issue|mr list -p <path> -H <host> --state <state> -l 0 --jq length`
+/// → 计数。codehub 无 GitHub 的 `search/issues total_count`,改用分页 list 的
+/// `--jq length` 让 CLI 端计数(P3 实测:maas opened issues=6、merged MRs=9)。
+///
+/// **`-l 0` = 全量**(实测:codehub-cli 把 0 当"不限"取全部页,不是"取 0 条")。
+/// 若 CLI 升级改了语义(0 被解读成 limit=0 → 计数恒 0 静默出错),要复核。
+///
+/// **查询口径**(P5 定稿):P3 只认最小词汇 `issues:<state>` / `mrs:<state>`
+/// (state=opened|closed|merged|all)。复杂窗口(本周合入、按标签筛)留 P5
+/// ——口径等 P4 用户导入 maas 看真实需求再定,骨架先搭。`today` 参数留给
+/// P5 的日期窗口,这里 `_today` 暂不用。
+pub async fn collect_count(
+    host: &str,
+    path: &str,
+    query: &str,
+    _today: Date,
+) -> Result<u64, CodehubError> {
+    let q = query.trim();
+    let (kind, state) = q.split_once(':').ok_or_else(|| {
+        CodehubError::Parse(format!(
+            "codehub 查询需 'issues:<state>' 或 'mrs:<state>':{q:?}"
+        ))
+    })?;
+    let list_cmd = match kind.trim() {
+        "issues" => "issue",
+        "mrs" => "mr",
+        other => {
+            return Err(CodehubError::Parse(format!(
+                "未知 codehub 查询类型 {other:?}"
+            )))
+        }
+    };
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            list_cmd,
+            "list",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--state",
+            state.trim(),
+            "-l",
+            "0",
+            "--jq",
+            "length",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    text.parse::<u64>()
+        .map_err(|_| CodehubError::Parse(format!("无法解析 codehub 计数:{text:?}")))
+}
+
+/// Clone a codehub repo into `dest` over **SSH**. codehub 是局域网平台,HTTPS
+/// `git clone` 经代理隧道被拦(实测 504);SSH 走 SSH key、不经代理、不要
+/// token——开发者手敲 `git clone ssh://git@szv-open...:2222/.../maas.git` 就是
+/// 这条路,常规、不特立独行。
+///
+/// SSH host(`szv-open.codehub.huawei.com:2222`)≠ API host
+/// (`open.codehub.huawei.com`),不能从 (host,path) 手拼——从 `project view`
+/// 的 `ssh_url_to_repo` 字段取准确地址(`--template` 出裸串;`--jq` 带引号且
+/// 无 `-r`)。拿到后 raw `git clone`(codehub-cli 的 `repo clone` 对 SSH 输入
+/// 是纯透传,无增益,故绕过)。
+///
+/// `GIT_SSH_COMMAND` 带 `accept-new`(首次 host key 自动接受写 known_hosts,
+/// 免非交互卡死)+ `BatchMode=yes`(只走 key、不弹密码,密码会挂死非交互进程)。
+pub async fn clone_repo(host: &str, path: &str, dest: &Path) -> Result<(), CodehubError> {
+    // 1. 取 ssh_url(--template 出裸串,无引号)
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "project",
+            "view",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--template",
+            "{{.ssh_url_to_repo}}",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(format!(
+            "取 ssh_url 失败(project view):{}",
+            stderr_text(&out)
+        )));
+    }
+    let ssh_url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // --template 对 null 字段输出 "<no value>";空/非 ssh:// 不喂给 git
+    // (老仓/无 SSH 配置的仓 ssh_url_to_repo 会是空)。
+    if !ssh_url.starts_with("ssh://") {
+        return Err(CodehubError::Command(format!(
+            "codehub 仓无 SSH clone 地址(ssh_url_to_repo 为空或老仓?):{ssh_url:?}"
+        )));
+    }
+    // 2. raw git clone(SSH key 认证,不经代理)
+    let out = tokio::process::Command::new("git")
+        .args(["clone", &ssh_url, &dest.to_string_lossy()])
+        .env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    Ok(())
+}

@@ -144,7 +144,8 @@ async fn find_or_create_project(app: &mut App) -> ProjectId {
                (Hacker News、arXiv)聚合、去重、过滤,生成一份可读的每日 AI 热点摘要。"
             .into(),
         workspace: None,
-        github: None, // 本地 mint,不绑 GitHub 远端(见文件头注释)
+        github: None,
+        codehub: None, // 本地 mint,不绑 GitHub 远端(见文件头注释)
     })
     .await
     .expect("create aihot project");

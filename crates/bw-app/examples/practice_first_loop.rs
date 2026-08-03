@@ -46,7 +46,7 @@ async fn dump_state(store: &Arc<dyn Store>, name: &str) {
     };
     println!(
         "  项目「{}」 phase={:?} remote={:?}",
-        proj.name, proj.phase, proj.github_remote
+        proj.name, proj.phase, proj.remote_path
     );
     let issues = store.list_issues(proj.id, None, None).await.unwrap();
     if issues.is_empty() {

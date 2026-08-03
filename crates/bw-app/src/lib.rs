@@ -33,8 +33,9 @@ use bw_core::model::{
     ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus,
     KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, PhaseRole, Readiness,
     RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, Verdict,
-    WorkflowKind, WorkflowSpec, BW_STANDARD_LIBRARY, CONNECTOR_KIND_CLAUDE_CLI,
-    CONNECTOR_KIND_GITHUB_REPO, CONNECTOR_KIND_GIT_REPO,
+    WorkflowKind, WorkflowSpec, BW_PROJECT_ASSETS_LIBRARY, BW_STANDARD_LIBRARY,
+    CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO,
+    CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
@@ -97,6 +98,16 @@ pub enum GithubOrigin {
     Existing { owner: String, repo: String },
 }
 
+/// CodeHub 为主体的创建流(2026-07-28):Repo 卡片选 codehub 平台时的远端
+/// 身份。`host` = API 域名(open.codehub.huawei.com 等,绿/黄/内源三域名);
+/// `path` = org/repo(innersource/AI-Coding_G/maas)。身份用户输入即已知,
+/// clone 不回 ref(区别于 GithubOrigin.Existing 的 owner/repo 拆分)。
+#[derive(Clone, Debug)]
+pub struct CodehubOrigin {
+    pub host: String,
+    pub path: String,
+}
+
 /// UI → kernel intents.
 pub enum Command {
     /// App start: load the project wall and re-derive every running project's
@@ -123,6 +134,10 @@ pub enum Command {
         /// bound (`workspace` also `None`) → today's local-mint-if-configured
         /// default, unchanged.
         github: Option<GithubOrigin>,
+        /// CodeHub 为主体(2026-07-28):Repo 卡片选 codehub 平台时的远端身份。
+        /// 与 `github`/`workspace` 三选一(UI 只设其一)。`None` = 没选 codehub
+        /// (走 github 或本地)。maas 这类已有 codehub 仓走这条(clone,不建新)。
+        codehub: Option<CodehubOrigin>,
     },
     /// GitHub 为主体的创建流(2026-07-22): 读一次当前用户可接入的仓列表,
     /// 填充 `AppState.github_repos`(Repo 卡片"接入已有仓"下拉的数据源)。
@@ -219,7 +234,7 @@ pub enum Command {
     /// on the chosen review cadence) and switches the project into `Running`.
     /// This is the creation flow's real *landing* point (读源码定,写明选择
     /// — 不是 Repo/Intent 卡提交,是末卡「确认 · 建立项目」): a
-    /// github_remote-backed project gets its standard Issue trio
+    /// remote_path-backed project gets its standard Issue trio
     /// (竞品分析→找指标→绑数据, plan/13 D8) minted here, right alongside
     /// `set_project_phase(Running)`.
     CompleteCreation {
@@ -242,9 +257,9 @@ pub enum Command {
     },
     /// P1(loop-buddy↔aihot 接线 spec):给一个**存量**项目补上 GitHub 远端
     /// —— `CreateProject` 的「绑定本地目录」分支([lib.rs:3121] 附近)只
-    /// `set_workspace`,从不写 `github_remote`,产品里此前没有补救入口。
+    /// `set_workspace`,从不写 `remote_path`,产品里此前没有补救入口。
     /// 对活跃项目生效(`self.active()`)。`gh repo view` 先探活,探不到就
-    /// 如实报错、一个字节不写库;探到之后依次写 `github_remote`、补建
+    /// 如实报错、一个字节不写库;探到之后依次写 `remote_path`、补建
     /// (幂等)`github-repo` connector、再接线本地工作区的 `origin`(工作区
     /// 已有 remote 且不符目标 → 拒绝覆盖,不静默改写用户的 git 配置)。
     /// `push_local=true` 时额外推当前分支。
@@ -771,7 +786,7 @@ pub enum Command {
     /// Issues and backfills `pr_number` / derives `InReview` — **read-only**,
     /// never rewrites GitHub, never reaches `Done` — then reloads from the
     /// store (mirrors `RefreshHubs` for the hub library, but project-scoped).
-    /// No active project / no `github_remote` ⇒ the GitHub step is skipped
+    /// No active project / no `remote_path` ⇒ the GitHub step is skipped
     /// and this is the same bare local reload it always was.
     RefreshIssues,
     SendSessionMessage {
@@ -946,6 +961,15 @@ pub enum AppError {
     NotFound,
     #[error("invalid: {0}")]
     Invalid(String),
+}
+
+/// codehub 对接(P2):bw-app 调 `Remote::for_project` / `Remote::xxx` 时把
+/// [`bw_engine::remote::RemoteError`] 归进既有 `Engine(String)` 口径——
+/// github 臂的 `GithubError` 与 codehub 臂的未接线拒斥都走这一条。
+impl From<bw_engine::remote::RemoteError> for AppError {
+    fn from(e: bw_engine::remote::RemoteError) -> Self {
+        AppError::Engine(e.to_string())
+    }
 }
 
 /// plan/16 §2 防线 1 (S1): the one name-format guard all three skill-writing
@@ -1250,7 +1274,7 @@ impl App {
             .get_project(project)
             .await?
             .ok_or(AppError::NotFound)?;
-        let remote = proj.github_remote.trim().to_string();
+        let remote = proj.remote_path.trim().to_string();
         if remote.is_empty() {
             // 无仓项目:整段跳过,今天的行为逐字节不变。
             return Ok(());
@@ -2141,6 +2165,72 @@ impl App {
                     last_target: String::new(),
                     driver: String::new(),
                     pos: 100 + kind.index() as i64,
+                    collect_kind: String::new(),
+                    collect_query: String::new(),
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// P5 · codehub 公共指标 seed(对标 `seed_stage_done_metrics` 的幂等套路):
+    /// 给 `provider=codehub` 且 `remote_path` 非空的项目种两条默认公共指标
+    /// ——开放 Issue 数 + 已合入 MR 数,`kind=codehub` 走 `collect_project_metrics`
+    /// 的 codehub arm 真采(`codehub-cli issue|mr list --jq length`)。**不用
+    /// 定义**——V3 规划里「公共指标默认有」的落地。非 codehub / 没接远端 →
+    /// no-op(留 github 的既有口径不动)。口径先用最小词汇 `issues:opened` /
+    /// `mrs:merged`,复杂窗口(本周合入)留后续按真实需求扩。
+    async fn seed_codehub_public_metrics(&self, project: ProjectId) -> Result<(), AppError> {
+        let proj = self
+            .store
+            .get_project(project)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if proj.provider != "codehub" || proj.remote_path.trim().is_empty() {
+            return Ok(());
+        }
+        // by-name 幂等:已有同名不重种(不抹既有值)。
+        let have: std::collections::HashSet<String> = self
+            .store
+            .persisted_signals(project)
+            .await?
+            .metrics
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
+        // (name, def, query) —— 公共计数,滞后指标(Lagging),空 target 保持
+        // signal Unknown(计数不是目标,只为点亮「有数据」)。
+        const PAIR: [(&str, &str, &str); 2] = [
+            (
+                "开放 Issue 数",
+                "codehub 仓当前 state=opened 的 issue 计数(机器源,codehub-cli issue list --jq length)",
+                "issues:opened",
+            ),
+            (
+                "已合入 MR 数",
+                "codehub 仓累计 state=merged 的 MR 计数(机器源,codehub-cli mr list --jq length)",
+                "mrs:merged",
+            ),
+        ];
+        for (idx, (name, def, query)) in PAIR.iter().copied().enumerate() {
+            if have.contains(name) {
+                continue;
+            }
+            self.store
+                .upsert_metric(NewMetric {
+                    id: MetricId::new(),
+                    project_id: project,
+                    role: MetricRole::Lagging,
+                    stage_kind: None,
+                    name: name.to_string(),
+                    def: def.to_string(),
+                    target_raw: String::new(),
+                    amber: AmberBand::default(),
+                    last_target: String::new(),
+                    driver: String::new(),
+                    pos: 200 + idx as i64,
+                    collect_kind: "codehub".into(),
+                    collect_query: query.to_string(),
                 })
                 .await?;
         }
@@ -2209,6 +2299,7 @@ impl App {
                         // value really changed — no observation spam).
                         if let Some(p) = c.project_id {
                             self.feed_workspace_metrics(p, &ev).await?;
+                            self.sync_project_assets(p, &workspace).await;
                         }
                         Ok((
                             true,
@@ -2237,14 +2328,32 @@ impl App {
                 }
             }
             CONNECTOR_KIND_GITHUB_REPO => {
-                // plan/13 D12(code-review Spec 轴指出此前未落地):22 号设计
-                // 「不接真探针」的立场已被推翻——`gh repo view` 一次真实探活,
-                // 探不通如实 false,绝不伪造「已同步」。
-                let remote = c.config.trim();
-                if remote.is_empty() {
+                // plan/13 D12: 真探针一次,探不通如实 false,绝不伪造「已同步」。
+                // 经 Remote 分发:github-repo 连器 → Remote::Github(config);
+                // codehub-repo 连器(P4)另有 arm → Remote::Codehub{host,path}。
+                let cfg = c.config.trim();
+                if cfg.is_empty() {
                     return Ok((false, "连接器未记录 owner/repo,无法探活".into()));
                 }
-                match bw_engine::github::probe_repo(remote).await {
+                let remote = bw_engine::remote::Remote::Github(cfg.to_string());
+                match remote.probe().await {
+                    Ok(detail) => Ok((true, detail)),
+                    Err(e) => Ok((false, e.to_string())),
+                }
+            }
+            CONNECTOR_KIND_CODEHUB_REPO => {
+                // codehub 真探针:`codehub-cli project view` 经 Remote::Codehub。
+                // config = "host/path"(创建时 mint 进来),split_once('/') 拆出
+                // host + path(path 自带 /,只切第一段)。探不通如实 false。
+                let cfg = c.config.trim();
+                let Some((host, path)) = cfg.split_once('/') else {
+                    return Ok((false, "codehub 连器 config 需 'host/path',无法探活".into()));
+                };
+                let remote = bw_engine::remote::Remote::Codehub {
+                    host: host.to_string(),
+                    path: path.to_string(),
+                };
+                match remote.probe().await {
                     Ok(detail) => Ok((true, detail)),
                     Err(e) => Ok((false, e.to_string())),
                 }
@@ -2255,14 +2364,145 @@ impl App {
         }
     }
 
-    /// C4 · issue 身份映射(plan/13 D2): a project with a `github_remote`
+    /// plan/渠道6 · sync a project's own `skills/` + `agents/` from its
+    /// workspace into the hub as 种A (registered-visible, never injected).
+    /// Re-scanned on every git-repo connector probe (build-time probe-at-
+    /// creation + manual「立即同步」). 项目仓是正本, buddy DB is a mirror, so
+    /// this is a **full rebuild** of the project's project-assets batch:
+    /// delete the existing batch then re-import everything on disk. The
+    /// delete gate is `project_id == project && source.is_project_assets()`
+    /// — never touches distilled `SelfBuilt` rows or global libraries.
+    ///
+    /// 种A rows have no consumers (excluded from every injection picker via
+    /// `is_project_assets`) and `uses`/`runs` stay 0, so the id churn from
+    /// delete+recreate is harmless. Soft-degrade: every store error is
+    /// logged to stderr (`[BW]`) and swallowed — scanning skills is a side-
+    /// product of the connector probe and must never block the主功能 (git
+    /// evidence + workspace metrics). A missing `skills/`/`agents/` dir is a
+    /// normal empty scan, not an error.
+    async fn sync_project_assets(&mut self, project: ProjectId, workspace: &str) {
+        let source = HubSource::Official {
+            official_library: BW_PROJECT_ASSETS_LIBRARY.to_string(),
+        };
+
+        // ── skills: full rebuild (delete the project-assets batch, re-import scanned) ──
+        // `import_skill_package` (not `create_skill`) so the folder's support
+        // files land in `skill_file` too — `create_skill` would drop the file
+        // tree. Maas skills carry references/scripts/knowledge dirs.
+        let scanned_skills = skill_import::scan_project_skills_dir(workspace);
+        let existing_skills: Vec<SkillCard> = match self.store.list_skills().await {
+            Ok(all) => all
+                .into_iter()
+                .filter(|s| s.project_id == Some(project) && s.source.is_project_assets())
+                .collect(),
+            Err(e) => {
+                eprintln!("[BW] sync_project_assets: list_skills 失败,跳过 skill 同步:{e}");
+                return;
+            }
+        };
+        for s in &existing_skills {
+            if let Err(e) = self.store.delete_skill(s.id).await {
+                eprintln!(
+                    "[BW] sync_project_assets: delete_skill「{}」失败:{e}",
+                    s.name
+                );
+            }
+        }
+        for pkg in &scanned_skills {
+            if let Err(e) = self
+                .store
+                .import_skill_package(
+                    NewSkill {
+                        id: SkillId::new(),
+                        name: pkg.name.clone(),
+                        // 同 ImportSkillPackage:外部资产,成熟度由本地真实使用派生,不从外部声誉继承。
+                        maturity: Maturity::Fresh,
+                        desc: pkg.desc.clone(),
+                        category: String::new(),
+                        stage_ref: None,
+                        source: source.clone(),
+                        content: pkg.content.clone(),
+                        project_id: Some(project),
+                    },
+                    pkg.files
+                        .iter()
+                        .map(|(rel_path, content)| NewSkillFile {
+                            rel_path: rel_path.clone(),
+                            content: content.clone(),
+                        })
+                        .collect(),
+                )
+                .await
+            {
+                eprintln!(
+                    "[BW] sync_project_assets: import skill「{}」失败:{e}",
+                    pkg.name
+                );
+            }
+        }
+
+        // ── agents: full rebuild (single AGENT.md files, no skill_file equivalent) ──
+        let scanned_agents = agent_import::scan_project_agents_dir(workspace);
+        let existing_agents: Vec<AgentCard> = self
+            .store
+            .list_agents()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.project_id == Some(project) && a.source.is_project_assets())
+            .collect();
+        for a in &existing_agents {
+            if let Err(e) = self.store.delete_agent(a.id).await {
+                eprintln!(
+                    "[BW] sync_project_assets: delete_agent「{}」失败:{e}",
+                    a.name
+                );
+            }
+        }
+        for def in &scanned_agents {
+            if let Err(e) = self
+                .store
+                .create_agent(NewAgent {
+                    id: AgentId::new(),
+                    name: def.name.clone(),
+                    role: def.description.clone(),
+                    stage_ref: None,
+                    maturity: Maturity::Fresh,
+                    skills: Vec::new(),
+                    model: def.model.clone(),
+                    instructions: def.instructions.clone(),
+                    tools: def.tools.clone(),
+                    agent_cli: "claude-code".to_string(),
+                    source: source.clone(),
+                    project_id: Some(project),
+                })
+                .await
+            {
+                eprintln!(
+                    "[BW] sync_project_assets: create_agent「{}」失败:{e}",
+                    def.name
+                );
+            }
+        }
+
+        if let Err(e) = self.refresh_skills().await {
+            eprintln!("[BW] sync_project_assets: refresh_skills 失败:{e}");
+        }
+        if let Err(e) = self.refresh_agents().await {
+            eprintln!("[BW] sync_project_assets: refresh_agents 失败:{e}");
+        }
+        self.emit(Event::SkillsChanged);
+        self.emit(Event::AgentsChanged);
+    }
+
+    /// C4 · issue 身份映射(plan/13 D2): a project with a `remote_path`
     /// gets every BW-minted Issue mirrored as a real GitHub issue — the issue
     /// number is the Issue's cross-system identity. Called AFTER the Issue
     /// already exists in `bw-store`, so a `gh` failure never blocks the
     /// BW-side create (创建不破): the Issue simply keeps `github_number = 0`
     /// and an honest `ConnectorSynced { ok: false, .. }` toast fires — same
     /// soft-degrade shape as the Repo 卡片's `create_repo`/`clone_repo`
-    /// paths. `github_remote` empty (no repo, or a 存量项目) short-circuits
+    /// paths. `remote_path` empty (no repo, or a 存量项目) short-circuits
     /// before touching `gh` at all — today's behavior, byte-for-byte.
     ///
     /// `announce` (plan/14 C14): only the creation flow's standard-Issue trio
@@ -2285,10 +2525,12 @@ impl App {
             .get_project(project_id)
             .await?
             .ok_or(AppError::NotFound)?;
-        let remote = proj.github_remote.trim();
-        if remote.is_empty() {
+        let path = proj.remote_path.trim();
+        if path.is_empty() {
             return Ok(());
         }
+        let remote =
+            bw_engine::remote::Remote::for_project(&proj.provider, &proj.remote_host, path)?;
         let body = if desc.trim().is_empty() {
             "(BW 建单同步,未填写详情)".to_string()
         } else {
@@ -2301,7 +2543,7 @@ impl App {
                 state: ActionState::Started,
             });
         }
-        match bw_engine::github::create_issue(remote, title, &body).await {
+        match remote.create_issue(title, &body).await {
             Ok(gh_number) => {
                 self.store
                     .set_issue_github_number(issue_id, gh_number)
@@ -2334,10 +2576,10 @@ impl App {
     /// 时,挂仓项目自动建三张标配 Issue——竞品分析→找指标→绑数据,依赖序
     /// 即建单序即编号序(`create_issue` 按项目内 `MAX(number)+1` 分配,这里
     /// 是这个新项目的头三张 Issue,天然拿到 1/2/3)。每张都走既有
-    /// `sync_issue_to_github` 真开一个 GitHub issue——`github_remote` 为空
+    /// `sync_issue_to_github` 真开一个 GitHub issue——`remote_path` 为空
     /// 的项目在那里短路返回,这里的 BW 侧建号仍然发生,只是 `github_number`
     /// 留 0(和手动建单同一诚实口径),但本函数在调用前就已经用
-    /// `github_remote` 是否非空短路整批——无仓项目连 BW 侧的三张都不建,
+    /// `remote_path` 是否非空短路整批——无仓项目连 BW 侧的三张都不建,
     /// 不给建不了仓的项目发一套没处交付的活(如实留白)。
     ///
     /// 每张携带一个稳定 `standard_skill` slug——三张卡均已由 Boot 的
@@ -2357,7 +2599,7 @@ impl App {
             .get_project(project)
             .await?
             .ok_or(AppError::NotFound)?;
-        if proj.github_remote.trim().is_empty() {
+        if proj.remote_path.trim().is_empty() {
             return Ok(None);
         }
         const TRIO: [(&str, &str, &str); 3] = [
@@ -2502,7 +2744,12 @@ impl App {
             .get_project(project)
             .await?
             .ok_or(AppError::NotFound)?;
-        let remote = proj.github_remote.trim().to_string();
+        let remote_path = proj.remote_path.trim().to_string();
+        let remote = bw_engine::remote::Remote::for_project(
+            &proj.provider,
+            &proj.remote_host,
+            &remote_path,
+        )?;
         let sigs = self.store.persisted_signals(project).await?;
         let today = now().date();
         let mut summary = MetricCollectSummary::default();
@@ -2511,14 +2758,12 @@ impl App {
         for m in &sigs.metrics {
             match m.collect_kind.as_str() {
                 "github" => {
-                    if remote.is_empty() {
+                    if remote_path.is_empty() {
                         // No repo to pull from — honest, not a silent success.
                         summary.no_remote_github = true;
                         continue;
                     }
-                    match bw_engine::github::collect_github_count(&remote, &m.collect_query, today)
-                        .await
-                    {
+                    match remote.collect_count(&m.collect_query, today).await {
                         Ok(count) => {
                             let value = count.to_string();
                             // window-guard(code-review Standards #5 修正,取代
@@ -2538,6 +2783,42 @@ impl App {
                             } else {
                                 self.store
                                     .append_observation(m.id, SourceKind::Github, &value, now())
+                                    .await?;
+                                summary.changed += 1;
+                                touched = true;
+                            }
+                        }
+                        Err(e) => {
+                            summary.failed += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error = Some(format!("{}:{e}", m.name));
+                            }
+                        }
+                    }
+                }
+                "codehub" => {
+                    // P5:codehub 采集,镜像 github arm。Remote::Codehub 由 remote
+                    // 变量(project 的 provider 派生)分发到 codehub::collect_count
+                    // (issue|mr list --jq length)。查询口径见 codehub::collect_count
+                    // (issues:<state> / mrs:<state>)。
+                    if remote_path.is_empty() {
+                        summary.no_remote_codehub = true;
+                        continue;
+                    }
+                    match remote.collect_count(&m.collect_query, today).await {
+                        Ok(count) => {
+                            let value = count.to_string();
+                            let last_ts = self.store.latest_observation_ts(m.id).await?;
+                            let same_window = last_ts.is_some_and(|t| {
+                                OffsetDateTime::from_unix_timestamp(t)
+                                    .map(|d| d.date() == today)
+                                    .unwrap_or(false)
+                            });
+                            if m.value_raw == value && same_window {
+                                summary.unchanged += 1;
+                            } else {
+                                self.store
+                                    .append_observation(m.id, SourceKind::Codehub, &value, now())
                                     .await?;
                                 summary.changed += 1;
                                 touched = true;
@@ -3145,7 +3426,7 @@ impl App {
         // behavior byte-for-byte. A branch-checkout failure degrades
         // honestly: the run proceeds on the current branch, no PR is
         // opened (提 PR 失败不炸 run).
-        let pr_eligible = !proj.github_remote.trim().is_empty()
+        let pr_eligible = !proj.remote_path.trim().is_empty()
             && issue.github_number != 0
             && !proj.workspace_path.trim().is_empty();
         let on_issue_branch = if pr_eligible {
@@ -3188,20 +3469,36 @@ impl App {
                 // InProgress — retryable via RunIssue, never faked into
                 // review with no PR behind it.
                 let opened_pr = if on_issue_branch {
-                    match bw_engine::github::open_pr(
-                        std::path::Path::new(proj.workspace_path.trim()),
-                        issue.github_number,
-                        &issue.title,
-                    )
-                    .await
-                    {
+                    // Bug③ (2026-07-30): route PR/MR creation through the
+                    // Remote factory so codehub projects open a codehub MR
+                    // (`codehub-cli mr create`) instead of crashing `gh pr
+                    // create` (gh doesn't know codehub → issue stuck
+                    // InProgress, no InReview, SyncMetricsFile never ran).
+                    // Github projects delegate to `github::open_pr` unchanged.
+                    let remote = bw_engine::remote::Remote::for_project(
+                        &proj.provider,
+                        &proj.remote_host,
+                        &proj.remote_path,
+                    );
+                    let res: Result<bw_engine::github::PrOpened, String> = match remote {
+                        Ok(r) => r
+                            .create_mr(
+                                std::path::Path::new(proj.workspace_path.trim()),
+                                issue.github_number,
+                                &issue.title,
+                            )
+                            .await
+                            .map_err(|e| e.to_string()),
+                        Err(e) => Err(e.to_string()),
+                    };
+                    match res {
                         Ok(bw_engine::github::PrOpened::Created(pr)) => {
                             self.store.set_issue_pr_number(id, pr).await?;
                             self.emit(Event::ConnectorSynced {
                                 name: format!("#{} · PR", issue.number),
                                 ok: true,
                                 detail: format!(
-                                    "已提 PR #{pr}(Closes #{}),等待人工 merge 验收",
+                                    "已提 PR/MR #{pr}(关联 Issue #{}),等待人工 merge 验收",
                                     issue.github_number
                                 ),
                             });
@@ -3218,7 +3515,7 @@ impl App {
                                 name: format!("#{} · PR", issue.number),
                                 ok: true,
                                 detail: format!(
-                                    "已认领队友提的 PR #{pr}(Closes #{}),等待人工 merge 验收",
+                                    "已认领队友提的 PR/MR #{pr}(关联 Issue #{}),等待人工 merge 验收",
                                     issue.github_number
                                 ),
                             });
@@ -3228,7 +3525,7 @@ impl App {
                             self.emit(Event::ConnectorSynced {
                                 name: format!("#{} · PR", issue.number),
                                 ok: false,
-                                detail: format!("提 PR 失败,活留在进行中可重试:{e}"),
+                                detail: format!("提 PR/MR 失败,活留在进行中可重试:{e}"),
                             });
                             false
                         }
@@ -3530,6 +3827,7 @@ impl App {
                 // unchanged (by-name idempotent).
                 for p in &projects {
                     self.seed_stage_done_metrics(p.id).await?;
+                    self.seed_codehub_public_metrics(p.id).await?;
                 }
                 self.refresh_workflow_specs().await?;
                 self.refresh_skills().await?;
@@ -3556,6 +3854,7 @@ impl App {
                 desc,
                 workspace,
                 github,
+                codehub,
             } => {
                 self.store
                     .create_project(NewProject {
@@ -3582,8 +3881,8 @@ impl App {
                     .get_project(id)
                     .await?
                     .ok_or(AppError::NotFound)?;
-                match (bound, github) {
-                    (Some(path), _) => {
+                match (bound, github, codehub) {
+                    (Some(path), _, _) => {
                         if !std::path::Path::new(path).join(".git").exists() {
                             return Err(AppError::Invalid(format!(
                                 "绑定的工作目录不是 git 仓库(无 .git):{path}"
@@ -3591,7 +3890,7 @@ impl App {
                         }
                         self.store.set_workspace(id, path, true).await?;
                     }
-                    (None, Some(GithubOrigin::New { slug, private })) => {
+                    (None, Some(GithubOrigin::New { slug, private }), _) => {
                         // plan/14 C14: 建仓是这个命令里最慢的一步(真实
                         // `gh repo create` 网络调用,数秒)——Started 先发,
                         // 唯一的 name 贯穿这一步的 Ok/Fail,UI 据此配对。
@@ -3616,8 +3915,9 @@ impl App {
                                         let path = root.join(&slug).to_string_lossy().into_owned();
                                         self.store.set_workspace(id, &path, true).await?;
                                         self.store
-                                            .set_github_remote(
+                                            .set_remote(
                                                 id,
+                                                "github.com",
                                                 &format!("{}/{}", r.owner, r.repo),
                                             )
                                             .await?;
@@ -3698,7 +3998,7 @@ impl App {
                             }
                         }
                     }
-                    (None, Some(GithubOrigin::Existing { owner, repo })) => {
+                    (None, Some(GithubOrigin::Existing { owner, repo }), _) => {
                         // plan/14 C14: 克隆同样是真实 `gh repo clone` 网络
                         // 调用——同一套 Started→Ok/Fail 配对。
                         let action_name = format!("{} · 克隆仓库", proj.name);
@@ -3714,8 +4014,9 @@ impl App {
                                         let path = dir.to_string_lossy().into_owned();
                                         self.store.set_workspace(id, &path, true).await?;
                                         self.store
-                                            .set_github_remote(
+                                            .set_remote(
                                                 id,
+                                                "github.com",
                                                 &format!("{}/{}", r.owner, r.repo),
                                             )
                                             .await?;
@@ -3777,7 +4078,76 @@ impl App {
                             }
                         }
                     }
-                    (None, None) => {
+                    (None, None, Some(CodehubOrigin { host, path })) => {
+                        // codehub 接入已有仓(对标 github Existing):真实
+                        // `codehub-cli repo clone` 网络调用,同一套 Started→Ok/Fail。
+                        let action_name = format!("{} · 克隆 codehub 仓", proj.name);
+                        self.emit(Event::ActionProgress {
+                            name: action_name.clone(),
+                            state: ActionState::Started,
+                        });
+                        match self.workspaces_root.clone() {
+                            Some(root) => {
+                                let dir = root.join(workspace_slug(&proj.name, id));
+                                match bw_engine::codehub::clone_repo(&host, &path, &dir).await {
+                                    Ok(()) => {
+                                        let p = dir.to_string_lossy().into_owned();
+                                        self.store.set_workspace(id, &p, true).await?;
+                                        self.store.set_remote(id, &host, &path).await?;
+                                        self.store
+                                            .create_connector(NewConnector {
+                                                id: ConnectorId::new(),
+                                                name: format!("{} · 代码仓", proj.name),
+                                                kind: CONNECTOR_KIND_GIT_REPO.into(),
+                                                scope: proj.name.clone(),
+                                                project_id: Some(id),
+                                                config: p.clone(),
+                                            })
+                                            .await?;
+                                        self.store
+                                            .create_connector(NewConnector {
+                                                id: ConnectorId::new(),
+                                                name: format!("{} · CodeHub", proj.name),
+                                                kind: CONNECTOR_KIND_CODEHUB_REPO.into(),
+                                                scope: proj.name.clone(),
+                                                project_id: Some(id),
+                                                config: format!("{host}/{path}"),
+                                            })
+                                            .await?;
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Ok(path.clone()),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let detail = format!("接入 codehub {host}/{path} 失败:{e}");
+                                        self.emit(Event::ConnectorSynced {
+                                            name: format!("{} · CodeHub", proj.name),
+                                            ok: false,
+                                            detail: detail.clone(),
+                                        });
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Fail(detail),
+                                        });
+                                    }
+                                }
+                            }
+                            None => {
+                                let detail = "未配置本地工作区根目录,无法克隆".to_string();
+                                self.emit(Event::ConnectorSynced {
+                                    name: format!("{} · CodeHub", proj.name),
+                                    ok: false,
+                                    detail: detail.clone(),
+                                });
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail),
+                                });
+                            }
+                        }
+                    }
+                    (None, None, None) => {
                         if let Some(root) = self.workspaces_root.clone() {
                             match provision_workspace(&root, &proj).await {
                                 Ok(path) => {
@@ -3807,14 +4177,14 @@ impl App {
                 // C7 · 标配采集 cron (plan/13 D7):挂了 GitHub 仓的项目出生即
                 // 带一条每日采集器,由现成 tick_scheduler 到点真实触发,把
                 // GitHub 数据拉成 append-only 观测。只有 github 项目挂(无 remote
-                // 即无 github 源可采);软降级回本地/接入失败的项目 github_remote
+                // 即无 github 源可采);软降级回本地/接入失败的项目 remote_path
                 // 仍空,不挂——不给采不到的东西装一个空跑的 cron。no-hijack:
                 // CollectMetrics 只观测,绝不自动跑活/结算。
                 let github_backed = self
                     .store
                     .get_project(id)
                     .await?
-                    .map(|pr| !pr.github_remote.trim().is_empty())
+                    .map(|pr| !pr.remote_path.trim().is_empty())
                     .unwrap_or(false);
                 if github_backed {
                     self.store
@@ -3947,6 +4317,8 @@ impl App {
                         last_target: String::new(),
                         driver: String::new(),
                         pos: 0,
+                        collect_kind: "manual".into(),
+                        collect_query: String::new(),
                     })
                     .await?;
                 // The value is born as an explicit Manual observation; the signal
@@ -4078,6 +4450,9 @@ impl App {
                 // target ⇒ honest Unknown) so Done-edge feeds have a home. The
                 // recompute at the end of CompleteCreation derives its signal.
                 self.seed_stage_done_metrics(p).await?;
+                // P5:codehub 公共指标(开放 Issue 数 / 已合入 MR 数)随创建流
+                // 种下,走 collect_project_metrics 的 codehub arm 真采点亮。
+                self.seed_codehub_public_metrics(p).await?;
                 // All-in-one-codebase default: a project completing creation
                 // gets its own real git repo (when a workspaces root is
                 // configured and no workspace was set by hand), plus a bound
@@ -4112,10 +4487,10 @@ impl App {
                         }
                     }
                 }
-                // C8 · plan/13 D8: 挂仓项目(github_remote 非空)创建流落地
+                // C8 · plan/13 D8: 挂仓项目(remote_path 非空)创建流落地
                 // 即建标配 Issue 三件套(竞品分析→找指标→绑数据),依赖序即
                 // 建单序即编号序(1/2/3),都经既有 sync_issue_to_github 真开
-                // GitHub issue。无仓项目(github_remote 空——包括新建/接入
+                // GitHub issue。无仓项目(remote_path 空——包括新建/接入
                 // 都失败、软降级回本地 mint 的项目)零标配票:不给建不了
                 // 仓、没有 PR 环可走的项目发一套没处交付的活,如实留白。
                 let first_issue = self.seed_standard_issue_trio(p).await?;
@@ -4124,9 +4499,9 @@ impl App {
                 // plan/13 D1(#31 记录的缺口):create_repo 只推了首 commit,
                 // 创建流途中的章程/组件标准提交停在本地——产品信息正本在
                 // 仓里,落地时把 HEAD 一次推齐。失败软降级 toast,不倒灌
-                // 创建(github_remote 非空 ⇒ workspace 在 CreateProject 就
+                // 创建(remote_path 非空 ⇒ workspace 在 CreateProject 就
                 // 已绑定,直接用)。
-                if !proj.github_remote.trim().is_empty() && !proj.workspace_path.trim().is_empty() {
+                if !proj.remote_path.trim().is_empty() && !proj.workspace_path.trim().is_empty() {
                     // plan/14 C14: 落地推送同样是真实网络调用——Started 先
                     // 发,pending→ok/fail 配对到底。
                     let action_name = format!("{} · 落地推送", proj.name);
@@ -4163,6 +4538,39 @@ impl App {
                 self.state.view = View::App;
                 self.refresh_projects().await?;
                 self.refresh_issues().await?;
+                // 创建即探活(§6.5 GAP,用户实践点破):建完的连接器就地 probe
+                // 一遍——git-repo 顺带喂工作区指标(commits/docs)、codehub/github-
+                // repo 翻 Connected。用户不用再为每个项目去 Hub 点「立即同步」。
+                // 探活失败软降级留 Error,如实,不倒灌创建(创建本身已落地)。
+                let minted: Vec<_> = self
+                    .store
+                    .list_connectors()
+                    .await?
+                    .into_iter()
+                    .filter(|c| c.project_id == Some(p))
+                    .collect();
+                for c in minted {
+                    let (ok, detail) = self
+                        .probe_connector(&c)
+                        .await
+                        .unwrap_or((false, "探活异常,跳过".into()));
+                    let status = if ok {
+                        ConnectorStatus::Connected
+                    } else {
+                        ConnectorStatus::Error
+                    };
+                    let _ = self
+                        .store
+                        .set_connector_sync(c.id, status, &run_at_label(now()))
+                        .await;
+                    self.emit(Event::ConnectorSynced {
+                        name: c.name.clone(),
+                        ok,
+                        detail,
+                    });
+                }
+                self.refresh_connectors().await?;
+                self.emit(Event::ConnectorsChanged);
                 self.emit(Event::ProjectUpdated(p));
                 self.emit(Event::ViewChanged(View::App));
                 self.emit(Event::IssuesChanged);
@@ -4241,10 +4649,10 @@ impl App {
                 // 2) P1-fix(复核 P1 时读回发现的重试死路):项目已有工作区时,
                 // 先把本地 origin 接上 —— 必须排在任何写库动作之前。探活通过
                 // 之后,`Mismatch`(工作区已挂着别的 origin)是这条命令唯一
-                // 还可能失败的分支;若先写了 github_remote/建了 connector 再
+                // 还可能失败的分支;若先写了 remote_path/建了 connector 再
                 // 撞上 Mismatch,产品侧就没有 UI 重试入口了 ——
                 // `AttachRepoCard`(app-desktop/src/screens/op.rs)只在
-                // `github_remote` 为空时渲染,写库后卡片消失,用户再点不到
+                // `remote_path` 为空时渲染,写库后卡片消失,用户再点不到
                 // 这个动作,只能手改 SQL。先做这步 ⇒ 失败时一个字节都还没
                 // 进库,再次调用同一条命令天然就是重试。没有工作区就跳过整步
                 // (不是错误——纯身份挂靠,后续 SetWorkspace 再补)。
@@ -4263,8 +4671,8 @@ impl App {
                     }
                 }
 
-                // 3) 写 github_remote。
-                self.store.set_github_remote(p, &owner_repo).await?;
+                // 3) 写 remote_path / remote_host。
+                self.store.set_remote(p, "github.com", &owner_repo).await?;
 
                 // 4) 补建 github-repo connector —— 幂等:同项目已有同 kind
                 // 就不重复建(`CreateProject` 的另两条分支都建了它,绑定
@@ -4290,10 +4698,10 @@ impl App {
 
                 // 5) push_local=true 且第 2 步真的跑过(有工作区)时推当前
                 // 分支。这一步刻意留在写库之后,不是疏漏:推送失败时
-                // github_remote 已经设对是事实正确的(仓确实接上了,只是这
+                // remote_path 已经设对是事实正确的(仓确实接上了,只是这
                 // 次本地提交没推上去),用户可以自己 `git push` 补,不必也
                 // 不该把整条「接仓」判失败重来 —— 那样反而会在下次重试时对
-                // 已经正确的 github_remote/connector 做多余的幂等检查。
+                // 已经正确的 remote_path/connector 做多余的幂等检查。
                 if !workspace_path.is_empty() && push_local {
                     let workspace = std::path::Path::new(&workspace_path);
                     let branch = match bw_engine::github::current_branch(workspace).await {
@@ -5786,7 +6194,7 @@ impl App {
                     })
                     .await?;
                 // C4: 项目挂了 GitHub 仓时,建单同时经 gh 真开一个 GitHub
-                // issue;github_remote 为空的项目在这里直接短路返回,今天的
+                // issue;remote_path 为空的项目在这里直接短路返回,今天的
                 // 行为一个字节不变。announce=false(plan/14 C14 范围收敛):
                 // op 面板的手动建单不在本票覆盖范围,行为一个字节不变。
                 self.sync_issue_to_github(p, id, &title, &desc, false)
@@ -5915,24 +6323,34 @@ impl App {
                     .get_project(issue.project_id)
                     .await?
                     .ok_or(AppError::NotFound)?;
-                let remote = proj.github_remote.trim().to_string();
-                if remote.is_empty() {
+                if proj.remote_path.trim().is_empty() {
                     return Err(AppError::Invalid(format!(
-                        "#{} 的项目未挂 GitHub 仓,无法 merge PR",
+                        "#{} 的项目未挂远端仓,无法 merge PR/MR",
                         issue.number
                     )));
                 }
-                // merge PR — the human验收 action, the ONLY place `gh pr merge`
-                // is ever called (never from any executor/run path; plan/13
-                // D3+D11).
-                if let Err(e) = bw_engine::github::merge_pr(&remote, issue.pr_number).await {
+                // merge PR/MR — the human验收 action, the ONLY place a merge is
+                // ever called (never from any executor/run path; plan/13
+                // D3+D11). Routed through the Remote factory (bug③ 2026-07-30):
+                // codehub projects merge via `codehub-cli mr merge`, github via
+                // `gh pr merge` — before this, MergeIssuePr crashed `gh pr
+                // merge` on codehub.
+                let merge_result = match bw_engine::remote::Remote::for_project(
+                    &proj.provider,
+                    &proj.remote_host,
+                    &proj.remote_path,
+                ) {
+                    Ok(r) => r.merge_mr(issue.pr_number).await,
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = merge_result {
                     // 绝不反向改写:a merge failure (including the drift case of
-                    // a PR already merged on the web) is only reflected — the
+                    // a PR/MR already merged on the web) is only reflected — the
                     // Issue stays InReview and retryable, nothing is settled.
                     self.emit(Event::ConnectorSynced {
                         name: format!("#{} · merge", issue.number),
                         ok: false,
-                        detail: format!("merge PR #{} 失败,活留在评审中:{e}", issue.pr_number),
+                        detail: format!("merge PR/MR #{} 失败,活留在评审中:{e}", issue.pr_number),
                     });
                     return Ok(());
                 }
@@ -5945,22 +6363,30 @@ impl App {
                     status: IssueStatus::Done,
                 }))
                 .await?;
-                // issue 关闭是 merge 的后果: `Closes #<n>` should have closed it;
-                // verify and补关 idempotently if GitHub didn't. Never reopen,
-                // never fight drift.
-                match bw_engine::github::issue_state(&remote, issue.github_number).await {
-                    Ok(state) if state.eq_ignore_ascii_case("OPEN") => {
-                        if let Err(e) =
-                            bw_engine::github::close_issue(&remote, issue.github_number).await
-                        {
-                            self.emit(Event::ConnectorSynced {
-                                name: format!("#{} · 关单", issue.number),
-                                ok: false,
-                                detail: format!("PR 已 merge,但补关 GitHub issue 失败:{e}"),
-                            });
+                // issue 关闭是 merge 的后果. github: `Closes #<n>` should have
+                // closed it; verify + 补关 idempotently if GitHub didn't.
+                // codehub: the MR body's `Closes #<n>` auto-closes on merge
+                // (GitLab standard, set in `codehub::create_mr`); `--issue-nums`
+                // only links, doesn't auto-close (2026-07-31 实测). So codehub
+                // issues close via the MR body, not this gh-only补关 block —
+                // skip it for codehub (never reopen, never fight drift). Bug③:
+                // was unconditional → `gh issue` crashed on codehub; now github-only.
+                if matches!(proj.provider.as_str(), "github" | "") {
+                    let remote = proj.remote_path.trim().to_string();
+                    match bw_engine::github::issue_state(&remote, issue.github_number).await {
+                        Ok(state) if state.eq_ignore_ascii_case("OPEN") => {
+                            if let Err(e) =
+                                bw_engine::github::close_issue(&remote, issue.github_number).await
+                            {
+                                self.emit(Event::ConnectorSynced {
+                                    name: format!("#{} · 关单", issue.number),
+                                    ok: false,
+                                    detail: format!("PR 已 merge,但补关 GitHub issue 失败:{e}"),
+                                });
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
                 self.emit(Event::ConnectorSynced {
                     name: format!("#{} · 验收", issue.number),
@@ -6026,7 +6452,7 @@ impl App {
 
             Command::RefreshIssues => {
                 // P7-7B (D22): 先真采 GitHub、再本地刷新——无活跃项目/无
-                // github_remote 的项目在 collect_github_issue_drift 内部短
+                // remote_path 的项目在 collect_github_issue_drift 内部短
                 // 路跳过,行为与升级前逐字节一致。
                 if let Some(p) = self.state.active_project {
                     self.collect_github_issue_drift(p).await?;
@@ -6152,6 +6578,7 @@ struct MetricCollectSummary {
     deferred: u32,
     first_error: Option<String>,
     no_remote_github: bool,
+    no_remote_codehub: bool,
 }
 
 /// Standard workspace-derived metric names — the join keys between the

@@ -98,6 +98,7 @@ async fn main() {
         desc: "C12 headless E2E · 验证创建流全卡可退、中断可续".into(),
         workspace: None,
         github: None,
+        codehub: None,
     })
     .await
     .expect("create project");
