@@ -15,8 +15,10 @@ schema_version = 1
 name = "周活跃创作者数"
 def  = "过去 7 天内至少发布过一篇正式内容(非草稿)的注册用户数"
 # collect 是这条指标的采集方案——回答"这个数字打哪来":
-#   kind  = "github" | "connector" | "bw" | "manual"(语义见下方字段说明)
+#   kind  = "github" | "connector" | "bw" | "manual" | "script"(语义见下方字段说明)
 #   query = 按 kind 语义写的查询串;manual 允许留空
+#   script 的 query 只写字段在脚本输出 JSON 里的点分路径(如 "leading.L1"),
+#   脚本路径+输出文件由项目的 script connector 配置(buddy 跑脚本后按 query 取值)
 collect = { kind = "connector", query = "content-analytics" }
 
 # ── 滞后指标(结果性,滞后于动作才看得出好坏) ─────────────────────
@@ -46,3 +48,12 @@ name   = "队友结算 Issue 数"
 def    = "过去 7 天内被人 merge 关闭(settle)的 Issue 数——交付节奏的先行信号"
 target = "≥3"
 collect = { kind = "bw", query = "issue.settled_at within 7d" }
+
+# script kind:项目仓里既有采集脚本(如 derive_*.py 机械解析真实数据源、产出
+# data.json)的指标。buddy 到点 shell-out 跑脚本、读输出 JSON、按 query 点分
+# 路径取值。脚本路径+输出文件由项目的 script connector 配置,query 不含脚本路径。
+[[leading]]
+name   = "自动规范问题数"
+def    = "累计 defect 中 title 含上报标记的条数——项目自采脚本派生"
+target = "≥3"
+collect = { kind = "script", query = "leading.L1" }

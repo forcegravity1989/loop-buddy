@@ -1874,6 +1874,7 @@ fn MetricCard(m: MetricVm) -> Element {
     // its existing 手填 badge below (a different axis: the latest value's source).
     let (collect_badge, collect_dim) = match m.collect_kind.as_str() {
         "github" => ("采集 · GitHub".to_string(), false),
+        "script" => ("采集 · 项目侧脚本".to_string(), false),
         "bw" => ("采集 · BW 记账 · v1 未接".to_string(), true),
         "connector" => ("采集 · Connector · v1 未接".to_string(), true),
         _ => (String::new(), false),
