@@ -55,7 +55,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use time::OffsetDateTime;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinHandle;
 
 /// Top-level workspace view (only meaningful for `hub == workspace`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -385,6 +386,18 @@ pub enum Command {
     /// `TransitionIssue` only; one work item, one human-confirmed credit).
     RunIssue {
         session: SessionId,
+        id: IssueId,
+    },
+    /// plan/17 S3 (① 中止): abort the in-flight backgrounded run on an Issue
+    /// (the desktop kernel's settle channel path). No-op when there's no
+    /// in-flight run on that issue (a normal completion already settled, or
+    /// the run was inline-only — examples / headless never background). The
+    /// issue STAYS `InProgress` (retryable); `settled_at` stays empty —
+    /// **never auto-Done** (铁律). Inlined issue runs (no `settle_tx`) have
+    /// no `JoinHandle` to abort, so `CancelRun` is a no-op there too (the
+    /// inline `await` is already blocking the kernel loop — nothing to
+    /// cancel, the run either completes or fails on its own).
+    CancelRun {
         id: IssueId,
     },
     /// Reload the hub library (`workflow_specs`/`skills`/`agents`) from the
@@ -1022,7 +1035,112 @@ enum LoopEnd {
     Failed(AppError),
 }
 
-#[derive(Clone, Debug)]
+/// plan/17 S3: everything `run_round_loop` needs to drive one issue-run's
+/// adversarial round loop, and everything `finalize_run` needs to settle the
+/// after-loop accounting. Built once on the main thread (`prepare_run`) so the
+/// long round loop can run on a `tokio::spawn` with NO `&mut App` (the loop
+/// only ever touched `self.store`/`self.emit` — shared borrows — per the
+/// long-standing `lib.rs` comment; S3 just makes that structural). The owned
+/// `Engine` is what unblocked the extraction: mock path clones the shared
+/// `mock_engine`'s `Arc`, real path clones a fresh one-shot executor's `Arc`.
+#[derive(Clone)]
+struct PreparedRun {
+    engine: Engine,
+    spec: WorkflowSpec,
+    ctx: RunCtx,
+    params_json: String,
+    eval_idx: Option<usize>,
+    num_phases: usize,
+    max_iter: u32,
+    /// One past the last phase index the loop runs each round (through the
+    /// gate, inclusive; or `num_phases` when there's no gate).
+    range_end: usize,
+    heads_workspace: String,
+    head_before: Option<String>,
+    proj: ProjectRow,
+    p: ProjectId,
+    session: SessionId,
+    issue_id: Option<IssueId>,
+    trigger: RunTrigger,
+    cron_task_id: Option<CronTaskId>,
+}
+
+/// plan/17 S3: the slice of [`PreparedRun`] that `finalize_run` reads after
+/// the loop returns — kept on the main thread (in [`ActiveRun`]) so the
+/// after-loop accounting (change window, agent/skill usage, artifact scan)
+/// runs under `&mut self`, exactly as it did inline. The `Engine` + loop
+/// locals are NOT here — they lived inside the spawn and are gone by settle.
+#[derive(Clone)]
+struct FinalizeCtx {
+    spec: WorkflowSpec,
+    heads_workspace: String,
+    head_before: Option<String>,
+    proj: ProjectRow,
+    p: ProjectId,
+    issue_id: Option<IssueId>,
+}
+
+/// plan/17 S3: outcome a backgrounded round loop reports back to the main
+/// thread via the settle mpsc. `Ok` carries the `LoopEnd` + the last round's
+/// `workflow_run` id + `final_run_ok` (exactly what `run_round_loop` returns);
+/// `Err` is a `?`-early-bail mid-round (a store error before any settle —
+/// the round's row stays "started, never settled", honest). Sent from the
+/// spawned task; received by the kernel's `select!` settle arm.
+pub struct SettleReq {
+    pub(crate) project: ProjectId,
+    pub(crate) issue: IssueId,
+    // Private-typed on purpose: `LoopEnd` is an internal enum. The kernel
+    // only ever MOVES a `SettleReq` value (channel → `run_issue_settle`),
+    // never names/constructures it — so the fields stay crate-internal while
+    // the type itself is pub (the kernel names it for the mpsc type param).
+    pub(crate) outcome: Result<(LoopEnd, WorkflowRunId, bool), AppError>,
+}
+
+/// plan/17 S3: an in-flight backgrounded issue-run. Held in `AppState
+/// .active_run` so:
+///  - the same-project serial lock holds across dispatch returns (a second
+///    `RunIssue` on the same project sees `Some` and is rejected);
+///  - `CancelRun` can `abort` the `JoinHandle`;
+///  - `run_issue_settle` has the `FinalizeCtx` + the tail's issue/project/
+///    worktree context + the worktree guard (dropped AFTER `finalize_run`
+///    reads `head_after` and the tail's `create_mr` commits the worktree).
+struct ActiveRun {
+    project: ProjectId,
+    /// The bound Issue (id + number + github_number + title) — used to match
+    /// `CancelRun`'s id and to drive the tail's `create_mr` / transition.
+    issue: Issue,
+    handle: JoinHandle<()>,
+    guard: bw_engine::workspace::IssueWorktreeGuard,
+    finalize: FinalizeCtx,
+    // tail context (run_issue_settle's create_mr + transition):
+    proj: ProjectRow,
+    issue_ws: Option<PathBuf>,
+    pr_eligible: bool,
+}
+
+/// plan/17 S3: the shared 起手 prefix of an issue-run, returned by
+/// `prepare_issue_run` so the inline path (`run_issue_body`) and the
+/// backgrounded path (`run_issue_backgrounded`) start from the exact same
+/// setup — get+validate the Issue, build the stage-playbook `WorkflowSpec`
+/// (+ standard/distilled skill injection), transition to InProgress, and
+/// provision the isolated issue worktree behind an RAII guard. The guard is
+/// owned here so each caller can place it where the worktree must outlive
+/// (the inline path's local, or the backgrounded path's `ActiveRun`).
+struct IssueRunPrep {
+    issue: Issue,
+    proj: ProjectRow,
+    spec: WorkflowSpec,
+    issue_ws: Option<PathBuf>,
+    pr_eligible: bool,
+    guard: bw_engine::workspace::IssueWorktreeGuard,
+}
+
+/// plan/17 S3: `AppState` no longer `derive(Clone, Debug)` — `active_run`
+/// now holds an `ActiveRun` with a `JoinHandle` (not `Clone`) and a
+/// worktree guard (not `Debug`), so the blanket derive breaks. Nothing
+/// clones `AppState` wholesale (`snapshot()` returns `&AppState`; every
+/// reader clones only the field it needs), and nothing formats it — so the
+/// derives were unused baggage. Drop them rather than fake-impl the trait.
 pub struct AppState {
     pub view: View,
     pub panel: Panel,
@@ -1034,10 +1152,15 @@ pub struct AppState {
     /// 「立即开工」) on the SAME project until the in-flight run settles.
     /// Cross-project parallel stays allowed (`plan/05` §3.5 models
     /// project-level parallelism only; single-project multi-issue was never
-    /// designed). Dormant while runs are inline (the inline `await` already
-    /// serializes); S3's backgrounding makes this the real guard. In-memory
+    /// designed). plan/17 S3: now carries the spawned round-loop `JoinHandle`
+    /// (for `CancelRun`'s `abort`) + everything `run_issue_settle` needs to
+    /// finalize + tail on the main thread. The lock is real post-S3 — the
+    /// backgrounded run stays in-flight across dispatch returns, so without
+    /// this a same-project second `RunIssue` would race two worktrees. In-memory
     /// only — a crashed run leaves it set, but a restart re-seeds `None`.
-    pub active_run: Option<(ProjectId, IssueId)>,
+    /// Crate-private type (carries a `JoinHandle` + guard that can't cross
+    /// the crate boundary cleanly); the UI reads it via [`App::active_run`].
+    pub(crate) active_run: Option<ActiveRun>,
     pub projects: Vec<ProjectRow>,
     /// Hub library — global, loaded independent of any active project.
     pub workflow_specs: Vec<WorkflowSpec>,
@@ -1129,6 +1252,15 @@ pub struct App {
     /// `None` (the default, and every pre-完整形态 caller) keeps the old
     /// behavior: no provisioning, workspace stays an explicit opt-in.
     workspaces_root: Option<PathBuf>,
+    /// plan/17 S3: back-channel a backgrounded issue-run uses to hand its
+    /// outcome back to the main thread. `None` (default — every example /
+    /// headless driver) keeps `RunIssue` INLINE (the old blocking behavior
+    /// those callers rely on: `dispatch(RunIssue)` settles before returning).
+    /// `Some` (the desktop kernel wires it via [`App::with_settle_channel`])
+    /// backgrounds the issue run: `run_issue_now` spawns the round loop and
+    /// returns immediately, and the kernel's `select!` settle arm later
+    /// drives `run_issue_settle` under `&mut self` — the UI never freezes.
+    settle_tx: Option<mpsc::UnboundedSender<SettleReq>>,
 }
 
 impl App {
@@ -1143,7 +1275,22 @@ impl App {
             },
             events: tx,
             workspaces_root: None,
+            settle_tx: None,
         }
+    }
+
+    /// plan/17 S3: wire the back-channel that turns `RunIssue` from a
+    /// blocking inline call into a backgrounded one. The desktop kernel
+    /// owns the matching `mpsc::UnboundedReceiver` and polls it in its
+    /// `select!` loop; each settle drives `run_issue_settle` + a `Vm`
+    /// rebuild. Returns `self` for chaining with `with_workspaces_root`.
+    /// Once set, the same-project serial lock (`active_run`) becomes the
+    /// real guard (a backgrounded run stays in-flight across dispatch
+    /// returns). Examples / headless drivers never call this → `RunIssue`
+    /// stays inline, byte-for-byte the pre-S3 behavior they depend on.
+    pub fn with_settle_channel(mut self, tx: mpsc::UnboundedSender<SettleReq>) -> Self {
+        self.settle_tx = Some(tx);
+        self
     }
 
     /// Enable all-in-one-codebase auto-provisioning: every project completed
@@ -1163,6 +1310,19 @@ impl App {
     /// The current state (read-only).
     pub fn snapshot(&self) -> &AppState {
         &self.state
+    }
+
+    /// plan/17 S3: the in-flight backgrounded run's (project, issue), or
+    /// `None` when nothing's running. The UI uses this to show a 「⬇ 终止」
+    /// button on exactly the issue whose run is in flight (and to grey-out
+    /// 「▶ 跑」 for same-project siblings while the serial lock holds).
+    /// Returns a `Copy` tuple — the `JoinHandle` / guard inside `ActiveRun`
+    /// stay crate-internal.
+    pub fn active_run(&self) -> Option<(ProjectId, IssueId)> {
+        self.state
+            .active_run
+            .as_ref()
+            .map(|ar| (ar.project, ar.issue.id))
     }
 
     /// Borrow the store (for read queries the UI projects through selectors).
@@ -1378,7 +1538,7 @@ impl App {
         &mut self,
         project: ProjectId,
         session: SessionId,
-        mut spec: WorkflowSpec,
+        spec: WorkflowSpec,
         trigger: RunTrigger,
         cron_task_id: Option<CronTaskId>,
         issue_id: Option<IssueId>,
@@ -1390,6 +1550,80 @@ impl App {
         // in isolation, decoupling InReview-window collisions.
         issue_worktree: Option<&Path>,
     ) -> Result<RunOutcome, AppError> {
+        // plan/17 S3: this is now a thin inline composition of three stages —
+        // `prepare_run` (起手, `&self` only) → `run_round_loop` (the long
+        // adversarial loop, self-contained, `tokio::spawn`-able) →
+        // `finalize_run` (收尾, `&mut self`). Inline callers (cron / stage
+        // playbook / creation drafting) await all three in sequence here,
+        // byte-for-byte the pre-S3 behavior. The issue path instead spawns
+        // `run_round_loop` and defers `finalize_run` to `run_issue_settle`
+        // (see `run_issue_now`'s `settle_tx` branch) — same three stages, a
+        // different execution topology. `mut spec` moved into `prepare_run`,
+        // which owns the skills-prompt mutation.
+        let prep = self
+            .prepare_run(
+                project,
+                session,
+                spec,
+                trigger,
+                cron_task_id,
+                issue_id,
+                force_mock,
+                issue_worktree,
+            )
+            .await?;
+        let (end, last_run_log, final_run_ok) = Self::run_round_loop(
+            self.store.clone(),
+            self.events.clone(),
+            &prep.engine,
+            &prep.spec,
+            &prep.ctx,
+            prep.session,
+            prep.p,
+            prep.issue_id,
+            prep.trigger,
+            prep.cron_task_id,
+            &prep.params_json,
+            prep.eval_idx,
+            prep.num_phases,
+            prep.max_iter,
+            prep.range_end,
+        )
+        .await?;
+        self.finalize_run(
+            &prep.spec,
+            &prep.heads_workspace,
+            &prep.head_before,
+            &prep.proj,
+            prep.p,
+            prep.issue_id,
+            end,
+            last_run_log,
+            final_run_ok,
+        )
+        .await
+    }
+
+    /// plan/17 S3: the 起手 stage of [`run_workflow_inner`] — everything up to
+    /// (but not including) the round loop. `&self` only (every touch here is a
+    /// shared borrow: `self.store` / `self.skills_prompt_block` /
+    /// `self.resolve_agent_route` / `self.emit` / `self.state.claude_config`),
+    /// which is precisely why the long round loop could be peeled off without
+    /// needing `&mut self` (the comment that has lived at the old engine-
+    /// selection site since iter 3). Returns an owned [`PreparedRun`] so the
+    /// issue path can move `engine` + `spec` into a `tokio::spawn`.
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare_run(
+        &self,
+        project: ProjectId,
+        session: SessionId,
+        mut spec: WorkflowSpec,
+        trigger: RunTrigger,
+        cron_task_id: Option<CronTaskId>,
+        issue_id: Option<IssueId>,
+        force_mock: bool,
+        issue_worktree: Option<&Path>,
+    ) -> Result<PreparedRun, AppError> {
         let p = project;
         let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
 
@@ -1461,6 +1695,10 @@ impl App {
             .position(|ph| ph.role == PhaseRole::Evaluator);
         let num_phases = spec.phases.len();
         let max_iter = spec.loop_config.max_iter.max(1) as u32;
+        let range_end = match eval_idx {
+            Some(e) => e + 1, // through the gate, inclusive
+            None => num_phases,
+        };
 
         // Announce once, before the first round — real name/agents/skills off
         // `spec`, so a live subscriber can render "this run uses X/Y".
@@ -1477,6 +1715,12 @@ impl App {
         // Held immutably across the loop — every in-loop `self` touch is a shared
         // borrow (`self.store` / `self.emit`), never `&mut self`, so this holds.
         //
+        // plan/17 S3: `Engine` is now `Clone`; `prepare_run` returns an OWNED
+        // engine so the issue path can move it into `tokio::spawn`. The mock
+        // path clones the shared `mock_engine`'s `Arc` (cheap); the real path
+        // builds the same fresh one-shot executor, just owned rather than
+        // borrowed. Inline path passes it by `&` into `run_round_loop`.
+        //
         // plan/14 C13 (D8 回锁): `force_mock` short-circuits everything below —
         // checked BEFORE the `agent_cli` match, so the creation flow's drafting
         // run never reaches real-executor selection no matter what workspace
@@ -1490,14 +1734,13 @@ impl App {
         // configured. Only `"claude-code"` (the default for an unassigned
         // issue or any other caller) reaches the existing mock-vs-real split,
         // unchanged.
-        let fresh_engine;
-        let engine: &Engine = if force_mock {
-            &self.mock_engine
+        let engine: Engine = if force_mock {
+            self.mock_engine.clone()
         } else {
             match agent_cli.as_str() {
                 "claude-code" => {
                     if proj.workspace_path.trim().is_empty() {
-                        &self.mock_engine
+                        self.mock_engine.clone()
                     } else {
                         let executor = ClaudeCliExecutor::new(
                             self.state.claude_config.clone(),
@@ -1507,8 +1750,7 @@ impl App {
                             proj.allow_commands,
                             agent_tools.clone(),
                         );
-                        fresh_engine = Engine::new(Arc::new(executor));
-                        &fresh_engine
+                        Engine::new(Arc::new(executor))
                     }
                 }
                 other => {
@@ -1517,25 +1759,64 @@ impl App {
                     // executor's first (and only) call errors, and the existing
                     // "executor failed → settle Failed" path records it honestly.
                     let executor = UnsupportedCliExecutor::new(other.to_string());
-                    fresh_engine = Engine::new(Arc::new(executor));
-                    &fresh_engine
+                    Engine::new(Arc::new(executor))
                 }
             }
         };
 
-        // Live progress streams out of the engine callback (broadcast::send is
-        // sync); only persistence (async) is deferred to after each round.
-        let live = self.events.clone();
+        Ok(PreparedRun {
+            engine,
+            spec,
+            ctx,
+            params_json,
+            eval_idx,
+            num_phases,
+            max_iter,
+            range_end,
+            heads_workspace,
+            head_before,
+            proj,
+            p,
+            session,
+            issue_id,
+            trigger,
+            cron_task_id,
+        })
+    }
 
+    /// plan/17 S3: the long adversarial round loop, extracted verbatim from
+    /// `run_workflow_inner` so it can run on a `tokio::spawn` with NO `&mut
+    /// App` — it only ever touched `self.store` / `self.emit` / `engine` /
+    /// `live`, all shared borrows or owned/move-able. `self.emit(X)` became
+    /// `live.send(X)` (emit IS `self.events.send`, and `live` is exactly
+    /// `self.events.clone()`). `self.store` became the `store: Arc<dyn
+    /// Store>` param. Returns the `LoopEnd` + the last round's
+    /// `workflow_run` id + `final_run_ok`; `Err` is a `?`-early-bail (a
+    /// store error before any settle — the round's row stays "started,
+    /// never settled", honest, never a fabricated success).
+    #[allow(clippy::too_many_arguments)]
+    async fn run_round_loop(
+        store: Arc<dyn Store>,
+        live: broadcast::Sender<Event>,
+        engine: &Engine,
+        spec: &WorkflowSpec,
+        ctx: &RunCtx,
+        session: SessionId,
+        p: ProjectId,
+        issue_id: Option<IssueId>,
+        trigger: RunTrigger,
+        cron_task_id: Option<CronTaskId>,
+        params_json: &str,
+        eval_idx: Option<usize>,
+        num_phases: usize,
+        max_iter: u32,
+        range_end: usize,
+    ) -> Result<(LoopEnd, WorkflowRunId, bool), AppError> {
         // ── Adversarial review loop (plan/12 §4, T9) ────────────────────────
         // Each round is its OWN settled `workflow_run` row: "多轮 run 记录" reads
         // back as multiple rows, and settle-once holds because each row is
         // settled exactly once. Round 1 runs from phase 0; each Evaluator打回
         // restarts from the reject target and increments the round.
-        let range_end = match eval_idx {
-            Some(e) => e + 1, // through the gate, inclusive
-            None => num_phases,
-        };
         let mut start = 0usize;
         let mut round: u32 = 1;
         let mut baton: Option<String> = None;
@@ -1551,8 +1832,7 @@ impl App {
             // fabricated success.
             let started_at = OffsetDateTime::now_utc().unix_timestamp();
             let t0 = Instant::now();
-            let run_log_id = self
-                .store
+            let run_log_id = store
                 .record_workflow_run_start(bw_store::NewWorkflowRun {
                     workflow_id: spec.id,
                     workflow_name: &spec.name,
@@ -1561,14 +1841,14 @@ impl App {
                     trigger,
                     started_at,
                     cron_task_id,
-                    params_json: &params_json,
+                    params_json,
                 })
                 .await?;
             // A3: bind this round's run to the Issue it executes (RunIssue passes
             // Some; every other caller None). Every round of an issue-run is
             // bound, so `list_runs_for_issue` reads the whole loop back.
             if let Some(iid) = issue_id {
-                self.store.set_run_issue(run_log_id, iid).await?;
+                store.set_run_issue(run_log_id, iid).await?;
             }
             last_run_log = run_log_id;
 
@@ -1576,7 +1856,7 @@ impl App {
             // workflow, or all phases for an ungated one. Outputs come back on
             // the return value; live events stream via the callback.
             let range_res = engine
-                .run_phase_range(&spec, &ctx, start..range_end, baton.clone(), |e| {
+                .run_phase_range(spec, ctx, start..range_end, baton.clone(), |e| {
                     forward_progress(&live, e)
                 })
                 .await;
@@ -1588,7 +1868,7 @@ impl App {
                 Ok(o) => o,
                 Err(e) => {
                     // Honest executor failure — settle Failed, stop the loop.
-                    self.store
+                    store
                         .settle_workflow_run(
                             run_log_id,
                             RunStatus::Failed,
@@ -1605,10 +1885,10 @@ impl App {
             // Persist this round's phase outputs as session messages (每阶段留痕).
             let phases_completed = outputs.len() as u32;
             for output in &outputs {
-                self.store
+                store
                     .append_message(session, Author::Agent, &output.text)
                     .await?;
-                self.emit(Event::SessionMessageAdded {
+                let _ = live.send(Event::SessionMessageAdded {
                     session,
                     role: Author::Agent,
                     text: output.text.clone(),
@@ -1617,7 +1897,7 @@ impl App {
 
             // Ungated pipeline: this single round is the whole run.
             let Some(e_idx) = eval_idx else {
-                self.store
+                store
                     .settle_workflow_run(
                         run_log_id,
                         RunStatus::Ok,
@@ -1642,7 +1922,7 @@ impl App {
                     spec.phases[e_idx].name,
                     review_tail(&eval_text)
                 );
-                self.store
+                store
                     .settle_workflow_run(
                         run_log_id,
                         RunStatus::Failed,
@@ -1663,8 +1943,8 @@ impl App {
                     if e_idx + 1 < num_phases {
                         let tail_res = engine
                             .run_phase_range(
-                                &spec,
-                                &ctx,
+                                spec,
+                                ctx,
                                 (e_idx + 1)..num_phases,
                                 Some(review_tail(&eval_text)),
                                 |e| forward_progress(&live, e),
@@ -1673,10 +1953,10 @@ impl App {
                         match tail_res {
                             Ok(tail) => {
                                 for output in &tail {
-                                    self.store
+                                    store
                                         .append_message(session, Author::Agent, &output.text)
                                         .await?;
-                                    self.emit(Event::SessionMessageAdded {
+                                    let _ = live.send(Event::SessionMessageAdded {
                                         session,
                                         role: Author::Agent,
                                         text: output.text.clone(),
@@ -1685,7 +1965,7 @@ impl App {
                                 total += tail.len() as u32;
                             }
                             Err(e) => {
-                                self.store
+                                store
                                     .settle_workflow_run(
                                         run_log_id,
                                         RunStatus::Failed,
@@ -1699,7 +1979,7 @@ impl App {
                             }
                         }
                     }
-                    self.store
+                    store
                         .settle_workflow_run(
                             run_log_id,
                             RunStatus::Ok,
@@ -1733,7 +2013,7 @@ impl App {
                         let msg = format!(
                             "评审打回目标越界(阶段索引 {target} / 共 {num_phases} 阶段 · 轮次 {round}/{max_iter}):{reason}"
                         );
-                        self.store
+                        store
                             .settle_workflow_run(
                                 run_log_id,
                                 RunStatus::Failed,
@@ -1750,7 +2030,7 @@ impl App {
                         // round Failed with the cap reason; hand a Blocked outcome
                         // up (a bound Issue is parked Blocked by the caller).
                         let cap_reason = format!("对抗循环 {round}/{max_iter} 仍未通过:{reason}");
-                        self.store
+                        store
                             .settle_workflow_run(
                                 run_log_id,
                                 RunStatus::Failed,
@@ -1769,7 +2049,7 @@ impl App {
                         "评审打回阶段「{}」(轮次 {round}/{max_iter}):{reason}",
                         spec.phases[target].name
                     );
-                    self.store
+                    store
                         .settle_workflow_run(
                             run_log_id,
                             RunStatus::Failed,
@@ -1786,7 +2066,31 @@ impl App {
             }
         };
 
-        // ── After the loop: change window + usage accounting, ONCE ──────────
+        Ok((end, last_run_log, final_run_ok))
+    }
+
+    /// plan/17 S3: the 收尾 stage of [`run_workflow_inner`] — change window +
+    /// usage accounting, ONCE per run, attributed to the LAST round's row.
+    /// Extracted verbatim from the old inline tail; `&mut self` so it can run
+    /// on the main thread (it touches `refresh_agents` / `refresh_skills` /
+    /// `scan_and_register_artifacts` — the only `&mut self` parts of the whole
+    /// run). Takes individual refs (not a struct) so the inline path can pass
+    /// them straight out of `PreparedRun` and the backgrounded path out of
+    /// `FinalizeCtx` — no clone needed in either. Inline callers run it right
+    /// after `run_round_loop`; the issue path runs it inside `run_issue_settle`.
+    #[allow(clippy::too_many_arguments)]
+    async fn finalize_run(
+        &mut self,
+        spec: &WorkflowSpec,
+        heads_workspace: &str,
+        head_before: &Option<String>,
+        proj: &ProjectRow,
+        p: ProjectId,
+        issue_id: Option<IssueId>,
+        end: LoopEnd,
+        last_run_log: WorkflowRunId,
+        final_run_ok: bool,
+    ) -> Result<RunOutcome, AppError> {
         // Attributed to the LAST round's row (the one that produced the final
         // state). Runs on every terminal outcome (pass / block / honest failure)
         // — a failed run's partial real output is still real output. Doing this
@@ -1795,9 +2099,9 @@ impl App {
         let run_ok = final_run_ok;
         let run_log_id = last_run_log;
         if !heads_workspace.is_empty() {
-            let head_after = evidence::head_commit(&heads_workspace).await.ok().flatten();
+            let head_after = evidence::head_commit(heads_workspace).await.ok().flatten();
             self.store
-                .set_run_heads(run_log_id, head_before, head_after)
+                .set_run_heads(run_log_id, head_before.clone(), head_after)
                 .await?;
         }
         for a in &spec.agents {
@@ -1839,6 +2143,11 @@ impl App {
             }
         }
 
+        // The after-loop accounting above runs on EVERY terminal outcome
+        // (pass / block / honest failure) — a failed run's partial real
+        // output is still real output. Only now does the outcome surface:
+        // `Failed` propagates as `Err` so the caller's tail (issue stays
+        // InProgress) mirrors the inline `?`-early-bail path.
         match end {
             LoopEnd::Passed => Ok(RunOutcome::Completed),
             LoopEnd::Blocked(reason) => Ok(RunOutcome::BlockedAtCap { reason }),
@@ -3333,12 +3642,14 @@ impl App {
         Ok(report)
     }
 
-    /// plan/17 S1: entry guard + lifecycle for the same-project serial run
-    /// lock (`AppState::active_run`). Delegates the real work to
-    /// [`run_issue_body`]. The check is dormant while runs are inline (the
-    /// inline `await` already serializes dispatch); S3's backgrounding makes
-    /// this the actual concurrency guard. `active_run` is set here and cleared
-    /// on return — S3 moves the clear to the background settle. Both callers
+    /// plan/17 S1+S3: entry guard + lifecycle for the same-project serial
+    /// run lock (`AppState::active_run`). Backgrounded path (`settle_tx`
+    /// wired — the desktop kernel): `run_issue_backgrounded` sets
+    /// `active_run` after the 起手 prefix succeeds and returns immediately;
+    /// the kernel's settle arm later drives `run_issue_settle`, which clears
+    /// it. Inline path (`settle_tx` = None — examples / headless drivers):
+    /// `run_issue_body` runs the whole run inline; the `await` already
+    /// serializes, so `active_run` stays `None` (dormant). Both callers
     /// (`Command::RunIssue` and C8 「立即开工」) route here, so the lock
     /// applies uniformly.
     async fn run_issue_now(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
@@ -3349,28 +3660,29 @@ impl App {
             .await?
             .ok_or(AppError::NotFound)?
             .project_id;
-        if let Some((active_pid, _)) = self.state.active_run {
-            if active_pid == p {
+        if let Some(ar) = &self.state.active_run {
+            if ar.project == p {
                 return Err(AppError::Invalid(
                     "该项目有活正在跑，等它到评审中/干完再开下一张".into(),
                 ));
             }
         }
-        self.state.active_run = Some((p, id));
-        let res = self.run_issue_body(session, id).await;
-        self.state.active_run = None;
-        res
+        if self.settle_tx.is_some() {
+            self.run_issue_backgrounded(session, id).await
+        } else {
+            self.run_issue_body(session, id).await
+        }
     }
 
-    /// A3: run an Issue — assemble the issue's title/desc + its stage's role
-    /// playbook + any distilled (compounded) skills from the same project +
-    /// (C8) its `standard_skill` association into one real run through
-    /// `run_workflow_inner`. Extracted out of `Command::RunIssue`'s match arm
-    /// so `Command::CompleteCreation`'s「问一句就跑」(C8) can call the exact
-    /// same real path, not a parallel shortcut. See `Command::RunIssue`'s doc
-    /// for the state-machine contract (InProgress at start, InReview on
-    /// success via the PR-derive rule, never auto-Done).
-    async fn run_issue_body(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
+    /// plan/17 S3: the shared 起手 prefix of an issue-run — get + validate
+    /// the Issue, build the stage-playbook `WorkflowSpec` (+ standard /
+    /// distilled skill injection), transition to InProgress (refresh + emit),
+    /// and provision the isolated issue worktree behind an RAII guard.
+    /// `&mut self` (transition + refresh), but returns FAST — the long round
+    /// loop is NOT here. Both the inline path (`run_issue_body`) and the
+    /// backgrounded path (`run_issue_backgrounded`) start here, so the
+    /// spec / worktree / guard setup is never duplicated.
+    async fn prepare_issue_run(&mut self, id: IssueId) -> Result<IssueRunPrep, AppError> {
         let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
         // A5-F: only work not yet settled/parked/under-review/blocked
         // can be (re)started this way. InProgress is a legal starting
@@ -3510,32 +3822,42 @@ impl App {
         };
         // RAII: remove the worktree on EVERY exit path (early `?`/Ok/Err/
         // panic). The branch stays on `origin` (pushed by `stage_commit_push`)
-        // for review/merge — only the local working dir is dropped.
-        let _worktree_guard = bw_engine::workspace::IssueWorktreeGuard::new(
+        // for review/merge — only the local working dir is dropped. The
+        // caller owns the guard so it lives as long as the run needs it.
+        let guard = bw_engine::workspace::IssueWorktreeGuard::new(
             PathBuf::from(proj.workspace_path.trim()),
             issue_ws.clone(),
         );
-        let on_issue_branch = issue_ws.is_some();
 
-        // Run through the same path as any run, bound to this issue. C13
-        // (plan/14): `force_mock = false` — a standard/normal Issue's real
-        // work is the one path the creation flow's mock lock must NEVER
-        // touch; this keeps routing to the real executor whenever the
-        // project has a configured workspace, byte-for-byte unchanged.
-        // plan/17 S2: pass the issue worktree path so the executor + evidence
-        // run against the isolated worktree, not the shared main workspace.
-        let run = self
-            .run_workflow_inner(
-                p,
-                session,
-                spec,
-                RunTrigger::Manual,
-                None,
-                Some(id),
-                false,
-                issue_ws.as_deref(),
-            )
-            .await;
+        Ok(IssueRunPrep {
+            issue,
+            proj,
+            spec,
+            issue_ws,
+            pr_eligible,
+            guard,
+        })
+    }
+
+    /// plan/17 S3: the shared tail of an issue-run — `create_mr` /
+    /// `transition InReview` / `refresh_issues` / emit, branching on the run
+    /// outcome. `Ok(Completed)` → InReview (iff a PR opened or the issue
+    /// isn't PR-eligible); `Ok(BlockedAtCap)` → park Blocked; `Err` → stay
+    /// InProgress (never auto-Done, 铁律). The guard is taken BY VALUE so it
+    /// outlives the tail's `create_mr` (which `stage_commit_push`es the
+    /// worktree) and drops at the end — removing the worktree only AFTER the
+    /// branch is pushed to `origin` for review/merge.
+    async fn issue_run_tail(
+        &mut self,
+        issue: Issue,
+        proj: ProjectRow,
+        issue_ws: Option<PathBuf>,
+        pr_eligible: bool,
+        run: Result<RunOutcome, AppError>,
+        _guard: bw_engine::workspace::IssueWorktreeGuard,
+    ) -> Result<(), AppError> {
+        let id = issue.id;
+        let on_issue_branch = issue_ws.is_some();
         match run {
             // A completed run only reaches 评审中 — never 完成. Done stays an
             // explicit human act (merge / TransitionIssue,铁律).
@@ -3664,6 +3986,249 @@ impl App {
                 Err(e)
             }
         }
+    }
+
+    /// A3: INLINE issue-run path (examples / headless drivers — `settle_tx`
+    /// = None). `prepare_issue_run` → `run_workflow_inner` (起手+loop+
+    /// finalize, awaited inline) → `issue_run_tail`. Byte-for-byte the
+    /// pre-S3 behavior: the whole run completes before `dispatch(RunIssue)`
+    /// returns, so every example that awaits a `RunIssue` dispatch still
+    /// reads back a settled Issue. Extracted out of `Command::RunIssue`'s
+    /// match arm so `Command::CompleteCreation`'s「问一句就跑」(C8) can call
+    /// the exact same real path, not a parallel shortcut. See
+    /// `Command::RunIssue`'s doc for the state-machine contract (InProgress
+    /// at start, InReview on success via the PR-derive rule, never auto-Done).
+    async fn run_issue_body(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
+        let prep = self.prepare_issue_run(id).await?;
+        let IssueRunPrep {
+            issue,
+            proj,
+            spec,
+            issue_ws,
+            pr_eligible,
+            guard,
+        } = prep;
+        let p = issue.project_id;
+        let run = self
+            .run_workflow_inner(
+                p,
+                session,
+                spec,
+                RunTrigger::Manual,
+                None,
+                Some(id),
+                false,
+                issue_ws.as_deref(),
+            )
+            .await;
+        self.issue_run_tail(issue, proj, issue_ws, pr_eligible, run, guard)
+            .await
+    }
+
+    /// plan/17 S3: the BACKGROUNDED issue-run path (`settle_tx` wired — the
+    /// desktop kernel). Same 起手 prefix (`prepare_issue_run`) then
+    /// `prepare_run` (起手 of `run_workflow_inner`, `&self` only) on the
+    /// main thread — so InProgress + RunStarted emit + worktree provisioning
+    /// all land before dispatch returns and the UI re-renders. Then
+    /// `tokio::spawn` the long round loop (it only ever touched `self.store`
+    /// / `self.emit` / `engine` — shared borrows — so it needs NO `&mut
+    /// App`, the whole point of the freeze fix). The spawn reports back via
+    /// the settle mpsc; `run_issue_settle` (kernel settle arm) drives
+    /// `finalize_run` + tail under `&mut self`. The same-project serial lock
+    /// becomes real here — `active_run` stays `Some` across dispatch returns.
+    async fn run_issue_backgrounded(
+        &mut self,
+        session: SessionId,
+        id: IssueId,
+    ) -> Result<(), AppError> {
+        let prep = self.prepare_issue_run(id).await?;
+        let p = prep.issue.project_id;
+        let IssueRunPrep {
+            issue,
+            proj,
+            spec,
+            issue_ws,
+            pr_eligible,
+            guard,
+        } = prep;
+        let prepared = self
+            .prepare_run(
+                p,
+                session,
+                spec,
+                RunTrigger::Manual,
+                None,
+                Some(id),
+                false,
+                issue_ws.as_deref(),
+            )
+            .await?;
+        // Destructure everything `run_round_loop` + `finalize_run` need out
+        // of `prepared`. The engine moves into the spawn (owned); `spec` is
+        // cloned for the spawn because `finalize_run` (main thread, after
+        // settle) also needs `spec.agents` / `spec.skills` / `spec.stage_ref`.
+        let PreparedRun {
+            engine,
+            spec,
+            ctx,
+            params_json,
+            eval_idx,
+            num_phases,
+            max_iter,
+            range_end,
+            heads_workspace,
+            head_before,
+            proj: prepared_proj,
+            p: _prepared_p,
+            session: _prepared_session,
+            issue_id: prepared_issue_id,
+            trigger,
+            cron_task_id,
+        } = prepared;
+        let spec_spawn = spec.clone();
+        let params_json_spawn = params_json.clone();
+        let store = self.store.clone();
+        let live = self.events.clone();
+        let settle_tx = self
+            .settle_tx
+            .clone()
+            .expect("run_issue_backgrounded only called when settle_tx is Some");
+        let handle = tokio::spawn(async move {
+            let outcome = Self::run_round_loop(
+                store,
+                live,
+                &engine,
+                &spec_spawn,
+                &ctx,
+                session,
+                p,
+                prepared_issue_id,
+                trigger,
+                cron_task_id,
+                &params_json_spawn,
+                eval_idx,
+                num_phases,
+                max_iter,
+                range_end,
+            )
+            .await;
+            let _ = settle_tx.send(SettleReq {
+                project: p,
+                issue: id,
+                outcome,
+            });
+        });
+        self.state.active_run = Some(ActiveRun {
+            project: p,
+            issue,
+            handle,
+            guard,
+            finalize: FinalizeCtx {
+                spec,
+                heads_workspace,
+                head_before,
+                proj: prepared_proj,
+                p,
+                issue_id: prepared_issue_id,
+            },
+            proj,
+            issue_ws,
+            pr_eligible,
+        });
+        Ok(())
+    }
+
+    /// plan/17 S3: settle a backgrounded issue-run on the main thread. Called
+    /// by the kernel's settle arm when the spawned round loop reports back.
+    /// `take()` is the double-settle guard: a `CancelRun` that already
+    /// cleared `active_run` makes a late-arriving completion a no-op (and
+    /// vice-versa — the first of cancel/completion to take `active_run` wins,
+    /// the other is an honest no-op). `finalize_run` reads `head_after` from
+    /// the worktree (guard still alive in `ar`), then the tail's `create_mr`
+    /// commits the worktree — guard drops only AFTER both, at the end of
+    /// `issue_run_tail`.
+    pub async fn run_issue_settle(&mut self, req: SettleReq) -> Result<(), AppError> {
+        let Some(ar) = self.state.active_run.take() else {
+            // Already settled (cancel raced ahead, or a stale req for a run
+            // whose settle already ran). Honest no-op.
+            return Ok(());
+        };
+        if ar.issue.id != req.issue || ar.project != req.project {
+            // Not this run — restore and ignore (a different run is in flight;
+            // this req is a straggler from a prior one).
+            self.state.active_run = Some(ar);
+            return Ok(());
+        }
+        // `Err` = `?`-early-bail mid-round (a store error before any settle) —
+        // skip finalize (the round's row stays started-never-settled, honest),
+        // mirror the inline path's early-return. `Ok` = normal loop terminal
+        // → finalize_run does the once-per-run accounting.
+        let outcome = match req.outcome {
+            Ok((end, last_run_log, final_run_ok)) => {
+                self.finalize_run(
+                    &ar.finalize.spec,
+                    &ar.finalize.heads_workspace,
+                    &ar.finalize.head_before,
+                    &ar.finalize.proj,
+                    ar.finalize.p,
+                    ar.finalize.issue_id,
+                    end,
+                    last_run_log,
+                    final_run_ok,
+                )
+                .await
+            }
+            Err(e) => Err(e),
+        };
+        self.issue_run_tail(
+            ar.issue,
+            ar.proj,
+            ar.issue_ws,
+            ar.pr_eligible,
+            outcome,
+            ar.guard,
+        )
+        .await
+    }
+
+    /// plan/17 S3 (① 中止): abort the in-flight backgrounded run on an issue.
+    /// `abort` the `JoinHandle` (the engine's child `claude` subprocess is
+    /// killed via `kill_on_drop`), then run the honest failure tail — the
+    /// issue STAYS `InProgress` (retryable), `settled_at` stays empty (no
+    /// auto-Done, 铁律), the worktree is torn down (guard drops). No
+    /// `finalize_run` accounting: the aborted round's `workflow_run` row stays
+    /// "started, never settled" (honest), and agent/skill `uses` are NOT
+    /// bumped — a cancelled run did not complete, so not counting it as a use
+    /// is the honest call (偏差 vs the normal `Failed` path which does
+    /// finalize with `run_ok=false`; noted in the commit). A normal
+    /// completion that already sent a settle req is a no-op here (`active_run`
+    /// already taken / being taken by the settle arm).
+    async fn cancel_run(&mut self, id: IssueId) -> Result<(), AppError> {
+        let Some(ar) = self.state.active_run.take() else {
+            return Ok(()); // no in-flight run — nothing to cancel
+        };
+        if ar.issue.id != id {
+            // Wrong issue — restore and leave it in flight.
+            self.state.active_run = Some(ar);
+            return Ok(());
+        }
+        ar.handle.abort(); // drop the spawned round-loop future → kill_on_drop
+        self.emit(Event::WorkflowFailed(format!(
+            "Issue #{} 已中止",
+            ar.issue.number
+        )));
+        // The abort already succeeded — `active_run` was cleared by `take()`
+        // above and the guard will clean the worktree when `ar` drops at fn
+        // exit. A `refresh_issues` failure here is NOT the user's cancel
+        // failing (and `state.issues` already shows InProgress, which is the
+        // honest post-cancel state), so swallow it rather than surface a
+        // misleading "cancel failed" toast.
+        let _ = self.refresh_issues().await;
+        self.emit(Event::IssuesChanged);
+        // `ar` drops here → guard removes the worktree. The pushed branch
+        // stays on `origin` if `stage_commit_push` had already run, but a
+        // mid-run abort usually hadn't — either way no fabrication.
+        Ok(())
     }
 
     pub async fn dispatch(&mut self, cmd: Command) -> Result<(), AppError> {
@@ -5217,6 +5782,9 @@ impl App {
 
             Command::RunIssue { session, id } => {
                 self.run_issue_now(session, id).await?;
+            }
+            Command::CancelRun { id } => {
+                self.cancel_run(id).await?;
             }
 
             Command::UpdateWorkflowSpec {

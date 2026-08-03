@@ -763,8 +763,26 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 let k_run = k.clone();
                                 let k_merge = k.clone();
                                 let k_detail = k.clone();
+                                let k_cancel = k.clone();
                                 let agents = agents.clone();
                                 let i_id = i.id;
+                                // plan/17 S3: is THIS card's run in flight?
+                                // (`active_run` carries (project, issue).) And is
+                                // a same-project sibling in flight (serial lock
+                                // → 「▶ 跑」 greyed)? A run on another project
+                                // doesn't block this card.
+                                let is_running = op.active_run == Some((op.id, i_id));
+                                let same_project_busy =
+                                    op.active_run.map(|(p, _)| p) == Some(op.id);
+                                // plan/17 S3: the 「▶ 跑」 button's label /
+                                // cursor / color when a same-project run is in
+                                // flight (serial lock — RunIssue is rejected
+                                // server-side; the UI just tells the truth).
+                                let (run_label, run_cursor, run_color) = if same_project_busy {
+                                    ("▶ 跑(排队中)".to_string(), "not-allowed", ink3)
+                                } else {
+                                    ("▶ 跑".to_string(), "pointer", clay)
+                                };
                                 // P3: only work not yet under review / settled
                                 // can be started from the board — same states
                                 // `RunIssue` itself accepts (guard lives in
@@ -902,9 +920,28 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                 // same session+run path the
                                                 // stage "▶ 运行" uses. Mock
                                                 // projects run self-labeled.
-                                                if runnable {
+                                                // plan/17 S3 (① 中止): when this
+                                                // card's run is in flight, show
+                                                // 「⬇ 终止」 instead of 「▶ 跑」
+                                                // (aborts the backgrounded run,
+                                                // issue stays InProgress, never
+                                                // auto-Done — 铁律). When a
+                                                // same-project sibling is
+                                                // running, grey 「▶ 跑」 (serial
+                                                // lock — RunIssue would be
+                                                // rejected anyway; honest UI).
+                                                if is_running {
                                                     button {
-                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;font-weight:700;",
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{alert};font-size:11.5px;padding:0;font-weight:700;",
+                                                        onclick: move |_| {
+                                                            k_cancel.send(Command::CancelRun { id: i_id });
+                                                        },
+                                                        "⬇ 终止"
+                                                    }
+                                                } else if runnable {
+                                                    button {
+                                                        style: "cursor:{run_cursor};background:transparent;border:none;color:{run_color};font-size:11.5px;padding:0;font-weight:700;",
+                                                        disabled: same_project_busy,
                                                         onclick: move |_| {
                                                             let sid = SessionId::new();
                                                             k_run.send(Command::StartSession {
@@ -915,7 +952,7 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                             });
                                                             k_run.send(Command::RunIssue { session: sid, id: i_id });
                                                         },
-                                                        "▶ 跑"
+                                                        "{run_label}"
                                                     }
                                                 }
                                                 // C5 · PR 验收环: InReview + 有 PR 时,
