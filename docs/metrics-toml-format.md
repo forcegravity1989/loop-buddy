@@ -73,7 +73,7 @@ collect = { kind = "...", query = "..." }
 ### 采集方案 `collect`(内联表)
 
 ```toml
-collect = { kind = "github" | "connector" | "bw" | "manual", query = "..." }
+collect = { kind = "github" | "connector" | "bw" | "manual" | "script", query = "..." }
 ```
 
 **每条指标(含北极星)必须带 `collect`** —— 这是「对的指标」的硬约束
@@ -85,17 +85,18 @@ collect = { kind = "github" | "connector" | "bw" | "manual", query = "..." }
 | `"connector"` | 走已配置的 BW Connector | Connector 的名字/scope,如 `"content-analytics"` | **v1 未接,如实 Unknown**:采集器不碰,无观测、signal 保持 Unknown,绝不假绿 |
 | `"bw"` | BW 自己的记账(issue 结算数、run 遥测等),不经外部系统 | 内部口径的简短描述,如 `"issue.settled_at within 7d"` | **v1 未接,如实 Unknown**:同上,留给后续票接 BW 自记账口径 |
 | `"manual"` | 暂时没有采集器,靠人手填 | 允许留空字符串 `""` | 不归采集器管;值靠界面手填,戴「手填」徽记 |
+| `"script"` | 项目仓里既有采集脚本(如 `derive_*.py` 机械解析真实数据源、产出 `data.json`),buddy shell-out 调它读结果 | 字段在脚本输出 JSON 里的点分路径,如 `"leading.L1"` / `"north_star.adoption_rate"`(脚本路径 + 输出文件由项目的 `script` connector 配置,buddy 跑脚本后按此路径取值) | **plan18-③ 已接**:`CollectMetrics` 跑项目的 `script` connector 配置的脚本、读输出、按 `query` 字段路径取值写 observation。脚本自身依赖(Playwright/SSO/Chrome 等)由项目侧保证可独立跑,buddy 只 shell-out 调 |
 
-`kind` 是固定词表——文件里出现这四个之外的值,整份文件解析失败(结构性
+`kind` 是固定词表——文件里出现这五个之外的值,整份文件解析失败(结构性
 错误,不是"未知类型就忽略"式的静默宽容)。`query` 对非 `manual` 的 kind
 虽然不强制非空(解析器不做语义校验,只做结构校验),但一条采集不到值的
-"github"/"connector"/"bw" 指标是内容问题,留给「找指标」/「绑数据」
+"github"/"connector"/"bw"/"script" 指标是内容问题,留给「找指标」/「绑数据」
 Skill 处理,不是文件格式问题。
 
-**采集器 v1(C7)只真采 `github`**(外加既有 workspace evidence 覆盖的部分);
-`bw`/`connector` 两类如实留白——不采集、不写零值,看板上这些指标的 signal
-保持 Unknown 灰,徽记标「v1 未接」。「无数据 = Unknown ≠ 绿」是硬约束,采不到
-就如实说采不到,绝不为了点亮而伪造观测。
+**采集器 v1(C7)真采 `github` + `script`**(外加既有 workspace evidence 覆盖
+的部分);`bw`/`connector` 两类如实留白——不采集、不写零值,看板上这些指标
+的 signal 保持 Unknown 灰,徽记标「v1 未接」。「无数据 = Unknown ≠ 绿」是硬
+约束,采不到就如实说采不到,绝不为了点亮而伪造观测。
 
 ## 同步语义(`SyncMetricsFile` 命令)
 

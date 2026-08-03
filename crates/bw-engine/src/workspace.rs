@@ -5,7 +5,7 @@
 //! verifiable on disk (`.git/`, `README.md`, `git log`), nothing is staged
 //! for later or simulated.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 #[derive(Debug, thiserror::Error)]
@@ -190,6 +190,121 @@ pub(crate) async fn stage_commit_push(
     }
     git_in(workspace, &["push", "-u", "origin", branch]).await?;
     Ok(())
+}
+
+/// plan/17 S2: RAII guard for an issue worktree. `Drop` removes the worktree
+/// (best-effort, sync) so **every** exit path of `run_issue_body` — early
+/// `?`, `Ok`, `Err`, panic — cleans up. Never panics on a remove failure
+/// (best-effort: an orphaned worktree is orphaned git metadata, not data
+/// loss; the branch stays on `origin` for review/merge). Sync `git` in `Drop`
+/// because `Drop` can't `await` — the call is sub-second and this is the
+/// one place cleanup lives, so a brief block is the honest trade.
+pub struct IssueWorktreeGuard {
+    main_workspace: PathBuf,
+    path: Option<PathBuf>,
+}
+
+impl IssueWorktreeGuard {
+    /// Construct a guard. `path = None` makes a no-op guard (used when
+    /// provisioning failed or the project isn't `pr_eligible`); cleanup then
+    /// does nothing. `Some(path)` schedules `git worktree remove --force` +
+    /// `prune` for `Drop`.
+    pub fn new(main_workspace: PathBuf, path: Option<PathBuf>) -> Self {
+        Self {
+            main_workspace,
+            path,
+        }
+    }
+
+    /// The worktree path this guard owns, or `None` if none was provisioned.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+}
+
+impl Drop for IssueWorktreeGuard {
+    fn drop(&mut self) {
+        let Some(p) = &self.path else {
+            return;
+        };
+        let Some(s) = p.to_str() else {
+            return;
+        };
+        for args in [
+            ["worktree", "remove", "--force", s].as_slice(),
+            ["worktree", "prune"].as_slice(),
+        ] {
+            let _ = std::process::Command::new("git")
+                .current_dir(&self.main_workspace)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+}
+
+/// plan/17 S2: provision an isolated per-issue git worktree off the main
+/// workspace's HEAD (master), so two concurrent/back-to-back issue runs in
+/// one project never collide on the shared working tree. The worktree lives
+/// in a sibling directory `<main_workspace>-issue-<n>` and carries branch
+/// `bw/issue-<n>` (created here if missing, same retry-fallback semantics
+/// as `github::checkout_issue_branch`). Main workspace stays on master —
+/// only the issue worktree carries the issue branch. The caller wraps the
+/// returned path in an [`IssueWorktreeGuard`] so cleanup is automatic.
+pub async fn provision_issue_worktree(
+    main_workspace: &Path,
+    issue_number: u32,
+) -> Result<PathBuf, ProvisionError> {
+    let branch = crate::github::issue_branch(issue_number);
+    let parent = main_workspace.parent().ok_or_else(|| {
+        ProvisionError::CreateDir(format!("主工作区无 parent:{}", main_workspace.display()))
+    })?;
+    let stem = main_workspace
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workspace");
+    let sibling = parent.join(format!("{stem}-issue-{issue_number}"));
+    let sibling_str = sibling
+        .to_str()
+        .ok_or_else(|| {
+            ProvisionError::CreateDir(format!("worktree 路径非 UTF-8:{}", sibling.display()))
+        })?
+        .to_string();
+    // A prior run that crashed before its guard's `Drop` ran leaves the
+    // sibling dir behind. Prune stale worktree metadata; if the dir survives
+    // prune with a `.git` worktree file, it's a live worktree for this branch
+    // — reuse it (idempotent retry, mirroring `checkout_issue_branch`).
+    if sibling.exists() {
+        let _ = tokio::process::Command::new("git")
+            .current_dir(main_workspace)
+            .args(["worktree", "prune"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await;
+        if sibling.join(".git").exists() {
+            return Ok(sibling);
+        }
+        // Stale leftover dir with no worktree metadata — clear it so the
+        // `worktree add` below creates a fresh one.
+        let _ = std::fs::remove_dir_all(&sibling);
+    }
+    // First run: `worktree add -b <branch> <path>` from main HEAD (master).
+    // Retry (branch already exists from a prior run): fall back to checking
+    // the existing branch out into the new worktree.
+    if git_in(
+        main_workspace,
+        &["worktree", "add", "-b", &branch, &sibling_str],
+    )
+    .await
+    .is_err()
+    {
+        git_in(main_workspace, &["worktree", "add", &sibling_str, &branch]).await?;
+    }
+    Ok(sibling)
 }
 
 /// Is this a workspace the workbench owns — i.e. it minted the repo and

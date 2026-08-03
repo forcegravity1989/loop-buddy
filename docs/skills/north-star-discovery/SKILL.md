@@ -24,9 +24,14 @@ category: 标配
 ## 硬性约束(先对后亮,plan/13 D6 · 白纸黑字)
 
 > **每条指标(含北极星)必须附一个采集方案** —— `collect.kind` 只能是
-> `"github"` / `"connector"` / `"bw"` / `"manual"` 四选一,这是「对的指标」
-> 的硬约束:没有采集方案不等于指标不对,但必须如实标注"这个数字暂时怎么
-> 来"。
+> `"github"` / `"connector"` / `"bw"` / `"manual"` / `"script"` 五选一,这是
+> 「对的指标」的硬约束:没有采集方案不等于指标不对,但必须如实标注"这
+> 个数字暂时怎么来"。各 kind 语义:`github`=GitHub 查询;`connector`=走
+> BW 已配置的 Connector;`bw`=BW 自己记账;`manual`=人手填;`script`=
+> 项目仓里既有的采集脚本(如 `derive_*.py`)机械解析真实数据源、buddy
+> shell-out 调它读结果——**项目侧自采脚本不是 `manual`**,别因为脚本不
+> 在 `github`/`connector`/`bw` 语义内就降级成人手填,那是把自动采谎报
+> 成人填。
 >
 > **北极星绝不为了"当前采得到"而退化成 commit 数、PR 数、issue 数这类工程
 > 虚荣指标。** 工程活动量是引领指标的候选(甚至只是引领指标的引领指标),
@@ -57,6 +62,18 @@ category: 标配
 1. **读输入**:项目意图(`desc`/`benchmark`/`opportunity`)+
    `docs/competitive-analysis.md`(若存在)+ 项目现有 `.bw/metrics.toml`
    (若已存在,说明是修订而非首次起草,原地改写、不无理由推倒重来)。
+   **(4) 读项目仓里既有的指标体系**:扫 `governance/`、`derive_*.py`/
+   `derive_*.sh`、项目自己的 `docs/metrics-rationale.md`(非本 Skill 产出的
+   那份)、任何 `[L1/L2/L3]`/`[CN/DS/DT]` 之类分层定义文件、`connectors/`
+   采集脚本、`data-sources/`。**若项目已有自己的指标体系,三层指标(北极
+   星/滞后/引领)优先对齐、映射到既有体系的名字与分层,不是另起炉灶自造
+   一套**——项目自己的 owner 最清楚他们的业务指标怎么定义、怎么采,本
+   Skill 复用而非覆盖;映射不上的才用第 2-5 步的三段拆解推导。在
+   `docs/metrics-rationale.md` 里如实记一句「已对齐项目既有 X 层指标体系
+   (出处 `governance/...`)」或「项目无既有指标体系,本轮首次推导」。**这
+   一步是避免产出和项目真实业务对不上的「形似而神偏」指标的关键**——不
+   读项目既有体系就推导,等于把 buddy 的通用模板强加给项目,会漏造项目真
+   实指标、造出项目从不数的 phantom 指标。
 2. **拆三段:供给 / 使用 / 价值**:动笔起草北极星之前,先把这个项目拆成
    三段——**供给**(做出来了:功能/内容/文件被生产出来)、**使用**(用户
    真的用了:打开、读、点、留存、复访)、**价值**(用户因此变好了:省了
@@ -82,13 +99,25 @@ category: 标配
    是**上限**(别让用户被灌太多),指标却守着**下限**,方向完全反了,
    等于没守。
 5. **起草引领指标**(0..N,建议 2-4 条):过程性、当下可控、驱动滞后指标
-   的先行量——研发节奏(合并 PR 数)、交付节奏(结算 Issue 数)等工程活动
-   量放在这一层是合适的,不是北极星层。同样按上一步的口径校准 `target`。
+   的先行量。**优先复用项目既有指标体系里的过程性指标**(第 1 步读到的
+   `governance/`/`derive_*.py` 里的);只有项目确实没有既有引领指标时,
+   才用 BW 自有记账(issue 结算数、run 遥测等)或工程活动量(合并 PR 数)
+   作候选——但须在 `docs/metrics-rationale.md` 标注「本条来自 BW/GitHub
+   自有记账,非项目既有指标」,避免把 buddy 的概念当成项目真实的过程指
+   标。同样按上一步的口径校准 `target`。
 6. **给每条指标定 `collect`**:诚实选 `kind`。能查 GitHub 的写
    `"github"` + 真实查询串(占位符见下);走 BW 已配置 Connector 的写
    `"connector"` + connector 名字;BW 自己记账(issue 结算数、run 遥测)写
-   `"bw"` + 简短口径描述;暂时没有埋点/连接器就诚实写 `"manual"` +
-   `query = ""`——**不为了显得"采得到"而编一个查不出真实数字的 query**。
+   `"bw"` + 简短口径描述;**项目仓里已有自动采集脚本(如 `derive_*.py`
+   机械解析真实数据源、产出 `data.json` 之类)的,写 `"script"` + `query`
+   只写字段在脚本输出 JSON 里的点分路径**(如 `leading.L1` / `north_star.adoption_rate`)——
+   脚本路径与输出文件由项目的 `script` connector 配置(见 `docs/metrics-toml-format.md`),
+   buddy 跑脚本后按 `query` 字段路径取值,`query` 不含脚本路径、不带 `script:`/`;`/`field:` 前缀。
+   `script` kind 由 buddy
+   shell-out 调脚本读结果——项目侧自采脚本**不是 `manual`**;暂时没有
+   埋点/连接器、也没项目侧脚本的才诚实写 `"manual"` + `query = ""`。
+   **不为了显得"采得到"而编一个查不出真实数字的 query,也不为了显得体面
+   把项目侧自采脚本降级成 `manual`**——后者等于把自动采谎报成人填。
 7. **落文件**:把三层指标写进工作区 `<workspace>/.bw/metrics.toml`,严格
    按 `docs/metrics-toml-format.md` 的结构(见下方"输出契约"与完整样例)。
 8. **写推导文档**:`<workspace>/docs/metrics-rationale.md`——人读的推导过
@@ -105,7 +134,7 @@ category: 标配
 
 ### `.bw/metrics.toml`
 
-结构、字段、`collect.kind` 四值封闭枚举、`query` 占位符语法,一律遵照
+结构、字段、`collect.kind` 五值封闭枚举、`query` 占位符语法,一律遵照
 [`docs/metrics-toml-format.md`](../../metrics-toml-format.md)——不要凭记忆
 另起一套格式,那份文档就是 BW 的 `SyncMetricsFile` / `bw_engine::metrics_file`
 解析器的唯一契约,格式错一个字段整份文件解析失败、零写入。
@@ -167,13 +196,21 @@ collect = { kind = "bw", query = "issue.settled_at within 7d" }
 真实存在的工程活动量,但它只配当引领指标(驱动北极星的先行量),换到北极
 星位置就是本 Skill 明令禁止的退化。
 
+> **样例的两条引领指标(`每周合并 PR 数`/`队友结算 Issue 数`)示范的是
+> BW/GitHub 自有记账口径**,只在「项目无既有引领指标体系」时才照抄。若
+> 项目第 1 步读到了自己的 `governance/`/`derive_*.py` 既有过程指标(如
+> maas 的 L1 自动规范问题数、L2 定位分析数),应优先用项目的,不是照抄
+> 这两条 buddy 自有概念——否则会产出项目从不数的 phantom 指标。同理,若
+> 项目北极星(如采纳率)其实有项目侧脚本机械采集(见第 6 步 `script`
+> kind),用 `script` 而非 `manual`。
+
 ## 完成的标准(DoD)
 
 - `<workspace>/.bw/metrics.toml` 存在、结构合法(能被
   `bw_engine::metrics_file::read` 无错解析)。
 - 恰好一条 `[north_star]`,不是虚荣指标(能对照 `docs/competitive-analysis.md`
   或项目 `desc`/`benchmark` 说清楚"为什么是这条")。
-- 每条指标(含北极星)`collect.kind` 落在四值枚举内,`query` 不是为了"看
+- 每条指标(含北极星)`collect.kind` 落在五值枚举内,`query` 不是为了"看
   起来能采"而瞎写的假查询。
 - `<workspace>/docs/metrics-rationale.md` 存在,四块内容都有真实依据支撑。
 - 改动是活分支上的真实提交,不是口头描述。
@@ -190,6 +227,9 @@ collect = { kind = "bw", query = "issue.settled_at within 7d" }
   就还停在供给段。
 - **为了让 `collect.kind` 显得"高级"而选错**:能诚实标 `manual` 就标
   `manual`,不要为了显得体面而选 `connector`/`bw` 却没有真实对应的接入。
+  **反向同样错**:项目仓里已有自动采集脚本(机械解析真实数据源)的,该
+  标 `script` 就标 `script`,别降级成 `manual`——项目侧脚本是自动采集,
+  降级人填等于把自动谎报成人填,看板上会平白多一个「手填」徽。
 - **`docs/competitive-analysis.md` 存在却没读**:那份报告存在的唯一理由
   就是喂给这一步,跳过它等于自己现编"知道对标谁"。
 - **改写已存在的 `.bw/metrics.toml` 时误删历史指标的 id 语义**:文件没有

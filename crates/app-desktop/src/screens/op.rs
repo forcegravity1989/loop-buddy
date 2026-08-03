@@ -763,8 +763,26 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 let k_run = k.clone();
                                 let k_merge = k.clone();
                                 let k_detail = k.clone();
+                                let k_cancel = k.clone();
                                 let agents = agents.clone();
                                 let i_id = i.id;
+                                // plan/17 S3: is THIS card's run in flight?
+                                // (`active_run` carries (project, issue).) And is
+                                // a same-project sibling in flight (serial lock
+                                // → 「▶ 跑」 greyed)? A run on another project
+                                // doesn't block this card.
+                                let is_running = op.active_run == Some((op.id, i_id));
+                                let same_project_busy =
+                                    op.active_run.map(|(p, _)| p) == Some(op.id);
+                                // plan/17 S3: the 「▶ 跑」 button's label /
+                                // cursor / color when a same-project run is in
+                                // flight (serial lock — RunIssue is rejected
+                                // server-side; the UI just tells the truth).
+                                let (run_label, run_cursor, run_color) = if same_project_busy {
+                                    ("▶ 跑(排队中)".to_string(), "not-allowed", ink3)
+                                } else {
+                                    ("▶ 跑".to_string(), "pointer", clay)
+                                };
                                 // P3: only work not yet under review / settled
                                 // can be started from the board — same states
                                 // `RunIssue` itself accepts (guard lives in
@@ -902,9 +920,28 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                 // same session+run path the
                                                 // stage "▶ 运行" uses. Mock
                                                 // projects run self-labeled.
-                                                if runnable {
+                                                // plan/17 S3 (① 中止): when this
+                                                // card's run is in flight, show
+                                                // 「⬇ 终止」 instead of 「▶ 跑」
+                                                // (aborts the backgrounded run,
+                                                // issue stays InProgress, never
+                                                // auto-Done — 铁律). When a
+                                                // same-project sibling is
+                                                // running, grey 「▶ 跑」 (serial
+                                                // lock — RunIssue would be
+                                                // rejected anyway; honest UI).
+                                                if is_running {
                                                     button {
-                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;font-weight:700;",
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{alert};font-size:11.5px;padding:0;font-weight:700;",
+                                                        onclick: move |_| {
+                                                            k_cancel.send(Command::CancelRun { id: i_id });
+                                                        },
+                                                        "⬇ 终止"
+                                                    }
+                                                } else if runnable {
+                                                    button {
+                                                        style: "cursor:{run_cursor};background:transparent;border:none;color:{run_color};font-size:11.5px;padding:0;font-weight:700;",
+                                                        disabled: same_project_busy,
                                                         onclick: move |_| {
                                                             let sid = SessionId::new();
                                                             k_run.send(Command::StartSession {
@@ -915,7 +952,7 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                             });
                                                             k_run.send(Command::RunIssue { session: sid, id: i_id });
                                                         },
-                                                        "▶ 跑"
+                                                        "{run_label}"
                                                     }
                                                 }
                                                 // C5 · PR 验收环: InReview + 有 PR 时,
@@ -1609,6 +1646,7 @@ fn ProgressAll(op: OpVm) -> Element {
     let bar_color = ui::progress_color(op.overall);
     let overall = op.overall;
     let mix = op.cycle.mix();
+    let k_sync = k.clone();
     let stats = [
         ("工作流累计", op.stats.workflows_total),
         ("定时任务运行中", op.stats.routines_active),
@@ -1730,6 +1768,35 @@ fn ProgressAll(op: OpVm) -> Element {
                 }
             }
         }
+        // plan18-⑤ · 项目级业务指标区段:北极星在顶栏,这里显不绑阶段的
+        // 项目级指标(stage_kind=NULL,如 L1/L2/L3 业务指标、项目级滞后)。
+        // 之前 kernel.rs:970 的 filter(stage_kind==Some) 只管阶段卡,项目级
+        // 指标被全过滤掉、UI 完全看不见(§4.11)。这里补渲染段,data 已在
+        // OpVm.metrics(全量),只筛 stage_kind.is_none()。
+        if op.metrics.iter().any(|m| m.stage_kind.is_none()) {
+            div {
+                style: "{card} padding:20px 22px;margin-bottom:16px;",
+                div {
+                    style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;",
+                    span { style: "font-family:{serif};font-size:16px;font-weight:600;", "项目级业务指标" }
+                    // plan18-⑦:SyncMetricsFile 当前只在 PR merge 后 auto-fire,
+                    // 运营视图无手动入口——改完 .bw/metrics.toml 要走命令行/PR
+                    // 才同步进表。加按钮让改完立刻同步看效果。
+                    button {
+                        style: "font-size:12px;color:{ink2};border:1px solid {ink3};border-radius:4px;padding:3px 10px;cursor:pointer;background:transparent;",
+                        onclick: move |_| k_sync.send(Command::SyncMetricsFile),
+                        "↻ 同步指标文件"
+                    }
+                }
+                div { style: "font-size:12px;color:{ink3};margin-bottom:12px;", "不绑阶段的项目级指标(北极星在顶栏,引领·滞后在此)" }
+                div {
+                    style: "display:grid;grid-template-columns:repeat(2,1fr);gap:12px;",
+                    for m in op.metrics.iter().filter(|m| m.stage_kind.is_none()).cloned() {
+                        MetricCard { key: "{m.name}", m }
+                    }
+                }
+            }
+        }
         div {
             style: "{card} padding:20px 22px;",
             div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:12px;", "阶段" }
@@ -1844,6 +1911,7 @@ fn MetricCard(m: MetricVm) -> Element {
     // its existing 手填 badge below (a different axis: the latest value's source).
     let (collect_badge, collect_dim) = match m.collect_kind.as_str() {
         "github" => ("采集 · GitHub".to_string(), false),
+        "script" => ("采集 · 项目侧脚本".to_string(), false),
         "bw" => ("采集 · BW 记账 · v1 未接".to_string(), true),
         "connector" => ("采集 · Connector · v1 未接".to_string(), true),
         _ => (String::new(), false),

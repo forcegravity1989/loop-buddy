@@ -12,7 +12,7 @@
 //! persisted derive cache (`None` ⇒ Unknown), feeds are real records, stage
 //! methodology text is `StageKind`'s own static metadata.
 
-use bw_app::{ActionState, App, Command, Event, Panel, Scope, View};
+use bw_app::{ActionState, App, Command, Event, Panel, Scope, SettleReq, View};
 use bw_core::model::{
     AgentRef, Author, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal, SkillRef,
     StageKind,
@@ -63,6 +63,11 @@ pub struct Vm {
     /// any project row exists. Empty until the Repo 卡片 first dispatches
     /// `ListGithubRepos` (switching to "接入已有仓").
     pub github_repos: Vec<GithubRepoSummary>,
+    /// plan/17 S3: the in-flight backgrounded run's (project, issue), or
+    /// `None` when nothing's running. The issue board uses this to show a
+    /// 「⬇ 终止」 button on exactly the issue whose run is in flight, and to
+    /// keep 「▶ 跑」 greyed for same-project siblings (serial lock).
+    pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -206,6 +211,11 @@ pub struct OpVm {
     /// P4: the Issue-detail overlay, `None` = closed. Opened per-issue by
     /// `Command::OpenIssueDetail`, cleared by `Command::CloseIssueDetail`.
     pub issue_detail: Option<ui::vm::IssueDetailVm>,
+    /// plan/17 S3: the in-flight backgrounded run's (project, issue), or
+    /// `None`. Threaded from [`Vm::active_run`] (`App::active_run`) so the
+    /// issue board can show a 「⬇ 终止」 button on the running card + keep
+    /// 「▶ 跑」 greyed for same-project siblings while the serial lock holds.
+    pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
     /// P5: weekly-review card (top of the progress panel).
     pub week_review: ui::vm::WeekReviewVm,
 }
@@ -473,6 +483,12 @@ fn claude_config_from_env() -> ClaudeCliConfig {
 /// on the watch channel once `Boot` has run.
 pub fn spawn() -> Kernel {
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Command>();
+    // plan/17 S3: the back-channel a backgrounded issue-run uses to hand its
+    // outcome back to this main loop (so `RunIssue` can return before the
+    // long claude spawn finishes — the UI never freezes). Polled by the
+    // `select!` settle arm below; each settle drives `run_issue_settle`
+    // under `&mut app` + a `Vm` rebuild, exactly like a dispatched command.
+    let (settle_tx, mut settle_rx) = mpsc::unbounded_channel::<SettleReq>();
     let (vm_tx, vm_rx) = watch::channel(Vm::default());
     let (note_tx, _keep) = broadcast::channel::<UiNote>(256);
     let notes = note_tx.clone();
@@ -512,7 +528,13 @@ pub fn spawn() -> Kernel {
                 )
                 // All-in-one-codebase default: projects born through the
                 // creation flow get their own real git repo next to the DB.
-                .with_workspaces_root(workspaces_root());
+                .with_workspaces_root(workspaces_root())
+                // plan/17 S3: wire the back-channel that turns `RunIssue`
+                // from a blocking inline call into a backgrounded one. The
+                // matching `settle_rx` is polled in the `select!` loop
+                // below; examples / headless drivers never wire this →
+                // `RunIssue` stays inline there.
+                .with_settle_channel(settle_tx);
 
                 // Live event → transient note forwarding. Runs concurrently with
                 // dispatch (progress events are emitted mid-run).
@@ -643,6 +665,18 @@ pub fn spawn() -> Kernel {
                         cmd = cmd_rx.recv() => {
                             let Some(cmd) = cmd else { break };
                             if let Err(e) = app.dispatch(cmd).await {
+                                let _ = note_tx.send(UiNote::Error(e.to_string()));
+                            }
+                            let _ = vm_tx.send(build_vm(&app, &store).await);
+                        }
+                        // plan/17 S3: a backgrounded issue-run's round loop
+                        // finished (or errored) — drive `finalize_run` + tail
+                        // on the main thread, same as a dispatched command.
+                        // The spawned task ran on THIS `current_thread`
+                        // runtime (cooperatively interleaved at the other
+                        // arms' await points), so no `Arc<Mutex>` was needed.
+                        Some(req) = settle_rx.recv() => {
+                            if let Err(e) = app.run_issue_settle(req).await {
                                 let _ = note_tx.send(UiNote::Error(e.to_string()));
                             }
                             let _ = vm_tx.send(build_vm(&app, &store).await);
@@ -829,6 +863,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         settings,
         cron_effectiveness,
         github_repos: state.github_repos.clone(),
+        active_run: app.active_run(),
     };
 
     let Some(pid) = state.active_project else {
@@ -1131,6 +1166,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         issue_detail: state.issue_detail.as_ref().map(|d| {
             ui::vm::issue_detail_vm(&d.issue, &d.runs, &d.changes, &d.artifacts, &state.agents)
         }),
+        active_run: app.active_run(),
         week_review,
     });
     vm
