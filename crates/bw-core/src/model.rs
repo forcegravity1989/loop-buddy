@@ -61,6 +61,12 @@ pub enum SourceKind {
     /// Github — machine-collected, no 手填 badge, independently re-derivable
     /// from codehub-cli.
     Codehub,
+    /// plan18-③ · 项目侧自采脚本采集器: a value pulled by buddy shell-out
+    /// 一个项目仓里既有的采集脚本(如 `derive_*.py` 机械解析真实数据源、产
+    /// 出 `data.json`)、按指标的 `collect_query` 字段路径取回。非 manual——
+    /// 是自动采集(脚本自身依赖由项目侧管,buddy 只调),不带手填徽,可从该脚
+    /// 本独立重派生。
+    Script,
     /// Hand-entered. Carries a `手填 · 未接入度量源` badge in the UI until a real
     /// connector is bound (Tier D), at which point the badge auto-drops.
     Manual,
@@ -1858,6 +1864,14 @@ pub const CONNECTOR_KIND_GITHUB_REPO: &str = "github-repo";
 /// open.codehub.huawei.com,path=org/repo)。真探针走 `codehub-cli project view`
 /// (Remote::Codehub.probe,P3 已通);issue/MR 计数采集由 collect arm(P5)负责。
 pub const CONNECTOR_KIND_CODEHUB_REPO: &str = "codehub-repo";
+/// plan18-③ · 项目侧脚本连接器:记录一个项目仓里既有的采集脚本(如
+/// `derive_*.py` 机械解析真实数据源、产出 `data.json`)。`config` 存 JSON:
+/// `{"script":"<相对工作区脚本路径>","output":"<相对工作区输出文件>","command":"<跑脚本的命令如 python>"}`。
+/// `SyncConnector` 探活=检查脚本文件存在;指标采集(`CollectMetrics` 的
+/// `script` arm)= 在项目工作区 shell-out 跑脚本、读 output、按各
+/// `collect_kind=script` 指标的 `collect_query` 字段路径取值写 observation。
+/// 脚本自身依赖(如 Playwright/SSO)由项目侧管,buddy 只 shell-out 调。
+pub const CONNECTOR_KIND_SCRIPT: &str = "script";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Connector {

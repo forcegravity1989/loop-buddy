@@ -1646,6 +1646,7 @@ fn ProgressAll(op: OpVm) -> Element {
     let bar_color = ui::progress_color(op.overall);
     let overall = op.overall;
     let mix = op.cycle.mix();
+    let k_sync = k.clone();
     let stats = [
         ("工作流累计", op.stats.workflows_total),
         ("定时任务运行中", op.stats.routines_active),
@@ -1767,6 +1768,35 @@ fn ProgressAll(op: OpVm) -> Element {
                 }
             }
         }
+        // plan18-⑤ · 项目级业务指标区段:北极星在顶栏,这里显不绑阶段的
+        // 项目级指标(stage_kind=NULL,如 L1/L2/L3 业务指标、项目级滞后)。
+        // 之前 kernel.rs:970 的 filter(stage_kind==Some) 只管阶段卡,项目级
+        // 指标被全过滤掉、UI 完全看不见(§4.11)。这里补渲染段,data 已在
+        // OpVm.metrics(全量),只筛 stage_kind.is_none()。
+        if op.metrics.iter().any(|m| m.stage_kind.is_none()) {
+            div {
+                style: "{card} padding:20px 22px;margin-bottom:16px;",
+                div {
+                    style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;",
+                    span { style: "font-family:{serif};font-size:16px;font-weight:600;", "项目级业务指标" }
+                    // plan18-⑦:SyncMetricsFile 当前只在 PR merge 后 auto-fire,
+                    // 运营视图无手动入口——改完 .bw/metrics.toml 要走命令行/PR
+                    // 才同步进表。加按钮让改完立刻同步看效果。
+                    button {
+                        style: "font-size:12px;color:{ink2};border:1px solid {ink3};border-radius:4px;padding:3px 10px;cursor:pointer;background:transparent;",
+                        onclick: move |_| k_sync.send(Command::SyncMetricsFile),
+                        "↻ 同步指标文件"
+                    }
+                }
+                div { style: "font-size:12px;color:{ink3};margin-bottom:12px;", "不绑阶段的项目级指标(北极星在顶栏,引领·滞后在此)" }
+                div {
+                    style: "display:grid;grid-template-columns:repeat(2,1fr);gap:12px;",
+                    for m in op.metrics.iter().filter(|m| m.stage_kind.is_none()).cloned() {
+                        MetricCard { key: "{m.name}", m }
+                    }
+                }
+            }
+        }
         div {
             style: "{card} padding:20px 22px;",
             div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:12px;", "阶段" }
@@ -1881,6 +1911,7 @@ fn MetricCard(m: MetricVm) -> Element {
     // its existing 手填 badge below (a different axis: the latest value's source).
     let (collect_badge, collect_dim) = match m.collect_kind.as_str() {
         "github" => ("采集 · GitHub".to_string(), false),
+        "script" => ("采集 · 项目侧脚本".to_string(), false),
         "bw" => ("采集 · BW 记账 · v1 未接".to_string(), true),
         "connector" => ("采集 · Connector · v1 未接".to_string(), true),
         _ => (String::new(), false),

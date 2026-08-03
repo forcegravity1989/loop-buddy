@@ -266,6 +266,30 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
   - **滞后**:**没有任何渲染路径**——ProgressStage 只显 `stage_kind==Some(阶段)` 的(`kernel.rs:970` 过滤掉 NULL),ProgressAll 没滞后段。→ 项目级滞后指标装了也看不见,只能 `sqlite3` 查。
 - **决议:先不修**(用户 2026-07-31 说先不急)。修法方向:给 ProgressAll 加「滞后指标」段渲染项目级 `role=lagging` MetricCard;或 SyncMetricsFile 给 trio 指标设 stage_kind(但 trio 是项目级不绑阶段,语义不对)。待实践想明白。
 
+### 4.12 plan18 step3 收尾·代码侧已交付 + 未决(指回步5/6/7)
+
+> worktree `plan18-step3-metric-loop`(分支同名),9 commit,门禁全过。2 轮 SubAgent 自检:7 铁律全合规、代码可作底座。
+
+**已交付**:
+- 18-① 找指标/绑数据 skill 调:Step1 读项目既有指标体系(governance/derive_*.py)优先对齐不另起炉灶 + script kind(项目侧自采不降级 manual)
+- 18-③ 通用脚本 connector(kind=script):probe 文件在位 + collect arm shell-out 项目仓采集脚本→读 JSON→按字段路径取值写 observation。可复制给同事项目
+- 18-④ L6 上卷补缝:recompute 把项目级 metric(stage_kind=NULL)卷入项目健康灯(北极星 Green 拉亮项目灯,补缝符合"北极星驱动健康"哲学,非原代码设计)
+- 18-⑤ UI 项目级业务指标区段:ProgressAll 显 stage_kind=NULL 的 metric(§4.11 滞后渲染 GAP 解)
+- 18-⑦ SyncMetricsFile 按钮:改完 metrics.toml 点按钮同步进表(不必走 PR/命令)
+- 18-⑧ 创建流 C/E 部分修:GitHub 建仓失败不兜底本地 mint(缺口E修);CompleteCreation 兜底条件改但**无效**(见下)
+- 18-⑩ script 来源徽 + sample 示例(检视补)
+- 审反馈修复:SKILL.md query 格式对齐代码(原 `script:;field:` 代码不认会全 deferred)+ 脚本非零退出 stderr 入错因 + 拒绝绝对路径
+
+**未决**(留主窗口/§4):
+- 🔴 **北极星 metric 行缝(方案A,留主窗口)**:北极星在 buddy 原设计存 `project.north_star` 列(**非 metric 表行**),collect/L6 都从 metric 表读→正规路径北极星不采集/不上卷/项目灯亮不了。SubAgent task2 验证 SQL 直插北极星 metric 行绕过通了,但正规 SyncMetricsFile 不建北极星 metric 行。修法 A:SyncMetricsFile 给北极星建 metric 行(role=north_star)+ `NorthStarDef` 加 target 字段(metrics.toml 格式契约改)+ EditNorthStar 同步 + UI 两套。**卡点不是逻辑难,是北极星位置迁移(project 列→metric 行)+ 补 target + 界面两套同步**——引领/滞后一开始就是 metric 行所以没卡,北极星位置不同。留主窗口和 plan17 汇总稳做。核心闭环"北极星点亮项目灯"最后一环。
+- 创建流缺口 C 没完全修:CompleteCreation 兜底条件 `&& remote_path.is_empty()` 无效(`set_remote` 只成功调,失败 remote_path 本就空→本地 mint 兜底仍触发)。边缘(挂远端失败才触发),正常对接不撞,按"没问题的不强行修"标 §4 留撞到再修。
+- task6 墙移植不开发(plan§1.4 vs memory 2026-07-28"项目健康总览先不补"冲突,没对齐不开发);层 B 来源徽未做(补充暂不开发)。**待什么条件回头**:哪天重判"项目健康总览要做"(推翻 07-28 memory 决议)+ 层B徽要值做时补
+- task7 UpdateWeekPlan 接 UI 未做(plan 内但非核心——改周计划非改指标值/采集)。**待什么条件回头**:下一会话续或主窗口汇总时做(dioxus inline edit 细活,token 不够稳做时别赶)
+- maas 侧:`clouddragon_cache.json` 被 cron 跑空(采集产零,maas 侧重跑 refresh_data.py 恢复)+ `derive_leading.py`/`data.json` 改(adoption_rate+扁平镜像)未 commit maas 仓
+- script connector:300s 超时硬编码 / probe 不查 command 可用 / 多 connector 字段重叠语义(非阻塞标后续)
+
+**task2 管线验证**(SubAgent):maas 脚本加 adoption_rate+扁平镜像(因 buddy `json_field_by_path` 只走点分对象键不数数组)→worktree 编译 buddy OK→SQL 建 script connector+4 metric 行(北极星/L1/L2/L3 collect_kind=script)→深链渲染 `[BW_OPEN]` 无 panic→采集点亮留主窗口(GUI CollectMetrics)。**SQL 直改 DB 绕法非终态**,终态走 metrics.toml+SyncMetricsFile 按钮。
+
 ### 待记(后续会话补)
 - _待补:步3 agent 真跑——bug① 修好后竞品分析能不能真联网出报告 + 产出 PR?_
 - _待补:推广给别人时,别人的前置装/配跟我的差异。_
@@ -301,6 +325,15 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - **种A 登记可见不注入**:项目自带 skill/agent 扫进来只登记可见,不进任何注入下拉(issue standard_skill / assignee / workflow crew / cron RunSkill)。执行/战绩归属是归属反转半破口,先不碰;项目级可注入留归属反转后。
 - **种B(运行资产 vs 维护资产、维护类可注入)留未来想法**:maas 的 auto-ticket(运行资产)/ refresh-indicators(维护资产)当前都按种A 登记不注入,不预设区分。等归属反转线理清再回头。
 - **规范未拉通前两边都不改**:扫到能解析的 SKILL.md(name+desc)就如实呈现字段,缺的按 buddy 诚实空态;规范不符出 Advisory 灰提示不阻断。未来拉通两边规范再收紧。
+
+### plan18 step3 收尾认知(2026-08-03)
+
+- **指标两层分层**(用户定):层 A 业务指标(北极星/引领/滞后,项目级 `stage_kind=NULL`,用项目真实定义)+ 层 B buddy 固有项目管理指标(开放 Issue/已合入 MR/阶段完成,通用,只当现状数不进健康灯)。buddy 固有指标不混进业务卡。
+- **通用脚本 connector**(plan18-③):buddy 加 `kind=script` connector,shell-out 项目仓既有采集脚本→读输出 JSON→按字段路径取值。可复制给同事项目(任何有产出指标值脚本的项目能接)。**buddy 不为某项目加功能**(用户哲学:maas 采纳率走 (a) maas 脚本自己加 adoption_rate 字段,buddy 通用采,不特化)。脚本自身依赖(Playwright/SSO)项目侧管。
+- **L6 上卷补缝**(plan18-④):北极星驱动项目健康是 buddy 原产品哲学(目标清晰且难造假),但代码当前 L6 只卷阶段 metric、项目级不上卷是缝→补 `by_project` 卷入。非原代码设计,补缝符合哲学,不替它圆场说"原来就这样"。
+- **北极星位置差异**(plan18-⑨ 留主窗口):北极星在 buddy 原设计存 `project` 列(项目唯一顶层目标单独存),非 metric 表行。引领/滞后一开始就是 metric 表行→采集/上卷天然通;北极星位置不同→要迁移 + 补 target + 界面两套。这是我 plan §1.2 写"北极星给 metric 行"时低估原设计位置差异的偏差,诚实记。
+- **buddy 通用采要项目脚本输出扁平 JSON**:`json_field_by_path` 只走点分对象键不数数组,maas 原 data.json 的 `leading_indicators` 是对象数组取不到,补扁平镜像 `leading.{L1,L2,L3}`。印证"项目侧脚本按 buddy 通用契约适配"——buddy 保持通用,项目侧保证输出扁平可寻址。
+- **skill 不读项目既有体系是指标对不上根因**:三件套 agent 造指标和 maas 真实对不上(phantom/误标 manual/漏造),不是 agent 跑错,是 skill Step1 不读项目仓 governance/derive_*.py。调 skill 让 agent 读项目体系优先对齐,可复制。
 
 ### 反命题(buddy 不是什么)
 - 不是团队协作平台(无成员/群聊/收件箱)。

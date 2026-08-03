@@ -35,7 +35,7 @@ use bw_core::model::{
     RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, Verdict,
     WorkflowKind, WorkflowSpec, BW_PROJECT_ASSETS_LIBRARY, BW_STANDARD_LIBRARY,
     CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO,
-    CONNECTOR_KIND_GIT_REPO,
+    CONNECTOR_KIND_GIT_REPO, CONNECTOR_KIND_SCRIPT,
 };
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
@@ -2688,6 +2688,46 @@ impl App {
                     Err(e) => Ok((false, e.to_string())),
                 }
             }
+            CONNECTOR_KIND_SCRIPT => {
+                // plan18-③:探活=检查项目仓里脚本文件在位(不真跑,真跑留
+                // collect arm,避免探活就触发长脚本)。config=JSON
+                // {script,output,command}。
+                let workspace = match c.project_id {
+                    Some(p) => self
+                        .store
+                        .get_project(p)
+                        .await?
+                        .map(|proj| proj.workspace_path)
+                        .filter(|w| !w.trim().is_empty())
+                        .unwrap_or_default(),
+                    None => String::new(),
+                };
+                if workspace.trim().is_empty() {
+                    return Ok((false, "script 连接器需项目工作区,无法探活".into()));
+                }
+                let cfg: ScriptConnectorConfig =
+                    match ScriptConnectorConfig::from_config(c.config.trim()) {
+                        Ok(v) => v,
+                        Err(e) => return Ok((false, format!("script 连接器 config 解析失败:{e}"))),
+                    };
+                if cfg.script.trim().is_empty() {
+                    return Ok((false, "script 连接器未记录脚本路径".into()));
+                }
+                if Path::new(cfg.script.trim()).is_absolute() {
+                    return Ok((false, "script 连接器 config 用绝对路径,需相对工作区".into()));
+                }
+                let script_path = Path::new(&workspace).join(&cfg.script);
+                match std::fs::metadata(&script_path) {
+                    Ok(_) => Ok((
+                        true,
+                        format!("脚本 {} 在位(输出 {})", cfg.script, cfg.output),
+                    )),
+                    Err(e) => Ok((
+                        false,
+                        format!("脚本 {} 不存在:{}", script_path.display(), e),
+                    )),
+                }
+            }
             other => Err(AppError::Invalid(format!(
                 "连接器类型「{other}」没有真实探针——不支持同步(诚实拒绝,不伪造状态)"
             ))),
@@ -3085,6 +3125,117 @@ impl App {
         let mut summary = MetricCollectSummary::default();
         let mut touched = false;
 
+        // plan18-③ · 预跑项目的 `script` connector,把脚本产出 JSON 缓存进
+        // `script_outputs`,供下面 `script` kind 指标按字段路径取值。一个项目
+        // 可有多个 script connector;每个脚本只跑一次(不是每指标跑一次)。
+        // 脚本自身依赖(Playwright/SSO/Chrome)由项目侧保证,buddy 只 shell-out。
+        let mut script_outputs: Vec<serde_json::Value> = Vec::new();
+        if !proj.workspace_path.trim().is_empty()
+            && sigs.metrics.iter().any(|m| m.collect_kind == "script")
+        {
+            let connectors = self.store.list_connectors().await?;
+            for c in connectors.iter().filter(|c| {
+                c.kind.as_str() == CONNECTOR_KIND_SCRIPT && c.project_id == Some(project)
+            }) {
+                let cfg: ScriptConnectorConfig =
+                    match ScriptConnectorConfig::from_config(c.config.trim()) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            summary.failed += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error =
+                                    Some(format!("script 连接器 config 解析失败:{e}"));
+                            }
+                            continue;
+                        }
+                    };
+                if cfg.script.trim().is_empty() {
+                    continue;
+                }
+                let command = if cfg.command.trim().is_empty() {
+                    "python".to_string()
+                } else {
+                    cfg.command.trim().to_string()
+                };
+                if Path::new(&cfg.script).is_absolute() {
+                    summary.failed += 1;
+                    if summary.first_error.is_none() {
+                        summary.first_error = Some(format!(
+                            "script {} config 用绝对路径,需相对工作区",
+                            cfg.script
+                        ));
+                    }
+                    continue;
+                }
+                let script_path = Path::new(&proj.workspace_path).join(&cfg.script);
+                let run = tokio::process::Command::new(&command)
+                    .arg(&script_path)
+                    .current_dir(&proj.workspace_path)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output();
+                let out = match tokio::time::timeout(std::time::Duration::from_secs(300), run).await
+                {
+                    Ok(Ok(o)) if o.status.success() => o,
+                    Ok(Ok(o)) => {
+                        // 非零退出:stderr 尾部入错因(读回为证,运维能从 buddy 内判根因)
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        let tail: String = stderr
+                            .chars()
+                            .rev()
+                            .take(500)
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect();
+                        summary.failed += 1;
+                        if summary.first_error.is_none() {
+                            summary.first_error = Some(format!(
+                                "script {} 非零退出:{}",
+                                cfg.script,
+                                tail.trim_end()
+                            ));
+                        }
+                        continue;
+                    }
+                    _ => {
+                        summary.failed += 1;
+                        if summary.first_error.is_none() {
+                            summary.first_error = Some(format!(
+                                "script {} 跑失败(超时>300s 或 spawn 失败)",
+                                cfg.script
+                            ));
+                        }
+                        continue;
+                    }
+                };
+                let _ = out; // stdout 不解析,只看 output 文件
+                let output_path = Path::new(&proj.workspace_path).join(&cfg.output);
+                let raw = match std::fs::read_to_string(&output_path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        summary.failed += 1;
+                        if summary.first_error.is_none() {
+                            summary.first_error =
+                                Some(format!("script {} 输出读不到:{}", cfg.script, e));
+                        }
+                        continue;
+                    }
+                };
+                match serde_json::from_str::<serde_json::Value>(&raw) {
+                    Ok(v) => script_outputs.push(v),
+                    Err(e) => {
+                        summary.failed += 1;
+                        if summary.first_error.is_none() {
+                            summary.first_error =
+                                Some(format!("script {} 输出非 JSON:{}", cfg.script, e));
+                        }
+                    }
+                }
+            }
+        }
+
         for m in &sigs.metrics {
             match m.collect_kind.as_str() {
                 "github" => {
@@ -3158,6 +3309,55 @@ impl App {
                             summary.failed += 1;
                             if summary.first_error.is_none() {
                                 summary.first_error = Some(format!("{}:{e}", m.name));
+                            }
+                        }
+                    }
+                }
+                "script" => {
+                    // plan18-③:从预跑的 script connector 输出 JSON 按
+                    // collect_query 字段路径取值。没配 script connector /
+                    // 脚本跑失败(已记 failed)→ 这里 deferred,绝不伪造观测。
+                    if script_outputs.is_empty() {
+                        summary.deferred += 1;
+                        continue;
+                    }
+                    let mut found: Option<String> = None;
+                    for out in &script_outputs {
+                        if let Some(v) = json_field_by_path(out, &m.collect_query) {
+                            let value = match v {
+                                serde_json::Value::Number(n) => n.to_string(),
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            found = Some(value);
+                            break;
+                        }
+                    }
+                    match found {
+                        Some(value) => {
+                            let last_ts = self.store.latest_observation_ts(m.id).await?;
+                            let same_window = last_ts.is_some_and(|t| {
+                                OffsetDateTime::from_unix_timestamp(t)
+                                    .map(|d| d.date() == today)
+                                    .unwrap_or(false)
+                            });
+                            if m.value_raw == value && same_window {
+                                summary.unchanged += 1;
+                            } else {
+                                self.store
+                                    .append_observation(m.id, SourceKind::Script, &value, now())
+                                    .await?;
+                                summary.changed += 1;
+                                touched = true;
+                            }
+                        }
+                        None => {
+                            summary.deferred += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error = Some(format!(
+                                    "{}:script 输出无字段 {}",
+                                    m.name, m.collect_query
+                                ));
                             }
                         }
                     }
@@ -4600,28 +4800,15 @@ impl App {
                                         });
                                     }
                                     Err(e) => {
-                                        let mut detail =
-                                            format!("GitHub 建仓失败,已尝试改建本地仓:{e}");
-                                        match provision_workspace(&root, &proj).await {
-                                            Ok(path) => {
-                                                self.store.set_workspace(id, &path, true).await?;
-                                                self.store
-                                                    .create_connector(NewConnector {
-                                                        id: ConnectorId::new(),
-                                                        name: format!("{} · 代码仓", proj.name),
-                                                        kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                                        scope: proj.name.clone(),
-                                                        project_id: Some(id),
-                                                        config: path.clone(),
-                                                    })
-                                                    .await?;
-                                            }
-                                            Err(local_e) => {
-                                                detail = format!(
-                                                    "GitHub 建仓失败:{e};本地兜底也失败:{local_e}"
-                                                );
-                                            }
-                                        }
+                                        // plan18-⑧:建仓失败就停、如实报,不兜底
+                                        // 本地 mint 空仓装接上(缺口 E:悄悄本地 mint
+                                        // → remote_path 空 → 不建 trio/不挂 cron/不扫
+                                        // skill,用户以为建好了实际远端没仓)。项目行
+                                        // 已落库但无远端仓,用户看到 Fail 可删项目重
+                                        // 来或重试——和"不假装健康"同精神。
+                                        let detail = format!(
+                                            "GitHub 建仓失败:{e}(未接上,无远端仓,请重试或检查权限)"
+                                        );
                                         self.emit(Event::ConnectorSynced {
                                             name: format!("{} · GitHub", proj.name),
                                             ok: false,
@@ -5109,7 +5296,16 @@ impl App {
                 // `git-repo` connector. Provisioning failure degrades to the
                 // old Mock-only behavior — creation itself never breaks.
                 let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
-                if self.workspaces_root.is_some() && proj.workspace_path.trim().is_empty() {
+                // plan18-⑧:只对纯本地项目(remote_path 也空)兜底开本地仓;
+                // 挂了远端但 clone 失败导致 workspace_path 空的,不兜底本地
+                // mint 装接上(缺口 C:否则用户以为接了远端实际是个本地空仓,
+                // remote_path 非空还会建 trio/cron 但无 workspace 跑不了)。
+                // 挂远端失败的项目停在"有 remote 无 workspace"——用户看到无
+                // 代码仓 connector 知道没接上,可删项目重来,比悄悄 mint 诚实。
+                if self.workspaces_root.is_some()
+                    && proj.workspace_path.trim().is_empty()
+                    && proj.remote_path.trim().is_empty()
+                {
                     let root = self.workspaces_root.clone().expect("checked above");
                     match provision_workspace(&root, &proj).await {
                         Ok(path) => {
@@ -7251,6 +7447,48 @@ impl App {
 
 fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
+}
+
+/// plan18-③ · `script` connector 的 config 解析结构。config 是 JSON 字符串,
+/// 存项目仓里既有采集脚本的相对工作区路径 + 输出文件 + 跑脚本的命令。
+#[derive(Debug, Clone, Default)]
+struct ScriptConnectorConfig {
+    script: String,
+    output: String,
+    /// 跑脚本的命令(`python` / `ts-node` / `node` …),空则默认 `python`。
+    command: String,
+}
+
+impl ScriptConnectorConfig {
+    /// 从 connector `config` JSON 字符串解析(script/output/command 三字段,
+    /// 缺的当空串,不硬性要求都填——采集时会再校验 script 非空)。
+    fn from_config(s: &str) -> serde_json::Result<Self> {
+        let v: serde_json::Value = serde_json::from_str(s)?;
+        let get = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        Ok(Self {
+            script: get("script"),
+            output: get("output"),
+            command: get("command"),
+        })
+    }
+}
+
+/// plan18-③ · 按点分路径从一个 JSON 里取字段值(供 `script` 指标的
+/// `collect_query` 取回脚本输出里的某条指标)。兼容 skill 写的
+/// `field:leading.L1` / `data.json:leading.L1` / 裸 `leading.L1` 三种写法,
+/// 一律取点分路径。
+fn json_field_by_path<'a>(v: &'a serde_json::Value, raw: &str) -> Option<&'a serde_json::Value> {
+    let path = raw.trim();
+    let path = path.strip_prefix("field:").unwrap_or(path).trim();
+    let path = path.strip_prefix("data.json:").unwrap_or(path).trim();
+    if path.is_empty() {
+        return None;
+    }
+    let mut cur = v;
+    for seg in path.split('.') {
+        cur = cur.get(seg)?;
+    }
+    Some(cur)
 }
 
 /// C7 · 采集器 receipt — an honest tally of one collection pass (manual or
