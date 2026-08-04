@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>buddy · 使用指导与维护指南</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    /* buddy 自有设计系统 — 取自代码仓 CLAUDE.md，真实 token */
+    --bg:#EFEBE2; --surface:#F4EFE3; --surface-2:#E7DFCD;
+    --fg:#2B2620; --muted:#6B6258; --border:#D9CFBC;
+    --accent:#C5654A; --accent-ink:#A84A30; --accent-soft:#E9C9BC;
+    --sig-green:#6E8F62; --sig-amber:#C98A2B; --sig-red:#B5462E; --sig-unknown:#9A938A;
+    --font-display:'Noto Serif SC','Songti SC',serif;
+    --font-body:'Noto Sans SC',system-ui,sans-serif;
+    --font-mono:'JetBrains Mono','Cascadia Code',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;display:flex;overflow:hidden}
+  ::selection{background:var(--accent-soft)}
+
+  /* 侧栏 */
+  aside.sidebar{width:272px;flex:0 0 272px;height:100vh;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:22px 0 16px;overflow-y:auto}
+  .brand{padding:0 22px 20px;border-bottom:1px solid var(--border)}
+  .brand .mark{font-family:var(--font-display);font-weight:700;font-size:22px;letter-spacing:-0.01em}
+  .brand .mark .dot{color:var(--accent)}
+  .brand .sub{font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-top:6px}
+  nav{padding:14px 0;flex:1}
+  .nav-group{margin-bottom:6px}
+  .nav-group-title{font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);padding:8px 22px 6px;font-weight:500}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:8px 22px;cursor:pointer;font-size:14px;border-left:3px solid transparent;transition:background .12s,border-color .12s}
+  .nav-item:hover{background:rgba(197,101,74,.06)}
+  .nav-item.active{background:var(--accent-soft);border-left-color:var(--accent);color:var(--accent-ink);font-weight:500}
+  .nav-item svg{width:16px;height:16px;flex:0 0 16px;stroke:currentColor;stroke-width:1.6;fill:none}
+  .nav-foot{padding:12px 22px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);line-height:1.5}
+  .nav-foot code{font-family:var(--font-mono);color:var(--accent-ink)}
+
+  /* 主区 */
+  main.main{flex:1;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  header.topbar{height:56px;flex:0 0 56px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;padding:0 32px;background:var(--bg)}
+  .crumb{display:flex;align-items:center;gap:10px;font-size:13px}
+  .crumb .sec{color:var(--muted)} .crumb .sep{color:var(--border)} .crumb .cur{color:var(--fg);font-weight:500}
+  .badge{margin-left:auto;font-size:11px;letter-spacing:0.06em;padding:4px 10px;border-radius:999px;border:1px solid var(--border);color:var(--muted);background:var(--surface);text-transform:uppercase}
+  .badge.use{color:#5f7d57;border-color:#c4d2bc} .badge.maint{color:var(--accent-ink);border-color:var(--accent-soft)}
+  .content{flex:1;overflow-y:auto;padding:34px 40px 80px}
+  .content::-webkit-scrollbar{width:10px} .content::-webkit-scrollbar-thumb{background:var(--border);border-radius:6px}
+
+  /* 屏与排版 */
+  .screen{display:none;max-width:880px}
+  .screen.active{display:block;animation:fade .18s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .eyebrow{font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent-ink);font-weight:500;margin-bottom:10px}
+  h1.disp{font-family:var(--font-display);font-weight:700;font-size:34px;line-height:1.18;letter-spacing:-0.02em;margin-bottom:14px}
+  .lede{font-size:16px;color:var(--muted);line-height:1.65;max-width:62ch;margin-bottom:26px}
+  h2.sec{font-family:var(--font-display);font-weight:600;font-size:21px;letter-spacing:-0.01em;margin:30px 0 12px;display:flex;align-items:center;gap:9px}
+  h2.sec .n{font-family:var(--font-mono);font-size:12px;font-weight:500;color:var(--accent-ink);background:var(--accent-soft);padding:2px 7px;border-radius:5px}
+  p{margin-bottom:12px;max-width:65ch} .muted{color:var(--muted)}
+  strong{font-weight:500} code,.mono{font-family:var(--font-mono);font-size:.92em}
+  a{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid var(--accent-soft)} a:hover{border-bottom-color:var(--accent-ink)}
+
+  /* 通用组件 */
+  .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin:8px 0 6px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+  .card .t{font-weight:500;margin-bottom:5px;display:flex;align-items:center;gap:8px}
+  .card .d{font-size:13.5px;color:var(--muted);line-height:1.55}
+  .card svg.ico{width:18px;height:18px;stroke:var(--accent);stroke-width:1.6;fill:none;flex:0 0 18px}
+
+  .callout{display:flex;gap:12px;border-radius:10px;padding:14px 16px;margin:16px 0;border:1px solid var(--border)}
+  .callout svg{width:18px;height:18px;flex:0 0 18px;stroke-width:1.6;fill:none;margin-top:2px}
+  .callout.warn{background:#FBF1E2;border-color:#EAD0A6} .callout.warn svg{stroke:var(--sig-amber)}
+  .callout.note{background:var(--surface)} .callout.note svg{stroke:var(--accent)}
+  .callout.danger{background:#F6E3DE;border-color:#E3B7AD} .callout.danger svg{stroke:var(--sig-red)}
+  .callout .body{font-size:14px} .callout .body strong{display:block;margin-bottom:2px}
+
+  pre.code{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--font-mono);font-size:13px;line-height:1.6;color:#3a332b;margin:12px 0}
+  pre.code .c{color:var(--muted)}
+
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0;font-size:13px}
+  .flow .node{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 12px;font-family:var(--font-mono);font-size:12.5px}
+  .flow .ar{color:var(--border)}
+
+  /* —— 阶段屏专用：操作步骤 / 结果 / 看到 —— */
+  .ops{margin:6px 0}
+  .ops .li{display:grid;grid-template-columns:28px 1fr;gap:12px;padding:9px 0;border-bottom:1px dashed var(--border)}
+  .ops .li:last-child{border-bottom:none}
+  .ops .li .n{font-family:var(--font-mono);font-size:12px;color:#fff;background:var(--accent);width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+  .ops .li .t{font-size:14px;padding-top:1px}
+  .ops .li .t code{font-size:12.5px}
+
+  .res{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:12px 0}
+  .res .h{font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+  .res ul{list-style:none}
+  .res li{padding:5px 0;font-size:13.5px;display:grid;grid-template-columns:14px 1fr;gap:8px}
+  .res li .b{width:6px;height:6px;border-radius:50%;background:var(--accent);margin-top:8px}
+
+  .see{border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:0 10px 10px 0;padding:12px 16px;margin:12px 0;background:var(--surface)}
+  .see .h{font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:var(--accent-ink);margin-bottom:8px}
+  .see .d{font-size:13.5px;color:var(--fg);line-height:1.6}
+
+  .linker{font-size:13px;color:var(--muted);margin:14px 0 0}
+  .linker a{font-family:var(--font-mono);font-size:12.5px}
+
+  /* —— 维护指南·机制章：用到此机制的阶段徽 —— */
+  .stages{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 14px}
+  .stages .sl{font-size:11px;color:var(--muted);align-self:center;margin-right:2px}
+  .stages .s{font-family:var(--font-mono);font-size:11px;padding:2px 8px;border-radius:5px;background:var(--accent-soft);color:var(--accent-ink);letter-spacing:0.02em}
+
+  /* —— 维护指南·概念盘点卡 —— */
+  .cc{border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:14px 16px;margin:12px 0}
+  .cc .h{font-weight:500;font-size:15px;margin-bottom:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .cc .h .term{font-family:var(--font-mono);font-size:12px;color:var(--accent-ink);background:var(--accent-soft);padding:1px 7px;border-radius:4px}
+  .cc .d{font-size:13.5px;color:var(--fg);line-height:1.6}
+  .cc .src{font-size:11.5px;color:var(--muted);margin-top:7px} .cc .src code{color:var(--accent-ink)}
+
+  /* 健康灯 */
+  .lights{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0}
+  .light{display:flex;align-items:center;gap:8px;font-size:13px}
+  .light .d{width:14px;height:14px;border-radius:50%;border:1px solid rgba(0,0,0,.08)}
+  .light.g .d{background:var(--sig-green);opacity:.45} .light.a .d{background:var(--sig-amber)} .light.r .d{background:var(--sig-red)} .light.u .d{background:var(--sig-unknown)}
+  .light .lbl{color:var(--muted)}
+
+  /* checklist */
+  .checklist{display:flex;flex-direction:column;gap:0;margin:8px 0}
+  .chk{display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--border)}
+  .chk:last-child{border-bottom:none}
+  .chk .mk{width:20px;height:20px;border-radius:5px;border:1.5px solid var(--accent);display:flex;align-items:center;justify-content:center;color:var(--accent);margin-top:1px}
+  .chk .mk svg{width:13px;height:13px;stroke:var(--accent);stroke-width:2;fill:none}
+  .chk.opt .mk{border-color:var(--muted)} .chk.opt .mk svg{stroke:var(--muted)}
+  .chk .t{font-size:14px;font-weight:500;margin-bottom:3px}
+  .chk .t .tag{font-family:var(--font-mono);font-size:11px;font-weight:400;color:var(--accent-ink);background:var(--accent-soft);padding:1px 6px;border-radius:4px;margin-left:8px}
+  .chk .t .tag.opt{color:var(--muted);background:var(--surface-2)}
+  .chk .d{font-size:13px;color:var(--muted);line-height:1.55}
+
+  /* 铁律 */
+  .rules{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0}
+  .rule{border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:13px 16px;background:var(--surface)}
+  .rule .n{font-family:var(--font-mono);font-size:11px;color:var(--accent-ink);margin-bottom:4px}
+  .rule .t{font-weight:500;margin-bottom:3px} .rule .d{font-size:13px;color:var(--muted);line-height:1.55}
+
+  .foot{margin-top:36px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);max-width:65ch}
+  .foot code{color:var(--accent-ink)}
+</style>
+</head>
+<body>
+
+<!-- ╔══════════════════════════════════════════════════════════════════╗
+     ║  buddy · 使用指导与维护指南  ·  原型模板
+     ║  结构：使用指导 = 界面操作阶段屏（操作→结果→看到）
+     ║        维护指南 = 跨阶段共享的机制汇总（高 level，每章标用到哪些阶段）
+     ║  扩展规范见同目录 填写规范.md
+     ║  维护：CSS 集中顶部；每屏一个 <section class="screen">，互不影响。
+     ╚══════════════════════════════════════════════════════════════════╝ -->
+<aside class="sidebar" data-od-id="guide-nav">
+  <div class="brand"><div class="mark">buddy<span class="dot">.</span></div><div class="sub">Builders' Workbench</div></div>
+  <nav>
+    <div class="nav-group">
+      <div class="nav-group-title">使用指导</div>
+      <div class="nav-item active" data-screen="u0"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>概览</div>
+      <div class="nav-item" data-screen="u1"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>前置准备</div>
+      <div class="nav-item" data-screen="u2"><svg viewBox="0 0 24 24"><path d="M5 6h11l4 4v8H5z"/></svg>纳入项目</div>
+      <div class="nav-item" data-screen="u3"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 5v4M12 15v4M5 12h4M15 12h4"/></svg>找指标</div>
+      <div class="nav-item" data-screen="u4"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 16l3-5 3 3 4-6"/></svg>绑数据</div>
+      <div class="nav-item" data-screen="u5"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 9h16M9 5v14"/></svg>总览呈现</div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">维护指南 · 机制</div>
+      <div class="nav-item" data-screen="m1"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="13" width="11" height="7" rx="1"/></svg>架构与铁律</div>
+      <div class="nav-item" data-screen="m2"><svg viewBox="0 0 24 24"><path d="M4 5h16v6H4zM4 13h16v6H4z"/></svg>Hub 全局库</div>
+      <div class="nav-item" data-screen="m3"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 9h16"/></svg>Issue 与调度</div>
+      <div class="nav-item" data-screen="m4"><svg viewBox="0 0 24 24"><path d="M5 6h11l4 4v8H5z"/><path d="M9 13h6"/></svg>技能与 Prompt</div>
+      <div class="nav-item" data-screen="m5"><svg viewBox="0 0 24 24"><path d="M5 8l-2 4 2 4M7 5h12M7 19h12M9 8l-2 4 2 4"/></svg>执行与证据</div>
+      <div class="nav-item" data-screen="m6"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 16l3-5 3 3 4-6"/></svg>指标与健康</div>
+    </div>
+  </nav>
+  <div class="nav-foot">
+    使用指导讲<strong>操作→结果→看到</strong>；<br>维护指南按<strong>跨阶段机制</strong>汇总。<br>扩展见 <code>填写规范.md</code>
+  </div>
+</aside>
+
+<main class="main">
+  <header class="topbar" data-od-id="guide-topbar">
+    <div class="crumb"><span class="sec" id="crumb-sec">使用指导</span><span class="sep">/</span><span class="cur" id="crumb-cur">概览</span></div>
+    <span class="badge use" id="top-badge">Usage</span>
+  </header>
+
+  <div class="content" id="content">
+
+    <!-- ============ U0 概览 ============ -->
+    <section class="screen active" id="u0" data-title="概览" data-sec-name="使用指导">
+      <div class="eyebrow">使用指导 · 概览</div>
+      <h1 class="disp">一个 Builder + Agent Loop 的项目管理工作台</h1>
+      <p class="lede">Builders' Workbench（口语「buddy」）把传统项目管理的 5 角色 10 流程压成「1 个构建者 + AI 执行小队」。人守质量门与验收，活让 agent 干。本使用指导按<strong>界面操作的一个个阶段</strong>组织——实践推进到哪，就写到哪。</p>
+
+      <h2 class="sec"><span class="n">当前阶段</span>实践到、能见到的</h2>
+      <div class="flow">
+        <span class="node">纳入项目</span><span class="ar">→</span>
+        <span class="node">找指标</span><span class="ar">→</span>
+        <span class="node">绑数据</span><span class="ar">→</span>
+        <span class="node">总览呈现</span><span class="ar">→</span>
+        <span class="node" style="border-color:var(--accent-soft);background:var(--accent-soft);color:var(--accent-ink)">健康灯亮</span>
+      </div>
+      <p class="muted">四个阶段各对应一屏（纳入/找指标/绑数据/总览），每屏写<strong>操作 → 结果 → 看到</strong>。后续阶段随实践推进补在后面。</p>
+
+      <h2 class="sec"><span class="n">面向谁</span></h2>
+      <div class="cards">
+        <div class="card"><div class="t"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg>Builder / 构建者</div><div class="d">端到端 own 项目的单人，全局唯一，专指人类。</div></div>
+        <div class="card"><div class="t"><svg class="ico" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/></svg>边界</div><div class="d">不是团队协作/通用看板/审批系统/云服务。AI 执行 = 本机 claude CLI。</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">四个控制点</span></h2>
+      <div class="rules">
+        <div class="rule"><div class="n">01</div><div class="t">知道对标谁</div><div class="d">北极星唯一，引领指标可控先行。</div></div>
+        <div class="rule"><div class="n">02</div><div class="t">每周在正常演进</div><div class="d">可验证增量替代甘特图，真实 telemetry 难造假。</div></div>
+        <div class="rule"><div class="n">03</div><div class="t">agent 干活，人守验收</div><div class="d">干完只到 InReview，Done 永远人显式点。</div></div>
+        <div class="rule"><div class="n">04</div><div class="t">目标清晰且难造假</div><div class="d">无数据即 Unknown 而非绿色。</div></div>
+      </div>
+
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>两本怎么配合</strong>使用指导按操作阶段讲操作与结果；维护指南站在更高 level，按<strong>跨阶段共享的机制</strong>汇总——一个机制服务于多个阶段（如 connector 既用于纳入又用于采数，技能加载既用于找指标又用于绑数据）。每章顶部用阶段徽标出用到它的阶段，阶段屏末用 linker 指回涉及的机制章。</div>
+      </div>
+      <div class="foot">事实源：<code>plan/07-product-proposition.md</code>、<code>CLAUDE.md</code>。</div>
+    </section>
+
+    <!-- ============ U1 前置准备 ============ -->
+    <section class="screen" id="u1" data-title="前置准备" data-sec-name="使用指导">
+      <div class="eyebrow">使用指导 · 前置准备</div>
+      <h1 class="disp">开工前先装齐这些</h1>
+      <p class="lede">buddy 是本机桌面应用，AI 执行靠 shell-out 本机 <code>claude</code> CLI。分「必装」与「开发验证才装」两组，远端仓连接器按项目 provider 选装。</p>
+
+      <h2 class="sec"><span class="n">必装</span></h2>
+      <div class="checklist">
+        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">git<span class="tag">基础</span></div><div class="d">项目纳入靠 SSH clone。</div></div></div>
+        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">claude CLI<span class="tag">AI 执行</span></div><div class="d">buddy 通过 <code>claude -p</code> 真开工。Windows 下用 <code>BW_CLAUDE_BIN</code> 给全路径（Rust Command 不做 PATHEXT）。</div></div></div>
+        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">LLM 网关<span class="tag">AI 执行</span></div><div class="d">claude 指向 GLM first-party，配在 <code>~/.claude.json</code>。<code>BW_CLAUDE_MAX_BUDGET_USD</code> 单次封顶。</div></div></div>
+        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">远端仓连接器（按 provider 选装）<span class="tag">按项目</span></div><div class="d">codehub → <code>codehub-cli</code> + token；github → <code>gh</code>；本地 → 无需。</div></div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">选装</span>仅开发/验证才需要</h2>
+      <div class="checklist">
+        <div class="chk opt"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">Rust 工具链 + mingw + sqlite3<span class="tag opt">开发</span></div><div class="d">从源码构建 <code>app-desktop</code> 需要，含 wasm32 target。</div></div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">环境变量与启动</span></h2>
+      <pre class="code"><span class="c"># 数据库与工作区</span>
+BW_DB=/path/to/bw.sqlite
+BW_WORKSPACES=/path/to/workspaces
+
+<span class="c"># 深链（直接打开某项目某面板）</span>
+BW_OPEN=&lt;项目名&gt; BW_PANEL=&lt;panel&gt;
+
+<span class="c"># AI 执行</span>
+BW_CLAUDE_BIN=/full/path/to/claude
+BW_CLAUDE_MAX_BUDGET_USD=2.0
+
+<span class="c"># 启动（Windows 别直接跑 target exe，会崩 0xC0000135）</span>
+cargo run -p app-desktop</pre>
+
+      <div class="callout warn">
+        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+        <div class="body"><strong>Windows 启动坑</strong>务必 <code>cargo run -p app-desktop</code>，别直接跑 <code>target/</code> 下 exe，会以 0xC0000135 崩溃。</div>
+      </div>
+      <div class="foot">事实源：<code>CLAUDE.md · 常用命令</code>、<code>DEVELOPMENT.md</code>。</div>
+    </section>
+
+    <!-- ============ U2 纳入项目 ============ -->
+    <section class="screen" id="u2" data-title="纳入项目" data-sec-name="使用指导">
+      <div class="eyebrow">使用指导 · 阶段 01</div>
+      <h1 class="disp">纳入项目</h1>
+      <p class="lede">一条 URL 把项目挂进来。砍掉了原 host·path·platform 三段分卡和让人填不准的指标字段。</p>
+
+      <h2 class="sec"><span class="n">操作</span></h2>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">项目墙 → 新建</div></div>
+        <div class="li"><div class="n">2</div><div class="t">填一条项目地址（codehub / github URL）</div></div>
+        <div class="li"><div class="n">3</div><div class="t">命名 + brief</div></div>
+        <div class="li"><div class="n">4</div><div class="t">确认建立</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">结果</span>系统/项目改了什么</h2>
+      <div class="res">
+        <div class="h">落库与产出</div>
+        <ul>
+          <li><span class="b"></span><div>仓库 <strong>SSH clone</strong> 到 <code>BW_WORKSPACES</code></div></li>
+          <li><span class="b"></span><div>SQLite 落 <strong>project</strong> 行</div></li>
+          <li><span class="b"></span><div>建 <strong>2 个 connector</strong>（git-repo + provider 适配）</div></li>
+          <li><span class="b"></span><div>自动建<strong>标配 Issue 三件套</strong>（竞品分析 / 找指标 / 绑数据）状态 <code>Backlog</code></div></li>
+        </ul>
+      </div>
+
+      <h2 class="sec"><span class="n">看到</span>界面呈现</h2>
+      <div class="see"><div class="h">项目墙</div><div class="d">项目出现在墙，连接状态 green；三件套 Issue 已在 Backlog。</div></div>
+
+      <div class="callout warn">
+        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+        <div class="body"><strong>竞品分析别点真跑</strong>联网墙未解（bug②）。UI 保留入口但标 warn，点了会失败。其余两件套实测可跑通。</div>
+      </div>
+
+      <p class="linker">本阶段涉及的机制（connector / Remote 工厂 / project 行 / 幂等守卫）→ 见维护指南 <a href="#" onclick="go('m2');return false">Hub 全局库</a>；三件套自动建 → <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
+      <div class="foot">事实源：<code>v1-onboarding-overview.html</code> Tab①、<code>PRACTICE-buddy.md §2</code>。</div>
+    </section>
+
+    <!-- ============ U3 找指标 ============ -->
+    <section class="screen" id="u3" data-title="找指标" data-sec-name="使用指导">
+      <div class="eyebrow">使用指导 · 阶段 02</div>
+      <h1 class="disp">找指标</h1>
+      <p class="lede">AI 跑 <code>north-star-discovery</code> skill，产出指标定义写进项目仓。</p>
+
+      <h2 class="sec"><span class="n">操作</span></h2>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">三件套看板 → 「找指标」卡</div></div>
+        <div class="li"><div class="n">2</div><div class="t">指派队友 / 触发 <code>RunIssue</code></div></div>
+        <div class="li"><div class="n">3</div><div class="t">AI 跑 <code>north-star-discovery</code> skill</div></div>
+        <div class="li"><div class="n">4</div><div class="t">review 产出的指标定义</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">结果</span>系统/项目改了什么</h2>
+      <div class="res">
+        <div class="h">落库与产出</div>
+        <ul>
+          <li><span class="b"></span><div>产出 <code>.bw/metrics.toml</code> 写进<strong>项目仓</strong>（北极星 + 引领/滞后 + 目标值 + 比较符 + 黄区带）</div></li>
+          <li><span class="b"></span><div>Issue 状态 <code>Backlog → InProgress → InReview</code></div></li>
+          <li><span class="b"></span><div><strong>Run</strong> 记录入账（成败 / 耗时）</div></li>
+        </ul>
+      </div>
+
+      <h2 class="sec"><span class="n">看到</span>界面呈现</h2>
+      <div class="see"><div class="h">三件套看板</div><div class="d">「找指标」卡状态到 <code>InReview</code>；<code>metrics.toml</code> 在仓里可见。<strong>干完只到 InReview，不到 Done</strong>——Done 要你显式点。</div></div>
+
+      <p class="linker">本阶段涉及的机制：RunIssue / Run / Issue 状态机 → <a href="#" onclick="go('m3');return false">Issue 与调度</a>；预制技能 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>；Executor / evidence → <a href="#" onclick="go('m5');return false">执行与证据</a>；metrics.toml / 北极星 → <a href="#" onclick="go('m6');return false">指标与健康</a>。</p>
+      <div class="foot">事实源：<code>v1-onboarding-overview.html</code>、<code>docs/skills</code>、实测 ~21min。</div>
+    </section>
+
+    <!-- ============ U4 绑数据 ============ -->
+    <section class="screen" id="u4" data-title="绑数据" data-sec-name="使用指导">
+      <div class="eyebrow">使用指导 · 阶段 03</div>
+      <h1 class="disp">绑数据</h1>
+      <p class="lede">AI 跑 <code>metrics-binding</code> skill，给每条指标接采集方案。此时指标有定义、有采集方案，但还没采数、还没点亮。</p>
+
+      <h2 class="sec"><span class="n">操作</span></h2>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">review 找指标的产出</div></div>
+        <div class="li"><div class="n">2</div><div class="t">「绑数据」卡触发 <code>RunIssue</code></div></div>
+        <div class="li"><div class="n">3</div><div class="t">AI 跑 <code>metrics-binding</code> skill</div></div>
+        <div class="li"><div class="n">4</div><div class="t">给每条指标接采集方案</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">结果</span>系统/项目改了什么</h2>
+      <div class="res">
+        <div class="h">落库与产出</div>
+        <ul>
+          <li><span class="b"></span><div>每条指标接<strong>采集器类型 + 采集配置</strong></div></li>
+          <li><span class="b"></span><div>产出登记写进仓</div></li>
+          <li><span class="b"></span><div>Issue → <code>InReview</code></div></li>
+        </ul>
+      </div>
+
+      <h2 class="sec"><span class="n">看到</span>界面呈现</h2>
+      <div class="see"><div class="h">三件套看板</div><div class="d">「绑数据」卡 <code>InReview</code>；指标已有采集方案但<strong>还没采数、没点亮</strong>——点亮要等 merge 后总览呈现阶段。</div></div>
+
+      <p class="linker">本阶段涉及的机制：metrics-binding 预制技能 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>；采集器 / probe vs collect / manual 带徽 → <a href="#" onclick="go('m6');return false">指标与健康</a>。</p>
+      <div class="foot">事实源：<code>docs/skills</code>、实测 ~19min。</div>
+    </section>
+
+    <!-- ============ U5 总览呈现 ============ -->
+    <section class="screen" id="u5" data-title="总览呈现" data-sec-name="使用指导">
+      <div class="eyebrow">使用指导 · 阶段 04</div>
+      <h1 class="disp">总览呈现</h1>
+      <p class="lede">merge 指标定义后，采数、重算信号、点亮。项目从纳入走到健康灯亮。</p>
+
+      <h2 class="sec"><span class="n">操作</span></h2>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">merge 指标定义（走 PR）</div></div>
+        <div class="li"><div class="n">2</div><div class="t">等 cron / connector 采数</div></div>
+        <div class="li"><div class="n">3</div><div class="t">打开项目总览</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">结果</span>系统/项目改了什么</h2>
+      <div class="res">
+        <div class="h">落库与产出</div>
+        <ul>
+          <li><span class="b"></span><div><code>SyncMetricsFile</code> 把 metrics.toml 装进 <strong>metric 表</strong></div></li>
+          <li><span class="b"></span><div>采集器 <code>collect</code> 写 <strong>observation 表</strong>（真实数据点，append-only）</div></li>
+          <li><span class="b"></span><div><code>recompute_signals</code> 重算 Signal</div></li>
+          <li><span class="b"></span><div><strong>健康灯亮</strong></div></li>
+        </ul>
+      </div>
+
+      <h2 class="sec"><span class="n">看到</span>界面呈现</h2>
+      <div class="see"><div class="h">项目总览</div><div class="d">纳入卡 / 三件套看板 / 北极星 + L1·L2·L3 / 健康灯（Green / Amber / Red / Unknown）。</div></div>
+
+      <h2 class="sec"><span class="n">健康灯怎么读</span></h2>
+      <div class="lights">
+        <div class="light g"><span class="d"></span><span class="lbl">Green · 隐身（正常不出声）</span></div>
+        <div class="light a"><span class="d"></span><span class="lbl">Amber · 黄区预警</span></div>
+        <div class="light r"><span class="d"></span><span class="lbl">Red · 越界</span></div>
+        <div class="light u"><span class="d"></span><span class="lbl">Unknown · 无数据</span></div>
+      </div>
+      <div class="callout danger">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+        <div class="body"><strong>无数据 ≠ 绿色</strong>没有观测就是 Unknown（灰），绝不是 green。绿色「隐身」——只有红、黄出声。</div>
+      </div>
+
+      <p class="linker">本阶段涉及的机制（SyncMetricsFile / observation / recompute_signals / Signal / 五截断点）→ 见维护指南 <a href="#" onclick="go('m6');return false">指标与健康</a>。</p>
+      <div class="foot">事实源：<code>v1-onboarding-overview.html</code> Tab②、<code>plan/18</code>。</div>
+    </section>
+
+    <!-- ============ M1 架构与铁律 ============ -->
+    <section class="screen" id="m1" data-title="架构与铁律" data-sec-name="维护指南">
+      <div class="eyebrow">维护指南 · 机制 01</div>
+      <h1 class="disp">架构与铁律</h1>
+      <p class="lede">整套产品的工程底座与不可妥协。后续每个机制章都建立在这之上。</p>
+      <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">全部</span></div>
+
+      <h2 class="sec"><span class="n">crate 全景</span></h2>
+      <div class="cards">
+        <div class="card"><div class="t">bw-core</div><div class="d">领域内核：StageKind / Issue 状态机 / 度量派生链。零 IO 零 UI，wasm32 可编译。</div></div>
+        <div class="card"><div class="t">bw-engine</div><div class="d">Executor trait + ClaudeCliExecutor + evidence.rs。</div></div>
+        <div class="card"><div class="t">bw-store</div><div class="d">SQLite（sqlx）：schema.sql + add_column_if_missing；append-only 表。</div></div>
+        <div class="card"><div class="t">bw-app</div><div class="d">编排大脑：Command/Event 总线，用例与守卫主战场。</div></div>
+        <div class="card"><div class="t">ui</div><div class="d">纯函数 selector + ViewModel，wasm32 可编译。</div></div>
+        <div class="card"><div class="t">app-desktop</div><div class="d">真壳（Dioxus 0.7 hard-pin 0.7.9）。app-web 留口不编译。</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">两个不可妥协</span>钉进类型与 CI</h2>
+      <div class="rules">
+        <div class="rule"><div class="n">01</div><div class="t">UI 无关内核</div><div class="d">五个内核 crate 禁依赖 dioxus/tauri/wry，guard 脚本 + wasm32 check 可证。</div></div>
+        <div class="rule"><div class="n">02</div><div class="t">健康永远 derive</div><div class="d">Signal 只能经封口 <code>Derived&lt;Signal&gt;</code> 进缓存，store 无 set_signal。</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">铁律四条</span></h2>
+      <div class="rules">
+        <div class="rule"><div class="n">01</div><div class="t">管理体系自带</div><div class="d">挂仓即自动建三件套与五阶段。</div></div>
+        <div class="rule"><div class="n">02</div><div class="t">活让 agent 干，人守验收</div><div class="d">Done 唯一入边 = InReview，永不自动完成。</div></div>
+        <div class="rule"><div class="n">03</div><div class="t">健康难造假</div><div class="d">Signal derive-only，无数据即 Unknown。</div></div>
+        <div class="rule"><div class="n">04</div><div class="t">经验复利</div><div class="d">蒸馏 → 注入 → uses+1。</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">三个事实源</span></h2>
+      <div class="cards">
+        <div class="card"><div class="t">仓 codehub/github</div><div class="d">产品信息正本。指标定义 <code>.bw/metrics.toml</code> 也在仓里。</div></div>
+        <div class="card"><div class="t">SQLite store</div><div class="d">过程信息，append-only。project 行、observation 等落此。</div></div>
+      </div>
+      <p class="muted">纳入时的幂等守卫、project 行落库都在 store 层（重复提交不产生脏数据，已修）。</p>
+      <div class="foot">事实源：<code>CLAUDE.md · 架构 / 核心纪律</code>、<code>DEVELOPMENT.md</code>。</div>
+    </section>
+
+    <!-- ============ M2 Hub 全局库 ============ -->
+    <section class="screen" id="m2" data-title="Hub 全局库" data-sec-name="维护指南">
+      <div class="eyebrow">维护指南 · 机制 02</div>
+      <h1 class="disp">Hub 全局库</h1>
+      <p class="lede">跨阶段的共享资产层，<code>project_id=NULL</code>。纳入、找指标、绑数据、总览都经它——connector 供纳入与采数，skill 供找指标与绑数据加载。</p>
+      <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">纳入</span><span class="s">找指标</span><span class="s">绑数据</span><span class="s">总览</span></div>
+
+      <h2 class="sec"><span class="n">六套件</span></h2>
+      <div class="cards">
+        <div class="card"><div class="t">connector 连接器</div><div class="d">git-repo / CodeHub / GitHub / claude-cli（+ script 计划中）。纳入时建 2 个；采数经它。</div></div>
+        <div class="card"><div class="t">skill 技能</div><div class="d">6 渠道，唯一能 CRUD 的地方。找指标/绑数据加载预制技能。</div></div>
+        <div class="card"><div class="t">agent 智能体</div><div class="d">五角色全局单例（原型师/构建师/优化师/运营推广师/运维师）。</div></div>
+        <div class="card"><div class="t">workflow 工作流</div><div class="d">五阶段 template + 自建。</div></div>
+        <div class="card"><div class="t">cron 定时</div><div class="d">4 mode 分发（collect_metrics / run_skill / run_prompt / run_stage_playbook）。</div></div>
+        <div class="card"><div class="t">knowledge 知识</div><div class="d">留口未建。</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">connector 与 Remote 工厂</span></h2>
+      <div class="cc"><div class="h">connector</div><div class="d">buddy 与远端仓/CLI 的适配抽象。纳入项目时建 2 个：<code>git-repo</code> + provider 适配；总览阶段采数也经 connector。</div><div class="src">事实源：<code>bw-store</code>、<code>CLAUDE.md</code></div></div>
+      <div class="cc"><div class="h">Remote 工厂</div><div class="d">provider 分叉（codehub / github）收敛一处。新增 provider 只改工厂。</div><div class="src">事实源：<code>CLAUDE.md · 架构</code></div></div>
+
+      <h2 class="sec"><span class="n">skill 六渠道</span></h2>
+      <div class="cc"><div class="h">skill 6 渠道</div><div class="d">Boot seed / 手建 / 蒸馏 / 导入单包 / 批量导入 / 项目仓自带扫描（<strong>种A</strong>：只登记可见、不进注入下拉）。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
+      <div class="foot">技能注入/蒸馏复利见「技能与 Prompt」章。</div>
+    </section>
+
+    <!-- ============ M3 Issue 与调度 ============ -->
+    <section class="screen" id="m3" data-title="Issue 与调度" data-sec-name="维护指南">
+      <div class="eyebrow">维护指南 · 机制 03</div>
+      <h1 class="disp">Issue 与调度</h1>
+      <p class="lede">找指标、绑数据本身都是 Issue 被调度执行。纳入时三件套也是 Issue 自动建。调度贯穿全流程。</p>
+      <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">纳入</span><span class="s">找指标</span><span class="s">绑数据</span></div>
+
+      <h2 class="sec"><span class="n">Issue 状态机</span></h2>
+      <div class="cc"><div class="h">状态机</div><div class="d"><code>Backlog → Todo → InProgress → InReview → Done</code>，另有 Blocked / Cancelled。<strong>Done 唯一入边 = InReview</strong>，且必须人显式点。</div><div class="src">事实源：<code>bw-core</code></div></div>
+
+      <h2 class="sec"><span class="n">调度执行</span></h2>
+      <div class="cc"><div class="h">RunIssue</div><div class="d">issue 卡触发 AI 真开工。干完只到 <code>InReview</code>，不到 Done。</div><div class="src">事实源：<code>bw-app</code></div></div>
+      <div class="cc"><div class="h">Run <span class="term">运行</span></div><div class="d">一次真实执行，有成败/耗时，全结局入账。</div><div class="src">事实源：<code>bw-store</code></div></div>
+
+      <h2 class="sec"><span class="n">自动与留痕</span></h2>
+      <div class="cc"><div class="h">autopilot / cron no-hijack</div><div class="d">到点只<strong>建</strong>活、永不自动<strong>完成</strong>活。AI 永远不能替你点 Done。</div><div class="src">事实源：<code>CLAUDE.md · 核心纪律</code></div></div>
+      <div class="cc"><div class="h">标配三件套自动建</div><div class="d">纳入项目末尾按依赖序自动建 3 张起手 Issue：竞品分析 → 找指标 → 绑数据。</div><div class="src">事实源：<code>plan</code></div></div>
+      <div class="callout danger">
+        <svg viewBox="0 0 24 24"><path d="M12 3l8 3v5c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+        <div class="body"><strong>铁律②的落地</strong>Done 唯一入边 = InReview + no-hijack，是「健康难造假」的根基。详见「架构与铁律」章。</div>
+      </div>
+      <div class="foot">执行器本身见「执行与证据」章。</div>
+    </section>
+
+    <!-- ============ M4 技能与 Prompt ============ -->
+    <section class="screen" id="m4" data-title="技能与 Prompt" data-sec-name="维护指南">
+      <div class="eyebrow">维护指南 · 机制 04</div>
+      <h1 class="disp">技能与 Prompt 加载</h1>
+      <p class="lede">找指标、绑数据都加载系统预制技能（north-star-discovery / metrics-binding）。技能是 buddy 的复利资产。</p>
+      <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">找指标</span><span class="s">绑数据</span></div>
+
+      <h2 class="sec"><span class="n">系统预制技能</span></h2>
+      <div class="cc"><div class="h">三件套技能</div><div class="d"><code>north-star-discovery</code>（找指标）/ <code>metrics-binding</code>（绑数据）/ <code>competitive-analysis</code>（竞品分析，联网墙未解）。</div><div class="src">事实源：<code>docs/skills/</code></div></div>
+      <div class="cc"><div class="h">五阶段方法论</div><div class="d"><code>baseline-before-touch</code> / <code>breaking-drill</code> / <code>evidence-first</code> / <code>fresh-eyes-funnel</code> / <code>spec-to-tests</code>。</div><div class="src">事实源：<code>docs/skills/</code></div></div>
+
+      <h2 class="sec"><span class="n">注入与复利</span></h2>
+      <div class="cc"><div class="h">skill 注入</div><div class="d">干活时自动把最相关技能带进队友上下文。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
+      <div class="cc"><div class="h">蒸馏 → 注入 → uses+1 <span class="term">复利链</span></div><div class="d">做完的活提炼成技能（distill 记来源活），下次干活自动注入最相关技能，uses+1。战绩/胜率由真实成败派生，永不手设。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
+      <div class="cc"><div class="h">种A</div><div class="d">项目仓自带 skill 扫进来登记可见，<strong>不进任何注入下拉</strong>。见 Hub 章。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
+      <div class="foot">技能 CRUD 在 Hub 全局库（skill 套件）。</div>
+    </section>
+
+    <!-- ============ M5 执行与证据 ============ -->
+    <section class="screen" id="m5" data-title="执行与证据" data-sec-name="维护指南">
+      <div class="eyebrow">维护指南 · 机制 05</div>
+      <h1 class="disp">执行与证据回流</h1>
+      <p class="lede">AI 真开工靠 shell-out 本机 claude CLI。核心纪律：不信执行器自报，evidence 从工作区真实状态回流。</p>
+      <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">找指标</span><span class="s">绑数据</span></div>
+
+      <h2 class="sec"><span class="n">执行器热插拔</span></h2>
+      <div class="cc"><div class="h">Executor trait</div><div class="d">抽象 AI 执行，<code>MockExecutor</code> / <code>ClaudeCliExecutor</code> 热插拔。</div><div class="src">事实源：<code>bw-engine</code></div></div>
+      <div class="cc"><div class="h">ClaudeCliExecutor</div><div class="d">shell-out <code>claude -p --permission-mode acceptEdits --allowedTools Bash</code>。<code>BW_CLAUDE_BIN</code> 给全路径（Windows Rust Command 不做 PATHEXT）；<code>BW_CLAUDE_MAX_BUDGET_USD</code> 单次封顶。</div><div class="src">事实源：<code>bw-engine</code></div></div>
+      <div class="cc"><div class="h">MockExecutor</div><div class="d">流程演示替身，产出自我标注【mock】，绝不冒充真实。</div><div class="src">事实源：<code>bw-engine</code></div></div>
+
+      <h2 class="sec"><span class="n">证据回流</span></h2>
+      <div class="cc"><div class="h">evidence.rs</div><div class="d">从工作区真实状态回流观测，<strong>不信任执行器自报</strong>。</div><div class="src">事实源：<code>bw-engine</code></div></div>
+      <div class="cc"><div class="h">读回为证</div><div class="d">数字一律 <code>sqlite3</code> SQL 读回，过程数据 append-only 可查证。</div><div class="src">事实源：<code>CLAUDE.md · 核心纪律</code></div></div>
+      <div class="foot">调度入口 RunIssue 见「Issue 与调度」章。</div>
+    </section>
+
+    <!-- ============ M6 指标与健康 ============ -->
+    <section class="screen" id="m6" data-title="指标与健康" data-sec-name="维护指南">
+      <div class="eyebrow">维护指南 · 机制 06</div>
+      <h1 class="disp">指标与健康体系</h1>
+      <p class="lede">贯穿找指标（产出定义）、绑数据（接采集）、总览（采数重算点亮）。价值闭环的五截断点由 plan/18 修通。</p>
+      <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">找指标</span><span class="s">绑数据</span><span class="s">总览</span></div>
+
+      <h2 class="sec"><span class="n">指标定义</span></h2>
+      <div class="cc"><div class="h">.bw/metrics.toml <span class="term">指标正本</span></div><div class="d">仓里机读文件，非 buddy 私有配置，改指标走 PR。含北极星 + 引领/滞后 + 目标值 + 比较符 + 黄区带。找指标阶段产出。格式见 <code>docs/metrics-toml-format.md</code>。</div><div class="src">事实源：<code>docs/metrics-toml-format.md</code></div></div>
+      <div class="cc"><div class="h">北极星 / 引领·滞后</div><div class="d">North Star = 项目唯一顶层目标（maas 实例 = 定界结论采纳率 <code>(L2−L3)/L2</code>）。Leading = 可控先行量；Lagging = 结果量。</div><div class="src">事实源：<code>CONTEXT.md</code></div></div>
+
+      <h2 class="sec"><span class="n">采集</span></h2>
+      <div class="cc"><div class="h">采集器四类</div><div class="d"><code>github</code> / <code>connector</code> / <code>bw</code> / <code>manual</code>（带徽）；<code>+</code> 计划中 <code>script</code>。绑数据阶段接采集方案。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
+      <div class="cc"><div class="h">probe vs collect</div><div class="d">probe = 探活翻已连接；collect = 真采计数写 observation。总览阶段才真采。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
+      <div class="cc"><div class="h">observation 表</div><div class="d">append-only：一个观测 = 一个点，<strong>绝不插值</strong>；无观测即 Unknown。</div><div class="src">事实源：<code>bw-store/schema.sql</code></div></div>
+
+      <h2 class="sec"><span class="n">装表·重算·点亮</span></h2>
+      <div class="cc"><div class="h">SyncMetricsFile</div><div class="d">merge 后把 metrics.toml 装进 metric 表。</div><div class="src">事实源：<code>bw-app</code></div></div>
+      <div class="cc"><div class="h">recompute_signals</div><div class="d">由观测重算 Signal。观测变 → Signal 重算。</div><div class="src">事实源：<code>bw-app</code></div></div>
+      <div class="cc"><div class="h">五截断点 <span class="term">价值闭环</span></div><div class="d">进 metric 表 → 采数 → 点亮 Signal → UI 看见 → 上卷项目健康。plan/18 修通。</div><div class="src">事实源：<code>plan/18</code></div></div>
+
+      <h2 class="sec"><span class="n">健康灯</span></h2>
+      <div class="cc"><div class="h">Signal derive-only</div><div class="d">store 无 <code>set_signal</code>，信号只能经封口 <code>Derived&lt;Signal&gt;</code> 进缓存。健康不可手设。</div><div class="src">事实源：<code>bw-core</code> / <code>ui</code></div></div>
+      <div class="cc"><div class="h">三态 + Unknown</div><div class="d">Green（隐身）/ Amber / Red / Unknown。无数据 = Unknown ≠ 绿；绿色隐身——只有红黄出声；manual 带徽；数字可 sqlite3 查证。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
+      <div class="foot">铁律③「健康难造假」见「架构与铁律」章。</div>
+    </section>
+
+  </div>
+</main>
+
+<script>
+/* 屏切换：localStorage 持久化，无 scrollIntoView。每屏独立 section，互不影响。 */
+(function(){
+  var items = Array.prototype.slice.call(document.querySelectorAll('.nav-item'));
+  var screens = Array.prototype.slice.call(document.querySelectorAll('.screen'));
+  var crumbSec = document.getElementById('crumb-sec');
+  var crumbCur = document.getElementById('crumb-cur');
+  var badge = document.getElementById('top-badge');
+  var content = document.getElementById('content');
+  var KEY = 'buddy-guide-screen';
+  window.go = show;
+
+  function show(id){
+    var el = document.getElementById(id); if(!el) return;
+    screens.forEach(function(s){ s.classList.remove('active'); });
+    el.classList.add('active');
+    items.forEach(function(n){ n.classList.toggle('active', n.dataset.screen === id); });
+    crumbSec.textContent = el.dataset.secName || '';
+    crumbCur.textContent = el.dataset.title || '';
+    var isMaint = id.charAt(0) === 'm';
+    badge.textContent = isMaint ? 'Maintenance' : 'Usage';
+    badge.className = 'badge ' + (isMaint ? 'maint' : 'use');
+    try{ localStorage.setItem(KEY, id); }catch(e){}
+    content.scrollTop = 0;
+  }
+  items.forEach(function(n){ n.addEventListener('click', function(){ show(n.dataset.screen); }); });
+  document.addEventListener('keydown', function(e){
+    if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    var cur = document.querySelector('.screen.active'); if(!cur) return;
+    var idx = screens.indexOf(cur);
+    if(e.key === 'ArrowRight' && idx < screens.length - 1){ show(screens[idx+1].id); }
+    else if(e.key === 'ArrowLeft' && idx > 0){ show(screens[idx-1].id); }
+  });
+  var saved = null; try{ saved = localStorage.getItem(KEY); }catch(e){}
+  if(saved && document.getElementById(saved)){ show(saved); } else { show('u0'); }
+})();
+</script>
+</body>
+</html>
