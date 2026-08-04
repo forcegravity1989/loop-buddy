@@ -42,8 +42,9 @@ use bw_core::{
     SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    allowed_tools_arg, evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit,
-    GithubRepoSummary, PermissionMode, PhaseNode, RunCtx, RunEvent, UnsupportedCliExecutor,
+    allowed_tools_arg, evidence, ClaudeCliConfig, ClaudeCliExecutor, CodehubRepoSummary, Engine,
+    GitCommit, GithubRepoSummary, PermissionMode, PhaseNode, RunCtx, RunEvent,
+    UnsupportedCliExecutor,
 };
 use bw_store::{
     AgentEdit, GlobalHandoffRow, MetricDefSync, MetricRole, MetricsFileSync, NewAgent, NewArtifact,
@@ -100,13 +101,27 @@ pub enum GithubOrigin {
 }
 
 /// CodeHub 为主体的创建流(2026-07-28):Repo 卡片选 codehub 平台时的远端
-/// 身份。`host` = API 域名(open.codehub.huawei.com 等,绿/黄/内源三域名);
-/// `path` = org/repo(innersource/AI-Coding_G/maas)。身份用户输入即已知,
-/// clone 不回 ref(区别于 GithubOrigin.Existing 的 owner/repo 拆分)。
+/// 身份。V1 Issue 1(2026-08-04)改为 enum,对仗 [`GithubOrigin`] 的
+/// `New`/`Existing` 两臂:
+/// - [`CodehubOrigin::Existing`] = 接入已有仓(`host` + `path` = org/repo,clone)
+/// - [`CodehubOrigin::New`] = 新建仓(`host` + 个人 `namespace` 路径 + `name` +
+///   `visibility`,`codehub-cli project create` + clone + BW root commit)
+///
+/// `host` = API 域名 alias(green/open/yellow);`namespace` = 个人 namespace
+/// 路径(如 `z30026659`,空串 = 引擎自动解析个人 namespace)。group namespace
+/// 选择 V1 不做(§6 偏差,如实标)。
 #[derive(Clone, Debug)]
-pub struct CodehubOrigin {
-    pub host: String,
-    pub path: String,
+pub enum CodehubOrigin {
+    New {
+        host: String,
+        namespace: String,
+        name: String,
+        visibility: String,
+    },
+    Existing {
+        host: String,
+        path: String,
+    },
 }
 
 /// UI → kernel intents.
@@ -145,6 +160,13 @@ pub enum Command {
     /// 显式加载,同 `LoadVersionLog`/`LoadArtifacts` 惯例——不在每次
     /// rebuild 里打 GitHub API。
     ListGithubRepos,
+    /// CodeHub 为主体的创建流(V1 Issue 1): 读一次当前用户在指定 host 上的
+    /// codehub 仓列表,填充 `AppState.codehub_repos`(Repo 卡片"接入已有仓"
+    /// 下拉的数据源)。对仗 `ListGithubRepos`,但 codehub 有 green/open/
+    /// yellow 三域名,需显式带 `host`。显式加载,同 `ListGithubRepos` 惯例。
+    ListCodehubRepos {
+        host: String,
+    },
     /// Creation flow step 2 (快速问题 · 周期).
     SetCycle {
         cycle: MaturityPeriod,
@@ -1199,6 +1221,10 @@ pub struct AppState {
     /// internal cache of live GitHub data, not persisted — it's a direct
     /// read-through, not one of this app's own derived Signals.
     pub github_repos: Vec<GithubRepoSummary>,
+    /// CodeHub 为主体的创建流: last `Command::ListCodehubRepos` result. Same
+    /// process-internal cache pattern as `github_repos` — a direct read-through
+    /// of `codehub-cli project list --mine`, not a derived Signal.
+    pub codehub_repos: Vec<CodehubRepoSummary>,
 }
 
 /// P4: everything the Issue-detail overlay shows, assembled read-only at
@@ -1237,6 +1263,7 @@ impl Default for AppState {
             cron_effectiveness: None,
             issue_detail: None,
             github_repos: Vec::new(),
+            codehub_repos: Vec::new(),
         }
     }
 }
@@ -2505,11 +2532,15 @@ impl App {
 
     /// P5 · codehub 公共指标 seed(对标 `seed_stage_done_metrics` 的幂等套路):
     /// 给 `provider=codehub` 且 `remote_path` 非空的项目种两条默认公共指标
-    /// ——开放 Issue 数 + 已合入 MR 数,`kind=codehub` 走 `collect_project_metrics`
-    /// 的 codehub arm 真采(`codehub-cli issue|mr list --jq length`)。**不用
-    /// 定义**——V3 规划里「公共指标默认有」的落地。非 codehub / 没接远端 →
-    /// no-op(留 github 的既有口径不动)。口径先用最小词汇 `issues:opened` /
-    /// `mrs:merged`,复杂窗口(本周合入)留后续按真实需求扩。
+    /// ——开放 Issue 数 + 已合入 MR 数。V1 Issue 1 phase2:`collect_kind`
+    /// 从 `'codehub'`(inline arm)改为 `'script'`(script connector arm),
+    /// `collect_query` 从 `'issues:opened'`/`'mrs:merged'` 改为
+    /// `'open_issues'`/`'merged_mrs'`(script 输出 JSON 的字段路径)。
+    /// cron → `collect_project_metrics` → script arm 预跑「codehub 仓统计」
+    /// connector → 输出 JSON → metric 按 `collect_query` 取值 → observation。
+    /// **不用定义**——V3 规划里「公共指标默认有」的落地。非 codehub / 没
+    /// 接远端 → no-op(留 github 的既有口径不动)。inline codehub arm 留兼容
+    /// (§6 偏差:本 issue 不动 collect_project_metrics 的 inline arm)。
     async fn seed_codehub_public_metrics(&self, project: ProjectId) -> Result<(), AppError> {
         let proj = self
             .store
@@ -2530,16 +2561,18 @@ impl App {
             .collect();
         // (name, def, query) —— 公共计数,滞后指标(Lagging),空 target 保持
         // signal Unknown(计数不是目标,只为点亮「有数据」)。
+        // V1 Issue 1: query 改为 script 输出 JSON 的字段路径(open_issues /
+        // merged_mrs),collect_kind 改为 script。
         const PAIR: [(&str, &str, &str); 2] = [
             (
                 "开放 Issue 数",
-                "codehub 仓当前 state=opened 的 issue 计数(机器源,codehub-cli issue list --jq length)",
-                "issues:opened",
+                "codehub 仓当前 state=opened 的 issue 计数(机器源,buddy 自带 script connector 跑 codehub-cli issue list --jq length)",
+                "open_issues",
             ),
             (
                 "已合入 MR 数",
-                "codehub 仓累计 state=merged 的 MR 计数(机器源,codehub-cli mr list --jq length)",
-                "mrs:merged",
+                "codehub 仓累计 state=merged 的 MR 计数(机器源,buddy 自带 script connector 跑 codehub-cli mr list --jq length)",
+                "merged_mrs",
             ),
         ];
         for (idx, (name, def, query)) in PAIR.iter().copied().enumerate() {
@@ -2559,7 +2592,7 @@ impl App {
                     last_target: String::new(),
                     driver: String::new(),
                     pos: 200 + idx as i64,
-                    collect_kind: "codehub".into(),
+                    collect_kind: "script".into(),
                     collect_query: query.to_string(),
                 })
                 .await?;
@@ -4774,16 +4807,6 @@ impl App {
                                         self.store
                                             .create_connector(NewConnector {
                                                 id: ConnectorId::new(),
-                                                name: format!("{} · 代码仓", proj.name),
-                                                kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                                scope: proj.name.clone(),
-                                                project_id: Some(id),
-                                                config: path.clone(),
-                                            })
-                                            .await?;
-                                        self.store
-                                            .create_connector(NewConnector {
-                                                id: ConnectorId::new(),
                                                 name: format!("{} · GitHub", proj.name),
                                                 kind: CONNECTOR_KIND_GITHUB_REPO.into(),
                                                 scope: proj.name.clone(),
@@ -4860,16 +4883,6 @@ impl App {
                                         self.store
                                             .create_connector(NewConnector {
                                                 id: ConnectorId::new(),
-                                                name: format!("{} · 代码仓", proj.name),
-                                                kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                                scope: proj.name.clone(),
-                                                project_id: Some(id),
-                                                config: path.clone(),
-                                            })
-                                            .await?;
-                                        self.store
-                                            .create_connector(NewConnector {
-                                                id: ConnectorId::new(),
                                                 name: format!("{} · GitHub", proj.name),
                                                 kind: CONNECTOR_KIND_GITHUB_REPO.into(),
                                                 scope: proj.name.clone(),
@@ -4915,7 +4928,7 @@ impl App {
                             }
                         }
                     }
-                    (None, None, Some(CodehubOrigin { host, path })) => {
+                    (None, None, Some(CodehubOrigin::Existing { host, path })) => {
                         // codehub 接入已有仓(对标 github Existing):真实
                         // `codehub-cli repo clone` 网络调用,同一套 Started→Ok/Fail。
                         let action_name = format!("{} · 克隆 codehub 仓", proj.name);
@@ -4931,16 +4944,6 @@ impl App {
                                         let p = dir.to_string_lossy().into_owned();
                                         self.store.set_workspace(id, &p, true).await?;
                                         self.store.set_remote(id, &host, &path).await?;
-                                        self.store
-                                            .create_connector(NewConnector {
-                                                id: ConnectorId::new(),
-                                                name: format!("{} · 代码仓", proj.name),
-                                                kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                                scope: proj.name.clone(),
-                                                project_id: Some(id),
-                                                config: p.clone(),
-                                            })
-                                            .await?;
                                         self.store
                                             .create_connector(NewConnector {
                                                 id: ConnectorId::new(),
@@ -4984,21 +4987,97 @@ impl App {
                             }
                         }
                     }
+                    (
+                        None,
+                        None,
+                        Some(CodehubOrigin::New {
+                            host,
+                            namespace,
+                            name: repo_name,
+                            visibility,
+                        }),
+                    ) => {
+                        // codehub 新建仓(对标 github New):真实
+                        // `codehub-cli project create` + `git clone` + BW root
+                        // commit(让 is_owned_workspace=true)。同一套 Started→Ok/Fail。
+                        let action_name = format!("{} · 建 codehub 仓", proj.name);
+                        self.emit(Event::ActionProgress {
+                            name: action_name.clone(),
+                            state: ActionState::Started,
+                        });
+                        match self.workspaces_root.clone() {
+                            Some(root) => {
+                                let dir = root.join(workspace_slug(&proj.name, id));
+                                let body = if proj.desc.trim().is_empty() {
+                                    "(创建流程未填写 brief)".to_string()
+                                } else {
+                                    proj.desc.trim().to_string()
+                                };
+                                match bw_engine::codehub::create_repo(
+                                    &host,
+                                    &namespace,
+                                    &repo_name,
+                                    &visibility,
+                                    &dir,
+                                    &proj.name,
+                                    &body,
+                                )
+                                .await
+                                {
+                                    Ok(r) => {
+                                        let p = dir.to_string_lossy().into_owned();
+                                        self.store.set_workspace(id, &p, true).await?;
+                                        self.store.set_remote(id, &r.host, &r.path).await?;
+                                        self.store
+                                            .create_connector(NewConnector {
+                                                id: ConnectorId::new(),
+                                                name: format!("{} · CodeHub", proj.name),
+                                                kind: CONNECTOR_KIND_CODEHUB_REPO.into(),
+                                                scope: proj.name.clone(),
+                                                project_id: Some(id),
+                                                config: format!("{}/{}", r.host, r.path),
+                                            })
+                                            .await?;
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Ok(r.path.clone()),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let detail = format!(
+                                            "codehub 建仓失败:{e}(未接上,无远端仓,请重试或检查权限)"
+                                        );
+                                        self.emit(Event::ConnectorSynced {
+                                            name: format!("{} · CodeHub", proj.name),
+                                            ok: false,
+                                            detail: detail.clone(),
+                                        });
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Fail(detail),
+                                        });
+                                    }
+                                }
+                            }
+                            None => {
+                                let detail = "未配置本地工作区根目录,无法建仓".to_string();
+                                self.emit(Event::ConnectorSynced {
+                                    name: format!("{} · CodeHub", proj.name),
+                                    ok: false,
+                                    detail: detail.clone(),
+                                });
+                                self.emit(Event::ActionProgress {
+                                    name: action_name,
+                                    state: ActionState::Fail(detail),
+                                });
+                            }
+                        }
+                    }
                     (None, None, None) => {
                         if let Some(root) = self.workspaces_root.clone() {
                             match provision_workspace(&root, &proj).await {
                                 Ok(path) => {
                                     self.store.set_workspace(id, &path, true).await?;
-                                    self.store
-                                        .create_connector(NewConnector {
-                                            id: ConnectorId::new(),
-                                            name: format!("{} · 代码仓", proj.name),
-                                            kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                            scope: proj.name.clone(),
-                                            project_id: Some(id),
-                                            config: path.clone(),
-                                        })
-                                        .await?;
                                 }
                                 Err(e) => {
                                     self.emit(Event::ConnectorSynced {
@@ -5011,11 +5090,57 @@ impl App {
                         }
                     }
                 }
-                // C7 · 标配采集 cron (plan/13 D7):挂了 GitHub 仓的项目出生即
+                // V1 Issue 1 phase2 · 工作区探活(不建 git-repo connector,直接
+                // 调一次):evidence::collect + feed_workspace_metrics +
+                // sync_project_assets 原在 probe_connector 的 git-repo arm,现搬
+                // 到创建时直接调,采第一批工作区指标 + 扫 assets。
+                let proj = self
+                    .store
+                    .get_project(id)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                if !proj.workspace_path.trim().is_empty() {
+                    match evidence::collect(&proj.workspace_path).await {
+                        Ok(ev) => {
+                            let _ = self.feed_workspace_metrics(id, &ev).await;
+                            self.sync_project_assets(id, &proj.workspace_path).await;
+                        }
+                        Err(e) => {
+                            eprintln!("[BW] CreateProject 工作区探活失败:{e}");
+                        }
+                    }
+                    // 建 script connector(挂远端的项目;buddy 自带采集脚本,
+                    // §0 第 2 层业务脚本)。脚本写进 .bw/collect_stats.sh(相对
+                    // 工作区,buddy 自有空间),collect arm 跑脚本 → 读输出 JSON。
+                    if !proj.remote_path.trim().is_empty() {
+                        let script = build_collect_script(&proj);
+                        let bw_dir = std::path::Path::new(&proj.workspace_path).join(".bw");
+                        let _ = std::fs::create_dir_all(&bw_dir);
+                        let script_path = bw_dir.join("collect_stats.sh");
+                        let _ = std::fs::write(&script_path, &script);
+                        let config = serde_json::json!({
+                            "script": ".bw/collect_stats.sh",
+                            "output": ".bw/collect_stats.json",
+                            "command": "sh",
+                        })
+                        .to_string();
+                        self.store
+                            .create_connector(NewConnector {
+                                id: ConnectorId::new(),
+                                name: format!("{} · 仓统计", proj.name),
+                                kind: CONNECTOR_KIND_SCRIPT.into(),
+                                scope: proj.name.clone(),
+                                project_id: Some(id),
+                                config,
+                            })
+                            .await?;
+                    }
+                }
+                // C7 · 标配采集 cron (plan/13 D7):挂了远端仓的项目出生即
                 // 带一条每日采集器,由现成 tick_scheduler 到点真实触发,把
-                // GitHub 数据拉成 append-only 观测。只有 github 项目挂(无 remote
-                // 即无 github 源可采);软降级回本地/接入失败的项目 remote_path
-                // 仍空,不挂——不给采不到的东西装一个空跑的 cron。no-hijack:
+                // 远端数据拉成 append-only 观测。挂远端的项目(github/codehub
+                // 均算)挂;软降级回本地/接入失败的项目 remote_path 仍空,不挂
+                // ——不给采不到的东西装一个空跑的 cron。no-hijack:
                 // CollectMetrics 只观测,绝不自动跑活/结算。
                 let github_backed = self
                     .store
@@ -5069,6 +5194,40 @@ impl App {
                     }
                     Err(e) => {
                         self.state.github_repos = Vec::new();
+                        self.emit(Event::ConnectorSynced {
+                            name: ACTION_NAME.into(),
+                            ok: false,
+                            detail: e.to_string(),
+                        });
+                        self.emit(Event::ActionProgress {
+                            name: ACTION_NAME.into(),
+                            state: ActionState::Fail(e.to_string()),
+                        });
+                    }
+                }
+                self.emit(Event::ProjectsChanged);
+            }
+
+            Command::ListCodehubRepos { host } => {
+                // V1 Issue 1: the Repo 卡片's「接入已有仓」picker for codehub
+                // triggers a real `codehub-cli project list --mine` call —
+                // same Started→Ok/Fail pairing as `ListGithubRepos`. `host`
+                // = green/open/yellow(codehub 三域名,需显式带)。
+                const ACTION_NAME: &str = "CodeHub 仓库列表";
+                self.emit(Event::ActionProgress {
+                    name: ACTION_NAME.into(),
+                    state: ActionState::Started,
+                });
+                match bw_engine::codehub::list_repos(&host, 30).await {
+                    Ok(repos) => {
+                        self.emit(Event::ActionProgress {
+                            name: ACTION_NAME.into(),
+                            state: ActionState::Ok(format!("{} 个仓库", repos.len())),
+                        });
+                        self.state.codehub_repos = repos;
+                    }
+                    Err(e) => {
+                        self.state.codehub_repos = Vec::new();
                         self.emit(Event::ConnectorSynced {
                             name: ACTION_NAME.into(),
                             ok: false,
@@ -5310,16 +5469,17 @@ impl App {
                     match provision_workspace(&root, &proj).await {
                         Ok(path) => {
                             self.store.set_workspace(p, &path, true).await?;
-                            self.store
-                                .create_connector(NewConnector {
-                                    id: ConnectorId::new(),
-                                    name: format!("{} · 代码仓", proj.name),
-                                    kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                    scope: proj.name.clone(),
-                                    project_id: Some(p),
-                                    config: path.clone(),
-                                })
-                                .await?;
+                            // V1 Issue 1 phase2: 不建 git-repo connector,
+                            // 直接调一次工作区探活(采第一批指标 + 扫 assets)。
+                            match evidence::collect(&path).await {
+                                Ok(ev) => {
+                                    let _ = self.feed_workspace_metrics(p, &ev).await;
+                                    self.sync_project_assets(p, &path).await;
+                                }
+                                Err(e) => {
+                                    eprintln!("[BW] CompleteCreation 工作区探活失败:{e}");
+                                }
+                            }
                             self.refresh_connectors().await?;
                             self.emit(Event::ConnectorsChanged);
                         }
@@ -7573,6 +7733,41 @@ async fn provision_workspace(root: &std::path::Path, proj: &ProjectRow) -> Resul
         .await
         .map_err(|e| e.to_string())?;
     Ok(dir.to_string_lossy().into_owned())
+}
+
+/// V1 Issue 1 phase2 · Build the buddy-provided collect-stats script for a
+/// remote-backed project. The script runs two provider CLI commands (open
+/// issues + merged MRs/PRs), combines the counts into one JSON object, and
+/// writes it to `.bw/collect_stats.json` (the `ScriptConnectorConfig.output`
+/// the collect arm reads). Provider-split: codehub → `codehub-cli issue/mr
+/// list`; github → `gh api search/issues` (same endpoint the inline github
+/// arm uses, so the numbers match). Errors in either CLI call default to `0`
+/// (`|| echo 0`) — a failed count is honest zero, not a silent skip.
+fn build_collect_script(proj: &ProjectRow) -> String {
+    match proj.provider.as_str() {
+        "codehub" => format!(
+            r#"#!/bin/sh
+# BW 自带采集脚本 — codehub 仓统计 (CreateProject 生成,勿手改)
+HOST="{host}"
+PATH_NS="{path}"
+ISSUES=$(codehub-cli -H "$HOST" issue list -p "$PATH_NS" --state opened -l 0 --jq 'length' 2>/dev/null || echo 0)
+MRS=$(codehub-cli -H "$HOST" mr list -p "$PATH_NS" --state merged -l 0 --jq 'length' 2>/dev/null || echo 0)
+printf '{{"open_issues": %s, "merged_mrs": %s}}' "$ISSUES" "$MRS" > .bw/collect_stats.json
+"#,
+            host = proj.remote_host,
+            path = proj.remote_path,
+        ),
+        _ => format!(
+            r#"#!/bin/sh
+# BW 自带采集脚本 — GitHub 仓统计 (CreateProject 生成,勿手改)
+REPO="{path}"
+ISSUES=$(gh api -X GET search/issues -f "q=is:issue is:open repo:$REPO" --jq '.total_count' 2>/dev/null || echo 0)
+PRS=$(gh api -X GET search/issues -f "q=is:pr is:merged repo:$REPO" --jq '.total_count' 2>/dev/null || echo 0)
+printf '{{"open_issues": %s, "merged_mrs": %s}}' "$ISSUES" "$PRS" > .bw/collect_stats.json
+"#,
+            path = proj.remote_path,
+        ),
+    }
 }
 
 /// P1: the project's charter (`PROJECT.md`) — every line is a real creation-

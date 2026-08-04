@@ -35,6 +35,7 @@ mod unsupported_cli;
 pub mod workspace;
 
 pub use claude_cli::{allowed_tools_arg, ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
+pub use codehub::{CodehubError, CodehubRepoRef, CodehubRepoSummary};
 pub use evidence::{EvidenceError, WorkspaceEvidence, WorkspaceFile};
 pub use git_log::{read_commits, GitCommit, GitLogError};
 pub use github::{GithubError, GithubRepoRef, GithubRepoSummary};
