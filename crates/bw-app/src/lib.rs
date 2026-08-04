@@ -2898,6 +2898,49 @@ impl App {
         self.emit(Event::AgentsChanged);
     }
 
+    /// V1 Issue 1 phase2 · 工作区探活三元组:采 `evidence::collect` →
+    /// 喂指标(`feed_workspace_metrics`)→ 扫 assets(`sync_project_assets`)。
+    /// `CreateProject` 末尾与 `CompleteCreation` 末尾共用;失败只 `eprintln!`,
+    /// 绝不阻断创建流本身(创建永不因探活失败而崩)。`label` 区分日志来源,
+    /// 与原两处内联的 `eprintln!` 文案逐字一致。空工作区的守卫留在各调用
+    /// 处(`CreateProject` 需判 `workspace_path` 非空;`CompleteCreation` 的
+    /// `path` 刚 mint 出来,调用处不守)——差异保留,不强同化。
+    async fn probe_workspace(&mut self, project: ProjectId, workspace: &str, label: &str) {
+        match evidence::collect(workspace).await {
+            Ok(ev) => {
+                let _ = self.feed_workspace_metrics(project, &ev).await;
+                self.sync_project_assets(project, workspace).await;
+            }
+            Err(e) => {
+                eprintln!("[BW] {label} 工作区探活失败:{e}");
+            }
+        }
+    }
+
+    /// CreateProject 远端建仓/接入四臂(github New/Existing + codehub New/Existing)
+    /// 共用这段:未配 `workspaces_root` → 建仓根本起不来,发同款
+    /// `ConnectorSynced(Fail)` + `ActionProgress(Fail)` 对子。各臂只在
+    /// provider 标签("GitHub"/"CodeHub")与"为什么"文案上不同,其余逐字
+    /// 一致——抽出来收口,避免四份逐字复制。
+    fn fail_no_workspaces_root(
+        &mut self,
+        action_name: &str,
+        proj_name: &str,
+        provider_label: &str,
+        detail: &str,
+    ) {
+        let detail = detail.to_string();
+        self.emit(Event::ConnectorSynced {
+            name: format!("{} · {}", proj_name, provider_label),
+            ok: false,
+            detail: detail.clone(),
+        });
+        self.emit(Event::ActionProgress {
+            name: action_name.to_string(),
+            state: ActionState::Fail(detail),
+        });
+    }
+
     /// C4 · issue 身份映射(plan/13 D2): a project with a `remote_path`
     /// gets every BW-minted Issue mirrored as a real GitHub issue — the issue
     /// number is the Issue's cross-system identity. Called AFTER the Issue
@@ -4845,16 +4888,12 @@ impl App {
                                 }
                             }
                             None => {
-                                let detail = "未配置本地工作区根目录,无法建仓".to_string();
-                                self.emit(Event::ConnectorSynced {
-                                    name: format!("{} · GitHub", proj.name),
-                                    ok: false,
-                                    detail: detail.clone(),
-                                });
-                                self.emit(Event::ActionProgress {
-                                    name: action_name,
-                                    state: ActionState::Fail(detail),
-                                });
+                                self.fail_no_workspaces_root(
+                                    &action_name,
+                                    &proj.name,
+                                    "GitHub",
+                                    "未配置本地工作区根目录,无法建仓",
+                                );
                             }
                         }
                     }
@@ -4915,16 +4954,12 @@ impl App {
                                 }
                             }
                             None => {
-                                let detail = "未配置本地工作区根目录,无法接入".to_string();
-                                self.emit(Event::ConnectorSynced {
-                                    name: format!("{} · GitHub", proj.name),
-                                    ok: false,
-                                    detail: detail.clone(),
-                                });
-                                self.emit(Event::ActionProgress {
-                                    name: action_name,
-                                    state: ActionState::Fail(detail),
-                                });
+                                self.fail_no_workspaces_root(
+                                    &action_name,
+                                    &proj.name,
+                                    "GitHub",
+                                    "未配置本地工作区根目录,无法接入",
+                                );
                             }
                         }
                     }
@@ -4974,16 +5009,12 @@ impl App {
                                 }
                             }
                             None => {
-                                let detail = "未配置本地工作区根目录,无法克隆".to_string();
-                                self.emit(Event::ConnectorSynced {
-                                    name: format!("{} · CodeHub", proj.name),
-                                    ok: false,
-                                    detail: detail.clone(),
-                                });
-                                self.emit(Event::ActionProgress {
-                                    name: action_name,
-                                    state: ActionState::Fail(detail),
-                                });
+                                self.fail_no_workspaces_root(
+                                    &action_name,
+                                    &proj.name,
+                                    "CodeHub",
+                                    "未配置本地工作区根目录,无法克隆",
+                                );
                             }
                         }
                     }
@@ -5060,16 +5091,12 @@ impl App {
                                 }
                             }
                             None => {
-                                let detail = "未配置本地工作区根目录,无法建仓".to_string();
-                                self.emit(Event::ConnectorSynced {
-                                    name: format!("{} · CodeHub", proj.name),
-                                    ok: false,
-                                    detail: detail.clone(),
-                                });
-                                self.emit(Event::ActionProgress {
-                                    name: action_name,
-                                    state: ActionState::Fail(detail),
-                                });
+                                self.fail_no_workspaces_root(
+                                    &action_name,
+                                    &proj.name,
+                                    "CodeHub",
+                                    "未配置本地工作区根目录,无法建仓",
+                                );
                             }
                         }
                     }
@@ -5100,15 +5127,8 @@ impl App {
                     .await?
                     .ok_or(AppError::NotFound)?;
                 if !proj.workspace_path.trim().is_empty() {
-                    match evidence::collect(&proj.workspace_path).await {
-                        Ok(ev) => {
-                            let _ = self.feed_workspace_metrics(id, &ev).await;
-                            self.sync_project_assets(id, &proj.workspace_path).await;
-                        }
-                        Err(e) => {
-                            eprintln!("[BW] CreateProject 工作区探活失败:{e}");
-                        }
-                    }
+                    self.probe_workspace(id, &proj.workspace_path, "CreateProject")
+                        .await;
                     // 建 script connector(挂远端的项目;buddy 自带采集脚本,
                     // §0 第 2 层业务脚本)。脚本写进 .bw/collect_stats.sh(相对
                     // 工作区,buddy 自有空间),collect arm 跑脚本 → 读输出 JSON。
@@ -5471,15 +5491,7 @@ impl App {
                             self.store.set_workspace(p, &path, true).await?;
                             // V1 Issue 1 phase2: 不建 git-repo connector,
                             // 直接调一次工作区探活(采第一批指标 + 扫 assets)。
-                            match evidence::collect(&path).await {
-                                Ok(ev) => {
-                                    let _ = self.feed_workspace_metrics(p, &ev).await;
-                                    self.sync_project_assets(p, &path).await;
-                                }
-                                Err(e) => {
-                                    eprintln!("[BW] CompleteCreation 工作区探活失败:{e}");
-                                }
-                            }
+                            self.probe_workspace(p, &path, "CompleteCreation").await;
                             self.refresh_connectors().await?;
                             self.emit(Event::ConnectorsChanged);
                         }

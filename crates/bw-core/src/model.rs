@@ -1864,6 +1864,25 @@ pub const CONNECTOR_KIND_GITHUB_REPO: &str = "github-repo";
 /// open.codehub.huawei.com,path=org/repo)。真探针走 `codehub-cli project view`
 /// (Remote::Codehub.probe,P3 已通);issue/MR 计数采集由 collect arm(P5)负责。
 pub const CONNECTOR_KIND_CODEHUB_REPO: &str = "codehub-repo";
+
+/// Map a codehub host *alias* (`green`/`open`/`yellow` — what the engine
+/// stores in `remote_host` and passes to `codehub-cli -H`) to the full web
+/// domain for browser-URL construction. Legacy full-domain values (e.g. an
+/// already-fully-qualified host stored by an older flow) pass through
+/// unchanged via the `_ => alias` arm. PRACTICE-buddy §3 convention:
+/// green→`codehub-g.huawei.com`, open→内源 `open.codehub.huawei.com`,
+/// yellow→`codehub-y.huawei.com`. Single source of truth — app-desktop's web
+/// links and any future engine-side URL builder share this one mapping
+/// instead of each re-deriving it. Pure (zero IO), wasm32-clean.
+pub fn codehub_alias_to_domain(alias: &str) -> &str {
+    match alias.trim() {
+        "green" => "codehub-g.huawei.com",
+        "open" => "open.codehub.huawei.com",
+        "yellow" => "codehub-y.huawei.com",
+        _ => alias,
+    }
+}
+
 /// plan18-③ · 项目侧脚本连接器:记录一个项目仓里既有的采集脚本(如
 /// `derive_*.py` 机械解析真实数据源、产出 `data.json`)。`config` 存 JSON:
 /// `{"script":"<相对工作区脚本路径>","output":"<相对工作区输出文件>","command":"<跑脚本的命令如 python>"}`。

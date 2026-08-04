@@ -27,18 +27,6 @@ use dioxus::prelude::*;
 use ui::vm::{MetricVm, SessionCardVm, VersionLogVm};
 use ui::{sparkline_path, SparkPath, WowDir};
 
-/// Maps a codehub host alias (green/open/yellow — what the engine stores in
-/// `remote_host` and passes to `codehub-cli -H`) to the full web domain for
-/// URL construction. Legacy full-domain values pass through unchanged.
-fn codehub_web_host(host: &str) -> &str {
-    match host.trim() {
-        "green" => "codehub-g.huawei.com",
-        "open" => "open.codehub.huawei.com",
-        "yellow" => "codehub-y.huawei.com",
-        _ => host,
-    }
-}
-
 /// Provider-aware web URL for a remote issue. codehub →
 /// `https://{domain}/{path}/issues/{iid}`; github → the canonical `github.com`
 /// path. Empty path = no remote attached → empty string (caller renders plain
@@ -48,7 +36,10 @@ fn remote_issue_url(provider: &str, host: &str, path: &str, n: u32) -> String {
         return String::new();
     }
     match provider.trim() {
-        "codehub" => format!("https://{}/{path}/issues/{n}", codehub_web_host(host)),
+        "codehub" => format!(
+            "https://{}/{path}/issues/{n}",
+            bw_core::codehub_alias_to_domain(host)
+        ),
         _ => format!("https://github.com/{path}/issues/{n}"),
     }
 }
@@ -63,7 +54,7 @@ fn remote_mr_url(provider: &str, host: &str, path: &str, n: u32) -> String {
         "codehub" => {
             format!(
                 "https://{}/{path}/-/merge_requests/{n}",
-                codehub_web_host(host)
+                bw_core::codehub_alias_to_domain(host)
             )
         }
         _ => format!("https://github.com/{path}/pull/{n}"),
