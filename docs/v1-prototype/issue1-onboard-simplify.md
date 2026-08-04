@@ -92,7 +92,8 @@ connector: 改前 git-repo+codehub-repo → 改后 codehub-repo + script「codeh
 ## 6. 偏差 / 未决(记不擅定,commit 偏差段如实)
 
 - **bug① UI 冻死**:codehub clone 同步堵单线程命令循环,Intent 提交后 UI 卡。本 issue 砍中间卡不解 bug①。practice skill §4.3 独立未决项。
-- **connector 归位未竟**:phase2 只做创建侧(不建 git-repo + 建 script + 改 metric collect_kind)。`collect_project_metrics` 的 inline github/codehub arm 本 issue **不动**(留兼容),标注后续可砍。cron 改「调脚本」的进一步统一(把 inline arm 也迁 script)留采数/总览窗口。
+- **connector 归位未竟**:phase2 只做创建侧(不建 git-repo + 建 script + 改 metric collect_kind)。`collect_project_metrics` 的 inline github/codehub arm 本 issue **不动**,标注后续可砍,留采数/总览窗口。
+- **collect_kind 顶层两 kind(2026-08-04 找指标/绑数据窗口 grilling 精炼;本 issue 代码不动,仅文档/指南口径对齐)**:顶层 `collect_kind` 只剩 `script|manual` 两 kind。github/codehub/bw/connector 不是并列 kind,是 script 的不同 instance(脚本包 codehub/github CLI,"是否依赖某 connector"是 script instance 子属性);`collect_query` 统一=字段点分路径。**codehub 不是面向用户的 kind**:CollectKind 枚举(metrics_file.rs:40)无此变体,`.bw/metrics.toml` 写 `kind="codehub"` serde 解析失败零写入,UI MetricCard(op.rs:1912)徽记 match 无 codehub 臂——DB 里只是 legacy inline arm 字符串,该彻底退休不是留兼容。本 issue 已把 2 条 codehub metric 改 `collect_kind='script'`(方向对齐);inline arm 迁 script + CollectKind 枚举清理归采数/总览窗口。绑数据 scope 升级:不只改 metrics.toml collect 字段,是搭 script connector(包 CLI 或项目侧 derive 脚本)+ 落标准目录 + 挂 cron + 登记进 buddy——与 phase2 建 script connector 方向一致,范围更大,归绑数据窗口。
 - **codehub 新建 namespace-id**:默认建到个人 namespace(对标 gh repo create)。group namespace 选择留口(V1 不做,如实标)。SubAgent 实测 codehub-cli 钉 namespace-id 取法。
 - **op_stage.routine_schedule / stage_done**:求同存异留。signal 过期降级读这列的改法留总览窗口(碰派生链)。
 - **standards 质量**:留写入,内容打磨是依赖事项,本窗口不管。
