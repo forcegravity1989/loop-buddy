@@ -28,6 +28,7 @@ pub mod contract;
 pub mod evidence;
 pub mod git_log;
 pub mod github;
+pub mod interactive_cli;
 pub mod metrics_file;
 mod mock;
 pub mod remote;
@@ -38,6 +39,11 @@ pub use claude_cli::{allowed_tools_arg, ClaudeCliConfig, ClaudeCliExecutor, Perm
 pub use evidence::{EvidenceError, WorkspaceEvidence, WorkspaceFile};
 pub use git_log::{read_commits, GitCommit, GitLogError};
 pub use github::{GithubError, GithubRepoRef, GithubRepoSummary};
+pub use interactive_cli::{
+    build_bridge_system_prompt, build_startup_plan, InteractiveCliExecutor, InteractiveExecutor,
+    LaunchPlan, MockInteractiveExecutor, PromptInjectionMode, SkillOutput, TuiAgentConfig, CLAUDE,
+    CURSOR,
+};
 pub use metrics_file::{
     CollectKind, CollectPlan, MetricDef, MetricsFile, MetricsFileError, NorthStarDef,
 };

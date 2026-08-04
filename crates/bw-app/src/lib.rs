@@ -42,8 +42,10 @@ use bw_core::{
     SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    allowed_tools_arg, evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit,
-    GithubRepoSummary, PermissionMode, PhaseNode, RunCtx, RunEvent, UnsupportedCliExecutor,
+    allowed_tools_arg, build_bridge_system_prompt, build_startup_plan, evidence, ClaudeCliConfig,
+    ClaudeCliExecutor, Engine, GitCommit, GithubRepoSummary, InteractiveCliExecutor,
+    InteractiveExecutor, MockInteractiveExecutor, PermissionMode, PhaseNode, RunCtx, RunEvent,
+    SkillOutput, UnsupportedCliExecutor, CLAUDE,
 };
 use bw_store::{
     AgentEdit, GlobalHandoffRow, MetricDefSync, MetricRole, MetricsFileSync, NewAgent, NewArtifact,
@@ -1080,20 +1082,30 @@ struct FinalizeCtx {
     issue_id: Option<IssueId>,
 }
 
+/// plan/17 S3 + V1 Issue2 Phase1: outcome a backgrounded run reports back
+/// to the main thread via the settle mpsc. The phase-loop variant carries
+/// `LoopEnd` + the last round's `workflow_run` id + `final_run_ok`; the
+/// interactive variant carries a `SkillOutput` (one-shot interactive
+/// session, no phase loop). `Err` in either is a `?`-early-bail.
+/// `pub(crate)` — the kernel only ever MOVES a `SettleReq` value, never
+/// names/constructs `SettleOutcome`.
+pub(crate) enum SettleOutcome {
+    PhaseLoop(Result<(LoopEnd, WorkflowRunId, bool), AppError>),
+    Interactive(Result<SkillOutput, AppError>),
+}
+
 /// plan/17 S3: outcome a backgrounded round loop reports back to the main
-/// thread via the settle mpsc. `Ok` carries the `LoopEnd` + the last round's
-/// `workflow_run` id + `final_run_ok` (exactly what `run_round_loop` returns);
-/// `Err` is a `?`-early-bail mid-round (a store error before any settle —
-/// the round's row stays "started, never settled", honest). Sent from the
-/// spawned task; received by the kernel's `select!` settle arm.
+/// thread via the settle mpsc. Sent from the spawned task; received by the
+/// kernel's `select!` settle arm.
 pub struct SettleReq {
     pub(crate) project: ProjectId,
     pub(crate) issue: IssueId,
-    // Private-typed on purpose: `LoopEnd` is an internal enum. The kernel
-    // only ever MOVES a `SettleReq` value (channel → `run_issue_settle`),
-    // never names/constructures it — so the fields stay crate-internal while
-    // the type itself is pub (the kernel names it for the mpsc type param).
-    pub(crate) outcome: Result<(LoopEnd, WorkflowRunId, bool), AppError>,
+    // Private-typed on purpose: `SettleOutcome` carries internal types
+    // (`LoopEnd`). The kernel only ever MOVES a `SettleReq` value
+    // (channel → `run_issue_settle`), never names/constructures it — so
+    // the fields stay crate-internal while the type itself is pub (the
+    // kernel names it for the mpsc type param).
+    pub(crate) outcome: SettleOutcome,
 }
 
 /// plan/17 S3: an in-flight backgrounded issue-run. Held in `AppState
@@ -2155,6 +2167,85 @@ impl App {
         }
     }
 
+    /// V1 Issue2 Phase1: the interactive path's settle accounting — the
+    /// counterpart of `finalize_run` for one-shot TUI agent sessions.
+    /// Does the same agent/skill `uses` bumping + artifact reflux, but
+    /// SKIPS the phase-based parts (no `workflow_run` row → no HEAD diff
+    /// via `set_run_heads`, no `LoopEnd` conversion). The interactive
+    /// session's terminal scrollback + session.jsonl is the record (§2.5
+    /// 砍了对话摘要 collector); the worktree's git state + artifacts are
+    /// the file-level evidence buddy keeps.
+    ///
+    /// DEVIATION: HEAD diff is not recorded for interactive runs (no
+    /// `workflow_run` row to attach `set_run_heads` to). The worktree's
+    /// own git log IS the diff evidence — it just isn't indexed in
+    /// buddy's `workflow_run.head_before/after` columns. Recorded in the
+    /// commit deviation note; Phase 2 can add a `workflow_run` row for
+    /// interactive sessions if needed.
+    #[allow(clippy::too_many_arguments)]
+    async fn finalize_run_interactive(
+        &mut self,
+        spec: &WorkflowSpec,
+        proj: &ProjectRow,
+        p: ProjectId,
+        issue_id: Option<IssueId>,
+        skill_output: SkillOutput,
+    ) -> Result<RunOutcome, AppError> {
+        let run_ok = skill_output.completed;
+
+        // Agent/skill uses accounting — same as `finalize_run`: one real
+        // work item = one agent run, one skill use. Doing this once per
+        // interactive session (not per phase) keeps the compounding loop
+        // honest.
+        for a in &spec.agents {
+            self.store.record_agent_run_by_name(&a.name, run_ok).await?;
+        }
+        for s in &spec.skills {
+            self.store.record_skill_use_by_name(&s.name).await?;
+        }
+        if !spec.agents.is_empty() {
+            self.refresh_agents().await?;
+            self.emit(Event::AgentsChanged);
+        }
+        if !spec.skills.is_empty() {
+            self.refresh_skills().await?;
+            self.emit(Event::SkillsChanged);
+        }
+
+        // Artifact reflux: scan the real workspace and register new file
+        // versions. No `workflow_run_id` (interactive sessions don't create
+        // one) — artifacts bind to the issue via `issue_id`. Scan errors
+        // are a 0-fresh no-op, same as the phase-loop path.
+        if !proj.workspace_path.trim().is_empty() {
+            let stage_kind = spec
+                .stage_ref
+                .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n));
+            if let Ok(fresh) = self
+                .scan_and_register_artifacts(
+                    p,
+                    &proj.workspace_path,
+                    None, // no workflow_run row for interactive
+                    stage_kind,
+                    issue_id,
+                )
+                .await
+            {
+                if fresh > 0 {
+                    self.emit(Event::ArtifactsRegistered { fresh });
+                }
+            }
+        }
+
+        // Convert SkillOutput → RunOutcome. `completed = true` → Completed
+        // (the caller's tail advances to InReview iff a PR opens). `false`
+        // → Err (the issue stays InProgress, never auto-Done).
+        if skill_output.completed {
+            Ok(RunOutcome::Completed)
+        } else {
+            Err(AppError::Engine(skill_output.summary))
+        }
+    }
+
     /// T6 (plan/12 §3): resolve which Agent CLI executes an issue-run and
     /// what `tools` (AllowedTools) it declares. Only `RunIssue` has a
     /// concrete assignee to route by — an issue with no assignee, an
@@ -2456,6 +2547,28 @@ impl App {
             from: skill.category.clone(),
         }];
         Ok((block, refs))
+    }
+
+    /// V1 Issue2 Phase1: fetch the RAW skill body (full content, headings
+    /// NOT demoted) for interactive injection — the skill body goes into
+    /// the interactive session as the first user message (positional
+    /// `prompt` argument), so it should keep its original `#`-shaped
+    /// structure. Same lookup logic as `standard_skill_block` (by-name
+    /// against the Skill Hub catalog), but returns the raw content string
+    /// instead of a formatted block. An empty/content-less slug returns an
+    /// empty string (honest no-op, never fails the run).
+    async fn fetch_skill_body(&self, slug: &str) -> Result<String, AppError> {
+        if slug.trim().is_empty() {
+            return Ok(String::new());
+        }
+        let catalog = self.store.list_skills().await?;
+        let Some(skill) = catalog
+            .iter()
+            .find(|s| s.name == slug && !s.content.trim().is_empty())
+        else {
+            return Ok(String::new());
+        };
+        Ok(skill.content.trim().to_string())
     }
 
     /// A4: name of the machine-fed "完成 Issue 数" leading metric, seeded per
@@ -3842,6 +3955,16 @@ impl App {
         Ok(report)
     }
 
+    /// V1 Issue2 Phase1: whether a `standard_skill` slug routes to the
+    /// interactive path (one-shot TUI agent session, no phase loop).
+    /// These two skills are the creation-flow trio's "找指标" + "绑数据"
+    /// — they need an interactive claude session (the user watches the
+    /// terminal, the agent reads the project workspace, produces
+    /// `.bw/metrics.toml` / `docs/metrics-rationale.md`).
+    fn is_interactive_skill(slug: &str) -> bool {
+        matches!(slug, "north-star-discovery" | "metrics-binding")
+    }
+
     /// plan/17 S1+S3: entry guard + lifecycle for the same-project serial
     /// run lock (`AppState::active_run`). Backgrounded path (`settle_tx`
     /// wired — the desktop kernel): `run_issue_backgrounded` sets
@@ -3854,12 +3977,8 @@ impl App {
     /// applies uniformly.
     async fn run_issue_now(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
         // Fail fast on a same-project in-flight run before touching anything.
-        let p = self
-            .store
-            .get_issue(id)
-            .await?
-            .ok_or(AppError::NotFound)?
-            .project_id;
+        let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+        let p = issue.project_id;
         if let Some(ar) = &self.state.active_run {
             if ar.project == p {
                 return Err(AppError::Invalid(
@@ -3867,7 +3986,16 @@ impl App {
                 ));
             }
         }
-        if self.settle_tx.is_some() {
+        // V1 Issue2 Phase1: interactive skills (north-star-discovery,
+        // metrics-binding) route to the interactive path — a one-shot TUI
+        // agent session (claude CLI in a terminal, skill body pre-loaded,
+        // bridge system prompt for project context + buddy 契约). No phase
+        // loop, no adversarial review — one skill = one session (§2.3).
+        // Other issues use the existing one-shot / phase-loop path, zero
+        // disturbance.
+        if Self::is_interactive_skill(&issue.standard_skill) {
+            self.run_issue_interactive(session, id).await
+        } else if self.settle_tx.is_some() {
             self.run_issue_backgrounded(session, id).await
         } else {
             self.run_issue_body(session, id).await
@@ -4315,7 +4443,7 @@ impl App {
             let _ = settle_tx.send(SettleReq {
                 project: p,
                 issue: id,
-                outcome,
+                outcome: SettleOutcome::PhaseLoop(outcome),
             });
         });
         self.state.active_run = Some(ActiveRun {
@@ -4336,6 +4464,168 @@ impl App {
             pr_eligible,
         });
         Ok(())
+    }
+
+    /// V1 Issue2 Phase1: the INTERACTIVE issue-run path (one-shot TUI agent
+    /// session, no phase loop). Same 起手 prefix (`prepare_issue_run`) as the
+    /// phase-loop path, then builds a [`LaunchPlan`] (skill body from the
+    /// Skill Hub + bridge system prompt from [`PlaybookCtx`]) and either:
+    ///  - **Backgrounded** (`settle_tx` wired — desktop kernel): spawn a
+    ///    task that calls [`InteractiveExecutor::run_skill`], report back
+    ///    via `settle_tx`. The kernel's settle arm drives
+    ///    `finalize_run_interactive` + `issue_run_tail`.
+    ///  - **Inline** (`settle_tx` = None — examples / headless drivers):
+    ///    await `run_skill` inline, then `finalize_run_interactive` +
+    ///    `issue_run_tail` synchronously.
+    ///
+    /// A project with no real `workspace_path` runs on
+    /// [`MockInteractiveExecutor`] (self-labeled 【mock】 + placeholder
+    /// `.bw/metrics.toml`); a configured one runs on
+    /// [`InteractiveCliExecutor`] (spawns a system terminal running the
+    /// `claude` CLI). **one-shot ClaudeCliExecutor 路径零扰动** — other
+    /// issues still use `run_issue_backgrounded` / `run_issue_body`.
+    async fn run_issue_interactive(
+        &mut self,
+        _session: SessionId,
+        id: IssueId,
+    ) -> Result<(), AppError> {
+        let prep = self.prepare_issue_run(id).await?;
+        let p = prep.issue.project_id;
+        let issue = prep.issue.clone();
+        let standard_skill = prep.issue.standard_skill.clone();
+        let IssueRunPrep {
+            issue: _,
+            proj,
+            spec,
+            issue_ws,
+            pr_eligible,
+            guard,
+        } = prep;
+
+        // Build PlaybookCtx for the bridge system prompt (same fields as
+        // `prepare_issue_run` builds internally for the stage-playbook spec).
+        let handoff_note = self
+            .store
+            .list_handoffs(p)
+            .await?
+            .first()
+            .map(|h| h.note.clone())
+            .unwrap_or_default();
+        let workspace_hint = if proj.workspace_path.trim().is_empty() {
+            "（未配置真实工作区 —— 交互式会话在 MockInteractiveExecutor 上,产出仅为流程演示）"
+                .to_string()
+        } else {
+            format!(
+                "工作区 {}（git 仓库）。产出落于此;先查看现状再动手。",
+                proj.workspace_path.trim()
+            )
+        };
+        let playbook_ctx = bw_core::playbook::PlaybookCtx {
+            project_name: proj.name.clone(),
+            project_kind: proj.kind.clone(),
+            project_desc: proj.desc.clone(),
+            benchmark: proj.benchmark.clone(),
+            opportunity: proj.opportunity.clone(),
+            north_star: proj.north_star.clone(),
+            ns_def: proj.ns_def.clone(),
+            handoff_note,
+            workspace_hint,
+        };
+
+        // Fetch the raw skill body (full content, headings NOT demoted —
+        // it goes into the session as the first user message).
+        let skill_body = self.fetch_skill_body(&standard_skill).await?;
+        if skill_body.trim().is_empty() {
+            return Err(AppError::Invalid(format!(
+                "交互式技能 `{standard_skill}` 的正文为空 —— 无法启动交互式会话"
+            )));
+        }
+
+        // Build the bridge system prompt + launch plan.
+        let bridge_prompt = build_bridge_system_prompt(&playbook_ctx, &standard_skill);
+        let workspace_cwd = issue_ws
+            .as_deref()
+            .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
+        let plan = build_startup_plan(&CLAUDE, &skill_body, &bridge_prompt, workspace_cwd)
+            .map_err(|e| AppError::Engine(e.to_string()))?;
+
+        // Capture head_before (for potential evidence; Phase 1 doesn't
+        // record HEAD diff for interactive runs — no workflow_run row).
+        let heads_workspace = workspace_cwd.to_string_lossy().to_string();
+        let head_before = if heads_workspace.is_empty() {
+            None
+        } else {
+            evidence::head_commit(&heads_workspace).await.ok().flatten()
+        };
+
+        // Construct the executor: real spawn if workspace configured, mock
+        // if not (same honest split as the phase-loop path's engine
+        // selection).
+        let executor: Arc<dyn InteractiveExecutor> = if proj.workspace_path.trim().is_empty() {
+            Arc::new(MockInteractiveExecutor::new())
+        } else {
+            Arc::new(
+                InteractiveCliExecutor::new()
+                    .with_claude_binary(self.state.claude_config.binary.clone()),
+            )
+        };
+
+        let ctx = RunCtx {
+            project: p,
+            workflow: spec.id,
+        };
+
+        // Announce (same event as the phase-loop path — the UI shows
+        // "this run uses X/Y").
+        self.emit(Event::RunStarted {
+            workflow_name: spec.name.clone(),
+            agents: spec.agents.clone(),
+            skills: spec.skills.clone(),
+        });
+
+        if let Some(settle_tx) = self.settle_tx.clone() {
+            // ── Backgrounded (desktop kernel) ──
+            let handle = tokio::spawn(async move {
+                let result = executor
+                    .run_skill(&plan, &ctx)
+                    .await
+                    .map_err(|e| AppError::Engine(e.to_string()));
+                let _ = settle_tx.send(SettleReq {
+                    project: p,
+                    issue: id,
+                    outcome: SettleOutcome::Interactive(result),
+                });
+            });
+            self.state.active_run = Some(ActiveRun {
+                project: p,
+                issue,
+                handle,
+                guard,
+                finalize: FinalizeCtx {
+                    spec,
+                    heads_workspace,
+                    head_before,
+                    proj: proj.clone(),
+                    p,
+                    issue_id: Some(id),
+                },
+                proj,
+                issue_ws,
+                pr_eligible,
+            });
+            Ok(())
+        } else {
+            // ── Inline (examples / headless drivers) ──
+            let skill_output = executor
+                .run_skill(&plan, &ctx)
+                .await
+                .map_err(|e| AppError::Engine(e.to_string()))?;
+            let run = self
+                .finalize_run_interactive(&spec, &proj, p, Some(id), skill_output)
+                .await;
+            self.issue_run_tail(issue, proj, issue_ws, pr_eligible, run, guard)
+                .await
+        }
     }
 
     /// plan/17 S3: settle a backgrounded issue-run on the main thread. Called
@@ -4359,12 +4649,13 @@ impl App {
             self.state.active_run = Some(ar);
             return Ok(());
         }
-        // `Err` = `?`-early-bail mid-round (a store error before any settle) —
-        // skip finalize (the round's row stays started-never-settled, honest),
-        // mirror the inline path's early-return. `Ok` = normal loop terminal
-        // → finalize_run does the once-per-run accounting.
+        // V1 Issue2 Phase1: branch on `interactive` — an interactive skill
+        // session skips the phase-based `finalize_run` (no `workflow_run` row,
+        // no `LoopEnd`) and calls `finalize_run_interactive` instead (agent/
+        // skill uses + artifact scan, no HEAD diff). Both paths converge on
+        // `issue_run_tail` for the PR / transition.
         let outcome = match req.outcome {
-            Ok((end, last_run_log, final_run_ok)) => {
+            SettleOutcome::PhaseLoop(Ok((end, last_run_log, final_run_ok))) => {
                 self.finalize_run(
                     &ar.finalize.spec,
                     &ar.finalize.heads_workspace,
@@ -4378,7 +4669,18 @@ impl App {
                 )
                 .await
             }
-            Err(e) => Err(e),
+            SettleOutcome::PhaseLoop(Err(e)) => Err(e),
+            SettleOutcome::Interactive(Ok(skill_output)) => {
+                self.finalize_run_interactive(
+                    &ar.finalize.spec,
+                    &ar.finalize.proj,
+                    ar.finalize.p,
+                    ar.finalize.issue_id,
+                    skill_output,
+                )
+                .await
+            }
+            SettleOutcome::Interactive(Err(e)) => Err(e),
         };
         self.issue_run_tail(
             ar.issue,
