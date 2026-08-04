@@ -225,8 +225,12 @@ pub fn build_bridge_system_prompt(playbook_ctx: &PlaybookCtx, skill_slug: &str) 
             );
             s.push_str("- 三层结构:恰好 1 个 `[north_star]`,0..N 个 `[[lagging]]`,0..N 个 `[[leading]]`。\n");
             s.push_str(
-                "- 每条指标(含北极星)必须附 `collect`,kind 只能是 \
-                 `github`/`connector`/`bw`/`manual`/`script` 五选一。\n",
+                "- 每条指标(含北极星)必须附 `collect`。采集 kind 优先 `script`\
+                 (自动:机械解析数据源产出 JSON,`query`=字段在 JSON 里的点分路径;\
+                 buddy 自带 instance 包 codehub/github CLI,或项目侧 `derive_*.py`)\
+                 或 `manual`(人手填,戴「手填」徽)。`github`/`codehub`/`bw`/`connector`\
+                 是 legacy inline arm(格式档 `docs/metrics-toml-format.md` 仍列五值兼容),\
+                 正退休进 `script`——新写优先 `script`/`manual`,不写 legacy kind。\n",
             );
             s.push_str(
                 "- 产 `<工作区>/docs/metrics-rationale.md`(人读推导过程,四块:输入摘要/\
@@ -259,7 +263,9 @@ pub fn build_bridge_system_prompt(playbook_ctx: &PlaybookCtx, skill_slug: &str) 
             s.push_str("### 读上游\n");
             s.push_str("- 读 `.bw/metrics.toml`(已存在,是本技能的输入)。\n");
             s.push_str(
-                "- 读 `docs/metrics-toml-format.md`(五值封闭枚举、占位符语法、upsert 语义)。\n",
+                "- 读 `docs/metrics-toml-format.md`(采集 kind 以 `script`|`manual` 两 kind\
+                 为方向;`github`/`codehub`/`bw`/`connector` 是 legacy 仍列五值兼容、正退休进 `script`;\
+                 占位符语法、upsert 语义)。\n",
             );
             s.push_str("- 读 `docs/metrics-rationale.md`(找指标技能留下的推导)。\n");
             s.push_str(
@@ -470,10 +476,15 @@ impl InteractiveCliExecutor {
             ))),
             Err(_) => {
                 // Timeout — declare completed. The worktree's git state
-                // is the real evidence; the terminal may still be open.
+                // is the real evidence. On Windows/Linux the spawned child
+                // (terminal+claude) is killed here via `kill_on_drop` when
+                // `child` drops on return; on macOS `osascript` already
+                // returned immediately and the Terminal app is independent
+                // (not a child), so it stays open — only the wall-clock
+                // deadline fires.
                 Ok(SkillOutput {
                     completed: true,
-                    summary: "(wall-clock timeout — terminal may still be running)".to_string(),
+                    summary: "(wall-clock timeout)".to_string(),
                 })
             }
         }
