@@ -503,12 +503,19 @@ cargo run -p app-desktop</pre>
     <section class="screen" id="m4" data-title="技能与 Prompt" data-sec-name="维护指南">
       <div class="eyebrow">维护指南 · 机制 04</div>
       <h1 class="disp">技能与 Prompt 加载</h1>
-      <p class="lede">找指标、绑数据都加载系统预制技能（north-star-discovery / metrics-binding）。技能是 buddy 的复利资产。</p>
+      <p class="lede">找指标、绑数据都加载系统预制技能（north-star-discovery / metrics-binding）。技能是 buddy 的复利资产。<strong>V1 起 skill 方法论可换（业界 skill 也行），buddy 衔接层 system prompt 不可换——包项目上下文 + 契约 + 铁律。</strong></p>
       <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">找指标</span><span class="s">绑数据</span></div>
 
       <h2 class="sec"><span class="n">系统预制技能</span></h2>
       <div class="cc"><div class="h">三件套技能</div><div class="d"><code>north-star-discovery</code>（找指标）/ <code>metrics-binding</code>（绑数据）/ <code>competitive-analysis</code>（竞品分析，联网墙未解）。</div><div class="src">事实源：<code>docs/skills/</code></div></div>
       <div class="cc"><div class="h">五阶段方法论</div><div class="d"><code>baseline-before-touch</code> / <code>breaking-drill</code> / <code>evidence-first</code> / <code>fresh-eyes-funnel</code> / <code>spec-to-tests</code>。</div><div class="src">事实源：<code>docs/skills/</code></div></div>
+
+      <h2 class="sec"><span class="n">交互式 skill 注入（V1）</span></h2>
+      <div class="cc"><div class="h">衔接层 system prompt <span class="term">不可换</span></div><div class="d"><code>--append-system-prompt</code> 灌项目上下文（PlaybookCtx：desc/benchmark/opportunity/north_star）+ buddy 契约（写 <code>.bw/metrics.toml</code> 按 <code>script</code>|<code>manual</code> 两 kind、读 <code>governance/</code>/<code>derive_*.py</code> 优先对齐、产 <code>metrics-rationale.md</code>、绑数据建 script connector 经正规 <code>create_connector</code>）+ 铁律（Done 不自动/settle-once/signal derive-only/Unknown≠绿）。任何 skill 进来都包这层。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · build_bridge_system_prompt</code></div></div>
+      <div class="cc"><div class="h">skill 方法论 <span class="term">可换</span></div><div class="d">skill 正文经位置参数 prompt 注入（本机 <code>claude --help</code> 无 <code>--prefill</code>，用位置参数等价 auto-send；<code>--prefill</code> 字段留 forward-compat）。buddy 自带 north-star-discovery/metrics-binding，业界 skill 拿来当 prompt 注入也行——衔接层包住它，产出仍对得上契约。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · build_startup_plan</code>、<code>docs/skills/</code></div></div>
+      <div class="cc"><div class="h">声明式 CLI 表</div><div class="d"><code>TuiAgentConfig</code> 静态表，<code>claude</code> 支持 / <code>cursor</code> 占位（先不接）。加新 CLI 加一行配置，不是新 impl。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · CLAUDE/CURSOR</code></div></div>
+      <div class="cc"><div class="h">权限</div><div class="d">交互式 <code>--dangerously-skip-permissions</code>（流体操作不老问）+ <code>--disallowedTools "Bash(gh pr merge)"</code>（守"人 merge"铁律——跳权限询问 ≠ 绕 deny 名单）。后台 one-shot 休眠轨留 <code>acceptEdits</code>。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · build_startup_plan</code></div></div>
+      <div class="foot">注入/蒸馏复利链见下；CRUD 在 Hub 全局库。嵌入终端（PTY/xterm/hook→事件）Phase 2 未建，见设计 <code>docs/v1-prototype/issue2-metrics-interactive-loop.md</code>。</div>
 
       <h2 class="sec"><span class="n">注入与复利</span></h2>
       <div class="cc"><div class="h">skill 注入</div><div class="d">干活时自动把最相关技能带进队友上下文。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
@@ -521,13 +528,20 @@ cargo run -p app-desktop</pre>
     <section class="screen" id="m5" data-title="执行与证据" data-sec-name="维护指南">
       <div class="eyebrow">维护指南 · 机制 05</div>
       <h1 class="disp">执行与证据回流</h1>
-      <p class="lede">AI 真开工靠 shell-out 本机 claude CLI。核心纪律：不信执行器自报，evidence 从工作区真实状态回流。</p>
+      <p class="lede">AI 真开工靠 shell-out 本机 claude CLI。<strong>V1 起两轨：后台 one-shot（autopilot 建活）+ 交互式 claude CLI（找指标/绑数据，人 in loop 搭装置）。</strong>核心纪律：不信执行器自报，evidence 从工作区真实状态回流。</p>
       <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">找指标</span><span class="s">绑数据</span></div>
 
-      <h2 class="sec"><span class="n">执行器热插拔</span></h2>
+      <h2 class="sec"><span class="n">执行器热插拔（one-shot 后台轨）</span></h2>
       <div class="cc"><div class="h">Executor trait</div><div class="d">抽象 AI 执行，<code>MockExecutor</code> / <code>ClaudeCliExecutor</code> 热插拔。</div><div class="src">事实源：<code>bw-engine</code></div></div>
       <div class="cc"><div class="h">ClaudeCliExecutor</div><div class="d">shell-out <code>claude -p --permission-mode acceptEdits --allowedTools Bash</code>。<code>BW_CLAUDE_BIN</code> 给全路径（Windows Rust Command 不做 PATHEXT）；<code>BW_CLAUDE_MAX_BUDGET_USD</code> 单次封顶。</div><div class="src">事实源：<code>bw-engine</code></div></div>
       <div class="cc"><div class="h">MockExecutor</div><div class="d">流程演示替身，产出自我标注【mock】，绝不冒充真实。</div><div class="src">事实源：<code>bw-engine</code></div></div>
+
+      <h2 class="sec"><span class="n">交互式执行（V1 · 人 in loop 轨）</span></h2>
+      <div class="cc"><div class="h">InteractiveCliExecutor</div><div class="d">交互式 spawn <code>claude</code>（不带 <code>-p</code>），用户多轮对话，跑完<strong>只到 InReview</strong>（Done 永不自动铁律不破）。Phase 1 = 系统终端 spawn + 等进程退出（+ wall-clock 兜底）；<strong>嵌入终端（PTY + xterm + hook→事件）Phase 2 未建</strong>。零扰 one-shot <code>Executor</code> trait / <code>ClaudeCliExecutor</code> / <code>run_workflow</code>。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs</code>、<code>bw-app/src/lib.rs · run_issue_interactive</code></div></div>
+      <div class="cc"><div class="h">会话即记录 <span class="term">不额外摘要</span></div><div class="d">嵌入终端 scrollback + <code>session.jsonl</code> 本身是对话记录，buddy <strong>不解析摘要</strong>。buddy 只留文件级 evidence：HEAD 对 diff + artifact 登记 + 状态/PR#（+ 可选 usage 读回）。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · SkillOutput</code>、<code>bw-app/src/lib.rs · finalize_run_interactive</code></div></div>
+      <div class="cc"><div class="h">预算 wall-clock</div><div class="d"><code>--max-budget-usd</code> 只配 <code>--print</code>，交互式用不了；用 wall-clock 超时 + <code>jsonl</code> usage 诚实读回。对"单次花费封顶"是<strong>显式偏差</strong>（交互式 user-in-loop 花费眼看着，不像后台 runaway；orca 同款）。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · await_child</code></div></div>
+      <div class="cc"><div class="h">MockInteractiveExecutor</div><div class="d">无 claude/网关环境的交互式替身，产出自标【mock】+ 写占位 <code>.bw/metrics.toml</code>。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs</code></div></div>
+      <div class="foot">已知 gap（Phase 2 修）：交互式 run 不建 <code>workflow_run</code> 行→运行史暂不可见；macOS 完成检测只靠 timeout。真交互式 E2E（嵌入终端 + 真 claude）defer Phase 2 + 用户驱动；Phase 1 验证 = 门禁 + mock 单测 + code review。设计见 <code>docs/v1-prototype/issue2-metrics-interactive-loop.md</code>。</div>
 
       <h2 class="sec"><span class="n">证据回流</span></h2>
       <div class="cc"><div class="h">evidence.rs</div><div class="d">从工作区真实状态回流观测，<strong>不信任执行器自报</strong>。</div><div class="src">事实源：<code>bw-engine</code></div></div>
