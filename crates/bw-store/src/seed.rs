@@ -23,7 +23,7 @@ use crate::{NewAgent, NewSkill, NewWorkflowSpec, Result, Store};
 use bw_core::model::{
     stage_template_workflow, HubSource, Maturity, StageKind, BW_STANDARD_LIBRARY,
 };
-use bw_core::{AgentId, SkillId};
+use bw_core::{AgentId, ProjectId, SkillId};
 
 /// Seed the hub library's own stage-template workflows if it's currently
 /// empty. Called once at `Boot`; safe to call on every boot since it checks
@@ -118,6 +118,47 @@ pub async fn seed_stage_role_agents_if_missing(store: &dyn Store) -> Result<()> 
                 source: HubSource::SelfBuilt,
                 // 同上:五角色是全局单例,不因这次践行的项目自有切片改变。
                 project_id: None,
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+/// plan/20 W1(R1):每项目自有的五角色队友副本——与全局模板行同源自
+/// `bw_core::playbook::role_agents()` 代码正本,`project_id = 本项目`,
+/// `runs/wins` 从 0 立新账(plan/08 §1 拍板:各项目战绩各立各的账)。
+/// 按 (project, name) 幂等:Boot 对存量项目补种,重启不重复;全局五行
+/// (共享目录模板,[`seed_stage_role_agents_if_missing`])原地不动,历史
+/// 战绩不迁移、不伪造。
+pub async fn seed_project_role_agents_if_missing(
+    store: &dyn Store,
+    project: ProjectId,
+) -> Result<()> {
+    let existing: Vec<String> = store
+        .list_agents()
+        .await?
+        .into_iter()
+        .filter(|a| a.project_id == Some(project))
+        .map(|a| a.name)
+        .collect();
+    for (kind, ra) in bw_core::playbook::role_agents() {
+        if existing.iter().any(|n| n == ra.name) {
+            continue;
+        }
+        store
+            .create_agent(NewAgent {
+                id: AgentId::new(),
+                name: ra.name.to_string(),
+                role: ra.role,
+                stage_ref: Some(kind),
+                maturity: Maturity::Mature,
+                skills: ra.skills,
+                model: ra.model.to_string(),
+                instructions: ra.instructions,
+                tools: Vec::new(),
+                agent_cli: "claude-code".to_string(),
+                source: HubSource::SelfBuilt,
+                project_id: Some(project),
             })
             .await?;
     }

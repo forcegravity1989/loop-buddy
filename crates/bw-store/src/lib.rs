@@ -36,8 +36,8 @@ pub use sqlite::SqliteStore;
 
 pub mod seed;
 pub use seed::{
-    seed_bw_standard_skills_if_missing, seed_hub_if_empty, seed_stage_role_agents_if_missing,
-    CanonicalSkill,
+    seed_bw_standard_skills_if_missing, seed_hub_if_empty, seed_project_role_agents_if_missing,
+    seed_stage_role_agents_if_missing, CanonicalSkill,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -821,10 +821,11 @@ pub trait Store: Send + Sync {
     async fn list_skills(&self) -> Result<Vec<SkillCard>>;
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>>;
     async fn update_skill(&self, id: SkillId, edit: SkillEdit) -> Result<()>;
-    /// Credit one real run to every skill row named `name` (`uses += 1`).
-    /// Returns how many rows matched — `0` (an unregistered ad-hoc ref) is
-    /// honest data, not an error.
-    async fn record_skill_use_by_name(&self, name: &str) -> Result<u32>;
+    /// Credit one real run to **one** skill row (`uses += 1`). plan/20 R3:
+    /// 记账行 == 注入行——调用方先按作用域就近解析出那一行
+    /// (`bw_core::scope::scoped_pick`),再按 id 打点;此前的按名全表
+    /// UPDATE 会把跨作用域同名行齐 bump,settle-once 在作用域维度是破的。
+    async fn record_skill_use(&self, id: SkillId) -> Result<()>;
     /// Distill a new skill from a completed, assigned Issue — the "every
     /// solution compounds into a reusable skill" link. The issue must exist,
     /// be `Done`, and have a real assignee; the new skill is `SelfBuilt` /
@@ -847,7 +848,7 @@ pub trait Store: Send + Sync {
     async fn list_skill_files(&self, skill_id: SkillId) -> Result<Vec<SkillFileRow>>;
     /// T7 (plan/12 §0/§2): narrow backfill setter — classifies an *existing*
     /// row (not a content edit, so deliberately separate from `SkillEdit`,
-    /// same reasoning `record_skill_use_by_name` already established for
+    /// same reasoning `record_skill_use` already established for
     /// single-column, non-content updates). Used by
     /// `seed_bw_standard_skills_if_missing` to backfill `stage_ref` on the
     /// built-in bw-standard skills when they were seeded by an older binary,
@@ -875,10 +876,11 @@ pub trait Store: Send + Sync {
     /// T7: same backfill role as `set_skill_stage_ref`, for the five
     /// built-in stage-role agents.
     async fn set_agent_stage_ref(&self, id: AgentId, stage_ref: Option<StageKind>) -> Result<()>;
-    /// Credit one settled run to every agent row named `name`: `runs += 1`,
+    /// Credit one settled run to **one** agent row: `runs += 1`,
     /// `wins += ok as int`, `win_rate` recomputed from the real counters.
-    /// Returns how many rows matched (0 = unregistered ref, honest no-op).
-    async fn record_agent_run_by_name(&self, name: &str, ok: bool) -> Result<u32>;
+    /// plan/20 R3: by-id,同 `record_skill_use`——各项目战绩各立各的账,
+    /// 同名的五角色副本(W1)绝不互相污账。
+    async fn record_agent_run(&self, id: AgentId, ok: bool) -> Result<()>;
     /// T14: delete one agent row. No table carries a real FK onto `agent(id)`
     /// (`issue.assignee` is a plain, unconstrained id string) so this is a
     /// single-table delete; same "mechanics only, decision lives in bw-app"

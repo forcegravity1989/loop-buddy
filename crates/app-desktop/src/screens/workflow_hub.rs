@@ -126,10 +126,14 @@ pub fn WorkflowHub(
                     }
                 }
             }
+            // plan/20 R1: Hub 是全局语境,这里编出来的工作流(含临时编队)
+            // 引用池只列全局行——引用的作用域不得宽于引用者;项目自有资产
+            // 由此天然不会被别的项目的全局工作流引走(种A 行都挂 project_id,
+            // 也一并被这个口径排除)。
             if adhoc() {
                 AdHocWorkflowForm {
-                    skills: hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect(),
-                    agents: hub.agents.iter().filter(|a| !a.is_project_assets).cloned().collect(),
+                    skills: hub.skills.iter().filter(|s| s.project_id.is_none()).cloned().collect(),
+                    agents: hub.agents.iter().filter(|a| a.project_id.is_none()).cloned().collect(),
                     projects: projects.clone(),
                     on_run: move |_| {
                         adhoc.set(false);
@@ -139,8 +143,8 @@ pub fn WorkflowHub(
             }
             if creating() {
                 CreateWorkflowForm {
-                    skills: hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect(),
-                    agents: hub.agents.iter().filter(|a| !a.is_project_assets).cloned().collect(),
+                    skills: hub.skills.iter().filter(|s| s.project_id.is_none()).cloned().collect(),
+                    agents: hub.agents.iter().filter(|a| a.project_id.is_none()).cloned().collect(),
                     on_done: move |_| creating.set(false),
                 }
             }
@@ -248,8 +252,11 @@ pub fn WorkflowHub(
                                         let stage_ref = row.stage_ref;
                                         let row_name = row.name.clone();
                                         let detail = details_by_id.get(&row_id).cloned();
-                                        let skills_pool = hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect();
-                                        let agents_pool = hub.agents.iter().filter(|a| !a.is_project_assets).cloned().collect();
+                                        // plan/20 R1: 编队池随本行的作用域走——全局工作流只
+                                        // 引全局行;项目自有工作流可引本项目行 + 全局行;他
+                                        // 项目的行绝不出现(种A 照旧排除)。
+                                        let skills_pool = hub.skills.iter().filter(|s| bw_core::scope::in_scope(s.project_id, row.project_id) && !s.is_project_assets).cloned().collect();
+                                        let agents_pool = hub.agents.iter().filter(|a| bw_core::scope::in_scope(a.project_id, row.project_id) && !a.is_project_assets).cloned().collect();
                                         // 真实项目名(从 project_id 反查)——`None` = 共享/内建阶段模板。
                                         let owner_project = row
                                             .project_id

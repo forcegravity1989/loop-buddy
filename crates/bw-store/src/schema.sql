@@ -163,9 +163,12 @@ CREATE INDEX IF NOT EXISTS idx_handoff_project_ts ON handoff(project_id, created
 -- a deliberate architectural first: a hub entry is a catalog/library item that
 -- exists independent of any project. 2026-07-20 践行最小切片(plan/09 墙 B)
 -- added a nullable `project_id`: NULL keeps the original global/shared
--- semantics byte-for-byte; non-NULL marks a project-owned row. Query-side
--- scoping (指派下拉/技能注入/剧本选择只看本项目) is deliberately NOT part of
--- this slice — that's plan/08 的 P2,一次性做够,不留半破的收窄。
+-- semantics byte-for-byte; non-NULL marks a project-owned row.
+-- 2026-08-05 plan/20 落地了当年欠下的查询收窄(plan/08 P2,一次性做够):
+-- R1 选择池按作用域(他项目行绝不出现)、R2 按名解析就近优先
+-- (bw_core::scope::scoped_pick,项目行遮蔽全局行)、R3 记账 by-id
+-- (记账行==注入行)、R4 撞名同作用域内唯一(跨作用域同名=收录副本,合法)、
+-- R5 AdoptIntoProject 复制归项目。NULL 的全局/共享语义保持字节不差。
 
 CREATE TABLE IF NOT EXISTS workflow_spec (
     id             TEXT PRIMARY KEY,

@@ -66,15 +66,27 @@ async fn main() {
     println!("[run]「{}」settled Ok(真实执行:sonnet5 构建师)", wf.name);
 
     // 2) Credit the real successful work to the 构建 agent + its method skill.
-    let a = store
-        .record_agent_run_by_name("构建师", true)
-        .await
-        .unwrap();
-    let s = store
-        .record_skill_use_by_name("spec-to-tests")
-        .await
-        .unwrap();
-    println!("[account] 构建师 agent +{a} 行(runs/wins); spec-to-tests 技能 +{s}");
+    //    plan/20 R3: 记账 by-id——先按就近规则解析出该记账的那一行(项目行
+    //    优先、全局兜底、他项目行绝不),再打点,跨作用域同名绝不齐 bump。
+    let agents = store.list_agents().await.unwrap();
+    let agent_row = bw_core::scope::scoped_pick(
+        agents.iter(),
+        Some(pid),
+        |a| a.project_id,
+        |a| a.name == "构建师",
+    )
+    .expect("构建师 agent row");
+    store.record_agent_run(agent_row.id, true).await.unwrap();
+    let skills = store.list_skills().await.unwrap();
+    let skill_row = bw_core::scope::scoped_pick(
+        skills.iter(),
+        Some(pid),
+        |s| s.project_id,
+        |s| s.name == "spec-to-tests",
+    )
+    .expect("spec-to-tests skill row");
+    store.record_skill_use(skill_row.id).await.unwrap();
+    println!("[account] 构建师 agent +1 run(win); spec-to-tests 技能 +1 use");
 
     // 3) Register the REAL artifacts the build produced (commit f4f8ed3).
     //    Identity = project × path × git_commit (idempotent → 版本史).
