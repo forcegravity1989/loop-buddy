@@ -392,7 +392,15 @@ pub fn build_bridge_system_prompt(playbook_ctx: &PlaybookCtx, skill_slug: &str) 
             s.push_str("- 绝不为了点亮而改指标定义(`name`/`def`/`target` 一律不动)。\n");
             s.push_str("- 项目侧自采脚本(`derive_*.py`)是 `script` kind,不是 `manual`——别降级。\n");
             s.push_str(
-                "- 绑数据=建 script connector 时,经正规 create_connector 路径,脚本落 `.bw/scripts/`。\n",
+                "- 绑数据=搭采集装置:写采集脚本到 `.bw/scripts/`(buddy 自带 instance 包 \
+                 codehub/github CLI,或项目侧 `derive_*.py` 留原位)+ 写连接器清单 \
+                 `.bw/connectors.toml`(格式见 `docs/connectors-toml-format.md`)+ \
+                 给 metric 配 `collect_kind='script'`+`collect_query=字段路径`。\
+                 **agent 不调 buddy API**——靠文件正本 + PR 合入后 buddy 感知 sync(\
+                 `.bw/connectors.toml` → `connector` 行 upsert,`.bw/metrics.toml` → \
+                 `metric` 行 upsert;cron 到点自动跑 script connector → observation → \
+                 signal)。`script` 的 `query` 只写字段在脚本输出 JSON 里的点分路径\
+                 (如 `leading.L1`),不含脚本路径。\n",
             );
         }
         _ => {
