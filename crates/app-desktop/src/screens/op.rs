@@ -30,7 +30,7 @@ use ui::vm::{MetricVm, SessionCardVm, VersionLogVm};
 use ui::{sparkline_path, SparkPath, WowDir};
 
 /// Provider-aware web URL for a remote issue. codehub →
-/// `https://{host}/{path}/issues/{iid}`; github → the canonical `github.com`
+/// `https://{domain}/{path}/issues/{iid}`; github → the canonical `github.com`
 /// path. Empty path = no remote attached → empty string (caller renders plain
 /// text). Bug③+UI: was a hardcoded `github.com` URL even for codehub projects.
 fn remote_issue_url(provider: &str, host: &str, path: &str, n: u32) -> String {
@@ -38,7 +38,10 @@ fn remote_issue_url(provider: &str, host: &str, path: &str, n: u32) -> String {
         return String::new();
     }
     match provider.trim() {
-        "codehub" => format!("https://{host}/{path}/issues/{n}"),
+        "codehub" => format!(
+            "https://{}/{path}/issues/{n}",
+            bw_core::codehub_alias_to_domain(host)
+        ),
         _ => format!("https://github.com/{path}/issues/{n}"),
     }
 }
@@ -50,7 +53,12 @@ fn remote_mr_url(provider: &str, host: &str, path: &str, n: u32) -> String {
         return String::new();
     }
     match provider.trim() {
-        "codehub" => format!("https://{host}/{path}/-/merge_requests/{n}"),
+        "codehub" => {
+            format!(
+                "https://{}/{path}/-/merge_requests/{n}",
+                bw_core::codehub_alias_to_domain(host)
+            )
+        }
         _ => format!("https://github.com/{path}/pull/{n}"),
     }
 }

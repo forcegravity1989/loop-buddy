@@ -1,32 +1,25 @@
-//! `view=create` — the creation card-flow (体系重构 v2 · replaces the old
-//! 8-step form wizard): 意图 → 快速问题 → 起草中 → 审阅确认.
+//! `view=create` — the creation card-flow (V1 Issue 1 slimmed to 2 cards):
+//! Repo (仓从哪来) → Intent (意图 + 确认建立). The old 5-card flow
+//! (Questions/Drafting/Review) is cut — cycle/cadence use DB defaults,
+//! brief/benchmark/win are optional, and the Intent card's confirm button
+//! fires the full CreateProject → UpdateBrief → CompleteCreation sequence.
 //!
-//! Nothing here fabricates project-specific content. The "起草" step is a
-//! real workflow run through the same `Engine` op.rs uses, dispatched via
-//! `Command::RunDraftWorkflow` (plan/14 C13, D8 回锁) — that command hard-
-//! locks the run to the shared `MockExecutor` regardless of whether this
-//! project already has a real GitHub-cloned workspace, so it never spends a
-//! real `claude -p` call. Its output is a clearly-mock transcript, never
-//! injected into the editable north-star/metric fields as fact. Those
-//! fields start from the user's own words (the brief) or blank, always
-//! editable, only becoming real project state when the user hits 确认.
-//!
-//! The project row is minted at the *first* card (意图), not deferred to
-//! confirm: that gives the drafting run somewhere real to attach a session,
-//! and means an interrupted creation resumes instead of vanishing.
+//! Nothing here fabricates project-specific content. The project row is
+//! minted at Intent's confirm (fresh) or already exists (resume). The
+//! Bug-B submitting guard lives on the Intent confirm button: set true on
+//! click, released by `main.rs` on a real `UiNote::Error` (failure → retry),
+//! or naturally when the kernel flips `view` to App on success (this screen
+//! unmounts).
 
 use crate::kernel::{
-    ActionItem, CreateVm, Kernel, RunVm, ACTION_FAIL_LINGER, ACTION_OK_LINGER,
-    ACTION_PENDING_THRESHOLD,
+    ActionItem, CreateVm, Kernel, ACTION_FAIL_LINGER, ACTION_OK_LINGER, ACTION_PENDING_THRESHOLD,
 };
 use crate::theme;
 use bw_app::{CodehubOrigin, Command, GithubOrigin, Panel, Scope};
-use bw_core::model::{drafting_workflow, Cadence, MaturityPeriod, StageKind};
-use bw_core::{MetricId, ProjectId, SessionId};
-use bw_engine::GithubRepoSummary;
-use bw_store::{MetricRole, SessionKind};
+use bw_core::model::Cadence;
+use bw_core::ProjectId;
+use bw_engine::{CodehubRepoSummary, GithubRepoSummary};
 use dioxus::prelude::*;
-use ui::vm::MetricVm;
 
 /// Which card of the flow is showing. Local UI navigation only — the real
 /// draft lives in [`CreateVm`], sourced from the store.
@@ -34,13 +27,12 @@ use ui::vm::MetricVm;
 enum Card {
     Repo,
     Intent,
-    Questions,
-    Drafting,
-    Review,
 }
 
-/// The Repo 卡片's local choice — turned into a `GithubOrigin` only at
-/// `IntentCard`'s submit time, once a project name exists to slugify.
+/// The Repo 卡片's local choice — turned into a `GithubOrigin`/`CodehubOrigin`
+/// only at `IntentCard`'s confirm time. The `private`/`owner`/`repo` fields
+/// are github-specific; codehub uses its own signals (`codehub_namespace`/
+/// `codehub_name`/`codehub_visibility` for New, `codehub_path` for Existing).
 #[derive(Clone, Debug, PartialEq)]
 enum RepoChoice {
     New { private: bool },
@@ -50,9 +42,8 @@ enum RepoChoice {
 #[component]
 pub fn Create(
     vm: Option<CreateVm>,
-    run: RunVm,
-    // Bug B: the末卡 confirm button's pending guard. Set true on click in
-    // `ReviewCard`; released by `main.rs` on a real `UiNote::Error` (failure →
+    // Bug B: the Intent card's confirm-button pending guard. Set true on
+    // click; released by `main.rs` on a real `UiNote::Error` (failure →
     // retry), or naturally when the kernel flips `view` to App on success
     // (this screen unmounts). Local signal passed down, not a global busy
     // state — buddy keeps no such global.
@@ -60,35 +51,36 @@ pub fn Create(
     // plan/14 C14: raw Started/Ok/Fail facts for this flow's background
     // actions (建仓/克隆/仓列表加载/标配建单/落地推送) — rendered by
     // `ActionsBanner` below, visible across every card since the action that
-    // started it may finish several cards later (e.g. 建仓 starts on
-    // Intent, resolves while the user is already answering Questions).
+    // started it may finish after the user has already moved on.
     actions: Vec<ActionItem>,
     github_repos: Vec<GithubRepoSummary>,
+    codehub_repos: Vec<CodehubRepoSummary>,
     on_cancel: EventHandler<()>,
 ) -> Element {
     let has_project = vm.is_some();
     // Resuming an interrupted creation (OpenProject on a cold-start project)
-    // skips straight past Repo/Intent — the project row (and its repo, if
-    // any) already exists.
+    // skips straight to Intent — the project row (and its repo, if any)
+    // already exists, so only the Intent fields (editable) + confirm remain.
     let mut card = use_signal(move || {
         if has_project {
-            Card::Questions
+            Card::Intent
         } else {
             Card::Repo
         }
     });
-    let cadence = use_signal(|| Cadence::Weekly);
     let repo_choice = use_signal(|| RepoChoice::New { private: true });
-    // C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 默认 "github"(P4 后
-    // codehub 也是可点选项,默认仍 github 因更常见;codehub 用户点 CodeHub
-    // chip 切换即可,github 块的 gh 调用已改懒触发,不再因默认 github 而误触)。
-    // `RepoCard` 渲染 chip、`IntentCard` 提交时把它带进 `Command::CreateProject.provider`。
-    // 纯 UI 状态,与 `repo_choice`(起点:新建/接入)并存、互不影响。
+    // C16(plan/14 规范条 4): 仓平台选择器的选中值 —— 默认 "github";
+    // codehub 用户点 CodeHub chip 切换即可。纯 UI 状态,与 `repo_choice`
+    // (起点:新建/接入)并存、互不影响。
     let platform = use_signal(|| "github".to_string());
-    // P4:codehub 平台的仓身份(host+path)。与 platform 并存,platform=="codehub"
-    // 时才有意义,传给 RepoCard(UI 卡)+ IntentCard(send 建 CreateProject)。
-    let codehub_host = use_signal(|| "open.codehub.huawei.com".to_string());
+    // P4+V1:codehub 平台的仓身份。host = API 域名 alias(green/open/yellow,
+    // 引擎用 -H <alias> shell-out codehub-cli);path = org/repo(接入已有);
+    // namespace/name/visibility = 新建仓参数。
+    let codehub_host = use_signal(|| "open".to_string());
     let codehub_path = use_signal(String::new);
+    let codehub_namespace = use_signal(String::new);
+    let codehub_name = use_signal(String::new);
+    let codehub_visibility = use_signal(|| "private".to_string());
 
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
@@ -99,10 +91,10 @@ pub fn Create(
             div {
                 style: "display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;",
                 span { style: "font-family:{serif};font-size:17px;font-weight:600;", "新建项目" }
-                // C12(plan/14 规范条 1): 永远退得出去 —— 全卡、全状态(含起草
-                // 进行中/失败、审阅)都有这条路,不再只挂 Repo/Intent 两卡。
-                // `on_cancel` 语义见 main.rs:只清活跃项目指针,不删项目、不回
-                // 滚已落库进度——已建的项目留在墙上,重开走 cold-start 续。
+                // C12(plan/14 规范条 1): 永远退得出去 —— 全卡、全状态都有
+                // 这条路。`on_cancel` 语义见 main.rs:只清活跃项目指针,不删
+                // 项目、不回滚已落库进度——已建的项目留在墙上,重开走
+                // cold-start 续。
                 button {
                     style: "background:transparent;border:none;color:{ink2};cursor:pointer;font-size:13px;",
                     onclick: move |_| on_cancel.call(()),
@@ -112,22 +104,33 @@ pub fn Create(
             // plan/14 C14(规范条 2): 后台动作永远有状态回显 —— 建仓/克隆/仓
             // 列表加载/标配建单/落地推送不管走完哪张卡都在这里能看见。
             ActionsBanner { items: actions }
-            match (card(), vm) {
-                (Card::Repo, _) => rsx! {
-                    RepoCard { platform, choice: repo_choice, github_repos: github_repos.clone(), codehub_host, codehub_path, on_next: move |_| card.set(Card::Intent) }
+            match card() {
+                Card::Repo => rsx! {
+                    RepoCard {
+                        platform,
+                        choice: repo_choice,
+                        github_repos: github_repos.clone(),
+                        codehub_repos: codehub_repos.clone(),
+                        codehub_host,
+                        codehub_path,
+                        codehub_namespace,
+                        codehub_name,
+                        codehub_visibility,
+                        on_next: move |_| card.set(Card::Intent),
+                    }
                 },
-                (Card::Intent, _) => rsx! {
-                    IntentCard { platform, repo_choice, codehub_host, codehub_path, on_created: move |_| card.set(Card::Questions) }
-                },
-                (_, None) => rsx! { div { "…" } },
-                (Card::Questions, Some(v)) => rsx! {
-                    QuestionsCard { vm: v, cadence, on_next: move |_| card.set(Card::Drafting) }
-                },
-                (Card::Drafting, Some(_)) => rsx! {
-                    DraftingCard { run, on_next: move |_| card.set(Card::Review), on_cancel }
-                },
-                (Card::Review, Some(v)) => rsx! {
-                    ReviewCard { vm: v, cadence, submitting }
+                Card::Intent => rsx! {
+                    IntentCard {
+                        vm: vm.clone(),
+                        platform,
+                        repo_choice,
+                        codehub_host,
+                        codehub_path,
+                        codehub_namespace,
+                        codehub_name,
+                        codehub_visibility,
+                        submitting,
+                    }
                 },
             }
         }
@@ -267,45 +270,72 @@ fn RepoCard(
     platform: Signal<String>,
     choice: Signal<RepoChoice>,
     github_repos: Vec<GithubRepoSummary>,
+    codehub_repos: Vec<CodehubRepoSummary>,
     codehub_host: Signal<String>,
     codehub_path: Signal<String>,
+    codehub_namespace: Signal<String>,
+    codehub_name: Signal<String>,
+    codehub_visibility: Signal<String>,
     on_next: EventHandler<()>,
 ) -> Element {
     let k = use_context::<Kernel>();
     let card = theme::card();
     let serif = theme::SERIF;
     let ink3 = theme::INK_3;
+    let label = theme::label();
+    let input = theme::input();
     let is_new = matches!(choice(), RepoChoice::New { .. });
-    // P4:platform=="codehub" 时走 codehub_origin_card(host/path 来自父组件信号),
-    // github 平台时 is_codehub=false,走下面的 github 起点 chip + 仓选择器。
     let is_codehub = platform() == "codehub";
-    let existing_ready =
-        matches!(&choice(), RepoChoice::Existing { owner, .. } if !owner.is_empty());
-    // Q1-fix: codehub 时 path 必填,不被 is_new/existing_ready 的 || 盖过——
-    // 原写法 `is_codehub && !path.empty || is_new || existing_ready` 因 || 优先
-    // 级,codehub 下 is_new(默认新建)为真就放行空 path,用户过去后到 Intent
-    // 才被正确 gate 挡住,摸不着头脑是上一步 path 没填。gate 放源头(这里)。
+
+    // can_send gate: github = same as before (new always ok, existing needs
+    // owner); codehub new = name+namespace non-empty; codehub existing =
+    // path selected.
     let can_send = if is_codehub {
-        !codehub_path().trim().is_empty()
+        if is_new {
+            !codehub_name().trim().is_empty() && !codehub_namespace().trim().is_empty()
+        } else {
+            !codehub_path().trim().is_empty()
+        }
     } else {
+        let existing_ready =
+            matches!(&choice(), RepoChoice::Existing { owner, .. } if !owner.is_empty());
         is_new || existing_ready
     };
     let opacity = if can_send { "1" } else { ".45" };
-    // 置灰时讲清原因,别让人猜。
     let hint: &str = if can_send {
         ""
     } else if is_codehub {
-        "codehub 仓库 path 未填(输入框要填值,不是 placeholder)"
+        if is_new {
+            if codehub_name().trim().is_empty() {
+                "codehub 仓名未填"
+            } else {
+                "namespace 未填(个人或 group)"
+            }
+        } else {
+            "选一个 codehub 仓(点刷新列表加载)"
+        }
     } else {
         "选一个已有仓,或点「接入已有仓」从列表选"
     };
-    // C16(plan/14 规范条 4): 选中已有仓时,在下拉下方回显它的完整真实
-    // metadata(不只是下拉一行 owner/repo · private)。找不到(仓列表还没
-    // 加载完/选择已清空)就不渲染这块 —— 不拿假数据充数。
-    let selected_meta = if let RepoChoice::Existing { owner, repo } = &choice() {
-        github_repos
+
+    // C16: github 接入已有仓时,在下拉下方回显完整真实 metadata。
+    let selected_gh_meta = if let RepoChoice::Existing { owner, repo } = &choice() {
+        if is_codehub {
+            None
+        } else {
+            github_repos
+                .iter()
+                .find(|r| &r.owner == owner && &r.repo == repo)
+                .cloned()
+        }
+    } else {
+        None
+    };
+    // codehub 接入已有仓时,同样回显 metadata(对仗 github)。
+    let selected_ch_meta = if is_codehub && !is_new {
+        codehub_repos
             .iter()
-            .find(|r| &r.owner == owner && &r.repo == repo)
+            .find(|r| r.path == codehub_path())
             .cloned()
     } else {
         None
@@ -315,99 +345,181 @@ fn RepoCard(
         div { style: "font-family:{serif};font-size:22px;font-weight:600;margin:14px 0 4px;", "仓从哪来？" }
         p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;", "每个项目背后是一个真实的代码仓 —— 新建一个,或者接入你已有的。" }
 
-        // C16(plan/14 规范条 4): 仓平台是一个选择器 —— 今天只有 GitHub 一个
-        // 选项没关系,但它必须是「选出来的」。GitLab/Gitcode 如实灰置
-        // 「未接」,不可点、视觉明确禁用,绝不假装可用。
         {platform_selector(platform)}
 
         if is_codehub {
-            {codehub_origin_card(codehub_host, codehub_path)}
-        }
-        if !is_codehub {
-        {chip_question(
-            "起点",
-            vec![("新建仓", is_new), ("接入已有仓", !is_new)],
-            move |i| {
-                if i == 0 {
-                    choice.set(RepoChoice::New { private: true });
-                } else {
-                    // Q2-fix: 不在 chip 点击急触发 gh repo list——原写法让 codehub
-                    // 用户停在 github 默认时一点「接入已有仓」就 fire gh,gh 没装
-                    // 就报错(codehub 流本不该碰 github)。改懒触发:只在下面
-                    // 「↻ 刷新列表」按钮才拉,codehub 用户根本不碰 github 这块。
-                    choice.set(RepoChoice::Existing {
-                        owner: String::new(),
-                        repo: String::new(),
-                    });
-                }
-            },
-        )}
+            // codehub host 选择器:绿区 green / 内源 open(默认) / 黄区 yellow
+            {codehub_host_selector(codehub_host, codehub_path)}
 
-        div {
-            style: "{card} padding:18px 20px;margin-top:8px;",
-            if is_new {
-                {
-                    let private = matches!(choice(), RepoChoice::New { private: true });
-                    rsx! {
-                        {chip_question(
-                            "可见性",
-                            vec![("Private", private), ("Public", !private)],
-                            move |i| choice.set(RepoChoice::New { private: i == 0 }),
-                        )}
+            // 起点 chip:两边都有(新建/接入)
+            {chip_question(
+                "起点",
+                vec![("新建仓", is_new), ("接入已有仓", !is_new)],
+                move |i| {
+                    if i == 0 {
+                        choice.set(RepoChoice::New { private: true });
+                    } else {
+                        choice.set(RepoChoice::Existing {
+                            owner: String::new(),
+                            repo: String::new(),
+                        });
                     }
-                }
-            } else {
-                div {
-                    style: "display:flex;align-items:center;justify-content:space-between;gap:8px;",
-                    label { style: "{theme::label()}", "选一个仓" }
-                    button {
-                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:6px;padding:3px 10px;font-size:11px;",
-                        onclick: move |_| k.send(Command::ListGithubRepos),
-                        "↻ 刷新列表"
+                },
+            )}
+
+            div {
+                style: "{card} padding:18px 20px;margin-top:8px;",
+                if is_new {
+                    // codehub 新建仓:host(上方选)+ namespace + name + 可见性
+                    label { style: "{label}", "namespace(个人或 group)" }
+                    input {
+                        style: "{input}",
+                        placeholder: "z30026659",
+                        value: "{codehub_namespace}",
+                        oninput: move |e| codehub_namespace.set(e.value()),
                     }
-                }
-                select {
-                    style: "{theme::input()} margin-top:6px;",
-                    value: {
-                        if let RepoChoice::Existing { owner, repo } = &choice() {
-                            format!("{owner}/{repo}")
-                        } else {
-                            String::new()
+                    p { style: "font-size:11px;color:{ink3};margin:4px 0 12px;line-height:1.6;", "group namespace 选择 V1 不做(留口);个人 namespace 填你的工号或账号。" }
+                    label { style: "{label};margin-top:4px;", "仓库名" }
+                    input {
+                        style: "{input};margin-top:6px;",
+                        placeholder: "my-service",
+                        value: "{codehub_name}",
+                        oninput: move |e| codehub_name.set(e.value()),
+                    }
+                    {
+                        let vis_private = codehub_visibility() == "private";
+                        rsx! {
+                            {chip_question(
+                                "可见性",
+                                vec![("Private", vis_private), ("Public", !vis_private)],
+                                move |i| codehub_visibility.set(if i == 0 { "private".to_string() } else { "public".to_string() }),
+                            )}
                         }
-                    },
-                    onchange: move |e| {
-                        if let Some((owner, repo)) = e.value().split_once('/') {
-                            choice.set(RepoChoice::Existing {
-                                owner: owner.to_string(),
-                                repo: repo.to_string(),
-                            });
+                    }
+                } else {
+                    // codehub 接入已有:host(上方选)+ 下拉(codehub_repos)
+                    div {
+                        style: "display:flex;align-items:center;justify-content:space-between;gap:8px;",
+                        label { style: "{label}", "选一个仓" }
+                        button {
+                            style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:6px;padding:3px 10px;font-size:11px;",
+                            onclick: move |_| k.send(Command::ListCodehubRepos { host: codehub_host() }),
+                            "↻ 刷新列表"
                         }
-                    },
-                    option { value: "", "请选择…" }
-                    for r in github_repos.iter() {
-                        {
-                            let value = format!("{}/{}", r.owner, r.repo);
-                            let vis = if r.private { "private" } else { "public" };
-                            let branch = if r.default_branch.trim().is_empty() {
-                                "?".to_string()
-                            } else {
-                                r.default_branch.clone()
-                            };
-                            rsx! {
-                                option { key: "{value}", value: "{value}", "{value} · {vis} · {branch}" }
+                    }
+                    select {
+                        style: "{input} margin-top:6px;",
+                        value: "{codehub_path()}",
+                        onchange: move |e| codehub_path.set(e.value()),
+                        option { value: "", "请选择…" }
+                        for r in codehub_repos.iter() {
+                            {
+                                let value = r.path.clone();
+                                let vis = r.visibility.clone();
+                                let branch = if r.default_branch.trim().is_empty() {
+                                    "?".to_string()
+                                } else {
+                                    r.default_branch.clone()
+                                };
+                                rsx! {
+                                    option { key: "{value}", value: "{value}", "{value} · {vis} · {branch}" }
+                                }
                             }
                         }
                     }
+                    if codehub_repos.is_empty() {
+                        p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 点「↻ 刷新列表」加载(需本机 codehub-cli 已登录:codehub-cli -H {codehub_host()} auth status)。" }
+                    } else {
+                        p { style: "font-size:11px;color:{ink3};margin-top:8px;", "仓不在列表=需先成为 member,不留手填 fallback(如实约束)。" }
+                    }
+                    if let Some(meta) = selected_ch_meta {
+                        {codehub_repo_metadata_block(&meta)}
+                    }
                 }
-                if github_repos.is_empty() {
-                    p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 点「↻ 刷新列表」加载(需本机 gh 已登录:gh auth status)。" }
-                }
-                if let Some(meta) = selected_meta {
-                    {repo_metadata_block(&meta)}
+            }
+        } else {
+            // github:现状留(新建 slug+可见性 / 接入 gh repo list 下拉)
+            {chip_question(
+                "起点",
+                vec![("新建仓", is_new), ("接入已有仓", !is_new)],
+                move |i| {
+                    if i == 0 {
+                        choice.set(RepoChoice::New { private: true });
+                    } else {
+                        choice.set(RepoChoice::Existing {
+                            owner: String::new(),
+                            repo: String::new(),
+                        });
+                    }
+                },
+            )}
+
+            div {
+                style: "{card} padding:18px 20px;margin-top:8px;",
+                if is_new {
+                    {
+                        let private = matches!(choice(), RepoChoice::New { private: true });
+                        rsx! {
+                            {chip_question(
+                                "可见性",
+                                vec![("Private", private), ("Public", !private)],
+                                move |i| choice.set(RepoChoice::New { private: i == 0 }),
+                            )}
+                        }
+                    }
+                } else {
+                    div {
+                        style: "display:flex;align-items:center;justify-content:space-between;gap:8px;",
+                        label { style: "{label}", "选一个仓" }
+                        button {
+                            style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:6px;padding:3px 10px;font-size:11px;",
+                            onclick: move |_| k.send(Command::ListGithubRepos),
+                            "↻ 刷新列表"
+                        }
+                    }
+                    select {
+                        style: "{input} margin-top:6px;",
+                        value: {
+                            if let RepoChoice::Existing { owner, repo } = &choice() {
+                                format!("{owner}/{repo}")
+                            } else {
+                                String::new()
+                            }
+                        },
+                        onchange: move |e| {
+                            if let Some((owner, repo)) = e.value().split_once('/') {
+                                choice.set(RepoChoice::Existing {
+                                    owner: owner.to_string(),
+                                    repo: repo.to_string(),
+                                });
+                            }
+                        },
+                        option { value: "", "请选择…" }
+                        for r in github_repos.iter() {
+                            {
+                                let value = format!("{}/{}", r.owner, r.repo);
+                                let vis = if r.private { "private" } else { "public" };
+                                let branch = if r.default_branch.trim().is_empty() {
+                                    "?".to_string()
+                                } else {
+                                    r.default_branch.clone()
+                                };
+                                rsx! {
+                                    option { key: "{value}", value: "{value}", "{value} · {vis} · {branch}" }
+                                }
+                            }
+                        }
+                    }
+                    if github_repos.is_empty() {
+                        p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 点「↻ 刷新列表」加载(需本机 gh 已登录:gh auth status)。" }
+                    }
+                    if let Some(meta) = selected_gh_meta {
+                        {repo_metadata_block(&meta)}
+                    }
                 }
             }
         }
-        }
+
         div {
             style: "display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:14px;",
             if !can_send {
@@ -423,10 +535,10 @@ fn RepoCard(
     }
 }
 
-/// C16(plan/14 规范条 4): 仓平台选择器 —— GitHub / CodeHub 都可点
-/// (github 默认选中,codehub 后加);GitLab/Gitcode 如实灰置「未接」(虚线
-/// 边框、无 onclick、不可点),绝不假装可用。纯 UI 状态(`platform` 信号),
-/// 与「起点」chip 并存、互不影响。
+/// C16(plan/14 规范条 4): 仓平台选择器 —— GitHub / CodeHub 两个可点选项
+/// (github 默认选中)。V1 Issue 1:去 GitLab/Gitcode 占位(如实,不假装
+/// 「未接」;真接时再加)。纯 UI 状态(`platform` 信号),与「起点」chip
+/// 并存、互不影响。
 fn platform_selector(mut platform: Signal<String>) -> Element {
     let ink2 = theme::INK_2;
     let gh = platform() == "github";
@@ -456,47 +568,55 @@ fn platform_selector(mut platform: Signal<String>) -> Element {
                     style: "cursor:pointer;border:{cbd};background:{cbg};color:{cfg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
                     "CodeHub"
                 }
-                for name in ["GitLab", "Gitcode"] {
-                    div {
-                        key: "{name}",
-                        title: "未接 —— 需要 token 管理/API 适配,留白如实,不假装可用(plan/14 留白台账)",
-                        style: "cursor:not-allowed;border:1px dashed #DDD5C5;background:transparent;color:#B5AD9C;border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
-                        "{name} · 未接"
-                    }
-                }
             }
         }
     }
 }
 
-/// P4(2026-07-28):codehub 平台的仓身份输入 —— host(API 域名,绿/黄/内源)
-/// + path(org/repo)。token 走本机 `codehub-cli` keyring,UI 不收凭据。
-/// maas 这类已有 codehub 仓走这条(对标 github 的"接入已有仓"下拉,但
-/// codehub 没 list_repos,直接填 host+path)。
-fn codehub_origin_card(mut host: Signal<String>, mut path: Signal<String>) -> Element {
-    let label = theme::label();
-    let input = theme::input();
-    let card = theme::card();
+/// V1 Issue 1:codehub host 选择器 —— 三域名 alias(green/open/yellow),
+/// 引擎用 `-H <alias>` shell-out codehub-cli。green/open 默认可直用;
+/// yellow 需先 `codehub-cli -H yellow auth login`(tooltip 如实标)。
+/// 切换 host 时清空 path(旧 host 的仓列表不再适用)。
+fn codehub_host_selector(mut host: Signal<String>, mut path: Signal<String>) -> Element {
+    let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
+    let chip = |sel: bool| -> (&'static str, &'static str, &'static str) {
+        if sel {
+            ("1.5px solid #C5654A", "#C5654A", "#fff")
+        } else {
+            ("1px solid #DDD5C5", "transparent", "#57534A")
+        }
+    };
+    let green = host() == "green";
+    let open = host() == "open";
+    let yellow = host() == "yellow";
+    let (grbd, grbg, grfg) = chip(green);
+    let (obd, obg, ofg) = chip(open);
+    let (ybd, ybg, yfg) = chip(yellow);
     rsx! {
         div {
-            style: "{card} padding:18px 20px;margin-top:8px;",
-            label { style: "{label}", "CodeHub 仓" }
-            p { style: "font-size:11.5px;color:{ink3};margin:4px 0 12px;line-height:1.6;", "填 host(API 域名)+ path(org/repo)。token 走本机 codehub-cli keyring,这里不收凭据。" }
-            label { style: "{label}", "host" }
-            input {
-                style: "{input}",
-                placeholder: "open.codehub.huawei.com",
-                value: "{host}",
-                oninput: move |e| host.set(e.value()),
+            style: "margin-bottom:6px;",
+            div { style: "font-size:12.5px;font-weight:600;color:{ink2};margin-bottom:8px;", "CodeHub 域" }
+            div {
+                style: "display:flex;gap:6px;flex-wrap:wrap;",
+                div {
+                    onclick: move |_| { host.set("green".to_string()); path.set(String::new()); },
+                    style: "cursor:pointer;border:{grbd};background:{grbg};color:{grfg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                    "绿区 green"
+                }
+                div {
+                    onclick: move |_| { host.set("open".to_string()); path.set(String::new()); },
+                    style: "cursor:pointer;border:{obd};background:{obg};color:{ofg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                    "内源 open"
+                }
+                div {
+                    title: "需先 `codehub-cli -H yellow auth login`",
+                    onclick: move |_| { host.set("yellow".to_string()); path.set(String::new()); },
+                    style: "cursor:pointer;border:{ybd};background:{ybg};color:{yfg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
+                    "黄区 yellow"
+                }
             }
-            label { style: "{label};margin-top:10px;", "path" }
-            input {
-                style: "{input};margin-top:6px;",
-                placeholder: "innersource/AI-Coding_G/maas",
-                value: "{path}",
-                oninput: move |e| path.set(e.value()),
-            }
+            p { style: "font-size:11px;color:{ink3};margin-top:6px;", "green/open 已登录可直用;yellow 需先在本机 `codehub-cli -H yellow auth login`。" }
         }
     }
 }
@@ -536,6 +656,40 @@ fn repo_metadata_block(meta: &GithubRepoSummary) -> Element {
     }
 }
 
+/// V1 Issue 1:codehub 接入已有仓时的 metadata 回显 —— 对仗 github 的
+/// `repo_metadata_block`,但 `CodehubRepoSummary.visibility` 是字符串
+/// (private/public/internal),不是 bool。
+fn codehub_repo_metadata_block(meta: &CodehubRepoSummary) -> Element {
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+    let desc = if meta.description.trim().is_empty() {
+        "(无描述)".to_string()
+    } else {
+        meta.description.clone()
+    };
+    let branch = if meta.default_branch.trim().is_empty() {
+        "(未知)".to_string()
+    } else {
+        meta.default_branch.clone()
+    };
+    let pushed = if meta.pushed_at.trim().is_empty() {
+        "(未知)".to_string()
+    } else {
+        meta.pushed_at.clone()
+    };
+    rsx! {
+        div {
+            style: "margin-top:10px;padding:11px 13px;background:#F7F3EA;border:1px solid #E5DDCB;border-radius:8px;",
+            div { style: "font-family:{mono};font-size:12px;font-weight:600;color:#3A3833;margin-bottom:6px;", "{meta.path}" }
+            div { style: "font-size:11.5px;color:{ink3};line-height:1.9;",
+                div { "描述:{desc}" }
+                div { "可见性:{meta.visibility} · 默认分支:{branch}" }
+                div { "最近推送:{pushed}" }
+            }
+        }
+    }
+}
+
 // ───────────────────────── 1 · 意图 ─────────────────────────
 
 const KINDS: [&str; 5] = [
@@ -569,16 +723,37 @@ fn slugify(name: &str) -> String {
 
 #[component]
 fn IntentCard(
+    // V1 Issue 1: resuming reads vm.name/brief/benchmark/win for initial
+    // values; fresh (vm=None) starts all fields blank.
+    vm: Option<CreateVm>,
     platform: Signal<String>,
     repo_choice: Signal<RepoChoice>,
     codehub_host: Signal<String>,
     codehub_path: Signal<String>,
-    on_created: EventHandler<()>,
+    codehub_namespace: Signal<String>,
+    codehub_name: Signal<String>,
+    codehub_visibility: Signal<String>,
+    submitting: Signal<bool>,
 ) -> Element {
     let k = use_context::<Kernel>();
-    let mut name = use_signal(String::new);
-    let mut kind = use_signal(|| KINDS[0].to_string());
-    let mut brief = use_signal(String::new);
+
+    // Extract initial values before hooks (can't move Option<CreateVm> into
+    // multiple use_signal closures).
+    let v = vm.as_ref();
+    let init_name = v.map(|v| v.name.clone()).unwrap_or_default();
+    let init_kind = v
+        .map(|v| v.kind.clone())
+        .unwrap_or_else(|| KINDS[0].to_string());
+    let init_brief = v.map(|v| v.brief.clone()).unwrap_or_default();
+    let init_benchmark = v.map(|v| v.benchmark.clone()).unwrap_or_default();
+    let init_win = v.map(|v| v.win.clone()).unwrap_or_default();
+    let is_resuming = vm.is_some();
+
+    let mut name = use_signal(move || init_name);
+    let mut kind = use_signal(move || init_kind);
+    let mut brief = use_signal(move || init_brief);
+    let mut benchmark = use_signal(move || init_benchmark);
+    let mut win = use_signal(move || init_win);
     let mut slug = use_signal(String::new);
     let mut slug_touched = use_signal(|| false);
 
@@ -587,60 +762,107 @@ fn IntentCard(
     let ink3 = theme::INK_3;
     let input = theme::input();
     let label = theme::label();
-    // P4-fix:codehub 平台额外要求 path 非空(placeholder 不是值,空 path
-    // 不能提交——否则 clone 一个空 repo 失败 + remote 空 + trio 不建)。
-    let can_send = !name().trim().is_empty()
-        && !brief().trim().is_empty()
-        && (platform() != "codehub" || !codehub_path().trim().is_empty());
-    let opacity = if can_send { "1" } else { ".45" };
+    let is_codehub = platform() == "codehub";
     let is_new_repo = matches!(repo_choice(), RepoChoice::New { .. });
 
+    // can_send: name 非空(+ codehub 必要字段)。brief 改不强制。
+    let codehub_ok = if is_codehub {
+        if is_new_repo {
+            !codehub_name().trim().is_empty() && !codehub_namespace().trim().is_empty()
+        } else {
+            !codehub_path().trim().is_empty()
+        }
+    } else {
+        true
+    };
+    let can_send = !name().trim().is_empty() && codehub_ok;
+
+    // Bug B: pending guard — 防连点(后台建项目非幂等)。点即置 true;
+    // 成功由 kernel 翻 view→App 卸载本屏;失败由 main.rs 收
+    // UiNote::Error 复位,可重试。
+    let pending = submitting();
+    let (btn_label, btn_bg, btn_shadow, btn_cursor) = if pending {
+        ("建立中…", "#B89A8E", "none", "not-allowed")
+    } else {
+        (
+            "确认 · 建立项目",
+            "#C5654A",
+            "0 3px 10px rgba(197,101,74,.25)",
+            "pointer",
+        )
+    };
+    let opacity = if can_send { "1" } else { ".45" };
+
     let send = move |_| {
-        if !can_send {
+        if !can_send || submitting() {
             return;
         }
-        let (github, codehub) = if platform() == "codehub" {
-            (
-                None,
-                Some(CodehubOrigin {
-                    host: codehub_host().trim().to_string(),
-                    path: codehub_path().trim().to_string(),
-                }),
-            )
-        } else {
-            (
-                match repo_choice() {
-                    RepoChoice::New { private } => Some(GithubOrigin::New {
-                        slug: if slug().trim().is_empty() {
-                            slugify(&name())
-                        } else {
-                            slug().trim().to_string()
-                        },
-                        private,
-                    }),
-                    RepoChoice::Existing { owner, repo } => {
-                        Some(GithubOrigin::Existing { owner, repo })
+        submitting.set(true);
+
+        // Fresh: mint project row + repo. Resume: project already exists,
+        // skip CreateProject (would create a duplicate row with a new ID).
+        if !is_resuming {
+            let (github, codehub) = if is_codehub {
+                let origin = if is_new_repo {
+                    CodehubOrigin::New {
+                        host: codehub_host().trim().to_string(),
+                        namespace: codehub_namespace().trim().to_string(),
+                        name: codehub_name().trim().to_string(),
+                        visibility: codehub_visibility().trim().to_string(),
                     }
-                },
-                None,
-            )
-        };
-        k.send(Command::CreateProject {
-            provider: platform(),
-            id: ProjectId::new(),
-            name: name().trim().to_string(),
-            kind: kind(),
-            desc: brief().trim().to_string(),
-            workspace: None,
-            github,
-            codehub,
+                } else {
+                    CodehubOrigin::Existing {
+                        host: codehub_host().trim().to_string(),
+                        path: codehub_path().trim().to_string(),
+                    }
+                };
+                (None, Some(origin))
+            } else {
+                (
+                    match repo_choice() {
+                        RepoChoice::New { private } => Some(GithubOrigin::New {
+                            slug: if slug().trim().is_empty() {
+                                slugify(&name())
+                            } else {
+                                slug().trim().to_string()
+                            },
+                            private,
+                        }),
+                        RepoChoice::Existing { owner, repo } => {
+                            Some(GithubOrigin::Existing { owner, repo })
+                        }
+                    },
+                    None,
+                )
+            };
+            k.send(Command::CreateProject {
+                provider: platform(),
+                id: ProjectId::new(),
+                name: name().trim().to_string(),
+                kind: kind(),
+                desc: brief().trim().to_string(),
+                workspace: None,
+                github,
+                codehub,
+            });
+        }
+
+        // Both fresh and resume: 对标+成功标准落库 + stage+三件套+push+probe
+        k.send(Command::UpdateBrief {
+            benchmark: benchmark().trim().to_string(),
+            opportunity: win().trim().to_string(),
         });
-        on_created.call(());
+        k.send(Command::CompleteCreation {
+            cadence: Cadence::Weekly,
+            run_first: false,
+        });
+        k.send(Command::SetPanel(Panel::Progress));
+        k.send(Command::SetScope(Scope::All));
     };
 
     rsx! {
         div { style: "font-family:{serif};font-size:22px;font-weight:600;margin:14px 0 4px;", "你想做什么？" }
-        p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;", "一个名字、一句你想做的事。剩下的问题会帮你补全 —— 答不上的交给系统兜底,不编造具体数字。" }
+        p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;", "一个名字、一句你想做的事。对标和成功标准不强制,留空系统照常兜底。" }
         div {
             style: "{card} padding:18px 20px;",
             div {
@@ -671,14 +893,37 @@ fn IntentCard(
                     }
                 }
             }
-            label { style: "{label}", "你想做什么 *" }
+            label { style: "{label}", "你想做什么" }
             textarea {
-                style: "{input} min-height:90px;",
-                placeholder: "一句话即可,多写几句问题会更少。例:把 agent 会话里长出的工作流沉淀成可复用资产,导入即跑。",
+                style: "{input} min-height:70px;",
+                placeholder: "一句话即可,不强制。例:把 agent 会话里长出的工作流沉淀成可复用资产,导入即跑。",
                 value: "{brief}",
                 oninput: move |e| brief.set(e.value()),
             }
-            if is_new_repo {
+            div {
+                style: "display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;",
+                div {
+                    label { style: "{label}", "最像的对标(不强制)" }
+                    textarea {
+                        style: "{input} min-height:52px;",
+                        placeholder: "例:\nLinear\nHeight",
+                        value: "{benchmark}",
+                        oninput: move |e| benchmark.set(e.value()),
+                    }
+                }
+                div {
+                    label { style: "{label}", "三个月后怎样算成了(不强制)" }
+                    textarea {
+                        style: "{input} min-height:52px;",
+                        placeholder: "例:被持续复用、效率可量化提升……",
+                        value: "{win}",
+                        oninput: move |e| win.set(e.value()),
+                    }
+                }
+            }
+            // github 新建仓:slug 预览(Intent 可改);codehub 不走这条
+            // (codehub 新建的 namespace/name 在 RepoCard 填)。
+            if is_new_repo && !is_codehub {
                 div {
                     style: "margin-top:10px;",
                     label { style: "{label}", "GitHub 仓名(可改)" }
@@ -692,144 +937,26 @@ fn IntentCard(
                         },
                     }
                 }
-            } else if let RepoChoice::Existing { owner, repo } = repo_choice() {
-                p { style: "font-size:11.5px;color:{ink3};margin-top:10px;", "将接入 {owner}/{repo} ↗" }
+            } else if !is_codehub {
+                if let RepoChoice::Existing { owner, repo } = repo_choice() {
+                    p { style: "font-size:11.5px;color:{ink3};margin-top:10px;", "将接入 {owner}/{repo} ↗" }
+                }
             }
             div {
                 style: "display:flex;justify-content:flex-end;margin-top:14px;",
                 button {
-                    style: "{theme::btn_primary()} opacity:{opacity};",
-                    disabled: !can_send,
+                    disabled: pending,
+                    style: "cursor:{btn_cursor};background:{btn_bg};color:#fff;border:none;border-radius:8px;padding:10px 22px;font:600 13px/1 inherit;box-shadow:{btn_shadow};opacity:{opacity};",
                     onclick: send,
-                    "开始 ↑"
+                    "{btn_label}"
                 }
             }
         }
-        p { style: "font-size:11.5px;color:{ink3};margin:10px 2px 0;", "提交后即建立项目;之后的问答与起草随时可编辑,确认后才正式生效。" }
+        p { style: "font-size:11.5px;color:{ink3};margin:10px 2px 0;", "提交后系统自动建仓 + connector + cron + 标配三件套;进度见上方条,完成自动进项目墙。" }
     }
 }
 
-/// Kicks off the drafting run — shared by `QuestionsCard`'s initial submit
-/// and `DraftingCard`'s「重试起草」on a failed run (C12, plan/14). Always a
-/// fresh `SessionId` + `StartSession`: `RunDraftWorkflow` (plan/14 C13, D8
-/// 回锁) hard-locks to the shared MockExecutor regardless of session
-/// identity, so a retry doesn't need the failed attempt's session — a new
-/// one keeps each attempt's record honest (a retry is a new real session,
-/// not a fabricated continuation of the one that failed).
-fn dispatch_draft_run(k: &Kernel) {
-    let session = SessionId::new();
-    k.send(Command::StartSession {
-        id: session,
-        stage_kind: Some(StageKind::Prototype),
-        kind: SessionKind::Create,
-        title: "创建 · 体系起草".into(),
-    });
-    k.send(Command::RunDraftWorkflow {
-        session,
-        spec: drafting_workflow(),
-    });
-}
-
-// ───────────────────────── 2 · 快速问题 ─────────────────────────
-
-#[component]
-fn QuestionsCard(vm: CreateVm, cadence: Signal<Cadence>, on_next: EventHandler<()>) -> Element {
-    let k = use_context::<Kernel>();
-    let mut cycle = use_signal(|| vm.cycle);
-    let mut bench = use_signal(|| vm.benchmark.clone());
-    let mut win = use_signal(|| vm.win.clone());
-    let mut cad = use_signal(|| cadence.peek().clone());
-
-    let card = theme::card();
-    let serif = theme::SERIF;
-    let ink3 = theme::INK_3;
-    let input = theme::input();
-    let label = theme::label();
-    let clay = theme::CLAY;
-
-    let submit = move |_| {
-        k.send(Command::SetCycle { cycle: cycle() });
-        k.send(Command::UpdateBrief {
-            benchmark: bench().trim().to_string(),
-            opportunity: win().trim().to_string(),
-        });
-        cadence.set(cad());
-
-        // Kick off the drafting run — same Engine/progress-event path as any
-        // operating-view run, but `RunDraftWorkflow` (plan/14 C13, D8 回锁)
-        // hard-locks it to the shared MockExecutor regardless of whether
-        // this project already has a real GitHub-cloned workspace. Its
-        // transcript is honestly mock; nothing from it is copied into the
-        // editable review fields. Real system-drafting work (竞品分析/找
-        // 指标/绑数据) happens later, through the standard-Issue trio.
-        dispatch_draft_run(&k);
-        on_next.call(());
-    };
-
-    rsx! {
-        div { style: "font-family:{serif};font-size:18px;font-weight:600;margin:10px 0 14px;", "关于「{vm.name}」的几个问题" }
-
-        {chip_question(
-            "项目处在什么周期？",
-            [MaturityPeriod::Explore, MaturityPeriod::Expand, MaturityPeriod::Mature]
-                .map(|c| (c.label(), c == cycle()))
-                .to_vec(),
-            move |i| cycle.set([MaturityPeriod::Explore, MaturityPeriod::Expand, MaturityPeriod::Mature][i]),
-        )}
-        p { style: "font-size:11px;color:{ink3};margin:-6px 0 14px;", "{cycle().sub_label()} —— 决定五段的初始精力配比。" }
-
-        {chip_question(
-            "多久做一次体检复盘？",
-            [Cadence::Weekly, Cadence::Daily, Cadence::RealTime]
-                .iter()
-                .map(|c| (cadence_chip_label(c), cadence_eq(&cad(), c)))
-                .collect(),
-            move |i| cad.set([Cadence::Weekly, Cadence::Daily, Cadence::RealTime][i].clone()),
-        )}
-
-        div {
-            style: "{card} padding:16px 18px;margin-bottom:2px;",
-            label { style: "{label}", "最像的对标(每行一个,不确定可留空)" }
-            textarea {
-                style: "{input} min-height:64px;",
-                placeholder: "例:\nLinear\nHeight",
-                value: "{bench}",
-                oninput: move |e| bench.set(e.value()),
-            }
-        }
-        div {
-            style: "{card} padding:16px 18px;margin-bottom:16px;",
-            label { style: "{label}", "三个月后,怎样算成了？" }
-            textarea {
-                style: "{input} min-height:64px;",
-                placeholder: "例:被持续复用、效率可量化提升……",
-                value: "{win}",
-                oninput: move |e| win.set(e.value()),
-            }
-        }
-
-        div {
-            style: "display:flex;justify-content:flex-end;",
-            button {
-                style: "cursor:pointer;background:{clay};color:#fff;border:none;border-radius:8px;padding:10px 20px;font:600 13px/1 inherit;",
-                onclick: submit,
-                "继续 · 开始起草 →"
-            }
-        }
-    }
-}
-
-fn cadence_chip_label(c: &Cadence) -> &'static str {
-    match c {
-        Cadence::Weekly => "每周",
-        Cadence::Daily => "每日",
-        Cadence::RealTime => "实时",
-        Cadence::Cron(_) => "自定义",
-    }
-}
-fn cadence_eq(a: &Cadence, b: &Cadence) -> bool {
-    std::mem::discriminant(a) == std::mem::discriminant(b)
-}
+// ───────────────────────── helpers ─────────────────────────
 
 /// A row of selectable chips for one question. `options` = (label, selected).
 fn chip_question(
@@ -862,509 +989,6 @@ fn chip_question(
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-// ───────────────────────── 3 · 起草中 ─────────────────────────
-
-/// plan/14 C14: a phase chip's real start/end `Instant`s, component-local to
-/// `DraftingCard` — `RunVm.phases` (shared with the Op screen's run banner)
-/// only carries `(name, done)`, so this latches timing alongside it without
-/// changing that shared shape.
-#[derive(Clone, Copy)]
-struct PhaseTiming {
-    started: std::time::Instant,
-    ended: Option<std::time::Instant>,
-}
-
-#[component]
-fn DraftingCard(run: RunVm, on_next: EventHandler<()>, on_cancel: EventHandler<()>) -> Element {
-    let k = use_context::<Kernel>();
-    let card = theme::card();
-    let ink2 = theme::INK_2;
-    let ink3 = theme::INK_3;
-    let clay = theme::CLAY;
-    let done = !run.running && run.failed.is_none() && !run.phases.is_empty();
-    let failed = run.failed.is_some();
-
-    // plan/14 C14(规范条 2): "补相位耗时显示即可,不重做" — the phase chips
-    // themselves (below) are untouched; this only latches a real start
-    // `Instant` per phase index (from `run.phases` growing, the same signal
-    // the chips already render off) so each chip can show how long it's
-    // actually been running/took. `run.phases` resets to a shorter/empty
-    // list on a retry (`RunVm::apply`'s `RunStarted` clears it) — caught
-    // below so a fresh attempt never inherits a stale `Instant`.
-    let mut phase_times = use_signal(Vec::<PhaseTiming>::new);
-    if run.phases.len() < phase_times.peek().len() {
-        phase_times.set(Vec::new());
-    }
-    if run.phases.len() > phase_times.peek().len() {
-        phase_times.with_mut(|pt| {
-            while pt.len() < run.phases.len() {
-                pt.push(PhaseTiming {
-                    started: std::time::Instant::now(),
-                    ended: None,
-                });
-            }
-        });
-    }
-    for (i, (_, ok)) in run.phases.iter().enumerate() {
-        if *ok && phase_times.peek().get(i).is_some_and(|t| t.ended.is_none()) {
-            phase_times.with_mut(|pt| {
-                if let Some(t) = pt.get_mut(i) {
-                    t.ended = Some(std::time::Instant::now());
-                }
-            });
-        }
-    }
-    // Self-ticking so a still-running phase's "已 Ns" visibly counts up
-    // between `WorkflowProgress` events, same rationale as
-    // `ActionsBanner` above. Bounded to this card's lifetime.
-    use_future(move || async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            phase_times.with_mut(|_| {});
-        }
-    });
-
-    rsx! {
-        div {
-            style: "{card} padding:20px 22px;display:flex;flex-direction:column;gap:14px;",
-            div {
-                style: "display:flex;align-items:center;gap:10px;",
-                if run.running {
-                    span { style: "width:7px;height:7px;border-radius:50%;background:{clay};", "" }
-                    span { style: "font-size:12.5px;color:{ink3};", "正在按方法论起草体系 —— 北极星起草 · 指标框架 · 阶段激活…" }
-                } else if let Some(err) = run.failed.clone() {
-                    // plan/14 C15(规范条 3): 人话优先 —— headline 上屏,原文
-                    // `err` 一字不改地进下方「技术详情」折叠区(见 details 块)。
-                    {
-                        let x = ui::explain_failure(&err);
-                        rsx! { span { style: "font-size:12.5px;color:#B0503A;", "起草失败:{x.headline}" } }
-                    }
-                } else {
-                    span { style: "font-size:12.5px;color:{ink2};", "起草完成 —— 以下候选均可编辑,确认前不算数。" }
-                }
-            }
-            div {
-                style: "display:flex;gap:8px;flex-wrap:wrap;",
-                for (i, (name, ok)) in run.phases.iter().enumerate() {
-                    {
-                        let color = if *ok { "#5F7355" } else { clay };
-                        let mark = if *ok { "✓" } else { "…" };
-                        // 耗时:done 的相位显示定格用时,进行中的相位随
-                        // 上面的 tick 实时累加 —— 都是真实 Instant 差值。
-                        let secs = phase_times.peek().get(i).map(|t| {
-                            let end = t.ended.unwrap_or_else(std::time::Instant::now);
-                            end.saturating_duration_since(t.started).as_secs()
-                        });
-                        rsx! {
-                            span {
-                                key: "{i}",
-                                style: "border:1.4px solid {color};color:{color};border-radius:7px;padding:3px 10px;font-size:12px;",
-                                if let Some(secs) = secs {
-                                    "{name} {mark} · {secs}s"
-                                } else {
-                                    "{name} {mark}"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if done {
-                div {
-                    style: "display:flex;justify-content:flex-end;",
-                    button {
-                        style: "{theme::btn_primary()}",
-                        onclick: move |_| on_next.call(()),
-                        "查看起草结果 →"
-                    }
-                }
-            }
-            // C12(plan/14 规范条 1)→ C15(规范条 3): 失败态从「零按钮死路」升
-            // 到三出路,原文永不丢。
-            if let Some(err) = run.failed.clone() {
-                {
-                    let raw = err.clone();
-                    rsx! {
-                        // 技术详情折叠:默认收起,只显示人话;展开见原始报错
-                        // 逐字文本(`FailureExplanation::raw`,未经改写)—— 如
-                        // 实,不隐藏(规范条 3)。
-                        details {
-                            style: "font-size:11.5px;color:{ink3};",
-                            summary { style: "cursor:pointer;color:{ink3};", "技术详情" }
-                            div {
-                                style: "margin-top:6px;padding:8px 10px;background:#F7F3EA;border:1px solid #E5DDCB;border-radius:6px;font-family:{theme::MONO};font-size:11px;color:{ink2};white-space:pre-wrap;word-break:break-word;",
-                                "{raw}"
-                            }
-                        }
-                    }
-                }
-            }
-            if failed {
-                div {
-                    style: "display:flex;justify-content:flex-end;gap:8px;",
-                    button {
-                        style: "background:transparent;border:1px solid #CFC7B6;color:{ink2};cursor:pointer;border-radius:8px;padding:9px 16px;font-size:12.5px;",
-                        onclick: move |_| on_cancel.call(()),
-                        "返回项目墙"
-                    }
-                    button {
-                        style: "background:transparent;border:1px solid #CFC7B6;color:{ink2};cursor:pointer;border-radius:8px;padding:9px 16px;font-size:12.5px;",
-                        // plan/14 C15(规范条 3)「先用模板继续」: 起草这一跑
-                        // (`RunDraftWorkflow`,C13 后已是 mock)失败不拦审阅 ——
-                        // `ReviewCard` 的字段来自 `CreateVm`/用户已填的
-                        // brief/问答(见本文件顶部注释),从不读这次跑的
-                        // transcript,所以「继续」= 原样推进到 Review,零新
-                        // 后端命令、零编造字段。与 `done` 分支的「查看起草结果」
-                        // 是同一条 `on_next`,只是失败也放行。
-                        onclick: move |_| on_next.call(()),
-                        "先用模板继续 →"
-                    }
-                    button {
-                        style: "{theme::btn_primary()}",
-                        onclick: move |_| dispatch_draft_run(&k),
-                        "重试起草"
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ───────────────────────── 4 · 审阅确认 ─────────────────────────
-
-#[derive(Clone, PartialEq)]
-struct MetricDraft {
-    id: Option<MetricId>,
-    name: String,
-    def: String,
-    current: String,
-    target: String,
-}
-
-impl MetricDraft {
-    fn empty() -> Self {
-        MetricDraft {
-            id: None,
-            name: String::new(),
-            def: String::new(),
-            current: String::new(),
-            target: String::new(),
-        }
-    }
-    fn from_vm(m: &MetricVm) -> Self {
-        MetricDraft {
-            id: Some(m.id),
-            name: m.name.clone(),
-            def: m.def.clone(),
-            current: m.value_raw.clone(),
-            target: m.target_raw.clone(),
-        }
-    }
-}
-
-/// The three north-star candidates, all derived from real user input — no
-/// invented specifics. `0` = the brief verbatim, `1` = brief + success
-/// criteria, `2` = a blank slate to write fresh.
-fn ns_candidate(idx: usize, brief: &str, win: &str) -> (String, String) {
-    match idx % 3 {
-        0 => (
-            brief.to_string(),
-            "（请编辑:怎么算、数据从哪来）".to_string(),
-        ),
-        1 if !win.is_empty() => (
-            format!("{brief}(成功标准:{win})"),
-            "（请编辑:怎么算、数据从哪来）".to_string(),
-        ),
-        1 => (brief.to_string(), String::new()),
-        _ => (String::new(), String::new()),
-    }
-}
-
-#[component]
-fn ReviewCard(vm: CreateVm, cadence: Signal<Cadence>, submitting: Signal<bool>) -> Element {
-    let k = use_context::<Kernel>();
-    let mut ns_idx = use_signal(|| 0usize);
-    let mut ns = use_signal(|| {
-        if vm.north_star.is_empty() {
-            vm.brief.clone()
-        } else {
-            vm.north_star.clone()
-        }
-    });
-    let mut ns_def = use_signal(|| vm.ns_def.clone());
-    let leading = use_signal({
-        let vm = vm.clone();
-        move || {
-            if vm.leading.is_empty() {
-                vec![MetricDraft::empty()]
-            } else {
-                vm.leading.iter().map(MetricDraft::from_vm).collect()
-            }
-        }
-    });
-    let lagging = use_signal({
-        let vm = vm.clone();
-        move || {
-            if vm.lagging.is_empty() {
-                vec![MetricDraft::empty()]
-            } else {
-                vm.lagging.iter().map(MetricDraft::from_vm).collect()
-            }
-        }
-    });
-    // C8 · plan/13 D8 末卡「立即让队友开工第一件?」—— 默认不勾,显式授权
-    // 才在落地后对标配三件套里的①竞品分析 dispatch 一次真实 RunIssue。
-    let mut run_first = use_signal(|| false);
-
-    // Bug B: 按钮置灰 + 文案 + cursor 由 pending 派生(对齐 op.rs 灰点表
-    // pending 的既有约定:pending = 不可再点、视觉发暗)。读 submitting() 在
-    // 组件体里建订阅,pending 一变本卡重渲。
-    let pending = submitting();
-    let (btn_label, btn_bg, btn_shadow, btn_cursor) = if pending {
-        ("建立中…", "#B89A8E", "none", "not-allowed")
-    } else {
-        (
-            "确认 · 建立项目",
-            "#C5654A",
-            "0 3px 10px rgba(197,101,74,.25)",
-            "pointer",
-        )
-    };
-
-    let card = theme::card();
-    let serif = theme::SERIF;
-    let ink3 = theme::INK_3;
-    let mono = theme::MONO;
-
-    let mix = vm.cycle.mix();
-    let brief_for_regen = vm.brief.clone();
-    let win_for_regen = vm.win.clone();
-    let regen = move |_| {
-        let next = ns_idx() + 1;
-        ns_idx.set(next);
-        let (star, def) = ns_candidate(next, &brief_for_regen, &win_for_regen);
-        ns.set(star);
-        ns_def.set(def);
-    };
-
-    let confirm = {
-        let k = k.clone();
-        move |_| {
-            // Bug B: 防连点 —— 后台建项目是真在干活(sync 三件套 / 落地推送),
-            // 但按钮没反馈时人会觉得点击无效连点 N 次 = 重跑 N 遍
-            // CompleteCreation(非幂等,污染远端)。起手即置 pending,后续
-            // 连点在此 no-op。成功由 kernel 翻 view→App 卸载本屏;失败由
-            // main.rs 收 UiNote::Error 复位,可重试。
-            if submitting() {
-                return;
-            }
-            submitting.set(true);
-            k.send(Command::UpdateNorthStar {
-                value: ns().trim().to_string(),
-                def: ns_def().trim().to_string(),
-            });
-            for row in leading() {
-                if row.name.trim().is_empty() {
-                    continue;
-                }
-                k.send(Command::UpsertManualMetric {
-                    id: row.id.unwrap_or_else(MetricId::new),
-                    name: row.name.trim().to_string(),
-                    def: row.def.trim().to_string(),
-                    role: MetricRole::Leading,
-                    stage_kind: None,
-                    target: row.target.trim().to_string(),
-                    amber: Default::default(),
-                    value: row.current.trim().to_string(),
-                });
-            }
-            for row in lagging() {
-                if row.name.trim().is_empty() {
-                    continue;
-                }
-                k.send(Command::UpsertManualMetric {
-                    id: row.id.unwrap_or_else(MetricId::new),
-                    name: row.name.trim().to_string(),
-                    def: row.def.trim().to_string(),
-                    role: MetricRole::Lagging,
-                    stage_kind: None,
-                    target: row.target.trim().to_string(),
-                    amber: Default::default(),
-                    value: row.current.trim().to_string(),
-                });
-            }
-            k.send(Command::CompleteCreation {
-                cadence: cadence(),
-                run_first: run_first(),
-            });
-            k.send(Command::SetPanel(Panel::Progress));
-            k.send(Command::SetScope(Scope::All));
-        }
-    };
-
-    rsx! {
-        div {
-            style: "{card} padding:18px 20px;margin-bottom:14px;",
-            div { style: "display:flex;align-items:center;gap:8px;margin-bottom:10px;",
-                span { style: "font-family:{serif};font-size:16px;font-weight:600;", "体系草案" }
-                span { style: "font-size:10.5px;color:#B0503A;background:#F2E4DD;border-radius:4px;padding:3px 7px;", "审阅关口" }
-                span { style: "margin-left:auto;font-size:11px;color:{ink3};", "改完确认即建立" }
-            }
-
-            div {
-                style: "display:flex;align-items:center;gap:10px;margin-bottom:14px;",
-                span { style: "font-size:11.5px;color:{ink3};width:52px;flex:none;", "周期" }
-                span { style: "font-size:13px;font-weight:600;", "{vm.cycle.label()}" }
-                div {
-                    style: "flex:1;display:flex;height:7px;border-radius:4px;overflow:hidden;max-width:200px;",
-                    for (i, k) in StageKind::ALL.iter().enumerate() {
-                        span { key: "{i}", style: "width:{mix[i]}%;background:{k.color()};", "" }
-                    }
-                }
-                span { style: "font-size:11px;color:{ink3};", "{vm.cycle.main_loop_label()}" }
-            }
-
-            div {
-                style: "background:#23211C;border-radius:10px;padding:15px 17px;margin-bottom:14px;",
-                div {
-                    style: "display:flex;align-items:center;gap:8px;margin-bottom:7px;",
-                    span { style: "font-size:10.5px;letter-spacing:.08em;color:#E0A78F;", "北极星" }
-                    button {
-                        style: "cursor:pointer;margin-left:auto;background:transparent;color:#E0A78F;border:1px solid #4A453C;border-radius:5px;padding:5px 9px;font-size:11px;",
-                        onclick: regen,
-                        "↺ 换一版候选"
-                    }
-                }
-                textarea {
-                    style: "width:100%;min-height:52px;background:transparent;border:none;outline:none;color:#fff;font-family:{serif};font-size:15px;line-height:1.5;resize:vertical;",
-                    value: "{ns}",
-                    oninput: move |e| ns.set(e.value()),
-                }
-                input {
-                    style: "width:100%;background:transparent;border:none;outline:none;color:#C9C2B4;font-size:11.5px;margin-top:6px;",
-                    placeholder: "计算口径:怎么算、数据从哪来",
-                    value: "{ns_def}",
-                    oninput: move |e| ns_def.set(e.value()),
-                }
-            }
-
-            div {
-                style: "display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:6px;",
-                MetricList { title: "引领 · 每周推动", rows: leading, mono }
-                MetricList { title: "滞后 · 只看不追", rows: lagging, mono }
-            }
-
-            div {
-                style: "display:flex;align-items:center;gap:10px;margin:14px 0;",
-                span { style: "font-size:11.5px;color:{ink3};width:52px;flex:none;", "阶段" }
-                div {
-                    style: "display:flex;gap:4px;flex-wrap:wrap;",
-                    for k in StageKind::ALL {
-                        {
-                            let hot = k == StageKind::Prototype;
-                            let (bg, fg) = if hot { ("#F2E4DD", "#B0503A") } else { ("#EDE8DE", "#8C867A") };
-                            rsx! {
-                                span {
-                                    key: "{k.index()}",
-                                    title: "{k.role()}",
-                                    style: "font-family:{mono};font-size:10px;background:{bg};color:{fg};border-radius:5px;padding:5px 8px;",
-                                    "{k.index()} {k.label()}"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            div {
-                style: "font-size:11.5px;color:{ink3};line-height:1.7;margin-bottom:16px;",
-                "每{cadence_chip_label(&cadence())}一次体检定时任务 · 人只在五个交棒点介入(原型→构建→优化→推广→运维→回流原型)"
-            }
-
-            if !vm.remote_path.trim().is_empty() {
-                {
-                    let remote = vm.remote_path.clone();
-                    let (box_bg, box_bd, mark) = if run_first() {
-                        ("#C5654A", "#C5654A", "✓")
-                    } else {
-                        ("transparent", "#CFC7B6", "")
-                    };
-                    rsx! {
-                        div {
-                            style: "background:#F7F3EA;border:1px solid #E5DDCB;border-radius:8px;padding:12px 14px;margin-bottom:16px;",
-                            div {
-                                onclick: move |_| run_first.set(!run_first()),
-                                style: "cursor:pointer;display:flex;align-items:flex-start;gap:10px;",
-                                span { style: "width:16px;height:16px;margin-top:1px;border-radius:4px;border:1.5px solid {box_bd};background:{box_bg};color:#fff;font-size:10px;line-height:14px;text-align:center;flex:none;", "{mark}" }
-                                div {
-                                    div { style: "font-size:12.5px;font-weight:600;color:#3A3833;", "立即让队友开工第一件?" }
-                                    p {
-                                        style: "font-size:11px;color:{ink3};margin:4px 0 0;line-height:1.6;",
-                                        "落地后自动建「竞品分析 → 找指标 → 绑数据」三张标配 Issue,真开进 {remote} 的 GitHub Issues。勾选后立即对①竞品分析 dispatch 一次真实运行;不勾就只建票,开工时机由你自己定。"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            div {
-                style: "display:flex;justify-content:flex-end;",
-                button {
-                    disabled: pending,
-                    style: "cursor:{btn_cursor};background:{btn_bg};color:#fff;border:none;border-radius:8px;padding:10px 22px;font:600 13px/1 inherit;box-shadow:{btn_shadow};",
-                    onclick: confirm,
-                    "{btn_label}"
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn MetricList(title: &'static str, rows: Signal<Vec<MetricDraft>>, mono: &'static str) -> Element {
-    let ink3 = theme::INK_3;
-    let input = theme::input();
-    let snapshot = rows();
-    rsx! {
-        div {
-            div { style: "font-size:10.5px;color:{ink3};margin-bottom:7px;", "{title}" }
-            for (i, row) in snapshot.into_iter().enumerate() {
-                div {
-                    key: "{i}",
-                    style: "border-bottom:1px dashed #EFEAE0;padding:6px 0;margin-bottom:4px;",
-                    input {
-                        style: "{input} padding:5px 7px;font-size:12px;margin-bottom:3px;",
-                        placeholder: "指标名",
-                        value: "{row.name}",
-                        oninput: move |e| rows.write()[i].name = e.value(),
-                    }
-                    div {
-                        style: "display:flex;gap:4px;",
-                        input {
-                            style: "{input} padding:5px 7px;font-size:11px;font-family:{mono};",
-                            placeholder: "当前值",
-                            value: "{row.current}",
-                            oninput: move |e| rows.write()[i].current = e.value(),
-                        }
-                        input {
-                            style: "{input} padding:5px 7px;font-size:11px;font-family:{mono};",
-                            placeholder: "目标",
-                            value: "{row.target}",
-                            oninput: move |e| rows.write()[i].target = e.value(),
-                        }
-                    }
-                }
-            }
-            button {
-                style: "cursor:pointer;background:transparent;border:1px dashed #C9B8A4;border-radius:6px;color:{ink3};font-size:11px;padding:5px 10px;width:100%;",
-                onclick: move |_| rows.write().push(MetricDraft::empty()),
-                "+ 添加一条"
             }
         }
     }

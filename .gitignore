@@ -37,3 +37,6 @@ e2e/reports/
 # 验收报告是给人看的,不进仓:仓里的东西会变成 agent 上下文,而报告是
 # 人工终审用的大件(带图 4MB+)。报告留在 e2e/reports/ 本地,或挂到 PR/Release。
 iterations/evidence/**/*.html
+
+# 指南截图本地占位（验证时填，不进仓——文字自洽，截图是补充不是必需）
+docs/guide/img/

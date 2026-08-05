@@ -271,37 +271,56 @@ cargo run -p app-desktop</pre>
     <section class="screen" id="u2" data-title="纳入项目" data-sec-name="使用指导">
       <div class="eyebrow">使用指导 · 阶段 01</div>
       <h1 class="disp">纳入项目</h1>
-      <p class="lede">一条 URL 把项目挂进来。砍掉了原 host·path·platform 三段分卡和让人填不准的指标字段。</p>
+      <p class="lede">填个名字 + 一句意图，点确认。剩下 buddy 全兜——clone 仓、挂连接器、排定时器、建三张起手 Issue、扫你项目自带的技能和 agent——你只管后面跑那三张活。</p>
 
-      <h2 class="sec"><span class="n">操作</span></h2>
+      <h2 class="sec"><span class="n">操作</span>两个界面</h2>
       <div class="ops">
-        <div class="li"><div class="n">1</div><div class="t">项目墙 → 新建</div></div>
-        <div class="li"><div class="n">2</div><div class="t">填一条项目地址（codehub / github URL）</div></div>
-        <div class="li"><div class="n">3</div><div class="t">命名 + brief</div></div>
-        <div class="li"><div class="n">4</div><div class="t">确认建立</div></div>
+        <div class="li"><div class="n">1</div><div class="t">项目墙点「新建」，进入创建流</div></div>
+        <img src="img/u2-step1-wall.png" alt="项目墙 · 点新建" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
+        <div class="li"><div class="n">2</div><div class="t">填项目地址：选平台（<code>codehub</code>/<code>github</code>）；起点选「新建仓」或「接入已有」；<code>codehub</code> 选区域（绿区/内源/黄区，黄区未登录如实灰）；接入已有从你的仓列表下拉选</div></div>
+        <div class="li"><div class="n">3</div><div class="t">命名（必填）+ 一句话意图 brief（可不填）+ 对标谁（可不填，竞品分析用）+ 三个月后怎样算成了（可不填，找指标用）</div></div>
+        <img src="img/u2-step3-intent.png" alt="命名 · 意图 · 确认建立" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
+        <div class="li"><div class="n">4</div><div class="t">点「确认 · 建立项目」——一个按钮，背后连发整链</div></div>
+      </div>
+      <div class="callout">
+        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+        <div class="body"><strong>接入已有仓时</strong>下拉只拉得到你登录 token 关联上的项目——<code>gh</code> / <code>codehub-cli</code> 登录态决定可见范围，关联不到的仓选不了，老实灰，不假装搜得到。</div>
       </div>
 
-      <h2 class="sec"><span class="n">结果</span>系统/项目改了什么</h2>
+      <h2 class="sec"><span class="n">背后</span>点确认那一下，buddy 做了啥</h2>
       <div class="res">
-        <div class="h">落库与产出</div>
+        <div class="h">对远端代码仓（GitHub/CodeHub）</div>
         <ul>
-          <li><span class="b"></span><div>仓库 <strong>SSH clone</strong> 到 <code>BW_WORKSPACES</code></div></li>
-          <li><span class="b"></span><div>SQLite 落 <strong>project</strong> 行</div></li>
-          <li><span class="b"></span><div>建 <strong>2 个 connector</strong>（git-repo + provider 适配）</div></li>
-          <li><span class="b"></span><div>自动建<strong>标配 Issue 三件套</strong>（竞品分析 / 找指标 / 绑数据）状态 <code>Backlog</code></div></li>
+          <li><span class="b"></span><div>建一个新仓（或把你选的已有仓接入），顺手开 3 个 Issue（竞品分析 / 找指标 / 绑数据），把本地起的章程提交推上去</div></li>
+        </ul>
+        <div class="h">对你的机器</div>
+        <ul>
+          <li><span class="b"></span><div>把仓 clone 到本地工作区，写进项目章程（开篇 + 完成创建两段）和四份组件标准文件，供之后建 agent/skill/workflow/cron 对照</div></li>
+        </ul>
+        <div class="h">对 buddy 数据库</div>
+        <ul>
+          <li><span class="b"></span><div>落一条项目记录、铺开五阶段、挂 2 个连接器（仓 + 采集脚本）和一条每日定时器、建 3 张起手 Issue、指标先空着等定时器采——没数据不假装绿</div></li>
+        </ul>
+      </div>
+      <p class="muted">细节（具体哪些连接器/定时器/metric、什么条件下建或不建）见维护指南 <a href="#" onclick="go('m2');return false">Hub 全局库</a> / <a href="#" onclick="go('m3');return false">Issue 与调度</a> / <a href="#" onclick="go('m6');return false">指标与健康</a>。</p>
+
+      <h2 class="sec"><span class="n">得到什么</span>建完你手上多了啥</h2>
+      <div class="res">
+        <ul>
+          <li><span class="b"></span><div><strong>项目在墙</strong>，连接状态 <code>green</code>（远端仓接上了）</div></li>
+          <li><span class="b"></span><div><strong>连接器 + 每日定时器就位</strong>——以后每天自动采一次你代码仓的指标（开放 Issue 数 / 已合入 MR 数），指标卡先 <code>Unknown</code> 灰，采到才有值</div></li>
+          <li><span class="b"></span><div><strong>扫到你项目自带的 skill / agent 等资产</strong>，登记进全局 Hub，之后干活能注入</div></li>
+          <li><span class="b"></span><div><strong>3 张起手 Issue</strong>（竞品分析 → 找指标 → 绑数据）在 <code>Backlog</code>，远端 Issues 也同步开了——下一步实践直接开跑</div></li>
         </ul>
       </div>
 
-      <h2 class="sec"><span class="n">看到</span>界面呈现</h2>
-      <div class="see"><div class="h">项目墙</div><div class="d">项目出现在墙，连接状态 green；三件套 Issue 已在 Backlog。</div></div>
-
       <div class="callout warn">
         <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
-        <div class="body"><strong>竞品分析别点真跑</strong>联网墙未解（bug②）。UI 保留入口但标 warn，点了会失败。其余两件套实测可跑通。</div>
+        <div class="body"><strong>两个已知坑</strong>① 点「确认」后 UI 可能冻一会儿：clone 在后台跑（已知 bug，未解），等它跑完即恢复。② 三件套里「竞品分析」别点真跑：联网墙未解，点了会失败；其余两件套可跑通。</div>
       </div>
 
-      <p class="linker">本阶段涉及的机制（connector / Remote 工厂 / project 行 / 幂等守卫）→ 见维护指南 <a href="#" onclick="go('m2');return false">Hub 全局库</a>；三件套自动建 → <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
-      <div class="foot">事实源：<code>v1-onboarding-overview.html</code> Tab①、<code>PRACTICE-buddy.md §2</code>。</div>
+      <p class="linker">建仓 / 连接器 / 定时器 / 三件套这些机制的开发维护口径 → <a href="#" onclick="go('m2');return false">Hub 全局库</a> + <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
+      <div class="foot">事实源：<code>docs/v1-prototype/issue1-onboard-simplify.md</code>、<code>crates/app-desktop/src/screens/create.rs</code>（Repo→Intent 两卡）、<code>crates/bw-app/src/lib.rs</code>（CreateProject / CompleteCreation）。</div>
     </section>
 
     <!-- ============ U3 找指标 ============ -->
@@ -377,43 +396,8 @@ cargo run -p app-desktop</pre>
     <section class="screen" id="u5" data-title="总览呈现" data-sec-name="使用指导">
       <div class="eyebrow">使用指导 · 阶段 04</div>
       <h1 class="disp">总览呈现</h1>
-      <p class="lede">merge 指标定义后，采数、重算信号、点亮。项目从纳入走到健康灯亮。</p>
-
-      <h2 class="sec"><span class="n">操作</span></h2>
-      <div class="ops">
-        <div class="li"><div class="n">1</div><div class="t">merge 指标定义（走 PR）</div></div>
-        <div class="li"><div class="n">2</div><div class="t">等 cron / connector 采数</div></div>
-        <div class="li"><div class="n">3</div><div class="t">打开项目总览</div></div>
-      </div>
-
-      <h2 class="sec"><span class="n">结果</span>系统/项目改了什么</h2>
-      <div class="res">
-        <div class="h">落库与产出</div>
-        <ul>
-          <li><span class="b"></span><div><code>SyncMetricsFile</code> 把 metrics.toml 装进 <strong>metric 表</strong></div></li>
-          <li><span class="b"></span><div>采集器 <code>collect</code> 写 <strong>observation 表</strong>（真实数据点，append-only）</div></li>
-          <li><span class="b"></span><div><code>recompute_signals</code> 重算 Signal</div></li>
-          <li><span class="b"></span><div><strong>健康灯亮</strong></div></li>
-        </ul>
-      </div>
-
-      <h2 class="sec"><span class="n">看到</span>界面呈现</h2>
-      <div class="see"><div class="h">项目总览</div><div class="d">纳入卡 / 三件套看板 / 北极星 + L1·L2·L3 / 健康灯（Green / Amber / Red / Unknown）。</div></div>
-
-      <h2 class="sec"><span class="n">健康灯怎么读</span></h2>
-      <div class="lights">
-        <div class="light g"><span class="d"></span><span class="lbl">Green · 隐身（正常不出声）</span></div>
-        <div class="light a"><span class="d"></span><span class="lbl">Amber · 黄区预警</span></div>
-        <div class="light r"><span class="d"></span><span class="lbl">Red · 越界</span></div>
-        <div class="light u"><span class="d"></span><span class="lbl">Unknown · 无数据</span></div>
-      </div>
-      <div class="callout danger">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
-        <div class="body"><strong>无数据 ≠ 绿色</strong>没有观测就是 Unknown（灰），绝不是 green。绿色「隐身」——只有红、黄出声。</div>
-      </div>
-
-      <p class="linker">本阶段涉及的机制（SyncMetricsFile / observation / recompute_signals / Signal / 五截断点）→ 见维护指南 <a href="#" onclick="go('m6');return false">指标与健康</a>。</p>
-      <div class="foot">事实源：<code>v1-onboarding-overview.html</code> Tab②、<code>plan/18</code>。</div>
+      <p class="lede">本阶段待「总览」窗口棒实践后补充。</p>
+      <div class="foot">见 <code>plan/08</code> 执行队列。</div>
     </section>
 
     <!-- ============ M1 架构与铁律 ============ -->
@@ -460,50 +444,48 @@ cargo run -p app-desktop</pre>
     <section class="screen" id="m2" data-title="Hub 全局库" data-sec-name="维护指南">
       <div class="eyebrow">维护指南 · 机制 02</div>
       <h1 class="disp">Hub 全局库</h1>
-      <p class="lede">跨阶段的共享资产层，<code>project_id=NULL</code>。纳入、找指标、绑数据、总览都经它——connector 供纳入与采数，skill 供找指标与绑数据加载。</p>
-      <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">纳入</span><span class="s">找指标</span><span class="s">绑数据</span><span class="s">总览</span></div>
+      <p class="lede">跨阶段的共享资产层，<code>project_id=NULL</code>。纳入、找指标、绑数据、总览都经它——connector 供纳入与采数，skill 供找指标与绑数据加载。本章是<strong>特性组件介绍</strong>：章节与使用阶段解耦，但特性用在哪的 example 关联回使用阶段（见 u2 纳入）。</p>
+      <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">纳入</span><span class="s">找指标·绑数据</span><span class="s">总览</span></div>
 
       <h2 class="sec"><span class="n">六套件</span></h2>
       <div class="cards">
-        <div class="card"><div class="t">connector 连接器</div><div class="d">git-repo / CodeHub / GitHub / claude-cli（+ script 计划中）。纳入时建 2 个；采数经它。</div></div>
-        <div class="card"><div class="t">skill 技能</div><div class="d">6 渠道，唯一能 CRUD 的地方。找指标/绑数据加载预制技能。</div></div>
+        <div class="card"><div class="t">connector 连接器</div><div class="d">对外连接器（<code>codehub-repo</code> / <code>github-repo</code> / <code>claude-cli</code>）+ 业务脚本（<code>script</code>）。纳入时：挂远端的新项目建 2 个（1 仓 + 1 script），绑定本地仓 / 纯本地 mint 建 0 个。采数经它。用在 <a href="#" onclick="go('u2');return false">u2 步骤④</a>。</div></div>
+        <div class="card"><div class="t">skill 技能</div><div class="d">唯一能 CRUD 的套件。纳入时扫项目仓自带 skill 登记（种A，见下）。</div></div>
         <div class="card"><div class="t">agent 智能体</div><div class="d">五角色全局单例（原型师/构建师/优化师/运营推广师/运维师）。</div></div>
         <div class="card"><div class="t">workflow 工作流</div><div class="d">五阶段 template + 自建。</div></div>
-        <div class="card"><div class="t">cron 定时</div><div class="d">4 mode 分发（collect_metrics / run_skill / run_prompt / run_stage_playbook）。</div></div>
+        <div class="card"><div class="t">cron 定时</div><div class="d">定时调业务脚本（cron→script 可选→connector）。<code>mode=CollectMetrics</code> 跑采集。</div></div>
         <div class="card"><div class="t">knowledge 知识</div><div class="d">留口未建。</div></div>
       </div>
 
-      <h2 class="sec"><span class="n">connector 与 Remote 工厂</span></h2>
-      <div class="cc"><div class="h">connector</div><div class="d">buddy 与远端仓/CLI 的适配抽象。纳入项目时建 2 个：<code>git-repo</code> + provider 适配；总览阶段采数也经 connector。</div><div class="src">事实源：<code>bw-store</code>、<code>CLAUDE.md</code></div></div>
-      <div class="cc"><div class="h">Remote 工厂</div><div class="d">provider 分叉（codehub / github）收敛一处。新增 provider 只改工厂。</div><div class="src">事实源：<code>CLAUDE.md · 架构</code></div></div>
+      <h2 class="sec"><span class="n">连接三层模型</span></h2>
+      <p class="muted">心智模型（2026-08-04 钉）：cron 调 script，script 可选调 connector；本地工作区探活不是 connector。</p>
+      <div class="cc"><div class="h">connector <span class="term">对外连接器</span></div><div class="d">三层模型第 1 层。基础实体，提供「探活函数」——知道怎么连某外部系统 + 探一次看通不通。<code>codehub-repo</code> / <code>github-repo</code> / <code>claude-cli</code> 是。第 2 层 = 业务脚本（见下卡 <code>script</code>）；第 3 层 = 定时器（见下卡 <code>cron_task</code>）。<strong>本地工作区读取不是 connector</strong>（<code>git-repo</code> 已不建）。example：纳入项目时建 <code>codehub-repo</code> connector，建完即探活（见 <a href="#" onclick="go('u2');return false">u2 步骤④</a>）。</div><div class="src">事实源：<code>docs/v1-prototype/issue1-onboard-simplify.md §0</code></div></div>
+      <div class="cc"><div class="h">script <span class="term">业务脚本</span></div><div class="d">三层模型第 2 层。干业务活的脚本，可基于 connector（也可不基于，不强绑），被定时器调。两层：<strong>buddy 自带</strong>（项目代码仓级采集，<code>config={command, output, script}</code>，输出 JSON 供 <code>metric.collect_query</code> 取值）vs <strong>用户业务级</strong>（找指标 skill 产出，用户自己来）。example：纳入时建 1 个 <code>script</code> connector 跑 codehub/github 仓统计（仅挂远端项目，见 <a href="#" onclick="go('u2');return false">u2 步骤④</a>）；metric 取值见 <a href="#" onclick="go('m6');return false">指标与健康</a>。</div><div class="src">事实源：<code>docs/v1-prototype/issue1-onboard-simplify.md §0</code></div></div>
+      <div class="cc"><div class="h">cron_task <span class="term">定时器</span></div><div class="d">三层模型第 3 层。调度组件，<strong>定时调用业务脚本</strong>（cron→script，script 可选→connector）。<code>mode=CollectMetrics</code> 跑采集；另有 <code>run_skill</code> / <code>run_prompt</code> / <code>run_stage_playbook</code>。example：纳入时建 1 条 <code>schedule=Daily</code> <code>mode=CollectMetrics</code> cron（仅挂远端项目，见 <a href="#" onclick="go('u2');return false">u2 步骤④</a>）；采数链见 <a href="#" onclick="go('m6');return false">指标与健康</a>。</div><div class="src">事实源：<code>crates/bw-store/src/schema.sql</code>（cron_task 表）</div></div>
+      <div class="cc"><div class="h">本地工作区探活 <span class="term">evidence</span></div><div class="d">从工作区真实状态回流观测（git/docs/测试），<strong>不是 connector</strong>——本地不是对外连接器。纳入时调（clone 后读状态），但不建模成 connector 行。</div><div class="src">事实源：<code>crates/bw-engine/src/evidence.rs</code></div></div>
+      <div class="cc"><div class="h">Remote 工厂</div><div class="d">provider 分叉（<code>codehub</code> / <code>github</code>）收敛一处。新增 provider 只改工厂。</div><div class="src">事实源：<code>CLAUDE.md · 架构</code></div></div>
 
       <h2 class="sec"><span class="n">skill 六渠道</span></h2>
-      <div class="cc"><div class="h">skill 6 渠道</div><div class="d">Boot seed / 手建 / 蒸馏 / 导入单包 / 批量导入 / 项目仓自带扫描（<strong>种A</strong>：只登记可见、不进注入下拉）。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
-      <div class="foot">技能注入/蒸馏复利见「技能与 Prompt」章。</div>
+      <div class="cc"><div class="h">skill 渠道</div><div class="d">纳入时实践了 <strong>种A</strong>：项目仓自带 skill 扫进来登记可见，<strong>不进任何注入下拉</strong>。其余渠道（Boot seed / 手建 / 蒸馏 / 导入单包 / 批量导入）待 <a href="#" onclick="go('m4');return false">技能与 Prompt</a> 章对应窗口棒补。</div><div class="src">事实源：<code>crates/bw-app/src/lib.rs</code>（sync_project_assets）</div></div>
+      <div class="foot">技能注入/蒸馏复利见「技能与 Prompt」章；metric/observation/signal 见「指标与健康」章。</div>
     </section>
 
     <!-- ============ M3 Issue 与调度 ============ -->
     <section class="screen" id="m3" data-title="Issue 与调度" data-sec-name="维护指南">
       <div class="eyebrow">维护指南 · 机制 03</div>
       <h1 class="disp">Issue 与调度</h1>
-      <p class="lede">找指标、绑数据本身都是 Issue 被调度执行。纳入时三件套也是 Issue 自动建。调度贯穿全流程。</p>
+      <p class="lede">纳入时自动建三张起手 Issue；Issue 的状态机与调度执行（RunIssue / Run / autopilot）在「找指标 / 绑数据」窗口实践后补。</p>
       <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">纳入</span><span class="s">找指标</span><span class="s">绑数据</span></div>
 
-      <h2 class="sec"><span class="n">Issue 状态机</span></h2>
-      <div class="cc"><div class="h">状态机</div><div class="d"><code>Backlog → Todo → InProgress → InReview → Done</code>，另有 Blocked / Cancelled。<strong>Done 唯一入边 = InReview</strong>，且必须人显式点。</div><div class="src">事实源：<code>bw-core</code></div></div>
-
-      <h2 class="sec"><span class="n">调度执行</span></h2>
-      <div class="cc"><div class="h">RunIssue</div><div class="d">issue 卡触发 AI 真开工。干完只到 <code>InReview</code>，不到 Done。</div><div class="src">事实源：<code>bw-app</code></div></div>
-      <div class="cc"><div class="h">Run <span class="term">运行</span></div><div class="d">一次真实执行，有成败/耗时，全结局入账。</div><div class="src">事实源：<code>bw-store</code></div></div>
-
-      <h2 class="sec"><span class="n">自动与留痕</span></h2>
-      <div class="cc"><div class="h">autopilot / cron no-hijack</div><div class="d">到点只<strong>建</strong>活、永不自动<strong>完成</strong>活。AI 永远不能替你点 Done。</div><div class="src">事实源：<code>CLAUDE.md · 核心纪律</code></div></div>
-      <div class="cc"><div class="h">标配三件套自动建</div><div class="d">纳入项目末尾按依赖序自动建 3 张起手 Issue：竞品分析 → 找指标 → 绑数据。</div><div class="src">事实源：<code>plan</code></div></div>
+      <h2 class="sec"><span class="n">纳入时自动建</span></h2>
+      <div class="cc"><div class="h">标配三件套自动建</div><div class="d">纳入项目末尾按依赖序自动建 3 张起手 Issue：竞品分析 → 找指标 → 绑数据（仅挂远端仓的项目，见 <a href="#" onclick="go('u2');return false">u2 步骤④</a>）。</div><div class="src">事实源：<code>crates/bw-app/src/lib.rs</code>（seed_standard_issue_trio）</div></div>
       <div class="callout danger">
         <svg viewBox="0 0 24 24"><path d="M12 3l8 3v5c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
         <div class="body"><strong>铁律②的落地</strong>Done 唯一入边 = InReview + no-hijack，是「健康难造假」的根基。详见「架构与铁律」章。</div>
       </div>
-      <div class="foot">执行器本身见「执行与证据」章。</div>
+
+      <p class="muted">Issue 状态机 / RunIssue / Run 调度执行 / autopilot no-hijack 待「找指标 / 绑数据」窗口棒实践后补（见 <code>plan/08</code>）；Done 永不自动的铁律见 <a href="#" onclick="go('m1');return false">架构与铁律</a>。</p>
+      <div class="foot">已写部分 <code>crates/bw-app/src/lib.rs</code>（seed_standard_issue_trio）；其余待补。</div>
     </section>
 
     <!-- ============ M4 技能与 Prompt ============ -->
@@ -563,7 +545,7 @@ cargo run -p app-desktop</pre>
     <section class="screen" id="m6" data-title="指标与健康" data-sec-name="维护指南">
       <div class="eyebrow">维护指南 · 机制 06</div>
       <h1 class="disp">指标与健康体系</h1>
-      <p class="lede">贯穿找指标（产出定义）、绑数据（接采集）、总览（采数重算点亮）。价值闭环的五截断点由 plan/18 修通。</p>
+      <p class="lede">本机制服务于「找指标 / 绑数据 / 总览」窗口，待对应窗口棒实践后补充。</p>
       <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">找指标</span><span class="s">绑数据</span><span class="s">总览</span></div>
 
       <h2 class="sec"><span class="n">指标定义</span></h2>

@@ -374,16 +374,15 @@ fn Root() -> Element {
                 } else if show_create {
                     Create {
                         vm: v.create.clone(),
-                        run: run(),
-                        // Bug B: pending guard for the末卡 confirm button —
-                        // set on click in ReviewCard, released on real
-                        // Error (above) or by the screen unmounting on
-                        // success.
+                        // Bug B: pending guard for the Intent card's confirm
+                        // button — set on click, released on real Error (above)
+                        // or by the screen unmounting on success (view→App).
                         submitting,
                         // plan/14 C14: raw action-progress facts — `Create`
                         // renders the pending/ok/fail strip from these.
                         actions: actions().items,
                         github_repos: v.github_repos.clone(),
+                        codehub_repos: v.codehub_repos.clone(),
                         // C12(plan/14): every card/state of the creation flow
                         // routes its exit here — including after a project row
                         // already exists (kernel `state.view` is already

@@ -18,7 +18,9 @@ use bw_core::model::{
     StageKind,
 };
 use bw_core::{MetricId, SessionId};
-use bw_engine::{ClaudeCliConfig, Engine, GithubRepoSummary, MockExecutor, PermissionMode};
+use bw_engine::{
+    ClaudeCliConfig, CodehubRepoSummary, Engine, GithubRepoSummary, MockExecutor, PermissionMode,
+};
 use bw_store::{MetricRole, SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,6 +65,11 @@ pub struct Vm {
     /// any project row exists. Empty until the Repo 卡片 first dispatches
     /// `ListGithubRepos` (switching to "接入已有仓").
     pub github_repos: Vec<GithubRepoSummary>,
+    /// CodeHub 为主体的创建流: last `Command::ListCodehubRepos` result —
+    /// same process-internal cache pattern as `github_repos`, populated by
+    /// the Repo 卡片's「接入已有仓」refresh button dispatching
+    /// `ListCodehubRepos{host}`.
+    pub codehub_repos: Vec<CodehubRepoSummary>,
     /// plan/17 S3: the in-flight backgrounded run's (project, issue), or
     /// `None` when nothing's running. The issue board uses this to show a
     /// 「⬇ 终止」 button on exactly the issue whose run is in flight, and to
@@ -911,6 +918,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         settings,
         cron_effectiveness,
         github_repos: state.github_repos.clone(),
+        codehub_repos: state.codehub_repos.clone(),
         active_run: app.active_run(),
         pty_active: state.pty_input_tx.is_some(),
     };
