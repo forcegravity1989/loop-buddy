@@ -1,7 +1,7 @@
 # 19 · 北极星 / 引领滞后指标 skill 业界选型测评(拿来主义)
 
 > 2026-08-04。目标(用户原话):最重要的两个 skill——「找到北极星指标」「找到引领性指标和滞后性指标」——业界可能已存在,**不要自己创建,找评分很高的现成 skill,拿来主义,做测评**。
-> 本文是测评结果正本。一手证据全部归档在 `verification/skill-eval-2026-08-04/`(调研报告×2、盲测场景×2、14 份盲产原文、8 份盲评裁决 JSON、匿名映射、聚合 summary),每个数字可独立读回复核(§7)。
+> 本文是测评结果正本。一手证据(调研报告、盲测场景、两轮 22 份盲产原文、16 份盲评裁决 JSON、匿名映射、聚合 summary)归档于本机 `verification/skill-eval-2026-08-04/`——**拍板(2026-08-05):证据包不入仓**,该路径已进 `.gitignore`,只存本机、不随仓分发;§7/§8.4 的读回命令在持有本机存档的机器上照跑。
 
 ---
 
@@ -141,7 +141,7 @@ for f in verification/skill-eval-2026-08-04/bench/verdicts/*.json; do echo "== $
 cat verification/skill-eval-2026-08-04/bench/mapping.json   # 匿名字母 → 真实配置
 ```
 
-14 份盲产原文在 `verification/skill-eval-2026-08-04/bench/raw/`(文件名即配置),两份调研报告(含全部候选 URL/stars/安装量出处)在同目录。第三方 SKILL.md 原文包**不入仓**(amplitude 无 license;其余以 URL 溯源),留在会话 scratchpad 存档。
+14 份盲产原文在 `verification/skill-eval-2026-08-04/bench/raw/`(文件名即配置),两份调研报告(含全部候选 URL/stars/安装量出处)在同目录——以上均为**本机存档,不入仓**(见文首拍板)。第三方 SKILL.md 原文包同样不入仓(amplitude 无 license;其余以 URL 溯源),留在会话 scratchpad 存档。
 
 ---
 
@@ -181,4 +181,4 @@ cat verification/skill-eval-2026-08-04/bench/mapping.json   # 匿名字母 → �
 | 北极星 | amplitude/builder-skills(8 票 8.63;无 license→T11 改编合入,已落地 1aefe50) | **tarunccet/pm-skills `metric-definition`**(MIT,社区市场过审收录——非官方背书,4 票 8.00)——取代第一轮「phuryn 采用度最佳但不推荐」的空缺 | 新增备选;可作 P1 引入观察 |
 | 引领/滞后 | mohit metrics-framework+metric-tree-builder(8 票 9.00,已真实引入 73ff197)+ kouko standards 增强 | 同左(MIT) | 不变,重判加强 |
 
-第二轮证据:`verification/skill-eval-2026-08-04/round2/`(3 份渠道报告+shortlist+8 份新产出+8 份裁决+mapping+summary);读回:`cat verification/skill-eval-2026-08-04/round2/bench/summary.json`。局限同 §2(每组 n=4 票;渠道A 报告缺失如实记)。
+第二轮证据:`verification/skill-eval-2026-08-04/round2/`(4 份渠道报告+shortlist+8 份新产出+8 份裁决+mapping+summary,本机存档不入仓);读回:`cat verification/skill-eval-2026-08-04/round2/bench/summary.json`。局限同 §2(每组 n=4 票)。
