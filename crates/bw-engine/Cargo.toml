@@ -22,6 +22,11 @@ time = { workspace = true }
 # shells out to the `claude` CLI (tokio::process). bw-engine is a native
 # runtime crate (not in the wasm32 keepalive set), so this is consistent.
 tokio = { workspace = true, features = ["process"] }
+# V1 Issue2 Phase2b: PTY for in-app terminal embedding (portable-pty is a
+# native runtime dep — not a UI dep, passes guard-kernel-ui-free.sh). Used
+# by InteractiveCliExecutor to spawn `claude` in a PTY (replacing the system
+# terminal) and stream bytes to the UI via Event::TerminalBytes.
+portable-pty = "0.9"
 
 [dev-dependencies]
 tokio = { workspace = true }

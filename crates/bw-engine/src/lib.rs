@@ -41,8 +41,8 @@ pub use git_log::{read_commits, GitCommit, GitLogError};
 pub use github::{GithubError, GithubRepoRef, GithubRepoSummary};
 pub use interactive_cli::{
     build_bridge_system_prompt, build_resume_plan, build_startup_plan, InteractiveCliExecutor,
-    InteractiveExecutor, LaunchPlan, MockInteractiveExecutor, PromptInjectionMode, SkillOutput,
-    TuiAgentConfig, CLAUDE, CURSOR,
+    InteractiveExecutor, LaunchPlan, MockInteractiveExecutor, PromptInjectionMode, PtyInput,
+    SkillOutput, TuiAgentConfig, CLAUDE, CURSOR,
 };
 pub use metrics_file::{
     CollectKind, CollectPlan, MetricDef, MetricsFile, MetricsFileError, NorthStarDef,

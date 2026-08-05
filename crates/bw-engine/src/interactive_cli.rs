@@ -17,13 +17,31 @@
 //! is a plain OS terminal spawn.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bw_core::playbook::PlaybookCtx;
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use tokio::sync::mpsc;
 
 use crate::{ExecError, RunCtx};
+
+// ─── PtyInput (V1 Issue2 Phase2b) ───────────────────────────────────────
+
+/// Input the App sends to the PTY executor. The App holds the sender side;
+/// the executor holds the receiver. Sent via mpsc so the executor can
+/// `select!` between PTY output and user input.
+#[derive(Clone, Debug)]
+pub enum PtyInput {
+    /// User-typed bytes (from the UI's xterm.js `onData` →
+    /// `Command::TerminalInput`).
+    Bytes(Vec<u8>),
+    /// Terminal resize (from the UI's xterm.js `onResize` →
+    /// `Command::TerminalResize`).
+    Resize { cols: u16, rows: u16 },
+}
 
 // ─── PromptInjectionMode ───────────────────────────────────────────────
 
@@ -437,6 +455,38 @@ pub trait InteractiveExecutor: Send + Sync {
         plan: &LaunchPlan,
         ctx: &RunCtx,
     ) -> Result<SkillOutput, ExecError>;
+
+    /// V1 Issue2 Phase2b: spawn the agent in a PTY and stream bytes. The
+    /// caller provides two channels:
+    ///  - `bytes_tx`: PTY → App. The executor reads master bytes and sends
+    ///    them here (the App emits `Event::TerminalBytes`).
+    ///  - `input_rx`: App → PTY. The App sends [`PtyInput::Bytes`] (user
+    ///    typed) and [`PtyInput::Resize`] (terminal resized). The executor
+    ///    writes to the PTY master / resizes.
+    ///
+    /// Returns when the PTY child exits (like `run_skill`). The caller
+    /// settles the run the same way. If the executor doesn't support PTY,
+    /// the default returns `Err` (the caller falls back to `run_skill`).
+    ///
+    /// **Three races** (orca §2.4, solved in the UI layer, not here):
+    ///  - ACK backpressure (`ackData`): the UI throttles to prevent flooding.
+    ///  - rendererDispatcherReady handshake: the UI buffers until xterm.js
+    ///    signals ready (prevents reload losing bytes).
+    ///  - resize re-assertion (`getAppliedSize`): the UI re-sends resize if
+    ///    the PTY's applied size doesn't match.
+    async fn run_skill_pty(
+        &self,
+        plan: &LaunchPlan,
+        ctx: &RunCtx,
+        bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
+        input_rx: mpsc::UnboundedReceiver<PtyInput>,
+    ) -> Result<SkillOutput, ExecError> {
+        // Default: PTY not supported. The caller falls back to run_skill.
+        let _ = (plan, ctx, bytes_tx, input_rx);
+        Err(ExecError::Failed(
+            "PTY not supported by this executor (use run_skill instead)".into(),
+        ))
+    }
 }
 
 // ─── InteractiveCliExecutor (Phase 1 (c) real spawn) ──────────────────
@@ -578,6 +628,124 @@ impl InteractiveExecutor for InteractiveCliExecutor {
         // wall-clock timeout are identical.
         self.run_skill(plan, ctx).await
     }
+
+    /// V1 Issue2 Phase2b: spawn `claude` in a PTY (portable-pty) and stream
+    /// bytes. Replaces the system-terminal spawn with an in-app PTY:
+    ///  - PTY master → reader (blocking, `spawn_blocking` task) → `bytes_tx`
+    ///  - `input_rx` → PTY master writer (blocking, fast for kernel buffer)
+    ///  - `PtyInput::Resize` → `master.resize()`
+    ///  - Child exit → return `SkillOutput { completed: true }`
+    ///
+    /// The env strip + cwd are identical to `build_startup_plan` (nested-
+    /// execution vars removed so the child uses its own CLI config).
+    async fn run_skill_pty(
+        &self,
+        plan: &LaunchPlan,
+        _ctx: &RunCtx,
+        bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
+        mut input_rx: mpsc::UnboundedReceiver<PtyInput>,
+    ) -> Result<SkillOutput, ExecError> {
+        let binary = self.claude_binary.as_deref().unwrap_or(&plan.binary);
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| ExecError::Failed(format!("openpty failed: {e}")))?;
+
+        // Build the command (env strip + cwd from LaunchPlan).
+        let mut cmd = CommandBuilder::new(binary);
+        cmd.args(&plan.args);
+        for (k, v) in &plan.env {
+            cmd.env(k, v);
+        }
+        cmd.cwd(&plan.cwd);
+
+        // Spawn the child in the PTY's slave.
+        let mut child = pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| ExecError::Failed(format!("pty spawn failed: {e}")))?;
+        // Drop the slave so EOF propagates to the master when the child exits.
+        drop(pair.slave);
+
+        // Take the reader (blocking) and writer (blocking) from the master.
+        // portable-pty 0.9 uses `try_clone_reader` (not `take_reader`).
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|e| ExecError::Failed(format!("pty try_clone_reader failed: {e}")))?;
+        let mut writer = pair
+            .master
+            .take_writer()
+            .map_err(|e| ExecError::Failed(format!("pty take_writer failed: {e}")))?;
+        let master = pair.master;
+
+        // Read loop: blocking read from PTY → send bytes via channel.
+        // Uses `spawn_blocking` because portable-pty's reader is `std::io::Read`
+        // (blocking), not `tokio::io::AsyncRead`.
+        let read_tx = bytes_tx.clone();
+        let read_handle = tokio::task::spawn_blocking(move || {
+            let mut reader = reader;
+            let mut buf = [0u8; 8192];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break, // EOF — child exited
+                    Ok(n) => {
+                        if read_tx.send(buf[..n].to_vec()).is_err() {
+                            break; // App dropped the receiver — stop reading
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Main loop: select between user input (→ write to PTY) and the read
+        // loop finishing (→ child exited).
+        tokio::pin!(read_handle);
+        loop {
+            tokio::select! {
+                // PTY read loop finished (child exited / EOF).
+                _ = &mut read_handle => {
+                    break;
+                }
+                // User input from the App (typed bytes or resize).
+                input = input_rx.recv() => {
+                    match input {
+                        Some(PtyInput::Bytes(bytes)) => {
+                            // Write to PTY (blocking, but fast — kernel buffer).
+                            let _ = writer.write_all(&bytes);
+                            let _ = writer.flush();
+                        }
+                        Some(PtyInput::Resize { cols, rows }) => {
+                            let _ = master.resize(PtySize {
+                                rows,
+                                cols,
+                                pixel_width: 0,
+                                pixel_height: 0,
+                            });
+                        }
+                        None => {
+                            // App dropped the input sender — stop.
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Wait for the child to exit (best-effort — it may have already exited).
+        let _ = child.wait();
+
+        Ok(SkillOutput {
+            completed: true,
+            summary: "(pty session ended)".to_string(),
+        })
+    }
 }
 
 impl InteractiveCliExecutor {
@@ -667,6 +835,34 @@ impl InteractiveExecutor for MockInteractiveExecutor {
         Ok(SkillOutput {
             completed: true,
             summary: "【mock】交互式技能会话 resume 完成(流程演示,未真 spawn claude)".to_string(),
+        })
+    }
+
+    /// V1 Issue2 Phase2b: mock PTY mode. Sends a few 【mock】 bytes (so the
+    /// UI has something to render in tests) and drains `input_rx`. Never
+    /// spawns a real PTY — self-labeled, never pretends to be real execution.
+    async fn run_skill_pty(
+        &self,
+        plan: &LaunchPlan,
+        _ctx: &RunCtx,
+        bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
+        mut input_rx: mpsc::UnboundedReceiver<PtyInput>,
+    ) -> Result<SkillOutput, ExecError> {
+        let _ = write_mock_metrics_toml(&plan.cwd);
+
+        // Send mock output so the UI has something to render in tests.
+        let _ = bytes_tx.send(
+            "【mock】pty output (no real claude spawned)\r\n"
+                .as_bytes()
+                .to_vec(),
+        );
+
+        // Drain input (the UI may send resize/input — ignore, just consume).
+        while input_rx.try_recv().is_ok() {}
+
+        Ok(SkillOutput {
+            completed: true,
+            summary: "【mock】pty 交互式技能会话完成(流程演示,未真 spawn claude)".to_string(),
         })
     }
 }

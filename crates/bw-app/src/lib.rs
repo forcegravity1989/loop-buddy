@@ -824,6 +824,20 @@ pub enum Command {
     SetScope(Scope),
     /// Select (or clear) the chat-focused session in the operating view.
     SelectSession(Option<SessionId>),
+    /// V1 Issue2 Phase2b: user-typed bytes from the in-app xterm.js terminal
+    /// (`onData` callback). The App forwards these to the PTY writer via
+    /// the `pty_input_tx` channel. Only dispatched when PTY mode is active.
+    TerminalInput {
+        bytes: Vec<u8>,
+    },
+    /// V1 Issue2 Phase2b: terminal resize from the in-app xterm.js
+    /// (`onResize` callback). The App forwards this to `master.resize()`.
+    /// The UI should also re-assert (getAppliedSize, orca §2.4) — if the
+    /// PTY's applied size doesn't match, re-send this.
+    TerminalResize {
+        cols: u16,
+        rows: u16,
+    },
 }
 
 /// Kernel → UI facts (already happened).
@@ -930,6 +944,15 @@ pub enum Event {
     /// nothing-to-do no-op path) — carries the real tally.
     LegacyShellsMigrated {
         report: LegacyMigrationReport,
+    },
+    /// V1 Issue2 Phase2b: bytes from the PTY (agent's stdout/stderr). The
+    /// UI writes these to xterm.js. Emitted by `poll_pty_bytes` (drains the
+    /// `pty_bytes_rx` channel from the background PTY read task). Only
+    /// emitted when PTY mode is active (`with_pty` wired by the desktop
+    /// kernel). The bytes are raw terminal escape sequences — xterm.js
+    /// interprets them, buddy doesn't parse.
+    TerminalBytes {
+        bytes: Vec<u8>,
     },
 }
 
@@ -1239,6 +1262,22 @@ pub struct AppState {
     /// debounce needed within a single tick; the 5-minute poller remains as
     /// backstop for Stop events processed with delay).
     pub pending_stop_check: bool,
+    /// V1 Issue2 Phase2b: PTY input sender — forwards user-typed bytes
+    /// (`Command::TerminalInput`) and resize (`Command::TerminalResize`)
+    /// to the background PTY task. `None` when PTY mode isn't active or no
+    /// interactive session is running. Set in `run_issue_interactive` when
+    /// spawning a PTY session; cleared when the session settles.
+    pub pty_input_tx: Option<mpsc::UnboundedSender<bw_engine::PtyInput>>,
+    /// V1 Issue2 Phase2b: PTY bytes receiver — drains PTY output bytes
+    /// from the background read task and emits `Event::TerminalBytes`.
+    /// `None` when PTY mode isn't active or no session is running.
+    /// Drained in `poll_pty_bytes` (called from `tick_scheduler`).
+    pub pty_bytes_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
+    /// V1 Issue2 Phase2b: whether PTY mode is enabled (the desktop kernel
+    /// wires it via `App::with_pty`). When `true`, `run_issue_interactive`
+    /// uses `run_skill_pty` (in-app terminal). When `false`, it uses the
+    /// old `run_skill` (system terminal / mock).
+    pub pty_enabled: bool,
 }
 
 /// P4: everything the Issue-detail overlay shows, assembled read-only at
@@ -1280,6 +1319,9 @@ impl Default for AppState {
             last_inreview_poll: 0,
             interactive_sessions: HashMap::new(),
             pending_stop_check: false,
+            pty_input_tx: None,
+            pty_bytes_rx: None,
+            pty_enabled: false,
         }
     }
 }
@@ -1383,6 +1425,16 @@ impl App {
     /// so the five roles have a real substrate from birth instead of Mock.
     pub fn with_workspaces_root(mut self, root: PathBuf) -> Self {
         self.workspaces_root = Some(root);
+        self
+    }
+
+    /// V1 Issue2 Phase2b: enable PTY mode — `run_issue_interactive` spawns
+    /// `claude` in a PTY (portable-pty) instead of a system terminal, and
+    /// streams bytes via `Event::TerminalBytes` / `Command::TerminalInput`.
+    /// The desktop kernel calls this; examples / headless drivers don't
+    /// (they use the old system-terminal / mock path).
+    pub fn with_pty(mut self) -> Self {
+        self.state.pty_enabled = true;
         self
     }
 
@@ -1683,6 +1735,30 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// V1 Issue2 Phase2b: drain pending PTY bytes from the background read
+    /// task and emit `Event::TerminalBytes` for each chunk. Called from
+    /// `tick_scheduler` (and can be called from the desktop kernel's
+    /// `select!` loop for more prompt delivery). No PTY session active →
+    /// no-op. The bytes are raw terminal escape sequences — the UI's
+    /// xterm.js interprets them, buddy doesn't parse.
+    fn poll_pty_bytes(&mut self) {
+        // Collect all pending bytes first (releases the mutable borrow on
+        // `pty_bytes_rx` before calling `self.emit`).
+        let chunks: Vec<Vec<u8>> = {
+            let Some(rx) = self.state.pty_bytes_rx.as_mut() else {
+                return; // no PTY session active
+            };
+            let mut chunks = Vec::new();
+            while let Ok(bytes) = rx.try_recv() {
+                chunks.push(bytes);
+            }
+            chunks
+        };
+        for bytes in chunks {
+            self.emit(Event::TerminalBytes { bytes });
+        }
     }
 
     /// V1 Issue2 Phase2a: poll codehub/github for open MRs on interactive
@@ -4086,6 +4162,10 @@ impl App {
         // backstop). No listener (hook_event_rx = None) = no-op.
         let _ = self.poll_hook_events().await;
 
+        // V1 Issue2 Phase2b: drain PTY bytes → Event::TerminalBytes (for the
+        // UI's xterm.js to render). Best-effort — no PTY session = no-op.
+        self.poll_pty_bytes();
+
         // V1 Issue2 Phase2b: Stop-triggered InReview check. When a `Stop`
         // hook event was received (agent finished a turn), run
         // `poll_interactive_inreview` immediately — the Stop is the real-time
@@ -4962,21 +5042,51 @@ impl App {
             skills: spec.skills.clone(),
         });
 
+        // V1 Issue2 Phase2b: when PTY mode is enabled (desktop kernel wires
+        // it via `App::with_pty`), the backgrounded path creates byte-stream
+        // channels and uses `run_skill_pty` (PTY spawn + byte streaming)
+        // instead of `run_skill` (system terminal). The inline path
+        // (examples/headless) never uses PTY — no UI to render bytes.
+
         if let Some(settle_tx) = self.settle_tx.clone() {
             // ── Backgrounded (desktop kernel) ──
-            let handle = tokio::spawn(async move {
-                let result = if is_resume {
-                    executor.run_skill_resume(&plan, &ctx).await
-                } else {
-                    executor.run_skill(&plan, &ctx).await
-                }
-                .map_err(|e| AppError::Engine(e.to_string()));
-                let _ = settle_tx.send(SettleReq {
-                    project: p,
-                    issue: id,
-                    outcome: SettleOutcome::Interactive(result),
-                });
-            });
+            let handle = if self.state.pty_enabled {
+                // V1 Issue2 Phase2b: PTY mode — create byte-stream channels
+                // and spawn via `run_skill_pty`. The App holds `input_tx`
+                // (for forwarding `Command::TerminalInput`) and `bytes_rx`
+                // (for draining → `Event::TerminalBytes`).
+                let (bytes_tx, bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+                let (input_tx, input_rx) = mpsc::unbounded_channel::<bw_engine::PtyInput>();
+                self.state.pty_input_tx = Some(input_tx);
+                self.state.pty_bytes_rx = Some(bytes_rx);
+                tokio::spawn(async move {
+                    let result = executor
+                        .run_skill_pty(&plan, &ctx, bytes_tx, input_rx)
+                        .await
+                        .map_err(|e| AppError::Engine(e.to_string()));
+                    let _ = settle_tx.send(SettleReq {
+                        project: p,
+                        issue: id,
+                        outcome: SettleOutcome::Interactive(result),
+                    });
+                })
+            } else {
+                // System-terminal mode (2a behavior — PTY not enabled or
+                // examples/headless). The task calls run_skill / run_skill_resume.
+                tokio::spawn(async move {
+                    let result = if is_resume {
+                        executor.run_skill_resume(&plan, &ctx).await
+                    } else {
+                        executor.run_skill(&plan, &ctx).await
+                    }
+                    .map_err(|e| AppError::Engine(e.to_string()));
+                    let _ = settle_tx.send(SettleReq {
+                        project: p,
+                        issue: id,
+                        outcome: SettleOutcome::Interactive(result),
+                    });
+                })
+            };
             self.state.active_run = Some(ActiveRun {
                 project: p,
                 issue,
@@ -8160,6 +8270,21 @@ impl App {
             Command::SetPanel(p) => self.state.panel = p,
             Command::SetScope(s) => self.state.scope = s,
             Command::SelectSession(s) => self.state.active_session = s,
+            // V1 Issue2 Phase2b: forward user-typed bytes to the PTY writer.
+            // No PTY session active → silently drop (best-effort — the UI
+            // shouldn't send input when no session is running, but a race
+            // between session end and the last keystroke is possible).
+            Command::TerminalInput { bytes } => {
+                if let Some(tx) = &self.state.pty_input_tx {
+                    let _ = tx.send(bw_engine::PtyInput::Bytes(bytes));
+                }
+            }
+            // V1 Issue2 Phase2b: forward terminal resize to the PTY master.
+            Command::TerminalResize { cols, rows } => {
+                if let Some(tx) = &self.state.pty_input_tx {
+                    let _ = tx.send(bw_engine::PtyInput::Resize { cols, rows });
+                }
+            }
         }
         Ok(())
     }
