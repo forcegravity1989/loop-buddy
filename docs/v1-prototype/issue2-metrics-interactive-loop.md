@@ -94,8 +94,8 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
    - **m4 技能与Prompt** = buddy 自带阶段绑定技能 + 运作/替换机制(衔接层不可换 / skill 可换 / 声明式 CLI 表 / 权限)。
    - **m5 执行与证据** = issue 调度 + claude cli 会话机制(唤醒 / 注入 / **resume / 多轮记忆**)。
    - **m6 指标与健康** = 指标采集链(connector → 构造脚本(可依赖或不依赖 connector) → cron)+ 相关表(`metric`/`observation`/`connector`/`cron_task`)与重要字段(`collect_kind`/`collect_query`/`origin`/`source_kind`)。也可从 skill/agent/定时器/连接器角度讲。
-4. **交互式会话 = 持久 + 可 resume(重设计,替 F2)**:交互式 issue ↔ 一个持久 claude 会话 1:1。点 issue 卡在工作流 = **唤醒之前的会话窗口继续聊**(`claude --dangerously-skip-permissions --resume <session-id>`),不是"跑完记一行 workflow_run"。claude 自己写 `session.jsonl`(含 session-id),buddy 存 session-id,唤醒时 `--resume`(orca `buildAgentResumeStartupPlan` 同款)。**F2"补 workflow_run 行"作废** → 改设计:issue=会话、点卡=resume。交互式 run 不再是"一次性 run 到 InReview",而是持续会话,用户决定何时 finalize 出 PR。
-5. **dev 偏差**:#1 `--prefill` 注入机制待 orca 研究 + `claude --help` 核(subagent 验);#2 见上(改 resume 重设计);#3 预算偏差接受(用户"无所谓")。
+4. **交互式会话 = 持久 + 可 resume(重设计,替 F2)**:交互式 issue ↔ 一个持久 claude 会话 1:1。点 issue 卡在工作流 = **唤醒之前的会话窗口继续聊**,不是"跑完记一行 workflow_run"。**resume 机制坐实(subagent 验)**:`claude --resume <session_id>`(交互,不带 -p,不注新 prompt,会话续)。session_id **从 Claude hook 的 SessionStart 事件 payload 取**——不是从 session.jsonl 文件名(文件名 UUID ≠ session_id);buddy 装一个 hook listener(127.0.0.1 http,像 orca)抓 session_id 存起来,唤醒时 `--resume <id>`。该 hook listener **一物两用**:SessionStart 抓 session_id + Stop/PreToolUse 抓生命周期事件(Phase 2)。备选 `-c`/`--continue`(resume 最近会话,不用存 id,简单 fallback);`--fork-session`(resume 时分支留审计,可选)。**F2"补 workflow_run 行"作废** → 改设计:issue=会话、点卡=resume。交互式 run 不再是"一次性 run 到 InReview",而是持续会话,用户决定何时 finalize 出 PR。
+5. **dev 偏差**:#1 `--prefill` **已解决(subagent 验)**——dev 用位置参数 prompt 是**对的**(= orca `promptInjectionMode:'argv'` 主路径,`claude "<prompt>"` auto-submit,文档化稳定);`--prefill` 是 orca 草案路径(预植入输入框、回车前审阅),buddy 不需要,代码里 `draft_prompt_flag:"--prefill"` 字段多余可清。#2 见上(resume 重设计)。#3 预算偏差接受(用户"无所谓";`--max-budget-usd` 确认只配 `--print`)。
 6. **m6 待补**:今晚只改了 m4/m5;m6(指标采集链 + 表/字段 + script kind「计划中」→「已接」校准)未动,留 Phase 5。
 
 ## 3. collect_kind 收两 kind + 绑数据=搭采集装置
