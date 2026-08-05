@@ -23,3 +23,89 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 **处置**：W1 不解，暂留。待三窗口合入后与各窗口遗留汇总转 issue。
 
 **事实源**：`crates/bw-app/src/lib.rs`（`write_charter` L7829 / `write_component_standards` L7855 / `push_head` 调用 L5522）。
+
+---
+
+## W3 · 总览重构窗口遗留
+
+**产生窗口**：W3 总览重构（`docs/v1-prototype/issue3-overview-refactor.md`）。v2 总览（ProgressAll）已落地（dev `b166929`），以下问题冒出但不在 W3 解，按窗口边界留给对应窗口或后续。
+
+### W3-1 · 北極星采不到（无 metric 行）
+
+**现象**：北極星指标在 v1 上没有 `metric` 行——采集配置落在 `project` 列（`north_star_collect_kind` / `north_star_query`），挂不上 `observation`，signal 恒 `Unknown`。W3 总览如实渲染灰卡（折线空 + delta「—」+ 底注「Unknown≠绿」），不越界建采数。
+
+**未决点**：北極星该建独立 `metric` 行（role=leading，挂 `north_star` 标记）+ 接 script connector 采数，还是沿用 project 列配置补挂观测链？
+
+**处置**：留窗口二 / 采数。W3 只 UI forward-correct，不动 schema 与采集链。
+
+**事实源**：`crates/bw-app/src/lib.rs:3143`（北極星 collect 落 project 列）、`crates/app-desktop/src/screens/op.rs`（BizMetricCard 灰卡分支）。
+
+### W3-2 · collect_kind 枚举收 5→2 + inline arm 改 script
+
+**现象**：`CollectKind` 枚举现 5 kind（Github / Connector / Bw / Script / Manual，`bw-engine/src/metrics_file.rs:40`）。W2 Phase3 申明收成 2 kind（script / manual），代码未收。W3 只在 UI 层 forward-correct：`collect_label` 把 github/codehub/bw/connector 标「legacy·迁 script」，script→script、manual→manual，不动枚举。
+
+**未决点**：枚举收口 + inline arm 改 script 的迁移落在 W2 Phase3，需同步改采数链与 metrics_file 解析。
+
+**处置**：W2 Phase3 / 采数账。W3 只 UI forward-correct，不碰 `bw-engine`。
+
+**事实源**：`crates/ui/src/vm.rs`（collect_label · forward-correct）、`crates/bw-engine/src/metrics_file.rs:40`（CollectKind 枚举 · 待 W2 收）。
+
+### W3-3 · ↻同步指标文件按钮退场
+
+**现象**：v2 总览保留「↻ 同步指标文件」按钮（`op.rs` ProgressAll 业务指标区头，原 `:1793-1797`）。HTML 原型显退场，但 W2 Phase3 已申明退场——按窗口边界 W3 不删 W2 申明的活。
+
+**未决点**：W2 Phase3 采数链正规化后，<code>SyncMetricsFile</code> 由 PR merge auto-fire 兜底，手动按钮不再需要即可退场。
+
+**处置**：W2 Phase3 账。W3 保留不删，放不碍眼处。
+
+**事实源**：`crates/app-desktop/src/screens/op.rs`（v2 业务指标区 ↻ 按钮）、`docs/v1-prototype/issue3-overview-refactor.md §3`（W2/W3 边界表）。
+
+### W3-4 · 白名单撞名 edge case
+
+**现象**：项目指标 vs 业务指标用 `is_intrinsic_metric` 名字白名单分流（命中 = 层 B 项目指标条，未命中 = 层 A 业务指标卡）。若用户手建指标名字撞 W1 seed 名（「阶段完成 Issue 数」/「开放 Issue 数」/「已合入 MR 数」），会被误判为 intrinsic。
+
+**未决点**：名字撞库低风险但存在。根治需给 metric 表加 intrinsic 布尔字段（或 source 字段区分 buddy-seed vs user-defined），动 schema。
+
+**处置**：V1 接受。后续可加 `intrinsic` 字段根治（新 seed 指标需同步白名单）。
+
+**事实源**：`crates/ui/src/vm.rs`（is_intrinsic_metric · 名字集合）、`docs/v1-prototype/issue3-overview-refactor.md §2`（白名单设计）。
+
+### W3-5 · wall HealthOverviewBar 非逐字移植 op HealthOverviewCard
+
+**现象**：v1 总览的 `HealthOverviewCard`（`op.rs:307-349`，per-project 跨阶段信号 + 点击跳 stage）被移到 `wall.rs` 成 `HealthOverviewBar`。但 wall 无 `OpVm`，改成<strong>跨项目信号分布</strong>（green/amber/red/unknown 计数，green 隐身折成计数，非 green 出声），不是逐字移植。per-project 跨阶段细节留在 ProgressAll 的阶段轴（每 stage 一个信号点）。
+
+**未决点**：wall 跨项目概览 vs op per-project 细节的分工是否最终形态？wall 是否需要点击下钻到某项目的阶段？
+
+**处置**：W3 接受当前形态（wall 跨项目分布 + op 阶段轴细节）。下钻交互待后续。
+
+**事实源**：`crates/app-desktop/src/screens/wall.rs`（HealthOverviewBar）、`crates/app-desktop/src/screens/op.rs`（StageAxis · per-stage 信号点）。
+
+### W3-6 · stats trio 从总览显示拿掉
+
+**现象**：v1 总览有 stats trio（工作流累计 / 定时任务运行中 / 优化中待验收，`op.rs` 原 ProgressAll）。v2 拿掉显示（总览聚焦指标，不堆工程计数）。数据留 `OpVm.stats` 不删（`kernel.rs`），后续可回。
+
+**未决点**：stats 是否该在别处（如 workflow panel）显示？还是退场？
+
+**处置**：W3 从总览拿掉显示，数据留 VM 不删，后续窗口可回。
+
+**事实源**：`crates/app-desktop/src/kernel.rs`（OpVm.stats · 保留）、`crates/app-desktop/src/screens/op.rs`（v2 ProgressAll · 无 stats）。
+
+### W3-7 · W2 Phase2b 嵌入终端 merge 时与 W3 总览 op.rs 共存
+
+**现象**：W2 Phase2b 嵌入终端（xterm / hook / resume）在 W2 分支已成，v1 基线无。W3 总览重构改了 `op.rs` ProgressAll。三窗口合入时，W2 的嵌入终端改动与 W3 的 op.rs v2 布局需共存。
+
+**未决点**：merge 时 op.rs 是否冲突？嵌入终端挂在哪个 panel / 区段？
+
+**处置**：W2 账。W3 只管自己改的 ProgressAll 区段，与 W2 嵌入终端的共存由 W2 合入时自解。
+
+**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md`（Phase 2b · 嵌入终端）、`crates/app-desktop/src/screens/op.rs`（W3 v2 布局）。
+
+### W3-8 · weekly delta carry-forward 伪"没变"（review Low）
+
+**现象**：`weekly_spark` 先做 carry-forward（空周继承上个已知值，保折线连续无空缺），`weekly_delta` 再读末两桶算 delta。当某指标本周无新观测但 8 周窗内有旧数据时，末周桶被 carry-forward 填满 → delta 算成 `0.0`，渲染"→ 0.0 / vs 上周"——读着像"没变"，实为"本周没采"。
+
+**未决点**：delta 该不该在"末周桶是 carry-forward 而非真观测"时显「—」（无数据）而非 `0.0`？需 `weekly_spark` 多返回一个"末周桶有无真观测"标志。
+
+**处置**：W3 不解（review 判 Low + 缓解已在：buddy 情况行的 `metrics_stale` 计数标"N 个指标本周未记·建议复盘" + 北極星卡 collection_chain 显"cron 未跑"——信息在，只是不在 delta 数字本身）。后续增强。
+
+**事实源**：`crates/ui/src/vm.rs`（`weekly_spark` carry-forward / `weekly_delta`）、`crates/app-desktop/src/screens/op.rs`（buddy 情况行 `metrics_stale`）。

@@ -187,11 +187,120 @@ pub struct MetricVm {
     pub trend: Vec<f32>,
     /// Sparkline geometry over the trend (empty polyline when <1 point).
     pub spark: SparkPath,
+    /// V1-Issue3 · true = 项目指标层B (intrinsic buddy-seeded code-stats:
+    /// 开放Issue/已合入MR/阶段完成), false = 业务指标层A (user's own
+    /// north-star / leading / lagging). Drives the 项目指标 strip vs 业务指标
+    /// section split. Name-based whitelist — no schema column added.
+    pub is_intrinsic: bool,
+    /// V1-Issue3 · week-over-week delta (latest ISO-week value − prior week).
+    /// None when <2 weeks of history — renders as "—".
+    pub weekly_delta: Option<f32>,
+    /// V1-Issue3 · last ~8 ISO weeks, one value per week (carry-forward when a
+    /// week has no observation). Empty when no parseable history at all.
+    pub weekly_spark: Vec<f32>,
+    /// V1-Issue3 · collection-chain status for the v2 card footer.
+    pub collection_chain: CollectionChainVm,
+}
+
+/// V1-Issue3 · collection-chain status: how this metric is collected — drives
+/// the per-card collection-chain footer in the v2 业务指标 section.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct CollectionChainVm {
+    /// Two-kind forward-correct label:
+    /// - "script" (script connector, live)
+    /// - "manual" (手填 / 界面手建, no collection plan)
+    /// - "machine" (buddy auto-feeds an intrinsic metric, e.g. stage-done count)
+    /// - "legacy·迁script" (github/bw/connector — W2 Phase3 collapses to script)
+    pub collect_label: String,
+    /// The project's script connector name if this metric is script-collected.
+    pub connector_name: Option<String>,
+    /// The project's CollectMetrics cron task last tick (unix sec), if any.
+    pub cron_last_tick: Option<i64>,
+    /// Whether this metric has at least one observation.
+    pub has_observation: bool,
 }
 
 /// Sparkline box used by the stage KPI cards (matches prototype wsMetrics).
 pub const SPARK_W: f32 = 120.0;
 pub const SPARK_H: f32 = 34.0;
+
+/// V1-Issue3 · whitelist of W1-seeded intrinsic metric names (buddy's own
+/// code-stats, not the user's business metrics). Hits = layer-B 项目指标条,
+/// misses = layer-A 业务指标卡. Name-based — no schema column added. The three
+/// names come from `seed_stage_done_metrics` (`bw-app/src/lib.rs:2491` =
+/// "阶段完成 Issue 数") + `seed_codehub_public_metrics` PAIR (`lib.rs:2566` =
+/// "开放 Issue 数" / "已合入 MR 数"). A user metric whose name collides is a
+/// low-risk edge case (V1 accepts — see issue3 design §2).
+pub fn is_intrinsic_metric(name: &str) -> bool {
+    matches!(name, "阶段完成 Issue 数" | "开放 Issue 数" | "已合入 MR 数")
+}
+
+/// V1-Issue3 · forward-correct two-kind label from the raw `collect_kind`
+/// column. Empty collect_kind on an intrinsic metric = buddy auto-feeds it
+/// ("machine"); on a user metric = "manual" (界面手建). Legacy kinds
+/// (github/codehub/bw/connector) are all headed for script under W2 Phase 3,
+/// labeled "legacy·迁script" — honest about the migration direction without
+/// touching the enum (W2's scope).
+pub fn collect_label(collect_kind: &str, is_intrinsic: bool) -> &'static str {
+    match collect_kind {
+        "script" => "script",
+        "manual" => "manual",
+        "github" | "codehub" | "bw" | "connector" => "legacy·迁script",
+        _ => {
+            if is_intrinsic {
+                "machine"
+            } else {
+                "manual"
+            }
+        }
+    }
+}
+
+/// V1-Issue3 · bucket observations by ISO week, take the latest value per
+/// week for the last 8 weeks (carry-forward when a week has none). Empty when
+/// no parseable observation exists in the window. `obs` = `(unix_ts, raw)`
+/// pairs oldest→newest (caller ensures ASC — later values overwrite earlier
+/// within the same week bucket).
+pub fn weekly_spark(obs: &[(i64, String)], now_unix: i64) -> Vec<f32> {
+    let week_start = iso_week_start_unix(now_unix);
+    const DAY: i64 = 86_400;
+    const WEEK: i64 = 7 * DAY;
+    let mut latest: [Option<f32>; 8] = [None; 8];
+    for &(ts, ref raw) in obs {
+        let val = match parse_magnitude(raw) {
+            Some(m) => m as f32,
+            None => continue,
+        };
+        for (i, slot) in latest.iter_mut().enumerate() {
+            let bucket_start = week_start - (7 - i as i64) * WEEK;
+            if ts >= bucket_start && ts < bucket_start + WEEK {
+                *slot = Some(val);
+                break;
+            }
+        }
+    }
+    // Carry-forward: weeks with no observation inherit the last known value,
+    // so the sparkline reads as a continuous line (no gaps to misread as 0).
+    let mut spark = Vec::with_capacity(8);
+    let mut last: Option<f32> = None;
+    for v in latest.iter() {
+        if let Some(val) = v {
+            last = Some(*val);
+        }
+        if let Some(val) = last {
+            spark.push(val);
+        }
+    }
+    spark
+}
+
+/// V1-Issue3 · latest week − prior week. None when <2 weeks of history.
+pub fn weekly_delta(spark: &[f32]) -> Option<f32> {
+    match spark {
+        [.., a, b] => Some(*b - *a),
+        _ => None,
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn metric_vm(
@@ -209,11 +318,15 @@ pub fn metric_vm(
     source: Option<SourceKind>,
     collect_kind: &str,
     observation_raws: &[String],
+    weekly_spark: &[f32],
+    weekly_delta: Option<f32>,
+    collection_chain: CollectionChainVm,
 ) -> MetricVm {
     let trend: Vec<f32> = observation_raws
         .iter()
         .filter_map(|raw| parse_magnitude(raw).map(|m| m as f32))
         .collect();
+    let is_intrinsic = is_intrinsic_metric(name);
     MetricVm {
         id,
         name: name.into(),
@@ -230,6 +343,10 @@ pub fn metric_vm(
         collect_kind: collect_kind.into(),
         spark: sparkline_path(&trend, SPARK_W, SPARK_H),
         trend,
+        is_intrinsic,
+        weekly_delta,
+        weekly_spark: weekly_spark.to_vec(),
+        collection_chain,
     }
 }
 

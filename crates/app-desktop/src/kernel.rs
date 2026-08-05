@@ -14,8 +14,8 @@
 
 use bw_app::{ActionState, App, Command, Event, Panel, Scope, SettleReq, View};
 use bw_core::model::{
-    AgentRef, Author, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal, SkillRef,
-    StageKind,
+    AgentRef, Author, CronMode, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal,
+    SkillRef, StageKind, CONNECTOR_KIND_SCRIPT,
 };
 use bw_core::{MetricId, SessionId};
 use bw_engine::{
@@ -28,13 +28,14 @@ use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
-    activity_row, agent_card, attention_from_rows, cadence_label, connector_card, cron_row,
-    hub_overview, issue_card, knowledge_row, metric_vm, notify_feed, observation_feed,
-    project_card, session_status_label, settings_vm, skill_card, stage_detail, stage_nav,
-    version_log_vm, week_plan_rows, workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm,
-    ConnectorCardVm, CronRowVm, FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm,
-    NotifyItemVm, ProjectCardVm, SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm,
-    StageNavItemVm, WeekPlanRowVm, WorkflowHubRowVm,
+    activity_row, agent_card, attention_from_rows, cadence_label, collect_label, connector_card,
+    cron_row, hub_overview, is_intrinsic_metric, issue_card, knowledge_row, metric_vm, notify_feed,
+    observation_feed, project_card, session_status_label, settings_vm, skill_card, stage_detail,
+    stage_nav, version_log_vm, week_plan_rows, weekly_delta, weekly_spark, workflow_hub_row,
+    ActivityRowVm, ActivitySource, AgentCardVm, CollectionChainVm, ConnectorCardVm, CronRowVm,
+    FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm,
+    SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm,
+    WorkflowHubRowVm,
 };
 use ui::{overall_progress, Attention};
 
@@ -945,15 +946,54 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // Observation series per metric (ASC) — the honest trend + feed source.
     let mut series: HashMap<MetricId, Vec<String>> = HashMap::new();
     let mut latest_ts: HashMap<MetricId, OffsetDateTime> = HashMap::new();
+    // V1-Issue3 · per-metric (ts, raw) pairs for ISO-week sparkline bucketing.
+    let mut series_ts: HashMap<MetricId, Vec<(i64, String)>> = HashMap::new();
     for o in &observations {
         series.entry(o.metric_id).or_default().push(o.raw.clone());
         latest_ts.insert(o.metric_id, o.ts);
+        series_ts
+            .entry(o.metric_id)
+            .or_default()
+            .push((o.ts.unix_timestamp(), o.raw.clone()));
     }
+
+    // V1-Issue3 · the project's CollectMetrics cron last tick + script
+    // connector name — shared across all this project's metrics'
+    // collection_chain. Read from AppState's cached rows (already loaded by
+    // `refresh_cron_tasks`/`refresh_connectors`), no new store call.
+    let now_unix = now.unix_timestamp();
+    let cron_last_tick: Option<i64> = state
+        .cron_tasks
+        .iter()
+        .filter(|c| c.project_id == Some(pid) && matches!(c.mode, CronMode::CollectMetrics))
+        .filter_map(|c| c.last_run_at)
+        .map(|t| t.unix_timestamp())
+        .max();
+    let script_connector: Option<String> = state
+        .connectors
+        .iter()
+        .find(|c| c.project_id == Some(pid) && c.kind == CONNECTOR_KIND_SCRIPT)
+        .map(|c| c.name.clone());
 
     let metrics: Vec<MetricVm> = sigs
         .metrics
         .iter()
         .map(|m| {
+            let mid = m.id;
+            let obs_ts = series_ts.get(&mid).map(Vec::as_slice).unwrap_or(&[]);
+            let wk_spark = weekly_spark(obs_ts, now_unix);
+            let wk_delta = weekly_delta(&wk_spark);
+            let is_intrinsic = is_intrinsic_metric(&m.name);
+            let chain = CollectionChainVm {
+                collect_label: collect_label(&m.collect_kind, is_intrinsic).to_string(),
+                connector_name: if m.collect_kind == "script" {
+                    script_connector.clone()
+                } else {
+                    None
+                },
+                cron_last_tick,
+                has_observation: latest_ts.contains_key(&mid),
+            };
             metric_vm(
                 m.id,
                 &m.name,
@@ -969,6 +1009,9 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
                 m.source,
                 &m.collect_kind,
                 series.get(&m.id).map(Vec::as_slice).unwrap_or(&[]),
+                &wk_spark,
+                wk_delta,
+                chain,
             )
         })
         .collect();
@@ -1153,7 +1196,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // P5: weekly-review card — a pure read of already-recorded facts. Counts
     // come off `state.issues` + the per-metric latest-observation-ts map built
     // above; the date math (ISO week, 90-day line) lives in the VM.
-    let now_unix = now.unix_timestamp();
     let week_start = ui::vm::iso_week_start_unix(now_unix);
     let week_review = ui::vm::week_review_vm(
         now_unix,

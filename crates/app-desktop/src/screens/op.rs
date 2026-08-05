@@ -301,54 +301,10 @@ fn ActiveSessionsRail(op: OpVm) -> Element {
     }
 }
 
-/// L2(plan/11): the health-signal half of the old `HealthOverview`, now a
-/// card at the top of the 看板/进度 panel instead of a left-rail widget that
-/// used to render on every panel regardless of relevance. Same data
-/// (`op.attention`), same click-through (switch scope to the flagged stage).
-#[component]
-fn HealthOverviewCard(op: OpVm) -> Element {
-    let k = use_context::<Kernel>();
-    let card = theme::card();
-    let serif = theme::SERIF;
-    let ink3 = theme::INK_3;
-    let quiet = op.attention.watch.is_empty();
-    rsx! {
-        div {
-            style: "{card} padding:16px 20px;margin-bottom:16px;",
-            div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:10px;", "健康概览" }
-            if quiet {
-                div { style: "font-size:12.5px;color:{ink3};line-height:1.7;", "一切安静。绿色隐身,只有红黄出声。" }
-            } else {
-                div {
-                    style: "display:flex;flex-wrap:wrap;gap:8px;",
-                    for (kind , sig) in op.attention.watch.clone() {
-                        {
-                            let k = k.clone();
-                            let color = ui::signal_color(sig);
-                            let dot = theme::dot(color, 8);
-                            let label = kind.label();
-                            let sig_label = ui::vm::signal_label(sig);
-                            rsx! {
-                                button {
-                                    key: "{kind.index()}",
-                                    style: "text-align:left;background:transparent;border:1px solid #ECE6DA;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;gap:8px;",
-                                    onclick: move |_| k.send(Command::SetScope(Scope::Stage(kind))),
-                                    span { style: "{dot}" }
-                                    span { style: "font-size:12.5px;", "{label}" }
-                                    span { style: "font-size:11px;color:{ink3};", "{sig_label}" }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            div {
-                style: "font-size:11px;color:{ink3};margin-top:12px;border-top:1px dashed #E2DCCF;padding-top:10px;",
-                "{op.attention.steady} 个阶段平稳 · {op.archived} 条已归档"
-            }
-        }
-    }
-}
+/// V1-Issue3 · cross-stage health overview moved to `wall.rs` (project-list
+/// entry page). The ProgressAll page no longer repeats it — the 阶段轴 already
+/// shows per-stage signal dots, so a separate health-overview card here was
+/// redundant. See `wall::HealthOverviewBar`.
 
 #[component]
 fn StageSessions(op: OpVm) -> Element {
@@ -1652,184 +1608,183 @@ fn ProgressAll(op: OpVm) -> Element {
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
+    let ink4 = theme::INK_4;
     let mono = theme::MONO;
-    let bar_color = ui::progress_color(op.overall);
-    let overall = op.overall;
-    let mix = op.cycle.mix();
-    let stats = [
-        ("工作流累计", op.stats.workflows_total),
-        ("定时任务运行中", op.stats.routines_active),
-        ("优化中待验收", op.stats.optimizing),
-    ];
-    let goal_color = if op.week_review.goal_negative {
-        "#C5654A"
+    let border = theme::BORDER;
+    let clay = theme::CLAY;
+    let k_sync = k.clone();
+
+    // V1-Issue3 · split metrics: intrinsic (项目指标 strip) vs business (业务指标
+    // 值卡). stage_kind.is_none() = project-level (北极星/L1/L2/L3 + codehub
+    // 公共指标). Intrinsic ones are buddy's own code-stats, not user business
+    // metrics — whitelist-driven (is_intrinsic_metric, name-based).
+    let intrinsic: Vec<MetricVm> = op
+        .metrics
+        .iter()
+        .filter(|m| m.is_intrinsic)
+        .cloned()
+        .collect();
+    let business: Vec<MetricVm> = op
+        .metrics
+        .iter()
+        .filter(|m| !m.is_intrinsic && m.stage_kind.is_none())
+        .cloned()
+        .collect();
+
+    // North star: if a business metric matches the project's north_star name,
+    // use it (might still be grey if no observations). Else the north star has
+    // no metric row (v1 留白: collect 落 project 列非 metric 行) — render honest
+    // grey. Either way the rendering is data-driven, not hardcoded.
+    let ns_name = op.north_star.clone();
+    let ns_def = op.ns_def.clone();
+    let ns_metric: Option<MetricVm> = business.iter().find(|m| m.name == ns_name).cloned();
+    let lagging: Vec<MetricVm> = business
+        .iter()
+        .filter(|m| !m.leading && m.name != ns_name)
+        .cloned()
+        .collect();
+    let leading: Vec<MetricVm> = business
+        .iter()
+        .filter(|m| m.leading && m.name != ns_name)
+        .cloned()
+        .collect();
+
+    // buddy 情况 — derived from existing op data (attention/week_review/issues).
+    let in_review = op
+        .issues
+        .iter()
+        .filter(|i| i.status == IssueStatus::InReview)
+        .count();
+    let stage_label = op.active_stage.label();
+    let done_week = op.week_review.done_this_week;
+    let open_count = op.week_review.open_count;
+    let metrics_stale = op.week_review.metrics_stale;
+
+    // ▾配置 collapse toggle — default collapsed (config is secondary on the
+    // overview; the v2 layout surfaces metrics first, config behind a click).
+    let mut config_open = use_signal(|| false);
+    let cfg_arrow = if config_open() { "▴" } else { "▾" };
+    let cfg_label = if config_open() {
+        "收起 ▾"
     } else {
-        ink2
+        "展开 ▸"
     };
+
     rsx! {
-        // L2(plan/11): health belongs on the board, at the very top — the
-        // number-one thing "整体进展" answers before anything else.
-        HealthOverviewCard { op: op.clone() }
-        // P5: weekly-review card — pure read of recorded facts, top of panel.
-        div {
-            style: "{card} padding:16px 20px;margin-bottom:16px;",
-            div {
-                style: "display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;",
-                span { style: "font-family:{serif};font-size:16px;font-weight:600;", "本周复盘" }
-                span { style: "font-size:12px;color:{ink3};", "{op.week_review.week_label}" }
-            }
-            div {
-                style: "display:grid;grid-template-columns:repeat(4,1fr);gap:12px;",
-                div {
-                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "本周完成" }
-                    div { style: "font-family:{mono};font-size:20px;font-weight:600;", "{op.week_review.done_this_week} 件" }
-                }
-                div {
-                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "仍开着" }
-                    div { style: "font-family:{mono};font-size:20px;font-weight:600;", "{op.week_review.open_count} 件" }
-                }
-                div {
-                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "本周未记指标" }
-                    div { style: "font-family:{mono};font-size:20px;font-weight:600;", "{op.week_review.metrics_stale} 个" }
-                }
-                div {
-                    div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "90 天目标" }
-                    div { style: "font-family:{mono};font-size:13px;font-weight:600;color:{goal_color};", "{op.week_review.goal_label}" }
-                }
-            }
-            div {
-                style: "font-size:11px;color:{ink3};margin-top:10px;",
-                "全从已记录的数据算:本周结算的 Issue、未结 Issue、本周无观测的指标、距创建日 90 天。"
-            }
+        // ═══ 1. 项目指标 strip (intrinsic · compact · no signal lights) ═══
+        if !intrinsic.is_empty() {
+            ProjectMetricStrip { intrinsic, active_stage: op.active_stage }
         }
-        EditProjectCard { op: op.clone() }
-        WorkspaceConfig { op: op.clone() }
-        if op.remote_path.trim().is_empty() {
-            AttachRepoCard { op: op.clone() }
-        }
+
+        // ═══ 2. 业务指标 section (北極星 → 滯後 → 引領, 值卡并排) ═══
         div {
             style: "{card} padding:20px 22px;margin-bottom:16px;",
-            div { style: "display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;",
-                span { style: "font-family:{serif};font-size:16px;font-weight:600;", "总进度" }
-                span { style: "font-family:{mono};font-size:14px;", "{overall}%" }
-            }
             div {
-                style: "height:8px;border-radius:4px;background:#E6E0D2;overflow:hidden;margin-bottom:10px;",
-                div { style: "height:100%;width:{overall}%;background:{bar_color};" }
+                style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;",
+                span { style: "font-family:{serif};font-size:16px;font-weight:600;", "业务指标" }
+                // plan18-⑦ · ↻同步按钮: W2 Phase3 owns its removal; v2 总览
+                // 暂保留在不碍眼处(偏差:HTML 原型显退场,按窗口边界留 W2)。
+                button {
+                    style: "font-size:12px;color:{ink2};border:1px solid {ink3};border-radius:4px;padding:3px 10px;cursor:pointer;background:transparent;",
+                    onclick: move |_| k_sync.send(Command::SyncMetricsFile),
+                    "↻ 同步指标文件"
+                }
             }
-            div {
-                style: "display:flex;align-items:center;gap:8px;",
-                span { style: "font-size:11px;color:{ink3};", "{op.cycle.label()} 配比" }
+            div { style: "font-size:12px;color:{ink3};margin-bottom:16px;", "北极星 → 滞后 → 引领 · 带健康灯 · 上卷项目健康" }
+
+            // 北極星 (首卡 · 高亮 · 全宽)
+            if !ns_name.is_empty() && ns_metric.is_some() {
+                BizMetricCard { m: ns_metric.clone().unwrap(), is_north_star: true }
+            }
+            if !ns_name.is_empty() && ns_metric.is_none() {
+                // North star has no metric row (v1 留白 · 窗口二未绑采数) → honest grey.
                 div {
-                    style: "flex:1;display:flex;height:6px;border-radius:3px;overflow:hidden;max-width:220px;",
-                    for (i, sk) in StageKind::ALL.iter().enumerate() {
-                        span { key: "{i}", style: "width:{mix[i]}%;background:{sk.color()};", "" }
+                    style: "background:#F0EDE5;border:1px dashed #C8C2B4;border-left:4px solid {clay};border-radius:10px;padding:18px 20px;margin-bottom:16px;",
+                    div {
+                        style: "display:flex;align-items:center;gap:8px;margin-bottom:8px;",
+                        span { style: "{theme::dot(ui::signal_color(Signal::Unknown), 10)}" }
+                        span { style: "font-family:{serif};font-size:16px;font-weight:600;", "★ {ns_name}" }
                     }
-                }
-                span { style: "font-size:11px;color:{ink3};", "{op.cycle.main_loop_label()}" }
-            }
-            div { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "各阶段进度的平均值;阶段进度在「进度 × 阶段」里手动维护 —— 它是计划数据,不是信号。" }
-        }
-        div {
-            style: "display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px;",
-            for (label, value) in stats {
-                div {
-                    key: "{label}",
-                    style: "{card} padding:16px 18px;",
-                    div { style: "font-size:12px;color:{ink3};margin-bottom:6px;", "{label}" }
-                    div { style: "font-family:{mono};font-size:22px;font-weight:600;", "{value}" }
-                }
-            }
-        }
-        if !op.week_plan.is_empty() {
-            div {
-                style: "{card} padding:20px 22px;margin-bottom:16px;",
-                div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:12px;", "本周计划" }
-                div {
-                    style: "display:grid;grid-template-columns:1.4fr .8fr .8fr .9fr 1.6fr .5fr;gap:8px;font-size:12px;color:{ink3};margin-bottom:6px;",
-                    span { "引领指标" } span { "上周目标" } span { "当前值" } span { "本周目标" } span { "依据 / 抓手" } span { "达成" }
-                }
-                for row in op.week_plan.clone() {
-                    {
-                        let hit_txt = match row.hit {
-                            Some(true) => "●",
-                            Some(false) => "○",
-                            None => "—",
-                        };
-                        let hit_color = match row.hit {
-                            Some(true) => ui::signal_color(Signal::Green),
-                            Some(false) => ui::signal_color(Signal::Red),
-                            None => ink3,
-                        };
-                        rsx! {
-                            div {
-                                key: "{row.name}",
-                                style: "display:grid;grid-template-columns:1.4fr .8fr .8fr .9fr 1.6fr .5fr;gap:8px;font-size:12.5px;align-items:center;margin-bottom:7px;",
-                                span { "{row.name}" }
-                                span { style: "font-family:{mono};color:{ink2};", "{row.last_target}" }
-                                span { style: "font-family:{mono};", "{row.current}" }
-                                span { style: "font-family:{mono};", "{row.target}" }
-                                span { style: "color:{ink2};", "{row.driver}" }
-                                span { style: "color:{hit_color};", "{hit_txt}" }
-                            }
-                        }
+                    div {
+                        style: "display:flex;align-items:baseline;gap:14px;margin-bottom:8px;",
+                        span { style: "font-family:{serif};font-weight:700;font-size:20px;color:{ink4};", "—" }
+                        span { style: "font-size:12px;color:{ink3};", "目标未设" }
+                    }
+                    div {
+                        style: "font-size:12px;color:{ink3};",
+                        span { "vs 上周 " }
+                        span { style: "font-family:{mono};color:{ink4};", "—" }
+                        span { "  无观测" }
+                    }
+                    div { style: "font-size:11px;color:{ink4};margin-top:8px;", "无观测 · Unknown≠绿 · 窗口二未绑采数" }
+                    if !ns_def.is_empty() {
+                        div { style: "font-size:11.5px;color:{ink3};margin-top:6px;line-height:1.6;", "{ns_def}" }
                     }
                 }
             }
-        }
-        // plan18-⑤ · 项目级业务指标区段:北极星在顶栏,这里显不绑阶段的
-        // 项目级指标(stage_kind=NULL,如 L1/L2/L3 业务指标、项目级滞后)。
-        // 之前 kernel.rs:970 的 filter(stage_kind==Some) 只管阶段卡,项目级
-        // 指标被全过滤掉、UI 完全看不见(§4.11)。这里补渲染段,data 已在
-        // OpVm.metrics(全量),只筛 stage_kind.is_none()。
-        if op.metrics.iter().any(|m| m.stage_kind.is_none()) {
-            div {
-                style: "{card} padding:20px 22px;margin-bottom:16px;",
-                div {
-                    style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;",
-                    span { style: "font-family:{serif};font-size:16px;font-weight:600;", "项目级业务指标" }
-                }
-                div { style: "font-size:12px;color:{ink3};margin-bottom:12px;", "不绑阶段的项目级指标(北极星在顶栏,引领·滞后在此)" }
+
+            // 滞后性指标 (结果型 · 看趋势不追本周)
+            if !lagging.is_empty() {
+                div { style: "font-family:{mono};font-size:10.5px;font-weight:600;letter-spacing:.08em;color:{clay};margin:14px 0 10px;", "滞后性指标 · 结果型 · 看趋势不追本周" }
                 div {
                     style: "display:grid;grid-template-columns:repeat(2,1fr);gap:12px;",
-                    for m in op.metrics.iter().filter(|m| m.stage_kind.is_none()).cloned() {
-                        MetricCard { key: "{m.name}", m }
+                    for m in lagging.iter().cloned() {
+                        BizMetricCard { key: "{m.name}", m, is_north_star: false }
+                    }
+                }
+            }
+
+            // 引领性指标 (定本周驱动项 · 计划指指标·指标验计划 · 本周计划折进卡里)
+            if !leading.is_empty() {
+                div { style: "font-family:{mono};font-size:10.5px;font-weight:600;letter-spacing:.08em;color:{clay};margin:14px 0 10px;", "引领性指标 · 定本周驱动项 · 计划指指标·指标验计划" }
+                div {
+                    style: "display:grid;grid-template-columns:repeat(2,1fr);gap:12px;",
+                    for m in leading.iter().cloned() {
+                        BizMetricCard { key: "{m.name}", m, is_north_star: false }
                     }
                 }
             }
         }
+
+        // ═══ 3. buddy 情况 · 一行 (non-card · derived from existing data) ═══
         div {
-            style: "{card} padding:20px 22px;",
-            div { style: "font-family:{serif};font-size:16px;font-weight:600;margin-bottom:12px;", "阶段" }
-            for s in op.stages.clone() {
-                {
-                    let k = k.clone();
-                    let color = ui::signal_color(s.health);
-                    let dot = theme::dot(color, 8);
-                    let (chip_bg, chip_fg, _) = ui::stage_tint(s.kind);
-                    let chip = theme::chip(chip_bg, chip_fg);
-                    let bar = ui::progress_color(s.progress);
-                    let kind = s.kind;
-                    let progress = s.progress;
-                    let n = s.n;
-                    let role = s.detail.role;
-                    rsx! {
-                        button {
-                            key: "{n}",
-                            style: "width:100%;display:grid;grid-template-columns:24px 1.4fr 130px 1fr 60px;gap:10px;align-items:center;background:transparent;border:none;border-bottom:1px dashed #ECE6DA;padding:10px 2px;cursor:pointer;text-align:left;",
-                            onclick: move |_| {
-                                k.send(Command::SetScope(Scope::Stage(kind)));
-                                k.send(Command::SetPanel(Panel::Workflow));
-                            },
-                            span { style: "{dot}" }
-                            span { style: "font-size:13px;", "{n} {kind.label()}" }
-                            span { style: "{chip}", "{role}" }
-                            div {
-                                style: "height:5px;border-radius:3px;background:#E6E0D2;overflow:hidden;",
-                                div { style: "height:100%;width:{progress}%;background:{bar};" }
-                            }
-                            span { style: "font-family:{mono};font-size:12px;color:{ink2};text-align:right;", "{progress}%" }
-                        }
+            style: "margin:0 0 16px;padding:11px 14px;border-left:3px solid {clay};background:{theme::CARD_ALT};border-radius:0 8px 8px 0;font-size:13.5px;color:{ink2};display:flex;align-items:center;gap:10px;flex-wrap:wrap;",
+            span { style: "font-family:{mono};font-size:10px;font-weight:600;letter-spacing:.06em;color:{ink3};", "buddy 情况" }
+            span { "●{stage_label}阶段" }
+            if in_review > 0 {
+                span { style: "color:{ink3};", "·" }
+                span { style: "font-family:{mono};font-weight:600;color:{clay};", "{in_review}" }
+                span { "条 Issue 评审中待你 merge" }
+            }
+            if metrics_stale > 0 {
+                span { style: "color:{ink3};", "·" }
+                span { "{metrics_stale} 个指标本周未记·建议复盘" }
+            }
+            span { style: "color:{ink3};", "·" }
+            span { "本周完成 " }
+            span { style: "font-family:{mono};font-weight:600;color:{clay};", "{done_week}" }
+            span { " / 开放 " }
+            span { style: "font-family:{mono};font-weight:600;color:{clay};", "{open_count}" }
+        }
+
+        // ═══ 4. ▾配置 (collapsed by default · 收进次级) ═══
+        div {
+            style: "{card} overflow:hidden;",
+            button {
+                style: "width:100%;display:flex;align-items:center;gap:11px;padding:13px 18px;cursor:pointer;background:transparent;border:none;text-align:left;",
+                onclick: move |_| config_open.set(!config_open()),
+                span { style: "font-family:{mono};color:{ink3};font-size:14px;", "{cfg_arrow}" }
+                span { style: "font-family:{serif};font-weight:600;font-size:15px;color:{ink2};", "配置" }
+                span { style: "font-size:12px;color:{ink3};", "收进次级 · 总览是看指标的不是改配置的" }
+                span { style: "margin-left:auto;font-family:{mono};font-size:12px;color:{ink3};", "{cfg_label}" }
+            }
+            if config_open() {
+                div {
+                    style: "border-top:1px solid {border};padding:14px 18px;",
+                    EditProjectCard { op: op.clone() }
+                    WorkspaceConfig { op: op.clone() }
+                    if op.remote_path.trim().is_empty() {
+                        AttachRepoCard { op: op.clone() }
                     }
                 }
             }
@@ -1942,6 +1897,227 @@ fn MetricCard(m: MetricVm) -> Element {
                 div { style: "font-size:11.5px;color:{ink3};margin-top:8px;line-height:1.6;", "{m.def}" }
             }
             RecordInline { metric: m.clone() }
+        }
+    }
+}
+
+/// V1-Issue3 · 项目指标 strip — compact top strip of intrinsic metrics
+/// (buddy-seeded code-stats: 开放Issue/已合入MR/阶段完成). NOT big cards, no
+/// signal lights — "只当现状数·不上卷健康". Source badges: 〔脚本采〕/〔机器记〕.
+#[component]
+fn ProjectMetricStrip(intrinsic: Vec<MetricVm>, active_stage: StageKind) -> Element {
+    let card = theme::card();
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+
+    let open_issues = intrinsic
+        .iter()
+        .find(|m| m.name == "开放 Issue 数" && m.stage_kind.is_none())
+        .cloned();
+    let merged_mrs = intrinsic
+        .iter()
+        .find(|m| m.name == "已合入 MR 数" && m.stage_kind.is_none())
+        .cloned();
+    let stage_done = intrinsic
+        .iter()
+        .find(|m| m.name == "阶段完成 Issue 数" && m.stage_kind == Some(active_stage))
+        .cloned();
+
+    rsx! {
+        div {
+            style: "{card} padding:9px 14px;margin-bottom:16px;display:flex;align-items:center;gap:6px 16px;flex-wrap:wrap;",
+            span { style: "font-family:{mono};font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:{ink3};white-space:nowrap;", "项目指标 · 代码仓级" }
+            StripItem { name: "开放 Issue", metric: open_issues }
+            StripItem { name: "已合入 MR", metric: merged_mrs }
+            StripItem { name: "阶段完成", metric: stage_done }
+            div {
+                style: "font-size:11px;color:{ink3};width:100%;margin-top:4px;line-height:1.5;",
+                "只当现状数 · 不上卷健康——buddy 固有工程数(Issue/MR/阶段),不点健康灯,不参与项目健康派生。来源徽:〔脚本采〕/〔机器记〕。"
+            }
+        }
+    }
+}
+
+/// One inline value chip in the 项目指标 strip.
+#[component]
+fn StripItem(name: &'static str, metric: Option<MetricVm>) -> Element {
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+    match metric {
+        Some(m) => {
+            let (btxt, bclr) = match m.collection_chain.collect_label.as_str() {
+                "script" => ("〔脚本采〕", "#4A5E42"),
+                "machine" => ("〔机器记〕", "#5A4E7A"),
+                "manual" => ("〔手填〕", "#8A6720"),
+                "legacy·迁script" => ("〔legacy·迁script〕", "#8C867A"),
+                _ => ("〔未接〕", "#B0503A"),
+            };
+            let val = if m.value_raw.is_empty() {
+                "—".to_string()
+            } else {
+                m.value_raw.clone()
+            };
+            rsx! {
+                span {
+                    style: "display:inline-flex;align-items:baseline;gap:5px;font-size:12.5px;",
+                    span { style: "color:{ink3};", "{name}" }
+                    span { style: "font-family:{mono};font-weight:600;font-size:13px;", "{val}" }
+                    span { style: "font-family:{mono};font-size:10.5px;color:{bclr};", "{btxt}" }
+                }
+            }
+        }
+        None => rsx! {
+            span {
+                style: "display:inline-flex;align-items:baseline;gap:5px;font-size:12.5px;",
+                span { style: "color:{ink3};", "{name}" }
+                span { style: "font-family:{mono};color:{ink3};", "—" }
+            }
+        },
+    }
+}
+
+/// V1-Issue3 · v2 业务指标值卡 — 当前值+目标+信号灯 → delta上周变化 →
+/// 按周折线. 北極星卡高亮(is_north_star=true). 引领卡额外带「本周目标+达成」
+/// (本周计划折进卡). 无观测=grey+折线空+delta「—」(data-driven, not hardcoded).
+#[component]
+fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
+    let card = theme::card();
+    let serif = theme::SERIF;
+    let ink2 = theme::INK_2;
+    let ink3 = theme::INK_3;
+    let ink4 = theme::INK_4;
+    let mono = theme::MONO;
+    let clay = theme::CLAY;
+    let sig_color = ui::signal_color(m.signal).to_string();
+    let dot = theme::dot(&sig_color, 9);
+    let has_obs = m.collection_chain.has_observation;
+
+    // Weekly sparkline geometry from weekly_spark (8-week, carry-forward).
+    let wk_spark = sparkline_path(&m.weekly_spark, 92.0, 24.0);
+    let spark_color = sig_color.clone();
+
+    // Delta: vs 上周 (green↑/red↓/grey—). None when <2 weeks of history.
+    let (delta_txt, delta_clr, delta_arrow) = match m.weekly_delta {
+        Some(d) if d > 0.0 => (format!("+{d:.1}"), "#5F7355", "↑"),
+        Some(d) if d < 0.0 => (format!("{d:.1}"), "#B0503A", "↓"),
+        Some(_) => ("0.0".into(), ink3, "→"),
+        None => ("—".into(), ink4, ""),
+    };
+
+    // North star gets a clay left border + larger name/value.
+    let ns_css = if is_north_star {
+        format!("border-left:4px solid {clay};padding:18px 20px;")
+    } else {
+        String::new()
+    };
+    let grey_css = if !has_obs {
+        "background:#F0EDE5;border:1px dashed #C8C2B4;".to_string()
+    } else {
+        String::new()
+    };
+    let name_size = if is_north_star { "16px" } else { "14px" };
+    let val_size = if is_north_star { "24px" } else { "22px" };
+
+    // 引领卡: 本周目标 + 达成 ●/○ (folded week_plan — the card IS the plan).
+    let hit_txt = match m.hit {
+        Some(true) => "●",
+        Some(false) => "○",
+        None => "—",
+    };
+    let hit_clr = match m.hit {
+        Some(true) => ui::signal_color(Signal::Green),
+        Some(false) => ui::signal_color(Signal::Red),
+        None => ink4,
+    };
+
+    // Collection chain — pre-compute strings to avoid if-let in rsx!.
+    let conn_name = m
+        .collection_chain
+        .connector_name
+        .clone()
+        .unwrap_or_default();
+    let has_tick = m.collection_chain.cron_last_tick.is_some();
+    let show_chain = is_north_star || !has_obs;
+    let collect_label = m.collection_chain.collect_label.clone();
+
+    rsx! {
+        div {
+            style: "{card} {ns_css} {grey_css} padding:14px 16px;display:flex;flex-direction:column;gap:10px;",
+            // Head: signal dot + name (+ collect badge)
+            div {
+                style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;",
+                span { style: "{dot}" }
+                span { style: "font-family:{serif};font-weight:600;font-size:{name_size};", "{m.name}" }
+                if !collect_label.is_empty() && collect_label != "machine" {
+                    span { style: "margin-left:auto;font-family:{mono};font-size:10.5px;color:{ink3};border:1px solid #E2DCCF;border-radius:4px;padding:1px 6px;", "{collect_label}" }
+                }
+                if m.manual {
+                    span { style: "font-family:{mono};font-size:10.5px;color:#8A6720;border:1px solid #E2DCCF;border-radius:4px;padding:1px 6px;", "手填" }
+                }
+            }
+            // Top: current value + target (+ leading: 本周目标 + 达成)
+            div {
+                style: "display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;",
+                span { style: "font-family:{serif};font-weight:700;font-size:{val_size};", "{m.value_raw}" }
+                if !m.target_raw.is_empty() {
+                    span { style: "font-size:12px;color:{ink3};", "目标 {m.target_raw}" }
+                } else {
+                    span { style: "font-size:12px;color:{ink4};", "目标未设" }
+                }
+                if m.leading {
+                    span {
+                        style: "display:inline-flex;align-items:baseline;gap:5px;font-size:12px;",
+                        span { style: "color:{ink3};", "本周目标" }
+                        span { style: "font-family:{mono};font-weight:600;", "{m.last_target}" }
+                    }
+                    span {
+                        style: "display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:{ink3};",
+                        span { style: "width:9px;height:9px;border-radius:50%;border:1px solid rgba(0,0,0,.08);background:{hit_clr};opacity:0.55;" }
+                        "{hit_txt} 达成"
+                    }
+                }
+            }
+            // Delta: vs 上周
+            div {
+                style: "display:flex;align-items:center;gap:6px;font-size:12.5px;",
+                span { style: "color:{ink3};", "vs 上周" }
+                span { style: "font-family:{mono};font-weight:600;color:{delta_clr};", "{delta_arrow} {delta_txt}" }
+                if !has_obs {
+                    span { style: "color:{ink4};", "  无观测" }
+                }
+            }
+            // Weekly sparkline (8-week trend · from observation ISO-week buckets)
+            div {
+                style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;",
+                Spark { spark: wk_spark, color: spark_color, w: 92.0, h: 24.0 }
+                span { style: "font-family:{mono};font-size:9.5px;color:{ink3};", "8 周走势" }
+            }
+            // Collection chain footer (north star card or no-observation cards).
+            // Honest: 无数据=Unknown≠绿.
+            if show_chain {
+                div {
+                    style: "font-size:11px;color:{ink3};display:flex;align-items:center;gap:6px;flex-wrap:wrap;line-height:1.5;",
+                    if !has_obs {
+                        span { style: "color:{ink4};", "无观测 · Unknown≠绿" }
+                    } else {
+                        span { style: "font-weight:500;color:{ink2};", "采集链:" }
+                        if !conn_name.is_empty() {
+                            span { style: "font-family:{mono};font-size:10.5px;color:{clay};", "{conn_name}" }
+                            span { "→" }
+                        }
+                        if has_tick {
+                            span { style: "font-family:{mono};font-size:10.5px;color:{ink3};", "cron 有 tick" }
+                        } else {
+                            span { style: "font-family:{mono};font-size:10.5px;color:{ink4};", "cron 未跑" }
+                        }
+                        span { "→" }
+                        span { "有观测 · 非 Unknown" }
+                    }
+                }
+            }
+            if !m.def.is_empty() {
+                div { style: "font-size:11.5px;color:{ink3};line-height:1.6;", "{m.def}" }
+            }
         }
     }
 }
