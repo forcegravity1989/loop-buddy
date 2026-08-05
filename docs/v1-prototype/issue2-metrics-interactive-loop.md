@@ -108,9 +108,10 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 
 ### 3.2 绑数据 = 搭采集装置(本 issue 核心,正规化 1.3 的 makeshift)
 绑数据 skill(交互式)引导用户**实际搭装置**,不只改 metrics.toml collect 字段:
-- **能自动采的**:建 script connector(`store.create_connector(NewConnector{kind:CONNECTOR_KIND_SCRIPT, project_id, config: ScriptConnectorConfig{script, output, command}})`)——buddy 自带 instance(包 codehub/github CLI 输出 JSON,落**标准目录** 见 3.3)或项目侧(`derive_*.py`)。给 metric 配 `collect_kind='script'` + `collect_query=字段路径`。cron(已有 Daily CollectMetrics)到点自动跑 script connector → 取字段 → `append_observation(SourceKind::Script)` → `recompute_signals` 点亮。
+- **能自动采的**:agent 在会话里写采集脚本到 `.bw/scripts/<slug>.py`(buddy 自带 instance 包 codehub/github CLI,或项目侧 `derive_*.py`)+ 写连接器清单 `.bw/connectors.toml`(name/script/command/output 字段结构)+ 给 metric 配 `collect_kind='script'`+`collect_query=字段路径`(在 `.bw/metrics.toml`)。**PR 合入后 buddy 感知**:扩展 `SyncMetricsFile`(或并列 `SyncConnectorsFile`)读 `.bw/connectors.toml` → upsert `connector` 行(kind=script,正规非 SQL 直插)。cron(已有 Daily CollectMetrics)到点自动跑 script connector → 取字段 → `append_observation(SourceKind::Script)` → `recompute_signals` 点亮。**核心是定规范(最简先),agent 不能调 buddy API——靠文件正本 + buddy 感知 sync**(像 skills 分 buddy 自带 + 项目仓自带)。
 - **不能自动采的**:`collect_kind='manual'` + 给具体手填节奏(RecordInline op.rs:1866 → `RecordObservation` 戴徽)。
-- **登记进 buddy**:script connector 经正规 `create_connector` 进 connector 表(非 SQL 直插),metric 的 collect 经 `SyncMetricsFile`(merge 后自动)或绑数据 issue run 内更新。buddy Hub 能管理(script_hub/op 列出、探活、改 config)。
+- **登记进 buddy(感知 sync)**:script connector 经 buddy 感知 `.bw/connectors.toml`(merge 后自动 upsert,非 SQL 直插、非 agent 调 API);metric 的 collect 经 `SyncMetricsFile`(merge 后自动)。buddy Hub 能管理(列出/探活/改 config)。**规范先最简**:`.bw/scripts/` 目录约定 + `.bw/connectors.toml` 清单格式 + sync 感知规则;Hub 几大组件(skill/connector/agent/cron)完整规范留遗留单独定(见 §6)。
+- **connector.project_id 待核**:NewConnector(bw-store/lib.rs:367)有 project_id,connector 表 schema 未见该列(§6 偏差);P3 sync 前核 + 缺则加(schema 双守卫)。
 - **"同步"自动化、手动按钮退场**:绑数据 issue merge 后 `SyncMetricsFile` 自动(lib.rs:7296),op.rs「↻同步指标文件」手动按钮(plan18-⑦ 补丁)退场——它的存在是流程没顺的证物,流程顺了不需要。
 
 ### 3.3 标准目录(script connector 脚本落哪)
@@ -162,7 +163,8 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 - **collect_kind 收枚举代码归采数/总览**:本 issue 只文档 forward-correct,不动 inline arm / CollectKind 枚举(Q1 边界)。
 - **F1(2a 已知限制,2b 修,code review Medium)**:`interactive_started` 在 spawn 前置 true(`lib.rs:4743`)。若首次 spawn 失败(claude binary 找不到 / `BW_CLAUDE_BIN` 错 / 终端没开 / claude 崩在会话建立前),会话没建但 flag 已 true → 下次点 ▶跑 走 resume(`--continue` 无 skill 注入)→ 用户卡在无 skill 上下文的会话,且无 UI 重置 flag(得 SQL `UPDATE issue SET interactive_started=0 WHERE id=...`)。2a 仅 spawn 失败(config 错误非正常流)咬人;**2b hook 自然修**(无 session_id 捕获 → fallback `build_startup_plan` 重灌 skill)。小修挪 set 到 spawn 后要动两分支(后台 tokio::spawn + inline)+ settle 错误路径,风险大,defer 2b。临时恢复:SQL 重置 flag。
 - **scope 膨胀**:原 Issue 2「skill 易用性」已扩成多 phase 程序。本 worktree 逐 phase commit 不 push;PR 时或拆多 issue(交互式引擎 / 绑装置归位 / skill+guide 各一)。拿不准→问用户。
-- **多人参与同项目**:buddy 单人构建者命题(反命题:非团队协作)。第二人接入已有 buddy 项目 = V1+ 特性,本窗口**遗留**,不接。
+- **遗留① 多人协作(多 PC)**:多人各自装 buddy、都纳入同 1 项目 → 需协作支持。**至少**:别让三件套 issue 被重复提(同一仓已被 buddy 管过就不重 seed)。buddy 单人构建者命题(反命题:非团队协作),完整协作 = V1+ 特性,本窗口**遗留**,不接。
+- **遗留② 制定各规范**:buddy 给各项目带的统一规范(脚本/连接器/skill 等)要**扛得住考验**。`.bw/scripts/` + `.bw/connectors.toml` 的最简规范 P3 先定;Hub 几大组件(skill/connector/agent/cron)完整规范留**遗留单独定**。
 - **maas 现态 makeshift 修在 Phase 3**:script connector 从 SQL 直插改正规 create_connector;2 条 codehub 指标 forward-correct 标 legacy(迁 script 留采数/总览)。
 
 ## 7. 验证(step 4,读回为证)
