@@ -154,13 +154,13 @@ cat verification/skill-eval-2026-08-04/bench/mapping.json   # 匿名字母 → �
 - **渠道B · GitHub 代码级关键词矩阵**:28 个功能关键词(英文 "success metric"/"lead measure"/"counter-metric"/"KPI tree"/"OKR"/"measure what matters"/WIG…+中文 北极星/指标体系/先行指标…,`--filename SKILL.md` 内容搜索)→ 21 个新仓/约 25 个新 skill;镜像/衍生/译本溯源归并(About-Intelligence、Osirs→phuryn;liqiongyu、wuwu119→RefoundAI);中文关键词「引领指标」0 命中如实记录。
 - **渠道C · 插件市场+聚合库反查**:逐行解析 **anthropics/claude-plugins-community 官方市场 marketplace.json(24,080 行)** 挖出 3 个渠道B/D 都没发现的候选(tarunccet/pm-skills 等);majiayu000 聚合库(533★)按 metadata.json 溯源,~70% north-star 条目归并回已知四仓;aitmpl.com(30k★)扫过;claudeskills.directory/skillsmp/clawhub 不存在,mcpmarket.com/claudskills.com 被 429 挡,如实记。
 - **渠道D · 社区口碑**:HN/Reddit/PH/X/PM 圈一手源;最大发现=anthropics/knowledge-work-plugins(官方,23,297★ gh api 读回,Apache-2.0)的 `metrics-review`。
-- **渠道A · skills.sh 全量扫**:代理跑了大量抓取(原始 dump 已存 scratchpad)但**最终报告未产出**(会话中断),skills.sh 安装量数据本轮缺失——如实标注为覆盖缺口;短名单的 stars/license 由筛选官用 gh api 独立读回,不依赖此渠道。
+- **渠道A · skills.sh 全量扫**(2026-08-05 补齐,首次代理中断的缺口已消):打通抓取方法=公开搜索 API `skills.sh/api/search?q=`(返回 JSON 含 installs),24 关键词扫出 **1,791 个唯一 skill**;高装榜逐个功能核验**零漏网**(50 万装的 lark-okr=飞书连接器、8,889 装的 wshobson startup-metrics-framework=CAC/LTV 财务计算手册,均不对题);全部候选安装量读回(冠军们都是个位/两位数:amplitude 4、mohit 50、kouko 1、tarunccet 11;phuryn 1,948 仍盲测垫底)。全文见 `round2/channel-a-skillssh.md`。
 
 ### 8.2 筛选(长名单 → 短名单)
 
 45 个候选目录合并去重后,筛选官按「gh api 亲自读回数字 + 原文四问抽读 + license 硬门槛」收敛。两个高星宣称核实**为真但均不对题、不入围**——anthropics/knowledge-work-plugins `metrics-review`(23,297★)本质是"已有指标的周期性复盘",非从零推导;alirezarezvani/claude-skills `cpo-advisor`(23,816★)话题过宽无判据装置。**星数≠对题质量再添两例。**
 
-入围终审 4 家(gh api 读回):borghei/Claude-Skills north-star-metric(451★,**NOASSERTION 无 license**,纸面四问 5/5/5/5 全场最高)、tarunccet/pm-skills metric-definition+/north-star(5★,MIT,**官方社区市场收录**)、gvkhosla/founder-skills north-star-definer(8★,MIT)、nWave-ai/nWave nw-outcome-kpi-framework(589★,MIT)。
+入围终审 4 家(gh api 读回):borghei/Claude-Skills north-star-metric(451★,**NOASSERTION 无 license**,纸面四问 5/5/5/5 全场最高)、tarunccet/pm-skills metric-definition+/north-star(5★,MIT,收录于 anthropics/claude-plugins-community——**社区提交型市场:经自动安全扫描+分发审核,收录≠官方背书**,官方自维护仓是另一个 claude-plugins-official;此处只作分发合规与发现渠道信号)、gvkhosla/founder-skills north-star-definer(8★,MIT)、nWave-ai/nWave nw-outcome-kpi-framework(589★,MIT)。
 
 ### 8.3 终审盲测(新入围 × 2 场景,混入第一轮冠军样本重判;4 评审组 × 2 评委 = 8 裁决)
 
@@ -178,7 +178,7 @@ cat verification/skill-eval-2026-08-04/bench/mapping.json   # 匿名字母 → �
 
 | 类别 | 业界最佳(两轮盲测) | 干净授权可直接装的业界最佳 | 变化 |
 |---|---|---|---|
-| 北极星 | amplitude/builder-skills(8 票 8.63;无 license→T11 改编合入,已落地 1aefe50) | **tarunccet/pm-skills `metric-definition`**(MIT,官方社区市场,4 票 8.00)——取代第一轮「phuryn 采用度最佳但不推荐」的空缺 | 新增备选;可作 P1 引入观察 |
+| 北极星 | amplitude/builder-skills(8 票 8.63;无 license→T11 改编合入,已落地 1aefe50) | **tarunccet/pm-skills `metric-definition`**(MIT,社区市场过审收录——非官方背书,4 票 8.00)——取代第一轮「phuryn 采用度最佳但不推荐」的空缺 | 新增备选;可作 P1 引入观察 |
 | 引领/滞后 | mohit metrics-framework+metric-tree-builder(8 票 9.00,已真实引入 73ff197)+ kouko standards 增强 | 同左(MIT) | 不变,重判加强 |
 
 第二轮证据:`verification/skill-eval-2026-08-04/round2/`(3 份渠道报告+shortlist+8 份新产出+8 份裁决+mapping+summary);读回:`cat verification/skill-eval-2026-08-04/round2/bench/summary.json`。局限同 §2(每组 n=4 票;渠道A 报告缺失如实记)。
