@@ -86,6 +86,18 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 - **边界(找指标设计 vs 绑数据实现)**:找指标=推导指标 + 每条**设计采集方案**(manual/script-via-X/要新 connector 对接 Y/cron 节奏建议);绑数据=**实现采集方案**(建 script connector `create_connector`、找/写脚本落 `.bw/scripts/`、配 metric collect、确认 cron;manual 给手填节奏)。采集方案设计在找指标会话里定,搭装置在绑数据会话里做;两会话经文件接上下文(上条)。
 - **MR 合入后自动(已自动,非人点同步)**:merge → `MergeIssuePr` 自动 `sync_metrics_file_for`;cron(Daily CollectMetrics)到点自动扫 script connector → observation → signal。**「↻同步」手动按钮退场**(plan18-⑦ 补丁,流程顺了不需要)。
 
+### 2.6 用户回来后的澄清与决定(2026-08-05)
+
+1. **buddy 是薄编排器**:交互式下 buddy 只干两件——唤醒 claude 会话 + 灌入(阶段 system prompt + skill)。会话和用户怎么沟通是 **skill 的活**(skill 方法论驱动交互)。找指标 = 找指标阶段 system prompt + north-star-discovery skill;绑数据同理。衔接层 system prompt **按阶段**(已落地:`build_bridge_system_prompt` 按 `skill_slug` 分支)。
+2. **绑数据通用,不为 maas 开后门**:maas 的"采纳率 manual / L1-L3 script"只是举例;绑数据 skill + system prompt **引导用户在 claude cli 里共同开发采集装置**(建 script connector / 脚本 / cron),不是 buddy 为某项目专项。任何项目同一套。
+3. **维护指南 3 章范围**(特性向;用户旅程放使用指南 u3/u4):
+   - **m4 技能与Prompt** = buddy 自带阶段绑定技能 + 运作/替换机制(衔接层不可换 / skill 可换 / 声明式 CLI 表 / 权限)。
+   - **m5 执行与证据** = issue 调度 + claude cli 会话机制(唤醒 / 注入 / **resume / 多轮记忆**)。
+   - **m6 指标与健康** = 指标采集链(connector → 构造脚本(可依赖或不依赖 connector) → cron)+ 相关表(`metric`/`observation`/`connector`/`cron_task`)与重要字段(`collect_kind`/`collect_query`/`origin`/`source_kind`)。也可从 skill/agent/定时器/连接器角度讲。
+4. **交互式会话 = 持久 + 可 resume(重设计,替 F2)**:交互式 issue ↔ 一个持久 claude 会话 1:1。点 issue 卡在工作流 = **唤醒之前的会话窗口继续聊**(`claude --dangerously-skip-permissions --resume <session-id>`),不是"跑完记一行 workflow_run"。claude 自己写 `session.jsonl`(含 session-id),buddy 存 session-id,唤醒时 `--resume`(orca `buildAgentResumeStartupPlan` 同款)。**F2"补 workflow_run 行"作废** → 改设计:issue=会话、点卡=resume。交互式 run 不再是"一次性 run 到 InReview",而是持续会话,用户决定何时 finalize 出 PR。
+5. **dev 偏差**:#1 `--prefill` 注入机制待 orca 研究 + `claude --help` 核(subagent 验);#2 见上(改 resume 重设计);#3 预算偏差接受(用户"无所谓")。
+6. **m6 待补**:今晚只改了 m4/m5;m6(指标采集链 + 表/字段 + script kind「计划中」→「已接」校准)未动,留 Phase 5。
+
 ## 3. collect_kind 收两 kind + 绑数据=搭采集装置
 
 ### 3.1 collect_kind 收 `script`|`manual`(forward-correct 文档 + 代码分窗口)
