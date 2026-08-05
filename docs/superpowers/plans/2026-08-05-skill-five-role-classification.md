@@ -35,6 +35,11 @@
   ```bash
   cp ~/Library/Application\ Support/BuildersWorkbench/workbench.db /tmp/bw-verify.db
   ```
+- **迁移验证只用 `verify_migration` example，绝不用 `verify_goal`**（2026-08-05 执行期发现的真坑，代价是 Task 2 交了一次假阳性证据）：
+  - `verify_goal.rs:45` 读的是 `std::env::args().nth(1)` **位置参数**，不读 `BW_DB` 环境变量 —— 写成 `BW_DB=<db> … verify_goal` 会在 `$TMPDIR/bw_verify_goal.db` 上跑完全部用例，**根本没碰目标库**；
+  - 更致命的是 `verify_goal.rs:51` 会 `remove_file(&path)` **先删库再建**，所以即使改用位置参数，"老库迁移"路径依然从未被验证——它验的永远是个全新库。
+  - **识别假阳性的硬指标**：迁移后 `SELECT COUNT(*) FROM skill` 若等于 **10**（= bw-standard 8 + mohit 2，全新库 Boot 的播种量），说明你验的是新库不是老库。真实日常库副本应有 **65+** 条。
+  - 正确工具是 `crates/bw-app/examples/verify_migration.rs`（Task 2 补建）：**只开不删**，跑 `Command::Boot`，打印迁移后的真实计数。用法 `cargo run -p bw-app --example verify_migration -- <db-path>`。
 
 ---
 
@@ -549,7 +554,7 @@ Expected: 全绿，零 warning。
 
 ```bash
 cp ~/Library/Application\ Support/BuildersWorkbench/workbench.db /tmp/bw-verify.db
-BW_DB=/tmp/bw-verify.db cargo run -p bw-app --example verify_goal 2>&1 | tail -5
+cargo run -p bw-app --example verify_migration -- /tmp/bw-verify.db 2>&1 | tail -5
 sqlite3 /tmp/bw-verify.db ".tables" | tr ' ' '\n' | grep -x skill_stage
 sqlite3 /tmp/bw-verify.db "PRAGMA table_info(skill);" | grep stage_origin
 sqlite3 /tmp/bw-verify.db "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_skill_stage_by_stage';"
@@ -1052,7 +1057,7 @@ Expected: 六条全绿。
 
 ```bash
 cp ~/Library/Application\ Support/BuildersWorkbench/workbench.db /tmp/bw-verify.db
-BW_DB=/tmp/bw-verify.db cargo run -p bw-app --example verify_goal 2>&1 | tail -3
+cargo run -p bw-app --example verify_migration -- /tmp/bw-verify.db 2>&1 | tail -3
 sqlite3 -header -column /tmp/bw-verify.db \
   "SELECT s.name, s.stage_origin, group_concat(x.stage) stages
    FROM skill s JOIN skill_stage x ON x.skill_id=s.id
@@ -1199,7 +1204,7 @@ cargo check -p app-desktop
 
 ```bash
 cp ~/Library/Application\ Support/BuildersWorkbench/workbench.db /tmp/bw-verify.db
-BW_DB=/tmp/bw-verify.db cargo run -p bw-app --example verify_goal 2>&1 | tail -3
+cargo run -p bw-app --example verify_migration -- /tmp/bw-verify.db 2>&1 | tail -3
 echo "stage_ref 残留数(必须为 0):"
 sqlite3 /tmp/bw-verify.db "PRAGMA table_info(skill);" | grep -c stage_ref || true
 echo "老索引残留(必须为空):"
@@ -1214,7 +1219,7 @@ Expected: `0` / 空 / `≥ 8`，且 `verify_goal` 不 panic。
 
 ```bash
 rm -f /tmp/bw-fresh.db
-BW_DB=/tmp/bw-fresh.db cargo run -p bw-app --example verify_goal 2>&1 | tail -3
+cargo run -p bw-app --example verify_migration -- /tmp/bw-fresh.db 2>&1 | tail -3
 sqlite3 /tmp/bw-fresh.db "PRAGMA table_info(skill);" | grep -c stage_ref || true
 sqlite3 /tmp/bw-fresh.db "SELECT COUNT(*) FROM skill_stage;"
 ```
@@ -1328,7 +1333,7 @@ cargo fmt --all --check && cargo clippy --workspace --exclude app-desktop -- -D 
 
 ```bash
 cp ~/Library/Application\ Support/BuildersWorkbench/workbench.db /tmp/bw-verify.db
-BW_DB=/tmp/bw-verify.db cargo run -p bw-app --example verify_goal 2>&1 | tail -3
+cargo run -p bw-app --example verify_migration -- /tmp/bw-verify.db 2>&1 | tail -3
 sqlite3 -header -column /tmp/bw-verify.db \
   "SELECT CASE WHEN n=0 AND stage_origin='' THEN '未归类'
                WHEN n=0 THEN '已判定不属任何阶段'
@@ -1357,7 +1362,7 @@ Expected（真实日常库共 65 条 + Boot 导入 mohit 2 条 = 67 条）：
 
 ```bash
 sqlite3 /tmp/bw-verify.db "SELECT COUNT(*) FROM skill WHERE updated_at > strftime('%s','now') - 120;" 
-BW_DB=/tmp/bw-verify.db cargo run -p bw-app --example verify_goal 2>&1 | tail -1
+cargo run -p bw-app --example verify_migration -- /tmp/bw-verify.db 2>&1 | tail -1
 sqlite3 /tmp/bw-verify.db "SELECT COUNT(*) FROM skill WHERE updated_at > strftime('%s','now') - 60;"
 ```
 
@@ -1517,7 +1522,7 @@ cargo check -p app-desktop
 
 ```bash
 cp ~/Library/Application\ Support/BuildersWorkbench/workbench.db /tmp/bw-verify.db
-BW_DB=/tmp/bw-verify.db cargo run -p bw-app --example verify_goal 2>&1 | tail -1
+cargo run -p bw-app --example verify_migration -- /tmp/bw-verify.db 2>&1 | tail -1
 # 把 tdd(静态表里是「构建」)人工改成「构建+优化」并标 manual
 sqlite3 /tmp/bw-verify.db "
   UPDATE skill SET stage_origin='manual' WHERE name='tdd';
@@ -1525,7 +1530,7 @@ sqlite3 /tmp/bw-verify.db "
   INSERT INTO skill_stage(skill_id,stage) SELECT id,2 FROM skill WHERE name='tdd';
   INSERT INTO skill_stage(skill_id,stage) SELECT id,3 FROM skill WHERE name='tdd';"
 # 再 Boot 一次
-BW_DB=/tmp/bw-verify.db cargo run -p bw-app --example verify_goal 2>&1 | tail -1
+cargo run -p bw-app --example verify_migration -- /tmp/bw-verify.db 2>&1 | tail -1
 sqlite3 /tmp/bw-verify.db "
   SELECT s.name, s.stage_origin, group_concat(x.stage)
   FROM skill s JOIN skill_stage x ON x.skill_id=s.id WHERE s.name='tdd' GROUP BY s.id;"
@@ -1977,7 +1982,7 @@ cargo check -p app-desktop
 
 ```bash
 cp ~/Library/Application\ Support/BuildersWorkbench/workbench.db /tmp/bw-final.db
-BW_DB=/tmp/bw-final.db cargo run -p bw-app --example verify_goal 2>&1 | tail -3
+cargo run -p bw-app --example verify_migration -- /tmp/bw-final.db 2>&1 | tail -3
 
 echo "=== 1. 四态分布 ==="
 sqlite3 -header -column /tmp/bw-final.db \
@@ -1998,7 +2003,7 @@ sqlite3 /tmp/bw-final.db "SELECT name FROM sqlite_master WHERE type='index' AND 
 
 echo "=== 4. 全新库同样对 ==="
 rm -f /tmp/bw-fresh2.db
-BW_DB=/tmp/bw-fresh2.db cargo run -p bw-app --example verify_goal 2>&1 | tail -1
+cargo run -p bw-app --example verify_migration -- /tmp/bw-fresh2.db 2>&1 | tail -1
 sqlite3 /tmp/bw-fresh2.db "PRAGMA table_info(skill);" | grep -c stage_ref || true
 sqlite3 /tmp/bw-fresh2.db "SELECT COUNT(*) FROM skill_stage;"
 
