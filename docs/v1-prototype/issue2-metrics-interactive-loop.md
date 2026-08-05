@@ -120,25 +120,30 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 
 ## 4. phase 拆分(本 worktree 逐 phase commit,不 push;scope 膨胀→PR 时或拆多 issue)
 
-- **Phase 1 · (c) 引擎**(验证交互闭环):`InteractiveCliExecutor`(PTY spawn claude + session.jsonl 解析)+ `InteractiveExecutor` trait + provider 抽象 + 走 `run_issue_backgrounded`。先用 (c) 外部终端验通"唤起 + 多轮 + 回流 evidence"。(d) 嵌入层此时不开。
-- **Phase 2 · (d) 嵌入层**:PTY 字节流 → `Event::TerminalBytes`/`Command::TerminalInput` + xterm.js widget。借 orca 研究回流细化。
-- **Phase 3 · 绑数据=搭装置 + collect_kind forward-correct**:绑数据 skill 引导建 script connector(正规 `create_connector`)+ 配 metric collect + 标准目录;skill/guide 按 script|manual 两 kind forward-correct;「↻同步」按钮退场。(inline arm 代码不动,留采数/总览。)
-- **Phase 4 · skill 重写**:north-star-discovery + metrics-binding 改成引导式多轮(interactive)口径 + 两 kind + 读项目既有 governance 优先对齐(保留)+ script query 矛盾 bug 修(metrics-binding intro/常见坑「query 写脚本路径」→ 改「query 只写字段路径」,对齐契约 metrics-toml-format.md L88)。
-- **Phase 5 · guide 校准**:u3/u4/m4/m5/m6 按 V1 实态(交互式 + 两 kind + 绑装置)校准;m6 `script`「计划中」→「已接」;u3/u4 foot 陈旧外链替换;信号色 token 对齐 plan/00 §6(或单列)。altitude 纪律:描述动作身后事务用「系统×CRUD」不用 `Command::`(已存记忆)。
+- **Phase 1 · (c) 引擎 [✅ 已建, commit 11a24b9 + a09e98d]**:`crates/bw-engine/src/interactive_cli.rs`(声明式 CLI 表 claude 支持/cursor 占位 + `build_startup_plan` 位置参数 prompt + `build_bridge_system_prompt` 衔接层 system prompt + `InteractiveCliExecutor` 系统终端 spawn+等退出 + `MockInteractiveExecutor`)+ `bw-app/src/lib.rs` `run_issue_interactive` 分流(零扰 one-shot)+ `SettleOutcome::Interactive`。**无 PTY/xterm/hook、无对话摘要**(§2.6 #2 砍)。验证:门禁+cargo test(6+3 过)+code review(F1/F4 修);真交互式 E2E defer Phase 2。
+- **Phase 2a · 引擎补强(resume + InReview 检测 + 状态机)[⏳ dev 中]**:resume(`claude --continue` 续最近会话,先不搞 hook/精确 session_id)+ InReview 检测(**轮询** codehub/github 查 issue 分支 `bw/issue-N` 的 open MR,读回为证,挂 `tick_scheduler` 节流)+ 状态机(InProgress→InReview[MR 查到]→Done[人 merge];**砍交互式 `issue_run_tail` 提 MR**,agent 在会话里自提 MR,buddy 检测)+ `interactive_started` 列(schema 双守卫)。**不建 PTY/xterm/hook(2b)**。
+- **Phase 2b · 嵌入终端 + hook listener [⬜ pending]**:`portable-pty` PTY + xterm.js widget + `Event::TerminalBytes`/`Command::TerminalInput` 经事件总线(ACK 背压 + reload 握手 + resize 重断言,§2.4 orca 模式)+ hook listener(127.0.0.1 http,抓 SessionStart→精确 `session_id` 用 `--resume <id>` 替 `--continue` + Stop 触发 InReview 检测替轮询)。把 resume/检测从外部终端+轮询升级到 in-app+实时。
+- **Phase 3 · 绑数据=搭装置 + collect_kind forward-correct [⬜ pending]**:绑数据 skill 引导建 script connector(正规 `create_connector`)+ 配 metric collect + `.bw/scripts/` 标准目录;skill/guide 按 script|manual 两 kind forward-correct;「↻同步」按钮退场。(inline arm 代码不动,留采数/总览。)
+- **Phase 4 · skill 重写 [⬜ pending]**:north-star/metrics-binding 改引导式多轮(interactive)+ **衔接层抽离**(skill 方法论可换 vs buddy 契约 system prompt 不可换,§2.6 #1)+ 两 kind + 修 metrics-binding script query 矛盾 bug(intro/常见坑「query 写脚本路径」→「query 只写字段路径」,对齐契约 `docs/metrics-toml-format.md` L88)。
+- **Phase 5 · guide 校准 [⬜ partial]**:m4/m5 已改(Phase 1 实态);待补 u3/u4 阶段屏(交互式用户旅程)+ m6(指标采集链+表字段+script「计划中」→「已接」)+ 信号色 token 对齐 plan/00 §6。altitude 用系统×CRUD。
 
 ## 5. 文件级改动清单 + 契约(SubA 照此建)
 
-### Phase 1((c) 引擎)
-- `crates/bw-engine/src/interactive_cli.rs`(新):`InteractiveCliExecutor` + `InteractiveCli` provider trait + `SessionTrail` 解析器(读 `~/.claude/projects/<proj>/session.jsonl` → 对话摘要)。PTY 用 `portable-pty`。
-- `crates/bw-engine/src/lib.rs`:导出 `InteractiveCliExecutor`、新 trait;`Executor` trait / `ClaudeCliExecutor` / `Engine::run_workflow` **不动**。
-- `crates/bw-app/src/lib.rs`:`run_issue_now`(3855)加交互式分支(按 issue 的 standard_skill 或新 `interactive` 标志分流);`issue_run_tail`(4050)复用,加 session.jsonl 摘要喂会话消息。
-- `crates/bw-core/src/model.rs`:`IssueRun`/会话消息结构加"对话摘要"字段(可选,forward-correct)。
+### Phase 1((c) 引擎)✅ 已建(commit 11a24b9 + a09e98d)
+- `crates/bw-engine/src/interactive_cli.rs`(新,683 行):`TuiAgentConfig` 静态表(CLAUDE supported / CURSOR 占位)+ `PromptInjectionMode::FlagPrefill` + `LaunchPlan` + `build_startup_plan`(位置参数 prompt + `--dangerously-skip-permissions` + `--disallowedTools "Bash(gh pr merge)"`,无 `-p`/无 `--max-budget-usd`)+ `build_bridge_system_prompt`(PlaybookCtx + 按 `skill_slug` 契约 + 铁律)+ `InteractiveExecutor` trait + `InteractiveCliExecutor`(系统终端 spawn + 等退出 + wall-clock)+ `MockInteractiveExecutor`。**无 PTY、无对话摘要 collector**(§2.6 #2 砍)。
+- `crates/bw-engine/src/lib.rs`:模块声明 + re-export。`Executor` trait / `ClaudeCliExecutor` / `Engine::run_workflow` **不动**。
+- `crates/bw-app/src/lib.rs`:`SettleOutcome` enum(`PhaseLoop`|`Interactive`)+ `run_issue_now` 交互式分流(`is_interactive_skill`)+ `run_issue_interactive` + `finalize_run_interactive`(artifact 登记,不提 MR)+ `fetch_skill_body`。one-shot 路径零扰。
 
-### Phase 2((d) 嵌入层)
-- `crates/bw-engine/src/interactive_cli.rs`:PTY master 读循环 → 发 `Event::TerminalBytes`;收 `Command::TerminalInput` → PTY writer。
-- `crates/bw-app/src/lib.rs`:`Event`/`Command` enum 加 `TerminalBytes`/`TerminalInput` 变体。
-- `crates/app-desktop/src/screens/`(新 widget 或 op.rs 内):xterm.js 加载 + 轮询桥(`document::eval`,仿 flow.rs:129)+ 输入回写。
-- `Cargo.toml`(app-desktop):`portable-pty` dep(bw-engine 侧,非 UI)。
+### Phase 2a(引擎补强:resume + InReview 检测 + 状态机)⏳ dev 中
+- `crates/bw-engine/src/interactive_cli.rs`:`InteractiveCliExecutor` 加 resume(`claude --continue` 续最近会话;首次走 `build_startup_plan` 位置参数;首次 vs resume 判定靠 `issue.interactive_started`)+ `MockInteractiveExecutor` resume 路径(自标【mock】)。
+- `crates/bw-app/src/lib.rs`:InReview 检测挂 `tick_scheduler`(lib.rs:3438)——对交互式 InProgress + `interactive_started` + `pr_number==0` 的 issue 轮询(节流,SubA 定)查 `codehub-cli mr list --state opened --json`/`gh pr list --head bw/issue-N` → 有 open MR → `set_issue_pr_number`(lib.rs:4103)+ `transition_issue(InReview)`。**砍交互式 `issue_run_tail` 提 MR**(agent 在会话里自提,buddy 检测;§2.6 #8)。
+- `crates/bw-store/src/schema.sql` + `sqlite.rs` + `bw-core/src/model.rs`:`issue.interactive_started` 列(`add_column_if_missing` 双守卫 + `Issue` struct + SELECT 加列)。
+
+### Phase 2b(嵌入终端 + hook listener)⬜ pending
+- `crates/bw-engine/src/interactive_cli.rs`:`portable-pty` PTY master 读循环 → `Event::TerminalBytes`;收 `Command::TerminalInput` → PTY writer;resume 升级 `--resume <session_id>`(hook 抓的)替 `--continue`。
+- `crates/bw-app/src/lib.rs`:`Event`/`Command` 加 `TerminalBytes`/`TerminalInput` 变体;hook listener(127.0.0.1 http,装 `~/.claude/settings.json` hook)抓 SessionStart→`session_id` + Stop→触发 InReview 检测替轮询。
+- `crates/app-desktop/src/screens/`:xterm.js widget(`document::eval` 仿 `flow.rs:129`)+ ACK 背压 / reload 握手 / resize 重断言(§2.4 orca)。
+- `Cargo.toml`:`portable-pty` dep(bw-engine 侧,非 UI)。
 
 ### Phase 3(绑装置 + forward-correct)
 - `crates/bw-app/src/lib.rs`:绑数据 issue run 内引导建 script connector(正规 `create_connector`)+ 配 metric collect;op.rs「↻同步」按钮(L1787)退场或改 dev-only。
@@ -150,9 +155,9 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 
 ## 6. 偏差 / 未决(记不擅定,commit 偏差段如实)
 
-- **R1 预算封顶**:`--max-budget-usd` 只配合 `--print`(claude help 明示),交互式无 CLI flag 级封顶。退路:wall-clock 超时 kill + UI 诚实标注 + jsonl 的 usage 字段事后读回。**orca 先例**:orca 也不自己重算 token,信 flag + jsonl usage + 进程级 deadline(SIGKILL)——即 orca 也是 wall-clock deadline 兜底,无硬 per-token cap。**所以 wall-clock + 诚实是经 orca 验过的模式**(交互式本质 user-in-loop,花费眼看着,不像后台 runaway)。**预算铁律是否硬挡交互式,仍要用户定**——但 orca 先例让"wall-clock 过渡"站得住。
+- **R1 预算封顶**:`--max-budget-usd` 只配合 `--print`(claude help 明示),交互式无 CLI flag 级封顶。退路:wall-clock 超时 kill + UI 诚实标注 + jsonl 的 usage 字段事后读回。**orca 先例**:orca 也不自己重算 token,信 flag + jsonl usage + 进程级 deadline(SIGKILL)——即 orca 也是 wall-clock deadline 兜底,无硬 per-token cap。**用户 2026-08-05 已接受 wall-clock 过渡**(交互式 user-in-loop 花费眼看着,不像后台 runaway)。
 - **R2 kernel 冻死**:交互式 executor 必须走 `run_issue_backgrounded`(已确认 desktop 走这条,lib.rs:4239 `tokio::spawn`)。
-- **orca 研究回流待 fold**:(d) 嵌入层的 PTY/xterm/IPC 桥细节等 orca-main 研究 SubAgent 回来后细化(进程已派)。
+- ~~orca 研究回流待 fold~~ → **已折进 §2.4**(声明式 CLI 表/`IPtyProvider`/PTY ACK 字节流协议/hook→HTTP/session.jsonl collector 模式)。
 - **connector.project_id 契约**:NewConnector(bw-store/lib.rs:367)有 project_id,但 connector 表 schema 未见该列(scope 持有?需核)。SubA 建前 `PRAGMA` 读回确认。
 - **collect_kind 收枚举代码归采数/总览**:本 issue 只文档 forward-correct,不动 inline arm / CollectKind 枚举(Q1 边界)。
 - **scope 膨胀**:原 Issue 2「skill 易用性」已扩成多 phase 程序。本 worktree 逐 phase commit 不 push;PR 时或拆多 issue(交互式引擎 / 绑装置归位 / skill+guide 各一)。拿不准→问用户。
