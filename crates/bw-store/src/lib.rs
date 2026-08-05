@@ -147,6 +147,32 @@ pub struct MetricsFileSyncSummary {
     pub leading_synced: u32,
 }
 
+/// V1 Issue2 Phase 3: one `.bw/connectors.toml` connector definition, shaped
+/// for one atomic sync call. Parallel to [`MetricDefSync`] — the file's own
+/// identity is `(project_id, name)`, not a caller-minted id.
+pub struct ConnectorDefSync {
+    pub name: String,
+    /// Kind-specific real config, serialized as JSON `{script, command, output}`
+    /// (matches `ScriptConnectorConfig` in bw-app). The connector row's `config`
+    /// column stores this string verbatim.
+    pub config: String,
+}
+
+/// V1 Issue2 Phase 3: the whole `.bw/connectors.toml` file, shaped for one
+/// atomic sync call. Parallel to [`MetricsFileSync`].
+pub struct ConnectorsFileSync {
+    pub project_id: ProjectId,
+    pub connectors: Vec<ConnectorDefSync>,
+}
+
+/// V1 Issue2 Phase 3: the honest receipt of one connectors sync — real
+/// count of upserted rows, not "however many were in the file" (a connector
+/// skipped for some future validation reason would make those differ).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ConnectorsFileSyncSummary {
+    pub connectors_synced: u32,
+}
+
 pub struct NewStage {
     pub project_id: ProjectId,
     pub kind: StageKind,
@@ -621,6 +647,16 @@ pub trait Store: Send + Sync {
     /// one layer up, in `bw-engine::metrics_file::read`), and this method
     /// keeps its own partial-failure window closed too.
     async fn sync_metrics_file(&self, sync: MetricsFileSync) -> Result<MetricsFileSyncSummary>;
+    /// V1 Issue2 Phase 3: upsert all `.bw/connectors.toml` connector
+    /// definitions for a project in one atomic transaction. Parallel to
+    /// [`sync_metrics_file`] — upserts by `(project_id, name)`, keeping
+    /// existing row ids (so connector history stays attached). Only
+    /// `kind = 'script'` connectors are synced from the file; other kinds
+    /// live in the DB from their creation paths.
+    async fn sync_connectors_file(
+        &self,
+        sync: ConnectorsFileSync,
+    ) -> Result<ConnectorsFileSyncSummary>;
     /// Week-plan edit: update a metric's target + this week's driver, keeping
     /// the previous target as `last_target`. Touches no value and no signal —
     /// recompute re-derives against the new target.

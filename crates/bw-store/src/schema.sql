@@ -318,6 +318,10 @@ CREATE TABLE IF NOT EXISTS connector (
     status      TEXT NOT NULL DEFAULT 'disconnected',
     last_sync   TEXT NOT NULL DEFAULT '',
     scope       TEXT NOT NULL DEFAULT '',
+    -- V1 Issue2 Phase 3: added inline (was already via add_column_if_missing;
+    -- double-guard: schema.sql + add_column_if_missing, per CLAUDE.md 铁律).
+    project_id  TEXT,
+    config      TEXT NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0

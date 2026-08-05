@@ -49,10 +49,10 @@ use bw_engine::{
     PhaseNode, RunCtx, RunEvent, SkillOutput, UnsupportedCliExecutor, CLAUDE,
 };
 use bw_store::{
-    AgentEdit, GlobalHandoffRow, MetricDefSync, MetricRole, MetricsFileSync, NewAgent, NewArtifact,
-    NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession,
-    NewSkill, NewSkillFile, NewStage, NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store,
-    WorkflowEdit,
+    AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
+    MetricsFileSync, NewAgent, NewArtifact, NewConnector, NewCronTask, NewIssue,
+    NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewSkillFile, NewStage,
+    NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -3557,6 +3557,42 @@ impl App {
                 // cache is untouched (nothing was written above).
                 self.emit(Event::ConnectorSynced {
                     name: "metrics.toml".into(),
+                    ok: false,
+                    detail: e.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// V1 Issue2 Phase 3 · §3.2: sync `.bw/connectors.toml` → SQLite
+    /// `connector` rows. Parallel to [`sync_metrics_file_for`] — the file is
+    /// the source of truth, buddy DB is a mirror. merge after `MergeIssuePr`
+    /// auto-calls this (alongside `sync_metrics_file_for`). File not
+    /// existing = zero action zero noise (same idiom). Bad file = honest
+    /// error toast, cache untouched.
+    ///
+    /// Only `kind = "script"` connectors are synced from the file (other
+    /// kinds live in the DB from their creation paths). Each connector is
+    /// upserted by `(project_id, name)` — existing rows keep their id, new
+    /// rows get `kind = 'script'` + default operational fields.
+    async fn sync_connectors_file_for(&mut self, p: ProjectId) -> Result<(), AppError> {
+        let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+        match bw_engine::connectors_file::read(&proj.workspace_path) {
+            Ok(None) => {}
+            Ok(Some(file)) => {
+                let sync = connectors_file_sync(p, &file);
+                let summary = self.store.sync_connectors_file(sync).await?;
+                self.emit(Event::ProjectUpdated(p));
+                self.emit(Event::ConnectorSynced {
+                    name: "connectors.toml".into(),
+                    ok: true,
+                    detail: format!("{} 个 script 连接器已同步", summary.connectors_synced),
+                });
+            }
+            Err(e) => {
+                self.emit(Event::ConnectorSynced {
+                    name: "connectors.toml".into(),
                     ok: false,
                     detail: e.to_string(),
                 });
@@ -8109,6 +8145,8 @@ impl App {
                 // `.bw/metrics.toml` 只有 checkout+pull 之后才读得到),再
                 // 走同一条 sync 路径。收拢失败软降级 toast——验收已经完成,
                 // 不因同步不顺回滚任何东西;下次手动 SyncMetricsFile 可补。
+                // V1 Issue2 Phase 3: 同时同步 `.bw/connectors.toml`(script
+                // connector 正本),与 metrics.toml 并列。
                 if !proj.workspace_path.trim().is_empty() {
                     match bw_engine::github::sync_default_branch(std::path::Path::new(
                         proj.workspace_path.trim(),
@@ -8117,13 +8155,14 @@ impl App {
                     {
                         Ok(()) => {
                             self.sync_metrics_file_for(issue.project_id).await?;
+                            self.sync_connectors_file_for(issue.project_id).await?;
                         }
                         Err(e) => {
                             self.emit(Event::ConnectorSynced {
                                 name: "metrics.toml".into(),
                                 ok: false,
                                 detail: format!(
-                                    "merge 后工作区收拢默认分支失败,指标正本未同步(可手动重试):{e}"
+                                    "merge 后工作区收拢默认分支失败,指标/连接器正本未同步(可手动重试):{e}"
                                 ),
                             });
                         }
@@ -8685,6 +8724,40 @@ fn metrics_file_sync(
         north_star_collect_query: file.north_star.collect.query.clone(),
         lagging: file.lagging.iter().map(to_def).collect(),
         leading: file.leading.iter().map(to_def).collect(),
+    }
+}
+
+/// V1 Issue2 Phase 3: `bw_engine::connectors_file::ConnectorsFile` (parsed
+/// toml) → `ConnectorsFileSync` (the store's write shape). Pure reshaping —
+/// no validation here, `read` already guaranteed every connector has a valid
+/// `kind = "script"` and `name`/`script` by the time this runs (a file
+/// missing those fails to parse, never reaches this function). The `config`
+/// column is the JSON `{script, command, output}` that
+/// `ScriptConnectorConfig::from_config` parses back — matches the existing
+/// connector `config` format.
+fn connectors_file_sync(
+    project_id: ProjectId,
+    file: &bw_engine::connectors_file::ConnectorsFile,
+) -> ConnectorsFileSync {
+    let connectors = file
+        .connectors
+        .iter()
+        .map(|c| {
+            let config = serde_json::json!({
+                "script": c.script,
+                "command": c.command,
+                "output": c.output,
+            })
+            .to_string();
+            ConnectorDefSync {
+                name: c.name.clone(),
+                config,
+            }
+        })
+        .collect();
+    ConnectorsFileSync {
+        project_id,
+        connectors,
     }
 }
 

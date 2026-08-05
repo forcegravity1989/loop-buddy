@@ -9,12 +9,13 @@ use crate::{
     parse_cadence, parse_connector_status, parse_cron_mode, parse_cron_status, parse_cycle,
     parse_hub_source, parse_issue_priority, parse_issue_status, parse_maturity,
     parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
-    stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow, MessageRow, MetricDefSync,
-    MetricOrigin, MetricRole, MetricSignal, MetricsFileSync, MetricsFileSyncSummary, NewAgent,
-    NewArtifact, NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject,
-    NewSession, NewSkill, NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow,
-    PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow,
-    StageRow, StageSignal, Store, StoreError, WorkflowEdit,
+    stage_kind_text, AgentEdit, ConnectorDefSync, ConnectorsFileSync, ConnectorsFileSyncSummary,
+    GlobalHandoffRow, HandoffRow, MessageRow, MetricDefSync, MetricOrigin, MetricRole,
+    MetricSignal, MetricsFileSync, MetricsFileSyncSummary, NewAgent, NewArtifact, NewConnector,
+    NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
+    NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals,
+    ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow, StageRow, StageSignal,
+    Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -545,6 +546,55 @@ async fn sync_one_metric_definition(
     Ok(())
 }
 
+/// V1 Issue2 Phase 3: upsert-by-name for one `.bw/connectors.toml` connector
+/// definition. Parallel to [`sync_one_metric_definition`] — looks the row up
+/// by `(project_id, name)` and either UPDATEs its `config` in place (keeping
+/// the existing row's id, so connector history stays attached) or INSERTs a
+/// fresh row with `kind = 'script'` and default operational fields. Only
+/// `kind = 'script'` connectors are synced from the file.
+async fn sync_one_connector_definition(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    project_id: &str,
+    c: &ConnectorDefSync,
+    t: i64,
+) -> Result<()> {
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT id FROM connector WHERE project_id=? AND name=?")
+            .bind(project_id)
+            .bind(&c.name)
+            .fetch_optional(&mut **tx)
+            .await?;
+
+    match existing {
+        Some(id) => {
+            sqlx::query("UPDATE connector SET config=?, updated_at=?, rev=rev+1 WHERE id=?")
+                .bind(&c.config)
+                .bind(t)
+                .bind(&id)
+                .execute(&mut **tx)
+                .await?;
+        }
+        None => {
+            let id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO connector
+                    (id, name, kind, status, last_sync, scope, project_id, config,
+                     created_at, updated_at, rev)
+                 VALUES (?, ?, 'script', 'disconnected', '', '', ?, ?, ?, ?, 0)",
+            )
+            .bind(&id)
+            .bind(&c.name)
+            .bind(project_id)
+            .bind(&c.config)
+            .bind(t)
+            .bind(t)
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl Store for SqliteStore {
     async fn create_project(&self, p: NewProject) -> Result<()> {
@@ -812,6 +862,31 @@ impl Store for SqliteStore {
         Ok(MetricsFileSyncSummary {
             lagging_synced: sync.lagging.len() as u32,
             leading_synced: sync.leading.len() as u32,
+        })
+    }
+
+    /// V1 Issue2 Phase 3: upsert all `.bw/connectors.toml` connector
+    /// definitions for a project in one atomic transaction. Each connector
+    /// is upserted by `(project_id, name)` — existing rows keep their id
+    /// (so connector history stays attached), new rows are inserted with
+    /// `kind = 'script'` and default operational fields. Only `kind =
+    /// 'script'` connectors are synced from the file; other kinds are not
+    /// touched (they live in the DB from their creation paths).
+    async fn sync_connectors_file(
+        &self,
+        sync: ConnectorsFileSync,
+    ) -> Result<ConnectorsFileSyncSummary> {
+        let p = pid(sync.project_id);
+        let t = now_unix();
+        let mut tx = self.pool.begin().await?;
+
+        for c in &sync.connectors {
+            sync_one_connector_definition(&mut tx, &p, c, t).await?;
+        }
+
+        tx.commit().await?;
+        Ok(ConnectorsFileSyncSummary {
+            connectors_synced: sync.connectors.len() as u32,
         })
     }
 
@@ -3044,4 +3119,141 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     })
+}
+
+// ─── Tests ─────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ConnectorDefSync, ConnectorsFileSync, NewProject};
+
+    /// V1 Issue2 Phase 3: `sync_connectors_file` upserts by `(project_id,
+    /// name)` — first sync inserts, second sync updates config in place
+    /// (same id), kind is always `script`, config is the JSON string.
+    #[tokio::test]
+    async fn sync_connectors_file_upserts_by_name() {
+        let db_path = tempdb_path();
+        let store = SqliteStore::open(&db_path).await.expect("open store");
+        let project_id = ProjectId::new();
+        store
+            .create_project(NewProject {
+                id: project_id,
+                name: "测试项目".into(),
+                kind: "content".into(),
+                desc: "测试".into(),
+                provider: "github".into(),
+            })
+            .await
+            .expect("create project");
+
+        // First sync: insert two connectors.
+        let sync = ConnectorsFileSync {
+            project_id,
+            connectors: vec![
+                ConnectorDefSync {
+                    name: "leading".into(),
+                    config: r#"{"script":"scripts/derive_leading.py","command":"python","output":"data.json"}"#.into(),
+                },
+                ConnectorDefSync {
+                    name: "north-star".into(),
+                    config: r#"{"script":"scripts/derive_ns.py","command":"","output":"ns.json"}"#.into(),
+                },
+            ],
+        };
+        let summary = store.sync_connectors_file(sync).await.expect("first sync");
+        assert_eq!(summary.connectors_synced, 2);
+
+        let connectors = store.list_connectors().await.expect("list");
+        let project_connectors: Vec<_> = connectors
+            .into_iter()
+            .filter(|c| c.project_id == Some(project_id))
+            .collect();
+        assert_eq!(project_connectors.len(), 2);
+        let leading = project_connectors
+            .iter()
+            .find(|c| c.name == "leading")
+            .expect("leading found");
+        assert_eq!(leading.kind, "script");
+        assert!(leading.config.contains("derive_leading.py"));
+        let leading_id = leading.id;
+
+        // Second sync: update leading's config (same name → upsert, same id),
+        // drop north-star from the file (file deletion does NOT delete DB
+        // rows per design — §connectors-toml-format.md "正本里删掉的连接器").
+        let sync2 = ConnectorsFileSync {
+            project_id,
+            connectors: vec![ConnectorDefSync {
+                name: "leading".into(),
+                config: r#"{"script":"scripts/derive_leading_v2.py","command":"node","output":"data2.json"}"#.into(),
+            }],
+        };
+        let summary2 = store
+            .sync_connectors_file(sync2)
+            .await
+            .expect("second sync");
+        assert_eq!(summary2.connectors_synced, 1);
+
+        let connectors2 = store.list_connectors().await.expect("list after upsert");
+        let project_connectors2: Vec<_> = connectors2
+            .into_iter()
+            .filter(|c| c.project_id == Some(project_id))
+            .collect();
+        // north-star still in DB (file deletion doesn't delete DB rows).
+        assert_eq!(project_connectors2.len(), 2);
+        let leading2 = project_connectors2
+            .iter()
+            .find(|c| c.name == "leading")
+            .expect("leading still found");
+        // Same id (upsert, not insert).
+        assert_eq!(leading2.id, leading_id);
+        // Config was updated.
+        assert!(leading2.config.contains("derive_leading_v2.py"));
+        assert!(leading2.config.contains("node"));
+        assert!(!leading2.config.contains("derive_leading.py") || leading2.config.contains("v2"));
+    }
+
+    /// V1 Issue2 Phase 3: empty connectors list is a valid no-op (file with
+    /// zero `[[connector]]` entries — honest no-op, not an error).
+    #[tokio::test]
+    async fn sync_connectors_file_empty_is_noop() {
+        let db_path = tempdb_path();
+        let store = SqliteStore::open(&db_path).await.expect("open store");
+        let project_id = ProjectId::new();
+        store
+            .create_project(NewProject {
+                id: project_id,
+                name: "空项目".into(),
+                kind: "content".into(),
+                desc: "".into(),
+                provider: "github".into(),
+            })
+            .await
+            .expect("create project");
+
+        let sync = ConnectorsFileSync {
+            project_id,
+            connectors: vec![],
+        };
+        let summary = store.sync_connectors_file(sync).await.expect("empty sync");
+        assert_eq!(summary.connectors_synced, 0);
+
+        let connectors = store.list_connectors().await.expect("list");
+        assert!(connectors.is_empty());
+    }
+
+    /// Create a unique temp DB path for test isolation.
+    fn tempdb_path() -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "bw-store-test-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Remove any stale file from a previous run.
+        let _ = std::fs::remove_file(&dir);
+        dir.to_string_lossy().into_owned()
+    }
 }
