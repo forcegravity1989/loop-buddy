@@ -6588,6 +6588,12 @@ impl App {
             Command::SyncMetricsFile => {
                 let p = self.active()?;
                 self.sync_metrics_file_for(p).await?;
+                // V1 Issue2 Phase 3: keep the command complete — sync
+                // connectors.toml alongside metrics.toml (used by
+                // collector_demo example + any future manual sync entry
+                // point). The UI button that fired this was retired per
+                // §3.2/§4 (merge auto-sync covers the normal flow).
+                self.sync_connectors_file_for(p).await?;
             }
 
             Command::CollectMetrics => {

@@ -1648,7 +1648,6 @@ fn ProgressAll(op: OpVm) -> Element {
     let bar_color = ui::progress_color(op.overall);
     let overall = op.overall;
     let mix = op.cycle.mix();
-    let k_sync = k.clone();
     let stats = [
         ("工作流累计", op.stats.workflows_total),
         ("定时任务运行中", op.stats.routines_active),
@@ -1781,14 +1780,6 @@ fn ProgressAll(op: OpVm) -> Element {
                 div {
                     style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;",
                     span { style: "font-family:{serif};font-size:16px;font-weight:600;", "项目级业务指标" }
-                    // plan18-⑦:SyncMetricsFile 当前只在 PR merge 后 auto-fire,
-                    // 运营视图无手动入口——改完 .bw/metrics.toml 要走命令行/PR
-                    // 才同步进表。加按钮让改完立刻同步看效果。
-                    button {
-                        style: "font-size:12px;color:{ink2};border:1px solid {ink3};border-radius:4px;padding:3px 10px;cursor:pointer;background:transparent;",
-                        onclick: move |_| k_sync.send(Command::SyncMetricsFile),
-                        "↻ 同步指标文件"
-                    }
                 }
                 div { style: "font-size:12px;color:{ink3};margin-bottom:12px;", "不绑阶段的项目级指标(北极星在顶栏,引领·滞后在此)" }
                 div {

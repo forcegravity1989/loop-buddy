@@ -548,22 +548,28 @@ async fn sync_one_metric_definition(
 
 /// V1 Issue2 Phase 3: upsert-by-name for one `.bw/connectors.toml` connector
 /// definition. Parallel to [`sync_one_metric_definition`] — looks the row up
-/// by `(project_id, name)` and either UPDATEs its `config` in place (keeping
-/// the existing row's id, so connector history stays attached) or INSERTs a
-/// fresh row with `kind = 'script'` and default operational fields. Only
-/// `kind = 'script'` connectors are synced from the file.
+/// by `(project_id, name, kind='script')` and either UPDATEs its `config` in
+/// place (keeping the existing row's id, so connector history stays attached)
+/// or INSERTs a fresh row with `kind = 'script'` and default operational
+/// fields. Only `kind = 'script'` connectors are synced from the file; the
+/// `kind='script'` filter on the SELECT ensures a file script connector never
+/// collides with an existing non-script connector of the same name (e.g. a
+/// `codehub-repo` / `git-repo` connector) — same name + different kind →
+/// new INSERT, script row and legacy row coexist, each handled by its own
+/// processing path.
 async fn sync_one_connector_definition(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     project_id: &str,
     c: &ConnectorDefSync,
     t: i64,
 ) -> Result<()> {
-    let existing: Option<String> =
-        sqlx::query_scalar("SELECT id FROM connector WHERE project_id=? AND name=?")
-            .bind(project_id)
-            .bind(&c.name)
-            .fetch_optional(&mut **tx)
-            .await?;
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM connector WHERE project_id=? AND name=? AND kind='script'",
+    )
+    .bind(project_id)
+    .bind(&c.name)
+    .fetch_optional(&mut **tx)
+    .await?;
 
     match existing {
         Some(id) => {
@@ -3207,10 +3213,87 @@ mod tests {
             .expect("leading still found");
         // Same id (upsert, not insert).
         assert_eq!(leading2.id, leading_id);
+        // Kind is still "script" (UPDATE path doesn't touch kind, but verify
+        // — regression guard for the Med review finding: SELECT must filter
+        // kind='script' so a non-script connector of the same name never
+        // gets its kind clobbered or its config overwritten).
+        assert_eq!(leading2.kind, "script");
         // Config was updated.
         assert!(leading2.config.contains("derive_leading_v2.py"));
         assert!(leading2.config.contains("node"));
         assert!(!leading2.config.contains("derive_leading.py") || leading2.config.contains("v2"));
+    }
+
+    /// V1 Issue2 Phase 3 review-fixup (Med): a file script connector with
+    /// the same name as an existing non-script connector (e.g. `git-repo`)
+    /// must NOT collide — the SELECT filters `kind='script'`, so the file
+    /// connector gets a fresh INSERT (new row, kind=script) instead of
+    /// updating the non-script row's config (which would leave the wrong
+    /// kind on it and silently break `collect_project_metrics`'s
+    /// `kind==script` filter).
+    #[tokio::test]
+    async fn sync_connectors_file_same_name_non_script_coexists() {
+        let db_path = tempdb_path();
+        let store = SqliteStore::open(&db_path).await.expect("open store");
+        let project_id = ProjectId::new();
+        store
+            .create_project(NewProject {
+                id: project_id,
+                name: "共存项目".into(),
+                kind: "content".into(),
+                desc: "".into(),
+                provider: "github".into(),
+            })
+            .await
+            .expect("create project");
+
+        // Pre-existing non-script connector with the same name as the file
+        // connector we're about to sync.
+        store
+            .create_connector(NewConnector {
+                id: bw_core::ConnectorId::new(),
+                name: "shared-name".into(),
+                kind: "git-repo".into(),
+                scope: String::new(),
+                project_id: Some(project_id),
+                config: "/workspace/path".into(),
+            })
+            .await
+            .expect("create git-repo connector");
+
+        // Sync a file script connector with the same name.
+        let sync = ConnectorsFileSync {
+            project_id,
+            connectors: vec![ConnectorDefSync {
+                name: "shared-name".into(),
+                config: r#"{"script":"scripts/derive.py","command":"python","output":"data.json"}"#
+                    .into(),
+            }],
+        };
+        let summary = store.sync_connectors_file(sync).await.expect("sync");
+        assert_eq!(summary.connectors_synced, 1);
+
+        let connectors = store.list_connectors().await.expect("list");
+        let project_connectors: Vec<_> = connectors
+            .into_iter()
+            .filter(|c| c.project_id == Some(project_id))
+            .collect();
+        // Both rows coexist: the non-script row is untouched, the script
+        // row is a fresh INSERT.
+        assert_eq!(project_connectors.len(), 2);
+        let git_repo = project_connectors
+            .iter()
+            .find(|c| c.kind == "git-repo")
+            .expect("git-repo row untouched");
+        assert_eq!(git_repo.name, "shared-name");
+        assert_eq!(git_repo.config, "/workspace/path");
+        let script = project_connectors
+            .iter()
+            .find(|c| c.kind == "script")
+            .expect("script row created");
+        assert_eq!(script.name, "shared-name");
+        assert!(script.config.contains("derive.py"));
+        assert_ne!(script.id, git_repo.id);
     }
 
     /// V1 Issue2 Phase 3: empty connectors list is a valid no-op (file with
