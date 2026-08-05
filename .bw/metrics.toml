@@ -1,16 +1,19 @@
 schema_version = 1
 
-# WorkflowHub · 指标正本(草案位置说明见同目录 metrics-rationale.md §0)
+# WorkflowHub · 指标正本
 #
-# ⚠️ 这份文件**暂时不在它该在的位置**。按 docs/metrics-toml-format.md,指标正本
-# 应当住在 `<项目工作区根>/.bw/metrics.toml`;但 WorkflowHub 这个项目在库里
-# `workspace_path` 与 `remote_path` **都是空的**(sqlite 读回为证),没有工作区
-# 就没有地方放正本,`SyncMetricsFile` 也无从读起。所以本轮先把推导结果落在 BW
-# 仓的 docs/metrics/workflowhub/ 下,结构与字段完全按正式契约写,等这个项目挂上
-# 工作区后原样拷进 `.bw/metrics.toml` 即可同步——不是另造一套格式。
+# 这份文件是 **WorkflowHub 这个项目**的指标正本,不是 BW 仓自己的。两者同址是
+# 有据的:WorkflowHub 的项目自述原话就是「Builders 工作台自己的 workflow 库…
+# 用这个仓库自己的真实 git 历史当证据」——它的工作区本来就该是 BW 仓。本轮
+# (2026-08-05)据此给它挂上 `workspace_path = <BW 仓根>`,正本落到契约要求的
+# `<工作区根>/.bw/metrics.toml`,和另外两个项目走同一条路:改指标 = 改这份文件
+# = 走 PR 审核,`SyncMetricsFile` 读它、同步进 SQLite 作只读缓存。
 #
-# 六判据打分、被拒的坏候选(含现行北极星为什么过不了)、成对反指标、
-# 0-40 质量门实际得分、每条指标可独立复核的 SQL,全部在 metrics-rationale.md。
+# 一处如实标注的偏差:推导文档没有按惯例放在 `<工作区根>/docs/metrics-rationale.md`,
+# 而是 `docs/metrics/workflowhub/metrics-rationale.md`——BW 仓的 docs/ 下已经住着
+# 大量本产品自己的文档,一份叫 metrics-rationale.md 的文件放在那里会被误读成
+# 「BW 产品的指标推导」。六判据打分、被拒的坏候选(含现行北极星为什么过不了)、
+# 成对反指标、0-40 质量门实际得分、每条指标可独立复核的 SQL,都在那份文件里。
 
 [north_star]
 name = "每月被标准工作流带完成的活数"

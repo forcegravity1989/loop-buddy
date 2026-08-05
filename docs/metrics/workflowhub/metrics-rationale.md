@@ -10,27 +10,43 @@
 
 ---
 
-## 0. 为什么这份正本不在 `.bw/metrics.toml`(先说清楚这件事)
+## 0. 正本在哪、为什么(拍板记录)
 
-WorkflowHub 这个项目在库里**没有工作区**:
+推导完成时,WorkflowHub 在库里**没有工作区**:
 
 ```bash
-sqlite3 ~/Library/Application\ Support/BuildersWorkbench/workspace.db \
+sqlite3 ~/Library/Application\ Support/BuildersWorkbench/workbench.db \
   "SELECT name, workspace_path, remote_path FROM project WHERE name='WorkflowHub';"
 # → WorkflowHub|| (两列都是空串)
 ```
 
 没有工作区就没有地方放 `<workspace>/.bw/metrics.toml`,`SyncMetricsFile` 也
-无从读起(它读的是 active 项目的工作区)。所以本轮的产出**先落在 BW 仓的
-`docs/metrics/workflowhub/`**,字段与结构完全按 `docs/metrics-toml-format.md`
-的正式契约写,等这个项目挂上工作区后原样拷进 `.bw/metrics.toml` 即可同步。
+无从读起(它读的是 active 项目的工作区)。当时给出两条路,标为产品决定不代拍。
 
-**不假装它已经上了看板**——要真正点亮,二选一,是产品决定,不由本轮代拍:
+**2026-08-05 拍板:走第一条——给 WorkflowHub 挂 BW 仓当工作区。**
 
-1. 给 WorkflowHub 挂一个真实工作区(它本质上就是 BW 自己的 workflow 库,
-   最自然的工作区就是 BW 仓本身),然后 `SyncMetricsFile`;
-2. 或者按现状用 `UpsertManualMetric` 手建这五行,`origin='manual'`、戴「手填」
-   徽记——但这样就丢掉了「指标定义走 PR 审核」这条 plan/13 D5 的纪律。
+依据不是「找个地方放文件」,而是这个项目的自述原话(`project.descr`):
+
+> 「Builders 工作台自己的 workflow 库:创建 / 优化 / 评估 wf 全生命周期。这次
+> 创建过程本身也走 Builders 工作台的 Command 路径,**用这个仓库自己的真实 git
+> 历史当证据**,不编造。」
+
+它的工作区本来就该是 BW 仓。于是正本移到 `<BW 仓根>/.bw/metrics.toml`,和另外
+两个项目走同一条路:改指标 = 改文件 = 走 PR 审核(plan/13 D5),同步后
+`origin='file'`。
+
+**被否掉的第二条路及其理由**:`UpsertManualMetric` 手建五行不用挂工作区、当场
+能亮,但 ① 丢掉「指标定义走 PR」这条纪律;② **BW 目前没有任何删除指标的命令**
+(全仓 `DeleteMetric`/`RemoveMetric`/`delete_metric` 零命中),手建进去就拿不
+掉——aihot 项目此刻正因为这个问题,看板上留着两条已被判为坏候选的废弃手填指标。
+
+**代价如实记账**:挂上工作区后,对 WorkflowHub 跑 `RunIssue` 会让 agent 在 BW
+仓里真实改文件。`allow_commands` 因此设为 `false`。
+
+**一处偏差**:本推导文档没有按惯例放在 `<工作区根>/docs/metrics-rationale.md`,
+而是 `docs/metrics/workflowhub/metrics-rationale.md`——BW 仓的 `docs/` 下已经住
+着大量本产品自己的文档,一份叫 `metrics-rationale.md` 的文件放在那里会被误读成
+「BW 产品自己的指标推导」。
 
 ---
 
