@@ -25,6 +25,7 @@ use bw_core::model::{
     SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
     WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
+use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
     SkillFileId, SkillId, WorkflowId, WorkflowRunId,
@@ -845,6 +846,24 @@ pub trait Store: Send + Sync {
     /// Every real support file belonging to one skill, insertion order
     /// (oldest first) — the file-tree source for a Skill detail view (T4).
     async fn list_skill_files(&self, skill_id: SkillId) -> Result<Vec<SkillFileRow>>;
+    /// 五角色归类:一次读回全库的技能阶段归属。`list_skills` 用它给每张
+    /// `SkillCard` 补齐 `stages`,避免每行一次查询的 N+1。缺席的 skill_id =
+    /// 零行 = 「没挂任何阶段」(是未归类还是已判定不属任何阶段,由该行的
+    /// `stage_origin` 分辨,不在本方法的职责里)。
+    async fn list_skill_stages(&self)
+        -> Result<std::collections::HashMap<SkillId, Vec<StageKind>>>;
+    /// 五角色归类:重写一件技能的阶段归属(先删后插,幂等),并同时写下这次
+    /// 归类的出处。空 `stages` + 非 `Unclassified` 的 `origin` = 「已判定:
+    /// 不属任何阶段」;空 `stages` + `Unclassified` = 回到「未归类」。
+    ///
+    /// 这里**不碰** `source`/`official_library` —— 归类是 BW 自己的组织维度,
+    /// 不是对上游正文的改编,不触发 T11「编辑即脱离源头」。
+    async fn set_skill_stages(
+        &self,
+        id: SkillId,
+        stages: &[StageKind],
+        origin: StageOrigin,
+    ) -> Result<()>;
     /// T7 (plan/12 §0/§2): narrow backfill setter — classifies an *existing*
     /// row (not a content edit, so deliberately separate from `SkillEdit`,
     /// same reasoning `record_skill_use_by_name` already established for

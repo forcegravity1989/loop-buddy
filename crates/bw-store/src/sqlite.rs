@@ -27,6 +27,7 @@ use bw_core::model::{
     SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
     WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
+use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
     SessionId, SkillFileId, SkillId, WorkflowId, WorkflowRunId,
@@ -259,6 +260,12 @@ impl SqliteStore {
         // manually classified those, so this never guesses.
         add_column_if_missing(&pool, "skill", "stage_ref", "INTEGER").await?;
         add_column_if_missing(&pool, "agent", "stage_ref", "INTEGER").await?;
+        // 五角色归类(2026-08-05):归类**动作**的出处。'' = 还没人归过类;
+        // 'table' = bw-core 静态表回填;'distilled' = 按蒸馏出处 Issue 派生;
+        // 'manual' = 人工在 SkillHub 改过(此后 Boot 的静态表回填整条跳过)。
+        // 与 skill_stage 的行数共同派生四态 —— 单看行数分不出「判过了、不属
+        // 任何阶段」和「还没人管」,而这两件事在本仓是必须分开的。
+        add_column_if_missing(&pool, "skill", "stage_origin", "TEXT NOT NULL DEFAULT ''").await?;
         // T16 (plan/12 §10 v1.1#3): workflow's main MD document, aligned
         // with `skill.content`. '' on every pre-T16 row = honestly "no
         // original document" (real pre-T16 workflows never had one to lose).
@@ -318,6 +325,43 @@ async fn add_column_if_missing(
             .execute(pool)
             .await?;
     }
+    Ok(())
+}
+
+/// `add_column_if_missing` 的对称件:删一列,先删掉依赖它的索引。
+///
+/// SQLite 的 `ALTER TABLE ... DROP COLUMN`(3.35+,本仓 libsqlite3-sys 0.30.1
+/// 远高于门槛)在列被索引时会直接拒绝,所以 `dependent_indexes` 必须列全 ——
+/// 调用方自己知道该列有哪些索引,这里不去猜。列不存在即 no-op,可在每次
+/// `open()` 上安全重复调用。
+///
+/// 用户 2026-08-05 拍板「不能无限制扩展表格,不要害怕修改旧表,有需要就大胆
+/// 重做」——把这条做成常备原语而不是一次性代码,是那句话的落地。
+///
+/// 本任务(SR2)只**定义**它,不调用(调用在 SR4);为避免 `dead_code` 让
+/// `-D warnings` 失败先加 `#[allow(dead_code)]`,SR4 接上调用时删掉该属性。
+#[allow(dead_code)]
+async fn drop_column_if_present(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+    dependent_indexes: &[&str],
+) -> Result<()> {
+    let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
+        .fetch_all(pool)
+        .await?;
+    let exists = rows.iter().any(|r| r.get::<String, _>("name") == column);
+    if !exists {
+        return Ok(());
+    }
+    for idx in dependent_indexes {
+        sqlx::query(&format!("DROP INDEX IF EXISTS {idx}"))
+            .execute(pool)
+            .await?;
+    }
+    sqlx::query(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -2179,6 +2223,50 @@ impl Store for SqliteStore {
         rows.into_iter().map(skill_file_row).collect()
     }
 
+    async fn list_skill_stages(&self) -> Result<HashMap<SkillId, Vec<StageKind>>> {
+        let rows = sqlx::query("SELECT skill_id, stage FROM skill_stage ORDER BY skill_id, stage")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out: HashMap<SkillId, Vec<StageKind>> = HashMap::new();
+        for r in rows {
+            let id = parse_uuid(&r.get::<String, _>("skill_id"), SkillId::from_uuid)?;
+            // 越界值(理论上进不来 —— 写侧只写 StageKind::index)如实丢弃,
+            // 绝不映射成某个「差不多的」阶段。
+            if let Some(k) = StageKind::from_index(r.get::<i64, _>("stage") as u8) {
+                out.entry(id).or_default().push(k);
+            }
+        }
+        Ok(out)
+    }
+
+    async fn set_skill_stages(
+        &self,
+        id: SkillId,
+        stages: &[StageKind],
+        origin: StageOrigin,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM skill_stage WHERE skill_id=?")
+            .bind(id.uuid().to_string())
+            .execute(&mut *tx)
+            .await?;
+        for k in stages {
+            sqlx::query("INSERT INTO skill_stage (skill_id, stage) VALUES (?, ?)")
+                .bind(id.uuid().to_string())
+                .bind(i64::from(k.index()))
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query("UPDATE skill SET stage_origin=?, updated_at=? WHERE id=?")
+            .bind(stage_origin_tag(origin))
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn create_agent(&self, a: NewAgent) -> Result<()> {
         let t = now_unix();
         let (source_tag, official_library) = hub_source_columns(&a.source);
@@ -2793,6 +2881,29 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
         project_id,
         content: r.get("content"),
     })
+}
+
+/// `skill.stage_origin` 列 ↔ 域枚举。未知/空值一律读成 `Unclassified` ——
+/// 诚实降级,绝不猜一个归类出处出来。
+///
+/// 本任务(SR2)先定义,SR3 接上 `skill_row` 时删掉这个属性。
+#[allow(dead_code)]
+fn parse_stage_origin(tag: &str) -> StageOrigin {
+    match tag {
+        "table" => StageOrigin::Table,
+        "distilled" => StageOrigin::Distilled,
+        "manual" => StageOrigin::Manual,
+        _ => StageOrigin::Unclassified,
+    }
+}
+
+fn stage_origin_tag(origin: StageOrigin) -> &'static str {
+    match origin {
+        StageOrigin::Unclassified => "",
+        StageOrigin::Table => "table",
+        StageOrigin::Distilled => "distilled",
+        StageOrigin::Manual => "manual",
+    }
 }
 
 fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {

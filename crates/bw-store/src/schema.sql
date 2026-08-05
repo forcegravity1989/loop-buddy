@@ -242,6 +242,18 @@ CREATE TABLE IF NOT EXISTS skill_file (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_skill_file_skill ON skill_file(skill_id);
+-- 五角色归类(2026-08-05):一件技能可挂多个阶段,所以归属是关联表而不是
+-- skill 行上的一个值。行数本身是语义的一半 —— 0 行 / 1..=4 行 / 5 行分别是
+-- 「未判定或已判定不属任何阶段」/「挂这些阶段」/「全阶段通用」,另一半由
+-- skill.stage_origin 提供(见 sqlite.rs 的迁移段)。
+CREATE TABLE IF NOT EXISTS skill_stage (
+    skill_id TEXT NOT NULL REFERENCES skill(id),
+    stage    INTEGER NOT NULL,
+    PRIMARY KEY (skill_id, stage)
+);
+-- 这个索引可以安全地待在 schema.sql 里(与下面 skill.stage_ref 的情况不同):
+-- 它索引的是本文件自己刚 CREATE 的新表的列,不是往存量表上补的列。
+CREATE INDEX IF NOT EXISTS idx_skill_stage_by_stage ON skill_stage(stage);
 -- T7: deliberately NO `CREATE INDEX ... ON skill(stage_ref)` here — this
 -- schema blob runs in full (via `open()`'s statement-by-statement replay)
 -- *before* `add_column_if_missing` adds this column to a pre-T7 on-disk
