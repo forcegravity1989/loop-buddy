@@ -4672,6 +4672,37 @@ impl App {
                         }
                     }
                 }
+                // plan/19 §6 P0 + 2026-08-05 拍板「直接作为基础 skill 引入」:
+                // 盲测冠军 mohit `metrics-framework`/`metric-tree-builder`
+                // (引领/滞后组两轮 8 票均值 9.00 第一,MIT,vendored 于
+                // examples/skill-libraries/mohit-pm-claude-skills)从「手跑
+                // example 才入库」升级为 Boot 自动引入——含全新 DB 在内的每
+                // 个库都自带这两件基础技能。走既有 `ImportSkillLibrary` 命令
+                // 而非 bw-standard canon 播种,因为:①出处保真——行的
+                // `official_library` 就是真实上游
+                // `mohitagw15856/pm-claude-skills`,不伪装成 bw-standard
+                // (plan/16 S6 来源诚实 + plan/19「原文保留」拍板);②包内
+                // references/templates 支撑文件随包一并入库(canon 播种路径
+                // 只存正文);③幂等与 T11「编辑即脱离源头」复用该命令自己的
+                // `(name, official_library)` + `adapted_from` 判定,不另造第
+                // 二套。vendor 目录缺失(脱离仓库运行的打包场景)按 ECC
+                // vendor 先例(`legacy_migration::ecc_agents_vendor_dir`)
+                // 如实跳过——绝不硬造,也不报错拦启动。
+                const MOHIT_VENDOR_ROOT: &str = concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../examples/skill-libraries/mohit-pm-claude-skills/skills"
+                );
+                if matches!(
+                    skill_import::find_skill_package_dirs(MOHIT_VENDOR_ROOT),
+                    Ok(dirs) if !dirs.is_empty()
+                ) {
+                    Box::pin(self.dispatch(Command::ImportSkillLibrary {
+                        root_path: MOHIT_VENDOR_ROOT.to_string(),
+                        official_library: "mohitagw15856/pm-claude-skills".to_string(),
+                        project_id: None,
+                    }))
+                    .await?;
+                }
                 // A4: backfill the per-stage "完成 Issue 数" metric for every
                 // project — pre-A4 projects gain it; already-seeded ones are
                 // unchanged (by-name idempotent).

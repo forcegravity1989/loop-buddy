@@ -1,7 +1,9 @@
 //! T3 (plan/12 §1/§2) headless E2E: drive the real `App`/`Command` layer to
-//! batch-import both real skill libraries — mattpocock-skills and
-//! superpowers — via `Command::ImportSkillLibrary`, the same command-layer
-//! path the desktop UI will eventually drive, no mocked assertions. Then:
+//! batch-import the real skill libraries — mattpocock-skills, superpowers,
+//! and (plan/19 拿来主义) mohit-pm-claude-skills' `metrics-framework` +
+//! `metric-tree-builder` pair — via `Command::ImportSkillLibrary`, the same
+//! command-layer path the desktop UI will eventually drive, no mocked
+//! assertions. Then:
 //!
 //! 1. read the result back from the store (grouped counts, a multi-file
 //!    skill's `skill_file` rows),
@@ -38,6 +40,13 @@ const SUPERPOWERS_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../examples/skill-libraries/superpowers/skills"
 );
+/// plan/19: a **partial** vendor — only `metrics-framework` +
+/// `metric-tree-builder` out of upstream's several-hundred-skill library
+/// (see `examples/skill-libraries/README.md` for why only these two).
+const MOHIT_ROOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../examples/skill-libraries/mohit-pm-claude-skills/skills"
+);
 
 #[tokio::main]
 async fn main() {
@@ -68,9 +77,10 @@ async fn main() {
     // higher; see this run's own printed number and the final report).
     let mattpocock_real = count_skill_md(MATTPOCOCK_ROOT);
     let superpowers_real = count_skill_md(SUPERPOWERS_ROOT);
+    let mohit_real = count_skill_md(MOHIT_ROOT);
     println!(
-        "real SKILL.md dirs on disk: mattpocock-skills={mattpocock_real} superpowers={superpowers_real} total={}",
-        mattpocock_real + superpowers_real
+        "real SKILL.md dirs on disk: mattpocock-skills={mattpocock_real} superpowers={superpowers_real} mohit-pm-claude-skills={mohit_real} total={}",
+        mattpocock_real + superpowers_real + mohit_real
     );
 
     let skills_before = store.list_skills().await.unwrap().len();
@@ -94,6 +104,15 @@ async fn main() {
     .expect("ImportSkillLibrary(superpowers) pass 1 should succeed");
     let sp_pass1 = drain_import_event(&mut sub);
 
+    app.dispatch(Command::ImportSkillLibrary {
+        root_path: MOHIT_ROOT.to_string(),
+        official_library: "mohitagw15856/pm-claude-skills".to_string(),
+        project_id: None,
+    })
+    .await
+    .expect("ImportSkillLibrary(mohit-pm-claude-skills) pass 1 should succeed");
+    let mohit_pass1 = drain_import_event(&mut sub);
+
     let skills_after_pass1 = store.list_skills().await.unwrap();
     println!("----------------------------------------------------------");
     println!(
@@ -108,6 +127,10 @@ async fn main() {
         "pass 1 superpowers: imported={} skipped={}",
         sp_pass1.0, sp_pass1.1
     );
+    println!(
+        "pass 1 mohit-pm-claude-skills: imported={} skipped={}",
+        mohit_pass1.0, mohit_pass1.1
+    );
 
     let mp_rows: Vec<_> = skills_after_pass1
         .iter()
@@ -121,10 +144,17 @@ async fn main() {
             matches!(&s.source, HubSource::Official { official_library } if official_library == "superpowers")
         })
         .collect();
+    let mohit_rows: Vec<_> = skills_after_pass1
+        .iter()
+        .filter(|s| {
+            matches!(&s.source, HubSource::Official { official_library } if official_library == "mohitagw15856/pm-claude-skills")
+        })
+        .collect();
     println!(
-        "official_library grouped counts: mattpocock-skills={} superpowers={}",
+        "official_library grouped counts: mattpocock-skills={} superpowers={} mohit-pm-claude-skills={}",
         mp_rows.len(),
-        sp_rows.len()
+        sp_rows.len(),
+        mohit_rows.len()
     );
 
     // Spot check a real multi-file skill: mattpocock's "tdd" carries 3 real
@@ -158,6 +188,15 @@ async fn main() {
     .expect("ImportSkillLibrary(superpowers) pass 2 should succeed");
     let sp_pass2 = drain_import_event(&mut sub);
 
+    app.dispatch(Command::ImportSkillLibrary {
+        root_path: MOHIT_ROOT.to_string(),
+        official_library: "mohitagw15856/pm-claude-skills".to_string(),
+        project_id: None,
+    })
+    .await
+    .expect("ImportSkillLibrary(mohit-pm-claude-skills) pass 2 should succeed");
+    let mohit_pass2 = drain_import_event(&mut sub);
+
     let skills_after_pass2 = store.list_skills().await.unwrap();
     println!("----------------------------------------------------------");
     println!(
@@ -169,21 +208,30 @@ async fn main() {
         sp_pass2.0, sp_pass2.1
     );
     println!(
+        "pass 2 mohit-pm-claude-skills: imported={} skipped={}",
+        mohit_pass2.0, mohit_pass2.1
+    );
+    println!(
         "skills after pass 2: {} (must equal pass 1's {})",
         skills_after_pass2.len(),
         skills_after_pass1.len()
     );
 
-    let count_ok =
-        mp_rows.len() as u64 == mattpocock_real && sp_rows.len() as u64 == superpowers_real;
+    let count_ok = mp_rows.len() as u64 == mattpocock_real
+        && sp_rows.len() as u64 == superpowers_real
+        && mohit_rows.len() as u64 == mohit_real;
     let pass1_ok = mp_pass1.0 == mattpocock_real as u32
         && mp_pass1.1 == 0
         && sp_pass1.0 == superpowers_real as u32
-        && sp_pass1.1 == 0;
+        && sp_pass1.1 == 0
+        && mohit_pass1.0 == mohit_real as u32
+        && mohit_pass1.1 == 0;
     let pass2_ok = mp_pass2.0 == 0
         && mp_pass2.1 == mattpocock_real as u32
         && sp_pass2.0 == 0
-        && sp_pass2.1 == superpowers_real as u32;
+        && sp_pass2.1 == superpowers_real as u32
+        && mohit_pass2.0 == 0
+        && mohit_pass2.1 == mohit_real as u32;
     let stable_ok = skills_after_pass2.len() == skills_after_pass1.len();
     let tdd_ok =
         tdd_files.len() == 3 && tdd_rel == vec!["agents/openai.yaml", "mocking.md", "tests.md"];
