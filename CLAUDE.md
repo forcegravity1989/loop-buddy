@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **看不懂词先查这两处**:领域词(队友、交棒、观测、蒸馏……)与工程操作词(读回、门禁、记账……)见 `CONTEXT.md` 词表;字母数字代号(P2、W6、R1……)见 `docs/code-schemes.md` 代号索引。写任何给人看的东西之前,先读下方「写作纪律」。
+
 ## 这个仓库在做什么
 
 **Builders' Workbench(BW)**:单人构建者的 Rust 原生桌面工作台(Dioxus 0.7 / wry WebView,macOS+Windows)。
@@ -12,14 +14,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 针对的痛:传统项目管理要 5 个专职角色、10 道流程,信息靠开会和口头汇报流动。Builders 模式换成 **1 个 Builder + Agent Loop**:PRD+评审 → 原型即规格;甘特图 → 每周可验证增量;人工实现 → agent 产出 80%、人审 20%;状态周会 → 真实 telemetry,难造假。四个控制点(产品哲学,自始未变):**知道对标谁 / 每周在正常演进 / 让 agent loop 干活(人只守质量门与验收)/ 目标清晰且难造假**。
 
-落到今天的实现,是四件互锁的事(括号内是代码里的对应物):
+落到今天的实现,是四件互锁的事:
 
-1. **管理体系自带,不用用户发明**:项目分五个阶段——原型→构建→优化→运营推广→运维——每阶段自带打法:该问什么、什么节奏、做到什么算完(DoD)、常见的坑(`StageKind` 静态元数据,通用方法论,不随项目现编);运维复盘回流原型,项目是环不是流水线;阶段推进=交棒,清单未勾完可以交但强制标「带险」留痕(append-only 审计)。
-2. **活让 agent 干,人守验收门**:活=Issue 卡,指派给 AI 队友,一键真实开工(`RunIssue`,在项目真实目录里改文件跑测试);干完只到「评审中」,**「完成」永远由人显式点**(状态机 `can_transition_to` 里 Done 的入边只有 InReview);干砸如实停在原地可重试;定时任务只自动**建**活(Autopilot),绝不自动**完成**活。
-3. **健康难造假**:健康灯只能被真实数据点亮——观测只追加、信号只派生(封口 `Derived<Signal>`,store 无 set_signal),**无数据=Unknown,绝不假装绿**,数据过期降级,手填带「手填」徽记;干活自动留痕:队友战绩、产物登记、运行成败耗时、阶段吞吐指标,全自动入账且同一件活绝不记两次(settle-once);任何界面数字都能 `sqlite3` 独立查证。
-4. **经验复利,越用越强**:做完的 Issue 一键蒸馏成带正文的技能(记着来自哪件活),下次同类活自动注入、用一次记一次;队友胜率由真实战绩派生,绝不手设。
+1. **管理体系自带,不用用户发明**。项目分五个阶段:原型 → 构建 → 优化 → 运营推广 → 运维。每个阶段自带打法——该问什么、什么节奏、做到什么算完(DoD 清单)、常见的坑;这套方法论是内置的(代码里是 `StageKind` 静态元数据),不随项目现编。运维阶段的复盘回流到原型阶段,所以项目是环、不是流水线。从一个阶段推进到下一个阶段叫「交棒」:清单没勾完也允许交,但会强制标成「带险交棒」并永久记下当时缺了什么——这类记录只追加、不修改(append-only),事后抹不掉。
+2. **活让 agent 干,人守验收门**。一件活就是一张 Issue 卡,指派给 AI 队友后一键真实开工(`RunIssue` 命令,在项目的真实目录里改文件、跑测试)。队友干完,活最远只能走到「评审中」;**「完成」永远由人显式点**——状态机里 Done 的唯一入口就是「评审中」,由 `can_transition_to` 在代码层面锁死。干砸了就如实停在原地,可以重试,不假装前进。定时任务只会自动**建**活(Autopilot 模式),绝不自动**完成**活。
+3. **健康难造假**。健康信号灯只能被真实数据点亮:数据点(观测)只追加、不修改;信号只能从数据推导出来,不能手动设置(`Derived<Signal>` 类型是密封的,store 层根本没有 set_signal 方法)。**没有数据就显示 Unknown 灰,绝不假装绿**;数据过期自动降级;手工填的数据带「手填」徽记。干活过程自动留痕:队友战绩、产物登记、每次运行的成败与耗时、阶段吞吐指标,全部自动入账,且同一件活绝不重复记账(代码里这条约束叫 settle-once)。界面上任何数字都能用 `sqlite3` 直接查库核对。
+4. **经验复利,越用越强**。做完的 Issue 可以一键「蒸馏」成一篇带正文的技能(永远记着它来自哪件活);下次干同类活时自动注入给队友,用一次记一次。队友胜率由真实战绩算出,绝不手工设定。
 
 **反命题(防蔓延)**:不是团队协作平台(没有成员/群聊/收件箱)、不是通用看板(无拖拽/甘特;回退不给 UI)、不是审批系统(交棒只留痕不拦人)、不是云服务(AI 执行=本机 `claude` CLI,单次花费封顶);永远不替用户捏造健康。
+
+## 写作纪律(给人看的东西,先让人看得懂)
+
+管辖范围:**一切写给人读的输出**——对话里的进度汇报、commit message、plan/ 文档、交接记录。背景:用户已四次反馈「输出太黑话、审核很费劲」(2026-07-16 / 07-20 / 07-22 / 08-05),这一节就是那几次反馈的固化。
+
+1. **汇报用人话**。给用户的进度汇报和总结,用完整句子说清「做了什么、结果如何、下一步是什么」。不要甩裸代号链(「T1→T2→T5,剩 T3/T4」这种);代号可以出现,但**每个代号在当次输出里第一次出现时必须带一句人话说明**,例:「T3(把工作流正文接进详情页)还在做」。
+2. **实现术语留在代码里**。settle-once、no-hijack、derive-only、`Derived<Signal>` 这类实现机制词,只出现在代码、代码注释和工程对照表里;写给人的正文改说人话:「同一件活绝不记两次」「定时任务绝不自动完成活」「信号只能从数据推导」。这是 2026-07-22 术语沉淀时已定的规矩(`docs/adr/0001-ubiquitous-language.md`),此处重申并扩展到对话汇报。
+3. **用词以 `CONTEXT.md` 词表为准**。要新造一个词,先进词表(给出定义和 _Avoid_)再使用;拿不准某个词读者懂不懂,就查词表——词表里没有,多半说明该换成人话。
+4. **代号先登记再使用**。要新开一批任务代号(比如下一批活想编成 X1-X5)之前,先查 `docs/code-schemes.md`:该字母已被占用就换一个,然后把新系列登记进去再用。历史上 P/S/W/R/L/A 六个字母都发生过「同字母、不同批次、含义完全不同」的撞车,根因就是没有登记表。
+5. **每篇新文档开头给 30 秒导读**:这文档是什么、给谁看、现在还作数吗。文档过时后不删,但必须在顶部加横幅注明「历史档案,现状以 XX 为准」——plan/00-05 和 iterations/ 的历史交接记录都已照此标注,新文档过时时照做。
+6. **写作范本**:`docs/metrics-toml-format.md`(零裸代号、术语随用随定义、有真实样例)和 `plan/07-product-proposition.md`(命题正文用人话、工程锚点单独进对照表)。写新文档前先看它们长什么样。
 
 ## 常用命令
 
@@ -27,11 +40,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cargo check -p bw-app             # 日常:编译内核+应用(不编 Dioxus,快)
 cargo run -p app-desktop          # 启动桌面应用(见下方环境变量)
 # E2E 验证(核心纪律,取代单元测试):
-BW_DB=<db> BW_OPEN=<项目名> BW_PANEL=<panel> ./target/debug/builders-workbench  # 深链启动,stderr [BW_OPEN] = 渲染证明
-sqlite3 <db> "SELECT …"           # 数字一律 SQL 读回(读回为证,比截图更硬)
+BW_DB=<db> BW_OPEN=<项目名> BW_PANEL=<panel> ./target/debug/builders-workbench  # 深链启动(用环境变量直接跳到指定项目/面板),stderr [BW_OPEN] = 渲染证明
+sqlite3 <db> "SELECT …"           # 数字一律 SQL 读回(「读回」=把数字从数据库重新查出来核对,比截图更硬)
 ```
 
-**门禁(每个 commit 前全过,与 CI 完全一致)**:
+**门禁(每个 commit 前全过,与 CI 完全一致;「门禁」=提交前必须全部通过的检查组)**:
 
 ```bash
 cargo fmt --all --check
@@ -43,11 +56,11 @@ cargo check -p app-desktop        # 桌面壳编译过
 # 行为正确性靠 E2E(深链启动 + sqlite 读回 + computer-use)+ /code-review,不靠测试基线
 ```
 
-**headless 实跑指挥器**(不开 UI 走完完整生命周期):
+**headless 实跑指挥器**(「指挥器」=不开界面、直接驱动内核走完完整生命周期的脚本):
 
 ```bash
 cargo run -p bw-app --example real_demo -- <db-path> <workspaces-root> [--mock] [--only <slug>]
-./scripts/supervise-real-demo.sh <slug>   # 网关抖动期的幂等重试监理
+./scripts/supervise-real-demo.sh <slug>   # 网关抖动期的重试监理脚本(失败自动重跑,重复跑不产生重复数据)
 ```
 
 **环境变量**:`BW_DB`(覆盖数据库路径)· `BW_OPEN=<项目名>` + `BW_PANEL=progress|workflow|routine|artifact|version|issues`(启动深链,stderr 打 `[BW_OPEN]` 日志,是桌面渲染的可靠证明)· `BW_WORKSPACES` · `BW_CLAUDE_BIN` / `BW_CLAUDE_MAX_BUDGET_USD`(真执行器配置)。
@@ -60,19 +73,19 @@ bw-core     领域内核:StageKind 五阶段元数据 / Issue 状态机与合法
 bw-engine   Executor trait + MockExecutor(可配延迟)+ ClaudeCliExecutor(shell 出 `claude -p`,
             真实读写文件)+ evidence.rs(从工作区采集 git/docs/测试真状态回流观测)
 bw-store    SQLite(sqlx):schema.sql + add_column_if_missing 迁移守卫;handoff/observation 等
-            append-only 表;store 无业务判断(哑存储)
+            只追加(append-only)表;store 无业务判断(哑存储)
 bw-app      编排大脑:App + Command/Event 总线,所有用例与守卫都在这层;E2E 的命令层主战场
 ui          纯函数 selector + ViewModel(state→可渲染 DTO),可单测/E2E 核验
 app-desktop 真壳(Dioxus 0.7 hard-pin =0.7.9):kernel 桥(独立 tokio 线程)+ 各屏
-app-web     非 workspace 成员,"以后也许"留口,不编译
+app-web     非 workspace 成员,"以后也许"的预留位,不编译
 ```
 
-数据流:UI 只发 `Command`、收 `Event`;`bw-app` 执行用例 → store 落库 → `recompute_signals` 重算 → 事件流回 UI。执行器按项目热插拔:未配置真实工作区的项目走 MockExecutor(产出自我标注为演示),配置了的每次调用新建 ClaudeCliExecutor。
+数据流:UI 只发 `Command`、收 `Event`;`bw-app` 执行用例 → store 写入数据库 → `recompute_signals` 重算 → 事件流回 UI。执行器按项目热插拔:未配置真实工作区的项目走 MockExecutor(产出自我标注为演示),配置了的每次调用新建 ClaudeCliExecutor。
 
 **两条不可妥协(已钉进类型与 CI)**:
 
-1. **UI 无关内核**:五个内核 crate 禁依赖 dioxus/tauri/wry/leptos(`guard-kernel-ui-free.sh` 强制);wasm32 check 保活 Web 留口。UI 相关改动只准进 `app-desktop`。
-2. **健康永远 derive**:`Signal` 只能经封口的 `Derived<Signal>` 进缓存,store 无 `set_signal`,`recompute_signals` 是唯一写入者。观测 append-only,一个观测=一个点,绝不插值;**无数据 = Unknown ≠ 绿**。
+1. **UI 无关内核**:五个内核 crate 禁依赖 dioxus/tauri/wry/leptos(`guard-kernel-ui-free.sh` 强制);wasm32 check 保住将来出 Web 版的可能性。UI 相关改动只准进 `app-desktop`。
+2. **健康永远推导**:`Signal` 只能经密封的 `Derived<Signal>` 进缓存,store 无 `set_signal`,`recompute_signals` 是唯一写入者。观测只追加,一个观测=一个点,绝不插值;**无数据 = Unknown ≠ 绿**。
 
 ## 核心纪律:一切实跑(验证你做的东西是"真"的)
 
@@ -86,27 +99,31 @@ app-web     非 workspace 成员,"以后也许"留口,不编译
    ```
    演示/报告里的每个数字都从真实 DB 读出,绝不硬编码(`real_demo` 的 evidence JSON 模式)。
 2. **mock 必须自我标注**。MockExecutor 路径的产出带【mock】/「流程演示」字样,文档如实注明;mock 存在的唯一目的是廉价验证管线本身,绝不冒充真实执行。
-3. **E2E 验证绝不依赖网关**。验证动作 = 临时/演示 DB + 深链启动到目标面板(stderr 见 `[BW_OPEN]` 即渲染成功、无 panic)→ `sqlite3` 读回核数 → 截图存档;必要时 computer-use 驱动交互。真实 `claude -p` 执行受 GLM 网关 529 抖动影响,只在 example/监理脚本里跑,幂等可重试,**不作为常绿验证手段**。
+3. **E2E 验证绝不依赖网关**。验证动作 = 临时/演示 DB + 深链启动到目标面板(stderr 见 `[BW_OPEN]` 即渲染成功、无 panic)→ `sqlite3` 读回核数 → 截图存档;必要时 computer-use 驱动交互。真实 `claude -p` 执行受 GLM 网关 529 抖动影响,只在 example/监理脚本里跑,可安全重试,**不作为常绿验证手段**。
 
    **computer-use 摸桌面应用(2026-07-30 踩出来的坑,别重踩)**:`~/Applications/BWDev.app`(bundle id `dev.buildersworkbench.bwdev`)是长期稳定的验证壳,任何 worktree 跑一次 `./scripts/point-bwdev-here.sh`(编译 + 把最新二进制拷进这个 app)即可接上,不需要新建/重注册 app——computer-use 的 `request_access` 认的"已安装应用"名单在同一次会话里现造的新 app 认不出来,必须提前存在。**screenshot 真实可用,click/key 永久受阻**(两种打包方式——exec 转符号链接、直接拷二进制进 bundle——都测过,结果一样,是 Dioxus/wry 这层更深的窗口限制,不是权限或封装问题):验证手段因此是 `BW_HUB=<hub>` / `BW_SEL=skill:<uuid>` 等 env 深链**直接终端调用** `Contents/MacOS/bwdev-launcher`(不要用 `open -a`,env 传不进去)把目标视图摆到位,再截图,不要指望点击导航。另外,agent 自身的 `screencapture`/`Read` 拿不到真实桌面像素(sandbox 只看得到壁纸)——真实证据只能靠 computer-use 自己截图当场看,或者把上面那条命令原样给用户,让用户在自己屏幕上核验。
-4. **Done 永不自动,破坏性永不自动**(产品铁律)。run 成功只推 InReview;InReview→Done 必须来自显式 `TransitionIssue` 命令(状态机 `can_transition_to` 守卫锁死,E2E 读回 `settled_at` 抽查)。
+4. **Done 永不自动,破坏性永不自动**(产品铁律)。run 成功只推「评审中」;「评审中」→「完成」必须来自显式 `TransitionIssue` 命令(状态机 `can_transition_to` 守卫锁死,E2E 读回 `settled_at` 抽查)。
 5. **schema 迁移双守卫**(踩过的真坑):`CREATE TABLE IF NOT EXISTS` 对存量表**不会**加新列 —— 每加一列必须同时改 `schema.sql` 并在 `sqlite.rs` 加 `add_column_if_missing(...)`,否则存量 DB 直接崩。
-6. **代码质量靠 `/code-review`,不靠测试基线**。每件功能实现后过 `/code-review`;产品铁律(Done 永不自动、settle-once、Signal derive-only、状态机合法转移表)由类型/守卫在编译期守住,E2E 读回抽查。UI(Dioxus 组件)编译过即可,行为在 bw-app 命令层 + E2E 兜底 —— 如实,不假装 UI 测试。
-7. **留白如实标注**。未建的功能(Squad/多视图/Gantt 等)在文档里写"未建,留口不假装",占位 UI 不放模拟数据。
+6. **代码质量靠 `/code-review`,不靠测试基线**。每件功能实现后过 `/code-review`;产品铁律由类型/守卫在编译期守住,E2E 读回抽查。UI(Dioxus 组件)编译过即可,行为在 bw-app 命令层 + E2E 兜底 —— 如实,不假装 UI 测试。
+7. **留白如实标注**。未建的功能(Squad/多视图/Gantt 等)在文档里写"未建,不假装有",占位 UI 不放模拟数据。
 
-**产品铁律(原由出口闸门测试锁死,2026-07-17 起改由 类型/守卫/`/code-review`/E2E 读回 共同守住)**:
+**产品铁律**(「铁律」=产品行为的不可违反约束;原由出口闸门测试锁死,2026-07-17 起改由类型/守卫/`/code-review`/E2E 读回共同守住):
 
-| 铁律 | 怎么守 |
+| 铁律(人话) | 怎么守 |
 |---|---|
-| 持久化==独立重算 | 杀进程重开,`recompute_signals` 由 store 重算;E2E 重启后 sqlite 读回一致 |
-| Signal derive-only、无数据=Unknown | `Derived<Signal>` 封口、store 无 `set_signal`;E2E 读回 signal |
-| Done 永不自动、settle-once 记账 | 状态机 `can_transition_to` 守卫、Done 入边仅 InReview;E2E 读回 `settled_at` |
-| Issue/run/产物归属与记账 | store 读回核验,绝不硬编;蒸馏/注入/uses 复利链 E2E 读回 |
+| 杀进程重开,所有数字能从库里重算出来、前后一致 | `recompute_signals` 由 store 重算;E2E 重启后 sqlite 读回一致 |
+| 信号只能从数据推导;没数据就是 Unknown,不是绿 | `Derived<Signal>` 密封、store 无 `set_signal`;E2E 读回 signal |
+| 「完成」永远由人点;同一件活绝不重复记账 | 状态机 `can_transition_to` 守卫、Done 入边仅「评审中」;E2E 读回 `settled_at` |
+| 每件活/运行/产物的归属和账目真实可查 | store 读回核验,绝不硬编;蒸馏/注入/使用数这条增益链 E2E 读回 |
 | schema 迁移不崩老库 | `schema.sql` + `add_column_if_missing` 双守卫;开老库 `PRAGMA` 读回新列 |
-| cron 真实调度 tick、自动建单 no-hijack | E2E:到点 tick 后 sqlite 读回新建 Issue,状态 Normal |
+| 定时任务真实到点触发;自动建的活绝不被自动推进 | E2E:到点 tick 后 sqlite 读回新建 Issue,状态 Normal |
 
 ## 文档与协作约定
 
-- **设计唯一事实源**:`plan/06-overall-alignment.md`(缺口台账 G1-G11/R1-R4 + 执行队列);**产品命题**:`plan/07-product-proposition.md`(引子页命题原文 + 用户语言拆解 + 工程对照表——命题正文用人话,源码/测试锚点只进对照表);**MVP 执行计划**:`plan/08-mvp-execution-plan.md`(MVP=项目的生命周期 × workflow 的生命周期,两线四棒 P/W 队列,目标用人话、锚点在各件「工程对照」——当前接棒入口)。`DEVELOPMENT.md` 是开发指南;`plan/00~05` 是路线与选型背景;`iterations/HANDOFF-*.md` 是棒次交接件(自足,不读对话也能接手)。
-- **commit 约定**:每件独立 commit,代号前缀(如 `A5-F · 转移守卫…`),信息如实描述取舍,不吹。交接件与实况冲突时**以源码为准,如实记录偏差,不擅改设计决定**;拿不准的写进 commit message 的「偏差」段留给下一棒。
+- **先读什么**:`plan/README.md` 是 plan/ 目录的导读(哪些文档还作数、哪些是历史档案)。当前活跃三件:
+  - `plan/06-overall-alignment.md` — 设计唯一事实源,含「缺口台账」(=持续追加的问题与任务登记表,G1-G11/R1-R4 编号)与执行队列;
+  - `plan/07-product-proposition.md` — 产品命题:引子页原文 + 用户语言拆解 + 工程对照表(命题正文用人话,源码/测试锚点只进对照表);
+  - `plan/08-mvp-execution-plan.md` — MVP 执行计划(MVP=项目的生命周期 × workflow 的生命周期),当前接手工作的入口。
+- **历史档案**:`plan/00~05` 是路线与选型背景(其中七控制点模型、双团队分工等前提已被 06-08 取代);`iterations/HANDOFF-*.md` 等是已执行完毕的交接记录。两处顶部均有横幅注明,读时别当现状。`DEVELOPMENT.md` 是开发指南(常用命令与架构速览部分常青,迁移叙事部分是历史)。
+- **commit 约定**:每件独立 commit。**commit 标题必须让不查文档的人看懂做了什么**——可以带代号前缀(如 `plan20-W6 · E2E 读回指挥器`),但代号之外必须有人话描述,且代号系列须先在 `docs/code-schemes.md` 登记(防同字母撞车)。信息如实描述取舍,不吹。交接件与实况冲突时**以源码为准,如实记录偏差,不擅改设计决定**;拿不准的写进 commit message 的「偏差」段,留给下一个接手的会话。
 - 设计系统 token(暖纸底色 `#EFEBE2`、clay 主色 `#C5654A`、三态信号色+Unknown 灰、Noto Serif/Sans SC + JetBrains Mono)见 `plan/00-PLAN.md` §6;绿色隐身、只有红黄出声。
