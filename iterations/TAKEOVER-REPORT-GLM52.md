@@ -1,5 +1,7 @@
 # 接棒报告 · 完整形态(fable5 → glm5.2)
 
+> ⚠️ **历史档案(2026-08-05 标注)**:本文是已执行完毕的接手记录,所述分支已并回主线,不描述现状——现状以 `plan/06~08` 为准。
+
 > 写于 2026-07-14,worktree `romantic-grothendieck-e9bb5c`,分支 `claude/builders-workbench-multica-0517f4`。
 > 自足:每条陈述可对源码 / demo DB / 日志核验。前置交接件:`iterations/HANDOFF-TO-GLM52.md`、`plan/05-complete-form-design.md`(§G1-G11)。
 
