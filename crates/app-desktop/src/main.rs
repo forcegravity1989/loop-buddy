@@ -272,7 +272,14 @@ fn Root() -> Element {
         let Some(pid) = c.project_id else {
             return;
         };
-        let Some(wf) = hub_for_cron.workflows.iter().find(|w| w.name == c.target) else {
+        // plan/20 R2: 与 tick_scheduler 同一条就近规则——本项目行优先、
+        // 全局兜底、他项目行永不命中。
+        let Some(wf) = bw_core::scope::scoped_pick(
+            hub_for_cron.workflows.iter(),
+            Some(pid),
+            |w| w.project_id,
+            |w| w.name == c.target,
+        ) else {
             return;
         };
         let session = SessionId::new();

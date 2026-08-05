@@ -3784,14 +3784,16 @@ impl App {
             .transition_issue(issue_id, IssueStatus::Todo)
             .await?;
         // Assign by name if the named agent exists — honest 0-match otherwise.
+        // plan/20 R2: 就近优先——本项目的五角色副本(W1)优先于全局同名行,
+        // 他项目的行永不命中,自动建单的战绩才落在本项目的账上。
         if let Some(agent_name) = assignee {
-            if let Some(agent) = self
-                .store
-                .list_agents()
-                .await?
-                .into_iter()
-                .find(|a| a.name == agent_name)
-            {
+            let agents = self.store.list_agents().await?;
+            if let Some(agent) = bw_core::scope::scoped_pick(
+                agents.iter(),
+                Some(project),
+                |a| a.project_id,
+                |a| a.name == agent_name,
+            ) {
                 self.store.assign_issue(issue_id, Some(agent.id)).await?;
             }
         }
@@ -7405,6 +7407,32 @@ impl App {
             }
 
             Command::AssignIssue { id, assignee } => {
+                // plan/20 R1 命令层守卫:他项目的队友与种A(工作区登记行)
+                // 不可指派——UI 池已收窄,这里把口子在命令层锁死(深链/
+                // 指挥器路径同受约束)。全局共享行仍可指派:存量流程与
+                // examples 不破坏,战绩按 R3 记到被指派的那一行,不污账。
+                if let Some(aid) = assignee {
+                    let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                    let agent = self
+                        .store
+                        .get_agent(aid)
+                        .await?
+                        .ok_or_else(|| AppError::Invalid("指派对象不存在".into()))?;
+                    if let Some(owner) = agent.project_id {
+                        if owner != issue.project_id {
+                            return Err(AppError::Invalid(format!(
+                                "「{}」是别的项目的队友,不可跨项目指派(plan/20 R1)",
+                                agent.name
+                            )));
+                        }
+                    }
+                    if agent.source.is_project_assets() {
+                        return Err(AppError::Invalid(format!(
+                            "「{}」是工作区登记行(种A),仅登记可见,不可指派",
+                            agent.name
+                        )));
+                    }
+                }
                 self.store.assign_issue(id, assignee).await?;
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);

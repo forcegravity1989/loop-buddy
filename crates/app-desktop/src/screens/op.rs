@@ -639,19 +639,27 @@ fn IssuesPanel(op: OpVm) -> Element {
     let mut new_stage = use_signal(move || initial_stage);
     // P3: 关联技能选择器只列 content 非空的行 —— 空壳技能选了也注入不了
     // (`standard_skill_block` 的诚实降级口径),不该出现在选项里。
+    // plan/20 R1: 池 = 本项目行 + 全局基础库行,他项目的行绝不出现;
+    // 种A(工作区登记行)照旧排除。
     let skill_choices: Vec<_> = op
         .hub
         .skills
         .iter()
-        .filter(|s| !s.content.trim().is_empty() && !s.is_project_assets)
+        .filter(|s| {
+            bw_core::scope::in_scope(s.project_id, Some(op.id))
+                && !s.content.trim().is_empty()
+                && !s.is_project_assets
+        })
         .cloned()
         .collect();
     let mut new_skill = use_signal(String::new);
+    // plan/20 R1(plan/08 S1 完成标准原文):「指派下拉只出现自己的五个
+    // 角色」——严格只列本项目自有队友(W1 出生/补种保证每个项目都有)。
     let agents: Vec<_> = op
         .hub
         .agents
         .iter()
-        .filter(|a| !a.is_project_assets)
+        .filter(|a| a.project_id == Some(op.id) && !a.is_project_assets)
         .cloned()
         .collect();
     // Board-wide: at most one card is "entering a block reason" at a time.
