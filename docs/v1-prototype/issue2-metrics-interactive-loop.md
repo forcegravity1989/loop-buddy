@@ -97,6 +97,7 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 4. **交互式会话 = 持久 + 可 resume(重设计,替 F2)**:交互式 issue ↔ 一个持久 claude 会话 1:1。点 issue 卡在工作流 = **唤醒之前的会话窗口继续聊**,不是"跑完记一行 workflow_run"。**resume 机制坐实(subagent 验)**:`claude --resume <session_id>`(交互,不带 -p,不注新 prompt,会话续)。session_id **从 Claude hook 的 SessionStart 事件 payload 取**——不是从 session.jsonl 文件名(文件名 UUID ≠ session_id);buddy 装一个 hook listener(127.0.0.1 http,像 orca)抓 session_id 存起来,唤醒时 `--resume <id>`。该 hook listener **一物两用**:SessionStart 抓 session_id + Stop/PreToolUse 抓生命周期事件(Phase 2)。备选 `-c`/`--continue`(resume 最近会话,不用存 id,简单 fallback);`--fork-session`(resume 时分支留审计,可选)。**F2"补 workflow_run 行"作废** → 改设计:issue=会话、点卡=resume。交互式 run 不再是"一次性 run 到 InReview",而是持续会话,用户决定何时 finalize 出 PR。
 5. **dev 偏差**:#1 `--prefill` **已解决(subagent 验)**——dev 用位置参数 prompt 是**对的**(= orca `promptInjectionMode:'argv'` 主路径,`claude "<prompt>"` auto-submit,文档化稳定);`--prefill` 是 orca 草案路径(预植入输入框、回车前审阅),buddy 不需要,代码里 `draft_prompt_flag:"--prefill"` 字段多余可清。#2 见上(resume 重设计)。#3 预算偏差接受(用户"无所谓";`--max-budget-usd` 确认只配 `--print`)。
 6. **m6 待补**:今晚只改了 m4/m5;m6(指标采集链 + 表/字段 + script kind「计划中」→「已接」校准)未动,留 Phase 5。
+7. **状态机(用户 2026-08-05 钉)**:InReview 的触发 = **issue 被关联了 PR**(检测到有 PR),不是"跑完"——跑完≠InReview,有 PR 才进评审。PR 合入 → Done(人 merge,铁律)。**Done 后 issue 窗口保持**(点开仍能 `--resume` 唤醒之前的 claude cli 窗口+会话)。**不考虑**"合入后 issue 又新开、继承历史上下文"——新 issue(哪怕同是找指标)靠**读已合入的产物文件**接上下文(薄编排器,文件接),不特殊继承。**一个 issue = 一个 session**(1:1),不做多 session 特殊设计、也不特殊防。
 
 ## 3. collect_kind 收两 kind + 绑数据=搭采集装置
 
