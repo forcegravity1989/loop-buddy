@@ -20,6 +20,7 @@
 
 mod agent_import;
 mod bw_canon;
+mod hook_listener;
 mod legacy_migration;
 mod skill_import;
 
@@ -53,6 +54,7 @@ use bw_store::{
     NewSkill, NewSkillFile, NewStage, NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store,
     WorkflowEdit,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -1224,6 +1226,19 @@ pub struct AppState {
     /// Throttled to once per 5 minutes so it doesn't hit the remote every
     /// `tick_scheduler` fire. `0` = never polled (first tick runs it).
     pub last_inreview_poll: i64,
+    /// V1 Issue2 Phase2b: cwd → IssueId map for hook event routing. When
+    /// `run_issue_interactive` spawns a session, it registers the worktree
+    /// cwd here. When the hook listener receives a SessionStart/Stop event
+    /// (which carries `cwd`), `poll_hook_events` looks up the issue by cwd
+    /// to store `session_id` or trigger InReview detection. Entries are
+    /// cleared when the issue settles (Done) or the worktree is cleaned up.
+    pub interactive_sessions: HashMap<String, IssueId>,
+    /// V1 Issue2 Phase2b: a `Stop` hook event was received since the last
+    /// `tick_scheduler` fire. `true` → run `poll_interactive_inreview` on
+    /// this tick (the tick's cadence is the natural throttle — no additional
+    /// debounce needed within a single tick; the 5-minute poller remains as
+    /// backstop for Stop events processed with delay).
+    pub pending_stop_check: bool,
 }
 
 /// P4: everything the Issue-detail overlay shows, assembled read-only at
@@ -1263,6 +1278,8 @@ impl Default for AppState {
             issue_detail: None,
             github_repos: Vec::new(),
             last_inreview_poll: 0,
+            interactive_sessions: HashMap::new(),
+            pending_stop_check: false,
         }
     }
 }
@@ -1287,11 +1304,50 @@ pub struct App {
     /// returns immediately, and the kernel's `select!` settle arm later
     /// drives `run_issue_settle` under `&mut self` — the UI never freezes.
     settle_tx: Option<mpsc::UnboundedSender<SettleReq>>,
+    /// V1 Issue2 Phase2b: hook event receiver from the hook listener
+    /// (localhost HTTP server). `None` when the listener failed to start
+    /// (port in use, no home dir) — the app works without real-time hooks,
+    /// falling back to 2a's 5-minute InReview poller. Drained in
+    /// [`App::poll_hook_events`] (called from `tick_scheduler`).
+    hook_event_rx: Option<mpsc::UnboundedReceiver<hook_listener::HookEvent>>,
+    /// V1 Issue2 Phase2b: the port the hook listener bound to. Written into
+    /// `~/.claude/settings.json`'s curl commands. `None` when the listener
+    /// isn't running.
+    hook_port: Option<u16>,
 }
 
 impl App {
     pub fn new(store: Arc<dyn Store>, mock_engine: Engine, claude_config: ClaudeCliConfig) -> Self {
         let (tx, _rx) = broadcast::channel(256);
+        // V1 Issue2 Phase2b: start the hook listener (localhost HTTP server
+        // that receives claude SessionStart/Stop hook events). Best-effort —
+        // if it fails (port in use, no home dir, no tokio runtime), the app
+        // works without real-time hooks (falls back to 2a's 5-minute InReview
+        // poller). The sender is moved into the background task (keeps the
+        // channel alive); the receiver stays here for `poll_hook_events` to
+        // drain.
+        let (hook_tx, hook_rx) = mpsc::unbounded_channel::<hook_listener::HookEvent>();
+        let (hook_port, hook_event_rx) = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                let result = handle.block_on(hook_listener::HookListener::start(hook_tx));
+                match result {
+                    Ok(listener) => {
+                        let port = listener.port;
+                        // Write hooks config to ~/.claude/settings.json
+                        // (idempotent merge — preserves user hooks). If this
+                        // fails, the listener is useless (curl has nowhere
+                        // to POST), so drop the receiver.
+                        if hook_listener::install_hooks_config(port).is_ok() {
+                            (Some(port), Some(hook_rx))
+                        } else {
+                            (None, None)
+                        }
+                    }
+                    Err(_) => (None, None),
+                }
+            }
+            Err(_) => (None, None), // no tokio runtime → no listener
+        };
         Self {
             store,
             mock_engine,
@@ -1302,6 +1358,8 @@ impl App {
             events: tx,
             workspaces_root: None,
             settle_tx: None,
+            hook_event_rx,
+            hook_port,
         }
     }
 
@@ -1354,6 +1412,14 @@ impl App {
     /// Borrow the store (for read queries the UI projects through selectors).
     pub fn store(&self) -> &Arc<dyn Store> {
         &self.store
+    }
+
+    /// V1 Issue2 Phase2b: the port the hook listener is bound to, or `None`
+    /// when the listener isn't running (port in use, no home dir, no runtime).
+    /// The UI can show this for debugging; `~/.claude/settings.json`'s curl
+    /// commands embed it.
+    pub fn hook_port(&self) -> Option<u16> {
+        self.hook_port
     }
 
     fn emit(&self, e: Event) {
@@ -1540,6 +1606,82 @@ impl App {
 
     async fn refresh_activity(&mut self) -> Result<(), AppError> {
         self.state.recent_activity = self.store.list_recent_handoffs(50).await?;
+        Ok(())
+    }
+
+    /// V1 Issue2 Phase2b: drain pending hook events from the hook listener
+    /// (localhost HTTP server). Called from `tick_scheduler` (and can be
+    /// called from the desktop kernel's `select!` loop for more prompt
+    /// processing). Processes:
+    ///  - **SessionStart**: look up the issue by `cwd` (via the
+    ///    `interactive_sessions` map) and store `session_id` via
+    ///    `store.set_issue_claude_session_id`. This is the F1 fix: only when
+    ///    the hook fires (session really established) is the session_id
+    ///    stored — an empty session_id on the issue means the first spawn
+    ///    failed, and the next ▶ run falls back to `build_startup_plan`.
+    ///  - **Stop**: set `pending_stop_check = true` so the next
+    ///    `tick_scheduler` fire runs `poll_interactive_inreview` (the Stop
+    ///    event is the real-time trigger; the tick's cadence is the natural
+    ///    throttle — no additional debounce needed within a single tick;
+    ///    the 5-minute poller remains as backstop).
+    ///
+    /// Best-effort: a failed store write (session_id) or a missing cwd →
+    /// issue mapping is silently skipped (logged via toast). Never blocks
+    /// the tick scheduler's cron-fired list from returning.
+    async fn poll_hook_events(&mut self) -> Result<(), AppError> {
+        // Drain all pending events first (releases the mutable borrow on
+        // `hook_event_rx` before we call `self.emit` / `self.store` below).
+        let events: Vec<hook_listener::HookEvent> = {
+            let Some(rx) = self.hook_event_rx.as_mut() else {
+                return Ok(()); // no listener running
+            };
+            let mut events = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+            events
+        };
+        for event in events {
+            match event {
+                hook_listener::HookEvent::SessionStart { session_id, cwd } => {
+                    // Look up the issue by cwd (the worktree path the
+                    // session was spawned in).
+                    if let Some(&issue_id) = self.state.interactive_sessions.get(&cwd) {
+                        if let Err(e) = self
+                            .store
+                            .set_issue_claude_session_id(issue_id, &session_id)
+                            .await
+                        {
+                            self.emit(Event::ConnectorSynced {
+                                name: "Hook SessionStart".into(),
+                                ok: false,
+                                detail: format!(
+                                    "存储 session_id 失败,该活的 resume 仍用 fallback:{e}"
+                                ),
+                            });
+                        } else {
+                            self.emit(Event::ConnectorSynced {
+                                name: "Hook SessionStart".into(),
+                                ok: true,
+                                detail: format!(
+                                    "捕获 claude session_id (前8位: {}…) — 下次 ▶跑 用 --resume",
+                                    &session_id[..session_id.len().min(8)]
+                                ),
+                            });
+                        }
+                    }
+                    // cwd not in map → the hook fired for a session buddy
+                    // didn't spawn (user's own claude session). Silently
+                    // ignore — we only care about buddy-spawned sessions.
+                }
+                hook_listener::HookEvent::Stop { .. } => {
+                    // Mark for InReview check on this tick. The tick's
+                    // cadence is the natural throttle (multiple Stop events
+                    // in one tick = one check).
+                    self.state.pending_stop_check = true;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -3937,13 +4079,38 @@ impl App {
 
             fired.push(c.id);
         }
-        // V1 Issue2 Phase2a: InReview detection poller (throttled). Checks
-        // codehub/github for open MRs on interactive issues (InProgress +
-        // interactive_started + pr_number == 0). Not a cron task — a
+        // V1 Issue2 Phase2b: drain hook events from the listener (localhost
+        // HTTP server). SessionStart → store session_id (F1 fix); Stop → set
+        // pending_stop_check for immediate InReview detection. Best-effort —
+        // a failure is silently skipped (the 5-minute poller below is the
+        // backstop). No listener (hook_event_rx = None) = no-op.
+        let _ = self.poll_hook_events().await;
+
+        // V1 Issue2 Phase2b: Stop-triggered InReview check. When a `Stop`
+        // hook event was received (agent finished a turn), run
+        // `poll_interactive_inreview` immediately — the Stop is the real-time
+        // trigger (replaces 2a's 5-minute-only cadence). The tick's cadence
+        // is the natural throttle (multiple Stops in one tick = one check).
+        if self.state.pending_stop_check {
+            self.state.pending_stop_check = false;
+            if let Err(e) = self.poll_interactive_inreview().await {
+                self.emit(Event::ConnectorSynced {
+                    name: "InReview (Stop 触发)".into(),
+                    ok: false,
+                    detail: format!("Stop 触发 InReview 检测失败,5min 轮询兜底:{e}"),
+                });
+            }
+        }
+
+        // V1 Issue2 Phase2a: InReview detection poller (throttled backstop).
+        // Checks codehub/github for open MRs on interactive issues (InProgress
+        // + interactive_started + pr_number == 0). Not a cron task — a
         // separate periodic check that rides `tick_scheduler`'s cadence
         // but throttles to once per 5 min so it doesn't hit the remote
         // every tick. Never auto-Done (铁律) — only backfills pr_number +
-        // transitions to InReview.
+        // transitions to InReview. In Phase2b this is the BACKSTOP for the
+        // Stop-triggered check above — catches MRs the Stop trigger missed
+        // (hook not installed, agent session not via buddy, etc.).
         let now_ts = now().unix_timestamp();
         if now_ts - self.state.last_inreview_poll >= INREVIEW_POLL_INTERVAL_SECS {
             self.state.last_inreview_poll = now_ts;
@@ -4744,8 +4911,21 @@ impl App {
         // re-click routes to resume. Set before spawn: even if spawn fails,
         // the next attempt re-tries as resume (which is safe — `--continue`
         // on a non-existent session just starts a fresh one in claude's CLI).
+        // V1 Issue2 Phase2b: the resume decision now uses `claude_session_id`
+        // (not `interactive_started`) — see the F1 fix at the top of this
+        // function. `interactive_started` is still set (marks a spawn was
+        // attempted, used by the poller's filter).
         if !is_resume {
             self.store.set_issue_interactive_started(id).await?;
+        }
+
+        // V1 Issue2 Phase2b: register the worktree cwd → IssueId mapping so
+        // the hook listener can route SessionStart/Stop events (which carry
+        // `cwd` in the payload) back to this issue. Registered before spawn
+        // so events arrive as soon as the session starts.
+        let cwd_key = workspace_cwd.to_string_lossy().to_string();
+        if !cwd_key.is_empty() {
+            self.state.interactive_sessions.insert(cwd_key, id);
         }
 
         // Capture head_before (for potential evidence; Phase 1 doesn't
