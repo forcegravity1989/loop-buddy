@@ -197,6 +197,19 @@ pub enum Command {
         last_target: String,
         driver: String,
     },
+    /// 停用(归档)或恢复一条指标 —— 指标退役的唯一产品路径,**没有物理
+    /// 删除**。`observation` 是 append-only 的:硬删 metric 行要么级联抹掉
+    /// 真实测量历史,要么留下孤儿观测,两个都不可接受。停用把"不想再看见
+    /// 它"和"它当初真测过什么"拆开——行留着、观测一条不删,只是退出界面
+    /// 默认视图、退出健康灯上卷、退出自动采集。
+    ///
+    /// 停用后紧跟一次 `recompute_signals`:项目/阶段的上卷要把这条的进出
+    /// 反映出来。被停用行自己那盏灯冻结在停用那一刻(recompute 跳过归档
+    /// 行),恢复后由下一次 recompute 重新派生 —— derive-only 不破。
+    SetMetricArchived {
+        metric: MetricId,
+        archived: bool,
+    },
     /// The monitoring loop's heartbeat: a new Manual value is born as an
     /// observation, then every signal is re-derived. Never sets a signal.
     RecordObservation {
@@ -2589,9 +2602,14 @@ impl App {
             .await?
             .metrics
             .into_iter()
-            .find(|m| m.name == Self::stage_done_metric_name() && m.stage_kind == Some(stage));
+            .find(|m| {
+                m.name == Self::stage_done_metric_name()
+                    && m.stage_kind == Some(stage)
+                    // 停用的指标不再进新观测:停用就是"别再拿这条量我了"。
+                    && !m.archived
+            });
         let Some(m) = metric else {
-            return Ok(()); // metric missing — honest no-op
+            return Ok(()); // metric missing/archived — honest no-op
         };
         if m.value_raw == new_raw {
             return Ok(()); // change-guard: no new fact
@@ -3036,7 +3054,8 @@ impl App {
             (METRIC_WS_COMMITS, ev.commit_count.to_string()),
             (METRIC_WS_DOCS, ev.docs_files.to_string()),
         ] {
-            let Some(m) = sigs.metrics.iter().find(|m| m.name == name) else {
+            // 停用的指标不再进新观测(同 feed_stage_done_count)。
+            let Some(m) = sigs.metrics.iter().find(|m| m.name == name && !m.archived) else {
                 continue;
             };
             if m.value_raw == value {
@@ -3082,13 +3101,22 @@ impl App {
                 let sync = metrics_file_sync(p, &file);
                 let summary = self.store.sync_metrics_file(sync).await?;
                 self.emit(Event::ProjectUpdated(p));
+                // 自动停用只在真发生时出声(0 条不提)——正本里删掉一条
+                // 指标是"界面上少了一块"这种看得见的后果,不能静默发生。
+                let mut detail = format!(
+                    "北极星 · {} 条滞后指标 · {} 条引领指标已同步",
+                    summary.lagging_synced, summary.leading_synced
+                );
+                if summary.auto_archived > 0 {
+                    detail.push_str(&format!(
+                        ";正本里已删除的 {} 条自动停用(历史观测保留,可在「已停用」里恢复)",
+                        summary.auto_archived
+                    ));
+                }
                 self.emit(Event::ConnectorSynced {
                     name: "metrics.toml".into(),
                     ok: true,
-                    detail: format!(
-                        "北极星 · {} 条滞后指标 · {} 条引领指标已同步",
-                        summary.lagging_synced, summary.leading_synced
-                    ),
+                    detail,
                 });
             }
             Err(e) => {
@@ -3131,7 +3159,10 @@ impl App {
         // 脚本自身依赖(Playwright/SSO/Chrome)由项目侧保证,buddy 只 shell-out。
         let mut script_outputs: Vec<serde_json::Value> = Vec::new();
         if !proj.workspace_path.trim().is_empty()
-            && sigs.metrics.iter().any(|m| m.collect_kind == "script")
+            && sigs
+                .metrics
+                .iter()
+                .any(|m| m.collect_kind == "script" && !m.archived)
         {
             let connectors = self.store.list_connectors().await?;
             for c in connectors.iter().filter(|c| {
@@ -3237,6 +3268,11 @@ impl App {
         }
 
         for m in &sigs.metrics {
+            // 停用的指标退出自动采集 —— 不拉数、不记点、也不计入本次采集
+            // 回执的任何一个计数(它压根没参与,报进去就是虚的)。
+            if m.archived {
+                continue;
+            }
             match m.collect_kind.as_str() {
                 "github" => {
                     if remote_path.is_empty() {
@@ -5212,6 +5248,28 @@ impl App {
                     .await?;
                 // The target moved ⇒ the same value may now mean a different
                 // signal. Re-derive; never patch by hand.
+                self.store.recompute_signals(p, now()).await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::SetMetricArchived { metric, archived } => {
+                let p = self.active()?;
+                // 作用域守卫:只能停用/恢复当前项目自己的指标。指标跟着项目
+                // 走,没有跨项目的停用 —— 一个别的项目的 MetricId 传进来直接
+                // NotFound,而不是静默改到别人头上。
+                let sigs = self.store.persisted_signals(p).await?;
+                let target = sigs
+                    .metrics
+                    .iter()
+                    .find(|m| m.id == metric)
+                    .ok_or(AppError::NotFound)?;
+                if target.archived == archived {
+                    // 幂等:重复点不重复盖 archived_at 时戳,也不白重算一遍。
+                    return Ok(());
+                }
+                self.store.set_metric_archived(metric, archived).await?;
+                // 这条指标进/出了上卷集合 ⇒ 项目与阶段的健康灯要重算。
+                // 唯一写入者仍是 recompute_signals,绝不手工 patch。
                 self.store.recompute_signals(p, now()).await?;
                 self.emit(Event::ProjectUpdated(p));
             }
