@@ -39,13 +39,28 @@ skill_file 支撑文件 100 条
 | D2 | stage 值由谁填、正本在哪 | **静态归类表（进 git）+ UI 人工覆盖** |
 | D3 | 「通用」桶存不存在 | **多态：某阶段 / 明确全阶段通用 / 未归类**——不把「没人管」和「确实通用」混成一格 |
 | D4 | 单角色还是多角色 | **多角色，新建关联表** |
-| D5 | 旧 `skill.stage_ref` 单值列 | **彻底迁到关联表，列废弃**（sqlite 不删列，保留但不读） |
+| D5 | 旧 `skill.stage_ref` 单值列 | **彻底迁到关联表**（→ D8 追加：不留死列，真删） |
 | D6 | 归类怎么到达执行现场 | **目录进 prompt + 正文物化到工作区 `.claude/skills/`** |
 | D7 | uses 记账 | **本轮不做**。用户原话：「uses 使用率解析现在不是重点，不用考虑这么复杂，事实上真实解析确实是最好的方案」 |
+| D8 | schema 姿态 | 用户追加：「**我们不能无限制扩展表格，不要害怕修改旧表，有需要就大胆重做**」→ 旧列真删而非留死列，新增字段以「净增 0 列」为目标 |
+| D9 | bw-standard 8 条 | 用户追加：「**指标类那 8 条也扩挂，口径统一**」→ 指标类技能按统一口径多角色扩挂（§6.1） |
 
-## 3. 数据模型
+## 3. 数据模型（D8：老表大胆重做，净增一表零列）
 
-### 3.1 新表
+### 3.1 旧列真删，不留死列
+
+`skill.stage_ref` 单值列迁移后**真删**，不采用「保留但不读」的保守做法（D8）。已在日常库副本上**实测通过**：
+
+```sql
+DROP INDEX idx_skill_stage;               -- 老索引:CREATE INDEX idx_skill_stage ON skill(stage_ref)
+ALTER TABLE skill DROP COLUMN stage_ref;  -- SQLite ≥3.35 支持
+```
+
+实测记录（2026-08-05，`workbench.db` 副本）：两条语句成功，`PRAGMA table_info(skill)` 读回 `stage_ref` 已消失；`sqlite_master` 查过，全库**无** view/trigger 引用该列。版本余量充足——本机 CLI 3.43.2，`libsqlite3-sys` 0.30.1 更新，均远高于 3.35 门槛。
+
+**顺带纠一个命名坑**：老索引名 `idx_skill_stage` 与新表名 `skill_stage` 撞脸。老索引本轮删除，新索引改叫 `idx_skill_stage_by_stage`，不复用老名字。
+
+### 3.2 净增：一张表、零列
 
 ```sql
 CREATE TABLE IF NOT EXISTS skill_stage (
@@ -53,37 +68,34 @@ CREATE TABLE IF NOT EXISTS skill_stage (
   stage    INTEGER NOT NULL,          -- 1..=5，与 StageKind::index 同一口径
   PRIMARY KEY (skill_id, stage)
 );
-CREATE INDEX IF NOT EXISTS idx_skill_stage_stage ON skill_stage(stage);
+CREATE INDEX IF NOT EXISTS idx_skill_stage_by_stage ON skill_stage(stage);
+
+ALTER TABLE skill ADD COLUMN stage_origin TEXT NOT NULL DEFAULT '';
 ```
 
-### 3.2 新列（走 `add_column_if_missing` 双守卫）
+`stage_origin ∈ {'', 'table', 'distilled', 'manual'}`——**归类这个动作的出处**。skill 表因此**净增 0 列**（去掉 `stage_ref`、加上 `stage_origin`）。
 
-```sql
-ALTER TABLE skill ADD COLUMN stage_manual INTEGER NOT NULL DEFAULT 0;
-```
+比上一版设计少一样东西：原方案的 `stage_manual` 布尔列被 `stage_origin` 取代，后者一列同时承担三件事——「判过没有」「谁判的」「Boot 要不要跳过」——且**读侧不必再回查静态表**（上一版的四态判据要查静态表才能区分「已判定」和「没人管」，现在不用）。
 
-`stage_manual=1` 表示「人工在 UI 里归过类」，Boot 的静态表回填**从此整条跳过这条技能**。这是 D2「人工覆盖优先」的唯一判据。
+### 3.3 迁移守卫
 
-按 CLAUDE.md 的 schema 迁移双守卫纪律：新表/新列必须**同时**改 `crates/bw-store/schema.sql` 与 `crates/bw-store/src/sqlite.rs` 的 `add_column_if_missing(...)`，否则存量 DB 直接崩。
+- `add_column_if_missing(pool, "skill", "stage_origin", "TEXT NOT NULL DEFAULT ''")`——既有守卫
+- **新增迁移原语** `drop_column_if_present(pool, table, column, dependent_indexes)`：先删依赖索引、再删列，列不存在即 no-op。对称于 `add_column_if_missing`。D8 既然把「大胆重做旧表」定为常态姿态，这个原语就该常备在 `sqlite.rs` 里，而不是这次手写一段一次性代码
+- **迁移顺序**（幂等，可重复跑）：① 建 `skill_stage` ② 若 `skill.stage_ref` 列仍在，把非 NULL 值搬进 `skill_stage` 并置 `stage_origin='table'` ③ `drop_column_if_present` ④ 静态表对账
+- `crates/bw-store/schema.sql` 与 `sqlite.rs` **必须同改**（CLAUDE.md 双守卫纪律：`CREATE TABLE IF NOT EXISTS` 对存量表不会加列）
 
-### 3.3 归属状态：四态（对已批准设计的一处修正）
+### 3.4 归属状态：四态（对已批准三态的修正）
 
-批准设计时说的是**三态**、由关联表行数天然表达（0 行=未归类 / 1–4 行=挂这些阶段 / 5 行=全阶段通用）。**做归类草案时发现这不够用**：`obsidian-vault`（Obsidian 笔记工具）、`scaffold-exercises`（Matt 自己课程仓的练习脚手架）、`writing-skills`（写技能的元技能）这类技能，**不是「没人管」，而是「判过了，它跟项目五阶段无关」**——把它们挂成「全阶段通用」会让每次 run 都物化+列目录，是噪音；留成「未归类」又跟真正没人管的混成一格，正是 D3 要避免的事。
+批准设计时说的是**三态**、由关联表行数天然表达（0 行=未归类 / 1–4 行=挂这些阶段 / 5 行=全阶段通用）。**做归类草案时发现这不够用**：`obsidian-vault`（Obsidian 笔记工具）、`scaffold-exercises`（Matt 自己课程仓的练习脚手架）、`writing-skills`（写技能的元技能）这类技能，**不是「没人管」，而是「判过了，它跟项目五阶段无关」**——挂成「全阶段通用」会让每次 run 都物化+列目录，是噪音；留成「未归类」又跟真正没人管的混成一格，正是 D3 要避免的事。
 
-修正为**四态，仍然零额外存储**——读侧派生：
+修正为**四态**，判据全在 `skill_stage` + `stage_origin` 两处，读侧零回查：
 
 | 状态 | 判据 | UI 显示 |
 |---|---|---|
 | 挂 N 个阶段 | `skill_stage` 有 1–4 行 | 对应角色 chip |
 | 全阶段通用 | `skill_stage` 有 5 行 | 「全阶段通用」 |
-| **不属任何阶段（已判定）** | 0 行，且 `name` 在静态表里（值为空集）**或** `stage_manual=1` | 「不属任何阶段」 |
-| 未归类（Unknown） | 0 行，且不在静态表，且 `stage_manual=0` | 「未归类」 |
-
-静态表是纯函数、在 `bw-core` 内，读侧查它零成本。这条修正不新增列、不新增表，只是把「已判定」这个信息从**已有的两处**（静态表命中、`stage_manual`）读出来。
-
-### 3.4 旧列处置
-
-`skill.stage_ref` 迁移后不再被任何读侧代码引用。sqlite 不删列（避免碰老库，与 `add_column_if_missing` 同一保守立场）。Boot 一次性迁移：某 skill 有 `stage_ref` 且 `skill_stage` 无行 → 插一行。实际上 8 条 bw-standard 也全在静态表里，这条迁移只是兜底。
+| **不属任何阶段（已判定）** | 0 行，且 `stage_origin ≠ ''` | 「不属任何阶段」 |
+| 未归类（Unknown） | 0 行，且 `stage_origin = ''` | 「未归类」 |
 
 ## 4. 归类的三条来源
 
@@ -91,9 +103,11 @@ ALTER TABLE skill ADD COLUMN stage_manual INTEGER NOT NULL DEFAULT 0;
 
 | 来源 | 覆盖 | 机制 |
 |---|---|---|
-| **静态归类表** `bw-core`，`name → &[StageKind]` | 65 条随包发行/vendored 技能（本文 §6 全表） | Boot 按名幂等对账。进 git，可 diff 可 review |
-| **蒸馏派生** | 有 `distilled_from_issue` 的技能 | 由出处 Issue 的 `stage` 直接派生——这正是 `distilled_skills_block` 今天已在用的口径，不新造判据 |
-| **人工覆盖** | 任何技能、任何库 | SkillHub 编辑面板多选五角色；落库同时置 `stage_manual=1`，Boot 回填从此跳过 |
+| **静态归类表** `bw-core`，`name → &[StageKind]` | 65 条随包发行/vendored 技能（本文 §6 全表） | Boot 按名幂等对账，落 `stage_origin='table'`。进 git，可 diff 可 review |
+| **蒸馏派生** | 有 `distilled_from_issue` 的技能 | 由出处 Issue 的 `stage` 直接派生，落 `stage_origin='distilled'`——这正是 `distilled_skills_block` 今天已在用的口径，不新造判据 |
+| **人工覆盖** | 任何技能、任何库 | SkillHub 编辑面板多选五角色；落 `stage_origin='manual'`，Boot 回填从此整条跳过 |
+
+「不属任何阶段」在静态表里表达为**空集** `&[]`——Boot 照样落 `stage_origin='table'`、`skill_stage` 零行，于是四态里正确读成「已判定」而非「没人管」。
 
 **归类不触发 T11「编辑即脱离源头」**——`source` 不翻 `SelfBuilt`、`adapted_from` 不写。理由：阶段归属是 BW 自己的组织维度，不是对上游正文的改编；把 mattpocock 的 `tdd` 归到构建段，不该让它失去官方徽记。命令层调用 `SkillEdit` 时 `flip_to_self_built: false`。
 
@@ -121,7 +135,7 @@ run 时按当前 Issue 的 `stage`：
 ```
 
 - 每行 `- <name> — <desc 首句，截断至 80 字符>`
-- 整块字符上限 **4000**（构建段候选最多，27 条 × ~110 字符 ≈ 3000，留余量）
+- 整块字符上限 **4000**（原型段候选最多，29 条 × ~110 字符 ≈ 3200，留余量）
 - 超限按 `uses` 降序截断，并**如实写明**「另有 N 条未列出」——no silent caps
 
 ### 5.3 物化
@@ -135,7 +149,7 @@ run 时按当前 Issue 的 `stage`：
 - **绝不覆盖用户手写**：同名目录存在但**没有** `.bw-managed` → 整条跳过，并在 run 记录里如实留痕（用户自己的 skill 优先）
 - 工作区路径为空（未配置真实工作区的项目）→ no-op，不报错
 
-磁盘量级：构建段 27 条候选，正文合计约 150 KB。可接受（磁盘不是 prompt）。
+磁盘量级：候选最多的原型段 29 条，正文合计约 160 KB。可接受（磁盘不是 prompt）。
 
 ### 5.4 uses 记账（本轮明确不动）
 
@@ -153,27 +167,38 @@ run 时按当前 Issue 的 `stage`：
 
 **读法**：角色列写「原型/构建/优化/运营/运维」= 挂这些阶段；「全阶段通用」= 五个都挂（每个阶段的候选集都含它）；「不属任何阶段」= 已判定，不进任何候选。
 
-### 6.1 bw-standard（8 条）— 保持现状不动
+### 6.0 指标类技能的统一口径（D9）
 
-这 8 条是五阶段方法论技能，是角色的**定义性技能**，多角色能力本轮不用在它们身上（外扩会稀释「阶段=角色=方法论」的绑定）。如需扩挂，后续人工在 UI 里点。
+上一版把 bw-standard 的指标类技能单挂原型段、却给 mohit 两件挂了三个阶段，**两组口径打架**。统一为一条按「指标的生命周期」切分的规则，四条指标类技能一律照它归：
+
+| 指标生命周期 | 阶段 | 含义 |
+|---|---|---|
+| **定** | 原型 | 建体系、推北极星、拆驱动树——指标是什么，在原型段定 |
+| **用来打磨** | 优化 | 拿指标选打磨对象、看回归——度量驱动打磨的输入 |
+| **用来增长** | 运营 | 拿指标设增长实验、看漏斗 |
+| **用来守稳** | 运维 | 接真数据源点亮 SLI/健康灯——**仅当**该技能真涉及可观测性接入 |
+
+### 6.1 bw-standard（8 条）— 指标/对标类按 §6.0 扩挂，五条方法论招牌技能不动
 
 | 技能 | 角色 | 理由 |
 |---|---|---|
-| `evidence-first` | 原型 | 原型段方法论技能，`playbook::stage_skills(Prototype)` 的正本 |
-| `competitive-analysis` | 原型 | 创建后标配起手活「竞品分析」 |
-| `north-star-discovery` | 原型 | 标配起手活「找指标」，北极星在原型段定 |
-| `metrics-binding` | 原型 | 标配起手活「绑数据」，与找指标同期 |
-| `spec-to-tests` | 构建 | 构建段方法论技能 |
-| `baseline-before-touch` | 优化 | 优化段方法论技能 |
-| `fresh-eyes-funnel` | 运营 | 运营推广段方法论技能 |
-| `breaking-drill` | 运维 | 运维段方法论技能 |
+| `evidence-first` | 原型 | 原型段方法论招牌技能，`playbook::stage_skills(Prototype)` 的正本，不外扩 |
+| `competitive-analysis` | 原型 · 运营 | 对标名单+各家北极星猜测（原型段起手活）+ **可借鉴打法**（增长的直接输入） |
+| `north-star-discovery` | 原型 · 优化 · 运营 | 按 §6.0：推三层指标=定，打磨选对象=优化，增长实验=运营。不涉可观测性接入，无运维 |
+| `metrics-binding` | 原型 · 优化 · 运营 · 运维 | 按 §6.0 全四段：它就是**接真数据源点亮 Unknown 健康灯**的活，SLI 接入是 SRE 本职 |
+| `spec-to-tests` | 构建 | 构建段方法论招牌技能，不外扩 |
+| `baseline-before-touch` | 优化 | 优化段方法论招牌技能，不外扩 |
+| `fresh-eyes-funnel` | 运营 | 运营推广段方法论招牌技能，不外扩 |
+| `breaking-drill` | 运维 | 运维段方法论招牌技能，不外扩 |
+
+**为什么五条方法论技能不扩挂**：它们是 `playbook::stage_skills(kind)` 的正本，「阶段=角色=方法论」这条产品线靠它们一一对应支撑；外扩会让「原型师的招牌技能」这个概念失效。指标/对标类不同——它们是标配起手活的载体，本来就横跨定/用两端。若你认为这五条也该扩，说一声即可改。
 
 ### 6.2 mohit/pm-claude-skills（2 条）— PR #74 升的基础技能
 
 | 技能 | 角色 | 理由 |
 |---|---|---|
-| `metrics-framework` | 原型 · 优化 · 运营 | 从零建指标体系：原型段定北极星时起手；优化段拿它选打磨对象；运营段拿它设增长实验 |
-| `metric-tree-builder` | 优化 · 运营 | 前提是北极星已定（原型段产出），它做的是往下拆驱动、找杠杆——那是打磨与增长的动作 |
+| `metrics-framework` | 原型 · 优化 · 运营 | 按 §6.0：从零建指标体系=定，选打磨对象=优化，设增长实验=运营 |
+| `metric-tree-builder` | 原型 · 优化 · 运营 | 按 §6.0 与上条同口径。上一版给的是「优化·运营」（理由：北极星已定才轮到它），但拆驱动树本就是标配起手活「找指标」的一部分，仍在原型段——D9 统一后补上原型 |
 
 ### 6.3 mattpocock-skills（41 条）
 
@@ -251,13 +276,15 @@ run 时按当前 Issue 的 `stage`：
 
 ### 6.6 统计
 
+（D9 扩挂后重算，数字由脚本从本文表格里统计得出，非手数）
+
 | 阶段 | 直接挂的条数 | + 全阶段通用 6 条 = 该阶段候选集 |
 |---|---|---|
-| 原型 | 22 | 28 |
+| 原型 | 23 | 29 |
 | 构建 | 21 | 27 |
-| 优化 | 14 | 20 |
-| 运营 | 8 | 14 |
-| 运维 | 8 | 14 |
+| 优化 | 16 | 22 |
+| 运营 | 11 | 17 |
+| 运维 | 9 | 15 |
 
 | 特殊档 | 条数 | 名单 |
 |---|---|---|
@@ -269,7 +296,7 @@ run 时按当前 Issue 的 `stage`：
 ## 7. UI
 
 - `SkillEdit` 加 `stages: Option<Vec<StageKind>>`（`None` = 本次编辑不改归类，保持既有行为）
-- SkillHub 编辑面板：五角色多选 + 「全阶段通用」/「不属任何阶段」两个快捷；提交时命令层落 `skill_stage` 并置 `stage_manual=1`
+- SkillHub 编辑面板：五角色多选 + 「全阶段通用」/「不属任何阶段」两个快捷；提交时命令层重写 `skill_stage` 并置 `stage_origin='manual'`
 - `ui::vm` 的 `RoleFilter::matches` / `role_chip_counts` 改吃 `&[StageKind]`；agent / workflow 侧传单元素切片——三个 Hub 屏共用一个筛选谓词的格局保住，不分叉
 - 卡片上显示归属 chip；「未归类」与「不属任何阶段」用不同措辞，不混
 
@@ -281,7 +308,7 @@ run 时按当前 Issue 的 `stage`：
 
 | 不做 | 理由 |
 |---|---|
-| **agent 侧同病** | 67 条 ECC agent 的 `stage_ref` 全 NULL，结构与 skill 完全同形。留口不做，本文记在案 |
+| **agent 侧同病** | 67 条 ECC agent 的 `stage_ref` 全 NULL，结构与 skill 完全同形。留口不做，本文记在案。本轮做完后配方现成（`drop_column_if_present` + `agent_stage` 关联表 + 静态表），照抄一遍即可 |
 | **uses 真实解析 transcript** | 用户明确说不是重点。正解已验证可行（§5.4），待后续 |
 | **五角色 agent 的 `skills` 列表由归类派生** | 用户选的是注入路线，不是挂 agent 名下 |
 | **`workflow_spec.stage_ref` 跟进多值** | 本轮只动 skill；workflow 侧单值不变，`RoleFilter` 用单元素切片兼容 |
@@ -291,16 +318,24 @@ run 时按当前 Issue 的 `stage`：
 按 CLAUDE.md「读回为证」：
 
 ```bash
-# 1. 归类真的落库，四态分布正确
+# 1. 归类真的落库，五阶段分布与 §6.6 一致(29/27/22/17/15 含全阶段通用)
 sqlite3 <db> "SELECT stage, COUNT(*) FROM skill_stage GROUP BY stage ORDER BY stage;"
-sqlite3 <db> "SELECT COUNT(*) FROM skill s WHERE NOT EXISTS(SELECT 1 FROM skill_stage x WHERE x.skill_id=s.id) AND s.stage_manual=0;"
+# 四态各自可数：未归类应为 1(keyword-focus-scoring)，已判定不属任何阶段应为 6
+sqlite3 <db> "SELECT CASE WHEN n=0 AND stage_origin='' THEN '未归类'
+                          WHEN n=0 THEN '已判定不属任何阶段'
+                          WHEN n=5 THEN '全阶段通用' ELSE '挂'||n||'个阶段' END st, COUNT(*)
+              FROM (SELECT s.id, s.stage_origin, (SELECT COUNT(*) FROM skill_stage x WHERE x.skill_id=s.id) n FROM skill s)
+              GROUP BY st;"
 
-# 2. 老库不崩：开 PR#74 之前的备份库，PRAGMA 读回新表新列
-sqlite3 <老库副本> "PRAGMA table_info(skill);" | grep stage_manual
+# 2. 老库不崩 + 旧列真删：开 PR#74 之前的备份库，PRAGMA 读回
+sqlite3 <老库副本> "PRAGMA table_info(skill);" | grep -c stage_ref     # 必须为 0(已删)
+sqlite3 <老库副本> "PRAGMA table_info(skill);" | grep stage_origin      # 必须有
 sqlite3 <老库副本> ".tables" | grep skill_stage
+sqlite3 <老库副本> "SELECT COUNT(*) FROM skill_stage;"                  # 老库的 8 条 bw-standard 值搬过来了
+sqlite3 <老库副本> "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_skill_stage';"  # 必须空(老索引已删)
 
 # 3. 人工覆盖不被 Boot 冲掉：UI 改一条 → 重启 → 读回仍是人工值
-sqlite3 <db> "SELECT s.name, s.stage_manual, group_concat(x.stage) FROM skill s LEFT JOIN skill_stage x ON x.skill_id=s.id WHERE s.stage_manual=1 GROUP BY s.id;"
+sqlite3 <db> "SELECT s.name, s.stage_origin, group_concat(x.stage) FROM skill s LEFT JOIN skill_stage x ON x.skill_id=s.id WHERE s.stage_origin='manual' GROUP BY s.id;"
 
 # 4. 物化真发生且不覆盖用户手写
 ls <workspace>/.claude/skills/*/SKILL.md | wc -l
@@ -314,7 +349,8 @@ BW_DB=<db> BW_HUB=skill target/debug/builders-workbench   # stderr 见 [BW_OPEN]
 
 ## 11. 偏差与待确认
 
-1. **三态 → 四态**（§3.3）。批准设计时说的是三态、靠关联表行数天然表达。做归类草案时发现 `obsidian-vault` / `scaffold-exercises` / `writing-skills` 这类技能需要「已判定：不属任何阶段」这一档，否则要么污染候选集、要么与「没人管」混淆。修正后仍不新增列/表，只是读侧多查一次静态表。**这是对已批准设计的实质修改，实现前需确认。**
-2. **65 条里有 6 条判为「不属任何阶段」**，等于承认这批外部库里约 9% 的技能对 BW 的五阶段管理体系没有位置。这是诚实结论而非偷懒，但若用户认为「都该硬挂一个」，§6.3/§6.4 对应行需要改。
-3. **bw-standard 8 条保持单角色不动**（§6.1）。多角色能力本轮只用在外部技能上。若希望 `north-star-discovery` / `metrics-binding` 同时挂优化+运营（它们与 mohit 两件是同类活），需另行拍板。
-4. **prompt 目录块上限 4000 字符**是按构建段 27 条候选估的（27 × ~110）。若后续技能库继续膨胀，这个数要跟着调，或改成按 `uses` 排序取前 N 条 + 如实标注未列出数量。
+1. **三态 → 四态**（§3.4）。批准设计时说的是三态、靠关联表行数天然表达。做归类草案时发现 `obsidian-vault` / `scaffold-exercises` / `writing-skills` 这类技能需要「已判定：不属任何阶段」这一档，否则要么污染候选集、要么与「没人管」混淆。**D8 之后这条修正的代价降为零**：`stage_origin` 一列同时承担四态判据，读侧不必回查静态表，且 skill 表净增 0 列。
+2. **65 条里有 6 条判为「不属任何阶段」**，等于承认这批外部库里约 9% 的技能对 BW 的五阶段管理体系没有位置。这是诚实结论而非偷懒，但若你认为「都该硬挂一个」，§6.3/§6.4 对应行需要改。
+3. **五条方法论招牌技能仍不扩挂**（§6.1）。D9 只扩了指标/对标类 4 条（`competitive-analysis` `north-star-discovery` `metrics-binding` 及 mohit 两件同口径对齐）。`evidence-first` / `spec-to-tests` / `baseline-before-touch` / `fresh-eyes-funnel` / `breaking-drill` 保持单挂，理由见 §6.1 正文——它们是 `playbook::stage_skills(kind)` 的正本，外扩会让「阶段=角色=方法论」的一一对应失效。若你要求这五条也扩，一句话即可改。
+4. **prompt 目录块上限 4000 字符**是按原型段 29 条候选估的（29 × ~110 ≈ 3200）。若后续技能库继续膨胀，这个数要跟着调，或改成按 `uses` 排序取前 N 条 + 如实标注未列出数量。
+5. **agent / workflow 侧仍是单值 `stage_ref`**。本轮做完后，skill 走关联表、agent 与 workflow 走单列，是一个不齐的中间态。D8 的姿态本该一并铲平，但用户此前已把 agent 侧划在本轮之外（§9），且 workflow 的单值今天是**正确且在读**的（不是死列），不属于「旧表债」。§9 已把迁移配方（`drop_column_if_present` + 关联表）备好，后续要拉齐是照抄一遍的事。
