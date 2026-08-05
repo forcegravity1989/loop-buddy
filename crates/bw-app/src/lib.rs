@@ -4666,12 +4666,15 @@ impl App {
         _session: SessionId,
         id: IssueId,
     ) -> Result<(), AppError> {
-        // V1 Issue2 Phase2a: first-run vs resume. `interactive_started`
-        // is set to true right before the first spawn (below); a re-click
-        // of ▶跑 on an interactive issue with `interactive_started = true`
-        // routes to the resume path (`claude --continue`).
+        // V1 Issue2 Phase2b: first-run vs resume — decided by claude_session_id
+        // (F1 fix). `interactive_started` is set before spawn (marks an attempt);
+        // `claude_session_id` is set by the hook listener on SessionStart (marks
+        // the session was actually established). If session_id is empty, the first
+        // spawn either failed or the hook hasn't fired → use build_startup_plan
+        // (re-inject skill, don't get stuck in a skill-less session). If
+        // session_id is non-empty → resume with `--resume <id>` (precise session).
         let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
-        let is_resume = issue.interactive_started;
+        let is_resume = !issue.claude_session_id.is_empty();
         let prep = self.prepare_issue_run(id, is_resume).await?;
         let p = prep.issue.project_id;
         let issue = prep.issue.clone();
@@ -4689,12 +4692,13 @@ impl App {
             .as_deref()
             .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
 
-        // Build the plan: startup (first run) or resume (--continue).
+        // Build the plan: startup (first run) or resume (--resume <session_id>).
         let plan = if is_resume {
             // Resume: no new prompt, no bridge system prompt. The session
             // persists under ~/.claude/projects/<encoded-cwd>/ from the
-            // first run; `--continue` re-enters it.
-            build_resume_plan(&CLAUDE, workspace_cwd)
+            // first run; `--resume <session_id>` re-enters the exact session.
+            // session_id was captured by the hook listener (non-empty = is_resume).
+            build_resume_plan(&CLAUDE, Some(&issue.claude_session_id), workspace_cwd)
                 .map_err(|e| AppError::Engine(e.to_string()))?
         } else {
             // First run: fetch skill body + build bridge system prompt.

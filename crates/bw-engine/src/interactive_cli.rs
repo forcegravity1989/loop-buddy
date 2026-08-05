@@ -56,6 +56,13 @@ pub struct TuiAgentConfig {
     /// the skill body + bridge prompt were injected on the first run and
     /// persist in the session.
     pub resume_flag: &'static str,
+    /// V1 Issue2 Phase2b: the flag to resume a SPECIFIC session by id. For
+    /// claude: `--resume <session_id>`. More precise than `--continue` (which
+    /// resumes "most recent in cwd") — the session_id is captured from the
+    /// SessionStart hook event and stored on the issue. When the caller has a
+    /// session_id, `build_resume_plan` uses this; when not, it falls back to
+    /// `resume_flag` (`--continue`).
+    pub resume_id_flag: &'static str,
     pub supported: bool,
 }
 
@@ -80,7 +87,15 @@ pub static CLAUDE: TuiAgentConfig = TuiAgentConfig {
     // issue has its own worktree (`bw/issue-N`), so `--continue` from that
     // cwd hits the session started there. No session_id needed (unlike
     // `--resume <id>` which 2a doesn't have a hook to capture).
+    // Phase2b: `--resume <session_id>` is the precise resume (captured from
+    // the SessionStart hook event, stored on the issue). `--continue` remains
+    // the fallback when no session_id is available (F1: empty session_id
+    // actually falls back to build_startup_plan, not --continue).
     resume_flag: "--continue",
+    // Verified 2026-08-05: `claude --resume <session_id>` resumes a specific
+    // session by id (interactive, no -p, no new prompt). The session_id is
+    // captured from the SessionStart hook payload and stored on the issue.
+    resume_id_flag: "--resume",
     supported: true,
 };
 
@@ -94,6 +109,7 @@ pub static CURSOR: TuiAgentConfig = TuiAgentConfig {
     draft_prompt_flag: "--prefill",
     yolo_flag: "",
     resume_flag: "--continue",
+    resume_id_flag: "--resume",
     supported: false,
 };
 
@@ -178,19 +194,30 @@ pub fn build_startup_plan(
 }
 
 /// Build the resume plan for an interactive agent session (V1 Issue2
-/// Phase2a). Resume re-enters the existing session — no new prompt, no
+/// Phase2b). Resume re-enters an existing session — no new prompt, no
 /// `--append-system-prompt` (the skill body + bridge prompt were injected
 /// on the first run and persist in the session stored under
 /// `~/.claude/projects/<encoded-cwd>/`).
 ///
-/// For claude:
+/// When `session_id` is `Some(id)`:
+/// `claude --resume <id> --dangerously-skip-permissions --disallowedTools "Bash(gh pr merge)"`
+/// — precise resume of the exact session (captured from the SessionStart hook).
+///
+/// When `session_id` is `None`:
 /// `claude --continue --dangerously-skip-permissions --disallowedTools "Bash(gh pr merge)"`
+/// — fallback: resume the most recent session in this cwd. Used when no
+/// session_id was captured (hook not yet wired, or SessionStart didn't fire).
+/// In practice, the App layer's F1 fix routes empty-session_id issues to
+/// `build_startup_plan` (re-inject skill) instead of this fallback, so
+/// `None` is only reached when the caller explicitly wants the imprecise
+/// `--continue` path.
 ///
 /// The `cwd` MUST match the first run's cwd (the issue's `bw/issue-N`
 /// worktree path) so `--continue` finds the right session. The env strip
 /// is identical to [`build_startup_plan`] (nested-execution vars removed).
 pub fn build_resume_plan(
     agent: &TuiAgentConfig,
+    session_id: Option<&str>,
     workspace_cwd: &Path,
 ) -> Result<LaunchPlan, ExecError> {
     if !agent.supported {
@@ -213,15 +240,19 @@ pub fn build_resume_plan(
         env.remove(var);
     }
 
-    // --continue: resume the most recent session in this cwd. No positional
+    // --resume <session_id> (precise) or --continue (fallback). No positional
     // prompt (the session continues from where it left off). Same permission
     // posture as the first run + deny `gh pr merge` (验收 = 人 merge, 铁律).
-    let args = vec![
-        agent.resume_flag.to_string(),
-        agent.yolo_flag.to_string(),
-        "--disallowedTools".to_string(),
-        "Bash(gh pr merge)".to_string(),
-    ];
+    let mut args = Vec::with_capacity(5);
+    if let Some(id) = session_id.filter(|s| !s.is_empty()) {
+        args.push(agent.resume_id_flag.to_string());
+        args.push(id.to_string());
+    } else {
+        args.push(agent.resume_flag.to_string());
+    }
+    args.push(agent.yolo_flag.to_string());
+    args.push("--disallowedTools".to_string());
+    args.push("Bash(gh pr merge)".to_string());
 
     Ok(LaunchPlan {
         binary: agent.launch_cmd.to_string(),
@@ -395,11 +426,12 @@ pub trait InteractiveExecutor: Send + Sync {
     /// timeout).
     async fn run_skill(&self, plan: &LaunchPlan, ctx: &RunCtx) -> Result<SkillOutput, ExecError>;
 
-    /// Resume an existing interactive skill session (V1 Issue2 Phase2a).
-    /// The plan is built by [`build_resume_plan`] (`--continue`, no new
-    /// prompt). The session persists under `~/.claude/projects/<encoded-
-    /// cwd>/` from the first run; resume re-enters it. Same lifecycle as
-    /// `run_skill` (exits when the process exits / wall-clock timeout).
+    /// Resume an existing interactive skill session (V1 Issue2 Phase2b).
+    /// The plan is built by [`build_resume_plan`] (`--resume <session_id>`
+    /// when a session_id is available, `--continue` as fallback). The session
+    /// persists under `~/.claude/projects/<encoded-cwd>/` from the first run;
+    /// resume re-enters it. Same lifecycle as `run_skill` (exits when the
+    /// process exits / wall-clock timeout).
     async fn run_skill_resume(
         &self,
         plan: &LaunchPlan,
@@ -540,9 +572,10 @@ impl InteractiveExecutor for InteractiveCliExecutor {
         ctx: &RunCtx,
     ) -> Result<SkillOutput, ExecError> {
         // Resume uses the same spawn logic as the first run — the LaunchPlan
-        // carries the resume args (`--continue` instead of the startup plan's
-        // `--append-system-prompt <bridge> <skill_body>`). The process spawn,
-        // terminal window, and wall-clock timeout are identical.
+        // carries the resume args (`--resume <session_id>` or `--continue`
+        // fallback, instead of the startup plan's `--append-system-prompt
+        // <bridge> <skill_body>`). The process spawn, terminal window, and
+        // wall-clock timeout are identical.
         self.run_skill(plan, ctx).await
     }
 }
@@ -782,12 +815,14 @@ mod tests {
     }
 
     #[test]
-    fn build_resume_plan_claude_supported() {
+    fn build_resume_plan_claude_with_session_id() {
         let tmp = tempfile_dir();
-        let plan = build_resume_plan(&CLAUDE, &tmp).expect("claude is supported");
+        let plan = build_resume_plan(&CLAUDE, Some("abc-123-session-id"), &tmp)
+            .expect("claude is supported");
         assert_eq!(plan.binary, "claude");
-        // --continue --dangerously-skip-permissions --disallowedTools "Bash(gh pr merge)"
-        assert!(plan.args.contains(&"--continue".to_string()));
+        // --resume <session_id> --dangerously-skip-permissions --disallowedTools "Bash(gh pr merge)"
+        assert!(plan.args.contains(&"--resume".to_string()));
+        assert!(plan.args.contains(&"abc-123-session-id".to_string()));
         assert!(plan
             .args
             .contains(&"--dangerously-skip-permissions".to_string()));
@@ -796,18 +831,43 @@ mod tests {
         // No startup-plan artifacts: no --append-system-prompt, no positional
         // skill body (resume re-enters the existing session).
         assert!(!plan.args.iter().any(|a| a == "--append-system-prompt"));
-        assert_eq!(plan.args.len(), 4); // exactly the 4 resume args
+        assert!(!plan.args.contains(&"--continue".to_string())); // precise resume, not fallback
+        assert_eq!(plan.args.len(), 5); // resume_flag + id + yolo + disallowedTools + value
                                         // Env vars stripped
         assert!(!plan.env.contains_key("ANTHROPIC_AUTH_TOKEN"));
         assert!(!plan.env.contains_key("CLAUDECODE"));
-        // Cwd preserved (matters: --continue is scoped to cwd)
+        // Cwd preserved
         assert_eq!(plan.cwd, tmp);
+    }
+
+    #[test]
+    fn build_resume_plan_claude_fallback_continue() {
+        let tmp = tempfile_dir();
+        // No session_id → fallback to --continue (the 2a behavior).
+        let plan = build_resume_plan(&CLAUDE, None, &tmp).expect("claude is supported");
+        assert_eq!(plan.binary, "claude");
+        assert!(plan.args.contains(&"--continue".to_string()));
+        assert!(!plan.args.contains(&"--resume".to_string()));
+        assert!(plan
+            .args
+            .contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(plan.args.contains(&"--disallowedTools".to_string()));
+        assert_eq!(plan.args.len(), 4); // continue + yolo + disallowedTools + value
+    }
+
+    #[test]
+    fn build_resume_plan_claude_empty_session_id_falls_back() {
+        let tmp = tempfile_dir();
+        // Empty session_id → treated as None → --continue fallback.
+        let plan = build_resume_plan(&CLAUDE, Some(""), &tmp).expect("claude is supported");
+        assert!(plan.args.contains(&"--continue".to_string()));
+        assert!(!plan.args.contains(&"--resume".to_string()));
     }
 
     #[test]
     fn build_resume_plan_cursor_unsupported() {
         let tmp = tempfile_dir();
-        let result = build_resume_plan(&CURSOR, &tmp);
+        let result = build_resume_plan(&CURSOR, Some("id"), &tmp);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("cursor"));
@@ -834,7 +894,7 @@ mod tests {
             .unwrap();
 
         // Resume: should NOT rewrite the placeholder (it already exists).
-        let resume_plan = build_resume_plan(&CLAUDE, &tmp).unwrap();
+        let resume_plan = build_resume_plan(&CLAUDE, Some("session-id-123"), &tmp).unwrap();
         let output = mock.run_skill_resume(&resume_plan, &ctx).await.unwrap();
         assert!(output.completed);
         assert!(output.summary.contains("【mock】"));
