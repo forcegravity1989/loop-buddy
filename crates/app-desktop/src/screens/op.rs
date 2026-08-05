@@ -1791,9 +1791,12 @@ fn ProgressAll(op: OpVm) -> Element {
                 div { style: "font-size:12px;color:{ink3};margin-bottom:12px;", "不绑阶段的项目级指标(北极星在顶栏,引领·滞后在此)" }
                 div {
                     style: "display:grid;grid-template-columns:repeat(2,1fr);gap:12px;",
-                    for m in op.metrics.iter().filter(|m| m.stage_kind.is_none()).cloned() {
+                    for m in op.metrics.iter().filter(|m| m.stage_kind.is_none() && !m.archived).cloned() {
                         MetricCard { key: "{m.name}", m }
                     }
+                }
+                ArchivedMetrics {
+                    metrics: op.metrics.iter().filter(|m| m.stage_kind.is_none() && m.archived).cloned().collect::<Vec<_>>(),
                 }
             }
         }
@@ -1897,14 +1900,69 @@ fn RecordInline(metric: MetricVm) -> Element {
     }
 }
 
+/// 「已停用 (N) ▾」折叠区 —— 停用的指标的唯一去处。默认收起(停用的本意
+/// 就是别再占视线),展开后是灰显的卡片 + 每张卡上的「恢复」按钮,不需要
+/// 开命令行改库。一条都没有时整个区段不渲染(不摆一个空抽屉)。
+///
+/// 这里刻意**不**给「彻底删除」:observation 表是 append-only 的,硬删
+/// metric 行要么级联抹掉真实测量历史、要么留下孤儿观测。停用把「不想再看见
+/// 它」和「它当初真测过什么」拆成两件事,两个都保住。
+#[component]
+fn ArchivedMetrics(metrics: Vec<MetricVm>) -> Element {
+    let mut open = use_signal(|| false);
+    let ink3 = theme::INK_3;
+    let n = metrics.len();
+    if n == 0 {
+        return rsx! {};
+    }
+    let caret = if open() { "▾" } else { "▸" };
+    rsx! {
+        div {
+            style: "margin-top:14px;border-top:1px dashed #ECE6DA;padding-top:10px;",
+            button {
+                style: "background:transparent;border:none;cursor:pointer;padding:2px 0;font-size:12px;color:{ink3};",
+                onclick: move |_| open.toggle(),
+                "{caret} 已停用 ({n})"
+            }
+            if open() {
+                div {
+                    style: "font-size:11px;color:{ink3};margin:8px 0 10px;line-height:1.6;",
+                    "已停用的指标不计入项目健康、不再自动采集、不进本周计划;它们的历史观测一条未删,随时可恢复。"
+                }
+                div {
+                    style: "display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;",
+                    for m in metrics.clone() {
+                        MetricCard { key: "{m.name}", m }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn MetricCard(m: MetricVm) -> Element {
+    let k = use_context::<Kernel>();
     let card = theme::card();
     let ink3 = theme::INK_3;
     let mono = theme::MONO;
     let color = ui::signal_color(m.signal).to_string();
     let dot = theme::dot(&color, 9);
     let spark = m.spark.clone();
+    // 停用态整卡压暗:它不参与项目健康、不再采集,视觉上不能和在用的指标
+    // 抢注意力。灯还画着,但下面那行会讲清它是冻结值。
+    let archived_css = if m.archived { "opacity:0.55;" } else { "" };
+    let id = m.id;
+    let archived = m.archived;
+    let toggle = {
+        let k = k.clone();
+        move |_| {
+            k.send(Command::SetMetricArchived {
+                metric: id,
+                archived: !archived,
+            })
+        }
+    };
     // C7 · 采集来源徽记: label this metric's collection source. github is wired
     // in v1 (real gh pull); bw/connector read「v1 未接」and stay dimmed —
     // honest about what does and doesn't feed a real number yet. manual keeps
@@ -1919,7 +1977,7 @@ fn MetricCard(m: MetricVm) -> Element {
     let collect_dim_css = if collect_dim { "opacity:0.6;" } else { "" };
     rsx! {
         div {
-            style: "{card} padding:16px 18px;",
+            style: "{card} padding:16px 18px;{archived_css}",
             div {
                 style: "display:flex;align-items:center;gap:8px;margin-bottom:8px;",
                 span { style: "{dot}" }
@@ -1940,7 +1998,42 @@ fn MetricCard(m: MetricVm) -> Element {
             if !m.def.is_empty() {
                 div { style: "font-size:11.5px;color:{ink3};margin-top:8px;line-height:1.6;", "{m.def}" }
             }
-            RecordInline { metric: m.clone() }
+            // 停用态:不给记录框(停用就是别再拿这条量了),换成一句如实
+            // 说明 + 恢复入口。「冻结」两个字必须说出来 —— 上面那盏灯是停用
+            // 那一刻的旧值,不是此刻重算的结果,不讲清就是在骗人。
+            if m.archived {
+                div {
+                    style: "display:flex;align-items:center;gap:8px;margin-top:10px;",
+                    span { style: "font-size:11px;color:{ink3};line-height:1.6;flex:1;",
+                        "已停用 · 不计入项目健康、不再自动采集;上方信号为停用时刻的冻结值,历史观测一条未删。"
+                    }
+                    button {
+                        style: "flex:none;font-size:11.5px;color:{ink3};border:1px solid #E2DCCF;border-radius:6px;padding:3px 10px;cursor:pointer;background:transparent;",
+                        onclick: toggle,
+                        "恢复"
+                    }
+                }
+            } else {
+                RecordInline { metric: m.clone() }
+                // 停用按钮只给界面手建的指标。正本(.bw/metrics.toml)同步来
+                // 的指标去留由正本说了算:从文件里删掉 → 下次同步自动停用;
+                // 写回文件 → 自动恢复。这里再给个按钮只会被下次同步推翻,
+                // 等于在界面上摆一个假开关。
+                if m.from_file {
+                    div { style: "font-size:11px;color:{ink3};margin-top:8px;line-height:1.6;",
+                        "来自正本 .bw/metrics.toml · 从该文件里删掉这条并「↻ 同步指标文件」即停用"
+                    }
+                } else {
+                    div {
+                        style: "display:flex;justify-content:flex-end;margin-top:8px;",
+                        button {
+                            style: "font-size:11.5px;color:{ink3};border:1px solid #E2DCCF;border-radius:6px;padding:3px 10px;cursor:pointer;background:transparent;",
+                            onclick: toggle,
+                            "停用"
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -2093,7 +2186,12 @@ fn ProgressStage(op: OpVm, s: StageVm) -> Element {
     let mono = theme::MONO;
     let input = theme::input();
     let clay = theme::CLAY;
-    let empty = s.metrics.is_empty();
+    // 「该阶段还没有指标」的判据看的是**在用**的指标:全部停用等同于没有,
+    // 不能因为抽屉里躺着几条已退役的行就假装这个阶段还有在测的东西。
+    let live_metrics: Vec<MetricVm> = s.metrics.iter().filter(|m| !m.archived).cloned().collect();
+    let archived_metrics: Vec<MetricVm> =
+        s.metrics.iter().filter(|m| m.archived).cloned().collect();
+    let empty = live_metrics.is_empty();
     let mut prog = use_signal(|| s.progress.to_string());
     let stage_kind = s.kind;
     let trend_spark = sparkline_path(&s.trend, 520.0, 74.0);
@@ -2136,11 +2234,12 @@ fn ProgressStage(op: OpVm, s: StageVm) -> Element {
         } else {
             div {
                 style: "display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:16px;",
-                for m in s.metrics.clone() {
+                for m in live_metrics.clone() {
                     MetricCard { key: "{m.name}", m }
                 }
             }
         }
+        ArchivedMetrics { metrics: archived_metrics.clone() }
         div {
             style: "{card} padding:20px 22px;",
             div {

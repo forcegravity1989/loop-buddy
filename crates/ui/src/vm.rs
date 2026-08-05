@@ -187,6 +187,15 @@ pub struct MetricVm {
     pub trend: Vec<f32>,
     /// Sparkline geometry over the trend (empty polyline when <1 point).
     pub spark: SparkPath,
+    /// 已停用(归档):退出默认视图,只在「已停用」折叠区里灰显。`signal`
+    /// 是停用那一刻冻结的缓存,不是当下重算的值 —— 展示时要如实说明,
+    /// 不能让人以为这是它此刻的健康状态。
+    pub archived: bool,
+    /// 这条指标是不是从项目正本 `.bw/metrics.toml` 同步来的。决定界面给不
+    /// 给「停用」按钮:正本行的去留由正本说了算(从文件里删掉即自动停用,
+    /// 写回去即自动恢复),界面上再给个按钮只会被下次同步推翻;手建行正本
+    /// 里本来就没有,只能在界面上停用。
+    pub from_file: bool,
 }
 
 /// Sparkline box used by the stage KPI cards (matches prototype wsMetrics).
@@ -208,6 +217,8 @@ pub fn metric_vm(
     hit: Option<bool>,
     source: Option<SourceKind>,
     collect_kind: &str,
+    archived: bool,
+    from_file: bool,
     observation_raws: &[String],
 ) -> MetricVm {
     let trend: Vec<f32> = observation_raws
@@ -228,6 +239,8 @@ pub fn metric_vm(
         hit,
         manual: source.map(|s| s.is_manual()).unwrap_or(false),
         collect_kind: collect_kind.into(),
+        archived,
+        from_file,
         spark: sparkline_path(&trend, SPARK_W, SPARK_H),
         trend,
     }
@@ -249,7 +262,9 @@ pub struct WeekPlanRowVm {
 pub fn week_plan_rows(metrics: &[MetricVm]) -> Vec<WeekPlanRowVm> {
     metrics
         .iter()
-        .filter(|m| m.leading)
+        // 停用的引领指标退出本周计划:本周计划是"这周要拧哪几个把手",
+        // 一条已经判定不再用的指标留在里面就是虚的待办。
+        .filter(|m| m.leading && !m.archived)
         .map(|m| WeekPlanRowVm {
             metric: m.id,
             name: m.name.clone(),
