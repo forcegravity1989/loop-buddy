@@ -98,6 +98,7 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 5. **dev 偏差**:#1 `--prefill` **已解决(subagent 验)**——dev 用位置参数 prompt 是**对的**(= orca `promptInjectionMode:'argv'` 主路径,`claude "<prompt>"` auto-submit,文档化稳定);`--prefill` 是 orca 草案路径(预植入输入框、回车前审阅),buddy 不需要,代码里 `draft_prompt_flag:"--prefill"` 字段多余可清。#2 见上(resume 重设计)。#3 预算偏差接受(用户"无所谓";`--max-budget-usd` 确认只配 `--print`)。
 6. **m6 待补**:今晚只改了 m4/m5;m6(指标采集链 + 表/字段 + script kind「计划中」→「已接」校准)未动,留 Phase 5。
 7. **状态机(用户 2026-08-05 钉)**:InReview 的触发 = **issue 被关联了 PR**(检测到有 PR),不是"跑完"——跑完≠InReview,有 PR 才进评审。PR 合入 → Done(人 merge,铁律)。**Done 后 issue 窗口保持**(点开仍能 `--resume` 唤醒之前的 claude cli 窗口+会话)。**不考虑**"合入后 issue 又新开、继承历史上下文"——新 issue(哪怕同是找指标)靠**读已合入的产物文件**接上下文(薄编排器,文件接),不特殊继承。**一个 issue = 一个 session**(1:1),不做多 session 特殊设计、也不特殊防。
+8. **InReview 检测机制(读回为证,2026-08-05 钉 + 2 GAP 核过)**:agent 在会话里提 MR(skill+system prompt 引导,命题:活让 agent 干);buddy **不靠 agent marker**(违反读回为证),而是**自己查 codehub/github** —— `codehub-cli mr list --project <path> --state opened --json iid,source_branch,web_url` 客户端过滤 `source_branch == bw/issue-N`(issue 活分支,字段名建时实测钉)/ github `gh pr list --head bw/issue-N` → 有 open MR → 关联 `pr_number` → InReview。触发:claude `Stop` hook(= agent 一轮答完等用户,频繁 fire,作**防抖查询触发**非"立刻 InReview";codehub 结果权威)+ `SessionEnd`(会话关)fallback。**2 GAP 核过皆 OK**:① Stop 歧义(干完 vs 等用户反馈)不致命——buddy 查 codehub 结果权威,debounce 即可;② codehub-cli 能查 MR(`mr list --json` 客户端过滤 source_branch,无直接 --source-branch flag 但可行)。系统 prompt 仍可引导 agent "干完提代码 + MR 地址打屏"(给用户看,非给 buddy 检测)。
 
 ## 3. collect_kind 收两 kind + 绑数据=搭采集装置
 
