@@ -73,6 +73,15 @@ CREATE TABLE IF NOT EXISTS metric (
     collect_kind       TEXT NOT NULL DEFAULT '', -- 'github'|'connector'|'bw'|'manual'|'script'|''
     collect_query      TEXT NOT NULL DEFAULT '',
     origin             TEXT NOT NULL DEFAULT 'manual', -- 'manual'(界面手建) | 'file'(正本文件同步)
+    -- 「停用/归档」——指标退役的唯一形态,替代物理删除。observation 是
+    -- append-only 的,硬删 metric 行要么级联抹掉真实历史、要么留下孤儿观测,
+    -- 两个都不可接受;archived 把「不想再看见它」和「它当初真测过什么」拆
+    -- 开:行留着、观测一条不删,只是退出界面默认视图 + 退出健康灯上卷 +
+    -- 退出自动采集。0=在用(存量行的真实状态,不是编的默认值) 1=已停用。
+    -- 停用后其 signal 缓存**冻结**在停用那一刻(recompute 跳过归档行),
+    -- 恢复后下一次 recompute 重新给它派生。
+    archived           INTEGER NOT NULL DEFAULT 0,
+    archived_at        INTEGER,                  -- 停用时刻 unix 秒;NULL=从未停用
     signal             TEXT,                     -- derived cache (L2/L3)
     hit                INTEGER,                  -- derived cache (= signal==green)
     signal_derived_rev INTEGER,

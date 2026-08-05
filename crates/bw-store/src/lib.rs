@@ -145,6 +145,11 @@ pub struct MetricsFileSync {
 pub struct MetricsFileSyncSummary {
     pub lagging_synced: u32,
     pub leading_synced: u32,
+    /// 本次同步顺手停用的行数:正本里已经没有、且 `origin = File`(当初就是
+    /// 从正本同步进来的)、且此前还没被停用的行。界面手建的 `Manual` 行永远
+    /// 不计入——正本里本来就没有它们,"正本删了它"这个判断对它们不成立,不能
+    /// 被沉默改写(要停用得人显式点)。0 = 这次没有任何一条被自动停用。
+    pub auto_archived: u32,
 }
 
 pub struct NewStage {
@@ -480,6 +485,10 @@ pub struct MetricSignal {
     /// C6: `Manual` (界面手建, the byte-for-byte pre-C6 default) or `File`
     /// (synced from the project's metrics source-of-truth file).
     pub origin: MetricOrigin,
+    /// 已停用(归档)——退出界面默认视图、退出健康灯上卷、退出自动采集,
+    /// 但这条指标的 `observation` 历史一条不删。`signal`/`hit` 是停用那一刻
+    /// 冻结下来的缓存(`recompute_signals` 跳过归档行),不是当下重算的值。
+    pub archived: bool,
 }
 
 /// One materialized stage, as the operating view reads it.
@@ -621,6 +630,14 @@ pub trait Store: Send + Sync {
     /// one layer up, in `bw-engine::metrics_file::read`), and this method
     /// keeps its own partial-failure window closed too.
     async fn sync_metrics_file(&self, sync: MetricsFileSync) -> Result<MetricsFileSyncSummary>;
+    /// 停用(归档)/恢复一条指标 —— 指标退役的唯一形态,替代物理删除。
+    /// `observation` 一个字节不碰(append-only 不可破:硬删 metric 行要么级联
+    /// 抹掉真实历史、要么留下孤儿观测)。只翻 `metric.archived` + 盖
+    /// `archived_at` 时戳,不写任何 `signal`——停用后那条指标的 signal 缓存
+    /// 冻结在停用那一刻(`recompute_signals` 跳过归档行),恢复后由下一次
+    /// recompute 重新派生。调用方负责在其后触发 recompute,好让项目/阶段的
+    /// 上卷把这条的进/出反映出来。
+    async fn set_metric_archived(&self, metric: MetricId, archived: bool) -> Result<()>;
     /// Week-plan edit: update a metric's target + this week's driver, keeping
     /// the previous target as `last_target`. Touches no value and no signal —
     /// recompute re-derives against the new target.
