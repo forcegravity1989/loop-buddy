@@ -25,6 +25,7 @@ pub mod model;
 pub mod playbook;
 pub mod skill_body;
 pub mod skill_spec;
+pub mod stage_catalog;
 pub mod standards;
 
 pub use ids::{
