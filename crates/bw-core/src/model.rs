@@ -2225,6 +2225,18 @@ pub struct Issue {
     /// `run_issue_interactive`.
     #[serde(default)]
     pub interactive_started: bool,
+    /// V1 Issue2 Phase2b: the claude session_id captured from the
+    /// SessionStart hook event (the hook listener POSTs to the app's local
+    /// HTTP server, which extracts `session_id` from the payload). `""` = not
+    /// yet captured — either the first spawn failed before the session was
+    /// established (F1: next ▶跑 falls back to `build_startup_plan`,
+    /// re-injecting the skill, never getting stuck), or the hook hasn't
+    /// fired yet. When non-empty, the next ▶跑 resumes via
+    /// `claude --resume <session_id>` (precise session, not `--continue`'s
+    /// "most recent in cwd"). Drives the resume decision (F1 fix):
+    /// `claude_session_id.is_empty()` = first run, non-empty = resume.
+    #[serde(default)]
+    pub claude_session_id: String,
     pub created_at: i64,
     pub updated_at: i64,
 }

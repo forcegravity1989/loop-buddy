@@ -217,6 +217,17 @@ impl SqliteStore {
             "INTEGER NOT NULL DEFAULT 0",
         )
         .await?;
+        // V1 Issue2 Phase2b: claude session_id captured from SessionStart hook.
+        // Old DBs open with '' (= not yet captured → fallback to
+        // build_startup_plan, F1 fix). Set when the hook listener receives a
+        // SessionStart event; used by build_resume_plan for `--resume <id>`.
+        add_column_if_missing(
+            &pool,
+            "issue",
+            "claude_session_id",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
         // T2 (plan/12 §6): Skill's source unified onto HubSource. Old rows'
         // bare `source='official'`/`'self_built'` text values already match
         // the new tag vocabulary 1:1 (no rewrite needed) — only the new
@@ -2551,7 +2562,7 @@ impl Store for SqliteStore {
         let mut sql = String::from(
             "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
                     priority, assignee, settled_at, blocked_reason, standard_skill,
-                    interactive_started, created_at, updated_at
+                    interactive_started, claude_session_id, created_at, updated_at
              FROM issue WHERE project_id=?",
         );
         if stage.is_some() {
@@ -2576,7 +2587,7 @@ impl Store for SqliteStore {
         let row = sqlx::query(
             "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
                     priority, assignee, settled_at, blocked_reason, standard_skill,
-                    interactive_started, created_at, updated_at
+                    interactive_started, claude_session_id, created_at, updated_at
              FROM issue WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -2660,6 +2671,21 @@ impl Store for SqliteStore {
     /// deciding this is a first run (not a resume).
     async fn set_issue_interactive_started(&self, id: IssueId) -> Result<()> {
         sqlx::query("UPDATE issue SET interactive_started=1, updated_at=? WHERE id=?")
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// V1 Issue2 Phase2b: store the claude session_id captured from the
+    /// SessionStart hook event. Called when the hook listener receives a
+    /// SessionStart event and maps the cwd → issue. An empty string clears
+    /// it (F1 recovery path). Never fabricates a session_id — only stores
+    /// what the real hook payload contained.
+    async fn set_issue_claude_session_id(&self, id: IssueId, session_id: &str) -> Result<()> {
+        sqlx::query("UPDATE issue SET claude_session_id=?, updated_at=? WHERE id=?")
+            .bind(session_id)
             .bind(now_unix())
             .bind(id.uuid().to_string())
             .execute(&self.pool)
@@ -3014,6 +3040,7 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
             .filter(|s| !s.is_empty()),
         standard_skill: r.get("standard_skill"),
         interactive_started: r.get::<i64, _>("interactive_started") != 0,
+        claude_session_id: r.get("claude_session_id"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     })

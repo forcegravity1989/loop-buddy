@@ -971,6 +971,13 @@ pub trait Store: Send + Sync {
     /// first spawn; never reset. Drives the first-run vs resume decision in
     /// `run_issue_interactive`.
     async fn set_issue_interactive_started(&self, id: IssueId) -> Result<()>;
+    /// V1 Issue2 Phase2b: store the claude session_id captured from the
+    /// SessionStart hook event. Called when the hook listener receives a
+    /// SessionStart event and maps cwd → issue. An empty string clears it
+    /// (F1 recovery path). Drives the `--resume <id>` vs startup-plan
+    /// decision (F1 fix: empty session_id = fallback to build_startup_plan,
+    /// never get stuck in a skill-less session).
+    async fn set_issue_claude_session_id(&self, id: IssueId, session_id: &str) -> Result<()>;
     /// A5-F: the only way an issue reaches `Blocked` — sets status and reason
     /// together in one write. Legality (which source states may block) and
     /// the non-empty-reason rule are the App layer's job; the store just

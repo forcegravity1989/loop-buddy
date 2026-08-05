@@ -475,6 +475,14 @@ CREATE TABLE IF NOT EXISTS issue (
     -- (build_startup_plan); 1 = resume (--continue, session persists under
     -- ~/.claude/projects/<encoded-cwd>/). Set before first spawn, never reset.
     interactive_started INTEGER NOT NULL DEFAULT 0,
+    -- V1 Issue2 Phase2b: the claude session_id captured from the SessionStart
+    -- hook event. '' = not yet captured (first spawn may have failed, or the
+    -- hook hasn't fired). When non-empty, the next ▶跑 resumes via
+    -- `claude --resume <session_id>` (precise session, not --continue's "most
+    -- recent in cwd"). F1 fix: resume decision uses THIS column, not
+    -- interactive_started — empty session_id = fallback to build_startup_plan
+    -- (re-inject skill, don't get stuck in a skill-less session).
+    claude_session_id TEXT NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );
