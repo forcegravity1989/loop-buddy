@@ -37,6 +37,7 @@ use bw_core::model::{
     CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO,
     CONNECTOR_KIND_GIT_REPO, CONNECTOR_KIND_SCRIPT,
 };
+use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
     SessionId, SkillId, WorkflowId, WorkflowRunId,
@@ -2789,7 +2790,10 @@ impl App {
                         maturity: Maturity::Fresh,
                         desc: pkg.desc.clone(),
                         category: String::new(),
-                        stage_ref: None,
+                        // T7 一贯的 通用-until-classified:项目工作区扫描同样
+                        // 不猜阶段。
+                        stages: Vec::new(),
+                        stage_origin: StageOrigin::Unclassified,
                         source: source.clone(),
                         content: pkg.content.clone(),
                         project_id: Some(project),
@@ -4475,6 +4479,28 @@ impl App {
                 // — by-name idempotent, so an already-seeded database gains
                 // them too.
                 bw_store::seed_stage_role_agents_if_missing(self.store.as_ref()).await?;
+                // 五角色归类迁移(2026-08-05):老库的 skill.stage_ref 单值搬进
+                // skill_stage 关联表。只搬「关联表还没有这件技能的行」的,所以
+                // 重复 Boot 是 no-op;列已被 SR4 删掉的库(即已迁过的库)读不到
+                // 值,自然跳过。搬完置 stage_origin='table' —— 它们本来就是静
+                // 态表管辖的那批行。
+                let already: std::collections::HashSet<SkillId> = self
+                    .store
+                    .list_skill_stages()
+                    .await?
+                    .keys()
+                    .copied()
+                    .collect();
+                for s in self.store.list_skills().await? {
+                    if already.contains(&s.id) || s.stage_origin != StageOrigin::Unclassified {
+                        continue;
+                    }
+                    if let Some(stages) = bw_core::stage_catalog::stages_for(&s.name) {
+                        self.store
+                            .set_skill_stages(s.id, stages, StageOrigin::Table)
+                            .await?;
+                    }
+                }
                 // P8 (2026-07-28, widened by plan/16 §2): the bw-standard
                 // skill library (issue trio + five playbook stage skills) is
                 // reconciled — `desc`+`content` — against its canon (plan/17
@@ -6085,8 +6111,9 @@ impl App {
                         category,
                         // T7: no stage selector on the hand-authored create
                         // form yet (out of this ticket's scope) — honest
-                        // 通用 until an editor exists to classify it.
-                        stage_ref: None,
+                        // 未归类 until an editor exists to classify it.
+                        stages: Vec::new(),
+                        stage_origin: StageOrigin::Unclassified,
                         source,
                         content,
                         project_id: None, // Hub 创建口径不变,一律全局
@@ -6122,9 +6149,11 @@ impl App {
                             desc,
                             category,
                             // 忽略:store::distill_skill_from_issue 同样改从源
-                            // Issue 的真实 stage 派生(T7,与 project_id 同一
-                            // provenance-not-input 规则),不采用这里传入的值。
-                            stage_ref: None,
+                            // Issue 的真实 stage 派生(T7/2026-08-05,与
+                            // project_id 同一 provenance-not-input 规则),
+                            // 不采用这里传入的值。
+                            stages: Vec::new(),
+                            stage_origin: StageOrigin::Unclassified,
                             source: HubSource::SelfBuilt,
                             content,
                             // 忽略:store::distill_skill_from_issue 改从源 Issue
@@ -6174,8 +6203,9 @@ impl App {
                             // stays empty, editable later via `UpdateSkill`.
                             category: String::new(),
                             // T7 (plan/12 §0/§2): no stage guessing on import
-                            // either — 通用 until a human classifies it.
-                            stage_ref: None,
+                            // either — 未归类 until a human classifies it.
+                            stages: Vec::new(),
+                            stage_origin: StageOrigin::Unclassified,
                             source,
                             content: parsed.content,
                             project_id,
@@ -6255,10 +6285,11 @@ impl App {
                                 // T3 scope, same as T2: no predetermined
                                 // category on import.
                                 category: String::new(),
-                                // T7: same 通用-until-classified rule as
+                                // T7: same 未归类-until-classified rule as
                                 // `ImportSkillPackage` — no guessing across
                                 // 55 imported skills either.
-                                stage_ref: None,
+                                stages: Vec::new(),
+                                stage_origin: StageOrigin::Unclassified,
                                 source: HubSource::Official {
                                     official_library: official_library.clone(),
                                 },

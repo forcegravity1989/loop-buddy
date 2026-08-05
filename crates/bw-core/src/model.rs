@@ -15,6 +15,7 @@ use crate::ids::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, ProjectId, SessionId,
     SkillId, WorkflowId, WorkflowRunId,
 };
+use crate::stage_catalog::StageOrigin;
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 
@@ -1492,19 +1493,24 @@ pub struct SkillCard {
     pub maturity: Maturity,
     pub desc: String,
     pub category: String,
-    /// T7 (2026-07-23, plan/12 §0/§2): which of the five stage roles this
-    /// skill belongs to — the same classification dimension `WorkflowSpec`
-    /// already carries (its `stage_ref: Option<u8>`, 1..=5). Here the domain
-    /// type is `Option<StageKind>` directly (the ticket's own alignment
-    /// call) rather than the bare `u8` `WorkflowSpec` was left with — that
-    /// field predates this ticket and stays untouched (T8/T9's workflow
-    /// chain reads it), so storage-level interop goes through
-    /// `StageKind::index`/`from_index`, not a shared Rust type. `None` =
-    /// cross-stage/general — honest for every imported catalog skill (no
-    /// one has manually classified them) and the default for a
-    /// hand-authored one until edited.
+    /// 这件技能挂在哪几个阶段角色下(2026-08-05,用户拍板「通用的 skill 应该
+    /// 被划分到对应的五角色中」)。多值:`code-review` 真的既属构建也属优化。
+    /// 五个全挂 = 「全阶段通用」,对每个阶段的注入候选集都算命中。
+    ///
+    /// 空 `Vec` 有两种含义,靠 [`Self::stage_origin`] 分辨:origin 非
+    /// `Unclassified` = **已判定**不属任何阶段(如 `obsidian-vault`);origin 为
+    /// `Unclassified` = 还没人归过类。这两件事必须分开 —— 混成一格就是本仓
+    /// 「无数据 = Unknown,绝不假装」纪律的反面。
+    ///
+    /// 存储在 `skill_stage` 关联表,不在 skill 行上(前身是 T7 的单值
+    /// `stage_ref` 列,已随本次改动删除)。`WorkflowSpec.stage_ref` /
+    /// `AgentCard.stage_ref` 本轮不动,仍是单值。
     #[serde(default)]
-    pub stage_ref: Option<StageKind>,
+    pub stages: Vec<StageKind>,
+    /// 上面那次归类**从哪来**——静态表 / 蒸馏派生 / 人工。见
+    /// [`bw_core::stage_catalog::StageOrigin`]。
+    #[serde(default)]
+    pub stage_origin: StageOrigin,
     /// T2 (2026-07-23, plan/12 §6): unified onto the same 4-tier
     /// [`HubSource`] Workflow already uses, replacing the former standalone
     /// `LibSource { Official, SelfBuilt }` — "which curated library this
@@ -1563,10 +1569,10 @@ pub struct AgentCard {
     pub name: String,
     pub role: String,
     /// T7 (2026-07-23, plan/12 §0/§3): same classification dimension as
-    /// `SkillCard.stage_ref` — see that field's doc comment for the
-    /// `Option<StageKind>`-vs-`WorkflowSpec`'s-`Option<u8>` alignment call.
-    /// `None` = cross-stage/general (every imported ECC agent, honestly
-    /// unclassified); `Some` for the five built-in stage-role agents.
+    /// `SkillCard.stages`(Skill 侧 2026-08-05 起改多值;Agent 侧本轮不动,
+    /// 仍是单值)。`None` = cross-stage/general (every imported ECC agent,
+    /// honestly unclassified); `Some` for the five built-in stage-role
+    /// agents.
     #[serde(default)]
     pub stage_ref: Option<StageKind>,
     pub maturity: Maturity,

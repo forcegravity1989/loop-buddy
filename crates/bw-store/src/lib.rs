@@ -240,11 +240,11 @@ pub struct NewSkill {
     pub maturity: Maturity,
     pub desc: String,
     pub category: String,
-    /// T7 (plan/12 §0/§2): which stage role this skill belongs to; `None` =
-    /// general/cross-stage. See `bw_core::model::SkillCard::stage_ref`'s doc
-    /// comment for the `Option<StageKind>`-vs-`WorkflowSpec`'s-`Option<u8>`
-    /// alignment call.
-    pub stage_ref: Option<StageKind>,
+    /// 建行时的阶段归属(多值)。见 `bw_core::model::SkillCard::stages`。
+    pub stages: Vec<StageKind>,
+    /// 这次归类的出处。手工新建(`CreateSkill`)一律 `Unclassified` + 空
+    /// `stages` —— 诚实的「还没归类」,绝不替用户猜一个阶段。
+    pub stage_origin: StageOrigin,
     pub source: HubSource,
     /// Executable body (may be empty for a catalog reference entry). For a
     /// skill minted by `ImportSkillPackage`, this is SKILL.md's own body —
@@ -293,8 +293,9 @@ pub struct NewAgent {
     pub id: AgentId,
     pub name: String,
     pub role: String,
-    /// T7 (plan/12 §0/§3): same classification dimension as
-    /// `NewSkill::stage_ref` — `None` = general/cross-stage.
+    /// T7 (plan/12 §0/§3): same classification dimension as `NewSkill`'s
+    /// (Skill 侧 2026-08-05 起改 `stages`/`stage_origin` 多值;Agent 侧本轮
+    /// 不动,仍是单值)。`None` = general/cross-stage.
     pub stage_ref: Option<StageKind>,
     pub maturity: Maturity,
     pub skills: Vec<String>,
@@ -864,16 +865,8 @@ pub trait Store: Send + Sync {
         stages: &[StageKind],
         origin: StageOrigin,
     ) -> Result<()>;
-    /// T7 (plan/12 §0/§2): narrow backfill setter — classifies an *existing*
-    /// row (not a content edit, so deliberately separate from `SkillEdit`,
-    /// same reasoning `record_skill_use_by_name` already established for
-    /// single-column, non-content updates). Used by
-    /// `seed_bw_standard_skills_if_missing` to backfill `stage_ref` on the
-    /// built-in bw-standard skills when they were seeded by an older binary,
-    /// before this column carried real values.
-    async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()>;
     /// plan/16 §2 防线 2: same narrow single-concern setter shape as
-    /// `set_skill_stage_ref`, for the `source`/`official_library` column
+    /// `set_skill_stages`, for the `source`/`official_library` column
     /// pair. Used by Boot's pristine promotion — a legacy-encoded built-in
     /// stage-skill row whose `content` still matches the code canon
     /// byte-for-byte gets re-labelled `Official { "bw-standard" }`. The
@@ -891,7 +884,7 @@ pub trait Store: Send + Sync {
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>>;
     async fn update_agent(&self, id: AgentId, edit: AgentEdit) -> Result<()>;
-    /// T7: same backfill role as `set_skill_stage_ref`, for the five
+    /// T7: same backfill role as `set_skill_stages`(单值版), for the five
     /// built-in stage-role agents.
     async fn set_agent_stage_ref(&self, id: AgentId, stage_ref: Option<StageKind>) -> Result<()>;
     /// Credit one settled run to every agent row named `name`: `runs += 1`,

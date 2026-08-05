@@ -8,9 +8,11 @@
 //! content only, `maturity`/`uses` stay untouched.
 //!
 //! T7 (2026-07-23, plan/12 §0/§2): a stage-role filter chip row — the same
-//! "全部/{五角色}/通用" dimension Workflow Hub already had (its stage
-//! chips), extended here with `ui::vm::RoleFilter`/`role_chip_counts` so all
-//! three Hub screens share one filter predicate instead of three ad hoc ones.
+//! dimension Workflow Hub already had (its stage chips), sharing
+//! `ui::vm::RoleFilter`/`role_chip_counts` across all three Hub screens
+//! instead of three ad hoc ones. 2026-08-05:Skill 侧改多值(`RoleTag`),chip
+//! 行五档:全部/{五角色}/全阶段通用/不属任何阶段/未归类——后两枚只在这屏,见
+//! Agent/Workflow Hub 各自的模块文档为何不加。
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::markdown::MarkdownView;
@@ -38,12 +40,16 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let mut editing = use_signal(|| None::<SkillId>);
     let mut role_filter = use_signal(|| RoleFilter::All);
 
-    let (stage_counts, general_count) =
-        role_chip_counts(&hub.skills.iter().map(|s| s.stage_ref).collect::<Vec<_>>());
+    let counts = role_chip_counts(
+        &hub.skills
+            .iter()
+            .map(|s| s.role_tag.clone())
+            .collect::<Vec<_>>(),
+    );
     let filtered: Vec<SkillCardVm> = hub
         .skills
         .iter()
-        .filter(|s| role_filter().matches(s.stage_ref))
+        .filter(|s| role_filter().matches(&s.role_tag))
         .cloned()
         .collect();
 
@@ -82,7 +88,7 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
                         }
                     }
                 }
-                for (sk , count) in stage_counts {
+                for (sk , count) in counts.per_stage.clone() {
                     {
                         let active = role_filter() == RoleFilter::Stage(sk);
                         let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
@@ -97,13 +103,35 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
                     }
                 }
                 {
-                    let active = role_filter() == RoleFilter::General;
+                    let active = role_filter() == RoleFilter::Universal;
                     let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
                     rsx! {
                         button {
                             style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                            onclick: move |_| role_filter.set(RoleFilter::General),
-                            "通用 · {general_count}"
+                            onclick: move |_| role_filter.set(RoleFilter::Universal),
+                            "全阶段通用 · {counts.universal}"
+                        }
+                    }
+                }
+                {
+                    let active = role_filter() == RoleFilter::NoStage;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(RoleFilter::NoStage),
+                            "不属任何阶段 · {counts.no_stage}"
+                        }
+                    }
+                }
+                {
+                    let active = role_filter() == RoleFilter::Unclassified;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(RoleFilter::Unclassified),
+                            "未归类 · {counts.unclassified}"
                         }
                     }
                 }

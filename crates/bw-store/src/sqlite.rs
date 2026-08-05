@@ -1997,7 +1997,7 @@ impl Store for SqliteStore {
         let t = now_unix();
         let (source_tag, official_library) = hub_source_columns(&s.source);
         sqlx::query(
-            "INSERT INTO skill (id, name, maturity, descr, category, stage_ref, source, official_library, uses, content, project_id, created_at, updated_at, rev)
+            "INSERT INTO skill (id, name, maturity, descr, category, stage_origin, source, official_library, uses, content, project_id, created_at, updated_at, rev)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
         )
         .bind(s.id.uuid().to_string())
@@ -2005,7 +2005,7 @@ impl Store for SqliteStore {
         .bind(maturity_text(s.maturity))
         .bind(&s.desc)
         .bind(&s.category)
-        .bind(s.stage_ref.map(|k| i64::from(k.index())))
+        .bind(stage_origin_tag(s.stage_origin))
         .bind(source_tag)
         .bind(official_library)
         .bind(&s.content)
@@ -2014,6 +2014,15 @@ impl Store for SqliteStore {
         .bind(t)
         .execute(&self.pool)
         .await?;
+        // 建行与阶段归属在同一次调用里落地 —— 让调用方没有「忘了写关联表」
+        // 的机会(seed/import 路径都靠这一点)。
+        for k in &s.stages {
+            sqlx::query("INSERT OR IGNORE INTO skill_stage (skill_id, stage) VALUES (?, ?)")
+                .bind(s.id.uuid().to_string())
+                .bind(i64::from(k.index()))
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 
@@ -2050,16 +2059,6 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()> {
-        sqlx::query("UPDATE skill SET stage_ref=?, updated_at=?, rev=rev+1 WHERE id=?")
-            .bind(stage_ref.map(|k| i64::from(k.index())))
-            .bind(now_unix())
-            .bind(id.uuid().to_string())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     async fn set_skill_source(&self, id: SkillId, source: HubSource) -> Result<()> {
         let (source_tag, official_library) = hub_source_columns(&source);
         sqlx::query(
@@ -2091,25 +2090,47 @@ impl Store for SqliteStore {
 
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, maturity, descr, category, stage_ref, source, official_library, uses, content,
+            "SELECT id, name, maturity, descr, category, stage_origin, source, official_library, uses, content,
                     distilled_from_issue, origin_agent, project_id
              FROM skill ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter().map(skill_row).collect()
+        let mut cards: Vec<SkillCard> = rows
+            .into_iter()
+            .map(skill_row)
+            .collect::<Result<Vec<_>>>()?;
+        // 一次查关联表、按 id 分发 —— 不是每张卡一次查询。
+        let by_id = self.list_skill_stages().await?;
+        for c in cards.iter_mut() {
+            if let Some(stages) = by_id.get(&c.id) {
+                c.stages = stages.clone();
+            }
+        }
+        Ok(cards)
     }
 
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>> {
         let row = sqlx::query(
-            "SELECT id, name, maturity, descr, category, stage_ref, source, official_library, uses, content,
+            "SELECT id, name, maturity, descr, category, stage_origin, source, official_library, uses, content,
                     distilled_from_issue, origin_agent, project_id
              FROM skill WHERE id=?",
         )
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
         .await?;
-        row.map(skill_row).transpose()
+        let Some(mut card) = row.map(skill_row).transpose()? else {
+            return Ok(None);
+        };
+        let stages = sqlx::query("SELECT stage FROM skill_stage WHERE skill_id=? ORDER BY stage")
+            .bind(id.uuid().to_string())
+            .fetch_all(&self.pool)
+            .await?;
+        card.stages = stages
+            .into_iter()
+            .filter_map(|r| StageKind::from_index(r.get::<i64, _>("stage") as u8))
+            .collect();
+        Ok(Some(card))
     }
 
     async fn record_skill_use_by_name(&self, name: &str) -> Result<u32> {
@@ -2142,7 +2163,7 @@ impl Store for SqliteStore {
         let (source_tag, official_library) = hub_source_columns(&HubSource::SelfBuilt);
         sqlx::query(
             "INSERT INTO skill
-                (id, name, maturity, descr, category, stage_ref, source, official_library, uses, content,
+                (id, name, maturity, descr, category, stage_origin, source, official_library, uses, content,
                  distilled_from_issue, origin_agent, project_id,
                  created_at, updated_at, rev)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)",
@@ -2152,10 +2173,12 @@ impl Store for SqliteStore {
         .bind(maturity_text(Maturity::Polishing))
         .bind(&skill.desc)
         .bind(&skill.category)
-        // T7 (plan/12 §0): same provenance-not-input rule the line below
-        // already applies to `project_id` — a distilled skill really did
-        // arise from work in the issue's real stage, not a caller guess.
-        .bind(i64::from(issue.stage.index()))
+        // T7 (plan/12 §0)/2026-08-05: same provenance-not-input rule the
+        // line below already applies to `project_id` — a distilled skill
+        // really did arise from work in the issue's real stage, not a
+        // caller guess (`skill.stages`/`skill.stage_origin` are ignored the
+        // same way `project_id` is, see the call site's own comment).
+        .bind(stage_origin_tag(StageOrigin::Distilled))
         .bind(source_tag)
         .bind(official_library)
         .bind(&skill.content)
@@ -2168,6 +2191,11 @@ impl Store for SqliteStore {
         .bind(t)
         .execute(&self.pool)
         .await?;
+        sqlx::query("INSERT OR IGNORE INTO skill_stage (skill_id, stage) VALUES (?, ?)")
+            .bind(skill.id.uuid().to_string())
+            .bind(i64::from(issue.stage.index()))
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -2176,7 +2204,7 @@ impl Store for SqliteStore {
         let (source_tag, official_library) = hub_source_columns(&skill.source);
         let mut tx = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO skill (id, name, maturity, descr, category, stage_ref, source, official_library, uses, content, project_id, created_at, updated_at, rev)
+            "INSERT INTO skill (id, name, maturity, descr, category, stage_origin, source, official_library, uses, content, project_id, created_at, updated_at, rev)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
         )
         .bind(skill.id.uuid().to_string())
@@ -2184,7 +2212,7 @@ impl Store for SqliteStore {
         .bind(maturity_text(skill.maturity))
         .bind(&skill.desc)
         .bind(&skill.category)
-        .bind(skill.stage_ref.map(|k| i64::from(k.index())))
+        .bind(stage_origin_tag(skill.stage_origin))
         .bind(source_tag)
         .bind(official_library)
         .bind(&skill.content)
@@ -2193,6 +2221,14 @@ impl Store for SqliteStore {
         .bind(t)
         .execute(&mut *tx)
         .await?;
+        // 同 create_skill:建行与阶段归属在同一次调用里落地。
+        for k in &skill.stages {
+            sqlx::query("INSERT OR IGNORE INTO skill_stage (skill_id, stage) VALUES (?, ?)")
+                .bind(skill.id.uuid().to_string())
+                .bind(i64::from(k.index()))
+                .execute(&mut *tx)
+                .await?;
+        }
 
         for f in files {
             sqlx::query(
@@ -2885,9 +2921,6 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
 
 /// `skill.stage_origin` 列 ↔ 域枚举。未知/空值一律读成 `Unclassified` ——
 /// 诚实降级,绝不猜一个归类出处出来。
-///
-/// 本任务(SR2)先定义,SR3 接上 `skill_row` 时删掉这个属性。
-#[allow(dead_code)]
 fn parse_stage_origin(tag: &str) -> StageOrigin {
     match tag {
         "table" => StageOrigin::Table,
@@ -2919,9 +2952,10 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         .map(|s| parse_uuid(&s, AgentId::from_uuid))
         .transpose()?;
     let project_id = opt_project_id(&r)?;
-    let stage_ref = r
-        .get::<Option<i64>, _>("stage_ref")
-        .and_then(|n| StageKind::from_index(n as u8));
+    // 阶段归属不在 skill 行上——它在 skill_stage 关联表里(多值)。行读只带
+    // 归类出处;`stages` 由调用方(list_skills / get_skill)按 skill_id 补齐,
+    // 避免每行一次查询的 N+1。
+    let stage_origin = parse_stage_origin(&r.get::<String, _>("stage_origin"));
     let source_tag: String = r.get("source");
     let official_library: String = r.get("official_library");
     Ok(SkillCard {
@@ -2930,7 +2964,8 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         maturity: parse_maturity(&r.get::<String, _>("maturity")),
         desc: r.get("descr"),
         category: r.get("category"),
-        stage_ref,
+        stages: Vec::new(),
+        stage_origin,
         source: parse_hub_source(&source_tag, &official_library),
         adapted_from: parse_adapted_from(&source_tag, &official_library),
         uses: r.get::<i64, _>("uses") as u32,

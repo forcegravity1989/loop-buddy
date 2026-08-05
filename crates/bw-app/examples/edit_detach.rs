@@ -17,6 +17,7 @@
 
 use bw_app::{App, Command};
 use bw_core::model::{HubSource, StageKind};
+use bw_core::stage_catalog::StageOrigin;
 use bw_core::ProjectId;
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{SqliteStore, Store};
@@ -168,26 +169,31 @@ async fn main() {
     );
     all_ok &= b1_ok;
 
-    // b2) 仅改 stage_ref 归类(非实质字段;无 UpdateSkill 命令面覆盖它,直接
-    // 走 store 的 set_skill_stage_ref 窄口——它的 SQL 从不碰 source 列,结构上
-    // 就不可能触发翻转)→ 不应翻转。
+    // b2) 仅改五角色归类(非实质字段;无 UpdateSkill 命令面覆盖它,直接走
+    // store 的 set_skill_stages 窄口——它的 SQL 从不碰 source 列,结构上就
+    // 不可能触发翻转)→ 不应翻转。2026-08-05:stage_ref 单值列改多值关联表,
+    // 这里改走 set_skill_stages,Manual 出处(人工覆盖)。
     let third = mp_rows_pass1
         .iter()
         .find(|s| s.id != tdd.id && s.id != tracer.id)
         .copied()
-        .expect("a third official mattpocock-skills row must exist to test the stage_ref-only path")
+        .expect("a third official mattpocock-skills row must exist to test the stages-only path")
         .clone();
     assert!(matches!(&third.source, HubSource::Official { .. }));
     store
-        .set_skill_stage_ref(third.id, Some(StageKind::Build))
+        .set_skill_stages(third.id, &[StageKind::Build], StageOrigin::Manual)
         .await
-        .expect("set_skill_stage_ref should succeed");
+        .expect("set_skill_stages should succeed");
     let third_after_stage = store.get_skill(third.id).await.unwrap().unwrap();
     let b2_ok = matches!(third_after_stage.source, HubSource::Official { .. })
-        && third_after_stage.stage_ref == Some(StageKind::Build);
+        && third_after_stage.stages == vec![StageKind::Build]
+        && third_after_stage.stage_origin == StageOrigin::Manual;
     println!(
-        "[skill b2] {} 仅改 stage_ref 后:source={:?} stage_ref={:?}  -> {b2_ok}",
-        third.name, third_after_stage.source, third_after_stage.stage_ref
+        "[skill b2] {} 仅改归类后:source={:?} stages={:?} stage_origin={:?}  -> {b2_ok}",
+        third.name,
+        third_after_stage.source,
+        third_after_stage.stages,
+        third_after_stage.stage_origin
     );
     all_ok &= b2_ok;
 
