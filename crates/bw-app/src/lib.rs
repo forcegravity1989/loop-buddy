@@ -109,6 +109,15 @@ pub struct CodehubOrigin {
     pub path: String,
 }
 
+/// plan/20 R5: what [`Command::AdoptIntoProject`] copies — plan/08 S1 的
+/// `{ kind, id }`,按本仓命令风格落成带类型 id 的枚举,拼错 kind 编译不过。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdoptTarget {
+    Skill(SkillId),
+    Agent(AgentId),
+    Workflow(WorkflowId),
+}
+
 /// UI → kernel intents.
 pub enum Command {
     /// App start: load the project wall and re-derive every running project's
@@ -552,6 +561,18 @@ pub enum Command {
         desc: String,
         category: String,
         content: String,
+    },
+    /// plan/20 R5(plan/08 S1 原拍板命名):「引入本项目」= 从共享目录
+    /// **复制一份归我**——新 id、`project_id = 目标项目`、描述尾注「引入自
+    /// <归属> · <日期>」、uses/战绩清零(新账,本地挣);skill 的支撑文件
+    /// (`skill_file`)一并复制;`source` 原样保留(出处保真——Official 库
+    /// 文本仍是那个库的原文,T11「编辑即脱离源头」照常生效,收录副本靠
+    /// 归属徽记 + 描述尾注辨认)。只认全局行(`project_id IS NULL`):他
+    /// 项目的行不属于共享池——想共享先升格全局(promote,留口未建)。
+    /// 同池同名(含重复收录同一件)按 R4 拒绝,诚实报错不静默去重。
+    AdoptIntoProject {
+        target: AdoptTarget,
+        project_id: ProjectId,
     },
     CreateAgent {
         id: AgentId,
@@ -6414,6 +6435,167 @@ impl App {
                     .await?;
                 self.refresh_skills().await?;
                 self.emit(Event::SkillsChanged);
+            }
+
+            Command::AdoptIntoProject { target, project_id } => {
+                // 语义与守卫见 Command 变体的 doc comment(plan/20 R5)。
+                self.store
+                    .get_project(project_id)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                let d = now().date();
+                let stamp = format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day());
+                // 归属标签:Official 库名是真实上游;其余(自建/会话内)统称
+                // 共享目录——不发明更细的出处。
+                let origin_of = |source: &HubSource| -> String {
+                    match source {
+                        HubSource::Official { official_library } if !official_library.is_empty() => {
+                            official_library.clone()
+                        }
+                        _ => "共享目录".to_string(),
+                    }
+                };
+                match target {
+                    AdoptTarget::Skill(sid) => {
+                        let src = self.store.get_skill(sid).await?.ok_or(AppError::NotFound)?;
+                        if src.project_id.is_some() {
+                            return Err(AppError::Invalid(
+                                "只能收录共享目录(全局)里的技能——他项目的资产不外借(plan/20 R5)".into(),
+                            ));
+                        }
+                        self.guard_skill_name_unique(&src.name, Some(project_id), None)
+                            .await?;
+                        let files: Vec<NewSkillFile> = self
+                            .store
+                            .list_skill_files(sid)
+                            .await?
+                            .into_iter()
+                            .map(|f| NewSkillFile {
+                                rel_path: f.rel_path,
+                                content: f.content,
+                            })
+                            .collect();
+                        let tail = format!("(引入自 {} · {})", origin_of(&src.source), stamp);
+                        let desc = if src.desc.trim().is_empty() {
+                            tail.clone()
+                        } else {
+                            format!("{} {}", src.desc.trim(), tail)
+                        };
+                        self.store
+                            .import_skill_package(
+                                NewSkill {
+                                    id: SkillId::new(),
+                                    name: src.name.clone(),
+                                    // 新账:成熟度由本项目真实使用挣出来,
+                                    // 不从共享行/外部声誉继承(同 Import 先例)。
+                                    maturity: Maturity::Fresh,
+                                    desc,
+                                    category: src.category.clone(),
+                                    stage_ref: src.stage_ref,
+                                    source: src.source.clone(),
+                                    content: src.content.clone(),
+                                    project_id: Some(project_id),
+                                },
+                                files,
+                            )
+                            .await?;
+                        self.refresh_skills().await?;
+                        self.emit(Event::SkillsChanged);
+                    }
+                    AdoptTarget::Agent(aid) => {
+                        let src = self.store.get_agent(aid).await?.ok_or(AppError::NotFound)?;
+                        if src.project_id.is_some() {
+                            return Err(AppError::Invalid(
+                                "只能收录共享目录(全局)里的队友——他项目的资产不外借(plan/20 R5)".into(),
+                            ));
+                        }
+                        let dup = self
+                            .store
+                            .list_agents()
+                            .await?
+                            .iter()
+                            .any(|a| a.project_id == Some(project_id) && a.name == src.name);
+                        if dup {
+                            return Err(AppError::Invalid(format!(
+                                "本项目已有同名队友「{}」(plan/20 R4)",
+                                src.name
+                            )));
+                        }
+                        // agent 没有 desc 字段可挂尾注;instructions 会整段
+                        // 进 prompt,不往里塞出处备注——归属靠 project_id
+                        // 徽记 + source 保真,如实不硬造。
+                        self.store
+                            .create_agent(NewAgent {
+                                id: AgentId::new(),
+                                name: src.name.clone(),
+                                role: src.role.clone(),
+                                stage_ref: src.stage_ref,
+                                maturity: Maturity::Fresh,
+                                skills: src.skills.iter().map(|t| t.name.clone()).collect(),
+                                model: src.model.clone(),
+                                instructions: src.instructions.clone(),
+                                tools: src.tools.clone(),
+                                agent_cli: src.agent_cli.clone(),
+                                source: src.source.clone(),
+                                project_id: Some(project_id),
+                            })
+                            .await?;
+                        self.refresh_agents().await?;
+                        self.emit(Event::AgentsChanged);
+                    }
+                    AdoptTarget::Workflow(wid) => {
+                        let src = self
+                            .store
+                            .get_workflow_spec(wid)
+                            .await?
+                            .ok_or(AppError::NotFound)?;
+                        if src.project_id.is_some() {
+                            return Err(AppError::Invalid(
+                                "只能收录共享目录(全局)里的工作流——他项目的资产不外借(plan/20 R5)".into(),
+                            ));
+                        }
+                        let dup = self
+                            .store
+                            .list_workflow_specs()
+                            .await?
+                            .iter()
+                            .any(|w| w.project_id == Some(project_id) && w.name == src.name);
+                        if dup {
+                            return Err(AppError::Invalid(format!(
+                                "本项目已有同名工作流「{}」(plan/20 R4)",
+                                src.name
+                            )));
+                        }
+                        let tail = format!("(引入自 共享目录 · {stamp})");
+                        let goal = if src.goal.trim().is_empty() {
+                            tail.clone()
+                        } else {
+                            format!("{} {}", src.goal.trim(), tail)
+                        };
+                        // `kind` 原样复制:workflow 的 HubSource 出处随
+                        // WorkflowKind::Static 一起走(R5 出处保真);新 id
+                        // 意味着 run 史/uses 从零(按 spec id 记账)。
+                        self.store
+                            .create_workflow_spec(NewWorkflowSpec {
+                                id: WorkflowId::new(),
+                                name: src.name.clone(),
+                                kind: src.kind.clone(),
+                                prompt: src.prompt.clone(),
+                                goal,
+                                stage_ref: src.stage_ref,
+                                phases: src.phases.clone(),
+                                phase_prompts: src.phase_prompts.clone(),
+                                agents: src.agents.clone(),
+                                skills: src.skills.clone(),
+                                loop_config: src.loop_config.clone(),
+                                project_id: Some(project_id),
+                                content: src.content.clone(),
+                            })
+                            .await?;
+                        self.refresh_workflow_specs().await?;
+                        self.emit(Event::WorkflowSpecsChanged);
+                    }
+                }
             }
 
             Command::CreateAgent {
