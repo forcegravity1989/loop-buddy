@@ -308,62 +308,69 @@ cargo run -p app-desktop</pre>
     <section class="screen" id="u3" data-title="找指标" data-sec-name="使用指导">
       <div class="eyebrow">使用指导 · 阶段 02</div>
       <h1 class="disp">找指标</h1>
-      <p class="lede">AI 跑 <code>north-star-discovery</code> skill，产出指标定义写进项目仓。</p>
+      <p class="lede">点 ▶跑 唤醒交互式 claude 会话(灌 north-star skill + 衔接层 system prompt),你和 claude 多轮推导北极星,产出指标定义写进项目仓。</p>
 
       <h2 class="sec"><span class="n">操作</span></h2>
       <div class="ops">
-        <div class="li"><div class="n">1</div><div class="t">三件套看板 → 「找指标」卡</div></div>
-        <div class="li"><div class="n">2</div><div class="t">指派队友 / 触发 <code>RunIssue</code></div></div>
-        <div class="li"><div class="n">3</div><div class="t">AI 跑 <code>north-star-discovery</code> skill</div></div>
-        <div class="li"><div class="n">4</div><div class="t">review 产出的指标定义</div></div>
+        <div class="li"><div class="n">1</div><div class="t">运营屏 Issue 看板 →「找指标」卡点 <code>▶跑(交互)</code></div></div>
+        <div class="li"><div class="n">2</div><div class="t">工作流面板嵌终端开 <code>claude</code>——已灌 north-star skill(方法论)+ 衔接层 system prompt(项目意图 + buddy 契约 + 铁律)+ <code>--dangerously-skip-permissions</code></div></div>
+        <div class="li"><div class="n">3</div><div class="t">多轮:claude 读项目 <code>desc/benchmark/opportunity</code> + 竞品报告 + <code>governance/derive_*.py</code>,问用户/价值,提北极星(自动化免疫检验 challenge),你确认</div></div>
+        <div class="li"><div class="n">4</div><div class="t">claude 写 <code>.bw/metrics.toml</code> + <code>docs/metrics-rationale.md</code> 到活分支,提 MR</div></div>
       </div>
 
       <h2 class="sec"><span class="n">结果</span>系统/项目改了什么</h2>
       <div class="res">
-        <div class="h">落库与产出</div>
+        <div class="h">周边(项目仓)</div>
         <ul>
-          <li><span class="b"></span><div>产出 <code>.bw/metrics.toml</code> 写进<strong>项目仓</strong>（北极星 + 引领/滞后 + 目标值 + 比较符 + 黄区带）</div></li>
-          <li><span class="b"></span><div>Issue 状态 <code>Backlog → InProgress → InReview</code></div></li>
-          <li><span class="b"></span><div><strong>Run</strong> 记录入账（成败 / 耗时）</div></li>
+          <li><span class="b"></span><div>写 <code>.bw/metrics.toml</code>(北极星 + 引领/滞后 + <code>collect_kind</code>=<code>script</code>|<code>manual</code> + <code>collect_query</code>)+ <code>docs/metrics-rationale.md</code> 到活分支</div></li>
+          <li><span class="b"></span><div>agent 提 MR(<code>gh pr create</code>/<code>codehub-cli mr create</code>,禁 <code>gh pr merge</code>)</div></li>
+        </ul>
+        <div class="h">本机(buddy DB)</div>
+        <ul>
+          <li><span class="b"></span><div>Issue <code>InProgress</code>(会话活)→ <code>InReview</code>(buddy 查到 issue 分支 <code>bw/issue-N</code> 的 open MR,读回为证)</div></li>
+          <li><span class="b"></span><div>merge 后 buddy 感知 <code>.bw/metrics.toml</code> → upsert <code>metric</code> 行(<code>origin='file'</code>)</div></li>
         </ul>
       </div>
 
       <h2 class="sec"><span class="n">看到</span>界面呈现</h2>
-      <div class="see"><div class="h">三件套看板</div><div class="d">「找指标」卡状态到 <code>InReview</code>；<code>metrics.toml</code> 在仓里可见。<strong>干完只到 InReview，不到 Done</strong>——Done 要你显式点。</div></div>
+      <div class="see"><div class="h">工作流面板</div><div class="d">嵌终端里和 claude 多轮对话(会话持久,点 issue 卡可 <code>--resume</code> 续聊);Issue 卡 <code>InReview</code> + PR#。<strong>干完只到 InReview,不到 Done</strong>——Done 要你 merge。</div></div>
 
-      <p class="linker">本阶段涉及的机制：RunIssue / Run / Issue 状态机 → <a href="#" onclick="go('m3');return false">Issue 与调度</a>；预制技能 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>；Executor / evidence → <a href="#" onclick="go('m5');return false">执行与证据</a>；metrics.toml / 北极星 → <a href="#" onclick="go('m6');return false">指标与健康</a>。</p>
-      <div class="foot">事实源：<code>v1-onboarding-overview.html</code>、<code>docs/skills</code>、实测 ~21min。</div>
+      <p class="linker">本阶段涉及的机制:交互式引擎 / resume / InReview 检测 → <a href="#" onclick="go('m5');return false">执行与证据</a>;衔接层 system prompt / skill 可换 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>;metrics.toml / 北极星 → <a href="#" onclick="go('m6');return false">指标与健康</a>;Issue 状态机 → <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
+      <div class="foot">事实源:<code>docs/skills/north-star-discovery/SKILL.md</code>、<code>bw-engine/src/interactive_cli.rs · build_bridge_system_prompt</code>、设计 <code>docs/v1-prototype/issue2-metrics-interactive-loop.md</code>。</div>
     </section>
 
     <!-- ============ U4 绑数据 ============ -->
     <section class="screen" id="u4" data-title="绑数据" data-sec-name="使用指导">
       <div class="eyebrow">使用指导 · 阶段 03</div>
       <h1 class="disp">绑数据</h1>
-      <p class="lede">AI 跑 <code>metrics-binding</code> skill，给每条指标接采集方案。此时指标有定义、有采集方案，但还没采数、还没点亮。</p>
+      <p class="lede">点 ▶跑 唤醒交互式 claude(metrics-binding skill + 衔接层),和 claude 多轮给每条指标搭采集装置:能自动采的按 buddy 规范建脚本/连接器落 <code>.bw/</code>,不能的手填。</p>
 
       <h2 class="sec"><span class="n">操作</span></h2>
       <div class="ops">
-        <div class="li"><div class="n">1</div><div class="t">review 找指标的产出</div></div>
-        <div class="li"><div class="n">2</div><div class="t">「绑数据」卡触发 <code>RunIssue</code></div></div>
-        <div class="li"><div class="n">3</div><div class="t">AI 跑 <code>metrics-binding</code> skill</div></div>
-        <div class="li"><div class="n">4</div><div class="t">给每条指标接采集方案</div></div>
+        <div class="li"><div class="n">1</div><div class="t">「绑数据」卡点 <code>▶跑(交互)</code> → 嵌终端开 claude(读上游 <code>.bw/metrics.toml</code> + rationale 接上下文)</div></div>
+        <div class="li"><div class="n">2</div><div class="t">多轮,对每条指标定采集:能自动采→写脚本到 <code>.bw/scripts/</code> + 连接器清单 <code>.bw/connectors.toml</code> + 配 <code>collect_kind='script'</code>+<code>collect_query=字段路径</code>;不能→<code>manual</code>+手填节奏</div></div>
+        <div class="li"><div class="n">3</div><div class="t">claude 写回 <code>.bw/metrics.toml</code> collect + <code>.bw/connectors.toml</code> + 脚本,提 MR</div></div>
       </div>
 
       <h2 class="sec"><span class="n">结果</span>系统/项目改了什么</h2>
       <div class="res">
-        <div class="h">落库与产出</div>
+        <div class="h">周边(项目仓)</div>
         <ul>
-          <li><span class="b"></span><div>每条指标接<strong>采集器类型 + 采集配置</strong></div></li>
-          <li><span class="b"></span><div>产出登记写进仓</div></li>
-          <li><span class="b"></span><div>Issue → <code>InReview</code></div></li>
+          <li><span class="b"></span><div><code>.bw/metrics.toml</code> collect 字段更新(只动 <code>collect_kind</code>/<code>collect_query</code>,不动 <code>name/def/target</code>)+ <code>.bw/connectors.toml</code> + <code>.bw/scripts/*.py</code></div></li>
+          <li><span class="b"></span><div>agent 提 MR</div></li>
+        </ul>
+        <div class="h">本机(buddy DB)</div>
+        <ul>
+          <li><span class="b"></span><div>Issue → <code>InReview</code>(buddy 查到 open MR)</div></li>
+          <li><span class="b"></span><div>merge 后 buddy 感知 <code>.bw/connectors.toml</code> → upsert <code>connector</code> 行(kind=script)+ <code>.bw/metrics.toml</code> → upsert <code>metric</code> 行</div></li>
         </ul>
       </div>
 
       <h2 class="sec"><span class="n">看到</span>界面呈现</h2>
-      <div class="see"><div class="h">三件套看板</div><div class="d">「绑数据」卡 <code>InReview</code>；指标已有采集方案但<strong>还没采数、没点亮</strong>——点亮要等 merge 后总览呈现阶段。</div></div>
+      <div class="see"><div class="h">运营屏 MetricCard</div><div class="d">嵌终端多轮搭装置;Issue <code>InReview</code> + PR#;merge 后 cron(每日 CollectMetrics)自动跑 script connector → <code>observation</code> 有值 → 健康灯亮。<code>manual</code> 指标戴「手填」徽,RecordInline 手填。<strong>无「↻同步」手动按钮</strong>——merge 自动 sync。</div></div>
 
-      <p class="linker">本阶段涉及的机制：metrics-binding 预制技能 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>；采集器 / probe vs collect / manual 带徽 → <a href="#" onclick="go('m6');return false">指标与健康</a>。</p>
-      <div class="foot">事实源：<code>docs/skills</code>、实测 ~19min。</div>
+      <p class="linker">本阶段涉及的机制:绑装置规范(.bw/connectors.toml + buddy 感知 sync)→ <a href="#" onclick="go('m6');return false">指标与健康</a>;衔接层 / skill 可换 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>;交互式引擎 → <a href="#" onclick="go('m5');return false">执行与证据</a>。</p>
+      <div class="foot">事实源:<code>docs/skills/metrics-binding/SKILL.md</code>、<code>docs/connectors-toml-format.md</code>、<code>bw-app/src/lib.rs · sync_connectors_file_for</code>、设计 <code>docs/v1-prototype/issue2-metrics-interactive-loop.md</code>。</div>
     </section>
 
     <!-- ============ U5 总览呈现 ============ -->
@@ -512,10 +519,10 @@ cargo run -p app-desktop</pre>
 
       <h2 class="sec"><span class="n">交互式 skill 注入（V1）</span></h2>
       <div class="cc"><div class="h">衔接层 system prompt <span class="term">不可换</span></div><div class="d"><code>--append-system-prompt</code> 灌项目上下文（PlaybookCtx：desc/benchmark/opportunity/north_star）+ buddy 契约（写 <code>.bw/metrics.toml</code> 按 <code>script</code>|<code>manual</code> 两 kind、读 <code>governance/</code>/<code>derive_*.py</code> 优先对齐、产 <code>metrics-rationale.md</code>、绑数据建 script connector 经正规 <code>create_connector</code>）+ 铁律（Done 不自动/settle-once/signal derive-only/Unknown≠绿）。任何 skill 进来都包这层。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · build_bridge_system_prompt</code></div></div>
-      <div class="cc"><div class="h">skill 方法论 <span class="term">可换</span></div><div class="d">skill 正文经位置参数 prompt 注入（本机 <code>claude --help</code> 无 <code>--prefill</code>，用位置参数等价 auto-send；<code>--prefill</code> 字段留 forward-compat）。buddy 自带 north-star-discovery/metrics-binding，业界 skill 拿来当 prompt 注入也行——衔接层包住它，产出仍对得上契约。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · build_startup_plan</code>、<code>docs/skills/</code></div></div>
+      <div class="cc"><div class="h">skill 方法论 <span class="term">可换</span></div><div class="d">skill 正文经位置参数 prompt 注入(本机 <code>claude --help</code> 无 <code>--prefill</code>,用位置参数等价 auto-send)。**P4 起 SKILL.md 改纯方法论**(buddy 契约抽到衔接层,不重复)——换业界 skill 当 prompt 注入,产出仍对得上契约。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · build_startup_plan</code>、<code>docs/skills/</code></div></div>
       <div class="cc"><div class="h">声明式 CLI 表</div><div class="d"><code>TuiAgentConfig</code> 静态表，<code>claude</code> 支持 / <code>cursor</code> 占位（先不接）。加新 CLI 加一行配置，不是新 impl。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · CLAUDE/CURSOR</code></div></div>
       <div class="cc"><div class="h">权限</div><div class="d">交互式 <code>--dangerously-skip-permissions</code>（流体操作不老问）+ <code>--disallowedTools "Bash(gh pr merge)"</code>（守"人 merge"铁律——跳权限询问 ≠ 绕 deny 名单）。后台 one-shot 休眠轨留 <code>acceptEdits</code>。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · build_startup_plan</code></div></div>
-      <div class="foot">注入/蒸馏复利链见下；CRUD 在 Hub 全局库。嵌入终端（PTY/xterm/hook→事件）Phase 2 未建，见设计 <code>docs/v1-prototype/issue2-metrics-interactive-loop.md</code>。</div>
+      <div class="foot">注入/蒸馏复利链见下;CRUD 在 Hub 全局库。V1 已建:嵌入终端(PTY + xterm + hook→事件,Phase 2b)+ skill 重写(P4,SKILL.md 纯方法论、契约唯一在衔接层)。设计见 <code>docs/v1-prototype/issue2-metrics-interactive-loop.md</code>。</div>
 
       <h2 class="sec"><span class="n">注入与复利</span></h2>
       <div class="cc"><div class="h">skill 注入</div><div class="d">干活时自动把最相关技能带进队友上下文。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
@@ -537,14 +544,14 @@ cargo run -p app-desktop</pre>
       <div class="cc"><div class="h">MockExecutor</div><div class="d">流程演示替身，产出自我标注【mock】，绝不冒充真实。</div><div class="src">事实源：<code>bw-engine</code></div></div>
 
       <h2 class="sec"><span class="n">交互式执行（V1 · 人 in loop 轨）</span></h2>
-      <div class="cc"><div class="h">InteractiveCliExecutor</div><div class="d">交互式 spawn <code>claude</code>（不带 <code>-p</code>），用户多轮对话，跑完<strong>只到 InReview</strong>（Done 永不自动铁律不破）。Phase 1 = 系统终端 spawn + 等进程退出（+ wall-clock 兜底）；<strong>嵌入终端（PTY + xterm + hook→事件）Phase 2 未建</strong>。零扰 one-shot <code>Executor</code> trait / <code>ClaudeCliExecutor</code> / <code>run_workflow</code>。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs</code>、<code>bw-app/src/lib.rs · run_issue_interactive</code></div></div>
+      <div class="cc"><div class="h">InteractiveCliExecutor</div><div class="d">交互式 spawn <code>claude</code>(不带 <code>-p</code>),用户在工作流面板<strong>嵌终端</strong>多轮对话(xterm.js + <code>portable-pty</code> PTY,字节流经 <code>pty_rx</code> watch 通道;三条 race 解:pre-handler buffer/replayIntoTerminal guard/resize 显式 drain),跑完<strong>只到 InReview</strong>(Done 永不自动铁律不破)。零扰 one-shot <code>Executor</code> trait / <code>ClaudeCliExecutor</code> / <code>run_workflow</code>。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · run_skill_pty</code>、<code>app-desktop/src/screens/op.rs · TerminalWidget</code></div></div>
       <div class="cc"><div class="h">会话即记录 <span class="term">不额外摘要</span></div><div class="d">嵌入终端 scrollback + <code>session.jsonl</code> 本身是对话记录，buddy <strong>不解析摘要</strong>。buddy 只留文件级 evidence：HEAD 对 diff + artifact 登记 + 状态/PR#（+ 可选 usage 读回）。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · SkillOutput</code>、<code>bw-app/src/lib.rs · finalize_run_interactive</code></div></div>
       <div class="cc"><div class="h">预算 wall-clock</div><div class="d"><code>--max-budget-usd</code> 只配 <code>--print</code>，交互式用不了；用 wall-clock 超时 + <code>jsonl</code> usage 诚实读回。对"单次花费封顶"是<strong>显式偏差</strong>（交互式 user-in-loop 花费眼看着，不像后台 runaway；orca 同款）。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · await_child</code></div></div>
       <div class="cc"><div class="h">MockInteractiveExecutor</div><div class="d">无 claude/网关环境的交互式替身，产出自标【mock】+ 写占位 <code>.bw/metrics.toml</code>。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs</code></div></div>
-      <div class="cc"><div class="h">resume <span class="term">续会话</span></div><div class="d">交互式 issue = 持久会话。点 issue 卡再跑 = <code>claude --continue</code>（续当前 worktree <code>bw/issue-N</code> cwd 的最近会话，不重灌 skill）——首次 <code>build_startup_plan</code>（位置参数 prompt + skill + 衔接层），之后 resume。判定靠 <code>issue.interactive_started</code> 列。2b 升级 <code>--resume &lt;session_id&gt;</code>（hook 抓 id）。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · build_resume_plan</code>、<code>bw-app/src/lib.rs · run_issue_interactive</code></div></div>
-      <div class="cc"><div class="h">InReview 检测 <span class="term">读回为证</span></div><div class="d">agent 在会话里自提 MR（skill 引导）；buddy <strong>不靠 agent 自报</strong>，自己查 codehub/github：<code>codehub-cli mr list --source-branch bw/issue-N --state opened</code> / <code>gh pr list --head</code> → 有 open MR → 关联 <code>pr_number</code> → 转 InReview。挂 <code>tick_scheduler</code> 轮询（5min 节流）。2b 升级 hook <code>Stop</code> 触发替轮询。</div><div class="src">事实源：<code>bw-engine/src/codehub.rs · open_mr_for_branch</code>、<code>bw-app/src/lib.rs · poll_interactive_inreview</code></div></div>
+      <div class="cc"><div class="h">resume <span class="term">续会话</span></div><div class="d">交互式 issue = 持久会话。点 issue 卡再跑 = <code>claude --resume &lt;session_id&gt;</code>(续之前会话,不重灌 skill);首次 <code>build_startup_plan</code>(位置参数 prompt + skill + 衔接层)。session_id 由 **hook listener**(127.0.0.1 http,装 <code>~/.claude/settings.json</code> hook)抓 SessionStart 事件存 <code>issue.claude_session_id</code> 列。**F1 修**:无 session_id(spawn 失败)→ fallback <code>build_startup_plan</code> 重灌 skill,不卡。</div><div class="src">事实源：<code>bw-engine/src/interactive_cli.rs · build_resume_plan</code>、<code>bw-app/src/hook_listener.rs</code>、<code>bw-app/src/lib.rs · run_issue_interactive</code></div></div>
+      <div class="cc"><div class="h">InReview 检测 <span class="term">读回为证</span></div><div class="d">agent 在会话里自提 MR(skill 引导);buddy <strong>不靠 agent 自报</strong>,自己查 codehub/github:<code>codehub-cli mr list --source-branch bw/issue-N --state opened</code> / <code>gh pr list --head</code> → 有 open MR → 关联 <code>pr_number</code> → 转 InReview。触发:**hook listener 抓 <code>Stop</code> 事件**(agent 一轮答完)→ 查 MR;5min 轮询兜底。</div><div class="src">事实源：<code>bw-engine/src/codehub.rs · open_mr_for_branch</code>、<code>bw-app/src/lib.rs · poll_interactive_inreview / poll_hook_events</code></div></div>
       <div class="cc"><div class="h">状态机 <span class="term">1 issue = 1 session</span></div><div class="d">InProgress（会话活、无 MR）→ InReview（查到 MR）→ Done（人 <code>MergeIssuePr</code>）。<strong>砍交互式 <code>issue_run_tail</code> 提 MR</strong>（agent 自提，buddy 检测）。Done 后窗口保持（点开仍 resume 续聊）。新 issue 靠读已合入产物文件接上下文，不特殊继承。</div><div class="src">事实源：<code>bw-app/src/lib.rs · run_issue_interactive/poll_interactive_inreview</code>、设计 md §2.6 #7</div></div>
-      <div class="foot">Phase 2a 已建（resume + InReview 检测 + 状态机）。Phase 2b 未建：嵌入终端（PTY + xterm + hook listener 替轮询、<code>--resume &lt;session_id&gt;</code> 替 <code>--continue</code>）。已知限制（2b 修）：<code>interactive_started</code> spawn 前置→首次 spawn 失败会卡 resume 无 skill（临时 SQL 重置）。真交互式 E2E defer 2b + 用户驱动；2a 验证 = 门禁 + cargo test + code review。设计见 <code>docs/v1-prototype/issue2-metrics-interactive-loop.md</code>。</div>
+      <div class="foot">V1 交互式已建(Phase 1+2a+2b):spawn + resume(--resume&lt;session_id&gt;,hook 抓 id)+ InReview 检测(hook Stop 触发,读回为证查 codehub/github)+ 状态机 + PTY/xterm 嵌终端 + hook listener。F1 已修(session_id fallback)。真终端渲染 E2E defer 用户(claude+网关 529 抖动);验证 = 门禁 + cargo test(33)+ code review。设计见 <code>docs/v1-prototype/issue2-metrics-interactive-loop.md</code>。</div>
 
       <h2 class="sec"><span class="n">证据回流</span></h2>
       <div class="cc"><div class="h">evidence.rs</div><div class="d">从工作区真实状态回流观测，<strong>不信任执行器自报</strong>。</div><div class="src">事实源：<code>bw-engine</code></div></div>
@@ -564,14 +571,16 @@ cargo run -p app-desktop</pre>
       <div class="cc"><div class="h">北极星 / 引领·滞后</div><div class="d">North Star = 项目唯一顶层目标（maas 实例 = 定界结论采纳率 <code>(L2−L3)/L2</code>）。Leading = 可控先行量；Lagging = 结果量。</div><div class="src">事实源：<code>CONTEXT.md</code></div></div>
 
       <h2 class="sec"><span class="n">采集</span></h2>
-      <div class="cc"><div class="h">采集器四类</div><div class="d"><code>github</code> / <code>connector</code> / <code>bw</code> / <code>manual</code>（带徽）；<code>+</code> 计划中 <code>script</code>。绑数据阶段接采集方案。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
-      <div class="cc"><div class="h">probe vs collect</div><div class="d">probe = 探活翻已连接；collect = 真采计数写 observation。总览阶段才真采。</div><div class="src">事实源：<code>CLAUDE.md</code></div></div>
-      <div class="cc"><div class="h">observation 表</div><div class="d">append-only：一个观测 = 一个点，<strong>绝不插值</strong>；无观测即 Unknown。</div><div class="src">事实源：<code>bw-store/schema.sql</code></div></div>
+      <div class="cc"><div class="h">collect_kind 两 kind <span class="term">script | manual</span></div><div class="d"><code>script</code>(自动:机械解析数据源产出 JSON,<code>collect_query</code>=字段在 JSON 里的点分路径;buddy 自带 instance 包 codehub/github CLI,或项目侧 <code>derive_*.py</code>)| <code>manual</code>(人手填,戴「手填」徽)。<code>github</code>/<code>codehub</code>/<code>bw</code>/<code>connector</code> 是 legacy inline arm,正退休进 <code>script</code>(采数/总览收尾)。方向两 kind,格式档仍列五值兼容。</div><div class="src">事实源：<code>docs/metrics-toml-format.md</code>、<code>bw-engine/src/metrics_file.rs · CollectKind</code></div></div>
+      <div class="cc"><div class="h">绑装置规范 <span class="term">.bw/connectors.toml + .bw/scripts/</span></div><div class="d">绑数据阶段 agent 写脚本到 <code>.bw/scripts/&lt;slug&gt;.py</code> + 连接器清单 <code>.bw/connectors.toml</code>(<code>[[connector]] name/kind="script"/script/command/output</code>);<strong>agent 不调 buddy API</strong>——靠文件正本,PR 合入后 buddy 感知 sync(像 skills 分 buddy 自带 + 项目仓自带)。规范先最简,Hub 几大组件完整规范留遗留。</div><div class="src">事实源：<code>docs/connectors-toml-format.md</code>、<code>bw-engine/src/connectors_file.rs</code></div></div>
+      <div class="cc"><div class="h">采集链 <span class="term">cron → script → observation → signal</span></div><div class="d">cron(每日 <code>CollectMetrics</code>)→ <code>collect_project_metrics</code> → 预跑 script connector(产出 JSON 缓存)→ metric 按 <code>collect_query</code> 字段路径取值 → <code>append_observation(SourceKind::Script)</code> → <code>recompute_signals</code> 派生健康灯。一个 script connector 只跑一次(不是每指标跑一次)。</div><div class="src">事实源：<code>bw-app/src/lib.rs · collect_project_metrics</code>(script arm) </div></div>
+      <div class="cc"><div class="h">probe vs collect</div><div class="d">probe = 探活(script connector 查脚本文件在位,不真跑);collect = 真跑脚本采计数写 observation。</div><div class="src">事实源：<code>bw-app/src/lib.rs · probe_connector</code></div></div>
+      <div class="cc"><div class="h">observation 表</div><div class="d">append-only:一个观测 = 一个点,<strong>绝不插值</strong>;无观测即 Unknown。<code>source_kind</code>:<code>manual</code>/<code>script</code>/<code>codehub</code>/<code>github</code>…</div><div class="src">事实源：<code>bw-store/src/schema.sql</code></div></div>
 
       <h2 class="sec"><span class="n">装表·重算·点亮</span></h2>
-      <div class="cc"><div class="h">SyncMetricsFile</div><div class="d">merge 后把 metrics.toml 装进 metric 表。</div><div class="src">事实源：<code>bw-app</code></div></div>
-      <div class="cc"><div class="h">recompute_signals</div><div class="d">由观测重算 Signal。观测变 → Signal 重算。</div><div class="src">事实源：<code>bw-app</code></div></div>
-      <div class="cc"><div class="h">五截断点 <span class="term">价值闭环</span></div><div class="d">进 metric 表 → 采数 → 点亮 Signal → UI 看见 → 上卷项目健康。plan/18 修通。</div><div class="src">事实源：<code>plan/18</code></div></div>
+      <div class="cc"><div class="h">SyncMetricsFile + SyncConnectorsFile <span class="term">buddy 感知</span></div><div class="d">merge MR 后 buddy 感知 <code>.bw/metrics.toml</code> → upsert <code>metric</code> 行(<code>origin='file'</code>,按 (层级,name) keep id)+ <code>.bw/connectors.toml</code> → upsert <code>connector</code> 行(kind=script,按 (project_id,name) keep id,SELECT 过滤 kind='script' 不碰非脚本)。<strong>无手动同步按钮</strong>——merge 自动。</div><div class="src">事实源：<code>bw-app/src/lib.rs · sync_metrics_file_for / sync_connectors_file_for</code></div></div>
+      <div class="cc"><div class="h">recompute_signals</div><div class="d">由观测重算 Signal。观测变 → Signal 重算(唯一写入口,store 无 set_signal)。</div><div class="src">事实源：<code>bw-app</code></div></div>
+      <div class="cc"><div class="h">五截断点 <span class="term">价值闭环</span></div><div class="d">进 metric 表 → 采数 → 点亮 Signal → UI 看见 → 上卷项目健康。plan/18 修通,V1 交互式闭环接上。</div><div class="src">事实源：<code>plan/18</code></div></div>
 
       <h2 class="sec"><span class="n">健康灯</span></h2>
       <div class="cc"><div class="h">Signal derive-only</div><div class="d">store 无 <code>set_signal</code>，信号只能经封口 <code>Derived&lt;Signal&gt;</code> 进缓存。健康不可手设。</div><div class="src">事实源：<code>bw-core</code> / <code>ui</code></div></div>
