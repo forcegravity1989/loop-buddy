@@ -66,12 +66,12 @@ pub enum HookEvent {
     Stop { session_id: String, cwd: String },
 }
 
-/// The hook listener handle. `port` is the bound port (written into
-/// `~/.claude/settings.json` by [`install_hooks_config`]).
-#[derive(Debug)]
-pub struct HookListener {
-    pub port: u16,
-}
+/// The hook listener: a localhost HTTP server that receives claude hook
+/// events (POSTed by a curl script installed in `~/.claude/settings.json`).
+/// All methods are associated functions — no instance state (the port is
+/// returned by `bind`, the accept loop runs in a background task).
+#[derive(Debug, Default)]
+pub struct HookListener;
 
 impl HookListener {
     /// Start the listener on `127.0.0.1`. Returns the bound port.
@@ -84,16 +84,23 @@ impl HookListener {
     /// Fail-open: any parse error responds `200 OK` and moves on — a broken
     /// hook never blocks the agent (claude waits for the hook command to
     /// exit; curl's `--max-time 2` is the backstop if the server is slow).
-    pub async fn start(tx: mpsc::UnboundedSender<HookEvent>) -> std::io::Result<Self> {
-        // Try the fixed port first (so settings.json stays stable). Fall back
-        // to OS-assigned if the fixed port is in use (another buddy instance,
-        // or another app).
-        let listener = match TcpListener::bind(("127.0.0.1", BW_HOOK_PORT)).await {
-            Ok(l) => l,
-            Err(_) => TcpListener::bind(("127.0.0.1", 0)).await?,
-        };
-        let port = listener.local_addr()?.port();
+    /// Sync bind — returns `(port, TcpListener)`. Uses `std::net` for the
+    /// initial bind (no async runtime needed) so the port is known
+    /// immediately. `App::new` calls this, then spawns the accept loop via
+    /// [`HookListener::spawn`] if a tokio runtime is available.
+    pub fn bind() -> std::io::Result<(u16, TcpListener)> {
+        let std_listener = std::net::TcpListener::bind(("127.0.0.1", BW_HOOK_PORT))
+            .or_else(|_| std::net::TcpListener::bind(("127.0.0.1", 0)))?;
+        let port = std_listener.local_addr()?.port();
+        std_listener.set_nonblocking(true)?;
+        let listener = TcpListener::from_std(std_listener)?;
+        Ok((port, listener))
+    }
 
+    /// Spawn the accept loop (async — must be called from a tokio runtime).
+    /// The listener was pre-bound by [`bind`]; this just runs the accept
+    /// loop forever (each connection handled in its own task).
+    pub fn spawn(listener: TcpListener, tx: mpsc::UnboundedSender<HookEvent>) {
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -103,14 +110,10 @@ impl HookListener {
                             let _ = handle_connection(stream, tx).await;
                         });
                     }
-                    // Accept error → log + continue (a bad client doesn't
-                    // kill the listener).
                     Err(_) => continue,
                 }
             }
         });
-
-        Ok(Self { port })
     }
 }
 
@@ -609,8 +612,8 @@ mod tests {
         use tokio::time::{timeout, Duration};
 
         let (tx, mut rx) = mpsc::unbounded_channel::<HookEvent>();
-        let listener = HookListener::start(tx).await.unwrap();
-        let port = listener.port;
+        let (port, listener) = HookListener::bind().unwrap();
+        HookListener::spawn(listener, tx);
 
         // Helper: send a raw HTTP POST to the hook listener (simulates what
         // curl does — no external dependency on curl being installed).

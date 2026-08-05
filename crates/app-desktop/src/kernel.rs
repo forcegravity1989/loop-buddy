@@ -68,6 +68,16 @@ pub struct Vm {
     /// 「⬇ 终止」 button on exactly the issue whose run is in flight, and to
     /// keep 「▶ 跑」 greyed for same-project siblings (serial lock).
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
+    /// V1 Issue2 Phase2b: terminal bytes from the PTY (accumulated since
+    /// the last Vm rebuild). The UI writes these to xterm.js via
+    /// `document::eval` and they're drained on each rebuild — never
+    /// accumulate across renders. Empty when no PTY session is active.
+    pub terminal_bytes: Vec<u8>,
+    /// V1 Issue2 Phase2b: whether a PTY session is active (the UI shows the
+    /// xterm.js terminal widget when `true`). Derived from
+    /// `AppState::pty_input_tx.is_some()` — set in `run_issue_interactive`
+    /// when spawning a PTY session, cleared when the session settles.
+    pub pty_active: bool,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -218,6 +228,10 @@ pub struct OpVm {
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
     /// P5: weekly-review card (top of the progress panel).
     pub week_review: ui::vm::WeekReviewVm,
+    /// V1 Issue2 Phase2b: whether a PTY session is active (the UI shows the
+    /// xterm.js terminal widget when `true`). Derived from
+    /// `AppState::pty_input_tx.is_some()` in `build_vm`.
+    pub pty_active: bool,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -409,6 +423,11 @@ pub struct Kernel {
     tx: mpsc::UnboundedSender<Command>,
     vm_rx: watch::Receiver<Vm>,
     notes: broadcast::Sender<UiNote>,
+    /// V1 Issue2 Phase2b: terminal bytes from the PTY (dedicated watch
+    /// channel, NOT the Vm — avoids the race where a regular `build_vm`
+    /// overwrites `terminal_bytes` before the UI reads them). The pty_ticker
+    /// arm sends each batch; the UI's xterm.js widget reads via `changed()`.
+    pty_rx: watch::Receiver<Vec<u8>>,
 }
 
 impl Kernel {
@@ -420,6 +439,12 @@ impl Kernel {
     }
     pub fn notes(&self) -> broadcast::Receiver<UiNote> {
         self.notes.subscribe()
+    }
+    /// V1 Issue2 Phase2b: terminal bytes watch receiver. The UI's xterm.js
+    /// widget calls `changed().await` to get new bytes, then writes them
+    /// to the terminal via `document::eval`.
+    pub fn pty_bytes(&self) -> watch::Receiver<Vec<u8>> {
+        self.pty_rx.clone()
     }
 }
 
@@ -492,6 +517,10 @@ pub fn spawn() -> Kernel {
     let (vm_tx, vm_rx) = watch::channel(Vm::default());
     let (note_tx, _keep) = broadcast::channel::<UiNote>(256);
     let notes = note_tx.clone();
+    // V1 Issue2 Phase2b: dedicated watch channel for PTY terminal bytes.
+    // Separate from the Vm to avoid the race where a regular `build_vm`
+    // overwrites bytes before the UI reads them.
+    let (pty_tx, pty_rx) = watch::channel(Vec::<u8>::new());
 
     std::thread::Builder::new()
         .name("bw-kernel".into())
@@ -534,7 +563,11 @@ pub fn spawn() -> Kernel {
                 // matching `settle_rx` is polled in the `select!` loop
                 // below; examples / headless drivers never wire this →
                 // `RunIssue` stays inline there.
-                .with_settle_channel(settle_tx);
+                .with_settle_channel(settle_tx)
+                // V1 Issue2 Phase2b: enable PTY mode — interactive issue runs
+                // spawn claude in a PTY (portable-pty) instead of a system
+                // terminal, streaming bytes to the UI's xterm.js widget.
+                .with_pty();
 
                 // Live event → transient note forwarding. Runs concurrently with
                 // dispatch (progress events are emitted mid-run).
@@ -659,6 +692,14 @@ pub fn spawn() -> Kernel {
                 // fired something, so idle polling costs nothing extra.
                 let mut ticker = tokio::time::interval(Duration::from_secs(5));
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                // V1 Issue2 Phase2b: fast timer for PTY terminal bytes —
+                // drains `pty_bytes_rx` and rebuilds the Vm with the bytes.
+                // 100ms = 10fps, sufficient for terminal output (the human
+                // eye reads text at ~10 chars/sec; 8KB chunks every 100ms
+                // is plenty). Not a `tick_scheduler` call — this is a
+                // dedicated drain that bypasses cron/scheduler logic.
+                let mut pty_ticker = tokio::time::interval(Duration::from_millis(100));
+                pty_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
                 loop {
                     tokio::select! {
@@ -692,6 +733,17 @@ pub fn spawn() -> Kernel {
                                 }
                             }
                         }
+                        // V1 Issue2 Phase2b: drain PTY bytes → dedicated
+                        // watch channel (NOT the Vm — avoids the race where
+                        // a regular `build_vm` overwrites bytes before the UI
+                        // reads them). The UI's xterm.js widget reads via
+                        // `pty_rx.changed().await` and writes to the terminal.
+                        _ = pty_ticker.tick() => {
+                            let bytes = app.drain_pty_bytes();
+                            if !bytes.is_empty() {
+                                let _ = pty_tx.send(bytes);
+                            }
+                        }
                     }
                 }
             });
@@ -702,6 +754,7 @@ pub fn spawn() -> Kernel {
         tx: cmd_tx,
         vm_rx,
         notes,
+        pty_rx,
     }
 }
 
@@ -864,6 +917,8 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         cron_effectiveness,
         github_repos: state.github_repos.clone(),
         active_run: app.active_run(),
+        pty_active: state.pty_input_tx.is_some(),
+        terminal_bytes: Vec::new(),
     };
 
     let Some(pid) = state.active_project else {
@@ -1168,6 +1223,10 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         }),
         active_run: app.active_run(),
         week_review,
+        // V1 Issue2 Phase2b: PTY active flag (drives the xterm.js widget
+        // visibility in the WorkflowStage component).
+        pty_active: state.pty_input_tx.is_some(),
     });
+    vm.pty_active = state.pty_input_tx.is_some();
     vm
 }

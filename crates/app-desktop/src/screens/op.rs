@@ -23,7 +23,9 @@ use bw_core::model::{
 };
 use bw_core::{IssueId, SessionId, SkillId, WorkflowId};
 use bw_store::SessionKind;
+use dioxus::document;
 use dioxus::prelude::*;
+use std::time::Duration;
 use ui::vm::{MetricVm, SessionCardVm, VersionLogVm};
 use ui::{sparkline_path, SparkPath, WowDir};
 
@@ -2466,6 +2468,12 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
         }
         {chat_area}
+        // V1 Issue2 Phase2b: in-app terminal (xterm.js) — shown when a PTY
+        // session is active (interactive issue run). The widget loads
+        // xterm.js, writes PTY bytes, and forwards user input/resize.
+        if op.pty_active {
+            TerminalWidget {}
+        }
         if let Some(msg) = promoted_msg() {
             Toast { msg, onclose: move |_| promoted_msg.set(None) }
         }
@@ -2674,6 +2682,234 @@ fn RoutineStage(s: StageVm) -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ─── V1 Issue2 Phase2b: in-app terminal (xterm.js) ─────────────────────
+
+/// Pre-handler buffer + write function (set up BEFORE the async init script
+/// so bytes arriving before xterm.js is ready are buffered, not lost).
+/// This solves the **pre-handler buffer** race (orca §2.4): the terminal
+/// isn't ready yet, so bytes go to `__bw_term_buffer`; the init script
+/// flushes the buffer when ready (rendererDispatcherReady handshake).
+const TERM_PRE_HANDLER_JS: &str = r#"
+window.__bw_term_write = function(text) {
+    if (!window.__bw_term_ready) {
+        // Pre-handler buffer: stash until xterm.js is ready.
+        window.__bw_term_buffer = (window.__bw_term_buffer || '') + text;
+        return;
+    }
+    try { window.__bw_term.write(text); } catch(e) {}
+};
+window.__bw_term_drain_input = function() {
+    if (!window.__bw_term_input || window.__bw_term_input.length === 0) return null;
+    var data = window.__bw_term_input.join('');
+    window.__bw_term_input = [];
+    return data;
+};
+window.__bw_term_drain_resize = function() {
+    if (!window.__bw_term_resize) return null;
+    var r = window.__bw_term_resize;
+    window.__bw_term_resize = null;
+    return r;
+};
+"#;
+
+/// xterm.js init script (async IIFE). Loads CSS + JS + Fit addon from CDN,
+/// creates the terminal, sets up onData/onResize callbacks, and flushes
+/// the pre-handler buffer. The `if (window.__bw_term) return;` at the top
+/// is the **replayIntoTerminal guard** — prevents re-initialization on
+/// Dioxus re-render (which would replay scrollback and send DA1/OSC
+/// responses that pollute the new shell).
+const TERM_INIT_JS: &str = r#"
+(async function() {
+    // replayIntoTerminal guard: don't re-init on Dioxus re-render.
+    if (window.__bw_term) return { ok: true, reason: 'already-initialized' };
+
+    // Load CSS.
+    if (!document.getElementById('__bw_xterm_css')) {
+        var link = document.createElement('link');
+        link.id = '__bw_xterm_css';
+        link.rel = 'stylesheet';
+        link.href = 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css';
+        document.head.appendChild(link);
+    }
+
+    // Load xterm.js.
+    if (!window.Terminal) {
+        await new Promise(function(resolve, reject) {
+            var s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js';
+            s.onload = resolve;
+            s.onerror = function() { reject(new Error('xterm.js load failed')); };
+            document.head.appendChild(s);
+        });
+    }
+
+    // Load Fit addon.
+    if (!window.FitAddon) {
+        await new Promise(function(resolve, reject) {
+            var s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js';
+            s.onload = resolve;
+            s.onerror = function() { reject(new Error('fit addon load failed')); };
+            document.head.appendChild(s);
+        });
+    }
+
+    // Create terminal.
+    var term = new Terminal({
+        fontFamily: 'JetBrains Mono, Consolas, monospace',
+        fontSize: 13,
+        cols: 80,
+        rows: 24,
+        cursorBlink: true,
+        theme: { background: '#1e1e2e', foreground: '#cdd6f4' },
+    });
+    var fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+
+    // Attach to div.
+    var div = document.getElementById('__bw_terminal');
+    if (!div) return { ok: false, reason: 'div not found' };
+    term.open(div);
+    fitAddon.fit();
+
+    // onData → stash for the Rust side to drain.
+    term.onData(function(data) {
+        window.__bw_term_input = window.__bw_term_input || [];
+        window.__bw_term_input.push(data);
+    });
+
+    // onResize → stash for the Rust side to drain.
+    // resize re-assertion: fitAddon.fit() may fire onResize with a
+    // different size than the PTY expects — the Rust side re-sends
+    // TerminalResize, and the PTY's master.resize() applies it.
+    term.onResize(function(size) {
+        window.__bw_term_resize = { cols: size.cols, rows: size.rows };
+    });
+
+    window.__bw_term = term;
+    window.__bw_fit = fitAddon;
+    // rendererDispatcherReady handshake: signal that the terminal is
+    // ready to receive bytes.
+    window.__bw_term_ready = true;
+
+    // Flush pre-handler buffer (bytes received before terminal was ready).
+    if (window.__bw_term_buffer) {
+        term.write(window.__bw_term_buffer);
+        window.__bw_term_buffer = '';
+    }
+
+    return { ok: true };
+})()
+"#;
+
+/// V1 Issue2 Phase2b: in-app terminal widget (xterm.js). Renders when a
+/// PTY session is active (`pty_active = true` on the OpVm). Three races
+/// solved (orca §2.4):
+///  1. **Pre-handler buffer + rendererDispatcherReady**: bytes are buffered
+///     in `window.__bw_term_buffer` before xterm.js is ready; the init
+///     script flushes the buffer when ready (see `TERM_PRE_HANDLER_JS` +
+///     `TERM_INIT_JS`). This prevents Dioxus re-render from losing bytes.
+///  2. **ACK backpressure**: skipped for V1 — `document::eval` is
+///     synchronous (no WebSocket), so no backpressure needed. The PTY
+///     read task sends to an unbounded mpsc channel.
+///  3. **Resize re-assertion**: `fitAddon.fit()` fires `onResize`; the
+///     Rust side drains it and sends `Command::TerminalResize`; the PTY's
+///     `master.resize()` applies it. No fire-and-forget (the drain is
+///     explicit). The `replayIntoTerminal` guard (`if (window.__bw_term)
+///     return`) prevents re-init on Dioxus re-render.
+#[component]
+fn TerminalWidget() -> Element {
+    let k = use_context::<Kernel>();
+
+    // Single `use_future` that handles: terminal init, byte streaming,
+    // and input/resize polling. Combined into one future to avoid
+    // `FnMut` capture issues with multiple `use_future` calls.
+    // The `k.clone()` inside the closure makes it `Fn`-compatible.
+    use_future(move || {
+        let k = k.clone();
+        async move {
+            // 1. Set up pre-handler functions (sync, fast) — must run
+            // BEFORE any bytes arrive so they're buffered, not lost.
+            let _ = document::eval(TERM_PRE_HANDLER_JS).await;
+            // 2. Fire the async init script (loads xterm.js from CDN).
+            // Don't block — the pre-handler buffer stashes bytes until
+            // __bw_term_ready becomes true (rendererDispatcherReady).
+            let _ = document::eval(TERM_INIT_JS).await;
+
+            // 3. Main loop: select between new PTY bytes and input/resize
+            // polling (50ms). `pty_rx.changed()` fires when the pty_ticker
+            // sends a new batch; the sleep timer fires for input/resize.
+            let mut pty_rx = k.pty_bytes();
+            // Mark the initial value as seen (empty Vec from watch::channel).
+            let _ = pty_rx.borrow_and_update();
+            loop {
+                tokio::select! {
+                    // PTY bytes arrived → write to terminal.
+                    result = pty_rx.changed() => {
+                        if result.is_err() {
+                            break; // sender dropped (PTY session ended)
+                        }
+                        let bytes = pty_rx.borrow().clone();
+                        if !bytes.is_empty() {
+                            let text = String::from_utf8_lossy(&bytes);
+                            let escaped = serde_json::to_string(&text)
+                                .unwrap_or_else(|_| "\"\"".into());
+                            let script = format!("window.__bw_term_write({escaped})");
+                            let _ = document::eval(&script).await;
+                        }
+                    }
+                    // 50ms timer → poll for user input + resize.
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                        // Drain input (onData → Command::TerminalInput).
+                        if let Ok(v) = document::eval(
+                            "window.__bw_term_drain_input()"
+                        ).await {
+                            if let Some(input) = v.as_str() {
+                                if !input.is_empty() {
+                                    k.send(Command::TerminalInput {
+                                        bytes: input.as_bytes().to_vec(),
+                                    });
+                                }
+                            }
+                        }
+                        // Drain resize (onResize → Command::TerminalResize).
+                        if let Ok(v) = document::eval(
+                            "window.__bw_term_drain_resize()"
+                        ).await {
+                            if let Some(obj) = v.as_object() {
+                                let cols = obj
+                                    .get("cols")
+                                    .and_then(|c| c.as_u64())
+                                    .unwrap_or(80) as u16;
+                                let rows = obj
+                                    .get("rows")
+                                    .and_then(|r| r.as_u64())
+                                    .unwrap_or(24) as u16;
+                                k.send(Command::TerminalResize { cols, rows });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    rsx! {
+        div {
+            style: "margin-top:14px;border:1px solid {theme::BORDER};border-radius:8px;overflow:hidden;",
+            div {
+                style: "background:#1e1e2e;color:#cdd6f4;font-family:JetBrains Mono,Consolas,monospace;font-size:11px;padding:4px 10px;display:flex;align-items:center;gap:6px;",
+                span { style: "opacity:0.7;", "● in-app terminal" }
+                span { style: "opacity:0.4;margin-left:auto;", "claude interactive session" }
+            }
+            div {
+                id: "__bw_terminal",
+                style: "min-height:320px;background:#1e1e2e;",
             }
         }
     }

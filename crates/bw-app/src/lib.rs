@@ -1365,30 +1365,32 @@ impl App {
         // that receives claude SessionStart/Stop hook events). Best-effort —
         // if it fails (port in use, no home dir, no tokio runtime), the app
         // works without real-time hooks (falls back to 2a's 5-minute InReview
-        // poller). The sender is moved into the background task (keeps the
-        // channel alive); the receiver stays here for `poll_hook_events` to
-        // drain.
+        // poller). Sync `bind()` gets the port immediately (no `block_on`
+        // needed — safe to call inside a tokio runtime like the desktop
+        // kernel). The accept loop is spawned if a runtime is available.
         let (hook_tx, hook_rx) = mpsc::unbounded_channel::<hook_listener::HookEvent>();
-        let (hook_port, hook_event_rx) = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                let result = handle.block_on(hook_listener::HookListener::start(hook_tx));
-                match result {
-                    Ok(listener) => {
-                        let port = listener.port;
-                        // Write hooks config to ~/.claude/settings.json
-                        // (idempotent merge — preserves user hooks). If this
-                        // fails, the listener is useless (curl has nowhere
-                        // to POST), so drop the receiver.
-                        if hook_listener::install_hooks_config(port).is_ok() {
-                            (Some(port), Some(hook_rx))
-                        } else {
-                            (None, None)
-                        }
+        let (hook_port, hook_event_rx) = match hook_listener::HookListener::bind() {
+            Ok((port, listener)) => {
+                // Write hooks config to ~/.claude/settings.json (idempotent
+                // merge — preserves user hooks). If this fails, the listener
+                // is useless (curl has nowhere to POST).
+                if hook_listener::install_hooks_config(port).is_ok() {
+                    // Spawn the accept loop (needs a tokio runtime). Inside
+                    // the desktop kernel's runtime, this works; in
+                    // examples/headless (no runtime), the listener is dropped.
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.spawn(async move {
+                            hook_listener::HookListener::spawn(listener, hook_tx);
+                        });
+                        (Some(port), Some(hook_rx))
+                    } else {
+                        (None, None)
                     }
-                    Err(_) => (None, None),
+                } else {
+                    (None, None)
                 }
             }
-            Err(_) => (None, None), // no tokio runtime → no listener
+            Err(_) => (None, None),
         };
         Self {
             store,
@@ -1759,6 +1761,32 @@ impl App {
         for bytes in chunks {
             self.emit(Event::TerminalBytes { bytes });
         }
+    }
+
+    /// V1 Issue2 Phase2b: drain all pending PTY bytes and return them as a
+    /// single concatenated `Vec<u8>`. Called by the kernel's fast timer
+    /// (100ms) — the bytes are carried in `Vm::terminal_bytes` to the UI's
+    /// xterm.js widget. Returns empty when no PTY session is active or no
+    /// new bytes arrived. Unlike `poll_pty_bytes`, this does NOT emit
+    /// `Event::TerminalBytes` — the Vm carries the bytes directly (avoids
+    /// the broadcast channel's capacity limits for frequent terminal
+    /// output).
+    pub fn drain_pty_bytes(&mut self) -> Vec<u8> {
+        let chunks: Vec<Vec<u8>> = {
+            let Some(rx) = self.state.pty_bytes_rx.as_mut() else {
+                return Vec::new();
+            };
+            let mut chunks = Vec::new();
+            while let Ok(bytes) = rx.try_recv() {
+                chunks.push(bytes);
+            }
+            chunks
+        };
+        let mut all = Vec::new();
+        for chunk in chunks {
+            all.extend_from_slice(&chunk);
+        }
+        all
     }
 
     /// V1 Issue2 Phase2a: poll codehub/github for open MRs on interactive
