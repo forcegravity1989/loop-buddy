@@ -1349,7 +1349,14 @@ sqlite3 -header -column /tmp/bw-verify.db \
   "SELECT stage, COUNT(*) FROM skill_stage GROUP BY stage ORDER BY stage;"
 ```
 
-Expected（真实日常库共 65 条 + Boot 导入 mohit 2 条 = 67 条）：
+> **期望值必须现算，不能当常量抄**：真实日常库是活的（2026-08-05 早间快照 65 条，当晚已是 68 条——用户在用这个应用）。跑验证前先用这条 SQL 数出**本次**的期望「未归类」数，再与实际结果对：
+> ```bash
+> sqlite3 /tmp/bw-verify.db "SELECT COUNT(*) FROM skill s WHERE s.distilled_from_issue IS NULL;"  # 上界
+> sqlite3 /tmp/bw-verify.db "SELECT name FROM skill WHERE distilled_from_issue IS NULL ORDER BY name;"  # 逐条与 bw-core 静态表比对
+> ```
+> 下面的数字是 65 条快照下的结果，**结构**（哪些档存在、每档意味着什么）必须对，绝对值按上面现算的来。
+
+Expected（65 条快照 + Boot 导入 mohit 2 条 = 67 条时）：
 - `未归类` = **1**（`keyword-focus-scoring`——无蒸馏出处、不在静态表）
 - `已判定不属任何阶段` = **6**
 - `全阶段通用` = **6**
