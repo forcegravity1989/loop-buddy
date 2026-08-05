@@ -68,11 +68,6 @@ pub struct Vm {
     /// 「⬇ 终止」 button on exactly the issue whose run is in flight, and to
     /// keep 「▶ 跑」 greyed for same-project siblings (serial lock).
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
-    /// V1 Issue2 Phase2b: terminal bytes from the PTY (accumulated since
-    /// the last Vm rebuild). The UI writes these to xterm.js via
-    /// `document::eval` and they're drained on each rebuild — never
-    /// accumulate across renders. Empty when no PTY session is active.
-    pub terminal_bytes: Vec<u8>,
     /// V1 Issue2 Phase2b: whether a PTY session is active (the UI shows the
     /// xterm.js terminal widget when `true`). Derived from
     /// `AppState::pty_input_tx.is_some()` — set in `run_issue_interactive`
@@ -424,9 +419,9 @@ pub struct Kernel {
     vm_rx: watch::Receiver<Vm>,
     notes: broadcast::Sender<UiNote>,
     /// V1 Issue2 Phase2b: terminal bytes from the PTY (dedicated watch
-    /// channel, NOT the Vm — avoids the race where a regular `build_vm`
-    /// overwrites `terminal_bytes` before the UI reads them). The pty_ticker
-    /// arm sends each batch; the UI's xterm.js widget reads via `changed()`.
+    /// channel, NOT the Vm — a regular `build_vm` could overwrite bytes
+    /// before the UI reads them). The pty_ticker arm sends each batch;
+    /// the UI's xterm.js widget reads via `changed()`.
     pty_rx: watch::Receiver<Vec<u8>>,
 }
 
@@ -918,7 +913,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         github_repos: state.github_repos.clone(),
         active_run: app.active_run(),
         pty_active: state.pty_input_tx.is_some(),
-        terminal_bytes: Vec::new(),
     };
 
     let Some(pid) = state.active_project else {

@@ -945,15 +945,6 @@ pub enum Event {
     LegacyShellsMigrated {
         report: LegacyMigrationReport,
     },
-    /// V1 Issue2 Phase2b: bytes from the PTY (agent's stdout/stderr). The
-    /// UI writes these to xterm.js. Emitted by `poll_pty_bytes` (drains the
-    /// `pty_bytes_rx` channel from the background PTY read task). Only
-    /// emitted when PTY mode is active (`with_pty` wired by the desktop
-    /// kernel). The bytes are raw terminal escape sequences — xterm.js
-    /// interprets them, buddy doesn't parse.
-    TerminalBytes {
-        bytes: Vec<u8>,
-    },
 }
 
 /// Three-state visibility for one `Event::ActionProgress` — see that
@@ -1269,9 +1260,9 @@ pub struct AppState {
     /// spawning a PTY session; cleared when the session settles.
     pub pty_input_tx: Option<mpsc::UnboundedSender<bw_engine::PtyInput>>,
     /// V1 Issue2 Phase2b: PTY bytes receiver — drains PTY output bytes
-    /// from the background read task and emits `Event::TerminalBytes`.
-    /// `None` when PTY mode isn't active or no session is running.
-    /// Drained in `poll_pty_bytes` (called from `tick_scheduler`).
+    /// from the background read task. `None` when PTY mode isn't active or
+    /// no session is running. Drained by `drain_pty_bytes` (called from
+    /// the kernel's 100ms `pty_ticker` arm — NOT `tick_scheduler`).
     pub pty_bytes_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
     /// V1 Issue2 Phase2b: whether PTY mode is enabled (the desktop kernel
     /// wires it via `App::with_pty`). When `true`, `run_issue_interactive`
@@ -1432,7 +1423,7 @@ impl App {
 
     /// V1 Issue2 Phase2b: enable PTY mode — `run_issue_interactive` spawns
     /// `claude` in a PTY (portable-pty) instead of a system terminal, and
-    /// streams bytes via `Event::TerminalBytes` / `Command::TerminalInput`.
+    /// streams bytes via a dedicated `watch` channel / `Command::TerminalInput`.
     /// The desktop kernel calls this; examples / headless drivers don't
     /// (they use the old system-terminal / mock path).
     pub fn with_pty(mut self) -> Self {
@@ -1739,38 +1730,11 @@ impl App {
         Ok(())
     }
 
-    /// V1 Issue2 Phase2b: drain pending PTY bytes from the background read
-    /// task and emit `Event::TerminalBytes` for each chunk. Called from
-    /// `tick_scheduler` (and can be called from the desktop kernel's
-    /// `select!` loop for more prompt delivery). No PTY session active →
-    /// no-op. The bytes are raw terminal escape sequences — the UI's
-    /// xterm.js interprets them, buddy doesn't parse.
-    fn poll_pty_bytes(&mut self) {
-        // Collect all pending bytes first (releases the mutable borrow on
-        // `pty_bytes_rx` before calling `self.emit`).
-        let chunks: Vec<Vec<u8>> = {
-            let Some(rx) = self.state.pty_bytes_rx.as_mut() else {
-                return; // no PTY session active
-            };
-            let mut chunks = Vec::new();
-            while let Ok(bytes) = rx.try_recv() {
-                chunks.push(bytes);
-            }
-            chunks
-        };
-        for bytes in chunks {
-            self.emit(Event::TerminalBytes { bytes });
-        }
-    }
-
     /// V1 Issue2 Phase2b: drain all pending PTY bytes and return them as a
     /// single concatenated `Vec<u8>`. Called by the kernel's fast timer
-    /// (100ms) — the bytes are carried in `Vm::terminal_bytes` to the UI's
-    /// xterm.js widget. Returns empty when no PTY session is active or no
-    /// new bytes arrived. Unlike `poll_pty_bytes`, this does NOT emit
-    /// `Event::TerminalBytes` — the Vm carries the bytes directly (avoids
-    /// the broadcast channel's capacity limits for frequent terminal
-    /// output).
+    /// (100ms pty_ticker) — the bytes are sent via a dedicated `watch`
+    /// channel to the UI's xterm.js widget. Returns empty when no PTY
+    /// session is active or no new bytes arrived.
     pub fn drain_pty_bytes(&mut self) -> Vec<u8> {
         let chunks: Vec<Vec<u8>> = {
             let Some(rx) = self.state.pty_bytes_rx.as_mut() else {
@@ -4190,10 +4154,6 @@ impl App {
         // backstop). No listener (hook_event_rx = None) = no-op.
         let _ = self.poll_hook_events().await;
 
-        // V1 Issue2 Phase2b: drain PTY bytes → Event::TerminalBytes (for the
-        // UI's xterm.js to render). Best-effort — no PTY session = no-op.
-        self.poll_pty_bytes();
-
         // V1 Issue2 Phase2b: Stop-triggered InReview check. When a `Stop`
         // hook event was received (agent finished a turn), run
         // `poll_interactive_inreview` immediately — the Stop is the real-time
@@ -5082,7 +5042,7 @@ impl App {
                 // V1 Issue2 Phase2b: PTY mode — create byte-stream channels
                 // and spawn via `run_skill_pty`. The App holds `input_tx`
                 // (for forwarding `Command::TerminalInput`) and `bytes_rx`
-                // (for draining → `Event::TerminalBytes`).
+                // (for draining via `drain_pty_bytes` → `pty_tx` watch).
                 let (bytes_tx, bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
                 let (input_tx, input_rx) = mpsc::unbounded_channel::<bw_engine::PtyInput>();
                 self.state.pty_input_tx = Some(input_tx);
@@ -5232,6 +5192,11 @@ impl App {
             // in-session and the InReview poller detects it. Guard drops
             // here (worktree cleanup); the issue stays in its current state
             // (InProgress on first run, unchanged on resume). Never auto-Done.
+            // V1 Issue2 Phase2b: clear PTY state so the terminal widget
+            // disappears (pty_active → false), input stops going to the
+            // dropped receiver, and the 100ms pty_ticker stops spinning.
+            self.state.pty_input_tx = None;
+            self.state.pty_bytes_rx = None;
             drop(ar.guard);
             self.refresh_issues().await?;
             self.emit(Event::IssuesChanged);

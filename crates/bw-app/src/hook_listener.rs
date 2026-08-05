@@ -242,16 +242,25 @@ fn parse_content_length(headers: &str) -> Option<usize> {
 
 // ─── ~/.claude/settings.json hooks config ──────────────────────────────
 
-/// Build the curl command string for the hook script. Cross-platform
-/// (`curl` is available on Windows 10+, macOS, and Linux).
+/// Build the curl command string for the hook script. Cross-platform.
+///
+/// On Windows, uses `curl.exe` (explicit `.exe` bypasses PowerShell's
+/// `curl` → `Invoke-WebRequest` alias, which doesn't recognize
+/// `--data-binary`/`--connect-timeout`/`--max-time` and silently fails).
+/// On macOS/Linux, `curl` resolves to the real curl binary.
 ///
 /// `--connect-timeout 1 --max-time 2`: hook must never block the agent. If
 /// the server is down/slow, curl exits within 2s and claude continues.
 /// `--data-binary @-`: reads stdin (the JSON payload) and sends it as the
 /// POST body, with no line-ending conversion (binary-safe).
 fn hook_command(port: u16) -> String {
+    let curl = if cfg!(target_os = "windows") {
+        "curl.exe"
+    } else {
+        "curl"
+    };
     format!(
-        "curl -s --connect-timeout 1 --max-time 2 -X POST http://127.0.0.1:{port}{BW_HOOK_PATH} --data-binary @-"
+        "{curl} -s --connect-timeout 1 --max-time 2 -X POST http://127.0.0.1:{port}{BW_HOOK_PATH} --data-binary @-"
     )
 }
 
@@ -465,6 +474,13 @@ mod tests {
         assert!(cmd.contains(BW_HOOK_PATH));
         assert!(cmd.contains("--data-binary @-"));
         assert!(cmd.contains("--max-time 2"));
+        // Windows: must use curl.exe (bypasses PowerShell alias).
+        // Unix: plain curl.
+        if cfg!(target_os = "windows") {
+            assert!(cmd.starts_with("curl.exe"));
+        } else {
+            assert!(cmd.starts_with("curl "));
+        }
     }
 
     #[test]
