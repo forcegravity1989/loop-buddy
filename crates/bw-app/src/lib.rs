@@ -4709,6 +4709,11 @@ impl App {
                 for p in &projects {
                     self.seed_stage_done_metrics(p.id).await?;
                     self.seed_codehub_public_metrics(p.id).await?;
+                    // plan/20 W1 (R1): 存量项目补种自有五角色副本——按
+                    // (project, name) 幂等,重启不重复;全局五行(共享目录
+                    // 模板)原地不动,战绩不迁移。
+                    bw_store::seed_project_role_agents_if_missing(self.store.as_ref(), p.id)
+                        .await?;
                 }
                 self.refresh_workflow_specs().await?;
                 self.refresh_skills().await?;
@@ -4748,6 +4753,12 @@ impl App {
                     .await?;
                 self.state.active_project = Some(id);
                 self.state.view = View::Create;
+                // plan/20 W1 (R1): 出生即带自有五角色队友(从代码正本复制,
+                // 战绩从零立账)——「新项目里指派下拉只出现自己的五个角色」
+                // (plan/08 S1 完成标准)从出生那一刻成立。
+                bw_store::seed_project_role_agents_if_missing(self.store.as_ref(), id).await?;
+                self.refresh_agents().await?;
+                self.emit(Event::AgentsChanged);
                 // P1: 建项目即建仓 —— 出生那一刻仓就存在(而非走完创建流才有)。
                 // 绑定已有本地仓:只校验含 .git,绝不动原文件。GitHub 为主体
                 // (2026-07-22): github 非空时改走 gh CLI 开仓/接入,新建失败
