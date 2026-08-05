@@ -2068,13 +2068,13 @@ impl Store for SqliteStore {
         row.map(skill_row).transpose()
     }
 
-    async fn record_skill_use_by_name(&self, name: &str) -> Result<u32> {
-        let res = sqlx::query("UPDATE skill SET uses=uses+1, updated_at=?, rev=rev+1 WHERE name=?")
+    async fn record_skill_use(&self, id: SkillId) -> Result<()> {
+        sqlx::query("UPDATE skill SET uses=uses+1, updated_at=?, rev=rev+1 WHERE id=?")
             .bind(now_unix())
-            .bind(name)
+            .bind(id.uuid().to_string())
             .execute(&self.pool)
             .await?;
-        Ok(res.rows_affected() as u32)
+        Ok(())
     }
 
     /// Distill a new skill from a completed, assigned Issue — the "every
@@ -2268,22 +2268,22 @@ impl Store for SqliteStore {
         row.map(agent_row).transpose()
     }
 
-    async fn record_agent_run_by_name(&self, name: &str, ok: bool) -> Result<u32> {
+    async fn record_agent_run(&self, id: AgentId, ok: bool) -> Result<()> {
         // runs/wins are the real counters; win_rate is a derived display
         // string recomputed from them in the same statement — never patched
         // independently, so it can't drift from the counters it summarizes.
-        let res = sqlx::query(
+        sqlx::query(
             "UPDATE agent SET runs=runs+1, wins=wins+?, \
              win_rate = printf('%d%%', (wins+?)*100/(runs+1)), \
-             updated_at=?, rev=rev+1 WHERE name=?",
+             updated_at=?, rev=rev+1 WHERE id=?",
         )
         .bind(if ok { 1 } else { 0 })
         .bind(if ok { 1 } else { 0 })
         .bind(now_unix())
-        .bind(name)
+        .bind(id.uuid().to_string())
         .execute(&self.pool)
         .await?;
-        Ok(res.rows_affected() as u32)
+        Ok(())
     }
 
     async fn delete_agent(&self, id: AgentId) -> Result<()> {

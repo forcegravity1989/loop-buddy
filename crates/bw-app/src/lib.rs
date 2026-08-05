@@ -1633,7 +1633,7 @@ impl App {
         // real bodies to the shared prompt. Name-only refs with no stored
         // content contribute nothing — never a fabricated placeholder.
         if spec.phase_prompts.is_empty() && !spec.skills.is_empty() {
-            let block = self.skills_prompt_block(&spec.skills).await?;
+            let block = self.skills_prompt_block(p, &spec.skills).await?;
             if !block.is_empty() {
                 spec.prompt = format!("{}{block}", spec.prompt);
             }
@@ -2104,11 +2104,32 @@ impl App {
                 .set_run_heads(run_log_id, head_before.clone(), head_after)
                 .await?;
         }
+        // plan/20 R3: 记账行 == 注入行——用与注入完全同一条就近规则
+        // (`scope::scoped_pick`,项目行遮蔽全局行、他项目行永不命中)解析
+        // 出这次 run 实际采用的那一行,按 id 打点;解析落空(未登记的
+        // ad-hoc ref)如实跳过。此前的按名全表 UPDATE 会把跨作用域同名行
+        // (W1 起每个项目都有五角色副本)齐 bump,战绩互相污账。
+        let agent_catalog = self.store.list_agents().await?;
         for a in &spec.agents {
-            self.store.record_agent_run_by_name(&a.name, run_ok).await?;
+            if let Some(row) = bw_core::scope::scoped_pick(
+                agent_catalog.iter(),
+                Some(p),
+                |x| x.project_id,
+                |x| x.name == a.name,
+            ) {
+                self.store.record_agent_run(row.id, run_ok).await?;
+            }
         }
+        let skill_catalog = self.store.list_skills().await?;
         for s in &spec.skills {
-            self.store.record_skill_use_by_name(&s.name).await?;
+            if let Some(row) = bw_core::scope::scoped_pick(
+                skill_catalog.iter(),
+                Some(p),
+                |x| x.project_id,
+                |x| x.name == s.name,
+            ) {
+                self.store.record_skill_use(row.id).await?;
+            }
         }
         if !spec.agents.is_empty() {
             self.refresh_agents().await?;
@@ -2309,18 +2330,32 @@ impl App {
     /// Resolve skill refs against the hub and render the non-empty bodies as
     /// a prompt block. Pure read; the honest empty string when nothing
     /// resolves. Capped so a pathological catalog can't drown the task.
-    async fn skills_prompt_block(&self, refs: &[SkillRef]) -> Result<String, AppError> {
+    ///
+    /// plan/20 R2: 按名解析走 `scope::scoped_pick` 就近优先——本项目行遮蔽
+    /// 全局同名行,他项目的行永不命中。遮蔽是行级的:被遮蔽定位到的行
+    /// content 为空则如实不注入,绝不再「就近找下一条能用的」——否则记账行
+    /// (R3,`finalize_run` 同一条规则解析)会与注入行分家。
+    async fn skills_prompt_block(
+        &self,
+        project: ProjectId,
+        refs: &[SkillRef],
+    ) -> Result<String, AppError> {
         const MAX_BLOCK_CHARS: usize = 6000;
         let catalog = self.store.list_skills().await?;
         let mut bodies = Vec::new();
         let mut total = 0usize;
         for r in refs {
-            let Some(skill) = catalog
-                .iter()
-                .find(|s| s.name == r.name && !s.content.trim().is_empty())
-            else {
+            let Some(skill) = bw_core::scope::scoped_pick(
+                catalog.iter(),
+                Some(project),
+                |s| s.project_id,
+                |s| s.name == r.name,
+            ) else {
                 continue;
             };
+            if skill.content.trim().is_empty() {
+                continue;
+            }
             // plan/16 S7: bodies are spec-shaped SKILL.md text opening at
             // `#`; the injector nests them two levels down so they sit
             // correctly under this block's own H2 (see
@@ -2432,15 +2467,24 @@ impl App {
     /// too — see that function's doc comment). With the exclusion in place,
     /// `record_skill_use_by_name` accounting sees each skill exactly once
     /// per run.
-    async fn standard_skill_block(&self, slug: &str) -> Result<(String, Vec<SkillRef>), AppError> {
+    async fn standard_skill_block(
+        &self,
+        project: ProjectId,
+        slug: &str,
+    ) -> Result<(String, Vec<SkillRef>), AppError> {
         if slug.trim().is_empty() {
             return Ok((String::new(), Vec::new()));
         }
         let catalog = self.store.list_skills().await?;
-        let Some(skill) = catalog
-            .iter()
-            .find(|s| s.name == slug && !s.content.trim().is_empty())
-        else {
+        // plan/20 R2: 同 `skills_prompt_block` 的就近遮蔽——项目里收录改过
+        // 的标配副本优先于全局正本,他项目的行永不命中。
+        let Some(skill) = bw_core::scope::scoped_pick(
+            catalog.iter(),
+            Some(project),
+            |s| s.project_id,
+            |s| s.name == slug,
+        )
+        .filter(|s| !s.content.trim().is_empty()) else {
             return Ok((String::new(), Vec::new()));
         };
         let block = format!(
@@ -3625,7 +3669,16 @@ impl App {
                 continue;
             }
 
-            let Some(spec) = specs.iter().find(|w| w.name == c.target).cloned() else {
+            // plan/20 R2: cron 按名找 workflow 走同一条就近规则——本项目行
+            // 优先、全局兜底、他项目行永不命中(plan/08 S1「cron 的按名找
+            // workflow 同样本项目优先」)。
+            let Some(spec) = bw_core::scope::scoped_pick(
+                specs.iter(),
+                Some(pid),
+                |w| w.project_id,
+                |w| w.name == c.target,
+            )
+            .cloned() else {
                 continue; // target doesn't (yet) name a real hub workflow — same rule as the manual trigger.
             };
 
@@ -3940,7 +3993,7 @@ impl App {
         // 的 slug)。理论上仍可能查不到(例如 seed 尚未跑过的极早期状态),
         // 那种情况如实跳过、零报错,不是本注入路径的正常状态。
         let (standard_block, standard_refs) =
-            self.standard_skill_block(&issue.standard_skill).await?;
+            self.standard_skill_block(p, &issue.standard_skill).await?;
         // Distilled (compounded) skills from this project, same-stage
         // preferred, capped at 3. Exclude `issue.standard_skill` by name —
         // since P3 a distilled skill can itself be picked as the standard
@@ -7183,9 +7236,10 @@ impl App {
                     // stands in the append-only history.)
                     if let Some(agent_id) = issue.assignee {
                         if let Some(agent) = self.store.get_agent(agent_id).await? {
-                            self.store
-                                .record_agent_run_by_name(&agent.name, true)
-                                .await?;
+                            // plan/20 R3: by-id——此前按 name 全表 UPDATE,
+                            // W1 之后每个项目都有同名五角色副本,一次 Done
+                            // 会给所有项目的同名队友齐记战绩(真 bug)。
+                            self.store.record_agent_run(agent.id, true).await?;
                             self.refresh_agents().await?;
                             self.emit(Event::AgentsChanged);
                         }

@@ -23,6 +23,7 @@ pub mod derive;
 pub mod ids;
 pub mod model;
 pub mod playbook;
+pub mod scope;
 pub mod skill_body;
 pub mod skill_spec;
 pub mod standards;
