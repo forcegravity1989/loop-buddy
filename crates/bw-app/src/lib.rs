@@ -1354,15 +1354,20 @@ impl App {
         Ok(())
     }
 
-    /// plan/16 §2 防线 1 (S2): the skill name is the hub-wide join key
+    /// plan/16 §2 防线 1 (S2): the skill name is the join key
     /// (`SkillRef` / `agent.skills` / 蒸馏溯源 all match by name), so a
     /// duplicate is ambiguity, not a style problem. `exempt` = the row being
     /// renamed itself (an unchanged-name `UpdateSkill` must not self-collide).
     /// Read against the store, not `self.state` — same stale-UI reasoning as
     /// `UpdateSkill`'s T11 flip check.
+    ///
+    /// plan/20 R4: 唯一性按**作用域**强制——全局一池、每项目一池(`scope` =
+    /// 这行将要落在的池)。跨作用域允许同名:那是「收录=复制归我」的天然
+    /// 结果,按名引用处由就近规则(R2 `scope::scoped_pick`)确定性消歧。
     async fn guard_skill_name_unique(
         &self,
         name: &str,
+        scope: Option<ProjectId>,
         exempt: Option<SkillId>,
     ) -> Result<(), AppError> {
         let taken = self
@@ -1370,10 +1375,10 @@ impl App {
             .list_skills()
             .await?
             .iter()
-            .any(|s| s.name == name && Some(s.id) != exempt);
+            .any(|s| s.name == name && s.project_id == scope && Some(s.id) != exempt);
         if taken {
             return Err(AppError::Invalid(format!(
-                "技能名「{name}」已存在——名字是联合键,不容歧义(plan/16 S2)"
+                "技能名「{name}」已存在——名字在同一作用域内是联合键,不容歧义(plan/16 S2 · plan/20 R4)"
             )));
         }
         Ok(())
@@ -6138,7 +6143,8 @@ impl App {
                 // (SkillRef / agent.skills / 蒸馏溯源), so a bad or
                 // ambiguous one spreads.
                 guard_skill_name(&name)?;
-                self.guard_skill_name_unique(&name, None).await?;
+                // plan/20 R4: Hub 创建落全局池,查重也只查全局池。
+                self.guard_skill_name_unique(&name, None, None).await?;
                 self.store
                     .create_skill(NewSkill {
                         id,
@@ -6178,7 +6184,16 @@ impl App {
                 // day one (the two legacy Chinese-named rows are exactly the
                 // stock this guard prevents regrowing).
                 guard_skill_name(&name)?;
-                self.guard_skill_name_unique(&name, None).await?;
+                // plan/20 R4: 蒸馏落在源 Issue 所属项目的池,查重只查该池
+                // (store::distill_skill_from_issue 按同一 provenance 定归属)。
+                let scope = self
+                    .store
+                    .get_issue(issue_id)
+                    .await?
+                    .ok_or(AppError::NotFound)?
+                    .project_id;
+                self.guard_skill_name_unique(&name, Some(scope), None)
+                    .await?;
                 self.store
                     .distill_skill_from_issue(
                         NewSkill {
@@ -6366,7 +6381,6 @@ impl App {
                 // exact door the audit's curated corrections walk through
                 // (中文名 → kebab), so the guard and the fix share one rule.
                 guard_skill_name(&name)?;
-                self.guard_skill_name_unique(&name, Some(id)).await?;
                 // T11 (plan/12 §7): "编辑即脱离源头" — an `Official` row whose
                 // substantive fields (content/desc/category; `name` is
                 // identity, not content) really changed flips to `SelfBuilt`
@@ -6375,6 +6389,13 @@ impl App {
                 // decides correctly. A no-op edit (identical content
                 // resubmitted) or a rename-only edit never flips.
                 let existing = self.store.get_skill(id).await?;
+                // plan/20 R4: 改名只在本行所在的池里查重。
+                self.guard_skill_name_unique(
+                    &name,
+                    existing.as_ref().and_then(|s| s.project_id),
+                    Some(id),
+                )
+                .await?;
                 let flip_to_self_built = existing.as_ref().is_some_and(|s| {
                     matches!(s.source, HubSource::Official { .. })
                         && (s.content != content || s.desc != desc || s.category != category)
