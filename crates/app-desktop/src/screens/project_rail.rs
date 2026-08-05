@@ -77,7 +77,11 @@ pub fn ProjectRail(
         .iter()
         .filter(|w| w.project_id == Some(project_id))
         .collect();
-    let shared_workflows = hub.workflows.iter().filter(|w| w.project_id.is_none()).count();
+    let shared_workflows = hub
+        .workflows
+        .iter()
+        .filter(|w| w.project_id.is_none())
+        .count();
     let workflow_items: Vec<RailItem> = own_workflows
         .iter()
         .map(|w| RailItem {

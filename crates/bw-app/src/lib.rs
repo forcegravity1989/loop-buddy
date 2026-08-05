@@ -6449,7 +6449,9 @@ impl App {
                 // 共享目录——不发明更细的出处。
                 let origin_of = |source: &HubSource| -> String {
                     match source {
-                        HubSource::Official { official_library } if !official_library.is_empty() => {
+                        HubSource::Official { official_library }
+                            if !official_library.is_empty() =>
+                        {
                             official_library.clone()
                         }
                         _ => "共享目录".to_string(),
@@ -6460,7 +6462,8 @@ impl App {
                         let src = self.store.get_skill(sid).await?.ok_or(AppError::NotFound)?;
                         if src.project_id.is_some() {
                             return Err(AppError::Invalid(
-                                "只能收录共享目录(全局)里的技能——他项目的资产不外借(plan/20 R5)".into(),
+                                "只能收录共享目录(全局)里的技能——他项目的资产不外借(plan/20 R5)"
+                                    .into(),
                             ));
                         }
                         self.guard_skill_name_unique(&src.name, Some(project_id), None)
@@ -6506,7 +6509,8 @@ impl App {
                         let src = self.store.get_agent(aid).await?.ok_or(AppError::NotFound)?;
                         if src.project_id.is_some() {
                             return Err(AppError::Invalid(
-                                "只能收录共享目录(全局)里的队友——他项目的资产不外借(plan/20 R5)".into(),
+                                "只能收录共享目录(全局)里的队友——他项目的资产不外借(plan/20 R5)"
+                                    .into(),
                             ));
                         }
                         let dup = self
@@ -6551,7 +6555,8 @@ impl App {
                             .ok_or(AppError::NotFound)?;
                         if src.project_id.is_some() {
                             return Err(AppError::Invalid(
-                                "只能收录共享目录(全局)里的工作流——他项目的资产不外借(plan/20 R5)".into(),
+                                "只能收录共享目录(全局)里的工作流——他项目的资产不外借(plan/20 R5)"
+                                    .into(),
                             ));
                         }
                         let dup = self

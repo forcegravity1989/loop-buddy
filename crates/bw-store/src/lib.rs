@@ -37,8 +37,7 @@ pub use sqlite::SqliteStore;
 pub mod seed;
 pub use seed::{
     seed_bw_standard_skills_if_missing, seed_hub_if_empty, seed_project_role_agents_if_missing,
-    seed_stage_role_agents_if_missing,
-    CanonicalSkill,
+    seed_stage_role_agents_if_missing, CanonicalSkill,
 };
 
 #[derive(Debug, thiserror::Error)]
