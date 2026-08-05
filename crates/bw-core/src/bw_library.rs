@@ -58,6 +58,7 @@ pub const COMPETITIVE_ANALYSIS_MD: &str =
 pub const NORTH_STAR_DISCOVERY_MD: &str =
     include_str!("../../../docs/skills/north-star-discovery/SKILL.md");
 pub const METRICS_BINDING_MD: &str = include_str!("../../../docs/skills/metrics-binding/SKILL.md");
+pub const METRICS_RENDER_MD: &str = include_str!("../../../docs/skills/metrics-render/SKILL.md");
 
 // 每条包文档 frontmatter `description` 的复述(见 `BwSkillDoc::desc`):必须
 // 与文件逐字相等,Boot canon 构建器守卫。`const` 而非函数内联字面量,是因为
@@ -79,11 +80,18 @@ pub const NORTH_STAR_DISCOVERY_DESC: &str =
     "结合项目意图与竞品分析报告推导北极星+滞后+引领三层指标,每条必附采集方案——先对后亮,北极星绝不为「采得到」退化成工程虚荣指标。适用:标配 Issue「找指标」,或北极星需要重推的时点";
 pub const METRICS_BINDING_DESC: &str =
     "为 .bw/metrics.toml 里绑不上的指标找到点亮的最便宜路径——绝不伪造数据、绝不为了点亮而改指标定义。适用:标配 Issue「绑数据」,或健康灯长期 Unknown 需要接真数据源的时点";
+pub const METRICS_RENDER_DESC: &str =
+    "把项目指标的真实状态渲染成一页可复核的自包含 HTML——零观测渲染成「无数据」而不是 0,每个数字自带 sqlite3 复核命令,绿色隐身。适用:想看某个项目/全部项目此刻的指标看板,或要把指标状态发给别人看的时点";
 
 /// The whole bw-standard skill library, in seed order (five stage skills in
-/// stage order, then the standard-issue trio in its 竞品分析→找指标→绑数据
-/// chain order).
-pub fn bw_standard_skill_docs() -> [BwSkillDoc; 8] {
+/// stage order, then the standard-issue skills in their 竞品分析→找指标→绑数据
+/// chain order, with 渲染指标 appended as the chain's read-out end).
+///
+/// 注意:`BwSkillDocKind::StandardIssue` 只决定这条 skill 的 category(「标配」)
+/// 与 stage 归属,**不**决定创建流自动建哪几张 Issue —— 那是
+/// [`crate::super`] 之外 `bw-app` 里 `seed_standard_issue_trio` 的
+/// 硬编码三元组。所以这里多一条 skill 不会让每个新项目多出一张活。
+pub fn bw_standard_skill_docs() -> [BwSkillDoc; 9] {
     [
         BwSkillDoc {
             slug: "evidence-first",
@@ -132,6 +140,12 @@ pub fn bw_standard_skill_docs() -> [BwSkillDoc; 8] {
             kind: BwSkillDocKind::StandardIssue,
             desc: METRICS_BINDING_DESC,
             raw: METRICS_BINDING_MD,
+        },
+        BwSkillDoc {
+            slug: "metrics-render",
+            kind: BwSkillDocKind::StandardIssue,
+            desc: METRICS_RENDER_DESC,
+            raw: METRICS_RENDER_MD,
         },
     ]
 }
