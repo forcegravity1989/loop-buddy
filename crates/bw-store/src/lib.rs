@@ -966,6 +966,11 @@ pub trait Store: Send + Sync {
     /// create` success — a failed/skipped PR simply never calls it, leaving
     /// the honest `0` default (提 PR 失败不炸 run). Never a fabricated number.
     async fn set_issue_pr_number(&self, id: IssueId, pr_number: u32) -> Result<()>;
+    /// V1 Issue2 Phase2a: mark the interactive session as started (first
+    /// ▶跑 spawned claude with the skill body). Called once right before the
+    /// first spawn; never reset. Drives the first-run vs resume decision in
+    /// `run_issue_interactive`.
+    async fn set_issue_interactive_started(&self, id: IssueId) -> Result<()>;
     /// A5-F: the only way an issue reaches `Blocked` — sets status and reason
     /// together in one write. Legality (which source states may block) and
     /// the non-empty-reason rule are the App layer's job; the store just

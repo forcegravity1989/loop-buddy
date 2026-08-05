@@ -470,6 +470,11 @@ CREATE TABLE IF NOT EXISTS issue (
     -- by-name convention) this Issue is wired to. '' = no association (every
     -- hand-created / autopilot Issue). Set once at creation, never rewritten.
     standard_skill TEXT NOT NULL DEFAULT '',
+    -- V1 Issue2 Phase2a: whether the interactive skill session has been
+    -- started (first ▶跑 spawned claude with the skill body). 0 = first run
+    -- (build_startup_plan); 1 = resume (--continue, session persists under
+    -- ~/.claude/projects/<encoded-cwd>/). Set before first spawn, never reset.
+    interactive_started INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );

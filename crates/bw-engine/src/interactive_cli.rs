@@ -50,6 +50,12 @@ pub struct TuiAgentConfig {
     pub prompt_injection_mode: PromptInjectionMode,
     pub draft_prompt_flag: &'static str,
     pub yolo_flag: &'static str,
+    /// V1 Issue2 Phase2a: the flag to resume the most recent session in the
+    /// current directory. For claude: `--continue` (`-c`). Resume re-enters
+    /// the existing session (no new prompt, no `--append-system-prompt`) —
+    /// the skill body + bridge prompt were injected on the first run and
+    /// persist in the session.
+    pub resume_flag: &'static str,
     pub supported: bool,
 }
 
@@ -69,6 +75,12 @@ pub static CLAUDE: TuiAgentConfig = TuiAgentConfig {
     // `build_startup_plan` can switch to `--prefill` with a one-line change.
     draft_prompt_flag: "--prefill",
     yolo_flag: "--dangerously-skip-permissions",
+    // Verified 2026-08-05 via `claude --help`: `-c, --continue` resumes the
+    // most recent conversation in the current directory. Each interactive
+    // issue has its own worktree (`bw/issue-N`), so `--continue` from that
+    // cwd hits the session started there. No session_id needed (unlike
+    // `--resume <id>` which 2a doesn't have a hook to capture).
+    resume_flag: "--continue",
     supported: true,
 };
 
@@ -81,6 +93,7 @@ pub static CURSOR: TuiAgentConfig = TuiAgentConfig {
     prompt_injection_mode: PromptInjectionMode::FlagPrefill,
     draft_prompt_flag: "--prefill",
     yolo_flag: "",
+    resume_flag: "--continue",
     supported: false,
 };
 
@@ -155,6 +168,60 @@ pub fn build_startup_plan(
     // rule as the one-shot ClaudeCliExecutor path.
     args.push("--disallowedTools".to_string());
     args.push("Bash(gh pr merge)".to_string());
+
+    Ok(LaunchPlan {
+        binary: agent.launch_cmd.to_string(),
+        args,
+        env,
+        cwd: workspace_cwd.to_path_buf(),
+    })
+}
+
+/// Build the resume plan for an interactive agent session (V1 Issue2
+/// Phase2a). Resume re-enters the existing session — no new prompt, no
+/// `--append-system-prompt` (the skill body + bridge prompt were injected
+/// on the first run and persist in the session stored under
+/// `~/.claude/projects/<encoded-cwd>/`).
+///
+/// For claude:
+/// `claude --continue --dangerously-skip-permissions --disallowedTools "Bash(gh pr merge)"`
+///
+/// The `cwd` MUST match the first run's cwd (the issue's `bw/issue-N`
+/// worktree path) so `--continue` finds the right session. The env strip
+/// is identical to [`build_startup_plan`] (nested-execution vars removed).
+pub fn build_resume_plan(
+    agent: &TuiAgentConfig,
+    workspace_cwd: &Path,
+) -> Result<LaunchPlan, ExecError> {
+    if !agent.supported {
+        return Err(ExecError::Failed(format!(
+            "TUI agent '{}' 暂不支持(Phase 1 仅 claude)",
+            agent.slug
+        )));
+    }
+
+    let mut env: HashMap<String, String> = std::env::vars().collect();
+    for var in [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "CLAUDECODE",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+    ] {
+        env.remove(var);
+    }
+
+    // --continue: resume the most recent session in this cwd. No positional
+    // prompt (the session continues from where it left off). Same permission
+    // posture as the first run + deny `gh pr merge` (验收 = 人 merge, 铁律).
+    let args = vec![
+        agent.resume_flag.to_string(),
+        agent.yolo_flag.to_string(),
+        "--disallowedTools".to_string(),
+        "Bash(gh pr merge)".to_string(),
+    ];
 
     Ok(LaunchPlan {
         binary: agent.launch_cmd.to_string(),
@@ -323,9 +390,21 @@ pub struct SkillOutput {
 /// a self-labeled mock ([`MockInteractiveExecutor`]).
 #[async_trait]
 pub trait InteractiveExecutor: Send + Sync {
-    /// Run one interactive skill session. Returns when the session ends
-    /// (user exits the terminal / process exits / wall-clock timeout).
+    /// Run one interactive skill session (first run). Returns when the
+    /// session ends (user exits the terminal / process exits / wall-clock
+    /// timeout).
     async fn run_skill(&self, plan: &LaunchPlan, ctx: &RunCtx) -> Result<SkillOutput, ExecError>;
+
+    /// Resume an existing interactive skill session (V1 Issue2 Phase2a).
+    /// The plan is built by [`build_resume_plan`] (`--continue`, no new
+    /// prompt). The session persists under `~/.claude/projects/<encoded-
+    /// cwd>/` from the first run; resume re-enters it. Same lifecycle as
+    /// `run_skill` (exits when the process exits / wall-clock timeout).
+    async fn run_skill_resume(
+        &self,
+        plan: &LaunchPlan,
+        ctx: &RunCtx,
+    ) -> Result<SkillOutput, ExecError>;
 }
 
 // ─── InteractiveCliExecutor (Phase 1 (c) real spawn) ──────────────────
@@ -388,7 +467,6 @@ impl Default for InteractiveCliExecutor {
 impl InteractiveExecutor for InteractiveCliExecutor {
     async fn run_skill(&self, plan: &LaunchPlan, _ctx: &RunCtx) -> Result<SkillOutput, ExecError> {
         let binary = self.claude_binary.as_deref().unwrap_or(&plan.binary);
-
         // Build the spawn command. On Windows, spawning a console process
         // from a GUI app creates a new console window (the user sees the
         // agent). On macOS, we use osascript to open Terminal (the osascript
@@ -454,6 +532,18 @@ impl InteractiveExecutor for InteractiveCliExecutor {
             })?;
             return self.await_child(child).await;
         }
+    }
+
+    async fn run_skill_resume(
+        &self,
+        plan: &LaunchPlan,
+        ctx: &RunCtx,
+    ) -> Result<SkillOutput, ExecError> {
+        // Resume uses the same spawn logic as the first run — the LaunchPlan
+        // carries the resume args (`--continue` instead of the startup plan's
+        // `--append-system-prompt <bridge> <skill_body>`). The process spawn,
+        // terminal window, and wall-clock timeout are identical.
+        self.run_skill(plan, ctx).await
     }
 }
 
@@ -531,6 +621,19 @@ impl InteractiveExecutor for MockInteractiveExecutor {
         Ok(SkillOutput {
             completed: true,
             summary: "【mock】交互式技能会话完成(流程演示,未真 spawn claude)".to_string(),
+        })
+    }
+
+    async fn run_skill_resume(
+        &self,
+        _plan: &LaunchPlan,
+        _ctx: &RunCtx,
+    ) -> Result<SkillOutput, ExecError> {
+        // Resume: no placeholder write (the first run already wrote it).
+        // Self-labeled 【mock】 — never pretend to be real execution.
+        Ok(SkillOutput {
+            completed: true,
+            summary: "【mock】交互式技能会话 resume 完成(流程演示,未真 spawn claude)".to_string(),
         })
     }
 }
@@ -676,6 +779,72 @@ mod tests {
         assert!(content.contains("【mock】"));
         assert!(content.contains("schema_version = 1"));
         assert!(content.contains("[north_star]"));
+    }
+
+    #[test]
+    fn build_resume_plan_claude_supported() {
+        let tmp = tempfile_dir();
+        let plan = build_resume_plan(&CLAUDE, &tmp).expect("claude is supported");
+        assert_eq!(plan.binary, "claude");
+        // --continue --dangerously-skip-permissions --disallowedTools "Bash(gh pr merge)"
+        assert!(plan.args.contains(&"--continue".to_string()));
+        assert!(plan
+            .args
+            .contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(plan.args.contains(&"--disallowedTools".to_string()));
+        assert!(plan.args.contains(&"Bash(gh pr merge)".to_string()));
+        // No startup-plan artifacts: no --append-system-prompt, no positional
+        // skill body (resume re-enters the existing session).
+        assert!(!plan.args.iter().any(|a| a == "--append-system-prompt"));
+        assert_eq!(plan.args.len(), 4); // exactly the 4 resume args
+                                        // Env vars stripped
+        assert!(!plan.env.contains_key("ANTHROPIC_AUTH_TOKEN"));
+        assert!(!plan.env.contains_key("CLAUDECODE"));
+        // Cwd preserved (matters: --continue is scoped to cwd)
+        assert_eq!(plan.cwd, tmp);
+    }
+
+    #[test]
+    fn build_resume_plan_cursor_unsupported() {
+        let tmp = tempfile_dir();
+        let result = build_resume_plan(&CURSOR, &tmp);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("cursor"));
+        assert!(err.to_string().contains("暂不支持"));
+    }
+
+    #[tokio::test]
+    async fn mock_executor_resume_returns_completed_no_placeholder_write() {
+        let tmp = tempfile_dir();
+        // Simulate a first run that wrote the placeholder.
+        let skill_body = "# 找指标\n\nskill body";
+        let bridge = "bridge prompt";
+        let startup_plan = build_startup_plan(&CLAUDE, skill_body, bridge, &tmp).unwrap();
+        let ctx = RunCtx {
+            project: bw_core::ProjectId::nil(),
+            workflow: bw_core::WorkflowId::nil(),
+        };
+        let mock = MockInteractiveExecutor::new();
+        let _ = mock.run_skill(&startup_plan, &ctx).await.unwrap();
+        let metrics_path = tmp.join(".bw").join("metrics.toml");
+        let mtime_before = std::fs::metadata(&metrics_path)
+            .expect("placeholder exists from first run")
+            .modified()
+            .unwrap();
+
+        // Resume: should NOT rewrite the placeholder (it already exists).
+        let resume_plan = build_resume_plan(&CLAUDE, &tmp).unwrap();
+        let output = mock.run_skill_resume(&resume_plan, &ctx).await.unwrap();
+        assert!(output.completed);
+        assert!(output.summary.contains("【mock】"));
+        assert!(output.summary.contains("resume"));
+        // The placeholder file was NOT rewritten (mtime unchanged).
+        let mtime_after = std::fs::metadata(&metrics_path)
+            .expect("placeholder still exists")
+            .modified()
+            .unwrap();
+        assert_eq!(mtime_before, mtime_after);
     }
 
     /// Create a temp directory for test isolation.

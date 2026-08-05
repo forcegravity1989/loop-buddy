@@ -206,6 +206,17 @@ impl SqliteStore {
         // 来是空串,和"这张 Issue 没有标配 Skill 关联"这个真实状态完全一致
         // ——存量 Issue 全部是手建/Autopilot 建,从未挂过标配 Skill。
         add_column_if_missing(&pool, "issue", "standard_skill", "TEXT NOT NULL DEFAULT ''").await?;
+        // V1 Issue2 Phase2a: interactive session started flag. Old DBs open
+        // with 0 (= first run, build_startup_plan) — identical to the
+        // pre-Phase2a "never spawned" state. Only set to 1 right before the
+        // first interactive spawn; never reset.
+        add_column_if_missing(
+            &pool,
+            "issue",
+            "interactive_started",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
         // T2 (plan/12 §6): Skill's source unified onto HubSource. Old rows'
         // bare `source='official'`/`'self_built'` text values already match
         // the new tag vocabulary 1:1 (no rewrite needed) — only the new
@@ -2539,8 +2550,8 @@ impl Store for SqliteStore {
         // query-builder dependency.
         let mut sql = String::from(
             "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
-                    priority, assignee, settled_at, blocked_reason, standard_skill, created_at,
-                    updated_at
+                    priority, assignee, settled_at, blocked_reason, standard_skill,
+                    interactive_started, created_at, updated_at
              FROM issue WHERE project_id=?",
         );
         if stage.is_some() {
@@ -2565,7 +2576,7 @@ impl Store for SqliteStore {
         let row = sqlx::query(
             "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
                     priority, assignee, settled_at, blocked_reason, standard_skill,
-                    created_at, updated_at
+                    interactive_started, created_at, updated_at
              FROM issue WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -2636,6 +2647,19 @@ impl Store for SqliteStore {
     async fn set_issue_pr_number(&self, id: IssueId, pr_number: u32) -> Result<()> {
         sqlx::query("UPDATE issue SET pr_number=?, updated_at=? WHERE id=?")
             .bind(pr_number as i64)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// V1 Issue2 Phase2a: mark an interactive issue's session as started
+    /// (first ▶跑 spawned claude). Called once, right before the first
+    /// interactive spawn; never reset. The App layer calls this only after
+    /// deciding this is a first run (not a resume).
+    async fn set_issue_interactive_started(&self, id: IssueId) -> Result<()> {
+        sqlx::query("UPDATE issue SET interactive_started=1, updated_at=? WHERE id=?")
             .bind(now_unix())
             .bind(id.uuid().to_string())
             .execute(&self.pool)
@@ -2989,6 +3013,7 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
             .get::<Option<String>, _>("blocked_reason")
             .filter(|s| !s.is_empty()),
         standard_skill: r.get("standard_skill"),
+        interactive_started: r.get::<i64, _>("interactive_started") != 0,
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     })

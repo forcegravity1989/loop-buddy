@@ -42,10 +42,10 @@ use bw_core::{
     SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    allowed_tools_arg, build_bridge_system_prompt, build_startup_plan, evidence, ClaudeCliConfig,
-    ClaudeCliExecutor, Engine, GitCommit, GithubRepoSummary, InteractiveCliExecutor,
-    InteractiveExecutor, MockInteractiveExecutor, PermissionMode, PhaseNode, RunCtx, RunEvent,
-    SkillOutput, UnsupportedCliExecutor, CLAUDE,
+    allowed_tools_arg, build_bridge_system_prompt, build_resume_plan, build_startup_plan, evidence,
+    ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit, GithubRepoSummary,
+    InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
+    PhaseNode, RunCtx, RunEvent, SkillOutput, UnsupportedCliExecutor, CLAUDE,
 };
 use bw_store::{
     AgentEdit, GlobalHandoffRow, MetricDefSync, MetricRole, MetricsFileSync, NewAgent, NewArtifact,
@@ -1128,6 +1128,13 @@ struct ActiveRun {
     proj: ProjectRow,
     issue_ws: Option<PathBuf>,
     pr_eligible: bool,
+    /// V1 Issue2 Phase2a: whether this run is a resume (not the first run).
+    /// Set from `issue.interactive_started` at dispatch time. The settle arm
+    /// uses it to pick `finalize_run_interactive_resume` (artifact scan only,
+    /// no uses bump — settle-once) vs `finalize_run_interactive` (first run:
+    /// uses + artifacts). Both skip `issue_run_tail` (no MR creation — agent
+    /// does it in-session; InReview from polling).
+    is_resume: bool,
 }
 
 /// plan/17 S3: the shared 起手 prefix of an issue-run, returned by
@@ -1211,6 +1218,12 @@ pub struct AppState {
     /// internal cache of live GitHub data, not persisted — it's a direct
     /// read-through, not one of this app's own derived Signals.
     pub github_repos: Vec<GithubRepoSummary>,
+    /// V1 Issue2 Phase2a: unix ts of the last InReview poll for interactive
+    /// issues. The poller checks codehub/github for open MRs on interactive
+    /// issues that are InProgress + `interactive_started` + `pr_number == 0`.
+    /// Throttled to once per 5 minutes so it doesn't hit the remote every
+    /// `tick_scheduler` fire. `0` = never polled (first tick runs it).
+    pub last_inreview_poll: i64,
 }
 
 /// P4: everything the Issue-detail overlay shows, assembled read-only at
@@ -1249,6 +1262,7 @@ impl Default for AppState {
             cron_effectiveness: None,
             issue_detail: None,
             github_repos: Vec::new(),
+            last_inreview_poll: 0,
         }
     }
 }
@@ -1526,6 +1540,97 @@ impl App {
 
     async fn refresh_activity(&mut self) -> Result<(), AppError> {
         self.state.recent_activity = self.store.list_recent_handoffs(50).await?;
+        Ok(())
+    }
+
+    /// V1 Issue2 Phase2a: poll codehub/github for open MRs on interactive
+    /// issues that are InProgress + `interactive_started` + `pr_number == 0`.
+    /// When an open MR is found (读回为证: buddy checks the remote itself,
+    /// not agent self-report), it backfills `pr_number` and transitions to
+    /// InReview (D3: 评审中由存在开放 PR 派生). Never reaches Done — that
+    /// edge stays exclusively a human `MergeIssuePr`/`TransitionIssue`.
+    ///
+    /// Covers BOTH codehub and github (unlike `collect_github_issue_drift`
+    /// which is github-only and manual-trigger). Called from
+    /// `tick_scheduler`, throttled to once per 5 minutes
+    /// (`INREVIEW_POLL_INTERVAL_SECS`) so it doesn't hit the remote every
+    /// tick. A failed remote query degrades honestly (toast + skip this
+    /// issue this round), never fabricating an InReview.
+    async fn poll_interactive_inreview(&mut self) -> Result<(), AppError> {
+        for proj in self.state.projects.clone() {
+            let remote_path = proj.remote_path.trim();
+            if remote_path.is_empty() {
+                continue; // no remote = no MR to detect
+            }
+            let remote = match bw_engine::remote::Remote::for_project(
+                &proj.provider,
+                &proj.remote_host,
+                remote_path,
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("{} · InReview 轮询", proj.name),
+                        ok: false,
+                        detail: format!("远端 provider 不可用,跳过:{e}"),
+                    });
+                    continue;
+                }
+            };
+            // Interactive issues in InProgress + interactive_started + no PR.
+            let candidates: Vec<_> = self
+                .store
+                .list_issues(proj.id, None, Some(IssueStatus::InProgress))
+                .await?
+                .into_iter()
+                .filter(|i| {
+                    i.interactive_started
+                        && i.pr_number == 0
+                        && i.github_number != 0
+                        && Self::is_interactive_skill(&i.standard_skill)
+                })
+                .collect();
+            for issue in candidates {
+                let branch = bw_engine::github::issue_branch(issue.github_number);
+                let open_mr = match remote.open_mr_for_branch(&branch).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.emit(Event::ConnectorSynced {
+                            name: format!("#{} · InReview 轮询", issue.number),
+                            ok: false,
+                            detail: format!("查开放 MR 失败,该活保持原状可重试:{e}"),
+                        });
+                        continue;
+                    }
+                };
+                let Some(pr) = open_mr else {
+                    continue; // no open MR yet — honest "nothing to review"
+                };
+                // Backfill pr_number + transition InReview (读回为证).
+                self.store.set_issue_pr_number(issue.id, pr).await?;
+                // D3: 评审中由「存在开放 PR」派生. Re-read the current
+                // status (it was InProgress when we listed; the transition
+                // guard `can_transition_to` is the single source of truth).
+                let cur = self.store.get_issue(issue.id).await?;
+                if let Some(cur) = cur {
+                    if cur.status.can_transition_to(IssueStatus::InReview) {
+                        self.store
+                            .transition_issue(issue.id, IssueStatus::InReview)
+                            .await?;
+                    }
+                }
+                self.emit(Event::ConnectorSynced {
+                    name: format!("#{} · InReview", issue.number),
+                    ok: true,
+                    detail: format!(
+                        "轮询检测到开放 PR/MR #{pr},已关联 Issue #{} 并转入评审中",
+                        issue.github_number
+                    ),
+                });
+            }
+        }
+        self.refresh_issues().await?;
+        self.emit(Event::IssuesChanged);
         Ok(())
     }
 
@@ -2244,6 +2349,38 @@ impl App {
         } else {
             Err(AppError::Engine(skill_output.summary))
         }
+    }
+
+    /// V1 Issue2 Phase2a: the resume path's settle accounting — a slimmed
+    /// `finalize_run_interactive` that does artifact scan ONLY (no agent/skill
+    /// `uses` bump — settle-once: the first run already counted the use; no
+    /// MR creation — the agent creates it in-session; no status transition —
+    /// InReview comes from the `poll_interactive_inreview` poller). Called
+    /// from `run_issue_settle` when `ar.is_resume` is true.
+    async fn finalize_run_interactive_resume(
+        &mut self,
+        proj: &ProjectRow,
+        p: ProjectId,
+        issue_id: Option<IssueId>,
+        stage: StageKind,
+    ) -> Result<(), AppError> {
+        if !proj.workspace_path.trim().is_empty() {
+            if let Ok(fresh) = self
+                .scan_and_register_artifacts(
+                    p,
+                    &proj.workspace_path,
+                    None, // no workflow_run row for interactive
+                    Some(stage),
+                    issue_id,
+                )
+                .await
+            {
+                if fresh > 0 {
+                    self.emit(Event::ArtifactsRegistered { fresh });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// T6 (plan/12 §3): resolve which Agent CLI executes an issue-run and
@@ -3800,6 +3937,26 @@ impl App {
 
             fired.push(c.id);
         }
+        // V1 Issue2 Phase2a: InReview detection poller (throttled). Checks
+        // codehub/github for open MRs on interactive issues (InProgress +
+        // interactive_started + pr_number == 0). Not a cron task — a
+        // separate periodic check that rides `tick_scheduler`'s cadence
+        // but throttles to once per 5 min so it doesn't hit the remote
+        // every tick. Never auto-Done (铁律) — only backfills pr_number +
+        // transitions to InReview.
+        let now_ts = now().unix_timestamp();
+        if now_ts - self.state.last_inreview_poll >= INREVIEW_POLL_INTERVAL_SECS {
+            self.state.last_inreview_poll = now_ts;
+            // Best-effort: a poller failure is recorded as a toast but never
+            // blocks the scheduler's cron-fired list from returning.
+            if let Err(e) = self.poll_interactive_inreview().await {
+                self.emit(Event::ConnectorSynced {
+                    name: "InReview 轮询".into(),
+                    ok: false,
+                    detail: format!("本轮 InReview 检测失败,下轮重试:{e}"),
+                });
+            }
+        }
         Ok(fired)
     }
 
@@ -4010,16 +4167,32 @@ impl App {
     /// loop is NOT here. Both the inline path (`run_issue_body`) and the
     /// backgrounded path (`run_issue_backgrounded`) start here, so the
     /// spec / worktree / guard setup is never duplicated.
-    async fn prepare_issue_run(&mut self, id: IssueId) -> Result<IssueRunPrep, AppError> {
+    ///
+    /// V1 Issue2 Phase2a: `resume` controls the interactive resume path.
+    /// When `true` (interactive issue with `interactive_started = true`
+    /// re-clicked ▶跑): skip the status check (Done/InReview can resume —
+    /// the session persists, no status change happens) and skip the
+    /// InProgress transition (the issue stays in its current state). The
+    /// worktree is still provisioned (for the cwd `--continue` needs). One-
+    /// shot callers always pass `false`.
+    async fn prepare_issue_run(
+        &mut self,
+        id: IssueId,
+        resume: bool,
+    ) -> Result<IssueRunPrep, AppError> {
         let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
         // A5-F: only work not yet settled/parked/under-review/blocked
         // can be (re)started this way. InProgress is a legal starting
         // point too — it's the retry path after an honest failure
         // (the issue stays InProgress on error, never faked forward).
-        if !matches!(
-            issue.status,
-            IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
-        ) {
+        // V1 Issue2 Phase2a: resume bypasses this check — a Done/InReview
+        // issue can resume its interactive session (no status change).
+        if !resume
+            && !matches!(
+                issue.status,
+                IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
+            )
+        {
             return Err(AppError::Invalid(format!(
                 "#{} 处于{},不能直接运行",
                 issue.number,
@@ -4102,7 +4275,10 @@ impl App {
         // retry (issue already InProgress from a prior failed run)
         // skips this — X→X is not a legal table edge, and there's
         // nothing to change anyway.
-        if issue.status != IssueStatus::InProgress {
+        // V1 Issue2 Phase2a: resume skips this entirely — the issue
+        // stays in its current state (InProgress/InReview/Done); only
+        // the session is resumed, no status transition.
+        if !resume && issue.status != IssueStatus::InProgress {
             self.store
                 .transition_issue(id, IssueStatus::InProgress)
                 .await?;
@@ -4327,7 +4503,7 @@ impl App {
     /// `Command::RunIssue`'s doc for the state-machine contract (InProgress
     /// at start, InReview on success via the PR-derive rule, never auto-Done).
     async fn run_issue_body(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
-        let prep = self.prepare_issue_run(id).await?;
+        let prep = self.prepare_issue_run(id, false).await?;
         let IssueRunPrep {
             issue,
             proj,
@@ -4369,7 +4545,7 @@ impl App {
         session: SessionId,
         id: IssueId,
     ) -> Result<(), AppError> {
-        let prep = self.prepare_issue_run(id).await?;
+        let prep = self.prepare_issue_run(id, false).await?;
         let p = prep.issue.project_id;
         let IssueRunPrep {
             issue,
@@ -4462,6 +4638,7 @@ impl App {
             proj,
             issue_ws,
             pr_eligible,
+            is_resume: false,
         });
         Ok(())
     }
@@ -4489,7 +4666,13 @@ impl App {
         _session: SessionId,
         id: IssueId,
     ) -> Result<(), AppError> {
-        let prep = self.prepare_issue_run(id).await?;
+        // V1 Issue2 Phase2a: first-run vs resume. `interactive_started`
+        // is set to true right before the first spawn (below); a re-click
+        // of ▶跑 on an interactive issue with `interactive_started = true`
+        // routes to the resume path (`claude --continue`).
+        let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+        let is_resume = issue.interactive_started;
+        let prep = self.prepare_issue_run(id, is_resume).await?;
         let p = prep.issue.project_id;
         let issue = prep.issue.clone();
         let standard_skill = prep.issue.standard_skill.clone();
@@ -4502,52 +4685,64 @@ impl App {
             guard,
         } = prep;
 
-        // Build PlaybookCtx for the bridge system prompt (same fields as
-        // `prepare_issue_run` builds internally for the stage-playbook spec).
-        let handoff_note = self
-            .store
-            .list_handoffs(p)
-            .await?
-            .first()
-            .map(|h| h.note.clone())
-            .unwrap_or_default();
-        let workspace_hint = if proj.workspace_path.trim().is_empty() {
-            "（未配置真实工作区 —— 交互式会话在 MockInteractiveExecutor 上,产出仅为流程演示）"
-                .to_string()
-        } else {
-            format!(
-                "工作区 {}（git 仓库）。产出落于此;先查看现状再动手。",
-                proj.workspace_path.trim()
-            )
-        };
-        let playbook_ctx = bw_core::playbook::PlaybookCtx {
-            project_name: proj.name.clone(),
-            project_kind: proj.kind.clone(),
-            project_desc: proj.desc.clone(),
-            benchmark: proj.benchmark.clone(),
-            opportunity: proj.opportunity.clone(),
-            north_star: proj.north_star.clone(),
-            ns_def: proj.ns_def.clone(),
-            handoff_note,
-            workspace_hint,
-        };
-
-        // Fetch the raw skill body (full content, headings NOT demoted —
-        // it goes into the session as the first user message).
-        let skill_body = self.fetch_skill_body(&standard_skill).await?;
-        if skill_body.trim().is_empty() {
-            return Err(AppError::Invalid(format!(
-                "交互式技能 `{standard_skill}` 的正文为空 —— 无法启动交互式会话"
-            )));
-        }
-
-        // Build the bridge system prompt + launch plan.
-        let bridge_prompt = build_bridge_system_prompt(&playbook_ctx, &standard_skill);
         let workspace_cwd = issue_ws
             .as_deref()
             .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
-        let plan = build_startup_plan(&CLAUDE, &skill_body, &bridge_prompt, workspace_cwd)
-            .map_err(|e| AppError::Engine(e.to_string()))?;
+
+        // Build the plan: startup (first run) or resume (--continue).
+        let plan = if is_resume {
+            // Resume: no new prompt, no bridge system prompt. The session
+            // persists under ~/.claude/projects/<encoded-cwd>/ from the
+            // first run; `--continue` re-enters it.
+            build_resume_plan(&CLAUDE, workspace_cwd)
+                .map_err(|e| AppError::Engine(e.to_string()))?
+        } else {
+            // First run: fetch skill body + build bridge system prompt.
+            let handoff_note = self
+                .store
+                .list_handoffs(p)
+                .await?
+                .first()
+                .map(|h| h.note.clone())
+                .unwrap_or_default();
+            let workspace_hint = if proj.workspace_path.trim().is_empty() {
+                "（未配置真实工作区 —— 交互式会话在 MockInteractiveExecutor 上,产出仅为流程演示）"
+                    .to_string()
+            } else {
+                format!(
+                    "工作区 {}（git 仓库）。产出落于此;先查看现状再动手。",
+                    proj.workspace_path.trim()
+                )
+            };
+            let playbook_ctx = bw_core::playbook::PlaybookCtx {
+                project_name: proj.name.clone(),
+                project_kind: proj.kind.clone(),
+                project_desc: proj.desc.clone(),
+                benchmark: proj.benchmark.clone(),
+                opportunity: proj.opportunity.clone(),
+                north_star: proj.north_star.clone(),
+                ns_def: proj.ns_def.clone(),
+                handoff_note,
+                workspace_hint,
+            };
+            let skill_body = self.fetch_skill_body(&standard_skill).await?;
+            if skill_body.trim().is_empty() {
+                return Err(AppError::Invalid(format!(
+                    "交互式技能 `{standard_skill}` 的正文为空 —— 无法启动交互式会话"
+                )));
+            }
+            let bridge_prompt = build_bridge_system_prompt(&playbook_ctx, &standard_skill);
+            build_startup_plan(&CLAUDE, &skill_body, &bridge_prompt, workspace_cwd)
+                .map_err(|e| AppError::Engine(e.to_string()))?
+        };
+
+        // Mark interactive_started before spawning (first run only) so a
+        // re-click routes to resume. Set before spawn: even if spawn fails,
+        // the next attempt re-tries as resume (which is safe — `--continue`
+        // on a non-existent session just starts a fresh one in claude's CLI).
+        if !is_resume {
+            self.store.set_issue_interactive_started(id).await?;
+        }
 
         // Capture head_before (for potential evidence; Phase 1 doesn't
         // record HEAD diff for interactive runs — no workflow_run row).
@@ -4586,10 +4781,12 @@ impl App {
         if let Some(settle_tx) = self.settle_tx.clone() {
             // ── Backgrounded (desktop kernel) ──
             let handle = tokio::spawn(async move {
-                let result = executor
-                    .run_skill(&plan, &ctx)
-                    .await
-                    .map_err(|e| AppError::Engine(e.to_string()));
+                let result = if is_resume {
+                    executor.run_skill_resume(&plan, &ctx).await
+                } else {
+                    executor.run_skill(&plan, &ctx).await
+                }
+                .map_err(|e| AppError::Engine(e.to_string()));
                 let _ = settle_tx.send(SettleReq {
                     project: p,
                     issue: id,
@@ -4612,19 +4809,32 @@ impl App {
                 proj,
                 issue_ws,
                 pr_eligible,
+                is_resume,
             });
             Ok(())
         } else {
             // ── Inline (examples / headless drivers) ──
-            let skill_output = executor
-                .run_skill(&plan, &ctx)
-                .await
-                .map_err(|e| AppError::Engine(e.to_string()))?;
-            let run = self
-                .finalize_run_interactive(&spec, &proj, p, Some(id), skill_output)
-                .await;
-            self.issue_run_tail(issue, proj, issue_ws, pr_eligible, run, guard)
-                .await
+            let skill_output = if is_resume {
+                executor.run_skill_resume(&plan, &ctx).await
+            } else {
+                executor.run_skill(&plan, &ctx).await
+            }
+            .map_err(|e| AppError::Engine(e.to_string()))?;
+            // V1 Issue2 Phase2a: interactive path skips issue_run_tail (no
+            // MR creation — agent does it in-session; InReview comes from
+            // polling). First run: uses + artifacts. Resume: artifacts only
+            // (settle-once — uses were bumped on the first run).
+            if is_resume {
+                self.finalize_run_interactive_resume(&proj, p, Some(id), issue.stage)
+                    .await?;
+            } else {
+                let _ = self
+                    .finalize_run_interactive(&spec, &proj, p, Some(id), skill_output)
+                    .await?;
+            }
+            // Guard drops on return (worktree cleanup). Issue stays in its
+            // current state (InProgress on first run; unchanged on resume).
+            Ok(())
         }
     }
 
@@ -4649,11 +4859,13 @@ impl App {
             self.state.active_run = Some(ar);
             return Ok(());
         }
-        // V1 Issue2 Phase1: branch on `interactive` — an interactive skill
-        // session skips the phase-based `finalize_run` (no `workflow_run` row,
-        // no `LoopEnd`) and calls `finalize_run_interactive` instead (agent/
-        // skill uses + artifact scan, no HEAD diff). Both paths converge on
-        // `issue_run_tail` for the PR / transition.
+        // V1 Issue2 Phase2a: interactive sessions skip `issue_run_tail`
+        // entirely (no MR creation — the agent creates it in-session; no
+        // InReview transition from the run — polling detects open MR).
+        // First run: `finalize_run_interactive` (uses + artifacts). Resume:
+        // `finalize_run_interactive_resume` (artifacts only, settle-once).
+        // Phase-loop sessions keep `finalize_run` + `issue_run_tail`.
+        let interactive = matches!(req.outcome, SettleOutcome::Interactive(_));
         let outcome = match req.outcome {
             SettleOutcome::PhaseLoop(Ok((end, last_run_log, final_run_ok))) => {
                 self.finalize_run(
@@ -4671,26 +4883,48 @@ impl App {
             }
             SettleOutcome::PhaseLoop(Err(e)) => Err(e),
             SettleOutcome::Interactive(Ok(skill_output)) => {
-                self.finalize_run_interactive(
-                    &ar.finalize.spec,
-                    &ar.finalize.proj,
-                    ar.finalize.p,
-                    ar.finalize.issue_id,
-                    skill_output,
-                )
-                .await
+                if ar.is_resume {
+                    self.finalize_run_interactive_resume(
+                        &ar.finalize.proj,
+                        ar.finalize.p,
+                        ar.finalize.issue_id,
+                        ar.issue.stage,
+                    )
+                    .await
+                    .map(|_| RunOutcome::Completed)
+                } else {
+                    self.finalize_run_interactive(
+                        &ar.finalize.spec,
+                        &ar.finalize.proj,
+                        ar.finalize.p,
+                        ar.finalize.issue_id,
+                        skill_output,
+                    )
+                    .await
+                }
             }
             SettleOutcome::Interactive(Err(e)) => Err(e),
         };
-        self.issue_run_tail(
-            ar.issue,
-            ar.proj,
-            ar.issue_ws,
-            ar.pr_eligible,
-            outcome,
-            ar.guard,
-        )
-        .await
+        if interactive {
+            // No `issue_run_tail` for interactive — the agent creates the MR
+            // in-session and the InReview poller detects it. Guard drops
+            // here (worktree cleanup); the issue stays in its current state
+            // (InProgress on first run, unchanged on resume). Never auto-Done.
+            drop(ar.guard);
+            self.refresh_issues().await?;
+            self.emit(Event::IssuesChanged);
+            outcome.map(|_| ())
+        } else {
+            self.issue_run_tail(
+                ar.issue,
+                ar.proj,
+                ar.issue_ws,
+                ar.pr_eligible,
+                outcome,
+                ar.guard,
+            )
+            .await
+        }
     }
 
     /// plan/17 S3 (① 中止): abort the in-flight backgrounded run on an issue.
@@ -7750,6 +7984,13 @@ impl App {
 fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
 }
+
+/// V1 Issue2 Phase2a: InReview poller throttle. The poller checks codehub/
+/// github for open MRs on interactive issues at most once per 5 minutes —
+/// it rides `tick_scheduler`'s cadence but doesn't hit the remote every
+/// tick (a tick may fire every 60s; 5 min is a reasonable detection lag
+/// without flooding the remote API).
+const INREVIEW_POLL_INTERVAL_SECS: i64 = 5 * 60;
 
 /// plan18-③ · `script` connector 的 config 解析结构。config 是 JSON 字符串,
 /// 存项目仓里既有采集脚本的相对工作区路径 + 输出文件 + 跑脚本的命令。

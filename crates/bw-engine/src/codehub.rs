@@ -227,6 +227,55 @@ pub async fn create_mr(
     Ok(crate::github::PrOpened::Created(iid))
 }
 
+/// `codehub-cli mr list --source-branch <branch> --state opened --jq .[0].iid`
+/// → the iid of the first open MR sourced from `branch`, or `None` if no
+/// such MR exists. Read-only, zero repo side effects. Used by the InReview
+/// detection poller (V1 Issue2 Phase2a) to detect an MR the agent opened
+/// in-session — buddy doesn't create it (the agent does), buddy just reads
+/// it back (读回为证, not agent self-report).
+///
+/// Mirrors the existing `create_mr` adoption path's `mr list` call exactly
+/// (same flags, same `--jq .[0].iid` extraction). `Ok(None)` = no open MR
+/// for that branch — the honest "nothing to review yet" answer, not an
+/// error.
+pub async fn open_mr_for_branch(
+    host: &str,
+    path: &str,
+    branch: &str,
+) -> Result<Option<u32>, CodehubError> {
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "list",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--source-branch",
+            branch,
+            "--state",
+            "opened",
+            "--jq",
+            ".[0].iid",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() || text == "null" {
+        return Ok(None);
+    }
+    text.parse::<u32>()
+        .map(Some)
+        .map_err(|_| CodehubError::Parse(format!("无法解析 codehub MR iid:{text:?}")))
+}
+
 /// `codehub-cli mr merge <iid> --squash -y` — the codehub parity of
 /// [`crate::github::merge_pr`]: the human验收 action that integrates the
 /// source branch into the target. Squash-merges (matches github's `--squash`).

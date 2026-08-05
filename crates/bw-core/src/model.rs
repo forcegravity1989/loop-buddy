@@ -2215,6 +2215,16 @@ pub struct Issue {
     /// seeded by C9+C10) is an honest skip, never an error.
     #[serde(default)]
     pub standard_skill: String,
+    /// V1 Issue2 Phase2a: whether the interactive skill session has been
+    /// started (first ▶跑 completed the 起手 prefix + spawned claude with
+    /// the skill body). `false` = first run will use `build_startup_plan`
+    /// (positional prompt + skill + bridge system prompt); `true` = resume
+    /// path (`claude --continue` — no new prompt, the session persists under
+    /// `~/.claude/projects/<encoded-cwd>/`). Set to `true` right before the
+    /// first spawn; never reset. Used to decide first-run vs resume in
+    /// `run_issue_interactive`.
+    #[serde(default)]
+    pub interactive_started: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
