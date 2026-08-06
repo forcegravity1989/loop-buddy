@@ -123,7 +123,8 @@ async fn main() {
         .iter()
         .any(|r| r.get::<String, _>("name") == "stage_ref");
     println!(
-        "skill.stage_ref 列是否仍在: {has_stage_ref}(本阶段应为 true —— 真删排在 SR4,在所有读侧迁完之后)"
+        "skill.stage_ref 列是否仍在: {has_stage_ref}(SR4 起应为 false —— 旧列已真删,\
+         连同它的老索引 idx_skill_stage;读到 true 说明迁移没跑到)"
     );
 
     println!("=================================================");
