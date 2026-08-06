@@ -2898,10 +2898,10 @@ window.__bw_term_drain = function() {
 };
 "#;
 
-/// xterm.js init script (async IIFE). Loads CSS + JS + Fit addon locally,
-/// creates the terminal, sets up onData/onResize callbacks, flushes the
-/// pre-handler buffer, and — on a **re-attach** — re-homes an existing
-/// terminal into whatever div exists right now.
+/// xterm.js init script (async IIFE). Creates the terminal from the bundles
+/// `TerminalWidget` already eval'd, sets up onData/onResize callbacks,
+/// flushes the pre-handler buffer, and — on a **re-attach** — re-homes an
+/// existing terminal into whatever div exists right now.
 ///
 /// The re-attach path exists because `WorkflowStage` (and this widget with
 /// it) fully unmounts whenever the user leaves the workflow panel: `Center`
@@ -2985,35 +2985,13 @@ return (async function() {
         return { ok: true, reason: 'already-initialized' };
     }
 
-    // Load CSS (local, no CDN — CDN 不稳定会导致 xterm 不初始化 → stdin/stdout 死).
-    if (!document.getElementById('__bw_xterm_css')) {
-        var link = document.createElement('link');
-        link.id = '__bw_xterm_css';
-        link.rel = 'stylesheet';
-        link.href = '/xterm.css';
-        document.head.appendChild(link);
-    }
-
-    // Load xterm.js (local).
-    if (!window.Terminal) {
-        await new Promise(function(resolve, reject) {
-            var s = document.createElement('script');
-            s.src = '/xterm.min.js';
-            s.onload = resolve;
-            s.onerror = function() { reject(new Error('xterm.js load failed (local)')); };
-            document.head.appendChild(s);
-        });
-    }
-
-    // Load Fit addon (local).
-    if (!window.FitAddon) {
-        await new Promise(function(resolve, reject) {
-            var s = document.createElement('script');
-            s.src = '/xterm-addon-fit.min.js';
-            s.onload = resolve;
-            s.onerror = function() { reject(new Error('fit addon load failed (local)')); };
-            document.head.appendChild(s);
-        });
+    // xterm.js / Fit addon / CSS are already in scope: `TerminalWidget`
+    // eval'd the two `include_str!`-bundled UMD files and injected the
+    // stylesheet inline before running this script. No fetch here — the
+    // whole point of bundling them (`0df7897`) was that a failed network
+    // load aborts this IIFE and leaves the session with no terminal at all.
+    if (!window.Terminal || !window.FitAddon) {
+        return { ok: false, reason: 'xterm bundles not loaded' };
     }
 
     // Create terminal.
