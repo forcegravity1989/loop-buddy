@@ -8558,15 +8558,6 @@ impl App {
             // between session end and the last keystroke is possible).
             Command::TerminalInput { bytes } => {
                 if let Some(tx) = &self.state.pty_input_tx {
-                    if let Ok(mut f) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("D:\\2026\\code\\loop-buddy\\pty-stdin-diag.log")
-                    {
-                        use std::io::Write;
-                        let _ = writeln!(f, "[stdin-app] TerminalInput {} bytes (pty_input_tx live), →PtyInput::Bytes", bytes.len());
-                        let _ = f.flush();
-                    }
                     let _ = tx.send(bw_engine::PtyInput::Bytes(bytes));
                 }
             }
