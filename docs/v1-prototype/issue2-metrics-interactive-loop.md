@@ -1,6 +1,7 @@
 # V1 Issue 2 · 找指标/绑数据 交互式闭环 + 采集装置归位 — 开发事实源
 
 > 走 (c):现有 buddy app 当底。本文是设计 + 开发唯一事实源(SubAgent 照此建)。5 步法:scope delta ✅(经多轮 grilling 重塑)→ 对齐原型(本文)→ 开发 → 验证 → 填指南。Issue 已提(Issue 2)。
+> ⚡ 遗留问题统一归拢于 `docs/v1-prototype/LEFTOVERS.md`(唯一完整清单,W1-1~4/W2-1~7/W3-1~9/V1-P1);本文各「遗留/未决/后续」条目(§6 偏差/未决、§10.5~10.7 等)为设计过程原文留存,读遗留以 LEFTOVERS 为准。
 >
 > **scope 重塑(边做边发现,如实记)**:原范围「north-star-discovery + metrics-binding 两 skill 文本易用性打磨」。经多轮 grilling 发现 skill 文本是**下游**,真正产品化杠杆在上游三件:① 交互式执行模型(`claude -p` one-shot 出草案 → PR 合不了);② collect_kind 收两 kind(五 kind 是错误心智产物);③ 绑数据 = 搭采集装置(不是只改 metrics.toml collect 字段)。skill 重写 fork 在执行模型上。
 

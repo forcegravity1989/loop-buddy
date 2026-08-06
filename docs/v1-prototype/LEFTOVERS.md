@@ -2,6 +2,7 @@
 
 > V1 三个窗口（纳入项目 / 找指标·绑数据 / 总览重构）实践过程中冒出、但**不在当前窗口解**的问题。
 > 每条标产生窗口（W1/W2/W3）+ 现象 + 未决点 + 处置。三窗口一把合入后，把这里的条目转成 issue 挂到库上。
+> **唯一完整清单**（2026-08-06 归拢）：issue1/issue2/issue3 三份 plan 里散落的遗留/未决条目已全部并入此文件，各 plan 顶部加横幅指向本文，读遗留只看此文件。
 
 ---
 
@@ -26,6 +27,48 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 ---
 
+## W1-2 · codehub clone 同步堵命令循环 → Intent 提交后 UI 冻死
+
+**产生窗口**：W1 纳入项目（`issue1-onboard-simplify.md` §6 bug①）。
+
+**现象**：`CreateProject`/`CompleteCreation` 里 codehub `git clone` 同步执行，堵住 buddy 单线程命令循环，Intent 卡提交后 UI 卡死。PF1 穿刺批次（`piercing-fixes-1.md` 点④）修了 cron 抢跑时序（clone 完成前 cron 不跑、`CompleteCreation` 即采一次），缓解了「采集抢在 clone 完成前」的竞态，但 **clone 同步堵命令循环的根因未解**。
+
+**未决点**：clone 是否该改异步/后台执行释放命令循环？
+
+**处置**：留后续。PF1 已缓解时序竞态，根因未解。
+
+**事实源**：`docs/v1-prototype/issue1-onboard-simplify.md` §6 bug①、`docs/v1-prototype/piercing-fixes-1.md` 点④。
+
+---
+
+## W1-3 · op_stage.routine_schedule/stage_done 留列，signal 过期降级未读它
+
+**产生窗口**：W1 纳入项目（`issue1-onboard-simplify.md` §6）。
+
+**现象**：`op_stage` 表的 `routine_schedule` / `stage_done` 两列 W1 求同存异留了下来；signal 过期降级本想读这列，但改法未做（碰派生链）。
+
+**未决点**：signal 过期降级是否读 `routine_schedule`？
+
+**处置**：留总览窗口（碰派生链）。
+
+**事实源**：`docs/v1-prototype/issue1-onboard-simplify.md` §6。
+
+---
+
+## W1-4 · 组件标准内容打磨（依赖项）
+
+**产生窗口**：W1 纳入项目（`issue1-onboard-simplify.md` §6）。
+
+**现象**：`write_component_standards` 写四份组件标准（agent/skill/workflow/cron），内容质量打磨是依赖事项。
+
+**未决点**：四份 standards 的内容打磨。
+
+**处置**：留写入（模板已落），内容后续打磨。
+
+**事实源**：`crates/bw-app/src/lib.rs`（`write_component_standards`）、`docs/v1-prototype/issue1-onboard-simplify.md` §6。
+
+---
+
 ## W3 · 总览重构窗口遗留
 
 **产生窗口**：W3 总览重构（`docs/v1-prototype/issue3-overview-refactor.md`）。v2 总览（ProgressAll）已落地（dev `b166929`），以下问题冒出但不在 W3 解，按窗口边界留给对应窗口或后续。
@@ -44,7 +87,7 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 **现象**：`CollectKind` 枚举现 5 kind（Github / Connector / Bw / Script / Manual，`bw-engine/src/metrics_file.rs:40`）。W2 Phase3 申明收成 2 kind（script / manual），代码未收。W3 只在 UI 层 forward-correct：`collect_label` 把 github/codehub/bw/connector 标「legacy·迁 script」，script→script、manual→manual，不动枚举。
 
-**未决点**：枚举收口 + inline arm 改 script 的迁移落在 W2 Phase3，需同步改采数链与 metrics_file 解析。
+**未决点**：枚举收口 + inline arm 改 script 的迁移落在 W2 Phase3，需同步改采数链与 metrics_file 解析；绑数据 skill + `.bw/scripts/` 正规化同归窗口二/采数。
 
 **处置**：W2 Phase3 / 采数账。W3 只 UI forward-correct，不碰 `bw-engine`。
 
@@ -156,6 +199,76 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 **处置**：新增去重（`existing_issue_session()`，op.rs）已修"以后"；"过去"的脏数据不补（没有 `DeleteSession`，加会涉及 store 新方法 + UI 按钮，本次不擅自扩范围）。用户下一步计划重建 cowelink 项目验证，删项目会带走它名下所有会话记录，不需要额外清理动作；如果后续在存量项目上还是想清理，需要单独排 `DeleteSession` 这个功能。
 
 **事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §10.5、`crates/app-desktop/src/screens/op.rs`（`existing_issue_session`）。
+
+---
+
+## W2-3 · 交互式无 per-token 预算封顶（显式偏差，已接受）
+
+**产生窗口**：W2 交互式引擎（`issue2-metrics-interactive-loop.md` §2.5 R1）。
+
+**现象**：`--max-budget-usd` 只配合 `--print`，交互式 PTY 路径（`run_skill_pty`）没有 per-token 硬 cap，也**不靠超时兜底**——只在会话 EOF / App 丢输入端 / 用户取消时收尾，无 wall-clock deadline。对 `CLAUDE.md`「单次花费封顶」是显式偏差。
+
+**未决点**：交互式是否要补封顶机制？
+
+**处置**：已接受（2026-08-06 review）。封顶是防后台 runaway 的，后台 one-shot 轨（`ClaudeCliExecutor`）照旧 `--max-budget-usd 0.5` + `ATTEMPT_TIMEOUT_SECS`，一行没动。待后续评估是否给交互式补。
+
+**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §2.5、`crates/bw-engine/src/interactive_cli.rs`（`run_skill_pty` 无 deadline）。
+
+---
+
+## W2-4 · Phase 5 guide 校准 partial（m6 + u3/u4 待补）
+
+**产生窗口**：W2 交互式引擎（`issue2-metrics-interactive-loop.md` §4 Phase 5、§2.6 #6）。
+
+**现象**：Phase 5 guide 校准只 partial——m4/m5 已改（Phase 1 实态），**m6**（指标采集链 + 表/字段 + script kind「计划中」→「已接」校准）未动，**u3/u4** 阶段屏（交互式用户旅程）待补，信号色 token 对齐 plan/00 §6 未做。
+
+**未决点**：m6 + u3/u4 + 信号色 token 对齐。
+
+**处置**：留 Phase 5 / 后续窗口。altitude 用系统×CRUD。
+
+**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §4 Phase 5、§2.6 #6。
+
+---
+
+## W2-5 · Hub 四组件完整规范未定（最简规范已定）
+
+**产生窗口**：W2 交互式引擎（`issue2-metrics-interactive-loop.md` §3.2、§6 遗留②）。
+
+**现象**：Phase 3 只定了最简规范（`.bw/scripts/` 目录约定 + `.bw/connectors.toml` 清单格式 + sync 感知规则）。Hub 四大组件（skill/connector/agent/cron）的**完整规范**未定。
+
+**未决点**：四组件完整规范。
+
+**处置**：留遗留单独定。
+
+**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §3.2、§6 遗留②。
+
+---
+
+## W2-6 · 多人协作（多 PC）= V1+ 特性
+
+**产生窗口**：W2 交互式引擎（`issue2-metrics-interactive-loop.md` §6 遗留①）。
+
+**现象**：完整多人协作（多 PC 并行工作）是 V1+ 特性，V1 不接。
+
+**未决点**：协作模型。
+
+**处置**：V1 不接，留 V1+。
+
+**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §6 遗留①。
+
+---
+
+## W2-7 · §9.7 诊断 spike 清理待核实
+
+**产生窗口**：W2 交互式引擎（`issue2-metrics-interactive-loop.md` §9.7、§8）。
+
+**现象**：§9.7 列了开发阶段清理项——删 `crates/bw-engine/examples/` 下诊断 spike 源文件（pty_spike/conpty_direct/conpty_test/conpty_oxide_test/conpty_oxide_claude）、删 `[target.'cfg(windows)'.dev-dependencies]` 的 conpty/conpty-oxide/winapi、删 `interactive_cli.rs` 的 `[pty-diag]` 诊断日志、删 pty-diag.log。§8 述两处**预研 spike 文档目录**已删（`3d7b6ca`），但 examples/ 下**源文件清理是否做完未核实**。
+
+**未决点**：examples/ 诊断 spike 源文件 + dev-deps + 诊断日志是否已清干净？
+
+**处置**：待核实。本棒未核。
+
+**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §9.7、§8。
 
 ---
 

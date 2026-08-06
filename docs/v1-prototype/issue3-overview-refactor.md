@@ -1,6 +1,7 @@
 # V1 Issue 3 · 总览页重构 — 开发事实源
 
 > 走 (c):现有 buddy app 当底。本文是设计 + 开发唯一事实源(SubAgent 照此建)。5 步法:scope delta ✅ → 对齐原型 ✅(HTML 高保真已对齐)→ 提 issue ✅(Issue 3)→ 开发 → 验证 → 填指南。
+> ⚡ 遗留问题统一归拢于 `docs/v1-prototype/LEFTOVERS.md`(唯一完整清单,W1-1~4/W2-1~7/W3-1~9/V1-P1);本文 §3 边界表及各「留窗口」条目为设计过程原文留存,读遗留以 LEFTOVERS 为准。
 >
 > 基线:worktree 在 v1(`a4f8339` = W1 全量)。W2 代码未合 v1;W2 终态按 `docs/v1-prototype/issue2-metrics-interactive-loop.md`(Phase 1+2a+2b ✅,Phase 3+4 ⬜)对齐——W2 申明的活 W3 不碰(见 §3)。
 >
