@@ -945,6 +945,14 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                                 title: run_sess_title.clone(),
                                                             });
                                                             k_run.send(Command::RunIssue { session: sid, id: i_id });
+                                                            // Jump the user straight to the session/terminal that just
+                                                            // started (or resumed) — otherwise the board gives no visible
+                                                            // feedback at all that anything happened, which is exactly
+                                                            // what made repeat clicks feel like they were silently
+                                                            // spawning duplicates instead of reusing the existing run.
+                                                            k_run.send(Command::SetScope(Scope::Stage(run_stage)));
+                                                            k_run.send(Command::SetPanel(Panel::Workflow));
+                                                            k_run.send(Command::SelectSession(Some(sid)));
                                                         },
                                                         "{run_label}"
                                                     }
@@ -1125,7 +1133,14 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm, sessions: Vec<SessionCardVm>) ->
                                     title: run_sess_title.clone(),
                                 });
                                 k_run.send(Command::RunIssue { session: sid, id });
-                                k_run.send(Command::OpenIssueDetail(id));
+                                // Same as the board's 「▶ 跑」 — jump straight to the
+                                // session/terminal instead of leaving the user staring at
+                                // the (now stale) detail overlay with no visible sign
+                                // anything started.
+                                k_run.send(Command::CloseIssueDetail);
+                                k_run.send(Command::SetScope(Scope::Stage(run_stage)));
+                                k_run.send(Command::SetPanel(Panel::Workflow));
+                                k_run.send(Command::SelectSession(Some(sid)));
                             },
                             "▶ 跑"
                         }
