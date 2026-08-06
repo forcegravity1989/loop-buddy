@@ -52,11 +52,11 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 ### W3-3 · ↻同步指标文件按钮退场
 
-**现象**：v2 总览保留「↻ 同步指标文件」按钮（`op.rs` ProgressAll 业务指标区头，原 `:1793-1797`）。HTML 原型显退场，但 W2 Phase3 已申明退场——按窗口边界 W3 不删 W2 申明的活。
+**现象**：v2 总览保留「↻ 同步指标文件」按钮（`op.rs` ProgressAll 业务指标区头）。HTML 原型显退场，W2 Phase3 也申明退场——按窗口边界 W3 不删 W2 申明的活。
 
 **未决点**：W2 Phase3 采数链正规化后，<code>SyncMetricsFile</code> 由 PR merge auto-fire 兜底，手动按钮不再需要即可退场。
 
-**处置**：W2 Phase3 账。W3 保留不删，放不碍眼处。
+**处置**：✅ 已决（2026-08-06 review）。**按钮保留，不退场**。此前两份文档互指对方负责、谁都没删，实况是：`76c7d0e`（W2 Phase3 review-fixup）确实删过，`a2b914c`（W3 总览重构）又加回，今天仍在。这次把口径钉死为保留——merge auto-fire 覆盖不了「人手改了 `.bw/metrics.toml` 但还没走 PR」的补采场景，手动补一刀有真实用途。W2 设计文档 §3.2/§4 Phase3/§5 三处「已退场」申明同步纠偏。
 
 **事实源**：`crates/app-desktop/src/screens/op.rs`（v2 业务指标区 ↻ 按钮）、`docs/v1-prototype/issue3-overview-refactor.md §3`（W2/W3 边界表）。
 

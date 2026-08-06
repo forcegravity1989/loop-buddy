@@ -84,7 +84,7 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 - **预算**:交互式 `--max-budget-usd` 只配 `--print` 用不了,丢 per-token 硬 cap;用 **wall-clock 超时 kill + jsonl usage 诚实读回**。对 CLAUDE.md「单次花费封顶」是**显式偏差(已接受)**——交互式 user-in-loop 花费眼看着,不像后台 runaway;orca 同款。
 - **CLI 支持**:claude 支持;cursor 占位进声明式表但**先不接**。
 - **边界(找指标设计 vs 绑数据实现)**:找指标=推导指标 + 每条**设计采集方案**(manual/script-via-X/要新 connector 对接 Y/cron 节奏建议);绑数据=**实现采集方案**(建 script connector `create_connector`、找/写脚本落 `.bw/scripts/`、配 metric collect、确认 cron;manual 给手填节奏)。采集方案设计在找指标会话里定,搭装置在绑数据会话里做;两会话经文件接上下文(上条)。
-- **MR 合入后自动(已自动,非人点同步)**:merge → `MergeIssuePr` 自动 `sync_metrics_file_for`;cron(Daily CollectMetrics)到点自动扫 script connector → observation → signal。**「↻同步」手动按钮退场**(plan18-⑦ 补丁,流程顺了不需要)。
+- **MR 合入后自动(已自动,非人点同步)**:merge → `MergeIssuePr` 自动 `sync_metrics_file_for`;cron(Daily CollectMetrics)到点自动扫 script connector → observation → signal。**「↻同步」手动按钮曾按此申明退场(`76c7d0e`),但 W3 总览重构又把它加了回来(`a2b914c`),今天仍在 `op.rs` 业务指标区头 —— 现状是「自动为主 + 手动补一刀」,不是「只有自动」(2026-08-06 review 纠偏,决议保留手动按钮,见 LEFTOVERS W3-3)。**
 
 ### 2.6 用户回来后的澄清与决定(2026-08-05)
 
@@ -112,7 +112,7 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 - **不能自动采的**:`collect_kind='manual'` + 给具体手填节奏(RecordInline op.rs:1866 → `RecordObservation` 戴徽)。
 - **登记进 buddy(感知 sync)**:script connector 经 buddy 感知 `.bw/connectors.toml`(merge 后自动 upsert,非 SQL 直插、非 agent 调 API);metric 的 collect 经 `SyncMetricsFile`(merge 后自动)。buddy Hub 能管理(列出/探活/改 config)。**规范先最简**:`.bw/scripts/` 目录约定 + `.bw/connectors.toml` 清单格式 + sync 感知规则;Hub 几大组件(skill/connector/agent/cron)完整规范留遗留单独定(见 §6)。
 - **connector.project_id 待核**:NewConnector(bw-store/lib.rs:367)有 project_id,connector 表 schema 未见该列(§6 偏差);P3 sync 前核 + 缺则加(schema 双守卫)。
-- **"同步"自动化、手动按钮退场**:绑数据 issue merge 后 `SyncMetricsFile` 自动(lib.rs:7296),op.rs「↻同步指标文件」手动按钮(plan18-⑦ 补丁)退场——它的存在是流程没顺的证物,流程顺了不需要。
+- **"同步"自动化**:绑数据 issue merge 后 `SyncMetricsFile` 自动(`sync_metrics_file_for`)。~~op.rs「↻同步指标文件」手动按钮退场——它的存在是流程没顺的证物~~ **(2026-08-06 review 纠偏:此申明未最终成立。按钮 `76c7d0e` 删过,`a2b914c` 又加回,今天仍在。决议保留——merge auto-fire 覆盖不了「人手改了 metrics.toml 但还没走 PR」的补采场景。)**
 
 ### 3.3 标准目录(script connector 脚本落哪)
 - **buddy 自带采集脚本**(包 codehub/github CLI 输出 JSON):落项目仓 `.bw/scripts/`(buddy 管理、随仓 PR)。script connector config 指 `.bw/scripts/<slug>.py` + command + output 字段路径。
@@ -124,7 +124,7 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 - **Phase 1 · (c) 引擎 [✅ 已建, commit 11a24b9 + a09e98d]**:`crates/bw-engine/src/interactive_cli.rs`(声明式 CLI 表 claude 支持/cursor 占位 + `build_startup_plan` 位置参数 prompt + `build_bridge_system_prompt` 衔接层 system prompt + `InteractiveCliExecutor` 系统终端 spawn+等退出 + `MockInteractiveExecutor`)+ `bw-app/src/lib.rs` `run_issue_interactive` 分流(零扰 one-shot)+ `SettleOutcome::Interactive`。**无 PTY/xterm/hook、无对话摘要**(§2.6 #2 砍)。验证:门禁+cargo test(6+3 过)+code review(F1/F4 修);真交互式 E2E defer Phase 2。
 - **Phase 2a · 引擎补强(resume + InReview 检测 + 状态机)[✅ 已建, commit b4059ee + review fixup]**:resume(`claude --continue` 续最近会话,先不搞 hook/精确 session_id)+ InReview 检测(**轮询** codehub/github 查 issue 分支 `bw/issue-N` 的 open MR,读回为证,挂 `tick_scheduler` 5min 节流)+ 状态机(InProgress→InReview[MR 查到]→Done[人 merge];**砍交互式 `issue_run_tail` 提 MR**,agent 在会话里自提 MR,buddy 检测)+ `interactive_started` 列(schema 双守卫)。**不建 PTY/xterm/hook(2b)**。验证:门禁+cargo test(9+3)+code review 过(F1 defer 2b);真 E2E defer 2b。
 - **Phase 2b · 嵌入终端 + hook listener [✅ 已建, commit c2e4099..f8fb8b5]**:`portable-pty` PTY + xterm.js widget(`TERM_PRE_HANDLER_JS` 缓冲 + `TERM_INIT_JS` CDN 加载 + `replayIntoTerminal` guard + 三条 race 解:pre-handler buffer/reload 握手/resize 显式 drain)+ hook listener(`bw-app/src/hook_listener.rs` 127.0.0.1 http + `~/.claude/settings.json` 幂等 hooks,抓 SessionStart→`claude_session_id` + Stop→触发 InReview)+ resume 升级 `--resume <session_id>`(替 `--continue`,**F1 用 session_id fallback 修**)+ InReview hook Stop 触发(替 2a 轮询,5min 兜底)+ `Event::TerminalBytes`/`Command::TerminalInput`/`TerminalResize`(后 review 删 `TerminalBytes` 死码,改 `pty_rx` watch 通道避双消费)+ `App::with_pty()` + block_on panic 修(`bind()` 同步 + `spawn()` 异步)。review fixup(f8fb8b5):PTY 状态会话后清 None + 移除 `poll_pty_bytes` 双消费 + Windows `curl.exe` + 删死码。验证:门禁+cargo test(22)+code review 过;真终端渲染截图 defer 用户(claude+网关)。
-- **Phase 3 · 绑数据=搭装置 + collect_kind forward-correct [✅ 已建, commit 7e8fdc4 + 76c7d0e]**:`.bw/connectors.toml` 解析器(`bw-engine/src/connectors_file.rs` 新,对仗 metrics_file.rs,8 单测)+ `docs/connectors-toml-format.md` 规范 + `sync_connectors_file_for`(对仗 sync_metrics_file_for,MergeIssuePr merge 后并列调)+ `connector.project_id`/`config` schema 双守卫补(schema.sql inline 漏两列,补了)+ collect_kind forward-correct(文档层两 kind,枚举代码不动留采数/总览)。review fixup(76c7d0e):SELECT 加 `kind='script'` 过滤(防同名非脚本 connector 被串 kind 静默失败)+ 移除「↻同步」手动按钮(merge 自动 sync 覆盖)。
+- **Phase 3 · 绑数据=搭装置 + collect_kind forward-correct [✅ 已建, commit 7e8fdc4 + 76c7d0e]**:`.bw/connectors.toml` 解析器(`bw-engine/src/connectors_file.rs` 新,对仗 metrics_file.rs,8 单测)+ `docs/connectors-toml-format.md` 规范 + `sync_connectors_file_for`(对仗 sync_metrics_file_for,MergeIssuePr merge 后并列调)+ `connector.project_id`/`config` schema 双守卫补(schema.sql inline 漏两列,补了)+ collect_kind forward-correct(文档层两 kind,枚举代码不动留采数/总览)。review fixup(76c7d0e):SELECT 加 `kind='script'` 过滤(防同名非脚本 connector 被串 kind 静默失败)+ 移除「↻同步」手动按钮(merge 自动 sync 覆盖)。**⚠ 后者已回退**:W3 总览重构(`a2b914c`)把按钮加回 v2 布局,今天仍在;2026-08-06 review 决议保留,本条台账不再算「按钮已退场」(见 §3.2 纠偏 + LEFTOVERS W3-3)。
 - **Phase 4 · skill 重写 [✅ 已建, commit 19f2f78]**:north-star + metrics-binding SKILL.md 改**纯方法论**(去掉重复 buddy 契约,加"契约见衔接层 system prompt"指引)+ **衔接层 `build_bridge_system_prompt` 唯一持 buddy 契约**(不可换层,换业界 skill 当 prefill 产出仍对得上契约,§2.6 #1)+ **metrics-binding script query bug 修**(intro/常见坑「query 写脚本路径」→「只写字段路径」,对齐契约 L88)+ bridge prompt 更新绑装置文件规范(.bw/connectors.toml + .bw/scripts/,agent 不调 API)。
 - **Phase 5 · guide 校准 [⬜ partial]**:m4/m5 已改(Phase 1 实态);待补 u3/u4 阶段屏(交互式用户旅程)+ m6(指标采集链+表字段+script「计划中」→「已接」)+ 信号色 token 对齐 plan/00 §6。altitude 用系统×CRUD。
 
@@ -147,7 +147,7 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 - `Cargo.toml`:`portable-pty` dep(bw-engine 侧,非 UI)。
 
 ### Phase 3(绑装置 + forward-correct)
-- `crates/bw-app/src/lib.rs`:绑数据 issue run 内引导建 script connector(正规 `create_connector`)+ 配 metric collect;op.rs「↻同步」按钮(L1787)退场或改 dev-only。
+- `crates/bw-app/src/lib.rs`:绑数据 issue run 内引导建 script connector(正规 `create_connector`)+ 配 metric collect;~~op.rs「↻同步」按钮退场或改 dev-only~~ **(2026-08-06 review 纠偏:退场已回退,按钮保留,见 §3.2)**。
 - `crates/bw-engine/src/metrics_file.rs`:`CollectKind` **不动代码**(留采数/总览收),但 doc-comment 标注 legacy 迁移方向。
 - `docs/skills/metrics-binding/SKILL.md` + `docs/skills/north-star-discovery/SKILL.md`:两 kind + script query bug 修 + 引导式口径(Phase 4 一起)。
 
