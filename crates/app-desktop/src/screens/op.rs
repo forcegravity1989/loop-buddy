@@ -2972,6 +2972,8 @@ const TERM_INIT_JS: &str = r#"
     term.onData(function(data) {
         window.__bw_term_input = window.__bw_term_input || [];
         window.__bw_term_input.push(data);
+        // 可视化 onData 触发:打字时窗口标题变化(看键盘到没到 xterm)
+        document.title = 'BW TYPED: ' + JSON.stringify(data).slice(0, 30);
     });
 
     // onResize → stash for the Rust side to drain.
@@ -3056,15 +3058,21 @@ fn TerminalWidget() -> Element {
                     }
                     // 50ms timer → poll for user input + resize.
                     _ = tokio::time::sleep(Duration::from_millis(50)) => {
-                        // 诊断:__bw_term_input length(看 xterm onData 有没有触发)
-                        let _input_len: u64 = document::eval(
-                            "(window.__bw_term_input||[]).length"
-                        ).await.ok().and_then(|v| v.as_u64()).unwrap_or(0);
+                        // 诊断:always-on(每次 drain 写),看 drain 跑没 + xterm 状态 + onData
+                        let _ready: bool = document::eval("!!window.__bw_term_ready").await.ok().and_then(|v| v.as_bool()).unwrap_or(false);
+                        let _term_exists: bool = document::eval("!!window.__bw_term").await.ok().and_then(|v| v.as_bool()).unwrap_or(false);
+                        let _input_len: u64 = document::eval("(window.__bw_term_input||[]).length").await.ok().and_then(|v| v.as_u64()).unwrap_or(0);
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
+                            .open("D:\\2026\\code\\loop-buddy\\pty-stdin-diag.log") {
+                            use std::io::Write;
+                            let _ = writeln!(f, "[stdin-ui] drain ready={_ready} term={_term_exists} input_len={_input_len}");
+                            let _ = f.flush();
+                        }
                         if _input_len > 0 {
                             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
                                 .open("D:\\2026\\code\\loop-buddy\\pty-stdin-diag.log") {
                                 use std::io::Write;
-                                let _ = writeln!(f, "[stdin-ui] __bw_term_input len={_input_len} (onData triggered)");
+                                let _ = writeln!(f, "[stdin-ui] __bw_term_input len={_input_len} (onData triggered!)");
                                 let _ = f.flush();
                             }
                         }
