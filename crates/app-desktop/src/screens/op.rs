@@ -2963,16 +2963,29 @@ const TERM_INIT_JS: &str = r#"
     fitAddon.fit();
     term.focus();
 
-    // Ensure keyboard always reaches xterm: refocus on div click
-    // (wry WebView may not auto-focus the hidden helper textarea,
-    // so without this stdin never fires onData → no interaction).
-    div.addEventListener('click', function() { term.focus(); });
+    // Workaround: wry WebView2 may not focus xterm's hidden helper textarea
+    // (offscreen), so onData never fires → stdin dead. Make the div itself
+    // focusable + handle keydown → push to __bw_term_input (bypass textarea).
+    div.tabIndex = 0;
+    div.focus();
+    div.addEventListener('click', function() { div.focus(); term.focus(); });
+    div.addEventListener('keydown', function(e) {
+        var data = e.key;
+        if (e.key === 'Enter') data = '\r';
+        else if (e.key === 'Backspace') data = '\x7f';
+        else if (e.key === 'Escape') data = '\x1b';
+        else if (e.key === 'Tab') { data = '\t'; e.preventDefault(); }
+        else if (e.key.length > 1) return; // Shift/Control/Arrow 等先忽略
+        window.__bw_term_input = window.__bw_term_input || [];
+        window.__bw_term_input.push(data);
+        document.title = 'BW TYPED: ' + JSON.stringify(data).slice(0, 30);
+        e.preventDefault();
+    });
 
-    // onData → stash for the Rust side to drain.
+    // onData → stash (fallback if textarea focus works).
     term.onData(function(data) {
         window.__bw_term_input = window.__bw_term_input || [];
         window.__bw_term_input.push(data);
-        // 可视化 onData 触发:打字时窗口标题变化(看键盘到没到 xterm)
         document.title = 'BW TYPED: ' + JSON.stringify(data).slice(0, 30);
     });
 
