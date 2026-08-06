@@ -96,9 +96,9 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 **未决点**：merge 时 op.rs 是否冲突？嵌入终端挂在哪个 panel / 区段？
 
-**处置**：W2 账。W3 只管自己改的 ProgressAll 区段，与 W2 嵌入终端的共存由 W2 合入时自解。
+**处置**：✅ 已解（2026-08-06）。W2 分支上 op.rs 已同时带着嵌入终端（`TerminalWidget`/`WorkflowStage`）与 W3 的 v2 `ProgressAll` 布局，两者是同一文件里不同区段（Center 的 `match (op.panel, stage)` 分支），未见结构冲突。嵌入终端挂在 `Panel::Workflow` 分支下的 `WorkflowStage`；`ProgressAll` 是 `Panel::Progress` 分支——各自独立。
 
-**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md`（Phase 2b · 嵌入终端）、`crates/app-desktop/src/screens/op.rs`（W3 v2 布局）。
+**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md`（Phase 2b · 嵌入终端 · §9/§10 stdin 修复）、`crates/app-desktop/src/screens/op.rs`（`Center` 组件的 panel 分支）。
 
 ### W3-8 · weekly delta carry-forward 伪"没变"（review Low）
 
@@ -120,9 +120,42 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 **未决点**：删除是否连带删 workspace clone？边界：用户可能手动把 `workspace_path` 指到自有目录（不该删，如 `/d/2026/code/omhwcc` 是用户自己的工作副本，非 buddy 建的）；只有 buddy 自动建的（`workspaces_root` 下 `<slug>-<uuid6>`）才该删。删目录不可逆，需谨慎（用户可能想保留产物取证）。
 
-**处置**：穿刺后转 issue。重加 omhwcc 前，3 个孤儿目录人工清掉（用户已确认是残留）。
+**处置**：穿刺后转 issue。重加同仓前，孤儿目录人工清掉。产品指南 U2 **不**写此说明（2026-08-06 决议：进本 LEFTOVERS，不进用户指南）。
 
 **事实源**：`crates/bw-app/src/lib.rs:8458`（DeleteProject handler）、`crates/bw-store/src/sqlite.rs:624`（delete_project）、`crates/app-desktop/src/kernel.rs:483`（workspaces_root）。
+
+---
+
+## W2-1 · 嵌入终端离开面板期间可能丢字节；buddy 重启后黑窗口整块消失(无提示)
+
+**产生窗口**：W2 找指标/绑数据 stdin bug 修复棒次（`docs/v1-prototype/issue2-metrics-interactive-loop.md` §10.6/§10.7），用户实测导航 + 重启两个场景冒出。
+
+**现象**：
+1. 同一次 buddy 运行中，切到别的面板再切回工作流，终端曾显示为空——**这部分已修**（§10.6①：`TERM_INIT_JS` 的旧 guard 只判断"存在即返回"，不会把 xterm 的渲染 DOM 搬到 Dioxus 重建出的新 `div` 上；改成"存在就搬家 + 重绑 div 级监听器，`onData` 不重绑"）。
+2. buddy 重启后再进工作流，终端整块（连黑框都）消失——这是`pty_active`(`state.pty_input_tx.is_some()`) 纯内存状态在进程重启后天然为 false 的诚实表现，**不是本次要修的 bug**，但用户体验上没有任何"会话已断开，点▶跑可恢复"的提示,略生硬。
+3. 即便①修好后，如果用户离开工作流面板的时间跨过多个 100ms 采集批次，中间批次的 PTY 输出可能被静默丢弃——PTY 字节走 `watch::channel<Vec<u8>>`(单槽、非队列)从内核线程送到 UI，`TerminalWidget` 卸载时没人 `.changed().await`,内核线程仍按 100ms 一批覆盖发送，只有卸载期间的*最后一批*会被下次挂载时的新 receiver 捞到。
+
+**未决点**：
+- ②要不要在 UI 上加"会话已断开(buddy 重启)，点▶跑用 `--resume` 接回"的提示,而不是让黑框默默消失？
+- ③要不要把单槽 `watch` 换成有界队列/服务端整段 scrollback 缓冲,彻底堵死导航期间丢字节的窗口？这块工作量较大(涉及 kernel.rs 的 pty 分发结构),本次 bugfix 没做。
+
+**处置**：①已修（见 issue2-metrics-interactive-loop.md §10.6，含 Node harness 验证）。②③留后续窗口评估，不在 W2 本棒动。
+
+**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §10.6/§10.7、`crates/app-desktop/src/screens/op.rs`（`TERM_INIT_JS`/`TerminalWidget`）、`crates/app-desktop/src/kernel.rs`（`pty_bytes` watch channel）。
+
+---
+
+## W2-2 · Issue 板重复点「▶ 跑」堆积重复「阶段记录」卡 —— 已修，历史脏数据未清
+
+**产生窗口**：W2 找指标/绑数据 stdin bug 修复棒次，用户实测冒出（`docs/v1-prototype/issue2-metrics-interactive-loop.md` §10.5）。
+
+**现象**：同一个 issue（如「找指标」）每点一次「▶ 跑」，工作流「阶段记录」轨就多一张同名卡片，用户删不掉，内容看起来是同一个（空）会话。根因是「▶ 跑」onclick 每次都铸新 `SessionId` 再 `StartSession`，跟 `run_issue_interactive` 真正用来判断 resume 的 `claude_session_id` 完全无关——UI 侧堆积纯粹是重复插入的空壳。
+
+**未决点**：本次按 `(stage_kind, title)` 去重复用既有 session id 解决了"以后不再堆积"，但**历史已经堆积出来的重复卡片没有批量清理路径**（没有 `DeleteSession` 命令）。
+
+**处置**：新增去重（`existing_issue_session()`，op.rs）已修"以后"；"过去"的脏数据不补（没有 `DeleteSession`，加会涉及 store 新方法 + UI 按钮，本次不擅自扩范围）。用户下一步计划重建 cowelink 项目验证，删项目会带走它名下所有会话记录，不需要额外清理动作；如果后续在存量项目上还是想清理，需要单独排 `DeleteSession` 这个功能。
+
+**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §10.5、`crates/app-desktop/src/screens/op.rs`（`existing_issue_session`）。
 
 ---
 

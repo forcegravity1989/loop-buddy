@@ -227,3 +227,45 @@ W2 选直接 spawn claude(CommandBuilder::new(claude).args(...),无 shell)是合
 - 删 Cargo.toml 的 [target.'cfg(windows)'.dev-dependencies] conpty/conpty-oxide/winapi
 - 删 interactive_cli.rs 的 [pty-diag] 诊断日志(read loop 的文件日志 + spawn 后的日志)
 - 删 pty-diag.log
+
+## 10. stdin 不通的真根因 + 修法(2026-08-06,续 §9 之后一棒)
+
+§9 修好了 stdout(conpty-oxide 换库)。用户重启验证后:输出能看到了,但**打字没反应**——键盘敲了终端里什么都不出现。之前四次修法尝试(xterm 打包本地、div keydown workaround、term.focus()、日志)都没解决,因为都在 xterm.js 初始化/键盘事件那一层找,没人怀疑 Rust↔JS 桥接本身。
+
+### 10.1 现象与误导性证据
+`pty-stdin-diag.log` 一直显示 `drain ready=false term=false input_len=0`——看起来像 xterm.js 压根没初始化(CDN 失败假说)。但用户手动验证时 claude 的 TUI **确实渲染出来了**(说明 xterm 其实初始化好了、stdout 也写进去了),跟日志矛盾。日志在说谎,得先信实况不信日志。
+
+### 10.2 真根因:`document::eval()` 是 `AsyncFunction` 体,不写 `return` 就永远拿 `undefined`
+翻 Dioxus 0.7.9 源码(`dioxus-desktop-0.7.9/src/query.rs`):`document::eval(script)` 把传入的字符串整段包成 `new AsyncFunction("dioxus", script)(dioxus)` 去执行——**是函数体,不是表达式**。之前 `TERM_INIT_JS`/drain 脚本的最后一行是裸的 `(async function() {...})()`(没有 `return`),JS 侧确实跑了(xterm 真初始化了、`window.__bw_term_ready` 真置为 true),但这个 IIFE 的返回值从没被 `return` 出这层 `AsyncFunction`——Rust 侧 `document::eval(...).await` 拿到的永远是 `undefined`。于是:
+- 诊断日志读的就是这个 `undefined`(反序列化成 `ready=false`/`term=false`)——**日志假,不是终端假**,这也是 §9.1 现象里"log 说空但 TUI 真渲染"的另一半解释。
+- 真正致命的是 `TerminalWidget` 的 50ms 轮询:`window.__bw_term_drain_input()`/`__bw_term_drain_resize()` 的返回值同样从没跨过 Rust 边界——`Command::TerminalInput` 因此**从未被派发过一次**,不管用户在终端里按了什么键。stdout 通、stdin 死,根因是同一层桥接缺 `return`,跟 xterm.js 初始化、CDN、焦点、Dioxus 截键全无关——之前四次修法都在错误的层排查。
+
+### 10.3 修法
+1. **每个 `document::eval` 调用前补 `return`**:`TERM_INIT_JS` 顶部加 `return (async function(){...})()`;drain 脚本合并 `__bw_term_drain_input`/`__bw_term_drain_resize` 两个函数为单次 `window.__bw_term_drain()`,一次 eval 拿 `{ input, resize, ready }` 一整个对象(减少每帧 eval 次数,也让 `ready`/`input_len` 日志终于反映真实状态)。
+2. **onData 与 keydown 去重**:xterm 的 hidden textarea 聚焦时,`term.onData` 已经把这次按键编码成字节了;容器 `div` 上的 `keydown` 是焦点丢失时的兜底,两者都触发会把每个字符送两遍。修法:`keydown` 处理器判断 `e.target === textarea` 时直接跳过(textarea 有焦点说明 `onData` 会接管)。
+3. **按键映射补全**:原来只处理单字符 + Enter/Backspace/Escape/Tab,方向键(`e.key.length > 1`)被 `return` 忽略——claude TUI 靠上下箭头翻历史,箭头送不进去等于交互式白搭。补齐 `KEYS` 映射表(方向键/Home/End/PageUp/PageDown/Delete/Insert 的 CSI 序列)+ Ctrl+字母→`0x01`-`0x1a`(Ctrl+C=`0x03` 中断 TUI)。
+4. **诊断日志改门控**:`pty-stdin-diag.log`(硬编码 `D:\...` 绝对路径文件写)和 lib.rs/interactive_cli.rs 里的 `[stdin-*]` 全删,改成 `BW_PTY_DEBUG=1` 门控的 `eprintln!`(默认关,轮询 ~20Hz 不刷屏)。
+
+### 10.4 验证(用户手动确认,2026-08-06)
+不能自验(无 Windows GUI/computer-use),请用户重启 buddy 后手动打字确认。结果:**打字有效、Esc 能取消、上箭头能看到输入历史**——等同 PowerShell 里直接开 `claude` CLI 的体验。逻辑正确性额外用 Node.js 起了两个抛弃式 harness(stub DOM,跑真实 `TERM_PRE_HANDLER_JS`/`TERM_INIT_JS` 源码字符串):一个覆盖 drain 契约/按键映射/去重(16 项全过),一个覆盖 §10.6 的组件重挂载(remount)场景(10 项全过)。
+
+### 10.5 顺带修的第二个 bug:Issue 板重复点「▶ 跑」→ 每次新开一张「阶段记录」卡
+用户反馈:同一个 issue(如「找指标」)每点一次「▶ 跑」,工作流「阶段记录」轨就多一张同名卡片,删不掉,内容看起来还是同一个会话。
+
+根因:Issue 卡/详情页的「▶ 跑」onclick 一直是 `let sid = SessionId::new()` 后 `StartSession` + `RunIssue`——**每次点击都铸一个全新 `SessionId`**,而 `run_issue_interactive` 侧真正决定"新开 vs resume"是靠 issue 行上的 `claude_session_id`(有值就 `--resume`),跟 UI 传进去的 `SessionId` 完全无关。`session` 表也没有 `issue_id` 外键,`StartSession`(`ensure_session`,`ON CONFLICT(id) DO NOTHING`)对每个新 id 都真插一行——UI 侧的"阶段记录"堆积纯粹是重复插入的空壳,跟真正的 claude 会话是不是 resume 无关(所以用户看到"不同卡片回显同一个会话"——因为交互式 issue 从不写 `session.message` 表,这些卡片本来就都是空的,只是标题一样看起来像同一个)。
+
+修法(不动 schema):`run_sess_title = "#{number} {title}"` 本来就是这个 issue 独有的确定性标题,拿它当去重 key——点「▶ 跑」前先在 `op.sessions`(项目全量会话列表)里找 `(stage_kind, title)` 都匹配的既有会话,找到就复用它的 id(`StartSession` 传旧 id 是幂等 no-op),找不到才 `SessionId::new()`。两处「▶ 跑」(Issue 板列表 op.rs、IssueDetailOverlay)共用同一个 `existing_issue_session()` 辅助函数。效果:同一个 issue 反复点「▶ 跑」只会有一张阶段记录卡,点击就是原来那张(不再新开视图卡片)。
+
+遗留:已经堆积出来的历史重复卡片本次不做批量清理(没有 `DeleteSession` 命令,加会涉及 store 新方法 + UI 按钮,本次不擅自扩);用户下一步要重新创建 cowelink 项目重跑验证,删项目会带走它名下所有会话,不需要额外清理动作。
+
+### 10.6 顺带修的第三个 bug:切到别的面板再切回工作流,终端显示空;重启 buddy 后终端整块消失
+用户反馈两种情况:①(同一次运行中)点开其他面板再切回工作流,claude CLI 那块黑窗口是空的;②这时候重启 buddy,再进工作流,黑窗口整个不见了(不是"空",是"没了")。
+
+**① 同进程内导航后变空 —— 真 bug,已修**。`Center`(op.rs)是按 `(op.panel, stage)` 做 `match` 的,切到 Issues/进度等任何其他面板都会让 `WorkflowPanel`/`WorkflowStage`/`TerminalWidget` 整棵子树从 Dioxus 树上摘掉;切回工作流是重新构造一遍这些组件,`TerminalWidget` 的 `div#__bw_terminal` 因此是一个**全新的 DOM 节点**。旧的 `TERM_INIT_JS` 顶部是 `if (window.__bw_term) return`——`window.__bw_term`(xterm 实例 + 它背后的 PTY 会话)确实还活着,但这一行直接短路返回,从不把它挂到新 div 上;xterm 自己的滚屏缓冲区其实什么都没丢,只是渲染出的 DOM 还挂在旧的、已经被摘掉的 div 下面,画面上自然什么都看不到。
+
+修法:把"存在即返回"的旧 guard 换成"存在就搬家"——检查当前 div 是否已经包含 `window.__bw_term.element`(xterm 公开的渲染根节点),不包含就 `div.appendChild(window.__bw_term.element)` 搬过去 + 重新 `fit()`。同时把 `click`/`keydown` 这两个绑在旧 div 上的监听器重新绑到新 div 上(DOM 节点级监听器不会跟着搬家);但 `term.onData` 是绑在 `term` 对象本身(不是绑在 div 上)的,重挂载时**不能**再调一次,否则往后每敲一个字符都会被送两遍——这也是为什么代码把"绑一次的 onData"和"每次挂载都要重绑的 div 监听器"拆成了两段。用 Node harness 模拟了"挂载→卸载(换 div)→重挂载"全过程,确认:xterm 内容正确搬到新 div、`onData` 只注册一次、新 div 上敲键正确产出一个字节(§10.4 的第二个 harness)。
+
+**② buddy 重启后终端整块消失 —— 如实,不是本次要修的 bug**。`pty_active`(决定要不要渲染 `TerminalWidget`)来自 `state.pty_input_tx.is_some()`,这是纯内存状态,buddy 进程重启后天然是 `None`——按 CLAUDE.md「无数据=Unknown,绝不假装绿」的铁律,这里"黑窗口整个不渲染"是**诚实**表现,不是要补的洞。更深一层:`interactive_cli.rs` 里 conpty-oxide 的 session 挂在一个 kill-on-close 的 Windows Job 上,buddy 进程退出时这个 Job 会把子进程 claude.exe 一起杀掉——就算硬做"重启后把旧 PTY 接回来"的 UI,底层那个 PTY 连接本身也已经死了,接不回去。真正的恢复路径是 issue 行上持久化的 `claude_session_id`:重启后再点一次「▶ 跑」,`run_issue_interactive` 会带 `--resume <claude_session_id>` 重新 spawn,claude 自己的会话持久化(不依赖 buddy 进程)让对话历史接得上,只是需要重新走一次「▶ 跑」而不是"自动复活黑窗口"。这个体验(重启后黑窗口悄悄消失,没有任何提示)留作 LEFTOVERS 里的后续打磨项,不在本棒动。
+
+### 10.7 已知但本次不修的残留缝隙(如实记录,别当成修好了)
+- **导航离开期间的字节可能丢一部分**:PTY 输出经 `watch::channel<Vec<u8>>` 从内核线程送到 UI(`pty_ticker` 每 100ms 取一批新字节塞进去)。`watch` 只保留"最新一批",不是队列——如果 `TerminalWidget` 因为用户切到别的面板而卸载(停止 `.changed().await`),这段时间里内核线程仍在按 100ms 一批地覆盖发送,只有*最后一批*会留到用户切回来时被捞到,中间那些批次会被静默覆盖丢掉。§10.6 修的是"切回来后能不能看见"(能),没修"切走期间产出的字节是否一批不丢"(不能完全保证,拿之前的行为对比不算新introduce的回归,是 Phase2b 设计里本来就有的性质)。真正堵死这个洞需要把单槽 `watch` 换成有界队列或服务端整段 scrollback 缓冲,工作量超出本次 bugfix,记在这里留给下一棒评估要不要做。
