@@ -250,15 +250,13 @@ impl SqliteStore {
             "TEXT NOT NULL DEFAULT ''",
         )
         .await?;
-        // T7 (2026-07-23, plan/12 §0/§2/§3): Skill/Agent gain the same
-        // stage-role classification `workflow_spec.stage_ref` already has.
-        // NULL on every pre-T7 row (including the five built-in stage-role
-        // agents/skills) is honest until the boot-time by-name backfill
-        // (`seed_stage_role_agents_if_missing` / plan/17 起 skills 走
-        // `seed_bw_standard_skills_if_missing`) fills the real ones in;
+        // T7 (2026-07-23, plan/12 §0/§2/§3): Agent gains the same stage-role
+        // classification `workflow_spec.stage_ref` already has. NULL on
+        // every pre-T7 row (including the five built-in stage-role agents)
+        // is honest until the boot-time by-name backfill
+        // (`seed_stage_role_agents_if_missing`) fills the real ones in;
         // every imported catalog row stays NULL = 通用/跨阶段 — nobody has
         // manually classified those, so this never guesses.
-        add_column_if_missing(&pool, "skill", "stage_ref", "INTEGER").await?;
         add_column_if_missing(&pool, "agent", "stage_ref", "INTEGER").await?;
         // 五角色归类(2026-08-05):归类**动作**的出处。'' = 还没人归过类;
         // 'table' = bw-core 静态表回填;'distilled' = 按蒸馏出处 Issue 派生;
@@ -266,6 +264,13 @@ impl SqliteStore {
         // 与 skill_stage 的行数共同派生四态 —— 单看行数分不出「判过了、不属
         // 任何阶段」和「还没人管」,而这两件事在本仓是必须分开的。
         add_column_if_missing(&pool, "skill", "stage_origin", "TEXT NOT NULL DEFAULT ''").await?;
+        // 旧列真删(用户 2026-08-05:「不要害怕修改旧表,有需要就大胆重做」)。
+        // 位置很关键:必须在 skill_stage 建表(schema blob)与 stage_origin 加列
+        // 之后 —— Boot 的搬值逻辑要先能读到这一列,才轮得到删它。搬值本身在
+        // bw-app 的 Boot 里,发生在 open() 返回之后,所以这里删列会让**本次**
+        // 启动读不到旧值……因此搬值必须幂等且以静态表为准(见 SR3 Step 7 的
+        // 实现:它按 name 查静态表重建,不依赖旧列的值)。
+        drop_column_if_present(&pool, "skill", "stage_ref", &["idx_skill_stage"]).await?;
         // T16 (plan/12 §10 v1.1#3): workflow's main MD document, aligned
         // with `skill.content`. '' on every pre-T16 row = honestly "no
         // original document" (real pre-T16 workflows never had one to lose).
@@ -276,19 +281,19 @@ impl SqliteStore {
             "TEXT NOT NULL DEFAULT ''",
         )
         .await?;
-        // Indexes on `stage_ref` deliberately live here, *after* the two
-        // `add_column_if_missing` calls above, instead of in `schema.sql`'s
+        // The index on `agent.stage_ref` deliberately lives here, *after* the
+        // `add_column_if_missing` call above, instead of in `schema.sql`'s
         // `CREATE INDEX` blob (that whole blob replays unconditionally,
-        // before these guards run, against the real on-disk `skill`/`agent`
-        // tables — a pre-T7 DB doesn't have the column yet at that point, so
-        // an index on it there crashes with "no such column: stage_ref",
-        // caught by this ticket's own migration E2E against an old fixture
-        // DB). `workflow_spec.stage_ref`'s schema.sql-embedded index never
-        // hit this because that column has been part of the table's initial
+        // before this guard runs, against the real on-disk `agent` table —
+        // a pre-T7 DB doesn't have the column yet at that point, so an index
+        // on it there crashes with "no such column: stage_ref", caught by
+        // this ticket's own migration E2E against an old fixture DB).
+        // `workflow_spec.stage_ref`'s schema.sql-embedded index never hit
+        // this because that column has been part of the table's initial
         // `CREATE TABLE` since before this ticket, not retrofitted.
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_skill_stage ON skill(stage_ref)")
-            .execute(&pool)
-            .await?;
+        // (`skill.stage_ref`'s twin index, `idx_skill_stage`, was dropped
+        // 2026-08-05 along with the column — see `drop_column_if_present`
+        // above.)
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_agent_stage ON agent(stage_ref)")
             .execute(&pool)
             .await?;
@@ -338,9 +343,10 @@ async fn add_column_if_missing(
 /// 用户 2026-08-05 拍板「不能无限制扩展表格,不要害怕修改旧表,有需要就大胆
 /// 重做」——把这条做成常备原语而不是一次性代码,是那句话的落地。
 ///
-/// 本任务(SR2)只**定义**它,不调用(调用在 SR4);为避免 `dead_code` 让
-/// `-D warnings` 失败先加 `#[allow(dead_code)]`,SR4 接上调用时删掉该属性。
-#[allow(dead_code)]
+/// 非原子:`DROP INDEX` 与 `ALTER TABLE ... DROP COLUMN` 是各自独立的
+/// autocommit 语句,中途(比如进程被杀)可能只有索引没了、列还在。这是可以
+/// 接受的——每一步都是幂等的(索引不存在就 no-op、列不存在整个函数直接
+/// 提前返回),下次 `open()` 重跑会自愈到两者都删掉的终态,不需要事务包裹。
 async fn drop_column_if_present(
     pool: &SqlitePool,
     table: &str,
