@@ -669,51 +669,119 @@ pub fn source_chip_counts(rows: &[WorkflowHubRowVm]) -> Vec<(&'static str, usize
     counts
 }
 
-/// T7 (2026-07-23, plan/12 §0/§2/§3): the shared five-role classification
-/// filter every Hub screen (Skill/Agent/Workflow) now applies to its rows —
-/// one pure predicate instead of three copy-pasted per-screen closures.
-/// `General` is a real, selectable state (not merely "no filter"), matching
-/// the ticket's chip row 全部/原型师/构建师/优化师/运营推广师/运维师/通用 —
-/// a user can ask "show me only the honestly-unclassified rows" the same
-/// way they can ask for a specific stage.
+/// 一行 Hub 记录在五角色维度上的**归属状态**,三个 Hub 屏共用。
+///
+/// Skill 侧是多值(2026-08-05 起,`skill_stage` 关联表);Agent / Workflow 侧
+/// 本轮仍是单值 `Option<StageKind>`,经 [`RoleTag::from_single`] 收敛到同一
+/// 个类型 —— 三屏共用一个筛选谓词的格局因此保住,不分叉。
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum RoleTag {
+    /// 挂 1..=4 个阶段。
+    Stages(Vec<StageKind>),
+    /// 五个全挂 = 全阶段通用。
+    Universal,
+    /// **已判定**不属任何阶段(判过了,跟五阶段无关)。
+    NoStage,
+    /// 还没人归过类(Unknown)。
+    Unclassified,
+}
+
+impl RoleTag {
+    /// Skill 侧:多值 + 「判过没有」。`classified` 来自
+    /// `SkillCard::stage_origin != StageOrigin::Unclassified`。
+    pub fn from_skill(stages: &[StageKind], classified: bool) -> RoleTag {
+        if stages.len() >= StageKind::ALL.len() {
+            RoleTag::Universal
+        } else if stages.is_empty() {
+            if classified {
+                RoleTag::NoStage
+            } else {
+                RoleTag::Unclassified
+            }
+        } else {
+            RoleTag::Stages(stages.to_vec())
+        }
+    }
+
+    /// Agent / Workflow 侧:单值。`None` 一律是「还没人归类」——那两侧今天
+    /// 没有「已判定不属任何阶段」这个概念,不假装有。
+    pub fn from_single(stage: Option<StageKind>) -> RoleTag {
+        match stage {
+            Some(k) => RoleTag::Stages(vec![k]),
+            None => RoleTag::Unclassified,
+        }
+    }
+}
+
+/// 五角色筛选 chip 的选中态。`Universal`/`NoStage`/`Unclassified` 都是**可选
+/// 中的真实状态**,不只是「无筛选」——用户可以专门问「只给我看还没归类的」。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RoleFilter {
     All,
     Stage(StageKind),
-    General,
+    Universal,
+    NoStage,
+    Unclassified,
 }
 
 impl RoleFilter {
-    /// Does `stage_ref` pass this filter?
-    pub fn matches(self, stage_ref: Option<StageKind>) -> bool {
-        match self {
-            RoleFilter::All => true,
-            RoleFilter::Stage(k) => stage_ref == Some(k),
-            RoleFilter::General => stage_ref.is_none(),
+    pub fn matches(self, tag: &RoleTag) -> bool {
+        match (self, tag) {
+            (RoleFilter::All, _) => true,
+            (RoleFilter::Stage(k), RoleTag::Stages(v)) => v.contains(&k),
+            // 全阶段通用的技能对每个阶段 chip 都算命中 —— 它确实属于那个阶段,
+            // 这与注入候选集的口径(本阶段的 + 全阶段通用的)是同一条规则。
+            (RoleFilter::Stage(_), RoleTag::Universal) => true,
+            (RoleFilter::Universal, RoleTag::Universal) => true,
+            (RoleFilter::NoStage, RoleTag::NoStage) => true,
+            (RoleFilter::Unclassified, RoleTag::Unclassified) => true,
+            _ => false,
         }
     }
 }
 
-/// Real per-role counts for a stage-role filter chip row — shared by all
-/// three Hub screens now that Skill/Agent/Workflow carry the identical
-/// `Option<StageKind>` classification dimension (T7). Returns the five real
-/// stages in loop order plus a trailing 通用 (unclassified) count — never
-/// invented: a row with no `stage_ref` is honestly tallied there, never
-/// folded into a stage it was never assigned to.
-pub fn role_chip_counts(stage_refs: &[Option<StageKind>]) -> (Vec<(StageKind, usize)>, usize) {
+/// chip 行的真实计数。
+///
+/// `per_stage` 里已包含「全阶段通用」的行(与 `RoleFilter::matches` 同口径),
+/// 因此各项之和会大于总行数 —— 这在多值维度下是正确的,一件挂两个阶段的技能
+/// 本来就该在两个 chip 里各数一次。
+pub struct RoleChipCounts {
+    pub per_stage: Vec<(StageKind, usize)>,
+    pub universal: usize,
+    pub no_stage: usize,
+    pub unclassified: usize,
+}
+
+pub fn role_chip_counts(tags: &[RoleTag]) -> RoleChipCounts {
     let mut per_stage: Vec<(StageKind, usize)> = StageKind::ALL.iter().map(|&k| (k, 0)).collect();
-    let mut general = 0usize;
-    for sr in stage_refs {
-        match sr {
-            Some(k) => {
-                if let Some(slot) = per_stage.iter_mut().find(|(s, _)| s == k) {
+    let mut universal = 0usize;
+    let mut no_stage = 0usize;
+    let mut unclassified = 0usize;
+    for tag in tags {
+        match tag {
+            RoleTag::Stages(v) => {
+                for k in v {
+                    if let Some(slot) = per_stage.iter_mut().find(|(s, _)| s == k) {
+                        slot.1 += 1;
+                    }
+                }
+            }
+            RoleTag::Universal => {
+                universal += 1;
+                for slot in per_stage.iter_mut() {
                     slot.1 += 1;
                 }
             }
-            None => general += 1,
+            RoleTag::NoStage => no_stage += 1,
+            RoleTag::Unclassified => unclassified += 1,
         }
     }
-    (per_stage, general)
+    RoleChipCounts {
+        per_stage,
+        universal,
+        no_stage,
+        unclassified,
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -898,11 +966,9 @@ pub struct SkillCardVm {
     pub maturity_label: &'static str,
     pub desc: String,
     pub category: String,
-    /// T7 (plan/12 §0/§2): the stage-role classification dimension shared
-    /// with `AgentCardVm`/`WorkflowHubRowVm` — `None` = 通用/跨阶段. Kept as
-    /// the real `StageKind` (not `WorkflowHubRowVm`'s `Option<u8>`), since
-    /// `SkillCard.stage_ref` already is one — no round-trip needed here.
-    pub stage_ref: Option<StageKind>,
+    /// 五角色归属(2026-08-05 起多值)。与 `AgentCardVm`/`WorkflowHubRowVm` 的
+    /// 单值 `stage_ref` 经 `RoleTag` 收敛到同一筛选谓词。
+    pub role_tag: RoleTag,
     pub source_label: &'static str,
     /// plan/渠道6: `true` iff scanned in from the project's own workspace
     /// (`BW_PROJECT_ASSETS_LIBRARY`) — 种A, registered-visible only, excluded
@@ -962,7 +1028,10 @@ pub fn skill_card(s: &SkillCard, files: Vec<SkillFileVm>) -> SkillCardVm {
         maturity_label: maturity_label(s.maturity),
         desc: s.desc.clone(),
         category: s.category.clone(),
-        stage_ref: s.stage_ref,
+        role_tag: RoleTag::from_skill(
+            &s.stages,
+            s.stage_origin != bw_core::stage_catalog::StageOrigin::Unclassified,
+        ),
         source_label: s.source.label(),
         is_project_assets: s.source.is_project_assets(),
         adapted_from: s.adapted_from.clone(),
@@ -1060,7 +1129,8 @@ pub struct AgentCardVm {
     pub name: String,
     pub initial: String,
     pub role: String,
-    /// T7 (plan/12 §0/§3): same dimension as `SkillCardVm::stage_ref`.
+    /// T7 (plan/12 §0/§3): same classification dimension as `SkillCardVm`'s
+    /// `role_tag`(Agent 侧本轮仍单值,经 `RoleTag::from_single` 收敛)。
     pub stage_ref: Option<StageKind>,
     pub maturity_label: &'static str,
     pub skills: Vec<String>,

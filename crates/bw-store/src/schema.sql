@@ -221,11 +221,11 @@ CREATE TABLE IF NOT EXISTS skill (
     maturity    TEXT NOT NULL DEFAULT 'fresh',
     descr       TEXT NOT NULL DEFAULT '',
     category    TEXT NOT NULL DEFAULT '',
-    -- T7 (plan/12 §0/§2): which stage role this skill belongs to — same
-    -- 1..=5 nullable-INTEGER convention `workflow_spec.stage_ref` already
-    -- uses (interop via StageKind::index/from_index). NULL = 通用/跨阶段,
-    -- honest for every imported catalog skill (nobody has classified them).
-    stage_ref   INTEGER,
+    -- 2026-08-05:五角色归类出处(静态表/蒸馏派生/人工/legacy/''=未归类),
+    -- 与 skill_stage 关联表(下方)一起构成 stages 的完整语义(见那张表的
+    -- 注释)。同 `content` 一样,双守卫两处都要有 —— 这一列同时也靠
+    -- `sqlite.rs` 的 `add_column_if_missing` 补给存量库,新库靠这里。
+    stage_origin TEXT NOT NULL DEFAULT '',
     source      TEXT NOT NULL DEFAULT 'self_built',
     -- T2 (plan/12 §6): sub-tag for source='official' only — which curated
     -- external library ("mattpocock-skills"/"superpowers"/"ecc"/…). '' for
@@ -254,14 +254,22 @@ CREATE TABLE IF NOT EXISTS skill_file (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_skill_file_skill ON skill_file(skill_id);
--- T7: deliberately NO `CREATE INDEX ... ON skill(stage_ref)` here — this
--- schema blob runs in full (via `open()`'s statement-by-statement replay)
--- *before* `add_column_if_missing` adds this column to a pre-T7 on-disk
--- `skill` table, so an index on it here would crash every existing database
--- with "no such column: stage_ref" (real bug, caught by this ticket's own
--- migration E2E — `CREATE TABLE IF NOT EXISTS` is the schema-blob's only
--- safe-on-old-tables statement kind; `workflow_spec.stage_ref`'s index below
--- never hit this because that whole table postdates its own column).
+-- 五角色归类(2026-08-05):一件技能可挂多个阶段,所以归属是关联表而不是
+-- skill 行上的一个值。行数本身是语义的一半 —— 0 行 / 1..=4 行 / 5 行分别是
+-- 「未判定或已判定不属任何阶段」/「挂这些阶段」/「全阶段通用」,另一半由
+-- skill.stage_origin 提供(见上面 skill 表的 stage_origin 列)。
+CREATE TABLE IF NOT EXISTS skill_stage (
+    skill_id TEXT NOT NULL REFERENCES skill(id),
+    stage    INTEGER NOT NULL,
+    PRIMARY KEY (skill_id, stage)
+);
+-- 这个索引可以安全地待在 schema.sql 里(与下面 skill.stage_ref 的情况不同):
+-- 它索引的是本文件自己刚 CREATE 的新表的列,不是往存量表上补的列。
+CREATE INDEX IF NOT EXISTS idx_skill_stage_by_stage ON skill_stage(stage);
+-- 2026-08-05:skill 的阶段归属已迁到上面的 skill_stage 关联表,skill.stage_ref
+-- 列连同 idx_skill_stage 索引一并删除(sqlite.rs 的 drop_column_if_present)。
+-- T7 当年那条「本 blob 无条件重放在迁移守卫之前,所以补列的索引不能写在这里」
+-- 的教训仍然成立,对 agent.stage_ref 依然有效 —— 别把它的索引搬进本文件。
 
 CREATE TABLE IF NOT EXISTS agent (
     id          TEXT PRIMARY KEY,

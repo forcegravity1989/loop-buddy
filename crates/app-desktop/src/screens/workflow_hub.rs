@@ -16,6 +16,12 @@
 //! - **设为定时任务** dispatches straight into Cron Hub's own
 //!   `Command::CreateCronTask` (same `schedule: Weekly, project_id: None`
 //!   defaults Cron Hub's own create form uses).
+//!
+//! T7 (2026-07-23, plan/12 §0): a stage-role filter chip row shared with
+//! `SkillHub`/`AgentHub` via `ui::vm::RoleFilter`/`role_chip_counts` — but
+//! without `SkillHub`'s 全阶段通用/不属任何阶段 chips: workflow 侧本轮
+//! `stage_ref` 仍是单值 `Option<StageKind>`,没有这两个多值态,加了就是假的
+//! (理由同样落在下方 chip 渲染旁注上)。
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::component_detail::ComponentSel;
@@ -70,10 +76,10 @@ pub fn WorkflowHub(
 
     let n = hub.workflows.len();
     let chip_counts = ui::vm::source_chip_counts(&hub.workflows);
-    let (role_stage_counts, role_general_count) = ui::vm::role_chip_counts(
+    let role_counts = ui::vm::role_chip_counts(
         &hub.workflows
             .iter()
-            .map(|r| r.stage_ref.and_then(StageKind::from_index))
+            .map(|r| ui::vm::RoleTag::from_single(r.stage_ref.and_then(StageKind::from_index)))
             .collect::<Vec<_>>(),
     );
     let details_by_id: HashMap<WorkflowId, WorkflowDetailVm> = hub
@@ -86,7 +92,11 @@ pub fn WorkflowHub(
     let filtered: Vec<WorkflowHubRowVm> = hub
         .workflows
         .iter()
-        .filter(|r| role_filter().matches(r.stage_ref.and_then(StageKind::from_index)))
+        .filter(|r| {
+            role_filter().matches(&ui::vm::RoleTag::from_single(
+                r.stage_ref.and_then(StageKind::from_index),
+            ))
+        })
         .filter(|r| {
             source_filter()
                 .map(|sf| r.source_label == sf)
@@ -162,7 +172,7 @@ pub fn WorkflowHub(
                         }
                     }
                 }
-                for (sk , count) in role_stage_counts {
+                for (sk , count) in role_counts.per_stage.clone() {
                     {
                         let active = role_filter() == ui::vm::RoleFilter::Stage(sk);
                         let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
@@ -177,13 +187,15 @@ pub fn WorkflowHub(
                     }
                 }
                 {
-                    let active = role_filter() == ui::vm::RoleFilter::General;
+                    // workflow 屏同 agent 屏:不加 Universal/NoStage chip ——
+                    // workflow 侧本轮没有这两个状态,加了就是假的。
+                    let active = role_filter() == ui::vm::RoleFilter::Unclassified;
                     let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
                     rsx! {
                         button {
                             style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                            onclick: move |_| role_filter.set(ui::vm::RoleFilter::General),
-                            "通用 · {role_general_count}"
+                            onclick: move |_| role_filter.set(ui::vm::RoleFilter::Unclassified),
+                            "未归类 · {role_counts.unclassified}"
                         }
                     }
                 }

@@ -257,6 +257,7 @@ async fn main() {
                 desc: c.new_desc.to_string(),
                 category: s.category.clone(),
                 content: c.new_content.to_string(),
+                stages: None,
             })
             .await
             .unwrap();

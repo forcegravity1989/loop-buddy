@@ -22,6 +22,7 @@ mod agent_import;
 mod bw_canon;
 mod legacy_migration;
 mod skill_import;
+mod skill_materialize;
 
 pub use legacy_migration::LegacyMigrationReport;
 
@@ -37,6 +38,7 @@ use bw_core::model::{
     CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO,
     CONNECTOR_KIND_GIT_REPO, CONNECTOR_KIND_SCRIPT,
 };
+use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
     SessionId, SkillId, WorkflowId, WorkflowRunId,
@@ -574,6 +576,11 @@ pub enum Command {
         desc: String,
         category: String,
         content: String,
+        /// 五角色归类(2026-08-05)。`None` = 本次编辑不碰归类(保持既有行为,
+        /// 让任何不带归类 UI 的调用方原样工作);`Some(v)` = 人工归类,落
+        /// `StageOrigin::Manual`,此后 Boot 的静态表回填不再覆盖这件技能。
+        /// `Some(vec![])` 是合法且有意义的输入:人工判定「不属任何阶段」。
+        stages: Option<Vec<StageKind>>,
     },
     /// plan/20 R5(plan/08 S1 原拍板命名):「引入本项目」= 从共享目录
     /// **复制一份归我**——新 id、`project_id = 目标项目`、描述尾注「引入自
@@ -2493,6 +2500,68 @@ impl App {
         Ok((block, refs))
     }
 
+    /// 本阶段(含全阶段通用)技能的**目录**块 + 需要物化的候选行。
+    ///
+    /// 只出目录不出正文:正文由 `skill_materialize` 落到工作区
+    /// `.claude/skills/`,让 CLI 按需加载。desc 里本来就有触发段(「适用:…」/
+    /// "Use when …"),那正是 agent 判断该不该加载一件技能的唯一依据。
+    ///
+    /// 候选 = 挂了本阶段的 ∪ 挂满五阶段的。「已判定不属任何阶段」与「未归类」
+    /// 都**不进**候选 —— 前者判过了不属于,后者没人判过,都不该被当成本阶段的
+    /// 推荐技能。
+    async fn stage_catalog_block(
+        &self,
+        stage: StageKind,
+    ) -> Result<(String, Vec<SkillCard>), AppError> {
+        /// 目录块字符上限。按候选最多的原型段(29 条 × 约 110 字符 ≈ 3200)取,
+        /// 留余量。超限按 uses 降序截断并如实写明未列出的条数 —— 静默截断会让
+        /// prompt 读起来像「本阶段就这些技能」,那是假的。
+        const MAX_BLOCK_CHARS: usize = 4000;
+        const DESC_CAP: usize = 80;
+
+        let mut candidates: Vec<SkillCard> = self
+            .store
+            .list_skills()
+            .await?
+            .into_iter()
+            .filter(|s| !s.content.trim().is_empty() && s.stages.contains(&stage))
+            .collect();
+        if candidates.is_empty() {
+            return Ok((String::new(), Vec::new()));
+        }
+        candidates.sort_by(|a, b| b.uses.cmp(&a.uses).then_with(|| a.name.cmp(&b.name)));
+
+        let mut lines: Vec<String> = Vec::new();
+        let mut total = 0usize;
+        let mut listed = 0usize;
+        for s in &candidates {
+            let line = format!(
+                "- {} — {}",
+                s.name,
+                first_sentence_capped(&s.desc, DESC_CAP)
+            );
+            let n = line.chars().count() + 1;
+            if total + n > MAX_BLOCK_CHARS {
+                break;
+            }
+            total += n;
+            lines.push(line);
+            listed += 1;
+        }
+        let omitted = candidates.len() - listed;
+        let tail = if omitted > 0 {
+            format!("\n（另有 {omitted} 件同样已物化，未在此列出——目录到此为止，不是技能到此为止）")
+        } else {
+            String::new()
+        };
+        let block = format!(
+            "\n\n## 本阶段可用技能（已物化到 .claude/skills/，按需自行加载）\n{}{}\n",
+            lines.join("\n"),
+            tail
+        );
+        Ok((block, candidates))
+    }
+
     /// C8 · 标配 Issue 三件套的 Skill 注入(plan/13 D8): resolve an Issue's
     /// `standard_skill` slug (set once by `seed_standard_issue_trio`, C9's
     /// by-name convention) against the Skill Hub catalog and render its real
@@ -2582,6 +2651,60 @@ impl App {
                     collect_query: String::new(),
                 })
                 .await?;
+        }
+        Ok(())
+    }
+
+    /// 五角色归类的 Boot 对账(2026-08-05)。三条来源按优先级递增:
+    ///
+    /// 1. **静态表**(`bw_core::stage_catalog`):随包/vendored 技能的归类
+    ///    正本。按名对账,幂等 —— 与库中现值不同就改齐(这是自愈:表改了、库
+    ///    跟上)。
+    /// 2. **蒸馏派生**:有 `distilled_from_issue` 的技能,按出处 Issue 的 stage
+    ///    归类。这正是 `distilled_skills_block` 今天已在用的口径,不新造判据。
+    /// 3. **人工覆盖**(`StageOrigin::Manual`):整条跳过,永不回填。
+    ///
+    /// 不在静态表、也没有蒸馏出处的技能如实留在「未归类」——绝不猜。
+    ///
+    /// `StageOrigin::Legacy`(搬自已删除的旧 `skill.stage_ref` 单值列,原始
+    /// 出处不可考,真实案例 `metrics-render`)在下面**没有专门的跳过分支**,
+    /// 是推出来的结论、不是漏掉的分支:保值搬迁
+    /// (`bw_store::sqlite::migrate_legacy_skill_stage_ref`)只在
+    /// `stages_for(name)` 返回 `None` 时才把一行标成 `Legacy`——换句话说,
+    /// 每一条 `Legacy` 行按定义就是静态表覆盖不到的行,所以这里对同一件
+    /// 技能重新查 `stages_for(&s.name)` 必然还是 `None`,自然走不进下面的
+    /// 静态表分支;而蒸馏分支的门槛是 `stage_origin == Unclassified`,
+    /// `Legacy` 也不满足。两条分支天然都放过它,值原样不动。
+    async fn reconcile_skill_stages(&self) -> Result<(), AppError> {
+        let by_id = self.store.list_skill_stages().await?;
+        for s in self.store.list_skills().await? {
+            // 人工归过类的行是终点,任何自动来源都不许覆盖。
+            if s.stage_origin == StageOrigin::Manual {
+                continue;
+            }
+            if let Some(want) = bw_core::stage_catalog::stages_for(&s.name) {
+                let have = by_id.get(&s.id).map(Vec::as_slice).unwrap_or(&[]);
+                // 已经一致就不写 —— 每次 Boot 空转一遍 UPDATE 会白白推高
+                // updated_at,让「这行最近被动过」这个信号失真。
+                let same = have.len() == want.len() && want.iter().all(|k| have.contains(k));
+                if !(same && s.stage_origin == StageOrigin::Table) {
+                    self.store
+                        .set_skill_stages(s.id, want, StageOrigin::Table)
+                        .await?;
+                }
+                continue;
+            }
+            // 蒸馏技能:出处 Issue 的 stage 就是它的阶段。出处 Issue 查不到
+            // (理论上不该发生)如实跳过,不编一个阶段出来。
+            if s.stage_origin == StageOrigin::Unclassified {
+                if let Some(iid) = s.distilled_from_issue {
+                    if let Some(issue) = self.store.get_issue(iid).await? {
+                        self.store
+                            .set_skill_stages(s.id, &[issue.stage], StageOrigin::Distilled)
+                            .await?;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -2877,7 +3000,10 @@ impl App {
                         maturity: Maturity::Fresh,
                         desc: pkg.desc.clone(),
                         category: String::new(),
-                        stage_ref: None,
+                        // T7 一贯的 通用-until-classified:项目工作区扫描同样
+                        // 不猜阶段。
+                        stages: Vec::new(),
+                        stage_origin: StageOrigin::Unclassified,
                         source: source.clone(),
                         content: pkg.content.clone(),
                         project_id: Some(project),
@@ -4066,8 +4192,60 @@ impl App {
         let (distilled_block, distilled_refs) = self
             .distilled_skills_block(p, issue.stage, &issue.standard_skill)
             .await?;
+        // 五角色归类的落地(2026-08-05):本阶段技能的目录进 prompt、正文物化到
+        // 工作区。与上面两块的关键区别 —— 目录里的技能**不进** `spec.skills`,
+        // 因此不记 uses:目录列了二十几条、agent 实际可能只读两条,全都记一笔
+        // 就是造假,会稀释 uses「真被用了」的语义。真解析(读 claude CLI 的
+        // session jsonl 里的 tool_use=Skill 记录,只给真加载的记账)已验证可行,
+        // 用户 2026-08-05 明确说本轮不做。
+        let (catalog_block, catalog_skills) = self.stage_catalog_block(issue.stage).await?;
+        let workspace_present = !proj.workspace_path.trim().is_empty();
+        if !catalog_skills.is_empty() && workspace_present {
+            let mut with_files = Vec::with_capacity(catalog_skills.len());
+            for s in catalog_skills {
+                let files = self.store.list_skill_files(s.id).await?;
+                with_files.push((s, files));
+            }
+            let report =
+                skill_materialize::materialize_stage_skills(&proj.workspace_path, &with_files)
+                    .await;
+            if !report.skipped_foreign.is_empty() {
+                eprintln!(
+                    "[BW_SKILL_MATERIALIZE] 跳过 {} 件同名但非 BW 托管的技能目录(用户自己的 skill 优先):{}",
+                    report.skipped_foreign.len(),
+                    report.skipped_foreign.join(", ")
+                );
+            }
+            if !report.skipped_unsafe.is_empty() {
+                // 评审找出的真坑(2026-08-06):路径穿越拦截,跟上面「用户的
+                // 东西优先」是完全不同性质的跳过 —— 单独一行,避免混进
+                // `skipped_foreign` 让人误读成"这只是普通冲突"。
+                eprintln!(
+                    "[BW_SKILL_MATERIALIZE_SECURITY] 拦截 {} 件路径穿越技能(name/rel_path 校验不过,未写盘):{}",
+                    report.skipped_unsafe.len(),
+                    report.skipped_unsafe.join(", ")
+                );
+            }
+            eprintln!(
+                "[BW_SKILL_MATERIALIZE] 写入 {} · 未变 {}",
+                report.written.len(),
+                report.unchanged
+            );
+        }
+        // Important 修复(评审实测确认,plan 原文缺口,由控制者拍板修):
+        // `catalog_block` 的文案原文承诺「已物化到 .claude/skills/」——但上面
+        // 的物化分支只在 `workspace_present` 时跑。空工作区(Mock 项目)磁盘
+        // 上根本不存在这些文件,若仍把这段“已物化”的文案拼进 prompt,就是对
+        // 执行 agent 说假话,直接违反本仓「mock 必须自我标注、绝不假装」的
+        // 核心纪律。所以拼接（不只是物化）也要进这道闸门:工作区为空时这一
+        // 段干脆不出现在 prompt 里,而不是出现一段承诺落空的文案。
+        let catalog_block = if workspace_present {
+            catalog_block
+        } else {
+            String::new()
+        };
         spec.name = format!("#{} {}", issue.number, issue.title);
-        let extra = format!("{issue_brief}{standard_block}{distilled_block}");
+        let extra = format!("{issue_brief}{standard_block}{distilled_block}{catalog_block}");
         // 既有缺口(C8 顺带修复,非本票新增行为):`stage_workflow_with_playbook`
         // 给每个 phase 都填了非空的 `phase_prompts[idx]`,而
         // `Engine::run_workflow` 选 phase 的真实 prompt 时——`phase_prompts
@@ -4833,6 +5011,11 @@ impl App {
                         .await?;
                 }
                 self.refresh_workflow_specs().await?;
+                // 五角色归类对账(SR5):放在 mohit `ImportSkillLibrary` 之后
+                // ——那次导入会新建两行技能,对账要看得见它们;放在
+                // `refresh_skills` 之前,让本次 Boot 里的界面立刻读到对账后
+                // 的 stages。
+                self.reconcile_skill_stages().await?;
                 self.refresh_skills().await?;
                 self.refresh_agents().await?;
                 self.refresh_cron_tasks().await?;
@@ -6236,8 +6419,9 @@ impl App {
                         category,
                         // T7: no stage selector on the hand-authored create
                         // form yet (out of this ticket's scope) — honest
-                        // 通用 until an editor exists to classify it.
-                        stage_ref: None,
+                        // 未归类 until an editor exists to classify it.
+                        stages: Vec::new(),
+                        stage_origin: StageOrigin::Unclassified,
                         source,
                         content,
                         project_id: None, // Hub 创建口径不变,一律全局
@@ -6282,9 +6466,11 @@ impl App {
                             desc,
                             category,
                             // 忽略:store::distill_skill_from_issue 同样改从源
-                            // Issue 的真实 stage 派生(T7,与 project_id 同一
-                            // provenance-not-input 规则),不采用这里传入的值。
-                            stage_ref: None,
+                            // Issue 的真实 stage 派生(T7/2026-08-05,与
+                            // project_id 同一 provenance-not-input 规则),
+                            // 不采用这里传入的值。
+                            stages: Vec::new(),
+                            stage_origin: StageOrigin::Unclassified,
                             source: HubSource::SelfBuilt,
                             content,
                             // 忽略:store::distill_skill_from_issue 改从源 Issue
@@ -6334,8 +6520,9 @@ impl App {
                             // stays empty, editable later via `UpdateSkill`.
                             category: String::new(),
                             // T7 (plan/12 §0/§2): no stage guessing on import
-                            // either — 通用 until a human classifies it.
-                            stage_ref: None,
+                            // either — 未归类 until a human classifies it.
+                            stages: Vec::new(),
+                            stage_origin: StageOrigin::Unclassified,
                             source,
                             content: parsed.content,
                             project_id,
@@ -6415,10 +6602,11 @@ impl App {
                                 // T3 scope, same as T2: no predetermined
                                 // category on import.
                                 category: String::new(),
-                                // T7: same 通用-until-classified rule as
+                                // T7: same 未归类-until-classified rule as
                                 // `ImportSkillPackage` — no guessing across
                                 // 55 imported skills either.
-                                stage_ref: None,
+                                stages: Vec::new(),
+                                stage_origin: StageOrigin::Unclassified,
                                 source: HubSource::Official {
                                     official_library: official_library.clone(),
                                 },
@@ -6451,6 +6639,7 @@ impl App {
                 desc,
                 category,
                 content,
+                stages,
             } => {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
@@ -6491,6 +6680,44 @@ impl App {
                         },
                     )
                     .await?;
+                // 归类与内容编辑分两次写:`SkillEdit` 管内容(且带 T11 的
+                // flip_to_self_built),归类走 `set_skill_stages`(刻意不碰
+                // source/official_library —— 归类是 BW 自己的组织维度,不是对
+                // 上游正文的改编,不该让 mattpocock 的 tdd 因为被归到构建段就
+                // 失去官方徽记)。
+                //
+                // Important 修复(2026-08 code review,控制者拍板):编辑表单
+                // 的 `picked` 初值就是打开时的现有归类,无论用户有没有碰过五
+                // 角色 chip,`save` 都无条件带上 `stages: Some(picked())`——
+                // 如果这里对着 `Some(...)` 就无条件 `Manual`,那「只改个错别字
+                // 就保存」也会把 `stage_origin` 静默翻成 `Manual`,让这件技能
+                // 永久失去静态表自愈资格(2026-08-05 真实日常库 68 件里 65 件
+                // 当时是 Table 来源,覆盖面极大)。`stage_origin` 记录的是**归类
+                // 动作**的出处,不是「这次请求里带没带 stages 字段」——跟下面
+                // `flip_to_self_built` 同一条纪律:比对真实现值,值没变就不算
+                // 一次动作,不落 Manual。
+                //
+                // 集合比较(顺序无关,不能直接 `==` 比 `Vec`——DB 读回按
+                // `stage` 升序,不保证等于 UI 勾选顺序):长度相等 + 逐个
+                // `contains`。
+                if let Some(stages) = stages {
+                    let unchanged = existing.as_ref().is_some_and(|e| {
+                        e.stages.len() == stages.len()
+                            && stages.iter().all(|k| e.stages.contains(k))
+                    });
+                    // Unclassified 是例外:哪怕请求值(空集)与现值(空集)
+                    // 集合相等,「现有 origin 是 Unclassified」时用户提交空集
+                    // 仍是一次真实判断——「判定为不属任何阶段」,必须落成
+                    // Manual + 零关联行,不能因为集合相等就跳过。
+                    let existing_is_unclassified = existing
+                        .as_ref()
+                        .is_some_and(|e| e.stage_origin == StageOrigin::Unclassified);
+                    if !unchanged || existing_is_unclassified {
+                        self.store
+                            .set_skill_stages(id, &stages, StageOrigin::Manual)
+                            .await?;
+                    }
+                }
                 self.refresh_skills().await?;
                 self.emit(Event::SkillsChanged);
             }
@@ -6552,7 +6779,11 @@ impl App {
                                     maturity: Maturity::Fresh,
                                     desc,
                                     category: src.category.clone(),
-                                    stage_ref: src.stage_ref,
+                                    // 出处保真(R5)延伸到五角色归类:阶段归属
+                                    // 与其出处一并原样复制,不因收录进项目而
+                                    // 退化成未归类——收录是复制,不是重新判断。
+                                    stages: src.stages.clone(),
+                                    stage_origin: src.stage_origin,
                                     source: src.source.clone(),
                                     content: src.content.clone(),
                                     project_id: Some(project_id),
@@ -8115,6 +8346,24 @@ fn review_tail(text: &str) -> String {
         return t.to_string();
     }
     t.chars().skip(n - MAX).collect()
+}
+
+/// desc 的第一句,按字符数截断。技能的 description 上限 1024 字符,整句进目录
+/// 会把 prompt 撑得没法读;第一句恰好是触发段所在。
+fn first_sentence_capped(desc: &str, cap: usize) -> String {
+    let head = desc
+        .split(['。', '\n'])
+        .next()
+        .unwrap_or(desc)
+        .split(". ")
+        .next()
+        .unwrap_or(desc)
+        .trim();
+    if head.chars().count() <= cap {
+        return head.to_string();
+    }
+    let cut: String = head.chars().take(cap).collect();
+    format!("{cut}…")
 }
 
 /// T10 (plan/12 §5): the ephemeral spec `tick_scheduler` runs a `RunSkill`/

@@ -25,6 +25,7 @@ use bw_core::model::{
     SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
     WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
+use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
     SkillFileId, SkillId, WorkflowId, WorkflowRunId,
@@ -244,11 +245,11 @@ pub struct NewSkill {
     pub maturity: Maturity,
     pub desc: String,
     pub category: String,
-    /// T7 (plan/12 §0/§2): which stage role this skill belongs to; `None` =
-    /// general/cross-stage. See `bw_core::model::SkillCard::stage_ref`'s doc
-    /// comment for the `Option<StageKind>`-vs-`WorkflowSpec`'s-`Option<u8>`
-    /// alignment call.
-    pub stage_ref: Option<StageKind>,
+    /// 建行时的阶段归属(多值)。见 `bw_core::model::SkillCard::stages`。
+    pub stages: Vec<StageKind>,
+    /// 这次归类的出处。手工新建(`CreateSkill`)一律 `Unclassified` + 空
+    /// `stages` —— 诚实的「还没归类」,绝不替用户猜一个阶段。
+    pub stage_origin: StageOrigin,
     pub source: HubSource,
     /// Executable body (may be empty for a catalog reference entry). For a
     /// skill minted by `ImportSkillPackage`, this is SKILL.md's own body —
@@ -297,8 +298,9 @@ pub struct NewAgent {
     pub id: AgentId,
     pub name: String,
     pub role: String,
-    /// T7 (plan/12 §0/§3): same classification dimension as
-    /// `NewSkill::stage_ref` — `None` = general/cross-stage.
+    /// T7 (plan/12 §0/§3): same classification dimension as `NewSkill`'s
+    /// (Skill 侧 2026-08-05 起改 `stages`/`stage_origin` 多值;Agent 侧本轮
+    /// 不动,仍是单值)。`None` = general/cross-stage.
     pub stage_ref: Option<StageKind>,
     pub maturity: Maturity,
     pub skills: Vec<String>,
@@ -863,16 +865,31 @@ pub trait Store: Send + Sync {
     /// Every real support file belonging to one skill, insertion order
     /// (oldest first) — the file-tree source for a Skill detail view (T4).
     async fn list_skill_files(&self, skill_id: SkillId) -> Result<Vec<SkillFileRow>>;
-    /// T7 (plan/12 §0/§2): narrow backfill setter — classifies an *existing*
-    /// row (not a content edit, so deliberately separate from `SkillEdit`,
-    /// same reasoning `record_skill_use` already established for
-    /// single-column, non-content updates). Used by
-    /// `seed_bw_standard_skills_if_missing` to backfill `stage_ref` on the
-    /// built-in bw-standard skills when they were seeded by an older binary,
-    /// before this column carried real values.
-    async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()>;
+    /// 五角色归类:一次读回全库的技能阶段归属。`list_skills` 用它给每张
+    /// `SkillCard` 补齐 `stages`,避免每行一次查询的 N+1。缺席的 skill_id =
+    /// 零行 = 「没挂任何阶段」(是未归类还是已判定不属任何阶段,由该行的
+    /// `stage_origin` 分辨,不在本方法的职责里)。
+    async fn list_skill_stages(&self)
+        -> Result<std::collections::HashMap<SkillId, Vec<StageKind>>>;
+    /// 五角色归类:重写一件技能的阶段归属(先删后插,幂等),并同时写下这次
+    /// 归类的出处。空 `stages` + 非 `Unclassified` 的 `origin` = 「已判定:
+    /// 不属任何阶段」;空 `stages` + `Unclassified` = 回到「未归类」。
+    ///
+    /// 这里**不碰** `source`/`official_library` —— 归类是 BW 自己的组织维度,
+    /// 不是对上游正文的改编,不触发 T11「编辑即脱离源头」。
+    ///
+    /// 取代了 T7 时代的窄回填器 `set_skill_stage_ref`(单值)——五角色归类
+    /// 2026-08-05 起迁到 `skill_stage` 关联表(多值),`stage_ref` 单值列已
+    /// 真删,旧回填器随之移除,唯一调用方 `seed_bw_standard_skills_if_missing`
+    /// 已改走本方法。
+    async fn set_skill_stages(
+        &self,
+        id: SkillId,
+        stages: &[StageKind],
+        origin: StageOrigin,
+    ) -> Result<()>;
     /// plan/16 §2 防线 2: same narrow single-concern setter shape as
-    /// `set_skill_stage_ref`, for the `source`/`official_library` column
+    /// `set_skill_stages`, for the `source`/`official_library` column
     /// pair. Used by Boot's pristine promotion — a legacy-encoded built-in
     /// stage-skill row whose `content` still matches the code canon
     /// byte-for-byte gets re-labelled `Official { "bw-standard" }`. The
@@ -890,7 +907,7 @@ pub trait Store: Send + Sync {
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>>;
     async fn update_agent(&self, id: AgentId, edit: AgentEdit) -> Result<()>;
-    /// T7: same backfill role as `set_skill_stage_ref`, for the five
+    /// T7: same backfill role as `set_skill_stages`(单值版), for the five
     /// built-in stage-role agents.
     async fn set_agent_stage_ref(&self, id: AgentId, stage_ref: Option<StageKind>) -> Result<()>;
     /// Credit one settled run to **one** agent row: `runs += 1`,
