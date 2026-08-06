@@ -1613,6 +1613,10 @@ fn ProgressAll(op: OpVm) -> Element {
     let border = theme::BORDER;
     let clay = theme::CLAY;
     let k_sync = k.clone();
+    // PF1-R3 · 项目指标改卡片后,「↻ 立即采集」按钮从 R2-2 的 strip 挪到项目
+    // 指标区头。对仗 ProgressStage C7 取法,发 Command::CollectMetrics(走老
+    // handler lib.rs:6798,采集不是结算,不推 Issue 状态)。
+    let k_collect = k.clone();
 
     // V1-Issue3 · split metrics: intrinsic (项目指标 strip) vs business (业务指标
     // 值卡). stage_kind.is_none() = project-level (北极星/L1/L2/L3 + codehub
@@ -1660,6 +1664,41 @@ fn ProgressAll(op: OpVm) -> Element {
     let open_count = op.week_review.open_count;
     let metrics_stale = op.week_review.metrics_stale;
 
+    // PF1-R4 · 项目指标区定型:round 3 把 intrinsic 全量(5 阶段完成 +
+    // 2 仓指标)都渲染成卡,阶段完成不该是大卡。改:只渲染 2 张代码仓
+    // 卡(开放 Issue 数 / 已合入 MR 数),下方加一行小字显 active stage
+    // 的阶段完成数(内联 div,不复活 strip 组件)。R4-2 的 spark 1 点
+    // 显点让 1 周数据也能在折线显个点。
+    let repo_metrics: Vec<MetricVm> = intrinsic
+        .iter()
+        .filter(|m| m.name == "开放 Issue 数" || m.name == "已合入 MR 数")
+        .cloned()
+        .collect();
+    // PF1-R5 · 阶段完成一行五阶段(不只 active):所有阶段并排一行小字,
+    // 值空显「—」。对仗旧 strip 多项一行口径,但不复活 strip 组件。
+    let mut stage_done_rows = intrinsic
+        .iter()
+        .filter(|m| m.name == "阶段完成 Issue 数")
+        .filter_map(|m| m.stage_kind.as_ref().map(|sk| (sk, m)))
+        .collect::<Vec<_>>();
+    stage_done_rows.sort_by_key(|(sk, _)| sk.index());
+    let stage_done_txt = if stage_done_rows.is_empty() {
+        "阶段完成:—".to_string()
+    } else {
+        let parts: Vec<String> = stage_done_rows
+            .iter()
+            .map(|(sk, m)| {
+                let v = if m.value_raw.trim().is_empty() {
+                    "—"
+                } else {
+                    m.value_raw.trim()
+                };
+                format!("{} {}", sk.label(), v)
+            })
+            .collect();
+        format!("阶段完成:{} · 机器记", parts.join(" / "))
+    };
+
     // ▾配置 collapse toggle — default collapsed (config is secondary on the
     // overview; the v2 layout surfaces metrics first, config behind a click).
     let mut config_open = use_signal(|| false);
@@ -1671,9 +1710,38 @@ fn ProgressAll(op: OpVm) -> Element {
     };
 
     rsx! {
-        // ═══ 1. 项目指标 strip (intrinsic · compact · no signal lights) ═══
-        if !intrinsic.is_empty() {
-            ProjectMetricStrip { intrinsic, active_stage: op.active_stage }
+        // ═══ 1. 项目指标 · 代码仓级 (intrinsic · 卡片 · 不点健康灯) ═══
+        // PF1-R3 · 原 strip(compact 小条)看不清、无 delta/趋势、无数据
+        // 「—」像分隔符且全局样式垮。改用 BizMetricCard(对仗业务指标卡),
+        // 复用数据层已有的 weekly_delta/weekly_spark。intrinsic 指标不点灯
+        // (决议 a:代码仓 Issue/MR 是工程数,signal 恒 Unknown 无信息量)。
+        // PF1-R4 见上方 repo_metrics/stage_done_txt 计算(移出 rsx:Dioxus
+        // rsx! 块不接受 let 绑定)。
+        if !repo_metrics.is_empty() {
+            div {
+                style: "{card} padding:20px 22px;margin-bottom:16px;",
+                div {
+                    style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;",
+                    span { style: "font-family:{serif};font-size:16px;font-weight:600;", "项目指标 · 代码仓级" }
+                    button {
+                        style: "font-size:12px;color:{clay};border:1px solid {clay};border-radius:7px;padding:5px 12px;cursor:pointer;background:transparent;",
+                        onclick: move |_| k_collect.send(Command::CollectMetrics),
+                        "↻ 立即采集"
+                    }
+                }
+                div { style: "font-size:12px;color:{ink3};margin-bottom:16px;", "只当现状数 · 不点健康灯 · 不参与项目健康派生" }
+                div {
+                    style: "display:grid;grid-template-columns:repeat(2,1fr);gap:12px;",
+                    for m in repo_metrics.iter().cloned() {
+                        BizMetricCard { key: "{m.name}", m, is_north_star: false }
+                    }
+                }
+                // 阶段完成一行(内联小字,不复活 strip):只显 active stage 那条。
+                div {
+                    style: "margin-top:12px;font-size:12px;color:{ink3};font-family:{mono};",
+                    "{stage_done_txt}"
+                }
+            }
         }
 
         // ═══ 2. 业务指标 section (北極星 → 滯後 → 引領, 值卡并排) ═══
@@ -1901,81 +1969,6 @@ fn MetricCard(m: MetricVm) -> Element {
     }
 }
 
-/// V1-Issue3 · 项目指标 strip — compact top strip of intrinsic metrics
-/// (buddy-seeded code-stats: 开放Issue/已合入MR/阶段完成). NOT big cards, no
-/// signal lights — "只当现状数·不上卷健康". Source badges: 〔脚本采〕/〔机器记〕.
-#[component]
-fn ProjectMetricStrip(intrinsic: Vec<MetricVm>, active_stage: StageKind) -> Element {
-    let card = theme::card();
-    let ink3 = theme::INK_3;
-    let mono = theme::MONO;
-
-    let open_issues = intrinsic
-        .iter()
-        .find(|m| m.name == "开放 Issue 数" && m.stage_kind.is_none())
-        .cloned();
-    let merged_mrs = intrinsic
-        .iter()
-        .find(|m| m.name == "已合入 MR 数" && m.stage_kind.is_none())
-        .cloned();
-    let stage_done = intrinsic
-        .iter()
-        .find(|m| m.name == "阶段完成 Issue 数" && m.stage_kind == Some(active_stage))
-        .cloned();
-
-    rsx! {
-        div {
-            style: "{card} padding:9px 14px;margin-bottom:16px;display:flex;align-items:center;gap:6px 16px;flex-wrap:wrap;",
-            span { style: "font-family:{mono};font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:{ink3};white-space:nowrap;", "项目指标 · 代码仓级" }
-            StripItem { name: "开放 Issue", metric: open_issues }
-            StripItem { name: "已合入 MR", metric: merged_mrs }
-            StripItem { name: "阶段完成", metric: stage_done }
-            div {
-                style: "font-size:11px;color:{ink3};width:100%;margin-top:4px;line-height:1.5;",
-                "只当现状数 · 不上卷健康——buddy 固有工程数(Issue/MR/阶段),不点健康灯,不参与项目健康派生。来源徽:〔脚本采〕/〔机器记〕。"
-            }
-        }
-    }
-}
-
-/// One inline value chip in the 项目指标 strip.
-#[component]
-fn StripItem(name: &'static str, metric: Option<MetricVm>) -> Element {
-    let ink3 = theme::INK_3;
-    let mono = theme::MONO;
-    match metric {
-        Some(m) => {
-            let (btxt, bclr) = match m.collection_chain.collect_label.as_str() {
-                "script" => ("〔脚本采〕", "#4A5E42"),
-                "machine" => ("〔机器记〕", "#5A4E7A"),
-                "manual" => ("〔手填〕", "#8A6720"),
-                "legacy·迁script" => ("〔legacy·迁script〕", "#8C867A"),
-                _ => ("〔未接〕", "#B0503A"),
-            };
-            let val = if m.value_raw.is_empty() {
-                "—".to_string()
-            } else {
-                m.value_raw.clone()
-            };
-            rsx! {
-                span {
-                    style: "display:inline-flex;align-items:baseline;gap:5px;font-size:12.5px;",
-                    span { style: "color:{ink3};", "{name}" }
-                    span { style: "font-family:{mono};font-weight:600;font-size:13px;", "{val}" }
-                    span { style: "font-family:{mono};font-size:10.5px;color:{bclr};", "{btxt}" }
-                }
-            }
-        }
-        None => rsx! {
-            span {
-                style: "display:inline-flex;align-items:baseline;gap:5px;font-size:12.5px;",
-                span { style: "color:{ink3};", "{name}" }
-                span { style: "font-family:{mono};color:{ink3};", "—" }
-            }
-        },
-    }
-}
-
 /// V1-Issue3 · v2 业务指标值卡 — 当前值+目标+信号灯 → delta上周变化 →
 /// 按周折线. 北極星卡高亮(is_north_star=true). 引领卡额外带「本周目标+达成」
 /// (本周计划折进卡). 无观测=grey+折线空+delta「—」(data-driven, not hardcoded).
@@ -1989,7 +1982,15 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
     let mono = theme::MONO;
     let clay = theme::CLAY;
     let sig_color = ui::signal_color(m.signal).to_string();
-    let dot = theme::dot(&sig_color, 9);
+    // PF1-R3 · 决议 a:intrinsic 指标(代码仓 Issue/MR/阶段完成)是工程数
+    // 不是健康,signal 恒 Unknown 无信息量 → 不渲染信号灯 dot。其余
+    // (值/delta/折线/collect 徽)照常。
+    let show_dot = !m.is_intrinsic;
+    let dot = if show_dot {
+        theme::dot(&sig_color, 9)
+    } else {
+        String::new()
+    };
     let has_obs = m.collection_chain.has_observation;
 
     // Weekly sparkline geometry from weekly_spark (8-week, carry-forward).
@@ -2017,6 +2018,13 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
     };
     let name_size = if is_north_star { "16px" } else { "14px" };
     let val_size = if is_north_star { "24px" } else { "22px" };
+    // PF1-R3-fixup: 无观测时值显「—」不显空(review Low · 用户要求#3),
+    // 对所有指标一致(业务+项目),dashed 边框 + delta「—」已就位,值补齐。
+    let val_display = if m.value_raw.trim().is_empty() {
+        "—".to_string()
+    } else {
+        m.value_raw.clone()
+    };
 
     // 引领卡: 本周目标 + 达成 ●/○ (folded week_plan — the card IS the plan).
     let hit_txt = match m.hit {
@@ -2043,10 +2051,12 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
     rsx! {
         div {
             style: "{card} {ns_css} {grey_css} padding:14px 16px;display:flex;flex-direction:column;gap:10px;",
-            // Head: signal dot + name (+ collect badge)
+            // Head: signal dot (intrinsic 指标不点灯)+ name (+ collect badge)
             div {
                 style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;",
-                span { style: "{dot}" }
+                if show_dot {
+                    span { style: "{dot}" }
+                }
                 span { style: "font-family:{serif};font-weight:600;font-size:{name_size};", "{m.name}" }
                 if !collect_label.is_empty() && collect_label != "machine" {
                     span { style: "margin-left:auto;font-family:{mono};font-size:10.5px;color:{ink3};border:1px solid #E2DCCF;border-radius:4px;padding:1px 6px;", "{collect_label}" }
@@ -2058,7 +2068,7 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
             // Top: current value + target (+ leading: 本周目标 + 达成)
             div {
                 style: "display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;",
-                span { style: "font-family:{serif};font-weight:700;font-size:{val_size};", "{m.value_raw}" }
+                span { style: "font-family:{serif};font-weight:700;font-size:{val_size};", "{val_display}" }
                 if !m.target_raw.is_empty() {
                     span { style: "font-size:12px;color:{ink3};", "目标 {m.target_raw}" }
                 } else {

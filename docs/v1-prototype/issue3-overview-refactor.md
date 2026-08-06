@@ -5,6 +5,8 @@
 > 基线:worktree 在 v1(`a4f8339` = W1 全量)。W2 代码未合 v1;W2 终态按 `docs/v1-prototype/issue2-metrics-interactive-loop.md`(Phase 1+2a+2b ✅,Phase 3+4 ⬜)对齐——W2 申明的活 W3 不碰(见 §3)。
 >
 > 视觉事实源:`docs/v1-prototype/issue3-overview-mockup.html`(高保真原型,toggle 现状/提议,default 提议)。
+>
+> **穿刺修正(2026-08-06)**:本文 §1 的「项目指标 compact 一行小条」实践后被推翻——用户要卡片(值+delta+按周趋势),见 `docs/v1-prototype/piercing-fixes-1.md` §8(Round 3 strip→卡片)/§9(Round 4 定型:2 仓卡+阶段完成一行)/§10(Round 5+5c)。项目指标区最终态:2 张代码仓卡(BizMetricCard,intrinsic 不点灯)+ 阶段完成一行五阶段。以 piercing-fixes-1.md 为准。
 
 ## 0. scope delta(读现状取证,不基于猜)
 

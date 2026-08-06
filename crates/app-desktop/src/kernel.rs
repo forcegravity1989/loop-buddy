@@ -847,11 +847,26 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         .iter()
         .map(|p| (p.id, p.name.clone()))
         .collect();
-    let cron_tasks: Vec<CronRowVm> = state
-        .cron_tasks
-        .iter()
-        .map(|c| cron_row(c, &project_names, &state.skills, now))
-        .collect();
+    // PF1-3a: CollectMetrics 任务的副标题从该项目 collect_kind='script' 的
+    // metric name 派生(对仗 mode_label/mode_icon 同源)。卡只读 VM 无 store
+    // 访问,所以这里(kernel build_vm)填。best-effort:读失败空 Vec。
+    let mut cron_tasks: Vec<CronRowVm> = Vec::with_capacity(state.cron_tasks.len());
+    for c in state.cron_tasks.iter() {
+        let mut row = cron_row(c, &project_names, &state.skills, now);
+        if matches!(c.mode, CronMode::CollectMetrics) {
+            if let Some(pid) = c.project_id {
+                if let Ok(sigs) = store.persisted_signals(pid).await {
+                    row.collect_targets = sigs
+                        .metrics
+                        .iter()
+                        .filter(|m| m.collect_kind == "script")
+                        .map(|m| m.name.clone())
+                        .collect();
+                }
+            }
+        }
+        cron_tasks.push(row);
+    }
     let connectors: Vec<ConnectorCardVm> = state.connectors.iter().map(connector_card).collect();
     let knowledge_sources: Vec<KnowledgeRowVm> =
         state.knowledge_sources.iter().map(knowledge_row).collect();

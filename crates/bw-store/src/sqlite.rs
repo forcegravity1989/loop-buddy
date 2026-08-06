@@ -318,6 +318,14 @@ impl SqliteStore {
             "TEXT NOT NULL DEFAULT 'github'",
         )
         .await?;
+        // PF1-R2-1②: rename legacy collect_metrics cron names ending in
+        // "· 指标采集" (pre-PF1-3a default) to the specific "· 采集代码仓指标"
+        // form, so `sqlite3 SELECT name` reads back the clear name too (UI +
+        // DB 一致 — honest, not just a VM-layer display override). Idempotent:
+        // only matches rows still ending in "· 指标采集"; new rows already use
+        // the specific name (PF1-3a ①) and don't match. Storage name 是审计
+        // 口径的活物,这次用户明确要 DB 读回也清楚,故走数据迁移而非 VM 派生。
+        migrate_cron_collect_metrics_name(&pool).await?;
 
         Ok(Self { pool })
     }
@@ -362,6 +370,41 @@ async fn rename_column_if_exists(
     let old_exists = rows.iter().any(|r| r.get::<String, _>("name") == old);
     if old_exists {
         sqlx::query(&format!("ALTER TABLE {table} RENAME COLUMN {old} TO {new}"))
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// PF1-R2-1②: data migration (not a schema change — no new column, only
+/// renames rows in `cron_task`). Legacy collect_metrics crons built before
+/// PF1-3a ① stored `name = "<project> · 指标采集"` (too generic; user read it
+/// as unclear what this cron actually does). Rename them to the specific
+/// "<project> · 采集代码仓指标" form so `SELECT name` reads back honestly —
+/// UI + DB 一致, not a VM-layer display override. Idempotent: the LIKE
+/// suffix `'· 指标采集'` only matches rows still on the old generic name; new
+/// crons (PF1-3a ①) already use the specific name and are not touched, so
+/// re-running on an already-migrated DB is a no-op. Project name is joined
+/// from `project` via `project_id` (keeps the name in sync with the project's
+/// real display name at migration time; later project renames are out of
+/// scope — same append-only name-stability cron_task has always had).
+async fn migrate_cron_collect_metrics_name(pool: &SqlitePool) -> Result<()> {
+    let rows = sqlx::query(
+        r#"SELECT cron_task.id AS id, project.name AS pname
+           FROM cron_task
+           JOIN project ON cron_task.project_id = project.id
+           WHERE cron_task.mode = 'collect_metrics'
+             AND cron_task.name LIKE '% · 指标采集'"#,
+    )
+    .fetch_all(pool)
+    .await?;
+    for r in rows {
+        let id: String = r.get("id");
+        let pname: String = r.get("pname");
+        let new_name = format!("{pname} · 采集代码仓指标");
+        sqlx::query("UPDATE cron_task SET name = ? WHERE id = ?")
+            .bind(&new_name)
+            .bind(&id)
             .execute(pool)
             .await?;
     }
@@ -2400,8 +2443,8 @@ impl Store for SqliteStore {
     async fn create_cron_task(&self, c: NewCronTask) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO cron_task (id, name, target, schedule, project_id, status, last_run, next_run, mode, issue_stage, issue_assignee, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, 'normal', '', '', ?, ?, ?, ?, ?, 0)",
+            "INSERT INTO cron_task (id, name, target, schedule, project_id, status, last_run, next_run, mode, issue_stage, issue_assignee, created_at, updated_at, rev, last_run_at)
+             VALUES (?, ?, ?, ?, ?, 'normal', '', '', ?, ?, ?, ?, ?, 0, ?)",
         )
         .bind(c.id.uuid().to_string())
         .bind(&c.name)
@@ -2413,6 +2456,7 @@ impl Store for SqliteStore {
         .bind(&c.issue_assignee)
         .bind(t)
         .bind(t)
+        .bind(c.last_run_at.unwrap_or(0))
         .execute(&self.pool)
         .await?;
         Ok(())

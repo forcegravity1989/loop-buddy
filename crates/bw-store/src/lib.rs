@@ -373,6 +373,10 @@ pub struct NewCronTask {
     pub issue_stage: Option<StageKind>,
     /// A1: agent NAME to assign the minted Issue to (`None` = unassigned).
     pub issue_assignee: Option<String>,
+    /// PF1-4: 初始 `last_run_at`(unix sec)。`None`→0(NULL 语义,cron_due
+    /// 视为 never-run,首 tick 立即触发);`Some(t)`→t,避免新建 cron 在
+    /// setup 完成前抢跑。CollectMetrics cron 用 `Some(now())` 防竞态。
+    pub last_run_at: Option<i64>,
 }
 
 /// Write DTO for creating an [`Issue`]. `status` defaults to `Backlog`;

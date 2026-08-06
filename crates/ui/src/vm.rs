@@ -1387,6 +1387,15 @@ pub struct CronRowVm {
     /// T10: `RunPrompt`'s full text, for the "点击展开全文" affordance.
     /// `None` for every other mode.
     pub prompt_full: Option<String>,
+    /// PF1-3a: `CollectMetrics` 任务的采集目标名(从该项目
+    /// `collect_kind='script'` 的 metric name 派生,kernel 填)。cron 卡
+    /// 用它显示「采集代码仓指标(开放 Issue / 已合入 MR)· 每日」副标题。
+    /// 非 CollectMetrics 模式为空 Vec。
+    pub collect_targets: Vec<String>,
+    /// PF1-3a fixup: `true` only for `CronMode::CollectMetrics` — a stable
+    /// discriminant for the card's collect-metrics branch, so a label-text
+    /// rename can't silently drop the `collect_targets` subtitle (review F1).
+    pub is_collect_metrics: bool,
 }
 
 /// A real, honest first-40-character preview — counts chars (not bytes), so
@@ -1453,6 +1462,11 @@ pub fn cron_row(
         skill_missing,
         prompt_preview,
         prompt_full,
+        // PF1-3a: cron_row 无 store 访问,kernel 在 build_vm 里按项目指标派生后
+        // 覆盖;这里先空,保证非 CollectMetrics 模式与未填充时为零 Vec。
+        collect_targets: Vec::new(),
+        // PF1-3a fixup: 稳定判别,不靠 mode_label 字符串(文案改不失效)。
+        is_collect_metrics: matches!(c.mode, CronMode::CollectMetrics),
     }
 }
 
@@ -1524,7 +1538,7 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
             .next()
             .map(|ch| ch.to_string())
             .unwrap_or_default(),
-        kind: c.kind.clone(),
+        kind: connector_kind_label(&c.kind),
         status: c.status,
         status_label: c.status.label(),
         last_sync: c.last_sync.clone(),
@@ -1537,6 +1551,20 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
                 | bw_core::model::CONNECTOR_KIND_CODEHUB_REPO
         ),
         project_id: c.project_id,
+    }
+}
+
+/// PF1-3b: 连接器 kind → 角色人话标签(VM 层派生,存储仍原 kind)。
+/// 心智:script 也是连接器(kind=script,塞进 connector 表当一种 kind),
+/// 只是角色不同(对外连代码仓 vs 内部采集)。其余 kind 原样显示。
+fn connector_kind_label(kind: &str) -> String {
+    match kind {
+        bw_core::model::CONNECTOR_KIND_CODEHUB_REPO => "对外连接器 · 连 CodeHub 仓".to_string(),
+        bw_core::model::CONNECTOR_KIND_GITHUB_REPO => "对外连接器 · 连 GitHub 仓".to_string(),
+        bw_core::model::CONNECTOR_KIND_SCRIPT => "脚本连接器 · 采集 Issue/MR".to_string(),
+        bw_core::model::CONNECTOR_KIND_CLAUDE_CLI => "对外连接器 · claude CLI".to_string(),
+        bw_core::model::CONNECTOR_KIND_GIT_REPO => "本地工作区(legacy)".to_string(),
+        _ => kind.to_string(),
     }
 }
 

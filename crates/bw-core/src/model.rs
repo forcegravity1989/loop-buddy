@@ -1683,7 +1683,7 @@ impl CronMode {
             CronMode::RunSkill { .. } => "运行技能",
             CronMode::RunPrompt { .. } => "运行 Prompt",
             CronMode::CreateIssue => "建活(autopilot · 不自动跑)",
-            CronMode::CollectMetrics => "采集指标(pull GitHub → 观测)",
+            CronMode::CollectMetrics => "采集指标(脚本 → 观测)",
         }
     }
 

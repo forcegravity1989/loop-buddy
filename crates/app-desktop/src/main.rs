@@ -123,6 +123,10 @@ fn Root() -> Element {
     // orchestration knowledge the kernel doesn't carry.
     let mut submitting = use_signal(|| false);
     let mut toast = use_signal(|| None::<String>);
+    // PF1-5: toast 自清的 epoch —— 每次 set_toast 自增,spawn 的 8s timer
+    // 到点只在 epoch 仍匹配时清(新 toast 替换重置)。决议 5:所有 toast 8s
+    // 自动清,不区分关键/非关键。
+    let mut toast_epoch = use_signal(|| 0u64);
     let mut run = use_signal(RunVm::default);
     // plan/14 C14: raw Started/Ok/Fail facts for the creation flow's
     // background actions (repo create/clone, repo list, standard-Issue
@@ -165,11 +169,24 @@ fn Root() -> Element {
             let mut rx = kernel.notes();
             let kernel = kernel.clone();
             async move {
+                // PF1-5: 所有 toast 8s 自动清(spawn 8s timer,到点 epoch 仍
+                // 匹配才清;新 toast 替换重置 epoch)。失败/非关键 toast 不滞留。
+                let mut set_toast = move |msg: String| {
+                    toast.set(Some(msg));
+                    toast_epoch.set(toast_epoch() + 1);
+                    let epoch = toast_epoch();
+                    spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+                        if toast_epoch() == epoch {
+                            toast.set(None);
+                        }
+                    });
+                };
                 loop {
                     match rx.recv().await {
                         Ok(note) => match &note {
                             UiNote::Error(e) => {
-                                toast.set(Some(e.clone()));
+                                set_toast(e.clone());
                                 // Bug B: a dispatch error during creation is
                                 // the real "this attempt failed" signal —
                                 // re-enable the button so the user can retry,
@@ -181,7 +198,7 @@ fn Root() -> Element {
                                 }
                             }
                             UiNote::RunFailed(e) => {
-                                toast.set(Some(format!("工作流失败:{e}")));
+                                set_toast(format!("工作流失败:{e}"));
                                 run.with_mut(|r| r.apply(&note));
                                 if let Some(cid) = pending_cron() {
                                     kernel.send(Command::MarkCronRun {
@@ -208,14 +225,14 @@ fn Root() -> Element {
                             // it must not touch the user's current screen.
                             UiNote::CronAutoFired { name, ok } => {
                                 let mark = if *ok { "✓" } else { "✕" };
-                                toast.set(Some(format!("⏰ 定时任务自动运行 {mark} · {name}")));
+                                set_toast(format!("⏰ 定时任务自动运行 {mark} · {name}"));
                             }
                             UiNote::ArtifactsRegistered { fresh } => {
-                                toast.set(Some(format!("📦 新登记 {fresh} 个产物版本")));
+                                set_toast(format!("📦 新登记 {fresh} 个产物版本"));
                             }
                             UiNote::ConnectorSynced { name, ok, detail } => {
                                 let mark = if *ok { "✓" } else { "✕" };
-                                toast.set(Some(format!("🔌 {name} 同步 {mark} · {detail}")));
+                                set_toast(format!("🔌 {name} 同步 {mark} · {detail}"));
                             }
                             // plan/14 C14: raw fact only — `ActionsBanner`
                             // decides at render time whether enough real

@@ -307,17 +307,18 @@ cargo run -p app-desktop</pre>
       <h2 class="sec"><span class="n">得到什么</span>建完你手上多了啥</h2>
       <div class="res">
         <ul>
-          <li><span class="b"></span><div><strong>项目在墙</strong>，连接状态 <code>green</code>（远端仓接上了）</div></li>
+          <li><span class="b"></span><div><strong>项目在墙</strong>,连接状态 <code>green</code>（远端仓接上了）</div></li>
           <li><span class="b"></span><div><strong>连接器 + 每日定时器就位</strong>——以后每天自动采一次你代码仓的指标（开放 Issue 数 / 已合入 MR 数），指标卡先 <code>Unknown</code> 灰，采到才有值</div></li>
           <li><span class="b"></span><div><strong>扫到你项目自带的 skill / agent 等资产</strong>，登记进全局 Hub，之后干活能注入</div></li>
           <li><span class="b"></span><div><strong>3 张起手 Issue</strong>（竞品分析 → 找指标 → 绑数据）在 <code>Backlog</code>，远端 Issues 也同步开了——下一步实践直接开跑</div></li>
         </ul>
+        <img src="img/u2-result-sidebar-assets.png" alt="侧边栏资产 · 扫到的 skill/agent/workflow" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
+        <img src="img/u2-result-overview-metrics.png" alt="主页总览 · 代码仓指标条" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
+        <img src="img/u2-result-issues.png" alt="三张起手 Issue · Backlog" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
       </div>
 
-      <div class="callout warn">
-        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
-        <div class="body"><strong>两个已知坑</strong>① 点「确认」后 UI 可能冻一会儿：clone 在后台跑（已知 bug，未解），等它跑完即恢复。② 三件套里「竞品分析」别点真跑：联网墙未解，点了会失败；其余两件套可跑通。</div>
-      </div>
+      <h2 class="sec"><span class="n">竞品分析</span>三件套之一怎么用</h2>
+      <p>起手三件套里的①「竞品分析」需要联网抓取对标产品的公开页面。当前 buddy 的真执行器走本机 <code>claude</code> CLI，claude webFetch 机器环境暂不支持——点了会失败。后续改造支持联网抓取后再开跑；现阶段这一张活先留着，其余两件套可正常跑通。</p>
 
       <p class="linker">建仓 / 连接器 / 定时器 / 三件套这些机制的开发维护口径 → <a href="#" onclick="go('m2');return false">Hub 全局库</a> + <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
       <div class="foot">事实源：<code>docs/v1-prototype/issue1-onboard-simplify.md</code>、<code>crates/app-desktop/src/screens/create.rs</code>（Repo→Intent 两卡）、<code>crates/bw-app/src/lib.rs</code>（CreateProject / CompleteCreation）。</div>

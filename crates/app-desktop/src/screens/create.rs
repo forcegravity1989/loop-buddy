@@ -81,6 +81,9 @@ pub fn Create(
     let codehub_namespace = use_signal(String::new);
     let codehub_name = use_signal(String::new);
     let codehub_visibility = use_signal(|| "private".to_string());
+    // PF1-1: GitHub 新建仓的仓名在 RepoCard 填(对仗 codehub_name),不再在
+    // IntentCard 第二步填。空时提交闭包仍 slugify(&name()) 兜底(项目名→仓名)。
+    let github_slug = use_signal(String::new);
 
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
@@ -116,6 +119,7 @@ pub fn Create(
                         codehub_namespace,
                         codehub_name,
                         codehub_visibility,
+                        github_slug,
                         on_next: move |_| card.set(Card::Intent),
                     }
                 },
@@ -129,6 +133,7 @@ pub fn Create(
                         codehub_namespace,
                         codehub_name,
                         codehub_visibility,
+                        github_slug,
                         submitting,
                     }
                 },
@@ -276,6 +281,7 @@ fn RepoCard(
     codehub_namespace: Signal<String>,
     codehub_name: Signal<String>,
     codehub_visibility: Signal<String>,
+    github_slug: Signal<String>,
     on_next: EventHandler<()>,
 ) -> Element {
     let k = use_context::<Kernel>();
@@ -438,7 +444,7 @@ fn RepoCard(
                 }
             }
         } else {
-            // github:现状留(新建 slug+可见性 / 接入 gh repo list 下拉)
+            // github:新建仓 RepoCard 填仓名+可见性 / 接入 gh repo list 下拉
             {chip_question(
                 "起点",
                 vec![("新建仓", is_new), ("接入已有仓", !is_new)],
@@ -457,6 +463,16 @@ fn RepoCard(
             div {
                 style: "{card} padding:18px 20px;margin-top:8px;",
                 if is_new {
+                    // PF1-1: github 新建仓也在 RepoCard 填仓名(对仗 codehub),
+                    // 不再延后到 IntentCard。空时提交闭包 slugify(&name()) 兜底。
+                    label { style: "{label}", "仓库名" }
+                    input {
+                        style: "{input};margin-top:6px;",
+                        placeholder: "growth-kanban(空则用项目名)",
+                        value: "{github_slug}",
+                        oninput: move |e| github_slug.set(e.value()),
+                    }
+                    p { style: "font-size:11px;color:{ink3};margin:4px 0 12px;line-height:1.6;", "GitHub 仓名 = 仓库名;留空系统用项目名 slugify 兜底。" }
                     {
                         let private = matches!(choice(), RepoChoice::New { private: true });
                         rsx! {
@@ -701,8 +717,8 @@ const KINDS: [&str; 5] = [
 ];
 
 /// GitHub 仓名要求 ASCII + 连字符;项目显示名允许中文。两个独立字段(用户
-/// 已确认),这个纯函数只给"新建仓"分支的实时预览用——真正发去 `gh` 的值
-/// 是用户可能手改过的 `slug` 信号,不是每次都重新静默转写。
+/// 已确认),这个纯函数只给"新建仓"分支的兜底用——真正发去 `gh` 的值
+/// 是用户在 RepoCard 填的 `github_slug` 信号(空时才用本函数兜底)。
 fn slugify(name: &str) -> String {
     let base: String = name
         .trim()
@@ -733,6 +749,7 @@ fn IntentCard(
     codehub_namespace: Signal<String>,
     codehub_name: Signal<String>,
     codehub_visibility: Signal<String>,
+    github_slug: Signal<String>,
     submitting: Signal<bool>,
 ) -> Element {
     let k = use_context::<Kernel>();
@@ -754,8 +771,6 @@ fn IntentCard(
     let mut brief = use_signal(move || init_brief);
     let mut benchmark = use_signal(move || init_benchmark);
     let mut win = use_signal(move || init_win);
-    let mut slug = use_signal(String::new);
-    let mut slug_touched = use_signal(|| false);
 
     let card = theme::card();
     let serif = theme::SERIF;
@@ -821,10 +836,10 @@ fn IntentCard(
                 (
                     match repo_choice() {
                         RepoChoice::New { private } => Some(GithubOrigin::New {
-                            slug: if slug().trim().is_empty() {
+                            slug: if github_slug().trim().is_empty() {
                                 slugify(&name())
                             } else {
-                                slug().trim().to_string()
+                                github_slug().trim().to_string()
                             },
                             private,
                         }),
@@ -875,9 +890,6 @@ fn IntentCard(
                         value: "{name}",
                         oninput: move |e| {
                             name.set(e.value());
-                            if !slug_touched() {
-                                slug.set(slugify(&name()));
-                            }
                         },
                     }
                 }
@@ -921,23 +933,9 @@ fn IntentCard(
                     }
                 }
             }
-            // github 新建仓:slug 预览(Intent 可改);codehub 不走这条
-            // (codehub 新建的 namespace/name 在 RepoCard 填)。
-            if is_new_repo && !is_codehub {
-                div {
-                    style: "margin-top:10px;",
-                    label { style: "{label}", "GitHub 仓名(可改)" }
-                    input {
-                        style: "{input} font-family:{theme::MONO};",
-                        placeholder: "growth-kanban",
-                        value: "{slug}",
-                        oninput: move |e| {
-                            slug_touched.set(true);
-                            slug.set(e.value());
-                        },
-                    }
-                }
-            } else if !is_codehub {
+            // PF1-1: GitHub 仓名已在上一步 RepoCard 填(github_slug);接入已有
+            // 仓时回显将接入的 owner/repo。codehub 的仓名也在 RepoCard 填。
+            if !is_new_repo && !is_codehub {
                 if let RepoChoice::Existing { owner, repo } = repo_choice() {
                     p { style: "font-size:11.5px;color:{ink3};margin-top:10px;", "将接入 {owner}/{repo} ↗" }
                 }

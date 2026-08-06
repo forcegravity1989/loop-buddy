@@ -3739,43 +3739,84 @@ impl App {
                     continue;
                 }
                 let script_path = Path::new(&proj.workspace_path).join(&cfg.script);
-                let run = tokio::process::Command::new(&command)
-                    .arg(&script_path)
-                    .current_dir(&proj.workspace_path)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .output();
-                let out = match tokio::time::timeout(std::time::Duration::from_secs(300), run).await
-                {
-                    Ok(Ok(o)) if o.status.success() => o,
-                    Ok(Ok(o)) => {
-                        // 非零退出:stderr 尾部入错因(读回为证,运维能从 buddy 内判根因)
-                        let stderr = String::from_utf8_lossy(&o.stderr);
-                        let tail: String = stderr
-                            .chars()
-                            .rev()
-                            .take(500)
-                            .collect::<String>()
-                            .chars()
-                            .rev()
-                            .collect();
-                        summary.failed += 1;
-                        if summary.first_error.is_none() {
-                            summary.first_error = Some(format!(
-                                "script {} 非零退出:{}",
-                                cfg.script,
-                                tail.trim_end()
-                            ));
+                // PF1-R5c · Windows: app 进程 PATH 可能缺 Git bin/usr-bin
+                // (sh.exe/bash.exe 所在),`Command::new("sh")` 报 program not
+                // found。用候选链(BW_SH_BIN env → 裸名 PATH 搜 → 从 git.exe
+                // 推导全路径 → 常见安装位),NotFound 才换下一个;非零退出/超时用当前。
+                let candidates = script_interpreter_candidates(&command);
+                let mut out: Option<std::process::Output> = None;
+                for cand in &candidates {
+                    let run = tokio::process::Command::new(cand)
+                        .arg(&script_path)
+                        .current_dir(&proj.workspace_path)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .output();
+                    match tokio::time::timeout(std::time::Duration::from_secs(300), run).await {
+                        Ok(Ok(o)) if o.status.success() => {
+                            out = Some(o);
+                            break;
                         }
-                        continue;
+                        Ok(Ok(o)) => {
+                            // 非零退出:此候选能 spawn(脚本能跑),用其结果不试下一个。
+                            let stderr = String::from_utf8_lossy(&o.stderr);
+                            let tail: String = stderr
+                                .chars()
+                                .rev()
+                                .take(500)
+                                .collect::<String>()
+                                .chars()
+                                .rev()
+                                .collect();
+                            summary.failed += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error = Some(format!(
+                                    "script {} 非零退出({}):{}",
+                                    cfg.script,
+                                    cand,
+                                    tail.trim_end()
+                                ));
+                            }
+                            break;
+                        }
+                        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                            // 此候选不在 PATH,试下一个
+                            continue;
+                        }
+                        Ok(Err(e)) => {
+                            summary.failed += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error = Some(format!(
+                                    "script {} spawn 失败({}):{}",
+                                    cfg.script, cand, e
+                                ));
+                            }
+                            break;
+                        }
+                        Err(_) => {
+                            summary.failed += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error = Some(format!(
+                                    "script {} 超时(>300s,可能 codehub-cli 挂起)",
+                                    cfg.script
+                                ));
+                            }
+                            break;
+                        }
                     }
-                    _ => {
+                }
+                let out = match out {
+                    Some(o) => o,
+                    None => {
+                        // 所有候选都 NotFound(无可用解释器)。failed 无条件计
+                        // (对齐其余失败分支),first_error 只记首条(守卫内)。
                         summary.failed += 1;
                         if summary.first_error.is_none() {
                             summary.first_error = Some(format!(
-                                "script {} 跑失败(超时>300s 或 spawn 失败)",
-                                cfg.script
+                                "script {} 无可用解释器(试过 {})",
+                                cfg.script,
+                                candidates.join("/")
                             ));
                         }
                         continue;
@@ -6030,13 +6071,17 @@ impl App {
                     self.store
                         .create_cron_task(NewCronTask {
                             id: CronTaskId::new(),
-                            name: format!("{} · 指标采集", proj.name),
+                            name: format!("{} · 采集代码仓指标", proj.name),
                             target: String::new(),
                             schedule: Cadence::Daily,
                             project_id: Some(id),
                             mode: CronMode::CollectMetrics,
                             issue_stage: None,
                             issue_assignee: None,
+                            // PF1-4: 填 now() 防新建 cron 在 clone/setup 完成
+                            // 前抢跑(cron_due 首 tick 立即触发 → workspace_path
+                            // 仍空 → 脚本臂跳过 → 记 normal → 下次 tick 等明天)。
+                            last_run_at: Some(now().unix_timestamp()),
                         })
                         .await?;
                     self.refresh_cron_tasks().await?;
@@ -6106,10 +6151,28 @@ impl App {
                     }
                     Err(e) => {
                         self.state.codehub_repos = Vec::new();
+                        // PF1-5: credentials/token/secret 类错因映射人话,告诉
+                        // 用户去本机 codehub-cli auth login(决议 6:不硬编码禁点
+                        // yellow,失败映射人话 + 保留现有警告 + toast 自清)。
+                        let raw = e.to_string();
+                        let lower = raw.to_lowercase();
+                        let detail = if lower.contains("credential")
+                            || lower.contains("token")
+                            || lower.contains("secret")
+                            || lower.contains("auth")
+                            || lower.contains("login")
+                            || lower.contains("401")
+                        {
+                            format!(
+                                "{host} 域未登录:先本机 `codehub-cli -H {host} auth login`(原始错因:{raw})"
+                            )
+                        } else {
+                            raw
+                        };
                         self.emit(Event::ConnectorSynced {
                             name: ACTION_NAME.into(),
                             ok: false,
-                            detail: e.to_string(),
+                            detail,
                         });
                         self.emit(Event::ActionProgress {
                             name: ACTION_NAME.into(),
@@ -6450,6 +6513,12 @@ impl App {
                 self.emit(Event::ProjectUpdated(p));
                 self.emit(Event::ViewChanged(View::App));
                 self.emit(Event::IssuesChanged);
+                // PF1-4: 创建即采一次指标(probe connector 之后,setup 全完成)。
+                // cron 不抢跑(见 CreateProject 处 last_run_at=now()),这里补这一
+                // 次让新项目总览指标条不再全「—」。best-effort:失败不 block 创建,
+                // 不发 Command::CollectMetrics 避免往返/toast——创建流有自己的
+                // ActionsBanner 进度(决议 4)。
+                let _ = self.collect_project_metrics(p).await;
                 // C8 · 末卡「立即让队友开工第一件?」(plan/13 D8): 显式勾选
                 // 才跑,默认不跑——不勾是零摩擦的另一半,真的什么都不发生。
                 // 勾了就对标配三件套里的①竞品分析显式 dispatch 一次
@@ -7934,6 +8003,7 @@ impl App {
                         mode: CronMode::RunWorkflow,
                         issue_stage: None,
                         issue_assignee: None,
+                        last_run_at: None,
                     })
                     .await?;
                 self.refresh_cron_tasks().await?;
@@ -7961,6 +8031,7 @@ impl App {
                         mode: CronMode::CreateIssue,
                         issue_stage: Some(stage),
                         issue_assignee: assignee,
+                        last_run_at: None,
                     })
                     .await?;
                 self.refresh_cron_tasks().await?;
@@ -7989,6 +8060,7 @@ impl App {
                         mode: CronMode::RunSkill { skill_id },
                         issue_stage: None,
                         issue_assignee: None,
+                        last_run_at: None,
                     })
                     .await?;
                 self.refresh_cron_tasks().await?;
@@ -8020,6 +8092,7 @@ impl App {
                         mode: CronMode::RunPrompt { prompt },
                         issue_stage: None,
                         issue_assignee: None,
+                        last_run_at: None,
                     })
                     .await?;
                 self.refresh_cron_tasks().await?;
@@ -8669,6 +8742,78 @@ printf '{{"open_issues": %s, "merged_mrs": %s}}' "$ISSUES" "$PRS" > .bw/collect_
             path = proj.remote_path,
         ),
     }
+}
+
+/// PF1-R5c · Windows: app 进程的 PATH 可能缺 Git 的 bin/usr-bin(sh.exe/bash.exe
+/// 所在),`Command::new("sh")` 报 program not found。从 PATH 里的 git.exe 位置
+/// 推导(系统 PATH 通常有 `<root>\cmd\git.exe`):`<root>\bin\bash.exe` 或
+/// `<root>\usr\bin\sh.exe`。返回首个存在的全路径。
+fn resolve_script_interpreter_via_git() -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let path = std::env::var("PATH").ok()?;
+    for dir in path.split(';') {
+        let dir_path = Path::new(dir);
+        if !dir_path.join("git.exe").exists() {
+            continue;
+        }
+        // git.exe 可能在 <root>\cmd\ 或 <root>\mingw64\bin\ 或 <root>\bin\。
+        // 试 root = dir_path 与 dir_path.parent(),找 bin\bash.exe / usr\bin\sh.exe。
+        let roots = [
+            dir_path.to_path_buf(),
+            dir_path.parent().unwrap_or(dir_path).to_path_buf(),
+        ];
+        for root in &roots {
+            let bash = root.join("bin").join("bash.exe");
+            if bash.exists() {
+                return Some(bash.to_string_lossy().into_owned());
+            }
+            let sh = root.join("usr").join("bin").join("sh.exe");
+            if sh.exists() {
+                return Some(sh.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+/// PF1-R5c · collect arm 跑 .sh 脚本的解释器候选链(Windows 专用增强)。
+/// 顺序:BW_SH_BIN env 强制 → config command + 裸名 sh/bash/sh.exe/bash.exe
+/// (PATH 搜)→ 从 git.exe 推导的全路径 → 常见安装位兜底。collect arm 试到
+/// 第一个 spawn 成功的为止(NotFound 才换下一个)。
+fn script_interpreter_candidates(command: &str) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    let push = |v: &mut Vec<String>, s: String| {
+        if !v.contains(&s) {
+            v.push(s);
+        }
+    };
+    if cfg!(windows) {
+        if let Ok(p) = std::env::var("BW_SH_BIN") {
+            let p = p.trim();
+            if !p.is_empty() {
+                push(&mut v, p.to_string());
+            }
+        }
+    }
+    push(&mut v, command.to_string());
+    if cfg!(windows) {
+        for c in ["bash", "sh.exe", "bash.exe"] {
+            push(&mut v, c.to_string());
+        }
+        if let Some(bash) = resolve_script_interpreter_via_git() {
+            push(&mut v, bash);
+        }
+        for p in [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\sh.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ] {
+            push(&mut v, p.to_string());
+        }
+    }
+    v
 }
 
 /// P1: the project's charter (`PROJECT.md`) — every line is a real creation-

@@ -98,6 +98,7 @@ connector: 改前 git-repo+codehub-repo → 改后 codehub-repo + script「codeh
 - **op_stage.routine_schedule / stage_done**:求同存异留。signal 过期降级读这列的改法留总览窗口(碰派生链)。
 - **standards 质量**:留写入,内容打磨是依赖事项,本窗口不管。
 - **yellow 未登录**:host 选择器如实标「未登录」。
+- **穿刺修正(2026-08-06,见 `docs/v1-prototype/piercing-fixes-1.md`)**:① GitHub/CodeHub 新建仓 UI 统一(仓名都放 RepoCard);② cron 名改「`<项目> · 采集代码仓指标」+ 详情卡具体化;③ collect arm 错误分 spawn/超时;④ **Windows spawn fix(R5c)**:app 进程 PATH 缺 Git bin/usr-bin 时 `Command::new("sh")` 找不到,加候选链(`BW_SH_BIN` env → sh/bash/sh.exe/bash.exe → 从 git.exe 推导 `<root>\bin\bash.exe` → 常见安装位);⑤ 采集时序竞态(cron 不抢跑 + CompleteCreation 即采一次);⑥ yellow 报错人话 + toast 8s 自清。以 piercing-fixes-1.md 为准。
 
 ## 7. 验证(step 4,读回为证)
 

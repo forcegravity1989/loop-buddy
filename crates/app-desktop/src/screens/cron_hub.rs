@@ -168,6 +168,24 @@ fn CronTaskRowView(c: CronRowVm, can_run: bool, on_trigger: EventHandler<CronTas
                             "{c.prompt_full.clone().unwrap_or_default()}"
                         }
                     }
+                } else if c.is_collect_metrics {
+                    // PF1-3a: CollectMetrics 卡具体化——显示「采集代码仓指标
+                    // (开放 Issue / 已合入 MR)· 每日」,targets 非空时拼上指标名
+                    // (从该项目 collect_kind='script' 的 metric 派生,kernel 填)。
+                    {
+                        let targets = c.collect_targets.join(" / ");
+                        let subtitle = if targets.is_empty() {
+                            "采集代码仓指标(开放 Issue / 已合入 MR)· 每日".to_string()
+                        } else {
+                            format!("采集代码仓指标({targets})· 每日")
+                        };
+                        rsx! {
+                            div {
+                                style: "font-size:11px;color:{ink3};",
+                                "{subtitle}"
+                            }
+                        }
+                    }
                 } else if !c.target.is_empty() {
                     div { style: "font-size:11px;color:{ink3};", "{c.target}" }
                 }

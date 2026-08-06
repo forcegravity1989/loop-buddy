@@ -109,3 +109,31 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 **处置**：W3 不解（review 判 Low + 缓解已在：buddy 情况行的 `metrics_stale` 计数标"N 个指标本周未记·建议复盘" + 北極星卡 collection_chain 显"cron 未跑"——信息在，只是不在 delta 数字本身）。后续增强。
 
 **事实源**：`crates/ui/src/vm.rs`（`weekly_spark` carry-forward / `weekly_delta`）、`crates/app-desktop/src/screens/op.rs`（buddy 情况行 `metrics_stale`）。
+
+---
+
+## W3-9 · DeleteProject 不清磁盘 workspace clone —— 删项目后磁盘残留
+
+**产生窗口**：W3 总览重构窗口后、用户穿刺准备期（删 omhwcc 重加）实地撞出。
+
+**现象**：`Command::DeleteProject` → `store.delete_project` 只清 DB 行（issue/artifact/connector/cron_task/metric/op_stage/session/handoff/observation/message/skill_file/workflow_version 等全表，清理本身近期已补强，见 `6dce307`），**不删 `workspaces_root` 下该项目的 clone 目录**。物证：用户实际库 `%APPDATA%\BuildersWorkbench\workspaces` 下残留 3 个 omhwcc 孤儿 clone（`aa-c3a908ab` / `ohmycc-739ee884` / `proj-f442abd9`，remote 均 `ssh://git@szv-open.codehub.huawei.com:2222/innersource/AI-Coding_G/omhwcc.git`，DB project 表已无对应行）。全代码库唯一 `remove_dir_all` 是 `workspace.rs:293` 的兄弟目录清理，与删项目无关。
+
+**未决点**：删除是否连带删 workspace clone？边界：用户可能手动把 `workspace_path` 指到自有目录（不该删，如 `/d/2026/code/omhwcc` 是用户自己的工作副本，非 buddy 建的）；只有 buddy 自动建的（`workspaces_root` 下 `<slug>-<uuid6>`）才该删。删目录不可逆，需谨慎（用户可能想保留产物取证）。
+
+**处置**：穿刺后转 issue。重加 omhwcc 前，3 个孤儿目录人工清掉（用户已确认是残留）。
+
+**事实源**：`crates/bw-app/src/lib.rs:8458`（DeleteProject handler）、`crates/bw-store/src/sqlite.rs:624`（delete_project）、`crates/app-desktop/src/kernel.rs:483`（workspaces_root）。
+
+---
+
+## 索引 · 穿刺修复批次 1（cowelink W1 穿刺 7 条反馈）
+
+**产生窗口**：V1 三窗口合入后、用户用 cowelink 做 W1 穿刺实地冒出。**本批次修**（见 `docs/v1-prototype/piercing-fixes-1.md`）。
+
+7 条：① GitHub/CodeHub 新建仓 UI 不一致 ③a cron 卡看不明白 ③b 连接器卡分不清 ④ 总览看不到仓指标（采集时序竞态）⑤ yellow 报错（host 黄区 + toast 不自动清）⑥ 指南 U2 去两个已知坑 + 加竞品分析章节 ⑦ 指南 U2 加创建后截图位。
+
+**与 LEFTOVERS 的交叉**：
+- 点 ④ 的「UI 冻死」callout 与 W1-1 无直接重叠（W1-1 是 buddy 自动 push 用户仓，点 ④ 是 cron 抢跑时序），但点 ⑥ 删的「UI 冻死」callout 是 issue1 §6 bug① 的 UI 表现——**本批次只删指南 callout（点 4 时序修复缓解 cron 抢跑，但 clone 同步堵单线程的根因 issue1 bug① 未解，留 issue1 §6）**。
+- 点 ⑤ yellow 未登录标注与 issue1 §6「yellow 未登录」一致，本批次落地（host 选择器灰置 + 标注）。
+
+**事实源**：`docs/v1-prototype/piercing-fixes-1.md`（设计事实源，未改代码）。
