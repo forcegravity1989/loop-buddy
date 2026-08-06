@@ -264,12 +264,21 @@ impl SqliteStore {
         // 与 skill_stage 的行数共同派生四态 —— 单看行数分不出「判过了、不属
         // 任何阶段」和「还没人管」,而这两件事在本仓是必须分开的。
         add_column_if_missing(&pool, "skill", "stage_origin", "TEXT NOT NULL DEFAULT ''").await?;
+        // Critical 修复(2026-08-06):上一版在这里直接删列,理由是「Boot 的
+        // 搬值逻辑按 name 查静态表重建,不读旧列的值,所以删列不丢数据」——
+        // 这句话对静态表**覆盖得到**的行是对的,但对覆盖不到的行是假的:静态
+        // 表按名查不到的行,Boot 的按名回填从头到尾不会碰它,它的旧
+        // `stage_ref` 单值就随列一起被删列语句静默抹掉。真实日常库独立核实
+        // 命中过一次:`metrics-render`(`stage_ref=1`,来自另一条未合入本分支
+        // 的产品线,静态表里没有这个名字)。删列之前必须先把这类「静态表管不
+        // 着」的行搬进 `skill_stage`,标 `StageOrigin::Legacy`——静态表管得到
+        // 的行不搬,原样留给下面 Boot 的按名回填去写正确的**多值**(搬单值会
+        // 让它们停在旧的单值上,是计划内的中间态倒退)。
+        migrate_legacy_skill_stage_ref(&pool).await?;
         // 旧列真删(用户 2026-08-05:「不要害怕修改旧表,有需要就大胆重做」)。
-        // 位置很关键:必须在 skill_stage 建表(schema blob)与 stage_origin 加列
-        // 之后 —— Boot 的搬值逻辑要先能读到这一列,才轮得到删它。搬值本身在
-        // bw-app 的 Boot 里,发生在 open() 返回之后,所以这里删列会让**本次**
-        // 启动读不到旧值……因此搬值必须幂等且以静态表为准(见 SR3 Step 7 的
-        // 实现:它按 name 查静态表重建,不依赖旧列的值)。
+        // 位置很关键:必须排在上面的保值搬迁之后 —— 搬迁函数自己按
+        // `PRAGMA table_info` 判断列是否还在,删列之后再跑第二次 `open()` 会
+        // 直接 no-op,天然幂等。
         drop_column_if_present(&pool, "skill", "stage_ref", &["idx_skill_stage"]).await?;
         // T16 (plan/12 §10 v1.1#3): workflow's main MD document, aligned
         // with `skill.content`. '' on every pre-T16 row = honestly "no
@@ -310,6 +319,63 @@ impl SqliteStore {
 
         Ok(Self { pool })
     }
+}
+
+/// 删 `skill.stage_ref` 之前的保值搬迁(Critical 修复,2026-08-06)。
+///
+/// 静态表([`bw_core::stage_catalog::SKILL_STAGE_CATALOG`])永远不可能覆盖每
+/// 个用户库里的每一行——它只随本分支发行,另一条产品线/另一次手填都可能
+/// 留下静态表查不到名字的 `stage_ref` 值。这些行**不会**被下面 Boot 的按名
+/// 回填接住(那段逻辑本身就是按名查这张静态表),所以旧列一删,值就真没了。
+///
+/// 做法:只在列还在时跑(`PRAGMA table_info` 判据,与 [`drop_column_if_present`]
+/// 同款,可安全重复调用);对每一行 `stage_ref IS NOT NULL` 的技能,**只在**
+/// `stages_for(name)` 返回 `None`(静态表管不着)时才搬——搬法是往
+/// `skill_stage` 插一行同值、把 `stage_origin` 标成 `Legacy`。静态表管得到的
+/// 行原样不动,留给调用方之后紧接着跑的 Boot 按名回填去写正确的**多值**
+/// (那才是这些行的正本;这里抢先写单值会造成计划内的中间态倒退)。
+///
+/// 越界的 `stage_ref` 值(理论上写不出来,但读侧 [`crate::sqlite::skill_row`]
+/// 一贯宁可丢弃也不瞎猜)按同一条纪律处理:不认识的整数不搬,直接丢弃。
+async fn migrate_legacy_skill_stage_ref(pool: &SqlitePool) -> Result<()> {
+    let table_info = sqlx::query("PRAGMA table_info(skill)")
+        .fetch_all(pool)
+        .await?;
+    let has_stage_ref = table_info
+        .iter()
+        .any(|r| r.get::<String, _>("name") == "stage_ref");
+    if !has_stage_ref {
+        // 已经真删过列的库(本函数在更早的一次 open() 里跑过)——no-op。
+        return Ok(());
+    }
+    let legacy_rows =
+        sqlx::query("SELECT id, name, stage_ref FROM skill WHERE stage_ref IS NOT NULL")
+            .fetch_all(pool)
+            .await?;
+    for r in legacy_rows {
+        let id: String = r.get("id");
+        let name: String = r.get("name");
+        let stage_ref: i64 = r.get("stage_ref");
+        // 静态表管得到的行不搬——交给紧随其后的 Boot 按名回填写多值。
+        if bw_core::stage_catalog::stages_for(&name).is_some() {
+            continue;
+        }
+        // 越界值如实丢弃,不硬塞进关联表(读侧同一条纪律:不认识就不猜)。
+        if StageKind::from_index(stage_ref as u8).is_none() {
+            continue;
+        }
+        sqlx::query("INSERT OR IGNORE INTO skill_stage (skill_id, stage) VALUES (?, ?)")
+            .bind(&id)
+            .bind(stage_ref)
+            .execute(pool)
+            .await?;
+        sqlx::query("UPDATE skill SET stage_origin=? WHERE id=?")
+            .bind(stage_origin_tag(StageOrigin::Legacy))
+            .bind(&id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
 }
 
 /// `ALTER TABLE ... ADD COLUMN` has no `IF NOT EXISTS` clause in SQLite, so
@@ -2938,6 +3004,7 @@ fn parse_stage_origin(tag: &str) -> StageOrigin {
         "table" => StageOrigin::Table,
         "distilled" => StageOrigin::Distilled,
         "manual" => StageOrigin::Manual,
+        "legacy" => StageOrigin::Legacy,
         _ => StageOrigin::Unclassified,
     }
 }
@@ -2948,6 +3015,7 @@ fn stage_origin_tag(origin: StageOrigin) -> &'static str {
         StageOrigin::Table => "table",
         StageOrigin::Distilled => "distilled",
         StageOrigin::Manual => "manual",
+        StageOrigin::Legacy => "legacy",
     }
 }
 

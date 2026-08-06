@@ -38,6 +38,12 @@ pub enum StageOrigin {
     Distilled,
     /// 人工在 SkillHub 里改过——Boot 的静态表回填从此整条跳过这件技能。
     Manual,
+    /// 搬自已被删除的旧 `skill.stage_ref` 单值列。原始出处已不可考——它可能
+    /// 是早年的 seed 回填,也可能来自本分支静态表覆盖不到的另一条产品线
+    /// (真实案例:`metrics-render` 来自未合入本分支的 c14932d)。标成
+    /// `Legacy` 而不是 `Table`,是因为本分支的静态表并没有为它背书;标成
+    /// `Legacy` 而不是 `Manual`,是因为没人在 UI 里点过它。
+    Legacy,
 }
 
 /// 「全阶段通用」的展开值。挂满五阶段 = 每个阶段的注入候选集都含它。
