@@ -34,6 +34,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 5. **每篇新文档开头给 30 秒导读**:这文档是什么、给谁看、现在还作数吗。文档过时后不删,但必须在顶部加横幅注明「历史档案,现状以 XX 为准」——plan/00-05 和 iterations/ 的历史交接记录都已照此标注,新文档过时时照做。
 6. **写作范本**:`docs/metrics-toml-format.md`(零裸代号、术语随用随定义、有真实样例)和 `plan/07-product-proposition.md`(命题正文用人话、工程锚点单独进对照表)。写新文档前先看它们长什么样。
 
+## 改代码的原则:不为向后兼容留旧路径
+
+发现过时的实现路径,直接移除它,而不是加兼容层、回退逻辑或迁移流程去迁就它。这条对本仓库的所有代码改动都成立,不只是本次迁移。
+
 ## 常用命令
 
 ```bash
