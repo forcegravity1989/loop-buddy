@@ -14,20 +14,76 @@
 //!
 //! 子命令(串起来演 Step 6/7/8 三条验证):
 //!   verify_skill_materialize <db> <ws-root> init          — 建项目+技能+issue #1,打印编号
-//!   verify_skill_materialize <db> <ws-root> run <编号>     — 对该编号 RunIssue,打印读回
+//!   verify_skill_materialize <db> <ws-root> run <编号> [项目名]  — 对该编号 RunIssue,打印读回
+//!                                                           (项目名省略则用有工作区的那个)
 //!   verify_skill_materialize <db> <ws-root> new-issue      — 再建一张同阶段 issue,打印编号
 //!
 //! Step 7(手写同名目录不被覆盖)要在两次 `run` 之间由外层 shell 手工在工作区
 //! 摆放一个没有 `.bw-managed` 标记的同名目录,再对第二张 issue `run` 一遍 ——
 //! 那一步不需要改这个例子,直接摸文件系统即可(见 `task-7-report.md`)。
+//!
+//! Important 修复验证(评审实测确认的缺陷:空工作区 prompt 里假称「已物化」):
+//!   verify_skill_materialize <db> <ws-root> init-empty     — 建一个**不设工作区**的项目
+//!                                                            + 同阶段技能 + issue,打印编号
+//!   verify_skill_materialize <db> <ws-root> run <编号> task7-verify-project-empty-ws
+//!                                                          — 对空工作区项目跑 RunIssue。
+//!
+//! 空工作区这条路径(`lib.rs:1749`)不会走真实 `claude` 子进程(所以摸不到
+//! `STUB_CLAUDE_LOG`)——`workspace_path` 一空,`prepare_issue_run` 就直接切
+//! 回 `App` 起手时挂的共享 `mock_engine`,`MockExecutor::run_phase` 的入参
+//! `_ctx` 本来就命名成下划线弃用,压根不看 prompt 内容。因此本例把 `App::new`
+//! 传入的执行器换成下面的 `PromptLoggingMock`(只在这个验证例子里存在,
+//! `mock.rs` 里真正的生产 `MockExecutor` 一字未动)——原样转发给内部
+//! `MockExecutor` 产出 canned 结果,唯一的额外动作是把收到的 `phase.prompt`
+//! 落盘到 `MOCK_PROMPT_LOG`,好独立核验 `prepare_issue_run` 真实拼出的
+//! prompt 里到底有没有那一段目录文案。
 
 use bw_app::{App, Command};
 use bw_core::model::{HubSource, IssuePriority, StageKind};
 use bw_core::{IssueId, ProjectId, SessionId, SkillId};
-use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
+use bw_engine::{ClaudeCliConfig, Engine, ExecError, Executor, MockExecutor, PermissionMode};
+use bw_engine::{PhaseNode, PhaseOutput, RunCtx};
 use bw_store::{SessionKind, SqliteStore, Store};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Important 修复验证专用包装:空工作区(`workspace_path` 留空)那条路径
+/// (`lib.rs:1749`)用的是 `App` 起手时挂的共享 `mock_engine`,不会碰真实
+/// `claude` 子进程,所以 `STUB_CLAUDE_LOG` 摸不到它收到的 prompt。生产代码
+/// 里真正的 `MockExecutor::run_phase`(`bw-engine/src/mock.rs`)把 `ctx` 参数
+/// 命名成 `_ctx`——压根不看 `phase.prompt` 内容,自然也不会替我们落盘。
+/// 这个包装只在本验证例子里存在:原样转发给内部 `MockExecutor` 拿 canned
+/// 结果,唯一的额外动作是把 `phase.prompt` 追加写进 `MOCK_PROMPT_LOG`,好
+/// 独立核验 `prepare_issue_run` 真实拼出的 prompt 里有没有目录段。
+struct PromptLoggingMock {
+    inner: MockExecutor,
+    log_path: PathBuf,
+}
+
+impl PromptLoggingMock {
+    fn new(log_path: PathBuf) -> Self {
+        PromptLoggingMock {
+            inner: MockExecutor::new(),
+            log_path,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Executor for PromptLoggingMock {
+    async fn run_phase(&self, phase: &PhaseNode, ctx: &RunCtx) -> Result<PhaseOutput, ExecError> {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+        {
+            let _ = writeln!(f, "===PHASE {} (shared mock engine)===", phase.name);
+            let _ = writeln!(f, "{}", phase.prompt);
+        }
+        self.inner.run_phase(phase, ctx).await
+    }
+}
 
 #[cfg(unix)]
 fn make_executable(p: &std::path::Path) {
@@ -58,6 +114,12 @@ exit 0
 "#;
 
 const PROJECT_NAME: &str = "task7-verify-project";
+// Important 修复验证专用(evidence-first review 抓到:`catalog_block` 的拼接
+// 曾经不受 `workspace_path` 非空闸门约束,空工作区 Mock 项目的 prompt 里会
+// 出现「已物化到 .claude/skills/」的假话——见 task-7-report.md「顾虑」第2条)。
+// `init-empty`/`run` 用这个项目名,刻意不调用 `SetWorkspace`,workspace_path
+// 全程留空,专门盯 `stage_catalog_block` 这一段是否还会混进 prompt。
+const EMPTY_PROJECT_NAME: &str = "task7-verify-project-empty-ws";
 const SKILL_NAME: &str = "task7-demo-skill";
 const SKILL_CONTENT: &str = "# Task 7 Demo Skill\n\n适用:验证目录进 prompt + 正文物化到工作区。\n\n步骤:\n1. 什么都不用做,这是验证用的假技能正文。\n2. 用来确认 SKILL.md 首行原样是 `#`,没被 demote_headings 动过。\n";
 
@@ -67,7 +129,9 @@ async fn main() {
     let (db, ws_root_s, action) = match (args.first(), args.get(1), args.get(2)) {
         (Some(a), Some(b), Some(c)) => (a.clone(), b.clone(), c.clone()),
         _ => {
-            eprintln!("usage: verify_skill_materialize <db> <ws-root> <init|run|new-issue|bulk> …");
+            eprintln!(
+                "usage: verify_skill_materialize <db> <ws-root> <init|init-empty|run|new-issue|bulk> …"
+            );
             std::process::exit(2);
         }
     };
@@ -86,11 +150,15 @@ async fn main() {
     std::env::set_var("PATH", format!("{}:{}", stub_bin.display(), old_path));
     let claude_log = ws_root.join(".stub-claude.log");
     std::env::set_var("STUB_CLAUDE_LOG", claude_log.display().to_string());
+    // Important 修复验证:空工作区那条路径走共享 mock_engine,摸不到
+    // STUB_CLAUDE_LOG(见上面 `PromptLoggingMock` 的文档注释)——单独落一份
+    // 它实际收到的 phase.prompt。
+    let mock_prompt_log = ws_root.join(".mock-phase-prompts.log");
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db).await.expect("open db"));
     let mut app = App::new(
         store.clone(),
-        Engine::new(Arc::new(MockExecutor::new())),
+        Engine::new(Arc::new(PromptLoggingMock::new(mock_prompt_log))),
         ClaudeCliConfig {
             binary: None, // 从 PATH 解析 —— 命中上面前置的 stub
             max_budget_usd: 1.0,
@@ -208,6 +276,100 @@ async fn main() {
             println!("[建卡] #{} {}", issue.number, issue.title);
         }
 
+        // Important 修复验证:空工作区(从不调用 `SetWorkspace`,
+        // `workspace_path` 全程保持默认空串)项目 + 一件已归类到 Prototype
+        // 的技能(保证 `catalog_skills` 非空,不然「目录不出现」这条断言在
+        // 修复前修复后都成立,测不出差异)+ 一张同阶段 issue。跟 `init` 的
+        // 唯一实质差异就是不调 `SetWorkspace` —— 其余全部照抄,好让两条路径
+        // 除了这一个变量外尽量对齐。
+        "init-empty" => {
+            let project = match store
+                .list_projects()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|p| p.name == EMPTY_PROJECT_NAME)
+            {
+                Some(p) => {
+                    println!("[空工作区项目已存在] 续用");
+                    p.id
+                }
+                None => {
+                    let id = ProjectId::new();
+                    app.dispatch(Command::CreateProject {
+                        provider: "github".to_string(),
+                        id,
+                        name: EMPTY_PROJECT_NAME.into(),
+                        kind: "验证 fixture".into(),
+                        desc: "Task 7 Important 修复验证:空工作区不该假称已物化。".into(),
+                        workspace: None,
+                        github: None,
+                        codehub: None,
+                    })
+                    .await
+                    .expect("create empty-ws project");
+                    id
+                }
+            };
+            app.dispatch(Command::OpenProject(project))
+                .await
+                .expect("open empty-ws project");
+            // 刻意不调用 Command::SetWorkspace —— workspace_path 留空,
+            // 复现「Mock 项目」这条真实存在的产品路径(lib.rs:1749 与
+            // MockExecutor 死绑的那条)。
+
+            // 技能分类是全局技能库(不分项目),`init` 若已跑过,这里会直接
+            // 命中同一件已分类技能;若单独先跑 `init-empty`,这里自己造一件,
+            // 保证 catalog_skills 非空。
+            let existing_skill = store
+                .list_skills()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|s| s.name == SKILL_NAME);
+            let skill_id = match existing_skill {
+                Some(s) => s.id,
+                None => {
+                    let id = SkillId::new();
+                    app.dispatch(Command::CreateSkill {
+                        id,
+                        name: SKILL_NAME.into(),
+                        desc: "适用:Task 7 物化验证专用假技能。".into(),
+                        category: "验证 fixture".into(),
+                        source: HubSource::SelfBuilt,
+                        content: SKILL_CONTENT.into(),
+                    })
+                    .await
+                    .expect("create skill");
+                    id
+                }
+            };
+            app.dispatch(Command::UpdateSkill {
+                id: skill_id,
+                name: SKILL_NAME.into(),
+                desc: "适用:Task 7 物化验证专用假技能。".into(),
+                category: "验证 fixture".into(),
+                content: SKILL_CONTENT.into(),
+                stages: Some(vec![StageKind::Prototype]),
+            })
+            .await
+            .expect("classify skill");
+
+            let issue_id = IssueId::new();
+            app.dispatch(Command::CreateIssue {
+                id: issue_id,
+                stage: StageKind::Prototype,
+                title: "Task 7 空工作区物化验证活".into(),
+                desc: "验证 workspace_path 为空时 prompt 里不出现「已物化」目录段。".into(),
+                priority: IssuePriority::Medium,
+                standard_skill: String::new(),
+            })
+            .await
+            .expect("create issue");
+            let issue = store.get_issue(issue_id).await.unwrap().unwrap();
+            println!("[空工作区建卡] #{} {}", issue.number, issue.title);
+        }
+
         "new-issue" => {
             let project = store
                 .list_projects()
@@ -295,13 +457,17 @@ async fn main() {
 
         "run" => {
             let n: u32 = args.get(3).expect("run <编号>").parse().expect("编号");
+            // 可选第 5 参:项目名,默认走原来的 PROJECT_NAME(有工作区的项目)。
+            // Important 修复验证传 `EMPTY_PROJECT_NAME` 来跑空工作区那条路径,
+            // 复用同一段 run 逻辑,不另起一个几乎重复的分支。
+            let project_name = args.get(4).map(String::as_str).unwrap_or(PROJECT_NAME);
             let project = store
                 .list_projects()
                 .await
                 .unwrap()
                 .into_iter()
-                .find(|p| p.name == PROJECT_NAME)
-                .expect("先跑 init");
+                .find(|p| p.name == project_name)
+                .unwrap_or_else(|| panic!("项目 {project_name} 不存在,先跑 init/init-empty"));
             app.dispatch(Command::OpenProject(project.id))
                 .await
                 .expect("open project");

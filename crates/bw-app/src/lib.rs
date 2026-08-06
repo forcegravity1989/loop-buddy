@@ -4082,7 +4082,8 @@ impl App {
         // session jsonl 里的 tool_use=Skill 记录,只给真加载的记账)已验证可行,
         // 用户 2026-08-05 明确说本轮不做。
         let (catalog_block, catalog_skills) = self.stage_catalog_block(issue.stage).await?;
-        if !catalog_skills.is_empty() && !proj.workspace_path.trim().is_empty() {
+        let workspace_present = !proj.workspace_path.trim().is_empty();
+        if !catalog_skills.is_empty() && workspace_present {
             let mut with_files = Vec::with_capacity(catalog_skills.len());
             for s in catalog_skills {
                 let files = self.store.list_skill_files(s.id).await?;
@@ -4104,6 +4105,18 @@ impl App {
                 report.unchanged
             );
         }
+        // Important 修复(评审实测确认,plan 原文缺口,由控制者拍板修):
+        // `catalog_block` 的文案原文承诺「已物化到 .claude/skills/」——但上面
+        // 的物化分支只在 `workspace_present` 时跑。空工作区(Mock 项目)磁盘
+        // 上根本不存在这些文件,若仍把这段“已物化”的文案拼进 prompt,就是对
+        // 执行 agent 说假话,直接违反本仓「mock 必须自我标注、绝不假装」的
+        // 核心纪律。所以拼接（不只是物化）也要进这道闸门:工作区为空时这一
+        // 段干脆不出现在 prompt 里,而不是出现一段承诺落空的文案。
+        let catalog_block = if workspace_present {
+            catalog_block
+        } else {
+            String::new()
+        };
         spec.name = format!("#{} {}", issue.number, issue.title);
         let extra = format!("{issue_brief}{standard_block}{distilled_block}{catalog_block}");
         // 既有缺口(C8 顺带修复,非本票新增行为):`stage_workflow_with_playbook`
