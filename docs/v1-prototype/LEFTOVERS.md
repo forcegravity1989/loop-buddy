@@ -194,3 +194,42 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 - 点 ⑤ yellow 未登录标注与 issue1 §6「yellow 未登录」一致，本批次落地的是**标注**：host 选择器三个 alias 都可点，chip 上挂 tooltip、下方常驻一行「green/open 已登录可直用；yellow 需先在本机 `codehub-cli -H yellow auth login`」，选中未登录的 yellow 时靠 CLI 调用失败回人话报错。**没有做灰置**——buddy 不探测 `codehub-cli` 的登录态，探不到就不能替用户判定「没登录」，灰置会在人其实已登录时挡住路（事实源：`crates/app-desktop/src/screens/create.rs` `CodehubHostPicker`）。
 
 **事实源**：`docs/v1-prototype/piercing-fixes-1.md`（设计事实源，未改代码）。
+
+---
+
+## 索引 · V1 产品化任务 A 收口（cowelink 验证 P1–P13，2026-08-06）
+
+**产生窗口**：`.claude/cowelink-verify-2026-08-06.md`（不提交、事实源）记录的 W2/W3 真实实践问题台账 P1–P13，本窗按「高痛/契约硬错优先」分诊后动代码。**尚未 commit**（工作树改动，等用户明确要求再提交）。
+
+### 已修（本窗，✅）
+
+| ID | 一句话 | 落地方式 |
+|---|---|---|
+| **P4** | 网页合 MR 后点「已完成」不同步指标/连接器 | 把 `MergeIssuePr` 尾部的 pull+`SyncMetrics`+`SyncConnectors` 挪进 `TransitionIssue` 的 `newly_done` 记账块，两个入口（merge 内部 dispatch / 网页手点已完成）共用一条路径，不重复跑 |
+| **P5** | connectors.toml 错键静默吞空 + 脚本只 print 不写 output + Windows 找不到 python | `ConnectorsFile`/`ConnectorDef` 加 `deny_unknown_fields`（错键直接报错，含回归测试）；衔接层 system prompt + `connectors-toml-format.md` + `metrics-binding/SKILL.md` 三处加"只读 output 文件、不看 stdout"硬提示；`script_interpreter_candidates` 给 Windows 加 `py` 候选 |
+| **P10** | 总览业务卡（`BizMetricCard`）没有手填框 | `collect_kind=="manual"` 时卡内嵌入既有 `RecordInline`（复用组件）；北极星若命中同名 `metric` 行走同一路径自动生效，无 `metric` 行的灰卡（W3-1 缺口）不动 |
+| **P12** | 所有 `kind=="script"` 连接器副标题硬编码「采集 Issue/MR」 | `connector_kind_label` 按 name/config 派生：仓统计脚本保留原文案，其余从 config 挖脚本文件名生成专属标签 |
+| **P13** | cron 卡副标题「采集代码仓指标」误导（业务脚本也被这条 Daily 调度，但名字看不出来） | 只改前缀措辞为中性的「本项目全部 script 指标(...)· 每日」，**不做**按 `connectors.toml schedule` 拆独立 cron（用户明确留待后续） |
+| **P2** | Issue 详情弹窗「▶ 跑」不知道看板已在跑；交互式活运行史恒空时显示「还没有运行」（假话） | 弹窗复用看板卡片同一段 `is_running`/`same_project_busy`/`run_label` 判断（传 `active_run`+`project_id`）；`IssueDetailVm` 加 `is_interactive`（读 `issue.interactive_started`），运行史为空且是交互式活时换成「过程在下方嵌入终端/会话里」的诚实文案 |
+
+验证：六步门禁 + `cargo test --workspace --exclude app-desktop`（35 测试）全绿；未跑 sqlite/深链读回（本窗改动多是纯前端文案/组件复用/同步路径合并，无新 schema，读回价值有限，留給下一棒需要时再核）。
+
+### 核实结论（不算修复）
+
+**P7 · 创建未见 PROJECT.md / standards**：读代码确认路径存在——`write_charter`/`write_component_standards`（`lib.rs:9573`/`9599`）只在 `is_owned_workspace(dir)` 为真（工作区 `.git` 存在且根提交作者可读）时才写，且是 best-effort（`let _ = …`，失败被静默吞掉，不阻断创建流、也不提示用户）。**未复现**，不确认验证日志里"未见"是因为路径条件不满足（如目标仓判定成 bound 而非 owned）还是真的静默失败。若要根治静默失败这半个缺口，需要把 `let _ =` 改成至少记一条日志/toast，而不是假装成功——这条不在本窗改，留给下一棒决定要不要做。
+
+### 转移 / 新增条目（本窗不修，非 top 优先级 + 需要设计判断）
+
+**P1 · 窄窗嵌入终端 ANSI 错乱、底栏双 prompt**：xterm 在窄容器下的 `Fit`/列宽重算与 ANSI 转义重绘冲突，本窗未查——工作量在 xterm.js `fit addon` 与容器尺寸监听那层，不是一次性小改。留后续窗口专项处理（截图见验证日志 §2.1）。事实源：`crates/app-desktop/src/screens/op.rs`（`TerminalWidget`）。
+
+**P3 · 单例 PTY 无法回看历史会话**：app 级只有一路活跃 PTY（`kernel.rs` pty watch），切到某个 issue 的历史会话卡时，看到的仍是当前 live 终端的内容，不能"只看"旧会话的 scrollback。需要 per-session scrollback 缓冲或明确的"live 在 #N，你正在看的是历史只读快照"提示，属于 W2-1 提到的"单槽 watch channel"架构限制的延伸，非本窗小改能解。事实源：`crates/app-desktop/src/kernel.rs`（pty watch）、`crates/app-desktop/src/screens/op.rs`（`WorkflowStage`）。
+
+**P3b · Done 后交互式活无 `--resume` 入口**：`runnable` 判断只覆盖 backlog/todo/in_progress（`op.rs`），Done/InReview 状态下即便设计允许 `--resume`（`prepare_issue_run resume=true`），看板上也没有"打开会话/resume"的可点入口。需要在 runnable 之外单独给交互式 Done/InReview 活加一个不改变状态机、只读打开会话的按钮。事实源：`crates/app-desktop/src/screens/op.rs`（`runnable`）、`crates/bw-app/src/lib.rs`（`prepare_issue_run`）。
+
+**P6 · Done toast「N 个产物版本」文案吓人**：`scan_and_register_artifacts` 对 owned workspace 做全量 tracked 文件快照登记，一次 Done 常报出几十上百个"新增产物版本"，用户第一反应是"是不是哪里跑飞了"。这是设计如实行为（整仓快照，不是 bug），本窗不改代码，留给任务 B 产品指南写清楚"这是整仓快照，不代表改了这么多文件"。
+
+**P9 · cron 不随 `connectors.toml` 的 `schedule` 字段增减独立定时器**：设计上"一条 Daily `CollectMetrics` 覆盖项目下全部 `kind=script` 连接器"（见 §9 代码事实：`lib.rs` tick→`collect_project_metrics`→按 `kind==script && project_id` 过滤，`~3979-3993`），`connectors.toml` 里写的 `schedule` 字段目前**只是文档性的，buddy 不读它建 cron 行**。是否要接线（按 schedule 建/更新独立 cron）还是保持"一条 Daily 全覆盖"的现状只需把面板文案说清楚（P13 已解决一半），是产品未决点，本窗不擅自接线。事实源：`crates/bw-app/src/lib.rs`（`collect_project_metrics`）、`crates/bw-engine/src/connectors_file.rs`（`schedule` 字段仅解析不接调度）。
+
+**P11 · Issue Done 后阶段记录区变回旧 Chat + 会话卡「进行中」不消失**：两个独立现象——① PTY 结束后 `pty_active=false`，工作流面板退回旧的 Chat 发送框（交互式活不写 `message`，所以是空壳），视觉上像"退步"；② `session.status=Active` 插入后没有任何路径把它翻成 Done，与 issue 本身是否 Done 完全脱钩，导致早已完成的活在会话列表里永远显示"进行中"。需要 session 状态跟随 issue 状态或显式归档动作，属于状态机层面的改动，本窗不擅自扩。事实源：`crates/app-desktop/src/screens/op.rs`（`WorkflowStage` Chat 回退分支）、`session` 表（`status` 字段无 Done 写入路径）。
+
+**P8**：不新增条目——已是 `W3-1`（北极星无 `metric` 行 · 灰卡）的既有决议，采数窗口另议，本窗未碰。

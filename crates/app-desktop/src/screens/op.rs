@@ -21,7 +21,7 @@ use bw_core::model::{
     stage_workflow, FeedLevel, HubKind, HubSource, IssuePriority, IssueStatus, MaturityPeriod,
     Signal, StageKind,
 };
-use bw_core::{IssueId, SessionId, SkillId, WorkflowId};
+use bw_core::{IssueId, ProjectId, SessionId, SkillId, WorkflowId};
 use bw_store::SessionKind;
 use dioxus::document;
 use dioxus::prelude::*;
@@ -739,7 +739,7 @@ fn IssuesPanel(op: OpVm) -> Element {
             }
             // P4: the evidence overlay — floats above the board while open.
             if let Some(d) = op.issue_detail.clone() {
-                IssueDetailOverlay { d, sessions: op.sessions.clone() }
+                IssueDetailOverlay { d, sessions: op.sessions.clone(), active_run: op.active_run, project_id: op.id }
             }
             div { style: "display:flex;gap:12px;align-items:flex-start;",
                 for (label, list) in grouped {
@@ -1013,7 +1013,12 @@ fn IssuesPanel(op: OpVm) -> Element {
 /// guarded commands the board uses — 「确认完成」 is the human's call, here
 /// as everywhere.
 #[component]
-fn IssueDetailOverlay(d: ui::vm::IssueDetailVm, sessions: Vec<SessionCardVm>) -> Element {
+fn IssueDetailOverlay(
+    d: ui::vm::IssueDetailVm,
+    sessions: Vec<SessionCardVm>,
+    active_run: Option<(ProjectId, IssueId)>,
+    project_id: ProjectId,
+) -> Element {
     let k = use_context::<Kernel>();
     let card = theme::card();
     let border = theme::BORDER;
@@ -1030,6 +1035,7 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm, sessions: Vec<SessionCardVm>) ->
     let k_run = k.clone();
     let k_merge = k.clone();
     let k_distill = k.clone();
+    let k_cancel = k.clone();
     let mut distilling = use_signal(|| false);
     let mut skill_name = use_signal(|| format!("{} · 做法", d.title));
     let mut skill_desc = use_signal(|| format!("来自 Issue #{} 的实战沉淀", d.number));
@@ -1043,6 +1049,16 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm, sessions: Vec<SessionCardVm>) ->
     let run_stage = d.stage;
     let run_sess_title = format!("#{} {}", d.number, d.title);
     let assignee = d.assignee_name.clone().unwrap_or_else(|| "未分配".into());
+    // P2 (2026-08-06 cowelink 验证): 对仗看板卡片(op.rs 列表行 :769-780,930-
+    // 941)的同一段 active_run/串行锁判断——弹窗此前完全不看 active_run,
+    // 「▶ 跑」永远可点、永远不知道这件活(或同项目另一件)是不是已经在跑。
+    let is_running = active_run == Some((project_id, d.id));
+    let same_project_busy = active_run.map(|(p, _)| p) == Some(project_id);
+    let (run_label, run_cursor, run_color) = if same_project_busy {
+        ("▶ 跑(排队中)".to_string(), "not-allowed", ink3)
+    } else {
+        ("▶ 跑".to_string(), "pointer", clay)
+    };
 
     rsx! {
         div {
@@ -1075,7 +1091,14 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm, sessions: Vec<SessionCardVm>) ->
                 // ── runs + real changes ──
                 div { style: "font-size:12px;color:{ink3};letter-spacing:.05em;margin:12px 0 6px;", "运行史({d.runs.len()})" }
                 if d.runs.is_empty() {
-                    div { style: "font-size:12px;color:{ink3};", "还没有运行——「▶ 跑」会真实开工并留痕。" }
+                    if d.is_interactive {
+                        // P2: 交互式活(找指标/绑数据)不写 workflow_run——
+                        // 「还没有运行」对已经跑过的交互式活是假话,过程在
+                        // 嵌入终端/claude 会话里,不在这张运行史列表里。
+                        div { style: "font-size:12px;color:{ink3};", "交互式活不写运行史——过程在下方嵌入终端 / claude 会话里,不是没跑过。" }
+                    } else {
+                        div { style: "font-size:12px;color:{ink3};", "还没有运行——「▶ 跑」会真实开工并留痕。" }
+                    }
                 }
                 for (ri , r) in d.runs.iter().enumerate() {
                     div {
@@ -1128,10 +1151,22 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm, sessions: Vec<SessionCardVm>) ->
 
                 // ── actions(status-gated;same guarded commands as the board)──
                 div { style: "display:flex;gap:14px;margin-top:16px;align-items:center;flex-wrap:wrap;",
-                    if runnable {
+                    if is_running {
+                        // P2: 对仗看板卡片 :930-937 — 这件活正在跑,给「⬇ 终止」
+                        // 而不是一个假装可点的「▶ 跑」。
                         button {
-                            style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
+                            style: "cursor:pointer;border:none;border-radius:7px;background:transparent;border:1px solid {alert};color:{alert};padding:6px 15px;font-size:12.5px;font-weight:700;",
+                            onclick: move |_| k_cancel.send(Command::CancelRun { id }),
+                            "⬇ 终止"
+                        }
+                    } else if runnable {
+                        button {
+                            style: "cursor:{run_cursor};border:none;border-radius:7px;background:{run_color};color:#FFF;padding:7px 16px;font-size:12.5px;",
+                            disabled: same_project_busy,
                             onclick: move |_| {
+                                if same_project_busy {
+                                    return;
+                                }
                                 let sid = existing_issue_session(&sessions, run_stage, &run_sess_title)
                                     .unwrap_or_else(SessionId::new);
                                 k_run.send(Command::StartSession {
@@ -1150,7 +1185,7 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm, sessions: Vec<SessionCardVm>) ->
                                 k_run.send(Command::SetPanel(Panel::Workflow));
                                 k_run.send(Command::SelectSession(Some(sid)));
                             },
-                            "▶ 跑"
+                            "{run_label}"
                         }
                     }
                     if in_review {
@@ -2296,6 +2331,20 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
             }
             if !m.def.is_empty() {
                 div { style: "font-size:11.5px;color:{ink3};line-height:1.6;", "{m.def}" }
+            }
+            // P10(2026-08-06 cowelink 验证):总览业务卡此前看得到 manual
+            // 指标(灰卡+「手填」徽)但填不了——手填入口只挂在旧 `MetricCard`
+            // (阶段面板),v2 总览的 `BizMetricCard` 没有任何录入框。复用既有
+            // `RecordInline`(同一份组件,阶段面板那份原样不动)。gate 在
+            // `collect_kind`(这条指标的采集*计划*)而非 `m.manual`(最近一次
+            // 观测的来源)——刻意如此:一条 manual 指标在**还没有任何观测**
+            // 时 `manual` 是 false(没有"最近来源"这回事),但依然需要这个
+            // 输入框才能填出第一条观测,否则永远死锁。停用的指标不给填(和
+            // `MetricCard` 一致——停用就是别再拿这条量了)。北极星如果绑定了
+            // 一条真实 metric 行(`ns_metric.is_some()`),也走的是这同一个
+            // `BizMetricCard`,manual 时同样会出现这个框——不需要特殊处理。
+            if m.collect_kind == "manual" && !m.archived {
+                RecordInline { metric: m.clone() }
             }
         }
     }

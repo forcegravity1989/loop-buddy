@@ -413,13 +413,20 @@ pub fn build_bridge_system_prompt(playbook_ctx: &PlaybookCtx, skill_slug: &str) 
             s.push_str(
                 "- 绑数据=搭采集装置:写采集脚本到 `.bw/scripts/`(buddy 自带 instance 包 \
                  codehub/github CLI,或项目侧 `derive_*.py` 留原位)+ 写连接器清单 \
-                 `.bw/connectors.toml`(格式见 `docs/connectors-toml-format.md`)+ \
+                 `.bw/connectors.toml`(格式见 `docs/connectors-toml-format.md`,数组表键名 \
+                 是单数 `[[connector]]`,写成复数 `[[connectors]]` 会解析失败)+ \
                  给 metric 配 `collect_kind='script'`+`collect_query=字段路径`。\
                  **agent 不调 buddy API**——靠文件正本 + PR 合入后 buddy 感知 sync(\
                  `.bw/connectors.toml` → `connector` 行 upsert,`.bw/metrics.toml` → \
                  `metric` 行 upsert;cron 到点自动跑 script connector → observation → \
                  signal)。`script` 的 `query` 只写字段在脚本输出 JSON 里的点分路径\
                  (如 `leading.L1`),不含脚本路径。\n",
+            );
+            s.push_str(
+                "- **`.bw/connectors.toml` 的 `output` 字段必须真实写文件**:buddy 采集时\
+                 只读 `output` 指向的那个文件,完全不看脚本的 stdout——哪怕脚本 `print()` \
+                 出了正确的 JSON,不写进 `output` 文件也等于没接。脚本必须真的落盘一份 \
+                 JSON,再把相对路径填进 `output`,收尾前务必确认这个文件真的存在。\n",
             );
         }
         _ => {
@@ -1026,6 +1033,9 @@ mod tests {
         assert!(prompt.contains("绝不伪造数据"));
         assert!(prompt.contains("不动 `name`/`def`/`target`"));
         assert!(prompt.contains("derive_*.py"));
+        // P5 · 2026-08-06: output-file-not-stdout must be in the prompt an
+        // agent actually receives, not just in docs it may not read.
+        assert!(prompt.contains("完全不看脚本的 stdout"));
     }
 
     #[test]

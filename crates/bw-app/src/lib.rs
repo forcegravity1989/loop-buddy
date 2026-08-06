@@ -8917,11 +8917,48 @@ impl App {
                             self.emit(Event::AgentsChanged);
                         }
                     }
-                    // Artifact reflux, issue-scoped: whatever real files exist
-                    // in the workspace at completion time get registered
-                    // against the issue's stage (idempotent — an unchanged
-                    // workspace registers 0 fresh rows).
+                    // P4 (2026-08-06 cowelink 验证 §2.3/§5): 「已完成」是唯一的
+                    // 验收兜底,不管走的是 `MergeIssuePr`(内部 dispatch 到这里)
+                    // 还是网页上把 PR 合了、回 buddy 裸点「→已完成」——两条路都
+                    // 该把远端可能已经合入的改动拉回本地、把 `.bw/metrics.toml`/
+                    // `.bw/connectors.toml` 正本同步进 SQLite 缓存。此前只有
+                    // `MergeIssuePr` 路径做这件事,裸 `TransitionIssue`(网页合
+                    // MR 场景)完全跳过 sync,业务指标停在 seed 值——这是本条
+                    // 验证日志的头号发现。挪到这唯一的 Done 记账口后,两条入口
+                    // 共用同一次 pull+sync,不重复跑(`MergeIssuePr` 内部通过
+                    // `dispatch` 到这里,不再自己另跑一遍)。收拢/同步失败只软
+                    // 降级 toast,不因此回滚已经发生的验收。
                     if let Ok(Some(proj)) = self.store.get_project(issue.project_id).await {
+                        if !proj.workspace_path.trim().is_empty()
+                            && !proj.remote_path.trim().is_empty()
+                        {
+                            match bw_engine::github::sync_default_branch(std::path::Path::new(
+                                proj.workspace_path.trim(),
+                            ))
+                            .await
+                            {
+                                Ok(()) => {
+                                    self.sync_metrics_file_for(issue.project_id).await?;
+                                    self.sync_connectors_file_for(issue.project_id).await?;
+                                }
+                                Err(e) => {
+                                    self.emit(Event::ConnectorSynced {
+                                        name: "metrics.toml".into(),
+                                        ok: false,
+                                        detail: format!(
+                                            "验收后工作区收拢默认分支失败,指标/连接器正本未同步(可手动重试):{e}"
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                        // Artifact reflux, issue-scoped: whatever real files
+                        // exist in the workspace at completion time get
+                        // registered against the issue's stage (idempotent —
+                        // an unchanged workspace registers 0 fresh rows). Runs
+                        // after the pull above so a webMerge-completed issue's
+                        // artifact scan sees the just-pulled files, not stale
+                        // pre-pull state.
                         if !proj.workspace_path.trim().is_empty() {
                             if let Ok(fresh) = self
                                 .scan_and_register_artifacts(
@@ -9050,34 +9087,11 @@ impl App {
                         issue.pr_number, issue.number
                     ),
                 });
-                // plan/13 D5: merge 后同步指标正本。先把工作区收拢回默认
-                // 分支(run 后还停在 bw/issue-N 活分支,merge 进主干的
-                // `.bw/metrics.toml` 只有 checkout+pull 之后才读得到),再
-                // 走同一条 sync 路径。收拢失败软降级 toast——验收已经完成,
-                // 不因同步不顺回滚任何东西;下次手动 SyncMetricsFile 可补。
-                // V1 Issue2 Phase 3: 同时同步 `.bw/connectors.toml`(script
-                // connector 正本),与 metrics.toml 并列。
-                if !proj.workspace_path.trim().is_empty() {
-                    match bw_engine::github::sync_default_branch(std::path::Path::new(
-                        proj.workspace_path.trim(),
-                    ))
-                    .await
-                    {
-                        Ok(()) => {
-                            self.sync_metrics_file_for(issue.project_id).await?;
-                            self.sync_connectors_file_for(issue.project_id).await?;
-                        }
-                        Err(e) => {
-                            self.emit(Event::ConnectorSynced {
-                                name: "metrics.toml".into(),
-                                ok: false,
-                                detail: format!(
-                                    "merge 后工作区收拢默认分支失败,指标/连接器正本未同步(可手动重试):{e}"
-                                ),
-                            });
-                        }
-                    }
-                }
+                // P4 (2026-08-06): pull-default-branch + sync metrics/
+                // connectors 正本已经挪到 `TransitionIssue` 的 Done 记账口
+                // (它就在上面几行通过 `dispatch` 走过了)——两个入口(这里的
+                // MergeIssuePr 和网页合 MR 后裸点「→已完成」)现在共用同一次
+                // sync,这里不再重复跑一遍。
             }
 
             Command::AssignIssue { id, assignee } => {
@@ -9485,6 +9499,16 @@ fn script_interpreter_candidates(command: &str) -> Vec<String> {
     }
     push(&mut v, command.to_string());
     if cfg!(windows) {
+        // P5 · 2026-08-06 real-world incident: a fresh Windows machine may
+        // have the `py` launcher (installed by python.org's installer by
+        // default) on PATH but not a bare `python`/`python3` — the default
+        // script command (`ScriptConnectorConfig::from_config` defaults
+        // empty `command` to `"python"`) then fails NotFound with no
+        // fallback. `py` (no version arg) launches the newest installed
+        // Python, same semantics as bare `python` for a single-version box.
+        if matches!(command, "python" | "python3") {
+            push(&mut v, "py".to_string());
+        }
         for c in ["bash", "sh.exe", "bash.exe"] {
             push(&mut v, c.to_string());
         }

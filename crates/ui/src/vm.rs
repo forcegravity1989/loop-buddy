@@ -999,6 +999,12 @@ pub struct IssueDetailVm {
     pub runs: Vec<IssueRunRowVm>,
     /// (path, short commit, bytes) per registered artifact version.
     pub artifacts: Vec<(String, String, u64)>,
+    /// P2 (2026-08-06 cowelink 验证): 交互式活(找指标/绑数据)不写
+    /// `workflow_run` 行(§2.6 设计决定——过程在嵌入终端/`session.jsonl`
+    /// 里,不解析成摘要),`runs` 因此对交互式活恒为空。弹窗此前对空
+    /// `runs` 一律显示「还没有运行」,对交互式活是假话——已经跑过甚至跑
+    /// 完了,只是这条活从不产生这种记录。
+    pub is_interactive: bool,
 }
 
 fn duration_label(ms: Option<i64>) -> String {
@@ -1073,6 +1079,7 @@ pub fn issue_detail_vm(
                 (a.path.clone(), short, a.bytes)
             })
             .collect(),
+        is_interactive: issue.interactive_started,
     }
 }
 
@@ -1623,7 +1630,7 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
             .next()
             .map(|ch| ch.to_string())
             .unwrap_or_default(),
-        kind: connector_kind_label(&c.kind),
+        kind: connector_kind_label(c),
         status: c.status,
         status_label: c.status.label(),
         last_sync: c.last_sync.clone(),
@@ -1642,15 +1649,46 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
 /// PF1-3b: 连接器 kind → 角色人话标签(VM 层派生,存储仍原 kind)。
 /// 心智:script 也是连接器(kind=script,塞进 connector 表当一种 kind),
 /// 只是角色不同(对外连代码仓 vs 内部采集)。其余 kind 原样显示。
-fn connector_kind_label(kind: &str) -> String {
-    match kind {
+fn connector_kind_label(c: &Connector) -> String {
+    match c.kind.as_str() {
         bw_core::model::CONNECTOR_KIND_CODEHUB_REPO => "对外连接器 · 连 CodeHub 仓".to_string(),
         bw_core::model::CONNECTOR_KIND_GITHUB_REPO => "对外连接器 · 连 GitHub 仓".to_string(),
-        bw_core::model::CONNECTOR_KIND_SCRIPT => "脚本连接器 · 采集 Issue/MR".to_string(),
+        bw_core::model::CONNECTOR_KIND_SCRIPT => script_connector_kind_label(c),
         bw_core::model::CONNECTOR_KIND_CLAUDE_CLI => "对外连接器 · claude CLI".to_string(),
         bw_core::model::CONNECTOR_KIND_GIT_REPO => "本地工作区(legacy)".to_string(),
-        _ => kind.to_string(),
+        _ => c.kind.clone(),
     }
+}
+
+/// P12 (2026-08-06 cowelink 验证): 此前所有 `kind=script` 连接器一律标
+/// 「采集 Issue/MR」,连业务侧自采脚本(如 changelog 特性数)也被贴上这个
+/// 跟自己毫不相干的标签——用户看着连接器 Hub 会以为一个明明是采业务数据
+/// 的脚本在采 Issue/MR。CreateProject 建的仓统计脚本连接器固定命名
+/// `"{项目名} · 仓统计"`(`bw-app/lib.rs`),按这个名字识别；其余按
+/// `config` JSON 里的 `script` 字段抽脚本文件名,给一个真实反映内容的标签
+/// (无法解析时退化成通用「业务指标脚本」,不再乱贴"Issue/MR")。
+fn script_connector_kind_label(c: &Connector) -> String {
+    if c.name.contains("仓统计") {
+        return "脚本连接器 · 采集 Issue/MR".to_string();
+    }
+    match script_file_name_from_config(&c.config) {
+        Some(file) => format!("脚本连接器 · {file}"),
+        None => "脚本连接器 · 业务指标脚本".to_string(),
+    }
+}
+
+/// Best-effort `"script"` field extraction from a connector's raw JSON
+/// `config` string, without pulling in a JSON parser dependency just for a
+/// display label — safe because `config` is buddy's own serialized shape
+/// (`{"script": "...", ...}`, written by `sync_connectors_file_for`/
+/// `create_connector`), never untrusted external input.
+fn script_file_name_from_config(config: &str) -> Option<&str> {
+    let idx = config.find("\"script\"")?;
+    let rest = &config[idx + "\"script\"".len()..];
+    let after_colon = rest.split_once(':')?.1.trim_start();
+    let quoted = after_colon.strip_prefix('"')?;
+    let value = quoted.split('"').next()?;
+    value.rsplit(['/', '\\']).next().filter(|s| !s.is_empty())
 }
 
 #[derive(Clone, PartialEq, Debug)]

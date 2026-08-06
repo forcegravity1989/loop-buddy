@@ -173,3 +173,10 @@ collect = { kind = "script", query = "leading.L1" }
 - **忘记「改了再同步」的幂等语义**:`.bw/metrics.toml` 是唯一正本,改完
   只需要正常提交 + PR + merge,`SyncMetricsFile` 会在下一次同步时原地覆
   盖对应行——不需要、也不应该手动去改 SQLite。
+- **脚本只 `print()` 到 stdout,`.bw/connectors.toml` 的 `output` 留空**
+  (2026-08-06 真实事故):buddy 采集只读 `output` 指向的文件,**完全不看
+  stdout**——脚本必须真的把 JSON 写进 `output` 文件才算搭好装置,只是打印
+  到终端等于没接。写连接器清单时 `output` 字段视为必填。
+- **`[[connector]]` 写错成 `[[connectors]]`(复数)**:TOML 数组表键名是单
+  数 `connector`,写错会让整份文件解析失败(2026-08-06 起已加严格校验,不
+  会再静默吞成零连接器)——报错信息会指出具体是哪个字段名不对。

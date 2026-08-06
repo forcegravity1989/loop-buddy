@@ -175,15 +175,20 @@ fn CronTaskRowView(c: CronRowVm, can_run: bool, on_trigger: EventHandler<CronTas
                         }
                     }
                 } else if c.is_collect_metrics {
-                    // PF1-3a: CollectMetrics 卡具体化——显示「采集代码仓指标
-                    // (开放 Issue / 已合入 MR)· 每日」,targets 非空时拼上指标名
-                    // (从该项目 collect_kind='script' 的 metric 派生,kernel 填)。
+                    // PF1-3a: CollectMetrics 卡具体化,targets 非空时拼上指标名
+                    // (从该项目 collect_kind='script' 的全部 metric 派生,kernel
+                    // 填——不止代码仓统计,业务脚本指标也在里面)。P13(2026-08-06
+                    // cowelink 验证):此前固定前缀「采集代码仓指标」在业务脚本
+                    // 指标混进 targets 后就是误导——这一条定时器共用同一个
+                    // CollectMetrics 到点会跑该项目**全部** script 连接器,不是
+                    // 只跑代码仓统计;前缀改成中性的「本项目全部 script 指标」,
+                    // 不预设内容类别。
                     {
                         let targets = c.collect_targets.join(" / ");
                         let subtitle = if targets.is_empty() {
-                            "采集代码仓指标(开放 Issue / 已合入 MR)· 每日".to_string()
+                            "本项目全部 script 指标 · 每日".to_string()
                         } else {
-                            format!("采集代码仓指标({targets})· 每日")
+                            format!("本项目全部 script 指标({targets})· 每日")
                         };
                         rsx! {
                             div {

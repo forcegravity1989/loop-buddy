@@ -35,8 +35,15 @@ output = "..."
 | `name` | string | 是 | 连接器名称,同一项目内唯一(upsert 按 `(project_id, name)` 身份) |
 | `kind` | string | 是 | 固定词表,目前只接受 `"script"`。其他值会让整份文件解析失败 |
 | `script` | string | 是 | 采集脚本的路径,相对工作区根(如 `scripts/derive_leading.py` 或 `governance/derive_leading.py`)。不能用绝对路径 |
-| `command` | string | 否(默认空) | 跑脚本的命令(`python` / `ts-node` / `node` …)。空在采集时默认 `python` |
-| `output` | string | 否(默认空) | 脚本输出文件路径(相对工作区根)或字段结构描述。buddy 跑完脚本后读它取 JSON,再按各 `script` 指标的 `collect_query` 字段路径取值 |
+| `command` | string | 否(默认空) | 跑脚本的命令(`python` / `ts-node` / `node` …)。空在采集时默认 `python`(Windows 上找不到 `python` 会自动退而求其次试 `py` 启动器) |
+| `output` | string | **事实上必填**(默认空) | 脚本输出文件路径(相对工作区根)。buddy 跑完脚本后**只读这个文件**取 JSON,再按各 `script` 指标的 `collect_query` 字段路径取值 |
+
+> **⚠ `output` 留空 = 永远采不到数(2026-08-06 真实事故)**:`collect_project_metrics`
+> 跑完脚本**只看 `output` 指向的文件,完全丢弃脚本的 stdout**(哪怕脚本 print
+> 出了正确的 JSON)。真实发生过:agent 写的脚本只 `print()` 到 stdout、
+> `connectors.toml` 里 `output` 留空,PR 合入 + sync 全部"成功",但指标一直
+> Unknown——因为脚本必须真的把结果**写进** `output` 指向的文件,不是打印到
+> 终端。绑数据时务必让脚本落一次盘再收工。
 
 ## `kind` 的词表
 

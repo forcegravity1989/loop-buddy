@@ -49,6 +49,7 @@ pub enum ConnectorsFileError {
 /// they are not part of this file's vocabulary; a `kind` other than
 /// `"script"` is a parse error (not silently ignored).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConnectorDef {
     pub name: String,
     /// Only `"script"` is accepted. The fixed vocabulary is enforced at
@@ -93,7 +94,16 @@ impl ConnectorKind {
 }
 
 /// The parsed `.bw/connectors.toml` file.
+///
+/// `deny_unknown_fields` (P5, 2026-08-06 real-world incident): without it, an
+/// agent writing `[[connectors]]` (plural — an easy typo against the
+/// singular `[[connector]]` array-table header below) parses "successfully"
+/// into an empty `connectors: Vec` — `sync_connectors_file_for` then upserts
+/// zero rows with no error, silently as if the file had genuinely defined no
+/// connectors. Denying unknown top-level keys turns that into a loud parse
+/// error naming the bad key instead.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConnectorsFile {
     /// `[[connector]]` array entries. Empty is valid (a file with zero
     /// connectors — honest no-op, not an error). The TOML key is `connector`
@@ -276,6 +286,56 @@ script = "scripts/x.py"
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("解析"));
+    }
+
+    #[test]
+    fn read_plural_key_typo_fails_loud_not_silent_empty() {
+        // P5 real-world incident (2026-08-06): an agent wrote `[[connectors]]`
+        // (plural) instead of `[[connector]]`. Before `deny_unknown_fields`,
+        // this parsed to `Ok(Some(ConnectorsFile { connectors: vec![] }))` —
+        // a silent zero-connector "success". It must now be a loud `Err`.
+        let tmp = tempfile_dir();
+        let bw_dir = tmp.join(".bw");
+        std::fs::create_dir_all(&bw_dir).unwrap();
+        std::fs::write(
+            bw_dir.join("connectors.toml"),
+            r#"[[connectors]]
+name = "leading-indicators"
+kind = "script"
+script = "scripts/derive_leading.py"
+output = "data.json"
+"#,
+        )
+        .unwrap();
+
+        let result = read(&tmp.to_string_lossy());
+        assert!(
+            result.is_err(),
+            "plural [[connectors]] typo must fail parsing, not silently yield zero connectors"
+        );
+    }
+
+    #[test]
+    fn read_unknown_field_in_connector_def_fails() {
+        let tmp = tempfile_dir();
+        let bw_dir = tmp.join(".bw");
+        std::fs::create_dir_all(&bw_dir).unwrap();
+        std::fs::write(
+            bw_dir.join("connectors.toml"),
+            r#"[[connector]]
+name = "typo-field"
+kind = "script"
+script = "scripts/x.py"
+outptu = "data.json"
+"#,
+        )
+        .unwrap();
+
+        let result = read(&tmp.to_string_lossy());
+        assert!(
+            result.is_err(),
+            "unknown field must fail, not be silently dropped"
+        );
     }
 
     #[test]
