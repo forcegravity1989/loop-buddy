@@ -157,7 +157,12 @@ async fn handle_connection(
 
     // Parse Content-Length from the header section.
     let headers = String::from_utf8_lossy(&buf[..header_end]);
-    let content_length = parse_content_length(&headers).unwrap_or(0);
+    // Cap the body the same way the header read is capped: a claude hook
+    // payload is a few KB of JSON, so anything past MAX_BODY is either
+    // malformed or a local process trying to make buddy allocate. Reading
+    // `Content-Length` unbounded would let it.
+    const MAX_BODY: usize = 256 * 1024;
+    let content_length = parse_content_length(&headers).unwrap_or(0).min(MAX_BODY);
 
     // The body may already be partially (or fully) in `buf` — collect the
     // remaining bytes if needed.
