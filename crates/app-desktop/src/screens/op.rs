@@ -2879,6 +2879,10 @@ fn RoutineStage(s: StageVm) -> Element {
 /// This solves the **pre-handler buffer** race (orca §2.4): the terminal
 /// isn't ready yet, so bytes go to `__bw_term_buffer`; the init script
 /// flushes the buffer when ready (rendererDispatcherReady handshake).
+const XTERM_JS: &str = include_str!("../../public/xterm.min.js");
+const XTERM_CSS: &str = include_str!("../../public/xterm.css");
+const FIT_ADDON_JS: &str = include_str!("../../public/xterm-addon-fit.min.js");
+
 const TERM_PRE_HANDLER_JS: &str = r#"
 window.__bw_term_write = function(text) {
     if (!window.__bw_term_ready) {
@@ -2913,33 +2917,33 @@ const TERM_INIT_JS: &str = r#"
     // replayIntoTerminal guard: don't re-init on Dioxus re-render.
     if (window.__bw_term) return { ok: true, reason: 'already-initialized' };
 
-    // Load CSS.
+    // Load CSS (local, no CDN — CDN 不稳定会导致 xterm 不初始化 → stdin/stdout 死).
     if (!document.getElementById('__bw_xterm_css')) {
         var link = document.createElement('link');
         link.id = '__bw_xterm_css';
         link.rel = 'stylesheet';
-        link.href = 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css';
+        link.href = '/xterm.css';
         document.head.appendChild(link);
     }
 
-    // Load xterm.js.
+    // Load xterm.js (local).
     if (!window.Terminal) {
         await new Promise(function(resolve, reject) {
             var s = document.createElement('script');
-            s.src = 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js';
+            s.src = '/xterm.min.js';
             s.onload = resolve;
-            s.onerror = function() { reject(new Error('xterm.js load failed')); };
+            s.onerror = function() { reject(new Error('xterm.js load failed (local)')); };
             document.head.appendChild(s);
         });
     }
 
-    // Load Fit addon.
+    // Load Fit addon (local).
     if (!window.FitAddon) {
         await new Promise(function(resolve, reject) {
             var s = document.createElement('script');
-            s.src = 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js';
+            s.src = '/xterm-addon-fit.min.js';
             s.onload = resolve;
-            s.onerror = function() { reject(new Error('fit addon load failed')); };
+            s.onerror = function() { reject(new Error('fit addon load failed (local)')); };
             document.head.appendChild(s);
         });
     }
@@ -3042,9 +3046,15 @@ fn TerminalWidget() -> Element {
             // 1. Set up pre-handler functions (sync, fast) — must run
             // BEFORE any bytes arrive so they're buffered, not lost.
             let _ = document::eval(TERM_PRE_HANDLER_JS).await;
-            // 2. Fire the async init script (loads xterm.js from CDN).
-            // Don't block — the pre-handler buffer stashes bytes until
-            // __bw_term_ready becomes true (rendererDispatcherReady).
+            // 2. Load xterm.js + Fit addon + CSS inline (no CDN — CDN 不稳定
+            // 会导致 xterm 不初始化 → stdin/stdout 死)。eval 直接执行 JS,
+            // 定义 window.Terminal / window.FitAddon;CSS 注入 <style>。
+            let _ = document::eval(XTERM_JS).await;
+            let _ = document::eval(FIT_ADDON_JS).await;
+            let _ = document::eval(&format!(
+                "var __s=document.createElement('style');__s.id='__bw_xterm_css';__s.textContent={};document.head.appendChild(__s)",
+                serde_json::to_string(XTERM_CSS).unwrap_or_else(|_| String::new())
+            )).await;
             let _ = document::eval(TERM_INIT_JS).await;
 
             // 3. Main loop: select between new PTY bytes and input/resize
