@@ -2961,6 +2961,12 @@ const TERM_INIT_JS: &str = r#"
     if (!div) return { ok: false, reason: 'div not found' };
     term.open(div);
     fitAddon.fit();
+    term.focus();
+
+    // Ensure keyboard always reaches xterm: refocus on div click
+    // (wry WebView may not auto-focus the hidden helper textarea,
+    // so without this stdin never fires onData → no interaction).
+    div.addEventListener('click', function() { term.focus(); });
 
     // onData → stash for the Rust side to drain.
     term.onData(function(data) {
@@ -3050,12 +3056,30 @@ fn TerminalWidget() -> Element {
                     }
                     // 50ms timer → poll for user input + resize.
                     _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                        // 诊断:__bw_term_input length(看 xterm onData 有没有触发)
+                        let _input_len: u64 = document::eval(
+                            "(window.__bw_term_input||[]).length"
+                        ).await.ok().and_then(|v| v.as_u64()).unwrap_or(0);
+                        if _input_len > 0 {
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
+                                .open("D:\\2026\\code\\loop-buddy\\pty-stdin-diag.log") {
+                                use std::io::Write;
+                                let _ = writeln!(f, "[stdin-ui] __bw_term_input len={_input_len} (onData triggered)");
+                                let _ = f.flush();
+                            }
+                        }
                         // Drain input (onData → Command::TerminalInput).
                         if let Ok(v) = document::eval(
                             "window.__bw_term_drain_input()"
                         ).await {
                             if let Some(input) = v.as_str() {
                                 if !input.is_empty() {
+                                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
+                                        .open("D:\\2026\\code\\loop-buddy\\pty-stdin-diag.log") {
+                                        use std::io::Write;
+                                        let _ = writeln!(f, "[stdin-ui] drain→TerminalInput {} bytes: {:?}", input.len(), input);
+                                        let _ = f.flush();
+                                    }
                                     k.send(Command::TerminalInput {
                                         bytes: input.as_bytes().to_vec(),
                                     });

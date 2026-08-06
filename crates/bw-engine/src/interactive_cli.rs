@@ -755,6 +755,12 @@ impl InteractiveExecutor for InteractiveCliExecutor {
                     Some(PtyInput::Bytes(bytes)) => {
                         // OwnedWriteHalf: bytes written become console input;
                         // line-oriented programs expect `\r\n`. flush is a no-op.
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
+                            .open("D:\\2026\\code\\loop-buddy\\pty-stdin-diag.log") {
+                            use std::io::Write;
+                            let _ = writeln!(f, "[stdin-pty] input_rx got {} bytes →writer.write_all: {:?}", bytes.len(), String::from_utf8_lossy(&bytes));
+                            let _ = f.flush();
+                        }
                         let _ = writer.write_all(&bytes);
                         let _ = writer.flush();
                     }
