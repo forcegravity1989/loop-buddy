@@ -180,3 +180,50 @@ orca 是 Electron+React+node-pty+xterm.js;buddy 是 Dioxus/wry+Rust。**能借�
 预研:`docs/v1-prototype/issue2-interactive-cli-spike.md`(A预研 verdict)+ `spike/pty-spike/`(portable-pty spike)+ orca-main 研究(声明式 CLI 表 `TUI_AGENT_CONFIG`、`IPtyProvider` trait、PTY ACK 字节流协议、hook→HTTP→事件、session.jsonl collector——模式可借代码不同栈)。
 心智模型物证:commit `fa2e3bb 18-③script-connector` + Issue1 plan(`docs/v1-prototype/issue1-onboard-simplify.md` §0/§6)。
 guide 目标态:`docs/guide/buddy-guide.html` u3/u4/m4/m5/m6、`docs/guide/填写规范.md`。
+
+## 9. 根因定位 + 修法(2026-08-06 诊断 spike)
+
+### 9.1 现象(用户穿刺 cowelink 找指标卡)
+点「找指标」▶跑后:buddy UI 工作流只显示「进行中」,内嵌终端(claude interactive session)空白,旧 Chat 发送按钮还在,无法交互。DB issue `83052118` in_progress + interactive_started=1 + claude_session_id 空。claude 进程(PID 26852,父 builders-workbench)在但僵死:无网络连接、无子进程、内存恒定、无 session.jsonl。
+
+### 9.2 根因:portable-pty 0.9.0 的 ConPTY 实现读不到程序 stdout
+最小颗粒 spike 逐层排除(都在 crates/bw-engine/examples/,临时诊断用,开发阶段清):
+
+| spike | 库 | spawn | reader 读到 |
+|---|---|---|---|
+| v1 | portable-pty 0.9.0 | claude(直接) | 155B ConPTY 控制序列,无 claude 实际输出 |
+| v9 | portable-pty 0.9.0 | powershell(shell) | 4B DSR,无 prompt |
+| v11 | portable-pty 0.9.0 | cmd /c echo(直接) | 90B ConPTY 控制序列,无 echo stdout |
+| buddy 真实(pty-diag.log) | portable-pty 0.9.0 | claude(直接,issue-2 worktree) | 4B DSR,claude 僵死 |
+| v14 | conpty-oxide 0.1.2 | cmd /c echo(直接) | ✅ PTY_OXIDE_OK |
+| v15 | conpty-oxide 0.1.2 | claude -p(直接) | ✅ OXIDE_CLAUDE_OK(全链通)|
+| 对照 | (无 PTY) | claude -p(直接跑,bash) | ✅ GATEWAY_OK |
+
+排除项:
+- ❌ orca 假设错(positional auto-submit):claude 起来 TUI 了,问题更深
+- ❌ drop(slave):v10 不 drop 也一样
+- ❌ take_writer 破坏 reader:v7 不 take 也 4B
+- ❌ 直接 spawn vs shell 中介:v9 portable-pty+shell 也读不到;v15 conpty-oxide 直接 spawn 读到
+- ❌ claude/worktree/网关:直接跑 claude -p 在 issue-2 worktree 输出 WORKSPACE_OK
+- ✅ **portable-pty 0.9.0 的 ConPTY 实现**:spawn 的程序进程起来了但 stdout 没到 reader(PsuedoCon::new 的 hInput/hOutput 接线对,但实际读不到——0.9.0 实现 bug)
+
+### 9.3 portable-pty 不能升级
+crates.io 最新就是 0.9.0(2025-02-11 发布,max_version=0.9.0)。github wezterm/wezterm 的 pty 目录最近 commit 是 "pty: windows: fix kill()"(修 kill,不是修 ConPTY stdout)。所以 git 依赖也没修复。
+
+### 9.4 修法:buddy 换 conpty-oxide
+- 换 `portable-pty = "0.9"` → `conpty-oxide = "0.1"`(crates.io,0.1.2,2026-08-04 发布,correctness-first,sync+async API)
+- `run_skill_pty` 改用 `conpty_oxide::blocking::Command::new(claude).args(...).spawn()?.into_parts()` 拿 output reader(流式读 claude 输出 → bytes_tx)+ input writer(接 PtyInput::Bytes 用户输入)+ child(kill/wait)
+- v15 已验证 conpty-oxide spawn claude + 读 stdout + 网关全链通
+
+### 9.5 叠加问题:claude 交互式 positional 不 auto-submit
+claude 交互式(不带 -p)的 positional argv 不会自动提交为首条消息(claude TUI 起来后等用户回车)。buddy 的 build_startup_plan 用 positional 注入 skill body,假设 auto-submit——这个假设跟 orca 共用(orca 也没 e2e 验证过,但 orca 用户跑 stock claude 碰巧成立,buddy 环境 GLM 网关的 claude 不成立)。
+修法:开发时调注入方式——spawn 裸 claude(无 positional)+ 等 TUI ready + stdin paste skill body + 回车提交(或用户在嵌入终端手动输入,符合"一个回车就能先用起来"的最低期望)。具体方案开发阶段定。
+
+### 9.6 W2 决策背景:直接 spawn claude(不走 shell 中介)
+W2 选直接 spawn claude(CommandBuilder::new(claude).args(...),无 shell)是合理简化——不需 orca 那套 shell-ready 握手(OSC 777 marker)、shell 是 PTY child 再 exec claude。orca 走 shell 是因为它的架构(多 agent、shell 通用、需要 shell-ready marker + writeStartupCommandWhenShellReady)。**这个结构差异不是根因**(v15 conpty-oxide 直接 spawn claude 读到 stdout),只是 portable-pty 0.9.0 的 bug 把它暴露了。
+
+### 9.7 清理(开发阶段做)
+- 删诊断 spike:crates/bw-engine/examples/{pty_spike,conpty_direct,conpty_test,conpty_oxide_test,conpty_oxide_claude}.rs
+- 删 Cargo.toml 的 [target.'cfg(windows)'.dev-dependencies] conpty/conpty-oxide/winapi
+- 删 interactive_cli.rs 的 [pty-diag] 诊断日志(read loop 的文件日志 + spawn 后的日志)
+- 删 pty-diag.log

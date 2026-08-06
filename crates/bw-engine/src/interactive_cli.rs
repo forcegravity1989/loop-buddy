@@ -17,14 +17,21 @@
 //! is a plain OS terminal spawn.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bw_core::playbook::PlaybookCtx;
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tokio::sync::mpsc;
+
+// V1 Issue2 W2 (§9): Windows uses conpty-oxide (portable-pty 0.9.0's ConPTY
+// impl doesn't deliver child stdout to the reader). The blocking Command +
+// Size are imported here for the windows run_skill_pty impl; non-Windows has
+// no run_skill_pty override (falls back to the InteractiveExecutor trait
+// default — PTY not supported, caller uses run_skill). bw-engine keeps
+// portable-pty as a non-Windows keepalive dep only (see Cargo.toml).
+#[cfg(windows)]
+use conpty_oxide::{blocking::Command as PtyCommand, Size};
 
 use crate::{ExecError, RunCtx};
 
@@ -143,6 +150,14 @@ pub struct LaunchPlan {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub cwd: PathBuf,
+    /// V1 Issue2 W2 (§9.5): whether `run_skill_pty` should submit the
+    /// positional prompt after the TUI loads. claude interactive's
+    /// positional argv doesn't auto-submit in buddy's GLM-gateway environment
+    /// (the TUI starts and waits for Enter). `true` on first run (the startup
+    /// plan has a positional skill body) → `run_skill_pty` sends `\r` after a
+    /// brief ready-wait. `false` on resume (no positional — the session
+    /// continues from where it left off).
+    pub submit_prompt: bool,
 }
 
 /// Build the startup plan for an interactive agent session.
@@ -208,6 +223,8 @@ pub fn build_startup_plan(
         args,
         env,
         cwd: workspace_cwd.to_path_buf(),
+        // First run: the positional skill body needs an Enter to submit (§9.5).
+        submit_prompt: true,
     })
 }
 
@@ -277,6 +294,8 @@ pub fn build_resume_plan(
         args,
         env,
         cwd: workspace_cwd.to_path_buf(),
+        // Resume: no positional prompt to submit — the session continues.
+        submit_prompt: false,
     })
 }
 
@@ -637,15 +656,28 @@ impl InteractiveExecutor for InteractiveCliExecutor {
         self.run_skill(plan, ctx).await
     }
 
-    /// V1 Issue2 Phase2b: spawn `claude` in a PTY (portable-pty) and stream
-    /// bytes. Replaces the system-terminal spawn with an in-app PTY:
-    ///  - PTY master → reader (blocking, `spawn_blocking` task) → `bytes_tx`
-    ///  - `input_rx` → PTY master writer (blocking, fast for kernel buffer)
-    ///  - `PtyInput::Resize` → `master.resize()`
-    ///  - Child exit → return `SkillOutput { completed: true }`
+    /// V1 Issue2 W2 (§9): spawn `claude` in a PTY (conpty-oxide on Windows)
+    /// and stream bytes. Replaces the portable-pty 0.9.0 impl whose ConPTY
+    /// backend doesn't deliver child stdout to the reader (see §9).
     ///
-    /// The env strip + cwd are identical to `build_startup_plan` (nested-
-    /// execution vars removed so the child uses its own CLI config).
+    /// Flow (conpty-oxide `blocking::Command` + `Session::into_parts`):
+    ///  - `Command::new(binary).args().env().current_dir().spawn()` → `Session`
+    ///  - `Session::into_parts()` → `{ child, output, input, controller }`
+    ///  - `output` (OwnedReadHalf: std::io::Read) → spawn_blocking read loop →
+    ///    `bytes_tx` (drains ConPTY output so the pipe can't fill —
+    ///    `Child::wait` deadlocks otherwise, per conpty-oxide module docs)
+    ///  - `input` (OwnedWriteHalf: std::io::Write) ← `PtyInput::Bytes`
+    ///  - `controller.resize(Size)` ← `PtyInput::Resize`
+    ///  - §9.5: on first run (`plan.submit_prompt`), send `\r` after a brief
+    ///    ready-wait to submit the positional skill body (claude interactive
+    ///    positional argv doesn't auto-submit in buddy's GLM-gateway env).
+    ///  - Child exit (EOF on output) → kill (idempotent) → return completed.
+    ///
+    /// Non-Windows has no override here → the trait default returns
+    /// `Err("PTY not supported")` and the caller falls back to `run_skill`
+    /// (system terminal). buddy is Windows-only; portable-pty remains a
+    /// non-Windows keepalive dep only (Cargo.toml).
+    #[cfg(windows)]
     async fn run_skill_pty(
         &self,
         plan: &LaunchPlan,
@@ -653,55 +685,46 @@ impl InteractiveExecutor for InteractiveCliExecutor {
         bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
         mut input_rx: mpsc::UnboundedReceiver<PtyInput>,
     ) -> Result<SkillOutput, ExecError> {
+        use std::io::{Read, Write};
         let binary = self.claude_binary.as_deref().unwrap_or(&plan.binary);
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| ExecError::Failed(format!("openpty failed: {e}")))?;
 
-        // Build the command (env strip + cwd from LaunchPlan).
-        let mut cmd = CommandBuilder::new(binary);
+        // Build the spawn command. conpty-oxide's Command mirrors
+        // std::process::Command (builder takes &mut self). The child's stdio
+        // is the pseudoconsole (handles set to INVALID_HANDLE_VALUE — a
+        // redirected parent cannot leak its stdio into the child), and no
+        // handles are inherited (a leaked output pipe copy would keep the
+        // session from ever reaching EOF).
+        let mut cmd = PtyCommand::new(binary);
         cmd.args(&plan.args);
         for (k, v) in &plan.env {
             cmd.env(k, v);
         }
-        cmd.cwd(&plan.cwd);
+        cmd.current_dir(&plan.cwd);
 
-        // Spawn the child in the PTY's slave.
-        let mut child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| ExecError::Failed(format!("pty spawn failed: {e}")))?;
-        // Drop the slave so EOF propagates to the master when the child exits.
-        drop(pair.slave);
+        // Spawn the managed ConPTY session. The returned Session owns its
+        // pseudoconsole, I/O, child process, and a kill-on-close Job. into_parts
+        // separates ownership without detaching the child.
+        let session = cmd
+            .spawn()
+            .map_err(|e| ExecError::Failed(format!("conpty-oxide spawn failed: {e}")))?;
+        let parts = session.into_parts();
+        let mut child = parts.child;
+        let output = parts.output; // moved into the read thread below
+        let mut writer = parts.input; // held until teardown (dropping it ends the session)
+        let controller = parts.controller; // Clone; resize/clear control
 
-        // Take the reader (blocking) and writer (blocking) from the master.
-        // portable-pty 0.9 uses `try_clone_reader` (not `take_reader`).
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| ExecError::Failed(format!("pty try_clone_reader failed: {e}")))?;
-        let mut writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| ExecError::Failed(format!("pty take_writer failed: {e}")))?;
-        let master = pair.master;
-
-        // Read loop: blocking read from PTY → send bytes via channel.
-        // Uses `spawn_blocking` because portable-pty's reader is `std::io::Read`
-        // (blocking), not `tokio::io::AsyncRead`.
+        // Read loop (blocking, spawn_blocking): drains ConPTY output → bytes_tx.
+        // MUST run on a separate thread: conpty-oxide's module docs warn that
+        // Child::wait (and the console host generally) can stop making progress
+        // once conout's pipe buffer fills, so a caller that blocks without
+        // draining output can deadlock.
         let read_tx = bytes_tx.clone();
         let read_handle = tokio::task::spawn_blocking(move || {
-            let mut reader = reader;
+            let mut reader = output;
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
-                    Ok(0) => break, // EOF — child exited
+                    Ok(0) => break, // EOF — child exited (broken pipe → Ok(0))
                     Ok(n) => {
                         if read_tx.send(buf[..n].to_vec()).is_err() {
                             break; // App dropped the receiver — stop reading
@@ -712,42 +735,54 @@ impl InteractiveExecutor for InteractiveCliExecutor {
             }
         });
 
-        // Main loop: select between user input (→ write to PTY) and the read
-        // loop finishing (→ child exited).
+        // §9.5: claude interactive positional argv doesn't auto-submit in
+        // buddy's GLM-gateway environment — the TUI starts and waits for
+        // Enter. On first run (submit_prompt), wait briefly for the TUI to
+        // load, then send `\r` to submit the positional skill body. The read
+        // loop drains concurrently so the pipe can't fill during this wait.
+        // Resume (submit_prompt=false) has no positional — nothing to submit.
+        let submit_delay = tokio::time::sleep(Duration::from_millis(2000));
+        tokio::pin!(submit_delay);
+        let mut submitted = !plan.submit_prompt;
+
         tokio::pin!(read_handle);
         loop {
             tokio::select! {
-                // PTY read loop finished (child exited / EOF).
-                _ = &mut read_handle => {
-                    break;
-                }
+                // Read loop finished (child exited / EOF / App dropped bytes_rx).
+                _ = &mut read_handle => break,
                 // User input from the App (typed bytes or resize).
-                input = input_rx.recv() => {
-                    match input {
-                        Some(PtyInput::Bytes(bytes)) => {
-                            // Write to PTY (blocking, but fast — kernel buffer).
-                            let _ = writer.write_all(&bytes);
-                            let _ = writer.flush();
-                        }
-                        Some(PtyInput::Resize { cols, rows }) => {
-                            let _ = master.resize(PtySize {
-                                rows,
-                                cols,
-                                pixel_width: 0,
-                                pixel_height: 0,
-                            });
-                        }
-                        None => {
-                            // App dropped the input sender — stop.
-                            break;
+                input = input_rx.recv() => match input {
+                    Some(PtyInput::Bytes(bytes)) => {
+                        // OwnedWriteHalf: bytes written become console input;
+                        // line-oriented programs expect `\r\n`. flush is a no-op.
+                        let _ = writer.write_all(&bytes);
+                        let _ = writer.flush();
+                    }
+                    Some(PtyInput::Resize { cols, rows }) => {
+                        // Size::try_new takes (cols, rows) — cols first.
+                        if let Ok(size) = Size::try_new(cols, rows) {
+                            let _ = controller.resize(size);
                         }
                     }
+                    None => break, // App dropped the input sender — stop.
+                },
+                // Submit the positional prompt after the TUI loads (first run).
+                _ = &mut submit_delay, if !submitted => {
+                    submitted = true;
+                    let _ = writer.write_all(b"\r");
+                    let _ = writer.flush();
                 }
             }
         }
 
-        // Wait for the child to exit (best-effort — it may have already exited).
-        let _ = child.wait();
+        // Teardown: kill the child tree (idempotent — no-op if it already
+        // exited via EOF). This unblocks the read thread if it's still
+        // draining (kill → child exit → output EOF → read thread returns).
+        // `writer` and `controller` then drop, closing conin and tearing down
+        // the pseudoconsole — held until now so a still-running child isn't
+        // terminated before we've drained its output.
+        let _ = child.kill();
+        let _ = tokio::time::timeout(Duration::from_secs(2), read_handle).await;
 
         Ok(SkillOutput {
             completed: true,
