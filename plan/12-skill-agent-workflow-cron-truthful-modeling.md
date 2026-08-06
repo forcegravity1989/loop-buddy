@@ -38,6 +38,10 @@
 | mattpocock-skills 1.2.0 | `~/.claude/plugins/cache/mattpocock/mattpocock-skills/1.2.0/skills/**`(plugin.json 列 22 个) | 22 skills |
 | superpowers 6.1.1 | `~/.claude/plugins/cache/superpowers-dev/superpowers/6.1.1/skills/**` | 14 skills |
 
+> **补注(2026-08-06)**:上表 mattpocock-skills 的 22 是写作日 plugin.json 的清点数,
+> 后实测为 41,见 `plan/16`(41 已是 `plan/16` 起统一使用的口径);两处曾长期互不
+> 提及,2026-08-06 补此注,不改上表原始记录。
+
 每个 skill 的真实形态(实测):一个文件夹,`SKILL.md`(frontmatter `name`+`description`
 +正文)为必备,其余文件**任意结构**——mattpocock 每个 skill 带 `agents/openai.yaml`
 (跨平台调用包装,不是 subagent 人格),部分带 `references/`、`scripts/`、平铺的
@@ -266,6 +270,33 @@ T1 只停了空壳**播种**,没清**存量**;55+67 真实内容只进过 E2E �
 (导入 UI 即 T12 尚未建,应用内无入口);文件树组件对 skill_file=0 诚实降级
 单栏,于是"看起来没变"。教训:**验收要在用户真实打开的库上走一遍,
 临时库全绿≠用户可见**。
+
+> **补注(2026-08-06,票号对照表)**:全文反复出现「T1」「T1-T11」「T14→T17」等票号
+> (即上面这次 grilling 批下的十七张任务票),但本文此前没有一张完整清单——下表补上,
+> 票号 + 一句话说明,如实归纳自本文各处描述与 `git log`(commit message 里的
+> `T<n> ·` 前缀是逐票的权威来源);T12/T13 本文只在下面括注了范围、没有展开成段,
+> 如实照录并标注来源单薄,不作展开、不编造细节。**代号系列的唯一登记处**见
+> `docs/code-schemes.md`(全仓字母代号索引,T 系列现状以其为准)。
+>
+> | 票号 | 一句话说明 |
+> |---|---|
+> | T1 | HubSource 重构为 Official/Adopted/SelfBuilt/WithinSession 四态,ECC/OMC 空壳目录种子退场 |
+> | T2 | 新增 `skill_file` 子表 + `ImportSkillPackage` 单包导入命令,`Skill.source` 迁至 HubSource |
+> | T3 | `ImportSkillLibrary` 批量导入 mattpocock-skills + superpowers,共 55 个真实 skill |
+> | T4 | Skill 详情页改双栏文件树 UI(SKILL.md 固定置顶 + 真实 skill_file 树) |
+> | T5 | AgentCard 新增真实字段 + `ImportAgentDefinition`,导入 67 个 ECC agent |
+> | T6 | agent_cli 真实路由落地,`tools` 字段真实映射为 `--allowedTools` |
+> | T7 | Skill/Agent 补齐 `stage_ref`,三个 Hub 按五阶段角色筛选对齐 |
+> | T8 | `WorkflowSpec.phases` 结构化为 `PhaseMeta`(role + reject_to_phase),流程图按真实字段渲染 |
+> | T9 | 对抗循环运行时:`PhaseOutcome` 裁决解析 + 静态/动态双轨打回,达上限转 Blocked |
+> | T10 | `CronMode` 新增 RunSkill/RunPrompt 两种真实执行模式,四种 mode 各配 UI |
+> | T11 | 编辑即脱离源头:Official→SelfBuilt 翻转,重新导入不覆盖已脱离的本地副本 |
+> | T12 | 导入 UI(应用内的 skill/agent 导入入口)——本文仅在起因段与下方括注了这四个字的范围,未展开成段;`git log` 未见以 `T12 ·` 为前缀的独立提交 |
+> | T13 | stage_ref 编辑 + 来源二级筛选——本文仅在下方括注了这七个字的范围,未展开成段;`git log` 未见以 `T13 ·` 为前缀的独立提交 |
+> | T14 | 存量日常库一次性迁移:清理无正文旧空壳 + 自动导入真实的 55 skill / 67 agent |
+> | T15 | MD 富文本渲染:SKILL.md/AGENT.md/Workflow 正文统一用 pulldown-cmark 渲染,带「原文」开关 |
+> | T16 | Workflow 新增 `content` 主文档字段 + `PhaseMeta` 绑定 agent/skills,流程图关联双 Hub 详情 |
+> | T17 | 解析 Agent:Workflow MD 文本→流程图结构,显式触发 + 严格 JSON 契约 + 诚实失败,绝不自动重跑 |
 
 六条拍板:
 
