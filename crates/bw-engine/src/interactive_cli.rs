@@ -680,9 +680,12 @@ impl InteractiveExecutor for InteractiveCliExecutor {
     ///  - Child exit (EOF on output) → kill (idempotent) → return completed.
     ///
     /// Non-Windows has no override here → the trait default returns
-    /// `Err("PTY not supported")` and the caller falls back to `run_skill`
-    /// (system terminal). buddy is Windows-only; portable-pty remains a
-    /// non-Windows keepalive dep only (Cargo.toml).
+    /// `Err("PTY not supported")`. Only a caller with `pty_enabled == false`
+    /// (headless/examples) falls back to `run_skill`; **the desktop shell
+    /// wires `App::with_pty()` unconditionally**, so on macOS/Linux an
+    /// interactive run fails outright with that error rather than opening a
+    /// system terminal. V1 is Windows-only in practice — see LEFTOVERS
+    /// `V1-P1`. portable-pty remains a non-Windows keepalive dep (Cargo.toml).
     #[cfg(windows)]
     async fn run_skill_pty(
         &self,

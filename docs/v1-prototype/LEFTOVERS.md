@@ -159,6 +159,30 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 ---
 
+## V1-P1 · macOS 上交互式跑不了（V1 实际是 Windows-only）
+
+**产生窗口**：W2 交互式引擎（`docs/v1-prototype/issue2-metrics-interactive-loop.md` §9 PTY），2026-08-06 整体 review 时点出、用户要求先记为遗留。
+
+**现象**：`CLAUDE.md` 顶上写的是「macOS+Windows」，但 V1 的交互式两件套（找指标 / 绑数据）在 macOS 上**跑不成**：
+
+- 嵌入终端那条真路径 `InteractiveCliExecutor::run_skill_pty` 整个函数挂着 `#[cfg(windows)]`，PTY 后端是 Windows 专有的 `conpty-oxide`。非 Windows 上这个方法不存在，走 trait 默认实现 → `Err("PTY not supported by this executor (use run_skill instead)")`。
+- **桌面壳上没有回落**：`app-desktop/src/kernel.rs` 建 App 时无条件 `.with_pty()`，`run_issue_interactive` 只在 `pty_enabled == false` 时才走 `run_skill`。所以 macOS 上点「▶跑(交互)」= 这个 run 立刻以那句**英文报错**结算失败，用户看不懂也没得跑。引擎侧注释写的「caller falls back to run_skill」只对 `pty_enabled=false` 的 headless/example 路径成立，**对桌面不成立**。
+- 那条 `run_skill` 回落路径本身在 macOS 上也不体面：`osascript` 叫 Terminal.app 开窗口，`osascript` 进程叫完就退、拿不到 claude 句柄，代码于是 `sleep(self.timeout)` 睡满 1 小时再**宣告 `completed = true`** —— 谁都没验证过 claude 退没退，这是**谎报完成**，违反「读回为证」。
+- `portable-pty` 目前只作为非 Windows 的 keepalive 依赖挂在 `bw-engine/Cargo.toml` 里，**没有接**任何代码路径。
+
+（注：`CLAUDE.md` 记的「computer-use 在 macOS 上 screenshot 能用、click/key 永久受阻」是**验证侧**的另一回事，与本条运行侧的问题不是一件事，别混谈。）
+
+**未决点**：
+1. 给 `run_skill_pty` 补一个 Unix PTY 后端（`portable-pty` 已在依赖里，或换 `pty-process`/`nix`），让 macOS 也走嵌入终端 —— 这是让 macOS 真正可用的唯一正路。
+2. 在补后端之前，`run_skill` 那条路径的「睡满超时 → completed = true」语义要改：它现在会**谎报完成**，违反「读回为证」。至少该标成未验证完成，或干脆在非 Windows 上如实拒绝启动交互式，而不是假装跑完。
+3. 桌面壳那句英文 `Err` 直接怼到用户脸上，没有人话映射（对比 codehub 那套错误映射）。补后端前至少该说人话：「本机（macOS）暂不支持嵌入式交互终端，V1 仅 Windows」。
+
+**处置**：V1 不解。**V1 的实际目标平台按落成情况是 Windows-only**，文档不要再宣称 macOS 上交互式可用；转 issue 时按「macOS 交互式 PTY 后端」单独排一件，连带处理上面第 2、3 点。
+
+**事实源**：`crates/bw-engine/src/interactive_cli.rs`（`run_skill_pty` 的 `#[cfg(windows)]` L686、trait 默认实现「PTY not supported」L517、macOS `osascript` 分支 L608、`wait_child` 超时宣告 completed L809）、`crates/bw-app/src/lib.rs`（`run_issue_interactive` 按 `pty_enabled` 二选一 L5225）、`crates/app-desktop/src/kernel.rs:573`（无条件 `.with_pty()`）、`crates/bw-engine/Cargo.toml`（`portable-pty` non-Windows keepalive）。
+
+---
+
 ## 索引 · 穿刺修复批次 1（cowelink W1 穿刺 7 条反馈）
 
 **产生窗口**：V1 三窗口合入后、用户用 cowelink 做 W1 穿刺实地冒出。**本批次修**（见 `docs/v1-prototype/piercing-fixes-1.md`）。
