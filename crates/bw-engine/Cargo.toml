@@ -28,7 +28,7 @@ tokio = { workspace = true, features = ["process"] }
 # docs/v1-prototype/issue2-metrics-interactive-loop.md §9). conpty-oxide is a
 # native runtime dep — not a UI dep, passes guard-kernel-ui-free.sh (bw-engine
 # does not touch dioxus/wry). Used by InteractiveCliExecutor::run_skill_pty to
-# spawn `claude` in a PTY and stream bytes to the UI via Event::TerminalBytes.
+# spawn `claude` in a PTY and stream bytes to the UI via the App's watch channel.
 # Non-Windows keeps portable-pty as a keepalive dep (bw-engine is a native
 # runtime crate, not in the wasm32 set); the non-Windows path falls back to the
 # InteractiveExecutor trait default (PTY not supported → caller uses run_skill).

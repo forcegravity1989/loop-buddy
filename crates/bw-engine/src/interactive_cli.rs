@@ -12,9 +12,9 @@
 //! the record. buddy only keeps file-level evidence (HEAD diff, artifacts,
 //! status) via the existing `issue_run_tail` / `finalize_run` path.
 //!
-//! The [`InteractiveExecutor`] trait is the seam Phase 2 will widen
-//! (PTY/xterm/hook → `Event::TerminalBytes`), but Phase 1's concrete impl
-//! is a plain OS terminal spawn.
+//! The [`InteractiveExecutor`] trait is the seam Phase 2 widened (PTY/xterm/
+//! hook); Phase 1's concrete impl is a plain OS terminal spawn, still used as
+//! the non-Windows fallback.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -52,14 +52,19 @@ pub enum PtyInput {
 
 // ─── PromptInjectionMode ───────────────────────────────────────────────
 
-/// How the skill body is injected into the interactive session.
+/// How the skill body is injected into the interactive session. One variant
+/// per real injection strategy — adding a CLI that needs a different one
+/// means adding a variant and the matching arm in [`build_startup_plan`],
+/// not a new impl (orca §2.4's declarative table).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptInjectionMode {
-    /// Inject the skill body via a flag (design intent: `--prefill`,
-    /// which drafts the text in the input box). Falls back to the
-    /// positional `prompt` argument when the flag is unavailable —
-    /// see [`build_startup_plan`]'s deviation note.
-    FlagPrefill,
+    /// The skill body rides as the positional `prompt` argument, becoming the
+    /// session's first user message. This is what claude actually supports:
+    /// the design's `--prefill` (draft the text in the input box for review)
+    /// does not exist in `claude --help` (verified 2026-08-04), so the flag
+    /// and its config field were dropped rather than kept as dead forward-
+    /// compat (§2.6 #5).
+    PositionalArgv,
 }
 
 // ─── TuiAgentConfig (orca §2.4 declarative CLI table) ──────────────────
@@ -73,7 +78,6 @@ pub struct TuiAgentConfig {
     pub detect_cmd: &'static str,
     pub launch_cmd: &'static str,
     pub prompt_injection_mode: PromptInjectionMode,
-    pub draft_prompt_flag: &'static str,
     pub yolo_flag: &'static str,
     /// V1 Issue2 Phase2a: the flag to resume the most recent session in the
     /// current directory. For claude: `--continue` (`-c`). Resume re-enters
@@ -96,16 +100,9 @@ pub static CLAUDE: TuiAgentConfig = TuiAgentConfig {
     slug: "claude",
     detect_cmd: "claude --version",
     launch_cmd: "claude",
-    prompt_injection_mode: PromptInjectionMode::FlagPrefill,
-    // Design intent: `--prefill` (draft the skill body in the input box).
-    // DEVIATION: `--prefill` does not exist in the current `claude --help`
-    // (verified 2026-08-04). `build_startup_plan` uses the positional
-    // `prompt` argument instead — the skill body becomes the first user
-    // message (semantically equivalent: the agent starts working on the
-    // skill immediately; difference: auto-sent, not a draft-for-review).
-    // The flag name is kept for forward-compat: when the CLI adds it,
-    // `build_startup_plan` can switch to `--prefill` with a one-line change.
-    draft_prompt_flag: "--prefill",
+    // The skill body goes in as the positional prompt (claude has no
+    // `--prefill`; see `PromptInjectionMode::PositionalArgv`).
+    prompt_injection_mode: PromptInjectionMode::PositionalArgv,
     yolo_flag: "--dangerously-skip-permissions",
     // Verified 2026-08-05 via `claude --help`: `-c, --continue` resumes the
     // most recent conversation in the current directory. Each interactive
@@ -130,8 +127,7 @@ pub static CURSOR: TuiAgentConfig = TuiAgentConfig {
     slug: "cursor",
     detect_cmd: "cursor --version",
     launch_cmd: "cursor",
-    prompt_injection_mode: PromptInjectionMode::FlagPrefill,
-    draft_prompt_flag: "--prefill",
+    prompt_injection_mode: PromptInjectionMode::PositionalArgv,
     yolo_flag: "",
     resume_flag: "--continue",
     resume_id_flag: "--resume",
@@ -213,8 +209,12 @@ pub fn build_startup_plan(
     // and run commands without per-action prompts (the user is watching
     // the terminal and can intervene at any time).
     args.push(agent.yolo_flag.to_string());
-    // Defense-in-depth: deny `gh pr merge` (验收 = 人 merge, 铁律). Same
-    // rule as the one-shot ClaudeCliExecutor path.
+    // Deny `gh pr merge` (验收 = 人 merge, 铁律). This is a partial fence,
+    // not a wall: it doesn't cover `codehub-cli mr merge` (the CodeHub
+    // equivalent) and a deny list under `--dangerously-skip-permissions` is
+    // only as strong as the CLI's own enforcement. 「合并永远是人」的真正
+    // 约束在衔接层 system prompt 里说清楚(`build_bridge_system_prompt`),
+    // 且 buddy 侧 Done 入边由状态机守死 —— 别把这两行当成拦得住的保证。
     args.push("--disallowedTools".to_string());
     args.push("Bash(gh pr merge)".to_string());
 
@@ -438,8 +438,12 @@ pub fn build_bridge_system_prompt(playbook_ctx: &PlaybookCtx, skill_slug: &str) 
         "- **Signal derive-only**:健康灯只被真实数据点亮,无数据=Unknown≠绿,\
          绝不伪造观测。\n",
     );
-    s.push_str("- 改动落在活分支,正常提交 + 提 PR,**合并永远是人手动作**。\n");
-    s.push_str("- 禁用 `gh pr merge`(已由 `--disallowedTools` 拦截)。\n");
+    s.push_str("- 改动落在活分支,正常提交 + 提 PR/MR,**合并永远是人手动作**。\n");
+    s.push_str(
+        "- **你只负责提上去,绝不自己合入**:`gh pr merge`、\
+         `codehub-cli mr merge` 以及任何等价的合并/直推主干动作一律不许执行。\
+         提完 PR/MR 把地址打屏给用户,合入由人在 buddy 里点。\n",
+    );
 
     s
 }
@@ -460,8 +464,8 @@ pub struct SkillOutput {
 // ─── InteractiveExecutor trait ─────────────────────────────────────────
 
 /// The swappable interactive execution backend (§2.3: one skill = one
-/// interactive session, not phase-by-phase). Phase 2 will widen this
-/// seam (PTY bytes → `Event::TerminalBytes`), but Phase 1's concrete
+/// interactive session, not phase-by-phase). Phase 2 widened this
+/// seam (PTY bytes → the App's `watch` channel), but Phase 1's concrete
 /// impls are a plain OS terminal spawn ([`InteractiveCliExecutor`]) and
 /// a self-labeled mock ([`MockInteractiveExecutor`]).
 #[async_trait]
@@ -486,7 +490,9 @@ pub trait InteractiveExecutor: Send + Sync {
     /// V1 Issue2 Phase2b: spawn the agent in a PTY and stream bytes. The
     /// caller provides two channels:
     ///  - `bytes_tx`: PTY → App. The executor reads master bytes and sends
-    ///    them here (the App emits `Event::TerminalBytes`).
+    ///    them here (the App forwards them on its `pty_bytes` watch channel;
+    ///    there is no `Event` variant for terminal bytes — that design was
+    ///    dropped to avoid double-consuming the stream).
     ///  - `input_rx`: App → PTY. The App sends [`PtyInput::Bytes`] (user
     ///    typed) and [`PtyInput::Resize`] (terminal resized). The executor
     ///    writes to the PTY master / resizes.

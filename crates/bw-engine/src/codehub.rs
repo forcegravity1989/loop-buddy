@@ -553,13 +553,21 @@ async fn resolve_personal_namespace_id(
     // `kind == "user"`.
     let want = namespace.trim();
     if !want.is_empty() {
-        if let Some(nsid) = rows
+        // The user typed a namespace — honour it or say why not. Silently
+        // falling through to "first personal namespace" would build the repo
+        // somewhere they didn't ask for and never tell them (group namespaces
+        // aren't supported in V1, so a group name lands here too).
+        return match rows
             .iter()
             .find(|r| r.namespace.kind == "user" && r.namespace.full_path == want)
             .map(|r| r.namespace.id)
         {
-            return Ok(Some(nsid));
-        }
+            Some(nsid) => Ok(Some(nsid)),
+            None => Err(CodehubError::Parse(format!(
+                "namespace `{want}` 不在你的个人 namespace 里(V1 只支持建到个人 namespace,\
+                 group 未做)。留空走默认,或填你自己的 namespace。"
+            ))),
+        };
     }
     Ok(rows
         .iter()
