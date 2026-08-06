@@ -8,8 +8,12 @@
 //! `Command::UpdateAgent` — content only, `maturity`/`runs`/`win_rate` stay
 //! untouched, same rule `OptimizeWorkflowForm` established for workflows.
 //!
-//! T7 (2026-07-23, plan/12 §0/§3): the same stage-role filter chip row
-//! `SkillHub` gained — shared `ui::vm::RoleFilter`/`role_chip_counts`.
+//! T7 (2026-07-23, plan/12 §0/§3): a stage-role filter chip row shared with
+//! `SkillHub` via `ui::vm::RoleFilter`/`role_chip_counts`. 2026-08-05:
+//! `SkillHub` grew two more chips (全阶段通用/不属任何阶段) this screen does
+//! not carry — no longer "the same" row. This screen skips both on purpose:
+//! agent 侧本轮 `stage_ref` 仍是单值 `Option<StageKind>`,没有这两个多值态,
+//! 加了就是假的(理由同样落在下方 chip 渲染旁注上)。
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::markdown::MarkdownView;

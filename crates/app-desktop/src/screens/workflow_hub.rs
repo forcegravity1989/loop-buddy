@@ -16,6 +16,12 @@
 //! - **设为定时任务** dispatches straight into Cron Hub's own
 //!   `Command::CreateCronTask` (same `schedule: Weekly, project_id: None`
 //!   defaults Cron Hub's own create form uses).
+//!
+//! T7 (2026-07-23, plan/12 §0): a stage-role filter chip row shared with
+//! `SkillHub`/`AgentHub` via `ui::vm::RoleFilter`/`role_chip_counts` — but
+//! without `SkillHub`'s 全阶段通用/不属任何阶段 chips: workflow 侧本轮
+//! `stage_ref` 仍是单值 `Option<StageKind>`,没有这两个多值态,加了就是假的
+//! (理由同样落在下方 chip 渲染旁注上)。
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::component_detail::ComponentSel;

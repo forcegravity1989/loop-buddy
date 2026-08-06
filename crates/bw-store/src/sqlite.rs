@@ -1996,6 +1996,9 @@ impl Store for SqliteStore {
     async fn create_skill(&self, s: NewSkill) -> Result<()> {
         let t = now_unix();
         let (source_tag, official_library) = hub_source_columns(&s.source);
+        // 建行与阶段归属包在同一事务里 —— 让调用方没有「skill 行落地、
+        // skill_stage 半途失败」的机会(seed/import 路径都靠这一点)。
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO skill (id, name, maturity, descr, category, stage_origin, source, official_library, uses, content, project_id, created_at, updated_at, rev)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
@@ -2012,17 +2015,16 @@ impl Store for SqliteStore {
         .bind(s.project_id.map(pid))
         .bind(t)
         .bind(t)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        // 建行与阶段归属在同一次调用里落地 —— 让调用方没有「忘了写关联表」
-        // 的机会(seed/import 路径都靠这一点)。
         for k in &s.stages {
             sqlx::query("INSERT OR IGNORE INTO skill_stage (skill_id, stage) VALUES (?, ?)")
                 .bind(s.id.uuid().to_string())
                 .bind(i64::from(k.index()))
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -2161,6 +2163,9 @@ impl Store for SqliteStore {
 
         let t = now_unix();
         let (source_tag, official_library) = hub_source_columns(&HubSource::SelfBuilt);
+        // 建行与阶段归属包在同一事务里(同 create_skill)—— 前置的只读校验
+        // (issue 存在/Done/有 assignee)已经在事务外做完,这里只包写入。
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO skill
                 (id, name, maturity, descr, category, stage_origin, source, official_library, uses, content,
@@ -2189,13 +2194,14 @@ impl Store for SqliteStore {
         .bind(pid(issue.project_id))
         .bind(t)
         .bind(t)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         sqlx::query("INSERT OR IGNORE INTO skill_stage (skill_id, stage) VALUES (?, ?)")
             .bind(skill.id.uuid().to_string())
             .bind(i64::from(issue.stage.index()))
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
