@@ -349,8 +349,9 @@ BW_DB=<db> BW_HUB=skill target/debug/builders-workbench   # stderr 见 [BW_OPEN]
 
 ## 11. 偏差与待确认
 
-1. **三态 → 四态**（§3.4）。批准设计时说的是三态、靠关联表行数天然表达。做归类草案时发现 `obsidian-vault` / `scaffold-exercises` / `writing-skills` 这类技能需要「已判定：不属任何阶段」这一档，否则要么污染候选集、要么与「没人管」混淆。**D8 之后这条修正的代价降为零**：`stage_origin` 一列同时承担四态判据，读侧不必回查静态表，且 skill 表净增 0 列。
+1. **三态 → 四态**（§3.4）。**已实现**。批准设计时说的是三态、靠关联表行数天然表达。做归类草案时发现 `obsidian-vault` / `scaffold-exercises` / `writing-skills` 这类技能需要「已判定：不属任何阶段」这一档，否则要么污染候选集、要么与「没人管」混淆。**D8 之后这条修正的代价降为零**：`stage_origin` 一列同时承担四态判据，读侧不必回查静态表，且 skill 表净增 0 列。`stage_origin` 落地为 `bw_core::stage_catalog::StageOrigin`，四态判据在真实日常库副本（68 件）读回验证：未归类 1 / 已判定不属任何阶段 6 / 全阶段通用 6 / 挂 1~4 阶段 55（每阶段候选 1=30 / 2=27 / 3=23 / 4=17 / 5=15）。
 2. **65 条里有 6 条判为「不属任何阶段」**，等于承认这批外部库里约 9% 的技能对 BW 的五阶段管理体系没有位置。这是诚实结论而非偷懒，但若你认为「都该硬挂一个」，§6.3/§6.4 对应行需要改。
 3. **五条方法论招牌技能仍不扩挂**（§6.1）。D9 只扩了指标/对标类 4 条（`competitive-analysis` `north-star-discovery` `metrics-binding` 及 mohit 两件同口径对齐）。`evidence-first` / `spec-to-tests` / `baseline-before-touch` / `fresh-eyes-funnel` / `breaking-drill` 保持单挂，理由见 §6.1 正文——它们是 `playbook::stage_skills(kind)` 的正本，外扩会让「阶段=角色=方法论」的一一对应失效。若你要求这五条也扩，一句话即可改。
 4. **prompt 目录块上限 4000 字符**是按原型段 29 条候选估的（29 × ~110 ≈ 3200）。若后续技能库继续膨胀，这个数要跟着调，或改成按 `uses` 排序取前 N 条 + 如实标注未列出数量。
-5. **agent / workflow 侧仍是单值 `stage_ref`**。本轮做完后，skill 走关联表、agent 与 workflow 走单列，是一个不齐的中间态。D8 的姿态本该一并铲平，但用户此前已把 agent 侧划在本轮之外（§9），且 workflow 的单值今天是**正确且在读**的（不是死列），不属于「旧表债」。§9 已把迁移配方（`drop_column_if_present` + 关联表）备好，后续要拉齐是照抄一遍的事。
+5. **agent / workflow 侧仍是单值 `stage_ref`**（已知中间态，保留）。本轮做完后，skill 走关联表、agent 与 workflow 走单列，是一个不齐的中间态。D8 的姿态本该一并铲平，但用户此前已把 agent 侧划在本轮之外（§9），且 workflow 的单值今天是**正确且在读**的（不是死列），不属于「旧表债」。§9 已把迁移配方（`drop_column_if_present` + 关联表）备好，后续要拉齐是照抄一遍的事。
+6. **`StageOrigin::Legacy` 是执行期新增的第五档，spec 原文只设计了四态**（对应 `stage_origin` 空 / `table` / `distilled` / `manual` 四值）。真删 `skill.stage_ref` 前跑保值搬迁时发现，日常库里有一行（`metrics-render`，`stage_ref=1`）不是本分支静态表回填、也不是蒸馏或人工，而是搬自另一条未合入本分支的产品线（c14932d）——原始归类出处已不可考。若直接照 §3.3 的删列步骤执行，这行数据会随列一起被悄悄抹掉。修复（"Critical 修复"提交 `bdc759a`）新增 `StageOrigin::Legacy`：真删列之前先把这类 `stage_ref IS NOT NULL` 的行原样搬进 `skill_stage`、标 `stage_origin='legacy'`，而不是 `table`（静态表并未为它背书）或 `manual`（没人在 UI 里点过它）。四态判据不受影响——`Legacy` 和 `Table`/`Distilled`/`Manual` 一样，都落在「关联表非空」或「非空 origin」的判据里，不新增第五种 UI 状态，只是让「这行数据的出处诚实」这件事多一档可表达的答案。
