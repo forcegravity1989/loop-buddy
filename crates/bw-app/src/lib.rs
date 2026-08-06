@@ -553,6 +553,11 @@ pub enum Command {
         desc: String,
         category: String,
         content: String,
+        /// 五角色归类(2026-08-05)。`None` = 本次编辑不碰归类(保持既有行为,
+        /// 让任何不带归类 UI 的调用方原样工作);`Some(v)` = 人工归类,落
+        /// `StageOrigin::Manual`,此后 Boot 的静态表回填不再覆盖这件技能。
+        /// `Some(vec![])` 是合法且有意义的输入:人工判定「不属任何阶段」。
+        stages: Option<Vec<StageKind>>,
     },
     CreateAgent {
         id: AgentId,
@@ -6359,6 +6364,7 @@ impl App {
                 desc,
                 category,
                 content,
+                stages,
             } => {
                 if name.trim().is_empty() {
                     return Err(AppError::Invalid("名称不能为空".into()));
@@ -6393,6 +6399,16 @@ impl App {
                         },
                     )
                     .await?;
+                // 归类与内容编辑分两次写:`SkillEdit` 管内容(且带 T11 的
+                // flip_to_self_built),归类走 `set_skill_stages`(刻意不碰
+                // source/official_library —— 归类是 BW 自己的组织维度,不是对
+                // 上游正文的改编,不该让 mattpocock 的 tdd 因为被归到构建段就
+                // 失去官方徽记)。
+                if let Some(stages) = stages {
+                    self.store
+                        .set_skill_stages(id, &stages, StageOrigin::Manual)
+                        .await?;
+                }
                 self.refresh_skills().await?;
                 self.emit(Event::SkillsChanged);
             }

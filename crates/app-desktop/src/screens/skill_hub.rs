@@ -18,12 +18,13 @@ use crate::kernel::{HubVm, Kernel};
 use crate::screens::markdown::MarkdownView;
 use crate::theme;
 use bw_app::Command;
-use bw_core::model::HubSource;
+use bw_core::model::{HubSource, StageKind};
 use bw_core::SkillId;
 use dioxus::prelude::*;
 use std::collections::HashSet;
 use ui::vm::{
-    role_chip_counts, skill_file_tree, ProjectCardVm, RoleFilter, SkillCardVm, SkillTreeNode,
+    role_chip_counts, skill_file_tree, ProjectCardVm, RoleFilter, RoleTag, SkillCardVm,
+    SkillTreeNode,
 };
 
 #[component]
@@ -613,6 +614,14 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
     let mut desc = use_signal(|| s.desc.clone());
     let mut category = use_signal(|| s.category.clone());
     let mut content = use_signal(|| s.content.clone());
+    // 当前归属展开成「五个勾选位」——`Universal` 是五个全勾,`NoStage`/
+    // `Unclassified` 是全不勾(两者的区别在保存时无意义:人工提交空集一律
+    // 表示「判定为不属任何阶段」,这正是 Manual + 空集的语义)。
+    let mut picked = use_signal(|| match &s.role_tag {
+        RoleTag::Stages(v) => v.clone(),
+        RoleTag::Universal => StageKind::ALL.to_vec(),
+        RoleTag::NoStage | RoleTag::Unclassified => Vec::new(),
+    });
 
     let save = move |_| {
         let n = name().trim().to_string();
@@ -625,6 +634,7 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
             desc: desc().trim().to_string(),
             category: category().trim().to_string(),
             content: content().trim().to_string(),
+            stages: Some(picked()),
         });
         on_done.call(());
     };
@@ -650,6 +660,27 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
                 style: "{input} margin-bottom:10px;",
                 value: "{category}",
                 oninput: move |e| category.set(e.value()),
+            }
+            div { style: "{label}", "五角色归属(可多选;全不选 = 判定为不属任何阶段)" }
+            div {
+                style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;",
+                for kind in StageKind::ALL {
+                    {
+                        let on = picked().contains(&kind);
+                        let (bg, fg): (&str, &str) = if on { (kind.color(), "#FFF") } else { ("#EFE9DA", theme::INK_2) };
+                        rsx! {
+                            button {
+                                style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                                onclick: move |_| {
+                                    let mut v = picked();
+                                    if let Some(i) = v.iter().position(|k| *k == kind) { v.remove(i); } else { v.push(kind); }
+                                    picked.set(v);
+                                },
+                                "{kind.role_short()}"
+                            }
+                        }
+                    }
+                }
             }
             div { style: "{label}", "正文(可执行指令,运行时注入 prompt;留空=仅目录引用)" }
             textarea {

@@ -124,6 +124,7 @@ async fn main() {
         desc: tdd.desc.clone(),
         category: tdd.category.clone(),
         content: edited_content.clone(),
+        stages: None,
     })
     .await
     .expect("UpdateSkill(tdd, edited content) should succeed");
@@ -158,6 +159,7 @@ async fn main() {
         desc: tracer.desc.clone(),
         category: tracer.category.clone(),
         content: tracer.content.clone(),
+        stages: None,
     })
     .await
     .expect("UpdateSkill(no-op resubmit) should succeed");
