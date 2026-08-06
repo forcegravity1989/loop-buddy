@@ -560,6 +560,27 @@ fn VersionPanel(op: OpVm) -> Element {
 /// `Blocked` don't advance — they're a stop or a side state). Deliberately
 /// forward-only: reopen/rewind stay API-only (A5-H leaves no UI for them —
 /// settle-once is the safety net for the ones that ARE public).
+/// An Issue's 「▶ 跑」 used to mint a brand-new `SessionId` on every click,
+/// even when the issue already had a resumable session — `run_issue_interactive`
+/// resumes the same underlying claude session via `claude_session_id` on the
+/// issue row regardless of which `SessionId` the UI passes in, so the extra
+/// records were purely cosmetic: a growing pile of dead-looking "阶段记录"
+/// cards, all titled after the same issue, that the user can't tell apart or
+/// delete. There's no `issue_id` column on `session` (a schema change this
+/// fix doesn't need) — the de-dup key is the same `(stage_kind, title)` pair
+/// `run_sess_title` already makes unique per issue, so reuse the existing
+/// session id when one exists instead of minting another.
+fn existing_issue_session(
+    sessions: &[SessionCardVm],
+    stage: StageKind,
+    title: &str,
+) -> Option<SessionId> {
+    sessions
+        .iter()
+        .find(|s| s.stage_kind == Some(stage) && s.title == title)
+        .map(|s| s.id)
+}
+
 fn next_issue_status(s: IssueStatus) -> Option<IssueStatus> {
     match s {
         IssueStatus::Backlog => Some(IssueStatus::Todo),
@@ -710,7 +731,7 @@ fn IssuesPanel(op: OpVm) -> Element {
             }
             // P4: the evidence overlay — floats above the board while open.
             if let Some(d) = op.issue_detail.clone() {
-                IssueDetailOverlay { d }
+                IssueDetailOverlay { d, sessions: op.sessions.clone() }
             }
             div { style: "display:flex;gap:12px;align-items:flex-start;",
                 for (label, list) in grouped {
@@ -759,6 +780,7 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 );
                                 let run_stage = i.stage;
                                 let run_sess_title = format!("#{} {}", i.number, i.title);
+                                let op_sessions = op.sessions.clone();
                                 let advance = next_issue_status(i.status);
                                 let advance_label = advance.map(|s| s.label()).unwrap_or("");
                                 let is_blocked = i.status == IssueStatus::Blocked;
@@ -883,8 +905,9 @@ fn IssuesPanel(op: OpVm) -> Element {
                                         } else {
                                             div { style: "margin-top:6px;display:flex;gap:12px;",
                                                 // P3: really start the work —
-                                                // same session+run path the
-                                                // stage "▶ 运行" uses. Mock
+                                                // the same StartSession +
+                                                // RunIssue path, real or mock
+                                                // per project config. Mock
                                                 // projects run self-labeled.
                                                 // plan/17 S3 (① 中止): when this
                                                 // card's run is in flight, show
@@ -909,7 +932,12 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                         style: "cursor:{run_cursor};background:transparent;border:none;color:{run_color};font-size:11.5px;padding:0;font-weight:700;",
                                                         disabled: same_project_busy,
                                                         onclick: move |_| {
-                                                            let sid = SessionId::new();
+                                                            let sid = existing_issue_session(
+                                                                &op_sessions,
+                                                                run_stage,
+                                                                &run_sess_title,
+                                                            )
+                                                            .unwrap_or_else(SessionId::new);
                                                             k_run.send(Command::StartSession {
                                                                 id: sid,
                                                                 stage_kind: Some(run_stage),
@@ -969,7 +997,7 @@ fn IssuesPanel(op: OpVm) -> Element {
 /// guarded commands the board uses — 「确认完成」 is the human's call, here
 /// as everywhere.
 #[component]
-fn IssueDetailOverlay(d: ui::vm::IssueDetailVm) -> Element {
+fn IssueDetailOverlay(d: ui::vm::IssueDetailVm, sessions: Vec<SessionCardVm>) -> Element {
     let k = use_context::<Kernel>();
     let card = theme::card();
     let border = theme::BORDER;
@@ -1088,7 +1116,8 @@ fn IssueDetailOverlay(d: ui::vm::IssueDetailVm) -> Element {
                         button {
                             style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
                             onclick: move |_| {
-                                let sid = SessionId::new();
+                                let sid = existing_issue_session(&sessions, run_stage, &run_sess_title)
+                                    .unwrap_or_else(SessionId::new);
                                 k_run.send(Command::StartSession {
                                     id: sid,
                                     stage_kind: Some(run_stage),
@@ -1480,7 +1509,7 @@ fn WorkspaceConfig(op: OpVm) -> Element {
                     }
                     span { style: "font-size:11px;color:{ink3};flex:none;", "{permission_label}" }
                 } else {
-                    span { style: "font-size:12.5px;color:{ink3};flex:1;", "未配置 —— 「▶ 运行」目前始终为模拟执行" }
+                    span { style: "font-size:12.5px;color:{ink3};flex:1;", "未配置 —— 「▶ 跑」目前始终为模拟执行" }
                 }
                 button {
                     style: "cursor:pointer;background:transparent;color:{clay};border:1px solid {clay};border-radius:7px;padding:5px 12px;font-size:12px;flex:none;",
@@ -1497,7 +1526,7 @@ fn WorkspaceConfig(op: OpVm) -> Element {
         rsx! {
             div {
                 style: "{card} padding:14px 18px;margin-bottom:16px;",
-                div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "配置后「▶ 运行」将真正读写这个目录下的文件 —— 路径必须已存在" }
+                div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "配置后「▶ 跑」将真正读写这个目录下的文件 —— 路径必须已存在" }
                 input {
                     style: "{input_style} width:100%;padding:6px 9px;font-size:12px;margin-bottom:8px;",
                     placeholder: "例如 /Users/you/projects/my-app(留空 = 清空配置,只跑模拟)",
@@ -2370,7 +2399,7 @@ fn WorkflowPanel(
             div {
                 div { style: "font-weight:600;margin-bottom:4px;", "从 Hub 导入" }
                 p { style: "color:{theme::INK_2};font-size:12.5px;line-height:1.7;margin:0 0 14px;",
-                    "选中阶段轴上的任一阶段可运行其内置标准工作流;这里是三个可复用库的入口——沉淀过的工作流、可插拔技能、配置好的智能体。"
+                    "选中阶段轴上的任一阶段可查看其方法循环与历史记录;这里是三个可复用库的入口——沉淀过的工作流、可插拔技能、配置好的智能体。"
                 }
                 HubOverviewStrip { hub: op.hub.clone(), on_pick_hub }
             }
@@ -2548,7 +2577,6 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
-    let primary = theme::btn_primary();
     let spec_preview = stage_workflow(s.kind);
     let phases = spec_preview
         .phases
@@ -2557,36 +2585,6 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
         .collect::<Vec<_>>()
         .join(" → ");
     let goal = spec_preview.goal.clone();
-    let stage_kind = s.kind;
-    let round = op
-        .sessions
-        .iter()
-        .filter(|x| x.stage_kind == Some(stage_kind))
-        .count()
-        + 1;
-    let running = run.running;
-    let launch = {
-        let k = k.clone();
-        move |_| {
-            if running {
-                return;
-            }
-            let sid = SessionId::new();
-            k.send(Command::StartSession {
-                id: sid,
-                stage_kind: Some(stage_kind),
-                kind: SessionKind::Create,
-                title: format!("{} · 第{}轮", stage_kind.label(), round),
-            });
-            k.send(Command::SelectSession(Some(sid)));
-            // The kernel assembles this stage's playbook (role instructions +
-            // real project context) — the UI only names the stage.
-            k.send(Command::RunStagePlaybook {
-                session: sid,
-                stage_kind,
-            });
-        }
-    };
     let mut promoted_msg = use_signal(|| None::<String>);
     let promote = {
         let k = k.clone();
@@ -2603,10 +2601,23 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             promoted_msg.set(Some("已沉淀为静态工作流 → WorkflowHub".into()));
         }
     };
+    // V1-Issue2-PTY-cleanup: the old 「▶ 运行」 button (`Command::RunStagePlaybook`)
+    // spawned a fresh mock-chat session on every click, titled "{stage}·第N轮" —
+    // an ever-growing pile of dead 「找指标」/「绑数据」 session records with no
+    // real executor behind them (`SendSessionMessage`'s reply is always a
+    // hardcoded 【mock】 echo). Real work now starts exclusively from an
+    // Issue card's 「▶ 跑」 (`Command::RunIssue`) on the Issues panel — this
+    // stage view is read-only: the method-loop preview, and whatever a real
+    // run (chat-based non-interactive, or the PTY terminal below) produced.
     let chat_area = match op.chat.clone() {
-        Some(chat) => rsx! { Chat { chat } },
+        // A live PTY session (`op.pty_active`) is the one place a real reply
+        // exists — showing the 发送 box next to it invites the user to type
+        // into a box whose "reply" is a canned echo that goes nowhere, right
+        // above the terminal where their input actually reaches claude.
+        Some(chat) if !op.pty_active => rsx! { Chat { chat } },
+        Some(_) => rsx! {},
         None => rsx! {
-            div { style: "color:{ink3};font-size:12.5px;", "运行一轮,或从左栏选择一条会话查看记录。" }
+            div { style: "color:{ink3};font-size:12.5px;", "到「Issue」面板点「▶ 跑」开工——记录会出现在这里。" }
         },
     };
     rsx! {
@@ -2616,31 +2627,10 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             div {
                 style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
                 span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{spec_preview.name}" }
-                {
-                    let opacity = if running { ".5" } else { "1" };
-                    let run_label = if running {
-                        "运行中…"
-                    } else if run.failed.is_some() {
-                        "↻ 重新运行"
-                    } else {
-                        "▶ 运行"
-                    };
-                    rsx! {
-                        button {
-                            style: "{primary} padding:8px 18px;font-size:13px;opacity:{opacity};",
-                            disabled: running,
-                            onclick: launch,
-                            "{run_label}"
-                        }
-                    }
-                }
-            }
-            if op.workspace_path.trim().is_empty() {
-                div { style: "font-size:11px;color:{ink3};margin-bottom:6px;", "当前未配置工作目录 → 本轮仍为模拟执行" }
             }
             div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
             div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
-            if op.chat.is_some() {
+            if op.chat.is_some() && !op.pty_active {
                 button {
                     style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
                     onclick: promote,
@@ -2892,30 +2882,108 @@ window.__bw_term_write = function(text) {
     }
     try { window.__bw_term.write(text); } catch(e) {}
 };
-window.__bw_term_drain_input = function() {
-    if (!window.__bw_term_input || window.__bw_term_input.length === 0) return null;
-    var data = window.__bw_term_input.join('');
-    window.__bw_term_input = [];
-    return data;
-};
-window.__bw_term_drain_resize = function() {
-    if (!window.__bw_term_resize) return null;
-    var r = window.__bw_term_resize;
+// One call drains both queues: the Rust side polls on a timer, and every
+// `document::eval` is a full IPC round trip — five per tick was the old
+// shape, one is enough.
+window.__bw_term_drain = function() {
+    var input = null;
+    if (window.__bw_term_input && window.__bw_term_input.length > 0) {
+        input = window.__bw_term_input.join('');
+        window.__bw_term_input = [];
+    }
+    var resize = window.__bw_term_resize || null;
     window.__bw_term_resize = null;
-    return r;
+    if (input === null && resize === null) return null;
+    return { input: input, resize: resize, ready: !!window.__bw_term_ready };
 };
 "#;
 
-/// xterm.js init script (async IIFE). Loads CSS + JS + Fit addon from CDN,
-/// creates the terminal, sets up onData/onResize callbacks, and flushes
-/// the pre-handler buffer. The `if (window.__bw_term) return;` at the top
-/// is the **replayIntoTerminal guard** — prevents re-initialization on
-/// Dioxus re-render (which would replay scrollback and send DA1/OSC
-/// responses that pollute the new shell).
+/// xterm.js init script (async IIFE). Loads CSS + JS + Fit addon locally,
+/// creates the terminal, sets up onData/onResize callbacks, flushes the
+/// pre-handler buffer, and — on a **re-attach** — re-homes an existing
+/// terminal into whatever div exists right now.
+///
+/// The re-attach path exists because `WorkflowStage` (and this widget with
+/// it) fully unmounts whenever the user leaves the workflow panel: `Center`
+/// (op.rs) is a `match` over the active panel, so switching to Issues/
+/// Progress/etc. drops the `TerminalWidget` component and its `div#
+/// __bw_terminal` from the tree entirely. Coming back re-creates a *new*
+/// div. `window.__bw_term` and the PTY session behind it are untouched by
+/// this (they live in the webview's global JS scope / the Rust process,
+/// not the DOM) — xterm keeps its own scrollback internally, so nothing
+/// needs replaying — but its rendered DOM (`term.element`) is still parented
+/// under the *old*, now-detached div. The old `if (window.__bw_term) return`
+/// guard left it there, so the terminal looked empty even though the
+/// session was alive. Fix: move `term.element` into the current div and
+/// re-wire the div-scoped input listeners (click/keydown are bound to a
+/// specific DOM node, so they don't survive the div being replaced —
+/// `term.onData`, by contrast, is bound to `term` itself and must NOT be
+/// re-registered, or every keystroke would fire it twice for the rest of
+/// the session).
 const TERM_INIT_JS: &str = r#"
-(async function() {
-    // replayIntoTerminal guard: don't re-init on Dioxus re-render.
-    if (window.__bw_term) return { ok: true, reason: 'already-initialized' };
+return (async function() {
+    var div = document.getElementById('__bw_terminal');
+    if (!div) return { ok: false, reason: 'div not found' };
+
+    var push = function(data) {
+        window.__bw_term_input = window.__bw_term_input || [];
+        window.__bw_term_input.push(data);
+    };
+    var CTRL_A = 'a'.charCodeAt(0);
+    var KEYS = {
+        Enter: '\r', Backspace: '\x7f', Escape: '\x1b', Tab: '\t',
+        Delete: '\x1b[3~', Insert: '\x1b[2~',
+        ArrowUp: '\x1b[A', ArrowDown: '\x1b[B',
+        ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D',
+        Home: '\x1b[H', End: '\x1b[F',
+        PageUp: '\x1b[5~', PageDown: '\x1b[6~',
+    };
+    var keyBytes = function(e) {
+        if (e.ctrlKey && e.key.length === 1) {
+            var c = e.key.toLowerCase().charCodeAt(0);
+            // Ctrl+a..z → 0x01..0x1a (Ctrl+C = 0x03 interrupts the TUI).
+            if (c >= CTRL_A && c < CTRL_A + 26) return String.fromCharCode(c - CTRL_A + 1);
+            return null;
+        }
+        if (KEYS[e.key]) return KEYS[e.key];
+        if (e.key.length !== 1) return null; // Shift/Alt/F-keys: not our job
+        return e.altKey ? '\x1b' + e.key : e.key;
+    };
+    // Focus: xterm reads keystrokes through a hidden helper textarea. Prefer
+    // it; if WebView2 refuses to focus it, fall back to the container div
+    // and synthesize bytes in the keydown listener. Re-run for every div
+    // this terminal ever attaches to (fresh listeners each time).
+    var wireDiv = function(div, term) {
+        var textarea = div.querySelector('.xterm-helper-textarea');
+        div.tabIndex = 0;
+        var focusTerm = function() {
+            term.focus();
+            if (!textarea || document.activeElement !== textarea) div.focus();
+        };
+        div.addEventListener('click', focusTerm);
+        focusTerm();
+        div.addEventListener('keydown', function(e) {
+            // Fallback only. When the helper textarea has focus xterm
+            // already turned this keystroke into onData — handling it here
+            // too would send every character twice.
+            if (textarea && e.target === textarea) return;
+            var data = keyBytes(e);
+            if (data === null) return;
+            push(data);
+            e.preventDefault();
+        });
+    };
+
+    // Re-attach guard: an existing terminal survives a Dioxus remount —
+    // only its DOM needs re-homing into the current div.
+    if (window.__bw_term) {
+        if (window.__bw_term.element && !div.contains(window.__bw_term.element)) {
+            div.appendChild(window.__bw_term.element);
+            if (window.__bw_fit) window.__bw_fit.fit();
+            wireDiv(div, window.__bw_term);
+        }
+        return { ok: true, reason: 'already-initialized' };
+    }
 
     // Load CSS (local, no CDN — CDN 不稳定会导致 xterm 不初始化 → stdin/stdout 死).
     if (!document.getElementById('__bw_xterm_css')) {
@@ -2959,39 +3027,14 @@ const TERM_INIT_JS: &str = r#"
     });
     var fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
-
-    // Attach to div.
-    var div = document.getElementById('__bw_terminal');
-    if (!div) return { ok: false, reason: 'div not found' };
     term.open(div);
     fitAddon.fit();
-    term.focus();
 
-    // Workaround: wry WebView2 may not focus xterm's hidden helper textarea
-    // (offscreen), so onData never fires → stdin dead. Make the div itself
-    // focusable + handle keydown → push to __bw_term_input (bypass textarea).
-    div.tabIndex = 0;
-    div.focus();
-    div.addEventListener('click', function() { div.focus(); term.focus(); });
-    div.addEventListener('keydown', function(e) {
-        var data = e.key;
-        if (e.key === 'Enter') data = '\r';
-        else if (e.key === 'Backspace') data = '\x7f';
-        else if (e.key === 'Escape') data = '\x1b';
-        else if (e.key === 'Tab') { data = '\t'; e.preventDefault(); }
-        else if (e.key.length > 1) return; // Shift/Control/Arrow 等先忽略
-        window.__bw_term_input = window.__bw_term_input || [];
-        window.__bw_term_input.push(data);
-        document.title = 'BW TYPED: ' + JSON.stringify(data).slice(0, 30);
-        e.preventDefault();
-    });
-
-    // onData → stash (fallback if textarea focus works).
-    term.onData(function(data) {
-        window.__bw_term_input = window.__bw_term_input || [];
-        window.__bw_term_input.push(data);
-        document.title = 'BW TYPED: ' + JSON.stringify(data).slice(0, 30);
-    });
+    // onData is the primary input path: xterm already encodes arrows, Ctrl
+    // combos and IME composition into the bytes a terminal expects. Bound
+    // to `term` itself (not the div) — registered exactly once, here, ever.
+    term.onData(push);
+    wireDiv(div, term);
 
     // onResize → stash for the Rust side to drain.
     // resize re-assertion: fitAddon.fit() may fire onResize with a
@@ -3030,8 +3073,9 @@ const TERM_INIT_JS: &str = r#"
 ///  3. **Resize re-assertion**: `fitAddon.fit()` fires `onResize`; the
 ///     Rust side drains it and sends `Command::TerminalResize`; the PTY's
 ///     `master.resize()` applies it. No fire-and-forget (the drain is
-///     explicit). The `replayIntoTerminal` guard (`if (window.__bw_term)
-///     return`) prevents re-init on Dioxus re-render.
+///     explicit). The re-attach guard in `TERM_INIT_JS` re-homes an
+///     existing terminal into a fresh `div` when this component remounts
+///     (panel switch away and back — see that constant's doc comment).
 #[component]
 fn TerminalWidget() -> Element {
     let k = use_context::<Kernel>();
@@ -3043,23 +3087,31 @@ fn TerminalWidget() -> Element {
     use_future(move || {
         let k = k.clone();
         async move {
+            // `BW_PTY_DEBUG=1` traces the terminal bridge to stderr. Off by
+            // default: the drain runs ~33x/s and would drown the log.
+            let debug = std::env::var("BW_PTY_DEBUG").is_ok_and(|v| v != "0");
+
             // 1. Set up pre-handler functions (sync, fast) — must run
             // BEFORE any bytes arrive so they're buffered, not lost.
             let _ = document::eval(TERM_PRE_HANDLER_JS).await;
-            // 2. Load xterm.js + Fit addon + CSS inline (no CDN — CDN 不稳定
-            // 会导致 xterm 不初始化 → stdin/stdout 死)。eval 直接执行 JS,
-            // 定义 window.Terminal / window.FitAddon;CSS 注入 <style>。
+            // 2. Load xterm.js + Fit addon + CSS inline (no CDN — a failed
+            // CDN fetch used to abort the init IIFE, leaving no terminal).
+            // The UMD bundle assigns to `self`, so eval'ing it as a function
+            // body still defines `window.Terminal` / `window.FitAddon`.
             let _ = document::eval(XTERM_JS).await;
             let _ = document::eval(FIT_ADDON_JS).await;
             let _ = document::eval(&format!(
                 "var __s=document.createElement('style');__s.id='__bw_xterm_css';__s.textContent={};document.head.appendChild(__s)",
                 serde_json::to_string(XTERM_CSS).unwrap_or_else(|_| String::new())
             )).await;
-            let _ = document::eval(TERM_INIT_JS).await;
+            let init = document::eval(TERM_INIT_JS).await;
+            if debug {
+                eprintln!("[pty] terminal init: {init:?}");
+            }
 
             // 3. Main loop: select between new PTY bytes and input/resize
-            // polling (50ms). `pty_rx.changed()` fires when the pty_ticker
-            // sends a new batch; the sleep timer fires for input/resize.
+            // polling. `pty_rx.changed()` fires when the pty_ticker sends a
+            // new batch; the sleep timer fires for input/resize.
             let mut pty_rx = k.pty_bytes();
             // Mark the initial value as seen (empty Vec from watch::channel).
             let _ = pty_rx.borrow_and_update();
@@ -3079,59 +3131,32 @@ fn TerminalWidget() -> Element {
                             let _ = document::eval(&script).await;
                         }
                     }
-                    // 50ms timer → poll for user input + resize.
-                    _ = tokio::time::sleep(Duration::from_millis(50)) => {
-                        // 诊断:always-on(每次 drain 写),看 drain 跑没 + xterm 状态 + onData
-                        let _ready: bool = document::eval("!!window.__bw_term_ready").await.ok().and_then(|v| v.as_bool()).unwrap_or(false);
-                        let _term_exists: bool = document::eval("!!window.__bw_term").await.ok().and_then(|v| v.as_bool()).unwrap_or(false);
-                        let _input_len: u64 = document::eval("(window.__bw_term_input||[]).length").await.ok().and_then(|v| v.as_u64()).unwrap_or(0);
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
-                            .open("D:\\2026\\code\\loop-buddy\\pty-stdin-diag.log") {
-                            use std::io::Write;
-                            let _ = writeln!(f, "[stdin-ui] drain ready={_ready} term={_term_exists} input_len={_input_len}");
-                            let _ = f.flush();
-                        }
-                        if _input_len > 0 {
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
-                                .open("D:\\2026\\code\\loop-buddy\\pty-stdin-diag.log") {
-                                use std::io::Write;
-                                let _ = writeln!(f, "[stdin-ui] __bw_term_input len={_input_len} (onData triggered!)");
-                                let _ = f.flush();
-                            }
-                        }
-                        // Drain input (onData → Command::TerminalInput).
-                        if let Ok(v) = document::eval(
-                            "window.__bw_term_drain_input()"
-                        ).await {
-                            if let Some(input) = v.as_str() {
-                                if !input.is_empty() {
-                                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
-                                        .open("D:\\2026\\code\\loop-buddy\\pty-stdin-diag.log") {
-                                        use std::io::Write;
-                                        let _ = writeln!(f, "[stdin-ui] drain→TerminalInput {} bytes: {:?}", input.len(), input);
-                                        let _ = f.flush();
-                                    }
-                                    k.send(Command::TerminalInput {
-                                        bytes: input.as_bytes().to_vec(),
-                                    });
+                    // Timer → drain what the user typed / resized.
+                    _ = tokio::time::sleep(Duration::from_millis(30)) => {
+                        // `return` is load-bearing: dioxus-desktop runs the
+                        // script as the body of `new AsyncFunction("dioxus",
+                        // script)` (query.rs), so a bare expression resolves
+                        // to `undefined` and every read-back silently yields
+                        // None. That is what kept stdin dead — the drained
+                        // keystrokes never made it out of the webview.
+                        let Ok(v) = document::eval(
+                            "return window.__bw_term_drain ? window.__bw_term_drain() : null"
+                        ).await else { continue };
+                        let Some(obj) = v.as_object() else { continue };
+                        if let Some(input) = obj.get("input").and_then(|i| i.as_str()) {
+                            if !input.is_empty() {
+                                if debug {
+                                    eprintln!("[pty] stdin {} bytes: {input:?}", input.len());
                                 }
+                                k.send(Command::TerminalInput {
+                                    bytes: input.as_bytes().to_vec(),
+                                });
                             }
                         }
-                        // Drain resize (onResize → Command::TerminalResize).
-                        if let Ok(v) = document::eval(
-                            "window.__bw_term_drain_resize()"
-                        ).await {
-                            if let Some(obj) = v.as_object() {
-                                let cols = obj
-                                    .get("cols")
-                                    .and_then(|c| c.as_u64())
-                                    .unwrap_or(80) as u16;
-                                let rows = obj
-                                    .get("rows")
-                                    .and_then(|r| r.as_u64())
-                                    .unwrap_or(24) as u16;
-                                k.send(Command::TerminalResize { cols, rows });
-                            }
+                        if let Some(r) = obj.get("resize").and_then(|r| r.as_object()) {
+                            let cols = r.get("cols").and_then(|c| c.as_u64()).unwrap_or(80) as u16;
+                            let rows = r.get("rows").and_then(|r| r.as_u64()).unwrap_or(24) as u16;
+                            k.send(Command::TerminalResize { cols, rows });
                         }
                     }
                 }
