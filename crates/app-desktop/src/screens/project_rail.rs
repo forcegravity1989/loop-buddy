@@ -45,7 +45,9 @@ pub fn ProjectRail(
         .iter()
         .filter(|s| s.project_id == Some(project_id))
         .collect();
-    let shared_skills = hub.skills.len() - own_skills.len();
+    // plan/20 R1: 「共享」只数全局行(project_id IS NULL)——他项目的行
+    // 既不是我的也不是共享目录的,此前用「总数 − 自有」把它们冒充进共享数。
+    let shared_skills = hub.skills.iter().filter(|s| s.project_id.is_none()).count();
     let skill_items: Vec<RailItem> = own_skills
         .iter()
         .map(|s| RailItem {
@@ -60,7 +62,7 @@ pub fn ProjectRail(
         .iter()
         .filter(|a| a.project_id == Some(project_id))
         .collect();
-    let shared_agents = hub.agents.len() - own_agents.len();
+    let shared_agents = hub.agents.iter().filter(|a| a.project_id.is_none()).count();
     let agent_items: Vec<RailItem> = own_agents
         .iter()
         .map(|a| RailItem {
@@ -75,7 +77,11 @@ pub fn ProjectRail(
         .iter()
         .filter(|w| w.project_id == Some(project_id))
         .collect();
-    let shared_workflows = hub.workflows.len() - own_workflows.len();
+    let shared_workflows = hub
+        .workflows
+        .iter()
+        .filter(|w| w.project_id.is_none())
+        .count();
     let workflow_items: Vec<RailItem> = own_workflows
         .iter()
         .map(|w| RailItem {

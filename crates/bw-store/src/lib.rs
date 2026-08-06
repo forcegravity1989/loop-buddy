@@ -37,8 +37,8 @@ pub use sqlite::SqliteStore;
 
 pub mod seed;
 pub use seed::{
-    seed_bw_standard_skills_if_missing, seed_hub_if_empty, seed_stage_role_agents_if_missing,
-    CanonicalSkill,
+    seed_bw_standard_skills_if_missing, seed_hub_if_empty, seed_project_role_agents_if_missing,
+    seed_stage_role_agents_if_missing, CanonicalSkill,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -146,6 +146,11 @@ pub struct MetricsFileSync {
 pub struct MetricsFileSyncSummary {
     pub lagging_synced: u32,
     pub leading_synced: u32,
+    /// 本次同步顺手停用的行数:正本里已经没有、且 `origin = File`(当初就是
+    /// 从正本同步进来的)、且此前还没被停用的行。界面手建的 `Manual` 行永远
+    /// 不计入——正本里本来就没有它们,"正本删了它"这个判断对它们不成立,不能
+    /// 被沉默改写(要停用得人显式点)。0 = 这次没有任何一条被自动停用。
+    pub auto_archived: u32,
 }
 
 pub struct NewStage {
@@ -482,6 +487,10 @@ pub struct MetricSignal {
     /// C6: `Manual` (界面手建, the byte-for-byte pre-C6 default) or `File`
     /// (synced from the project's metrics source-of-truth file).
     pub origin: MetricOrigin,
+    /// 已停用(归档)——退出界面默认视图、退出健康灯上卷、退出自动采集,
+    /// 但这条指标的 `observation` 历史一条不删。`signal`/`hit` 是停用那一刻
+    /// 冻结下来的缓存(`recompute_signals` 跳过归档行),不是当下重算的值。
+    pub archived: bool,
 }
 
 /// One materialized stage, as the operating view reads it.
@@ -623,6 +632,14 @@ pub trait Store: Send + Sync {
     /// one layer up, in `bw-engine::metrics_file::read`), and this method
     /// keeps its own partial-failure window closed too.
     async fn sync_metrics_file(&self, sync: MetricsFileSync) -> Result<MetricsFileSyncSummary>;
+    /// 停用(归档)/恢复一条指标 —— 指标退役的唯一形态,替代物理删除。
+    /// `observation` 一个字节不碰(append-only 不可破:硬删 metric 行要么级联
+    /// 抹掉真实历史、要么留下孤儿观测)。只翻 `metric.archived` + 盖
+    /// `archived_at` 时戳,不写任何 `signal`——停用后那条指标的 signal 缓存
+    /// 冻结在停用那一刻(`recompute_signals` 跳过归档行),恢复后由下一次
+    /// recompute 重新派生。调用方负责在其后触发 recompute,好让项目/阶段的
+    /// 上卷把这条的进/出反映出来。
+    async fn set_metric_archived(&self, metric: MetricId, archived: bool) -> Result<()>;
     /// Week-plan edit: update a metric's target + this week's driver, keeping
     /// the previous target as `last_target`. Touches no value and no signal —
     /// recompute re-derives against the new target.
@@ -823,10 +840,11 @@ pub trait Store: Send + Sync {
     async fn list_skills(&self) -> Result<Vec<SkillCard>>;
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>>;
     async fn update_skill(&self, id: SkillId, edit: SkillEdit) -> Result<()>;
-    /// Credit one real run to every skill row named `name` (`uses += 1`).
-    /// Returns how many rows matched — `0` (an unregistered ad-hoc ref) is
-    /// honest data, not an error.
-    async fn record_skill_use_by_name(&self, name: &str) -> Result<u32>;
+    /// Credit one real run to **one** skill row (`uses += 1`). plan/20 R3:
+    /// 记账行 == 注入行——调用方先按作用域就近解析出那一行
+    /// (`bw_core::scope::scoped_pick`),再按 id 打点;此前的按名全表
+    /// UPDATE 会把跨作用域同名行齐 bump,settle-once 在作用域维度是破的。
+    async fn record_skill_use(&self, id: SkillId) -> Result<()>;
     /// Distill a new skill from a completed, assigned Issue — the "every
     /// solution compounds into a reusable skill" link. The issue must exist,
     /// be `Done`, and have a real assignee; the new skill is `SelfBuilt` /
@@ -859,6 +877,11 @@ pub trait Store: Send + Sync {
     ///
     /// 这里**不碰** `source`/`official_library` —— 归类是 BW 自己的组织维度,
     /// 不是对上游正文的改编,不触发 T11「编辑即脱离源头」。
+    ///
+    /// 取代了 T7 时代的窄回填器 `set_skill_stage_ref`(单值)——五角色归类
+    /// 2026-08-05 起迁到 `skill_stage` 关联表(多值),`stage_ref` 单值列已
+    /// 真删,旧回填器随之移除,唯一调用方 `seed_bw_standard_skills_if_missing`
+    /// 已改走本方法。
     async fn set_skill_stages(
         &self,
         id: SkillId,
@@ -887,10 +910,11 @@ pub trait Store: Send + Sync {
     /// T7: same backfill role as `set_skill_stages`(单值版), for the five
     /// built-in stage-role agents.
     async fn set_agent_stage_ref(&self, id: AgentId, stage_ref: Option<StageKind>) -> Result<()>;
-    /// Credit one settled run to every agent row named `name`: `runs += 1`,
+    /// Credit one settled run to **one** agent row: `runs += 1`,
     /// `wins += ok as int`, `win_rate` recomputed from the real counters.
-    /// Returns how many rows matched (0 = unregistered ref, honest no-op).
-    async fn record_agent_run_by_name(&self, name: &str, ok: bool) -> Result<u32>;
+    /// plan/20 R3: by-id,同 `record_skill_use`——各项目战绩各立各的账,
+    /// 同名的五角色副本(W1)绝不互相污账。
+    async fn record_agent_run(&self, id: AgentId, ok: bool) -> Result<()>;
     /// T14: delete one agent row. No table carries a real FK onto `agent(id)`
     /// (`issue.assignee` is a plain, unconstrained id string) so this is a
     /// single-table delete; same "mechanics only, decision lives in bw-app"

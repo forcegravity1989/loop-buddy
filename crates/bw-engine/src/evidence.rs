@@ -1,7 +1,7 @@
 //! Workspace evidence collector — turns a project workspace's *real* state
 //! (git history, tracked files, dirty status) into numbers the metric derive
 //! chain can eat. Same idiom as [`crate::git_log`]: read-only subprocesses,
-//! real output, no fabrication. This is the first non-Manual `MetricSource`
+//! real output, no fabrication. This is the first non-Manual `SourceKind`
 //! producer in the codebase — the minimal down payment on Tier D ("Connector
 //! 真喂指标"), scoped to what a local workspace can honestly answer.
 //!

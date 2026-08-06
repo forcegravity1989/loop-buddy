@@ -111,6 +111,15 @@ pub struct CodehubOrigin {
     pub path: String,
 }
 
+/// plan/20 R5: what [`Command::AdoptIntoProject`] copies — plan/08 S1 的
+/// `{ kind, id }`,按本仓命令风格落成带类型 id 的枚举,拼错 kind 编译不过。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdoptTarget {
+    Skill(SkillId),
+    Agent(AgentId),
+    Workflow(WorkflowId),
+}
+
 /// UI → kernel intents.
 pub enum Command {
     /// App start: load the project wall and re-derive every running project's
@@ -198,6 +207,19 @@ pub enum Command {
         new_target: String,
         last_target: String,
         driver: String,
+    },
+    /// 停用(归档)或恢复一条指标 —— 指标退役的唯一产品路径,**没有物理
+    /// 删除**。`observation` 是 append-only 的:硬删 metric 行要么级联抹掉
+    /// 真实测量历史,要么留下孤儿观测,两个都不可接受。停用把"不想再看见
+    /// 它"和"它当初真测过什么"拆开——行留着、观测一条不删,只是退出界面
+    /// 默认视图、退出健康灯上卷、退出自动采集。
+    ///
+    /// 停用后紧跟一次 `recompute_signals`:项目/阶段的上卷要把这条的进出
+    /// 反映出来。被停用行自己那盏灯冻结在停用那一刻(recompute 跳过归档
+    /// 行),恢复后由下一次 recompute 重新派生 —— derive-only 不破。
+    SetMetricArchived {
+        metric: MetricId,
+        archived: bool,
     },
     /// The monitoring loop's heartbeat: a new Manual value is born as an
     /// observation, then every signal is re-derived. Never sets a signal.
@@ -559,6 +581,18 @@ pub enum Command {
         /// `StageOrigin::Manual`,此后 Boot 的静态表回填不再覆盖这件技能。
         /// `Some(vec![])` 是合法且有意义的输入:人工判定「不属任何阶段」。
         stages: Option<Vec<StageKind>>,
+    },
+    /// plan/20 R5(plan/08 S1 原拍板命名):「引入本项目」= 从共享目录
+    /// **复制一份归我**——新 id、`project_id = 目标项目`、描述尾注「引入自
+    /// <归属> · <日期>」、uses/战绩清零(新账,本地挣);skill 的支撑文件
+    /// (`skill_file`)一并复制;`source` 原样保留(出处保真——Official 库
+    /// 文本仍是那个库的原文,T11「编辑即脱离源头」照常生效,收录副本靠
+    /// 归属徽记 + 描述尾注辨认)。只认全局行(`project_id IS NULL`):他
+    /// 项目的行不属于共享池——想共享先升格全局(promote,留口未建)。
+    /// 同池同名(含重复收录同一件)按 R4 拒绝,诚实报错不静默去重。
+    AdoptIntoProject {
+        target: AdoptTarget,
+        project_id: ProjectId,
     },
     CreateAgent {
         id: AgentId,
@@ -1361,15 +1395,20 @@ impl App {
         Ok(())
     }
 
-    /// plan/16 §2 防线 1 (S2): the skill name is the hub-wide join key
+    /// plan/16 §2 防线 1 (S2): the skill name is the join key
     /// (`SkillRef` / `agent.skills` / 蒸馏溯源 all match by name), so a
     /// duplicate is ambiguity, not a style problem. `exempt` = the row being
     /// renamed itself (an unchanged-name `UpdateSkill` must not self-collide).
     /// Read against the store, not `self.state` — same stale-UI reasoning as
     /// `UpdateSkill`'s T11 flip check.
+    ///
+    /// plan/20 R4: 唯一性按**作用域**强制——全局一池、每项目一池(`scope` =
+    /// 这行将要落在的池)。跨作用域允许同名:那是「收录=复制归我」的天然
+    /// 结果,按名引用处由就近规则(R2 `scope::scoped_pick`)确定性消歧。
     async fn guard_skill_name_unique(
         &self,
         name: &str,
+        scope: Option<ProjectId>,
         exempt: Option<SkillId>,
     ) -> Result<(), AppError> {
         let taken = self
@@ -1377,10 +1416,10 @@ impl App {
             .list_skills()
             .await?
             .iter()
-            .any(|s| s.name == name && Some(s.id) != exempt);
+            .any(|s| s.name == name && s.project_id == scope && Some(s.id) != exempt);
         if taken {
             return Err(AppError::Invalid(format!(
-                "技能名「{name}」已存在——名字是联合键,不容歧义(plan/16 S2)"
+                "技能名「{name}」已存在——名字在同一作用域内是联合键,不容歧义(plan/16 S2 · plan/20 R4)"
             )));
         }
         Ok(())
@@ -1640,7 +1679,7 @@ impl App {
         // real bodies to the shared prompt. Name-only refs with no stored
         // content contribute nothing — never a fabricated placeholder.
         if spec.phase_prompts.is_empty() && !spec.skills.is_empty() {
-            let block = self.skills_prompt_block(&spec.skills).await?;
+            let block = self.skills_prompt_block(p, &spec.skills).await?;
             if !block.is_empty() {
                 spec.prompt = format!("{}{block}", spec.prompt);
             }
@@ -2111,11 +2150,32 @@ impl App {
                 .set_run_heads(run_log_id, head_before.clone(), head_after)
                 .await?;
         }
+        // plan/20 R3: 记账行 == 注入行——用与注入完全同一条就近规则
+        // (`scope::scoped_pick`,项目行遮蔽全局行、他项目行永不命中)解析
+        // 出这次 run 实际采用的那一行,按 id 打点;解析落空(未登记的
+        // ad-hoc ref)如实跳过。此前的按名全表 UPDATE 会把跨作用域同名行
+        // (W1 起每个项目都有五角色副本)齐 bump,战绩互相污账。
+        let agent_catalog = self.store.list_agents().await?;
         for a in &spec.agents {
-            self.store.record_agent_run_by_name(&a.name, run_ok).await?;
+            if let Some(row) = bw_core::scope::scoped_pick(
+                agent_catalog.iter(),
+                Some(p),
+                |x| x.project_id,
+                |x| x.name == a.name,
+            ) {
+                self.store.record_agent_run(row.id, run_ok).await?;
+            }
         }
+        let skill_catalog = self.store.list_skills().await?;
         for s in &spec.skills {
-            self.store.record_skill_use_by_name(&s.name).await?;
+            if let Some(row) = bw_core::scope::scoped_pick(
+                skill_catalog.iter(),
+                Some(p),
+                |x| x.project_id,
+                |x| x.name == s.name,
+            ) {
+                self.store.record_skill_use(row.id).await?;
+            }
         }
         if !spec.agents.is_empty() {
             self.refresh_agents().await?;
@@ -2316,18 +2376,32 @@ impl App {
     /// Resolve skill refs against the hub and render the non-empty bodies as
     /// a prompt block. Pure read; the honest empty string when nothing
     /// resolves. Capped so a pathological catalog can't drown the task.
-    async fn skills_prompt_block(&self, refs: &[SkillRef]) -> Result<String, AppError> {
+    ///
+    /// plan/20 R2: 按名解析走 `scope::scoped_pick` 就近优先——本项目行遮蔽
+    /// 全局同名行,他项目的行永不命中。遮蔽是行级的:被遮蔽定位到的行
+    /// content 为空则如实不注入,绝不再「就近找下一条能用的」——否则记账行
+    /// (R3,`finalize_run` 同一条规则解析)会与注入行分家。
+    async fn skills_prompt_block(
+        &self,
+        project: ProjectId,
+        refs: &[SkillRef],
+    ) -> Result<String, AppError> {
         const MAX_BLOCK_CHARS: usize = 6000;
         let catalog = self.store.list_skills().await?;
         let mut bodies = Vec::new();
         let mut total = 0usize;
         for r in refs {
-            let Some(skill) = catalog
-                .iter()
-                .find(|s| s.name == r.name && !s.content.trim().is_empty())
-            else {
+            let Some(skill) = bw_core::scope::scoped_pick(
+                catalog.iter(),
+                Some(project),
+                |s| s.project_id,
+                |s| s.name == r.name,
+            ) else {
                 continue;
             };
+            if skill.content.trim().is_empty() {
+                continue;
+            }
             // plan/16 S7: bodies are spec-shaped SKILL.md text opening at
             // `#`; the injector nests them two levels down so they sit
             // correctly under this block's own H2 (see
@@ -2501,15 +2575,24 @@ impl App {
     /// too — see that function's doc comment). With the exclusion in place,
     /// `record_skill_use_by_name` accounting sees each skill exactly once
     /// per run.
-    async fn standard_skill_block(&self, slug: &str) -> Result<(String, Vec<SkillRef>), AppError> {
+    async fn standard_skill_block(
+        &self,
+        project: ProjectId,
+        slug: &str,
+    ) -> Result<(String, Vec<SkillRef>), AppError> {
         if slug.trim().is_empty() {
             return Ok((String::new(), Vec::new()));
         }
         let catalog = self.store.list_skills().await?;
-        let Some(skill) = catalog
-            .iter()
-            .find(|s| s.name == slug && !s.content.trim().is_empty())
-        else {
+        // plan/20 R2: 同 `skills_prompt_block` 的就近遮蔽——项目里收录改过
+        // 的标配副本优先于全局正本,他项目的行永不命中。
+        let Some(skill) = bw_core::scope::scoped_pick(
+            catalog.iter(),
+            Some(project),
+            |s| s.project_id,
+            |s| s.name == slug,
+        )
+        .filter(|s| !s.content.trim().is_empty()) else {
             return Ok((String::new(), Vec::new()));
         };
         let block = format!(
@@ -2712,9 +2795,14 @@ impl App {
             .await?
             .metrics
             .into_iter()
-            .find(|m| m.name == Self::stage_done_metric_name() && m.stage_kind == Some(stage));
+            .find(|m| {
+                m.name == Self::stage_done_metric_name()
+                    && m.stage_kind == Some(stage)
+                    // 停用的指标不再进新观测:停用就是"别再拿这条量我了"。
+                    && !m.archived
+            });
         let Some(m) = metric else {
-            return Ok(()); // metric missing — honest no-op
+            return Ok(()); // metric missing/archived — honest no-op
         };
         if m.value_raw == new_raw {
             return Ok(()); // change-guard: no new fact
@@ -3162,7 +3250,8 @@ impl App {
             (METRIC_WS_COMMITS, ev.commit_count.to_string()),
             (METRIC_WS_DOCS, ev.docs_files.to_string()),
         ] {
-            let Some(m) = sigs.metrics.iter().find(|m| m.name == name) else {
+            // 停用的指标不再进新观测(同 feed_stage_done_count)。
+            let Some(m) = sigs.metrics.iter().find(|m| m.name == name && !m.archived) else {
                 continue;
             };
             if m.value_raw == value {
@@ -3208,13 +3297,22 @@ impl App {
                 let sync = metrics_file_sync(p, &file);
                 let summary = self.store.sync_metrics_file(sync).await?;
                 self.emit(Event::ProjectUpdated(p));
+                // 自动停用只在真发生时出声(0 条不提)——正本里删掉一条
+                // 指标是"界面上少了一块"这种看得见的后果,不能静默发生。
+                let mut detail = format!(
+                    "北极星 · {} 条滞后指标 · {} 条引领指标已同步",
+                    summary.lagging_synced, summary.leading_synced
+                );
+                if summary.auto_archived > 0 {
+                    detail.push_str(&format!(
+                        ";正本里已删除的 {} 条自动停用(历史观测保留,可在「已停用」里恢复)",
+                        summary.auto_archived
+                    ));
+                }
                 self.emit(Event::ConnectorSynced {
                     name: "metrics.toml".into(),
                     ok: true,
-                    detail: format!(
-                        "北极星 · {} 条滞后指标 · {} 条引领指标已同步",
-                        summary.lagging_synced, summary.leading_synced
-                    ),
+                    detail,
                 });
             }
             Err(e) => {
@@ -3257,7 +3355,10 @@ impl App {
         // 脚本自身依赖(Playwright/SSO/Chrome)由项目侧保证,buddy 只 shell-out。
         let mut script_outputs: Vec<serde_json::Value> = Vec::new();
         if !proj.workspace_path.trim().is_empty()
-            && sigs.metrics.iter().any(|m| m.collect_kind == "script")
+            && sigs
+                .metrics
+                .iter()
+                .any(|m| m.collect_kind == "script" && !m.archived)
         {
             let connectors = self.store.list_connectors().await?;
             for c in connectors.iter().filter(|c| {
@@ -3363,6 +3464,11 @@ impl App {
         }
 
         for m in &sigs.metrics {
+            // 停用的指标退出自动采集 —— 不拉数、不记点、也不计入本次采集
+            // 回执的任何一个计数(它压根没参与,报进去就是虚的)。
+            if m.archived {
+                continue;
+            }
             match m.collect_kind.as_str() {
                 "github" => {
                     if remote_path.is_empty() {
@@ -3751,7 +3857,16 @@ impl App {
                 continue;
             }
 
-            let Some(spec) = specs.iter().find(|w| w.name == c.target).cloned() else {
+            // plan/20 R2: cron 按名找 workflow 走同一条就近规则——本项目行
+            // 优先、全局兜底、他项目行永不命中(plan/08 S1「cron 的按名找
+            // workflow 同样本项目优先」)。
+            let Some(spec) = bw_core::scope::scoped_pick(
+                specs.iter(),
+                Some(pid),
+                |w| w.project_id,
+                |w| w.name == c.target,
+            )
+            .cloned() else {
                 continue; // target doesn't (yet) name a real hub workflow — same rule as the manual trigger.
             };
 
@@ -3857,14 +3972,16 @@ impl App {
             .transition_issue(issue_id, IssueStatus::Todo)
             .await?;
         // Assign by name if the named agent exists — honest 0-match otherwise.
+        // plan/20 R2: 就近优先——本项目的五角色副本(W1)优先于全局同名行,
+        // 他项目的行永不命中,自动建单的战绩才落在本项目的账上。
         if let Some(agent_name) = assignee {
-            if let Some(agent) = self
-                .store
-                .list_agents()
-                .await?
-                .into_iter()
-                .find(|a| a.name == agent_name)
-            {
+            let agents = self.store.list_agents().await?;
+            if let Some(agent) = bw_core::scope::scoped_pick(
+                agents.iter(),
+                Some(project),
+                |a| a.project_id,
+                |a| a.name == agent_name,
+            ) {
                 self.store.assign_issue(issue_id, Some(agent.id)).await?;
             }
         }
@@ -4066,7 +4183,7 @@ impl App {
         // 的 slug)。理论上仍可能查不到(例如 seed 尚未跑过的极早期状态),
         // 那种情况如实跳过、零报错,不是本注入路径的正常状态。
         let (standard_block, standard_refs) =
-            self.standard_skill_block(&issue.standard_skill).await?;
+            self.standard_skill_block(p, &issue.standard_skill).await?;
         // Distilled (compounded) skills from this project, same-stage
         // preferred, capped at 3. Exclude `issue.standard_skill` by name —
         // since P3 a distilled skill can itself be picked as the standard
@@ -4887,6 +5004,11 @@ impl App {
                 for p in &projects {
                     self.seed_stage_done_metrics(p.id).await?;
                     self.seed_codehub_public_metrics(p.id).await?;
+                    // plan/20 W1 (R1): 存量项目补种自有五角色副本——按
+                    // (project, name) 幂等,重启不重复;全局五行(共享目录
+                    // 模板)原地不动,战绩不迁移。
+                    bw_store::seed_project_role_agents_if_missing(self.store.as_ref(), p.id)
+                        .await?;
                 }
                 self.refresh_workflow_specs().await?;
                 // 五角色归类对账(SR5):放在 mohit `ImportSkillLibrary` 之后
@@ -4931,6 +5053,12 @@ impl App {
                     .await?;
                 self.state.active_project = Some(id);
                 self.state.view = View::Create;
+                // plan/20 W1 (R1): 出生即带自有五角色队友(从代码正本复制,
+                // 战绩从零立账)——「新项目里指派下拉只出现自己的五个角色」
+                // (plan/08 S1 完成标准)从出生那一刻成立。
+                bw_store::seed_project_role_agents_if_missing(self.store.as_ref(), id).await?;
+                self.refresh_agents().await?;
+                self.emit(Event::AgentsChanged);
                 // P1: 建项目即建仓 —— 出生那一刻仓就存在(而非走完创建流才有)。
                 // 绑定已有本地仓:只校验含 .git,绝不动原文件。GitHub 为主体
                 // (2026-07-22): github 非空时改走 gh CLI 开仓/接入,新建失败
@@ -5395,6 +5523,28 @@ impl App {
                     .await?;
                 // The target moved ⇒ the same value may now mean a different
                 // signal. Re-derive; never patch by hand.
+                self.store.recompute_signals(p, now()).await?;
+                self.emit(Event::ProjectUpdated(p));
+            }
+
+            Command::SetMetricArchived { metric, archived } => {
+                let p = self.active()?;
+                // 作用域守卫:只能停用/恢复当前项目自己的指标。指标跟着项目
+                // 走,没有跨项目的停用 —— 一个别的项目的 MetricId 传进来直接
+                // NotFound,而不是静默改到别人头上。
+                let sigs = self.store.persisted_signals(p).await?;
+                let target = sigs
+                    .metrics
+                    .iter()
+                    .find(|m| m.id == metric)
+                    .ok_or(AppError::NotFound)?;
+                if target.archived == archived {
+                    // 幂等:重复点不重复盖 archived_at 时戳,也不白重算一遍。
+                    return Ok(());
+                }
+                self.store.set_metric_archived(metric, archived).await?;
+                // 这条指标进/出了上卷集合 ⇒ 项目与阶段的健康灯要重算。
+                // 唯一写入者仍是 recompute_signals,绝不手工 patch。
                 self.store.recompute_signals(p, now()).await?;
                 self.emit(Event::ProjectUpdated(p));
             }
@@ -6255,7 +6405,8 @@ impl App {
                 // (SkillRef / agent.skills / 蒸馏溯源), so a bad or
                 // ambiguous one spreads.
                 guard_skill_name(&name)?;
-                self.guard_skill_name_unique(&name, None).await?;
+                // plan/20 R4: Hub 创建落全局池,查重也只查全局池。
+                self.guard_skill_name_unique(&name, None, None).await?;
                 self.store
                     .create_skill(NewSkill {
                         id,
@@ -6296,7 +6447,16 @@ impl App {
                 // day one (the two legacy Chinese-named rows are exactly the
                 // stock this guard prevents regrowing).
                 guard_skill_name(&name)?;
-                self.guard_skill_name_unique(&name, None).await?;
+                // plan/20 R4: 蒸馏落在源 Issue 所属项目的池,查重只查该池
+                // (store::distill_skill_from_issue 按同一 provenance 定归属)。
+                let scope = self
+                    .store
+                    .get_issue(issue_id)
+                    .await?
+                    .ok_or(AppError::NotFound)?
+                    .project_id;
+                self.guard_skill_name_unique(&name, Some(scope), None)
+                    .await?;
                 self.store
                     .distill_skill_from_issue(
                         NewSkill {
@@ -6489,7 +6649,6 @@ impl App {
                 // exact door the audit's curated corrections walk through
                 // (中文名 → kebab), so the guard and the fix share one rule.
                 guard_skill_name(&name)?;
-                self.guard_skill_name_unique(&name, Some(id)).await?;
                 // T11 (plan/12 §7): "编辑即脱离源头" — an `Official` row whose
                 // substantive fields (content/desc/category; `name` is
                 // identity, not content) really changed flips to `SelfBuilt`
@@ -6498,6 +6657,13 @@ impl App {
                 // decides correctly. A no-op edit (identical content
                 // resubmitted) or a rename-only edit never flips.
                 let existing = self.store.get_skill(id).await?;
+                // plan/20 R4: 改名只在本行所在的池里查重。
+                self.guard_skill_name_unique(
+                    &name,
+                    existing.as_ref().and_then(|s| s.project_id),
+                    Some(id),
+                )
+                .await?;
                 let flip_to_self_built = existing.as_ref().is_some_and(|s| {
                     matches!(s.source, HubSource::Official { .. })
                         && (s.content != content || s.desc != desc || s.category != category)
@@ -6554,6 +6720,176 @@ impl App {
                 }
                 self.refresh_skills().await?;
                 self.emit(Event::SkillsChanged);
+            }
+
+            Command::AdoptIntoProject { target, project_id } => {
+                // 语义与守卫见 Command 变体的 doc comment(plan/20 R5)。
+                self.store
+                    .get_project(project_id)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                let d = now().date();
+                let stamp = format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day());
+                // 归属标签:Official 库名是真实上游;其余(自建/会话内)统称
+                // 共享目录——不发明更细的出处。
+                let origin_of = |source: &HubSource| -> String {
+                    match source {
+                        HubSource::Official { official_library }
+                            if !official_library.is_empty() =>
+                        {
+                            official_library.clone()
+                        }
+                        _ => "共享目录".to_string(),
+                    }
+                };
+                match target {
+                    AdoptTarget::Skill(sid) => {
+                        let src = self.store.get_skill(sid).await?.ok_or(AppError::NotFound)?;
+                        if src.project_id.is_some() {
+                            return Err(AppError::Invalid(
+                                "只能收录共享目录(全局)里的技能——他项目的资产不外借(plan/20 R5)"
+                                    .into(),
+                            ));
+                        }
+                        self.guard_skill_name_unique(&src.name, Some(project_id), None)
+                            .await?;
+                        let files: Vec<NewSkillFile> = self
+                            .store
+                            .list_skill_files(sid)
+                            .await?
+                            .into_iter()
+                            .map(|f| NewSkillFile {
+                                rel_path: f.rel_path,
+                                content: f.content,
+                            })
+                            .collect();
+                        let tail = format!("(引入自 {} · {})", origin_of(&src.source), stamp);
+                        let desc = if src.desc.trim().is_empty() {
+                            tail.clone()
+                        } else {
+                            format!("{} {}", src.desc.trim(), tail)
+                        };
+                        self.store
+                            .import_skill_package(
+                                NewSkill {
+                                    id: SkillId::new(),
+                                    name: src.name.clone(),
+                                    // 新账:成熟度由本项目真实使用挣出来,
+                                    // 不从共享行/外部声誉继承(同 Import 先例)。
+                                    maturity: Maturity::Fresh,
+                                    desc,
+                                    category: src.category.clone(),
+                                    // 出处保真(R5)延伸到五角色归类:阶段归属
+                                    // 与其出处一并原样复制,不因收录进项目而
+                                    // 退化成未归类——收录是复制,不是重新判断。
+                                    stages: src.stages.clone(),
+                                    stage_origin: src.stage_origin,
+                                    source: src.source.clone(),
+                                    content: src.content.clone(),
+                                    project_id: Some(project_id),
+                                },
+                                files,
+                            )
+                            .await?;
+                        self.refresh_skills().await?;
+                        self.emit(Event::SkillsChanged);
+                    }
+                    AdoptTarget::Agent(aid) => {
+                        let src = self.store.get_agent(aid).await?.ok_or(AppError::NotFound)?;
+                        if src.project_id.is_some() {
+                            return Err(AppError::Invalid(
+                                "只能收录共享目录(全局)里的队友——他项目的资产不外借(plan/20 R5)"
+                                    .into(),
+                            ));
+                        }
+                        let dup = self
+                            .store
+                            .list_agents()
+                            .await?
+                            .iter()
+                            .any(|a| a.project_id == Some(project_id) && a.name == src.name);
+                        if dup {
+                            return Err(AppError::Invalid(format!(
+                                "本项目已有同名队友「{}」(plan/20 R4)",
+                                src.name
+                            )));
+                        }
+                        // agent 没有 desc 字段可挂尾注;instructions 会整段
+                        // 进 prompt,不往里塞出处备注——归属靠 project_id
+                        // 徽记 + source 保真,如实不硬造。
+                        self.store
+                            .create_agent(NewAgent {
+                                id: AgentId::new(),
+                                name: src.name.clone(),
+                                role: src.role.clone(),
+                                stage_ref: src.stage_ref,
+                                maturity: Maturity::Fresh,
+                                skills: src.skills.iter().map(|t| t.name.clone()).collect(),
+                                model: src.model.clone(),
+                                instructions: src.instructions.clone(),
+                                tools: src.tools.clone(),
+                                agent_cli: src.agent_cli.clone(),
+                                source: src.source.clone(),
+                                project_id: Some(project_id),
+                            })
+                            .await?;
+                        self.refresh_agents().await?;
+                        self.emit(Event::AgentsChanged);
+                    }
+                    AdoptTarget::Workflow(wid) => {
+                        let src = self
+                            .store
+                            .get_workflow_spec(wid)
+                            .await?
+                            .ok_or(AppError::NotFound)?;
+                        if src.project_id.is_some() {
+                            return Err(AppError::Invalid(
+                                "只能收录共享目录(全局)里的工作流——他项目的资产不外借(plan/20 R5)"
+                                    .into(),
+                            ));
+                        }
+                        let dup = self
+                            .store
+                            .list_workflow_specs()
+                            .await?
+                            .iter()
+                            .any(|w| w.project_id == Some(project_id) && w.name == src.name);
+                        if dup {
+                            return Err(AppError::Invalid(format!(
+                                "本项目已有同名工作流「{}」(plan/20 R4)",
+                                src.name
+                            )));
+                        }
+                        let tail = format!("(引入自 共享目录 · {stamp})");
+                        let goal = if src.goal.trim().is_empty() {
+                            tail.clone()
+                        } else {
+                            format!("{} {}", src.goal.trim(), tail)
+                        };
+                        // `kind` 原样复制:workflow 的 HubSource 出处随
+                        // WorkflowKind::Static 一起走(R5 出处保真);新 id
+                        // 意味着 run 史/uses 从零(按 spec id 记账)。
+                        self.store
+                            .create_workflow_spec(NewWorkflowSpec {
+                                id: WorkflowId::new(),
+                                name: src.name.clone(),
+                                kind: src.kind.clone(),
+                                prompt: src.prompt.clone(),
+                                goal,
+                                stage_ref: src.stage_ref,
+                                phases: src.phases.clone(),
+                                phase_prompts: src.phase_prompts.clone(),
+                                agents: src.agents.clone(),
+                                skills: src.skills.clone(),
+                                loop_config: src.loop_config.clone(),
+                                project_id: Some(project_id),
+                                content: src.content.clone(),
+                            })
+                            .await?;
+                        self.refresh_workflow_specs().await?;
+                        self.emit(Event::WorkflowSpecsChanged);
+                    }
+                }
             }
 
             Command::CreateAgent {
@@ -7399,9 +7735,10 @@ impl App {
                     // stands in the append-only history.)
                     if let Some(agent_id) = issue.assignee {
                         if let Some(agent) = self.store.get_agent(agent_id).await? {
-                            self.store
-                                .record_agent_run_by_name(&agent.name, true)
-                                .await?;
+                            // plan/20 R3: by-id——此前按 name 全表 UPDATE,
+                            // W1 之后每个项目都有同名五角色副本,一次 Done
+                            // 会给所有项目的同名队友齐记战绩(真 bug)。
+                            self.store.record_agent_run(agent.id, true).await?;
                             self.refresh_agents().await?;
                             self.emit(Event::AgentsChanged);
                         }
@@ -7567,6 +7904,32 @@ impl App {
             }
 
             Command::AssignIssue { id, assignee } => {
+                // plan/20 R1 命令层守卫:他项目的队友与种A(工作区登记行)
+                // 不可指派——UI 池已收窄,这里把口子在命令层锁死(深链/
+                // 指挥器路径同受约束)。全局共享行仍可指派:存量流程与
+                // examples 不破坏,战绩按 R3 记到被指派的那一行,不污账。
+                if let Some(aid) = assignee {
+                    let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                    let agent = self
+                        .store
+                        .get_agent(aid)
+                        .await?
+                        .ok_or_else(|| AppError::Invalid("指派对象不存在".into()))?;
+                    if let Some(owner) = agent.project_id {
+                        if owner != issue.project_id {
+                            return Err(AppError::Invalid(format!(
+                                "「{}」是别的项目的队友,不可跨项目指派(plan/20 R1)",
+                                agent.name
+                            )));
+                        }
+                    }
+                    if agent.source.is_project_assets() {
+                        return Err(AppError::Invalid(format!(
+                            "「{}」是工作区登记行(种A),仅登记可见,不可指派",
+                            agent.name
+                        )));
+                    }
+                }
                 self.store.assign_issue(id, assignee).await?;
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);

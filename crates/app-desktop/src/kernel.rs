@@ -911,6 +911,8 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
                 m.hit,
                 m.source,
                 &m.collect_kind,
+                m.archived,
+                m.origin == bw_store::MetricOrigin::File,
                 series.get(&m.id).map(Vec::as_slice).unwrap_or(&[]),
             )
         })
@@ -927,8 +929,20 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             win: row.opportunity.clone(),
             north_star: row.north_star.clone(),
             ns_def: row.ns_def.clone(),
-            leading: metrics.iter().filter(|m| m.leading).cloned().collect(),
-            lagging: metrics.iter().filter(|m| !m.leading).cloned().collect(),
+            // 创建流的指标表单里不出现已停用的指标:这是一张「这个项目
+            // 要用哪些指标」的编辑表,一条已经判定不再用的行留在里面,
+            // 提交时会被 UpsertManualMetric 原样写回去、等于悄悄复活它。
+            // (运营视图有「已停用」折叠区可看可恢复,那是它的去处。)
+            leading: metrics
+                .iter()
+                .filter(|m| m.leading && !m.archived)
+                .cloned()
+                .collect(),
+            lagging: metrics
+                .iter()
+                .filter(|m| !m.leading && !m.archived)
+                .cloned()
+                .collect(),
             remote_path: row.remote_path.clone(),
             remote_host: row.remote_host.clone(),
         });
@@ -1113,10 +1127,13 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             .count() as u32,
         sigs.metrics
             .iter()
+            // 停用的指标不再计入「久没数据」——它本来就不该再有新数据了,
+            // 把它数进去等于用一条已退役的指标制造一个假的待办。
             .filter(|m| {
-                latest_ts
-                    .get(&m.id)
-                    .map_or(true, |t| t.unix_timestamp() < week_start)
+                !m.archived
+                    && latest_ts
+                        .get(&m.id)
+                        .map_or(true, |t| t.unix_timestamp() < week_start)
             })
             .count() as u32,
     );

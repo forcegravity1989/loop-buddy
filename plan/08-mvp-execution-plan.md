@@ -1,32 +1,32 @@
 # 08 · MVP 执行计划(v2.1)— 项目的生命周期 × workflow 的生命周期 · 项目自有,Hub 只管搜索与共享
 
-> 2026-07-16 v2 **同日重写**。v1 的错(用户纠偏,如实记录):把加固项(分支隔离、成本预算)
-> 排在最前,没瞄准 MVP;正文黑话多。v2 修法:**MVP 核心只有两条主线——项目的生命周期管理、
-> workflow 的生命周期管理**;目标与完成标准全部用人话写;源码/测试锚点只进每件的「工程对照」,
-> 供执行者(sonnet5/glm5.2)落地用。**自足接棒件**:行号是写作日锚点,漂移以源码为准,
-> 偏差写进 commit message,不改设计决定。写作日基线:`cargo test --workspace` 188 通过,只许涨。
+> **30 秒导读**:本文是 **MVP 执行计划,当前接手工作的入口**——先看 §0 进度实况知道做到哪了,再看 §3 执行队列知道每件要做成什么样。给两类人看:接棒干活的会话,和核验真伪的人。**现在还作数**;期间两次「转向(用户拍板)」调整过接棒入口,原文集中在 §0.1 时间线,新决定以最晚一条为准。
+>
+> **读法**:正文只用日常语言(每件工作 = 目标 + 完成标准);源码/测试锚点全部集中在 §8「工程对照表」供执行者落地用——对照表里的行号是写作日锚点,漂移以源码为准,偏差写进 commit message,不改设计决定(结构照 [`plan/07-product-proposition.md`](07-product-proposition.md):结论不许无锚,锚不许上正文)。看不懂的代号查 [`../docs/code-schemes.md`](../docs/code-schemes.md)。
+
+> **版本沿革**:2026-07-16 v2 **同日重写**。v1 的错(用户纠偏,如实记录):把加固项(分支隔离、成本预算)排在最前,没瞄准 MVP;正文黑话多。v2 修法:**MVP 核心只有两条主线——项目的生命周期管理、workflow 的生命周期管理**;目标与完成标准全部用人话写;工程锚点只进对照表。写作日基线:`cargo test --workspace` 188 通过,只许涨(此测试基线自 2026-07-17 起被「不写单元测试、行为靠 E2E」的核心纪律取代,见 §7)。v2.1 增补「归属决定」(§1)。
 
 ---
 
-## 0. 进度实况(2026-07-17 自主夜,no-UT 纪律下)
+## 0. 进度实况(2026-07-17 自主夜起持续更新;commit 与验证锚点见 §8-0)
 
-| 件 | 状态 | commit / 验证 |
+| 件 | 状态 | 怎么验的(人话) |
 |---|---|---|
-| Bat A · P3 看板▶跑 + P4 活详情页 | ✅ | 7160fa0;app 启动 + sqlite 读回 + head_before/after 在老库迁移在场 |
-| Bat B · W1/W2/W3 workflow 可见 | ✅ | 7160fa0;hub_usage_ranking 实跑、app 编译 |
-| no-UT 核心纪律 | ✅ | 7160fa0;17 测试文件 + 内联模块全删、门禁/CLAUDE.md 改写 |
-| P1 · 建项目即建仓 + 章程 | ✅ | fdc59b1;driver 读回:出生即开仓 + 4 提交 + PROJECT.md;绑仓不动文件 |
-| P5 · 周复盘卡 | ✅ | 2566dc6;iso_week 公式 python 交叉核 5 时间戳全一致 + sqlite 读回 + 渲染编译 |
-| **S1 · 归属反转** | ⬜ 未开始 | 与 P2 强耦合,见下 |
-| **P2 · 项目自带套件** | ⬜ 未开始 | 依赖 S1 |
-| M4 · 端到端验收 | ◐ 集成启动证明 | 全部已交付件集成启动无 panic(深链 Progress,stderr [BW_OPEN]) |
+| Bat A · P3 看板▶跑 + P4 活详情页 | ✅ | 应用启动 + 数据库读回;新加的两列在老库上迁移在场 |
+| Bat B · W1/W2/W3 workflow 可见 | ✅ | 库排名聚合实跑、应用编译 |
+| no-UT 核心纪律(不再写/留单元测试) | ✅ | 17 个测试文件与内联测试模块全删,门禁与 CLAUDE.md 同步改写 |
+| P1 · 建项目即建仓 + 章程 | ✅ | 指挥器读回:出生即开仓 + 4 次提交 + 章程文件;绑已有仓不动原文件 |
+| P5 · 周复盘卡 | ✅ | 周界公式用独立脚本交叉核验,5 个时间戳全一致 + 数据库读回 + 渲染编译 |
+| S1 · 归属反转 | ✅ plan/20 落地(2026-08-05) | 查询按项目收窄(plan/20 的 R1-R5 规则)+「引入本项目」命令 + 记账改按 id;偏差如实记 plan/20 §6 |
+| P2 · 项目自带套件 | ◐ 五角色副本已落(plan/20 W1) | 出生即种 + 启动补种;③体检 ④晨间建单 ⑤三指标仍未做;剧本复制被「代码正本现铸」取代(plan/20 §6-1) |
+| M4 · 端到端验收(原 plan/06 §8 称 M3,本文起统一叫 M4) | ◐ 集成启动证明 | 全部已交付件集成启动无 panic(深链到进度面板,启动日志可证) |
 
-**S1+P2 未做的诚实理由**:二者强耦合——把 agent/skill/workflow_spec 查询按 `project_id` 收窄,必须**同时**给每个项目种自有的五角色/五剧本/技能(P2),否则项目看不到任何队友、树直接破。完整 S1+P2 ≈ 3.5–4 天量级,远超单次自主夜预算;在 no-UT(仅 E2E 读回)下强做半截会留下**不一致的破树**,比不做更糟。
+**S1+P2 当夜未做的诚实理由**(写于 2026-07-17;S1 后由 plan/20 完整落地,见上表):二者强耦合——把队友/技能/工作流的查询按项目收窄,必须**同时**给每个项目种自有的五角色/五剧本/技能(P2),否则项目看不到任何队友、树直接破。完整 S1+P2 ≈ 3.5–4 天量级,远超单次自主夜预算;在「不写单元测试、只靠 E2E 读回」的纪律下强做半截会留下**不一致的破树**,比不做更糟。当时给出的接棒顺序建议(先加归属列 → 再按项目种套件 → 收窄其余查询与记账 → 全链读回)的工程细节保留在 §8-0;实际执行按 plan/20 走,偏差记在 plan/20 §6。
 
-**接棒顺序建议**:① S1 schema(三表加 `project_id TEXT` 可空,可空=NULL 共享目录;schema.sql + add_column_if_missing 双守卫;138 行注释改写)→ ② P2 按项目种角色/剧本/技能 + 指派/注入/运行查询收窄到本项目 → ③ S1 剩余(Hub 列全部 + 归属标签 + 名称过滤 + AdoptIntoProject 复制命令 + 记账 record_agent_run_by_name/skill uses/cron 本项目优先 + DistillSkillFromIssue 写 project_id)→ ④ 全链 E2E 读回。存量全局行保留为共享目录、不迁移不拆分。
+### 0.1 转向记录(按时间线,用户拍板原文,一字不删)
 
 > **2026-07-20 转向(用户拍板)**:MVP 改为**实践版**——以真实项目「aihot 日报」从零到一真实践行,零 mock,见 **`plan/09-aihot-practice-run.md`**。上表 S1+P2 全量**暂缓**;其中"三表加可空 project_id + 项目内查询收窄"这一最小切片并入 09 的墙 B,由践行需要拉动。本文其余(两条生命周期的定义、现状盘点)仍有效。
->
+
 > **2026-07-21 转向(用户拍板)**:aihot 践行已跑通(28 issue,见 09)。当前接棒入口移到
 > **`plan/10-personal-kanban-and-real-run.md`**——个人级看板(项目二级组件侧边栏,marketplace 与
 > 项目维度并存)+ 真执行器实跑刷新(用户已解锁 `claude -p` 登录)+ aihot 指标从 issue 数重定为
@@ -36,13 +36,12 @@
 
 ## 1. MVP 是什么(一句话 + 两条生命周期)
 
-**一句话**:一个你每天真实打开的桌面应用,管好两条生命周期——**项目的**(从一个创意到持续运营),
-和 **workflow 的**(从标准模板到越用越好)。管理动作全程不出应用,终端只剩执行兜底。
+**一句话**:一个你每天真实打开的桌面应用,管好两条生命周期——**项目的**(从一个创意到持续运营),和 **workflow 的**(从标准模板到越用越好)。管理动作全程不出应用,终端只剩执行兜底。
 
 **项目的生命周期**(它应该长这样):
 
 > 有了新创意 → 建项目,同时就是建一个代码仓(项目的章程写进仓里)→ 项目出生就自带打法:
-> 五个阶段该怎么干、两条例行任务、三个自动统计的指标 → 日常:看板上派活,agent 真干活,
+> 五个阶段该怎么干、两条定时任务、三个自动统计的指标 → 日常:看板上派活,队友真干活,
 > 干完停在「评审中」,你看过它改了什么、产出什么,亲手点完成 → 清单勾完交棒进下一阶段,
 > 没勾完也能交但留痕 → 每周看一眼复盘卡:这周完成几件、指标记了没、离三个月的目标还有多远
 > → 运维阶段的复盘回流原型,项目转下一圈。
@@ -61,9 +60,7 @@
 > Hub 的意义只剩两件事:**搜索**(看见所有项目和共享目录里有什么)和**共享**(把别处的好东西
 > **复制**进我的项目——是复制不是引用,拿来之后就是我的,随我改,互不影响)。
 
-这与今天的代码正好相反:`schema.sql` 的 agent/skill/workflow_spec 三张表注释原话是
-「hub library (**global**, no project_id)」,五个角色 agent 是全局单例——意味着「构建师」的
-战绩混着所有项目的活。反转后各项目战绩各立各的账,更诚实。工程落地见 Bat C 的 S1。
+这与写作日(2026-07-16)的代码正好相反:当时队友/技能/工作流三类资产在库里是**全局一份、不分项目**(表注释原话见 §8-1),五个角色队友是全局单例——意味着「构建师」的战绩混着所有项目的活。反转后各项目战绩各立各的账,更诚实。工程落地见第三批(Bat C)的 S1。
 
 ## 2. 现状盘点(哪段已经是真的,哪段缺)
 
@@ -72,11 +69,11 @@
 | 环节 | 现状 |
 |---|---|
 | 创建流(意图→快问→起草→审阅) | ✅ 已有;但开仓在最后一步 → **要提前到出生那一刻**(P1) |
-| 五阶段打法 / DoD / 交棒 / 回流 | ✅ 已有 |
+| 五阶段打法 / 完成清单 / 交棒 / 回流 | ✅ 已有 |
 | 看板:建卡/指派/阻塞/前进 | ✅ 已有 |
 | **在应用里让活跑起来** | ✗ 缺——「▶ 跑」按钮在界面上引用数为 0(写作日核验),只能靠终端指挥器(P3)|
 | **在应用里审活** | ✗ 缺——评审时看不到它跑过几次、改了什么、产出什么(P4)|
-| 项目出生自带例行与指标 | ✗ 缺——能力都在(调度、建单、证据采集),但不是默认种子(P2)|
+| 项目出生自带定时任务与指标 | ✗ 缺——能力都在(调度、自动建活、证据采集),但不是默认种子(P2)|
 | 周复盘 | ✗ 缺(P5)|
 
 **workflow 线**:
@@ -84,149 +81,80 @@
 | 环节 | 现状 |
 |---|---|
 | 标准模板:五阶段剧本 + 起草 | ✅ 已有(起草是演示替身,有标注,B 轨换真)|
-| 运行:手动 / 到期自动 / 由活触发 | ✅ 已有(A1/A3/调度器)|
+| 运行:手动 / 到期自动 / 由活触发 | ✅ 已有(plan/06 队列的 A1 自动建活、A3 一键开工,加上真实调度器)|
 | 每次运行留痕:成败/耗时/触发方式 | ✅ 已有;**「改了什么」没记**(P4 顺手补,W2 复用)|
 | **库里看得到战绩** | ✗ 缺——库面板今天只显示「N 次复用」,成功率/耗时/最近一次都在库里躺着没上屏(W1)|
 | **点开一条看运行史** | ✗ 缺(W2)|
-| 修订留版本 | ◐ 底账已有(`list_workflow_versions` 在),**缺查看入口**(W3)|
-| 例行任务管理(暂停/恢复/上次/下次) | ✅ **已完整**(Cron Hub 核验过)——从计划划掉,不重做 |
+| 修订留版本 | ◐ 底账已有(存储层能列出历史版本,见 §8-W3),**缺查看入口**(W3)|
+| 定时任务管理(暂停/恢复/上次/下次) | ✅ **已完整**(Cron Hub 面板核验过)——从计划划掉,不重做 |
 | 蒸馏技能 → 注入下次运行 | ✅ 已有;**应用里缺蒸馏按钮**(并入 P4 动作区)|
 
 结论:**两条生命周期的引擎都在,缺的是把它们放到用户眼前和手上。** 这就是本计划的全部内容。
 
 ## 3. 执行队列(两线四棒,总约 8–10 人日)
 
+「两线」= 项目线(P 字头五件)与 workflow 线(W 字头三件);「四棒」= 四个批次 Bat A–D(Bat=Batch,批次)。每件只写目标与完成标准;工程对照逐件见 §8。
+
 ### Bat A · 日常环进应用(先让每天能用)——P3 + P4,约 2–2.5 天
 
 **P3 · 看板上能让活跑起来**
-- 目标(人话):待办的活,卡片上有「▶ 跑」;点了 agent 就开工,横幅能看到进度;没配代码仓的项目照旧演示模式并如实标注。
+- 目标(人话):待办的活,卡片上有「▶ 跑」;点了,队友就开工,横幅能看到进度;没配代码仓的项目照旧演示模式并如实标注。
 - 完成标准:在应用里点「▶」→ 活进「进行中」→ 干完停「评审中」,全程不碰终端。
-- 工程对照:`op.rs` IssuesPanel 卡片(状态∈{待办池,待办,进行中}露按钮)→ 复用 op 视图当前会话
-  (无则 `StartSession{kind: Optimize, title: "#N <标题>"}`)→ `Command::RunIssue`(命令与守卫已有,
-  [lib.rs:2049](../crates/bw-app/src/lib.rs) 一带;A3/A5 测试已锁行为);运行横幅走既有事件流,零新管道。
-  UI 编译过即可(命令层已兜底,如实不假装 UI 测试)。
+- 工程对照:见 §8-P3。
 
 **P4 · 活的详情页:审得有据,就地裁决**
-- 目标(人话):点开一件活,一屏看到——它跑过几次(每次成败/耗时)、**每次改了哪些文件**、
-  登记了什么产物;评审中的活就地「✓ 完成」「↩ 打回」;做完的活就地「⚗ 蒸馏」(正文由人写)。
-  没记录的东西不显示(绝不造「测试通过」这类没记过的结论)。
+- 目标(人话):点开一件活,一屏看到——它跑过几次(每次成败/耗时)、**每次改了哪些文件**、登记了什么产物;评审中的活就地「✓ 完成」「↩ 打回」;做完的活就地「⚗ 蒸馏」(正文由人写)。没记录的东西不显示(绝不造「测试通过」这类没记过的结论)。
 - 完成标准:整个「审活→裁决→沉淀」在这一屏完成;页上每个数字用 `sqlite3`/`git` 能对出来。
-- 工程对照:
-  - **「改了什么」的记法(本计划唯一的新记录,P4/W2 共用)**:`workflow_run` 加两列
-    `head_before TEXT` / `head_after TEXT`(运行起止时工作区 HEAD;无工作区为空)——
-    schema.sql + `add_column_if_missing` 双守卫(本仓库摔过的坑);起跑/落定时经
-    `evidence::head_commit`([evidence.rs:126](../crates/bw-engine/src/evidence.rs))采集;
-    变更清单 = `git diff --numstat <before>..<after>`(`workspace.rs` 新增薄函数,抄 `git_log.rs` 模式)。
-  - 数据通道:`Command::OpenIssueDetail(IssueId)` → 组装进 state(runs 用已有
-    `list_runs_for_issue`;产物加 store 薄查询 `list_artifacts_for_issue`)→ 事件通知;只读不落库。
-  - UI:看板卡点击开浮层;动作按钮全走既有命令(`TransitionIssue`/`DistillSkillFromIssue`)。
-  - 测试:组装结果与 store 直查逐字段一致(读回);head 两列在带临时 git 仓 + 写文件 stub 执行器
-    的测试里真实变化;`ui::vm` 新 `IssueDetailVm` 纯函数单测(含「早于本功能的旧活无对比」的如实文案)。
+- 工程对照:见 §8-P4(含本计划唯一的新记录「运行前后各在哪个提交」,P4/W2 共用)。
 
 ### Bat B · workflow 生命周期看得见——W1 + W2 + W3,约 1.5–2 天
 
 **W1 · 库面板上的真战绩**
 - 目标(人话):Workflow 库每条显示:跑过几次、成功率、平均耗时、最近一次时间——全部来自真实运行记录,没跑过就显示「暂无运行」,不显示 0%。
-- 完成标准:面板数字与 `sqlite3` 对 `workflow_run` 的聚合一致。
-- 工程对照:聚合已有(`run_outcome.rs::analytics_aggregates_runs_and_rates_success_honestly`
-  锁着口径);store 聚合查询 → vm 字段 → `workflow_hub.rs` 行(235 行一带现在只有
-  `version_label · uses 次复用`,并排补战绩);vm 单测:无运行=「暂无」不冒充。
+- 完成标准:面板数字与 `sqlite3` 直查运行记录的聚合一致。
+- 工程对照:见 §8-W1。
 
 **W2 · 点开一条,看它的运行史**
 - 目标(人话):每条 workflow 能点开看运行列表:哪次成哪次败、各花多久、怎么触发的(手动/定时/哪件活)、改了什么。
-- 完成标准:列表与 `workflow_run` 表直查一致;「由活触发」的行能看到活编号。
-- 工程对照:store `list_runs_for_workflow(workflow_id)`(按 started_at 倒序,含
-  issue_id/cron_task_id 归因列——A2/iter4 已有列);vm + hub 行展开;复用 P4 的 head 两列显示变更数。
+- 完成标准:列表与运行记录直查一致;「由活触发」的行能看到活编号。
+- 工程对照:见 §8-W2。
 
 **W3 · 修订翻得了旧账**
 - 目标(人话):改过的剧本,能看到改之前长什么样(名称/描述/提示词),知道自己在第几版。
 - 完成标准:改一次 → 版本 +1,旧版内容完整可读。
-- 工程对照:底账已有(store `list_workflow_versions`,[lib.rs:562](../crates/bw-store/src/lib.rs);
-  `version_log.rs` 测试锁行为);hub 行加「历史版本」展开(version_label 已在行上);只补 UI 与 vm,
-  不动记录语义。
+- 工程对照:见 §8-W3。
 
 ### Bat C · 项目出生线与归属反转——P1 + S1 + P2,约 3.5–4 天
 
 **S1 · 归属反转:项目自有,Hub 只管搜索与共享(在 P2 之前落地)**
-- 目标(人话):我在项目里看到的队友、技能、workflow,默认只有**这个项目自己的**;
-  Hub 里能看到所有(每条标着归属:某项目/共享目录),能搜索,能一键「引入本项目」——
-  引入是**复制一份归我**,之后各改各的,互不影响。老数据不动:既有的全局角色和技能留在
-  共享目录里,历史战绩不拆分、不迁移、**不伪造**;新的项目自有角色从零立账。
-- 完成标准:新项目里指派下拉只出现自己的五个角色;蒸馏出的技能归属本项目;Hub 每条带归属
-  标签且可按名搜索;从 Hub 引入一条到项目后,改它不影响原件。
-- 工程对照:
-  - `agent` / `skill` / `workflow_spec` 三表各加 `project_id TEXT REFERENCES project(id)`
-    (**可空,NULL=共享目录**;schema.sql + `add_column_if_missing` 双守卫;138 行
-    「hub library (global)」注释同步改写);
-  - 查询口径:运营视图的指派([op.rs](../crates/app-desktop/src/screens/op.rs) select)、
-    技能注入(`skills_prompt_block` / `distilled_skills_block`)、剧本运行、种子判存
-    一律**只取本项目**;Hub 面板列全部 + 归属标签 + 名称过滤框;
-  - 「引入本项目」= 新命令 `Command::AdoptIntoProject { kind, id }`:复制行、置本项目
-    project_id、描述尾注「引入自 <归属> · <日期>」,战绩/uses 清零(新账);
-  - 记账解析:`record_agent_run_by_name` / skill uses 按名解析改为「本项目优先」;
-    找不到本项目行 → **如实跳过并记事件,绝不错记到共享行**;
-  - cron 的「按名找 workflow」同样本项目优先(cron_hub.rs 顶部注释同步改);
-  - 蒸馏落库:`DistillSkillFromIssue` 直接写 issue 所属项目的 project_id(现状靠
-    provenance 连接查,改为显式归属);
-  - 存量测试只准改铺垫(如先种自有角色),断言不动;基线只许涨。
+- 目标(人话):我在项目里看到的队友、技能、workflow,默认只有**这个项目自己的**;Hub 里能看到所有(每条标着归属:某项目/共享目录),能搜索,能一键「引入本项目」——引入是**复制一份归我**,之后各改各的,互不影响。老数据不动:既有的全局角色和技能留在共享目录里,历史战绩不拆分、不迁移、**不伪造**;新的项目自有角色从零立账。
+- 完成标准:新项目里指派下拉只出现自己的五个角色;蒸馏出的技能归属本项目;Hub 每条带归属标签且可按名搜索;从 Hub 引入一条到项目后,改它不影响原件。
+- 工程对照:见 §8-S1。
 
 **P1 · 建项目就是建代码仓,章程写进仓**
-- 目标(人话):点「新建」的那一刻仓就存在(不是走完创建流才有);仓里有一份 `PROJECT.md` 章程
-  (定位/对标/三个月成功标准/北极星),创建流每答一步,章程就更新一次并留提交记录;
-  也可以绑定已有仓——绝不动人家已有的文件。
+- 目标(人话):点「新建」的那一刻仓就存在(不是走完创建流才有);仓里有一份 `PROJECT.md` 章程(定位/对标/三个月成功标准/北极星),创建流每答一步,章程就更新一次并留提交记录;也可以绑定已有仓——绝不动人家已有的文件。
 - 完成标准:新项目 = `git log` 里有初始提交 + 章程文件;答完北极星,章程里就有;绑已有仓,原文件字节不变。
-- 工程对照:`CreateProject` 处理器内 ensure `provision_git_workspace`
-  ([workspace.rs:48](../crates/bw-engine/src/workspace.rs);root=`BW_WORKSPACES` 或默认,
-  取值逻辑从 CompleteCreation 搬家不重写)+ seed `README.md`/`PROJECT.md` 后首 commit;
-  `UpdateBrief`/`UpdateNorthStar`/`CompleteCreation` 各写回对应节并 commit
-  (消息 `docs(bw): 项目章程 · <节>`);`CreateProject` 加可选 `workspace: Option<String>`
-  (创建卡 1「绑定已有代码仓」输入,校验含 `.git`);开仓失败沿用既有降级
-  ([lib.rs:1775](../crates/bw-app/src/lib.rs) 一带事件,项目以演示模式活着);
-  CompleteCreation 的开仓改为兼容存量的 ensure。测试:仓/章程/提交读回;绑仓不动原文件;
-  `spine.rs`/`complete_form.rs` 断言不动。
+- 工程对照:见 §8-P1。
 
 **P2 · 项目出生自带标准套件(项目自有,S1 之后)**
-- 目标(人话):新项目自动带上**属于自己的**一整套——①自己的五个角色队友(原型师…运维师,
-  战绩从零立账,和别的项目不混);②自己的五套阶段剧本(从通用模板**复制**成项目自有的第 1 版,
-  之后随这个项目演化、留版本——「每个项目长出自己的打法」就落在这里);③「仓库体检·每日」:
-  每天从代码仓采集真实状态(提交了几次、测试过没过),自动记进指标,值没变就不重复记;
-  ④「晨间建单·按复盘节奏」:到期自动把例行活挂上看板、指派给当班角色(可一键暂停);
-  ⑤三个自动统计的指标:每阶段完成件数(已有)、周提交数、测试通过率——**都只统计事实;
-  想要绿灯,得自己设目标,不设就一直是「未知」**。
-- 完成标准:新建项目后——指派下拉见自己的五个角色;工作流库见自己的五套剧本(标注归属);
-  例行面板见两条任务;指标面板见三个机器指标(全部「未知」灰);体检跑过后指标有真实数值;
-  老项目重启应用后自动补种,不重复,旧共享数据原地不动。
-- 工程对照:角色种子=每项目五行 agent(project_id=本项目,runs/wins 从 0;
-  `seed_stage_entities_if_missing` [seed.rs:2977](../crates/bw-store/src/seed.rs) 改造为
-  按项目种,旧全局行保留为共享目录);剧本种子=把 `stage_workflow_with_playbook` 的五套模板
-  **物化**为项目自有 `workflow_spec` 行(v1,含 phase_prompts;RunIssue/剧本运行改为取项目自有 spec,
-  这使 W3 的版本史对「项目自己的打法」生效);`CronMode` 加 `SyncEvidence` 变体
-  ([model.rs:1025](../crates/bw-core/src/model.rs);mode 是文本列,无迁移,`tick_scheduler`
-  加分支:调 `evidence::collect` → 既有 `RecordCollectedObservation` 通道,值不变不追加);
-  种子统一在 `CompleteCreation`+Boot,幂等按(project_id, name/title)判存
-  (抄 `seed_stage_done_metrics`,[lib.rs:1035](../crates/bw-app/src/lib.rs));
-  建单例行用既有 `CreateIssue` 模式,节奏=项目复盘节奏,`issue_stage`=活跃段,状态 Normal
-  (`CronStatus::Paused` 已支持暂停);指标名常量化进 `bw_app::std_metrics`
-  (收编现有字面量「阶段完成 Issue 数」+新增「周提交数」source=git_pr、「测试通过率」source=ci)。
-  测试:种子幂等且互不串项目;体检 tick 后观测可读回、重复值不追加;测试仓补一个真 commit 再 tick,
-  「周提交数」变化;无目标全程 Unknown;改项目自有剧本→版本+1(W3 口径);
-  `autopilot.rs`/`scheduler.rs`/`issues_skill_loop.rs` 不回归(铺垫可改,断言不动)。
+- 目标(人话):新项目自动带上**属于自己的**一整套——①自己的五个角色队友(原型师…运维师,战绩从零立账,和别的项目不混);②自己的五套阶段剧本(从通用模板**复制**成项目自有的第 1 版,之后随这个项目演化、留版本——「每个项目长出自己的打法」就落在这里);③「仓库体检·每日」:每天从代码仓采集真实状态(提交了几次、测试过没过),自动记进指标,值没变就不重复记;④「晨间建单·按复盘节奏」:到期自动把当天该建的活挂上看板、指派给当班角色(可一键暂停);⑤三个自动统计的指标:每阶段完成件数(已有)、周提交数、测试通过率——**都只统计事实;想要绿灯,得自己设目标,不设就一直是「未知」**。
+- 完成标准:新建项目后——指派下拉见自己的五个角色;工作流库见自己的五套剧本(标注归属);例行面板见两条定时任务;指标面板见三个机器指标(全部「未知」灰);体检跑过后指标有真实数值;老项目重启应用后自动补种,不重复,旧共享数据原地不动。
+- 工程对照:见 §8-P2。
 
 ### Bat D · 周节奏 + 总验收——P5 + M4,约 1.5 天
 
 **P5 · 周复盘卡**
 - 目标(人话):进项目第一眼有张周卡:本周完成几件活、哪些指标该记还没记、离「三个月成功标准」还剩多少天、几件活还开着。全是从已有数据算的,不用你填。
 - 完成标准:卡上数字与 `sqlite3` 直查一致;跨过周一自动翻页。
-- 工程对照:`ui::vm` 新 `WeekReviewVm`(注入 now 的纯函数+单测;周界=ISO 周一;
-  倒计时=90−距 `created_at` 天数,负值如实显示「已过线 N 天」);进度面板顶部一张卡;不建新表。
+- 工程对照:见 §8-P5。
 
 **M4 · 「一天」验收测试 v2**
-- 目标(人话):把 MVP 的一天写成一条自动化测试:建项目(出生即仓+章程)→ 套件在 → 建卡 →
-  跑活 → 详情读回(运行史/变更/产物)→ 完成(记账)→ 库里战绩变化 → 周卡数字对得上。
-- 工程对照:新文件 `crates/bw-app/tests/mvp_day.rs`,临时库+临时 git 仓+写文件并 commit 的
-  stub 执行器(**绝不依赖网关**,组装抄 `user_day.rs`);每步断言=store/git 读回;基线只许涨。
+- 目标(人话):把 MVP 的一天写成一条自动化测试:建项目(出生即仓+章程)→ 套件在 → 建卡 → 一键开工 → 详情读回(运行史/变更/产物)→ 完成(记账)→ 库里战绩变化 → 周卡数字对得上。
+- 工程对照:见 §8-M4。
 
 ## 4. 与 v1 的差异(如实记录,防止两条事实线)
+
+表中 C1–C6 / D0–D2 是 v1(同日被本重写取代的初版)的条目编号,只在本表出现,含义见各行;**与 plan/14 的 C 系列无关**(同字母撞车,消歧见代号索引)。
 
 | v1 项 | v2 处置 | 理由 |
 |---|---|---|
@@ -236,32 +164,100 @@
 | C2/C4 | 保留,即 P4/P3(重述为人话) | 日常环的核心 |
 | D0/D1/D2 | 保留,即 P1/P2 | 用户自己的设计决定 |
 | — | **新增 W1/W2/W3** | 用户点名:workflow 生命周期管理是 MVP 另一半;核验发现引擎全在、屏面全缺 |
-| — | **新增 S1 归属反转(v2.1)** | 用户拍板:agent/skill/workflow 项目自有,Hub 只管搜索与共享;今天三张表是「hub library (global)」,正好反转;W1-W3 的 Hub 行落地后补一枚归属标签(半小时级) |
+| — | **新增 S1 归属反转(v2.1)** | 用户拍板:agent/skill/workflow 项目自有,Hub 只管搜索与共享;写作日三类资产在库里是全局一份(注释原话见 §8-1),正好反转;W1-W3 的 Hub 行落地后补一枚归属标签(半小时级) |
 | C5 | 保留,即 P5 | 「每周在正常演进」控制点 |
 | （核验收获） | Cron Hub 例行管理**不做**——已完整 | 写计划前先核验,少干一件 |
 
 ## 5. 加固层(MVP 之后,记录不丢)
 
-分支隔离与冲突语义 · 成本入账与预算闸 · 样板引导 · 创建流真起草与聊天真回复(B 轨,等网关)·
-Windows 编译与打包 · Issue 详情的更多聚合。**这些都有价值,但都不挡「每天用它管项目」。**
+分支隔离与冲突语义 · 成本入账与预算闸 · 样板引导 · 创建流真起草与聊天真回复(B 轨,等网关)· Windows 编译与打包 · Issue 详情的更多聚合。**这些都有价值,但都不挡「每天用它管项目」。**
 
 ## 6. MVP 验收(人话,全部可核验)
 
 1. 连续两周,≥2 个真实项目、≥10 件真实活在应用里走完整环——**期间所有管理动作不出应用**;
 2. 每条常用 workflow 的战绩(次数/成功率/耗时)在库里看得到,数字与 `sqlite3` 直查一致;
 3. 改一条剧本,能翻到旧版本;
-4. 新建一个项目,出生即有仓+章程+**自己的角色/剧本**+例行+指标;体检例行让「周提交数」出现真实数值;
+4. 新建一个项目,出生即有仓+章程+**自己的角色/剧本**+定时任务+指标;体检定时任务让「周提交数」出现真实数值;
 5. 项目里默认只见自己的队友/技能/剧本;Hub 能搜到一切并标注归属;从 Hub 引入后各改各的互不影响;
 6. 无目标的指标两周内始终「未知」——0 假绿;
-7. `mvp_day.rs` 常绿;网关恢复窗口跑通一次真执行并锁存证据。
+7. M4 的「一天」验收常绿(测试文件见 §8-M4);网关恢复窗口跑通一次真实运行并锁存证据。
 
 ## 7. 门禁 + 提交 + 孵化纪律
 
-每件 commit 前全过(与 CI 一致):`cargo fmt --all --check` · `cargo clippy --workspace
---exclude app-desktop -- -D warnings` · wasm32 check ×2 · `./scripts/guard-kernel-ui-free.sh` ·
-`cargo check -p app-desktop`。**行为正确性靠 E2E(深链启动 + sqlite 读回 + computer-use)+ `/code-review`,
-不靠测试基线**——2026-07-17 核心纪律转向:不再写/留单元测试(`crates/*/tests/` 与源码内联测试模块已清)。
+每件 commit 前全过(与 CI 一致):`cargo fmt --all --check` · `cargo clippy --workspace --exclude app-desktop -- -D warnings` · wasm32 check ×2 · `./scripts/guard-kernel-ui-free.sh` · `cargo check -p app-desktop`。**行为正确性靠 E2E(深链启动 + sqlite 读回 + computer-use)+ `/code-review`,不靠测试基线**——2026-07-17 核心纪律转向:不再写/留单元测试(`crates/*/tests/` 与源码内联测试模块已清)。
 
-commit 代号前缀(`P3 · …`/`W1 · …`),取舍如实;拿不准写「偏差」段。
-**孵化纪律**:每件开工前先用 `incubate_issue` 指挥器在工作台给 BW 项目建同名活,做完走到「完成」
-并读回——工作台记录自己的建造。网关每日一探,恢复即先跑通一次真执行。
+commit 代号前缀(`P3 · …`/`W1 · …`),代号之外必须有人话描述(见 CLAUDE.md 写作纪律);取舍如实;拿不准写「偏差」段。
+
+**孵化纪律**:每件开工前先用 `incubate_issue` 指挥器在工作台给 BW 项目建同名活,做完走到「完成」并读回——工作台记录自己的建造。网关每日一探,恢复即先跑通一次真实运行。
+
+## 8. 工程对照表(给执行者与验证者:每件在代码里从哪下手、拿什么核验)
+
+> **修订纪律**:正文每件的目标/完成标准变了,对照行必须同步改;行号与 hash 是写作日锚点,漂移以源码为准,偏差写进 commit message,不改设计决定。
+
+### 8-0 进度实况的 commit 与验证锚点(对照 §0)
+
+| 件 | commit / 验证(原记录) |
+|---|---|
+| Bat A · P3+P4 | `7160fa0`;app 启动 + sqlite 读回 + head_before/after 在老库迁移在场 |
+| Bat B · W1/W2/W3 | `7160fa0`;hub_usage_ranking 实跑、app 编译 |
+| no-UT 核心纪律 | `7160fa0`;17 测试文件 + 内联模块全删、门禁/CLAUDE.md 改写 |
+| P1 | `fdc59b1`;driver 读回:出生即开仓 + 4 提交 + PROJECT.md;绑仓不动文件 |
+| P5 | `2566dc6`;iso_week 公式 python 交叉核 5 时间戳全一致 + sqlite 读回 + 渲染编译 |
+| S1 | plan/20 落地:查询收窄 R1-R5 + AdoptIntoProject + by-id 记账 |
+| P2 | plan/20 W1:五角色副本出生即种 + Boot 补种 |
+| M4 | 深链 Progress 启动,stderr `[BW_OPEN]` 无 panic |
+
+**当时的接棒顺序建议(2026-07-17 原工程细节;实际执行见 plan/20)**:① S1 schema(三表加 `project_id TEXT` 可空,可空=NULL 共享目录;schema.sql + `add_column_if_missing` 双守卫;138 行注释改写)→ ② P2 按项目种角色/剧本/技能 + 指派/注入/运行查询收窄到本项目 → ③ S1 剩余(Hub 列全部 + 归属标签 + 名称过滤 + AdoptIntoProject 复制命令 + 记账 `record_agent_run_by_name`/skill uses/cron 本项目优先 + `DistillSkillFromIssue` 写 project_id)→ ④ 全链 E2E 读回。存量全局行保留为共享目录、不迁移不拆分。
+
+### 8-1 归属决定所引的表注释原话(对照 §1)
+
+`schema.sql` 的 agent/skill/workflow_spec 三张表注释原话是「hub library (**global**, no project_id)」,五个角色 agent 是全局单例(写作日实况;该注释已在 plan/20 W6 按落地现状改写还账)。
+
+### 8-P3 看板上能让活跑起来(对照 §3 Bat A)
+
+`op.rs` IssuesPanel 卡片(状态∈{待办池,待办,进行中}露按钮)→ 复用 op 视图当前会话(无则 `StartSession{kind: Optimize, title: "#N <标题>"}`)→ `Command::RunIssue`(命令与守卫已有,[lib.rs:2049](../crates/bw-app/src/lib.rs) 一带;A3/A5 测试已锁行为);运行横幅走既有事件流,零新管道。UI 编译过即可(命令层已兜底,如实不假装 UI 测试)。
+
+### 8-P4 活的详情页(对照 §3 Bat A)
+
+- **「改了什么」的记法(本计划唯一的新记录,P4/W2 共用)**:`workflow_run` 加两列 `head_before TEXT` / `head_after TEXT`(运行起止时工作区 HEAD;无工作区为空)——schema.sql + `add_column_if_missing` 双守卫(本仓库摔过的坑);起跑/落定时经 `evidence::head_commit`([evidence.rs:126](../crates/bw-engine/src/evidence.rs))采集;变更清单 = `git diff --numstat <before>..<after>`(`workspace.rs` 新增薄函数,抄 `git_log.rs` 模式)。
+- 数据通道:`Command::OpenIssueDetail(IssueId)` → 组装进 state(runs 用已有 `list_runs_for_issue`;产物加 store 薄查询 `list_artifacts_for_issue`)→ 事件通知;只读不落库。
+- UI:看板卡点击开浮层;动作按钮全走既有命令(`TransitionIssue`/`DistillSkillFromIssue`)。
+- 测试:组装结果与 store 直查逐字段一致(读回);head 两列在带临时 git 仓 + 写文件 stub 执行器的测试里真实变化;`ui::vm` 新 `IssueDetailVm` 纯函数单测(含「早于本功能的旧活无对比」的如实文案)。
+
+### 8-W1 库面板上的真战绩(对照 §3 Bat B)
+
+聚合已有(`run_outcome.rs::analytics_aggregates_runs_and_rates_success_honestly` 锁着口径);store 聚合查询 → vm 字段 → `workflow_hub.rs` 行(235 行一带现在只有 `version_label · uses 次复用`,并排补战绩);vm 单测:无运行=「暂无」不冒充。
+
+### 8-W2 运行史(对照 §3 Bat B)
+
+store `list_runs_for_workflow(workflow_id)`(按 started_at 倒序,含 issue_id/cron_task_id 归因列——A2/iter4 已有列);vm + hub 行展开;复用 P4 的 head 两列显示变更数。
+
+### 8-W3 版本旧账(对照 §3 Bat B)
+
+底账已有(store `list_workflow_versions`,[lib.rs:562](../crates/bw-store/src/lib.rs);`version_log.rs` 测试锁行为);hub 行加「历史版本」展开(version_label 已在行上);只补 UI 与 vm,不动记录语义。
+
+### 8-S1 归属反转(对照 §3 Bat C)
+
+- `agent` / `skill` / `workflow_spec` 三表各加 `project_id TEXT REFERENCES project(id)`(**可空,NULL=共享目录**;schema.sql + `add_column_if_missing` 双守卫;138 行「hub library (global)」注释同步改写);
+- 查询口径:运营视图的指派([op.rs](../crates/app-desktop/src/screens/op.rs) select)、技能注入(`skills_prompt_block` / `distilled_skills_block`)、剧本运行、种子判存一律**只取本项目**;Hub 面板列全部 + 归属标签 + 名称过滤框;
+- 「引入本项目」= 新命令 `Command::AdoptIntoProject { kind, id }`:复制行、置本项目 project_id、描述尾注「引入自 <归属> · <日期>」,战绩/uses 清零(新账);
+- 记账解析:`record_agent_run_by_name` / skill uses 按名解析改为「本项目优先」;找不到本项目行 → **如实跳过并记事件,绝不错记到共享行**;
+- cron 的「按名找 workflow」同样本项目优先(cron_hub.rs 顶部注释同步改);
+- 蒸馏落库:`DistillSkillFromIssue` 直接写 issue 所属项目的 project_id(现状靠 provenance 连接查,改为显式归属);
+- 存量测试只准改铺垫(如先种自有角色),断言不动;基线只许涨。
+
+### 8-P1 建项目即建仓(对照 §3 Bat C)
+
+`CreateProject` 处理器内 ensure `provision_git_workspace`([workspace.rs:48](../crates/bw-engine/src/workspace.rs);root=`BW_WORKSPACES` 或默认,取值逻辑从 CompleteCreation 搬家不重写)+ seed `README.md`/`PROJECT.md` 后首 commit;`UpdateBrief`/`UpdateNorthStar`/`CompleteCreation` 各写回对应节并 commit(消息 `docs(bw): 项目章程 · <节>`);`CreateProject` 加可选 `workspace: Option<String>`(创建卡 1「绑定已有代码仓」输入,校验含 `.git`);开仓失败沿用既有降级([lib.rs:1775](../crates/bw-app/src/lib.rs) 一带事件,项目以演示模式活着);CompleteCreation 的开仓改为兼容存量的 ensure。测试:仓/章程/提交读回;绑仓不动原文件;`spine.rs`/`complete_form.rs` 断言不动。
+
+### 8-P2 项目出生自带标准套件(对照 §3 Bat C)
+
+角色种子=每项目五行 agent(project_id=本项目,runs/wins 从 0;`seed_stage_entities_if_missing` [seed.rs:2977](../crates/bw-store/src/seed.rs) 改造为按项目种,旧全局行保留为共享目录);剧本种子=把 `stage_workflow_with_playbook` 的五套模板**物化**为项目自有 `workflow_spec` 行(v1,含 phase_prompts;RunIssue/剧本运行改为取项目自有 spec,这使 W3 的版本史对「项目自己的打法」生效);`CronMode` 加 `SyncEvidence` 变体([model.rs:1025](../crates/bw-core/src/model.rs);mode 是文本列,无迁移,`tick_scheduler` 加分支:调 `evidence::collect` → 既有 `RecordCollectedObservation` 通道,值不变不追加);种子统一在 `CompleteCreation`+Boot,幂等按(project_id, name/title)判存(抄 `seed_stage_done_metrics`,[lib.rs:1035](../crates/bw-app/src/lib.rs));建单例行用既有 `CreateIssue` 模式,节奏=项目复盘节奏,`issue_stage`=活跃段,状态 Normal(`CronStatus::Paused` 已支持暂停);指标名常量化进 `bw_app::std_metrics`(收编现有字面量「阶段完成 Issue 数」+新增「周提交数」source=git_pr、「测试通过率」source=ci)。测试:种子幂等且互不串项目;体检 tick 后观测可读回、重复值不追加;测试仓补一个真 commit 再 tick,「周提交数」变化;无目标全程 Unknown;改项目自有剧本→版本+1(W3 口径);`autopilot.rs`/`scheduler.rs`/`issues_skill_loop.rs` 不回归(铺垫可改,断言不动)。
+
+### 8-P5 周复盘卡(对照 §3 Bat D)
+
+`ui::vm` 新 `WeekReviewVm`(注入 now 的纯函数+单测;周界=ISO 周一;倒计时=90−距 `created_at` 天数,负值如实显示「已过线 N 天」);进度面板顶部一张卡;不建新表。
+
+### 8-M4 「一天」验收测试(对照 §3 Bat D)
+
+新文件 `crates/bw-app/tests/mvp_day.rs`,临时库+临时 git 仓+写文件并 commit 的 stub 执行器(**绝不依赖网关**,组装抄 `user_day.rs`);每步断言=store/git 读回;基线只许涨。

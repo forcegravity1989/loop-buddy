@@ -10,7 +10,7 @@
 //! load (plan `§2.5`: "绝不把缓存当权威"). Leaf, signal-free structs are fully
 //! `serde`-round-trippable.
 
-use crate::derive::{reduce_worst_of, AmberBand, Derived};
+use crate::derive::{AmberBand, Derived};
 use crate::ids::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, ProjectId, SessionId,
     SkillId, WorkflowId, WorkflowRunId,
@@ -78,12 +78,6 @@ impl SourceKind {
     pub fn is_manual(self) -> bool {
         matches!(self, SourceKind::Manual)
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MetricSource {
-    pub kind: SourceKind,
-    pub note: String,
 }
 
 // ─────────────────────────── op stages ───────────────────────────
@@ -2108,11 +2102,6 @@ impl IssueStatus {
         matches!(self, IssueStatus::Done | IssueStatus::Cancelled)
     }
 
-    /// `true` only for `Backlog` — the "not yet committed to" pile.
-    pub fn is_backlog(self) -> bool {
-        matches!(self, IssueStatus::Backlog)
-    }
-
     /// `true` iff `to` is a legal next state from `self` in the Issue
     /// lifecycle graph — the single source of truth for every transition
     /// guard (App-layer `TransitionIssue`/`BlockIssue`/`RunIssue` all query
@@ -2317,30 +2306,10 @@ pub struct Project {
 }
 
 impl Project {
-    /// **L6.** Project signal = worst-of its five stages' routine signals.
-    /// Always derived (returns a sealed value); never hand-set.
-    pub fn derive_signal(&self) -> Derived<Signal> {
-        reduce_worst_of(self.stages.iter().map(|s| s.routine.signal()))
-    }
-
     /// The cached project signal, or `Unknown` if not yet computed.
     pub fn signal(&self) -> Signal {
         cached(&self.signal)
     }
-}
-
-// ─────────────────────────── handoff ───────────────────────────
-
-/// One audited stage transition (体系重构 v2 `§07`①③): the DoD checklist for
-/// `from_stage` need not be fully checked to hand off — an incomplete one is
-/// simply recorded as `risky`, never silently blocked. `Ops → Prototype` is
-/// the reflux that closes the loop.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HandoffRecord {
-    pub from_stage: StageKind,
-    pub to_stage: StageKind,
-    pub risky: bool,
-    pub note: String,
 }
 
 // ───────────────────────────── hub ─────────────────────────────

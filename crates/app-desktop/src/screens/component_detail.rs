@@ -16,7 +16,7 @@ use crate::screens::markdown::MarkdownView;
 use crate::screens::skill_hub::{workflows_using_skill, SkillFileBrowser, SkillSpecNotes};
 use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
-use bw_app::Command;
+use bw_app::{AdoptTarget, Command};
 use bw_core::{AgentId, ConnectorId, CronTaskId, SkillId, WorkflowId};
 use dioxus::prelude::*;
 use ui::vm::{CronEffectivenessVm, ProjectCardVm};
@@ -42,12 +42,47 @@ fn owner_project_name(
         .map(|p| p.name.clone())
 }
 
+/// plan/20 R5:「引入本项目」——只在 (a) 有活跃项目、(b) 本行是全局共享行
+/// (`row_owner` 为 None)时出现;点击把这行**复制**一份归活跃项目
+/// (`Command::AdoptIntoProject`,复制不是引用,之后各改各的)。
+fn adopt_button(
+    k: Kernel,
+    active_project: Option<bw_core::ProjectId>,
+    projects: &[ProjectCardVm],
+    row_owner: Option<bw_core::ProjectId>,
+    target: AdoptTarget,
+) -> Element {
+    let Some(pid) = active_project else {
+        return rsx! {};
+    };
+    if row_owner.is_some() {
+        return rsx! {};
+    }
+    let pname = projects
+        .iter()
+        .find(|p| p.id == pid)
+        .map(|p| p.name.clone())
+        .unwrap_or_default();
+    rsx! {
+        button {
+            style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:4px 10px;font-size:12px;",
+            onclick: move |_| {
+                k.send(Command::AdoptIntoProject { target, project_id: pid });
+            },
+            "⤓ 引入本项目 · {pname}"
+        }
+    }
+}
+
 #[component]
 pub fn ComponentDetail(
     sel: ComponentSel,
     hub: HubVm,
     projects: Vec<ProjectCardVm>,
     cron_effectiveness: Option<(CronTaskId, CronEffectivenessVm)>,
+    // plan/20 R5: 当前打开的项目(无则 None)——「引入本项目」按钮的归宿;
+    // Hub 深链没开项目时按钮如实不出现,不猜目标。
+    active_project: Option<bw_core::ProjectId>,
     on_close: EventHandler<()>,
     // T16 (plan/12 §10 v1.1#3): a workflow phase's agent/skill chip click,
     // re-pointing this very screen at a different `sel` — same `sel`/`hub`
@@ -70,9 +105,9 @@ pub fn ComponentDetail(
                 span { style: "font-family:{mono};font-size:11px;letter-spacing:.06em;color:{ink3};", "本项目组件 · 完整详情" }
             }
             match sel {
-                ComponentSel::Skill(id) => rsx! { SkillDetailCard { id, hub, projects } },
-                ComponentSel::Agent(id) => rsx! { AgentDetailCard { id, hub, projects } },
-                ComponentSel::Workflow(id) => rsx! { WorkflowDetailCard { id, hub, projects, on_select } },
+                ComponentSel::Skill(id) => rsx! { SkillDetailCard { id, hub, projects, active_project } },
+                ComponentSel::Agent(id) => rsx! { AgentDetailCard { id, hub, projects, active_project } },
+                ComponentSel::Workflow(id) => rsx! { WorkflowDetailCard { id, hub, projects, active_project, on_select } },
                 ComponentSel::Cron(id) => rsx! { CronDetailCard { id, hub, projects, cron_effectiveness } },
                 ComponentSel::Connector(id) => rsx! { ConnectorDetailCard { id, hub, projects } },
             }
@@ -81,7 +116,13 @@ pub fn ComponentDetail(
 }
 
 #[component]
-fn SkillDetailCard(id: SkillId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
+fn SkillDetailCard(
+    id: SkillId,
+    hub: HubVm,
+    projects: Vec<ProjectCardVm>,
+    active_project: Option<bw_core::ProjectId>,
+) -> Element {
+    let k = use_context::<Kernel>();
     let card = theme::card();
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
@@ -105,6 +146,7 @@ fn SkillDetailCard(id: SkillId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
                 }
                 SkillSpecNotes { s: s.clone(), compact: true }
                 span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{s.maturity_label}" }
+                {adopt_button(k.clone(), active_project, &projects, s.project_id, AdoptTarget::Skill(s.id))}
             }
             if !s.desc.is_empty() {
                 div { style: "font-size:13.5px;color:{ink2};line-height:1.7;margin-bottom:12px;", "{s.desc}" }
@@ -151,7 +193,13 @@ fn SkillDetailCard(id: SkillId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
 }
 
 #[component]
-fn AgentDetailCard(id: AgentId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
+fn AgentDetailCard(
+    id: AgentId,
+    hub: HubVm,
+    projects: Vec<ProjectCardVm>,
+    active_project: Option<bw_core::ProjectId>,
+) -> Element {
+    let k = use_context::<Kernel>();
     let card = theme::card();
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
@@ -178,6 +226,7 @@ fn AgentDetailCard(id: AgentId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Ele
                     span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)} margin-left:auto;", "◇ {p}" }
                 }
                 span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{a.maturity_label}" }
+                {adopt_button(k.clone(), active_project, &projects, a.project_id, AdoptTarget::Agent(a.id))}
             }
             div {
                 style: "display:flex;align-items:center;gap:10px;font-size:12px;color:{ink3};font-family:{theme::MONO};margin:8px 0 14px;",
@@ -226,6 +275,7 @@ fn WorkflowDetailCard(
     id: WorkflowId,
     hub: HubVm,
     projects: Vec<ProjectCardVm>,
+    active_project: Option<bw_core::ProjectId>,
     on_select: EventHandler<ComponentSel>,
 ) -> Element {
     let k = use_context::<Kernel>();
@@ -257,6 +307,7 @@ fn WorkflowDetailCard(
                     span { style: "{theme::chip(\"#F2E4DD\", theme::CLAY)}", "◇ {p}" }
                 }
                 span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{row.maturity_label}" }
+                {adopt_button(k.clone(), active_project, &projects, row.project_id, AdoptTarget::Workflow(row.id))}
             }
             div { style: "font-size:11px;color:{ink3};margin-bottom:4px;", "解决" }
             div { style: "font-size:12.5px;color:{ink2};margin-bottom:10px;", "{row.goal}" }

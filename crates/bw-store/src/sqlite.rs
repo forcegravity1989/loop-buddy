@@ -203,6 +203,10 @@ impl SqliteStore {
         add_column_if_missing(&pool, "metric", "collect_kind", "TEXT NOT NULL DEFAULT ''").await?;
         add_column_if_missing(&pool, "metric", "collect_query", "TEXT NOT NULL DEFAULT ''").await?;
         add_column_if_missing(&pool, "metric", "origin", "TEXT NOT NULL DEFAULT 'manual'").await?;
+        // 指标停用/归档。存量库全部行开出来 archived=0 / archived_at=NULL,
+        // 和"这些指标都还在用、从没被停用过"这个真实状态完全一致。
+        add_column_if_missing(&pool, "metric", "archived", "INTEGER NOT NULL DEFAULT 0").await?;
+        add_column_if_missing(&pool, "metric", "archived_at", "INTEGER").await?;
         // C8(plan/13 D8):标配 Issue 三件套与标配 Skill 的稳定关联。老库开出
         // 来是空串,和"这张 Issue 没有标配 Skill 关联"这个真实状态完全一致
         // ——存量 Issue 全部是手建/Autopilot 建,从未挂过标配 Skill。
@@ -598,9 +602,15 @@ async fn sync_one_metric_definition(
 
     match existing {
         Some(id) => {
+            // `archived=0` 让规则两边对称:**正本里有 = 在用,正本里没有 =
+            // 停用**。上面的自动停用是"没有"那一半,这里是"有"那一半——一条
+            // 曾被停用(手动或自动)的指标重新写回正本,下次同步它就回来,
+            // 不需要人再去界面上点一次"恢复"。界面因此不给正本来源的指标
+            // 停用按钮(点了会被下次同步推翻),只给手建行——见 op.rs 的
+            // MetricCard。
             sqlx::query(
                 "UPDATE metric SET def=?, target_raw=?, collect_kind=?, collect_query=?,
-                    origin=?, updated_at=?, rev=rev+1 WHERE id=?",
+                    origin=?, archived=0, archived_at=NULL, updated_at=?, rev=rev+1 WHERE id=?",
             )
             .bind(&m.def)
             .bind(&m.target_raw)
@@ -902,11 +912,66 @@ impl Store for SqliteStore {
             sync_one_metric_definition(&mut tx, &p, MetricRole::Leading, m, t).await?;
         }
 
+        // 正本里已经消失的行 → 自动停用。作用域死死卡在 `origin='file'`:
+        // 只有当初从正本同步进来的行,"正本里没有它了"才是一个成立的判断;
+        // 界面手建的 `manual` 行正本里本来就没有,不能被这条规则沉默清场
+        // (要停用得人在界面上显式点)。已经 archived 的不重复盖时戳。
+        // 一个字节不碰 observation。
+        let mut auto_archived = 0u32;
+        for (role, defs) in [
+            (MetricRole::Lagging, &sync.lagging),
+            (MetricRole::Leading, &sync.leading),
+        ] {
+            let rows = sqlx::query(
+                "SELECT id, name FROM metric
+                 WHERE project_id=? AND role=? AND origin='file' AND archived=0",
+            )
+            .bind(&p)
+            .bind(role_metric_text(role))
+            .fetch_all(&mut *tx)
+            .await?;
+            // 名字比对在 Rust 侧做,避开 IN (?,?,…) 的动态占位符拼接;
+            // 一个项目的指标是十几条量级,不值得为它上 SQL 生成。
+            for r in &rows {
+                let name: String = r.get("name");
+                if defs.iter().any(|m| m.name == name) {
+                    continue;
+                }
+                let id: String = r.get("id");
+                sqlx::query(
+                    "UPDATE metric SET archived=1, archived_at=?, updated_at=?, rev=rev+1 WHERE id=?",
+                )
+                .bind(t)
+                .bind(t)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+                auto_archived += 1;
+            }
+        }
+
         tx.commit().await?;
         Ok(MetricsFileSyncSummary {
             lagging_synced: sync.lagging.len() as u32,
             leading_synced: sync.leading.len() as u32,
+            auto_archived,
         })
+    }
+
+    async fn set_metric_archived(&self, metric: MetricId, archived: bool) -> Result<()> {
+        let t = now_unix();
+        sqlx::query(
+            "UPDATE metric SET archived=?, archived_at=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(archived as i64)
+        // 恢复时清掉时戳:archived_at 只在"当下正处于停用中"时才有意义,
+        // 留着一个陈旧的停用时刻会让人误以为它还停着。
+        .bind(if archived { Some(t) } else { None })
+        .bind(t)
+        .bind(metric.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn update_week_plan(
@@ -1129,8 +1194,14 @@ impl Store for SqliteStore {
         }
 
         // L1→L3: each metric's signal from its latest observation vs its target.
+        // `archived=0`:停用的指标整条退出派生 —— 既不再重算它自己那盏灯
+        // (缓存冻结在停用那一刻),也不进下面的 by_stage/by_project 上卷
+        // (一条被判定为坏指标的行不该再把项目健康灯往任何方向拽)。
+        // 恢复后它自然回到这个 SELECT 里,由下一次 recompute 重新派生。
+        // derive-only 不变:recompute_signals 仍是 signal 的唯一写入者。
         let metric_rows = sqlx::query(
-            "SELECT id, stage_kind, target_raw, amber_kind, amber_value FROM metric WHERE project_id=?",
+            "SELECT id, stage_kind, target_raw, amber_kind, amber_value
+             FROM metric WHERE project_id=? AND archived=0",
         )
         .bind(&p)
         .fetch_all(&self.pool)
@@ -1315,7 +1386,7 @@ impl Store for SqliteStore {
 
         let metric_rows = sqlx::query(
             "SELECT m.id, m.name, m.role, m.def, m.target_raw, m.last_target, m.driver, m.stage_kind, m.signal, m.hit,
-                    m.collect_kind, m.collect_query, m.origin,
+                    m.collect_kind, m.collect_query, m.origin, m.archived,
                     (SELECT raw FROM observation o WHERE o.metric_id = m.id ORDER BY ts DESC, rowid DESC LIMIT 1) AS value_raw,
                     (SELECT source_kind FROM observation o WHERE o.metric_id = m.id ORDER BY ts DESC, rowid DESC LIMIT 1) AS src
              FROM metric m WHERE m.project_id=? ORDER BY m.pos",
@@ -1347,6 +1418,7 @@ impl Store for SqliteStore {
                     collect_kind: r.get("collect_kind"),
                     collect_query: r.get("collect_query"),
                     origin: parse_metric_origin(&r.get::<String, _>("origin")),
+                    archived: r.get::<i64, _>("archived") != 0,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2207,13 +2279,13 @@ impl Store for SqliteStore {
         Ok(Some(card))
     }
 
-    async fn record_skill_use_by_name(&self, name: &str) -> Result<u32> {
-        let res = sqlx::query("UPDATE skill SET uses=uses+1, updated_at=?, rev=rev+1 WHERE name=?")
+    async fn record_skill_use(&self, id: SkillId) -> Result<()> {
+        sqlx::query("UPDATE skill SET uses=uses+1, updated_at=?, rev=rev+1 WHERE id=?")
             .bind(now_unix())
-            .bind(name)
+            .bind(id.uuid().to_string())
             .execute(&self.pool)
             .await?;
-        Ok(res.rows_affected() as u32)
+        Ok(())
     }
 
     /// Distill a new skill from a completed, assigned Issue — the "every
@@ -2470,22 +2542,22 @@ impl Store for SqliteStore {
         row.map(agent_row).transpose()
     }
 
-    async fn record_agent_run_by_name(&self, name: &str, ok: bool) -> Result<u32> {
+    async fn record_agent_run(&self, id: AgentId, ok: bool) -> Result<()> {
         // runs/wins are the real counters; win_rate is a derived display
         // string recomputed from them in the same statement — never patched
         // independently, so it can't drift from the counters it summarizes.
-        let res = sqlx::query(
+        sqlx::query(
             "UPDATE agent SET runs=runs+1, wins=wins+?, \
              win_rate = printf('%d%%', (wins+?)*100/(runs+1)), \
-             updated_at=?, rev=rev+1 WHERE name=?",
+             updated_at=?, rev=rev+1 WHERE id=?",
         )
         .bind(if ok { 1 } else { 0 })
         .bind(if ok { 1 } else { 0 })
         .bind(now_unix())
-        .bind(name)
+        .bind(id.uuid().to_string())
         .execute(&self.pool)
         .await?;
-        Ok(res.rows_affected() as u32)
+        Ok(())
     }
 
     async fn delete_agent(&self, id: AgentId) -> Result<()> {

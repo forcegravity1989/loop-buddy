@@ -1,0 +1,47 @@
+schema_version = 1
+
+# WorkflowHub · 指标正本
+#
+# 这份文件是 **WorkflowHub 这个项目**的指标正本,不是 BW 仓自己的。两者同址是
+# 有据的:WorkflowHub 的项目自述原话就是「Builders 工作台自己的 workflow 库…
+# 用这个仓库自己的真实 git 历史当证据」——它的工作区本来就该是 BW 仓。本轮
+# (2026-08-05)据此给它挂上 `workspace_path = <BW 仓根>`,正本落到契约要求的
+# `<工作区根>/.bw/metrics.toml`,和另外两个项目走同一条路:改指标 = 改这份文件
+# = 走 PR 审核,`SyncMetricsFile` 读它、同步进 SQLite 作只读缓存。
+#
+# 一处如实标注的偏差:推导文档没有按惯例放在 `<工作区根>/docs/metrics-rationale.md`,
+# 而是 `docs/metrics/workflowhub/metrics-rationale.md`——BW 仓的 docs/ 下已经住着
+# 大量本产品自己的文档,一份叫 metrics-rationale.md 的文件放在那里会被误读成
+# 「BW 产品的指标推导」。六判据打分、被拒的坏候选(含现行北极星为什么过不了)、
+# 成对反指标、0-40 质量门实际得分、每条指标可独立复核的 SQL,都在那份文件里。
+
+[north_star]
+name = "每月被标准工作流带完成的活数"
+def  = "过去 30 天内,状态真实到达 Done、且其执行链路上真实跑过一条 Hub 标准工作流(workflow_run.issue_id 关联到该 Issue、且 workflow_run.workflow_id 属于 Hub 的 workflow_spec)的 Issue 数。量的是「这些工作流真的把活带完成了」,不是「库里躺着多少条工作流」。注意 BW 的产品铁律在这里天然当护栏:Done 永不自动,InReview→Done 只能来自人显式点的 TransitionIssue,所以挂再多定时任务也刷不动这条指标。"
+collect = { kind = "bw", query = "issue.settled_at within 30d ∧ exists workflow_run(issue_id=issue.id, workflow_id ∈ workflow_spec)" }
+
+# ── 滞后指标(结果性:只能事后测,当下拧不动) ─────────────────────────
+[[lagging]]
+name   = "标准工作流执行成功率"
+def    = "过去 30 天内 workflow_run 中 status='ok' 的次数 ÷ 总次数。跑完才知道结果,当下拧不动 → 滞后。真实水位(2026-08-05 读回全库):13 次 run,6 次 ok、7 次 failed = 46.2%,失败集中在 2026-07-20~24。"
+target = "≥70%"
+collect = { kind = "bw", query = "workflow_run.status='ok' ratio within 30d" }
+
+[[lagging]]
+name   = "Hub 里 90 天零执行的条目占比"
+def    = "Hub 的 workflow_spec 中,过去 90 天内一次 workflow_run 都没有的条目占比——库存里有多少是死的。真实水位(2026-08-05 读回):6 条 spec 中只有 ecc-guide 跑过 1 次,五条阶段标准模板 runs 全是 0 → 83.3% 零执行。这条是对「条目总数」那类库存指标的正面对冲:数量涨而零执行占比不降,等于在囤积。"
+target = "≤20%"
+collect = { kind = "bw", query = "workflow_spec with zero workflow_run within 90d, ratio" }
+
+# ── 引领指标(过程性:当下可直接影响 + 对北极星有预测性) ───────────────
+[[leading]]
+name   = "30 天内被真实执行过的标准模板数"
+def    = "五条阶段标准工作流(原型/构建/优化/运营推广/运维)中,过去 30 天内至少被真实执行过一次的条数(0-5)。当下可影响:去跑一次就 +1。对北极星有预测性:一条从没被执行过的模板,不可能带出任何一件完成的活。真实水位:0/5——五条模板自 2026-07-10 入库至今 workflow_run 全为 0,一次都没被执行过。"
+target = "≥3"
+collect = { kind = "bw", query = "distinct workflow_spec(stage templates) with ≥1 workflow_run within 30d" }
+
+[[leading]]
+name   = "30 天内新增的工作流版本数"
+def    = "过去 30 天内新增的 workflow_version 行数。项目 desc 自述覆盖「创建 / 优化 / 评估 wf 全生命周期」,而「优化」这半段的产物就是新版本。当下可影响(改一版就 +1),对北极星有预测性(模板不迭代就不会变得更好用)。真实水位:0——workflow_version 表**全库零行**,即「优化 / 评估」这半个生命周期至今一次都没真正跑过。"
+target = "≥1"
+collect = { kind = "bw", query = "workflow_version created within 30d" }

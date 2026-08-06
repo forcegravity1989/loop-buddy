@@ -420,26 +420,6 @@ pub fn role_agents() -> Vec<(StageKind, RoleAgent)> {
         .collect()
 }
 
-/// plan/17: one stage's role agent rendered as a full `AGENT.md` document —
-/// the exact same format ECC agent files arrive in (frontmatter `name` /
-/// `description` / `model` + body = instructions), so bw-app's **single**
-/// agent parser ingests the five built-in roles and every external import
-/// through one code path. The five's真本 stays this code projection
-/// (StageKind 元数据驱动,方法论「versioned in code」不变);统一的是**装载
-/// 形态与解析器**,不是把活的元数据冻成会漂移的静态文件。
-///
-/// The body is [`role_preamble`]'s template verbatim — `{var}` slots and all
-/// (they are honestly part of the standing instructions; run time fills
-/// them via [`render`]).
-pub fn role_agent_md(kind: StageKind) -> String {
-    let role = format!("{} · {}段执行者", kind.methodology(), kind.label());
-    format!(
-        "---\nname: {name}\ndescription: {role}\nmodel: claude CLI · 跟随执行器配置\n---\n\n{body}",
-        name = kind.role_short(),
-        body = role_preamble(kind),
-    )
-}
-
 /// The "## 技能(工作方法)" block appended to each phase prompt — the stage's
 /// skills made *operative* (real content in the real prompt), not a name-only
 /// advisory hint. Empty string when the stage has no skills.

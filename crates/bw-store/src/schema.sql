@@ -73,6 +73,15 @@ CREATE TABLE IF NOT EXISTS metric (
     collect_kind       TEXT NOT NULL DEFAULT '', -- 'github'|'connector'|'bw'|'manual'|'script'|''
     collect_query      TEXT NOT NULL DEFAULT '',
     origin             TEXT NOT NULL DEFAULT 'manual', -- 'manual'(界面手建) | 'file'(正本文件同步)
+    -- 「停用/归档」——指标退役的唯一形态,替代物理删除。observation 是
+    -- append-only 的,硬删 metric 行要么级联抹掉真实历史、要么留下孤儿观测,
+    -- 两个都不可接受;archived 把「不想再看见它」和「它当初真测过什么」拆
+    -- 开:行留着、观测一条不删,只是退出界面默认视图 + 退出健康灯上卷 +
+    -- 退出自动采集。0=在用(存量行的真实状态,不是编的默认值) 1=已停用。
+    -- 停用后其 signal 缓存**冻结**在停用那一刻(recompute 跳过归档行),
+    -- 恢复后下一次 recompute 重新给它派生。
+    archived           INTEGER NOT NULL DEFAULT 0,
+    archived_at        INTEGER,                  -- 停用时刻 unix 秒;NULL=从未停用
     signal             TEXT,                     -- derived cache (L2/L3)
     hit                INTEGER,                  -- derived cache (= signal==green)
     signal_derived_rev INTEGER,
@@ -163,9 +172,12 @@ CREATE INDEX IF NOT EXISTS idx_handoff_project_ts ON handoff(project_id, created
 -- a deliberate architectural first: a hub entry is a catalog/library item that
 -- exists independent of any project. 2026-07-20 践行最小切片(plan/09 墙 B)
 -- added a nullable `project_id`: NULL keeps the original global/shared
--- semantics byte-for-byte; non-NULL marks a project-owned row. Query-side
--- scoping (指派下拉/技能注入/剧本选择只看本项目) is deliberately NOT part of
--- this slice — that's plan/08 的 P2,一次性做够,不留半破的收窄。
+-- semantics byte-for-byte; non-NULL marks a project-owned row.
+-- 2026-08-05 plan/20 落地了当年欠下的查询收窄(plan/08 P2,一次性做够):
+-- R1 选择池按作用域(他项目行绝不出现)、R2 按名解析就近优先
+-- (bw_core::scope::scoped_pick,项目行遮蔽全局行)、R3 记账 by-id
+-- (记账行==注入行)、R4 撞名同作用域内唯一(跨作用域同名=收录副本,合法)、
+-- R5 AdoptIntoProject 复制归项目。NULL 的全局/共享语义保持字节不差。
 
 CREATE TABLE IF NOT EXISTS workflow_spec (
     id             TEXT PRIMARY KEY,
