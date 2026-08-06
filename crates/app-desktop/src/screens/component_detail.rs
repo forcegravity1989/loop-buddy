@@ -454,7 +454,24 @@ fn CronDetailCard(
                 span { style: "{theme::chip(\"#EFE9DA\", ink2)}", "{c.status_label}" }
             }
             div { style: "font-size:13.5px;color:{ink2};margin-bottom:12px;",
-                if !c.mode_icon.is_empty() {
+                if c.is_collect_metrics {
+                    // PF1-R2-1①: CollectMetrics 详情卡专属分支(targets 非空时拼上
+                    // 指标名),不显示空「· 目标「」」(target 对 collect_metrics 无
+                    // 意义)。对仗 cron_hub.rs 列表行的 is_collect_metrics 分支。
+                    // P13(2026-08-06):前缀改中性「本项目全部 script 指标」,理由
+                    // 见 cron_hub.rs 同名分支注释——targets 不止代码仓统计。
+                    {
+                        let targets = c.collect_targets.join(" / ");
+                        let subtitle = if targets.is_empty() {
+                            "本项目全部 script 指标 · 每日".to_string()
+                        } else {
+                            format!("本项目全部 script 指标({targets})· 每日")
+                        };
+                        rsx! {
+                            span { "到点:📈 {subtitle}" }
+                        }
+                    }
+                } else if !c.mode_icon.is_empty() {
                     "到点:{c.mode_icon} {c.mode_label} · 目标「{target_display}」"
                 } else {
                     "到点:{c.mode_label} · 目标「{target_display}」"

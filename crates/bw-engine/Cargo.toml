@@ -22,6 +22,21 @@ time = { workspace = true }
 # shells out to the `claude` CLI (tokio::process). bw-engine is a native
 # runtime crate (not in the wasm32 keepalive set), so this is consistent.
 tokio = { workspace = true, features = ["process"] }
+# V1 Issue2 W2: PTY for in-app terminal embedding. buddy is Windows-only, so
+# Windows uses conpty-oxide (correctness-first ConPTY impl; portable-pty 0.9.0's
+# ConPTY impl doesn't deliver child stdout to the reader — see
+# docs/v1-prototype/issue2-metrics-interactive-loop.md §9). conpty-oxide is a
+# native runtime dep — not a UI dep, passes guard-kernel-ui-free.sh (bw-engine
+# does not touch dioxus/wry). Used by InteractiveCliExecutor::run_skill_pty to
+# spawn `claude` in a PTY and stream bytes to the UI via the App's watch channel.
+# Non-Windows keeps portable-pty as a keepalive dep (bw-engine is a native
+# runtime crate, not in the wasm32 set); the non-Windows path falls back to the
+# InteractiveExecutor trait default (PTY not supported → caller uses run_skill).
+[target.'cfg(windows)'.dependencies]
+conpty-oxide = "0.1"
+
+[target.'cfg(not(windows))'.dependencies]
+portable-pty = "0.9"
 
 [dev-dependencies]
 tokio = { workspace = true }

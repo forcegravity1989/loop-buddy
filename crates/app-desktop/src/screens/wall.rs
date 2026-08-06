@@ -4,6 +4,7 @@
 
 use crate::theme;
 use bw_app::Command;
+use bw_core::model::Signal;
 use dioxus::prelude::*;
 use ui::vm::ProjectCardVm;
 
@@ -25,6 +26,10 @@ pub fn Wall(projects: Vec<ProjectCardVm>, on_new: EventHandler<()>) -> Element {
                 span { style: "font-size:13px;color:{ink2};", "Builders' 工作台" }
             }
             h1 { style: "font-family:{serif};font-weight:600;font-size:30px;margin:0 0 6px;", "我的项目" }
+            // V1-Issue3 · cross-project health overview — moved here from the
+            // ProgressAll page (where it was per-project). The wall is the entry
+            // point: a glance at all projects' signals before you pick one.
+            HealthOverviewBar { projects: projects.clone() }
             p { style: "color:{ink2};font-size:13px;margin:0 0 30px;",
                 if empty {
                     "还没有项目。每个项目都从一句话意图开始,走完五段一环的创建引导 —— 从右侧虚线卡起步。"
@@ -38,6 +43,74 @@ pub fn Wall(projects: Vec<ProjectCardVm>, on_new: EventHandler<()>) -> Element {
                     ProjectCard { card: p }
                 }
                 NewCard { on_new }
+            }
+        }
+    }
+}
+
+/// V1-Issue3 · cross-project health summary bar — shows the signal distribution
+/// across all projects on the wall. "Green hides, only red/amber/unknown speak"
+/// (plan §6): green projects fold into a count, non-green ones speak. This is
+/// the entry-page health overview — the per-project cross-stage detail lives on
+/// the ProgressAll page's 阶段轴 (one dot per stage).
+#[component]
+fn HealthOverviewBar(projects: Vec<ProjectCardVm>) -> Element {
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+    let total = projects.len();
+    let green = projects
+        .iter()
+        .filter(|p| p.signal == Signal::Green)
+        .count();
+    let amber = projects
+        .iter()
+        .filter(|p| p.signal == Signal::Amber)
+        .count();
+    let red = projects.iter().filter(|p| p.signal == Signal::Red).count();
+    let unknown = projects
+        .iter()
+        .filter(|p| p.signal == Signal::Unknown)
+        .count();
+    let card = theme::card();
+    rsx! {
+        div {
+            style: "{card} padding:14px 18px;margin-bottom:18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;",
+            span { style: "font-family:{mono};font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:{ink3};", "健康概览" }
+            if total == 0 {
+                span { style: "font-size:13px;color:{ink3};", "尚无项目" }
+            } else {
+                div {
+                    style: "display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px;",
+                    if green > 0 {
+                        span {
+                            style: "display:inline-flex;align-items:center;gap:6px;",
+                            span { style: "{theme::dot(ui::signal_color(Signal::Green), 8)}" }
+                            span { style: "color:{ink3};", "{green} 平稳" }
+                        }
+                    }
+                    if amber > 0 {
+                        span {
+                            style: "display:inline-flex;align-items:center;gap:6px;",
+                            span { style: "{theme::dot(ui::signal_color(Signal::Amber), 8)}" }
+                            span { "需要关注 {amber}" }
+                        }
+                    }
+                    if red > 0 {
+                        span {
+                            style: "display:inline-flex;align-items:center;gap:6px;",
+                            span { style: "{theme::dot(ui::signal_color(Signal::Red), 8)}" }
+                            span { "阻塞 {red}" }
+                        }
+                    }
+                    if unknown > 0 {
+                        span {
+                            style: "display:inline-flex;align-items:center;gap:6px;",
+                            span { style: "{theme::dot(ui::signal_color(Signal::Unknown), 8)}" }
+                            span { style: "color:{ink3};", "无数据 {unknown}" }
+                        }
+                    }
+                }
+                span { style: "margin-left:auto;font-size:12px;color:{ink3};", "共 {total} 个项目" }
             }
         }
     }

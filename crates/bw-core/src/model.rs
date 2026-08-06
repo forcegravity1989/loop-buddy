@@ -1691,7 +1691,7 @@ impl CronMode {
             CronMode::RunSkill { .. } => "运行技能",
             CronMode::RunPrompt { .. } => "运行 Prompt",
             CronMode::CreateIssue => "建活(autopilot · 不自动跑)",
-            CronMode::CollectMetrics => "采集指标(pull GitHub → 观测)",
+            CronMode::CollectMetrics => "采集指标(脚本 → 观测)",
         }
     }
 
@@ -1872,6 +1872,25 @@ pub const CONNECTOR_KIND_GITHUB_REPO: &str = "github-repo";
 /// open.codehub.huawei.com,path=org/repo)。真探针走 `codehub-cli project view`
 /// (Remote::Codehub.probe,P3 已通);issue/MR 计数采集由 collect arm(P5)负责。
 pub const CONNECTOR_KIND_CODEHUB_REPO: &str = "codehub-repo";
+
+/// Map a codehub host *alias* (`green`/`open`/`yellow` — what the engine
+/// stores in `remote_host` and passes to `codehub-cli -H`) to the full web
+/// domain for browser-URL construction. Legacy full-domain values (e.g. an
+/// already-fully-qualified host stored by an older flow) pass through
+/// unchanged via the `_ => alias` arm. PRACTICE-buddy §3 convention:
+/// green→`codehub-g.huawei.com`, open→内源 `open.codehub.huawei.com`,
+/// yellow→`codehub-y.huawei.com`. Single source of truth — app-desktop's web
+/// links and any future engine-side URL builder share this one mapping
+/// instead of each re-deriving it. Pure (zero IO), wasm32-clean.
+pub fn codehub_alias_to_domain(alias: &str) -> &str {
+    match alias.trim() {
+        "green" => "codehub-g.huawei.com",
+        "open" => "open.codehub.huawei.com",
+        "yellow" => "codehub-y.huawei.com",
+        _ => alias,
+    }
+}
+
 /// plan18-③ · 项目侧脚本连接器:记录一个项目仓里既有的采集脚本(如
 /// `derive_*.py` 机械解析真实数据源、产出 `data.json`)。`config` 存 JSON:
 /// `{"script":"<相对工作区脚本路径>","output":"<相对工作区输出文件>","command":"<跑脚本的命令如 python>"}`。
@@ -2218,6 +2237,28 @@ pub struct Issue {
     /// seeded by C9+C10) is an honest skip, never an error.
     #[serde(default)]
     pub standard_skill: String,
+    /// V1 Issue2 Phase2a: whether the interactive skill session has been
+    /// started (first ▶跑 completed the 起手 prefix + spawned claude with
+    /// the skill body). `false` = first run will use `build_startup_plan`
+    /// (positional prompt + skill + bridge system prompt); `true` = resume
+    /// path (`claude --continue` — no new prompt, the session persists under
+    /// `~/.claude/projects/<encoded-cwd>/`). Set to `true` right before the
+    /// first spawn; never reset. Used to decide first-run vs resume in
+    /// `run_issue_interactive`.
+    #[serde(default)]
+    pub interactive_started: bool,
+    /// V1 Issue2 Phase2b: the claude session_id captured from the
+    /// SessionStart hook event (the hook listener POSTs to the app's local
+    /// HTTP server, which extracts `session_id` from the payload). `""` = not
+    /// yet captured — either the first spawn failed before the session was
+    /// established (F1: next ▶跑 falls back to `build_startup_plan`,
+    /// re-injecting the skill, never getting stuck), or the hook hasn't
+    /// fired yet. When non-empty, the next ▶跑 resumes via
+    /// `claude --resume <session_id>` (precise session, not `--continue`'s
+    /// "most recent in cwd"). Drives the resume decision (F1 fix):
+    /// `claude_session_id.is_empty()` = first run, non-empty = resume.
+    #[serde(default)]
+    pub claude_session_id: String,
     pub created_at: i64,
     pub updated_at: i64,
 }

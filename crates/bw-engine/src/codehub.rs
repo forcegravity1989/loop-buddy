@@ -9,6 +9,7 @@
 //! 不进 `Executor` 体系——`codehub-cli` 是 VCS 远端 API 客户端(对标 `gh`),
 //! 不是 agent 执行器(对标 `claude`)。两种 shell-out 模式别混。
 
+use crate::workspace::commit_initial;
 use std::path::Path;
 use std::process::Stdio;
 use time::Date;
@@ -21,6 +22,31 @@ pub enum CodehubError {
     Command(String),
     #[error("解析 codehub-cli 输出失败:{0}")]
     Parse(String),
+}
+
+/// A freshly-minted codehub repo's identity (the parity of
+/// [`crate::github::GithubRepoRef`]). `path` = `path_with_namespace`
+/// (e.g. `z30026659/my-service`); `host` = the API host alias
+/// (`open`/`green`/`yellow`); `visibility` = `private`/`public`/`internal`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodehubRepoRef {
+    pub host: String,
+    pub path: String,
+    pub visibility: String,
+}
+
+/// One row of `codehub-cli project list --mine` — the parity of
+/// [`crate::github::GithubRepoSummary`] for the「接入已有仓」picker. `path`
+/// = `path_with_namespace`; `pushed_at` is populated from codehub's
+/// `last_activity_at` field (codehub has no `pushedAt`; same semantic —
+/// the repo's last real activity timestamp).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodehubRepoSummary {
+    pub path: String,
+    pub visibility: String,
+    pub default_branch: String,
+    pub pushed_at: String,
+    pub description: String,
 }
 
 fn spawn_err(e: std::io::Error) -> CodehubError {
@@ -227,6 +253,55 @@ pub async fn create_mr(
     Ok(crate::github::PrOpened::Created(iid))
 }
 
+/// `codehub-cli mr list --source-branch <branch> --state opened --jq .[0].iid`
+/// → the iid of the first open MR sourced from `branch`, or `None` if no
+/// such MR exists. Read-only, zero repo side effects. Used by the InReview
+/// detection poller (V1 Issue2 Phase2a) to detect an MR the agent opened
+/// in-session — buddy doesn't create it (the agent does), buddy just reads
+/// it back (读回为证, not agent self-report).
+///
+/// Mirrors the existing `create_mr` adoption path's `mr list` call exactly
+/// (same flags, same `--jq .[0].iid` extraction). `Ok(None)` = no open MR
+/// for that branch — the honest "nothing to review yet" answer, not an
+/// error.
+pub async fn open_mr_for_branch(
+    host: &str,
+    path: &str,
+    branch: &str,
+) -> Result<Option<u32>, CodehubError> {
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "list",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--source-branch",
+            branch,
+            "--state",
+            "opened",
+            "--jq",
+            ".[0].iid",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() || text == "null" {
+        return Ok(None);
+    }
+    text.parse::<u32>()
+        .map(Some)
+        .map_err(|_| CodehubError::Parse(format!("无法解析 codehub MR iid:{text:?}")))
+}
+
 /// `codehub-cli mr merge <iid> --squash -y` — the codehub parity of
 /// [`crate::github::merge_pr`]: the human验收 action that integrates the
 /// source branch into the target. Squash-merges (matches github's `--squash`).
@@ -424,4 +499,240 @@ pub async fn clone_repo(host: &str, path: &str, dest: &Path) -> Result<(), Codeh
         return Err(CodehubError::Command(stderr_text(&out)));
     }
     Ok(())
+}
+
+// ─────────────── V1 · 新建仓 + 列仓 (对仗 github.rs create_repo/list_repos) ───────────────
+//
+// `codehub-cli project create --name <name> --visibility <vis> --namespace-id <nsid>`
+// + `project list --mine` — the codehub parity of `gh repo create`/`gh repo list`.
+// Both are stateless shell-outs with `tokio::process`, same as every other fn in
+// this module. Token goes via keyring (`auth login`), not passed here.
+
+/// Resolve the current user's personal namespace ID via `codehub-cli project list
+/// --mine --json namespace`. The user view doesn't expose `namespace.id` (only
+/// `id`/`username`), so the only reliable source is a project the user already
+/// owns under their personal namespace (`namespace.kind == "user"`). If
+/// `namespace` param is non-empty, match `namespace.full_path` against it;
+/// otherwise take the first `kind == "user"` namespace. Returns `None` when the
+/// user has no personal projects yet (caller falls back to `project create`
+/// without `--namespace-id`, which GitLab defaults to the user's personal
+/// namespace — same as `gh repo create` defaulting to the authenticated user).
+async fn resolve_personal_namespace_id(
+    host: &str,
+    namespace: &str,
+) -> Result<Option<u32>, CodehubError> {
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "-H",
+            host,
+            "project",
+            "list",
+            "--mine",
+            "--limit",
+            "50",
+            "--json",
+            "namespace",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        // Not fatal — fall back to no-namespace-id create. Log via stderr.
+        eprintln!(
+            "[BW] codehub namespace 解析失败(project list):{}",
+            stderr_text(&out)
+        );
+        return Ok(None);
+    }
+    let rows: Vec<NamespaceJson> = serde_json::from_slice(&out.stdout)
+        .map_err(|e| CodehubError::Parse(format!("project list namespace JSON:{e}")))?;
+    // Prefer an exact full_path match when `namespace` is provided; else first
+    // `kind == "user"`.
+    let want = namespace.trim();
+    if !want.is_empty() {
+        // The user typed a namespace — honour it or say why not. Silently
+        // falling through to "first personal namespace" would build the repo
+        // somewhere they didn't ask for and never tell them (group namespaces
+        // aren't supported in V1, so a group name lands here too).
+        return match rows
+            .iter()
+            .find(|r| r.namespace.kind == "user" && r.namespace.full_path == want)
+            .map(|r| r.namespace.id)
+        {
+            Some(nsid) => Ok(Some(nsid)),
+            None => Err(CodehubError::Parse(format!(
+                "namespace `{want}` 不在你的个人 namespace 里(V1 只支持建到个人 namespace,\
+                 group 未做)。留空走默认,或填你自己的 namespace。"
+            ))),
+        };
+    }
+    Ok(rows
+        .iter()
+        .find(|r| r.namespace.kind == "user")
+        .map(|r| r.namespace.id))
+}
+
+/// `codehub-cli -H <host> project create --name <name> --visibility <vis>
+/// --namespace-id <nsid>` → 取 ssh_url → raw `git clone` → 调
+/// [`crate::workspace::commit_initial`] 写 BW root commit(让
+/// `is_owned_workspace` = true,后续 charter/standards 才会写)。
+///
+/// 个人 `namespace-id` 由 [`resolve_personal_namespace_id`] 解析;解析不到
+/// (用户无个人仓)时退化为不带 `--namespace-id` 创建(GitLab 默认建到个人
+/// namespace,对标 `gh repo create` 的默认行为)。`namespace` 空串 = 同样
+/// 走默认。group namespace 选择 V1 不做(§6 偏差),如实标。
+///
+/// `readme_title`/`readme_body` 进 BW 自有的开仓 commit,与 github 新建仓
+/// 同一作者(`Builders' Workbench`),让两个 provider 的 owned 判定一致。
+pub async fn create_repo(
+    host: &str,
+    namespace: &str,
+    name: &str,
+    visibility: &str,
+    dest: &Path,
+    readme_title: &str,
+    readme_body: &str,
+) -> Result<CodehubRepoRef, CodehubError> {
+    // 1. 解析个人 namespace-id(可能 None → 不带 --namespace-id 创建)
+    let nsid = resolve_personal_namespace_id(host, namespace).await?;
+    // 2. project create --json ssh_url_to_repo,path_with_namespace,visibility
+    let mut args: Vec<String> = vec![
+        "-H".into(),
+        host.into(),
+        "project".into(),
+        "create".into(),
+        "--name".into(),
+        name.into(),
+        "--visibility".into(),
+        visibility.into(),
+    ];
+    if let Some(id) = nsid {
+        args.push("--namespace-id".into());
+        args.push(id.to_string());
+    }
+    args.push("--json".into());
+    args.push("ssh_url_to_repo,path_with_namespace,visibility".into());
+    let out = tokio::process::Command::new("codehub-cli")
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(format!(
+            "project create 失败:{}",
+            stderr_text(&out)
+        )));
+    }
+    let v: CreatedRepoJson = serde_json::from_slice(&out.stdout)
+        .map_err(|e| CodehubError::Parse(format!("project create JSON:{e}")))?;
+    let ssh_url = v.ssh_url_to_repo.trim().to_string();
+    if !ssh_url.starts_with("ssh://") {
+        return Err(CodehubError::Command(format!(
+            "新建仓无 SSH clone 地址(ssh_url_to_repo 为空或老仓?):{ssh_url:?}"
+        )));
+    }
+    // 3. raw git clone(SSH key 认证,同 clone_repo)
+    let out = tokio::process::Command::new("git")
+        .args(["clone", &ssh_url, &dest.to_string_lossy()])
+        .env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    // 4. 写 BW root commit(让 is_owned_workspace=true)
+    commit_initial(dest, readme_title, readme_body)
+        .await
+        .map_err(|e| CodehubError::Command(format!("初始提交失败:{e}")))?;
+    Ok(CodehubRepoRef {
+        host: host.to_string(),
+        path: v.path_with_namespace,
+        visibility: v.visibility,
+    })
+}
+
+/// `codehub-cli -H <host> project list --mine --limit N --json` → 仓列表
+/// (对仗 `gh repo list`)。Read-only,无副作用。解析
+/// `path_with_namespace`/`visibility`/`default_branch`/`last_activity_at`/
+/// `description` 成 [`CodehubRepoSummary`]。
+pub async fn list_repos(host: &str, limit: u32) -> Result<Vec<CodehubRepoSummary>, CodehubError> {
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "-H",
+            host,
+            "project",
+            "list",
+            "--mine",
+            "--limit",
+            &limit.to_string(),
+            "--json",
+            "path_with_namespace,visibility,default_branch,last_activity_at,description",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    let rows: Vec<CodehubRepoJson> = serde_json::from_slice(&out.stdout)
+        .map_err(|e| CodehubError::Parse(format!("project list JSON:{e}")))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| CodehubRepoSummary {
+            path: r.path_with_namespace,
+            visibility: r.visibility,
+            default_branch: r.default_branch,
+            pushed_at: r.last_activity_at,
+            description: r.description.unwrap_or_default(),
+        })
+        .collect())
+}
+
+// ─────────────── JSON deserialization helpers ───────────────
+
+#[derive(serde::Deserialize)]
+struct NamespaceJson {
+    namespace: NamespaceInner,
+}
+
+#[derive(serde::Deserialize)]
+struct NamespaceInner {
+    id: u32,
+    kind: String,
+    full_path: String,
+}
+
+#[derive(serde::Deserialize)]
+struct CreatedRepoJson {
+    ssh_url_to_repo: String,
+    path_with_namespace: String,
+    visibility: String,
+}
+
+#[derive(serde::Deserialize)]
+struct CodehubRepoJson {
+    path_with_namespace: String,
+    visibility: String,
+    #[serde(default)]
+    default_branch: String,
+    #[serde(default)]
+    last_activity_at: String,
+    #[serde(default)]
+    description: Option<String>,
 }

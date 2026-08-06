@@ -138,4 +138,21 @@ impl Remote {
             Remote::Codehub { host, path } => Ok(codehub::merge_mr(host, path, pr_number).await?),
         }
     }
+
+    /// V1 Issue2 Phase2a: read back whether an open PR/MR exists for the
+    /// issue's `bw/issue-<n>` branch — the InReview detection poller's
+    /// query (读回为证: buddy checks the remote itself, not agent self-report).
+    /// Github: `gh pr list --head <branch> --state open` (delegates to
+    /// [`github::open_pr_for_branch`]); codehub: `codehub-cli mr list
+    /// --source-branch <branch> --state opened` (delegates to
+    /// [`codehub::open_mr_for_branch`]). `Ok(None)` = no open PR/MR — the
+    /// honest "nothing to review yet" answer. Read-only, zero side effects.
+    pub async fn open_mr_for_branch(&self, branch: &str) -> Result<Option<u32>, RemoteError> {
+        match self {
+            Remote::Github(r) => Ok(github::open_pr_for_branch(r, branch).await?),
+            Remote::Codehub { host, path } => {
+                Ok(codehub::open_mr_for_branch(host, path, branch).await?)
+            }
+        }
+    }
 }

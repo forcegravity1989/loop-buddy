@@ -888,12 +888,13 @@ fn OptimizeWorkflowForm(
 
 /// The "dynamic workflow creation" surface: author a one-off `WorkflowKind::
 /// Dynamic` spec (prompt/phases/crew, no hub entry) and run it for real
-/// against a chosen project — the same real `Command::RunWorkflow` path
-/// `WorkflowStage`'s "▶ 运行" already uses for the built-in stage template,
-/// just with a user-authored spec instead of `stage_workflow(kind)`. Once it
-/// runs, the session's normal "沉淀为静态工作流" action (in the operating
-/// view) is the "运维" half of this loop — promote it, or let it stay a
-/// one-off.
+/// against a chosen project via `Command::RunWorkflow` — the same
+/// `run_workflow_inner` engine the stage-template path used before the old
+/// `RunStagePlaybook` button was retired (V1 Issue2 PTY cleanup — real work
+/// now starts from an Issue card's 「▶ 跑」), just with a user-authored spec
+/// instead of `stage_workflow(kind)`. Once it runs, the session's normal
+/// "沉淀为静态工作流" action (in the operating view) is the "运维" half of
+/// this loop — promote it, or let it stay a one-off.
 #[component]
 fn AdHocWorkflowForm(
     skills: Vec<SkillCardVm>,

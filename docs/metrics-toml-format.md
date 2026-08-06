@@ -93,6 +93,13 @@ collect = { kind = "github" | "connector" | "bw" | "manual" | "script", query = 
 "github"/"connector"/"bw"/"script" 指标是内容问题,留给「找指标」/「绑数据」
 Skill 处理,不是文件格式问题。
 
+> **`kind` 的方向(Forward-correct,V1 Issue2)**:`github`/`codehub`/`bw`/
+> `connector` 是 legacy inline arm,正在退休进 `script`——它们只是不同的
+> 脚本 instance(脚本不同但都是脚本),不是并列 kind。新写优先 `script`
+> (自动)或 `manual`(人填);legacy kind 的 inline 采集代码归采数/总览
+> 窗口收进 `script`。文件格式仍列五值兼容(解析器接受全部五值),但 skill
+> 和 guide 按两 kind 写。
+
 **采集器 v1(C7)真采 `github` + `script`**(外加既有 workspace evidence 覆盖
 的部分);`bw`/`connector` 两类如实留白——不采集、不写零值,看板上这些指标
 的 signal 保持 Unknown 灰,徽记标「v1 未接」。「无数据 = Unknown ≠ 绿」是硬

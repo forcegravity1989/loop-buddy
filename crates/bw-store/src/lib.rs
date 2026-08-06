@@ -153,6 +153,32 @@ pub struct MetricsFileSyncSummary {
     pub auto_archived: u32,
 }
 
+/// V1 Issue2 Phase 3: one `.bw/connectors.toml` connector definition, shaped
+/// for one atomic sync call. Parallel to [`MetricDefSync`] — the file's own
+/// identity is `(project_id, name)`, not a caller-minted id.
+pub struct ConnectorDefSync {
+    pub name: String,
+    /// Kind-specific real config, serialized as JSON `{script, command, output}`
+    /// (matches `ScriptConnectorConfig` in bw-app). The connector row's `config`
+    /// column stores this string verbatim.
+    pub config: String,
+}
+
+/// V1 Issue2 Phase 3: the whole `.bw/connectors.toml` file, shaped for one
+/// atomic sync call. Parallel to [`MetricsFileSync`].
+pub struct ConnectorsFileSync {
+    pub project_id: ProjectId,
+    pub connectors: Vec<ConnectorDefSync>,
+}
+
+/// V1 Issue2 Phase 3: the honest receipt of one connectors sync — real
+/// count of upserted rows, not "however many were in the file" (a connector
+/// skipped for some future validation reason would make those differ).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ConnectorsFileSyncSummary {
+    pub connectors_synced: u32,
+}
+
 pub struct NewStage {
     pub project_id: ProjectId,
     pub kind: StageKind,
@@ -354,6 +380,10 @@ pub struct NewCronTask {
     pub issue_stage: Option<StageKind>,
     /// A1: agent NAME to assign the minted Issue to (`None` = unassigned).
     pub issue_assignee: Option<String>,
+    /// PF1-4: 初始 `last_run_at`(unix sec)。`None`→0(NULL 语义,cron_due
+    /// 视为 never-run,首 tick 立即触发);`Some(t)`→t,避免新建 cron 在
+    /// setup 完成前抢跑。CollectMetrics cron 用 `Some(now())` 防竞态。
+    pub last_run_at: Option<i64>,
 }
 
 /// Write DTO for creating an [`Issue`]. `status` defaults to `Backlog`;
@@ -632,6 +662,16 @@ pub trait Store: Send + Sync {
     /// one layer up, in `bw-engine::metrics_file::read`), and this method
     /// keeps its own partial-failure window closed too.
     async fn sync_metrics_file(&self, sync: MetricsFileSync) -> Result<MetricsFileSyncSummary>;
+    /// V1 Issue2 Phase 3: upsert all `.bw/connectors.toml` connector
+    /// definitions for a project in one atomic transaction. Parallel to
+    /// [`sync_metrics_file`] — upserts by `(project_id, name)`, keeping
+    /// existing row ids (so connector history stays attached). Only
+    /// `kind = 'script'` connectors are synced from the file; other kinds
+    /// live in the DB from their creation paths.
+    async fn sync_connectors_file(
+        &self,
+        sync: ConnectorsFileSync,
+    ) -> Result<ConnectorsFileSyncSummary>;
     /// 停用(归档)/恢复一条指标 —— 指标退役的唯一形态,替代物理删除。
     /// `observation` 一个字节不碰(append-only 不可破:硬删 metric 行要么级联
     /// 抹掉真实历史、要么留下孤儿观测)。只翻 `metric.archived` + 盖
@@ -1002,6 +1042,18 @@ pub trait Store: Send + Sync {
     /// create` success — a failed/skipped PR simply never calls it, leaving
     /// the honest `0` default (提 PR 失败不炸 run). Never a fabricated number.
     async fn set_issue_pr_number(&self, id: IssueId, pr_number: u32) -> Result<()>;
+    /// V1 Issue2 Phase2a: mark the interactive session as started (first
+    /// ▶跑 spawned claude with the skill body). Called once right before the
+    /// first spawn; never reset. Drives the first-run vs resume decision in
+    /// `run_issue_interactive`.
+    async fn set_issue_interactive_started(&self, id: IssueId) -> Result<()>;
+    /// V1 Issue2 Phase2b: store the claude session_id captured from the
+    /// SessionStart hook event. Called when the hook listener receives a
+    /// SessionStart event and maps cwd → issue. An empty string clears it
+    /// (F1 recovery path). Drives the `--resume <id>` vs startup-plan
+    /// decision (F1 fix: empty session_id = fallback to build_startup_plan,
+    /// never get stuck in a skill-less session).
+    async fn set_issue_claude_session_id(&self, id: IssueId, session_id: &str) -> Result<()>;
     /// A5-F: the only way an issue reaches `Blocked` — sets status and reason
     /// together in one write. Legality (which source states may block) and
     /// the non-empty-reason rule are the App layer's job; the store just

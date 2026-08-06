@@ -187,6 +187,19 @@ pub struct MetricVm {
     pub trend: Vec<f32>,
     /// Sparkline geometry over the trend (empty polyline when <1 point).
     pub spark: SparkPath,
+    /// V1-Issue3 · true = 项目指标层B (intrinsic buddy-seeded code-stats:
+    /// 开放Issue/已合入MR/阶段完成), false = 业务指标层A (user's own
+    /// north-star / leading / lagging). Drives the 项目指标 strip vs 业务指标
+    /// section split. Name-based whitelist — no schema column added.
+    pub is_intrinsic: bool,
+    /// V1-Issue3 · week-over-week delta (latest ISO-week value − prior week).
+    /// None when <2 weeks of history — renders as "—".
+    pub weekly_delta: Option<f32>,
+    /// V1-Issue3 · last ~8 ISO weeks, one value per week (carry-forward when a
+    /// week has no observation). Empty when no parseable history at all.
+    pub weekly_spark: Vec<f32>,
+    /// V1-Issue3 · collection-chain status for the v2 card footer.
+    pub collection_chain: CollectionChainVm,
     /// 已停用(归档):退出默认视图,只在「已停用」折叠区里灰显。`signal`
     /// 是停用那一刻冻结的缓存,不是当下重算的值 —— 展示时要如实说明,
     /// 不能让人以为这是它此刻的健康状态。
@@ -198,9 +211,105 @@ pub struct MetricVm {
     pub from_file: bool,
 }
 
+/// V1-Issue3 · collection-chain status: how this metric is collected — drives
+/// the per-card collection-chain footer in the v2 业务指标 section.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct CollectionChainVm {
+    /// Two-kind forward-correct label:
+    /// - "script" (script connector, live)
+    /// - "manual" (手填 / 界面手建, no collection plan)
+    /// - "machine" (buddy auto-feeds an intrinsic metric, e.g. stage-done count)
+    /// - "legacy·迁script" (github/bw/connector — W2 Phase3 collapses to script)
+    pub collect_label: String,
+    /// The project's script connector name if this metric is script-collected.
+    pub connector_name: Option<String>,
+    /// The project's CollectMetrics cron task last tick (unix sec), if any.
+    pub cron_last_tick: Option<i64>,
+    /// Whether this metric has at least one observation.
+    pub has_observation: bool,
+}
+
 /// Sparkline box used by the stage KPI cards (matches prototype wsMetrics).
 pub const SPARK_W: f32 = 120.0;
 pub const SPARK_H: f32 = 34.0;
+
+/// V1-Issue3 · whitelist of W1-seeded intrinsic metric names (buddy's own
+/// code-stats, not the user's business metrics). Hits = layer-B 项目指标条,
+/// misses = layer-A 业务指标卡. Name-based — no schema column added. The three
+/// names come from `seed_stage_done_metrics` (`bw-app/src/lib.rs:2491` =
+/// "阶段完成 Issue 数") + `seed_codehub_public_metrics` PAIR (`lib.rs:2566` =
+/// "开放 Issue 数" / "已合入 MR 数"). A user metric whose name collides is a
+/// low-risk edge case (V1 accepts — see issue3 design §2).
+pub fn is_intrinsic_metric(name: &str) -> bool {
+    matches!(name, "阶段完成 Issue 数" | "开放 Issue 数" | "已合入 MR 数")
+}
+
+/// V1-Issue3 · forward-correct two-kind label from the raw `collect_kind`
+/// column. Empty collect_kind on an intrinsic metric = buddy auto-feeds it
+/// ("machine"); on a user metric = "manual" (界面手建). Legacy kinds
+/// (github/codehub/bw/connector) are all headed for script under W2 Phase 3,
+/// labeled "legacy·迁script" — honest about the migration direction without
+/// touching the enum (W2's scope).
+pub fn collect_label(collect_kind: &str, is_intrinsic: bool) -> &'static str {
+    match collect_kind {
+        "script" => "script",
+        "manual" => "manual",
+        "github" | "codehub" | "bw" | "connector" => "legacy·迁script",
+        _ => {
+            if is_intrinsic {
+                "machine"
+            } else {
+                "manual"
+            }
+        }
+    }
+}
+
+/// V1-Issue3 · bucket observations by ISO week, take the latest value per
+/// week for the last 8 weeks (carry-forward when a week has none). Empty when
+/// no parseable observation exists in the window. `obs` = `(unix_ts, raw)`
+/// pairs oldest→newest (caller ensures ASC — later values overwrite earlier
+/// within the same week bucket).
+pub fn weekly_spark(obs: &[(i64, String)], now_unix: i64) -> Vec<f32> {
+    let week_start = iso_week_start_unix(now_unix);
+    const DAY: i64 = 86_400;
+    const WEEK: i64 = 7 * DAY;
+    let mut latest: [Option<f32>; 8] = [None; 8];
+    for &(ts, ref raw) in obs {
+        let val = match parse_magnitude(raw) {
+            Some(m) => m as f32,
+            None => continue,
+        };
+        for (i, slot) in latest.iter_mut().enumerate() {
+            let bucket_start = week_start - (7 - i as i64) * WEEK;
+            if ts >= bucket_start && ts < bucket_start + WEEK {
+                *slot = Some(val);
+                break;
+            }
+        }
+    }
+    // Carry-forward: weeks with no observation inherit the last known value,
+    // so the sparkline reads as a continuous line (no gaps to misread as 0).
+    let mut spark = Vec::with_capacity(8);
+    let mut last: Option<f32> = None;
+    for v in latest.iter() {
+        if let Some(val) = v {
+            last = Some(*val);
+        }
+        if let Some(val) = last {
+            spark.push(val);
+        }
+    }
+    spark
+}
+
+/// V1-Issue3 · latest week − prior week. None when <2 weeks of history.
+pub fn weekly_delta(spark: &[f32]) -> Option<f32> {
+    match spark {
+        [.., a, b] => Some(*b - *a),
+        _ => None,
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn metric_vm(
@@ -220,11 +329,15 @@ pub fn metric_vm(
     archived: bool,
     from_file: bool,
     observation_raws: &[String],
+    weekly_spark: &[f32],
+    weekly_delta: Option<f32>,
+    collection_chain: CollectionChainVm,
 ) -> MetricVm {
     let trend: Vec<f32> = observation_raws
         .iter()
         .filter_map(|raw| parse_magnitude(raw).map(|m| m as f32))
         .collect();
+    let is_intrinsic = is_intrinsic_metric(name);
     MetricVm {
         id,
         name: name.into(),
@@ -243,6 +356,10 @@ pub fn metric_vm(
         from_file,
         spark: sparkline_path(&trend, SPARK_W, SPARK_H),
         trend,
+        is_intrinsic,
+        weekly_delta,
+        weekly_spark: weekly_spark.to_vec(),
+        collection_chain,
     }
 }
 
@@ -882,6 +999,12 @@ pub struct IssueDetailVm {
     pub runs: Vec<IssueRunRowVm>,
     /// (path, short commit, bytes) per registered artifact version.
     pub artifacts: Vec<(String, String, u64)>,
+    /// P2 (2026-08-06 cowelink 验证): 交互式活(找指标/绑数据)不写
+    /// `workflow_run` 行(§2.6 设计决定——过程在嵌入终端/`session.jsonl`
+    /// 里,不解析成摘要),`runs` 因此对交互式活恒为空。弹窗此前对空
+    /// `runs` 一律显示「还没有运行」,对交互式活是假话——已经跑过甚至跑
+    /// 完了,只是这条活从不产生这种记录。
+    pub is_interactive: bool,
 }
 
 fn duration_label(ms: Option<i64>) -> String {
@@ -956,6 +1079,7 @@ pub fn issue_detail_vm(
                 (a.path.clone(), short, a.bytes)
             })
             .collect(),
+        is_interactive: issue.interactive_started,
     }
 }
 
@@ -1355,6 +1479,15 @@ pub struct CronRowVm {
     /// T10: `RunPrompt`'s full text, for the "点击展开全文" affordance.
     /// `None` for every other mode.
     pub prompt_full: Option<String>,
+    /// PF1-3a: `CollectMetrics` 任务的采集目标名(从该项目
+    /// `collect_kind='script'` 的 metric name 派生,kernel 填)。cron 卡
+    /// 用它显示「采集代码仓指标(开放 Issue / 已合入 MR)· 每日」副标题。
+    /// 非 CollectMetrics 模式为空 Vec。
+    pub collect_targets: Vec<String>,
+    /// PF1-3a fixup: `true` only for `CronMode::CollectMetrics` — a stable
+    /// discriminant for the card's collect-metrics branch, so a label-text
+    /// rename can't silently drop the `collect_targets` subtitle (review F1).
+    pub is_collect_metrics: bool,
 }
 
 /// A real, honest first-40-character preview — counts chars (not bytes), so
@@ -1421,6 +1554,11 @@ pub fn cron_row(
         skill_missing,
         prompt_preview,
         prompt_full,
+        // PF1-3a: cron_row 无 store 访问,kernel 在 build_vm 里按项目指标派生后
+        // 覆盖;这里先空,保证非 CollectMetrics 模式与未填充时为零 Vec。
+        collect_targets: Vec::new(),
+        // PF1-3a fixup: 稳定判别,不靠 mode_label 字符串(文案改不失效)。
+        is_collect_metrics: matches!(c.mode, CronMode::CollectMetrics),
     }
 }
 
@@ -1492,7 +1630,7 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
             .next()
             .map(|ch| ch.to_string())
             .unwrap_or_default(),
-        kind: c.kind.clone(),
+        kind: connector_kind_label(c),
         status: c.status,
         status_label: c.status.label(),
         last_sync: c.last_sync.clone(),
@@ -1506,6 +1644,51 @@ pub fn connector_card(c: &Connector) -> ConnectorCardVm {
         ),
         project_id: c.project_id,
     }
+}
+
+/// PF1-3b: 连接器 kind → 角色人话标签(VM 层派生,存储仍原 kind)。
+/// 心智:script 也是连接器(kind=script,塞进 connector 表当一种 kind),
+/// 只是角色不同(对外连代码仓 vs 内部采集)。其余 kind 原样显示。
+fn connector_kind_label(c: &Connector) -> String {
+    match c.kind.as_str() {
+        bw_core::model::CONNECTOR_KIND_CODEHUB_REPO => "对外连接器 · 连 CodeHub 仓".to_string(),
+        bw_core::model::CONNECTOR_KIND_GITHUB_REPO => "对外连接器 · 连 GitHub 仓".to_string(),
+        bw_core::model::CONNECTOR_KIND_SCRIPT => script_connector_kind_label(c),
+        bw_core::model::CONNECTOR_KIND_CLAUDE_CLI => "对外连接器 · claude CLI".to_string(),
+        bw_core::model::CONNECTOR_KIND_GIT_REPO => "本地工作区(legacy)".to_string(),
+        _ => c.kind.clone(),
+    }
+}
+
+/// P12 (2026-08-06 cowelink 验证): 此前所有 `kind=script` 连接器一律标
+/// 「采集 Issue/MR」,连业务侧自采脚本(如 changelog 特性数)也被贴上这个
+/// 跟自己毫不相干的标签——用户看着连接器 Hub 会以为一个明明是采业务数据
+/// 的脚本在采 Issue/MR。CreateProject 建的仓统计脚本连接器固定命名
+/// `"{项目名} · 仓统计"`(`bw-app/lib.rs`),按这个名字识别；其余按
+/// `config` JSON 里的 `script` 字段抽脚本文件名,给一个真实反映内容的标签
+/// (无法解析时退化成通用「业务指标脚本」,不再乱贴"Issue/MR")。
+fn script_connector_kind_label(c: &Connector) -> String {
+    if c.name.contains("仓统计") {
+        return "脚本连接器 · 采集 Issue/MR".to_string();
+    }
+    match script_file_name_from_config(&c.config) {
+        Some(file) => format!("脚本连接器 · {file}"),
+        None => "脚本连接器 · 业务指标脚本".to_string(),
+    }
+}
+
+/// Best-effort `"script"` field extraction from a connector's raw JSON
+/// `config` string, without pulling in a JSON parser dependency just for a
+/// display label — safe because `config` is buddy's own serialized shape
+/// (`{"script": "...", ...}`, written by `sync_connectors_file_for`/
+/// `create_connector`), never untrusted external input.
+fn script_file_name_from_config(config: &str) -> Option<&str> {
+    let idx = config.find("\"script\"")?;
+    let rest = &config[idx + "\"script\"".len()..];
+    let after_colon = rest.split_once(':')?.1.trim_start();
+    let quoted = after_colon.strip_prefix('"')?;
+    let value = quoted.split('"').next()?;
+    value.rsplit(['/', '\\']).next().filter(|s| !s.is_empty())
 }
 
 #[derive(Clone, PartialEq, Debug)]

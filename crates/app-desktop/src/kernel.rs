@@ -14,11 +14,13 @@
 
 use bw_app::{ActionState, App, Command, Event, Panel, Scope, SettleReq, View};
 use bw_core::model::{
-    AgentRef, Author, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal, SkillRef,
-    StageKind,
+    AgentRef, Author, CronMode, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal,
+    SkillRef, StageKind, CONNECTOR_KIND_SCRIPT,
 };
 use bw_core::{MetricId, SessionId};
-use bw_engine::{ClaudeCliConfig, Engine, GithubRepoSummary, MockExecutor, PermissionMode};
+use bw_engine::{
+    ClaudeCliConfig, CodehubRepoSummary, Engine, GithubRepoSummary, MockExecutor, PermissionMode,
+};
 use bw_store::{MetricRole, SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,13 +28,14 @@ use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
-    activity_row, agent_card, attention_from_rows, cadence_label, connector_card, cron_row,
-    hub_overview, issue_card, knowledge_row, metric_vm, notify_feed, observation_feed,
-    project_card, session_status_label, settings_vm, skill_card, stage_detail, stage_nav,
-    version_log_vm, week_plan_rows, workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm,
-    ConnectorCardVm, CronRowVm, FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm,
-    NotifyItemVm, ProjectCardVm, SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm,
-    StageNavItemVm, WeekPlanRowVm, WorkflowHubRowVm,
+    activity_row, agent_card, attention_from_rows, cadence_label, collect_label, connector_card,
+    cron_row, hub_overview, is_intrinsic_metric, issue_card, knowledge_row, metric_vm, notify_feed,
+    observation_feed, project_card, session_status_label, settings_vm, skill_card, stage_detail,
+    stage_nav, version_log_vm, week_plan_rows, weekly_delta, weekly_spark, workflow_hub_row,
+    ActivityRowVm, ActivitySource, AgentCardVm, CollectionChainVm, ConnectorCardVm, CronRowVm,
+    FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm,
+    SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm,
+    WorkflowHubRowVm,
 };
 use ui::{overall_progress, Attention};
 
@@ -63,11 +66,21 @@ pub struct Vm {
     /// any project row exists. Empty until the Repo 卡片 first dispatches
     /// `ListGithubRepos` (switching to "接入已有仓").
     pub github_repos: Vec<GithubRepoSummary>,
+    /// CodeHub 为主体的创建流: last `Command::ListCodehubRepos` result —
+    /// same process-internal cache pattern as `github_repos`, populated by
+    /// the Repo 卡片's「接入已有仓」refresh button dispatching
+    /// `ListCodehubRepos{host}`.
+    pub codehub_repos: Vec<CodehubRepoSummary>,
     /// plan/17 S3: the in-flight backgrounded run's (project, issue), or
     /// `None` when nothing's running. The issue board uses this to show a
     /// 「⬇ 终止」 button on exactly the issue whose run is in flight, and to
     /// keep 「▶ 跑」 greyed for same-project siblings (serial lock).
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
+    /// V1 Issue2 Phase2b: whether a PTY session is active (the UI shows the
+    /// xterm.js terminal widget when `true`). Derived from
+    /// `AppState::pty_input_tx.is_some()` — set in `run_issue_interactive`
+    /// when spawning a PTY session, cleared when the session settles.
+    pub pty_active: bool,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -218,6 +231,10 @@ pub struct OpVm {
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
     /// P5: weekly-review card (top of the progress panel).
     pub week_review: ui::vm::WeekReviewVm,
+    /// V1 Issue2 Phase2b: whether a PTY session is active (the UI shows the
+    /// xterm.js terminal widget when `true`). Derived from
+    /// `AppState::pty_input_tx.is_some()` in `build_vm`.
+    pub pty_active: bool,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -409,6 +426,11 @@ pub struct Kernel {
     tx: mpsc::UnboundedSender<Command>,
     vm_rx: watch::Receiver<Vm>,
     notes: broadcast::Sender<UiNote>,
+    /// V1 Issue2 Phase2b: terminal bytes from the PTY (dedicated watch
+    /// channel, NOT the Vm — a regular `build_vm` could overwrite bytes
+    /// before the UI reads them). The pty_ticker arm sends each batch;
+    /// the UI's xterm.js widget reads via `changed()`.
+    pty_rx: watch::Receiver<Vec<u8>>,
 }
 
 impl Kernel {
@@ -420,6 +442,12 @@ impl Kernel {
     }
     pub fn notes(&self) -> broadcast::Receiver<UiNote> {
         self.notes.subscribe()
+    }
+    /// V1 Issue2 Phase2b: terminal bytes watch receiver. The UI's xterm.js
+    /// widget calls `changed().await` to get new bytes, then writes them
+    /// to the terminal via `document::eval`.
+    pub fn pty_bytes(&self) -> watch::Receiver<Vec<u8>> {
+        self.pty_rx.clone()
     }
 }
 
@@ -492,6 +520,10 @@ pub fn spawn() -> Kernel {
     let (vm_tx, vm_rx) = watch::channel(Vm::default());
     let (note_tx, _keep) = broadcast::channel::<UiNote>(256);
     let notes = note_tx.clone();
+    // V1 Issue2 Phase2b: dedicated watch channel for PTY terminal bytes.
+    // Separate from the Vm to avoid the race where a regular `build_vm`
+    // overwrites bytes before the UI reads them.
+    let (pty_tx, pty_rx) = watch::channel(Vec::<u8>::new());
 
     std::thread::Builder::new()
         .name("bw-kernel".into())
@@ -534,7 +566,11 @@ pub fn spawn() -> Kernel {
                 // matching `settle_rx` is polled in the `select!` loop
                 // below; examples / headless drivers never wire this →
                 // `RunIssue` stays inline there.
-                .with_settle_channel(settle_tx);
+                .with_settle_channel(settle_tx)
+                // V1 Issue2 Phase2b: enable PTY mode — interactive issue runs
+                // spawn claude in a PTY (portable-pty) instead of a system
+                // terminal, streaming bytes to the UI's xterm.js widget.
+                .with_pty();
 
                 // Live event → transient note forwarding. Runs concurrently with
                 // dispatch (progress events are emitted mid-run).
@@ -659,6 +695,14 @@ pub fn spawn() -> Kernel {
                 // fired something, so idle polling costs nothing extra.
                 let mut ticker = tokio::time::interval(Duration::from_secs(5));
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                // V1 Issue2 Phase2b: fast timer for PTY terminal bytes —
+                // drains `pty_bytes_rx` and rebuilds the Vm with the bytes.
+                // 100ms = 10fps, sufficient for terminal output (the human
+                // eye reads text at ~10 chars/sec; 8KB chunks every 100ms
+                // is plenty). Not a `tick_scheduler` call — this is a
+                // dedicated drain that bypasses cron/scheduler logic.
+                let mut pty_ticker = tokio::time::interval(Duration::from_millis(100));
+                pty_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
                 loop {
                     tokio::select! {
@@ -692,6 +736,17 @@ pub fn spawn() -> Kernel {
                                 }
                             }
                         }
+                        // V1 Issue2 Phase2b: drain PTY bytes → dedicated
+                        // watch channel (NOT the Vm — avoids the race where
+                        // a regular `build_vm` overwrites bytes before the UI
+                        // reads them). The UI's xterm.js widget reads via
+                        // `pty_rx.changed().await` and writes to the terminal.
+                        _ = pty_ticker.tick() => {
+                            let bytes = app.drain_pty_bytes();
+                            if !bytes.is_empty() {
+                                let _ = pty_tx.send(bytes);
+                            }
+                        }
                     }
                 }
             });
@@ -702,6 +757,7 @@ pub fn spawn() -> Kernel {
         tx: cmd_tx,
         vm_rx,
         notes,
+        pty_rx,
     }
 }
 
@@ -791,11 +847,26 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         .iter()
         .map(|p| (p.id, p.name.clone()))
         .collect();
-    let cron_tasks: Vec<CronRowVm> = state
-        .cron_tasks
-        .iter()
-        .map(|c| cron_row(c, &project_names, &state.skills, now))
-        .collect();
+    // PF1-3a: CollectMetrics 任务的副标题从该项目 collect_kind='script' 的
+    // metric name 派生(对仗 mode_label/mode_icon 同源)。卡只读 VM 无 store
+    // 访问,所以这里(kernel build_vm)填。best-effort:读失败空 Vec。
+    let mut cron_tasks: Vec<CronRowVm> = Vec::with_capacity(state.cron_tasks.len());
+    for c in state.cron_tasks.iter() {
+        let mut row = cron_row(c, &project_names, &state.skills, now);
+        if matches!(c.mode, CronMode::CollectMetrics) {
+            if let Some(pid) = c.project_id {
+                if let Ok(sigs) = store.persisted_signals(pid).await {
+                    row.collect_targets = sigs
+                        .metrics
+                        .iter()
+                        .filter(|m| m.collect_kind == "script")
+                        .map(|m| m.name.clone())
+                        .collect();
+                }
+            }
+        }
+        cron_tasks.push(row);
+    }
     let connectors: Vec<ConnectorCardVm> = state.connectors.iter().map(connector_card).collect();
     let knowledge_sources: Vec<KnowledgeRowVm> =
         state.knowledge_sources.iter().map(knowledge_row).collect();
@@ -863,7 +934,9 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         settings,
         cron_effectiveness,
         github_repos: state.github_repos.clone(),
+        codehub_repos: state.codehub_repos.clone(),
         active_run: app.active_run(),
+        pty_active: state.pty_input_tx.is_some(),
     };
 
     let Some(pid) = state.active_project else {
@@ -888,15 +961,54 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // Observation series per metric (ASC) — the honest trend + feed source.
     let mut series: HashMap<MetricId, Vec<String>> = HashMap::new();
     let mut latest_ts: HashMap<MetricId, OffsetDateTime> = HashMap::new();
+    // V1-Issue3 · per-metric (ts, raw) pairs for ISO-week sparkline bucketing.
+    let mut series_ts: HashMap<MetricId, Vec<(i64, String)>> = HashMap::new();
     for o in &observations {
         series.entry(o.metric_id).or_default().push(o.raw.clone());
         latest_ts.insert(o.metric_id, o.ts);
+        series_ts
+            .entry(o.metric_id)
+            .or_default()
+            .push((o.ts.unix_timestamp(), o.raw.clone()));
     }
+
+    // V1-Issue3 · the project's CollectMetrics cron last tick + script
+    // connector name — shared across all this project's metrics'
+    // collection_chain. Read from AppState's cached rows (already loaded by
+    // `refresh_cron_tasks`/`refresh_connectors`), no new store call.
+    let now_unix = now.unix_timestamp();
+    let cron_last_tick: Option<i64> = state
+        .cron_tasks
+        .iter()
+        .filter(|c| c.project_id == Some(pid) && matches!(c.mode, CronMode::CollectMetrics))
+        .filter_map(|c| c.last_run_at)
+        .map(|t| t.unix_timestamp())
+        .max();
+    let script_connector: Option<String> = state
+        .connectors
+        .iter()
+        .find(|c| c.project_id == Some(pid) && c.kind == CONNECTOR_KIND_SCRIPT)
+        .map(|c| c.name.clone());
 
     let metrics: Vec<MetricVm> = sigs
         .metrics
         .iter()
         .map(|m| {
+            let mid = m.id;
+            let obs_ts = series_ts.get(&mid).map(Vec::as_slice).unwrap_or(&[]);
+            let wk_spark = weekly_spark(obs_ts, now_unix);
+            let wk_delta = weekly_delta(&wk_spark);
+            let is_intrinsic = is_intrinsic_metric(&m.name);
+            let chain = CollectionChainVm {
+                collect_label: collect_label(&m.collect_kind, is_intrinsic).to_string(),
+                connector_name: if m.collect_kind == "script" {
+                    script_connector.clone()
+                } else {
+                    None
+                },
+                cron_last_tick,
+                has_observation: latest_ts.contains_key(&mid),
+            };
             metric_vm(
                 m.id,
                 &m.name,
@@ -914,6 +1026,9 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
                 m.archived,
                 m.origin == bw_store::MetricOrigin::File,
                 series.get(&m.id).map(Vec::as_slice).unwrap_or(&[]),
+                &wk_spark,
+                wk_delta,
+                chain,
             )
         })
         .collect();
@@ -1110,7 +1225,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // P5: weekly-review card — a pure read of already-recorded facts. Counts
     // come off `state.issues` + the per-metric latest-observation-ts map built
     // above; the date math (ISO week, 90-day line) lives in the VM.
-    let now_unix = now.unix_timestamp();
     let week_start = ui::vm::iso_week_start_unix(now_unix);
     let week_review = ui::vm::week_review_vm(
         now_unix,
@@ -1185,6 +1299,10 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         }),
         active_run: app.active_run(),
         week_review,
+        // V1 Issue2 Phase2b: PTY active flag (drives the xterm.js widget
+        // visibility in the WorkflowStage component).
+        pty_active: state.pty_input_tx.is_some(),
     });
+    vm.pty_active = state.pty_input_tx.is_some();
     vm
 }

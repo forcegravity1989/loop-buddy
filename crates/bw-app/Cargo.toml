@@ -10,14 +10,14 @@ rust-version.workspace = true
 bw-core = { workspace = true, features = ["idgen"] }
 bw-engine = { workspace = true }
 bw-store = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util"] }
 time = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util"] }
 bw-store = { workspace = true }
 bw-engine = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>总览重构 · 原型示意 · maas-locate</title>
+<style>
+  :root{
+    /* buddy 自有设计系统 — 取自 buddy-guide.html :root + 运营页减法方案信号色 */
+    --bg:#EFEBE2; --surface:#F4EFE3; --surface-2:#E7DFCD;
+    --fg:#2B2620; --muted:#6B6258; --border:#D9CFBC;
+    --accent:#C5654A; --accent-ink:#A84A30; --accent-soft:#E9C9BC;
+    --sig-green:#5F7355; --sig-amber:#B5862F; --sig-red:#B0503A; --sig-unknown:#A19B8D;
+    --font-display:'Noto Serif SC','Songti SC','STSong','SimSun',serif;
+    --font-body:'Noto Sans SC',system-ui,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+    --font-mono:'JetBrains Mono','Cascadia Code','Consolas','Courier New',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  ::selection{background:var(--accent-soft)}
+
+  /* ── 原型顶条 + toggle ── */
+  .proto-bar{position:sticky;top:0;z-index:30;background:rgba(239,235,226,.95);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  .proto-bar-inner{max-width:1040px;margin:0 auto;padding:10px 24px;display:flex;align-items:center;gap:14px}
+  .proto-brand{font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing:-.01em;white-space:nowrap}
+  .proto-brand .dot{color:var(--accent)}
+  .proto-sub{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .toggle{display:flex;background:var(--surface-2);border-radius:8px;padding:3px;gap:2px;margin-left:8px}
+  .toggle button{border:none;background:transparent;font-family:var(--font-body);font-size:13px;font-weight:500;padding:7px 16px;border-radius:6px;cursor:pointer;color:var(--muted);transition:all .12s;white-space:nowrap}
+  .toggle button.active{background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.06)}
+  .proto-badge{margin-left:auto;font-size:11px;letter-spacing:.06em;padding:4px 10px;border-radius:999px;border:1px solid #E3B7AD;color:#B0503A;background:#F6E3DE;font-weight:500;white-space:nowrap}
+
+  /* ── 主容器 ── */
+  .wrap{max-width:1040px;margin:0 auto;padding:24px 24px 90px}
+  .view{display:none}
+  .view.active{display:block;animation:fade .18s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+  /* ── 复用 buddy-guide 组件类 ── */
+  .eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-ink);font-weight:500;margin-bottom:10px}
+  h1.disp{font-family:var(--font-display);font-weight:700;font-size:30px;line-height:1.18;letter-spacing:-.02em;margin-bottom:14px}
+  .lede{font-size:16px;color:var(--muted);line-height:1.65;max-width:62ch;margin-bottom:26px}
+  h2.sec{font-family:var(--font-display);font-weight:600;font-size:20px;letter-spacing:-.01em;margin:26px 0 12px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  h2.sec .n{font-family:var(--font-mono);font-size:12px;font-weight:500;color:var(--accent-ink);background:var(--accent-soft);padding:2px 7px;border-radius:5px}
+  h2.sec .hint{font-family:var(--font-body);font-size:12px;font-weight:400;color:var(--muted)}
+  p{margin-bottom:12px;max-width:65ch} .muted{color:var(--muted)}
+  strong{font-weight:500} code,.mono{font-family:var(--font-mono);font-size:.92em}
+
+  .callout{display:flex;gap:12px;border-radius:10px;padding:14px 16px;margin:14px 0;border:1px solid var(--border);font-size:14px}
+  .callout svg{width:18px;height:18px;flex:0 0 18px;stroke-width:1.6;fill:none;margin-top:2px}
+  .callout.warn{background:#FBF1E2;border-color:#EAD0A6} .callout.warn svg{stroke:var(--sig-amber)}
+  .callout.note{background:var(--surface)} .callout.note svg{stroke:var(--accent)}
+  .callout.danger{background:#F6E3DE;border-color:#E3B7AD} .callout.danger svg{stroke:var(--sig-red)}
+  .callout .body strong{display:block;margin-bottom:2px}
+
+  .foot{margin-top:36px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);max-width:65ch}
+  .foot code{color:var(--accent-ink)}
+
+  /* ── 信号灯(健康灯) ── */
+  .lights{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0}
+  .light{display:flex;align-items:center;gap:8px;font-size:13px}
+  .light .d{width:14px;height:14px;border-radius:50%;border:1px solid rgba(0,0,0,.08)}
+  .light.g .d{background:var(--sig-green);opacity:.45}
+  .light.a .d{background:var(--sig-amber)}
+  .light.r .d{background:var(--sig-red)}
+  .light.u .d{background:var(--sig-unknown)}
+  .light .lbl{color:var(--muted)}
+
+  /* 小信号圆点(inline) */
+  .sig{display:inline-flex;align-items:center;gap:5px;font-size:13px}
+  .sig .dot{width:10px;height:10px;border-radius:50%;border:1px solid rgba(0,0,0,.08);flex:0 0 10px}
+  .sig.g .dot{background:var(--sig-green);opacity:.45}
+  .sig.a .dot{background:var(--sig-amber)}
+  .sig.r .dot{background:var(--sig-red)}
+  .sig.u .dot{background:var(--sig-unknown)}
+  .sig .lbl{color:var(--muted)}
+
+  /* 来源徽 */
+  .src-tag{font-family:var(--font-mono);font-size:10.5px;font-weight:500;padding:2px 7px;border-radius:4px;background:var(--surface-2);color:var(--muted);letter-spacing:.02em;white-space:nowrap}
+  .src-tag.script{color:#4A5E42;background:#E7EDE2}
+  .src-tag.machine{color:#5A4E7A;background:#EDE4F0}
+  .src-tag.manual{color:#8A6720;background:#F5ECD6}
+  .src-tag.none{color:var(--sig-red);background:#F6E3DE}
+
+  /* ════════════ 提议视图 v2 ════════════ */
+
+  /* 顶栏:北极星一句话常驻 */
+  .p-topbar{background:rgba(244,239,227,.7);border:1px solid var(--border);border-radius:12px;padding:12px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+  .p-back{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--muted)}
+  .p-back .arr{color:var(--border)}
+  .p-proj{font-family:var(--font-display);font-weight:600;font-size:17px;color:var(--fg)}
+  .p-status{font-size:11px;font-weight:500;padding:3px 9px;border-radius:5px;background:#E7EDE2;color:#4A5E42}
+  .p-sep{width:1px;height:16px;background:var(--border)}
+  .p-cycle{font-size:12px;color:var(--muted)}
+  .p-northstar{margin-left:auto;display:flex;align-items:center;gap:9px}
+  .p-ns-label{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .p-ns-val{font-family:var(--font-display);font-weight:600;font-size:13px;color:var(--fg)}
+
+  /* 阶段轴:5 chips 带 per-stage 信号点(无单独阶段 list 卡) */
+  .stage-axis{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:12px}
+  .stage-axis .sep{color:var(--border);margin:0 4px}
+  .stage-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:7px;border:1px solid transparent;cursor:pointer;font-size:12.5px;font-weight:500;color:var(--muted);white-space:nowrap}
+  .stage-chip:hover{background:rgba(197,101,74,.06)}
+  .stage-chip.active{background:var(--accent-soft);border-color:#E2C9BF;color:var(--accent-ink);font-weight:600}
+  .stage-chip .n{font-family:var(--font-mono);font-size:10px;font-weight:700;color:var(--muted)}
+  .stage-chip.active .n{color:var(--accent-ink)}
+  .stage-chip .dot{width:7px;height:7px;border-radius:50%;border:1px solid rgba(0,0,0,.08)}
+  .stage-chip.g .dot{background:var(--sig-green);opacity:.45}
+  .stage-chip.a .dot{background:var(--sig-amber)}
+  .stage-chip.r .dot{background:var(--sig-red)}
+  .stage-chip.u .dot{background:var(--sig-unknown)}
+
+  /* 工具栏 */
+  .toolbar{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:20px;padding:3px;background:var(--surface-2);border-radius:8px;width:fit-content}
+  .toolbar .grp{display:flex;gap:2px}
+  .toolbar .grp-sep{width:1px;height:18px;background:var(--border);margin:0 4px;align-self:center}
+  .toolbar button{border:none;background:transparent;font-family:var(--font-body);font-size:12.5px;font-weight:500;padding:7px 14px;border-radius:6px;cursor:pointer;color:var(--muted);transition:all .12s;white-space:nowrap}
+  .toolbar button:hover{color:var(--fg)}
+  .toolbar button.active{background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.06)}
+
+  /* 移走/退场 callout 容器 */
+  .moved-callouts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px}
+
+  /* 项目指标 · 代码仓级 · compact 顶条(占篇幅小,非大卡) */
+  .proj-strip{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 14px;display:flex;align-items:center;gap:6px 16px;flex-wrap:wrap;margin-bottom:24px}
+  .proj-strip .ps-label{font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+  .proj-strip .ps-item{display:inline-flex;align-items:baseline;gap:5px;font-size:12.5px}
+  .proj-strip .ps-name{color:var(--muted)}
+  .proj-strip .ps-val{font-family:var(--font-mono);font-weight:600;font-size:13px;color:var(--fg)}
+  .proj-strip .ps-dash{font-family:var(--font-mono);color:var(--border);font-size:13px}
+  .proj-strip .ps-note{font-size:11px;color:var(--muted);width:100%;margin-top:4px;line-height:1.5}
+
+  /* 业务指标 · 层A(北极星→滞后→引领,值卡并排) */
+  .biz-v2{margin-top:4px}
+  .biz-sub{margin-bottom:20px}
+  .biz-sub .sub-head{font-family:var(--font-mono);font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-ink);margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .biz-sub .sub-head .sub-note{font-family:var(--font-body);font-size:11.5px;font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)}
+  .biz-sub .sub-head .sub-tag{font-family:var(--font-body);font-size:10.5px;font-weight:500;padding:2px 7px;border-radius:4px;background:var(--surface-2);color:var(--muted);text-transform:none;letter-spacing:0}
+
+  /* 值卡 grid(并排,auto-fit) */
+  .vc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(218px,1fr));gap:12px}
+
+  /* 值卡:顶部当前值+目标+信号灯,下面 delta,最下 sparkline */
+  .vcard{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+  .vcard .vc-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .vcard .vc-name{font-family:var(--font-display);font-weight:600;font-size:14px;color:var(--fg)}
+  .vcard .vc-top{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .vcard .vc-cur{font-family:var(--font-display);font-weight:700;font-size:24px;line-height:1;color:var(--fg)}
+  .vcard .vc-target{font-size:12px;color:var(--muted)}
+  .vcard .vc-weekly{display:inline-flex;align-items:baseline;gap:5px;font-size:12px}
+  .vcard .vc-weekly .wl{color:var(--muted)}
+  .vcard .vc-weekly .wv{font-family:var(--font-mono);font-weight:600;color:var(--fg)}
+  .vcard .vc-achieved{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--muted)}
+  .vcard .vc-achieved .dot{width:9px;height:9px;border-radius:50%;border:1px solid rgba(0,0,0,.08)}
+  .vcard .vc-achieved.g .dot{background:var(--sig-green);opacity:.45}
+  .vcard .vc-achieved.a .dot{background:var(--sig-amber)}
+  .vcard .vc-delta{display:flex;align-items:center;gap:6px;font-size:12.5px;flex-wrap:wrap}
+  .vcard .vc-delta .dl{color:var(--muted)}
+  .vcard .vc-delta .dv{font-family:var(--font-mono);font-weight:600}
+  .vcard .vc-delta.up .dv{color:var(--sig-green)}
+  .vcard .vc-delta.down .dv{color:var(--sig-red)}
+  .vcard .vc-delta.none .dv{color:var(--sig-unknown)}
+  .vcard .vc-spark{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .vcard .vc-spark .wk{font-family:var(--font-mono);font-size:9.5px;color:var(--muted);letter-spacing:.04em}
+  .vcard .vc-chain{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap;line-height:1.5}
+  .vcard .vc-chain code{font-size:10.5px;color:var(--accent-ink)}
+
+  /* 北极星首卡:稍大/高亮 */
+  .vcard.ns{background:linear-gradient(135deg,#F7EDE7 0%,#F4EFE3 100%);border:1px solid #E2C9BF;border-left:4px solid var(--accent);padding:18px 20px}
+  .vcard.ns .vc-name{font-size:16px}
+  .vcard.ns .vc-cur{font-size:30px;color:var(--sig-amber)}
+
+  /* 诚实灰 case:无观测 = Unknown≠绿,折线画空 */
+  .vcard.grey{background:#F0EDE5;border:1px dashed #C8C2B4}
+  .vcard.grey .vc-cur{color:var(--sig-unknown);font-size:20px}
+  .vcard.grey .vc-spark .empty{font-family:var(--font-mono);font-size:10.5px;color:var(--sig-unknown);background:#E8E4DA;padding:2px 8px;border-radius:4px}
+
+  /* buddy 情况 · 一行(非卡) */
+  .buddy-line{margin:22px 0;padding:11px 14px;border-left:3px solid var(--accent);background:var(--surface);border-radius:0 8px 8px 0;font-size:13.5px;color:var(--fg);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .buddy-line .bl-label{font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .buddy-line .bl-sep{color:var(--border)}
+  .buddy-line strong{font-family:var(--font-mono);font-weight:600;color:var(--accent-ink)}
+
+  /* 配置折叠(收进次级,默认收起) */
+  .config-collapse{margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .config-head{display:flex;align-items:center;gap:11px;padding:13px 18px;cursor:pointer;user-select:none}
+  .config-head .title{font-family:var(--font-display);font-weight:600;font-size:15px;color:var(--fg)}
+  .config-head .note{font-size:12px;color:var(--muted)}
+  .config-head .arrow{margin-left:auto;font-family:var(--font-mono);font-size:14px;color:var(--muted)}
+  .config-body{display:none;border-top:1px solid var(--border);padding:14px 18px}
+  .config-body.open{display:block}
+  .config-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px dashed #EFEAE0;font-size:13.5px}
+  .config-item:last-child{border-bottom:none}
+  .config-item .ci-name{font-weight:500;min-width:130px}
+  .config-item .ci-val{color:var(--muted);font-family:var(--font-mono);font-size:12px}
+
+  /* ════════════ 现状视图 ════════════ */
+  .flat-stack{display:flex;flex-direction:column;gap:10px}
+  .flat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;position:relative}
+  .flat-card .fc-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .flat-card .fc-num{font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--muted);background:var(--surface-2);padding:2px 7px;border-radius:5px}
+  .flat-card .fc-title{font-weight:500;font-size:14px}
+  .flat-card .fc-body{font-size:13px;color:var(--muted);line-height:1.55}
+  .flat-card .fc-body .mini-lights{display:inline-flex;gap:10px;margin-left:8px;align-items:center}
+  .flat-card .fc-body .ml{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)}
+  .flat-card .fc-body .ml .d{width:9px;height:9px;border-radius:50%;border:1px solid rgba(0,0,0,.08)}
+  .flat-card .fc-body .ml.g .d{background:var(--sig-green);opacity:.45}
+  .flat-card .fc-body .ml.a .d{background:var(--sig-amber)}
+  .flat-card .fc-body .ml.r .d{background:var(--sig-red)}
+  .flat-card .fc-body .ml.u .d{background:var(--sig-unknown)}
+  .pain-pin{margin:6px 0 2px 26px;background:#F6E3DE;border:1px solid #E3B7AD;border-left:3px solid var(--sig-red);border-radius:0 8px 8px 0;padding:8px 12px;font-size:12.5px;color:#7A3D2D;display:flex;align-items:center;gap:7px}
+  .pain-pin svg{width:14px;height:14px;flex:0 0 14px;stroke:var(--sig-red);stroke-width:1.8;fill:none}
+  .pain-pin strong{color:var(--sig-red);font-weight:600}
+  .mixed-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}
+  .mixed-grid .mg{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:12px}
+  .mixed-grid .mg .mg-l{font-size:10px;color:var(--muted);margin-bottom:2px}
+  .mixed-grid .mg .mg-v{font-family:var(--font-mono);font-weight:600;font-size:13px}
+  .mixed-grid .mg.northstar{border-color:#E2C9BF;background:#F7EDE7;grid-column:span 3}
+  .mixed-grid .mg .sync-btn{font-size:11px;padding:3px 8px;border-radius:5px;background:var(--accent);color:#fff;border:none;cursor:pointer;margin-left:8px;font-family:var(--font-body)}
+  .fp-bar{width:100%;height:7px;background:var(--surface-2);border-radius:4px;overflow:hidden;margin-top:6px;max-width:280px}
+  .fp-bar .fill{height:100%;background:var(--accent);width:55%}
+  .stat-trio{display:flex;gap:14px;margin-top:6px}
+  .stat-trio .st{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-size:12.5px}
+  .stat-trio .st .v{font-family:var(--font-mono);font-weight:700;font-size:15px;color:var(--accent-ink)}
+  .mini-plan{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px}
+  .mini-plan th{font-family:var(--font-mono);font-size:10px;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);background:var(--surface-2)}
+  .mini-plan td{padding:6px 8px;border-bottom:1px solid #F0EBDF}
+  .mini-plan td:last-child{font-family:var(--font-mono)}
+</style>
+</head>
+<body>
+
+<!-- ╔══════════════════════════════════════════════════════════════════╗
+     ║  总览重构 · 原型示意  ·  maas-locate
+     ║  throwaway HTML alignment aid — NOT production (production = Dioxus in app-desktop)
+     ║  toggle: 【现状(扁平)】/【提议(重构)】  default = 提议
+     ║  数据为示意,渲染守诚实:无观测=灰,手填=「手填」,脚本采=〔脚本采〕
+     ╚══════════════════════════════════════════════════════════════════╝ -->
+
+<!-- 原型顶条 + toggle -->
+<div class="proto-bar">
+  <div class="proto-bar-inner">
+    <div class="proto-brand">buddy<span class="dot">.</span></div>
+    <span class="proto-sub">总览重构 · 原型</span>
+    <div class="toggle" id="toggle">
+      <button data-view="current">现状(扁平)</button>
+      <button data-view="proposed" class="active">提议(重构)</button>
+    </div>
+    <span class="proto-badge">原型示意 · 非真实数据</span>
+  </div>
+</div>
+
+<div class="wrap">
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<!--                      提议视图(v2 重构)                      -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<div class="view active" id="proposed">
+
+  <!-- 顶栏:北极星一句话常驻 -->
+  <div class="p-topbar">
+    <div class="p-back"><span class="arr">←</span> 全部项目</div>
+    <div class="p-sep"></div>
+    <span class="p-proj">maas-locate</span>
+    <span class="sig a"><span class="dot"></span></span>
+    <span class="p-status">运营中</span>
+    <span class="p-cycle">周期 2026-W32</span>
+    <div class="p-northstar">
+      <span class="p-ns-label">北极星</span>
+      <span class="p-ns-val">定界采纳率</span>
+    </div>
+  </div>
+
+  <!-- 阶段轴:5 chips 带 per-stage 信号点(无单独阶段 list 卡) -->
+  <div class="stage-axis">
+    <div class="stage-chip active"><span class="n">◎</span>全部·总览</div>
+    <span class="sep">│</span>
+    <div class="stage-chip g active"><span class="n">01</span><span class="dot"></span>原型</div>
+    <div class="stage-chip g"><span class="n">02</span><span class="dot"></span>构建</div>
+    <div class="stage-chip a"><span class="n">03</span><span class="dot"></span>优化</div>
+    <div class="stage-chip u"><span class="n">04</span><span class="dot"></span>运营推广</div>
+    <div class="stage-chip u"><span class="n">05</span><span class="dot"></span>运维</div>
+  </div>
+
+  <!-- 工具栏:6 panel -->
+  <div class="toolbar">
+    <div class="grp">
+      <button class="active">进度</button>
+      <button>Issue 看板</button>
+      <button>版本</button>
+    </div>
+    <div class="grp-sep"></div>
+    <div class="grp">
+      <button>工作流</button>
+      <button>定时任务</button>
+      <button>产物</button>
+    </div>
+  </div>
+
+  <!-- 顶部 callout 注两件(保持) -->
+  <div class="moved-callouts">
+    <div class="callout note">
+      <svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/><path d="M4 4l16 16" style="opacity:.3"/></svg>
+      <div class="body"><strong>健康概览(跨阶段)→ 移到项目列表入口墙(wall)</strong>总览里不再重复跨阶段信号灯——入口墙一眼选项目,总览聚焦本项目的指标与计划。</div>
+    </div>
+    <div class="callout danger">
+      <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+      <div class="body"><strong>↻ 同步指标文件按钮 → 退场</strong>merge 后自动同步指标定义 + cron 自动采数,流程顺了不需要手动按钮——它是流程没顺的证物。</div>
+    </div>
+  </div>
+  <!-- ════ 【项目指标】代码仓级 · compact 顶条(占篇幅小) ════ -->
+  <div class="proj-strip">
+    <span class="ps-label">项目指标 · 代码仓级</span>
+    <span class="ps-item"><span class="ps-name">开放 Issue</span><span class="ps-val">11</span><span class="src-tag script">〔脚本采〕</span></span>
+    <span class="ps-item"><span class="ps-name">已合入 MR</span><span class="ps-val">9</span><span class="src-tag script">〔脚本采〕</span></span>
+    <span class="ps-item"><span class="ps-name">阶段完成</span><span class="ps-val">1/2</span><span class="src-tag machine">〔机器记〕</span></span>
+    <span class="ps-item"><span class="ps-name">每周结算</span><span class="ps-dash">—</span><span class="src-tag none">未到</span></span>
+    <span class="ps-item"><span class="ps-name">每周合并 PR</span><span class="ps-dash">—</span><span class="src-tag none">未到</span></span>
+    <span class="ps-note">只当现状数 · 不上卷健康——buddy 固有工程数(Issue/MR/阶段),不点健康灯,不参与项目健康派生。来源徽:〔脚本采〕/〔机器记〕。</span>
+  </div>
+
+  <!-- ════ 【业务指标】层A 顺序固定:北极星 → 滞后 → 引领 ════ -->
+  <div class="eyebrow">业务指标 · 层A</div>
+  <h2 class="sec"><span class="n">业务指标</span>北极星 → 滞后 → 引领 <span class="hint">顺序固定 · 带健康灯 · 上卷项目健康</span></h2>
+
+  <div class="biz-v2">
+
+    <!-- Sub 1 · 北极星(首卡,稍大/高亮,全宽) -->
+    <div class="biz-sub">
+      <div class="sub-head">北极星 <span class="sub-note">首卡 · 高亮 · 项目唯一顶层指标</span><span class="sub-tag">顶层</span></div>
+      <div class="vc-grid" style="grid-template-columns:1fr">
+        <div class="vcard ns">
+          <div class="vc-head">
+            <span class="sig a"><span class="dot"></span><span class="lbl">amber</span></span>
+            <span class="vc-name">★ 定界采纳率</span>
+          </div>
+          <div class="vc-top">
+            <span class="vc-cur">42%</span>
+            <span class="vc-target">目标 ≥ 50%</span>
+          </div>
+          <div class="vc-delta up">
+            <span class="dl">vs 上周</span>
+            <span class="dv">↑ +3%</span>
+            <span class="dl" style="color:var(--sig-green)">缓升</span>
+          </div>
+          <div class="vc-spark">
+            <svg width="92" height="24" viewBox="0 0 92 24" aria-label="8 周走势 缓升">
+              <polyline points="0,22 13,19 26,18 39,15 51,12 64,10 77,7 90,4" stroke="#B5862F" fill="none" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+              <circle cx="90" cy="4" r="2.6" fill="#B5862F"/>
+            </svg>
+            <span class="wk">8 周走势</span>
+          </div>
+          <div class="vc-chain">
+            <span style="font-weight:500;color:var(--fg)">采集链:</span>
+            <code>script connector「maas·指标脚本」</code>
+            <span>→</span>
+            <code>cron 今天 tick</code>
+            <span>→</span>
+            <span>有观测 · 非 Unknown</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Sub 2 · 滞后性指标(只看不追,值卡并排) -->
+    <div class="biz-sub">
+      <div class="sub-head">滞后性指标 <span class="sub-note">结果型 · 看趋势不追本周</span><span class="sub-tag">只看不追</span></div>
+      <div class="vc-grid">
+
+        <div class="vcard">
+          <div class="vc-head">
+            <span class="sig r"><span class="dot"></span><span class="lbl">red</span></span>
+            <span class="vc-name">L3 未采纳率</span>
+          </div>
+          <div class="vc-top">
+            <span class="vc-cur">58%</span>
+            <span class="vc-target">越低越好</span>
+          </div>
+          <div class="vc-delta down">
+            <span class="dl">vs 上周</span>
+            <span class="dv">↓ -2%</span>
+          </div>
+          <div class="vc-spark">
+            <svg width="92" height="24" viewBox="0 0 92 24" aria-label="8 周 ↘">
+              <polyline points="0,4 13,7 26,9 39,12 51,14 64,17 77,17 90,22" stroke="#B0503A" fill="none" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+              <circle cx="90" cy="22" r="2.6" fill="#B0503A"/>
+            </svg>
+            <span class="wk">8 周 ↘</span>
+          </div>
+        </div>
+
+        <div class="vcard">
+          <div class="vc-head">
+            <span class="sig a"><span class="dot"></span><span class="lbl">amber</span></span>
+            <span class="vc-name">采纳率走势</span>
+            <span class="sub-tag">同北极星·滞后视角</span>
+          </div>
+          <div class="vc-top">
+            <span class="vc-cur">42%</span>
+            <span class="vc-target">目标 ≥ 50%</span>
+          </div>
+          <div class="vc-delta up">
+            <span class="dl">vs 上周</span>
+            <span class="dv">↑ +3%</span>
+          </div>
+          <div class="vc-spark">
+            <svg width="92" height="24" viewBox="0 0 92 24" aria-label="8 周走势 波动缓升">
+              <polyline points="0,22 13,18 26,20 39,14 51,16 64,12 77,10 90,4" stroke="#B5862F" fill="none" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+              <circle cx="90" cy="4" r="2.6" fill="#B5862F"/>
+            </svg>
+            <span class="wk">8 周走势</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Sub 3 · 引领性指标(定本周驱动项 · 本周计划折进卡里:本周目标+达成) -->
+    <div class="biz-sub">
+      <div class="sub-head">引领性指标 <span class="sub-note">定本周驱动项 · 计划指指标 · 指标验计划</span><span class="sub-tag">本周驱动</span></div>
+      <div class="vc-grid">
+
+        <div class="vcard">
+          <div class="vc-head">
+            <span class="sig g"><span class="dot"></span><span class="lbl">green</span></span>
+            <span class="vc-name">L1 新增采纳数</span>
+          </div>
+          <div class="vc-top">
+            <span class="vc-cur">4</span>
+            <span class="vc-weekly"><span class="wl">本周目标</span><span class="wv">5</span></span>
+            <span class="vc-achieved g"><span class="dot"></span>达成</span>
+          </div>
+          <div class="vc-delta up">
+            <span class="dl">vs 上周</span>
+            <span class="dv">↑ +1</span>
+          </div>
+          <div class="vc-spark">
+            <svg width="92" height="24" viewBox="0 0 92 24" aria-label="8 周 ↗">
+              <polyline points="0,22 13,16 26,16 39,10 51,10 64,10 77,4 90,4" stroke="#5F7355" fill="none" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+              <circle cx="90" cy="4" r="2.6" fill="#5F7355" opacity=".5"/>
+            </svg>
+            <span class="wk">8 周 ↗</span>
+          </div>
+        </div>
+
+        <div class="vcard">
+          <div class="vc-head">
+            <span class="sig a"><span class="dot"></span><span class="lbl">amber</span></span>
+            <span class="vc-name">L2 周活留存率</span>
+          </div>
+          <div class="vc-top">
+            <span class="vc-cur">58%</span>
+            <span class="vc-weekly"><span class="wl">本周目标</span><span class="wv">65%</span></span>
+            <span class="vc-achieved a"><span class="dot"></span>未</span>
+          </div>
+          <div class="vc-delta down">
+            <span class="dl">vs 上周</span>
+            <span class="dv">↓ -2%</span>
+          </div>
+          <div class="vc-spark">
+            <svg width="92" height="24" viewBox="0 0 92 24" aria-label="8 周 ↘">
+              <polyline points="0,8 13,4 26,11 39,8 51,15 64,18 77,15 90,22" stroke="#B5862F" fill="none" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+              <circle cx="90" cy="22" r="2.6" fill="#B5862F"/>
+            </svg>
+            <span class="wk">8 周 ↘</span>
+          </div>
+        </div>
+        <!-- 一条诚实灰 case:和业务指标卡并排,显「无数据」 -->
+        <div class="vcard grey">
+          <div class="vc-head">
+            <span class="sig u"><span class="dot"></span><span class="lbl">unknown</span></span>
+            <span class="vc-name">客户端拦截准确率</span>
+            <span class="sub-tag">无数据</span>
+          </div>
+          <div class="vc-top">
+            <span class="vc-cur">—</span>
+            <span class="vc-target">目标未设</span>
+          </div>
+          <div class="vc-delta none">
+            <span class="dl">vs 上周</span>
+            <span class="dv">—</span>
+            <span class="dl">无上周观测</span>
+          </div>
+          <div class="vc-spark">
+            <svg width="92" height="24" viewBox="0 0 92 24" aria-label="无观测·折线画空">
+              <line x1="0" y1="22" x2="92" y2="22" stroke="#C8C2B4" stroke-width="1" stroke-dasharray="3 4"/>
+            </svg>
+            <span class="empty">无观测 · Unknown≠绿</span>
+          </div>
+          <div class="vc-chain" style="color:var(--sig-unknown)">窗口二未绑采数 · 待接入 script connector 后点亮</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 诚实说明:sparkline = 观测历史 -->
+    <p style="font-size:11.5px;color:var(--muted);margin-top:-4px;margin-bottom:0;line-height:1.6">
+      周折线 = 观测历史(append-only · cron 日采)· delta = 当前 vs 上周观测 ·
+      <strong style="color:var(--sig-unknown)">无观测则折线空、delta 显「—」</strong>(见上灰卡:客户端拦截准确率未绑采数,不假装绿)。
+    </p>
+  </div>
+
+  <!-- ════ 【buddy 情况·一行】(需人关注的,非卡) ════ -->
+  <div class="buddy-line">
+    <span class="bl-label">buddy 情况</span>
+    <span class="sig a"><span class="dot"></span><span class="lbl">原型阶段</span></span>
+    <span>2 条 Issue 评审中待你 merge</span>
+    <span class="bl-sep">·</span>
+    <span>北极星 42% 距目标 50% 仍差 8% · 建议拉引领</span>
+    <span class="bl-sep">·</span>
+    <span>本周完成 <strong>3</strong> / 开放 <strong>8</strong></span>
+  </div>
+
+  <!-- ════ 【▾配置】(折叠收次级,默认收起) ════ -->
+  <div class="config-collapse">
+    <div class="config-head" id="config-toggle">
+      <span style="font-family:var(--font-mono);color:var(--muted)">▾</span>
+      <span class="title">配置</span>
+      <span class="note">收进次级 · 总览是看指标的不是改配置的</span>
+      <span class="arrow">收起 ▸</span>
+    </div>
+    <div class="config-body" id="config-body">
+      <div class="config-item">
+        <span class="ci-name">编辑项目</span>
+        <span class="ci-val">名称 / 描述 / 对标 / 机会 / 北极星…</span>
+      </div>
+      <div class="config-item">
+        <span class="ci-name">真执行工作目录</span>
+        <span class="ci-val">/workspaces/maas-locate · 允许 cargo test · 远端 codehub</span>
+      </div>
+      <div class="config-item">
+        <span class="ci-name">接入仓库</span>
+        <span class="ci-val">codehub · 已接入 · green</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    v2 重构:项目指标 compact 顶条 / 业务指标 北极星→滞后→引领 值卡并排(delta+周折线) /
+    本周计划折进引领卡(本周目标+达成) / 阶段 list + 总进度 移除(阶段轴已示) / buddy 情况一行 / 无数据灰卡 折线空。
+    事实源:<code>design/ops-page-reduction/运营页减法方案.dc.html</code>(减法方案 + 引领/滞后 split)、
+    <code>docs/guide/buddy-guide.html</code>(设计 token 与组件类)、
+    <code>plan/06-overall-alignment.md</code>(总览重构执行队列)。
+    原型示意,数据非真实——渲染守诚实:无观测=灰 Unknown,脚本采=〔脚本采〕,机器记=〔机器记〕。
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<!--                      现状视图(扁平)                         -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<div class="view" id="current">
+  <div class="eyebrow">现状 · 扁平 10 卡竖堆</div>
+  <h1 class="disp">maas-locate · 总览(现状)</h1>
+  <p class="lede">10 张卡平铺竖堆,配置夹中间抢主视觉、业务与固有混一锅、lagging 无标注、↻ 同步按钮是流程没顺的证物。下方红 pin 标出 6 处痛点。</p>
+
+  <div class="flat-stack">
+
+    <!-- 1. 健康概览 -->
+    <div class="flat-card">
+      <div class="fc-head"><span class="fc-num">01</span><span class="fc-title">健康概览</span></div>
+      <div class="fc-body">跨阶段信号灯:
+        <span class="mini-lights">
+          <span class="ml g"><span class="d"></span>原型</span>
+          <span class="ml g"><span class="d"></span>构建</span>
+          <span class="ml a"><span class="d"></span>优化</span>
+          <span class="ml u"><span class="d"></span>运营推广</span>
+          <span class="ml u"><span class="d"></span>运维</span>
+        </span>
+      </div>
+      <div class="pain-pin"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg><strong>痛点</strong>健康概览卡在总览里——跨阶段信号灯属于项目列表入口墙,总览不该重复。</div>
+    </div>
+
+    <!-- 2. 本周复盘 -->
+    <div class="flat-card">
+      <div class="fc-head"><span class="fc-num">02</span><span class="fc-title">本周复盘</span></div>
+      <div class="fc-body">统计 tile:本周完成 <strong>3</strong> · 开放 <strong>11</strong> · 指标陈旧 <strong>2</strong> · 目标 <strong>5</strong></div>
+    </div>
+
+    <!-- 3. 编辑项目 -->
+    <div class="flat-card">
+      <div class="fc-head"><span class="fc-num">03</span><span class="fc-title">编辑项目</span></div>
+      <div class="fc-body">名称 / 描述 / 对标 / 机会 / 北极星…</div>
+    </div>
+
+    <!-- 4. 真执行工作目录 -->
+    <div class="flat-card">
+      <div class="fc-head"><span class="fc-num">04</span><span class="fc-title">真执行工作目录</span></div>
+      <div class="fc-body">路径 /workspaces/maas-locate · 允许命令 cargo test · 远端 codehub</div>
+    </div>
+
+    <!-- 5. 接入仓库 -->
+    <div class="flat-card">
+      <div class="fc-head"><span class="fc-num">05</span><span class="fc-title">接入仓库</span></div>
+      <div class="fc-body">若没接 → codehub · 已接入 · green</div>
+    </div>
+
+    <!-- 配置卡痛点 pin(夹在 03/04/05 中间) -->
+    <div class="pain-pin" style="margin-left:0"><svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg><strong>痛点</strong>配置卡(03/04/05)夹中间抢主视觉——总览是看指标的,配置该收进次级折叠区。</div>
+
+    <!-- 6. 总进度 -->
+    <div class="flat-card">
+      <div class="fc-head"><span class="fc-num">06</span><span class="fc-title">总进度</span></div>
+      <div class="fc-body">███░░ 55%
+        <div class="fp-bar"><div class="fill"></div></div>
+      </div>
+    </div>
+
+    <!-- 7. 三 stat -->
+    <div class="flat-card">
+      <div class="fc-head"><span class="fc-num">07</span><span class="fc-title">运行统计</span></div>
+      <div class="fc-body">
+        <div class="stat-trio">
+          <div class="st">工作流 <span class="v">3</span></div>
+          <div class="st">定时 <span class="v">2</span></div>
+          <div class="st">优化中 <span class="v">1</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 8. 本周计划(只引领指标) -->
+    <div class="flat-card">
+      <div class="fc-head"><span class="fc-num">08</span><span class="fc-title">本周计划</span></div>
+      <div class="fc-body">只引领指标,6 列表:
+        <table class="mini-plan">
+          <thead><tr><th>引领</th><th>上周</th><th>当前</th><th>本周目标</th><th>抓手</th><th>达成</th></tr></thead>
+          <tbody>
+            <tr><td>L1 新增采纳数</td><td>3</td><td>4</td><td>5</td><td>脚本X</td><td>●</td></tr>
+            <tr><td>L2 周活留存率</td><td>60%</td><td>58%</td><td>65%</td><td>脚本Y</td><td>○</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 9. 项目级业务指标 grid(混一锅) -->
+    <div class="flat-card">
+      <div class="fc-head"><span class="fc-num">09</span><span class="fc-title">项目级业务指标</span></div>
+      <div class="fc-body">grid 混一锅:北极星 + L1/L2/L3 + 开放 Issue + 已合入 MR,lagging 无标注
+        <div class="mixed-grid">
+          <div class="mg northstar"><div class="mg-l">★ 北极星 · 定界采纳率</div><div class="mg-v">42% / ≥50% ●amber <button class="sync-btn">↻ 同步指标文件</button></div></div>
+          <div class="mg"><div class="mg-l">L1 新增采纳数(引领)</div><div class="mg-v">4 → 5 ●</div></div>
+          <div class="mg"><div class="mg-l">L2 周活留存率(引领)</div><div class="mg-v">58% → 65% ●</div></div>
+          <div class="mg"><div class="mg-l">L3 未采纳率</div><div class="mg-v">58% ●</div></div>
+          <div class="mg"><div class="mg-l">采纳率</div><div class="mg-v">42% ●</div></div>
+          <div class="mg"><div class="mg-l">开放 Issue</div><div class="mg-v">11</div></div>
+          <div class="mg"><div class="mg-l">已合入 MR</div><div class="mg-v">9</div></div>
+        </div>
+      </div>
+      <!-- 三个痛点 pin 在这张卡上 -->
+      <div class="pain-pin"><svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg><strong>痛点①</strong>业务+固有混一锅分不清主次——北极星/L1/L2/L3(项目自己的)与开放 Issue/已合入 MR(buddy 固有现状数)混在同一张 grid,看不出谁是健康、谁是状态。</div>
+      <div class="pain-pin"><svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg><strong>痛点②</strong>lagging 没标注——L3/采纳率是滞后指标,但 grid 里没标「滞后/只看不追」,和引领指标并列容易误追。</div>
+      <div class="pain-pin"><svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg><strong>痛点③</strong>↻ 同步指标文件按钮——流程没顺的证物:指标定义该 merge 自动同步,采数该 cron 自动跑,不需要手动按钮。</div>
+    </div>
+
+    <!-- 计划与指标没联动 pin -->
+    <div class="pain-pin" style="margin-left:0"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg><strong>痛点</strong>本周计划(卡08)和指标(卡09)两张卡没联动——计划写的 L1/L2 目标值与指标卡里的 L1/L2 当前值不在一处,看不出计划兑现没兑现。</div>
+
+    <!-- 10. 阶段 list -->
+    <div class="flat-card">
+      <div class="fc-head"><span class="fc-num">10</span><span class="fc-title">阶段 list</span></div>
+      <div class="fc-body">5 阶段进度 + 健康灯:
+        <span class="mini-lights" style="margin-top:4px">
+          <span class="ml g"><span class="d"></span>原型 100%</span>
+          <span class="ml g"><span class="d"></span>构建 100%</span>
+          <span class="ml a"><span class="d"></span>优化 72%</span>
+          <span class="ml u"><span class="d"></span>运营推广 —</span>
+          <span class="ml u"><span class="d"></span>运维 —</span>
+        </span>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="foot">
+    现状为 sketch(轻量示意),只标结构与痛点;高保真见「提议」视图。
+    痛点对照 <code>design/ops-page-reduction/运营页减法方案.dc.html</code> 的减法思路。
+  </div>
+</div>
+
+</div><!-- /wrap -->
+
+<script>
+/* toggle:【现状】/【提议】  default = 提议 */
+(function(){
+  var buttons = document.querySelectorAll('#toggle button');
+  var views = document.querySelectorAll('.view');
+  function show(name){
+    buttons.forEach(function(b){ b.classList.toggle('active', b.dataset.view === name); });
+    views.forEach(function(v){ v.classList.toggle('active', v.id === name); });
+    window.scrollTo(0,0);
+  }
+  buttons.forEach(function(b){ b.addEventListener('click', function(){ show(b.dataset.view); }); });
+
+  /* 配置折叠:默认收起,点开/收 */
+  var cfgHead = document.getElementById('config-toggle');
+  var cfgBody = document.getElementById('config-body');
+  var cfgOpen = false;
+  if(cfgHead){
+    cfgHead.addEventListener('click', function(){
+      cfgOpen = !cfgOpen;
+      cfgBody.classList.toggle('open', cfgOpen);
+      cfgHead.querySelector('.arrow').textContent = cfgOpen ? '收起 ▾' : '展开 ▸';
+      cfgHead.querySelector('span:first-child').textContent = cfgOpen ? '▴' : '▾';
+    });
+    /* 默认收起,arrow 文案 */
+    cfgHead.querySelector('.arrow').textContent = '展开 ▸';
+  }
+})();
+</script>
+</body>
+</html>

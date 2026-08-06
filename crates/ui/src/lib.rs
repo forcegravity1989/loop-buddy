@@ -101,7 +101,7 @@ pub fn sparkline_path(trend: &[f32], w: f32, h: f32) -> SparkPath {
 
     let x_at = |i: usize| -> f32 {
         if n == 1 {
-            0.0
+            w / 2.0 // PF1-R4: n==1 居中,避免 circle 被左边缘裁掉
         } else {
             (i as f32 / (n - 1) as f32) * w
         }
@@ -122,12 +122,18 @@ pub fn sparkline_path(trend: &[f32], w: f32, h: f32) -> SparkPath {
         polyline.push_str(&format!("{:.1},{:.1}", x_at(i), y_at(v)));
     }
 
-    // Area: baseline → curve → baseline, closed.
-    let mut area = format!("M {:.1},{:.1}", x_at(0), h);
-    for (i, &v) in trend.iter().enumerate() {
-        area.push_str(&format!(" L {:.1},{:.1}", x_at(i), y_at(v)));
-    }
-    area.push_str(&format!(" L {:.1},{:.1} Z", x_at(n - 1), h));
+    // Area: baseline → curve → baseline, closed. n==1 时退化为零宽竖线,
+    // 不画(area 留空)——polyline 仍 1 点,Spark 的 circle 在 (w/2, y) 显点。
+    let area = if n == 1 {
+        String::new()
+    } else {
+        let mut a = format!("M {:.1},{:.1}", x_at(0), h);
+        for (i, &v) in trend.iter().enumerate() {
+            a.push_str(&format!(" L {:.1},{:.1}", x_at(i), y_at(v)));
+        }
+        a.push_str(&format!(" L {:.1},{:.1} Z", x_at(n - 1), h));
+        a
+    };
 
     SparkPath {
         polyline,

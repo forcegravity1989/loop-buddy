@@ -9,12 +9,13 @@ use crate::{
     parse_cadence, parse_connector_status, parse_cron_mode, parse_cron_status, parse_cycle,
     parse_hub_source, parse_issue_priority, parse_issue_status, parse_maturity,
     parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
-    stage_kind_text, AgentEdit, GlobalHandoffRow, HandoffRow, MessageRow, MetricDefSync,
-    MetricOrigin, MetricRole, MetricSignal, MetricsFileSync, MetricsFileSyncSummary, NewAgent,
-    NewArtifact, NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject,
-    NewSession, NewSkill, NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow,
-    PersistedSignals, ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow,
-    StageRow, StageSignal, Store, StoreError, WorkflowEdit,
+    stage_kind_text, AgentEdit, ConnectorDefSync, ConnectorsFileSync, ConnectorsFileSyncSummary,
+    GlobalHandoffRow, HandoffRow, MessageRow, MetricDefSync, MetricOrigin, MetricRole,
+    MetricSignal, MetricsFileSync, MetricsFileSyncSummary, NewAgent, NewArtifact, NewConnector,
+    NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
+    NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals,
+    ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow, StageRow, StageSignal,
+    Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -211,6 +212,28 @@ impl SqliteStore {
         // 来是空串,和"这张 Issue 没有标配 Skill 关联"这个真实状态完全一致
         // ——存量 Issue 全部是手建/Autopilot 建,从未挂过标配 Skill。
         add_column_if_missing(&pool, "issue", "standard_skill", "TEXT NOT NULL DEFAULT ''").await?;
+        // V1 Issue2 Phase2a: interactive session started flag. Old DBs open
+        // with 0 (= first run, build_startup_plan) — identical to the
+        // pre-Phase2a "never spawned" state. Only set to 1 right before the
+        // first interactive spawn; never reset.
+        add_column_if_missing(
+            &pool,
+            "issue",
+            "interactive_started",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        // V1 Issue2 Phase2b: claude session_id captured from SessionStart hook.
+        // Old DBs open with '' (= not yet captured → fallback to
+        // build_startup_plan, F1 fix). Set when the hook listener receives a
+        // SessionStart event; used by build_resume_plan for `--resume <id>`.
+        add_column_if_missing(
+            &pool,
+            "issue",
+            "claude_session_id",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        .await?;
         // T2 (plan/12 §6): Skill's source unified onto HubSource. Old rows'
         // bare `source='official'`/`'self_built'` text values already match
         // the new tag vocabulary 1:1 (no rewrite needed) — only the new
@@ -320,6 +343,14 @@ impl SqliteStore {
             "TEXT NOT NULL DEFAULT 'github'",
         )
         .await?;
+        // PF1-R2-1②: rename legacy collect_metrics cron names ending in
+        // "· 指标采集" (pre-PF1-3a default) to the specific "· 采集代码仓指标"
+        // form, so `sqlite3 SELECT name` reads back the clear name too (UI +
+        // DB 一致 — honest, not just a VM-layer display override). Idempotent:
+        // only matches rows still ending in "· 指标采集"; new rows already use
+        // the specific name (PF1-3a ①) and don't match. Storage name 是审计
+        // 口径的活物,这次用户明确要 DB 读回也清楚,故走数据迁移而非 VM 派生。
+        migrate_cron_collect_metrics_name(&pool).await?;
 
         Ok(Self { pool })
     }
@@ -459,6 +490,41 @@ async fn rename_column_if_exists(
     let old_exists = rows.iter().any(|r| r.get::<String, _>("name") == old);
     if old_exists {
         sqlx::query(&format!("ALTER TABLE {table} RENAME COLUMN {old} TO {new}"))
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// PF1-R2-1②: data migration (not a schema change — no new column, only
+/// renames rows in `cron_task`). Legacy collect_metrics crons built before
+/// PF1-3a ① stored `name = "<project> · 指标采集"` (too generic; user read it
+/// as unclear what this cron actually does). Rename them to the specific
+/// "<project> · 采集代码仓指标" form so `SELECT name` reads back honestly —
+/// UI + DB 一致, not a VM-layer display override. Idempotent: the LIKE
+/// suffix `'· 指标采集'` only matches rows still on the old generic name; new
+/// crons (PF1-3a ①) already use the specific name and are not touched, so
+/// re-running on an already-migrated DB is a no-op. Project name is joined
+/// from `project` via `project_id` (keeps the name in sync with the project's
+/// real display name at migration time; later project renames are out of
+/// scope — same append-only name-stability cron_task has always had).
+async fn migrate_cron_collect_metrics_name(pool: &SqlitePool) -> Result<()> {
+    let rows = sqlx::query(
+        r#"SELECT cron_task.id AS id, project.name AS pname
+           FROM cron_task
+           JOIN project ON cron_task.project_id = project.id
+           WHERE cron_task.mode = 'collect_metrics'
+             AND cron_task.name LIKE '% · 指标采集'"#,
+    )
+    .fetch_all(pool)
+    .await?;
+    for r in rows {
+        let id: String = r.get("id");
+        let pname: String = r.get("pname");
+        let new_name = format!("{pname} · 采集代码仓指标");
+        sqlx::query("UPDATE cron_task SET name = ? WHERE id = ?")
+            .bind(&new_name)
+            .bind(&id)
             .execute(pool)
             .await?;
     }
@@ -640,6 +706,61 @@ async fn sync_one_metric_definition(
             .bind(&m.collect_kind)
             .bind(&m.collect_query)
             .bind(metric_origin_text(MetricOrigin::File))
+            .bind(t)
+            .bind(t)
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// V1 Issue2 Phase 3: upsert-by-name for one `.bw/connectors.toml` connector
+/// definition. Parallel to [`sync_one_metric_definition`] — looks the row up
+/// by `(project_id, name, kind='script')` and either UPDATEs its `config` in
+/// place (keeping the existing row's id, so connector history stays attached)
+/// or INSERTs a fresh row with `kind = 'script'` and default operational
+/// fields. Only `kind = 'script'` connectors are synced from the file; the
+/// `kind='script'` filter on the SELECT ensures a file script connector never
+/// collides with an existing non-script connector of the same name (e.g. a
+/// `codehub-repo` / `git-repo` connector) — same name + different kind →
+/// new INSERT, script row and legacy row coexist, each handled by its own
+/// processing path.
+async fn sync_one_connector_definition(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    project_id: &str,
+    c: &ConnectorDefSync,
+    t: i64,
+) -> Result<()> {
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM connector WHERE project_id=? AND name=? AND kind='script'",
+    )
+    .bind(project_id)
+    .bind(&c.name)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    match existing {
+        Some(id) => {
+            sqlx::query("UPDATE connector SET config=?, updated_at=?, rev=rev+1 WHERE id=?")
+                .bind(&c.config)
+                .bind(t)
+                .bind(&id)
+                .execute(&mut **tx)
+                .await?;
+        }
+        None => {
+            let id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO connector
+                    (id, name, kind, status, last_sync, scope, project_id, config,
+                     created_at, updated_at, rev)
+                 VALUES (?, ?, 'script', 'disconnected', '', '', ?, ?, ?, ?, 0)",
+            )
+            .bind(&id)
+            .bind(&c.name)
+            .bind(project_id)
+            .bind(&c.config)
             .bind(t)
             .bind(t)
             .execute(&mut **tx)
@@ -955,6 +1076,31 @@ impl Store for SqliteStore {
             lagging_synced: sync.lagging.len() as u32,
             leading_synced: sync.leading.len() as u32,
             auto_archived,
+        })
+    }
+
+    /// V1 Issue2 Phase 3: upsert all `.bw/connectors.toml` connector
+    /// definitions for a project in one atomic transaction. Each connector
+    /// is upserted by `(project_id, name)` — existing rows keep their id
+    /// (so connector history stays attached), new rows are inserted with
+    /// `kind = 'script'` and default operational fields. Only `kind =
+    /// 'script'` connectors are synced from the file; other kinds are not
+    /// touched (they live in the DB from their creation paths).
+    async fn sync_connectors_file(
+        &self,
+        sync: ConnectorsFileSync,
+    ) -> Result<ConnectorsFileSyncSummary> {
+        let p = pid(sync.project_id);
+        let t = now_unix();
+        let mut tx = self.pool.begin().await?;
+
+        for c in &sync.connectors {
+            sync_one_connector_definition(&mut tx, &p, c, t).await?;
+        }
+
+        tx.commit().await?;
+        Ok(ConnectorsFileSyncSummary {
+            connectors_synced: sync.connectors.len() as u32,
         })
     }
 
@@ -2571,8 +2717,8 @@ impl Store for SqliteStore {
     async fn create_cron_task(&self, c: NewCronTask) -> Result<()> {
         let t = now_unix();
         sqlx::query(
-            "INSERT INTO cron_task (id, name, target, schedule, project_id, status, last_run, next_run, mode, issue_stage, issue_assignee, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, 'normal', '', '', ?, ?, ?, ?, ?, 0)",
+            "INSERT INTO cron_task (id, name, target, schedule, project_id, status, last_run, next_run, mode, issue_stage, issue_assignee, created_at, updated_at, rev, last_run_at)
+             VALUES (?, ?, ?, ?, ?, 'normal', '', '', ?, ?, ?, ?, ?, 0, ?)",
         )
         .bind(c.id.uuid().to_string())
         .bind(&c.name)
@@ -2584,6 +2730,7 @@ impl Store for SqliteStore {
         .bind(&c.issue_assignee)
         .bind(t)
         .bind(t)
+        .bind(c.last_run_at.unwrap_or(0))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -2813,8 +2960,8 @@ impl Store for SqliteStore {
         // query-builder dependency.
         let mut sql = String::from(
             "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
-                    priority, assignee, settled_at, blocked_reason, standard_skill, created_at,
-                    updated_at
+                    priority, assignee, settled_at, blocked_reason, standard_skill,
+                    interactive_started, claude_session_id, created_at, updated_at
              FROM issue WHERE project_id=?",
         );
         if stage.is_some() {
@@ -2839,7 +2986,7 @@ impl Store for SqliteStore {
         let row = sqlx::query(
             "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
                     priority, assignee, settled_at, blocked_reason, standard_skill,
-                    created_at, updated_at
+                    interactive_started, claude_session_id, created_at, updated_at
              FROM issue WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -2910,6 +3057,34 @@ impl Store for SqliteStore {
     async fn set_issue_pr_number(&self, id: IssueId, pr_number: u32) -> Result<()> {
         sqlx::query("UPDATE issue SET pr_number=?, updated_at=? WHERE id=?")
             .bind(pr_number as i64)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// V1 Issue2 Phase2a: mark an interactive issue's session as started
+    /// (first ▶跑 spawned claude). Called once, right before the first
+    /// interactive spawn; never reset. The App layer calls this only after
+    /// deciding this is a first run (not a resume).
+    async fn set_issue_interactive_started(&self, id: IssueId) -> Result<()> {
+        sqlx::query("UPDATE issue SET interactive_started=1, updated_at=? WHERE id=?")
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// V1 Issue2 Phase2b: store the claude session_id captured from the
+    /// SessionStart hook event. Called when the hook listener receives a
+    /// SessionStart event and maps the cwd → issue. An empty string clears
+    /// it (F1 recovery path). Never fabricates a session_id — only stores
+    /// what the real hook payload contained.
+    async fn set_issue_claude_session_id(&self, id: IssueId, session_id: &str) -> Result<()> {
+        sqlx::query("UPDATE issue SET claude_session_id=?, updated_at=? WHERE id=?")
+            .bind(session_id)
             .bind(now_unix())
             .bind(id.uuid().to_string())
             .execute(&self.pool)
@@ -3288,7 +3463,223 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
             .get::<Option<String>, _>("blocked_reason")
             .filter(|s| !s.is_empty()),
         standard_skill: r.get("standard_skill"),
+        interactive_started: r.get::<i64, _>("interactive_started") != 0,
+        claude_session_id: r.get("claude_session_id"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     })
+}
+
+// ─── Tests ─────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ConnectorDefSync, ConnectorsFileSync, NewProject};
+
+    /// V1 Issue2 Phase 3: `sync_connectors_file` upserts by `(project_id,
+    /// name)` — first sync inserts, second sync updates config in place
+    /// (same id), kind is always `script`, config is the JSON string.
+    #[tokio::test]
+    async fn sync_connectors_file_upserts_by_name() {
+        let db_path = tempdb_path();
+        let store = SqliteStore::open(&db_path).await.expect("open store");
+        let project_id = ProjectId::new();
+        store
+            .create_project(NewProject {
+                id: project_id,
+                name: "测试项目".into(),
+                kind: "content".into(),
+                desc: "测试".into(),
+                provider: "github".into(),
+            })
+            .await
+            .expect("create project");
+
+        // First sync: insert two connectors.
+        let sync = ConnectorsFileSync {
+            project_id,
+            connectors: vec![
+                ConnectorDefSync {
+                    name: "leading".into(),
+                    config: r#"{"script":"scripts/derive_leading.py","command":"python","output":"data.json"}"#.into(),
+                },
+                ConnectorDefSync {
+                    name: "north-star".into(),
+                    config: r#"{"script":"scripts/derive_ns.py","command":"","output":"ns.json"}"#.into(),
+                },
+            ],
+        };
+        let summary = store.sync_connectors_file(sync).await.expect("first sync");
+        assert_eq!(summary.connectors_synced, 2);
+
+        let connectors = store.list_connectors().await.expect("list");
+        let project_connectors: Vec<_> = connectors
+            .into_iter()
+            .filter(|c| c.project_id == Some(project_id))
+            .collect();
+        assert_eq!(project_connectors.len(), 2);
+        let leading = project_connectors
+            .iter()
+            .find(|c| c.name == "leading")
+            .expect("leading found");
+        assert_eq!(leading.kind, "script");
+        assert!(leading.config.contains("derive_leading.py"));
+        let leading_id = leading.id;
+
+        // Second sync: update leading's config (same name → upsert, same id),
+        // drop north-star from the file (file deletion does NOT delete DB
+        // rows per design — §connectors-toml-format.md "正本里删掉的连接器").
+        let sync2 = ConnectorsFileSync {
+            project_id,
+            connectors: vec![ConnectorDefSync {
+                name: "leading".into(),
+                config: r#"{"script":"scripts/derive_leading_v2.py","command":"node","output":"data2.json"}"#.into(),
+            }],
+        };
+        let summary2 = store
+            .sync_connectors_file(sync2)
+            .await
+            .expect("second sync");
+        assert_eq!(summary2.connectors_synced, 1);
+
+        let connectors2 = store.list_connectors().await.expect("list after upsert");
+        let project_connectors2: Vec<_> = connectors2
+            .into_iter()
+            .filter(|c| c.project_id == Some(project_id))
+            .collect();
+        // north-star still in DB (file deletion doesn't delete DB rows).
+        assert_eq!(project_connectors2.len(), 2);
+        let leading2 = project_connectors2
+            .iter()
+            .find(|c| c.name == "leading")
+            .expect("leading still found");
+        // Same id (upsert, not insert).
+        assert_eq!(leading2.id, leading_id);
+        // Kind is still "script" (UPDATE path doesn't touch kind, but verify
+        // — regression guard for the Med review finding: SELECT must filter
+        // kind='script' so a non-script connector of the same name never
+        // gets its kind clobbered or its config overwritten).
+        assert_eq!(leading2.kind, "script");
+        // Config was updated.
+        assert!(leading2.config.contains("derive_leading_v2.py"));
+        assert!(leading2.config.contains("node"));
+        assert!(!leading2.config.contains("derive_leading.py") || leading2.config.contains("v2"));
+    }
+
+    /// V1 Issue2 Phase 3 review-fixup (Med): a file script connector with
+    /// the same name as an existing non-script connector (e.g. `git-repo`)
+    /// must NOT collide — the SELECT filters `kind='script'`, so the file
+    /// connector gets a fresh INSERT (new row, kind=script) instead of
+    /// updating the non-script row's config (which would leave the wrong
+    /// kind on it and silently break `collect_project_metrics`'s
+    /// `kind==script` filter).
+    #[tokio::test]
+    async fn sync_connectors_file_same_name_non_script_coexists() {
+        let db_path = tempdb_path();
+        let store = SqliteStore::open(&db_path).await.expect("open store");
+        let project_id = ProjectId::new();
+        store
+            .create_project(NewProject {
+                id: project_id,
+                name: "共存项目".into(),
+                kind: "content".into(),
+                desc: "".into(),
+                provider: "github".into(),
+            })
+            .await
+            .expect("create project");
+
+        // Pre-existing non-script connector with the same name as the file
+        // connector we're about to sync.
+        store
+            .create_connector(NewConnector {
+                id: bw_core::ConnectorId::new(),
+                name: "shared-name".into(),
+                kind: "git-repo".into(),
+                scope: String::new(),
+                project_id: Some(project_id),
+                config: "/workspace/path".into(),
+            })
+            .await
+            .expect("create git-repo connector");
+
+        // Sync a file script connector with the same name.
+        let sync = ConnectorsFileSync {
+            project_id,
+            connectors: vec![ConnectorDefSync {
+                name: "shared-name".into(),
+                config: r#"{"script":"scripts/derive.py","command":"python","output":"data.json"}"#
+                    .into(),
+            }],
+        };
+        let summary = store.sync_connectors_file(sync).await.expect("sync");
+        assert_eq!(summary.connectors_synced, 1);
+
+        let connectors = store.list_connectors().await.expect("list");
+        let project_connectors: Vec<_> = connectors
+            .into_iter()
+            .filter(|c| c.project_id == Some(project_id))
+            .collect();
+        // Both rows coexist: the non-script row is untouched, the script
+        // row is a fresh INSERT.
+        assert_eq!(project_connectors.len(), 2);
+        let git_repo = project_connectors
+            .iter()
+            .find(|c| c.kind == "git-repo")
+            .expect("git-repo row untouched");
+        assert_eq!(git_repo.name, "shared-name");
+        assert_eq!(git_repo.config, "/workspace/path");
+        let script = project_connectors
+            .iter()
+            .find(|c| c.kind == "script")
+            .expect("script row created");
+        assert_eq!(script.name, "shared-name");
+        assert!(script.config.contains("derive.py"));
+        assert_ne!(script.id, git_repo.id);
+    }
+
+    /// V1 Issue2 Phase 3: empty connectors list is a valid no-op (file with
+    /// zero `[[connector]]` entries — honest no-op, not an error).
+    #[tokio::test]
+    async fn sync_connectors_file_empty_is_noop() {
+        let db_path = tempdb_path();
+        let store = SqliteStore::open(&db_path).await.expect("open store");
+        let project_id = ProjectId::new();
+        store
+            .create_project(NewProject {
+                id: project_id,
+                name: "空项目".into(),
+                kind: "content".into(),
+                desc: "".into(),
+                provider: "github".into(),
+            })
+            .await
+            .expect("create project");
+
+        let sync = ConnectorsFileSync {
+            project_id,
+            connectors: vec![],
+        };
+        let summary = store.sync_connectors_file(sync).await.expect("empty sync");
+        assert_eq!(summary.connectors_synced, 0);
+
+        let connectors = store.list_connectors().await.expect("list");
+        assert!(connectors.is_empty());
+    }
+
+    /// Create a unique temp DB path for test isolation.
+    fn tempdb_path() -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "bw-store-test-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Remove any stale file from a previous run.
+        let _ = std::fs::remove_file(&dir);
+        dir.to_string_lossy().into_owned()
+    }
 }

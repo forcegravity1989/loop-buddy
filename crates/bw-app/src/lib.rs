@@ -20,6 +20,7 @@
 
 mod agent_import;
 mod bw_canon;
+mod hook_listener;
 mod legacy_migration;
 mod skill_import;
 mod skill_materialize;
@@ -44,15 +45,18 @@ use bw_core::{
     SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    allowed_tools_arg, evidence, ClaudeCliConfig, ClaudeCliExecutor, Engine, GitCommit,
-    GithubRepoSummary, PermissionMode, PhaseNode, RunCtx, RunEvent, UnsupportedCliExecutor,
+    allowed_tools_arg, build_bridge_system_prompt, build_resume_plan, build_startup_plan, evidence,
+    ClaudeCliConfig, ClaudeCliExecutor, CodehubRepoSummary, Engine, GitCommit, GithubRepoSummary,
+    InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
+    PhaseNode, RunCtx, RunEvent, SkillOutput, UnsupportedCliExecutor, CLAUDE,
 };
 use bw_store::{
-    AgentEdit, GlobalHandoffRow, MetricDefSync, MetricRole, MetricsFileSync, NewAgent, NewArtifact,
-    NewConnector, NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession,
-    NewSkill, NewSkillFile, NewStage, NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store,
-    WorkflowEdit,
+    AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
+    MetricsFileSync, NewAgent, NewArtifact, NewConnector, NewCronTask, NewIssue,
+    NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewSkillFile, NewStage,
+    NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -102,13 +106,27 @@ pub enum GithubOrigin {
 }
 
 /// CodeHub 为主体的创建流(2026-07-28):Repo 卡片选 codehub 平台时的远端
-/// 身份。`host` = API 域名(open.codehub.huawei.com 等,绿/黄/内源三域名);
-/// `path` = org/repo(innersource/AI-Coding_G/maas)。身份用户输入即已知,
-/// clone 不回 ref(区别于 GithubOrigin.Existing 的 owner/repo 拆分)。
+/// 身份。V1 Issue 1(2026-08-04)改为 enum,对仗 [`GithubOrigin`] 的
+/// `New`/`Existing` 两臂:
+/// - [`CodehubOrigin::Existing`] = 接入已有仓(`host` + `path` = org/repo,clone)
+/// - [`CodehubOrigin::New`] = 新建仓(`host` + 个人 `namespace` 路径 + `name` +
+///   `visibility`,`codehub-cli project create` + clone + BW root commit)
+///
+/// `host` = API 域名 alias(green/open/yellow);`namespace` = 个人 namespace
+/// 路径(如 `z30026659`,空串 = 引擎自动解析个人 namespace)。group namespace
+/// 选择 V1 不做(§6 偏差,如实标)。
 #[derive(Clone, Debug)]
-pub struct CodehubOrigin {
-    pub host: String,
-    pub path: String,
+pub enum CodehubOrigin {
+    New {
+        host: String,
+        namespace: String,
+        name: String,
+        visibility: String,
+    },
+    Existing {
+        host: String,
+        path: String,
+    },
 }
 
 /// plan/20 R5: what [`Command::AdoptIntoProject`] copies — plan/08 S1 的
@@ -156,6 +174,13 @@ pub enum Command {
     /// 显式加载,同 `LoadVersionLog`/`LoadArtifacts` 惯例——不在每次
     /// rebuild 里打 GitHub API。
     ListGithubRepos,
+    /// CodeHub 为主体的创建流(V1 Issue 1): 读一次当前用户在指定 host 上的
+    /// codehub 仓列表,填充 `AppState.codehub_repos`(Repo 卡片"接入已有仓"
+    /// 下拉的数据源)。对仗 `ListGithubRepos`,但 codehub 有 green/open/
+    /// yellow 三域名,需显式带 `host`。显式加载,同 `ListGithubRepos` 惯例。
+    ListCodehubRepos {
+        host: String,
+    },
     /// Creation flow step 2 (快速问题 · 周期).
     SetCycle {
         cycle: MaturityPeriod,
@@ -861,6 +886,20 @@ pub enum Command {
     SetScope(Scope),
     /// Select (or clear) the chat-focused session in the operating view.
     SelectSession(Option<SessionId>),
+    /// V1 Issue2 Phase2b: user-typed bytes from the in-app xterm.js terminal
+    /// (`onData` callback). The App forwards these to the PTY writer via
+    /// the `pty_input_tx` channel. Only dispatched when PTY mode is active.
+    TerminalInput {
+        bytes: Vec<u8>,
+    },
+    /// V1 Issue2 Phase2b: terminal resize from the in-app xterm.js
+    /// (`onResize` callback). The App forwards this to `master.resize()`.
+    /// The UI should also re-assert (getAppliedSize, orca §2.4) — if the
+    /// PTY's applied size doesn't match, re-send this.
+    TerminalResize {
+        cols: u16,
+        rows: u16,
+    },
 }
 
 /// Kernel → UI facts (already happened).
@@ -1121,20 +1160,30 @@ struct FinalizeCtx {
     issue_id: Option<IssueId>,
 }
 
+/// plan/17 S3 + V1 Issue2 Phase1: outcome a backgrounded run reports back
+/// to the main thread via the settle mpsc. The phase-loop variant carries
+/// `LoopEnd` + the last round's `workflow_run` id + `final_run_ok`; the
+/// interactive variant carries a `SkillOutput` (one-shot interactive
+/// session, no phase loop). `Err` in either is a `?`-early-bail.
+/// `pub(crate)` — the kernel only ever MOVES a `SettleReq` value, never
+/// names/constructs `SettleOutcome`.
+pub(crate) enum SettleOutcome {
+    PhaseLoop(Result<(LoopEnd, WorkflowRunId, bool), AppError>),
+    Interactive(Result<SkillOutput, AppError>),
+}
+
 /// plan/17 S3: outcome a backgrounded round loop reports back to the main
-/// thread via the settle mpsc. `Ok` carries the `LoopEnd` + the last round's
-/// `workflow_run` id + `final_run_ok` (exactly what `run_round_loop` returns);
-/// `Err` is a `?`-early-bail mid-round (a store error before any settle —
-/// the round's row stays "started, never settled", honest). Sent from the
-/// spawned task; received by the kernel's `select!` settle arm.
+/// thread via the settle mpsc. Sent from the spawned task; received by the
+/// kernel's `select!` settle arm.
 pub struct SettleReq {
     pub(crate) project: ProjectId,
     pub(crate) issue: IssueId,
-    // Private-typed on purpose: `LoopEnd` is an internal enum. The kernel
-    // only ever MOVES a `SettleReq` value (channel → `run_issue_settle`),
-    // never names/constructures it — so the fields stay crate-internal while
-    // the type itself is pub (the kernel names it for the mpsc type param).
-    pub(crate) outcome: Result<(LoopEnd, WorkflowRunId, bool), AppError>,
+    // Private-typed on purpose: `SettleOutcome` carries internal types
+    // (`LoopEnd`). The kernel only ever MOVES a `SettleReq` value
+    // (channel → `run_issue_settle`), never names/constructures it — so
+    // the fields stay crate-internal while the type itself is pub (the
+    // kernel names it for the mpsc type param).
+    pub(crate) outcome: SettleOutcome,
 }
 
 /// plan/17 S3: an in-flight backgrounded issue-run. Held in `AppState
@@ -1157,6 +1206,13 @@ struct ActiveRun {
     proj: ProjectRow,
     issue_ws: Option<PathBuf>,
     pr_eligible: bool,
+    /// V1 Issue2 Phase2a: whether this run is a resume (not the first run).
+    /// Set from `issue.interactive_started` at dispatch time. The settle arm
+    /// uses it to pick `finalize_run_interactive_resume` (artifact scan only,
+    /// no uses bump — settle-once) vs `finalize_run_interactive` (first run:
+    /// uses + artifacts). Both skip `issue_run_tail` (no MR creation — agent
+    /// does it in-session; InReview from polling).
+    is_resume: bool,
 }
 
 /// plan/17 S3: the shared 起手 prefix of an issue-run, returned by
@@ -1240,6 +1296,47 @@ pub struct AppState {
     /// internal cache of live GitHub data, not persisted — it's a direct
     /// read-through, not one of this app's own derived Signals.
     pub github_repos: Vec<GithubRepoSummary>,
+    /// V1 Issue2 Phase2a: unix ts of the last InReview poll for interactive
+    /// issues. The poller checks codehub/github for open MRs on interactive
+    /// issues that are InProgress + `interactive_started` + `pr_number == 0`.
+    /// Throttled to once per 5 minutes so it doesn't hit the remote every
+    /// `tick_scheduler` fire. `0` = never polled (first tick runs it).
+    pub last_inreview_poll: i64,
+    /// V1 Issue2 Phase2b: cwd → IssueId map for hook event routing. When
+    /// `run_issue_interactive` spawns a session, it registers the worktree
+    /// cwd here. When the hook listener receives a SessionStart/Stop event
+    /// (which carries `cwd`), `poll_hook_events` looks up the issue by cwd
+    /// to store `session_id` or trigger InReview detection. Entries are
+    /// dropped by `forget_interactive_session` when the run settles or is
+    /// cancelled — a session that's over must not keep a cwd registered, or a
+    /// late/forged hook event could still rewrite that issue's session id.
+    pub interactive_sessions: HashMap<String, IssueId>,
+    /// V1 Issue2 Phase2b: a `Stop` hook event was received since the last
+    /// `tick_scheduler` fire. `true` → run `poll_interactive_inreview` on
+    /// this tick (the tick's cadence is the natural throttle — no additional
+    /// debounce needed within a single tick; the 5-minute poller remains as
+    /// backstop for Stop events processed with delay).
+    pub pending_stop_check: bool,
+    /// V1 Issue2 Phase2b: PTY input sender — forwards user-typed bytes
+    /// (`Command::TerminalInput`) and resize (`Command::TerminalResize`)
+    /// to the background PTY task. `None` when PTY mode isn't active or no
+    /// interactive session is running. Set in `run_issue_interactive` when
+    /// spawning a PTY session; cleared when the session settles.
+    pub pty_input_tx: Option<mpsc::UnboundedSender<bw_engine::PtyInput>>,
+    /// V1 Issue2 Phase2b: PTY bytes receiver — drains PTY output bytes
+    /// from the background read task. `None` when PTY mode isn't active or
+    /// no session is running. Drained by `drain_pty_bytes` (called from
+    /// the kernel's 100ms `pty_ticker` arm — NOT `tick_scheduler`).
+    pub pty_bytes_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
+    /// V1 Issue2 Phase2b: whether PTY mode is enabled (the desktop kernel
+    /// wires it via `App::with_pty`). When `true`, `run_issue_interactive`
+    /// uses `run_skill_pty` (in-app terminal). When `false`, it uses the
+    /// old `run_skill` (system terminal / mock).
+    pub pty_enabled: bool,
+    /// CodeHub 为主体的创建流: last `Command::ListCodehubRepos` result. Same
+    /// process-internal cache pattern as `github_repos` — a direct read-through
+    /// of `codehub-cli project list --mine`, not a derived Signal.
+    pub codehub_repos: Vec<CodehubRepoSummary>,
 }
 
 /// P4: everything the Issue-detail overlay shows, assembled read-only at
@@ -1278,6 +1375,13 @@ impl Default for AppState {
             cron_effectiveness: None,
             issue_detail: None,
             github_repos: Vec::new(),
+            last_inreview_poll: 0,
+            interactive_sessions: HashMap::new(),
+            pending_stop_check: false,
+            pty_input_tx: None,
+            pty_bytes_rx: None,
+            pty_enabled: false,
+            codehub_repos: Vec::new(),
         }
     }
 }
@@ -1302,11 +1406,52 @@ pub struct App {
     /// returns immediately, and the kernel's `select!` settle arm later
     /// drives `run_issue_settle` under `&mut self` — the UI never freezes.
     settle_tx: Option<mpsc::UnboundedSender<SettleReq>>,
+    /// V1 Issue2 Phase2b: hook event receiver from the hook listener
+    /// (localhost HTTP server). `None` when the listener failed to start
+    /// (port in use, no home dir) — the app works without real-time hooks,
+    /// falling back to 2a's 5-minute InReview poller. Drained in
+    /// [`App::poll_hook_events`] (called from `tick_scheduler`).
+    hook_event_rx: Option<mpsc::UnboundedReceiver<hook_listener::HookEvent>>,
+    /// V1 Issue2 Phase2b: the port the hook listener bound to. Written into
+    /// `~/.claude/settings.json`'s curl commands. `None` when the listener
+    /// isn't running.
+    hook_port: Option<u16>,
 }
 
 impl App {
     pub fn new(store: Arc<dyn Store>, mock_engine: Engine, claude_config: ClaudeCliConfig) -> Self {
         let (tx, _rx) = broadcast::channel(256);
+        // V1 Issue2 Phase2b: start the hook listener (localhost HTTP server
+        // that receives claude SessionStart/Stop hook events). Best-effort —
+        // if it fails (port in use, no home dir, no tokio runtime), the app
+        // works without real-time hooks (falls back to 2a's 5-minute InReview
+        // poller). Sync `bind()` gets the port immediately (no `block_on`
+        // needed — safe to call inside a tokio runtime like the desktop
+        // kernel). The accept loop is spawned if a runtime is available.
+        let (hook_tx, hook_rx) = mpsc::unbounded_channel::<hook_listener::HookEvent>();
+        let (hook_port, hook_event_rx) = match hook_listener::HookListener::bind() {
+            Ok((port, listener)) => {
+                // Write hooks config to ~/.claude/settings.json (idempotent
+                // merge — preserves user hooks). If this fails, the listener
+                // is useless (curl has nowhere to POST).
+                if hook_listener::install_hooks_config(port).is_ok() {
+                    // Spawn the accept loop (needs a tokio runtime). Inside
+                    // the desktop kernel's runtime, this works; in
+                    // examples/headless (no runtime), the listener is dropped.
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.spawn(async move {
+                            hook_listener::HookListener::spawn(listener, hook_tx);
+                        });
+                        (Some(port), Some(hook_rx))
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                }
+            }
+            Err(_) => (None, None),
+        };
         Self {
             store,
             mock_engine,
@@ -1317,6 +1462,8 @@ impl App {
             events: tx,
             workspaces_root: None,
             settle_tx: None,
+            hook_event_rx,
+            hook_port,
         }
     }
 
@@ -1340,6 +1487,16 @@ impl App {
     /// so the five roles have a real substrate from birth instead of Mock.
     pub fn with_workspaces_root(mut self, root: PathBuf) -> Self {
         self.workspaces_root = Some(root);
+        self
+    }
+
+    /// V1 Issue2 Phase2b: enable PTY mode — `run_issue_interactive` spawns
+    /// `claude` in a PTY (portable-pty) instead of a system terminal, and
+    /// streams bytes via a dedicated `watch` channel / `Command::TerminalInput`.
+    /// The desktop kernel calls this; examples / headless drivers don't
+    /// (they use the old system-terminal / mock path).
+    pub fn with_pty(mut self) -> Self {
+        self.state.pty_enabled = true;
         self
     }
 
@@ -1369,6 +1526,14 @@ impl App {
     /// Borrow the store (for read queries the UI projects through selectors).
     pub fn store(&self) -> &Arc<dyn Store> {
         &self.store
+    }
+
+    /// V1 Issue2 Phase2b: the port the hook listener is bound to, or `None`
+    /// when the listener isn't running (port in use, no home dir, no runtime).
+    /// The UI can show this for debugging; `~/.claude/settings.json`'s curl
+    /// commands embed it.
+    pub fn hook_port(&self) -> Option<u16> {
+        self.hook_port
     }
 
     fn emit(&self, e: Event) {
@@ -1560,6 +1725,226 @@ impl App {
 
     async fn refresh_activity(&mut self) -> Result<(), AppError> {
         self.state.recent_activity = self.store.list_recent_handoffs(50).await?;
+        Ok(())
+    }
+
+    /// V1 Issue2 Phase2b: drain pending hook events from the hook listener
+    /// (localhost HTTP server). Called from `tick_scheduler` (and can be
+    /// called from the desktop kernel's `select!` loop for more prompt
+    /// processing). Processes:
+    ///  - **SessionStart**: look up the issue by `cwd` (via the
+    ///    `interactive_sessions` map) and store `session_id` via
+    ///    `store.set_issue_claude_session_id`. This is the F1 fix: only when
+    ///    the hook fires (session really established) is the session_id
+    ///    stored — an empty session_id on the issue means the first spawn
+    ///    failed, and the next ▶ run falls back to `build_startup_plan`.
+    ///  - **Stop**: set `pending_stop_check = true` so the next
+    ///    `tick_scheduler` fire runs `poll_interactive_inreview` (the Stop
+    ///    event is the real-time trigger; the tick's cadence is the natural
+    ///    throttle — no additional debounce needed within a single tick;
+    ///    the 5-minute poller remains as backstop).
+    ///
+    /// Best-effort: a failed store write (session_id) or a missing cwd →
+    /// issue mapping is silently skipped (logged via toast). Never blocks
+    /// the tick scheduler's cron-fired list from returning.
+    async fn poll_hook_events(&mut self) -> Result<(), AppError> {
+        // Drain all pending events first (releases the mutable borrow on
+        // `hook_event_rx` before we call `self.emit` / `self.store` below).
+        let events: Vec<hook_listener::HookEvent> = {
+            let Some(rx) = self.hook_event_rx.as_mut() else {
+                return Ok(()); // no listener running
+            };
+            let mut events = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+            events
+        };
+        for event in events {
+            match event {
+                hook_listener::HookEvent::SessionStart { session_id, cwd } => {
+                    // Look up the issue by cwd (the worktree path the
+                    // session was spawned in).
+                    if let Some(&issue_id) = self.state.interactive_sessions.get(&cwd) {
+                        if let Err(e) = self
+                            .store
+                            .set_issue_claude_session_id(issue_id, &session_id)
+                            .await
+                        {
+                            self.emit(Event::ConnectorSynced {
+                                name: "Hook SessionStart".into(),
+                                ok: false,
+                                detail: format!(
+                                    "存储 session_id 失败,该活的 resume 仍用 fallback:{e}"
+                                ),
+                            });
+                        } else {
+                            self.emit(Event::ConnectorSynced {
+                                name: "Hook SessionStart".into(),
+                                ok: true,
+                                detail: format!(
+                                    "捕获 claude session_id (前8位: {}…) — 下次 ▶跑 用 --resume",
+                                    &session_id[..session_id.len().min(8)]
+                                ),
+                            });
+                        }
+                    }
+                    // cwd not in map → the hook fired for a session buddy
+                    // didn't spawn (user's own claude session). Silently
+                    // ignore — we only care about buddy-spawned sessions.
+                }
+                hook_listener::HookEvent::Stop { .. } => {
+                    // Mark for InReview check on this tick. The tick's
+                    // cadence is the natural throttle (multiple Stop events
+                    // in one tick = one check).
+                    self.state.pending_stop_check = true;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// V1 Issue2 Phase2b: drain all pending PTY bytes and return them as a
+    /// single concatenated `Vec<u8>`. Called by the kernel's fast timer
+    /// (100ms pty_ticker) — the bytes are sent via a dedicated `watch`
+    /// channel to the UI's xterm.js widget. Returns empty when no PTY
+    /// session is active or no new bytes arrived.
+    pub fn drain_pty_bytes(&mut self) -> Vec<u8> {
+        let chunks: Vec<Vec<u8>> = {
+            let Some(rx) = self.state.pty_bytes_rx.as_mut() else {
+                return Vec::new();
+            };
+            let mut chunks = Vec::new();
+            while let Ok(bytes) = rx.try_recv() {
+                chunks.push(bytes);
+            }
+            chunks
+        };
+        let mut all = Vec::new();
+        for chunk in chunks {
+            all.extend_from_slice(&chunk);
+        }
+        all
+    }
+
+    /// V1 Issue2 Phase2b: drop every `cwd → issue` mapping pointing at `id`.
+    /// Called when an interactive run settles or is cancelled — the session is
+    /// over, so a late (or forged) hook event carrying that cwd must not still
+    /// rewrite this issue's `claude_session_id`. Keyed by value, not by cwd,
+    /// because the worktree path isn't at hand on every teardown path.
+    fn forget_interactive_session(&mut self, id: IssueId) {
+        self.state.interactive_sessions.retain(|_, v| *v != id);
+    }
+
+    /// V1 Issue2 Phase2a: poll codehub/github for open MRs on interactive
+    /// issues that are InProgress + `interactive_started` + `pr_number == 0`.
+    /// When an open MR is found (读回为证: buddy checks the remote itself,
+    /// not agent self-report), it backfills `pr_number` and transitions to
+    /// InReview (D3: 评审中由存在开放 PR 派生). Never reaches Done — that
+    /// edge stays exclusively a human `MergeIssuePr`/`TransitionIssue`.
+    ///
+    /// Covers BOTH codehub and github (unlike `collect_github_issue_drift`
+    /// which is github-only and manual-trigger). Called from
+    /// `tick_scheduler`, throttled to once per 5 minutes
+    /// (`INREVIEW_POLL_INTERVAL_SECS`) so it doesn't hit the remote every
+    /// tick. A failed remote query degrades honestly (toast + skip this
+    /// issue this round), never fabricating an InReview.
+    async fn poll_interactive_inreview(&mut self) -> Result<(), AppError> {
+        for proj in self.state.projects.clone() {
+            let remote_path = proj.remote_path.trim();
+            if remote_path.is_empty() {
+                continue; // no remote = no MR to detect
+            }
+            let remote = match bw_engine::remote::Remote::for_project(
+                &proj.provider,
+                &proj.remote_host,
+                remote_path,
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("{} · InReview 轮询", proj.name),
+                        ok: false,
+                        detail: format!("远端 provider 不可用,跳过:{e}"),
+                    });
+                    continue;
+                }
+            };
+            // Interactive issues in InProgress + interactive_started + no PR.
+            let candidates: Vec<_> = self
+                .store
+                .list_issues(proj.id, None, Some(IssueStatus::InProgress))
+                .await?
+                .into_iter()
+                .filter(|i| {
+                    i.interactive_started
+                        && i.pr_number == 0
+                        && i.github_number != 0
+                        && Self::is_interactive_skill(&i.standard_skill)
+                })
+                .collect();
+            for issue in candidates {
+                let branch = bw_engine::github::issue_branch(issue.github_number);
+                let open_mr = match remote.open_mr_for_branch(&branch).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.emit(Event::ConnectorSynced {
+                            name: format!("#{} · InReview 轮询", issue.number),
+                            ok: false,
+                            detail: format!("查开放 MR 失败,该活保持原状可重试:{e}"),
+                        });
+                        continue;
+                    }
+                };
+                let Some(pr) = open_mr else {
+                    continue; // no open MR yet — honest "nothing to review"
+                };
+                // D3: 评审中由「存在开放 PR」派生. Transition FIRST, then
+                // backfill `pr_number` — the candidate filter above keys on
+                // `pr_number == 0`, so writing the PR number before a
+                // transition that then fails (store error / status moved
+                // under us) would drop the issue out of the候选集 forever:
+                // stuck InProgress with a PR nobody re-checks. Doing the
+                // transition first means a failure leaves `pr_number == 0`
+                // and the next poll retries the whole thing.
+                let cur = self.store.get_issue(issue.id).await?;
+                let transitioned = match cur {
+                    Some(cur) if cur.status == IssueStatus::InReview => true, // already there
+                    Some(cur) if cur.status.can_transition_to(IssueStatus::InReview) => {
+                        self.store
+                            .transition_issue(issue.id, IssueStatus::InReview)
+                            .await?;
+                        true
+                    }
+                    _ => false,
+                };
+                if !transitioned {
+                    // Status moved somewhere the state machine won't take to
+                    // InReview. Say so instead of claiming a transition that
+                    // didn't happen; `pr_number` stays 0 so a later poll (or a
+                    // human) can still pick it up.
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("#{} · InReview", issue.number),
+                        ok: false,
+                        detail: format!(
+                            "查到开放 PR/MR #{pr},但该活当前状态不允许转入评审中,保持原状"
+                        ),
+                    });
+                    continue;
+                }
+                self.store.set_issue_pr_number(issue.id, pr).await?;
+                self.emit(Event::ConnectorSynced {
+                    name: format!("#{} · InReview", issue.number),
+                    ok: true,
+                    detail: format!(
+                        "轮询检测到开放 PR/MR #{pr},已关联 Issue #{} 并转入评审中",
+                        issue.github_number
+                    ),
+                });
+            }
+        }
+        self.refresh_issues().await?;
+        self.emit(Event::IssuesChanged);
         Ok(())
     }
 
@@ -2222,6 +2607,134 @@ impl App {
         }
     }
 
+    /// V1 Issue2 Phase1: the interactive path's settle accounting — the
+    /// counterpart of `finalize_run` for one-shot TUI agent sessions.
+    /// Does the same agent/skill `uses` bumping + artifact reflux, but
+    /// SKIPS the phase-based parts (no `workflow_run` row → no HEAD diff
+    /// via `set_run_heads`, no `LoopEnd` conversion). The interactive
+    /// session's terminal scrollback + session.jsonl is the record (§2.5
+    /// 砍了对话摘要 collector); the worktree's git state + artifacts are
+    /// the file-level evidence buddy keeps.
+    ///
+    /// DEVIATION: HEAD diff is not recorded for interactive runs (no
+    /// `workflow_run` row to attach `set_run_heads` to). The worktree's
+    /// own git log IS the diff evidence — it just isn't indexed in
+    /// buddy's `workflow_run.head_before/after` columns. Recorded in the
+    /// commit deviation note; Phase 2 can add a `workflow_run` row for
+    /// interactive sessions if needed.
+    #[allow(clippy::too_many_arguments)]
+    async fn finalize_run_interactive(
+        &mut self,
+        spec: &WorkflowSpec,
+        proj: &ProjectRow,
+        p: ProjectId,
+        issue_id: Option<IssueId>,
+        skill_output: SkillOutput,
+    ) -> Result<RunOutcome, AppError> {
+        let run_ok = skill_output.completed;
+
+        // Agent/skill uses accounting — same as `finalize_run`: one real
+        // work item = one agent run, one skill use. Doing this once per
+        // interactive session (not per phase) keeps the compounding loop
+        // honest. plan/20 R3(main 合入): by-id via `scope::scoped_pick`,
+        // 同一条就近规则,他项目的同名五角色副本绝不被连带 bump。
+        let agent_catalog = self.store.list_agents().await?;
+        for a in &spec.agents {
+            if let Some(row) = bw_core::scope::scoped_pick(
+                agent_catalog.iter(),
+                Some(p),
+                |x| x.project_id,
+                |x| x.name == a.name,
+            ) {
+                self.store.record_agent_run(row.id, run_ok).await?;
+            }
+        }
+        let skill_catalog = self.store.list_skills().await?;
+        for s in &spec.skills {
+            if let Some(row) = bw_core::scope::scoped_pick(
+                skill_catalog.iter(),
+                Some(p),
+                |x| x.project_id,
+                |x| x.name == s.name,
+            ) {
+                self.store.record_skill_use(row.id).await?;
+            }
+        }
+        if !spec.agents.is_empty() {
+            self.refresh_agents().await?;
+            self.emit(Event::AgentsChanged);
+        }
+        if !spec.skills.is_empty() {
+            self.refresh_skills().await?;
+            self.emit(Event::SkillsChanged);
+        }
+
+        // Artifact reflux: scan the real workspace and register new file
+        // versions. No `workflow_run_id` (interactive sessions don't create
+        // one) — artifacts bind to the issue via `issue_id`. Scan errors
+        // are a 0-fresh no-op, same as the phase-loop path.
+        if !proj.workspace_path.trim().is_empty() {
+            let stage_kind = spec
+                .stage_ref
+                .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n));
+            if let Ok(fresh) = self
+                .scan_and_register_artifacts(
+                    p,
+                    &proj.workspace_path,
+                    None, // no workflow_run row for interactive
+                    stage_kind,
+                    issue_id,
+                )
+                .await
+            {
+                if fresh > 0 {
+                    self.emit(Event::ArtifactsRegistered { fresh });
+                }
+            }
+        }
+
+        // Convert SkillOutput → RunOutcome. `completed = true` → Completed
+        // (the caller's tail advances to InReview iff a PR opens). `false`
+        // → Err (the issue stays InProgress, never auto-Done).
+        if skill_output.completed {
+            Ok(RunOutcome::Completed)
+        } else {
+            Err(AppError::Engine(skill_output.summary))
+        }
+    }
+
+    /// V1 Issue2 Phase2a: the resume path's settle accounting — a slimmed
+    /// `finalize_run_interactive` that does artifact scan ONLY (no agent/skill
+    /// `uses` bump — settle-once: the first run already counted the use; no
+    /// MR creation — the agent creates it in-session; no status transition —
+    /// InReview comes from the `poll_interactive_inreview` poller). Called
+    /// from `run_issue_settle` when `ar.is_resume` is true.
+    async fn finalize_run_interactive_resume(
+        &mut self,
+        proj: &ProjectRow,
+        p: ProjectId,
+        issue_id: Option<IssueId>,
+        stage: StageKind,
+    ) -> Result<(), AppError> {
+        if !proj.workspace_path.trim().is_empty() {
+            if let Ok(fresh) = self
+                .scan_and_register_artifacts(
+                    p,
+                    &proj.workspace_path,
+                    None, // no workflow_run row for interactive
+                    Some(stage),
+                    issue_id,
+                )
+                .await
+            {
+                if fresh > 0 {
+                    self.emit(Event::ArtifactsRegistered { fresh });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// T6 (plan/12 §3): resolve which Agent CLI executes an issue-run and
     /// what `tools` (AllowedTools) it declares. Only `RunIssue` has a
     /// concrete assignee to route by — an issue with no assignee, an
@@ -2610,6 +3123,35 @@ impl App {
         Ok((block, refs))
     }
 
+    /// V1 Issue2 Phase1: fetch the RAW skill body (full content, headings
+    /// NOT demoted) for interactive injection — the skill body goes into
+    /// the interactive session as the first user message (positional
+    /// `prompt` argument), so it should keep its original `#`-shaped
+    /// structure. Same lookup logic as `standard_skill_block` (including
+    /// plan/20 R2 就近遮蔽), but returns the raw content string instead of a
+    /// formatted block. An empty/content-less slug returns an empty string
+    /// (honest no-op, never fails the run).
+    ///
+    /// plan/20 合入后 `scoped_pick` 是必须的,不是对齐洁癖:W1 起每个项目
+    /// 都有一份自己的五角色副本、跨作用域同名合法(R4),裸 `find(by name)`
+    /// 会撞上别的项目那一行,把他项目改过的正文灌进本项目的交互式会话。
+    async fn fetch_skill_body(&self, project: ProjectId, slug: &str) -> Result<String, AppError> {
+        if slug.trim().is_empty() {
+            return Ok(String::new());
+        }
+        let catalog = self.store.list_skills().await?;
+        let Some(skill) = bw_core::scope::scoped_pick(
+            catalog.iter(),
+            Some(project),
+            |s| s.project_id,
+            |s| s.name == slug,
+        )
+        .filter(|s| !s.content.trim().is_empty()) else {
+            return Ok(String::new());
+        };
+        Ok(skill.content.trim().to_string())
+    }
+
     /// A4: name of the machine-fed "完成 Issue 数" leading metric, seeded per
     /// project×stage with an EMPTY target so its signal stays Unknown (honest
     /// "no goal set") — never a fake green from a raw completion count.
@@ -2711,11 +3253,15 @@ impl App {
 
     /// P5 · codehub 公共指标 seed(对标 `seed_stage_done_metrics` 的幂等套路):
     /// 给 `provider=codehub` 且 `remote_path` 非空的项目种两条默认公共指标
-    /// ——开放 Issue 数 + 已合入 MR 数,`kind=codehub` 走 `collect_project_metrics`
-    /// 的 codehub arm 真采(`codehub-cli issue|mr list --jq length`)。**不用
-    /// 定义**——V3 规划里「公共指标默认有」的落地。非 codehub / 没接远端 →
-    /// no-op(留 github 的既有口径不动)。口径先用最小词汇 `issues:opened` /
-    /// `mrs:merged`,复杂窗口(本周合入)留后续按真实需求扩。
+    /// ——开放 Issue 数 + 已合入 MR 数。V1 Issue 1 phase2:`collect_kind`
+    /// 从 `'codehub'`(inline arm)改为 `'script'`(script connector arm),
+    /// `collect_query` 从 `'issues:opened'`/`'mrs:merged'` 改为
+    /// `'open_issues'`/`'merged_mrs'`(script 输出 JSON 的字段路径)。
+    /// cron → `collect_project_metrics` → script arm 预跑「codehub 仓统计」
+    /// connector → 输出 JSON → metric 按 `collect_query` 取值 → observation。
+    /// **不用定义**——V3 规划里「公共指标默认有」的落地。非 codehub / 没
+    /// 接远端 → no-op(留 github 的既有口径不动)。inline codehub arm 留兼容
+    /// (§6 偏差:本 issue 不动 collect_project_metrics 的 inline arm)。
     async fn seed_codehub_public_metrics(&self, project: ProjectId) -> Result<(), AppError> {
         let proj = self
             .store
@@ -2736,16 +3282,18 @@ impl App {
             .collect();
         // (name, def, query) —— 公共计数,滞后指标(Lagging),空 target 保持
         // signal Unknown(计数不是目标,只为点亮「有数据」)。
+        // V1 Issue 1: query 改为 script 输出 JSON 的字段路径(open_issues /
+        // merged_mrs),collect_kind 改为 script。
         const PAIR: [(&str, &str, &str); 2] = [
             (
                 "开放 Issue 数",
-                "codehub 仓当前 state=opened 的 issue 计数(机器源,codehub-cli issue list --jq length)",
-                "issues:opened",
+                "codehub 仓当前 state=opened 的 issue 计数(机器源,buddy 自带 script connector 跑 codehub-cli issue list --jq length)",
+                "open_issues",
             ),
             (
                 "已合入 MR 数",
-                "codehub 仓累计 state=merged 的 MR 计数(机器源,codehub-cli mr list --jq length)",
-                "mrs:merged",
+                "codehub 仓累计 state=merged 的 MR 计数(机器源,buddy 自带 script connector 跑 codehub-cli mr list --jq length)",
+                "merged_mrs",
             ),
         ];
         for (idx, (name, def, query)) in PAIR.iter().copied().enumerate() {
@@ -2765,7 +3313,7 @@ impl App {
                     last_target: String::new(),
                     driver: String::new(),
                     pos: 200 + idx as i64,
-                    collect_kind: "codehub".into(),
+                    collect_kind: "script".into(),
                     collect_query: query.to_string(),
                 })
                 .await?;
@@ -3079,6 +3627,49 @@ impl App {
         self.emit(Event::AgentsChanged);
     }
 
+    /// V1 Issue 1 phase2 · 工作区探活三元组:采 `evidence::collect` →
+    /// 喂指标(`feed_workspace_metrics`)→ 扫 assets(`sync_project_assets`)。
+    /// `CreateProject` 末尾与 `CompleteCreation` 末尾共用;失败只 `eprintln!`,
+    /// 绝不阻断创建流本身(创建永不因探活失败而崩)。`label` 区分日志来源,
+    /// 与原两处内联的 `eprintln!` 文案逐字一致。空工作区的守卫留在各调用
+    /// 处(`CreateProject` 需判 `workspace_path` 非空;`CompleteCreation` 的
+    /// `path` 刚 mint 出来,调用处不守)——差异保留,不强同化。
+    async fn probe_workspace(&mut self, project: ProjectId, workspace: &str, label: &str) {
+        match evidence::collect(workspace).await {
+            Ok(ev) => {
+                let _ = self.feed_workspace_metrics(project, &ev).await;
+                self.sync_project_assets(project, workspace).await;
+            }
+            Err(e) => {
+                eprintln!("[BW] {label} 工作区探活失败:{e}");
+            }
+        }
+    }
+
+    /// CreateProject 远端建仓/接入四臂(github New/Existing + codehub New/Existing)
+    /// 共用这段:未配 `workspaces_root` → 建仓根本起不来,发同款
+    /// `ConnectorSynced(Fail)` + `ActionProgress(Fail)` 对子。各臂只在
+    /// provider 标签("GitHub"/"CodeHub")与"为什么"文案上不同,其余逐字
+    /// 一致——抽出来收口,避免四份逐字复制。
+    fn fail_no_workspaces_root(
+        &mut self,
+        action_name: &str,
+        proj_name: &str,
+        provider_label: &str,
+        detail: &str,
+    ) {
+        let detail = detail.to_string();
+        self.emit(Event::ConnectorSynced {
+            name: format!("{} · {}", proj_name, provider_label),
+            ok: false,
+            detail: detail.clone(),
+        });
+        self.emit(Event::ActionProgress {
+            name: action_name.to_string(),
+            state: ActionState::Fail(detail),
+        });
+    }
+
     /// C4 · issue 身份映射(plan/13 D2): a project with a `remote_path`
     /// gets every BW-minted Issue mirrored as a real GitHub issue — the issue
     /// number is the Issue's cross-system identity. Called AFTER the Issue
@@ -3329,6 +3920,42 @@ impl App {
         Ok(())
     }
 
+    /// V1 Issue2 Phase 3 · §3.2: sync `.bw/connectors.toml` → SQLite
+    /// `connector` rows. Parallel to [`sync_metrics_file_for`] — the file is
+    /// the source of truth, buddy DB is a mirror. merge after `MergeIssuePr`
+    /// auto-calls this (alongside `sync_metrics_file_for`). File not
+    /// existing = zero action zero noise (same idiom). Bad file = honest
+    /// error toast, cache untouched.
+    ///
+    /// Only `kind = "script"` connectors are synced from the file (other
+    /// kinds live in the DB from their creation paths). Each connector is
+    /// upserted by `(project_id, name)` — existing rows keep their id, new
+    /// rows get `kind = 'script'` + default operational fields.
+    async fn sync_connectors_file_for(&mut self, p: ProjectId) -> Result<(), AppError> {
+        let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+        match bw_engine::connectors_file::read(&proj.workspace_path) {
+            Ok(None) => {}
+            Ok(Some(file)) => {
+                let sync = connectors_file_sync(p, &file);
+                let summary = self.store.sync_connectors_file(sync).await?;
+                self.emit(Event::ProjectUpdated(p));
+                self.emit(Event::ConnectorSynced {
+                    name: "connectors.toml".into(),
+                    ok: true,
+                    detail: format!("{} 个 script 连接器已同步", summary.connectors_synced),
+                });
+            }
+            Err(e) => {
+                self.emit(Event::ConnectorSynced {
+                    name: "connectors.toml".into(),
+                    ok: false,
+                    detail: e.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     async fn collect_project_metrics(
         &mut self,
         project: ProjectId,
@@ -3395,43 +4022,84 @@ impl App {
                     continue;
                 }
                 let script_path = Path::new(&proj.workspace_path).join(&cfg.script);
-                let run = tokio::process::Command::new(&command)
-                    .arg(&script_path)
-                    .current_dir(&proj.workspace_path)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .output();
-                let out = match tokio::time::timeout(std::time::Duration::from_secs(300), run).await
-                {
-                    Ok(Ok(o)) if o.status.success() => o,
-                    Ok(Ok(o)) => {
-                        // 非零退出:stderr 尾部入错因(读回为证,运维能从 buddy 内判根因)
-                        let stderr = String::from_utf8_lossy(&o.stderr);
-                        let tail: String = stderr
-                            .chars()
-                            .rev()
-                            .take(500)
-                            .collect::<String>()
-                            .chars()
-                            .rev()
-                            .collect();
-                        summary.failed += 1;
-                        if summary.first_error.is_none() {
-                            summary.first_error = Some(format!(
-                                "script {} 非零退出:{}",
-                                cfg.script,
-                                tail.trim_end()
-                            ));
+                // PF1-R5c · Windows: app 进程 PATH 可能缺 Git bin/usr-bin
+                // (sh.exe/bash.exe 所在),`Command::new("sh")` 报 program not
+                // found。用候选链(BW_SH_BIN env → 裸名 PATH 搜 → 从 git.exe
+                // 推导全路径 → 常见安装位),NotFound 才换下一个;非零退出/超时用当前。
+                let candidates = script_interpreter_candidates(&command);
+                let mut out: Option<std::process::Output> = None;
+                for cand in &candidates {
+                    let run = tokio::process::Command::new(cand)
+                        .arg(&script_path)
+                        .current_dir(&proj.workspace_path)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .output();
+                    match tokio::time::timeout(std::time::Duration::from_secs(300), run).await {
+                        Ok(Ok(o)) if o.status.success() => {
+                            out = Some(o);
+                            break;
                         }
-                        continue;
+                        Ok(Ok(o)) => {
+                            // 非零退出:此候选能 spawn(脚本能跑),用其结果不试下一个。
+                            let stderr = String::from_utf8_lossy(&o.stderr);
+                            let tail: String = stderr
+                                .chars()
+                                .rev()
+                                .take(500)
+                                .collect::<String>()
+                                .chars()
+                                .rev()
+                                .collect();
+                            summary.failed += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error = Some(format!(
+                                    "script {} 非零退出({}):{}",
+                                    cfg.script,
+                                    cand,
+                                    tail.trim_end()
+                                ));
+                            }
+                            break;
+                        }
+                        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                            // 此候选不在 PATH,试下一个
+                            continue;
+                        }
+                        Ok(Err(e)) => {
+                            summary.failed += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error = Some(format!(
+                                    "script {} spawn 失败({}):{}",
+                                    cfg.script, cand, e
+                                ));
+                            }
+                            break;
+                        }
+                        Err(_) => {
+                            summary.failed += 1;
+                            if summary.first_error.is_none() {
+                                summary.first_error = Some(format!(
+                                    "script {} 超时(>300s,可能 codehub-cli 挂起)",
+                                    cfg.script
+                                ));
+                            }
+                            break;
+                        }
                     }
-                    _ => {
+                }
+                let out = match out {
+                    Some(o) => o,
+                    None => {
+                        // 所有候选都 NotFound(无可用解释器)。failed 无条件计
+                        // (对齐其余失败分支),first_error 只记首条(守卫内)。
                         summary.failed += 1;
                         if summary.first_error.is_none() {
                             summary.first_error = Some(format!(
-                                "script {} 跑失败(超时>300s 或 spawn 失败)",
-                                cfg.script
+                                "script {} 无可用解释器(试过 {})",
+                                cfg.script,
+                                candidates.join("/")
                             ));
                         }
                         continue;
@@ -3928,6 +4596,51 @@ impl App {
 
             fired.push(c.id);
         }
+        // V1 Issue2 Phase2b: drain hook events from the listener (localhost
+        // HTTP server). SessionStart → store session_id (F1 fix); Stop → set
+        // pending_stop_check for immediate InReview detection. Best-effort —
+        // a failure is silently skipped (the 5-minute poller below is the
+        // backstop). No listener (hook_event_rx = None) = no-op.
+        let _ = self.poll_hook_events().await;
+
+        // V1 Issue2 Phase2b: Stop-triggered InReview check. When a `Stop`
+        // hook event was received (agent finished a turn), run
+        // `poll_interactive_inreview` immediately — the Stop is the real-time
+        // trigger (replaces 2a's 5-minute-only cadence). The tick's cadence
+        // is the natural throttle (multiple Stops in one tick = one check).
+        if self.state.pending_stop_check {
+            self.state.pending_stop_check = false;
+            if let Err(e) = self.poll_interactive_inreview().await {
+                self.emit(Event::ConnectorSynced {
+                    name: "InReview (Stop 触发)".into(),
+                    ok: false,
+                    detail: format!("Stop 触发 InReview 检测失败,5min 轮询兜底:{e}"),
+                });
+            }
+        }
+
+        // V1 Issue2 Phase2a: InReview detection poller (throttled backstop).
+        // Checks codehub/github for open MRs on interactive issues (InProgress
+        // + interactive_started + pr_number == 0). Not a cron task — a
+        // separate periodic check that rides `tick_scheduler`'s cadence
+        // but throttles to once per 5 min so it doesn't hit the remote
+        // every tick. Never auto-Done (铁律) — only backfills pr_number +
+        // transitions to InReview. In Phase2b this is the BACKSTOP for the
+        // Stop-triggered check above — catches MRs the Stop trigger missed
+        // (hook not installed, agent session not via buddy, etc.).
+        let now_ts = now().unix_timestamp();
+        if now_ts - self.state.last_inreview_poll >= INREVIEW_POLL_INTERVAL_SECS {
+            self.state.last_inreview_poll = now_ts;
+            // Best-effort: a poller failure is recorded as a toast but never
+            // blocks the scheduler's cron-fired list from returning.
+            if let Err(e) = self.poll_interactive_inreview().await {
+                self.emit(Event::ConnectorSynced {
+                    name: "InReview 轮询".into(),
+                    ok: false,
+                    detail: format!("本轮 InReview 检测失败,下轮重试:{e}"),
+                });
+            }
+        }
         Ok(fired)
     }
 
@@ -4085,6 +4798,16 @@ impl App {
         Ok(report)
     }
 
+    /// V1 Issue2 Phase1: whether a `standard_skill` slug routes to the
+    /// interactive path (one-shot TUI agent session, no phase loop).
+    /// These two skills are the creation-flow trio's "找指标" + "绑数据"
+    /// — they need an interactive claude session (the user watches the
+    /// terminal, the agent reads the project workspace, produces
+    /// `.bw/metrics.toml` / `docs/metrics-rationale.md`).
+    fn is_interactive_skill(slug: &str) -> bool {
+        matches!(slug, "north-star-discovery" | "metrics-binding")
+    }
+
     /// plan/17 S1+S3: entry guard + lifecycle for the same-project serial
     /// run lock (`AppState::active_run`). Backgrounded path (`settle_tx`
     /// wired — the desktop kernel): `run_issue_backgrounded` sets
@@ -4097,12 +4820,8 @@ impl App {
     /// applies uniformly.
     async fn run_issue_now(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
         // Fail fast on a same-project in-flight run before touching anything.
-        let p = self
-            .store
-            .get_issue(id)
-            .await?
-            .ok_or(AppError::NotFound)?
-            .project_id;
+        let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+        let p = issue.project_id;
         if let Some(ar) = &self.state.active_run {
             if ar.project == p {
                 return Err(AppError::Invalid(
@@ -4110,7 +4829,16 @@ impl App {
                 ));
             }
         }
-        if self.settle_tx.is_some() {
+        // V1 Issue2 Phase1: interactive skills (north-star-discovery,
+        // metrics-binding) route to the interactive path — a one-shot TUI
+        // agent session (claude CLI in a terminal, skill body pre-loaded,
+        // bridge system prompt for project context + buddy 契约). No phase
+        // loop, no adversarial review — one skill = one session (§2.3).
+        // Other issues use the existing one-shot / phase-loop path, zero
+        // disturbance.
+        if Self::is_interactive_skill(&issue.standard_skill) {
+            self.run_issue_interactive(session, id).await
+        } else if self.settle_tx.is_some() {
             self.run_issue_backgrounded(session, id).await
         } else {
             self.run_issue_body(session, id).await
@@ -4125,16 +4853,32 @@ impl App {
     /// loop is NOT here. Both the inline path (`run_issue_body`) and the
     /// backgrounded path (`run_issue_backgrounded`) start here, so the
     /// spec / worktree / guard setup is never duplicated.
-    async fn prepare_issue_run(&mut self, id: IssueId) -> Result<IssueRunPrep, AppError> {
+    ///
+    /// V1 Issue2 Phase2a: `resume` controls the interactive resume path.
+    /// When `true` (interactive issue with `interactive_started = true`
+    /// re-clicked ▶跑): skip the status check (Done/InReview can resume —
+    /// the session persists, no status change happens) and skip the
+    /// InProgress transition (the issue stays in its current state). The
+    /// worktree is still provisioned (for the cwd `--continue` needs). One-
+    /// shot callers always pass `false`.
+    async fn prepare_issue_run(
+        &mut self,
+        id: IssueId,
+        resume: bool,
+    ) -> Result<IssueRunPrep, AppError> {
         let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
         // A5-F: only work not yet settled/parked/under-review/blocked
         // can be (re)started this way. InProgress is a legal starting
         // point too — it's the retry path after an honest failure
         // (the issue stays InProgress on error, never faked forward).
-        if !matches!(
-            issue.status,
-            IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
-        ) {
+        // V1 Issue2 Phase2a: resume bypasses this check — a Done/InReview
+        // issue can resume its interactive session (no status change).
+        if !resume
+            && !matches!(
+                issue.status,
+                IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
+            )
+        {
             return Err(AppError::Invalid(format!(
                 "#{} 处于{},不能直接运行",
                 issue.number,
@@ -4269,7 +5013,10 @@ impl App {
         // retry (issue already InProgress from a prior failed run)
         // skips this — X→X is not a legal table edge, and there's
         // nothing to change anyway.
-        if issue.status != IssueStatus::InProgress {
+        // V1 Issue2 Phase2a: resume skips this entirely — the issue
+        // stays in its current state (InProgress/InReview/Done); only
+        // the session is resumed, no status transition.
+        if !resume && issue.status != IssueStatus::InProgress {
             self.store
                 .transition_issue(id, IssueStatus::InProgress)
                 .await?;
@@ -4494,7 +5241,7 @@ impl App {
     /// `Command::RunIssue`'s doc for the state-machine contract (InProgress
     /// at start, InReview on success via the PR-derive rule, never auto-Done).
     async fn run_issue_body(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
-        let prep = self.prepare_issue_run(id).await?;
+        let prep = self.prepare_issue_run(id, false).await?;
         let IssueRunPrep {
             issue,
             proj,
@@ -4536,7 +5283,7 @@ impl App {
         session: SessionId,
         id: IssueId,
     ) -> Result<(), AppError> {
-        let prep = self.prepare_issue_run(id).await?;
+        let prep = self.prepare_issue_run(id, false).await?;
         let p = prep.issue.project_id;
         let IssueRunPrep {
             issue,
@@ -4610,7 +5357,7 @@ impl App {
             let _ = settle_tx.send(SettleReq {
                 project: p,
                 issue: id,
-                outcome,
+                outcome: SettleOutcome::PhaseLoop(outcome),
             });
         });
         self.state.active_run = Some(ActiveRun {
@@ -4629,8 +5376,251 @@ impl App {
             proj,
             issue_ws,
             pr_eligible,
+            is_resume: false,
         });
         Ok(())
+    }
+
+    /// V1 Issue2 Phase1: the INTERACTIVE issue-run path (one-shot TUI agent
+    /// session, no phase loop). Same 起手 prefix (`prepare_issue_run`) as the
+    /// phase-loop path, then builds a [`LaunchPlan`] (skill body from the
+    /// Skill Hub + bridge system prompt from [`PlaybookCtx`]) and either:
+    ///  - **Backgrounded** (`settle_tx` wired — desktop kernel): spawn a
+    ///    task that calls [`InteractiveExecutor::run_skill`], report back
+    ///    via `settle_tx`. The kernel's settle arm drives
+    ///    `finalize_run_interactive` + `issue_run_tail`.
+    ///  - **Inline** (`settle_tx` = None — examples / headless drivers):
+    ///    await `run_skill` inline, then `finalize_run_interactive` +
+    ///    `issue_run_tail` synchronously.
+    ///
+    /// A project with no real `workspace_path` runs on
+    /// [`MockInteractiveExecutor`] (self-labeled 【mock】 + placeholder
+    /// `.bw/metrics.toml`); a configured one runs on
+    /// [`InteractiveCliExecutor`] (spawns a system terminal running the
+    /// `claude` CLI). **one-shot ClaudeCliExecutor 路径零扰动** — other
+    /// issues still use `run_issue_backgrounded` / `run_issue_body`.
+    async fn run_issue_interactive(
+        &mut self,
+        _session: SessionId,
+        id: IssueId,
+    ) -> Result<(), AppError> {
+        // V1 Issue2 Phase2b: first-run vs resume — decided by claude_session_id
+        // (F1 fix). `interactive_started` is set before spawn (marks an attempt);
+        // `claude_session_id` is set by the hook listener on SessionStart (marks
+        // the session was actually established). If session_id is empty, the first
+        // spawn either failed or the hook hasn't fired → use build_startup_plan
+        // (re-inject skill, don't get stuck in a skill-less session). If
+        // session_id is non-empty → resume with `--resume <id>` (precise session).
+        let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+        let is_resume = !issue.claude_session_id.is_empty();
+        let prep = self.prepare_issue_run(id, is_resume).await?;
+        let p = prep.issue.project_id;
+        let issue = prep.issue.clone();
+        let standard_skill = prep.issue.standard_skill.clone();
+        let IssueRunPrep {
+            issue: _,
+            proj,
+            spec,
+            issue_ws,
+            pr_eligible,
+            guard,
+        } = prep;
+
+        let workspace_cwd = issue_ws
+            .as_deref()
+            .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
+
+        // Build the plan: startup (first run) or resume (--resume <session_id>).
+        let plan = if is_resume {
+            // Resume: no new prompt, no bridge system prompt. The session
+            // persists under ~/.claude/projects/<encoded-cwd>/ from the
+            // first run; `--resume <session_id>` re-enters the exact session.
+            // session_id was captured by the hook listener (non-empty = is_resume).
+            build_resume_plan(&CLAUDE, Some(&issue.claude_session_id), workspace_cwd)
+                .map_err(|e| AppError::Engine(e.to_string()))?
+        } else {
+            // First run: fetch skill body + build bridge system prompt.
+            let handoff_note = self
+                .store
+                .list_handoffs(p)
+                .await?
+                .first()
+                .map(|h| h.note.clone())
+                .unwrap_or_default();
+            let workspace_hint = if proj.workspace_path.trim().is_empty() {
+                "（未配置真实工作区 —— 交互式会话在 MockInteractiveExecutor 上,产出仅为流程演示）"
+                    .to_string()
+            } else {
+                format!(
+                    "工作区 {}（git 仓库）。产出落于此;先查看现状再动手。",
+                    proj.workspace_path.trim()
+                )
+            };
+            let playbook_ctx = bw_core::playbook::PlaybookCtx {
+                project_name: proj.name.clone(),
+                project_kind: proj.kind.clone(),
+                project_desc: proj.desc.clone(),
+                benchmark: proj.benchmark.clone(),
+                opportunity: proj.opportunity.clone(),
+                north_star: proj.north_star.clone(),
+                ns_def: proj.ns_def.clone(),
+                handoff_note,
+                workspace_hint,
+            };
+            let skill_body = self.fetch_skill_body(p, &standard_skill).await?;
+            if skill_body.trim().is_empty() {
+                return Err(AppError::Invalid(format!(
+                    "交互式技能 `{standard_skill}` 的正文为空 —— 无法启动交互式会话"
+                )));
+            }
+            let bridge_prompt = build_bridge_system_prompt(&playbook_ctx, &standard_skill);
+            build_startup_plan(&CLAUDE, &skill_body, &bridge_prompt, workspace_cwd)
+                .map_err(|e| AppError::Engine(e.to_string()))?
+        };
+
+        // Mark interactive_started before spawning (first run only) so a
+        // re-click routes to resume. Set before spawn: even if spawn fails,
+        // the next attempt re-tries as resume (which is safe — `--continue`
+        // on a non-existent session just starts a fresh one in claude's CLI).
+        // V1 Issue2 Phase2b: the resume decision now uses `claude_session_id`
+        // (not `interactive_started`) — see the F1 fix at the top of this
+        // function. `interactive_started` is still set (marks a spawn was
+        // attempted, used by the poller's filter).
+        if !is_resume {
+            self.store.set_issue_interactive_started(id).await?;
+        }
+
+        // V1 Issue2 Phase2b: register the worktree cwd → IssueId mapping so
+        // the hook listener can route SessionStart/Stop events (which carry
+        // `cwd` in the payload) back to this issue. Registered before spawn
+        // so events arrive as soon as the session starts.
+        let cwd_key = workspace_cwd.to_string_lossy().to_string();
+        if !cwd_key.is_empty() {
+            self.state.interactive_sessions.insert(cwd_key, id);
+        }
+
+        // Capture head_before (for potential evidence; Phase 1 doesn't
+        // record HEAD diff for interactive runs — no workflow_run row).
+        let heads_workspace = workspace_cwd.to_string_lossy().to_string();
+        let head_before = if heads_workspace.is_empty() {
+            None
+        } else {
+            evidence::head_commit(&heads_workspace).await.ok().flatten()
+        };
+
+        // Construct the executor: real spawn if workspace configured, mock
+        // if not (same honest split as the phase-loop path's engine
+        // selection).
+        let executor: Arc<dyn InteractiveExecutor> = if proj.workspace_path.trim().is_empty() {
+            Arc::new(MockInteractiveExecutor::new())
+        } else {
+            Arc::new(
+                InteractiveCliExecutor::new()
+                    .with_claude_binary(self.state.claude_config.binary.clone()),
+            )
+        };
+
+        let ctx = RunCtx {
+            project: p,
+            workflow: spec.id,
+        };
+
+        // Announce (same event as the phase-loop path — the UI shows
+        // "this run uses X/Y").
+        self.emit(Event::RunStarted {
+            workflow_name: spec.name.clone(),
+            agents: spec.agents.clone(),
+            skills: spec.skills.clone(),
+        });
+
+        // V1 Issue2 Phase2b: when PTY mode is enabled (desktop kernel wires
+        // it via `App::with_pty`), the backgrounded path creates byte-stream
+        // channels and uses `run_skill_pty` (PTY spawn + byte streaming)
+        // instead of `run_skill` (system terminal). The inline path
+        // (examples/headless) never uses PTY — no UI to render bytes.
+
+        if let Some(settle_tx) = self.settle_tx.clone() {
+            // ── Backgrounded (desktop kernel) ──
+            let handle = if self.state.pty_enabled {
+                // V1 Issue2 Phase2b: PTY mode — create byte-stream channels
+                // and spawn via `run_skill_pty`. The App holds `input_tx`
+                // (for forwarding `Command::TerminalInput`) and `bytes_rx`
+                // (for draining via `drain_pty_bytes` → `pty_tx` watch).
+                let (bytes_tx, bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+                let (input_tx, input_rx) = mpsc::unbounded_channel::<bw_engine::PtyInput>();
+                self.state.pty_input_tx = Some(input_tx);
+                self.state.pty_bytes_rx = Some(bytes_rx);
+                tokio::spawn(async move {
+                    let result = executor
+                        .run_skill_pty(&plan, &ctx, bytes_tx, input_rx)
+                        .await
+                        .map_err(|e| AppError::Engine(e.to_string()));
+                    let _ = settle_tx.send(SettleReq {
+                        project: p,
+                        issue: id,
+                        outcome: SettleOutcome::Interactive(result),
+                    });
+                })
+            } else {
+                // System-terminal mode (2a behavior — PTY not enabled or
+                // examples/headless). The task calls run_skill / run_skill_resume.
+                tokio::spawn(async move {
+                    let result = if is_resume {
+                        executor.run_skill_resume(&plan, &ctx).await
+                    } else {
+                        executor.run_skill(&plan, &ctx).await
+                    }
+                    .map_err(|e| AppError::Engine(e.to_string()));
+                    let _ = settle_tx.send(SettleReq {
+                        project: p,
+                        issue: id,
+                        outcome: SettleOutcome::Interactive(result),
+                    });
+                })
+            };
+            self.state.active_run = Some(ActiveRun {
+                project: p,
+                issue,
+                handle,
+                guard,
+                finalize: FinalizeCtx {
+                    spec,
+                    heads_workspace,
+                    head_before,
+                    proj: proj.clone(),
+                    p,
+                    issue_id: Some(id),
+                },
+                proj,
+                issue_ws,
+                pr_eligible,
+                is_resume,
+            });
+            Ok(())
+        } else {
+            // ── Inline (examples / headless drivers) ──
+            let skill_output = if is_resume {
+                executor.run_skill_resume(&plan, &ctx).await
+            } else {
+                executor.run_skill(&plan, &ctx).await
+            }
+            .map_err(|e| AppError::Engine(e.to_string()))?;
+            // V1 Issue2 Phase2a: interactive path skips issue_run_tail (no
+            // MR creation — agent does it in-session; InReview comes from
+            // polling). First run: uses + artifacts. Resume: artifacts only
+            // (settle-once — uses were bumped on the first run).
+            if is_resume {
+                self.finalize_run_interactive_resume(&proj, p, Some(id), issue.stage)
+                    .await?;
+            } else {
+                let _ = self
+                    .finalize_run_interactive(&spec, &proj, p, Some(id), skill_output)
+                    .await?;
+            }
+            // Guard drops on return (worktree cleanup). Issue stays in its
+            // current state (InProgress on first run; unchanged on resume).
+            Ok(())
+        }
     }
 
     /// plan/17 S3: settle a backgrounded issue-run on the main thread. Called
@@ -4654,12 +5644,15 @@ impl App {
             self.state.active_run = Some(ar);
             return Ok(());
         }
-        // `Err` = `?`-early-bail mid-round (a store error before any settle) —
-        // skip finalize (the round's row stays started-never-settled, honest),
-        // mirror the inline path's early-return. `Ok` = normal loop terminal
-        // → finalize_run does the once-per-run accounting.
+        // V1 Issue2 Phase2a: interactive sessions skip `issue_run_tail`
+        // entirely (no MR creation — the agent creates it in-session; no
+        // InReview transition from the run — polling detects open MR).
+        // First run: `finalize_run_interactive` (uses + artifacts). Resume:
+        // `finalize_run_interactive_resume` (artifacts only, settle-once).
+        // Phase-loop sessions keep `finalize_run` + `issue_run_tail`.
+        let interactive = matches!(req.outcome, SettleOutcome::Interactive(_));
         let outcome = match req.outcome {
-            Ok((end, last_run_log, final_run_ok)) => {
+            SettleOutcome::PhaseLoop(Ok((end, last_run_log, final_run_ok))) => {
                 self.finalize_run(
                     &ar.finalize.spec,
                     &ar.finalize.heads_workspace,
@@ -4673,17 +5666,56 @@ impl App {
                 )
                 .await
             }
-            Err(e) => Err(e),
+            SettleOutcome::PhaseLoop(Err(e)) => Err(e),
+            SettleOutcome::Interactive(Ok(skill_output)) => {
+                if ar.is_resume {
+                    self.finalize_run_interactive_resume(
+                        &ar.finalize.proj,
+                        ar.finalize.p,
+                        ar.finalize.issue_id,
+                        ar.issue.stage,
+                    )
+                    .await
+                    .map(|_| RunOutcome::Completed)
+                } else {
+                    self.finalize_run_interactive(
+                        &ar.finalize.spec,
+                        &ar.finalize.proj,
+                        ar.finalize.p,
+                        ar.finalize.issue_id,
+                        skill_output,
+                    )
+                    .await
+                }
+            }
+            SettleOutcome::Interactive(Err(e)) => Err(e),
         };
-        self.issue_run_tail(
-            ar.issue,
-            ar.proj,
-            ar.issue_ws,
-            ar.pr_eligible,
-            outcome,
-            ar.guard,
-        )
-        .await
+        if interactive {
+            // No `issue_run_tail` for interactive — the agent creates the MR
+            // in-session and the InReview poller detects it. Guard drops
+            // here (worktree cleanup); the issue stays in its current state
+            // (InProgress on first run, unchanged on resume). Never auto-Done.
+            // V1 Issue2 Phase2b: clear PTY state so the terminal widget
+            // disappears (pty_active → false), input stops going to the
+            // dropped receiver, and the 100ms pty_ticker stops spinning.
+            self.state.pty_input_tx = None;
+            self.state.pty_bytes_rx = None;
+            self.forget_interactive_session(ar.issue.id);
+            drop(ar.guard);
+            self.refresh_issues().await?;
+            self.emit(Event::IssuesChanged);
+            outcome.map(|_| ())
+        } else {
+            self.issue_run_tail(
+                ar.issue,
+                ar.proj,
+                ar.issue_ws,
+                ar.pr_eligible,
+                outcome,
+                ar.guard,
+            )
+            .await
+        }
     }
 
     /// plan/17 S3 (① 中止): abort the in-flight backgrounded run on an issue.
@@ -4708,6 +5740,14 @@ impl App {
             return Ok(());
         }
         ar.handle.abort(); // drop the spawned round-loop future → kill_on_drop
+                           // V1 Issue2 Phase2b: an interactive run cancelled here must clear the
+                           // same PTY/session state the settle arm clears — otherwise the
+                           // terminal widget keeps rendering (pty_active stays true) and typed
+                           // bytes go into a receiver nobody reads. Unconditional: the phase-loop
+                           // path never sets these, so clearing is a no-op there.
+        self.state.pty_input_tx = None;
+        self.state.pty_bytes_rx = None;
+        self.forget_interactive_session(ar.issue.id);
         self.emit(Event::WorkflowFailed(format!(
             "Issue #{} 已中止",
             ar.issue.number
@@ -5116,16 +6156,6 @@ impl App {
                                         self.store
                                             .create_connector(NewConnector {
                                                 id: ConnectorId::new(),
-                                                name: format!("{} · 代码仓", proj.name),
-                                                kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                                scope: proj.name.clone(),
-                                                project_id: Some(id),
-                                                config: path.clone(),
-                                            })
-                                            .await?;
-                                        self.store
-                                            .create_connector(NewConnector {
-                                                id: ConnectorId::new(),
                                                 name: format!("{} · GitHub", proj.name),
                                                 kind: CONNECTOR_KIND_GITHUB_REPO.into(),
                                                 scope: proj.name.clone(),
@@ -5164,16 +6194,12 @@ impl App {
                                 }
                             }
                             None => {
-                                let detail = "未配置本地工作区根目录,无法建仓".to_string();
-                                self.emit(Event::ConnectorSynced {
-                                    name: format!("{} · GitHub", proj.name),
-                                    ok: false,
-                                    detail: detail.clone(),
-                                });
-                                self.emit(Event::ActionProgress {
-                                    name: action_name,
-                                    state: ActionState::Fail(detail),
-                                });
+                                self.fail_no_workspaces_root(
+                                    &action_name,
+                                    &proj.name,
+                                    "GitHub",
+                                    "未配置本地工作区根目录,无法建仓",
+                                );
                             }
                         }
                     }
@@ -5198,16 +6224,6 @@ impl App {
                                                 "github.com",
                                                 &format!("{}/{}", r.owner, r.repo),
                                             )
-                                            .await?;
-                                        self.store
-                                            .create_connector(NewConnector {
-                                                id: ConnectorId::new(),
-                                                name: format!("{} · 代码仓", proj.name),
-                                                kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                                scope: proj.name.clone(),
-                                                project_id: Some(id),
-                                                config: path.clone(),
-                                            })
                                             .await?;
                                         self.store
                                             .create_connector(NewConnector {
@@ -5244,20 +6260,16 @@ impl App {
                                 }
                             }
                             None => {
-                                let detail = "未配置本地工作区根目录,无法接入".to_string();
-                                self.emit(Event::ConnectorSynced {
-                                    name: format!("{} · GitHub", proj.name),
-                                    ok: false,
-                                    detail: detail.clone(),
-                                });
-                                self.emit(Event::ActionProgress {
-                                    name: action_name,
-                                    state: ActionState::Fail(detail),
-                                });
+                                self.fail_no_workspaces_root(
+                                    &action_name,
+                                    &proj.name,
+                                    "GitHub",
+                                    "未配置本地工作区根目录,无法接入",
+                                );
                             }
                         }
                     }
-                    (None, None, Some(CodehubOrigin { host, path })) => {
+                    (None, None, Some(CodehubOrigin::Existing { host, path })) => {
                         // codehub 接入已有仓(对标 github Existing):真实
                         // `codehub-cli repo clone` 网络调用,同一套 Started→Ok/Fail。
                         let action_name = format!("{} · 克隆 codehub 仓", proj.name);
@@ -5273,16 +6285,6 @@ impl App {
                                         let p = dir.to_string_lossy().into_owned();
                                         self.store.set_workspace(id, &p, true).await?;
                                         self.store.set_remote(id, &host, &path).await?;
-                                        self.store
-                                            .create_connector(NewConnector {
-                                                id: ConnectorId::new(),
-                                                name: format!("{} · 代码仓", proj.name),
-                                                kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                                scope: proj.name.clone(),
-                                                project_id: Some(id),
-                                                config: p.clone(),
-                                            })
-                                            .await?;
                                         self.store
                                             .create_connector(NewConnector {
                                                 id: ConnectorId::new(),
@@ -5313,16 +6315,94 @@ impl App {
                                 }
                             }
                             None => {
-                                let detail = "未配置本地工作区根目录,无法克隆".to_string();
-                                self.emit(Event::ConnectorSynced {
-                                    name: format!("{} · CodeHub", proj.name),
-                                    ok: false,
-                                    detail: detail.clone(),
-                                });
-                                self.emit(Event::ActionProgress {
-                                    name: action_name,
-                                    state: ActionState::Fail(detail),
-                                });
+                                self.fail_no_workspaces_root(
+                                    &action_name,
+                                    &proj.name,
+                                    "CodeHub",
+                                    "未配置本地工作区根目录,无法克隆",
+                                );
+                            }
+                        }
+                    }
+                    (
+                        None,
+                        None,
+                        Some(CodehubOrigin::New {
+                            host,
+                            namespace,
+                            name: repo_name,
+                            visibility,
+                        }),
+                    ) => {
+                        // codehub 新建仓(对标 github New):真实
+                        // `codehub-cli project create` + `git clone` + BW root
+                        // commit(让 is_owned_workspace=true)。同一套 Started→Ok/Fail。
+                        let action_name = format!("{} · 建 codehub 仓", proj.name);
+                        self.emit(Event::ActionProgress {
+                            name: action_name.clone(),
+                            state: ActionState::Started,
+                        });
+                        match self.workspaces_root.clone() {
+                            Some(root) => {
+                                let dir = root.join(workspace_slug(&proj.name, id));
+                                let body = if proj.desc.trim().is_empty() {
+                                    "(创建流程未填写 brief)".to_string()
+                                } else {
+                                    proj.desc.trim().to_string()
+                                };
+                                match bw_engine::codehub::create_repo(
+                                    &host,
+                                    &namespace,
+                                    &repo_name,
+                                    &visibility,
+                                    &dir,
+                                    &proj.name,
+                                    &body,
+                                )
+                                .await
+                                {
+                                    Ok(r) => {
+                                        let p = dir.to_string_lossy().into_owned();
+                                        self.store.set_workspace(id, &p, true).await?;
+                                        self.store.set_remote(id, &r.host, &r.path).await?;
+                                        self.store
+                                            .create_connector(NewConnector {
+                                                id: ConnectorId::new(),
+                                                name: format!("{} · CodeHub", proj.name),
+                                                kind: CONNECTOR_KIND_CODEHUB_REPO.into(),
+                                                scope: proj.name.clone(),
+                                                project_id: Some(id),
+                                                config: format!("{}/{}", r.host, r.path),
+                                            })
+                                            .await?;
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Ok(r.path.clone()),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let detail = format!(
+                                            "codehub 建仓失败:{e}(未接上,无远端仓,请重试或检查权限)"
+                                        );
+                                        self.emit(Event::ConnectorSynced {
+                                            name: format!("{} · CodeHub", proj.name),
+                                            ok: false,
+                                            detail: detail.clone(),
+                                        });
+                                        self.emit(Event::ActionProgress {
+                                            name: action_name,
+                                            state: ActionState::Fail(detail),
+                                        });
+                                    }
+                                }
+                            }
+                            None => {
+                                self.fail_no_workspaces_root(
+                                    &action_name,
+                                    &proj.name,
+                                    "CodeHub",
+                                    "未配置本地工作区根目录,无法建仓",
+                                );
                             }
                         }
                     }
@@ -5331,16 +6411,6 @@ impl App {
                             match provision_workspace(&root, &proj).await {
                                 Ok(path) => {
                                     self.store.set_workspace(id, &path, true).await?;
-                                    self.store
-                                        .create_connector(NewConnector {
-                                            id: ConnectorId::new(),
-                                            name: format!("{} · 代码仓", proj.name),
-                                            kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                            scope: proj.name.clone(),
-                                            project_id: Some(id),
-                                            config: path.clone(),
-                                        })
-                                        .await?;
                                 }
                                 Err(e) => {
                                     self.emit(Event::ConnectorSynced {
@@ -5353,11 +6423,50 @@ impl App {
                         }
                     }
                 }
-                // C7 · 标配采集 cron (plan/13 D7):挂了 GitHub 仓的项目出生即
+                // V1 Issue 1 phase2 · 工作区探活(不建 git-repo connector,直接
+                // 调一次):evidence::collect + feed_workspace_metrics +
+                // sync_project_assets 原在 probe_connector 的 git-repo arm,现搬
+                // 到创建时直接调,采第一批工作区指标 + 扫 assets。
+                let proj = self
+                    .store
+                    .get_project(id)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                if !proj.workspace_path.trim().is_empty() {
+                    self.probe_workspace(id, &proj.workspace_path, "CreateProject")
+                        .await;
+                    // 建 script connector(挂远端的项目;buddy 自带采集脚本,
+                    // §0 第 2 层业务脚本)。脚本写进 .bw/collect_stats.sh(相对
+                    // 工作区,buddy 自有空间),collect arm 跑脚本 → 读输出 JSON。
+                    if !proj.remote_path.trim().is_empty() {
+                        let script = build_collect_script(&proj);
+                        let bw_dir = std::path::Path::new(&proj.workspace_path).join(".bw");
+                        let _ = std::fs::create_dir_all(&bw_dir);
+                        let script_path = bw_dir.join("collect_stats.sh");
+                        let _ = std::fs::write(&script_path, &script);
+                        let config = serde_json::json!({
+                            "script": ".bw/collect_stats.sh",
+                            "output": ".bw/collect_stats.json",
+                            "command": "sh",
+                        })
+                        .to_string();
+                        self.store
+                            .create_connector(NewConnector {
+                                id: ConnectorId::new(),
+                                name: format!("{} · 仓统计", proj.name),
+                                kind: CONNECTOR_KIND_SCRIPT.into(),
+                                scope: proj.name.clone(),
+                                project_id: Some(id),
+                                config,
+                            })
+                            .await?;
+                    }
+                }
+                // C7 · 标配采集 cron (plan/13 D7):挂了远端仓的项目出生即
                 // 带一条每日采集器,由现成 tick_scheduler 到点真实触发,把
-                // GitHub 数据拉成 append-only 观测。只有 github 项目挂(无 remote
-                // 即无 github 源可采);软降级回本地/接入失败的项目 remote_path
-                // 仍空,不挂——不给采不到的东西装一个空跑的 cron。no-hijack:
+                // 远端数据拉成 append-only 观测。挂远端的项目(github/codehub
+                // 均算)挂;软降级回本地/接入失败的项目 remote_path 仍空,不挂
+                // ——不给采不到的东西装一个空跑的 cron。no-hijack:
                 // CollectMetrics 只观测,绝不自动跑活/结算。
                 let github_backed = self
                     .store
@@ -5369,13 +6478,17 @@ impl App {
                     self.store
                         .create_cron_task(NewCronTask {
                             id: CronTaskId::new(),
-                            name: format!("{} · 指标采集", proj.name),
+                            name: format!("{} · 采集代码仓指标", proj.name),
                             target: String::new(),
                             schedule: Cadence::Daily,
                             project_id: Some(id),
                             mode: CronMode::CollectMetrics,
                             issue_stage: None,
                             issue_assignee: None,
+                            // PF1-4: 填 now() 防新建 cron 在 clone/setup 完成
+                            // 前抢跑(cron_due 首 tick 立即触发 → workspace_path
+                            // 仍空 → 脚本臂跳过 → 记 normal → 下次 tick 等明天)。
+                            last_run_at: Some(now().unix_timestamp()),
                         })
                         .await?;
                     self.refresh_cron_tasks().await?;
@@ -5415,6 +6528,58 @@ impl App {
                             name: ACTION_NAME.into(),
                             ok: false,
                             detail: e.to_string(),
+                        });
+                        self.emit(Event::ActionProgress {
+                            name: ACTION_NAME.into(),
+                            state: ActionState::Fail(e.to_string()),
+                        });
+                    }
+                }
+                self.emit(Event::ProjectsChanged);
+            }
+
+            Command::ListCodehubRepos { host } => {
+                // V1 Issue 1: the Repo 卡片's「接入已有仓」picker for codehub
+                // triggers a real `codehub-cli project list --mine` call —
+                // same Started→Ok/Fail pairing as `ListGithubRepos`. `host`
+                // = green/open/yellow(codehub 三域名,需显式带)。
+                const ACTION_NAME: &str = "CodeHub 仓库列表";
+                self.emit(Event::ActionProgress {
+                    name: ACTION_NAME.into(),
+                    state: ActionState::Started,
+                });
+                match bw_engine::codehub::list_repos(&host, 30).await {
+                    Ok(repos) => {
+                        self.emit(Event::ActionProgress {
+                            name: ACTION_NAME.into(),
+                            state: ActionState::Ok(format!("{} 个仓库", repos.len())),
+                        });
+                        self.state.codehub_repos = repos;
+                    }
+                    Err(e) => {
+                        self.state.codehub_repos = Vec::new();
+                        // PF1-5: credentials/token/secret 类错因映射人话,告诉
+                        // 用户去本机 codehub-cli auth login(决议 6:不硬编码禁点
+                        // yellow,失败映射人话 + 保留现有警告 + toast 自清)。
+                        let raw = e.to_string();
+                        let lower = raw.to_lowercase();
+                        let detail = if lower.contains("credential")
+                            || lower.contains("token")
+                            || lower.contains("secret")
+                            || lower.contains("auth")
+                            || lower.contains("login")
+                            || lower.contains("401")
+                        {
+                            format!(
+                                "{host} 域未登录:先本机 `codehub-cli -H {host} auth login`(原始错因:{raw})"
+                            )
+                        } else {
+                            raw
+                        };
+                        self.emit(Event::ConnectorSynced {
+                            name: ACTION_NAME.into(),
+                            ok: false,
+                            detail,
                         });
                         self.emit(Event::ActionProgress {
                             name: ACTION_NAME.into(),
@@ -5674,16 +6839,9 @@ impl App {
                     match provision_workspace(&root, &proj).await {
                         Ok(path) => {
                             self.store.set_workspace(p, &path, true).await?;
-                            self.store
-                                .create_connector(NewConnector {
-                                    id: ConnectorId::new(),
-                                    name: format!("{} · 代码仓", proj.name),
-                                    kind: CONNECTOR_KIND_GIT_REPO.into(),
-                                    scope: proj.name.clone(),
-                                    project_id: Some(p),
-                                    config: path.clone(),
-                                })
-                                .await?;
+                            // V1 Issue 1 phase2: 不建 git-repo connector,
+                            // 直接调一次工作区探活(采第一批指标 + 扫 assets)。
+                            self.probe_workspace(p, &path, "CompleteCreation").await;
                             self.refresh_connectors().await?;
                             self.emit(Event::ConnectorsChanged);
                         }
@@ -5784,6 +6942,12 @@ impl App {
                 self.emit(Event::ProjectUpdated(p));
                 self.emit(Event::ViewChanged(View::App));
                 self.emit(Event::IssuesChanged);
+                // PF1-4: 创建即采一次指标(probe connector 之后,setup 全完成)。
+                // cron 不抢跑(见 CreateProject 处 last_run_at=now()),这里补这一
+                // 次让新项目总览指标条不再全「—」。best-effort:失败不 block 创建,
+                // 不发 Command::CollectMetrics 避免往返/toast——创建流有自己的
+                // ActionsBanner 进度(决议 4)。
+                let _ = self.collect_project_metrics(p).await;
                 // C8 · 末卡「立即让队友开工第一件?」(plan/13 D8): 显式勾选
                 // 才跑,默认不跑——不勾是零摩擦的另一半,真的什么都不发生。
                 // 勾了就对标配三件套里的①竞品分析显式 dispatch 一次
@@ -6093,6 +7257,12 @@ impl App {
             Command::SyncMetricsFile => {
                 let p = self.active()?;
                 self.sync_metrics_file_for(p).await?;
+                // V1 Issue2 Phase 3: keep the command complete — sync
+                // connectors.toml alongside metrics.toml (used by
+                // collector_demo example + any future manual sync entry
+                // point). The UI button that fired this was retired per
+                // §3.2/§4 (merge auto-sync covers the normal flow).
+                self.sync_connectors_file_for(p).await?;
             }
 
             Command::CollectMetrics => {
@@ -7492,6 +8662,7 @@ impl App {
                         mode: CronMode::RunWorkflow,
                         issue_stage: None,
                         issue_assignee: None,
+                        last_run_at: None,
                     })
                     .await?;
                 self.refresh_cron_tasks().await?;
@@ -7519,6 +8690,7 @@ impl App {
                         mode: CronMode::CreateIssue,
                         issue_stage: Some(stage),
                         issue_assignee: assignee,
+                        last_run_at: None,
                     })
                     .await?;
                 self.refresh_cron_tasks().await?;
@@ -7547,6 +8719,7 @@ impl App {
                         mode: CronMode::RunSkill { skill_id },
                         issue_stage: None,
                         issue_assignee: None,
+                        last_run_at: None,
                     })
                     .await?;
                 self.refresh_cron_tasks().await?;
@@ -7578,6 +8751,7 @@ impl App {
                         mode: CronMode::RunPrompt { prompt },
                         issue_stage: None,
                         issue_assignee: None,
+                        last_run_at: None,
                     })
                     .await?;
                 self.refresh_cron_tasks().await?;
@@ -7743,11 +8917,48 @@ impl App {
                             self.emit(Event::AgentsChanged);
                         }
                     }
-                    // Artifact reflux, issue-scoped: whatever real files exist
-                    // in the workspace at completion time get registered
-                    // against the issue's stage (idempotent — an unchanged
-                    // workspace registers 0 fresh rows).
+                    // P4 (2026-08-06 cowelink 验证 §2.3/§5): 「已完成」是唯一的
+                    // 验收兜底,不管走的是 `MergeIssuePr`(内部 dispatch 到这里)
+                    // 还是网页上把 PR 合了、回 buddy 裸点「→已完成」——两条路都
+                    // 该把远端可能已经合入的改动拉回本地、把 `.bw/metrics.toml`/
+                    // `.bw/connectors.toml` 正本同步进 SQLite 缓存。此前只有
+                    // `MergeIssuePr` 路径做这件事,裸 `TransitionIssue`(网页合
+                    // MR 场景)完全跳过 sync,业务指标停在 seed 值——这是本条
+                    // 验证日志的头号发现。挪到这唯一的 Done 记账口后,两条入口
+                    // 共用同一次 pull+sync,不重复跑(`MergeIssuePr` 内部通过
+                    // `dispatch` 到这里,不再自己另跑一遍)。收拢/同步失败只软
+                    // 降级 toast,不因此回滚已经发生的验收。
                     if let Ok(Some(proj)) = self.store.get_project(issue.project_id).await {
+                        if !proj.workspace_path.trim().is_empty()
+                            && !proj.remote_path.trim().is_empty()
+                        {
+                            match bw_engine::github::sync_default_branch(std::path::Path::new(
+                                proj.workspace_path.trim(),
+                            ))
+                            .await
+                            {
+                                Ok(()) => {
+                                    self.sync_metrics_file_for(issue.project_id).await?;
+                                    self.sync_connectors_file_for(issue.project_id).await?;
+                                }
+                                Err(e) => {
+                                    self.emit(Event::ConnectorSynced {
+                                        name: "metrics.toml".into(),
+                                        ok: false,
+                                        detail: format!(
+                                            "验收后工作区收拢默认分支失败,指标/连接器正本未同步(可手动重试):{e}"
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                        // Artifact reflux, issue-scoped: whatever real files
+                        // exist in the workspace at completion time get
+                        // registered against the issue's stage (idempotent —
+                        // an unchanged workspace registers 0 fresh rows). Runs
+                        // after the pull above so a webMerge-completed issue's
+                        // artifact scan sees the just-pulled files, not stale
+                        // pre-pull state.
                         if !proj.workspace_path.trim().is_empty() {
                             if let Ok(fresh) = self
                                 .scan_and_register_artifacts(
@@ -7876,31 +9087,11 @@ impl App {
                         issue.pr_number, issue.number
                     ),
                 });
-                // plan/13 D5: merge 后同步指标正本。先把工作区收拢回默认
-                // 分支(run 后还停在 bw/issue-N 活分支,merge 进主干的
-                // `.bw/metrics.toml` 只有 checkout+pull 之后才读得到),再
-                // 走同一条 sync 路径。收拢失败软降级 toast——验收已经完成,
-                // 不因同步不顺回滚任何东西;下次手动 SyncMetricsFile 可补。
-                if !proj.workspace_path.trim().is_empty() {
-                    match bw_engine::github::sync_default_branch(std::path::Path::new(
-                        proj.workspace_path.trim(),
-                    ))
-                    .await
-                    {
-                        Ok(()) => {
-                            self.sync_metrics_file_for(issue.project_id).await?;
-                        }
-                        Err(e) => {
-                            self.emit(Event::ConnectorSynced {
-                                name: "metrics.toml".into(),
-                                ok: false,
-                                detail: format!(
-                                    "merge 后工作区收拢默认分支失败,指标正本未同步(可手动重试):{e}"
-                                ),
-                            });
-                        }
-                    }
-                }
+                // P4 (2026-08-06): pull-default-branch + sync metrics/
+                // connectors 正本已经挪到 `TransitionIssue` 的 Done 记账口
+                // (它就在上面几行通过 `dispatch` 走过了)——两个入口(这里的
+                // MergeIssuePr 和网页合 MR 后裸点「→已完成」)现在共用同一次
+                // sync,这里不再重复跑一遍。
             }
 
             Command::AssignIssue { id, assignee } => {
@@ -8061,6 +9252,21 @@ impl App {
             Command::SetPanel(p) => self.state.panel = p,
             Command::SetScope(s) => self.state.scope = s,
             Command::SelectSession(s) => self.state.active_session = s,
+            // V1 Issue2 Phase2b: forward user-typed bytes to the PTY writer.
+            // No PTY session active → silently drop (best-effort — the UI
+            // shouldn't send input when no session is running, but a race
+            // between session end and the last keystroke is possible).
+            Command::TerminalInput { bytes } => {
+                if let Some(tx) = &self.state.pty_input_tx {
+                    let _ = tx.send(bw_engine::PtyInput::Bytes(bytes));
+                }
+            }
+            // V1 Issue2 Phase2b: forward terminal resize to the PTY master.
+            Command::TerminalResize { cols, rows } => {
+                if let Some(tx) = &self.state.pty_input_tx {
+                    let _ = tx.send(bw_engine::PtyInput::Resize { cols, rows });
+                }
+            }
         }
         Ok(())
     }
@@ -8069,6 +9275,13 @@ impl App {
 fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
 }
+
+/// V1 Issue2 Phase2a: InReview poller throttle. The poller checks codehub/
+/// github for open MRs on interactive issues at most once per 5 minutes —
+/// it rides `tick_scheduler`'s cadence but doesn't hit the remote every
+/// tick (a tick may fire every 60s; 5 min is a reasonable detection lag
+/// without flooding the remote API).
+const INREVIEW_POLL_INTERVAL_SECS: i64 = 5 * 60;
 
 /// plan18-③ · `script` connector 的 config 解析结构。config 是 JSON 字符串,
 /// 存项目仓里既有采集脚本的相对工作区路径 + 输出文件 + 跑脚本的命令。
@@ -8194,6 +9407,123 @@ async fn provision_workspace(root: &std::path::Path, proj: &ProjectRow) -> Resul
         .await
         .map_err(|e| e.to_string())?;
     Ok(dir.to_string_lossy().into_owned())
+}
+
+/// V1 Issue 1 phase2 · Build the buddy-provided collect-stats script for a
+/// remote-backed project. The script runs two provider CLI commands (open
+/// issues + merged MRs/PRs), combines the counts into one JSON object, and
+/// writes it to `.bw/collect_stats.json` (the `ScriptConnectorConfig.output`
+/// the collect arm reads). Provider-split: codehub → `codehub-cli issue/mr
+/// list`; github → `gh api search/issues` (same endpoint the inline github
+/// arm uses, so the numbers match). Errors in either CLI call default to `0`
+/// (`|| echo 0`) — a failed count is honest zero, not a silent skip.
+fn build_collect_script(proj: &ProjectRow) -> String {
+    match proj.provider.as_str() {
+        "codehub" => format!(
+            r#"#!/bin/sh
+# BW 自带采集脚本 — codehub 仓统计 (CreateProject 生成,勿手改)
+HOST="{host}"
+PATH_NS="{path}"
+ISSUES=$(codehub-cli -H "$HOST" issue list -p "$PATH_NS" --state opened -l 0 --jq 'length' 2>/dev/null || echo 0)
+MRS=$(codehub-cli -H "$HOST" mr list -p "$PATH_NS" --state merged -l 0 --jq 'length' 2>/dev/null || echo 0)
+printf '{{"open_issues": %s, "merged_mrs": %s}}' "$ISSUES" "$MRS" > .bw/collect_stats.json
+"#,
+            host = proj.remote_host,
+            path = proj.remote_path,
+        ),
+        _ => format!(
+            r#"#!/bin/sh
+# BW 自带采集脚本 — GitHub 仓统计 (CreateProject 生成,勿手改)
+REPO="{path}"
+ISSUES=$(gh api -X GET search/issues -f "q=is:issue is:open repo:$REPO" --jq '.total_count' 2>/dev/null || echo 0)
+PRS=$(gh api -X GET search/issues -f "q=is:pr is:merged repo:$REPO" --jq '.total_count' 2>/dev/null || echo 0)
+printf '{{"open_issues": %s, "merged_mrs": %s}}' "$ISSUES" "$PRS" > .bw/collect_stats.json
+"#,
+            path = proj.remote_path,
+        ),
+    }
+}
+
+/// PF1-R5c · Windows: app 进程的 PATH 可能缺 Git 的 bin/usr-bin(sh.exe/bash.exe
+/// 所在),`Command::new("sh")` 报 program not found。从 PATH 里的 git.exe 位置
+/// 推导(系统 PATH 通常有 `<root>\cmd\git.exe`):`<root>\bin\bash.exe` 或
+/// `<root>\usr\bin\sh.exe`。返回首个存在的全路径。
+fn resolve_script_interpreter_via_git() -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let path = std::env::var("PATH").ok()?;
+    for dir in path.split(';') {
+        let dir_path = Path::new(dir);
+        if !dir_path.join("git.exe").exists() {
+            continue;
+        }
+        // git.exe 可能在 <root>\cmd\ 或 <root>\mingw64\bin\ 或 <root>\bin\。
+        // 试 root = dir_path 与 dir_path.parent(),找 bin\bash.exe / usr\bin\sh.exe。
+        let roots = [
+            dir_path.to_path_buf(),
+            dir_path.parent().unwrap_or(dir_path).to_path_buf(),
+        ];
+        for root in &roots {
+            let bash = root.join("bin").join("bash.exe");
+            if bash.exists() {
+                return Some(bash.to_string_lossy().into_owned());
+            }
+            let sh = root.join("usr").join("bin").join("sh.exe");
+            if sh.exists() {
+                return Some(sh.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+/// PF1-R5c · collect arm 跑 .sh 脚本的解释器候选链(Windows 专用增强)。
+/// 顺序:BW_SH_BIN env 强制 → config command + 裸名 sh/bash/sh.exe/bash.exe
+/// (PATH 搜)→ 从 git.exe 推导的全路径 → 常见安装位兜底。collect arm 试到
+/// 第一个 spawn 成功的为止(NotFound 才换下一个)。
+fn script_interpreter_candidates(command: &str) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    let push = |v: &mut Vec<String>, s: String| {
+        if !v.contains(&s) {
+            v.push(s);
+        }
+    };
+    if cfg!(windows) {
+        if let Ok(p) = std::env::var("BW_SH_BIN") {
+            let p = p.trim();
+            if !p.is_empty() {
+                push(&mut v, p.to_string());
+            }
+        }
+    }
+    push(&mut v, command.to_string());
+    if cfg!(windows) {
+        // P5 · 2026-08-06 real-world incident: a fresh Windows machine may
+        // have the `py` launcher (installed by python.org's installer by
+        // default) on PATH but not a bare `python`/`python3` — the default
+        // script command (`ScriptConnectorConfig::from_config` defaults
+        // empty `command` to `"python"`) then fails NotFound with no
+        // fallback. `py` (no version arg) launches the newest installed
+        // Python, same semantics as bare `python` for a single-version box.
+        if matches!(command, "python" | "python3") {
+            push(&mut v, "py".to_string());
+        }
+        for c in ["bash", "sh.exe", "bash.exe"] {
+            push(&mut v, c.to_string());
+        }
+        if let Some(bash) = resolve_script_interpreter_via_git() {
+            push(&mut v, bash);
+        }
+        for p in [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\sh.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ] {
+            push(&mut v, p.to_string());
+        }
+    }
+    v
 }
 
 /// P1: the project's charter (`PROJECT.md`) — every line is a real creation-
@@ -8479,6 +9809,40 @@ fn metrics_file_sync(
         north_star_collect_query: file.north_star.collect.query.clone(),
         lagging: file.lagging.iter().map(to_def).collect(),
         leading: file.leading.iter().map(to_def).collect(),
+    }
+}
+
+/// V1 Issue2 Phase 3: `bw_engine::connectors_file::ConnectorsFile` (parsed
+/// toml) → `ConnectorsFileSync` (the store's write shape). Pure reshaping —
+/// no validation here, `read` already guaranteed every connector has a valid
+/// `kind = "script"` and `name`/`script` by the time this runs (a file
+/// missing those fails to parse, never reaches this function). The `config`
+/// column is the JSON `{script, command, output}` that
+/// `ScriptConnectorConfig::from_config` parses back — matches the existing
+/// connector `config` format.
+fn connectors_file_sync(
+    project_id: ProjectId,
+    file: &bw_engine::connectors_file::ConnectorsFile,
+) -> ConnectorsFileSync {
+    let connectors = file
+        .connectors
+        .iter()
+        .map(|c| {
+            let config = serde_json::json!({
+                "script": c.script,
+                "command": c.command,
+                "output": c.output,
+            })
+            .to_string();
+            ConnectorDefSync {
+                name: c.name.clone(),
+                config,
+            }
+        })
+        .collect();
+    ConnectorsFileSync {
+        project_id,
+        connectors,
     }
 }
 
