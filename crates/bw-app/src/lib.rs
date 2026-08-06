@@ -1266,7 +1266,9 @@ pub struct AppState {
     /// cwd here. When the hook listener receives a SessionStart/Stop event
     /// (which carries `cwd`), `poll_hook_events` looks up the issue by cwd
     /// to store `session_id` or trigger InReview detection. Entries are
-    /// cleared when the issue settles (Done) or the worktree is cleaned up.
+    /// dropped by `forget_interactive_session` when the run settles or is
+    /// cancelled — a session that's over must not keep a cwd registered, or a
+    /// late/forged hook event could still rewrite that issue's session id.
     pub interactive_sessions: HashMap<String, IssueId>,
     /// V1 Issue2 Phase2b: a `Stop` hook event was received since the last
     /// `tick_scheduler` fire. `true` → run `poll_interactive_inreview` on
@@ -1779,6 +1781,15 @@ impl App {
         all
     }
 
+    /// V1 Issue2 Phase2b: drop every `cwd → issue` mapping pointing at `id`.
+    /// Called when an interactive run settles or is cancelled — the session is
+    /// over, so a late (or forged) hook event carrying that cwd must not still
+    /// rewrite this issue's `claude_session_id`. Keyed by value, not by cwd,
+    /// because the worktree path isn't at hand on every teardown path.
+    fn forget_interactive_session(&mut self, id: IssueId) {
+        self.state.interactive_sessions.retain(|_, v| *v != id);
+    }
+
     /// V1 Issue2 Phase2a: poll codehub/github for open MRs on interactive
     /// issues that are InProgress + `interactive_started` + `pr_number == 0`.
     /// When an open MR is found (读回为证: buddy checks the remote itself,
@@ -1842,19 +1853,40 @@ impl App {
                 let Some(pr) = open_mr else {
                     continue; // no open MR yet — honest "nothing to review"
                 };
-                // Backfill pr_number + transition InReview (读回为证).
-                self.store.set_issue_pr_number(issue.id, pr).await?;
-                // D3: 评审中由「存在开放 PR」派生. Re-read the current
-                // status (it was InProgress when we listed; the transition
-                // guard `can_transition_to` is the single source of truth).
+                // D3: 评审中由「存在开放 PR」派生. Transition FIRST, then
+                // backfill `pr_number` — the candidate filter above keys on
+                // `pr_number == 0`, so writing the PR number before a
+                // transition that then fails (store error / status moved
+                // under us) would drop the issue out of the候选集 forever:
+                // stuck InProgress with a PR nobody re-checks. Doing the
+                // transition first means a failure leaves `pr_number == 0`
+                // and the next poll retries the whole thing.
                 let cur = self.store.get_issue(issue.id).await?;
-                if let Some(cur) = cur {
-                    if cur.status.can_transition_to(IssueStatus::InReview) {
+                let transitioned = match cur {
+                    Some(cur) if cur.status == IssueStatus::InReview => true, // already there
+                    Some(cur) if cur.status.can_transition_to(IssueStatus::InReview) => {
                         self.store
                             .transition_issue(issue.id, IssueStatus::InReview)
                             .await?;
+                        true
                     }
+                    _ => false,
+                };
+                if !transitioned {
+                    // Status moved somewhere the state machine won't take to
+                    // InReview. Say so instead of claiming a transition that
+                    // didn't happen; `pr_number` stays 0 so a later poll (or a
+                    // human) can still pick it up.
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("#{} · InReview", issue.number),
+                        ok: false,
+                        detail: format!(
+                            "查到开放 PR/MR #{pr},但该活当前状态不允许转入评审中,保持原状"
+                        ),
+                    });
+                    continue;
                 }
+                self.store.set_issue_pr_number(issue.id, pr).await?;
                 self.emit(Event::ConnectorSynced {
                     name: format!("#{} · InReview", issue.number),
                     ok: true,
@@ -5349,6 +5381,7 @@ impl App {
             // dropped receiver, and the 100ms pty_ticker stops spinning.
             self.state.pty_input_tx = None;
             self.state.pty_bytes_rx = None;
+            self.forget_interactive_session(ar.issue.id);
             drop(ar.guard);
             self.refresh_issues().await?;
             self.emit(Event::IssuesChanged);
@@ -5388,6 +5421,14 @@ impl App {
             return Ok(());
         }
         ar.handle.abort(); // drop the spawned round-loop future → kill_on_drop
+                           // V1 Issue2 Phase2b: an interactive run cancelled here must clear the
+                           // same PTY/session state the settle arm clears — otherwise the
+                           // terminal widget keeps rendering (pty_active stays true) and typed
+                           // bytes go into a receiver nobody reads. Unconditional: the phase-loop
+                           // path never sets these, so clearing is a no-op there.
+        self.state.pty_input_tx = None;
+        self.state.pty_bytes_rx = None;
+        self.forget_interactive_session(ar.issue.id);
         self.emit(Event::WorkflowFailed(format!(
             "Issue #{} 已中止",
             ar.issue.number
