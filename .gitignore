@@ -40,3 +40,5 @@ iterations/evidence/**/*.html
 
 # 指南截图本地占位（验证时填，不进仓——文字自洽，截图是补充不是必需）
 docs/guide/img/
+
+verification/skill-eval-*/

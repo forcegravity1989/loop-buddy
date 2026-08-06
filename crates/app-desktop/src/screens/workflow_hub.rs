@@ -16,6 +16,12 @@
 //! - **设为定时任务** dispatches straight into Cron Hub's own
 //!   `Command::CreateCronTask` (same `schedule: Weekly, project_id: None`
 //!   defaults Cron Hub's own create form uses).
+//!
+//! T7 (2026-07-23, plan/12 §0): a stage-role filter chip row shared with
+//! `SkillHub`/`AgentHub` via `ui::vm::RoleFilter`/`role_chip_counts` — but
+//! without `SkillHub`'s 全阶段通用/不属任何阶段 chips: workflow 侧本轮
+//! `stage_ref` 仍是单值 `Option<StageKind>`,没有这两个多值态,加了就是假的
+//! (理由同样落在下方 chip 渲染旁注上)。
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::component_detail::ComponentSel;
@@ -70,10 +76,10 @@ pub fn WorkflowHub(
 
     let n = hub.workflows.len();
     let chip_counts = ui::vm::source_chip_counts(&hub.workflows);
-    let (role_stage_counts, role_general_count) = ui::vm::role_chip_counts(
+    let role_counts = ui::vm::role_chip_counts(
         &hub.workflows
             .iter()
-            .map(|r| r.stage_ref.and_then(StageKind::from_index))
+            .map(|r| ui::vm::RoleTag::from_single(r.stage_ref.and_then(StageKind::from_index)))
             .collect::<Vec<_>>(),
     );
     let details_by_id: HashMap<WorkflowId, WorkflowDetailVm> = hub
@@ -86,7 +92,11 @@ pub fn WorkflowHub(
     let filtered: Vec<WorkflowHubRowVm> = hub
         .workflows
         .iter()
-        .filter(|r| role_filter().matches(r.stage_ref.and_then(StageKind::from_index)))
+        .filter(|r| {
+            role_filter().matches(&ui::vm::RoleTag::from_single(
+                r.stage_ref.and_then(StageKind::from_index),
+            ))
+        })
         .filter(|r| {
             source_filter()
                 .map(|sf| r.source_label == sf)
@@ -126,10 +136,14 @@ pub fn WorkflowHub(
                     }
                 }
             }
+            // plan/20 R1: Hub 是全局语境,这里编出来的工作流(含临时编队)
+            // 引用池只列全局行——引用的作用域不得宽于引用者;项目自有资产
+            // 由此天然不会被别的项目的全局工作流引走(种A 行都挂 project_id,
+            // 也一并被这个口径排除)。
             if adhoc() {
                 AdHocWorkflowForm {
-                    skills: hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect(),
-                    agents: hub.agents.iter().filter(|a| !a.is_project_assets).cloned().collect(),
+                    skills: hub.skills.iter().filter(|s| s.project_id.is_none()).cloned().collect(),
+                    agents: hub.agents.iter().filter(|a| a.project_id.is_none()).cloned().collect(),
                     projects: projects.clone(),
                     on_run: move |_| {
                         adhoc.set(false);
@@ -139,8 +153,8 @@ pub fn WorkflowHub(
             }
             if creating() {
                 CreateWorkflowForm {
-                    skills: hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect(),
-                    agents: hub.agents.iter().filter(|a| !a.is_project_assets).cloned().collect(),
+                    skills: hub.skills.iter().filter(|s| s.project_id.is_none()).cloned().collect(),
+                    agents: hub.agents.iter().filter(|a| a.project_id.is_none()).cloned().collect(),
                     on_done: move |_| creating.set(false),
                 }
             }
@@ -158,7 +172,7 @@ pub fn WorkflowHub(
                         }
                     }
                 }
-                for (sk , count) in role_stage_counts {
+                for (sk , count) in role_counts.per_stage.clone() {
                     {
                         let active = role_filter() == ui::vm::RoleFilter::Stage(sk);
                         let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
@@ -173,13 +187,15 @@ pub fn WorkflowHub(
                     }
                 }
                 {
-                    let active = role_filter() == ui::vm::RoleFilter::General;
+                    // workflow 屏同 agent 屏:不加 Universal/NoStage chip ——
+                    // workflow 侧本轮没有这两个状态,加了就是假的。
+                    let active = role_filter() == ui::vm::RoleFilter::Unclassified;
                     let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
                     rsx! {
                         button {
                             style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                            onclick: move |_| role_filter.set(ui::vm::RoleFilter::General),
-                            "通用 · {role_general_count}"
+                            onclick: move |_| role_filter.set(ui::vm::RoleFilter::Unclassified),
+                            "未归类 · {role_counts.unclassified}"
                         }
                     }
                 }
@@ -248,8 +264,11 @@ pub fn WorkflowHub(
                                         let stage_ref = row.stage_ref;
                                         let row_name = row.name.clone();
                                         let detail = details_by_id.get(&row_id).cloned();
-                                        let skills_pool = hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect();
-                                        let agents_pool = hub.agents.iter().filter(|a| !a.is_project_assets).cloned().collect();
+                                        // plan/20 R1: 编队池随本行的作用域走——全局工作流只
+                                        // 引全局行;项目自有工作流可引本项目行 + 全局行;他
+                                        // 项目的行绝不出现(种A 照旧排除)。
+                                        let skills_pool = hub.skills.iter().filter(|s| bw_core::scope::in_scope(s.project_id, row.project_id) && !s.is_project_assets).cloned().collect();
+                                        let agents_pool = hub.agents.iter().filter(|a| bw_core::scope::in_scope(a.project_id, row.project_id) && !a.is_project_assets).cloned().collect();
                                         // 真实项目名(从 project_id 反查)——`None` = 共享/内建阶段模板。
                                         let owner_project = row
                                             .project_id

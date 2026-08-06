@@ -1,5 +1,13 @@
 # 践行日志 · buddy(操作指南 + 实践记录 + 认知演进)
 
+## 30 秒导读
+
+这是我实际使用、维护 buddy(loop-buddy 项目管理工作台)的真实记录。**它是唯一一份持续更新的实践日志,不是写完就封存的历史档案**——每次会话都可能往上加新内容,旧结论被推翻时保留原文并补一句「归正」说明,不悄悄改写。
+
+给谁看:照着操作步骤把 buddy 接到自己项目上的同事,或者未来想知道某个坑当时怎么解的我自己。
+
+怎么用:全文较长,不必从头读到尾——按下面的目录跳到你需要的部分:装环境看第 1 节,完整流程走一遍看第 2 节,某个具体功能怎么用看第 3 节,已知的坑和还没拍板的事看第 4 节,想理解 buddy 整体设计思路看第 5 节。下面这段引用是更细的写法约定,先看目录也可以。
+
 > 一份**活文档**,每个会话更新。不是开发文档(那是 `plan/` + 源码 + commit),是
 > **我用 + 维护 buddy 的真实实践**,兼两个用途:① 给同事/未来开发者照着用 loop-buddy
 > (前置、主流程、分支操作,每步在磁盘/UI/数据库/人能读懂的背后动作上做了什么);
@@ -11,6 +19,63 @@
 > 主流程/分支操作的哪一步。归正注保留原始过程 + 修正,不抹。读回为证,不硬编。
 >
 > 维护规范见 `.claude/skills/practice-buddy-landing/SKILL.md` §6。
+
+## 目录
+
+- [1. 前置:用 buddy 前要装/配啥](#1-前置用-buddy-前要装配啥)
+  - [运行时必装必配(干活绕不开)](#运行时必装必配干活绕不开)
+  - [按项目 provider 选装](#按项目-provider-选装)
+  - [开发/验证才需要(跑门禁 + E2E 读回)](#开发验证才需要跑门禁--e2e-读回)
+  - [可选 env](#可选-env)
+  - [启动](#启动)
+- [2. 主流程:创建项目 → 跑三件套(竞品分析 → 找指标 → 绑数据 → 交棒)](#2-主流程创建项目--跑三件套竞品分析--找指标--绑数据--交棒)
+  - [步1·启动 → 项目墙](#步1启动--项目墙)
+  - [步2·创建流(Repo 卡 + Intent 卡)](#步2创建流repo-卡--intent-卡)
+  - [步3·进 Op 侧边栏(看本项目有什么)](#步3进-op-侧边栏看本项目有什么)
+  - [步4·跑竞品分析(competitive-analysis) ⚠ 阻塞:见 §4.3 bug① + §4.4 bug②](#步4跑竞品分析competitive-analysis--阻塞见-43-bug--44-bug)
+  - [步5·跑找指标(north-star-discovery,能跑通,不联网)](#步5跑找指标north-star-discovery能跑通不联网)
+  - [步6·跑绑数据(metrics-binding,实测 run ok ~19min)](#步6跑绑数据metrics-binding实测-run-ok-19min)
+  - [步7·交棒 / merge](#步7交棒--merge)
+  - [闭环验证(读回为证)](#闭环验证读回为证)
+  - [环境坑(非 buddy 代码)](#环境坑非-buddy-代码)
+- [3. 分支操作:Hub 全局库 / Op 项目运营](#3-分支操作hub-全局库--op-项目运营)
+  - [3.1 Hub 全局库操作(公共可浏览,`project_id=NULL`)](#31-hub-全局库操作公共可浏览project_idnull)
+    - [skill(技能库)](#skill技能库)
+    - [agent(智能体)](#agent智能体)
+    - [workflow(工作流)](#workflow工作流)
+    - [cron(定时任务)](#cron定时任务)
+    - [connector(连接器)](#connector连接器)
+    - [knowledge(知识源)](#knowledge知识源)
+  - [3.2 Op 项目运营操作(`project_id=本项目`)](#32-op-项目运营操作project_id本项目)
+    - [stages(五阶段环)](#stages五阶段环)
+    - [issues(看板)](#issues看板)
+    - [metrics(指标 + 健康灯)](#metrics指标--健康灯)
+    - [artifacts(产物登记)](#artifacts产物登记)
+    - [version(版本日志)](#version版本日志)
+    - [sessions(会话)](#sessions会话)
+- [4. 未决事项(按主题,关联指回主流程/分支操作哪步)](#4-未决事项按主题关联指回主流程分支操作哪步)
+  - [4.1 创建流 UI 该不该收窄(指回步2)](#41-创建流-ui-该不该收窄指回步2)
+  - [4.2 创建时不该自动开工(run_first / auto-run,指回步2)](#42-创建时不该自动开工run_first--auto-run指回步2)
+  - [4.3 bug① 冻死·RunIssue 甩后台 + 并行 run 无 worktree(指回步4/5/6)](#43-bug-冻死runissue-甩后台--并行-run-无-worktree指回步456)
+  - [4.4 bug② 联网墙(指回步4)](#44-bug-联网墙指回步4)
+  - [4.5 issue 技能绑死·无 UpdateIssue 命令(指回 §3 issues)](#45-issue-技能绑死无-updateissue-命令指回-3-issues)
+  - [4.6 issue 看板要不要从仓库取(指回 §3 issues)](#46-issue-看板要不要从仓库取指回-3-issues)
+  - [4.7 连接器动作位置(hub-Op 边界)+ probe-at-creation(指回 §3 connector)](#47-连接器动作位置hub-op-边界-probe-at-creation指回-3-connector)
+  - [4.8 skill/agent 渠道6 规范 + 归属反转(指回 §3 skill/agent)](#48-skillagent-渠道6-规范--归属反转指回-3-skillagent)
+  - [4.9 cron / workflow / connector(运行体系)定位 gap 搁置(指回 §3)](#49-cron--workflow--connector运行体系定位-gap-搁置指回-3)
+  - [4.10 auto-mint「失败就停」需持久化标志位(指回步2)](#410-auto-mint失败就停需持久化标志位指回步2)
+  - [4.11 滞后指标 UI 渲染 GAP(指回步6 / §3.2 metrics)](#411-滞后指标-ui-渲染-gap指回步6--32-metrics)
+  - [4.12 plan18 step3 收尾·代码侧已交付 + 未决(指回步5/6/7)](#412-plan18-step3-收尾代码侧已交付--未决指回步567)
+  - [待记(后续会话补)](#待记后续会话补)
+- [5. 认知(buddy 是什么、能带来什么)](#5-认知buddy-是什么能带来什么)
+  - [两个面(buddy = 看板 + AI 小队)](#两个面buddy--看板--ai-小队)
+  - [四个铁律(防蔓延,不假装)](#四个铁律防蔓延不假装)
+  - [codehub 对接设计(步1 落地的认知)](#codehub-对接设计步1-落地的认知)
+  - [连接器同步背后(git-repo vs codehub/github-repo vs collect arm)](#连接器同步背后git-repo-vs-codehubgithub-repo-vs-collect-arm)
+  - [skill / agent 形态归宿(2026-07-31 钉死)](#skill--agent-形态归宿2026-07-31-钉死)
+  - [plan18 step3 收尾认知(2026-08-03)](#plan18-step3-收尾认知2026-08-03)
+  - [run 调度层认知(2026-08-03,plan17 S1-S5 落地钉)](#run-调度层认知2026-08-03plan17-s1-s5-落地钉)
+  - [反命题(buddy 不是什么)](#反命题buddy-不是什么)
 
 ---
 
@@ -229,7 +294,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 ### 4.1 创建流 UI 该不该收窄(指回步2)
 - 创建末卡让用户填对标/算成/北极星/引领·滞后指标。对标+算成=人意图填得准(竞品分析 skill 读 `benchmark`/`opportunity`);北极星+指标=要推导的(「找指标」issue 本职),人填不准、创建时填了没反馈。**决议:先不动**。`run_first` 默认不勾(§4.2)已是现状;指标值选填可空。等三件套实践中想明白「输入实际怎么被用、哪填合适」再回头——**不基于猜测改设计**。
 
-### 4.2 run_first 在创建时 auto-run(指回步2)
+### 4.2 创建时不该自动开工(run_first / auto-run,指回步2)
 - 竞品分析不该创建时默认跑,由人创建后在 issue 卡触发。已对齐:`run_first` 默认 false(`create.rs`)。保留末卡「立即开工」框、默认不勾。
 
 ### 4.3 bug① 冻死·RunIssue 甩后台 + 并行 run 无 worktree(指回步4/5/6)

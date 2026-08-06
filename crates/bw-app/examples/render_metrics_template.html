@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>指标看板 · 真实状态渲染</title>
+<style>
+  :root{
+    --paper:#EFEBE2; --paper-2:#E9E3D7; --card:#F6F3ED; --line:#DAD2C4; --line-2:#C8BEAC;
+    --ink:#2B2823; --ink-2:#5C554C; --ink-3:#8A8177;
+    --clay:#C5654A; --clay-soft:rgba(197,101,74,.10);
+    --green:#5F7355; --amber:#B5862F; --red:#B0503A; --unknown:#9A9288;
+    --serif:"Noto Serif SC","Songti SC","Source Han Serif SC",Georgia,serif;
+    --sans:"Noto Sans SC","PingFang SC","Hiragino Sans GB",system-ui,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#1C1917; --paper-2:#231F1C; --card:#26221E; --line:#3A342E; --line-2:#4A423A;
+      --ink:#EEE7DB; --ink-2:#B3A996; --ink-3:#877E71;
+      --clay:#DB7F63; --clay-soft:rgba(219,127,99,.13);
+      --green:#8AA37C; --amber:#D6A542; --red:#D2705A; --unknown:#7E766A;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+       font-size:15px;line-height:1.7;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1120px;margin:0 auto;padding:48px 24px 88px;display:flex;flex-direction:column;gap:44px}
+  h1,h2,h3{font-family:var(--serif);font-weight:600;margin:0;line-height:1.35;text-wrap:balance}
+  h1{font-size:30px} h2{font-size:22px} h3{font-size:16px}
+  p{margin:0}
+  code{font-family:var(--mono);font-size:.9em;background:var(--paper-2);padding:1px 5px;border-radius:4px}
+  pre{font-family:var(--mono);font-size:11.5px;line-height:1.6;margin:8px 0 0;padding:10px 12px;
+      background:var(--paper-2);border:1px solid var(--line);border-radius:7px;overflow-x:auto;
+      white-space:pre-wrap;word-break:break-all;color:var(--ink-2)}
+
+  header{display:flex;flex-direction:column;gap:12px;border-bottom:1px solid var(--line);padding-bottom:20px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+           color:var(--clay);font-weight:600}
+  .lede{color:var(--ink-2);max-width:66ch}
+  .facts{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:12.5px;color:var(--ink-3);font-family:var(--mono)}
+  .facts b{color:var(--ink-2);font-weight:600}
+
+  .project{display:flex;flex-direction:column;gap:16px}
+  .phead{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 12px;
+         padding-bottom:10px;border-bottom:2px solid var(--ink)}
+  .pill{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:999px;
+        border:1px solid var(--line-2);color:var(--ink-3);white-space:nowrap}
+
+  .chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;
+        font-weight:600;padding:1px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  .chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  /* 护栏 4:green 不高亮、不庆祝——中性描边,和别的安静元素一样 */
+  .chip.green{color:var(--ink-3);border-color:var(--line-2)}
+  .chip.amber{color:var(--amber);border-color:var(--amber);background:rgba(181,134,47,.10)}
+  .chip.red{color:var(--red);border-color:var(--red);background:rgba(176,80,58,.09)}
+  .chip.unknown{color:var(--unknown);border-color:var(--line-2);border-style:dashed}
+
+  .ns{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--clay);
+      border-radius:10px;padding:16px 18px;display:flex;flex-direction:column;gap:6px}
+  .ns-tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+  .ns-name{font-family:var(--serif);font-size:19px;font-weight:600}
+  .ns-def{font-size:13.5px;color:var(--ink-2)}
+  .ns-collect{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+
+  .loud{border:1px solid var(--amber);background:rgba(181,134,47,.07);border-radius:10px;padding:14px 18px}
+  .loud h3{font-size:15px;margin-bottom:8px}
+  .loud ul{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:14px}
+  .loud li{display:flex;align-items:center;gap:9px}
+  .quiet{color:var(--ink-3);font-size:13.5px;font-style:italic}
+
+  .sec{margin-top:4px}
+  .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+  table{border-collapse:collapse;width:100%;min-width:820px;font-size:13.5px}
+  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  thead th{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+           color:var(--ink-3);font-weight:600;background:var(--paper-2);white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  .cell-name{width:40%}
+  .cell-val,.cell-target{white-space:nowrap}
+  .role{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);border:1px solid var(--line-2);
+        border-radius:4px;padding:0 5px;margin-right:6px}
+  .def{font-size:12px;color:var(--ink-3);line-height:1.6;margin-top:5px;
+       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .val{font-family:var(--mono);font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+  /* 护栏 1:「无数据」必须看起来就是没有数据,不能像一个值 */
+  .val.none{color:var(--unknown);font-size:13px;font-weight:400;font-style:italic}
+  .cell-val .chip{margin-top:5px}
+  .cell-target{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-2)}
+  .note{font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+  .badge{font-family:var(--mono);font-size:10px;padding:1px 6px;border-radius:4px;
+         border:1px solid var(--line-2);color:var(--ink-3);margin-left:5px;white-space:nowrap;display:inline-block}
+  .badge.manual{border-color:var(--amber);color:var(--amber)}
+  .badge.warn{border-color:var(--red);color:var(--red)}
+  .badge.file{border-color:var(--line-2);color:var(--ink-3)}
+  .spark{display:block}
+  .spark polyline{fill:none;stroke:var(--clay);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round}
+  .spark circle{fill:var(--clay)}
+  details summary{cursor:pointer;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);margin-top:6px}
+  details summary:focus-visible{outline:2px solid var(--clay);outline-offset:2px}
+  .layerb{border:1px dashed var(--line-2);border-radius:9px;padding:12px 16px;background:var(--paper-2)}
+  .layerb summary{font-size:12px}
+  .layerb ul{margin:10px 0 0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:5px;font-size:13px}
+  .layerb li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--ink-2)}
+
+  .rules{border:1px solid var(--line-2);border-radius:10px;padding:18px 20px;background:var(--paper-2)}
+  .rules ol{margin:10px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:7px;
+            font-size:13.5px;color:var(--ink-2)}
+  .rules b{color:var(--ink)}
+  footer{border-top:1px solid var(--line);padding-top:16px;color:var(--ink-3);font-size:12px;font-family:var(--mono)}
+  @media (max-width:720px){ .wrap{padding:32px 16px 64px;gap:34px} h1{font-size:25px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">metrics-render · 真实状态渲染</div>
+  <h1>指标看板</h1>
+  <p class="lede">
+    这一页由 <code>render_metrics</code> 从库里直接渲染,数据只有两个来源:<code>metric</code> 表的定义
+    (经 <code>SyncMetricsFile</code> 来自各项目的 <code>.bw/metrics.toml</code> 正本)和 <code>observation</code>
+    表的真实观测。<b>没有观测的指标显示「无数据」,不显示 0、不沿用旧值、不插值。</b>
+    每条指标下面都有一行能直接跑的 <code>sqlite3</code> 命令 —— 跑出来的就是它上面显示的那些点,不必信这段代码。
+  </p>
+  <div class="facts">
+    <span>数据源 <b><!--DB--></b></span>
+    <span>项目级业务指标 <b><!--N_METRICS--></b> 条</span>
+    <span>真实观测 <b><!--N_OBS--></b> 个点</span>
+    <span>零观测 <b><!--N_NODATA--></b> 条</span>
+    <span>渲染于 <b><!--GENERATED--></b> UTC</span>
+  </div>
+</header>
+
+<!--BODY-->
+
+<section class="rules">
+  <h3>这个渲染器守的六条(写在代码里,不靠自觉)</h3>
+  <ol>
+    <li><b>无数据 = Unknown 灰,绝不假绿。</b>显示值只从 <code>observation</code> 真实序列取;零观测直接渲染「无数据」——不读 <code>metric.value_raw</code> 缓存、不填 0、不沿用上一次的值。</li>
+    <li><b>来源徽记。</b>只有 <code>SourceKind::Manual</code> 戴「手填」徽(github/script 是机器采,戴徽是谎报);<code>collect_kind</code> 是 <code>bw</code>/<code>connector</code> 的标「v1 未接」。</li>
+    <li><b>数字可独立复核。</b>每条指标自带 <code>sqlite3</code> 复核命令,页面自带自证方式。</li>
+    <li><b>绿色隐身。</b>green 不高亮不庆祝;每个项目顶部只浮出 signal≠green 的项。</li>
+    <li><b>1 个观测点不画趋势线。</b>画了就是插值;非数值观测(如 <code>5/5</code>)同样不画。</li>
+    <li><b>只吃两个源。</b>命令行不接受任何指标数值入参 —— 想让页面上出现一个数,只能先让它成为一条真实观测。</li>
+  </ol>
+</section>
+
+<footer>
+  render_metrics · 只读渲染,不写库、不 recompute、不采集 · 配套 skill:docs/skills/metrics-render/SKILL.md
+</footer>
+
+</div>
+</body>
+</html>

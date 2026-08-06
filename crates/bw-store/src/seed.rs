@@ -23,7 +23,8 @@ use crate::{NewAgent, NewSkill, NewWorkflowSpec, Result, Store};
 use bw_core::model::{
     stage_template_workflow, HubSource, Maturity, StageKind, BW_STANDARD_LIBRARY,
 };
-use bw_core::{AgentId, SkillId};
+use bw_core::stage_catalog::StageOrigin;
+use bw_core::{AgentId, ProjectId, SkillId};
 
 /// Seed the hub library's own stage-template workflows if it's currently
 /// empty. Called once at `Boot`; safe to call on every boot since it checks
@@ -124,6 +125,47 @@ pub async fn seed_stage_role_agents_if_missing(store: &dyn Store) -> Result<()> 
     Ok(())
 }
 
+/// plan/20 W1(R1):每项目自有的五角色队友副本——与全局模板行同源自
+/// `bw_core::playbook::role_agents()` 代码正本,`project_id = 本项目`,
+/// `runs/wins` 从 0 立新账(plan/08 §1 拍板:各项目战绩各立各的账)。
+/// 按 (project, name) 幂等:Boot 对存量项目补种,重启不重复;全局五行
+/// (共享目录模板,[`seed_stage_role_agents_if_missing`])原地不动,历史
+/// 战绩不迁移、不伪造。
+pub async fn seed_project_role_agents_if_missing(
+    store: &dyn Store,
+    project: ProjectId,
+) -> Result<()> {
+    let existing: Vec<String> = store
+        .list_agents()
+        .await?
+        .into_iter()
+        .filter(|a| a.project_id == Some(project))
+        .map(|a| a.name)
+        .collect();
+    for (kind, ra) in bw_core::playbook::role_agents() {
+        if existing.iter().any(|n| n == ra.name) {
+            continue;
+        }
+        store
+            .create_agent(NewAgent {
+                id: AgentId::new(),
+                name: ra.name.to_string(),
+                role: ra.role,
+                stage_ref: Some(kind),
+                maturity: Maturity::Mature,
+                skills: ra.skills,
+                model: ra.model.to_string(),
+                instructions: ra.instructions,
+                tools: Vec::new(),
+                agent_cli: "claude-code".to_string(),
+                source: HubSource::SelfBuilt,
+                project_id: Some(project),
+            })
+            .await?;
+    }
+    Ok(())
+}
+
 // ───────────────── plan/17 · bw-standard 技能库的统一播种 ─────────────────
 //
 // 正本是仓里的真实包文件 `docs/skills/<slug>/SKILL.md`(五阶段方法论技能 +
@@ -154,15 +196,17 @@ pub struct CanonicalSkill {
     /// 归类徽记:五阶段技能 = `kind.label()`(原型/构建/…),三件套 = 「标配」
     /// —— 由 `bw_library` 的 `BwSkillDocKind` 拍板派生,不是猜测。
     pub category: String,
-    /// 每件 bw-standard 技能都有阶段锚(五阶段技能挂本阶段;标配三件套钉
-    /// 原型段 —— plan/13 D8 拍板:创建流落地后原型阶段的起手活)。
-    pub stage_ref: StageKind,
+    /// 每件 bw-standard 技能的阶段归属(多值)。五条方法论技能单挂本阶段;
+    /// 指标/对标类按 spec §6.0 口径扩挂 —— 真值由 bw-core 静态表提供,这里
+    /// 只是搬运。
+    pub stages: Vec<StageKind>,
 }
 
 /// 按名幂等地种下 bw-standard 技能库(五阶段方法论 + 标配三件套)。已存在
-/// (同名)只回填缺失的 `stage_ref`(T7 语义:pre-T7 库的诚实 NULL 按既有
-/// 拍板补上,已有值绝不动),不覆盖 desc/content——内容对账是 bw-app Boot
-/// 的 Pass 2(只追 `Official { "bw-standard" }` 行),不是重新 seed。
+/// (同名)只回填还没被归过类的阶段归属(2026-08-05:`StageOrigin::
+/// Unclassified` 按既有拍板补上,已归类的行绝不动),不覆盖 desc/content
+/// ——内容对账是 bw-app Boot 的 Pass 2(只追 `Official { "bw-standard" }`
+/// 行),不是重新 seed。
 pub async fn seed_bw_standard_skills_if_missing(
     store: &dyn Store,
     canon: &[CanonicalSkill],
@@ -170,15 +214,15 @@ pub async fn seed_bw_standard_skills_if_missing(
     let existing_skills = store.list_skills().await?;
     for c in canon {
         if let Some(existing) = existing_skills.iter().find(|s| s.name == c.name) {
-            // stage_ref 回填只认**确实是我们这一行**的行(Official
-            // {bw-standard})。纯按名匹配会把用户自建的同名技能(比如他自
-            // 己那条 metrics-binding,stage_ref 为 NULL = 通用/跨阶段,是既
-            // 有的诚实语义)误当成「已种下的标配」,悄悄改掉他的归类——用户
-            // 什么都没做,自己的技能被系统动了。被本函数替换掉的三件套种
-            // 子路径在命中同名时就是什么都不碰,这里跟随那条更保守的先例。
-            // 老库里读回 SelfBuilt 的那批真·内置行由 Boot 的 Pass 1 升源,
-            // 下一次 Boot 走到这里就满足条件、照常补上。
-            if existing.stage_ref.is_none()
+            // 回填只认**确实是我们这一行**的行(Official {bw-standard}),且只
+            // 在它还没被归过类时动手(`StageOrigin::Unclassified`)。纯按名匹配
+            // 会把用户自建的同名技能误当成「已种下的标配」,悄悄改掉他的归类
+            // ——用户什么都没做,自己的技能被系统动了。人工归过类的行
+            // (`Manual`)同理绝不覆盖。被本函数替换掉的三件套种子路径在命中
+            // 同名时就是什么都不碰,这里跟随那条更保守的先例。老库里读回
+            // SelfBuilt 的那批真·内置行由 Boot 的 Pass 1 升源,下一次 Boot
+            // 走到这里就满足条件、照常补上。
+            if existing.stage_origin == StageOrigin::Unclassified
                 && matches!(
                     &existing.source,
                     HubSource::Official { official_library }
@@ -186,7 +230,7 @@ pub async fn seed_bw_standard_skills_if_missing(
                 )
             {
                 store
-                    .set_skill_stage_ref(existing.id, Some(c.stage_ref))
+                    .set_skill_stages(existing.id, &c.stages, StageOrigin::Table)
                     .await?;
             }
             continue;
@@ -198,7 +242,8 @@ pub async fn seed_bw_standard_skills_if_missing(
                 maturity: Maturity::Mature,
                 desc: c.desc.clone(),
                 category: c.category.clone(),
-                stage_ref: Some(c.stage_ref),
+                stages: c.stages.clone(),
+                stage_origin: StageOrigin::Table,
                 source: HubSource::Official {
                     official_library: BW_STANDARD_LIBRARY.to_string(),
                 },

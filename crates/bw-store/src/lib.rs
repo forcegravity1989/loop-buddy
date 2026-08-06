@@ -25,6 +25,7 @@ use bw_core::model::{
     SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
     WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
+use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
     AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
     SkillFileId, SkillId, WorkflowId, WorkflowRunId,
@@ -36,8 +37,8 @@ pub use sqlite::SqliteStore;
 
 pub mod seed;
 pub use seed::{
-    seed_bw_standard_skills_if_missing, seed_hub_if_empty, seed_stage_role_agents_if_missing,
-    CanonicalSkill,
+    seed_bw_standard_skills_if_missing, seed_hub_if_empty, seed_project_role_agents_if_missing,
+    seed_stage_role_agents_if_missing, CanonicalSkill,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -145,6 +146,11 @@ pub struct MetricsFileSync {
 pub struct MetricsFileSyncSummary {
     pub lagging_synced: u32,
     pub leading_synced: u32,
+    /// 本次同步顺手停用的行数:正本里已经没有、且 `origin = File`(当初就是
+    /// 从正本同步进来的)、且此前还没被停用的行。界面手建的 `Manual` 行永远
+    /// 不计入——正本里本来就没有它们,"正本删了它"这个判断对它们不成立,不能
+    /// 被沉默改写(要停用得人显式点)。0 = 这次没有任何一条被自动停用。
+    pub auto_archived: u32,
 }
 
 /// V1 Issue2 Phase 3: one `.bw/connectors.toml` connector definition, shaped
@@ -265,11 +271,11 @@ pub struct NewSkill {
     pub maturity: Maturity,
     pub desc: String,
     pub category: String,
-    /// T7 (plan/12 §0/§2): which stage role this skill belongs to; `None` =
-    /// general/cross-stage. See `bw_core::model::SkillCard::stage_ref`'s doc
-    /// comment for the `Option<StageKind>`-vs-`WorkflowSpec`'s-`Option<u8>`
-    /// alignment call.
-    pub stage_ref: Option<StageKind>,
+    /// 建行时的阶段归属(多值)。见 `bw_core::model::SkillCard::stages`。
+    pub stages: Vec<StageKind>,
+    /// 这次归类的出处。手工新建(`CreateSkill`)一律 `Unclassified` + 空
+    /// `stages` —— 诚实的「还没归类」,绝不替用户猜一个阶段。
+    pub stage_origin: StageOrigin,
     pub source: HubSource,
     /// Executable body (may be empty for a catalog reference entry). For a
     /// skill minted by `ImportSkillPackage`, this is SKILL.md's own body —
@@ -318,8 +324,9 @@ pub struct NewAgent {
     pub id: AgentId,
     pub name: String,
     pub role: String,
-    /// T7 (plan/12 §0/§3): same classification dimension as
-    /// `NewSkill::stage_ref` — `None` = general/cross-stage.
+    /// T7 (plan/12 §0/§3): same classification dimension as `NewSkill`'s
+    /// (Skill 侧 2026-08-05 起改 `stages`/`stage_origin` 多值;Agent 侧本轮
+    /// 不动,仍是单值)。`None` = general/cross-stage.
     pub stage_ref: Option<StageKind>,
     pub maturity: Maturity,
     pub skills: Vec<String>,
@@ -510,6 +517,10 @@ pub struct MetricSignal {
     /// C6: `Manual` (界面手建, the byte-for-byte pre-C6 default) or `File`
     /// (synced from the project's metrics source-of-truth file).
     pub origin: MetricOrigin,
+    /// 已停用(归档)——退出界面默认视图、退出健康灯上卷、退出自动采集,
+    /// 但这条指标的 `observation` 历史一条不删。`signal`/`hit` 是停用那一刻
+    /// 冻结下来的缓存(`recompute_signals` 跳过归档行),不是当下重算的值。
+    pub archived: bool,
 }
 
 /// One materialized stage, as the operating view reads it.
@@ -661,6 +672,14 @@ pub trait Store: Send + Sync {
         &self,
         sync: ConnectorsFileSync,
     ) -> Result<ConnectorsFileSyncSummary>;
+    /// 停用(归档)/恢复一条指标 —— 指标退役的唯一形态,替代物理删除。
+    /// `observation` 一个字节不碰(append-only 不可破:硬删 metric 行要么级联
+    /// 抹掉真实历史、要么留下孤儿观测)。只翻 `metric.archived` + 盖
+    /// `archived_at` 时戳,不写任何 `signal`——停用后那条指标的 signal 缓存
+    /// 冻结在停用那一刻(`recompute_signals` 跳过归档行),恢复后由下一次
+    /// recompute 重新派生。调用方负责在其后触发 recompute,好让项目/阶段的
+    /// 上卷把这条的进/出反映出来。
+    async fn set_metric_archived(&self, metric: MetricId, archived: bool) -> Result<()>;
     /// Week-plan edit: update a metric's target + this week's driver, keeping
     /// the previous target as `last_target`. Touches no value and no signal —
     /// recompute re-derives against the new target.
@@ -861,10 +880,11 @@ pub trait Store: Send + Sync {
     async fn list_skills(&self) -> Result<Vec<SkillCard>>;
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>>;
     async fn update_skill(&self, id: SkillId, edit: SkillEdit) -> Result<()>;
-    /// Credit one real run to every skill row named `name` (`uses += 1`).
-    /// Returns how many rows matched — `0` (an unregistered ad-hoc ref) is
-    /// honest data, not an error.
-    async fn record_skill_use_by_name(&self, name: &str) -> Result<u32>;
+    /// Credit one real run to **one** skill row (`uses += 1`). plan/20 R3:
+    /// 记账行 == 注入行——调用方先按作用域就近解析出那一行
+    /// (`bw_core::scope::scoped_pick`),再按 id 打点;此前的按名全表
+    /// UPDATE 会把跨作用域同名行齐 bump,settle-once 在作用域维度是破的。
+    async fn record_skill_use(&self, id: SkillId) -> Result<()>;
     /// Distill a new skill from a completed, assigned Issue — the "every
     /// solution compounds into a reusable skill" link. The issue must exist,
     /// be `Done`, and have a real assignee; the new skill is `SelfBuilt` /
@@ -885,16 +905,31 @@ pub trait Store: Send + Sync {
     /// Every real support file belonging to one skill, insertion order
     /// (oldest first) — the file-tree source for a Skill detail view (T4).
     async fn list_skill_files(&self, skill_id: SkillId) -> Result<Vec<SkillFileRow>>;
-    /// T7 (plan/12 §0/§2): narrow backfill setter — classifies an *existing*
-    /// row (not a content edit, so deliberately separate from `SkillEdit`,
-    /// same reasoning `record_skill_use_by_name` already established for
-    /// single-column, non-content updates). Used by
-    /// `seed_bw_standard_skills_if_missing` to backfill `stage_ref` on the
-    /// built-in bw-standard skills when they were seeded by an older binary,
-    /// before this column carried real values.
-    async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()>;
+    /// 五角色归类:一次读回全库的技能阶段归属。`list_skills` 用它给每张
+    /// `SkillCard` 补齐 `stages`,避免每行一次查询的 N+1。缺席的 skill_id =
+    /// 零行 = 「没挂任何阶段」(是未归类还是已判定不属任何阶段,由该行的
+    /// `stage_origin` 分辨,不在本方法的职责里)。
+    async fn list_skill_stages(&self)
+        -> Result<std::collections::HashMap<SkillId, Vec<StageKind>>>;
+    /// 五角色归类:重写一件技能的阶段归属(先删后插,幂等),并同时写下这次
+    /// 归类的出处。空 `stages` + 非 `Unclassified` 的 `origin` = 「已判定:
+    /// 不属任何阶段」;空 `stages` + `Unclassified` = 回到「未归类」。
+    ///
+    /// 这里**不碰** `source`/`official_library` —— 归类是 BW 自己的组织维度,
+    /// 不是对上游正文的改编,不触发 T11「编辑即脱离源头」。
+    ///
+    /// 取代了 T7 时代的窄回填器 `set_skill_stage_ref`(单值)——五角色归类
+    /// 2026-08-05 起迁到 `skill_stage` 关联表(多值),`stage_ref` 单值列已
+    /// 真删,旧回填器随之移除,唯一调用方 `seed_bw_standard_skills_if_missing`
+    /// 已改走本方法。
+    async fn set_skill_stages(
+        &self,
+        id: SkillId,
+        stages: &[StageKind],
+        origin: StageOrigin,
+    ) -> Result<()>;
     /// plan/16 §2 防线 2: same narrow single-concern setter shape as
-    /// `set_skill_stage_ref`, for the `source`/`official_library` column
+    /// `set_skill_stages`, for the `source`/`official_library` column
     /// pair. Used by Boot's pristine promotion — a legacy-encoded built-in
     /// stage-skill row whose `content` still matches the code canon
     /// byte-for-byte gets re-labelled `Official { "bw-standard" }`. The
@@ -912,13 +947,14 @@ pub trait Store: Send + Sync {
     async fn list_agents(&self) -> Result<Vec<AgentCard>>;
     async fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>>;
     async fn update_agent(&self, id: AgentId, edit: AgentEdit) -> Result<()>;
-    /// T7: same backfill role as `set_skill_stage_ref`, for the five
+    /// T7: same backfill role as `set_skill_stages`(单值版), for the five
     /// built-in stage-role agents.
     async fn set_agent_stage_ref(&self, id: AgentId, stage_ref: Option<StageKind>) -> Result<()>;
-    /// Credit one settled run to every agent row named `name`: `runs += 1`,
+    /// Credit one settled run to **one** agent row: `runs += 1`,
     /// `wins += ok as int`, `win_rate` recomputed from the real counters.
-    /// Returns how many rows matched (0 = unregistered ref, honest no-op).
-    async fn record_agent_run_by_name(&self, name: &str, ok: bool) -> Result<u32>;
+    /// plan/20 R3: by-id,同 `record_skill_use`——各项目战绩各立各的账,
+    /// 同名的五角色副本(W1)绝不互相污账。
+    async fn record_agent_run(&self, id: AgentId, ok: bool) -> Result<()>;
     /// T14: delete one agent row. No table carries a real FK onto `agent(id)`
     /// (`issue.assignee` is a plain, unconstrained id string) so this is a
     /// single-table delete; same "mechanics only, decision lives in bw-app"

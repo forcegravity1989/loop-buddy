@@ -289,7 +289,14 @@ fn Root() -> Element {
         let Some(pid) = c.project_id else {
             return;
         };
-        let Some(wf) = hub_for_cron.workflows.iter().find(|w| w.name == c.target) else {
+        // plan/20 R2: 与 tick_scheduler 同一条就近规则——本项目行优先、
+        // 全局兜底、他项目行永不命中。
+        let Some(wf) = bw_core::scope::scoped_pick(
+            hub_for_cron.workflows.iter(),
+            Some(pid),
+            |w| w.project_id,
+            |w| w.name == c.target,
+        ) else {
             return;
         };
         let session = SessionId::new();
@@ -383,6 +390,8 @@ fn Root() -> Element {
                         hub: v.hub.clone(),
                         projects: v.projects.clone(),
                         cron_effectiveness: v.cron_effectiveness.clone(),
+                        // plan/20 R5: 「引入本项目」按钮的归宿——当前打开的项目。
+                        active_project: v.op.as_ref().map(|o| o.id),
                         on_close: move |_| sel.set(None),
                         // T16: a workflow phase's agent/skill chip click
                         // re-points this same `sel` at the clicked component.

@@ -1,5 +1,7 @@
 # Builders' Workbench · Rust 跨平台 UI 选型评估
 
+> ℹ️ **背景文档(2026-08-05 标注)**:选型结论(Dioxus 0.7,hard-pin =0.7.9)**至今成立且仍在执行**;调研数据的时间口径是 2026-06-26,版本号等细节以现实为准。读本文是为了理解「为什么选 Dioxus 而不是 Electron/Tauri」。
+
 > 目标:把现有 React 风格的复杂前端原型(`Builders工作台-项目管理向导.dc.html`)重写成**原生桌面应用(Rust)**。**桌面唯一(macOS + Windows);Web 是「以后也许」,绝不驱动任何 MVP 决策。** 真实诉求:一个**比 Electron 更快更轻**的桌面应用(复用系统 WebView,不打包 Chromium)。
 >
 > 调研口径:2026-06-26 联网核实(crates.io API / GitHub Releases API / 官方文档原文)。WebSearch/WebFetch 当时后端不可用,改用 `curl` 直取权威端点的原始数据,版本号与能力均为实测,非凭记忆。

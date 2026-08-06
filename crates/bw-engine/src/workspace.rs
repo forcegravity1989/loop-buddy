@@ -140,6 +140,24 @@ pub async fn commit_file(
     }
 }
 
+/// 纯写盘,**不** git add/commit —— 与 `commit_file` 的区别就在这里。
+///
+/// 用于 BW 托管的派生文件(技能物化):它们每次 run 都可能重写,提交进 git 会
+/// 把工作区的历史刷成噪音,而且这些文件的正本在库里,不在仓里。父目录不存在
+/// 就建。
+pub async fn write_file(dir: &Path, rel_path: &str, content: &str) -> Result<(), ProvisionError> {
+    let path = dir.join(rel_path);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ProvisionError::Write(e.to_string()))?;
+    }
+    tokio::fs::write(&path, content)
+        .await
+        .map_err(|e| ProvisionError::Write(e.to_string()))?;
+    Ok(())
+}
+
 /// Stage **all** of a run's edits on its work branch, commit them (idempotent
 /// — a clean tree left by an executor that committed its own work is *not* a
 /// failure), and push the branch to `origin` so a PR/MR can be opened on it.

@@ -8,20 +8,23 @@
 //! content only, `maturity`/`uses` stay untouched.
 //!
 //! T7 (2026-07-23, plan/12 §0/§2): a stage-role filter chip row — the same
-//! "全部/{五角色}/通用" dimension Workflow Hub already had (its stage
-//! chips), extended here with `ui::vm::RoleFilter`/`role_chip_counts` so all
-//! three Hub screens share one filter predicate instead of three ad hoc ones.
+//! dimension Workflow Hub already had (its stage chips), sharing
+//! `ui::vm::RoleFilter`/`role_chip_counts` across all three Hub screens
+//! instead of three ad hoc ones. 2026-08-05:Skill 侧改多值(`RoleTag`),chip
+//! 行五档:全部/{五角色}/全阶段通用/不属任何阶段/未归类——后两枚只在这屏,见
+//! Agent/Workflow Hub 各自的模块文档为何不加。
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::markdown::MarkdownView;
 use crate::theme;
 use bw_app::Command;
-use bw_core::model::HubSource;
+use bw_core::model::{HubSource, StageKind};
 use bw_core::SkillId;
 use dioxus::prelude::*;
 use std::collections::HashSet;
 use ui::vm::{
-    role_chip_counts, skill_file_tree, ProjectCardVm, RoleFilter, SkillCardVm, SkillTreeNode,
+    role_chip_counts, skill_file_tree, ProjectCardVm, RoleFilter, RoleTag, SkillCardVm,
+    SkillTreeNode,
 };
 
 #[component]
@@ -38,12 +41,16 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let mut editing = use_signal(|| None::<SkillId>);
     let mut role_filter = use_signal(|| RoleFilter::All);
 
-    let (stage_counts, general_count) =
-        role_chip_counts(&hub.skills.iter().map(|s| s.stage_ref).collect::<Vec<_>>());
+    let counts = role_chip_counts(
+        &hub.skills
+            .iter()
+            .map(|s| s.role_tag.clone())
+            .collect::<Vec<_>>(),
+    );
     let filtered: Vec<SkillCardVm> = hub
         .skills
         .iter()
-        .filter(|s| role_filter().matches(s.stage_ref))
+        .filter(|s| role_filter().matches(&s.role_tag))
         .cloned()
         .collect();
 
@@ -82,7 +89,7 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
                         }
                     }
                 }
-                for (sk , count) in stage_counts {
+                for (sk , count) in counts.per_stage.clone() {
                     {
                         let active = role_filter() == RoleFilter::Stage(sk);
                         let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
@@ -97,13 +104,35 @@ pub fn SkillHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
                     }
                 }
                 {
-                    let active = role_filter() == RoleFilter::General;
+                    let active = role_filter() == RoleFilter::Universal;
                     let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
                     rsx! {
                         button {
                             style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                            onclick: move |_| role_filter.set(RoleFilter::General),
-                            "通用 · {general_count}"
+                            onclick: move |_| role_filter.set(RoleFilter::Universal),
+                            "全阶段通用 · {counts.universal}"
+                        }
+                    }
+                }
+                {
+                    let active = role_filter() == RoleFilter::NoStage;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(RoleFilter::NoStage),
+                            "不属任何阶段 · {counts.no_stage}"
+                        }
+                    }
+                }
+                {
+                    let active = role_filter() == RoleFilter::Unclassified;
+                    let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
+                    rsx! {
+                        button {
+                            style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                            onclick: move |_| role_filter.set(RoleFilter::Unclassified),
+                            "未归类 · {counts.unclassified}"
                         }
                     }
                 }
@@ -473,6 +502,7 @@ fn SkillCard(
     let card = theme::card();
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
+    let amber = ui::signal_color(bw_core::model::Signal::Amber);
     let (chip_bg, chip_fg) = ("#EFE9DA", theme::INK_2);
     let chip = theme::chip(chip_bg, chip_fg);
     // 展开态横跨整行取版面,但正文可读宽度必须封顶——否则 span 到整个宽屏窗
@@ -500,6 +530,34 @@ fn SkillCard(
                 }
                 SkillSpecNotes { s: s.clone(), compact: true }
                 span { style: "{chip} margin-left:auto;", "{s.maturity_label}" }
+            }
+            // ── 1.5 归属行(评审找出的真坑,2026-08-06):spec §7 要求卡面本身
+            // 显示归属 chip,此前只有 Hub 顶部筛选栏 + 编辑面板画了这个维度,
+            // 浏览列表时看不出任何一件技能挂在哪个阶段。四态措辞必须区分,
+            // 「未归类」(还没人判过,Unknown)与「不属任何阶段」(判过了,
+            // 结论是不属于)绝不能混用同一个词——那正是这整件事要解决的问题。
+            div {
+                style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;",
+                match &s.role_tag {
+                    RoleTag::Stages(stages) => rsx! {
+                        for kind in stages.iter().copied() {
+                            span {
+                                key: "{kind.index()}",
+                                style: "{theme::chip(kind.color(), \"#FFF\")}",
+                                "{kind.role_short()}"
+                            }
+                        }
+                    },
+                    RoleTag::Universal => rsx! {
+                        span { style: "{theme::chip(theme::CLAY, \"#FFF\")}", "全阶段通用" }
+                    },
+                    RoleTag::NoStage => rsx! {
+                        span { style: "{theme::chip(\"#EFE9DA\", ink3)}", "不属任何阶段" }
+                    },
+                    RoleTag::Unclassified => rsx! {
+                        span { style: "{theme::chip(\"#F2E8D2\", amber)}", "未归类" }
+                    },
+                }
             }
             // ── 2. 一句话价值主张:这个技能解决什么 ──
             if !s.desc.is_empty() {
@@ -585,6 +643,14 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
     let mut desc = use_signal(|| s.desc.clone());
     let mut category = use_signal(|| s.category.clone());
     let mut content = use_signal(|| s.content.clone());
+    // 当前归属展开成「五个勾选位」——`Universal` 是五个全勾,`NoStage`/
+    // `Unclassified` 是全不勾(两者的区别在保存时无意义:人工提交空集一律
+    // 表示「判定为不属任何阶段」,这正是 Manual + 空集的语义)。
+    let mut picked = use_signal(|| match &s.role_tag {
+        RoleTag::Stages(v) => v.clone(),
+        RoleTag::Universal => StageKind::ALL.to_vec(),
+        RoleTag::NoStage | RoleTag::Unclassified => Vec::new(),
+    });
 
     let save = move |_| {
         let n = name().trim().to_string();
@@ -597,6 +663,7 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
             desc: desc().trim().to_string(),
             category: category().trim().to_string(),
             content: content().trim().to_string(),
+            stages: Some(picked()),
         });
         on_done.call(());
     };
@@ -622,6 +689,44 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
                 style: "{input} margin-bottom:10px;",
                 value: "{category}",
                 oninput: move |e| category.set(e.value()),
+            }
+            div { style: "{label}", "五角色归属(可多选;全不选 = 判定为不属任何阶段)" }
+            // spec §7 要求的两个快捷(评审找出的真坑,2026-08-06):此前要达到
+            // 「全阶段通用」/「不属任何阶段」这两个状态,用户得手动点满/清空
+            // 五枚独立开关;现在一键到位,底下的五枚开关仍然可再单独微调。
+            div {
+                style: "display:flex;gap:8px;margin-bottom:8px;",
+                button {
+                    style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:4px 10px;font-size:11.5px;",
+                    onclick: move |_| picked.set(StageKind::ALL.to_vec()),
+                    "全阶段通用"
+                }
+                button {
+                    style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid {theme::BORDER};border-radius:7px;padding:4px 10px;font-size:11.5px;",
+                    onclick: move |_| picked.set(Vec::new()),
+                    "不属任何阶段"
+                }
+            }
+            div {
+                style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;",
+                for kind in StageKind::ALL {
+                    {
+                        let on = picked().contains(&kind);
+                        let (bg, fg): (&str, &str) = if on { (kind.color(), "#FFF") } else { ("#EFE9DA", theme::INK_2) };
+                        rsx! {
+                            button {
+                                key: "{kind.index()}",
+                                style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
+                                onclick: move |_| {
+                                    let mut v = picked();
+                                    if let Some(i) = v.iter().position(|k| *k == kind) { v.remove(i); } else { v.push(kind); }
+                                    picked.set(v);
+                                },
+                                "{kind.role_short()}"
+                            }
+                        }
+                    }
+                }
             }
             div { style: "{label}", "正文(可执行指令,运行时注入 prompt;留空=仅目录引用)" }
             textarea {

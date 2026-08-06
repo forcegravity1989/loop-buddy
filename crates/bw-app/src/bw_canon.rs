@@ -45,12 +45,12 @@ pub(crate) fn bw_standard_skill_canon() -> Result<Vec<CanonicalSkill>, String> {
                     doc.slug
                 ));
             }
-            let (category, stage_ref) = match doc.kind {
+            let (category, single_stage) = match doc.kind {
                 // 五阶段方法论技能挂本阶段,归类徽记即阶段名(T7:拍板,
                 // 不是猜测)。
                 BwSkillDocKind::Stage(kind) => (kind.label().to_string(), kind),
                 // plan/13 D8: 标配三件套是创建流落地后原型阶段的起手活,
-                // stage_ref 钉原型段。
+                // 单值语义钉原型段。
                 BwSkillDocKind::StandardIssue => ("标配".to_string(), StageKind::Prototype),
             };
             if let Some(file_category) = &parsed.category {
@@ -62,12 +62,19 @@ pub(crate) fn bw_standard_skill_canon() -> Result<Vec<CanonicalSkill>, String> {
                     ));
                 }
             }
+            // 2026-08-05:阶段归属改查 bw-core 静态表(可能扩挂多值,如
+            // metrics-binding 1,3,4,5);查不到则退回上面 BwSkillDocKind 的
+            // 单值语义包成一个元素的 Vec —— 静态表目前覆盖全部 8 件
+            // bw-standard 技能,这条退回路径只在表漏收录时兜底。
+            let stages = bw_core::stage_catalog::stages_for(&parsed.name)
+                .map(|s| s.to_vec())
+                .unwrap_or_else(|| vec![single_stage]);
             Ok(CanonicalSkill {
                 name: parsed.name,
                 desc: parsed.desc,
                 content: parsed.body,
                 category,
-                stage_ref,
+                stages,
             })
         })
         .collect()

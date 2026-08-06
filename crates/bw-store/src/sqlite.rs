@@ -28,6 +28,7 @@ use bw_core::model::{
     SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
     WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
+use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
     AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
     SessionId, SkillFileId, SkillId, WorkflowId, WorkflowRunId,
@@ -203,6 +204,10 @@ impl SqliteStore {
         add_column_if_missing(&pool, "metric", "collect_kind", "TEXT NOT NULL DEFAULT ''").await?;
         add_column_if_missing(&pool, "metric", "collect_query", "TEXT NOT NULL DEFAULT ''").await?;
         add_column_if_missing(&pool, "metric", "origin", "TEXT NOT NULL DEFAULT 'manual'").await?;
+        // 指标停用/归档。存量库全部行开出来 archived=0 / archived_at=NULL,
+        // 和"这些指标都还在用、从没被停用过"这个真实状态完全一致。
+        add_column_if_missing(&pool, "metric", "archived", "INTEGER NOT NULL DEFAULT 0").await?;
+        add_column_if_missing(&pool, "metric", "archived_at", "INTEGER").await?;
         // C8(plan/13 D8):标配 Issue 三件套与标配 Skill 的稳定关联。老库开出
         // 来是空串,和"这张 Issue 没有标配 Skill 关联"这个真实状态完全一致
         // ——存量 Issue 全部是手建/Autopilot 建,从未挂过标配 Skill。
@@ -272,16 +277,36 @@ impl SqliteStore {
             "TEXT NOT NULL DEFAULT ''",
         )
         .await?;
-        // T7 (2026-07-23, plan/12 §0/§2/§3): Skill/Agent gain the same
-        // stage-role classification `workflow_spec.stage_ref` already has.
-        // NULL on every pre-T7 row (including the five built-in stage-role
-        // agents/skills) is honest until the boot-time by-name backfill
-        // (`seed_stage_role_agents_if_missing` / plan/17 起 skills 走
-        // `seed_bw_standard_skills_if_missing`) fills the real ones in;
+        // T7 (2026-07-23, plan/12 §0/§2/§3): Agent gains the same stage-role
+        // classification `workflow_spec.stage_ref` already has. NULL on
+        // every pre-T7 row (including the five built-in stage-role agents)
+        // is honest until the boot-time by-name backfill
+        // (`seed_stage_role_agents_if_missing`) fills the real ones in;
         // every imported catalog row stays NULL = 通用/跨阶段 — nobody has
         // manually classified those, so this never guesses.
-        add_column_if_missing(&pool, "skill", "stage_ref", "INTEGER").await?;
         add_column_if_missing(&pool, "agent", "stage_ref", "INTEGER").await?;
+        // 五角色归类(2026-08-05):归类**动作**的出处。'' = 还没人归过类;
+        // 'table' = bw-core 静态表回填;'distilled' = 按蒸馏出处 Issue 派生;
+        // 'manual' = 人工在 SkillHub 改过(此后 Boot 的静态表回填整条跳过)。
+        // 与 skill_stage 的行数共同派生四态 —— 单看行数分不出「判过了、不属
+        // 任何阶段」和「还没人管」,而这两件事在本仓是必须分开的。
+        add_column_if_missing(&pool, "skill", "stage_origin", "TEXT NOT NULL DEFAULT ''").await?;
+        // Critical 修复(2026-08-06):上一版在这里直接删列,理由是「Boot 的
+        // 搬值逻辑按 name 查静态表重建,不读旧列的值,所以删列不丢数据」——
+        // 这句话对静态表**覆盖得到**的行是对的,但对覆盖不到的行是假的:静态
+        // 表按名查不到的行,Boot 的按名回填从头到尾不会碰它,它的旧
+        // `stage_ref` 单值就随列一起被删列语句静默抹掉。真实日常库独立核实
+        // 命中过一次:`metrics-render`(`stage_ref=1`,来自另一条未合入本分支
+        // 的产品线,静态表里没有这个名字)。删列之前必须先把这类「静态表管不
+        // 着」的行搬进 `skill_stage`,标 `StageOrigin::Legacy`——静态表管得到
+        // 的行不搬,原样留给下面 Boot 的按名回填去写正确的**多值**(搬单值会
+        // 让它们停在旧的单值上,是计划内的中间态倒退)。
+        migrate_legacy_skill_stage_ref(&pool).await?;
+        // 旧列真删(用户 2026-08-05:「不要害怕修改旧表,有需要就大胆重做」)。
+        // 位置很关键:必须排在上面的保值搬迁之后 —— 搬迁函数自己按
+        // `PRAGMA table_info` 判断列是否还在,删列之后再跑第二次 `open()` 会
+        // 直接 no-op,天然幂等。
+        drop_column_if_present(&pool, "skill", "stage_ref", &["idx_skill_stage"]).await?;
         // T16 (plan/12 §10 v1.1#3): workflow's main MD document, aligned
         // with `skill.content`. '' on every pre-T16 row = honestly "no
         // original document" (real pre-T16 workflows never had one to lose).
@@ -292,19 +317,19 @@ impl SqliteStore {
             "TEXT NOT NULL DEFAULT ''",
         )
         .await?;
-        // Indexes on `stage_ref` deliberately live here, *after* the two
-        // `add_column_if_missing` calls above, instead of in `schema.sql`'s
+        // The index on `agent.stage_ref` deliberately lives here, *after* the
+        // `add_column_if_missing` call above, instead of in `schema.sql`'s
         // `CREATE INDEX` blob (that whole blob replays unconditionally,
-        // before these guards run, against the real on-disk `skill`/`agent`
-        // tables — a pre-T7 DB doesn't have the column yet at that point, so
-        // an index on it there crashes with "no such column: stage_ref",
-        // caught by this ticket's own migration E2E against an old fixture
-        // DB). `workflow_spec.stage_ref`'s schema.sql-embedded index never
-        // hit this because that column has been part of the table's initial
+        // before this guard runs, against the real on-disk `agent` table —
+        // a pre-T7 DB doesn't have the column yet at that point, so an index
+        // on it there crashes with "no such column: stage_ref", caught by
+        // this ticket's own migration E2E against an old fixture DB).
+        // `workflow_spec.stage_ref`'s schema.sql-embedded index never hit
+        // this because that column has been part of the table's initial
         // `CREATE TABLE` since before this ticket, not retrofitted.
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_skill_stage ON skill(stage_ref)")
-            .execute(&pool)
-            .await?;
+        // (`skill.stage_ref`'s twin index, `idx_skill_stage`, was dropped
+        // 2026-08-05 along with the column — see `drop_column_if_present`
+        // above.)
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_agent_stage ON agent(stage_ref)")
             .execute(&pool)
             .await?;
@@ -331,6 +356,63 @@ impl SqliteStore {
     }
 }
 
+/// 删 `skill.stage_ref` 之前的保值搬迁(Critical 修复,2026-08-06)。
+///
+/// 静态表([`bw_core::stage_catalog::SKILL_STAGE_CATALOG`])永远不可能覆盖每
+/// 个用户库里的每一行——它只随本分支发行,另一条产品线/另一次手填都可能
+/// 留下静态表查不到名字的 `stage_ref` 值。这些行**不会**被下面 Boot 的按名
+/// 回填接住(那段逻辑本身就是按名查这张静态表),所以旧列一删,值就真没了。
+///
+/// 做法:只在列还在时跑(`PRAGMA table_info` 判据,与 [`drop_column_if_present`]
+/// 同款,可安全重复调用);对每一行 `stage_ref IS NOT NULL` 的技能,**只在**
+/// `stages_for(name)` 返回 `None`(静态表管不着)时才搬——搬法是往
+/// `skill_stage` 插一行同值、把 `stage_origin` 标成 `Legacy`。静态表管得到的
+/// 行原样不动,留给调用方之后紧接着跑的 Boot 按名回填去写正确的**多值**
+/// (那才是这些行的正本;这里抢先写单值会造成计划内的中间态倒退)。
+///
+/// 越界的 `stage_ref` 值(理论上写不出来,但读侧 [`crate::sqlite::skill_row`]
+/// 一贯宁可丢弃也不瞎猜)按同一条纪律处理:不认识的整数不搬,直接丢弃。
+async fn migrate_legacy_skill_stage_ref(pool: &SqlitePool) -> Result<()> {
+    let table_info = sqlx::query("PRAGMA table_info(skill)")
+        .fetch_all(pool)
+        .await?;
+    let has_stage_ref = table_info
+        .iter()
+        .any(|r| r.get::<String, _>("name") == "stage_ref");
+    if !has_stage_ref {
+        // 已经真删过列的库(本函数在更早的一次 open() 里跑过)——no-op。
+        return Ok(());
+    }
+    let legacy_rows =
+        sqlx::query("SELECT id, name, stage_ref FROM skill WHERE stage_ref IS NOT NULL")
+            .fetch_all(pool)
+            .await?;
+    for r in legacy_rows {
+        let id: String = r.get("id");
+        let name: String = r.get("name");
+        let stage_ref: i64 = r.get("stage_ref");
+        // 静态表管得到的行不搬——交给紧随其后的 Boot 按名回填写多值。
+        if bw_core::stage_catalog::stages_for(&name).is_some() {
+            continue;
+        }
+        // 越界值如实丢弃,不硬塞进关联表(读侧同一条纪律:不认识就不猜)。
+        if StageKind::from_index(stage_ref as u8).is_none() {
+            continue;
+        }
+        sqlx::query("INSERT OR IGNORE INTO skill_stage (skill_id, stage) VALUES (?, ?)")
+            .bind(&id)
+            .bind(stage_ref)
+            .execute(pool)
+            .await?;
+        sqlx::query("UPDATE skill SET stage_origin=? WHERE id=?")
+            .bind(stage_origin_tag(StageOrigin::Legacy))
+            .bind(&id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
 /// `ALTER TABLE ... ADD COLUMN` has no `IF NOT EXISTS` clause in SQLite, so
 /// check `PRAGMA table_info` first. Safe to call on every `open()` — a no-op
 /// once the column exists.
@@ -349,6 +431,44 @@ async fn add_column_if_missing(
             .execute(pool)
             .await?;
     }
+    Ok(())
+}
+
+/// `add_column_if_missing` 的对称件:删一列,先删掉依赖它的索引。
+///
+/// SQLite 的 `ALTER TABLE ... DROP COLUMN`(3.35+,本仓 libsqlite3-sys 0.30.1
+/// 远高于门槛)在列被索引时会直接拒绝,所以 `dependent_indexes` 必须列全 ——
+/// 调用方自己知道该列有哪些索引,这里不去猜。列不存在即 no-op,可在每次
+/// `open()` 上安全重复调用。
+///
+/// 用户 2026-08-05 拍板「不能无限制扩展表格,不要害怕修改旧表,有需要就大胆
+/// 重做」——把这条做成常备原语而不是一次性代码,是那句话的落地。
+///
+/// 非原子:`DROP INDEX` 与 `ALTER TABLE ... DROP COLUMN` 是各自独立的
+/// autocommit 语句,中途(比如进程被杀)可能只有索引没了、列还在。这是可以
+/// 接受的——每一步都是幂等的(索引不存在就 no-op、列不存在整个函数直接
+/// 提前返回),下次 `open()` 重跑会自愈到两者都删掉的终态,不需要事务包裹。
+async fn drop_column_if_present(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+    dependent_indexes: &[&str],
+) -> Result<()> {
+    let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
+        .fetch_all(pool)
+        .await?;
+    let exists = rows.iter().any(|r| r.get::<String, _>("name") == column);
+    if !exists {
+        return Ok(());
+    }
+    for idx in dependent_indexes {
+        sqlx::query(&format!("DROP INDEX IF EXISTS {idx}"))
+            .execute(pool)
+            .await?;
+    }
+    sqlx::query(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -548,9 +668,15 @@ async fn sync_one_metric_definition(
 
     match existing {
         Some(id) => {
+            // `archived=0` 让规则两边对称:**正本里有 = 在用,正本里没有 =
+            // 停用**。上面的自动停用是"没有"那一半,这里是"有"那一半——一条
+            // 曾被停用(手动或自动)的指标重新写回正本,下次同步它就回来,
+            // 不需要人再去界面上点一次"恢复"。界面因此不给正本来源的指标
+            // 停用按钮(点了会被下次同步推翻),只给手建行——见 op.rs 的
+            // MetricCard。
             sqlx::query(
                 "UPDATE metric SET def=?, target_raw=?, collect_kind=?, collect_query=?,
-                    origin=?, updated_at=?, rev=rev+1 WHERE id=?",
+                    origin=?, archived=0, archived_at=NULL, updated_at=?, rev=rev+1 WHERE id=?",
             )
             .bind(&m.def)
             .bind(&m.target_raw)
@@ -907,10 +1033,49 @@ impl Store for SqliteStore {
             sync_one_metric_definition(&mut tx, &p, MetricRole::Leading, m, t).await?;
         }
 
+        // 正本里已经消失的行 → 自动停用。作用域死死卡在 `origin='file'`:
+        // 只有当初从正本同步进来的行,"正本里没有它了"才是一个成立的判断;
+        // 界面手建的 `manual` 行正本里本来就没有,不能被这条规则沉默清场
+        // (要停用得人在界面上显式点)。已经 archived 的不重复盖时戳。
+        // 一个字节不碰 observation。
+        let mut auto_archived = 0u32;
+        for (role, defs) in [
+            (MetricRole::Lagging, &sync.lagging),
+            (MetricRole::Leading, &sync.leading),
+        ] {
+            let rows = sqlx::query(
+                "SELECT id, name FROM metric
+                 WHERE project_id=? AND role=? AND origin='file' AND archived=0",
+            )
+            .bind(&p)
+            .bind(role_metric_text(role))
+            .fetch_all(&mut *tx)
+            .await?;
+            // 名字比对在 Rust 侧做,避开 IN (?,?,…) 的动态占位符拼接;
+            // 一个项目的指标是十几条量级,不值得为它上 SQL 生成。
+            for r in &rows {
+                let name: String = r.get("name");
+                if defs.iter().any(|m| m.name == name) {
+                    continue;
+                }
+                let id: String = r.get("id");
+                sqlx::query(
+                    "UPDATE metric SET archived=1, archived_at=?, updated_at=?, rev=rev+1 WHERE id=?",
+                )
+                .bind(t)
+                .bind(t)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+                auto_archived += 1;
+            }
+        }
+
         tx.commit().await?;
         Ok(MetricsFileSyncSummary {
             lagging_synced: sync.lagging.len() as u32,
             leading_synced: sync.leading.len() as u32,
+            auto_archived,
         })
     }
 
@@ -937,6 +1102,22 @@ impl Store for SqliteStore {
         Ok(ConnectorsFileSyncSummary {
             connectors_synced: sync.connectors.len() as u32,
         })
+    }
+
+    async fn set_metric_archived(&self, metric: MetricId, archived: bool) -> Result<()> {
+        let t = now_unix();
+        sqlx::query(
+            "UPDATE metric SET archived=?, archived_at=?, updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(archived as i64)
+        // 恢复时清掉时戳:archived_at 只在"当下正处于停用中"时才有意义,
+        // 留着一个陈旧的停用时刻会让人误以为它还停着。
+        .bind(if archived { Some(t) } else { None })
+        .bind(t)
+        .bind(metric.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn update_week_plan(
@@ -1159,8 +1340,14 @@ impl Store for SqliteStore {
         }
 
         // L1→L3: each metric's signal from its latest observation vs its target.
+        // `archived=0`:停用的指标整条退出派生 —— 既不再重算它自己那盏灯
+        // (缓存冻结在停用那一刻),也不进下面的 by_stage/by_project 上卷
+        // (一条被判定为坏指标的行不该再把项目健康灯往任何方向拽)。
+        // 恢复后它自然回到这个 SELECT 里,由下一次 recompute 重新派生。
+        // derive-only 不变:recompute_signals 仍是 signal 的唯一写入者。
         let metric_rows = sqlx::query(
-            "SELECT id, stage_kind, target_raw, amber_kind, amber_value FROM metric WHERE project_id=?",
+            "SELECT id, stage_kind, target_raw, amber_kind, amber_value
+             FROM metric WHERE project_id=? AND archived=0",
         )
         .bind(&p)
         .fetch_all(&self.pool)
@@ -1345,7 +1532,7 @@ impl Store for SqliteStore {
 
         let metric_rows = sqlx::query(
             "SELECT m.id, m.name, m.role, m.def, m.target_raw, m.last_target, m.driver, m.stage_kind, m.signal, m.hit,
-                    m.collect_kind, m.collect_query, m.origin,
+                    m.collect_kind, m.collect_query, m.origin, m.archived,
                     (SELECT raw FROM observation o WHERE o.metric_id = m.id ORDER BY ts DESC, rowid DESC LIMIT 1) AS value_raw,
                     (SELECT source_kind FROM observation o WHERE o.metric_id = m.id ORDER BY ts DESC, rowid DESC LIMIT 1) AS src
              FROM metric m WHERE m.project_id=? ORDER BY m.pos",
@@ -1377,6 +1564,7 @@ impl Store for SqliteStore {
                     collect_kind: r.get("collect_kind"),
                     collect_query: r.get("collect_query"),
                     origin: parse_metric_origin(&r.get::<String, _>("origin")),
+                    archived: r.get::<i64, _>("archived") != 0,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2098,8 +2286,11 @@ impl Store for SqliteStore {
     async fn create_skill(&self, s: NewSkill) -> Result<()> {
         let t = now_unix();
         let (source_tag, official_library) = hub_source_columns(&s.source);
+        // 建行与阶段归属包在同一事务里 —— 让调用方没有「skill 行落地、
+        // skill_stage 半途失败」的机会(seed/import 路径都靠这一点)。
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO skill (id, name, maturity, descr, category, stage_ref, source, official_library, uses, content, project_id, created_at, updated_at, rev)
+            "INSERT INTO skill (id, name, maturity, descr, category, stage_origin, source, official_library, uses, content, project_id, created_at, updated_at, rev)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
         )
         .bind(s.id.uuid().to_string())
@@ -2107,15 +2298,23 @@ impl Store for SqliteStore {
         .bind(maturity_text(s.maturity))
         .bind(&s.desc)
         .bind(&s.category)
-        .bind(s.stage_ref.map(|k| i64::from(k.index())))
+        .bind(stage_origin_tag(s.stage_origin))
         .bind(source_tag)
         .bind(official_library)
         .bind(&s.content)
         .bind(s.project_id.map(pid))
         .bind(t)
         .bind(t)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        for k in &s.stages {
+            sqlx::query("INSERT OR IGNORE INTO skill_stage (skill_id, stage) VALUES (?, ?)")
+                .bind(s.id.uuid().to_string())
+                .bind(i64::from(k.index()))
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -2152,16 +2351,6 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn set_skill_stage_ref(&self, id: SkillId, stage_ref: Option<StageKind>) -> Result<()> {
-        sqlx::query("UPDATE skill SET stage_ref=?, updated_at=?, rev=rev+1 WHERE id=?")
-            .bind(stage_ref.map(|k| i64::from(k.index())))
-            .bind(now_unix())
-            .bind(id.uuid().to_string())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     async fn set_skill_source(&self, id: SkillId, source: HubSource) -> Result<()> {
         let (source_tag, official_library) = hub_source_columns(&source);
         sqlx::query(
@@ -2193,34 +2382,56 @@ impl Store for SqliteStore {
 
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
-            "SELECT id, name, maturity, descr, category, stage_ref, source, official_library, uses, content,
-                    distilled_from_issue, origin_agent, project_id
+            "SELECT id, name, maturity, descr, category, stage_origin, source, official_library, uses, content,
+                    distilled_from_issue, origin_agent, project_id, rev
              FROM skill ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter().map(skill_row).collect()
+        let mut cards: Vec<SkillCard> = rows
+            .into_iter()
+            .map(skill_row)
+            .collect::<Result<Vec<_>>>()?;
+        // 一次查关联表、按 id 分发 —— 不是每张卡一次查询。
+        let by_id = self.list_skill_stages().await?;
+        for c in cards.iter_mut() {
+            if let Some(stages) = by_id.get(&c.id) {
+                c.stages = stages.clone();
+            }
+        }
+        Ok(cards)
     }
 
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>> {
         let row = sqlx::query(
-            "SELECT id, name, maturity, descr, category, stage_ref, source, official_library, uses, content,
-                    distilled_from_issue, origin_agent, project_id
+            "SELECT id, name, maturity, descr, category, stage_origin, source, official_library, uses, content,
+                    distilled_from_issue, origin_agent, project_id, rev
              FROM skill WHERE id=?",
         )
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
         .await?;
-        row.map(skill_row).transpose()
+        let Some(mut card) = row.map(skill_row).transpose()? else {
+            return Ok(None);
+        };
+        let stages = sqlx::query("SELECT stage FROM skill_stage WHERE skill_id=? ORDER BY stage")
+            .bind(id.uuid().to_string())
+            .fetch_all(&self.pool)
+            .await?;
+        card.stages = stages
+            .into_iter()
+            .filter_map(|r| StageKind::from_index(r.get::<i64, _>("stage") as u8))
+            .collect();
+        Ok(Some(card))
     }
 
-    async fn record_skill_use_by_name(&self, name: &str) -> Result<u32> {
-        let res = sqlx::query("UPDATE skill SET uses=uses+1, updated_at=?, rev=rev+1 WHERE name=?")
+    async fn record_skill_use(&self, id: SkillId) -> Result<()> {
+        sqlx::query("UPDATE skill SET uses=uses+1, updated_at=?, rev=rev+1 WHERE id=?")
             .bind(now_unix())
-            .bind(name)
+            .bind(id.uuid().to_string())
             .execute(&self.pool)
             .await?;
-        Ok(res.rows_affected() as u32)
+        Ok(())
     }
 
     /// Distill a new skill from a completed, assigned Issue — the "every
@@ -2242,9 +2453,12 @@ impl Store for SqliteStore {
 
         let t = now_unix();
         let (source_tag, official_library) = hub_source_columns(&HubSource::SelfBuilt);
+        // 建行与阶段归属包在同一事务里(同 create_skill)—— 前置的只读校验
+        // (issue 存在/Done/有 assignee)已经在事务外做完,这里只包写入。
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO skill
-                (id, name, maturity, descr, category, stage_ref, source, official_library, uses, content,
+                (id, name, maturity, descr, category, stage_origin, source, official_library, uses, content,
                  distilled_from_issue, origin_agent, project_id,
                  created_at, updated_at, rev)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)",
@@ -2254,10 +2468,12 @@ impl Store for SqliteStore {
         .bind(maturity_text(Maturity::Polishing))
         .bind(&skill.desc)
         .bind(&skill.category)
-        // T7 (plan/12 §0): same provenance-not-input rule the line below
-        // already applies to `project_id` — a distilled skill really did
-        // arise from work in the issue's real stage, not a caller guess.
-        .bind(i64::from(issue.stage.index()))
+        // T7 (plan/12 §0)/2026-08-05: same provenance-not-input rule the
+        // line below already applies to `project_id` — a distilled skill
+        // really did arise from work in the issue's real stage, not a
+        // caller guess (`skill.stages`/`skill.stage_origin` are ignored the
+        // same way `project_id` is, see the call site's own comment).
+        .bind(stage_origin_tag(StageOrigin::Distilled))
         .bind(source_tag)
         .bind(official_library)
         .bind(&skill.content)
@@ -2268,8 +2484,14 @@ impl Store for SqliteStore {
         .bind(pid(issue.project_id))
         .bind(t)
         .bind(t)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        sqlx::query("INSERT OR IGNORE INTO skill_stage (skill_id, stage) VALUES (?, ?)")
+            .bind(skill.id.uuid().to_string())
+            .bind(i64::from(issue.stage.index()))
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -2278,7 +2500,7 @@ impl Store for SqliteStore {
         let (source_tag, official_library) = hub_source_columns(&skill.source);
         let mut tx = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO skill (id, name, maturity, descr, category, stage_ref, source, official_library, uses, content, project_id, created_at, updated_at, rev)
+            "INSERT INTO skill (id, name, maturity, descr, category, stage_origin, source, official_library, uses, content, project_id, created_at, updated_at, rev)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)",
         )
         .bind(skill.id.uuid().to_string())
@@ -2286,7 +2508,7 @@ impl Store for SqliteStore {
         .bind(maturity_text(skill.maturity))
         .bind(&skill.desc)
         .bind(&skill.category)
-        .bind(skill.stage_ref.map(|k| i64::from(k.index())))
+        .bind(stage_origin_tag(skill.stage_origin))
         .bind(source_tag)
         .bind(official_library)
         .bind(&skill.content)
@@ -2295,6 +2517,14 @@ impl Store for SqliteStore {
         .bind(t)
         .execute(&mut *tx)
         .await?;
+        // 同 create_skill:建行与阶段归属在同一次调用里落地。
+        for k in &skill.stages {
+            sqlx::query("INSERT OR IGNORE INTO skill_stage (skill_id, stage) VALUES (?, ?)")
+                .bind(skill.id.uuid().to_string())
+                .bind(i64::from(k.index()))
+                .execute(&mut *tx)
+                .await?;
+        }
 
         for f in files {
             sqlx::query(
@@ -2323,6 +2553,50 @@ impl Store for SqliteStore {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(skill_file_row).collect()
+    }
+
+    async fn list_skill_stages(&self) -> Result<HashMap<SkillId, Vec<StageKind>>> {
+        let rows = sqlx::query("SELECT skill_id, stage FROM skill_stage ORDER BY skill_id, stage")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out: HashMap<SkillId, Vec<StageKind>> = HashMap::new();
+        for r in rows {
+            let id = parse_uuid(&r.get::<String, _>("skill_id"), SkillId::from_uuid)?;
+            // 越界值(理论上进不来 —— 写侧只写 StageKind::index)如实丢弃,
+            // 绝不映射成某个「差不多的」阶段。
+            if let Some(k) = StageKind::from_index(r.get::<i64, _>("stage") as u8) {
+                out.entry(id).or_default().push(k);
+            }
+        }
+        Ok(out)
+    }
+
+    async fn set_skill_stages(
+        &self,
+        id: SkillId,
+        stages: &[StageKind],
+        origin: StageOrigin,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM skill_stage WHERE skill_id=?")
+            .bind(id.uuid().to_string())
+            .execute(&mut *tx)
+            .await?;
+        for k in stages {
+            sqlx::query("INSERT INTO skill_stage (skill_id, stage) VALUES (?, ?)")
+                .bind(id.uuid().to_string())
+                .bind(i64::from(k.index()))
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query("UPDATE skill SET stage_origin=?, updated_at=? WHERE id=?")
+            .bind(stage_origin_tag(origin))
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn create_agent(&self, a: NewAgent) -> Result<()> {
@@ -2414,22 +2688,22 @@ impl Store for SqliteStore {
         row.map(agent_row).transpose()
     }
 
-    async fn record_agent_run_by_name(&self, name: &str, ok: bool) -> Result<u32> {
+    async fn record_agent_run(&self, id: AgentId, ok: bool) -> Result<()> {
         // runs/wins are the real counters; win_rate is a derived display
         // string recomputed from them in the same statement — never patched
         // independently, so it can't drift from the counters it summarizes.
-        let res = sqlx::query(
+        sqlx::query(
             "UPDATE agent SET runs=runs+1, wins=wins+?, \
              win_rate = printf('%d%%', (wins+?)*100/(runs+1)), \
-             updated_at=?, rev=rev+1 WHERE name=?",
+             updated_at=?, rev=rev+1 WHERE id=?",
         )
         .bind(if ok { 1 } else { 0 })
         .bind(if ok { 1 } else { 0 })
         .bind(now_unix())
-        .bind(name)
+        .bind(id.uuid().to_string())
         .execute(&self.pool)
         .await?;
-        Ok(res.rows_affected() as u32)
+        Ok(())
     }
 
     async fn delete_agent(&self, id: AgentId) -> Result<()> {
@@ -2970,6 +3244,28 @@ fn workflow_spec_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkflowSpec> {
     })
 }
 
+/// `skill.stage_origin` 列 ↔ 域枚举。未知/空值一律读成 `Unclassified` ——
+/// 诚实降级,绝不猜一个归类出处出来。
+fn parse_stage_origin(tag: &str) -> StageOrigin {
+    match tag {
+        "table" => StageOrigin::Table,
+        "distilled" => StageOrigin::Distilled,
+        "manual" => StageOrigin::Manual,
+        "legacy" => StageOrigin::Legacy,
+        _ => StageOrigin::Unclassified,
+    }
+}
+
+fn stage_origin_tag(origin: StageOrigin) -> &'static str {
+    match origin {
+        StageOrigin::Unclassified => "",
+        StageOrigin::Table => "table",
+        StageOrigin::Distilled => "distilled",
+        StageOrigin::Manual => "manual",
+        StageOrigin::Legacy => "legacy",
+    }
+}
+
 fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
     let id = parse_uuid(&r.get::<String, _>("id"), SkillId::from_uuid)?;
     let distilled_from_issue = r
@@ -2983,9 +3279,10 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         .map(|s| parse_uuid(&s, AgentId::from_uuid))
         .transpose()?;
     let project_id = opt_project_id(&r)?;
-    let stage_ref = r
-        .get::<Option<i64>, _>("stage_ref")
-        .and_then(|n| StageKind::from_index(n as u8));
+    // 阶段归属不在 skill 行上——它在 skill_stage 关联表里(多值)。行读只带
+    // 归类出处;`stages` 由调用方(list_skills / get_skill)按 skill_id 补齐,
+    // 避免每行一次查询的 N+1。
+    let stage_origin = parse_stage_origin(&r.get::<String, _>("stage_origin"));
     let source_tag: String = r.get("source");
     let official_library: String = r.get("official_library");
     Ok(SkillCard {
@@ -2994,7 +3291,8 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         maturity: parse_maturity(&r.get::<String, _>("maturity")),
         desc: r.get("descr"),
         category: r.get("category"),
-        stage_ref,
+        stages: Vec::new(),
+        stage_origin,
         source: parse_hub_source(&source_tag, &official_library),
         adapted_from: parse_adapted_from(&source_tag, &official_library),
         uses: r.get::<i64, _>("uses") as u32,
@@ -3002,6 +3300,7 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         distilled_from_issue,
         origin_agent,
         project_id,
+        rev: r.get::<i64, _>("rev") as u32,
     })
 }
 

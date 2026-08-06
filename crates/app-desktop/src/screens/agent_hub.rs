@@ -8,8 +8,12 @@
 //! `Command::UpdateAgent` — content only, `maturity`/`runs`/`win_rate` stay
 //! untouched, same rule `OptimizeWorkflowForm` established for workflows.
 //!
-//! T7 (2026-07-23, plan/12 §0/§3): the same stage-role filter chip row
-//! `SkillHub` gained — shared `ui::vm::RoleFilter`/`role_chip_counts`.
+//! T7 (2026-07-23, plan/12 §0/§3): a stage-role filter chip row shared with
+//! `SkillHub` via `ui::vm::RoleFilter`/`role_chip_counts`. 2026-08-05:
+//! `SkillHub` grew two more chips (全阶段通用/不属任何阶段) this screen does
+//! not carry — no longer "the same" row. This screen skips both on purpose:
+//! agent 侧本轮 `stage_ref` 仍是单值 `Option<StageKind>`,没有这两个多值态,
+//! 加了就是假的(理由同样落在下方 chip 渲染旁注上)。
 
 use crate::kernel::{HubVm, Kernel};
 use crate::screens::markdown::MarkdownView;
@@ -17,7 +21,7 @@ use crate::theme;
 use bw_app::Command;
 use bw_core::AgentId;
 use dioxus::prelude::*;
-use ui::vm::{role_chip_counts, AgentCardVm, ProjectCardVm, RoleFilter};
+use ui::vm::{role_chip_counts, AgentCardVm, ProjectCardVm, RoleFilter, RoleTag};
 
 #[component]
 pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
@@ -33,12 +37,16 @@ pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let mut editing = use_signal(|| None::<AgentId>);
     let mut role_filter = use_signal(|| RoleFilter::All);
 
-    let (stage_counts, general_count) =
-        role_chip_counts(&hub.agents.iter().map(|a| a.stage_ref).collect::<Vec<_>>());
+    let counts = role_chip_counts(
+        &hub.agents
+            .iter()
+            .map(|a| RoleTag::from_single(a.stage_ref))
+            .collect::<Vec<_>>(),
+    );
     let filtered: Vec<AgentCardVm> = hub
         .agents
         .iter()
-        .filter(|a| role_filter().matches(a.stage_ref))
+        .filter(|a| role_filter().matches(&RoleTag::from_single(a.stage_ref)))
         .cloned()
         .collect();
 
@@ -74,7 +82,7 @@ pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
                         }
                     }
                 }
-                for (sk , count) in stage_counts {
+                for (sk , count) in counts.per_stage.clone() {
                     {
                         let active = role_filter() == RoleFilter::Stage(sk);
                         let (bg, fg): (&str, &str) = if active { (sk.color(), "#FFF") } else { ("#EFE9DA", ink2) };
@@ -89,13 +97,15 @@ pub fn AgentHub(hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
                     }
                 }
                 {
-                    let active = role_filter() == RoleFilter::General;
+                    // agent 屏不加 Universal/NoStage chip —— agent 侧本轮没有
+                    // 这两个状态,加了就是假的;剩这一枚,诚实地叫「未归类」。
+                    let active = role_filter() == RoleFilter::Unclassified;
                     let (bg, fg): (&str, &str) = if active { (theme::CLAY, "#FFF") } else { ("#EFE9DA", ink2) };
                     rsx! {
                         button {
                             style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
-                            onclick: move |_| role_filter.set(RoleFilter::General),
-                            "通用 · {general_count}"
+                            onclick: move |_| role_filter.set(RoleFilter::Unclassified),
+                            "未归类 · {counts.unclassified}"
                         }
                     }
                 }

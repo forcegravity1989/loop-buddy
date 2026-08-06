@@ -1,5 +1,7 @@
 # 03 · Rust 应用架构与工作流引擎设计
 
+> ℹ️ **背景文档(2026-08-05 标注)**:§2.5 的 L0-L6 度量派生链定义**至今是权威定义**(全仓库唯一完整定义处),crate 分层思路也大体成立;但部分细节已与代码漂移(如 `bw-providers` crate 已不存在)。架构现状以代码与 `plan/06~08` 为准。
+
 > 目标:把 `Builders工作台-项目管理向导.dc.html` + `support.js` 重写成桌面优先(Mac+Win)、Web 次之的 Rust 应用。核心是把**领域逻辑 / 状态 / 持久化 / 工作流引擎**全部沉到与 UI 无关的 crate,让桌面与 Web 复用 80%+ 代码;UI 栈由 [`02-rust-stack-evaluation.md`](02-rust-stack-evaluation.md) 选型,这里只留薄适配层。
 
 ---

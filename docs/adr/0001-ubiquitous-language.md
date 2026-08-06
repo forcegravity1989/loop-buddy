@@ -2,6 +2,7 @@
 
 - 状态:已接受 (2026-07-22) · R1/R2/R3/R4/R6 已执行(2026-07-22,同日)
 - 相关:[`CONTEXT.md`](../../CONTEXT.md)、[`plan/07-product-proposition.md`](../../plan/07-product-proposition.md)
+- 注意:本文的 R1-R7 是**改名任务**编号,与 `plan/06` 的 R 系列(multica 融合任务)、`plan/20` 的 R1-R5(作用域规则)是三套互不相关的编号——消歧见 [`docs/code-schemes.md`](../code-schemes.md)
 
 ## 背景
 

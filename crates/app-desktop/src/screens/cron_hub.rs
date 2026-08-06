@@ -86,8 +86,14 @@ pub fn CronHub(
                     }
                     for c in hub.cron_tasks.clone() {
                         {
+                            // plan/20 R2: 与 tick_scheduler 的就近解析同一口
+                            // 径——本项目行或全局行按名命中即可跑,他项目
+                            // 的行不算数(避免「按钮亮着,点了却跑不了」)。
                             let can_run = c.project_id.is_some()
-                                && hub.workflows.iter().any(|w| w.name == c.target);
+                                && hub.workflows.iter().any(|w| {
+                                    bw_core::scope::in_scope(w.project_id, c.project_id)
+                                        && w.name == c.target
+                                });
                             rsx! {
                                 CronTaskRowView {
                                     key: "{c.id.uuid()}",
@@ -402,7 +408,23 @@ fn CreateCronForm(hub: HubVm, projects: Vec<ProjectCardVm>, on_done: EventHandle
                         }
                         if picker_open() {
                             SkillPicker {
-                                skills: hub.skills.iter().filter(|s| !s.is_project_assets).cloned().collect(),
+                                // plan/20 R1: 池随表单当前选的项目走——选了
+                                // 项目 = 本项目行 + 全局行;「全部项目」= 只
+                                // 全局行;他项目的行绝不出现。
+                                skills: {
+                                    let pid = (project_choice() > 0)
+                                        .then(|| projects.get(project_choice() - 1))
+                                        .flatten()
+                                        .map(|p| p.id);
+                                    hub.skills
+                                        .iter()
+                                        .filter(|s| {
+                                            bw_core::scope::in_scope(s.project_id, pid)
+                                                && !s.is_project_assets
+                                        })
+                                        .cloned()
+                                        .collect()
+                                },
                                 on_pick: move |s: SkillCardVm| {
                                     picked_skill.set(Some(s));
                                     picker_open.set(false);
