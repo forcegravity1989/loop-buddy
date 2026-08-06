@@ -2165,7 +2165,7 @@ impl Store for SqliteStore {
     async fn list_skills(&self) -> Result<Vec<SkillCard>> {
         let rows = sqlx::query(
             "SELECT id, name, maturity, descr, category, stage_origin, source, official_library, uses, content,
-                    distilled_from_issue, origin_agent, project_id
+                    distilled_from_issue, origin_agent, project_id, rev
              FROM skill ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -2187,7 +2187,7 @@ impl Store for SqliteStore {
     async fn get_skill(&self, id: SkillId) -> Result<Option<SkillCard>> {
         let row = sqlx::query(
             "SELECT id, name, maturity, descr, category, stage_origin, source, official_library, uses, content,
-                    distilled_from_issue, origin_agent, project_id
+                    distilled_from_issue, origin_agent, project_id, rev
              FROM skill WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -3053,6 +3053,7 @@ fn skill_row(r: sqlx::sqlite::SqliteRow) -> Result<SkillCard> {
         distilled_from_issue,
         origin_agent,
         project_id,
+        rev: r.get::<i64, _>("rev") as u32,
     })
 }
 

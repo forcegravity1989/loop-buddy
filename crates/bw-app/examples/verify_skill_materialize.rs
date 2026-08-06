@@ -39,11 +39,12 @@
 //! prompt 里到底有没有那一段目录文案。
 
 use bw_app::{App, Command};
-use bw_core::model::{HubSource, IssuePriority, StageKind};
+use bw_core::model::{HubSource, IssuePriority, Maturity, StageKind};
+use bw_core::stage_catalog::StageOrigin;
 use bw_core::{IssueId, ProjectId, SessionId, SkillId};
 use bw_engine::{ClaudeCliConfig, Engine, ExecError, Executor, MockExecutor, PermissionMode};
 use bw_engine::{PhaseNode, PhaseOutput, RunCtx};
-use bw_store::{SessionKind, SqliteStore, Store};
+use bw_store::{NewSkill, NewSkillFile, SessionKind, SqliteStore, Store};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -130,7 +131,7 @@ async fn main() {
         (Some(a), Some(b), Some(c)) => (a.clone(), b.clone(), c.clone()),
         _ => {
             eprintln!(
-                "usage: verify_skill_materialize <db> <ws-root> <init|init-empty|run|new-issue|bulk> …"
+                "usage: verify_skill_materialize <db> <ws-root> <init|init-empty|run|new-issue|bulk|same-len-edit|traversal-attack> …"
             );
             std::process::exit(2);
         }
@@ -453,6 +454,151 @@ async fn main() {
                 .expect("classify bulk skill");
             }
             println!("[批量] 已确保 {n} 件 task7-bulk-* 候选技能挂 Prototype");
+        }
+
+        // 评审 #1 验证专用(2026-08-06):对既有已归类技能做一次**同字节长度**
+        // 的正文编辑(旧指纹「id + content.len() + files.len()」在这种编辑下
+        // 不变,会误判「未变」而把过期 SKILL.md 留在磁盘)——`UpdateSkill` 走
+        // 真实命令层,`rev` 由 store 侧 `rev=rev+1` 真实递增,不是本例伪造的。
+        "same-len-edit" => {
+            let project = store
+                .list_projects()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|p| p.name == PROJECT_NAME)
+                .expect("先跑 init");
+            app.dispatch(Command::OpenProject(project.id))
+                .await
+                .expect("open project");
+            let before = store
+                .list_skills()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|s| s.name == SKILL_NAME)
+                .expect("先跑 init 建技能");
+            // 唯一改动:「Task 7」→「Task 9」,一个 ASCII 数字换另一个 ASCII
+            // 数字,字节长度严格不变——正是旧指纹的盲区。
+            let edited_content = SKILL_CONTENT.replacen("Task 7", "Task 9", 1);
+            assert_eq!(
+                edited_content.len(),
+                SKILL_CONTENT.len(),
+                "本验证要求同字节长度编辑,不然测不出旧指纹的真实盲区"
+            );
+            app.dispatch(Command::UpdateSkill {
+                id: before.id,
+                name: SKILL_NAME.into(),
+                desc: "适用:Task 7 物化验证专用假技能。".into(),
+                category: "验证 fixture".into(),
+                content: edited_content.clone(),
+                stages: Some(vec![StageKind::Prototype]),
+            })
+            .await
+            .expect("same-length edit");
+            let after = store
+                .list_skills()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|s| s.id == before.id)
+                .unwrap();
+            println!(
+                "[同长度编辑] rev {} → {} · content.len() 编辑前={} 编辑后={}(相等=同字节长度,旧指纹在这里会误判未变)",
+                before.rev,
+                after.rev,
+                SKILL_CONTENT.len(),
+                after.content.len()
+            );
+        }
+
+        // 评审 #3 验证专用(2026-08-06):直接走 `Store` trait(绕过 bw-app
+        // 命令层的 `guard_skill_name`)构造两条「未经校验」的行——这正是评审
+        // 指出的真实前提:guard 只存在于 Command 处理器这一层,`bw-store` 的
+        // `create_skill`/`import_skill_package` 本身对 name/rel_path 零校验,
+        // `ImportSkillPackage`/`ImportSkillLibrary` 又刻意不调用它(见
+        // `lib.rs` 的 `guard_skill_name` 文档注释)。构造出来后走真实
+        // `RunIssue`,独立验证 `materialize_stage_skills` 自己的纵深防御是否
+        // 真的拦得住,而不是靠上游守规矩。
+        "traversal-attack" => {
+            let project = store
+                .list_projects()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|p| p.name == PROJECT_NAME)
+                .expect("先跑 init(要有真实工作区)");
+            app.dispatch(Command::OpenProject(project.id))
+                .await
+                .expect("open project");
+
+            const EVIL_NAME: &str = "../../../../../../tmp/BW-TRAVERSAL-POC-NAME";
+            const EVIL_FILE_REL: &str = "../../../../../../tmp/BW-TRAVERSAL-POC-FILE.txt";
+
+            let evil_name_id = SkillId::new();
+            store
+                .create_skill(NewSkill {
+                    id: evil_name_id,
+                    name: EVIL_NAME.into(),
+                    maturity: Maturity::Polishing,
+                    desc: "路径穿越验证 fixture:恶意技能名。".into(),
+                    category: "验证 fixture".into(),
+                    stages: vec![StageKind::Prototype],
+                    stage_origin: StageOrigin::Table,
+                    source: HubSource::SelfBuilt,
+                    content: "# evil\n\n若这份文件真落到工作区外,纵深防御失效。\n".into(),
+                    project_id: None,
+                })
+                .await
+                .expect("create evil-name skill (直接走 store,绕过 guard_skill_name)");
+
+            let evil_file_id = SkillId::new();
+            store
+                .import_skill_package(
+                    NewSkill {
+                        id: evil_file_id,
+                        name: "evil-materialize-file-poc".into(), // 名字本身合法
+                        maturity: Maturity::Polishing,
+                        desc: "路径穿越验证 fixture:合法技能名 + 恶意支撑文件 rel_path。".into(),
+                        category: "验证 fixture".into(),
+                        stages: vec![StageKind::Prototype],
+                        stage_origin: StageOrigin::Table,
+                        source: HubSource::SelfBuilt,
+                        content: "# evil file poc\n\n正文本身无害,危险在支撑文件的 rel_path。\n"
+                            .into(),
+                        project_id: None,
+                    },
+                    vec![NewSkillFile {
+                        rel_path: EVIL_FILE_REL.into(),
+                        content: "pwned".into(),
+                    }],
+                )
+                .await
+                .expect("import evil-file skill (直接走 store,绕过 guard_skill_name)");
+
+            println!(
+                "[路径穿越 fixture] 恶意技能名={EVIL_NAME:?} id={} · 合法名+恶意支撑文件 rel_path={EVIL_FILE_REL:?} id={}",
+                evil_name_id.uuid(),
+                evil_file_id.uuid()
+            );
+
+            let issue_id = IssueId::new();
+            app.dispatch(Command::CreateIssue {
+                id: issue_id,
+                stage: StageKind::Prototype,
+                title: "路径穿越拦截验证活".into(),
+                desc: "触发 materialize_stage_skills,验证恶意 name/rel_path 被拦下、未写盘。"
+                    .into(),
+                priority: IssuePriority::Medium,
+                standard_skill: String::new(),
+            })
+            .await
+            .expect("create issue");
+            let issue = store.get_issue(issue_id).await.unwrap().unwrap();
+            println!(
+                "[建卡] #{} {} —— 接下来对这个编号跑 `run <编号>`,再检查:\n  1) stderr 是否有 [BW_SKILL_MATERIALIZE_SECURITY] 两行\n  2) /tmp/BW-TRAVERSAL-POC-NAME 与 /tmp/BW-TRAVERSAL-POC-FILE.txt 是否都不存在\n  3) 工作区 .claude/skills/ 下没有以这两个 fixture 命名的目录\n  4) 同批的合法技能({SKILL_NAME})仍正常写出——恶意条目不拖累整批",
+                issue.number, issue.title
+            );
         }
 
         "run" => {

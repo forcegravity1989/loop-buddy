@@ -502,6 +502,7 @@ fn SkillCard(
     let card = theme::card();
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
+    let amber = ui::signal_color(bw_core::model::Signal::Amber);
     let (chip_bg, chip_fg) = ("#EFE9DA", theme::INK_2);
     let chip = theme::chip(chip_bg, chip_fg);
     // 展开态横跨整行取版面,但正文可读宽度必须封顶——否则 span 到整个宽屏窗
@@ -529,6 +530,34 @@ fn SkillCard(
                 }
                 SkillSpecNotes { s: s.clone(), compact: true }
                 span { style: "{chip} margin-left:auto;", "{s.maturity_label}" }
+            }
+            // ── 1.5 归属行(评审找出的真坑,2026-08-06):spec §7 要求卡面本身
+            // 显示归属 chip,此前只有 Hub 顶部筛选栏 + 编辑面板画了这个维度,
+            // 浏览列表时看不出任何一件技能挂在哪个阶段。四态措辞必须区分,
+            // 「未归类」(还没人判过,Unknown)与「不属任何阶段」(判过了,
+            // 结论是不属于)绝不能混用同一个词——那正是这整件事要解决的问题。
+            div {
+                style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;",
+                match &s.role_tag {
+                    RoleTag::Stages(stages) => rsx! {
+                        for kind in stages.iter().copied() {
+                            span {
+                                key: "{kind.index()}",
+                                style: "{theme::chip(kind.color(), \"#FFF\")}",
+                                "{kind.role_short()}"
+                            }
+                        }
+                    },
+                    RoleTag::Universal => rsx! {
+                        span { style: "{theme::chip(theme::CLAY, \"#FFF\")}", "全阶段通用" }
+                    },
+                    RoleTag::NoStage => rsx! {
+                        span { style: "{theme::chip(\"#EFE9DA\", ink3)}", "不属任何阶段" }
+                    },
+                    RoleTag::Unclassified => rsx! {
+                        span { style: "{theme::chip(\"#F2E8D2\", amber)}", "未归类" }
+                    },
+                }
             }
             // ── 2. 一句话价值主张:这个技能解决什么 ──
             if !s.desc.is_empty() {
@@ -662,6 +691,22 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
                 oninput: move |e| category.set(e.value()),
             }
             div { style: "{label}", "五角色归属(可多选;全不选 = 判定为不属任何阶段)" }
+            // spec §7 要求的两个快捷(评审找出的真坑,2026-08-06):此前要达到
+            // 「全阶段通用」/「不属任何阶段」这两个状态,用户得手动点满/清空
+            // 五枚独立开关;现在一键到位,底下的五枚开关仍然可再单独微调。
+            div {
+                style: "display:flex;gap:8px;margin-bottom:8px;",
+                button {
+                    style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:4px 10px;font-size:11.5px;",
+                    onclick: move |_| picked.set(StageKind::ALL.to_vec()),
+                    "全阶段通用"
+                }
+                button {
+                    style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid {theme::BORDER};border-radius:7px;padding:4px 10px;font-size:11.5px;",
+                    onclick: move |_| picked.set(Vec::new()),
+                    "不属任何阶段"
+                }
+            }
             div {
                 style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;",
                 for kind in StageKind::ALL {

@@ -1556,6 +1556,14 @@ pub struct SkillCard {
     /// 技能(plan/10 K1 项目侧边栏按这个字段过滤)。
     #[serde(default)]
     pub project_id: Option<ProjectId>,
+    /// 单调递增的行版本号(`skill.rev` 列,每次内容编辑 `rev=rev+1`)。评审
+    /// 找出的真坑(2026-08-06):`skill_materialize` 曾经因为这个字段不存在,
+    /// 退而用「id + 正文长度 + 支撑文件数」拼一个「稳定指纹」——同长度的正文
+    /// 编辑(改个错别字)不改变指纹,物化器就会判定「未变」而跳过,磁盘上
+    /// 留着过期的 SKILL.md。`rev` 浮出来之后,指纹改用 `id + rev`,任何一次
+    /// 真实编辑(`update_skill` 一律 `rev=rev+1`)都必然让指纹改变。
+    #[serde(default)]
+    pub rev: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

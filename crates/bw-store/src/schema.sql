@@ -209,6 +209,11 @@ CREATE TABLE IF NOT EXISTS skill (
     maturity    TEXT NOT NULL DEFAULT 'fresh',
     descr       TEXT NOT NULL DEFAULT '',
     category    TEXT NOT NULL DEFAULT '',
+    -- 2026-08-05:五角色归类出处(静态表/蒸馏派生/人工/legacy/''=未归类),
+    -- 与 skill_stage 关联表(下方)一起构成 stages 的完整语义(见那张表的
+    -- 注释)。同 `content` 一样,双守卫两处都要有 —— 这一列同时也靠
+    -- `sqlite.rs` 的 `add_column_if_missing` 补给存量库,新库靠这里。
+    stage_origin TEXT NOT NULL DEFAULT '',
     source      TEXT NOT NULL DEFAULT 'self_built',
     -- T2 (plan/12 §6): sub-tag for source='official' only — which curated
     -- external library ("mattpocock-skills"/"superpowers"/"ecc"/…). '' for
@@ -240,7 +245,7 @@ CREATE INDEX IF NOT EXISTS idx_skill_file_skill ON skill_file(skill_id);
 -- 五角色归类(2026-08-05):一件技能可挂多个阶段,所以归属是关联表而不是
 -- skill 行上的一个值。行数本身是语义的一半 —— 0 行 / 1..=4 行 / 5 行分别是
 -- 「未判定或已判定不属任何阶段」/「挂这些阶段」/「全阶段通用」,另一半由
--- skill.stage_origin 提供(见 sqlite.rs 的迁移段)。
+-- skill.stage_origin 提供(见上面 skill 表的 stage_origin 列)。
 CREATE TABLE IF NOT EXISTS skill_stage (
     skill_id TEXT NOT NULL REFERENCES skill(id),
     stage    INTEGER NOT NULL,

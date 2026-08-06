@@ -27,13 +27,48 @@ pub(crate) struct MaterializeReport {
     /// 同名目录存在但**不是** BW 托管(没有标记文件)因而跳过的技能名 ——
     /// 这些是用户自己的 skill,优先级高于我们。
     pub skipped_foreign: Vec<String>,
+    /// 评审找出的真坑(2026-08-06):技能名 / 支撑文件 `rel_path` 都来自未经
+    /// `guard_skill_name` 校验的来源(`ImportSkillPackage`/`ImportSkillLibrary`
+    /// 刻意放行外部库文本逐字进入,见 `lib.rs` 的 `guard_skill_name` 文档
+    /// 注释)——本物化器是第一个把这些未经校验的字符串拼成真实写盘路径的
+    /// 消费者,必须自己做纵深防御。含 `..`/绝对路径/空段、或规范化后仍落在
+    /// `.claude/skills/<name>/` 之外的技能,整条跳过,记在这里、不当普通
+    /// `skipped_foreign` 处理(那是"用户的东西",这是"路径穿越拦截")。
+    pub skipped_unsafe: Vec<String>,
+}
+
+/// 纵深防御(finding #3):`base` 是允许落盘的根(`.claude/skills` 或某个
+/// 技能自己的目录),`rel` 是待拼接的相对片段(技能名本身,或一个
+/// `SkillFileRow.rel_path`)。规则:非空、不含 `..`、不以 `/` 开头、无空段
+/// (含开头/结尾/连续的 `/`);再做一次纯词法规范化(不摸文件系统 —— 目标
+/// 文件多数还不存在,`canonicalize` 用不了)——只允许 `Normal` 分量拼接,
+/// 最终路径必须仍然落在 `base` 之内。任何一条不过就是不安全。
+fn is_safe_rel_path(base: &Path, rel: &str) -> bool {
+    if rel.is_empty() || rel.contains("..") || rel.starts_with('/') {
+        return false;
+    }
+    if rel.split('/').any(|seg| seg.is_empty()) {
+        return false;
+    }
+    let mut joined = base.to_path_buf();
+    for comp in Path::new(rel).components() {
+        match comp {
+            std::path::Component::Normal(seg) => joined.push(seg),
+            // ParentDir/RootDir/CurDir/Prefix —— 一律拒,纵深防御不信任
+            // 上面字符串级检查已经查干净,双保险。
+            _ => return false,
+        }
+    }
+    joined.starts_with(base)
 }
 
 /// 把 `skills`(每项 = 技能行 + 它的支撑文件)物化到 `workspace/.claude/skills/`。
 ///
-/// `rev` 用于版本比对:调用方传入的 `SkillCard` 没有 `rev` 字段,所以这里用
-/// 「id + 正文长度 + 支撑文件数」拼一个稳定指纹 —— 它对本用途足够:同一件技能
-/// 内容没变就不重写,变了必然重写。
+/// 指纹 = `skill id + rev`(spec §5.3):`rev` 是 `skill.rev` 列真实的单调
+/// 版本号,每次内容编辑 `update_skill` 都 `rev=rev+1` —— 任何一次真实编辑
+/// (哪怕字节数不变,比如改个错别字)都必然让指纹改变,不会像旧版「id + 正文
+/// 长度 + 支撑文件数」那样在同长度编辑下误判「未变」而把过期的 SKILL.md
+/// 留在磁盘上。
 pub(crate) async fn materialize_stage_skills(
     workspace: &str,
     skills: &[(SkillCard, Vec<SkillFileRow>)],
@@ -44,11 +79,31 @@ pub(crate) async fn materialize_stage_skills(
         return report; // 未配置真实工作区 —— no-op,零报错
     }
     let root = Path::new(ws);
+    let skills_root = root.join(".claude/skills");
     for (skill, files) in skills {
+        if !is_safe_rel_path(&skills_root, &skill.name) {
+            eprintln!(
+                "[BW_SKILL_MATERIALIZE_SECURITY] 拦截技能名穿越:{:?} 校验不过(含 .. / 绝对路径 / 空段,或规范化后逃出 .claude/skills/),整条跳过、未写盘",
+                skill.name
+            );
+            report.skipped_unsafe.push(skill.name.clone());
+            continue;
+        }
         let dir_rel = format!(".claude/skills/{}", skill.name);
-        let marker_rel = format!("{dir_rel}/{MANAGED_MARKER}");
-        let fingerprint = format!("{}\n{}", skill.id.uuid(), skill.content.len() + files.len());
         let dir_abs = root.join(&dir_rel);
+        if let Some(bad) = files
+            .iter()
+            .find(|f| !is_safe_rel_path(&dir_abs, &f.rel_path))
+        {
+            eprintln!(
+                "[BW_SKILL_MATERIALIZE_SECURITY] 拦截技能 {:?} 的支撑文件路径穿越:rel_path={:?} 校验不过,整条技能跳过、未写盘",
+                skill.name, bad.rel_path
+            );
+            report.skipped_unsafe.push(skill.name.clone());
+            continue;
+        }
+        let marker_rel = format!("{dir_rel}/{MANAGED_MARKER}");
+        let fingerprint = format!("{}\n{}", skill.id.uuid(), skill.rev);
         let marker_abs = root.join(&marker_rel);
 
         if dir_abs.exists() {

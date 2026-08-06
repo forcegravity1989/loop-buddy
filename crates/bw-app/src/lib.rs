@@ -4099,6 +4099,16 @@ impl App {
                     report.skipped_foreign.join(", ")
                 );
             }
+            if !report.skipped_unsafe.is_empty() {
+                // 评审找出的真坑(2026-08-06):路径穿越拦截,跟上面「用户的
+                // 东西优先」是完全不同性质的跳过 —— 单独一行,避免混进
+                // `skipped_foreign` 让人误读成"这只是普通冲突"。
+                eprintln!(
+                    "[BW_SKILL_MATERIALIZE_SECURITY] 拦截 {} 件路径穿越技能(name/rel_path 校验不过,未写盘):{}",
+                    report.skipped_unsafe.len(),
+                    report.skipped_unsafe.join(", ")
+                );
+            }
             eprintln!(
                 "[BW_SKILL_MATERIALIZE] 写入 {} · 未变 {}",
                 report.written.len(),
