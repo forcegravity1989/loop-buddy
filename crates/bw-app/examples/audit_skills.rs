@@ -302,7 +302,6 @@ async fn main() {
         // 自建域,但原始列还挂着 official——把原始编码归一为 self_built,
         // 与 parse_hub_source 早已在读的语义完全一致,零行为变化,纯编码
         // 卫生(plan/16 §4 台账)。
-        use sqlx::Row as _;
         let url = format!("sqlite://{db_path}");
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
