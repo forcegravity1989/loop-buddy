@@ -6404,10 +6404,38 @@ impl App {
                 // source/official_library —— 归类是 BW 自己的组织维度,不是对
                 // 上游正文的改编,不该让 mattpocock 的 tdd 因为被归到构建段就
                 // 失去官方徽记)。
+                //
+                // Important 修复(2026-08 code review,控制者拍板):编辑表单
+                // 的 `picked` 初值就是打开时的现有归类,无论用户有没有碰过五
+                // 角色 chip,`save` 都无条件带上 `stages: Some(picked())`——
+                // 如果这里对着 `Some(...)` 就无条件 `Manual`,那「只改个错别字
+                // 就保存」也会把 `stage_origin` 静默翻成 `Manual`,让这件技能
+                // 永久失去静态表自愈资格(2026-08-05 真实日常库 68 件里 65 件
+                // 当时是 Table 来源,覆盖面极大)。`stage_origin` 记录的是**归类
+                // 动作**的出处,不是「这次请求里带没带 stages 字段」——跟下面
+                // `flip_to_self_built` 同一条纪律:比对真实现值,值没变就不算
+                // 一次动作,不落 Manual。
+                //
+                // 集合比较(顺序无关,不能直接 `==` 比 `Vec`——DB 读回按
+                // `stage` 升序,不保证等于 UI 勾选顺序):长度相等 + 逐个
+                // `contains`。
                 if let Some(stages) = stages {
-                    self.store
-                        .set_skill_stages(id, &stages, StageOrigin::Manual)
-                        .await?;
+                    let unchanged = existing.as_ref().is_some_and(|e| {
+                        e.stages.len() == stages.len()
+                            && stages.iter().all(|k| e.stages.contains(k))
+                    });
+                    // Unclassified 是例外:哪怕请求值(空集)与现值(空集)
+                    // 集合相等,「现有 origin 是 Unclassified」时用户提交空集
+                    // 仍是一次真实判断——「判定为不属任何阶段」,必须落成
+                    // Manual + 零关联行,不能因为集合相等就跳过。
+                    let existing_is_unclassified = existing
+                        .as_ref()
+                        .is_some_and(|e| e.stage_origin == StageOrigin::Unclassified);
+                    if !unchanged || existing_is_unclassified {
+                        self.store
+                            .set_skill_stages(id, &stages, StageOrigin::Manual)
+                            .await?;
+                    }
                 }
                 self.refresh_skills().await?;
                 self.emit(Event::SkillsChanged);

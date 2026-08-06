@@ -670,6 +670,7 @@ fn EditSkillForm(s: SkillCardVm, on_done: EventHandler<()>) -> Element {
                         let (bg, fg): (&str, &str) = if on { (kind.color(), "#FFF") } else { ("#EFE9DA", theme::INK_2) };
                         rsx! {
                             button {
+                                key: "{kind.index()}",
                                 style: "{theme::chip(bg, fg)} cursor:pointer;border:none;padding:4px 10px;",
                                 onclick: move |_| {
                                     let mut v = picked();
