@@ -178,20 +178,24 @@ run 时按当前 Issue 的 `stage`：
 | **用来增长** | 运营 | 拿指标设增长实验、看漏斗 |
 | **用来守稳** | 运维 | 接真数据源点亮 SLI/健康灯——**仅当**该技能真涉及可观测性接入 |
 
-### 6.1 bw-standard（8 条）— 指标/对标类按 §6.0 扩挂，五条方法论招牌技能不动
+### 6.1 bw-standard（8 条）— 全部按「实际适用面」扩挂（2026-08-06 拍板推翻本节原判断）
+
+> 本节结论已被用户推翻，见下方新表与说明；原判断原文见 §11 偏差第 3 条，不删，如实记录这是被推翻的判断。
+
+方法论招牌技能不是需要保护的特殊类。用户原话：「方法论我在找业界最佳实践，理论上也是要挂靠的；它的区别只在于官方提供，还是用户上传的」——出处（官方 vs 用户上传）不构成归类规则的例外，五条方法论技能与其它 57 条技能同一把尺子：「它实际在哪些阶段被用」，按各自 desc 里写明的适用面扩挂。指标/对标类仍按 §6.0 口径不变。
 
 | 技能 | 角色 | 理由 |
 |---|---|---|
-| `evidence-first` | 原型 | 原型段方法论招牌技能，`playbook::stage_skills(Prototype)` 的正本，不外扩 |
+| `evidence-first` | **全阶段通用** | desc 自己写着「或**任何**需要引用事实与数字的产出」——本就是跨阶段品质，与本仓「读回为证」同构 |
 | `competitive-analysis` | 原型 · 运营 | 对标名单+各家北极星猜测（原型段起手活）+ **可借鉴打法**（增长的直接输入） |
 | `north-star-discovery` | 原型 · 优化 · 运营 | 按 §6.0：推三层指标=定，打磨选对象=优化，增长实验=运营。不涉可观测性接入，无运维 |
 | `metrics-binding` | 原型 · 优化 · 运营 · 运维 | 按 §6.0 全四段：它就是**接真数据源点亮 Unknown 健康灯**的活，SLI 接入是 SRE 本职 |
-| `spec-to-tests` | 构建 | 构建段方法论招牌技能，不外扩 |
-| `baseline-before-touch` | 优化 | 优化段方法论招牌技能，不外扩 |
-| `fresh-eyes-funnel` | 运营 | 运营推广段方法论招牌技能，不外扩 |
-| `breaking-drill` | 运维 | 运维段方法论招牌技能，不外扩 |
+| `spec-to-tests` | 构建 · 优化 | desc：「构建段从 SPEC 落实现之前，**以及评审时逐条核对验收标准**」——评审发生在优化 |
+| `baseline-before-touch` | 优化 · 运维 | desc：「优化段动手重构或调性能之前」+ 改线上东西前先量基线是 SRE 本职 |
+| `fresh-eyes-funnel` | 优化 · 运营 | desc：「运营推广段诊断漏斗，**或对照验证上线改动**」——后半句是优化 |
+| `breaking-drill` | 构建 · 运维 | desc：「运维段事故演练、健康检查脚本落地，**或发布前的稳健性检查**」——发布前属构建 |
 
-**为什么五条方法论技能不扩挂**：它们是 `playbook::stage_skills(kind)` 的正本，「阶段=角色=方法论」这条产品线靠它们一一对应支撑；外扩会让「原型师的招牌技能」这个概念失效。指标/对标类不同——它们是标配起手活的载体，本来就横跨定/用两端。若你认为这五条也该扩，说一声即可改。
+它们仍是 `playbook::stage_skills(kind)` 的正本（单件招牌技能展示不变）；本表扩挂的是**注入候选集**，两者是不同的读者——前者答「这个阶段的招牌方法论是哪条」，后者答「这个阶段 run 时该把哪些技能目录列进 prompt」，同一件技能在两处可以有不同的答案。
 
 ### 6.2 mohit/pm-claude-skills（2 条）— PR #74 升的基础技能
 
@@ -222,18 +226,18 @@ run 时按当前 Issue 的 `stage`：
 | `improve-codebase-architecture` | 优化 | 扫描深化机会 + 报告 + 拷问 = 度量驱动打磨 |
 | `loop-me` | 原型 | 拷问要建的 workflow 的规格 |
 | `migrate-to-shoehorn` | 优化 | TS 测试从 `as` 迁到 shoehorn = 存量改造 |
-| `obsidian-vault` | 不属任何阶段 | Obsidian 笔记库工具，与项目五阶段无关。判过了，不是没人管 |
+| `obsidian-vault` | 原型 · 运营（2026-08-06 改判，原判「不属任何阶段」见 §11 偏差第 2 条） | 组织笔记与知识：探索期积累素材（原型）+ 内容生产的素材库（运营） |
 | `prototype` | 原型 | 造一次性原型回答设计问题 |
 | `qa` | 优化 · 运维 | 用户报 bug、agent 建单 = 缺陷收集：打磨（优化）+ 稳态（运维） |
 | `request-refactor-plan` | 优化 | 重构计划（小 commit） |
 | `research` | 原型 · 运营 | 对高信源调研落 Markdown：技术调研（原型）+ 市场/对标调研（运营） |
 | `resolving-merge-conflicts` | 构建 | 解合并冲突 = 交付路上的活 |
-| `scaffold-exercises` | 不属任何阶段 | Matt 自己课程仓的练习脚手架，对本仓/一般项目无阶段归属 |
-| `setup-matt-pocock-skills` | 不属任何阶段 | 一次性安装配置，不是阶段动作 |
+| `scaffold-exercises` | 构建 · 运营（2026-08-06 改判，原判「不属任何阶段」见 §11 偏差第 2 条） | 按规格生成练习目录骨架（构建）+ 产出的是教学内容（运营） |
+| `setup-matt-pocock-skills` | 构建（2026-08-06 改判，原判「不属任何阶段」见 §11 偏差第 2 条） | 一次性把仓配置成可用形态（issue tracker / 标签词表 / 文档布局），是搭项目基础形态 |
 | `setup-pre-commit` | 构建 · 运维 | Husky 门禁：交付门禁（构建）+ 防破坏护栏（运维） |
 | `setup-ts-deep-modules` | 优化 | dependency-cruiser 接进仓做深模块 = 架构打磨 |
 | `tdd` | 构建 | 测试驱动开发 |
-| `teach` | 不属任何阶段 | 教用户概念，对象是人不是项目 |
+| `teach` | 原型（2026-08-06 改判，原判「不属任何阶段」见 §11 偏差第 2 条） | 学一个新概念是为了做决定——属于假设驱动探索的前置 |
 | `to-questionnaire` | 原型 | 把答不了的决策变成问卷 = 探索未知 |
 | `to-spec` | 原型 · 构建 | 会话综合成 spec：规格产出（原型）+ 进 tracker（构建） |
 | `to-tickets` | 原型 · 构建 | 计划/规格拆成 tracer-bullet 票 |
@@ -243,7 +247,7 @@ run 时按当前 Issue 的 `stage`：
 | `wizard` | 运维 | 生成交互式 bash 向导走手工流程（第三方配置、一次性迁移）= 运维动作 |
 | `writing-beats` | 运营 | 写作三件套之一：素材组装成节奏 |
 | `writing-fragments` | 运营 | 写作三件套之一：挖原始碎片 |
-| `writing-great-skills` | 不属任何阶段 | 写技能的参考，元技能层，不是项目阶段动作 |
+| `writing-great-skills` | 优化（2026-08-06 改判，原判「不属任何阶段」见 §11 偏差第 2 条） | 写技能的参考：把做过的事提炼得更简，是求简 |
 | `writing-shape` | 运营 | 写作三件套之一：素材塑成文章 |
 
 ### 6.4 superpowers（14 条）
@@ -263,7 +267,7 @@ run 时按当前 Issue 的 `stage`：
 | `using-superpowers` | 全阶段通用 | 会话起手，建立如何找/用技能 |
 | `verification-before-completion` | 全阶段通用 | 任何阶段声称「完成」之前都该守——与本仓「读回为证」纪律同构 |
 | `writing-plans` | 原型 · 构建 | 有 spec 后写实现计划：规格收口（原型）+ 交付计划（构建） |
-| `writing-skills` | 不属任何阶段 | 创建/编辑/验证技能，元技能层 |
+| `writing-skills` | 构建 · 优化（2026-08-06 改判，原判「不属任何阶段」见 §11 偏差第 2 条） | 创建/编辑/验证技能并部署：造出来（构建）+ 提炼求简（优化） |
 
 ### 6.5 本地自建 2 条（不进静态表）
 
@@ -276,22 +280,22 @@ run 时按当前 Issue 的 `stage`：
 
 ### 6.6 统计
 
-（D9 扩挂后重算，数字由脚本从本文表格里统计得出，非手数）
+（2026-08-06 拍板：6 条「不属任何阶段」全部挂靠 + 5 条方法论招牌技能同口径扩挂后重算。数字由 `cargo run -p bw-app --example verify_stage_catalog` 从本表本身统计得出，非手数——该 example 的输出即本节数字的来源。）
 
-| 阶段 | 直接挂的条数 | + 全阶段通用 6 条 = 该阶段候选集 |
+| 阶段 | 直接挂的条数 | + 全阶段通用 7 条 = 该阶段候选集 |
 |---|---|---|
-| 原型 | 23 | 29 |
-| 构建 | 21 | 27 |
-| 优化 | 16 | 22 |
-| 运营 | 11 | 17 |
-| 运维 | 9 | 15 |
+| 原型 | 24 | 31 |
+| 构建 | 25 | 32 |
+| 优化 | 20 | 27 |
+| 运营 | 13 | 20 |
+| 运维 | 10 | 17 |
 
 | 特殊档 | 条数 | 名单 |
 |---|---|---|
-| 全阶段通用 | 6 | `ask-matt` `claude-handoff` `handoff` `dispatching-parallel-agents` `using-superpowers` `verification-before-completion` |
-| 不属任何阶段（已判定） | 6 | `obsidian-vault` `scaffold-exercises` `setup-matt-pocock-skills` `teach` `writing-great-skills` `writing-skills` |
+| 全阶段通用 | 7 | `evidence-first` `ask-matt` `claude-handoff` `handoff` `dispatching-parallel-agents` `using-superpowers` `verification-before-completion` |
+| 不属任何阶段（已判定） | 0 | （原 6 条已各自挂靠阶段，见 §6.3 对应行；静态表不再生产这一档——该状态本身未废，仍可由人工在 UI 提交空集产生，见 `stage_catalog.rs` 里 `StageOrigin` 上的说明） |
 
-归类后「未归类」从 57 条降到 **1 条**（`keyword-focus-scoring`，等人工补）。
+归类后「未归类」仍是 **1 条**（`keyword-focus-scoring`，本轮未动，等人工补）。
 
 ## 7. UI
 
@@ -318,9 +322,9 @@ run 时按当前 Issue 的 `stage`：
 按 CLAUDE.md「读回为证」：
 
 ```bash
-# 1. 归类真的落库，五阶段分布与 §6.6 一致(29/27/22/17/15 含全阶段通用)
+# 1. 归类真的落库，五阶段分布与 §6.6 一致(2026-08-06 拍板后:31/32/27/20/17 含全阶段通用)
 sqlite3 <db> "SELECT stage, COUNT(*) FROM skill_stage GROUP BY stage ORDER BY stage;"
-# 四态各自可数：未归类应为 1(keyword-focus-scoring)，已判定不属任何阶段应为 6
+# 四态各自可数：未归类应为 1(keyword-focus-scoring)，已判定不属任何阶段应为 0(6 条已各自挂靠，见 §11 偏差第 2 条)
 sqlite3 <db> "SELECT CASE WHEN n=0 AND stage_origin='' THEN '未归类'
                           WHEN n=0 THEN '已判定不属任何阶段'
                           WHEN n=5 THEN '全阶段通用' ELSE '挂'||n||'个阶段' END st, COUNT(*)
@@ -351,7 +355,9 @@ BW_DB=<db> BW_HUB=skill target/debug/builders-workbench   # stderr 见 [BW_OPEN]
 
 1. **三态 → 四态**（§3.4）。**已实现**。批准设计时说的是三态、靠关联表行数天然表达。做归类草案时发现 `obsidian-vault` / `scaffold-exercises` / `writing-skills` 这类技能需要「已判定：不属任何阶段」这一档，否则要么污染候选集、要么与「没人管」混淆。**D8 之后这条修正的代价降为零**：`stage_origin` 一列同时承担四态判据，读侧不必回查静态表，且 skill 表净增 0 列。`stage_origin` 落地为 `bw_core::stage_catalog::StageOrigin`，四态判据在真实日常库副本（68 件）读回验证：未归类 1 / 已判定不属任何阶段 6 / 全阶段通用 6 / 挂 1~4 阶段 55（每阶段候选 1=30 / 2=27 / 3=23 / 4=17 / 5=15）。
 2. **65 条里有 6 条判为「不属任何阶段」**，等于承认这批外部库里约 9% 的技能对 BW 的五阶段管理体系没有位置。这是诚实结论而非偷懒，但若你认为「都该硬挂一个」，§6.3/§6.4 对应行需要改。
+   > **用户 2026-08-06 拍板：全部挂靠。** 原话「都需要挂靠阶段」——静态表里不再有空集条目。上面这条判断被推翻，原文保留不删，如实记录这是被推翻的判断；改判结果见 §6.3/§6.4 对应 6 行、§6.6 统计与 `crates/bw-core/src/stage_catalog.rs`。「已判定不属任何阶段」这一**状态**本身没有废，只是静态表不再生产它，仍可由人工在 UI 提交空集产生。
 3. **五条方法论招牌技能仍不扩挂**（§6.1）。D9 只扩了指标/对标类 4 条（`competitive-analysis` `north-star-discovery` `metrics-binding` 及 mohit 两件同口径对齐）。`evidence-first` / `spec-to-tests` / `baseline-before-touch` / `fresh-eyes-funnel` / `breaking-drill` 保持单挂，理由见 §6.1 正文——它们是 `playbook::stage_skills(kind)` 的正本，外扩会让「阶段=角色=方法论」的一一对应失效。若你要求这五条也扩，一句话即可改。
+   > **用户 2026-08-06 拍板：方法论同样扩挂。** 原话「方法论我在找业界最佳实践，理论上也是要挂靠的；它的区别只在于官方提供，还是用户上传的」——方法论技能不是需要保护的特殊类，差别只在出处（官方 vs 用户上传），不在归类规则；按与其它技能同一把尺子（它实际在哪些阶段被用）判。上面这条判断被推翻，原文保留不删，如实记录这是被推翻的判断；改判结果见 §6.1 新表与 `crates/bw-core/src/stage_catalog.rs`。`playbook::stage_skills(kind)` 的单件招牌展示不受影响，扩挂的只是注入候选集。
 4. **prompt 目录块上限 4000 字符**是按原型段 29 条候选估的（29 × ~110 ≈ 3200）。若后续技能库继续膨胀，这个数要跟着调，或改成按 `uses` 排序取前 N 条 + 如实标注未列出数量。
 5. **agent / workflow 侧仍是单值 `stage_ref`**（已知中间态，保留）。本轮做完后，skill 走关联表、agent 与 workflow 走单列，是一个不齐的中间态。D8 的姿态本该一并铲平，但用户此前已把 agent 侧划在本轮之外（§9），且 workflow 的单值今天是**正确且在读**的（不是死列），不属于「旧表债」。§9 已把迁移配方（`drop_column_if_present` + 关联表）备好，后续要拉齐是照抄一遍的事。
 6. **`StageOrigin::Legacy` 是执行期新增的第五档，spec 原文只设计了四态**（对应 `stage_origin` 空 / `table` / `distilled` / `manual` 四值）。真删 `skill.stage_ref` 前跑保值搬迁时发现，日常库里有一行（`metrics-render`，`stage_ref=1`）不是本分支静态表回填、也不是蒸馏或人工，而是搬自另一条未合入本分支的产品线（c14932d）——原始归类出处已不可考。若直接照 §3.3 的删列步骤执行，这行数据会随列一起被悄悄抹掉。修复（"Critical 修复"提交 `bdc759a`）新增 `StageOrigin::Legacy`：真删列之前先把这类 `stage_ref IS NOT NULL` 的行原样搬进 `skill_stage`、标 `stage_origin='legacy'`，而不是 `table`（静态表并未为它背书）或 `manual`（没人在 UI 里点过它）。四态判据不受影响——`Legacy` 和 `Table`/`Distilled`/`Manual` 一样，都落在「关联表非空」或「非空 origin」的判据里，不新增第五种 UI 状态，只是让「这行数据的出处诚实」这件事多一档可表达的答案。

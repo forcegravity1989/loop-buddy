@@ -22,10 +22,15 @@ use serde::{Deserialize, Serialize};
 /// | 已判定「不属任何阶段」 | 0 行 且 `origin != Unclassified` |
 /// | 未归类(Unknown) | 0 行 且 `origin == Unclassified` |
 ///
-/// 第三、四档的区分是这个枚举存在的全部理由:`obsidian-vault`(笔记工具)、
-/// `scaffold-exercises`(课程脚手架)这类技能**不是没人管**,是判过了、跟项目
-/// 五阶段无关——把它们和真没人管的混成一格,就是仓里「无数据=Unknown,绝不
-/// 假装」那条纪律的反面。
+/// 第三、四档的区分是这个枚举存在的全部理由——「已判定不属任何阶段」这一档
+/// 不是没人管,是判过了、跟项目五阶段无关,不该和真没人管的混成一格,这正是
+/// 仓里「无数据=Unknown,绝不假装」那条纪律的反面。
+///
+/// **用户 2026-08-06 拍板**:静态表(`SKILL_STAGE_CATALOG`)里不再生产这一档——
+/// 原来挂空集的 6 条(`obsidian-vault`/`scaffold-exercises` 等)已各自挂上至少
+/// 一个阶段,`NO_STAGE` 常量随之删除。但这一档**状态本身没有废**:它仍可由
+/// 人工在 SkillHub 里提交空集产生(`StageOrigin::Manual` + `skill_stage` 零
+/// 关联行),四态判据(见下表)不变。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageOrigin {
@@ -49,9 +54,6 @@ pub enum StageOrigin {
 /// 「全阶段通用」的展开值。挂满五阶段 = 每个阶段的注入候选集都含它。
 pub const ALL_FIVE: &[StageKind] = &[Prototype, Build, Optimize, Growth, Ops];
 
-/// 空集 = **已判定**「不属任何阶段」(区别于「还没人判」——后者根本不在本表里)。
-const NO_STAGE: &[StageKind] = &[];
-
 /// 65 件随包发行 / vendored 技能的阶段归属正本。
 ///
 /// 口径(指标类技能,spec §6.0):定=原型 / 用来打磨=优化 / 用来增长=运营 /
@@ -59,17 +61,18 @@ const NO_STAGE: &[StageKind] = &[];
 ///
 /// 本地自建/蒸馏技能**不进本表**——它们是本机产物,归类走蒸馏派生或人工。
 pub const SKILL_STAGE_CATALOG: &[(&str, &[StageKind])] = &[
-    // ── bw-standard(8):五条方法论招牌技能单挂本阶段(它们是
-    //    `playbook::stage_skills(kind)` 的正本,外扩会让「阶段=角色=方法论」
-    //    的一一对应失效);指标/对标类按 §6.0 口径扩挂。
-    ("evidence-first", &[Prototype]),
+    // ── bw-standard(8):方法论招牌技能不是需要保护的特殊类,用户 2026-08-06
+    //    拍板「它的区别只在于官方提供,还是用户上传的」——与其它技能同一把
+    //    尺子(它实际在哪些阶段被用)判,按各自 desc 里写明的适用面扩挂;
+    //    指标/对标类仍按 §6.0 口径。
+    ("evidence-first", ALL_FIVE), // desc 自己写着「或任何需要引用事实与数字的产出」——本就是跨阶段品质
     ("competitive-analysis", &[Prototype, Growth]),
     ("north-star-discovery", &[Prototype, Optimize, Growth]),
     ("metrics-binding", &[Prototype, Optimize, Growth, Ops]),
-    ("spec-to-tests", &[Build]),
-    ("baseline-before-touch", &[Optimize]),
-    ("fresh-eyes-funnel", &[Growth]),
-    ("breaking-drill", &[Ops]),
+    ("spec-to-tests", &[Build, Optimize]), // desc:「以及评审时逐条核对验收标准」——评审发生在优化
+    ("baseline-before-touch", &[Optimize, Ops]), // desc:「优化段动手重构或调性能之前」+ 改线上东西前先量基线是 SRE 本职
+    ("fresh-eyes-funnel", &[Optimize, Growth]),  // desc:「或对照验证上线改动」——后半句是优化
+    ("breaking-drill", &[Build, Ops]),           // desc:「或发布前的稳健性检查」——发布前属构建
     // ── mohit/pm-claude-skills(2):PR #74 升的基础技能,按 §6.0 同口径。
     ("metrics-framework", &[Prototype, Optimize, Growth]),
     ("metric-tree-builder", &[Prototype, Optimize, Growth]),
@@ -92,18 +95,18 @@ pub const SKILL_STAGE_CATALOG: &[(&str, &[StageKind])] = &[
     ("improve-codebase-architecture", &[Optimize]),
     ("loop-me", &[Prototype]),
     ("migrate-to-shoehorn", &[Optimize]),
-    ("obsidian-vault", NO_STAGE),
+    ("obsidian-vault", &[Prototype, Growth]), // 组织笔记与知识:探索期积累素材(原型)+ 内容生产的素材库(运营)
     ("prototype", &[Prototype]),
     ("qa", &[Optimize, Ops]),
     ("request-refactor-plan", &[Optimize]),
     ("research", &[Prototype, Growth]),
     ("resolving-merge-conflicts", &[Build]),
-    ("scaffold-exercises", NO_STAGE),
-    ("setup-matt-pocock-skills", NO_STAGE),
+    ("scaffold-exercises", &[Build, Growth]), // 按规格生成练习目录骨架(构建)+ 产出的是教学内容(运营)
+    ("setup-matt-pocock-skills", &[Build]),   // 一次性把仓配置成可用形态,是搭项目基础形态
     ("setup-pre-commit", &[Build, Ops]),
     ("setup-ts-deep-modules", &[Optimize]),
     ("tdd", &[Build]),
-    ("teach", NO_STAGE),
+    ("teach", &[Prototype]), // 学一个新概念是为了做决定——属于假设驱动探索的前置
     ("to-questionnaire", &[Prototype]),
     ("to-spec", &[Prototype, Build]),
     ("to-tickets", &[Prototype, Build]),
@@ -113,7 +116,7 @@ pub const SKILL_STAGE_CATALOG: &[(&str, &[StageKind])] = &[
     ("wizard", &[Ops]),
     ("writing-beats", &[Growth]),
     ("writing-fragments", &[Growth]),
-    ("writing-great-skills", NO_STAGE),
+    ("writing-great-skills", &[Optimize]), // 写技能的参考:把做过的事提炼得更简,是求简
     ("writing-shape", &[Growth]),
     // ── superpowers(14)
     ("brainstorming", &[Prototype]),
@@ -129,11 +132,13 @@ pub const SKILL_STAGE_CATALOG: &[(&str, &[StageKind])] = &[
     ("using-superpowers", ALL_FIVE),
     ("verification-before-completion", ALL_FIVE),
     ("writing-plans", &[Prototype, Build]),
-    ("writing-skills", NO_STAGE),
+    ("writing-skills", &[Build, Optimize]), // 创建/编辑/验证技能并部署:造出来(构建)+ 提炼求简(优化)
 ];
 
 /// 查表。`None` = 这件技能不在静态表里(本地自建/外部新库)——诚实的「本表
-/// 管不着」,**不是**「不属任何阶段」(后者在表里,值为空集)。
+/// 管不着」,**不是**「不属任何阶段」(后者会在表里、值为空集;2026-08-06
+/// 拍板后本表当前 65 条均已挂至少一个阶段,但空集仍是这个类型合法能表达
+/// 的值,人工在 UI 里仍可产生等价语义——见 [`StageOrigin`] 上的说明)。
 ///
 /// 线性扫描:65 条 × 每次 Boot 的技能数,量级微不足道,不值得为它引入 HashMap
 /// (那会让本模块从 `const` 数据变成需要 lazy 初始化的东西)。
