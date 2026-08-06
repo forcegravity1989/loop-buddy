@@ -285,7 +285,7 @@
         <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
         <div class="body"><strong>Windows</strong>请用上面这条启动，别直接跑 <code>target/</code> 下 exe（会以 0xC0000135 崩溃）。若找不到 <code>claude</code>，再设用户环境变量 <code>BW_CLAUDE_BIN</code> 指向 <code>claude.exe</code> 全路径。</div>
       </div>
-      <div class="foot">事实源：<code>CLAUDE.md · 常用命令</code>、<code>crates/app-desktop/src/kernel.rs</code>（默认 DB / workspaces 路径）。</div>
+      <div class="foot">数据库与工作区默认在本机用户目录下的 BuildersWorkbench；一般不用改。</div>
     </section>
 
     <!-- ============ U2 纳入项目 ============ -->
@@ -306,7 +306,7 @@
       </div>
       <div class="callout">
         <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
-        <div class="body"><strong>接入已有仓时</strong>下拉只拉得到你登录 token 关联上的项目——<code>gh</code> / <code>codehub-cli</code> 登录态决定可见范围，关联不到的仓选不了，不留手填 fallback。</div>
+        <div class="body"><strong>接入已有仓时</strong>下拉只列出你当前登录能看到的项目——关联不到的仓选不了，也不能手填路径绕过。</div>
       </div>
 
       <h2 class="sec"><span class="n">背后</span>确认建立后系统执行了什么</h2>
@@ -342,125 +342,159 @@
       <h2 class="sec"><span class="n">竞品分析</span>三件套之一怎么用</h2>
       <p>起手三件套里的①「竞品分析」需要联网抓取对标产品的公开页面。当前 buddy 的真执行器走本机 <code>claude</code> CLI，claude webFetch 机器环境暂不支持——点了会失败。后续改造支持联网抓取后再开跑；现阶段这一张活先留着，其余两件套可正常跑通。</p>
 
-      <p class="linker">建仓 / 连接器 / 定时器 / 三件套这些机制的开发维护口径 → <a href="#" onclick="go('m2');return false">Hub 全局库</a> + <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
-      <div class="foot">事实源：<code>docs/v1-prototype/issue1-onboard-simplify.md</code>、<code>crates/app-desktop/src/screens/create.rs</code>（Repo→Intent 两卡）、<code>crates/bw-app/src/lib.rs</code>（CreateProject / CompleteCreation / write_charter · 仅 owned）、实跑 cowelink 接入已有（2026-08-06）。</div>
+      <p class="linker">想看「连接器 / 定时器 / 三件套」怎么设计的 → <a href="#" onclick="go('m2');return false">Hub 全局库</a> + <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
+      <div class="foot">事实源：实跑 cowelink 接入已有（2026-08-06）；纳入设计见 <code>docs/v1-prototype/issue1-onboard-simplify.md</code>。</div>
     </section>
 
     <!-- ============ U3 找指标 ============ -->
     <section class="screen" id="u3" data-title="找指标" data-sec-name="使用指导">
       <div class="eyebrow">使用指导 · 阶段 02</div>
       <h1 class="disp">找指标</h1>
-      <p class="lede">点 ▶跑 唤醒交互式 claude 会话(灌 north-star skill + 衔接层 system prompt),你和 claude 多轮推导北极星,产出指标定义写进项目仓。</p>
+      <p class="lede">一句话：和本机 claude 聊清楚「北极星是什么、还要盯哪些引领/滞后指标」，把计划写进仓里。这时总览多半还是灰的——有计划 ≠ 已采到数。</p>
 
-      <h2 class="sec"><span class="n">操作</span></h2>
+      <div class="diagram">
+        <div class="cap">这条链路怎么走</div>
+        <div class="pipe">
+          <div class="box"><div class="t">▶跑</div><div class="d">看板点找指标</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">嵌终端</div><div class="d">多轮定指标</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">提 MR</div><div class="d">写 metrics.toml</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">评审中</div><div class="d">buddy 读到 MR</div></div>
+          <div class="arr">→</div>
+          <div class="box warn"><div class="t">你收尾</div><div class="d">合入并点完成</div></div>
+        </div>
+      </div>
+
+      <h2 class="sec"><span class="n">操作</span>五步</h2>
       <div class="ops">
-        <div class="li"><div class="n">1</div><div class="t">运营屏 Issue 看板 →「找指标」卡点 <code>▶跑(交互)</code></div></div>
-        <div class="li"><div class="n">2</div><div class="t">工作流面板嵌终端开 <code>claude</code>——已灌 north-star skill(方法论)+ 衔接层 system prompt(项目意图 + buddy 契约 + 铁律)+ <code>--dangerously-skip-permissions</code></div></div>
-        <div class="li"><div class="n">3</div><div class="t">多轮:claude 读项目 <code>desc/benchmark/opportunity</code> + 竞品报告 + <code>governance/derive_*.py</code>,问用户/价值,提北极星(自动化免疫检验 challenge),你确认</div></div>
-        <div class="li"><div class="n">4</div><div class="t">claude 写 <code>.bw/metrics.toml</code> + <code>docs/metrics-rationale.md</code> 到活分支,提 MR</div></div>
+        <div class="li"><div class="n">1</div><div class="t">Issue 看板点「找指标」的 <code>▶跑(交互)</code>（同时只跑一张；其它卡会排队）</div></div>
+        <div class="li"><div class="n">2</div><div class="t">工作流屏出现黑底嵌终端——技能已备好，直接打字聊</div></div>
+        <img src="img/u3-issues-board.png" alt="Issue 看板 · 找指标与绑数据收尾后" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
+        <p class="note-line">上图示例：找指标 / 绑数据已在「已完成」；左侧能看到连接器和每日采集定时。</p>
+        <div class="li"><div class="n">3</div><div class="t">聊到你认可：北极星、引领/滞后；每条打算<strong>自动采</strong>还是<strong>以后手填</strong></div></div>
+        <div class="li"><div class="n">4</div><div class="t">让模型把计划写进仓（<code>.bw/metrics.toml</code> 等）并自提合并请求——它合不了，只能你合</div></div>
+        <div class="li"><div class="n">5</div><div class="t">卡变成「评审中」后：在 buddy 点 <strong>⬇ merge PR</strong>；若你已在网页合过，再点 <strong>→已完成</strong></div></div>
       </div>
 
-      <h2 class="sec"><span class="n">结果</span>系统/项目改了什么</h2>
-      <div class="res">
-        <div class="h">周边(项目仓)</div>
-        <ul>
-          <li><span class="b"></span><div>写 <code>.bw/metrics.toml</code>(北极星 + 引领/滞后 + <code>collect_kind</code>=<code>script</code>|<code>manual</code> + <code>collect_query</code>)+ <code>docs/metrics-rationale.md</code> 到活分支</div></li>
-          <li><span class="b"></span><div>agent 提 MR(<code>gh pr create</code>/<code>codehub-cli mr create</code>,禁 <code>gh pr merge</code>)</div></li>
-        </ul>
-        <div class="h">本机(buddy DB)</div>
-        <ul>
-          <li><span class="b"></span><div>Issue <code>InProgress</code>(会话活)→ <code>InReview</code>(buddy 查到 issue 分支 <code>bw/issue-N</code> 的 open MR,读回为证)</div></li>
-          <li><span class="b"></span><div>merge 后 buddy 感知 <code>.bw/metrics.toml</code> → upsert <code>metric</code> 行(<code>origin='file'</code>)</div></li>
-        </ul>
+      <h2 class="sec"><span class="n">你会得到</span></h2>
+      <div class="split2">
+        <div class="pane"><div class="ph">仓里</div><ul><li>指标计划（还不是已采到的数）</li><li>为什么选这些指标的说明</li></ul></div>
+        <div class="pane"><div class="ph">buddy 里</div><ul><li>这张活走到评审 → 完成</li><li>总览出现业务卡（常仍灰：有计划 ≠ 已有数）</li></ul></div>
       </div>
 
-      <h2 class="sec"><span class="n">看到</span>界面呈现</h2>
-      <div class="see"><div class="h">工作流面板</div><div class="d">嵌终端里和 claude 多轮对话(会话持久,点 issue 卡可 <code>--resume</code> 续聊);Issue 卡 <code>InReview</code> + PR#。<strong>干完只到 InReview,不到 Done</strong>——Done 要你 merge。</div></div>
+      <table class="ktable">
+        <thead><tr><th>按钮</th><th>什么时候用</th><th>会做什么</th></tr></thead>
+        <tbody>
+          <tr><td class="k">⬇ merge PR</td><td>合并请求还没合</td><td>在 buddy 里合进默认分支，并把这张活标完成</td></tr>
+          <tr><td class="k">→已完成</td><td>你已在网页合过</td><td>把活标完成，并把仓里的指标计划同步进 buddy</td></tr>
+        </tbody>
+      </table>
+      <p class="note-line">「完成」只能你点，buddy 不会替你自动完成。</p>
 
-      <p class="linker">本阶段涉及的机制:交互式引擎 / resume / InReview 检测 → <a href="#" onclick="go('m5');return false">执行与证据</a>;衔接层 system prompt / skill 可换 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>;metrics.toml / 北极星 → <a href="#" onclick="go('m6');return false">指标与健康</a>;Issue 状态机 → <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
-      <div class="foot">事实源:<code>docs/skills/north-star-discovery/SKILL.md</code>、<code>bw-engine/src/interactive_cli.rs · build_bridge_system_prompt</code>、设计 <code>docs/v1-prototype/issue2-metrics-interactive-loop.md</code>。</div>
+      <div class="ex">
+        <div class="eh">小提示</div>
+        <div class="ed">同一时间只有一路可打字的终端。切到别的 Issue，仍可能看到正在跑的那一路；弹窗里的「运行史」常常是空的——以嵌终端画面为准。</div>
+      </div>
+
+      <p class="linker">想了解背后怎么跑、怎么记账 → <a href="#" onclick="go('m5');return false">执行与证据</a> · <a href="#" onclick="go('m6');return false">指标与健康</a></p>
+      <div class="foot">事实源：cowelink 实跑 2026-08-06。</div>
     </section>
 
     <!-- ============ U4 绑数据 ============ -->
     <section class="screen" id="u4" data-title="绑数据" data-sec-name="使用指导">
       <div class="eyebrow">使用指导 · 阶段 03</div>
       <h1 class="disp">绑数据</h1>
-      <p class="lede">点 ▶跑 唤醒交互式 claude(metrics-binding skill + 衔接层),和 claude 多轮给每条指标搭采集装置:能自动采的按 buddy 规范建脚本/连接器落 <code>.bw/</code>,不能的手填。</p>
+      <p class="lede">一句话：把「打算怎么采」搭成真装置——能自动的写脚本登记连接器，不能自动的保持手填。合入后<strong>不用新建定时器</strong>：原来那条每日采集会跑本项目全部脚本。</p>
+
+      <div class="diagram">
+        <div class="cap">装置怎么进系统</div>
+        <div class="pipe">
+          <div class="box"><div class="t">▶跑</div><div class="d">绑数据会话</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">写装置</div><div class="d">scripts + toml</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">合入完成</div><div class="d">同步进 buddy</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">每日采集</div><div class="d">跑本项目全部脚本</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">出数</div><div class="d">总览业务卡有值</div></div>
+        </div>
+      </div>
 
       <h2 class="sec"><span class="n">操作</span></h2>
       <div class="ops">
-        <div class="li"><div class="n">1</div><div class="t">「绑数据」卡点 <code>▶跑(交互)</code> → 嵌终端开 claude(读上游 <code>.bw/metrics.toml</code> + rationale 接上下文)</div></div>
-        <div class="li"><div class="n">2</div><div class="t">多轮,对每条指标定采集:能自动采→写脚本到 <code>.bw/scripts/</code> + 连接器清单 <code>.bw/connectors.toml</code> + 配 <code>collect_kind='script'</code>+<code>collect_query=字段路径</code>;不能→<code>manual</code>+手填节奏</div></div>
-        <div class="li"><div class="n">3</div><div class="t">claude 写回 <code>.bw/metrics.toml</code> collect + <code>.bw/connectors.toml</code> + 脚本,提 MR</div></div>
+        <div class="li"><div class="n">1</div><div class="t">「绑数据」点 <code>▶跑(交互)</code>——它会读你已合入的指标计划</div></div>
+        <div class="li"><div class="n">2</div><div class="t">能自动采的：让模型写脚本并登记到 <code>.bw/connectors.toml</code>；只能手填的：保持计划即可</div></div>
+        <div class="li"><div class="n">3</div><div class="t">提合并请求 → 看板 <strong>⬇ merge PR</strong>（或网页合完再点「已完成」）</div></div>
+        <div class="li"><div class="n">4</div><div class="t">总览点「↻ 立即采集」，或等每日定时，看业务卡是否出数</div></div>
+      </div>
+      <img src="img/u4-hub-connectors.png" alt="左侧连接器 · 仓与业务脚本" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
+      <p class="note-line">看左侧「连接器」：除了仓本身，还应出现你刚绑上的业务脚本。定时任务多半还是原来那一条——这是正常的。</p>
+
+      <h2 class="sec"><span class="n">和模型核对</span>这三件事</h2>
+      <table class="ktable">
+        <thead><tr><th>请确认</th><th>正确样子</th><th>不对时你会看到</th></tr></thead>
+        <tbody>
+          <tr><td class="k">连接器表头</td><td>写成 <code>[[connector]]</code>（单数）</td><td>同步时报错，侧栏多不出新连接器</td></tr>
+          <tr><td class="k">脚本怎么交结果</td><td>写到约定的结果文件里</td><td>只在终端打印 → 总览一直采不到</td></tr>
+          <tr><td class="k">本机怎么跑脚本</td><td>用你机器上真有的命令（Windows 常见 <code>py</code>）</td><td>采集失败、业务卡仍灰</td></tr>
+        </tbody>
+      </table>
+
+      <div class="ex">
+        <div class="eh">定时器怎么理解</div>
+        <div class="ed">面板上多半仍只有一条「… · 采集代码仓指标」。别被名字骗了——到点会跑<strong>本项目每一个</strong>采数脚本（仓统计 + 你绑的业务脚本）。文件里写的采集周期<strong>不会</strong>再多出一条定时任务。</div>
       </div>
 
-      <h2 class="sec"><span class="n">结果</span>系统/项目改了什么</h2>
-      <div class="res">
-        <div class="h">周边(项目仓)</div>
-        <ul>
-          <li><span class="b"></span><div><code>.bw/metrics.toml</code> collect 字段更新(只动 <code>collect_kind</code>/<code>collect_query</code>,不动 <code>name/def/target</code>)+ <code>.bw/connectors.toml</code> + <code>.bw/scripts/*.py</code></div></li>
-          <li><span class="b"></span><div>agent 提 MR</div></li>
-        </ul>
-        <div class="h">本机(buddy DB)</div>
-        <ul>
-          <li><span class="b"></span><div>Issue → <code>InReview</code>(buddy 查到 open MR)</div></li>
-          <li><span class="b"></span><div>merge 后 buddy 感知 <code>.bw/connectors.toml</code> → upsert <code>connector</code> 行(kind=script)+ <code>.bw/metrics.toml</code> → upsert <code>metric</code> 行</div></li>
-        </ul>
-      </div>
-
-      <h2 class="sec"><span class="n">看到</span>界面呈现</h2>
-      <div class="see"><div class="h">运营屏 MetricCard</div><div class="d">嵌终端多轮搭装置;Issue <code>InReview</code> + PR#;merge 后 cron(每日 CollectMetrics)自动跑 script connector → <code>observation</code> 有值 → 健康灯亮。<code>manual</code> 指标戴「手填」徽,RecordInline 手填。merge 后 buddy 自动 sync;运营屏业务指标区头另留一个 <strong>「↻ 同步指标文件」</strong>手动按钮,补「人手改了 <code>.bw/metrics.toml</code> 但还没走 PR」这种情况。</div></div>
-
-      <p class="linker">本阶段涉及的机制:绑装置规范(.bw/connectors.toml + buddy 感知 sync)→ <a href="#" onclick="go('m6');return false">指标与健康</a>;衔接层 / skill 可换 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>;交互式引擎 → <a href="#" onclick="go('m5');return false">执行与证据</a>。</p>
-      <div class="foot">事实源:<code>docs/skills/metrics-binding/SKILL.md</code>、<code>docs/connectors-toml-format.md</code>、<code>bw-app/src/lib.rs · sync_connectors_file_for</code>、设计 <code>docs/v1-prototype/issue2-metrics-interactive-loop.md</code>。</div>
+      <p class="linker">连接器 / 采数机制 → <a href="#" onclick="go('m2');return false">Hub 全局库</a> · <a href="#" onclick="go('m6');return false">指标与健康</a></p>
+      <div class="foot">事实源：cowelink 绑数据实跑。</div>
     </section>
 
     <!-- ============ U5 总览呈现 ============ -->
     <section class="screen" id="u5" data-title="总览呈现" data-sec-name="使用指导">
       <div class="eyebrow">使用指导 · 阶段 04</div>
       <h1 class="disp">总览呈现</h1>
-      <p class="lede">跑完三件套之后，总览是你每周唯一要看的一屏：<strong>项目指标</strong>（代码仓的现状数，不点灯）和<strong>业务指标</strong>（北极星 → 滞后 → 引领，带灯、上卷项目健康）分开两层，下面一行「buddy 情况」告诉你这周还欠什么。数字全从 <code>observation</code> 表读，没采到就灰着显「—」，不替你脑补绿灯。</p>
+      <p class="lede">一句话：每周看这一屏就够——上面是仓的现状数（不点灯），下面是业务健康（点灯）。没采到就灰，不替你假装绿。</p>
 
-      <h2 class="sec"><span class="n">操作</span>一屏四块 + 两个手动补刀</h2>
+      <div class="diagram">
+        <div class="cap">一屏怎么读</div>
+        <div class="stack">
+          <div class="ly"><div class="nm">项目指标</div><div class="ds">开放 Issue / 已合入 MR… · <strong>不点灯</strong>、不上卷业务健康</div></div>
+          <div class="ly"><div class="nm">业务指标</div><div class="ds">北极星 → 滞后 → 引领 · 有数才可能亮；没数就灰</div></div>
+          <div class="ly"><div class="nm">buddy 情况</div><div class="ds">待合入、本周未记… · 「完成」只能你点</div></div>
+        </div>
+      </div>
+
+      <h2 class="sec"><span class="n">操作</span></h2>
       <div class="ops">
-        <div class="li"><div class="n">1</div><div class="t">进项目 → 阶段轴点「<code>◎ 全部阶段 · 总览</code>」（工具栏落在看板组「进度」；等价深链 <code>BW_OPEN=&lt;项目名&gt; BW_PANEL=progress</code>）</div></div>
-        <div class="li"><div class="n">2</div><div class="t">自上而下看四块：<strong>项目指标 · 代码仓级</strong> → <strong>业务指标</strong> → <strong>buddy 情况</strong>一行 → <strong>▾ 配置</strong>（默认折叠）</div></div>
-        <div class="li"><div class="n">3</div><div class="t">不想等每日定时器：项目指标区头点「<code>↻ 立即采集</code>」，当场跑一遍连接器采数</div></div>
-        <div class="li"><div class="n">4</div><div class="t">人手改了 <code>.bw/metrics.toml</code> 还没走 PR：业务指标区头点「<code>↻ 同步指标文件</code>」，把定义同步进 buddy</div></div>
-        <div class="li"><div class="n">5</div><div class="t">要改项目名/意图、工作目录、接入仓库：点最下面「<code>▾ 配置</code>」展开（总览是看指标的，不是改配置的，所以收进次级）</div></div>
+        <div class="li"><div class="n">1</div><div class="t">阶段轴点「◎ 全部阶段 · 总览」</div></div>
+        <div class="li"><div class="n">2</div><div class="t">自上而下扫三层；灰卡 = 还没采到数，或还没绑上采集方式</div></div>
+        <div class="li"><div class="n">3</div><div class="t">想立刻出数：项目指标区「↻ 立即采集」</div></div>
+        <div class="li"><div class="n">4</div><div class="t">你在仓里改了指标计划、还没走合并：业务区「↻ 同步指标文件」（只同步计划，不采新数）</div></div>
+      </div>
+      <img src="img/u5-overview.png" alt="总览进度 · 项目指标有数、业务灰卡" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
+      <p class="note-line">上图：上面仓指标已有数；下面北极星 / 周新增仍灰——要么还要手填，要么自动采还没跑成功。没数就灰，不会假装绿。</p>
+
+      <h2 class="sec"><span class="n">三个易混概念</span></h2>
+      <table class="ktable">
+        <thead><tr><th>你看到的</th><th>实际意思</th></tr></thead>
+        <tbody>
+          <tr><td class="k">「手动 / 脚本」标注</td><td>这是采集<strong>计划</strong>，不是「已经有数」</td></tr>
+          <tr><td class="k">灰卡 / —</td><td>还没有采到的数值（不是绿灯）</td></tr>
+          <tr><td class="k">「手填」徽</td><td>这条数是人手填的；总览卡上<strong>暂时还不能直接填</strong></td></tr>
+          <tr><td class="k">折线旁 → 0.0</td><td>可能是空周沿用了上周，不是「稳住了」——留意「本周未记」</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>杂项</strong>点完成时若提示「登记了 N 个产物」，N 往往接近整仓文件数，不是业务产出件数。删项目只清 buddy 里的记录，重建前请自行清掉本机工作区目录 <code>workspaces\&lt;名&gt;-*</code>。</div>
       </div>
 
-      <h2 class="sec"><span class="n">背后</span>这一屏会动什么</h2>
-      <div class="res">
-        <div class="h">对远端代码仓（GitHub/CodeHub）</div>
-        <ul>
-          <li><span class="b"></span><div>只读。「立即采集」通过 <code>gh</code> / <code>codehub-cli</code> 查开放 Issue 数、已合入 MR 数，不写任何东西到你远端</div></li>
-        </ul>
-        <div class="h">对你的机器</div>
-        <ul>
-          <li><span class="b"></span><div><code>script</code> 连接器按 <code>.bw/connectors.toml</code> 跑 <code>.bw/scripts/</code> 下的脚本取 JSON，按 <code>collect_query</code> 挑字段</div></li>
-        </ul>
-        <div class="h">对 buddy 数据库</div>
-        <ul>
-          <li><span class="b"></span><div>每采到一个值 <strong>append 一行</strong> <code>observation</code>（只追加，不改历史；一次采集 = 一个点，不插值）</div></li>
-          <li><span class="b"></span><div>采完重算健康灯缓存（指标 → 阶段 → 项目三级派生）。灯只能被真实观测点亮，界面上没有任何地方能手设灯</div></li>
-          <li><span class="b"></span><div>「同步指标文件」只 <code>upsert</code> <code>metric</code> 的<strong>定义</strong>（名字/定义/目标/采集方式），不造观测值</div></li>
-        </ul>
-      </div>
-
-      <h2 class="sec"><span class="n">看到</span>四块分别长什么样</h2>
-      <div class="see"><div class="h">① 项目指标 · 代码仓级</div><div class="d">两张卡：<strong>开放 Issue 数</strong> / <strong>已合入 MR 数</strong>。区头写着「只当现状数 · 不点健康灯 · 不参与项目健康派生」——卡上<strong>没有</strong>信号灯圆点，这是有意的：仓里的工程数说明不了业务健康，硬点灯只会制造假绿。下方一行小字「阶段完成：原型 x / 构建 y / … · 机器记」，没数的阶段显「—」。</div></div>
-      <div class="see"><div class="h">② 业务指标</div><div class="d">北极星单独一张大卡（clay 左边框）在最上，下面「滞后性指标 · 结果型 · 看趋势不追本周」和「引领性指标 · 定本周驱动项」各两列。每张卡：信号灯点 + 名字 +（非机器采的挂采集方式徽、<code>manual</code> 的挂「手填」徽）、当前值 + 目标、vs 上周（↑绿 / ↓红 / →持平 / — 不足两周）、8 周走势折线；引领卡多显「本周目标 + ●/○ 达成」。</div></div>
-      <div class="see"><div class="h">③ 没采到数的卡</div><div class="d">灰底虚线框，值和 vs 上周都显「—」。北极星没绑到指标行时整卡灰着写「无观测 · Unknown≠绿 · 窗口二未绑采数」。北极星卡和无观测卡底下还会展开一条<strong>采集链</strong>（连接器 → 定时器 → 有没有观测 → 灯是什么），链尾<strong>灯是什么就写什么</strong>：有观测但灯仍 Unknown（比如目标没设）会如实写「有观测 · 灯仍 Unknown」，不写成「非 Unknown」糊过去。</div></div>
-      <div class="see"><div class="h">④ buddy 情况一行</div><div class="d">当前阶段 · <strong>N 条 Issue 评审中待你 merge</strong> · N 个指标本周未记·建议复盘 · 本周完成 X / 开放 Y。「待你 merge」是字面意思——<code>InReview</code> 到 <code>Done</code> 永远只能人点。</div></div>
-
-      <div class="callout">
-        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
-        <div class="body"><strong>「→ 0.0」不等于「这周稳住了」。</strong>8 周折线按 ISO 周分桶，某周没采到值时会沿用上周的值把线连上（carry-forward），vs 上周于是显示「→ 0.0」，看着像持平，其实可能是<strong>没记</strong>。判断有没有断采，以 buddy 情况行的「N 个指标本周未记」为准，别只看箭头。</div>
-      </div>
-
-      <p class="linker">本屏涉及的机制：观测只追加 / 灯只派生 / 三级上卷 → <a href="#" onclick="go('m6');return false">指标与健康</a>；连接器与每日定时器怎么排的 → <a href="#" onclick="go('m2');return false">Hub 全局库</a> + <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
-      <div class="foot">事实源：<code>crates/app-desktop/src/screens/op.rs</code>（<code>ProgressAll</code> / <code>BizMetricCard</code>）、<code>crates/ui/src/vm.rs</code>（<code>weekly_spark</code> / <code>weekly_delta</code> / <code>CollectionChainVm</code>）、设计 <code>docs/v1-prototype/issue3-overview-refactor.md</code>、修订 <code>docs/v1-prototype/piercing-fixes-1.md</code>（PF1-R3/R4/R5 项目指标改卡）。</div>
+      <p class="linker">指标与健康怎么设计的 → <a href="#" onclick="go('m6');return false">指标与健康</a></p>
+      <div class="foot">事实源：cowelink 总览实跑。</div>
     </section>
 
     <!-- ============ M1 架构与铁律 ============ -->
@@ -531,9 +565,39 @@
       <ul class="bullets">
         <li><strong>connector</strong>：知道怎么连外部系统并探一次（如 <code>codehub-repo</code> / <code>github-repo</code>）。</li>
         <li><strong>script</strong>：干采数活的脚本实体（表里 kind=<code>script</code>）。buddy 自带「仓统计」；业务脚本由绑数据写入仓后再 sync。</li>
-        <li><strong>cron</strong>：到点调用。纳入时挂「每日 CollectMetrics」；创建瞬间记已跑，避免刚建就抢跑。</li>
+        <li><strong>cron</strong>：到点调用。纳入时挂<strong>一条</strong> Daily <code>CollectMetrics</code>（名常为「… · 采集代码仓指标」）；创建瞬间记已跑，避免刚建就抢跑。</li>
         <li><strong>本地工作区探活</strong>：clone 后直接读 git/docs/测试回流，并扫项目 skill（种 A）——<strong>不建</strong>成 connector 行。</li>
       </ul>
+
+      <h2 class="sec"><span class="n">CollectMetrics</span>一条覆盖全部 script</h2>
+      <div class="diagram">
+        <div class="cap">名字像「只采仓」· 实际按 kind+project 预跑全部 script</div>
+        <div class="pipe">
+          <div class="box"><div class="t">Daily cron</div><div class="d">mode=<br>CollectMetrics</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">全部 script</div><div class="d">本项目<br>kind=script</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">读 output 文件</div><div class="d">JSON<br>不读 stdout</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">observation</div><div class="d">按 collect_query<br>取字段</div></div>
+        </div>
+      </div>
+      <ul class="bullets">
+        <li><code>connectors.toml</code> 里的 <code>schedule</code> <strong>不会</strong>自动新建 cron 行；业务脚本也吃同一条 Daily。</li>
+        <li>立即采集与 cron 走同一条预跑路径。</li>
+        <li>面板文案若一律「采集 Issue/MR」是 kind 文案硬编码（P12 follow-up）；看 config / 名称，别被副标题骗。</li>
+      </ul>
+
+      <h2 class="sec"><span class="n">connectors.toml</span>契约</h2>
+      <table class="ktable">
+        <thead><tr><th>要点</th><th>正确</th><th>踩坑</th></tr></thead>
+        <tbody>
+          <tr><td class="k">表头</td><td><code>[[connector]]</code>（单数）</td><td><code>[[connectors]]</code> → <strong>解析报错</strong>（deny_unknown_fields；不再静默空数组）</td></tr>
+          <tr><td class="k">采数输入</td><td>config.<code>output</code> 指向 JSON 文件，脚本写入该文件</td><td>只 print stdout → Collect 读不到</td></tr>
+          <tr><td class="k">命令</td><td>本机可执行的解释器（Windows 常需 <code>py</code>）</td><td>默认 <code>python</code> 不在 PATH → spawn 失败</td></tr>
+        </tbody>
+      </table>
+      <p class="note-line">格式正本 <code>docs/connectors-toml-format.md</code>。错键响亮失败已落地；output / Windows <code>py</code> 仍靠技能与本表约束。</p>
 
       <h2 class="sec"><span class="n">六套件</span>一眼扫</h2>
       <table class="ktable">
@@ -561,6 +625,10 @@
       <div class="ex">
         <div class="eh">Example · 接入已有 codehub 仓</div>
         <div class="ed">确认建立后你会看到：1 个仓 connector（探活绿）+ 1 个 script「仓统计」+ 1 条每日 cron + 2 条种子指标（开放 Issue / 已合入 MR）。侧栏 Hub 能翻到这些行；总览项目指标区能读到数（或先 Unknown）。操作见 <a href="#" onclick="go('u2');return false">纳入项目</a>。</div>
+      </div>
+      <div class="ex">
+        <div class="eh">Example · 删项目重建</div>
+        <div class="ed">UI 删项目只清库，不清 <code>workspaces\&lt;名&gt;-*</code> clone（W3-9）。重建前人工清盘，否则会误认成「新建已有目录」。业务指标 / 业务 script 仍要等找指标、绑数据合入后才有。</div>
       </div>
       <p class="where">落点：schema <code>crates/bw-store/src/schema.sql</code>；纳入播种 <code>crates/bw-app</code>；装置文件格式 <code>docs/connectors-toml-format.md</code>。</p>
       <div class="foot">采数链细节 → <a href="#" onclick="go('m6');return false">指标与健康</a>；技能注入 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>。</div>
@@ -735,17 +803,29 @@
         </div>
       </div>
       <ul class="bullets">
-        <li><strong>会话即记录</strong>：不另做「对话摘要表」；需要回顾就看终端/会话日志。</li>
-        <li><strong>续聊</strong>：有 <code>claude_session_id</code> 则 resume；没有则按首次启动重灌技能，避免空会话卡死。</li>
-        <li><strong>触发查 MR</strong>：一轮结束钩子 + 短周期轮询兜底。</li>
+        <li><strong>会话即记录</strong>：不另做对话摘要表；交互式<strong>不写</strong> <code>workflow_run</code>，弹窗「运行史」常空——以嵌终端为准。</li>
+        <li><strong>单例 live PTY</strong>：全应用一路当前终端；切非 live 卡仍可能看到当前画面（回看/Done resume 入口 follow-up）。</li>
+        <li><strong>续聊</strong>：有 <code>claude_session_id</code> 则 resume；没有则按首次启动重灌技能。</li>
+        <li><strong>触发查 MR</strong>：一轮结束钩子 + 短周期轮询兜底 → InReview。</li>
       </ul>
 
+      <h2 class="sec"><span class="n">合入与装表</span>两条路径（现状）</h2>
+      <table class="ktable">
+        <thead><tr><th>动作</th><th>现状做什么</th><th>实跑注意</th></tr></thead>
+        <tbody>
+          <tr><td class="k">⬇ merge PR</td><td>合远端 → 再 <code>TransitionIssue→Done</code></td><td>Done 记账里统一 pull + Sync*</td></tr>
+          <tr><td class="k">→已完成</td><td>Done + pull + SyncMetrics/Connectors + settle + 扫产物</td><td>网页已合 MR 后走这条即可装表</td></tr>
+        </tbody>
+      </table>
+      <p class="note-line">P4 收口：pull+Sync 挂在 Done 记账后半段，两条入口共用，不再只认 merge。更激进的「merge 只合代码、留 InReview」尚未做。</p>
+      <p class="note-line">产物登记常按工作区 tracked 全量快照计数，toast 数字易偏大——不是业务产物件数（P6）。</p>
+
       <div class="ex">
-        <div class="eh">Example · 点「找指标 ▶跑」之后</div>
-        <div class="ed">工作流屏开嵌终端 → 已灌 north-star + 衔接层 → 你与模型多轮 → 模型在 <code>bw/issue-N</code> 分支写 <code>.bw/metrics.toml</code> 并提 MR → buddy 查到开放 MR → Issue 变 InReview。你本地 merge 后，装表发生在指标章那条链。</div>
+        <div class="eh">Example · 找指标 ▶跑 → InReview</div>
+        <div class="ed">嵌终端多轮 → 活分支写 <code>.bw/metrics.toml</code> → 自提 MR → buddy 读回开放 MR → InReview。buddy 内 merge，或网页合完点「已完成」——都会 pull+Sync 装表。</div>
       </div>
-      <p class="where">落点：one-shot / 交互式 <code>crates/bw-engine</code>；编排与钩子 <code>crates/bw-app</code>；嵌终端 <code>crates/app-desktop</code>；证据采集 <code>bw-engine</code> evidence。</p>
-      <div class="foot">技能怎么灌 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>。</div>
+      <p class="where">落点：交互式 <code>crates/bw-engine</code>；MergeIssuePr / TransitionIssue <code>crates/bw-app</code>；嵌终端 <code>app-desktop</code>。</p>
+      <div class="foot">技能怎么灌 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>；采数链 → <a href="#" onclick="go('m6');return false">指标与健康</a>。</div>
     </section>
 
     <!-- ============ M6 指标与健康 ============ -->
@@ -771,15 +851,30 @@
         </div>
       </div>
 
-      <h2 class="sec"><span class="n">采集两种心智</span></h2>
+      <h2 class="sec"><span class="n">计划 ≠ 已有数</span></h2>
       <table class="ktable">
-        <thead><tr><th>collect_kind</th><th>怎么取值</th><th>界面</th></tr></thead>
+        <thead><tr><th>字段 / 现象</th><th>含义</th></tr></thead>
         <tbody>
-          <tr><td class="k">script</td><td>跑脚本得 JSON，<code>collect_query</code> = 字段点分路径</td><td>自动；依赖 script connector</td></tr>
-          <tr><td class="k">manual</td><td>人手填 raw</td><td>戴「手填」徽</td></tr>
+          <tr><td class="k">collect_kind = script|manual</td><td><strong>采集计划</strong>（找指标写入）；不是「已经采到数」</td></tr>
+          <tr><td class="k">observation 有无</td><td>有数才可能亮灯；无 = Unknown 灰</td></tr>
+          <tr><td class="k">「手填」徽</td><td>观测 <code>source_kind</code> 来自人手；≠ collect_kind 本身</td></tr>
+          <tr><td class="k">总览手填入口</td><td>BizMetricCard / 北极星灰卡<strong>无</strong> RecordInline（P10 未关；绕法看阶段旧 MetricCard，项目级业务指标可能仍填不了）</td></tr>
         </tbody>
       </table>
-      <p class="note-line">用户心智只有上面两种。库里若仍见历史内联字符串，正往 script 收拢；读旧数据时兼容，新装置按 script|manual 设计。</p>
+
+      <h2 class="sec"><span class="n">装表</span>SyncMetrics / SyncConnectors</h2>
+      <div class="pipe">
+        <div class="box"><div class="t">默认分支</div><div class="d">.bw/metrics.toml<br>.bw/connectors.toml</div></div>
+        <div class="arr">→</div>
+        <div class="box"><div class="t">Sync*</div><div class="d">upsert metric<br>/ script connector</div></div>
+        <div class="arr">→</div>
+        <div class="box"><div class="t">Collect</div><div class="d">读 output 文件<br>→ observation</div></div>
+      </div>
+      <ul class="bullets">
+        <li>触发：凡进入 Done（merge 或「已完成」）都会 pull + Sync*（见 <a href="#" onclick="go('m5');return false">执行与证据</a>）。</li>
+        <li>手动「↻ 同步指标文件」：只同步定义，补「人手改 toml 未走 PR」。</li>
+        <li>SyncConnectors：错键响亮失败；对了才 upsert（见 <a href="#" onclick="go('m2');return false">Hub</a>）。</li>
+      </ul>
 
       <h2 class="sec"><span class="n">关键表字段</span></h2>
       <table class="ktable">
@@ -822,7 +917,7 @@
         <div class="ed">MR 合入 → buddy 读 <code>.bw/metrics.toml</code> + <code>.bw/connectors.toml</code> 装表 → 每日 cron（或「立即采集」）跑 <code>.bw/scripts/*.py</code> → <code>observation.raw</code> 有值 → 总览业务卡亮灯。装置目录约定见 <code>docs/connectors-toml-format.md</code>。</div>
       </div>
       <p class="where">落点：格式 <code>docs/metrics-toml-format.md</code>；解析 <code>crates/bw-engine</code>；采集/装表/重算 <code>crates/bw-app</code> + <code>crates/bw-store</code>；总览分层 <code>crates/ui</code> + <code>app-desktop</code>。</p>
-      <div class="foot">连接三层 → <a href="#" onclick="go('m2');return false">Hub 全局库</a>；铁律 → <a href="#" onclick="go('m1');return false">架构与铁律</a>。</div>
+      <div class="foot">W2/W3 主路径已实跑收口；仍开着的缺口：总览手填（P10）、cron/连接器文案（P12/P13）、北极星无 metric 行（W3-1）、终端/会话 UX（P1–P3/P11）等 → 见 LEFTOVERS / 验证台账。连接三层 → <a href="#" onclick="go('m2');return false">Hub 全局库</a>；铁律 → <a href="#" onclick="go('m1');return false">架构与铁律</a>。</div>
     </section>
 
   </div>
