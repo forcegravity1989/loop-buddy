@@ -2504,6 +2504,60 @@ impl App {
         Ok(())
     }
 
+    /// 五角色归类的 Boot 对账(2026-08-05)。三条来源按优先级递增:
+    ///
+    /// 1. **静态表**(`bw_core::stage_catalog`):随包/vendored 技能的归类
+    ///    正本。按名对账,幂等 —— 与库中现值不同就改齐(这是自愈:表改了、库
+    ///    跟上)。
+    /// 2. **蒸馏派生**:有 `distilled_from_issue` 的技能,按出处 Issue 的 stage
+    ///    归类。这正是 `distilled_skills_block` 今天已在用的口径,不新造判据。
+    /// 3. **人工覆盖**(`StageOrigin::Manual`):整条跳过,永不回填。
+    ///
+    /// 不在静态表、也没有蒸馏出处的技能如实留在「未归类」——绝不猜。
+    ///
+    /// `StageOrigin::Legacy`(搬自已删除的旧 `skill.stage_ref` 单值列,原始
+    /// 出处不可考,真实案例 `metrics-render`)在下面**没有专门的跳过分支**,
+    /// 是推出来的结论、不是漏掉的分支:保值搬迁
+    /// (`bw_store::sqlite::migrate_legacy_skill_stage_ref`)只在
+    /// `stages_for(name)` 返回 `None` 时才把一行标成 `Legacy`——换句话说,
+    /// 每一条 `Legacy` 行按定义就是静态表覆盖不到的行,所以这里对同一件
+    /// 技能重新查 `stages_for(&s.name)` 必然还是 `None`,自然走不进下面的
+    /// 静态表分支;而蒸馏分支的门槛是 `stage_origin == Unclassified`,
+    /// `Legacy` 也不满足。两条分支天然都放过它,值原样不动。
+    async fn reconcile_skill_stages(&self) -> Result<(), AppError> {
+        let by_id = self.store.list_skill_stages().await?;
+        for s in self.store.list_skills().await? {
+            // 人工归过类的行是终点,任何自动来源都不许覆盖。
+            if s.stage_origin == StageOrigin::Manual {
+                continue;
+            }
+            if let Some(want) = bw_core::stage_catalog::stages_for(&s.name) {
+                let have = by_id.get(&s.id).map(Vec::as_slice).unwrap_or(&[]);
+                // 已经一致就不写 —— 每次 Boot 空转一遍 UPDATE 会白白推高
+                // updated_at,让「这行最近被动过」这个信号失真。
+                let same = have.len() == want.len() && want.iter().all(|k| have.contains(k));
+                if !(same && s.stage_origin == StageOrigin::Table) {
+                    self.store
+                        .set_skill_stages(s.id, want, StageOrigin::Table)
+                        .await?;
+                }
+                continue;
+            }
+            // 蒸馏技能:出处 Issue 的 stage 就是它的阶段。出处 Issue 查不到
+            // (理论上不该发生)如实跳过,不编一个阶段出来。
+            if s.stage_origin == StageOrigin::Unclassified {
+                if let Some(iid) = s.distilled_from_issue {
+                    if let Some(issue) = self.store.get_issue(iid).await? {
+                        self.store
+                            .set_skill_stages(s.id, &[issue.stage], StageOrigin::Distilled)
+                            .await?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// P5 · codehub 公共指标 seed(对标 `seed_stage_done_metrics` 的幂等套路):
     /// 给 `provider=codehub` 且 `remote_path` 非空的项目种两条默认公共指标
     /// ——开放 Issue 数 + 已合入 MR 数,`kind=codehub` 走 `collect_project_metrics`
@@ -4479,28 +4533,6 @@ impl App {
                 // — by-name idempotent, so an already-seeded database gains
                 // them too.
                 bw_store::seed_stage_role_agents_if_missing(self.store.as_ref()).await?;
-                // 五角色归类迁移(2026-08-05):老库的 skill.stage_ref 单值搬进
-                // skill_stage 关联表。只搬「关联表还没有这件技能的行」的,所以
-                // 重复 Boot 是 no-op;列已被 SR4 删掉的库(即已迁过的库)读不到
-                // 值,自然跳过。搬完置 stage_origin='table' —— 它们本来就是静
-                // 态表管辖的那批行。
-                let already: std::collections::HashSet<SkillId> = self
-                    .store
-                    .list_skill_stages()
-                    .await?
-                    .keys()
-                    .copied()
-                    .collect();
-                for s in self.store.list_skills().await? {
-                    if already.contains(&s.id) || s.stage_origin != StageOrigin::Unclassified {
-                        continue;
-                    }
-                    if let Some(stages) = bw_core::stage_catalog::stages_for(&s.name) {
-                        self.store
-                            .set_skill_stages(s.id, stages, StageOrigin::Table)
-                            .await?;
-                    }
-                }
                 // P8 (2026-07-28, widened by plan/16 §2): the bw-standard
                 // skill library (issue trio + five playbook stage skills) is
                 // reconciled — `desc`+`content` — against its canon (plan/17
@@ -4737,6 +4769,11 @@ impl App {
                     self.seed_codehub_public_metrics(p.id).await?;
                 }
                 self.refresh_workflow_specs().await?;
+                // 五角色归类对账(SR5):放在 mohit `ImportSkillLibrary` 之后
+                // ——那次导入会新建两行技能,对账要看得见它们;放在
+                // `refresh_skills` 之前,让本次 Boot 里的界面立刻读到对账后
+                // 的 stages。
+                self.reconcile_skill_stages().await?;
                 self.refresh_skills().await?;
                 self.refresh_agents().await?;
                 self.refresh_cron_tasks().await?;
