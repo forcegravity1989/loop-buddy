@@ -2090,6 +2090,15 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
         .unwrap_or_default();
     let has_tick = m.collection_chain.cron_last_tick.is_some();
     let show_chain = is_north_star || !has_obs;
+    // 采集链尾段读派生出来的灯,不从「有没有观测」反推:有观测也可能仍是
+    // Unknown(没设目标、过期降级),那时写「非 Unknown」就是 UI 自己在替
+    // 健康下结论。
+    let chain_tail = match m.signal {
+        Signal::Unknown => "有观测 · 灯仍 Unknown",
+        Signal::Green => "有观测 · 灯绿",
+        Signal::Amber => "有观测 · 灯黄",
+        Signal::Red => "有观测 · 灯红",
+    };
     let collect_label = m.collection_chain.collect_label.clone();
 
     rsx! {
@@ -2165,7 +2174,7 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
                             span { style: "font-family:{mono};font-size:10.5px;color:{ink4};", "cron 未跑" }
                         }
                         span { "→" }
-                        span { "有观测 · 非 Unknown" }
+                        span { "{chain_tail}" }
                     }
                 }
             }
@@ -3069,6 +3078,45 @@ return (async function() {
 ///     explicit). The re-attach guard in `TERM_INIT_JS` re-homes an
 ///     existing terminal into a fresh `div` when this component remounts
 ///     (panel switch away and back — see that constant's doc comment).
+/// Take the longest valid UTF-8 prefix out of `buf`, leaving whatever
+/// trailing bytes form an incomplete character behind for the next batch.
+///
+/// PTY output is a byte stream cut into ~100ms batches at arbitrary offsets;
+/// a 3-byte CJK character routinely straddles two of them. Decoding a batch
+/// in isolation (`from_utf8_lossy`) replaces both halves with U+FFFD, which
+/// is exactly the garbling users see when claude prints Chinese. An
+/// incomplete tail is at most 3 bytes, so carrying it costs nothing.
+///
+/// Genuinely invalid bytes (not just a truncated tail) are still replaced —
+/// this only defers *decidable-later* sequences, it doesn't wait forever.
+fn take_utf8_prefix(buf: &mut Vec<u8>) -> String {
+    match std::str::from_utf8(buf) {
+        Ok(s) => {
+            let out = s.to_string();
+            buf.clear();
+            out
+        }
+        Err(e) => {
+            let valid = e.valid_up_to();
+            match e.error_len() {
+                // Truncated tail: emit what's whole, keep the rest.
+                None => {
+                    let out = String::from_utf8_lossy(&buf[..valid]).into_owned();
+                    buf.drain(..valid);
+                    out
+                }
+                // Real invalid sequence — lossy-decode the whole batch (the
+                // bad bytes will never become valid, waiting would stall).
+                Some(_) => {
+                    let out = String::from_utf8_lossy(buf).into_owned();
+                    buf.clear();
+                    out
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn TerminalWidget() -> Element {
     let k = use_context::<Kernel>();
@@ -3108,6 +3156,12 @@ fn TerminalWidget() -> Element {
             let mut pty_rx = k.pty_bytes();
             // Mark the initial value as seen (empty Vec from watch::channel).
             let _ = pty_rx.borrow_and_update();
+            // Bytes arrive in ~100ms batches cut at arbitrary offsets, so a
+            // multi-byte character (every Chinese glyph claude prints) can
+            // straddle two batches. Decoding each batch on its own would turn
+            // both halves into U+FFFD, so carry the trailing incomplete
+            // sequence over to the next batch instead.
+            let mut carry: Vec<u8> = Vec::new();
             loop {
                 tokio::select! {
                     // PTY bytes arrived → write to terminal.
@@ -3117,11 +3171,14 @@ fn TerminalWidget() -> Element {
                         }
                         let bytes = pty_rx.borrow().clone();
                         if !bytes.is_empty() {
-                            let text = String::from_utf8_lossy(&bytes);
-                            let escaped = serde_json::to_string(&text)
-                                .unwrap_or_else(|_| "\"\"".into());
-                            let script = format!("window.__bw_term_write({escaped})");
-                            let _ = document::eval(&script).await;
+                            carry.extend_from_slice(&bytes);
+                            let text = take_utf8_prefix(&mut carry);
+                            if !text.is_empty() {
+                                let escaped = serde_json::to_string(&text)
+                                    .unwrap_or_else(|_| "\"\"".into());
+                                let script = format!("window.__bw_term_write({escaped})");
+                                let _ = document::eval(&script).await;
+                            }
                         }
                     }
                     // Timer → drain what the user typed / resized.
