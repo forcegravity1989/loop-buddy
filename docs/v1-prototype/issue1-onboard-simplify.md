@@ -11,9 +11,11 @@
 
 **buddy 现状对照**:三层 buddy 都有,但是**半成品**——commit `fa2e3bb "18-③script-connector"`(用户自己 plan/18)建了 `script` connector kind + collect arm,但:① `git-repo` 错位成 connector(本地不是对外);② `script` 被塞进 connector 表(本该是业务脚本实体,「求同存异」接受它留在 connector 表当一种 kind);③ 采集 cron 不调脚本、inline 调 gh/codehub-cli(`metric.collect_kind='codehub'/'github'`),`connector` collect_kind **留白**(没做完的意图物证)。**phase2 = 收尾自己开的半成品,不是大改。**
 
-## 1. 现状(5 卡)+ 命令层事实(取证,见 commit 锚点)
+## 1. 改前基线(5 卡)+ 命令层事实(取证,见 commit 锚点)
 
-创建流 5 卡(`crates/app-desktop/src/screens/create.rs`):Repo→Intent→Questions→Drafting→Review。
+> **⚠ 本节是「改前」快照,不是当前事实**(2026-08-06 review 标注)。phase1+phase2 已落地(`ef7fa26`):创建流现在只有 **Repo→Intent 两卡**(`Card` enum 只剩这两个变体),`CreateProject` **不再建 `git-repo` connector**(改建 provider-repo + script)。下面整节保留作 delta 的对照底,别当现状读。
+
+改前创建流 5 卡(`crates/app-desktop/src/screens/create.rs`):Repo→Intent→Questions→Drafting→Review。
 - `CreateProject`(lib.rs:4699):建 project 行 + clone/`gh repo create` + 建 2 connector(`git-repo`+provider)+ 每日 `CollectMetrics` cron + charter/standards(仅 owned)。
 - `CompleteCreation`(lib.rs:5280):建 5 `op_stage`(schedule=cadence)+ `seed_standard_issue_trio`(remote 非空才建,Backlog)+ push remote + probe connector +(run_first→跑①竞品分析)。
 - cycle(`explore`)/cadence(`Weekly`)均**展示性**,不触发真 cron。唯一真 cron = CreateProject 那条 Daily `CollectMetrics`。
@@ -34,6 +36,7 @@
 - **Intent 卡**:名称* + kind(留) + brief(不强制) + 对标 benchmark(不强制,竞品分析输入) + 成功标准 win(不强制,找指标输入)。cycle=`explore`/cadence=`Weekly` 用 DB 默认。
 - **提交即连发**:`CreateProject`(建仓+connector+cron+charter)→ `UpdateBrief`(benchmark,opportunity)→ `CompleteCreation`(stage+三件套+push+probe)。建仓/落地进度走 `ActionsBanner`,失败可重试。
 - **统一 github/codehub 地址 UI**:去 GitLab/Gitcode 占位;两边「新建/接入」chip 对称;codehub host 选择器(green/open/yellow,yellow 未登录如实标);codehub 接入已有用 `list --mine` 下拉(**不留手填 fallback**;仓不在列表=需先成为 member,如实约束)。
+  - **⚠ yellow 处理已改(2026-08-06 review 纠偏)**:本节原写「yellow 未登录**灰置**」,穿刺批次 PF1 决议 6 明确推翻 —— **不硬编码禁点**(登录态是运行时的事,硬编码禁点会在用户已经 `auth login` 之后依然拦人)。今天的实现是:yellow 可点,选择器上静态标注需先 `codehub-cli auth login`,真点下去失败时把错误映射成人话 + toast 8 秒自清。见 `piercing-fixes-1.md` 决议 6。
 - **codehub 两臂**(引擎 shell-out,对仗 github):`codehub.rs` 加 `create_repo`(`project create`,默认建到个人 namespace 对标 `gh repo create`)+ `list_repos`(`project list --mine`);`remote.rs` + `lib.rs` CreateProject codehub 新建分支 + `Command::ListCodehubRepos` + `CodehubRepoSummary` VM。
 
 ### phase 2 · connector 心智模型归位(按 §0 三层)
@@ -46,9 +49,12 @@
 
 ## 4. 具体例子:maas(codehub)创建后
 
-**改前/改后表行**:
+**改前/改后表行**(cron 名与 `last_run_at` 后经 PF1 再改一次,见行内注):
 ```
-cron_task(不变): name='maas · 指标采集' schedule='daily' mode='collect_metrics' project_id=<maas> last_run_at=0
+cron_task: name='maas · 采集代码仓指标'(PF1-3a① 改名,原 '· 指标采集';存量行由
+           migrate_cron_collect_metrics_name 迁移)schedule='daily'
+           mode='collect_metrics' project_id=<maas>
+           last_run_at=now()(PF1-4 防新建 cron 在 clone 完成前抢跑,原为 0)
 metric「开放 Issue 数」: 改前 collect_kind='codehub' collect_query='issues:opened' → 改后 'script' 'open_issues'
 metric「已合入 MR 数」: 改前 'codehub' 'mrs:merged' → 改后 'script' 'merged_mrs'
 connector: 改前 git-repo+codehub-repo → 改后 codehub-repo + script「codehub 仓统计」(git-repo 不建)
@@ -78,7 +84,7 @@ connector: 改前 git-repo+codehub-repo → 改后 codehub-repo + script「codeh
 ### UI(SubAgent B,基于 A 的契约)
 - `crates/app-desktop/src/screens/create.rs`:
   - `Card` enum 砍到 `Repo`+`Intent`。删 QuestionsCard/DraftingCard/ReviewCard/MetricDraft/MetricList/ns_candidate/dispatch_draft_run。
-  - `RepoCard`:platform chip 去 GitLab/Gitcode(只 GitHub/CodeHub);起点 chip 新建/接入(两边都有);github 新建(slug+可见性,现状)+ 接入(`gh repo list` 下拉,现状);codehub host 选择器(green/open/yellow,yellow 未登录灰置)+ codehub 新建(namespace+name+可见性)+ codehub 接入(`list_repos` 下拉)。
+  - `RepoCard`:platform chip 去 GitLab/Gitcode(只 GitHub/CodeHub);起点 chip 新建/接入(两边都有);github 新建(slug+可见性,现状)+ 接入(`gh repo list` 下拉,现状);codehub host 选择器(green/open/yellow,~~yellow 未登录灰置~~ **yellow 可点 + 静态标注需先 login,见 §3 纠偏**)+ codehub 新建(namespace+name+可见性)+ codehub 接入(`list_repos` 下拉)。
   - `IntentCard`:name* + kind + brief(不强制)+ benchmark(不强制)+ win(不强制);「确认建立」按钮连发 CreateProject+UpdateBrief+CompleteCreation。`can_send` 只 gate name 非空(+ codehub path/namespace 非空)。
   - `ActionsBanner` 留(建仓/落地进度回显)。
 - `crates/app-desktop/src/main.rs`:`ListCodehubRepos` 事件接线 + codehub repos 信号传 RepoCard(对仗 github_repos)。
@@ -97,7 +103,7 @@ connector: 改前 git-repo+codehub-repo → 改后 codehub-repo + script「codeh
 - **codehub 新建 namespace-id**:默认建到个人 namespace(对标 gh repo create)。group namespace 选择留口(V1 不做,如实标)。SubAgent 实测 codehub-cli 钉 namespace-id 取法。
 - **op_stage.routine_schedule / stage_done**:求同存异留。signal 过期降级读这列的改法留总览窗口(碰派生链)。
 - **standards 质量**:留写入,内容打磨是依赖事项,本窗口不管。
-- **yellow 未登录**:host 选择器如实标「未登录」。
+- **yellow 未登录**:host 选择器如实标 —— **落地口径(PF1 决议 6)**是静态提示「需先 `codehub-cli -H yellow auth login`」+ 失败时人话报错,**不是**探测登录态、也**不**灰置(见 §3 纠偏)。
 - **穿刺修正(2026-08-06,见 `docs/v1-prototype/piercing-fixes-1.md`)**:① GitHub/CodeHub 新建仓 UI 统一(仓名都放 RepoCard);② cron 名改「`<项目> · 采集代码仓指标」+ 详情卡具体化;③ collect arm 错误分 spawn/超时;④ **Windows spawn fix(R5c)**:app 进程 PATH 缺 Git bin/usr-bin 时 `Command::new("sh")` 找不到,加候选链(`BW_SH_BIN` env → sh/bash/sh.exe/bash.exe → 从 git.exe 推导 `<root>\bin\bash.exe` → 常见安装位);⑤ 采集时序竞态(cron 不抢跑 + CompleteCreation 即采一次);⑥ yellow 报错人话 + toast 8s 自清。以 piercing-fixes-1.md 为准。
 
 ## 7. 验证(step 4,读回为证)
