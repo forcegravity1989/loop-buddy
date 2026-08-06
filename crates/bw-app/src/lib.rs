@@ -22,6 +22,7 @@ mod agent_import;
 mod bw_canon;
 mod legacy_migration;
 mod skill_import;
+mod skill_materialize;
 
 pub use legacy_migration::LegacyMigrationReport;
 
@@ -2425,6 +2426,68 @@ impl App {
         Ok((block, refs))
     }
 
+    /// 本阶段(含全阶段通用)技能的**目录**块 + 需要物化的候选行。
+    ///
+    /// 只出目录不出正文:正文由 `skill_materialize` 落到工作区
+    /// `.claude/skills/`,让 CLI 按需加载。desc 里本来就有触发段(「适用:…」/
+    /// "Use when …"),那正是 agent 判断该不该加载一件技能的唯一依据。
+    ///
+    /// 候选 = 挂了本阶段的 ∪ 挂满五阶段的。「已判定不属任何阶段」与「未归类」
+    /// 都**不进**候选 —— 前者判过了不属于,后者没人判过,都不该被当成本阶段的
+    /// 推荐技能。
+    async fn stage_catalog_block(
+        &self,
+        stage: StageKind,
+    ) -> Result<(String, Vec<SkillCard>), AppError> {
+        /// 目录块字符上限。按候选最多的原型段(29 条 × 约 110 字符 ≈ 3200)取,
+        /// 留余量。超限按 uses 降序截断并如实写明未列出的条数 —— 静默截断会让
+        /// prompt 读起来像「本阶段就这些技能」,那是假的。
+        const MAX_BLOCK_CHARS: usize = 4000;
+        const DESC_CAP: usize = 80;
+
+        let mut candidates: Vec<SkillCard> = self
+            .store
+            .list_skills()
+            .await?
+            .into_iter()
+            .filter(|s| !s.content.trim().is_empty() && s.stages.contains(&stage))
+            .collect();
+        if candidates.is_empty() {
+            return Ok((String::new(), Vec::new()));
+        }
+        candidates.sort_by(|a, b| b.uses.cmp(&a.uses).then_with(|| a.name.cmp(&b.name)));
+
+        let mut lines: Vec<String> = Vec::new();
+        let mut total = 0usize;
+        let mut listed = 0usize;
+        for s in &candidates {
+            let line = format!(
+                "- {} — {}",
+                s.name,
+                first_sentence_capped(&s.desc, DESC_CAP)
+            );
+            let n = line.chars().count() + 1;
+            if total + n > MAX_BLOCK_CHARS {
+                break;
+            }
+            total += n;
+            lines.push(line);
+            listed += 1;
+        }
+        let omitted = candidates.len() - listed;
+        let tail = if omitted > 0 {
+            format!("\n（另有 {omitted} 件同样已物化，未在此列出——目录到此为止，不是技能到此为止）")
+        } else {
+            String::new()
+        };
+        let block = format!(
+            "\n\n## 本阶段可用技能（已物化到 .claude/skills/，按需自行加载）\n{}{}\n",
+            lines.join("\n"),
+            tail
+        );
+        Ok((block, candidates))
+    }
+
     /// C8 · 标配 Issue 三件套的 Skill 注入(plan/13 D8): resolve an Issue's
     /// `standard_skill` slug (set once by `seed_standard_issue_trio`, C9's
     /// by-name convention) against the Skill Hub catalog and render its real
@@ -4012,8 +4075,37 @@ impl App {
         let (distilled_block, distilled_refs) = self
             .distilled_skills_block(p, issue.stage, &issue.standard_skill)
             .await?;
+        // 五角色归类的落地(2026-08-05):本阶段技能的目录进 prompt、正文物化到
+        // 工作区。与上面两块的关键区别 —— 目录里的技能**不进** `spec.skills`,
+        // 因此不记 uses:目录列了二十几条、agent 实际可能只读两条,全都记一笔
+        // 就是造假,会稀释 uses「真被用了」的语义。真解析(读 claude CLI 的
+        // session jsonl 里的 tool_use=Skill 记录,只给真加载的记账)已验证可行,
+        // 用户 2026-08-05 明确说本轮不做。
+        let (catalog_block, catalog_skills) = self.stage_catalog_block(issue.stage).await?;
+        if !catalog_skills.is_empty() && !proj.workspace_path.trim().is_empty() {
+            let mut with_files = Vec::with_capacity(catalog_skills.len());
+            for s in catalog_skills {
+                let files = self.store.list_skill_files(s.id).await?;
+                with_files.push((s, files));
+            }
+            let report =
+                skill_materialize::materialize_stage_skills(&proj.workspace_path, &with_files)
+                    .await;
+            if !report.skipped_foreign.is_empty() {
+                eprintln!(
+                    "[BW_SKILL_MATERIALIZE] 跳过 {} 件同名但非 BW 托管的技能目录(用户自己的 skill 优先):{}",
+                    report.skipped_foreign.len(),
+                    report.skipped_foreign.join(", ")
+                );
+            }
+            eprintln!(
+                "[BW_SKILL_MATERIALIZE] 写入 {} · 未变 {}",
+                report.written.len(),
+                report.unchanged
+            );
+        }
         spec.name = format!("#{} {}", issue.number, issue.title);
-        let extra = format!("{issue_brief}{standard_block}{distilled_block}");
+        let extra = format!("{issue_brief}{standard_block}{distilled_block}{catalog_block}");
         // 既有缺口(C8 顺带修复,非本票新增行为):`stage_workflow_with_playbook`
         // 给每个 phase 都填了非空的 `phase_prompts[idx]`,而
         // `Engine::run_workflow` 选 phase 的真实 prompt 时——`phase_prompts
@@ -7868,6 +7960,24 @@ fn review_tail(text: &str) -> String {
         return t.to_string();
     }
     t.chars().skip(n - MAX).collect()
+}
+
+/// desc 的第一句,按字符数截断。技能的 description 上限 1024 字符,整句进目录
+/// 会把 prompt 撑得没法读;第一句恰好是触发段所在。
+fn first_sentence_capped(desc: &str, cap: usize) -> String {
+    let head = desc
+        .split(['。', '\n'])
+        .next()
+        .unwrap_or(desc)
+        .split(". ")
+        .next()
+        .unwrap_or(desc)
+        .trim();
+    if head.chars().count() <= cap {
+        return head.to_string();
+    }
+    let cut: String = head.chars().take(cap).collect();
+    format!("{cut}…")
 }
 
 /// T10 (plan/12 §5): the ephemeral spec `tick_scheduler` runs a `RunSkill`/
