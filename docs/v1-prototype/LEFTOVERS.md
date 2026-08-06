@@ -167,6 +167,6 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 **与 LEFTOVERS 的交叉**：
 - 点 ④ 的「UI 冻死」callout 与 W1-1 无直接重叠（W1-1 是 buddy 自动 push 用户仓，点 ④ 是 cron 抢跑时序），但点 ⑥ 删的「UI 冻死」callout 是 issue1 §6 bug① 的 UI 表现——**本批次只删指南 callout（点 4 时序修复缓解 cron 抢跑，但 clone 同步堵单线程的根因 issue1 bug① 未解，留 issue1 §6）**。
-- 点 ⑤ yellow 未登录标注与 issue1 §6「yellow 未登录」一致，本批次落地（host 选择器灰置 + 标注）。
+- 点 ⑤ yellow 未登录标注与 issue1 §6「yellow 未登录」一致，本批次落地的是**标注**：host 选择器三个 alias 都可点，chip 上挂 tooltip、下方常驻一行「green/open 已登录可直用；yellow 需先在本机 `codehub-cli -H yellow auth login`」，选中未登录的 yellow 时靠 CLI 调用失败回人话报错。**没有做灰置**——buddy 不探测 `codehub-cli` 的登录态，探不到就不能替用户判定「没登录」，灰置会在人其实已登录时挡住路（事实源：`crates/app-desktop/src/screens/create.rs` `CodehubHostPicker`）。
 
 **事实源**：`docs/v1-prototype/piercing-fixes-1.md`（设计事实源，未改代码）。
