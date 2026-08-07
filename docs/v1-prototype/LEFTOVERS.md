@@ -21,7 +21,7 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 2. **worktree 感知**——buddy 在自己的 workspace clone 提交并 push；用户若在项目的独立 worktree 工作，需 `git pull` 才能感知这些自动提交，存在同步感知缺口（用户不知道 buddy 往 main 推过东西）。
 3. **PR 独立性**——三件套（竞品分析 / 找指标 / 绑数据）各产 PR；charter + standards 已在 base（main）上，PR 从该 base 分支基本不碍独立性。但 buddy `push_head` 与用户 worktree 并行 push 同一 main 可能产生分叉 / 冲突 / 强推风险。
 
-**处置**：W1 不解，暂留。待三窗口合入后与各窗口遗留汇总转 issue。
+**处置**：✅ 已修（2026-08-07）。用户决议：仓库是 buddy 建的、建之初推初始规范没问题，**保留自动写章程+组件标准+本地 commit+push main（不走 PR）**，不加 opt-out 勾选。只补「报告不代答」缺口：三处 `let _ =` 静默吞失败（CreateProject 章程/标准 + CompleteCreation 章程）改成失败 toast；push 成功的「已推送」toast 原本就有。失败不再静默。
 
 **事实源**：`crates/bw-app/src/lib.rs`（`write_charter` L7829 / `write_component_standards` L7855 / `push_head` 调用 L5522）。
 
@@ -49,7 +49,7 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 **未决点**：signal 过期降级是否读 `routine_schedule`？
 
-**处置**：留总览窗口（碰派生链）。
+**处置**：✅ 已实质解决，2026-08-07 关闭。读代码确认 `recompute_signals`（`sqlite.rs:1329-1338`）已读 `op_stage.routine_schedule` 解析成 `Cadence` → `measure.rs:70` staleness → `eval.rs:48-53` `stale && Green → Amber`，过期降级链路已完整接通。原记「改法未做」标记错。`stage_done` 列从未加进 schema，不用清。
 
 **事实源**：`docs/v1-prototype/issue1-onboard-simplify.md` §6。
 

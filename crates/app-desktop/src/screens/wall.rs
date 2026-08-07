@@ -135,6 +135,12 @@ fn ProjectCard(card: ProjectCardVm) -> Element {
     let progress = card.progress;
     let id = card.id;
     let desc_preview: String = card.desc.chars().take(72).collect();
+    let ws = card.workspace_path.trim();
+    let delete_hint = if ws.is_empty() {
+        "将删除项目数据（工作目录未配置）".to_string()
+    } else {
+        format!("将删除项目数据 + 工作目录 {ws}（buddy 自建会一并删，你绑的目录保留）")
+    };
     let mut confirming_delete = use_signal(|| false);
     rsx! {
         div {
@@ -180,7 +186,7 @@ fn ProjectCard(card: ProjectCardVm) -> Element {
             if confirming_delete() {
                 div {
                     style: "margin-top:12px;padding-top:12px;border-top:1px dashed {ink3};display:flex;align-items:center;gap:8px;",
-                    span { style: "font-size:11.5px;color:{ink3};flex:1;", "删除后不可恢复" }
+                    span { style: "font-size:11.5px;color:{ink3};flex:1;line-height:1.5;", "{delete_hint}" }
                     button {
                         style: "cursor:pointer;background:{theme::ALERT_DEEP};color:#FFF;border:none;border-radius:6px;padding:5px 11px;font-size:11.5px;",
                         onclick: {

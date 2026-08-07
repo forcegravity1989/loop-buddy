@@ -12,9 +12,11 @@
 //!    抖动/配额/预算腰斩都是合法结果,如实打印、绝不吞掉。
 //! 2. **结论读回为证**:每步之后从 store 读回真实状态打印;独立复核用
 //!    `sqlite3` 对同一个库再查一遍(本文件结尾打印可直接复制的查询)。
-//! 3. **Done 永不自动**:run 成功只到评审中(InReview + 真 PR);
-//!    `merge` 模式存在的唯一意义是让人从 BW 真实命令层(`MergeIssuePr`)
-//!    验收,避免绕过 BW 直接在网页 merge 造成状态漂移(C11 #42 未建)。
+//! 3. **Done 永不自动**:V1-TermClose3 后 RunIssue 走嵌入终端,run 成功只
+//!    到 InProgress(InReview 改由 agent 自提 MR + poll 检测;无 MR 的活
+//!    诚实停在 InProgress,不假装前进);`merge` 模式存在的唯一意义是让人
+//!    从 BW 真实命令层(`MergeIssuePr`)验收,避免绕过 BW 直接在网页 merge
+//!    造成状态漂移(C11 #42 未建)。
 //!
 //! 用法(db/ws-root 用真实日常库的那套路径):
 //!   cargo run -p bw-app --example practice_first_loop -- <db> <ws-root> <项目名> status
@@ -63,6 +65,8 @@ async fn dump_state(store: &Arc<dyn Store>, name: &str) {
             i.standard_skill,
             i.settled_at
         );
+        // V1-TermClose3:RunIssue 走嵌入终端后不再创建 workflow_run 行;
+        // 这段对 issue run 会空(阶段循环命令仍留行)。证据改读 agent_run/skill_use。
         for r in store.list_runs_for_issue(i.id).await.unwrap() {
             println!(
                 "      run {:?} phases={} dur={}ms err={:?}",
@@ -215,5 +219,6 @@ async fn main() {
 
     println!("\n══ 独立复核(sqlite3 直接对库再查) ══");
     println!("  sqlite3 \"{db_path}\" \"SELECT number,title,status,github_number,pr_number FROM issue;\"");
-    println!("  sqlite3 \"{db_path}\" \"SELECT workflow_name,status,phases_completed,duration_ms,error FROM workflow_run ORDER BY started_at DESC LIMIT 5;\"");
+    // V1-TermClose3:RunIssue(嵌入终端)不再留 workflow_run 行;issue run 证据改读 agent_run/skill_use。
+    println!("  sqlite3 \"{db_path}\" \"SELECT workflow_name,status,phases_completed,duration_ms,error FROM workflow_run ORDER BY started_at DESC LIMIT 5;\"  -- 阶段循环命令(非 issue 终端)的 run 行");
 }

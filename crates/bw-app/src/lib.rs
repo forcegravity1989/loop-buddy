@@ -41,14 +41,15 @@ use bw_core::model::{
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
-    AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
-    SessionId, SkillId, WorkflowId, WorkflowRunId,
+    AgentId, ArtifactId, ConnectorId, ConversationId, CronTaskId, IssueId, KnowledgeSourceId,
+    MetricId, ProjectId, SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    allowed_tools_arg, build_bridge_system_prompt, build_resume_plan, build_startup_plan, evidence,
-    ClaudeCliConfig, ClaudeCliExecutor, CodehubRepoSummary, Engine, GitCommit, GithubRepoSummary,
+    allowed_tools_arg, build_bridge_system_prompt, build_consultation_resume_plan,
+    build_resume_plan, build_startup_plan, evidence, ClaudeCliConfig, ClaudeCliExecutor,
+    CodehubRepoSummary, ConversationMeta, Engine, GitCommit, GithubRepoSummary,
     InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
-    PhaseNode, RunCtx, RunEvent, SkillOutput, UnsupportedCliExecutor, CLAUDE,
+    PhaseNode, RunCtx, RunEvent, SkillOutput, TerminalManager, UnsupportedCliExecutor, CLAUDE,
 };
 use bw_store::{
     AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
@@ -881,22 +882,27 @@ pub enum Command {
     /// counterpart to `CreateProject` — irreversible; the UI is responsible
     /// for confirming with the user before dispatching this.
     DeleteProject(ProjectId),
+    /// W2-2: hard-delete a single session + its messages, clearing the
+    /// `issue.session_id` dangling reference (issue row stays). Irreversible;
+    /// the UI confirms with the user before dispatching. Used to clean up the
+    /// historical duplicate "阶段记录" cards that piled up before the
+    /// `(stage_kind, title)` dedup guard landed.
+    DeleteSession(SessionId),
     BackToProjects,
     SetPanel(Panel),
     SetScope(Scope),
     /// Select (or clear) the chat-focused session in the operating view.
     SelectSession(Option<SessionId>),
     /// V1 Issue2 Phase2b: user-typed bytes from the in-app xterm.js terminal
-    /// (`onData` callback). The App forwards these to the PTY writer via
-    /// the `pty_input_tx` channel. Only dispatched when PTY mode is active.
+    /// (`onData` callback). Forwarded to TerminalManager by conversation_id.
     TerminalInput {
+        conversation_id: ConversationId,
         bytes: Vec<u8>,
     },
     /// V1 Issue2 Phase2b: terminal resize from the in-app xterm.js
-    /// (`onResize` callback). The App forwards this to `master.resize()`.
-    /// The UI should also re-assert (getAppliedSize, orca §2.4) — if the
-    /// PTY's applied size doesn't match, re-send this.
+    /// (`onResize` callback). Forwarded to TerminalManager by conversation_id.
     TerminalResize {
+        conversation_id: ConversationId,
         cols: u16,
         rows: u16,
     },
@@ -1153,8 +1159,6 @@ struct PreparedRun {
 #[derive(Clone)]
 struct FinalizeCtx {
     spec: WorkflowSpec,
-    heads_workspace: String,
-    head_before: Option<String>,
     proj: ProjectRow,
     p: ProjectId,
     issue_id: Option<IssueId>,
@@ -1168,8 +1172,11 @@ struct FinalizeCtx {
 /// `pub(crate)` — the kernel only ever MOVES a `SettleReq` value, never
 /// names/constructs `SettleOutcome`.
 pub(crate) enum SettleOutcome {
-    PhaseLoop(Result<(LoopEnd, WorkflowRunId, bool), AppError>),
     Interactive(Result<SkillOutput, AppError>),
+    /// 咨询 PTY 退出:不占 active_run、不改状态、不 settle-once。
+    ConsultationEnded {
+        conversation_id: ConversationId,
+    },
 }
 
 /// plan/17 S3: outcome a backgrounded round loop reports back to the main
@@ -1186,50 +1193,56 @@ pub struct SettleReq {
     pub(crate) outcome: SettleOutcome,
 }
 
-/// plan/17 S3: an in-flight backgrounded issue-run. Held in `AppState
-/// .active_run` so:
-///  - the same-project serial lock holds across dispatch returns (a second
-///    `RunIssue` on the same project sees `Some` and is rejected);
-///  - `CancelRun` can `abort` the `JoinHandle`;
-///  - `run_issue_settle` has the `FinalizeCtx` + the tail's issue/project/
-///    worktree context + the worktree guard (dropped AFTER `finalize_run`
-///    reads `head_after` and the tail's `create_mr` commits the worktree).
+/// V1 收口:issue ▶跑 全走嵌入终端(`run_issue_interactive`)后,issue 脚本
+/// 调度路径退场。`ActiveRun` 只服务交互式交付(same-project 串行锁 +
+/// `CancelRun` 的 `abort` + settle 的 `finalize_run_interactive(_resume)` +
+/// worktree guard)。`proj`/`issue_ws`/`pr_eligible` 三字段曾服务 `issue_run_tail`
+/// 的 create_mr/transition,随该函数一并删去。`finalize: FinalizeCtx` 承载 settle
+/// 所需的 spec/proj/issue_id;`is_resume` 选 finalize 分支(settle-once)。
 struct ActiveRun {
     project: ProjectId,
     /// The bound Issue (id + number + github_number + title) — used to match
-    /// `CancelRun`'s id and to drive the tail's `create_mr` / transition.
+    /// `CancelRun`'s id and settle's conversation lookup.
     issue: Issue,
     handle: JoinHandle<()>,
     guard: bw_engine::workspace::IssueWorktreeGuard,
     finalize: FinalizeCtx,
-    // tail context (run_issue_settle's create_mr + transition):
-    proj: ProjectRow,
-    issue_ws: Option<PathBuf>,
-    pr_eligible: bool,
     /// V1 Issue2 Phase2a: whether this run is a resume (not the first run).
-    /// Set from `issue.interactive_started` at dispatch time. The settle arm
+    /// Set from the conversation's claude_session_id at dispatch time. The settle arm
     /// uses it to pick `finalize_run_interactive_resume` (artifact scan only,
     /// no uses bump — settle-once) vs `finalize_run_interactive` (first run:
-    /// uses + artifacts). Both skip `issue_run_tail` (no MR creation — agent
-    /// does it in-session; InReview from polling).
+    /// uses + artifacts). Issue stays in its current state (never auto-Done).
     is_resume: bool,
 }
 
-/// plan/17 S3: the shared 起手 prefix of an issue-run, returned by
-/// `prepare_issue_run` so the inline path (`run_issue_body`) and the
-/// backgrounded path (`run_issue_backgrounded`) start from the exact same
-/// setup — get+validate the Issue, build the stage-playbook `WorkflowSpec`
-/// (+ standard/distilled skill injection), transition to InProgress, and
-/// provision the isolated issue worktree behind an RAII guard. The guard is
-/// owned here so each caller can place it where the worktree must outlive
-/// (the inline path's local, or the backgrounded path's `ActiveRun`).
+/// 咨询态 PTY(Done/InReview 续聊)。不进 active_run。
+struct ConsultationRun {
+    issue_id: IssueId,
+    #[allow(dead_code)] // 后续若加「关咨询」可 abort
+    handle: JoinHandle<()>,
+    guard: bw_engine::workspace::IssueWorktreeGuard,
+}
+
+/// V1 收口:the shared 起手 prefix of an issue-run, returned by
+/// `prepare_issue_run` so the interactive path (`run_issue_interactive`,
+/// first-run + resume branches) starts from the right setup — get+validate
+/// the Issue, build the stage-playbook `WorkflowSpec` (+ standard/distilled
+/// skill injection), transition to InProgress, and provision the isolated
+/// issue worktree behind an RAII guard. The guard is owned here so the caller
+/// can place it where the worktree must outlive (the interactive path's
+/// `ActiveRun`, or the consultation path's `ConsultationRun`).
 struct IssueRunPrep {
     issue: Issue,
     proj: ProjectRow,
     spec: WorkflowSpec,
     issue_ws: Option<PathBuf>,
-    pr_eligible: bool,
     guard: bw_engine::workspace::IssueWorktreeGuard,
+    /// 同阶段蒸馏技能块(最多 3 条,经验复利)。V1 收口:interactive 路径
+    /// 并进系统提示词(原来只进 phase-loop 的 spec.prompt,issue 全转终端
+    /// 后会静默丢失)。
+    distilled_block: String,
+    /// 本阶段技能目录块(工作区为空时为空,守「不假装物化」)。同上并入系统提示词。
+    catalog_block: String,
 }
 
 /// plan/17 S3: `AppState` no longer `derive(Clone, Debug)` — `active_run`
@@ -1298,7 +1311,7 @@ pub struct AppState {
     pub github_repos: Vec<GithubRepoSummary>,
     /// V1 Issue2 Phase2a: unix ts of the last InReview poll for interactive
     /// issues. The poller checks codehub/github for open MRs on interactive
-    /// issues that are InProgress + `interactive_started` + `pr_number == 0`.
+    /// issues that are InProgress + have a claude_conversation row (interactive) + `pr_number == 0`.
     /// Throttled to once per 5 minutes so it doesn't hit the remote every
     /// `tick_scheduler` fire. `0` = never polled (first tick runs it).
     pub last_inreview_poll: i64,
@@ -1317,17 +1330,15 @@ pub struct AppState {
     /// debounce needed within a single tick; the 5-minute poller remains as
     /// backstop for Stop events processed with delay).
     pub pending_stop_check: bool,
-    /// V1 Issue2 Phase2b: PTY input sender — forwards user-typed bytes
-    /// (`Command::TerminalInput`) and resize (`Command::TerminalResize`)
-    /// to the background PTY task. `None` when PTY mode isn't active or no
-    /// interactive session is running. Set in `run_issue_interactive` when
-    /// spawning a PTY session; cleared when the session settles.
-    pub pty_input_tx: Option<mpsc::UnboundedSender<bw_engine::PtyInput>>,
-    /// V1 Issue2 Phase2b: PTY bytes receiver — drains PTY output bytes
-    /// from the background read task. `None` when PTY mode isn't active or
-    /// no session is running. Drained by `drain_pty_bytes` (called from
-    /// the kernel's 100ms `pty_ticker` arm — NOT `tick_scheduler`).
-    pub pty_bytes_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
+    pub terminal_manager: TerminalManager,
+    /// UI 焦点会话(切卡只改这个,不杀其它 PTY)。
+    pub focused_conversation: Option<ConversationId>,
+    pub focused_issue: Option<IssueId>,
+    /// 咨询态活连接;与 active_run 并存,不占交付名额。
+    consultation_runs: HashMap<ConversationId, ConsultationRun>,
+    /// V1-TermRefactor4 · 重启恢复:点卡 resume 进行中(重建 worktree →
+    /// spawn PTY → 首包字节前)。UI 显示「恢复中…」;Boot 绝不批量唤醒。
+    pub pty_restoring: Option<ConversationId>,
     /// V1 Issue2 Phase2b: whether PTY mode is enabled (the desktop kernel
     /// wires it via `App::with_pty`). When `true`, `run_issue_interactive`
     /// uses `run_skill_pty` (in-app terminal). When `false`, it uses the
@@ -1349,6 +1360,10 @@ pub struct IssueDetailData {
     pub runs: Vec<bw_core::model::WorkflowRun>,
     pub changes: Vec<bw_core::model::RunChanges>,
     pub artifacts: Vec<Artifact>,
+    /// V1 终端会话重构(阶段1): 该活是否已有交互式会话(claude_conversation
+    /// 行存在与否)。替代旧 `issue.interactive_started` —— P2 诚实文案用它
+    /// 判断「过程在嵌入终端里」还是「还没有运行」。
+    pub is_interactive: bool,
 }
 
 impl Default for AppState {
@@ -1378,8 +1393,11 @@ impl Default for AppState {
             last_inreview_poll: 0,
             interactive_sessions: HashMap::new(),
             pending_stop_check: false,
-            pty_input_tx: None,
-            pty_bytes_rx: None,
+            terminal_manager: TerminalManager::new(),
+            focused_conversation: None,
+            focused_issue: None,
+            consultation_runs: HashMap::new(),
+            pty_restoring: None,
             pty_enabled: false,
             codehub_repos: Vec::new(),
         }
@@ -1734,10 +1752,11 @@ impl App {
     /// processing). Processes:
     ///  - **SessionStart**: look up the issue by `cwd` (via the
     ///    `interactive_sessions` map) and store `session_id` via
-    ///    `store.set_issue_claude_session_id`. This is the F1 fix: only when
+    ///    `store.set_conversation_session_id` (writes the `claude_conversation`
+    ///    row, not the retired `issue` columns). This is the F1 fix: only when
     ///    the hook fires (session really established) is the session_id
-    ///    stored — an empty session_id on the issue means the first spawn
-    ///    failed, and the next ▶ run falls back to `build_startup_plan`.
+    ///    stored — an empty session_id means the first spawn failed, and the
+    ///    next ▶ run falls back to `build_startup_plan`.
     ///  - **Stop**: set `pending_stop_check = true` so the next
     ///    `tick_scheduler` fire runs `poll_interactive_inreview` (the Stop
     ///    event is the real-time trigger; the tick's cadence is the natural
@@ -1768,7 +1787,7 @@ impl App {
                     if let Some(&issue_id) = self.state.interactive_sessions.get(&cwd) {
                         if let Err(e) = self
                             .store
-                            .set_issue_claude_session_id(issue_id, &session_id)
+                            .set_conversation_session_id(issue_id, &session_id)
                             .await
                         {
                             self.emit(Event::ConnectorSynced {
@@ -1804,27 +1823,150 @@ impl App {
         Ok(())
     }
 
-    /// V1 Issue2 Phase2b: drain all pending PTY bytes and return them as a
-    /// single concatenated `Vec<u8>`. Called by the kernel's fast timer
-    /// (100ms pty_ticker) — the bytes are sent via a dedicated `watch`
-    /// channel to the UI's xterm.js widget. Returns empty when no PTY
-    /// session is active or no new bytes arrived.
-    pub fn drain_pty_bytes(&mut self) -> Vec<u8> {
-        let chunks: Vec<Vec<u8>> = {
-            let Some(rx) = self.state.pty_bytes_rx.as_mut() else {
-                return Vec::new();
-            };
-            let mut chunks = Vec::new();
-            while let Ok(bytes) = rx.try_recv() {
-                chunks.push(bytes);
+    /// V1 终端会话重构·底座: drain 各会话有界缓冲,返回带 conversation_id
+    /// 的批次。kernel 的 100ms pty_ticker 调用后按 id 路由到对应 xterm。
+    /// 重启恢复:若正在「恢复中」的会话已收到非空字节 → 清 pty_restoring
+    /// (PTY 就绪,「恢复中…」消失)。
+    pub fn drain_pty_events(&mut self) -> Vec<(ConversationId, Vec<u8>)> {
+        let batches = self.state.terminal_manager.drain_events();
+        if let Some(rid) = self.state.pty_restoring {
+            if batches.iter().any(|(id, b)| *id == rid && !b.is_empty()) {
+                self.state.pty_restoring = None;
             }
-            chunks
-        };
-        let mut all = Vec::new();
-        for chunk in chunks {
-            all.extend_from_slice(&chunk);
         }
-        all
+        batches
+    }
+
+    /// 点卡 resume 是否仍在「恢复中」(重建 worktree / spawn / 等首包)。
+    pub fn pty_restoring(&self) -> Option<ConversationId> {
+        self.state.pty_restoring
+    }
+
+    /// 是否有活着的 PTY 连接(UI `pty_active`)。
+    pub fn pty_active(&self) -> bool {
+        self.state.terminal_manager.has_live()
+    }
+
+    /// 焦点会话;无焦点时回落任一活连接。
+    pub fn focused_pty_conversation(&self) -> Option<ConversationId> {
+        self.state
+            .focused_conversation
+            .filter(|id| self.state.terminal_manager.is_live(*id))
+            .or_else(|| self.state.terminal_manager.live_ids().first().copied())
+    }
+
+    pub fn focused_pty_issue(&self) -> Option<IssueId> {
+        let cid = self.focused_pty_conversation()?;
+        self.state
+            .terminal_manager
+            .issue_id(cid)
+            .or(self.state.focused_issue)
+    }
+
+    pub fn live_pty_ids(&self) -> Vec<ConversationId> {
+        self.state.terminal_manager.live_ids()
+    }
+
+    async fn focus_conversation(&mut self, conversation_id: ConversationId, issue_id: IssueId) {
+        self.state.focused_conversation = Some(conversation_id);
+        self.state.focused_issue = Some(issue_id);
+        // Bug2(V1-TermFocus): 终端→左——回写 active_session 到该 issue 对应的
+        // 阶段记录(按 run_sess_title `#N 标题` 反查 SessionId)。左侧高亮跟着
+        // 终端焦点走。找不到(纯阶段记录不挂 issue)则静默跳过。
+        self.writeback_active_session(issue_id).await;
+    }
+
+    /// Bug2:按 issue 的 run_sess_title(`#N 标题`)在 store 的 session 表里
+    /// 反查 SessionId,回写 `active_session`。这样左侧 session 卡高亮跟着
+    /// 嵌终端焦点走(终端切焦点 → 左侧高亮同步)。用 `self.state.issues`
+    /// 拿 number+title(内存,无需额外查库),再查 session(一次 list_sessions)。
+    async fn writeback_active_session(&mut self, issue_id: IssueId) {
+        let (p, title) = match self.state.issues.iter().find(|i| i.id == issue_id) {
+            Some(issue) => (
+                issue.project_id,
+                format!("#{} {}", issue.number, issue.title),
+            ),
+            None => return,
+        };
+        if let Ok(sessions) = self.store.list_sessions(p).await {
+            if let Some(s) = sessions.into_iter().find(|s| s.title == title) {
+                self.state.active_session = Some(s.id);
+            }
+        }
+    }
+
+    /// Bug2(V1-TermFocus): 左→终端——解析 session→issue。session 的 title 是
+    /// `#N 标题`(见 op.rs `run_sess_title = format!("#{} {}", i.number,
+    /// i.title)`),按 number+title 在 `self.state.issues` 里匹配 issue。
+    /// 匹配到 + 活 PTY → `focus_conversation`;匹配到 + 无活 PTY 但有
+    /// `claude_session_id` → `run_issue_now`(与 `OpenIssueDetail` 一致:
+    /// Done/InReview 进 `open_conversation`、InProgress 进 resume);匹配不到
+    /// (纯 stage-playbook 跑的阶段记录,不挂 issue)→ 保持原行为。
+    async fn sync_session_to_terminal(&mut self, sid: SessionId) -> Result<(), AppError> {
+        let p = self.active()?;
+        let title = self
+            .store
+            .list_sessions(p)
+            .await?
+            .into_iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.title);
+        let Some(title) = title else {
+            return Ok(());
+        };
+        let issue_id = self
+            .state
+            .issues
+            .iter()
+            .find(|i| format!("#{} {}", i.number, i.title) == title)
+            .map(|i| i.id);
+        let Some(issue_id) = issue_id else {
+            return Ok(());
+        };
+        if let Some(c) = self.store.get_conversation_by_issue(issue_id).await? {
+            if self.state.terminal_manager.is_live(c.id) {
+                self.focus_conversation(c.id, issue_id).await;
+            } else if !c.claude_session_id.is_empty() {
+                self.run_issue_now(SessionId::new(), issue_id).await?;
+            }
+        }
+        Ok(())
+    }
+
+    fn clear_focus_if(&mut self, conversation_id: ConversationId) {
+        if self.state.focused_conversation != Some(conversation_id) {
+            return;
+        }
+        let next = self
+            .state
+            .terminal_manager
+            .live_ids()
+            .into_iter()
+            .find(|id| *id != conversation_id);
+        self.state.focused_conversation = next;
+        self.state.focused_issue = next.and_then(|cid| self.state.terminal_manager.issue_id(cid));
+    }
+
+    fn clear_restoring_if(&mut self, conversation_id: ConversationId) {
+        if self.state.pty_restoring == Some(conversation_id) {
+            self.state.pty_restoring = None;
+        }
+    }
+
+    /// 迁移留空的 workspace_path/branch_name:resume 成功后回填(只填空列)。
+    async fn backfill_conversation_workspace_if_empty(
+        &self,
+        issue_id: IssueId,
+        workspace_path: &str,
+        branch_name: &str,
+    ) -> Result<(), AppError> {
+        if workspace_path.is_empty() && branch_name.is_empty() {
+            return Ok(());
+        }
+        self.store
+            .update_conversation_workspace_if_empty(issue_id, workspace_path, branch_name)
+            .await?;
+        Ok(())
     }
 
     /// V1 Issue2 Phase2b: drop every `cwd → issue` mapping pointing at `id`.
@@ -1837,7 +1979,7 @@ impl App {
     }
 
     /// V1 Issue2 Phase2a: poll codehub/github for open MRs on interactive
-    /// issues that are InProgress + `interactive_started` + `pr_number == 0`.
+    /// issues that are InProgress + have a claude_conversation row (interactive) + `pr_number == 0`.
     /// When an open MR is found (读回为证: buddy checks the remote itself,
     /// not agent self-report), it backfills `pr_number` and transitions to
     /// InReview (D3: 评审中由存在开放 PR 派生). Never reaches Done — that
@@ -1870,18 +2012,21 @@ impl App {
                     continue;
                 }
             };
-            // Interactive issues in InProgress + interactive_started + no PR.
+            // V1 终端会话重构(阶段1): interactive_started 改读 claude_conversation
+            // 行存在(一次查全项目 issue_ids,避免 N+1)。
+            let conv_ids: std::collections::HashSet<IssueId> = self
+                .store
+                .list_conversation_issue_ids(proj.id)
+                .await?
+                .into_iter()
+                .collect();
+            // Interactive issues in InProgress + 有会话行 + no PR.
             let candidates: Vec<_> = self
                 .store
                 .list_issues(proj.id, None, Some(IssueStatus::InProgress))
                 .await?
                 .into_iter()
-                .filter(|i| {
-                    i.interactive_started
-                        && i.pr_number == 0
-                        && i.github_number != 0
-                        && Self::is_interactive_skill(&i.standard_skill)
-                })
+                .filter(|i| conv_ids.contains(&i.id) && i.pr_number == 0 && i.github_number != 0)
                 .collect();
             for issue in candidates {
                 let branch = bw_engine::github::issue_branch(issue.github_number);
@@ -1933,6 +2078,11 @@ impl App {
                     continue;
                 }
                 self.store.set_issue_pr_number(issue.id, pr).await?;
+                // Bug1(V1-TermDemote):issue 离开 InProgress → InReview。若交付
+                // PTY 仍活(claude 提完 MR 往往不退出),降级为咨询 → 放
+                // active_run 锁,同项目别的 issue 可跑。PTY + worktree 留着
+                // (不杀、不清)。PTY 已死则 no-op,让待处理 settle 正常 finalize。
+                let _ = self.demote_delivery_to_consultation(issue.id).await;
                 self.emit(Event::ConnectorSynced {
                     name: format!("#{} · InReview", issue.number),
                     ok: true,
@@ -3965,12 +4115,6 @@ impl App {
             .get_project(project)
             .await?
             .ok_or(AppError::NotFound)?;
-        let remote_path = proj.remote_path.trim().to_string();
-        let remote = bw_engine::remote::Remote::for_project(
-            &proj.provider,
-            &proj.remote_host,
-            &remote_path,
-        )?;
         let sigs = self.store.persisted_signals(project).await?;
         let today = now().date();
         let mut summary = MetricCollectSummary::default();
@@ -4138,81 +4282,11 @@ impl App {
                 continue;
             }
             match m.collect_kind.as_str() {
-                "github" => {
-                    if remote_path.is_empty() {
-                        // No repo to pull from — honest, not a silent success.
-                        summary.no_remote_github = true;
-                        continue;
-                    }
-                    match remote.collect_count(&m.collect_query, today).await {
-                        Ok(count) => {
-                            let value = count.to_string();
-                            // window-guard(code-review Standards #5 修正,取代
-                            // 纯 change-guard):值变了当然记;值没变但本采集
-                            // 窗口(UTC 日)还没有点,也要记——定时采集的每次
-                            // 测量都是真实观测,平台期的新鲜确认不落点的话,
-                            // 过期降级会把「今天测过没变」误判成「久无数据」
-                            // 压绿为黄。同窗口同值才跳过(防手动连点刷屏)。
-                            let last_ts = self.store.latest_observation_ts(m.id).await?;
-                            let same_window = last_ts.is_some_and(|t| {
-                                OffsetDateTime::from_unix_timestamp(t)
-                                    .map(|d| d.date() == today)
-                                    .unwrap_or(false)
-                            });
-                            if m.value_raw == value && same_window {
-                                summary.unchanged += 1;
-                            } else {
-                                self.store
-                                    .append_observation(m.id, SourceKind::Github, &value, now())
-                                    .await?;
-                                summary.changed += 1;
-                                touched = true;
-                            }
-                        }
-                        Err(e) => {
-                            summary.failed += 1;
-                            if summary.first_error.is_none() {
-                                summary.first_error = Some(format!("{}:{e}", m.name));
-                            }
-                        }
-                    }
-                }
-                "codehub" => {
-                    // P5:codehub 采集,镜像 github arm。Remote::Codehub 由 remote
-                    // 变量(project 的 provider 派生)分发到 codehub::collect_count
-                    // (issue|mr list --jq length)。查询口径见 codehub::collect_count
-                    // (issues:<state> / mrs:<state>)。
-                    if remote_path.is_empty() {
-                        summary.no_remote_codehub = true;
-                        continue;
-                    }
-                    match remote.collect_count(&m.collect_query, today).await {
-                        Ok(count) => {
-                            let value = count.to_string();
-                            let last_ts = self.store.latest_observation_ts(m.id).await?;
-                            let same_window = last_ts.is_some_and(|t| {
-                                OffsetDateTime::from_unix_timestamp(t)
-                                    .map(|d| d.date() == today)
-                                    .unwrap_or(false)
-                            });
-                            if m.value_raw == value && same_window {
-                                summary.unchanged += 1;
-                            } else {
-                                self.store
-                                    .append_observation(m.id, SourceKind::Codehub, &value, now())
-                                    .await?;
-                                summary.changed += 1;
-                                touched = true;
-                            }
-                        }
-                        Err(e) => {
-                            summary.failed += 1;
-                            if summary.first_error.is_none() {
-                                summary.first_error = Some(format!("{}:{e}", m.name));
-                            }
-                        }
-                    }
-                }
+                // W3-2 第一步:github/codehub/bw/connector legacy kind 一律
+                // deferred(不再直采,强走 script connector)。collect_label
+                // 已标「legacy·迁script」;第二步(改枚举 + DB 字符串迁移)
+                // 放 V1+。北极星(W3-1 后是 script/manual 行)走下面真臂。
+                "github" | "codehub" | "bw" | "connector" => summary.deferred += 1,
                 "script" => {
                     // plan18-③:从预跑的 script connector 输出 JSON 按
                     // collect_query 字段路径取值。没配 script connector /
@@ -4262,8 +4336,6 @@ impl App {
                         }
                     }
                 }
-                // v1 未接:bw / connector 如实留白——不采集、不写零值。
-                "bw" | "connector" => summary.deferred += 1,
                 // manual(或空 collect_kind = 界面手建)不归采集器管。
                 _ => {}
             }
@@ -4396,8 +4468,8 @@ impl App {
                     .await?;
                 let res = self.collect_project_metrics(pid).await;
                 let (ok, status) = match &res {
-                    Ok(s) => (s.failed == 0 && !s.no_remote_github, CronStatus::Normal),
-                    Err(_) => (false, CronStatus::Failed),
+                    Ok(s) if s.is_success() => (true, CronStatus::Normal),
+                    Ok(_) | Err(_) => (false, CronStatus::Failed),
                 };
                 self.store
                     .record_cron_run(c.id, status, run_at_label(now()))
@@ -4621,7 +4693,7 @@ impl App {
 
         // V1 Issue2 Phase2a: InReview detection poller (throttled backstop).
         // Checks codehub/github for open MRs on interactive issues (InProgress
-        // + interactive_started + pr_number == 0). Not a cron task — a
+        // + interactive (has conversation) + pr_number == 0). Not a cron task — a
         // separate periodic check that rides `tick_scheduler`'s cadence
         // but throttles to once per 5 min so it doesn't hit the remote
         // every tick. Never auto-Done (铁律) — only backfills pr_number +
@@ -4798,16 +4870,6 @@ impl App {
         Ok(report)
     }
 
-    /// V1 Issue2 Phase1: whether a `standard_skill` slug routes to the
-    /// interactive path (one-shot TUI agent session, no phase loop).
-    /// These two skills are the creation-flow trio's "找指标" + "绑数据"
-    /// — they need an interactive claude session (the user watches the
-    /// terminal, the agent reads the project workspace, produces
-    /// `.bw/metrics.toml` / `docs/metrics-rationale.md`).
-    fn is_interactive_skill(slug: &str) -> bool {
-        matches!(slug, "north-star-discovery" | "metrics-binding")
-    }
-
     /// plan/17 S1+S3: entry guard + lifecycle for the same-project serial
     /// run lock (`AppState::active_run`). Backgrounded path (`settle_tx`
     /// wired — the desktop kernel): `run_issue_backgrounded` sets
@@ -4819,9 +4881,38 @@ impl App {
     /// (`Command::RunIssue` and C8 「立即开工」) route here, so the lock
     /// applies uniformly.
     async fn run_issue_now(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
-        // Fail fast on a same-project in-flight run before touching anything.
         let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
         let p = issue.project_id;
+
+        // Done/InReview 有会话行 → 咨询 resume(不占 active_run)。
+        // V1 收口:不再限 is_interactive_skill —— 任何有 claude_conversation
+        // 行的 Done/InReview issue 都能续聊(与 UI consultable_issues 对齐)。
+        let conv = self.store.get_conversation_by_issue(id).await?;
+        let is_resume = conv
+            .as_ref()
+            .map(|c| !c.claude_session_id.is_empty())
+            .unwrap_or(false);
+        if is_resume && matches!(issue.status, IssueStatus::Done | IssueStatus::InReview) {
+            return self.open_conversation(id).await;
+        }
+        // 本件交付已在跑 → 只切焦点。
+        if let Some(ar) = &self.state.active_run {
+            if ar.issue.id == id {
+                if let Some(c) = conv {
+                    self.focus_conversation(c.id, id).await;
+                }
+                return Ok(());
+            }
+        }
+        // 咨询 PTY 已活 → 只切焦点。
+        if let Some(c) = &conv {
+            if self.state.terminal_manager.is_live(c.id) {
+                self.focus_conversation(c.id, id).await;
+                return Ok(());
+            }
+        }
+
+        // Fail fast on a same-project in-flight run before touching anything.
         if let Some(ar) = &self.state.active_run {
             if ar.project == p {
                 return Err(AppError::Invalid(
@@ -4829,20 +4920,11 @@ impl App {
                 ));
             }
         }
-        // V1 Issue2 Phase1: interactive skills (north-star-discovery,
-        // metrics-binding) route to the interactive path — a one-shot TUI
-        // agent session (claude CLI in a terminal, skill body pre-loaded,
-        // bridge system prompt for project context + buddy 契约). No phase
-        // loop, no adversarial review — one skill = one session (§2.3).
-        // Other issues use the existing one-shot / phase-loop path, zero
-        // disturbance.
-        if Self::is_interactive_skill(&issue.standard_skill) {
-            self.run_issue_interactive(session, id).await
-        } else if self.settle_tx.is_some() {
-            self.run_issue_backgrounded(session, id).await
-        } else {
-            self.run_issue_body(session, id).await
-        }
+        // V1 收口:所有 issue ▶跑 走交互式嵌入终端(buddy 脚本调度的阶段循环
+        // 路径退场;多 agent 转由技能方法论 prompt 驱动,claude 在会话内用
+        // SubAgent 调度)。非 issue 命令(RunStagePlaybook/hub workflow/cron)
+        // 仍用阶段循环机器。
+        self.run_issue_interactive(session, id).await
     }
 
     /// plan/17 S3: the shared 起手 prefix of an issue-run — get + validate
@@ -4855,7 +4937,7 @@ impl App {
     /// spec / worktree / guard setup is never duplicated.
     ///
     /// V1 Issue2 Phase2a: `resume` controls the interactive resume path.
-    /// When `true` (interactive issue with `interactive_started = true`
+    /// When `true` (interactive issue with an existing claude_conversation row
     /// re-clicked ▶跑): skip the status check (Done/InReview can resume —
     /// the session persists, no status change happens) and skip the
     /// InProgress transition (the issue stays in its current state). The
@@ -4919,15 +5001,13 @@ impl App {
             workspace_hint,
         };
         let mut spec = stage_workflow_with_playbook(issue.stage, &ctx);
-        let issue_brief = format!(
-            "\n\n## 本件活(Issue #{})\n标题:{}\n描述:{}\n请用本阶段方法论完成它,产出落为工作区真实文件。\n",
-            issue.number, issue.title, issue.desc
-        );
         // C8 · plan/13 D8: 标配 Issue 携带的稳定 Skill 关联(按 C9+C10 种下
         // 的 slug)。理论上仍可能查不到(例如 seed 尚未跑过的极早期状态),
-        // 那种情况如实跳过、零报错,不是本注入路径的正常状态。
-        let (standard_block, standard_refs) =
-            self.standard_skill_block(p, &issue.standard_skill).await?;
+        // 那种情况如实跳过、零报错,不是本注入路径的正常状态。V1 收口:issue
+        // 全转终端后 spec.prompt/phase_prompts 不再服务 issue(交互式用 bridge
+        // 系统提示词 + IssueRunPrep.distilled_block/catalog_block);这里只取
+        // `standard_refs` 给 `spec.skills` 记 uses,格式化块不再拼进 spec。
+        let (_, standard_refs) = self.standard_skill_block(p, &issue.standard_skill).await?;
         // Distilled (compounded) skills from this project, same-stage
         // preferred, capped at 3. Exclude `issue.standard_skill` by name —
         // since P3 a distilled skill can itself be picked as the standard
@@ -4989,20 +5069,7 @@ impl App {
             String::new()
         };
         spec.name = format!("#{} {}", issue.number, issue.title);
-        let extra = format!("{issue_brief}{standard_block}{distilled_block}{catalog_block}");
-        // 既有缺口(C8 顺带修复,非本票新增行为):`stage_workflow_with_playbook`
-        // 给每个 phase 都填了非空的 `phase_prompts[idx]`,而
-        // `Engine::run_workflow` 选 phase 的真实 prompt 时——`phase_prompts
-        // [idx]` 非空就直接用它,完全不读 `spec.prompt`(见
-        // bw-engine/src/lib.rs `run_workflow`)。之前这里只改了
-        // `spec.prompt`,对 playbook 跑法是死代码:issue 简介/复利技能从未
-        // 真正到达执行器。把 `extra` 同时贴进每个 `phase_prompts` 项才是真
-        // 注入;`spec.prompt` 仍然一并更新,兜底任何理论上仍为空的 phase。
-        spec.prompt = format!("{}{}", spec.prompt, extra);
-        for pp in spec.phase_prompts.iter_mut() {
-            pp.push_str(&extra);
-        }
-        // Put the injected skills on spec.skills so run_workflow_inner's
+        // Put the injected skills on spec.skills so finalize_run_interactive's
         // usage accounting bumps each one's `uses` — the compounding
         // loop closes here (a run that rides a distilled/standard skill →
         // uses+1, exactly once per ref present).
@@ -5076,344 +5143,67 @@ impl App {
             proj,
             spec,
             issue_ws,
-            pr_eligible,
             guard,
+            distilled_block,
+            catalog_block,
         })
     }
 
-    /// plan/17 S3: the shared tail of an issue-run — `create_mr` /
-    /// `transition InReview` / `refresh_issues` / emit, branching on the run
-    /// outcome. `Ok(Completed)` → InReview (iff a PR opened or the issue
-    /// isn't PR-eligible); `Ok(BlockedAtCap)` → park Blocked; `Err` → stay
-    /// InProgress (never auto-Done, 铁律). The guard is taken BY VALUE so it
-    /// outlives the tail's `create_mr` (which `stage_commit_push`es the
-    /// worktree) and drops at the end — removing the worktree only AFTER the
-    /// branch is pushed to `origin` for review/merge.
-    async fn issue_run_tail(
-        &mut self,
-        issue: Issue,
-        proj: ProjectRow,
-        issue_ws: Option<PathBuf>,
-        pr_eligible: bool,
-        run: Result<RunOutcome, AppError>,
-        _guard: bw_engine::workspace::IssueWorktreeGuard,
-    ) -> Result<(), AppError> {
-        let id = issue.id;
-        let on_issue_branch = issue_ws.is_some();
-        match run {
-            // A completed run only reaches 评审中 — never 完成. Done stays an
-            // explicit human act (merge / TransitionIssue,铁律).
-            Ok(RunOutcome::Completed) => {
-                // C5: on the issue branch → try to open the PR (提 PR).
-                // Success stores the PR number and lets the Issue reach
-                // InReview (which now *derives from an open PR*, D3).
-                // Failure fires an honest toast and leaves the Issue at
-                // InProgress — retryable via RunIssue, never faked into
-                // review with no PR behind it.
-                let opened_pr = if on_issue_branch {
-                    // Bug③ (2026-07-30): route PR/MR creation through the
-                    // Remote factory so codehub projects open a codehub MR
-                    // (`codehub-cli mr create`) instead of crashing `gh pr
-                    // create` (gh doesn't know codehub → issue stuck
-                    // InProgress, no InReview, SyncMetricsFile never ran).
-                    // Github projects delegate to `github::open_pr` unchanged.
-                    let remote = bw_engine::remote::Remote::for_project(
-                        &proj.provider,
-                        &proj.remote_host,
-                        &proj.remote_path,
-                    );
-                    let res: Result<bw_engine::github::PrOpened, String> = match remote {
-                        Ok(r) => r
-                            .create_mr(
-                                // plan/17 S2: open the MR from the issue's
-                                // isolated worktree (guaranteed Some by
-                                // `on_issue_branch`), not the shared main
-                                // workspace — `stage_commit_push` inside
-                                // commits the worktree's edits to `bw/issue-N`.
-                                issue_ws.as_deref().unwrap_or_else(|| {
-                                    std::path::Path::new(proj.workspace_path.trim())
-                                }),
-                                issue.github_number,
-                                &issue.title,
-                            )
-                            .await
-                            .map_err(|e| e.to_string()),
-                        Err(e) => Err(e.to_string()),
-                    };
-                    match res {
-                        Ok(bw_engine::github::PrOpened::Created(pr)) => {
-                            self.store.set_issue_pr_number(id, pr).await?;
-                            self.emit(Event::ConnectorSynced {
-                                name: format!("#{} · PR", issue.number),
-                                ok: true,
-                                detail: format!(
-                                    "已提 PR/MR #{pr}(关联 Issue #{}),等待人工 merge 验收",
-                                    issue.github_number
-                                ),
-                            });
-                            true
-                        }
-                        // 7A(真实践行暴露的缺口): 队友自己在 run 里跑了
-                        // `gh pr create`(允许,禁的只有 `gh pr merge`),BW
-                        // 再提一次时撞见"已存在"——不是失败,是提 PR 幂等。
-                        // 认领到的号是 `open_pr` 独立读回的真实号,诚实告知
-                        // 用户"这是认领来的",不混同成 BW 自己提的。
-                        Ok(bw_engine::github::PrOpened::Adopted(pr)) => {
-                            self.store.set_issue_pr_number(id, pr).await?;
-                            self.emit(Event::ConnectorSynced {
-                                name: format!("#{} · PR", issue.number),
-                                ok: true,
-                                detail: format!(
-                                    "已认领队友提的 PR/MR #{pr}(关联 Issue #{}),等待人工 merge 验收",
-                                    issue.github_number
-                                ),
-                            });
-                            true
-                        }
-                        Err(e) => {
-                            self.emit(Event::ConnectorSynced {
-                                name: format!("#{} · PR", issue.number),
-                                ok: false,
-                                detail: format!("提 PR/MR 失败,活留在进行中可重试:{e}"),
-                            });
-                            false
-                        }
-                    }
-                } else {
-                    false
-                };
-                // InReview iff there's really something to review: an
-                // open PR (pr issues), or — for no-repo/unmapped issues
-                // — the run succeeding (今天的意思,未变). A
-                // pr_eligible issue whose PR failed stays InProgress.
-                if !pr_eligible || opened_pr {
-                    self.store
-                        .transition_issue(id, IssueStatus::InReview)
-                        .await?;
-                }
-                self.refresh_issues().await?;
-                self.emit(Event::IssuesChanged);
-                Ok(())
-            }
-            Ok(RunOutcome::BlockedAtCap { reason }) => {
-                // T9 (plan/12 §4,合流移植): the adversarial loop hit its cap
-                // without passing. Never auto-Done, never auto-Failed: park the
-                // work in Blocked via the SAME guarded path `BlockIssue` uses —
-                // `can_transition_to` is the single source of truth. Re-read
-                // the current status (the run left it InProgress);
-                // InProgress→Blocked is a legal edge. 不提 PR:没通过评审门的
-                // 产出不该进验收队列。
-                let cur = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
-                if cur.status.can_transition_to(IssueStatus::Blocked) {
-                    self.store.block_issue(id, &reason).await?;
-                }
-                self.emit(Event::WorkflowFailed(format!(
-                    "Issue #{} {}",
-                    issue.number, reason
-                )));
-                self.refresh_issues().await?;
-                self.emit(Event::IssuesChanged);
-                Ok(())
-            }
-            Err(e) => {
-                // Honest failure: the issue stays InProgress (not faked
-                // to InReview/Done/Blocked). Done remains a human
-                // TransitionIssue; a retry re-runs from InProgress.
-                self.emit(Event::WorkflowFailed(format!(
-                    "Issue #{} 运行失败:{}",
-                    issue.number, e
-                )));
-                self.refresh_issues().await?;
-                self.emit(Event::IssuesChanged);
-                Err(e)
-            }
-        }
-    }
-
-    /// A3: INLINE issue-run path (examples / headless drivers — `settle_tx`
-    /// = None). `prepare_issue_run` → `run_workflow_inner` (起手+loop+
-    /// finalize, awaited inline) → `issue_run_tail`. Byte-for-byte the
-    /// pre-S3 behavior: the whole run completes before `dispatch(RunIssue)`
-    /// returns, so every example that awaits a `RunIssue` dispatch still
-    /// reads back a settled Issue. Extracted out of `Command::RunIssue`'s
-    /// match arm so `Command::CompleteCreation`'s「问一句就跑」(C8) can call
-    /// the exact same real path, not a parallel shortcut. See
-    /// `Command::RunIssue`'s doc for the state-machine contract (InProgress
-    /// at start, InReview on success via the PR-derive rule, never auto-Done).
-    async fn run_issue_body(&mut self, session: SessionId, id: IssueId) -> Result<(), AppError> {
-        let prep = self.prepare_issue_run(id, false).await?;
-        let IssueRunPrep {
-            issue,
-            proj,
-            spec,
-            issue_ws,
-            pr_eligible,
-            guard,
-        } = prep;
-        let p = issue.project_id;
-        let run = self
-            .run_workflow_inner(
-                p,
-                session,
-                spec,
-                RunTrigger::Manual,
-                None,
-                Some(id),
-                false,
-                issue_ws.as_deref(),
-            )
-            .await;
-        self.issue_run_tail(issue, proj, issue_ws, pr_eligible, run, guard)
-            .await
-    }
-
-    /// plan/17 S3: the BACKGROUNDED issue-run path (`settle_tx` wired — the
-    /// desktop kernel). Same 起手 prefix (`prepare_issue_run`) then
-    /// `prepare_run` (起手 of `run_workflow_inner`, `&self` only) on the
-    /// main thread — so InProgress + RunStarted emit + worktree provisioning
-    /// all land before dispatch returns and the UI re-renders. Then
-    /// `tokio::spawn` the long round loop (it only ever touched `self.store`
-    /// / `self.emit` / `engine` — shared borrows — so it needs NO `&mut
-    /// App`, the whole point of the freeze fix). The spawn reports back via
-    /// the settle mpsc; `run_issue_settle` (kernel settle arm) drives
-    /// `finalize_run` + tail under `&mut self`. The same-project serial lock
-    /// becomes real here — `active_run` stays `Some` across dispatch returns.
-    async fn run_issue_backgrounded(
-        &mut self,
-        session: SessionId,
-        id: IssueId,
-    ) -> Result<(), AppError> {
-        let prep = self.prepare_issue_run(id, false).await?;
-        let p = prep.issue.project_id;
-        let IssueRunPrep {
-            issue,
-            proj,
-            spec,
-            issue_ws,
-            pr_eligible,
-            guard,
-        } = prep;
-        let prepared = self
-            .prepare_run(
-                p,
-                session,
-                spec,
-                RunTrigger::Manual,
-                None,
-                Some(id),
-                false,
-                issue_ws.as_deref(),
-            )
-            .await?;
-        // Destructure everything `run_round_loop` + `finalize_run` need out
-        // of `prepared`. The engine moves into the spawn (owned); `spec` is
-        // cloned for the spawn because `finalize_run` (main thread, after
-        // settle) also needs `spec.agents` / `spec.skills` / `spec.stage_ref`.
-        let PreparedRun {
-            engine,
-            spec,
-            ctx,
-            params_json,
-            eval_idx,
-            num_phases,
-            max_iter,
-            range_end,
-            heads_workspace,
-            head_before,
-            proj: prepared_proj,
-            p: _prepared_p,
-            session: _prepared_session,
-            issue_id: prepared_issue_id,
-            trigger,
-            cron_task_id,
-        } = prepared;
-        let spec_spawn = spec.clone();
-        let params_json_spawn = params_json.clone();
-        let store = self.store.clone();
-        let live = self.events.clone();
-        let settle_tx = self
-            .settle_tx
-            .clone()
-            .expect("run_issue_backgrounded only called when settle_tx is Some");
-        let handle = tokio::spawn(async move {
-            let outcome = Self::run_round_loop(
-                store,
-                live,
-                &engine,
-                &spec_spawn,
-                &ctx,
-                session,
-                p,
-                prepared_issue_id,
-                trigger,
-                cron_task_id,
-                &params_json_spawn,
-                eval_idx,
-                num_phases,
-                max_iter,
-                range_end,
-            )
-            .await;
-            let _ = settle_tx.send(SettleReq {
-                project: p,
-                issue: id,
-                outcome: SettleOutcome::PhaseLoop(outcome),
-            });
-        });
-        self.state.active_run = Some(ActiveRun {
-            project: p,
-            issue,
-            handle,
-            guard,
-            finalize: FinalizeCtx {
-                spec,
-                heads_workspace,
-                head_before,
-                proj: prepared_proj,
-                p,
-                issue_id: prepared_issue_id,
-            },
-            proj,
-            issue_ws,
-            pr_eligible,
-            is_resume: false,
-        });
-        Ok(())
-    }
-
-    /// V1 Issue2 Phase1: the INTERACTIVE issue-run path (one-shot TUI agent
-    /// session, no phase loop). Same 起手 prefix (`prepare_issue_run`) as the
+    /// V1 收口:the INTERACTIVE issue-run path (one-shot TUI agent session,
+    /// no phase loop). Same 起手 prefix (`prepare_issue_run`) as the old
     /// phase-loop path, then builds a [`LaunchPlan`] (skill body from the
     /// Skill Hub + bridge system prompt from [`PlaybookCtx`]) and either:
     ///  - **Backgrounded** (`settle_tx` wired — desktop kernel): spawn a
-    ///    task that calls [`InteractiveExecutor::run_skill`], report back
-    ///    via `settle_tx`. The kernel's settle arm drives
-    ///    `finalize_run_interactive` + `issue_run_tail`.
+    ///    task that calls [`InteractiveExecutor::run_skill_pty`] (PTY spawn +
+    ///    byte streaming), report back via `settle_tx`. The kernel's settle
+    ///    arm drives `finalize_run_interactive(_resume)` + PTY close + guard
+    ///    drop (no `issue_run_tail` — MR 由 agent 自提、InReview 由 poll 检测;
+    ///    无 MR 的活诚实停在 InProgress,铁律:Done 永不自动)。
     ///  - **Inline** (`settle_tx` = None — examples / headless drivers):
-    ///    await `run_skill` inline, then `finalize_run_interactive` +
-    ///    `issue_run_tail` synchronously.
+    ///    await `run_skill` inline, then `finalize_run_interactive`
+    ///    synchronously.
     ///
     /// A project with no real `workspace_path` runs on
     /// [`MockInteractiveExecutor`] (self-labeled 【mock】 + placeholder
     /// `.bw/metrics.toml`); a configured one runs on
-    /// [`InteractiveCliExecutor`] (spawns a system terminal running the
-    /// `claude` CLI). **one-shot ClaudeCliExecutor 路径零扰动** — other
-    /// issues still use `run_issue_backgrounded` / `run_issue_body`.
+    /// [`InteractiveCliExecutor`] (spawns a PTY running the
+    /// `claude` CLI). V1 收口:所有 issue ▶跑 都走本函数(issue 脚本调度
+    /// 路径 `run_issue_body`/`run_issue_backgrounded`/`issue_run_tail` 已删,
+    /// 不为向后兼容留旧路径)。
     async fn run_issue_interactive(
         &mut self,
         _session: SessionId,
         id: IssueId,
     ) -> Result<(), AppError> {
-        // V1 Issue2 Phase2b: first-run vs resume — decided by claude_session_id
-        // (F1 fix). `interactive_started` is set before spawn (marks an attempt);
-        // `claude_session_id` is set by the hook listener on SessionStart (marks
-        // the session was actually established). If session_id is empty, the first
-        // spawn either failed or the hook hasn't fired → use build_startup_plan
-        // (re-inject skill, don't get stuck in a skill-less session). If
-        // session_id is non-empty → resume with `--resume <id>` (precise session).
-        let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
-        let is_resume = !issue.claude_session_id.is_empty();
-        let prep = self.prepare_issue_run(id, is_resume).await?;
+        // V1 终端会话重构(阶段1): first-run vs resume — decided by the
+        // claude_conversation 行(按 issue_id 查,非空 claude_session_id =
+        // resume)。会话身份在 claude_conversation 表(不在 issue 行):首次
+        // spawn 前 ensure_conversation 建行(留空 claude_session_id + 填
+        // workspace_path/branch);hook SessionStart 回传填 claude_session_id。
+        // 空 claude_session_id = 首次 spawn 没捕获到(失败或 hook 未 fire)→
+        // fallback build_startup_plan(重灌 skill,F1)。非空 → `--resume <id>`
+        // (precise session)。
+        let conv = self.store.get_conversation_by_issue(id).await?;
+        let is_resume = conv
+            .as_ref()
+            .map(|c| !c.claude_session_id.is_empty())
+            .unwrap_or(false);
+        // 重启恢复:is_live==false 时走 resume 分支(不误撞锁——上方 run_issue_now
+        // 已确认无同卡活 PTY / 无同卡 active_run)。点卡到首包显示「恢复中…」。
+        if is_resume {
+            if let Some(c) = &conv {
+                self.state.pty_restoring = Some(c.id);
+            }
+        }
+        let prep = match self.prepare_issue_run(id, is_resume).await {
+            Ok(p) => p,
+            Err(e) => {
+                if is_resume {
+                    self.state.pty_restoring = None;
+                }
+                return Err(e);
+            }
+        };
         let p = prep.issue.project_id;
         let issue = prep.issue.clone();
         let standard_skill = prep.issue.standard_skill.clone();
@@ -5422,8 +5212,9 @@ impl App {
             proj,
             spec,
             issue_ws,
-            pr_eligible,
             guard,
+            distilled_block,
+            catalog_block,
         } = prep;
 
         let workspace_cwd = issue_ws
@@ -5435,9 +5226,18 @@ impl App {
             // Resume: no new prompt, no bridge system prompt. The session
             // persists under ~/.claude/projects/<encoded-cwd>/ from the
             // first run; `--resume <session_id>` re-enters the exact session.
-            // session_id was captured by the hook listener (non-empty = is_resume).
-            build_resume_plan(&CLAUDE, Some(&issue.claude_session_id), workspace_cwd)
-                .map_err(|e| AppError::Engine(e.to_string()))?
+            // session_id 来自 claude_conversation 行(hook 回传)。
+            let session_id = conv
+                .as_ref()
+                .map(|c| c.claude_session_id.as_str())
+                .unwrap_or("");
+            match build_resume_plan(&CLAUDE, Some(session_id), workspace_cwd) {
+                Ok(p) => p,
+                Err(e) => {
+                    self.state.pty_restoring = None;
+                    return Err(AppError::Engine(e.to_string()));
+                }
+            }
         } else {
             // First run: fetch skill body + build bridge system prompt.
             let handoff_note = self
@@ -5467,28 +5267,47 @@ impl App {
                 handoff_note,
                 workspace_hint,
             };
-            let skill_body = self.fetch_skill_body(p, &standard_skill).await?;
-            if skill_body.trim().is_empty() {
-                return Err(AppError::Invalid(format!(
-                    "交互式技能 `{standard_skill}` 的正文为空 —— 无法启动交互式会话"
-                )));
-            }
+            let skill_body = match self.fetch_skill_body(p, &standard_skill).await {
+                Ok(b) => b,
+                Err(e) => return Err(e),
+            };
+            // V1 收口:无技能也能跑 —— issue 内容(标题+描述)作位置 prompt
+            // (auto-submit 首句);技能正文 + 蒸馏 + 目录块并入系统提示词,让
+            // 「经验复利」在 issue 交付侧不静默丢失(原来只进 phase-loop 的
+            // spec.prompt)。空技能不报错,降级到 bridge 通用铁律。
             let bridge_prompt = build_bridge_system_prompt(&playbook_ctx, &standard_skill);
-            build_startup_plan(&CLAUDE, &skill_body, &bridge_prompt, workspace_cwd)
+            let mut system_prompt = bridge_prompt;
+            for block in [&skill_body, &distilled_block, &catalog_block] {
+                if !block.trim().is_empty() {
+                    system_prompt.push_str("\n\n");
+                    system_prompt.push_str(block);
+                }
+            }
+            let issue_prompt = if issue.desc.trim().is_empty() {
+                issue.title.clone()
+            } else {
+                format!("{}\n\n{}", issue.title, issue.desc)
+            };
+            build_startup_plan(&CLAUDE, &issue_prompt, &system_prompt, workspace_cwd)
                 .map_err(|e| AppError::Engine(e.to_string()))?
         };
 
-        // Mark interactive_started before spawning (first run only) so a
-        // re-click routes to resume. Set before spawn: even if spawn fails,
-        // the next attempt re-tries as resume (which is safe — `--continue`
-        // on a non-existent session just starts a fresh one in claude's CLI).
-        // V1 Issue2 Phase2b: the resume decision now uses `claude_session_id`
-        // (not `interactive_started`) — see the F1 fix at the top of this
-        // function. `interactive_started` is still set (marks a spawn was
-        // attempted, used by the poller's filter).
-        if !is_resume {
-            self.store.set_issue_interactive_started(id).await?;
-        }
+        // V1 终端会话重构: 首次 spawn 前建会话行;resume 时行已在。两端都要
+        // ConversationId 交给 TerminalManager。
+        let branch_name = if issue.github_number != 0 {
+            format!("bw/issue-{}", issue.github_number)
+        } else {
+            String::new()
+        };
+        let conversation_id = if !is_resume {
+            self.store
+                .ensure_conversation(id, p, workspace_cwd.to_str().unwrap_or(""), &branch_name)
+                .await?
+        } else {
+            conv.as_ref().map(|c| c.id).ok_or_else(|| {
+                AppError::Invalid("resume 需要已有 claude_conversation 行,但库里没有".into())
+            })?
+        };
 
         // V1 Issue2 Phase2b: register the worktree cwd → IssueId mapping so
         // the hook listener can route SessionStart/Stop events (which carry
@@ -5498,15 +5317,6 @@ impl App {
         if !cwd_key.is_empty() {
             self.state.interactive_sessions.insert(cwd_key, id);
         }
-
-        // Capture head_before (for potential evidence; Phase 1 doesn't
-        // record HEAD diff for interactive runs — no workflow_run row).
-        let heads_workspace = workspace_cwd.to_string_lossy().to_string();
-        let head_before = if heads_workspace.is_empty() {
-            None
-        } else {
-            evidence::head_commit(&heads_workspace).await.ok().flatten()
-        };
 
         // Construct the executor: real spawn if workspace configured, mock
         // if not (same honest split as the phase-loop path's engine
@@ -5542,14 +5352,32 @@ impl App {
         if let Some(settle_tx) = self.settle_tx.clone() {
             // ── Backgrounded (desktop kernel) ──
             let handle = if self.state.pty_enabled {
-                // V1 Issue2 Phase2b: PTY mode — create byte-stream channels
-                // and spawn via `run_skill_pty`. The App holds `input_tx`
-                // (for forwarding `Command::TerminalInput`) and `bytes_rx`
-                // (for draining via `drain_pty_bytes` → `pty_tx` watch).
-                let (bytes_tx, bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-                let (input_tx, input_rx) = mpsc::unbounded_channel::<bw_engine::PtyInput>();
-                self.state.pty_input_tx = Some(input_tx);
-                self.state.pty_bytes_rx = Some(bytes_rx);
+                // V1 终端会话重构·底座: 经 TerminalManager.attach 拿带身份的
+                // channels(有界缓冲在 Manager 侧);不再塞全局单槽。
+                let meta = ConversationMeta {
+                    conversation_id,
+                    issue_id: id,
+                    claude_session_id: conv
+                        .as_ref()
+                        .map(|c| c.claude_session_id.clone())
+                        .unwrap_or_default(),
+                    workspace_path: workspace_cwd.to_path_buf(),
+                    branch_name: branch_name.clone(),
+                };
+                let (bytes_tx, input_rx) =
+                    self.state
+                        .terminal_manager
+                        .attach(conversation_id, meta, None);
+                self.focus_conversation(conversation_id, id).await;
+                if is_resume {
+                    let _ = self
+                        .backfill_conversation_workspace_if_empty(
+                            id,
+                            workspace_cwd.to_str().unwrap_or(""),
+                            &branch_name,
+                        )
+                        .await;
+                }
                 tokio::spawn(async move {
                     let result = executor
                         .run_skill_pty(&plan, &ctx, bytes_tx, input_rx)
@@ -5585,15 +5413,10 @@ impl App {
                 guard,
                 finalize: FinalizeCtx {
                     spec,
-                    heads_workspace,
-                    head_before,
                     proj: proj.clone(),
                     p,
                     issue_id: Some(id),
                 },
-                proj,
-                issue_ws,
-                pr_eligible,
                 is_resume,
             });
             Ok(())
@@ -5623,6 +5446,237 @@ impl App {
         }
     }
 
+    /// Done/InReview 咨询:spawn PTY、不占 active_run、退出不 settle。
+    /// 重启后点卡:is_live==false → 重建 worktree + `--resume`(不批量唤醒)。
+    async fn open_conversation(&mut self, id: IssueId) -> Result<(), AppError> {
+        let conv = self
+            .store
+            .get_conversation_by_issue(id)
+            .await?
+            .ok_or_else(|| AppError::Invalid("咨询需要已有会话行".into()))?;
+        if conv.claude_session_id.is_empty() {
+            return Err(AppError::Invalid(
+                "会话尚无 claude_session_id,无法 resume".into(),
+            ));
+        }
+        if self.state.terminal_manager.is_live(conv.id)
+            || self.state.consultation_runs.contains_key(&conv.id)
+        {
+            // 既有咨询会话:活 PTY 直接聚焦;PTY 刚退出、settle 尚未处理间
+            // 也聚焦 —— 不二度 spawn,否则旧 handle 的 ConsultationEnded
+            // settle 会误清新 handle(HashMap insert 覆盖旧 key后,remove
+            // 取到新 cr)。等排队 settle 清掉记录后,下次点卡才走 spawn。
+            self.focus_conversation(conv.id, id).await;
+            self.clear_restoring_if(conv.id);
+            self.emit(Event::IssuesChanged);
+            return Ok(());
+        }
+        if !self.state.pty_enabled {
+            return Err(AppError::Invalid("咨询需要嵌入终端(PTY);当前未启用".into()));
+        }
+        let Some(settle_tx) = self.settle_tx.clone() else {
+            return Err(AppError::Invalid(
+                "咨询只在桌面内核路径可用(需要 settle 通道)".into(),
+            ));
+        };
+
+        // 点卡到 PTY 首包:「恢复中…」(不在 Boot 批量起历史会话)。
+        self.state.pty_restoring = Some(conv.id);
+
+        let prep = match self.prepare_issue_run(id, true).await {
+            Ok(p) => p,
+            Err(e) => {
+                self.state.pty_restoring = None;
+                return Err(e);
+            }
+        };
+        let p = prep.issue.project_id;
+        let github_number = prep.issue.github_number;
+        let workflow_id = prep.spec.id;
+        let IssueRunPrep {
+            issue: _,
+            proj,
+            spec: _,
+            issue_ws,
+            guard,
+            distilled_block: _,
+            catalog_block: _,
+        } = prep;
+        let workspace_cwd = issue_ws
+            .as_deref()
+            .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
+        // 咨询 resume:注入 §6.2 规则;失败清 pty_restoring。
+        let plan = match build_consultation_resume_plan(
+            &CLAUDE,
+            Some(&conv.claude_session_id),
+            workspace_cwd,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                self.state.pty_restoring = None;
+                return Err(AppError::Engine(e.to_string()));
+            }
+        };
+        let branch_name = if github_number != 0 {
+            format!("bw/issue-{github_number}")
+        } else {
+            conv.branch_name.clone()
+        };
+        let conversation_id = conv.id;
+        let cwd_key = workspace_cwd.to_string_lossy().to_string();
+        if !cwd_key.is_empty() {
+            self.state.interactive_sessions.insert(cwd_key, id);
+        }
+
+        let executor: Arc<dyn InteractiveExecutor> = if proj.workspace_path.trim().is_empty() {
+            Arc::new(MockInteractiveExecutor::new())
+        } else {
+            Arc::new(
+                InteractiveCliExecutor::new()
+                    .with_claude_binary(self.state.claude_config.binary.clone()),
+            )
+        };
+        let ctx = RunCtx {
+            project: p,
+            workflow: workflow_id,
+        };
+        let meta = ConversationMeta {
+            conversation_id,
+            issue_id: id,
+            claude_session_id: conv.claude_session_id.clone(),
+            workspace_path: workspace_cwd.to_path_buf(),
+            branch_name: branch_name.clone(),
+        };
+        let (bytes_tx, input_rx) = self
+            .state
+            .terminal_manager
+            .attach(conversation_id, meta, None);
+        self.focus_conversation(conversation_id, id).await;
+        let _ = self
+            .backfill_conversation_workspace_if_empty(
+                id,
+                workspace_cwd.to_str().unwrap_or(""),
+                &branch_name,
+            )
+            .await;
+
+        let handle = tokio::spawn(async move {
+            let _ = executor
+                .run_skill_pty(&plan, &ctx, bytes_tx, input_rx)
+                .await;
+            let _ = settle_tx.send(SettleReq {
+                project: p,
+                issue: id,
+                outcome: SettleOutcome::ConsultationEnded { conversation_id },
+            });
+        });
+        self.state.consultation_runs.insert(
+            conversation_id,
+            ConsultationRun {
+                issue_id: id,
+                handle,
+                guard,
+            },
+        );
+        self.emit(Event::IssuesChanged);
+        Ok(())
+    }
+
+    /// Bug1 修复(V1-TermDemote):issue 离开 InProgress(→InReview 或→Done)
+    /// 且仍持有交付锁 + PTY 还活着时,把这笔交付**降级为咨询**:清掉
+    /// `active_run`(放锁,同项目别的 issue 可跑)、把 PTY handle + worktree
+    /// guard 从 `active_run` 迁到 `consultation_runs`(keyed by
+    /// `conversation_id`),PTY 和 worktree 都留着(跟续聊形态一样)。不杀
+    /// 进程、不清工作区(用户明确要求 worktree 不清)。
+    ///
+    /// 降级时记账:补记一次技能被用过(`record_skill_use` for
+    /// `ar.finalize.spec.skills`,首次 run;resume 不记 settle-once)。合入
+    /// 边(Done)已记 agent 战绩(8845),不重复记 agent;InReview 边此刻
+    /// 未记 agent,agent 留到 Done 边(8845)记——所以降级只记 skill,不记
+    /// agent,agent 永远只在 Done 边记一次。
+    ///
+    /// 降级后 PTY 退出时发的 `Interactive` settle 因 `active_run` 已空走
+    /// `cleanup_demoted_consultation`(下方),不重复 finalize;skill_output
+    /// 忽略(降级时已记账)。
+    ///
+    /// PTY 已死时不降级(restore `active_run`),让待处理的 settle 走正常
+    /// finalize 路径(记 agent+skill、drop guard)。这条 idempotent:active_run
+    /// 不持本 issue / PTY 已死 / 无会话行 → no-op。
+    async fn demote_delivery_to_consultation(&mut self, issue_id: IssueId) -> Result<(), AppError> {
+        let Some(ar) = self.state.active_run.take() else {
+            return Ok(()); // 无在跑交付 —— 无可降级
+        };
+        if ar.issue.id != issue_id {
+            // 别的 issue 的活 —— 还原,别误伤
+            self.state.active_run = Some(ar);
+            return Ok(());
+        }
+        // 只在 PTY 仍活时降级(claude 提完 MR 往往不退出)。PTY 已死 →
+        // restore,让待处理 settle 走正常 finalize(记 agent+skill、drop guard)。
+        let conv = match self.store.get_conversation_by_issue(issue_id).await? {
+            Some(c) => c,
+            None => {
+                self.state.active_run = Some(ar);
+                return Ok(());
+            }
+        };
+        if !self.state.terminal_manager.is_live(conv.id) {
+            self.state.active_run = Some(ar);
+            return Ok(());
+        }
+        // 降级:首次 run 补记 skill uses(resume 不记,settle-once);不记
+        // agent(Done 边 8845 已记 / 会记)。与 `finalize_run_interactive`
+        // 的 skill 记账块同形(by-name scoped_pick,他项目不连带 bump)。
+        if !ar.is_resume {
+            let skill_catalog = self.store.list_skills().await?;
+            for s in &ar.finalize.spec.skills {
+                if let Some(row) = bw_core::scope::scoped_pick(
+                    skill_catalog.iter(),
+                    Some(ar.finalize.p),
+                    |x| x.project_id,
+                    |x| x.name == s.name,
+                ) {
+                    self.store.record_skill_use(row.id).await?;
+                }
+            }
+            self.refresh_skills().await?;
+            self.emit(Event::SkillsChanged);
+        }
+        // handle + guard 迁到 consultation_runs;active_run 已 take(放锁)。
+        self.state.consultation_runs.insert(
+            conv.id,
+            ConsultationRun {
+                issue_id,
+                handle: ar.handle,
+                guard: ar.guard,
+            },
+        );
+        self.emit(Event::IssuesChanged);
+        Ok(())
+    }
+
+    /// Bug1:降级后的交付 PTY 退出时,spawn 闭包仍发
+    /// `SettleOutcome::Interactive`(不是 `ConsultationEnded`)。`active_run`
+    /// 已空 → `run_issue_settle` 的 None 分支 / straggler 分支调本方法:
+    /// 查 `req.issue` 对应的 conversation,若在 `consultation_runs` 里(降级
+    /// 交付退出)→ 按咨询退出收尾(close PTY,clear_focus,clear_restoring,
+    /// forget_session,drop guard,refresh)。skill_output 忽略(降级时
+    /// 已记账)。不在 consultation_runs 里 → 真 no-op(早已 settle)。
+    async fn cleanup_demoted_consultation(&mut self, issue_id: IssueId) {
+        if let Ok(Some(c)) = self.store.get_conversation_by_issue(issue_id).await {
+            if self.state.consultation_runs.contains_key(&c.id) {
+                self.state.terminal_manager.close(c.id);
+                self.clear_focus_if(c.id);
+                self.clear_restoring_if(c.id);
+                if let Some(cr) = self.state.consultation_runs.remove(&c.id) {
+                    self.forget_interactive_session(cr.issue_id);
+                    drop(cr.guard);
+                }
+                self.emit(Event::IssuesChanged);
+            }
+        }
+    }
+
     /// plan/17 S3: settle a backgrounded issue-run on the main thread. Called
     /// by the kernel's settle arm when the spawned round loop reports back.
     /// `take()` is the double-settle guard: a `CancelRun` that already
@@ -5633,40 +5687,42 @@ impl App {
     /// commits the worktree — guard drops only AFTER both, at the end of
     /// `issue_run_tail`.
     pub async fn run_issue_settle(&mut self, req: SettleReq) -> Result<(), AppError> {
+        // 咨询 PTY 退出:不碰 active_run / 状态机 / settle-once。
+        if let SettleOutcome::ConsultationEnded { conversation_id } = req.outcome {
+            self.state.terminal_manager.close(conversation_id);
+            self.clear_focus_if(conversation_id);
+            self.clear_restoring_if(conversation_id);
+            if let Some(cr) = self.state.consultation_runs.remove(&conversation_id) {
+                self.forget_interactive_session(cr.issue_id);
+                drop(cr.guard);
+            }
+            self.emit(Event::IssuesChanged);
+            return Ok(());
+        }
+
         let Some(ar) = self.state.active_run.take() else {
-            // Already settled (cancel raced ahead, or a stale req for a run
-            // whose settle already ran). Honest no-op.
+            // active_run 空:要么早已 settle(no-op),要么是降级交付的 PTY
+            // 退出(spawn 闭包发的是 Interactive 不是 ConsultationEnded)。
+            // 查 consultation_runs:在则按咨询退出收尾(降级时已记账,
+            // skill_output 忽略);不在则真 no-op。
+            self.cleanup_demoted_consultation(req.issue).await;
             return Ok(());
         };
         if ar.issue.id != req.issue || ar.project != req.project {
-            // Not this run — restore and ignore (a different run is in flight;
-            // this req is a straggler from a prior one).
+            // 别的 issue 的活(新交付起来了)—— restore,别误清。但若这个
+            // straggler 是降级交付退出(req.issue 在 consultation_runs 里),
+            // 顺带清掉它的咨询记录(PTY 已死,guard 该 drop)。
             self.state.active_run = Some(ar);
+            self.cleanup_demoted_consultation(req.issue).await;
             return Ok(());
         }
-        // V1 Issue2 Phase2a: interactive sessions skip `issue_run_tail`
-        // entirely (no MR creation — the agent creates it in-session; no
-        // InReview transition from the run — polling detects open MR).
-        // First run: `finalize_run_interactive` (uses + artifacts). Resume:
-        // `finalize_run_interactive_resume` (artifacts only, settle-once).
-        // Phase-loop sessions keep `finalize_run` + `issue_run_tail`.
-        let interactive = matches!(req.outcome, SettleOutcome::Interactive(_));
+        // V1 收口:issue ▶跑 全走嵌入终端后,settle 只剩 Interactive(交付)与
+        // ConsultationEnded(咨询,上方已早返回)。First run: `finalize_run_interactive`
+        // (uses + artifacts)。Resume: `finalize_run_interactive_resume` (artifacts
+        // only, settle-once)。无 `issue_run_tail`:MR 由 agent 自提、InReview 由
+        // `poll_interactive_inreview` 检测;无 MR 的活诚实停在 InProgress,不假装
+        // 前进(铁律:Done 永不自动)。
         let outcome = match req.outcome {
-            SettleOutcome::PhaseLoop(Ok((end, last_run_log, final_run_ok))) => {
-                self.finalize_run(
-                    &ar.finalize.spec,
-                    &ar.finalize.heads_workspace,
-                    &ar.finalize.head_before,
-                    &ar.finalize.proj,
-                    ar.finalize.p,
-                    ar.finalize.issue_id,
-                    end,
-                    last_run_log,
-                    final_run_ok,
-                )
-                .await
-            }
-            SettleOutcome::PhaseLoop(Err(e)) => Err(e),
             SettleOutcome::Interactive(Ok(skill_output)) => {
                 if ar.is_resume {
                     self.finalize_run_interactive_resume(
@@ -5689,42 +5745,29 @@ impl App {
                 }
             }
             SettleOutcome::Interactive(Err(e)) => Err(e),
+            SettleOutcome::ConsultationEnded { .. } => unreachable!("handled above"),
         };
-        if interactive {
-            // No `issue_run_tail` for interactive — the agent creates the MR
-            // in-session and the InReview poller detects it. Guard drops
-            // here (worktree cleanup); the issue stays in its current state
-            // (InProgress on first run, unchanged on resume). Never auto-Done.
-            // V1 Issue2 Phase2b: clear PTY state so the terminal widget
-            // disappears (pty_active → false), input stops going to the
-            // dropped receiver, and the 100ms pty_ticker stops spinning.
-            self.state.pty_input_tx = None;
-            self.state.pty_bytes_rx = None;
-            self.forget_interactive_session(ar.issue.id);
-            drop(ar.guard);
-            self.refresh_issues().await?;
-            self.emit(Event::IssuesChanged);
-            outcome.map(|_| ())
-        } else {
-            self.issue_run_tail(
-                ar.issue,
-                ar.proj,
-                ar.issue_ws,
-                ar.pr_eligible,
-                outcome,
-                ar.guard,
-            )
-            .await
+        // No `issue_run_tail` — the agent creates the MR in-session and the
+        // InReview poller detects it. Guard drops here (worktree cleanup); the
+        // issue stays in its current state (InProgress on first run, unchanged
+        // on resume). Never auto-Done. 只关本件交付 PTY,不伤后台咨询。
+        if let Ok(Some(c)) = self.store.get_conversation_by_issue(ar.issue.id).await {
+            self.state.terminal_manager.close(c.id);
+            self.clear_focus_if(c.id);
+            self.clear_restoring_if(c.id);
         }
+        self.forget_interactive_session(ar.issue.id);
+        drop(ar.guard);
+        self.refresh_issues().await?;
+        self.emit(Event::IssuesChanged);
+        outcome.map(|_| ())
     }
 
-    /// plan/17 S3 (① 中止): abort the in-flight backgrounded run on an issue.
-    /// `abort` the `JoinHandle` (the engine's child `claude` subprocess is
-    /// killed via `kill_on_drop`), then run the honest failure tail — the
+    /// plan/17 S3 (① 中止): abort the in-flight backgrounded interactive run
+    /// on an issue. `abort` the `JoinHandle` (the `claude` subprocess is killed
+    /// via `kill_on_drop`), then close the PTY + drop the worktree guard. The
     /// issue STAYS `InProgress` (retryable), `settled_at` stays empty (no
-    /// auto-Done, 铁律), the worktree is torn down (guard drops). No
-    /// `finalize_run` accounting: the aborted round's `workflow_run` row stays
-    /// "started, never settled" (honest), and agent/skill `uses` are NOT
+    /// auto-Done, 铁律). No `finalize_run` accounting: agent/skill `uses` are NOT
     /// bumped — a cancelled run did not complete, so not counting it as a use
     /// is the honest call (偏差 vs the normal `Failed` path which does
     /// finalize with `run_ok=false`; noted in the commit). A normal
@@ -5740,13 +5783,12 @@ impl App {
             return Ok(());
         }
         ar.handle.abort(); // drop the spawned round-loop future → kill_on_drop
-                           // V1 Issue2 Phase2b: an interactive run cancelled here must clear the
-                           // same PTY/session state the settle arm clears — otherwise the
-                           // terminal widget keeps rendering (pty_active stays true) and typed
-                           // bytes go into a receiver nobody reads. Unconditional: the phase-loop
-                           // path never sets these, so clearing is a no-op there.
-        self.state.pty_input_tx = None;
-        self.state.pty_bytes_rx = None;
+                           // 只关本件交付 PTY,不伤其它会话。
+        if let Ok(Some(c)) = self.store.get_conversation_by_issue(ar.issue.id).await {
+            self.state.terminal_manager.close(c.id);
+            self.clear_focus_if(c.id);
+            self.clear_restoring_if(c.id);
+        }
         self.forget_interactive_session(ar.issue.id);
         self.emit(Event::WorkflowFailed(format!(
             "Issue #{} 已中止",
@@ -5769,6 +5811,10 @@ impl App {
     pub async fn dispatch(&mut self, cmd: Command) -> Result<(), AppError> {
         match cmd {
             Command::Boot => {
+                // V1-TermRefactor4: Boot 只重算信号 / 播种 / 对账 —— **绝不**
+                // 批量 spawn 历史 claude 会话。重启后 PTY 如实全死;用户点哪张
+                // 卡才按该卡 `--resume`(见 open_conversation /
+                // run_issue_interactive)。
                 // Staleness is clock-relative: what was green last week may be
                 // amber-capped today. Re-derive every running project on boot so
                 // the wall never shows a stale cache as fresh truth.
@@ -6494,12 +6540,25 @@ impl App {
                     self.refresh_cron_tasks().await?;
                     self.emit(Event::CronTasksChanged);
                 }
-                // 章程开篇(仅 owned 仓写;bound 仓尊重「不动原文件」)。
-                let _ = write_charter(self, id, "开篇").await;
+                if let Err(e) = write_charter(self, id, "开篇").await {
+                    self.emit(Event::ActionProgress {
+                        name: "写项目章程".into(),
+                        state: ActionState::Fail(format!(
+                            "章程未写入仓（可能缺 PROJECT.md，请人工补）：{e}"
+                        )),
+                    });
+                }
                 // 模板能力(用户 2026-07-20 拍板):四份组件标准文件写进仓里,
                 // 供人与 agent 之后在这个项目里创建 agent/skill/workflow/cron 时
                 // 对照(同一 owned-workspace 门槛,一次性,不随创建流逐步改写)。
-                let _ = write_component_standards(self, id).await;
+                if let Err(e) = write_component_standards(self, id).await {
+                    self.emit(Event::ActionProgress {
+                        name: "写组件标准".into(),
+                        state: ActionState::Fail(format!(
+                            "组件标准未写入仓（.claude/standards/ 可能缺，请人工补）：{e}"
+                        )),
+                    });
+                }
                 self.refresh_projects().await?;
                 self.refresh_connectors().await?;
                 self.emit(Event::ProjectsChanged);
@@ -6602,14 +6661,28 @@ impl App {
             } => {
                 let p = self.active()?;
                 self.store.set_brief(p, &benchmark, &opportunity).await?;
-                let _ = write_charter(self, p, "定位与机会").await;
+                if let Err(e) = write_charter(self, p, "定位与机会").await {
+                    self.emit(Event::ActionProgress {
+                        name: "写项目章程".into(),
+                        state: ActionState::Fail(format!(
+                            "章程未补写（PROJECT.md 定位与机会段可能缺）：{e}"
+                        )),
+                    });
+                }
                 self.emit(Event::ProjectUpdated(p));
             }
 
             Command::UpdateNorthStar { value, def } => {
                 let p = self.active()?;
                 self.store.set_north_star(p, &value, &def).await?;
-                let _ = write_charter(self, p, "北极星").await;
+                if let Err(e) = write_charter(self, p, "北极星").await {
+                    self.emit(Event::ActionProgress {
+                        name: "写项目章程".into(),
+                        state: ActionState::Fail(format!(
+                            "章程未补写（PROJECT.md 北极星段可能缺）：{e}"
+                        )),
+                    });
+                }
                 self.emit(Event::ProjectUpdated(p));
             }
 
@@ -6622,7 +6695,14 @@ impl App {
                 self.store
                     .set_project_identity(p, &name, kind.trim(), descr.trim())
                     .await?;
-                let _ = write_charter(self, p, "项目信息").await;
+                if let Err(e) = write_charter(self, p, "项目信息").await {
+                    self.emit(Event::ActionProgress {
+                        name: "写项目章程".into(),
+                        state: ActionState::Fail(format!(
+                            "章程未补写（PROJECT.md 项目信息段可能缺）：{e}"
+                        )),
+                    });
+                }
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectUpdated(p));
             }
@@ -6863,7 +6943,14 @@ impl App {
                 // 仓、没有 PR 环可走的项目发一套没处交付的活,如实留白。
                 let first_issue = self.seed_standard_issue_trio(p).await?;
                 self.store.recompute_signals(p, now()).await?;
-                let _ = write_charter(self, p, "完成创建").await;
+                if let Err(e) = write_charter(self, p, "完成创建").await {
+                    self.emit(Event::ActionProgress {
+                        name: "写项目章程".into(),
+                        state: ActionState::Fail(format!(
+                            "章程未补写（PROJECT.md 完成创建段可能缺）：{e}"
+                        )),
+                    });
+                }
                 // plan/13 D1(#31 记录的缺口):create_repo 只推了首 commit,
                 // 创建流途中的章程/组件标准提交停在本地——产品信息正本在
                 // 仓里,落地时把 HEAD 一次推齐。失败软降级 toast,不倒灌
@@ -7168,6 +7255,19 @@ impl App {
             // comes from the store / git, nothing synthesized here.
             Command::OpenIssueDetail(id) => {
                 let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                let conv = self.store.get_conversation_by_issue(id).await?;
+                let is_interactive = conv.is_some();
+                // 切卡:有活 PTY 则只切焦点(不 spawn)。
+                // 重启恢复:PTY 已死但有可 resume 的 session_id → 点卡唤醒
+                // (走现有 run_issue_now → open_conversation / is_resume 分支;
+                // 不造第二条路径;Boot 不批量起)。
+                if let Some(c) = &conv {
+                    if self.state.terminal_manager.is_live(c.id) {
+                        self.focus_conversation(c.id, id).await;
+                    } else if !c.claude_session_id.is_empty() {
+                        self.run_issue_now(SessionId::new(), id).await?;
+                    }
+                }
                 let runs = self.store.list_runs_for_issue(id).await?;
                 let artifacts = self.store.list_artifacts_for_issue(id).await?;
                 let workspace = self
@@ -7181,8 +7281,6 @@ impl App {
                     let entry = match (&r.head_before, &r.head_after) {
                         (Some(b), Some(a)) if !workspace.is_empty() => {
                             if b == a {
-                                // A real run that committed nothing — an
-                                // honest empty list, not an error.
                                 Ok(Vec::new())
                             } else {
                                 bw_engine::workspace::diff_numstat(&workspace, b, a)
@@ -7204,6 +7302,7 @@ impl App {
                     runs,
                     changes,
                     artifacts,
+                    is_interactive,
                 });
             }
 
@@ -7268,17 +7367,14 @@ impl App {
             Command::CollectMetrics => {
                 let p = self.active()?;
                 let s = self.collect_project_metrics(p).await?;
-                // Honest toast: any gh failure — or a github metric with no
-                // remote to pull from — is ok:false. Never claim a green
-                // collection we didn't actually perform.
-                let ok = s.failed == 0 && !s.no_remote_github;
+                // Honest toast: only a pass that really measured at least one
+                // metric, with no failures or deferred definitions, is ok.
+                // "Nothing collected" must not wear a success colour.
+                let ok = s.is_success();
                 let mut detail = format!(
-                    "采集 · {} 更新 · {} 未变 · {} 未接(bw/connector 留白)",
+                    "采集 · {} 更新 · {} 未变 · {} 未接（legacy 或脚本未产出）",
                     s.changed, s.unchanged, s.deferred
                 );
-                if s.no_remote_github {
-                    detail.push_str(";项目未挂 GitHub 仓,github 指标无法采集");
-                }
                 if let Some(err) = &s.first_error {
                     detail.push_str(&format!(";首个失败:{err}"));
                 }
@@ -8917,6 +9013,13 @@ impl App {
                             self.emit(Event::AgentsChanged);
                         }
                     }
+                    // Bug1(V1-TermDemote):issue → Done。若交付 PTY 仍活
+                    // (claude 提完 MR 往往不退出),降级为咨询 → 放 active_run
+                    // 锁,同项目别的 issue 可跑。PTY + worktree 留着(不杀、不
+                    // 清)。MergeIssuePr 内部 dispatch 到这里,自动覆盖。PTY 已
+                    // 死则 no-op,让待处理 settle 正常 finalize。降级失败不阻塞
+                    // Done 记账(降级是放锁,best-effort)。
+                    let _ = self.demote_delivery_to_consultation(id).await;
                     // P4 (2026-08-06 cowelink 验证 §2.3/§5): 「已完成」是唯一的
                     // 验收兜底,不管走的是 `MergeIssuePr`(内部 dispatch 到这里)
                     // 还是网页上把 PR 合了、回 buddy 裸点「→已完成」——两条路都
@@ -9229,7 +9332,36 @@ impl App {
             }
 
             Command::DeleteProject(id) => {
+                // W3-9: cache the project row before delete_project wipes it,
+                // then judge whether its workspace is a buddy-built clone
+                // (under workspaces_root, named <slug>-<uuid8hex>) — only
+                // those get removed. A user-bound pre-existing directory is
+                // never touched (the user may want to keep the evidence).
+                // Order is DB-first: delete_project succeeds, then best-effort
+                // remove_dir_all — a dir left behind is a manual cleanup, the
+                // reverse (dir gone, DB row still pointing at it) is worse.
+                let cached_proj = self.store.get_project(id).await?;
                 self.store.delete_project(id).await?;
+                if let Some(proj) = cached_proj {
+                    if is_buddy_built_clone(
+                        &proj.workspace_path,
+                        &proj.name,
+                        id,
+                        self.workspaces_root.as_deref(),
+                    ) {
+                        if let Err(e) = std::fs::remove_dir_all(std::path::Path::new(
+                            proj.workspace_path.trim(),
+                        )) {
+                            // DB row is already gone — a leftover dir is a
+                            // manual cleanup, not a data-integrity break.
+                            // Loud, honest, non-fatal.
+                            eprintln!(
+                                "W3-9: 删项目 {} 的 buddy 自建工作目录失败(目录残留,可手动删): {}",
+                                proj.name, e
+                            );
+                        }
+                    }
+                }
                 if self.state.active_project == Some(id) {
                     self.state.active_project = None;
                     self.state.active_session = None;
@@ -9238,6 +9370,21 @@ impl App {
                 }
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectsChanged);
+            }
+
+            Command::DeleteSession(id) => {
+                self.store.delete_session(id).await?;
+                // If the deleted session was the chat-focused one, drop the
+                // stale pointer so the workflow panel doesn't try to render
+                // messages for a session that no longer exists.
+                if self.state.active_session == Some(id) {
+                    self.state.active_session = None;
+                }
+                // review: refresh issues so state.issues doesn't hold a stale
+                // session_id ref (delete_session nulled it in the DB; this
+                // re-reads the honest NULL into state).
+                self.refresh_issues().await?;
+                self.emit(Event::ViewChanged(self.state.view));
             }
 
             Command::BackToProjects => {
@@ -9251,20 +9398,40 @@ impl App {
 
             Command::SetPanel(p) => self.state.panel = p,
             Command::SetScope(s) => self.state.scope = s,
-            Command::SelectSession(s) => self.state.active_session = s,
-            // V1 Issue2 Phase2b: forward user-typed bytes to the PTY writer.
-            // No PTY session active → silently drop (best-effort — the UI
-            // shouldn't send input when no session is running, but a race
-            // between session end and the last keystroke is possible).
-            Command::TerminalInput { bytes } => {
-                if let Some(tx) = &self.state.pty_input_tx {
-                    let _ = tx.send(bw_engine::PtyInput::Bytes(bytes));
+            Command::SelectSession(s) => {
+                self.state.active_session = s;
+                // Bug2(V1-TermFocus): 左→终端——解析 session→issue(session
+                // title 是 `#N 标题`,按 number+title 匹配 issue),有活 PTY
+                // 则切焦点,无活 PTY 但有 claude_session_id 则唤醒(与
+                // OpenIssueDetail 一致——Done/InReview 进 open_conversation、
+                // InProgress 进 resume)。解析不到(纯阶段记录不挂 issue)→
+                // 保持原行为(只设 active_session)。best-effort:错误不阻塞。
+                if let Some(sid) = s {
+                    let _ = self.sync_session_to_terminal(sid).await;
                 }
             }
-            // V1 Issue2 Phase2b: forward terminal resize to the PTY master.
-            Command::TerminalResize { cols, rows } => {
-                if let Some(tx) = &self.state.pty_input_tx {
-                    let _ = tx.send(bw_engine::PtyInput::Resize { cols, rows });
+            // V1 终端会话重构·底座: 按 conversation_id 转发到 TerminalManager。
+            Command::TerminalInput {
+                conversation_id,
+                bytes,
+            } => {
+                let _ = self
+                    .state
+                    .terminal_manager
+                    .input(conversation_id, bw_engine::PtyInput::Bytes(bytes));
+            }
+            Command::TerminalResize {
+                conversation_id,
+                cols,
+                rows,
+            } => {
+                // 无活连接时也记 fit 尺寸,供下次 attach 用真值而非 80×24。
+                if !self
+                    .state
+                    .terminal_manager
+                    .resize(conversation_id, cols, rows)
+                {
+                    self.state.terminal_manager.note_fit_size(cols, rows);
                 }
             }
         }
@@ -9328,9 +9495,8 @@ fn json_field_by_path<'a>(v: &'a serde_json::Value, raw: &str) -> Option<&'a ser
 /// C7 · 采集器 receipt — an honest tally of one collection pass (manual or
 /// cron). Real counts, so a caller can toast the truth and a failure is never
 /// silently swallowed. `changed` vs `unchanged` prove the change-guard held;
-/// `failed` with `first_error` prove a `gh` failure wrote nothing; `deferred`
-/// proves the bw/connector 留白; `no_remote_github` proves github can't be faked
-/// without a repo.
+/// `failed` with `first_error` proves a script failure wrote nothing;
+/// `deferred` proves a legacy definition or missing script output stayed blank.
 #[derive(Default)]
 struct MetricCollectSummary {
     changed: u32,
@@ -9338,8 +9504,15 @@ struct MetricCollectSummary {
     failed: u32,
     deferred: u32,
     first_error: Option<String>,
-    no_remote_github: bool,
-    no_remote_codehub: bool,
+}
+
+impl MetricCollectSummary {
+    /// A green collection must have measured at least one real value and left
+    /// no failures or deferred definitions behind. Manual metrics are outside
+    /// this collector, so an all-manual project correctly reports no auto-collect.
+    fn is_success(&self) -> bool {
+        self.failed == 0 && self.deferred == 0 && self.changed + self.unchanged > 0
+    }
 }
 
 /// Standard workspace-derived metric names — the join keys between the
@@ -9390,6 +9563,34 @@ fn workspace_slug(name: &str, id: ProjectId) -> String {
         format!("proj-{id8}")
     } else {
         format!("{base}-{id8}")
+    }
+}
+
+/// W3-9: tell apart a buddy-provisioned workspace clone (under
+/// `workspaces_root`, named `<slug>-<uuid8hex>` — safe to delete with the
+/// project) from a user-bound pre-existing directory (the user's own path,
+/// which buddy must never delete). The judgment is path-based: `project`
+/// has no `is_bound` column, so this is the only reliable discriminator.
+fn is_buddy_built_clone(
+    workspace_path: &str,
+    name: &str,
+    id: ProjectId,
+    workspaces_root: Option<&std::path::Path>,
+) -> bool {
+    let ws = workspace_path.trim();
+    if ws.is_empty() {
+        return false;
+    }
+    let Some(root) = workspaces_root else {
+        return false;
+    };
+    let path = std::path::Path::new(ws);
+    if !path.starts_with(root) {
+        return false;
+    }
+    match path.file_name().and_then(|n| n.to_str()) {
+        Some(name_on_disk) => name_on_disk == workspace_slug(name, id),
+        None => false,
     }
 }
 

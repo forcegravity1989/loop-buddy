@@ -26,6 +26,7 @@
 //!   cargo run -p bw-app --example verify_c8_standard_trio -- migrate-check <old-db-path>
 
 use bw_app::{App, Command, Event, GithubOrigin};
+use bw_core::model::IssueStatus;
 use bw_core::{ProjectId, SessionId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
 use bw_store::{SessionKind, SqliteStore, Store};
@@ -430,22 +431,20 @@ async fn main() {
     let issues_c_final = store.list_issues(proj_c, None, None).await.unwrap();
     assert_eq!(issues_c_final.len(), 0, "无仓项目 C 应零标配票");
 
-    let runs_a_issue1 = store
-        .list_runs_for_issue(issues_a_final.iter().find(|i| i.number == 1).unwrap().id)
-        .await
-        .unwrap();
+    // V1-TermClose3:RunIssue 全走嵌入终端后不再创建 workflow_run 行(交互式
+    // finalize 不记 workflow_run)。改读 issue 状态证明确实 dispatch 了一次
+    // RunIssue:run_first=true → prepare_issue_run 把①竞品分析从 Backlog 转到
+    // InProgress(interactive 不再自动推 InReview,无 MR 的活诚实停在 InProgress)。
+    let issue_a1 = issues_a_final.iter().find(|i| i.number == 1).unwrap();
     assert!(
-        !runs_a_issue1.is_empty(),
-        "run_first=true 应对①竞品分析真实 dispatch 了一次 RunIssue"
+        matches!(issue_a1.status, IssueStatus::InProgress),
+        "run_first=true 应对①竞品分析真实 dispatch 了一次 RunIssue(转 InProgress)"
     );
 
-    let runs_b_issue1 = store
-        .list_runs_for_issue(issues_b_final.iter().find(|i| i.number == 1).unwrap().id)
-        .await
-        .unwrap();
+    let issue_b1 = issues_b_final.iter().find(|i| i.number == 1).unwrap();
     assert!(
-        runs_b_issue1.is_empty(),
-        "run_first=false 不应有任何 run —— 零摩擦的另一半"
+        !matches!(issue_b1.status, IssueStatus::InProgress),
+        "run_first=false 不应 dispatch RunIssue(不应转 InProgress)"
     );
 
     let ns_skill_uses_after = store

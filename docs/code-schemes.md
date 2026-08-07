@@ -36,6 +36,10 @@
 | **T1–T17** | plan/12 | truthful-modeling 批的十七张票(T14–T17 为真实感落地批;T11 在 plan/13/16/19 被引用时指同一张票) | 已全部交付 |
 | **W1–W3** | plan/08 | MVP「workflow 的生命周期」线三件事 | 活跃 |
 | **W1–W6** | plan/20 §5 | 资产作用域隔离批的六件落地工作(commit 前缀 plan20-W2 等即此)。**与 plan/08 的 W 系列无关** | 已落地 |
+| **V1-TermRefactor1–5** | `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §10 | 终端会话重构:1 数据模型 / 2 底座(PTY+路由+xterm+尺寸) / 3 并发切卡 / 4 重启恢复 / 5 咨询态。接续窗口按 §10.1 产品体感切分(非原工程五段) | 1–5 已落地 |
+| **V1-TermClose1–3** | `docs/v1-prototype/issue2-all-issues-terminal-runs.md` | 终端会话重构收口:1 路由+prompt(所有 issue ▶跑 走终端、issue 内容作位置 prompt、蒸馏/目录并入系统提示词) / 2 删老路径+UI 门控 / 3 examples+文档 | 1–3 已落地 |
+| **V1-TermDemote** | `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §13 | Bug1:合入/Done 后 active_run 不释放 → 交付降级为咨询(放锁、不杀 PTY、不清 worktree) | 已落地 |
+| **V1-TermFocus** | `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §13 | Bug2:左侧 session 卡 ↔ 嵌终端焦点双向同步 | 已落地 |
 
 散见的一次性编号(如 plan/16 的 P8、plan/17 的 C5)不单独列行,以所在文件的上下文为准。
 

@@ -22,16 +22,16 @@ use bw_core::derive::{
     evaluate_metric, measure, parse_target_with, reduce_worst_of, AmberBand, Measurement,
 };
 use bw_core::model::{
-    AgentCard, AgentRef, AgentSkillTag, Artifact, ArtifactKind, Author, Connector, ConnectorStatus,
-    CronEffectiveness, CronStatus, CronTask, HubSource, Issue, IssueStatus, KnowledgeSource,
-    LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness, RunStatus, RunTrigger, Signal,
-    SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun,
-    WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
+    AgentCard, AgentRef, AgentSkillTag, Artifact, ArtifactKind, Author, ClaudeConversation,
+    Connector, ConnectorStatus, CronEffectiveness, CronStatus, CronTask, HubSource, Issue,
+    IssueStatus, KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness,
+    RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank,
+    WorkflowKind, WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
-    AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
-    SessionId, SkillFileId, SkillId, WorkflowId, WorkflowRunId,
+    AgentId, ArtifactId, ConnectorId, ConversationId, CronTaskId, IssueId, KnowledgeSourceId,
+    MetricId, ProjectId, SessionId, SkillFileId, SkillId, WorkflowId, WorkflowRunId,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
@@ -212,28 +212,19 @@ impl SqliteStore {
         // 来是空串,和"这张 Issue 没有标配 Skill 关联"这个真实状态完全一致
         // ——存量 Issue 全部是手建/Autopilot 建,从未挂过标配 Skill。
         add_column_if_missing(&pool, "issue", "standard_skill", "TEXT NOT NULL DEFAULT ''").await?;
-        // V1 Issue2 Phase2a: interactive session started flag. Old DBs open
-        // with 0 (= first run, build_startup_plan) — identical to the
-        // pre-Phase2a "never spawned" state. Only set to 1 right before the
-        // first interactive spawn; never reset.
-        add_column_if_missing(
-            &pool,
-            "issue",
-            "interactive_started",
-            "INTEGER NOT NULL DEFAULT 0",
-        )
-        .await?;
-        // V1 Issue2 Phase2b: claude session_id captured from SessionStart hook.
-        // Old DBs open with '' (= not yet captured → fallback to
-        // build_startup_plan, F1 fix). Set when the hook listener receives a
-        // SessionStart event; used by build_resume_plan for `--resume <id>`.
-        add_column_if_missing(
-            &pool,
-            "issue",
-            "claude_session_id",
-            "TEXT NOT NULL DEFAULT ''",
-        )
-        .await?;
+        // V1 终端会话重构(阶段1): 存量搬运 —— 把 issue.claude_session_id
+        // 非空的行搬进新表 claude_conversation(幂等:INSERT OR IGNORE,
+        // issue_id UNIQUE 兜底,重复 open() 不产生重复行)。workspace_path/
+        // branch_name 能从 issue + project 推就推(worktree 兄弟路径 +
+        // bw/issue-<github_number>),推不出留空等首次 open 填(阶段4 resume
+        // 时回填)。
+        migrate_claude_conversations(&pool).await?;
+        // 阶段1: 旧列退场(物理 DROP,先搬后删——搬在上一行,删在这)。
+        // interactive_started / claude_session_id 业务零读(读路径收口到
+        // claude_conversation),守「不为向后兼容留旧路径」。列不存在即
+        // no-op(很老的库 Phase2a 之前没这两列;DROP 过的库二次 open 也 no-op)。
+        drop_column_if_present(&pool, "issue", "interactive_started", &[]).await?;
+        drop_column_if_present(&pool, "issue", "claude_session_id", &[]).await?;
         // T2 (plan/12 §6): Skill's source unified onto HubSource. Old rows'
         // bare `source='official'`/`'self_built'` text values already match
         // the new tag vocabulary 1:1 (no rewrite needed) — only the new
@@ -469,6 +460,79 @@ async fn drop_column_if_present(
     sqlx::query(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// V1 终端会话重构(阶段1): 存量搬运 —— 把 `issue.claude_session_id` 非空
+/// 的行搬进新表 `claude_conversation`。幂等:INSERT OR IGNORE(issue_id
+/// UNIQUE 兜底),重复 `open()` 不产生重复行。`workspace_path`/
+/// `branch_name` 能从 issue + project 推就推(worktree 兄弟路径
+/// `<主>-issue-<github_number>` + 分支 `bw/issue-<github_number>`),推
+/// 不出留空等首次 open 填。旧列已在本阶段 DROP(见下方
+/// `drop_column_if_present`,先搬后删,数据不丢);DROP 后这函数从 PRAGMA
+/// 检测到列不在直接 no-op(二次 open 安全)。
+async fn migrate_claude_conversations(pool: &SqlitePool) -> Result<()> {
+    // 本阶段已 DROP 旧列 → 搬无可搬,no-op。
+    let has_legacy = sqlx::query("PRAGMA table_info(issue)")
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .any(|r| r.get::<String, _>("name") == "claude_session_id");
+    if !has_legacy {
+        return Ok(());
+    }
+    let rows = sqlx::query(
+        "SELECT i.id AS issue_id, i.project_id, i.claude_session_id, i.github_number, p.workspace_path
+         FROM issue i JOIN project p ON i.project_id = p.id
+         WHERE i.claude_session_id != ''",
+    )
+    .fetch_all(pool)
+    .await?;
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    for r in rows {
+        let issue_id_str: String = r.get("issue_id");
+        let project_id_str: String = r.get("project_id");
+        let claude_session_id: String = r.get("claude_session_id");
+        let github_number: i64 = r.get("github_number");
+        let main_ws: String = r.get("workspace_path");
+        // branch_name: github_number 非0 推 bw/issue-<n>;否则留空。
+        let branch_name = if github_number != 0 {
+            format!("bw/issue-{github_number}")
+        } else {
+            String::new()
+        };
+        // workspace_path: 推 worktree 兄弟路径 <parent>/<stem>-issue-<n>;
+        // 主工作区空 / 无 parent / github_number=0 → 留空(阶段4 resume 回填)。
+        let conv_workspace = if github_number != 0 && !main_ws.trim().is_empty() {
+            let main = std::path::Path::new(&main_ws);
+            match (main.parent(), main.file_name().and_then(|n| n.to_str())) {
+                (Some(parent), Some(stem)) => parent
+                    .join(format!("{stem}-issue-{github_number}"))
+                    .to_string_lossy()
+                    .to_string(),
+                _ => String::new(),
+            }
+        } else {
+            String::new()
+        };
+        // buddy 自己的稳定会话 id(new uuid);claude_session_id 是 claude CLI 的。
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT OR IGNORE INTO claude_conversation
+             (id, project_id, issue_id, claude_session_id, workspace_path, branch_name, created_at, last_opened_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&project_id_str)
+        .bind(&issue_id_str)
+        .bind(&claude_session_id)
+        .bind(&conv_workspace)
+        .bind(&branch_name)
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }
 
@@ -835,6 +899,11 @@ impl Store for SqliteStore {
         // in the file — real Issue titles and artifact paths surviving a
         // "delete", which is both wrong and a privacy leak when a DB is
         // shared. Global agents/skills/workflows (`project_id IS NULL`) stay.
+        // 会话行挂在 issue 上:先于 issue 删,避免孤儿(阶段1缺口,底座补)。
+        sqlx::query("DELETE FROM claude_conversation WHERE project_id=?")
+            .bind(&p)
+            .execute(&mut *tx)
+            .await?;
         for table in [
             "issue",
             "artifact",
@@ -872,6 +941,28 @@ impl Store for SqliteStore {
             .await?;
         sqlx::query("DELETE FROM project WHERE id=?")
             .bind(&p)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn delete_session(&self, id: SessionId) -> Result<()> {
+        let sid = id.uuid().to_string();
+        let mut tx = self.pool.begin().await?;
+        // message.session_id has a REFERENCES session(id) FK — must go first.
+        sqlx::query("DELETE FROM message WHERE session_id=?")
+            .bind(&sid)
+            .execute(&mut *tx)
+            .await?;
+        // issue.session_id has no FK constraint but a dangling pointer is
+        // wrong — clear it so a later run re-mints its own session.
+        sqlx::query("UPDATE issue SET session_id=NULL WHERE session_id=?")
+            .bind(&sid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM session WHERE id=?")
+            .bind(&sid)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -1026,6 +1117,25 @@ impl Store for SqliteStore {
         .execute(&mut *tx)
         .await?;
 
+        // W3-1: upsert the north star as a real metric row (role=Leading,
+        // stage_kind=NULL = project-level) so collect_project_metrics sees it
+        // and recompute_signals derives its signal instead of a forever-grey
+        // card. The two project columns above stay as a sync cache; this row
+        // is the observation mount point. Same upsert shape (by project_id +
+        // role + name) as lagging/leading below — a user-built same-name row
+        // is overwritten by origin='file', identical to lagging/leading sync.
+        let ns_name = sync.north_star_name.trim();
+        if !ns_name.is_empty() {
+            let ns_def = MetricDefSync {
+                name: ns_name.to_string(),
+                def: sync.north_star_def.clone(),
+                target_raw: String::new(),
+                collect_kind: sync.north_star_collect_kind.clone(),
+                collect_query: sync.north_star_collect_query.clone(),
+            };
+            sync_one_metric_definition(&mut tx, &p, MetricRole::Leading, &ns_def, t).await?;
+        }
+
         for m in &sync.lagging {
             sync_one_metric_definition(&mut tx, &p, MetricRole::Lagging, m, t).await?;
         }
@@ -1055,7 +1165,9 @@ impl Store for SqliteStore {
             // 一个项目的指标是十几条量级,不值得为它上 SQL 生成。
             for r in &rows {
                 let name: String = r.get("name");
-                if defs.iter().any(|m| m.name == name) {
+                let is_current_north_star =
+                    role == MetricRole::Leading && !ns_name.is_empty() && name == ns_name;
+                if is_current_north_star || defs.iter().any(|m| m.name == name) {
                     continue;
                 }
                 let id: String = r.get("id");
@@ -2961,7 +3073,7 @@ impl Store for SqliteStore {
         let mut sql = String::from(
             "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
                     priority, assignee, settled_at, blocked_reason, standard_skill,
-                    interactive_started, claude_session_id, created_at, updated_at
+                    created_at, updated_at
              FROM issue WHERE project_id=?",
         );
         if stage.is_some() {
@@ -2986,7 +3098,7 @@ impl Store for SqliteStore {
         let row = sqlx::query(
             "SELECT id, project_id, stage, number, github_number, pr_number, title, descr, status,
                     priority, assignee, settled_at, blocked_reason, standard_skill,
-                    interactive_started, claude_session_id, created_at, updated_at
+                    created_at, updated_at
              FROM issue WHERE id=?",
         )
         .bind(id.uuid().to_string())
@@ -3064,32 +3176,117 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    /// V1 Issue2 Phase2a: mark an interactive issue's session as started
-    /// (first ▶跑 spawned claude). Called once, right before the first
-    /// interactive spawn; never reset. The App layer calls this only after
-    /// deciding this is a first run (not a resume).
-    async fn set_issue_interactive_started(&self, id: IssueId) -> Result<()> {
-        sqlx::query("UPDATE issue SET interactive_started=1, updated_at=? WHERE id=?")
-            .bind(now_unix())
-            .bind(id.uuid().to_string())
+    /// V1 终端会话重构(阶段1): 读一件活绑定的会话行。None = 从未点开过。
+    async fn get_conversation_by_issue(
+        &self,
+        issue_id: IssueId,
+    ) -> Result<Option<ClaudeConversation>> {
+        let row = sqlx::query(
+            "SELECT id, project_id, issue_id, claude_session_id, workspace_path, branch_name,
+                    created_at, last_opened_at
+             FROM claude_conversation WHERE issue_id=?",
+        )
+        .bind(issue_id.uuid().to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(conversation_row).transpose()
+    }
+
+    /// V1 终端会话重构: 首次 spawn 前建会话行(INSERT OR IGNORE,issue_id
+    /// UNIQUE 兜底,幂等)。claude_session_id 留空,等 hook 填。返回行的
+    /// `ConversationId`(新建或已存在都查回——底座 TerminalManager 要身份)。
+    async fn ensure_conversation(
+        &self,
+        issue_id: IssueId,
+        project_id: ProjectId,
+        workspace_path: &str,
+        branch_name: &str,
+    ) -> Result<ConversationId> {
+        let id = Uuid::new_v4().to_string();
+        let now = now_unix();
+        sqlx::query(
+            "INSERT OR IGNORE INTO claude_conversation
+             (id, project_id, issue_id, claude_session_id, workspace_path, branch_name,
+              created_at, last_opened_at)
+             VALUES (?, ?, ?, '', ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(project_id.uuid().to_string())
+        .bind(issue_id.uuid().to_string())
+        .bind(workspace_path)
+        .bind(branch_name)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        // INSERT OR IGNORE 在行已存在时不改 id——一律按 issue_id 读回。
+        let row = sqlx::query("SELECT id FROM claude_conversation WHERE issue_id=?")
+            .bind(issue_id.uuid().to_string())
+            .fetch_one(&self.pool)
+            .await?;
+        let id_str: String = row.get::<String, _>("id");
+        Ok(parse_uuid(&id_str, ConversationId::from_uuid)?)
+    }
+
+    /// V1 终端会话重构(阶段1): hook SessionStart 回传 session_id 时填进会话行
+    /// (UPDATE;行不存在则 0 行受影响,no-op 不报错)。
+    async fn set_conversation_session_id(&self, issue_id: IssueId, session_id: &str) -> Result<()> {
+        sqlx::query("UPDATE claude_conversation SET claude_session_id=? WHERE issue_id=?")
+            .bind(session_id)
+            .bind(issue_id.uuid().to_string())
             .execute(&self.pool)
             .await?;
         Ok(())
     }
 
-    /// V1 Issue2 Phase2b: store the claude session_id captured from the
-    /// SessionStart hook event. Called when the hook listener receives a
-    /// SessionStart event and maps the cwd → issue. An empty string clears
-    /// it (F1 recovery path). Never fabricates a session_id — only stores
-    /// what the real hook payload contained.
-    async fn set_issue_claude_session_id(&self, id: IssueId, session_id: &str) -> Result<()> {
-        sqlx::query("UPDATE issue SET claude_session_id=?, updated_at=? WHERE id=?")
-            .bind(session_id)
-            .bind(now_unix())
-            .bind(id.uuid().to_string())
-            .execute(&self.pool)
-            .await?;
+    /// V1 终端会话重构(重启恢复): 只回填空的 workspace_path/branch_name,
+    /// 已有值不覆盖;刷新 last_opened_at。
+    async fn update_conversation_workspace_if_empty(
+        &self,
+        issue_id: IssueId,
+        workspace_path: &str,
+        branch_name: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE claude_conversation SET
+                workspace_path = CASE WHEN workspace_path = '' THEN ? ELSE workspace_path END,
+                branch_name = CASE WHEN branch_name = '' THEN ? ELSE branch_name END,
+                last_opened_at = ?
+             WHERE issue_id = ?",
+        )
+        .bind(workspace_path)
+        .bind(branch_name)
+        .bind(now_unix())
+        .bind(issue_id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
         Ok(())
+    }
+
+    /// V1 终端会话重构(阶段1): 列出某项目下有会话行的 issue_id(poll 用)。
+    async fn list_conversation_issue_ids(&self, project_id: ProjectId) -> Result<Vec<IssueId>> {
+        let rows = sqlx::query("SELECT issue_id FROM claude_conversation WHERE project_id=?")
+            .bind(project_id.uuid().to_string())
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| parse_uuid(&r.get::<String, _>("issue_id"), IssueId::from_uuid))
+            .collect()
+    }
+
+    async fn list_resumable_conversation_issue_ids(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<IssueId>> {
+        let rows = sqlx::query(
+            "SELECT issue_id FROM claude_conversation WHERE project_id=? AND claude_session_id != ''",
+        )
+            .bind(project_id.uuid().to_string())
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| parse_uuid(&r.get::<String, _>("issue_id"), IssueId::from_uuid))
+            .collect()
     }
 
     async fn set_issue_github_number(&self, id: IssueId, github_number: u32) -> Result<()> {
@@ -3463,10 +3660,25 @@ fn issue_row(r: sqlx::sqlite::SqliteRow) -> Result<Issue> {
             .get::<Option<String>, _>("blocked_reason")
             .filter(|s| !s.is_empty()),
         standard_skill: r.get("standard_skill"),
-        interactive_started: r.get::<i64, _>("interactive_started") != 0,
-        claude_session_id: r.get("claude_session_id"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
+    })
+}
+
+/// V1 终端会话重构(阶段1): row → ClaudeConversation。
+fn conversation_row(r: sqlx::sqlite::SqliteRow) -> Result<ClaudeConversation> {
+    let id = parse_uuid(&r.get::<String, _>("id"), ConversationId::from_uuid)?;
+    let project_id = parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid)?;
+    let issue_id = parse_uuid(&r.get::<String, _>("issue_id"), IssueId::from_uuid)?;
+    Ok(ClaudeConversation {
+        id,
+        project_id,
+        issue_id,
+        claude_session_id: r.get("claude_session_id"),
+        workspace_path: r.get("workspace_path"),
+        branch_name: r.get("branch_name"),
+        created_at: r.get("created_at"),
+        last_opened_at: r.get("last_opened_at"),
     })
 }
 

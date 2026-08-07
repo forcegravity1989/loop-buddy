@@ -200,6 +200,7 @@
       <div class="nav-item" data-screen="u3"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 5v4M12 15v4M5 12h4M15 12h4"/></svg>找指标</div>
       <div class="nav-item" data-screen="u4"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 16l3-5 3 3 4-6"/></svg>绑数据</div>
       <div class="nav-item" data-screen="u5"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 9h16M9 5v14"/></svg>总览呈现</div>
+      <div class="nav-item" data-screen="u6"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>建活 · 选技能</div>
     </div>
     <div class="nav-group">
       <div class="nav-group-title">维护指南 · 机制</div>
@@ -238,7 +239,7 @@
         <span class="node">总览呈现</span><span class="ar">→</span>
         <span class="node" style="border-color:var(--accent-soft);background:var(--accent-soft);color:var(--accent-ink)">健康灯亮</span>
       </div>
-      <p class="muted">四个阶段各对应一屏（纳入/找指标/绑数据/总览），每屏写<strong>操作 → 结果 → 看到</strong>。后续阶段随实践推进补在后面。</p>
+      <p class="muted">上面是主闭环（纳入→找指标→绑数据→总览→健康灯），四阶段各对应一屏，每屏写<strong>操作 → 结果 → 看到</strong>。旁路还可随时<a href="#" onclick="go('u6');return false">建活 · 选技能</a>——开自己的活、挂方法；那是旁路，不是主闭环必经五步。</p>
 
       <h2 class="sec"><span class="n">面向谁</span></h2>
       <div class="cards">
@@ -343,7 +344,7 @@
       <p>起手三件套里的①「竞品分析」需要联网抓取对标产品的公开页面。当前本机 claude 环境暂不支持这类抓取——点了会失败。联网能力就绪后再开跑；现阶段先留着这张活，其余两件套可正常跑通。</p>
 
       <p class="linker">想看「连接器 / 定时器 / 三件套」怎么设计的 → <a href="#" onclick="go('m2');return false">Hub 全局库</a> + <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
-      <div class="foot">事实源：实跑 cowelink 接入已有（2026-08-06）；纳入设计见 <code>docs/v1-prototype/issue1-onboard-simplify.md</code>。</div>
+      <div class="foot">事实源：实跑 cowelink 接入已有（2026-08-06；2026-08-07 重跑核对）；纳入设计见 <code>docs/v1-prototype/issue1-onboard-simplify.md</code>。</div>
     </section>
 
     <!-- ============ U3 找指标 ============ -->
@@ -363,19 +364,24 @@
           <div class="arr">→</div>
           <div class="box"><div class="t">评审中</div><div class="d">buddy 读到 MR</div></div>
           <div class="arr">→</div>
-          <div class="box warn"><div class="t">你收尾</div><div class="d">合入并点完成</div></div>
+          <div class="box warn"><div class="t">你收尾</div><div class="d">merge＝合入并完成</div></div>
         </div>
       </div>
 
-      <h2 class="sec"><span class="n">操作</span>五步</h2>
+      <h2 class="sec"><span class="n">操作</span></h2>
       <div class="ops">
-        <div class="li"><div class="n">1</div><div class="t">Issue 看板点「找指标」的 <code>▶跑(交互)</code>（同时只跑一张；其它卡会排队）</div></div>
+        <div class="li"><div class="n">1</div><div class="t">Issue 看板点「找指标」的 <code>▶跑</code>（同项目交付同时只一件；其它卡会排队）</div></div>
         <div class="li"><div class="n">2</div><div class="t">工作流屏出现黑底嵌终端——技能已备好，直接打字聊</div></div>
-        <img src="img/u3-issues-board.png" alt="Issue 看板 · 找指标与绑数据收尾后" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
-        <p class="note-line">上图示例：找指标 / 绑数据已在「已完成」；左侧能看到连接器和每日采集定时。</p>
+        <img src="img/u3-run-issue.png" alt="找指标 · 嵌终端会话" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
+        <p class="note-line">上图：找指标跑起来后，工作流屏嵌终端可多轮对话。</p>
         <div class="li"><div class="n">3</div><div class="t">聊到你认可：北极星、引领/滞后；每条打算<strong>自动采</strong>还是<strong>以后手填</strong></div></div>
         <div class="li"><div class="n">4</div><div class="t">让模型把计划写进仓（<code>.bw/metrics.toml</code> 等）并自提合并请求——它合不了，只能你合</div></div>
-        <div class="li"><div class="n">5</div><div class="t">卡变成「评审中」后：在 buddy 点 <strong>⬇ merge PR</strong>；若你已在网页合过，再点 <strong>→已完成</strong></div></div>
+        <div class="li"><div class="n">5</div><div class="t">卡变成「评审中」后：在 buddy 点 <strong>⬇ merge PR</strong>（合入并验收完成）；只有你已在网页合过时，才点 <strong>→已完成</strong></div></div>
+        <img src="img/u3-issues-board.png" alt="Issue 看板 · 找指标与绑数据收尾后" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
+        <p class="note-line">上图示例（收尾后刷新）：找指标 / 绑数据已在「已完成」；左侧能看到连接器和每日采集定时。</p>
+        <div class="li"><div class="n">6</div><div class="t">完成后卡上可点 <strong>续聊</strong>——只是咨询，不占新交付、不改完成态；buddy 重启后再点续聊会 resume 原会话</div></div>
+        <img src="img/已完成issue点击续聊.png" alt="已完成 Issue · 续聊" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
+        <p class="note-line">上图：重启后已完成卡上仍有「续聊」；点开唤醒工作流嵌终端（咨询态）。</p>
       </div>
 
       <h2 class="sec"><span class="n">你会得到</span></h2>
@@ -391,15 +397,15 @@
           <tr><td class="k">→已完成</td><td>你已在网页合过</td><td>把活标完成，并把仓里的指标计划同步进 buddy</td></tr>
         </tbody>
       </table>
-      <p class="note-line">「完成」只能你点，buddy 不会替你自动完成。</p>
+      <p class="note-line">在 buddy 点 merge＝合入并验收完成；「完成」不会自动发生——要么你点 merge，要么网页已合后再点「→已完成」。</p>
 
       <div class="ex">
         <div class="eh">小提示</div>
-        <div class="ed">同一时间只有一路可打字的终端。切到别的 Issue，仍可能看到正在跑的那一路；弹窗里的「运行史」常常是空的——以嵌终端画面为准。</div>
+        <div class="ed">同项目<strong>交付</strong>同时只一件（串行排队）。已完成 / 评审中可<strong>续聊</strong>（咨询），各卡各有会话、各自显示。弹窗里的「运行史」常常是空的——以嵌终端画面为准。若切卡时画面串台，属已知缺口，别当成正常能力。</div>
       </div>
 
       <p class="linker">想了解背后怎么跑、怎么记账 → <a href="#" onclick="go('m5');return false">执行与证据</a> · <a href="#" onclick="go('m6');return false">指标与健康</a></p>
-      <div class="foot">事实源：cowelink 实跑 2026-08-06。</div>
+      <div class="foot">事实源：cowelink 实跑 2026-08-06；2026-08-07 重跑（merge＝完成、续聊 resume）。</div>
     </section>
 
     <!-- ============ U4 绑数据 ============ -->
@@ -490,11 +496,78 @@
 
       <div class="callout note">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
-        <div class="body"><strong>杂项</strong>点完成时若提示「登记了 N 个产物」，N 往往接近整仓文件数，不是业务产出件数。删项目只清 buddy 里的记录，重建前请自行清掉本机工作区目录 <code>workspaces\&lt;名&gt;-*</code>。</div>
+        <div class="body"><strong>杂项</strong>点完成时若提示「登记了 N 个产物」，N 往往接近整仓文件数，不是业务产出件数。删项目会清 buddy 记录 + 自动删 buddy 自建的 clone 工作区；你自己绑的已有目录不删（留着你的证据）。</div>
       </div>
 
       <p class="linker">指标与健康怎么设计的 → <a href="#" onclick="go('m6');return false">指标与健康</a></p>
       <div class="foot">事实源：cowelink 总览实跑。</div>
+    </section>
+
+    <!-- ============ U6 建活 · 选技能 ============ -->
+    <section class="screen" id="u6" data-title="建活 · 选技能" data-sec-name="使用指导">
+      <div class="eyebrow">使用指导 · 阶段 05</div>
+      <h1 class="disp">建活 · 选技能</h1>
+      <p class="lede">一句话：总览看明白缺什么之后，在 Issue 看板最上方一行开一件活——填标题、选阶段、挂一条方法（技能），落进「待办池」。队友在卡片上指派，不在创建行绑。</p>
+
+      <div class="diagram">
+        <div class="cap">一件活怎么进看板</div>
+        <div class="pipe">
+          <div class="box"><div class="t">填标题</div><div class="d">最上一行</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">选阶段</div><div class="d">阶段 chip</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">挂技能</div><div class="d">下拉（可空）</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">＋创建</div><div class="d">落待办池</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">指派队友</div><div class="d">卡片上选</div></div>
+        </div>
+      </div>
+
+      <h2 class="sec"><span class="n">操作</span></h2>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">Issue 看板最上方一行：填<strong>标题</strong>（作用域到选中的阶段）</div></div>
+        <div class="li"><div class="n">2</div><div class="t">点 <strong>阶段 chip</strong> 选这件活属于哪个阶段（原型 / 构建 / 优化 / 运营推广 / 运维）</div></div>
+        <div class="li"><div class="n">3</div><div class="t"><strong>关联技能</strong>下拉选一条方法（可空）；选了，开工时会带着这条方法注入给队友</div></div>
+        <div class="li"><div class="n">4</div><div class="t">点 <code>＋ 创建 Issue</code>；新卡落在最左「待办池」</div></div>
+        <div class="li"><div class="n">5</div><div class="t">在<strong>卡片</strong>上用「指派」下拉选队友——不在创建行绑；一张卡一个队友</div></div>
+      </div>
+      <p class="note-line">截图待补：创建行 + 落进待办池的新卡（实跑截图 defer 到终端会话重构收口后用 cowelink 补）。</p>
+
+      <h2 class="sec"><span class="n">背后</span>buddy 自动干了啥</h2>
+      <div class="res">
+        <ul>
+          <li><strong>对远端代码仓</strong>：挂了远端的项目，创建会去远端开一张同名 Issue（网页建的进不来 buddy 看板）</li>
+          <li><strong>对你的机器</strong>：尚未 clone / 写文件——建活只立账，不动磁盘</li>
+          <li><strong>对 buddy 数据库</strong>：落一条 <code>issue</code> 行（状态 待办）、按阶段归位、挂上所选技能</li>
+        </ul>
+      </div>
+
+      <h2 class="sec"><span class="n">你会得到</span></h2>
+      <div class="res">
+        <ul>
+          <li>一张待办卡，带着阶段和（若选了）技能</li>
+          <li>点 <code>▶ 跑</code> 即开工：所有 issue ▶跑 都进嵌入终端（每卡一会话），队友在真实工作目录改文件（见下）</li>
+          <li>无技能也跑：issue 标题+描述作首句 prompt，技能正文+蒸馏+目录块并入系统提示词</li>
+        </ul>
+      </div>
+
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>易踩</strong>① 空标题点创建会被静默忽略（没反馈，不是卡住）——先填标题。② 挂远端时创建要等远端开票回来，无进度条，体感像卡住，稍等。③ 同项目同时只一件活在交付中（串行）；别的卡点「▶ 跑」会显示「排队中」。</div>
+      </div>
+
+      <h2 class="sec"><span class="n">▶ 跑 · 嵌终端 · 完成</span></h2>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">卡片点 <code>▶ 跑</code>：队友开工，跳到工作流屏的嵌终端（每卡一会话）</div></div>
+        <div class="li"><div class="n">2</div><div class="t">无技能也能跑：issue 标题+描述驱动；多 agent 在会话内由 claude 用 SubAgent 调度（技能方法论讲清）</div></div>
+        <div class="li"><div class="n">3</div><div class="t">活干完<strong>不会自动进「评审中」</strong>——agent 自提 MR 后 buddy 检测到才推评审中；无 MR 的活诚实停在「进行中」，不假装前进</div></div>
+        <div class="li"><div class="n">4</div><div class="t">评审通过：点 <strong>→已完成</strong>（「完成」永远由人点）</div></div>
+      </div>
+      <p class="note-line">终端会话已按「每卡一会话」重构：切到别的卡再切回来接回原会话；buddy 重启后点卡即按原路径恢复。阶段循环（方法循环卡）只用于 stage playbook / hub workflow / cron，issue 终端会话不显。实跑「▶ 跑后终端」截图 defer。</p>
+
+      <p class="linker">Issue 状态机 / 一活一会话 / 调度 → <a href="#" onclick="go('m3');return false">Issue 与调度</a> · 技能怎么注入 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a> · 执行与验收 → <a href="#" onclick="go('m5');return false">执行与证据</a></p>
+      <div class="foot">事实源：cowelink 创建流实跑 2026-08-06；终端会话重构（V1-TermRefactor）已落地，实跑截图 defer。</div>
     </section>
 
     <!-- ============ M1 架构与铁律 ============ -->
@@ -511,8 +584,8 @@
           <div class="ly"><div class="nm">app-desktop</div><div class="ds">桌面壳（Dioxus）。<strong>唯一</strong>允许碰 UI 框架的地方。用户点按钮 → 发意图。</div></div>
           <div class="ly"><div class="nm">ui</div><div class="ds">纯函数：状态 → 可渲染 DTO。无 IO。</div></div>
           <div class="ly"><div class="nm">bw-app</div><div class="ds">编排大脑：用例、守卫、调度、重算。几乎所有「业务发生」都在这。</div></div>
-          <div class="ly"><div class="nm">bw-store</div><div class="ds">SQLite 哑存储。观测/交棒只追加；信号列是缓存，不是手填入口。</div></div>
-          <div class="ly"><div class="nm">bw-engine</div><div class="ds">真干活：claude CLI、远端仓 API、工作区证据、指标/连接器文件解析。</div></div>
+          <div class="ly"><div class="nm">bw-store</div><div class="ds">SQLite 哑存储。观测/交棒只追加；信号列是缓存，不是手填入口；<code>claude_conversation</code> 表存终端会话持久身份（PTY 句柄在内存，不在库里）。</div></div>
+          <div class="ly"><div class="nm">bw-engine</div><div class="ds">真干活：claude CLI、远端仓 API、工作区证据、指标/连接器文件解析、<strong>终端会话管理（<code>TerminalManager</code>，纯内存 PTY 会话 Map）</strong>。</div></div>
           <div class="ly"><div class="nm">bw-core</div><div class="ds">领域内核：五阶段、Issue 合法转移、派生类型。零 IO、零 UI，须能编到 wasm。</div></div>
         </div>
       </div>
@@ -524,7 +597,7 @@
       <h2 class="sec"><span class="n">四铁律</span>产品边界</h2>
       <div class="rules">
         <div class="rule"><div class="n">01</div><div class="t">管理体系自带</div><div class="d">五阶段打法内置；挂仓即搭起手装置。</div></div>
-        <div class="rule"><div class="n">02</div><div class="t">人守验收</div><div class="d">Done 唯一入边 = InReview；agent / cron 到不了完成。</div></div>
+        <div class="rule"><div class="n">02</div><div class="t">人守验收</div><div class="d">Done 唯一入边 = InReview；agent / cron 到不了完成。issue 走终端后 MR 由 agent 自提 + buddy poll 检测；无 MR 的活诚实停在 InProgress，不假装前进。</div></div>
         <div class="rule"><div class="n">03</div><div class="t">健康难造假</div><div class="d">观测只追加；settle-once；手填戴徽。</div></div>
         <div class="rule"><div class="n">04</div><div class="t">经验复利</div><div class="d">蒸馏 → 注入 → uses+1；胜率由战绩派生。</div></div>
       </div>
@@ -539,7 +612,19 @@
         </tbody>
       </table>
       <p class="where">实现入口：<code>crates/bw-core</code> · <code>crates/bw-engine</code> · <code>crates/bw-store</code> · <code>crates/bw-app</code> · <code>crates/ui</code> · <code>crates/app-desktop</code>。命题原文见 <code>plan/07-product-proposition.md</code>。</p>
-      <div class="foot">反命题：不是团队协作 / 通用看板 / 审批系统 / 云服务。</div>
+
+      <h2 class="sec"><span class="n">终端会话身份层</span>持久身份 + 内存 PTY</h2>
+      <p class="note-line">issue 终端会话重构后，会话身份与 PTY 连接分开存：<strong>身份落库</strong>（buddy 重启可恢复），<strong>PTY 进程在内存</strong>（进程死只丢实时连接，不丢身份）。</p>
+      <table class="ktable">
+        <thead><tr><th>层</th><th>存哪</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td class="k">持久身份</td><td>SQLite <code>claude_conversation</code> 表</td><td>会话 id / <code>issue_id</code>（一件交互式活最多一个会话）/ <code>claude_session_id</code>（<code>--resume</code> 用）/ <code>workspace_path</code> / <code>branch_name</code> / 时间戳</td></tr>
+          <tr><td class="k">内存 PTY</td><td>bw-engine <code>TerminalManager</code></td><td>PTY 句柄 / 字节 channel / 当前尺寸 / xterm 实例；进程退出即清空，从持久身份恢复</td></tr>
+          <tr><td class="k">旧 issue 列</td><td>已物理删除</td><td>issue.<code>claude_session_id</code> / issue.<code>interactive_started</code> 退场；业务读路径只认 <code>claude_conversation</code> 表（不为向后兼容留旧路径）</td></tr>
+        </tbody>
+      </table>
+      <p class="where">落点：表 <code>crates/bw-store/src/schema.sql</code> → <code>claude_conversation</code>；PTY 管理 <code>crates/bw-engine/src/terminal_manager.rs</code>；身份/调度收口 <code>crates/bw-app</code>。</p>
+      <div class="foot">反命题：不是团队协作 / 通用看板 / 审批系统 / 云服务。终端会话设计见 <code>docs/v1-prototype/issue2-terminal-conversation-refactor.md</code>。</div>
     </section>
 
     <!-- ============ M2 Hub 全局库 ============ -->
@@ -643,47 +728,51 @@
 
       <h2 class="sec"><span class="n">状态机</span>主图</h2>
       <div class="diagram">
-        <div class="cap">明路 · Done 只能从 InReview 进入</div>
+        <div class="cap">明路 · Done 只能从 InReview 进入 · issue 阶段循环脚本调度路径已退场</div>
         <div class="pipe">
           <div class="box"><div class="t">Backlog</div><div class="d">待办池</div></div>
           <div class="arr">→</div>
           <div class="box"><div class="t">Todo</div><div class="d">待办</div></div>
           <div class="arr">→</div>
-          <div class="box"><div class="t">InProgress</div><div class="d">进行中<br>会话活着</div></div>
+          <div class="box"><div class="t">InProgress</div><div class="d">进行中<br>交付运行<br>占 active_run</div></div>
           <div class="arr">→</div>
-          <div class="box"><div class="t">InReview</div><div class="d">评审中<br>已有开放 MR</div></div>
+          <div class="box"><div class="t">InReview</div><div class="d">评审中<br>agent 自提 MR<br>poll 检测到</div></div>
           <div class="arr">→</div>
           <div class="box warn"><div class="t">Done</div><div class="d">完成<br>人显式点</div></div>
         </div>
       </div>
-      <p class="note-line">另有 Blocked（须填原因）与 Cancelled。合法边表在 <code>bw-core</code> 的 <code>can_transition_to</code>；产品 UI 不提供拖拽回退看板。</p>
+      <p class="note-line">另有 Blocked（须填原因）与 Cancelled。合法边表在 <code>bw-core</code> 的 <code>can_transition_to</code>；产品 UI 不提供拖拽回退看板。所有 issue ▶跑 走嵌入终端（每卡一会话）；<strong>issue 阶段循环脚本调度路径已退场</strong>，阶段循环机器只服务 stage playbook / hub workflow / cron（非 issue）。</p>
       <ul class="bullets">
-        <li><strong>交互式进 InReview</strong>：不信 agent 自报；buddy 查远端是否确有该分支的开放 MR/PR，有才转入并记 <code>pr_number</code>。</li>
+        <li><strong>交付锁只拦新交付</strong>：同项目「只一件 InProgress 活占 <code>active_run</code>」；Done/InReview 活的 PTY 若仍活，<strong>降级为咨询</strong>（迁到 <code>consultation_runs</code>，放锁、不杀 PTY、不清 worktree），不挡同项目别的活。</li>
+        <li><strong>交互式进 InReview</strong>：不信 agent 自报；buddy 查远端是否确有该分支的开放 MR/PR，有才转入并记 <code>pr_number</code>。无 MR 的活诚实停在 InProgress。</li>
+        <li><strong>结算两轨</strong>：交付结束走 <code>Interactive</code>（finalize 记 skill uses + 产物登记）；咨询结束走 <code>ConsultationEnded</code>（只关 PTY，不 settle、不改状态、不碰 active_run）。</li>
         <li><strong>Autopilot</strong>：定时只<strong>建</strong>活，不开跑、不完成。</li>
         <li><strong>settle-once</strong>：第一次进入 Done 记账；重开再完成不双计（<code>settled_at</code>）。</li>
       </ul>
 
-      <h2 class="sec"><span class="n">一活一会话</span></h2>
+      <h2 class="sec"><span class="n">一活一会话</span>每卡独立 PTY</h2>
       <div class="split2">
         <div class="pane">
-          <div class="ph">找指标 / 绑数据</div>
+          <div class="ph">会话生命周期</div>
           <ul>
-            <li>首次 ▶跑：灌技能 + 衔接层</li>
-            <li>再点同一卡：续聊（同一 <code>claude_session_id</code>）</li>
-            <li>Done 后仍可打开续聊</li>
-            <li>新活靠读已合入产物接上下文</li>
+            <li>首次 ▶跑：建 <code>claude_conversation</code> 行 + spawn PTY（占 <code>active_run</code>）</li>
+            <li>切到别的卡再回来：接回原 PTY（<strong>不杀</strong>，切显示/键盘）</li>
+            <li>Done/InReview 仍可点「续聊」：咨询态，走 <code>consultation_runs</code>，不占 <code>active_run</code>、不 settle、不改状态</li>
+            <li>buddy 重启后 PTY 全死（如实）；点卡按原路径重建 worktree + <code>--resume</code>，<strong>不在启动时批量唤醒</strong></li>
+            <li>新活靠读已合入产物接上下文（薄编排器）</li>
           </ul>
         </div>
         <div class="pane">
-          <div class="ph">人怎么驱动</div>
+          <div class="ph">人怎么驱动 + 焦点同步</div>
           <ul>
-            <li>点跑 / 续聊</li>
-            <li>嵌终端多轮改仓内文件</li>
-            <li>agent 提 MR → buddy 读回</li>
-            <li>人 merge / 显式完成 → Done</li>
+            <li>点跑 / 续聊 → 嵌终端多轮改仓内文件</li>
+            <li>agent 自提 MR → buddy <strong>poll</strong> 读回 → InReview</li>
+            <li>人 merge / 显式完成 → Done（pull + Sync* 装表）</li>
+            <li>左侧 session 卡 ↔ 嵌终端焦点<strong>双向同步</strong>：按 <code>#N 标题</code> 匹配 issue，切卡不杀 peer PTY</li>
           </ul>
         </div>
       </div>
+      <p class="note-line">交付离开 InProgress（→InReview poll / →Done merge）且 PTY 仍活 → <strong>降级为咨询</strong>（放锁、handle+guard 迁 <code>consultation_runs</code>、补记 skill uses、不杀 PTY/不清 worktree）。降级 PTY 退出走 <code>cleanup_demoted_consultation</code> 防泄漏。降级 PTY 不带 §6.2 咨询 prompt（下次 resume 才注入，诚实口径）。</p>
 
       <h2 class="sec"><span class="n">issue 表 · 关键字段</span></h2>
       <table class="ktable">
@@ -693,17 +782,16 @@
           <tr><td class="k">standard_skill</td><td>标配三件套挂的技能 slug；手建活通常为空</td></tr>
           <tr><td class="k">pr_number</td><td>关联的 MR/PR 号；非 0 才谈得上「有评审物证」</td></tr>
           <tr><td class="k">settled_at</td><td>首次 Done 记账时间；NULL = 从未结算</td></tr>
-          <tr><td class="k">interactive_started</td><td>是否已开过交互式会话</td></tr>
-          <tr><td class="k">claude_session_id</td><td>续聊用的会话 id；空则下次按首次启动重灌技能</td></tr>
           <tr><td class="k">blocked_reason</td><td>仅 Blocked 时非空</td></tr>
         </tbody>
       </table>
+      <p class="note-line">会话身份不在 issue 表——<code>claude_session_id</code> / <code>interactive_started</code> 两列已物理删除（见 <a href="#" onclick="go('m1');return false">架构与铁律 · 终端会话身份层</a>）；读会话身份查 <code>claude_conversation</code> 表。</p>
 
       <div class="ex">
         <div class="eh">Example · 三件套从哪来</div>
         <div class="ed">挂远端仓的项目，纳入收尾自动建：竞品分析 → 找指标 → 绑数据（软序）。各挂 <code>competitive-analysis</code> / <code>north-star-discovery</code> / <code>metrics-binding</code>。纯本地无远端则不建这三张。</div>
       </div>
-      <p class="where">落点：状态机 <code>crates/bw-core</code>；播种/调度/交互式 <code>crates/bw-app</code>；表定义 <code>schema.sql</code> → <code>issue</code>。</p>
+      <p class="where">落点：状态机 <code>crates/bw-core</code>；播种/调度/交付锁/降级咨询 <code>crates/bw-app</code>；PTY 会话 <code>crates/bw-engine/src/terminal_manager.rs</code>；身份表 <code>schema.sql</code> → <code>claude_conversation</code> + <code>issue</code>。</p>
       <div class="foot">怎么跑、怎么证 → <a href="#" onclick="go('m5');return false">执行与证据</a>。</div>
     </section>
 
@@ -757,7 +845,20 @@
         <div class="box"><div class="t">下次注入</div><div class="d">uses+1</div></div>
       </div>
       <p class="where">落点：技能正本 <code>docs/skills/</code>；注入/衔接层 <code>crates/bw-engine</code>（交互式）；Hub 登记 <code>skill</code> 表；蒸馏 <code>crates/bw-app</code>。</p>
-      <div class="foot">执行两轨 → <a href="#" onclick="go('m5');return false">执行与证据</a>。</div>
+
+      <h2 class="sec"><span class="n">V1 收口</span>issue 终端会话的 prompt 模型</h2>
+      <ul class="bullets">
+        <li><strong>所有 issue ▶跑 都进嵌入终端</strong>（每卡一会话），不再只限找指标/绑数据两技能。</li>
+        <li><strong>位置 prompt = issue 标题+描述</strong>（auto-submit 首句用户消息；描述空则只标题）。</li>
+        <li><strong>系统提示词 = bridge prompt + 技能正文 + 蒸馏块 + 目录块</strong>（<code>--append-system-prompt</code>）；无技能也跑，经验复利在 issue 交付侧不静默丢失。</li>
+        <li><strong>bridge prompt 文案两档</strong>：空 slug 显「未关联技能,由你驱动或按用户要求干活;项目上下文与铁律已就位」；非空未知 slug 仍显「你正在执行技能: `<slug>`」（让用户看到 typo 能自查）。</li>
+        <li><strong>多 agent 转 prompt 驱动</strong>：技能方法论讲清 claude 在终端会话内用 SubAgent 调度各 agent（独立上下文）；buddy 不再脚本调度 issue 的 agent——per-agent 战绩记账不适用于 issue 活（PTY 看不见 claude 内部调度）。</li>
+        <li><strong>阶段循环只用于非 issue 命令</strong>：stage playbook / hub workflow / cron 仍用 buddy 脚本调度的阶段循环机器，不在本次收口范围。</li>
+        <li><strong>咨询态 §6.2 prompt</strong>：resume 一个 Done/InReview 活的会话时，在系统提示词追加「这活已由人验收，新交付请另开一件活」；<strong>仅 <code>open_conversation</code>（续聊）路径注入</strong>，交付 resume 不注入。降级 PTY 也不带（下次续聊才注入）——这是行为约定，不是技术只读。</li>
+        <li><strong>默认系统提示词 / 默认 skill</strong>：后续 V1 催熟设计点（留口，不假装已建）。</li>
+        <li><strong>macOS Unix PTY adapter</strong>：未建，留口。V1 交互式 Windows-only；macOS 适配按 <code>issue2-terminal-conversation-refactor.md</code> §8 补 Unix adapter（上层多会话/路由/xterm 不感知平台，已一次做完）。</li>
+      </ul>
+      <div class="foot">执行两轨 → <a href="#" onclick="go('m5');return false">执行与证据</a>；终端会话身份 → <a href="#" onclick="go('m1');return false">架构与铁律</a>。</div>
     </section>
 
     <!-- ============ M5 执行与证据 ============ -->
@@ -770,19 +871,19 @@
       <h2 class="sec"><span class="n">两轨对照</span></h2>
       <div class="split2">
         <div class="pane">
-          <div class="ph">后台 one-shot</div>
+          <div class="ph">后台 one-shot · 非 issue</div>
           <ul>
             <li>本机 <code>claude -p</code>（打印模式）</li>
-            <li>适合不需边聊边改的活</li>
+            <li>阶段 playbook / hub workflow / cron / examples</li>
             <li>单次花费可美元封顶</li>
             <li>无真实工作区 → Mock，产出自标【mock】</li>
           </ul>
         </div>
         <div class="pane">
-          <div class="ph">交互式 · 人在环</div>
+          <div class="ph">交互式 · 所有 issue ▶跑</div>
           <ul>
-            <li>嵌终端多轮（不带 <code>-p</code>）</li>
-            <li>找指标 / 绑数据主路径</li>
+            <li>嵌终端多轮（不带 <code>-p</code>），每卡独立 PTY</li>
+            <li>issue 标题+描述驱动；无技能也跑</li>
             <li>时间墙 + 用量读回（非美元硬帽）</li>
             <li>最多到 InReview；Done 仍由人</li>
           </ul>
@@ -797,16 +898,18 @@
           <div class="arr">→</div>
           <div class="box"><div class="t">仓内改动</div><div class="d">worktree / 分支<br>产物登记</div></div>
           <div class="arr">→</div>
-          <div class="box"><div class="t">远端 MR</div><div class="d">buddy 主动查询<br>不信自报</div></div>
+          <div class="box"><div class="t">远端 MR</div><div class="d">agent 自提<br>buddy poll 读回</div></div>
           <div class="arr">→</div>
           <div class="box warn"><div class="t">InReview</div><div class="d">写入 pr_number<br>等人 merge</div></div>
         </div>
       </div>
       <ul class="bullets">
+        <li><strong>每卡独立 PTY</strong>：字节按 <code>conversation_id</code> 路由到对应 xterm；有界输出环（每会话独立，切走期间缓冲不丢，满丢最老）。多会话并发：A 交付 + B/C 咨询同时活。</li>
         <li><strong>会话即记录</strong>：不另做对话摘要表；交互式<strong>不写</strong> <code>workflow_run</code>，弹窗「运行史」常空——以嵌终端为准。</li>
-        <li><strong>单例 live PTY</strong>：全应用一路当前终端；切非 live 卡仍可能看到当前画面（回看/Done resume 入口 follow-up）。</li>
-        <li><strong>续聊</strong>：有 <code>claude_session_id</code> 则 resume；没有则按首次启动重灌技能。</li>
-        <li><strong>触发查 MR</strong>：一轮结束钩子 + 短周期轮询兜底 → InReview。</li>
+        <li><strong>交付降级咨询</strong>：issue 离开 InProgress（→InReview poll / →Done merge）且 PTY 仍活 → 降级为咨询（放 <code>active_run</code> 锁、不杀 PTY、不清 worktree）。降级 PTY 退出走 <code>cleanup_demoted_consultation</code>。</li>
+        <li><strong>续聊</strong>：有 <code>claude_session_id</code>（在 <code>claude_conversation</code> 表）则 <code>--resume</code>；没有则按首次启动重灌。</li>
+        <li><strong>触发查 MR</strong>：agent 自提 MR 后，buddy 短周期轮询远端 → InReview。无 MR 的活诚实停 InProgress。</li>
+        <li><strong>网关抖动</strong>：真 <code>claude -p</code> / 交互式受 GLM 网关 529 抖动影响，只在 example / 监理脚本里跑（可安全重试），不作为常绿验证手段。</li>
       </ul>
 
       <h2 class="sec"><span class="n">合入与装表</span>两条路径（现状）</h2>
@@ -824,7 +927,7 @@
         <div class="eh">Example · 找指标 ▶跑 → InReview</div>
         <div class="ed">嵌终端多轮 → 活分支写 <code>.bw/metrics.toml</code> → 自提 MR → buddy 读回开放 MR → InReview。buddy 内 merge，或网页合完点「已完成」——都会 pull+Sync 装表。</div>
       </div>
-      <p class="where">落点：交互式 <code>crates/bw-engine</code>；MergeIssuePr / TransitionIssue <code>crates/bw-app</code>；嵌终端 <code>app-desktop</code>。</p>
+      <p class="where">落点：PTY 会话 <code>crates/bw-engine/src/terminal_manager.rs</code>；交互式启动/续聊/降级咨询 <code>crates/bw-app</code>；MergeIssuePr / TransitionIssue <code>crates/bw-app</code>；嵌终端 <code>app-desktop</code>。</p>
       <div class="foot">技能怎么灌 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>；采数链 → <a href="#" onclick="go('m6');return false">指标与健康</a>。</div>
     </section>
 
@@ -855,10 +958,10 @@
       <table class="ktable">
         <thead><tr><th>字段 / 现象</th><th>含义</th></tr></thead>
         <tbody>
-          <tr><td class="k">collect_kind = script|manual</td><td><strong>采集计划</strong>（找指标写入）；不是「已经采到数」</td></tr>
+          <tr><td class="k">collect_kind = script|manual</td><td><strong>采集计划</strong>（找指标写入）；不是「已经采到数」<span class="muted" style="font-size:11px;">　· 代码枚举尚含 legacy kind（github/codehub/bw/connector），UI 已 forward-correct 标 legacy·迁 script，枚举收口见 W3-2</span></td></tr>
           <tr><td class="k">observation 有无</td><td>有数才可能亮灯；无 = Unknown 灰</td></tr>
           <tr><td class="k">「手填」徽</td><td>观测 <code>source_kind</code> 来自人手；≠ collect_kind 本身</td></tr>
-          <tr><td class="k">总览手填入口</td><td>BizMetricCard / 北极星灰卡<strong>无</strong> RecordInline（P10 未关；绕法看阶段旧 MetricCard，项目级业务指标可能仍填不了）</td></tr>
+          <tr><td class="k">总览手填入口</td><td>已接：manual 指标在总览卡内可直接手填（BizMetricCard 内嵌 RecordInline，P10 已落地）；北极星若无 metric 行则灰卡暂不能填（见 W3-1）</td></tr>
         </tbody>
       </table>
 

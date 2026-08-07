@@ -103,3 +103,13 @@ id_newtype!(
     /// Stable identity of an [`crate::model::Issue`].
     IssueId
 );
+id_newtype!(
+    /// Stable identity of a `claude_conversation` row — buddy's own id for
+    /// one claude CLI session (`--resume <claude_session_id>`) bound to an
+    /// interactive Issue. V1 terminal refactor 阶段1: 活(Issue)和会话
+    /// (Conversation)解耦,会话有独立身份,可跨多次点开,不随活 Done 而
+    /// 结束。和 claude CLI 的 session_id 是两个 id: 这个是 buddy 内部的稳定
+    /// 行 id, claude_session_id 是 hook 回传的 claude CLI 会话 id(用于
+    /// `--resume`)。
+    ConversationId
+);
