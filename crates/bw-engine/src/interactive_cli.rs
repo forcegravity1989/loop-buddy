@@ -159,8 +159,13 @@ pub struct LaunchPlan {
 /// Build the startup plan for an interactive agent session.
 ///
 /// For claude (`supported = true`):
-/// `claude --append-system-prompt <bridge> <skill_body>
+/// `claude --append-system-prompt <system_prompt> <position_prompt>
 ///  --dangerously-skip-permissions --disallowedTools "Bash(gh pr merge)"`
+///
+/// - `system_prompt` → `--append-system-prompt`(caller 传 bridge prompt +
+///   技能正文 + 蒸馏/目录块,见 `run_issue_interactive`)。
+/// - `position_prompt` → 位置 prompt(auto-submit 首句用户消息;caller 传
+///   issue 标题+描述)。
 ///
 /// No `-p`/`--print` (interactive), no `--max-budget-usd` (interactive
 /// sessions are user-paced, no per-call cap). The env is inherited from
@@ -168,8 +173,8 @@ pub struct LaunchPlan {
 /// [`crate::ClaudeCliExecutor`]) so the child uses its own CLI config.
 pub fn build_startup_plan(
     agent: &TuiAgentConfig,
-    skill_body: &str,
-    bridge_system_prompt: &str,
+    position_prompt: &str,
+    system_prompt: &str,
     workspace_cwd: &Path,
 ) -> Result<LaunchPlan, ExecError> {
     if !agent.supported {
@@ -196,15 +201,19 @@ pub fn build_startup_plan(
     }
 
     let mut args = Vec::with_capacity(8);
-    // Bridge system prompt — appended to the default system prompt.
+    // System prompt — appended to claude's default system prompt. Caller
+    // assembles bridge (project context + 铁律 + 技能契约) + 技能正文 +
+    // 蒸馏/目录块 into this one string.
     args.push("--append-system-prompt".to_string());
-    args.push(bridge_system_prompt.to_string());
-    // Skill body — positional `prompt` argument (first user message).
-    // DEVIATION: design calls for `--prefill <skill_body>` (draft in the
-    // input box); the flag doesn't exist in the current CLI. Positional
-    // prompt achieves the same effect (skill body is the first thing the
-    // agent sees and acts on), just auto-sent instead of a draft.
-    args.push(skill_body.to_string());
+    args.push(system_prompt.to_string());
+    // Positional `prompt` — the first user message, auto-submitted
+    // (`submit_prompt: true` sends Enter). Caller passes issue 标题+描述
+    // (the requirement); the skill methodology lives in the system prompt
+    // above, so claude runs the method ON the requirement.
+    // DEVIATION: design once called for `--prefill <skill_body>` (draft in
+    // the input box); the flag doesn't exist in the current CLI. Positional
+    // prompt achieves the same effect, just auto-sent instead of a draft.
+    args.push(position_prompt.to_string());
     // Skip permissions — interactive sessions need to read/write files
     // and run commands without per-action prompts (the user is watching
     // the terminal and can intervene at any time).
