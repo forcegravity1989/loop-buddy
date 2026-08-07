@@ -1867,9 +1867,70 @@ impl App {
         self.state.terminal_manager.live_ids()
     }
 
-    fn focus_conversation(&mut self, conversation_id: ConversationId, issue_id: IssueId) {
+    async fn focus_conversation(&mut self, conversation_id: ConversationId, issue_id: IssueId) {
         self.state.focused_conversation = Some(conversation_id);
         self.state.focused_issue = Some(issue_id);
+        // Bug2(V1-TermFocus): 终端→左——回写 active_session 到该 issue 对应的
+        // 阶段记录(按 run_sess_title `#N 标题` 反查 SessionId)。左侧高亮跟着
+        // 终端焦点走。找不到(纯阶段记录不挂 issue)则静默跳过。
+        self.writeback_active_session(issue_id).await;
+    }
+
+    /// Bug2:按 issue 的 run_sess_title(`#N 标题`)在 store 的 session 表里
+    /// 反查 SessionId,回写 `active_session`。这样左侧 session 卡高亮跟着
+    /// 嵌终端焦点走(终端切焦点 → 左侧高亮同步)。用 `self.state.issues`
+    /// 拿 number+title(内存,无需额外查库),再查 session(一次 list_sessions)。
+    async fn writeback_active_session(&mut self, issue_id: IssueId) {
+        let (p, title) = match self.state.issues.iter().find(|i| i.id == issue_id) {
+            Some(issue) => (
+                issue.project_id,
+                format!("#{} {}", issue.number, issue.title),
+            ),
+            None => return,
+        };
+        if let Ok(sessions) = self.store.list_sessions(p).await {
+            if let Some(s) = sessions.into_iter().find(|s| s.title == title) {
+                self.state.active_session = Some(s.id);
+            }
+        }
+    }
+
+    /// Bug2(V1-TermFocus): 左→终端——解析 session→issue。session 的 title 是
+    /// `#N 标题`(见 op.rs `run_sess_title = format!("#{} {}", i.number,
+    /// i.title)`),按 number+title 在 `self.state.issues` 里匹配 issue。
+    /// 匹配到 + 活 PTY → `focus_conversation`;匹配到 + 无活 PTY 但有
+    /// `claude_session_id` → `run_issue_now`(与 `OpenIssueDetail` 一致:
+    /// Done/InReview 进 `open_conversation`、InProgress 进 resume);匹配不到
+    /// (纯 stage-playbook 跑的阶段记录,不挂 issue)→ 保持原行为。
+    async fn sync_session_to_terminal(&mut self, sid: SessionId) -> Result<(), AppError> {
+        let p = self.active()?;
+        let title = self
+            .store
+            .list_sessions(p)
+            .await?
+            .into_iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.title);
+        let Some(title) = title else {
+            return Ok(());
+        };
+        let issue_id = self
+            .state
+            .issues
+            .iter()
+            .find(|i| format!("#{} {}", i.number, i.title) == title)
+            .map(|i| i.id);
+        let Some(issue_id) = issue_id else {
+            return Ok(());
+        };
+        if let Some(c) = self.store.get_conversation_by_issue(issue_id).await? {
+            if self.state.terminal_manager.is_live(c.id) {
+                self.focus_conversation(c.id, issue_id).await;
+            } else if !c.claude_session_id.is_empty() {
+                self.run_issue_now(SessionId::new(), issue_id).await?;
+            }
+        }
+        Ok(())
     }
 
     fn clear_focus_if(&mut self, conversation_id: ConversationId) {
@@ -4838,7 +4899,7 @@ impl App {
         if let Some(ar) = &self.state.active_run {
             if ar.issue.id == id {
                 if let Some(c) = conv {
-                    self.focus_conversation(c.id, id);
+                    self.focus_conversation(c.id, id).await;
                 }
                 return Ok(());
             }
@@ -4846,7 +4907,7 @@ impl App {
         // 咨询 PTY 已活 → 只切焦点。
         if let Some(c) = &conv {
             if self.state.terminal_manager.is_live(c.id) {
-                self.focus_conversation(c.id, id);
+                self.focus_conversation(c.id, id).await;
                 return Ok(());
             }
         }
@@ -5307,7 +5368,7 @@ impl App {
                     self.state
                         .terminal_manager
                         .attach(conversation_id, meta, None);
-                self.focus_conversation(conversation_id, id);
+                self.focus_conversation(conversation_id, id).await;
                 if is_resume {
                     let _ = self
                         .backfill_conversation_workspace_if_empty(
@@ -5405,7 +5466,7 @@ impl App {
             // 也聚焦 —— 不二度 spawn,否则旧 handle 的 ConsultationEnded
             // settle 会误清新 handle(HashMap insert 覆盖旧 key后,remove
             // 取到新 cr)。等排队 settle 清掉记录后,下次点卡才走 spawn。
-            self.focus_conversation(conv.id, id);
+            self.focus_conversation(conv.id, id).await;
             self.clear_restoring_if(conv.id);
             self.emit(Event::IssuesChanged);
             return Ok(());
@@ -5490,7 +5551,7 @@ impl App {
             .state
             .terminal_manager
             .attach(conversation_id, meta, None);
-        self.focus_conversation(conversation_id, id);
+        self.focus_conversation(conversation_id, id).await;
         let _ = self
             .backfill_conversation_workspace_if_empty(
                 id,
@@ -7202,7 +7263,7 @@ impl App {
                 // 不造第二条路径;Boot 不批量起)。
                 if let Some(c) = &conv {
                     if self.state.terminal_manager.is_live(c.id) {
-                        self.focus_conversation(c.id, id);
+                        self.focus_conversation(c.id, id).await;
                     } else if !c.claude_session_id.is_empty() {
                         self.run_issue_now(SessionId::new(), id).await?;
                     }
@@ -9337,7 +9398,18 @@ impl App {
 
             Command::SetPanel(p) => self.state.panel = p,
             Command::SetScope(s) => self.state.scope = s,
-            Command::SelectSession(s) => self.state.active_session = s,
+            Command::SelectSession(s) => {
+                self.state.active_session = s;
+                // Bug2(V1-TermFocus): 左→终端——解析 session→issue(session
+                // title 是 `#N 标题`,按 number+title 匹配 issue),有活 PTY
+                // 则切焦点,无活 PTY 但有 claude_session_id 则唤醒(与
+                // OpenIssueDetail 一致——Done/InReview 进 open_conversation、
+                // InProgress 进 resume)。解析不到(纯阶段记录不挂 issue)→
+                // 保持原行为(只设 active_session)。best-effort:错误不阻塞。
+                if let Some(sid) = s {
+                    let _ = self.sync_session_to_terminal(sid).await;
+                }
+            }
             // V1 终端会话重构·底座: 按 conversation_id 转发到 TerminalManager。
             Command::TerminalInput {
                 conversation_id,
