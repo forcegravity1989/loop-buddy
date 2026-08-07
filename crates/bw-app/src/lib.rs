@@ -1757,10 +1757,11 @@ impl App {
     /// processing). Processes:
     ///  - **SessionStart**: look up the issue by `cwd` (via the
     ///    `interactive_sessions` map) and store `session_id` via
-    ///    `store.set_issue_claude_session_id`. This is the F1 fix: only when
+    ///    `store.set_conversation_session_id` (writes the `claude_conversation`
+    ///    row, not the retired `issue` columns). This is the F1 fix: only when
     ///    the hook fires (session really established) is the session_id
-    ///    stored — an empty session_id on the issue means the first spawn
-    ///    failed, and the next ▶ run falls back to `build_startup_plan`.
+    ///    stored — an empty session_id means the first spawn failed, and the
+    ///    next ▶ run falls back to `build_startup_plan`.
     ///  - **Stop**: set `pending_stop_check = true` so the next
     ///    `tick_scheduler` fire runs `poll_interactive_inreview` (the Stop
     ///    event is the real-time trigger; the tick's cadence is the natural
@@ -5734,7 +5735,13 @@ impl App {
                 "会话尚无 claude_session_id,无法 resume".into(),
             ));
         }
-        if self.state.terminal_manager.is_live(conv.id) {
+        if self.state.terminal_manager.is_live(conv.id)
+            || self.state.consultation_runs.contains_key(&conv.id)
+        {
+            // 既有咨询会话:活 PTY 直接聚焦;PTY 刚退出、settle 尚未处理间
+            // 也聚焦 —— 不二度 spawn,否则旧 handle 的 ConsultationEnded
+            // settle 会误清新 handle(HashMap insert 覆盖旧 key后,remove
+            // 取到新 cr)。等排队 settle 清掉记录后,下次点卡才走 spawn。
             self.focus_conversation(conv.id, id);
             self.clear_restoring_if(conv.id);
             self.emit(Event::IssuesChanged);

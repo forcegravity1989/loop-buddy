@@ -327,6 +327,10 @@ impl TerminalManager {
   - 诚实口径:行为约定不是技术只读;UI 文案写「咨询中 · 新交付请另开一件活」,不写「只读模式」。
   - 「转成新活」:详情 overlay(续聊旁)+ 工作流终端区(焦点属于 `consultable_issues` 时)显式按钮 → 复用 `Command::CreateIssue`,标题预填「来自咨询：…」、描述带源 issue 编号。不做自动意图分类;不加新 Command。
   - `--allowedTools` 硬只读仍否决(§6.1/§13 既有未决保留)。
+- **全量检视修复(2026-08-07,五阶段落地后 4 路并行检视)**:
+  - **修**:① 窄窗错行根治缺口——`term_init_js` 仅初次/remount fit,缺 `display:none`↔visible / 窗口缩放 / 侧栏变化 / 字体就绪的 re-fit(§7.6);加 `ResizeObserver`(观察 `term.element`,跨 remount 稳定)+ `window.resize` 监听,fit 触发 onResize→stash→Rust drain 发 `TerminalResize`。display:none 下尺寸为 0 跳过,避免 FitAddon 零宽框抛错。② `open_conversation` 入口加 `consultation_runs.contains_key` 短路(覆盖活 PTY + PTY 刚死等 settle 清理两种),防双 spawn——否则旧 handle 的 `ConsultationEnded` settle 会误清新 handle(HashMap insert 覆盖旧 key 后 remove 取新 cr)。③ 清 hook doc 注释里残留旧方法名 `set_issue_claude_session_id`。
+  - **defer(记此处,不擅加脆弱路径)**:`restoring_issue` 板级 local signal 在 resume 失败时卡死「恢复中…」——PTY 死→`pty_restoring` 清、`pty_active` 仍 false→`resume_ready` false→local signal 无显式 clear 路径,永久贴到切项目/面板。严重度低(自愈;触发为 resume 失败,主要首次配环境)、纯文案。正确修法需 board 层订阅 `pty_restoring`/`pty_active` 的 reactive effect,但 `OpVm` 是渲染期读值的平结构、无裸 signal 可订,加 plumbing 风险/收益不划算(守「不为向后兼容留旧路径」不加脆弱 reactive 路径)。后续若动 board reactive 层再顺手清。
+  - **defer(§8 seam 粒度偏差,非阻塞)**:§8 呼唤的 `PtyBackend` trait seam 实际未提取——平台分叉直接写在 `InteractiveCliExecutor::run_skill_pty` 内(`#[cfg(windows)]` conpty-oxide,非 Windows trait default `Err`)。§8 核心「上层不感知平台」已满足(`TerminalManager` 不碰平台类型);但 seam 粒度是「换整个 executor」而非「只换 PTY 后端」。macOS 适配时可二选一:在 `run_skill_pty` 内加 `#[cfg(target_os="macos")]` 分支,或提取 `PtyBackend` trait。当前不提取(不擅扩 scope)。
 ---
 
 ## 14. 事实源锚点

@@ -3398,6 +3398,23 @@ return (async function(id) {{
         sess.resize = {{ cols: size.cols, rows: size.rows }};
     }});
 
+    // V1-TermRefactor review · 设计 md §7.6:卡片重新显示 / 窗口缩放 /
+    // 侧栏变化 / 字体就绪都 re-fit。fit() 触发 onResize → stash
+    // sess.resize → Rust 30ms drain 发 TerminalResize(带 id)。观察
+    // term.element(跨 remount 稳定);display:none 下尺寸为 0 跳过,避免
+    // FitAddon 在零宽框上抛错。仅新建分支挂一次,re-attach 不重复。
+    var refit = function() {{
+        try {{
+            if (term.element && term.element.clientWidth > 0 && term.element.clientHeight > 0) {{
+                fitAddon.fit();
+            }}
+        }} catch(e) {{}}
+    }};
+    if (window.ResizeObserver) {{
+        new ResizeObserver(refit).observe(term.element || div);
+    }}
+    window.addEventListener('resize', refit);
+
     sess.term = term;
     sess.fit = fitAddon;
     sess.ready = true;
