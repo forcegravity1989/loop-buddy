@@ -303,6 +303,16 @@ pub fn weekly_spark(obs: &[(i64, String)], now_unix: i64) -> Vec<f32> {
     spark
 }
 
+/// V1-quickfix · whether the latest (current) week bucket has a real
+/// observation (not a carry-forward). Used so `weekly_delta` doesn't read
+/// 0.0 off a carry-forward-filled last bucket when the week was unmeasured.
+pub fn last_week_has_real_obs(obs: &[(i64, String)], now_unix: i64) -> bool {
+    let week_start = iso_week_start_unix(now_unix);
+    const WEEK: i64 = 7 * 86_400;
+    obs.iter()
+        .any(|(ts, _)| *ts >= week_start && *ts < week_start + WEEK)
+}
+
 /// V1-Issue3 · latest week − prior week. None when <2 weeks of history.
 pub fn weekly_delta(spark: &[f32]) -> Option<f32> {
     match spark {
@@ -511,33 +521,6 @@ pub fn signal_label(s: Signal) -> &'static str {
 }
 
 // ───────────────────────── stat cards ─────────────────────────
-
-/// The three showProgAll stat cards, from real rows.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct StatCardsVm {
-    /// 工作流累计 = create sessions ever run.
-    pub workflows_total: u32,
-    /// 定时任务运行中 = materialized stages (each carries a standing routine
-    /// once the project is running).
-    pub routines_active: u32,
-    /// 优化中待验收 = active optimize sessions.
-    pub optimizing: u32,
-}
-
-pub fn stat_cards(
-    materialized_stage_count: usize,
-    // (kind is create?, is_active)
-    sessions: &[(bool, bool)],
-) -> StatCardsVm {
-    StatCardsVm {
-        workflows_total: sessions.iter().filter(|(create, _)| *create).count() as u32,
-        routines_active: materialized_stage_count as u32,
-        optimizing: sessions
-            .iter()
-            .filter(|(create, live)| !*create && *live)
-            .count() as u32,
-    }
-}
 
 // ───────────────────────── chat ─────────────────────────
 

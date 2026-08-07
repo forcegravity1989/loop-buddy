@@ -29,13 +29,13 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
     activity_row, agent_card, attention_from_rows, cadence_label, collect_label, connector_card,
-    cron_row, hub_overview, is_intrinsic_metric, issue_card, knowledge_row, metric_vm, notify_feed,
-    observation_feed, project_card, session_status_label, settings_vm, skill_card, stage_detail,
-    stage_nav, version_log_vm, week_plan_rows, weekly_delta, weekly_spark, workflow_hub_row,
-    ActivityRowVm, ActivitySource, AgentCardVm, CollectionChainVm, ConnectorCardVm, CronRowVm,
-    FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm,
-    SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm,
-    WorkflowHubRowVm,
+    cron_row, hub_overview, is_intrinsic_metric, issue_card, knowledge_row, last_week_has_real_obs,
+    metric_vm, notify_feed, observation_feed, project_card, session_status_label, settings_vm,
+    skill_card, stage_detail, stage_nav, version_log_vm, week_plan_rows, weekly_delta,
+    weekly_spark, workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm, CollectionChainVm,
+    ConnectorCardVm, CronRowVm, FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm,
+    NotifyItemVm, ProjectCardVm, SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm,
+    StageNavItemVm, WeekPlanRowVm, WorkflowHubRowVm,
 };
 use ui::{overall_progress, Attention};
 
@@ -202,7 +202,6 @@ pub struct OpVm {
     pub stages: Vec<StageVm>,
     pub metrics: Vec<MetricVm>,
     pub week_plan: Vec<WeekPlanRowVm>,
-    pub stats: ui::vm::StatCardsVm,
     pub overall: u8,
     pub sessions: Vec<SessionCardVm>,
     /// The project's Issues (R1) — assignable work units scoped to a stage,
@@ -997,7 +996,13 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             let mid = m.id;
             let obs_ts = series_ts.get(&mid).map(Vec::as_slice).unwrap_or(&[]);
             let wk_spark = weekly_spark(obs_ts, now_unix);
-            let wk_delta = weekly_delta(&wk_spark);
+            // V1-quickfix(W3-8): if the latest week has no real observation
+            // (only carry-forward), delta is meaningless — show "—" not "0.0".
+            let wk_delta = if last_week_has_real_obs(obs_ts, now_unix) {
+                weekly_delta(&wk_spark)
+            } else {
+                None
+            };
             let is_intrinsic = is_intrinsic_metric(&m.name);
             let chain = CollectionChainVm {
                 collect_label: collect_label(&m.collect_kind, is_intrinsic).to_string(),
@@ -1209,18 +1214,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         .and_then(|(apid, rows)| (*apid == pid).then(|| ui::vm::artifact_rows(rows, now)));
 
     let overall = overall_progress(&stages.iter().map(|s| s.progress).collect::<Vec<_>>());
-    let stats = ui::vm::stat_cards(
-        stages.len(),
-        &sessions
-            .iter()
-            .map(|s| {
-                (
-                    s.kind == bw_store::SessionKind::Create,
-                    s.status == SessionStatus::Active,
-                )
-            })
-            .collect::<Vec<_>>(),
-    );
 
     // P5: weekly-review card — a pure read of already-recorded facts. Counts
     // come off `state.issues` + the per-metric latest-observation-ts map built
@@ -1280,7 +1273,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         stages: stage_vms,
         metrics,
         week_plan,
-        stats,
         overall,
         sessions: session_cards,
         issues: state

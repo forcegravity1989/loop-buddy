@@ -631,11 +631,14 @@ impl InteractiveExecutor for InteractiveCliExecutor {
             let _child = cmd.spawn().map_err(|e| {
                 ExecError::Failed(format!("failed to spawn Terminal (osascript): {e}"))
             })?;
-            // Can't wait on the claude process — use timeout.
-            tokio::time::sleep(self.timeout).await;
+            // Can't wait on the claude process — osascript returns immediately
+            // after telling Terminal to open. Sleeping to timeout then claiming
+            // `completed = true` would be a false-success (违反「读回为证」).
+            // Stay honest: report not-completed so the issue stays InProgress
+            // (never auto-Done) and the human verifies in Terminal instead.
             return Ok(SkillOutput {
-                completed: true,
-                summary: "(wall-clock timeout — Terminal session may still be running)".to_string(),
+                completed: false,
+                summary: "未验证：osascript 启动 Terminal 后拿不到 claude 句柄，无法等待其退出。请在 Terminal 里确认会话结束后手动推进，buddy 不替你判定完成。".to_string(),
             });
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
