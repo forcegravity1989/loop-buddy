@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS claude_conversation (
 `issue.claude_session_id`、`issue.interactive_started` 这条旧实现路径退出使用。守 `CLAUDE.md` 铁律「不为向后兼容留旧路径」——业务代码只能有一条新路径。
 
 - 存量数据一次性搬到新表(`issue.claude_session_id` 非空的活各建一行 `claude_conversation`)。
-- schema 双守卫:`schema.sql` 加新表 + `sqlite.rs` 建表 + 迁移函数;`issue` 表旧列物理删除与否按迁移代价在实施阶段定,但**业务读路径只认新表**(不保留读旧列的 fallback)。
+- schema 双守卫:`schema.sql` 加新表 + `sqlite.rs` 建表 + 迁移函数;`issue` 表旧列**已定:物理删除**(用 `drop_column_if_present`,见 §13 实施决定),**业务读路径只认新表**(不保留读旧列的 fallback)。
 - 注:`session` / `message` 表是遗留的"聊天 UI"概念(从非交互式时代遗留,`schema.sql:122`),与交互式 claude 会话无关,本重构**不动它们**;W2-2 已给它们加了 DeleteSession 清理路径,继续用。
 
 ### 4.3 hook 路由调整
@@ -258,7 +258,7 @@ impl TerminalManager {
 
 每阶段让最终架构更接近,**不造要删除的临时兼容层**(守 CLAUDE.md「不为向后兼容留旧路径」)。
 
-- **阶段 1 · 概念解耦 + 数据模型**:建 `claude_conversation` 表 + 存量迁移 + `TerminalManager` 骨架(只含 conversation 身份,无 PTY)。业务读路径(`is_resume` 判断、hook 路由)收口到新表,`issue` 旧列退场。
+- **阶段 1 · 概念解耦 + 数据模型**(✅ 已落地,V1-TermRefactor1 系列 commit):建 `claude_conversation` 表 + 存量迁移 + `TerminalManager` 骨架(只含 conversation 身份,无 PTY)。业务读路径(`is_resume` 判断、hook 路由)收口到新表,`issue` 旧列物理退场。实施细节见 §13。
 - **阶段 2 · 每会话独立 PTY + 字节路由 + xterm**:`TerminalManager` 实现 spawn/resume/input/resize/events;字节带 `conversation_id`;每卡独立 xterm;watch 单槽 → 有界 mpsc。此时仍是"同一时刻只一个活 PTY",但已带身份路由。
 - **阶段 3 · 多会话并发 + 切卡**:A 交付 + B 咨询并发;切卡只切显示/键盘,不杀 PTY;UI 标清"当前显示哪个会话"(修现象三:绑指标卡看到绑数据 CLI)。
 - **阶段 4 · 重启恢复 + 窄窗尺寸根治**:重启后点卡重建 worktree + resume;每会话真实尺寸同步链(spawn 用 fit 真值 + remount 重 fit + resize 带 id)。修现象一(切走丢字)和窄窗错行。
@@ -295,6 +295,12 @@ impl TerminalManager {
 - **会话数量上限**:单人工作台同时活几个 claude 进程合理?默认不限,靠用户显式关。若实测内存爆,再加闲置回收(当前不做,守「不擅自扩 scope」)。
 - **`claude_conversation` 表的 `issue_id` 外键 + issue 删除时的级联**:实施阶段定(store 已有 `delete_project` 全表清理模式,`delete_issue` 若有则加级联)。
 - **transcript 缓存解析(`~/.claude/projects/<encoded-cwd>/*.jsonl`)**:用于重启过渡显示。claude 的 jsonl 格式未公开文档,实施时参考 orca 的 `claude-usage/scanner.ts` 逆向,只读不写。
+- **阶段1 实施决定(2026-08-07)**:
+  - 旧列 `interactive_started`/`claude_session_id` **物理删除**(非留空),用 `drop_column_if_present`(SQLite 3.35+ `ALTER TABLE DROP COLUMN`,本仓 bundled sqlite 3.44+ 远高于门槛,环境 sqlite3 CLI 3.53.4 验证通过)。迁移顺序:先 `migrate_claude_conversations` 搬运(INSERT OR IGNORE,issue_id UNIQUE 兜底幂等),再 DROP 两列——搬完 DROP 不丢数据(读回为证:claude_conversation 行仍在,issue 表无旧两列)。
+  - conversation 行建行时机:首次 spawn 前 `ensure_conversation`(INSERT OR IGNORE,行存在 = 旧 `interactive_started` 语义)+ hook SessionStart `set_conversation_session_id`(UPDATE,claude_session_id 非空 = 旧 `claude_session_id` 非空语义)。is_resume 改读 `conv.claude_session_id 非空`;is_interactive 改读 `conv 行存在`。
+  - 迁移时 `workspace_path`/`branch_name` 尽力推:branch = `bw/issue-<github_number>`(github_number 非0);workspace_path 推 worktree 兄弟路径 `<parent>/<stem>-issue-<github_number>`(project.workspace_path 非空 + github_number 非0),推不出留空(阶段4 resume 时回填)。
+  - `TerminalManager` 骨架在 bw-engine(无 PTY,阶段2 接入),阶段1 无调用点,`#[allow(dead_code)]` 注明。
+  - `issue_detail_vm` 纯函数加 `is_interactive: bool` 参数(不读 issue 旧字段),调用链 OpenIssueDetail → IssueDetailData.is_interactive → kernel.rs → vm。
 
 ---
 
