@@ -21,7 +21,7 @@ use bw_core::model::{
     stage_workflow, FeedLevel, HubKind, HubSource, IssuePriority, IssueStatus, MaturityPeriod,
     Signal, StageKind,
 };
-use bw_core::{IssueId, ProjectId, SessionId, SkillId, WorkflowId};
+use bw_core::{ConversationId, IssueId, ProjectId, SessionId, SkillId, WorkflowId};
 use bw_store::SessionKind;
 use dioxus::document;
 use dioxus::prelude::*;
@@ -2878,11 +2878,12 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
         }
         {chat_area}
-        // V1 Issue2 Phase2b: in-app terminal (xterm.js) — shown when a PTY
-        // session is active (interactive issue run). The widget loads
-        // xterm.js, writes PTY bytes, and forwards user input/resize.
+        // V1 终端会话重构·底座: 有活 PTY 且知道 conversation_id 才挂
+        // xterm(按 id 索引,不再用全局单例)。
         if op.pty_active {
-            TerminalWidget {}
+            if let Some(cid) = op.pty_conversation_id {
+                TerminalWidget { conversation_id: cid }
+            }
         }
         if let Some(msg) = promoted_msg() {
             Toast { msg, onclose: move |_| promoted_msg.set(None) }
@@ -3097,209 +3098,157 @@ fn RoutineStage(s: StageVm) -> Element {
     }
 }
 
-// ─── V1 Issue2 Phase2b: in-app terminal (xterm.js) ─────────────────────
+// ─── V1 终端会话重构·底座: per-conversation xterm (xterm.js) ───────────
 
-/// Pre-handler buffer + write function (set up BEFORE the async init script
-/// so bytes arriving before xterm.js is ready are buffered, not lost).
-/// This solves the **pre-handler buffer** race (orca §2.4): the terminal
-/// isn't ready yet, so bytes go to `__bw_term_buffer`; the init script
-/// flushes the buffer when ready (rendererDispatcherReady handshake).
+/// Bundled xterm assets (no CDN — a failed fetch used to leave no terminal).
 const XTERM_JS: &str = include_str!("../../public/xterm.min.js");
 const XTERM_CSS: &str = include_str!("../../public/xterm.css");
 const FIT_ADDON_JS: &str = include_str!("../../public/xterm-addon-fit.min.js");
 
+/// Pre-handler write/drain keyed by conversation id. Must run BEFORE any
+/// bytes arrive so the pre-handler buffer (orca §2.4) catches early output.
+/// Map shape: `window.__bw_term_sessions[id] = { term, fit, ready, buffer,
+/// input[], resize }` — 修掉旧全局 `window.__bw_term` 单例(设计 md §7.3)。
 const TERM_PRE_HANDLER_JS: &str = r#"
-window.__bw_term_write = function(text) {
-    if (!window.__bw_term_ready) {
-        // Pre-handler buffer: stash until xterm.js is ready.
-        window.__bw_term_buffer = (window.__bw_term_buffer || '') + text;
+window.__bw_term_sessions = window.__bw_term_sessions || {};
+window.__bw_term_ensure = function(id) {
+    var s = window.__bw_term_sessions;
+    if (!s[id]) s[id] = { term: null, fit: null, ready: false, buffer: '', input: [], resize: null };
+    return s[id];
+};
+window.__bw_term_write = function(id, text) {
+    var sess = window.__bw_term_ensure(id);
+    if (!sess.ready || !sess.term) {
+        sess.buffer += text;
         return;
     }
-    try { window.__bw_term.write(text); } catch(e) {}
+    try { sess.term.write(text); } catch(e) {}
 };
-// One call drains both queues: the Rust side polls on a timer, and every
-// `document::eval` is a full IPC round trip — five per tick was the old
-// shape, one is enough.
-window.__bw_term_drain = function() {
+// One call drains both queues for one conversation: Rust polls on a timer,
+// and every `document::eval` is a full IPC round trip.
+window.__bw_term_drain = function(id) {
+    var sess = window.__bw_term_sessions && window.__bw_term_sessions[id];
+    if (!sess) return null;
     var input = null;
-    if (window.__bw_term_input && window.__bw_term_input.length > 0) {
-        input = window.__bw_term_input.join('');
-        window.__bw_term_input = [];
+    if (sess.input && sess.input.length > 0) {
+        input = sess.input.join('');
+        sess.input = [];
     }
-    var resize = window.__bw_term_resize || null;
-    window.__bw_term_resize = null;
+    var resize = sess.resize || null;
+    sess.resize = null;
     if (input === null && resize === null) return null;
-    return { input: input, resize: resize, ready: !!window.__bw_term_ready };
+    return { input: input, resize: resize, ready: !!sess.ready };
 };
 "#;
 
-/// xterm.js init script (async IIFE). Creates the terminal from the bundles
-/// `TerminalWidget` already eval'd, sets up onData/onResize callbacks,
-/// flushes the pre-handler buffer, and — on a **re-attach** — re-homes an
-/// existing terminal into whatever div exists right now.
-///
-/// The re-attach path exists because `WorkflowStage` (and this widget with
-/// it) fully unmounts whenever the user leaves the workflow panel: `Center`
-/// (op.rs) is a `match` over the active panel, so switching to Issues/
-/// Progress/etc. drops the `TerminalWidget` component and its `div#
-/// __bw_terminal` from the tree entirely. Coming back re-creates a *new*
-/// div. `window.__bw_term` and the PTY session behind it are untouched by
-/// this (they live in the webview's global JS scope / the Rust process,
-/// not the DOM) — xterm keeps its own scrollback internally, so nothing
-/// needs replaying — but its rendered DOM (`term.element`) is still parented
-/// under the *old*, now-detached div. The old `if (window.__bw_term) return`
-/// guard left it there, so the terminal looked empty even though the
-/// session was alive. Fix: move `term.element` into the current div and
-/// re-wire the div-scoped input listeners (click/keydown are bound to a
-/// specific DOM node, so they don't survive the div being replaced —
-/// `term.onData`, by contrast, is bound to `term` itself and must NOT be
-/// re-registered, or every keystroke would fire it twice for the rest of
-/// the session).
-const TERM_INIT_JS: &str = r#"
-return (async function() {
-    var div = document.getElementById('__bw_terminal');
-    if (!div) return { ok: false, reason: 'div not found' };
+/// Build the per-conversation init IIFE. `id` is the conversation uuid
+/// string. Re-attach path: panel switch drops the Dioxus div but JS Map +
+/// PTY stay; remount re-homes `term.element` and re-fits (尺寸同步链).
+fn term_init_js(conversation_id: &str) -> String {
+    let id_json = serde_json::to_string(conversation_id).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        r#"
+return (async function(id) {{
+    var div = document.getElementById('__bw_terminal_' + id);
+    if (!div) return {{ ok: false, reason: 'div not found' }};
+    var sess = window.__bw_term_ensure(id);
 
-    var push = function(data) {
-        window.__bw_term_input = window.__bw_term_input || [];
-        window.__bw_term_input.push(data);
-    };
+    var push = function(data) {{
+        sess.input = sess.input || [];
+        sess.input.push(data);
+    }};
     var CTRL_A = 'a'.charCodeAt(0);
-    var KEYS = {
+    var KEYS = {{
         Enter: '\r', Backspace: '\x7f', Escape: '\x1b', Tab: '\t',
         Delete: '\x1b[3~', Insert: '\x1b[2~',
         ArrowUp: '\x1b[A', ArrowDown: '\x1b[B',
         ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D',
         Home: '\x1b[H', End: '\x1b[F',
         PageUp: '\x1b[5~', PageDown: '\x1b[6~',
-    };
-    var keyBytes = function(e) {
-        if (e.ctrlKey && e.key.length === 1) {
+    }};
+    var keyBytes = function(e) {{
+        if (e.ctrlKey && e.key.length === 1) {{
             var c = e.key.toLowerCase().charCodeAt(0);
-            // Ctrl+a..z → 0x01..0x1a (Ctrl+C = 0x03 interrupts the TUI).
             if (c >= CTRL_A && c < CTRL_A + 26) return String.fromCharCode(c - CTRL_A + 1);
             return null;
-        }
+        }}
         if (KEYS[e.key]) return KEYS[e.key];
-        if (e.key.length !== 1) return null; // Shift/Alt/F-keys: not our job
+        if (e.key.length !== 1) return null;
         return e.altKey ? '\x1b' + e.key : e.key;
-    };
-    // Focus: xterm reads keystrokes through a hidden helper textarea. Prefer
-    // it; if WebView2 refuses to focus it, fall back to the container div
-    // and synthesize bytes in the keydown listener. Re-run for every div
-    // this terminal ever attaches to (fresh listeners each time).
-    var wireDiv = function(div, term) {
+    }};
+    var wireDiv = function(div, term) {{
         var textarea = div.querySelector('.xterm-helper-textarea');
         div.tabIndex = 0;
-        var focusTerm = function() {
+        var focusTerm = function() {{
             term.focus();
             if (!textarea || document.activeElement !== textarea) div.focus();
-        };
+        }};
         div.addEventListener('click', focusTerm);
         focusTerm();
-        div.addEventListener('keydown', function(e) {
-            // Fallback only. When the helper textarea has focus xterm
-            // already turned this keystroke into onData — handling it here
-            // too would send every character twice.
+        div.addEventListener('keydown', function(e) {{
             if (textarea && e.target === textarea) return;
             var data = keyBytes(e);
             if (data === null) return;
             push(data);
             e.preventDefault();
-        });
-    };
+        }});
+    }};
 
-    // Re-attach guard: an existing terminal survives a Dioxus remount —
-    // only its DOM needs re-homing into the current div.
-    if (window.__bw_term) {
-        if (window.__bw_term.element && !div.contains(window.__bw_term.element)) {
-            div.appendChild(window.__bw_term.element);
-            if (window.__bw_fit) window.__bw_fit.fit();
-            wireDiv(div, window.__bw_term);
-        }
-        return { ok: true, reason: 'already-initialized' };
-    }
+    // Re-attach: existing term for this conversation survives Dioxus remount.
+    if (sess.term) {{
+        if (sess.term.element && !div.contains(sess.term.element)) {{
+            div.appendChild(sess.term.element);
+            if (sess.fit) sess.fit.fit();
+            wireDiv(div, sess.term);
+        }}
+        return {{ ok: true, reason: 'already-initialized' }};
+    }}
 
-    // xterm.js / Fit addon / CSS are already in scope: `TerminalWidget`
-    // eval'd the two `include_str!`-bundled UMD files and injected the
-    // stylesheet inline before running this script. No fetch here — the
-    // whole point of bundling them (`0df7897`) was that a failed network
-    // load aborts this IIFE and leaves the session with no terminal at all.
-    if (!window.Terminal || !window.FitAddon) {
-        return { ok: false, reason: 'xterm bundles not loaded' };
-    }
+    if (!window.Terminal || !window.FitAddon) {{
+        return {{ ok: false, reason: 'xterm bundles not loaded' }};
+    }}
 
-    // Create terminal.
-    var term = new Terminal({
+    var term = new Terminal({{
         fontFamily: 'JetBrains Mono, Consolas, monospace',
         fontSize: 13,
         cols: 80,
         rows: 24,
         cursorBlink: true,
-        theme: { background: '#1e1e2e', foreground: '#cdd6f4' },
-    });
+        theme: {{ background: '#1e1e2e', foreground: '#cdd6f4' }},
+    }});
     var fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(div);
     fitAddon.fit();
 
-    // onData is the primary input path: xterm already encodes arrows, Ctrl
-    // combos and IME composition into the bytes a terminal expects. Bound
-    // to `term` itself (not the div) — registered exactly once, here, ever.
     term.onData(push);
     wireDiv(div, term);
+    term.onResize(function(size) {{
+        sess.resize = {{ cols: size.cols, rows: size.rows }};
+    }});
 
-    // onResize → stash for the Rust side to drain.
-    // resize re-assertion: fitAddon.fit() may fire onResize with a
-    // different size than the PTY expects — the Rust side re-sends
-    // TerminalResize, and the PTY's master.resize() applies it.
-    term.onResize(function(size) {
-        window.__bw_term_resize = { cols: size.cols, rows: size.rows };
-    });
+    sess.term = term;
+    sess.fit = fitAddon;
+    sess.ready = true;
+    if (sess.buffer) {{
+        term.write(sess.buffer);
+        sess.buffer = '';
+    }}
+    // Push fit size immediately so Rust can resize PTY off 80×24.
+    sess.resize = {{ cols: term.cols, rows: term.rows }};
 
-    window.__bw_term = term;
-    window.__bw_fit = fitAddon;
-    // rendererDispatcherReady handshake: signal that the terminal is
-    // ready to receive bytes.
-    window.__bw_term_ready = true;
+    return {{ ok: true }};
+}})({id_json})
+"#
+    )
+}
 
-    // Flush pre-handler buffer (bytes received before terminal was ready).
-    if (window.__bw_term_buffer) {
-        term.write(window.__bw_term_buffer);
-        window.__bw_term_buffer = '';
-    }
-
-    return { ok: true };
-})()
-"#;
-
-/// V1 Issue2 Phase2b: in-app terminal widget (xterm.js). Renders when a
-/// PTY session is active (`pty_active = true` on the OpVm). Three races
-/// solved (orca §2.4):
-///  1. **Pre-handler buffer + rendererDispatcherReady**: bytes are buffered
-///     in `window.__bw_term_buffer` before xterm.js is ready; the init
-///     script flushes the buffer when ready (see `TERM_PRE_HANDLER_JS` +
-///     `TERM_INIT_JS`). This prevents Dioxus re-render from losing bytes.
-///  2. **ACK backpressure**: skipped for V1 — `document::eval` is
-///     synchronous (no WebSocket), so no backpressure needed. The PTY
-///     read task sends to an unbounded mpsc channel.
-///  3. **Resize re-assertion**: `fitAddon.fit()` fires `onResize`; the
-///     Rust side drains it and sends `Command::TerminalResize`; the PTY's
-///     `master.resize()` applies it. No fire-and-forget (the drain is
-///     explicit). The re-attach guard in `TERM_INIT_JS` re-homes an
-///     existing terminal into a fresh `div` when this component remounts
-///     (panel switch away and back — see that constant's doc comment).
 /// Take the longest valid UTF-8 prefix out of `buf`, leaving whatever
 /// trailing bytes form an incomplete character behind for the next batch.
 ///
 /// PTY output is a byte stream cut into ~100ms batches at arbitrary offsets;
 /// a 3-byte CJK character routinely straddles two of them. Decoding a batch
-/// in isolation (`from_utf8_lossy`) replaces both halves with U+FFFD, which
-/// is exactly the garbling users see when claude prints Chinese. An
-/// incomplete tail is at most 3 bytes, so carrying it costs nothing.
-///
-/// Genuinely invalid bytes (not just a truncated tail) are still replaced —
-/// this only defers *decidable-later* sequences, it doesn't wait forever.
+/// in isolation (`from_utf8_lossy`) replaces both halves with U+FFFD.
 fn take_utf8_prefix(buf: &mut Vec<u8>) -> String {
     match std::str::from_utf8(buf) {
         Ok(s) => {
@@ -3310,14 +3259,11 @@ fn take_utf8_prefix(buf: &mut Vec<u8>) -> String {
         Err(e) => {
             let valid = e.valid_up_to();
             match e.error_len() {
-                // Truncated tail: emit what's whole, keep the rest.
                 None => {
                     let out = String::from_utf8_lossy(&buf[..valid]).into_owned();
                     buf.drain(..valid);
                     out
                 }
-                // Real invalid sequence — lossy-decode the whole batch (the
-                // bad bytes will never become valid, waiting would stall).
                 Some(_) => {
                     let out = String::from_utf8_lossy(buf).into_owned();
                     buf.clear();
@@ -3328,81 +3274,67 @@ fn take_utf8_prefix(buf: &mut Vec<u8>) -> String {
     }
 }
 
+/// V1 终端会话重构·底座: in-app terminal widget keyed by conversation_id.
+/// Bytes / input / resize 全带身份;JS 侧 Map 存每会话独立 xterm(§7.3)。
 #[component]
-fn TerminalWidget() -> Element {
+fn TerminalWidget(conversation_id: ConversationId) -> Element {
     let k = use_context::<Kernel>();
+    let cid_str = conversation_id.uuid().to_string();
+    let div_id = format!("__bw_terminal_{cid_str}");
 
-    // Single `use_future` that handles: terminal init, byte streaming,
-    // and input/resize polling. Combined into one future to avoid
-    // `FnMut` capture issues with multiple `use_future` calls.
-    // The `k.clone()` inside the closure makes it `Fn`-compatible.
     use_future(move || {
         let k = k.clone();
+        let cid = conversation_id;
+        let cid_str = cid.uuid().to_string();
         async move {
-            // `BW_PTY_DEBUG=1` traces the terminal bridge to stderr. Off by
-            // default: the drain runs ~33x/s and would drown the log.
             let debug = std::env::var("BW_PTY_DEBUG").is_ok_and(|v| v != "0");
+            let cid_json = serde_json::to_string(&cid_str).unwrap_or_else(|_| "\"\"".into());
 
-            // 1. Set up pre-handler functions (sync, fast) — must run
-            // BEFORE any bytes arrive so they're buffered, not lost.
             let _ = document::eval(TERM_PRE_HANDLER_JS).await;
-            // 2. Load xterm.js + Fit addon + CSS inline (no CDN — a failed
-            // CDN fetch used to abort the init IIFE, leaving no terminal).
-            // The UMD bundle assigns to `self`, so eval'ing it as a function
-            // body still defines `window.Terminal` / `window.FitAddon`.
             let _ = document::eval(XTERM_JS).await;
             let _ = document::eval(FIT_ADDON_JS).await;
             let _ = document::eval(&format!(
-                "var __s=document.createElement('style');__s.id='__bw_xterm_css';__s.textContent={};document.head.appendChild(__s)",
+                "if(!document.getElementById('__bw_xterm_css')){{var __s=document.createElement('style');__s.id='__bw_xterm_css';__s.textContent={};document.head.appendChild(__s)}}",
                 serde_json::to_string(XTERM_CSS).unwrap_or_else(|_| String::new())
-            )).await;
-            let init = document::eval(TERM_INIT_JS).await;
+            ))
+            .await;
+            let init = document::eval(&term_init_js(&cid_str)).await;
             if debug {
-                eprintln!("[pty] terminal init: {init:?}");
+                eprintln!("[pty] terminal init {cid_str}: {init:?}");
             }
 
-            // 3. Main loop: select between new PTY bytes and input/resize
-            // polling. `pty_rx.changed()` fires when the pty_ticker sends a
-            // new batch; the sleep timer fires for input/resize.
             let mut pty_rx = k.pty_bytes();
-            // Mark the initial value as seen (empty Vec from watch::channel).
             let _ = pty_rx.borrow_and_update();
-            // Bytes arrive in ~100ms batches cut at arbitrary offsets, so a
-            // multi-byte character (every Chinese glyph claude prints) can
-            // straddle two batches. Decoding each batch on its own would turn
-            // both halves into U+FFFD, so carry the trailing incomplete
-            // sequence over to the next batch instead.
             let mut carry: Vec<u8> = Vec::new();
             loop {
                 tokio::select! {
-                    // PTY bytes arrived → write to terminal.
                     result = pty_rx.changed() => {
                         if result.is_err() {
-                            break; // sender dropped (PTY session ended)
+                            break;
                         }
-                        let bytes = pty_rx.borrow().clone();
-                        if !bytes.is_empty() {
+                        let batches = pty_rx.borrow().clone();
+                        for (batch_cid, bytes) in batches {
+                            if batch_cid != cid || bytes.is_empty() {
+                                continue;
+                            }
                             carry.extend_from_slice(&bytes);
                             let text = take_utf8_prefix(&mut carry);
-                            if !text.is_empty() {
-                                let escaped = serde_json::to_string(&text)
-                                    .unwrap_or_else(|_| "\"\"".into());
-                                let script = format!("window.__bw_term_write({escaped})");
-                                let _ = document::eval(&script).await;
+                            if text.is_empty() {
+                                continue;
                             }
+                            let escaped = serde_json::to_string(&text)
+                                .unwrap_or_else(|_| "\"\"".into());
+                            let script = format!(
+                                "window.__bw_term_write({cid_json}, {escaped})"
+                            );
+                            let _ = document::eval(&script).await;
                         }
                     }
-                    // Timer → drain what the user typed / resized.
                     _ = tokio::time::sleep(Duration::from_millis(30)) => {
-                        // `return` is load-bearing: dioxus-desktop runs the
-                        // script as the body of `new AsyncFunction("dioxus",
-                        // script)` (query.rs), so a bare expression resolves
-                        // to `undefined` and every read-back silently yields
-                        // None. That is what kept stdin dead — the drained
-                        // keystrokes never made it out of the webview.
-                        let Ok(v) = document::eval(
-                            "return window.__bw_term_drain ? window.__bw_term_drain() : null"
-                        ).await else { continue };
+                        let drain_script = format!(
+                            "return window.__bw_term_drain ? window.__bw_term_drain({cid_json}) : null"
+                        );
+                        let Ok(v) = document::eval(&drain_script).await else { continue };
                         let Some(obj) = v.as_object() else { continue };
                         if let Some(input) = obj.get("input").and_then(|i| i.as_str()) {
                             if !input.is_empty() {
@@ -3410,6 +3342,7 @@ fn TerminalWidget() -> Element {
                                     eprintln!("[pty] stdin {} bytes: {input:?}", input.len());
                                 }
                                 k.send(Command::TerminalInput {
+                                    conversation_id: cid,
                                     bytes: input.as_bytes().to_vec(),
                                 });
                             }
@@ -3417,7 +3350,11 @@ fn TerminalWidget() -> Element {
                         if let Some(r) = obj.get("resize").and_then(|r| r.as_object()) {
                             let cols = r.get("cols").and_then(|c| c.as_u64()).unwrap_or(80) as u16;
                             let rows = r.get("rows").and_then(|r| r.as_u64()).unwrap_or(24) as u16;
-                            k.send(Command::TerminalResize { cols, rows });
+                            k.send(Command::TerminalResize {
+                                conversation_id: cid,
+                                cols,
+                                rows,
+                            });
                         }
                     }
                 }
@@ -3434,7 +3371,7 @@ fn TerminalWidget() -> Element {
                 span { style: "opacity:0.4;margin-left:auto;", "claude interactive session" }
             }
             div {
-                id: "__bw_terminal",
+                id: "{div_id}",
                 style: "min-height:320px;background:#1e1e2e;",
             }
         }

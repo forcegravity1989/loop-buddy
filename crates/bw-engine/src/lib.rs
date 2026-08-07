@@ -52,7 +52,9 @@ pub use metrics_file::{
     CollectKind, CollectPlan, MetricDef, MetricsFile, MetricsFileError, NorthStarDef,
 };
 pub use mock::MockExecutor;
-pub use terminal_manager::{ConversationMeta, TerminalManager};
+pub use terminal_manager::{
+    ConversationMeta, TerminalManager, TerminalSession, OUTPUT_BATCH_CAP, OUTPUT_BATCH_MAX_BYTES,
+};
 pub use unsupported_cli::UnsupportedCliExecutor;
 pub use workspace::{
     provision_git_workspace, provision_issue_worktree, IssueWorktreeGuard, ProvisionError,

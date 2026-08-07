@@ -41,14 +41,15 @@ use bw_core::model::{
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
-    AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId,
-    SessionId, SkillId, WorkflowId, WorkflowRunId,
+    AgentId, ArtifactId, ConnectorId, ConversationId, CronTaskId, IssueId, KnowledgeSourceId,
+    MetricId, ProjectId, SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
     allowed_tools_arg, build_bridge_system_prompt, build_resume_plan, build_startup_plan, evidence,
-    ClaudeCliConfig, ClaudeCliExecutor, CodehubRepoSummary, Engine, GitCommit, GithubRepoSummary,
-    InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
-    PhaseNode, RunCtx, RunEvent, SkillOutput, UnsupportedCliExecutor, CLAUDE,
+    ClaudeCliConfig, ClaudeCliExecutor, CodehubRepoSummary, ConversationMeta, Engine, GitCommit,
+    GithubRepoSummary, InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor,
+    PermissionMode, PhaseNode, RunCtx, RunEvent, SkillOutput, TerminalManager,
+    UnsupportedCliExecutor, CLAUDE,
 };
 use bw_store::{
     AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
@@ -893,16 +894,15 @@ pub enum Command {
     /// Select (or clear) the chat-focused session in the operating view.
     SelectSession(Option<SessionId>),
     /// V1 Issue2 Phase2b: user-typed bytes from the in-app xterm.js terminal
-    /// (`onData` callback). The App forwards these to the PTY writer via
-    /// the `pty_input_tx` channel. Only dispatched when PTY mode is active.
+    /// (`onData` callback). Forwarded to TerminalManager by conversation_id.
     TerminalInput {
+        conversation_id: ConversationId,
         bytes: Vec<u8>,
     },
     /// V1 Issue2 Phase2b: terminal resize from the in-app xterm.js
-    /// (`onResize` callback). The App forwards this to `master.resize()`.
-    /// The UI should also re-assert (getAppliedSize, orca §2.4) — if the
-    /// PTY's applied size doesn't match, re-send this.
+    /// (`onResize` callback). Forwarded to TerminalManager by conversation_id.
     TerminalResize {
+        conversation_id: ConversationId,
         cols: u16,
         rows: u16,
     },
@@ -1323,17 +1323,10 @@ pub struct AppState {
     /// debounce needed within a single tick; the 5-minute poller remains as
     /// backstop for Stop events processed with delay).
     pub pending_stop_check: bool,
-    /// V1 Issue2 Phase2b: PTY input sender — forwards user-typed bytes
-    /// (`Command::TerminalInput`) and resize (`Command::TerminalResize`)
-    /// to the background PTY task. `None` when PTY mode isn't active or no
-    /// interactive session is running. Set in `run_issue_interactive` when
-    /// spawning a PTY session; cleared when the session settles.
-    pub pty_input_tx: Option<mpsc::UnboundedSender<bw_engine::PtyInput>>,
-    /// V1 Issue2 Phase2b: PTY bytes receiver — drains PTY output bytes
-    /// from the background read task. `None` when PTY mode isn't active or
-    /// no session is running. Drained by `drain_pty_bytes` (called from
-    /// the kernel's 100ms `pty_ticker` arm — NOT `tick_scheduler`).
-    pub pty_bytes_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
+    /// V1 终端会话重构·底座: 集中 PTY 多会话管理(身份路由 + 有界缓冲 +
+    /// 尺寸)。替代旧全局 `pty_input_tx` / `pty_bytes_rx` 单槽。桌面
+    /// `with_pty` 后 interactive spawn 走这里;settle/cancel 时 close。
+    pub terminal_manager: TerminalManager,
     /// V1 Issue2 Phase2b: whether PTY mode is enabled (the desktop kernel
     /// wires it via `App::with_pty`). When `true`, `run_issue_interactive`
     /// uses `run_skill_pty` (in-app terminal). When `false`, it uses the
@@ -1388,8 +1381,7 @@ impl Default for AppState {
             last_inreview_poll: 0,
             interactive_sessions: HashMap::new(),
             pending_stop_check: false,
-            pty_input_tx: None,
-            pty_bytes_rx: None,
+            terminal_manager: TerminalManager::new(),
             pty_enabled: false,
             codehub_repos: Vec::new(),
         }
@@ -1814,27 +1806,20 @@ impl App {
         Ok(())
     }
 
-    /// V1 Issue2 Phase2b: drain all pending PTY bytes and return them as a
-    /// single concatenated `Vec<u8>`. Called by the kernel's fast timer
-    /// (100ms pty_ticker) — the bytes are sent via a dedicated `watch`
-    /// channel to the UI's xterm.js widget. Returns empty when no PTY
-    /// session is active or no new bytes arrived.
-    pub fn drain_pty_bytes(&mut self) -> Vec<u8> {
-        let chunks: Vec<Vec<u8>> = {
-            let Some(rx) = self.state.pty_bytes_rx.as_mut() else {
-                return Vec::new();
-            };
-            let mut chunks = Vec::new();
-            while let Ok(bytes) = rx.try_recv() {
-                chunks.push(bytes);
-            }
-            chunks
-        };
-        let mut all = Vec::new();
-        for chunk in chunks {
-            all.extend_from_slice(&chunk);
-        }
-        all
+    /// V1 终端会话重构·底座: drain 各会话有界缓冲,返回带 conversation_id
+    /// 的批次。kernel 的 100ms pty_ticker 调用后按 id 路由到对应 xterm。
+    pub fn drain_pty_events(&mut self) -> Vec<(ConversationId, Vec<u8>)> {
+        self.state.terminal_manager.drain_events()
+    }
+
+    /// 是否有活着的 PTY 连接(UI `pty_active`)。
+    pub fn pty_active(&self) -> bool {
+        self.state.terminal_manager.has_live()
+    }
+
+    /// 底座阶段:恰好一个活连接时返回其 id(给 TerminalWidget 用)。
+    pub fn sole_pty_conversation(&self) -> Option<ConversationId> {
+        self.state.terminal_manager.sole_live_id()
     }
 
     /// V1 Issue2 Phase2b: drop every `cwd → issue` mapping pointing at `id`.
@@ -5426,26 +5411,22 @@ impl App {
                 .map_err(|e| AppError::Engine(e.to_string()))?
         };
 
-        // 首次 spawn 前建会话行(见下方 ensure_conversation);re-click 走
-        // resume 由行里非空 claude_session_id 判定(见上方 F1)。Set before
-        // spawn: even if spawn fails, the row exists so a re-click re-tries as
-        // resume(safe — `--resume` on a non-existent session just starts a
-        // fresh one in claude's CLI).
-        // V1 终端会话重构(阶段1): 首次 spawn 前建会话行(ensure_conversation
-        // 替代旧 set_issue_interactive_started)。行存在 = 开过交互式会话
-        // (is_interactive 判断 + poll filter 读这个)。claude_session_id 留空,
-        // 等 hook SessionStart 回传填。workspace_path/branch_name 来自 worktree
-        // provisioning(workspace_cwd + bw/issue-<github_number>)。
-        if !is_resume {
-            let branch_name = if issue.github_number != 0 {
-                format!("bw/issue-{}", issue.github_number)
-            } else {
-                String::new()
-            };
+        // V1 终端会话重构: 首次 spawn 前建会话行;resume 时行已在。两端都要
+        // ConversationId 交给 TerminalManager。
+        let branch_name = if issue.github_number != 0 {
+            format!("bw/issue-{}", issue.github_number)
+        } else {
+            String::new()
+        };
+        let conversation_id = if !is_resume {
             self.store
                 .ensure_conversation(id, p, workspace_cwd.to_str().unwrap_or(""), &branch_name)
-                .await?;
-        }
+                .await?
+        } else {
+            conv.as_ref().map(|c| c.id).ok_or_else(|| {
+                AppError::Invalid("resume 需要已有 claude_conversation 行,但库里没有".into())
+            })?
+        };
 
         // V1 Issue2 Phase2b: register the worktree cwd → IssueId mapping so
         // the hook listener can route SessionStart/Stop events (which carry
@@ -5499,14 +5480,21 @@ impl App {
         if let Some(settle_tx) = self.settle_tx.clone() {
             // ── Backgrounded (desktop kernel) ──
             let handle = if self.state.pty_enabled {
-                // V1 Issue2 Phase2b: PTY mode — create byte-stream channels
-                // and spawn via `run_skill_pty`. The App holds `input_tx`
-                // (for forwarding `Command::TerminalInput`) and `bytes_rx`
-                // (for draining via `drain_pty_bytes` → `pty_tx` watch).
-                let (bytes_tx, bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-                let (input_tx, input_rx) = mpsc::unbounded_channel::<bw_engine::PtyInput>();
-                self.state.pty_input_tx = Some(input_tx);
-                self.state.pty_bytes_rx = Some(bytes_rx);
+                // V1 终端会话重构·底座: 经 TerminalManager.attach 拿带身份的
+                // channels(有界缓冲在 Manager 侧);不再塞全局单槽。
+                let meta = ConversationMeta {
+                    conversation_id,
+                    claude_session_id: conv
+                        .as_ref()
+                        .map(|c| c.claude_session_id.clone())
+                        .unwrap_or_default(),
+                    workspace_path: workspace_cwd.to_path_buf(),
+                    branch_name: branch_name.clone(),
+                };
+                let (bytes_tx, input_rx) =
+                    self.state
+                        .terminal_manager
+                        .attach(conversation_id, meta, None);
                 tokio::spawn(async move {
                     let result = executor
                         .run_skill_pty(&plan, &ctx, bytes_tx, input_rx)
@@ -5652,11 +5640,14 @@ impl App {
             // in-session and the InReview poller detects it. Guard drops
             // here (worktree cleanup); the issue stays in its current state
             // (InProgress on first run, unchanged on resume). Never auto-Done.
-            // V1 Issue2 Phase2b: clear PTY state so the terminal widget
-            // disappears (pty_active → false), input stops going to the
-            // dropped receiver, and the 100ms pty_ticker stops spinning.
-            self.state.pty_input_tx = None;
-            self.state.pty_bytes_rx = None;
+            // V1 终端会话重构·底座: close 该活对应会话的 PTY 连接(终端
+            // widget 随 has_live→false 消失)。按 issue 查 conversation 再
+            // close;查不到则 close_all(底座单 PTY 安全兜底)。
+            if let Ok(Some(c)) = self.store.get_conversation_by_issue(ar.issue.id).await {
+                self.state.terminal_manager.close(c.id);
+            } else {
+                self.state.terminal_manager.close_all();
+            }
             self.forget_interactive_session(ar.issue.id);
             drop(ar.guard);
             self.refresh_issues().await?;
@@ -5697,13 +5688,12 @@ impl App {
             return Ok(());
         }
         ar.handle.abort(); // drop the spawned round-loop future → kill_on_drop
-                           // V1 Issue2 Phase2b: an interactive run cancelled here must clear the
-                           // same PTY/session state the settle arm clears — otherwise the
-                           // terminal widget keeps rendering (pty_active stays true) and typed
-                           // bytes go into a receiver nobody reads. Unconditional: the phase-loop
-                           // path never sets these, so clearing is a no-op there.
-        self.state.pty_input_tx = None;
-        self.state.pty_bytes_rx = None;
+                           // V1 终端会话重构·底座: 与 settle 同样清 PTY 连接。
+        if let Ok(Some(c)) = self.store.get_conversation_by_issue(ar.issue.id).await {
+            self.state.terminal_manager.close(c.id);
+        } else {
+            self.state.terminal_manager.close_all();
+        }
         self.forget_interactive_session(ar.issue.id);
         self.emit(Event::WorkflowFailed(format!(
             "Issue #{} 已中止",
@@ -9296,19 +9286,28 @@ impl App {
             Command::SetPanel(p) => self.state.panel = p,
             Command::SetScope(s) => self.state.scope = s,
             Command::SelectSession(s) => self.state.active_session = s,
-            // V1 Issue2 Phase2b: forward user-typed bytes to the PTY writer.
-            // No PTY session active → silently drop (best-effort — the UI
-            // shouldn't send input when no session is running, but a race
-            // between session end and the last keystroke is possible).
-            Command::TerminalInput { bytes } => {
-                if let Some(tx) = &self.state.pty_input_tx {
-                    let _ = tx.send(bw_engine::PtyInput::Bytes(bytes));
-                }
+            // V1 终端会话重构·底座: 按 conversation_id 转发到 TerminalManager。
+            Command::TerminalInput {
+                conversation_id,
+                bytes,
+            } => {
+                let _ = self
+                    .state
+                    .terminal_manager
+                    .input(conversation_id, bw_engine::PtyInput::Bytes(bytes));
             }
-            // V1 Issue2 Phase2b: forward terminal resize to the PTY master.
-            Command::TerminalResize { cols, rows } => {
-                if let Some(tx) = &self.state.pty_input_tx {
-                    let _ = tx.send(bw_engine::PtyInput::Resize { cols, rows });
+            Command::TerminalResize {
+                conversation_id,
+                cols,
+                rows,
+            } => {
+                // 无活连接时也记 fit 尺寸,供下次 attach 用真值而非 80×24。
+                if !self
+                    .state
+                    .terminal_manager
+                    .resize(conversation_id, cols, rows)
+                {
+                    self.state.terminal_manager.note_fit_size(cols, rows);
                 }
             }
         }

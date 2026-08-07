@@ -899,6 +899,11 @@ impl Store for SqliteStore {
         // in the file — real Issue titles and artifact paths surviving a
         // "delete", which is both wrong and a privacy leak when a DB is
         // shared. Global agents/skills/workflows (`project_id IS NULL`) stay.
+        // 会话行挂在 issue 上:先于 issue 删,避免孤儿(阶段1缺口,底座补)。
+        sqlx::query("DELETE FROM claude_conversation WHERE project_id=?")
+            .bind(&p)
+            .execute(&mut *tx)
+            .await?;
         for table in [
             "issue",
             "artifact",
@@ -3187,15 +3192,16 @@ impl Store for SqliteStore {
         row.map(conversation_row).transpose()
     }
 
-    /// V1 终端会话重构(阶段1): 首次 spawn 前建会话行(INSERT OR IGNORE,
-    /// issue_id UNIQUE 兜底,幂等)。claude_session_id 留空,等 hook 填。
+    /// V1 终端会话重构: 首次 spawn 前建会话行(INSERT OR IGNORE,issue_id
+    /// UNIQUE 兜底,幂等)。claude_session_id 留空,等 hook 填。返回行的
+    /// `ConversationId`(新建或已存在都查回——底座 TerminalManager 要身份)。
     async fn ensure_conversation(
         &self,
         issue_id: IssueId,
         project_id: ProjectId,
         workspace_path: &str,
         branch_name: &str,
-    ) -> Result<()> {
+    ) -> Result<ConversationId> {
         let id = Uuid::new_v4().to_string();
         let now = now_unix();
         sqlx::query(
@@ -3213,7 +3219,13 @@ impl Store for SqliteStore {
         .bind(now)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        // INSERT OR IGNORE 在行已存在时不改 id——一律按 issue_id 读回。
+        let row = sqlx::query("SELECT id FROM claude_conversation WHERE issue_id=?")
+            .bind(issue_id.uuid().to_string())
+            .fetch_one(&self.pool)
+            .await?;
+        let id_str: String = row.get::<String, _>("id");
+        Ok(parse_uuid(&id_str, ConversationId::from_uuid)?)
     }
 
     /// V1 终端会话重构(阶段1): hook SessionStart 回传 session_id 时填进会话行

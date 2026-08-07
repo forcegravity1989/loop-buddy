@@ -263,7 +263,7 @@ impl TerminalManager {
 原 §10 五段里阶段 2「先只做身份路由、人为只留一个活 PTY」是工程可审切法,对用户体感几乎无增益;尺寸同步又和重启恢复拆在两段。接续窗口按产品体感重切为四段,**可用底线 = 底座 + 并发切卡 + 重启 resume**(咨询态后置)。不单独 verify 阶段 1(局部未整体可用时局部 verify 无意义)。
 
 - **阶段 1 · 概念解耦 + 数据模型**(✅ 已落地,V1-TermRefactor1):建 `claude_conversation` 表 + 存量迁移 + `TerminalManager` 骨架(只含 conversation 身份,无 PTY)。业务读路径收口到新表,`issue` 旧列物理退场。实施细节见 §13。
-- **阶段 · 底座**(⬜ 下一步,V1-TermRefactor2):`TerminalManager` 接 PTY(spawn/resume/input/resize/events);字节带 `conversation_id` 路由(修 `kernel.rs` 单槽);每卡独立 xterm(修 `window.__bw_term` 单例);watch → 每会话有界 mpsc(64 批);**每会话真实尺寸同步链一并进本段**(spawn 用 fit 真值,不再默认 80×24;remount 重 fit;resize 带 id)。顺手补 `delete_project` 清 `claude_conversation`(阶段 1 缺口)。此时仍可「同一时刻只一个活 PTY」(新交付仍走 `active_run` 串行),但身份路由与多 xterm 已就位——不造之后要删的单槽兼容层。
+- **阶段 · 底座**(✅ 已落地,V1-TermRefactor2):`TerminalManager` 接 PTY(spawn/resume/input/resize/events);字节带 `conversation_id` 路由;每卡独立 xterm(`window.__bw_term_sessions[id]` Map,修掉全局单例);每会话有界输出环(64 批×8KB);尺寸同步链(fit→`TerminalResize` 带 id→`note_fit_size`/`attach` 初始 Resize;remount 重 fit)。`delete_project` 清 `claude_conversation`。底座仍「同一时刻只一个活 PTY」(`attach` 关其余;新交付仍走 `active_run` 串行),但身份路由与多 xterm Map 已就位——不造之后要删的单槽兼容层。
 - **阶段 · 并发切卡**(⬜,V1-TermRefactor3):A 交付 + B 咨询并发;切卡只切显示/键盘,不杀 PTY;UI 标清当前会话(修现象三)。咨询 PTY 不占 `active_run`、不 settle、不改状态。
 - **阶段 · 重启恢复**(⬜,V1-TermRefactor4):重启后点卡 → 重建 worktree + `--resume`;点卡到就绪显示「恢复中…」;**不在启动时批量唤醒**。到此达到「能用」底线(含重启后卡能 resume)。
 - **阶段 · 咨询态**(⬜,V1-TermRefactor5,可用后置):Done/InReview 注入咨询 prompt;「转成新活」按钮。
@@ -307,6 +307,12 @@ impl TerminalManager {
   - 迁移时 `workspace_path`/`branch_name` 尽力推:branch = `bw/issue-<github_number>`(github_number 非0);workspace_path 推 worktree 兄弟路径 `<parent>/<stem>-issue-<github_number>`(project.workspace_path 非空 + github_number 非0),推不出留空(阶段4 resume 时回填)。
   - `TerminalManager` 骨架在 bw-engine(无 PTY,阶段2 接入),阶段1 无调用点,`#[allow(dead_code)]` 注明。
   - `issue_detail_vm` 纯函数加 `is_interactive: bool` 参数(不读 issue 旧字段),调用链 OpenIssueDetail → IssueDetailData.is_interactive → kernel.rs → vm。
+- **阶段·底座实施决定(2026-08-07 接续窗口)**:
+  - `AppState` 去掉全局 `pty_input_tx`/`pty_bytes_rx`,改持 `TerminalManager`;`ensure_conversation` 返回 `ConversationId` 交给 `attach`。
+  - kernel `pty_rx` 载荷改为 `Vec<(ConversationId, Vec<u8>)>`;UI 按 id 写对应 xterm。有界环在 Manager 侧(满丢最老);kernel 仍用 watch 通知(并发段再考虑无订阅时不 drain)。
+  - JS:`window.__bw_term_sessions[id]` 取代 `__bw_term` 单例;`TerminalWidget { conversation_id }` + `div#__bw_terminal_<uuid>`。
+  - 尺寸:xterm fit 后立刻 stash resize;Rust `TerminalResize` 带 id;`attach` 用 `last_fit_size` 入队初始 Resize(无历史仍短暂 80×24,fit 到即纠正)。ConPTY spawn 本体未改(阶段外),靠 spawn 后首条 Resize。
+  - `delete_project` 先删 `claude_conversation`(阶段1 缺口补上)。`delete_issue` 级联仍未决。
 
 ---
 

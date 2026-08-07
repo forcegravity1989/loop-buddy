@@ -17,7 +17,7 @@ use bw_core::model::{
     AgentRef, Author, CronMode, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal,
     SkillRef, StageKind, CONNECTOR_KIND_SCRIPT,
 };
-use bw_core::{MetricId, SessionId};
+use bw_core::{ConversationId, MetricId, SessionId};
 use bw_engine::{
     ClaudeCliConfig, CodehubRepoSummary, Engine, GithubRepoSummary, MockExecutor, PermissionMode,
 };
@@ -76,11 +76,10 @@ pub struct Vm {
     /// 「⬇ 终止」 button on exactly the issue whose run is in flight, and to
     /// keep 「▶ 跑」 greyed for same-project siblings (serial lock).
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
-    /// V1 Issue2 Phase2b: whether a PTY session is active (the UI shows the
-    /// xterm.js terminal widget when `true`). Derived from
-    /// `AppState::pty_input_tx.is_some()` — set in `run_issue_interactive`
-    /// when spawning a PTY session, cleared when the session settles.
+    /// V1 终端会话重构·底座: 是否有活着的 PTY 连接(驱动 xterm 显隐)。
     pub pty_active: bool,
+    /// 当前 sole 活连接的 conversation id(底座单 PTY;并发阶段会扩展)。
+    pub pty_conversation_id: Option<ConversationId>,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -230,10 +229,10 @@ pub struct OpVm {
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
     /// P5: weekly-review card (top of the progress panel).
     pub week_review: ui::vm::WeekReviewVm,
-    /// V1 Issue2 Phase2b: whether a PTY session is active (the UI shows the
-    /// xterm.js terminal widget when `true`). Derived from
-    /// `AppState::pty_input_tx.is_some()` in `build_vm`.
+    /// V1 终端会话重构·底座: 是否有活着的 PTY 连接。
     pub pty_active: bool,
+    /// 当前 sole 活连接的 conversation id。
+    pub pty_conversation_id: Option<ConversationId>,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -425,11 +424,9 @@ pub struct Kernel {
     tx: mpsc::UnboundedSender<Command>,
     vm_rx: watch::Receiver<Vm>,
     notes: broadcast::Sender<UiNote>,
-    /// V1 Issue2 Phase2b: terminal bytes from the PTY (dedicated watch
-    /// channel, NOT the Vm — a regular `build_vm` could overwrite bytes
-    /// before the UI reads them). The pty_ticker arm sends each batch;
-    /// the UI's xterm.js widget reads via `changed()`.
-    pty_rx: watch::Receiver<Vec<u8>>,
+    /// V1 终端会话重构·底座: 带 conversation_id 的 PTY 字节批次(dedicated
+    /// watch,NOT the Vm)。pty_ticker 发送;UI 按 id 写入对应 xterm。
+    pty_rx: watch::Receiver<Vec<(ConversationId, Vec<u8>)>>,
 }
 
 impl Kernel {
@@ -442,10 +439,8 @@ impl Kernel {
     pub fn notes(&self) -> broadcast::Receiver<UiNote> {
         self.notes.subscribe()
     }
-    /// V1 Issue2 Phase2b: terminal bytes watch receiver. The UI's xterm.js
-    /// widget calls `changed().await` to get new bytes, then writes them
-    /// to the terminal via `document::eval`.
-    pub fn pty_bytes(&self) -> watch::Receiver<Vec<u8>> {
+    /// V1 终端会话重构·底座: 带 conversation_id 的字节批次 watch。
+    pub fn pty_bytes(&self) -> watch::Receiver<Vec<(ConversationId, Vec<u8>)>> {
         self.pty_rx.clone()
     }
 }
@@ -519,10 +514,8 @@ pub fn spawn() -> Kernel {
     let (vm_tx, vm_rx) = watch::channel(Vm::default());
     let (note_tx, _keep) = broadcast::channel::<UiNote>(256);
     let notes = note_tx.clone();
-    // V1 Issue2 Phase2b: dedicated watch channel for PTY terminal bytes.
-    // Separate from the Vm to avoid the race where a regular `build_vm`
-    // overwrites bytes before the UI reads them.
-    let (pty_tx, pty_rx) = watch::channel(Vec::<u8>::new());
+    // V1 终端会话重构·底座: 带 conversation_id 的字节通道(替代无身份单槽)。
+    let (pty_tx, pty_rx) = watch::channel(Vec::<(ConversationId, Vec<u8>)>::new());
 
     std::thread::Builder::new()
         .name("bw-kernel".into())
@@ -735,15 +728,11 @@ pub fn spawn() -> Kernel {
                                 }
                             }
                         }
-                        // V1 Issue2 Phase2b: drain PTY bytes → dedicated
-                        // watch channel (NOT the Vm — avoids the race where
-                        // a regular `build_vm` overwrites bytes before the UI
-                        // reads them). The UI's xterm.js widget reads via
-                        // `pty_rx.changed().await` and writes to the terminal.
+                        // V1 终端会话重构·底座: drain 带 id 的批次 → watch。
                         _ = pty_ticker.tick() => {
-                            let bytes = app.drain_pty_bytes();
-                            if !bytes.is_empty() {
-                                let _ = pty_tx.send(bytes);
+                            let batches = app.drain_pty_events();
+                            if !batches.is_empty() {
+                                let _ = pty_tx.send(batches);
                             }
                         }
                     }
@@ -936,7 +925,8 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         github_repos: state.github_repos.clone(),
         codehub_repos: state.codehub_repos.clone(),
         active_run: app.active_run(),
-        pty_active: state.pty_input_tx.is_some(),
+        pty_active: app.pty_active(),
+        pty_conversation_id: app.sole_pty_conversation(),
     };
 
     let Some(pid) = state.active_project else {
@@ -1299,10 +1289,11 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         }),
         active_run: app.active_run(),
         week_review,
-        // V1 Issue2 Phase2b: PTY active flag (drives the xterm.js widget
-        // visibility in the WorkflowStage component).
-        pty_active: state.pty_input_tx.is_some(),
+        // V1 终端会话重构·底座
+        pty_active: app.pty_active(),
+        pty_conversation_id: app.sole_pty_conversation(),
     });
-    vm.pty_active = state.pty_input_tx.is_some();
+    vm.pty_active = app.pty_active();
+    vm.pty_conversation_id = app.sole_pty_conversation();
     vm
 }

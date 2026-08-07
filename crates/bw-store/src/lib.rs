@@ -27,8 +27,8 @@ use bw_core::model::{
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
-    AgentId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, MetricId, ProjectId, SessionId,
-    SkillFileId, SkillId, WorkflowId, WorkflowRunId,
+    AgentId, ConnectorId, ConversationId, CronTaskId, IssueId, KnowledgeSourceId, MetricId,
+    ProjectId, SessionId, SkillFileId, SkillId, WorkflowId, WorkflowRunId,
 };
 use time::OffsetDateTime;
 
@@ -1064,13 +1064,14 @@ pub trait Store: Send + Sync {
     /// `bw/issue-<github_number>`);`claude_session_id` 此时为空,等 hook
     /// SessionStart 回传再由 [`set_conversation_session_id`] 填。替代旧
     /// `set_issue_interactive_started` 的语义(行存在 = 开过交互式会话)。
+    /// 返回行的 `ConversationId`(新建或已存在都查回——底座 TerminalManager 要身份)。
     async fn ensure_conversation(
         &self,
         issue_id: IssueId,
         project_id: ProjectId,
         workspace_path: &str,
         branch_name: &str,
-    ) -> Result<()>;
+    ) -> Result<ConversationId>;
     /// V1 终端会话重构(阶段1): hook SessionStart 回传 session_id 时填进
     /// 会话行(UPDATE;行不存在则 0 行受影响,no-op 不报错——行由首次
     /// spawn 前的 `ensure_conversation` 建好)。替代旧
