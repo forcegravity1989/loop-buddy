@@ -614,6 +614,13 @@ pub trait Store: Send + Sync {
     /// after-the-fact editing/correction. Irreversible; the caller is
     /// responsible for any user-facing confirmation.
     async fn delete_project(&self, id: ProjectId) -> Result<()>;
+    /// W2-2: hard-delete a single session row + its messages, and clear the
+    /// dangling `issue.session_id` reference (set to NULL, issue row stays).
+    /// `session` is a work product (not an observation/issue state-machine),
+    /// so deleting it touches none of the ironclad rules. Transaction-internal
+    /// order is message → issue.session_id → session so the `message.session_id`
+    /// FK constraint holds. Irreversible; the caller confirms with the user.
+    async fn delete_session(&self, id: SessionId) -> Result<()>;
     async fn set_project_phase(&self, id: ProjectId, phase: Readiness) -> Result<()>;
     async fn set_project_cycle(&self, id: ProjectId, cycle: MaturityPeriod) -> Result<()>;
     /// P9: `name`/`kind`/`descr` — the three identity fields `create_project`

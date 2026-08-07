@@ -878,6 +878,28 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn delete_session(&self, id: SessionId) -> Result<()> {
+        let sid = id.uuid().to_string();
+        let mut tx = self.pool.begin().await?;
+        // message.session_id has a REFERENCES session(id) FK — must go first.
+        sqlx::query("DELETE FROM message WHERE session_id=?")
+            .bind(&sid)
+            .execute(&mut *tx)
+            .await?;
+        // issue.session_id has no FK constraint but a dangling pointer is
+        // wrong — clear it so a later run re-mints its own session.
+        sqlx::query("UPDATE issue SET session_id=NULL WHERE session_id=?")
+            .bind(&sid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM session WHERE id=?")
+            .bind(&sid)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn set_project_phase(&self, id: ProjectId, phase: Readiness) -> Result<()> {
         sqlx::query("UPDATE project SET phase=?, updated_at=?, rev=rev+1 WHERE id=?")
             .bind(phase_text(phase))

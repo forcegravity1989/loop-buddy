@@ -350,15 +350,55 @@ fn SessionCard(s: SessionCardVm, selected: bool) -> Element {
     let bd = if selected { theme::CLAY } else { "#DBD4C5" };
     let card_alt = theme::CARD_ALT;
     let sid = s.id;
+    let mut confirming_delete = use_signal(|| false);
+    let k_del = k.clone();
     rsx! {
-        button {
-            style: "width:100%;text-align:left;background:{card_alt};border:1.4px solid {bd};border-radius:8px;padding:9px 10px;margin-bottom:7px;cursor:pointer;",
-            onclick: move |_| {
-                k.send(Command::SetPanel(Panel::Workflow));
-                k.send(Command::SelectSession(Some(sid)));
-            },
-            div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
-            div { style: "font-size:11px;color:{ink3};", "{s.status_label}" }
+        div {
+            style: "width:100%;text-align:left;background:{card_alt};border:1.4px solid {bd};border-radius:8px;padding:9px 10px;margin-bottom:7px;",
+            div {
+                style: "display:flex;align-items:flex-start;gap:6px;",
+                button {
+                    style: "flex:1;text-align:left;background:transparent;border:none;cursor:pointer;padding:0;font:inherit;color:inherit;",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        k.send(Command::SetPanel(Panel::Workflow));
+                        k.send(Command::SelectSession(Some(sid)));
+                    },
+                    div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
+                    div { style: "font-size:11px;color:{ink3};", "{s.status_label}" }
+                }
+                button {
+                    title: "删除此会话记录",
+                    style: "background:transparent;border:none;color:{ink3};cursor:pointer;font-size:14px;padding:0 0 0 4px;line-height:1;flex-shrink:0;",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        confirming_delete.set(true);
+                    },
+                    "×"
+                }
+            }
+            if confirming_delete() {
+                div {
+                    style: "margin-top:8px;padding-top:8px;border-top:1px dashed {ink3};display:flex;align-items:center;gap:8px;flex-wrap:wrap;",
+                    span { style: "font-size:11.5px;color:{ink3};flex:1;", "删除此会话记录?不可恢复" }
+                    button {
+                        style: "cursor:pointer;background:{theme::ALERT_DEEP};color:#FFF;border:none;border-radius:6px;padding:4px 10px;font-size:11.5px;",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            k_del.send(Command::DeleteSession(sid));
+                        },
+                        "确认"
+                    }
+                    button {
+                        style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid {ink3};border-radius:6px;padding:4px 10px;font-size:11.5px;",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            confirming_delete.set(false);
+                        },
+                        "取消"
+                    }
+                }
+            }
         }
     }
 }

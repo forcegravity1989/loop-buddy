@@ -881,6 +881,12 @@ pub enum Command {
     /// counterpart to `CreateProject` — irreversible; the UI is responsible
     /// for confirming with the user before dispatching this.
     DeleteProject(ProjectId),
+    /// W2-2: hard-delete a single session + its messages, clearing the
+    /// `issue.session_id` dangling reference (issue row stays). Irreversible;
+    /// the UI confirms with the user before dispatching. Used to clean up the
+    /// historical duplicate "阶段记录" cards that piled up before the
+    /// `(stage_kind, title)` dedup guard landed.
+    DeleteSession(SessionId),
     BackToProjects,
     SetPanel(Panel),
     SetScope(Scope),
@@ -9238,6 +9244,17 @@ impl App {
                 }
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectsChanged);
+            }
+
+            Command::DeleteSession(id) => {
+                self.store.delete_session(id).await?;
+                // If the deleted session was the chat-focused one, drop the
+                // stale pointer so the workflow panel doesn't try to render
+                // messages for a session that no longer exists.
+                if self.state.active_session == Some(id) {
+                    self.state.active_session = None;
+                }
+                self.emit(Event::ViewChanged(self.state.view));
             }
 
             Command::BackToProjects => {
