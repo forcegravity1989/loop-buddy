@@ -1,5 +1,7 @@
 # V1 遗留深度分析 · 交互式引擎 / PTY 架构组
 
+> ⚠️ **归正注记(2026-08-07)**:本文对 W2-1(切走丢字 / 重启黑框 / 窄窗错行)的诊断「单槽 watch 丢字节」只盖了三现象之一,且把「切走丢字」和「窄窗错行」混为一谈。W2-1 的真根因经两轮独立架构评估已归正:四个生命周期(活 / 交付运行 / Claude 会话 / 终端连接)被错误绑死。归正后的设计事实源见 [`issue2-terminal-conversation-refactor.md`](issue2-terminal-conversation-refactor.md),以该篇为准——别照本文 W2-1 段落施工。本文其余四条(V1-P1 macOS、W1-2 clone 堵命令循环、W2-3 无预算封顶、W2-7 诊断 spike 清理)仍作数。
+
 > **30 秒导读**：这份报告覆盖五条遗留（V1-P1 macOS 跑不了、W2-1 离开面板丢字节/重启黑框消失、W1-2 clone 堵命令循环、W2-3 交互式无预算封顶、W2-7 诊断 spike 清理核实）。给现状代码行号 → 根因 → 方案选项与取舍 → 推荐 → 工作量 → 是否动铁律。结论先行：**V1-P1 的 portable-pty Unix 后端是让 macOS 真正可用的唯一正路，且工作量不大（portable-pty 的 Unix 后端工作正常，issue2 §9 那条「不投递 stdout」的坑是 Windows ConPTY 专有的，不影响 Unix）**；W2-7 清理已做完；其余三条都不动铁律，按痛度排序 W1-2 > W2-1 > W2-3。报告只读分析为主，未碰主分支代码；portable-pty 可行性未在本机做 demo（本机是 Windows，验不了 Unix 后端），结论基于 API 形态与 issue2 §9 的事实陈述。
 >
 > **代号说明**：PTY = 伪终端（把 claude 放进一个可被嵌入 UI 的虚拟终端里，字节流双向收发）；ConPTY = Windows 的伪终端实现；铁律 = CLAUDE.md 列的产品不可违反约束；读回为证 = 任何「完成/数字是 X」的陈述必须能从 DB 或工作区独立复核。
