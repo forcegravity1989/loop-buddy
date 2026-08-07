@@ -2017,6 +2017,11 @@ impl App {
                     continue;
                 }
                 self.store.set_issue_pr_number(issue.id, pr).await?;
+                // Bug1(V1-TermDemote):issue 离开 InProgress → InReview。若交付
+                // PTY 仍活(claude 提完 MR 往往不退出),降级为咨询 → 放
+                // active_run 锁,同项目别的 issue 可跑。PTY + worktree 留着
+                // (不杀、不清)。PTY 已死则 no-op,让待处理 settle 正常 finalize。
+                let _ = self.demote_delivery_to_consultation(issue.id).await;
                 self.emit(Event::ConnectorSynced {
                     name: format!("#{} · InReview", issue.number),
                     ok: true,
@@ -5516,6 +5521,101 @@ impl App {
         Ok(())
     }
 
+    /// Bug1 修复(V1-TermDemote):issue 离开 InProgress(→InReview 或→Done)
+    /// 且仍持有交付锁 + PTY 还活着时,把这笔交付**降级为咨询**:清掉
+    /// `active_run`(放锁,同项目别的 issue 可跑)、把 PTY handle + worktree
+    /// guard 从 `active_run` 迁到 `consultation_runs`(keyed by
+    /// `conversation_id`),PTY 和 worktree 都留着(跟续聊形态一样)。不杀
+    /// 进程、不清工作区(用户明确要求 worktree 不清)。
+    ///
+    /// 降级时记账:补记一次技能被用过(`record_skill_use` for
+    /// `ar.finalize.spec.skills`,首次 run;resume 不记 settle-once)。合入
+    /// 边(Done)已记 agent 战绩(8845),不重复记 agent;InReview 边此刻
+    /// 未记 agent,agent 留到 Done 边(8845)记——所以降级只记 skill,不记
+    /// agent,agent 永远只在 Done 边记一次。
+    ///
+    /// 降级后 PTY 退出时发的 `Interactive` settle 因 `active_run` 已空走
+    /// `cleanup_demoted_consultation`(下方),不重复 finalize;skill_output
+    /// 忽略(降级时已记账)。
+    ///
+    /// PTY 已死时不降级(restore `active_run`),让待处理的 settle 走正常
+    /// finalize 路径(记 agent+skill、drop guard)。这条 idempotent:active_run
+    /// 不持本 issue / PTY 已死 / 无会话行 → no-op。
+    async fn demote_delivery_to_consultation(&mut self, issue_id: IssueId) -> Result<(), AppError> {
+        let Some(ar) = self.state.active_run.take() else {
+            return Ok(()); // 无在跑交付 —— 无可降级
+        };
+        if ar.issue.id != issue_id {
+            // 别的 issue 的活 —— 还原,别误伤
+            self.state.active_run = Some(ar);
+            return Ok(());
+        }
+        // 只在 PTY 仍活时降级(claude 提完 MR 往往不退出)。PTY 已死 →
+        // restore,让待处理 settle 走正常 finalize(记 agent+skill、drop guard)。
+        let conv = match self.store.get_conversation_by_issue(issue_id).await? {
+            Some(c) => c,
+            None => {
+                self.state.active_run = Some(ar);
+                return Ok(());
+            }
+        };
+        if !self.state.terminal_manager.is_live(conv.id) {
+            self.state.active_run = Some(ar);
+            return Ok(());
+        }
+        // 降级:首次 run 补记 skill uses(resume 不记,settle-once);不记
+        // agent(Done 边 8845 已记 / 会记)。与 `finalize_run_interactive`
+        // 的 skill 记账块同形(by-name scoped_pick,他项目不连带 bump)。
+        if !ar.is_resume {
+            let skill_catalog = self.store.list_skills().await?;
+            for s in &ar.finalize.spec.skills {
+                if let Some(row) = bw_core::scope::scoped_pick(
+                    skill_catalog.iter(),
+                    Some(ar.finalize.p),
+                    |x| x.project_id,
+                    |x| x.name == s.name,
+                ) {
+                    self.store.record_skill_use(row.id).await?;
+                }
+            }
+            self.refresh_skills().await?;
+            self.emit(Event::SkillsChanged);
+        }
+        // handle + guard 迁到 consultation_runs;active_run 已 take(放锁)。
+        self.state.consultation_runs.insert(
+            conv.id,
+            ConsultationRun {
+                issue_id,
+                handle: ar.handle,
+                guard: ar.guard,
+            },
+        );
+        self.emit(Event::IssuesChanged);
+        Ok(())
+    }
+
+    /// Bug1:降级后的交付 PTY 退出时,spawn 闭包仍发
+    /// `SettleOutcome::Interactive`(不是 `ConsultationEnded`)。`active_run`
+    /// 已空 → `run_issue_settle` 的 None 分支 / straggler 分支调本方法:
+    /// 查 `req.issue` 对应的 conversation,若在 `consultation_runs` 里(降级
+    /// 交付退出)→ 按咨询退出收尾(close PTY,clear_focus,clear_restoring,
+    /// forget_session,drop guard,refresh)。skill_output 忽略(降级时
+    /// 已记账)。不在 consultation_runs 里 → 真 no-op(早已 settle)。
+    async fn cleanup_demoted_consultation(&mut self, issue_id: IssueId) {
+        if let Ok(Some(c)) = self.store.get_conversation_by_issue(issue_id).await {
+            if self.state.consultation_runs.contains_key(&c.id) {
+                self.state.terminal_manager.close(c.id);
+                self.clear_focus_if(c.id);
+                self.clear_restoring_if(c.id);
+                if let Some(cr) = self.state.consultation_runs.remove(&c.id) {
+                    self.forget_interactive_session(cr.issue_id);
+                    drop(cr.guard);
+                }
+                self.emit(Event::IssuesChanged);
+            }
+        }
+    }
+
     /// plan/17 S3: settle a backgrounded issue-run on the main thread. Called
     /// by the kernel's settle arm when the spawned round loop reports back.
     /// `take()` is the double-settle guard: a `CancelRun` that already
@@ -5540,14 +5640,19 @@ impl App {
         }
 
         let Some(ar) = self.state.active_run.take() else {
-            // Already settled (cancel raced ahead, or a stale req for a run
-            // whose settle already ran). Honest no-op.
+            // active_run 空:要么早已 settle(no-op),要么是降级交付的 PTY
+            // 退出(spawn 闭包发的是 Interactive 不是 ConsultationEnded)。
+            // 查 consultation_runs:在则按咨询退出收尾(降级时已记账,
+            // skill_output 忽略);不在则真 no-op。
+            self.cleanup_demoted_consultation(req.issue).await;
             return Ok(());
         };
         if ar.issue.id != req.issue || ar.project != req.project {
-            // Not this run — restore and ignore (a different run is in flight;
-            // this req is a straggler from a prior one).
+            // 别的 issue 的活(新交付起来了)—— restore,别误清。但若这个
+            // straggler 是降级交付退出(req.issue 在 consultation_runs 里),
+            // 顺带清掉它的咨询记录(PTY 已死,guard 该 drop)。
             self.state.active_run = Some(ar);
+            self.cleanup_demoted_consultation(req.issue).await;
             return Ok(());
         }
         // V1 收口:issue ▶跑 全走嵌入终端后,settle 只剩 Interactive(交付)与
@@ -8847,6 +8952,13 @@ impl App {
                             self.emit(Event::AgentsChanged);
                         }
                     }
+                    // Bug1(V1-TermDemote):issue → Done。若交付 PTY 仍活
+                    // (claude 提完 MR 往往不退出),降级为咨询 → 放 active_run
+                    // 锁,同项目别的 issue 可跑。PTY + worktree 留着(不杀、不
+                    // 清)。MergeIssuePr 内部 dispatch 到这里,自动覆盖。PTY 已
+                    // 死则 no-op,让待处理 settle 正常 finalize。降级失败不阻塞
+                    // Done 记账(降级是放锁,best-effort)。
+                    let _ = self.demote_delivery_to_consultation(id).await;
                     // P4 (2026-08-06 cowelink 验证 §2.3/§5): 「已完成」是唯一的
                     // 验收兜底,不管走的是 `MergeIssuePr`(内部 dispatch 到这里)
                     // 还是网页上把 PR 合了、回 buddy 裸点「→已完成」——两条路都
