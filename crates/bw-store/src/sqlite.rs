@@ -3250,6 +3250,21 @@ impl Store for SqliteStore {
             .collect()
     }
 
+    async fn list_resumable_conversation_issue_ids(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<IssueId>> {
+        let rows = sqlx::query(
+            "SELECT issue_id FROM claude_conversation WHERE project_id=? AND claude_session_id != ''",
+        )
+            .bind(project_id.uuid().to_string())
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| parse_uuid(&r.get::<String, _>("issue_id"), IssueId::from_uuid))
+            .collect()
+    }
+
     async fn set_issue_github_number(&self, id: IssueId, github_number: u32) -> Result<()> {
         sqlx::query("UPDATE issue SET github_number=?, updated_at=? WHERE id=?")
             .bind(github_number as i64)

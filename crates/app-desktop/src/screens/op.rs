@@ -779,7 +779,13 @@ fn IssuesPanel(op: OpVm) -> Element {
             }
             // P4: the evidence overlay — floats above the board while open.
             if let Some(d) = op.issue_detail.clone() {
-                IssueDetailOverlay { d, sessions: op.sessions.clone(), active_run: op.active_run, project_id: op.id }
+                IssueDetailOverlay {
+                    can_consult: op.consultable_issues.contains(&d.id),
+                    sessions: op.sessions.clone(),
+                    active_run: op.active_run,
+                    project_id: op.id,
+                    d: d,
+                }
             }
             div { style: "display:flex;gap:12px;align-items:flex-start;",
                 for (label, list) in grouped {
@@ -807,6 +813,8 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 // → 「▶ 跑」 greyed)? A run on another project
                                 // doesn't block this card.
                                 let is_running = op.active_run == Some((op.id, i_id));
+                                let is_focused = op.focused_issue == Some(i_id);
+                                let can_consult = op.consultable_issues.contains(&i_id);
                                 let same_project_busy =
                                     op.active_run.map(|(p, _)| p) == Some(op.id);
                                 // plan/17 S3: the 「▶ 跑」 button's label /
@@ -833,11 +841,22 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 let advance_label = advance.map(|s| s.label()).unwrap_or("");
                                 let is_blocked = i.status == IssueStatus::Blocked;
                                 let entering_reason = blocking() == Some(i_id);
+                                let card_left = if is_focused { clay } else { i.status_color };
+                                let card_extra = if is_focused {
+                                    format!("box-shadow:inset 0 0 0 1px {clay};")
+                                } else {
+                                    String::new()
+                                };
                                 rsx! {
                                     div {
                                         key: "{i.number}",
-                                        style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {i.status_color};",
-                                        div { style: "font-size:11px;color:{ink3};font-family:{mono};", "#{i.number} · {i.stage.label()}" }
+                                        style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {card_left};{card_extra}",
+                                        div { style: "font-size:11px;color:{ink3};font-family:{mono};display:flex;align-items:center;gap:6px;",
+                                            span { "#{i.number} · {i.stage.label()}" }
+                                            if is_focused {
+                                                span { style: "color:{clay};border:1px solid {clay};border-radius:4px;padding:0 5px;font-size:10px;", "当前会话" }
+                                            }
+                                        }
                                         // C4 · issue 身份映射: 号非 0 才渲染。
                                         // Bug③+UI: provider-aware link to the
                                         // remote issue (codehub `{host}/{path}/issues`
@@ -1004,6 +1023,29 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                         },
                                                         "{run_label}"
                                                     }
+                                                } else if can_consult {
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;font-weight:700;",
+                                                        onclick: move |_| {
+                                                            let sid = existing_issue_session(
+                                                                &op_sessions,
+                                                                run_stage,
+                                                                &run_sess_title,
+                                                            )
+                                                            .unwrap_or_else(SessionId::new);
+                                                            k_run.send(Command::StartSession {
+                                                                id: sid,
+                                                                stage_kind: Some(run_stage),
+                                                                kind: SessionKind::Create,
+                                                                title: run_sess_title.clone(),
+                                                            });
+                                                            k_run.send(Command::RunIssue { session: sid, id: i_id });
+                                                            k_run.send(Command::SetScope(Scope::Stage(run_stage)));
+                                                            k_run.send(Command::SetPanel(Panel::Workflow));
+                                                            k_run.send(Command::SelectSession(Some(sid)));
+                                                        },
+                                                        "续聊"
+                                                    }
                                                 }
                                                 // C5 · PR 验收环: InReview + 有 PR 时,
                                                 // merge 是首选验收路径(人 merge → 关单)。
@@ -1058,6 +1100,7 @@ fn IssueDetailOverlay(
     sessions: Vec<SessionCardVm>,
     active_run: Option<(ProjectId, IssueId)>,
     project_id: ProjectId,
+    can_consult: bool,
 ) -> Element {
     let k = use_context::<Kernel>();
     let card = theme::card();
@@ -1226,6 +1269,26 @@ fn IssueDetailOverlay(
                                 k_run.send(Command::SelectSession(Some(sid)));
                             },
                             "{run_label}"
+                        }
+                    } else if can_consult {
+                        button {
+                            style: "cursor:pointer;border:none;border-radius:7px;background:transparent;border:1px solid {clay};color:{clay};padding:7px 16px;font-size:12.5px;",
+                            onclick: move |_| {
+                                let sid = existing_issue_session(&sessions, run_stage, &run_sess_title)
+                                    .unwrap_or_else(SessionId::new);
+                                k_run.send(Command::StartSession {
+                                    id: sid,
+                                    stage_kind: Some(run_stage),
+                                    kind: SessionKind::Create,
+                                    title: run_sess_title.clone(),
+                                });
+                                k_run.send(Command::RunIssue { session: sid, id });
+                                k_run.send(Command::CloseIssueDetail);
+                                k_run.send(Command::SetScope(Scope::Stage(run_stage)));
+                                k_run.send(Command::SetPanel(Panel::Workflow));
+                                k_run.send(Command::SelectSession(Some(sid)));
+                            },
+                            "续聊"
                         }
                     }
                     if in_review {
@@ -2878,11 +2941,19 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
         }
         {chat_area}
-        // V1 终端会话重构·底座: 有活 PTY 且知道 conversation_id 才挂
-        // xterm(按 id 索引,不再用全局单例)。
+        // 多会话常驻:所有活 PTY 挂 xterm;仅焦点可见(隐藏的仍收字节)。
         if op.pty_active {
-            if let Some(cid) = op.pty_conversation_id {
-                TerminalWidget { conversation_id: cid }
+            for cid in op.pty_live_ids.clone() {
+                {
+                    let is_focused = op.pty_conversation_id == Some(cid);
+                    rsx! {
+                        TerminalWidget {
+                            key: "{cid.uuid()}",
+                            conversation_id: cid,
+                            focused: is_focused,
+                        }
+                    }
+                }
             }
         }
         if let Some(msg) = promoted_msg() {
@@ -3274,10 +3345,9 @@ fn take_utf8_prefix(buf: &mut Vec<u8>) -> String {
     }
 }
 
-/// V1 终端会话重构·底座: in-app terminal widget keyed by conversation_id.
-/// Bytes / input / resize 全带身份;JS 侧 Map 存每会话独立 xterm(§7.3)。
+/// 按 conversation_id 挂的嵌入终端;focused=false 时隐藏但仍收字节。
 #[component]
-fn TerminalWidget(conversation_id: ConversationId) -> Element {
+fn TerminalWidget(conversation_id: ConversationId, focused: bool) -> Element {
     let k = use_context::<Kernel>();
     let cid_str = conversation_id.uuid().to_string();
     let div_id = format!("__bw_terminal_{cid_str}");
@@ -3362,9 +3432,15 @@ fn TerminalWidget(conversation_id: ConversationId) -> Element {
         }
     });
 
+    let border = theme::BORDER;
+    let wrap = if focused {
+        format!("margin-top:14px;border:1px solid {border};border-radius:8px;overflow:hidden;")
+    } else {
+        "display:none;".into()
+    };
     rsx! {
         div {
-            style: "margin-top:14px;border:1px solid {theme::BORDER};border-radius:8px;overflow:hidden;",
+            style: "{wrap}",
             div {
                 style: "background:#1e1e2e;color:#cdd6f4;font-family:JetBrains Mono,Consolas,monospace;font-size:11px;padding:4px 10px;display:flex;align-items:center;gap:6px;",
                 span { style: "opacity:0.7;", "● in-app terminal" }

@@ -264,7 +264,7 @@ impl TerminalManager {
 
 - **阶段 1 · 概念解耦 + 数据模型**(✅ 已落地,V1-TermRefactor1):建 `claude_conversation` 表 + 存量迁移 + `TerminalManager` 骨架(只含 conversation 身份,无 PTY)。业务读路径收口到新表,`issue` 旧列物理退场。实施细节见 §13。
 - **阶段 · 底座**(✅ 已落地,V1-TermRefactor2):`TerminalManager` 接 PTY(spawn/resume/input/resize/events);字节带 `conversation_id` 路由;每卡独立 xterm(`window.__bw_term_sessions[id]` Map,修掉全局单例);每会话有界输出环(64 批×8KB);尺寸同步链(fit→`TerminalResize` 带 id→`note_fit_size`/`attach` 初始 Resize;remount 重 fit)。`delete_project` 清 `claude_conversation`。底座仍「同一时刻只一个活 PTY」(`attach` 关其余;新交付仍走 `active_run` 串行),但身份路由与多 xterm Map 已就位——不造之后要删的单槽兼容层。
-- **阶段 · 并发切卡**(⬜,V1-TermRefactor3):A 交付 + B 咨询并发;切卡只切显示/键盘,不杀 PTY;UI 标清当前会话(修现象三)。咨询 PTY 不占 `active_run`、不 settle、不改状态。
+- **阶段 · 并发切卡**(✅ 已落地,V1-TermRefactor3):A 交付 + B 咨询并发;切卡只切显示/键盘,不杀 PTY;UI 标「当前会话」+ Done/InReview「续聊」;多 xterm 常驻(非焦点 `display:none` 仍收字节)。咨询 PTY 走 `open_conversation` → `consultation_runs`,不占 `active_run`、不 settle、不改状态。
 - **阶段 · 重启恢复**(⬜,V1-TermRefactor4):重启后点卡 → 重建 worktree + `--resume`;点卡到就绪显示「恢复中…」;**不在启动时批量唤醒**。到此达到「能用」底线(含重启后卡能 resume)。
 - **阶段 · 咨询态**(⬜,V1-TermRefactor5,可用后置):Done/InReview 注入咨询 prompt;「转成新活」按钮。
 
@@ -313,6 +313,11 @@ impl TerminalManager {
   - JS:`window.__bw_term_sessions[id]` 取代 `__bw_term` 单例;`TerminalWidget { conversation_id }` + `div#__bw_terminal_<uuid>`。
   - 尺寸:xterm fit 后立刻 stash resize;Rust `TerminalResize` 带 id;`attach` 用 `last_fit_size` 入队初始 Resize(无历史仍短暂 80×24,fit 到即纠正)。ConPTY spawn 本体未改(阶段外),靠 spawn 后首条 Resize。
   - `delete_project` 先删 `claude_conversation`(阶段1 缺口补上)。`delete_issue` 级联仍未决。
+- **阶段·并发切卡实施决定(2026-08-07 接续)**:
+  - `open_conversation`:Done/InReview + 非空 `claude_session_id` → `prepare_issue_run(resume)` + `attach` + `consultation_runs`;settle 用 `ConsultationEnded`(关 PTY + drop guard,不碰状态/settle-once)。
+  - `attach` 不杀 peer;`ConversationMeta.issue_id` 供焦点回落;`focused_conversation`/`focused_issue` 驱动 UI。
+  - UI:看板「当前会话」徽 + 「续聊」;`pty_live_ids` 多 xterm 常驻(非焦点 `display:none`);`OpenIssueDetail` 有活 PTY 只切焦点。
+  - 咨询 prompt /「转成新活」仍属阶段·咨询态(TermRefactor5)。
 
 ---
 

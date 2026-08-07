@@ -1082,6 +1082,11 @@ pub trait Store: Send + Sync {
     /// `poll_interactive_inreview` 用来筛"开过交互式会话"的活(替代旧
     /// `interactive_started` filter),一次查询拿全,避免 N+1。
     async fn list_conversation_issue_ids(&self, project_id: ProjectId) -> Result<Vec<IssueId>>;
+    /// Done/InReview「续聊」用:有非空 `claude_session_id` 的会话(可 `--resume`)。
+    async fn list_resumable_conversation_issue_ids(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<IssueId>>;
     /// A5-F: the only way an issue reaches `Blocked` — sets status and reason
     /// together in one write. Legality (which source states may block) and
     /// the non-empty-reason rule are the App layer's job; the store just

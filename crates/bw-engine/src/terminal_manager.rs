@@ -3,16 +3,14 @@
 //! 外部调用者只认识稳定的 [`ConversationId`],不直接碰 child handle、channel、
 //! 平台 PTY 类型。字节按会话身份路由;每会话有界输出缓冲(满丢最老)。
 //!
-//! **阶段·底座**:接 PTY channels + 有界缓冲 + resize/input/drain。多会话
-//! Map 已就位;同项目「只一件交付」仍由 `active_run` 串行——并发常驻是下一
-//! 阶段。进程退出即清空(纯内存),身份从 `claude_conversation` 表恢复。
-//! 详见 `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §7 / §10.1。
+//! 并发切卡:多会话常驻 PTY,attach 不杀 peer;交付锁仍由 `active_run`。
+//! 见 `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §7 / §10.1。
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use bw_core::ConversationId;
+use bw_core::{ConversationId, IssueId};
 use tokio::sync::mpsc;
 
 use crate::interactive_cli::PtyInput;
@@ -27,11 +25,10 @@ pub const OUTPUT_BATCH_MAX_BYTES: usize = 8 * 1024;
 #[derive(Clone, Debug)]
 pub struct ConversationMeta {
     pub conversation_id: ConversationId,
+    pub issue_id: IssueId,
     /// claude CLI 的 `--resume` id(hook 回传)。空 = 首次未捕获。
     pub claude_session_id: String,
-    /// 固定 worktree 路径(重启 resume 重建 worktree 用同路径)。
     pub workspace_path: PathBuf,
-    /// 该活分支 `bw/issue-<github_number>`。
     pub branch_name: String,
 }
 
@@ -105,28 +102,21 @@ impl TerminalManager {
         !self.sessions.is_empty()
     }
 
-    /// 当前活连接的 conversation id 列表(底座阶段通常 0/1 个)。
+    /// 当前活连接的 conversation id 列表。
     pub fn live_ids(&self) -> Vec<ConversationId> {
         self.sessions.keys().copied().collect()
     }
 
-    /// 若恰好一个活连接,返回其 id(底座单 PTY 时给 UI 用)。
-    pub fn sole_live_id(&self) -> Option<ConversationId> {
-        if self.sessions.len() == 1 {
-            self.sessions.keys().next().copied()
-        } else {
-            None
-        }
+    pub fn is_live(&self, conversation_id: ConversationId) -> bool {
+        self.sessions.contains_key(&conversation_id)
     }
 
-    /// 注册一次 PTY 会话并返回交给 `run_skill_pty` 的两端。
-    ///
-    /// **底座约束**:同刻只保留一个活 PTY——attach 新会话前关掉其余(并发
-    /// 常驻是下一阶段)。有界缓冲在 Manager 侧;PTY 读循环仍用 unbounded
-    /// 推入,forwarder 写入环并丢最老。
-    ///
-    /// 返回 `(bytes_tx, input_rx)`:bytes_tx 给 PTY 读线程;input_rx 给
-    /// executor 的 select 循环。
+    /// 活连接对应的 issue(焦点回落时用)。
+    pub fn issue_id(&self, conversation_id: ConversationId) -> Option<IssueId> {
+        self.sessions.get(&conversation_id).map(|s| s.meta.issue_id)
+    }
+
+    /// 注册 PTY 会话,返回给 `run_skill_pty` 的两端。不关其它会话;同 id 重 spawn 先清自己。
     pub fn attach(
         &mut self,
         conversation_id: ConversationId,
@@ -136,16 +126,7 @@ impl TerminalManager {
         mpsc::UnboundedSender<Vec<u8>>,
         mpsc::UnboundedReceiver<PtyInput>,
     ) {
-        // 底座:新交付替换旧连接(不留无身份全局槽的兼容层)。
-        let stale: Vec<ConversationId> = self
-            .sessions
-            .keys()
-            .copied()
-            .filter(|id| *id != conversation_id)
-            .collect();
-        for id in stale {
-            self.close(id);
-        }
+        // 同会话重 spawn:只关自己,不杀 peer。
         self.close(conversation_id);
 
         let size = initial_size.or(self.last_fit_size).unwrap_or((80, 24));
@@ -211,10 +192,6 @@ impl TerminalManager {
     /// 关掉会话连接(丢 sender → executor 侧 input_rx 结束 → PTY 收尾)。
     pub fn close(&mut self, conversation_id: ConversationId) {
         self.sessions.remove(&conversation_id);
-    }
-
-    pub fn close_all(&mut self) {
-        self.sessions.clear();
     }
 
     /// 抽出所有会话自上次 drain 以来的输出,每项带 conversation_id。

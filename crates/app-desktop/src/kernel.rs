@@ -14,8 +14,8 @@
 
 use bw_app::{ActionState, App, Command, Event, Panel, Scope, SettleReq, View};
 use bw_core::model::{
-    AgentRef, Author, CronMode, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal,
-    SkillRef, StageKind, CONNECTOR_KIND_SCRIPT,
+    AgentRef, Author, CronMode, HubCard, IssueStatus, MaturityPeriod, Readiness, SessionStatus,
+    Signal, SkillRef, StageKind, CONNECTOR_KIND_SCRIPT,
 };
 use bw_core::{ConversationId, MetricId, SessionId};
 use bw_engine::{
@@ -76,10 +76,16 @@ pub struct Vm {
     /// 「⬇ 终止」 button on exactly the issue whose run is in flight, and to
     /// keep 「▶ 跑」 greyed for same-project siblings (serial lock).
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
-    /// V1 终端会话重构·底座: 是否有活着的 PTY 连接(驱动 xterm 显隐)。
+    /// 是否有活着的 PTY 连接。
     pub pty_active: bool,
-    /// 当前 sole 活连接的 conversation id(底座单 PTY;并发阶段会扩展)。
+    /// 当前焦点会话(驱动可见 xterm)。
     pub pty_conversation_id: Option<ConversationId>,
+    /// 所有活着的会话(多 xterm 常驻用)。
+    pub pty_live_ids: Vec<ConversationId>,
+    /// 焦点对应的 issue(看板「当前会话」)。
+    pub focused_issue: Option<bw_core::IssueId>,
+    /// Done/InReview 且有可 resume 会话的 issue(看板「续聊」)。
+    pub consultable_issues: Vec<bw_core::IssueId>,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -229,10 +235,11 @@ pub struct OpVm {
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
     /// P5: weekly-review card (top of the progress panel).
     pub week_review: ui::vm::WeekReviewVm,
-    /// V1 终端会话重构·底座: 是否有活着的 PTY 连接。
     pub pty_active: bool,
-    /// 当前 sole 活连接的 conversation id。
     pub pty_conversation_id: Option<ConversationId>,
+    pub pty_live_ids: Vec<ConversationId>,
+    pub focused_issue: Option<bw_core::IssueId>,
+    pub consultable_issues: Vec<bw_core::IssueId>,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -926,7 +933,10 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         codehub_repos: state.codehub_repos.clone(),
         active_run: app.active_run(),
         pty_active: app.pty_active(),
-        pty_conversation_id: app.sole_pty_conversation(),
+        pty_conversation_id: app.focused_pty_conversation(),
+        pty_live_ids: app.live_pty_ids(),
+        focused_issue: app.focused_pty_issue(),
+        consultable_issues: Vec::new(),
     };
 
     let Some(pid) = state.active_project else {
@@ -1289,11 +1299,29 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         }),
         active_run: app.active_run(),
         week_review,
-        // V1 终端会话重构·底座
         pty_active: app.pty_active(),
-        pty_conversation_id: app.sole_pty_conversation(),
+        pty_conversation_id: app.focused_pty_conversation(),
+        pty_live_ids: app.live_pty_ids(),
+        focused_issue: app.focused_pty_issue(),
+        consultable_issues: {
+            let conv_ids = store
+                .list_resumable_conversation_issue_ids(pid)
+                .await
+                .unwrap_or_default();
+            state
+                .issues
+                .iter()
+                .filter(|i| {
+                    matches!(i.status, IssueStatus::Done | IssueStatus::InReview)
+                        && conv_ids.contains(&i.id)
+                })
+                .map(|i| i.id)
+                .collect()
+        },
     });
     vm.pty_active = app.pty_active();
-    vm.pty_conversation_id = app.sole_pty_conversation();
+    vm.pty_conversation_id = app.focused_pty_conversation();
+    vm.pty_live_ids = app.live_pty_ids();
+    vm.focused_issue = app.focused_pty_issue();
     vm
 }
