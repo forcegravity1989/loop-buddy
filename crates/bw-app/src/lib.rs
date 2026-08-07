@@ -6621,14 +6621,28 @@ impl App {
             } => {
                 let p = self.active()?;
                 self.store.set_brief(p, &benchmark, &opportunity).await?;
-                let _ = write_charter(self, p, "定位与机会").await;
+                if let Err(e) = write_charter(self, p, "定位与机会").await {
+                    self.emit(Event::ActionProgress {
+                        name: "写项目章程".into(),
+                        state: ActionState::Fail(format!(
+                            "章程未补写（PROJECT.md 定位与机会段可能缺）：{e}"
+                        )),
+                    });
+                }
                 self.emit(Event::ProjectUpdated(p));
             }
 
             Command::UpdateNorthStar { value, def } => {
                 let p = self.active()?;
                 self.store.set_north_star(p, &value, &def).await?;
-                let _ = write_charter(self, p, "北极星").await;
+                if let Err(e) = write_charter(self, p, "北极星").await {
+                    self.emit(Event::ActionProgress {
+                        name: "写项目章程".into(),
+                        state: ActionState::Fail(format!(
+                            "章程未补写（PROJECT.md 北极星段可能缺）：{e}"
+                        )),
+                    });
+                }
                 self.emit(Event::ProjectUpdated(p));
             }
 
@@ -6641,7 +6655,14 @@ impl App {
                 self.store
                     .set_project_identity(p, &name, kind.trim(), descr.trim())
                     .await?;
-                let _ = write_charter(self, p, "项目信息").await;
+                if let Err(e) = write_charter(self, p, "项目信息").await {
+                    self.emit(Event::ActionProgress {
+                        name: "写项目章程".into(),
+                        state: ActionState::Fail(format!(
+                            "章程未补写（PROJECT.md 项目信息段可能缺）：{e}"
+                        )),
+                    });
+                }
                 self.refresh_projects().await?;
                 self.emit(Event::ProjectUpdated(p));
             }
@@ -9303,6 +9324,10 @@ impl App {
                 if self.state.active_session == Some(id) {
                     self.state.active_session = None;
                 }
+                // review: refresh issues so state.issues doesn't hold a stale
+                // session_id ref (delete_session nulled it in the DB; this
+                // re-reads the honest NULL into state).
+                self.refresh_issues().await?;
                 self.emit(Event::ViewChanged(self.state.view));
             }
 
