@@ -258,13 +258,17 @@ impl TerminalManager {
 
 每阶段让最终架构更接近,**不造要删除的临时兼容层**(守 CLAUDE.md「不为向后兼容留旧路径」)。
 
-- **阶段 1 · 概念解耦 + 数据模型**(✅ 已落地,V1-TermRefactor1 系列 commit):建 `claude_conversation` 表 + 存量迁移 + `TerminalManager` 骨架(只含 conversation 身份,无 PTY)。业务读路径(`is_resume` 判断、hook 路由)收口到新表,`issue` 旧列物理退场。实施细节见 §13。
-- **阶段 2 · 每会话独立 PTY + 字节路由 + xterm**:`TerminalManager` 实现 spawn/resume/input/resize/events;字节带 `conversation_id`;每卡独立 xterm;watch 单槽 → 有界 mpsc。此时仍是"同一时刻只一个活 PTY",但已带身份路由。
-- **阶段 3 · 多会话并发 + 切卡**:A 交付 + B 咨询并发;切卡只切显示/键盘,不杀 PTY;UI 标清"当前显示哪个会话"(修现象三:绑指标卡看到绑数据 CLI)。
-- **阶段 4 · 重启恢复 + 窄窗尺寸根治**:重启后点卡重建 worktree + resume;每会话真实尺寸同步链(spawn 用 fit 真值 + remount 重 fit + resize 带 id)。修现象一(切走丢字)和窄窗错行。
-- **阶段 5 · 咨询态 prompt 规则 + "转成新活"动作**:Done/InReview 会话注入咨询 prompt;transcript/会话视图里"转成新活"按钮(从消息提取标题/描述建新 issue)。
+### 10.1 阶段切分(2026-08-07 接续窗口拍板)
 
-(原 W2-1 三现象的归正落点:现象一「切走丢字」→ 阶段 2/4 的有界 mpsc;现象二「重启黑框无提示」→ 阶段 4 的"点卡重建+resume";现象三「窄窗错行」→ 阶段 4 的尺寸同步链。W2-1 由本篇承接,`LEFTOVERS.md` 标"归正中"。)
+原 §10 五段里阶段 2「先只做身份路由、人为只留一个活 PTY」是工程可审切法,对用户体感几乎无增益;尺寸同步又和重启恢复拆在两段。接续窗口按产品体感重切为四段,**可用底线 = 底座 + 并发切卡 + 重启 resume**(咨询态后置)。不单独 verify 阶段 1(局部未整体可用时局部 verify 无意义)。
+
+- **阶段 1 · 概念解耦 + 数据模型**(✅ 已落地,V1-TermRefactor1):建 `claude_conversation` 表 + 存量迁移 + `TerminalManager` 骨架(只含 conversation 身份,无 PTY)。业务读路径收口到新表,`issue` 旧列物理退场。实施细节见 §13。
+- **阶段 · 底座**(⬜ 下一步,V1-TermRefactor2):`TerminalManager` 接 PTY(spawn/resume/input/resize/events);字节带 `conversation_id` 路由(修 `kernel.rs` 单槽);每卡独立 xterm(修 `window.__bw_term` 单例);watch → 每会话有界 mpsc(64 批);**每会话真实尺寸同步链一并进本段**(spawn 用 fit 真值,不再默认 80×24;remount 重 fit;resize 带 id)。顺手补 `delete_project` 清 `claude_conversation`(阶段 1 缺口)。此时仍可「同一时刻只一个活 PTY」(新交付仍走 `active_run` 串行),但身份路由与多 xterm 已就位——不造之后要删的单槽兼容层。
+- **阶段 · 并发切卡**(⬜,V1-TermRefactor3):A 交付 + B 咨询并发;切卡只切显示/键盘,不杀 PTY;UI 标清当前会话(修现象三)。咨询 PTY 不占 `active_run`、不 settle、不改状态。
+- **阶段 · 重启恢复**(⬜,V1-TermRefactor4):重启后点卡 → 重建 worktree + `--resume`;点卡到就绪显示「恢复中…」;**不在启动时批量唤醒**。到此达到「能用」底线(含重启后卡能 resume)。
+- **阶段 · 咨询态**(⬜,V1-TermRefactor5,可用后置):Done/InReview 注入咨询 prompt;「转成新活」按钮。
+
+(原 W2-1 三现象归正落点修订:现象一「切走丢字」→ 底座有界 mpsc + 并发切卡不杀 PTY;现象二「重启黑框」→ 重启恢复段;现象三「绑指标看到绑数据 / 窄窗错行」→ 底座多 xterm+尺寸同步 + 并发切卡身份路由。W2-1 由本篇承接。)
 
 ---
 
@@ -295,6 +299,7 @@ impl TerminalManager {
 - **会话数量上限**:单人工作台同时活几个 claude 进程合理?默认不限,靠用户显式关。若实测内存爆,再加闲置回收(当前不做,守「不擅自扩 scope」)。
 - **`claude_conversation` 表的 `issue_id` 外键 + issue 删除时的级联**:实施阶段定(store 已有 `delete_project` 全表清理模式,`delete_issue` 若有则加级联)。
 - **transcript 缓存解析(`~/.claude/projects/<encoded-cwd>/*.jsonl`)**:用于重启过渡显示。claude 的 jsonl 格式未公开文档,实施时参考 orca 的 `claude-usage/scanner.ts` 逆向,只读不写。
+- **接续窗口阶段切分(2026-08-07)**:原阶段 2–5 按产品体感重切为「底座 → 并发切卡 → 重启恢复 → 咨询态」,见 §10.1;可用底线含重启 resume;不单独 verify 阶段 1;不提 issue(干完验证 commit 后再看)。
 - **阶段1 实施决定(2026-08-07)**:
   - 旧列 `interactive_started`/`claude_session_id` **物理删除**(非留空),用 `drop_column_if_present`(SQLite 3.35+ `ALTER TABLE DROP COLUMN`,本仓 bundled sqlite 3.44+ 远高于门槛,环境 sqlite3 CLI 3.53.4 验证通过)。迁移顺序:先 `migrate_claude_conversations` 搬运(INSERT OR IGNORE,issue_id UNIQUE 兜底幂等),再 DROP 两列——搬完 DROP 不丢数据(读回为证:claude_conversation 行仍在,issue 表无旧两列)。
   - conversation 行建行时机:首次 spawn 前 `ensure_conversation`(INSERT OR IGNORE,行存在 = 旧 `interactive_started` 语义)+ hook SessionStart `set_conversation_session_id`(UPDATE,claude_session_id 非空 = 旧 `claude_session_id` 非空语义)。is_resume 改读 `conv.claude_session_id 非空`;is_interactive 改读 `conv 行存在`。
