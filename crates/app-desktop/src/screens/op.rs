@@ -694,6 +694,9 @@ fn IssuesPanel(op: OpVm) -> Element {
     // (the derived-health enum), already imported unqualified above.
     let mut blocking: dioxus::prelude::Signal<Option<IssueId>> = use_signal(|| None);
     let mut block_reason = use_signal(String::new);
+    // V1-TermRefactor4: 点卡立刻亮「恢复中…」(dispatch 返回前 Vm 还不更新);
+    // 与 op.pty_restoring 合并;焦点已活且 App 恢复标记已清 → 不再显示。
+    let mut restoring_issue: dioxus::prelude::Signal<Option<IssueId>> = use_signal(|| None);
 
     let cols: [(IssueStatus, &str); 6] = [
         (IssueStatus::Backlog, "待办池"),
@@ -815,6 +818,14 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 let is_running = op.active_run == Some((op.id, i_id));
                                 let is_focused = op.focused_issue == Some(i_id);
                                 let can_consult = op.consultable_issues.contains(&i_id);
+                                let can_resume = op.resumable_issues.contains(&i_id);
+                                let resume_ready = op.focused_issue == Some(i_id)
+                                    && op.pty_active
+                                    && op.pty_restoring.is_none();
+                                let is_restoring = (restoring_issue() == Some(i_id)
+                                    && !resume_ready)
+                                    || (op.pty_restoring.is_some()
+                                        && op.focused_issue == Some(i_id));
                                 let same_project_busy =
                                     op.active_run.map(|(p, _)| p) == Some(op.id);
                                 // plan/17 S3: the 「▶ 跑」 button's label /
@@ -855,6 +866,9 @@ fn IssuesPanel(op: OpVm) -> Element {
                                             span { "#{i.number} · {i.stage.label()}" }
                                             if is_focused {
                                                 span { style: "color:{clay};border:1px solid {clay};border-radius:4px;padding:0 5px;font-size:10px;", "当前会话" }
+                                            }
+                                            if is_restoring {
+                                                span { style: "color:{ink3};border:1px solid {border};border-radius:4px;padding:0 5px;font-size:10px;", "恢复中…" }
                                             }
                                         }
                                         // C4 · issue 身份映射: 号非 0 才渲染。
@@ -900,7 +914,13 @@ fn IssuesPanel(op: OpVm) -> Element {
                                         // overlay (runs / diffs / artifacts).
                                         div {
                                             style: "font-size:13px;margin:3px 0 4px;color:{ink};cursor:pointer;",
-                                            onclick: move |_| k_detail.send(Command::OpenIssueDetail(i_id)),
+                                            onclick: move |_| {
+                                                // 重启后点卡:立刻亮「恢复中…」,内核走 OpenIssueDetail 唤醒。
+                                                if can_resume {
+                                                    restoring_issue.set(Some(i_id));
+                                                }
+                                                k_detail.send(Command::OpenIssueDetail(i_id));
+                                            },
                                             "{i.title}"
                                         }
                                         div { style: "font-size:11px;color:{ink2};margin-bottom:5px;", "{i.priority_label}" }
@@ -999,6 +1019,9 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                         style: "cursor:{run_cursor};background:transparent;border:none;color:{run_color};font-size:11.5px;padding:0;font-weight:700;",
                                                         disabled: same_project_busy,
                                                         onclick: move |_| {
+                                                            if can_resume {
+                                                                restoring_issue.set(Some(i_id));
+                                                            }
                                                             let sid = existing_issue_session(
                                                                 &op_sessions,
                                                                 run_stage,
@@ -1027,6 +1050,7 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                     button {
                                                         style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;font-weight:700;",
                                                         onclick: move |_| {
+                                                            restoring_issue.set(Some(i_id));
                                                             let sid = existing_issue_session(
                                                                 &op_sessions,
                                                                 run_stage,
@@ -2941,6 +2965,13 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
         }
         {chat_area}
+        // 重启恢复:点卡到首包之间显示「恢复中…」(首包后 pty_restoring 清空)。
+        if op.pty_restoring.is_some() {
+            div {
+                style: "{card} padding:10px 14px;margin-bottom:10px;font-size:12.5px;color:{ink3};",
+                "恢复中…"
+            }
+        }
         // 多会话常驻:所有活 PTY 挂 xterm;仅焦点可见(隐藏的仍收字节)。
         if op.pty_active {
             for cid in op.pty_live_ids.clone() {

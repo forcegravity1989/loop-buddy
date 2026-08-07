@@ -3239,6 +3239,30 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    /// V1 终端会话重构(重启恢复): 只回填空的 workspace_path/branch_name,
+    /// 已有值不覆盖;刷新 last_opened_at。
+    async fn update_conversation_workspace_if_empty(
+        &self,
+        issue_id: IssueId,
+        workspace_path: &str,
+        branch_name: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE claude_conversation SET
+                workspace_path = CASE WHEN workspace_path = '' THEN ? ELSE workspace_path END,
+                branch_name = CASE WHEN branch_name = '' THEN ? ELSE branch_name END,
+                last_opened_at = ?
+             WHERE issue_id = ?",
+        )
+        .bind(workspace_path)
+        .bind(branch_name)
+        .bind(now_unix())
+        .bind(issue_id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// V1 终端会话重构(阶段1): 列出某项目下有会话行的 issue_id(poll 用)。
     async fn list_conversation_issue_ids(&self, project_id: ProjectId) -> Result<Vec<IssueId>> {
         let rows = sqlx::query("SELECT issue_id FROM claude_conversation WHERE project_id=?")

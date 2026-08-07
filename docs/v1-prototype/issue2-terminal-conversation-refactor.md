@@ -265,7 +265,7 @@ impl TerminalManager {
 - **阶段 1 · 概念解耦 + 数据模型**(✅ 已落地,V1-TermRefactor1):建 `claude_conversation` 表 + 存量迁移 + `TerminalManager` 骨架(只含 conversation 身份,无 PTY)。业务读路径收口到新表,`issue` 旧列物理退场。实施细节见 §13。
 - **阶段 · 底座**(✅ 已落地,V1-TermRefactor2):`TerminalManager` 接 PTY(spawn/resume/input/resize/events);字节带 `conversation_id` 路由;每卡独立 xterm(`window.__bw_term_sessions[id]` Map,修掉全局单例);每会话有界输出环(64 批×8KB);尺寸同步链(fit→`TerminalResize` 带 id→`note_fit_size`/`attach` 初始 Resize;remount 重 fit)。`delete_project` 清 `claude_conversation`。底座仍「同一时刻只一个活 PTY」(`attach` 关其余;新交付仍走 `active_run` 串行),但身份路由与多 xterm Map 已就位——不造之后要删的单槽兼容层。
 - **阶段 · 并发切卡**(✅ 已落地,V1-TermRefactor3):A 交付 + B 咨询并发;切卡只切显示/键盘,不杀 PTY;UI 标「当前会话」+ Done/InReview「续聊」;多 xterm 常驻(非焦点 `display:none` 仍收字节)。咨询 PTY 走 `open_conversation` → `consultation_runs`,不占 `active_run`、不 settle、不改状态。
-- **阶段 · 重启恢复**(⬜,V1-TermRefactor4):重启后点卡 → 重建 worktree + `--resume`;点卡到就绪显示「恢复中…」;**不在启动时批量唤醒**。到此达到「能用」底线(含重启后卡能 resume)。
+- **阶段 · 重启恢复**(✅ 已落地,V1-TermRefactor4):重启后点卡 → 重建 worktree + `--resume`;点卡到首包显示「恢复中…」;**不在启动时批量唤醒**。到此达到「能用」底线(含重启后卡能 resume)。
 - **阶段 · 咨询态**(⬜,V1-TermRefactor5,可用后置):Done/InReview 注入咨询 prompt;「转成新活」按钮。
 
 (原 W2-1 三现象归正落点修订:现象一「切走丢字」→ 底座有界 mpsc + 并发切卡不杀 PTY;现象二「重启黑框」→ 重启恢复段;现象三「绑指标看到绑数据 / 窄窗错行」→ 底座多 xterm+尺寸同步 + 并发切卡身份路由。W2-1 由本篇承接。)
@@ -318,6 +318,12 @@ impl TerminalManager {
   - `attach` 不杀 peer;`ConversationMeta.issue_id` 供焦点回落;`focused_conversation`/`focused_issue` 驱动 UI。
   - UI:看板「当前会话」徽 + 「续聊」;`pty_live_ids` 多 xterm 常驻(非焦点 `display:none`);`OpenIssueDetail` 有活 PTY 只切焦点。
   - 咨询 prompt /「转成新活」仍属阶段·咨询态(TermRefactor5)。
+- **阶段·重启恢复实施决定(2026-08-07)**:
+  - Boot **确认不唤醒**:`Command::Boot` 只重算信号/播种/对账,不 spawn 任何历史会话;注释钉死。
+  - 点卡唤醒复用现路径,不造第二条:`OpenIssueDetail` 在 `!is_live` + 非空 `claude_session_id` 时调 `run_issue_now` → Done/InReview 进已有 `open_conversation`,InProgress 进 `run_issue_interactive` 的 `is_resume` 分支;`▶`/`续聊` 仍走 `RunIssue`。
+  - 「恢复中…」:`AppState.pty_restoring: Option<ConversationId>` 在 resume 起点置位,首包字节(`drain_pty_events`)或 settle/cancel 清;kernel pty_ticker 清后重建 Vm。UI 另有板级 local signal(点卡立刻亮,盖住 dispatch 返回前的空窗),与 Vm 字段合并显示;工作流面板焦点区也有文案。
+  - 空 `workspace_path`/`branch_name` 回填:store `update_conversation_workspace_if_empty`(SQL 只改空列)+ resume attach 成功后调用(阶段1 迁移推不出留空的缺口闭合)。
+  - `build_resume_plan` / 咨询 prompt 文案 **未动**(留给 TermRefactor5)。
 
 ---
 

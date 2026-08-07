@@ -1341,6 +1341,9 @@ pub struct AppState {
     pub focused_issue: Option<IssueId>,
     /// 咨询态活连接;与 active_run 并存,不占交付名额。
     consultation_runs: HashMap<ConversationId, ConsultationRun>,
+    /// V1-TermRefactor4 · 重启恢复:点卡 resume 进行中(重建 worktree →
+    /// spawn PTY → 首包字节前)。UI 显示「恢复中…」;Boot 绝不批量唤醒。
+    pub pty_restoring: Option<ConversationId>,
     /// V1 Issue2 Phase2b: whether PTY mode is enabled (the desktop kernel
     /// wires it via `App::with_pty`). When `true`, `run_issue_interactive`
     /// uses `run_skill_pty` (in-app terminal). When `false`, it uses the
@@ -1399,6 +1402,7 @@ impl Default for AppState {
             focused_conversation: None,
             focused_issue: None,
             consultation_runs: HashMap::new(),
+            pty_restoring: None,
             pty_enabled: false,
             codehub_repos: Vec::new(),
         }
@@ -1825,8 +1829,21 @@ impl App {
 
     /// V1 终端会话重构·底座: drain 各会话有界缓冲,返回带 conversation_id
     /// 的批次。kernel 的 100ms pty_ticker 调用后按 id 路由到对应 xterm。
+    /// 重启恢复:若正在「恢复中」的会话已收到非空字节 → 清 pty_restoring
+    /// (PTY 就绪,「恢复中…」消失)。
     pub fn drain_pty_events(&mut self) -> Vec<(ConversationId, Vec<u8>)> {
-        self.state.terminal_manager.drain_events()
+        let batches = self.state.terminal_manager.drain_events();
+        if let Some(rid) = self.state.pty_restoring {
+            if batches.iter().any(|(id, b)| *id == rid && !b.is_empty()) {
+                self.state.pty_restoring = None;
+            }
+        }
+        batches
+    }
+
+    /// 点卡 resume 是否仍在「恢复中」(重建 worktree / spawn / 等首包)。
+    pub fn pty_restoring(&self) -> Option<ConversationId> {
+        self.state.pty_restoring
     }
 
     /// 是否有活着的 PTY 连接(UI `pty_active`)。
@@ -1871,6 +1888,28 @@ impl App {
             .find(|id| *id != conversation_id);
         self.state.focused_conversation = next;
         self.state.focused_issue = next.and_then(|cid| self.state.terminal_manager.issue_id(cid));
+    }
+
+    fn clear_restoring_if(&mut self, conversation_id: ConversationId) {
+        if self.state.pty_restoring == Some(conversation_id) {
+            self.state.pty_restoring = None;
+        }
+    }
+
+    /// 迁移留空的 workspace_path/branch_name:resume 成功后回填(只填空列)。
+    async fn backfill_conversation_workspace_if_empty(
+        &self,
+        issue_id: IssueId,
+        workspace_path: &str,
+        branch_name: &str,
+    ) -> Result<(), AppError> {
+        if workspace_path.is_empty() && branch_name.is_empty() {
+            return Ok(());
+        }
+        self.store
+            .update_conversation_workspace_if_empty(issue_id, workspace_path, branch_name)
+            .await?;
+        Ok(())
     }
 
     /// V1 Issue2 Phase2b: drop every `cwd → issue` mapping pointing at `id`.
@@ -5422,7 +5461,22 @@ impl App {
             .as_ref()
             .map(|c| !c.claude_session_id.is_empty())
             .unwrap_or(false);
-        let prep = self.prepare_issue_run(id, is_resume).await?;
+        // 重启恢复:is_live==false 时走 resume 分支(不误撞锁——上方 run_issue_now
+        // 已确认无同卡活 PTY / 无同卡 active_run)。点卡到首包显示「恢复中…」。
+        if is_resume {
+            if let Some(c) = &conv {
+                self.state.pty_restoring = Some(c.id);
+            }
+        }
+        let prep = match self.prepare_issue_run(id, is_resume).await {
+            Ok(p) => p,
+            Err(e) => {
+                if is_resume {
+                    self.state.pty_restoring = None;
+                }
+                return Err(e);
+            }
+        };
         let p = prep.issue.project_id;
         let issue = prep.issue.clone();
         let standard_skill = prep.issue.standard_skill.clone();
@@ -5449,8 +5503,13 @@ impl App {
                 .as_ref()
                 .map(|c| c.claude_session_id.as_str())
                 .unwrap_or("");
-            build_resume_plan(&CLAUDE, Some(session_id), workspace_cwd)
-                .map_err(|e| AppError::Engine(e.to_string()))?
+            match build_resume_plan(&CLAUDE, Some(session_id), workspace_cwd) {
+                Ok(p) => p,
+                Err(e) => {
+                    self.state.pty_restoring = None;
+                    return Err(AppError::Engine(e.to_string()));
+                }
+            }
         } else {
             // First run: fetch skill body + build bridge system prompt.
             let handoff_note = self
@@ -5480,7 +5539,10 @@ impl App {
                 handoff_note,
                 workspace_hint,
             };
-            let skill_body = self.fetch_skill_body(p, &standard_skill).await?;
+            let skill_body = match self.fetch_skill_body(p, &standard_skill).await {
+                Ok(b) => b,
+                Err(e) => return Err(e),
+            };
             if skill_body.trim().is_empty() {
                 return Err(AppError::Invalid(format!(
                     "交互式技能 `{standard_skill}` 的正文为空 —— 无法启动交互式会话"
@@ -5577,6 +5639,15 @@ impl App {
                         .terminal_manager
                         .attach(conversation_id, meta, None);
                 self.focus_conversation(conversation_id, id);
+                if is_resume {
+                    let _ = self
+                        .backfill_conversation_workspace_if_empty(
+                            id,
+                            workspace_cwd.to_str().unwrap_or(""),
+                            &branch_name,
+                        )
+                        .await;
+                }
                 tokio::spawn(async move {
                     let result = executor
                         .run_skill_pty(&plan, &ctx, bytes_tx, input_rx)
@@ -5651,6 +5722,7 @@ impl App {
     }
 
     /// Done/InReview 咨询:spawn PTY、不占 active_run、退出不 settle。
+    /// 重启后点卡:is_live==false → 重建 worktree + `--resume`(不批量唤醒)。
     async fn open_conversation(&mut self, id: IssueId) -> Result<(), AppError> {
         let conv = self
             .store
@@ -5664,6 +5736,7 @@ impl App {
         }
         if self.state.terminal_manager.is_live(conv.id) {
             self.focus_conversation(conv.id, id);
+            self.clear_restoring_if(conv.id);
             self.emit(Event::IssuesChanged);
             return Ok(());
         }
@@ -5676,7 +5749,16 @@ impl App {
             ));
         };
 
-        let prep = self.prepare_issue_run(id, true).await?;
+        // 点卡到 PTY 首包:「恢复中…」(不在 Boot 批量起历史会话)。
+        self.state.pty_restoring = Some(conv.id);
+
+        let prep = match self.prepare_issue_run(id, true).await {
+            Ok(p) => p,
+            Err(e) => {
+                self.state.pty_restoring = None;
+                return Err(e);
+            }
+        };
         let p = prep.issue.project_id;
         let github_number = prep.issue.github_number;
         let workflow_id = prep.spec.id;
@@ -5691,8 +5773,13 @@ impl App {
         let workspace_cwd = issue_ws
             .as_deref()
             .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
-        let plan = build_resume_plan(&CLAUDE, Some(&conv.claude_session_id), workspace_cwd)
-            .map_err(|e| AppError::Engine(e.to_string()))?;
+        let plan = match build_resume_plan(&CLAUDE, Some(&conv.claude_session_id), workspace_cwd) {
+            Ok(p) => p,
+            Err(e) => {
+                self.state.pty_restoring = None;
+                return Err(AppError::Engine(e.to_string()));
+            }
+        };
 
         let branch_name = if github_number != 0 {
             format!("bw/issue-{github_number}")
@@ -5722,13 +5809,20 @@ impl App {
             issue_id: id,
             claude_session_id: conv.claude_session_id.clone(),
             workspace_path: workspace_cwd.to_path_buf(),
-            branch_name,
+            branch_name: branch_name.clone(),
         };
         let (bytes_tx, input_rx) = self
             .state
             .terminal_manager
             .attach(conversation_id, meta, None);
         self.focus_conversation(conversation_id, id);
+        let _ = self
+            .backfill_conversation_workspace_if_empty(
+                id,
+                workspace_cwd.to_str().unwrap_or(""),
+                &branch_name,
+            )
+            .await;
 
         let handle = tokio::spawn(async move {
             let _ = executor
@@ -5766,6 +5860,7 @@ impl App {
         if let SettleOutcome::ConsultationEnded { conversation_id } = req.outcome {
             self.state.terminal_manager.close(conversation_id);
             self.clear_focus_if(conversation_id);
+            self.clear_restoring_if(conversation_id);
             if let Some(cr) = self.state.consultation_runs.remove(&conversation_id) {
                 self.forget_interactive_session(cr.issue_id);
                 drop(cr.guard);
@@ -5841,6 +5936,7 @@ impl App {
             if let Ok(Some(c)) = self.store.get_conversation_by_issue(ar.issue.id).await {
                 self.state.terminal_manager.close(c.id);
                 self.clear_focus_if(c.id);
+                self.clear_restoring_if(c.id);
             }
             self.forget_interactive_session(ar.issue.id);
             drop(ar.guard);
@@ -5886,6 +5982,7 @@ impl App {
         if let Ok(Some(c)) = self.store.get_conversation_by_issue(ar.issue.id).await {
             self.state.terminal_manager.close(c.id);
             self.clear_focus_if(c.id);
+            self.clear_restoring_if(c.id);
         }
         self.forget_interactive_session(ar.issue.id);
         self.emit(Event::WorkflowFailed(format!(
@@ -5909,6 +6006,10 @@ impl App {
     pub async fn dispatch(&mut self, cmd: Command) -> Result<(), AppError> {
         match cmd {
             Command::Boot => {
+                // V1-TermRefactor4: Boot 只重算信号 / 播种 / 对账 —— **绝不**
+                // 批量 spawn 历史 claude 会话。重启后 PTY 如实全死;用户点哪张
+                // 卡才按该卡 `--resume`(见 open_conversation /
+                // run_issue_interactive)。
                 // Staleness is clock-relative: what was green last week may be
                 // amber-capped today. Re-derive every running project on boot so
                 // the wall never shows a stale cache as fresh truth.
@@ -7352,9 +7453,16 @@ impl App {
                 let conv = self.store.get_conversation_by_issue(id).await?;
                 let is_interactive = conv.is_some();
                 // 切卡:有活 PTY 则只切焦点(不 spawn)。
+                // 重启恢复:PTY 已死但有可 resume 的 session_id → 点卡唤醒
+                // (走现有 run_issue_now → open_conversation / is_resume 分支;
+                // 不造第二条路径;Boot 不批量起)。
                 if let Some(c) = &conv {
                     if self.state.terminal_manager.is_live(c.id) {
                         self.focus_conversation(c.id, id);
+                    } else if !c.claude_session_id.is_empty()
+                        && Self::is_interactive_skill(&issue.standard_skill)
+                    {
+                        self.run_issue_now(SessionId::new(), id).await?;
                     }
                 }
                 let runs = self.store.list_runs_for_issue(id).await?;

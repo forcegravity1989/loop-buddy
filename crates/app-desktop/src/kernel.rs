@@ -82,10 +82,14 @@ pub struct Vm {
     pub pty_conversation_id: Option<ConversationId>,
     /// 所有活着的会话(多 xterm 常驻用)。
     pub pty_live_ids: Vec<ConversationId>,
+    /// 点卡 resume 进行中(「恢复中…」);首包字节后清空。
+    pub pty_restoring: Option<ConversationId>,
     /// 焦点对应的 issue(看板「当前会话」)。
     pub focused_issue: Option<bw_core::IssueId>,
     /// Done/InReview 且有可 resume 会话的 issue(看板「续聊」)。
     pub consultable_issues: Vec<bw_core::IssueId>,
+    /// 任意状态、有非空 claude_session_id 的 issue(重启后点卡可 resume)。
+    pub resumable_issues: Vec<bw_core::IssueId>,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -238,8 +242,12 @@ pub struct OpVm {
     pub pty_active: bool,
     pub pty_conversation_id: Option<ConversationId>,
     pub pty_live_ids: Vec<ConversationId>,
+    /// 点卡 resume 进行中 → UI「恢复中…」。
+    pub pty_restoring: Option<ConversationId>,
     pub focused_issue: Option<bw_core::IssueId>,
     pub consultable_issues: Vec<bw_core::IssueId>,
+    /// 有可 `--resume` 会话的 issue(含 InProgress;点卡「恢复中…」用)。
+    pub resumable_issues: Vec<bw_core::IssueId>,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -736,10 +744,17 @@ pub fn spawn() -> Kernel {
                             }
                         }
                         // V1 终端会话重构·底座: drain 带 id 的批次 → watch。
+                        // 重启恢复:首包到达清 pty_restoring 时重建 Vm,让「恢复中…」消失。
                         _ = pty_ticker.tick() => {
+                            let was_restoring = app.pty_restoring().is_some();
                             let batches = app.drain_pty_events();
+                            let cleared_restoring =
+                                was_restoring && app.pty_restoring().is_none();
                             if !batches.is_empty() {
                                 let _ = pty_tx.send(batches);
+                            }
+                            if cleared_restoring {
+                                let _ = vm_tx.send(build_vm(&app, &store).await);
                             }
                         }
                     }
@@ -935,8 +950,10 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         pty_active: app.pty_active(),
         pty_conversation_id: app.focused_pty_conversation(),
         pty_live_ids: app.live_pty_ids(),
+        pty_restoring: app.pty_restoring(),
         focused_issue: app.focused_pty_issue(),
         consultable_issues: Vec::new(),
+        resumable_issues: Vec::new(),
     };
 
     let Some(pid) = state.active_project else {
@@ -1245,6 +1262,10 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             })
             .count() as u32,
     );
+    let resumable = store
+        .list_resumable_conversation_issue_ids(pid)
+        .await
+        .unwrap_or_default();
 
     vm.op = Some(OpVm {
         id: pid,
@@ -1302,26 +1323,25 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         pty_active: app.pty_active(),
         pty_conversation_id: app.focused_pty_conversation(),
         pty_live_ids: app.live_pty_ids(),
+        pty_restoring: app.pty_restoring(),
         focused_issue: app.focused_pty_issue(),
         consultable_issues: {
-            let conv_ids = store
-                .list_resumable_conversation_issue_ids(pid)
-                .await
-                .unwrap_or_default();
             state
                 .issues
                 .iter()
                 .filter(|i| {
                     matches!(i.status, IssueStatus::Done | IssueStatus::InReview)
-                        && conv_ids.contains(&i.id)
+                        && resumable.contains(&i.id)
                 })
                 .map(|i| i.id)
                 .collect()
         },
+        resumable_issues: resumable,
     });
     vm.pty_active = app.pty_active();
     vm.pty_conversation_id = app.focused_pty_conversation();
     vm.pty_live_ids = app.live_pty_ids();
+    vm.pty_restoring = app.pty_restoring();
     vm.focused_issue = app.focused_pty_issue();
     vm
 }

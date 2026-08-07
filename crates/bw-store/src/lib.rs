@@ -1078,6 +1078,15 @@ pub trait Store: Send + Sync {
     /// `set_issue_claude_session_id` 的语义(claude_session_id 非空 = 可
     /// resume)。
     async fn set_conversation_session_id(&self, issue_id: IssueId, session_id: &str) -> Result<()>;
+    /// V1 终端会话重构(重启恢复): 迁移时推不出而留空的 `workspace_path`/
+    /// `branch_name`,在 resume 成功后回填。SQL 只改空列(已有值不覆盖);
+    /// 同时刷新 `last_opened_at`。
+    async fn update_conversation_workspace_if_empty(
+        &self,
+        issue_id: IssueId,
+        workspace_path: &str,
+        branch_name: &str,
+    ) -> Result<()>;
     /// V1 终端会话重构(阶段1): 列出某项目下有会话行的所有 issue_id。
     /// `poll_interactive_inreview` 用来筛"开过交互式会话"的活(替代旧
     /// `interactive_started` filter),一次查询拿全,避免 N+1。
