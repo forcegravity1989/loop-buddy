@@ -1143,6 +1143,7 @@ fn IssueDetailOverlay(
     let k_merge = k.clone();
     let k_distill = k.clone();
     let k_cancel = k.clone();
+    let k_promote = k.clone();
     let mut distilling = use_signal(|| false);
     let mut skill_name = use_signal(|| format!("{} · 做法", d.title));
     let mut skill_desc = use_signal(|| format!("来自 Issue #{} 的实战沉淀", d.number));
@@ -1313,6 +1314,34 @@ fn IssueDetailOverlay(
                                 k_run.send(Command::SelectSession(Some(sid)));
                             },
                             "续聊"
+                        }
+                        // V1-TermRefactor5 · 咨询态:显式「转成新活」(不做自动意图分类)。
+                        {
+                            let promote_stage = d.stage;
+                            let promote_title = d.title.clone();
+                            let promote_number = d.number;
+                            rsx! {
+                                button {
+                                    style: "cursor:pointer;border:none;border-radius:7px;background:transparent;border:1px solid {border};color:{ink2};padding:7px 14px;font-size:12.5px;",
+                                    title: "在同项目新建一件活,承接咨询里冒出的新交付诉求",
+                                    onclick: move |_| {
+                                        k_promote.send(Command::CreateIssue {
+                                            id: IssueId::new(),
+                                            stage: promote_stage,
+                                            title: format!("来自咨询：{promote_title}"),
+                                            desc: format!(
+                                                "从 #{} 「{}」的咨询会话转来。",
+                                                promote_number, promote_title
+                                            ),
+                                            priority: IssuePriority::Medium,
+                                            standard_skill: String::new(),
+                                        });
+                                        k_promote.send(Command::CloseIssueDetail);
+                                        k_promote.send(Command::SetPanel(Panel::Issues));
+                                    },
+                                    "转成新活"
+                                }
+                            }
                         }
                     }
                     if in_review {
@@ -2923,6 +2952,16 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             promoted_msg.set(Some("已沉淀为静态工作流 → WorkflowHub".into()));
         }
     };
+    // V1-TermRefactor5 · 咨询态:焦点是 Done/InReview 续聊时,终端上方给「转成新活」。
+    let consult_promote = op.focused_issue.and_then(|fid| {
+        if !op.consultable_issues.contains(&fid) {
+            return None;
+        }
+        op.issues
+            .iter()
+            .find(|i| i.id == fid)
+            .map(|i| (i.stage, i.number, i.title.clone()))
+    });
     // V1-Issue2-PTY-cleanup: the old 「▶ 运行」 button (`Command::RunStagePlaybook`)
     // spawned a fresh mock-chat session on every click, titled "{stage}·第N轮" —
     // an ever-growing pile of dead 「找指标」/「绑数据」 session records with no
@@ -2972,7 +3011,37 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
                 "恢复中…"
             }
         }
-        // 多会话常驻:所有活 PTY 挂 xterm;仅焦点可见(隐藏的仍收字节)。
+        // V1-TermRefactor5 · 咨询态:终端区显式「转成新活」(不做自动意图分类;不宣称只读)。
+        if let Some((promote_stage, promote_number, promote_title)) = consult_promote {
+            {
+                let k_new = k.clone();
+                rsx! {
+                    div {
+                        style: "display:flex;align-items:center;gap:10px;margin:0 0 8px;",
+                        span { style: "font-size:11.5px;color:{ink3};", "咨询中 · 新交付请另开一件活" }
+                        button {
+                            style: "cursor:pointer;border:1px solid {theme::BORDER};border-radius:7px;background:transparent;color:{theme::INK_2};padding:5px 12px;font-size:11.5px;",
+                            title: "在同项目新建一件活,承接咨询里冒出的新交付诉求",
+                            onclick: move |_| {
+                                k_new.send(Command::CreateIssue {
+                                    id: IssueId::new(),
+                                    stage: promote_stage,
+                                    title: format!("来自咨询：{promote_title}"),
+                                    desc: format!(
+                                        "从 #{} 「{}」的咨询会话转来。",
+                                        promote_number, promote_title
+                                    ),
+                                    priority: IssuePriority::Medium,
+                                    standard_skill: String::new(),
+                                });
+                                k_new.send(Command::SetPanel(Panel::Issues));
+                            },
+                            "转成新活"
+                        }
+                    }
+                }
+            }
+        }        // 多会话常驻:所有活 PTY 挂 xterm;仅焦点可见(隐藏的仍收字节)。
         if op.pty_active {
             for cid in op.pty_live_ids.clone() {
                 {

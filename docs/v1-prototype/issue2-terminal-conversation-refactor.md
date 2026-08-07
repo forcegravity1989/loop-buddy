@@ -266,8 +266,7 @@ impl TerminalManager {
 - **阶段 · 底座**(✅ 已落地,V1-TermRefactor2):`TerminalManager` 接 PTY(spawn/resume/input/resize/events);字节带 `conversation_id` 路由;每卡独立 xterm(`window.__bw_term_sessions[id]` Map,修掉全局单例);每会话有界输出环(64 批×8KB);尺寸同步链(fit→`TerminalResize` 带 id→`note_fit_size`/`attach` 初始 Resize;remount 重 fit)。`delete_project` 清 `claude_conversation`。底座仍「同一时刻只一个活 PTY」(`attach` 关其余;新交付仍走 `active_run` 串行),但身份路由与多 xterm Map 已就位——不造之后要删的单槽兼容层。
 - **阶段 · 并发切卡**(✅ 已落地,V1-TermRefactor3):A 交付 + B 咨询并发;切卡只切显示/键盘,不杀 PTY;UI 标「当前会话」+ Done/InReview「续聊」;多 xterm 常驻(非焦点 `display:none` 仍收字节)。咨询 PTY 走 `open_conversation` → `consultation_runs`,不占 `active_run`、不 settle、不改状态。
 - **阶段 · 重启恢复**(✅ 已落地,V1-TermRefactor4):重启后点卡 → 重建 worktree + `--resume`;点卡到首包显示「恢复中…」;**不在启动时批量唤醒**。到此达到「能用」底线(含重启后卡能 resume)。
-- **阶段 · 咨询态**(⬜,V1-TermRefactor5,可用后置):Done/InReview 注入咨询 prompt;「转成新活」按钮。
-
+- **阶段 · 咨询态**(✅ 已落地,V1-TermRefactor5):Done/InReview 注入咨询 prompt;「转成新活」按钮。
 (原 W2-1 三现象归正落点修订:现象一「切走丢字」→ 底座有界 mpsc + 并发切卡不杀 PTY;现象二「重启黑框」→ 重启恢复段;现象三「绑指标看到绑数据 / 窄窗错行」→ 底座多 xterm+尺寸同步 + 并发切卡身份路由。W2-1 由本篇承接。)
 
 ---
@@ -323,8 +322,11 @@ impl TerminalManager {
   - 点卡唤醒复用现路径,不造第二条:`OpenIssueDetail` 在 `!is_live` + 非空 `claude_session_id` 时调 `run_issue_now` → Done/InReview 进已有 `open_conversation`,InProgress 进 `run_issue_interactive` 的 `is_resume` 分支;`▶`/`续聊` 仍走 `RunIssue`。
   - 「恢复中…」:`AppState.pty_restoring: Option<ConversationId>` 在 resume 起点置位,首包字节(`drain_pty_events`)或 settle/cancel 清;kernel pty_ticker 清后重建 Vm。UI 另有板级 local signal(点卡立刻亮,盖住 dispatch 返回前的空窗),与 Vm 字段合并显示;工作流面板焦点区也有文案。
   - 空 `workspace_path`/`branch_name` 回填:store `update_conversation_workspace_if_empty`(SQL 只改空列)+ resume attach 成功后调用(阶段1 迁移推不出留空的缺口闭合)。
-  - `build_resume_plan` / 咨询 prompt 文案 **未动**(留给 TermRefactor5)。
-
+- **阶段·咨询态实施决定(2026-08-07)**:
+  - 新增 `build_consultation_resume_plan`:`--resume`/`--continue` 同时 `--append-system-prompt` 注入 §6.2 咨询规则(`CONSULTATION_APPEND_PROMPT`)。仅 `open_conversation` 路径使用;交付 resume(`run_issue_interactive` → `build_resume_plan`)不注入。
+  - 诚实口径:行为约定不是技术只读;UI 文案写「咨询中 · 新交付请另开一件活」,不写「只读模式」。
+  - 「转成新活」:详情 overlay(续聊旁)+ 工作流终端区(焦点属于 `consultable_issues` 时)显式按钮 → 复用 `Command::CreateIssue`,标题预填「来自咨询：…」、描述带源 issue 编号。不做自动意图分类;不加新 Command。
+  - `--allowedTools` 硬只读仍否决(§6.1/§13 既有未决保留)。
 ---
 
 ## 14. 事实源锚点

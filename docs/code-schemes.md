@@ -36,7 +36,7 @@
 | **T1–T17** | plan/12 | truthful-modeling 批的十七张票(T14–T17 为真实感落地批;T11 在 plan/13/16/19 被引用时指同一张票) | 已全部交付 |
 | **W1–W3** | plan/08 | MVP「workflow 的生命周期」线三件事 | 活跃 |
 | **W1–W6** | plan/20 §5 | 资产作用域隔离批的六件落地工作(commit 前缀 plan20-W2 等即此)。**与 plan/08 的 W 系列无关** | 已落地 |
-| **V1-TermRefactor1–5** | `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §10 | 终端会话重构:1 数据模型 / 2 底座(PTY+路由+xterm+尺寸) / 3 并发切卡 / 4 重启恢复 / 5 咨询态。接续窗口按 §10.1 产品体感切分(非原工程五段) | 1–4 已落地,5 进行中 |
+| **V1-TermRefactor1–5** | `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §10 | 终端会话重构:1 数据模型 / 2 底座(PTY+路由+xterm+尺寸) / 3 并发切卡 / 4 重启恢复 / 5 咨询态。接续窗口按 §10.1 产品体感切分(非原工程五段) | 1–5 已落地 |
 
 散见的一次性编号(如 plan/16 的 P8、plan/17 的 C5)不单独列行,以所在文件的上下文为准。
 

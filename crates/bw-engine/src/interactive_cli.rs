@@ -299,6 +299,46 @@ pub fn build_resume_plan(
     })
 }
 
+/// V1-TermRefactor5 · 咨询态守门规则(设计 md §6.2)。
+///
+/// 行为约定,不是技术只读——claude 仍有完整 CLI 能力;buddy 不宣称硬隔离。
+/// 仅 [`build_consultation_resume_plan`](Done/InReview 续聊)注入;
+/// 交付 resume([`build_resume_plan`])不带这条。
+pub const CONSULTATION_APPEND_PROMPT: &str = "\
+这件活已经完成并由人验收。你可以继续回答历史决策、代码解释、后续讨论。\
+如果用户提出新的文件修改、代码开发或其他会产生交付的工作,\
+请建议用户在 buddy 中新建一件活来处理,不要把新交付继续记在这件已完成的活上。";
+
+/// Build the consultation resume plan (V1-TermRefactor5 · 咨询态).
+///
+/// Same as [`build_resume_plan`] (`--resume` / `--continue` + yolo + deny
+/// `gh pr merge`), plus `--append-system-prompt` with
+/// [`CONSULTATION_APPEND_PROMPT`]. Only the `open_conversation` path
+/// (Done/InReview 续聊) should call this — delivery resume stays on
+/// [`build_resume_plan`] so InProgress 交付不注入咨询规则。
+///
+/// Honest posture: this is a behavioural convention, not a hard sandbox.
+pub fn build_consultation_resume_plan(
+    agent: &TuiAgentConfig,
+    session_id: Option<&str>,
+    workspace_cwd: &Path,
+) -> Result<LaunchPlan, ExecError> {
+    let mut plan = build_resume_plan(agent, session_id, workspace_cwd)?;
+    // Inject consultation rules ahead of the permission flags so the
+    // append is adjacent to the resume identity (mirrors startup plan's
+    // `--append-system-prompt` placement near the front).
+    let insert_at = if plan.args.first().is_some_and(|a| a == agent.resume_id_flag) {
+        2 // after `--resume <id>`
+    } else {
+        1 // after `--continue`
+    };
+    plan.args
+        .insert(insert_at, "--append-system-prompt".to_string());
+    plan.args
+        .insert(insert_at + 1, CONSULTATION_APPEND_PROMPT.to_string());
+    Ok(plan)
+}
+
 // ─── Bridge system prompt ──────────────────────────────────────────────
 
 /// Build the bridge (衔接层) system prompt — the persistent context the
@@ -1133,6 +1173,58 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.to_string().contains("cursor"));
         assert!(err.to_string().contains("暂不支持"));
+    }
+
+    #[test]
+    fn build_consultation_resume_plan_appends_rules() {
+        let tmp = tempfile_dir();
+        let plan = build_consultation_resume_plan(&CLAUDE, Some("abc-123-session-id"), &tmp)
+            .expect("claude is supported");
+        assert_eq!(plan.binary, "claude");
+        assert!(plan.args.contains(&"--resume".to_string()));
+        assert!(plan.args.contains(&"abc-123-session-id".to_string()));
+        // Consultation-only: --append-system-prompt with §6.2 rules.
+        let append_idx = plan
+            .args
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .expect("consultation plan must append system prompt");
+        assert_eq!(
+            plan.args.get(append_idx + 1).map(String::as_str),
+            Some(CONSULTATION_APPEND_PROMPT)
+        );
+        assert!(CONSULTATION_APPEND_PROMPT.contains("新建一件活"));
+        assert!(!CONSULTATION_APPEND_PROMPT.contains("只读"));
+        // Same permission posture as delivery resume.
+        assert!(plan
+            .args
+            .contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(plan.args.contains(&"--disallowedTools".to_string()));
+        assert!(plan.args.contains(&"Bash(gh pr merge)".to_string()));
+        // No positional skill body / no --continue (precise resume).
+        assert!(!plan.args.contains(&"--continue".to_string()));
+        assert!(!plan.submit_prompt);
+        assert_eq!(plan.cwd, tmp);
+    }
+
+    #[test]
+    fn build_resume_plan_stays_without_consultation_append() {
+        // Delivery resume must NOT inject consultation rules — only
+        // open_conversation uses build_consultation_resume_plan.
+        let tmp = tempfile_dir();
+        let plan = build_resume_plan(&CLAUDE, Some("delivery-session"), &tmp).unwrap();
+        assert!(!plan.args.iter().any(|a| a == "--append-system-prompt"));
+        assert!(!plan
+            .args
+            .iter()
+            .any(|a| a.contains("新建一件活") || a == CONSULTATION_APPEND_PROMPT));
+    }
+
+    #[test]
+    fn build_consultation_resume_plan_cursor_unsupported() {
+        let tmp = tempfile_dir();
+        let result = build_consultation_resume_plan(&CURSOR, Some("id"), &tmp);
+        assert!(result.is_err());
     }
 
     #[tokio::test]

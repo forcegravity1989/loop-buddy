@@ -45,11 +45,11 @@ use bw_core::{
     MetricId, ProjectId, SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    allowed_tools_arg, build_bridge_system_prompt, build_resume_plan, build_startup_plan, evidence,
-    ClaudeCliConfig, ClaudeCliExecutor, CodehubRepoSummary, ConversationMeta, Engine, GitCommit,
-    GithubRepoSummary, InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor,
-    PermissionMode, PhaseNode, RunCtx, RunEvent, SkillOutput, TerminalManager,
-    UnsupportedCliExecutor, CLAUDE,
+    allowed_tools_arg, build_bridge_system_prompt, build_consultation_resume_plan,
+    build_resume_plan, build_startup_plan, evidence, ClaudeCliConfig, ClaudeCliExecutor,
+    CodehubRepoSummary, ConversationMeta, Engine, GitCommit, GithubRepoSummary,
+    InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
+    PhaseNode, RunCtx, RunEvent, SkillOutput, TerminalManager, UnsupportedCliExecutor, CLAUDE,
 };
 use bw_store::{
     AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
@@ -5773,14 +5773,18 @@ impl App {
         let workspace_cwd = issue_ws
             .as_deref()
             .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
-        let plan = match build_resume_plan(&CLAUDE, Some(&conv.claude_session_id), workspace_cwd) {
+        // 咨询 resume:注入 §6.2 规则;失败清 pty_restoring。
+        let plan = match build_consultation_resume_plan(
+            &CLAUDE,
+            Some(&conv.claude_session_id),
+            workspace_cwd,
+        ) {
             Ok(p) => p,
             Err(e) => {
                 self.state.pty_restoring = None;
                 return Err(AppError::Engine(e.to_string()));
             }
         };
-
         let branch_name = if github_number != 0 {
             format!("bw/issue-{github_number}")
         } else {
