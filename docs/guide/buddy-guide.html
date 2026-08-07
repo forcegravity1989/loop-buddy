@@ -855,7 +855,7 @@
       <table class="ktable">
         <thead><tr><th>字段 / 现象</th><th>含义</th></tr></thead>
         <tbody>
-          <tr><td class="k">collect_kind = script|manual</td><td><strong>采集计划</strong>（找指标写入）；不是「已经采到数」</td></tr>
+          <tr><td class="k">collect_kind = script|manual</td><td><strong>采集计划</strong>（找指标写入）；不是「已经采到数」<span class="muted" style="font-size:11px;">　· 代码枚举尚含 legacy kind（github/codehub/bw/connector），UI 已 forward-correct 标 legacy·迁 script，枚举收口见 W3-2</span></td></tr>
           <tr><td class="k">observation 有无</td><td>有数才可能亮灯；无 = Unknown 灰</td></tr>
           <tr><td class="k">「手填」徽</td><td>观测 <code>source_kind</code> 来自人手；≠ collect_kind 本身</td></tr>
           <tr><td class="k">总览手填入口</td><td>已接：manual 指标在总览卡内可直接手填（BizMetricCard 内嵌 RecordInline，P10 已落地）；北极星若无 metric 行则灰卡暂不能填（见 W3-1）</td></tr>
