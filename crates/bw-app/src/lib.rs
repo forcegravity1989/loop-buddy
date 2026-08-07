@@ -6500,12 +6500,25 @@ impl App {
                     self.refresh_cron_tasks().await?;
                     self.emit(Event::CronTasksChanged);
                 }
-                // 章程开篇(仅 owned 仓写;bound 仓尊重「不动原文件」)。
-                let _ = write_charter(self, id, "开篇").await;
+                if let Err(e) = write_charter(self, id, "开篇").await {
+                    self.emit(Event::ActionProgress {
+                        name: "写项目章程".into(),
+                        state: ActionState::Fail(format!(
+                            "章程未写入仓（可能缺 PROJECT.md，请人工补）：{e}"
+                        )),
+                    });
+                }
                 // 模板能力(用户 2026-07-20 拍板):四份组件标准文件写进仓里,
                 // 供人与 agent 之后在这个项目里创建 agent/skill/workflow/cron 时
                 // 对照(同一 owned-workspace 门槛,一次性,不随创建流逐步改写)。
-                let _ = write_component_standards(self, id).await;
+                if let Err(e) = write_component_standards(self, id).await {
+                    self.emit(Event::ActionProgress {
+                        name: "写组件标准".into(),
+                        state: ActionState::Fail(format!(
+                            "组件标准未写入仓（.claude/standards/ 可能缺，请人工补）：{e}"
+                        )),
+                    });
+                }
                 self.refresh_projects().await?;
                 self.refresh_connectors().await?;
                 self.emit(Event::ProjectsChanged);
@@ -6869,7 +6882,14 @@ impl App {
                 // 仓、没有 PR 环可走的项目发一套没处交付的活,如实留白。
                 let first_issue = self.seed_standard_issue_trio(p).await?;
                 self.store.recompute_signals(p, now()).await?;
-                let _ = write_charter(self, p, "完成创建").await;
+                if let Err(e) = write_charter(self, p, "完成创建").await {
+                    self.emit(Event::ActionProgress {
+                        name: "写项目章程".into(),
+                        state: ActionState::Fail(format!(
+                            "章程未补写（PROJECT.md 完成创建段可能缺）：{e}"
+                        )),
+                    });
+                }
                 // plan/13 D1(#31 记录的缺口):create_repo 只推了首 commit,
                 // 创建流途中的章程/组件标准提交停在本地——产品信息正本在
                 // 仓里,落地时把 HEAD 一次推齐。失败软降级 toast,不倒灌

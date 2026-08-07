@@ -21,7 +21,7 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 2. **worktree 感知**——buddy 在自己的 workspace clone 提交并 push；用户若在项目的独立 worktree 工作，需 `git pull` 才能感知这些自动提交，存在同步感知缺口（用户不知道 buddy 往 main 推过东西）。
 3. **PR 独立性**——三件套（竞品分析 / 找指标 / 绑数据）各产 PR；charter + standards 已在 base（main）上，PR 从该 base 分支基本不碍独立性。但 buddy `push_head` 与用户 worktree 并行 push 同一 main 可能产生分叉 / 冲突 / 强推风险。
 
-**处置**：W1 不解，暂留。待三窗口合入后与各窗口遗留汇总转 issue。**2026-08-07 用户决议搁置**：写章程/标准 + push 只在 buddy 新建项目路径走（bound 已有项目不走 `is_owned_workspace` 门槛），暂时不管；但 `let _ =` 静默吞失败违反「报告不代答」铁律这条**留存未解**，待后续评估要不要补 toast + opt-out 开关。
+**处置**：✅ 已修（2026-08-07）。用户决议：仓库是 buddy 建的、建之初推初始规范没问题，**保留自动写章程+组件标准+本地 commit+push main（不走 PR）**，不加 opt-out 勾选。只补「报告不代答」缺口：三处 `let _ =` 静默吞失败（CreateProject 章程/标准 + CompleteCreation 章程）改成失败 toast；push 成功的「已推送」toast 原本就有。失败不再静默。
 
 **事实源**：`crates/bw-app/src/lib.rs`（`write_charter` L7829 / `write_component_standards` L7855 / `push_head` 调用 L5522）。
 
