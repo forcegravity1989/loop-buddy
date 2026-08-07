@@ -4324,8 +4324,8 @@ impl App {
                     .await?;
                 let res = self.collect_project_metrics(pid).await;
                 let (ok, status) = match &res {
-                    Ok(s) => (s.failed == 0 && !s.no_remote_github, CronStatus::Normal),
-                    Err(_) => (false, CronStatus::Failed),
+                    Ok(s) if s.is_success() => (true, CronStatus::Normal),
+                    Ok(_) | Err(_) => (false, CronStatus::Failed),
                 };
                 self.store
                     .record_cron_run(c.id, status, run_at_label(now()))
@@ -7237,17 +7237,14 @@ impl App {
             Command::CollectMetrics => {
                 let p = self.active()?;
                 let s = self.collect_project_metrics(p).await?;
-                // Honest toast: any gh failure — or a github metric with no
-                // remote to pull from — is ok:false. Never claim a green
-                // collection we didn't actually perform.
-                let ok = s.failed == 0 && !s.no_remote_github;
+                // Honest toast: only a pass that really measured at least one
+                // metric, with no failures or deferred definitions, is ok.
+                // "Nothing collected" must not wear a success colour.
+                let ok = s.is_success();
                 let mut detail = format!(
-                    "采集 · {} 更新 · {} 未变 · {} 未接(bw/connector 留白)",
+                    "采集 · {} 更新 · {} 未变 · {} 未接（legacy 或脚本未产出）",
                     s.changed, s.unchanged, s.deferred
                 );
-                if s.no_remote_github {
-                    detail.push_str(";项目未挂 GitHub 仓,github 指标无法采集");
-                }
                 if let Some(err) = &s.first_error {
                     detail.push_str(&format!(";首个失败:{err}"));
                 }
@@ -9341,9 +9338,8 @@ fn json_field_by_path<'a>(v: &'a serde_json::Value, raw: &str) -> Option<&'a ser
 /// C7 · 采集器 receipt — an honest tally of one collection pass (manual or
 /// cron). Real counts, so a caller can toast the truth and a failure is never
 /// silently swallowed. `changed` vs `unchanged` prove the change-guard held;
-/// `failed` with `first_error` prove a `gh` failure wrote nothing; `deferred`
-/// proves the bw/connector 留白; `no_remote_github` proves github can't be faked
-/// without a repo.
+/// `failed` with `first_error` proves a script failure wrote nothing;
+/// `deferred` proves a legacy definition or missing script output stayed blank.
 #[derive(Default)]
 struct MetricCollectSummary {
     changed: u32,
@@ -9351,7 +9347,15 @@ struct MetricCollectSummary {
     failed: u32,
     deferred: u32,
     first_error: Option<String>,
-    no_remote_github: bool,
+}
+
+impl MetricCollectSummary {
+    /// A green collection must have measured at least one real value and left
+    /// no failures or deferred definitions behind. Manual metrics are outside
+    /// this collector, so an all-manual project correctly reports no auto-collect.
+    fn is_success(&self) -> bool {
+        self.failed == 0 && self.deferred == 0 && self.changed + self.unchanged > 0
+    }
 }
 
 /// Standard workspace-derived metric names — the join keys between the

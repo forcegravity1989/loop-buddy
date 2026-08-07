@@ -1096,7 +1096,9 @@ impl Store for SqliteStore {
             // 一个项目的指标是十几条量级,不值得为它上 SQL 生成。
             for r in &rows {
                 let name: String = r.get("name");
-                if defs.iter().any(|m| m.name == name) {
+                let is_current_north_star =
+                    role == MetricRole::Leading && !ns_name.is_empty() && name == ns_name;
+                if is_current_north_star || defs.iter().any(|m| m.name == name) {
                     continue;
                 }
                 let id: String = r.get("id");
