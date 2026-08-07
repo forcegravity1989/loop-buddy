@@ -5,6 +5,8 @@
 >
 > **scope 重塑(边做边发现,如实记)**:原范围「north-star-discovery + metrics-binding 两 skill 文本易用性打磨」。经多轮 grilling 发现 skill 文本是**下游**,真正产品化杠杆在上游三件:① 交互式执行模型(`claude -p` one-shot 出草案 → PR 合不了);② collect_kind 收两 kind(五 kind 是错误心智产物);③ 绑数据 = 搭采集装置(不是只改 metrics.toml collect 字段)。skill 重写 fork 在执行模型上。
 
+> **归正指针(2026-08-07)**:W2-1 三现象(切走丢字 / 重启黑框 / 窄窗错行)经两轮独立架构评估,根因是「活/交付运行/Claude会话/终端连接」四个生命周期被错误绑死,不是本文 §10.6/§10.7 记的单槽机制。终端多会话架构重构的设计事实源已迁至 [`issue2-terminal-conversation-refactor.md`](issue2-terminal-conversation-refactor.md)(W2 之前没做到位的归正);本文 §10.6/§10.7 保留作设计过程记录,别照着施工,以归正 md 为准。orca 可借鉴机制见 [`orca-terminal-session-reference.md`](orca-terminal-session-reference.md)。
+
 ## 0. 心智模型(三层 + 采集两 kind + 执行两轨,2026-08-04 钉下,继承 Issue1)
 
 1. **connector = 对外连接器**:codehub-cli/github/claude-cli,提供探活函数(知道怎么连某外部系统 + 探一次通不通)。本地工作区读取不是 connector(`git-repo` 不建,Issue1 已定)。

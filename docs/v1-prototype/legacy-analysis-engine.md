@@ -73,6 +73,8 @@ pair.master.resize(Size::new(cols, rows))?;
 
 ## W2-1 · 离开面板丢字节 + 重启后黑框消失无提示
 
+> **归正注记(2026-08-07)**:本节诊断的「watch 单槽丢字节」只盖了三现象之一,且把「切走丢字」和「窄窗错行」混为一谈。截图确诊窄窗错行是 PTY 列数 ≠ xterm 实际宽度(横向堆叠,非丢字非乱码);更深根因是「活/交付运行/Claude 会话/终端连接」四个生命周期被错误绑死。终端多会话架构重构的设计事实源见 [`issue2-terminal-conversation-refactor.md`](issue2-terminal-conversation-refactor.md),本节保留作分析过程记录,读 W2-1 以归正 md 为准。
+
 ### 现状代码（行号）
 
 - `crates/app-desktop/src/kernel.rs:526` —— `let (pty_tx, pty_rx) = watch::channel(Vec::<u8>::new());`，**单槽**（非队列）。
