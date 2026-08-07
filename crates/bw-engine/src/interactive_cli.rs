@@ -388,7 +388,14 @@ pub fn build_bridge_system_prompt(playbook_ctx: &PlaybookCtx, skill_slug: &str) 
     if !playbook_ctx.workspace_hint.trim().is_empty() {
         s.push_str(&format!("- 工作区: {}\n", playbook_ctx.workspace_hint));
     }
-    s.push_str(&format!("\n你正在执行技能: `{skill_slug}`\n"));
+    // V1 收口:空技能(无技能 issue)显「未关联技能」;非空(含未知 typo)显
+    // 「你正在执行技能: {slug}」让用户看到 slug 能自查。下方技能契约 match 对
+    // 未知 slug 走 `_` 臂只给通用铁律,空 slug 同样。
+    if skill_slug.trim().is_empty() {
+        s.push_str("\n未关联技能,由你驱动或按用户要求干活;项目上下文与铁律已就位。\n");
+    } else {
+        s.push_str(&format!("\n你正在执行技能: `{skill_slug}`\n"));
+    }
 
     // ── Skill-specific 产出契约 + 读上游 ──
     s.push_str("\n## 技能契约\n\n");
@@ -1087,6 +1094,19 @@ mod tests {
         let prompt = build_bridge_system_prompt(&ctx, "some-unknown-skill");
         assert!(prompt.contains("Done 永不自动"));
         assert!(prompt.contains("通用铁律"));
+        // 非空(含未知 typo)slug 仍显「你正在执行技能」,让用户自查。
+        assert!(prompt.contains("你正在执行技能: `some-unknown-skill`"));
+    }
+
+    #[test]
+    fn build_bridge_system_prompt_empty_skill_shows_unspecified_not_skill_label() {
+        // V1 收口:无技能 issue 也走终端 —— 空 slug 不报错,bridge 显
+        // 「未关联技能」(不假装在执行某技能),通用铁律仍在。
+        let ctx = mock_playbook_ctx();
+        let prompt = build_bridge_system_prompt(&ctx, "");
+        assert!(prompt.contains("Done 永不自动"));
+        assert!(prompt.contains("未关联技能"));
+        assert!(!prompt.contains("你正在执行技能"));
     }
 
     #[tokio::test]
