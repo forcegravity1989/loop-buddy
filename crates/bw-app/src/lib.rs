@@ -3971,12 +3971,6 @@ impl App {
             .get_project(project)
             .await?
             .ok_or(AppError::NotFound)?;
-        let remote_path = proj.remote_path.trim().to_string();
-        let remote = bw_engine::remote::Remote::for_project(
-            &proj.provider,
-            &proj.remote_host,
-            &remote_path,
-        )?;
         let sigs = self.store.persisted_signals(project).await?;
         let today = now().date();
         let mut summary = MetricCollectSummary::default();
@@ -4144,81 +4138,11 @@ impl App {
                 continue;
             }
             match m.collect_kind.as_str() {
-                "github" => {
-                    if remote_path.is_empty() {
-                        // No repo to pull from — honest, not a silent success.
-                        summary.no_remote_github = true;
-                        continue;
-                    }
-                    match remote.collect_count(&m.collect_query, today).await {
-                        Ok(count) => {
-                            let value = count.to_string();
-                            // window-guard(code-review Standards #5 修正,取代
-                            // 纯 change-guard):值变了当然记;值没变但本采集
-                            // 窗口(UTC 日)还没有点,也要记——定时采集的每次
-                            // 测量都是真实观测,平台期的新鲜确认不落点的话,
-                            // 过期降级会把「今天测过没变」误判成「久无数据」
-                            // 压绿为黄。同窗口同值才跳过(防手动连点刷屏)。
-                            let last_ts = self.store.latest_observation_ts(m.id).await?;
-                            let same_window = last_ts.is_some_and(|t| {
-                                OffsetDateTime::from_unix_timestamp(t)
-                                    .map(|d| d.date() == today)
-                                    .unwrap_or(false)
-                            });
-                            if m.value_raw == value && same_window {
-                                summary.unchanged += 1;
-                            } else {
-                                self.store
-                                    .append_observation(m.id, SourceKind::Github, &value, now())
-                                    .await?;
-                                summary.changed += 1;
-                                touched = true;
-                            }
-                        }
-                        Err(e) => {
-                            summary.failed += 1;
-                            if summary.first_error.is_none() {
-                                summary.first_error = Some(format!("{}:{e}", m.name));
-                            }
-                        }
-                    }
-                }
-                "codehub" => {
-                    // P5:codehub 采集,镜像 github arm。Remote::Codehub 由 remote
-                    // 变量(project 的 provider 派生)分发到 codehub::collect_count
-                    // (issue|mr list --jq length)。查询口径见 codehub::collect_count
-                    // (issues:<state> / mrs:<state>)。
-                    if remote_path.is_empty() {
-                        summary.no_remote_codehub = true;
-                        continue;
-                    }
-                    match remote.collect_count(&m.collect_query, today).await {
-                        Ok(count) => {
-                            let value = count.to_string();
-                            let last_ts = self.store.latest_observation_ts(m.id).await?;
-                            let same_window = last_ts.is_some_and(|t| {
-                                OffsetDateTime::from_unix_timestamp(t)
-                                    .map(|d| d.date() == today)
-                                    .unwrap_or(false)
-                            });
-                            if m.value_raw == value && same_window {
-                                summary.unchanged += 1;
-                            } else {
-                                self.store
-                                    .append_observation(m.id, SourceKind::Codehub, &value, now())
-                                    .await?;
-                                summary.changed += 1;
-                                touched = true;
-                            }
-                        }
-                        Err(e) => {
-                            summary.failed += 1;
-                            if summary.first_error.is_none() {
-                                summary.first_error = Some(format!("{}:{e}", m.name));
-                            }
-                        }
-                    }
-                }
+                // W3-2 第一步:github/codehub/bw/connector legacy kind 一律
+                // deferred(不再直采,强走 script connector)。collect_label
+                // 已标「legacy·迁script」;第二步(改枚举 + DB 字符串迁移)
+                // 放 V1+。北极星(W3-1 后是 script/manual 行)走下面真臂。
+                "github" | "codehub" | "bw" | "connector" => summary.deferred += 1,
                 "script" => {
                     // plan18-③:从预跑的 script connector 输出 JSON 按
                     // collect_query 字段路径取值。没配 script connector /
@@ -4268,8 +4192,6 @@ impl App {
                         }
                     }
                 }
-                // v1 未接:bw / connector 如实留白——不采集、不写零值。
-                "bw" | "connector" => summary.deferred += 1,
                 // manual(或空 collect_kind = 界面手建)不归采集器管。
                 _ => {}
             }
@@ -9430,7 +9352,6 @@ struct MetricCollectSummary {
     deferred: u32,
     first_error: Option<String>,
     no_remote_github: bool,
-    no_remote_codehub: bool,
 }
 
 /// Standard workspace-derived metric names — the join keys between the

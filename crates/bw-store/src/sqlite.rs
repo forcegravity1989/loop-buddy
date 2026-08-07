@@ -1048,6 +1048,25 @@ impl Store for SqliteStore {
         .execute(&mut *tx)
         .await?;
 
+        // W3-1: upsert the north star as a real metric row (role=Leading,
+        // stage_kind=NULL = project-level) so collect_project_metrics sees it
+        // and recompute_signals derives its signal instead of a forever-grey
+        // card. The two project columns above stay as a sync cache; this row
+        // is the observation mount point. Same upsert shape (by project_id +
+        // role + name) as lagging/leading below — a user-built same-name row
+        // is overwritten by origin='file', identical to lagging/leading sync.
+        let ns_name = sync.north_star_name.trim();
+        if !ns_name.is_empty() {
+            let ns_def = MetricDefSync {
+                name: ns_name.to_string(),
+                def: sync.north_star_def.clone(),
+                target_raw: String::new(),
+                collect_kind: sync.north_star_collect_kind.clone(),
+                collect_query: sync.north_star_collect_query.clone(),
+            };
+            sync_one_metric_definition(&mut tx, &p, MetricRole::Leading, &ns_def, t).await?;
+        }
+
         for m in &sync.lagging {
             sync_one_metric_definition(&mut tx, &p, MetricRole::Lagging, m, t).await?;
         }

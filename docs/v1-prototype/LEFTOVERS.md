@@ -49,7 +49,7 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 **未决点**：signal 过期降级是否读 `routine_schedule`？
 
-**处置**：留总览窗口（碰派生链）。
+**处置**：✅ 已实质解决，2026-08-07 关闭。读代码确认 `recompute_signals`（`sqlite.rs:1329-1338`）已读 `op_stage.routine_schedule` 解析成 `Cadence` → `measure.rs:70` staleness → `eval.rs:48-53` `stale && Green → Amber`，过期降级链路已完整接通。原记「改法未做」标记错。`stage_done` 列从未加进 schema，不用清。
 
 **事实源**：`docs/v1-prototype/issue1-onboard-simplify.md` §6。
 
