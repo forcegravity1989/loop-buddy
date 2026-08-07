@@ -200,6 +200,7 @@
       <div class="nav-item" data-screen="u3"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 5v4M12 15v4M5 12h4M15 12h4"/></svg>找指标</div>
       <div class="nav-item" data-screen="u4"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 16l3-5 3 3 4-6"/></svg>绑数据</div>
       <div class="nav-item" data-screen="u5"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 9h16M9 5v14"/></svg>总览呈现</div>
+      <div class="nav-item" data-screen="u6"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>建活 · 选技能</div>
     </div>
     <div class="nav-group">
       <div class="nav-group-title">维护指南 · 机制</div>
@@ -490,11 +491,76 @@
 
       <div class="callout note">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
-        <div class="body"><strong>杂项</strong>点完成时若提示「登记了 N 个产物」，N 往往接近整仓文件数，不是业务产出件数。删项目只清 buddy 里的记录，重建前请自行清掉本机工作区目录 <code>workspaces\&lt;名&gt;-*</code>。</div>
+        <div class="body"><strong>杂项</strong>点完成时若提示「登记了 N 个产物」，N 往往接近整仓文件数，不是业务产出件数。删项目会清 buddy 记录 + 自动删 buddy 自建的 clone 工作区；你自己绑的已有目录不删（留着你的证据）。</div>
       </div>
 
       <p class="linker">指标与健康怎么设计的 → <a href="#" onclick="go('m6');return false">指标与健康</a></p>
       <div class="foot">事实源：cowelink 总览实跑。</div>
+    </section>
+
+    <!-- ============ U6 建活 · 选技能 ============ -->
+    <section class="screen" id="u6" data-title="建活 · 选技能" data-sec-name="使用指导">
+      <div class="eyebrow">使用指导 · 阶段 05</div>
+      <h1 class="disp">建活 · 选技能</h1>
+      <p class="lede">一句话：总览看明白缺什么之后，在 Issue 看板最上方一行开一件活——填标题、选阶段、挂一条方法（技能），落进「待办池」。队友在卡片上指派，不在创建行绑。</p>
+
+      <div class="diagram">
+        <div class="cap">一件活怎么进看板</div>
+        <div class="pipe">
+          <div class="box"><div class="t">填标题</div><div class="d">最上一行</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">选阶段</div><div class="d">阶段 chip</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">挂技能</div><div class="d">下拉（可空）</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">＋创建</div><div class="d">落待办池</div></div>
+          <div class="arr">→</div>
+          <div class="box"><div class="t">指派队友</div><div class="d">卡片上选</div></div>
+        </div>
+      </div>
+
+      <h2 class="sec"><span class="n">操作</span></h2>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">Issue 看板最上方一行：填<strong>标题</strong>（作用域到选中的阶段）</div></div>
+        <div class="li"><div class="n">2</div><div class="t">点 <strong>阶段 chip</strong> 选这件活属于哪个阶段（原型 / 构建 / 优化 / 运营推广 / 运维）</div></div>
+        <div class="li"><div class="n">3</div><div class="t"><strong>关联技能</strong>下拉选一条方法（可空）；选了，开工时会带着这条方法注入给队友</div></div>
+        <div class="li"><div class="n">4</div><div class="t">点 <code>＋ 创建 Issue</code>；新卡落在最左「待办池」</div></div>
+        <div class="li"><div class="n">5</div><div class="t">在<strong>卡片</strong>上用「指派」下拉选队友——不在创建行绑；一张卡一个队友</div></div>
+      </div>
+      <p class="note-line">截图待补：创建行 + 落进待办池的新卡（实跑截图 defer 到终端会话重构收口后用 cowelink 补）。</p>
+
+      <h2 class="sec"><span class="n">背后</span>buddy 自动干了啥</h2>
+      <div class="res">
+        <ul>
+          <li><strong>对远端代码仓</strong>：挂了远端的项目，创建会去远端开一张同名 Issue（网页建的进不来 buddy 看板）</li>
+          <li><strong>对你的机器</strong>：尚未 clone / 写文件——建活只立账，不动磁盘</li>
+          <li><strong>对 buddy 数据库</strong>：落一条 <code>issue</code> 行（状态 待办）、按阶段归位、挂上所选技能</li>
+        </ul>
+      </div>
+
+      <h2 class="sec"><span class="n">你会得到</span></h2>
+      <div class="res">
+        <ul>
+          <li>一张待办卡，带着阶段和（若选了）技能</li>
+          <li>点 <code>▶ 跑</code> 即开工：队友在真实工作目录改文件（交互式走嵌终端，见下）</li>
+        </ul>
+      </div>
+
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>易踩</strong>① 空标题点创建会被静默忽略（没反馈，不是卡住）——先填标题。② 挂远端时创建要等远端开票回来，无进度条，体感像卡住，稍等。③ 同项目同时只一件活在交付中（串行）；别的卡点「▶ 跑」会显示「排队中」。</div>
+      </div>
+
+      <h2 class="sec"><span class="n">▶ 跑 · 嵌终端 · 完成</span></h2>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">卡片点 <code>▶ 跑</code>：队友开工，跳到工作流屏的嵌终端</div></div>
+        <div class="li"><div class="n">2</div><div class="t">活干完自动停在「评审中」——<strong>不会自动完成</strong>；你在嵌终端看结果</div></div>
+        <div class="li"><div class="n">3</div><div class="t">评审通过：点 <strong>→已完成</strong>（「完成」永远由人点）</div></div>
+      </div>
+      <p class="note-line">终端会话已按「每卡一会话」重构：切到别的卡再切回来接回原会话；buddy 重启后点卡即按原路径恢复。实跑「▶ 跑后终端」截图 defer。</p>
+
+      <p class="linker">Issue 状态机 / 一活一会话 / 调度 → <a href="#" onclick="go('m3');return false">Issue 与调度</a> · 技能怎么注入 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a> · 执行与验收 → <a href="#" onclick="go('m5');return false">执行与证据</a></p>
+      <div class="foot">事实源：cowelink 创建流实跑 2026-08-06；终端会话重构（V1-TermRefactor）已落地，实跑截图 defer。</div>
     </section>
 
     <!-- ============ M1 架构与铁律 ============ -->
