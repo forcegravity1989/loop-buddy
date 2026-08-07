@@ -22,9 +22,9 @@
 //!      (`force_mock` 恒真、零 stub claude 调用)—— 证明"有无工作区"不再影响
 //!      创建流起草的路由决定。
 //!
-//! **D8 回锁的对照(不在本例内真跑,详见完成报告的代码引用)**:标配 Issue 的
-//! `RunIssue` → `run_issue_now` → `run_workflow_inner(..., force_mock=false)`
-//! 未被本票触碰,继续按 `agent_cli`/`workspace_path` 走既有真执行器路由。
+//! **D8 回锁的对照(不在本例内真跑,详见完成报告的代码引用)**:V1-TermClose1
+//! 后,标配 Issue 的 `RunIssue` → `run_issue_interactive`(嵌入终端),不再走
+//! `run_workflow_inner`;`agent_cli` 路由是阶段循环概念,issue 终端会话不适用。
 //!
 //! **gh / claude 全程被自带的【mock】stub 顶替**——写进
 //! `<ws_root>/.stub-bin/{gh,claude}` 并前置进 PATH,输出/日志自我标注

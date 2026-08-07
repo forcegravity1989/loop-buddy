@@ -96,9 +96,10 @@ fn make_executable(_p: &std::path::Path) {}
 
 /// 自带【mock】标注的 stub `claude` —— 不是真实 Anthropic API。手法照抄
 /// `verify_c8_standard_trio.rs` 的 `STUB_CLAUDE`(已验证在这条命令层路径上
-/// 可用):对每次调用直接返回一个能通过评审门的假产出,让 run 能真实推进到
-/// InReview,而不是卡在网关抖动上——本例要验的是物化,不是执行器成败。额外
-/// 把收到的 prompt(`-p` 后那个参数)原样追加进 `$STUB_CLAUDE_LOG`(设了才
+/// 可用):对每次调用直接返回一个能通过评审门的假产出。V1-TermClose3:RunIssue
+/// 全走嵌入终端后,issue 不再自动推 InReview(无 MR 的活诚实停在 InProgress),
+/// 但物化本身发生在 `prepare_issue_run` 里(执行器调用之前),与本 stub 无关。
+/// 额外把收到的 prompt(`-p` 后那个参数)原样追加进 `$STUB_CLAUDE_LOG`(设了才
 /// 写)——用来独立核验「目录超限如实写明未列出条数,不静默截断」这条附加
 /// 纪律:命令层不暴露 `stage_catalog_block` 的私有返回值,只能从执行器真实
 /// 收到的 prompt 里抓文本。
@@ -139,9 +140,9 @@ async fn main() {
     let ws_root = PathBuf::from(&ws_root_s);
     std::fs::create_dir_all(&ws_root).expect("create ws root");
 
-    // stub claude 前置进 PATH —— 【mock】,不是真实执行,只为让 run 能推进到
-    // InReview,不卡在网关抖动;物化本身发生在执行器被调用之前,跟这个 stub
-    // 是否"演得像"无关。
+    // stub claude 前置进 PATH —— 【mock】,不是真实执行。V1-TermClose3:RunIssue
+    // 走嵌入终端(InteractiveCliExecutor),issue 停在 InProgress 不自动推 InReview;
+    // 物化本身发生在 `prepare_issue_run` 里(执行器调用之前),跟这个 stub 无关。
     let stub_bin = ws_root.join(".stub-bin");
     std::fs::create_dir_all(&stub_bin).unwrap();
     let claude = stub_bin.join("claude");

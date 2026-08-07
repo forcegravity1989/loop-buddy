@@ -87,9 +87,9 @@ dispatch `RunIssue` 的 examples 行为变(不再走 buddy 脚本调度):
 
 ## 执行分阶段(逐 commit,不 push)
 
-1. **功能解锁**:A(路由 + 咨询整块)+ B(prompt 模型 + 蒸馏/目录注入 + bridge 文案两档 + desc 条件)+ is_interactive_skill 删 + poll 放宽。改完能测无技能 issue ▶跑 进终端且带蒸馏上下文。过门禁 + lib test(改 build_startup_plan 调用方后更新测试)。
-2. **删老路径 + UI 门控**:C(删 issue 脚本调度路径 + 清 issue_brief 死代码)+ D(Chat/沉淀/RunOutputs 门控保留给阶段循环会话 + 方法循环卡门控 + Vm 判别)。过门禁 + 读回。
-3. **examples + 文档**:E(retarget/删/调断言)+ F(§13 + u6 + m4 + code-schemes + 铁律表)。过门禁 + examples check。
+1. **功能解锁**(✅ V1-TermClose1,commit c4d5b24):A(路由 + 咨询整块)+ B(prompt 模型 + 蒸馏/目录注入 + bridge 文案两档 + desc 条件)+ is_interactive_skill 删 + poll 放宽。改完能测无技能 issue ▶跑 进终端且带蒸馏上下文。过门禁 + lib test(改 build_startup_plan 调用方后更新测试)。
+2. **删老路径 + UI 门控**(✅ V1-TermClose2,commit d427203):C(删 issue 脚本调度路径 + 清 issue_brief 死代码)+ D(Chat/沉淀/RunOutputs 门控保留给阶段循环会话 + 方法循环卡门控 + Vm 判别)。过门禁 + 读回。
+3. **examples + 文档**(✅ V1-TermClose3):E(retarget/删/调断言)+ F(§13 + u6 + m4 + code-schemes + 铁律表)。过门禁 + examples check。
 
 ## 验证
 

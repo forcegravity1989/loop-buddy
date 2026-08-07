@@ -542,7 +542,8 @@
       <div class="res">
         <ul>
           <li>一张待办卡，带着阶段和（若选了）技能</li>
-          <li>点 <code>▶ 跑</code> 即开工：队友在真实工作目录改文件（交互式走嵌终端，见下）</li>
+          <li>点 <code>▶ 跑</code> 即开工：所有 issue ▶跑 都进嵌入终端（每卡一会话），队友在真实工作目录改文件（见下）</li>
+          <li>无技能也跑：issue 标题+描述作首句 prompt，技能正文+蒸馏+目录块并入系统提示词</li>
         </ul>
       </div>
 
@@ -553,11 +554,12 @@
 
       <h2 class="sec"><span class="n">▶ 跑 · 嵌终端 · 完成</span></h2>
       <div class="ops">
-        <div class="li"><div class="n">1</div><div class="t">卡片点 <code>▶ 跑</code>：队友开工，跳到工作流屏的嵌终端</div></div>
-        <div class="li"><div class="n">2</div><div class="t">活干完自动停在「评审中」——<strong>不会自动完成</strong>；你在嵌终端看结果</div></div>
-        <div class="li"><div class="n">3</div><div class="t">评审通过：点 <strong>→已完成</strong>（「完成」永远由人点）</div></div>
+        <div class="li"><div class="n">1</div><div class="t">卡片点 <code>▶ 跑</code>：队友开工，跳到工作流屏的嵌终端（每卡一会话）</div></div>
+        <div class="li"><div class="n">2</div><div class="t">无技能也能跑：issue 标题+描述驱动；多 agent 在会话内由 claude 用 SubAgent 调度（技能方法论讲清）</div></div>
+        <div class="li"><div class="n">3</div><div class="t">活干完<strong>不会自动进「评审中」</strong>——agent 自提 MR 后 buddy 检测到才推评审中；无 MR 的活诚实停在「进行中」，不假装前进</div></div>
+        <div class="li"><div class="n">4</div><div class="t">评审通过：点 <strong>→已完成</strong>（「完成」永远由人点）</div></div>
       </div>
-      <p class="note-line">终端会话已按「每卡一会话」重构：切到别的卡再切回来接回原会话；buddy 重启后点卡即按原路径恢复。实跑「▶ 跑后终端」截图 defer。</p>
+      <p class="note-line">终端会话已按「每卡一会话」重构：切到别的卡再切回来接回原会话；buddy 重启后点卡即按原路径恢复。阶段循环（方法循环卡）只用于 stage playbook / hub workflow / cron，issue 终端会话不显。实跑「▶ 跑后终端」截图 defer。</p>
 
       <p class="linker">Issue 状态机 / 一活一会话 / 调度 → <a href="#" onclick="go('m3');return false">Issue 与调度</a> · 技能怎么注入 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a> · 执行与验收 → <a href="#" onclick="go('m5');return false">执行与证据</a></p>
       <div class="foot">事实源：cowelink 创建流实跑 2026-08-06；终端会话重构（V1-TermRefactor）已落地，实跑截图 defer。</div>
@@ -823,6 +825,15 @@
         <div class="box"><div class="t">下次注入</div><div class="d">uses+1</div></div>
       </div>
       <p class="where">落点：技能正本 <code>docs/skills/</code>；注入/衔接层 <code>crates/bw-engine</code>（交互式）；Hub 登记 <code>skill</code> 表；蒸馏 <code>crates/bw-app</code>。</p>
+
+      <h2 class="sec"><span class="n">V1 收口</span>issue 终端会话的 prompt 模型</h2>
+      <ul class="bullets">
+        <li><strong>所有 issue ▶跑 都进嵌入终端</strong>（每卡一会话），不再只限找指标/绑数据两技能。</li>
+        <li><strong>无技能也跑</strong>：issue 标题+描述作首句 prompt（auto-submit）；技能正文+蒸馏块+目录块并入系统提示词（<code>--append-system-prompt</code>），经验复利在 issue 交付侧不静默丢失。</li>
+        <li><strong>多 agent 转 prompt 驱动</strong>：技能方法论讲清 claude 在终端会话内用 SubAgent 调度各 agent（独立上下文）；buddy 不再脚本调度 issue 的 agent——per-agent 战绩记账不适用于 issue 活（PTY 看不见 claude 内部调度）。</li>
+        <li><strong>阶段循环只用于非 issue 命令</strong>：stage playbook / hub workflow / cron 仍用 buddy 脚本调度的阶段循环机器（<code>run_workflow_inner</code>），不在本次收口范围。</li>
+        <li><strong>默认系统提示词 / 默认 skill</strong>：后续 V1 催熟设计点，本次不做。</li>
+      </ul>
       <div class="foot">执行两轨 → <a href="#" onclick="go('m5');return false">执行与证据</a>。</div>
     </section>
 
