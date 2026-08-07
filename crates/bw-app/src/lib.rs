@@ -1355,6 +1355,10 @@ pub struct IssueDetailData {
     pub runs: Vec<bw_core::model::WorkflowRun>,
     pub changes: Vec<bw_core::model::RunChanges>,
     pub artifacts: Vec<Artifact>,
+    /// V1 终端会话重构(阶段1): 该活是否已有交互式会话(claude_conversation
+    /// 行存在与否)。替代旧 `issue.interactive_started` —— P2 诚实文案用它
+    /// 判断「过程在嵌入终端里」还是「还没有运行」。
+    pub is_interactive: bool,
 }
 
 impl Default for AppState {
@@ -1774,7 +1778,7 @@ impl App {
                     if let Some(&issue_id) = self.state.interactive_sessions.get(&cwd) {
                         if let Err(e) = self
                             .store
-                            .set_issue_claude_session_id(issue_id, &session_id)
+                            .set_conversation_session_id(issue_id, &session_id)
                             .await
                         {
                             self.emit(Event::ConnectorSynced {
@@ -1876,14 +1880,22 @@ impl App {
                     continue;
                 }
             };
-            // Interactive issues in InProgress + interactive_started + no PR.
+            // V1 终端会话重构(阶段1): interactive_started 改读 claude_conversation
+            // 行存在(一次查全项目 issue_ids,避免 N+1)。
+            let conv_ids: std::collections::HashSet<IssueId> = self
+                .store
+                .list_conversation_issue_ids(proj.id)
+                .await?
+                .into_iter()
+                .collect();
+            // Interactive issues in InProgress + 有会话行 + no PR.
             let candidates: Vec<_> = self
                 .store
                 .list_issues(proj.id, None, Some(IssueStatus::InProgress))
                 .await?
                 .into_iter()
                 .filter(|i| {
-                    i.interactive_started
+                    conv_ids.contains(&i.id)
                         && i.pr_number == 0
                         && i.github_number != 0
                         && Self::is_interactive_skill(&i.standard_skill)
@@ -5339,8 +5351,15 @@ impl App {
         // spawn either failed or the hook hasn't fired → use build_startup_plan
         // (re-inject skill, don't get stuck in a skill-less session). If
         // session_id is non-empty → resume with `--resume <id>` (precise session).
-        let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
-        let is_resume = !issue.claude_session_id.is_empty();
+        // V1 终端会话重构(阶段1): is_resume 改读 claude_conversation 行
+        // (按 issue_id 查,非空 claude_session_id = resume)。替代旧
+        // issue.claude_session_id —— 会话身份搬到新表,业务零读旧列。空
+        // session_id = 首次 spawn 没捕获到 → fallback build_startup_plan(F1)。
+        let conv = self.store.get_conversation_by_issue(id).await?;
+        let is_resume = conv
+            .as_ref()
+            .map(|c| !c.claude_session_id.is_empty())
+            .unwrap_or(false);
         let prep = self.prepare_issue_run(id, is_resume).await?;
         let p = prep.issue.project_id;
         let issue = prep.issue.clone();
@@ -5363,8 +5382,12 @@ impl App {
             // Resume: no new prompt, no bridge system prompt. The session
             // persists under ~/.claude/projects/<encoded-cwd>/ from the
             // first run; `--resume <session_id>` re-enters the exact session.
-            // session_id was captured by the hook listener (non-empty = is_resume).
-            build_resume_plan(&CLAUDE, Some(&issue.claude_session_id), workspace_cwd)
+            // session_id 来自 claude_conversation 行(hook 回传)。
+            let session_id = conv
+                .as_ref()
+                .map(|c| c.claude_session_id.as_str())
+                .unwrap_or("");
+            build_resume_plan(&CLAUDE, Some(session_id), workspace_cwd)
                 .map_err(|e| AppError::Engine(e.to_string()))?
         } else {
             // First run: fetch skill body + build bridge system prompt.
@@ -5414,8 +5437,20 @@ impl App {
         // (not `interactive_started`) — see the F1 fix at the top of this
         // function. `interactive_started` is still set (marks a spawn was
         // attempted, used by the poller's filter).
+        // V1 终端会话重构(阶段1): 首次 spawn 前建会话行(ensure_conversation
+        // 替代旧 set_issue_interactive_started)。行存在 = 开过交互式会话
+        // (is_interactive 判断 + poll filter 读这个)。claude_session_id 留空,
+        // 等 hook SessionStart 回传填。workspace_path/branch_name 来自 worktree
+        // provisioning(workspace_cwd + bw/issue-<github_number>)。
         if !is_resume {
-            self.store.set_issue_interactive_started(id).await?;
+            let branch_name = if issue.github_number != 0 {
+                format!("bw/issue-{}", issue.github_number)
+            } else {
+                String::new()
+            };
+            self.store
+                .ensure_conversation(id, p, workspace_cwd.to_str().unwrap_or(""), &branch_name)
+                .await?;
         }
 
         // V1 Issue2 Phase2b: register the worktree cwd → IssueId mapping so
@@ -7137,6 +7172,10 @@ impl App {
             // comes from the store / git, nothing synthesized here.
             Command::OpenIssueDetail(id) => {
                 let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
+                // V1 终端会话重构(阶段1): is_interactive 改读 claude_conversation
+                // 行存在与否(替代旧 issue.interactive_started)。
+                let conv = self.store.get_conversation_by_issue(id).await?;
+                let is_interactive = conv.is_some();
                 let runs = self.store.list_runs_for_issue(id).await?;
                 let artifacts = self.store.list_artifacts_for_issue(id).await?;
                 let workspace = self
@@ -7173,6 +7212,7 @@ impl App {
                     runs,
                     changes,
                     artifacts,
+                    is_interactive,
                 });
             }
 

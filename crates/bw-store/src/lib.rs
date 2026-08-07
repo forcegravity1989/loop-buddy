@@ -19,11 +19,11 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    AgentCard, AgentRef, Author, Cadence, Connector, ConnectorStatus, CronEffectiveness, CronMode,
-    CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource,
-    LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness, RunStatus, RunTrigger,
-    SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
-    WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
+    AgentCard, AgentRef, Author, Cadence, ClaudeConversation, Connector, ConnectorStatus,
+    CronEffectiveness, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority,
+    IssueStatus, KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness,
+    RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind,
+    UsageRank, WorkflowKind, WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
@@ -1049,18 +1049,38 @@ pub trait Store: Send + Sync {
     /// create` success — a failed/skipped PR simply never calls it, leaving
     /// the honest `0` default (提 PR 失败不炸 run). Never a fabricated number.
     async fn set_issue_pr_number(&self, id: IssueId, pr_number: u32) -> Result<()>;
-    /// V1 Issue2 Phase2a: mark the interactive session as started (first
-    /// ▶跑 spawned claude with the skill body). Called once right before the
-    /// first spawn; never reset. Drives the first-run vs resume decision in
-    /// `run_issue_interactive`.
-    async fn set_issue_interactive_started(&self, id: IssueId) -> Result<()>;
-    /// V1 Issue2 Phase2b: store the claude session_id captured from the
-    /// SessionStart hook event. Called when the hook listener receives a
-    /// SessionStart event and maps cwd → issue. An empty string clears it
-    /// (F1 recovery path). Drives the `--resume <id>` vs startup-plan
-    /// decision (F1 fix: empty session_id = fallback to build_startup_plan,
-    /// never get stuck in a skill-less session).
-    async fn set_issue_claude_session_id(&self, id: IssueId, session_id: &str) -> Result<()>;
+    /// V1 终端会话重构(阶段1): 读取一件活绑定的 claude 会话行。`None` =
+    /// 该活还没有会话(从未点开过交互式 ▶跑)。非空行的 `claude_session_id`
+    /// 非空 = 可 resume;空 = 首次 spawn 没捕获到 session_id(F1 fallback)。
+    /// 业务读路径(is_resume 判断、is_interactive 判断)收口到这——不再读
+    /// `issue.claude_session_id` / `issue.interactive_started` 旧列。
+    async fn get_conversation_by_issue(
+        &self,
+        issue_id: IssueId,
+    ) -> Result<Option<ClaudeConversation>>;
+    /// V1 终端会话重构(阶段1): 首次 spawn 前建会话行(幂等:INSERT OR
+    /// IGNORE,issue_id UNIQUE 兜底,重复跑不产生重复行)。`workspace_path`/
+    /// `branch_name` 来自 worktree provisioning(workspace_cwd +
+    /// `bw/issue-<github_number>`);`claude_session_id` 此时为空,等 hook
+    /// SessionStart 回传再由 [`set_conversation_session_id`] 填。替代旧
+    /// `set_issue_interactive_started` 的语义(行存在 = 开过交互式会话)。
+    async fn ensure_conversation(
+        &self,
+        issue_id: IssueId,
+        project_id: ProjectId,
+        workspace_path: &str,
+        branch_name: &str,
+    ) -> Result<()>;
+    /// V1 终端会话重构(阶段1): hook SessionStart 回传 session_id 时填进
+    /// 会话行(UPDATE;行不存在则 0 行受影响,no-op 不报错——行由首次
+    /// spawn 前的 `ensure_conversation` 建好)。替代旧
+    /// `set_issue_claude_session_id` 的语义(claude_session_id 非空 = 可
+    /// resume)。
+    async fn set_conversation_session_id(&self, issue_id: IssueId, session_id: &str) -> Result<()>;
+    /// V1 终端会话重构(阶段1): 列出某项目下有会话行的所有 issue_id。
+    /// `poll_interactive_inreview` 用来筛"开过交互式会话"的活(替代旧
+    /// `interactive_started` filter),一次查询拿全,避免 N+1。
+    async fn list_conversation_issue_ids(&self, project_id: ProjectId) -> Result<Vec<IssueId>>;
     /// A5-F: the only way an issue reaches `Blocked` — sets status and reason
     /// together in one write. Legality (which source states may block) and
     /// the non-empty-reason rule are the App layer's job; the store just

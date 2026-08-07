@@ -12,8 +12,8 @@
 
 use crate::derive::{AmberBand, Derived};
 use crate::ids::{
-    AgentId, ArtifactId, ConnectorId, CronTaskId, IssueId, KnowledgeSourceId, ProjectId, SessionId,
-    SkillId, WorkflowId, WorkflowRunId,
+    AgentId, ArtifactId, ConnectorId, ConversationId, CronTaskId, IssueId, KnowledgeSourceId,
+    ProjectId, SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use crate::stage_catalog::StageOrigin;
 use serde::{Deserialize, Serialize};
@@ -2237,30 +2237,43 @@ pub struct Issue {
     /// seeded by C9+C10) is an honest skip, never an error.
     #[serde(default)]
     pub standard_skill: String,
-    /// V1 Issue2 Phase2a: whether the interactive skill session has been
-    /// started (first ▶跑 completed the 起手 prefix + spawned claude with
-    /// the skill body). `false` = first run will use `build_startup_plan`
-    /// (positional prompt + skill + bridge system prompt); `true` = resume
-    /// path (`claude --continue` — no new prompt, the session persists under
-    /// `~/.claude/projects/<encoded-cwd>/`). Set to `true` right before the
-    /// first spawn; never reset. Used to decide first-run vs resume in
-    /// `run_issue_interactive`.
-    #[serde(default)]
-    pub interactive_started: bool,
-    /// V1 Issue2 Phase2b: the claude session_id captured from the
-    /// SessionStart hook event (the hook listener POSTs to the app's local
-    /// HTTP server, which extracts `session_id` from the payload). `""` = not
-    /// yet captured — either the first spawn failed before the session was
-    /// established (F1: next ▶跑 falls back to `build_startup_plan`,
-    /// re-injecting the skill, never getting stuck), or the hook hasn't
-    /// fired yet. When non-empty, the next ▶跑 resumes via
-    /// `claude --resume <session_id>` (precise session, not `--continue`'s
-    /// "most recent in cwd"). Drives the resume decision (F1 fix):
-    /// `claude_session_id.is_empty()` = first run, non-empty = resume.
-    #[serde(default)]
-    pub claude_session_id: String,
+    // V1 终端会话重构(阶段1): 旧的 `interactive_started` +
+    // `claude_session_id` 两列已退场(物理 DROP,业务零读)。会话身份搬到
+    // `claude_conversation` 表(见 [`ClaudeConversation`])—— is_resume /
+    // is_interactive 改读新表,不留双读 fallback(守「不为向后兼容留旧
+    // 路径」)。
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// V1 终端会话重构(阶段1)· Claude 会话 / Conversation: 可持续的 claude
+/// 对话记忆,有独立身份(自己的 `id`),可跨多次点开,不随活(Issue)Done
+/// 而结束。一件交互式活 1:1 一个会话(表上 issue_id UNIQUE),但生命周期
+/// 解耦——活 Done 只结束交付,不结束会话。
+///
+/// 这行存的是**持久身份和恢复所需事实**(`claude --resume` 要用):buddy
+/// 自己的 `id`、claude CLI 的 `claude_session_id`(hook 回传,空=首次未捕
+/// 获 → fallback `build_startup_plan`)、固定 worktree 路径、分支名。PTY
+/// 进程句柄/channel/当前尺寸这些纯内存的东西**不进库**,进程死了如实消
+/// 失,从这行恢复身份。详见
+/// `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §4。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClaudeConversation {
+    pub id: ConversationId,
+    pub project_id: ProjectId,
+    /// 一件交互式活最多一个会话(UNIQUE)。
+    pub issue_id: IssueId,
+    /// claude CLI 的 `--resume` id(SessionStart hook 回传)。空 = 首次
+    /// spawn 还没捕获到 session_id(F1: 下次走 startup_plan fallback,
+    /// 不卡在无技能会话里)。
+    pub claude_session_id: String,
+    /// 首次建立会话的固定 worktree 路径(重启后 resume 重建 worktree 用
+    /// 同一路径,保证 encoded-cwd 一致 → claude 能找到历史会话)。
+    pub workspace_path: String,
+    /// 该活分支 `bw/issue-<github_number>`。
+    pub branch_name: String,
+    pub created_at: i64,
+    pub last_opened_at: i64,
 }
 
 // ─────────────────────────── project ───────────────────────────

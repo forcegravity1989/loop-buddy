@@ -1288,7 +1288,14 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         // P4: the explicitly-opened Issue detail — assembled by
         // `Command::OpenIssueDetail`, mapped 1:1 here, `None` = no overlay.
         issue_detail: state.issue_detail.as_ref().map(|d| {
-            ui::vm::issue_detail_vm(&d.issue, &d.runs, &d.changes, &d.artifacts, &state.agents)
+            ui::vm::issue_detail_vm(
+                &d.issue,
+                &d.runs,
+                &d.changes,
+                &d.artifacts,
+                &state.agents,
+                d.is_interactive,
+            )
         }),
         active_run: app.active_run(),
         week_review,

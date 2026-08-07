@@ -1013,6 +1013,9 @@ pub fn issue_detail_vm(
     changes: &[RunChanges],
     artifacts: &[Artifact],
     agents: &[AgentCard],
+    // V1 终端会话重构(阶段1): claude_conversation 行存在与否(替代旧
+    // issue.interactive_started,调用方查 conversation 传入)。
+    is_interactive: bool,
 ) -> IssueDetailVm {
     let run_rows = runs
         .iter()
@@ -1068,7 +1071,7 @@ pub fn issue_detail_vm(
                 (a.path.clone(), short, a.bytes)
             })
             .collect(),
-        is_interactive: issue.interactive_started,
+        is_interactive,
     }
 }
 
