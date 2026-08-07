@@ -1193,32 +1193,25 @@ pub struct SettleReq {
     pub(crate) outcome: SettleOutcome,
 }
 
-/// plan/17 S3: an in-flight backgrounded issue-run. Held in `AppState
-/// .active_run` so:
-///  - the same-project serial lock holds across dispatch returns (a second
-///    `RunIssue` on the same project sees `Some` and is rejected);
-///  - `CancelRun` can `abort` the `JoinHandle`;
-///  - `run_issue_settle` has the `FinalizeCtx` + the tail's issue/project/
-///    worktree context + the worktree guard (dropped AFTER `finalize_run`
-///    reads `head_after` and the tail's `create_mr` commits the worktree).
+/// V1 收口:issue ▶跑 全走嵌入终端(`run_issue_interactive`)后,issue 脚本
+/// 调度路径退场。`ActiveRun` 只服务交互式交付(same-project 串行锁 +
+/// `CancelRun` 的 `abort` + settle 的 `finalize_run_interactive(_resume)` +
+/// worktree guard)。`proj`/`issue_ws`/`pr_eligible` 三字段曾服务 `issue_run_tail`
+/// 的 create_mr/transition,随该函数一并删去。`finalize: FinalizeCtx` 承载 settle
+/// 所需的 spec/proj/issue_id;`is_resume` 选 finalize 分支(settle-once)。
 struct ActiveRun {
     project: ProjectId,
     /// The bound Issue (id + number + github_number + title) — used to match
-    /// `CancelRun`'s id and to drive the tail's `create_mr` / transition.
+    /// `CancelRun`'s id and settle's conversation lookup.
     issue: Issue,
     handle: JoinHandle<()>,
     guard: bw_engine::workspace::IssueWorktreeGuard,
     finalize: FinalizeCtx,
-    // tail context (run_issue_settle's create_mr + transition):
-    proj: ProjectRow,
-    issue_ws: Option<PathBuf>,
-    pr_eligible: bool,
     /// V1 Issue2 Phase2a: whether this run is a resume (not the first run).
     /// Set from the conversation's claude_session_id at dispatch time. The settle arm
     /// uses it to pick `finalize_run_interactive_resume` (artifact scan only,
     /// no uses bump — settle-once) vs `finalize_run_interactive` (first run:
-    /// uses + artifacts). Both skip `issue_run_tail` (no MR creation — agent
-    /// does it in-session; InReview from polling).
+    /// uses + artifacts). Issue stays in its current state (never auto-Done).
     is_resume: bool,
 }
 
@@ -1230,20 +1223,19 @@ struct ConsultationRun {
     guard: bw_engine::workspace::IssueWorktreeGuard,
 }
 
-/// plan/17 S3: the shared 起手 prefix of an issue-run, returned by
-/// `prepare_issue_run` so the inline path (`run_issue_body`) and the
-/// backgrounded path (`run_issue_backgrounded`) start from the exact same
-/// setup — get+validate the Issue, build the stage-playbook `WorkflowSpec`
-/// (+ standard/distilled skill injection), transition to InProgress, and
-/// provision the isolated issue worktree behind an RAII guard. The guard is
-/// owned here so each caller can place it where the worktree must outlive
-/// (the inline path's local, or the backgrounded path's `ActiveRun`).
+/// V1 收口:the shared 起手 prefix of an issue-run, returned by
+/// `prepare_issue_run` so the interactive path (`run_issue_interactive`,
+/// first-run + resume branches) starts from the right setup — get+validate
+/// the Issue, build the stage-playbook `WorkflowSpec` (+ standard/distilled
+/// skill injection), transition to InProgress, and provision the isolated
+/// issue worktree behind an RAII guard. The guard is owned here so the caller
+/// can place it where the worktree must outlive (the interactive path's
+/// `ActiveRun`, or the consultation path's `ConsultationRun`).
 struct IssueRunPrep {
     issue: Issue,
     proj: ProjectRow,
     spec: WorkflowSpec,
     issue_ws: Option<PathBuf>,
-    pr_eligible: bool,
     guard: bw_engine::workspace::IssueWorktreeGuard,
     /// 同阶段蒸馏技能块(最多 3 条,经验复利)。V1 收口:interactive 路径
     /// 并进系统提示词(原来只进 phase-loop 的 spec.prompt,issue 全转终端
@@ -4943,15 +4935,13 @@ impl App {
             workspace_hint,
         };
         let mut spec = stage_workflow_with_playbook(issue.stage, &ctx);
-        let issue_brief = format!(
-            "\n\n## 本件活(Issue #{})\n标题:{}\n描述:{}\n请用本阶段方法论完成它,产出落为工作区真实文件。\n",
-            issue.number, issue.title, issue.desc
-        );
         // C8 · plan/13 D8: 标配 Issue 携带的稳定 Skill 关联(按 C9+C10 种下
         // 的 slug)。理论上仍可能查不到(例如 seed 尚未跑过的极早期状态),
-        // 那种情况如实跳过、零报错,不是本注入路径的正常状态。
-        let (standard_block, standard_refs) =
-            self.standard_skill_block(p, &issue.standard_skill).await?;
+        // 那种情况如实跳过、零报错,不是本注入路径的正常状态。V1 收口:issue
+        // 全转终端后 spec.prompt/phase_prompts 不再服务 issue(交互式用 bridge
+        // 系统提示词 + IssueRunPrep.distilled_block/catalog_block);这里只取
+        // `standard_refs` 给 `spec.skills` 记 uses,格式化块不再拼进 spec。
+        let (_, standard_refs) = self.standard_skill_block(p, &issue.standard_skill).await?;
         // Distilled (compounded) skills from this project, same-stage
         // preferred, capped at 3. Exclude `issue.standard_skill` by name —
         // since P3 a distilled skill can itself be picked as the standard
@@ -5013,20 +5003,7 @@ impl App {
             String::new()
         };
         spec.name = format!("#{} {}", issue.number, issue.title);
-        let extra = format!("{issue_brief}{standard_block}{distilled_block}{catalog_block}");
-        // 既有缺口(C8 顺带修复,非本票新增行为):`stage_workflow_with_playbook`
-        // 给每个 phase 都填了非空的 `phase_prompts[idx]`,而
-        // `Engine::run_workflow` 选 phase 的真实 prompt 时——`phase_prompts
-        // [idx]` 非空就直接用它,完全不读 `spec.prompt`(见
-        // bw-engine/src/lib.rs `run_workflow`)。之前这里只改了
-        // `spec.prompt`,对 playbook 跑法是死代码:issue 简介/复利技能从未
-        // 真正到达执行器。把 `extra` 同时贴进每个 `phase_prompts` 项才是真
-        // 注入;`spec.prompt` 仍然一并更新,兜底任何理论上仍为空的 phase。
-        spec.prompt = format!("{}{}", spec.prompt, extra);
-        for pp in spec.phase_prompts.iter_mut() {
-            pp.push_str(&extra);
-        }
-        // Put the injected skills on spec.skills so run_workflow_inner's
+        // Put the injected skills on spec.skills so finalize_run_interactive's
         // usage accounting bumps each one's `uses` — the compounding
         // loop closes here (a run that rides a distilled/standard skill →
         // uses+1, exactly once per ref present).
@@ -5100,183 +5077,33 @@ impl App {
             proj,
             spec,
             issue_ws,
-            pr_eligible,
             guard,
             distilled_block,
             catalog_block,
         })
     }
 
-    /// plan/17 S3: the shared tail of an issue-run — `create_mr` /
-    /// `transition InReview` / `refresh_issues` / emit, branching on the run
-    /// outcome. `Ok(Completed)` → InReview (iff a PR opened or the issue
-    /// isn't PR-eligible); `Ok(BlockedAtCap)` → park Blocked; `Err` → stay
-    /// InProgress (never auto-Done, 铁律). The guard is taken BY VALUE so it
-    /// outlives the tail's `create_mr` (which `stage_commit_push`es the
-    /// worktree) and drops at the end — removing the worktree only AFTER the
-    /// branch is pushed to `origin` for review/merge.
-    async fn issue_run_tail(
-        &mut self,
-        issue: Issue,
-        proj: ProjectRow,
-        issue_ws: Option<PathBuf>,
-        pr_eligible: bool,
-        run: Result<RunOutcome, AppError>,
-        _guard: bw_engine::workspace::IssueWorktreeGuard,
-    ) -> Result<(), AppError> {
-        let id = issue.id;
-        let on_issue_branch = issue_ws.is_some();
-        match run {
-            // A completed run only reaches 评审中 — never 完成. Done stays an
-            // explicit human act (merge / TransitionIssue,铁律).
-            Ok(RunOutcome::Completed) => {
-                // C5: on the issue branch → try to open the PR (提 PR).
-                // Success stores the PR number and lets the Issue reach
-                // InReview (which now *derives from an open PR*, D3).
-                // Failure fires an honest toast and leaves the Issue at
-                // InProgress — retryable via RunIssue, never faked into
-                // review with no PR behind it.
-                let opened_pr = if on_issue_branch {
-                    // Bug③ (2026-07-30): route PR/MR creation through the
-                    // Remote factory so codehub projects open a codehub MR
-                    // (`codehub-cli mr create`) instead of crashing `gh pr
-                    // create` (gh doesn't know codehub → issue stuck
-                    // InProgress, no InReview, SyncMetricsFile never ran).
-                    // Github projects delegate to `github::open_pr` unchanged.
-                    let remote = bw_engine::remote::Remote::for_project(
-                        &proj.provider,
-                        &proj.remote_host,
-                        &proj.remote_path,
-                    );
-                    let res: Result<bw_engine::github::PrOpened, String> = match remote {
-                        Ok(r) => r
-                            .create_mr(
-                                // plan/17 S2: open the MR from the issue's
-                                // isolated worktree (guaranteed Some by
-                                // `on_issue_branch`), not the shared main
-                                // workspace — `stage_commit_push` inside
-                                // commits the worktree's edits to `bw/issue-N`.
-                                issue_ws.as_deref().unwrap_or_else(|| {
-                                    std::path::Path::new(proj.workspace_path.trim())
-                                }),
-                                issue.github_number,
-                                &issue.title,
-                            )
-                            .await
-                            .map_err(|e| e.to_string()),
-                        Err(e) => Err(e.to_string()),
-                    };
-                    match res {
-                        Ok(bw_engine::github::PrOpened::Created(pr)) => {
-                            self.store.set_issue_pr_number(id, pr).await?;
-                            self.emit(Event::ConnectorSynced {
-                                name: format!("#{} · PR", issue.number),
-                                ok: true,
-                                detail: format!(
-                                    "已提 PR/MR #{pr}(关联 Issue #{}),等待人工 merge 验收",
-                                    issue.github_number
-                                ),
-                            });
-                            true
-                        }
-                        // 7A(真实践行暴露的缺口): 队友自己在 run 里跑了
-                        // `gh pr create`(允许,禁的只有 `gh pr merge`),BW
-                        // 再提一次时撞见"已存在"——不是失败,是提 PR 幂等。
-                        // 认领到的号是 `open_pr` 独立读回的真实号,诚实告知
-                        // 用户"这是认领来的",不混同成 BW 自己提的。
-                        Ok(bw_engine::github::PrOpened::Adopted(pr)) => {
-                            self.store.set_issue_pr_number(id, pr).await?;
-                            self.emit(Event::ConnectorSynced {
-                                name: format!("#{} · PR", issue.number),
-                                ok: true,
-                                detail: format!(
-                                    "已认领队友提的 PR/MR #{pr}(关联 Issue #{}),等待人工 merge 验收",
-                                    issue.github_number
-                                ),
-                            });
-                            true
-                        }
-                        Err(e) => {
-                            self.emit(Event::ConnectorSynced {
-                                name: format!("#{} · PR", issue.number),
-                                ok: false,
-                                detail: format!("提 PR/MR 失败,活留在进行中可重试:{e}"),
-                            });
-                            false
-                        }
-                    }
-                } else {
-                    false
-                };
-                // InReview iff there's really something to review: an
-                // open PR (pr issues), or — for no-repo/unmapped issues
-                // — the run succeeding (今天的意思,未变). A
-                // pr_eligible issue whose PR failed stays InProgress.
-                if !pr_eligible || opened_pr {
-                    self.store
-                        .transition_issue(id, IssueStatus::InReview)
-                        .await?;
-                }
-                self.refresh_issues().await?;
-                self.emit(Event::IssuesChanged);
-                Ok(())
-            }
-            Ok(RunOutcome::BlockedAtCap { reason }) => {
-                // T9 (plan/12 §4,合流移植): the adversarial loop hit its cap
-                // without passing. Never auto-Done, never auto-Failed: park the
-                // work in Blocked via the SAME guarded path `BlockIssue` uses —
-                // `can_transition_to` is the single source of truth. Re-read
-                // the current status (the run left it InProgress);
-                // InProgress→Blocked is a legal edge. 不提 PR:没通过评审门的
-                // 产出不该进验收队列。
-                let cur = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
-                if cur.status.can_transition_to(IssueStatus::Blocked) {
-                    self.store.block_issue(id, &reason).await?;
-                }
-                self.emit(Event::WorkflowFailed(format!(
-                    "Issue #{} {}",
-                    issue.number, reason
-                )));
-                self.refresh_issues().await?;
-                self.emit(Event::IssuesChanged);
-                Ok(())
-            }
-            Err(e) => {
-                // Honest failure: the issue stays InProgress (not faked
-                // to InReview/Done/Blocked). Done remains a human
-                // TransitionIssue; a retry re-runs from InProgress.
-                self.emit(Event::WorkflowFailed(format!(
-                    "Issue #{} 运行失败:{}",
-                    issue.number, e
-                )));
-                self.refresh_issues().await?;
-                self.emit(Event::IssuesChanged);
-                Err(e)
-            }
-        }
-    }
-
-    /// A3: INLINE issue-run path (examples / headless drivers — `settle_tx`
-    /// = None). `prepare_issue_run` → `run_workflow_inner` (起手+loop+
-    /// finalize, awaited inline) → `issue_run_tail`. Byte-for-byte the
-    /// V1 Issue2 Phase1: the INTERACTIVE issue-run path (one-shot TUI agent
-    /// session, no phase loop). Same 起手 prefix (`prepare_issue_run`) as the
+    /// V1 收口:the INTERACTIVE issue-run path (one-shot TUI agent session,
+    /// no phase loop). Same 起手 prefix (`prepare_issue_run`) as the old
     /// phase-loop path, then builds a [`LaunchPlan`] (skill body from the
     /// Skill Hub + bridge system prompt from [`PlaybookCtx`]) and either:
     ///  - **Backgrounded** (`settle_tx` wired — desktop kernel): spawn a
-    ///    task that calls [`InteractiveExecutor::run_skill`], report back
-    ///    via `settle_tx`. The kernel's settle arm drives
-    ///    `finalize_run_interactive` + `issue_run_tail`.
+    ///    task that calls [`InteractiveExecutor::run_skill_pty`] (PTY spawn +
+    ///    byte streaming), report back via `settle_tx`. The kernel's settle
+    ///    arm drives `finalize_run_interactive(_resume)` + PTY close + guard
+    ///    drop (no `issue_run_tail` — MR 由 agent 自提、InReview 由 poll 检测;
+    ///    无 MR 的活诚实停在 InProgress,铁律:Done 永不自动)。
     ///  - **Inline** (`settle_tx` = None — examples / headless drivers):
-    ///    await `run_skill` inline, then `finalize_run_interactive` +
-    ///    `issue_run_tail` synchronously.
+    ///    await `run_skill` inline, then `finalize_run_interactive`
+    ///    synchronously.
     ///
     /// A project with no real `workspace_path` runs on
     /// [`MockInteractiveExecutor`] (self-labeled 【mock】 + placeholder
     /// `.bw/metrics.toml`); a configured one runs on
-    /// [`InteractiveCliExecutor`] (spawns a system terminal running the
-    /// `claude` CLI). **one-shot ClaudeCliExecutor 路径零扰动** — other
-    /// issues still use `run_issue_backgrounded` / `run_issue_body`.
+    /// [`InteractiveCliExecutor`] (spawns a PTY running the
+    /// `claude` CLI). V1 收口:所有 issue ▶跑 都走本函数(issue 脚本调度
+    /// 路径 `run_issue_body`/`run_issue_backgrounded`/`issue_run_tail` 已删,
+    /// 不为向后兼容留旧路径)。
     async fn run_issue_interactive(
         &mut self,
         _session: SessionId,
@@ -5319,7 +5146,6 @@ impl App {
             proj,
             spec,
             issue_ws,
-            pr_eligible,
             guard,
             distilled_block,
             catalog_block,
@@ -5525,9 +5351,6 @@ impl App {
                     p,
                     issue_id: Some(id),
                 },
-                proj,
-                issue_ws,
-                pr_eligible,
                 is_resume,
             });
             Ok(())
@@ -5609,7 +5432,6 @@ impl App {
             proj,
             spec: _,
             issue_ws,
-            pr_eligible: _,
             guard,
             distilled_block: _,
             catalog_block: _,
@@ -5728,15 +5550,12 @@ impl App {
             self.state.active_run = Some(ar);
             return Ok(());
         }
-        // V1 Issue2 Phase2a: interactive sessions skip `issue_run_tail`
-        // entirely (no MR creation — the agent creates it in-session; no
-        // InReview transition from the run — polling detects open MR).
-        // First run: `finalize_run_interactive` (uses + artifacts). Resume:
-        // `finalize_run_interactive_resume` (artifacts only, settle-once).
-        // V1 收口:issue 阶段循环路径退场 —— settle 只剩 Interactive(交付)
-        // 与 ConsultationEnded(咨询,上方已早返回)。`interactive` 现恒真,
-        // 下方 else(issue_run_tail)已不可达,留待阶段2 一并清。
-        let interactive = matches!(req.outcome, SettleOutcome::Interactive(_));
+        // V1 收口:issue ▶跑 全走嵌入终端后,settle 只剩 Interactive(交付)与
+        // ConsultationEnded(咨询,上方已早返回)。First run: `finalize_run_interactive`
+        // (uses + artifacts)。Resume: `finalize_run_interactive_resume` (artifacts
+        // only, settle-once)。无 `issue_run_tail`:MR 由 agent 自提、InReview 由
+        // `poll_interactive_inreview` 检测;无 MR 的活诚实停在 InProgress,不假装
+        // 前进(铁律:Done 永不自动)。
         let outcome = match req.outcome {
             SettleOutcome::Interactive(Ok(skill_output)) => {
                 if ar.is_resume {
@@ -5762,42 +5581,27 @@ impl App {
             SettleOutcome::Interactive(Err(e)) => Err(e),
             SettleOutcome::ConsultationEnded { .. } => unreachable!("handled above"),
         };
-        if interactive {
-            // No `issue_run_tail` for interactive — the agent creates the MR
-            // in-session and the InReview poller detects it. Guard drops
-            // here (worktree cleanup); the issue stays in its current state
-            // (InProgress on first run, unchanged on resume). Never auto-Done.
-            // 只关本件交付 PTY,不伤后台咨询。
-            if let Ok(Some(c)) = self.store.get_conversation_by_issue(ar.issue.id).await {
-                self.state.terminal_manager.close(c.id);
-                self.clear_focus_if(c.id);
-                self.clear_restoring_if(c.id);
-            }
-            self.forget_interactive_session(ar.issue.id);
-            drop(ar.guard);
-            self.refresh_issues().await?;
-            self.emit(Event::IssuesChanged);
-            outcome.map(|_| ())
-        } else {
-            self.issue_run_tail(
-                ar.issue,
-                ar.proj,
-                ar.issue_ws,
-                ar.pr_eligible,
-                outcome,
-                ar.guard,
-            )
-            .await
+        // No `issue_run_tail` — the agent creates the MR in-session and the
+        // InReview poller detects it. Guard drops here (worktree cleanup); the
+        // issue stays in its current state (InProgress on first run, unchanged
+        // on resume). Never auto-Done. 只关本件交付 PTY,不伤后台咨询。
+        if let Ok(Some(c)) = self.store.get_conversation_by_issue(ar.issue.id).await {
+            self.state.terminal_manager.close(c.id);
+            self.clear_focus_if(c.id);
+            self.clear_restoring_if(c.id);
         }
+        self.forget_interactive_session(ar.issue.id);
+        drop(ar.guard);
+        self.refresh_issues().await?;
+        self.emit(Event::IssuesChanged);
+        outcome.map(|_| ())
     }
 
-    /// plan/17 S3 (① 中止): abort the in-flight backgrounded run on an issue.
-    /// `abort` the `JoinHandle` (the engine's child `claude` subprocess is
-    /// killed via `kill_on_drop`), then run the honest failure tail — the
+    /// plan/17 S3 (① 中止): abort the in-flight backgrounded interactive run
+    /// on an issue. `abort` the `JoinHandle` (the `claude` subprocess is killed
+    /// via `kill_on_drop`), then close the PTY + drop the worktree guard. The
     /// issue STAYS `InProgress` (retryable), `settled_at` stays empty (no
-    /// auto-Done, 铁律), the worktree is torn down (guard drops). No
-    /// `finalize_run` accounting: the aborted round's `workflow_run` row stays
-    /// "started, never settled" (honest), and agent/skill `uses` are NOT
+    /// auto-Done, 铁律). No `finalize_run` accounting: agent/skill `uses` are NOT
     /// bumped — a cancelled run did not complete, so not counting it as a use
     /// is the honest call (偏差 vs the normal `Failed` path which does
     /// finalize with `run_ok=false`; noted in the commit). A normal

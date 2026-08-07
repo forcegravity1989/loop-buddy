@@ -2983,19 +2983,26 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
     };
     rsx! {
         RunBanner { run: run.clone() }
-        div {
-            style: "{card} padding:18px 20px;margin-bottom:14px;",
+        // V1-TermClose2 · UI 门控:方法循环卡(来自 stage_workflow)只在无终端
+        // 会话(!pty_active)时显——issue 终端会话无 phase loop,显这张卡会误导。
+        // 阶段循环会话(stage playbook / hub workflow / cron,无 PTY)仍显。
+        // 内含的「↑ 沉淀为静态」按钮语义不变(只 op.chat.is_some() && !pty_active
+        // 时显,本卡门控不改变其条件)。
+        if !op.pty_active {
             div {
-                style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
-                span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{spec_preview.name}" }
-            }
-            div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
-            div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
-            if op.chat.is_some() && !op.pty_active {
-                button {
-                    style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
-                    onclick: promote,
-                    "↑ 沉淀为静态"
+                style: "{card} padding:18px 20px;margin-bottom:14px;",
+                div {
+                    style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
+                    span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{spec_preview.name}" }
+                }
+                div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
+                div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
+                if op.chat.is_some() && !op.pty_active {
+                    button {
+                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
+                        onclick: promote,
+                        "↑ 沉淀为静态"
+                    }
                 }
             }
         }
