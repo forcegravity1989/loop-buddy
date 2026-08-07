@@ -316,7 +316,7 @@ impl TerminalManager {
   - `open_conversation`:Done/InReview + 非空 `claude_session_id` → `prepare_issue_run(resume)` + `attach` + `consultation_runs`;settle 用 `ConsultationEnded`(关 PTY + drop guard,不碰状态/settle-once)。
   - `attach` 不杀 peer;`ConversationMeta.issue_id` 供焦点回落;`focused_conversation`/`focused_issue` 驱动 UI。
   - UI:看板「当前会话」徽 + 「续聊」;`pty_live_ids` 多 xterm 常驻(非焦点 `display:none`);`OpenIssueDetail` 有活 PTY 只切焦点。
-  - 咨询 prompt /「转成新活」仍属阶段·咨询态(TermRefactor5)。
+  - 咨询 prompt /「转成新活」→ 阶段·咨询态(TermRefactor5)已落地。
 - **阶段·重启恢复实施决定(2026-08-07)**:
   - Boot **确认不唤醒**:`Command::Boot` 只重算信号/播种/对账,不 spawn 任何历史会话;注释钉死。
   - 点卡唤醒复用现路径,不造第二条:`OpenIssueDetail` 在 `!is_live` + 非空 `claude_session_id` 时调 `run_issue_now` → Done/InReview 进已有 `open_conversation`,InProgress 进 `run_issue_interactive` 的 `is_resume` 分支;`▶`/`续聊` 仍走 `RunIssue`。
