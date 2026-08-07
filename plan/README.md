@@ -4,7 +4,15 @@
 >
 > 看不懂的词查 [`../CONTEXT.md`](../CONTEXT.md) 词表;看不懂的代号(P2、W6、R1……)查 [`../docs/code-schemes.md`](../docs/code-schemes.md)。
 
-## 现在还作数的(改东西之前读这三篇)
+## vNext 现行方向
+
+| 文件 | 是什么 |
+|---|---|
+| [22-vnext-opc-control-plane-rebuild.md](22-vnext-opc-control-plane-rebuild.md) | **vNext 单一计划事实源**：把 Bench 重建为以 Rust 为主体、通过 Connector 组合成熟组件的 OPC 项目控制面。新实现先读这一篇。 |
+
+## 旧应用仍作数的事实源
+
+以下三篇继续解释当前旧应用的行为和历史约束，但不再约束 vNext 的产品中心与技术骨架。
 
 | 文件 | 是什么 |
 |---|---|
