@@ -9235,7 +9235,36 @@ impl App {
             }
 
             Command::DeleteProject(id) => {
+                // W3-9: cache the project row before delete_project wipes it,
+                // then judge whether its workspace is a buddy-built clone
+                // (under workspaces_root, named <slug>-<uuid8hex>) — only
+                // those get removed. A user-bound pre-existing directory is
+                // never touched (the user may want to keep the evidence).
+                // Order is DB-first: delete_project succeeds, then best-effort
+                // remove_dir_all — a dir left behind is a manual cleanup, the
+                // reverse (dir gone, DB row still pointing at it) is worse.
+                let cached_proj = self.store.get_project(id).await?;
                 self.store.delete_project(id).await?;
+                if let Some(proj) = cached_proj {
+                    if is_buddy_built_clone(
+                        &proj.workspace_path,
+                        &proj.name,
+                        id,
+                        self.workspaces_root.as_deref(),
+                    ) {
+                        if let Err(e) = std::fs::remove_dir_all(std::path::Path::new(
+                            proj.workspace_path.trim(),
+                        )) {
+                            // DB row is already gone — a leftover dir is a
+                            // manual cleanup, not a data-integrity break.
+                            // Loud, honest, non-fatal.
+                            eprintln!(
+                                "W3-9: 删项目 {} 的 buddy 自建工作目录失败(目录残留,可手动删): {}",
+                                proj.name, e
+                            );
+                        }
+                    }
+                }
                 if self.state.active_project == Some(id) {
                     self.state.active_project = None;
                     self.state.active_session = None;
@@ -9407,6 +9436,34 @@ fn workspace_slug(name: &str, id: ProjectId) -> String {
         format!("proj-{id8}")
     } else {
         format!("{base}-{id8}")
+    }
+}
+
+/// W3-9: tell apart a buddy-provisioned workspace clone (under
+/// `workspaces_root`, named `<slug>-<uuid8hex>` — safe to delete with the
+/// project) from a user-bound pre-existing directory (the user's own path,
+/// which buddy must never delete). The judgment is path-based: `project`
+/// has no `is_bound` column, so this is the only reliable discriminator.
+fn is_buddy_built_clone(
+    workspace_path: &str,
+    name: &str,
+    id: ProjectId,
+    workspaces_root: Option<&std::path::Path>,
+) -> bool {
+    let ws = workspace_path.trim();
+    if ws.is_empty() {
+        return false;
+    }
+    let Some(root) = workspaces_root else {
+        return false;
+    };
+    let path = std::path::Path::new(ws);
+    if !path.starts_with(root) {
+        return false;
+    }
+    match path.file_name().and_then(|n| n.to_str()) {
+        Some(name_on_disk) => name_on_disk == workspace_slug(name, id),
+        None => false,
     }
 }
 

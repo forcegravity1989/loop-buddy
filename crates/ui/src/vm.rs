@@ -48,6 +48,10 @@ pub struct ProjectCardVm {
     /// the A4 handoff risky-guard) — the wall's "open work" badge. `0` means
     /// the badge doesn't render; this field just carries the honest number.
     pub open_issues: usize,
+    /// W3-9: the project's real-executor target directory (empty = unconfigured).
+    /// Surfaced so the delete-confirm UI can show the path the user is about
+    /// to lose (or keep, if it's a user-bound dir).
+    pub workspace_path: String,
 }
 
 /// Build one wall card. `stage_progresses` = the project's real stage progress
@@ -64,6 +68,7 @@ pub fn project_card(
     signal: Option<Signal>,
     stage_progresses: &[u8],
     open_issues: usize,
+    workspace_path: &str,
 ) -> ProjectCardVm {
     let running = phase == Readiness::Running;
     let progress = if running {
@@ -95,6 +100,7 @@ pub fn project_card(
         meta,
         cycle_label: cycle.label(),
         open_issues,
+        workspace_path: workspace_path.into(),
     }
 }
 

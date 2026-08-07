@@ -794,6 +794,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             p.signal,
             &stage_progresses,
             open_issues,
+            &p.workspace_path,
         ));
     }
 
