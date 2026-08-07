@@ -298,6 +298,7 @@ impl TerminalManager {
 - **阶段1 实施决定(2026-08-07)**:
   - 旧列 `interactive_started`/`claude_session_id` **物理删除**(非留空),用 `drop_column_if_present`(SQLite 3.35+ `ALTER TABLE DROP COLUMN`,本仓 bundled sqlite 3.44+ 远高于门槛,环境 sqlite3 CLI 3.53.4 验证通过)。迁移顺序:先 `migrate_claude_conversations` 搬运(INSERT OR IGNORE,issue_id UNIQUE 兜底幂等),再 DROP 两列——搬完 DROP 不丢数据(读回为证:claude_conversation 行仍在,issue 表无旧两列)。
   - conversation 行建行时机:首次 spawn 前 `ensure_conversation`(INSERT OR IGNORE,行存在 = 旧 `interactive_started` 语义)+ hook SessionStart `set_conversation_session_id`(UPDATE,claude_session_id 非空 = 旧 `claude_session_id` 非空语义)。is_resume 改读 `conv.claude_session_id 非空`;is_interactive 改读 `conv 行存在`。
+  - **迁移 edge case(存量 F1 失败态)**:迁移只搬 `claude_session_id != ''` 的行。存量里 `interactive_started=1 && claude_session_id=''` 的 issue(spawn 尝试过但 hook 未捕获 session_id)不会被搬 → 迁移后无 conv 行 → `is_interactive` 从 true 临时变 false(直到用户再点 ▶ 触发 `ensure_conversation` 建行自愈)。`is_resume` 两边等价(都 false)。严重度低:自愈、poll 只到 InReview 不到 Done、不碰铁律。上方「行存在 = 旧 `interactive_started` 语义」对 going-forward 成立,对存量该 edge case 不完全成立(已知,接受)。
   - 迁移时 `workspace_path`/`branch_name` 尽力推:branch = `bw/issue-<github_number>`(github_number 非0);workspace_path 推 worktree 兄弟路径 `<parent>/<stem>-issue-<github_number>`(project.workspace_path 非空 + github_number 非0),推不出留空(阶段4 resume 时回填)。
   - `TerminalManager` 骨架在 bw-engine(无 PTY,阶段2 接入),阶段1 无调用点,`#[allow(dead_code)]` 注明。
   - `issue_detail_vm` 纯函数加 `is_interactive: bool` 参数(不读 issue 旧字段),调用链 OpenIssueDetail → IssueDetailData.is_interactive → kernel.rs → vm。

@@ -468,10 +468,11 @@ async fn drop_column_if_present(
 /// UNIQUE 兜底),重复 `open()` 不产生重复行。`workspace_path`/
 /// `branch_name` 能从 issue + project 推就推(worktree 兄弟路径
 /// `<主>-issue-<github_number>` + 分支 `bw/issue-<github_number>`),推
-/// 不出留空等首次 open 填。旧列暂不删(阶段3 才 DROP);阶段3 DROP 旧列
-/// 后这函数从 PRAGMA 检测到列不在直接 no-op。
+/// 不出留空等首次 open 填。旧列已在本阶段 DROP(见下方
+/// `drop_column_if_present`,先搬后删,数据不丢);DROP 后这函数从 PRAGMA
+/// 检测到列不在直接 no-op(二次 open 安全)。
 async fn migrate_claude_conversations(pool: &SqlitePool) -> Result<()> {
-    // 阶段3 已删旧列 → 搬无可搬,no-op。
+    // 本阶段已 DROP 旧列 → 搬无可搬,no-op。
     let has_legacy = sqlx::query("PRAGMA table_info(issue)")
         .fetch_all(pool)
         .await?

@@ -1213,7 +1213,7 @@ struct ActiveRun {
     issue_ws: Option<PathBuf>,
     pr_eligible: bool,
     /// V1 Issue2 Phase2a: whether this run is a resume (not the first run).
-    /// Set from `issue.interactive_started` at dispatch time. The settle arm
+    /// Set from the conversation's claude_session_id at dispatch time. The settle arm
     /// uses it to pick `finalize_run_interactive_resume` (artifact scan only,
     /// no uses bump — settle-once) vs `finalize_run_interactive` (first run:
     /// uses + artifacts). Both skip `issue_run_tail` (no MR creation — agent
@@ -1304,7 +1304,7 @@ pub struct AppState {
     pub github_repos: Vec<GithubRepoSummary>,
     /// V1 Issue2 Phase2a: unix ts of the last InReview poll for interactive
     /// issues. The poller checks codehub/github for open MRs on interactive
-    /// issues that are InProgress + `interactive_started` + `pr_number == 0`.
+    /// issues that are InProgress + have a claude_conversation row (interactive) + `pr_number == 0`.
     /// Throttled to once per 5 minutes so it doesn't hit the remote every
     /// `tick_scheduler` fire. `0` = never polled (first tick runs it).
     pub last_inreview_poll: i64,
@@ -1847,7 +1847,7 @@ impl App {
     }
 
     /// V1 Issue2 Phase2a: poll codehub/github for open MRs on interactive
-    /// issues that are InProgress + `interactive_started` + `pr_number == 0`.
+    /// issues that are InProgress + have a claude_conversation row (interactive) + `pr_number == 0`.
     /// When an open MR is found (读回为证: buddy checks the remote itself,
     /// not agent self-report), it backfills `pr_number` and transitions to
     /// InReview (D3: 评审中由存在开放 PR 派生). Never reaches Done — that
@@ -4561,7 +4561,7 @@ impl App {
 
         // V1 Issue2 Phase2a: InReview detection poller (throttled backstop).
         // Checks codehub/github for open MRs on interactive issues (InProgress
-        // + interactive_started + pr_number == 0). Not a cron task — a
+        // + interactive (has conversation) + pr_number == 0). Not a cron task — a
         // separate periodic check that rides `tick_scheduler`'s cadence
         // but throttles to once per 5 min so it doesn't hit the remote
         // every tick. Never auto-Done (铁律) — only backfills pr_number +
@@ -4795,7 +4795,7 @@ impl App {
     /// spec / worktree / guard setup is never duplicated.
     ///
     /// V1 Issue2 Phase2a: `resume` controls the interactive resume path.
-    /// When `true` (interactive issue with `interactive_started = true`
+    /// When `true` (interactive issue with an existing claude_conversation row
     /// re-clicked ▶跑): skip the status check (Done/InReview can resume —
     /// the session persists, no status change happens) and skip the
     /// InProgress transition (the issue stays in its current state). The
@@ -5344,17 +5344,14 @@ impl App {
         _session: SessionId,
         id: IssueId,
     ) -> Result<(), AppError> {
-        // V1 Issue2 Phase2b: first-run vs resume — decided by claude_session_id
-        // (F1 fix). `interactive_started` is set before spawn (marks an attempt);
-        // `claude_session_id` is set by the hook listener on SessionStart (marks
-        // the session was actually established). If session_id is empty, the first
-        // spawn either failed or the hook hasn't fired → use build_startup_plan
-        // (re-inject skill, don't get stuck in a skill-less session). If
-        // session_id is non-empty → resume with `--resume <id>` (precise session).
-        // V1 终端会话重构(阶段1): is_resume 改读 claude_conversation 行
-        // (按 issue_id 查,非空 claude_session_id = resume)。替代旧
-        // issue.claude_session_id —— 会话身份搬到新表,业务零读旧列。空
-        // session_id = 首次 spawn 没捕获到 → fallback build_startup_plan(F1)。
+        // V1 终端会话重构(阶段1): first-run vs resume — decided by the
+        // claude_conversation 行(按 issue_id 查,非空 claude_session_id =
+        // resume)。会话身份在 claude_conversation 表(不在 issue 行):首次
+        // spawn 前 ensure_conversation 建行(留空 claude_session_id + 填
+        // workspace_path/branch);hook SessionStart 回传填 claude_session_id。
+        // 空 claude_session_id = 首次 spawn 没捕获到(失败或 hook 未 fire)→
+        // fallback build_startup_plan(重灌 skill,F1)。非空 → `--resume <id>`
+        // (precise session)。
         let conv = self.store.get_conversation_by_issue(id).await?;
         let is_resume = conv
             .as_ref()
@@ -5429,14 +5426,11 @@ impl App {
                 .map_err(|e| AppError::Engine(e.to_string()))?
         };
 
-        // Mark interactive_started before spawning (first run only) so a
-        // re-click routes to resume. Set before spawn: even if spawn fails,
-        // the next attempt re-tries as resume (which is safe — `--continue`
-        // on a non-existent session just starts a fresh one in claude's CLI).
-        // V1 Issue2 Phase2b: the resume decision now uses `claude_session_id`
-        // (not `interactive_started`) — see the F1 fix at the top of this
-        // function. `interactive_started` is still set (marks a spawn was
-        // attempted, used by the poller's filter).
+        // 首次 spawn 前建会话行(见下方 ensure_conversation);re-click 走
+        // resume 由行里非空 claude_session_id 判定(见上方 F1)。Set before
+        // spawn: even if spawn fails, the row exists so a re-click re-tries as
+        // resume(safe — `--resume` on a non-existent session just starts a
+        // fresh one in claude's CLI).
         // V1 终端会话重构(阶段1): 首次 spawn 前建会话行(ensure_conversation
         // 替代旧 set_issue_interactive_started)。行存在 = 开过交互式会话
         // (is_interactive 判断 + poll filter 读这个)。claude_session_id 留空,

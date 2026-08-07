@@ -603,7 +603,7 @@ fn VersionPanel(op: OpVm) -> Element {
 /// An Issue's 「▶ 跑」 used to mint a brand-new `SessionId` on every click,
 /// even when the issue already had a resumable session — `run_issue_interactive`
 /// resumes the same underlying claude session via `claude_session_id` on the
-/// issue row regardless of which `SessionId` the UI passes in, so the extra
+/// claude_conversation row regardless of which `SessionId` the UI passes in, so the extra
 /// records were purely cosmetic: a growing pile of dead-looking "阶段记录"
 /// cards, all titled after the same issue, that the user can't tell apart or
 /// delete. There's no `issue_id` column on `session` (a schema change this
