@@ -42,6 +42,23 @@ cargo check -p app-desktop
 cargo run -p bw-app --example real_demo -- <db-path> <workspaces-root> [--mock] [--only <slug>]
 ```
 
+## 共享代码图谱
+
+仓库内的 `.codegraph/codegraph.db` 是给全体成员共用的代码关系快照。先安装
+`scripts/codegraph-version` 指定的 CodeGraph 版本；理解跨文件调用链或影响面时,
+优先运行 `codegraph explore`、`callers`、`callees`、`impact`,不要先把大量源码整份
+读进上下文。改代码后运行 `codegraph sync`,让本地查询保持最新。
+
+功能分支不要提交数据库:PR 上的 `CodeGraph / verify shared graph` 会独立增量更新并
+检查图谱和 SQLite 完整性;合入 `main` 且常规 `CI` 通过后,
+`CodeGraph / publish shared graph` 由 GitHub Actions 串行刷新数据库并提交。这样只有
+机器人写共享的二进制快照,并行 PR 不会围绕数据库产生合并冲突。需要本地复核同一套
+门禁时运行:
+
+```bash
+./scripts/verify-codegraph.sh
+```
+
 ## 怎么验证(本仓库不写单元测试)
 
 2026-07-17 起的纪律:**行为正确性靠端到端验证,不靠测试基线**。具体做法、深链环境变量、computer-use 的坑,全在 `CLAUDE.md`「核心纪律」一节,此处只记住三句话:

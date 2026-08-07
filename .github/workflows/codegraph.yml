@@ -1,0 +1,88 @@
+name: CodeGraph
+
+on:
+  pull_request:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CODEGRAPH_TELEMETRY: "0"
+  CODEGRAPH_NO_DAEMON: "1"
+  CODEGRAPH_NO_UPDATE_CHECK: "1"
+
+jobs:
+  verify:
+    name: verify shared graph
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pinned CodeGraph
+        run: |
+          version="$(tr -d '[:space:]' < scripts/codegraph-version)"
+          npm install --global "@colbymchenry/codegraph@${version}"
+      - name: Sync and verify graph
+        run: ./scripts/verify-codegraph.sh
+
+  publish:
+    name: publish shared graph
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: codegraph-snapshot-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pinned CodeGraph
+        run: |
+          version="$(tr -d '[:space:]' < scripts/codegraph-version)"
+          npm install --global "@colbymchenry/codegraph@${version}"
+      - name: Refresh and publish the shared snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git checkout --force -B codegraph-refresh origin/main
+            ./scripts/verify-codegraph.sh
+
+            if git diff --quiet -- .codegraph/codegraph.db; then
+              echo "Shared CodeGraph snapshot is already current."
+              exit 0
+            fi
+
+            git add .codegraph/codegraph.db
+            git commit -m "chore(codegraph): refresh shared snapshot"
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+
+            echo "main advanced during publication; rebuilding from the new tip (${attempt}/3)."
+          done
+
+          echo "Could not publish the CodeGraph snapshot after three attempts." >&2
+          exit 1

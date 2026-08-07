@@ -1,16 +1,9 @@
 //! The domain entity graph (plan `§2`), modelled so illegal states are
-//! unrepresentable. Mirrors the prototype's `state.*` but replaces every
-//! hand-written signal with a [`SignalCache`] that only the derive chain can fill.
-//!
-//! ## A note on `Serialize` without `Deserialize`
-//!
-//! Structs that embed a [`SignalCache`] (`StageMetric`, `Routine`, `OpStage`,
-//! `Project`) derive `Serialize` (export to a UI DTO) but **not** `Deserialize`:
-//! a cached signal must never be reconstructed from bytes — it is recomputed on
-//! load (plan `§2.5`: "绝不把缓存当权威"). Leaf, signal-free structs are fully
-//! `serde`-round-trippable.
+//! unrepresentable. Derived signals are never hand-written: only the derive
+//! chain ([`crate::derive`]) produces a [`Derived<Signal>`], and persisted
+//! caches are recomputed on load, never trusted as authority (plan `§2.5`:
+//! "绝不把缓存当权威").
 
-use crate::derive::{AmberBand, Derived};
 use crate::ids::{
     AgentId, ArtifactId, ConnectorId, ConversationId, CronTaskId, IssueId, KnowledgeSourceId,
     ProjectId, SessionId, SkillId, WorkflowId, WorkflowRunId,
@@ -28,16 +21,6 @@ pub enum Signal {
     Amber,
     Red,
     Unknown,
-}
-
-/// Write-through cache for a derived signal. `None` = cache miss / not yet
-/// computed ⇒ recompute, never assume green. Only the derive chain can produce
-/// the inner `Derived<Signal>` (see [`crate::derive`]).
-pub type SignalCache = Option<Derived<Signal>>;
-
-/// Read a signal cache, treating an empty cache as `Unknown` (not green).
-fn cached(c: &SignalCache) -> Signal {
-    c.as_ref().map(|d| *d.get()).unwrap_or(Signal::Unknown)
 }
 
 // ───────────────────────────── metrics ─────────────────────────────
@@ -367,55 +350,6 @@ impl StageKind {
     }
 }
 
-/// One KPI under a stage. `signal` is the L3 write-through cache.
-#[derive(Clone, Debug, Serialize)]
-pub struct StageMetric {
-    pub name: String,
-    /// Latest display value, e.g. `"60%"` / `"5/7"` / `"842ms"`.
-    pub value_raw: String,
-    /// Target in the mini-DSL, e.g. `"≥5"` / `"≤24h"` / `"清零"`.
-    pub target_raw: String,
-    /// Per-metric Amber band (default `RelPct(0.10)`).
-    pub amber: AmberBand,
-    /// Recent series for sparkline + `↑` direction targets.
-    pub trend: Vec<f32>,
-    /// L3 cache — only [`crate::derive::evaluate_metric`] can fill it.
-    pub signal: SignalCache,
-}
-
-impl StageMetric {
-    /// The cached signal, or `Unknown` if not yet computed.
-    pub fn signal(&self) -> Signal {
-        cached(&self.signal)
-    }
-}
-
-/// One of the five stages in a running project. `kind`'s methodology metadata
-/// (core question, method loop, DoD item labels, AI crew, anti-patterns) is
-/// **static** (see `StageKind` methods) — only the dynamic operating facts
-/// live here.
-#[derive(Clone, Debug, Serialize)]
-pub struct OpStage {
-    pub kind: StageKind,
-    pub progress: u8,
-    pub trend: Vec<f32>,
-    pub metrics: Vec<StageMetric>,
-    pub routine: Routine,
-    /// Handoff/DoD checklist state, same length + index as
-    /// [`StageKind::dod_items`]. A human check — never derived, never faked.
-    pub dod: Vec<bool>,
-    pub create: Vec<Session>,
-    pub optimize: Vec<Session>,
-}
-
-impl OpStage {
-    /// **L5.** Stage health is exactly the routine signal — a pure projection,
-    /// not an independent field (plan `§2.5`).
-    pub fn health(&self) -> Signal {
-        self.routine.signal()
-    }
-}
-
 // ─────────────────────────── routine ───────────────────────────
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -433,32 +367,6 @@ pub enum FeedLevel {
     Info,
     Warn,
     Err,
-}
-
-/// One append-only observation record in a routine feed.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FeedItem {
-    /// Human time label (`今日` / `本周` / `2min前`).
-    pub time_label: String,
-    pub level: FeedLevel,
-    pub text: String,
-}
-
-/// Scheduled observation for a stage. `signal` is the L4 worst-of cache.
-#[derive(Clone, Debug, Serialize)]
-pub struct Routine {
-    pub schedule: Cadence,
-    /// L4 cache — only [`crate::derive::reduce_worst_of`] can fill it.
-    pub signal: SignalCache,
-    pub watches: Vec<String>,
-    pub feed: Vec<FeedItem>,
-}
-
-impl Routine {
-    /// The cached routine signal, or `Unknown` if not yet computed.
-    pub fn signal(&self) -> Signal {
-        cached(&self.signal)
-    }
 }
 
 // ─────────────────────────── sessions ───────────────────────────
@@ -481,21 +389,6 @@ pub enum Author {
     Builder,
     /// Agent — left, white bubble.
     Agent,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Message {
-    pub role: Author,
-    pub text: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Session {
-    pub id: SessionId,
-    pub title: String,
-    pub snippet: String,
-    pub status: SessionStatus,
-    pub msgs: Vec<Message>,
 }
 
 // ─────────────────────────── workflow ───────────────────────────
@@ -2311,14 +2204,6 @@ impl MaturityPeriod {
         }
     }
 
-    pub fn sub_label(self) -> &'static str {
-        match self {
-            MaturityPeriod::Explore => "0→1 · 未达 PMF",
-            MaturityPeriod::Expand => "1→N · 增长",
-            MaturityPeriod::Mature => "Sustain · 原「运维」期",
-        }
-    }
-
     /// Percentage weight per [`StageKind::ALL`] stage, summing to 100.
     pub fn mix(self) -> [u8; 5] {
         match self {
@@ -2326,43 +2211,6 @@ impl MaturityPeriod {
             MaturityPeriod::Expand => [10, 25, 20, 30, 15],
             MaturityPeriod::Mature => [5, 10, 25, 25, 35],
         }
-    }
-
-    pub fn main_loop_label(self) -> &'static str {
-        match self {
-            MaturityPeriod::Explore => "主环 · 原型 ↔ 构建 来回",
-            MaturityPeriod::Expand => "主环 · 构建 → 优化 → 推广",
-            MaturityPeriod::Mature => "主环 · 优化 ↔ 运维 · 推广保温",
-        }
-    }
-}
-
-/// A product project. `signal` (L6) and `weekly_signal` are derived caches.
-#[derive(Clone, Debug, Serialize)]
-pub struct Project {
-    pub id: ProjectId,
-    pub name: String,
-    pub kind: String,
-    pub desc: String,
-    pub phase: Readiness,
-    pub cycle: MaturityPeriod,
-    /// Which of the five stages is currently hosting the work.
-    pub active_stage: StageKind,
-    /// L6 cache — only [`crate::derive::reduce_worst_of`] can fill it.
-    pub signal: SignalCache,
-    pub progress: u8,
-    pub stages: Vec<OpStage>,
-    pub north_star: String,
-    pub ns_def: String,
-    /// Friday-boundary snapshot of the derived signal (audited override lives in
-    /// `weekly_review`, not here).
-    pub weekly_signal: SignalCache,
-}
-
-impl Project {
-    /// The cached project signal, or `Unknown` if not yet computed.
-    pub fn signal(&self) -> Signal {
-        cached(&self.signal)
     }
 }
 

@@ -627,12 +627,6 @@ impl InteractiveCliExecutor {
         self.claude_binary = binary;
         self
     }
-
-    /// Override the wall-clock timeout (mainly for tests).
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
 }
 
 impl Default for InteractiveCliExecutor {

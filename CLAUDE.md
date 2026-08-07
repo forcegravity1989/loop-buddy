@@ -97,7 +97,7 @@ app-web     非 workspace 成员,"以后也许"的预留位,不编译
 
 1. **报告不代答,读回为证**。任何"已完成/数字是 X"的陈述必须能从 DB 或工作区独立复核:
    ```bash
-   sqlite3 demo-workspaces/bw-demo.db "PRAGMA table_info(issue);"     # 结构核验
+   sqlite3 demo-workspaces/bw-demo.db "PRAGMA table_info(issue);"     # 结构核验(demo-workspaces/ 不入库,需先跑 real_demo/监理脚本生成)
    sqlite3 <db> "SELECT ... "                                          # 数字一律 SQL 读回
    BW_OPEN=<项目名> BW_PANEL=issues target/debug/builders-workbench   # 深链 stderr 日志 = 渲染证明
    ```
