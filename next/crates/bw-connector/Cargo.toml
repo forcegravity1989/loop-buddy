@@ -1,0 +1,30 @@
+[package]
+name = "bw-connector"
+description = "BW 对外借力的连接器契约层:最小机器契约类型 + 按能力拆的四个小接口 + 统一登记分发的注册表。骨架阶段(next 切片二A)只立地基与 feature 边界,不含任何具体适配器——gh/codehub/script 的真实收编是下一任务(切片二B)。"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["gh", "codehub", "script"]
+# 仓连接器:gh(GitHub CLI)。骨架阶段这个 feature 只打开
+# `adapters::gh` 占位模块,不含实现。
+gh = []
+# 仓连接器:codehub-cli(内源)。同上,骨架阶段只占位。
+codehub = []
+# 采集连接器:项目仓里的采集脚本(`.bw/connectors.toml` 正本)。
+# 唯一需要额外依赖的一家 —— 解析 toml 正本要 `toml` crate。
+script = ["dep:toml"]
+
+[dependencies]
+bw-core = { path = "../bw-core" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["process", "time", "fs"] }
+tokio-util = { workspace = true }
+toml = { workspace = true, optional = true }

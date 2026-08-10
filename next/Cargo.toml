@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/bw-core",
     "crates/bw-engine",
+    "crates/bw-connector",
 ]
 
 [workspace.package]
@@ -25,3 +26,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", 
 async-trait = "0.1"
 # `.bw/metrics.toml` parser (bw-engine only — file IO stays out of bw-core).
 toml = "0.8"
+# Cancellation tokens for bw-connector's `CallCtx` (next 切片二A) — the
+# `CancellationToken` type that lets a caller cancel an in-flight connector
+# call without reaching into the adapter's process handle.
+tokio-util = "0.7"
