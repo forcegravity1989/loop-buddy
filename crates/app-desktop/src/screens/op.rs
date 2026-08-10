@@ -21,7 +21,7 @@ use bw_core::model::{
     stage_workflow, FeedLevel, HubKind, HubSource, IssuePriority, IssueStatus, MaturityPeriod,
     Signal, StageKind,
 };
-use bw_core::{IssueId, ProjectId, SessionId, SkillId, WorkflowId};
+use bw_core::{ConversationId, IssueId, ProjectId, SessionId, SkillId, WorkflowId};
 use bw_store::SessionKind;
 use dioxus::document;
 use dioxus::prelude::*;
@@ -350,15 +350,55 @@ fn SessionCard(s: SessionCardVm, selected: bool) -> Element {
     let bd = if selected { theme::CLAY } else { "#DBD4C5" };
     let card_alt = theme::CARD_ALT;
     let sid = s.id;
+    let mut confirming_delete = use_signal(|| false);
+    let k_del = k.clone();
     rsx! {
-        button {
-            style: "width:100%;text-align:left;background:{card_alt};border:1.4px solid {bd};border-radius:8px;padding:9px 10px;margin-bottom:7px;cursor:pointer;",
-            onclick: move |_| {
-                k.send(Command::SetPanel(Panel::Workflow));
-                k.send(Command::SelectSession(Some(sid)));
-            },
-            div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
-            div { style: "font-size:11px;color:{ink3};", "{s.status_label}" }
+        div {
+            style: "width:100%;text-align:left;background:{card_alt};border:1.4px solid {bd};border-radius:8px;padding:9px 10px;margin-bottom:7px;",
+            div {
+                style: "display:flex;align-items:flex-start;gap:6px;",
+                button {
+                    style: "flex:1;text-align:left;background:transparent;border:none;cursor:pointer;padding:0;font:inherit;color:inherit;",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        k.send(Command::SetPanel(Panel::Workflow));
+                        k.send(Command::SelectSession(Some(sid)));
+                    },
+                    div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
+                    div { style: "font-size:11px;color:{ink3};", "{s.status_label}" }
+                }
+                button {
+                    title: "删除此会话记录",
+                    style: "background:transparent;border:none;color:{ink3};cursor:pointer;font-size:14px;padding:0 0 0 4px;line-height:1;flex-shrink:0;",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        confirming_delete.set(true);
+                    },
+                    "×"
+                }
+            }
+            if confirming_delete() {
+                div {
+                    style: "margin-top:8px;padding-top:8px;border-top:1px dashed {ink3};display:flex;align-items:center;gap:8px;flex-wrap:wrap;",
+                    span { style: "font-size:11.5px;color:{ink3};flex:1;", "删除此会话记录?不可恢复" }
+                    button {
+                        style: "cursor:pointer;background:{theme::ALERT_DEEP};color:#FFF;border:none;border-radius:6px;padding:4px 10px;font-size:11.5px;",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            k_del.send(Command::DeleteSession(sid));
+                        },
+                        "确认"
+                    }
+                    button {
+                        style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid {ink3};border-radius:6px;padding:4px 10px;font-size:11.5px;",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            confirming_delete.set(false);
+                        },
+                        "取消"
+                    }
+                }
+            }
         }
     }
 }
@@ -563,7 +603,7 @@ fn VersionPanel(op: OpVm) -> Element {
 /// An Issue's 「▶ 跑」 used to mint a brand-new `SessionId` on every click,
 /// even when the issue already had a resumable session — `run_issue_interactive`
 /// resumes the same underlying claude session via `claude_session_id` on the
-/// issue row regardless of which `SessionId` the UI passes in, so the extra
+/// claude_conversation row regardless of which `SessionId` the UI passes in, so the extra
 /// records were purely cosmetic: a growing pile of dead-looking "阶段记录"
 /// cards, all titled after the same issue, that the user can't tell apart or
 /// delete. There's no `issue_id` column on `session` (a schema change this
@@ -654,6 +694,9 @@ fn IssuesPanel(op: OpVm) -> Element {
     // (the derived-health enum), already imported unqualified above.
     let mut blocking: dioxus::prelude::Signal<Option<IssueId>> = use_signal(|| None);
     let mut block_reason = use_signal(String::new);
+    // V1-TermRefactor4: 点卡立刻亮「恢复中…」(dispatch 返回前 Vm 还不更新);
+    // 与 op.pty_restoring 合并;焦点已活且 App 恢复标记已清 → 不再显示。
+    let mut restoring_issue: dioxus::prelude::Signal<Option<IssueId>> = use_signal(|| None);
 
     let cols: [(IssueStatus, &str); 6] = [
         (IssueStatus::Backlog, "待办池"),
@@ -739,7 +782,13 @@ fn IssuesPanel(op: OpVm) -> Element {
             }
             // P4: the evidence overlay — floats above the board while open.
             if let Some(d) = op.issue_detail.clone() {
-                IssueDetailOverlay { d, sessions: op.sessions.clone(), active_run: op.active_run, project_id: op.id }
+                IssueDetailOverlay {
+                    can_consult: op.consultable_issues.contains(&d.id),
+                    sessions: op.sessions.clone(),
+                    active_run: op.active_run,
+                    project_id: op.id,
+                    d: d,
+                }
             }
             div { style: "display:flex;gap:12px;align-items:flex-start;",
                 for (label, list) in grouped {
@@ -767,6 +816,16 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 // → 「▶ 跑」 greyed)? A run on another project
                                 // doesn't block this card.
                                 let is_running = op.active_run == Some((op.id, i_id));
+                                let is_focused = op.focused_issue == Some(i_id);
+                                let can_consult = op.consultable_issues.contains(&i_id);
+                                let can_resume = op.resumable_issues.contains(&i_id);
+                                let resume_ready = op.focused_issue == Some(i_id)
+                                    && op.pty_active
+                                    && op.pty_restoring.is_none();
+                                let is_restoring = (restoring_issue() == Some(i_id)
+                                    && !resume_ready)
+                                    || (op.pty_restoring.is_some()
+                                        && op.focused_issue == Some(i_id));
                                 let same_project_busy =
                                     op.active_run.map(|(p, _)| p) == Some(op.id);
                                 // plan/17 S3: the 「▶ 跑」 button's label /
@@ -793,11 +852,25 @@ fn IssuesPanel(op: OpVm) -> Element {
                                 let advance_label = advance.map(|s| s.label()).unwrap_or("");
                                 let is_blocked = i.status == IssueStatus::Blocked;
                                 let entering_reason = blocking() == Some(i_id);
+                                let card_left = if is_focused { clay } else { i.status_color };
+                                let card_extra = if is_focused {
+                                    format!("box-shadow:inset 0 0 0 1px {clay};")
+                                } else {
+                                    String::new()
+                                };
                                 rsx! {
                                     div {
                                         key: "{i.number}",
-                                        style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {i.status_color};",
-                                        div { style: "font-size:11px;color:{ink3};font-family:{mono};", "#{i.number} · {i.stage.label()}" }
+                                        style: "{card} padding:10px 12px;margin-bottom:9px;border-left:3px solid {card_left};{card_extra}",
+                                        div { style: "font-size:11px;color:{ink3};font-family:{mono};display:flex;align-items:center;gap:6px;",
+                                            span { "#{i.number} · {i.stage.label()}" }
+                                            if is_focused {
+                                                span { style: "color:{clay};border:1px solid {clay};border-radius:4px;padding:0 5px;font-size:10px;", "当前会话" }
+                                            }
+                                            if is_restoring {
+                                                span { style: "color:{ink3};border:1px solid {border};border-radius:4px;padding:0 5px;font-size:10px;", "恢复中…" }
+                                            }
+                                        }
                                         // C4 · issue 身份映射: 号非 0 才渲染。
                                         // Bug③+UI: provider-aware link to the
                                         // remote issue (codehub `{host}/{path}/issues`
@@ -841,7 +914,13 @@ fn IssuesPanel(op: OpVm) -> Element {
                                         // overlay (runs / diffs / artifacts).
                                         div {
                                             style: "font-size:13px;margin:3px 0 4px;color:{ink};cursor:pointer;",
-                                            onclick: move |_| k_detail.send(Command::OpenIssueDetail(i_id)),
+                                            onclick: move |_| {
+                                                // 重启后点卡:立刻亮「恢复中…」,内核走 OpenIssueDetail 唤醒。
+                                                if can_resume {
+                                                    restoring_issue.set(Some(i_id));
+                                                }
+                                                k_detail.send(Command::OpenIssueDetail(i_id));
+                                            },
                                             "{i.title}"
                                         }
                                         div { style: "font-size:11px;color:{ink2};margin-bottom:5px;", "{i.priority_label}" }
@@ -940,6 +1019,9 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                         style: "cursor:{run_cursor};background:transparent;border:none;color:{run_color};font-size:11.5px;padding:0;font-weight:700;",
                                                         disabled: same_project_busy,
                                                         onclick: move |_| {
+                                                            if can_resume {
+                                                                restoring_issue.set(Some(i_id));
+                                                            }
                                                             let sid = existing_issue_session(
                                                                 &op_sessions,
                                                                 run_stage,
@@ -963,6 +1045,30 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                             k_run.send(Command::SelectSession(Some(sid)));
                                                         },
                                                         "{run_label}"
+                                                    }
+                                                } else if can_consult {
+                                                    button {
+                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;font-weight:700;",
+                                                        onclick: move |_| {
+                                                            restoring_issue.set(Some(i_id));
+                                                            let sid = existing_issue_session(
+                                                                &op_sessions,
+                                                                run_stage,
+                                                                &run_sess_title,
+                                                            )
+                                                            .unwrap_or_else(SessionId::new);
+                                                            k_run.send(Command::StartSession {
+                                                                id: sid,
+                                                                stage_kind: Some(run_stage),
+                                                                kind: SessionKind::Create,
+                                                                title: run_sess_title.clone(),
+                                                            });
+                                                            k_run.send(Command::RunIssue { session: sid, id: i_id });
+                                                            k_run.send(Command::SetScope(Scope::Stage(run_stage)));
+                                                            k_run.send(Command::SetPanel(Panel::Workflow));
+                                                            k_run.send(Command::SelectSession(Some(sid)));
+                                                        },
+                                                        "续聊"
                                                     }
                                                 }
                                                 // C5 · PR 验收环: InReview + 有 PR 时,
@@ -1018,6 +1124,7 @@ fn IssueDetailOverlay(
     sessions: Vec<SessionCardVm>,
     active_run: Option<(ProjectId, IssueId)>,
     project_id: ProjectId,
+    can_consult: bool,
 ) -> Element {
     let k = use_context::<Kernel>();
     let card = theme::card();
@@ -1036,6 +1143,7 @@ fn IssueDetailOverlay(
     let k_merge = k.clone();
     let k_distill = k.clone();
     let k_cancel = k.clone();
+    let k_promote = k.clone();
     let mut distilling = use_signal(|| false);
     let mut skill_name = use_signal(|| format!("{} · 做法", d.title));
     let mut skill_desc = use_signal(|| format!("来自 Issue #{} 的实战沉淀", d.number));
@@ -1186,6 +1294,54 @@ fn IssueDetailOverlay(
                                 k_run.send(Command::SelectSession(Some(sid)));
                             },
                             "{run_label}"
+                        }
+                    } else if can_consult {
+                        button {
+                            style: "cursor:pointer;border:none;border-radius:7px;background:transparent;border:1px solid {clay};color:{clay};padding:7px 16px;font-size:12.5px;",
+                            onclick: move |_| {
+                                let sid = existing_issue_session(&sessions, run_stage, &run_sess_title)
+                                    .unwrap_or_else(SessionId::new);
+                                k_run.send(Command::StartSession {
+                                    id: sid,
+                                    stage_kind: Some(run_stage),
+                                    kind: SessionKind::Create,
+                                    title: run_sess_title.clone(),
+                                });
+                                k_run.send(Command::RunIssue { session: sid, id });
+                                k_run.send(Command::CloseIssueDetail);
+                                k_run.send(Command::SetScope(Scope::Stage(run_stage)));
+                                k_run.send(Command::SetPanel(Panel::Workflow));
+                                k_run.send(Command::SelectSession(Some(sid)));
+                            },
+                            "续聊"
+                        }
+                        // V1-TermRefactor5 · 咨询态:显式「转成新活」(不做自动意图分类)。
+                        {
+                            let promote_stage = d.stage;
+                            let promote_title = d.title.clone();
+                            let promote_number = d.number;
+                            rsx! {
+                                button {
+                                    style: "cursor:pointer;border:none;border-radius:7px;background:transparent;border:1px solid {border};color:{ink2};padding:7px 14px;font-size:12.5px;",
+                                    title: "在同项目新建一件活,承接咨询里冒出的新交付诉求",
+                                    onclick: move |_| {
+                                        k_promote.send(Command::CreateIssue {
+                                            id: IssueId::new(),
+                                            stage: promote_stage,
+                                            title: format!("来自咨询：{promote_title}"),
+                                            desc: format!(
+                                                "从 #{} 「{}」的咨询会话转来。",
+                                                promote_number, promote_title
+                                            ),
+                                            priority: IssuePriority::Medium,
+                                            standard_skill: String::new(),
+                                        });
+                                        k_promote.send(Command::CloseIssueDetail);
+                                        k_promote.send(Command::SetPanel(Panel::Issues));
+                                    },
+                                    "转成新活"
+                                }
+                            }
                         }
                     }
                     if in_review {
@@ -2796,6 +2952,16 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             promoted_msg.set(Some("已沉淀为静态工作流 → WorkflowHub".into()));
         }
     };
+    // V1-TermRefactor5 · 咨询态:焦点是 Done/InReview 续聊时,终端上方给「转成新活」。
+    let consult_promote = op.focused_issue.and_then(|fid| {
+        if !op.consultable_issues.contains(&fid) {
+            return None;
+        }
+        op.issues
+            .iter()
+            .find(|i| i.id == fid)
+            .map(|i| (i.stage, i.number, i.title.clone()))
+    });
     // V1-Issue2-PTY-cleanup: the old 「▶ 运行」 button (`Command::RunStagePlaybook`)
     // spawned a fresh mock-chat session on every click, titled "{stage}·第N轮" —
     // an ever-growing pile of dead 「找指标」/「绑数据」 session records with no
@@ -2817,19 +2983,26 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
     };
     rsx! {
         RunBanner { run: run.clone() }
-        div {
-            style: "{card} padding:18px 20px;margin-bottom:14px;",
+        // V1-TermClose2 · UI 门控:方法循环卡(来自 stage_workflow)只在无终端
+        // 会话(!pty_active)时显——issue 终端会话无 phase loop,显这张卡会误导。
+        // 阶段循环会话(stage playbook / hub workflow / cron,无 PTY)仍显。
+        // 内含的「↑ 沉淀为静态」按钮语义不变(只 op.chat.is_some() && !pty_active
+        // 时显,本卡门控不改变其条件)。
+        if !op.pty_active {
             div {
-                style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
-                span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{spec_preview.name}" }
-            }
-            div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
-            div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
-            if op.chat.is_some() && !op.pty_active {
-                button {
-                    style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
-                    onclick: promote,
-                    "↑ 沉淀为静态"
+                style: "{card} padding:18px 20px;margin-bottom:14px;",
+                div {
+                    style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
+                    span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{spec_preview.name}" }
+                }
+                div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
+                div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
+                if op.chat.is_some() && !op.pty_active {
+                    button {
+                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
+                        onclick: promote,
+                        "↑ 沉淀为静态"
+                    }
                 }
             }
         }
@@ -2838,11 +3011,57 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
         }
         {chat_area}
-        // V1 Issue2 Phase2b: in-app terminal (xterm.js) — shown when a PTY
-        // session is active (interactive issue run). The widget loads
-        // xterm.js, writes PTY bytes, and forwards user input/resize.
+        // 重启恢复:点卡到首包之间显示「恢复中…」(首包后 pty_restoring 清空)。
+        if op.pty_restoring.is_some() {
+            div {
+                style: "{card} padding:10px 14px;margin-bottom:10px;font-size:12.5px;color:{ink3};",
+                "恢复中…"
+            }
+        }
+        // V1-TermRefactor5 · 咨询态:终端区显式「转成新活」(不做自动意图分类;不宣称只读)。
+        if let Some((promote_stage, promote_number, promote_title)) = consult_promote {
+            {
+                let k_new = k.clone();
+                rsx! {
+                    div {
+                        style: "display:flex;align-items:center;gap:10px;margin:0 0 8px;",
+                        span { style: "font-size:11.5px;color:{ink3};", "咨询中 · 新交付请另开一件活" }
+                        button {
+                            style: "cursor:pointer;border:1px solid {theme::BORDER};border-radius:7px;background:transparent;color:{theme::INK_2};padding:5px 12px;font-size:11.5px;",
+                            title: "在同项目新建一件活,承接咨询里冒出的新交付诉求",
+                            onclick: move |_| {
+                                k_new.send(Command::CreateIssue {
+                                    id: IssueId::new(),
+                                    stage: promote_stage,
+                                    title: format!("来自咨询：{promote_title}"),
+                                    desc: format!(
+                                        "从 #{} 「{}」的咨询会话转来。",
+                                        promote_number, promote_title
+                                    ),
+                                    priority: IssuePriority::Medium,
+                                    standard_skill: String::new(),
+                                });
+                                k_new.send(Command::SetPanel(Panel::Issues));
+                            },
+                            "转成新活"
+                        }
+                    }
+                }
+            }
+        }        // 多会话常驻:所有活 PTY 挂 xterm;仅焦点可见(隐藏的仍收字节)。
         if op.pty_active {
-            TerminalWidget {}
+            for cid in op.pty_live_ids.clone() {
+                {
+                    let is_focused = op.pty_conversation_id == Some(cid);
+                    rsx! {
+                        TerminalWidget {
+                            key: "{cid.uuid()}",
+                            conversation_id: cid,
+                            focused: is_focused,
+                        }
+                    }
+                }
+            }
         }
         if let Some(msg) = promoted_msg() {
             Toast { msg, onclose: move |_| promoted_msg.set(None) }
@@ -3057,209 +3276,174 @@ fn RoutineStage(s: StageVm) -> Element {
     }
 }
 
-// ─── V1 Issue2 Phase2b: in-app terminal (xterm.js) ─────────────────────
+// ─── V1 终端会话重构·底座: per-conversation xterm (xterm.js) ───────────
 
-/// Pre-handler buffer + write function (set up BEFORE the async init script
-/// so bytes arriving before xterm.js is ready are buffered, not lost).
-/// This solves the **pre-handler buffer** race (orca §2.4): the terminal
-/// isn't ready yet, so bytes go to `__bw_term_buffer`; the init script
-/// flushes the buffer when ready (rendererDispatcherReady handshake).
+/// Bundled xterm assets (no CDN — a failed fetch used to leave no terminal).
 const XTERM_JS: &str = include_str!("../../public/xterm.min.js");
 const XTERM_CSS: &str = include_str!("../../public/xterm.css");
 const FIT_ADDON_JS: &str = include_str!("../../public/xterm-addon-fit.min.js");
 
+/// Pre-handler write/drain keyed by conversation id. Must run BEFORE any
+/// bytes arrive so the pre-handler buffer (orca §2.4) catches early output.
+/// Map shape: `window.__bw_term_sessions[id] = { term, fit, ready, buffer,
+/// input[], resize }` — 修掉旧全局 `window.__bw_term` 单例(设计 md §7.3)。
 const TERM_PRE_HANDLER_JS: &str = r#"
-window.__bw_term_write = function(text) {
-    if (!window.__bw_term_ready) {
-        // Pre-handler buffer: stash until xterm.js is ready.
-        window.__bw_term_buffer = (window.__bw_term_buffer || '') + text;
+window.__bw_term_sessions = window.__bw_term_sessions || {};
+window.__bw_term_ensure = function(id) {
+    var s = window.__bw_term_sessions;
+    if (!s[id]) s[id] = { term: null, fit: null, ready: false, buffer: '', input: [], resize: null };
+    return s[id];
+};
+window.__bw_term_write = function(id, text) {
+    var sess = window.__bw_term_ensure(id);
+    if (!sess.ready || !sess.term) {
+        sess.buffer += text;
         return;
     }
-    try { window.__bw_term.write(text); } catch(e) {}
+    try { sess.term.write(text); } catch(e) {}
 };
-// One call drains both queues: the Rust side polls on a timer, and every
-// `document::eval` is a full IPC round trip — five per tick was the old
-// shape, one is enough.
-window.__bw_term_drain = function() {
+// One call drains both queues for one conversation: Rust polls on a timer,
+// and every `document::eval` is a full IPC round trip.
+window.__bw_term_drain = function(id) {
+    var sess = window.__bw_term_sessions && window.__bw_term_sessions[id];
+    if (!sess) return null;
     var input = null;
-    if (window.__bw_term_input && window.__bw_term_input.length > 0) {
-        input = window.__bw_term_input.join('');
-        window.__bw_term_input = [];
+    if (sess.input && sess.input.length > 0) {
+        input = sess.input.join('');
+        sess.input = [];
     }
-    var resize = window.__bw_term_resize || null;
-    window.__bw_term_resize = null;
+    var resize = sess.resize || null;
+    sess.resize = null;
     if (input === null && resize === null) return null;
-    return { input: input, resize: resize, ready: !!window.__bw_term_ready };
+    return { input: input, resize: resize, ready: !!sess.ready };
 };
 "#;
 
-/// xterm.js init script (async IIFE). Creates the terminal from the bundles
-/// `TerminalWidget` already eval'd, sets up onData/onResize callbacks,
-/// flushes the pre-handler buffer, and — on a **re-attach** — re-homes an
-/// existing terminal into whatever div exists right now.
-///
-/// The re-attach path exists because `WorkflowStage` (and this widget with
-/// it) fully unmounts whenever the user leaves the workflow panel: `Center`
-/// (op.rs) is a `match` over the active panel, so switching to Issues/
-/// Progress/etc. drops the `TerminalWidget` component and its `div#
-/// __bw_terminal` from the tree entirely. Coming back re-creates a *new*
-/// div. `window.__bw_term` and the PTY session behind it are untouched by
-/// this (they live in the webview's global JS scope / the Rust process,
-/// not the DOM) — xterm keeps its own scrollback internally, so nothing
-/// needs replaying — but its rendered DOM (`term.element`) is still parented
-/// under the *old*, now-detached div. The old `if (window.__bw_term) return`
-/// guard left it there, so the terminal looked empty even though the
-/// session was alive. Fix: move `term.element` into the current div and
-/// re-wire the div-scoped input listeners (click/keydown are bound to a
-/// specific DOM node, so they don't survive the div being replaced —
-/// `term.onData`, by contrast, is bound to `term` itself and must NOT be
-/// re-registered, or every keystroke would fire it twice for the rest of
-/// the session).
-const TERM_INIT_JS: &str = r#"
-return (async function() {
-    var div = document.getElementById('__bw_terminal');
-    if (!div) return { ok: false, reason: 'div not found' };
+/// Build the per-conversation init IIFE. `id` is the conversation uuid
+/// string. Re-attach path: panel switch drops the Dioxus div but JS Map +
+/// PTY stay; remount re-homes `term.element` and re-fits (尺寸同步链).
+fn term_init_js(conversation_id: &str) -> String {
+    let id_json = serde_json::to_string(conversation_id).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        r#"
+return (async function(id) {{
+    var div = document.getElementById('__bw_terminal_' + id);
+    if (!div) return {{ ok: false, reason: 'div not found' }};
+    var sess = window.__bw_term_ensure(id);
 
-    var push = function(data) {
-        window.__bw_term_input = window.__bw_term_input || [];
-        window.__bw_term_input.push(data);
-    };
+    var push = function(data) {{
+        sess.input = sess.input || [];
+        sess.input.push(data);
+    }};
     var CTRL_A = 'a'.charCodeAt(0);
-    var KEYS = {
+    var KEYS = {{
         Enter: '\r', Backspace: '\x7f', Escape: '\x1b', Tab: '\t',
         Delete: '\x1b[3~', Insert: '\x1b[2~',
         ArrowUp: '\x1b[A', ArrowDown: '\x1b[B',
         ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D',
         Home: '\x1b[H', End: '\x1b[F',
         PageUp: '\x1b[5~', PageDown: '\x1b[6~',
-    };
-    var keyBytes = function(e) {
-        if (e.ctrlKey && e.key.length === 1) {
+    }};
+    var keyBytes = function(e) {{
+        if (e.ctrlKey && e.key.length === 1) {{
             var c = e.key.toLowerCase().charCodeAt(0);
-            // Ctrl+a..z → 0x01..0x1a (Ctrl+C = 0x03 interrupts the TUI).
             if (c >= CTRL_A && c < CTRL_A + 26) return String.fromCharCode(c - CTRL_A + 1);
             return null;
-        }
+        }}
         if (KEYS[e.key]) return KEYS[e.key];
-        if (e.key.length !== 1) return null; // Shift/Alt/F-keys: not our job
+        if (e.key.length !== 1) return null;
         return e.altKey ? '\x1b' + e.key : e.key;
-    };
-    // Focus: xterm reads keystrokes through a hidden helper textarea. Prefer
-    // it; if WebView2 refuses to focus it, fall back to the container div
-    // and synthesize bytes in the keydown listener. Re-run for every div
-    // this terminal ever attaches to (fresh listeners each time).
-    var wireDiv = function(div, term) {
+    }};
+    var wireDiv = function(div, term) {{
         var textarea = div.querySelector('.xterm-helper-textarea');
         div.tabIndex = 0;
-        var focusTerm = function() {
+        var focusTerm = function() {{
             term.focus();
             if (!textarea || document.activeElement !== textarea) div.focus();
-        };
+        }};
         div.addEventListener('click', focusTerm);
         focusTerm();
-        div.addEventListener('keydown', function(e) {
-            // Fallback only. When the helper textarea has focus xterm
-            // already turned this keystroke into onData — handling it here
-            // too would send every character twice.
+        div.addEventListener('keydown', function(e) {{
             if (textarea && e.target === textarea) return;
             var data = keyBytes(e);
             if (data === null) return;
             push(data);
             e.preventDefault();
-        });
-    };
+        }});
+    }};
 
-    // Re-attach guard: an existing terminal survives a Dioxus remount —
-    // only its DOM needs re-homing into the current div.
-    if (window.__bw_term) {
-        if (window.__bw_term.element && !div.contains(window.__bw_term.element)) {
-            div.appendChild(window.__bw_term.element);
-            if (window.__bw_fit) window.__bw_fit.fit();
-            wireDiv(div, window.__bw_term);
-        }
-        return { ok: true, reason: 'already-initialized' };
-    }
+    // Re-attach: existing term for this conversation survives Dioxus remount.
+    if (sess.term) {{
+        if (sess.term.element && !div.contains(sess.term.element)) {{
+            div.appendChild(sess.term.element);
+            if (sess.fit) sess.fit.fit();
+            wireDiv(div, sess.term);
+        }}
+        return {{ ok: true, reason: 'already-initialized' }};
+    }}
 
-    // xterm.js / Fit addon / CSS are already in scope: `TerminalWidget`
-    // eval'd the two `include_str!`-bundled UMD files and injected the
-    // stylesheet inline before running this script. No fetch here — the
-    // whole point of bundling them (`0df7897`) was that a failed network
-    // load aborts this IIFE and leaves the session with no terminal at all.
-    if (!window.Terminal || !window.FitAddon) {
-        return { ok: false, reason: 'xterm bundles not loaded' };
-    }
+    if (!window.Terminal || !window.FitAddon) {{
+        return {{ ok: false, reason: 'xterm bundles not loaded' }};
+    }}
 
-    // Create terminal.
-    var term = new Terminal({
+    var term = new Terminal({{
         fontFamily: 'JetBrains Mono, Consolas, monospace',
         fontSize: 13,
         cols: 80,
         rows: 24,
         cursorBlink: true,
-        theme: { background: '#1e1e2e', foreground: '#cdd6f4' },
-    });
+        theme: {{ background: '#1e1e2e', foreground: '#cdd6f4' }},
+    }});
     var fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(div);
     fitAddon.fit();
 
-    // onData is the primary input path: xterm already encodes arrows, Ctrl
-    // combos and IME composition into the bytes a terminal expects. Bound
-    // to `term` itself (not the div) — registered exactly once, here, ever.
     term.onData(push);
     wireDiv(div, term);
+    term.onResize(function(size) {{
+        sess.resize = {{ cols: size.cols, rows: size.rows }};
+    }});
 
-    // onResize → stash for the Rust side to drain.
-    // resize re-assertion: fitAddon.fit() may fire onResize with a
-    // different size than the PTY expects — the Rust side re-sends
-    // TerminalResize, and the PTY's master.resize() applies it.
-    term.onResize(function(size) {
-        window.__bw_term_resize = { cols: size.cols, rows: size.rows };
-    });
+    // V1-TermRefactor review · 设计 md §7.6:卡片重新显示 / 窗口缩放 /
+    // 侧栏变化 / 字体就绪都 re-fit。fit() 触发 onResize → stash
+    // sess.resize → Rust 30ms drain 发 TerminalResize(带 id)。观察
+    // term.element(跨 remount 稳定);display:none 下尺寸为 0 跳过,避免
+    // FitAddon 在零宽框上抛错。仅新建分支挂一次,re-attach 不重复。
+    var refit = function() {{
+        try {{
+            if (term.element && term.element.clientWidth > 0 && term.element.clientHeight > 0) {{
+                fitAddon.fit();
+            }}
+        }} catch(e) {{}}
+    }};
+    if (window.ResizeObserver) {{
+        new ResizeObserver(refit).observe(term.element || div);
+    }}
+    window.addEventListener('resize', refit);
 
-    window.__bw_term = term;
-    window.__bw_fit = fitAddon;
-    // rendererDispatcherReady handshake: signal that the terminal is
-    // ready to receive bytes.
-    window.__bw_term_ready = true;
+    sess.term = term;
+    sess.fit = fitAddon;
+    sess.ready = true;
+    if (sess.buffer) {{
+        term.write(sess.buffer);
+        sess.buffer = '';
+    }}
+    // Push fit size immediately so Rust can resize PTY off 80×24.
+    sess.resize = {{ cols: term.cols, rows: term.rows }};
 
-    // Flush pre-handler buffer (bytes received before terminal was ready).
-    if (window.__bw_term_buffer) {
-        term.write(window.__bw_term_buffer);
-        window.__bw_term_buffer = '';
-    }
+    return {{ ok: true }};
+}})({id_json})
+"#
+    )
+}
 
-    return { ok: true };
-})()
-"#;
-
-/// V1 Issue2 Phase2b: in-app terminal widget (xterm.js). Renders when a
-/// PTY session is active (`pty_active = true` on the OpVm). Three races
-/// solved (orca §2.4):
-///  1. **Pre-handler buffer + rendererDispatcherReady**: bytes are buffered
-///     in `window.__bw_term_buffer` before xterm.js is ready; the init
-///     script flushes the buffer when ready (see `TERM_PRE_HANDLER_JS` +
-///     `TERM_INIT_JS`). This prevents Dioxus re-render from losing bytes.
-///  2. **ACK backpressure**: skipped for V1 — `document::eval` is
-///     synchronous (no WebSocket), so no backpressure needed. The PTY
-///     read task sends to an unbounded mpsc channel.
-///  3. **Resize re-assertion**: `fitAddon.fit()` fires `onResize`; the
-///     Rust side drains it and sends `Command::TerminalResize`; the PTY's
-///     `master.resize()` applies it. No fire-and-forget (the drain is
-///     explicit). The re-attach guard in `TERM_INIT_JS` re-homes an
-///     existing terminal into a fresh `div` when this component remounts
-///     (panel switch away and back — see that constant's doc comment).
 /// Take the longest valid UTF-8 prefix out of `buf`, leaving whatever
 /// trailing bytes form an incomplete character behind for the next batch.
 ///
 /// PTY output is a byte stream cut into ~100ms batches at arbitrary offsets;
 /// a 3-byte CJK character routinely straddles two of them. Decoding a batch
-/// in isolation (`from_utf8_lossy`) replaces both halves with U+FFFD, which
-/// is exactly the garbling users see when claude prints Chinese. An
-/// incomplete tail is at most 3 bytes, so carrying it costs nothing.
-///
-/// Genuinely invalid bytes (not just a truncated tail) are still replaced —
-/// this only defers *decidable-later* sequences, it doesn't wait forever.
+/// in isolation (`from_utf8_lossy`) replaces both halves with U+FFFD.
 fn take_utf8_prefix(buf: &mut Vec<u8>) -> String {
     match std::str::from_utf8(buf) {
         Ok(s) => {
@@ -3270,14 +3454,11 @@ fn take_utf8_prefix(buf: &mut Vec<u8>) -> String {
         Err(e) => {
             let valid = e.valid_up_to();
             match e.error_len() {
-                // Truncated tail: emit what's whole, keep the rest.
                 None => {
                     let out = String::from_utf8_lossy(&buf[..valid]).into_owned();
                     buf.drain(..valid);
                     out
                 }
-                // Real invalid sequence — lossy-decode the whole batch (the
-                // bad bytes will never become valid, waiting would stall).
                 Some(_) => {
                     let out = String::from_utf8_lossy(buf).into_owned();
                     buf.clear();
@@ -3288,81 +3469,66 @@ fn take_utf8_prefix(buf: &mut Vec<u8>) -> String {
     }
 }
 
+/// 按 conversation_id 挂的嵌入终端;focused=false 时隐藏但仍收字节。
 #[component]
-fn TerminalWidget() -> Element {
+fn TerminalWidget(conversation_id: ConversationId, focused: bool) -> Element {
     let k = use_context::<Kernel>();
+    let cid_str = conversation_id.uuid().to_string();
+    let div_id = format!("__bw_terminal_{cid_str}");
 
-    // Single `use_future` that handles: terminal init, byte streaming,
-    // and input/resize polling. Combined into one future to avoid
-    // `FnMut` capture issues with multiple `use_future` calls.
-    // The `k.clone()` inside the closure makes it `Fn`-compatible.
     use_future(move || {
         let k = k.clone();
+        let cid = conversation_id;
+        let cid_str = cid.uuid().to_string();
         async move {
-            // `BW_PTY_DEBUG=1` traces the terminal bridge to stderr. Off by
-            // default: the drain runs ~33x/s and would drown the log.
             let debug = std::env::var("BW_PTY_DEBUG").is_ok_and(|v| v != "0");
+            let cid_json = serde_json::to_string(&cid_str).unwrap_or_else(|_| "\"\"".into());
 
-            // 1. Set up pre-handler functions (sync, fast) — must run
-            // BEFORE any bytes arrive so they're buffered, not lost.
             let _ = document::eval(TERM_PRE_HANDLER_JS).await;
-            // 2. Load xterm.js + Fit addon + CSS inline (no CDN — a failed
-            // CDN fetch used to abort the init IIFE, leaving no terminal).
-            // The UMD bundle assigns to `self`, so eval'ing it as a function
-            // body still defines `window.Terminal` / `window.FitAddon`.
             let _ = document::eval(XTERM_JS).await;
             let _ = document::eval(FIT_ADDON_JS).await;
             let _ = document::eval(&format!(
-                "var __s=document.createElement('style');__s.id='__bw_xterm_css';__s.textContent={};document.head.appendChild(__s)",
+                "if(!document.getElementById('__bw_xterm_css')){{var __s=document.createElement('style');__s.id='__bw_xterm_css';__s.textContent={};document.head.appendChild(__s)}}",
                 serde_json::to_string(XTERM_CSS).unwrap_or_else(|_| String::new())
-            )).await;
-            let init = document::eval(TERM_INIT_JS).await;
+            ))
+            .await;
+            let init = document::eval(&term_init_js(&cid_str)).await;
             if debug {
-                eprintln!("[pty] terminal init: {init:?}");
+                eprintln!("[pty] terminal init {cid_str}: {init:?}");
             }
 
-            // 3. Main loop: select between new PTY bytes and input/resize
-            // polling. `pty_rx.changed()` fires when the pty_ticker sends a
-            // new batch; the sleep timer fires for input/resize.
             let mut pty_rx = k.pty_bytes();
-            // Mark the initial value as seen (empty Vec from watch::channel).
             let _ = pty_rx.borrow_and_update();
-            // Bytes arrive in ~100ms batches cut at arbitrary offsets, so a
-            // multi-byte character (every Chinese glyph claude prints) can
-            // straddle two batches. Decoding each batch on its own would turn
-            // both halves into U+FFFD, so carry the trailing incomplete
-            // sequence over to the next batch instead.
             let mut carry: Vec<u8> = Vec::new();
             loop {
                 tokio::select! {
-                    // PTY bytes arrived → write to terminal.
                     result = pty_rx.changed() => {
                         if result.is_err() {
-                            break; // sender dropped (PTY session ended)
+                            break;
                         }
-                        let bytes = pty_rx.borrow().clone();
-                        if !bytes.is_empty() {
+                        let batches = pty_rx.borrow().clone();
+                        for (batch_cid, bytes) in batches {
+                            if batch_cid != cid || bytes.is_empty() {
+                                continue;
+                            }
                             carry.extend_from_slice(&bytes);
                             let text = take_utf8_prefix(&mut carry);
-                            if !text.is_empty() {
-                                let escaped = serde_json::to_string(&text)
-                                    .unwrap_or_else(|_| "\"\"".into());
-                                let script = format!("window.__bw_term_write({escaped})");
-                                let _ = document::eval(&script).await;
+                            if text.is_empty() {
+                                continue;
                             }
+                            let escaped = serde_json::to_string(&text)
+                                .unwrap_or_else(|_| "\"\"".into());
+                            let script = format!(
+                                "window.__bw_term_write({cid_json}, {escaped})"
+                            );
+                            let _ = document::eval(&script).await;
                         }
                     }
-                    // Timer → drain what the user typed / resized.
                     _ = tokio::time::sleep(Duration::from_millis(30)) => {
-                        // `return` is load-bearing: dioxus-desktop runs the
-                        // script as the body of `new AsyncFunction("dioxus",
-                        // script)` (query.rs), so a bare expression resolves
-                        // to `undefined` and every read-back silently yields
-                        // None. That is what kept stdin dead — the drained
-                        // keystrokes never made it out of the webview.
-                        let Ok(v) = document::eval(
-                            "return window.__bw_term_drain ? window.__bw_term_drain() : null"
-                        ).await else { continue };
+                        let drain_script = format!(
+                            "return window.__bw_term_drain ? window.__bw_term_drain({cid_json}) : null"
+                        );
+                        let Ok(v) = document::eval(&drain_script).await else { continue };
                         let Some(obj) = v.as_object() else { continue };
                         if let Some(input) = obj.get("input").and_then(|i| i.as_str()) {
                             if !input.is_empty() {
@@ -3370,6 +3536,7 @@ fn TerminalWidget() -> Element {
                                     eprintln!("[pty] stdin {} bytes: {input:?}", input.len());
                                 }
                                 k.send(Command::TerminalInput {
+                                    conversation_id: cid,
                                     bytes: input.as_bytes().to_vec(),
                                 });
                             }
@@ -3377,7 +3544,11 @@ fn TerminalWidget() -> Element {
                         if let Some(r) = obj.get("resize").and_then(|r| r.as_object()) {
                             let cols = r.get("cols").and_then(|c| c.as_u64()).unwrap_or(80) as u16;
                             let rows = r.get("rows").and_then(|r| r.as_u64()).unwrap_or(24) as u16;
-                            k.send(Command::TerminalResize { cols, rows });
+                            k.send(Command::TerminalResize {
+                                conversation_id: cid,
+                                cols,
+                                rows,
+                            });
                         }
                     }
                 }
@@ -3385,16 +3556,22 @@ fn TerminalWidget() -> Element {
         }
     });
 
+    let border = theme::BORDER;
+    let wrap = if focused {
+        format!("margin-top:14px;border:1px solid {border};border-radius:8px;overflow:hidden;")
+    } else {
+        "display:none;".into()
+    };
     rsx! {
         div {
-            style: "margin-top:14px;border:1px solid {theme::BORDER};border-radius:8px;overflow:hidden;",
+            style: "{wrap}",
             div {
                 style: "background:#1e1e2e;color:#cdd6f4;font-family:JetBrains Mono,Consolas,monospace;font-size:11px;padding:4px 10px;display:flex;align-items:center;gap:6px;",
                 span { style: "opacity:0.7;", "● in-app terminal" }
                 span { style: "opacity:0.4;margin-left:auto;", "claude interactive session" }
             }
             div {
-                id: "__bw_terminal",
+                id: "{div_id}",
                 style: "min-height:320px;background:#1e1e2e;",
             }
         }

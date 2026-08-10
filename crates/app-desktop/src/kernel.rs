@@ -14,10 +14,10 @@
 
 use bw_app::{ActionState, App, Command, Event, Panel, Scope, SettleReq, View};
 use bw_core::model::{
-    AgentRef, Author, CronMode, HubCard, MaturityPeriod, Readiness, SessionStatus, Signal,
-    SkillRef, StageKind, CONNECTOR_KIND_SCRIPT,
+    AgentRef, Author, CronMode, HubCard, IssueStatus, MaturityPeriod, Readiness, SessionStatus,
+    Signal, SkillRef, StageKind, CONNECTOR_KIND_SCRIPT,
 };
-use bw_core::{MetricId, SessionId};
+use bw_core::{ConversationId, MetricId, SessionId};
 use bw_engine::{
     ClaudeCliConfig, CodehubRepoSummary, Engine, GithubRepoSummary, MockExecutor, PermissionMode,
 };
@@ -29,13 +29,13 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use ui::vm::{
     activity_row, agent_card, attention_from_rows, cadence_label, collect_label, connector_card,
-    cron_row, hub_overview, is_intrinsic_metric, issue_card, knowledge_row, metric_vm, notify_feed,
-    observation_feed, project_card, session_status_label, settings_vm, skill_card, stage_detail,
-    stage_nav, version_log_vm, week_plan_rows, weekly_delta, weekly_spark, workflow_hub_row,
-    ActivityRowVm, ActivitySource, AgentCardVm, CollectionChainVm, ConnectorCardVm, CronRowVm,
-    FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm, NotifyItemVm, ProjectCardVm,
-    SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm, StageNavItemVm, WeekPlanRowVm,
-    WorkflowHubRowVm,
+    cron_row, hub_overview, is_intrinsic_metric, issue_card, knowledge_row, last_week_has_real_obs,
+    metric_vm, notify_feed, observation_feed, project_card, session_status_label, settings_vm,
+    skill_card, stage_detail, stage_nav, version_log_vm, week_plan_rows, weekly_delta,
+    weekly_spark, workflow_hub_row, ActivityRowVm, ActivitySource, AgentCardVm, CollectionChainVm,
+    ConnectorCardVm, CronRowVm, FeedItemVm, FeedSource, IssueVm, KnowledgeRowVm, MetricVm,
+    NotifyItemVm, ProjectCardVm, SessionCardVm, SettingsVm, SkillCardVm, StageDetailVm,
+    StageNavItemVm, WeekPlanRowVm, WorkflowHubRowVm,
 };
 use ui::{overall_progress, Attention};
 
@@ -76,11 +76,20 @@ pub struct Vm {
     /// 「⬇ 终止」 button on exactly the issue whose run is in flight, and to
     /// keep 「▶ 跑」 greyed for same-project siblings (serial lock).
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
-    /// V1 Issue2 Phase2b: whether a PTY session is active (the UI shows the
-    /// xterm.js terminal widget when `true`). Derived from
-    /// `AppState::pty_input_tx.is_some()` — set in `run_issue_interactive`
-    /// when spawning a PTY session, cleared when the session settles.
+    /// 是否有活着的 PTY 连接。
     pub pty_active: bool,
+    /// 当前焦点会话(驱动可见 xterm)。
+    pub pty_conversation_id: Option<ConversationId>,
+    /// 所有活着的会话(多 xterm 常驻用)。
+    pub pty_live_ids: Vec<ConversationId>,
+    /// 点卡 resume 进行中(「恢复中…」);首包字节后清空。
+    pub pty_restoring: Option<ConversationId>,
+    /// 焦点对应的 issue(看板「当前会话」)。
+    pub focused_issue: Option<bw_core::IssueId>,
+    /// Done/InReview 且有可 resume 会话的 issue(看板「续聊」)。
+    pub consultable_issues: Vec<bw_core::IssueId>,
+    /// 任意状态、有非空 claude_session_id 的 issue(重启后点卡可 resume)。
+    pub resumable_issues: Vec<bw_core::IssueId>,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -202,7 +211,6 @@ pub struct OpVm {
     pub stages: Vec<StageVm>,
     pub metrics: Vec<MetricVm>,
     pub week_plan: Vec<WeekPlanRowVm>,
-    pub stats: ui::vm::StatCardsVm,
     pub overall: u8,
     pub sessions: Vec<SessionCardVm>,
     /// The project's Issues (R1) — assignable work units scoped to a stage,
@@ -231,10 +239,15 @@ pub struct OpVm {
     pub active_run: Option<(bw_core::ProjectId, bw_core::IssueId)>,
     /// P5: weekly-review card (top of the progress panel).
     pub week_review: ui::vm::WeekReviewVm,
-    /// V1 Issue2 Phase2b: whether a PTY session is active (the UI shows the
-    /// xterm.js terminal widget when `true`). Derived from
-    /// `AppState::pty_input_tx.is_some()` in `build_vm`.
     pub pty_active: bool,
+    pub pty_conversation_id: Option<ConversationId>,
+    pub pty_live_ids: Vec<ConversationId>,
+    /// 点卡 resume 进行中 → UI「恢复中…」。
+    pub pty_restoring: Option<ConversationId>,
+    pub focused_issue: Option<bw_core::IssueId>,
+    pub consultable_issues: Vec<bw_core::IssueId>,
+    /// 有可 `--resume` 会话的 issue(含 InProgress;点卡「恢复中…」用)。
+    pub resumable_issues: Vec<bw_core::IssueId>,
 }
 
 /// Transient, non-persistent notices (live run progress, dispatch errors).
@@ -426,11 +439,9 @@ pub struct Kernel {
     tx: mpsc::UnboundedSender<Command>,
     vm_rx: watch::Receiver<Vm>,
     notes: broadcast::Sender<UiNote>,
-    /// V1 Issue2 Phase2b: terminal bytes from the PTY (dedicated watch
-    /// channel, NOT the Vm — a regular `build_vm` could overwrite bytes
-    /// before the UI reads them). The pty_ticker arm sends each batch;
-    /// the UI's xterm.js widget reads via `changed()`.
-    pty_rx: watch::Receiver<Vec<u8>>,
+    /// V1 终端会话重构·底座: 带 conversation_id 的 PTY 字节批次(dedicated
+    /// watch,NOT the Vm)。pty_ticker 发送;UI 按 id 写入对应 xterm。
+    pty_rx: watch::Receiver<Vec<(ConversationId, Vec<u8>)>>,
 }
 
 impl Kernel {
@@ -443,10 +454,8 @@ impl Kernel {
     pub fn notes(&self) -> broadcast::Receiver<UiNote> {
         self.notes.subscribe()
     }
-    /// V1 Issue2 Phase2b: terminal bytes watch receiver. The UI's xterm.js
-    /// widget calls `changed().await` to get new bytes, then writes them
-    /// to the terminal via `document::eval`.
-    pub fn pty_bytes(&self) -> watch::Receiver<Vec<u8>> {
+    /// V1 终端会话重构·底座: 带 conversation_id 的字节批次 watch。
+    pub fn pty_bytes(&self) -> watch::Receiver<Vec<(ConversationId, Vec<u8>)>> {
         self.pty_rx.clone()
     }
 }
@@ -520,10 +529,8 @@ pub fn spawn() -> Kernel {
     let (vm_tx, vm_rx) = watch::channel(Vm::default());
     let (note_tx, _keep) = broadcast::channel::<UiNote>(256);
     let notes = note_tx.clone();
-    // V1 Issue2 Phase2b: dedicated watch channel for PTY terminal bytes.
-    // Separate from the Vm to avoid the race where a regular `build_vm`
-    // overwrites bytes before the UI reads them.
-    let (pty_tx, pty_rx) = watch::channel(Vec::<u8>::new());
+    // V1 终端会话重构·底座: 带 conversation_id 的字节通道(替代无身份单槽)。
+    let (pty_tx, pty_rx) = watch::channel(Vec::<(ConversationId, Vec<u8>)>::new());
 
     std::thread::Builder::new()
         .name("bw-kernel".into())
@@ -736,15 +743,18 @@ pub fn spawn() -> Kernel {
                                 }
                             }
                         }
-                        // V1 Issue2 Phase2b: drain PTY bytes → dedicated
-                        // watch channel (NOT the Vm — avoids the race where
-                        // a regular `build_vm` overwrites bytes before the UI
-                        // reads them). The UI's xterm.js widget reads via
-                        // `pty_rx.changed().await` and writes to the terminal.
+                        // V1 终端会话重构·底座: drain 带 id 的批次 → watch。
+                        // 重启恢复:首包到达清 pty_restoring 时重建 Vm,让「恢复中…」消失。
                         _ = pty_ticker.tick() => {
-                            let bytes = app.drain_pty_bytes();
-                            if !bytes.is_empty() {
-                                let _ = pty_tx.send(bytes);
+                            let was_restoring = app.pty_restoring().is_some();
+                            let batches = app.drain_pty_events();
+                            let cleared_restoring =
+                                was_restoring && app.pty_restoring().is_none();
+                            if !batches.is_empty() {
+                                let _ = pty_tx.send(batches);
+                            }
+                            if cleared_restoring {
+                                let _ = vm_tx.send(build_vm(&app, &store).await);
                             }
                         }
                     }
@@ -795,6 +805,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             p.signal,
             &stage_progresses,
             open_issues,
+            &p.workspace_path,
         ));
     }
 
@@ -936,7 +947,13 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         github_repos: state.github_repos.clone(),
         codehub_repos: state.codehub_repos.clone(),
         active_run: app.active_run(),
-        pty_active: state.pty_input_tx.is_some(),
+        pty_active: app.pty_active(),
+        pty_conversation_id: app.focused_pty_conversation(),
+        pty_live_ids: app.live_pty_ids(),
+        pty_restoring: app.pty_restoring(),
+        focused_issue: app.focused_pty_issue(),
+        consultable_issues: Vec::new(),
+        resumable_issues: Vec::new(),
     };
 
     let Some(pid) = state.active_project else {
@@ -997,7 +1014,13 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             let mid = m.id;
             let obs_ts = series_ts.get(&mid).map(Vec::as_slice).unwrap_or(&[]);
             let wk_spark = weekly_spark(obs_ts, now_unix);
-            let wk_delta = weekly_delta(&wk_spark);
+            // V1-quickfix(W3-8): if the latest week has no real observation
+            // (only carry-forward), delta is meaningless — show "—" not "0.0".
+            let wk_delta = if last_week_has_real_obs(obs_ts, now_unix) {
+                weekly_delta(&wk_spark)
+            } else {
+                None
+            };
             let is_intrinsic = is_intrinsic_metric(&m.name);
             let chain = CollectionChainVm {
                 collect_label: collect_label(&m.collect_kind, is_intrinsic).to_string(),
@@ -1209,18 +1232,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         .and_then(|(apid, rows)| (*apid == pid).then(|| ui::vm::artifact_rows(rows, now)));
 
     let overall = overall_progress(&stages.iter().map(|s| s.progress).collect::<Vec<_>>());
-    let stats = ui::vm::stat_cards(
-        stages.len(),
-        &sessions
-            .iter()
-            .map(|s| {
-                (
-                    s.kind == bw_store::SessionKind::Create,
-                    s.status == SessionStatus::Active,
-                )
-            })
-            .collect::<Vec<_>>(),
-    );
 
     // P5: weekly-review card — a pure read of already-recorded facts. Counts
     // come off `state.issues` + the per-metric latest-observation-ts map built
@@ -1251,6 +1262,10 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             })
             .count() as u32,
     );
+    let resumable = store
+        .list_resumable_conversation_issue_ids(pid)
+        .await
+        .unwrap_or_default();
 
     vm.op = Some(OpVm {
         id: pid,
@@ -1280,7 +1295,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         stages: stage_vms,
         metrics,
         week_plan,
-        stats,
         overall,
         sessions: session_cards,
         issues: state
@@ -1295,14 +1309,39 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         // P4: the explicitly-opened Issue detail — assembled by
         // `Command::OpenIssueDetail`, mapped 1:1 here, `None` = no overlay.
         issue_detail: state.issue_detail.as_ref().map(|d| {
-            ui::vm::issue_detail_vm(&d.issue, &d.runs, &d.changes, &d.artifacts, &state.agents)
+            ui::vm::issue_detail_vm(
+                &d.issue,
+                &d.runs,
+                &d.changes,
+                &d.artifacts,
+                &state.agents,
+                d.is_interactive,
+            )
         }),
         active_run: app.active_run(),
         week_review,
-        // V1 Issue2 Phase2b: PTY active flag (drives the xterm.js widget
-        // visibility in the WorkflowStage component).
-        pty_active: state.pty_input_tx.is_some(),
+        pty_active: app.pty_active(),
+        pty_conversation_id: app.focused_pty_conversation(),
+        pty_live_ids: app.live_pty_ids(),
+        pty_restoring: app.pty_restoring(),
+        focused_issue: app.focused_pty_issue(),
+        consultable_issues: {
+            state
+                .issues
+                .iter()
+                .filter(|i| {
+                    matches!(i.status, IssueStatus::Done | IssueStatus::InReview)
+                        && resumable.contains(&i.id)
+                })
+                .map(|i| i.id)
+                .collect()
+        },
+        resumable_issues: resumable,
     });
-    vm.pty_active = state.pty_input_tx.is_some();
+    vm.pty_active = app.pty_active();
+    vm.pty_conversation_id = app.focused_pty_conversation();
+    vm.pty_live_ids = app.live_pty_ids();
+    vm.pty_restoring = app.pty_restoring();
+    vm.focused_issue = app.focused_pty_issue();
     vm
 }

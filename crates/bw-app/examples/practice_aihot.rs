@@ -431,7 +431,9 @@ fn find_issue_by_number(issues: &[bw_core::model::Issue], number: i64) -> &bw_co
 }
 
 /// `probe-run <number>` —— 真执行器诚实探测(只用这一次,见文件头注释)。
-/// 真跑一个真实小活,让 workflow_run 留一条 100% 真实的记录(成或败都如实)。
+/// 真跑一个真实小活。V1-TermClose3:RunIssue 走嵌入终端(inline run_skill),
+/// 不再留 workflow_run 行;证据改读 agent_run/skill_use 表(成或败都如实)。
+/// 网关抖动/配额/预算腰斩都是合法结果,如实打印、绝不吞掉。
 async fn cmd_probe_run(app: &mut App, project: ProjectId, args: &[String]) {
     let [number] = args else {
         panic!("用法: probe-run <number>");

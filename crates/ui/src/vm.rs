@@ -48,6 +48,10 @@ pub struct ProjectCardVm {
     /// the A4 handoff risky-guard) — the wall's "open work" badge. `0` means
     /// the badge doesn't render; this field just carries the honest number.
     pub open_issues: usize,
+    /// W3-9: the project's real-executor target directory (empty = unconfigured).
+    /// Surfaced so the delete-confirm UI can show the path the user is about
+    /// to lose (or keep, if it's a user-bound dir).
+    pub workspace_path: String,
 }
 
 /// Build one wall card. `stage_progresses` = the project's real stage progress
@@ -64,6 +68,7 @@ pub fn project_card(
     signal: Option<Signal>,
     stage_progresses: &[u8],
     open_issues: usize,
+    workspace_path: &str,
 ) -> ProjectCardVm {
     let running = phase == Readiness::Running;
     let progress = if running {
@@ -95,6 +100,7 @@ pub fn project_card(
         meta,
         cycle_label: cycle.label(),
         open_issues,
+        workspace_path: workspace_path.into(),
     }
 }
 
@@ -301,6 +307,16 @@ pub fn weekly_spark(obs: &[(i64, String)], now_unix: i64) -> Vec<f32> {
         }
     }
     spark
+}
+
+/// V1-quickfix · whether the latest (current) week bucket has a real
+/// observation (not a carry-forward). Used so `weekly_delta` doesn't read
+/// 0.0 off a carry-forward-filled last bucket when the week was unmeasured.
+pub fn last_week_has_real_obs(obs: &[(i64, String)], now_unix: i64) -> bool {
+    let week_start = iso_week_start_unix(now_unix);
+    const WEEK: i64 = 7 * 86_400;
+    obs.iter()
+        .any(|(ts, _)| *ts >= week_start && *ts < week_start + WEEK)
 }
 
 /// V1-Issue3 · latest week − prior week. None when <2 weeks of history.
@@ -511,33 +527,6 @@ pub fn signal_label(s: Signal) -> &'static str {
 }
 
 // ───────────────────────── stat cards ─────────────────────────
-
-/// The three showProgAll stat cards, from real rows.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct StatCardsVm {
-    /// 工作流累计 = create sessions ever run.
-    pub workflows_total: u32,
-    /// 定时任务运行中 = materialized stages (each carries a standing routine
-    /// once the project is running).
-    pub routines_active: u32,
-    /// 优化中待验收 = active optimize sessions.
-    pub optimizing: u32,
-}
-
-pub fn stat_cards(
-    materialized_stage_count: usize,
-    // (kind is create?, is_active)
-    sessions: &[(bool, bool)],
-) -> StatCardsVm {
-    StatCardsVm {
-        workflows_total: sessions.iter().filter(|(create, _)| *create).count() as u32,
-        routines_active: materialized_stage_count as u32,
-        optimizing: sessions
-            .iter()
-            .filter(|(create, live)| !*create && *live)
-            .count() as u32,
-    }
-}
 
 // ───────────────────────── chat ─────────────────────────
 
@@ -1024,6 +1013,9 @@ pub fn issue_detail_vm(
     changes: &[RunChanges],
     artifacts: &[Artifact],
     agents: &[AgentCard],
+    // V1 终端会话重构(阶段1): claude_conversation 行存在与否(替代旧
+    // issue.interactive_started,调用方查 conversation 传入)。
+    is_interactive: bool,
 ) -> IssueDetailVm {
     let run_rows = runs
         .iter()
@@ -1079,7 +1071,7 @@ pub fn issue_detail_vm(
                 (a.path.clone(), short, a.bytes)
             })
             .collect(),
-        is_interactive: issue.interactive_started,
+        is_interactive,
     }
 }
 

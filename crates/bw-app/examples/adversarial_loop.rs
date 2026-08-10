@@ -5,10 +5,15 @@
 //! 全程用**可脚本化的 MockExecutor**(产出自我标注【mock】),不碰真 claude(网关
 //! 抖动),每条路径结束都从 store 读回并打印证据(报告不代答)。
 //!
-//! 四条路径:
-//!   A 两轮打回后通过(Dynamic 轨,评审真实提议目标)→ 多轮 run 行 + Issue 进 InReview
-//!   B 打满上限转 Blocked(Dynamic 轨,每轮打回)→ 3/3 + blocked_reason 含最后 reason
-//!   C 解析失败=诚实失败(评审无裁决块)→ run 行 failed 且原因如实、Issue 仍 InProgress
+//! V1-TermClose3:issue ▶跑 全走嵌入终端后,RunIssue 不再走阶段循环机器。A/B/C
+//! 三路从 RunIssue retarget 到 RunStagePlaybook(阶段循环机器仍在,对抗循环还在
+//! 那里);D 路用 RunWorkflow(自定义 spec,静态轨)。断言改读 workflow_run 行
+//! (按 session 过滤),不再断言 issue 状态(RunStagePlaybook 无 issue)。
+//!
+//! 四条路径(全走阶段循环,非 issue 终端):
+//!   A 两轮打回后通过(Dynamic 轨,评审真实提议目标)→ 多轮 run 行
+//!   B 打满上限(Dynamic 轨,每轮打回)→ 3 轮 run 行
+//!   C 解析失败=诚实失败(评审无裁决块)→ run 行 failed 且原因如实
 //!   D 静态轨打回目标覆盖(评审提议越界目标,按声明目标打回)+ 评审后尾阶段
 //!
 //! 用法:adversarial_loop <db-path>
@@ -16,16 +21,15 @@
 
 use bw_app::{App, Command};
 use bw_core::model::{
-    HubSource, IssuePriority, LoopConfig, Maturity, PhaseMeta, PhaseRole, StageKind, WorkflowKind,
-    WorkflowSpec,
+    HubSource, LoopConfig, Maturity, PhaseMeta, PhaseRole, StageKind, WorkflowKind, WorkflowSpec,
 };
-use bw_core::{IssueId, ProjectId, SessionId, WorkflowId};
+use bw_core::{ProjectId, SessionId, WorkflowId};
 use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
 use bw_store::{NewSession, SessionKind, SqliteStore, Store};
 use std::sync::Arc;
 
 /// The Build stage's Evaluator phase name (`kind.method_loop()` 最后一项) — the
-/// gate RunIssue's playbook spec drives, so this is the phase we script.
+/// gate the stage playbook drives, so this is the phase we script.
 const BUILD_GATE: &str = "评审合入 · CI 门禁";
 
 /// Build a fresh App wrapping a scripted mock over the shared store, then Boot.
@@ -39,22 +43,18 @@ async fn app_with_script(store: Arc<dyn Store>, script: Vec<(String, Vec<String>
     app
 }
 
-/// Print every workflow_run row bound to an issue, oldest→newest (read-back).
-async fn dump_issue_runs(store: &Arc<dyn Store>, issue_id: IssueId, label: &str) {
-    let issue = store
-        .get_issue(issue_id)
+/// Print every workflow_run row for a session, oldest→newest (read-back).
+/// V1-TermClose3:RunStagePlaybook 无 issue,改按 session_id 过滤 workflow_run 行。
+async fn dump_stage_runs(store: &Arc<dyn Store>, session: SessionId, label: &str) {
+    let mut runs: Vec<_> = store
+        .list_all_workflow_runs(1000)
         .await
-        .expect("issue")
-        .expect("row");
-    let mut runs = store.list_runs_for_issue(issue_id).await.expect("runs");
+        .expect("runs")
+        .into_iter()
+        .filter(|r| r.session_id == Some(session))
+        .collect();
     runs.reverse(); // list is newest-first; show in round order
-    println!(
-        "  [{label}] Issue #{} 现状 = [{}]  blocked_reason={:?}",
-        issue.number,
-        issue.status.label(),
-        issue.blocked_reason
-    );
-    println!("    ↳ {} 轮 run 行:", runs.len());
+    println!("  [{label}] {} 轮 run 行:", runs.len());
     for (i, r) in runs.iter().enumerate() {
         println!(
             "      round {} · status={} · phases={} · error={:?}",
@@ -70,23 +70,7 @@ async fn dump_issue_runs(store: &Arc<dyn Store>, issue_id: IssueId, label: &str)
     }
 }
 
-/// Create a Backlog Build-stage issue and return its id.
-async fn make_build_issue(app: &mut App, title: &str) -> IssueId {
-    let id = IssueId::new();
-    app.dispatch(Command::CreateIssue {
-        id,
-        stage: StageKind::Build,
-        title: title.into(),
-        desc: "T9 对抗循环 E2E 演示件".into(),
-        priority: IssuePriority::Medium,
-        standard_skill: String::new(),
-    })
-    .await
-    .expect("create issue");
-    id
-}
-
-/// Mint a real session row for a run (RunIssue/RunWorkflow append messages, so
+/// Mint a real session row (RunStagePlaybook/RunWorkflow append messages, so
 /// the FK target must exist first).
 async fn new_session(store: &Arc<dyn Store>, pid: ProjectId, title: &str) -> SessionId {
     let session = SessionId::new();
@@ -147,17 +131,19 @@ async fn main() {
         )
         .await;
         app.dispatch(Command::OpenProject(pid)).await.expect("open");
-        let issue = make_build_issue(&mut app, "A · 两轮打回后通过").await;
         let session = new_session(&store, pid, "A · 两轮打回后通过").await;
-        app.dispatch(Command::RunIssue { session, id: issue })
-            .await
-            .expect("run issue A");
+        app.dispatch(Command::RunStagePlaybook {
+            session,
+            stage_kind: StageKind::Build,
+        })
+        .await
+        .expect("run stage playbook A");
         println!("Path A · 两轮打回后通过(Dynamic 轨,评审提议目标=2):");
-        dump_issue_runs(&store, issue, "A").await;
+        dump_stage_runs(&store, session, "A").await;
         println!();
     }
 
-    // ── Path B: 打满上限转 Blocked(Dynamic 轨)──────────────────────────
+    // ── Path B: 打满上限(Dynamic 轨)──────────────────────────────────────
     {
         let mut app = app_with_script(
             store.clone(),
@@ -175,13 +161,15 @@ async fn main() {
         )
         .await;
         app.dispatch(Command::OpenProject(pid)).await.expect("open");
-        let issue = make_build_issue(&mut app, "B · 打满上限转 Blocked").await;
-        let session = new_session(&store, pid, "B · 打满上限转 Blocked").await;
-        app.dispatch(Command::RunIssue { session, id: issue })
-            .await
-            .expect("run issue B（Blocked 是正常终态,非错误）");
-        println!("Path B · 打满上限转 Blocked(Dynamic 轨,每轮打回):");
-        dump_issue_runs(&store, issue, "B").await;
+        let session = new_session(&store, pid, "B · 打满上限").await;
+        app.dispatch(Command::RunStagePlaybook {
+            session,
+            stage_kind: StageKind::Build,
+        })
+        .await
+        .expect("run stage playbook B（触上限是正常终态,非错误）");
+        println!("Path B · 打满上限(Dynamic 轨,每轮打回):");
+        dump_stage_runs(&store, session, "B").await;
         println!();
     }
 
@@ -196,18 +184,22 @@ async fn main() {
         )
         .await;
         app.dispatch(Command::OpenProject(pid)).await.expect("open");
-        let issue = make_build_issue(&mut app, "C · 评审输出缺裁决").await;
         let session = new_session(&store, pid, "C · 评审输出缺裁决").await;
-        let res = app.dispatch(Command::RunIssue { session, id: issue }).await;
+        let res = app
+            .dispatch(Command::RunStagePlaybook {
+                session,
+                stage_kind: StageKind::Build,
+            })
+            .await;
         println!(
-            "Path C · 解析失败=诚实失败(RunIssue 返回 = {}):",
+            "Path C · 解析失败=诚实失败(RunStagePlaybook 返回 = {}):",
             if res.is_err() {
                 "Err(诚实失败)"
             } else {
                 "Ok"
             }
         );
-        dump_issue_runs(&store, issue, "C").await;
+        dump_stage_runs(&store, session, "C").await;
         println!();
     }
 
@@ -324,5 +316,5 @@ async fn main() {
         println!();
     }
 
-    println!("== 读回完毕。用 sqlite3 {db} 独立复核 workflow_run / issue 表 ==");
+    println!("== 读回完毕。用 sqlite3 {db} 独立复核 workflow_run 表 ==");
 }

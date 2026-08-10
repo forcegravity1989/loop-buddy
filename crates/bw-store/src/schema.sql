@@ -494,24 +494,34 @@ CREATE TABLE IF NOT EXISTS issue (
     -- by-name convention) this Issue is wired to. '' = no association (every
     -- hand-created / autopilot Issue). Set once at creation, never rewritten.
     standard_skill TEXT NOT NULL DEFAULT '',
-    -- V1 Issue2 Phase2a: whether the interactive skill session has been
-    -- started (first ▶跑 spawned claude with the skill body). 0 = first run
-    -- (build_startup_plan); 1 = resume (--continue, session persists under
-    -- ~/.claude/projects/<encoded-cwd>/). Set before first spawn, never reset.
-    interactive_started INTEGER NOT NULL DEFAULT 0,
-    -- V1 Issue2 Phase2b: the claude session_id captured from the SessionStart
-    -- hook event. '' = not yet captured (first spawn may have failed, or the
-    -- hook hasn't fired). When non-empty, the next ▶跑 resumes via
-    -- `claude --resume <session_id>` (precise session, not --continue's "most
-    -- recent in cwd"). F1 fix: resume decision uses THIS column, not
-    -- interactive_started — empty session_id = fallback to build_startup_plan
-    -- (re-inject skill, don't get stuck in a skill-less session).
-    claude_session_id TEXT NOT NULL DEFAULT '',
+    -- V1 终端会话重构(阶段1): interactive_started + claude_session_id
+    -- 两列已退场(物理 DROP,见 sqlite.rs drop_column_if_present)。会话身
+    -- 份搬到下方 claude_conversation 表。业务读路径(is_resume /
+    -- is_interactive)只认新表,不留双读 fallback(守「不为向后兼容留旧
+    -- 路径」)。
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_issue_project_number ON issue(project_id, number);
 CREATE INDEX IF NOT EXISTS idx_issue_project_stage ON issue(project_id, stage);
+
+-- V1 终端会话重构(阶段1): Claude 会话 / Conversation 的持久身份。
+-- 把活(Issue)和会话(Conversation)解耦:会话有独立身份,不随活 Done
+-- 而结束。一件交互式活最多一个会话(issue_id UNIQUE)。这行只存持久身份
+-- 和恢复所需事实(claude --resume 要用的 claude_session_id + 固定
+-- worktree 路径);PTY 句柄/channel/尺寸是纯内存,进程死了如实消失,
+-- 从这行恢复身份。详见 issue2-terminal-conversation-refactor.md §4。
+-- 新表,CREATE TABLE IF NOT EXISTS 即是充分守卫(无 add_column)。
+CREATE TABLE IF NOT EXISTS claude_conversation (
+    id                TEXT PRIMARY KEY,            -- buddy 自己的稳定会话 id
+    project_id         TEXT NOT NULL REFERENCES project(id),
+    issue_id          TEXT NOT NULL UNIQUE REFERENCES issue(id), -- 一件交互式活最多一个会话
+    claude_session_id TEXT NOT NULL DEFAULT '',   -- claude CLI 的 --resume id(hook 回传,空=未捕获)
+    workspace_path    TEXT NOT NULL DEFAULT '',   -- 固定 worktree 路径(重启 resume 重建用同路径)
+    branch_name       TEXT NOT NULL DEFAULT '',   -- bw/issue-<github_number>
+    created_at        INTEGER NOT NULL,
+    last_opened_at    INTEGER NOT NULL
+);
 
 -- T14 (2026-07-24, plan/12 §10 v1.1): tiny app-scoped key/value table for
 -- one-shot migration markers — starting with the legacy-shell migration's

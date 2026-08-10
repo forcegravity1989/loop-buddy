@@ -159,8 +159,13 @@ pub struct LaunchPlan {
 /// Build the startup plan for an interactive agent session.
 ///
 /// For claude (`supported = true`):
-/// `claude --append-system-prompt <bridge> <skill_body>
+/// `claude --append-system-prompt <system_prompt> <position_prompt>
 ///  --dangerously-skip-permissions --disallowedTools "Bash(gh pr merge)"`
+///
+/// - `system_prompt` → `--append-system-prompt`(caller 传 bridge prompt +
+///   技能正文 + 蒸馏/目录块,见 `run_issue_interactive`)。
+/// - `position_prompt` → 位置 prompt(auto-submit 首句用户消息;caller 传
+///   issue 标题+描述)。
 ///
 /// No `-p`/`--print` (interactive), no `--max-budget-usd` (interactive
 /// sessions are user-paced, no per-call cap). The env is inherited from
@@ -168,8 +173,8 @@ pub struct LaunchPlan {
 /// [`crate::ClaudeCliExecutor`]) so the child uses its own CLI config.
 pub fn build_startup_plan(
     agent: &TuiAgentConfig,
-    skill_body: &str,
-    bridge_system_prompt: &str,
+    position_prompt: &str,
+    system_prompt: &str,
     workspace_cwd: &Path,
 ) -> Result<LaunchPlan, ExecError> {
     if !agent.supported {
@@ -196,15 +201,19 @@ pub fn build_startup_plan(
     }
 
     let mut args = Vec::with_capacity(8);
-    // Bridge system prompt — appended to the default system prompt.
+    // System prompt — appended to claude's default system prompt. Caller
+    // assembles bridge (project context + 铁律 + 技能契约) + 技能正文 +
+    // 蒸馏/目录块 into this one string.
     args.push("--append-system-prompt".to_string());
-    args.push(bridge_system_prompt.to_string());
-    // Skill body — positional `prompt` argument (first user message).
-    // DEVIATION: design calls for `--prefill <skill_body>` (draft in the
-    // input box); the flag doesn't exist in the current CLI. Positional
-    // prompt achieves the same effect (skill body is the first thing the
-    // agent sees and acts on), just auto-sent instead of a draft.
-    args.push(skill_body.to_string());
+    args.push(system_prompt.to_string());
+    // Positional `prompt` — the first user message, auto-submitted
+    // (`submit_prompt: true` sends Enter). Caller passes issue 标题+描述
+    // (the requirement); the skill methodology lives in the system prompt
+    // above, so claude runs the method ON the requirement.
+    // DEVIATION: design once called for `--prefill <skill_body>` (draft in
+    // the input box); the flag doesn't exist in the current CLI. Positional
+    // prompt achieves the same effect, just auto-sent instead of a draft.
+    args.push(position_prompt.to_string());
     // Skip permissions — interactive sessions need to read/write files
     // and run commands without per-action prompts (the user is watching
     // the terminal and can intervene at any time).
@@ -299,6 +308,46 @@ pub fn build_resume_plan(
     })
 }
 
+/// V1-TermRefactor5 · 咨询态守门规则(设计 md §6.2)。
+///
+/// 行为约定,不是技术只读——claude 仍有完整 CLI 能力;buddy 不宣称硬隔离。
+/// 仅 [`build_consultation_resume_plan`](Done/InReview 续聊)注入;
+/// 交付 resume([`build_resume_plan`])不带这条。
+pub const CONSULTATION_APPEND_PROMPT: &str = "\
+这件活已经完成并由人验收。你可以继续回答历史决策、代码解释、后续讨论。\
+如果用户提出新的文件修改、代码开发或其他会产生交付的工作,\
+请建议用户在 buddy 中新建一件活来处理,不要把新交付继续记在这件已完成的活上。";
+
+/// Build the consultation resume plan (V1-TermRefactor5 · 咨询态).
+///
+/// Same as [`build_resume_plan`] (`--resume` / `--continue` + yolo + deny
+/// `gh pr merge`), plus `--append-system-prompt` with
+/// [`CONSULTATION_APPEND_PROMPT`]. Only the `open_conversation` path
+/// (Done/InReview 续聊) should call this — delivery resume stays on
+/// [`build_resume_plan`] so InProgress 交付不注入咨询规则。
+///
+/// Honest posture: this is a behavioural convention, not a hard sandbox.
+pub fn build_consultation_resume_plan(
+    agent: &TuiAgentConfig,
+    session_id: Option<&str>,
+    workspace_cwd: &Path,
+) -> Result<LaunchPlan, ExecError> {
+    let mut plan = build_resume_plan(agent, session_id, workspace_cwd)?;
+    // Inject consultation rules ahead of the permission flags so the
+    // append is adjacent to the resume identity (mirrors startup plan's
+    // `--append-system-prompt` placement near the front).
+    let insert_at = if plan.args.first().is_some_and(|a| a == agent.resume_id_flag) {
+        2 // after `--resume <id>`
+    } else {
+        1 // after `--continue`
+    };
+    plan.args
+        .insert(insert_at, "--append-system-prompt".to_string());
+    plan.args
+        .insert(insert_at + 1, CONSULTATION_APPEND_PROMPT.to_string());
+    Ok(plan)
+}
+
 // ─── Bridge system prompt ──────────────────────────────────────────────
 
 /// Build the bridge (衔接层) system prompt — the persistent context the
@@ -348,7 +397,14 @@ pub fn build_bridge_system_prompt(playbook_ctx: &PlaybookCtx, skill_slug: &str) 
     if !playbook_ctx.workspace_hint.trim().is_empty() {
         s.push_str(&format!("- 工作区: {}\n", playbook_ctx.workspace_hint));
     }
-    s.push_str(&format!("\n你正在执行技能: `{skill_slug}`\n"));
+    // V1 收口:空技能(无技能 issue)显「未关联技能」;非空(含未知 typo)显
+    // 「你正在执行技能: {slug}」让用户看到 slug 能自查。下方技能契约 match 对
+    // 未知 slug 走 `_` 臂只给通用铁律,空 slug 同样。
+    if skill_slug.trim().is_empty() {
+        s.push_str("\n未关联技能,由你驱动或按用户要求干活;项目上下文与铁律已就位。\n");
+    } else {
+        s.push_str(&format!("\n你正在执行技能: `{skill_slug}`\n"));
+    }
 
     // ── Skill-specific 产出契约 + 读上游 ──
     s.push_str("\n## 技能契约\n\n");
@@ -571,12 +627,6 @@ impl InteractiveCliExecutor {
         self.claude_binary = binary;
         self
     }
-
-    /// Override the wall-clock timeout (mainly for tests).
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
 }
 
 impl Default for InteractiveCliExecutor {
@@ -631,11 +681,14 @@ impl InteractiveExecutor for InteractiveCliExecutor {
             let _child = cmd.spawn().map_err(|e| {
                 ExecError::Failed(format!("failed to spawn Terminal (osascript): {e}"))
             })?;
-            // Can't wait on the claude process — use timeout.
-            tokio::time::sleep(self.timeout).await;
+            // Can't wait on the claude process — osascript returns immediately
+            // after telling Terminal to open. Sleeping to timeout then claiming
+            // `completed = true` would be a false-success (违反「读回为证」).
+            // Stay honest: report not-completed so the issue stays InProgress
+            // (never auto-Done) and the human verifies in Terminal instead.
             return Ok(SkillOutput {
-                completed: true,
-                summary: "(wall-clock timeout — Terminal session may still be running)".to_string(),
+                completed: false,
+                summary: "未验证：osascript 启动 Terminal 后拿不到 claude 句柄，无法等待其退出。请在 Terminal 里确认会话结束后手动推进，buddy 不替你判定完成。".to_string(),
             });
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -1044,6 +1097,19 @@ mod tests {
         let prompt = build_bridge_system_prompt(&ctx, "some-unknown-skill");
         assert!(prompt.contains("Done 永不自动"));
         assert!(prompt.contains("通用铁律"));
+        // 非空(含未知 typo)slug 仍显「你正在执行技能」,让用户自查。
+        assert!(prompt.contains("你正在执行技能: `some-unknown-skill`"));
+    }
+
+    #[test]
+    fn build_bridge_system_prompt_empty_skill_shows_unspecified_not_skill_label() {
+        // V1 收口:无技能 issue 也走终端 —— 空 slug 不报错,bridge 显
+        // 「未关联技能」(不假装在执行某技能),通用铁律仍在。
+        let ctx = mock_playbook_ctx();
+        let prompt = build_bridge_system_prompt(&ctx, "");
+        assert!(prompt.contains("Done 永不自动"));
+        assert!(prompt.contains("未关联技能"));
+        assert!(!prompt.contains("你正在执行技能"));
     }
 
     #[tokio::test]
@@ -1130,6 +1196,58 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.to_string().contains("cursor"));
         assert!(err.to_string().contains("暂不支持"));
+    }
+
+    #[test]
+    fn build_consultation_resume_plan_appends_rules() {
+        let tmp = tempfile_dir();
+        let plan = build_consultation_resume_plan(&CLAUDE, Some("abc-123-session-id"), &tmp)
+            .expect("claude is supported");
+        assert_eq!(plan.binary, "claude");
+        assert!(plan.args.contains(&"--resume".to_string()));
+        assert!(plan.args.contains(&"abc-123-session-id".to_string()));
+        // Consultation-only: --append-system-prompt with §6.2 rules.
+        let append_idx = plan
+            .args
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .expect("consultation plan must append system prompt");
+        assert_eq!(
+            plan.args.get(append_idx + 1).map(String::as_str),
+            Some(CONSULTATION_APPEND_PROMPT)
+        );
+        assert!(CONSULTATION_APPEND_PROMPT.contains("新建一件活"));
+        assert!(!CONSULTATION_APPEND_PROMPT.contains("只读"));
+        // Same permission posture as delivery resume.
+        assert!(plan
+            .args
+            .contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(plan.args.contains(&"--disallowedTools".to_string()));
+        assert!(plan.args.contains(&"Bash(gh pr merge)".to_string()));
+        // No positional skill body / no --continue (precise resume).
+        assert!(!plan.args.contains(&"--continue".to_string()));
+        assert!(!plan.submit_prompt);
+        assert_eq!(plan.cwd, tmp);
+    }
+
+    #[test]
+    fn build_resume_plan_stays_without_consultation_append() {
+        // Delivery resume must NOT inject consultation rules — only
+        // open_conversation uses build_consultation_resume_plan.
+        let tmp = tempfile_dir();
+        let plan = build_resume_plan(&CLAUDE, Some("delivery-session"), &tmp).unwrap();
+        assert!(!plan.args.iter().any(|a| a == "--append-system-prompt"));
+        assert!(!plan
+            .args
+            .iter()
+            .any(|a| a.contains("新建一件活") || a == CONSULTATION_APPEND_PROMPT));
+    }
+
+    #[test]
+    fn build_consultation_resume_plan_cursor_unsupported() {
+        let tmp = tempfile_dir();
+        let result = build_consultation_resume_plan(&CURSOR, Some("id"), &tmp);
+        assert!(result.is_err());
     }
 
     #[tokio::test]

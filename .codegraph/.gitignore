@@ -1,0 +1,4 @@
+# CI publishes the stable CodeGraph snapshot; runtime state stays machine-local.
+*
+!.gitignore
+!codegraph.db
