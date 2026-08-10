@@ -20,8 +20,8 @@ pub mod registry;
 pub use caps::{ChangeState, CheckConclusion, CheckRun, Collect, CollectOut, CollectReq};
 pub use caps::{Connector, Execute, IssueOps, IssueState, OpenChangeReq, Probe, ProbeReport};
 pub use contract::{
-    CallCtx, Capability, CapabilitySet, ConfigRef, ConnError, ConnResult, ConnectorEntry,
-    ConnectorKind, ExecSpec, ExecState, ExecTicket, Fail, IdemKey, InjectBlock, Ok as ConnOk,
-    ProjectBinding, RequestId, WriteOutcome, PROTOCOL,
+    guarded, CallCtx, CallOk, Capability, CapabilitySet, ConfigRef, ConnError, ConnResult,
+    ConnectorEntry, ConnectorKind, ExecSpec, ExecState, ExecTicket, Fail, IdemKey, InjectBlock,
+    OpClass, ProjectBinding, RequestId, WriteOutcome, PROTOCOL,
 };
 pub use registry::{ConnectorRegistry, RoutingError};

@@ -21,9 +21,11 @@ script = ["dep:toml"]
 bw-core = { path = "../bw-core" }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
+# `RequestId::new()` 要 v4(随机)生成。workspace 的 `uuid` 默认关掉 v4(内核
+# crate 要保 wasm32 可编译),这里显式声明,不隐式蹭 bw-core 的 `idgen`
+# feature 顺带打开——那条依赖链纯属巧合,不该是 bw-connector 能编译的原因。
+uuid = { workspace = true, features = ["v4"] }
 time = { workspace = true }
 tokio = { workspace = true, features = ["process", "time", "fs"] }
 tokio-util = { workspace = true }

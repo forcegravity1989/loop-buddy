@@ -12,12 +12,20 @@ TARGETS=(
   next/crates/bw-core/src
   next/crates/bw-app/src
 )
-FORBIDDEN='std::process::Command|tokio::process'
+# 放宽到 `std::process`(不只 `::Command`)—— `std::process::exit`、
+# `use std::process as p` 之类的旁路同样绕过了连接器接口,原来只锁
+# `std::process::Command` 会漏掉这些。
+FORBIDDEN='std::process|tokio::process'
 
 existing=()
 for t in "${TARGETS[@]}"; do
   if [ -d "$t" ]; then
-    existing+=("$t")
+    # 不用 `existing+=("$t")`:macOS 自带的 bash 3.2 在 `set -u` 下,对**零元素**
+    # 数组做 `+=`/`"${arr[@]}"` 展开会报 "unbound variable"(3.2 的老 bug,4.4
+    # 才修)。这里第一次追加时 existing 还是空数组,会踩中它——改用
+    # `${existing[@]+"${existing[@]}"}` 惯用法:数组为空时展开成空,不触发
+    # nounset 报错;非空时正常展开。
+    existing=("${existing[@]+"${existing[@]}"}" "$t")
   else
     echo "… $t 尚不存在,跳过(切片进度使然,覆盖面随后续切片扩大)"
   fi
@@ -28,7 +36,7 @@ if [ "${#existing[@]}" -eq 0 ]; then
   exit 1
 fi
 
-if grep -rnE "$FORBIDDEN" "${existing[@]}"; then
+if grep -rnE "$FORBIDDEN" "${existing[@]+"${existing[@]}"}"; then
   echo "✗ 编排层/内核出现直接进程调用,对外能力必须经 bw-connector 的四个接口"
   exit 1
 fi

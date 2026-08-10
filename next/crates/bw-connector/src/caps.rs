@@ -69,9 +69,11 @@ pub trait Probe: Send + Sync {
 }
 
 /// 一次探活的结果。
+///
+/// 刻意没有 `reachable: bool` 字段——探活失败走 `Err`,能拿到 `ProbeReport`
+/// 就已经证明连上了;恒真字段不携带信息,删掉它比留着「以防将来」更诚实。
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProbeReport {
-    /// 恒 true;false 走 `Err`,这里留给「连上了但只读」这类将来。
-    pub reachable: bool,
     /// 上游认定的身份,如 `"owner/repo"` / `"org/repo"` / 脚本绝对路径。
     pub identity: String,
     /// 一行人话,直接可上界面。
@@ -114,6 +116,7 @@ pub enum CollectReq {
 }
 
 /// 一次采集的结果。
+#[derive(Debug, Clone, PartialEq)]
 pub struct CollectOut {
     /// `ScriptRun` 给整份 JSON;`RemoteCount` 给 `Number`。
     pub value: serde_json::Value,
@@ -170,19 +173,24 @@ pub trait IssueOps: Send + Sync {
 /// 提 MR/PR 需要的信息(分支、标题、正文——具体字段由适配器在收编时补齐,
 /// 这里先留最小形状,骨架阶段字段以能编译通过为准)。
 pub struct OpenChangeReq {
+    /// 源分支(活分支)。
     pub branch: String,
+    /// 目标分支(MR/PR 要合进哪条)。
+    pub base: String,
     pub title: String,
     pub body: String,
 }
 
 /// Issue 状态归一化:上游 `OPEN`/`CLOSED`/`opened`/`closed` 这些原生词只活在
 /// 适配器里,交回内核的是这两档。
+#[derive(Debug, Clone, PartialEq)]
 pub enum IssueState {
     Open,
     Closed,
 }
 
 /// MR/PR 状态归一化:同上,`Merged` 是三档里唯一不可逆的一档。
+#[derive(Debug, Clone, PartialEq)]
 pub enum ChangeState {
     Open,
     Merged,

@@ -18,6 +18,10 @@ use tokio_util::sync::CancellationToken;
 /// 协议版本。改动契约类型的形状(增删字段、改语义)必须 +1;注册时
 /// `conn.protocol() != PROTOCOL` 一律拒绝登记,不做兼容层
 /// (CLAUDE.md:不为向后兼容留旧路径)。
+///
+/// **契约冻结点 = 切片二B 收编完成**:在那之前(骨架阶段到 gh/codehub/script
+/// 三家真实收编期间)对契约类型的形状调整不撞版本号——冻结后再增删字段才必须
+/// `PROTOCOL + 1`。
 pub const PROTOCOL: u32 = 1;
 
 /// 能力名。既是路由键,也是「不支持」错误里说得清的那个词。裁决 #11:通信
@@ -65,8 +69,29 @@ impl CapabilitySet {
 
 /// 请求编号——一次调用一个,进 stderr 诊断日志、进运行记账、进「待人处理」条目。
 /// 出问题时能把「界面上这条红」和「当时那次 gh 调用」对上。
+///
+/// 内部字段私有:构造只走 [`RequestId::new`],不给外部塞自造的 uuid。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RequestId(pub uuid::Uuid);
+pub struct RequestId(uuid::Uuid);
+
+impl RequestId {
+    /// 生成一个新请求编号(uuid v4)。每次调用一个,不复用。
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+}
+
+impl Default for RequestId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for RequestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// 防重编号——只有**可重试的写操作**要带(`create_issue` / `open_change` /
 /// `merge_change` / `close_issue`)。读操作和采集不带。
@@ -78,11 +103,31 @@ pub struct RequestId(pub uuid::Uuid);
 /// 锚点(按 head 分支查已开的 MR/PR),`create_issue` 没有——按标题查重不可靠
 /// (标题可重名)。首版接受这个不对称:`create_issue` 上的 `IdemKey` 只作日志
 /// 追溯用,不是真防重;真正的防重只在 `open_change` 上成立。
+///
+/// 内部字段私有:格式钉死在 [`IdemKey::for_issue_action`] 一处,不给调用方
+/// 各自拼字符串(拼法一旦分叉,重试就认不出是同一件事)。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct IdemKey(pub String);
+pub struct IdemKey(String);
+
+impl IdemKey {
+    /// 构造一个防重编号。格式钉死 `issue-{issue_no}/{action}`——同一件活的
+    /// 同一个动作永远同一个值,重试时不变。
+    pub fn for_issue_action(issue_no: u64, action: &'static str) -> Self {
+        Self(format!("issue-{issue_no}/{action}"))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// 写操作的结构化结果。**这是防重的落地形态,也是唯一诚实的形态**:
 /// gh / codehub-cli 都没有幂等头,唯一可靠的做法是「先读回、再决定」。
+///
+/// 与 [`ConnError::Timeout`] 同一口径:写操作超时不等于失败,更不等于「没
+/// 发生」——运行管理器带着同一个 [`IdemKey`] 重试,重试经 read-before-write
+/// 会落进 `AlreadyExisted`,账才对得上。
+#[derive(Debug, Clone, PartialEq)]
 pub enum WriteOutcome<T> {
     /// 这次调用真的创建了它。
     Created(T),
@@ -96,11 +141,15 @@ pub enum WriteOutcome<T> {
 #[derive(Debug, thiserror::Error)]
 pub enum ConnError {
     /// 该连接器压根没实现这个能力/操作——如实说不支持,不给假空结果。
-    #[error("该连接器不支持{cap:?}的 {op} 操作")]
+    #[error("该连接器不支持{cap}的 {op} 操作")]
     Unsupported { cap: Capability, op: &'static str },
     /// CLI 不在 PATH、没登录、host 不可达——「装了≠连上了」的失败面。
     #[error("未连接:{0}")]
     NotConnected(String),
+    /// **写操作超时 = 状态未知,不是失败**:超时不代表上游没建成(MR/Issue 可能
+    /// 已经建好,只是回包没赶上)。绝不当失败记账——运行管理器必须带着同一个
+    /// [`IdemKey`] 重试;重试经 read-before-write 会得到 `AlreadyExisted`,
+    /// 账才对得上(design §4「超时与取消」第三条)。
     #[error("超时({0:?} 未回)")]
     Timeout(Duration),
     #[error("已取消")]
@@ -116,45 +165,97 @@ pub enum ConnError {
     Other(String),
 }
 
-/// 四个能力小接口的统一返回形状:成功走 [`Ok`],失败走 [`Fail`]——两边都带
+/// 四个能力小接口的统一返回形状:成功走 [`CallOk`],失败走 [`Fail`]——两边都带
 /// 请求编号与耗时,证据链要能点开原始出处。
-pub type ConnResult<T> = Result<Ok<T>, Fail>;
+pub type ConnResult<T> = Result<CallOk<T>, Fail>;
 
 /// 成功也带元数据——证据链要能点开原始出处。
-pub struct Ok<T> {
+#[derive(Debug)]
+pub struct CallOk<T> {
     pub req: RequestId,
     pub took: Duration,
     pub value: T,
 }
 
 /// 失败也带编号——「待人处理」的一条要能追回是哪次调用。
+#[derive(Debug)]
 pub struct Fail {
     pub req: RequestId,
     pub took: Duration,
     pub err: ConnError,
 }
 
+impl std::fmt::Display for Fail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.err)
+    }
+}
+
+impl std::error::Error for Fail {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.err)
+    }
+}
+
 /// 每次调用的上下文。四个小接口的每个方法首参都是它——这是统一的,不给例外。
 pub struct CallCtx {
     pub req: RequestId,
-    /// 相对超时。`None` = 用操作类的默认档(探活 10s / 读 20s /
-    /// 采集·RemoteCount 30s / 采集·ScriptRun 180s / 写 60s,见 design §4)。
+    /// 相对超时。`None` = 用调用所属 [`OpClass`] 的默认档
+    /// (见 [`OpClass::default_timeout`])。
     pub timeout: Option<Duration>,
     /// 取消令牌。
     pub cancel: CancellationToken,
 }
 
+/// 操作类别——决定 [`guarded`] 在 `CallCtx.timeout` 为 `None` 时用哪档默认
+/// 超时(design §4「超时与取消」表)。五档钉在类型上,不是散落各处的裸数字。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpClass {
+    /// 探活。10s——快失败,界面上要立刻显灰而不是转圈。
+    Probe,
+    /// 读(`issue_state` / `change_state` / `open_change_for_branch`)。
+    /// 20s——一次 API 往返。
+    Read,
+    /// 采集 · `RemoteCount`。30s——搜索接口慢一档。
+    CollectCount,
+    /// 采集 · `ScriptRun`。180s——项目脚本可能跑 Playwright/SSO,给宽。
+    CollectScript,
+    /// 写(`create_issue` / `open_change` / `merge_change`)。60s——含 push,
+    /// 大仓要时间。
+    Write,
+}
+
+impl OpClass {
+    /// 该操作类别的默认超时档。
+    pub const fn default_timeout(self) -> Duration {
+        match self {
+            OpClass::Probe => Duration::from_secs(10),
+            OpClass::Read => Duration::from_secs(20),
+            OpClass::CollectCount => Duration::from_secs(30),
+            OpClass::CollectScript => Duration::from_secs(180),
+            OpClass::Write => Duration::from_secs(60),
+        }
+    }
+}
+
 /// 超时/取消的统一实现——**适配器不各自写 timeout**,只写业务 future,这两条
-/// 边由这里兜(design §4「超时与取消」三条语义的第一条)。
+/// 边由这里兜(design §4「超时与取消」三条语义的第一条)。`op` 决定 `CallCtx`
+/// 没给超时时用哪档默认([`OpClass::default_timeout`]),`CallCtx.timeout` 为
+/// `Some` 时覆盖档位默认。
 ///
-/// 骨架阶段(切片二A)还没有任何适配器调用它——这是契约层的地基,真正被调用
-/// 要等切片二B 把 gh/codehub/script 收编进来后接线。
-#[allow(dead_code)]
-pub(crate) async fn guarded<T, F>(cx: &CallCtx, kind_default: Duration, fut: F) -> ConnResult<T>
+/// **取消义务在适配器那边,包装器兜不住**:适配器起子进程必须
+/// `.kill_on_drop(true)`——`tokio::select!` 落选分支被 drop 只是让 future 停止
+/// 被 poll,不会自动杀掉里面已经 spawn 的子进程;不加这个 flag,取消只是
+/// BW 这边假装取消了,子进程仍在跑。这条义务写在这里,因为包装器本身看不见
+/// 适配器 future 内部起了什么进程,补不了这个洞。
+///
+/// pub(跨 crate 可见,不是 `pub(crate)`):将来 `bw-engine` 的 agentcli 适配器
+/// (切片三)也要用同一份超时/取消实现,不允许各自抄一份。
+pub async fn guarded<T, F>(cx: &CallCtx, op: OpClass, fut: F) -> ConnResult<T>
 where
     F: std::future::Future<Output = Result<T, ConnError>>,
 {
-    let d = cx.timeout.unwrap_or(kind_default);
+    let d = cx.timeout.unwrap_or_else(|| op.default_timeout());
     let started = std::time::Instant::now();
     let outcome = tokio::select! {
         _ = cx.cancel.cancelled() => Err(ConnError::Canceled),
@@ -163,12 +264,12 @@ where
     };
     let took = started.elapsed();
     match outcome {
-        std::result::Result::Ok(value) => std::result::Result::Ok(Ok {
+        Ok(value) => Ok(CallOk {
             req: cx.req,
             took,
             value,
         }),
-        std::result::Result::Err(err) => std::result::Result::Err(Fail {
+        Err(err) => Err(Fail {
             req: cx.req,
             took,
             err,
@@ -258,6 +359,7 @@ pub struct ExecTicket {
 /// **刻意的类型断路**:这里没有 `Done` 变体。执行连接器再成功也只产出
 /// `Finished`,把 Issue 推到「评审中」;从「评审中」到「完成」的唯一入口是
 /// `bw-core` 状态机的显式转移。产品铁律在契约类型上就成立,不靠纪律,不许妥协。
+#[derive(Debug, Clone, PartialEq)]
 pub enum ExecState {
     Running,
     /// 干完了。**最远只能推到「评审中」**。
