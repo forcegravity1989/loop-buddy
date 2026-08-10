@@ -493,6 +493,22 @@ impl Execute for AgentCliConnector {
                                     },
                                     summary: output.summary,
                                 },
+                                // F3(评审 task-s3b-fixreview.md,next 切
+                                // 片三-2 修二新增):这一臂吞了两种不同来
+                                // 源的 `Err`,`ExecError` 只有一个
+                                // `Failed(String)` 变体(`bw-engine/src/
+                                // lib.rs`),类型层面区分不了——① spawn 即
+                                // 失败,进程压根没起来(`pty_backend.rs`
+                                // `openpty`/`spawn_command` 失败,`run_
+                                // skill_pty` 直接返回 `Err`,我们确定它没
+                                // 跑过);② 跑起来之后连接断了,去向不明
+                                // (PTY 读循环/收尾异常)。契约不为这个区
+                                // 分加新变体——两者都落
+                                // `SessionEnd::ContactLost`,差别只在
+                                // `summary`(= `e.to_string()`)的错误正文
+                                // 里。读账的人要靠 `summary` 分辨这两种情
+                                // 况,不要把 `ContactLost` 一律读成「它可
+                                // 能还活着」:①的情况下它确定没活过。
                                 Err(e) => ExecState::Finished {
                                     ended: SessionEnd::ContactLost,
                                     summary: e.to_string(),

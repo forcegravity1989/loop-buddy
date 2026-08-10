@@ -780,6 +780,45 @@ async fn section_mock_lifecycle(args: &Args) -> bool {
     } else {
         println!("装配好的系统提示词已落盘: {}", dump_path.display());
     }
+
+    // F2(评审 task-s3b-fixreview.md,next 切片三-2 修二新增):I1 保的是
+    // 「衔接层正文(通用铁律)真的进了装配出的系统提示词」——上面只把结
+    // 果落盘等人去看 dump 文件,从没断言过正文本身。三句标志句摘自
+    // `interactive_cli.rs`「## 通用铁律(不可违反)」段的真实原句(无条
+    // 件 `push_str`,不读任何 ctx 字段),不是新造的句子。
+    let bridge_markers = ["Done 永不自动", "绝不伪造观测", "合并永远是人手动作"];
+    let missing_markers: Vec<&str> = bridge_markers
+        .iter()
+        .copied()
+        .filter(|m| !expected_prompt.contains(m))
+        .collect();
+    if missing_markers.is_empty() {
+        println!("OK: 装配出的系统提示词含衔接层铁律正文的标志句(I1)");
+    } else {
+        eprintln!("ASSERT FAILED: 系统提示词缺铁律正文标志句:{missing_markers:?}");
+        ok = false;
+    }
+    // 设计稿 §6.1 明文顺序的另一半:衔接层正文在前、inject 块在后——正文
+    // 必须出现在第一个注入块标题(`## <label>`)之前。`load_inject_blocks`
+    // 在没传 `--inject` 时也会自建一条演示块,`inject_blocks` 实际不会为
+    // 空,这条顺序断言常态下真的在验证。
+    if let Some(first_label) = inject_blocks.first().map(|b| format!("## {}", b.label)) {
+        match (
+            expected_prompt.find(bridge_markers[0]),
+            expected_prompt.find(&first_label),
+        ) {
+            (Some(bridge_pos), Some(label_pos)) if bridge_pos < label_pos => {
+                println!("OK: 铁律正文出现在第一个注入块标题之前(§6.1 顺序)")
+            }
+            (bridge_pos, label_pos) => {
+                eprintln!(
+                    "ASSERT FAILED: 铁律正文应在第一个注入块标题之前,实得 bridge_pos={bridge_pos:?} label_pos={label_pos:?}"
+                );
+                ok = false;
+            }
+        }
+    }
+
     if let Some(p) = &self_built_inject_path {
         println!("(未传 --inject,自建演示注入文件: {})", p.display());
     }
@@ -820,6 +859,22 @@ async fn section_mock_lifecycle(args: &Args) -> bool {
         ok = false;
     } else {
         println!("OK: start() 立刻返回");
+    }
+
+    // F1(评审 task-s3b-fixreview.md,next 切片三-2 修二新增):C1 保的判
+    // 据是「能被指派会话号的行,upstream_session 真的编了号、不留空」——
+    // 上面一直只打印读回,从没断言过。这是全新工作区首启(没有历史可续
+    // 接),CLAUDE 的 `session_id_flag` 是 `Some(...)`(见
+    // `interactive_cli.rs` CLAUDE 常量),连接器必须走 C1「能指派就编号」
+    // 分支,`upstream_session` 不该是 `None`。对称的「不能指派就留空」分
+    // 支由第 5 节的探针行(`session_id_flag: None`)断言。
+    if ticket1.upstream_session.is_some() {
+        println!("OK: claude(session_id_flag=Some)首启真编了 upstream_session,不留空(C1)");
+    } else {
+        eprintln!(
+            "ASSERT FAILED: claude 首启应该编号 upstream_session,实得 None(C1 连接器语义退化)"
+        );
+        ok = false;
     }
 
     match conn.session_row(req1) {
@@ -1142,6 +1197,7 @@ async fn section_cancel_real_kill() -> bool {
     let conn = AgentCliConnector::new(binding, probe_row, Arc::new(InteractiveCliExecutor::new()));
     let execute = conn.as_execute().unwrap();
     let cx = mk_cx();
+    let req = cx.req;
     let spec = ExecSpec {
         workspace: ws.clone(),
         branch: "main".into(),
@@ -1157,6 +1213,36 @@ async fn section_cancel_real_kill() -> bool {
             return false;
         }
     };
+
+    // F1(评审 task-s3b-fixreview.md,next 切片三-2 修二新增):C1「不能指
+    // 派就留空,绝不填一个猜的号」的分支,本节探针行(`session_id_flag:
+    // None`)天然在跑这条分支——之前只起了会话,从没读回断言过「真的留
+    // 空」这句话。对称的「能指派就编号」分支由第 4 节 claude 行断言。
+    if ticket.upstream_session.is_none() {
+        println!("OK: session_id_flag=None 的探针行,票据 upstream_session 如实留空(C1)");
+    } else {
+        eprintln!(
+            "ASSERT FAILED: session_id_flag=None 不该编号,票据 upstream_session 实得 {:?}",
+            ticket.upstream_session
+        );
+        ok = false;
+    }
+    match conn.session_row(req) {
+        Some(row) if row.upstream_session.is_empty() => {
+            println!("OK: SessionRow.upstream_session 同样如实留空,不是编的号(C1)")
+        }
+        Some(row) => {
+            eprintln!(
+                "ASSERT FAILED: SessionRow.upstream_session 应留空,实得 {:?}",
+                row.upstream_session
+            );
+            ok = false;
+        }
+        None => {
+            eprintln!("ASSERT FAILED: 起会话后应该能读到 SessionRow,实得 None");
+            ok = false;
+        }
+    }
 
     // 轮询等脚本真的跑起来(exec 探针脚本 + nohup 出孙进程)——固定
     // `sleep` 在系统繁忙时会不够长导致假失败(本轮修复时实测复现过一
