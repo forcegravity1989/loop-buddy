@@ -36,6 +36,7 @@
 | **T1–T17** | plan/12 | truthful-modeling 批的十七张票(T14–T17 为真实感落地批;T11 在 plan/13/16/19 被引用时指同一张票) | 已全部交付 |
 | **W1–W3** | plan/08 | MVP「workflow 的生命周期」线三件事 | 活跃 |
 | **W1–W6** | plan/20 §5 | 资产作用域隔离批的六件落地工作(commit 前缀 plan20-W2 等即此)。**与 plan/08 的 W 系列无关** | 已落地 |
+| **切片一~五**(每片再拆 A/B/C……子 commit,如「切片三C」) | plan/23 | vNext OPC 控制面重建(`next/` workspace)的执行分片;design-s1~s3-*.md 是各切片的设计稿,commit 标题里的「next 切片三C」等即此系列 | 执行中,2026-08-10 补登记(此前多个 commit 已在用,登记滞后于首次使用,如实记录不回改历史 commit) |
 
 散见的一次性编号(如 plan/16 的 P8、plan/17 的 C5)不单独列行,以所在文件的上下文为准。
 

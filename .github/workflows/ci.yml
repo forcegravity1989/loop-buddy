@@ -87,3 +87,10 @@ jobs:
       # 干净收尾。runner 是 ubuntu(unix),可常绿;末行 PTY_SMOKE_OK。
       - name: PTY 后端烟测(bw-engine pty_smoke)
         run: cd next && cargo run -p bw-engine --example pty_smoke
+
+      # next 切片三E:agentcli 层收官验收指挥器——不带 --real(真实 claude
+      # 会话受网关抖动影响,只在人手/监理脚本里跑,design §7.3),其余四节
+      # (注册表机械证明/类型断路/会话反查反证/mock 生命周期)全部确定性,
+      # 可常绿。末行 AGENT_SESSION_OK。
+      - name: agentcli 层验收指挥器(bw-engine agent_session)
+        run: cd next && cargo run -p bw-engine --example agent_session

@@ -175,3 +175,23 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
    - **来源**:v1 `interactive_cli.rs` `run_skill_pty`(`#[cfg(windows)]` override)整段搬运件,零改写移植(next 切片三B)。这个问题在移植前就存在于 v1 源码里,不是移植过程引入的新 bug;`unix::UnixPtyBackend`(本片新写,不受零改写约束)已经用 `read_finished` 标志位避开了同一个坑。
    - **待办**:需要一台 Windows 机器验证真机行为,再按 Unix 侧已经用过的思路(拆分「哪支 break 出循环」,只在读循环没被 `select!` 消费过时才 `.await`)修。
    - **登记日**:2026-08-10。
+
+2. **`ExecSpec` 没有独立的「这件活要干什么」字段**(登记日 2026-08-10)
+   - **现象**:`bw-connector` 契约的 `ExecSpec`(切片二冻结)只有 `workspace`/`branch`/`inject`/`budget_usd` 四个字段;`inject: Vec<InjectBlock>` 按设计口径整体进系统提示词(`--append-system-prompt`),没有一个字段对应 v1 `interactive_cli.rs` `build_startup_plan` 的 `position_prompt`(issue 标题+描述,首启时作为位置 prompt 自动提交、真正触发 agent 开始动手的那句话)。
+   - **来源**:切片二骨架阶段定型 `ExecSpec` 时,agentcli 层(切片三)尚未接线,没有把「任务正文放哪」这个问题摆到台面上。`bw-engine/src/agentcli/connector.rs` `AgentCliConnector::start` 首启时因此用一条固定的通用开局句(`GENERIC_KICKOFF_PROMPT` = "请阅读上面的系统提示词并开始执行。")当位置 prompt——不编造任务内容,但也不携带真实任务正文,首启的第一条用户消息只会指向系统提示词里的 `inject` 内容。
+   - **待办**:切片四编排层(运行管理器)真正把 Issue 交给 `Execute::start` 时会正面撞上这个缺口——要么在 `ExecSpec` 加一个任务正文字段(撞协议号,按契约冻结规矩来),要么定一条「`inject` 的某个特定标签就是任务正文」的调用约定。哪种取舍是产品/协议层面的决定,不该由 agentcli 层单方面通过改契约形状解决,留给切片四接线时定案。
+   - **登记日**:2026-08-10。
+
+3. **`pty_backend.rs` 的 env-strip 对真实子进程不生效**(登记日 2026-08-10,切片三E 实测发现)
+   - **现象**:`build_startup_plan`/`build_resume_plan`(`interactive_cli.rs`)把嵌套会话相关的几个环境变量(`CLAUDE_CODE_CHILD_SESSION` 等)从 `LaunchPlan.env` 这个 `HashMap` 里删掉,文档注释与既有任务报告都把这当作「已经生效的防护」。**实测(临时脚本,验证后已删,不入本 commit)证明它对 `pty_backend::unix::UnixPtyBackend::run` 的真实子进程无效**:该函数用 `portable_pty::CommandBuilder::new(binary)` 起步,而 `CommandBuilder::new` 在构造时就用 `get_base_env()` 把**当前进程的完整环境**(`std::env::vars_os()`)整个复制进它自己内部的 env 表(portable-pty 0.9.0 `src/cmdbuilder.rs`);随后 `pty_backend.rs` 只对 `plan.env` 里**剩下的**键调用 `cmd.env(k, v)`(逐条覆盖/新增),从未调用 `cmd.env_remove(...)` 或 `cmd.env_clear()`——`plan.env` 里被删掉的键因此从未真正从 `CommandBuilder` 自己那份「已经复制了全量环境」的内部表里移除,子进程照样原样继承。用一个哨兵环境变量 + 起一个真跑 `env`(打印环境）的子进程直接验证:该变量与 `CLAUDE_CODE_CHILD_SESSION` 均**原样出现在子进程输出里**,证明「删了」没有真的删掉。
+   - **来源**:`pty_backend::unix::UnixPtyBackend::run`(切片三B 新写,不是 v1 零改写移植件),以及同样模式的 `interactive_cli.rs` `InteractiveCliExecutor::run_skill`(`tokio::process::Command` 路径,v1 零改写移植——`tokio::process::Command` 默认同样整段继承父进程环境,`.env(k,v)` 只覆盖/新增,不清空)。**Windows 侧(`pty_backend::windows::WindowsPtyBackend::run`,conpty-oxide)未实测,但同一模式(整段搬运、未见 `env_clear`)大概率同样中招**,如实标注未验证,不假设它没事。
+   - **为什么切片三-1/三A 的 `--session-id` 实测没有先发现这个坑**:上一任务(切片三-1)验证 `--session-id` 用的是一段独立的 Python 探针(`pty.openpty()` + `subprocess.Popen` 直接起 `claude`),完全绕开了 `bw-engine` 自己的 `pty_backend.rs`/`interactive_cli.rs` 代码路径;该探针靠在**外层 shell** 用 `env -u ...` 剥离变量后再起 Python 进程才成功,这个外层剥离掩盖了「BW 自己的 Rust 代码其实没有正确剥离」这个事实——本片(切片三E)是第一次真的跑通 `pty_backend.rs` 的真实 spawn 路径去验证这件事,才第一次发现。
+   - **本片(切片三E)如何绕开**:`agent_session --real` 档验证时,在**外层进程调用**上用 `env -u ...` 剥离(与三-1 报告同一份变量清单),不依赖 `plan.env` 这条(已知失效的)内层剥离——绕开不是修复,如实标注。
+   - **待办**:`pty_backend.rs`(unix/windows 两份)的 spawn 都应该改成先 `cmd.env_clear()`(或 `CommandBuilder` 对应的清空 API)再整个用 `plan.env` 重建环境,让「删了」真的生效;`interactive_cli.rs` `run_skill` 的 `tokio::process::Command` 路径是 v1 零改写移植件,同样的问题按「移植件不擅改」的既有规矩,留给读到这条登记的下一个会话按当时的裁决(修 vs 继续零改写)处理,不由本片单方面决定。这条缺口影响面比字面看起来大:任何经 `pty_backend` 真正 spawn 出去的 claude 会话,只要 BW 自己运行在另一个 Claude Code 会话内部,子会话都会继承宿主的鉴权/网关/会话号,可能导致 401 或 transcript 被关闭(与三-1 报告记录的首次失败现象一致)。
+   - **登记日**:2026-08-10。
+
+4. **Unix 后端不自动提交位置 prompt,真实会话验证时首次实测确认会卡住**(登记日 2026-08-10;此前是切片三-1 报告的一条 concern/开放猜测,本条是它的实测坐实)
+   - **现象**:`agent_session --real` 跑了一次真实首启(`AgentCliConnector::start` 经真实 `InteractiveCliExecutor`/`pty_backend::unix` 真 spawn 了 `claude`),`start` 本身成功、`upstream_session` 拿到了自己指派的 uuid,但轮询 90 秒始终停在 `Running`,最终按超时兜底取消;事后读回 `~/.claude/projects/<encoded>/<uuid>.jsonl`——**文件从未被创建**(不是空文件,是压根不存在),说明 claude 连第一轮交互都没发生。
+   - **来源**:`pty_backend::unix::UnixPtyBackend` 是切片三B 明确写清楚的「最小集」——**刻意不含** Windows 实现里那段「TUI 加载完等 2 秒自动发 `\r` 提交位置 prompt」的补丁(模块文档原话:「真要在 macOS 上验证是否也需要这个补丁,得先有一次真实交互式 claude 会话观察,留给切片三 C/D 接线后」)。本条就是那次观察:位置 prompt 确实以 argv 形式传给了 `claude`,但没有一次真实按键把它从输入框送出去,会话因此一直停在「TUI 起来了、在等用户按 Enter」这一步,不会往前走。
+   - **待办**:`pty_backend::unix::UnixPtyBackend::run` 需要照 Windows 那段逻辑的思路(TUI 起来后等一小段时间、`plan.submit_prompt` 为真时发一次 `\r`)补上对应的 Unix 版本,补完后需要再跑一次 `agent_session --real` 验证 jsonl 真的落地且非空、且里面第一条记录是真实的位置 prompt 正文。
+   - **登记日**:2026-08-10。

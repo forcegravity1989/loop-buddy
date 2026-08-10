@@ -61,3 +61,8 @@ libc = "0.2"
 # dev-dependencies,不进正常依赖,不影响真实产物的依赖面。版本沿用工作区
 # 既有 pin,无版本漂移。
 time = { workspace = true }
+# next 切片三E `examples/agent_session.rs` 要自己构造 `CallCtx`(`bw_connector`
+# 契约要求调用方带一个取消令牌)——`bw-connector` 的 `CallCtx.cancel` 字段
+# 类型就是它。`bw-engine` 的正常依赖里没有 `tokio-util`,example 要点名这个
+# 类型就必须自己依赖它——只进 dev-dependencies。
+tokio-util = { workspace = true }
