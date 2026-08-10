@@ -4895,13 +4895,18 @@ impl App {
         if is_resume && matches!(issue.status, IssueStatus::Done | IssueStatus::InReview) {
             return self.open_conversation(id).await;
         }
-        // 本件交付已在跑 → 只切焦点。
+        // 本件交付已在跑且 PTY 仍活 → 只切焦点。
+        // PTY 已死但 active_run 仍挂(zombie 锁)时不要 early-return:
+        // 旧逻辑 focus 死 id 后直接 Ok,侧栏「唤不醒」、看板因完整 ▶跑/
+        // remount 仍能救回来。
         if let Some(ar) = &self.state.active_run {
             if ar.issue.id == id {
-                if let Some(c) = conv {
-                    self.focus_conversation(c.id, id).await;
+                if let Some(c) = &conv {
+                    if self.state.terminal_manager.is_live(c.id) {
+                        self.focus_conversation(c.id, id).await;
+                        return Ok(());
+                    }
                 }
-                return Ok(());
             }
         }
         // 咨询 PTY 已活 → 只切焦点。
@@ -4913,8 +4918,13 @@ impl App {
         }
 
         // Fail fast on a same-project in-flight run before touching anything.
+        // 本件 zombie(锁在、PTY 死)放行:清掉名额后再走 interactive resume。
         if let Some(ar) = &self.state.active_run {
-            if ar.project == p {
+            if ar.issue.id == id {
+                let _zombie = self.state.active_run.take();
+                // handle/guard drop with ActiveRun — PTY already gone; settle
+                // may still arrive and no-op via cleanup paths.
+            } else if ar.project == p {
                 return Err(AppError::Invalid(
                     "该项目有活正在跑，等它到评审中/干完再开下一张".into(),
                 ));
@@ -5459,17 +5469,20 @@ impl App {
                 "会话尚无 claude_session_id,无法 resume".into(),
             ));
         }
-        if self.state.terminal_manager.is_live(conv.id)
-            || self.state.consultation_runs.contains_key(&conv.id)
-        {
-            // 既有咨询会话:活 PTY 直接聚焦;PTY 刚退出、settle 尚未处理间
-            // 也聚焦 —— 不二度 spawn,否则旧 handle 的 ConsultationEnded
-            // settle 会误清新 handle(HashMap insert 覆盖旧 key后,remove
-            // 取到新 cr)。等排队 settle 清掉记录后,下次点卡才走 spawn。
+        if self.state.terminal_manager.is_live(conv.id) {
+            // 活 PTY:只切焦点。consultation_runs 有记录但 PTY 已死时不要
+            // 短路——否则侧栏/续聊 focus 死 id,看起来「唤不醒」(看板完整
+            // ▶跑 序列常能 remount 救回来)。settle 排队间的竞态由
+            // ConsultationEnded 收尾后再点一次覆盖。
             self.focus_conversation(conv.id, id).await;
             self.clear_restoring_if(conv.id);
             self.emit(Event::IssuesChanged);
             return Ok(());
+        }
+        // PTY 已死但仍占着 consultation_runs:清掉残骸再 spawn,避免旧
+        // ConsultationEnded settle 误清新 handle(见原注释竞态)。
+        if let Some(cr) = self.state.consultation_runs.remove(&conv.id) {
+            drop(cr);
         }
         if !self.state.pty_enabled {
             return Err(AppError::Invalid("咨询需要嵌入终端(PTY);当前未启用".into()));
@@ -10441,6 +10454,93 @@ mod select_session_focus_tests {
             "侧栏切会话应收起看板证据弹层,避免回 Issue 面板再挡侧栏"
         );
 
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[tokio::test]
+    async fn run_issue_now_respawns_when_active_run_zombie() {
+        // 侧栏唤不醒的命令层洞:active_run 仍挂本件但 PTY 已死时,旧逻辑
+        // early-return 只 focus 死 id。应收掉 zombie 锁并允许再次走
+        // interactive(本测用 mock 无 PTY 路径:清锁后不应再被「同项目忙碌」挡住)。
+        let db = std::env::temp_dir().join(format!(
+            "bw_zombie_active_run_{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+        let issue = mk_issue(&mut app, "找指标").await;
+        app.dispatch(Command::OpenProject(pid)).await.unwrap();
+        let cid = store
+            .ensure_conversation(issue, pid, "/tmp/z", "bw/z")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue, "claude-z")
+            .await
+            .unwrap();
+
+        // 伪造「锁在、PTY 不在」:写入 active_run 但不 attach。
+        let issue_row = app
+            .state
+            .issues
+            .iter()
+            .find(|i| i.id == issue)
+            .cloned()
+            .expect("issue");
+        let handle = tokio::spawn(async {});
+        app.state.active_run = Some(crate::ActiveRun {
+            project: pid,
+            issue: issue_row,
+            handle,
+            guard: bw_engine::workspace::IssueWorktreeGuard::new(
+                std::path::PathBuf::from("/tmp"),
+                None,
+            ),
+            finalize: crate::FinalizeCtx {
+                spec: bw_core::model::stage_workflow(StageKind::Prototype),
+                proj: app
+                    .store
+                    .get_project(pid)
+                    .await
+                    .unwrap()
+                    .expect("proj"),
+                p: pid,
+                issue_id: Some(issue),
+            },
+            is_resume: true,
+        });
+        assert!(
+            !app.state.terminal_manager.is_live(cid),
+            "本测前提:无活 PTY"
+        );
+
+        // run_issue_now 必须能越过 zombie(headless 无 settle 通道时 Done
+        // 咨询会 Err;先把状态保持可交付的 InProgress 路径)。
+        app.dispatch(Command::TransitionIssue {
+            id: issue,
+            status: IssueStatus::Todo,
+        })
+        .await
+        .ok();
+        app.dispatch(Command::TransitionIssue {
+            id: issue,
+            status: IssueStatus::InProgress,
+        })
+        .await
+        .ok();
+
+        let result = app.run_issue_now(SessionId::new(), issue).await;
+        assert!(
+            app.state.active_run.is_none()
+                || result.is_ok()
+                || result
+                    .as_ref()
+                    .err()
+                    .map(|e| !e.to_string().contains("有活正在跑"))
+                    .unwrap_or(false),
+            "zombie 锁不得再以「有活正在跑」挡住本件唤醒: {result:?}"
+        );
         let _ = std::fs::remove_file(&db);
     }
 }

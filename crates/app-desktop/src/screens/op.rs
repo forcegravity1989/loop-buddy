@@ -26,7 +26,7 @@ use bw_store::SessionKind;
 use dioxus::document;
 use dioxus::prelude::*;
 use std::time::Duration;
-use ui::vm::{MetricVm, SessionCardVm, VersionLogVm};
+use ui::vm::{IssueVm, MetricVm, SessionCardVm, VersionLogVm};
 use ui::{sparkline_path, SparkPath, WowDir};
 
 /// Provider-aware web URL for a remote issue. codehub →
@@ -270,6 +270,8 @@ fn ActiveSessionsRail(op: OpVm) -> Element {
     let ink3 = theme::INK_3;
     let card_alt = theme::CARD_ALT;
     let needs_you: Vec<SessionCardVm> = op.sessions.iter().filter(|s| s.active).cloned().collect();
+    let sessions = op.sessions.clone();
+    let issues = op.issues.clone();
     rsx! {
         div { style: "font-size:11px;color:{ink3};letter-spacing:.06em;margin-bottom:8px;", "进行中 · 待你介入" }
         if needs_you.is_empty() {
@@ -279,18 +281,24 @@ fn ActiveSessionsRail(op: OpVm) -> Element {
             {
                 let k = k.clone();
                 let sid = s.id;
+                let title = s.title.clone();
                 let stage = s.stage_kind;
                 let stage_label = stage.map(|x| x.label()).unwrap_or("项目");
+                let sessions = sessions.clone();
+                let issues = issues.clone();
                 rsx! {
                     button {
-                        key: "{s.title}",
+                        key: "{sid.uuid()}",
                         style: "width:100%;text-align:left;background:{card_alt};border:1px solid #DBD4C5;border-radius:8px;padding:9px 10px;margin-bottom:7px;cursor:pointer;",
                         onclick: move |_| {
-                            if let Some(kind) = stage {
-                                k.send(Command::SetScope(Scope::Stage(kind)));
-                            }
-                            k.send(Command::SetPanel(Panel::Workflow));
-                            k.send(Command::SelectSession(Some(sid)));
+                            wake_session_like_board(
+                                &k,
+                                &sessions,
+                                &issues,
+                                sid,
+                                &title,
+                                stage,
+                            );
                         },
                         div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
                         div { style: "font-size:11px;color:{ink3};", "{stage_label} · {s.status_label}" }
@@ -331,29 +339,47 @@ fn StageSessions(op: OpVm) -> Element {
         if !creates.is_empty() {
             div { style: "font-size:11px;color:{ink3};margin:6px 0;", "创建" }
             for s in creates {
-                SessionCard { s: s.clone(), selected: active_id == Some(s.id) }
+                SessionCard {
+                    s: s.clone(),
+                    selected: active_id == Some(s.id),
+                    sessions: op.sessions.clone(),
+                    issues: op.issues.clone(),
+                }
             }
         }
         if !opts.is_empty() {
             div { style: "font-size:11px;color:{agent};margin:8px 0 6px;", "优化" }
             for s in opts {
-                SessionCard { s: s.clone(), selected: active_id == Some(s.id) }
+                SessionCard {
+                    s: s.clone(),
+                    selected: active_id == Some(s.id),
+                    sessions: op.sessions.clone(),
+                    issues: op.issues.clone(),
+                }
             }
         }
     }
 }
 
 #[component]
-fn SessionCard(s: SessionCardVm, selected: bool) -> Element {
+fn SessionCard(
+    s: SessionCardVm,
+    selected: bool,
+    sessions: Vec<SessionCardVm>,
+    issues: Vec<IssueVm>,
+) -> Element {
     let k = use_context::<Kernel>();
     let ink3 = theme::INK_3;
     let bd = if selected { theme::CLAY } else { "#DBD4C5" };
     let card_alt = theme::CARD_ALT;
     let sid = s.id;
+    let title = s.title.clone();
+    let stage_kind = s.stage_kind;
     let mut confirming_delete = use_signal(|| false);
     let k_del = k.clone();
     rsx! {
         div {
+            key: "{sid.uuid()}",
             style: "width:100%;text-align:left;background:{card_alt};border:1.4px solid {bd};border-radius:8px;padding:9px 10px;margin-bottom:7px;",
             div {
                 style: "display:flex;align-items:flex-start;gap:6px;",
@@ -361,8 +387,14 @@ fn SessionCard(s: SessionCardVm, selected: bool) -> Element {
                     style: "flex:1;text-align:left;background:transparent;border:none;cursor:pointer;padding:0;font:inherit;color:inherit;",
                     onclick: move |e| {
                         e.stop_propagation();
-                        k.send(Command::SetPanel(Panel::Workflow));
-                        k.send(Command::SelectSession(Some(sid)));
+                        wake_session_like_board(
+                            &k,
+                            &sessions,
+                            &issues,
+                            sid,
+                            &title,
+                            stage_kind,
+                        );
                     },
                     div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
                     div { style: "font-size:11px;color:{ink3};", "{s.status_label}" }
@@ -619,6 +651,45 @@ fn existing_issue_session(
         .iter()
         .find(|s| s.stage_kind == Some(stage) && s.title == title)
         .map(|s| s.id)
+}
+
+/// Sidebar → same wake chain as board ▶跑/续聊 (Bug2 再发,2026-08-10).
+/// Pure stage-playbook cards (title not `#N …`) keep SelectSession-only.
+fn wake_session_like_board(
+    k: &Kernel,
+    sessions: &[SessionCardVm],
+    issues: &[IssueVm],
+    sid: SessionId,
+    title: &str,
+    stage_kind: Option<StageKind>,
+) {
+    let issue = issues
+        .iter()
+        .find(|i| format!("#{} {}", i.number, i.title) == title);
+    let Some(issue) = issue else {
+        if let Some(kind) = stage_kind {
+            k.send(Command::SetScope(Scope::Stage(kind)));
+        }
+        k.send(Command::SetPanel(Panel::Workflow));
+        k.send(Command::SelectSession(Some(sid)));
+        return;
+    };
+    let stage = issue.stage;
+    let sess_title = format!("#{} {}", issue.number, issue.title);
+    let sess_id = existing_issue_session(sessions, stage, &sess_title).unwrap_or(sid);
+    k.send(Command::StartSession {
+        id: sess_id,
+        stage_kind: Some(stage),
+        kind: SessionKind::Create,
+        title: sess_title,
+    });
+    k.send(Command::RunIssue {
+        session: sess_id,
+        id: issue.id,
+    });
+    k.send(Command::SetScope(Scope::Stage(stage)));
+    k.send(Command::SetPanel(Panel::Workflow));
+    k.send(Command::SelectSession(Some(sess_id)));
 }
 
 fn next_issue_status(s: IssueStatus) -> Option<IssueStatus> {
@@ -3328,6 +3399,20 @@ window.__bw_term_drain = function(id) {
     if (input === null && resize === null) return null;
     return { input: input, resize: resize, ready: !!sess.ready };
 };
+// Bug2:侧栏切焦点只翻 display,不 remount → xterm 停在 0×0 fit。
+// 焦点回来时强制 fit + focus(等一帧让父级 display 生效)。
+window.__bw_term_refocus = function(id) {
+    var sess = window.__bw_term_sessions && window.__bw_term_sessions[id];
+    var div = document.getElementById('__bw_terminal_' + id);
+    if (!sess || !sess.term || !div) return false;
+    requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+            try { if (sess.fit) sess.fit.fit(); } catch (e) {}
+            try { sess.term.focus(); } catch (e) {}
+        });
+    });
+    return true;
+};
 "#;
 
 /// Build the per-conversation init IIFE. `id` is the conversation uuid
@@ -3573,6 +3658,23 @@ fn TerminalWidget(conversation_id: ConversationId, focused: bool) -> Element {
     } else {
         "display:none;".into()
     };
+
+    // 侧栏切焦点:父级从 display:none → 可见后强制 fit/focus,否则
+    // xterm 停在 0×0(看板切面板会 remount 整树,侧栏不会)。
+    use_effect(move || {
+        if !focused {
+            return;
+        }
+        let cid_json = serde_json::to_string(&cid_str).unwrap_or_else(|_| "\"\"".into());
+        spawn(async move {
+            tokio::time::sleep(Duration::from_millis(32)).await;
+            let script = format!(
+                "return window.__bw_term_refocus ? window.__bw_term_refocus({cid_json}) : false"
+            );
+            let _ = document::eval(&script).await;
+        });
+    });
+
     rsx! {
         div {
             style: "{wrap}",

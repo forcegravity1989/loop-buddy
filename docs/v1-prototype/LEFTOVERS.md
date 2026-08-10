@@ -360,6 +360,6 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 1. **维护好 buddy 系统提示词 + 一帮规范手册**（大提示词；按场景渐进加载文档——例如指标类额外加载 metrics/connectors 契约，才能被 buddy 托管对）。
 2. **搞好有价值的 skill + 五大板块默认 skill**——选了某板块 = 装载该板块默认 skill；agent 小队调度本身就是 skill（认可「装载 skill」路线，而不是把旧 phase-loop 脚本调度搬回 issue）。
 
-**处置**：✅ 记入 V2 整改队列，**本窗不改代码**。落地时走 `buddy-feature-dev`，设计归档建议新开 `docs/v2-*/`（或当时作数的版本目录），勿再堆进已发版的 V1 窗口号叙事。
+**处置**：✅ 记入 V2 整改队列，**本窗不改代码**。落地时走 `buddy-feature-dev`，设计归档到 [`docs/v2-prototype/`](../v2-prototype/README.md)(初始节奏与意向见 [`roadmap.md`](../v2-prototype/roadmap.md))，勿再堆进已发版的 V1 窗口号叙事。
 
 **事实源**：`docs/v1-prototype/issue2-all-issues-terminal-runs.md`（prompt 模型 + 多 agent 转 prompt）；`crates/bw-app/src/lib.rs` `run_issue_interactive` / `prepare_issue_run`（`spec.prompt`/`phase_prompts` 不再服务 issue）；`docs/guide/buddy-guide.html` m4「默认系统提示词 / 默认 skill」留口。
