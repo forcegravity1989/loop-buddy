@@ -7257,16 +7257,14 @@ impl App {
                 let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
                 let conv = self.store.get_conversation_by_issue(id).await?;
                 let is_interactive = conv.is_some();
-                // 切卡:有活 PTY 则只切焦点(不 spawn)。
-                // 重启恢复:PTY 已死但有可 resume 的 session_id → 点卡唤醒
-                // (走现有 run_issue_now → open_conversation / is_resume 分支;
-                // 不造第二条路径;Boot 不批量起)。
-                if let Some(c) = &conv {
-                    if self.state.terminal_manager.is_live(c.id) {
-                        self.focus_conversation(c.id, id).await;
-                    } else if !c.claude_session_id.is_empty() {
-                        self.run_issue_now(SessionId::new(), id).await?;
-                    }
+                // Bug2 半套收齐:有 conversation 行时点卡唤醒与阶段记录
+                // SelectSession / ▶跑 同一条 `run_issue_now`(活 PTY 切焦点 /
+                // Done·InReview 咨询 / 空 session_id 起手)。旧窄门还要求
+                // 「活 PTY | 非空 session_id」,缺行或 hook 未回填时只开弹层
+                // 不切终端。无 conversation 行 = 从未跑过,只开证据弹层、
+                // 不因点标题误开工(开工仍走 ▶跑)。
+                if conv.is_some() {
+                    self.run_issue_now(SessionId::new(), id).await?;
                 }
                 let runs = self.store.list_runs_for_issue(id).await?;
                 let artifacts = self.store.list_artifacts_for_issue(id).await?;
@@ -9407,6 +9405,10 @@ impl App {
                 if let Some(sid) = s {
                     self.sync_session_to_terminal(sid).await?;
                 }
+                // 侧栏切会话时收起看板证据弹层——弹层曾用 fixed inset:0 盖住
+                // 整窗(含侧栏),关掉后若 state 仍挂着 issue_detail,回 Issue
+                // 面板会再次挡住侧栏;切会话即清,两侧导航一致。
+                self.state.issue_detail = None;
             }
             // V1 终端会话重构·底座: 按 conversation_id 转发到 TerminalManager。
             Command::TerminalInput {
@@ -10335,6 +10337,110 @@ mod select_session_focus_tests {
                 || msg.contains("终端"),
             "错误应说明咨询/终端路径不可用,实际:{msg}"
         );
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[tokio::test]
+    async fn select_session_still_switches_after_open_issue_detail() {
+        // 用户实跑(2026-08-10):重启后侧栏 SelectSession 能切;一经由看板
+        // OpenIssueDetail 切过焦点,侧栏再点就「没用」。命令层回归:看板点卡
+        // 后 SelectSession 仍须把 focused_conversation 切回目标卡(与侧栏
+        // 首切同一条 run_issue_now);并清掉 issue_detail,避免弹层 state
+        // 残留。
+        let db = std::env::temp_dir().join(format!(
+            "bw_select_after_board_{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+
+        let issue_a = mk_issue(&mut app, "找指标").await;
+        let issue_b = mk_issue(&mut app, "绑数据").await;
+        app.dispatch(Command::OpenProject(pid)).await.expect("reopen");
+        let (num_a, title_a) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue_a).unwrap();
+            (i.number, i.title.clone())
+        };
+        let (num_b, title_b) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue_b).unwrap();
+            (i.number, i.title.clone())
+        };
+
+        let sess_a = SessionId::new();
+        let sess_b = SessionId::new();
+        app.dispatch(Command::StartSession {
+            id: sess_a,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num_a} {title_a}"),
+        })
+        .await
+        .expect("sess a");
+        app.dispatch(Command::StartSession {
+            id: sess_b,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num_b} {title_b}"),
+        })
+        .await
+        .expect("sess b");
+
+        let cid_a = store
+            .ensure_conversation(issue_a, pid, "/tmp/a", "bw/a")
+            .await
+            .unwrap();
+        let cid_b = store
+            .ensure_conversation(issue_b, pid, "/tmp/b", "bw/b")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue_a, "claude-a")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue_b, "claude-b")
+            .await
+            .unwrap();
+
+        attach_live(&mut app, cid_a, issue_a, "claude-a");
+        attach_live(&mut app, cid_b, issue_b, "claude-b");
+
+        // 侧栏先切到 A(重启后首切路径)。
+        app.dispatch(Command::SelectSession(Some(sess_a)))
+            .await
+            .expect("sidebar A");
+        assert_eq!(app.state.focused_conversation, Some(cid_a));
+        assert!(app.state.issue_detail.is_none());
+
+        // 看板点 B 标题 → OpenIssueDetail(旧半套窄门曾只 focus;现走 run_issue_now)。
+        app.dispatch(Command::OpenIssueDetail(issue_b))
+            .await
+            .expect("board open B");
+        assert_eq!(
+            app.state.focused_conversation,
+            Some(cid_b),
+            "看板点卡必须切到 B 的终端焦点"
+        );
+        assert!(
+            app.state.issue_detail.is_some(),
+            "看板点卡仍应打开证据弹层"
+        );
+
+        // 再侧栏点回 A —— 用户报「就没用了」的那一步。
+        app.dispatch(Command::SelectSession(Some(sess_a)))
+            .await
+            .expect("sidebar A again");
+        assert_eq!(
+            app.state.focused_conversation,
+            Some(cid_a),
+            "看板切过之后,侧栏 SelectSession 仍须能切回 A"
+        );
+        assert!(
+            app.state.issue_detail.is_none(),
+            "侧栏切会话应收起看板证据弹层,避免回 Issue 面板再挡侧栏"
+        );
+
         let _ = std::fs::remove_file(&db);
     }
 }

@@ -346,3 +346,20 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 **P11 · Issue Done 后阶段记录区变回旧 Chat + 会话卡「进行中」不消失**：两个独立现象——① PTY 结束后 `pty_active=false`，工作流面板退回旧的 Chat 发送框（交互式活不写 `message`，所以是空壳），视觉上像"退步"；② `session.status=Active` 插入后没有任何路径把它翻成 Done，与 issue 本身是否 Done 完全脱钩，导致早已完成的活在会话列表里永远显示"进行中"。需要 session 状态跟随 issue 状态或显式归档动作，属于状态机层面的改动，本窗不擅自扩。事实源：`crates/app-desktop/src/screens/op.rs`（`WorkflowStage` Chat 回退分支）、`session` 表（`status` 字段无 Done 写入路径）。
 
 **P8**：不新增条目——已是 `W3-1`（北极星无 `metric` 行 · 灰卡）的既有决议，采数窗口另议，本窗未碰。
+
+---
+
+## V2 · 阶段默认 Skill / 系统提示词与规范手册（2026-08-10 拍板延期）
+
+**产生**：用户实测构建阶段无技能测试 issue ▶跑 进嵌入终端后，claude cli 里可见注入几乎只有 issue 标题+描述，没有构建板块 AI 小队 / 方法循环怎么干活。
+
+**根因（已分析，见会话；设计事实源 `issue2-all-issues-terminal-runs.md`）**：V1-TermClose 把 issue 从「buddy 脚本调度阶段循环」改成「prompt 驱动」；`stage_workflow_with_playbook` 的 `phase_prompts`（构建师规格→任务→实现→评审）**故意不再进** interactive 系统提示词；多 agent 能力约定落在「技能方法论讲清 SubAgent 调度」。无 `standard_skill` 时 `fetch_skill_body` 为空 → 没有载体承载小队流程；m4 已诚实留口「默认系统提示词 / 默认 skill = 后续催熟」。
+
+**用户拍板的 V2 统一概念（本窗不开发）**：
+
+1. **维护好 buddy 系统提示词 + 一帮规范手册**（大提示词；按场景渐进加载文档——例如指标类额外加载 metrics/connectors 契约，才能被 buddy 托管对）。
+2. **搞好有价值的 skill + 五大板块默认 skill**——选了某板块 = 装载该板块默认 skill；agent 小队调度本身就是 skill（认可「装载 skill」路线，而不是把旧 phase-loop 脚本调度搬回 issue）。
+
+**处置**：✅ 记入 V2 整改队列，**本窗不改代码**。落地时走 `buddy-feature-dev`，设计归档建议新开 `docs/v2-*/`（或当时作数的版本目录），勿再堆进已发版的 V1 窗口号叙事。
+
+**事实源**：`docs/v1-prototype/issue2-all-issues-terminal-runs.md`（prompt 模型 + 多 agent 转 prompt）；`crates/bw-app/src/lib.rs` `run_issue_interactive` / `prepare_issue_run`（`spec.prompt`/`phase_prompts` 不再服务 issue）；`docs/guide/buddy-guide.html` m4「默认系统提示词 / 默认 skill」留口。

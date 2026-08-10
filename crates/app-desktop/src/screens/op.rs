@@ -780,7 +780,12 @@ fn IssuesPanel(op: OpVm) -> Element {
                     "＋ 创建 Issue"
                 }
             }
-            // P4: the evidence overlay — floats above the board while open.
+            // P4: evidence overlay — covers the Issue board center only.
+            // Must NOT use viewport `fixed;inset:0`: that painted over the
+            // left session rail too, so after opening a card from the board
+            // the sidebar looked dead (clicks hit the dimmer). Absolute
+            // within this relative board root keeps LeftRail clickable.
+            div { style: "position:relative;min-height:60vh;",
             if let Some(d) = op.issue_detail.clone() {
                 IssueDetailOverlay {
                     can_consult: op.consultable_issues.contains(&d.id),
@@ -1107,6 +1112,7 @@ fn IssuesPanel(op: OpVm) -> Element {
                     }
                 }
             }
+            }
         }
     }
 }
@@ -1137,6 +1143,7 @@ fn IssueDetailOverlay(
     let mono = theme::MONO;
     let id = d.id;
     let k_close = k.clone();
+    let k_close_x = k.clone();
     let k_done = k.clone();
     let k_back = k.clone();
     let k_run = k.clone();
@@ -1170,16 +1177,20 @@ fn IssueDetailOverlay(
 
     rsx! {
         div {
-            style: "position:fixed;inset:0;background:rgba(35,33,28,.38);z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;",
+            style: "position:absolute;inset:0;background:rgba(35,33,28,.38);z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;",
+            // Backdrop click closes — left rail stays outside this absolute
+            // layer (parent is the board center `position:relative` root).
+            onclick: move |_| k_close.send(Command::CloseIssueDetail),
             div {
                 style: "{card} width:720px;max-width:96vw;max-height:82vh;overflow-y:auto;padding:18px 22px;",
+                onclick: move |e| e.stop_propagation(),
                 // ── header ──
                 div { style: "display:flex;align-items:baseline;gap:10px;",
                     div { style: "font-size:11.5px;color:{ink3};font-family:{mono};", "#{d.number} · {d.stage_label} · {d.status_label}" }
                     div { style: "flex:1;" }
                     button {
                         style: "cursor:pointer;background:transparent;border:none;color:{ink3};font-size:14px;",
-                        onclick: move |_| k_close.send(Command::CloseIssueDetail),
+                        onclick: move |_| k_close_x.send(Command::CloseIssueDetail),
                         "✕"
                     }
                 }
