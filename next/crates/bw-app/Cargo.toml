@@ -11,6 +11,13 @@ rust-version.workspace = true
 bw-core = { path = "../bw-core" }
 bw-connector = { path = "../bw-connector", default-features = false }
 bw-store = { path = "../bw-store" }
+# next 切片五C(design-s5-hexpanel.md §6.2 分层图:bw-workspace ← bw-app):
+# `cmd::metric::sync_metrics_file` 用例要读项目仓正本(`metrics_lenient::
+# read_lenient` + `metric_shape::flatten_lenient`);六段视图组装用例(交
+# 付证据段③)要现采工作区证据(`evidence::collect`,§2.6「现采不落库」)。
+# 这是 `bw-workspace` 第一次被正式产物依赖(此前只在 `bw-store`/`bw-app`
+# 各自的 [dev-dependencies] 里当指挥器夹具)。
+bw-workspace = { path = "../bw-workspace" }
 tokio = { workspace = true }
 time = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }

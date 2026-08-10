@@ -80,7 +80,16 @@ pub fn parse_magnitude(raw: &str) -> Option<f64> {
 }
 
 /// How long until a source of the given cadence is considered stale.
-fn cadence_window(c: &Cadence) -> Duration {
+///
+/// `pub` since next 切片五D(design-s5-hexpanel.md §3.2④b 注释:「过期判
+/// 断已经在内核里……在 SQL 里再写一遍过期阈值,就是给同一个规则开第二本
+/// 账」)——待人处理④「指标没数 / 数据过期」的判断需要复用这个阈值,而
+/// 调用方(`bw-app::view::attention`)手上只有「最新一条观测的时刻」,没
+/// 有一整条原始观测串去走 [`measure`] 的完整解析路径。与其为了拿一个阈
+/// 值去编一个假的 `raw_value` 骗 [`measure`],不如把这半句已经存在、纯
+/// 函数、与 [`measure`] 内部用的是同一份实现的判断直接公开——阈值仍然
+/// **只有这一处定义**,没有开第二本账。
+pub fn cadence_window(c: &Cadence) -> Duration {
     match c {
         Cadence::RealTime => Duration::minutes(10),
         Cadence::Daily => Duration::hours(24),

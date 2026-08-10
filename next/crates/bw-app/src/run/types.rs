@@ -53,17 +53,36 @@ pub struct ReapReport {
 }
 
 /// `RunManager::snapshot` 的返回——聚合计数,不是一百行明细(design
-/// §3.1)。**刻意保持最小**:本片只保证这条读接口存在且如实(数字来自循
-/// 环独占的内存活跃表,不经过额外的一层缓存),没有把它做成一个功能完
-/// 备的查询面——`run_races` 指挥器的逐运行断言全部走独立的 SQL 读回
-/// (§5.2),不依赖这个类型的字段够不够用;界面(切片五)真正要用聚合快
-/// 照时,按那时候的真实需要再加字段,不预先猜测形状。
+/// §3.1)。**刻意保持最小**:本片只保证这条读接口存在且如实,没有把它做
+/// 成一个功能完备的查询面——`run_races` 指挥器的逐运行断言全部走独立的
+/// SQL 读回(§5.2),不依赖这个类型的字段够不够用。
+///
+/// **next 切片五C 加字段**(design-s5-hexpanel.md §1.2 第④段「当前 Loop」
+/// 点名的四个数,每个都有真实消费者——`bw-app::view::hex` 的 Loop 段渲染
+/// 这四个数,`hex_readback` 指挥器逐个读回核对):
+/// - `running` 仍然来自循环独占的内存活跃表(原 `active` 字段改名,更贴
+///   合它现在的定位——「在跑」是四个数里唯一一个不查库的,其余三个天生
+///   要问 `bw-store`,查库这件事对这个方法不再是新鲜事);
+/// - `in_review`/`recent_failed`/`unsettled` 三个走
+///   [`bw_store::IssueStore::list_issues_by_status`]/
+///   [`bw_store::RunStore::count_failed_runs`]/
+///   [`bw_store::RunStore::list_unsettled_runs`]——真实查库,不是猜的。
 #[derive(Debug, Clone)]
 pub struct RunSnapshot {
     pub project: Option<ProjectId>,
-    /// 循环内存活跃表里,当前这个筛选范围内还「活着」(starting/running,
-    /// 含交付 + 咨询)的运行数。
-    pub active: usize,
+    /// 在跑:循环内存活跃表里,当前这个筛选范围内还「活着」(starting/
+    /// running,含交付 + 咨询)的运行数。
+    pub running: usize,
+    /// 评审中:这个筛选范围内状态为 `InReview` 的活数——「完成」的候诊
+    /// 室有多满(design §1.2④)。
+    pub in_review: usize,
+    /// 最近失败:`state = Failed` 的运行数(原始计数,**不叠加**「没有更
+    /// 晚运行接手」那条收窄——那是待人处理③「停在原地的运行」专属的更
+    /// 严格判据,两个数字故意不同)。
+    pub recent_failed: usize,
+    /// 遗留未结账:关了门但没结账(`ended_at IS NOT NULL AND settled_at
+    /// IS NULL`)的运行数——待人处理①同一条判据的聚合版。
+    pub unsettled: usize,
 }
 
 /// 运行管理器公开方法的统一错误面。**不包含任何写 Done 的分支**——运行

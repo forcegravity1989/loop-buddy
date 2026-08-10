@@ -189,6 +189,35 @@ pub(crate) fn parse_issue_status(s: &str) -> Result<IssueStatus> {
     }
 }
 
+/// [`get_issue`](IssueStore::get_issue)/[`list_issues_by_status`](IssueStore::list_issues_by_status)
+/// 共用的行解析——next 切片五C 新增第二个调用点时抽出来,避免两处各写
+/// 一遍列解析逻辑分叉。要求 `SELECT` 的列集与 `get_issue` 完全一致(顺序
+/// 无所谓,`sqlx::Row::get` 按列名取)。
+fn issue_row_from_sqlx(r: &sqlx::sqlite::SqliteRow) -> Result<IssueRow> {
+    let status_text: String = r.get("status");
+    // `issue.stage` 同 `project.active_stage`:INTEGER(1..5),走
+    // `StageKind::from_index`,不是 TEXT。
+    let stage_num: Option<i64> = r.get("stage");
+    let stage = stage_num
+        .map(|n| {
+            StageKind::from_index(n as u8)
+                .ok_or_else(|| StoreError::Other(format!("bad issue.stage {n:?}")))
+        })
+        .transpose()?;
+    Ok(IssueRow {
+        id: parse_uuid(&r.get::<String, _>("id"), IssueId::from_uuid)?,
+        project_id: parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid)?,
+        number: r.get("number"),
+        title: r.get("title"),
+        status: parse_issue_status(&status_text)?,
+        settled_at: r.get("settled_at"),
+        stage,
+        body: r.get("body"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    })
+}
+
 #[async_trait]
 impl IssueStore for SqliteStore {
     async fn create_project(&self, p: NewProject) -> Result<()> {
@@ -257,31 +286,7 @@ impl IssueStore for SqliteStore {
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
         .await?;
-        let Some(r) = row else {
-            return Ok(None);
-        };
-        let status_text: String = r.get("status");
-        // `issue.stage` 同 `project.active_stage`:INTEGER(1..5),走
-        // `StageKind::from_index`,不是 TEXT。
-        let stage_num: Option<i64> = r.get("stage");
-        let stage = stage_num
-            .map(|n| {
-                StageKind::from_index(n as u8)
-                    .ok_or_else(|| StoreError::Other(format!("bad issue.stage {n:?}")))
-            })
-            .transpose()?;
-        Ok(Some(IssueRow {
-            id: parse_uuid(&r.get::<String, _>("id"), IssueId::from_uuid)?,
-            project_id: parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid)?,
-            number: r.get("number"),
-            title: r.get("title"),
-            status: parse_issue_status(&status_text)?,
-            settled_at: r.get("settled_at"),
-            stage,
-            body: r.get("body"),
-            created_at: r.get("created_at"),
-            updated_at: r.get("updated_at"),
-        }))
+        row.as_ref().map(issue_row_from_sqlx).transpose()
     }
 
     async fn settle_issue(&self, id: IssueId, at: i64) -> Result<()> {
@@ -329,6 +334,60 @@ impl IssueStore for SqliteStore {
                 .await?;
         Ok(outcome.rows_affected() == 1)
     }
+
+    async fn list_issues_by_status(
+        &self,
+        project: Option<ProjectId>,
+        status: IssueStatus,
+    ) -> Result<Vec<IssueRow>> {
+        let select = "SELECT id, project_id, number, title, status, settled_at, stage, body, \
+                       created_at, updated_at FROM issue";
+        let rows = match project {
+            Some(p) => {
+                sqlx::query(&format!(
+                    "{select} WHERE status = ? AND project_id = ? ORDER BY updated_at ASC, id ASC"
+                ))
+                .bind(issue_status_text(status))
+                .bind(p.uuid().to_string())
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(&format!(
+                    "{select} WHERE status = ? ORDER BY updated_at ASC, id ASC"
+                ))
+                .bind(issue_status_text(status))
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        rows.iter().map(issue_row_from_sqlx).collect()
+    }
+
+    async fn count_issues_by_stage(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<(Option<StageKind>, i64)>> {
+        let rows = sqlx::query(
+            "SELECT stage, COUNT(*) AS n FROM issue WHERE project_id = ? GROUP BY stage ORDER BY stage",
+        )
+        .bind(project_id.uuid().to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let stage_num: Option<i64> = r.get("stage");
+                let stage = stage_num
+                    .map(|n| {
+                        StageKind::from_index(n as u8)
+                            .ok_or_else(|| StoreError::Other(format!("bad issue.stage {n:?}")))
+                    })
+                    .transpose()?;
+                let n: i64 = r.get("n");
+                Ok((stage, n))
+            })
+            .collect()
+    }
 }
 
 /// `issue.status` 列的文本编码——与 [`parse_issue_status`] 互为逆运算。
@@ -344,6 +403,40 @@ fn issue_status_text(s: IssueStatus) -> &'static str {
         IssueStatus::Blocked => "blocked",
         IssueStatus::Cancelled => "cancelled",
     }
+}
+
+/// [`RunStore`] 的多个方法(`get_run`/`list_runs`/`list_unsettled_runs`/
+/// `list_stalled_runs`)共用同一份列集——抽出来一处,避免四处各写一遍列
+/// 解析逻辑分叉(next 切片五C 新增三个调用点时抽出来)。
+const RUN_SELECT_COLUMNS: &str = "id, project_id, issue_id, kind, connector_name, req_id, \
+     upstream_session, workspace, branch, state, end_kind, end_detail, started_at, ended_at, \
+     settled_at, demoted_at";
+
+fn run_row_from_sqlx(r: &sqlx::sqlite::SqliteRow) -> Result<RunRow> {
+    let state_text: String = r.get("state");
+    let state = RunState::parse(&state_text)
+        .ok_or_else(|| StoreError::Other(format!("bad run.state {state_text:?}")))?;
+    let end_kind: Option<String> = r.get("end_kind");
+    let end_kind: Option<RunEndKind> = end_kind.map(|s| parse_run_end_kind(&s)).transpose()?;
+    let kind_text: String = r.get("kind");
+    Ok(RunRow {
+        id: parse_uuid(&r.get::<String, _>("id"), RunId::from_uuid)?,
+        project_id: parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid)?,
+        issue_id: parse_uuid(&r.get::<String, _>("issue_id"), IssueId::from_uuid)?,
+        kind: parse_run_kind(&kind_text)?,
+        connector_name: r.get("connector_name"),
+        req_id: r.get("req_id"),
+        upstream_session: r.get("upstream_session"),
+        workspace: r.get("workspace"),
+        branch: r.get("branch"),
+        state,
+        end_kind,
+        end_detail: r.get("end_detail"),
+        started_at: r.get("started_at"),
+        ended_at: r.get("ended_at"),
+        settled_at: r.get("settled_at"),
+        demoted_at: r.get("demoted_at"),
+    })
 }
 
 #[async_trait]
@@ -373,41 +466,13 @@ impl RunStore for SqliteStore {
     }
 
     async fn get_run(&self, id: RunId) -> Result<Option<RunRow>> {
-        let row = sqlx::query(
-            "SELECT id, project_id, issue_id, kind, connector_name, req_id, upstream_session, \
-             workspace, branch, state, end_kind, end_detail, started_at, ended_at, settled_at, \
-             demoted_at FROM run WHERE id = ?",
-        )
+        let row = sqlx::query(&format!(
+            "SELECT {RUN_SELECT_COLUMNS} FROM run WHERE id = ?"
+        ))
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
         .await?;
-        let Some(r) = row else {
-            return Ok(None);
-        };
-        let state_text: String = r.get("state");
-        let state = RunState::parse(&state_text)
-            .ok_or_else(|| StoreError::Other(format!("bad run.state {state_text:?}")))?;
-        let end_kind: Option<String> = r.get("end_kind");
-        let end_kind: Option<RunEndKind> = end_kind.map(|s| parse_run_end_kind(&s)).transpose()?;
-        let kind_text: String = r.get("kind");
-        Ok(Some(RunRow {
-            id: parse_uuid(&r.get::<String, _>("id"), RunId::from_uuid)?,
-            project_id: parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid)?,
-            issue_id: parse_uuid(&r.get::<String, _>("issue_id"), IssueId::from_uuid)?,
-            kind: parse_run_kind(&kind_text)?,
-            connector_name: r.get("connector_name"),
-            req_id: r.get("req_id"),
-            upstream_session: r.get("upstream_session"),
-            workspace: r.get("workspace"),
-            branch: r.get("branch"),
-            state,
-            end_kind,
-            end_detail: r.get("end_detail"),
-            started_at: r.get("started_at"),
-            ended_at: r.get("ended_at"),
-            settled_at: r.get("settled_at"),
-            demoted_at: r.get("demoted_at"),
-        }))
+        row.as_ref().map(run_row_from_sqlx).transpose()
     }
 
     async fn close_run(
@@ -503,6 +568,68 @@ impl RunStore for SqliteStore {
         rows.iter()
             .map(|r| parse_uuid(&r.get::<String, _>("id"), RunId::from_uuid))
             .collect()
+    }
+
+    async fn list_runs(&self, project: Option<ProjectId>) -> Result<Vec<RunRow>> {
+        let base = format!("SELECT {RUN_SELECT_COLUMNS} FROM run");
+        let rows = match project {
+            Some(p) => {
+                sqlx::query(&format!(
+                    "{base} WHERE project_id = ? ORDER BY started_at DESC, id DESC"
+                ))
+                .bind(p.uuid().to_string())
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(&format!("{base} ORDER BY started_at DESC, id DESC"))
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+        };
+        rows.iter().map(run_row_from_sqlx).collect()
+    }
+
+    async fn list_unsettled_runs(&self, project: Option<ProjectId>) -> Result<Vec<RunRow>> {
+        // design §3.2① —— 关了门但没结账:`ended_at IS NOT NULL AND
+        // settled_at IS NULL`。
+        let base = format!(
+            "SELECT {RUN_SELECT_COLUMNS} FROM run \
+             WHERE ended_at IS NOT NULL AND settled_at IS NULL"
+        );
+        let rows = match project {
+            Some(p) => {
+                sqlx::query(&format!(
+                    "{base} AND project_id = ? ORDER BY ended_at DESC, id DESC"
+                ))
+                .bind(p.uuid().to_string())
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(&format!("{base} ORDER BY ended_at DESC, id DESC"))
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+        };
+        rows.iter().map(run_row_from_sqlx).collect()
+    }
+
+    async fn count_failed_runs(&self, project: Option<ProjectId>) -> Result<i64> {
+        let n: i64 = match project {
+            Some(p) => sqlx::query(
+                "SELECT COUNT(*) AS n FROM run WHERE state = 'failed' AND project_id = ?",
+            )
+            .bind(p.uuid().to_string())
+            .fetch_one(&self.pool)
+            .await?
+            .get("n"),
+            None => sqlx::query("SELECT COUNT(*) AS n FROM run WHERE state = 'failed'")
+                .fetch_one(&self.pool)
+                .await?
+                .get("n"),
+        };
+        Ok(n)
     }
 }
 
@@ -706,9 +833,13 @@ impl ObservationStore for SqliteStore {
     }
 
     async fn list_observations(&self, metric_id: MetricId) -> Result<Vec<ObservationRow>> {
+        // `, id DESC` 兜底(next 切片五D `hex_readback` 指挥器实测抓到的偶
+        // 发假红教训,见 `view/hex.rs` `sorted_observations` 文档):`ts` 只
+        // 有秒级精度,两条观测同一秒插入时单靠 `ORDER BY ts DESC` 的并列
+        // 顺序不保证跨两次查询稳定。
         let rows = sqlx::query(
             "SELECT id, metric_id, project_id, ts, raw_value, source, source_hint, created_at \
-             FROM observation WHERE metric_id = ? ORDER BY ts DESC",
+             FROM observation WHERE metric_id = ? ORDER BY ts DESC, id DESC",
         )
         .bind(metric_id.uuid().to_string())
         .fetch_all(&self.pool)
@@ -792,38 +923,36 @@ impl HandoffStore for SqliteStore {
     }
 
     async fn list_handoffs(&self, project_id: ProjectId) -> Result<Vec<HandoffRow>> {
+        // `, id DESC` 兜底——同 `list_observations` 上方注记,`created_at`
+        // 只有秒级精度。
         let rows = sqlx::query(
             "SELECT id, project_id, from_stage, to_stage, risky, note, created_at \
-             FROM handoff WHERE project_id = ? ORDER BY created_at DESC",
+             FROM handoff WHERE project_id = ? ORDER BY created_at DESC, id DESC",
         )
         .bind(project_id.uuid().to_string())
         .fetch_all(&self.pool)
         .await?;
-        rows.iter()
-            .map(|r| {
-                // INTEGER(1..5),同 `project.active_stage`/`issue.stage`
-                // ——2026-08-11 主控裁决(见 handoff_stage 上方注记),不
-                // 经 TEXT 互转。
-                let from_num: i64 = r.get("from_stage");
-                let to_num: i64 = r.get("to_stage");
-                let risky_num: i64 = r.get("risky");
-                Ok(HandoffRow {
-                    id: parse_uuid(&r.get::<String, _>("id"), HandoffId::from_uuid)?,
-                    project_id: parse_uuid(
-                        &r.get::<String, _>("project_id"),
-                        ProjectId::from_uuid,
-                    )?,
-                    from_stage: StageKind::from_index(from_num as u8).ok_or_else(|| {
-                        StoreError::Other(format!("bad handoff.from_stage {from_num:?}"))
-                    })?,
-                    to_stage: StageKind::from_index(to_num as u8).ok_or_else(|| {
-                        StoreError::Other(format!("bad handoff.to_stage {to_num:?}"))
-                    })?,
-                    risky: risky_num != 0,
-                    note: r.get("note"),
-                    created_at: r.get("created_at"),
-                })
-            })
-            .collect()
+        rows.iter().map(handoff_row_from_sqlx).collect()
     }
+}
+
+/// [`HandoffStore::list_handoffs`] 的行解析——下一个 commit(切片五D)加
+/// 第二个调用点(`list_current_stage_risky_handoffs`)时会复用这个函数。
+fn handoff_row_from_sqlx(r: &sqlx::sqlite::SqliteRow) -> Result<HandoffRow> {
+    // INTEGER(1..5),同 `project.active_stage`/`issue.stage`——2026-08-11
+    // 主控裁决(见 `handoff_stage` 上方注记),不经 TEXT 互转。
+    let from_num: i64 = r.get("from_stage");
+    let to_num: i64 = r.get("to_stage");
+    let risky_num: i64 = r.get("risky");
+    Ok(HandoffRow {
+        id: parse_uuid(&r.get::<String, _>("id"), HandoffId::from_uuid)?,
+        project_id: parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid)?,
+        from_stage: StageKind::from_index(from_num as u8)
+            .ok_or_else(|| StoreError::Other(format!("bad handoff.from_stage {from_num:?}")))?,
+        to_stage: StageKind::from_index(to_num as u8)
+            .ok_or_else(|| StoreError::Other(format!("bad handoff.to_stage {to_num:?}")))?,
+        risky: risky_num != 0,
+        note: r.get("note"),
+        created_at: r.get("created_at"),
+    })
 }

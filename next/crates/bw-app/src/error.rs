@@ -5,6 +5,10 @@
 //! 在 [`crate::run`] 模块,不并进这里(设计上运行管理器的错误面与编排层
 //! 的其它错误面是两回事,`RunManager` 的公开方法直接返回 `RunError`,不
 //! 经这层转换)。
+//!
+//! next 切片五C(design-s5-hexpanel.md §4.2)补五个变体——`cmd::project`/
+//! `cmd::metric` 两个聚合的用例层合法性判断(项目不存在 / 已经开过棒 /
+//! 从未开棒不能交棒 / 指标不存在 / 正本文件解析失败)。
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -29,4 +33,28 @@ pub enum AppError {
         from: bw_core::IssueStatus,
         to: bw_core::IssueStatus,
     },
+    #[error("项目不存在:{0:?}")]
+    ProjectNotFound(bw_core::ProjectId),
+    /// `cmd::project::set_active_stage`——已经开过棒的项目不能再「首次开
+    /// 棒」,要往下一棒走该用交棒(`cmd::project::handoff_stage`)。
+    #[error(
+        "项目 {project:?} 已经开棒在 {current:?},不能再次「首次开棒」——要往下一棒走,用交棒命令"
+    )]
+    StageAlreadySet {
+        project: bw_core::ProjectId,
+        current: bw_core::StageKind,
+    },
+    /// `cmd::project::handoff_stage`——从未开棒的项目没有「从」这个非空
+    /// 起点,`handoff.from_stage` 是 `NOT NULL`。
+    #[error("项目 {0:?} 从未开棒,不能交棒(没有「从」这个起点)")]
+    NoActiveStage(bw_core::ProjectId),
+    #[error("指标不存在:{0:?}")]
+    MetricNotFound(bw_core::MetricId),
+    /// `cmd::metric::sync_metrics_file`——项目仓 `.bw/metrics.toml` 存在但
+    /// 解析失败(语法错/字段缺)。**这一步失败,函数在这里就返回**,不会
+    /// 走到 `MetricStore::sync_metrics_from_file`——「文件必须整份解析成
+    /// 功才会有任何 SQLite 写入」这条语义(`docs/metrics-toml-format.md`)
+    /// 在编排层这一侧的落点(五-1 report concern 3 点名的那半句)。
+    #[error("项目仓 .bw/metrics.toml 解析失败:{0}")]
+    MetricsFile(String),
 }

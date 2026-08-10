@@ -147,6 +147,25 @@ pub trait IssueStore: Send + Sync {
         to: IssueStatus,
         at: i64,
     ) -> Result<bool>;
+
+    /// next 切片五C/D(design-s5-hexpanel.md §3.2②):状态匹配的活列表,
+    /// 按更新时刻升序(先进先出——待人处理②「评审中等你点」用这个顺序,
+    /// 六段视图「当前 Loop」的评审中计数与 [`crate::run::RunSnapshot`] 的
+    /// `in_review` 字段共用同一条查询,不重复发明第二本账)。`project=None`
+    /// 时横跨全库——裁决 10:投影/查询层不内含单项目假设。
+    async fn list_issues_by_status(
+        &self,
+        project: Option<ProjectId>,
+        status: IssueStatus,
+    ) -> Result<Vec<IssueRow>>;
+
+    /// next 切片五C(design §1.2②):一个项目里按阶段分组的活数——五角色
+    /// 责任卡「这个阶段有几件活」的真实数据源。`None` 那一档是「未归类」
+    /// (`issue.stage IS NULL`),不计入任何 `StageKind`。
+    async fn count_issues_by_stage(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<(Option<StageKind>, i64)>>;
 }
 
 // ───────────────────────────── run ─────────────────────────────
@@ -305,6 +324,23 @@ pub trait RunStore: Send + Sync {
     /// 标注「不知道怎么结束的」,`settled_at` 不动(账没结,如实欠着)。
     /// 返回被标注的运行编号列表,供 `ReapReport`/「不批量唤醒」断言用。
     async fn reap_open_runs(&self, at: i64) -> Result<Vec<RunId>>;
+
+    /// next 切片五C/D(design §1.2⑥/§3.2):一个项目(或全库,`project=None`
+    /// ——裁决 10)的全部运行,按开工时刻倒序。「交付证据」段①(每次运行
+    /// 的账:结束事实原文、耗时、上游会话号、结没结账)与 hex 视图组装用
+    /// 例共用同一条数据源。
+    async fn list_runs(&self, project: Option<ProjectId>) -> Result<Vec<RunRow>>;
+
+    /// next 切片五D(design §3.2①):关了门但没结账的运行——待人处理①/
+    /// hex 视图「当前 Loop」段「遗留未结账」计数共用同一条查询。
+    async fn list_unsettled_runs(&self, project: Option<ProjectId>) -> Result<Vec<RunRow>>;
+
+    /// next 切片五C(design §1.2④「最近失败」聚合数的真实数据源):
+    /// `state='failed'` 的运行数——**不叠加**「没有更晚运行」那条收窄
+    /// (那是待人处理③「停在原地的运行」专属的更严格判据,下一个 commit
+    /// 加它的查询方法时会点名这里)。两个数字故意不同:一个答「发生过
+    /// 多少次失败」,一个答「现在还悬着没人管的失败」。
+    async fn count_failed_runs(&self, project: Option<ProjectId>) -> Result<i64>;
 }
 
 // ───────────────────────────── metric(next 切片五B)─────────────────────────────
@@ -528,8 +564,8 @@ pub trait HandoffStore: Send + Sync {
         at: i64,
     ) -> Result<HandoffId>;
 
-    /// 一个项目的交棒流水,按时间倒序——「风险与决策」段与待人处理第⑤
-    /// 项(当前一棒的带险交棒欠账)共用的数据来源。
+    /// 一个项目的**全部**交棒流水,按时间倒序——「风险与决策」段的数据
+    /// 来源(带险的置顶标红,决策栏如实留白)。
     async fn list_handoffs(&self, project_id: ProjectId) -> Result<Vec<HandoffRow>>;
 }
 

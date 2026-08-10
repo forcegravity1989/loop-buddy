@@ -115,14 +115,12 @@ impl RunManager {
         self.call(|reply| Cmd::Reap { reply }).await
     }
 
-    /// 读:聚合快照(界面与指挥器用)。返回的是计数,不是一百行明细。
+    /// 读:聚合快照(界面与指挥器用)。返回的是计数,不是一百行明细
+    /// ——next 切片五C 起,`in_review`/`recent_failed`/`unsettled` 三个字
+    /// 段是真实查库(`RunSnapshot` 文档),因此这个方法现在可能失败(存储
+    /// 调用出错),签名相应从「必成功」改成「可失败」。
     pub async fn snapshot(&self, project: Option<ProjectId>) -> Result<RunSnapshot, RunError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(Cmd::Snapshot { project, reply })
-            .await
-            .map_err(|_| RunError::Closed)?;
-        rx.await.map_err(|_| RunError::Closed)
+        self.call(|reply| Cmd::Snapshot { project, reply }).await
     }
 
     /// 四个「发命令、等回信」公开方法共用的样板:发送失败(队列已关)与
@@ -162,7 +160,7 @@ enum Cmd {
     },
     Snapshot {
         project: Option<ProjectId>,
-        reply: oneshot::Sender<RunSnapshot>,
+        reply: oneshot::Sender<Result<RunSnapshot, RunError>>,
     },
     /// 内部命令:某运行的开工外呼(`Execute::start`)完成了。
     Started {
@@ -245,7 +243,7 @@ impl Loop {
                 let _ = reply.send(result);
             }
             Cmd::Snapshot { project, reply } => {
-                let snap = self.handle_snapshot(project);
+                let snap = self.handle_snapshot(project).await;
                 let _ = reply.send(snap);
             }
             Cmd::Started { run, outcome } => self.handle_started(run, outcome).await,
@@ -716,8 +714,14 @@ impl Loop {
         Ok(ReapReport { reaped })
     }
 
-    fn handle_snapshot(&self, project: Option<ProjectId>) -> RunSnapshot {
-        let active = self
+    /// next 切片五C:四个数各自的真实数据源(`RunSnapshot` 文档)。
+    /// `running` 查内存活跃表(原样保留,只改了名字);其余三个真的查库
+    /// ——这是这个方法第一次做 `.await`,`design §3.2「循环独占状态,唯
+    /// 一 .await 点是存储调用」`这条并发纪律仍然成立:连接器调用一律
+    /// `tokio::spawn` 出去,这里直接 `.await` 的只是 `self.store` 上的只
+    /// 读查询,不是外呼。
+    async fn handle_snapshot(&self, project: Option<ProjectId>) -> Result<RunSnapshot, RunError> {
+        let running = self
             .active
             .values()
             .filter(|a| match project {
@@ -725,7 +729,20 @@ impl Loop {
                 None => true,
             })
             .count();
-        RunSnapshot { project, active }
+        let in_review = self
+            .store
+            .list_issues_by_status(project, IssueStatus::InReview)
+            .await?
+            .len();
+        let recent_failed = self.store.count_failed_runs(project).await? as usize;
+        let unsettled = self.store.list_unsettled_runs(project).await?.len();
+        Ok(RunSnapshot {
+            project,
+            running,
+            in_review,
+            recent_failed,
+            unsettled,
+        })
     }
 
     fn release_issue_slot(&mut self, issue: IssueId, run: RunId) {
