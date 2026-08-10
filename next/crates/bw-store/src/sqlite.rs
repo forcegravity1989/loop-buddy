@@ -7,9 +7,10 @@
 
 use crate::{
     metric_tier_text, parse_metric_tier, parse_run_end_kind, parse_run_kind, run_end_kind_text,
-    run_kind_text, HandoffRow, HandoffStore, IncomingMetricDef, IssueRow, IssueStore, MetricRow,
-    MetricStore, MetricSyncReport, MetricTier, NewIssue, NewObservation, NewProject, NewRun,
-    ObservationRow, ObservationStore, ProjectRow, Result, RunEndKind, RunRow, RunStore, StoreError,
+    run_kind_text, HandoffRow, HandoffStore, IncomingMetricDef, IssueRow, IssueStore,
+    MetricLatestObservation, MetricRow, MetricStore, MetricSyncReport, MetricTier, NewIssue,
+    NewObservation, NewProject, NewRun, ObservationRow, ObservationStore, ProjectRow, Result,
+    RunEndKind, RunRow, RunStore, StoreError,
 };
 use async_trait::async_trait;
 use bw_core::{
@@ -615,6 +616,35 @@ impl RunStore for SqliteStore {
         rows.iter().map(run_row_from_sqlx).collect()
     }
 
+    async fn list_stalled_runs(&self, project: Option<ProjectId>) -> Result<Vec<RunRow>> {
+        // design §3.2③ —— 失败/遗留,且这件活之后没有更晚开的运行接手。
+        // 外层 SELECT 列表不加 `r.` 前缀也不歧义——`NOT EXISTS` 子查询里的
+        // `run r2` 是独立作用域,不会把它的列带进外层结果集。
+        let base = format!(
+            "SELECT {RUN_SELECT_COLUMNS} FROM run r \
+             WHERE r.state IN ('failed', 'orphaned') \
+               AND NOT EXISTS (SELECT 1 FROM run r2 \
+                                WHERE r2.issue_id = r.issue_id \
+                                  AND r2.started_at > r.started_at)"
+        );
+        let rows = match project {
+            Some(p) => {
+                sqlx::query(&format!(
+                    "{base} AND r.project_id = ? ORDER BY r.ended_at DESC, r.id DESC"
+                ))
+                .bind(p.uuid().to_string())
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(&format!("{base} ORDER BY r.ended_at DESC, r.id DESC"))
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+        };
+        rows.iter().map(run_row_from_sqlx).collect()
+    }
+
     async fn count_failed_runs(&self, project: Option<ProjectId>) -> Result<i64> {
         let n: i64 = match project {
             Some(p) => sqlx::query(
@@ -810,6 +840,77 @@ impl MetricStore for SqliteStore {
                 .await?;
         Ok(outcome.rows_affected() == 1)
     }
+
+    async fn list_metrics_without_observation(
+        &self,
+        project: Option<ProjectId>,
+    ) -> Result<Vec<MetricRow>> {
+        // design §3.2④a —— 未停用、且一条观测都没有。
+        let select = "SELECT id, project_id, tier, name, def, target_raw, collect_kind, \
+             collect_query, origin, archived_at, created_at, updated_at FROM metric m \
+             WHERE m.archived_at IS NULL \
+               AND NOT EXISTS (SELECT 1 FROM observation o WHERE o.metric_id = m.id)";
+        let rows = match project {
+            Some(p) => {
+                sqlx::query(&format!(
+                    "{select} AND m.project_id = ? ORDER BY m.tier, m.name, m.id"
+                ))
+                .bind(p.uuid().to_string())
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(&format!("{select} ORDER BY m.tier, m.name, m.id"))
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+        };
+        rows.iter().map(metric_row_from_sqlx).collect()
+    }
+
+    async fn list_metric_latest_observation(
+        &self,
+        project: Option<ProjectId>,
+    ) -> Result<Vec<MetricLatestObservation>> {
+        // design §3.2④b —— 每条未停用指标最新一条观测的时刻;过不过期不
+        // 在这里判断(留给内核按节奏窗口算)。
+        let select = "SELECT m.id, m.project_id, m.tier, m.name, MAX(o.ts) AS latest_ts \
+             FROM metric m LEFT JOIN observation o ON o.metric_id = m.id \
+             WHERE m.archived_at IS NULL";
+        // `GROUP BY` 本身不承诺输出行序;补一条 `ORDER BY m.id`——不影响聚
+        // 合结果,只是让「同一批数据、两次各自查询」的行序稳定(同
+        // `list_observations` 上方注记,同一类偶发假红的另一个潜在源头)。
+        let rows = match project {
+            Some(p) => {
+                sqlx::query(&format!(
+                    "{select} AND m.project_id = ? GROUP BY m.id ORDER BY m.id"
+                ))
+                .bind(p.uuid().to_string())
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(&format!("{select} GROUP BY m.id ORDER BY m.id"))
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+        };
+        rows.iter()
+            .map(|r| {
+                let tier_text: String = r.get("tier");
+                Ok(MetricLatestObservation {
+                    id: parse_uuid(&r.get::<String, _>("id"), MetricId::from_uuid)?,
+                    project_id: parse_uuid(
+                        &r.get::<String, _>("project_id"),
+                        ProjectId::from_uuid,
+                    )?,
+                    tier: parse_metric_tier(&tier_text)?,
+                    name: r.get("name"),
+                    latest_ts: r.get("latest_ts"),
+                })
+            })
+            .collect()
+    }
 }
 
 #[async_trait]
@@ -934,10 +1035,41 @@ impl HandoffStore for SqliteStore {
         .await?;
         rows.iter().map(handoff_row_from_sqlx).collect()
     }
+
+    async fn list_current_stage_risky_handoffs(
+        &self,
+        project: Option<ProjectId>,
+    ) -> Result<Vec<HandoffRow>> {
+        // design §3.2⑤,2026-08-11 主控裁决(见本文件 `handoff_stage` 上方
+        // 与 schema.sql `handoff` 表上方两处同一条裁决的注记):INTEGER 对
+        // INTEGER 直接比较,不经 `CAST`。子查询按 `h.project_id` 自身相关
+        // 联(不是绑定单个固定项目的 `?1` 参数)——裁决 10:不写死单项目,
+        // `project=None` 时对全库每个项目各自的「当前一棒」分别判断。
+        let select = "SELECT id, project_id, from_stage, to_stage, risky, note, created_at \
+             FROM handoff h \
+             WHERE h.risky = 1 \
+               AND h.to_stage = (SELECT active_stage FROM project WHERE id = h.project_id)";
+        let rows = match project {
+            Some(p) => {
+                sqlx::query(&format!(
+                    "{select} AND h.project_id = ? ORDER BY h.created_at DESC, h.id DESC"
+                ))
+                .bind(p.uuid().to_string())
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(&format!("{select} ORDER BY h.created_at DESC, h.id DESC"))
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+        };
+        rows.iter().map(handoff_row_from_sqlx).collect()
+    }
 }
 
-/// [`HandoffStore::list_handoffs`] 的行解析——下一个 commit(切片五D)加
-/// 第二个调用点(`list_current_stage_risky_handoffs`)时会复用这个函数。
+/// [`HandoffStore::list_handoffs`]/[`HandoffStore::list_current_stage_risky_handoffs`]
+/// 共用的行解析——next 切片五D 新增第二个调用点时抽出来。
 fn handoff_row_from_sqlx(r: &sqlx::sqlite::SqliteRow) -> Result<HandoffRow> {
     // INTEGER(1..5),同 `project.active_stage`/`issue.stage`——2026-08-11
     // 主控裁决(见 `handoff_stage` 上方注记),不经 TEXT 互转。

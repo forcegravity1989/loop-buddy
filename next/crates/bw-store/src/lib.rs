@@ -85,7 +85,11 @@ pub struct NewIssue {
     pub title: String,
 }
 
-#[derive(Clone, Debug)]
+// next 切片五D:`PartialEq` 是 `hex_readback` 指挥器「重启前后同一查询
+// 逐字节比对」(design-s5-hexpanel.md §7.2 第 4 节,裁决 4 的新验收形
+// 态)要用的——两次调用同一条组装用例产出的视图要能直接 `==` 比较,不
+// 靠格式化字符串比对这种更脆的手法。只加派生,不改字段/行为。
+#[derive(Clone, Debug, PartialEq)]
 pub struct IssueRow {
     pub id: IssueId,
     pub project_id: ProjectId,
@@ -245,7 +249,7 @@ pub struct NewRun {
     pub started_at: i64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)] // next 切片五D:同 `IssueRow` 上方注记
 pub struct RunRow {
     pub id: RunId,
     pub project_id: ProjectId,
@@ -335,11 +339,15 @@ pub trait RunStore: Send + Sync {
     /// hex 视图「当前 Loop」段「遗留未结账」计数共用同一条查询。
     async fn list_unsettled_runs(&self, project: Option<ProjectId>) -> Result<Vec<RunRow>>;
 
+    /// next 切片五D(design §3.2③):失败/遗留,且这件活之后没有更晚开的
+    /// 运行接手——待人处理③「停在原地的运行」。
+    async fn list_stalled_runs(&self, project: Option<ProjectId>) -> Result<Vec<RunRow>>;
+
     /// next 切片五C(design §1.2④「最近失败」聚合数的真实数据源):
     /// `state='failed'` 的运行数——**不叠加**「没有更晚运行」那条收窄
-    /// (那是待人处理③「停在原地的运行」专属的更严格判据,下一个 commit
-    /// 加它的查询方法时会点名这里)。两个数字故意不同:一个答「发生过
-    /// 多少次失败」,一个答「现在还悬着没人管的失败」。
+    /// (那是 [`RunStore::list_stalled_runs`] 专属的更严格判据)。两个数字
+    /// 故意不同:一个答「发生过多少次失败」,一个答「现在还悬着没人管的
+    /// 失败」。
     async fn count_failed_runs(&self, project: Option<ProjectId>) -> Result<i64>;
 }
 
@@ -391,7 +399,7 @@ pub struct IncomingMetricDef {
     pub collect_query: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)] // next 切片五D:同 `IssueRow` 上方注记
 pub struct MetricRow {
     pub id: MetricId,
     pub project_id: ProjectId,
@@ -482,6 +490,36 @@ pub trait MetricStore: Send + Sync {
     /// `docs/metrics-toml-format.md`「从该文件里删掉即停用」)。`true` =
     /// 这次真停用了;`false` = 已经停用过,幂等空转。
     async fn archive_metric(&self, id: MetricId, at: i64) -> Result<bool>;
+
+    /// next 切片五D(design §3.2④a):从来没有观测过的指标(未停用的才
+    /// 算)——待人处理④「指标没数 / 数据过期」的第一半。
+    async fn list_metrics_without_observation(
+        &self,
+        project: Option<ProjectId>,
+    ) -> Result<Vec<MetricRow>>;
+
+    /// next 切片五D(design §3.2④b):每条指标(未停用)最新一条观测的时
+    /// 刻。**过不过期不在这里判断**——那是内核按这条指标的节奏窗口算的
+    /// (`bw_core::derive::measure`),SQL 只负责把「最新是什么时候」老实
+    /// 交出来,在 SQL 里再判一遍阈值就是给同一条规则开第二本账。
+    async fn list_metric_latest_observation(
+        &self,
+        project: Option<ProjectId>,
+    ) -> Result<Vec<MetricLatestObservation>>;
+}
+
+/// [`MetricStore::list_metric_latest_observation`] 的一行——指标身份 + 它
+/// 最新一条观测的时刻(`None` = 一条观测都没有,与
+/// [`MetricStore::list_metrics_without_observation`] 是同一件事的两种问
+/// 法,数据来源相同,取用场景不同:前者要「从没采过」的清单,这里要「每
+/// 条指标各自最新一次是什么时候」以便调用方按节奏窗口自己判过期)。
+#[derive(Clone, Debug)]
+pub struct MetricLatestObservation {
+    pub id: MetricId,
+    pub project_id: ProjectId,
+    pub tier: MetricTier,
+    pub name: String,
+    pub latest_ts: Option<i64>,
 }
 
 // ───────────────────────────── observation(next 切片五B)─────────────────────────────
@@ -497,7 +535,7 @@ pub struct NewObservation {
     pub source_hint: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)] // next 切片五D:同 `IssueRow` 上方注记
 pub struct ObservationRow {
     pub id: ObservationId,
     pub metric_id: MetricId,
@@ -523,7 +561,7 @@ pub trait ObservationStore: Send + Sync {
 
 // ───────────────────────────── handoff(next 切片五B)─────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)] // next 切片五D:同 `IssueRow` 上方注记
 pub struct HandoffRow {
     pub id: HandoffId,
     pub project_id: ProjectId,
@@ -567,6 +605,20 @@ pub trait HandoffStore: Send + Sync {
     /// 一个项目的**全部**交棒流水,按时间倒序——「风险与决策」段的数据
     /// 来源(带险的置顶标红,决策栏如实留白)。
     async fn list_handoffs(&self, project_id: ProjectId) -> Result<Vec<HandoffRow>>;
+
+    /// next 切片五D(design §3.2⑤,2026-08-11 主控裁决:INTEGER 对 INTEGER
+    /// 直接比较,不经 `CAST`;裁决 8:范围收窄成「当前这一棒」,消失条件
+    /// 是「阶段再往前推一棒」;裁决 10:不写死单项目——子查询按
+    /// `h.project_id` 自身相关联,不绑定某一个固定项目,`project=None`
+    /// 时对全库每个项目各自的「当前一棒」分别判断)。**这不是**
+    /// [`HandoffStore::list_handoffs`] 的子集查询——它专门回答「当前这一
+    /// 棒身上还压着哪些带险交棒欠账」,更早棒次的带险交棒不在这份结果
+    /// 里(它们仍然躺在 `list_handoffs` 的全量流水里永久可查,「更早的欠
+    /// 账在风险与决策段永久可查」)。
+    async fn list_current_stage_risky_handoffs(
+        &self,
+        project: Option<ProjectId>,
+    ) -> Result<Vec<HandoffRow>>;
 }
 
 // next 切片五-1 修复轮:`stage_kind_text`/`parse_stage_kind`(TEXT↔StageKind

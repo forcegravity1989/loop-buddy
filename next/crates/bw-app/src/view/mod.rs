@@ -8,9 +8,8 @@
 //! 挥器(`bw-app/examples/hex_readback.rs`)直接调用,验的就是界面真正会
 //! 用的那个函数,不是另一份平行发明的核对逻辑。
 
+pub mod attention;
 pub mod hex;
 
+pub use attention::AttentionView;
 pub use hex::HexView;
-
-// `attention` 模块(待人处理投影)是下一个 commit(切片五D)的事——本片
-// (切片五C)只立六段总控这一半。

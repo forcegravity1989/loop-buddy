@@ -1,0 +1,1813 @@
+//! `hex_readback` — 切片五行为验收指挥器(design-s5-hexpanel.md §7.1)。
+//!
+//! 不开界面,直接调用 [`bw_app::App::hex_view`]/[`bw_app::App::attention_view`]
+//! ——界面(切片五E,本片不建)将来真正会用的同一段代码——造一批真数据
+//! (真 git 工作区 + 真 `.bw/metrics.toml` + 真项目/活/运行/观测/交棒),
+//! 逐段读回断言,五项待人处理投影正反各验一次(造出来 → 消掉 → 行自然
+//! 消失),重启前后同一份查询逐字节比对,SQL 原样打印供人复核。
+//!
+//! 七段:
+//!
+//! 1. 指标正本同步(北极星也是一行,读一份真实 `.bw/metrics.toml`)
+//! 2. 观测只追加 + 手填戴徽
+//! 3. 信号只能推导(读时现算,零缓存;含「零观测不是 Green」的反证)
+//! 4. 杀进程重开,数字一致(裁决 4 的新验收形态:同一份组装用例的产物,
+//!    重开数据库连接前后逐字段比对)
+//! 5. 六段逐段读回
+//! 6. 完成永远人点(显式转移 + 合法转移表拒绝)
+//! 7. 待人处理:五项正反各验一次
+//!
+//! **不重复的一段**:「附 · 存量库迁移双守卫」本档不再重复一遍——`bw-store`
+//! `examples/store_guards.rs` 第 14 节与 `bw-app` `examples/run_races.rs`
+//! 「附」都已经真实覆盖过这条守卫,本片(五C/五D)没有新增任何列迁移,
+//! 再抄一份只是同一件事的第三份复制,不产生新的验证价值。
+//!
+//! 跑法:`cd next && cargo run -p bw-app --example hex_readback`
+//! 退出码 0 且末行 `HEX_READBACK_OK` = 全部断言通过。
+//! 数据库/工作区跑完不删,路径打印出来,人可以自己 `sqlite3`/`git` 复核。
+
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use bw_app::view::hex::LoopInputs;
+use bw_app::{App, Command, Event};
+use bw_core::{IssueId, IssueStatus, MetricId, ProjectId, RunId, RunState, StageKind};
+use bw_store::{
+    HandoffStore, IssueStore, MetricStore, NewIssue, NewObservation, NewProject, NewRun,
+    ObservationStore, RunEndKind, RunKind, RunStore, SqliteStore,
+};
+use bw_workspace::git_support::{commit_initial, git_in};
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{Row, SqlitePool};
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+const DB_NAME_PREFIX: &str = "bw-hex-";
+const WS_DIR_PREFIX: &str = "bw-hex-ws-";
+
+fn now_i64() -> i64 {
+    OffsetDateTime::now_utc().unix_timestamp()
+}
+
+fn fresh_db_path() -> PathBuf {
+    std::env::temp_dir().join(format!("{DB_NAME_PREFIX}{}.db", Uuid::new_v4()))
+}
+
+fn fresh_workspace_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("{WS_DIR_PREFIX}{}", Uuid::new_v4()))
+}
+
+/// 清场——同 `store_guards.rs`/`run_races.rs`/`provision_readback.rs` 的既
+/// 有先例:uuid v4 命名,PID 会被系统复用,uuid 不会;清掉临时目录里所有
+/// **更早**的同前缀残留(库文件与工作区目录各自一份前缀),下一次跑不会
+/// 意外读到任何一次旧跑的残留。
+fn clear_stale(current_db: &Path, current_ws: &Path) {
+    if current_db.exists() {
+        let _ = std::fs::remove_file(current_db);
+    }
+    let dir = std::env::temp_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let current_db_name = current_db.file_name().map(|n| n.to_os_string());
+    let current_ws_name = current_ws.file_name().map(|n| n.to_os_string());
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if current_db_name.as_deref() == Some(name.as_os_str())
+            || current_ws_name.as_deref() == Some(name.as_os_str())
+        {
+            continue;
+        }
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with(DB_NAME_PREFIX) {
+            let _ = std::fs::remove_file(entry.path());
+        } else if name_str.starts_with(WS_DIR_PREFIX) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+// ─────────────────────────── 断言账本(同 run_races.rs 既有先例)───────────────────────────
+
+struct Ledger {
+    ok: bool,
+    count: usize,
+}
+
+impl Ledger {
+    fn new() -> Self {
+        Self { ok: true, count: 0 }
+    }
+    fn check(&mut self, cond: bool, label: impl std::fmt::Display) {
+        self.count += 1;
+        if cond {
+            println!("  ✓ {label}");
+        } else {
+            eprintln!("ASSERT FAILED: {label}");
+            self.ok = false;
+        }
+    }
+    fn fail(&mut self, label: impl std::fmt::Display) {
+        self.check(false, label);
+    }
+    fn merge(&mut self, other: Ledger) {
+        self.ok &= other.ok;
+        self.count += other.count;
+    }
+}
+
+fn format_row(row: &sqlx::sqlite::SqliteRow) -> String {
+    use sqlx::{Column, ValueRef};
+    row.columns()
+        .iter()
+        .enumerate()
+        .map(|(i, col)| {
+            let name = col.name();
+            let is_null = row.try_get_raw(i).map(|v| v.is_null()).unwrap_or(false);
+            let value = if is_null {
+                "NULL".to_string()
+            } else if let Ok(v) = row.try_get::<i64, _>(i) {
+                v.to_string()
+            } else if let Ok(v) = row.try_get::<f64, _>(i) {
+                v.to_string()
+            } else if let Ok(v) = row.try_get::<String, _>(i) {
+                v
+            } else {
+                "<unreadable>".to_string()
+            };
+            format!("{name}={value}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 独立只读连接原样跑一条 SQL、打印结果、把「读回成功」记一条断言——同
+/// `run_races.rs` `section_sql_readback` 的既有先例:每条查询都真的执行、
+/// 每一行都原样打出来,人可以自己复制这条 SQL 去 `sqlite3` 复核。
+async fn print_and_run(
+    pool: &SqlitePool,
+    label: &str,
+    sql: &str,
+    l: &mut Ledger,
+) -> Vec<sqlx::sqlite::SqliteRow> {
+    println!("  [{label}] 执行 SQL: {sql}");
+    match sqlx::query(sql).fetch_all(pool).await {
+        Ok(rows) => {
+            if rows.is_empty() {
+                println!("    → (0 行)");
+            } else {
+                for row in &rows {
+                    println!("    → {}", format_row(row));
+                }
+            }
+            l.check(
+                true,
+                format!("[{label}] SQL 读回成功({} 行,原文见上)", rows.len()),
+            );
+            rows
+        }
+        Err(e) => {
+            l.fail(format!("[{label}] 读回失败:{e}"));
+            Vec::new()
+        }
+    }
+}
+
+// ─────────────────────────── 造真实工作区 + 正本 ───────────────────────────
+
+/// 完整版 `.bw/metrics.toml`(1 北极星 + 1 滞后 + 1 引领)。
+fn metrics_toml_full() -> &'static str {
+    "schema_version = 1\n\n\
+     [north_star]\n\
+     name = \"每周真实交付的活数\"\n\
+     def = \"hex_readback 指挥器自造的北极星,验证三层同构\"\n\
+     collect = { kind = \"manual\", query = \"\" }\n\n\
+     [[lagging]]\n\
+     name = \"滞后指标·周吞吐\"\n\
+     def = \"过去一周结算的活数\"\n\
+     target = \"≥3\"\n\
+     collect = { kind = \"manual\", query = \"\" }\n\n\
+     [[leading]]\n\
+     name = \"引领指标·评审周转\"\n\
+     def = \"评审中平均停留天数(越小越好)\"\n\
+     target = \"≤2\"\n\
+     collect = { kind = \"script\", query = \"\" }\n"
+}
+
+/// 删掉 `[north_star]` 一节的版本(§5「北极星尚未定稿」灰卡那一步复用)。
+fn metrics_toml_no_north_star() -> &'static str {
+    "schema_version = 1\n\n\
+     [[lagging]]\n\
+     name = \"滞后指标·周吞吐\"\n\
+     def = \"过去一周结算的活数\"\n\
+     target = \"≥3\"\n\
+     collect = { kind = \"manual\", query = \"\" }\n\n\
+     [[leading]]\n\
+     name = \"引领指标·评审周转\"\n\
+     def = \"评审中平均停留天数(越小越好)\"\n\
+     target = \"≤2\"\n\
+     collect = { kind = \"script\", query = \"\" }\n"
+}
+
+fn write_metrics_toml(ws: &Path, content: &str) -> Result<(), String> {
+    let bw_dir = ws.join(".bw");
+    std::fs::create_dir_all(&bw_dir).map_err(|e| format!("建 .bw 目录失败:{e}"))?;
+    std::fs::write(bw_dir.join("metrics.toml"), content)
+        .map_err(|e| format!("写 metrics.toml 失败:{e}"))
+}
+
+/// 真造一个 git 工作区:`git init` + 真 `.bw/metrics.toml` + 一份已提交的
+/// `docs/` 文档(供交付证据段③ `docs_files`/`recent_subjects` 有真数据)+
+/// 一个未提交的文件(供 `dirty_paths` > 0)。
+async fn setup_workspace(ws: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(ws).map_err(|e| format!("建工作区目录失败:{e}"))?;
+    git_in(ws, &["init", "-q"])
+        .await
+        .map_err(|e| format!("git init 失败:{e}"))?;
+    write_metrics_toml(ws, metrics_toml_full())?;
+    let docs_dir = ws.join("docs");
+    std::fs::create_dir_all(&docs_dir).map_err(|e| format!("建 docs 目录失败:{e}"))?;
+    std::fs::write(
+        docs_dir.join("hex-readback-fixture.md"),
+        "# hex_readback 夹具\n\n本文档由 hex_readback 指挥器真实写入,供交付证据段③读回。\n",
+    )
+    .map_err(|e| format!("写 docs 文档失败:{e}"))?;
+    commit_initial(
+        ws,
+        "hex_readback 示例工作区",
+        "本目录由 next 切片五D 的 hex_readback 指挥器真实创建,带真 .bw/metrics.toml 与一份真 docs/ 文档。",
+    )
+    .await
+    .map_err(|e| format!("首提交失败:{e}"))?;
+    // 未提交的一个改动——`dirty_paths` 因此 > 0,交付证据段③的「工作区此
+    // 刻真状态」不是一个永远干净的假摆设。
+    std::fs::write(
+        ws.join("SCRATCH.md"),
+        "指挥器留下的未提交改动,供 dirty_paths 读回非零。\n",
+    )
+    .map_err(|e| format!("写未提交文件失败:{e}"))?;
+    Ok(())
+}
+
+// ─────────────────────────── 造数:活 + 阶段归类 ───────────────────────────
+
+struct Issues {
+    a_build: IssueId,     // 归类到「构建」阶段,示范五角色卡的活数
+    b_review: IssueId,    // 评审中——待人处理②的正反主角
+    c_stalled: IssueId,   // 停在原地的失败运行——待人处理③的正反主角
+    d_unsettled: IssueId, // 遗留未结账的运行——待人处理①的正反主角
+}
+
+async fn create_issue(
+    store: &SqliteStore,
+    project_id: ProjectId,
+    number: i64,
+    title: &str,
+) -> Result<IssueId, String> {
+    let id = IssueId::new();
+    store
+        .create_issue(NewIssue {
+            id,
+            project_id,
+            number,
+            title: title.to_string(),
+        })
+        .await
+        .map_err(|e| format!("create_issue({title:?}) 失败:{e}"))?;
+    Ok(id)
+}
+
+/// `issue.stage` **今天没有任何生产写入方**(五-1 报告已如实登记这条缺
+/// 口,design-s5-hexpanel.md §8「完成清单的勾选入口本片不做」同一条裁剪
+/// 的姊妹缺口——`plan/23-opc-stitching-rebuild.md` §10 补记这条)。为了
+/// 让五角色责任卡的「这个阶段有几件活」有真数据可读回(而不是永远读到
+/// 一片空白的「查询机制本身对不对都测不出来」),这里**绕过 store 层**用
+/// 一条独立连接直接 `UPDATE issue SET stage = ?`——同 design §7.4 降级口
+/// 径的既有标注惯例,每一行都要说清楚它不是生产路径产出的。
+async fn bypass_set_issue_stage(
+    db_path: &str,
+    issue: IssueId,
+    stage: StageKind,
+) -> Result<(), String> {
+    let opts = SqliteConnectOptions::new().filename(db_path);
+    let pool = SqlitePool::connect_with(opts)
+        .await
+        .map_err(|e| format!("独立连接打开数据库失败:{e}"))?;
+    sqlx::query("UPDATE issue SET stage = ? WHERE id = ?")
+        .bind(stage.index() as i64)
+        .bind(issue.uuid().to_string())
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("UPDATE issue.stage 失败:{e}"))?;
+    println!(
+        "  【本行由 hex_readback 指挥器直接写入 issue.stage,非生产路径产出——issue.stage 今天没有\
+         生产写入方,见 plan/23 §10 登记】issue={issue:?} stage={stage:?}"
+    );
+    Ok(())
+}
+
+async fn bootstrap_issues(
+    app: &App,
+    db_path: &str,
+    project_id: ProjectId,
+) -> Result<Issues, String> {
+    let a = create_issue(&app.store, project_id, 1, "归类到构建阶段的活").await?;
+    let b = create_issue(&app.store, project_id, 2, "评审中等你点的活").await?;
+    let c = create_issue(&app.store, project_id, 3, "停在原地失败的活").await?;
+    let d = create_issue(&app.store, project_id, 4, "遗留未结账运行的活").await?;
+
+    bypass_set_issue_stage(db_path, a, StageKind::Build).await?;
+    bypass_set_issue_stage(db_path, c, StageKind::Optimize).await?;
+
+    // b: backlog → in_progress → in_review(停在评审中,section 7 再点完成)。
+    app.transition_issue(b, IssueStatus::InProgress)
+        .await
+        .map_err(|e| format!("issue b backlog→in_progress 失败:{e}"))?;
+    app.transition_issue(b, IssueStatus::InReview)
+        .await
+        .map_err(|e| format!("issue b in_progress→in_review 失败:{e}"))?;
+
+    Ok(Issues {
+        a_build: a,
+        b_review: b,
+        c_stalled: c,
+        d_unsettled: d,
+    })
+}
+
+/// 本指挥器不起真实 `run::RunManager`(所有运行都是直接插库造的既成事
+/// 实,不是「人点开工」产生的)——`running` 因此恒为 0,如实标注,不冒
+/// 充有真在跑的运行。其余三个字段真查库,与
+/// `bw_app::run::RunManager::snapshot` 内部用的同一批查询方法。
+async fn current_loop_inputs(
+    store: &SqliteStore,
+    project_id: ProjectId,
+) -> Result<LoopInputs, String> {
+    let project = Some(project_id);
+    let in_review = store
+        .list_issues_by_status(project, IssueStatus::InReview)
+        .await
+        .map_err(|e| e.to_string())?
+        .len();
+    let recent_failed = store
+        .count_failed_runs(project)
+        .await
+        .map_err(|e| e.to_string())? as usize;
+    let unsettled_rows = store
+        .list_unsettled_runs(project)
+        .await
+        .map_err(|e| e.to_string())?;
+    let stalled_rows = store
+        .list_stalled_runs(project)
+        .await
+        .map_err(|e| e.to_string())?;
+    let has_any_run = !store
+        .list_runs(project)
+        .await
+        .map_err(|e| e.to_string())?
+        .is_empty();
+    Ok(LoopInputs {
+        running: 0,
+        in_review,
+        recent_failed,
+        unsettled: unsettled_rows.len(),
+        exceptions: stalled_rows,
+        has_any_run,
+    })
+}
+
+// ─────────────────────────── 1 · 指标正本同步 ───────────────────────────
+
+struct MetricIds {
+    north_star: MetricId,
+    lagging: MetricId,
+    leading: MetricId,
+    /// 界面手建(`origin='manual'`)的第四条指标,专门用来演示待人处理④a
+    /// 「从没采过 → 出现;填一条 → 消失」的正反两步——**特意不用北极星
+    /// 来演示这一步**:北极星在 §5 末尾会被拿去演示「仓里删掉 `[north_star]`
+    /// 一节 → 自动停用 → 灰卡」,停用之后它会退出④a 的候选范围(停用指
+    /// 标不算「没数据的活指标」),两件事用同一条指标做会互相绊住,拆成
+    /// 两条各自干净。
+    manual: MetricId,
+}
+
+async fn section_metrics_sync(
+    app: &App,
+    project_id: ProjectId,
+    workspace: &str,
+    db_path: &str,
+) -> (Ledger, Option<MetricIds>) {
+    let mut l = Ledger::new();
+
+    let event = match app
+        .dispatch(Command::SyncMetricsFile {
+            project: project_id,
+            workspace: workspace.to_string(),
+        })
+        .await
+    {
+        Ok(e) => e,
+        Err(e) => {
+            l.fail(format!("Command::SyncMetricsFile 应该成功,实得错误:{e}"));
+            return (l, None);
+        }
+    };
+    let Event::MetricsSynced(report) = event else {
+        l.fail("Command::SyncMetricsFile 应该回 Event::MetricsSynced");
+        return (l, None);
+    };
+    l.check(
+        report.inserted.len() == 3
+            && report.updated.is_empty()
+            && report.archived.is_empty()
+            && report.restored.is_empty(),
+        format!(
+            "首次同步:inserted=3(1 北极星+1 滞后+1 引领)、其余三类为空(实得 inserted={} updated={} \
+             archived={} restored={})",
+            report.inserted.len(),
+            report.updated.len(),
+            report.archived.len(),
+            report.restored.len()
+        ),
+    );
+
+    let opts = SqliteConnectOptions::new()
+        .filename(db_path)
+        .read_only(true);
+    let pool = match SqlitePool::connect_with(opts).await {
+        Ok(p) => p,
+        Err(e) => {
+            l.fail(format!("独立只读连接打开数据库失败:{e}"));
+            return (l, None);
+        }
+    };
+    let rows = print_and_run(
+        &pool,
+        "① metric 表读回",
+        "SELECT tier, name, target_raw, collect_kind, origin FROM metric ORDER BY tier, name",
+        &mut l,
+    )
+    .await;
+    l.check(
+        rows.len() == 3,
+        format!("metric 表恰好 3 行,实得 {}", rows.len()),
+    );
+
+    let project_columns = print_and_run(
+        &pool,
+        "② project 表结构(核验北极星不在这张表上)",
+        "PRAGMA table_info(project)",
+        &mut l,
+    )
+    .await;
+    let has_north_star_column_on_project = project_columns.iter().any(|r| {
+        let name: String = r.get("name");
+        name.to_lowercase().contains("north")
+    });
+    l.check(
+        !has_north_star_column_on_project,
+        "project 表结构里没有任何名字含 north 的列——北极星只在 metric 表当一行,不是项目表上的文本字段",
+    );
+
+    let metrics = match app.store.list_metrics(project_id).await {
+        Ok(m) => m,
+        Err(e) => {
+            l.fail(format!("list_metrics 应该成功,实得错误:{e}"));
+            return (l, None);
+        }
+    };
+    let north_star = metrics
+        .iter()
+        .find(|m| m.tier == bw_store::MetricTier::NorthStar);
+    let lagging = metrics
+        .iter()
+        .find(|m| m.tier == bw_store::MetricTier::Lagging);
+    let leading = metrics
+        .iter()
+        .find(|m| m.tier == bw_store::MetricTier::Leading);
+    let (Some(north_star), Some(lagging), Some(leading)) = (north_star, lagging, leading) else {
+        l.fail("同步之后应该能分别读到北极星/滞后/引领各一条,实得缺失至少一条");
+        return (l, None);
+    };
+    l.check(
+        north_star.target_raw.is_empty(),
+        "北极星那一行 target_raw 为空串(它是项目唯一目标,不是「朝着某个目标努力的一条指标」)",
+    );
+
+    // 突变自证:绕过用例直接插第二条北极星 → 必须撞 uq_metric_north_star。
+    let dup_id = bw_core::MetricId::new();
+    let dup_result = app
+        .store
+        .create_manual_metric(
+            dup_id,
+            project_id,
+            bw_store::MetricTier::NorthStar,
+            "绕过用例插的第二条北极星",
+            "",
+            "",
+            "manual",
+            "",
+            now_i64(),
+        )
+        .await;
+    match dup_result {
+        Err(e) if e.is_unique_violation() => {
+            l.check(true, "绕过同步用例直接插第二条北极星 → 撞 uq_metric_north_star,如实拒绝(is_unique_violation=true)");
+        }
+        Err(e) => l.fail(format!("插第二条北极星应该撞唯一索引,实得别的错误:{e}")),
+        Ok(()) => l.fail(
+            "插第二条北极星竟然成功了——uq_metric_north_star 没有真的钉住「一个项目至多一个北极星」",
+        ),
+    }
+
+    // 界面手建一条指标(origin='manual')——待人处理④a 正反两步的专用道
+    // 具(理由见 `MetricIds::manual` 文档)。
+    let manual_id = bw_core::MetricId::new();
+    if let Err(e) = app
+        .store
+        .create_manual_metric(
+            manual_id,
+            project_id,
+            bw_store::MetricTier::Leading,
+            "界面手建·待人处理④a 演示专用",
+            "专门演示「从没采过 → 出现;填一条 → 消失」,不掺进正本同步的三条",
+            "≥1",
+            "manual",
+            "",
+            now_i64(),
+        )
+        .await
+    {
+        l.fail(format!("界面手建指标应该成功,实得错误:{e}"));
+        return (l, None);
+    }
+    l.check(
+        true,
+        format!("界面手建一条指标(origin='manual'):{manual_id:?}"),
+    );
+
+    (
+        l,
+        Some(MetricIds {
+            north_star: north_star.id,
+            lagging: lagging.id,
+            leading: leading.id,
+            manual: manual_id,
+        }),
+    )
+}
+
+// ─────────────────────────── 2 · 观测只追加 + 手填戴徽 ───────────────────────────
+
+const STALE_DAYS: i64 = 10; // > Cadence::Weekly(7 天)的窗口,制造「过期」
+
+async fn section_observations(app: &App, project_id: ProjectId, metrics: &MetricIds) -> Ledger {
+    let mut l = Ledger::new();
+
+    // 手填一条:滞后指标「5」(target「≥3」→ 之后会算出 Green)。
+    let event = match app
+        .dispatch(Command::RecordManualObservation {
+            metric: metrics.lagging,
+            raw: "5".to_string(),
+        })
+        .await
+    {
+        Ok(e) => e,
+        Err(e) => {
+            l.fail(format!(
+                "Command::RecordManualObservation(滞后)应该成功,实得错误:{e}"
+            ));
+            return l;
+        }
+    };
+    l.check(
+        matches!(event, Event::ObservationRecorded(_)),
+        "手填一条滞后指标观测,回执 Event::ObservationRecorded",
+    );
+
+    // 脚本采一条(source='script'):引领指标「1」(target「≤2」单看数值该是
+    // Green),但 ts 故意回拨到 10 天前——制造「有观测但过期」的场景
+    // (§3.2④b 的正例,同时也是「零观测不是唯一能不显绿的理由」的反证素
+    // 材:过期同样能压住信号)。直接调 store,不经 Command——`RecordManualObservation`
+    // 命令按名字就只产 `source='manual'`,这条不是那条命令的职责。
+    let stale_ts = now_i64() - STALE_DAYS * 24 * 3600;
+    if let Err(e) = app
+        .store
+        .insert_observation(NewObservation {
+            id: bw_core::ObservationId::new(),
+            metric_id: metrics.leading,
+            project_id,
+            ts: stale_ts,
+            raw_value: "1".to_string(),
+            source: "script".to_string(),
+            source_hint: "hex_readback 指挥器模拟脚本采集,故意回拨时刻".to_string(),
+        })
+        .await
+    {
+        l.fail(format!("脚本采集插入引领指标观测应该成功,实得错误:{e}"));
+        return l;
+    }
+    l.check(
+        true,
+        "脚本采一条引领指标观测(source='script',ts 回拨 10 天)",
+    );
+
+    let obs = match app.store.list_observations(metrics.lagging).await {
+        Ok(o) => o,
+        Err(e) => {
+            l.fail(format!("list_observations(滞后)应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+    l.check(
+        obs.len() == 1 && obs[0].source == "manual",
+        format!("滞后指标恰好 1 条观测,source='manual'(实得 {obs:?})"),
+    );
+
+    let obs_leading = match app.store.list_observations(metrics.leading).await {
+        Ok(o) => o,
+        Err(e) => {
+            l.fail(format!("list_observations(引领)应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+    l.check(
+        obs_leading.len() == 1 && obs_leading[0].source == "script",
+        format!("引领指标恰好 1 条观测,source='script'(实得 {obs_leading:?})"),
+    );
+    // 「手填」徽记本身(`SourceKind::is_manual()` → `MetricCard.latest_is_manual`)
+    // 走的是六段视图组装用例的产出——放在 §5(六段逐段读回)一起断言,验的
+    // 是界面真正会用的那个字段,不在这里另调一份内部私有函数搭一条平行
+    // 验证路径。
+
+    l
+}
+
+// ─────────────────────────── 3 · 信号只能推导 ───────────────────────────
+
+async fn section_signal_derive_only(
+    app: &App,
+    db_path: &str,
+    project_id: ProjectId,
+    metrics: &MetricIds,
+    evidence: &bw_workspace::evidence::WorkspaceEvidence,
+) -> Ledger {
+    let mut l = Ledger::new();
+
+    let opts = SqliteConnectOptions::new()
+        .filename(db_path)
+        .read_only(true);
+    let pool = match SqlitePool::connect_with(opts).await {
+        Ok(p) => p,
+        Err(e) => {
+            l.fail(format!("独立只读连接打开数据库失败:{e}"));
+            return l;
+        }
+    };
+    for table in [
+        "project",
+        "issue",
+        "run",
+        "metric",
+        "observation",
+        "handoff",
+    ] {
+        let sql = format!("PRAGMA table_info({table})");
+        let label = format!("结构核验 {table}");
+        let cols = print_and_run(&pool, &label, &sql, &mut l).await;
+        let has_signal_col = cols.iter().any(|r| {
+            let name: String = r.get("name");
+            name.eq_ignore_ascii_case("signal")
+        });
+        l.check(
+            !has_signal_col,
+            format!("{table} 表结构里没有任何一列叫 signal"),
+        );
+    }
+
+    let loop_inputs = match current_loop_inputs(&app.store, project_id).await {
+        Ok(li) => li,
+        Err(e) => {
+            l.fail(format!("组装 LoopInputs 失败:{e}"));
+            return l;
+        }
+    };
+    let now = OffsetDateTime::now_utc();
+    let view = match app
+        .hex_view(project_id, loop_inputs, Some(evidence.clone()), now)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("App::hex_view 应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+
+    // 按 `id` 找,不按 `tier`——`metrics.leading`(正本同步来的)与
+    // `metrics.manual`(界面手建,§1 末尾新增)同属 `Leading` 层,`tier` 已
+    // 经不是这一层唯一的一条卡,必须用身份精确定位。
+    let lagging_card = view.metrics.cards.iter().find(|c| c.id == metrics.lagging);
+    let leading_card = view.metrics.cards.iter().find(|c| c.id == metrics.leading);
+
+    match lagging_card {
+        Some(c) => l.check(
+            c.signal == bw_core::Signal::Green,
+            format!("滞后指标「5 ≥ 3」→ 现算信号 Green(实得 {:?})", c.signal),
+        ),
+        None => l.fail("应该能在 hex_view 里找到滞后指标卡"),
+    }
+    match leading_card {
+        Some(c) => l.check(
+            c.signal == bw_core::Signal::Amber,
+            format!(
+                "引领指标「1 ≤ 2」本该 Green,但观测已过期(10 天 > Cadence::Weekly 窗口)→ \
+                 stale 把 Green 压到 Amber,「新鲜的绿不能掩盖一个失联的数据源」(实得 {:?})",
+                c.signal
+            ),
+        ),
+        None => l.fail("应该能在 hex_view 里找到引领指标卡"),
+    }
+
+    // 反证:北极星此刻还没有任何观测,不能是 Green——必须是 Unknown。
+    match &view.north_star {
+        bw_app::view::hex::NorthStarView::Defined(card) => {
+            l.check(
+                card.signal == bw_core::Signal::Unknown && !card.has_observation,
+                format!(
+                    "反证:北极星零观测,信号不是 Green,如实 Unknown(实得 signal={:?} has_observation={})",
+                    card.signal, card.has_observation
+                ),
+            );
+        }
+        bw_app::view::hex::NorthStarView::Undefined => {
+            l.fail("此刻北极星已经定义(§1 同步过),不该显示 Undefined 灰卡");
+        }
+    }
+
+    l
+}
+
+// ─────────────────────────── 造数:运行(供①③以及 Loop/交付证据段用)───────────────────────────
+
+/// 【hex_readback 指挥器直接写入运行表,非运行管理器产出——本档不起
+/// `RunManager`,所有运行都是直接插库造的既成事实】起一条运行、立刻关
+/// 门,返回运行编号。`settle` 控制要不要顺带结账——`false` 就是待人处
+/// 理①「遗留运行」的造法。
+async fn create_closed_run(
+    store: &SqliteStore,
+    project_id: ProjectId,
+    issue_id: IssueId,
+    state: RunState,
+    end_kind: RunEndKind,
+    started_at: i64,
+    settle: bool,
+) -> Result<RunId, String> {
+    let run_id = RunId::new();
+    store
+        .create_run(NewRun {
+            id: run_id,
+            project_id,
+            issue_id,
+            kind: RunKind::Delivery,
+            connector_name: "hex-readback-fixture".to_string(),
+            req_id: Uuid::new_v4().to_string(),
+            workspace: format!("/tmp/hex-readback-fixture-{issue_id:?}"),
+            branch: "bw/hex-readback-fixture".to_string(),
+            state: RunState::Starting,
+            started_at,
+        })
+        .await
+        .map_err(|e| format!("create_run 失败:{e}"))?;
+    let at = started_at + 60;
+    let closed = store
+        .close_run(
+            run_id,
+            at,
+            state,
+            Some(end_kind),
+            "【hex_readback 指挥器直接写入,非真实执行连接器上报】",
+        )
+        .await
+        .map_err(|e| format!("close_run 失败:{e}"))?;
+    if !closed {
+        return Err("close_run 应该是第一次抵达(受影响 1 行),实得比较并置落空".to_string());
+    }
+    if settle {
+        let settled = store
+            .settle_run(run_id, at + 1)
+            .await
+            .map_err(|e| format!("settle_run 失败:{e}"))?;
+        if !settled {
+            return Err("settle_run 应该是第一次抵达,实得比较并置落空".to_string());
+        }
+    }
+    Ok(run_id)
+}
+
+// ─────────────────────────── 4 · 杀进程重开,数字一致 ───────────────────────────
+
+/// 裁决 4 的新验收形态:信号不落库,「重启后数字一致」因此不是「读回缓
+/// 存列」,而是**同一份组装用例(`App::hex_view`/`App::attention_view`)
+/// 在重开数据库连接前后各跑一次,结果逐字段比对**。`now`/`loop_inputs`/
+/// `workspace_evidence` 三个外部输入在前后两次调用之间**保持不变**——这
+/// 三样本来就不是「重启后从库里重新查」的东西(时钟由调用方传入、Loop
+/// 聚合数问的是独立于 `App` 的 `RunManager`、工作区证据是现采的实时快
+/// 照),这一节要单独证的是「同一批已经持久化在库里的数据,重新接一条
+/// 连接,组装出来的东西必须一模一样」——把这三个不属于「库里数据」的输
+/// 入固定住,才是干净的对照。
+async fn section_restart_consistency(
+    db_path: &str,
+    project_id: ProjectId,
+    evidence: &bw_workspace::evidence::WorkspaceEvidence,
+) -> Ledger {
+    let mut l = Ledger::new();
+
+    let app1 = match App::open(db_path).await {
+        Ok(a) => a,
+        Err(e) => {
+            l.fail(format!("第一次 App::open 应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+    let loop_inputs = match current_loop_inputs(&app1.store, project_id).await {
+        Ok(li) => li,
+        Err(e) => {
+            l.fail(format!("组装 LoopInputs 失败:{e}"));
+            return l;
+        }
+    };
+    let now = OffsetDateTime::now_utc();
+
+    let hex_before = match app1
+        .hex_view(project_id, loop_inputs, Some(evidence.clone()), now)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("重启前 App::hex_view 应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+    let attention_before = match app1.attention_view(Some(project_id), now).await {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("重启前 App::attention_view 应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+    drop(app1); // 模拟「杀进程」——存储连接句柄真的被丢弃,不是摆样子。
+
+    let app2 = match App::open(db_path).await {
+        Ok(a) => a,
+        Err(e) => {
+            l.fail(format!(
+                "第二次 App::open(同一个库文件)应该成功,实得错误:{e}"
+            ));
+            return l;
+        }
+    };
+    let loop_inputs2 = match current_loop_inputs(&app2.store, project_id).await {
+        Ok(li) => li,
+        Err(e) => {
+            l.fail(format!("重开后组装 LoopInputs 失败:{e}"));
+            return l;
+        }
+    };
+    let hex_after = match app2
+        .hex_view(project_id, loop_inputs2, Some(evidence.clone()), now)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("重启后 App::hex_view 应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+    let attention_after = match app2.attention_view(Some(project_id), now).await {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("重启后 App::attention_view 应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+
+    l.check(
+        hex_before == hex_after,
+        "六段总控视图:重开数据库连接前后,同一份组装用例产出逐字段一致",
+    );
+    l.check(
+        attention_before == attention_after,
+        "待人处理投影:重开数据库连接前后,同一份组装用例产出逐字段一致",
+    );
+
+    // 突变自证(不是靠临时改源码——这是运行期就能做的负对照):拿
+    // `hex_after` 造一份故意不同的副本,断言 `==` 真的会把它判不相等,证
+    // 明上面两条「相等」不是因为比较本身失效了才恒真。
+    let mut mutated = hex_after.clone();
+    mutated.project_name = format!("{}·被指挥器故意改动,不该与原值相等", mutated.project_name);
+    l.check(
+        mutated != hex_after,
+        "反证:故意改一个字段之后,`hex_view != mutated` 为真——上面两条「相等」的断言不是矮化成永远为真",
+    );
+
+    l
+}
+
+// ─────────────────────────── 5 · 六段逐段读回 ───────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+async fn section_hex_segments(
+    app: &App,
+    project_id: ProjectId,
+    metrics: &MetricIds,
+    issues: &Issues,
+    workspace: &str,
+    evidence: &bw_workspace::evidence::WorkspaceEvidence,
+    c_run: RunId,
+    d_run: RunId,
+) -> Ledger {
+    let mut l = Ledger::new();
+
+    // `issues.a_build` 的行本身(不只是聚合计数)读回一次:`bypass_set_issue_stage`
+    // 那次绕过写入真的落进了 `issue.stage`,不只是查询侧碰巧算对。
+    match app.store.get_issue(issues.a_build).await {
+        Ok(Some(row)) => l.check(
+            row.stage == Some(StageKind::Build),
+            format!("issue a 的行读回 stage=Some(Build)(实得 {:?})", row.stage),
+        ),
+        Ok(None) => l.fail("issue a 应该存在"),
+        Err(e) => l.fail(format!("get_issue(issue a) 失败:{e}")),
+    }
+
+    let loop_inputs = match current_loop_inputs(&app.store, project_id).await {
+        Ok(li) => li,
+        Err(e) => {
+            l.fail(format!("组装 LoopInputs 失败:{e}"));
+            return l;
+        }
+    };
+    let now = OffsetDateTime::now_utc();
+    let view = match app
+        .hex_view(project_id, loop_inputs, Some(evidence.clone()), now)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("App::hex_view 应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+
+    println!("  -- ① 项目目标(北极星)--");
+    match &view.north_star {
+        bw_app::view::hex::NorthStarView::Defined(card) => {
+            l.check(
+                card.id == metrics.north_star && card.name == "每周真实交付的活数",
+                format!("北极星文案与库里一致(实得 name={:?})", card.name),
+            );
+            l.check(
+                !card.has_observation,
+                "北极星此刻仍无观测(还没到§7④a 的反转步)",
+            );
+        }
+        bw_app::view::hex::NorthStarView::Undefined => {
+            l.fail("此刻北极星已经定义,不该显示「尚未定稿」灰卡");
+        }
+    }
+
+    println!("  -- ② 五角色责任卡(零 SQL,静态元数据)--");
+    l.check(
+        view.five_roles.active_stage == Some(StageKind::Prototype),
+        format!(
+            "当前一棒 = Prototype(实得 {:?})",
+            view.five_roles.active_stage
+        ),
+    );
+    for card in view.five_roles.cards {
+        let expect_current = card.stage == StageKind::Prototype;
+        l.check(
+            card.is_current == expect_current,
+            format!(
+                "{:?} 卡片 is_current={}(期望 {})",
+                card.stage, card.is_current, expect_current
+            ),
+        );
+        // 零 SQL:静态元数据直接来自 `StageKind` 自身方法,与卡片渲染时用
+        // 的是同一份,这里独立再调一次做交叉核验。
+        l.check(
+            !card.stage.role_short().is_empty()
+                && !card.stage.methodology().is_empty()
+                && !card.stage.core_question().is_empty()
+                && !card.stage.dod_items().is_empty()
+                && !card.stage.anti_patterns().is_empty()
+                && !card.stage.cycle_rhythm().is_empty(),
+            format!(
+                "{:?} 的角色/方法论/核心问题/完成清单/常见的坑/节奏均非空(零数据库)",
+                card.stage
+            ),
+        );
+    }
+    let build_count = view
+        .five_roles
+        .cards
+        .iter()
+        .find(|c| c.stage == StageKind::Build)
+        .map(|c| c.issue_count)
+        .unwrap_or(-1);
+    let optimize_count = view
+        .five_roles
+        .cards
+        .iter()
+        .find(|c| c.stage == StageKind::Optimize)
+        .map(|c| c.issue_count)
+        .unwrap_or(-1);
+    l.check(
+        build_count == 1,
+        format!("构建阶段活数 = 1(issue a,实得 {build_count})"),
+    );
+    l.check(
+        optimize_count == 1,
+        format!("优化阶段活数 = 1(issue c,实得 {optimize_count})"),
+    );
+    l.check(
+        view.five_roles.unclassified_issue_count == 2,
+        format!(
+            "未归类活数 = 2(issue b/d,实得 {})",
+            view.five_roles.unclassified_issue_count
+        ),
+    );
+
+    println!("  -- ③ 引领指标(三层顺序固定,无观测那条虚线灰)--");
+    l.check(
+        view.metrics.cards.len() == 4,
+        format!(
+            "此刻共 4 张指标卡(北极星+滞后+引领+手建,实得 {})",
+            view.metrics.cards.len()
+        ),
+    );
+    let tiers: Vec<_> = view.metrics.cards.iter().map(|c| c.tier).collect();
+    l.check(
+        tiers.first() == Some(&bw_store::MetricTier::NorthStar),
+        format!("顺序固定:第一张是北极星(实得 {tiers:?})"),
+    );
+    let lagging_card = view.metrics.cards.iter().find(|c| c.id == metrics.lagging);
+    let leading_card = view.metrics.cards.iter().find(|c| c.id == metrics.leading);
+    let manual_card = view.metrics.cards.iter().find(|c| c.id == metrics.manual);
+    l.check(
+        lagging_card.map(|c| c.signal) == Some(bw_core::Signal::Green),
+        "滞后指标卡:信号 Green",
+    );
+    l.check(
+        leading_card.map(|c| c.latest_is_manual) == Some(false),
+        "引领指标卡:latest_is_manual = false(source='script',不戴「手填」徽记)",
+    );
+    l.check(
+        lagging_card.map(|c| c.latest_is_manual) == Some(true),
+        "滞后指标卡:latest_is_manual = true(source='manual',戴「手填」徽记)",
+    );
+    l.check(
+        manual_card.map(|c| (c.has_observation, c.signal))
+            == Some((false, bw_core::Signal::Unknown)),
+        "界面手建的指标此刻无观测,虚线灰(Unknown)——§7④a 的初始状态",
+    );
+
+    println!("  -- ④ 当前 Loop(聚合数 + 只列例外)--");
+    l.check(
+        view.loop_segment.running == 0,
+        "在跑数 = 0(本档不起 RunManager)",
+    );
+    l.check(
+        view.loop_segment.in_review == 1,
+        format!("评审中数 = 1(issue b,实得 {})", view.loop_segment.in_review),
+    );
+    l.check(
+        view.loop_segment.recent_failed == 1,
+        format!(
+            "最近失败数 = 1(issue c 的失败运行,实得 {})",
+            view.loop_segment.recent_failed
+        ),
+    );
+    l.check(
+        view.loop_segment.unsettled == 1,
+        format!(
+            "遗留未结账数 = 1(issue d 的运行,实得 {})",
+            view.loop_segment.unsettled
+        ),
+    );
+    l.check(
+        view.loop_segment.has_any_run,
+        "has_any_run = true(已经有真实运行)",
+    );
+    l.check(
+        view.loop_segment.exceptions.iter().any(|r| r.id == c_run),
+        "例外明细包含 issue c 的失败运行",
+    );
+    l.check(
+        !view.loop_segment.exceptions.iter().any(|r| r.id == d_run),
+        "d 的运行已结束但不是失败/遗留状态(Finished),不出现在「例外」里(它出现在遗留未结账那个数,不是这份明细)",
+    );
+
+    println!("  -- ⑤ 风险与决策(此刻还没有交棒,如实空)--");
+    l.check(
+        view.risk_decision.handoffs.is_empty(),
+        "此刻交棒流水为空(§7⑤ 还没开始)",
+    );
+    l.check(
+        !view.risk_decision.has_any_handoff,
+        "has_any_handoff = false",
+    );
+    l.check(
+        !bw_app::view::hex::RiskDecisionSegment::DECISION_NOTE.is_empty(),
+        "决策栏留白说明非空,不拿交棒记录冒充决策记录",
+    );
+
+    println!("  -- ⑥ 交付证据(运行账 + 观测出处 + 工作区现采)--");
+    l.check(
+        view.evidence.runs.len() == 2,
+        format!(
+            "运行账恰好 2 条(issue c + issue d,实得 {})",
+            view.evidence.runs.len()
+        ),
+    );
+    l.check(
+        view.evidence.observations.len() == 2,
+        format!(
+            "观测出处恰好 2 条(滞后手填 + 引领脚本,实得 {})",
+            view.evidence.observations.len()
+        ),
+    );
+    match &view.evidence.workspace_evidence {
+        Some(we) => {
+            l.check(
+                we.commit_count >= 1,
+                format!("工作区证据:commit_count >= 1(实得 {})", we.commit_count),
+            );
+            l.check(
+                we.dirty_paths >= 1,
+                format!(
+                    "工作区证据:dirty_paths >= 1(SCRATCH.md 未提交,实得 {})",
+                    we.dirty_paths
+                ),
+            );
+            l.check(
+                we.docs_files >= 1,
+                format!("工作区证据:docs_files >= 1(实得 {})", we.docs_files),
+            );
+            // 独立复核:不信任 `bw_workspace::evidence::collect` 自己,另起
+            // 一个同步子进程直接跑 `git rev-list --count HEAD`,两边必须一致
+            // ——「在工作区跑同一条 git 命令」就是这一栏的复核方式(裁决 6)。
+            let independent = std::process::Command::new("git")
+                .current_dir(workspace)
+                .args(["rev-list", "--count", "HEAD"])
+                .output();
+            match independent {
+                Ok(out) if out.status.success() => {
+                    let n: u32 = String::from_utf8_lossy(&out.stdout)
+                        .trim()
+                        .parse()
+                        .unwrap_or(u32::MAX);
+                    l.check(
+                        n == we.commit_count,
+                        format!(
+                            "独立复核:`git rev-list --count HEAD` 在工作区里跑出来的数({n})与工作区证据里的 commit_count 一致({})",
+                            we.commit_count
+                        ),
+                    );
+                }
+                _ => l.fail("独立跑 git rev-list --count HEAD 应该成功"),
+            }
+        }
+        None => l.fail("此刻工作区已配置,不该是 None"),
+    }
+
+    println!("  -- 北极星尚未定稿:仓里删掉 [north_star] 一节再同步 → 灰卡 --");
+    if let Err(e) = write_metrics_toml(Path::new(workspace), metrics_toml_no_north_star()) {
+        l.fail(format!("重写 metrics.toml(去掉 north_star)失败:{e}"));
+        return l;
+    }
+    let resync = app
+        .dispatch(Command::SyncMetricsFile {
+            project: project_id,
+            workspace: workspace.to_string(),
+        })
+        .await;
+    match resync {
+        Ok(Event::MetricsSynced(report)) => {
+            l.check(
+                report.archived.contains(&metrics.north_star),
+                format!(
+                    "重同步(缺 [north_star])→ 北极星那一行自动停用(实得 archived={:?})",
+                    report.archived
+                ),
+            );
+        }
+        Ok(_) => l.fail("重同步应该回 Event::MetricsSynced"),
+        Err(e) => l.fail(format!("重同步应该成功,实得错误:{e}")),
+    }
+    let loop_inputs2 = match current_loop_inputs(&app.store, project_id).await {
+        Ok(li) => li,
+        Err(e) => {
+            l.fail(format!("组装 LoopInputs 失败:{e}"));
+            return l;
+        }
+    };
+    match app
+        .hex_view(
+            project_id,
+            loop_inputs2,
+            Some(evidence.clone()),
+            OffsetDateTime::now_utc(),
+        )
+        .await
+    {
+        Ok(v) => l.check(
+            matches!(v.north_star, bw_app::view::hex::NorthStarView::Undefined),
+            "仓里没有 [north_star] 一节 → 北极星显示「尚未定稿」灰卡,绝不显绿",
+        ),
+        Err(e) => l.fail(format!("重同步之后 App::hex_view 应该成功,实得错误:{e}")),
+    }
+    // 复原,后续几节(§6/§7)仍然要用一个已定稿的北极星场景。
+    if let Err(e) = write_metrics_toml(Path::new(workspace), metrics_toml_full()) {
+        l.fail(format!("复原 metrics.toml 失败:{e}"));
+        return l;
+    }
+    match app
+        .dispatch(Command::SyncMetricsFile {
+            project: project_id,
+            workspace: workspace.to_string(),
+        })
+        .await
+    {
+        Ok(Event::MetricsSynced(report)) => l.check(
+            report.restored.contains(&metrics.north_star),
+            format!(
+                "复原 [north_star] 再同步 → 自动恢复(实得 restored={:?})",
+                report.restored
+            ),
+        ),
+        Ok(_) => l.fail("复原同步应该回 Event::MetricsSynced"),
+        Err(e) => l.fail(format!("复原同步应该成功,实得错误:{e}")),
+    }
+
+    l
+}
+
+// ─────────────────────────── 6 · 完成永远人点 ───────────────────────────
+
+/// 用两件**专用**的活(不碰 issue b——那是 §7②的正反主角,提前把它转到
+/// Done 会让 §7 无法再演示「造→消」两步):一件走完整合法链路到
+/// Done,一件在「进行中」直接尝试转「已完成」被合法转移表拒绝。
+async fn section_done_is_human(app: &App, project_id: ProjectId) -> Ledger {
+    let mut l = Ledger::new();
+
+    let done_issue = match create_issue(&app.store, project_id, 5, "完成永远人点·合法链路").await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(e);
+            return l;
+        }
+    };
+    let blocked_issue = match create_issue(&app.store, project_id, 6, "完成永远人点·非法转移").await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(e);
+            return l;
+        }
+    };
+
+    for (label, to) in [
+        ("backlog → in_progress", IssueStatus::InProgress),
+        ("in_progress → in_review", IssueStatus::InReview),
+    ] {
+        if let Err(e) = app.transition_issue(done_issue, to).await {
+            l.fail(format!("{label} 应该合法,实得:{e}"));
+            return l;
+        }
+    }
+    match app
+        .dispatch(Command::TransitionIssue {
+            issue: done_issue,
+            to: IssueStatus::Done,
+        })
+        .await
+    {
+        Ok(Event::IssueTransitioned) => l.check(
+            true,
+            "InReview → Done 经 Command::TransitionIssue 显式转移成功(Done 的唯一入边)",
+        ),
+        Ok(_) => l.fail("应该回 Event::IssueTransitioned"),
+        Err(e) => l.fail(format!("InReview → Done 应该合法,实得:{e}")),
+    }
+
+    if let Err(e) = app
+        .transition_issue(blocked_issue, IssueStatus::InProgress)
+        .await
+    {
+        l.fail(format!("backlog → in_progress 应该合法,实得:{e}"));
+        return l;
+    }
+    match app.transition_issue(blocked_issue, IssueStatus::Done).await {
+        Err(bw_app::AppError::IllegalTransition { .. }) => {
+            l.check(
+                true,
+                "「进行中」直接转「已完成」被合法转移表拒绝(IllegalTransition)",
+            );
+        }
+        Err(e) => l.fail(format!("应该报 IllegalTransition,实得别的错误:{e}")),
+        Ok(()) => l.fail("「进行中」直接转「已完成」竟然成功了——合法转移表没有真的挡住这条边"),
+    }
+
+    l
+}
+
+// ─────────────────────────── 7 · 待人处理:五项正反各验一次 ───────────────────────────
+
+const Q1_UNSETTLED: &str = "SELECT id, issue_id, state, end_kind, ended_at FROM run \
+    WHERE ended_at IS NOT NULL AND settled_at IS NULL ORDER BY ended_at DESC";
+const Q2_IN_REVIEW: &str =
+    "SELECT id, number, title, updated_at FROM issue WHERE status = 'in_review' ORDER BY updated_at ASC";
+const Q3_STALLED: &str = "SELECT r.id, r.issue_id, r.state, r.end_kind, r.ended_at FROM run r \
+    WHERE r.state IN ('failed', 'orphaned') \
+      AND NOT EXISTS (SELECT 1 FROM run r2 WHERE r2.issue_id = r.issue_id AND r2.started_at > r.started_at) \
+    ORDER BY r.ended_at DESC";
+const Q4A_NEVER_OBSERVED: &str = "SELECT m.id, m.tier, m.name, m.collect_kind FROM metric m \
+    WHERE m.archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM observation o WHERE o.metric_id = m.id)";
+const Q4B_LATEST_OBSERVATION: &str =
+    "SELECT m.id, m.tier, m.name, MAX(o.ts) AS latest_ts FROM metric m \
+     LEFT JOIN observation o ON o.metric_id = m.id WHERE m.archived_at IS NULL GROUP BY m.id";
+const Q5_CURRENT_STAGE_RISKY: &str = "SELECT h.id, h.from_stage, h.to_stage, h.note, h.created_at \
+    FROM handoff h WHERE h.risky = 1 \
+      AND h.to_stage = (SELECT active_stage FROM project WHERE id = h.project_id) \
+    ORDER BY h.created_at DESC";
+
+#[allow(clippy::too_many_arguments)]
+async fn section_attention_five_items(
+    app: &App,
+    db_path: &str,
+    project_id: ProjectId,
+    metrics: &MetricIds,
+    issues: &Issues,
+    c_run: RunId,
+    d_run: RunId,
+) -> Ledger {
+    let mut l = Ledger::new();
+
+    let opts = SqliteConnectOptions::new()
+        .filename(db_path)
+        .read_only(true);
+    let pool = match SqlitePool::connect_with(opts).await {
+        Ok(p) => p,
+        Err(e) => {
+            l.fail(format!("独立只读连接打开数据库失败:{e}"));
+            return l;
+        }
+    };
+    println!("  -- 五条查询原样打印(供人复核,项目内只有一个项目,不加 project_id 过滤不影响结果)--");
+    print_and_run(&pool, "① 遗留运行", Q1_UNSETTLED, &mut l).await;
+    print_and_run(&pool, "② 评审中等你点", Q2_IN_REVIEW, &mut l).await;
+    print_and_run(&pool, "③ 停在原地的运行", Q3_STALLED, &mut l).await;
+    print_and_run(&pool, "④a 从没采过", Q4A_NEVER_OBSERVED, &mut l).await;
+    print_and_run(
+        &pool,
+        "④b 每条指标最新观测时刻",
+        Q4B_LATEST_OBSERVATION,
+        &mut l,
+    )
+    .await;
+    print_and_run(
+        &pool,
+        "⑤ 当前一棒的带险交棒欠账",
+        Q5_CURRENT_STAGE_RISKY,
+        &mut l,
+    )
+    .await;
+
+    let now = OffsetDateTime::now_utc();
+    let before = match app.attention_view(Some(project_id), now).await {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("App::attention_view(造)应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+
+    println!("  -- ① 遗留运行:造(已在造数阶段成立)→ 消(结算一次)--");
+    l.check(
+        before.unsettled_runs.iter().any(|r| r.id == d_run),
+        "造:issue d 的运行关门未结账 → 出现在①",
+    );
+    match app.store.settle_run(d_run, now_i64()).await {
+        Ok(true) => l.check(true, "结算一次(第一次抵达)"),
+        Ok(false) => l.fail("结算应该是第一次抵达,实得比较并置落空"),
+        Err(e) => l.fail(format!("settle_run 失败:{e}")),
+    }
+
+    println!("  -- ② 评审中等你点:造(已在造数阶段成立)→ 消(点完成)--");
+    l.check(
+        before
+            .in_review_issues
+            .iter()
+            .any(|i| i.id == issues.b_review),
+        "造:issue b 处在评审中 → 出现在②",
+    );
+    match app
+        .dispatch(Command::TransitionIssue {
+            issue: issues.b_review,
+            to: IssueStatus::Done,
+        })
+        .await
+    {
+        Ok(Event::IssueTransitioned) => l.check(true, "点完成(InReview → Done)"),
+        Ok(_) => l.fail("应该回 Event::IssueTransitioned"),
+        Err(e) => l.fail(format!("InReview → Done 应该合法,实得:{e}")),
+    }
+
+    println!("  -- ③ 停在原地的运行:造(已在造数阶段成立)→ 消(重开一次,哪怕又失败)--");
+    l.check(
+        before.stalled_runs.iter().any(|r| r.id == c_run),
+        "造:issue c 的失败运行且没有更晚的运行 → 出现在③",
+    );
+    let c_run2 = match create_closed_run(
+        &app.store,
+        project_id,
+        issues.c_stalled,
+        RunState::Failed,
+        RunEndKind::StartFailed,
+        now_i64() + 3600,
+        false,
+    )
+    .await
+    {
+        Ok(id) => {
+            l.check(true, format!("重开一次(哪怕又失败):新运行 {id:?}"));
+            id
+        }
+        Err(e) => {
+            l.fail(e);
+            RunId::new()
+        }
+    };
+
+    println!("  -- ④a 从没采过:造(已在造数阶段成立)→ 消(填一条)--");
+    l.check(
+        before
+            .metrics_without_observation
+            .iter()
+            .any(|m| m.id == metrics.manual),
+        "造:界面手建的指标从没采过 → 出现在④a",
+    );
+    match app
+        .dispatch(Command::RecordManualObservation {
+            metric: metrics.manual,
+            raw: "1".to_string(),
+        })
+        .await
+    {
+        Ok(Event::ObservationRecorded(_)) => l.check(true, "填一条观测"),
+        Ok(_) => l.fail("应该回 Event::ObservationRecorded"),
+        Err(e) => l.fail(format!("RecordManualObservation 应该成功,实得错误:{e}")),
+    }
+
+    println!("  -- ④b 数据过期:造(已在造数阶段成立,§2 的引领指标)→ 消(填一条新的)--");
+    l.check(
+        before.metrics_stale.iter().any(|m| m.id == metrics.leading),
+        "造:引领指标最新一条观测已经过期(10 天 > Weekly 窗口)→ 出现在④b",
+    );
+    if let Err(e) = app
+        .store
+        .insert_observation(NewObservation {
+            id: bw_core::ObservationId::new(),
+            metric_id: metrics.leading,
+            project_id,
+            ts: now_i64(),
+            raw_value: "1".to_string(),
+            source: "script".to_string(),
+            source_hint: "hex_readback 指挥器:填一条新的,证明「过期」能自然消失".to_string(),
+        })
+        .await
+    {
+        l.fail(format!("填一条新观测应该成功,实得错误:{e}"));
+    } else {
+        l.check(true, "填一条新的观测(ts=now)");
+    }
+
+    println!("  -- ⑤ 当前一棒的带险交棒欠账:造(带险交一棒)→ 消(再交一棒,handoff 表里那条还在)--");
+    let handoff1 = match app
+        .dispatch(Command::HandoffStage {
+            project: project_id,
+            risky: true,
+            note: "评审清单没勾完就交了,hex_readback 示例带险交棒".to_string(),
+        })
+        .await
+    {
+        Ok(Event::HandoffRecorded(id)) => id,
+        Ok(_) => {
+            l.fail("应该回 Event::HandoffRecorded");
+            bw_core::HandoffId::new()
+        }
+        Err(e) => {
+            l.fail(format!("HandoffStage(risky) 应该成功,实得错误:{e}"));
+            bw_core::HandoffId::new()
+        }
+    };
+    let after_risky_handoff = match app
+        .attention_view(Some(project_id), OffsetDateTime::now_utc())
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!(
+                "App::attention_view(带险交棒后)应该成功,实得错误:{e}"
+            ));
+            return l;
+        }
+    };
+    l.check(
+        after_risky_handoff
+            .current_stage_risky_handoffs
+            .iter()
+            .any(|h| h.id == handoff1),
+        "造:带险交一棒(交到当前一棒)→ 出现在⑤",
+    );
+    match app
+        .dispatch(Command::HandoffStage {
+            project: project_id,
+            risky: false,
+            note: "评审清单已勾完,正常交棒".to_string(),
+        })
+        .await
+    {
+        Ok(Event::HandoffRecorded(_)) => l.check(true, "再交一棒(阶段再往前推一棒,当前一棒变了)"),
+        Ok(_) => l.fail("应该回 Event::HandoffRecorded"),
+        Err(e) => l.fail(format!("HandoffStage(不带险)应该成功,实得错误:{e}")),
+    }
+
+    // ── 五项一起回读,验「消」那一半全部生效 ──
+    let after = match app
+        .attention_view(Some(project_id), OffsetDateTime::now_utc())
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("App::attention_view(消)应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+    l.check(
+        !after.unsettled_runs.iter().any(|r| r.id == d_run),
+        "消:①行自然消失(结算一次)",
+    );
+    l.check(
+        !after
+            .in_review_issues
+            .iter()
+            .any(|i| i.id == issues.b_review),
+        "消:②行自然消失(点完成)",
+    );
+    l.check(
+        !after.stalled_runs.iter().any(|r| r.id == c_run),
+        "消:③旧行自然消失(重开一次,有更晚的运行接手)",
+    );
+    l.check(
+        after.stalled_runs.iter().any(|r| r.id == c_run2),
+        "重开的那条新运行(还是失败)如实出现在③——它现在是最新一条",
+    );
+    l.check(
+        !after
+            .metrics_without_observation
+            .iter()
+            .any(|m| m.id == metrics.manual),
+        "消:④a 行自然消失(填一条)",
+    );
+    l.check(
+        !after.metrics_stale.iter().any(|m| m.id == metrics.leading),
+        "消:④b 行自然消失(填一条新的)",
+    );
+    l.check(
+        !after
+            .current_stage_risky_handoffs
+            .iter()
+            .any(|h| h.id == handoff1),
+        "消:⑤行自然消失(阶段再往前推一棒,当前一棒变了)",
+    );
+
+    // 「更早的欠账在风险与决策段永久可查」——handoff 表里那条带险记录本身
+    // 一个字节都没有被动过,只是不再出现在待人处理这份**投影**里。
+    match app.store.list_handoffs(project_id).await {
+        Ok(rows) => {
+            let still_there = rows.iter().find(|h| h.id == handoff1);
+            l.check(
+                still_there.is_some_and(|h| h.risky),
+                "反证:带险交棒记录本身在 handoff 表(风险与决策段)里永久还在,risky=true 没有被改动",
+            );
+        }
+        Err(e) => l.fail(format!("list_handoffs 应该成功,实得错误:{e}")),
+    }
+    l.check(
+        !bw_app::view::attention::CURRENT_STAGE_RISKY_HANDOFF_CAVEAT.is_empty(),
+        "裁决 8 的防误读文案非空(界面渲染⑤时附加在旁边)",
+    );
+
+    // ── 全部安静时,清单长度真的是 0(不是带框的空壳)──
+    let empty_project = ProjectId::new();
+    if let Err(e) = app
+        .store
+        .create_project(NewProject {
+            id: empty_project,
+            name: "hex_readback 全空项目(演示 is_quiet)".to_string(),
+            root_path: String::new(),
+        })
+        .await
+    {
+        l.fail(format!("造一个全空项目失败:{e}"));
+        return l;
+    }
+    match app
+        .attention_view(Some(empty_project), OffsetDateTime::now_utc())
+        .await
+    {
+        Ok(quiet) => {
+            l.check(
+                quiet.is_quiet() && quiet.total_count() == 0,
+                format!("全空项目:待人处理清单长度 = 0(真的空,不是「0 条告警」的空壳),实得 total_count={}", quiet.total_count()),
+            );
+        }
+        Err(e) => l.fail(format!(
+            "空项目的 App::attention_view 应该成功,实得错误:{e}"
+        )),
+    }
+
+    l
+}
+
+// ─────────────────────────── main ───────────────────────────
+
+macro_rules! bail {
+    ($msg:expr) => {{
+        eprintln!("ASSERT FAILED: {}", $msg);
+        eprintln!("HEX_READBACK_FAILED");
+        return ExitCode::FAILURE;
+    }};
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let db_path = fresh_db_path();
+    let ws_dir = fresh_workspace_dir();
+    clear_stale(&db_path, &ws_dir);
+    let db_path_str = db_path.to_string_lossy().to_string();
+    let ws_str = ws_dir.to_string_lossy().to_string();
+
+    println!("== hex_readback · 切片五行为验收指挥器 ==");
+    println!("本次数据库:{}   ← 跑完不删,给人手工复核", db_path.display());
+    println!(
+        "本次工作区:{}   ← 真 git 检出,带真 .bw/metrics.toml",
+        ws_dir.display()
+    );
+    println!();
+
+    let app = match App::open(&db_path_str).await {
+        Ok(a) => a,
+        Err(e) => bail!(format!("App::open 失败:{e}")),
+    };
+
+    let project_id = ProjectId::new();
+    if let Err(e) = app
+        .store
+        .create_project(NewProject {
+            id: project_id,
+            name: "hex_readback 示例项目".to_string(),
+            root_path: ws_str.clone(),
+        })
+        .await
+    {
+        bail!(format!("create_project 失败:{e}"));
+    }
+    if let Err(e) = setup_workspace(&ws_dir).await {
+        bail!(format!("造真实工作区失败:{e}"));
+    }
+
+    match app
+        .dispatch(Command::SetActiveStage {
+            project: project_id,
+            stage: StageKind::Prototype,
+        })
+        .await
+    {
+        Ok(Event::StageSet) => {}
+        Ok(_) => bail!("Command::SetActiveStage 应该回 Event::StageSet"),
+        Err(e) => bail!(format!("首次开棒应该成功,实得错误:{e}")),
+    }
+
+    let issues = match bootstrap_issues(&app, &db_path_str, project_id).await {
+        Ok(i) => i,
+        Err(e) => bail!(e),
+    };
+
+    let evidence = match bw_workspace::evidence::collect(&ws_str).await {
+        Ok(e) => e,
+        Err(e) => bail!(format!("采集工作区证据失败:{e}")),
+    };
+
+    let mut total = Ledger::new();
+
+    println!("== 1 · 指标正本同步(北极星也是一行)==");
+    let (l1, metric_ids) = section_metrics_sync(&app, project_id, &ws_str, &db_path_str).await;
+    total.merge(l1);
+    let Some(metrics) = metric_ids else {
+        bail!("第一次指标同步本身没成功,后续步骤无法继续");
+    };
+    println!();
+
+    println!("== 2 · 观测只追加 + 手填戴徽 ==");
+    total.merge(section_observations(&app, project_id, &metrics).await);
+    println!();
+
+    println!("== 3 · 信号只能推导(读时现算,零缓存)==");
+    total.merge(
+        section_signal_derive_only(&app, &db_path_str, project_id, &metrics, &evidence).await,
+    );
+    println!();
+
+    // 造运行(供 §4 重启比对、§5 六段读回、§7①③ 用)——issue c 的失败运行
+    // 立刻结账(不然会同时出现在①和③,把两条各自的正反验证绊在一
+    // 起);issue d 的运行关门不结账,是①的正例。
+    let c_run = match create_closed_run(
+        &app.store,
+        project_id,
+        issues.c_stalled,
+        RunState::Failed,
+        RunEndKind::StartFailed,
+        now_i64(),
+        true,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => bail!(e),
+    };
+    let d_run = match create_closed_run(
+        &app.store,
+        project_id,
+        issues.d_unsettled,
+        RunState::Finished,
+        RunEndKind::ProcessExit,
+        now_i64(),
+        false,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => bail!(e),
+    };
+
+    println!("== 4 · 杀进程重开,数字一致 ==");
+    total.merge(section_restart_consistency(&db_path_str, project_id, &evidence).await);
+    println!();
+
+    println!("== 5 · 六段逐段读回 ==");
+    total.merge(
+        section_hex_segments(
+            &app, project_id, &metrics, &issues, &ws_str, &evidence, c_run, d_run,
+        )
+        .await,
+    );
+    println!();
+
+    println!("== 6 · 完成永远人点(显式转移 + 合法转移表拒绝)==");
+    total.merge(section_done_is_human(&app, project_id).await);
+    println!();
+
+    println!("== 7 · 待人处理:五项正反各验一次 ==");
+    total.merge(
+        section_attention_five_items(
+            &app,
+            &db_path_str,
+            project_id,
+            &metrics,
+            &issues,
+            c_run,
+            d_run,
+        )
+        .await,
+    );
+    println!();
+
+    println!(
+        "断言 {} 条,{}",
+        total.count,
+        if total.ok { "全过" } else { "有失败" }
+    );
+    println!("数据库留在:{}", db_path.display());
+    println!("工作区留在:{}", ws_dir.display());
+    if total.ok {
+        println!("HEX_READBACK_OK");
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("HEX_READBACK_FAILED");
+        ExitCode::FAILURE
+    }
+}

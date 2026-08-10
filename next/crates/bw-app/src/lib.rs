@@ -26,12 +26,11 @@
 //!    §3.3/§8 明令本片不做)都不在这个枚举里——设计稿原文自己写着「草
 //!    案,实施时按真实需要收敛」,这就是那次收敛,详情见对应 commit 正
 //!    文。
-//! 2. **六段总控视图的组装用例**:[`App::hex_view`]——查库,拼装喂给
-//!    [`view::hex::build`] 那个纯函数,纯推导逻辑与「去哪查库」两件事分
-//!    开放,但装配本身仍然是 `App` 的方法,让 `hex_readback` 指挥器与将
-//!    来的桌面壳调的是同一段代码,不是两份平行发明。待人处理投影的组
-//!    装用例(`App::attention_view`)是下一个 commit(切片五D)的事,本
-//!    片(切片五C)先把六段这一半立起来。
+//! 2. **六段总控 + 待人处理的组装用例**:[`App::hex_view`]/
+//!    [`App::attention_view`]——查库,拼装喂给 [`view`] 里的纯函数
+//!    (`view::hex::build`/`view::attention::build`),纯推导逻辑与「去哪
+//!    查库」两件事分开放,但装配本身仍然是 `App` 的方法,让 `hex_readback`
+//!    指挥器与将来的桌面壳调的是同一段代码,不是两份平行发明。
 //!
 //! 正式依赖里刻意没有 `bw-engine`:PTY/agentcli 那堆原生依赖不该渗进编排
 //! 层,`scripts/guard-app-layering.sh` 在 CI 里守这条线(只查
@@ -211,6 +210,40 @@ impl App {
             &handoffs,
             &all_runs,
             workspace_evidence,
+            now,
+        ))
+    }
+
+    /// 待人处理投影组装用例(design §3)——五条查询各自按
+    /// `project: Option<ProjectId>` 参数化(裁决 10:不写死单项目),查
+    /// 库、拼装,喂给 [`view::attention::build`]。
+    pub async fn attention_view(
+        &self,
+        project: Option<ProjectId>,
+        now: OffsetDateTime,
+    ) -> Result<view::AttentionView, AppError> {
+        let unsettled_runs = self.store.list_unsettled_runs(project).await?;
+        let in_review_issues = self
+            .store
+            .list_issues_by_status(project, IssueStatus::InReview)
+            .await?;
+        let stalled_runs = self.store.list_stalled_runs(project).await?;
+        let metrics_without_observation =
+            self.store.list_metrics_without_observation(project).await?;
+        let metric_latest_observations = self.store.list_metric_latest_observation(project).await?;
+        let current_stage_risky_handoffs = self
+            .store
+            .list_current_stage_risky_handoffs(project)
+            .await?;
+
+        Ok(view::attention::build(
+            project,
+            unsettled_runs,
+            in_review_issues,
+            stalled_runs,
+            metrics_without_observation,
+            metric_latest_observations,
+            current_stage_risky_handoffs,
             now,
         ))
     }

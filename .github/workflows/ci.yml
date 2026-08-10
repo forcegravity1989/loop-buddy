@@ -131,3 +131,12 @@ jobs:
       # 网关,可常绿。末行 RUN_RACES_OK。
       - name: 运行管理器行为验收指挥器(bw-app run_races)
         run: cd next && cargo run -p bw-app --example run_races
+
+      # next 切片五C/D:编排层命令/事件总线按聚合拆(design-s5-hexpanel.md
+      # §4.2)+ 六段总控/待人处理的组装用例(§4.3/§3)。指挥器造真 git 工
+      # 作区 + 真 .bw/metrics.toml + 真项目/活/运行/观测/交棒,逐段读回断
+      # 言、待人处理五项各自正反验一次(造出来→消掉→行自然消失)、重启
+      # 前后同一份组装用例逐字段比对(裁决 4 的新验收形态)。不依赖网关,
+      # 可常绿。末行 HEX_READBACK_OK。
+      - name: 六段总控/待人处理行为验收指挥器(bw-app hex_readback)
+        run: cd next && cargo run -p bw-app --example hex_readback

@@ -60,7 +60,7 @@ fn unix_to_odt(ts: i64) -> OffsetDateTime {
 
 /// 一条指标(北极星 / 滞后 / 引领,三层同构)算出来的可渲染卡片——**这不
 /// 是一张缓存表**,是 [`build`] 每次调用现算一遍、用完即弃的值。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MetricCard {
     pub id: MetricId,
     pub tier: MetricTier,
@@ -83,7 +83,7 @@ pub struct MetricCard {
 
 /// 段①:北极星。没有这一节 → 灰卡「北极星尚未定稿」,绝不显绿
 /// (design §1.2①)。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum NorthStarView {
     // clippy::large_enum_variant:`MetricCard` 比 `Undefined`(零字节)大
     // 得多,`Box` 一下——这个视图每次调用只构造一份,装箱的堆分配成本可
@@ -96,14 +96,14 @@ pub enum NorthStarView {
 /// 段②:五角色责任卡。前七项(角色/方法论/一字诀/核心问题/方法环节/完
 /// 成清单/常见的坑/节奏)零数据库,全部来自 `bw_core::StageKind` 静态元
 /// 数据(design §1.2②)——这里只挂当前一棒的高亮与每阶段的活数。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StageCard {
     pub stage: StageKind,
     pub is_current: bool,
     pub issue_count: i64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FiveRolesSegment {
     /// `None` = 尚未开棒——五张卡照常显(方法论本来就与项目无关),只是
     /// 没有一张高亮(design §1.2②「没数据时」)。
@@ -118,7 +118,7 @@ pub struct FiveRolesSegment {
 /// 散文式呈现),段③是它作为「三层里的第一层」出现在指标墙上,两处内容
 /// 有重叠是设计原文如此(§1.2③表格原文「三层,顺序固定:北极星→滞后→
 /// 引领」),不是本实现的重复。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MetricsSegment {
     pub cards: Vec<MetricCard>,
 }
@@ -127,7 +127,7 @@ pub struct MetricsSegment {
 /// 传入(那条查询/内存表的真实数据源见该类型文档);`exceptions` 是「只
 /// 列例外」的那部分明细(失败/遗留、且没有更晚运行接手——与待人处理③
 /// 同一条判据,design §1.2④「正常在跑的折成一个数」)。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LoopSegment {
     pub running: usize,
     pub in_review: usize,
@@ -141,7 +141,7 @@ pub struct LoopSegment {
 
 /// 段⑤:风险与决策。交棒记录流水,带险的置顶标红;决策栏本片不建,如实
 /// 留白(design §1.2⑤)。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RiskDecisionSegment {
     pub handoffs: Vec<HandoffRow>,
     /// 一次交棒都没有 → 如实说明。
@@ -157,7 +157,7 @@ impl RiskDecisionSegment {
 
 /// 段⑥:交付证据。三栏——①运行账(运行表)②观测出处(观测表)③工作区
 /// 现状(**现采不落库**,design §1.2⑥/§2.6)。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EvidenceSegment {
     pub runs: Vec<RunRow>,
     pub observations: Vec<ObservationRow>,
@@ -166,7 +166,7 @@ pub struct EvidenceSegment {
 }
 
 /// 六段总控屏——一次调用的产物,用完即弃,不是任何持久缓存。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HexView {
     pub project_id: ProjectId,
     pub project_name: String,
