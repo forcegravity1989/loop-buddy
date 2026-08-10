@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# next 切片四A:两条只查 manifest **正式依赖**(`[dependencies]`)那一节的
-# 分层守卫(design-s4-runmanager.md §1.2/§2.1/§8):
+# next 切片四A:两条查真实依赖图的分层守卫(design-s4-runmanager.md
+# §1.2/§2.1/§8):
 #
 # 1. `bw-app`(编排层)不准依赖 `bw-engine`——PTY/agentcli 那堆原生依赖不该
 #    渗进编排层;真跑档需要真连接器时,`bw-engine` 走 `[dev-dependencies]`
@@ -9,46 +9,58 @@
 #    不见 `ExecState`/`ExecTicket` 这些协议类型,想在存储层写一句「如果执
 #    行状态是 X 就把活推到 Y」都写不出来。
 #
-# 只查 `[dependencies]` 小节,不能全文 grep——否则会把合法的 dev 依赖误判
-# 成违规。
+# 评审 Important-3 实测:早期版本用 `awk` 截取 manifest `[dependencies]`
+# 小节原文再 grep,能查出朴素的 `crate = { path = … }` 一行式违规,但被
+# 两种同样合法的 TOML 写法完全绕过——`[dependencies.bw-engine]` 表头形
+# 式、以及改名依赖(`engine = { package = "bw-engine", path = … }`);两
+# 种写法 `cargo tree` 确认 bw-engine 真的进了非 dev 依赖图,文本 grep 却
+# 认不出来,因为它只认字面的 `bw-engine[[:space:]]*=` 这一种拼写。
+#
+# 因此改查**解析后的真实依赖图**而不是 manifest 文本:`cargo tree -p
+# <crate> -e normal`(只看正式依赖边,`-e normal` 天然排除 dev/build 依
+# 赖边,`[dev-dependencies]` 合法路径不受影响)列出的是 cargo 自己算出来
+# 的、这个 crate 编译进产物时真正会链接的那棵树——manifest 里用什么句
+# 法表达一条依赖,`cargo tree` 都会把它展开成同一种规范形式(真实 crate
+# 名),没有第二种绕过写法能骗过它。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# 提取一个 Cargo.toml 的 `[dependencies]` 小节原文:从该行开始,到下一个
-# `[` 开头的小节标题之前(没有下一个小节标题就到文件末尾)。
-extract_dependencies_section() {
-  local manifest="$1"
-  awk '
-    /^\[dependencies\]/ { printing = 1; next }
-    /^\[/ { printing = 0 }
-    printing { print }
-  ' "$manifest"
-}
-
 fail=0
 
-check_absent() {
-  local manifest="$1"
-  local forbidden_crate="$2"
-  local owner="$3"
+# 用真实依赖图断言 `package` 的**正式**(非 dev)依赖里不含 `forbidden_crate`。
+check_absent_from_graph() {
+  local workspace_dir="$1"   # next/ 独立 Cargo workspace 所在目录
+  local package="$2"         # 被检查的 crate(依赖图的根)
+  local forbidden_crate="$3" # 不准出现在正式依赖图里的 crate
+  local owner="$4"           # 报错文案里的人话名字
 
-  if [ ! -f "$manifest" ]; then
-    echo "… $manifest 尚不存在,跳过"
+  if [ ! -f "$workspace_dir/crates/$package/Cargo.toml" ]; then
+    echo "… $workspace_dir/crates/$package 尚不存在,跳过"
     return
   fi
 
-  local section
-  section="$(extract_dependencies_section "$manifest")"
-  if echo "$section" | grep -qE "^${forbidden_crate}[[:space:]]*="; then
-    echo "✗ $owner 的 [dependencies] 里出现了 $forbidden_crate(只准出现在 [dev-dependencies] 里,如果确实需要)"
+  local tree_output
+  if ! tree_output="$(cd "$workspace_dir" && cargo tree -p "$package" -e normal --prefix none 2>&1)"; then
+    echo "✗ 无法生成 $package 的真实依赖图(cargo tree 失败),原文:"
+    echo "$tree_output"
+    fail=1
+    return
+  fi
+
+  # `cargo tree --prefix none` 每行形如 `<crate-name> v<version> [...]`
+  # ——按真实 crate 名字整词匹配行首,不受 manifest 里怎么拼依赖声明影响
+  # (dotted-table / 改名依赖在这里都已经被 cargo 解析成同一个真实包名)。
+  if echo "$tree_output" | grep -qE "^${forbidden_crate} v"; then
+    echo "✗ $owner 的真实(非 dev)依赖图里出现了 $forbidden_crate —— cargo tree -p $package -e normal 证实"
+    echo "  (manifest 写法可能是一行式、[dependencies.$forbidden_crate] 表头、或改名依赖,查真实依赖图三种都拦得住)"
     fail=1
   else
-    echo "✓ $owner 的 [dependencies] 里没有 $forbidden_crate"
+    echo "✓ $owner 的真实(非 dev)依赖图里没有 $forbidden_crate(cargo tree -p $package -e normal 核验)"
   fi
 }
 
-check_absent "next/crates/bw-app/Cargo.toml" "bw-engine" "bw-app(编排层)"
-check_absent "next/crates/bw-store/Cargo.toml" "bw-connector" "bw-store(存储层)"
+check_absent_from_graph "next" "bw-app" "bw-engine" "bw-app(编排层)"
+check_absent_from_graph "next" "bw-store" "bw-connector" "bw-store(存储层)"
 
 if [ "$fail" -ne 0 ]; then
   echo
@@ -58,4 +70,4 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "✓ 分层守卫全过(编排层/存储层的正式依赖节干净)"
+echo "✓ 分层守卫全过(编排层/存储层的真实依赖图干净)"

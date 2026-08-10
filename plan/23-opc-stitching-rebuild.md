@@ -230,3 +230,9 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
    - **来源**:本片刻意的范围裁剪(投影是视图,提前建就是给切片五留一处要改的地方)。
    - **待办**:`run_races` 指挥器(下一任务)按 design §5.2 第 9 条把这条 SELECT 纳入读回清单;真正的「待人处理」列表 UI 留给切片五建。
    - **登记日**:2026-08-10。
+
+10. **`CREATE INDEX IF NOT EXISTS` 对存量库不更新索引定义——迁移双守卫只管列、不管索引**(登记日 2026-08-10,切片四-1 复审 Important-2)
+    - **现象**:`sqlite3` 独立复现:同名索引已存在时,一条谓词不同的 `CREATE UNIQUE INDEX IF NOT EXISTS` 会被静默忽略,`sqlite_master.sql` 里留的还是旧定义。这与本仓库「`CREATE TABLE IF NOT EXISTS` 对存量表不加新列」是同一类坑,只是从列扩到了索引;现有的迁移双守卫(`add_column_if_missing`,`next/crates/bw-store/src/sqlite.rs`)只覆盖列,没有对应机制覆盖索引定义。
+    - **来源**:`next/crates/bw-store/src/sqlite.rs`(开库流程,`CREATE UNIQUE INDEX IF NOT EXISTS uq_run_live_delivery_per_issue` 由这里逐语句执行);评审复现记录见切片四-1 独立复审全文 Important-2。
+    - **待办**:将来一旦要修 `uq_run_live_delivery_per_issue`(或本片之后新增的任何索引)的谓词,需要先加一条索引迁移(开库时比对 `sqlite_master.sql` 与期望定义,不一致就 `DROP INDEX` 后重建),不能只改 `schema.sql`——否则存量用户库永远修不上,新库老库行为分叉。本次(切片四-1 修复轮)只在 `schema.sql` 索引旁补了如实注释与本条登记,不修机制,机制留给真正需要改这条谓词的那次任务。
+    - **登记日**:2026-08-10。

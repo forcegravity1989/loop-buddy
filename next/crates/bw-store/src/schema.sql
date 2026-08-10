@@ -53,6 +53,17 @@ CREATE TABLE IF NOT EXISTS run (
 -- 铁律进存储:一件活至多一个「还活着的交付运行」。第二个插不进去,
 -- 不是被 if 拦住,是数据库根本不收。降级为咨询(kind 翻面)与结束
 -- (ended_at 落值)都会让这一行退出索引谓词,名额自然释放。
+--
+-- ⚠️ 如实登记(评审 Important-2,plan/23 §10 第 10 条):`CREATE INDEX
+-- IF NOT EXISTS` 对存量库的语义是「同名索引已存在就整条跳过,连谓词都
+-- 不比对」——将来如果要改这条谓词(比如 kind 值集扩展),光改这一行
+-- schema.sql 对已经开过库的老库**不会生效**,`sqlite_master.sql` 里留
+-- 的还是旧定义,新库老库行为会分叉。这与本仓库「`CREATE TABLE IF NOT
+-- EXISTS` 对存量表不加新列」是同一类坑,只是从列扩到了索引;现有的双
+-- 守卫(`add_column_if_missing`,sqlite.rs)只覆盖列,不覆盖索引定义。
+-- 本片(切片四A)只登记这个事实,不修机制——真要改这条谓词时,必须
+-- 配一条索引迁移(比对 sqlite_master.sql 与期望定义,不一致就 DROP
+-- INDEX 后重建),不能只改这一行。
 CREATE UNIQUE INDEX IF NOT EXISTS uq_run_live_delivery_per_issue
     ON run(issue_id) WHERE ended_at IS NULL AND kind = 'delivery';
 
