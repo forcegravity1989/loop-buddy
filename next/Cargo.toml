@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/bw-core",
+    "crates/bw-engine",
 ]
 
 [workspace.package]
@@ -17,3 +18,10 @@ serde_json = "1"
 uuid = { version = "1", default-features = false, features = ["serde"] }
 time = { version = "0.3", default-features = false, features = ["serde"] }
 thiserror = "1"
+
+# --- Runtime deps (native shells: bw-engine and later crates). Not in the
+#     wasm32 keepalive set. ---
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "process"] }
+async-trait = "0.1"
+# `.bw/metrics.toml` parser (bw-engine only — file IO stays out of bw-core).
+toml = "0.8"

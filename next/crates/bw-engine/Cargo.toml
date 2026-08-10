@@ -1,0 +1,33 @@
+[package]
+name = "bw-engine"
+description = "Workflow execution engine: WorkflowSpec → phase loop, the frozen Executor contract + a deterministic MockExecutor + a reusable consistency suite."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# `InteractiveCliExecutor::timeout` / `::await_child` (interactive_cli.rs) are
+# only reached on the Windows/Linux cfg branches of `run_skill`; the macOS
+# osascript branch never touches them. Verified against an untouched
+# origin/v1 checkout on this machine: the identical warning fires there too
+# (standalone crate build) — a pre-existing macOS-only quirk of the v1
+# source, not something this migration introduced. The migrated files are
+# zero-rewrite (no per-item #[allow] possible), so the exemption is scoped
+# here instead.
+[lints.rust]
+dead_code = "allow"
+
+[dependencies]
+bw-core = { path = "../bw-core" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true }
+
+# V1 Issue2 W2: Windows uses conpty-oxide (correctness-first ConPTY impl) for
+# in-app PTY terminal embedding. Non-Windows has no run_skill_pty override
+# (falls back to the InteractiveExecutor trait default — PTY not supported,
+# caller uses run_skill), so no non-Windows PTY dep is needed here.
+[target.'cfg(windows)'.dependencies]
+conpty-oxide = "0.1"
