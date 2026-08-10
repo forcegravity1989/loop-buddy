@@ -79,6 +79,12 @@ jobs:
       - name: 编排层/内核不准直接进程调用
         run: ./scripts/guard-no-direct-process.sh
 
+      # next 切片四A:编排层(bw-app)不准正式依赖引擎、存储层(bw-store)
+      # 不准正式依赖连接器——两条都只查 manifest 的 [dependencies] 节
+      # (design-s4-runmanager.md §1.2/§2.1/§8)。
+      - name: 编排层/存储层分层守卫
+        run: ./scripts/guard-app-layering.sh
+
       - name: 行为读回指挥器(bw-engine port_readback)
         run: cd next && cargo run -p bw-engine --example port_readback
 

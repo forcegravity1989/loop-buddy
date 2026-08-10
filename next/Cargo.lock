@@ -68,6 +68,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bw-app"
+version = "0.0.0"
+dependencies = [
+ "bw-connector",
+ "bw-core",
+ "bw-store",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "bw-connector"
 version = "0.0.0"
 dependencies = [

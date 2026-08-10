@@ -5,6 +5,7 @@ members = [
     "crates/bw-engine",
     "crates/bw-connector",
     "crates/bw-store",
+    "crates/bw-app",
 ]
 
 [workspace.package]

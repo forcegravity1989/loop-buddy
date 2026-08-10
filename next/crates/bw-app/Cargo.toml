@@ -1,0 +1,22 @@
+[package]
+name = "bw-app"
+description = "next 切片四:编排层。运行管理器住在这里(design-s4-runmanager.md §1)——它要写库、要判状态机,这是编排的活,不是引擎的活。本片(切片四A)只立起 crate 骨架:存储装配 + 错误类型;运行管理器本体是下一任务。正式依赖里刻意没有 bw-engine——PTY 那堆原生依赖渗不进编排层(§1.2),`scripts/guard-app-layering.sh` 守这条线。"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# 带 idgen(默认已开)——编排层要生成新编号(运行编号等)。
+bw-core = { path = "../bw-core" }
+bw-connector = { path = "../bw-connector", default-features = false }
+bw-store = { path = "../bw-store" }
+tokio = { workspace = true }
+time = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+
+# 刻意没有 [dev-dependencies] bw-engine:「真实并行三件」那一档(下一任务
+# 的 run_races --real,要把真的 claude 执行连接器组装进注册表)才会真的用
+# 到它——那时才加,不预置一个当下没有消费者的依赖(design §1.2:dev 依赖
+# 合法,但不是现在就要有)。`scripts/guard-app-layering.sh` 只查
+# `[dependencies]` 节,届时加进 `[dev-dependencies]` 不受影响。
