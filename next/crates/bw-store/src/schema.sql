@@ -131,13 +131,46 @@ CREATE TABLE IF NOT EXISTS observation (
 );
 CREATE INDEX IF NOT EXISTS idx_observation_metric_ts ON observation(metric_id, ts DESC);
 
+-- next 切片五-1 修复轮(评审 task-s5a-review.md Important-2):「观测只追
+-- 加」在这之前只是接口面上恰好没有 update/delete 方法——评审的突变 M3
+-- 证实过,把这两个方法加回 trait、接上真 SQL,门禁全绿、`store_guards`
+-- 也全绿,没有任何东西会变红。这两条触发器把它从「接口纪律」升级成「数
+-- 据库结构约束」:哪怕以后有人绕过 ObservationStore 直接对这张表跑裸
+-- SQL,数据库自己也会拒绝。新表新触发器,不需要迁移双守卫(`CREATE
+-- TRIGGER IF NOT EXISTS` 与三张新表一样,每次开库都随整份 schema.sql 重
+-- 新执行一遍,老库/新库同一条路径)。
+CREATE TRIGGER IF NOT EXISTS trg_observation_no_update
+BEFORE UPDATE ON observation
+BEGIN
+    SELECT RAISE(ABORT, '观测只追加,不可修改(observation is append-only)');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_observation_no_delete
+BEFORE DELETE ON observation
+BEGIN
+    SELECT RAISE(ABORT, '观测只追加,不可删除(observation is append-only)');
+END;
+
 -- 阶段交棒的审计流水。清单没勾完也允许交,但会被标成带险并永久记下——
--- 只追加、不修改,事后抹不掉。字段与索引逐字移植 v1 同名表。
+-- 只追加、不修改,事后抹不掉。索引逐字移植 v1 同名表。
+--
+-- ⚠️ next 切片五-1 修复轮(2026-08-11 主控裁决,评审 task-s5a-review.md
+-- Important-3):`from_stage`/`to_stage` 是 INTEGER(1..5,`StageKind::
+-- index()`/`from_index()`),不是设计稿 design-s5-hexpanel.md §2.4 原文
+-- 写的 TEXT。原文「逐字移植 v1」的口径本身与 §2.1(project.active_stage/
+-- issue.stage 都是 INTEGER)自相矛盾——v1 的 handoff 表是 TEXT,但 v1 从
+-- 来没有 INTEGER 的 active_stage 可比;移植到 next 之后两制并存,评审实
+-- 证过设计稿 §3.2 第⑤条查询(`h.to_stage = CAST(active_stage AS TEXT)`)
+-- 会因为 'build' 永不等于 CAST(2 AS TEXT)='2' 而永远查出 0 行——看起来
+-- 是「没有欠账」,实际是「查不出欠账」,是本仓库最恨的那种假绿。裁决:
+-- 统一 INTEGER,移植取的是「阶段交棒审计流水」这个语义,不是列类型本
+-- 身;`CLAUDE.md`「不为向后兼容留旧路径」在此适用——next 的库还没有任
+-- 何生产存量,不留 TEXT→INTEGER 的迁移路径。
 CREATE TABLE IF NOT EXISTS handoff (
     id          TEXT PRIMARY KEY,
     project_id  TEXT NOT NULL REFERENCES project(id),
-    from_stage  TEXT NOT NULL,
-    to_stage    TEXT NOT NULL,
+    from_stage  INTEGER NOT NULL,
+    to_stage    INTEGER NOT NULL,
     risky       INTEGER NOT NULL DEFAULT 0,
     note        TEXT NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL

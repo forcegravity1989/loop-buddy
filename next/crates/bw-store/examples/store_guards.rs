@@ -49,6 +49,22 @@
 //!     `project.active_stage`/`issue.stage`/`issue.body` 三列的老 schema
 //!     造一个库 → 走正式开库流程 → `PRAGMA table_info` 读回三列都补上了。
 //!
+//! **next 切片五-1 修复轮新增(评审 task-s5a-review.md)**——第 15-16 节:
+//!
+//! 15. 观测只追加升级成数据库结构约束(Important-2):`schema.sql` 给
+//!     `observation` 表加了 `BEFORE UPDATE`/`BEFORE DELETE` 触发器,
+//!     `RAISE(ABORT, …)`。绕过 `ObservationStore` 的公开方法,用一条独立
+//!     连接直接对同一个数据库文件跑裸 `UPDATE`/`DELETE`,断言两条都被
+//!     数据库拒绝,原始行一个字节没变——比第 12 节「trait 上没有这两个
+//!     方法」更硬,评审的突变 M3(把这两个方法加回 trait)今天会被这一
+//!     节挡下来,不会再像评审报告里那样全绿溜走。
+//! 16. `.bw/metrics.toml` 缺 `[north_star]` 一节:如实降级为 `None`,不
+//!     让整份正本一条都同步不进去(Important-4)——真读一份没有
+//!     `[north_star]` 的 `.bw/metrics.toml`,经 `metrics_lenient::
+//!     read_lenient` + `metric_shape::flatten_lenient` 归一,喂给
+//!     `sync_metrics_from_file`,SQL 读回滞后/引领正常入库、没有
+//!     `tier='north_star'` 的行、同步过程不报错。
+//!
 //! 跑法:`cd next && cargo run -p bw-store --example store_guards`
 //! 退出码 0 且末行 `STORE_GUARDS_OK` = 全部断言通过。
 //! 数据库跑完不删,路径打印出来,人可以自己 `sqlite3 <path>` 复核。
@@ -212,6 +228,17 @@ async fn main() -> ExitCode {
         "== 14 · 附:存量库迁移双守卫第二次真实使用(project.active_stage/issue.stage/issue.body)=="
     );
     all_ok &= section_migration_guard_s5_columns().await;
+    println!();
+
+    println!(
+        "== 15 · 观测只追加升级成数据库结构约束(触发器棘轮,绕过 store 直接 SQL UPDATE/DELETE)=="
+    );
+    all_ok &=
+        section_observation_ratchet(&store, project_id, fixture.north_star_id, &db_path).await;
+    println!();
+
+    println!("== 16 · `.bw/metrics.toml` 缺 [north_star] 一节:如实降级为 None,不整份失败 ==");
+    all_ok &= section_north_star_missing_section(&store).await;
     println!();
 
     if all_ok {
@@ -1607,5 +1634,282 @@ async fn section_migration_guard_s5_columns() -> bool {
     if ok {
         println!("老库(打开后)留在:{}", old_db.display());
     }
+    ok
+}
+
+// ═══════════════ next 切片五-1 修复轮:第 15-16 节 ═══════════════
+
+/// 第 15 节:观测只追加,从「trait 上没有 update/delete 方法」升级成「数
+/// 据库结构约束」(评审 task-s5a-review.md Important-2)。第 12 节证的是
+/// 接口面——`ObservationStore` 编译期就没有那两个方法可调;但评审的突变
+/// M3 实测过:把这两个方法加回 trait、在 `SqliteStore` 上接一段真
+/// `UPDATE`/`DELETE` SQL,门禁、`store_guards` 全部照样绿到底,没有任何
+/// 东西拦得住。`schema.sql` 新增的两条 `BEFORE UPDATE`/`BEFORE DELETE`
+/// 触发器把这条铁律钉进数据库本身——这里绕过 `SqliteStore` 的公开方法,
+/// 用一条独立连接直接对同一个数据库文件跑裸 SQL,断言两条都被拒绝,而
+/// 且原始行一个字节没变(不只是"报错了",要确认真的没生效)。
+///
+/// **突变自证**(本节新增的护栏,复现见 task-s5a-report.md「修复轮」):
+/// 临时从 `schema.sql` 删掉这两条触发器 → 这一节必须变红;加回来 → 恢复
+/// 绿。
+async fn section_observation_ratchet(
+    store: &SqliteStore,
+    project_id: ProjectId,
+    metric_id: MetricId,
+    db_path: &str,
+) -> bool {
+    let mut ok = true;
+
+    let obs_id = ObservationId::new();
+    if let Err(e) = store
+        .insert_observation(NewObservation {
+            id: obs_id,
+            metric_id,
+            project_id,
+            ts: now_i64(),
+            raw_value: "原始值,不该被改动".to_string(),
+            source: "store_guards".to_string(),
+            source_hint: "第 15 节触发器棘轮的靶子行".to_string(),
+        })
+        .await
+    {
+        eprintln!("ASSERT FAILED: 插入靶子观测应该成功,实得错误: {e}");
+        return false;
+    }
+    println!("插入靶子观测: {obs_id:?}(raw_value=\"原始值,不该被改动\")");
+
+    let opts = SqliteConnectOptions::new().filename(db_path);
+    let pool = match SqlitePool::connect_with(opts).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: 无法用独立连接打开同一个数据库文件: {e}");
+            return false;
+        }
+    };
+
+    let update_sql = "UPDATE observation SET raw_value = 'HACKED · 不该成功' WHERE id = ?";
+    println!("执行 SQL(绕过 store 层,直接对同一个数据库文件): {update_sql}");
+    match sqlx::query(update_sql)
+        .bind(obs_id.uuid().to_string())
+        .execute(&pool)
+        .await
+    {
+        Ok(_) => {
+            eprintln!(
+                "ASSERT FAILED: 直接 UPDATE observation 应该被 BEFORE UPDATE 触发器拒绝,实得成功"
+            );
+            ok = false;
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            println!("  UPDATE 被拒绝(如实预期),错误原文: {msg}");
+            if msg.contains("观测只追加") {
+                println!(
+                    "  ✓ 拒绝原因是 append-only 触发器(错误原文带着那句中文),不是别的错误撞上"
+                );
+            } else {
+                eprintln!(
+                    "ASSERT FAILED: UPDATE 失败了,但错误原文没带触发器的中文提示,可能是别的原因挡的: {msg}"
+                );
+                ok = false;
+            }
+        }
+    }
+
+    let delete_sql = "DELETE FROM observation WHERE id = ?";
+    println!("执行 SQL(绕过 store 层,直接对同一个数据库文件): {delete_sql}");
+    match sqlx::query(delete_sql)
+        .bind(obs_id.uuid().to_string())
+        .execute(&pool)
+        .await
+    {
+        Ok(_) => {
+            eprintln!(
+                "ASSERT FAILED: 直接 DELETE observation 应该被 BEFORE DELETE 触发器拒绝,实得成功"
+            );
+            ok = false;
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            println!("  DELETE 被拒绝(如实预期),错误原文: {msg}");
+            if msg.contains("观测只追加") {
+                println!("  ✓ 拒绝原因是 append-only 触发器,不是别的错误撞上");
+            } else {
+                eprintln!(
+                    "ASSERT FAILED: DELETE 失败了,但错误原文没带触发器的中文提示,可能是别的原因挡的: {msg}"
+                );
+                ok = false;
+            }
+        }
+    }
+
+    let rows = match store.list_observations(metric_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: list_observations 复核应该成功,实得错误: {e}");
+            return false;
+        }
+    };
+    match rows.iter().find(|r| r.id == obs_id) {
+        Some(r) if r.raw_value == "原始值,不该被改动" => {
+            println!(
+                "  ✓ 复核:靶子行还在,raw_value 一个字节没变(UPDATE/DELETE 真的没有生效,不只是报错)"
+            );
+        }
+        Some(r) => {
+            eprintln!(
+                "ASSERT FAILED: 靶子行的 raw_value 被改动了,实得 {:?}",
+                r.raw_value
+            );
+            ok = false;
+        }
+        None => {
+            eprintln!("ASSERT FAILED: 靶子行不见了,DELETE 其实生效了");
+            ok = false;
+        }
+    }
+
+    ok
+}
+
+/// 造一个临时工作区,写一份**没有 `[north_star]` 一节**的 `.bw/metrics.toml`
+/// (只有 `[[lagging]]`/`[[leading]]` 两张数组表),过
+/// `bw_workspace::metrics_lenient::read_lenient` +
+/// `bw_workspace::metric_shape::flatten_lenient` 解析 + 归一,返回「北极星
+/// 是否存在」与扁平定义——供第 16 节使用。
+fn read_and_flatten_no_north_star_fixture(
+    toml_content: &str,
+) -> Option<(bool, Vec<bw_workspace::metric_shape::FlatMetricDef>)> {
+    let dir = std::env::temp_dir().join(format!(
+        "bw-store-guards-metrics-no-north-star-{}",
+        Uuid::new_v4()
+    ));
+    let bw_dir = dir.join(".bw");
+    if std::fs::create_dir_all(&bw_dir).is_err() {
+        return None;
+    }
+    if std::fs::write(bw_dir.join("metrics.toml"), toml_content).is_err() {
+        return None;
+    }
+    let workspace_str = dir.to_string_lossy().to_string();
+    let file = match bw_workspace::metrics_lenient::read_lenient(&workspace_str) {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            eprintln!(
+                "ASSERT FAILED: 真实工作区 {workspace_str} 应该能读到 .bw/metrics.toml,实得 None"
+            );
+            return None;
+        }
+        Err(e) => {
+            eprintln!(
+                "ASSERT FAILED: 缺 [north_star] 一节的 .bw/metrics.toml 不该整份解析失败,实得错误: {e}"
+            );
+            return None;
+        }
+    };
+    let has_north_star = file.north_star.is_some();
+    Some((
+        has_north_star,
+        bw_workspace::metric_shape::flatten_lenient(&file),
+    ))
+}
+
+/// 第 16 节:`.bw/metrics.toml` 缺 `[north_star]` 一节时,`read_lenient` 如
+/// 实降级为 `north_star = None`,不让整份正本解析失败(评审
+/// task-s5a-review.md Important-4)。滞后/引领正常入库,`metric` 表里没有
+/// `tier='north_star'` 那一行,同步过程本身不报错——这正是设计稿 §1.2 第
+/// ①行钉死的产品语义("没有这一节 → 灰卡「北极星尚未定稿」",不是"整份
+/// 正本一条都不同步")的数据基础。
+async fn section_north_star_missing_section(store: &SqliteStore) -> bool {
+    let mut ok = true;
+
+    let project_id = ProjectId::new();
+    if let Err(e) = store
+        .create_project(NewProject {
+            id: project_id,
+            name: "store_guards 缺北极星示例项目".to_string(),
+            root_path: String::new(),
+        })
+        .await
+    {
+        eprintln!("ASSERT FAILED: create_project 应成功,实得错误: {e}");
+        return false;
+    }
+    println!("项目(缺北极星场景): {project_id:?}");
+
+    let toml_content = "schema_version = 1\n\n\
+         [[lagging]]\n\
+         name = \"无北极星-滞后指标\"\n\
+         def = \"这份正本没有 [north_star] 一节\"\n\
+         target = \"≥1\"\n\
+         collect = { kind = \"manual\", query = \"\" }\n\n\
+         [[leading]]\n\
+         name = \"无北极星-引领指标\"\n\
+         def = \"这份正本没有 [north_star] 一节\"\n\
+         target = \"≥2\"\n\
+         collect = { kind = \"manual\", query = \"\" }\n";
+    println!("读:临时工作区 .bw/metrics.toml(真文件,故意不写 [north_star],内容原样打印)");
+    println!("{toml_content}");
+
+    let Some((has_north_star, flat)) = read_and_flatten_no_north_star_fixture(toml_content) else {
+        return false;
+    };
+    if has_north_star {
+        eprintln!("ASSERT FAILED: 这份正本没写 [north_star],read_lenient 却读出了 Some");
+        ok = false;
+    } else {
+        println!("  ✓ read_lenient: north_star = None(如实降级,不是解析失败)");
+    }
+    if flat.len() == 2 {
+        println!("  ✓ 归一(flatten_lenient)后 2 条定义(1 滞后 + 1 引领,没有北极星那一条)");
+    } else {
+        eprintln!("ASSERT FAILED: 归一后应有 2 条定义,实得 {}", flat.len());
+        ok = false;
+    }
+
+    let incoming = to_incoming(flat);
+    let at = now_i64();
+    let report = match store.sync_metrics_from_file(project_id, incoming, at).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: 缺北极星的正本同步应该成功,实得错误: {e}");
+            return false;
+        }
+    };
+    println!(
+        "同步(不报错): inserted={} updated={} archived={} restored={}",
+        report.inserted.len(),
+        report.updated.len(),
+        report.archived.len(),
+        report.restored.len()
+    );
+    if report.inserted.len() == 2 {
+        println!("  ✓ 2 条(滞后+引领)全部插入成功,同步没有因为缺北极星整批失败");
+    } else {
+        eprintln!(
+            "ASSERT FAILED: 应该插入 2 条,实得 {}",
+            report.inserted.len()
+        );
+        ok = false;
+    }
+
+    let rows = match store.list_metrics(project_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: list_metrics 应该成功,实得错误: {e}");
+            return false;
+        }
+    };
+    println!("读回:MetricStore::list_metrics(project_id)");
+    for r in &rows {
+        println!("  tier={:?} name={:?}", r.tier, r.name);
+    }
+    if rows.len() == 2 && !rows.iter().any(|r| r.tier == MetricTier::NorthStar) {
+        println!("  ✓ metric 表里恰好 2 行,没有 tier=NorthStar 的行(下游据此显示「尚未定稿」灰卡)");
+    } else {
+        eprintln!("ASSERT FAILED: metric 表应恰好 2 行且没有 NorthStar,实得 {rows:?}");
+        ok = false;
+    }
+
     ok
 }

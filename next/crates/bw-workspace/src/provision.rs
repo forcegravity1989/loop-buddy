@@ -40,8 +40,13 @@ pub fn issue_branch(issue_number: u32) -> String {
 /// in a sibling directory `<main_workspace>-issue-<n>` and carries branch
 /// `bw/issue-<n>` (created here if missing, same retry-fallback semantics
 /// as `github::checkout_issue_branch`). Main workspace stays on master —
-/// only the issue worktree carries the issue branch. The caller wraps the
-/// returned path in an [`IssueWorktreeGuard`] so cleanup is automatic.
+/// only the issue worktree carries the issue branch. **供给只造不删**
+/// (主控裁决,design-s5 §6.3):清理不是这里发生的自动行为,而是一个显式
+/// 动作(理由见本文件头的模块文档——上游按工作目录编码存会话,续接必须
+/// 同路径,自动删了就再也接不回来)。**这一行是评审 task-s5a-review.md
+/// Important-1 点名的一处有意的文档更正**:v1 原文这里写的是「调用方把
+/// 返回路径包进 `IssueWorktreeGuard`,清理自动发生」,正好讲反了本文件
+/// 明令不搬的那件事,不是移植走样。
 pub async fn provision_issue_worktree(
     main_workspace: &Path,
     issue_number: u32,
@@ -61,10 +66,11 @@ pub async fn provision_issue_worktree(
             ProvisionError::CreateDir(format!("worktree 路径非 UTF-8:{}", sibling.display()))
         })?
         .to_string();
-    // A prior run that crashed before its guard's `Drop` ran leaves the
-    // sibling dir behind. Prune stale worktree metadata; if the dir survives
-    // prune with a `.git` worktree file, it's a live worktree for this branch
-    // — reuse it (idempotent retry, mirroring `checkout_issue_branch`).
+    // 供给只造不删,所以任何一次更早的调用都会把这个兄弟目录原样留在磁
+    // 盘上(不只是"崩溃"那一种情况——正常跑完同样不删)。Prune stale
+    // worktree metadata; if the dir survives prune with a `.git` worktree
+    // file, it's a live worktree for this branch — reuse it (idempotent
+    // retry, mirroring `checkout_issue_branch`).
     if sibling.exists() {
         let _ = tokio::process::Command::new("git")
             .current_dir(main_workspace)

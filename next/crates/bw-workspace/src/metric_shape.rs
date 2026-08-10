@@ -16,7 +16,8 @@
 //! 己的 `IncomingMetricDef` 并调用同步用例,是调用方(编排层,或本片的
 //! `store_guards` 指挥器)的事,这份归一本身保持零下游耦合。
 
-use crate::metrics_file::MetricsFile;
+use crate::metrics_file::{MetricDef, MetricsFile};
+use crate::metrics_lenient::LenientMetricsFile;
 
 /// 三层——与 `.bw/metrics.toml` 的三个键、`bw-store` `metric.tier` 列的三
 /// 个取值一一对应。
@@ -66,25 +67,45 @@ pub fn flatten(file: &MetricsFile) -> Vec<FlatMetricDef> {
         collect_kind: file.north_star.collect.kind.as_str(),
         collect_query: file.north_star.collect.query.clone(),
     });
-    for m in &file.lagging {
-        out.push(FlatMetricDef {
-            tier: MetricTier::Lagging,
-            name: m.name.clone(),
-            def: m.def.clone(),
-            target_raw: m.target.clone(),
-            collect_kind: m.collect.kind.as_str(),
-            collect_query: m.collect.query.clone(),
-        });
-    }
-    for m in &file.leading {
-        out.push(FlatMetricDef {
-            tier: MetricTier::Leading,
-            name: m.name.clone(),
-            def: m.def.clone(),
-            target_raw: m.target.clone(),
-            collect_kind: m.collect.kind.as_str(),
-            collect_query: m.collect.query.clone(),
-        });
-    }
+    push_tier_array(&mut out, MetricTier::Lagging, &file.lagging);
+    push_tier_array(&mut out, MetricTier::Leading, &file.leading);
     out
+}
+
+/// 宽松归一入口(next 切片五-1 修复轮,评审 Important-4):同一份归一逻
+/// 辑,喂给 [`crate::metrics_lenient::LenientMetricsFile`]——`north_star`
+/// 是 `None` 时不产出那一条(`metric` 表因此没有 `tier='north_star'` 那一
+/// 行,下游据此显示「尚未定稿」灰卡),滞后/引领两段照常归一,与
+/// [`flatten`] 走同一段 [`push_tier_array`] 逻辑,不重复一份。
+pub fn flatten_lenient(file: &LenientMetricsFile) -> Vec<FlatMetricDef> {
+    let north_star_count = usize::from(file.north_star.is_some());
+    let mut out = Vec::with_capacity(north_star_count + file.lagging.len() + file.leading.len());
+    if let Some(ns) = &file.north_star {
+        out.push(FlatMetricDef {
+            tier: MetricTier::NorthStar,
+            name: ns.name.clone(),
+            def: ns.def.clone(),
+            target_raw: String::new(),
+            collect_kind: ns.collect.kind.as_str(),
+            collect_query: ns.collect.query.clone(),
+        });
+    }
+    push_tier_array(&mut out, MetricTier::Lagging, &file.lagging);
+    push_tier_array(&mut out, MetricTier::Leading, &file.leading);
+    out
+}
+
+/// [`flatten`]/[`flatten_lenient`] 共用:把 `[[lagging]]`/`[[leading]]` 这
+/// 两张数组表的条目逐个归一,追加进 `out`。
+fn push_tier_array(out: &mut Vec<FlatMetricDef>, tier: MetricTier, defs: &[MetricDef]) {
+    for m in defs {
+        out.push(FlatMetricDef {
+            tier,
+            name: m.name.clone(),
+            def: m.def.clone(),
+            target_raw: m.target.clone(),
+            collect_kind: m.collect.kind.as_str(),
+            collect_query: m.collect.query.clone(),
+        });
+    }
 }

@@ -6,11 +6,10 @@
 //! `crates/bw-store/src/sqlite.rs`).
 
 use crate::{
-    metric_tier_text, parse_metric_tier, parse_run_end_kind, parse_run_kind, parse_stage_kind,
-    run_end_kind_text, run_kind_text, stage_kind_text, HandoffRow, HandoffStore, IncomingMetricDef,
-    IssueRow, IssueStore, MetricRow, MetricStore, MetricSyncReport, MetricTier, NewIssue,
-    NewObservation, NewProject, NewRun, ObservationRow, ObservationStore, ProjectRow, Result,
-    RunEndKind, RunRow, RunStore, StoreError,
+    metric_tier_text, parse_metric_tier, parse_run_end_kind, parse_run_kind, run_end_kind_text,
+    run_kind_text, HandoffRow, HandoffStore, IncomingMetricDef, IssueRow, IssueStore, MetricRow,
+    MetricStore, MetricSyncReport, MetricTier, NewIssue, NewObservation, NewProject, NewRun,
+    ObservationRow, ObservationStore, ProjectRow, Result, RunEndKind, RunRow, RunStore, StoreError,
 };
 use async_trait::async_trait;
 use bw_core::{
@@ -51,11 +50,8 @@ impl SqliteStore {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        for stmt in cleaned.split(';') {
-            if stmt.trim().is_empty() {
-                continue;
-            }
-            sqlx::query(stmt).execute(&pool).await?;
+        for stmt in schema_statements(&cleaned) {
+            sqlx::query(&stmt).execute(&pool).await?;
         }
 
         // 迁移双守卫的第一次真实调用(next 切片四D,design §2.4/§5.2 第
@@ -110,6 +106,66 @@ async fn add_column_if_missing(
     Ok(())
 }
 
+/// 把整份 schema.sql(已经剥掉 `--` 行注释)切成一条条可独立执行的语句。
+///
+/// naive 的 `cleaned.split(';')`(旧写法)对绝大多数语句都对,但对
+/// `CREATE TRIGGER … BEGIN … END` 这种形状不对——触发器体自己内部也用
+/// `;` 分隔每条语句(SQLite 的触发器语法要求最后一条语句同样要有分号),
+/// naive 切法会把一条触发器从中间切成两截,`sqlx::query` 各执行一半时报
+/// 语法错误。next 切片五-1 修复轮第一次真的在 schema.sql 里写触发器
+/// (`trg_observation_no_update`/`trg_observation_no_delete`),这个函数把
+/// 「`CREATE TRIGGER` 到独立一行 `END`」之间认成一整条语句,其余语句的切
+/// 法与旧写法逐字节一致(照样按 `;` 切,空白语句照样跳过)。
+fn schema_statements(cleaned: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut pending: Option<String> = None;
+    for part in cleaned.split(';') {
+        match pending.take() {
+            Some(mut acc) => {
+                acc.push(';');
+                acc.push_str(part);
+                if ends_with_end_keyword(&acc) {
+                    statements.push(acc);
+                } else {
+                    pending = Some(acc);
+                }
+            }
+            None => {
+                if part.trim().is_empty() {
+                    continue;
+                }
+                if starts_with_create_trigger(part) && !ends_with_end_keyword(part) {
+                    pending = Some(part.to_string());
+                } else {
+                    statements.push(part.to_string());
+                }
+            }
+        }
+    }
+    // 如果整份 schema.sql 写歪了(`CREATE TRIGGER` 没有配对的 `END`),把
+    // 剩下的残片原样交给 sqlx 执行——它会报一个真实的 SQL 语法错误,而不
+    // 是在这里默默吞掉,让开库流程假装成功。
+    if let Some(acc) = pending {
+        if !acc.trim().is_empty() {
+            statements.push(acc);
+        }
+    }
+    statements
+}
+
+fn starts_with_create_trigger(stmt: &str) -> bool {
+    stmt.trim_start()
+        .to_ascii_uppercase()
+        .starts_with("CREATE TRIGGER")
+}
+
+fn ends_with_end_keyword(stmt: &str) -> bool {
+    stmt.split_whitespace()
+        .last()
+        .map(|w| w.eq_ignore_ascii_case("END"))
+        .unwrap_or(false)
+}
+
 fn now_unix() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
 }
@@ -156,10 +212,10 @@ impl IssueStore for SqliteStore {
         let Some(r) = row else {
             return Ok(None);
         };
-        // `active_stage` 是 INTEGER(1..5,design §2.1)——不同于 `handoff`
-        // 表 from_stage/to_stage 那两列的 TEXT 表示,这里走
-        // `StageKind::index()`/`from_index()` 那条既有的 1-based 编号
-        // 互转,不经 `parse_stage_kind`(那个是给 TEXT 列用的)。
+        // `active_stage` 是 INTEGER(1..5,design §2.1),与 `handoff` 表
+        // from_stage/to_stage 那两列同一制式(2026-08-11 主控裁决统一
+        // INTEGER 后),都走 `StageKind::index()`/`from_index()` 这条
+        // 1-based 编号互转。
         let active_stage_num: Option<i64> = r.get("active_stage");
         let active_stage = active_stage_num
             .map(|n| {
@@ -705,9 +761,12 @@ impl HandoffStore for SqliteStore {
     ) -> Result<HandoffId> {
         // 原子操作:插一行交棒流水 + 把 project.active_stage 推到 `to`
         // ——原样搬 v1 `handoff_stage` 的语义(v1 `crates/bw-store/src/
-        // sqlite.rs` 约 1248 行),形态上两处都改了列类型(v1 的
-        // active_stage 是 TEXT,这里是 INTEGER;handoff.from_stage/
-        // to_stage 仍是 TEXT,逐字移植未变)。
+        // sqlite.rs` 约 1248 行,原子写这个形状本身不变)。**列类型不是
+        // 逐字移植**:v1 的 `handoff.from_stage`/`to_stage` 是 TEXT,这里
+        // 是 INTEGER,与 `project.active_stage`/`issue.stage` 同一制式,
+        // 走 `StageKind::index()`——2026-08-11 主控裁决,理由见
+        // schema.sql `handoff` 表上方的注记(设计稿原文的 TEXT 口径与
+        // §2.1 自相矛盾,会让 §3.2 第⑤条查询假绿式恒空)。
         let mut tx = self.pool.begin().await?;
         let id = HandoffId::new();
         sqlx::query(
@@ -716,8 +775,8 @@ impl HandoffStore for SqliteStore {
         )
         .bind(id.uuid().to_string())
         .bind(project_id.uuid().to_string())
-        .bind(stage_kind_text(from))
-        .bind(stage_kind_text(to))
+        .bind(from.index() as i64)
+        .bind(to.index() as i64)
         .bind(risky as i64)
         .bind(note)
         .bind(at)
@@ -742,8 +801,11 @@ impl HandoffStore for SqliteStore {
         .await?;
         rows.iter()
             .map(|r| {
-                let from_text: String = r.get("from_stage");
-                let to_text: String = r.get("to_stage");
+                // INTEGER(1..5),同 `project.active_stage`/`issue.stage`
+                // ——2026-08-11 主控裁决(见 handoff_stage 上方注记),不
+                // 经 TEXT 互转。
+                let from_num: i64 = r.get("from_stage");
+                let to_num: i64 = r.get("to_stage");
                 let risky_num: i64 = r.get("risky");
                 Ok(HandoffRow {
                     id: parse_uuid(&r.get::<String, _>("id"), HandoffId::from_uuid)?,
@@ -751,8 +813,12 @@ impl HandoffStore for SqliteStore {
                         &r.get::<String, _>("project_id"),
                         ProjectId::from_uuid,
                     )?,
-                    from_stage: parse_stage_kind(&from_text)?,
-                    to_stage: parse_stage_kind(&to_text)?,
+                    from_stage: StageKind::from_index(from_num as u8).ok_or_else(|| {
+                        StoreError::Other(format!("bad handoff.from_stage {from_num:?}"))
+                    })?,
+                    to_stage: StageKind::from_index(to_num as u8).ok_or_else(|| {
+                        StoreError::Other(format!("bad handoff.to_stage {to_num:?}"))
+                    })?,
                     risky: risky_num != 0,
                     note: r.get("note"),
                     created_at: r.get("created_at"),

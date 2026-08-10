@@ -12,6 +12,13 @@
 //! 3. 再造一次同一个 issue 的工作树(幂等复用)→ 必须返回同一个路径、不
 //!    报错、不产生第二棵工作树(`git worktree list` 读回条数不变)。
 //! 4. 造第二个 issue 的工作树 → 与第一个各自独立、互不干扰。
+//! 5. **供给只造不删,升级成断言**(评审 task-s5a-review.md Important-1
+//!    附带的 Minor-6):前四步全跑完、调用早已返回、局部变量早就出了作用
+//!    域之后,重新读回三个路径——仍然存在。再扫一遍 `bw-workspace` 的
+//!    源码,断言公开面上没有任何看起来像删除的函数、没有任何 `impl
+//!    Drop`(v1 那个「作用域结束自动删」的守卫如果被加回来,一定会在这
+//!    两处至少露一次面)。突变自证:临时在 `provision.rs` 里加一个
+//!    `pub fn remove_worktree(...)` 或 `impl Drop for X`,这一节必须变红。
 //!
 //! **供给只造不删**(design §6.3,主控裁决 #12 附带确认):本指挥器造出来
 //! 的主工作区与工作树跑完**不删**,路径打印出来给人手工复核——这不是遗
@@ -55,6 +62,79 @@ fn clear_stale_dirs(current: &Path) {
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
+}
+
+/// 「删除语义」的疑似关键字——用来扫 `bw-workspace/src` 的公开函数名。这份
+/// 清单只是「看起来像删除」的字面猜测,不是穷举;它的价值不在覆盖所有可能
+/// 的命名,而在于给 v1 那种 `remove_worktree`/`delete_*`/`cleanup_*` 式的
+/// 命名一个会被当场拦下的靶子——真加回一个自动清理函数,几乎不可能绕开
+/// 这几个词全部。
+const DELETE_LIKE_KEYWORDS: &[&str] = &[
+    "remove", "delete", "destroy", "cleanup", "clean_up", "purge", "teardown", "rm_",
+];
+
+/// 扫 `bw-workspace/src` 下所有 `.rs` 文件,断言:①公开面上(`pub fn`/
+/// `pub async fn`)没有任何函数名沾上「删除语义关键字」;②没有任何
+/// `impl Drop`(v1 那个「作用域结束自动删工作树」的守卫就是靠这个)。
+/// 返回发现的问题列表——空列表 = 断言通过。
+///
+/// **为什么是源码扫描,不是运行期调用**:「crate 公开面上不存在删除函
+/// 数」这件事本身没有运行期行为可触发——它是一个「这个符号存在不存在」
+/// 的静态事实。设计稿 §7.1 第 6 节已经在用同一手法(全库搜索,断言编排层
+/// 没有第二条写「已完成」的路径),这里是同一条老规矩的又一次应用。
+/// **突变自证**:临时在 `src/provision.rs` 里加一行 `pub fn
+/// remove_worktree(...)` 或 `impl Drop for Foo`,这个函数必须把它扫出来。
+fn scan_no_delete_surface(src_dir: &Path) -> Vec<String> {
+    let mut findings = Vec::new();
+    let mut stack = vec![src_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                findings.push(format!("{}: 读取失败,无法扫描", path.display()));
+                continue;
+            };
+            for (lineno, line) in content.lines().enumerate() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("impl Drop") {
+                    findings.push(format!(
+                        "{}:{}: 出现 `impl Drop`(v1 那个「作用域结束自动删工作树」的守卫就是\
+                         靠这个实现的——供给只造不删,这个 crate 不该有任何 Drop 清理)",
+                        path.display(),
+                        lineno + 1
+                    ));
+                }
+                let is_pub_fn =
+                    trimmed.starts_with("pub fn ") || trimmed.starts_with("pub async fn ");
+                if is_pub_fn {
+                    if let Some((_, after_fn)) = trimmed.split_once("fn ") {
+                        let name = after_fn.split('(').next().unwrap_or("").trim();
+                        let lower = name.to_lowercase();
+                        for kw in DELETE_LIKE_KEYWORDS {
+                            if lower.contains(kw) {
+                                findings.push(format!(
+                                    "{}:{}: 公开函数 `{name}` 的名字含疑似删除语义关键字 `{kw}`",
+                                    path.display(),
+                                    lineno + 1
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    findings
 }
 
 async fn git_stdout(dir: &Path, args: &[&str]) -> Option<String> {
@@ -231,6 +311,36 @@ async fn main() -> ExitCode {
         eprintln!(
             "ASSERT FAILED: 第二棵工作树分支应为 {expected_second_branch:?},实得 {second_branch:?}"
         );
+        all_ok = false;
+    }
+    println!();
+
+    println!("== 4 · 供给只造不删,升级成断言(不再只是文档口径)==");
+    // 调用早就返回了,局部变量也早就"出了作用域"意义上该被清理的时间点
+    // (如果这里真有一个 v1 式的 Drop 守卫,它此刻应该已经删过了)——现在
+    // 再读一次,路径应该原样还在。
+    if main_workspace.exists() && worktree_path.exists() && second_worktree.exists() {
+        println!("  ✓ 三个路径(主工作区 + 两棵 issue 工作树)全部原样还在,没有被任何自动清理动过");
+    } else {
+        eprintln!(
+            "ASSERT FAILED: 供给只造不删——三个路径都应该还在,实得 main={} #42={} #7={}",
+            main_workspace.exists(),
+            worktree_path.exists(),
+            second_worktree.exists()
+        );
+        all_ok = false;
+    }
+    let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let findings = scan_no_delete_surface(&src_dir);
+    if findings.is_empty() {
+        println!(
+            "  ✓ 源码扫描 {}:公开面上没有疑似删除函数,也没有 impl Drop",
+            src_dir.display()
+        );
+    } else {
+        for f in &findings {
+            eprintln!("ASSERT FAILED: {f}");
+        }
         all_ok = false;
     }
     println!();

@@ -32,13 +32,20 @@
 //!   的 `metric` 表消费。这不是移植件,是新写的归一逻辑——落在这里而不
 //!   是 `bw-store`,是因为它只需要已解析好的 `MetricsFile`,不碰任何存
 //!   储层类型,`bw-store` 因此不需要为了消费它反过来依赖这个 crate。
+//! - [`metrics_lenient`] —— next 切片五-1 修复轮新写(评审 Important-4):
+//!   `metrics_file::MetricsFile.north_star` 不是 `Option`,`.bw/metrics.toml`
+//!   缺 `[north_star]` 一节时移植件会整份解析失败。这个文件在移植件外
+//!   面单独包一层,`north_star` 缺节时如实降级为 `None`,让滞后/引领照
+//!   常同步——移植件本体(`metrics_file.rs`)零改写。
 
 pub mod evidence;
 pub mod git_support;
 pub mod metric_shape;
 pub mod metrics_file;
+pub mod metrics_lenient;
 pub mod provision;
 
 pub use git_support::{commit_initial, git_in, stage_commit_push, ProvisionError};
-pub use metric_shape::{flatten, FlatMetricDef, MetricTier};
+pub use metric_shape::{flatten, flatten_lenient, FlatMetricDef, MetricTier};
+pub use metrics_lenient::{read_lenient, LenientMetricsFile};
 pub use provision::{issue_branch, provision_issue_worktree};

@@ -533,19 +533,8 @@ pub trait HandoffStore: Send + Sync {
     async fn list_handoffs(&self, project_id: ProjectId) -> Result<Vec<HandoffRow>>;
 }
 
-pub(crate) fn stage_kind_text(k: StageKind) -> &'static str {
-    match k {
-        StageKind::Prototype => "prototype",
-        StageKind::Build => "build",
-        StageKind::Optimize => "optimize",
-        StageKind::Growth => "growth",
-        StageKind::Ops => "ops",
-    }
-}
-
-pub(crate) fn parse_stage_kind(s: &str) -> Result<StageKind> {
-    StageKind::ALL
-        .into_iter()
-        .find(|k| stage_kind_text(*k) == s)
-        .ok_or_else(|| StoreError::Other(format!("bad stage kind {s:?}")))
-}
+// next 切片五-1 修复轮:`stage_kind_text`/`parse_stage_kind`(TEXT↔StageKind
+// 互转)随 `handoff.from_stage`/`to_stage` 改成 INTEGER 一起删掉——它们唯一
+// 的调用点就是这两列,统一走 `StageKind::index()`/`from_index()` 之后这两
+// 个函数变成死代码。`CLAUDE.md`「不为向后兼容留旧路径」:没有别的调用点
+// 要留,就不留一个没人用的兼容层。
