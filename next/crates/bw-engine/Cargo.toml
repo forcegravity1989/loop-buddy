@@ -8,6 +8,14 @@ rust-version.workspace = true
 
 [dependencies]
 bw-core = { path = "../bw-core" }
+# next 切片三C(design-s3-agentcli.md §1.1 裁决):agentcli 层落在 bw-engine
+# 里,不新开 crate;它要实现 `bw_connector::caps::Execute` 并挂进同一份注册
+# 表契约,因此需要这条依赖。方向 bw-engine → bw-connector → bw-core,单向,
+# 不循环(bw-connector 不反向依赖 bw-engine)。`default-features = false`:
+# agentcli 只用得到契约类型层(`contract`/`caps`/`registry`,均不在任何
+# feature 门后面),gh/codehub/script 三家适配器 feature 用不上,不蹭它们的
+# 默认打开。
+bw-connector = { path = "../bw-connector", default-features = false }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

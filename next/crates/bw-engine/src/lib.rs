@@ -20,6 +20,9 @@ pub enum ExecError {
     Failed(String),
 }
 
+// agentcli 层(next 切片三C/D,design-s3-agentcli.md §1)。落点定案:不新开
+// crate,装在这里(PTY 依赖已经在 bw-engine)。见模块文档。
+pub mod agentcli;
 pub mod evidence;
 // 原有的 `#[allow(dead_code)]` 豁免(macOS 曾经走 osascript 分支,不引用
 // `InteractiveCliExecutor::timeout`/`::await_child`,触发 dead_code)在

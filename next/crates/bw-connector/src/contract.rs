@@ -77,7 +77,12 @@ impl CapabilitySet {
 /// 出问题时能把「界面上这条红」和「当时那次 gh 调用」对上。
 ///
 /// 内部字段私有:构造只走 [`RequestId::new`],不给外部塞自造的 uuid。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// **2026-08-10(切片三C)补 `Hash`**:agentcli 层的会话表
+/// (`bw-engine::agentcli::session::SessionTable`)要拿它当 `HashMap` 的键
+/// (design-s3-agentcli.md §1.2)。只加 derive,不改字段、不改语义——不算
+/// 契约形状变更,不撞 [`PROTOCOL`]。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RequestId(uuid::Uuid);
 
 impl RequestId {

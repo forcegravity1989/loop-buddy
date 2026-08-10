@@ -84,10 +84,33 @@ pub struct TuiAgentConfig {
     /// session_id, `build_resume_plan` uses this; when not, it falls back to
     /// `resume_flag` (`--continue`).
     pub resume_id_flag: &'static str,
-    pub supported: bool,
+
+    // ── next 切片三C(design-s3-agentcli.md §5.2):原来写死在
+    // `build_startup_plan`/`build_resume_plan` 函数体里的三处 claude 专属
+    // 字面量,包一层搬进这一行——第二家 CLI 若旗标不同名,加一行就够了,不
+    // 用再改函数体。──
+    /// 系统提示词注入旗标(claude:`--append-system-prompt`,2026-08-10 核
+    /// `claude --help` 属实)。`None` = 这家不支持系统提示词注入——复利块
+    /// 只能走位置 prompt,如实降级,绝不假装注入了。
+    pub system_prompt_flag: Option<&'static str>,
+    /// 由 BW 指派会话号的旗标(claude:`--session-id`,同日核对属实;
+    /// next 切片三-1 已用一次真实交互式会话验证过这个旗标在非 `--print`
+    /// 模式下真被接受,见任务报告的实测小节)。`None` = 这家不能指派会话
+    /// 号,只能靠上游目录反查(`agentcli::session::discover_sessions`)兜底。
+    pub session_id_flag: Option<&'static str>,
+    /// 起手就禁掉的工具列表。**如实口径:这是篱笆不是墙**(v1 原注释已
+    /// 写明:禁得掉 `gh pr merge`,禁不掉等价的其它写法),真约束在系统
+    /// 提示词与 `bw-core` 状态机。空切片 = 这家没有配对应的禁用规则。
+    pub deny_tools: &'static [&'static str],
+
+    /// 原字段名 `supported`,next 切片三C 改名 + 语义钉死:**只有在本机
+    /// 真跑过 `--help` 逐项核对过参数的行才准置 `true`**。「登记了」≠
+    /// 「能跑」,与连接器那条「装了≠连上了」同一口径——`build_startup_plan`/
+    /// `build_resume_plan` 拒绝为 `verified = false` 的行装配计划。
+    pub verified: bool,
 }
 
-/// The claude CLI. `supported = true` — we can really spawn it.
+/// The claude CLI. `verified = true` — we can really spawn it.
 pub static CLAUDE: TuiAgentConfig = TuiAgentConfig {
     slug: "claude",
     detect_cmd: "claude --version",
@@ -110,11 +133,19 @@ pub static CLAUDE: TuiAgentConfig = TuiAgentConfig {
     // session by id (interactive, no -p, no new prompt). The session_id is
     // captured from the SessionStart hook payload and stored on the issue.
     resume_id_flag: "--resume",
-    supported: true,
+    // next 切片三C:2026-08-10 核 `claude --help` 属实。
+    system_prompt_flag: Some("--append-system-prompt"),
+    // next 切片三-1 已用一次真实交互式会话验证过(见任务报告):BW 自己
+    // 指派一个 uuid,claude 真的用它落 session jsonl,不是仅登记未核对。
+    session_id_flag: Some("--session-id"),
+    deny_tools: &["Bash(gh pr merge)"],
+    verified: true,
 };
 
-/// Cursor placeholder. Not supported in Phase 1 — calling
-/// [`build_startup_plan`] with this config returns an honest error.
+/// Cursor placeholder. Not verified in Phase 1 — calling
+/// [`build_startup_plan`] with this config returns an honest error(design
+/// §5.3:本机没装 cursor,`which cursor` 未找到,参数没法核对,不许标
+/// `verified: true` 假装能跑)。
 pub static CURSOR: TuiAgentConfig = TuiAgentConfig {
     slug: "cursor",
     detect_cmd: "cursor --version",
@@ -123,7 +154,10 @@ pub static CURSOR: TuiAgentConfig = TuiAgentConfig {
     yolo_flag: "",
     resume_flag: "--continue",
     resume_id_flag: "--resume",
-    supported: false,
+    system_prompt_flag: None,
+    session_id_flag: None,
+    deny_tools: &[],
+    verified: false,
 };
 
 // ─── LaunchPlan ────────────────────────────────────────────────────────
@@ -150,7 +184,7 @@ pub struct LaunchPlan {
 
 /// Build the startup plan for an interactive agent session.
 ///
-/// For claude (`supported = true`):
+/// For claude (`verified = true`):
 /// `claude --append-system-prompt <system_prompt> <position_prompt>
 ///  --dangerously-skip-permissions --disallowedTools "Bash(gh pr merge)"`
 ///
@@ -169,7 +203,7 @@ pub fn build_startup_plan(
     system_prompt: &str,
     workspace_cwd: &Path,
 ) -> Result<LaunchPlan, ExecError> {
-    if !agent.supported {
+    if !agent.verified {
         return Err(ExecError::Failed(format!(
             "TUI agent '{}' 暂不支持(Phase 1 仅 claude)",
             agent.slug
@@ -193,11 +227,17 @@ pub fn build_startup_plan(
     }
 
     let mut args = Vec::with_capacity(8);
-    // System prompt — appended to claude's default system prompt. Caller
-    // assembles bridge (project context + 铁律 + 技能契约) + 技能正文 +
-    // 蒸馏/目录块 into this one string.
-    args.push("--append-system-prompt".to_string());
-    args.push(system_prompt.to_string());
+    // next 切片三C(design §5.2):系统提示词旗标从写死的字面量改读
+    // `agent.system_prompt_flag`。`None`(这家不支持)或 `system_prompt`
+    // 为空(调用方没给任何内容,§6.2「空就是空」)都不推这两个 arg——如实
+    // 降级,绝不假装注入了。caller 组装的内容不变:bridge(项目上下文+
+    // 铁律+技能契约)+ 技能正文 + 蒸馏/目录块。
+    if let Some(flag) = agent.system_prompt_flag {
+        if !system_prompt.is_empty() {
+            args.push(flag.to_string());
+            args.push(system_prompt.to_string());
+        }
+    }
     // Positional `prompt` — the first user message, auto-submitted
     // (`submit_prompt: true` sends Enter). Caller passes issue 标题+描述
     // (the requirement); the skill methodology lives in the system prompt
@@ -210,14 +250,15 @@ pub fn build_startup_plan(
     // and run commands without per-action prompts (the user is watching
     // the terminal and can intervene at any time).
     args.push(agent.yolo_flag.to_string());
-    // Deny `gh pr merge` (验收 = 人 merge, 铁律). This is a partial fence,
-    // not a wall: it doesn't cover `codehub-cli mr merge` (the CodeHub
-    // equivalent) and a deny list under `--dangerously-skip-permissions` is
-    // only as strong as the CLI's own enforcement. 「合并永远是人」的真正
-    // 约束在衔接层 system prompt 里说清楚(`build_bridge_system_prompt`),
-    // 且 buddy 侧 Done 入边由状态机守死 —— 别把这两行当成拦得住的保证。
-    args.push("--disallowedTools".to_string());
-    args.push("Bash(gh pr merge)".to_string());
+    // next 切片三C(design §5.2):起手禁掉的工具改读 `agent.deny_tools`——
+    // 「篱笆不是墙」,真约束在衔接层 system prompt 与 `bw-core` 状态机(见
+    // `TuiAgentConfig::deny_tools` 文档)。claude 行今天只有一条
+    // `Bash(gh pr merge)`,循环产出与原来手写的两行字面量逐字节一致
+    // (合并永远是人,铁律)。
+    for tool in agent.deny_tools {
+        args.push("--disallowedTools".to_string());
+        args.push((*tool).to_string());
+    }
 
     Ok(LaunchPlan {
         binary: agent.launch_cmd.to_string(),
@@ -256,7 +297,7 @@ pub fn build_resume_plan(
     session_id: Option<&str>,
     workspace_cwd: &Path,
 ) -> Result<LaunchPlan, ExecError> {
-    if !agent.supported {
+    if !agent.verified {
         return Err(ExecError::Failed(format!(
             "TUI agent '{}' 暂不支持(Phase 1 仅 claude)",
             agent.slug
@@ -278,7 +319,7 @@ pub fn build_resume_plan(
 
     // --resume <session_id> (precise) or --continue (fallback). No positional
     // prompt (the session continues from where it left off). Same permission
-    // posture as the first run + deny `gh pr merge` (验收 = 人 merge, 铁律).
+    // posture as the first run + deny `gh pr merge` (验收 = 人 merge, 铁律)。
     let mut args = Vec::with_capacity(5);
     if let Some(id) = session_id.filter(|s| !s.is_empty()) {
         args.push(agent.resume_id_flag.to_string());
@@ -287,8 +328,13 @@ pub fn build_resume_plan(
         args.push(agent.resume_flag.to_string());
     }
     args.push(agent.yolo_flag.to_string());
-    args.push("--disallowedTools".to_string());
-    args.push("Bash(gh pr merge)".to_string());
+    // next 切片三C(design §5.2):同 `build_startup_plan`,读
+    // `agent.deny_tools` 而不是写死的字面量——两处装配出同一条 claude 行的
+    // 禁用工具清单,不会因为改了一处漏改另一处而分叉。
+    for tool in agent.deny_tools {
+        args.push("--disallowedTools".to_string());
+        args.push((*tool).to_string());
+    }
 
     Ok(LaunchPlan {
         binary: agent.launch_cmd.to_string(),
@@ -319,6 +365,13 @@ pub const CONSULTATION_APPEND_PROMPT: &str = "\
 /// [`build_resume_plan`] so InProgress 交付不注入咨询规则。
 ///
 /// Honest posture: this is a behavioural convention, not a hard sandbox.
+///
+/// **next 切片三C 未动这里的 `--append-system-prompt` 字面量**——design
+/// §6.4 明文这条路径「保留移植原样、不接线」(要活的状态才谈得上,状态要
+/// 存储,存储是切片四/五的事)。三处字面量的提取范围钉在
+/// `build_startup_plan`/`build_resume_plan`(design §5.1 原话点名的
+/// `build_startup_plan`),这里不是「漏改」,是范围裁剪:接线那天(要用
+/// `agent.system_prompt_flag`)再一并处理,不在这个不接线的路径上先改一半。
 pub fn build_consultation_resume_plan(
     agent: &TuiAgentConfig,
     session_id: Option<&str>,

@@ -63,6 +63,7 @@ name = "bw-engine"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "bw-connector",
  "bw-core",
  "conpty-oxide",
  "libc",
