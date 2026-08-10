@@ -161,14 +161,7 @@ pub trait IssueOps: Send + Sync {
     /// 门禁检查结果。v1 两家都没有对应实现——默认如实返回「不支持」,谁先
     /// 补上谁 override,**不给假空列表**(空列表会被读成「检查全过」)。
     async fn checks(&self, cx: &CallCtx, _number: u32) -> ConnResult<Vec<CheckRun>> {
-        Err(crate::contract::Fail {
-            req: cx.req,
-            took: std::time::Duration::ZERO,
-            err: crate::contract::ConnError::Unsupported {
-                cap: Capability::IssueOps,
-                op: "checks",
-            },
-        })
+        crate::contract::unsupported(cx, Capability::IssueOps, "checks")
     }
 }
 

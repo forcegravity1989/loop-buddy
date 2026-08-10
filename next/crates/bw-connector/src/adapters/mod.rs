@@ -28,6 +28,9 @@ pub mod script;
 /// 函数,不是连接器,`ConnectorKind` 里没有、也不该有一个泛化的
 /// `GitRepo`——只有 `GithubRepo`/`CodehubRepo` 这两个具体厂商的仓连接器
 /// 种类会走到这个工厂里。
+///
+/// **不校验 `entry.config` 与 `kind` 配套**(config 现阶段整体未被 gh/codehub
+/// 消费,见 [`crate::contract::ConfigRef`] 文档);错配登记不会报错。
 pub fn from_entry(
     entry: &crate::contract::ConnectorEntry,
 ) -> Option<std::sync::Arc<dyn crate::caps::Connector>> {

@@ -251,6 +251,10 @@ impl OpClass {
 ///
 /// pub(跨 crate 可见,不是 `pub(crate)`):将来 `bw-engine` 的 agentcli 适配器
 /// (切片三)也要用同一份超时/取消实现,不允许各自抄一份。
+///
+/// **2026-08-10 现状**:gh/codehub 两家收编自 v1 的冻结上游函数体,均未设
+/// `.kill_on_drop(true)`——取消/超时对它们只切断 BW 侧等待,子进程可能续跑到
+/// 自然结束;新写的适配器(agentcli 等)必须兑现本义务。
 pub async fn guarded<T, F>(cx: &CallCtx, op: OpClass, fut: F) -> ConnResult<T>
 where
     F: std::future::Future<Output = Result<T, ConnError>>,
@@ -279,11 +283,10 @@ where
 
 /// 直接构造一个「不支持」的失败结果,**不经过 [`guarded`]**——这类失败是
 /// 本地决定(连接器压根没实现这个操作),不涉及外呼,不需要计时/取消这两条
-/// 边。与 [`crate::caps::IssueOps::checks`] 默认实现同一手法(那里手写了一次
-/// 因为它是 trait 默认方法、写在 `caps.rs`,不方便反过来依赖 `contract.rs`
-/// 的私有细节);这里收成一个共享小工具,给切片二B 起「上游真没有对应能力」
-/// 的分支复用(如 codehub 没有 `issue_state`/`close_issue`/`change_state`
-/// 的上游函数,两家都没有脚本采集能力)。
+/// 边。[`crate::caps::IssueOps::checks`] 的默认实现也直接调这个函数——共享
+/// 一处,不各自手写;给切片二B 起「上游真没有对应能力」的分支复用(如
+/// codehub 没有 `issue_state`/`close_issue`/`change_state` 的上游函数,
+/// 两家都没有脚本采集能力)。
 pub fn unsupported<T>(cx: &CallCtx, cap: Capability, op: &'static str) -> ConnResult<T> {
     Err(Fail {
         req: cx.req,
@@ -323,6 +326,10 @@ pub struct ProjectBinding {
 pub enum ConfigRef {
     /// 靠这个 CLI 自己的登录态(`gh auth login` / `codehub-cli auth login`)。
     /// 值就是 PATH 上的可执行名。BW 一个字节的凭证都不碰。
+    ///
+    /// **2026-08-10 现状**:gh/codehub 两家适配器目前不消费 `bin`(可执行名
+    /// 硬编码在冻结上游体内为 `gh` / `codehub-cli`);`bin` 字段对它们无效,
+    /// 将来解冻上游或新适配器接入时才生效。
     CliLogin { bin: String },
     /// 采集脚本:相对工作区根的脚本路径 + 运行命令 + 输出文件。三个字段直接
     /// 对应 `.bw/connectors.toml` 的 script/command/output。

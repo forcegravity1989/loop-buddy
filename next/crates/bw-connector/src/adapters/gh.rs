@@ -2,6 +2,10 @@
 //! `crates/bw-engine/src/github.rs`(见 `crate::upstream::github`,函数体零
 //! 改写)——这里只是薄包装:trait 实现 + [`guarded`] 接线 + 错误/状态归一化。
 //! design-s2-connector.md §5「收编映射:v1 github.rs(gh)」逐条对照。
+//!
+//! **2026-08-10 现状**:本文件收编的冻结上游函数体均未设 `.kill_on_drop(true)`
+//! ——取消/超时对它只切断 BW 侧等待,子进程可能续跑到自然结束;新写的适配器
+//! (agentcli 等)必须兑现本义务(见 [`crate::contract::guarded`] 文档)。
 
 use std::sync::Arc;
 
@@ -91,6 +95,11 @@ impl Connector for GhConnector {
 /// 分类器拦下,无法安全拿到可验证的真实文案。按裁决 #6「映射不到的落
 /// `UpstreamRejected` 原文透传」处理,不落未经验证的字符串规则——诚实优先
 /// 于覆盖率。
+///
+/// **已知归档偏差**:上游 `GithubError` 只有两档,解析失败(如无法从 gh
+/// 输出解析 PR 号)混在 `Command` 档里,因此 github 侧的解析失败目前落
+/// `UpstreamRejected` 而非 `Unparsable`——分诊时注意。codehub 侧上游有独立
+/// `Parse` 档,映射正确无此偏差。
 fn classify(err: up::GithubError) -> ConnError {
     match err {
         up::GithubError::NotInstalled => ConnError::NotConnected("gh 未安装或不在 PATH".into()),
@@ -98,6 +107,8 @@ fn classify(err: up::GithubError) -> ConnError {
     }
 }
 
+/// **比 v1 消费侧(`eq_ignore_ascii_case`)严格**:大小写变体落 `Unparsable`
+/// 而非静默归类——有意收紧,防静默错归。
 fn normalize_issue_state(raw: &str) -> Result<IssueState, ConnError> {
     match raw {
         "OPEN" => Ok(IssueState::Open),
@@ -108,6 +119,8 @@ fn normalize_issue_state(raw: &str) -> Result<IssueState, ConnError> {
     }
 }
 
+/// **比 v1 消费侧(`eq_ignore_ascii_case`)严格**:大小写变体落 `Unparsable`
+/// 而非静默归类——有意收紧,防静默错归。
 fn normalize_change_state(raw: &str) -> Result<ChangeState, ConnError> {
     match raw {
         "OPEN" => Ok(ChangeState::Open),
@@ -167,6 +180,10 @@ impl IssueOps for GhConnector {
     /// design §5:`create_issue` → `IssueOps::create_issue`。上游没有
     /// read-before-write(按标题查重不可靠),`WriteOutcome` 恒
     /// `Created`——如实标注的不对称(主控裁决 #4,`idem` 只作日志追溯)。
+    ///
+    /// **无 read-before-write 锚点**(按标题查重不可靠,裁决 #4):超时后带
+    /// 同一 `IdemKey` 重试会在上游重复建单——`IdemKey` 对本方法仅作日志
+    /// 追溯,不防重。
     async fn create_issue(
         &self,
         cx: &CallCtx,

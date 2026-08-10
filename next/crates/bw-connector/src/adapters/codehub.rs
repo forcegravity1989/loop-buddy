@@ -9,6 +9,10 @@
 //! 也只列了 `create_issue`/`create_mr`/`open_mr_for_branch`/`merge_mr`
 //! 四个 IssueOps 方法,没提这三个)。`IssueOps::issue_state`/`close_issue`/
 //! `change_state` 在这里如实返回 `Unsupported`,不假装有对应上游实现。
+//!
+//! **2026-08-10 现状**:本文件收编的冻结上游函数体均未设 `.kill_on_drop(true)`
+//! ——取消/超时对它只切断 BW 侧等待,子进程可能续跑到自然结束;新写的适配器
+//! (agentcli 等)必须兑现本义务(见 [`crate::contract::guarded`] 文档)。
 
 use std::sync::Arc;
 
@@ -156,6 +160,10 @@ impl Collect for CodehubConnector {
 impl IssueOps for CodehubConnector {
     /// design §5:`create_issue` → `IssueOps::create_issue`。同 github:
     /// 无 read-before-write,`WriteOutcome` 恒 `Created`(主控裁决 #4)。
+    ///
+    /// **无 read-before-write 锚点**(按标题查重不可靠,裁决 #4):超时后带
+    /// 同一 `IdemKey` 重试会在上游重复建单——`IdemKey` 对本方法仅作日志
+    /// 追溯,不防重。
     async fn create_issue(
         &self,
         cx: &CallCtx,
