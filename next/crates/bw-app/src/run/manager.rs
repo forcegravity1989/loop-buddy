@@ -566,6 +566,13 @@ impl Loop {
     /// 成功 → 数据库如实记下「失败」;补写也失败 → 数据库那一行还是
     /// `ended_at IS NULL`(要等 `reap_on_restart` 收拾),但至少这个进程
     /// 不会再把这件活/这个工作区锁死。
+    ///
+    /// **E2E 未覆盖,见 plan/23-opc-stitching-rebuild.md §10 第 12
+    /// 条**:这三条分支要真的被走到,前提是存储调用本身出错——
+    /// `run_races` 指挥器背后是真实 `SqliteStore`,正常路径下不会自己报
+    /// 错,没有故障注入机制就造不出这个前提。`run_races` 里目前没有一
+    /// 条断言会经过这个函数体(§10 第 12 条已记账,不是本函数自己的假
+    /// 装)。
     async fn honest_close_on_storage_error(&mut self, run: RunId, context: impl std::fmt::Display) {
         let at = now_unix();
         let detail = format!("[run-manager] 存储调用出错,已尽力标成失败:{context}");

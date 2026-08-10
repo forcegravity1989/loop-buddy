@@ -551,15 +551,20 @@ async fn main() -> ExitCode {
     // 症状(169 静静掉到 165)。条数是 `--n`/`--rounds` 的确定函数(R1 是
     // 聚合断言,与 `--n` 无关;R3 每轮 6 条,与 `--rounds` 成正比;其余
     // 各节条数固定,常绿参数下逐节实测核对过):
-    //   R1(6) + R2(3) + R3(6×rounds) + R4(15) + R5(15) + R6(7)
+    //   R1(6) + R2(3) + R3(6×rounds) + R4(15) + R5(19) + R6(7)
     //   + 降级为咨询(11) + 同工作区串线(1) + 完成永远人点(2)
-    //   + sqlite 读回(10) + 存量库迁移双守卫(1) = 71 + 6×rounds
-    let expected_assertions = 71 + 6 * args.rounds;
+    //   + sqlite 读回(10) + 存量库迁移双守卫(1) = 75 + 6×rounds
+    //   （R5 从 15 变 19,切片四-2 修二新增:在 reap 之前对 ids[2]——库里
+    //   开着、但管理器 B 内存里没有的运行——调一次 `cancel`,断言其效果
+    //   +7;原本 3 条都被 reap 判成 orphaned 那半,现在 ids[2] 提前被
+    //   cancel 关门、不再算 orphaned,少了它那份 3 条子断言 -3,orphaned
+    //   计数本身也从 3 改判 2;净变化 +4,15→19。）
+    let expected_assertions = 75 + 6 * args.rounds;
     let actual_before_meta_check = total.count;
     total.check(
         actual_before_meta_check == expected_assertions,
         format!(
-            "断言条数与设计期望一致(公式 71+6×rounds,rounds={} ⇒ 期望 {expected_assertions},实得 {actual_before_meta_check};不等就说明有一整节的断言没有真的跑到)",
+            "断言条数与设计期望一致(公式 75+6×rounds,rounds={} ⇒ 期望 {expected_assertions},实得 {actual_before_meta_check};不等就说明有一整节的断言没有真的跑到)",
             args.rounds
         ),
     );
@@ -1323,6 +1328,70 @@ async fn section_r5(ctx: &Ctx) -> Ledger {
         }
     };
 
+    // 复审「修复复审」新发现 1 / 本轮简报第 1 条:评审 Important-2 的
+    // 修复(`handle_cancel` 对「库里还开着、但不在内存」的运行真做一次
+    // `close_run`,不再假报 `Ok`)此前在这份指挥器里零覆盖——panic 探针
+    // 实测过(192 条断言一次都没走到那条分支)。这里正好是「库里开着但
+    // 内存没有」这条边缘态天然成立的地方:管理器 B 刚开、内存三张表全
+    // 空,而 `ids[2]` 这条运行(管理器 A 起的、永不结束的脚本)在数据库
+    // 里仍然 `ended_at IS NULL`。在调 `reap_on_restart` **之前**对它调一
+    // 次 `cancel`,让这条分支被真的走到,断言其效果(运行被真的关门、
+    // 名额在存储层真的释放,不是打日志就当没发生过)。
+    let late_cancel = manager_b.cancel(ids[2]).await;
+    l.check(
+        late_cancel.is_ok(),
+        format!("cancel(库里开着、不在内存)返回 Ok(实得 {late_cancel:?})"),
+    );
+    match ctx.control.get_run(ids[2]).await {
+        Ok(Some(row)) => {
+            l.check(
+                row.ended_at.is_some(),
+                "cancel(不在内存)之后:ended_at 非空(真的被关过门,不是假报 Ok 却什么都没改)",
+            );
+            l.check(
+                row.state == bw_core::RunState::Canceled,
+                format!("cancel(不在内存)之后:state=canceled(实得 {:?})", row.state),
+            );
+            l.check(
+                row.end_kind == Some(bw_store::RunEndKind::Canceled),
+                format!(
+                    "cancel(不在内存)之后:end_kind=canceled(实得 {:?})",
+                    row.end_kind
+                ),
+            );
+            l.check(
+                row.settled_at.is_some(),
+                "cancel(不在内存)之后:settled_at 非空(账已结)",
+            );
+            l.check(
+                row.end_detail.contains("无法确认上游会话是否已真正停止"),
+                format!(
+                    "cancel(不在内存)之后:end_detail 如实写明未持有连接器句柄(实得 {:?})",
+                    row.end_detail
+                ),
+            );
+        }
+        other => {
+            eprintln!(
+                "ASSERT FAILED: cancel(不在内存)之后读不回运行 {:?}:{other:?}",
+                ids[2]
+            );
+            l.check(false, "cancel(不在内存)之后运行可读回");
+        }
+    }
+    // 名额真的在存储层释放了:直接查「这件活还有没有活跃交付运行」——
+    // 这条查询正是 `create_run` 撞唯一索引时用来回填「是哪一条」的同一
+    // 条(`find_live_delivery_run`,manager.rs §3.4 第二行「存储才是真正
+    // 的守卫」),不依赖任何内存缓存(管理器 B 的 `by_issue` 本来就是空
+    // 的,这条查询才是唯一有意义的证据)。
+    let slot_released = ctx.control.find_live_delivery_run(issues[2]).await;
+    l.check(
+        matches!(slot_released, Ok(None)),
+        format!(
+            "cancel(不在内存)之后:该活在存储层已无活跃交付运行,名额真释放(实得 {slot_released:?})"
+        ),
+    );
+
     let report = match manager_b.reap_on_restart().await {
         Ok(r) => r,
         Err(e) => {
@@ -1331,7 +1400,7 @@ async fn section_r5(ctx: &Ctx) -> Ledger {
         }
     };
     println!(
-        "reap_on_restart 收拾了 {} 条运行:{:?}",
+        "reap_on_restart 收拾了 {} 条运行:{:?}(ids[2] 已经在上面被 cancel 提前关门,不在这份名单里)",
         report.reaped.len(),
         report.reaped
     );
@@ -1368,8 +1437,10 @@ async fn section_r5(ctx: &Ctx) -> Ledger {
         }
     }
     l.check(
-        orphaned_count == 3,
-        format!("3 条 state=orphaned(实得 {orphaned_count})"),
+        orphaned_count == 2,
+        format!(
+            "2 条 state=orphaned(实得 {orphaned_count})——第 3 条上面已经被 cancel 提前关门(canceled),不算在 reap 的收拾范围内"
+        ),
     );
     l.check(
         finished_process_exit_count == 0,
@@ -2315,7 +2386,12 @@ async fn section_real(ctx: &Ctx, parent_dir: &std::path::Path, n: usize) -> bool
                 }
                 workspaces.insert(row.workspace.clone());
             }
-            _ => eprintln!("REAL_RUN_FAILED(读不回运行 {id:?})"),
+            // 复审「修复复审」新发现 3:此前这里只打印,不经 `Ledger`——
+            // 单靠后面的 `rows_read == known_ids.len()` 断言兜底,形态与
+            // 评审 Critical-3 治过的「打了 ASSERT FAILED 却没有登记」同
+            // 源。`Ledger::fail` 是登记失败的唯一入口(见 `Ledger::check`
+            // 文档),这里改走它,不开第二条路。
+            _ => l.fail(format!("REAL_RUN_FAILED(读不回运行 {id:?})")),
         }
     }
     l.check(
@@ -2344,7 +2420,12 @@ async fn section_real(ctx: &Ctx, parent_dir: &std::path::Path, n: usize) -> bool
     // Running(§10 第 6 条)还是已经自己跑完。
     for id in &known_ids {
         if let Err(e) = manager_real.cancel(*id).await {
-            eprintln!("REAL_RUN_FAILED(取消运行 {id:?} 失败):{e}");
+            // 复审「修复复审」新发现 3:此前只打印,只被随后的
+            // `settled_count == known_ids.len()` 间接兜住——若这条运行
+            // 恰好已经自己关门结账,`settled_count` 照样对得上,会漏掉
+            // 这次 `cancel` 调用本身的失败。改走 `l.fail`,失败只有一
+            // 个登记入口。
+            l.fail(format!("REAL_RUN_FAILED(取消运行 {id:?} 失败):{e}"));
         }
     }
     let _ = wait_for_all_closed(&ctx.control, &known_ids, Duration::from_secs(15)).await;

@@ -242,3 +242,15 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
     - **来源**:`next/crates/bw-app/src/run/manager.rs`(`Loop::by_workspace` 字段与 `handle_start` 里的检查),按 design-s4-runmanager.md §11 开放问题 5 与主控裁决 #5 的字面范围实现——裁决本身只要求「单点实现」,没有要求跨重启;`run_races` 指挥器的同工作区串线校验一节(`section_workspace_guard`)验证的正是「单进程内」这半句,没有覆盖重启后的这条空窗,如实标注不假装测过。
     - **待办**:真要补上跨重启这一半,两个方向:①在 `reap_on_restart()` 里顺带扫一遍数据库里所有还开着的运行、把 `by_workspace` 重建起来(需要 `run` 表加一条按 `workspace` 分组的查询,或者把重建塞进 `RunManager::open()` 本身而不是等显式调 `reap_on_restart`);②或者接受这条校验就是「尽力而为,不承诺跨重启」的定位,把这句话写进 `RunManager::start` 的文档注释里(目前文档没有提到这个边界)。哪个方向对,以及要不要现在就补,留给切片五接手时按真实撞上的场景定。
     - **登记日**:2026-08-10。
+
+12. **`honest_close_on_storage_error`(以及 `handle_cancel`「库里开着、不在内存」分支里的补写关门路径)缺故障注入,存储调用真出错这条分支仍是零覆盖**(登记日 2026-08-11,切片四-2 修二实施时发现,来源:独立复审 `task-s4b-review.md`「修复复审」新发现 1)
+    - **现象**:切片四-2 修 A(commit `f274bac`)新增的 `Loop::honest_close_on_storage_error`(三处调用点:`handle_start` 的回滚 / `handle_started` 的 `Ok(false)`/`Err` 分支 / `handle_observed` 的 `Err` 分支)要触发,前提是**存储调用本身出错**——`run_races` 指挥器里的存储层是真实 `SqliteStore`,正常路径下 `close_run`/`settle_run`/`mark_issue_in_progress` 不会自己报错,没有任何断言能走到这几条分支。复审用 panic 探针实测过:在 `honest_close_on_storage_error` 函数体第一行插一句 `panic!`,复跑 192 条断言全过、一次都没 panic——证明这条诚实收尾路径(评审 Important-1 的产品代码修复)修完之后仍然是零覆盖,任何回归都不会被这份指挥器发现,也造不出能让它变红的突变。`handle_cancel`「库里开着、不在内存」分支里真正调用 `close_run` 的那部分,本轮(切片四-2 修二,commit 见本条登记日当天的 next 切片四-2 修二 commit)已经用 R5 新增的 7 条断言补上覆盖(`run_races.rs` `section_r5`,reap 之前对遗留运行调一次 `cancel`),**不再计入本条缺口**;本条现在只剩 `honest_close_on_storage_error` 本体。
+    - **来源**:`next/crates/bw-app/src/run/manager.rs` `Loop::honest_close_on_storage_error`(定义于 commit `f274bac`);复审判定见 `task-s4b-review.md`「修复复审」新发现 1 与 concern 4。
+    - **待办**:需要一个能按调用次序人为报错的 store 包装做故障注入(比如包一层 `SqliteStore`,「第 N 次调用某方法就返回 `Err`」),让 `run_races` 能确定性地让 `close_run`/`mark_issue_in_progress` 在正确的时机报错,从而真的走一次这条分支,断言其收尾效果(内存三张表槽位真的释放、库里那一行如实标成失败或者保持 `ended_at=NULL` 等待下次 `reap_on_restart`)。这个故障注入机制不是本轮范围,留给下一个专门做它的任务。
+    - **登记日**:2026-08-11。
+
+13. **R6「取消后晚到的完成消息」经真实轮询链路造不出来,是设计层面的结构性局限,不是实现疏漏**(登记日 2026-08-11,切片四-2 修二实施时记账,复述独立复审对 Critical-2 的根因辨析,不改实现)
+    - **现象**:design-s4-runmanager.md §4.1 给 mock 的四行 `poll` 逻辑第一行是「被取消过 → 恒报 `Canceled`」;§3.5②/主控裁决 #6 又要求 `RunManager` 取消时打断轮询任务(`poll_cancel.cancel()` 一响,轮询任务在下一次 `select!` 立刻退出,不会再发第二条消息)。这两条设计合在一起,§4.2 R6 原文那条「取消后 300ms 才到的完成消息」——完整走轮询任务真实投递的那种晚到消息——在这份指挥器里**结构性造不出来**。`next/crates/bw-app/examples/run_races.rs` `section_r6` 现在改成直接对存储层重放一次 `close_run`(绕过 `RunManager`,`【模拟晚到】` 自我标注),把「关门只发生一次」这把守卫从零覆盖抬到有覆盖,但这条重放**不经过**轮询任务/取消令牌那条真实链路——§4.3「晚到消息的钥匙 = 运行编号」的完整链路仍然没有被证过。
+    - **来源**:独立复审 `task-s4b-review.md` `774c3cb..647bba6` 区间「修复复审」Critical-2 判定与 concern 1(该复审已认定这是「如实、合理,但需要一个记账动作」);代码注释见 `run_races.rs` `section_r6` 里紧邻 `close_run` 重放调用之前的说明段。
+    - **待办**:不是重做,是记账——将来读 design §4.2 R6 原文的人应该先看到这条登记,而不是误以为完整轮询链路验过。真要补全,需要按复审给的两条路之一动 mock:①给「取消后仍按原脚本报 `Finished`」开一个脚本开关(仅 R6 那条分支打开,自我标注),让晚到的完成消息真的经轮询任务送回;②或者接受当前的「直接重放 `close_run`」已经是最便宜、够用的覆盖方式,只补齐这条记账即可,不必再动 mock。哪个方向对,留给下一个真正需要验证完整轮询链路的任务定。
+    - **登记日**:2026-08-11。
