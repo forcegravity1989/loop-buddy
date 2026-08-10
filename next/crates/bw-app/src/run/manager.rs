@@ -102,6 +102,13 @@ impl RunManager {
         self.call(|reply| Cmd::Cancel { run, reply }).await
     }
 
+    /// 降级为咨询:放开这件活的交付名额,会话不杀、工作区不清(design
+    /// §3.5)。返回 `true` = 这次真降级了;`false` = 没什么可降的(幂
+    /// 等)。
+    pub async fn demote_to_consultation(&self, run: RunId) -> Result<bool, RunError> {
+        self.call(|reply| Cmd::Demote { run, reply }).await
+    }
+
     /// 重启后收拾遗留:库里还开着的运行,BW 这边已经没有句柄了,如实标
     /// 成「不知道怎么结束的」并放开名额。返回收拾了几条。
     pub async fn reap_on_restart(&self) -> Result<ReapReport, RunError> {
@@ -133,11 +140,10 @@ impl RunManager {
     }
 }
 
-/// 循环处理的命令。`Start`/`Cancel`/`Reap`/`Snapshot` 四个是外部公开方法
-/// 的落地;`Started`/`Observed` 两个是内部命令,构造点分别是
+/// 循环处理的命令。`Start`/`Cancel`/`Demote`/`Reap`/`Snapshot` 五个是外部
+/// 公开方法的落地;`Started`/`Observed` 两个是内部命令,构造点分别是
 /// [`Loop::handle_start`] 派出去的开工外呼任务与 [`spawn_poll_task`] 派出
-/// 去的轮询任务——外部代码没有路径构造它们。「降级为咨询」
-/// (`Cmd::Demote`)是切片四C 的事,本片不预置。
+/// 去的轮询任务——外部代码没有路径构造它们。
 enum Cmd {
     Start {
         req: StartRun,
@@ -146,6 +152,10 @@ enum Cmd {
     Cancel {
         run: RunId,
         reply: oneshot::Sender<Result<(), RunError>>,
+    },
+    Demote {
+        run: RunId,
+        reply: oneshot::Sender<Result<bool, RunError>>,
     },
     Reap {
         reply: oneshot::Sender<Result<ReapReport, RunError>>,
@@ -169,6 +179,10 @@ struct ActiveRun {
     issue: IssueId,
     project: ProjectId,
     workspace: PathBuf,
+    /// 内存里的 kind 副本,随 [`Loop::handle_demote`] 翻面——只用于「降
+    /// 级后是否还占 `by_issue` 名额」这类内存记账判断,不是权威(权威在
+    /// 数据库,`bw_store::RunRow.kind`)。
+    kind: RunKind,
     connector: Arc<dyn Connector>,
     /// `None` = 还在 `Starting`(连接器的 `start` 调用还没返回,没有票
     /// 据可取消)。
@@ -216,6 +230,10 @@ impl Loop {
             }
             Cmd::Cancel { run, reply } => {
                 let result = self.handle_cancel(run).await;
+                let _ = reply.send(result);
+            }
+            Cmd::Demote { run, reply } => {
+                let result = self.handle_demote(run).await;
                 let _ = reply.send(result);
             }
             Cmd::Reap { reply } => {
@@ -319,6 +337,7 @@ impl Loop {
                 issue: req.issue,
                 project,
                 workspace: req.workspace.clone(),
+                kind: RunKind::Delivery,
                 connector: connector.clone(),
                 ticket: None,
                 poll_cancel: poll_cancel.clone(),
@@ -452,11 +471,8 @@ impl Loop {
             .await
         {
             Ok(true) => {
-                // 结算:本片(切片四B)这里理论上恒为 true——关门赢了就是
-                // 唯一的结算入口,没有别的路径能抢先结过账。切片四C 加
-                // 「降级为咨询」之后会出现真的 false(账在降级那一刻已
-                // 经结过了),那时候这里不需要改代码,只需要改这句注
-                // 释——`_ =` 已经在无条件容忍 false 了。
+                // 结算:false 也无害——多半是这条运行之前已经被降级为咨
+                // 询、账已经结过了(design §3.5②「账不重结」)。
                 let _ = self.store.settle_run(run, at).await;
                 if let Some(active_run) = self.active.remove(&run) {
                     self.release_issue_slot(active_run.issue, run);
@@ -517,6 +533,24 @@ impl Loop {
             });
         }
         Ok(())
+    }
+
+    /// 降级为咨询(design §3.5):kind 翻面 + 结账,内存里同步释放交付名
+    /// 额;会话/工作区/活状态一个字都不碰。
+    async fn handle_demote(&mut self, run: RunId) -> Result<bool, RunError> {
+        let at = now_unix();
+        let demoted = self.store.demote_run(run, at).await?;
+        if demoted {
+            let _ = self.store.settle_run(run, at).await;
+            let issue = self.active.get_mut(&run).map(|a| {
+                a.kind = RunKind::Consultation;
+                a.issue
+            });
+            if let Some(issue) = issue {
+                self.release_issue_slot(issue, run);
+            }
+        }
+        Ok(demoted)
     }
 
     /// 重启后收拾遗留:一次 UPDATE 覆盖全部还开着的运行(§9「集合式

@@ -336,6 +336,20 @@ impl RunStore for SqliteStore {
         Ok(outcome.rows_affected() == 1)
     }
 
+    async fn demote_run(&self, id: RunId, at: i64) -> Result<bool> {
+        // 比较并置(design §3.5①):谓词同时守住「还是交付」与「还活着」
+        // 两半——已经降级过、或者已经关门的运行,这次调用诚实空转。
+        let outcome = sqlx::query(
+            "UPDATE run SET kind = 'consultation', demoted_at = ? \
+             WHERE id = ? AND kind = 'delivery' AND ended_at IS NULL",
+        )
+        .bind(at)
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(outcome.rows_affected() == 1)
+    }
+
     async fn reap_open_runs(&self, at: i64) -> Result<Vec<RunId>> {
         // 一次 UPDATE 覆盖全部还开着的运行(design §9「集合式 UPDATE」)。
         // `end_kind`/`end_detail` 保持原值(插行时 end_kind 恒 NULL、

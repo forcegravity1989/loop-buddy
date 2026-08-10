@@ -259,6 +259,13 @@ pub trait RunStore: Send + Sync {
     /// 家会跟它抢,但仍然用 CAS 防御式写,不假设「只有我会调」。
     async fn mark_run_started(&self, id: RunId, upstream_session: &str, at: i64) -> Result<bool>;
 
+    /// 降级为咨询:`kind` 从 `'delivery'` 翻成 `'consultation'` + `demoted_at`
+    /// 落值,比较并置(`WHERE kind = 'delivery' AND ended_at IS NULL`,
+    /// design §3.5①)。返回 `true` = 这次真降级了;`false` = 没什么可降的
+    /// (已经不是活着的交付运行——幂等)。翻面之后这一行退出
+    /// `uq_run_live_delivery_per_issue` 的谓词,交付名额当场释放。
+    async fn demote_run(&self, id: RunId, at: i64) -> Result<bool>;
+
     /// 重启后收拾遗留:所有还开着(`ended_at IS NULL`)的运行行,**一次
     /// UPDATE** 全部标成 `orphaned`(design §9「集合式 UPDATE」,不是按编
     /// 号挨个循环——百级并行不含小 N 假设)。`end_kind`/`end_detail` 如实
