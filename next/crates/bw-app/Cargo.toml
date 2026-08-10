@@ -1,6 +1,6 @@
 [package]
 name = "bw-app"
-description = "next 切片四:编排层。运行管理器住在这里(design-s4-runmanager.md §1)——它要写库、要判状态机,这是编排的活,不是引擎的活。切片四B:运行管理器单口(开工/取消/重启清理/快照),单条命令队列 + 循环独占内存活跃表,竞态串行化天然成立。正式依赖里刻意没有 bw-engine——PTY 那堆原生依赖渗不进编排层(§1.2),`scripts/guard-app-layering.sh` 守这条线。"
+description = "next 切片四:编排层。运行管理器住在这里(design-s4-runmanager.md §1)——它要写库、要判状态机,这是编排的活,不是引擎的活。切片四B/C 立起运行管理器单口(开工/取消/降级为咨询/重启清理);切片四D 起 [dev-dependencies] 装配 run_races 验收指挥器所需的 bw-engine/uuid/async-trait/sqlx——只进 dev-dependencies,正式依赖里刻意没有 bw-engine(§1.2),`scripts/guard-app-layering.sh` 守这条线(查 cargo tree -e normal 真实依赖图,dev 依赖不受影响)。"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -19,8 +19,26 @@ thiserror = { workspace = true }
 # 并发纪律靠它(design-s4-runmanager.md §3.2)。
 tokio-util = { workspace = true }
 
-# 刻意没有 [dev-dependencies]:「真实并行三件」那一档(切片四E 的
-# run_races --real,要把真的 claude 执行连接器组装进注册表)才会真的用
-# 到 bw-engine——那时才加,不预置一个当下没有消费者的依赖(design
-# §1.2:dev 依赖合法,但不是现在就要有)。`run_races` 指挥器本体是切片
-# 四D 的事,同样还没有消费者。
+[dev-dependencies]
+# next 切片四E:「真实并行三件」档(`run_races --real`)要把真的 claude 执
+# 行连接器组装进注册表——四-1 报告 concern 1 预告的「下一任务需要时补一
+# 行」就是现在。**只进 dev-dependencies**:`bw-engine` 的 PTY/agentcli 原
+# 生依赖不该渗进编排层的正式产物依赖图,`scripts/guard-app-layering.sh`
+# 已经改成查 `cargo tree -e normal`(只看正式依赖边),这行不会被它误伤
+# (design §1.2)。
+bw-engine = { path = "../bw-engine" }
+# `run_races.rs` 自己造临时数据库文件名/工作区目录名要用(与 `bw-store`
+# `examples/store_guards.rs` 同款先例:uuid v4 命名,PID 会被系统复用,
+# uuid 不会)。
+uuid = { workspace = true, features = ["v4"] }
+# `run_races.rs` 自建的脚本化 mock 执行连接器(design §4.1)要实现
+# `bw_connector::caps::Execute`——那条 trait 本身是 `#[async_trait]` 定义
+# 的,实现方也要用同一个宏。只进 dev-dependencies:mock 连接器不进任何
+# crate 的正式代码(design §4.1「住在指挥器里,不进库」)。
+async-trait = { workspace = true }
+# `run_races.rs`「附 · 存量库迁移双守卫」一节(design §5.2 第 9 条)要自
+# 己开一条独立连接、手工执行一份「少一列的老 schema」——不经过
+# `SqliteStore::open`(那样会用当前 schema.sql 把列建全,测不出「老库缺
+# 列」这件事),同 `bw-store` `examples/store_guards.rs` 第 6 节的独立连
+# 接读回先例。
+sqlx = { workspace = true }

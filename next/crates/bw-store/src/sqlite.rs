@@ -53,11 +53,18 @@ impl SqliteStore {
             sqlx::query(stmt).execute(&pool).await?;
         }
 
-        // 迁移双守卫的第一次真实调用留给切片五加列时(design-s4-runmanager.md
-        // §2.4)。本片三张表的每一列都在上面的 `CREATE TABLE` 里一步到位,
-        // 没有旧库列缺口需要补——`add_column_if_missing` 因此原样移植进来
-        // (v1 `crates/bw-store/src/sqlite.rs` 约 410 行,零改写)但暂无调用
-        // 点,见函数自己的文档注释;不为了演示而演示。
+        // 迁移双守卫的第一次真实调用(next 切片四D,design §2.4/§5.2 第
+        // 9 条)。**这不是本次新加的列**——`run.demoted_at` 本来就在上面
+        // 的 `CREATE TABLE`(四A 一步到位)里,不是「这次迁移新增的字
+        // 段」。挑它当第一次真实调用点,是因为它是这张表里唯一「可空、
+        // 无 NOT NULL 约束、ALTER TABLE ADD COLUMN 补起来最干净」的一
+        // 列,适合把这条此前 `#[allow(dead_code)]` 的守卫真正接进开库流
+        // 程,作为往后任何一次真实加列的活样板。对当下的每一个真实数据
+        // 库(不管是不是这个字段的老版本)都安全:字段已存在就是
+        // no-op,不存在才补——`bw-app` `examples/run_races.rs`「附 · 存量
+        // 库迁移双守卫」一节会真的造一个缺这一列的老库、走这条开库流
+        // 程,读回验证补列生效。
+        add_column_if_missing(&pool, "run", "demoted_at", "INTEGER").await?;
 
         Ok(Self { pool })
     }
@@ -69,9 +76,9 @@ impl SqliteStore {
 /// 调用。规矩不变:每加一列,必须同时改 `schema.sql` 并在开库流程里加一行
 /// 这样的调用,否则存量库直接崩(本仓库踩过的真坑)。
 ///
-/// 本片三张新表本身没有列需要迁移(`CREATE TABLE` 一步到位),第一次真实
-/// 调用点留给切片五加列时——如实标注留白,不假装现在就用得上。
-#[allow(dead_code)]
+/// 本片三张新表本身没有列需要迁移(`CREATE TABLE` 一步到位)——但
+/// `SqliteStore::open` 现在真的调用它一次(`run.demoted_at`,见调用点文
+/// 档),不再是死代码。
 async fn add_column_if_missing(
     pool: &SqlitePool,
     table: &str,
@@ -206,6 +213,42 @@ impl IssueStore for SqliteStore {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn transition_issue_status(
+        &self,
+        id: IssueId,
+        from: IssueStatus,
+        to: IssueStatus,
+        at: i64,
+    ) -> Result<bool> {
+        // 纯机械的比较并置写——合法性由调用方(`bw-app::App::
+        // transition_issue`)查 `bw_core::can_transition_to` 后再调用这里,
+        // 这一层自己不判断。
+        let outcome =
+            sqlx::query("UPDATE issue SET status = ?, updated_at = ? WHERE id = ? AND status = ?")
+                .bind(issue_status_text(to))
+                .bind(at)
+                .bind(id.uuid().to_string())
+                .bind(issue_status_text(from))
+                .execute(&self.pool)
+                .await?;
+        Ok(outcome.rows_affected() == 1)
+    }
+}
+
+/// `issue.status` 列的文本编码——与 [`parse_issue_status`] 互为逆运算。
+/// `transition_issue_status` 的比较并置需要把 `IssueStatus` 编回文本才能
+/// 拼进 `WHERE status = ?`/`SET status = ?`。
+fn issue_status_text(s: IssueStatus) -> &'static str {
+    match s {
+        IssueStatus::Backlog => "backlog",
+        IssueStatus::Todo => "todo",
+        IssueStatus::InProgress => "in_progress",
+        IssueStatus::InReview => "in_review",
+        IssueStatus::Done => "done",
+        IssueStatus::Blocked => "blocked",
+        IssueStatus::Cancelled => "cancelled",
     }
 }
 

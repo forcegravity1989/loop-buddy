@@ -103,8 +103,15 @@ jobs:
 
       # next 切片四A:存储层立起(项目/活/运行三表 + 迁移双守卫 + 两把结
       # 算/关门守卫)。指挥器插活 → 开两个交付运行(第二个被部分唯一索引
-      # 挡下)→ 关门两次 → 结算两次 → 独立连接读回索引真的建了。运行管理
-      # 器本体与五竞态(run_races)是下一任务,这里只证存储层。末行
+      # 挡下)→ 关门两次 → 结算两次 → 独立连接读回索引真的建了。末行
       # STORE_GUARDS_OK。
       - name: 存储层行为读回指挥器(bw-store store_guards)
         run: cd next && cargo run -p bw-store --example store_guards
+
+      # next 切片四B/C/D:运行管理器本体(开工/取消/降级为咨询/重启清
+      # 理)+ 十件并行 + 五竞态(同一件活开不出第二个交付运行/取消完成撞
+      # 车/单条失败不牵连/重启遗留如实标注/晚到消息不错账)确定性复现,
+      # sqlite 读回 + 存量库迁移双守卫。全程【mock】脚本化连接器,不依赖
+      # 网关,可常绿。末行 RUN_RACES_OK。
+      - name: 运行管理器行为验收指挥器(bw-app run_races)
+        run: cd next && cargo run -p bw-app --example run_races

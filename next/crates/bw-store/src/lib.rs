@@ -114,6 +114,23 @@ pub trait IssueStore: Send + Sync {
     /// 行中」是这条状态机的合法起点,也是诚实失败后重试的合法落点
     /// (design §3.4①),重复调用无害。
     async fn mark_issue_in_progress(&self, id: IssueId, at: i64) -> Result<()>;
+
+    /// 活状态的比较并置转移——纯机械写,**不判断合法性**:合法性由调用方
+    /// (编排层 `bw-app::App::transition_issue`)在写之前查
+    /// `bw_core::IssueStatus::can_transition_to` 决定,这里只管写它被告知
+    /// 要写的值。这不是给 `RunManager` 用的「便捷方法」——`RunManager` 的
+    /// 代码路径里没有一处调用它(那条铁律靠 `RunManager` 自己只用上面的
+    /// `mark_issue_in_progress` 一条窄方法维持,不是靠这个方法自己判
+    /// 断)。`WHERE status = ?`(调用方读到的当前值)是比较并置:返回
+    /// `false` = 调用方手里的「当前状态」已经不是数据库里的当前状态,没
+    /// 有发生写,调用方应该重读后再决定,不要盲目重试同一次写。
+    async fn transition_issue_status(
+        &self,
+        id: IssueId,
+        from: IssueStatus,
+        to: IssueStatus,
+        at: i64,
+    ) -> Result<bool>;
 }
 
 // ───────────────────────────── run ─────────────────────────────

@@ -71,13 +71,17 @@ dependencies = [
 name = "bw-app"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "bw-connector",
  "bw-core",
+ "bw-engine",
  "bw-store",
+ "sqlx",
  "thiserror 1.0.69",
  "time",
  "tokio",
  "tokio-util",
+ "uuid",
 ]
 
 [[package]]
