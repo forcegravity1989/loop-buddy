@@ -105,6 +105,15 @@ pub trait IssueStore: Send + Sync {
     /// 那条转移由 `bw-core::can_transition_to` 守,这里只记「结过账了」
     /// 这个事实。
     async fn settle_issue(&self, id: IssueId, at: i64) -> Result<()>;
+
+    /// 开工时把活推到「进行中」——运行管理器(切片四B)**唯一**改活状态的
+    /// 写(design-s4-runmanager.md §3.6)。**签名上没有 `IssueStatus` 形
+    /// 参**:这是「运行管理器没有任何写 Done 的路径」这条硬约束在类型层
+    /// 面的一部分落实——这个方法天生写不出「进行中」之外的任何值,不需
+    /// 要靠代码审查记住「别传 Done 进来」。无条件写(不比较并置):「进
+    /// 行中」是这条状态机的合法起点,也是诚实失败后重试的合法落点
+    /// (design §3.4①),重复调用无害。
+    async fn mark_issue_in_progress(&self, id: IssueId, at: i64) -> Result<()>;
 }
 
 // ───────────────────────────── run ─────────────────────────────
@@ -236,4 +245,24 @@ pub trait RunStore: Send + Sync {
     /// [`RunStore::close_run`]——取消与完成同时到达时,由「谁抢到」决定
     /// 谁去做后续记账动作(design §2.3②)。
     async fn settle_run(&self, id: RunId, at: i64) -> Result<bool>;
+
+    /// 一件活当前活着的交付运行编号(若有)。**跨重启也成立**——不靠运行
+    /// 管理器进程内的 `by_issue` 缓存,直接查
+    /// `uq_run_live_delivery_per_issue` 索引覆盖的那一行(design §3.4 第
+    /// 二行「存储才是真正的守卫」)。`create_run` 撞唯一索引之后,调用方
+    /// 靠这个查询把「已经有一个交付运行在跑」的错误消息补上具体是哪一条
+    /// ——包括进程刚重启、内存缓存还是空的那种情形。
+    async fn find_live_delivery_run(&self, issue_id: IssueId) -> Result<Option<RunId>>;
+
+    /// 起工成功:`state` 从 `starting` 推到 `running`,记下上游会话号。比
+    /// 较并置(`WHERE state = 'starting'`)——设计上这一步不存在第二个写
+    /// 家会跟它抢,但仍然用 CAS 防御式写,不假设「只有我会调」。
+    async fn mark_run_started(&self, id: RunId, upstream_session: &str, at: i64) -> Result<bool>;
+
+    /// 重启后收拾遗留:所有还开着(`ended_at IS NULL`)的运行行,**一次
+    /// UPDATE** 全部标成 `orphaned`(design §9「集合式 UPDATE」,不是按编
+    /// 号挨个循环——百级并行不含小 N 假设)。`end_kind`/`end_detail` 如实
+    /// 标注「不知道怎么结束的」,`settled_at` 不动(账没结,如实欠着)。
+    /// 返回被标注的运行编号列表,供 `ReapReport`/「不批量唤醒」断言用。
+    async fn reap_open_runs(&self, at: i64) -> Result<Vec<RunId>>;
 }

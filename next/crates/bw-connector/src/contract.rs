@@ -382,6 +382,15 @@ pub struct InjectBlock {
 }
 
 /// 一次执行的句柄。**上游会话号是核心**:agent CLI 的 resume 靠它。
+///
+/// **2026-08-10(切片四B)补 `Debug`/`Clone`**:运行管理器(design-s4-
+/// runmanager.md §3.2/§3.3)每个运行起一个独立的轮询任务,轮询接口
+/// (`Execute::poll`)收的是 `&ExecTicket` 引用,任务自己要持有一份——`Clone`
+/// 让它拿到独立的一份,不用共享借用。只加 derive,不改字段、不改语义,
+/// 按切片三A/三-2 已经立的判例(`RequestId` 加 `Hash` 同款先例)**不算契约
+/// 形状变更**,不撞 [`PROTOCOL`](主控裁决 #9,design-s4-runmanager.md
+/// §7/§11-9)。
+#[derive(Debug, Clone)]
 pub struct ExecTicket {
     pub req: RequestId,
     pub upstream_session: Option<String>,

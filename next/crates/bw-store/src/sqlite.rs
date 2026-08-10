@@ -195,6 +195,18 @@ impl IssueStore for SqliteStore {
             .await?;
         Ok(())
     }
+
+    async fn mark_issue_in_progress(&self, id: IssueId, at: i64) -> Result<()> {
+        // 无条件写(design-s4-runmanager.md §3.6):「进行中」是运行管理器
+        // 唯一改活状态的落点,没有比较并置——重复调用(诚实失败后重试)
+        // 无害,仍然一路写到 `in_progress`。
+        sqlx::query("UPDATE issue SET status = 'in_progress', updated_at = ? WHERE id = ?")
+            .bind(at)
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -296,5 +308,49 @@ impl RunStore for SqliteStore {
                 .execute(&self.pool)
                 .await?;
         Ok(outcome.rows_affected() == 1)
+    }
+
+    async fn find_live_delivery_run(&self, issue_id: IssueId) -> Result<Option<RunId>> {
+        // 直接查唯一索引覆盖的那一行——跨重启也成立,不靠进程内缓存
+        // (design §3.4 第二行)。
+        let row = sqlx::query(
+            "SELECT id FROM run WHERE issue_id = ? AND ended_at IS NULL AND kind = 'delivery'",
+        )
+        .bind(issue_id.uuid().to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| parse_uuid(&r.get::<String, _>("id"), RunId::from_uuid))
+            .transpose()
+    }
+
+    async fn mark_run_started(&self, id: RunId, upstream_session: &str, at: i64) -> Result<bool> {
+        let _ = at; // schema 没有独立的「确认起工」时刻列(design §2.2 只有一个 started_at,插行时已落定)。
+        let outcome = sqlx::query(
+            "UPDATE run SET state = 'running', upstream_session = ? \
+             WHERE id = ? AND state = 'starting'",
+        )
+        .bind(upstream_session)
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(outcome.rows_affected() == 1)
+    }
+
+    async fn reap_open_runs(&self, at: i64) -> Result<Vec<RunId>> {
+        // 一次 UPDATE 覆盖全部还开着的运行(design §9「集合式 UPDATE」)。
+        // `end_kind`/`end_detail` 保持原值(插行时 end_kind 恒 NULL、
+        // end_detail 恒 ''——如实标注「不知道」,不填一个猜的);
+        // `settled_at` 不动,账没结如实欠着。SQLite 的 `RETURNING` 让这仍
+        // 是一条语句,不是「先 SELECT 再逐条 UPDATE」的 N 次往返。
+        let rows = sqlx::query(
+            "UPDATE run SET ended_at = ?, state = 'orphaned' \
+             WHERE ended_at IS NULL RETURNING id",
+        )
+        .bind(at)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| parse_uuid(&r.get::<String, _>("id"), RunId::from_uuid))
+            .collect()
     }
 }
