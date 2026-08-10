@@ -271,7 +271,7 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
     - **现象**:`issue.stage`(五B 加的列,design §2.1)有真实读侧消费者——六段总控②「五角色责任卡」的活数分组(`IssueStore::count_issues_by_stage`)——但没有任何命令/用例会把一件活的 `stage` 从 `NULL` 推到某个值。`hex_readback` 指挥器为了让这一段有真数据可读回,绕过 store 层用独立连接直接 `UPDATE issue SET stage = ?`,每一行都标注「非生产路径产出」(design §7.4 降级口径的同一惯例)。查询机制本身是真的(读回 `Some(Build)` 与直接写入的值一致),但生产路径今天走不到这个值。
     - **来源**:design-s5-hexpanel.md 的命令面草案(§4.2)与本片的范围裁剪(§8)都没有点名一条「把活分到某个阶段」的命令——切阶段(`SetActiveStage`/`HandoffStage`)动的是 `project.active_stage`,不是逐件活的 `issue.stage`,两者是两回事,没有一条命令负责后者。
     - **待办**:补一条命令(例如 `SetIssueStage { issue, stage }`)与对应的 `cmd::issue` 用例,让这一列有真实写入方;在此之前,五角色责任卡的活数分组在生产环境里会一直是「全部未归类」。
-    - **登记日**:2026-08-11。
+    - **登记日**:2026-08-11。**2026-08-11 复审裁定**(task-s5b-review.md §6 concern 1 台账口径收紧):待办口径从开放式「补一条命令」收紧为——**五E(桌面壳)立壳之前必须补上这条生产写入方**,不能带着「五角色责任卡活数分组在生产环境永远显示全部未归类」这个已知空缺进入桌面壳阶段。
 
 17. **待人处理④b「数据过期」判断,全体指标共用同一个硬编码节奏窗口(Weekly)**(登记日 2026-08-11,切片五D 实施时按 design §3.2④b 附带登记)
     - **现象**:`bw-app/src/view/hex.rs` 的 `DEFAULT_METRIC_CADENCE`(`Cadence::Weekly`)是全体指标共用的唯一默认值,喂给 `bw_core::derive::measure`/`cadence_window` 判断一条观测是不是「过期」。`metric` 表(design §2.2)没有「这条指标多久刷新一次」的列,`.bw/metrics.toml` 的格式(`docs/metrics-toml-format.md`)也没有约定这个字段——按指标定制节奏今天做不到。

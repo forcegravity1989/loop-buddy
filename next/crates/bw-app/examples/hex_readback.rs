@@ -4,18 +4,24 @@
 //! ——界面(切片五E,本片不建)将来真正会用的同一段代码——造一批真数据
 //! (真 git 工作区 + 真 `.bw/metrics.toml` + 真项目/活/运行/观测/交棒),
 //! 逐段读回断言,五项待人处理投影正反各验一次(造出来 → 消掉 → 行自然
-//! 消失),重启前后同一份查询逐字节比对,SQL 原样打印供人复核。
+//! 消失),**真进程重启**前后同一份查询逐字节比对,store 层真实执行的查
+//! 询结果原样打印供人复核。
 //!
 //! 七段:
 //!
 //! 1. 指标正本同步(北极星也是一行,读一份真实 `.bw/metrics.toml`)
 //! 2. 观测只追加 + 手填戴徽
 //! 3. 信号只能推导(读时现算,零缓存;含「零观测不是 Green」的反证)
-//! 4. 杀进程重开,数字一致(裁决 4 的新验收形态:同一份组装用例的产物,
-//!    重开数据库连接前后逐字段比对)
-//! 5. 六段逐段读回
-//! 6. 完成永远人点(显式转移 + 合法转移表拒绝)
-//! 7. 待人处理:五项正反各验一次
+//! 4. 杀进程重开,数字一致(裁决 4 的新验收形态:**真子进程**重启前后,
+//!    同一份组装用例产出逐字段比对——见评审 task-s5b-review.md Important-1
+//!    修复轮:本节用 `std::env::current_exe()` re-exec 出一个全新操作系统进
+//!    程跑「后半场」,不是同进程内换一个变量名假装重启)
+//! 5. 六段逐段读回(含 `RunSnapshot` 三个数与独立 SQL 现查的等式核验,评审
+//!    Important-2 修复轮)
+//! 6. 完成永远人点(显式转移 + 合法转移表拒绝 + 源码扫描断言编排层没有第
+//!    二条写「已完成」的路径,评审 Important-3 修复轮)
+//! 7. 待人处理:五项正反各验一次(打印区改成直接打真实调用的返回行,不
+//!    再抄一份可能分叉的 SQL 文本,评审 Minor-1 修复轮)
 //!
 //! **不重复的一段**:「附 · 存量库迁移双守卫」本档不再重复一遍——`bw-store`
 //! `examples/store_guards.rs` 第 14 节与 `bw-app` `examples/run_races.rs`
@@ -25,12 +31,20 @@
 //! 跑法:`cd next && cargo run -p bw-app --example hex_readback`
 //! 退出码 0 且末行 `HEX_READBACK_OK` = 全部断言通过。
 //! 数据库/工作区跑完不删,路径打印出来,人可以自己 `sqlite3`/`git` 复核。
+//!
+//! **隐藏子命令 `--restart-probe`**:第 4 节「真进程重启」的后半场——父进
+//! 程 `std::env::current_exe()` re-exec 出的子进程会带这个参数启动,走
+//! [`run_restart_probe`] 而不是正常的七段流程。不是给人手跑的入口,人手
+//! 跑就用上面那条不带参数的命令。
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
+use bw_app::run::{RunManager, RunManagerConfig, RunSnapshot};
 use bw_app::view::hex::LoopInputs;
 use bw_app::{App, Command, Event};
+use bw_connector::ConnectorRegistry;
 use bw_core::{IssueId, IssueStatus, MetricId, ProjectId, RunId, RunState, StageKind};
 use bw_store::{
     HandoffStore, IssueStore, MetricStore, NewIssue, NewObservation, NewProject, NewRun,
@@ -44,6 +58,10 @@ use uuid::Uuid;
 
 const DB_NAME_PREFIX: &str = "bw-hex-";
 const WS_DIR_PREFIX: &str = "bw-hex-ws-";
+/// 隐藏子命令——[`main`] 顶部检测到 `argv[1]` 等于这个字符串就转去
+/// [`run_restart_probe`],不走正常的七段流程。见文件头文档「隐藏子命令」
+/// 一节。
+const RESTART_PROBE_ARG: &str = "--restart-probe";
 
 fn now_i64() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
@@ -335,28 +353,31 @@ async fn bootstrap_issues(
     })
 }
 
-/// 本指挥器不起真实 `run::RunManager`(所有运行都是直接插库造的既成事
-/// 实,不是「人点开工」产生的)——`running` 因此恒为 0,如实标注,不冒
-/// 充有真在跑的运行。其余三个字段真查库,与
-/// `bw_app::run::RunManager::snapshot` 内部用的同一批查询方法。
+/// 本指挥器不用 `RunManager` 开工(所有运行都是直接插库造的既成事实,不
+/// 是「人点开工」产生的)——`running` 因此恒为 0,如实标注,不冒充有真在
+/// 跑的运行。
+///
+/// **评审 Important-2 修复**:`running`/`in_review`/`recent_failed`/
+/// `unsettled` 四个数此前是这里另起一份查询平行算出来的——`RunSnapshot`
+/// 那三个新字段与 `handle_snapshot` 的新查库代码因此零消费者、零验证(两
+/// 份实现各自各的)。现在这四个数**直接从一次真实
+/// `RunManager::snapshot` 调用取**,`LoopInputs` 是 `RunSnapshot` 的真实
+/// 消费者;`exceptions`/`has_any_run` 不在 `RunSnapshot` 里(那两个字段本
+/// 来就不是它的职责,design §1.2④「聚合数走快照接口,例外明细单独
+/// 列」),仍然直接查库。返回值把 `RunSnapshot` 本身也带出来——
+/// `section_hex_segments` 用它做「与独立 SQL 逐一相等」的等式核验
+/// (`assert_snapshot_matches_independent_sql`),把两份实现钉在一起:
+/// `handle_snapshot` 里任何一条查询改错,那条等式立刻红。
 async fn current_loop_inputs(
     store: &SqliteStore,
+    manager: &RunManager,
     project_id: ProjectId,
-) -> Result<LoopInputs, String> {
+) -> Result<(LoopInputs, RunSnapshot), String> {
     let project = Some(project_id);
-    let in_review = store
-        .list_issues_by_status(project, IssueStatus::InReview)
+    let snap = manager
+        .snapshot(project)
         .await
-        .map_err(|e| e.to_string())?
-        .len();
-    let recent_failed = store
-        .count_failed_runs(project)
-        .await
-        .map_err(|e| e.to_string())? as usize;
-    let unsettled_rows = store
-        .list_unsettled_runs(project)
-        .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("RunManager::snapshot 失败:{e}"))?;
     let stalled_rows = store
         .list_stalled_runs(project)
         .await
@@ -366,14 +387,76 @@ async fn current_loop_inputs(
         .await
         .map_err(|e| e.to_string())?
         .is_empty();
-    Ok(LoopInputs {
-        running: 0,
-        in_review,
-        recent_failed,
-        unsettled: unsettled_rows.len(),
+    let loop_inputs = LoopInputs {
+        running: snap.running,
+        in_review: snap.in_review,
+        recent_failed: snap.recent_failed,
+        unsettled: snap.unsettled,
         exceptions: stalled_rows,
         has_any_run,
-    })
+    };
+    Ok((loop_inputs, snap))
+}
+
+/// 评审 Important-2 的核验半场:独立开一条只读连接,拿三条原始 SQL
+/// `COUNT(*)` 现查一遍 `in_review`/`recent_failed`/`unsettled`,与
+/// [`current_loop_inputs`] 传回来的那份 `RunSnapshot`(经一次真实
+/// `RunManager::snapshot` 调用得到,不是这里现造的)逐一比对。这条独立
+/// SQL **不复用** `bw-store` 里 `handle_snapshot` 调用的那几个 store 方
+/// 法——用的是指挥器自己另写的 `COUNT(*)`,两边各自独立到库文件,一边改
+/// 错另一边不会跟着错。突变自证:把 `bw-app/src/run/manager.rs`
+/// `handle_snapshot` 里任意一条查询改错(比如状态判断打错、`project_id`
+/// 过滤漏绑),这三条等式里至少一条立刻红。
+async fn assert_snapshot_matches_independent_sql(
+    db_path: &str,
+    project_id: ProjectId,
+    snap: &RunSnapshot,
+    l: &mut Ledger,
+) {
+    let opts = SqliteConnectOptions::new()
+        .filename(db_path)
+        .read_only(true);
+    let pool = match SqlitePool::connect_with(opts).await {
+        Ok(p) => p,
+        Err(e) => {
+            l.fail(format!("独立只读连接打开数据库失败:{e}"));
+            return;
+        }
+    };
+    let pid = project_id.uuid().to_string();
+    let checks: [(&str, &str, usize); 3] = [
+        (
+            "in_review",
+            "SELECT COUNT(*) AS n FROM issue WHERE project_id = ? AND status = 'in_review'",
+            snap.in_review,
+        ),
+        (
+            "recent_failed",
+            "SELECT COUNT(*) AS n FROM run WHERE project_id = ? AND state = 'failed'",
+            snap.recent_failed,
+        ),
+        (
+            "unsettled",
+            "SELECT COUNT(*) AS n FROM run WHERE project_id = ? AND ended_at IS NOT NULL \
+             AND settled_at IS NULL",
+            snap.unsettled,
+        ),
+    ];
+    for (label, sql, from_snapshot) in checks {
+        match sqlx::query(sql).bind(&pid).fetch_one(&pool).await {
+            Ok(row) => {
+                let n: i64 = row.get("n");
+                l.check(
+                    n == from_snapshot as i64,
+                    format!(
+                        "RunSnapshot.{label} 与独立 SQL COUNT(*) 逐一相等(RunSnapshot={from_snapshot} \
+                         独立 SQL={n})——`handle_snapshot` 与这条独立查询各自到库,不共用同一条实现"
+                    ),
+                );
+            }
+            Err(e) => l.fail(format!("独立 SQL 读回 {label} 失败:{e}")),
+        }
+    }
 }
 
 // ─────────────────────────── 1 · 指标正本同步 ───────────────────────────
@@ -647,6 +730,7 @@ async fn section_observations(app: &App, project_id: ProjectId, metrics: &Metric
 
 async fn section_signal_derive_only(
     app: &App,
+    manager: &RunManager,
     db_path: &str,
     project_id: ProjectId,
     metrics: &MetricIds,
@@ -685,8 +769,8 @@ async fn section_signal_derive_only(
         );
     }
 
-    let loop_inputs = match current_loop_inputs(&app.store, project_id).await {
-        Ok(li) => li,
+    let (loop_inputs, _snap) = match current_loop_inputs(&app.store, manager, project_id).await {
+        Ok(v) => v,
         Err(e) => {
             l.fail(format!("组装 LoopInputs 失败:{e}"));
             return l;
@@ -809,18 +893,35 @@ async fn create_closed_run(
 
 /// 裁决 4 的新验收形态:信号不落库,「重启后数字一致」因此不是「读回缓
 /// 存列」,而是**同一份组装用例(`App::hex_view`/`App::attention_view`)
-/// 在重开数据库连接前后各跑一次,结果逐字段比对**。`now`/`loop_inputs`/
-/// `workspace_evidence` 三个外部输入在前后两次调用之间**保持不变**——这
-/// 三样本来就不是「重启后从库里重新查」的东西(时钟由调用方传入、Loop
-/// 聚合数问的是独立于 `App` 的 `RunManager`、工作区证据是现采的实时快
-/// 照),这一节要单独证的是「同一批已经持久化在库里的数据,重新接一条
-/// 连接,组装出来的东西必须一模一样」——把这三个不属于「库里数据」的输
-/// 入固定住,才是干净的对照。
-async fn section_restart_consistency(
-    db_path: &str,
-    project_id: ProjectId,
-    evidence: &bw_workspace::evidence::WorkspaceEvidence,
-) -> Ledger {
+/// 在真进程重启前后各跑一次,结果逐字段比对**。
+///
+/// **评审 Important-1 修复**:此前这里是同进程内 `App::open` → `drop` →
+/// 再 `App::open`——突变测试当场证实了这不够格:把「重启」那一步整个跳
+/// 过(`let app2 = app1;`,连接都不重开),102 条断言仍然全绿,说明这条
+/// 断言证明的只是「第二次读回真的落在库文件上」,证明不了「重启过」。
+/// 现在「后半场」真的用 `std::env::current_exe()` re-exec 出一个**全新操
+/// 作系统进程**(带隐藏子命令 [`RESTART_PROBE_ARG`],落地在
+/// [`run_restart_probe`]):那个进程自己独立打开 `App`/`RunManager`、独立
+/// 重新采工作区证据、独立重新组装六段总控视图与待人处理投影,把结果打
+/// 印成可比对的文本行传回父进程——这才抓得住「进程级缓存」这一类东西
+/// (库里已经没有信号列可写,唯一还需要防的正是这一类,同进程内换一个
+/// 变量名抓不到)。
+///
+/// `now` 由父进程生成、原样传给子进程(不是子进程自己现取)——六段视图
+/// ④b「过期」判断依赖时钟,父子两次组装若各自取不同的 `now` 会引入一个
+/// 真实存在但与「重启是否保持一致」无关的变量,固定住它才是干净的对
+/// 照。`loop_inputs`/`workspace_evidence` 不这样处理——两者本来就是「当
+/// 下现查/现采」的东西,父子两侧各自独立重新查一遍(数据库与工作区在
+/// 这两次调用之间都没有别的写入,理应查出同一个结果);本节要单独证的
+/// 是「同一批已经持久化的数据,换一个全新进程重新接上,组装出来的东西
+/// 必须一模一样」,不是「把这两样东西原样搬过去」。
+///
+/// **guard-no-direct-process.sh 覆盖面核实**:该守卫的 `TARGETS` 只列了
+/// `bw-core/src`/`bw-app/src`(脚本注释原文),不含任何 `examples/` 目
+/// 录——这份指挥器本身早就在用 `std::process::Command::new("git")`(见
+/// §6「独立复核」一节)且门禁一直绿,这里 re-exec 自己走的是同一条已核
+/// 实过的豁免,不是新开一个口子。
+async fn section_restart_consistency(db_path: &str, ws_str: &str, project_id: ProjectId) -> Ledger {
     let mut l = Ledger::new();
 
     let app1 = match App::open(db_path).await {
@@ -830,17 +931,33 @@ async fn section_restart_consistency(
             return l;
         }
     };
-    let loop_inputs = match current_loop_inputs(&app1.store, project_id).await {
-        Ok(li) => li,
+    let registry1 = Arc::new(ConnectorRegistry::default());
+    let manager1 =
+        match RunManager::open(Path::new(db_path), registry1, RunManagerConfig::default()).await {
+            Ok(m) => m,
+            Err(e) => {
+                l.fail(format!("第一次 RunManager::open 应该成功,实得错误:{e}"));
+                return l;
+            }
+        };
+    let (loop_inputs, _snap) = match current_loop_inputs(&app1.store, &manager1, project_id).await {
+        Ok(v) => v,
         Err(e) => {
             l.fail(format!("组装 LoopInputs 失败:{e}"));
+            return l;
+        }
+    };
+    let evidence1 = match bw_workspace::evidence::collect(ws_str).await {
+        Ok(e) => e,
+        Err(e) => {
+            l.fail(format!("重启前采集工作区证据失败:{e}"));
             return l;
         }
     };
     let now = OffsetDateTime::now_utc();
 
     let hex_before = match app1
-        .hex_view(project_id, loop_inputs, Some(evidence.clone()), now)
+        .hex_view(project_id, loop_inputs, Some(evidence1), now)
         .await
     {
         Ok(v) => v,
@@ -856,59 +973,99 @@ async fn section_restart_consistency(
             return l;
         }
     };
-    drop(app1); // 模拟「杀进程」——存储连接句柄真的被丢弃,不是摆样子。
+    drop(app1);
+    drop(manager1); // 真丢:这一侧的 App/RunManager 两条存储连接都被丢弃。
 
-    let app2 = match App::open(db_path).await {
-        Ok(a) => a,
+    // 真进程重启:re-exec 出一个全新操作系统进程跑「后半场」——不是同进
+    // 程内的变量重绑定。
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
         Err(e) => {
-            l.fail(format!(
-                "第二次 App::open(同一个库文件)应该成功,实得错误:{e}"
-            ));
+            l.fail(format!("std::env::current_exe() 失败:{e}"));
             return l;
         }
     };
-    let loop_inputs2 = match current_loop_inputs(&app2.store, project_id).await {
-        Ok(li) => li,
-        Err(e) => {
-            l.fail(format!("重开后组装 LoopInputs 失败:{e}"));
-            return l;
-        }
-    };
-    let hex_after = match app2
-        .hex_view(project_id, loop_inputs2, Some(evidence.clone()), now)
-        .await
+    let output = match std::process::Command::new(&exe)
+        .arg(RESTART_PROBE_ARG)
+        .arg(db_path)
+        .arg(project_id.uuid().to_string())
+        .arg(ws_str)
+        .arg(now.unix_timestamp().to_string())
+        .output()
     {
-        Ok(v) => v,
+        Ok(o) => o,
         Err(e) => {
-            l.fail(format!("重启后 App::hex_view 应该成功,实得错误:{e}"));
+            l.fail(format!("re-exec 子进程启动失败:{e}"));
             return l;
         }
     };
-    let attention_after = match app2.attention_view(Some(project_id), now).await {
-        Ok(v) => v,
-        Err(e) => {
-            l.fail(format!("重启后 App::attention_view 应该成功,实得错误:{e}"));
-            return l;
-        }
+    if !output.status.success() {
+        l.fail(format!(
+            "--restart-probe 子进程应该成功退出,实得 status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+        return l;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let hex_after_text = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("HEX_VIEW_DEBUG:"));
+    let attention_after_text = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("ATTENTION_VIEW_DEBUG:"));
+    let child_pid_text = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("CHILD_PID:"));
+    let (Some(hex_after_text), Some(attention_after_text), Some(child_pid_text)) =
+        (hex_after_text, attention_after_text, child_pid_text)
+    else {
+        l.fail(format!(
+            "--restart-probe 子进程输出里没找到 HEX_VIEW_DEBUG/ATTENTION_VIEW_DEBUG/CHILD_PID 行,原文子进程 stdout:\n{stdout}"
+        ));
+        return l;
     };
 
+    // 进程身份本身的证据(不是逐字段比对能替代的):子进程的 PID 必须与
+    // 本进程的 PID 不同——这是「真的换了一个操作系统进程」唯一硬事实层
+    // 面的证明。突变自证:把上面 `std::process::Command::new(&exe)` 那一
+    // 段临时换成直接在本进程内调 `run_restart_probe` 的逻辑(不真的
+    // re-exec),`child_pid` 会变成本进程自己的 PID,这条断言必红——用这
+    // 条堵住「评审 Important-1 揪出的『跳过重启这一步仍然全绿』」同一类
+    // 漏洞在这份新实现里复发。
+    match child_pid_text.parse::<u32>() {
+        Ok(child_pid) => {
+            let my_pid = std::process::id();
+            l.check(
+                child_pid != my_pid,
+                format!(
+                    "子进程 PID({child_pid})与本进程 PID({my_pid})不同——真的是一个独立操作系统进程,\
+                     不是同进程内换一个变量名假装重启"
+                ),
+            );
+        }
+        Err(e) => l.fail(format!("CHILD_PID 解析失败:{e}(原文 {child_pid_text:?})")),
+    }
+
+    let hex_before_text = format!("{hex_before:?}");
+    let attention_before_text = format!("{attention_before:?}");
+
     l.check(
-        hex_before == hex_after,
-        "六段总控视图:重开数据库连接前后,同一份组装用例产出逐字段一致",
+        hex_before_text == hex_after_text,
+        "六段总控视图:真进程重启(子进程独立打开 App/RunManager 重新组装)前后逐字段一致",
     );
     l.check(
-        attention_before == attention_after,
-        "待人处理投影:重开数据库连接前后,同一份组装用例产出逐字段一致",
+        attention_before_text == attention_after_text,
+        "待人处理投影:真进程重启前后逐字段一致",
     );
 
-    // 突变自证(不是靠临时改源码——这是运行期就能做的负对照):拿
-    // `hex_after` 造一份故意不同的副本,断言 `==` 真的会把它判不相等,证
-    // 明上面两条「相等」不是因为比较本身失效了才恒真。
-    let mut mutated = hex_after.clone();
-    mutated.project_name = format!("{}·被指挥器故意改动,不该与原值相等", mutated.project_name);
+    // 突变自证(运行期负对照,不靠临时改源码):故意改一份文本,证明字
+    // 符串相等比较不是恒真——上面两条「相等」真的会在不等时报不等,不是
+    // 比较本身失效了才恒真。
+    let mutated = format!("{hex_before_text}·被指挥器故意改动,不该与原值相等");
     l.check(
-        mutated != hex_after,
-        "反证:故意改一个字段之后,`hex_view != mutated` 为真——上面两条「相等」的断言不是矮化成永远为真",
+        mutated != hex_after_text,
+        "反证:故意改一份文本之后,字符串比较判它们不相等——上面两条「相等」的断言不是矮化成永远为真",
     );
 
     l
@@ -919,6 +1076,8 @@ async fn section_restart_consistency(
 #[allow(clippy::too_many_arguments)]
 async fn section_hex_segments(
     app: &App,
+    manager: &RunManager,
+    db_path: &str,
     project_id: ProjectId,
     metrics: &MetricIds,
     issues: &Issues,
@@ -940,13 +1099,14 @@ async fn section_hex_segments(
         Err(e) => l.fail(format!("get_issue(issue a) 失败:{e}")),
     }
 
-    let loop_inputs = match current_loop_inputs(&app.store, project_id).await {
-        Ok(li) => li,
+    let (loop_inputs, snap) = match current_loop_inputs(&app.store, manager, project_id).await {
+        Ok(v) => v,
         Err(e) => {
             l.fail(format!("组装 LoopInputs 失败:{e}"));
             return l;
         }
     };
+    assert_snapshot_matches_independent_sql(db_path, project_id, &snap, &mut l).await;
     let now = OffsetDateTime::now_utc();
     let view = match app
         .hex_view(project_id, loop_inputs, Some(evidence.clone()), now)
@@ -1205,8 +1365,8 @@ async fn section_hex_segments(
         Ok(_) => l.fail("重同步应该回 Event::MetricsSynced"),
         Err(e) => l.fail(format!("重同步应该成功,实得错误:{e}")),
     }
-    let loop_inputs2 = match current_loop_inputs(&app.store, project_id).await {
-        Ok(li) => li,
+    let (loop_inputs2, _snap2) = match current_loop_inputs(&app.store, manager, project_id).await {
+        Ok(v) => v,
         Err(e) => {
             l.fail(format!("组装 LoopInputs 失败:{e}"));
             return l;
@@ -1254,6 +1414,78 @@ async fn section_hex_segments(
 }
 
 // ─────────────────────────── 6 · 完成永远人点 ───────────────────────────
+
+/// 评审 Important-3:design-s5-hexpanel.md §7.1 点名的「全库搜索:编排层
+/// 里没有第二条写『已完成』的路径」这条断言此前没做——文件头对「附 ·
+/// 存量库迁移双守卫」那一档明写了为什么不重复,同属 §7.1 的这一条却既
+/// 没做也没交代。这里把「全库搜索」变成机器能查的东西,同
+/// `bw-workspace` `examples/provision_readback.rs` `scan_no_delete_surface`
+/// 的既有纹理(源码扫描,不是运行期调用——「这条 SQL 存不存在」本身没
+/// 有运行期行为可触发)。
+///
+/// 扫 `bw-app/src` + `bw-store/src` 里所有 `SET status`(改 `issue.status`
+/// 的 SQL)出现的地方,只认两条钦定路径:
+/// - `bw_store::sqlite::mark_issue_in_progress` —— `SET status =
+///   'in_progress'`,字面量硬编码,结构上写不出 `'done'`;
+/// - `bw_store::sqlite::transition_issue_status` —— 参数化 `SET status =
+///   ?`(`cmd/issue.rs::transition` 唯一调用点,写之前必过
+///   `bw_core::IssueStatus::can_transition_to`)。
+///
+/// 除此之外任何一行 `SET status` 都判定为「第二条路径」。**突变自
+/// 证**:临时在 `bw-store/src/sqlite.rs` 或 `bw-app/src` 任意位置加一行
+/// `sqlx::query("UPDATE issue SET status = 'done' WHERE 1=1")` 之类的越权
+/// 写,这一节必须变红。
+fn scan_no_second_done_write_path(bw_app_src: &Path, bw_store_src: &Path) -> Vec<String> {
+    const ALLOWED_SNIPPETS: &[&str] = &[
+        // mark_issue_in_progress——字面量,结构上写不出 'done'。
+        "SET status = 'in_progress'",
+        // transition_issue_status——钦定的比较并置写路径。
+        "SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+    ];
+    let mut findings = Vec::new();
+    for src_dir in [bw_app_src, bw_store_src] {
+        let mut stack = vec![src_dir.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&path) else {
+                    findings.push(format!("{}: 读取失败,无法扫描", path.display()));
+                    continue;
+                };
+                for (lineno, line) in content.lines().enumerate() {
+                    let trimmed = line.trim_start();
+                    if trimmed.starts_with("//") {
+                        continue; // 注释/文档行不是代码——提一句「SET status」不算一条写。
+                    }
+                    if !line.contains("SET status") {
+                        continue;
+                    }
+                    if ALLOWED_SNIPPETS.iter().any(|snip| line.contains(snip)) {
+                        continue;
+                    }
+                    findings.push(format!(
+                        "{}:{}: 出现一条不在钦定名单里的 `SET status` 写(钦定名单只有 \
+                         mark_issue_in_progress 与 transition_issue_status 两条)——{}",
+                        path.display(),
+                        lineno + 1,
+                        line.trim()
+                    ));
+                }
+            }
+        }
+    }
+    findings
+}
 
 /// 用两件**专用**的活(不碰 issue b——那是 §7②的正反主角,提前把它转到
 /// Done 会让 §7 无法再演示「造→消」两步):一件走完整合法链路到
@@ -1320,33 +1552,56 @@ async fn section_done_is_human(app: &App, project_id: ProjectId) -> Ledger {
         Ok(()) => l.fail("「进行中」直接转「已完成」竟然成功了——合法转移表没有真的挡住这条边"),
     }
 
+    println!("  -- 全库搜索:编排层里没有第二条写「已完成」的路径(design §7.1)--");
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bw_app_src = manifest_dir.join("src");
+    let bw_store_src = manifest_dir.join("../bw-store/src");
+    let findings = scan_no_second_done_write_path(&bw_app_src, &bw_store_src);
+    if findings.is_empty() {
+        l.check(
+            true,
+            format!(
+                "源码扫描 {} + {}:`SET status` 只出现在两条钦定路径(mark_issue_in_progress / \
+                 transition_issue_status),没有第二条写「已完成」的路径",
+                bw_app_src.display(),
+                bw_store_src.display()
+            ),
+        );
+    } else {
+        for finding in &findings {
+            l.fail(finding.clone());
+        }
+    }
+
     l
 }
 
 // ─────────────────────────── 7 · 待人处理:五项正反各验一次 ───────────────────────────
 
-const Q1_UNSETTLED: &str = "SELECT id, issue_id, state, end_kind, ended_at FROM run \
-    WHERE ended_at IS NOT NULL AND settled_at IS NULL ORDER BY ended_at DESC";
-const Q2_IN_REVIEW: &str =
-    "SELECT id, number, title, updated_at FROM issue WHERE status = 'in_review' ORDER BY updated_at ASC";
-const Q3_STALLED: &str = "SELECT r.id, r.issue_id, r.state, r.end_kind, r.ended_at FROM run r \
-    WHERE r.state IN ('failed', 'orphaned') \
-      AND NOT EXISTS (SELECT 1 FROM run r2 WHERE r2.issue_id = r.issue_id AND r2.started_at > r.started_at) \
-    ORDER BY r.ended_at DESC";
-const Q4A_NEVER_OBSERVED: &str = "SELECT m.id, m.tier, m.name, m.collect_kind FROM metric m \
-    WHERE m.archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM observation o WHERE o.metric_id = m.id)";
-const Q4B_LATEST_OBSERVATION: &str =
-    "SELECT m.id, m.tier, m.name, MAX(o.ts) AS latest_ts FROM metric m \
-     LEFT JOIN observation o ON o.metric_id = m.id WHERE m.archived_at IS NULL GROUP BY m.id";
-const Q5_CURRENT_STAGE_RISKY: &str = "SELECT h.id, h.from_stage, h.to_stage, h.note, h.created_at \
-    FROM handoff h WHERE h.risky = 1 \
-      AND h.to_stage = (SELECT active_stage FROM project WHERE id = h.project_id) \
-    ORDER BY h.created_at DESC";
+/// 评审 Minor-1:此前这里打给人复核的 Q1-Q5 是设计稿原文 SQL 的手抄版
+/// (没有 project 过滤、没有次级排序键),与 `bw-store/src/sqlite.rs`
+/// 真正执行的查询(`format!` 拼出来,按 `project: Option<ProjectId>` 参
+/// 数化)可以分叉——突变测试实测到:store 层 SQL 改成 `WHERE 1=0` 之
+/// 后,断言正确变红,但打印区照样显示旧行,照着打印的 SQL 去 `sqlite3`
+/// 复核的人会被安抚。修法:不再另抄一份 SQL 字符串去单独执行,直接打印
+/// `before`(下方 `App::attention_view` 的真实返回值)本身的六个字
+/// 段——这就是下面全部断言用的同一份数据,打印用的和断言用的不可能再
+/// 分叉。真实 SQL 见 `bw-store/src/sqlite.rs` 对应的 store 方法(下面每
+/// 条打印都点了名)。
+fn print_rows<T: std::fmt::Debug>(label: &str, store_method: &str, rows: &[T]) {
+    println!("  [{label}] 源:App::attention_view → bw_store::{store_method}(与下方断言同一次调用的返回值)");
+    if rows.is_empty() {
+        println!("    → (0 行)");
+    } else {
+        for row in rows {
+            println!("    → {row:?}");
+        }
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 async fn section_attention_five_items(
     app: &App,
-    db_path: &str,
     project_id: ProjectId,
     metrics: &MetricIds,
     issues: &Issues,
@@ -1354,36 +1609,6 @@ async fn section_attention_five_items(
     d_run: RunId,
 ) -> Ledger {
     let mut l = Ledger::new();
-
-    let opts = SqliteConnectOptions::new()
-        .filename(db_path)
-        .read_only(true);
-    let pool = match SqlitePool::connect_with(opts).await {
-        Ok(p) => p,
-        Err(e) => {
-            l.fail(format!("独立只读连接打开数据库失败:{e}"));
-            return l;
-        }
-    };
-    println!("  -- 五条查询原样打印(供人复核,项目内只有一个项目,不加 project_id 过滤不影响结果)--");
-    print_and_run(&pool, "① 遗留运行", Q1_UNSETTLED, &mut l).await;
-    print_and_run(&pool, "② 评审中等你点", Q2_IN_REVIEW, &mut l).await;
-    print_and_run(&pool, "③ 停在原地的运行", Q3_STALLED, &mut l).await;
-    print_and_run(&pool, "④a 从没采过", Q4A_NEVER_OBSERVED, &mut l).await;
-    print_and_run(
-        &pool,
-        "④b 每条指标最新观测时刻",
-        Q4B_LATEST_OBSERVATION,
-        &mut l,
-    )
-    .await;
-    print_and_run(
-        &pool,
-        "⑤ 当前一棒的带险交棒欠账",
-        Q5_CURRENT_STAGE_RISKY,
-        &mut l,
-    )
-    .await;
 
     let now = OffsetDateTime::now_utc();
     let before = match app.attention_view(Some(project_id), now).await {
@@ -1393,6 +1618,38 @@ async fn section_attention_five_items(
             return l;
         }
     };
+
+    println!("  -- 五条查询的真实返回行原样打印(供人复核)--");
+    print_rows(
+        "① 遗留运行",
+        "RunStore::list_unsettled_runs",
+        &before.unsettled_runs,
+    );
+    print_rows(
+        "② 评审中等你点",
+        "IssueStore::list_issues_by_status(_, InReview)",
+        &before.in_review_issues,
+    );
+    print_rows(
+        "③ 停在原地的运行",
+        "RunStore::list_stalled_runs",
+        &before.stalled_runs,
+    );
+    print_rows(
+        "④a 从没采过",
+        "MetricStore::list_metrics_without_observation",
+        &before.metrics_without_observation,
+    );
+    print_rows(
+        "④b 数据过期(节奏窗口过滤后)",
+        "MetricStore::list_metric_latest_observation + cadence_window 过滤",
+        &before.metrics_stale,
+    );
+    print_rows(
+        "⑤ 当前一棒的带险交棒欠账",
+        "HandoffStore::list_current_stage_risky_handoffs",
+        &before.current_stage_risky_handoffs,
+    );
 
     println!("  -- ① 遗留运行:造(已在造数阶段成立)→ 消(结算一次)--");
     l.check(
@@ -1643,6 +1900,115 @@ async fn section_attention_five_items(
     l
 }
 
+// ─────────────────────────── --restart-probe 子命令 ───────────────────────────
+
+/// [`section_restart_consistency`] 「后半场」的真子进程落点——父进程用
+/// `std::env::current_exe()` re-exec 出的**全新操作系统进程**带着
+/// [`RESTART_PROBE_ARG`] 跑到这里,不是正常的七段流程。
+///
+/// 独立打开 `App`/`RunManager`、独立重新采工作区证据、独立重新组装六段
+/// 总控视图与待人处理投影,把结果各打印成一行 Debug 文本(`HEX_VIEW_DEBUG:`/
+/// `ATTENTION_VIEW_DEBUG:` 前缀,父进程按这两个前缀切出来做字符串比
+/// 对)。`now` 由父进程传入而不是这里现取(见调用方文档「为什么固定
+/// `now`」)。
+///
+/// 位置参数(父进程负责按这个顺序拼,顺序错了会解析失败,`ASSERT
+/// FAILED` 到 stderr、非零退出,父进程会如实报「子进程输出里没找到…
+/// 行」):`<db_path> <project_id-uuid> <workspace> <now-unix-ts>`。
+async fn run_restart_probe(args: &[String]) -> ExitCode {
+    if args.len() != 4 {
+        eprintln!(
+            "ASSERT FAILED: --restart-probe 需要 4 个位置参数(db_path project_id workspace now),实得 {}",
+            args.len()
+        );
+        return ExitCode::FAILURE;
+    }
+    let db_path = args[0].as_str();
+    let project_id_str = args[1].as_str();
+    let workspace = args[2].as_str();
+    let now_str = args[3].as_str();
+
+    let project_uuid = match Uuid::parse_str(project_id_str) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: --restart-probe project_id 解析失败:{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let project_id = ProjectId::from_uuid(project_uuid);
+    let now_ts: i64 = match now_str.parse() {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: --restart-probe now 解析失败:{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let now = match OffsetDateTime::from_unix_timestamp(now_ts) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: --restart-probe now 转换失败:{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let app = match App::open(db_path).await {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: --restart-probe 子进程 App::open 失败:{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let registry = Arc::new(ConnectorRegistry::default());
+    let manager =
+        match RunManager::open(Path::new(db_path), registry, RunManagerConfig::default()).await {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("ASSERT FAILED: --restart-probe 子进程 RunManager::open 失败:{e}");
+                return ExitCode::FAILURE;
+            }
+        };
+    let (loop_inputs, _snap) = match current_loop_inputs(&app.store, &manager, project_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: --restart-probe 子进程组装 LoopInputs 失败:{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let evidence = match bw_workspace::evidence::collect(workspace).await {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: --restart-probe 子进程采集工作区证据失败:{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let hex = match app
+        .hex_view(project_id, loop_inputs, Some(evidence), now)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: --restart-probe 子进程 App::hex_view 失败:{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let attention = match app.attention_view(Some(project_id), now).await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: --restart-probe 子进程 App::attention_view 失败:{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("HEX_VIEW_DEBUG:{hex:?}");
+    println!("ATTENTION_VIEW_DEBUG:{attention:?}");
+    // 进程身份本身的证据——父进程拿这一行与自己的 `std::process::id()` 比
+    // 对,逐字段相等再多也证明不了「真的换了一个进程」,PID 不同这一条
+    // 硬事实才是(见 `section_restart_consistency` 的 `l.check(child_pid
+    // != my_pid, …)`)。
+    println!("CHILD_PID:{}", std::process::id());
+    println!("RESTART_PROBE_OK");
+    ExitCode::SUCCESS
+}
+
 // ─────────────────────────── main ───────────────────────────
 
 macro_rules! bail {
@@ -1655,6 +2021,11 @@ macro_rules! bail {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some(RESTART_PROBE_ARG) {
+        return run_restart_probe(&args[2..]).await;
+    }
+
     let db_path = fresh_db_path();
     let ws_dir = fresh_workspace_dir();
     clear_stale(&db_path, &ws_dir);
@@ -1672,6 +2043,11 @@ async fn main() -> ExitCode {
     let app = match App::open(&db_path_str).await {
         Ok(a) => a,
         Err(e) => bail!(format!("App::open 失败:{e}")),
+    };
+    let registry = Arc::new(ConnectorRegistry::default());
+    let manager = match RunManager::open(&db_path, registry, RunManagerConfig::default()).await {
+        Ok(m) => m,
+        Err(e) => bail!(format!("RunManager::open 失败:{e}")),
     };
 
     let project_id = ProjectId::new();
@@ -1728,7 +2104,15 @@ async fn main() -> ExitCode {
 
     println!("== 3 · 信号只能推导(读时现算,零缓存)==");
     total.merge(
-        section_signal_derive_only(&app, &db_path_str, project_id, &metrics, &evidence).await,
+        section_signal_derive_only(
+            &app,
+            &manager,
+            &db_path_str,
+            project_id,
+            &metrics,
+            &evidence,
+        )
+        .await,
     );
     println!();
 
@@ -1764,35 +2148,35 @@ async fn main() -> ExitCode {
         Err(e) => bail!(e),
     };
 
-    println!("== 4 · 杀进程重开,数字一致 ==");
-    total.merge(section_restart_consistency(&db_path_str, project_id, &evidence).await);
+    println!("== 4 · 杀进程重开,数字一致(真子进程 re-exec)==");
+    total.merge(section_restart_consistency(&db_path_str, &ws_str, project_id).await);
     println!();
 
     println!("== 5 · 六段逐段读回 ==");
     total.merge(
         section_hex_segments(
-            &app, project_id, &metrics, &issues, &ws_str, &evidence, c_run, d_run,
+            &app,
+            &manager,
+            &db_path_str,
+            project_id,
+            &metrics,
+            &issues,
+            &ws_str,
+            &evidence,
+            c_run,
+            d_run,
         )
         .await,
     );
     println!();
 
-    println!("== 6 · 完成永远人点(显式转移 + 合法转移表拒绝)==");
+    println!("== 6 · 完成永远人点(显式转移 + 合法转移表拒绝 + 没有第二条写路径)==");
     total.merge(section_done_is_human(&app, project_id).await);
     println!();
 
     println!("== 7 · 待人处理:五项正反各验一次 ==");
     total.merge(
-        section_attention_five_items(
-            &app,
-            &db_path_str,
-            project_id,
-            &metrics,
-            &issues,
-            c_run,
-            d_run,
-        )
-        .await,
+        section_attention_five_items(&app, project_id, &metrics, &issues, c_run, d_run).await,
     );
     println!();
 
