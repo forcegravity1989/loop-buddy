@@ -12,7 +12,7 @@
 | 一 · 骨架与器官移植 | ✅ A/B/C 五 commit(0f032b9…d9504e3),bw-core+四器官零改写移植,读回指挥器 PORT_READBACK_OK |
 | 二 · 连接器地基 | ✅ A/B/C 五 commit(2b9e16a…f799e17),契约+gh/codehub/脚本三家+probe_all 真探活+CI next-gates |
 | 三 · agentcli 层 | 🔄 三-1 完成(契约三档/PROTOCOL=2/PTY 双平台后端+进程组真杀,0eb0c2b…a1d9499);三-2 完成(注册表/claude 连接器/指挥器,0099fc0/a8a0641/0075187)+ 三-2 修复轮完成(会话号真接线/铁律正文进系统提示词/断言真空补齐/取消真杀进常绿,§10 第 5 条)+ 缺口清偿轮(env-strip 真生效 + Unix 自动提交,97a66a6,§10 第 3/4 条已消灭);`--real` 端到端仍未跑通——验证轮新发现一道独立阻塞(全新工作区首次交互式启动的双重确认对话框,§10 第 6 条,待设计取舍);切片三主体收官,四待发 |
-| 四 · 并行运行 | ⬜ |
+| 四 · 并行运行 | ✅ A-1/B/C/D/E 六 commit(216a424…f8d3bef 打底,四B `dfd71d3`/四C `ad252fc`/四D `062e75a` 立起运行管理器单口+十件并行+五竞态确定性复现,`RUN_RACES_OK` 169 条断言全过、不依赖网关);四E 真实并行三件如实预期撞 §10 第 6 条(双重确认对话框)阻塞——3 件均 `start` 成功但 90s 内无一件产出上游 jsonl,mock 档不受影响,证据留本机不入仓 |
 | 五 · 六段总控 + 待人处理 | ⬜ |
 | 六 · multica cli 穿刺与缝入 | ⬜(等用户提供仓库指针) |
 | 七 · 真实项目切换 + 一次性导入 | ⬜ |
@@ -223,7 +223,7 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
    - **现象**:本条设计稿原文按「若切片四合入时三-2 尚未落地」立条件——但复核工作区实况(`git log --oneline -3` 含 `2feb2ce`),三-2(agentcli 层注册表 + claude 执行连接器)与三-2 修复轮、缺口清偿轮**均已落地**,条件本身已不成立。真实的现状是:切片四A(本次)只搭了 `bw-store`/`bw-app` 骨架与两把结算/关门守卫(`store_guards` 指挥器已证),运行管理器本体(开工/取消/结束回写/重启清理)与 `run_races` 指挥器(十件并行 + 五竞态)按 design §10 的切分留给下一任务——「真实并行三件」(`run_races --real`)因此不是被三-2 卡住,而是单纯还没到实现它的那个任务。
    - **来源**:切片四内部的 commit 切分(design §8 建议 A-E 五个 commit,本次只完成相当于 A 的部分)。
    - **待办**:下一任务把 `run_races` 指挥器(含 mock 档的十件并行 + 五竞态)实现并跑绿之后,再跑一次 `run_races --real`(依赖三-2,现已具备前置条件),证据存本机 `verification/`,在本表补记。
-   - **登记日**:2026-08-10。
+   - **登记日**:2026-08-10。**mock 档已消灭于切片四D commit `062e75a`**(`run_races` 十件并行 + 五竞态全部确定性复现,169 条断言,`RUN_RACES_OK`,不依赖网关,已进常绿门禁)。**「真实并行三件」这一半仍未消灭**:切片四E 按待办跑了 `run_races --real --n 3`(前置条件三-2 已具备,claude 在 PATH),两次实跑结果一致——3 件全部 `start` 成功、拿到 `upstream_session`,但 90 秒轮询窗口内全部停在 `Running`,读回 `~/.claude/projects/<encoded>/<upstream>.jsonl` 三件均不存在;如实登记为**受阻**,阻塞原因就是下方第 6 条(全新工作区首次交互式启动的双重确认对话框),不是新阻塞,是第 6 条在这一档场景下的又一次复现。证据留本机(不入仓)。
 
 9. **「待人处理」只证明了数据形状,投影未建**(登记日 2026-08-10,切片四A 实施时按 design-s4-runmanager.md §10 附带缺口登记)
    - **现象**:遗留运行(关了门但没结账,`ended_at IS NOT NULL AND settled_at IS NULL`)这个形状在新 schema 下能用一条 SELECT 查出来(`run` 表 `ended_at`/`settled_at` 两列独立可空,design §2.5),但没有任何代码把它变成一个清单或投影;本次的 `store_guards` 指挥器也没有专门跑这条 SELECT(它验的是两把守卫本身,不是这条派生查询)。
@@ -235,4 +235,10 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
     - **现象**:`sqlite3` 独立复现:同名索引已存在时,一条谓词不同的 `CREATE UNIQUE INDEX IF NOT EXISTS` 会被静默忽略,`sqlite_master.sql` 里留的还是旧定义。这与本仓库「`CREATE TABLE IF NOT EXISTS` 对存量表不加新列」是同一类坑,只是从列扩到了索引;现有的迁移双守卫(`add_column_if_missing`,`next/crates/bw-store/src/sqlite.rs`)只覆盖列,没有对应机制覆盖索引定义。
     - **来源**:`next/crates/bw-store/src/sqlite.rs`(开库流程,`CREATE UNIQUE INDEX IF NOT EXISTS uq_run_live_delivery_per_issue` 由这里逐语句执行);评审复现记录见切片四-1 独立复审全文 Important-2。
     - **待办**:将来一旦要修 `uq_run_live_delivery_per_issue`(或本片之后新增的任何索引)的谓词,需要先加一条索引迁移(开库时比对 `sqlite_master.sql` 与期望定义,不一致就 `DROP INDEX` 后重建),不能只改 `schema.sql`——否则存量用户库永远修不上,新库老库行为分叉。本次(切片四-1 修复轮)只在 `schema.sql` 索引旁补了如实注释与本条登记,不修机制,机制留给真正需要改这条谓词的那次任务。
+    - **登记日**:2026-08-10。
+
+11. **「同工作区串线校验」只在单进程存活期内成立,重启后失效**(登记日 2026-08-10,切片四D 实施时发现)
+    - **现象**:主控裁决 #5 要求的「同一个工作区已经有活跃运行时,第二次开工如实拒绝」(`RunError::WorkspaceBusy`)靠 `RunManager` 循环任务内存里的 `by_workspace: HashMap<PathBuf, RunId>` 实现——设计本身就把它定成「单点实现,不跨层」(不查数据库,不要求跨重启)。这意味着:进程重启后 `by_workspace` 从空表开始,如果 `reap_on_restart()` 还没被调用(该方法本身也不是自动触发的,design §3.1「不自动清理遗留」),此时对一个「库里还开着旧运行、但本进程从未见过」的工作区发起 `start()`,`by_workspace` 查不到冲突、`create_run` 也不会因为工作区重复而报错(唯一索引只按 `issue_id` 建,不按 `workspace`)——两个不同的 issue 若被指到同一个工作区,新的一个能顺利插行开工,之后 agentcli 层的会话续接会按工作区路径认出旧会话、把新活的开局接到旧活的历史对话里,这个错位不会被任何一层挡住。
+    - **来源**:`next/crates/bw-app/src/run/manager.rs`(`Loop::by_workspace` 字段与 `handle_start` 里的检查),按 design-s4-runmanager.md §11 开放问题 5 与主控裁决 #5 的字面范围实现——裁决本身只要求「单点实现」,没有要求跨重启;`run_races` 指挥器的同工作区串线校验一节(`section_workspace_guard`)验证的正是「单进程内」这半句,没有覆盖重启后的这条空窗,如实标注不假装测过。
+    - **待办**:真要补上跨重启这一半,两个方向:①在 `reap_on_restart()` 里顺带扫一遍数据库里所有还开着的运行、把 `by_workspace` 重建起来(需要 `run` 表加一条按 `workspace` 分组的查询,或者把重建塞进 `RunManager::open()` 本身而不是等显式调 `reap_on_restart`);②或者接受这条校验就是「尽力而为,不承诺跨重启」的定位,把这句话写进 `RunManager::start` 的文档注释里(目前文档没有提到这个边界)。哪个方向对,以及要不要现在就补,留给切片五接手时按真实撞上的场景定。
     - **登记日**:2026-08-10。

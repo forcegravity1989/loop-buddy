@@ -4,8 +4,8 @@
 //! §4 点名的五个竞态(同一件活开不出第二个交付运行 / 取消与完成同时到
 //! 达只结算一次 / 单条失败不牵连 / 重启后遗留运行如实标注不假活 / 晚到
 //! 消息不错账)与 §7 的验收条目「十件活并行互不覆盖、各自只结算一次」确
-//! 定性地造出来、`sqlite3` 读回核对。**全程不依赖网关**,可安全常绿。
-//! 「真实并行三件」(`--real`)是切片四E 的事,本片不预置。
+//! 定性地造出来、`sqlite3` 读回核对。**mock 档全程不依赖网关**,可安全
+//! 常绿;`--real` 那一档依赖真实 `claude` 会话,不进常绿门禁(§5.3)。
 //!
 //! **本档的脚本化执行连接器([`ScriptedExec`])住在这个文件里,不进任何
 //! crate 的正式代码**(design §4.1)——它的状态是「起跑时刻 + 脚本」的纯
@@ -21,6 +21,7 @@
 //! ```text
 //! cargo run -p bw-app --example run_races                    # mock 档,常绿
 //! cargo run -p bw-app --example run_races -- --n 10 --rounds 20
+//! cargo run -p bw-app --example run_races -- --real <git 检出根的父目录>
 //! ```
 //! 退出码 0 且末行 `RUN_RACES_OK` = 全部断言通过;任何一条失败 → stderr
 //! 打 `ASSERT FAILED: …`,末行 `RUN_RACES_FAILED`,退出码 1。
@@ -96,11 +97,13 @@ fn clear_stale_dbs(current: &PathBuf) {
 struct Args {
     n: usize,
     rounds: usize,
+    real: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut n = 10usize;
     let mut rounds = 20usize;
+    let mut real = None;
     let mut argv = std::env::args().skip(1);
     while let Some(a) = argv.next() {
         match a.as_str() {
@@ -118,10 +121,13 @@ fn parse_args() -> Result<Args, String> {
                     .parse()
                     .map_err(|e| format!("--rounds 解析失败:{e}"))?;
             }
+            "--real" => {
+                real = Some(PathBuf::from(argv.next().ok_or("--real 需要一个目录参数")?));
+            }
             other => return Err(format!("未知参数:{other}")),
         }
     }
-    Ok(Args { n, rounds })
+    Ok(Args { n, rounds, real })
 }
 
 // ─────────────────────────── 断言账本 ───────────────────────────
@@ -385,7 +391,7 @@ async fn main() -> ExitCode {
         Ok(a) => a,
         Err(e) => {
             eprintln!("参数错误:{e}");
-            eprintln!("用法:run_races [--n <N>] [--rounds <N>]");
+            eprintln!("用法:run_races [--n <N>] [--rounds <N>] [--real <git 检出根的父目录>]");
             return ExitCode::FAILURE;
         }
     };
@@ -395,7 +401,7 @@ async fn main() -> ExitCode {
 
     println!("== run_races · 切片四行为验收指挥器 ==");
     println!("本次数据库:{}   ← 跑完不删,给人手工复核", db_path.display());
-    println!("执行连接器:【mock】脚本化(自我标注)");
+    println!("执行连接器:【mock】脚本化(自我标注;真实并行档要 --real)");
     println!(
         "并行件数:{}   撞车轮数:{}   轮询节奏:250ms",
         args.n, args.rounds
@@ -519,6 +525,12 @@ async fn main() -> ExitCode {
     println!("== 附 · 存量库迁移双守卫 ==");
     total.merge(section_migration_guard().await);
     println!();
+
+    if args.real.is_some() {
+        println!("== 附 · 真实并行三件(--real,不进常绿门禁)==");
+        section_real(args.real.as_deref().unwrap(), args.n).await;
+        println!();
+    }
 
     println!(
         "断言 {} 条,{}",
@@ -1795,4 +1807,181 @@ async fn section_migration_guard() -> Ledger {
     }
 
     l
+}
+
+// ─────────────────────────── 附 · --real ───────────────────────────
+
+/// 真实并行三件(design §5.3):`--real <git 检出根的父目录>` 起三件真实
+/// claude 会话。**如实预期**:全新工作区首次交互式启动会先撞
+/// plan/23-opc-stitching-rebuild.md §10 第 6 条(双重确认对话框,默认退
+/// 出)——先试,撞上就如实打印,不为绕过对话框替用户自动应答安全确认。
+async fn section_real(parent_dir: &std::path::Path, n: usize) {
+    use bw_connector::{InjectBlock, ProjectBinding};
+    use bw_engine::agentcli::AgentCliConnector;
+    use bw_engine::interactive_cli::{InteractiveCliExecutor, CLAUDE};
+
+    let n = n.clamp(1, 3); // §5.3 的档位规模是三件;`--n` 给了更大的值也不在这里放大成本
+    println!("前置:claude 在 PATH + 给定的父目录用于新建 {n} 个真实 git 检出");
+
+    let mut worktrees = Vec::new();
+    for i in 1..=n {
+        let dir = parent_dir.join(format!("run-races-real-{i}-{}", Uuid::new_v4()));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!("REAL_RUN_FAILED(建工作区失败):{e}");
+            return;
+        }
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .status()
+        };
+        let ok = run(&["init", "-q", "-b", "main"])
+            .map(|s| s.success())
+            .unwrap_or(false)
+            && run(&["config", "user.email", "run-races@bw.local"])
+                .map(|s| s.success())
+                .unwrap_or(false)
+            && run(&["config", "user.name", "run_races --real"])
+                .map(|s| s.success())
+                .unwrap_or(false);
+        if !ok {
+            eprintln!("REAL_RUN_FAILED(git 初始化失败,第 {i} 件):检查本机是否装了 git");
+            return;
+        }
+        let _ = std::fs::write(dir.join("README.md"), "run_races --real 临时工作区\n");
+        let _ = run(&["add", "."]);
+        let _ = run(&["commit", "-q", "-m", "init"]);
+        worktrees.push(dir);
+    }
+
+    let mut tickets = Vec::new();
+    for (idx, ws) in worktrees.iter().enumerate() {
+        let binding = ProjectBinding {
+            project: ProjectId::new(),
+            host: String::new(),
+            path: format!("run-races-real-{}", idx + 1),
+        };
+        let conn = AgentCliConnector::new(
+            binding,
+            &CLAUDE,
+            std::sync::Arc::new(InteractiveCliExecutor::new()),
+        );
+        let execute = conn.as_execute().expect("AgentCliConnector 应支持 Execute");
+        let cx = CallCtx {
+            req: RequestId::new(),
+            timeout: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        let spec = ExecSpec {
+            workspace: ws.clone(),
+            branch: "main".to_string(),
+            inject: vec![InjectBlock {
+                label: "demo".to_string(),
+                body: "这是 run_races --real 档的演示注入块,不是真实技能库内容。".to_string(),
+            }],
+            budget_usd: None,
+        };
+        match execute.start(&cx, spec).await {
+            Ok(ok) => {
+                println!(
+                    "第 {} 件 start 成功,upstream_session={:?}",
+                    idx + 1,
+                    ok.value.upstream_session
+                );
+                tickets.push(Some((conn, ok.value)));
+            }
+            Err(f) => {
+                eprintln!(
+                    "REAL_RUN_FAILED(第 {} 件 start 阶段,可能是 §10 第 6 条的双重确认对话框、网关抖动或环境问题):{}",
+                    idx + 1,
+                    f.err
+                );
+                tickets.push(None);
+            }
+        }
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut finished = vec![false; tickets.len()];
+    while Instant::now() < deadline && finished.iter().any(|f| !f) {
+        for (idx, t) in tickets.iter().enumerate() {
+            if finished[idx] {
+                continue;
+            }
+            let Some((conn, ticket)) = t else {
+                finished[idx] = true;
+                continue;
+            };
+            let execute = conn.as_execute().expect("应支持 Execute");
+            let cx = CallCtx {
+                req: RequestId::new(),
+                timeout: None,
+                cancel: tokio_util::sync::CancellationToken::new(),
+            };
+            if let Ok(ok) = execute.poll(&cx, ticket).await {
+                if let ExecState::Finished { ended, .. } = ok.value {
+                    println!("第 {} 件结束:{ended:?}", idx + 1);
+                    finished[idx] = true;
+                }
+            }
+        }
+        if finished.iter().any(|f| !f) {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    let mut ok_count = 0usize;
+    for (idx, t) in tickets.iter().enumerate() {
+        if let Some((conn, ticket)) = t {
+            let execute = conn.as_execute().expect("应支持 Execute");
+            let cx = CallCtx {
+                req: RequestId::new(),
+                timeout: None,
+                cancel: tokio_util::sync::CancellationToken::new(),
+            };
+            let _ = execute.cancel(&cx, ticket).await;
+            if let Some(upstream) = &ticket.upstream_session {
+                if let Some(home) = std::env::var_os("HOME") {
+                    let encoded: String = worktrees[idx]
+                        .to_string_lossy()
+                        .chars()
+                        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+                        .collect();
+                    let jsonl = PathBuf::from(home)
+                        .join(".claude")
+                        .join("projects")
+                        .join(encoded)
+                        .join(format!("{upstream}.jsonl"));
+                    let found = std::fs::metadata(&jsonl)
+                        .map(|m| m.len() > 0)
+                        .unwrap_or(false);
+                    println!(
+                        "第 {} 件上游会话文件读回:{} · 存在={found}",
+                        idx + 1,
+                        jsonl.display()
+                    );
+                    if found {
+                        ok_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if ok_count == worktrees.len() {
+        println!(
+            "REAL_RUN_OK:{ok_count}/{} 件真实并行会话产出了非空上游会话文件",
+            worktrees.len()
+        );
+    } else {
+        println!(
+            "REAL_RUN 未全部产出上游会话文件({ok_count}/{}):如实登记为受阻,不影响本档之外的其余断言(不进常绿门禁)",
+            worktrees.len()
+        );
+    }
+
+    for ws in &worktrees {
+        let _ = std::fs::remove_dir_all(ws);
+    }
 }
