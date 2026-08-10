@@ -21,6 +21,11 @@ script = ["dep:toml"]
 bw-core = { path = "../bw-core" }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+# 切片二A 曾因「骨架阶段没代码用它」删掉(只留 serde_json)。切片二B 收编
+# v1 github.rs/codehub.rs 后需要它回来:两家上游文件都有
+# `#[derive(serde::Deserialize)]` 的响应结构体(`RepoJson`/`NamespaceJson`
+# 等),workspace 的 `serde` 已带 `features = ["derive"]`,这里直接继承。
+serde = { workspace = true }
 serde_json = { workspace = true }
 # `RequestId::new()` 要 v4(随机)生成。workspace 的 `uuid` 默认关掉 v4(内核
 # crate 要保 wasm32 可编译),这里显式声明,不隐式蹭 bw-core 的 `idgen`

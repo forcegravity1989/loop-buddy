@@ -277,6 +277,21 @@ where
     }
 }
 
+/// 直接构造一个「不支持」的失败结果,**不经过 [`guarded`]**——这类失败是
+/// 本地决定(连接器压根没实现这个操作),不涉及外呼,不需要计时/取消这两条
+/// 边。与 [`crate::caps::IssueOps::checks`] 默认实现同一手法(那里手写了一次
+/// 因为它是 trait 默认方法、写在 `caps.rs`,不方便反过来依赖 `contract.rs`
+/// 的私有细节);这里收成一个共享小工具,给切片二B 起「上游真没有对应能力」
+/// 的分支复用(如 codehub 没有 `issue_state`/`close_issue`/`change_state`
+/// 的上游函数,两家都没有脚本采集能力)。
+pub fn unsupported<T>(cx: &CallCtx, cap: Capability, op: &'static str) -> ConnResult<T> {
+    Err(Fail {
+        req: cx.req,
+        took: Duration::ZERO,
+        err: ConnError::Unsupported { cap, op },
+    })
+}
+
 /// 连接器种类。按**能力家族**分,不按厂商分。字符串形态只在存库/读文件时出现,
 /// 进内存立刻收敛成这个枚举——编排层永远看不到 `"github"` 这种裸串。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

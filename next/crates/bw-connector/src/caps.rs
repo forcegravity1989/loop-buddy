@@ -3,6 +3,8 @@
 //! 「枚举 + 手写上转方法」:对象安全、零 `dyn Any`、零 unsafe;声明由实现推导,
 //! 分叉不可能;新增能力=基座加一个 default 方法,老适配器不动。
 
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 
 use crate::contract::{
@@ -170,15 +172,35 @@ pub trait IssueOps: Send + Sync {
     }
 }
 
-/// 提 MR/PR 需要的信息(分支、标题、正文——具体字段由适配器在收编时补齐,
-/// 这里先留最小形状,骨架阶段字段以能编译通过为准)。
+/// 提 MR/PR 需要的信息。
+///
+/// **字段随切片二B 实际收编 v1 `open_pr`/`create_mr` 而定稿**——骨架阶段
+/// (切片二A)猜的 `branch`/`base`/`body` 三个字段,经收编验证后证明两家连接器
+/// 都不消费:
+/// - `open_pr`/`create_mr` 都是**自己算**活分支(`bw/issue-{issue_number}`,
+///   `github::issue_branch` 的老规矩),不接受调用方另指定分支;
+/// - `gh pr create` 从 `workspace` 的 `origin` 远端自动推断目标分支,
+///   `codehub-cli mr create` 在运行时从 `origin/HEAD` 解析目标分支,两家都
+///   不接受调用方传入的目标分支;
+/// - 两家的 PR/MR 正文都是**自己拼**的(含 `Closes #<n>` 自动关单),不接受
+///   调用方传入的正文。
+///
+/// 留着这三个不会被消费的字段,会让调用方误以为填了就有效(实际被无声丢弃)
+/// ——这正是本仓库反对的「看起来做了但没做」,按 CLAUDE.md「不为向后兼容留
+/// 旧路径」的原则拿掉,不留兼容层(2026-08-10,切片二B)。换上两个两家都
+/// **真正需要**、骨架阶段完全没有的字段:
 pub struct OpenChangeReq {
-    /// 源分支(活分支)。
-    pub branch: String,
-    /// 目标分支(MR/PR 要合进哪条)。
-    pub base: String,
+    /// 本地 git 检出根——`open_pr`/`create_mr` 都要在这里跑
+    /// stage+commit+push(内部调用**内建**工作区函数,这两个函数不出现在
+    /// 本接口上)。骨架阶段完全没有这个字段,没有它 `open_change` 连上游
+    /// 函数都调不起来。
+    pub workspace: PathBuf,
+    /// 这件活的 Issue 号。决定活分支名(`bw/issue-{issue_number}`)与
+    /// PR/MR 正文里的 `Closes #<n>` 关联,两者都由上游函数自己拼,不经这个
+    /// 结构体的其它字段传入。
+    pub issue_number: u32,
+    /// 唯一真正被两家上游函数消费的自由文本字段,进 `--title`。
     pub title: String,
-    pub body: String,
 }
 
 /// Issue 状态归一化:上游 `OPEN`/`CLOSED`/`opened`/`closed` 这些原生词只活在
