@@ -14,13 +14,15 @@
 
 ## 路线与选型背景(00-05,已是历史,各文件顶部有横幅)
 
+> 其中已无活文档引用的篇目会陆续归档:从本目录移除,原样保留在 `plan-archive` 分支的原路径下(索引见该分支的 `plan/ARCHIVE-INDEX.md`)。下表标「已归档」的即是。
+
 | 文件 | 一句话 | 还有效的部分 |
 |---|---|---|
 | [00-PLAN.md](00-PLAN.md) | 最初的总路线图(七控制点/双团队时期) | §6 设计系统 token 仍被 CLAUDE.md 引用 |
-| [01-prototype-inventory.md](01-prototype-inventory.md) | HTML 原型逐项转录(七步向导时期) | 原型仍是产品命题出处 |
+| 01-prototype-inventory.md(已归档) | HTML 原型逐项转录(七步向导时期) | 原型正本在 `design/project-management-wizard/`,产品命题出处见 07 |
 | [02-rust-stack-evaluation.md](02-rust-stack-evaluation.md) | UI 技术选型评估 | **结论至今成立**(Dioxus 0.7 pin =0.7.9) |
 | [03-architecture-and-engine.md](03-architecture-and-engine.md) | 架构与引擎设计 | §2.5 L0-L6 派生链定义**至今是权威定义** |
-| [04-effort-and-mvp.md](04-effort-and-mvp.md) | 工作量估算与 MVP 切线 | 无(前提已被推翻,仅决策背景) |
+| 04-effort-and-mvp.md(已归档) | 工作量估算与 MVP 切线 | 无(前提已被推翻,仅决策背景) |
 | [05-complete-form-design.md](05-complete-form-design.md) | 完整形态设计(multica 融合分支) | G 系列缺口台账由 06 接管;文首谱系注写明 |
 
 ## 执行批次记录(09-21,一批一篇;做完即历史,但含当批的权威定义)
