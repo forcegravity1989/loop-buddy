@@ -37,6 +37,7 @@ pub use caps::{Connector, Execute, IssueOps, IssueState, OpenChangeReq, Probe, P
 pub use contract::{
     guarded, unsupported, CallCtx, CallOk, Capability, CapabilitySet, ConfigRef, ConnError,
     ConnResult, ConnectorEntry, ConnectorKind, ExecSpec, ExecState, ExecTicket, Fail, IdemKey,
-    InjectBlock, OpClass, ProjectBinding, RequestId, WriteOutcome, PROTOCOL,
+    InjectBlock, OpClass, ProjectBinding, RequestId, SessionEnd, StopReason, WriteOutcome,
+    PROTOCOL,
 };
 pub use registry::{ConnectorRegistry, RoutingError};

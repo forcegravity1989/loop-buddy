@@ -22,7 +22,13 @@ use tokio_util::sync::CancellationToken;
 /// **契约冻结点 = 切片二B 收编完成**:在那之前(骨架阶段到 gh/codehub/script
 /// 三家真实收编期间)对契约类型的形状调整不撞版本号——冻结后再增删字段才必须
 /// `PROTOCOL + 1`。
-pub const PROTOCOL: u32 = 1;
+///
+/// **变更记录**:
+/// - 2026-08-10(切片三A)`1 → 2`:`ExecState::Finished` 的 `ok: bool` 换成
+///   `ended: SessionEnd`(会话怎么结束的三档事实,见该类型文档)。冻结后第一次
+///   形状变更,按冻结条款撞版本号。核过全仓 `Execute`/`ExecState` 实现数与
+///   消费者数均为 0(design-s3-agentcli.md §4.2),代价只是这一个常量。
+pub const PROTOCOL: u32 = 2;
 
 /// 能力名。既是路由键,也是「不支持」错误里说得清的那个词。裁决 #11:通信
 /// 能力(通知出口)不预先占位——空枚举项会诱导人往里填东西,做减法是纲。
@@ -381,16 +387,51 @@ pub struct ExecTicket {
 /// **刻意的类型断路**:这里没有 `Done` 变体。执行连接器再成功也只产出
 /// `Finished`,把 Issue 推到「评审中」;从「评审中」到「完成」的唯一入口是
 /// `bw-core` 状态机的显式转移。产品铁律在契约类型上就成立,不靠纪律,不许妥协。
+///
+/// **2026-08-10(切片三A)如实化**:`Finished` 原来带一个 `ok: bool`,但这个
+/// 布尔算不出来——PTY 会话的退出码几乎不携带信息(码 0 可能是活干完了,也
+/// 可能是人关了窗口;不退出也可能是干完了在等人)。让适配器填一个它不知道的
+/// 布尔,就是在类型上逼它猜;而且这个布尔没有正当消费者(成败判定归编排层看
+/// 远端 MR 状态,不该由这里的布尔代劳)。换成 `ended: SessionEnd`——只携带
+/// 「会话怎么结束的」这类真能观测到的事实,不含判断(design-s3-agentcli.md
+/// §4)。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExecState {
     Running,
-    /// 干完了。**最远只能推到「评审中」**。
+    /// 会话结束了。**结束 ≠ 干成了**——成败看真实证据(MR 状态、工作区改动),
+    /// 不看这里。最远只能推到「评审中」;这里依然**没有** Done 档。
     Finished {
-        ok: bool,
+        /// 怎么结束的(三档事实,见 [`SessionEnd`])。
+        ended: SessionEnd,
+        /// 只放上游给的原话或空串,**不放 BW 编的结论**——mock 执行器的
+        /// 「【mock】…」自我标注是正确样例。
         summary: String,
     },
     Canceled,
     /// 上游会话还在,但 BW 这边重启了——如实标注,不假活。
     Orphaned,
     Unknown,
+}
+
+/// 会话是怎么结束的。三档全是**能观测到的事实**,不含判断——尤其不含「成功
+/// 与否」的判断,那是编排层看真实证据(远端 MR 状态、工作区改动)才能下的
+/// 结论,契约类型层面不代劳(design-s3-agentcli.md §4.3)。
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionEnd {
+    /// 上游进程自己退出。退出码只是事实,不解释成成败。
+    ProcessExit { code: Option<i32> },
+    /// BW 主动停的(挂钟上限 / 预算封顶)。人点的取消不走这里,走
+    /// [`ExecState::Canceled`]。
+    StoppedByBw { reason: StopReason },
+    /// 连接断了、进程去向不明——如实说不知道,绝不当成功。
+    ContactLost,
+}
+
+/// [`SessionEnd::StoppedByBw`] 的停止原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// 挂钟上限到了。
+    WallClock,
+    /// 按次预算封顶到了。
+    Budget,
 }
