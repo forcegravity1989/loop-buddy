@@ -11,10 +11,19 @@
 //!   `InteractiveCliExecutor::claude_binary` 字段,现在改成读调用方已经解析
 //!   好、当参数传进来的 `binary: &str`(接缝提取的天然结果:同一个值,只是
 //!   传递方式从字段访问变成参数,不是逻辑变化)。
-//! - [`unix::UnixPtyBackend`]:本片唯一新写项,用 `portable-pty` 补上
-//!   macOS/Linux 缺的那一半(主控裁决 #2:本机 macOS 是部署机,必须能真
-//!   跑)。范围钉在「spawn / 字节双向 / 尺寸 / kill」的最小集,不含 Windows
-//!   实现里那段 claude 专属的自动提交逻辑——见该模块文档的如实说明。
+//! - [`unix::UnixPtyBackend`]:本片(切片三B)唯一新写项,用 `portable-pty`
+//!   补上 macOS/Linux 缺的那一半(主控裁决 #2:本机 macOS 是部署机,必须
+//!   能真跑)。范围原钉在「spawn / 字节双向 / 尺寸 / kill」的最小集,不含
+//!   Windows 实现里那段 claude 专属的自动提交逻辑——**这条范围裁剪已在
+//!   缺口清偿轮(2026-08-10,清偿 plan/23 §10 第 4 条)收窄**:自动提交
+//!   逻辑已经照 Windows 那份的策略(等 TUI 加载完一小段时间、
+//!   `plan.submit_prompt` 为真时发一次 `\r`)补齐,见该模块文档。
+//!
+//! 同一轮清偿的另一半(plan/23 §10 第 3 条,env-strip 对真实子进程不生
+//! 效):两份后端起步都补了 `env_clear()`(或等价 API),让
+//! `LaunchPlan.env` 真的成为子进程环境的唯一来源,不再被
+//! `CommandBuilder`/conpty-oxide `Command` 起步时已经整份继承的父进程环
+//! 境盖过——见两个子模块各自的行内注释。
 //!
 //! 调用方只认 [`PtyBackend`] 这一个 trait;[`active`] 按 cfg 选一份实现,
 //! `interactive_cli.rs` 里不再出现任何 `#[cfg(windows)]`/`#[cfg(unix)]`。
@@ -133,6 +142,23 @@ pub mod windows {
             // session from ever reaching EOF).
             let mut cmd = PtyCommand::new(binary);
             cmd.args(&plan.args);
+            // **缺口清偿(2026-08-10,清偿 plan/23 §10 第 3 条)**:这一行是
+            // 本条清偿新加的,不属于「Windows 分支整段搬运、零逻辑改写」的
+            // 范围——那条约束护的是 conpty-oxide 会话装配/收尾那段复杂逻
+            // 辑,不是「允许一个已知会导致真实鉴权泄漏的 bug 永远不修」。
+            // `PtyCommand`(conpty-oxide `blocking::Command`,包装
+            // `windows_spawn::Command`)构造时同样整份继承父进程环境,下面
+            // 只对 `plan.env` 剩下的键逐条 `cmd.env(k, v)`(覆盖/新增),从
+            // 未清空过——`interactive_cli.rs::build_startup_plan` 删掉的嵌
+            // 套会话变量因此原样漏进子进程,与 Unix 侧是同一个坑
+            // (`unix::UnixPtyBackend::run` 的对应注释)。`env_clear()` 是
+            // conpty-oxide 公开 API(`src/blocking/command.rs`),单行新
+            // 增,不改动这段搬运件的其余任何一行。
+            // **如实标注:本机是 macOS,没有 Windows 机器/SDK,这一行只用
+            // `cargo check --target x86_64-pc-windows-gnu -p bw-engine` 交
+            // 叉编译检查过类型对不对,从未在 Windows 真机跑过,行为未
+            // 实测。**
+            cmd.env_clear();
             for (k, v) in &plan.env {
                 cmd.env(k, v);
             }
@@ -252,14 +278,24 @@ pub mod unix {
     //! 优先于自建,design-s3-agentcli.md §7.4 / 主控裁决 #2)补上 macOS/
     //! Linux 缺的那一半:起 PTY 子进程、双向倒腾字节、resize、kill 的最小集。
     //!
-    //! **与 Windows 实现的一处刻意不对齐,如实记在这里**:Windows 实现里那
-    //! 段「首次运行等 TUI 加载完,自动发 `\r` 提交位置 prompt」的逻辑
-    //! (`submit_delay`/`submitted`)是 buddy 在 GLM 网关环境下测出来的
-    //! claude 交互式 TUI 不自动提交的补丁,不是 PTY 后端本身该有的语义。
-    //! design 明确把 Unix 后端的范围钉在「spawn / 字节双向 / 尺寸 / kill」
-    //! 的最小集,不含这条——这里不悄悄补上,免得下一个人以为漏了没做;真
-    //! 要在 macOS 上验证是否也需要这个补丁,得先有一次真实交互式 claude
-    //! 会话观察(留给切片三 C/D 接线后)。
+    //! **与 Windows 实现曾经的一处刻意不对齐,已在缺口清偿轮补齐,如实记在
+    //! 这里**:Windows 实现里那段「首次运行等 TUI 加载完,自动发 `\r` 提交
+    //! 位置 prompt」的逻辑(`submit_delay`/`submitted`)是 buddy 在 GLM 网关
+    //! 环境下测出来的 claude 交互式 TUI 不自动提交的补丁。切片三B 当时把
+    //! Unix 后端范围钉在「spawn / 字节双向 / 尺寸 / kill」的最小集,不含这
+    //! 条,理由是「真要在 macOS 上验证是否也需要这个补丁,得先有一次真实
+    //! 交互式 claude 会话观察」——切片三-2 的 `agent_session --real` 跑了
+    //! 那次观察(plan/23-opc-stitching-rebuild.md §10 第 4 条):位置
+    //! prompt 确实以 argv 形式传给了 claude,但 Unix 后端没有自动按 Enter,
+    //! 会话卡在「TUI 起来了、在等用户按 Enter」这一步,真实 jsonl 从未生
+    //! 成。本条缺口清偿轮(2026-08-10)照 Windows 那份策略把 `submit_delay`/
+    //! `submitted` 结构原样搬进 Unix 后端(见下面 `run` 方法体),不再是空
+    //! 白——**启发式如实标注**:等待时长固定 2000ms,赌的是「TUI 到这个点
+    //! 已经加载完」,不是真的侦测到了就绪信号;真实网络/机器更慢时这个数
+    //! 字可能不够,失效模式是「claude 还没准备好接收输入,`\r` 被送进一个
+    //! 还没起来的输入框,等于没发」——`agent_session --real` 的读回结果是
+    //! 这个启发式在本机真实环境下够不够用的唯一证据,不是这里的固定延迟本
+    //! 身能担保的。
     //!
     //! 与 Windows 实现的行为语义对照(切片三-1 修如实分列,不再笼统写
     //! 「对齐」——评审指出「对齐」掩盖了下面这条真实差异):
@@ -319,6 +355,22 @@ pub mod unix {
             for a in &plan.args {
                 cmd.arg(a);
             }
+            // **缺口清偿(2026-08-10,清偿 plan/23 §10 第 3 条)**:
+            // `CommandBuilder::new(binary)` 内部调 `get_base_env()`,起步就
+            // 把当前进程的全量环境(`std::env::vars_os()`)整份拷进它自己
+            // 的内部 env 表(portable-pty 0.9.0 `src/cmdbuilder.rs`)——下面
+            // 这个 for 循环只对 `plan.env` 剩下的键逐条 `cmd.env(k, v)`(覆
+            // 盖/新增),从没调过 `env_clear()`/`env_remove()`,
+            // `interactive_cli.rs::build_startup_plan` 删掉的嵌套会话变量
+            // (`ANTHROPIC_AUTH_TOKEN`/`CLAUDECODE` 等)因此原样漏进真实子
+            // 进程——`pty_smoke` 的 env-strip 探针节复现过这个现象(修前必
+            // 现,见该指挥器与本次任务报告的突变自证)。`env_clear()` 后
+            // `CommandBuilder::as_command()` 会把这份清空后只剩 `plan.env`
+            // 的内部表整个搬进真正 spawn 用的 `std::process::Command`(该
+            // 函数自己也会先 `cmd.env_clear()` 再套用这份表,双重确认不会
+            // 半路又漏回父进程环境,见 portable-pty 源码 `as_command`)——
+            // `plan.env` 因此真正成为子进程环境的唯一来源,不再是一句空话。
+            cmd.env_clear();
             for (k, v) in &plan.env {
                 cmd.env(k, v);
             }
@@ -387,6 +439,20 @@ pub mod unix {
             // 里按正确写法处理;Windows 迁移件保留原样不动,已把同一个隐患
             // 记进本文件顶部注释与任务报告的 concerns。
             let mut read_finished = false;
+
+            // **缺口清偿(2026-08-10,清偿 plan/23 §10 第 4 条)**:语义对齐
+            // `windows::WindowsPtyBackend::run` 的 `submit_delay`/`submitted`
+            // ——`plan.submit_prompt` 为真时(首启,位置 prompt 已经以 argv
+            // 形式传给了子进程,但没人替它按 Enter),等一段时间让 TUI 加
+            // 载完,发一次 `\r` 把它送出去;`submit_prompt` 为假(续接,没
+            // 有位置 prompt 可提交)时 `submitted` 从一开始就是 `true`,下面
+            // `select!` 里那条分支的 `if !submitted` 门永远关着,不发任何
+            // 东西——不改变续接路径的既有行为,`pty_smoke` 原有场景
+            // (`submit_prompt: false`)因此不受影响。
+            let submit_delay = tokio::time::sleep(Duration::from_millis(2000));
+            tokio::pin!(submit_delay);
+            let mut submitted = !plan.submit_prompt;
+
             tokio::pin!(read_handle);
             loop {
                 tokio::select! {
@@ -410,6 +476,14 @@ pub mod unix {
                             });
                         }
                         None => break, // 调用方丢了输入端 —— 停止。
+                    },
+                    // TUI 加载完(启发式:固定等 2000ms,不是真的侦测到了就
+                    // 绪信号)——发一次 `\r` 提交位置 prompt。只有
+                    // `plan.submit_prompt` 为真且还没发过才会走到这里。
+                    _ = &mut submit_delay, if !submitted => {
+                        submitted = true;
+                        let _ = writer.write_all(b"\r");
+                        let _ = writer.flush();
                     },
                 }
             }

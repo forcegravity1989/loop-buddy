@@ -224,10 +224,19 @@ pub struct LaunchPlan {
 /// the process but the nested-execution vars are stripped (same as
 /// [`crate::ClaudeCliExecutor`]) so the child uses its own CLI config.
 ///
-/// **next 切片三-2 修如实标注,这条「剥离」目前是句空话**:见下面 for 循环
-/// 前的行内注释——`pty_backend::unix::UnixPtyBackend` 真 spawn 子进程时,这
-/// 里删掉的键并不会真的从子进程环境里消失(`plan/23-opc-stitching-rebuild.md`
-/// §10 第 3 条)。
+/// **缺口清偿(2026-08-10,清偿 plan/23-opc-stitching-rebuild.md §10 第 3
+/// 条),如实更新口径**:这条「剥离」曾经是句空话——`LaunchPlan.env` 这个
+/// `HashMap` 本身删对了键,但真实子进程(`pty_backend::unix::UnixPtyBackend`)
+/// 起步时用 `portable_pty::CommandBuilder::new` 已经整份继承了当前进程环
+/// 境,之前只对剩下的键调 `cmd.env(k, v)`,从没清空过,删掉的键因此照样漏
+/// 进子进程。现在 `pty_backend.rs` 的 unix/windows 两份后端起步都先
+/// `env_clear()` 再整个套用 `plan.env`(见该文件 `unix`/`windows` 两个子模
+/// 块的行内注释),这个 `HashMap` 真正成了子进程环境的唯一来源——`pty_smoke`
+/// 指挥器的 env-strip 探针节是这句话的确定性证据(不依赖网关,每次门禁都
+/// 跑)。**范围如实标注**:这条清偿只覆盖 `run_skill_pty`(真实交互式会话
+/// 的通道)。`InteractiveCliExecutor::run_skill` 的 `tokio::process::Command`
+/// 路径(非 PTY,v1 零改写移植件,当前不是 agentcli 层的真实交互通道)同一
+/// 模式的隐患未动,按既有规矩留给读到这条登记的下一个会话裁决。
 pub fn build_startup_plan(
     agent: &TuiAgentConfig,
     position_prompt: &str,
@@ -246,18 +255,17 @@ pub fn build_startup_plan(
     // the host may be running inside a Claude Code session whose injected
     // tokens/gateway/model alias cause 401 in the child).
     //
-    // **如实标注(next 切片三-2 修,切片三E 实测发现)**:这一步只改了
-    // `LaunchPlan.env` 这个 `HashMap` 本身,不代表子进程真的看不到这些
-    // 键——`pty_backend::unix::UnixPtyBackend::run` 用
-    // `portable_pty::CommandBuilder::new(binary)` 起步时已经把当前进程的
-    // 全量环境整份复制进它自己内部的 env 表,后面只对 `plan.env` 里剩下
-    // 的键调 `cmd.env(k, v)`(覆盖/新增),从没调用过
-    // `cmd.env_remove(...)`/`cmd.env_clear()`——这里删掉的键因此从未真正
-    // 从那份内部表里移除,真实子进程照样原样继承。`InteractiveCliExecutor
-    // ::run_skill` 的 `tokio::process::Command` 路径大概率同样中招(同一
-    // 模式:只 `.env(k,v)`,不清空)。详见
-    // `plan/23-opc-stitching-rebuild.md` §10 第 3 条;待办登记在那里,不
-    // 在本轮修(`pty_backend.rs` 不属于本轮修复范围)。
+    // **如实更新口径(缺口清偿轮,2026-08-10)**:这一步删的是
+    // `LaunchPlan.env` 这个 `HashMap` 本身——它现在真的是子进程环境的唯一
+    // 来源了。原因不在这里:`pty_backend::unix::UnixPtyBackend::run`/
+    // `windows::WindowsPtyBackend::run` 起步时都已经先 `env_clear()` 再整
+    // 个套用这个 `HashMap`,不再是「先整份继承父进程环境、再对剩下的键逐
+    // 条覆盖」——这里删掉的键因此真的从子进程环境里消失了。曾经的空话已
+    // 消灭于 `pty_backend.rs` 的这次修复(commit 见
+    // `plan/23-opc-stitching-rebuild.md` §10 第 3 条的清偿记录)。
+    // `InteractiveCliExecutor::run_skill` 的 `tokio::process::Command` 路径
+    // (非 PTY,当前不是 agentcli 层的真实交互通道)不在这次清偿范围内,同
+    // 一模式的隐患是否要修留给下一个会话裁决。
     let mut env: HashMap<String, String> = std::env::vars().collect();
     for var in [
         "ANTHROPIC_AUTH_TOKEN",

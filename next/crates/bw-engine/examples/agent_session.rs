@@ -430,20 +430,23 @@ fn assert_eq_path(label: &str, got: &Path, expected: &Path) -> bool {
 ///
 /// **如实标注这条断言证到哪一步、证不到哪一步**:这里只验证
 /// `LaunchPlan.env`(一个 `HashMap`)不含这两个键——这是 `build_startup_plan`
-/// 自己的契约,它证得到。它证不到「真实子进程也看不到这两个键」——那条链
-/// 路(`pty_backend::unix::UnixPtyBackend::run` 用
-/// `portable_pty::CommandBuilder::new` 起步,已经整份复制了当前进程环境,
-/// 只对 `plan.env` 剩下的键调 `cmd.env(k,v)`,从不 `env_clear`)已知不成
-/// 立,登记在 `plan/23-opc-stitching-rebuild.md` §10 第 3 条,本轮修只在
-/// `interactive_cli.rs` 补了如实标注(I2),不改 `pty_backend.rs`(不在本
-/// 轮修复范围)。
+/// 自己的契约。**「真实子进程也看不到这两个键」这一半,曾经证不到、已在缺
+/// 口清偿轮(2026-08-10)补上独立证据**:那条链路
+/// (`pty_backend::unix::UnixPtyBackend::run` 起步已改成先 `env_clear()` 再
+/// 整个套用 `plan.env`,不再整份继承父进程环境)有了自己的确定性断言——见
+/// `pty_smoke` 指挥器的 env-strip 探针节(经真实 PTY 起子进程读回,不依赖
+/// claude/网关,每次门禁都跑),不在本节重复验证同一件事,这里仍然只管
+/// `LaunchPlan.env` 这一层契约。
 fn assert_env_stripped(label: &str, env: &std::collections::HashMap<String, String>) -> bool {
     let leaked: Vec<&str> = ["ANTHROPIC_AUTH_TOKEN", "CLAUDECODE"]
         .into_iter()
         .filter(|k| env.contains_key(*k))
         .collect();
     if leaked.is_empty() {
-        println!("OK: {label}(LaunchPlan.env 已剔除;真实子进程是否也看不到见 plan/23 §10 第 3 条)");
+        println!(
+            "OK: {label}(LaunchPlan.env 已剔除;真实子进程是否也看不到由 pty_smoke 的 \
+             env-strip 探针节独立证明)"
+        );
         true
     } else {
         eprintln!("ASSERT FAILED: {label} 仍残留于 LaunchPlan.env:{leaked:?}");
