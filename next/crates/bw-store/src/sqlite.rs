@@ -6,11 +6,16 @@
 //! `crates/bw-store/src/sqlite.rs`).
 
 use crate::{
-    parse_run_end_kind, parse_run_kind, run_end_kind_text, run_kind_text, IssueRow, IssueStore,
-    NewIssue, NewProject, NewRun, ProjectRow, Result, RunEndKind, RunRow, RunStore, StoreError,
+    metric_tier_text, parse_metric_tier, parse_run_end_kind, parse_run_kind, parse_stage_kind,
+    run_end_kind_text, run_kind_text, stage_kind_text, HandoffRow, HandoffStore, IncomingMetricDef,
+    IssueRow, IssueStore, MetricRow, MetricStore, MetricSyncReport, MetricTier, NewIssue,
+    NewObservation, NewProject, NewRun, ObservationRow, ObservationStore, ProjectRow, Result,
+    RunEndKind, RunRow, RunStore, StoreError,
 };
 use async_trait::async_trait;
-use bw_core::{IssueId, IssueStatus, ProjectId, RunId, RunState};
+use bw_core::{
+    HandoffId, IssueId, IssueStatus, MetricId, ObservationId, ProjectId, RunId, RunState, StageKind,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use time::OffsetDateTime;
@@ -65,6 +70,14 @@ impl SqliteStore {
         // 库迁移双守卫」一节会真的造一个缺这一列的老库、走这条开库流
         // 程,读回验证补列生效。
         add_column_if_missing(&pool, "run", "demoted_at", "INTEGER").await?;
+
+        // next 切片五B(design §2.1):三列加列,双守卫第二次真实使用——
+        // 与上面 run.demoted_at 那次不同,这三列是**真正**这次迁移新增
+        // 的字段(切片四A 的 schema 里没有它们)。对每一个真实数据库都
+        // 安全:字段已存在就是 no-op,不存在才补。
+        add_column_if_missing(&pool, "project", "active_stage", "INTEGER").await?;
+        add_column_if_missing(&pool, "issue", "stage", "INTEGER").await?;
+        add_column_if_missing(&pool, "issue", "body", "TEXT NOT NULL DEFAULT ''").await?;
 
         Ok(Self { pool })
     }
@@ -134,17 +147,31 @@ impl IssueStore for SqliteStore {
     }
 
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>> {
-        let row = sqlx::query("SELECT id, name, root_path, created_at FROM project WHERE id = ?")
-            .bind(id.uuid().to_string())
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query(
+            "SELECT id, name, root_path, active_stage, created_at FROM project WHERE id = ?",
+        )
+        .bind(id.uuid().to_string())
+        .fetch_optional(&self.pool)
+        .await?;
         let Some(r) = row else {
             return Ok(None);
         };
+        // `active_stage` 是 INTEGER(1..5,design §2.1)——不同于 `handoff`
+        // 表 from_stage/to_stage 那两列的 TEXT 表示,这里走
+        // `StageKind::index()`/`from_index()` 那条既有的 1-based 编号
+        // 互转,不经 `parse_stage_kind`(那个是给 TEXT 列用的)。
+        let active_stage_num: Option<i64> = r.get("active_stage");
+        let active_stage = active_stage_num
+            .map(|n| {
+                StageKind::from_index(n as u8)
+                    .ok_or_else(|| StoreError::Other(format!("bad project.active_stage {n:?}")))
+            })
+            .transpose()?;
         Ok(Some(ProjectRow {
             id: parse_uuid(&r.get::<String, _>("id"), ProjectId::from_uuid)?,
             name: r.get("name"),
             root_path: r.get("root_path"),
+            active_stage,
             created_at: r.get("created_at"),
         }))
     }
@@ -168,8 +195,8 @@ impl IssueStore for SqliteStore {
 
     async fn get_issue(&self, id: IssueId) -> Result<Option<IssueRow>> {
         let row = sqlx::query(
-            "SELECT id, project_id, number, title, status, settled_at, created_at, updated_at \
-             FROM issue WHERE id = ?",
+            "SELECT id, project_id, number, title, status, settled_at, stage, body, \
+             created_at, updated_at FROM issue WHERE id = ?",
         )
         .bind(id.uuid().to_string())
         .fetch_optional(&self.pool)
@@ -178,6 +205,15 @@ impl IssueStore for SqliteStore {
             return Ok(None);
         };
         let status_text: String = r.get("status");
+        // `issue.stage` 同 `project.active_stage`:INTEGER(1..5),走
+        // `StageKind::from_index`,不是 TEXT。
+        let stage_num: Option<i64> = r.get("stage");
+        let stage = stage_num
+            .map(|n| {
+                StageKind::from_index(n as u8)
+                    .ok_or_else(|| StoreError::Other(format!("bad issue.stage {n:?}")))
+            })
+            .transpose()?;
         Ok(Some(IssueRow {
             id: parse_uuid(&r.get::<String, _>("id"), IssueId::from_uuid)?,
             project_id: parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid)?,
@@ -185,6 +221,8 @@ impl IssueStore for SqliteStore {
             title: r.get("title"),
             status: parse_issue_status(&status_text)?,
             settled_at: r.get("settled_at"),
+            stage,
+            body: r.get("body"),
             created_at: r.get("created_at"),
             updated_at: r.get("updated_at"),
         }))
@@ -408,6 +446,318 @@ impl RunStore for SqliteStore {
         .await?;
         rows.iter()
             .map(|r| parse_uuid(&r.get::<String, _>("id"), RunId::from_uuid))
+            .collect()
+    }
+}
+
+fn metric_row_from_sqlx(r: &sqlx::sqlite::SqliteRow) -> Result<MetricRow> {
+    let tier_text: String = r.get("tier");
+    Ok(MetricRow {
+        id: parse_uuid(&r.get::<String, _>("id"), MetricId::from_uuid)?,
+        project_id: parse_uuid(&r.get::<String, _>("project_id"), ProjectId::from_uuid)?,
+        tier: parse_metric_tier(&tier_text)?,
+        name: r.get("name"),
+        def: r.get("def"),
+        target_raw: r.get("target_raw"),
+        collect_kind: r.get("collect_kind"),
+        collect_query: r.get("collect_query"),
+        origin: r.get("origin"),
+        archived_at: r.get("archived_at"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    })
+}
+
+#[async_trait]
+impl MetricStore for SqliteStore {
+    #[allow(clippy::too_many_arguments)]
+    async fn create_manual_metric(
+        &self,
+        id: MetricId,
+        project_id: ProjectId,
+        tier: MetricTier,
+        name: &str,
+        def: &str,
+        target_raw: &str,
+        collect_kind: &str,
+        collect_query: &str,
+        at: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO metric (id, project_id, tier, name, def, target_raw, collect_kind, \
+             collect_query, origin, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?)",
+        )
+        .bind(id.uuid().to_string())
+        .bind(project_id.uuid().to_string())
+        .bind(metric_tier_text(tier))
+        .bind(name)
+        .bind(def)
+        .bind(target_raw)
+        .bind(collect_kind)
+        .bind(collect_query)
+        .bind(at)
+        .bind(at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_metric(&self, id: MetricId) -> Result<Option<MetricRow>> {
+        let row = sqlx::query(
+            "SELECT id, project_id, tier, name, def, target_raw, collect_kind, collect_query, \
+             origin, archived_at, created_at, updated_at FROM metric WHERE id = ?",
+        )
+        .bind(id.uuid().to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(metric_row_from_sqlx).transpose()
+    }
+
+    async fn list_metrics(&self, project_id: ProjectId) -> Result<Vec<MetricRow>> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, tier, name, def, target_raw, collect_kind, collect_query, \
+             origin, archived_at, created_at, updated_at FROM metric \
+             WHERE project_id = ? ORDER BY tier, name",
+        )
+        .bind(project_id.uuid().to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(metric_row_from_sqlx).collect()
+    }
+
+    async fn sync_metrics_from_file(
+        &self,
+        project_id: ProjectId,
+        incoming: Vec<IncomingMetricDef>,
+        at: i64,
+    ) -> Result<MetricSyncReport> {
+        // 整个同步在一个事务里完成——要么全部生效,要么一行都不改
+        // (design §2.2「一个字节不碰」的姊妹保证)。
+        let mut tx = self.pool.begin().await?;
+        let mut report = MetricSyncReport::default();
+
+        // 先取出这个项目当前所有 origin='file' 的行(id/tier/name/是否
+        // 已停用),按「层级+名字」建索引——这就是「按项目+层级+名字对上
+        // 就原地更新、保住原来的行 id」那条同步语义的查找表。同步完成后
+        // 这个表里剩下的键就是「正本里已经没有的」,对应自动停用。
+        let existing_rows = sqlx::query(
+            "SELECT id, tier, name, archived_at FROM metric \
+             WHERE project_id = ? AND origin = 'file'",
+        )
+        .bind(project_id.uuid().to_string())
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut existing: std::collections::HashMap<(String, String), (MetricId, bool)> =
+            std::collections::HashMap::new();
+        for r in &existing_rows {
+            let tier_text: String = r.get("tier");
+            let name: String = r.get("name");
+            let id = parse_uuid(&r.get::<String, _>("id"), MetricId::from_uuid)?;
+            let archived: Option<i64> = r.get("archived_at");
+            existing.insert((tier_text, name), (id, archived.is_some()));
+        }
+
+        for def in &incoming {
+            let key = (metric_tier_text(def.tier).to_string(), def.name.clone());
+            if let Some((id, was_archived)) = existing.remove(&key) {
+                sqlx::query(
+                    "UPDATE metric SET def = ?, target_raw = ?, collect_kind = ?, \
+                     collect_query = ?, archived_at = NULL, updated_at = ? WHERE id = ?",
+                )
+                .bind(&def.def)
+                .bind(&def.target_raw)
+                .bind(&def.collect_kind)
+                .bind(&def.collect_query)
+                .bind(at)
+                .bind(id.uuid().to_string())
+                .execute(&mut *tx)
+                .await?;
+                report.updated.push(id);
+                if was_archived {
+                    report.restored.push(id);
+                }
+            } else {
+                let id = MetricId::new();
+                sqlx::query(
+                    "INSERT INTO metric (id, project_id, tier, name, def, target_raw, \
+                     collect_kind, collect_query, origin, created_at, updated_at) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'file', ?, ?)",
+                )
+                .bind(id.uuid().to_string())
+                .bind(project_id.uuid().to_string())
+                .bind(metric_tier_text(def.tier))
+                .bind(&def.name)
+                .bind(&def.def)
+                .bind(&def.target_raw)
+                .bind(&def.collect_kind)
+                .bind(&def.collect_query)
+                .bind(at)
+                .bind(at)
+                .execute(&mut *tx)
+                .await?;
+                report.inserted.push(id);
+            }
+        }
+
+        // 剩在查找表里的键 = 这次同步之前是 origin='file'、但这次不在
+        // incoming 里的行——正本里已经删掉了,自动停用(不物删)。已经
+        // 停用过的不重复记进 report(幂等,不重复告知)。
+        for (id, was_archived) in existing.into_values() {
+            if !was_archived {
+                sqlx::query("UPDATE metric SET archived_at = ? WHERE id = ?")
+                    .bind(at)
+                    .bind(id.uuid().to_string())
+                    .execute(&mut *tx)
+                    .await?;
+                report.archived.push(id);
+            }
+        }
+
+        tx.commit().await?;
+        Ok(report)
+    }
+
+    async fn archive_metric(&self, id: MetricId, at: i64) -> Result<bool> {
+        let outcome =
+            sqlx::query("UPDATE metric SET archived_at = ? WHERE id = ? AND archived_at IS NULL")
+                .bind(at)
+                .bind(id.uuid().to_string())
+                .execute(&self.pool)
+                .await?;
+        Ok(outcome.rows_affected() == 1)
+    }
+}
+
+#[async_trait]
+impl ObservationStore for SqliteStore {
+    async fn insert_observation(&self, o: NewObservation) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO observation (id, metric_id, project_id, ts, raw_value, source, \
+             source_hint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(o.id.uuid().to_string())
+        .bind(o.metric_id.uuid().to_string())
+        .bind(o.project_id.uuid().to_string())
+        .bind(o.ts)
+        .bind(&o.raw_value)
+        .bind(&o.source)
+        .bind(&o.source_hint)
+        .bind(now_unix())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_observations(&self, metric_id: MetricId) -> Result<Vec<ObservationRow>> {
+        let rows = sqlx::query(
+            "SELECT id, metric_id, project_id, ts, raw_value, source, source_hint, created_at \
+             FROM observation WHERE metric_id = ? ORDER BY ts DESC",
+        )
+        .bind(metric_id.uuid().to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(ObservationRow {
+                    id: parse_uuid(&r.get::<String, _>("id"), ObservationId::from_uuid)?,
+                    metric_id: parse_uuid(&r.get::<String, _>("metric_id"), MetricId::from_uuid)?,
+                    project_id: parse_uuid(
+                        &r.get::<String, _>("project_id"),
+                        ProjectId::from_uuid,
+                    )?,
+                    ts: r.get("ts"),
+                    raw_value: r.get("raw_value"),
+                    source: r.get("source"),
+                    source_hint: r.get("source_hint"),
+                    created_at: r.get("created_at"),
+                })
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl HandoffStore for SqliteStore {
+    async fn set_active_stage(
+        &self,
+        project_id: ProjectId,
+        stage: StageKind,
+        at: i64,
+    ) -> Result<()> {
+        let _ = at; // project 表没有独立的 updated_at 列(design §2.2 只给了 created_at)。
+        sqlx::query("UPDATE project SET active_stage = ? WHERE id = ?")
+            .bind(stage.index() as i64)
+            .bind(project_id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn handoff_stage(
+        &self,
+        project_id: ProjectId,
+        from: StageKind,
+        to: StageKind,
+        risky: bool,
+        note: &str,
+        at: i64,
+    ) -> Result<HandoffId> {
+        // 原子操作:插一行交棒流水 + 把 project.active_stage 推到 `to`
+        // ——原样搬 v1 `handoff_stage` 的语义(v1 `crates/bw-store/src/
+        // sqlite.rs` 约 1248 行),形态上两处都改了列类型(v1 的
+        // active_stage 是 TEXT,这里是 INTEGER;handoff.from_stage/
+        // to_stage 仍是 TEXT,逐字移植未变)。
+        let mut tx = self.pool.begin().await?;
+        let id = HandoffId::new();
+        sqlx::query(
+            "INSERT INTO handoff (id, project_id, from_stage, to_stage, risky, note, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id.uuid().to_string())
+        .bind(project_id.uuid().to_string())
+        .bind(stage_kind_text(from))
+        .bind(stage_kind_text(to))
+        .bind(risky as i64)
+        .bind(note)
+        .bind(at)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE project SET active_stage = ? WHERE id = ?")
+            .bind(to.index() as i64)
+            .bind(project_id.uuid().to_string())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    async fn list_handoffs(&self, project_id: ProjectId) -> Result<Vec<HandoffRow>> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, from_stage, to_stage, risky, note, created_at \
+             FROM handoff WHERE project_id = ? ORDER BY created_at DESC",
+        )
+        .bind(project_id.uuid().to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let from_text: String = r.get("from_stage");
+                let to_text: String = r.get("to_stage");
+                let risky_num: i64 = r.get("risky");
+                Ok(HandoffRow {
+                    id: parse_uuid(&r.get::<String, _>("id"), HandoffId::from_uuid)?,
+                    project_id: parse_uuid(
+                        &r.get::<String, _>("project_id"),
+                        ProjectId::from_uuid,
+                    )?,
+                    from_stage: parse_stage_kind(&from_text)?,
+                    to_stage: parse_stage_kind(&to_text)?,
+                    risky: risky_num != 0,
+                    note: r.get("note"),
+                    created_at: r.get("created_at"),
+                })
+            })
             .collect()
     }
 }

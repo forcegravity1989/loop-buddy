@@ -123,3 +123,21 @@ id_newtype!(
     /// (design §4.3)。
     RunId
 );
+id_newtype!(
+    /// Stable identity of one real, append-only data point measured for a
+    /// [`crate::MetricId`] — an `observation` row (next 切片五B,
+    /// design-s5-hexpanel.md §2.3). Same sibling pattern as `MetricId`
+    /// (added ahead of its first real consumer): the store's
+    /// `ObservationStore` trait exposes insert + query only — there is no
+    /// update/delete method to point this id at, structurally enforcing
+    /// "一个观测一个点,只追加,绝不插值"。
+    ObservationId
+);
+id_newtype!(
+    /// Stable identity of one append-only stage-handoff audit row — a
+    /// `handoff` row (next 切片五B,design-s5-hexpanel.md §2.4;字段与索引
+    /// 逐字移植 v1 的 `handoff` 表)。清单没勾完也允许交,带险交棒被永久
+    /// 记下——事后不改、不删,这个 id 只用来引用一行既成事实,不用来定位
+    /// 一行可变状态。
+    HandoffId
+);

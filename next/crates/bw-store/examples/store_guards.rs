@@ -28,6 +28,27 @@
 //! 之外的其余四个竞态(取消完成撞车/单条失败不牵连/重启遗留/晚到消息)
 //! 是下一任务的 `run_races` 指挥器要证的,本片只证存储层这两把守卫。
 //!
+//! **next 切片五B 新增(design-s5-hexpanel.md §2)**——第 9-14 节:
+//!
+//! 9.  指标正本同步:真实读一份 `.bw/metrics.toml`(经 `bw-workspace` 的
+//!     `metrics_file::read` + `metric_shape::flatten` 归一),喂给
+//!     `MetricStore::sync_metrics_from_file`,SQL 读回北极星落进 `metric`
+//!     表当一行(不在 `project` 表上)、`origin='file'` 行数与文件条数一致。
+//! 10. 二次同步:改一条定义(保住行 id)/ 删一条(自动停用,不物删)/ 手建
+//!     行(`origin='manual'`)不被同步器碰 / 再同步回来(自动恢复)——
+//!     `docs/metrics-toml-format.md` 那套同步语义逐条读回。
+//! 11. 北极星至多一行的突变自证:绕过同步用例直接插第二条 `north_star` →
+//!     必须撞 `uq_metric_north_star` 唯一索引冲突。
+//! 12. 观测只追加:接口上没有 update/delete 方法(结构事实,不是纪律);
+//!     手填一条(`source='manual'`)、脚本采一条(`source='script'`),读回
+//!     顺序按 `ts DESC`。
+//! 13. 交棒 + 阶段推进:首次开棒(`set_active_stage`)→ 交棒到下一棒
+//!     (`handoff_stage`,原子写 handoff 流水 + `project.active_stage`)→
+//!     两处读回一致。
+//! 14. 附 · 存量库迁移双守卫第二次真实使用:用缺
+//!     `project.active_stage`/`issue.stage`/`issue.body` 三列的老 schema
+//!     造一个库 → 走正式开库流程 → `PRAGMA table_info` 读回三列都补上了。
+//!
 //! 跑法:`cd next && cargo run -p bw-store --example store_guards`
 //! 退出码 0 且末行 `STORE_GUARDS_OK` = 全部断言通过。
 //! 数据库跑完不删,路径打印出来,人可以自己 `sqlite3 <path>` 复核。
@@ -43,10 +64,12 @@
 //! 败现场)——这样任何一次跑读到的库,要么是它自己刚建的,要么根本不
 //! 存在,不会有第三种「读到别人的库」。
 
-use bw_core::{IssueId, ProjectId, RunId, RunState};
+use bw_core::{IssueId, MetricId, ObservationId, ProjectId, RunId, RunState, StageKind};
 use bw_store::{
-    IssueStore, NewIssue, NewProject, NewRun, RunEndKind, RunKind, RunStore, SqliteStore,
+    HandoffStore, IncomingMetricDef, IssueStore, MetricStore, MetricTier, NewIssue, NewObservation,
+    NewProject, NewRun, ObservationStore, RunEndKind, RunKind, RunStore, SqliteStore,
 };
+use bw_workspace::metric_shape::flatten;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Row, SqlitePool};
 use std::path::{Path, PathBuf};
@@ -158,6 +181,37 @@ async fn main() -> ExitCode {
 
     println!("== 7 · 咨询运行不占交付名额(kind='delivery' 半边谓词的行为断言)==");
     all_ok &= section_consultation_does_not_block_delivery(&store, project_id).await;
+    println!();
+
+    println!("== 9 · 指标正本同步(北极星也是一行,读一份真实 .bw/metrics.toml)==");
+    let (ok, fixture) = section_metrics_sync_first(&store, project_id).await;
+    all_ok &= ok;
+    let Some(fixture) = fixture else {
+        eprintln!("STORE_GUARDS_FAILED(第一次指标同步本身没成功,后续步骤无法继续)");
+        return ExitCode::FAILURE;
+    };
+    println!();
+
+    println!("== 10 · 二次同步:改一条 / 删一条(停用不物删)/ 手建行不被碰 / 再同步回来(自动恢复)==");
+    all_ok &= section_metrics_sync_second_and_third(&store, &fixture).await;
+    println!();
+
+    println!("== 11 · 北极星至多一行的突变自证(绕过同步用例直接插第二条)==");
+    all_ok &= section_north_star_at_most_one(&store, project_id).await;
+    println!();
+
+    println!("== 12 · 观测只追加(接口上没有 update/delete)+ 手填/脚本两种来源 ==");
+    all_ok &= section_observation_append_only(&store, project_id, fixture.north_star_id).await;
+    println!();
+
+    println!("== 13 · 交棒 + 阶段推进(首次开棒 → 交棒到下一棒,原子写)==");
+    all_ok &= section_handoff_and_active_stage(&store, project_id).await;
+    println!();
+
+    println!(
+        "== 14 · 附:存量库迁移双守卫第二次真实使用(project.active_stage/issue.stage/issue.body)=="
+    );
+    all_ok &= section_migration_guard_s5_columns().await;
     println!();
 
     if all_ok {
@@ -740,4 +794,818 @@ async fn section_consultation_does_not_block_delivery(
             false
         }
     }
+}
+
+// ═══════════════════ next 切片五B:指标 / 观测 / 交棒 ═══════════════════
+
+fn now_i64() -> i64 {
+    OffsetDateTime::now_utc().unix_timestamp()
+}
+
+/// 第 9 节留给第 10 节复用的状态——三次同步都要认得同一批指标身份,靠这
+/// 几个 id 串联,而不是每节各自重新查一遍。
+struct MetricsSyncFixture {
+    project_id: ProjectId,
+    north_star_id: MetricId,
+    /// 会在第 10 节被改定义(验证「原地更新保住行 id」)。
+    lagging_a_id: MetricId,
+    /// 会在第 10 节被从正本删除、第三次同步又恢复(验证「停用不物删 +
+    /// 自动恢复」)。
+    leading_a_id: MetricId,
+    /// 界面手建(`origin='manual'`),同步器全程不该碰它。
+    manual_metric_id: MetricId,
+}
+
+/// 一份真实的 `.bw/metrics.toml` 内容:1 北极星 + 2 滞后 + 2 引领,四种
+/// `collect.kind` 都用 `manual`(指挥器不需要真去采集,只验证同步语义)。
+fn sample_metrics_toml(lagging_a_def: &str, include_leading_a: bool) -> String {
+    let leading_a_block = if include_leading_a {
+        "\n[[leading]]\nname = \"引领指标A\"\ndef = \"会在二次同步时被从正本删除\"\ntarget = \"≥3\"\ncollect = { kind = \"manual\", query = \"\" }\n"
+    } else {
+        ""
+    };
+    format!(
+        "schema_version = 1\n\n\
+         [north_star]\n\
+         name = \"store_guards 北极星\"\n\
+         def  = \"指挥器自造的北极星,用于验证三层同构\"\n\
+         collect = {{ kind = \"manual\", query = \"\" }}\n\n\
+         [[lagging]]\n\
+         name = \"滞后指标A\"\n\
+         def = \"{lagging_a_def}\"\n\
+         target = \"≥1\"\n\
+         collect = {{ kind = \"manual\", query = \"\" }}\n\n\
+         [[lagging]]\n\
+         name = \"滞后指标B\"\n\
+         def = \"保持不变的对照组\"\n\
+         target = \"≥2\"\n\
+         collect = {{ kind = \"manual\", query = \"\" }}\n\
+         {leading_a_block}\n\
+         [[leading]]\n\
+         name = \"引领指标B\"\n\
+         def = \"保持不变的对照组\"\n\
+         target = \"≥4\"\n\
+         collect = {{ kind = \"manual\", query = \"\" }}\n"
+    )
+}
+
+/// 把 `bw_workspace::metric_shape` 归一出来的扁平定义,逐字段搬成
+/// `bw-store` 自己的 `IncomingMetricDef`(两个类型分住两个 crate,`bw-store`
+/// 不依赖 `bw-workspace`——见 lib.rs `IncomingMetricDef` 文档)。
+fn to_incoming(defs: Vec<bw_workspace::metric_shape::FlatMetricDef>) -> Vec<IncomingMetricDef> {
+    defs.into_iter()
+        .map(|d| IncomingMetricDef {
+            tier: match d.tier {
+                bw_workspace::metric_shape::MetricTier::NorthStar => MetricTier::NorthStar,
+                bw_workspace::metric_shape::MetricTier::Lagging => MetricTier::Lagging,
+                bw_workspace::metric_shape::MetricTier::Leading => MetricTier::Leading,
+            },
+            name: d.name,
+            def: d.def,
+            target_raw: d.target_raw,
+            collect_kind: d.collect_kind.to_string(),
+            collect_query: d.collect_query,
+        })
+        .collect()
+}
+
+/// 造一个真实工作区目录,写一份真实 `.bw/metrics.toml`,过
+/// `bw_workspace::metrics_file::read` 真实解析 + `metric_shape::flatten`
+/// 归一,返回扁平定义。任何一步失败都直接 panic 式返回 None——这是指挥器
+/// 自己的测试夹具,不是被测代码,失败了没有「诚实退化」这一说。
+fn read_and_flatten_fixture(
+    toml_content: &str,
+) -> Option<Vec<bw_workspace::metric_shape::FlatMetricDef>> {
+    let dir = std::env::temp_dir().join(format!("bw-store-guards-metrics-{}", Uuid::new_v4()));
+    let bw_dir = dir.join(".bw");
+    if std::fs::create_dir_all(&bw_dir).is_err() {
+        return None;
+    }
+    if std::fs::write(bw_dir.join("metrics.toml"), toml_content).is_err() {
+        return None;
+    }
+    let workspace_str = dir.to_string_lossy().to_string();
+    let file = match bw_workspace::metrics_file::read(&workspace_str) {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            eprintln!(
+                "ASSERT FAILED: 真实工作区 {workspace_str} 应该能读到 .bw/metrics.toml,实得 None"
+            );
+            return None;
+        }
+        Err(e) => {
+            eprintln!("ASSERT FAILED: .bw/metrics.toml 解析失败: {e}");
+            return None;
+        }
+    };
+    Some(flatten(&file))
+}
+
+/// 第 9 节:第一次同步——真读一份真实 `.bw/metrics.toml`(1 北极星 + 2
+/// 滞后 + 2 引领),归一后喂给 `sync_metrics_from_file`,SQL 读回北极星落
+/// 进 `metric` 表当一行、`origin='file'` 行数与文件条数一致。
+async fn section_metrics_sync_first(
+    store: &SqliteStore,
+    project_id: ProjectId,
+) -> (bool, Option<MetricsSyncFixture>) {
+    let mut ok = true;
+
+    let toml_content = sample_metrics_toml("会在二次同步时被改定义", true);
+    println!("读:临时工作区 .bw/metrics.toml(真文件,内容原样打印)");
+    println!("{toml_content}");
+    let Some(flat) = read_and_flatten_fixture(&toml_content) else {
+        return (false, None);
+    };
+    if flat.len() != 5 {
+        eprintln!(
+            "ASSERT FAILED: 归一后应有 5 条定义(1 北极星 + 2 滞后 + 2 引领),实得 {}",
+            flat.len()
+        );
+        return (false, None);
+    }
+    println!("  ✓ 归一(flatten)后 5 条定义(1 北极星 + 2 滞后 + 2 引领)");
+
+    let incoming = to_incoming(flat);
+    let at = now_i64();
+    let report = match store.sync_metrics_from_file(project_id, incoming, at).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: 第一次 sync_metrics_from_file 应该成功,实得错误: {e}");
+            return (false, None);
+        }
+    };
+    println!(
+        "第一次同步: inserted={} updated={} archived={} restored={}",
+        report.inserted.len(),
+        report.updated.len(),
+        report.archived.len(),
+        report.restored.len()
+    );
+    if report.inserted.len() == 5
+        && report.updated.is_empty()
+        && report.archived.is_empty()
+        && report.restored.is_empty()
+    {
+        println!("  ✓ 全部 5 条都是新插入,没有更新/停用/恢复");
+    } else {
+        eprintln!("ASSERT FAILED: 第一次同步应该 inserted=5 且其余三类为空,实得如上");
+        ok = false;
+    }
+
+    let rows = match store.list_metrics(project_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: list_metrics 应该成功,实得错误: {e}");
+            return (false, None);
+        }
+    };
+    println!("读回:MetricStore::list_metrics(project_id)");
+    for r in &rows {
+        println!(
+            "  tier={:?} name={:?} target_raw={:?} collect_kind={:?} origin={:?}",
+            r.tier, r.name, r.target_raw, r.collect_kind, r.origin
+        );
+    }
+    let file_rows: Vec<_> = rows.iter().filter(|r| r.origin == "file").collect();
+    if file_rows.len() == 5 {
+        println!("  ✓ origin='file' 的行数 = 5,与文件里的条数一致");
+    } else {
+        eprintln!(
+            "ASSERT FAILED: origin='file' 行数应为 5,实得 {}",
+            file_rows.len()
+        );
+        ok = false;
+    }
+
+    let Some(north_star) = rows.iter().find(|r| r.tier == MetricTier::NorthStar) else {
+        eprintln!("ASSERT FAILED: 应该有一行 tier=NorthStar,实得没有");
+        return (false, None);
+    };
+    if north_star.name == "store_guards 北极星" && north_star.target_raw.is_empty() {
+        println!(
+            "  ✓ 北极星在 metric 表里当一行(不在 project 表上——ProjectRow 类型定义里\
+             压根没有北极星文本字段),target_raw 为空串(北极星本身没有 target)"
+        );
+    } else {
+        eprintln!("ASSERT FAILED: 北极星那一行字段不对: {north_star:?}");
+        ok = false;
+    }
+
+    let Some(lagging_a) = rows
+        .iter()
+        .find(|r| r.tier == MetricTier::Lagging && r.name == "滞后指标A")
+    else {
+        eprintln!("ASSERT FAILED: 应该有一行「滞后指标A」");
+        return (false, None);
+    };
+    let Some(leading_a) = rows
+        .iter()
+        .find(|r| r.tier == MetricTier::Leading && r.name == "引领指标A")
+    else {
+        eprintln!("ASSERT FAILED: 应该有一行「引领指标A」");
+        return (false, None);
+    };
+
+    // 手建一条指标(origin='manual')——同步器全程不该碰它,第 10 节读回验证。
+    let manual_metric_id = MetricId::new();
+    if let Err(e) = store
+        .create_manual_metric(
+            manual_metric_id,
+            project_id,
+            MetricTier::Leading,
+            "手建指标(同步器不该碰)",
+            "界面手建,不来自正本",
+            "",
+            "manual",
+            "",
+            at,
+        )
+        .await
+    {
+        eprintln!("ASSERT FAILED: create_manual_metric 应该成功,实得错误: {e}");
+        ok = false;
+    } else {
+        println!("  ✓ 手建一条指标: {manual_metric_id:?}(origin='manual')");
+    }
+
+    (
+        ok,
+        Some(MetricsSyncFixture {
+            project_id,
+            north_star_id: north_star.id,
+            lagging_a_id: lagging_a.id,
+            leading_a_id: leading_a.id,
+            manual_metric_id,
+        }),
+    )
+}
+
+/// 第 10 节:第二次同步(改一条定义 + 从正本删一条)与第三次同步(把删掉
+/// 的那条加回来,验证自动恢复),外加手建行全程不受影响的读回。
+async fn section_metrics_sync_second_and_third(
+    store: &SqliteStore,
+    fixture: &MetricsSyncFixture,
+) -> bool {
+    let mut ok = true;
+
+    // —— 第二次同步:滞后指标A 改定义,引领指标A 从正本里删掉 ——
+    let toml_2 = sample_metrics_toml("已改成新定义(二次同步)", false);
+    println!("读:临时工作区 .bw/metrics.toml(第二版,引领指标A 已从正本删除)");
+    let Some(flat_2) = read_and_flatten_fixture(&toml_2) else {
+        return false;
+    };
+    if flat_2.len() != 4 {
+        eprintln!(
+            "ASSERT FAILED: 第二版应有 4 条定义(1 北极星 + 2 滞后 + 1 引领),实得 {}",
+            flat_2.len()
+        );
+        return false;
+    }
+    let incoming_2 = to_incoming(flat_2);
+    let at2 = now_i64();
+    let report_2 = match store
+        .sync_metrics_from_file(fixture.project_id, incoming_2, at2)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: 第二次 sync_metrics_from_file 应该成功,实得错误: {e}");
+            return false;
+        }
+    };
+    println!(
+        "第二次同步: inserted={} updated={:?} archived={:?} restored={}",
+        report_2.inserted.len(),
+        report_2.updated,
+        report_2.archived,
+        report_2.restored.len()
+    );
+    if report_2.inserted.is_empty()
+        && report_2.updated.len() == 4
+        && report_2.archived == vec![fixture.leading_a_id]
+        && report_2.restored.is_empty()
+    {
+        println!("  ✓ 4 条原地更新(含北极星),引领指标A 被自动停用,没有新插入/恢复");
+    } else {
+        eprintln!("ASSERT FAILED: 第二次同步的报告形状不对,实得如上");
+        ok = false;
+    }
+    if report_2.updated.contains(&fixture.lagging_a_id) {
+        println!(
+            "  ✓ 滞后指标A 的行 id 在改定义前后保持不变: {:?}",
+            fixture.lagging_a_id
+        );
+    } else {
+        eprintln!("ASSERT FAILED: 滞后指标A 应该出现在 updated 列表里(id 保持不变)");
+        ok = false;
+    }
+
+    let lagging_a_after = match store.get_metric(fixture.lagging_a_id).await {
+        Ok(Some(r)) => r,
+        other => {
+            eprintln!("ASSERT FAILED: get_metric(滞后指标A) 应该还能读到,实得 {other:?}");
+            return false;
+        }
+    };
+    if lagging_a_after.def == "已改成新定义(二次同步)" {
+        println!("  ✓ 滞后指标A 的 def 已更新为: {:?}", lagging_a_after.def);
+    } else {
+        eprintln!(
+            "ASSERT FAILED: 滞后指标A 的 def 应该已更新,实得 {:?}",
+            lagging_a_after.def
+        );
+        ok = false;
+    }
+
+    let leading_a_after = match store.get_metric(fixture.leading_a_id).await {
+        Ok(Some(r)) => r,
+        other => {
+            eprintln!(
+                "ASSERT FAILED: get_metric(引领指标A) 应该还能读到(停用不物删),实得 {other:?}"
+            );
+            return false;
+        }
+    };
+    if leading_a_after.archived_at.is_some() {
+        println!(
+            "  ✓ 引领指标A 这一行还在(未物删),archived_at = {:?}(自动停用)",
+            leading_a_after.archived_at
+        );
+    } else {
+        eprintln!("ASSERT FAILED: 引领指标A 应该已被自动停用(archived_at 落值),实得 None");
+        ok = false;
+    }
+
+    let manual_after_sync2 = match store.get_metric(fixture.manual_metric_id).await {
+        Ok(Some(r)) => r,
+        other => {
+            eprintln!("ASSERT FAILED: 手建行应该还能读到,实得 {other:?}");
+            return false;
+        }
+    };
+    if manual_after_sync2.origin == "manual"
+        && manual_after_sync2.archived_at.is_none()
+        && manual_after_sync2.def == "界面手建,不来自正本"
+    {
+        println!("  ✓ 手建行全程未被同步器碰(origin/def/archived_at 都没变)");
+    } else {
+        eprintln!("ASSERT FAILED: 手建行被同步器动过了,实得 {manual_after_sync2:?}");
+        ok = false;
+    }
+
+    // —— 第三次同步:引领指标A 重新出现在正本里,验证自动恢复 ——
+    let toml_3 = sample_metrics_toml("已改成新定义(二次同步)", true);
+    println!("读:临时工作区 .bw/metrics.toml(第三版,引领指标A 重新出现)");
+    let Some(flat_3) = read_and_flatten_fixture(&toml_3) else {
+        return false;
+    };
+    let incoming_3 = to_incoming(flat_3);
+    let at3 = now_i64();
+    let report_3 = match store
+        .sync_metrics_from_file(fixture.project_id, incoming_3, at3)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: 第三次 sync_metrics_from_file 应该成功,实得错误: {e}");
+            return false;
+        }
+    };
+    println!(
+        "第三次同步: inserted={} updated={:?} archived={} restored={:?}",
+        report_3.inserted.len(),
+        report_3.updated,
+        report_3.archived.len(),
+        report_3.restored
+    );
+    if report_3.restored == vec![fixture.leading_a_id] {
+        println!(
+            "  ✓ 引领指标A 自动恢复,行 id 与最初插入时一致: {:?}",
+            fixture.leading_a_id
+        );
+    } else {
+        eprintln!(
+            "ASSERT FAILED: 第三次同步应该把引领指标A 恢复,实得 restored={:?}",
+            report_3.restored
+        );
+        ok = false;
+    }
+
+    let leading_a_restored = match store.get_metric(fixture.leading_a_id).await {
+        Ok(Some(r)) => r,
+        other => {
+            eprintln!("ASSERT FAILED: 恢复后应该还能读到引领指标A,实得 {other:?}");
+            return false;
+        }
+    };
+    if leading_a_restored.archived_at.is_none() {
+        println!("  ✓ 恢复后 archived_at 已清空,三轮同步下来行 id 全程未变");
+    } else {
+        eprintln!(
+            "ASSERT FAILED: 恢复后 archived_at 应该是 None,实得 {:?}",
+            leading_a_restored.archived_at
+        );
+        ok = false;
+    }
+
+    ok
+}
+
+/// 第 11 节:北极星至多一行的突变自证——绕过同步用例,直接调
+/// `create_manual_metric` 插第二条 `tier=NorthStar`,必须撞
+/// `uq_metric_north_star` 部分唯一索引。
+async fn section_north_star_at_most_one(store: &SqliteStore, project_id: ProjectId) -> bool {
+    let second_id = MetricId::new();
+    let result = store
+        .create_manual_metric(
+            second_id,
+            project_id,
+            MetricTier::NorthStar,
+            "第二个北极星(应被拒)",
+            "",
+            "",
+            "manual",
+            "",
+            now_i64(),
+        )
+        .await;
+    match result {
+        Ok(()) => {
+            eprintln!(
+                "ASSERT FAILED: 同一个项目插第二条 north_star 应该被 uq_metric_north_star 挡下,\
+                 实得成功: {second_id:?}"
+            );
+            false
+        }
+        Err(e) => {
+            let classified = e.is_unique_violation();
+            println!("插第二个北极星: {second_id:?} → 失败(如实预期)");
+            println!("  错误原文: {e}");
+            println!("  分类: is_unique_violation = {classified}");
+            if classified {
+                println!("  ✓ 一个项目至多一条北极星,铁律钉进数据库,不是 if 判断");
+                true
+            } else {
+                eprintln!(
+                    "ASSERT FAILED: 失败原因应分类为 is_unique_violation,实得 {classified}\
+                     (可能是别的错误撞上了,不是铁律在拦)"
+                );
+                false
+            }
+        }
+    }
+}
+
+/// 第 12 节:观测只追加。`ObservationStore` trait 定义上只有 `insert_observation`
+/// / `list_observations` 两个方法——没有 update/delete 方法可调,这份指挥
+/// 器能编译通过本身就是这条结构约束成立的证明(不是运行期反证,是编译期
+/// 反证:trait 上不存在的方法,任何调用点都写不出来)。这里另外验证功能性
+/// 行为:手填一条 + 脚本采一条,读回顺序按 `ts DESC`。
+async fn section_observation_append_only(
+    store: &SqliteStore,
+    project_id: ProjectId,
+    metric_id: MetricId,
+) -> bool {
+    let mut ok = true;
+    println!(
+        "  ✓(结构事实,非运行期断言)ObservationStore trait 定义里只有 insert_observation/\
+         list_observations 两个方法——没有 update/delete,这份指挥器能编译通过就是证明"
+    );
+
+    let older_ts = now_i64() - 3600;
+    let newer_ts = now_i64();
+
+    let script_obs_id = ObservationId::new();
+    if let Err(e) = store
+        .insert_observation(NewObservation {
+            id: script_obs_id,
+            metric_id,
+            project_id,
+            ts: older_ts,
+            raw_value: "37%".to_string(),
+            source: "script".to_string(),
+            source_hint: "本地脚本 derive_adoption.py 输出".to_string(),
+        })
+        .await
+    {
+        eprintln!("ASSERT FAILED: 脚本采集的观测插入应该成功,实得错误: {e}");
+        return false;
+    }
+    println!("插入观测(脚本采集): {script_obs_id:?} ts={older_ts} raw_value=37% source=script");
+
+    let manual_obs_id = ObservationId::new();
+    if let Err(e) = store
+        .insert_observation(NewObservation {
+            id: manual_obs_id,
+            metric_id,
+            project_id,
+            ts: newer_ts,
+            raw_value: "42%".to_string(),
+            source: "manual".to_string(),
+            source_hint: "人手填".to_string(),
+        })
+        .await
+    {
+        eprintln!("ASSERT FAILED: 手填的观测插入应该成功,实得错误: {e}");
+        return false;
+    }
+    println!("插入观测(手填): {manual_obs_id:?} ts={newer_ts} raw_value=42% source=manual");
+
+    let rows = match store.list_observations(metric_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: list_observations 应该成功,实得错误: {e}");
+            return false;
+        }
+    };
+    println!("读回:ObservationStore::list_observations(metric_id)");
+    for r in &rows {
+        println!(
+            "  id={:?} ts={} raw_value={:?} source={:?} source_hint={:?}",
+            r.id, r.ts, r.raw_value, r.source, r.source_hint
+        );
+    }
+    if rows.len() == 2 && rows[0].id == manual_obs_id && rows[1].id == script_obs_id {
+        println!("  ✓ 顺序按 ts DESC:手填(更新)的那条排在脚本采集(更早)的前面");
+    } else {
+        eprintln!("ASSERT FAILED: 观测顺序应为 [manual, script](ts DESC),实得如上");
+        ok = false;
+    }
+    if rows
+        .iter()
+        .any(|r| r.source == "manual" && r.source_hint == "人手填")
+    {
+        println!("  ✓ 手填的观测带真实 source_hint,界面据此挂「手填」徽记");
+    } else {
+        eprintln!("ASSERT FAILED: 应该有一条 source='manual' 且 source_hint='人手填' 的观测");
+        ok = false;
+    }
+
+    ok
+}
+
+/// 第 13 节:首次开棒(`set_active_stage`)→ 交棒到下一棒(`handoff_stage`,
+/// 原子写 handoff 流水 + `project.active_stage`)→ 两处读回一致。
+async fn section_handoff_and_active_stage(store: &SqliteStore, project_id: ProjectId) -> bool {
+    let mut ok = true;
+
+    let project_before = match store.get_project(project_id).await {
+        Ok(Some(p)) => p,
+        other => {
+            eprintln!("ASSERT FAILED: get_project 应该成功,实得 {other:?}");
+            return false;
+        }
+    };
+    if project_before.active_stage.is_none() {
+        println!("交棒前:project.active_stage = None(尚未开棒,如实预期)");
+    } else {
+        eprintln!(
+            "ASSERT FAILED: 交棒前 active_stage 应为 None,实得 {:?}",
+            project_before.active_stage
+        );
+        ok = false;
+    }
+
+    if let Err(e) = store
+        .set_active_stage(project_id, StageKind::Prototype, now_i64())
+        .await
+    {
+        eprintln!("ASSERT FAILED: set_active_stage 应该成功,实得错误: {e}");
+        return false;
+    }
+    let project_after_open = match store.get_project(project_id).await {
+        Ok(Some(p)) => p,
+        other => {
+            eprintln!("ASSERT FAILED: get_project 应该成功,实得 {other:?}");
+            return false;
+        }
+    };
+    if project_after_open.active_stage == Some(StageKind::Prototype) {
+        println!("首次开棒后:project.active_stage = Some(Prototype)");
+    } else {
+        eprintln!(
+            "ASSERT FAILED: 首次开棒后 active_stage 应为 Some(Prototype),实得 {:?}",
+            project_after_open.active_stage
+        );
+        ok = false;
+    }
+
+    let note = "评审清单没勾完就交了,示例带险交棒注记";
+    let handoff_id = match store
+        .handoff_stage(
+            project_id,
+            StageKind::Prototype,
+            StageKind::Build,
+            true,
+            note,
+            now_i64(),
+        )
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: handoff_stage 应该成功,实得错误: {e}");
+            return false;
+        }
+    };
+    println!("交棒: Prototype → Build,risky=true,handoff_id={handoff_id:?}");
+
+    let project_after_handoff = match store.get_project(project_id).await {
+        Ok(Some(p)) => p,
+        other => {
+            eprintln!("ASSERT FAILED: get_project 应该成功,实得 {other:?}");
+            return false;
+        }
+    };
+    if project_after_handoff.active_stage == Some(StageKind::Build) {
+        println!("  ✓ 交棒后 project.active_stage = Some(Build)(原子写的另一半生效)");
+    } else {
+        eprintln!(
+            "ASSERT FAILED: 交棒后 active_stage 应为 Some(Build),实得 {:?}",
+            project_after_handoff.active_stage
+        );
+        ok = false;
+    }
+
+    let handoffs = match store.list_handoffs(project_id).await {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: list_handoffs 应该成功,实得错误: {e}");
+            return false;
+        }
+    };
+    println!("读回:HandoffStore::list_handoffs(project_id)");
+    for h in &handoffs {
+        println!(
+            "  id={:?} from={:?} to={:?} risky={} note={:?}",
+            h.id, h.from_stage, h.to_stage, h.risky, h.note
+        );
+    }
+    let matched = handoffs.iter().find(|h| h.id == handoff_id);
+    match matched {
+        Some(h)
+            if h.from_stage == StageKind::Prototype
+                && h.to_stage == StageKind::Build
+                && h.risky
+                && h.note == note =>
+        {
+            println!("  ✓ 交棒流水与调用参数逐字段一致");
+        }
+        other => {
+            eprintln!("ASSERT FAILED: 交棒流水字段与预期不符,实得 {other:?}");
+            ok = false;
+        }
+    }
+
+    ok
+}
+
+/// 一份「少三列且没有五B 三张新表」的老 schema——`project` 没有
+/// `active_stage`,`issue` 没有 `stage`/`body`,更没有 `metric`/`observation`/
+/// `handoff` 三张表,`run` 也还没有 `demoted_at`(模拟切片四A 刚落地、四D/
+/// 五B 都还没来的库)。**不经过 `SqliteStore::open`**(那样会用当前
+/// schema.sql 把列建全,测不出「老库缺列」这件事),独立连接手工执行。
+const OLD_SCHEMA_PRE_S5: &str = "
+CREATE TABLE IF NOT EXISTS project (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    root_path   TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS issue (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL REFERENCES project(id),
+    number      INTEGER NOT NULL,
+    title       TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'backlog',
+    settled_at  INTEGER,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_issue_project_number ON issue(project_id, number);
+CREATE TABLE IF NOT EXISTS run (
+    id                TEXT PRIMARY KEY,
+    project_id        TEXT NOT NULL REFERENCES project(id),
+    issue_id          TEXT NOT NULL REFERENCES issue(id),
+    kind              TEXT NOT NULL DEFAULT 'delivery',
+    connector_name    TEXT NOT NULL,
+    req_id            TEXT NOT NULL,
+    upstream_session  TEXT NOT NULL DEFAULT '',
+    workspace         TEXT NOT NULL,
+    branch            TEXT NOT NULL,
+    state             TEXT NOT NULL,
+    end_kind          TEXT,
+    end_detail        TEXT NOT NULL DEFAULT '',
+    started_at        INTEGER NOT NULL,
+    ended_at          INTEGER,
+    settled_at        INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_run_live_delivery_per_issue
+    ON run(issue_id) WHERE ended_at IS NULL AND kind = 'delivery';
+CREATE INDEX IF NOT EXISTS idx_run_project_started ON run(project_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_run_open ON run(issue_id) WHERE ended_at IS NULL;
+";
+
+async fn section_migration_guard_s5_columns() -> bool {
+    let old_db = std::env::temp_dir().join(format!(
+        "{DB_NAME_PREFIX}pre-s5-schema-{}.db",
+        Uuid::new_v4()
+    ));
+    let _ = std::fs::remove_file(&old_db);
+
+    let opts = SqliteConnectOptions::new()
+        .filename(&old_db)
+        .create_if_missing(true);
+    let pool = match SqlitePool::connect_with(opts).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: 造老库失败: {e}");
+            return false;
+        }
+    };
+    for stmt in OLD_SCHEMA_PRE_S5.split(';') {
+        if stmt.trim().is_empty() {
+            continue;
+        }
+        if let Err(e) = sqlx::query(stmt).execute(&pool).await {
+            eprintln!("ASSERT FAILED: 老库建表语句失败: {e}\n语句: {stmt}");
+            return false;
+        }
+    }
+    pool.close().await;
+    println!("造了一个缺 active_stage/stage/body 三列、也没有 metric/observation/handoff 三张表的老库: {}", old_db.display());
+
+    // 用正式开库流程打开这个老库——`SqliteStore::open` 内部的三条
+    // `add_column_if_missing` 应该把三列都补上,`CREATE TABLE IF NOT
+    // EXISTS` 应该把三张新表都建起来。
+    match SqliteStore::open(&old_db.to_string_lossy()).await {
+        Ok(store) => drop(store),
+        Err(e) => {
+            eprintln!("ASSERT FAILED: 用正式开库流程打开老库失败: {e}");
+            return false;
+        }
+    }
+
+    let opts2 = SqliteConnectOptions::new()
+        .filename(&old_db)
+        .read_only(true);
+    let pool2 = match SqlitePool::connect_with(opts2).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: 老库读回连接失败: {e}");
+            return false;
+        }
+    };
+
+    let mut ok = true;
+    for (table, column) in [
+        ("project", "active_stage"),
+        ("issue", "stage"),
+        ("issue", "body"),
+    ] {
+        let sql = format!("PRAGMA table_info({table})");
+        let rows = match sqlx::query(&sql).fetch_all(&pool2).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("ASSERT FAILED: {sql} 失败: {e}");
+                ok = false;
+                continue;
+            }
+        };
+        let has_column = rows.iter().any(|r| r.get::<String, _>("name") == column);
+        println!(
+            "PRAGMA table_info({table}) 读回:{column} 列{}",
+            if has_column { "存在" } else { "缺失" }
+        );
+        if !has_column {
+            eprintln!(
+                "ASSERT FAILED: 老库打开后 {table}.{column} 应该存在(add_column_if_missing 生效),实得缺失"
+            );
+            ok = false;
+        }
+    }
+
+    let tables_sql =
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('metric', 'observation', 'handoff') ORDER BY name";
+    match sqlx::query(tables_sql).fetch_all(&pool2).await {
+        Ok(rows) => {
+            let names: Vec<String> = rows.iter().map(|r| r.get::<String, _>("name")).collect();
+            println!("sqlite_master 读回三张新表: {names:?}");
+            if names == vec!["handoff", "metric", "observation"] {
+                println!("  ✓ metric/observation/handoff 三张表在老库上也真的建起来了");
+            } else {
+                eprintln!("ASSERT FAILED: 三张新表应该都存在,实得 {names:?}");
+                ok = false;
+            }
+        }
+        Err(e) => {
+            eprintln!("ASSERT FAILED: {tables_sql} 失败: {e}");
+            ok = false;
+        }
+    }
+
+    if ok {
+        println!("老库(打开后)留在:{}", old_db.display());
+    }
+    ok
 }

@@ -1,6 +1,6 @@
 [package]
 name = "bw-store"
-description = "next 切片四A:最小存储层(SQLite/sqlx)。三张表(项目/活/运行)+ 迁移双守卫;「同一件活一个活着的交付运行」钉成数据库部分唯一索引,「结算一次/关门一次」用比较并置。只依赖 bw-core——编译期看不见 bw-connector 的协议类型,长不出业务判断(design-s4-runmanager.md §2.1)。"
+description = "next 切片四A:最小存储层(SQLite/sqlx)。三张表(项目/活/运行)+ 迁移双守卫;「同一件活一个活着的交付运行」钉成数据库部分唯一索引,「结算一次/关门一次」用比较并置。只依赖 bw-core——编译期看不见 bw-connector 的协议类型,长不出业务判断(design-s4-runmanager.md §2.1)。next 切片五B 加指标/观测/交棒三张表(design-s5-hexpanel.md §2),同一条边界不变。"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -20,3 +20,9 @@ uuid = { workspace = true, features = ["v4"] }
 [dev-dependencies]
 # `examples/store_guards.rs` 要起自己的 tokio 运行时(`#[tokio::main]`)。
 tokio = { workspace = true }
+# next 切片五B:`store_guards.rs` 新增「指标正本同步」一节要读一份真实的
+# `.bw/metrics.toml`(经 `bw_workspace::metrics_file::read` + `metric_shape::
+# flatten`)喂给 `MetricStore::sync_metrics_from_file`,证明「归一」逻辑与
+# 存储层同步语义接得上,不只是分开测。只进 dev-dependencies——`bw-store`
+# 的正式产物依赖面不变(仍然只有 bw-core),这条依赖只服务指挥器本身。
+bw-workspace = { path = "../bw-workspace" }

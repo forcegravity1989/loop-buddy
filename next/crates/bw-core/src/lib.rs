@@ -30,8 +30,8 @@ pub mod stage_catalog;
 pub mod standards;
 
 pub use ids::{
-    AgentId, ArtifactId, ConnectorId, ConversationId, CronTaskId, IssueId, KnowledgeSourceId,
-    MetricId, ProjectId, RoutineId, RunId, SessionId, SkillFileId, SkillId, WorkflowId,
-    WorkflowRunId,
+    AgentId, ArtifactId, ConnectorId, ConversationId, CronTaskId, HandoffId, IssueId,
+    KnowledgeSourceId, MetricId, ObservationId, ProjectId, RoutineId, RunId, SessionId,
+    SkillFileId, SkillId, WorkflowId, WorkflowRunId,
 };
 pub use model::*;

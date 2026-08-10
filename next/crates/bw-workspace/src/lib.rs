@@ -25,11 +25,20 @@
 //! 的两条边守这条线)。目前也不依赖 `bw-core`——这四类东西现在都不触碰任
 //! 何内核类型(`provision_issue_worktree` 接的是裸 `u32`/`&Path`,`evidence`/
 //! `metrics_file` 更是连 io 之外什么都不碰),加一条用不到的依赖不如不加。
+//!
+//! - [`metric_shape`] —— next 切片五B 新写(design §1.3/§2.2):把
+//!   [`metrics_file::MetricsFile`] 的三种形状(`north_star` 单表 +
+//!   `lagging`/`leading` 数组表)归一成同一张表的三种层级,供 `bw-store`
+//!   的 `metric` 表消费。这不是移植件,是新写的归一逻辑——落在这里而不
+//!   是 `bw-store`,是因为它只需要已解析好的 `MetricsFile`,不碰任何存
+//!   储层类型,`bw-store` 因此不需要为了消费它反过来依赖这个 crate。
 
 pub mod evidence;
 pub mod git_support;
+pub mod metric_shape;
 pub mod metrics_file;
 pub mod provision;
 
 pub use git_support::{commit_initial, git_in, stage_commit_push, ProvisionError};
+pub use metric_shape::{flatten, FlatMetricDef, MetricTier};
 pub use provision::{issue_branch, provision_issue_worktree};
