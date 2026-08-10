@@ -1,6 +1,7 @@
 //! 各家适配器的 feature 门。`gh`/`codehub` 两家在 next 切片二B 真实收编
 //! (v1 `github.rs`/`codehub.rs` 整体搬过来,见 `crate::upstream`);`script`
-//! 仍是占位,留给下一任务。`contract.rs`/`caps.rs`/`registry.rs` 里不出现
+//! 在 next 切片二C 真实收编(新写,无对应的 v1 冻结自由函数可整体搬,见
+//! `script.rs` 模块文档)。`contract.rs`/`caps.rs`/`registry.rs` 里不出现
 //! 任何一家的名字:注册表存的是 `Arc<dyn Connector>`,不是枚举 arm——删掉
 //! 某一家不需要动注册表一个字符,这条边界因此落在本文件的 [`from_entry`]
 //! 里,不落在那三个文件里。
@@ -11,6 +12,8 @@ pub mod codehub;
 pub mod gh;
 #[cfg(feature = "script")]
 pub mod script;
+#[cfg(feature = "script")]
+pub mod script_source;
 
 /// 登记工厂(brief 要求:「两家的构造函数(from ConnectorEntry)接入注册表
 /// 工厂」)。composition root(桌面壳 / headless 指挥器)拿到一份

@@ -38,3 +38,46 @@ jobs:
 
       - name: Kernel stays UI-free
         run: ./scripts/guard-kernel-ui-free.sh
+
+  next-gates:
+    name: next/ 门禁(vNext 连接器地基 + 行为读回)
+    # `next/` 是独立的 Cargo workspace(自己的 Cargo.toml/Cargo.lock,不是
+    # 根 workspace 的成员),门禁因此是独立一个 job,不并进上面的 `kernel`
+    # ——两边互不干扰,任何一边挂了不连带另一边(next 切片二C)。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # wasm32 保「以后也许的 Web」;clippy/rustfmt 供门禁用。
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next
+
+      - name: Format
+        run: cd next && cargo fmt --all --check
+
+      - name: Workspace check
+        run: cd next && cargo check --workspace
+
+      - name: Clippy (all targets — 含 examples)
+        run: cd next && cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Feature isolation — bw-connector(删任一连接器不影响其余)
+        run: |
+          cd next
+          cargo check -p bw-connector --no-default-features
+          cargo check -p bw-connector --no-default-features --features gh
+          cargo check -p bw-connector --no-default-features --features codehub
+          cargo check -p bw-connector --no-default-features --features script
+
+      - name: wasm32 keepalive (bw-core)
+        run: cd next && cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features
+
+      - name: 编排层/内核不准直接进程调用
+        run: ./scripts/guard-no-direct-process.sh
+
+      - name: 行为读回指挥器(bw-engine port_readback)
+        run: cd next && cargo run -p bw-engine --example port_readback

@@ -1,6 +1,6 @@
 [package]
 name = "bw-connector"
-description = "BW 对外借力的连接器契约层:最小机器契约类型 + 按能力拆的四个小接口 + 统一登记分发的注册表。骨架阶段(next 切片二A)只立地基与 feature 边界,不含任何具体适配器——gh/codehub/script 的真实收编是下一任务(切片二B)。"
+description = "BW 对外借力的连接器契约层:最小机器契约类型 + 按能力拆的四个小接口 + 统一登记分发的注册表。gh/codehub(切片二B)与 script(切片二C)三家首发适配器均已真实收编;agentcli(切片三,在 bw-engine 实现)通过同一契约挂进注册表。"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
