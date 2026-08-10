@@ -20,3 +20,12 @@ tokio = { workspace = true }
 # caller uses run_skill), so no non-Windows PTY dep is needed here.
 [target.'cfg(windows)'.dependencies]
 conpty-oxide = "0.1"
+
+[dev-dependencies]
+# next 切片一C `examples/port_readback.rs` 需要直接构造 `OffsetDateTime` 喂给
+# `bw_core::derive::measure`(该函数的 `now`/`as_of` 由调用方传入,模块本身
+# 不摸挂钟,见 measure.rs 文档注释)。`bw-engine` 的正常依赖里没有 `time`
+# (只有 bw-core 内部用),example 要点名这个类型就必须自己依赖它——只进
+# dev-dependencies,不进正常依赖,不影响真实产物的依赖面。版本沿用工作区
+# 既有 pin,无版本漂移。
+time = { workspace = true }

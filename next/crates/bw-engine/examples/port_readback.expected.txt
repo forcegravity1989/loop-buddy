@@ -1,0 +1,55 @@
+# 生成命令:cd next && cargo build -p bw-engine --example port_readback \
+#   && ./target/debug/examples/port_readback
+# (等价于 `cargo run -p bw-engine --example port_readback`,退出码 0;这里
+#  分两步跑只是为了让存档文件不夹带 cargo 自己的编译进度行。)
+# 生成时间:2026-08-10(next 切片一C · 行为读回指挥器验收)
+# 说明:除 cargo 编译日志外,以下为该指挥器某次真实运行的完整 stdout 原文,
+#   逐字未改;信号派生场景用固定参考时刻(非挂钟 now),因此本文件在同一份
+#   源码下应可重复复现。
+== 五阶段元数据 ==
+1. 原型 · 原型师 · Prototyper · 这个问题真的存在、值得解吗？
+2. 构建 · 构建师 · Constructor · 怎么把验证过的原型，变成生产可用的系统？
+3. 优化 · 优化师 · Optimizer · 系统扛得住被更多人用吗？哪些东西该删？
+4. 运营推广 · 运营推广师 · Grower · 增长卡在哪个环节？哪个实验能放大它？
+5. 运维 · 运维师 · Maintainer · 系统此刻健康吗？出了事多快能恢复？
+五阶段总数: 5
+
+== 状态机全矩阵 ==
+Backlog -> Todo
+Backlog -> InProgress
+Backlog -> Cancelled
+Todo -> Backlog
+Todo -> InProgress
+Todo -> Blocked
+Todo -> Cancelled
+InProgress -> Todo
+InProgress -> InReview
+InProgress -> Blocked
+InProgress -> Cancelled
+InReview -> InProgress
+InReview -> Done
+InReview -> Blocked
+InReview -> Cancelled
+Done -> Todo
+Done -> InProgress
+Blocked -> Todo
+Blocked -> InProgress
+Blocked -> Cancelled
+合法边总数: 20
+Done 唯一入边应为 InReview,实得入边: [InReview]
+
+== 信号派生 ==
+场景a 输入: Measurement::Missing, target="≥90%"
+场景a 派生输出: Unknown (hit=false)
+场景b 输入: raw_value="95%", as_of=now, source=Manual, cadence=Daily, target="≥90%"
+场景b 派生输出: Green (hit=true)
+
+== 指标正本解析 ==
+north_star: name="周活跃创作者数" kind=connector collect_query="content-analytics"
+lagging: name="月流失率" kind=connector collect_query="content-analytics"
+lagging: name="首月留存率" kind=manual collect_query=""
+leading: name="每周合并 PR 数" kind=github collect_query="repo:{owner}/{repo} is:pr is:merged merged:>=@{7d}"
+leading: name="队友结算 Issue 数" kind=bw collect_query="issue.settled_at within 7d"
+北极星+滞后+引领 合计条数: 5
+
+PORT_READBACK_OK
