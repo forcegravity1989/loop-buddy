@@ -11,7 +11,7 @@
 | 零 · 登记与横幅 | ✅ 830b5bc |
 | 一 · 骨架与器官移植 | ✅ A/B/C 五 commit(0f032b9…d9504e3),bw-core+四器官零改写移植,读回指挥器 PORT_READBACK_OK |
 | 二 · 连接器地基 | ✅ A/B/C 五 commit(2b9e16a…f799e17),契约+gh/codehub/脚本三家+probe_all 真探活+CI next-gates |
-| 三 · agentcli 层 | 🔄 三-1 完成(契约三档/PROTOCOL=2/PTY 双平台后端+进程组真杀,0eb0c2b…a1d9499);三-2 完成(注册表/claude 连接器/指挥器,0099fc0/a8a0641/0075187)+ 三-2 修复轮完成(会话号真接线/铁律正文进系统提示词/断言真空补齐/取消真杀进常绿,§10 第 5 条);切片三整体收官,四待发 |
+| 三 · agentcli 层 | 🔄 三-1 完成(契约三档/PROTOCOL=2/PTY 双平台后端+进程组真杀,0eb0c2b…a1d9499);三-2 完成(注册表/claude 连接器/指挥器,0099fc0/a8a0641/0075187)+ 三-2 修复轮完成(会话号真接线/铁律正文进系统提示词/断言真空补齐/取消真杀进常绿,§10 第 5 条)+ 缺口清偿轮(env-strip 真生效 + Unix 自动提交,97a66a6,§10 第 3/4 条已消灭);`--real` 端到端仍未跑通——验证轮新发现一道独立阻塞(全新工作区首次交互式启动的双重确认对话框,§10 第 6 条,待设计取舍);切片三主体收官,四待发 |
 | 四 · 并行运行 | ⬜ |
 | 五 · 六段总控 + 待人处理 | ⬜ |
 | 六 · multica cli 穿刺与缝入 | ⬜(等用户提供仓库指针) |
@@ -190,14 +190,14 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
    - **为什么切片三-1/三A 的 `--session-id` 实测没有先发现这个坑**:上一任务(切片三-1)验证 `--session-id` 用的是一段独立的 Python 探针(`pty.openpty()` + `subprocess.Popen` 直接起 `claude`),完全绕开了 `bw-engine` 自己的 `pty_backend.rs`/`interactive_cli.rs` 代码路径;该探针靠在**外层 shell** 用 `env -u ...` 剥离变量后再起 Python 进程才成功,这个外层剥离掩盖了「BW 自己的 Rust 代码其实没有正确剥离」这个事实——本片(切片三E)是第一次真的跑通 `pty_backend.rs` 的真实 spawn 路径去验证这件事,才第一次发现。
    - **本片(切片三E)如何绕开**:`agent_session --real` 档验证时,在**外层进程调用**上用 `env -u ...` 剥离(与三-1 报告同一份变量清单),不依赖 `plan.env` 这条(已知失效的)内层剥离——绕开不是修复,如实标注。
    - **待办**:`pty_backend.rs`(unix/windows 两份)的 spawn 都应该改成先 `cmd.env_clear()`(或 `CommandBuilder` 对应的清空 API)再整个用 `plan.env` 重建环境,让「删了」真的生效;`interactive_cli.rs` `run_skill` 的 `tokio::process::Command` 路径是 v1 零改写移植件,同样的问题按「移植件不擅改」的既有规矩,留给读到这条登记的下一个会话按当时的裁决(修 vs 继续零改写)处理,不由本片单方面决定。这条缺口影响面比字面看起来大:任何经 `pty_backend` 真正 spawn 出去的 claude 会话,只要 BW 自己运行在另一个 Claude Code 会话内部,子会话都会继承宿主的鉴权/网关/会话号,可能导致 401 或 transcript 被关闭(与三-1 报告记录的首次失败现象一致)。
-   - **登记日**:2026-08-10。
+   - **登记日**:2026-08-10。**已消灭于 commit `97a66a6`**(「next 切片三-2 修三 · env-strip 真生效(unix/windows)+ Unix 自动提交进常绿」):`pty_backend.rs` 的 `unix::UnixPtyBackend::run`/`windows::WindowsPtyBackend::run` 起步都加了 `cmd.env_clear()`,`plan.env` 真正成为子进程环境的唯一来源;`pty_smoke` 指挥器新增确定性 env-strip 断言节(不依赖网关,已做突变自证)。范围如实标注:只覆盖 `pty_backend.rs` 两份 PTY 后端;`interactive_cli.rs::InteractiveCliExecutor::run_skill` 的 `tokio::process::Command`(非 PTY)路径仍是同一模式的隐患,按待办里定的规矩不在这次动。Windows 侧只用 `cargo check --target x86_64-pc-windows-gnu` 交叉编译核对过类型,未在真机验证。
 
 4. **Unix 后端不自动提交位置 prompt,真实会话验证时首次实测确认会卡住**(登记日 2026-08-10;此前是切片三-1 报告的一条 concern/开放猜测,本条是它的实测坐实)
    - **现象**:`agent_session --real` 跑了一次真实首启(`AgentCliConnector::start` 经真实 `InteractiveCliExecutor`/`pty_backend::unix` 真 spawn 了 `claude`),`start` 本身成功、`upstream_session` 拿到了自己指派的 uuid,但轮询 90 秒始终停在 `Running`,最终按超时兜底取消;事后读回 `~/.claude/projects/<encoded>/<uuid>.jsonl`——**文件从未被创建**(不是空文件,是压根不存在),说明 claude 连第一轮交互都没发生。
    - **来源**:`pty_backend::unix::UnixPtyBackend` 是切片三B 明确写清楚的「最小集」——**刻意不含** Windows 实现里那段「TUI 加载完等 2 秒自动发 `\r` 提交位置 prompt」的补丁(模块文档原话:「真要在 macOS 上验证是否也需要这个补丁,得先有一次真实交互式 claude 会话观察,留给切片三 C/D 接线后」)。本条就是那次观察:位置 prompt 确实以 argv 形式传给了 `claude`,但没有一次真实按键把它从输入框送出去,会话因此一直停在「TUI 起来了、在等用户按 Enter」这一步,不会往前走。
    - **待办**:`pty_backend::unix::UnixPtyBackend::run` 需要照 Windows 那段逻辑的思路(TUI 起来后等一小段时间、`plan.submit_prompt` 为真时发一次 `\r`)补上对应的 Unix 版本,补完后需要再跑一次 `agent_session --real` 验证 jsonl 真的落地且非空、且里面第一条记录是真实的位置 prompt 正文。
    - **补充(2026-08-10,切片三-2 修复轮)**:本条(自动回车)只是 `--real` 从没跑通的**其中一个**独立阻塞——见下方第 5 条,当时还有另一个独立阻塞(会话号从未真交给 claude),已在本轮修复。两个阻塞都不解除,`--real` 才会真的跑通一整轮。
-   - **登记日**:2026-08-10。
+   - **登记日**:2026-08-10。**已消灭于 commit `97a66a6`**(「next 切片三-2 修三 · env-strip 真生效(unix/windows)+ Unix 自动提交进常绿」):`unix::UnixPtyBackend::run` 补上了 `submit_delay`/`submitted` 结构,语义对齐 Windows。`pty_smoke` 指挥器新增确定性断言节证明后端确实会自动发 `\r`(不依赖网关)。**但补完后按待办要求重跑 `agent_session --real` 发现:本条缺口的修复是必要但不充分的**——jsonl 依然没有生成,根因不是本条描述的「没人按 Enter」,而是另一个更深的、新发现的阻塞(全新工作区首次交互式启动会先弹两个交互确认对话框),已追加登记为下方第 6 条,不算在本条清偿范围内。
 
 5. **`build_startup_plan` 从没读过 `session_id_flag`,`--session-id` 从未真正交给 claude**(登记日 2026-08-10,发现于切片三-2 修复轮;已消灭于本轮同一次修复——`build_startup_plan`/`AgentCliConnector::start` 均已改,见下方待办)
    - **现象**:切片三C/D/E 三个 commit 把 `session_id_flag: Option<&'static str>` 字段加进了 `TuiAgentConfig`(注册表行,`interactive_cli.rs`),`CLAUDE` 行也填了 `Some("--session-id")` 并在文档里写「切片三-1 已用真实交互式会话验证过接受这个旗标」——但 `build_startup_plan` 的函数体当时**从没读过这个字段**,`agentcli::connector::AgentCliConnector::start` 首启时在内存里编了一个 uuid 塞进 `SessionRow.upstream_session`/回传的 `ExecTicket`,却从没把这个 uuid 放进 `claude` 的 argv 里。结果是:claude 会用它自己生成的会话号落 jsonl,BW 票据上记的那个「upstream_session」是 BW 自己编的、claude 根本不认的一个号——任何拿这个号去 `~/.claude/projects/<encoded>/<uuid>.jsonl` 读回的验证必空,不是因为文件慢生成,是因为这个文件从一开始就不会用这个文件名生成。
@@ -205,3 +205,10 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
    - **来源**:`next/crates/bw-engine/src/interactive_cli.rs` `build_startup_plan`;`next/crates/bw-engine/src/agentcli/connector.rs` `AgentCliConnector::start` 第③步(编会话号那一段)。
    - **待办(已在本轮完成)**:`build_startup_plan` 加 `session_id: Option<&str>` 形参,`agent.session_id_flag` 与调用方传入的 `session_id` 都非空才推 `--session-id <id>` 进 argv;`AgentCliConnector::start` 只有 `row.session_id_flag.is_some()`(这家真支持指派)才编 uuid、否则 `upstream_session` 如实留空(`String::new()`,`ExecTicket.upstream_session` 回 `None`),不再无条件瞎编一个号。指挥器(`agent_session.rs` 第 1 节)补了「给了 session_id」与「session_id 传空串不推旗标」两条逐字节断言。
    - **登记日**:2026-08-10。已消灭于本次「next 切片三-2 修 · 会话号真接线 + 铁律正文进系统提示词 + 断言真空补齐 + 取消真杀进常绿」commit。
+
+6. **全新工作区首次交互式启动,claude 在正文之前会先弹两道交互确认对话框,阻塞 `--real` 端到端跑通**(登记日 2026-08-10,发现于第 3/4 条清偿轮验证)
+   - **现象**:第 3 条(env-strip)与第 4 条(自动提交)按各自待办修完、指挥器断言全绿之后,`agent_session --real` 重跑仍然 90 秒轮询不到 `Finished`,上游 jsonl 依旧没有生成——说明这两条缺口的修复是必要但不充分的,还有第三个独立阻塞没被发现过。用一个不入 commit 的临时探针(直接调 `pty_backend::active()` + `build_startup_plan`,实时打印 PTY 字节到屏幕)复现:全新 git 工作区首次以 `--dangerously-skip-permissions --session-id <uuid>` 交互式启动 claude 时,在进入正常聊天界面之前,依次弹出两道交互确认——① 工作区信任确认(「是否信任这个文件夹」,默认选项是「是,信任」)、② bypass-permissions 模式警告(说明该模式下不再逐次询问危险操作的确认,**默认选项是「否,退出」,不是「是,接受」**)。第 4 条修复的单次 `\r`(2000ms 后发一次)只能带过第①道(默认选项恰好是「是」);第②道从未被处理——**如果不干预,会话就停在这里,不会自动前进也不会自动退出**(与第 4 条描述的「停在等 Enter」现象一致,只是停留的位置往前挪了一道)。人工介入实验(手动经 `PtyInput::Bytes` 发送方向键+Enter 选中「是,接受」)证实可以推过第②道、真正进入聊天主界面(终端标题变为 claude 的窗口标题,说明已进入正常会话),但**紧接着该次真实进程很快自行退出,没有产出任何回复内容**,jsonl 依旧不存在——第三层原因未查明(时间/范围所限未继续深挖:可能是 claude 自身在真正开始处理请求前还有别的检查、也可能是探针实验残留按键序列造成的干扰,两种可能都还没有证据区分)。
+   - **来源**:`pty_backend::unix::UnixPtyBackend::run` 目前的 `submit_delay` 机制只发一次固定的 `\r`,不识别当前屏幕上是哪一种画面,对「全新工作区需要先过至少两道确认」这件事完全不知情——这不是第 3/4 条里已经描述过的问题,是两者都修完之后才第一次看见的、更深一层的阻塞。
+   - **待办**:这不是「再加一次 `\r`」能简单解决的——第②道对话框的默认选项是危险方向(选错等于话都没说完就把会话退出了),需要专门设计「怎么识别当前是哪个画面、该发哪个按键」的方案(候选方向包括:识别特定文本/转义序列后按需应答;或者调查 claude 是否有配置文件/环境变量可以预先标记工作区为「已信任」+已接受 bypass-permissions 提示,从而让这两道对话框直接不出现,更接近这条问题的根子而不是逐个应付它的 UI)。第三层「进入主界面后很快退出」的根因也需要先查清楚,才能判断修完前两道对话框是否真的等于跑通。这是一个需要专门设计取舍的独立任务,不该在发现它的这次改动里顺手改。
+   - **补充**:这道「工作区信任」确认是否也会出现在 BW 生产环境的真实用法里(每个 issue 一个新 worktree,`bw/issue-N`),还是只在这类每次都从零新建临时目录的验证脚本里才会触发(比如 claude 的信任判定可能是按项目根 / git 远程身份而不是按精确的 worktree 子目录路径),这一点本条也没有查清楚,留给下一个会话确认。
+   - **登记日**:2026-08-10。
