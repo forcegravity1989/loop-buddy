@@ -341,6 +341,7 @@ impl TerminalManager {
   - **诚实缺口(记此处,不擅改)**:降级后的 PTY 是按交付起手的(`build_startup_plan` / `build_resume_plan`),没带 §6.2 咨询 prompt(「这活已验收,新交付请另开一件活」)。这条要等下次「续聊」resume(`build_consultation_resume_plan`)才注入。降级只放锁不杀进程,PTY 里的 claude 仍有完整 CLI 能力——与 §6.3 诚实口径一致(行为约定不是技术只读)。不假装已注入。
   - **范围**:`→InReview` + `→Done` 两个触发点(降级不杀进程,无损,§7.2 要评审中也不占锁)。`→Blocked` 等其他出 InProgress 的边暂不处理(follow-up:Blocked 的 PTY 该杀该留需另拍,本次不擅扩)。
 - **Bug2 焦点同步(V1-TermFocus,2026-08-07)**:左侧 session 卡 ↔ 嵌终端焦点串台。根因:`SelectSession` 只设 `active_session`(驱动老 Chat + 左侧高亮),不调 `focus_conversation`;终端可见性由 `focused_conversation` 驱动,只有 issue 看板点卡 / 续聊 / ▶跑 调 `focus_conversation`。而 `focus_conversation` 也不回写 `active_session`。双向脱节。修复:左→终端——`SelectSession` 处理时解析 session→issue(session title 是 `#N 标题`,按 number+title 匹配 issue),有活 PTY → `focus_conversation`,无活 PTY 但有 `claude_session_id` → 走 `run_issue_now`(与 `OpenIssueDetail` 一致),解析不到(纯阶段记录)→ 保持原行为。终端→左——`focus_conversation` 切焦点时回写 `active_session` 到该 issue 对应的阶段记录(按 `run_sess_title` 反查 SessionId)。不杀 peer PTY(切卡只切显示/键盘);不动交付锁/merge 语义。
+- **Bug2 收口补洞(2026-08-10)**:V1 合入后用户仍报「阶段记录切换看不到会话、看板切换正常」。根因不是焦点双向本身失效,而是左→终端分支**覆盖不全**:旧 `sync_session_to_terminal` 只在「已有 `claude_conversation` 且(活 PTY | 非空 `claude_session_id`)」时动作;缺行或 hook 未回填 session_id 时静默 no-op,同时 `SelectSession` 用 `let _ = sync` 吞掉 resume 错误 → 左侧高亮了、工作流区仍是空 Chat/无终端、无 toast。看板因直接 `RunIssue` 不受影响。修法:匹配到 issue 后**一律** `run_issue_now`(与 ▶跑/续聊等价);错误上浮打 `UiNote::Error`;纯 stage-playbook 标题仍 early Ok。命令层回归:`select_session_focus_tests`(活 PTY 切焦点 / 空 session_id 起手 / resume 错误上浮)。
 ---
 
 ## 14. 事实源锚点

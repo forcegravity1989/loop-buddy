@@ -1895,14 +1895,25 @@ impl App {
         }
     }
 
-    /// Bug2(V1-TermFocus): 左→终端——解析 session→issue。session 的 title 是
-    /// `#N 标题`(见 op.rs `run_sess_title = format!("#{} {}", i.number,
-    /// i.title)`),按 number+title 在 `self.state.issues` 里匹配 issue。
-    /// 匹配到 + 活 PTY → `focus_conversation`;匹配到 + 无活 PTY 但有
-    /// `claude_session_id` → `run_issue_now`(与 `OpenIssueDetail` 一致:
-    /// Done/InReview 进 `open_conversation`、InProgress 进 resume);匹配不到
-    /// (纯 stage-playbook 跑的阶段记录,不挂 issue)→ 保持原行为。
+    /// Bug2(V1-TermFocus)+收口补洞:左→终端——解析 session→issue 后走与
+    /// issue 看板「▶跑/续聊」相同的 `run_issue_now`(活 PTY 切焦点 /
+    /// Done·InReview resume 进 `open_conversation` / 否则起交互式)。
+    ///
+    /// 旧实现只在「已有 conversation 且(活 PTY|非空 claude_session_id)」时
+    /// 动作,缺行或 hook 未回填 session_id 时静默 no-op → 阶段记录高亮了、
+    /// 工作流区仍空(看板因直接 `RunIssue` 不受影响)。匹配不到 `#N 标题`
+    /// (纯 stage-playbook 阶段记录)→ 保持原行为(只设 active_session)。
     async fn sync_session_to_terminal(&mut self, sid: SessionId) -> Result<(), AppError> {
+        let Some(issue_id) = self.resolve_issue_for_session(sid).await? else {
+            return Ok(());
+        };
+        self.run_issue_now(sid, issue_id).await
+    }
+
+    /// 阶段记录 session.title = `#N 标题`(op.rs `run_sess_title`)。按
+    /// number+title 在 `self.state.issues` 匹配;匹配不到 = 不挂 issue 的
+    /// 纯阶段循环会话。
+    async fn resolve_issue_for_session(&self, sid: SessionId) -> Result<Option<IssueId>, AppError> {
         let p = self.active()?;
         let title = self
             .store
@@ -1912,25 +1923,14 @@ impl App {
             .find(|s| s.id == sid)
             .map(|s| s.title);
         let Some(title) = title else {
-            return Ok(());
+            return Ok(None);
         };
-        let issue_id = self
+        Ok(self
             .state
             .issues
             .iter()
             .find(|i| format!("#{} {}", i.number, i.title) == title)
-            .map(|i| i.id);
-        let Some(issue_id) = issue_id else {
-            return Ok(());
-        };
-        if let Some(c) = self.store.get_conversation_by_issue(issue_id).await? {
-            if self.state.terminal_manager.is_live(c.id) {
-                self.focus_conversation(c.id, issue_id).await;
-            } else if !c.claude_session_id.is_empty() {
-                self.run_issue_now(SessionId::new(), issue_id).await?;
-            }
-        }
-        Ok(())
+            .map(|i| i.id))
     }
 
     fn clear_focus_if(&mut self, conversation_id: ConversationId) {
@@ -9400,14 +9400,12 @@ impl App {
             Command::SetScope(s) => self.state.scope = s,
             Command::SelectSession(s) => {
                 self.state.active_session = s;
-                // Bug2(V1-TermFocus): 左→终端——解析 session→issue(session
-                // title 是 `#N 标题`,按 number+title 匹配 issue),有活 PTY
-                // 则切焦点,无活 PTY 但有 claude_session_id 则唤醒(与
-                // OpenIssueDetail 一致——Done/InReview 进 open_conversation、
-                // InProgress 进 resume)。解析不到(纯阶段记录不挂 issue)→
-                // 保持原行为(只设 active_session)。best-effort:错误不阻塞。
+                // Bug2(V1-TermFocus)+收口补洞:左→终端走 run_issue_now(与看板
+                // ▶跑/续聊等价)。错误上浮 → kernel 打 UiNote::Error,不再静默
+                // 吞掉(旧 `let _ =` 让用户只看见空工作流区、无任何提示)。
+                // 解析不到 issue(纯阶段循环会话)→ sync 内 early Ok,只亮高亮。
                 if let Some(sid) = s {
-                    let _ = self.sync_session_to_terminal(sid).await;
+                    self.sync_session_to_terminal(sid).await?;
                 }
             }
             // V1 终端会话重构·底座: 按 conversation_id 转发到 TerminalManager。
@@ -10070,4 +10068,273 @@ fn five_stages(project: ProjectId, cadence: Cadence) -> Vec<NewStage> {
             schedule: cadence.clone(),
         })
         .collect()
+}
+
+/// V1-TermFocus 缺口读回:阶段记录 `SelectSession` 必须把焦点切到对应
+/// conversation(与 issue 看板 `RunIssue` 路径等价)。无 UI,纯命令层。
+#[cfg(test)]
+mod select_session_focus_tests {
+    use super::*;
+    use bw_core::model::{IssuePriority, MaturityPeriod};
+    use bw_engine::MockExecutor;
+    use bw_store::SqliteStore;
+    use std::path::PathBuf;
+
+    async fn boot_project(db: &str) -> (App, Arc<dyn Store>, ProjectId) {
+        let store: Arc<dyn Store> = Arc::new(SqliteStore::open(db).await.expect("open db"));
+        let mut app = App::new(
+            store.clone(),
+            Engine::new(Arc::new(MockExecutor::new())),
+            ClaudeCliConfig::default(),
+        )
+        .with_pty();
+        app.dispatch(Command::Boot).await.expect("boot");
+        let pid = ProjectId::new();
+        app.dispatch(Command::CreateProject {
+            provider: "github".into(),
+            id: pid,
+            name: "focus-switch".into(),
+            kind: "test".into(),
+            desc: "SelectSession focus".into(),
+            workspace: None,
+            github: None,
+            codehub: None,
+        })
+        .await
+        .expect("create");
+        app.dispatch(Command::SetCycle {
+            cycle: MaturityPeriod::Explore,
+        })
+        .await
+        .expect("cycle");
+        app.dispatch(Command::CompleteCreation {
+            cadence: Cadence::Weekly,
+            run_first: false,
+        })
+        .await
+        .expect("complete");
+        app.dispatch(Command::OpenProject(pid)).await.expect("open");
+        (app, store, pid)
+    }
+
+    async fn mk_issue(app: &mut App, title: &str) -> IssueId {
+        let id = IssueId::new();
+        app.dispatch(Command::CreateIssue {
+            id,
+            stage: StageKind::Prototype,
+            title: title.into(),
+            desc: String::new(),
+            priority: IssuePriority::Medium,
+            standard_skill: String::new(),
+        })
+        .await
+        .expect("create issue");
+        id
+    }
+
+    fn attach_live(app: &mut App, cid: ConversationId, issue: IssueId, session_id: &str) {
+        let meta = ConversationMeta {
+            conversation_id: cid,
+            issue_id: issue,
+            claude_session_id: session_id.into(),
+            workspace_path: PathBuf::from("/tmp/focus-switch"),
+            branch_name: String::new(),
+        };
+        let _ = app.state.terminal_manager.attach(cid, meta, Some((80, 24)));
+    }
+
+    #[tokio::test]
+    async fn select_session_switches_focused_live_pty() {
+        let db = std::env::temp_dir().join(format!(
+            "bw_select_session_focus_{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+
+        let issue_a = mk_issue(&mut app, "找指标").await;
+        let issue_b = mk_issue(&mut app, "绑数据").await;
+        // refresh_issues happens inside CreateIssue; re-read numbers.
+        app.dispatch(Command::OpenProject(pid))
+            .await
+            .expect("reopen");
+        let (num_a, title_a) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue_a).unwrap();
+            (i.number, i.title.clone())
+        };
+        let (num_b, title_b) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue_b).unwrap();
+            (i.number, i.title.clone())
+        };
+
+        let sess_a = SessionId::new();
+        let sess_b = SessionId::new();
+        app.dispatch(Command::StartSession {
+            id: sess_a,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num_a} {title_a}"),
+        })
+        .await
+        .expect("sess a");
+        app.dispatch(Command::StartSession {
+            id: sess_b,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num_b} {title_b}"),
+        })
+        .await
+        .expect("sess b");
+
+        let cid_a = store
+            .ensure_conversation(issue_a, pid, "/tmp/a", "bw/a")
+            .await
+            .unwrap();
+        let cid_b = store
+            .ensure_conversation(issue_b, pid, "/tmp/b", "bw/b")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue_a, "claude-a")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue_b, "claude-b")
+            .await
+            .unwrap();
+
+        attach_live(&mut app, cid_a, issue_a, "claude-a");
+        attach_live(&mut app, cid_b, issue_b, "claude-b");
+        app.focus_conversation(cid_a, issue_a).await;
+        assert_eq!(app.state.focused_conversation, Some(cid_a));
+
+        // 阶段记录点击路径:只发 SelectSession(不发 RunIssue)。
+        app.dispatch(Command::SelectSession(Some(sess_b)))
+            .await
+            .expect("select b");
+
+        assert_eq!(
+            app.state.focused_conversation,
+            Some(cid_b),
+            "阶段记录 SelectSession 必须把嵌终端焦点切到 B(TermFocus 左→终端)"
+        );
+        assert_eq!(app.state.active_session, Some(sess_b));
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[tokio::test]
+    async fn select_session_empty_claude_session_id_runs_like_board() {
+        // 旧洞:有 conversation 行但 claude_session_id 空(hook 未回填)时,
+        // sync 静默 no-op → 阶段记录高亮、工作流空;看板 ▶跑 走 RunIssue
+        // 能起手。收口后 SelectSession 必须同样走 run_issue_now。
+        let db = std::env::temp_dir().join(format!(
+            "bw_select_session_empty_sid_{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+        let issue = mk_issue(&mut app, "找指标").await;
+        app.dispatch(Command::OpenProject(pid)).await.unwrap();
+        let (num, title) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue).unwrap();
+            (i.number, i.title.clone())
+        };
+        let sess = SessionId::new();
+        app.dispatch(Command::StartSession {
+            id: sess,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num} {title}"),
+        })
+        .await
+        .unwrap();
+        store
+            .ensure_conversation(issue, pid, "/tmp/x", "")
+            .await
+            .unwrap();
+        // 故意不 set_conversation_session_id —— 模拟 hook 未 fire。
+
+        app.dispatch(Command::SelectSession(Some(sess)))
+            .await
+            .expect("SelectSession 应像看板一样起手,不再静默");
+
+        app.dispatch(Command::OpenProject(pid)).await.unwrap();
+        let status = app
+            .state
+            .issues
+            .iter()
+            .find(|i| i.id == issue)
+            .map(|i| i.status)
+            .expect("issue");
+        assert_eq!(
+            status,
+            IssueStatus::InProgress,
+            "空 claude_session_id 时阶段记录点击也必须真正开工(与 RunIssue 等价)"
+        );
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[tokio::test]
+    async fn select_session_propagates_resume_errors() {
+        // 旧洞:`let _ = sync` 吞掉 open_conversation 错误 → 用户只见空白。
+        // Done + 有 session_id + 无 settle 通道(headless)→ 必须 Err 上浮。
+        let db =
+            std::env::temp_dir().join(format!("bw_select_session_err_{}.db", uuid::Uuid::new_v4()));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+        let issue = mk_issue(&mut app, "找指标").await;
+        for st in [
+            IssueStatus::Todo,
+            IssueStatus::InProgress,
+            IssueStatus::InReview,
+            IssueStatus::Done,
+        ] {
+            app.dispatch(Command::TransitionIssue {
+                id: issue,
+                status: st,
+            })
+            .await
+            .unwrap();
+        }
+        app.dispatch(Command::OpenProject(pid)).await.unwrap();
+        let (num, title) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue).unwrap();
+            (i.number, i.title.clone())
+        };
+        let sess = SessionId::new();
+        app.dispatch(Command::StartSession {
+            id: sess,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num} {title}"),
+        })
+        .await
+        .unwrap();
+        store
+            .ensure_conversation(issue, pid, "/tmp/x", "")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue, "claude-resume")
+            .await
+            .unwrap();
+
+        let err = app
+            .dispatch(Command::SelectSession(Some(sess)))
+            .await
+            .expect_err("无 settle 通道时咨询 resume 失败必须上浮,不能 Ok(())");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("settle")
+                || msg.contains("咨询")
+                || msg.contains("PTY")
+                || msg.contains("终端"),
+            "错误应说明咨询/终端路径不可用,实际:{msg}"
+        );
+        let _ = std::fs::remove_file(&db);
+    }
 }
