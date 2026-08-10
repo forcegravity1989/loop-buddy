@@ -1,21 +1,10 @@
 [package]
 name = "bw-engine"
-description = "Workflow execution engine: WorkflowSpec → phase loop, the frozen Executor contract + a deterministic MockExecutor + a reusable consistency suite."
+description = "Migrated from v1: four organs (evidence gathering / metrics-file-of-record parsing / terminal session management / interactive CLI). The Executor contract and MockExecutor are not yet ported; later slices will bring them over as needed."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 rust-version.workspace = true
-
-# `InteractiveCliExecutor::timeout` / `::await_child` (interactive_cli.rs) are
-# only reached on the Windows/Linux cfg branches of `run_skill`; the macOS
-# osascript branch never touches them. Verified against an untouched
-# origin/v1 checkout on this machine: the identical warning fires there too
-# (standalone crate build) — a pre-existing macOS-only quirk of the v1
-# source, not something this migration introduced. The migrated files are
-# zero-rewrite (no per-item #[allow] possible), so the exemption is scoped
-# here instead.
-[lints.rust]
-dead_code = "allow"
 
 [dependencies]
 bw-core = { path = "../bw-core" }

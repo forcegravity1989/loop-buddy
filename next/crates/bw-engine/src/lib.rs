@@ -2,7 +2,7 @@
 //! terminal_manager / interactive_cli)的正文逐字节来自 `origin/v1`,零改写;
 //! 本文件是新写的根定义,只搬运这四个模块唯一依赖的两个根类型
 //! (`RunCtx` / `ExecError`,逐字复制自 `origin/v1:crates/bw-engine/src/lib.rs`
-//! 第 91-96 行、106-110 行)与模块声明,不含其余 v1 根类型(`Executor`/
+//! 第 92-97 行、107-111 行)与模块声明,不含其余 v1 根类型(`Executor`/
 //! `PhaseOutput`/`MockExecutor` 等留给后续切片接线时再搬)。
 
 use bw_core::{ProjectId, WorkflowId};
@@ -21,6 +21,11 @@ pub enum ExecError {
 }
 
 pub mod evidence;
+// v1 源码跨平台既有告警:`InteractiveCliExecutor::timeout` / `::await_child`
+// 只在 Windows/Linux 的 cfg 分支被引用,macOS 下不被引用而触发 dead_code。
+// 零改写约束下无法逐项 #[allow],豁免收在本模块;切片三把该模块接线进
+// run_skill 后复查收窄。
+#[allow(dead_code)]
 pub mod interactive_cli;
 pub mod metrics_file;
 pub mod terminal_manager;
