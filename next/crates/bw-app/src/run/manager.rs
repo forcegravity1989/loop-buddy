@@ -350,10 +350,50 @@ impl Loop {
 
         // ④ 把活推到「进行中」——运行管理器唯一改活状态的写(design
         // §3.6)。没有 `IssueStatus` 形参可传:`mark_issue_in_progress`
-        // 天生写不出别的值。
-        self.store
+        // 天生写不出别的值。**不能用 `?` 直接甩手**(评审 Important-1):
+        // 这一步失败时,③ 已经插了运行行、也已经在内存三张表里占了名
+        // 额——直接传播错误,调用方拿到的是 `Err` 却没有 `RunId`,连
+        // `cancel` 都调不了,这件活的名额会被一条外部看不见的
+        // `starting` 行占死到下次重启 + `reap_on_restart`。这里尽力把已
+        // 插的行诚实关成「失败」并回滚三张内存表,让这件活在这个进程里
+        // 立刻能重新开工——补写要是也失败,如实记一行诊断,那一行只能
+        // 等 `reap_on_restart` 收拾,但至少内存槽位不再被这个进程自己
+        // 锁死。
+        if let Err(e) = self
+            .store
             .mark_issue_in_progress(req.issue, started_at)
-            .await?;
+            .await
+        {
+            let at = now_unix();
+            let detail = format!("[run-manager] 把活推到「进行中」时存储出错,已尽力回滚:{e}");
+            match self
+                .store
+                .close_run(
+                    run_id,
+                    at,
+                    RunState::Failed,
+                    Some(RunEndKind::StartFailed),
+                    &detail,
+                )
+                .await
+            {
+                Ok(true) => {
+                    let _ = self.store.settle_run(run_id, at).await;
+                }
+                Ok(false) => eprintln!(
+                    "[run-manager] 诊断:运行 {run_id:?} 回滚关门时发现已经被别的动作关过门(诚实空转)"
+                ),
+                Err(close_err) => eprintln!(
+                    "[run-manager] 诊断:运行 {run_id:?} 回滚关门也失败,库里这一行会一直挂着 \
+                     state=starting,直到下次重启 + reap_on_restart 收拾(如实记录,不假装已收\
+                     尾):{close_err}"
+                ),
+            }
+            self.active.remove(&run_id);
+            self.release_issue_slot(req.issue, run_id);
+            self.release_workspace_slot(&req.workspace, run_id);
+            return Err(RunError::Store(e));
+        }
 
         // ⑤ 派出去调连接器的 start——不等。
         let tx = self.tx.clone();
@@ -411,7 +451,11 @@ impl Loop {
                 let connector = active_run.connector.clone();
                 let poll_cancel = active_run.poll_cancel.clone();
                 let upstream = ticket.upstream_session.clone().unwrap_or_default();
-                match self.store.mark_run_started(run, &upstream, now_unix()).await {
+                match self
+                    .store
+                    .mark_run_started(run, &upstream, now_unix())
+                    .await
+                {
                     Ok(true) => {
                         spawn_poll_task(
                             self.tx.clone(),
@@ -422,10 +466,23 @@ impl Loop {
                             self.cfg.poll_interval,
                         );
                     }
-                    Ok(false) => eprintln!(
-                        "[run-manager] 诊断:运行 {run:?} 起工回写落空(比较并置未命中——理论不该发生,如实记一行)"
-                    ),
-                    Err(e) => eprintln!("[run-manager] 诊断:运行 {run:?} 起工回写失败:{e}"),
+                    // 评审 Important-1:此前这两支只打诊断,不起轮询任务
+                    // 也不关门——运行留在 `self.active`(占着 issue/
+                    // workspace 名额),但没有任何后续机制会再碰它,是一
+                    // 次永久搁浅(直到下次重启 + `reap_on_restart`)。这里
+                    // 改成诚实收尾:关门 + 结账 + 释放内存槽位,不再是
+                    // 「打完日志就当没发生过」。
+                    Ok(false) => {
+                        self.honest_close_on_storage_error(
+                            run,
+                            "起工回写落空(比较并置未命中——理论不该发生)",
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        self.honest_close_on_storage_error(run, format!("起工回写失败:{e}"))
+                            .await;
+                    }
                 }
             }
             Err(conn_err) => {
@@ -486,18 +543,97 @@ impl Loop {
             Ok(false) => eprintln!(
                 "[run-manager] 诊断:运行 {run:?} 的结束消息晚到,已经被别的动作关过门,诚实空转"
             ),
-            Err(e) => eprintln!("[run-manager] 诊断:运行 {run:?} 结束回写失败:{e}"),
+            // 评审 Important-1:此前这一支只打诊断——`close_run` 本身出
+            // 错意味着这次「关门」没有写进去任何字段,`self.active` 里
+            // 这条运行仍然「活着」、仍然占着 issue/workspace 名额,却再
+            // 也没有别的机制会去碰它(轮询任务已经在派出这条命令前退出
+            // 了),是一次永久搁浅。改成诚实收尾:尽力补一次关门写(标
+            // 成失败 + 存储错误原文),不管补写成不成功,内存槽位都要
+            // 释放。
+            Err(e) => {
+                self.honest_close_on_storage_error(run, format!("结束回写失败:{e}"))
+                    .await;
+            }
+        }
+    }
+
+    /// 存储调用出错时的诚实收尾(评审 Important-1):三处调用点(见各自
+    /// 文档)在写库失败之后,不能只打一行诊断就当没发生过——那会让这条
+    /// 运行永久留在 `self.active`(占着 issue/workspace 名额),却再没有
+    /// 任何机制会去推进它,直到下次重启 + `reap_on_restart` 才会被发
+    /// 现。这里尽力再补一次关门写(`state=Failed`,`end_detail` 写存储错
+    /// 误原文/诊断上下文);不管补写成不成功,内存槽位都要释放——补写
+    /// 成功 → 数据库如实记下「失败」;补写也失败 → 数据库那一行还是
+    /// `ended_at IS NULL`(要等 `reap_on_restart` 收拾),但至少这个进程
+    /// 不会再把这件活/这个工作区锁死。
+    async fn honest_close_on_storage_error(&mut self, run: RunId, context: impl std::fmt::Display) {
+        let at = now_unix();
+        let detail = format!("[run-manager] 存储调用出错,已尽力标成失败:{context}");
+        match self
+            .store
+            .close_run(run, at, RunState::Failed, None, &detail)
+            .await
+        {
+            Ok(true) => {
+                let _ = self.store.settle_run(run, at).await;
+                eprintln!(
+                    "[run-manager] 诊断:运行 {run:?} 存储出错({context}),已补写关门(state=Failed)"
+                );
+            }
+            Ok(false) => eprintln!(
+                "[run-manager] 诊断:运行 {run:?} 存储出错({context}),补写时发现已经被别的动作关过门,诚实空转"
+            ),
+            Err(close_err) => eprintln!(
+                "[run-manager] 诊断:运行 {run:?} 存储出错({context}),补写关门也失败,库里这一行会\
+                 一直挂着 ended_at=NULL,直到下次重启 + reap_on_restart 收拾(如实记录,不假装已\
+                 收尾):{close_err}"
+            ),
+        }
+        if let Some(active_run) = self.active.remove(&run) {
+            self.release_issue_slot(active_run.issue, run);
+            self.release_workspace_slot(&active_run.workspace, run);
         }
     }
 
     /// 取消(design §3.5②/主控裁决 #6):比较并置关门,赢了才结算 + 通
     /// 知连接器。幂等——不在活跃表时,查库判定是「已经关过门」(`Ok`)还
-    /// 是「压根不存在」(`Err`)。
+    /// 是「库里还开着、但本进程从没见过」(评审 Important-2)。
     async fn handle_cancel(&mut self, run: RunId) -> Result<(), RunError> {
         let Some(active_run) = self.active.remove(&run) else {
             return match self.store.get_run(run).await? {
-                Some(row) if row.ended_at.is_some() => Ok(()), // 已关门,幂等
-                Some(_) => Ok(()), // 活跃但不在本进程内存表(理论边缘态),同样幂等处理,不误报
+                Some(row) if row.ended_at.is_some() => Ok(()), // 已关门,真幂等
+                // 评审 Important-2:此前这一支直接报 `Ok(())` 却什么都不
+                // 做——被当成「理论边缘态」,实际上是重启之后、
+                // `reap_on_restart()` 之前的常规状态(它不是自动触发
+                // 的)。数据库那一行仍然 `ended_at IS NULL`,仍然占着交
+                // 付名额,回一个「取消成功」是一次没做事的假 `Ok`。这里
+                // 改成真去做一次 `close_run` 比较并置:本进程重启后没有
+                // 这条运行的连接器句柄/票据(那是运行时对象,不落库),
+                // 没法真的去杀上游进程,但至少把账如实关上——`end_detail`
+                // 写清楚这一点,不冒充「已经杀掉上游」。
+                Some(_) => {
+                    let at = now_unix();
+                    let detail = "已取消(本进程重启后未持有这条运行的连接器句柄,只能关账,\
+                                   无法确认上游会话是否已真正停止——上游会话档案保留,人可自行续接核实)";
+                    match self
+                        .store
+                        .close_run(
+                            run,
+                            at,
+                            RunState::Canceled,
+                            Some(RunEndKind::Canceled),
+                            detail,
+                        )
+                        .await
+                    {
+                        Ok(true) => {
+                            let _ = self.store.settle_run(run, at).await;
+                            Ok(())
+                        }
+                        Ok(false) => Ok(()), // 别人抢先关门了,真幂等
+                        Err(e) => Err(RunError::Store(e)),
+                    }
+                }
                 None => Err(RunError::RunNotFound(run)),
             };
         };
