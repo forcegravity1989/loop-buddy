@@ -46,19 +46,20 @@ pub struct BwSkillDoc {
     pub raw: &'static str,
 }
 
-pub const EVIDENCE_FIRST_MD: &str = include_str!("../../../docs/skills/evidence-first/SKILL.md");
-pub const SPEC_TO_TESTS_MD: &str = include_str!("../../../docs/skills/spec-to-tests/SKILL.md");
+pub const EVIDENCE_FIRST_MD: &str = include_str!("../../../../docs/skills/evidence-first/SKILL.md");
+pub const SPEC_TO_TESTS_MD: &str = include_str!("../../../../docs/skills/spec-to-tests/SKILL.md");
 pub const BASELINE_BEFORE_TOUCH_MD: &str =
-    include_str!("../../../docs/skills/baseline-before-touch/SKILL.md");
+    include_str!("../../../../docs/skills/baseline-before-touch/SKILL.md");
 pub const FRESH_EYES_FUNNEL_MD: &str =
-    include_str!("../../../docs/skills/fresh-eyes-funnel/SKILL.md");
-pub const BREAKING_DRILL_MD: &str = include_str!("../../../docs/skills/breaking-drill/SKILL.md");
+    include_str!("../../../../docs/skills/fresh-eyes-funnel/SKILL.md");
+pub const BREAKING_DRILL_MD: &str = include_str!("../../../../docs/skills/breaking-drill/SKILL.md");
 pub const COMPETITIVE_ANALYSIS_MD: &str =
-    include_str!("../../../docs/skills/competitive-analysis/SKILL.md");
+    include_str!("../../../../docs/skills/competitive-analysis/SKILL.md");
 pub const NORTH_STAR_DISCOVERY_MD: &str =
-    include_str!("../../../docs/skills/north-star-discovery/SKILL.md");
-pub const METRICS_BINDING_MD: &str = include_str!("../../../docs/skills/metrics-binding/SKILL.md");
-pub const METRICS_RENDER_MD: &str = include_str!("../../../docs/skills/metrics-render/SKILL.md");
+    include_str!("../../../../docs/skills/north-star-discovery/SKILL.md");
+pub const METRICS_BINDING_MD: &str =
+    include_str!("../../../../docs/skills/metrics-binding/SKILL.md");
+pub const METRICS_RENDER_MD: &str = include_str!("../../../../docs/skills/metrics-render/SKILL.md");
 
 // 每条包文档 frontmatter `description` 的复述(见 `BwSkillDoc::desc`):必须
 // 与文件逐字相等,Boot canon 构建器守卫。`const` 而非函数内联字面量,是因为

@@ -6,6 +6,9 @@ node_modules/
 
 # Rust
 /target/
+# next/ 是独立的 workspace 根(plan/17 next 切片迁移),/target/ 只锚定仓根,
+# 覆盖不到它自己的 target/,单独补一条。
+next/target/
 **/*.rs.bk
 # dx (Dioxus CLI) build output
 /dist/
