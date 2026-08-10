@@ -591,10 +591,19 @@ pub trait InteractiveExecutor: Send + Sync {
 /// Completion detection (deviation from design's session.jsonl mtime
 /// polling — see commit note): wait on the spawned process to exit. On
 /// Windows, spawning a console process from a GUI app (Dioxus/wry) creates
-/// a new console window automatically. On macOS, `osascript` opens Terminal
-/// — the `osascript` process itself exits immediately, so we rely on the
-/// wall-clock timeout exclusively. On Linux, spawn directly (may not open
-/// a terminal window — best-effort, not a primary platform).
+/// a new console window automatically. On macOS/Linux, spawn directly and
+/// wait on that same process (best-effort — may not open a visible terminal
+/// window depending on how buddy itself was launched).
+///
+/// **减法(next 切片三-1 修,design-s3-agentcli.md §7.4)**: macOS 曾经走
+/// `osascript` 开系统 Terminal 的一条独立分支——但那条分支自己的旧注释就
+/// 写明拿不到 claude 的进程句柄、等不到它退出,所以只能诚实报
+/// `completed = false`,永远靠人手动推进。Unix PTY 后端
+/// (`pty_backend::unix`,next 切片三B)补齐之后,交互式会话真正的通道是
+/// `run_skill_pty`(能起、能双向倒腾字节、能判定退出),这条判定不了完成
+/// 的旧回落分支失去存在理由——按 `CLAUDE.md`「发现过时的实现路径直接
+/// 移除」删掉,macOS 现在落到与 Linux 相同的直接 spawn 分支,不再留一条
+/// 体验不同、结果也判定不了的兼容路径。
 pub struct InteractiveCliExecutor {
     /// Override the claude binary path (e.g. from `BW_CLAUDE_BIN`).
     /// `None` → use `LaunchPlan.binary` (which is `TuiAgentConfig.launch_cmd`).
@@ -633,9 +642,12 @@ impl InteractiveExecutor for InteractiveCliExecutor {
         let binary = self.claude_binary.as_deref().unwrap_or(&plan.binary);
         // Build the spawn command. On Windows, spawning a console process
         // from a GUI app creates a new console window (the user sees the
-        // agent). On macOS, we use osascript to open Terminal (the osascript
-        // process exits immediately, so we rely on the timeout). On Linux,
-        // spawn directly (best-effort — may not open a terminal window).
+        // agent). On macOS/Linux, spawn directly (best-effort — may not
+        // open a visible terminal window; this OS-terminal path isn't the
+        // real interactive channel anyway — that's `run_skill_pty`, §4
+        // agentcli 层). macOS previously had its own `osascript` branch
+        // here; removed (see this struct's doc comment for why — design
+        // §7.4 减法, `CLAUDE.md`「不为向后兼容留旧路径」).
         #[cfg(target_os = "windows")]
         {
             let mut cmd = tokio::process::Command::new(binary);
@@ -654,39 +666,13 @@ impl InteractiveExecutor for InteractiveCliExecutor {
             })?;
             return self.await_child(child).await;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(not(target_os = "windows"))]
         {
-            // macOS: osascript opens Terminal and runs the command. The
-            // osascript process exits immediately (it just tells Terminal
-            // to open) — we can't wait on the claude process itself. Fall
-            // back to the wall-clock timeout.
-            let cwd = plan.cwd.display().to_string();
-            let mut cmd_line = format!("cd '{cwd}' && {binary}");
-            for a in &plan.args {
-                cmd_line.push(' ');
-                cmd_line.push_str(&shell_quote(a));
-            }
-            let script = format!("tell application \"Terminal\" to do script \"{cmd_line}\"");
-            let mut cmd = tokio::process::Command::new("osascript");
-            cmd.arg("-e").arg(&script);
-            cmd.kill_on_drop(true);
-            let _child = cmd.spawn().map_err(|e| {
-                ExecError::Failed(format!("failed to spawn Terminal (osascript): {e}"))
-            })?;
-            // Can't wait on the claude process — osascript returns immediately
-            // after telling Terminal to open. Sleeping to timeout then claiming
-            // `completed = true` would be a false-success (违反「读回为证」).
-            // Stay honest: report not-completed so the issue stays InProgress
-            // (never auto-Done) and the human verifies in Terminal instead.
-            return Ok(SkillOutput {
-                completed: false,
-                summary: "未验证：osascript 启动 Terminal 后拿不到 claude 句柄，无法等待其退出。请在 Terminal 里确认会话结束后手动推进，buddy 不替你判定完成。".to_string(),
-            });
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            // Linux/other: spawn directly. May not open a terminal window
-            // (would need xterm/gnome-terminal wrapper) — best-effort.
+            // macOS/Linux/other: spawn directly (best-effort — may not open
+            // a visible terminal window without an xterm/gnome-terminal-style
+            // wrapper on Linux, and on macOS the process simply isn't attached
+            // to any Terminal.app window). Same completion detection as
+            // Windows: wait on the process, wall-clock timeout backstop.
             let mut cmd = tokio::process::Command::new(binary);
             cmd.args(&plan.args);
             for (k, v) in &plan.env {
@@ -758,12 +744,12 @@ impl InteractiveCliExecutor {
             ))),
             Err(_) => {
                 // Timeout — declare completed. The worktree's git state
-                // is the real evidence. On Windows/Linux the spawned child
-                // (terminal+claude) is killed here via `kill_on_drop` when
-                // `child` drops on return; on macOS `osascript` already
-                // returned immediately and the Terminal app is independent
-                // (not a child), so it stays open — only the wall-clock
-                // deadline fires.
+                // is the real evidence. The spawned child (terminal+claude)
+                // is killed here via `kill_on_drop` when `child` drops on
+                // return — all platforms take this same path now (the macOS
+                // `osascript` special case that spawned an independent,
+                // unwaitable Terminal process was removed; see `run_skill`'s
+                // struct doc comment).
                 Ok(SkillOutput {
                     completed: true,
                     summary: "(wall-clock timeout)".to_string(),
@@ -771,14 +757,6 @@ impl InteractiveCliExecutor {
             }
         }
     }
-}
-
-/// Single-quote a shell argument for osascript (naive but sufficient for
-/// file paths and flag values — not a security boundary, the args are
-/// buddy-internal, not user-controlled).
-#[cfg(target_os = "macos")]
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 // ─── MockInteractiveExecutor (for tests / no-claude environments) ──────

@@ -65,6 +65,7 @@ dependencies = [
  "async-trait",
  "bw-core",
  "conpty-oxide",
+ "libc",
  "portable-pty",
  "serde",
  "thiserror 1.0.69",

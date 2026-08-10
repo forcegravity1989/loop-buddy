@@ -26,6 +26,14 @@ conpty-oxide = "0.1"
 # `pty_backend::unix`,只在 unix 目标上编译,不影响 Windows 产物依赖面。
 [target.'cfg(unix)'.dependencies]
 portable-pty = "0.9"
+# next 切片三-1 修(评审 must-fix #1):收尾按进程组 `killpg` 真杀,需要
+# `libc::killpg`/`libc::kill`。选 `libc` 不选 `nix`:两者都已经是
+# `portable-pty` 自身的依赖(`portable-pty` 内部杀单个 pid 就是直接调
+# `libc::kill`,见其 `src/lib.rs`),`libc` 的裸 extern 调用不需要 `nix`
+# 那层 `Signal`/`Pid` 包装类型做转换,本片只用得到一个信号常量 + 一次
+# `killpg` 调用,选薄的那个——零新增依赖面(两者都已在锁文件里,选哪个
+# 都不增加编译的包数量),选择本身只是接口粗细的取舍。
+libc = "0.2"
 
 [dev-dependencies]
 # next 切片一C `examples/port_readback.rs` 需要直接构造 `OffsetDateTime` 喂给

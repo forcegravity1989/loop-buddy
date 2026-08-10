@@ -81,3 +81,9 @@ jobs:
 
       - name: 行为读回指挥器(bw-engine port_readback)
         run: cd next && cargo run -p bw-engine --example port_readback
+
+      # next 切片三-1 修(评审顺手一并 #9):PTY 后端接缝的本机烟测——起
+      # 一个普通 shell 探针(不依赖 claude/网关),验证双向字节 + resize +
+      # 干净收尾。runner 是 ubuntu(unix),可常绿;末行 PTY_SMOKE_OK。
+      - name: PTY 后端烟测(bw-engine pty_smoke)
+        run: cd next && cargo run -p bw-engine --example pty_smoke

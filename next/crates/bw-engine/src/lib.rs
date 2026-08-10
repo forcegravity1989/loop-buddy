@@ -21,11 +21,11 @@ pub enum ExecError {
 }
 
 pub mod evidence;
-// v1 源码跨平台既有告警:`InteractiveCliExecutor::timeout` / `::await_child`
-// 只在 Windows/Linux 的 cfg 分支被引用,macOS 下不被引用而触发 dead_code。
-// 零改写约束下无法逐项 #[allow],豁免收在本模块;切片三把该模块接线进
-// run_skill 后复查收窄。
-#[allow(dead_code)]
+// 原有的 `#[allow(dead_code)]` 豁免(macOS 曾经走 osascript 分支,不引用
+// `InteractiveCliExecutor::timeout`/`::await_child`,触发 dead_code)在
+// next 切片三-1 修删掉 osascript 分支后已经不再需要——macOS 现在与
+// Linux/Windows 一样调用 `await_child`,`cargo clippy --all-targets
+// -D warnings` 复核过豁免摘掉后仍全绿,不留不必要的 allow。
 pub mod interactive_cli;
 pub mod metrics_file;
 // PTY 平台接缝(next 切片三B,从 `interactive_cli.rs` 的 `run_skill_pty`

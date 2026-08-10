@@ -165,3 +165,13 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
 | 迁移双守卫 / 结算一次 | `sqlite.rs` `add_column_if_missing` / `settled_at` COALESCE |
 | 指标与采集正本 | `.bw/metrics.toml`、`.bw/connectors.toml`(格式文档见 docs/) |
 | 六段 UI 设计参照 | v1 `docs/v1-prototype/issue3-overview-refactor.md` + 高保真原型 |
+
+## 10. 已知缺口(执行中登记,只追加)
+
+> 执行中途发现、暂不消灭的缺口登记在这里,只追加不修改;缺口一旦消灭,在对应行末尾补一句「已消灭于 commit XXX」,不删除原记录(如实留痕,与交棒记录同族——事后不抹)。
+
+1. **Windows PTY 收尾正常路径必 panic**(登记日 2026-08-10)
+   - **现象**:`next/crates/bw-engine/src/pty_backend.rs` `windows::WindowsPtyBackend::run` 的收尾代码——`tokio::select!` 循环里 `_ = &mut read_handle => break`,循环外再无条件 `let _ = timeout(..., read_handle).await`——一旦读循环那支先完成(子进程正常退出、读到 EOF 是最常见的收尾路径),`read_handle`(`tokio::task::JoinHandle`)已经在 `select!` 里被轮询到 `Ready` 过一次;循环外再 `.await` 同一个 `read_handle` 会 panic「JoinHandle polled after completion」。正常收尾路径必触发,不是边缘情况。
+   - **来源**:v1 `interactive_cli.rs` `run_skill_pty`(`#[cfg(windows)]` override)整段搬运件,零改写移植(next 切片三B)。这个问题在移植前就存在于 v1 源码里,不是移植过程引入的新 bug;`unix::UnixPtyBackend`(本片新写,不受零改写约束)已经用 `read_finished` 标志位避开了同一个坑。
+   - **待办**:需要一台 Windows 机器验证真机行为,再按 Unix 侧已经用过的思路(拆分「哪支 break 出循环」,只在读循环没被 `select!` 消费过时才 `.await`)修。
+   - **登记日**:2026-08-10。
