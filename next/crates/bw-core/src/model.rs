@@ -2236,3 +2236,65 @@ pub struct HubCard {
     pub desc: String,
     pub items: Vec<String>,
 }
+
+// ───────────────────────────── run (next 切片四) ─────────────────────────────
+
+/// 一次运行(交付/咨询)走到哪一步了——BW 自己记的账,design-s4-runmanager.md
+/// §7。**这不是** `bw-connector` 契约里那个执行状态(`ExecState`)的镜像:
+/// 一个是连接器报的"上游怎么样了",另一个是 BW 记的"这次运行走到哪了"。
+/// 两者的映射是编排层(`bw-app`)里一个穷举匹配的函数——契约改形状时编译器
+/// 会当场揪出来,分叉不可能;`bw-core` 本身对 `ExecState` 零依赖。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    /// 已插行占名额,连接器的 `start` 调用还没返回。
+    Starting,
+    /// 连接器确认已经在跑,拿到了上游会话号。
+    Running,
+    /// 正常收尾:上游报告了一个终态(成功或失败,由 `end_kind` 细分)。
+    Finished,
+    /// BW 侧主动取消,且这次关门先于任何"结束了"的消息抵达。
+    Canceled,
+    /// 重启后发现库里还开着、但 BW 已经没有句柄的运行——如实标成
+    /// "不知道怎么结束的",不是猜出来的终态。
+    Orphaned,
+    /// 开工本身就没起来(连接器的 `start` 直接失败)。
+    Failed,
+}
+
+impl RunState {
+    pub const ALL: [RunState; 6] = [
+        RunState::Starting,
+        RunState::Running,
+        RunState::Finished,
+        RunState::Canceled,
+        RunState::Orphaned,
+        RunState::Failed,
+    ];
+
+    /// 存进 `run.state` 列的文本键——与 `Self::parse` 互为逆运算。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RunState::Starting => "starting",
+            RunState::Running => "running",
+            RunState::Finished => "finished",
+            RunState::Canceled => "canceled",
+            RunState::Orphaned => "orphaned",
+            RunState::Failed => "failed",
+        }
+    }
+
+    /// 从 `run.state` 列的文本值解析回类型;未知文本 `None`——不是所有
+    /// 存储层的字符串都值得信任是这六档之一,调用方自己决定怎么如实报错。
+    pub fn parse(s: &str) -> Option<RunState> {
+        match s {
+            "starting" => Some(RunState::Starting),
+            "running" => Some(RunState::Running),
+            "finished" => Some(RunState::Finished),
+            "canceled" => Some(RunState::Canceled),
+            "orphaned" => Some(RunState::Orphaned),
+            "failed" => Some(RunState::Failed),
+            _ => None,
+        }
+    }
+}

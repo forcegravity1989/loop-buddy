@@ -94,3 +94,11 @@ jobs:
       # 可常绿。末行 AGENT_SESSION_OK。
       - name: agentcli 层验收指挥器(bw-engine agent_session)
         run: cd next && cargo run -p bw-engine --example agent_session
+
+      # next 切片四A:存储层立起(项目/活/运行三表 + 迁移双守卫 + 两把结
+      # 算/关门守卫)。指挥器插活 → 开两个交付运行(第二个被部分唯一索引
+      # 挡下)→ 关门两次 → 结算两次 → 独立连接读回索引真的建了。运行管理
+      # 器本体与五竞态(run_races)是下一任务,这里只证存储层。末行
+      # STORE_GUARDS_OK。
+      - name: 存储层行为读回指挥器(bw-store store_guards)
+        run: cd next && cargo run -p bw-store --example store_guards

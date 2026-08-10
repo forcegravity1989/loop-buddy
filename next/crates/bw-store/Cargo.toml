@@ -1,0 +1,22 @@
+[package]
+name = "bw-store"
+description = "next 切片四A:最小存储层(SQLite/sqlx)。三张表(项目/活/运行)+ 迁移双守卫;「同一件活一个活着的交付运行」钉成数据库部分唯一索引,「结算一次/关门一次」用比较并置。只依赖 bw-core——编译期看不见 bw-connector 的协议类型,长不出业务判断(design-s4-runmanager.md §2.1)。"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bw-core = { path = "../bw-core" }
+sqlx = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+# `OffsetDateTime::now_utc()`(`now_unix()` 辅助函数,v1 同款)要 std 时钟
+# 访问——workspace 的 `time` 默认关掉 std(内核 crate 要保 wasm32 可编译),
+# 这里显式加开,同 v1 `crates/bw-store/Cargo.toml` 的既有先例。
+time = { workspace = true, features = ["std"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+# `examples/store_guards.rs` 要起自己的 tokio 运行时(`#[tokio::main]`)。
+tokio = { workspace = true }

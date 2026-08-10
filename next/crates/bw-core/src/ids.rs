@@ -106,10 +106,20 @@ id_newtype!(
 id_newtype!(
     /// Stable identity of a `claude_conversation` row — buddy's own id for
     /// one claude CLI session (`--resume <claude_session_id>`) bound to an
-    /// interactive Issue. V1 terminal refactor 阶段1: 活(Issue)和会话
+    /// interactive Issue. V1 终端会话重构阶段1: 活(Issue)和会话
     /// (Conversation)解耦,会话有独立身份,可跨多次点开,不随活 Done 而
     /// 结束。和 claude CLI 的 session_id 是两个 id: 这个是 buddy 内部的稳定
     /// 行 id, claude_session_id 是 hook 回传的 claude CLI 会话 id(用于
     /// `--resume`)。
     ConversationId
+);
+id_newtype!(
+    /// Stable identity of one execution attempt of an [`crate::IssueId`] —
+    /// a `run` row (next 切片四,design-s4-runmanager.md §2.2/§7). Distinct
+    /// from `WorkflowRunId` (v1 器官,workflow-scoped): this is the
+    /// per-issue delivery/consultation run the vNext run manager tracks.
+    /// **晚到消息的钥匙是这个编号,不是防重编号**——同一件活的两次运行
+    /// 长得一模一样,按防重编号认人会把运行 A 的晚到结果记到运行 B 头上
+    /// (design §4.3)。
+    RunId
 );

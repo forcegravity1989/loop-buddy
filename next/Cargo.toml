@@ -4,6 +4,7 @@ members = [
     "crates/bw-core",
     "crates/bw-engine",
     "crates/bw-connector",
+    "crates/bw-store",
 ]
 
 [workspace.package]
@@ -30,3 +31,8 @@ toml = "0.8"
 # `CancellationToken` type that lets a caller cancel an in-flight connector
 # call without reaching into the adapter's process handle.
 tokio-util = "0.7"
+# next 切片四A(bw-store):local SQLite persistence. Version pin aligned with
+# the root workspace's existing `crates/bw-store` pin (root Cargo.toml) —
+# same major, same feature set, so a future re-merge of next/ into root
+# doesn't fight two sqlx versions.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
