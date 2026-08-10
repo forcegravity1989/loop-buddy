@@ -21,6 +21,16 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 tokio = { workspace = true }
+# next 切片三D:`agentcli::connector::AgentCliConnector::start` 首启要给会话
+# 自己指派一个 uuid(`--session-id`,design §2.1)。workspace 的 `uuid` 默认
+# 关掉 v4(内核 crate 要保 wasm32 可编译),这里显式加开——同
+# `bw-connector` 的 `RequestId::new()` 那条注释,不隐式蹭 bw-core 的
+# `idgen` feature 顺带打开。
+uuid = { workspace = true, features = ["v4"] }
+# next 切片三D:复利链留口(design §6.2)要给每块注入正文算一份内容指纹
+# (sha256 前 8 位)——够对上「是不是同一块」的最小需要,不必是密码学强度
+# 的场景,选成熟上游库而不是自己实现哈希(选型优先于自建)。
+sha2 = "0.10"
 
 # V1 Issue2 W2: Windows uses conpty-oxide (correctness-first ConPTY impl) for
 # in-app PTY terminal embedding. Wired into `pty_backend::windows` (next 切片

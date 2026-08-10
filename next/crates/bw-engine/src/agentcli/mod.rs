@@ -13,7 +13,7 @@
 //!   任何 BW 自有持久化**——上游(`~/.claude/projects/…`)已经是正本,BW 再
 //!   存一份就是开第二本账;切片四/五建活的存储时才轮到这张表的落盘版
 //!   (`CLAUDE.md`「不为向后兼容留旧路径」/design §2.1)。
-//! - `connector`(切片三D):`AgentCliConnector`——`bw_connector::caps::
+//! - [`connector`](切片三D):`AgentCliConnector`——`bw_connector::caps::
 //!   Connector` + `Probe` + `Execute` 的真实实现(claude 一家)。把
 //!   `session` 的会话表、`interactive_cli` 的计划构造器、`pty_backend` 的
 //!   平台后端接起来;持有 `terminal_manager::TerminalManager`(字节路由,
@@ -31,6 +31,8 @@
 //! 起 PTY 子进程是设计如此(它就是那个「对外能力」的实现方),不是绕过
 //! 守卫。
 
+pub mod connector;
 pub mod session;
 
+pub use connector::{assemble_system_prompt, AgentCliConnector};
 pub use session::{discover_sessions, InjectRecord, SessionRow, SessionTable};
