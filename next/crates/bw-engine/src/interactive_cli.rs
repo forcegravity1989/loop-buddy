@@ -70,7 +70,13 @@ pub struct TuiAgentConfig {
     pub detect_cmd: &'static str,
     pub launch_cmd: &'static str,
     pub prompt_injection_mode: PromptInjectionMode,
-    pub yolo_flag: &'static str,
+    /// 跳过逐次授权确认的旗标(claude:`--dangerously-skip-permissions`)。
+    /// next 切片三-2 修:改 `Option`(原来是空串 `""` 表示「没有」——一个
+    /// 空字符串会被当成一个真实 argv 元素推进去,是隐患;`None` 才是「这
+    /// 家没有这个旗标」的正确表达,与 `system_prompt_flag`/`session_id_flag`
+    /// 同型)。`None` 时 [`build_startup_plan`]/[`build_resume_plan`] 都不
+    /// 推这个 arg。
+    pub yolo_flag: Option<&'static str>,
     /// V1 Issue2 Phase2a: the flag to resume the most recent session in the
     /// current directory. For claude: `--continue` (`-c`). Resume re-enters
     /// the existing session (no new prompt, no `--append-system-prompt`) —
@@ -97,6 +103,17 @@ pub struct TuiAgentConfig {
     /// next 切片三-1 已用一次真实交互式会话验证过这个旗标在非 `--print`
     /// 模式下真被接受,见任务报告的实测小节)。`None` = 这家不能指派会话
     /// 号,只能靠上游目录反查(`agentcli::session::discover_sessions`)兜底。
+    ///
+    /// **next 切片三-2 修的坑,记在这里免得下一个人踩第二次**:切片三C/D
+    /// 把这个字段加进来之后,`build_startup_plan` 一度**从没读过它**——
+    /// `agentcli::connector::AgentCliConnector::start` 首启时 BW 自己编了
+    /// 一个 uuid 塞进 `SessionRow.upstream_session`/`ExecTicket`,但从没把
+    /// 这个 uuid 交给 claude(argv 里根本没有 `--session-id`),claude 会
+    /// 用它自己生成的会话号落 jsonl——票据上的 `upstream_session` 是一句
+    /// 谎话,读回必空。`build_startup_plan` 现在多了一个 `session_id` 形
+    /// 参,只有这个字段是 `Some` 且调用方真给了值,才会把它塞进 argv;字
+    /// 段/参数任一为空,`agentcli::connector` 那边就如实把
+    /// `SessionRow.upstream_session` 留成空串,不再编一个猜的号。
     pub session_id_flag: Option<&'static str>,
     /// 起手就禁掉的工具列表。**如实口径:这是篱笆不是墙**(v1 原注释已
     /// 写明:禁得掉 `gh pr merge`,禁不掉等价的其它写法),真约束在系统
@@ -118,7 +135,7 @@ pub static CLAUDE: TuiAgentConfig = TuiAgentConfig {
     // The skill body goes in as the positional prompt (claude has no
     // `--prefill`; see `PromptInjectionMode::PositionalArgv`).
     prompt_injection_mode: PromptInjectionMode::PositionalArgv,
-    yolo_flag: "--dangerously-skip-permissions",
+    yolo_flag: Some("--dangerously-skip-permissions"),
     // Verified 2026-08-05 via `claude --help`: `-c, --continue` resumes the
     // most recent conversation in the current directory. Each interactive
     // issue has its own worktree (`bw/issue-N`), so `--continue` from that
@@ -151,7 +168,10 @@ pub static CURSOR: TuiAgentConfig = TuiAgentConfig {
     detect_cmd: "cursor --version",
     launch_cmd: "cursor",
     prompt_injection_mode: PromptInjectionMode::PositionalArgv,
-    yolo_flag: "",
+    // next 切片三-2 修(M4):`None` 而不是空串——空串会被当成一个真实的
+    // argv 元素推进去(隐患),`None` 才是「没有」。cursor 的 verified=false
+    // 让这行今天永远走不到装配那一步,但类型上仍要如实。
+    yolo_flag: None,
     resume_flag: "--continue",
     resume_id_flag: "--resume",
     system_prompt_flag: None,
@@ -184,12 +204,18 @@ pub struct LaunchPlan {
 
 /// Build the startup plan for an interactive agent session.
 ///
-/// For claude (`verified = true`):
-/// `claude --append-system-prompt <system_prompt> <position_prompt>
-///  --dangerously-skip-permissions --disallowedTools "Bash(gh pr merge)"`
+/// For claude (`verified = true`,给了 `session_id`):
+/// `claude --append-system-prompt <system_prompt> --session-id <session_id>
+///  <position_prompt> --dangerously-skip-permissions
+///  --disallowedTools "Bash(gh pr merge)"`
 ///
 /// - `system_prompt` → `--append-system-prompt`(caller 传 bridge prompt +
 ///   技能正文 + 蒸馏/目录块,见 `run_issue_interactive`)。
+/// - `session_id` → `--session-id`(next 切片三-2 修新增形参;`agent.
+///   session_id_flag` 为 `None`,或这里传 `None`/空串,都不推这个
+///   arg——**如实降级,绝不把 BW 编的号硬塞给 claude**。caller
+///   [`crate::agentcli::connector::AgentCliConnector::start`] 只在自己真
+///   打算让 claude 采纳这个号时才传 `Some`,见该函数文档)。
 /// - `position_prompt` → 位置 prompt(auto-submit 首句用户消息;caller 传
 ///   issue 标题+描述)。
 ///
@@ -197,10 +223,16 @@ pub struct LaunchPlan {
 /// sessions are user-paced, no per-call cap). The env is inherited from
 /// the process but the nested-execution vars are stripped (same as
 /// [`crate::ClaudeCliExecutor`]) so the child uses its own CLI config.
+///
+/// **next 切片三-2 修如实标注,这条「剥离」目前是句空话**:见下面 for 循环
+/// 前的行内注释——`pty_backend::unix::UnixPtyBackend` 真 spawn 子进程时,这
+/// 里删掉的键并不会真的从子进程环境里消失(`plan/23-opc-stitching-rebuild.md`
+/// §10 第 3 条)。
 pub fn build_startup_plan(
     agent: &TuiAgentConfig,
     position_prompt: &str,
     system_prompt: &str,
+    session_id: Option<&str>,
     workspace_cwd: &Path,
 ) -> Result<LaunchPlan, ExecError> {
     if !agent.verified {
@@ -213,6 +245,19 @@ pub fn build_startup_plan(
     // Strip nested-execution env vars (same rationale as ClaudeCliExecutor:
     // the host may be running inside a Claude Code session whose injected
     // tokens/gateway/model alias cause 401 in the child).
+    //
+    // **如实标注(next 切片三-2 修,切片三E 实测发现)**:这一步只改了
+    // `LaunchPlan.env` 这个 `HashMap` 本身,不代表子进程真的看不到这些
+    // 键——`pty_backend::unix::UnixPtyBackend::run` 用
+    // `portable_pty::CommandBuilder::new(binary)` 起步时已经把当前进程的
+    // 全量环境整份复制进它自己内部的 env 表,后面只对 `plan.env` 里剩下
+    // 的键调 `cmd.env(k, v)`(覆盖/新增),从没调用过
+    // `cmd.env_remove(...)`/`cmd.env_clear()`——这里删掉的键因此从未真正
+    // 从那份内部表里移除,真实子进程照样原样继承。`InteractiveCliExecutor
+    // ::run_skill` 的 `tokio::process::Command` 路径大概率同样中招(同一
+    // 模式:只 `.env(k,v)`,不清空)。详见
+    // `plan/23-opc-stitching-rebuild.md` §10 第 3 条;待办登记在那里,不
+    // 在本轮修(`pty_backend.rs` 不属于本轮修复范围)。
     let mut env: HashMap<String, String> = std::env::vars().collect();
     for var in [
         "ANTHROPIC_AUTH_TOKEN",
@@ -226,7 +271,7 @@ pub fn build_startup_plan(
         env.remove(var);
     }
 
-    let mut args = Vec::with_capacity(8);
+    let mut args = Vec::with_capacity(9);
     // next 切片三C(design §5.2):系统提示词旗标从写死的字面量改读
     // `agent.system_prompt_flag`。`None`(这家不支持)或 `system_prompt`
     // 为空(调用方没给任何内容,§6.2「空就是空」)都不推这两个 arg——如实
@@ -236,6 +281,21 @@ pub fn build_startup_plan(
         if !system_prompt.is_empty() {
             args.push(flag.to_string());
             args.push(system_prompt.to_string());
+        }
+    }
+    // next 切片三-2 修(C1):会话号真接线。之前这里完全没有这段——
+    // `agentcli::connector::AgentCliConnector::start` 会在内存里编一个
+    // uuid 塞进 `SessionRow.upstream_session`/票据,但从来没把它交给
+    // claude,argv 里压根没有 `--session-id`,claude 会用自己生成的号落
+    // jsonl,票据上的号是一句谎话。现在:旗标存在(`agent.
+    // session_id_flag` 是 `Some`)且调用方真给了非空 `session_id`,才推
+    // 这两个 arg——两个条件缺一个都不推,如实,不猜。位置紧跟在系统提示
+    // 词之后、位置 prompt 之前,和「身份/上下文类旗标在前,用户消息在
+    // 后」的顺序一致。
+    if let Some(flag) = agent.session_id_flag {
+        if let Some(id) = session_id.filter(|s| !s.is_empty()) {
+            args.push(flag.to_string());
+            args.push(id.to_string());
         }
     }
     // Positional `prompt` — the first user message, auto-submitted
@@ -248,8 +308,12 @@ pub fn build_startup_plan(
     args.push(position_prompt.to_string());
     // Skip permissions — interactive sessions need to read/write files
     // and run commands without per-action prompts (the user is watching
-    // the terminal and can intervene at any time).
-    args.push(agent.yolo_flag.to_string());
+    // the terminal and can intervene at any time). next 切片三-2 修
+    // (M4):`yolo_flag` 现在是 `Option`,`None` 就不推(空串曾经会被当
+    // 成一个真实 argv 元素推进去,是隐患)。
+    if let Some(flag) = agent.yolo_flag {
+        args.push(flag.to_string());
+    }
     // next 切片三C(design §5.2):起手禁掉的工具改读 `agent.deny_tools`——
     // 「篱笆不是墙」,真约束在衔接层 system prompt 与 `bw-core` 状态机(见
     // `TuiAgentConfig::deny_tools` 文档)。claude 行今天只有一条
@@ -327,7 +391,11 @@ pub fn build_resume_plan(
     } else {
         args.push(agent.resume_flag.to_string());
     }
-    args.push(agent.yolo_flag.to_string());
+    // next 切片三-2 修(M4):`yolo_flag` 现在是 `Option`,同
+    // `build_startup_plan` 的口径,`None` 不推。
+    if let Some(flag) = agent.yolo_flag {
+        args.push(flag.to_string());
+    }
     // next 切片三C(design §5.2):同 `build_startup_plan`,读
     // `agent.deny_tools` 而不是写死的字面量——两处装配出同一条 claude 行的
     // 禁用工具清单,不会因为改了一处漏改另一处而分叉。
@@ -567,6 +635,17 @@ pub fn build_bridge_system_prompt(playbook_ctx: &PlaybookCtx, skill_slug: &str) 
 pub struct SkillOutput {
     pub completed: bool,
     pub summary: String,
+    /// next 切片三-2 修(I5):子进程的真实退出码,能拿到就拿,拿不到就
+    /// 如实 `None`——不是每条路径都能观测到:`InteractiveCliExecutor::
+    /// run_skill`(非 PTY 路径)`child.wait()` 就在手边,直接读;
+    /// `pty_backend::unix::UnixPtyBackend` 收尾处原来 `let _ =
+    /// child.wait();` 把状态丢了,本轮改成在 `spawn_blocking` 里捕获并
+    /// 经这个字段回传;`pty_backend::windows::WindowsPtyBackend` 收尾只
+    /// `child.kill()`、从未 `wait()` 过(零改写约束下的 Windows 整段搬运
+    /// 件,本轮不碰它的收尾逻辑),这里如实 `None`,不假装量出来一个。
+    /// mock 执行器同样如实 `None`——退出码是「真进程」的概念,自我标注
+    /// 的【mock】路径没有这个东西。
+    pub exit_code: Option<i32>,
 }
 
 // ─── InteractiveExecutor trait ─────────────────────────────────────────
@@ -788,9 +867,13 @@ impl InteractiveCliExecutor {
         mut child: tokio::process::Child,
     ) -> Result<SkillOutput, ExecError> {
         match tokio::time::timeout(self.timeout, child.wait()).await {
-            Ok(Ok(_status)) => Ok(SkillOutput {
+            // next 切片三-2 修(I5):这条路径的退出码本来就在手边
+            // (`std::process::ExitStatus::code()`),之前直接用 `_status`
+            // 扔掉——顺手接上,不是新观测手段,只是不再丢已经有的事实。
+            Ok(Ok(status)) => Ok(SkillOutput {
                 completed: true,
                 summary: String::new(),
+                exit_code: status.code(),
             }),
             Ok(Err(e)) => Err(ExecError::Failed(format!(
                 "interactive terminal error: {e}"
@@ -806,6 +889,8 @@ impl InteractiveCliExecutor {
                 Ok(SkillOutput {
                     completed: true,
                     summary: "(wall-clock timeout)".to_string(),
+                    // 超时兜底:压根没等到退出,没有退出码可言,如实 None。
+                    exit_code: None,
                 })
             }
         }
@@ -844,6 +929,9 @@ impl InteractiveExecutor for MockInteractiveExecutor {
         Ok(SkillOutput {
             completed: true,
             summary: "【mock】交互式技能会话完成(流程演示,未真 spawn claude)".to_string(),
+            // next 切片三-2 修(I5):mock 从不真 spawn 进程,退出码是「真进
+            // 程」的概念——如实 None,不假装量出来一个。
+            exit_code: None,
         })
     }
 
@@ -857,6 +945,7 @@ impl InteractiveExecutor for MockInteractiveExecutor {
         Ok(SkillOutput {
             completed: true,
             summary: "【mock】交互式技能会话 resume 完成(流程演示,未真 spawn claude)".to_string(),
+            exit_code: None,
         })
     }
 
@@ -885,6 +974,7 @@ impl InteractiveExecutor for MockInteractiveExecutor {
         Ok(SkillOutput {
             completed: true,
             summary: "【mock】pty 交互式技能会话完成(流程演示,未真 spawn claude)".to_string(),
+            exit_code: None,
         })
     }
 }

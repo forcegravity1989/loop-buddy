@@ -11,7 +11,7 @@
 | 零 · 登记与横幅 | ✅ 830b5bc |
 | 一 · 骨架与器官移植 | ✅ A/B/C 五 commit(0f032b9…d9504e3),bw-core+四器官零改写移植,读回指挥器 PORT_READBACK_OK |
 | 二 · 连接器地基 | ✅ A/B/C 五 commit(2b9e16a…f799e17),契约+gh/codehub/脚本三家+probe_all 真探活+CI next-gates |
-| 三 · agentcli 层 | 🔄 三-1 完成(契约三档/PROTOCOL=2/PTY 双平台后端+进程组真杀,0eb0c2b…a1d9499);三-2(注册表/claude 连接器/指挥器)待发 |
+| 三 · agentcli 层 | 🔄 三-1 完成(契约三档/PROTOCOL=2/PTY 双平台后端+进程组真杀,0eb0c2b…a1d9499);三-2 完成(注册表/claude 连接器/指挥器,0099fc0/a8a0641/0075187)+ 三-2 修复轮完成(会话号真接线/铁律正文进系统提示词/断言真空补齐/取消真杀进常绿,§10 第 5 条);切片三整体收官,四待发 |
 | 四 · 并行运行 | ⬜ |
 | 五 · 六段总控 + 待人处理 | ⬜ |
 | 六 · multica cli 穿刺与缝入 | ⬜(等用户提供仓库指针) |
@@ -194,4 +194,12 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
    - **现象**:`agent_session --real` 跑了一次真实首启(`AgentCliConnector::start` 经真实 `InteractiveCliExecutor`/`pty_backend::unix` 真 spawn 了 `claude`),`start` 本身成功、`upstream_session` 拿到了自己指派的 uuid,但轮询 90 秒始终停在 `Running`,最终按超时兜底取消;事后读回 `~/.claude/projects/<encoded>/<uuid>.jsonl`——**文件从未被创建**(不是空文件,是压根不存在),说明 claude 连第一轮交互都没发生。
    - **来源**:`pty_backend::unix::UnixPtyBackend` 是切片三B 明确写清楚的「最小集」——**刻意不含** Windows 实现里那段「TUI 加载完等 2 秒自动发 `\r` 提交位置 prompt」的补丁(模块文档原话:「真要在 macOS 上验证是否也需要这个补丁,得先有一次真实交互式 claude 会话观察,留给切片三 C/D 接线后」)。本条就是那次观察:位置 prompt 确实以 argv 形式传给了 `claude`,但没有一次真实按键把它从输入框送出去,会话因此一直停在「TUI 起来了、在等用户按 Enter」这一步,不会往前走。
    - **待办**:`pty_backend::unix::UnixPtyBackend::run` 需要照 Windows 那段逻辑的思路(TUI 起来后等一小段时间、`plan.submit_prompt` 为真时发一次 `\r`)补上对应的 Unix 版本,补完后需要再跑一次 `agent_session --real` 验证 jsonl 真的落地且非空、且里面第一条记录是真实的位置 prompt 正文。
+   - **补充(2026-08-10,切片三-2 修复轮)**:本条(自动回车)只是 `--real` 从没跑通的**其中一个**独立阻塞——见下方第 5 条,当时还有另一个独立阻塞(会话号从未真交给 claude),已在本轮修复。两个阻塞都不解除,`--real` 才会真的跑通一整轮。
    - **登记日**:2026-08-10。
+
+5. **`build_startup_plan` 从没读过 `session_id_flag`,`--session-id` 从未真正交给 claude**(登记日 2026-08-10,发现于切片三-2 修复轮;已消灭于本轮同一次修复——`build_startup_plan`/`AgentCliConnector::start` 均已改,见下方待办)
+   - **现象**:切片三C/D/E 三个 commit 把 `session_id_flag: Option<&'static str>` 字段加进了 `TuiAgentConfig`(注册表行,`interactive_cli.rs`),`CLAUDE` 行也填了 `Some("--session-id")` 并在文档里写「切片三-1 已用真实交互式会话验证过接受这个旗标」——但 `build_startup_plan` 的函数体当时**从没读过这个字段**,`agentcli::connector::AgentCliConnector::start` 首启时在内存里编了一个 uuid 塞进 `SessionRow.upstream_session`/回传的 `ExecTicket`,却从没把这个 uuid 放进 `claude` 的 argv 里。结果是:claude 会用它自己生成的会话号落 jsonl,BW 票据上记的那个「upstream_session」是 BW 自己编的、claude 根本不认的一个号——任何拿这个号去 `~/.claude/projects/<encoded>/<uuid>.jsonl` 读回的验证必空,不是因为文件慢生成,是因为这个文件从一开始就不会用这个文件名生成。
+   - **为什么当时没被三-1 的实测发现**:三-1 验证 `--session-id` 旗标本身「交互模式下真被接受」用的是独立 Python 探针(`pty.openpty()` + `subprocess.Popen` 直接起 `claude --session-id <uuid> ...`),这条探针自己拼好了完整 argv(含 `--session-id`),证明了「claude 这个旗标真能用」,但没有经过 `bw-engine` 自己的 `build_startup_plan`/`AgentCliConnector::start` 代码路径——三C/D/E 把这个字段加进类型、写好了文档,却漏了把它接进函数体这一步,直到三-2 修复轮实测 `agent_session --real`(见上方第 4 条)才第一次真的跑通这条代码路径,同时发现这个漏接线的问题。
+   - **来源**:`next/crates/bw-engine/src/interactive_cli.rs` `build_startup_plan`;`next/crates/bw-engine/src/agentcli/connector.rs` `AgentCliConnector::start` 第③步(编会话号那一段)。
+   - **待办(已在本轮完成)**:`build_startup_plan` 加 `session_id: Option<&str>` 形参,`agent.session_id_flag` 与调用方传入的 `session_id` 都非空才推 `--session-id <id>` 进 argv;`AgentCliConnector::start` 只有 `row.session_id_flag.is_some()`(这家真支持指派)才编 uuid、否则 `upstream_session` 如实留空(`String::new()`,`ExecTicket.upstream_session` 回 `None`),不再无条件瞎编一个号。指挥器(`agent_session.rs` 第 1 节)补了「给了 session_id」与「session_id 传空串不推旗标」两条逐字节断言。
+   - **登记日**:2026-08-10。已消灭于本次「next 切片三-2 修 · 会话号真接线 + 铁律正文进系统提示词 + 断言真空补齐 + 取消真杀进常绿」commit。

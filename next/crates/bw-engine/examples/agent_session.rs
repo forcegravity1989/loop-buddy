@@ -11,22 +11,36 @@
 //! `--continue` / 未核对的行如实拒绝——全部在下面「注册表机械证明」一节覆
 //! 盖;测试模块已在本 commit 删除(先补指挥器,再删测试,顺序不可颠倒)。
 //!
-//! 五节,对应 design §7.1「四件要证的事」+ §7.2「类型断路」:
+//! 六节,对应 design §7.1「四件要证的事」+ §7.2「类型断路」+ next 切片三-2
+//! 修新增的第 5 节(I4):
 //! 1. **注册表机械证明**(§5.3):claude/cursor 两行各跑一次计划构造,claude
 //!    的装配参数与 v1 逐字节一致;cursor 如实拒绝——证明表驱动的分叉真的
 //!    走通了,不是碰巧只有一条路。
 //! 2. **类型断路**(§7.2 第 5 条):`ExecState` 穷举匹配,证明没有 `Done`
 //!    档——编译期证明,不是运行时断言。
 //! 3. **会话反查反证**(§7.1「续接真同路径」的反证部分):`discover_sessions`
-//!    只认同路径,换一个路径找不到会话——只读文件系统,`BW_CLAUDE_HOME`
-//!    指向 scratch 目录,不碰用户真实 `~/.claude/projects/`。
+//!    只认同路径,换一个路径找不到会话——只读文件系统。**`BW_CLAUDE_HOME`
+//!    指向 scratch 目录,不碰用户真实 `~/.claude/projects/`这句话的作用域
+//!    只到本节为止**(next 切片三-2 修 M5 的澄清):第 4/6 节没有覆盖这个
+//!    环境变量,`AgentCliConnector::start`/`--real` 里调用的
+//!    `discover_sessions` 会去读真实 `$HOME/.claude/projects/<encoded>`——
+//!    对第 4 节那些一次性临时工作区路径,这个目录几乎必然不存在(只读,
+//!    读不到就返回空,无副作用),但严格说不是「不碰」,是「碰了但读不
+//!    到东西」,跟第 3 节刻意隔离的保证不是一回事,不要混着读。
 //! 4. **mock 生命周期**(§7.2 第 1-4/6 条 + 两条故意失败路径):
 //!    `AgentCliConnector` + `MockInteractiveExecutor`,证明「只起不等 /
 //!    续接自动走 resume 计划 / 取消真触发收尾且不被后台事后完成覆盖 / 注
 //!    入清单与落盘系统提示词一致 / 工作区不存在或分支不符如实拒绝」。
-//! 5. **`--real`(可选,不进常绿门禁)**:真实 `claude` 会话尝试一次,读回
+//! 5. **取消真杀进常绿**(I4,next 切片三-2 修新增):不依赖 claude/网关,
+//!    用一个非注册表正式成员的 shell 探针脚本(`nohup` 出一个孙进程后自
+//!    己继续跑着不退出)真实 spawn → `cancel()` → 按**进程组**
+//!    (`pgrep -g <pgid>`)断言子孙进程全不在——这是评审给的真实复现法
+//!    (`bash -c "nohup sleep 25 & echo started"`),对应
+//!    `pty_backend.rs` unix 模块 `killpg_graceful` 的收尾。确定性、可复
+//!    核,进 `AGENT_SESSION_OK` 断言面(仅 unix;非 unix 平台如实跳过)。
+//! 6. **`--real`(可选,不进常绿门禁)**:真实 `claude` 会话尝试一次,读回
 //!    `~/.claude/projects/<encoded>/<uuid>.jsonl` 存在且非空。网关抖动是已
-//!    知常态,失败可安全重试;成败都打印,不影响其余四节的断言结果。
+//!    知常态,失败可安全重试;成败都打印,不影响其余各节的断言结果。
 //!
 //! 跑法:
 //! ```text
@@ -52,7 +66,8 @@ use bw_core::ProjectId;
 use bw_engine::agentcli::{assemble_system_prompt, discover_sessions, AgentCliConnector};
 use bw_engine::interactive_cli::{
     build_resume_plan, build_startup_plan, InteractiveCliExecutor, InteractiveExecutor, LaunchPlan,
-    MockInteractiveExecutor, PtyInput, SkillOutput, CLAUDE, CURSOR,
+    MockInteractiveExecutor, PromptInjectionMode, PtyInput, SkillOutput, TuiAgentConfig, CLAUDE,
+    CURSOR,
 };
 use bw_engine::{ExecError, RunCtx};
 use tokio::sync::mpsc;
@@ -88,6 +103,8 @@ async fn main() -> ExitCode {
     all_ok &= section_discover_sessions_counter_evidence();
     println!();
     all_ok &= section_mock_lifecycle(&args).await;
+    println!();
+    all_ok &= section_cancel_real_kill().await;
 
     if args.real {
         println!();
@@ -153,12 +170,31 @@ fn section_registry_mechanical_proof() -> bool {
     let tmp = std::env::temp_dir().join(format!("bw-agent-session-plan-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);
 
-    // -- claude · 首启 --
+    // I3:env-strip 断言要先设两个哨兵值,不然「LaunchPlan.env 不含它们」
+    // 是一句空验证(进程本来就没设,不删也通过)。设之前先存原值,断言完
+    // 立刻还原——不打算长期改写这两个键。
+    // **多线程 runtime 注意(M5)**:`std::env::set_var`/`remove_var` 改的
+    // 是进程级全局状态,tokio 多线程 runtime 下若另一路任务同时在读环境
+    // 变量,会看见这里改写过程中的中间态。本指挥器的 `main` 顺序 `.await`
+    // 每一节,同一时刻没有别的任务在跑,不构成真实竞态——但这不是通用安
+    // 全模式,换成并发场景(真的并行跑多个指挥器/测试)要害,不要照抄。
+    let saved_token = std::env::var("ANTHROPIC_AUTH_TOKEN").ok();
+    let saved_claudecode = std::env::var("CLAUDECODE").ok();
+    std::env::set_var("ANTHROPIC_AUTH_TOKEN", "bw-agent-session-sentinel-token");
+    std::env::set_var("CLAUDECODE", "1");
+
+    // -- claude · 首启,不给 session_id(与 v1 基线逐字节一致;三-2 修
+    //    之前 build_startup_plan 没有 session_id 形参,这个基线形状是「什
+    //    么都不给」时的行为,不应该因为加了新形参就变形)--
     let position_prompt = "示例位置 prompt(这件活要做什么)";
     let system_prompt = "示例系统提示词(衔接层正文,占位)";
-    match build_startup_plan(&CLAUDE, position_prompt, system_prompt, &tmp) {
+    match build_startup_plan(&CLAUDE, position_prompt, system_prompt, None, &tmp) {
         Ok(plan) => {
-            println!("claude 首启装配:{} {}", plan.binary, plan.args.join(" "));
+            println!(
+                "claude 首启装配(无 session_id):{} {}",
+                plan.binary,
+                plan.args.join(" ")
+            );
             let expected = vec![
                 "--append-system-prompt".to_string(),
                 system_prompt.to_string(),
@@ -167,7 +203,17 @@ fn section_registry_mechanical_proof() -> bool {
                 "--disallowedTools".to_string(),
                 "Bash(gh pr merge)".to_string(),
             ];
-            ok &= assert_eq_vec("claude 首启参数", &plan.args, &expected);
+            ok &= assert_eq_vec(
+                "claude 首启参数(无 session_id,与 v1 基线一致)",
+                &plan.args,
+                &expected,
+            );
+            // I3:被删测试模块里断言过的三项,指挥器补齐(design §5.5 的
+            // 「等价断言」不能只顾 args,plan 的其余三个字段也要有断言,
+            // 不能留空验证)。
+            ok &= assert_eq_str("claude 首启 binary", &plan.binary, "claude");
+            ok &= assert_env_stripped("claude 首启 env(嵌套会话变量剥离)", &plan.env);
+            ok &= assert_eq_path("claude 首启 cwd", &plan.cwd, &tmp);
         }
         Err(e) => {
             eprintln!("ASSERT FAILED: claude(verified=true)首启装配不应该失败,实得:{e}");
@@ -175,8 +221,78 @@ fn section_registry_mechanical_proof() -> bool {
         }
     }
 
+    // 还原(M5):这两个键只是为了上面的 env-strip 断言临时借用。
+    match saved_token {
+        Some(v) => std::env::set_var("ANTHROPIC_AUTH_TOKEN", v),
+        None => std::env::remove_var("ANTHROPIC_AUTH_TOKEN"),
+    }
+    match saved_claudecode {
+        Some(v) => std::env::set_var("CLAUDECODE", v),
+        None => std::env::remove_var("CLAUDECODE"),
+    }
+
+    // -- claude · 首启,给了 session_id(C1:会话号真接线)——这是本轮修
+    //    复的核心行为:注册表行支持 session_id_flag 且调用方真给了值时,
+    //    argv 里必须真的出现 --session-id <id>,位置紧跟系统提示词之后、
+    //    位置 prompt 之前。
+    let sample_session_id = "8dde12c8-6151-41c1-ba7a-9a7eddf00fa2";
+    match build_startup_plan(
+        &CLAUDE,
+        position_prompt,
+        system_prompt,
+        Some(sample_session_id),
+        &tmp,
+    ) {
+        Ok(plan) => {
+            println!(
+                "claude 首启装配(给了 session_id):{} {}",
+                plan.binary,
+                plan.args.join(" ")
+            );
+            let expected = vec![
+                "--append-system-prompt".to_string(),
+                system_prompt.to_string(),
+                "--session-id".to_string(),
+                sample_session_id.to_string(),
+                position_prompt.to_string(),
+                "--dangerously-skip-permissions".to_string(),
+                "--disallowedTools".to_string(),
+                "Bash(gh pr merge)".to_string(),
+            ];
+            ok &= assert_eq_vec(
+                "claude 首启参数(给了 session_id,C1 修复)",
+                &plan.args,
+                &expected,
+            );
+        }
+        Err(e) => {
+            eprintln!("ASSERT FAILED: 给了 session_id 的首启装配不应该失败,实得:{e}");
+            ok = false;
+        }
+    }
+
+    // -- claude · 首启,session_id_flag=Some 但调用方传空串(C1 的「缺一
+    //    不推」分支:旗标存在 ≠ 调用方给了值,空串必须当没给处理)--
+    match build_startup_plan(&CLAUDE, position_prompt, system_prompt, Some(""), &tmp) {
+        Ok(plan) => {
+            if plan.args.iter().any(|a| a == "--session-id") {
+                eprintln!(
+                    "ASSERT FAILED: session_id 传空串不应该推 --session-id,实得参数:{:?}",
+                    plan.args
+                );
+                ok = false;
+            } else {
+                println!("OK: session_id 传空串 -> 不推 --session-id(旗标存在≠调用方给了值)");
+            }
+        }
+        Err(e) => {
+            eprintln!("ASSERT FAILED: session_id 传空串不应该导致装配失败,实得:{e}");
+            ok = false;
+        }
+    }
+
     // -- claude · 首启,system_prompt 为空(design §5.2「如实降级」)--
-    match build_startup_plan(&CLAUDE, position_prompt, "", &tmp) {
+    match build_startup_plan(&CLAUDE, position_prompt, "", None, &tmp) {
         Ok(plan) => {
             let has_flag = plan.args.iter().any(|a| a == "--append-system-prompt");
             if has_flag {
@@ -245,7 +361,7 @@ fn section_registry_mechanical_proof() -> bool {
     }
 
     // -- cursor · 首启/续接均如实拒绝 --
-    match build_startup_plan(&CURSOR, position_prompt, system_prompt, &tmp) {
+    match build_startup_plan(&CURSOR, position_prompt, system_prompt, None, &tmp) {
         Err(_) => println!("cursor: 参数未核对,拒绝启动(build_startup_plan 如实 Err)"),
         Ok(plan) => {
             eprintln!(
@@ -276,6 +392,61 @@ fn assert_eq_vec(label: &str, got: &[String], expected: &[String]) -> bool {
         true
     } else {
         eprintln!("ASSERT FAILED: {label} 与预期不一致\n  预期: {expected:?}\n  实得: {got:?}");
+        false
+    }
+}
+
+/// I3:补齐被删测试模块里断言过、但指挥器第 1 节起初只顾了 `args` 的那几
+/// 项——`plan.binary`。
+fn assert_eq_str(label: &str, got: &str, expected: &str) -> bool {
+    if got == expected {
+        println!("OK: {label} = {expected:?}");
+        true
+    } else {
+        eprintln!("ASSERT FAILED: {label} 期望 {expected:?},实得 {got:?}");
+        false
+    }
+}
+
+/// I3:`plan.cwd` 断言。
+fn assert_eq_path(label: &str, got: &Path, expected: &Path) -> bool {
+    if got == expected {
+        println!("OK: {label} = {}", expected.display());
+        true
+    } else {
+        eprintln!(
+            "ASSERT FAILED: {label} 期望 {},实得 {}",
+            expected.display(),
+            got.display()
+        );
+        false
+    }
+}
+
+/// I3:`plan.env` 剥离断言。**不是空验证**——调用方在调 `build_startup_plan`
+/// 之前把这两个键设成了哨兵值(见调用处),这里命中断言才说明真的被
+/// `build_startup_plan` 内部的 for 循环删掉了,不是「进程本来就没设」侥幸
+/// 通过。
+///
+/// **如实标注这条断言证到哪一步、证不到哪一步**:这里只验证
+/// `LaunchPlan.env`(一个 `HashMap`)不含这两个键——这是 `build_startup_plan`
+/// 自己的契约,它证得到。它证不到「真实子进程也看不到这两个键」——那条链
+/// 路(`pty_backend::unix::UnixPtyBackend::run` 用
+/// `portable_pty::CommandBuilder::new` 起步,已经整份复制了当前进程环境,
+/// 只对 `plan.env` 剩下的键调 `cmd.env(k,v)`,从不 `env_clear`)已知不成
+/// 立,登记在 `plan/23-opc-stitching-rebuild.md` §10 第 3 条,本轮修只在
+/// `interactive_cli.rs` 补了如实标注(I2),不改 `pty_backend.rs`(不在本
+/// 轮修复范围)。
+fn assert_env_stripped(label: &str, env: &std::collections::HashMap<String, String>) -> bool {
+    let leaked: Vec<&str> = ["ANTHROPIC_AUTH_TOKEN", "CLAUDECODE"]
+        .into_iter()
+        .filter(|k| env.contains_key(*k))
+        .collect();
+    if leaked.is_empty() {
+        println!("OK: {label}(LaunchPlan.env 已剔除;真实子进程是否也看不到见 plan/23 §10 第 3 条)");
+        true
+    } else {
+        eprintln!("ASSERT FAILED: {label} 仍残留于 LaunchPlan.env:{leaked:?}");
         false
     }
 }
@@ -341,8 +512,20 @@ fn section_type_closure() -> bool {
 
 /// `discover_sessions` 只读文件名与 mtime,只认同路径——伪造一份
 /// `<BW_CLAUDE_HOME>/projects/<encoded-a>/<uuid>.jsonl`,断言反查得到它;换
-/// 一个从没出现过的路径反查,断言为空。全程只碰 `BW_CLAUDE_HOME` 指向的
-/// scratch 目录,不碰用户真实的 `~/.claude/projects/`。
+/// 一个从没出现过的路径反查,断言为空。**本节验证全程**只碰
+/// `BW_CLAUDE_HOME` 指向的 scratch 目录,不碰用户真实的
+/// `~/.claude/projects/`——这句保证的作用域**只到本节为止**(next 切片
+/// 三-2 修 M5):第 4/6 节没有设这个环境变量覆盖,里面调用
+/// `discover_sessions`(经 `AgentCliConnector::start`,或 `--real` 直接调)
+/// 会去读真实 `$HOME/.claude/projects/`,不在这条隔离保证范围内(见本文件
+/// 顶部模块文档第 3 节条目的补充说明)。
+///
+/// **多线程 runtime 注意(M5)**:`std::env::set_var`/`remove_var` 改的是进
+/// 程级全局状态;tokio 多线程 runtime 下若另一路任务同时在读环境变量,会
+/// 看见这里改写过程中的中间态。本函数全程在 `main` 顺序 `.await` 的单一控
+/// 制流里设置、使用、复原,同一时刻没有别的任务在跑,不构成真实竞态——但
+/// 这不是通用安全模式,换成并发场景(真的并行跑多个指挥器/测试)会读到别
+/// 的任务设的中间态,不要照抄到并发场景。
 fn section_discover_sessions_counter_evidence() -> bool {
     println!("== 3. 反证:discover_sessions 只认同路径(不碰真实 ~/.claude/projects/)==");
     let mut ok = true;
@@ -577,7 +760,11 @@ async fn section_mock_lifecycle(args: &Args) -> bool {
 
     // -- 4c. 正常首启:只起不等 + 注入装配读回 + 续接 --
     let (inject_blocks, self_built_inject_path) = load_inject_blocks(args);
-    let (expected_prompt, expected_records) = assemble_system_prompt(&inject_blocks);
+    // I1:`assemble_system_prompt` 现在多两个形参(workspace/branch,拼衔接
+    // 层正文要用)——传下面 spec 里将要用的同一对值(ws / "main"),这样
+    // `expected_prompt` 才是真的跟 `AgentCliConnector::start` 内部装配出来
+    // 的同一份内容(读回比对的前提是「拿同样的输入算」)。
+    let (expected_prompt, expected_records) = assemble_system_prompt(&ws, "main", &inject_blocks);
     let dump_path = args.dump_prompt.clone().unwrap_or_else(|| {
         std::env::temp_dir().join(format!(
             "bw-agent-session-prompt-{}.txt",
@@ -650,14 +837,20 @@ async fn section_mock_lifecycle(args: &Args) -> bool {
                 );
                 ok = false;
             }
-            if row.budget_enforced {
-                eprintln!(
-                    "ASSERT FAILED: claude 交互式接不上按次预算封顶,budget_enforced 应为 false"
-                );
-                ok = false;
-            } else {
-                println!("OK: budget_enforced=false(如实无视 budget_usd,已打诊断行)");
-            }
+            // M3(next 切片三-2 修):这条不是真断言,只是读回打印——
+            // `budget_enforced` 在 `connector.rs` 里是硬编码
+            // `let budget_enforced = false;`(design §8/主控裁决 #3:claude
+            // 交互式接不上按次预算封顶),不是从 `budget_usd` 或任何输入推
+            // 出来的值。不管上面 `spec.budget_usd` 传了什么,这一行恒为
+            // `false`,`if row.budget_enforced { fail }` 那种写法永远进不
+            // 去分支——挂着 ASSERT FAILED 的措辞会让读的人以为这里验证了
+            // 什么行为,其实只是在验证一个常量字面量,删掉误导性的分支,
+            // 老实打印读回值。
+            println!(
+                "读回(非断言,budget_enforced 是 connector.rs 里的硬编码 false,\
+                 不随 budget_usd 变化): budget_enforced={}",
+                row.budget_enforced
+            );
         }
         None => {
             eprintln!("ASSERT FAILED: 首启后应该能读到 SessionRow,实得 None");
@@ -670,8 +863,19 @@ async fn section_mock_lifecycle(args: &Args) -> bool {
     let cx_poll = mk_cx();
     match execute.poll(&cx_poll, &ticket1).await {
         Ok(ok_val) => match ok_val.value {
-            ExecState::Finished { ended, .. } => {
-                println!("OK: poll 报 Finished({ended:?})——mock 已完成")
+            ExecState::Finished { ended, summary } => {
+                println!("OK: poll 报 Finished({ended:?})——mock 已完成,summary={summary:?}");
+                // I3:补齐「mock 分支 summary 含【mock】」断言——本仓核心
+                // 纪律第 2 条(「mock 必须自我标注」)的唯一守卫,之前这里
+                // 用 `{ ended, .. }` 把 `summary` 直接扔了,断言面是空的。
+                if summary.contains("【mock】") {
+                    println!("OK: summary 含【mock】自我标注(核心纪律第 2 条)");
+                } else {
+                    eprintln!(
+                        "ASSERT FAILED: mock 路径的 summary 必须自我标注【mock】,实得:{summary:?}"
+                    );
+                    ok = false;
+                }
             }
             other => {
                 eprintln!("ASSERT FAILED: mock 应已完成 Finished,实得 {other:?}");
@@ -763,7 +967,10 @@ async fn section_mock_lifecycle(args: &Args) -> bool {
     let cx3 = mk_cx();
     let req3 = cx3.req;
     let spec3 = ExecSpec {
-        workspace: ws2,
+        // M5(指挥器卫生):clone,不是移动——`ws2` 这个 PathBuf 留着给函
+        // 数末尾清理临时目录用,之前直接把它 move 进 `spec3` 之后就再也拿
+        // 不到这个路径清理了(残留在 /tmp 下)。
+        workspace: ws2.clone(),
         branch: "main".into(),
         inject: vec![],
         budget_usd: None,
@@ -833,11 +1040,277 @@ async fn section_mock_lifecycle(args: &Args) -> bool {
     }
 
     let _ = std::fs::remove_dir_all(&ws);
+    // M5(指挥器卫生):`ws2`(4d 取消竞态那个临时工作区)之前从没清理
+    // 过,残留在 /tmp 下——补上,跟 `ws` 一样善后。
+    let _ = std::fs::remove_dir_all(&ws2);
 
     ok
 }
 
-// ─── 5. --real(可选,不进常绿门禁)────────────────────────────────────
+// ─── 5. 取消真杀进常绿(I4,next 切片三-2 修新增)────────────────────────
+
+/// I4:「取消真杀」进常绿门禁。第 4 节的取消竞态测的是**账本**(`SessionRow.
+/// state` 变成 `Canceled` 且不被后台事后覆盖)——mock 从不真 spawn 进程,测
+/// 不出 `pty_backend.rs` unix 模块那段 `killpg_graceful` 真的杀掉了子孙进
+/// 程。本节补上这条,用真实 `InteractiveCliExecutor`(经真实 PTY 后端),但
+/// 不依赖 claude/网关:造一个**非注册表正式成员**的「探针行」,`launch_cmd`
+/// 指向一个临时 shell 脚本——脚本 `nohup` 出一个孙进程(`sleep 300`,脱离
+/// 父进程独立存活)后自己也 `sleep` 住不退出(保证 `cancel()` 之前脚本进程
+/// 一直是 `Running`,不会自然 EOF 把「是 cancel 触发的」这条断言蒙混过
+/// 去——`pty_backend.rs` 的收尾代码在自然 EOF 与 cancel 两条路径之后都会跑
+/// 同一段 `killpg_graceful`,脚本秒退就测不出取消本身有没有起作用)。
+///
+/// 起会话后记下探针脚本进程的 pid,查它的 pgid(`portable-pty` 的
+/// `CommandBuilder::spawn_command` 对每个子进程调用 `setsid()`,顶层子进程
+/// 的 pid 就是整个组的 pgid);`cancel()` 之后按**进程组**
+/// (`pgrep -g <pgid>`)断言组内一个成员都不剩——这正是评审给的复现法
+/// (`bash -c "nohup sleep 25 & echo started"`)的确定性、可复核版本。
+///
+/// 仅 `unix`——`nohup`/`pgrep`/`ps -o pgid=`/POSIX shell 脚本都是 unix 概
+/// 念,本仓 CI(`ubuntu-latest`)与本机部署机(macOS)都是 unix,Windows 侧
+/// 的 killpg 等价机制不在本节验证范围(如实登记在
+/// `plan/23-opc-stitching-rebuild.md` 已有的 Windows 相关缺口条目里,不是
+/// 本节新缺口)。
+#[cfg(unix)]
+async fn section_cancel_real_kill() -> bool {
+    println!("== 5. 取消真杀进常绿:非 claude 行 · nohup 孙进程按进程组连坐 ==");
+    let mut ok = true;
+
+    let script_dir = std::env::temp_dir().join(format!(
+        "bw-agent-session-cancel-probe-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    if let Err(e) = std::fs::create_dir_all(&script_dir) {
+        eprintln!("ASSERT FAILED: 探针脚本目录创建失败:{e}");
+        return false;
+    }
+    let script_path = script_dir.join("probe.sh");
+    // 探针脚本:nohup 出一个孙进程(sleep 300,脱离父进程独立存活)后,自
+    // 己也 sleep 住不退出——理由见函数文档「保证 cancel 之前脚本进程一直
+    // 是 Running」。
+    let script = "#!/bin/sh\nnohup sleep 300 >/dev/null 2>&1 &\necho probe-started\nsleep 300\n";
+    if let Err(e) = std::fs::write(&script_path, script) {
+        eprintln!("ASSERT FAILED: 探针脚本写入失败:{e}");
+        let _ = std::fs::remove_dir_all(&script_dir);
+        return false;
+    }
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(&script_path) {
+            Ok(meta) => {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = std::fs::set_permissions(&script_path, perms);
+            }
+            Err(e) => {
+                eprintln!("ASSERT FAILED: 探针脚本 chmod +x 失败:{e}");
+                let _ = std::fs::remove_dir_all(&script_dir);
+                return false;
+            }
+        }
+    }
+    let script_path_str = script_path.to_string_lossy().into_owned();
+
+    // 非 claude 的「注册表行」——`TuiAgentConfig.launch_cmd` 是
+    // `&'static str`,常规注册表行在编译期写死;这里运行期现造一个探针路
+    // 径,只能 `Box::leak`(指挥器这种短生命周期程序里唯一简单的做法,不
+    // 是产品代码模式)。
+    let launch_cmd: &'static str = Box::leak(script_path_str.clone().into_boxed_str());
+    let probe_row: &'static TuiAgentConfig = Box::leak(Box::new(TuiAgentConfig {
+        slug: "shell-probe(非注册表正式成员,仅本节验证用)",
+        detect_cmd: "true",
+        launch_cmd,
+        prompt_injection_mode: PromptInjectionMode::PositionalArgv,
+        yolo_flag: None,
+        resume_flag: "--continue",
+        resume_id_flag: "--resume",
+        system_prompt_flag: None,
+        session_id_flag: None,
+        deny_tools: &[],
+        verified: true,
+    }));
+
+    let ws = mk_git_workspace("main");
+    let binding = ProjectBinding {
+        project: ProjectId::new(),
+        host: String::new(),
+        path: "agent-session-cancel-real-kill".into(),
+    };
+    // 真实 InteractiveCliExecutor(经 pty_backend 真 spawn)——不是 mock,
+    // mock 从不真起进程,测不出 killpg。
+    let conn = AgentCliConnector::new(binding, probe_row, Arc::new(InteractiveCliExecutor::new()));
+    let execute = conn.as_execute().unwrap();
+    let cx = mk_cx();
+    let spec = ExecSpec {
+        workspace: ws.clone(),
+        branch: "main".into(),
+        inject: vec![],
+        budget_usd: None,
+    };
+    let ticket = match execute.start(&cx, spec).await {
+        Ok(ok_val) => ok_val.value,
+        Err(f) => {
+            eprintln!("ASSERT FAILED: 探针脚本 start 不应该失败:{}", f.err);
+            let _ = std::fs::remove_dir_all(&ws);
+            let _ = std::fs::remove_dir_all(&script_dir);
+            return false;
+        }
+    };
+
+    // 轮询等脚本真的跑起来(exec 探针脚本 + nohup 出孙进程)——固定
+    // `sleep` 在系统繁忙时会不够长导致假失败(本轮修复时实测复现过一
+    // 次),改轮询,给够上限(3s)但不空等。
+    let pid = poll_until(Duration::from_secs(3), || pgrep_first(&script_path_str)).await;
+    let Some(pid) = pid else {
+        eprintln!("ASSERT FAILED: 探针脚本进程没能找到(pgrep -f 3s 内未命中),可能没起来");
+        let _ = execute.cancel(&mk_cx(), &ticket).await;
+        let _ = std::fs::remove_dir_all(&ws);
+        let _ = std::fs::remove_dir_all(&script_dir);
+        return false;
+    };
+    let Some(pgid) = ps_pgid(pid) else {
+        eprintln!("ASSERT FAILED: 读不到探针脚本(pid={pid})的 pgid");
+        let _ = execute.cancel(&mk_cx(), &ticket).await;
+        let _ = std::fs::remove_dir_all(&ws);
+        let _ = std::fs::remove_dir_all(&script_dir);
+        return false;
+    };
+    // 同样轮询等孙进程(nohup 出去的 sleep)真的挂进这个进程组——脚本自己
+    // 起来了不代表它 fork 出的后台 job 也已经起来。
+    let before = poll_until(Duration::from_secs(3), || {
+        let members = pgrep_group(pgid);
+        if members.len() >= 2 {
+            Some(members)
+        } else {
+            None
+        }
+    })
+    .await
+    .unwrap_or_else(|| pgrep_group(pgid));
+    println!("探针脚本 pid={pid} pgid={pgid},cancel 前进程组成员: {before:?}");
+    if before.len() < 2 {
+        eprintln!(
+            "ASSERT FAILED: cancel 前进程组成员应至少 2 个(脚本本身 + nohup 出去的 sleep 孙进\
+             程),实得 {before:?}——可能 nohup 还没来得及起来,复现条件不成立"
+        );
+        ok = false;
+    } else {
+        println!("OK: 进程组里真有孙进程(nohup 出去的 sleep),复现条件成立");
+    }
+
+    match execute.poll(&mk_cx(), &ticket).await {
+        Ok(ok_val) => match ok_val.value {
+            ExecState::Running => println!("OK: cancel 前 poll -> Running"),
+            other => {
+                eprintln!(
+                    "ASSERT FAILED: cancel 前应仍是 Running,实得 {other:?}(脚本可能提早退出了)"
+                );
+                ok = false;
+            }
+        },
+        Err(f) => {
+            eprintln!("ASSERT FAILED: poll 不应该失败:{}", f.err);
+            ok = false;
+        }
+    }
+
+    if let Err(f) = execute.cancel(&mk_cx(), &ticket).await {
+        eprintln!("ASSERT FAILED: cancel 不应该失败:{}", f.err);
+        ok = false;
+    }
+
+    // killpg_graceful 内含 200ms SIGHUP 宽限 + spawn_blocking 的
+    // child.wait()——轮询等收尾真的跑完(上限 5s),不是靠猜一个固定
+    // sleep。
+    let after = poll_until(Duration::from_secs(5), || {
+        let members = pgrep_group(pgid);
+        if members.is_empty() {
+            Some(members)
+        } else {
+            None
+        }
+    })
+    .await
+    .unwrap_or_else(|| pgrep_group(pgid));
+    if after.is_empty() {
+        println!("OK: cancel 后按进程组(pgid={pgid})断言子孙全不在:{after:?}");
+    } else {
+        eprintln!("ASSERT FAILED: cancel 后进程组仍有残留成员:{after:?}(取消真杀失守)");
+        ok = false;
+    }
+
+    let _ = std::fs::remove_dir_all(&ws);
+    let _ = std::fs::remove_dir_all(&script_dir);
+    ok
+}
+
+#[cfg(not(unix))]
+async fn section_cancel_real_kill() -> bool {
+    println!("== 5. 取消真杀进常绿:跳过(本节靠 nohup/pgrep/ps 等 unix 概念,当前编译目标非 unix)==");
+    true
+}
+
+/// 每 100ms 跑一次 `check`,拿到 `Some` 就立刻返回;`deadline` 内始终
+/// `None` 就返回 `None`。**改用轮询而不是固定 `sleep`**:本轮修复实测复
+/// 现过一次假失败——固定 500ms 在系统繁忙时不够长等 `nohup` 真的把孙进程
+/// 起来,轮询给够上限但不空等,比猜一个固定时长更稳。`tokio::time::sleep`
+/// 而不是 `std::thread::sleep`——这是 async fn,不阻塞 tokio 工作线程。
+#[cfg(unix)]
+async fn poll_until<T>(deadline: Duration, mut check: impl FnMut() -> Option<T>) -> Option<T> {
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(v) = check() {
+            return Some(v);
+        }
+        if start.elapsed() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// `pgrep -f <pattern>` 取第一个命中的 pid(命令行子串匹配)。找不到 ->
+/// `None`。只用于本节验证,不是产品代码。
+#[cfg(unix)]
+fn pgrep_first(pattern: &str) -> Option<u32> {
+    let output = std::process::Command::new("pgrep")
+        .arg("-f")
+        .arg(pattern)
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .and_then(|l| l.trim().parse().ok())
+}
+
+/// `ps -o pgid= -p <pid>` 读一个 pid 所在的进程组号。
+#[cfg(unix)]
+fn ps_pgid(pid: u32) -> Option<u32> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "pgid=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+/// `pgrep -g <pgid>` 列出整个进程组当前存活的成员 pid——`killpg` 后应为空。
+#[cfg(unix)]
+fn pgrep_group(pgid: u32) -> Vec<u32> {
+    let Ok(output) = std::process::Command::new("pgrep")
+        .args(["-g", &pgid.to_string()])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect()
+}
+
+// ─── 6. --real(可选,不进常绿门禁)────────────────────────────────────
 
 /// 真实 claude 会话尝试一次(design §7.3):临时 git 工作区 + 真实
 /// `InteractiveCliExecutor`(经 `pty_backend` 真起 PTY 子进程)→ 轮询到结束

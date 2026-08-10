@@ -234,6 +234,13 @@ pub mod windows {
             Ok(SkillOutput {
                 completed: true,
                 summary: "(pty session ended)".to_string(),
+                // next 切片三-2 修(I5):这条收尾只 `child.kill()`,从没
+                // `.wait()` 过——`conpty_oxide::blocking::Child` 有没有等价
+                // 的退出码读法,零改写约束下（本函数体整段搬自 v1，不擅
+                // 改）没有去核实、也不去加一次新的 `wait()` 调用。如实
+                // `None`，不假装量出来一个（见 `SkillOutput::exit_code`
+                // 字段文档）。
+                exit_code: None,
             })
         }
     }
@@ -430,11 +437,19 @@ pub mod unix {
             // 本身(`Box<dyn portable_pty::Child + Send + Sync>`)满足
             // `spawn_blocking` 要求的 `'static + Send`,直接把它连同两个
             // 调用一起移进去。
-            tokio::task::spawn_blocking(move || {
+            // next 切片三-2 修(I5):`child.wait()` 的返回值以前被
+            // `let _ = ...` 直接扔了——退出码就在手边,顺手接上,不是新
+            // 观测手段。`portable_pty::ExitStatus::exit_code()` 拿 `u32`,
+            // 这里转 `i32` 存进 `SkillOutput.exit_code`(与
+            // `std::process::ExitStatus::code()` 的 `i32` 同型,方便调用方
+            // 统一处理)。`child.wait()` 失败(比如已经被上面的
+            // killpg_graceful 连坐、内核状态竞态导致读不到)时如实 `None`,
+            // 不编一个假的 0。
+            let exit_code = tokio::task::spawn_blocking(move || {
                 if let Some(pid) = child.process_id() {
                     killpg_graceful(pid);
                 }
-                let _ = child.wait();
+                child.wait().ok().map(|status| status.exit_code() as i32)
             })
             .await
             .expect("pty 收尾的 spawn_blocking 任务不应 panic");
@@ -456,6 +471,7 @@ pub mod unix {
             Ok(SkillOutput {
                 completed: true,
                 summary: "(pty session ended)".to_string(),
+                exit_code,
             })
         }
     }

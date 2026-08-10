@@ -21,12 +21,14 @@ use bw_connector::contract::{
     guarded, CallCtx, ConnError, ConnResult, ConnectorEntry, ConnectorKind, ExecSpec, ExecState,
     ExecTicket, InjectBlock, OpClass, ProjectBinding, RequestId, SessionEnd,
 };
+use bw_core::playbook::PlaybookCtx;
 use bw_core::{ConversationId, IssueId, WorkflowId};
 use sha2::{Digest, Sha256};
 
 use super::session::{discover_sessions, InjectRecord, SessionRow, SessionTable};
 use crate::interactive_cli::{
-    build_resume_plan, build_startup_plan, InteractiveExecutor, TuiAgentConfig,
+    build_bridge_system_prompt, build_resume_plan, build_startup_plan, InteractiveExecutor,
+    TuiAgentConfig,
 };
 use crate::terminal_manager::{ConversationMeta, TerminalManager};
 use crate::{ExecError, RunCtx};
@@ -54,15 +56,71 @@ fn note_budget_ignored(budget_usd: Option<f64>) {
     }
 }
 
-/// 把 `ExecSpec.inject` 按序拼进一段系统提示词,同时产出记账用的
-/// [`InjectRecord`] 清单(design §6.2:标签/字节数/sha256 前 8 位)。**顺序
-/// 等于调用方给的顺序,一个字不改、不截断、不重排**。空输入 → 空字符串 +
-/// 空清单——如实,不假装注入了(§6.2「空就是空」)。
+/// next 切片三-2 修(I1)构造喂给 [`build_bridge_system_prompt`] 的
+/// [`PlaybookCtx`]。**走「决策规则」里的路 A,不改 `ExecSpec` 契约形状**:
+///
+/// `build_bridge_system_prompt` 要九个字段(项目名/类型/说明/对标/机会/北
+/// 极星/北极星定义/交棒记录/工作区提示)。agentcli 层眼下手里只有
+/// `ExecSpec.workspace`/`branch`(经这个函数的两个形参传入)是**真实数
+/// 据**——项目名、描述、对标、机会、北极星、交棒记录全部活在 bw-app 的
+/// Issue/Project 领域模型里,agentcli 层按设计不依赖 store(`agentcli` 模块
+/// 文档「必须保住的一条性质」:编排层只依赖 `bw-connector`,`bw-engine` 这
+/// 层同样够不到那份数据)。这七个字段如实填「(未提供)」——**不留空**:
+/// `build_bridge_system_prompt` 对空字符串字段是条件渲染(悄悄跳过不打
+/// 印),读的人会误以为「这类上下文本来就没有」,而事实是「这一层接不
+/// 到」,两者不是一回事,「(未提供)」把这个差别说清楚。`skill_slug` 传空
+/// 串——`build_bridge_system_prompt` 本身已经支持这个输入,渲染成「未关联
+/// 技能,由你驱动或按用户要求干活」,同样是如实,不是取巧绕过。
+///
+/// **为什么不走路 B(给 `ExecSpec` 加可选 ctx 字段,协议号 2→3)**:
+/// `build_bridge_system_prompt` 的「通用铁律」段落(完成永不自动 / settle-
+/// once / Signal derive-only / 合并永远是人 / 禁 `gh pr merge`)是**无条件
+/// 渲染**的,不依赖任何 ctx 字段是否填了——哪怕九个字段有七个是
+/// 「(未提供)」,I1 真正要保住的那句铁律正文照样一字不少地进系统提示词。
+/// 项目上下文那部分即使残缺,每一处缺口都显式标了「(未提供)」,不是留白
+/// 让人瞎猜,没有触发「决策规则」里「明显残缺误导」的升级条件。真要把项目
+/// 上下文接进来,是切片四编排层把 Issue 真正交给 `Execute::start` 的那
+/// 天——那时候的契约决定权也该在切片四,不该 agentcli 层这一片单方面拍板
+/// 扩契约。
+fn bridge_prompt_ctx(workspace: &Path, branch: &str) -> PlaybookCtx {
+    let unknown = || "(未提供)".to_string();
+    PlaybookCtx {
+        project_name: unknown(),
+        project_kind: unknown(),
+        project_desc: unknown(),
+        benchmark: unknown(),
+        opportunity: unknown(),
+        north_star: unknown(),
+        ns_def: unknown(),
+        handoff_note: unknown(),
+        // 唯一两个真实可得的字段——直接来自 `ExecSpec`,不是编的。
+        workspace_hint: format!("{}(分支 {branch})", workspace.display()),
+    }
+}
+
+/// 装配一次首启的系统提示词:**衔接层正文(design §6.1/§9 明文的既定顺
+/// 序)在前,`ExecSpec.inject` 按序在后**。next 切片三-2 修(I1)之前这里
+/// 只拼了 `inject`,`build_bridge_system_prompt` 的正文(含「完成永不自动/
+/// 绝不伪造观测/合并永远是人」等通用铁律)从没接进去——commit D/E 的报告
+/// 与本函数旧文档都说这是「本片的职责只有一件:忠实搬运」,但实际漏了设计
+/// 明文要求的这一半,登记在本轮修复清单 I1,不是新发现的缺口,是补齐当时
+/// 漏做的接线。
+///
+/// `inject` 记账口不变:每块记标签/字节数/sha256 前 8 位([`InjectRecord`]),
+/// **顺序等于调用方给的顺序,一个字不改、不截断、不重排**;`inject` 为空
+/// 时,系统提示词仍然非空(衔接层正文恒非空),但记账清单为空——如实,不
+/// 假装注入了技能块(§6.2「空就是空」,这条只管 `inject` 这一半,不管衔接
+/// 层正文本身是否存在)。
 ///
 /// `pub`:切片三E 的 `agent_session` 指挥器要独立调这个函数,把落盘的系统
 /// 提示词与 `SessionRow.injected` 交叉核对(§7.2 第 6 条断言)。
-pub fn assemble_system_prompt(blocks: &[InjectBlock]) -> (String, Vec<InjectRecord>) {
-    let mut prompt = String::new();
+pub fn assemble_system_prompt(
+    workspace: &Path,
+    branch: &str,
+    blocks: &[InjectBlock],
+) -> (String, Vec<InjectRecord>) {
+    let ctx = bridge_prompt_ctx(workspace, branch);
+    let mut prompt = build_bridge_system_prompt(&ctx, "");
     let mut records = Vec::with_capacity(blocks.len());
     for block in blocks {
         if !prompt.is_empty() {
@@ -286,23 +344,48 @@ impl Execute for AgentCliConnector {
             }
 
             // ③ 查会话表(内存)→ 查不到再查上游目录反查。
+            //
+            // **M2(next 切片三-2 修,并发纪律留白如实标注)**:这一步与下面
+            // `t.insert(...)` 之间没有一把贯穿的锁——两次 `sessions.lock()`
+            // 是各自独立、快进快出的临界区(design §1.2「不跨 `.await` 持
+            // 锁」的直接后果)。如果同一个工作区被并发 `start` 两次,两次调
+            // 用都可能在这里读到「查不到会话」,都走首启分支,最终各自
+            // `insert` 一行——`by_workspace` 会被后写的那次覆盖,先写的那
+            // 行仍留在 `by_req` 里但再也查不到,等价于「同一个工作区意外起
+            // 了两个会话」。design §8 明写「本片只保证只起不等和自己这张表
+            // 的并发安全,不做同项目唯一交付的锁」——这条并发窗口的真正守
+            // 卫(同项目/同工作区一次只许一个交付在跑)留给切片四编排层的
+            // 运行管理器,agentcli 层这一片不单方面加锁。
             let found_in_table = {
                 let table = sessions.lock().expect("session table mutex poisoned");
                 table
                     .find_by_workspace(&workspace)
                     .map(|row| row.upstream_session.clone())
             };
-            let (upstream_session, is_resume) =
-                if let Some(id) = found_in_table.filter(|s| !s.is_empty()) {
-                    (id, true)
-                } else if let Some((id, _)) = discover_sessions(&workspace)
+            let discovered = found_in_table.filter(|s| !s.is_empty()).or_else(|| {
+                discover_sessions(&workspace)
                     .into_iter()
                     .max_by_key(|(_, mtime)| *mtime)
-                {
-                    (id, true)
-                } else {
-                    (uuid::Uuid::new_v4().to_string(), false)
-                };
+                    .map(|(id, _)| id)
+            });
+
+            // **C1(next 切片三-2 修,本轮最关键的一条)**:首启且没有历史
+            // 可续接时,`upstream_session` 该不该编一个 uuid,只看这家 CLI
+            // 是不是真能被指派会话号(`row.session_id_flag.is_some()`)——之
+            // 前这里无条件编一个 uuid 塞进 `SessionRow.upstream_session`/
+            // 回传的 `ExecTicket`,但从没把它交给 claude(`build_startup_
+            // plan` 当时压根不接收 `session_id` 参数),claude 会用自己生
+            // 成的会话号落 jsonl,票据上的号是一句谎话,读回必空(见
+            // `plan/23-opc-stitching-rebuild.md` §10 第 4 条的实测坐实)。
+            // 现在:能指派就编号、真交给 claude;不能指派就如实留空
+            // (`String::new()`),不猜——这是 `session.rs`
+            // `SessionRow.upstream_session` 字段文档自己定的判据:「不能
+            // 指派的家在这里留空,如实标注未知,绝不填一个猜的」。
+            let (upstream_session, is_resume) = match discovered {
+                Some(id) => (id, true),
+                None if row.session_id_flag.is_some() => (uuid::Uuid::new_v4().to_string(), false),
+                None => (String::new(), false),
+            };
 
             let (plan, injected) = if is_resume {
                 // §6.3:续接不重注入——复利块首启时已经在会话里,重注是污
@@ -311,10 +394,28 @@ impl Execute for AgentCliConnector {
                     .map_err(exec_error_to_conn_error)?;
                 (plan, Vec::new())
             } else {
-                let (system_prompt, injected) = assemble_system_prompt(&inject);
-                let plan =
-                    build_startup_plan(row, GENERIC_KICKOFF_PROMPT, &system_prompt, &workspace)
-                        .map_err(exec_error_to_conn_error)?;
+                // I1(next 切片三-2 修):`assemble_system_prompt` 现在把
+                // 衔接层正文拼在 `inject` 前面,见该函数文档。
+                let (system_prompt, injected) =
+                    assemble_system_prompt(&workspace, &required_branch, &inject);
+                // C1:只有 `upstream_session` 真的非空(即上面判定「这家能
+                // 被指派」)才把它交给 `build_startup_plan` 的 `session_id`
+                // 形参;为空就传 `None`——`build_startup_plan` 自己也会做
+                // 同样的判断,这里传 `None` 只是不制造一个「传了空字符
+                // 串」的中间态,语义更直白。
+                let session_id_arg = if upstream_session.is_empty() {
+                    None
+                } else {
+                    Some(upstream_session.as_str())
+                };
+                let plan = build_startup_plan(
+                    row,
+                    GENERIC_KICKOFF_PROMPT,
+                    &system_prompt,
+                    session_id_arg,
+                    &workspace,
+                )
+                .map_err(exec_error_to_conn_error)?;
                 (plan, injected)
             };
 
@@ -359,6 +460,7 @@ impl Execute for AgentCliConnector {
             // 后台任务:真跑会话,不等(「只起不等」的义务)。会话结束后把
             // 结果写回会话表——`poll` 读到的就是这里写的事实。
             let sessions_bg = sessions.clone();
+            let terminals_bg = terminals.clone();
             let run_ctx = RunCtx {
                 project,
                 // agentcli 层没有 workflow 身份(§8 范围裁剪)——两个
@@ -370,29 +472,58 @@ impl Execute for AgentCliConnector {
                 let outcome = exec
                     .run_skill_pty(&plan, &run_ctx, bytes_tx, input_rx)
                     .await;
-                let mut t = sessions_bg.lock().expect("session table mutex poisoned");
-                if let Some(row) = t.get_mut(req) {
-                    // 竞态守卫:`cancel` 可能已经把这一行标成 Canceled——
-                    // 那一档一旦落定就不许被这里的「正常结束」覆盖回去
-                    // (人点的取消优先于事后才跑完的收尾)。
-                    if row.state != ExecState::Canceled {
-                        row.state = match outcome {
-                            Ok(output) => ExecState::Finished {
-                                ended: SessionEnd::ProcessExit { code: None },
-                                summary: output.summary,
-                            },
-                            Err(e) => ExecState::Finished {
-                                ended: SessionEnd::ContactLost,
-                                summary: e.to_string(),
-                            },
-                        };
+                {
+                    let mut t = sessions_bg.lock().expect("session table mutex poisoned");
+                    if let Some(row) = t.get_mut(req) {
+                        // 竞态守卫:`cancel` 可能已经把这一行标成
+                        // Canceled——那一档一旦落定就不许被这里的「正常结
+                        // 束」覆盖回去(人点的取消优先于事后才跑完的收尾)。
+                        if row.state != ExecState::Canceled {
+                            row.state = match outcome {
+                                // I5(next 切片三-2 修):`ProcessExit.code`
+                                // 之前恒 `None`——`SkillOutput` 当时还没有
+                                // `exit_code` 字段。现在有了,顺手接上
+                                // (`InteractiveExecutor::run_skill_pty` 两
+                                // 个实现——真实 PTY 后端 / mock——各自决定
+                                // 拿不拿得到,见 `SkillOutput::exit_code`
+                                // 字段文档;拿不到就如实 `None`,这里不猜)。
+                                Ok(output) => ExecState::Finished {
+                                    ended: SessionEnd::ProcessExit {
+                                        code: output.exit_code,
+                                    },
+                                    summary: output.summary,
+                                },
+                                Err(e) => ExecState::Finished {
+                                    ended: SessionEnd::ContactLost,
+                                    summary: e.to_string(),
+                                },
+                            };
+                        }
                     }
                 }
+                // M1(next 切片三-2 修):会话自然结束(不是被 `cancel` 摘
+                // 的)也要把 `TerminalManager` 里这一行摘掉——否则界面侧
+                // `has_live()` 会把一个 PTY 子进程早就退出、只是没人显式
+                // `cancel` 过的会话继续算成「活着」,是假活。
+                // `TerminalManager::close` 对已经不存在的 key 是安全的
+                // no-op(`HashMap::remove` 找不到就什么也不干),`cancel`
+                // 已经摘过的会话这里重复摘一次没有副作用。
+                let mut term = terminals_bg
+                    .lock()
+                    .expect("terminal manager mutex poisoned");
+                term.close(conversation_id);
             });
 
+            // C1:`upstream_session` 是空串时,票据如实回 `None`——不把一个
+            // 「本来就没有」的字段包一层 `Some("")` 糊弄过去。
+            let upstream_session = if upstream_session.is_empty() {
+                None
+            } else {
+                Some(upstream_session)
+            };
             Ok(ExecTicket {
                 req,
-                upstream_session: Some(upstream_session),
+                upstream_session,
             })
         })
         .await
