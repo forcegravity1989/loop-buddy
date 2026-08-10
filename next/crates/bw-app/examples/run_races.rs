@@ -143,6 +143,14 @@ impl Ledger {
     fn new() -> Self {
         Self { ok: true, count: 0 }
     }
+    /// **登记一条失败的唯一入口**(评审 Critical-3 的假绿根治)。此前有
+    /// 25 处早退路径只打 `eprintln!("ASSERT FAILED: …")` 就 `return`,却
+    /// 没有调用这个方法——`ok` 字段就不会翻,`main` 合账时看到的还是
+    /// 「全过」,末行照样打 `RUN_RACES_OK`、退出码 0(实测复现:其中一处
+    /// 甚至让断言总数从 169 静静掉到 165,还写着「全过」)。这 25 处现在
+    /// 全部改成经这里(或简写 [`Ledger::fail`])登记,`ok` 才会真的跟着
+    /// 翻——凡是打了 `ASSERT FAILED` 却没有一条 `l.count` 增量与它对应
+    /// 的路径,就是这个方法要堵住的那种绕过。
     fn check(&mut self, cond: bool, label: impl std::fmt::Display) {
         self.count += 1;
         if cond {
@@ -151,6 +159,11 @@ impl Ledger {
             eprintln!("ASSERT FAILED: {label}");
             self.ok = false;
         }
+    }
+    /// `check(false, label)` 的简写——早退路径「这条本身就是失败」时用,
+    /// 语义完全等价,不是第二条打印通道(内部仍然只调用 [`Ledger::check`])。
+    fn fail(&mut self, label: impl std::fmt::Display) {
+        self.check(false, label);
     }
     fn merge(&mut self, other: Ledger) {
         self.ok &= other.ok;
@@ -510,6 +523,10 @@ async fn main() -> ExitCode {
     total.merge(section_r6(&ctx).await);
     println!();
 
+    println!("== 附 · 降级为咨询(design §3.5,评审 Critical-1 补齐覆盖)==");
+    total.merge(section_demote(&ctx).await);
+    println!();
+
     println!("== 附 · 同工作区串线校验(主控裁决 #5)==");
     total.merge(section_workspace_guard(&ctx).await);
     println!();
@@ -526,22 +543,53 @@ async fn main() -> ExitCode {
     total.merge(section_migration_guard().await);
     println!();
 
+    // 评审 Critical-3 第二层问题:期望条数下限。上面的 `Ledger::check`/
+    // `fail` 已经堵死了「打了 ASSERT FAILED 却不反映到 ok」这条路,但还
+    // 有一类更隐蔽的写法级问题防不住:如果哪节的 `total.merge(...)` 调
+    // 用被漏掉或注释掉,那一节的每条具体断言都不会跑(不是失败,是压根
+    // 没执行),`ok` 不会翻,只有条数会悄悄变少——这正是评审复现的原始
+    // 症状(169 静静掉到 165)。条数是 `--n`/`--rounds` 的确定函数(R1 是
+    // 聚合断言,与 `--n` 无关;R3 每轮 6 条,与 `--rounds` 成正比;其余
+    // 各节条数固定,常绿参数下逐节实测核对过):
+    //   R1(6) + R2(3) + R3(6×rounds) + R4(15) + R5(15) + R6(7)
+    //   + 降级为咨询(11) + 同工作区串线(1) + 完成永远人点(2)
+    //   + sqlite 读回(10) + 存量库迁移双守卫(1) = 71 + 6×rounds
+    let expected_assertions = 71 + 6 * args.rounds;
+    let actual_before_meta_check = total.count;
+    total.check(
+        actual_before_meta_check == expected_assertions,
+        format!(
+            "断言条数与设计期望一致(公式 71+6×rounds,rounds={} ⇒ 期望 {expected_assertions},实得 {actual_before_meta_check};不等就说明有一整节的断言没有真的跑到)",
+            args.rounds
+        ),
+    );
+
+    // 评审 Important-5:`--real` 显式传了就要真的算数——此前这一档的返
+    // 回值没有并进账本,失败只打印 `REAL_RUN_FAILED`,末行仍然
+    // `RUN_RACES_OK`、退出码 0。design §5.3 结尾原文:「显式传了 --real
+    // 但连接器不可用 → 打一行如实的原因并以退出码 1 结束」。`real_ok`
+    // 默认 `true`(没传 `--real` 时这一档压根没跑,不影响判定)。
+    let mut real_ok = true;
     if args.real.is_some() {
-        println!("== 附 · 真实并行三件(--real,不进常绿门禁)==");
-        section_real(args.real.as_deref().unwrap(), args.n).await;
+        println!("== 附 · 真实并行三件(--real,不进常绿门禁,经 RunManager)==");
+        real_ok = section_real(&ctx, args.real.as_deref().unwrap(), args.n).await;
         println!();
     }
 
     println!(
-        "断言 {} 条,{}",
+        "断言 {} 条(mock 档),{}",
         total.count,
         if total.ok { "全过" } else { "有失败" }
     );
     println!("数据库留在:{}", db_path.display());
-    if total.ok {
+    let overall_ok = total.ok && real_ok;
+    if overall_ok {
         println!("RUN_RACES_OK");
         ExitCode::SUCCESS
     } else {
+        if !real_ok {
+            eprintln!("ASSERT FAILED: --real 档未达到 design §5.3 的判定(见上方 REAL_RUN_FAILED/断言明细)");
+        }
         eprintln!("RUN_RACES_FAILED");
         ExitCode::FAILURE
     }
@@ -664,6 +712,26 @@ fn build_scripts(n: usize, rounds: usize) -> HashMap<String, Script> {
         },
     );
 
+    // 附 · 降级为咨询(评审 Critical-1):A 是那条会被降级的交付运行,脚
+    // 本足够长(900ms),留够时间做「降级 → 读回 → 同活立刻再开工 → 幂
+    // 等降级」这一串步骤,又足够短,能在本节结束前等到它自然结束(验证
+    // 「账不重结」)。B 是降级后在同一件活上重开的第二条交付运行,短脚
+    // 本,不需要等它结束。
+    scripts.insert(
+        "bw/issue-demote-a".to_string(),
+        Script {
+            start_fails: None,
+            finish_after: Some((Duration::from_millis(900), EndKind::ProcessExit)),
+        },
+    );
+    scripts.insert(
+        "bw/issue-demote-b".to_string(),
+        Script {
+            start_fails: None,
+            finish_after: Some((Duration::from_millis(200), EndKind::ProcessExit)),
+        },
+    );
+
     scripts
 }
 
@@ -681,7 +749,7 @@ async fn section_r1(ctx: &Ctx, n: usize) -> (bool, Ledger) {
         match ctx.new_issue(&format!("R1 示例活 #{i}")).await {
             Ok(id) => issues.push(id),
             Err(e) => {
-                eprintln!("ASSERT FAILED: R1 建活 #{i} 失败:{e}");
+                l.fail(format!("R1 建活 #{i} 失败:{e}"));
                 return (false, l);
             }
         }
@@ -704,11 +772,11 @@ async fn section_r1(ctx: &Ctx, n: usize) -> (bool, Ledger) {
         match h.await {
             Ok(Ok(id)) => ids.push(id),
             Ok(Err(e)) => {
-                eprintln!("ASSERT FAILED: R1 并发开工失败:{e}");
+                l.fail(format!("R1 并发开工失败:{e}"));
                 return (false, l);
             }
             Err(e) => {
-                eprintln!("ASSERT FAILED: R1 并发开工任务 panic:{e}");
+                l.fail(format!("R1 并发开工任务 panic:{e}"));
                 return (false, l);
             }
         }
@@ -784,7 +852,7 @@ async fn section_r2(ctx: &Ctx) -> Ledger {
     let issue = match ctx.new_issue("R2 示例活").await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("ASSERT FAILED: R2 建活失败:{e}");
+            l.fail(format!("R2 建活失败:{e}"));
             return l;
         }
     };
@@ -792,7 +860,7 @@ async fn section_r2(ctx: &Ctx) -> Ledger {
     let run1 = match ctx.manager.start(req1).await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("ASSERT FAILED: R2 第一次开工应该成功,实得:{e}");
+            l.fail(format!("R2 第一次开工应该成功,实得:{e}"));
             return l;
         }
     };
@@ -847,24 +915,33 @@ async fn section_r2(ctx: &Ctx) -> Ledger {
         }
     }
 
-    let count = count_runs_for_issue(&ctx.control, issue).await;
-    l.check(count == 1, format!("该活运行行数 = 1(实得 {count})"));
+    // 评审 Important-3:此前这里借 `find_live_delivery_run` 的 0/1 存在性
+    // 判断冒充「行数」——design §4.2 R2 要的是「该活运行行仍然只有 1
+    // 条」,如果管理器不小心多插了一条 consultation/failed 行,存在性判
+    // 断照样绿。改成真的 `SELECT COUNT(*)`(见 [`count_run_rows_for_issue`])。
+    match count_run_rows_for_issue(&ctx.db_path, issue).await {
+        Some(n) => l.check(n == 1, format!("该活运行行数(真实 COUNT)= 1(实得 {n})")),
+        None => l.fail("该活运行行数读回失败"),
+    }
 
     l
 }
 
-async fn count_runs_for_issue(control: &SqliteStore, issue: IssueId) -> usize {
-    // `RunStore` 没有「按活列举」的方法(裁决 #7:接口按聚合拆,不多堆方
-    // 法)——这里只需要知道「已知的那一个运行 id 还在不在」,不需要一个
-    // 通用列举接口,所以不新增 trait 方法,直接靠上层已经拿到的 run1 编
-    // 号验证。为了让本函数名副其实地检查「行数」,改成对唯一索引本身
-    // 的存在性做一次直接判定:同一件活至多一条活跃交付运行,行数是否
-    // 恰好 1 由 `find_live_delivery_run` 是否命中来回答。
-    match control.find_live_delivery_run(issue).await {
-        Ok(Some(_)) => 1,
-        Ok(None) => 0,
-        Err(_) => usize::MAX,
-    }
+/// 真的按行数回答「这件活有几条运行行」——不是「有没有活着的那一条」
+/// (评审 Important-3)。直接开一条独立只读连接跑 `SELECT COUNT(*)`,与
+/// `section_sql_readback` 同款做法,不新增 `RunStore` trait 方法(裁决
+/// #7:接口按聚合拆,不多堆方法)。
+async fn count_run_rows_for_issue(db_path: &std::path::Path, issue: IssueId) -> Option<i64> {
+    let opts = SqliteConnectOptions::new()
+        .filename(db_path)
+        .read_only(true);
+    let pool = SqlitePool::connect_with(opts).await.ok()?;
+    let row = sqlx::query("SELECT COUNT(*) AS n FROM run WHERE issue_id = ?")
+        .bind(issue.uuid().to_string())
+        .fetch_one(&pool)
+        .await
+        .ok()?;
+    Some(row.get::<i64, _>("n"))
 }
 
 // ─────────────────────────── R3 ───────────────────────────
@@ -1027,7 +1104,7 @@ async fn section_r4(ctx: &Ctx) -> Ledger {
         match ctx.new_issue(&format!("R4 示例活 #{i}")).await {
             Ok(id) => issues.push(id),
             Err(e) => {
-                eprintln!("ASSERT FAILED: R4 建活 #{i} 失败:{e}");
+                l.fail(format!("R4 建活 #{i} 失败:{e}"));
                 return l;
             }
         }
@@ -1120,11 +1197,16 @@ async fn section_r4(ctx: &Ctx) -> Ledger {
         Ok(new_id) => {
             println!("第 7 件立刻再开工成功:{new_id:?}(脚本仍是「起跑就失败」,第二条运行行也会关门为 failed)");
             let _ = wait_for_all_closed(&ctx.control, &[new_id], Duration::from_secs(2)).await;
-            let owns_two =
-                count_runs_created_for_issue_at_least_two(&ctx.control, issue7, &ids[6]).await;
+            let owns_two = match ids[6] {
+                Some(first_run) => {
+                    count_run_rows_at_least_two_distinct(&ctx.db_path, issue7, first_run, new_id)
+                        .await
+                }
+                None => false,
+            };
             l.check(
                 owns_two,
-                "第 7 件的活可以立刻再开工,新起一条运行行,与第一条编号不同",
+                "第 7 件的活可以立刻再开工,新起一条运行行,与第一条编号不同(真实 COUNT ≥ 2 且编号不同)",
             );
         }
         Err(e) => {
@@ -1136,17 +1218,21 @@ async fn section_r4(ctx: &Ctx) -> Ledger {
     l
 }
 
-/// R4「第 7 件共 2 条运行、编号不同」的核验——没有列举接口(裁决 #7 不
-/// 多堆方法),用「新开工的一次成功 = 一定是一条新行,而且没有撞唯一索
-/// 引」这个事实反着证:如果重开成功且给的是一个新的 `RunId`,叠加第一
-/// 条已知的 `RunId`,自然就是「至少两条、互不相同」。
-async fn count_runs_created_for_issue_at_least_two(
-    _control: &SqliteStore,
-    _issue: IssueId,
-    first_run: &Option<RunId>,
+/// R4「第 7 件共 2 条运行、编号不同」的核验(评审 Important-3)。此前这
+/// 里只回 `first_run.is_some()`——两个前置参数完全没用,而这件事在调用
+/// 点已经被上一条断言(`ids[6]`)验过,是一条恒真断言。改成真的
+/// `COUNT(*) >= 2` 加编号不同判定,design §4.2 R4 要的「该活共 2 条运
+/// 行、编号不同」才真的被查了一次。
+async fn count_run_rows_at_least_two_distinct(
+    db_path: &std::path::Path,
+    issue: IssueId,
+    first_run: RunId,
+    second_run: RunId,
 ) -> bool {
-    first_run.is_some() // 第二条能成功开工这件事本身(在调用点已经检查
-                        // `Ok`)加上第一条存在,就是「至少两条」——见调用点。
+    match count_run_rows_for_issue(db_path, issue).await {
+        Some(n) => n >= 2 && first_run != second_run,
+        None => false,
+    }
 }
 
 // ─────────────────────────── R5 ───────────────────────────
@@ -1170,7 +1256,7 @@ async fn section_r5(ctx: &Ctx) -> Ledger {
     {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("ASSERT FAILED: 起管理器 A 失败:{e}");
+            l.fail(format!("起管理器 A 失败:{e}"));
             return l;
         }
     };
@@ -1181,7 +1267,7 @@ async fn section_r5(ctx: &Ctx) -> Ledger {
         let issue = match ctx.new_issue(&format!("R5 示例活 #{i}")).await {
             Ok(id) => id,
             Err(e) => {
-                eprintln!("ASSERT FAILED: R5 建活 #{i} 失败:{e}");
+                l.fail(format!("R5 建活 #{i} 失败:{e}"));
                 return l;
             }
         };
@@ -1196,7 +1282,7 @@ async fn section_r5(ctx: &Ctx) -> Ledger {
                 ids.push(id);
             }
             Err(e) => {
-                eprintln!("ASSERT FAILED: R5 第 {i} 件开工失败:{e}");
+                l.fail(format!("R5 第 {i} 件开工失败:{e}"));
                 return l;
             }
         }
@@ -1232,7 +1318,7 @@ async fn section_r5(ctx: &Ctx) -> Ledger {
     {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("ASSERT FAILED: 重启后新建管理器 B 失败:{e}");
+            l.fail(format!("重启后新建管理器 B 失败:{e}"));
             return l;
         }
     };
@@ -1240,7 +1326,7 @@ async fn section_r5(ctx: &Ctx) -> Ledger {
     let report = match manager_b.reap_on_restart().await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("ASSERT FAILED: reap_on_restart 失败:{e}");
+            l.fail(format!("reap_on_restart 失败:{e}"));
             return l;
         }
     };
@@ -1374,7 +1460,7 @@ async fn section_r6(ctx: &Ctx) -> Ledger {
     let issue = match ctx.new_issue("R6 示例活").await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("ASSERT FAILED: R6 建活失败:{e}");
+            l.fail(format!("R6 建活失败:{e}"));
             return l;
         }
     };
@@ -1383,19 +1469,18 @@ async fn section_r6(ctx: &Ctx) -> Ledger {
     let run_a = match ctx.manager.start(req_a).await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("ASSERT FAILED: R6 运行 A 开工失败:{e}");
+            l.fail(format!("R6 运行 A 开工失败:{e}"));
             return l;
         }
     };
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     if let Err(e) = ctx.manager.cancel(run_a).await {
-        eprintln!("ASSERT FAILED: R6 100ms 时取消 A 失败:{e}");
-        l.check(false, "100ms 时取消 A 成功");
+        l.fail(format!("R6 100ms 时取消 A 失败:{e}"));
     }
     let row_a_after_cancel = ctx.control.get_run(run_a).await.ok().flatten();
     let Some(row_a_after_cancel) = row_a_after_cancel else {
-        eprintln!("ASSERT FAILED: R6 取消后读不回 A");
+        l.fail("R6 取消后读不回 A");
         return l;
     };
     l.check(
@@ -1406,19 +1491,76 @@ async fn section_r6(ctx: &Ctx) -> Ledger {
         ),
     );
 
+    // **评审 Critical-2 的修复**:design §4.2 R6 的原意是「A 的轮询任务
+    // 观测到一条晚到的 Finished,送回后被诚实空转」——但 RunManager 的
+    // 真实取消语义(design §3.5②/主控裁决 #6)是取消令牌一响,A 的轮询
+    // 任务在下一次 `select!` 立刻退出(`manager.rs` `spawn_poll_task`),
+    // 不会再有第二次 `poll()`;mock 的 `poll()` 又是「取消过就恒报
+    // Canceled」(design §4.1 四行逻辑第一行)。两条设计合在一起,「走轮
+    // 询任务的真实晚到消息」在这份指挥器里**造不出来**——这是评审给的根
+    // 因辨析,不是实现疏漏。指挥器因此直接对存储层重放一次「晚到的
+    // close_run 调用」,绕过 RunManager,模拟 A 的轮询任务本该在 300ms
+    // 观测到、但结构上永远发不出的那条晚到 Finished——如实标注这是指挥
+    // 器造出来的,不是走真实轮询任务(评审「该补什么」选项二,与 R3 的
+    // 「再结一次账值不变」同款形态,补的是「关门一次」这把此前零覆盖的
+    // 守卫)。
+    let late_at = row_a_after_cancel.ended_at.unwrap_or(0) + 999;
+    match ctx
+        .control
+        .close_run(
+            run_a,
+            late_at,
+            bw_core::RunState::Finished,
+            Some(bw_store::RunEndKind::ProcessExit),
+            "【模拟晚到】指挥器直接对 close_run 发起(绕过 RunManager),模拟 A 的轮询任务本该在 \
+             300ms 观测到、但结构上不会真的发生的晚到 Finished 消息",
+        )
+        .await
+    {
+        Ok(false) => {
+            l.check(
+                true,
+                "晚到的完成消息(直接对 close_run 发起,绕过 RunManager)没能改写已关门的 A——关门只发生一次",
+            );
+        }
+        Ok(true) => {
+            l.check(
+                false,
+                "晚到的完成消息不该改写已关门的 A,但 close_run 的比较并置居然赢了——关门发生了不止一次",
+            );
+        }
+        Err(e) => {
+            l.fail(format!("模拟晚到消息的 close_run 调用本身出错:{e}"));
+        }
+    }
+    match ctx.control.get_run(run_a).await.ok().flatten() {
+        Some(row) => {
+            l.check(
+                row.state == row_a_after_cancel.state
+                    && row.end_kind == row_a_after_cancel.end_kind
+                    && row.ended_at == row_a_after_cancel.ended_at
+                    && row.end_detail == row_a_after_cancel.end_detail,
+                "晚到消息之后 A 的 state/end_kind/ended_at/end_detail 与关门那一刻逐字节一致(晚到消息一个字段都没改动)",
+            );
+        }
+        None => {
+            l.fail("R6 晚到消息之后读不回 A");
+        }
+    }
+
     // 紧接着对同一件活起运行 B(名额已释放)。
     let req_b = ctx.mock_start(issue, "/tmp/run-races-mock/r6-b", "bw/issue-r6-b");
     let run_b = match ctx.manager.start(req_b).await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("ASSERT FAILED: R6 名额应该已经释放,B 开工应该成功,实得:{e}");
+            l.fail(format!("R6 名额应该已经释放,B 开工应该成功,实得:{e}"));
             return l;
         }
     };
 
-    // 等过 300ms(A 的晚到消息落地时刻)——A 的轮询任务此时已经收到取消
-    // 令牌,理论上不会再发消息;这里主要是让时间线走完,给潜在的晚到消
-    // 息一个抵达窗口。
+    // 等过 300ms(A 原脚本的结束时刻)——A 的轮询任务此时早已因为取消令
+    // 牌退出(见上面的说明),这里只是让时间线走完,不再指望会有第二条
+    // 真实晚到消息。
     tokio::time::sleep(Duration::from_millis(400)).await;
 
     let row_a_final = ctx.control.get_run(run_a).await.ok().flatten();
@@ -1481,6 +1623,136 @@ async fn section_r6(ctx: &Ctx) -> Ledger {
     l
 }
 
+// ─────────────────────────── 附 · 降级为咨询 ───────────────────────────
+
+/// design §3.5「降级为咨询」的显式覆盖(评审 Critical-1)。此前
+/// `RunManager::demote_to_consultation`/`Loop::handle_demote`/
+/// `RunStore::demote_run` 三处代码在整份指挥器里**没有任何调用点**——169
+/// 条断言一条都没验过这条语义,突变检验把 kind 翻面和名额释放同时拆掉,
+/// 断言照样全过。这里补上设计稿附带的验证脚本:起一条长脚本交付运行 →
+/// 降级返回 `true` → 读回 kind 翻面/`demoted_at` 非空/`settled_at` 非空/
+/// `ended_at` 仍空(会话没被杀)→ 同一件活立刻能开出新的交付运行(名额
+/// 真释放)→ 再降级一次返回 `false`(幂等)→ 等原会话自然结束,读回
+/// `ended_at` 落值但 `settled_at` 逐字节不变(账不重结,commit C 标题承
+/// 诺的那半)。
+async fn section_demote(ctx: &Ctx) -> Ledger {
+    let mut l = Ledger::new();
+
+    let issue = match ctx.new_issue("降级为咨询示例活").await {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(format!("降级示例建活失败:{e}"));
+            return l;
+        }
+    };
+
+    let req_a = ctx.mock_start(issue, "/tmp/run-races-mock/demote-a", "bw/issue-demote-a");
+    let run_a = match ctx.manager.start(req_a).await {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(format!("降级示例:交付运行 A 开工失败:{e}"));
+            return l;
+        }
+    };
+    if !wait_for_state_left_starting(&ctx.control, run_a, Duration::from_secs(2)).await {
+        l.fail("降级示例:A 应该在 2s 内离开 Starting");
+        return l;
+    }
+
+    // 降级:kind 翻面 + 结账,会话不杀、工作区不清(design §3.5)。
+    match ctx.manager.demote_to_consultation(run_a).await {
+        Ok(true) => l.check(true, "第一次降级返回 true(这次真降级了)"),
+        Ok(false) => l.check(false, "第一次降级应该返回 true,实得 false"),
+        Err(e) => {
+            l.fail(format!("第一次降级调用出错:{e}"));
+            return l;
+        }
+    }
+
+    let row_after_demote = match ctx.control.get_run(run_a).await.ok().flatten() {
+        Some(row) => row,
+        None => {
+            l.fail("降级后读不回 A");
+            return l;
+        }
+    };
+    l.check(
+        row_after_demote.kind == bw_store::RunKind::Consultation,
+        format!(
+            "降级后 kind 翻面为 consultation(实得 {:?})",
+            row_after_demote.kind
+        ),
+    );
+    l.check(
+        row_after_demote.demoted_at.is_some(),
+        "降级后 demoted_at 非空",
+    );
+    l.check(
+        row_after_demote.settled_at.is_some(),
+        "降级后 settled_at 非空(账在降级这一刻结)",
+    );
+    l.check(
+        row_after_demote.ended_at.is_none(),
+        "降级后 ended_at 仍为空(会话没被杀,不冒充已结束)",
+    );
+    let settled_at_at_demote = row_after_demote.settled_at;
+
+    // 同一件活立刻能开出新的交付运行——名额真的被释放了。
+    let req_b = ctx.mock_start(issue, "/tmp/run-races-mock/demote-b", "bw/issue-demote-b");
+    let run_b = match ctx.manager.start(req_b).await {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(format!("降级后同一件活应该能立刻再开工,实得:{e}"));
+            return l;
+        }
+    };
+    l.check(
+        run_b != run_a,
+        "降级后新起的交付运行是一条新行,编号与被降级的那条不同",
+    );
+
+    // 再降级一次——幂等,返回 false(已经不是「活着的交付运行」)。
+    match ctx.manager.demote_to_consultation(run_a).await {
+        Ok(false) => l.check(true, "第二次降级返回 false(幂等,没什么可降的了)"),
+        Ok(true) => l.check(false, "第二次降级不该再返回 true,实得 true——降级不是幂等的"),
+        Err(e) => l.fail(format!("第二次降级调用出错:{e}")),
+    }
+
+    // 等原会话(A)自然结束——总脚本 900ms,前面几步已经用掉一些时间,给
+    // 够余量。
+    let closed = wait_for_all_closed(&ctx.control, &[run_a], Duration::from_secs(3)).await;
+    l.check(
+        closed,
+        "A 的原会话在 3s 内自然结束(降级不杀会话,只是不再占名额)",
+    );
+    match ctx.control.get_run(run_a).await.ok().flatten() {
+        Some(row) => {
+            l.check(
+                row.ended_at.is_some(),
+                "A 自然结束后 ended_at 落值(会话真的跑完了)",
+            );
+            l.check(
+                row.state == bw_core::RunState::Finished
+                    && row.end_kind == Some(bw_store::RunEndKind::ProcessExit),
+                format!(
+                    "A 自然结束后 state=finished end_kind=process_exit(实得 state={:?} end_kind={:?})",
+                    row.state, row.end_kind
+                ),
+            );
+            l.check(
+                row.settled_at == settled_at_at_demote,
+                format!(
+                    "A 自然结束后 settled_at 与降级那一刻逐字节不变(账不重结,实得 {:?} → {:?})",
+                    settled_at_at_demote, row.settled_at
+                ),
+            );
+        }
+        None => l.fail("A 自然结束后读不回"),
+    }
+
+    l
+}
+
 // ─────────────────────────── 附 · 同工作区串线校验 ───────────────────────────
 
 async fn section_workspace_guard(ctx: &Ctx) -> Ledger {
@@ -1489,14 +1761,14 @@ async fn section_workspace_guard(ctx: &Ctx) -> Ledger {
     let issue_a = match ctx.new_issue("同工作区校验 · 活 A").await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("ASSERT FAILED: 建活 A 失败:{e}");
+            l.fail(format!("建活 A 失败:{e}"));
             return l;
         }
     };
     let issue_b = match ctx.new_issue("同工作区校验 · 活 B").await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("ASSERT FAILED: 建活 B 失败:{e}");
+            l.fail(format!("建活 B 失败:{e}"));
             return l;
         }
     };
@@ -1509,7 +1781,7 @@ async fn section_workspace_guard(ctx: &Ctx) -> Ledger {
     {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("ASSERT FAILED: 活 A 用这个工作区开工应该成功,实得:{e}");
+            l.fail(format!("活 A 用这个工作区开工应该成功,实得:{e}"));
             return l;
         }
     };
@@ -1549,7 +1821,7 @@ async fn section_done_is_human(ctx: &Ctx) -> Ledger {
     let app = match App::open(&ctx.db_path.to_string_lossy()).await {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("ASSERT FAILED: App::open 失败:{e}");
+            l.fail(format!("App::open 失败:{e}"));
             return l;
         }
     };
@@ -1557,7 +1829,7 @@ async fn section_done_is_human(ctx: &Ctx) -> Ledger {
     let issue_review = match ctx.new_issue("完成永远人点 · 手工置评审中").await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("ASSERT FAILED: 建活失败:{e}");
+            l.fail(format!("建活失败:{e}"));
             return l;
         }
     };
@@ -1594,7 +1866,7 @@ async fn section_done_is_human(ctx: &Ctx) -> Ledger {
     let issue_in_progress = match ctx.new_issue("完成永远人点 · 反证活").await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("ASSERT FAILED: 建反证活失败:{e}");
+            l.fail(format!("建反证活失败:{e}"));
             return l;
         }
     };
@@ -1628,6 +1900,35 @@ async fn section_done_is_human(ctx: &Ctx) -> Ledger {
 
 // ─────────────────────────── 附 · sqlite 读回清单 ───────────────────────────
 
+/// 把一行 SQL 读回原样打成 `col=val col2=val2 …`(评审 Important-4)。
+/// SQLite 是动态类型,这里按整数/浮点/文本三档级联尝试;`run`/`issue`
+/// 两张表 + 本节用到的 PRAGMA 结果全是这三类之一,取不到才标
+/// `<unreadable>`(设计上不会真的走到)。
+fn format_row(row: &sqlx::sqlite::SqliteRow) -> String {
+    use sqlx::{Column, Row, ValueRef};
+    row.columns()
+        .iter()
+        .enumerate()
+        .map(|(i, col)| {
+            let name = col.name();
+            let is_null = row.try_get_raw(i).map(|v| v.is_null()).unwrap_or(false);
+            let value = if is_null {
+                "NULL".to_string()
+            } else if let Ok(v) = row.try_get::<i64, _>(i) {
+                v.to_string()
+            } else if let Ok(v) = row.try_get::<f64, _>(i) {
+                v.to_string()
+            } else if let Ok(v) = row.try_get::<String, _>(i) {
+                v
+            } else {
+                "<unreadable>".to_string()
+            };
+            format!("{name}={value}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 async fn section_sql_readback(db_path: &std::path::Path, r1_ok: bool) -> Ledger {
     let mut l = Ledger::new();
     let opts = SqliteConnectOptions::new()
@@ -1636,7 +1937,7 @@ async fn section_sql_readback(db_path: &std::path::Path, r1_ok: bool) -> Ledger 
     let pool = match SqlitePool::connect_with(opts).await {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("ASSERT FAILED: 无法用独立连接打开数据库:{e}");
+            l.fail(format!("无法用独立连接打开数据库:{e}"));
             return l;
         }
     };
@@ -1655,10 +1956,29 @@ async fn section_sql_readback(db_path: &std::path::Path, r1_ok: bool) -> Ledger 
     for (label, sql) in queries {
         println!("[{label}] 执行 SQL: {sql}");
         match sqlx::query(sql).fetch_all(&pool).await {
-            Ok(rows) => println!("  → {} 行", rows.len()),
+            Ok(rows) => {
+                // 评审 Important-4:原样打印每一行的值,不是只打行数——
+                // 此前 `COUNT(*)` 那几条一律打「→ 1 行」,COUNT 天生只
+                // 返回 1 行,真正要给人看的那个数字一个都没打出来,读的
+                // 人还容易把「1 行」误读成「总量 1」。「读回为证」的意
+                // 思是人能拿这条 SQL 自己 `sqlite3` 复制去核对,不是
+                // 「SQL 没报错」——这里补上去,同时把「读回成功」变成一
+                // 条真断言(此前成功路径不打任何 `l.check`,一条断言都
+                // 没注册)。
+                if rows.is_empty() {
+                    println!("  → (0 行)");
+                } else {
+                    for row in &rows {
+                        println!("  → {}", format_row(row));
+                    }
+                }
+                l.check(
+                    true,
+                    format!("[{label}] SQL 读回成功({} 行,原文见上)", rows.len()),
+                );
+            }
             Err(e) => {
-                eprintln!("ASSERT FAILED: [{label}] 读回失败:{e}");
-                l.check(false, format!("[{label}] SQL 读回不报错"));
+                l.fail(format!("[{label}] 读回失败:{e}"));
             }
         }
     }
@@ -1679,8 +1999,7 @@ async fn section_sql_readback(db_path: &std::path::Path, r1_ok: bool) -> Ledger 
             );
         }
         Err(e) => {
-            eprintln!("ASSERT FAILED: 读回「已完成」计数失败:{e}");
-            l.check(false, "读回「已完成」计数");
+            l.fail(format!("读回「已完成」计数失败:{e}"));
         }
     }
 
@@ -1747,7 +2066,7 @@ async fn section_migration_guard() -> Ledger {
     let pool = match SqlitePool::connect_with(opts).await {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("ASSERT FAILED: 造老库失败:{e}");
+            l.fail(format!("造老库失败:{e}"));
             return l;
         }
     };
@@ -1756,7 +2075,7 @@ async fn section_migration_guard() -> Ledger {
             continue;
         }
         if let Err(e) = sqlx::query(stmt).execute(&pool).await {
-            eprintln!("ASSERT FAILED: 老库建表语句失败:{e}\n语句:{stmt}");
+            l.fail(format!("老库建表语句失败:{e}\n语句:{stmt}"));
             return l;
         }
     }
@@ -1779,7 +2098,7 @@ async fn section_migration_guard() -> Ledger {
     let pool2 = match SqlitePool::connect_with(opts2).await {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("ASSERT FAILED: 老库读回连接失败:{e}");
+            l.fail(format!("老库读回连接失败:{e}"));
             return l;
         }
     };
@@ -1811,24 +2130,45 @@ async fn section_migration_guard() -> Ledger {
 
 // ─────────────────────────── 附 · --real ───────────────────────────
 
-/// 真实并行三件(design §5.3):`--real <git 检出根的父目录>` 起三件真实
-/// claude 会话。**如实预期**:全新工作区首次交互式启动会先撞
+const REAL_CONNECTOR_NAME: &str = "real-claude";
+
+/// 真实并行三件(design §5.3)。**评审 Important-6 的修复**:此前这一节
+/// 直接拿 `AgentCliConnector` 调 `execute.start/poll/cancel`,完全绕开了
+/// 运行管理器——没有 `RunManager::start`,没有一条运行行落库,design
+/// §5.3 要的「3 条运行行 / 3 个互不相同的上游会话号 / 3 个互不相同的工
+/// 作区路径 / 各结账一次」这组读回断言因此一条都没落地(它证的是连接器
+/// 层能不能起三个会话,不是「真实并行三件经运行管理器跑通」)。这里改
+/// 起一个独立的 `RunManager`(同一个数据库文件,注册表里换成真实
+/// `AgentCliConnector`),开工/取消走 `StartRun`/`cancel`,断言全部走
+/// `ctx.control.get_run` 读回。
+///
+/// **评审 Important-5 的修复**:返回 `bool`——`main` 把它并进最终退出
+/// 码,不再是「打印一行 REAL_RUN_FAILED 但退出码恒 0」。design §5.3 结
+/// 尾原文:「显式传了 `--real` 但连接器不可用 → 打一行如实的原因并**以
+/// 退出码 1 结束**。悄悄回落到 mock 再报成功,是本仓库最恨的那种假
+/// 绿」。这里把「连接器/环境不可用」(建工作区失败、git 初始化失败、
+/// `RunManager::open`/`start` 本身报错)与「上游会话卡在 plan/23 §10 第
+/// 6 条的双重确认对话框,90 秒内没能产出 jsonl 会话文件」区分开:前者
+/// 是这份指挥器自己的装配/环境问题,判定这一档失败;后者是已登记的已
+/// 知外部缺口(不是本次改动要修的东西),如实打印但不影响这一档的判
+/// 定——`RunManager` 侧的行/会话号/工作区/结账读回断言该过的都要过。
+///
+/// **如实预期**:全新工作区首次交互式启动会先撞
 /// plan/23-opc-stitching-rebuild.md §10 第 6 条(双重确认对话框,默认退
 /// 出)——先试,撞上就如实打印,不为绕过对话框替用户自动应答安全确认。
-async fn section_real(parent_dir: &std::path::Path, n: usize) {
-    use bw_connector::{InjectBlock, ProjectBinding};
+async fn section_real(ctx: &Ctx, parent_dir: &std::path::Path, n: usize) -> bool {
     use bw_engine::agentcli::AgentCliConnector;
     use bw_engine::interactive_cli::{InteractiveCliExecutor, CLAUDE};
 
     let n = n.clamp(1, 3); // §5.3 的档位规模是三件;`--n` 给了更大的值也不在这里放大成本
-    println!("前置:claude 在 PATH + 给定的父目录用于新建 {n} 个真实 git 检出");
+    println!("前置:claude 在 PATH + 给定的父目录用于新建 {n} 个真实 git 检出,经 RunManager 起工(评审 Important-6)");
 
     let mut worktrees = Vec::new();
     for i in 1..=n {
         let dir = parent_dir.join(format!("run-races-real-{i}-{}", Uuid::new_v4()));
         if let Err(e) = std::fs::create_dir_all(&dir) {
             eprintln!("REAL_RUN_FAILED(建工作区失败):{e}");
-            return;
+            return false;
         }
         let run = |args: &[&str]| {
             std::process::Command::new("git")
@@ -1847,7 +2187,7 @@ async fn section_real(parent_dir: &std::path::Path, n: usize) {
                 .unwrap_or(false);
         if !ok {
             eprintln!("REAL_RUN_FAILED(git 初始化失败,第 {i} 件):检查本机是否装了 git");
-            return;
+            return false;
         }
         let _ = std::fs::write(dir.join("README.md"), "run_races --real 临时工作区\n");
         let _ = run(&["add", "."]);
@@ -1855,133 +2195,228 @@ async fn section_real(parent_dir: &std::path::Path, n: usize) {
         worktrees.push(dir);
     }
 
-    let mut tickets = Vec::new();
-    for (idx, ws) in worktrees.iter().enumerate() {
-        let binding = ProjectBinding {
-            project: ProjectId::new(),
+    // 真实注册表:同一个数据库文件,换成真实 AgentCliConnector,绑定到
+    // 与 mock 档同一个项目(`ctx.project`)——`RunManager::start` 按
+    // `issue_row.project_id` 反查连接器,新建的活也都挂在这个项目下。
+    let real_entry = ConnectorEntry {
+        id: ConnectorId::new(),
+        name: REAL_CONNECTOR_NAME.to_string(),
+        kind: ConnectorKind::AgentCli {
+            cli: CLAUDE.slug.to_string(),
+        },
+        binding: ProjectBinding {
+            project: ctx.project,
             host: String::new(),
-            path: format!("run-races-real-{}", idx + 1),
+            path: "run-races-real".to_string(),
+        },
+        config: ConfigRef::AgentRegistryRow {
+            slug: CLAUDE.slug.to_string(),
+        },
+    };
+    let real_conn = AgentCliConnector::from_entry(
+        &real_entry,
+        &CLAUDE,
+        std::sync::Arc::new(InteractiveCliExecutor::new()),
+    );
+    let mut real_registry = ConnectorRegistry::default();
+    real_registry.register(real_entry, real_conn);
+    let real_registry = std::sync::Arc::new(real_registry);
+
+    let manager_real =
+        match RunManager::open(&ctx.db_path, real_registry, RunManagerConfig::default()).await {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("REAL_RUN_FAILED(RunManager::open 失败):{e}");
+                for ws in &worktrees {
+                    let _ = std::fs::remove_dir_all(ws);
+                }
+                return false;
+            }
         };
-        let conn = AgentCliConnector::new(
-            binding,
-            &CLAUDE,
-            std::sync::Arc::new(InteractiveCliExecutor::new()),
-        );
-        let execute = conn.as_execute().expect("AgentCliConnector 应支持 Execute");
-        let cx = CallCtx {
-            req: RequestId::new(),
-            timeout: None,
-            cancel: tokio_util::sync::CancellationToken::new(),
+
+    let mut l = Ledger::new();
+    let mut ids: Vec<Option<RunId>> = Vec::with_capacity(worktrees.len());
+    for (idx, dir) in worktrees.iter().enumerate() {
+        let issue = match ctx
+            .new_issue(&format!("--real 真实并行示例活 #{}", idx + 1))
+            .await
+        {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("REAL_RUN_FAILED(第 {} 件建活失败):{e}", idx + 1);
+                ids.push(None);
+                continue;
+            }
         };
-        let spec = ExecSpec {
-            workspace: ws.clone(),
+        let req = StartRun {
+            issue,
+            connector_name: Some(REAL_CONNECTOR_NAME.to_string()),
+            workspace: dir.clone(),
             branch: "main".to_string(),
-            inject: vec![InjectBlock {
+            inject: vec![bw_connector::InjectBlock {
                 label: "demo".to_string(),
                 body: "这是 run_races --real 档的演示注入块,不是真实技能库内容。".to_string(),
             }],
             budget_usd: None,
         };
-        match execute.start(&cx, spec).await {
-            Ok(ok) => {
+        match manager_real.start(req).await {
+            Ok(id) => {
                 println!(
-                    "第 {} 件 start 成功,upstream_session={:?}",
-                    idx + 1,
-                    ok.value.upstream_session
+                    "第 {} 件 start 成功(经 RunManager),运行编号 {id:?}",
+                    idx + 1
                 );
-                tickets.push(Some((conn, ok.value)));
+                ids.push(Some(id));
             }
-            Err(f) => {
+            Err(e) => {
                 eprintln!(
-                    "REAL_RUN_FAILED(第 {} 件 start 阶段,可能是 §10 第 6 条的双重确认对话框、网关抖动或环境问题):{}",
-                    idx + 1,
-                    f.err
+                    "REAL_RUN_FAILED(第 {} 件 RunManager::start 失败,可能是 §10 第 6 条的双重确认对话框、网关抖动或环境问题):{e}",
+                    idx + 1
                 );
-                tickets.push(None);
+                ids.push(None);
             }
         }
     }
 
-    let deadline = Instant::now() + Duration::from_secs(90);
-    let mut finished = vec![false; tickets.len()];
-    while Instant::now() < deadline && finished.iter().any(|f| !f) {
-        for (idx, t) in tickets.iter().enumerate() {
-            if finished[idx] {
-                continue;
-            }
-            let Some((conn, ticket)) = t else {
-                finished[idx] = true;
-                continue;
-            };
-            let execute = conn.as_execute().expect("应支持 Execute");
-            let cx = CallCtx {
-                req: RequestId::new(),
-                timeout: None,
-                cancel: tokio_util::sync::CancellationToken::new(),
-            };
-            if let Ok(ok) = execute.poll(&cx, ticket).await {
-                if let ExecState::Finished { ended, .. } = ok.value {
-                    println!("第 {} 件结束:{ended:?}", idx + 1);
-                    finished[idx] = true;
+    let known_ids: Vec<RunId> = ids.iter().filter_map(|o| *o).collect();
+    l.check(
+        known_ids.len() == worktrees.len(),
+        format!(
+            "运行行数 = {}(design §5.3 第一项,实得 {})",
+            worktrees.len(),
+            known_ids.len()
+        ),
+    );
+
+    // 等每一条离开 Starting——上游会话号在这一步之后才会落库(design
+    // §3.4⑤「只起不等」)。
+    for id in &known_ids {
+        let _ = wait_for_state_left_starting(&ctx.control, *id, Duration::from_secs(15)).await;
+    }
+
+    // 90 秒窗口:轮巡数据库看是否已经关门。如实预期:大概率撞 plan/23
+    // §10 第 6 条,停在 Running,90 秒后仍未关门——那不算这里的断言失
+    // 败(见函数文档),后面统一走 `cancel` 关账。
+    let _ = wait_for_all_closed(&ctx.control, &known_ids, Duration::from_secs(90)).await;
+
+    // design §5.3 第二/三项:上游会话号、工作区路径两两不同。
+    let mut sessions = std::collections::HashSet::new();
+    let mut workspaces = std::collections::HashSet::new();
+    let mut rows_read = 0usize;
+    for id in &known_ids {
+        match ctx.control.get_run(*id).await {
+            Ok(Some(row)) => {
+                rows_read += 1;
+                println!(
+                    "  运行 {id:?}:state={:?} upstream_session={:?} workspace={}",
+                    row.state, row.upstream_session, row.workspace
+                );
+                if !row.upstream_session.is_empty() {
+                    sessions.insert(row.upstream_session.clone());
                 }
+                workspaces.insert(row.workspace.clone());
             }
-        }
-        if finished.iter().any(|f| !f) {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            _ => eprintln!("REAL_RUN_FAILED(读不回运行 {id:?})"),
         }
     }
+    l.check(
+        rows_read == known_ids.len(),
+        format!("{} 条运行行全部可读回(实得 {rows_read})", known_ids.len()),
+    );
+    l.check(
+        sessions.len() == known_ids.len(),
+        format!(
+            "{} 个互不相同的上游会话号(实得 {},claude 真的各自接受了 BW 指派的会话号)",
+            known_ids.len(),
+            sessions.len()
+        ),
+    );
+    l.check(
+        workspaces.len() == known_ids.len(),
+        format!(
+            "{} 个互不相同的工作区路径(实得 {})",
+            known_ids.len(),
+            workspaces.len()
+        ),
+    );
 
-    let mut ok_count = 0usize;
-    for (idx, t) in tickets.iter().enumerate() {
-        if let Some((conn, ticket)) = t {
-            let execute = conn.as_execute().expect("应支持 Execute");
-            let cx = CallCtx {
-                req: RequestId::new(),
-                timeout: None,
-                cancel: tokio_util::sync::CancellationToken::new(),
-            };
-            let _ = execute.cancel(&cx, ticket).await;
-            if let Some(upstream) = &ticket.upstream_session {
-                if let Some(home) = std::env::var_os("HOME") {
-                    let encoded: String = worktrees[idx]
-                        .to_string_lossy()
-                        .chars()
-                        .map(|c| if c == '/' || c == '.' { '-' } else { c })
-                        .collect();
-                    let jsonl = PathBuf::from(home)
-                        .join(".claude")
-                        .join("projects")
-                        .join(encoded)
-                        .join(format!("{upstream}.jsonl"));
-                    let found = std::fs::metadata(&jsonl)
-                        .map(|m| m.len() > 0)
-                        .unwrap_or(false);
-                    println!(
-                        "第 {} 件上游会话文件读回:{} · 存在={found}",
-                        idx + 1,
-                        jsonl.display()
-                    );
-                    if found {
-                        ok_count += 1;
-                    }
-                }
+    // design §5.3 第四项「各结账一次」:逐条经 RunManager 取消(取消口径
+    // 同 R6/主控裁决 #6),让结算真的发生——不管上游会话此刻是停在
+    // Running(§10 第 6 条)还是已经自己跑完。
+    for id in &known_ids {
+        if let Err(e) = manager_real.cancel(*id).await {
+            eprintln!("REAL_RUN_FAILED(取消运行 {id:?} 失败):{e}");
+        }
+    }
+    let _ = wait_for_all_closed(&ctx.control, &known_ids, Duration::from_secs(15)).await;
+
+    let mut settled_count = 0usize;
+    for id in &known_ids {
+        if let Ok(Some(row)) = ctx.control.get_run(*id).await {
+            if row.settled_at.is_some() {
+                settled_count += 1;
             }
         }
     }
+    l.check(
+        settled_count == known_ids.len(),
+        format!(
+            "{} 件各结账一次(design §5.3 第四项,实得 {settled_count})",
+            known_ids.len()
+        ),
+    );
 
-    if ok_count == worktrees.len() {
+    // jsonl 会话文件读回——纯信息性,不计入这一档的判定(如实预期大概
+    // 率受阻于 plan/23 §10 第 6 条的双重确认对话框,这是已登记的已知缺
+    // 口,不是本次改动要补的东西)。
+    let mut jsonl_ok = 0usize;
+    for id in &known_ids {
+        let Ok(Some(row)) = ctx.control.get_run(*id).await else {
+            continue;
+        };
+        if row.upstream_session.is_empty() {
+            continue;
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            let ws = PathBuf::from(&row.workspace);
+            let encoded: String = ws
+                .to_string_lossy()
+                .chars()
+                .map(|c| if c == '/' || c == '.' { '-' } else { c })
+                .collect();
+            let jsonl = PathBuf::from(home)
+                .join(".claude")
+                .join("projects")
+                .join(encoded)
+                .join(format!("{}.jsonl", row.upstream_session));
+            let found = std::fs::metadata(&jsonl)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false);
+            println!("  上游会话文件读回:{} · 存在={found}", jsonl.display());
+            if found {
+                jsonl_ok += 1;
+            }
+        }
+    }
+    if jsonl_ok == known_ids.len() && !known_ids.is_empty() {
         println!(
-            "REAL_RUN_OK:{ok_count}/{} 件真实并行会话产出了非空上游会话文件",
-            worktrees.len()
+            "REAL_RUN_OK:{jsonl_ok}/{} 件真实并行会话产出了非空上游会话文件",
+            known_ids.len()
         );
     } else {
         println!(
-            "REAL_RUN 未全部产出上游会话文件({ok_count}/{}):如实登记为受阻,不影响本档之外的其余断言(不进常绿门禁)",
-            worktrees.len()
+            "REAL_RUN 未全部产出上游会话文件({jsonl_ok}/{}):如实登记为受阻(plan/23 §10 第 6 条),不影响本档 RunManager 读回断言的判定",
+            known_ids.len()
         );
     }
 
     for ws in &worktrees {
         let _ = std::fs::remove_dir_all(ws);
     }
+
+    println!(
+        "--real 档:断言 {} 条,{}",
+        l.count,
+        if l.ok { "全过" } else { "有失败" }
+    );
+    l.ok
 }
