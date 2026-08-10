@@ -9,7 +9,9 @@
 //! 不进 `Executor` 体系——`codehub-cli` 是 VCS 远端 API 客户端(对标 `gh`),
 //! 不是 agent 执行器(对标 `claude`)。两种 shell-out 模式别混。
 
-use crate::upstream::workspace::commit_initial;
+// next 切片五A:`workspace.rs` 移到了 `bw-workspace` crate(design-
+// s5-hexpanel.md §6.2/§9)——只改引用路径,函数体零改写。
+use bw_workspace::commit_initial;
 use std::path::Path;
 use std::process::Stdio;
 use time::Date;
@@ -126,7 +128,7 @@ pub async fn create_issue(
 
 /// `codehub-cli mr create` — the codehub parity of [`crate::github::open_pr`]:
 /// stage + commit + push the run's edits on `bw/issue-<n>` (shared
-/// [`crate::workspace::stage_commit_push`]), then open a merge request from
+/// [`bw_workspace::stage_commit_push`]), then open a merge request from
 /// `bw/issue-<n>` → the project's default branch. The MR body carries
 /// `Closes #<n>` so merging it auto-closes codehub issue `<n>` (GitLab
 /// standard, same role as github's `Closes #<n>`); `--issue-nums issue<n>`
@@ -154,7 +156,7 @@ pub async fn create_mr(
     title: &str,
 ) -> Result<crate::upstream::github::PrOpened, CodehubError> {
     let branch = format!("bw/issue-{issue_number}");
-    crate::upstream::workspace::stage_commit_push(workspace, &branch, issue_number, title)
+    bw_workspace::stage_commit_push(workspace, &branch, issue_number, title)
         .await
         .map_err(|e| CodehubError::Command(format!("git 准备失败:{e}")))?;
     // target-branch = project default, resolved at runtime (see doc comment).
@@ -577,7 +579,7 @@ async fn resolve_personal_namespace_id(
 
 /// `codehub-cli -H <host> project create --name <name> --visibility <vis>
 /// --namespace-id <nsid>` → 取 ssh_url → raw `git clone` → 调
-/// [`crate::workspace::commit_initial`] 写 BW root commit(让
+/// [`bw_workspace::commit_initial`] 写 BW root commit(让
 /// `is_owned_workspace` = true,后续 charter/standards 才会写)。
 ///
 /// 个人 `namespace-id` 由 [`resolve_personal_namespace_id`] 解析;解析不到

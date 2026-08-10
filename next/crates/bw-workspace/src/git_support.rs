@@ -1,21 +1,26 @@
-//! v1 `crates/bw-engine/src/workspace.rs` 的**部分**收编——不是整体搬迁。
-//! 只收了 `github.rs`/`codehub.rs` 真实引用到的四项:`git_in`(内部 git
-//! shell-out 辅助)、`commit_initial`(开仓首提交)、`stage_commit_push`
-//! (活分支 stage+commit+push,`open_pr`/`create_mr` 共用)、`ProvisionError`
-//! (三家共用的错误类型)。这四项**函数体零改写**,一字未动。
+//! 三个 git shell-out 辅助 + 它们共用的错误类型——**从 `bw-connector`
+//! `upstream/workspace.rs` 移过来的单副本**(next 切片五A,
+//! design-s5-hexpanel.md §6.2/§9)。
 //!
-//! v1 原文件另外七项(`provision_git_workspace`/`commit_file`/`write_file`/
-//! `IssueWorktreeGuard`/`provision_issue_worktree`/`is_owned_workspace`/
-//! `FileChange`+`diff_numstat`)未被 `github.rs`/`codehub.rs` 引用,本次
-//! 没有搬(主控裁决 #1:workspace 辅助单副本落这里;这份文件不是那份文件的
-//! 完整拷贝,是它的一个真实被引用子集)。删减清单与核对方式见 next 切片二B
-//! 的 commit 正文与 `task-s2b-report.md`。
+//! **搬迁理由**(不是重新发明):`bw-connector` 的 `github.rs`/`codehub.rs`
+//! 真实引用 `git_in`(内部 git shell-out)/`commit_initial`(开仓首提交)/
+//! `stage_commit_push`(活分支提交并推送)/`ProvisionError`(三家共用的错误
+//! 类型)这四项。它们本身不是「对外连接」——本地 git 读写是内建工作区函数
+//! (design §6.2「为什么它不是连接器」),不该住在连接器 crate 里当「内建函
+//! 数」(那是切片二裁决 #1 留下的命名将就,切片三开放问题 4 已经登记过)。
+//! 现在 `bw-workspace` 有了一个正经的家,`bw-connector` 反过来依赖这个
+//! crate 复用这四项——单副本,不复制。
 //!
-//! 本文件顶部这段说明是新写的(不是"移植"——整体搬迁的 `github.rs`/
-//! `codehub.rs` 保留了 v1 原有的文件头;这份文件因为是选摘,原文件头会
-//! 误导,所以换成准确描述这四项来历的说明)。下面四项各自的文档注释(含
-//! 对已删除项 `provision_git_workspace`/`commit_file` 的引用)是 v1 原文,
-//! 一字未动。
+//! **移植纪律**:函数体一个字不改;唯一动的是可见性(`pub(crate)` → `pub`
+//! ——从「connector crate 内可见」放宽到「对 bw-connector 等外部 crate 可
+//! 见」)与模块路径。这与 next 切片一A「只改引用路径」是同一类改动,
+//! `bw-connector` 侧的移植纪律见其 commit 正文。
+//!
+//! 下面四项各自的文档注释是 v1 原文(`crates/bw-engine/src/workspace.rs`),
+//! 经 `bw-connector` `upstream/workspace.rs` 转手一次,一字未动地转手到这
+//! 里——包括其中对已删除项 `provision_git_workspace`/`commit_file` 的引用
+//! (那两项 v1 有、`bw-connector` 未选摘、`bw-workspace` 也没有;引用原样
+//! 保留是「不改文档注释」这条移植纪律的自然结果,不是新的说明性文字)。
 
 use std::path::Path;
 use std::process::Stdio;
@@ -30,7 +35,7 @@ pub enum ProvisionError {
     Write(String),
 }
 
-pub(crate) async fn git_in(dir: &Path, args: &[&str]) -> Result<(), ProvisionError> {
+pub async fn git_in(dir: &Path, args: &[&str]) -> Result<(), ProvisionError> {
     let output = tokio::process::Command::new("git")
         .current_dir(dir)
         .args(args)
@@ -56,7 +61,7 @@ pub(crate) async fn git_in(dir: &Path, args: &[&str]) -> Result<(), ProvisionErr
 /// authorship on a directory `gh repo create --clone` already initialized
 /// (the `.git`-exists early return above doesn't apply there — the repo is
 /// real but has zero commits yet).
-pub(crate) async fn commit_initial(
+pub async fn commit_initial(
     dir: &Path,
     readme_title: &str,
     readme_body: &str,
@@ -93,7 +98,7 @@ pub(crate) async fn commit_initial(
 /// pre-existing gap, left untouched here). The commit is authored as the
 /// workbench; `issue_number` + `title` form its message (`issue #<n>:
 /// <title>`). Never merges — opening the PR/MR is the caller's next step.
-pub(crate) async fn stage_commit_push(
+pub async fn stage_commit_push(
     workspace: &Path,
     branch: &str,
     issue_number: u32,

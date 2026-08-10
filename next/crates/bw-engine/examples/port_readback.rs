@@ -8,8 +8,11 @@
 //!    「Done 唯一入边是 InReview」断言成立。
 //! 3. 信号派生链(`bw_core::derive`)——无观测→Unknown、有新鲜观测→非
 //!    Unknown 两个场景,均只经密封类型的合法公开入口构造。
-//! 4. `.bw/metrics.toml` 正本解析(`bw_engine::metrics_file`)——内嵌样例文本
-//!    落一份临时文件,过解析器读出北极星/滞后/引领字段。
+//! 4. `.bw/metrics.toml` 正本解析(`bw_workspace::metrics_file`)——内嵌样例
+//!    文本落一份临时文件,过解析器读出北极星/滞后/引领字段。**next 切片
+//!    五A**:这个模块换落点到了 `bw-workspace`(design-s5-hexpanel.md
+//!    §6.2/§9),`bw-engine` 反过来依赖它复用——本文件这一处 `use` 是这条
+//!    复用唯一的调用点,其余三节验的仍是 `bw-core`/`bw-engine` 自己的行为。
 //!
 //! 跑法:`cd next && cargo run -p bw-engine --example port_readback`
 //! 退出码 0 且末行 `PORT_READBACK_OK` = 全部断言通过。
@@ -17,7 +20,7 @@
 
 use bw_core::derive::{evaluate_metric, measure, parse_target, Measurement};
 use bw_core::{Cadence, IssueStatus, Signal, SourceKind, StageKind};
-use bw_engine::metrics_file;
+use bw_workspace::metrics_file;
 use std::process::ExitCode;
 use time::OffsetDateTime;
 
@@ -195,8 +198,9 @@ fn section_signal_derivation() -> bool {
 }
 
 /// `.bw/metrics.toml` 正本解析(第 4 件事)——把内嵌样例落一份临时工作区文
-/// 件,过 `bw_engine::metrics_file::read` 真实解析,打印北极星/滞后/引领各
-/// 条的 name/kind/collect 字段,证明正本管道随迁可用。
+/// 件,过 `bw_workspace::metrics_file::read` 真实解析(next 切片五A 换落点
+/// 前是 `bw_engine::metrics_file::read`),打印北极星/滞后/引领各条的
+/// name/kind/collect 字段,证明正本管道随迁可用。
 fn section_metrics_file() -> bool {
     println!("== 指标正本解析 ==");
 

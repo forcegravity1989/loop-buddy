@@ -12,6 +12,12 @@ TARGETS=(
   next/crates/bw-core/src
   next/crates/bw-app/src
 )
+# next 切片五A(design-s5-hexpanel.md §10.1 第 3 条):`bw-workspace` **不**
+# 加进 TARGETS——它的整个存在理由就是起 git 进程(造工作树、git 辅助),
+# 和 `bw-engine`(PTY/agentcli 子进程)、`bw-connector`(`gh`/`codehub-cli`
+# shell-out)是同一类豁免:这三个 crate 干的活本身就是「对外/对本地环境
+# 做真实操作」,门禁只锁住不该起进程的那两层(内核、编排层)。这是一次
+# 显式核实过的豁免,不是漏查——如实留痕在这里,别被后来者当成疏漏补上。
 # 放宽到 `std::process`(不只 `::Command`)—— `std::process::exit`、
 # `use std::process as p` 之类的旁路同样绕过了连接器接口,原来只锁
 # `std::process::Command` 会漏掉这些。

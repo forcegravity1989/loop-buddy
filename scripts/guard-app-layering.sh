@@ -9,6 +9,12 @@
 #    不见 `ExecState`/`ExecTicket` 这些协议类型,想在存储层写一句「如果执
 #    行状态是 X 就把活推到 Y」都写不出来。
 #
+# next 切片五A 加两条边(design-s5-hexpanel.md §6.2/§10.1 第 2 条):
+# 3. `bw-workspace`(本地工作区能力)不准依赖 `bw-connector`——方向单一,
+#    连接器反过来依赖它(复用三个 git 辅助),不能反过来。
+# 4. `bw-workspace` 不准依赖 `bw-app`(编排层)——它是被编排层调用的一层,
+#    不能反过来依赖编排层,否则会形成环。
+#
 # 评审 Important-3 实测:早期版本用 `awk` 截取 manifest `[dependencies]`
 # 小节原文再 grep,能查出朴素的 `crate = { path = … }` 一行式违规,但被
 # 两种同样合法的 TOML 写法完全绕过——`[dependencies.bw-engine]` 表头形
@@ -61,12 +67,16 @@ check_absent_from_graph() {
 
 check_absent_from_graph "next" "bw-app" "bw-engine" "bw-app(编排层)"
 check_absent_from_graph "next" "bw-store" "bw-connector" "bw-store(存储层)"
+check_absent_from_graph "next" "bw-workspace" "bw-connector" "bw-workspace(本地工作区能力)"
+check_absent_from_graph "next" "bw-workspace" "bw-app" "bw-workspace(本地工作区能力)"
 
 if [ "$fail" -ne 0 ]; then
   echo
   echo "编排层不准正式依赖引擎(PTY 等原生依赖不该渗进来);存储层不准正式"
   echo "依赖连接器(看不见协议类型,长不出业务判断)——见"
-  echo "design-s4-runmanager.md §1.2 / §2.1。"
+  echo "design-s4-runmanager.md §1.2 / §2.1。工作区 crate 不准依赖连接器/"
+  echo "编排层——方向单一,谁都能依赖它,它谁也不依赖——见"
+  echo "design-s5-hexpanel.md §6.2 / §10.1 第 2 条。"
   exit 1
 fi
 

@@ -2,7 +2,10 @@
 //! subprocess pattern `workspace.rs` uses for local git. Relies entirely on
 //! the user's own `gh auth login` on this machine; no token handling here.
 
-use crate::upstream::workspace::{commit_initial, git_in, stage_commit_push};
+// next 切片五A:`workspace.rs` 移到了 `bw-workspace` crate(design-
+// s5-hexpanel.md §6.2/§9)——这一行是「只改引用路径」的移植纪律的应用,
+// 三个函数本身零改写。
+use bw_workspace::{commit_initial, git_in, stage_commit_push};
 use std::path::Path;
 use std::process::Stdio;
 use time::Date;
@@ -401,7 +404,7 @@ pub fn issue_branch(github_number: u32) -> String {
     format!("bw/issue-{github_number}")
 }
 
-fn git_err(prefix: &str, e: crate::upstream::workspace::ProvisionError) -> GithubError {
+fn git_err(prefix: &str, e: bw_workspace::ProvisionError) -> GithubError {
     GithubError::Command(format!("{prefix}:{e}"))
 }
 

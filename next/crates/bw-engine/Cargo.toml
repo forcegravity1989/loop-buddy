@@ -1,6 +1,6 @@
 [package]
 name = "bw-engine"
-description = "Migrated from v1: four organs (evidence gathering / metrics-file-of-record parsing / terminal session management / interactive CLI). The Executor contract and MockExecutor are not yet ported; later slices will bring them over as needed."
+description = "Migrated from v1: terminal session management / interactive CLI / PTY backend / agentcli. Evidence gathering and metrics-file-of-record parsing moved out to bw-workspace in next 切片五A (design-s5-hexpanel.md §6) — this crate now depends on bw-workspace to reuse them. The Executor contract and MockExecutor are not yet ported; later slices will bring them over as needed."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -16,10 +16,14 @@ bw-core = { path = "../bw-core" }
 # feature 门后面),gh/codehub/script 三家适配器 feature 用不上,不蹭它们的
 # 默认打开。
 bw-connector = { path = "../bw-connector", default-features = false }
+# next 切片五A:`evidence`/`metrics_file` 换落点到这里之后,`bw-engine`
+# 反过来依赖它复用(`examples/port_readback.rs` 是这条复用唯一的调用点;
+# `evidence` 本身在 `bw-engine` 里此前就是零消费者,搬走后这里也不再有
+# 谁调它)。`scripts/guard-app-layering.sh` 新增的两条边守的是「`bw-workspace`
+# 不准依赖 `bw-connector`/`bw-app`」这个方向,不禁止别人依赖它。
+bw-workspace = { path = "../bw-workspace" }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
-serde = { workspace = true }
-toml = { workspace = true }
 tokio = { workspace = true }
 # next 切片三D:`agentcli::connector::AgentCliConnector::start` 首启要给会话
 # 自己指派一个 uuid(`--session-id`,design §2.1)。workspace 的 `uuid` 默认

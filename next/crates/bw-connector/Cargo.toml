@@ -8,17 +8,26 @@ rust-version.workspace = true
 
 [features]
 default = ["gh", "codehub", "script"]
-# 仓连接器:gh(GitHub CLI)。骨架阶段这个 feature 只打开
-# `adapters::gh` 占位模块,不含实现。
-gh = []
-# 仓连接器:codehub-cli(内源)。同上,骨架阶段只占位。
-codehub = []
+# 仓连接器:gh(GitHub CLI)。真实收编后依赖 `upstream::workspace`
+# (next 切片五A 换落点到 `bw-workspace`)的三个 git 辅助——
+# `dep:bw-workspace` 只在这两家仓连接器需要时才拉进来,`script`/
+# `--no-default-features` 不蹭这条依赖。
+gh = ["dep:bw-workspace"]
+# 仓连接器:codehub-cli(内源)。同上,`upstream::github`/`upstream::codehub`
+# 共用同一份 git 辅助。
+codehub = ["dep:bw-workspace"]
 # 采集连接器:项目仓里的采集脚本(`.bw/connectors.toml` 正本)。
 # 唯一需要额外依赖的一家 —— 解析 toml 正本要 `toml` crate。
 script = ["dep:toml"]
 
 [dependencies]
 bw-core = { path = "../bw-core" }
+# next 切片五A:`upstream/workspace.rs`(git_in/commit_initial/
+# stage_commit_push/ProvisionError)换落点到 `bw-workspace`(design-
+# s5-hexpanel.md §6.2/§9)——`github.rs`/`codehub.rs` 反过来依赖这里复用,
+# 只在 `gh`/`codehub` 两家真实收编的仓连接器需要时才拉进来(见上面
+# `[features]`)。
+bw-workspace = { path = "../bw-workspace", optional = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 # 切片二A 曾因「骨架阶段没代码用它」删掉(只留 serde_json)。切片二B 收编

@@ -4,15 +4,17 @@
 //!
 //! `github.rs`/`codehub.rs` 是 v1 `crates/bw-engine/src/{github,codehub}.rs`
 //! 的整体搬迁(逐字节内容不变,只改了 `use crate::workspace::…` 这一类路径)。
-//! `workspace.rs` **不是**整体搬迁——它只收了被这两个文件真实引用到的四项
-//! (`git_in`/`commit_initial`/`stage_commit_push`/`ProvisionError`),v1
-//! 原文件里另外七项(`provision_git_workspace`/`commit_file`/`write_file`/
-//! `IssueWorktreeGuard`/`provision_issue_worktree`/`is_owned_workspace`/
-//! `FileChange`+`diff_numstat`)没被引用,没有搬(主控裁决 #1:workspace 辅助
-//! 落这里,单副本;移植清单见 next 切片二B 的 commit 正文)。
-
-#[cfg(any(feature = "gh", feature = "codehub"))]
-pub mod workspace;
+//!
+//! **next 切片五A**:曾经住在这里的 `workspace.rs`(`git_in`/
+//! `commit_initial`/`stage_commit_push`/`ProvisionError` 四项,v1 原文件
+//! 十一项里被 `github.rs`/`codehub.rs` 真实引用到的子集,切片二B 收编)已
+//! **移**到 `bw-workspace` crate 去(design-s5-hexpanel.md §6.2/§9:它们不
+//! 是「对外连接」,本地 git 读写是内建工作区函数,不该住在连接器 crate 里
+//! 当「内建函数」——那是切片二裁决 #1 留下的命名将就,切片三开放问题 4
+//! 已经登记过)。`github.rs`/`codehub.rs` 的 `use` 路径已改指向
+//! `bw_workspace::{…}`;`bw-connector` 因此反过来依赖 `bw-workspace`(见
+//! `Cargo.toml`,`gh`/`codehub` 两个 feature 门下)。单副本,不复制——这
+//! 里不再有一份自己的拷贝。
 
 // v1 `codehub.rs` 的 `create_mr` 直接复用 `github::PrOpened`(其自身 doc
 // comment 明说是「P7-7A parity」——created-vs-adopted 这套判定是两家共用的

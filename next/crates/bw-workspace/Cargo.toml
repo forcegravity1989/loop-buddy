@@ -1,0 +1,22 @@
+[package]
+name = "bw-workspace"
+description = "next 切片五A:本地工作区能力(造工作树 / git 辅助 / 工作区采证 / 项目正本文件解析)独立成一个正经的家——清偿 plan/23 §10 第 7 条(工作区供给没落点)与切片三开放问题 4(命名将就)。design-s5-hexpanel.md §6:它不是对外连接,所以不是连接器;它要被编排层直接调用,所以不能住在编排层依赖不到的引擎 crate 里。方向单一:谁都可以依赖它,它谁也不依赖(不依赖 bw-connector / bw-app)。"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+# workspace 顶层的 `tokio` 已经带 `process`(见 next/Cargo.toml `[workspace.
+# dependencies]` 注释)——这四件事(git shell-out / worktree 供给)全靠它,
+# 不需要额外开 feature。
+tokio = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+# `examples/provision_readback.rs` 要自己造临时目录名——同 `bw-store`
+# `examples/store_guards.rs`/`bw-app` `examples/run_races.rs` 同款先例:
+# uuid v4 命名,PID 会被系统复用,uuid 不会。
+uuid = { workspace = true, features = ["v4"] }

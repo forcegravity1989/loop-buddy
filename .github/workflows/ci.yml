@@ -76,17 +76,33 @@ jobs:
       - name: wasm32 keepalive (bw-core)
         run: cd next && cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features
 
+      # next 切片五A:本地工作区能力独立成 crate(design-s5-hexpanel.md
+      # §6)——`cargo check --workspace` 已经覆盖它,这一步单独点名是为了
+      # 让「这个 crate 能独立编译」这件事在 CI 输出里可见,不只是隐含在
+      # 全量检查里。
+      - name: bw-workspace 独立编译
+        run: cd next && cargo check -p bw-workspace
+
       - name: 编排层/内核不准直接进程调用
         run: ./scripts/guard-no-direct-process.sh
 
       # next 切片四A:编排层(bw-app)不准正式依赖引擎、存储层(bw-store)
-      # 不准正式依赖连接器——两条都只查 manifest 的 [dependencies] 节
-      # (design-s4-runmanager.md §1.2/§2.1/§8)。
-      - name: 编排层/存储层分层守卫
+      # 不准正式依赖连接器——两条都查解析后的真实依赖图
+      # (design-s4-runmanager.md §1.2/§2.1/§8)。next 切片五A 加两条边:
+      # 工作区 crate(bw-workspace)不准依赖连接器/编排层——方向单一,谁都
+      # 能依赖它,它谁也不依赖(design-s5-hexpanel.md §6.2/§10.1 第 2 条)。
+      - name: 编排层/存储层/工作区分层守卫
         run: ./scripts/guard-app-layering.sh
 
       - name: 行为读回指挥器(bw-engine port_readback)
         run: cd next && cargo run -p bw-engine --example port_readback
+
+      # next 切片五A:造工作树 + 采证 + 读项目正本换落点到 bw-workspace 之
+      # 后,「A 自己要真跑一遍」(design-s5-hexpanel.md §10.2)——真
+      # `git init`+真首提交+真 `git worktree add`,读回路径存在/分支对/
+      # 幂等复用不产生第二棵工作树。末行 PROVISION_READBACK_OK。
+      - name: 工作区供给行为读回指挥器(bw-workspace provision_readback)
+        run: cd next && cargo run -p bw-workspace --example provision_readback
 
       # next 切片三-1 修(评审顺手一并 #9):PTY 后端接缝的本机烟测——起
       # 一个普通 shell 探针(不依赖 claude/网关),验证双向字节 + resize +

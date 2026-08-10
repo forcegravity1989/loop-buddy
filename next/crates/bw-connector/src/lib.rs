@@ -15,7 +15,9 @@
 //! `upstream/` 是搬过来的 v1 原文,除 `use` 路径修正外零改写——「这里面的
 //! 东西不归你改,要改去上游 CLI 或去 `adapters/` 层」(design §1)。
 //!
-//! 依赖方向:`bw-connector → bw-core`,单向,不依赖 `bw-engine`。
+//! 依赖方向:`bw-connector → bw-core`,单向,不依赖 `bw-engine`。next 切片
+//! 五A 起还有 `bw-connector → bw-workspace`(`gh`/`codehub` 两个 feature 门
+//! 下,复用换落点过去的三个 git 辅助——design-s5-hexpanel.md §6.2)。
 
 pub mod adapters;
 pub mod caps;

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/bw-core",
+    "crates/bw-workspace",
     "crates/bw-engine",
     "crates/bw-connector",
     "crates/bw-store",
