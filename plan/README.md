@@ -8,7 +8,8 @@
 
 | 文件 | 是什么 |
 |---|---|
-| [22-vnext-opc-control-plane-rebuild.md](22-vnext-opc-control-plane-rebuild.md) | **vNext 单一计划事实源**：把 Bench 重建为以 Rust 为主体、通过 Connector 组合成熟组件的 OPC 项目控制面。新实现先读这一篇。 |
+| [23-opc-stitching-rebuild.md](23-opc-stitching-rebuild.md) | **vNext 现行执行计划**:OPC 六段总控 + CLI 连接器 + agentcli 层;重头建 `next/` 工程——骨架新建、已验证模块整体移植(v1 终端栈是最大移植来源)。动工先读这一篇。 |
+| [22-vnext-opc-control-plane-rebuild.md](22-vnext-opc-control-plane-rebuild.md) | codex 重建原案 + 代码审计。诊断与产品框架(OPC、六段链)经核验采纳;执行方式被 23 修订(顶部有横幅)。 |
 
 ## 旧应用仍作数的事实源
 
