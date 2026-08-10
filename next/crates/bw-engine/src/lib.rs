@@ -28,4 +28,7 @@ pub mod evidence;
 #[allow(dead_code)]
 pub mod interactive_cli;
 pub mod metrics_file;
+// PTY 平台接缝(next 切片三B,从 `interactive_cli.rs` 的 `run_skill_pty`
+// 提取)。见模块文档:Windows 实现整段搬运,Unix 实现是本片新写。
+pub mod pty_backend;
 pub mod terminal_manager;

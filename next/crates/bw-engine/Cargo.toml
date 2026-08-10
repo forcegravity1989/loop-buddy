@@ -15,11 +15,17 @@ toml = { workspace = true }
 tokio = { workspace = true }
 
 # V1 Issue2 W2: Windows uses conpty-oxide (correctness-first ConPTY impl) for
-# in-app PTY terminal embedding. Non-Windows has no run_skill_pty override
-# (falls back to the InteractiveExecutor trait default — PTY not supported,
-# caller uses run_skill), so no non-Windows PTY dep is needed here.
+# in-app PTY terminal embedding. Wired into `pty_backend::windows` (next 切片
+# 三B PTY 平台接缝提取)——函数体整段搬自这里原来的 `run_skill_pty` Windows
+# override,零逻辑改写。
 [target.'cfg(windows)'.dependencies]
 conpty-oxide = "0.1"
+
+# next 切片三B(主控裁决 #2:本机 macOS 是部署机,必须能真跑):Unix PTY
+# 后端新写用 `portable-pty`——成熟上游库,选型优先于自建。装进
+# `pty_backend::unix`,只在 unix 目标上编译,不影响 Windows 产物依赖面。
+[target.'cfg(unix)'.dependencies]
+portable-pty = "0.9"
 
 [dev-dependencies]
 # next 切片一C `examples/port_readback.rs` 需要直接构造 `OffsetDateTime` 喂给

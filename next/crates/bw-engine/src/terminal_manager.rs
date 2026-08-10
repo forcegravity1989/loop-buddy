@@ -71,9 +71,10 @@ pub struct TerminalSession {
 
 /// 集中模块:多会话终端管理器。
 ///
-/// 不碰 dioxus/tauri/wry(过 `guard-kernel-ui-free.sh`)。Windows PTY 本体仍
-/// 在 `InteractiveCliExecutor::run_skill_pty`;本模块管身份、channel、缓冲、
-/// 尺寸。Unix adapter 后续按 PtyBackend seam 补(本阶段不实现)。
+/// 不碰 dioxus/tauri/wry(过 `guard-kernel-ui-free.sh`)。PTY 本体在
+/// `InteractiveCliExecutor::run_skill_pty` 经 [`crate::pty_backend`] 接缝分
+/// 派到平台实现(Windows: conpty-oxide;Unix: portable-pty,next 切片三B
+/// 补齐);本模块管身份、channel、缓冲、尺寸,不关心平台细节。
 #[derive(Default)]
 pub struct TerminalManager {
     sessions: HashMap<ConversationId, TerminalSession>,
