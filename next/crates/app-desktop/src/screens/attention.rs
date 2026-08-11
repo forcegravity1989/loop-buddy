@@ -18,6 +18,7 @@ use bw_core::IssueId;
 use dioxus::prelude::*;
 
 use crate::kernel::Vm;
+use crate::screens::{run_end_summary, short_session};
 use crate::theme;
 
 #[component]
@@ -72,9 +73,11 @@ fn UnsettledSection(a: AttentionView) -> Element {
                 for r in a.unsettled_runs {
                     {item_row(
                         format!(
-                            "运行 {} · {:?} · 结束但未结算",
+                            "运行 {} · {:?} · 结束但未结算 · 会话 {} · {}",
                             r.id.uuid().to_string().chars().take(8).collect::<String>(),
                             r.state,
+                            short_session(&r.upstream_session),
+                            run_end_summary(&r),
                         ),
                         theme::signal_color(bw_core::Signal::Amber),
                     )}
@@ -124,9 +127,11 @@ fn StalledSection(a: AttentionView) -> Element {
                 for r in a.stalled_runs {
                     {item_row(
                         format!(
-                            "运行 {} · {:?} · 没有更晚的运行接手",
+                            "运行 {} · {:?} · 没有更晚的运行接手 · 会话 {} · {}",
                             r.id.uuid().to_string().chars().take(8).collect::<String>(),
                             r.state,
+                            short_session(&r.upstream_session),
+                            run_end_summary(&r),
                         ),
                         theme::signal_color(bw_core::Signal::Red),
                     )}

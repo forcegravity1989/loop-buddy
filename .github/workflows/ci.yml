@@ -203,3 +203,23 @@ jobs:
       # 绿。末行 IMPORT_LEGACY_OK。
       - name: 一次性导入器行为读回指挥器(bw-app import_legacy)
         run: cd next && cargo run -p bw-app --example import_legacy
+
+      # 切片七-2 修复轮(design-s7-real-project.md §8.1 门禁增量,
+      # task-s7b-review.md Important-1,主控裁决,2026-08-11):开工闭环
+      # 指挥器(`bw-app/examples/issue_kickoff.rs`)接进常绿门禁——commit
+      # `be3092b` 正文写着「进常绿门禁」,但 next-gates 当时其实一行都没
+      # 接,这份指挥器只在人手上跑过;`task-s7b-report.md`「修复轮」一节
+      # 已经把这处 overclaim 更正留痕,这一步是把那句话补成真的。指挥器
+      # 十段(含本轮新增 K1b:项目配了检出根、但根目录不是 git 仓库,
+      # `provision_issue_worktree` 如实报 `WorktreeProvision`、错误原文非
+      # 空、一条运行行都不会落库;K6:停在进行中、没有活着的运行的活可
+      # 以重新开工,评审 Important-3 死角修复的行为自证)全部确定性——执
+      # 行连接器是脚本化 mock(自我标注),但工作树是**真实** git 检
+      # 出,真的跑 `git init` + `git worktree add`,不依赖网关。它的正
+      # 式依赖(`bw-app`
+      # [dependencies])里没有 `bw-engine`/dioxus,`bw-connector` 是这份指
+      # 挥器唯一用到的连接器契约 crate——与 `import_legacy` 那一步同一条
+      # 理由,这一步不会触发 app-desktop 的任何一行编译。可常绿。末行
+      # ISSUE_KICKOFF_OK。
+      - name: 开工闭环行为读回指挥器(bw-app issue_kickoff)
+        run: cd next && cargo run -p bw-app --example issue_kickoff

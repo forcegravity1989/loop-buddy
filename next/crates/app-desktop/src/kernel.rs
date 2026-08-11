@@ -69,7 +69,7 @@ use bw_app::view::hex::LoopInputs;
 use bw_app::view::{AttentionView, HexView};
 use bw_app::{App, Command};
 use bw_connector::{ConfigRef, ConnectorEntry, ConnectorKind, ConnectorRegistry, ProjectBinding};
-use bw_core::{ConnectorId, IssueId, IssueStatus, ProjectId, RunId};
+use bw_core::{ConnectorId, IssueId, ProjectId, RunId};
 use bw_engine::agentcli::AgentCliConnector;
 use bw_engine::interactive_cli::{InteractiveCliExecutor, CLAUDE};
 use bw_store::{IssueRow, IssueStore, ProjectRow, RunStore};
@@ -156,11 +156,13 @@ pub struct Vm {
     /// 新增查询。
     pub open_runs: Vec<bw_store::RunRow>,
     /// next 切片七D(design-s7-real-project.md §1「壳的活卡加『开工』
-    /// 『取消』」)——能点「开工」的活(状态待办池/待办,`RunManager::
-    /// start` 允许开工的前两档;「进行中」那一档已经在 `open_runs`
-    /// 里,不重复列)。真实查询(`bw_store::IssueStore::
-    /// list_issues_by_status`,`hex`/`attention` 两屏已有的同一条读
-    /// 法),不是壳自己拼 SQL。
+    /// 『取消』」)——能点「开工」的活。**next 切片七-2 修**(评审
+    /// `task-s7b-review.md` Important-3):此前这里自己按状态查两档
+    /// (待办池/待办)、漏了「进行中且没有一条活着的运行」这一档——那是
+    /// `RunManager::start` 的业务判据,不该在壳里抄一份还抄漏。判据现
+    /// 在唯一住在 `bw_app::view::hex::LoopSegment::startable_issues`
+    /// (该字段文档细说判据与这次修复的死角),这里只是原样拷贝那份已经
+    /// 算好的字段,不再自己查库、不再自己判断——壳零业务判断。
     pub startable_issues: Vec<IssueRow>,
 }
 
@@ -408,22 +410,12 @@ async fn build_vm(app: &App, manager: &RunManager, nav: &Nav) -> Vm {
         .filter(|r| r.ended_at.is_none())
         .cloned()
         .collect();
-    // next 切片七D:能点「开工」的活——待办池 + 待办两档(design §1「壳
-    // 的活卡加『开工』」),两次真实查询(同 `list_issues_by_status` 既有
-    // 读法,`Command::TransitionIssue`/`hex`/`attention` 已经在用同一个
-    // 方法),不是壳自己拼合法性判断。
-    let mut startable = app
-        .store
-        .list_issues_by_status(Some(pid), IssueStatus::Backlog)
-        .await
-        .unwrap_or_default();
-    startable.extend(
-        app.store
-            .list_issues_by_status(Some(pid), IssueStatus::Todo)
-            .await
-            .unwrap_or_default(),
-    );
-    vm.startable_issues = startable;
+    // next 切片七-2 修(评审 task-s7b-review.md Important-3):不再自己查
+    // 库、自己判断「哪些活能开工」——那条业务规则唯一住在
+    // `bw_app::view::hex::LoopSegment::startable_issues`(判据与漏掉「进
+    // 行中」这一档的修复说明见该字段文档),这里只是把 `hex` 已经算好的
+    // 字段原样拷一份,壳零业务判断。
+    vm.startable_issues = hex.loop_segment.startable_issues.clone();
     vm.hex = Some(hex);
     vm.attention = Some(attention);
     vm

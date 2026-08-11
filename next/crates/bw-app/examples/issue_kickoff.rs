@@ -10,14 +10,19 @@
 //! 用例调用到,不是重新证明它自己已经证过的东西(那是
 //! `provision_readback.rs` 的事)。
 //!
-//! 八段:K1(项目没配检出根,如实拒绝,一条运行行都没有)/ K2(配了检出
-//! 根,工作树真的造出来 + 运行行落库 + 路径/分支吻合 + 活推进行中,结
-//! 束后依旧进行中)/ K2b(`BW_WORKSPACES` 深链变量的第一个真实消费者——
-//! 相对 `root_path` 接 `workspaces_root` 解析成绝对路径)/ K3(同一件活
-//! 再点一次开工,如实拒绝并给出已有运行编号)/ K4(连接器零条/多条,如
-//! 实报,不取第一条)/ K5(取消,结束事实=取消,结账一次;再取消,幂
-//! 等不改字段)/ K7(事件广播真的收到,订阅端断言)/ K8(晚到消息不复
-//! 活,复用 `run_races.rs` R3 的抖动扫窗形状,规模缩小、轮询节奏调快)。
+//! 十段:K1(项目没配检出根,如实拒绝,一条运行行都没有)/ K1b(项目配
+//! 了检出根,但根目录不是 git 仓库——`provision_issue_worktree` 如实报
+//! `WorktreeProvision`,错误原文非空,一条运行行都没有;评审
+//! `task-s7b-review.md` Important-2 点名的断言覆盖缺口,本轮补上)/ K2
+//! (配了检出根,工作树真的造出来 + 运行行落库 + 路径/分支吻合 + 活推
+//! 进行中,结束后依旧进行中)/ K2b(`BW_WORKSPACES` 深链变量的第一个真
+//! 实消费者——相对 `root_path` 接 `workspaces_root` 解析成绝对路径)/
+//! K3(同一件活再点一次开工,如实拒绝并给出已有运行编号)/ K4(连接器
+//! 零条/多条,如实报,不取第一条)/ K5(取消,结束事实=取消,结账一
+//! 次;再取消,幂等不改字段)/ K6(停在进行中、没有活着的运行的活可以
+//! 重新开工——评审 Important-3「进行中无活运行」死角修复的行为自证)/
+//! K7(事件广播真的收到,订阅端断言)/ K8(晚到消息不复活,复用
+//! `run_races.rs` R3 的抖动扫窗形状,规模缩小、轮询节奏调快)。
 //!
 //! 跑法:
 //! ```text
@@ -414,6 +419,25 @@ async fn main() -> ExitCode {
     // ── 项目们 ──────────────────────────────────────────────────────
     let project_no_root = new_project(&control, "K1 · 无检出根项目(合成)", "").await;
 
+    // K1b(评审 task-s7b-review.md Important-2):检出根**存在**、但不是
+    // 一个 git 仓库——只造目录,刻意不 `git init`。`run_issue` 走完①(检
+    // 出根非空,不会被 K1 那条判断拦下)之后,②`provision_issue_worktree`
+    // 应该在这里真的失败。此前 issue_kickoff 的五个合成项目要么没有检出
+    // 根(K1 在上一步就被拦下)、要么是真 git 仓库,没有一档能让工作树
+    // 供给真的失败——这一档补上那个空档。
+    let main_not_git = scratch.join("project-not-git");
+    if std::fs::create_dir_all(&main_not_git).is_err() {
+        eprintln!("ASSERT FAILED: 造 project-not-git 的目录失败");
+        eprintln!("ISSUE_KICKOFF_FAILED");
+        return ExitCode::FAILURE;
+    }
+    let project_not_git = new_project(
+        &control,
+        "K1b · 检出根不是 git 仓库项目(合成)",
+        &main_not_git.display().to_string(),
+    )
+    .await;
+
     let main_a = scratch.join("project-a");
     if !init_main_checkout(&main_a) {
         eprintln!("ASSERT FAILED: 造 project-a 的真实主检出失败(检查本机是否装了 git)");
@@ -573,6 +597,10 @@ async fn main() -> ExitCode {
     total.merge(section_k1(&ctx, project_no_root).await);
     println!();
 
+    println!("== K1b · 检出根存在但不是 git 仓库 → WorktreeProvision 如实拒绝,错误原文非空,一条运行行都没有 ==");
+    total.merge(section_k1b(&ctx, project_not_git).await);
+    println!();
+
     println!("== K2 · 配了检出根 → 工作树真的造出来 + 运行行落库 + 路径/分支吻合 + 活推进行中(结束后依旧进行中)==");
     total.merge(section_k2(&ctx, project_a, &main_a, &mock_a).await);
     println!();
@@ -591,6 +619,10 @@ async fn main() -> ExitCode {
 
     println!("== K5 · 取消 → 结束事实=取消,结账一次;再取消 → 幂等不改字段 ==");
     total.merge(section_k5(&ctx, project_a, &mock_a).await);
+    println!();
+
+    println!("== K6 · 停在进行中、没有活着的运行的活 → 可以重新开工(评审 Important-3 死角修复)==");
+    total.merge(section_k6(&ctx, project_a, &mock_a).await);
     println!();
 
     println!("== K7 · 事件广播真的收到(订阅端断言)==");
@@ -655,6 +687,52 @@ async fn section_k1(ctx: &Ctx, project_no_root: ProjectId) -> Ledger {
     l.check(
         runs.is_empty(),
         format!("K1:一条运行行都没有(实得 {} 条)", runs.len()),
+    );
+    l
+}
+
+// ─────────────────────────────── K1b ──────────────────────────────
+// 评审 task-s7b-review.md Important-2:此前把「造工作树失败 → `?`」改成
+// 「失败就回落主检出继续开工」这样一处突变,83 条断言仍然全绿——指挥器
+// 里没有任何一档能让 `bw_workspace::provision::provision_issue_worktree`
+// 真的失败。这一段补上:检出根**存在**,但不是 git 仓库。
+
+async fn section_k1b(ctx: &Ctx, project_not_git: ProjectId) -> Ledger {
+    let mut l = Ledger::new();
+    let (issue, _n) = match ctx.new_issue(project_not_git, "K1b 示例活").await {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("K1b 建活失败:{e}"));
+            return l;
+        }
+    };
+    let result = run_issue(
+        &ctx.control,
+        &ctx.manager,
+        &ctx.workspaces_root,
+        issue,
+        None,
+    )
+    .await;
+    match result {
+        Err(AppError::WorktreeProvision(detail)) => {
+            l.check(
+                !detail.trim().is_empty(),
+                format!("K1b:拒绝原因是 WorktreeProvision,错误原文非空(实得 {detail:?})"),
+            );
+        }
+        other => {
+            l.fail(format!("K1b:应该被 WorktreeProvision 拒绝,实得 {other:?}"));
+        }
+    }
+    let runs = ctx
+        .control
+        .list_runs(Some(project_not_git))
+        .await
+        .unwrap_or_default();
+    l.check(
+        runs.is_empty(),
+        format!("K1b:一条运行行都没有(实得 {} 条)", runs.len()),
     );
     l
 }
@@ -1036,6 +1114,101 @@ async fn section_k5(ctx: &Ctx, project: ProjectId, mock: &Arc<KickoffExec>) -> L
         "K5:再取消一次,字段逐字节不变(幂等,不是又结了一次账)",
     );
 
+    l
+}
+
+// ─────────────────────────────── K6 ───────────────────────────────
+// next 切片七-2 修(design-s7-real-project.md §1「壳的活卡加『开工』」,
+// 评审 task-s7b-review.md Important-3「进行中无活运行」的死角):这一段
+// 补的是**行为**自证——`view::hex::LoopSegment::startable_issues`(壳现
+// 在从这里读)算得对不对,靠 `hex_readback.rs` §8 的正反各验一次钉住;
+// 这里钉的是更底层那句话是不是真的——一件活跑完一次、状态仍是「进行
+// 中」、没有一条活着的运行时,`run_issue` 真的能再成功一次(不是界面
+// 上摆了个按钮,点下去才发现开工用例自己拒绝)。
+
+async fn section_k6(ctx: &Ctx, project: ProjectId, mock: &Arc<KickoffExec>) -> Ledger {
+    let mut l = Ledger::new();
+    let (issue, number) = match ctx.new_issue(project, "K6 示例活(进行中重开工)").await {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("K6 建活失败:{e}"));
+            return l;
+        }
+    };
+    let branch = bw_workspace::provision::issue_branch(number as u32);
+    mock.set_script(
+        branch.clone(),
+        Script::finishes_after(Duration::from_millis(40)),
+    );
+
+    let first_run = match run_issue(
+        &ctx.control,
+        &ctx.manager,
+        &ctx.workspaces_root,
+        issue,
+        None,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(format!("K6:第一次开工应该成功,实得 {e}"));
+            return l;
+        }
+    };
+    let closed = wait_for_closed(&ctx.control, first_run, Duration::from_millis(800)).await;
+    if closed.and_then(|r| r.ended_at).is_none() {
+        l.fail("K6:第一次开工应该在 800ms 内关门");
+        return l;
+    }
+    let issue_after_first = ctx.control.get_issue(issue).await.ok().flatten();
+    l.check(
+        issue_after_first.as_ref().map(|r| r.status) == Some(IssueStatus::InProgress),
+        format!(
+            "K6:第一次运行结束后活依旧进行中(结束不等于干成,实得 {:?})",
+            issue_after_first.map(|r| r.status)
+        ),
+    );
+
+    // 死角修复的核心断言:同一条分支再登记一次脚本(第一条已经跑完关
+    // 门,连接器不会再收到它的调用),对同一件「进行中、没有活着的运
+    // 行」的活再点一次开工——应该真的成功,不是被 AlreadyRunning 或别
+    // 的什么理由挡下来。
+    mock.set_script(branch, Script::finishes_after(Duration::from_millis(40)));
+    let second_run = match run_issue(
+        &ctx.control,
+        &ctx.manager,
+        &ctx.workspaces_root,
+        issue,
+        None,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(format!("K6:停在进行中的活应该能重新开工,实得 {e}"));
+            return l;
+        }
+    };
+    l.check(
+        second_run != first_run,
+        "K6:重开工产生的是一条新的运行行,不是复用第一条",
+    );
+    let runs_for_issue = ctx
+        .control
+        .list_runs(Some(project))
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.issue_id == issue)
+        .count();
+    l.check(
+        runs_for_issue == 2,
+        format!("K6:这件活现在有两条运行行(实得 {runs_for_issue} 条)"),
+    );
+
+    // 清场,不留一条运行拖慢/干扰后续段落。
+    let _ = cancel_run(&ctx.manager, second_run).await;
     l
 }
 

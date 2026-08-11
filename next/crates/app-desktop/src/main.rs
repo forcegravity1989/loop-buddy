@@ -172,6 +172,15 @@ fn Root() -> Element {
                             // 核起来只用看这一处。
                             let kernel_for_run = kernel.clone();
                             let kernel_for_cancel = kernel.clone();
+                            // next 切片七-2 修(design-s7-real-project.md
+                            // §1,task-s7b-review.md Important-3):「转回
+                            // 待办」只发**既有**命令(`Command::
+                            // TransitionIssue { to: Todo }`,同下面
+                            // `Panel::Attention` 分支「标记完成」走的同一
+                            // 条 `Dispatch` 路径),没有第三条发命令的地
+                            // 方——合法性由 `IssueStatus::
+                            // can_transition_to` 守,壳不判断。
+                            let kernel_for_revert = kernel.clone();
                             rsx! {
                                 screens::hex::HexScreen {
                                     vm: current.clone(),
@@ -180,6 +189,14 @@ fn Root() -> Element {
                                     },
                                     on_cancel_run: move |run: bw_core::RunId| {
                                         kernel_for_cancel.send(ShellCommand::CancelRun(run));
+                                    },
+                                    on_revert_to_todo: move |id: bw_core::IssueId| {
+                                        kernel_for_revert.send(ShellCommand::Dispatch(
+                                            bw_app::Command::TransitionIssue {
+                                                issue: id,
+                                                to: bw_core::IssueStatus::Todo,
+                                            },
+                                        ));
                                     },
                                 }
                             }

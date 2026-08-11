@@ -11,15 +11,26 @@
 //! 好的闭包(`ShellCommand::RunIssue`/`ShellCommand::CancelRun`,不是
 //! `bw_app::Command`——理由见 `bw-app/src/cmd/issue.rs` 模块文档),壳这
 //! 一层依旧零业务判断。
+//!
+//! **next 切片七-2 修**(评审 `task-s7b-review.md` Important-3):「待开
+//! 工」列表里状态是「进行中」的那些活(一次运行结束/失败/被收拾之后仍
+//! 然「进行中」,却没有一条活着的运行——见 `bw_app::view::hex::
+//! LoopSegment::startable_issues` 字段文档)多一个「转回待办」按钮,只
+//! 发**既有**命令(`bw_app::Command::TransitionIssue { to: Todo }`,同
+//! 待人处理屏「标记完成」按钮走的同一条 `Dispatch` 路径),不发明新的
+//! 状态转移——`(InProgress, Todo)` 本来就是 `bw_core::IssueStatus::
+//! can_transition_to` 表里的合法边。壳依旧只把「点了哪件活」这个事实报
+//! 给上层,合法性判断留给状态机自己守。
 
 use bw_app::view::hex::{
     EvidenceSegment, FiveRolesSegment, LoopSegment, MetricCard, NorthStarView, RiskDecisionSegment,
 };
-use bw_core::{IssueId, RunId, Signal};
+use bw_core::{IssueId, IssueStatus, RunId, Signal};
 use bw_store::IssueRow;
 use dioxus::prelude::*;
 
 use crate::kernel::Vm;
+use crate::screens::{run_end_summary, short_session};
 use crate::theme;
 
 #[component]
@@ -27,6 +38,7 @@ pub fn HexScreen(
     vm: Vm,
     on_run_issue: EventHandler<IssueId>,
     on_cancel_run: EventHandler<RunId>,
+    on_revert_to_todo: EventHandler<IssueId>,
 ) -> Element {
     let Some(hex) = vm.hex.clone() else {
         return rsx! {
@@ -45,6 +57,7 @@ pub fn HexScreen(
                 startable_issues: vm.startable_issues.clone(),
                 on_run_issue,
                 on_cancel_run,
+                on_revert_to_todo,
             }
             RiskDecisionSegmentView { seg: hex.risk_decision.clone() }
             EvidenceSegmentView { seg: hex.evidence.clone() }
@@ -52,20 +65,11 @@ pub fn HexScreen(
     }
 }
 
-/// 会话号前 8 位,空 = 「—」(展示层格式化,不是推导——这条指标本身
-/// 已经在存储层是既成事实,这里只决定怎么显示)。**不能内联进 rsx! 的
-/// 字符串插值**:`"...{if a { b } else { c }}..."` 这种块表达式嵌在带引
-/// 号的插值文本里,dioxus 的 rsx! 解析器认不出来(实测过,报「Failed to
-/// parse formatted segment」),必须先拆成一个简单表达式(函数调用)。
-fn short_session(upstream_session: &str) -> String {
-    if upstream_session.is_empty() {
-        "—".to_string()
-    } else {
-        upstream_session.chars().take(8).collect()
-    }
-}
-
-/// 同上,观测出处提示的「 · 提示文本」后缀,空提示时不加后缀。
+/// 观测出处提示的「 · 提示文本」后缀,空提示时不加后缀——**不能内联进
+/// rsx! 的字符串插值**:`"...{if a { b } else { c }}..."` 这种块表达式
+/// 嵌在带引号的插值文本里,dioxus 的 rsx! 解析器认不出来(实测过,报
+/// 「Failed to parse formatted segment」),必须先拆成一个简单表达式
+/// (函数调用)。
 fn hint_suffix(source_hint: &str) -> String {
     if source_hint.is_empty() {
         String::new()
@@ -233,6 +237,7 @@ fn LoopSegmentView(
     startable_issues: Vec<IssueRow>,
     on_run_issue: EventHandler<IssueId>,
     on_cancel_run: EventHandler<RunId>,
+    on_revert_to_todo: EventHandler<IssueId>,
 ) -> Element {
     rsx! {
         div {
@@ -247,6 +252,12 @@ fn LoopSegmentView(
                     span { "最近失败 " span { style: "font-weight:700;color:{theme::signal_color(Signal::Red)};", "{seg.recent_failed}" } }
                     span { "遗留未结账 " span { style: "font-weight:700;color:{theme::signal_color(Signal::Amber)};", "{seg.unsettled}" } }
                 }
+                // design-s7-real-project.md §1.5 第三行:「活的状态一个
+                // 字不改」——运行结束不会把活推到评审中,真实使用时会
+                // 看到「一次跑完了,活还停在进行中」。评审
+                // task-s7b-review.md Important-4 点名这行说明此前没有
+                // (免得被当成 bug)。
+                div { style: "font-size:10px;color:{theme::INK_4};margin-bottom:10px;", "结束不等于干成:一次运行跑完(无论成没成),活的状态不会自动变——这是如实,不是漏做,「完成」永远等你显式点。" }
                 if !seg.exceptions.is_empty() {
                     div {
                         style: "display:flex;flex-direction:column;gap:6px;",
@@ -266,10 +277,29 @@ fn LoopSegmentView(
                     for issue in startable_issues {
                         {
                             let id = issue.id;
+                            // next 切片七-2 修(Important-3):「进行中且没
+                            // 有活着的运行」的活多一个「转回待办」——只发
+                            // 既有的 `TransitionIssue { to: Todo }`(合法
+                            // 性由 `can_transition_to` 守,壳不判断),不
+                            // 是给「开工」加条件、也不是发明新状态。
+                            let stalled_in_progress = issue.status == IssueStatus::InProgress;
                             rsx! {
                                 div {
                                     style: "font-size:12px;padding:7px 10px;border-radius:6px;background:{theme::CARD};border:1px solid {theme::BORDER};display:flex;align-items:center;gap:10px;",
-                                    div { style: "flex:1;color:{theme::INK_2};", "#{issue.number} {issue.title}" }
+                                    div {
+                                        style: "flex:1;color:{theme::INK_2};",
+                                        "#{issue.number} {issue.title}"
+                                        if stalled_in_progress {
+                                            span { style: "color:{theme::INK_4};", " · 进行中(没有活着的运行——上一次结束不等于干成,可重新开工或转回待办)" }
+                                        }
+                                    }
+                                    if stalled_in_progress {
+                                        button {
+                                            style: "border:1px solid {theme::BORDER_DEEP};border-radius:6px;padding:4px 10px;font-size:12px;background:{theme::CARD_ALT};color:{theme::INK_2};",
+                                            onclick: move |_| on_revert_to_todo.call(id),
+                                            "转回待办"
+                                        }
+                                    }
                                     button {
                                         style: "border:none;border-radius:6px;padding:4px 10px;font-size:12px;font-weight:600;background:{theme::CLAY};color:#FFF;",
                                         onclick: move |_| on_run_issue.call(id),
@@ -382,7 +412,22 @@ fn EvidenceSegmentView(seg: EvidenceSegment) -> Element {
                         div { style: "font-size:12px;color:{theme::INK_3};", "暂无运行。" }
                     } else {
                         for r in seg.runs.iter().take(8) {
-                            div { style: "font-size:11px;color:{theme::INK_2};margin-bottom:3px;", "{r.state:?} · {r.connector_name} · 会话 {short_session(&r.upstream_session)}" }
+                            div {
+                                style: "margin-bottom:6px;",
+                                div { style: "font-size:11px;color:{theme::INK_2};", "{r.state:?} · {r.connector_name} · 会话 {short_session(&r.upstream_session)}" }
+                                // next 切片七-2 修(design-s7-real-project.md
+                                // §1.5「失败如实显示的四种形态」,评审
+                                // task-s7b-review.md Important-4)——结束事
+                                // 实原文/耗时:数据本身(`end_detail`/
+                                // `started_at`/`ended_at`)早就在运行行
+                                // 里,此前没有任何一屏接进来显示;还在跑
+                                // 的运行(`ended_at` 为空)没有这一行,
+                                // `run_end_summary` 对这种情况如实返回空
+                                // 串。
+                                if r.ended_at.is_some() {
+                                    div { style: "font-size:10px;color:{theme::INK_3};margin-top:2px;", "{run_end_summary(r)}" }
+                                }
+                            }
                         }
                     }
                 }

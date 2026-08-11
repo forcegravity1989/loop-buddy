@@ -7,13 +7,13 @@
 //! 现算——**这个模块里没有任何一处把算出来的 `Signal` 写回任何持久结
 //! 构**,`HexView` 本身只是一次调用返回、用完即弃的数据,不是缓存。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bw_core::derive::{
     evaluate_metric, measure, parse_magnitude, parse_target, Measurement, Target,
 };
-use bw_core::{Cadence, MetricId, ProjectId, Signal, SourceKind, StageKind};
-use bw_store::{HandoffRow, MetricRow, MetricTier, ObservationRow, RunRow};
+use bw_core::{Cadence, IssueId, IssueStatus, MetricId, ProjectId, Signal, SourceKind, StageKind};
+use bw_store::{HandoffRow, IssueRow, MetricRow, MetricTier, ObservationRow, RunRow};
 use bw_workspace::evidence::WorkspaceEvidence;
 use time::OffsetDateTime;
 
@@ -137,6 +137,25 @@ pub struct LoopSegment {
     /// 一次运行都没有 → 如实加一句「定时机制…在新工程里还没建」
     /// (design §1.2④「没数据时」)。
     pub has_any_run: bool,
+    /// next 切片七-2 修(design-s7-real-project.md §1「壳的活卡加『开
+    /// 工』『取消』」,`task-s7b-review.md` Important-3 收口):能点『开
+    /// 工』的活——判据原样照抄 `run::RunManager::start` 的既有判据
+    /// (design §3.4①「待办池/待办/进行中都能开工,『进行中』是诚实失
+    /// 败后的重试路径」),现在**只有这一处**在算,壳(`app-desktop::
+    /// kernel::build_vm`)不再自己维护一份平行判断——这是「壳内零业务
+    /// 判断」这条边界唯一破口的收口。
+    ///
+    /// **修复的死角**:此前壳里的版本只列「待办池/待办」两档,注释写
+    /// 「『进行中』已经在 `open_runs` 里,不重复列」——这条理由不成立:
+    /// `open_runs` 是「当前有一条活着的运行」,而「进行中」的活在一次运
+    /// 行正常结束/失败/被收拾之后**依旧是「进行中」**(§1.5 第三行「结
+    /// 束不等于干成」的既定语义),却没有落进 `open_runs`。漏了这一档
+    /// 的后果是:活跑完一次之后,界面上既没有「开工」也没有「取消」按
+    /// 钮,成了死局(评审的深链实测复现过这个状态)。这里的判据因此是
+    /// 「待办池/待办 全部 ∪ 进行中里没有一条活着的运行(`ended_at` 为
+    /// 空)的那些」——用 `all_runs` 现算,同 `open_runs` 展示层筛选用的
+    /// 同一批数据,不新增查询。
+    pub startable_issues: Vec<IssueRow>,
 }
 
 /// 段⑤:风险与决策。交棒记录流水,带险的置顶标红;决策栏本片不建,如实
@@ -204,6 +223,12 @@ pub fn build(
     loop_inputs: LoopInputs,
     handoffs: &[HandoffRow],
     all_runs: &[RunRow],
+    // next 切片七-2 修(Important-3):调用方已经按 `RunManager::start`
+    // 允许开工的三档状态(Backlog/Todo/InProgress)查好的候选活——这个
+    // 纯函数只负责把「进行中且当前有一条活着的运行」的那部分从候选里
+    // 减掉,不重新判断「哪些状态允许开工」这条业务规则本身(那条规则
+    // 的唯一真身仍是 `run::RunManager::start`,这里只是原样复述判据)。
+    startable_candidates: &[IssueRow],
     workspace_evidence: Option<WorkspaceEvidence>,
     now: OffsetDateTime,
 ) -> HexView {
@@ -248,6 +273,21 @@ pub fn build(
         .map(|(_, n)| *n)
         .unwrap_or(0);
 
+    // 能点『开工』的活(LoopSegment::startable_issues 字段文档细说判
+    // 据)——「进行中」候选里,当前有一条活着的运行(`ended_at` 为空)
+    // 的要被减掉,同 `open_runs`(壳的展示层筛选)用的同一批 `all_runs`
+    // 数据,不新增查询。
+    let live_issue_ids: HashSet<IssueId> = all_runs
+        .iter()
+        .filter(|r| r.ended_at.is_none())
+        .map(|r| r.issue_id)
+        .collect();
+    let startable_issues: Vec<IssueRow> = startable_candidates
+        .iter()
+        .filter(|i| i.status != IssueStatus::InProgress || !live_issue_ids.contains(&i.id))
+        .cloned()
+        .collect();
+
     HexView {
         project_id,
         project_name: project_name.to_string(),
@@ -265,6 +305,7 @@ pub fn build(
             unsettled: loop_inputs.unsettled,
             exceptions: loop_inputs.exceptions,
             has_any_run: loop_inputs.has_any_run,
+            startable_issues,
         },
         risk_decision: RiskDecisionSegment {
             handoffs: handoffs.to_vec(),

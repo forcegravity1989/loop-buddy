@@ -213,6 +213,27 @@ impl App {
         let issue_stage_counts = self.store.count_issues_by_stage(project_id).await?;
         let handoffs = self.store.list_handoffs(project_id).await?;
         let all_runs = self.store.list_runs(Some(project_id)).await?;
+        // next 切片七-2 修(task-s7b-review.md Important-3):能点『开工』
+        // 的候选活——`run::RunManager::start` 允许开工的三档状态原样照
+        // 抄(design §3.4①),三次查询同 `IssueStore::list_issues_by_status`
+        // 既有读法(此前壳里查两档的版本用的是同一条方法,这里补齐第三
+        // 档、并把判断搬到这一层)。「进行中」候选里再减掉「当前有一条
+        // 活着的运行」的那部分,在 `view::hex::build` 里用 `all_runs` 现
+        // 算,不新增查询。
+        let mut startable_candidates = self
+            .store
+            .list_issues_by_status(Some(project_id), IssueStatus::Backlog)
+            .await?;
+        startable_candidates.extend(
+            self.store
+                .list_issues_by_status(Some(project_id), IssueStatus::Todo)
+                .await?,
+        );
+        startable_candidates.extend(
+            self.store
+                .list_issues_by_status(Some(project_id), IssueStatus::InProgress)
+                .await?,
+        );
 
         Ok(view::hex::build(
             project_id,
@@ -224,6 +245,7 @@ impl App {
             loop_inputs,
             &handoffs,
             &all_runs,
+            &startable_candidates,
             workspace_evidence,
             now,
         ))

@@ -7,7 +7,7 @@
 //! 消失),**真进程重启**前后同一份查询逐字节比对,store 层真实执行的查
 //! 询结果原样打印供人复核。
 //!
-//! 七段:
+//! 八段:
 //!
 //! 1. 指标正本同步(北极星也是一行,读一份真实 `.bw/metrics.toml`)
 //! 2. 观测只追加 + 手填戴徽
@@ -22,6 +22,9 @@
 //!    二条写「已完成」的路径,评审 Important-3 修复轮)
 //! 7. 待人处理:五项正反各验一次(打印区改成直接打真实调用的返回行,不
 //!    再抄一份可能分叉的 SQL 文本,评审 Minor-1 修复轮)
+//! 8. 能点『开工』的活(next 切片七-2 修,评审 `task-s7b-review.md`
+//!    Important-3:待办池/待办全部正例,进行中+无活运行正例,进行中+有
+//!    活运行反例,评审中反例——独立小夹具,不搅进 §5/§6/§7 共用的那份)
 //!
 //! **不重复的一段**:「附 · 存量库迁移双守卫」本档不再重复一遍——`bw-store`
 //! `examples/store_guards.rs` 第 14 节与 `bw-app` `examples/run_races.rs`
@@ -2030,6 +2033,187 @@ async fn run_restart_probe(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+// ─────────────────────────── 8 · 能点「开工」的活(六段④)───────────────────────────
+
+/// next 切片七-2 修(design-s7-real-project.md §1「壳的活卡加『开工』」,
+/// 评审 `task-s7b-review.md` Important-3):`view::hex::LoopSegment::
+/// startable_issues` 此前没有任何断言覆盖——判据(待办池/待办全部,加上
+/// 「进行中」里再减掉「当前有一条活着的运行」的那部分)只靠这里的正反
+/// 各验一次才真的被钉住。**独立开一个项目**,不搅进 §5/§6/§7 共用的那
+/// 份大夹具(issue a/b/c/d 的状态/阶段已经被很多条既有断言绑住,插进去
+/// 风险大于收益,同 `create_closed_run` 文档「issue c 的失败运行立刻结
+/// 账,不然会同时出现在①和③」那条隔离既有先例)。
+async fn section_startable_issues(app: &App) -> Ledger {
+    let mut l = Ledger::new();
+    let project_id = ProjectId::new();
+    if let Err(e) = app
+        .store
+        .create_project(NewProject {
+            id: project_id,
+            name: "startable_issues 独立夹具(评审 Important-3)".to_string(),
+            root_path: String::new(),
+        })
+        .await
+    {
+        l.fail(format!("create_project 失败:{e}"));
+        return l;
+    }
+
+    let backlog = match create_issue(&app.store, project_id, 1, "待办池活(默认状态,原样起点)").await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(e);
+            return l;
+        }
+    };
+
+    let todo = match create_issue(&app.store, project_id, 2, "待办活").await {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(e);
+            return l;
+        }
+    };
+    if let Err(e) = app.transition_issue(todo, IssueStatus::Todo).await {
+        l.fail(format!("todo 活 backlog→todo 失败:{e}"));
+        return l;
+    }
+
+    // 死角修复要保的正例:「进行中」+ 一条已经关门的运行(上一次跑完了
+    // 不等于干成,§1.5 第三行)——这件活应该出现在能开工清单里。
+    let stalled = match create_issue(&app.store, project_id, 3, "进行中、没有活着的运行的活").await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(e);
+            return l;
+        }
+    };
+    if let Err(e) = app.transition_issue(stalled, IssueStatus::InProgress).await {
+        l.fail(format!("stalled 活推进行中失败:{e}"));
+        return l;
+    }
+    if let Err(e) = create_closed_run(
+        &app.store,
+        project_id,
+        stalled,
+        RunState::Finished,
+        RunEndKind::ProcessExit,
+        now_i64(),
+        true,
+    )
+    .await
+    {
+        l.fail(e);
+        return l;
+    }
+
+    // 反例:「进行中」+ 一条**还没关门**的运行——当前有一条活着的运行,
+    // 即使状态也是「进行中」,也不该出现在能开工清单里(已经在跑)。
+    let live = match create_issue(&app.store, project_id, 4, "进行中、有一条活着的运行的活").await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(e);
+            return l;
+        }
+    };
+    if let Err(e) = app.transition_issue(live, IssueStatus::InProgress).await {
+        l.fail(format!("live 活推进行中失败:{e}"));
+        return l;
+    }
+    if let Err(e) = app
+        .store
+        .create_run(NewRun {
+            id: RunId::new(),
+            project_id,
+            issue_id: live,
+            kind: RunKind::Delivery,
+            connector_name: "hex-readback-fixture".to_string(),
+            req_id: Uuid::new_v4().to_string(),
+            workspace: format!("/tmp/hex-readback-fixture-{live:?}"),
+            branch: "bw/hex-readback-fixture".to_string(),
+            state: RunState::Running,
+            started_at: now_i64(),
+        })
+        .await
+    {
+        l.fail(format!("造活着的运行失败:{e}"));
+        return l;
+    }
+
+    // 反例:「评审中」——不在 `RunManager::start` 允许开工的三档状态里,
+    // 判据本身不该重新发明,评审中的活不该出现在能开工清单里。
+    let in_review = match create_issue(&app.store, project_id, 5, "评审中的活").await {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(e);
+            return l;
+        }
+    };
+    if let Err(e) = app
+        .transition_issue(in_review, IssueStatus::InProgress)
+        .await
+    {
+        l.fail(format!("in_review 活推进行中失败:{e}"));
+        return l;
+    }
+    if let Err(e) = app.transition_issue(in_review, IssueStatus::InReview).await {
+        l.fail(format!("in_review 活推评审中失败:{e}"));
+        return l;
+    }
+
+    let loop_inputs = LoopInputs {
+        running: 0,
+        in_review: 0,
+        recent_failed: 0,
+        unsettled: 0,
+        exceptions: Vec::new(),
+        has_any_run: true,
+    };
+    let view = match app
+        .hex_view(project_id, loop_inputs, None, OffsetDateTime::now_utc())
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("App::hex_view 失败:{e}"));
+            return l;
+        }
+    };
+
+    let startable_ids: std::collections::HashSet<IssueId> = view
+        .loop_segment
+        .startable_issues
+        .iter()
+        .map(|i| i.id)
+        .collect();
+    l.check(startable_ids.contains(&backlog), "待办池的活在能开工清单里");
+    l.check(startable_ids.contains(&todo), "待办的活在能开工清单里");
+    l.check(
+        startable_ids.contains(&stalled),
+        "进行中且没有活着的运行的活在能开工清单里(死角修复:上一次跑完了不等于干成,可以重新开工)",
+    );
+    l.check(
+        !startable_ids.contains(&live),
+        "进行中且当前有一条活着的运行的活不在能开工清单里(已经在跑,不该再给一个开工按钮)",
+    );
+    l.check(
+        !startable_ids.contains(&in_review),
+        "评审中的活不在能开工清单里(不在 RunManager::start 允许开工的三档状态里)",
+    );
+    l.check(
+        view.loop_segment.startable_issues.len() == 3,
+        format!(
+            "能开工清单恰好 3 件(待办池 + 待办 + 进行中且无活运行,实得 {})",
+            view.loop_segment.startable_issues.len()
+        ),
+    );
+
+    l
+}
+
 // ─────────────────────────── main ───────────────────────────
 
 macro_rules! bail {
@@ -2199,6 +2383,10 @@ async fn main() -> ExitCode {
     total.merge(
         section_attention_five_items(&app, project_id, &metrics, &issues, c_run, d_run).await,
     );
+    println!();
+
+    println!("== 8 · 能点『开工』的活(六段④,next 切片七-2 修,评审 Important-3)==");
+    total.merge(section_startable_issues(&app).await);
     println!();
 
     println!(

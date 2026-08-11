@@ -361,3 +361,9 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
     - **待办**:下一次触碰 `docs/code-schemes.md` 时(计划落在设计稿 §8.2 建议的 E 提交,真实项目切换那一片),把登记表扩到切片七,并补上切片六、切片 5.5 这两条已经在用但还没登记的空缺。
     - **登记日**:2026-08-11。
     - **登记日**:2026-08-11。
+
+31. **预算上限(`BW_CLAUDE_MAX_BUDGET_USD`)不落库、运行卡上看不见「这次跑没跑在封顶下」**(登记日 2026-08-11,切片七-2 修复轮实施时按 `task-s7b-review.md` Important-4 附带登记)
+    - **现象**:design-s7-real-project.md §1.2「预算上限从哪来」明写「这个值要显示在运行卡上,让人知道这次跑没跑在封顶下」。`bw_app::cmd::issue::run_issue` 里 `budget_from_env()` 读到的值只喂进 `StartRun.budget_usd`,一路往下只交给 `Execute::start` 的 `ExecSpec`(连接器层的调用参数)——`bw_store::RunRow` 没有这一列,`run` 表的 schema 里也没有,数据在运行行落库那一刻就已经不在了,不是壳没接、是这一层压根没有能接的字段。同一轮修复顺手接线的另外三个字段(上游报错原文/结束事实原文/耗时)之所以能做,是因为它们已经在 `RunRow.end_detail`/`started_at`/`ended_at` 上;这一个不在同一处境。
+    - **来源**:`docs/design-next/design-s7-real-project.md` §1.2 原文 + `task-s7b-review.md` Important-4(四个待接字段里唯一「数据源本身缺失」的一个,逐字段核实过其余三个都已经在 `RunRow` 上)。
+    - **待办**:真要把这个值摆上运行卡,需要先给 `run` 表加一列(`budget_usd REAL`,可空)+ `schema.sql`/`add_column_if_missing` 双守卫(`CLAUDE.md`「schema 迁移双守卫」硬约束)、`RunManager::start`(或更早的 `create_run`)把 `StartRun.budget_usd` 一并写进这一行——这是一次小的 schema 改动,不是纯展示层接线,因此没有在这一轮里顺手做,留给下一次真的碰运行表 schema 的切片。
+    - **登记日**:2026-08-11。
