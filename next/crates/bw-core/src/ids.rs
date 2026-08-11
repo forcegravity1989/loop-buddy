@@ -1,5 +1,5 @@
 //! Opaque newtype identities. Each wraps a [`Uuid`] but is a distinct type, so a
-//! `ProjectId` can never be passed where a `SessionId` is expected.
+//! `ProjectId` can never be passed where an `IssueId` is expected.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -49,58 +49,28 @@ id_newtype!(
     ProjectId
 );
 id_newtype!(
-    /// Stable identity of a [`crate::model::WorkflowSpec`].
-    WorkflowId
-);
-id_newtype!(
-    /// Stable identity of a [`crate::model::Session`].
-    SessionId
-);
-id_newtype!(
     /// Stable identity of a metric (leading / lagging / stage KPI).
     MetricId
 );
 id_newtype!(
-    /// Stable identity of a [`crate::model::Routine`].
-    RoutineId
-);
-id_newtype!(
-    /// Stable identity of a [`crate::model::SkillCard`].
-    SkillId
-);
-id_newtype!(
-    /// Stable identity of one real file belonging to an imported skill
-    /// folder (T2, plan/12 §2) — a `skill_file` row (`references/mocking.md`,
-    /// `agents/openai.yaml`, …). Distinct from `SkillId`: a skill has many.
-    SkillFileId
-);
-id_newtype!(
-    /// Stable identity of a [`crate::model::AgentCard`].
-    AgentId
-);
-id_newtype!(
-    /// Stable identity of a [`crate::model::CronTask`].
-    CronTaskId
-);
-id_newtype!(
-    /// Stable identity of a [`crate::model::Connector`].
+    /// Stable identity of a `Connector` row (`bw-connector`'s own registry
+    /// entity — not the retired `bw_core::model::Connector` struct, which
+    /// next 减法专项 removed as a zero-consumer holdover from the v1 port).
     ConnectorId
 );
 id_newtype!(
-    /// Stable identity of a [`crate::model::KnowledgeSource`].
-    KnowledgeSourceId
-);
-id_newtype!(
-    /// Stable identity of one execution of a workflow (a run record).
-    WorkflowRunId
-);
-id_newtype!(
-    /// Stable identity of a [`crate::model::Artifact`] — one registered file
-    /// version (`project × path × git_commit`) in a project's workspace.
+    /// Stable identity of a registered file version (`project × path ×
+    /// git_commit`) in a project's workspace — `bw-store-import`'s artifact
+    /// archive row. The old `bw_core::model::Artifact` struct this doc once
+    /// pointed at was a zero-consumer v1 holdover, removed by next 减法专项;
+    /// this id survives it because the real consumer is the import crate.
     ArtifactId
 );
 id_newtype!(
-    /// Stable identity of an [`crate::model::Issue`].
+    /// Stable identity of an issue (the live row shape is
+    /// `bw_store::IssueRow`). The old `bw_core::model::Issue` struct this doc
+    /// once pointed at was a zero-consumer v1 holdover, removed by next
+    /// 减法专项.
     IssueId
 );
 id_newtype!(

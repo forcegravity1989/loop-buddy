@@ -302,7 +302,6 @@ name = "bw-core"
 version = "0.0.0"
 dependencies = [
  "serde",
- "serde_json",
  "thiserror 1.0.69",
  "time",
  "uuid",
