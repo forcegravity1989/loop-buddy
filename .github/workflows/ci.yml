@@ -223,3 +223,14 @@ jobs:
       # ISSUE_KICKOFF_OK。
       - name: 开工闭环行为读回指挥器(bw-app issue_kickoff)
         run: cd next && cargo run -p bw-app --example issue_kickoff
+
+      # 终审 Important-2(2026-08-11):切片 5.5 交付的字节泵→订阅全链路
+      # 验收指挥器(`bw-app/examples/terminal_feed_smoke.rs`)此前一行没接
+      # 进 next-gates——正是七-2 那次 issue_kickoff overclaim(commit 正文
+      # 写「进 CI」但没接)的同类复发,只是这次连 overclaim 都没有,纯粹
+      # 遗漏,终审把十个指挥器并排数一遍才显形。它完全具备接入条件:
+      # headless、不依赖网关、`bw-app` 的正式/开发依赖里都没有
+      # dioxus——与 `import_legacy`/`issue_kickoff` 两步同一条理由,这一步
+      # 不会触发 app-desktop 的任何一行编译。末行 TERMINAL_FEED_SMOKE_OK。
+      - name: 嵌入终端字节泵→订阅行为验收指挥器(bw-app terminal_feed_smoke)
+        run: cd next && cargo run -p bw-app --example terminal_feed_smoke

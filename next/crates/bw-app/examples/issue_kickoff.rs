@@ -694,6 +694,21 @@ async fn main() -> ExitCode {
     total.merge(section_k9(&ctx, project_a, &mock_a, &db_path).await);
     println!();
 
+    // 终审 Important-3(2026-08-11):断言条数守卫,推广自 `run_races.rs`
+    // 「== 5 ==」那一节的既有先例——哪一节的 `total.merge(...)` 被漏
+    // 调,那一节所有断言压根不执行(不是失败),`ok` 不会翻,只有条数
+    // 悄悄变少。这份指挥器没有任何会改变断言数的参数,十一节(K1/K1b/
+    // K2/K2b/K3/K4/K5/K6/K7/K8/K9)各自条数在固定输入下是常量,不是公
+    // 式,是这次终审实跑坐实的基线。
+    let expected_assertions = 91;
+    let actual_before_meta_check = total.count;
+    total.check(
+        actual_before_meta_check == expected_assertions,
+        format!(
+            "断言条数与基线一致(十一节固定输入下的常量,期望 {expected_assertions},实得 {actual_before_meta_check};不等就说明有一整节的断言没有真的跑到)"
+        ),
+    );
+
     println!(
         "断言 {} 条,{}",
         total.count,

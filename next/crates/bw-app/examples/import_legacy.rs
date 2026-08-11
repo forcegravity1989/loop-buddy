@@ -2507,6 +2507,25 @@ async fn run_self_test() -> ExitCode {
         "dirty 库:旧库文件指纹跑前跑后相同",
     );
 
+    // 终审 Important-3(2026-08-11):断言条数守卫,推广自 `run_races.rs`
+    // 「== 5 ==」那一节的既有先例。`run_self_test` 是一条从头到尾的直线
+    // 流程(不像 `hex_readback`/`issue_kickoff` 按具名小节各自
+    // `total.merge(...)`,这里全程共用同一个 `l`,`good`/`dirty` 两个合
+    // 成库依次走 dry-run/confirm/幂等/触发器/拒绝清单几段),但同一类假
+    // 绿仍然可能发生:哪一段 `l.check(...)`/`check_observation_triggers`
+    // 之类的调用被漏掉或注释掉,那一段断言压根不会执行(不是失败),
+    // `l.ok` 不会翻,只有条数悄悄变少。这条自测不接 `--from`/`--to`(走
+    // 合成老库,不是任何外部真实数据),条数在固定输入下是常量,不是公
+    // 式,是这次终审实跑坐实的基线。
+    let expected_assertions = 44;
+    let actual_before_meta_check = l.count;
+    l.check(
+        actual_before_meta_check == expected_assertions,
+        format!(
+            "断言条数与基线一致(合成数据固定流程下的常量,期望 {expected_assertions},实得 {actual_before_meta_check};不等就说明有一段的断言没有真的跑到)"
+        ),
+    );
+
     finish(l)
 }
 
