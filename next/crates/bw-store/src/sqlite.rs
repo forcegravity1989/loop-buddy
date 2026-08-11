@@ -219,6 +219,31 @@ fn issue_row_from_sqlx(r: &sqlx::sqlite::SqliteRow) -> Result<IssueRow> {
     })
 }
 
+/// [`get_project`](IssueStore::get_project)/[`list_projects`](IssueStore::list_projects)
+/// 共用的行解析——next 切片五E 新增第二个调用点时抽出来,避免两处各写
+/// 一遍 `active_stage` 解析逻辑分叉(同 `issue_row_from_sqlx` 的既有先
+/// 例)。要求 `SELECT` 的列集与 `get_project` 完全一致。
+fn project_row_from_sqlx(r: &sqlx::sqlite::SqliteRow) -> Result<ProjectRow> {
+    // `active_stage` 是 INTEGER(1..5,design §2.1),与 `handoff` 表
+    // from_stage/to_stage 那两列同一制式(2026-08-11 主控裁决统一
+    // INTEGER 后),都走 `StageKind::index()`/`from_index()` 这条
+    // 1-based 编号互转。
+    let active_stage_num: Option<i64> = r.get("active_stage");
+    let active_stage = active_stage_num
+        .map(|n| {
+            StageKind::from_index(n as u8)
+                .ok_or_else(|| StoreError::Other(format!("bad project.active_stage {n:?}")))
+        })
+        .transpose()?;
+    Ok(ProjectRow {
+        id: parse_uuid(&r.get::<String, _>("id"), ProjectId::from_uuid)?,
+        name: r.get("name"),
+        root_path: r.get("root_path"),
+        active_stage,
+        created_at: r.get("created_at"),
+    })
+}
+
 #[async_trait]
 impl IssueStore for SqliteStore {
     async fn create_project(&self, p: NewProject) -> Result<()> {
@@ -242,24 +267,23 @@ impl IssueStore for SqliteStore {
         let Some(r) = row else {
             return Ok(None);
         };
-        // `active_stage` 是 INTEGER(1..5,design §2.1),与 `handoff` 表
-        // from_stage/to_stage 那两列同一制式(2026-08-11 主控裁决统一
-        // INTEGER 后),都走 `StageKind::index()`/`from_index()` 这条
-        // 1-based 编号互转。
-        let active_stage_num: Option<i64> = r.get("active_stage");
-        let active_stage = active_stage_num
-            .map(|n| {
-                StageKind::from_index(n as u8)
-                    .ok_or_else(|| StoreError::Other(format!("bad project.active_stage {n:?}")))
-            })
-            .transpose()?;
-        Ok(Some(ProjectRow {
-            id: parse_uuid(&r.get::<String, _>("id"), ProjectId::from_uuid)?,
-            name: r.get("name"),
-            root_path: r.get("root_path"),
-            active_stage,
-            created_at: r.get("created_at"),
-        }))
+        project_row_from_sqlx(&r).map(Some)
+    }
+
+    async fn list_projects(&self) -> Result<Vec<ProjectRow>> {
+        // next 切片五E(design-s5-hexpanel.md §4.4):壳的深链启动
+        // (`BW_OPEN=<项目名>`)要按名字找项目——这之前存储层只有
+        // `get_project(id)`,没有任何按名字/列出全部项目的读法(壳是它
+        // 的第一个真实消费者)。裁决 10 同款「不写死单项目」:这里返回全
+        // 部,按名字过滤是调用方(壳)的事,不在存储层加一个只服务某一
+        // 种调用方式的窄方法。
+        let rows = sqlx::query(
+            "SELECT id, name, root_path, active_stage, created_at FROM project \
+             ORDER BY created_at ASC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(project_row_from_sqlx).collect()
     }
 
     async fn create_issue(&self, i: NewIssue) -> Result<()> {
@@ -308,6 +332,18 @@ impl IssueStore for SqliteStore {
         // 唯一改活状态的落点,没有比较并置——重复调用(诚实失败后重试)
         // 无害,仍然一路写到 `in_progress`。
         sqlx::query("UPDATE issue SET status = 'in_progress', updated_at = ? WHERE id = ?")
+            .bind(at)
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_issue_stage(&self, id: IssueId, stage: Option<StageKind>, at: i64) -> Result<()> {
+        // 纯机械写(同 `HandoffStore::set_active_stage` 的既有分工)——
+        // `stage=None` 合法:退回「未归类」不是错误状态。
+        sqlx::query("UPDATE issue SET stage = ?, updated_at = ? WHERE id = ?")
+            .bind(stage.map(|s| s.index() as i64))
             .bind(at)
             .bind(id.uuid().to_string())
             .execute(&self.pool)

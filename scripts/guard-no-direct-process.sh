@@ -11,6 +11,12 @@ cd "$(dirname "$0")/.."
 TARGETS=(
   next/crates/bw-core/src
   next/crates/bw-app/src
+  # next 切片五E(design-s5-hexpanel.md §10.1 第 3 条):新壳也纳进这条
+  # 门禁——壳要起进程干什么?没有正当理由:对外能力走连接器
+  # (bw-connector),本地工作区能力走 bw-workspace,壳自己不该直接
+  # shell-out。目标清单里加一行即可,脚本本身不用改(它的设计就是「列
+  # 出的目录哪个存在就查哪个」)。
+  next/crates/app-desktop/src
 )
 # next 切片五A(design-s5-hexpanel.md §10.1 第 3 条):`bw-workspace` **不**
 # 加进 TARGETS——它的整个存在理由就是起 git 进程(造工作树、git 辅助),

@@ -62,7 +62,10 @@ pub struct NewProject {
     pub root_path: String,
 }
 
-#[derive(Clone, Debug)]
+// next 切片五E:`PartialEq` 是桌面壳(`app-desktop`)的 `Vm` 要用的——
+// dioxus `#[component]` 的 props 需要 `PartialEq` 才能做变更检测;`Vm`
+// 内嵌 `Vec<ProjectRow>`(顶栏项目下拉),这条派生只加派生,不改字段/行为。
+#[derive(Clone, Debug, PartialEq)]
 pub struct ProjectRow {
     pub id: ProjectId,
     pub name: String,
@@ -116,6 +119,12 @@ pub trait IssueStore: Send + Sync {
     async fn create_project(&self, p: NewProject) -> Result<()>;
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>>;
 
+    /// next 切片五E(design-s5-hexpanel.md §4.4):壳的深链启动
+    /// (`BW_OPEN=<项目名>`)要按名字找项目——这之前存储层只有
+    /// `get_project(id)`,没有任何按名字/列出全部项目的读法。裁决 10
+    /// 同款「不写死单项目」:返回全部,按名字过滤是调用方(壳)的事。
+    async fn list_projects(&self) -> Result<Vec<ProjectRow>>;
+
     async fn create_issue(&self, i: NewIssue) -> Result<()>;
     async fn get_issue(&self, id: IssueId) -> Result<Option<IssueRow>>;
 
@@ -134,6 +143,17 @@ pub trait IssueStore: Send + Sync {
     /// 行中」是这条状态机的合法起点,也是诚实失败后重试的合法落点
     /// (design §3.4①),重复调用无害。
     async fn mark_issue_in_progress(&self, id: IssueId, at: i64) -> Result<()>;
+
+    /// next 切片五E(design-s5-hexpanel.md 主控补充要求 · 2026-08-11):
+    /// `issue.stage`(切片五B 加的列)此前只有列本身,没有任何命令能写
+    /// 它——`hex_readback` 只能绕过 store 直接 `UPDATE issue SET stage
+    /// = ?` 造数(plan/23 §10 第 16 条登记的缺口)。这是它的第一条正经
+    /// 出生路径:**纯机械写**,合法性(这件活该不该归类、归哪个阶段)由
+    /// 调用方(`bw-app::cmd::issue::set_stage`)决定,同 `HandoffStore::
+    /// set_active_stage`/`transition_issue_status` 的既有分工。
+    /// `stage=None` 合法——把一件活退回「未归类」不是错误状态,同
+    /// `active_stage`「不默认」的既有原则。
+    async fn set_issue_stage(&self, id: IssueId, stage: Option<StageKind>, at: i64) -> Result<()>;
 
     /// 活状态的比较并置转移——纯机械写,**不判断合法性**:合法性由调用方
     /// (编排层 `bw-app::App::transition_issue`)在写之前查

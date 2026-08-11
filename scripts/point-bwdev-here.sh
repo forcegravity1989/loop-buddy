@@ -33,12 +33,34 @@
 # 用法:cd 到目标 worktree,跑 ./scripts/point-bwdev-here.sh,然后:
 #   BW_SEL=skill:<uuid> ~/Applications/BWDev.app/Contents/MacOS/bwdev-launcher &
 # 配合 computer-use screenshot 使用。
+#
+# next 切片五E 加一档(design-s5-hexpanel.md §4.5「验证壳怎么接」/裁决
+# 11):`./scripts/point-bwdev-here.sh --next` 编译并拷贝**新壳**
+# (`next/crates/app-desktop`,二进制名 `bw-next`)进同一个 BWDev.app,
+# 用同一套已经踩通的验证壳接法(env 深链 + 直接终端调用
+# `bwdev-launcher` + computer-use screenshot,不要用 `open -a`)。**旧档
+# 一个字不改**——不带 `--next` 时行为逐字与之前一致(拷贝仓根旧壳
+# `builders-workbench`)。两档共用同一个 BWDev.app,意味着这个 app 在任
+# 意时刻只能代表"旧壳"或"新壳"里的一个——切换哪档由最近一次跑的是哪条
+# 命令决定,这是刻意的取舍(重新注册第二个 app 会撞上本文件顶部注释里
+# 记录的"新 app 认不出来"那个坑),需要同时验两边时就顺序各跑一次。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+APP=~/Applications/BWDev.app
+
+if [ "${1:-}" = "--next" ]; then
+  (cd next && cargo build -p app-desktop)
+  cp next/target/debug/bw-next "$APP/Contents/MacOS/bwdev-launcher"
+  chmod +x "$APP/Contents/MacOS/bwdev-launcher"
+  codesign --sign - --force --deep "$APP" >/dev/null 2>&1
+  echo "[point-bwdev-here --next] BWDev.app 现在是 next/ 这个 worktree 的最新新壳构建(bw-next):$(pwd)/next"
+  echo "[point-bwdev-here --next] 用法示例:BW_DB=<db> BW_OPEN=<项目名> BW_PANEL=hex $APP/Contents/MacOS/bwdev-launcher &"
+  exit 0
+fi
+
 cargo build -p app-desktop
 
-APP=~/Applications/BWDev.app
 cp target/debug/builders-workbench "$APP/Contents/MacOS/bwdev-launcher"
 chmod +x "$APP/Contents/MacOS/bwdev-launcher"
 codesign --sign - --force --deep "$APP" >/dev/null 2>&1

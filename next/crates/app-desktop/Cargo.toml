@@ -1,0 +1,47 @@
+[package]
+name = "app-desktop"
+description = "next 切片五E · 桌面壳(design-s5-hexpanel.md §4):Dioxus 0.7 / wry WebView 真壳,只有两屏——六段总控(BW_PANEL=hex)与待人处理(BW_PANEL=attention)。壳只发命令收事件,不做任何推导、不查 SQL、不起进程、不持有时钟(§4.1/§4.5「壳的杂项」)。二进制名 `bw-next`——不叫 `builders-workbench`,那是仓根旧壳的名字,同名会让『我刚才跑的是哪个』在验证时说不清(裁决 11)。"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+# 只导出 `escape_hatch`(见 `src/lib.rs` 文档)——`examples/
+# seed_shell_demo.rs` 的深链验证证据要调它,而不是自己另抄一遍格式化逻辑。
+name = "app_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bw-next"
+path = "src/main.rs"
+
+[dependencies]
+# 界面框架:next workspace 里第一次出现——本 crate 是设计稿 §10.1 第 2/4
+# 条「桌面壳是唯一允许出现界面框架依赖的 crate」里指的那个唯一。硬钉
+# =0.7.9,与仓根旧壳(`crates/app-desktop/Cargo.toml`)对齐(§4.5)。
+dioxus = { workspace = true, features = ["desktop"] }
+bw-core = { path = "../bw-core" }
+bw-app = { path = "../bw-app" }
+bw-store = { path = "../bw-store" }
+bw-workspace = { path = "../bw-workspace" }
+# 只要 `ConnectorRegistry` 类型本身(装一个空注册表喂给 `RunManager::
+# open`)——本片壳不发起 RunIssue/CollectMetrics(§3.3/§8 明令不做自动/
+# 后台连接器调用),不需要任何一家具体连接器适配器,默认特性全关,同
+# `bw-app` 已有的既定做法(见其 Cargo.toml 同一行注释)。
+bw-connector = { path = "../bw-connector", default-features = false }
+tokio = { workspace = true }
+time = { workspace = true, features = ["std"] }
+# `TopBar` 的项目下拉:`<select>` 的 value 是项目 id 的字符串形式,选中时
+# 要把它解析回 `ProjectId`——同旧壳 `main.rs` 解析 `BW_SEL=skill:<uuid>`
+# 那行的同款用法,不是新引入的第三方依赖(workspace 里本就有)。
+uuid = { workspace = true }
+
+[dev-dependencies]
+# `examples/seed_shell_demo.rs`(深链验证的造数脚本,不是行为验收指挥
+# 器)自己造临时数据库/工作区目录名要用——同 `bw-store`
+# `examples/store_guards.rs`/`bw-app` `examples/run_races.rs`/`bw-app`
+# `examples/hex_readback.rs` 的既有先例:uuid v4 命名,PID 会被系统复
+# 用,uuid 不会。只加 `v4` 特性,只进 dev-dependencies,不影响正式产物
+# 的依赖图。
+uuid = { workspace = true, features = ["v4"] }

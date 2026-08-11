@@ -59,11 +59,28 @@ jobs:
       - name: Format
         run: cd next && cargo fmt --all --check
 
-      - name: Workspace check
-        run: cd next && cargo check --workspace
+      # next 切片五E(design-s5-hexpanel.md §10.1 裁决 9「先按全量试;真
+      # 过不去,按旧工程既有做法排除桌面壳并在 CI 配置里如实注明为什
+      # 么,不静悄悄地放宽」):`app-desktop`(界面框架第一次进 next/)
+      # 在**本地 macOS**(这个提交实际开发/验证用的机器)已经真的跑过
+      # `cargo check --workspace` 与 `cargo clippy --workspace
+      # --all-targets -- -D warnings` 全量档,两条都全绿、零告警(见
+      # commit 正文与 task-s5c-report.md)——不是没试过就退让。这里排除
+      # 它的原因和仓根 `kernel` job 排除 `app-desktop` 是**同一条**(见
+      # 那个 job 上面的注释):Dioxus/wry 的 `desktop` 特性在 Linux 上要
+      # 编译 `wry`/`tao` 这层原生 WebView 绑定,需要 `libwebkit2gtk`/
+      # `libgtk-3`/`libayatana-appindicator3` 等系统开发包,这个仓库的
+      # ubuntu-latest CI runner 从来没装过这些(仓根 `kernel` job 至今
+      # 也从未在 CI 里编译过 `app-desktop`,只在开发者本机/
+      # `point-bwdev-here.sh` 编译)。跟着同一条已验证过的先例走,不新
+      # 开一条"给桌面壳装系统依赖"的路——那超出本片范围,且没有真实需
+      # 要驱动它(点击在这套框架上本就打不通,验证主力是深链 + 读回,
+      # 不依赖 CI 里能不能编出一个真窗口)。
+      - name: Workspace check(不含 app-desktop,理由见上)
+        run: cd next && cargo check --workspace --exclude app-desktop
 
-      - name: Clippy (all targets — 含 examples)
-        run: cd next && cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy(不含 app-desktop,理由见上;含 examples)
+        run: cd next && cargo clippy --workspace --exclude app-desktop --all-targets -- -D warnings
 
       - name: Feature isolation — bw-connector(删任一连接器不影响其余)
         run: |
@@ -93,6 +110,22 @@ jobs:
       # 能依赖它,它谁也不依赖(design-s5-hexpanel.md §6.2/§10.1 第 2 条)。
       - name: 编排层/存储层/工作区分层守卫
         run: ./scripts/guard-app-layering.sh
+
+      # next 切片五E(design-s5-hexpanel.md §10.1 第 1 条):内核无界面依
+      # 赖守卫加了 next 档(逐一查 next 六个内核 crate——不含 app-desktop,
+      # 它是唯一允许出现界面框架依赖的 crate)。仓根 `kernel` job 已经在
+      # 跑同一份脚本(它现在两档都查),这里再显式调一次,让 next-gates
+      # 自己也是一个完整独立的门禁面——不依赖"另一个 job 顺便也查了"这
+      # 件事才成立(next-gates 的既有原则:「两边互不干扰,任何一边挂了
+      # 不连带另一边」)。`cargo tree` 只做依赖图解析,不需要 GTK/WebKit
+      # 系统库,ubuntu-latest 上能正常跑。
+      - name: 内核无界面依赖守卫(含 next 档)
+        run: ./scripts/guard-kernel-ui-free.sh
+
+      # next 切片五E(design-s5-hexpanel.md §4.1/§10.1 第 4 条):壳不持有
+      # 调度时钟——源码扫描,没有 tokio::time::interval/sleep/.tick(。
+      - name: 壳不持有调度时钟守卫
+        run: ./scripts/guard-shell-no-clock.sh
 
       - name: 行为读回指挥器(bw-engine port_readback)
         run: cd next && cargo run -p bw-engine --example port_readback

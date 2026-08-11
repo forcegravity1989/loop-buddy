@@ -66,10 +66,12 @@ pub struct App {
     pub store: SqliteStore,
 }
 
-/// 编排层的命令面(design §4.2)。**六个变体,是设计稿草案的一次收敛**
-/// ——见本文件顶部模块文档「为什么」。壳(切片五E,本片不建)会把界面动
-/// 作翻译成这些命令发过来;`hex_readback` 指挥器同样经这条总线造数据,
-/// 不绕开它直接调 `cmd::*` 私自造一条平行路径。
+/// 编排层的命令面(design §4.2)。**七个变体**——前六个是设计稿草案的一
+/// 次收敛(见本文件顶部模块文档「为什么」),`SetIssueStage` 是切片五E
+/// 补的第七个(主控补充要求,`issue.stage` 第一条生产写入方,见
+/// [`cmd::issue::set_stage`])。壳(切片五E)把界面动作翻译成这些命令发
+/// 过来;`hex_readback` 指挥器同样经这条总线造数据,不绕开它直接调
+/// `cmd::*` 私自造一条平行路径。
 pub enum Command {
     SetActiveStage {
         project: ProjectId,
@@ -95,6 +97,14 @@ pub enum Command {
         issue: IssueId,
         to: IssueStatus,
     },
+    /// next 切片五E(主控补充要求,plan/23 §10 第 16 条清偿):`issue.stage`
+    /// 的第一条生产写入方——见 [`cmd::issue::set_stage`] 文档。`stage:
+    /// None` = 显式退回「未归类」,不是「不改」的意思(这条命令总是写,
+    /// 同 `SetActiveStage`「无条件写」的既有语义)。
+    SetIssueStage {
+        issue: IssueId,
+        stage: Option<StageKind>,
+    },
 }
 
 /// 每条 [`Command`] 成功之后的回执——壳(未来)拿它决定要不要重建六段视
@@ -111,6 +121,7 @@ pub enum Event {
         changed: bool,
     },
     IssueTransitioned,
+    IssueStageSet,
 }
 
 impl App {
@@ -156,6 +167,10 @@ impl App {
             Command::TransitionIssue { issue, to } => {
                 cmd::issue::transition(&self.store, issue, to).await?;
                 Ok(Event::IssueTransitioned)
+            }
+            Command::SetIssueStage { issue, stage } => {
+                cmd::issue::set_stage(&self.store, issue, stage).await?;
+                Ok(Event::IssueStageSet)
             }
         }
     }
