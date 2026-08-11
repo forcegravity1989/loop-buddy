@@ -295,47 +295,66 @@ async fn create_issue(
     Ok(id)
 }
 
-/// `issue.stage` **今天没有任何生产写入方**(五-1 报告已如实登记这条缺
-/// 口,design-s5-hexpanel.md §8「完成清单的勾选入口本片不做」同一条裁剪
-/// 的姊妹缺口——`plan/23-opc-stitching-rebuild.md` §10 补记这条)。为了
-/// 让五角色责任卡的「这个阶段有几件活」有真数据可读回(而不是永远读到
-/// 一片空白的「查询机制本身对不对都测不出来」),这里**绕过 store 层**用
-/// 一条独立连接直接 `UPDATE issue SET stage = ?`——同 design §7.4 降级口
-/// 径的既有标注惯例,每一行都要说清楚它不是生产路径产出的。
-async fn bypass_set_issue_stage(
-    db_path: &str,
+/// `issue.stage` 的生产写入方是 `Command::SetIssueStage`(切片五E 主控补
+/// 充要求,plan/23 §10 第 16 条清偿,落地见 `bw-app/src/cmd/issue.rs::
+/// set_stage`)。**评审 task-s5c-review.md Important-2 修复**:此前这里
+/// 绕过 store 层另开一条独立连接直接 `UPDATE issue SET stage = ?`(同
+/// design §7.4 降级口径的既有标注惯例),这条新写入路径因此在常绿门禁
+/// 里没有任何行使者,唯一真跑它的是不进 CI 的 `seed_shell_demo` 造数脚
+/// 本——而这份指挥器自己顶部文档与 `bw-app/src/lib.rs` 顶部文档都写着
+/// 「`hex_readback` 指挥器同样经这条总线造数据,不绕开它直接调
+/// `cmd::*` 私自造一条平行路径」,实现却在这一处食言。现在改经
+/// `App::dispatch(Command::SetIssueStage{..})`——让这条命令在
+/// `hex_readback` 这个进 CI 的常绿指挥器里有真实行使者;写完立刻独立读
+/// 回一次,断言库里的 `stage` 与命令参数一致,不是「命令返回 Ok 就当写
+/// 成功」。
+///
+/// 突变自证:把 `bw-app/src/cmd/issue.rs::set_stage` 里的
+/// `store.set_issue_stage(..)` 调用删掉或改错,这里的读回断言立刻报错、
+/// `bootstrap_issues` 立刻 `bail!`。
+async fn set_issue_stage_via_command(
+    app: &App,
     issue: IssueId,
     stage: StageKind,
 ) -> Result<(), String> {
-    let opts = SqliteConnectOptions::new().filename(db_path);
-    let pool = SqlitePool::connect_with(opts)
+    let event = app
+        .dispatch(Command::SetIssueStage {
+            issue,
+            stage: Some(stage),
+        })
         .await
-        .map_err(|e| format!("独立连接打开数据库失败:{e}"))?;
-    sqlx::query("UPDATE issue SET stage = ? WHERE id = ?")
-        .bind(stage.index() as i64)
-        .bind(issue.uuid().to_string())
-        .execute(&pool)
+        .map_err(|e| format!("Command::SetIssueStage({issue:?}, {stage:?}) 失败:{e}"))?;
+    if !matches!(event, Event::IssueStageSet) {
+        return Err(format!(
+            "Command::SetIssueStage 应该回 Event::IssueStageSet,实得 {event:?}"
+        ));
+    }
+    let row = app
+        .store
+        .get_issue(issue)
         .await
-        .map_err(|e| format!("UPDATE issue.stage 失败:{e}"))?;
+        .map_err(|e| format!("命令写入后读回 get_issue({issue:?}) 失败:{e}"))?
+        .ok_or_else(|| format!("命令写入后读回 get_issue({issue:?}) 应该存在,实得 None"))?;
+    if row.stage != Some(stage) {
+        return Err(format!(
+            "命令写入后读回 issue.stage 应该等于命令参数 {stage:?},实得 {:?}",
+            row.stage
+        ));
+    }
     println!(
-        "  【本行由 hex_readback 指挥器直接写入 issue.stage,非生产路径产出——issue.stage 今天没有\
-         生产写入方,见 plan/23 §10 登记】issue={issue:?} stage={stage:?}"
+        "  ✓ Command::SetIssueStage 写入 issue={issue:?} stage={stage:?}——命令写入后读回 stage 与命令参数一致"
     );
     Ok(())
 }
 
-async fn bootstrap_issues(
-    app: &App,
-    db_path: &str,
-    project_id: ProjectId,
-) -> Result<Issues, String> {
+async fn bootstrap_issues(app: &App, project_id: ProjectId) -> Result<Issues, String> {
     let a = create_issue(&app.store, project_id, 1, "归类到构建阶段的活").await?;
     let b = create_issue(&app.store, project_id, 2, "评审中等你点的活").await?;
     let c = create_issue(&app.store, project_id, 3, "停在原地失败的活").await?;
     let d = create_issue(&app.store, project_id, 4, "遗留未结账运行的活").await?;
 
-    bypass_set_issue_stage(db_path, a, StageKind::Build).await?;
-    bypass_set_issue_stage(db_path, c, StageKind::Optimize).await?;
+    set_issue_stage_via_command(app, a, StageKind::Build).await?;
+    set_issue_stage_via_command(app, c, StageKind::Optimize).await?;
 
     // b: backlog → in_progress → in_review(停在评审中,section 7 再点完成)。
     app.transition_issue(b, IssueStatus::InProgress)
@@ -1088,8 +1107,10 @@ async fn section_hex_segments(
 ) -> Ledger {
     let mut l = Ledger::new();
 
-    // `issues.a_build` 的行本身(不只是聚合计数)读回一次:`bypass_set_issue_stage`
-    // 那次绕过写入真的落进了 `issue.stage`,不只是查询侧碰巧算对。
+    // `issues.a_build` 的行本身(不只是聚合计数)再读回一次:`bootstrap_issues`
+    // 里 `set_issue_stage_via_command` 那次经 `Command::SetIssueStage` 的写
+    // 入真的落进了 `issue.stage`(那边已经做过一次即时读回,这里是六段视
+    // 图组装用例读到的同一份数据,独立确认查询侧也没有碰巧算对)。
     match app.store.get_issue(issues.a_build).await {
         Ok(Some(row)) => l.check(
             row.stage == Some(StageKind::Build),
@@ -2078,7 +2099,7 @@ async fn main() -> ExitCode {
         Err(e) => bail!(format!("首次开棒应该成功,实得错误:{e}")),
     }
 
-    let issues = match bootstrap_issues(&app, &db_path_str, project_id).await {
+    let issues = match bootstrap_issues(&app, project_id).await {
         Ok(i) => i,
         Err(e) => bail!(e),
     };

@@ -17,8 +17,35 @@
 //!   格式对但语义假的字符串;
 //! - 这正是 plan/23 §3 三档接法里的第三档(「外开 + 事实回收」):不抓
 //!   屏幕文本、不冒充已同步。
+//!
+//! **评审 task-s5c-review.md Important-3 修复**:工作区路径与会话号原样
+//! 拼进命令字符串,不加引号——工作区路径来自 `bw-workspace` 造在主工作
+//! 区兄弟目录上的路径,主工作区路径又来自用户自己的项目位置,macOS 上
+//! `~/My Projects/…` 这类带空格的路径很常见;真出现空格时人把这条命令
+//! 贴进终端会得到 `cd: too many arguments`,逃生舱当场失效,而裁决 7 明
+//! 写「本片必须真能用」。现在两处都经 [`shell_quote`] 做 POSIX shell 安
+//! 全引用。
 
 use bw_store::RunRow;
+
+/// POSIX shell 安全引用:整体套一对单引号,串内任何单引号自身替换成
+/// `'\''`(先闭合引号、写一个转义出来的单引号字面量、再重新开引号)——
+/// 这是唯一对任意字符(空格、双引号、反引号、`$`、换行……)都安全的写
+/// 法,不必对着字符集合逐个列白名单,也不依赖输入是「看起来正常」的路
+/// 径或会话号。
+fn shell_quote(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    out.push('\'');
+    for ch in raw.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
 
 /// 一张逃生舱卡片的渲染就绪数据。
 #[derive(Clone, Debug, PartialEq)]
@@ -48,7 +75,11 @@ pub fn build(run: &RunRow) -> EscapeHatch {
         EscapeHatch {
             run_label,
             upstream_session: Some(session.to_string()),
-            resume_command: Some(format!("cd {} && claude --resume {session}", run.workspace)),
+            resume_command: Some(format!(
+                "cd {} && claude --resume {}",
+                shell_quote(&run.workspace),
+                shell_quote(session)
+            )),
         }
     }
 }

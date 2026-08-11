@@ -21,7 +21,29 @@ TARGETS=(
 # now()`/`OffsetDateTime::now_utc()` 这类"读一次当前时刻"的调用——那是给
 # 深链 stderr 打时间戳或给推导传时钟参数用的,和"起一个会反复触发的定时
 # 器"是两回事,禁了就会把正常的时刻读取也拦下,变成假阳性。
-FORBIDDEN='tokio::time::interval|tokio::time::sleep|std::thread::sleep|\.tick\('
+#
+# 切片五-3 复审 Important-1 实测:早期版本只匹配单独引入的完整路径
+# (`tokio::time::interval`/`tokio::time::sleep` 这两个精确子串),被最常
+# 见的分组导入完全绕过——`use tokio::time::{interval, sleep};` 这行文本
+# 里出现的是 `tokio::time::{interval`,不是 `tokio::time::interval`,四条
+# 旧正则一条都不命中,后续裸调 `interval(..)`/`sleep(..).await` 也没有
+# 任何特征可抓。因此这里加两类匹配:①分组导入本身(花括号内出现
+# `interval`/`sleep` 字面名,不论是否被 `as` 改名)、②不认限定路径、只
+# 认调用点(`interval(`/`interval_at(`/`sleep(`/`sleep_until(`,不论从哪
+# 条路径导入、导入时是否改名)——代价是接受少量假阳性(源码里出现同名但
+# 与时钟无关的函数会被误伤),换真实覆盖。这与本仓库
+# `guard-app-layering.sh` 已经踩过的同一个教训一致(文本匹配清单/导入语
+# 法必然有绕过写法)。
+#
+# 已知局限(文本匹配的天花板,如实注明,不宣称拦得住):
+# - 用完全无关的名字重新导出/包一层再调用(如 `mod t { pub use tokio::
+#   time::sleep as go; }` 之后在别处 `use crate::t::go; go(d).await;`),
+#   跨文件间接到看不出字面 `sleep`/`interval` 的地步,这条门禁看不出来。
+# - 用 `Instant::now()`(本守卫明确允许的合法调用)手写忙等循环(如
+#   `while Instant::now() < deadline {}`)也是一种"定时器",但结构上和被
+#   允许的"读一次当前时刻"完全同形,文本正则区分不了、也不该在这条门禁
+#   里硬猜——这类忙等循环留给 `/code-review` 人工判断。
+FORBIDDEN='tokio::time::\{[^}]*\b(interval|sleep)\b|tokio::time::interval|tokio::time::sleep|std::thread::sleep|std::thread::\{[^}]*\bsleep\b|\.tick\(|\b(interval|interval_at|sleep|sleep_until)[[:space:]]*\('
 
 existing=()
 for t in "${TARGETS[@]}"; do
