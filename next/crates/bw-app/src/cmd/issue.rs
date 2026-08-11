@@ -123,10 +123,32 @@ fn resolve_main_workspace(root_path: &str, workspaces_root: &Path) -> std::path:
 /// - `RunManager::start` 的三种如实拒绝(已经有交付运行在跑/工作区被占/
 ///   连接器零条或多条)→ [`AppError::Run`] 透传
 ///
-/// **注入块本片放空**(design §1.2「本片放空,并如实标注」):复利链(蒸
-/// 馏出的技能正文、标准文件、目录块)在新工程里还没有任何一片建过,注
-/// 入块里今天没有真实内容可放;造一段占位文本塞进去,就是给上游会话喂
-/// BW 自己编的东西。空注入块比假内容好。
+/// **注入块现在装活正文,复利链仍放空**(design §1.2「本片放空,并如实标
+/// 注」的后续更新——next 紧急修 I1,2026-08-11,终审 Important-1)。此前
+/// `inject` 传的是空 `Vec`:开工按钮真的造工作树、真的起会话、真的落一行
+/// 运行,但 agent 收不到这件活的任何信息——`assemble_system_prompt` 拿到
+/// 空 `inject`,位置 prompt 落到 agentcli 层一句与这件活无关的固定开局
+/// 句,活的标题/描述全链路零出现。现在 [`task_body_inject`] 把这件活的标
+/// 题+描述装进恰好一块,label 用与 `bw-engine::agentcli::connector` 约定
+/// 的 [`bw_connector::TASK_BODY_LABEL`]——首启时被那一层单独取出来当位置
+/// prompt(v1 `interactive_cli::build_startup_plan` 文档「caller 传 issue
+/// 标题+描述」的既有语义,这里是恢复,不是新设计;`ExecSpec` 契约形状不
+/// 动,`inject` 本来就是自由文本块,`PROTOCOL` 不因此改动)。复利链(蒸馏
+/// 出的技能正文、标准文件、目录块)仍然放空——新工程里还没有任何一片建
+/// 过,造一段占位文本塞进去就是给上游会话喂 BW 自己编的东西,空注入块比
+/// 假内容好,这一半判断不变(`plan/23-opc-stitching-rebuild.md` §10 第 2
+/// 条行末已补记本条修复的实况;「该不该直接给 `ExecSpec` 加任务正文字
+/// 段」这条契约字段之争维持原登记,本条不裁决)。
+fn task_body_inject(issue_row: &bw_store::IssueRow) -> Vec<bw_connector::InjectBlock> {
+    vec![bw_connector::InjectBlock {
+        label: bw_connector::TASK_BODY_LABEL.to_string(),
+        body: format!(
+            "Issue #{}:{}\n\n{}",
+            issue_row.number, issue_row.title, issue_row.body
+        ),
+    }]
+}
+
 pub async fn run_issue(
     store: &SqliteStore,
     manager: &RunManager,
@@ -174,7 +196,7 @@ pub async fn run_issue(
             connector_name,
             workspace,
             branch,
-            inject: Vec::new(),
+            inject: task_body_inject(&issue_row),
             budget_usd: budget_from_env(),
         })
         .await?;

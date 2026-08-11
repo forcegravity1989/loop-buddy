@@ -386,6 +386,25 @@ pub struct InjectBlock {
     pub body: String,
 }
 
+/// `inject` 里「这一块是任务正文」的约定标签(next 紧急修 I1,2026-08-11,
+/// 终审 Important-1;登记于 `plan/23-opc-stitching-rebuild.md` §10 第 2
+/// 条行末)。
+///
+/// `ExecSpec` 没有独立的「这件活要干什么」字段——契约冻结在切片二,这条
+/// 本身不因这次修复而动(见上方 [`PROTOCOL`] 的变更记录:这里加的是一个
+/// `pub const`,不是给任何结构体增删字段,不撞协议号)。真实缺口是
+/// v1 `interactive_cli.rs` `build_startup_plan` 的 `position_prompt`(首启
+/// 时自动提交的第一条用户消息,caller 传 issue 标题+描述)在 next 里一度
+/// 没有着落,agentcli 层只能用一句固定的通用开局句顶上,活的标题/描述全
+/// 链路零出现。
+///
+/// 约定:`ExecSpec.inject` 里 `label` 恰好等于这个常量的那一块,
+/// **不**折进系统提示词——`bw-engine::agentcli::connector` 首启时把它单
+/// 独取出来当位置 prompt 用(其余块顺序不变地照旧拼系统提示词)。这是恢
+/// 复 v1 既有语义,不是新设计;「该不该直接给 `ExecSpec` 加一个任务正文
+/// 字段」这个契约字段之争本条不裁决,维持 §10 第 2 条原有登记。
+pub const TASK_BODY_LABEL: &str = "任务正文";
+
 /// 一次执行的句柄。**上游会话号是核心**:agent CLI 的 resume 靠它。
 ///
 /// **2026-08-10(切片四B)补 `Debug`/`Clone`**:运行管理器(design-s4-

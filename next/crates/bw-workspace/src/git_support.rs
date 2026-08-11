@@ -33,6 +33,13 @@ pub enum ProvisionError {
     Git(String),
     #[error("写初始文件失败:{0}")]
     Write(String),
+    /// next 紧急修(C1,2026-08-11)——目标目录已经存在、但不是一棵合法的
+    /// git 工作树(没有 `.git`)。「破坏性永不自动」这条产品铁律要求这里
+    /// 如实拒绝,不许代人清空/删除;见
+    /// [`crate::provision::provision_issue_worktree`] 该分支的文档与
+    /// `plan/23-opc-stitching-rebuild.md` §10 的分歧登记。
+    #[error("目标目录已存在但不是合法的 git 工作树:{0}")]
+    Occupied(String),
 }
 
 pub async fn git_in(dir: &Path, args: &[&str]) -> Result<(), ProvisionError> {

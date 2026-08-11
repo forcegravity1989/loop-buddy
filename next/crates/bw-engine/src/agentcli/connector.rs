@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use bw_connector::caps::{Connector, Execute, Interactive, Probe, ProbeReport, TermInput};
 use bw_connector::contract::{
     guarded, CallCtx, ConnError, ConnResult, ConnectorEntry, ConnectorKind, ExecSpec, ExecState,
-    ExecTicket, InjectBlock, OpClass, ProjectBinding, RequestId, SessionEnd,
+    ExecTicket, InjectBlock, OpClass, ProjectBinding, RequestId, SessionEnd, TASK_BODY_LABEL,
 };
 use bw_core::playbook::PlaybookCtx;
 use bw_core::{ConversationId, IssueId, WorkflowId};
@@ -48,15 +48,24 @@ impl From<TermInput> for PtyInput {
     }
 }
 
-/// `ExecSpec` 目前没有独立的「这件活要干什么」字段(v1 `position_prompt`
-/// 承担的角色,任务正文/需求描述)——契约冻结在切片二,`inject` 按本片口径
-/// (design §6.1/brief)整体进系统提示词(`--append-system-prompt`),不拆一
-/// 块出来当位置 prompt。首启仍然需要一个位置 prompt 才能让 claude 的 TUI
-/// 收到第一条用户消息、真正开始动手——完全空字符串会让 auto-submit 提交
-/// 一个空消息,agent 大概率只是空等在那里。这里用一条固定的通用开局句,不
-/// 编造任务内容;如实标注这是本片继承的契约缺口(该不该给 `ExecSpec` 加任
-/// 务字段是切片四编排层要接的事,agentcli 层不能单方面改契约形状)——见任
-/// 务报告 concerns。
+/// **历史状态,已被 I1 修正(next 紧急修,2026-08-11,终审 Important-1)**:
+/// `ExecSpec` 没有独立的「这件活要干什么」字段(v1 `position_prompt` 承担
+/// 的角色,任务正文/需求描述)——契约冻结在切片二,这条本身没变,`inject`
+/// 仍然按本片口径(design §6.1/brief)整体进系统提示词
+/// (`--append-system-prompt`)。**新增的是一条调用约定**(不是契约字段,
+/// 不撞 `PROTOCOL`):`inject` 里 label 恰好等于
+/// [`TASK_BODY_LABEL`](bw_connector::contract::TASK_BODY_LABEL) 的那一
+/// 块,不折进系统提示词,单独取出来当位置 prompt 用(见下方 `start` 首启
+/// 分支)——这就是恢复 v1 `interactive_cli::build_startup_plan` 文档写的
+/// 「caller 传 issue 标题+描述」语义,不是新设计;生产调用方是
+/// `bw-app::cmd::issue::run_issue`(见其 `task_body_inject`)。「该不该直
+/// 接给 `ExecSpec` 加一个任务正文字段」这个契约字段之争本条不裁决,维持
+/// `plan/23-opc-stitching-rebuild.md` §10 第 2 条原有登记。
+///
+/// 这句固定开局句现在只在**没有**收到 `TASK_BODY_LABEL` 块(旧调用方,或
+/// 调用方明确没有活正文可给)时才用——完全空字符串会让 auto-submit 提交
+/// 一个空消息,agent 大概率只是空等在那里,哪怕没有真实任务正文也不能传
+/// 空。
 const GENERIC_KICKOFF_PROMPT: &str = "请阅读上面的系统提示词并开始执行。";
 
 /// claude 交互式接不上按次预算封顶(`--max-budget-usd` 只在 `--print` 模式
@@ -485,10 +494,33 @@ impl Execute for AgentCliConnector {
                     .map_err(exec_error_to_conn_error)?;
                 (plan, Vec::new())
             } else {
+                // I1(next 紧急修,2026-08-11,终审 Important-1):位置
+                // prompt 恢复 v1 语义——把 `inject` 里 label 恰好等于
+                // `TASK_BODY_LABEL` 的那一块取出来,单独当位置 prompt,
+                // **不**折进系统提示词(见 `GENERIC_KICKOFF_PROMPT` 上方文
+                // 档:方法论住系统提示词,需求住位置 prompt,claude 在需
+                // 求上跑方法论)。其余块顺序不变、原样拼系统提示词——
+                // `partition` 保序(`Vec::into_iter` 本身就是顺序遍历),
+                // 不影响 `inject` 记账口「顺序等于调用方给的顺序」这条既
+                // 有承诺。没有这一块(旧调用方,或调用方明确没有活正文可
+                // 给)就如实退回通用开局句,不编造内容。
+                let mut task_body: Option<String> = None;
+                let mut rest: Vec<InjectBlock> = Vec::with_capacity(inject.len());
+                for block in inject {
+                    if task_body.is_none() && block.label == TASK_BODY_LABEL {
+                        task_body = Some(block.body);
+                    } else {
+                        rest.push(block);
+                    }
+                }
+                let position_prompt = match task_body.as_deref() {
+                    Some(body) if !body.trim().is_empty() => body,
+                    _ => GENERIC_KICKOFF_PROMPT,
+                };
                 // I1(next 切片三-2 修):`assemble_system_prompt` 现在把
                 // 衔接层正文拼在 `inject` 前面,见该函数文档。
                 let (system_prompt, injected) =
-                    assemble_system_prompt(&workspace, &required_branch, &inject);
+                    assemble_system_prompt(&workspace, &required_branch, &rest);
                 // C1:只有 `upstream_session` 真的非空(即上面判定「这家能
                 // 被指派」)才把它交给 `build_startup_plan` 的 `session_id`
                 // 形参;为空就传 `None`——`build_startup_plan` 自己也会做
@@ -501,7 +533,7 @@ impl Execute for AgentCliConnector {
                 };
                 let plan = build_startup_plan(
                     row,
-                    GENERIC_KICKOFF_PROMPT,
+                    position_prompt,
                     &system_prompt,
                     session_id_arg,
                     &workspace,

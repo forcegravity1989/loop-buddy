@@ -41,6 +41,6 @@ pub use contract::{
     guarded, unsupported, CallCtx, CallOk, Capability, CapabilitySet, ConfigRef, ConnError,
     ConnResult, ConnectorEntry, ConnectorKind, ExecSpec, ExecState, ExecTicket, Fail, IdemKey,
     InjectBlock, OpClass, ProjectBinding, RequestId, SessionEnd, StopReason, WriteOutcome,
-    PROTOCOL,
+    PROTOCOL, TASK_BODY_LABEL,
 };
 pub use registry::{ConnectorRegistry, RoutingError};

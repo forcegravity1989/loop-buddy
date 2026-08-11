@@ -5,13 +5,28 @@
 //! 的 `workspace`/`branch` 两个入参就是必填的,但当时没有任何一条生产路径
 //! 能把它们交给运行管理器(plan/23 §10 第 7 条)。本文件清偿这条缺口。
 //!
-//! **移植纪律**:函数体不改。唯一的真实改动是 `crate::github::issue_branch`
-//! 这一处调用——v1 原文里它调用同一个 crate 内 `github.rs` 模块的一个纯
-//! 文本函数(`format!("bw/issue-{n}")`,零逻辑);`bw-workspace` 不依赖
-//! `bw-connector`(工作区 crate 谁也不依赖,design §10.1 第 2 条),没有
-//! `github` 模块可调,因此把这一行为不变的纯文本计算原样内联成
-//! [`issue_branch`](同名同实现),就地调用。这是「只改引用路径,不改行
-//! 为」的又一个实例(与 next 切片一A 的既有判例同类),不算函数体改写。
+//! **移植纪律**:函数体基本不改,**两处有意分歧**(都不是漏改,逐条登
+//! 记):
+//!
+//! 1. `crate::github::issue_branch` 这一处调用——v1 原文里它调用同一个
+//!    crate 内 `github.rs` 模块的一个纯文本函数(`format!("bw/issue-{n}")`,
+//!    零逻辑);`bw-workspace` 不依赖 `bw-connector`(工作区 crate 谁也不
+//!    依赖,design §10.1 第 2 条),没有 `github` 模块可调,因此把这一行
+//!    为不变的纯文本计算原样内联成 [`issue_branch`](同名同实现),就地调
+//!    用。这是「只改引用路径,不改行为」的又一个实例(与 next 切片一A 的
+//!    既有判例同类),不算函数体改写。
+//! 2. **C1(next 紧急修,2026-08-11,终审 Critical-1)**:兄弟目录已存在
+//!    且没有 `.git`(不是合法工作树)时,v1 原实现在此处 `let _ =
+//!    std::fs::remove_dir_all(&sibling)`——整删重来,删失败还被 `let _ =`
+//!    吞掉,错误不报、删除不留痕。这条路径落在用户项目根的兄弟目录上
+//!    (不是 BW 自己的数据区),名字是可预测的确定性命名
+//!    (`<项目名>-issue-<活编号>`),用户自己在旁边建过同名目录(笔记/手
+//!    工克隆/别的工具生成/`.git` 文件被清掉的旧工作树)完全可能——一次
+//!    点击触发的无条件递归删除,直接违反「破坏性永不自动」这条产品铁
+//!    律。BW 按这条铁律改为**如实失败**:不删任何东西,把路径与发现的
+//!    情况说清楚,让人自己去处理。这是对 v1 逐字节移植件的一处有意分
+//!    歧,分歧登记在 `plan/23-opc-stitching-rebuild.md` §10(可回报伙伴
+//!    修 v1,我们不擅改 v1 分支)。
 //!
 //! **主控裁决 §6.3 钉死的一处不搬**:v1 原文件里与 `provision_issue_worktree`
 //! 配套的 `IssueWorktreeGuard`(作用域结束 `Drop` 里强制删工作树)**不搬**
@@ -83,9 +98,15 @@ pub async fn provision_issue_worktree(
         if sibling.join(".git").exists() {
             return Ok(sibling);
         }
-        // Stale leftover dir with no worktree metadata — clear it so the
-        // `worktree add` below creates a fresh one.
-        let _ = std::fs::remove_dir_all(&sibling);
+        // **只造不删(C1,见本文件头注释「移植纪律」第 2 条)**:目录存在
+        // 但不是一棵合法的工作树——不猜它是不是「过期残留」,如实拒绝,
+        // 绝不代人整删重来。
+        return Err(ProvisionError::Occupied(format!(
+            "{} 已存在,但不是一个合法的 git 工作树(没有 .git)。为避免误删\
+             用户自己的文件,这里不会自动清空或删除——请确认这个目录的内容\
+             后手动处理(移走或删除都可以),再重新开工",
+            sibling.display()
+        )));
     }
     // First run: `worktree add -b <branch> <path>` from main HEAD (master).
     // Retry (branch already exists from a prior run): fall back to checking

@@ -19,6 +19,13 @@
 //!    Drop`(v1 那个「作用域结束自动删」的守卫如果被加回来,一定会在这
 //!    两处至少露一次面)。突变自证:临时在 `provision.rs` 里加一个
 //!    `pub fn remove_worktree(...)` 或 `impl Drop for X`,这一节必须变红。
+//! 6. **C1(next 紧急修,2026-08-11,终审 Critical-1)**:目标兄弟目录已
+//!    经存在、但不是合法的 git 工作树(没有 `.git`)——真造一个这样的目
+//!    录(写一个标记文件进去,模拟用户自己留在旁边的东西),调用应该如
+//!    实报 `ProvisionError::Occupied`,标记文件必须原样还在。突变自证:
+//!    临时把 `provision.rs` 那一分支改回 `let _ =
+//!    std::fs::remove_dir_all(&sibling)`,这一节必须变红(标记文件消
+//!    失、返回值也从 `Err` 变 `Ok`)。
 //!
 //! **供给只造不删**(design §6.3,主控裁决 #12 附带确认):本指挥器造出来
 //! 的主工作区与工作树跑完**不删**,路径打印出来给人手工复核——这不是遗
@@ -30,7 +37,7 @@
 //! 跑法:`cd next && cargo run -p bw-workspace --example provision_readback`
 //! 退出码 0 且末行 `PROVISION_READBACK_OK` = 全部断言通过。
 
-use bw_workspace::git_support::{commit_initial, git_in};
+use bw_workspace::git_support::{commit_initial, git_in, ProvisionError};
 use bw_workspace::provision::{issue_branch, provision_issue_worktree};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
@@ -341,6 +348,62 @@ async fn main() -> ExitCode {
         for f in &findings {
             eprintln!("ASSERT FAILED: {f}");
         }
+        all_ok = false;
+    }
+    println!();
+
+    println!("== 5 · C1(next 紧急修):目标目录已占且非法工作树,必须如实报错,不许代删 ==");
+    // 真造一个「兄弟目录存在、但不是合法工作树」的场景——用一个前四步都
+    // 没碰过的活编号,手工在它应该落点的路径上建一个目录 + 写一个标记文
+    // 件(模拟用户自己留在旁边的东西:笔记/手工克隆/别的工具生成/`.git`
+    // 被清掉的旧工作树),再调用 `provision_issue_worktree`,断言:①必须
+    // 如实报错(`ProvisionError::Occupied`),不能返回 `Ok`;②标记文件必
+    // 须原样还在——如果它消失了,说明目录被整删重造了,C1 的洞又开着。
+    let occupied_issue = 99u32;
+    let stem = main_workspace
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workspace");
+    let occupied_sibling = main_workspace
+        .parent()
+        .expect("主工作区应该有 parent(临时目录下的一层)")
+        .join(format!("{stem}-issue-{occupied_issue}"));
+    if let Err(e) = std::fs::create_dir_all(&occupied_sibling) {
+        eprintln!("ASSERT FAILED: 建「占位、非工作树」目录应该成功,实得错误: {e}");
+        eprintln!("PROVISION_READBACK_FAILED");
+        return ExitCode::FAILURE;
+    }
+    let marker = occupied_sibling.join("not-a-worktree-please-dont-delete-me.txt");
+    if let Err(e) = std::fs::write(
+        &marker,
+        "这是用户自己留在这里的文件,不是 BW 造的工作树——provision_issue_worktree \
+         如果把这个目录整删重来,这个文件会消失,C1 就复发了。\n",
+    ) {
+        eprintln!("ASSERT FAILED: 写占位标记文件应该成功,实得错误: {e}");
+        eprintln!("PROVISION_READBACK_FAILED");
+        return ExitCode::FAILURE;
+    }
+    match provision_issue_worktree(&main_workspace, occupied_issue).await {
+        Ok(p) => {
+            eprintln!(
+                "ASSERT FAILED: 目标目录已存在且不是合法工作树时应该如实报错,实得 Ok({})\
+                 ——说明代码把它当过期残留整删重造了,C1 又开了这个洞",
+                p.display()
+            );
+            all_ok = false;
+        }
+        Err(ProvisionError::Occupied(msg)) => {
+            println!("  ✓ 如实报错(ProvisionError::Occupied),没有代删:{msg}");
+        }
+        Err(other) => {
+            eprintln!("ASSERT FAILED: 应该报 ProvisionError::Occupied,实得别的错误变体: {other}");
+            all_ok = false;
+        }
+    }
+    if marker.exists() {
+        println!("  ✓ 占位标记文件原样还在,目录没有被删除/清空");
+    } else {
+        eprintln!("ASSERT FAILED: 占位标记文件应该原样还在,实得已消失——目录被删除重造了");
         all_ok = false;
     }
     println!();

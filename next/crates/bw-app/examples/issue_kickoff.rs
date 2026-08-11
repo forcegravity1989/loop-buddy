@@ -10,7 +10,7 @@
 //! 用例调用到,不是重新证明它自己已经证过的东西(那是
 //! `provision_readback.rs` 的事)。
 //!
-//! 十段:K1(项目没配检出根,如实拒绝,一条运行行都没有)/ K1b(项目配
+//! 十一段:K1(项目没配检出根,如实拒绝,一条运行行都没有)/ K1b(项目配
 //! 了检出根,但根目录不是 git 仓库——`provision_issue_worktree` 如实报
 //! `WorktreeProvision`,错误原文非空,一条运行行都没有;评审
 //! `task-s7b-review.md` Important-2 点名的断言覆盖缺口,本轮补上)/ K2
@@ -22,7 +22,10 @@
 //! 次;再取消,幂等不改字段)/ K6(停在进行中、没有活着的运行的活可以
 //! 重新开工——评审 Important-3「进行中无活运行」死角修复的行为自证)/
 //! K7(事件广播真的收到,订阅端断言)/ K8(晚到消息不复活,复用
-//! `run_races.rs` R3 的抖动扫窗形状,规模缩小、轮询节奏调快)。
+//! `run_races.rs` R3 的抖动扫窗形状,规模缩小、轮询节奏调快)/ K9(next
+//! 紧急修 I1,终审 Important-1:位置 prompt 装活正文——`ExecSpec.inject`
+//! 真的携带一块 label=`TASK_BODY_LABEL` 的任务正文,内容含活标题+描述
+//! 原文,不再是此前的空 `Vec`)。
 //!
 //! 跑法:
 //! ```text
@@ -44,11 +47,13 @@ use bw_app::run::{RunManager, RunManagerConfig, RunStateChanged};
 use bw_app::AppError;
 use bw_connector::{
     guarded, CallCtx, ConfigRef, ConnError, ConnResult, Connector, ConnectorEntry, ConnectorKind,
-    ConnectorRegistry, ExecSpec, ExecState, ExecTicket, Execute, OpClass, ProjectBinding,
-    RequestId, SessionEnd,
+    ConnectorRegistry, ExecSpec, ExecState, ExecTicket, Execute, InjectBlock, OpClass,
+    ProjectBinding, RequestId, SessionEnd, TASK_BODY_LABEL,
 };
 use bw_core::{ConnectorId, IssueId, IssueStatus, ProjectId, RunId, RunState};
 use bw_store::{IssueStore, NewIssue, NewProject, RunEndKind, RunStore, SqliteStore, StoreError};
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::SqlitePool;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -172,6 +177,12 @@ struct KickoffExec {
     scripts: Mutex<HashMap<String, Script>>,
     live: Mutex<HashMap<RequestId, Live>>,
     starts_issued: AtomicUsize,
+    /// I1(next 紧急修,2026-08-11,终审 Important-1)验收专用:每次
+    /// `start` 真实收到的 `ExecSpec.inject`,按分支名归档(同 `scripts`
+    /// 既有键的先例——一个分支一次开工,不会撞)。只用于 K9 断言「生产
+    /// 路径(`run_issue`)真的把任务正文递交到了连接器这一层」,不影响
+    /// 原有脚本化行为。
+    received_inject: Mutex<HashMap<String, Vec<InjectBlock>>>,
 }
 
 impl KickoffExec {
@@ -184,6 +195,7 @@ impl KickoffExec {
             scripts: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
             starts_issued: AtomicUsize::new(0),
+            received_inject: Mutex::new(HashMap::new()),
         }
     }
 
@@ -194,6 +206,19 @@ impl KickoffExec {
             .lock()
             .expect("mock scripts mutex poisoned")
             .insert(branch.into(), script);
+    }
+
+    /// I1 验收:读回某条分支这次开工真实收到的任务正文——`ExecSpec.inject`
+    /// 里 label 恰好等于 `TASK_BODY_LABEL` 的那一块的 `body`。`None` = 没
+    /// 收到任何 inject,或收到了但没有这个 label 的块。
+    fn task_body_of(&self, branch: &str) -> Option<String> {
+        self.received_inject
+            .lock()
+            .expect("mock received_inject mutex poisoned")
+            .get(branch)?
+            .iter()
+            .find(|b| b.label == TASK_BODY_LABEL)
+            .map(|b| b.body.clone())
     }
 }
 
@@ -214,6 +239,14 @@ impl Execute for KickoffExec {
     async fn start(&self, cx: &CallCtx, spec: ExecSpec) -> ConnResult<ExecTicket> {
         let req = cx.req;
         let branch = spec.branch;
+        // I1(next 紧急修,终审 Important-1)验收专用:记一份「这次开工真
+        // 实收到了什么 inject」,按分支名归档——同步做,在 `guarded` 之
+        // 前,不管后面这次调用最终成功还是走 K3/K4 那类如实拒绝分支,只
+        // 要连接器的 `start` 方法真被调用到就记账。
+        self.received_inject
+            .lock()
+            .expect("mock received_inject mutex poisoned")
+            .insert(branch.clone(), spec.inject);
         guarded(cx, OpClass::Write, async move {
             let Some(script) = self
                 .scripts
@@ -389,6 +422,30 @@ async fn wait_for_closed(
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+/// 直接写 `issue.body`(描述正文)——**非生产路径产出,仅测试造数**。
+/// `IssueStore` 今天没有任何生产写入方能填这一列:`create_issue`
+/// (`NewIssue`)只接受 `title`,`body` 靠 schema `DEFAULT ''` 落空串
+/// (`bw-store/src/lib.rs` `IssueRow.body` 字段文档原话「`create_issue`
+/// 不填这一列……本片没有写它的用例」)。K9 要验的是「位置 prompt 真的读
+/// 了 title/body 两个字段」,不是「BW 有没有生产入口写 description」(那
+/// 是另一个尚未排期的独立缺口,不在本轮范围)——绕过 store 独立开一条
+/// 连接直接写,同 `hex_readback.rs` 早前 `stage` 列在专属命令建成之前的
+/// 既有降级先例(design §7.4 口径)。
+async fn set_issue_body_for_test(db_path: &Path, issue: IssueId, body: &str) -> Result<(), String> {
+    let opts = SqliteConnectOptions::new().filename(db_path);
+    let pool = SqlitePool::connect_with(opts)
+        .await
+        .map_err(|e| format!("独立连接打开数据库失败:{e}"))?;
+    let result = sqlx::query("UPDATE issue SET body = ? WHERE id = ?")
+        .bind(body)
+        .bind(issue.uuid().to_string())
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("UPDATE issue SET body 失败:{e}"));
+    pool.close().await;
+    result.map(|_| ())
 }
 
 #[tokio::main]
@@ -631,6 +688,10 @@ async fn main() -> ExitCode {
 
     println!("== K8 · 晚到消息不复活(复用 run_races.rs R3 的抖动扫窗形状,规模缩小)==");
     total.merge(section_k8(&ctx, project_a, &mock_a).await);
+    println!();
+
+    println!("== K9 · 位置 prompt 装活正文(next 紧急修 I1,终审 Important-1)==");
+    total.merge(section_k9(&ctx, project_a, &mock_a, &db_path).await);
     println!();
 
     println!(
@@ -1414,6 +1475,95 @@ async fn section_k8(ctx: &Ctx, project: ProjectId, mock: &Arc<KickoffExec>) -> L
         finish_wins > 0,
         format!("K8:抖动扫窗真的扫到了「结束先赢」的轮次(共 {finish_wins} 轮)"),
     );
+
+    l
+}
+
+// ─────────────────────────────── K9 ───────────────────────────────
+// I1(next 紧急修,2026-08-11,终审 Important-1):此前 `run_issue` 给
+// `StartRun.inject` 传的是空 `Vec`——开工按钮真的造工作树、真的起会话、
+// 真的落一行运行,但 agent 收不到这件活的任何信息(`bw-engine::agentcli::
+// connector.rs` 的 `assemble_system_prompt` 拿到空 `inject`,位置 prompt
+// 落到一句与这件活无关的固定开局句)。修复后 `run_issue` 把活的标题+描述
+// 装进恰好一块 `InjectBlock`,label 用与 agentcli 层约定的
+// `TASK_BODY_LABEL`(v1 `interactive_cli::build_startup_plan` 文档「caller
+// 传 issue 标题+描述」的既有语义,恢复,不是新设计)。这一节验证到
+// `bw-app` 够得到的契约边界——`ExecSpec.inject` 真的携带了这一块、内容里
+// 真的含标题与描述原文;`bw-engine` 那一层把这一块单独取出来当位置
+// prompt(不折进系统提示词)是 `bw-engine` 自己的行为,`bw-app` 不依赖
+// `bw-engine`(`scripts/guard-app-layering.sh` 守着这条线),够不到那一
+// 层,同本文件其余各节的既有边界。
+async fn section_k9(
+    ctx: &Ctx,
+    project: ProjectId,
+    mock: &Arc<KickoffExec>,
+    db_path: &Path,
+) -> Ledger {
+    let mut l = Ledger::new();
+    const TITLE: &str = "K9 示例活:标题探针 42 号";
+    const BODY: &str = "K9 描述探针:请把这段需求原文如实转交给 agent,一个字都不许编。";
+
+    let (issue, number) = match ctx.new_issue(project, TITLE).await {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("K9 建活失败:{e}"));
+            return l;
+        }
+    };
+    if let Err(e) = set_issue_body_for_test(db_path, issue, BODY).await {
+        l.fail(format!("K9:写活描述(测试造数,非生产路径)失败:{e}"));
+        return l;
+    }
+    // 独立读回一次,证明「标题+描述已经真的落库」不是断言里凭空假设的
+    // 前提——K9 接下来要证的是「这两样东西传到了连接器」,不是「store
+    // 读写本身对不对」(那是 K2 等其余各节已经覆盖过的事)。
+    let issue_row = ctx.control.get_issue(issue).await.ok().flatten();
+    l.check(
+        issue_row.as_ref().map(|r| r.title.as_str()) == Some(TITLE)
+            && issue_row.as_ref().map(|r| r.body.as_str()) == Some(BODY),
+        "K9:活的标题+描述已经真的落库(独立读回核对,不是假设)",
+    );
+
+    let branch = bw_workspace::provision::issue_branch(number as u32);
+    mock.set_script(
+        branch.clone(),
+        Script::finishes_after(Duration::from_millis(50)),
+    );
+
+    let run_id = match run_issue(
+        &ctx.control,
+        &ctx.manager,
+        &ctx.workspaces_root,
+        issue,
+        None,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            l.fail(format!("K9:run_issue 应该成功,实得 {e}"));
+            return l;
+        }
+    };
+    // 只关心这一节要验的东西(inject 是否真的携带任务正文),K2 已经把
+    // 「运行行落库/工作树/活状态」这些既有行为核过一遍,这里不重复验。
+    let _ = wait_for_closed(&ctx.control, run_id, Duration::from_millis(800)).await;
+
+    match mock.task_body_of(&branch) {
+        Some(body) => {
+            l.check(
+                body.contains(TITLE),
+                format!("K9:ExecSpec.inject 的任务正文含活标题原文(实得: {body:?})"),
+            );
+            l.check(
+                body.contains(BODY),
+                format!("K9:ExecSpec.inject 的任务正文含活描述原文(实得: {body:?})"),
+            );
+        }
+        None => l.fail(
+            "K9:ExecSpec.inject 里应该有一块 label = TASK_BODY_LABEL 的任务正文块,实得没收到",
+        ),
+    }
 
     l
 }
