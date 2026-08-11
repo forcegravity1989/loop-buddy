@@ -13,13 +13,18 @@
 //! 依赖 `bw-workspace` 复用它们(`examples/port_readback.rs` 就是这条复用
 //! 的调用点),不再自己拥有这两个模块。
 
-use bw_core::{ProjectId, WorkflowId};
+use bw_core::ProjectId;
 
 /// Context handed to an executor for a run.
+///
+/// next 减法专项(2026-08):`workflow: WorkflowId` 死字段已删——它唯一的
+/// 写入点(`agentcli/connector.rs` 的 `run_ctx`)恒写 `WorkflowId::nil()`,
+/// 两个 `InteractiveExecutor` 实现的 `run_skill_pty` 均不读它(agentcli 层
+/// 没有 workflow 身份,§8 范围裁剪)。`WorkflowId` 本身随 v1 整包移植进来
+/// 的旧工作流引擎构建管线一并从 `bw-core` 删除,详见死代码审计。
 #[derive(Clone, Copy, Debug)]
 pub struct RunCtx {
     pub project: ProjectId,
-    pub workflow: WorkflowId,
 }
 
 #[derive(Debug, thiserror::Error)]

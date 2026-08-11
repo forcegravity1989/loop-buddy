@@ -7,7 +7,6 @@
 //! 见 `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §7 / §10.1。
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use bw_core::{ConversationId, IssueId};
@@ -22,14 +21,15 @@ pub const OUTPUT_BATCH_CAP: usize = 64;
 pub const OUTPUT_BATCH_MAX_BYTES: usize = 8 * 1024;
 
 /// 某个会话此刻在内存里持有的身份事实(可随 attach 写入)。
+///
+/// next 减法专项(2026-08):`claude_session_id`/`workspace_path`/
+/// `branch_name` 三个只写不读字段已删——`attach()` 调用点真写入过它们,但
+/// 没有任何读侧消费(死代码审计坐实,grep 复核零消费者)。`issue_id` 留
+/// 着,`conversation_id` 是身份键。
 #[derive(Clone, Debug)]
 pub struct ConversationMeta {
     pub conversation_id: ConversationId,
     pub issue_id: IssueId,
-    /// claude CLI 的 `--resume` id(hook 回传)。空 = 首次未捕获。
-    pub claude_session_id: String,
-    pub workspace_path: PathBuf,
-    pub branch_name: String,
 }
 
 /// 有界输出环:满了 pop 最老。
@@ -96,25 +96,6 @@ impl TerminalManager {
 
     pub fn last_fit_size(&self) -> Option<(u16, u16)> {
         self.last_fit_size
-    }
-
-    /// 是否有任一活着的 PTY 连接(驱动 UI `pty_active`)。
-    pub fn has_live(&self) -> bool {
-        !self.sessions.is_empty()
-    }
-
-    /// 当前活连接的 conversation id 列表。
-    pub fn live_ids(&self) -> Vec<ConversationId> {
-        self.sessions.keys().copied().collect()
-    }
-
-    pub fn is_live(&self, conversation_id: ConversationId) -> bool {
-        self.sessions.contains_key(&conversation_id)
-    }
-
-    /// 活连接对应的 issue(焦点回落时用)。
-    pub fn issue_id(&self, conversation_id: ConversationId) -> Option<IssueId> {
-        self.sessions.get(&conversation_id).map(|s| s.meta.issue_id)
     }
 
     /// 注册 PTY 会话,返回给 `run_skill_pty` 的两端。不关其它会话;同 id 重 spawn 先清自己。

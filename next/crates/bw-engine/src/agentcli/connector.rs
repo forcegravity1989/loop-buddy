@@ -23,7 +23,7 @@ use bw_connector::contract::{
     ExecTicket, InjectBlock, OpClass, ProjectBinding, RequestId, SessionEnd, TASK_BODY_LABEL,
 };
 use bw_core::playbook::PlaybookCtx;
-use bw_core::{ConversationId, IssueId, WorkflowId};
+use bw_core::{ConversationId, IssueId};
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
@@ -553,9 +553,6 @@ impl Execute for AgentCliConnector {
                 // agentcli 层没有「活」的概念(§8:不做存储、不做编排层接
                 // 线)——用 nil 占位,如实标注不是真实 Issue 绑定。
                 issue_id: IssueId::nil(),
-                claude_session_id: upstream_session.clone(),
-                workspace_path: workspace.clone(),
-                branch_name: required_branch.clone(),
             };
             let initial_size = {
                 let t = terminals.lock().expect("terminal manager mutex poisoned");
@@ -594,13 +591,7 @@ impl Execute for AgentCliConnector {
             let sessions_bg = sessions.clone();
             let terminals_bg = terminals.clone();
             let byte_senders_bg = byte_senders.clone();
-            let run_ctx = RunCtx {
-                project,
-                // agentcli 层没有 workflow 身份(§8 范围裁剪)——两个
-                // `InteractiveExecutor` 实现(真实/mock)的 `run_skill_pty`
-                // 均不读这个字段,nil 占位无副作用。
-                workflow: WorkflowId::nil(),
-            };
+            let run_ctx = RunCtx { project };
             tokio::spawn(async move {
                 let outcome = exec
                     .run_skill_pty(&plan, &run_ctx, bytes_tx, input_rx)
