@@ -47,5 +47,15 @@ async-trait = { workspace = true }
 # 己开一条独立连接、手工执行一份「少一列的老 schema」——不经过
 # `SqliteStore::open`(那样会用当前 schema.sql 把列建全,测不出「老库缺
 # 列」这件事),同 `bw-store` `examples/store_guards.rs` 第 6 节的独立连
-# 接读回先例。
+# 接读回先例。`import_legacy.rs` 复用同一个依赖:合成老库指挥器同样要自
+# 己开一条独立连接、照 v1 schema 原文建六张表。
 sqlx = { workspace = true }
+# next 切片七B(design-s7-real-project.md §2.4 硬约束 1 / §8.1):`import_
+# legacy.rs` 要调 `bw_store::ImportStore`(导入专用写入面)——只有开了
+# `import` 这个 cargo 特性,`bw-store` 才会把这条 trait 编译出来。**只加
+# 在 [dev-dependencies]**,与上面 `[dependencies]` 里那行不带特性的
+# `bw-store` 各自独立:resolver v2 对同一个 crate 的 normal 依赖边与 dev
+# 依赖边分别做特性统一,`app-desktop`(经这个 crate 的 normal 依赖边)链
+# 接的还是不开 `import` 的那一份,`scripts/guard-import-feature-off.sh`
+# 查的正是这条边。
+bw-store = { path = "../bw-store", features = ["import"] }
