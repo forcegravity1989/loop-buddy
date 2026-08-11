@@ -66,6 +66,13 @@ fn remote_mr_url(provider: &str, host: &str, path: &str, n: u32) -> String {
 #[component]
 pub fn Op(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     let paper = theme::PAPER;
+    // Live PTY: center column fills height so the terminal can flex vertically.
+    // Other panels keep scrollable content.
+    let center = if op.panel == Panel::Workflow && op.pty_active {
+        "flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:14px 22px 16px;"
+    } else {
+        "flex:1;min-width:0;overflow-y:auto;padding:18px 22px 40px;"
+    };
     rsx! {
         div {
             style: "display:flex;flex-direction:column;height:100%;background:{paper};",
@@ -76,7 +83,7 @@ pub fn Op(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
                 style: "flex:1;display:flex;min-height:0;",
                 LeftRail { op: op.clone() }
                 div {
-                    style: "flex:1;min-width:0;overflow-y:auto;padding:18px 22px 40px;",
+                    style: "{center}",
                     Center { op, run, on_pick_hub }
                 }
             }
@@ -446,7 +453,19 @@ fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     match (op.panel, stage) {
         (Panel::Progress, None) => rsx! { ProgressAll { op } },
         (Panel::Progress, Some(s)) => rsx! { ProgressStage { op, s } },
-        (Panel::Workflow, s) => rsx! { WorkflowPanel { op, stage: s, run, on_pick_hub } },
+        (Panel::Workflow, s) => {
+            let fill = if op.pty_active {
+                "height:100%;min-height:0;display:flex;flex-direction:column;"
+            } else {
+                ""
+            };
+            rsx! {
+                div {
+                    style: "{fill}",
+                    WorkflowPanel { op, stage: s, run, on_pick_hub }
+                }
+            }
+        },
         (Panel::Routine, None) => rsx! { RoutineAll { op } },
         (Panel::Routine, Some(s)) => rsx! { RoutineStage { s } },
         (Panel::Artifact, _) => rsx! { ArtifactPanel { op } },
@@ -2837,7 +2856,30 @@ fn WorkflowPanel(
                 HubOverviewStrip { hub: op.hub.clone(), on_pick_hub }
             }
         },
-        Some(s) => rsx! { WorkflowStage { op, s, run } },
+        Some(s) => {
+            // Dioxus 0.7: a lone child's `key` is ignored (diff_vcomponent
+            // never reads it). Keyed `for` → Fragment → diff_keyed_children,
+            // so SetScope remounts the stage tree (Issues↔Workflow heal).
+            let stage_items = vec![s];
+            let fill = if op.pty_active {
+                "height:100%;min-height:0;display:flex;flex-direction:column;"
+            } else {
+                ""
+            };
+            rsx! {
+                div {
+                    style: "{fill}",
+                    for s in stage_items {
+                        {
+                            let stage_key = format!("{:?}", s.kind);
+                            rsx! {
+                                WorkflowStage { key: "{stage_key}", op: op.clone(), s, run: run.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+        },
     }
 }
 
@@ -2907,7 +2949,7 @@ fn RunBanner(run: RunVm) -> Element {
     let workflow_name = run.workflow_name.clone();
     rsx! {
         div {
-            style: "background:{card_alt};border:1px solid #DBD4C5;border-radius:10px;padding:14px 16px;margin-bottom:14px;",
+            style: "flex:none;background:{card_alt};border:1px solid #DBD4C5;border-radius:10px;padding:14px 16px;margin-bottom:14px;",
             div {
                 style: "display:flex;align-items:baseline;gap:8px;margin-bottom:10px;",
                 if !workflow_name.is_empty() {
@@ -3058,95 +3100,122 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
         // into a box whose "reply" is a canned echo that goes nowhere, right
         // above the terminal where their input actually reaches claude.
         Some(chat) if !op.pty_active => rsx! { Chat { chat } },
-        Some(_) => rsx! {},
-        None => rsx! {
+        None if !op.pty_active => rsx! {
             div { style: "color:{ink3};font-size:12.5px;", "到「Issue」面板点「▶ 跑」开工——记录会出现在这里。" }
         },
+        _ => rsx! {},
+    };
+    // Key includes stage + focus: cross-SetScope remounts the host; focus
+    // flips remount the newly-visible widget onto a real-size div (same heal
+    // as Issues↔Workflow). Unfocused peers stay mounted off-screen so PTY
+    // byte pumps keep running.
+    let stage_key = format!("{:?}", s.kind);
+    let live_terms: Vec<(ConversationId, bool, String)> = if op.pty_active {
+        op.pty_live_ids
+            .iter()
+            .map(|cid| {
+                let focused = op.pty_conversation_id == Some(*cid);
+                let focus_tag = if focused { "f" } else { "h" };
+                let term_key = format!("{}-{stage_key}-{focus_tag}", cid.uuid());
+                (*cid, focused, term_key)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let stage_fill = if op.pty_active {
+        "display:flex;flex-direction:column;height:100%;min-height:0;"
+    } else {
+        ""
     };
     rsx! {
-        RunBanner { run: run.clone() }
-        // V1-TermClose2 · UI 门控:方法循环卡(来自 stage_workflow)只在无终端
-        // 会话(!pty_active)时显——issue 终端会话无 phase loop,显这张卡会误导。
-        // 阶段循环会话(stage playbook / hub workflow / cron,无 PTY)仍显。
-        // 内含的「↑ 沉淀为静态」按钮语义不变(只 op.chat.is_some() && !pty_active
-        // 时显,本卡门控不改变其条件)。
-        if !op.pty_active {
-            div {
-                style: "{card} padding:18px 20px;margin-bottom:14px;",
+        div {
+            style: "{stage_fill}",
+            RunBanner { run: run.clone() }
+            // V1-TermClose2 · UI 门控:方法循环卡(来自 stage_workflow)只在无终端
+            // 会话(!pty_active)时显——issue 终端会话无 phase loop,显这张卡会误导。
+            // 阶段循环会话(stage playbook / hub workflow / cron,无 PTY)仍显。
+            // 内含的「↑ 沉淀为静态」按钮语义不变(只 op.chat.is_some() && !pty_active
+            // 时显,本卡门控不改变其条件)。
+            if !op.pty_active {
                 div {
-                    style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
-                    span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{spec_preview.name}" }
-                }
-                div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
-                div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
-                if op.chat.is_some() && !op.pty_active {
-                    button {
-                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
-                        onclick: promote,
-                        "↑ 沉淀为静态"
-                    }
-                }
-            }
-        }
-        RunOutputs {
-            phases: run.phases.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
-            msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
-        }
-        {chat_area}
-        // 重启恢复:点卡到首包之间显示「恢复中…」(首包后 pty_restoring 清空)。
-        if op.pty_restoring.is_some() {
-            div {
-                style: "{card} padding:10px 14px;margin-bottom:10px;font-size:12.5px;color:{ink3};",
-                "恢复中…"
-            }
-        }
-        // V1-TermRefactor5 · 咨询态:终端区显式「转成新活」(不做自动意图分类;不宣称只读)。
-        if let Some((promote_stage, promote_number, promote_title)) = consult_promote {
-            {
-                let k_new = k.clone();
-                rsx! {
+                    style: "{card} padding:18px 20px;margin-bottom:14px;",
                     div {
-                        style: "display:flex;align-items:center;gap:10px;margin:0 0 8px;",
-                        span { style: "font-size:11.5px;color:{ink3};", "咨询中 · 新交付请另开一件活" }
+                        style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
+                        span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{spec_preview.name}" }
+                    }
+                    div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
+                    div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
+                    if op.chat.is_some() && !op.pty_active {
                         button {
-                            style: "cursor:pointer;border:1px solid {theme::BORDER};border-radius:7px;background:transparent;color:{theme::INK_2};padding:5px 12px;font-size:11.5px;",
-                            title: "在同项目新建一件活,承接咨询里冒出的新交付诉求",
-                            onclick: move |_| {
-                                k_new.send(Command::CreateIssue {
-                                    id: IssueId::new(),
-                                    stage: promote_stage,
-                                    title: format!("来自咨询：{promote_title}"),
-                                    desc: format!(
-                                        "从 #{} 「{}」的咨询会话转来。",
-                                        promote_number, promote_title
-                                    ),
-                                    priority: IssuePriority::Medium,
-                                    standard_skill: String::new(),
-                                });
-                                k_new.send(Command::SetPanel(Panel::Issues));
-                            },
-                            "转成新活"
+                            style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
+                            onclick: promote,
+                            "↑ 沉淀为静态"
                         }
                     }
                 }
             }
-        }        // 多会话常驻:所有活 PTY 挂 xterm;仅焦点可见(隐藏的仍收字节)。
-        if op.pty_active {
-            for cid in op.pty_live_ids.clone() {
+            RunOutputs {
+                phases: run.phases.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
+                msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
+            }
+            {chat_area}
+            // 重启恢复:点卡到首包之间显示「恢复中…」(首包后 pty_restoring 清空)。
+            if op.pty_restoring.is_some() {
+                div {
+                    style: "{card} padding:10px 14px;margin-bottom:10px;font-size:12.5px;color:{ink3};",
+                    "恢复中…"
+                }
+            }
+            // V1-TermRefactor5 · 咨询态:终端区显式「转成新活」(不做自动意图分类;不宣称只读)。
+            if let Some((promote_stage, promote_number, promote_title)) = consult_promote {
                 {
-                    let is_focused = op.pty_conversation_id == Some(cid);
+                    let k_new = k.clone();
+                    rsx! {
+                        div {
+                            style: "display:flex;align-items:center;gap:10px;margin:0 0 8px;flex:none;",
+                            span { style: "font-size:11.5px;color:{ink3};", "咨询中 · 新交付请另开一件活" }
+                            button {
+                                style: "cursor:pointer;border:1px solid {theme::BORDER};border-radius:7px;background:transparent;color:{theme::INK_2};padding:5px 12px;font-size:11.5px;",
+                                title: "在同项目新建一件活,承接咨询里冒出的新交付诉求",
+                                onclick: move |_| {
+                                    k_new.send(Command::CreateIssue {
+                                        id: IssueId::new(),
+                                        stage: promote_stage,
+                                        title: format!("来自咨询：{promote_title}"),
+                                        desc: format!(
+                                            "从 #{} 「{}」的咨询会话转来。",
+                                            promote_number, promote_title
+                                        ),
+                                        priority: IssuePriority::Medium,
+                                        standard_skill: String::new(),
+                                    });
+                                    k_new.send(Command::SetPanel(Panel::Issues));
+                                },
+                                "转成新活"
+                            }
+                        }
+                    }
+                }
+            }
+            // 多会话常驻:所有活 PTY 挂 xterm;仅焦点可见(隐藏的仍收字节)。
+            for term in live_terms.iter() {
+                {
+                    let cid = term.0;
+                    let is_focused = term.1;
+                    let term_key = term.2.clone();
                     rsx! {
                         TerminalWidget {
-                            key: "{cid.uuid()}",
+                            key: "{term_key}",
                             conversation_id: cid,
                             focused: is_focused,
                         }
                     }
                 }
             }
-        }
-        if let Some(msg) = promoted_msg() {
-            Toast { msg, onclose: move |_| promoted_msg.set(None) }
+            if let Some(msg) = promoted_msg() {
+                Toast { msg, onclose: move |_| promoted_msg.set(None) }
+            }
         }
     }
 }
@@ -3168,7 +3237,7 @@ fn RunOutputs(phases: Vec<String>, msgs: Vec<MsgVm>) -> Element {
     let ink3 = theme::INK_3;
     rsx! {
         div {
-            style: "{card} padding:16px 18px;margin-bottom:14px;",
+            style: "flex:none;{card} padding:16px 18px;margin-bottom:14px;",
             div { style: "font-size:12.5px;font-weight:600;margin-bottom:2px;", "产出" }
             div { style: "font-size:10.5px;color:{ink3};margin-bottom:10px;", "按完成顺序把每条 agent 产出与对应阶段配对(最佳努力对齐)" }
             for (i , m) in agent_msgs.iter().enumerate() {
@@ -3399,18 +3468,30 @@ window.__bw_term_drain = function(id) {
     if (input === null && resize === null) return null;
     return { input: input, resize: resize, ready: !!sess.ready };
 };
-// Bug2:侧栏切焦点只翻 display,不 remount → xterm 停在 0×0 fit。
-// 焦点回来时强制 fit + focus(等一帧让父级 display 生效)。
+// Bug2: display:none → 0×0 open 假成功;非焦点离屏保尺寸;焦点回来 re-home+fit+refresh。
 window.__bw_term_refocus = function(id) {
     var sess = window.__bw_term_sessions && window.__bw_term_sessions[id];
     var div = document.getElementById('__bw_terminal_' + id);
     if (!sess || !sess.term || !div) return false;
-    requestAnimationFrame(function() {
-        requestAnimationFrame(function() {
+    if (sess.term.element && !div.contains(sess.term.element)) {
+        try { div.appendChild(sess.term.element); } catch (e) {}
+    }
+    var tries = 0;
+    var go = function() {
+        tries++;
+        var el = sess.term.element || div;
+        var w = el.clientWidth || 0;
+        var h = el.clientHeight || 0;
+        if (w > 0 && h > 0) {
             try { if (sess.fit) sess.fit.fit(); } catch (e) {}
+            try { sess.term.refresh(0, Math.max(0, sess.term.rows - 1)); } catch (e) {}
             try { sess.term.focus(); } catch (e) {}
-        });
-    });
+            sess.resize = { cols: sess.term.cols, rows: sess.term.rows };
+            return;
+        }
+        if (tries < 20) requestAnimationFrame(go);
+    };
+    requestAnimationFrame(function() { requestAnimationFrame(go); });
     return true;
 };
 "#;
@@ -3472,10 +3553,16 @@ return (async function(id) {{
     if (sess.term) {{
         if (sess.term.element && !div.contains(sess.term.element)) {{
             div.appendChild(sess.term.element);
-            if (sess.fit) sess.fit.fit();
-            wireDiv(div, sess.term);
         }}
-        return {{ ok: true, reason: 'already-initialized' }};
+        try {{
+            if (sess.fit && div.clientWidth > 0 && div.clientHeight > 0) {{
+                sess.fit.fit();
+                sess.term.refresh(0, Math.max(0, sess.term.rows - 1));
+                sess.resize = {{ cols: sess.term.cols, rows: sess.term.rows }};
+            }}
+        }} catch (e) {{}}
+        wireDiv(div, sess.term);
+        return {{ ok: true, reason: 'already-initialized', w: div.clientWidth, h: div.clientHeight }};
     }}
 
     if (!window.Terminal || !window.FitAddon) {{
@@ -3653,39 +3740,49 @@ fn TerminalWidget(conversation_id: ConversationId, focused: bool) -> Element {
     });
 
     let border = theme::BORDER;
+    // Never use display:none for unfocused xterms. Cross-stage remount used
+    // to open FitAddon at 0×0; later refocus returned ok but the canvas stayed
+    // blank (2026-08-11 log: fitted path Ok(true), user still saw no CLI).
+    // Off-screen fixed box keeps real width/height so open/fit stay healthy;
+    // focus flips CSS + remount (key f/h) onto a flex-growing host. Byte pumps
+    // stay mounted for all live ids.
     let wrap = if focused {
-        format!("margin-top:14px;border:1px solid {border};border-radius:8px;overflow:hidden;")
+        format!(
+            "margin-top:14px;border:1px solid {border};border-radius:8px;overflow:hidden;\
+             flex:1;min-height:0;display:flex;flex-direction:column;"
+        )
     } else {
-        "display:none;".into()
+        "position:fixed;left:-10000px;top:0;width:800px;height:360px;overflow:hidden;opacity:0;pointer-events:none;".into()
     };
 
-    // 侧栏切焦点:父级从 display:none → 可见后强制 fit/focus,否则
-    // xterm 停在 0×0(看板切面板会 remount 整树,侧栏不会)。
-    use_effect(move || {
+    // Dioxus 0.7: subscribe focused with use_reactive (bare bool prop is not
+    // reactive — focus-only updates used to skip this effect entirely).
+    use_effect(use_reactive((&focused, &cid_str), |(focused, cid_str)| {
         if !focused {
             return;
         }
         let cid_json = serde_json::to_string(&cid_str).unwrap_or_else(|_| "\"\"".into());
         spawn(async move {
-            tokio::time::sleep(Duration::from_millis(32)).await;
+            // Two frames for CSS/layout after remount, then refit.
+            tokio::time::sleep(Duration::from_millis(48)).await;
             let script = format!(
                 "return window.__bw_term_refocus ? window.__bw_term_refocus({cid_json}) : false"
             );
             let _ = document::eval(&script).await;
         });
-    });
+    }));
 
     rsx! {
         div {
             style: "{wrap}",
             div {
-                style: "background:#1e1e2e;color:#cdd6f4;font-family:JetBrains Mono,Consolas,monospace;font-size:11px;padding:4px 10px;display:flex;align-items:center;gap:6px;",
+                style: "flex:none;background:#1e1e2e;color:#cdd6f4;font-family:JetBrains Mono,Consolas,monospace;font-size:11px;padding:4px 10px;display:flex;align-items:center;gap:6px;",
                 span { style: "opacity:0.7;", "● in-app terminal" }
                 span { style: "opacity:0.4;margin-left:auto;", "claude interactive session" }
             }
             div {
                 id: "{div_id}",
-                style: "min-height:320px;background:#1e1e2e;",
+                style: "flex:1;min-height:0;height:100%;background:#1e1e2e;",
             }
         }
     }
