@@ -2,13 +2,23 @@
 //! [`App::transition_issue`](crate::App::transition_issue) 这条守卫(§3.6
 //! 「完成永远由人点」的编排层落点)之后,补一个「非法转移」变体——运行
 //! 管理器自己的错误(`RunError`,「这件活已经有一个交付运行在跑」等)住
-//! 在 [`crate::run`] 模块,不并进这里(设计上运行管理器的错误面与编排层
-//! 的其它错误面是两回事,`RunManager` 的公开方法直接返回 `RunError`,不
-//! 经这层转换)。
+//! 在 [`crate::run`] 模块,当时不并进这里(设计上运行管理器的错误面与编
+//! 排层的其它错误面是两回事,`RunManager` 的公开方法直接返回 `RunError`,
+//! 不经这层转换)——那是切片四唯一调用方(`run_races` 指挥器)自己直接
+//! 持有 `RunManager` 时的判断。
 //!
 //! next 切片五C(design-s5-hexpanel.md §4.2)补五个变体——`cmd::project`/
 //! `cmd::metric` 两个聚合的用例层合法性判断(项目不存在 / 已经开过棒 /
 //! 从未开棒不能交棒 / 指标不存在 / 正本文件解析失败)。
+//!
+//! **next 切片七C 更正上面那条「不并进这里」的判断**(design-s7-real-
+//! project.md §1.1):`cmd::issue::run_issue`/`cmd::issue::cancel_run` 是第
+//! 一个把「读活/项目 + 造工作树 + 起工」三步串成一个用例的调用点——壳与
+//! `issue_kickoff` 指挥器都要能用**同一种**错误类型做 §1.5 的「失败如实
+//! 显示的四种形态」分类,分开反而制造两套错误面要各自处理,不是「运行
+//! 管理器自己的错误面」这条边界原本要防的那种揉合。这里补一条透传变体
+//! ([`AppError::Run`]),`RunError` 这个类型本身不变、不缩小,只是多了一
+//! 条 `?` 能自动转换的路。
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -57,4 +67,26 @@ pub enum AppError {
     /// 在编排层这一侧的落点(五-1 report concern 3 点名的那半句)。
     #[error("项目仓 .bw/metrics.toml 解析失败:{0}")]
     MetricsFile(String),
+
+    /// next 切片七C(design-s7-real-project.md §1.2①):`cmd::issue::
+    /// run_issue` 第一步——项目没有配本地检出根(`root_path` 空串),开不
+    /// 了工。**这一步失败,一条运行行都不会落库**(design §6.1 读回清单
+    /// 第 1 条)——四种「如实失败形态」里唯一「一条运行行都没有」的那一
+    /// 种(design §1.5「开不了工(前置不满足)」)。
+    #[error("项目 {0:?} 还没有本地检出,开不了工")]
+    ProjectNoCheckoutRoot(bw_core::ProjectId),
+
+    /// next 切片七C(§1.2②):造工作树失败(不是 git 仓库/磁盘满/分支名
+    /// 撞了等)——**如实回原文,不重试、不换路径**(design 原话)。这一步
+    /// 失败同样不会有运行行落库(工作树是 `RunManager::start` 的入参之
+    /// 一,没造出来就轮不到它)。
+    #[error("造工作树失败:{0}")]
+    WorktreeProvision(String),
+
+    /// next 切片七C——`cmd::issue::run_issue`/`cmd::issue::cancel_run` 把
+    /// [`crate::run::RunError`] 透传到这里(见本文件顶部模块文档「更正上
+    /// 面那条判断」一节)。涵盖 design §1.2③ 的三个如实拒绝(已经有一个
+    /// 交付运行在跑 / 工作区被别的运行占着 / 连接器零条或多条)。
+    #[error(transparent)]
+    Run(#[from] crate::run::RunError),
 }

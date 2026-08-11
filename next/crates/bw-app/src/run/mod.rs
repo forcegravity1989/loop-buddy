@@ -11,7 +11,7 @@ mod manager;
 mod types;
 
 pub use manager::RunManager;
-pub use types::{ReapReport, RunError, RunManagerConfig, RunSnapshot, StartRun};
+pub use types::{ReapReport, RunError, RunManagerConfig, RunSnapshot, RunStateChanged, StartRun};
 
 /// next 切片 5.5(design-s5-hexpanel.md §5.3):`RunManager::terminal_input`
 /// 的入参类型——重导出自 `bw-connector`(契约层的正本),不是 `bw-app` 自

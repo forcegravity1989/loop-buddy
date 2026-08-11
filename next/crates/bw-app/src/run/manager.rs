@@ -12,6 +12,16 @@
 //! **结束回写只能被观测,不能被宣布**:[`Cmd::Observed`] 是私有的内部命
 //! 令,唯一构造点是 [`spawn_poll_task`] 派出去的轮询任务——外部调用方拿
 //! 不到能构造它的路径,没有一个公开方法能「宣布」一次运行结束了。
+//!
+//! next 切片七C(design-s7-real-project.md §1.4/主控裁决 5):**运行状态
+//! 事件广播**——[`RunManager::subscribe`]。同终端字节订阅([`RunManager::
+//! terminal_feed`])一样用 `tokio::sync::broadcast`,不是新机制;但字节
+//! 订阅按运行分表(每条运行一个频道,查活跃表才能拿到),这条广播是**全
+//! 局一条频道**——它不需要经命令队列往返(不用查循环独占的内存状态),
+//! 发送端的克隆直接存在 [`RunManager`] 自己身上,`subscribe()` 是纯同步
+//! 方法。状态真的变了才发一条(每个 `handle_*` 分支旁的调用点各自注
+//! 明);容量满时丢最老(`tokio::sync::broadcast` 的既有语义,同字节订阅
+//! 同一条代价),丢了也只是少刷新一次,下一条事件到达仍会重建。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -27,11 +37,19 @@ use bw_store::{IssueStore, NewRun, RunEndKind, RunKind, RunStore, SqliteStore};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::types::{ReapReport, RunError, RunManagerConfig, RunSnapshot, StartRun};
+use super::types::{
+    ReapReport, RunError, RunManagerConfig, RunSnapshot, RunStateChanged, StartRun,
+};
 
 fn now_unix() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
+
+/// 状态广播频道的容量——比字节频道([`bw_engine`] 那一条,64)小一档:
+/// 状态变化事件的量级远低于 PTY 字节批次(一条运行从起步到关门,状态变
+/// 化次数是个位数),给这个数字纯粹是「够用且不至于无限增长」,不是照抄
+/// 字节频道那条的理由推出来的。
+const STATE_CHANNEL_CAPACITY: usize = 64;
 
 /// 取消口径(主控裁决 #6):BW 侧取消 = 让连接器杀掉进程组/收尾会话 + 关
 /// 账;上游会话档案(claude 一家是 `~/.claude/projects/…/*.jsonl`)仍在,
@@ -45,6 +63,11 @@ const CANCEL_END_DETAIL: &str = "已取消(上游会话档案保留,人可自行
 #[derive(Clone)]
 pub struct RunManager {
     tx: mpsc::Sender<Cmd>,
+    /// next 切片七C:状态广播的发送端——`subscribe()` 直接 `.subscribe()`
+    /// 这一份克隆,不经命令队列(见本文件顶部模块文档「运行状态事件广
+    /// 播」一节)。`Loop` 持有的是这份 `Sender` 的另一份克隆,用来在状态
+    /// 真的变了的时候发送。
+    state_tx: broadcast::Sender<RunStateChanged>,
     /// 共享的收尾守卫:最后一份 `RunManager` 把手被丢弃时(`Arc` 引用计
     /// 数归零),`ManagerGuard::drop` 触发管理器级取消令牌,循环任务与所
     /// 有还在跑的轮询任务随之退出——不需要调用方显式调一个 `close()`。
@@ -73,6 +96,7 @@ impl RunManager {
         let store = Arc::new(SqliteStore::open(&db.to_string_lossy()).await?);
         let (tx, rx) = mpsc::channel(1024);
         let cancel = CancellationToken::new();
+        let (state_tx, _keep) = broadcast::channel(STATE_CHANNEL_CAPACITY);
         let state = Loop {
             store,
             registry,
@@ -81,13 +105,24 @@ impl RunManager {
             active: HashMap::new(),
             by_issue: HashMap::new(),
             by_workspace: HashMap::new(),
+            state_tx: state_tx.clone(),
         };
         let loop_cancel = cancel.clone();
         tokio::spawn(run_loop(rx, loop_cancel, state));
         Ok(Self {
             tx,
+            state_tx,
             _guard: Arc::new(ManagerGuard { cancel }),
         })
+    }
+
+    /// next 切片七C(design §1.4/主控裁决 5):订阅「哪条运行、现在什么状
+    /// 态」的事件广播——见本文件顶部模块文档。**不经命令队列**,纯同步方
+    /// 法:`state_tx` 是一个全局频道,订阅本身不需要查循环独占的内部状
+    /// 态(与 [`RunManager::terminal_feed`] 不同——那条要按运行号从活跃
+    /// 表里取一份具体的 `Arc<dyn Connector>`,只能走「发命令、等回信」)。
+    pub fn subscribe(&self) -> broadcast::Receiver<RunStateChanged> {
+        self.state_tx.subscribe()
     }
 
     /// 开工。返回运行编号;活会被推到「进行中」。返回时运行行已经插入
@@ -251,6 +286,10 @@ struct Loop {
     /// 突,不会被挡下(plan/23-opc-stitching-rebuild.md §10 第 11 条,如
     /// 实登记,本片不修)。
     by_workspace: HashMap<PathBuf, RunId>,
+    /// next 切片七C:状态广播发送端的一份克隆——`RunManager::open` 把另
+    /// 一份存进 [`RunManager`] 自己身上给 `subscribe()` 用,这份留给循环
+    /// 在状态真的变了的时候发送([`Loop::broadcast_state`])。
+    state_tx: broadcast::Sender<RunStateChanged>,
 }
 
 async fn run_loop(mut rx: mpsc::Receiver<Cmd>, cancel: CancellationToken, mut state: Loop) {
@@ -396,6 +435,9 @@ impl Loop {
                 poll_cancel: poll_cancel.clone(),
             },
         );
+        // next 切片七C:状态真的变了(数据库里这一行从不存在变成
+        // `Starting`)——见本文件顶部模块文档「运行状态事件广播」。
+        self.broadcast_state(run_id, RunState::Starting);
 
         // ④ 把活推到「进行中」——运行管理器唯一改活状态的写(design
         // §3.6)。没有 `IssueStatus` 形参可传:`mark_issue_in_progress`
@@ -428,6 +470,7 @@ impl Loop {
             {
                 Ok(true) => {
                     let _ = self.store.settle_run(run_id, at).await;
+                    self.broadcast_state(run_id, RunState::Failed);
                 }
                 Ok(false) => eprintln!(
                     "[run-manager] 诊断:运行 {run_id:?} 回滚关门时发现已经被别的动作关过门(诚实空转)"
@@ -514,6 +557,8 @@ impl Loop {
                             poll_cancel,
                             self.cfg.poll_interval,
                         );
+                        // next 切片七C:状态真的从 Starting 变成 Running 了。
+                        self.broadcast_state(run, RunState::Running);
                     }
                     // 评审 Important-1:此前这两支只打诊断,不起轮询任务
                     // 也不关门——运行留在 `self.active`(占着 issue/
@@ -552,6 +597,7 @@ impl Loop {
                 {
                     Ok(true) => {
                         let _ = self.store.settle_run(run, at).await;
+                        self.broadcast_state(run, RunState::Failed);
                     }
                     Ok(false) => eprintln!(
                         "[run-manager] 诊断:运行 {run:?} 起工失败的关门回写晚了(比较并置未命中)"
@@ -584,6 +630,10 @@ impl Loop {
                 // 结算:false 也无害——多半是这条运行之前已经被降级为咨
                 // 询、账已经结过了(design §3.5②「账不重结」)。
                 let _ = self.store.settle_run(run, at).await;
+                // next 切片七C:这次「关门」是真的第一个抵达的(比较并置
+                // 赢了)才广播——见下面 `Ok(false)` 分支「晚到消息诚实空
+                // 转」,那一支**不**广播,状态没有真的再变一次。
+                self.broadcast_state(run, observed.state);
                 if let Some(active_run) = self.active.remove(&run) {
                     self.release_issue_slot(active_run.issue, run);
                     self.release_workspace_slot(&active_run.workspace, run);
@@ -632,6 +682,7 @@ impl Loop {
         {
             Ok(true) => {
                 let _ = self.store.settle_run(run, at).await;
+                self.broadcast_state(run, RunState::Failed);
                 eprintln!(
                     "[run-manager] 诊断:运行 {run:?} 存储出错({context}),已补写关门(state=Failed)"
                 );
@@ -684,6 +735,7 @@ impl Loop {
                     {
                         Ok(true) => {
                             let _ = self.store.settle_run(run, at).await;
+                            self.broadcast_state(run, RunState::Canceled);
                             Ok(())
                         }
                         Ok(false) => Ok(()), // 别人抢先关门了,真幂等
@@ -712,6 +764,7 @@ impl Loop {
             .await?;
         if closed {
             let _ = self.store.settle_run(run, at).await;
+            self.broadcast_state(run, RunState::Canceled);
         }
         // 只有真的拿到过票据才有可取消的对象——还在 Starting 时没有
         // ticket,`handle_started` 那边收到晚到的结果会如实空转。
@@ -761,6 +814,12 @@ impl Loop {
                 self.release_workspace_slot(&active_run.workspace, *id);
                 active_run.poll_cancel.cancel();
             }
+            // next 切片七C:重启收拾同样是一次真实的状态变化(→
+            // `Orphaned`)——壳启动时会调一次 `reap_on_restart`,这时通常
+            // 还没有任何订阅方在听(`subscribe()` 要等 `Vm` 第一次建好之
+            // 后才会被壳的主循环订阅),广播了没人收也无害,同字节订阅的
+            // 既有语义(§1.4「代价」)。
+            self.broadcast_state(*id, RunState::Orphaned);
         }
         Ok(ReapReport { reaped })
     }
@@ -842,6 +901,15 @@ impl Loop {
         if self.by_workspace.get(workspace) == Some(&run) {
             self.by_workspace.remove(workspace);
         }
+    }
+
+    /// next 切片七C(design §1.4)——各 `handle_*` 分支在**真的写库成功之
+    /// 后**调这个方法,不是在决定要写之前(与终端字节泵「先拿到真字节再
+    /// 转发」同一个「先有事实,再广播事实」的顺序)。`broadcast::Sender::
+    /// send` 的返回值(没有订阅方时是 `Err`)不检查——没人订阅不是错误,
+    /// 同字节订阅的既有语义。
+    fn broadcast_state(&self, run: RunId, state: RunState) {
+        let _ = self.state_tx.send(RunStateChanged { run, state });
     }
 }
 

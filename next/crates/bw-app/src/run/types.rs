@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bw_connector::InjectBlock;
-use bw_core::{IssueId, IssueStatus, ProjectId, RunId};
+use bw_core::{IssueId, IssueStatus, ProjectId, RunId, RunState};
 use bw_store::StoreError;
 
 /// 开工要给的最小信息。**没有 `kind` 字段**——`RunManager::start` 永远只
@@ -83,6 +83,17 @@ pub struct RunSnapshot {
     /// 遗留未结账:关了门但没结账(`ended_at IS NOT NULL AND settled_at
     /// IS NULL`)的运行数——待人处理①同一条判据的聚合版。
     pub unsettled: usize,
+}
+
+/// next 切片七C(design-s7-real-project.md §1.4)——[`RunManager::subscribe`]
+/// 广播的一条事件。**内容只有「哪条运行、现在什么状态」**(design 原
+/// 话),不是运行的完整快照:订阅方(壳)拿到这条事件之后要做的事永远
+/// 是同一个动作——重建一次界面数据,不需要从事件本身拼出足够渲染的信
+/// 息,细节仍然经既有的查询/组装用例(`App::hex_view` 等)现查。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RunStateChanged {
+    pub run: RunId,
+    pub state: RunState,
 }
 
 /// 运行管理器公开方法的统一错误面。**不包含任何写 Done 的分支**——运行
