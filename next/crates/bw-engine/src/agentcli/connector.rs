@@ -23,7 +23,7 @@ use bw_connector::contract::{
     ExecTicket, InjectBlock, OpClass, ProjectBinding, RequestId, SessionEnd, TASK_BODY_LABEL,
 };
 use bw_core::playbook::PlaybookCtx;
-use bw_core::{ConversationId, IssueId};
+use bw_core::ConversationId;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
@@ -548,12 +548,7 @@ impl Execute for AgentCliConnector {
 
             // ④ 起 PTY,立刻返回票据,不等会话结束。
             let conversation_id = ConversationId::new();
-            let meta = ConversationMeta {
-                conversation_id,
-                // agentcli 层没有「活」的概念(§8:不做存储、不做编排层接
-                // 线)——用 nil 占位,如实标注不是真实 Issue 绑定。
-                issue_id: IssueId::nil(),
-            };
+            let meta = ConversationMeta { conversation_id };
             let initial_size = {
                 let t = terminals.lock().expect("terminal manager mutex poisoned");
                 t.last_fit_size()

@@ -454,3 +454,10 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
     - **判定**:这六个指挥器的断言节数各自少于三个已推广的指挥器(多数是三到十四节,不是十一节起步),假绿风险按体量排序本来就更低;但风险类型完全相同,不是「这六个不需要」,是「这次按体量优先级选了前三个」。
     - **待办**:下一次触碰这六个指挥器中任何一个时,顺手补一条同形状的 `expected == actual` 断言条数守卫(基线用当次实跑的真实条数,不是编一个数)。
     - **登记日**:2026-08-11。
+
+45. **`bw_core::playbook::render` 零调用点,`PlaybookCtx` 字段仍被真消费**(登记日 2026-08-11,减法收尾波三复核实证)
+    - **现象**:`bw-core/src/playbook.rs` 的 `render`(`{var}` 模板替换函数)在全仓 grep 复核下零调用点——`bw-engine`(`interactive_cli.rs::build_bridge_system_prompt`/`agentcli/connector.rs::bridge_prompt_ctx`)只直接读取 `PlaybookCtx` 的各个字段、手工 `format!` 拼系统提示词,从未调用 `render(template, &ctx)` 这条模板替换路径。`PlaybookCtx` 结构体本身是真消费的(两处调用点都构造/传递它),死的只是 `render` 这一个函数。
+    - **来源**:第 38 条(bw-core 整包移植审计)波二裁决时,`playbook.rs` 判定「`PlaybookCtx`/`render` 一起留」(470→65 行,只留这两样),依据是模块文档字面写「`PlaybookCtx` 与 `render` 保留:`bw-engine` 真消费它们」;当时的死代码审计没有把 `render` 单独拆出来核验调用点,`render` 的死亡证据是波三复核(本次任务)才坐实的,晚于波二裁决的时间点。
+    - **判定**:不是本次任务范围内的决定——本次只登记事实,不删代码、不接线。
+    - **待办**:下一次专门做减法决策时,对 `render` 单独裁决:要么找到/等到真正的模板替换消费点接上(比如把 `build_bridge_system_prompt` 里的手工 `format!` 拼接改走 `render` + 模板字符串),要么确认这条路径确实不需要而删掉这一个函数(`PlaybookCtx` 结构体本身不受影响,继续留)。
+    - **登记日**:2026-08-11。

@@ -9,7 +9,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use bw_core::{ConversationId, IssueId};
+use bw_core::ConversationId;
 use tokio::sync::mpsc;
 
 use crate::interactive_cli::PtyInput;
@@ -24,12 +24,12 @@ pub const OUTPUT_BATCH_MAX_BYTES: usize = 8 * 1024;
 ///
 /// next 减法专项(2026-08):`claude_session_id`/`workspace_path`/
 /// `branch_name` 三个只写不读字段已删——`attach()` 调用点真写入过它们,但
-/// 没有任何读侧消费(死代码审计坐实,grep 复核零消费者)。`issue_id` 留
-/// 着,`conversation_id` 是身份键。
+/// 没有任何读侧消费(死代码审计坐实,grep 复核零消费者)。`issue_id` 同样
+/// 只写不读(恒 `IssueId::nil()`,波三复核 grep 零读者)已删,现在只剩身
+/// 份键 `conversation_id`。
 #[derive(Clone, Debug)]
 pub struct ConversationMeta {
     pub conversation_id: ConversationId,
-    pub issue_id: IssueId,
 }
 
 /// 有界输出环:满了 pop 最老。
