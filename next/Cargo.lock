@@ -54,6 +54,7 @@ dependencies = [
  "bw-app",
  "bw-connector",
  "bw-core",
+ "bw-engine",
  "bw-store",
  "bw-workspace",
  "dioxus",

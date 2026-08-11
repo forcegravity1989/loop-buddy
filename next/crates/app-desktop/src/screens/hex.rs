@@ -2,18 +2,32 @@
 //! 何推导**——每一处显示的都是 `bw_app::view::hex::HexView`(或从它筛出
 //! 来的既成事实,如逃生舱)里已经算好的字段,组件只管排版与格式化。没
 //! 有数据的段照 §1.2 如实空(灰卡/说明文案),绝不假装绿。
+//!
+//! **next 切片七D**(design-s7-real-project.md §1「壳的活卡加『开工』
+//! 『取消』」):段④加了两处点击——「待开工」列表里每件活一个「开工」
+//! 按钮,逃生舱卡片(进行中的运行)加一个「取消」按钮。同待人处理屏
+//! 「标记完成」按钮的既有分工:组件只把「点了哪件活/哪条运行」这个事
+//! 实通过 `EventHandler` 报给上层,真正发命令的是 `main.rs::Root` 组装
+//! 好的闭包(`ShellCommand::RunIssue`/`ShellCommand::CancelRun`,不是
+//! `bw_app::Command`——理由见 `bw-app/src/cmd/issue.rs` 模块文档),壳这
+//! 一层依旧零业务判断。
 
 use bw_app::view::hex::{
     EvidenceSegment, FiveRolesSegment, LoopSegment, MetricCard, NorthStarView, RiskDecisionSegment,
 };
-use bw_core::Signal;
+use bw_core::{IssueId, RunId, Signal};
+use bw_store::IssueRow;
 use dioxus::prelude::*;
 
 use crate::kernel::Vm;
 use crate::theme;
 
 #[component]
-pub fn HexScreen(vm: Vm) -> Element {
+pub fn HexScreen(
+    vm: Vm,
+    on_run_issue: EventHandler<IssueId>,
+    on_cancel_run: EventHandler<RunId>,
+) -> Element {
     let Some(hex) = vm.hex.clone() else {
         return rsx! {
             div { style: "color:{theme::INK_3};padding:24px;", "没有可显示的项目——先在顶栏选一个,或深链 BW_OPEN 指定一个真实存在的项目名。" }
@@ -25,7 +39,13 @@ pub fn HexScreen(vm: Vm) -> Element {
             NorthStarSegment { view: hex.north_star.clone() }
             FiveRolesSegmentView { seg: hex.five_roles.clone() }
             MetricsSegmentView { cards: hex.metrics.cards.clone() }
-            LoopSegmentView { seg: hex.loop_segment.clone(), open_runs: vm.open_runs.clone() }
+            LoopSegmentView {
+                seg: hex.loop_segment.clone(),
+                open_runs: vm.open_runs.clone(),
+                startable_issues: vm.startable_issues.clone(),
+                on_run_issue,
+                on_cancel_run,
+            }
             RiskDecisionSegmentView { seg: hex.risk_decision.clone() }
             EvidenceSegmentView { seg: hex.evidence.clone() }
         }
@@ -204,9 +224,16 @@ fn MetricCardView(card: MetricCard, headline: bool) -> Element {
 }
 
 /// 段④:当前 Loop。一行聚合数,只列例外(design §1.2④)。「进行中」的
-/// 运行卡带逃生舱(design §5.2)。
+/// 运行卡带逃生舱(design §5.2)。**next 切片七D**加两处点击:待开工列
+/// 表(design §1「壳的活卡加『开工』」)+ 逃生舱卡片上的「取消」。
 #[component]
-fn LoopSegmentView(seg: LoopSegment, open_runs: Vec<bw_store::RunRow>) -> Element {
+fn LoopSegmentView(
+    seg: LoopSegment,
+    open_runs: Vec<bw_store::RunRow>,
+    startable_issues: Vec<IssueRow>,
+    on_run_issue: EventHandler<IssueId>,
+    on_cancel_run: EventHandler<RunId>,
+) -> Element {
     rsx! {
         div {
             {section_title("④", "当前 Loop")}
@@ -232,11 +259,33 @@ fn LoopSegmentView(seg: LoopSegment, open_runs: Vec<bw_store::RunRow>) -> Elemen
                     }
                 }
             }
+            if !startable_issues.is_empty() {
+                div {
+                    style: "margin-top:10px;display:flex;flex-direction:column;gap:6px;",
+                    div { style: "font-size:11px;color:{theme::INK_3};", "待开工 · {startable_issues.len()} 件" }
+                    for issue in startable_issues {
+                        {
+                            let id = issue.id;
+                            rsx! {
+                                div {
+                                    style: "font-size:12px;padding:7px 10px;border-radius:6px;background:{theme::CARD};border:1px solid {theme::BORDER};display:flex;align-items:center;gap:10px;",
+                                    div { style: "flex:1;color:{theme::INK_2};", "#{issue.number} {issue.title}" }
+                                    button {
+                                        style: "border:none;border-radius:6px;padding:4px 10px;font-size:12px;font-weight:600;background:{theme::CLAY};color:#FFF;",
+                                        onclick: move |_| on_run_issue.call(id),
+                                        "开工"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if !open_runs.is_empty() {
                 div {
                     style: "margin-top:10px;display:flex;flex-direction:column;gap:6px;",
                     for run in open_runs {
-                        EscapeHatchCard { run }
+                        EscapeHatchCard { run, on_cancel_run }
                     }
                 }
             }
@@ -252,13 +301,25 @@ fn LoopSegmentView(seg: LoopSegment, open_runs: Vec<bw_store::RunRow>) -> Elemen
 /// 时渲染空,§5.3 表「隐藏不等于停收」的另一面——这里连挂都不挂,不是
 /// 挂了再隐藏),这张卡因此对没有活会话的运行(今天的默认情形,壳的连
 /// 接器注册表是空的)是零回归的:界面上看到的和切片五收官时一模一样。
+/// **next 切片七D**加一个「取消」按钮——只发 `ShellCommand::CancelRun`,
+/// 合法性/幂等语义全部住在 `bw_app::cmd::issue::cancel_run` 里(design
+/// §1「壳的活卡加『开工』『取消』」)。
 #[component]
-fn EscapeHatchCard(run: bw_store::RunRow) -> Element {
+fn EscapeHatchCard(run: bw_store::RunRow, on_cancel_run: EventHandler<RunId>) -> Element {
     let eh = app_desktop::escape_hatch::build(&run);
+    let run_id = run.id;
     rsx! {
         div {
             style: "font-size:12px;font-family:{theme::MONO};background:{theme::CARD};border:1px solid {theme::BORDER};border-radius:8px;padding:8px 10px;",
-            div { style: "color:{theme::INK_2};margin-bottom:4px;font-family:{theme::SANS};", "运行 {eh.run_label} · 进行中" }
+            div {
+                style: "display:flex;align-items:center;gap:10px;margin-bottom:4px;",
+                div { style: "flex:1;color:{theme::INK_2};font-family:{theme::SANS};", "运行 {eh.run_label} · 进行中" }
+                button {
+                    style: "border:1px solid {theme::BORDER_DEEP};border-radius:6px;padding:3px 10px;font-size:11px;background:{theme::CARD_ALT};color:{theme::INK_2};font-family:{theme::SANS};",
+                    onclick: move |_| on_cancel_run.call(run_id),
+                    "取消"
+                }
+            }
             match eh.resume_command {
                 Some(cmd) => rsx! {
                     div { style: "color:{theme::INK_3};font-family:{theme::SANS};", "上游会话:{eh.upstream_session.clone().unwrap_or_default()} · 在你自己的终端里续接:" }

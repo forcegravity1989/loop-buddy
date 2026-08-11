@@ -163,7 +163,27 @@ fn Root() -> Element {
                     div { style: "color:{theme::signal_color(bw_core::Signal::Red)};padding:24px;", "无法渲染:{msg}" }
                 } else {
                     match current.panel {
-                        Panel::Hex => rsx! { screens::hex::HexScreen { vm: current.clone() } },
+                        Panel::Hex => {
+                            // next 切片七D(design-s7-real-project.md §1
+                            // 「壳的活卡加『开工』『取消』」)——同上面
+                            // `Panel::Attention` 分支的既有分工:这两个闭
+                            // 包是唯一把 `ShellCommand::RunIssue`/
+                            // `ShellCommand::CancelRun` 摆上台面的地方,复
+                            // 核起来只用看这一处。
+                            let kernel_for_run = kernel.clone();
+                            let kernel_for_cancel = kernel.clone();
+                            rsx! {
+                                screens::hex::HexScreen {
+                                    vm: current.clone(),
+                                    on_run_issue: move |id: bw_core::IssueId| {
+                                        kernel_for_run.send(ShellCommand::RunIssue(id));
+                                    },
+                                    on_cancel_run: move |run: bw_core::RunId| {
+                                        kernel_for_cancel.send(ShellCommand::CancelRun(run));
+                                    },
+                                }
+                            }
+                        }
                         Panel::Attention => {
                             // 「完成永远人点」的唯一发令点(硬约束)——这
                             // 个闭包只发 `Command::TransitionIssue { to:

@@ -26,17 +26,25 @@
 //! Refresh`)或人写命令之后的自动重建——**没有任何东西会自己刷新**,这
 //! 是设计稿明确要的行为,不是遗漏。
 //!
-//! **主循环只有一条 `select!`/`recv` 臂,不是设计稿工程对照表原文写的
-//! 「两条」**——如实标注这处偏差:对照表那句话描述的是"收命令"与"收编
-//! 排层发回来的事件"两条通道,但"编排层发回来的事件"在**这一片**的真
-//! 实实现里就是 `App::dispatch` 调用的同步返回值(`Result<Event,
-//! AppError>`),不是一条独立的、需要单独 `select!` 臂去订阅的异步事件
-//! 流;因此这里如实一条 `.recv().await`,把"收命令"与"处理命令返回的事
-//! 件"揉进同一条分支——`tokio::select!` 宏本身也没有用到,因为只有一
-//! 个要等待的源。
+//! **主循环此前只有一条 `select!`/`recv` 臂,直到 next 切片七D**——历史
+//! 记录:切片五E 时这里如实标注过「不是设计稿工程对照表原文写的『两
+//! 条』」,理由是当时"编排层发回来的事件"就是 `App::dispatch` 的同步返
+//! 回值,没有一条独立的异步事件流要订阅;切片 5.5(嵌入终端)落地后又
+//! 记过一笔「这条臂仍然只有一条」,因为终端字节走的是第四条独立通道
+//! (见下方「切片 5.5」一节),不经这条主循环。
 //!
-//! **切片 5.5(嵌入终端)落地后,这条臂仍然只有一条,不是当初预告的
-//! 「再加第二条臂」**——如实记一下这处判断的修正:终端字节不经这条主
+//! **切片七D 是这条判断第一次真的被推翻**(design-s7-real-project.md
+//! §1.4/主控裁决 5):运行状态事件广播([`bw_app::run::RunManager::
+//! subscribe`])需要让**主循环自己**收到「有运行状态变了」这个信号才能
+//! 重建 [`Vm`]——这不是某一张运行卡自己的局部状态(不像终端字节那样每
+//! 个组件各管各的),是"要不要重建整份界面数据"这个全局判断,天然属于
+//! 主循环。因此 [`spawn`] 起的主循环现在真的是 `tokio::select!` 两条
+//! 臂:一条收 [`ShellCommand`],一条收 `RunManager::subscribe()` 的事件
+//! ——**两条都是事件到达才醒**,没有引入任何 `interval`/`sleep`,
+//! `scripts/guard-shell-no-clock.sh` 查的是定时器构造,不是"是不是只有
+//! 一条分支",这条守卫的判据不变、仍然零开口。
+//!
+//! **切片 5.5(嵌入终端)的第四条通道判断不变**:终端字节仍然不经这条主
 //! 循环转发。`bw_app::run::RunManager` 本身是「循环独占状态 + 一条命令
 //! 队列」的架构(`run/manager.rs` 模块文档),`Clone` 出来的每一份把手
 //! 都能安全地从别的地方并发调用它的公开方法(`RunManager::call` 就是
@@ -60,12 +68,22 @@ use bw_app::run::{RunManager, RunManagerConfig};
 use bw_app::view::hex::LoopInputs;
 use bw_app::view::{AttentionView, HexView};
 use bw_app::{App, Command};
-use bw_connector::ConnectorRegistry;
-use bw_core::ProjectId;
-use bw_store::{IssueStore, ProjectRow, RunStore};
+use bw_connector::{ConfigRef, ConnectorEntry, ConnectorKind, ConnectorRegistry, ProjectBinding};
+use bw_core::{ConnectorId, IssueId, IssueStatus, ProjectId, RunId};
+use bw_engine::agentcli::AgentCliConnector;
+use bw_engine::interactive_cli::{InteractiveCliExecutor, CLAUDE};
+use bw_store::{IssueRow, IssueStore, ProjectRow, RunStore};
 use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
+
+/// next 切片七D(design-s7-real-project.md §1.3):壳启动时给每个有本地
+/// 检出根的项目装配的那一条执行连接器的名字——首家是 claude(§1.3「首
+/// 家是 claude」)。每个项目至多一条(§1.3「壳启动时按项目装配一条」,
+/// 单数),所以跨项目复用同一个名字不会撞
+/// `ConnectorRegistry::register` 的「项目内 name 唯一」校验(那条校验按
+/// `(project, name)` 这一对判重,不是全局判重)。
+const REAL_CONNECTOR_NAME: &str = "claude";
 
 /// 两屏,不多不少(design §1.1「屏的形状:两屏,不是七个面板」)。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -84,6 +102,15 @@ pub enum ShellCommand {
     Refresh,
     /// 转发进编排层自己的命令总线。
     Dispatch(Command),
+    /// next 切片七D(design-s7-real-project.md §1.1):开工——转发进
+    /// `bw_app::cmd::issue::run_issue`,**不经** `Dispatch`/`bw_app::
+    /// Command`(那两个函数不是总线上的命令,见 `bw-app/src/cmd/issue.rs`
+    /// 模块文档「为什么」)。壳内零业务判断:这一分支只把「点了哪件活的
+    /// 开工按钮」这个事实原样转发,合法性/工作树供给/连接器解析全部在
+    /// `run_issue` 内部。
+    RunIssue(IssueId),
+    /// next 切片七D——取消,同上转发进 `cmd::issue::cancel_run`。
+    CancelRun(RunId),
 }
 
 /// 壳启动时"这次深链解析到底通没通"的结果——[`spawn`] 用一条
@@ -128,6 +155,13 @@ pub struct Vm {
     /// 询:§4.3「查库在调用它的用例里做」,壳这一层只做展示层筛选,不
     /// 新增查询。
     pub open_runs: Vec<bw_store::RunRow>,
+    /// next 切片七D(design-s7-real-project.md §1「壳的活卡加『开工』
+    /// 『取消』」)——能点「开工」的活(状态待办池/待办,`RunManager::
+    /// start` 允许开工的前两档;「进行中」那一档已经在 `open_runs`
+    /// 里,不重复列)。真实查询(`bw_store::IssueStore::
+    /// list_issues_by_status`,`hex`/`attention` 两屏已有的同一条读
+    /// 法),不是壳自己拼 SQL。
+    pub startable_issues: Vec<IssueRow>,
 }
 
 /// 转瞬即逝的提示——运行/命令进度、错误提示这类不进 [`Vm`] 持久状态的
@@ -207,6 +241,23 @@ fn db_path() -> String {
             format!("{dir}/workbench.db")
         }
         None => "workbench-next.db".into(),
+    }
+}
+
+/// `BW_WORKSPACES` 覆盖;不给就落数据库同目录下的 `workspaces/` 子目录
+/// ——同旧壳(仓根 `crates/app-desktop/src/kernel.rs`)`workspaces_root()`
+/// 一条既有约定,next 这边本片是这个深链变量第一次被真的消费(plan/23
+/// §10 第 20 条清偿)。**消费方式**:`bw_app::cmd::issue::run_issue` 的
+/// `workspaces_root` 形参——项目的 `root_path` 是绝对路径时原样用,是相
+/// 对路径时才接在这个根后面解析(该函数文档细说)。
+fn workspaces_root() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("BW_WORKSPACES") {
+        return std::path::PathBuf::from(p);
+    }
+    let db = std::path::PathBuf::from(db_path());
+    match db.parent() {
+        Some(dir) => dir.join("workspaces"),
+        None => std::path::PathBuf::from("workspaces"),
     }
 }
 
@@ -311,6 +362,7 @@ async fn build_vm(app: &App, manager: &RunManager, nav: &Nav) -> Vm {
         hex: None,
         attention: None,
         open_runs: Vec::new(),
+        startable_issues: Vec::new(),
     };
 
     let Some(pid) = nav.project else {
@@ -356,6 +408,22 @@ async fn build_vm(app: &App, manager: &RunManager, nav: &Nav) -> Vm {
         .filter(|r| r.ended_at.is_none())
         .cloned()
         .collect();
+    // next 切片七D:能点「开工」的活——待办池 + 待办两档(design §1「壳
+    // 的活卡加『开工』」),两次真实查询(同 `list_issues_by_status` 既有
+    // 读法,`Command::TransitionIssue`/`hex`/`attention` 已经在用同一个
+    // 方法),不是壳自己拼合法性判断。
+    let mut startable = app
+        .store
+        .list_issues_by_status(Some(pid), IssueStatus::Backlog)
+        .await
+        .unwrap_or_default();
+    startable.extend(
+        app.store
+            .list_issues_by_status(Some(pid), IssueStatus::Todo)
+            .await
+            .unwrap_or_default(),
+    );
+    vm.startable_issues = startable;
     vm.hex = Some(hex);
     vm.attention = Some(attention);
     vm
@@ -433,10 +501,45 @@ pub fn spawn(outcome_tx: std_mpsc::Sender<DeepLinkOutcome>) -> Kernel {
                         return;
                     }
                 };
-                // 空注册表:本片壳不发起 RunIssue/CollectMetrics(见
-                // Cargo.toml 同一条注释),`RunManager::snapshot` 不碰
-                // 注册表,空的不影响它。
-                let registry = Arc::new(ConnectorRegistry::default());
+                // next 切片七D(design §1.3「壳启动时按项目装配」):真实
+                // 查一次项目清单——登记表要在 `RunManager::open` 之前建好
+                // (`ConnectorRegistry::register` 是 `&mut self`,注册表一
+                // 旦包进 `Arc` 交给运行管理器就不能再改)。下面
+                // `resolve_deep_link` 复用这同一份 `projects`,不重复查
+                // 询。
+                let projects = app.store.list_projects().await.unwrap_or_default();
+                let mut registry = ConnectorRegistry::default();
+                for p in &projects {
+                    // 只给「有本地检出根」的项目装(design §1.3 三条如实
+                    // 标注之一:连接器登记不落库,壳里这段装配是按约定生
+                    // 成的,不是从库里读出来的——换一家 CLI/一个项目挂两
+                    // 条,今天都要改代码,登记为缺口)。
+                    if p.root_path.trim().is_empty() {
+                        continue;
+                    }
+                    let entry = ConnectorEntry {
+                        id: ConnectorId::new(),
+                        name: REAL_CONNECTOR_NAME.to_string(),
+                        kind: ConnectorKind::AgentCli {
+                            cli: CLAUDE.slug.to_string(),
+                        },
+                        binding: ProjectBinding {
+                            project: p.id,
+                            host: String::new(),
+                            path: p.root_path.clone(),
+                        },
+                        config: ConfigRef::AgentRegistryRow {
+                            slug: CLAUDE.slug.to_string(),
+                        },
+                    };
+                    let conn = AgentCliConnector::from_entry(
+                        &entry,
+                        &CLAUDE,
+                        Arc::new(InteractiveCliExecutor::new()),
+                    );
+                    registry.register(entry, conn);
+                }
+                let registry = Arc::new(registry);
                 let manager = match RunManager::open(
                     std::path::Path::new(&real_db_path),
                     registry,
@@ -473,7 +576,6 @@ pub fn spawn(outcome_tx: std_mpsc::Sender<DeepLinkOutcome>) -> Kernel {
                     Err(e) => eprintln!("[BW_REAP] 失败:{e}"),
                 }
 
-                let projects = app.store.list_projects().await.unwrap_or_default();
                 let (mut nav, not_found) = resolve_deep_link(&projects);
                 if not_found {
                     let _ = outcome_tx.send(DeepLinkOutcome::NotFound);
@@ -495,24 +597,85 @@ pub fn spawn(outcome_tx: std_mpsc::Sender<DeepLinkOutcome>) -> Kernel {
                 let _ = vm_tx.send(vm);
                 let _ = outcome_tx.send(DeepLinkOutcome::Ready);
 
-                // 主循环——只有一条要等的源(见模块文档「主循环只有一
-                // 条…」),没有 `tokio::select!`,没有任何定时器构造。
-                while let Some(cmd) = cmd_rx.recv().await {
-                    match cmd {
-                        ShellCommand::SelectProject(pid) => nav.project = Some(pid),
-                        ShellCommand::SetPanel(p) => nav.panel = p,
-                        ShellCommand::Refresh => {}
-                        ShellCommand::Dispatch(c) => match app.dispatch(c).await {
-                            Ok(ev) => {
-                                let _ = note_tx_thread.send(UiNote::Ok(format!("{ev:?}")));
+                // next 切片七D:第二条臂——运行状态事件广播(见模块文档
+                // 「切片七D 是这条判断第一次真的被推翻」一节)。
+                let mut state_rx = manager.subscribe();
+                let mut state_closed = false;
+                let ws_root = workspaces_root();
+
+                // 主循环——两条要等的源,都是事件到达才醒,没有任何定时
+                // 器构造(`tokio::select!` 的两条分支本身不构成轮询)。
+                loop {
+                    tokio::select! {
+                        cmd = cmd_rx.recv() => {
+                            let Some(cmd) = cmd else { break; };
+                            match cmd {
+                                ShellCommand::SelectProject(pid) => nav.project = Some(pid),
+                                ShellCommand::SetPanel(p) => nav.panel = p,
+                                ShellCommand::Refresh => {}
+                                ShellCommand::Dispatch(c) => match app.dispatch(c).await {
+                                    Ok(ev) => {
+                                        let _ = note_tx_thread.send(UiNote::Ok(format!("{ev:?}")));
+                                    }
+                                    Err(e) => {
+                                        let _ = note_tx_thread.send(UiNote::Error(e.to_string()));
+                                    }
+                                },
+                                ShellCommand::RunIssue(issue) => {
+                                    match bw_app::cmd::issue::run_issue(
+                                        &app.store,
+                                        &manager,
+                                        &ws_root,
+                                        issue,
+                                        None,
+                                    )
+                                    .await
+                                    {
+                                        Ok(run_id) => {
+                                            let _ = note_tx_thread
+                                                .send(UiNote::Ok(format!("开工成功,运行 {run_id:?}")));
+                                        }
+                                        Err(e) => {
+                                            let _ = note_tx_thread.send(UiNote::Error(e.to_string()));
+                                        }
+                                    }
+                                }
+                                ShellCommand::CancelRun(run_id) => {
+                                    match bw_app::cmd::issue::cancel_run(&manager, run_id).await {
+                                        Ok(()) => {
+                                            let _ = note_tx_thread
+                                                .send(UiNote::Ok(format!("已取消运行 {run_id:?}")));
+                                        }
+                                        Err(e) => {
+                                            let _ = note_tx_thread.send(UiNote::Error(e.to_string()));
+                                        }
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                let _ = note_tx_thread.send(UiNote::Error(e.to_string()));
+                            let next = build_vm(&app, &manager, &nav).await;
+                            let _ = vm_tx.send(next);
+                        }
+                        evt = state_rx.recv(), if !state_closed => {
+                            match evt {
+                                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                                    // design §1.4:内容只有「哪条运行、现在
+                                    // 什么状态」,壳不解读细节——收到就重
+                                    // 建一次界面数据(Lagged 同样按「有事
+                                    // 发生」处理,同字节订阅既有语义)。
+                                    let next = build_vm(&app, &manager, &nav).await;
+                                    let _ = vm_tx.send(next);
+                                }
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    // 发送端随 `RunManager` 循环任务退出才
+                                    // 会关闭——理论上不该在壳存活期间发
+                                    // 生。停止再 `recv()`(靠 `if
+                                    // !state_closed` 守卫),避免对一个已
+                                    // 关闭的频道忙等。
+                                    state_closed = true;
+                                }
                             }
-                        },
+                        }
                     }
-                    let next = build_vm(&app, &manager, &nav).await;
-                    let _ = vm_tx.send(next);
                 }
             });
         })
