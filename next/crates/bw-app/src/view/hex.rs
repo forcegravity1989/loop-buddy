@@ -174,14 +174,31 @@ impl RiskDecisionSegment {
         "决策记录本片不建——正本住哪(项目仓 ADR 目录?BW 本地表?)还没定,如实留白,不拿交棒记录冒充决策记录。";
 }
 
+/// 交付证据段③「工作区此刻的真状态」的三态(终审必修 Minor s5c-4)。此前
+/// 这里是 `Option<WorkspaceEvidence>`,调用方(`app-desktop::kernel::
+/// build_vm`)把「项目没配检出根」与「配了检出根、但这次 `evidence::
+/// collect` 真的采证失败」两种完全不同的空态,用同一个 `.ok()` 塌成同一
+/// 个 `None`——界面因此把**采证失败**说成**「工作区未配置」**,用户会去
+/// 检查一个根本没问题的配置。三态各自持有各自的证据,不再共用一个
+/// `None`。
+#[derive(Clone, Debug, PartialEq)]
+pub enum WorkspaceEvidenceState {
+    /// 项目没有配置检出根(`root_path` 为空)。
+    NotConfigured,
+    /// 配置了检出根,但这次采证失败——错误原文保留,不吞掉(`let _ =`
+    /// 或 `.ok()` 都是把它吞掉的写法,界面这一段不该再犯)。
+    CollectFailed(String),
+    /// 采证成功。
+    Present(WorkspaceEvidence),
+}
+
 /// 段⑥:交付证据。三栏——①运行账(运行表)②观测出处(观测表)③工作区
 /// 现状(**现采不落库**,design §1.2⑥/§2.6)。
 #[derive(Clone, Debug, PartialEq)]
 pub struct EvidenceSegment {
     pub runs: Vec<RunRow>,
     pub observations: Vec<ObservationRow>,
-    /// `None` = 工作区未配置(design §1.2⑥「没数据时」)。
-    pub workspace_evidence: Option<WorkspaceEvidence>,
+    pub workspace_evidence: WorkspaceEvidenceState,
 }
 
 /// 六段总控屏——一次调用的产物,用完即弃,不是任何持久缓存。
@@ -229,7 +246,7 @@ pub fn build(
     // 减掉,不重新判断「哪些状态允许开工」这条业务规则本身(那条规则
     // 的唯一真身仍是 `run::RunManager::start`,这里只是原样复述判据)。
     startable_candidates: &[IssueRow],
-    workspace_evidence: Option<WorkspaceEvidence>,
+    workspace_evidence: WorkspaceEvidenceState,
     now: OffsetDateTime,
 ) -> HexView {
     let mut cards: Vec<MetricCard> = metrics

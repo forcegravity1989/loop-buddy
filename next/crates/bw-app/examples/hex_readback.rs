@@ -45,7 +45,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use bw_app::run::{RunManager, RunManagerConfig, RunSnapshot};
-use bw_app::view::hex::LoopInputs;
+use bw_app::view::hex::{LoopInputs, WorkspaceEvidenceState};
 use bw_app::{App, Command, Event};
 use bw_connector::ConnectorRegistry;
 use bw_core::{IssueId, IssueStatus, MetricId, ProjectId, RunId, RunState, StageKind};
@@ -800,7 +800,12 @@ async fn section_signal_derive_only(
     };
     let now = OffsetDateTime::now_utc();
     let view = match app
-        .hex_view(project_id, loop_inputs, Some(evidence.clone()), now)
+        .hex_view(
+            project_id,
+            loop_inputs,
+            WorkspaceEvidenceState::Present(evidence.clone()),
+            now,
+        )
         .await
     {
         Ok(v) => v,
@@ -979,7 +984,12 @@ async fn section_restart_consistency(db_path: &str, ws_str: &str, project_id: Pr
     let now = OffsetDateTime::now_utc();
 
     let hex_before = match app1
-        .hex_view(project_id, loop_inputs, Some(evidence1), now)
+        .hex_view(
+            project_id,
+            loop_inputs,
+            WorkspaceEvidenceState::Present(evidence1),
+            now,
+        )
         .await
     {
         Ok(v) => v,
@@ -1133,7 +1143,12 @@ async fn section_hex_segments(
     assert_snapshot_matches_independent_sql(db_path, project_id, &snap, &mut l).await;
     let now = OffsetDateTime::now_utc();
     let view = match app
-        .hex_view(project_id, loop_inputs, Some(evidence.clone()), now)
+        .hex_view(
+            project_id,
+            loop_inputs,
+            WorkspaceEvidenceState::Present(evidence.clone()),
+            now,
+        )
         .await
     {
         Ok(v) => v,
@@ -1322,7 +1337,7 @@ async fn section_hex_segments(
         ),
     );
     match &view.evidence.workspace_evidence {
-        Some(we) => {
+        WorkspaceEvidenceState::Present(we) => {
             l.check(
                 we.commit_count >= 1,
                 format!("工作区证据:commit_count >= 1(实得 {})", we.commit_count),
@@ -1362,7 +1377,10 @@ async fn section_hex_segments(
                 _ => l.fail("独立跑 git rev-list --count HEAD 应该成功"),
             }
         }
-        None => l.fail("此刻工作区已配置,不该是 None"),
+        WorkspaceEvidenceState::NotConfigured => l.fail("此刻工作区已配置,不该是 NotConfigured"),
+        WorkspaceEvidenceState::CollectFailed(err) => l.fail(format!(
+            "此刻工作区已配置且应该采证成功,不该 CollectFailed:{err}"
+        )),
     }
 
     println!("  -- 北极星尚未定稿:仓里删掉 [north_star] 一节再同步 → 灰卡 --");
@@ -1400,7 +1418,7 @@ async fn section_hex_segments(
         .hex_view(
             project_id,
             loop_inputs2,
-            Some(evidence.clone()),
+            WorkspaceEvidenceState::Present(evidence.clone()),
             OffsetDateTime::now_utc(),
         )
         .await
@@ -2006,7 +2024,12 @@ async fn run_restart_probe(args: &[String]) -> ExitCode {
         }
     };
     let hex = match app
-        .hex_view(project_id, loop_inputs, Some(evidence), now)
+        .hex_view(
+            project_id,
+            loop_inputs,
+            WorkspaceEvidenceState::Present(evidence),
+            now,
+        )
         .await
     {
         Ok(v) => v,
@@ -2173,7 +2196,12 @@ async fn section_startable_issues(app: &App) -> Ledger {
         has_any_run: true,
     };
     let view = match app
-        .hex_view(project_id, loop_inputs, None, OffsetDateTime::now_utc())
+        .hex_view(
+            project_id,
+            loop_inputs,
+            WorkspaceEvidenceState::NotConfigured,
+            OffsetDateTime::now_utc(),
+        )
         .await
     {
         Ok(v) => v,
@@ -2210,6 +2238,124 @@ async fn section_startable_issues(app: &App) -> Ledger {
             view.loop_segment.startable_issues.len()
         ),
     );
+
+    l
+}
+
+// ─────────────── 9 · ArchiveMetric 命令进断言面(主控裁决,接线组) ───────────────
+
+/// 主控对死代码审计报告「需人判断」项的裁决(2026-08-11,`.superpowers/
+/// sdd/progress.md` 「接线」组第一条):「停用不物删是产品支柱,孤儿功能
+/// 接上不删」——`Command::ArchiveMetric`/`Event::MetricArchived` 此前只
+/// 在 `bw-app` 实现代码里存在(`cmd::metric::archive_metric` 正文 +
+/// `App::dispatch` 的 match 分支),`hex_readback` 从没真的调过这条命
+/// 令,铁律有实现、没断言。这一节补上完整链路:构造(一条活跃指标)→
+/// 经命令停用(不是直接 `UPDATE`)→ 读回 `archived_at` 落值(停用不是删
+/// 除——行还在)→ 派生链跳过(`view::hex::build` 的 `metrics.iter()
+/// .filter(|m| m.archived_at.is_none())`,停用之后的指标不再出现在六段
+/// 视图的指标卡列表里)→ 再停用一次证明幂等(`changed=false`,不是又停
+/// 用了一次)。
+async fn section_archive_metric_wiring(
+    app: &App,
+    manager: &RunManager,
+    project_id: ProjectId,
+    metrics: &MetricIds,
+) -> Ledger {
+    let mut l = Ledger::new();
+
+    // 停用前:这条指标真的出现在指标卡列表里——否则下面「消失」这一半
+    // 是恒真(没出现过的东西当然不会出现)。
+    let (loop_inputs, _snap) = match current_loop_inputs(&app.store, manager, project_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("组装 LoopInputs 失败:{e}"));
+            return l;
+        }
+    };
+    let before = match app
+        .hex_view(
+            project_id,
+            loop_inputs,
+            WorkspaceEvidenceState::NotConfigured,
+            OffsetDateTime::now_utc(),
+        )
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("停用前 App::hex_view 应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+    l.check(
+        before.metrics.cards.iter().any(|c| c.id == metrics.lagging),
+        "停用前:这条滞后指标出现在指标卡列表里",
+    );
+
+    // 停用:经 `Command::ArchiveMetric`——证明的是这条命令本身真的接了
+    // 线,不是「反正 store 层测过就默认命令层也对」。
+    match app
+        .dispatch(Command::ArchiveMetric {
+            metric: metrics.lagging,
+        })
+        .await
+    {
+        Ok(Event::MetricArchived { changed }) => l.check(changed, "首次停用:changed=true"),
+        Ok(_) => l.fail("Command::ArchiveMetric 应该回 Event::MetricArchived"),
+        Err(e) => l.fail(format!("Command::ArchiveMetric 应该成功,实得错误:{e}")),
+    }
+
+    // 读回:`archived_at` 真的落值,不是命令回执自己说了算。
+    match app.store.get_metric(metrics.lagging).await {
+        Ok(Some(row)) => l.check(
+            row.archived_at.is_some(),
+            format!("读回:archived_at 落值(实得 {:?})", row.archived_at),
+        ),
+        Ok(None) => l.fail("停用之后这条指标本身应该还在(停用不物删)"),
+        Err(e) => l.fail(format!("读回 get_metric 失败:{e}")),
+    }
+
+    // 派生链跳过:六段视图的指标卡不再列出它。
+    let (loop_inputs2, _snap2) = match current_loop_inputs(&app.store, manager, project_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("组装 LoopInputs 失败:{e}"));
+            return l;
+        }
+    };
+    let after = match app
+        .hex_view(
+            project_id,
+            loop_inputs2,
+            WorkspaceEvidenceState::NotConfigured,
+            OffsetDateTime::now_utc(),
+        )
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            l.fail(format!("停用后 App::hex_view 应该成功,实得错误:{e}"));
+            return l;
+        }
+    };
+    l.check(
+        !after.metrics.cards.iter().any(|c| c.id == metrics.lagging),
+        "停用后:这条指标不再出现在指标卡列表里(派生链跳过;上面读回已经证过行还在,这不是删除)",
+    );
+
+    // 幂等:再停用一次,`changed=false`——不是「又真的停用了一次」。
+    match app
+        .dispatch(Command::ArchiveMetric {
+            metric: metrics.lagging,
+        })
+        .await
+    {
+        Ok(Event::MetricArchived { changed }) => {
+            l.check(!changed, "再停用一次:changed=false(幂等空转)")
+        }
+        Ok(_) => l.fail("Command::ArchiveMetric 应该回 Event::MetricArchived"),
+        Err(e) => l.fail(format!("Command::ArchiveMetric 应该成功,实得错误:{e}")),
+    }
 
     l
 }
@@ -2388,6 +2534,26 @@ async fn main() -> ExitCode {
     println!("== 8 · 能点『开工』的活(六段④,next 切片七-2 修,评审 Important-3)==");
     total.merge(section_startable_issues(&app).await);
     println!();
+
+    println!("== 9 · ArchiveMetric 命令进断言面(主控裁决,接线组,2026-08-11)==");
+    total.merge(section_archive_metric_wiring(&app, &manager, project_id, &metrics).await);
+    println!();
+
+    // 终审 Important-3(2026-08-11):断言条数守卫,推广自 `run_races.rs`
+    // 「== 5 ==」那一节的既有先例——同一类假绿在这份指挥器上没有理由不
+    // 会发生:哪一节的 `total.merge(...)` 被漏调,那一节所有断言压根不
+    // 执行(不是失败),`ok` 不会翻,只有条数悄悄变少。这份指挥器没有
+    // `--rounds` 这类会改变断言数的参数,九节各自条数在固定输入下是常
+    // 量,因此不是公式、是这次终审实跑坐实的基线;哪天某一节的断言数真
+    // 的变了(加断言/改场景),照实改这个数,不要删掉这条守卫。
+    let expected_assertions = 112;
+    let actual_before_meta_check = total.count;
+    total.check(
+        actual_before_meta_check == expected_assertions,
+        format!(
+            "断言条数与基线一致(九节固定输入下的常量,期望 {expected_assertions},实得 {actual_before_meta_check};不等就说明有一整节的断言没有真的跑到)"
+        ),
+    );
 
     println!(
         "断言 {} 条,{}",

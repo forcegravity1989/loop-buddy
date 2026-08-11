@@ -221,13 +221,40 @@ pub(crate) fn parse_run_kind(s: &str) -> Result<RunKind> {
 /// `run.end_kind`——上游/BW 对「这次怎么结束的」的诚实分类。`NULL`(不是
 /// 这个类型的一个变体)才是「不知道」——重启遗留就是 `NULL`,绝不填一个
 /// 猜的(design §2.2 注释)。
+///
+/// **`Start*` 四档(终审 Important-7,2026-08-11)**:`bw-connector` 契约
+/// 的 `ConnError`(此 crate 不依赖 `bw-connector`,只按名字说)立了七档
+/// 结构化失败分类,理由是防各连接器重新长出字符串分支。但唯一的生产消
+/// 费点(`bw-app::run::manager::Loop::handle_started` 的 `Err(conn_err)`
+/// 分支)此前把七档一律
+/// `.to_string()` 拍平成一个 `StartFailed` + 自由文本 `end_detail`——
+/// 原文没丢(人看运行卡上的 `end_detail` 还是看得到),但机器再也分不出
+/// 这次开工失败是超时、是这家不支持、还是上游拒绝,「待人处理」没法按
+/// 失败类型分诊。这四档是恢复分类传递的落点(`Canceled`/`Unparsable`/
+/// `Other` 三档没有独立字段,归进 `StartFailed` 兜底——`Unparsable`/
+/// `Other` 本来就没有更具体的说法可分;`ConnError::Canceled` 在这条调用
+/// 路径上理论上不可达,`handle_started` 收到晚到消息时运行已经不在活跃
+/// 表,不会走到这个分支,归进兜底不丢信息,`end_detail` 原文仍然如实)。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RunEndKind {
     ProcessExit,
     StoppedByBw,
     ContactLost,
     Canceled,
+    /// 开工外呼失败,且不属于下面四档中的任何一档更具体的分类
+    /// (`ConnError::Canceled`/`Unparsable`/`Other` 的落点)。
     StartFailed,
+    /// 开工外呼失败——连接器判定这次操作根本不支持
+    /// (`ConnError::Unsupported`)。
+    StartUnsupported,
+    /// 开工外呼失败——连不上上游:CLI 不在 PATH、没登录、host 不可达
+    /// (`ConnError::NotConnected`)。
+    StartNotConnected,
+    /// 开工外呼失败——连上了,上游明确拒绝这次开工(权限不足、分支不
+    /// 存在……,`ConnError::UpstreamRejected`)。
+    StartRejected,
+    /// 开工外呼失败——外呼超时(`ConnError::Timeout`)。
+    StartTimeout,
 }
 
 pub(crate) fn run_end_kind_text(k: RunEndKind) -> &'static str {
@@ -237,6 +264,10 @@ pub(crate) fn run_end_kind_text(k: RunEndKind) -> &'static str {
         RunEndKind::ContactLost => "contact_lost",
         RunEndKind::Canceled => "canceled",
         RunEndKind::StartFailed => "start_failed",
+        RunEndKind::StartUnsupported => "start_unsupported",
+        RunEndKind::StartNotConnected => "start_not_connected",
+        RunEndKind::StartRejected => "start_rejected",
+        RunEndKind::StartTimeout => "start_timeout",
     }
 }
 
@@ -247,6 +278,10 @@ pub(crate) fn parse_run_end_kind(s: &str) -> Result<RunEndKind> {
         "contact_lost" => Ok(RunEndKind::ContactLost),
         "canceled" => Ok(RunEndKind::Canceled),
         "start_failed" => Ok(RunEndKind::StartFailed),
+        "start_unsupported" => Ok(RunEndKind::StartUnsupported),
+        "start_not_connected" => Ok(RunEndKind::StartNotConnected),
+        "start_rejected" => Ok(RunEndKind::StartRejected),
+        "start_timeout" => Ok(RunEndKind::StartTimeout),
         other => Err(StoreError::Other(format!("bad run.end_kind {other:?}"))),
     }
 }

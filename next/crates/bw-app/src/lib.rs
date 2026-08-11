@@ -53,7 +53,6 @@ use bw_store::{
     HandoffStore, IssueStore, MetricStore, MetricSyncReport, ObservationStore, RunStore,
     SqliteStore,
 };
-use bw_workspace::evidence::WorkspaceEvidence;
 use time::OffsetDateTime;
 
 /// 编排层的把手。存储层的一个薄壳 + 状态转移的合法性守卫。运行管理器
@@ -196,7 +195,7 @@ impl App {
         &self,
         project_id: ProjectId,
         loop_inputs: view::hex::LoopInputs,
-        workspace_evidence: Option<WorkspaceEvidence>,
+        workspace_evidence: view::hex::WorkspaceEvidenceState,
         now: OffsetDateTime,
     ) -> Result<view::HexView, AppError> {
         let project = self

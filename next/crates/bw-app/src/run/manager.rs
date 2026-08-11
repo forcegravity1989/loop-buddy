@@ -128,6 +128,17 @@ impl RunManager {
     /// 开工。返回运行编号;活会被推到「进行中」。返回时运行行已经插入
     /// (`state = Starting`)、名额已经占住——**不等**连接器的 `start` 外呼
     /// 真正返回(那一步在后台跑,结果经 [`Cmd::Started`] 回到循环)。
+    ///
+    /// **同工作区串线校验的边界(终审 Important-4,2026-08-11,`plan/23`
+    /// §10 第 11 条选项②)**:「同一个工作区已经有活跃运行时,第二次开
+    /// 工如实拒绝」(`RunError::WorkspaceBusy`)靠内存表 `Loop::
+    /// by_workspace` 实现,这是**尽力而为,不承诺跨重启**——进程重启后
+    /// `by_workspace` 从空表开始,`reap_on_restart()` 不会重建它。今天生
+    /// 产路径上这个空窗构造不出来(工作区按活编号确定性派生,一件活一
+    /// 棵树,`uq_run_live_delivery_per_issue` 部分唯一索引挡住同一件活重
+    /// 复开工),但这是「今天的调用方只有一种造工作区路径」这个前提撑
+    /// 住的,不是这个函数自己的保证——如果将来出现第二条能让不同活拿
+    /// 到同一个工作区路径的调用方,这条校验不会跨重启认出冲突。
     pub async fn start(&self, req: StartRun) -> Result<RunId, RunError> {
         self.call(|reply| Cmd::Start { req, reply }).await
     }
@@ -582,17 +593,12 @@ impl Loop {
             Err(conn_err) => {
                 let at = now_unix();
                 let detail = conn_err.to_string();
+                let end_kind = classify_start_failure(&conn_err);
                 let issue = active_run.issue;
                 let workspace = active_run.workspace.clone();
                 match self
                     .store
-                    .close_run(
-                        run,
-                        at,
-                        RunState::Failed,
-                        Some(RunEndKind::StartFailed),
-                        &detail,
-                    )
+                    .close_run(run, at, RunState::Failed, Some(end_kind), &detail)
                     .await
                 {
                     Ok(true) => {
@@ -777,7 +783,20 @@ impl Loop {
                     cancel: CancellationToken::new(),
                 };
                 if let Some(execute) = connector.as_execute() {
-                    let _ = execute.cancel(&cx, &ticket).await;
+                    // 主控裁决(死代码审计「需人判断」项,接线组第二条):
+                    // 这条外呼是尽力而为——账已经在上面 `close_run` 关过
+                    // 了,不等它、也不能让它的结果改变取消这件事本身的成
+                    // 败。但此前失败时原地吞掉(`let _ =`),没有任何诊断
+                    // 行——同文件里所有别的「尽力而为、失败也不算数」分
+                    // 支都打了 `[run-manager] 诊断:` 这一行(见
+                    // `handle_start`/`handle_started` 的既有先例),这里补
+                    // 齐,不再是唯一吞错误不吭声的分支。
+                    if let Err(fail) = execute.cancel(&cx, &ticket).await {
+                        eprintln!(
+                            "[run-manager] 诊断:运行 {run:?} 取消时对连接器发起的上游 cancel 外呼失败(账已经关过,这里只是尽力而为,不影响已经落库的取消结果):{}",
+                            fail.err
+                        );
+                    }
                 }
             });
         }
@@ -955,6 +974,29 @@ fn map_exec_state(state: ExecState) -> Option<Observed> {
             end_kind: None,
             detail: String::new(),
         }),
+    }
+}
+
+/// 开工外呼失败 → `bw_store::RunEndKind` 的穷举映射(终审 Important-7,
+/// 2026-08-11)。**没有 `_` 通配分支**——同 [`map_exec_state`] 一条纪
+/// 律:`bw_connector::ConnError` 改形状时这里编译不过,逼着这份映射同
+/// 步更新。`ConnError` 立的七档结构化分类此前在这里被 `.to_string()`
+/// 拍平成一个 `StartFailed`,机器再也分不出超时/不支持/上游拒绝——这个
+/// 函数把分类原样传下去,不再丢信息。`Canceled`/`Unparsable`/`Other` 三
+/// 档没有更具体的说法可分(`Unparsable`/`Other` 本来就是「说不清是哪一
+/// 类」;`ConnError::Canceled` 在这条调用路径上理论不可达,晚到的取消
+/// 消息在 `handle_started` 里走的是另一支「已不在活跃表,诚实空转」),
+/// 归进 `StartFailed` 兜底——原文(`end_detail`)不受影响,只是 `end_kind`
+/// 这一列不再更细分。
+fn classify_start_failure(err: &ConnError) -> RunEndKind {
+    match err {
+        ConnError::Unsupported { .. } => RunEndKind::StartUnsupported,
+        ConnError::NotConnected(_) => RunEndKind::StartNotConnected,
+        ConnError::Timeout(_) => RunEndKind::StartTimeout,
+        ConnError::UpstreamRejected { .. } => RunEndKind::StartRejected,
+        ConnError::Canceled | ConnError::Unparsable { .. } | ConnError::Other(_) => {
+            RunEndKind::StartFailed
+        }
     }
 }
 

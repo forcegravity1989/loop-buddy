@@ -65,7 +65,7 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::OnceLock;
 
 use bw_app::run::{RunManager, RunManagerConfig};
-use bw_app::view::hex::LoopInputs;
+use bw_app::view::hex::{LoopInputs, WorkspaceEvidenceState};
 use bw_app::view::{AttentionView, HexView};
 use bw_app::{App, Command};
 use bw_connector::{ConfigRef, ConnectorEntry, ConnectorKind, ConnectorRegistry, ProjectBinding};
@@ -379,12 +379,19 @@ async fn build_vm(app: &App, manager: &RunManager, nav: &Nav) -> Vm {
         }
     };
     // 交付证据第③栏「现采不落库」(§2.6):`root_path` 空 = 工作区未配
-    // 置,`workspace_evidence` 如实是 `None`,不去猜一个假路径来采。
+    // 置,不去猜一个假路径来采。终审必修 Minor s5c-4:此前配了检出根但
+    // `evidence::collect` 真的采证失败这一支被 `.ok()` 悄悄吞掉、并进了
+    // 「未配置」那同一个 `None`——界面因此把**采证失败**说成**「工作区未
+    // 配置」**,用户会去检查一个根本没问题的配置。三态(未配置/采证失
+    // 败/成功)各自持有各自的证据,不再共用一个 `Option`。
     let workspace_evidence = match app.store.get_project(pid).await {
         Ok(Some(p)) if !p.root_path.trim().is_empty() => {
-            bw_workspace::evidence::collect(&p.root_path).await.ok()
+            match bw_workspace::evidence::collect(&p.root_path).await {
+                Ok(ev) => WorkspaceEvidenceState::Present(ev),
+                Err(e) => WorkspaceEvidenceState::CollectFailed(e.to_string()),
+            }
         }
-        _ => None,
+        _ => WorkspaceEvidenceState::NotConfigured,
     };
     let hex = match app
         .hex_view(pid, loop_inputs, workspace_evidence, now)
@@ -424,7 +431,25 @@ async fn build_vm(app: &App, manager: &RunManager, nav: &Nav) -> Vm {
 /// 深链渲染证明(design §4.4)——`[BW_OPEN] "项目名" -> panel=Hex 指标=N
 /// 观测=N 运行=N 待人处理=N`,数字从真实 `Vm` 读,不硬编。只在真的解析
 /// 了 `BW_OPEN` 时打(没有深链的正常交互式启动不刷屏)。
-fn print_bw_open_line(project_name: &str, vm: &Vm) {
+///
+/// **终审必修 Minor s5c-7 口径订正(2026-08-11)**:这个函数本身没变,变
+/// 的是**调用点**。此前调用点在 [`spawn`] 的编排层线程里、`build_vm`
+/// 刚组装完 `Vm` 就打——那一刻 `dioxus::launch` 还没被调用(`main()` 仍
+/// 在 `outcome_rx.recv_timeout` 上同步等着),没有任何窗口存在,这一行
+/// 证明的只是"数据层没崩(`App`/`RunManager` 打开成功、`build_vm` 没
+/// panic)",不是 `CLAUDE.md` 定义的"桌面渲染的可靠证明"——语义已经弱
+/// 化,但没有任何文档点出这个变化。现在的调用点挪到了 `main.rs`
+/// `Root()` 组件的 `use_effect` 里,在 `vm` 信号第一次带着 `ready=true`
+/// 的真实数据被组件树接住、`rsx!` 完成一次渲染提交(dioxus 对
+/// `use_effect` 的既有时序保证:回调排在这一轮渲染提交**之后**)才打。
+/// **如实标注这次订正证明到了哪一步,不夸大**:它证明的是"Dioxus 组件
+/// 树真的挂载、拿到了这份 `Vm`、完成过至少一次渲染提交",不是"WebView
+/// 引擎已经把像素画到屏幕上"——`click`/computer-use 在这套桌面框架上
+/// 长期打不通(`CLAUDE.md`「computer-use 摸桌面应用」一节),没有比这更
+/// 接近真实绘制完成的机器可测信号;比订正前的"数据层没崩"仍然是实质的
+/// 收紧。`pub(crate)` 是因为调用方现在在 `main.rs`(同一个 crate 的兄弟
+/// 模块),不再是这个模块自己的私有细节。
+pub(crate) fn print_bw_open_line(project_name: &str, vm: &Vm) {
     let (metrics, observations, runs) = match &vm.hex {
         Some(h) => (
             h.metrics.cards.len(),
@@ -574,18 +599,14 @@ pub fn spawn(outcome_tx: std_mpsc::Sender<DeepLinkOutcome>) -> Kernel {
                     return;
                 }
 
+                // 终审必修 Minor s5c-7:`[BW_OPEN]` 这行**不在这里打**了——
+                // 这一刻 `dioxus::launch` 还没被调用,没有任何窗口存在,
+                // 打在这里只证明得到"数据层没崩"。真正的打印点挪到了
+                // `main.rs` `Root()` 组件首次渲染提交之后(见
+                // `print_bw_open_line` 文档「终审必修 Minor s5c-7 口径订
+                // 正」一节)——这里只把 `vm` 原样发出去,`Root()` 自己判
+                // 断要不要打这一行。
                 let vm = build_vm(&app, &manager, &nav).await;
-                if std::env::var("BW_OPEN").is_ok() {
-                    if let Some(pid) = nav.project {
-                        let name = vm
-                            .projects
-                            .iter()
-                            .find(|p| p.id == pid)
-                            .map(|p| p.name.clone())
-                            .unwrap_or_default();
-                        print_bw_open_line(&name, &vm);
-                    }
-                }
                 let _ = vm_tx.send(vm);
                 let _ = outcome_tx.send(DeepLinkOutcome::Ready);
 

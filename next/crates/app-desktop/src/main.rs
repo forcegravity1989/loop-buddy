@@ -7,7 +7,12 @@
 //! 待人处理=N`。`BW_OPEN` 对不上任何项目时,进程在**打开任何窗口之前**
 //! 以非零码退出(§4.4「一处新增」)——见 [`kernel::DeepLinkOutcome`] 文
 //! 档「如实的偏差」一节,讲清楚这个判断为什么发生在 `main()` 而不是
-//! (像旧壳那样)完全交给编排层线程 fire-and-forget。
+//! (像旧壳那样)完全交给编排层线程 fire-and-forget。**打印点(终审必修
+//! Minor s5c-7,2026-08-11 订正)**:找对上项目的这一支,那一行打在
+//! `Root()` 组件第一次真的拿到 `Vm` 并完成一轮渲染提交**之后**(见
+//! [`kernel::print_bw_open_line`] 文档),不再打在 `dioxus::launch` 调用
+//! 之前的编排层线程里——之前的打法只证明"数据层没崩",这里如实说明证明
+//! 到了哪一步(组件树挂载渲染,不是 WebView 像素级绘制完成)。
 
 #![forbid(unsafe_code)]
 
@@ -108,6 +113,7 @@ fn Root() -> Element {
     });
     let mut vm = use_signal(Vm::default);
     let mut toast = use_signal(|| None::<String>);
+    let mut bw_open_printed = use_signal(|| false);
 
     // 最新内核快照 → 唯一的渲染真相来源(同旧壳 main.rs 同款 `use_future`
     // 订阅 `watch::Receiver` 的写法)。
@@ -122,6 +128,30 @@ fn Root() -> Element {
                     let next = rx.borrow().clone();
                     vm.set(next);
                 }
+            }
+        }
+    });
+
+    // 深链渲染证明(design §4.4;终审必修 Minor s5c-7):`[BW_OPEN]` 那一
+    // 行原来打在编排层线程里、`dioxus::launch` 调用之前——那一刻没有任
+    // 何窗口存在,证明的只是"数据层没崩"。这里挪到组件树第一次真的拿到
+    // `ready=true` 的 `Vm` 并完成一轮渲染提交**之后**(`use_effect` 排在
+    // 渲染提交之后触发,是 dioxus 的既有时序保证)——`bw_open_printed`
+    // 防抖动,后续每次 `vm` 变化重渲染不会重复打这一行。`kernel::
+    // print_bw_open_line` 函数本身没变,只是调用点变了(该函数文档细说
+    // 这次订正证明到了哪一步、没到哪一步,不夸大)。
+    use_effect(move || {
+        let current = vm();
+        if current.ready && !bw_open_printed() && std::env::var("BW_OPEN").is_ok() {
+            if let Some(pid) = current.selected {
+                let name = current
+                    .projects
+                    .iter()
+                    .find(|p| p.id == pid)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default();
+                kernel::print_bw_open_line(&name, &current);
+                bw_open_printed.set(true);
             }
         }
     });

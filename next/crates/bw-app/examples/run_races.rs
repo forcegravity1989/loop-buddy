@@ -1166,11 +1166,20 @@ async fn section_r4(ctx: &Ctx) -> Ledger {
                 );
             }
             7 => {
+                // 终审 Important-7(2026-08-11):这条脚本用
+                // `ConnError::NotConnected` 触发起跑失败(见
+                // `build_scripts` 第 7 件的 `start_fails` 配置);运行管理
+                // 器现在把这七档结构化分类原样传下去(`classify_start_
+                // failure`),不再全部拍平成 `StartFailed`——这条断言此前
+                // 判的是 `start_failed`,分类恢复传递之后如实改判
+                // `start_not_connected`(本条断言在实现这次修复时自然从
+                // 绿转红,是分类真的接上了线的证据,不是靠专门造的突
+                // 变)。
                 l.check(
                     row.state == bw_core::RunState::Failed
-                        && row.end_kind == Some(bw_store::RunEndKind::StartFailed),
+                        && row.end_kind == Some(bw_store::RunEndKind::StartNotConnected),
                     format!(
-                        "第 7 件 state=failed end_kind=start_failed(实得 state={:?} end_kind={:?})",
+                        "第 7 件 state=failed end_kind=start_not_connected(实得 state={:?} end_kind={:?})",
                         row.state, row.end_kind
                     ),
                 );

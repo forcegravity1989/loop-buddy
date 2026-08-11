@@ -24,6 +24,7 @@
 
 use bw_app::view::hex::{
     EvidenceSegment, FiveRolesSegment, LoopSegment, MetricCard, NorthStarView, RiskDecisionSegment,
+    WorkspaceEvidenceState,
 };
 use bw_core::{IssueId, IssueStatus, RunId, Signal};
 use bw_store::IssueRow;
@@ -446,15 +447,25 @@ fn EvidenceSegmentView(seg: EvidenceSegment) -> Element {
                     style: "{theme::card()}",
                     div { style: "font-weight:600;font-size:12px;margin-bottom:6px;", "工作区此刻的真状态" }
                     match &seg.workspace_evidence {
-                        Some(ev) => rsx! {
+                        WorkspaceEvidenceState::Present(ev) => rsx! {
                             div { style: "font-size:11px;color:{theme::INK_2};", "提交数 {ev.commit_count} · 跟踪文件 {ev.tracked_files} · 未提交路径 {ev.dirty_paths} · docs/ 下 {ev.docs_files} 份文档" }
                             for s in ev.recent_subjects.iter().take(3) {
                                 div { style: "font-size:11px;color:{theme::INK_3};margin-top:3px;", "· {s}" }
                             }
                         },
-                        None => rsx! {
+                        WorkspaceEvidenceState::NotConfigured => rsx! {
                             div { style: "font-size:12px;color:{theme::INK_3};", "工作区未配置。" }
                         },
+                        // 终审必修 Minor s5c-4:这是与「未配置」不同的另一种空
+                        // 态——项目配了检出根,但这次采证真的失败了,如实说
+                        // 「采证失败」,不再假冒成「未配置」误导用户去检查一个
+                        // 没问题的配置;错误原文摘进文案,方便定位。
+                        WorkspaceEvidenceState::CollectFailed(err) => {
+                            let amber = theme::signal_color(Signal::Amber);
+                            rsx! {
+                                div { style: "font-size:12px;color:{amber};", "工作区采证失败:{err}" }
+                            }
+                        }
                     }
                 }
             }
