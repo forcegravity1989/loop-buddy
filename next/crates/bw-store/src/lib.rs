@@ -646,3 +646,175 @@ pub trait HandoffStore: Send + Sync {
 // 的调用点就是这两列,统一走 `StageKind::index()`/`from_index()` 之后这两
 // 个函数变成死代码。`CLAUDE.md`「不为向后兼容留旧路径」:没有别的调用点
 // 要留,就不留一个没人用的兼容层。
+
+// ───────────────────────────── import(next 切片七A,cfg(feature = "import")) ─────────────────────────────
+//
+// design-s7-real-project.md §2.4 第三处硬碰撞:「新库的正常写入面写不出
+// 历史」——建项目不收创建时刻、建活不收状态与结算时刻、记观测不收创建时
+// 刻(都由实现自己取当前时刻)。导入要写的全是历史时刻与历史状态,上面
+// 那些方法一个都用不上。这里新开一条**导入专用的写入面**,方法收完整的
+// 行(含所有时刻与状态),全部走「撞了就跳过」的插入(`INSERT OR IGNORE`
+// ——身份编号原样沿用旧库,撞了就是重复导入,数据库自己跳过,§2.6)。
+//
+// **两条硬约束**(§2.4):
+// 1. 只在开了 `import` 这个 cargo 特性时才编译出来——整个模块挂在
+//    `#[cfg(feature = "import")]` 上,壳的产物不开这个特性,这些类型和
+//    这条 trait 在壳里根本不存在,不是「有但不许用」。
+//    `scripts/guard-import-feature-off.sh` 查真实依赖图断言这一点。
+// 2. 这条写入面里不许有任何更新或删除方法,只有插入——观测表的两条数
+//    据库触发器(`trg_observation_no_update`/`trg_observation_no_delete`)
+//    照旧生效,导入器也绕不过(它走的还是同一张 `observation` 表)。
+//
+// **为什么这不算给「完成永远由人点」开后门**:导入写的是"这件活在旧库里
+// 当时就是已完成"这个历史事实,不是一次状态转移——它不经过合法转移表
+// (`bw_core::IssueStatus::can_transition_to`),因为它压根不是转移。这个
+// 区别只有靠特性开关才立得住:开关关着,生产路径上就没有第二条能写"已
+// 完成"的路;开关开着,那是一次性导入,人在命令行上亲自确认过
+// (`--confirm`)。
+#[cfg(feature = "import")]
+pub use import::{
+    ImportArtifactRow, ImportHandoffRow, ImportIssueRow, ImportLedgerEntry, ImportMetricRow,
+    ImportObservationRow, ImportProjectRow, ImportStore,
+};
+
+#[cfg(feature = "import")]
+mod import {
+    use crate::{MetricTier, Result};
+    use async_trait::async_trait;
+    use bw_core::{
+        ArtifactId, HandoffId, IssueId, IssueStatus, MetricId, ObservationId, ProjectId, StageKind,
+    };
+
+    /// 旧库一行项目的完整历史形态(design §2.2①)。`active_stage` 是
+    /// `Option`——签名上允许 `None`,但调用方(导入器)读到的旧库这一列
+    /// **不可空**,所以真实调用永远是 `Some`;这里不收窄成必填,是因为
+    /// 「这个方法天生写不出哪个值」不是这个类型该守的边界(那是导入器自
+    /// 己读旧库时的事实,不是这条写入面的合法性判断——同 `IssueStore`/
+    /// `RunStore` 一贯的"合法性由调用方决定,这层只管写"分工)。
+    #[derive(Clone, Debug)]
+    pub struct ImportProjectRow {
+        pub id: ProjectId,
+        pub name: String,
+        pub root_path: String,
+        pub active_stage: Option<StageKind>,
+        pub created_at: i64,
+    }
+
+    /// 旧库一行指标(或合成的北极星行)的完整历史形态(design §2.2②③)。
+    /// `origin` 是裸 `String`("file" | "manual")——同 `MetricRow::origin`
+    /// 的既有形状,不是这里新造的判断。
+    #[derive(Clone, Debug)]
+    pub struct ImportMetricRow {
+        pub id: MetricId,
+        pub project_id: ProjectId,
+        pub tier: MetricTier,
+        pub name: String,
+        pub def: String,
+        pub target_raw: String,
+        pub collect_kind: String,
+        pub collect_query: String,
+        pub origin: String,
+        pub archived_at: Option<i64>,
+        pub created_at: i64,
+        pub updated_at: i64,
+    }
+
+    /// 旧库一行观测的完整历史形态(design §2.2④)。`id` 原样沿用旧库编
+    /// 号——这是幂等语义成立的关键一环(§2.6:重复导入天然安全,靠的就是
+    /// 编号原样沿用 + 数据库自己拒绝重复主键)。
+    #[derive(Clone, Debug)]
+    pub struct ImportObservationRow {
+        pub id: ObservationId,
+        pub metric_id: MetricId,
+        pub project_id: ProjectId,
+        pub ts: i64,
+        pub raw_value: String,
+        pub source: String,
+        pub source_hint: String,
+        pub created_at: i64,
+    }
+
+    /// 旧库一行活的完整历史形态(design §2.2⑤)。**导入的活按旧库状态原
+    /// 样搬,不做任何状态推进**——`status` 收 `IssueStatus` 本身(不是像
+    /// `IssueStore::mark_issue_in_progress` 那样窄到写不出别的值),因为
+    /// 这里就是要把旧库里真实存在的"已完成"这个历史事实原样写进来,不经
+    /// 过合法转移表(见本节模块文档"为什么这不算开后门")。
+    #[derive(Clone, Debug)]
+    pub struct ImportIssueRow {
+        pub id: IssueId,
+        pub project_id: ProjectId,
+        pub number: i64,
+        pub title: String,
+        pub status: IssueStatus,
+        pub settled_at: Option<i64>,
+        pub stage: Option<StageKind>,
+        pub body: String,
+        pub created_at: i64,
+        pub updated_at: i64,
+    }
+
+    /// 旧库一行交棒的完整历史形态(design §2.2⑦)。
+    #[derive(Clone, Debug)]
+    pub struct ImportHandoffRow {
+        pub id: HandoffId,
+        pub project_id: ProjectId,
+        pub from_stage: StageKind,
+        pub to_stage: StageKind,
+        pub risky: bool,
+        pub note: String,
+        pub created_at: i64,
+    }
+
+    /// 旧库一行产物登记的完整历史形态(design §2.2⑥,主控裁决 1:导成历
+    /// 史存档表 `artifact_archive`,与新工程读时现采的交付证据栏分开)。
+    /// `imported_at` 不在这里——store 自己盖当前时刻,同 `created_at` 在
+    /// 其它写入面上一贯"由实现取当前时刻"的分工;这条历史行本身没有"导入
+    /// 时刻"这个概念上的历史值可言,它就是"现在"。
+    #[derive(Clone, Debug)]
+    pub struct ImportArtifactRow {
+        pub id: ArtifactId,
+        pub project_id: ProjectId,
+        pub issue_id: Option<IssueId>,
+        pub stage: Option<StageKind>,
+        pub path: String,
+        pub kind: String,
+        pub bytes: i64,
+        pub git_commit: String,
+        pub registered_at: i64,
+    }
+
+    /// 一次真写(`--confirm`)的流水记账输入(design §2.6)。`created_at`
+    /// 不在这里——store 自己盖当前时刻(这次真写发生的那一刻本身就是历
+    /// 史,不需要调用方传入)。
+    #[derive(Clone, Debug)]
+    pub struct ImportLedgerEntry {
+        pub legacy_db_path: String,
+        pub legacy_db_fingerprint: String,
+        pub project_count: i64,
+        pub metric_count: i64,
+        pub observation_count: i64,
+        pub issue_count: i64,
+        pub handoff_count: i64,
+        pub artifact_count: i64,
+    }
+
+    /// 导入专用写入面。**只有插入,没有任何更新/删除方法**——这是这条
+    /// trait 存在的全部理由(§2.4 硬约束 2)。每个 `import_*` 方法返回
+    /// `bool`:`true` = 这次真插入了一行新的;`false` = 撞了主键,数据库
+    /// 自己跳过(`INSERT OR IGNORE`)——调用方(导入器)靠这个区分"新增"
+    /// 与"重复",不需要自己先查一遍存不存在。
+    #[async_trait]
+    pub trait ImportStore: Send + Sync {
+        async fn import_project(&self, row: ImportProjectRow) -> Result<bool>;
+        async fn import_metric(&self, row: ImportMetricRow) -> Result<bool>;
+        async fn import_observation(&self, row: ImportObservationRow) -> Result<bool>;
+        async fn import_issue(&self, row: ImportIssueRow) -> Result<bool>;
+        async fn import_handoff(&self, row: ImportHandoffRow) -> Result<bool>;
+        async fn import_artifact(&self, row: ImportArtifactRow) -> Result<bool>;
+
+        /// 只追加的导入流水——每次真写记一行(design §2.6)。不是防重复
+        /// 的机制本身(防重复靠上面六个方法各自的 `INSERT OR IGNORE`),
+        /// 是让第二次运行能说人话。
+        async fn record_import_ledger(&self, entry: ImportLedgerEntry) -> Result<()>;
+    }
+}

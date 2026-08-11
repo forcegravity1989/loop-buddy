@@ -43,16 +43,21 @@ impl SqliteStore {
         // Apply schema statement-by-statement. Strip `--` line comments first
         // so a `;` inside a comment can't split a statement mid-sentence
         // (same parsing shape as v1's `open()`).
-        let cleaned: String = SCHEMA
-            .lines()
-            .map(|line| match line.find("--") {
-                Some(i) => &line[..i],
-                None => line,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for stmt in schema_statements(&cleaned) {
+        for stmt in schema_statements(&strip_line_comments(SCHEMA)) {
             sqlx::query(&stmt).execute(&pool).await?;
+        }
+
+        // next 切片七A(design-s7-real-project.md §2.4 第三处硬碰撞/§8.1):
+        // 导入专用的两张表(`import_ledger`/`artifact_archive`)只在开了
+        // `import` 这个 cargo 特性时才应用——壳的产物默认不开这个特性,
+        // 这两张表在壳打开的库里根本不会被建出来。与上面 `SCHEMA` 走同一
+        // 条语句切分逻辑,不重新发明一遍解析。
+        #[cfg(feature = "import")]
+        {
+            const IMPORT_SCHEMA: &str = include_str!("schema_import.sql");
+            for stmt in schema_statements(&strip_line_comments(IMPORT_SCHEMA)) {
+                sqlx::query(&stmt).execute(&pool).await?;
+            }
         }
 
         // 迁移双守卫的第一次真实调用(next 切片四D,design §2.4/§5.2 第
@@ -105,6 +110,20 @@ async fn add_column_if_missing(
             .await?;
     }
     Ok(())
+}
+
+/// 剥掉 `--` 行注释,让一个出现在注释里的 `;` 不会把语句切错(同
+/// `SqliteStore::open` 原本内联的写法,next 切片七A 抽出来给
+/// `schema_import.sql` 复用——两份 schema 文件走同一条解析路径,不重新
+/// 发明一遍)。
+fn strip_line_comments(sql: &str) -> String {
+    sql.lines()
+        .map(|line| match line.find("--") {
+            Some(i) => &line[..i],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// 把整份 schema.sql(已经剥掉 `--` 行注释)切成一条条可独立执行的语句。
@@ -1123,4 +1142,182 @@ fn handoff_row_from_sqlx(r: &sqlx::sqlite::SqliteRow) -> Result<HandoffRow> {
         note: r.get("note"),
         created_at: r.get("created_at"),
     })
+}
+
+// ───────────────────────────── import(next 切片七A,cfg(feature = "import")) ─────────────────────────────
+//
+// 整块只在开了 `import` 特性时编译——`crate::lib.rs` 里 `ImportStore` trait
+// 本身也是同一条 `#[cfg]`,两边缺一不可才算「壳的产物里根本不存在」。
+// 每个 `import_*` 方法都是 `INSERT OR IGNORE`(design §2.6「撞了就跳
+// 过」):`rows_affected() == 1` = 这次真插入了新的一行;`0` = 撞了主键
+// (同一个旧编号第二次导入),数据库自己拒绝重复插入,调用方据此区分
+// "新增"与"重复",不需要先查一遍存不存在。**没有任何 UPDATE/DELETE**
+// (design §2.4 硬约束 2)——观测表的两条数据库触发器因此照旧生效,这里
+// 走的还是同一张 `observation` 表,不是绕过去的第二条路。
+#[cfg(feature = "import")]
+mod import_impl {
+    use super::now_unix;
+    use crate::{
+        metric_tier_text, ImportArtifactRow, ImportHandoffRow, ImportIssueRow, ImportLedgerEntry,
+        ImportMetricRow, ImportObservationRow, ImportProjectRow, ImportStore, Result, SqliteStore,
+    };
+    use async_trait::async_trait;
+    use bw_core::IssueStatus;
+    use uuid::Uuid;
+
+    /// `issue.status` 文本编码——这个模块自己需要一份(导入的是历史状态原
+    /// 文,不经过 `bw_core::IssueStatus::can_transition_to`),不复用外层
+    /// 私有的 `super::issue_status_text`(那个函数只给「合法转移之后落
+    /// 盘」的路径用,这里刻意分开命名,免得将来有人把导入路径错接到状态
+    /// 机守卫上,见 lib.rs `import` 模块文档「为什么这不算开后门」)。
+    fn issue_status_text(s: IssueStatus) -> &'static str {
+        match s {
+            IssueStatus::Backlog => "backlog",
+            IssueStatus::Todo => "todo",
+            IssueStatus::InProgress => "in_progress",
+            IssueStatus::InReview => "in_review",
+            IssueStatus::Done => "done",
+            IssueStatus::Blocked => "blocked",
+            IssueStatus::Cancelled => "cancelled",
+        }
+    }
+
+    #[async_trait]
+    impl ImportStore for SqliteStore {
+        async fn import_project(&self, row: ImportProjectRow) -> Result<bool> {
+            let outcome = sqlx::query(
+                "INSERT OR IGNORE INTO project (id, name, root_path, active_stage, created_at) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(row.id.uuid().to_string())
+            .bind(&row.name)
+            .bind(&row.root_path)
+            .bind(row.active_stage.map(|s| s.index() as i64))
+            .bind(row.created_at)
+            .execute(&self.pool)
+            .await?;
+            Ok(outcome.rows_affected() == 1)
+        }
+
+        async fn import_metric(&self, row: ImportMetricRow) -> Result<bool> {
+            let outcome = sqlx::query(
+                "INSERT OR IGNORE INTO metric (id, project_id, tier, name, def, target_raw, \
+                 collect_kind, collect_query, origin, archived_at, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(row.id.uuid().to_string())
+            .bind(row.project_id.uuid().to_string())
+            .bind(metric_tier_text(row.tier))
+            .bind(&row.name)
+            .bind(&row.def)
+            .bind(&row.target_raw)
+            .bind(&row.collect_kind)
+            .bind(&row.collect_query)
+            .bind(&row.origin)
+            .bind(row.archived_at)
+            .bind(row.created_at)
+            .bind(row.updated_at)
+            .execute(&self.pool)
+            .await?;
+            Ok(outcome.rows_affected() == 1)
+        }
+
+        async fn import_observation(&self, row: ImportObservationRow) -> Result<bool> {
+            let outcome = sqlx::query(
+                "INSERT OR IGNORE INTO observation (id, metric_id, project_id, ts, raw_value, \
+                 source, source_hint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(row.id.uuid().to_string())
+            .bind(row.metric_id.uuid().to_string())
+            .bind(row.project_id.uuid().to_string())
+            .bind(row.ts)
+            .bind(&row.raw_value)
+            .bind(&row.source)
+            .bind(&row.source_hint)
+            .bind(row.created_at)
+            .execute(&self.pool)
+            .await?;
+            Ok(outcome.rows_affected() == 1)
+        }
+
+        async fn import_issue(&self, row: ImportIssueRow) -> Result<bool> {
+            let outcome = sqlx::query(
+                "INSERT OR IGNORE INTO issue (id, project_id, number, title, status, \
+                 settled_at, stage, body, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(row.id.uuid().to_string())
+            .bind(row.project_id.uuid().to_string())
+            .bind(row.number)
+            .bind(&row.title)
+            .bind(issue_status_text(row.status))
+            .bind(row.settled_at)
+            .bind(row.stage.map(|s| s.index() as i64))
+            .bind(&row.body)
+            .bind(row.created_at)
+            .bind(row.updated_at)
+            .execute(&self.pool)
+            .await?;
+            Ok(outcome.rows_affected() == 1)
+        }
+
+        async fn import_handoff(&self, row: ImportHandoffRow) -> Result<bool> {
+            let outcome = sqlx::query(
+                "INSERT OR IGNORE INTO handoff (id, project_id, from_stage, to_stage, risky, \
+                 note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(row.id.uuid().to_string())
+            .bind(row.project_id.uuid().to_string())
+            .bind(row.from_stage.index() as i64)
+            .bind(row.to_stage.index() as i64)
+            .bind(row.risky as i64)
+            .bind(&row.note)
+            .bind(row.created_at)
+            .execute(&self.pool)
+            .await?;
+            Ok(outcome.rows_affected() == 1)
+        }
+
+        async fn import_artifact(&self, row: ImportArtifactRow) -> Result<bool> {
+            let outcome = sqlx::query(
+                "INSERT OR IGNORE INTO artifact_archive (id, project_id, issue_id, \
+                 stage_index, path, kind, bytes, git_commit, registered_at, imported_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(row.id.uuid().to_string())
+            .bind(row.project_id.uuid().to_string())
+            .bind(row.issue_id.map(|i| i.uuid().to_string()))
+            .bind(row.stage.map(|s| s.index() as i64))
+            .bind(&row.path)
+            .bind(&row.kind)
+            .bind(row.bytes)
+            .bind(&row.git_commit)
+            .bind(row.registered_at)
+            .bind(now_unix())
+            .execute(&self.pool)
+            .await?;
+            Ok(outcome.rows_affected() == 1)
+        }
+
+        async fn record_import_ledger(&self, entry: ImportLedgerEntry) -> Result<()> {
+            sqlx::query(
+                "INSERT INTO import_ledger (id, legacy_db_path, legacy_db_fingerprint, \
+                 project_count, metric_count, observation_count, issue_count, handoff_count, \
+                 artifact_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(&entry.legacy_db_path)
+            .bind(&entry.legacy_db_fingerprint)
+            .bind(entry.project_count)
+            .bind(entry.metric_count)
+            .bind(entry.observation_count)
+            .bind(entry.issue_count)
+            .bind(entry.handoff_count)
+            .bind(entry.artifact_count)
+            .bind(now_unix())
+            .execute(&self.pool)
+            .await?;
+            Ok(())
+        }
+    }
 }
