@@ -36,6 +36,13 @@ time = { workspace = true, features = ["std"] }
 # 要把它解析回 `ProjectId`——同旧壳 `main.rs` 解析 `BW_SEL=skill:<uuid>`
 # 那行的同款用法,不是新引入的第三方依赖(workspace 里本就有)。
 uuid = { workspace = true }
+# next 切片 5.5(design-s5-hexpanel.md §5.3):嵌入终端的 JS↔Rust 桥接——
+# `screens::terminal` 用 `serde_json` 拼/转义送进 `document::eval` 的脚
+# 本与 JSON 消息,用 `serde::Deserialize` 解析 JS 侧 `dioxus.send(...)`
+# 推回来的事件(`JsEvent`)。两个都已经是 workspace 依赖,这里第一次被
+# `app-desktop` 引用。
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # `examples/seed_shell_demo.rs`(深链验证的造数脚本,不是行为验收指挥

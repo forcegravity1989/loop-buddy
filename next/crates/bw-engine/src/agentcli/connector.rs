@@ -12,11 +12,12 @@
 //! `TerminalManager` 持有的输入 sender 触发 `pty_backend` 已经验证过的
 //! killpg 收尾语义(见下方 `cancel` 文档)——不重新发明一套杀进程逻辑。
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use bw_connector::caps::{Connector, Execute, Probe, ProbeReport};
+use bw_connector::caps::{Connector, Execute, Interactive, Probe, ProbeReport, TermInput};
 use bw_connector::contract::{
     guarded, CallCtx, ConnError, ConnResult, ConnectorEntry, ConnectorKind, ExecSpec, ExecState,
     ExecTicket, InjectBlock, OpClass, ProjectBinding, RequestId, SessionEnd,
@@ -24,14 +25,28 @@ use bw_connector::contract::{
 use bw_core::playbook::PlaybookCtx;
 use bw_core::{ConversationId, IssueId, WorkflowId};
 use sha2::{Digest, Sha256};
+use tokio::sync::broadcast;
 
+use super::pump::spawn_pump;
 use super::session::{discover_sessions, InjectRecord, SessionRow, SessionTable};
 use crate::interactive_cli::{
     build_bridge_system_prompt, build_resume_plan, build_startup_plan, InteractiveExecutor,
-    TuiAgentConfig,
+    PtyInput, TuiAgentConfig,
 };
 use crate::terminal_manager::{ConversationMeta, TerminalManager};
 use crate::{ExecError, RunCtx};
+
+/// [`TermInput`](bw-connector 契约层的镜像声明,见该类型文档)→
+/// [`PtyInput`](这一层内部真正喂给 `TerminalManager::input` 的类型)。两
+/// 个变体一一对应,纯搬运,不带判断。
+impl From<TermInput> for PtyInput {
+    fn from(input: TermInput) -> Self {
+        match input {
+            TermInput::Bytes(b) => PtyInput::Bytes(b),
+            TermInput::Resize { cols, rows } => PtyInput::Resize { cols, rows },
+        }
+    }
+}
 
 /// `ExecSpec` 目前没有独立的「这件活要干什么」字段(v1 `position_prompt`
 /// 承担的角色,任务正文/需求描述)——契约冻结在切片二,`inject` 按本片口径
@@ -189,7 +204,21 @@ pub struct AgentCliConnector {
     exec: Arc<dyn InteractiveExecutor>,
     terminals: Arc<Mutex<TerminalManager>>,
     sessions: Arc<Mutex<SessionTable>>,
+    /// next 切片 5.5:每个活着的会话一条广播频道,`start` 在 `attach` 的同
+    /// 一刻开一条、`close_conversation` 在会话收尾时摘掉——
+    /// `Interactive::subscribe` 从这张表按会话 id 发一份 `Receiver`;
+    /// [`pump::spawn_pump`] 起的泵任务按 v1 同款 100ms 节奏抽
+    /// `TerminalManager::drain_events`,再按会话 id 分发进这张表对应的频
+    /// 道。**两张表键不同、锁分开**(同本文件顶部模块文档「两张表,键不
+    /// 同,不绑一起」的既有原则,这里加的是第三张,同一个原则)。
+    byte_senders: Arc<Mutex<HashMap<ConversationId, broadcast::Sender<Vec<u8>>>>>,
 }
+
+/// 每会话广播频道的容量——同 [`crate::terminal_manager::OUTPUT_BATCH_CAP`]
+/// (输出环的批次上限)同一个数量级:订阅方掉线/迟迟不 `recv` 时,
+/// `broadcast::Sender::send` 不阻塞、只让最老的批次被挤掉(`Lagged`),不
+/// 会拖慢泵任务或撑爆内存。
+const BYTE_CHANNEL_CAPACITY: usize = 64;
 
 impl AgentCliConnector {
     pub fn new(
@@ -197,6 +226,13 @@ impl AgentCliConnector {
         row: &'static TuiAgentConfig,
         exec: Arc<dyn InteractiveExecutor>,
     ) -> Self {
+        let terminals = Arc::new(Mutex::new(TerminalManager::new()));
+        let byte_senders = Arc::new(Mutex::new(HashMap::new()));
+        // next 切片 5.5/主控裁决 7:字节泵住在这里(引擎侧),不住壳
+        // 里——见 `pump` 模块文档。这个连接器实例活多久,泵就跑多久
+        // (`pump::spawn_pump` 文档「不做显式停止」一节如实记了这条取
+        // 舍)。
+        spawn_pump(terminals.clone(), byte_senders.clone());
         Self {
             kind: ConnectorKind::AgentCli {
                 cli: row.slug.to_string(),
@@ -204,9 +240,37 @@ impl AgentCliConnector {
             binding,
             row,
             exec,
-            terminals: Arc::new(Mutex::new(TerminalManager::new())),
+            terminals,
             sessions: Arc::new(Mutex::new(SessionTable::new())),
+            byte_senders,
         }
+    }
+
+    /// 关掉一个会话的两张表:`TerminalManager` 里的 PTY 路由 + 这个连接器
+    /// 自己的广播频道。**两处必须一起摘**——只摘前者会让 `byte_senders`
+    /// 里留一条再也不会有新字节、却还没被 drop 的频道(不是内存泄漏,
+    /// `broadcast::Sender` 的订阅方会在下次 `recv` 时收到 `Closed`
+    /// 才发现——`Sender` 本身没有被 drop,`Closed` 永远不会发生,是一条
+    /// 真实的行为偏差,不只是"不好看")。原来 `terminals.lock().close(id)`
+    /// 的两处调用点(开工外呼后台任务收尾 / `cancel`)都改叫这个函数,零
+    /// 逻辑改写,只是把两行合成一步不许再漏掉一半。
+    ///
+    /// **关联函数、不是 `&self` 方法**——两处调用点都在 `tokio::spawn` 出
+    /// 去的 `'static` 任务里(后台开工任务本身、`cancel` 内部的
+    /// `guarded(...)` 异步块),它们持有的是 `terminals`/`byte_senders`
+    /// 两个 `Arc` 的克隆,不持有 `&self`(`self` 的生命周期不是
+    /// `'static`,借不进 `tokio::spawn`)。
+    fn close_conversation(
+        terminals: &Mutex<TerminalManager>,
+        byte_senders: &Mutex<HashMap<ConversationId, broadcast::Sender<Vec<u8>>>>,
+        id: ConversationId,
+    ) {
+        {
+            let mut t = terminals.lock().expect("terminal manager mutex poisoned");
+            t.close(id);
+        }
+        let mut senders = byte_senders.lock().expect("byte senders mutex poisoned");
+        senders.remove(&id);
     }
 
     /// 登记工厂用的构造入口(同 gh/script 两家的 `from_entry` 口径)。
@@ -258,6 +322,13 @@ impl Connector for AgentCliConnector {
     }
 
     fn as_execute(&self) -> Option<&dyn Execute> {
+        Some(self)
+    }
+
+    /// next 切片 5.5(design-s5-hexpanel.md §5.3):claude 一家真支持交互式
+    /// 字节流——它本来就是一次 PTY 会话,`Interactive` 只是把已经在
+    /// `terminals`/`byte_senders` 里活着的东西经统一契约递出去。
+    fn as_interactive(&self) -> Option<&dyn Interactive> {
         Some(self)
     }
 }
@@ -313,6 +384,7 @@ impl Execute for AgentCliConnector {
         let exec = self.exec.clone();
         let terminals = self.terminals.clone();
         let sessions = self.sessions.clone();
+        let byte_senders = self.byte_senders.clone();
         let project = self.binding.project;
 
         guarded(cx, OpClass::Write, async move {
@@ -442,6 +514,15 @@ impl Execute for AgentCliConnector {
                 let mut t = terminals.lock().expect("terminal manager mutex poisoned");
                 t.attach(conversation_id, meta, initial_size)
             };
+            // next 切片 5.5:这个会话专属的广播频道——`pump::spawn_pump`
+            // 抽到这个会话的字节就是往这条频道发,`Interactive::subscribe`
+            // 就是从这里 `.subscribe()` 一份。开在 `attach` 成功的同一刻,
+            // 关在 `close_conversation`(下面两处收尾各自会调)。
+            {
+                let (tx, _rx) = broadcast::channel(BYTE_CHANNEL_CAPACITY);
+                let mut senders = byte_senders.lock().expect("byte senders mutex poisoned");
+                senders.insert(conversation_id, tx);
+            }
 
             {
                 let mut t = sessions.lock().expect("session table mutex poisoned");
@@ -461,6 +542,7 @@ impl Execute for AgentCliConnector {
             // 结果写回会话表——`poll` 读到的就是这里写的事实。
             let sessions_bg = sessions.clone();
             let terminals_bg = terminals.clone();
+            let byte_senders_bg = byte_senders.clone();
             let run_ctx = RunCtx {
                 project,
                 // agentcli 层没有 workflow 身份(§8 范围裁剪)——两个
@@ -523,11 +605,10 @@ impl Execute for AgentCliConnector {
                 // `cancel` 过的会话继续算成「活着」,是假活。
                 // `TerminalManager::close` 对已经不存在的 key 是安全的
                 // no-op(`HashMap::remove` 找不到就什么也不干),`cancel`
-                // 已经摘过的会话这里重复摘一次没有副作用。
-                let mut term = terminals_bg
-                    .lock()
-                    .expect("terminal manager mutex poisoned");
-                term.close(conversation_id);
+                // 已经摘过的会话这里重复摘一次没有副作用。next 切片
+                // 5.5:同一步也要摘掉 `byte_senders` 里这一条(见
+                // `close_conversation` 文档)。
+                Self::close_conversation(&terminals_bg, &byte_senders_bg, conversation_id);
             });
 
             // C1:`upstream_session` 是空串时,票据如实回 `None`——不把一个
@@ -572,6 +653,7 @@ impl Execute for AgentCliConnector {
         let req = t.req;
         let sessions = self.sessions.clone();
         let terminals = self.terminals.clone();
+        let byte_senders = self.byte_senders.clone();
         guarded(cx, OpClass::Write, async move {
             let snapshot = {
                 let table = sessions.lock().expect("session table mutex poisoned");
@@ -586,10 +668,9 @@ impl Execute for AgentCliConnector {
                 return Ok(()); // 已结束/已取消——幂等。
             }
 
-            {
-                let mut term = terminals.lock().expect("terminal manager mutex poisoned");
-                term.close(conversation);
-            }
+            // next 切片 5.5:同一步摘掉 `byte_senders` 里这一条(见
+            // `close_conversation` 文档)。
+            Self::close_conversation(&terminals, &byte_senders, conversation);
             {
                 let mut table = sessions.lock().expect("session table mutex poisoned");
                 if let Some(row) = table.get_mut(req) {
@@ -599,6 +680,33 @@ impl Execute for AgentCliConnector {
             Ok(())
         })
         .await
+    }
+}
+
+/// next 切片 5.5(design-s5-hexpanel.md §5.3):`ExecTicket.req` → 会话表查
+/// `conversation` → 广播频道表查这条会话的 `Sender`。**同步**——见
+/// `bw_connector::caps::Interactive` 文档「不走 `guarded`/`CallCtx`」一
+/// 节:这两个方法只是把已经在内存里活着的 channel 把手递出去,不联系任
+/// 何外部系统。
+impl Interactive for AgentCliConnector {
+    fn subscribe(&self, ticket: &ExecTicket) -> Option<broadcast::Receiver<Vec<u8>>> {
+        let conversation = self.session_row(ticket.req)?.conversation;
+        let senders = self
+            .byte_senders
+            .lock()
+            .expect("byte senders mutex poisoned");
+        senders.get(&conversation).map(|tx| tx.subscribe())
+    }
+
+    fn send_input(&self, ticket: &ExecTicket, input: TermInput) -> bool {
+        let Some(conversation) = self.session_row(ticket.req).map(|r| r.conversation) else {
+            return false;
+        };
+        let terminals = self
+            .terminals
+            .lock()
+            .expect("terminal manager mutex poisoned");
+        terminals.input(conversation, input.into())
     }
 }
 

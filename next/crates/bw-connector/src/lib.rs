@@ -35,7 +35,8 @@ pub use adapters::script::ScriptConnector;
 #[cfg(feature = "script")]
 pub use adapters::script_source::{self, ScriptSourceError, CONNECTORS_FILE_REL_PATH};
 pub use caps::{ChangeState, CheckConclusion, CheckRun, Collect, CollectOut, CollectReq};
-pub use caps::{Connector, Execute, IssueOps, IssueState, OpenChangeReq, Probe, ProbeReport};
+pub use caps::{Connector, Execute, Interactive, IssueOps, IssueState, OpenChangeReq};
+pub use caps::{Probe, ProbeReport, TermInput};
 pub use contract::{
     guarded, unsupported, CallCtx, CallOk, Capability, CapabilitySet, ConfigRef, ConnError,
     ConnResult, ConnectorEntry, ConnectorKind, ExecSpec, ExecState, ExecTicket, Fail, IdemKey,

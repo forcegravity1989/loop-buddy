@@ -12,3 +12,9 @@ mod types;
 
 pub use manager::RunManager;
 pub use types::{ReapReport, RunError, RunManagerConfig, RunSnapshot, StartRun};
+
+/// next 切片 5.5(design-s5-hexpanel.md §5.3):`RunManager::terminal_input`
+/// 的入参类型——重导出自 `bw-connector`(契约层的正本),不是 `bw-app` 自
+/// 己发明的类型。壳(`app-desktop`)拼键盘/尺寸事件时从这里取,不需要单
+/// 独再依赖一次 `bw_connector::caps`。
+pub use bw_connector::caps::TermInput;

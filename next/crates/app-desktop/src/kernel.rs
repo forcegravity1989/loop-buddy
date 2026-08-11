@@ -31,16 +31,30 @@
 //! 排层发回来的事件"两条通道,但"编排层发回来的事件"在**这一片**的真
 //! 实实现里就是 `App::dispatch` 调用的同步返回值(`Result<Event,
 //! AppError>`),不是一条独立的、需要单独 `select!` 臂去订阅的异步事件
-//! 流——`bw-app`/`RunManager` 今天**没有**提供这样一条可订阅的运行进度
-//! /终端字节广播通道(那条通道属于嵌入终端,plan/23 §7 主控裁决 7 钉死
-//! 落在切片 5.5,不在本片)。为了凑「两条」而开一个不消费任何真实数据
-//! 源的 `select!` 分支,就是本仓库最忌的那种"形式对了、内容是空的"东
-//! 西;因此这里如实一条 `.recv().await`,把"收命令"与"处理命令返回的事
+//! 流;因此这里如实一条 `.recv().await`,把"收命令"与"处理命令返回的事
 //! 件"揉进同一条分支——`tokio::select!` 宏本身也没有用到,因为只有一
-//! 个要等待的源。等嵌入终端接进来(切片 5.5)、真的有第二条事件源时,
-//! 再加第二条臂。
+//! 个要等待的源。
+//!
+//! **切片 5.5(嵌入终端)落地后,这条臂仍然只有一条,不是当初预告的
+//! 「再加第二条臂」**——如实记一下这处判断的修正:终端字节不经这条主
+//! 循环转发。`bw_app::run::RunManager` 本身是「循环独占状态 + 一条命令
+//! 队列」的架构(`run/manager.rs` 模块文档),`Clone` 出来的每一份把手
+//! 都能安全地从别的地方并发调用它的公开方法(`RunManager::call` 就是
+//! 「发命令、等回信」,不要求调用方是唯一持有者)——这与 `App` 必须被
+//! 这条内核线程独占持有是两回事。因此 [`Kernel`] 直接多存一份
+//! `RunManager` 的克隆([`Kernel::manager`]),每张「进行中」运行卡的嵌
+//! 入终端组件(`screens::terminal::TerminalWidget`)在自己的
+//! `use_future` 里直接调 `kernel.manager().terminal_feed(run_id)` 拿一份
+//! `broadcast::Receiver<Vec<u8>>`,自己起一个 `tokio::select!` 收 PTY 字
+//! 节 + 收 JS 推来的键盘/尺寸事件——两路都是事件到达才醒,没有一次
+//! `sleep`/`interval`(`screens::terminal` 模块文档细说这条「壳零时钟」
+//! 怎么在没有轮询的前提下做到)。这条订阅完全绕开了 [`Vm`]/`watch`/
+//! `broadcast<UiNote>` 三条既有通道,是**第四条**独立通道,但它不是一
+//! 条要塞进主循环 `select!` 的事件源——每个终端组件自己的生命周期就是
+//! 它的作用域,不需要内核线程知道它的存在。
 
 use std::sync::mpsc as std_mpsc;
+use std::sync::OnceLock;
 
 use bw_app::run::{RunManager, RunManagerConfig};
 use bw_app::view::hex::LoopInputs;
@@ -134,6 +148,18 @@ pub struct Kernel {
     tx: mpsc::UnboundedSender<ShellCommand>,
     vm_rx: watch::Receiver<Vm>,
     notes: broadcast::Sender<UiNote>,
+    /// 第四条通道(见模块文档「切片 5.5」一节)——`RunManager` 自己就是
+    /// 「循环独占状态 + 命令队列」的克隆安全把手,终端组件直接拿它订阅
+    /// 字节流/写输入,不经 `ShellCommand`/`Vm`。**`OnceLock` 而不是直接
+    /// 存一份 `RunManager`**:[`spawn`] 必须在起好线程后立刻同步返回
+    /// `Kernel`(`main()` 在调用 `dioxus::launch` 之前就要拿到这个把
+    /// 手),但 `RunManager::open` 是异步的、只能在线程内部的 tokio 运行
+    /// 时里跑——同 `main.rs` 里 `static KERNEL: OnceLock<Kernel>` 一样的
+    /// 「先给把手,内容随后填」手法。`.manager()` 因此返回
+    /// `Option<&RunManager>`:`None` 如实覆盖两种情形(启动流程还没跑到
+    /// 那一步/`RunManager::open` 真的失败了,`Vm.fatal` 会同时说明后一
+    /// 种),调用方(终端组件)按「暂无终端」处理,不是 panic。
+    manager: Arc<OnceLock<RunManager>>,
 }
 
 impl Kernel {
@@ -145,6 +171,12 @@ impl Kernel {
     }
     pub fn notes(&self) -> broadcast::Receiver<UiNote> {
         self.notes.subscribe()
+    }
+    /// next 切片 5.5:嵌入终端组件用它订阅字节流/写输入
+    /// (`RunManager::terminal_feed`/`terminal_input`)。见字段文档「为什
+    /// 么是 `OnceLock`」。
+    pub fn manager(&self) -> Option<&RunManager> {
+        self.manager.get()
     }
 }
 
@@ -375,6 +407,10 @@ pub fn spawn(outcome_tx: std_mpsc::Sender<DeepLinkOutcome>) -> Kernel {
     // 留一份给要返回的 `Kernel`——线程闭包移进去的是克隆(广播 sender 本
     // 来就是给多个持有者共用的),不是唯一那份。
     let note_tx_thread = note_tx.clone();
+    // next 切片 5.5:`RunManager` 只在线程内部异步开出来,`Kernel::manager`
+    // 字段文档「为什么是 OnceLock」一节讲清楚了这条手法。
+    let manager_cell: Arc<OnceLock<RunManager>> = Arc::new(OnceLock::new());
+    let manager_cell_thread = manager_cell.clone();
 
     std::thread::Builder::new()
         .name("bw-next-kernel".into())
@@ -419,6 +455,11 @@ pub fn spawn(outcome_tx: std_mpsc::Sender<DeepLinkOutcome>) -> Kernel {
                         return;
                     }
                 };
+                // next 切片 5.5:填 `manager` 这个 `OnceLock`——从这一刻
+                // 起 `Kernel::manager()` 才会返回 `Some`。`RunManager` 本
+                // 身 `Clone` 廉价(克隆的是命令队列 sender,不是状态),
+                // 这里克隆一份存进 cell,原件留给下面的主循环继续用。
+                let _ = manager_cell_thread.set(manager.clone());
                 // 重启后收拾遗留(design-s4-runmanager.md §3.1)——桌面壳
                 // 是 `RunManager` 第一个"真的会被人重复启动"的调用方
                 // (`run_races`/`hex_readback` 两个指挥器都是单次跑完就
@@ -481,5 +522,6 @@ pub fn spawn(outcome_tx: std_mpsc::Sender<DeepLinkOutcome>) -> Kernel {
         tx: cmd_tx,
         vm_rx,
         notes: note_tx,
+        manager: manager_cell,
     }
 }

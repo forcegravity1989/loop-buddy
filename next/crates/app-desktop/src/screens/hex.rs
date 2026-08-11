@@ -244,6 +244,14 @@ fn LoopSegmentView(seg: LoopSegment, open_runs: Vec<bw_store::RunRow>) -> Elemen
     }
 }
 
+/// **逃生舱行保留,终端可用时也显示**(next 切片 5.5,design-s5-
+/// hexpanel.md §5.2/§5.3,主控裁决 7:「终端是增强不是替代」)——续接命
+/// 令是外部路径(在自己的终端里 `claude --resume`),嵌入终端是内部路径
+/// (卡片里直接看/敲),两者并存如实,不因为有了嵌入终端就拿掉逃生舱那
+/// 一行文案。`TerminalWidget` 自己决定要不要渲染任何东西(没有活会话
+/// 时渲染空,§5.3 表「隐藏不等于停收」的另一面——这里连挂都不挂,不是
+/// 挂了再隐藏),这张卡因此对没有活会话的运行(今天的默认情形,壳的连
+/// 接器注册表是空的)是零回归的:界面上看到的和切片五收官时一模一样。
 #[component]
 fn EscapeHatchCard(run: bw_store::RunRow) -> Element {
     let eh = app_desktop::escape_hatch::build(&run);
@@ -253,13 +261,14 @@ fn EscapeHatchCard(run: bw_store::RunRow) -> Element {
             div { style: "color:{theme::INK_2};margin-bottom:4px;font-family:{theme::SANS};", "运行 {eh.run_label} · 进行中" }
             match eh.resume_command {
                 Some(cmd) => rsx! {
-                    div { style: "color:{theme::INK_3};font-family:{theme::SANS};", "上游会话:{eh.upstream_session.clone().unwrap_or_default()} · 暂无嵌入终端;在你自己的终端里续接:" }
+                    div { style: "color:{theme::INK_3};font-family:{theme::SANS};", "上游会话:{eh.upstream_session.clone().unwrap_or_default()} · 在你自己的终端里续接:" }
                     div { style: "color:{theme::INK};margin-top:2px;", "{cmd}" }
                 },
                 None => rsx! {
                     div { style: "color:{theme::INK_3};font-family:{theme::SANS};", "这家不支持指派会话号,续接方式未知。" }
                 },
             }
+            crate::screens::terminal::TerminalWidget { run: run.clone() }
         }
     }
 }

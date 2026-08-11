@@ -20,11 +20,11 @@ use std::time::Duration;
 
 use bw_connector::{
     CallCtx, ConnError, Connector, ConnectorRegistry, ExecSpec, ExecState, ExecTicket, RequestId,
-    SessionEnd,
+    SessionEnd, TermInput,
 };
 use bw_core::{IssueId, IssueStatus, ProjectId, RunId, RunState};
 use bw_store::{IssueStore, NewRun, RunEndKind, RunKind, RunStore, SqliteStore};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::types::{ReapReport, RunError, RunManagerConfig, RunSnapshot, StartRun};
@@ -123,6 +123,36 @@ impl RunManager {
         self.call(|reply| Cmd::Snapshot { project, reply }).await
     }
 
+    /// next 切片 5.5(design-s5-hexpanel.md §5.3/主控裁决 7):订阅这条运行
+    /// 的终端字节流。**这就是简报点名的「bw-app 侧字节泵/订阅接口」**——
+    /// 但这里没有一个字节真正流过 `bw-app`:它只是从循环独占的活跃表里
+    /// 拿到这条运行的 `Arc<dyn Connector>` + `ExecTicket`,downcast 成
+    /// `bw_connector::caps::Interactive`(agentcli 一家在 `bw-engine` 里实
+    /// 现的能力,契约类型全部住在 `bw-connector`),转发它的 `subscribe`。
+    /// `bw-app` 因此**不需要依赖 `bw-engine`**——`scripts/guard-app-
+    /// layering.sh` 那条「编排层不准正式依赖引擎」的边一个字不用改。
+    ///
+    /// `Ok(None)` 覆盖三种如实情形,不细分——调用方(壳)只关心「有没有
+    /// 终端可看」:①这条运行不在活跃表(已经关门/从未在本进程跑过);
+    /// ②还在 `Starting`,连接器的 `start` 还没返回,没有票据;③连接器不
+    /// 支持交互式字节流(`gh`/`codehub`/`script` 三家跑的运行,这条运行
+    /// 压根不是一次 agentcli 会话)。三种情形界面上显示的都是同一句话
+    /// (「暂无嵌入终端」,逃生舱行照旧),细分对界面没有额外价值。
+    pub async fn terminal_feed(
+        &self,
+        run: RunId,
+    ) -> Result<Option<broadcast::Receiver<Vec<u8>>>, RunError> {
+        self.call(|reply| Cmd::TerminalFeed { run, reply }).await
+    }
+
+    /// 写键盘输入/尺寸变化。`Ok(true)` = 真的送进去了;`Ok(false)` = 同
+    /// `terminal_feed` 的三种「如实没有」情形之一(转发 `Interactive::
+    /// send_input` 的 `false`,或运行/票据/能力任一环节缺失)。
+    pub async fn terminal_input(&self, run: RunId, input: TermInput) -> Result<bool, RunError> {
+        self.call(|reply| Cmd::TerminalInput { run, input, reply })
+            .await
+    }
+
     /// 四个「发命令、等回信」公开方法共用的样板:发送失败(队列已关)与
     /// 回信丢失(循环任务提前退出)统一映射成 [`RunError::Closed`]。
     async fn call<T>(
@@ -161,6 +191,19 @@ enum Cmd {
     Snapshot {
         project: Option<ProjectId>,
         reply: oneshot::Sender<Result<RunSnapshot, RunError>>,
+    },
+    /// next 切片 5.5:订阅这条运行的终端字节流(见
+    /// [`RunManager::terminal_feed`] 文档)。
+    TerminalFeed {
+        run: RunId,
+        reply: oneshot::Sender<Result<Option<broadcast::Receiver<Vec<u8>>>, RunError>>,
+    },
+    /// next 切片 5.5:写这条运行的键盘输入/尺寸变化(见
+    /// [`RunManager::terminal_input`] 文档)。
+    TerminalInput {
+        run: RunId,
+        input: TermInput,
+        reply: oneshot::Sender<Result<bool, RunError>>,
     },
     /// 内部命令:某运行的开工外呼(`Execute::start`)完成了。
     Started {
@@ -245,6 +288,14 @@ impl Loop {
             Cmd::Snapshot { project, reply } => {
                 let snap = self.handle_snapshot(project).await;
                 let _ = reply.send(snap);
+            }
+            Cmd::TerminalFeed { run, reply } => {
+                let result = self.handle_terminal_feed(run);
+                let _ = reply.send(result);
+            }
+            Cmd::TerminalInput { run, input, reply } => {
+                let result = self.handle_terminal_input(run, input);
+                let _ = reply.send(result);
             }
             Cmd::Started { run, outcome } => self.handle_started(run, outcome).await,
             Cmd::Observed { run, state } => self.handle_observed(run, state).await,
@@ -743,6 +794,42 @@ impl Loop {
             recent_failed,
             unsettled,
         })
+    }
+
+    /// next 切片 5.5:[`RunManager::terminal_feed`] 的落地——纯读,不
+    /// `.await`(活跃表在内存里,`Interactive::subscribe` 不联系外部系
+    /// 统)。三档「如实没有」见该方法文档,这里穷举成三次 `let-else`,不
+    /// 用 `?` 糊成一条,免得读的人分不清「不在活跃表」和「真的出错」——
+    /// 这里三档都不是错误,`Ok(None)`。
+    fn handle_terminal_feed(
+        &self,
+        run: RunId,
+    ) -> Result<Option<broadcast::Receiver<Vec<u8>>>, RunError> {
+        let Some(active) = self.active.get(&run) else {
+            return Ok(None); // 不在活跃表:已关门,或本进程从未见过。
+        };
+        let Some(ticket) = &active.ticket else {
+            return Ok(None); // 还在 Starting,`start` 还没回,没有票据。
+        };
+        let Some(interactive) = active.connector.as_interactive() else {
+            return Ok(None); // 这条运行的连接器不支持交互式字节流。
+        };
+        Ok(interactive.subscribe(ticket))
+    }
+
+    /// next 切片 5.5:[`RunManager::terminal_input`] 的落地,同上三档穿透
+    /// 成 `false`(未能送达),不是错误。
+    fn handle_terminal_input(&self, run: RunId, input: TermInput) -> Result<bool, RunError> {
+        let Some(active) = self.active.get(&run) else {
+            return Ok(false);
+        };
+        let Some(ticket) = &active.ticket else {
+            return Ok(false);
+        };
+        let Some(interactive) = active.connector.as_interactive() else {
+            return Ok(false);
+        };
+        Ok(interactive.send_input(ticket, input))
     }
 
     fn release_issue_slot(&mut self, issue: IssueId, run: RunId) {

@@ -96,6 +96,16 @@ fn Root() -> Element {
         .get()
         .expect("main() 必须在 dioxus::launch 之前把 Kernel 存进 KERNEL")
         .clone();
+    // next 切片 5.5:`Kernel` 经 context 供全树读取——`screens::terminal::
+    // TerminalWidget` 用它订阅字节流(`use_context::<Kernel>()`),不当
+    // prop 传:`Kernel` 内含 tokio channel 把手,没有(也不该造一个假
+    // 的)`PartialEq`,`#[component]` 的 props diff 要求每个 prop 都实现
+    // 它——同 v1 `TerminalWidget` 自己 `use_context::<Kernel>()` 的既有
+    // 先例(`kernel` 模块文档「切片 5.5」一节)。
+    use_context_provider({
+        let kernel = kernel.clone();
+        move || kernel
+    });
     let mut vm = use_signal(Vm::default);
     let mut toast = use_signal(|| None::<String>);
 

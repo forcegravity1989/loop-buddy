@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use tokio::sync::broadcast;
 
 use crate::contract::{
     CallCtx, Capability, CapabilitySet, ConnResult, ConnectorKind, ExecSpec, ExecState, ExecTicket,
@@ -37,8 +38,14 @@ pub trait Connector: Send + Sync {
     fn as_issue_ops(&self) -> Option<&dyn IssueOps> {
         None
     }
+    /// next 切片 5.5(design-s5-hexpanel.md §5.3):交互式字节流,agentcli
+    /// 一家专属实现。默认 `None`——`gh`/`codehub`/`script` 三家老适配器一行
+    /// 不改,新增能力不逼它们表态。
+    fn as_interactive(&self) -> Option<&dyn Interactive> {
+        None
+    }
 
-    /// **provided 方法,由上面四个推导出来**——声明与实现不可能分叉,因为
+    /// **provided 方法,由上面五个推导出来**——声明与实现不可能分叉,因为
     /// `as_probe` 返回 `Some(self)` 编译器要求 `Self: Probe`。界面上「这条
     /// 连接器支持什么」直接读它,不需要第二处维护。
     fn capabilities(&self) -> CapabilitySet {
@@ -54,6 +61,9 @@ pub trait Connector: Send + Sync {
         }
         if self.as_issue_ops().is_some() {
             s = s.with(Capability::IssueOps);
+        }
+        if self.as_interactive().is_some() {
+            s = s.with(Capability::Interactive);
         }
         s
     }
@@ -225,4 +235,46 @@ pub enum CheckConclusion {
     Failed,
     Running,
     Unknown,
+}
+
+// ─── ⑤ 交互式字节流(next 切片 5.5,design-s5-hexpanel.md §5.3)──────────
+
+/// 交互式能力:订阅一次 [`Execute::start`] 起的会话的终端字节、写键盘输入
+/// /尺寸。**agentcli 一家专属**——`gh`/`codehub`/`script` 三家没有交互式
+/// 会话,`Connector::as_interactive` 默认 `None`。
+///
+/// **同步方法,不走 `guarded`/`CallCtx`**:这不是一次「外呼」(不联系任何
+/// 外部系统、不需要幂等/超时/取消这些契约概念)——它只是把一个已经在内
+/// 存里活着的字节 channel 的把手递给调用方,和 `Probe`/`Execute`/
+/// `Collect`/`IssueOps` 四个「真联系一次外部系统」的能力不是同一类动作。
+/// 这与 `bw-engine::terminal_manager::TerminalManager::input`/`resize` 本
+/// 身就是同步方法是同一个判断(那份文件本片不改一行)。
+///
+/// **主控裁决(design-s5-hexpanel.md §5 附·plan/23 §7 裁决 7)落地**:字节
+/// 抽取的节奏归实现方(`bw-engine` agentcli 层的泵任务)持有,这条 trait
+/// 的调用方(`bw-app::run::RunManager` → `app-desktop`)只订阅、不拉取,壳
+/// 里因此不需要、也不许出现任何定时器构造(`scripts/guard-shell-no-
+/// clock.sh` 守这条线)。
+pub trait Interactive: Send + Sync {
+    /// 订阅这张票据对应会话**从此刻起**的字节流(不回放历史——历史字节
+    /// 已经在有界输出环里被丢弃或消费过,这条订阅接口不新造一份回放机
+    /// 制)。会话不存在/已经关闭 → `None`,如实,不是错误(同
+    /// `TerminalManager::input` 对不存在会话回 `false` 的口径)。
+    fn subscribe(&self, ticket: &ExecTicket) -> Option<broadcast::Receiver<Vec<u8>>>;
+
+    /// 写键盘输入或尺寸变化。会话不存在 → `false`(同
+    /// `TerminalManager::input`/`resize` 的既有口径,这里只是转发)。
+    fn send_input(&self, ticket: &ExecTicket, input: TermInput) -> bool;
+}
+
+/// 交互式输入的两种形状——形状与
+/// `bw-engine::interactive_cli::PtyInput` 一一对应(那个类型是 agentcli
+/// 层内部的实现细节,不进这层契约;`bw-connector` 不依赖 `bw-engine`,这
+/// 里镜像声明,实现方在 `bw-engine` 里做一次 `From` 转换)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TermInput {
+    /// 用户敲的字节(键盘/粘贴)。
+    Bytes(Vec<u8>),
+    /// 终端尺寸变化(字符列数 × 行数)。
+    Resize { cols: u16, rows: u16 },
 }

@@ -32,6 +32,11 @@
 //! 守卫。
 
 pub mod connector;
+// next 切片 5.5(design-s5-hexpanel.md §5.3/主控裁决 7):字节泵——把
+// `terminal_manager::TerminalManager::drain_events` 按 v1 同款 100ms 节奏
+// 抽出来、分发给订阅方。壳只订阅、不拉取,这份节奏因此归这一层持有,不
+// 归 `app-desktop`。
+pub mod pump;
 pub mod session;
 
 pub use connector::{assemble_system_prompt, AgentCliConnector};

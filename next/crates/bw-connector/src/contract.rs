@@ -42,6 +42,10 @@ pub enum Capability {
     Collect,
     /// Issue·MR 操作:建活、查状态、提变更、合入。
     IssueOps,
+    /// 交互式字节流(next 切片 5.5,design-s5-hexpanel.md §5.3):订阅一次
+    /// 执行的终端字节、写键盘输入/尺寸。agentcli 一家专属——`gh`/`codehub`/
+    /// `script` 三家没有交互式会话可订阅,`as_interactive` 默认 `None`。
+    Interactive,
 }
 
 impl std::fmt::Display for Capability {
@@ -51,6 +55,7 @@ impl std::fmt::Display for Capability {
             Capability::Execute => "执行",
             Capability::Collect => "采集",
             Capability::IssueOps => "Issue·MR 操作",
+            Capability::Interactive => "交互式字节流",
         };
         write!(f, "{label}")
     }
