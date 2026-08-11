@@ -28,16 +28,6 @@ pub enum MetricTier {
     Leading,
 }
 
-impl MetricTier {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            MetricTier::NorthStar => "north_star",
-            MetricTier::Lagging => "lagging",
-            MetricTier::Leading => "leading",
-        }
-    }
-}
-
 /// 归一后的一条指标定义——不管来自 `[north_star]` 单表还是 `[[lagging]]`/
 /// `[[leading]]` 数组表,落到这里都是同一种扁平形状,字段名直接对应
 /// `bw-store` `metric` 表的列名(方便调用方逐字段搬)。
