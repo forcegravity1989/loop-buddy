@@ -127,6 +127,22 @@ jobs:
       - name: 壳不持有调度时钟守卫
         run: ./scripts/guard-shell-no-clock.sh
 
+      # 切片七-1 修复轮 CI 接线(design-s7-real-project.md §8.1 门禁增量,
+      # task-s7a-review.md Important-5,主控裁决,2026-08-11):导入专用写
+      # 入面(`bw-store-import`)不该有任何路径能被壳依赖到,这条守卫查
+      # `cargo tree -p app-desktop -e normal` 的真实依赖图核验。守卫脚本本
+      # 身分两档([隔离构建档] 只查依赖图 / [workspace 统一构建产物档] 要
+      # `cargo build --workspace --all-targets` 真编译并链接
+      # `app-desktop`)——这里只接 `--dep-edge-only`(隔离构建档):产物档
+      # 会把桌面壳(dioxus)真的编一遍,而这个 job 跟上面 `Workspace
+      # check`/`Clippy` 两步一样,刻意不编 app-desktop(ubuntu-latest
+      # runner 没装 libwebkit2gtk/libgtk-3 等系统开发包)。产物档因此留在
+      # 本地开发机与终审跑,不进这条常绿门禁——`scripts/guard-import-
+      # feature-off.sh` 头部「档位参数」一节与本条注释同步说明这个取舍,
+      # 两处对得上。
+      - name: 导入防线 · 隔离构建档(bw-store-import 不进壳的依赖图)
+        run: ./scripts/guard-import-feature-off.sh --dep-edge-only
+
       - name: 行为读回指挥器(bw-engine port_readback)
         run: cd next && cargo run -p bw-engine --example port_readback
 
@@ -173,3 +189,17 @@ jobs:
       # 可常绿。末行 HEX_READBACK_OK。
       - name: 六段总控/待人处理行为验收指挥器(bw-app hex_readback)
         run: cd next && cargo run -p bw-app --example hex_readback
+
+      # 切片七B/七-1 修复轮(design-s7-real-project.md §8.1 门禁增量,
+      # task-s7a-review.md Important-5,主控裁决,2026-08-11):一次性导入
+      # 器(`bw-app/examples/import_legacy.rs`)不给 `--from/--to` 时走合成
+      # 老库自测档——照旧 schema 原文建六张表、放已知数据、导入、逐实体计
+      # 数读回断言、二次导入幂等断言、旧库指纹跑前跑后不变断言,是行为兜
+      # 底,不只是编译烟测。它的正式依赖(`bw-app` [dependencies])里没有
+      # `bw-engine`/dioxus,`bw-store-import` 只在 [dev-dependencies]——
+      # `cargo run -p bw-app --example import_legacy` 因此不会触发
+      # app-desktop 的任何一行编译(本地按 `cargo build -p bw-app
+      # --examples` 的依赖面核验过,不间接拉 dioxus)。不依赖网关,可常
+      # 绿。末行 IMPORT_LEGACY_OK。
+      - name: 一次性导入器行为读回指挥器(bw-app import_legacy)
+        run: cd next && cargo run -p bw-app --example import_legacy
