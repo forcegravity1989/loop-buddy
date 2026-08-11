@@ -79,8 +79,8 @@
 
 | 上游实现 | 接法档位 | 状态 |
 |---|---|---|
-| `gh`(GitHub 官方 CLI) | ① 结构化直包 | ✅ 在用,切片二收编 |
-| `codehub-cli` | ① 结构化直包 | ✅ 在用,切片二收编 |
+| `gh`(GitHub 官方 CLI) | ① 结构化直包 | ⚠️ 收编完成(切片二),生产装配点未建——见 §10 第 37 条 |
+| `codehub-cli` | ① 结构化直包 | ⚠️ 收编完成(切片二),生产装配点未建——见 §10 第 37 条 |
 | `claude` CLI | ② agentcli 层 | ✅ 在用(v1 终端栈),切片三移植接通 |
 | cursor CLI | ② agentcli 层 | 🔜 切片三第二家(v1 注册表已留位) |
 | orca-main | 模式移植 | ✅ 四模式已借入 v1(注册表/hook 信号/jsonl 采证/prefill 注入);本体不接 |
@@ -218,7 +218,7 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
    - **现象**:运行管理器(下一任务)要求调用方给一个已存在、且分支已切好的工作区,自己不造(切片三定的边界:谁给的工作区谁负责)。真实使用时总得有人造 worktree,而这段代码在 v1 里直接调 git,编排层(`bw-app`)被 `scripts/guard-no-direct-process.sh` 禁止这么做。
    - **来源**:切片二裁决 #1 把 git 辅助放进连接器 crate 当「内建函数」(注明不是连接器),命名将就问题当时就留着了(切片三开放问题 4)。
    - **待办**:切片五正面撞上时一并解决——抽出来、定名、定落点。
-   - **登记日**:2026-08-10。
+   - **登记日**:2026-08-10。**已消灭于 commit `dcf9b18`(切片五A,`bw-workspace` 独立 crate)+ `be3092b`(切片七C,`bw-app::cmd::issue::run_issue` 是它第一条生产调用方)**:`provision::provision_issue_worktree` 有了独立落点(`bw-workspace`),`run_issue`(`next/crates/bw-app/src/cmd/issue.rs:158-166`)是它的生产消费方,`provision_readback` 指挥器进了常绿门禁——终审复核(2026-08-11,Important-4)确认这条待办已兑现,不是仍然「尚未落点」。
 
 8. **五竞态验收(`run_races` 指挥器)与「真实并行三件」档尚未跑**(登记日 2026-08-10,切片四A 实施时按 design-s4-runmanager.md §10 附带缺口登记,条件按实际进度改写)
    - **现象**:本条设计稿原文按「若切片四合入时三-2 尚未落地」立条件——但复核工作区实况(`git log --oneline -3` 含 `2feb2ce`),三-2(agentcli 层注册表 + claude 执行连接器)与三-2 修复轮、缺口清偿轮**均已落地**,条件本身已不成立。真实的现状是:切片四A(本次)只搭了 `bw-store`/`bw-app` 骨架与两把结算/关门守卫(`store_guards` 指挥器已证),运行管理器本体(开工/取消/结束回写/重启清理)与 `run_races` 指挥器(十件并行 + 五竞态)按 design §10 的切分留给下一任务——「真实并行三件」(`run_races --real`)因此不是被三-2 卡住,而是单纯还没到实现它的那个任务。
@@ -242,7 +242,7 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
     - **现象**:主控裁决 #5 要求的「同一个工作区已经有活跃运行时,第二次开工如实拒绝」(`RunError::WorkspaceBusy`)靠 `RunManager` 循环任务内存里的 `by_workspace: HashMap<PathBuf, RunId>` 实现——设计本身就把它定成「单点实现,不跨层」(不查数据库,不要求跨重启)。这意味着:进程重启后 `by_workspace` 从空表开始,如果 `reap_on_restart()` 还没被调用(该方法本身也不是自动触发的,design §3.1「不自动清理遗留」),此时对一个「库里还开着旧运行、但本进程从未见过」的工作区发起 `start()`,`by_workspace` 查不到冲突、`create_run` 也不会因为工作区重复而报错(唯一索引只按 `issue_id` 建,不按 `workspace`)——两个不同的 issue 若被指到同一个工作区,新的一个能顺利插行开工,之后 agentcli 层的会话续接会按工作区路径认出旧会话、把新活的开局接到旧活的历史对话里,这个错位不会被任何一层挡住。
     - **来源**:`next/crates/bw-app/src/run/manager.rs`(`Loop::by_workspace` 字段与 `handle_start` 里的检查),按 design-s4-runmanager.md §11 开放问题 5 与主控裁决 #5 的字面范围实现——裁决本身只要求「单点实现」,没有要求跨重启;`run_races` 指挥器的同工作区串线校验一节(`section_workspace_guard`)验证的正是「单进程内」这半句,没有覆盖重启后的这条空窗,如实标注不假装测过。
     - **待办**:真要补上跨重启这一半,两个方向:①在 `reap_on_restart()` 里顺带扫一遍数据库里所有还开着的运行、把 `by_workspace` 重建起来(需要 `run` 表加一条按 `workspace` 分组的查询,或者把重建塞进 `RunManager::open()` 本身而不是等显式调 `reap_on_restart`);②或者接受这条校验就是「尽力而为,不承诺跨重启」的定位,把这句话写进 `RunManager::start` 的文档注释里(目前文档没有提到这个边界)。哪个方向对,以及要不要现在就补,留给切片五接手时按真实撞上的场景定。
-    - **登记日**:2026-08-10。
+    - **登记日**:2026-08-10。**现状订正(2026-08-11,终审 Important-4)**:「现象」段原文描述的风险场景——「两个不同的 issue 若被指到同一个工作区」——在切片七C 之后的生产路径上**已经构造不出来**:工作区由 `provision_issue_worktree(main_workspace, issue_number)`(`next/crates/bw-app/src/cmd/issue.rs:171/186`)按活编号确定性派生,一件活一棵树,不存在「两件不同的活共用同一个工作区路径」这个前提;两件活撞同一个工作区只可能来自**同一件活**重复开工,而这条路由数据库那条部分唯一索引 `uq_run_live_delivery_per_issue`(`bw-store/src/schema.sql`)跨重启挡住(`create_run` 撞违反时如实报错,见 `manager.rs` `handle_start` ③)。风险没有被消灭(`by_workspace` 内存表本身依旧只在单进程存活期内成立,重启后从空表开始这个事实没变),但**触发它需要的前提条件在今天的生产路径上不存在**,现象描述比实际情况更严重,需要读者自己补上「除非有第二条路径能让两件不同的活拿到同一个工作区路径」这个隐含条件才成立——这条隐含条件目前没有。待办给的两条路依旧一条都没做:①`reap_on_restart()` 未重建 `by_workspace`;②按选项②的要求,下面就地给 `RunManager::start` 补一句边界文档(不再是「留给切片五接手时定」——切片五、七都已经过去,不能继续挂着不写)。
 
 12. **`honest_close_on_storage_error`(以及 `handle_cancel`「库里开着、不在内存」分支里的补写关门路径)缺故障注入,存储调用真出错这条分支仍是零覆盖**(登记日 2026-08-11,切片四-2 修二实施时发现,来源:独立复审 `task-s4b-review.md`「修复复审」新发现 1)
     - **现象**:切片四-2 修 A(commit `f274bac`)新增的 `Loop::honest_close_on_storage_error`(三处调用点:`handle_start` 的回滚 / `handle_started` 的 `Ok(false)`/`Err` 分支 / `handle_observed` 的 `Err` 分支)要触发,前提是**存储调用本身出错**——`run_races` 指挥器里的存储层是真实 `SqliteStore`,正常路径下 `close_run`/`settle_run`/`mark_issue_in_progress` 不会自己报错,没有任何断言能走到这几条分支。复审用 panic 探针实测过:在 `honest_close_on_storage_error` 函数体第一行插一句 `panic!`,复跑 192 条断言全过、一次都没 panic——证明这条诚实收尾路径(评审 Important-1 的产品代码修复)修完之后仍然是零覆盖,任何回归都不会被这份指挥器发现,也造不出能让它变红的突变。`handle_cancel`「库里开着、不在内存」分支里真正调用 `close_run` 的那部分,本轮(切片四-2 修二,commit 见本条登记日当天的 next 切片四-2 修二 commit)已经用 R5 新增的 7 条断言补上覆盖(`run_races.rs` `section_r5`,reap 之前对遗留运行调一次 `cancel`),**不再计入本条缺口**;本条现在只剩 `honest_close_on_storage_error` 本体。
@@ -379,3 +379,77 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
     - **修法(已落地,即本条登记的同一次修复)**:判据不变(有没有 `.git`),但目录存在且不是合法工作树时**如实失败**——新增 `ProvisionError::Occupied(String)`,错误信息说清路径、发现了什么、请人自己处理(移走或删除都可以);不删任何东西,不吞错误。`provision.rs` 模块头注释与函数体内联注释都写明这是对 v1 的一处**有意分歧**,不是移植走样。`provision_readback` 指挥器新增「== 5 ==」断言段:真造一个「目录存在、无 `.git`、带标记文件」的场景,断言 `provision_issue_worktree` 返回 `ProvisionError::Occupied`、标记文件原样还在;突变自证(临时改回 `remove_dir_all`)已验证该段会变红(标记文件消失、返回值变 `Ok`),验完已还原。
     - **如实标注不构成的事**:这不是「这条分支把什么东西弄坏了」的证据(风险在 main 上已经跑了很久),也不影响本条分支「敢不敢合」的结论——只是合入之后不能假装这条路径已经安全,七-4 真写之前必须先落这次修复(已经落了)。
     - **登记日**:2026-08-11。**已消灭于本次「next 紧急修 · 造工作树绝不代删(v1 分歧登记)+ 开工位置 prompt 接活正文」commit**。
+
+34. **`env-strip` 只修了 PTY 一条路,`bw-connector::adapters::script::run_script` 同一模式未修**(登记日 2026-08-11,终审 Important-6)
+    - **现象**:第 3 条登记的 env-strip 坑(嵌套会话变量原样漏进子进程)只在 `pty_backend.rs` 两个后端上真正修好(见第 3 条「已消灭」记录)。`interactive_cli.rs::InteractiveCliExecutor::run_skill`(非 PTY 路径)当时已经一并登记、按「移植件不擅改」留档;但 `bw-connector/src/adapters/script.rs::run_script`(`.bw/connectors.toml` 登记的采集脚本执行入口)从未被登记过,是本次终审的新发现——而且它比 `run_skill` **更彻底**:`run_skill` 至少还调用了 `.env(k, v)` 逐条覆盖(只是没清空),`run_script` 通篇零 `.env()` 调用,`tokio::process::Command` 默认整段继承父进程环境,没有任何剥离尝试。它的信任级别比 claude 更低——`.bw/connectors.toml` 登记的采集脚本可能是 agent 自己写出来的、也可能来自项目仓协作者;BW 若跑在嵌套 Claude Code 会话里(仓库注释多处确认是真实场景),鉴权令牌会原样进入这个弱信任脚本的执行环境。
+    - **来源**:`next/crates/bw-connector/src/adapters/script.rs:273-281`(`run_script` 的 spawn 起步)。可达性核实(2026-08-11):当前生产**不可达**——`ScriptConnector` 在 `bw-app`/`app-desktop` 里零调用方,见第 37 条(三家连接器零生产装配点)。
+    - **待办**:`.bw/connectors.toml` 自动采集真接线的那一片(第 27 条待办)落地时,把 `cmd.env_clear()` 一并补上,不要等接完再想起来——同 `pty_backend.rs` 的修法(先清空,再用 `plan.env`/配置里的白名单变量整个重建环境)。
+    - **登记日**:2026-08-11。
+
+35. **连接器契约的七档结构化错误分类,在唯一的生产消费点被拍平成字符串——已恢复分类传递**(登记日 2026-08-11,终审 Important-7,本次登记时已修)
+    - **现象**:`bw-connector::contract::ConnError` 立了七档结构化失败分类(`Unsupported`/`NotConnected`/`Timeout`/`Canceled`/`UpstreamRejected`/`Unparsable`/`Other`),计划 §3「最小机器契约」把「失败带错误分类」列为防复发的闸。但开工失败这条路上,`bw-app::run::manager::Loop::handle_started` 的 `Err(conn_err)` 分支此前把七档一律 `.to_string()` 拍平成一个 `RunEndKind::StartFailed` + 自由文本 `end_detail`——原文没丢(运行卡上的 `end_detail` 如实显示),但机器再也分不出这次开工失败是超时、是这家不支持、还是上游拒绝,「待人处理」没法按失败类型分诊。
+    - **来源**:契约层(切片二)立七档时的理由是防各连接器重新长出字符串分支;编排层(切片四)消费时把它变回了字符串——两片各自都讲得通,合在一起就是这条契约的核心主张在唯一的落地点上没有兑现。
+    - **修法(已落地,即本条登记的同一次修复)**:`bw_store::RunEndKind` 新增四档(`StartUnsupported`/`StartNotConnected`/`StartRejected`/`StartTimeout`),`bw-app::run::manager::classify_start_failure`(穷举匹配,无 `_` 通配分支,同 `map_exec_state` 一条纪律)把 `ConnError` 的分类原样映射过去;`Canceled`/`Unparsable`/`Other` 三档没有更具体的说法可分,归进原有的 `StartFailed` 兜底。**验证不是靠专门造的突变,是一次真实的回归**:`run_races.rs` R4 第 7 件(脚本配置 `ConnError::NotConnected` 触发起跑失败)原本断言 `end_kind == StartFailed`,修复落地后这条断言在真实调用链路上自然翻红(`实得 end_kind=Some(StartNotConnected)`)——如实改判 `StartNotConnected` 后复跑全绿,翻红本身就是分类真的接上了线的证据。`schema.sql` 不需要改(`run.end_kind` 是无约束的 `TEXT` 列,新增枚举值不是新增列,不触发「schema 迁移双守卫」)。
+    - **登记日**:2026-08-11。**已消灭于本次终审收尾波二 commit**。
+
+36. **`codehub.rs::collect_count` 挂着一条永远等不到触发条件的承诺,连同一个死参数——承诺已订正,死参数登记留档**(登记日 2026-08-11,终审 Important-8)
+    - **现象**:`collect_count` 函数文档此前写「复杂窗口(本周合入、按标签筛)留 P5——口径等 P4 用户导入 maas 看真实需求再定,骨架先搭」,`_today: Date` 参数带下划线留着给「P5 的日期窗口」。核实下来这条承诺挂在**另一条时间线**上:P3/P4/P5 来自 `docs/superpowers/plans/2026-07-28-codehub-integration-step1.md`,是 **v1 主线**自己的计划,`maas` 是 v1 的真实项目;`plan/22`/`plan/23`(next 这条线)全文搜「maas」零命中——vNext 选的真实项目是 aihot / 个人画像 / WorkflowHub,不会走到那条时间线。这段「骨架先搭、口径待填」的注释被零改写移植进了 `next/`,兑现条件却留在了一条不会在这里发生的计划里。
+    - **来源**:`next/crates/bw-connector/src/upstream/codehub.rs::collect_count` 函数文档;`_today` 参数本身来自 `Collect::collect(RemoteCount)` 契约面共用的 `today: time::Date` 字段(`bw-connector/src/caps.rs:127`)——这个字段不是死的,`github.rs::expand_query`/`days_ago_iso` 真的用它展开 `@{Nd}` 这类滚动窗口查询,只有 `codehub.rs` 这一侧的实现从未消费它。
+    - **修法(已落地一半,即本条登记的同一次修复)**:函数文档已订正——删掉指向 v1 计划(P3/P4/P5/maas)的引用,如实说明「复杂窗口未落地」,不再假装这里有一条正在推进的日期窗口路线图。`_today` 参数本身**本次不删**:它是共享契约字段的一部分,删掉需要连 `CollectReq::RemoteCount` 契约一起改(github 那侧仍在用同一个字段),超出这次终审收尾的范围,按主控裁决(死代码审计「需人判断」项,接线组)登记留档,不做删除。
+    - **待办**:codehub 的复杂查询窗口(本周合入、按标签筛)如果将来真要做,回到这个函数把 `_today` 前缀去掉、接上真实的日期展开逻辑(同 `github.rs::expand_query` 的形状);如果确认不需要,再回来把 `today` 参数从 `CollectReq::RemoteCount` 契约里减掉(需要 gh 那侧确认它的日期窗口用法是否也要一起收窄)。
+    - **登记日**:2026-08-11。
+
+37. **`gh`/`codehub-cli`/`.bw/connectors.toml` 脚本连接器约 2,700 行,在生产上没有任何装配点——主控裁决:留不删,登记根因**(登记日 2026-08-11,终审 Important-9,死代码审计「需人判断」项·留+登记组)
+    - **现象**:切片二收编的 `github.rs`(875 行)/`codehub.rs`(740 行)/`adapters/{gh,codehub,script,script_source}.rs`(约 1,100 行),今天在 `bw-app`/`app-desktop` 里**零调用方**(实测 grep:`CodehubConnector`/`codehub::`/`ScriptConnector` 在这两个 crate 里一次都不出现)。唯一的运行路径是 `probe_all` 这个要手工给参数的 example。六段总控的「交付证据」段(`bw-app/src/view/hex.rs` `EvidenceSegment`)走的是本地工作区读时现采(`bw_workspace::evidence::collect`),不查任何连接器——远端 MR/PR 的事实今天进不了界面。
+    - **根因**(主控裁决,死代码审计):不是漏接,是**消费这几家连接器的功能本身没建**——「查 MR/PR 状态」这个会真正用到 `IssueOps::pr_state`/`change_state`(`gh.rs`/`codehub.rs` 都实现了这两个方法)的功能,在 `next/` 里从没有任何一片的范围建过。`IssueOps` 全链(含 `create_issue`/`open_change`/`merge_change` 等约 2,700 行)是**产品主方向**(仓连接器写操作是这个仓库长期要做的事),裁决是**留,不删**——孤儿状态是「消费功能未建」这个更早的缺口的下游影响,不是这几个文件自己的问题。
+    - **判定**:不是谁做错了——切片二的验收标准就是「指挥器实跑探活 + 读回」,达成了;把仓连接器接进壳从来没在任何一片的范围里。这条分支的记账标准高得出奇(为「`BW_WORKSPACES` 这一个环境变量没有消费者」单开了第 20 条),按同一把尺子,一个 2,700 行、有完整探活/写操作/防重编号契约、但没有任何生产入口的子系统,至少值一条台账。`plan/23` §3 选型清单里 gh/codehub 两行「✅ 在用」的措辞已顺手改成如实的「收编完成,生产装配点未建」,不再让读进度表的人以为它们已经接进壳。
+    - **待办**:「查 MR/PR 状态」功能真正被排进某一片的范围时,这几家连接器才有第一个生产装配点;在那之前保持现状,不为了消掉这条登记而强行找一个使用场景。
+    - **登记日**:2026-08-11。
+
+38. **`bw-core` 是整包移植,不是「移植了三个器官」——约 1,500 行服务于已退役功能,零消费者**(登记日 2026-08-11,终审 Important-10,只登记不删,指向波三专项)
+    - **现象**:`next/crates/bw-core/src/` 的模块清单与旧工程 `crates/bw-core/src/` 逐个同名、一个不差(实测 `ls` 比对);其中零消费者的是 `analysis.rs`(546 行)/`standards.rs`(267 行)/`skill_spec.rs`(229)/`bw_library.rs`(152)/`stage_catalog.rs`(150)/`skill_body.rs`(107)/`scope.rs`(50),合计 1,501 行,在 `bw-core` 之外零引用;其中 `analysis.rs`/`standards.rs`/`scope.rs` 合计 863 行更是连 `bw-core` 内部都没有任何引用,是纯死代码。真正被消费的只有 `model`/`ids`/`derive`/`playbook` 四个。它们服务的正是 §6 退役清单上的东西(工作流引擎 / 创建向导 / 定时任务 / 三类资产 Hub 屏 / 复利链尚未接线)。
+    - **来源**:计划 §5.3 的器官移植清单第一行只点名「五阶段元数据 + Issue 状态机 + 密封信号 | 来源 `crates/bw-core`(`model.rs`/`derive/`)」,切片一A 执行的是整包复制(单看那一片没问题:零改写移植、评审判 clean、`port_readback` 读回一致);把七个切片并起来看才显形——内核这一层从第一天起就多带了 1,500 行退役功能的代码进来,没人回头清,也没进台账。死代码审计报告与本条互证,清单精确到行:七整文件 1,481 行死 + `model.rs`/`playbook.rs` 各半死,全仓 55-60%。
+    - **判定**:不构成任何运行时风险(编译得过、wasm 也过、没有消费者就不会执行)。但撞上 `CLAUDE.md`「发现过时的实现路径,直接移除它」与计划「做减法是纲」两条明文纪律。
+    - **待办(不在本任务范围)**:主控裁决排程「波三(bw-core 减法专项,审计报告为正本)」专门处理——纯死模块(`analysis.rs`/`standards.rs`/`scope.rs`,863 行,零内外引用)直接删,`bw_library`/`skill_spec`/`skill_body` 三个是复利链零件、将来真会用,留但登记「等复利链那一片接线」,`model.rs` 里的退役实体本次不动(风险高于收益)。本条(终审收尾波二)只做登记,一行代码不删。
+    - **登记日**:2026-08-11。
+
+39. **每张活卡都建一个终端组件,资源注入量级未按「百级并行」硬约束登记**(登记日 2026-08-11,终审必修 Minor s55-4)
+    - **现象**:`next/crates/app-desktop/src/screens/hex.rs`(嵌入终端一节)每渲染一张「进行中」活卡,就建一个 `TerminalWidget` 组件(xterm.js 渲染 + 字节泵订阅 + 键盘/resize 桥接),资源注入量级从 v1 的人手规模变成 `plan/23` §2 点名的**百级并行**规模。计划 §2 的硬约束原文:「所有架构决策不得内含『同时只有几个 run』的隐藏假设……一人管百级 agent 时,界面呈现的是聚合状态与例外,**永远不是一百面终端墙**」。每卡一终端正是那面墙的雏形。
+    - **来源**:切片 5.5(嵌入终端整体移植)实施时按 v1 组件形态原样复刻,没有对照 §2 硬约束逐条核过。
+    - **待办**:不要求现在改架构——这是产品口径级别的决定,牵动嵌入终端整体交互形态(是否需要"聚合视图 + 点开单个才起终端"这类懒加载/虚拟化设计),留给真正撞上百级并行场景时再定案。**要求的是登记**:否则这条硬约束第一次被违反时没有任何记录,下一个人重新发现一遍。
+    - **登记日**:2026-08-11。
+
+40. **design §12 第 4 条(终端输出环拉取节奏)的消灭记录只活在已归档的设计稿里,从没迁进 `plan/23` §10**(登记日 2026-08-11,终审必修 Minor s55-5)
+    - **现象**:`docs/design-next/design-s5-hexpanel.md` §12 第 4 条(终端输出的拉取节奏——环形缓冲/节流方案)在切片 5.5 实施时已经有明确的消灭记录(字节抽取节奏搬进引擎侧 `bw-engine::agentcli::pump`,壳只订阅不拉取,`terminal_feed_smoke` 指挥器验证),但这条消灭记录**只写在已归档的设计稿正文里**,从未作为一条独立记录迁移进 `plan/23` §10 这本「只追加、事后抹不掉」的唯一台账。
+    - **来源**:`docs/design-next/design-s5-hexpanel.md` §12 第 4 条;`plan/23` §10 当时没有对应条目。
+    - **为什么判必修**:§10 是这条分支「记账诚实度」这份最值钱资产的唯一存放处——一条缺口在别处消灭、台账里查不到,等于台账不再是全集,这是记账机制本身的漏洞,比漏记一条具体缺口更严重(下一个只读 §10 找现状的人,会漏掉这条已经发生过的设计决策变更)。
+    - **补记**:本条登记本身就是这次迁移——design §12 第 4 条描述的拉取节奏方案(引擎侧字节泵、壳零时钟订阅)已经是 `next/` 的现状,不是待办;`terminal_feed_smoke` 指挥器(本次终审收尾波二已接入 CI,见 §7 执行切片记录/本表其余条目)是它的常绿验证面。
+    - **登记日**:2026-08-11。
+
+41. **切片七D 自产的两条已知限制未进台账**(登记日 2026-08-11,终审必修 Minor s7b-5)
+    - **现象**:切片七D(壳接开工/取消/事件订阅)实施时自己发现、但没有正式登记进 §10 的两条用户可见行为限制:①运行状态事件广播(`RunManager::subscribe`)是**全局一条频道**,不按项目过滤——切换项目时界面会收到别的项目的运行状态变化事件(不影响正确性,`Vm` 重建时会按当前选中项目重新过滤,但订阅本身跨项目);②执行连接器的装配是**壳启动时的一次性动作**(`app-desktop::kernel::spawn` 按 `list_projects()` 结果装配一次),新建/导入一个项目之后,在该项目上点「开工」会因为找不到已装配的连接器而失败,**直到重启壳**才会被认到。
+    - **来源**:`next/crates/bw-app/src/run/manager.rs` 模块文档「运行状态事件广播」一节(①);`plan/23` §10 第 26 条(「执行连接器不落库,壳启动时按约定装配」)待办里已经隐含了②这个后果,但没有把「新项目要重启壳才认」这句话明确写成一条用户可见限制。
+    - **判定**:第②条是用户可见的行为限制——今天真的会发生「导入一个新项目后点开工失败」这个体验,不登记就会变成下一个人重新发现一遍。第 20 条为「一个环境变量没有消费者」都单开了一条,这条不该没有。
+    - **待办**:两条都是产品体验缺口,不是 bug——①要修得给广播加项目过滤(`RunStateChanged` 加 `project` 字段,订阅方按当前项目筛);②要修得让连接器登记表支持热更新(项目变化时增量装配,不必重启)。哪个优先级更高、要不要现在做,留给真正撞上体验问题时定案。
+    - **登记日**:2026-08-11。
+
+42. **`bw-core::derive::reduce_worst_of`(L4/L6 信号汇总函数)已实现但零生产调用方**(登记日 2026-08-11,主控对死代码审计报告「需人判断」项的裁决·接线组)
+    - **现象**:`reduce_worst_of`(`bw-core/src/derive/eval.rs:65`)是「许多信号 → 一个信号,取最差」的通用汇总函数,文档点名服务 L4(Routine.signal,取其 KPI 群里最差的)与 L6(Project.signal,取其七阶段里最差的)两级派生。实测 grep:全 `next/` 仅在它自己的模块文档/doctest 里出现,`bw-app`/`app-desktop` 零调用。
+    - **来源**:L4(Routine)是已退役概念(§6 退役清单「工作流引擎」的一部分,`Routine` 类型本身也在 §10 第 38 条点名的 1,501 行零消费退役代码之列);L6(Project 七阶段 worst-of 汇总)在 `next/` 目前没有任何界面位置需要"整个项目一个信号"这种极度收敛的汇总——六段总控展示的是逐项目、逐段、逐指标的信号,不是一个单一的项目级汇总灯。
+    - **判定**:不是 bug,是「函数为将来可能的消费者预先写好、消费者至今没出现」——按主控裁决,留着(是一个通用、语义清晰、有文档有 doctest 的纯函数,删了将来真要用还得重写),登记留档,不接线。
+    - **待办**:如果将来真的需要一个「项目级/流程级单一汇总信号」的界面位置(比如给一个跨项目仪表盘用),这是现成的落点;在那之前不主动找场景接线。
+    - **登记日**:2026-08-11。
+
+43. **`IssueRow.body`(活的描述原文)读侧已建,写侧仍无生产入口**(登记日 2026-08-11,主控对死代码审计报告「需人判断」项的裁决·接线组)
+    - **现象**:`bw-store::sqlite` 的 `get_issue`/`list_issues` 等读查询都 `SELECT` 了 `body` 列并填进 `IssueRow.body`(`next/crates/bw-store/src/sqlite.rs:326/398`),但写侧 `NewIssue`(`bw-store/src/lib.rs:83-89`)没有 `body` 字段,`create_issue` 的 `INSERT` 语句也不写这一列——生产路径造出来的每一件活,`body` 永远是 schema 默认值空串。`bw-app::cmd::issue::task_body_inject`(next 紧急修 I1 新增,用来把活正文装进位置 prompt)因此拿到的 `issue_row.body` 在真实生产流程里恒为空;`issue_kickoff` 指挥器 K9 段为了测出"描述原文"这一半,只能绕过 store 直接 `UPDATE issue SET body = ?`(非生产路径造数,代码注释已如实标注,同 `hex_readback` 早前 stage 列的既有降级先例)。
+    - **来源**:`next/crates/bw-store/src/lib.rs`(`NewIssue` 结构体)/`sqlite.rs::create_issue`;`task-final-fix1-report.md`(紧急修任务报告)已经把这件事记成 concern,但没有正式登记进 `plan/23` §10——本条补齐这一步。
+    - **判定**:这是「读侧走在写侧前面」的一处真实缺口(§10 已有先例:第 16 条 `issue.stage` 曾经同样只有读侧、没有生产写入方,后来切片五E 补上了)。今天的界面(创建活的入口)本身还没有「填一段描述」这个字段——补 `body` 的生产写入方,前提是先有一个能填它的界面/命令入口,这不在本次终审收尾的范围里。
+    - **待办**:哪一片真的建「创建活」的完整表单(标题 + 描述)时,顺带给 `NewIssue` 加 `body` 字段、`create_issue` 的 `INSERT` 带上它;在那之前,`issue_kickoff` K9 段继续用非生产路径的 `UPDATE` 造数演示正文能不能传到位置 prompt 这一半链路,不代表生产路径已经能填描述。
+    - **登记日**:2026-08-11。
+
+44. **断言条数守卫(终审 Important-3)推广到了三个断言数最多的指挥器,其余六个仍未推广**(登记日 2026-08-11,终审收尾波二实施时按取舍如实记账)
+    - **现象**:终审 Important-3 指出「一整节断言没跑到」的条数等式守卫只有 `run_races.rs` 一个指挥器有(切片四-2 评审复现过的真实假绿:某一节的 `total.merge(...)` 漏调,那一节断言压根不执行,`ok` 不翻,条数悄悄变少)。本次收尾把这条守卫推广到了断言数最多的三个:`hex_readback`(107→113,含新增 §9 ArchiveMetric 一节)/`issue_kickoff`(91→92)/`import_legacy`(44→45),三处都做过突变自证(临时漏调一节的 merge/check,复跑确认翻红,还原后复跑确认转绿)。**其余六个指挥器仍未推广**:`store_guards`/`provision_readback`/`agent_session`/`port_readback`/`pty_smoke`/`terminal_feed_smoke`——按任务简报「工作量大的话推广到断言数最多的三个,其余登记 §10,如实取舍」的口径,这六个如实登记,不是漏做。
+    - **来源**:`plan/23-opc-stitching-rebuild.md`(本表)/`task-final-fix2-brief.md`(终审收尾波二任务简报)。
+    - **判定**:这六个指挥器的断言节数各自少于三个已推广的指挥器(多数是三到十四节,不是十一节起步),假绿风险按体量排序本来就更低;但风险类型完全相同,不是「这六个不需要」,是「这次按体量优先级选了前三个」。
+    - **待办**:下一次触碰这六个指挥器中任何一个时,顺手补一条同形状的 `expected == actual` 断言条数守卫(基线用当次实跑的真实条数,不是编一个数)。
+    - **登记日**:2026-08-11。

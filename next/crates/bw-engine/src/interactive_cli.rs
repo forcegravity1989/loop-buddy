@@ -48,6 +48,15 @@ pub enum PtyInput {
 /// per real injection strategy — adding a CLI that needs a different one
 /// means adding a variant and the matching arm in [`build_startup_plan`],
 /// not a new impl (orca §2.4's declarative table).
+///
+/// **主控裁决(死代码审计「需人判断」项,留+登记组,2026-08-11)**:今天
+/// 只有一个变体,`match` 在唯一消费点(`build_startup_plan`)因此看起来
+/// 像多余的一层包装——这是**第二家 CLI 的脚手架**,不是死代码:一旦真
+/// 的接入一家注入方式不同的 CLI(比如不接受位置参数、只认某个
+/// `--prefill` 式旗标的),新加一个变体 + `build_startup_plan` 里补一条
+/// 匹配分支就够了,不用回头改调用方的类型签名。裁决是留着,不折叠成一
+/// 个只有一种取值的普通类型——第二家 CLI 接入之前,这条登记本身就是它
+/// 存在的理由说明。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptInjectionMode {
     /// The skill body rides as the positional `prompt` argument, becoming the

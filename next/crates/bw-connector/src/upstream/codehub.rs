@@ -384,10 +384,24 @@ pub async fn merge_mr(host: &str, path: &str, mr_iid: u32) -> Result<(), Codehub
 /// **`-l 0` = 全量**(实测:codehub-cli 把 0 当"不限"取全部页,不是"取 0 条")。
 /// 若 CLI 升级改了语义(0 被解读成 limit=0 → 计数恒 0 静默出错),要复核。
 ///
-/// **查询口径**(P5 定稿):P3 只认最小词汇 `issues:<state>` / `mrs:<state>`
-/// (state=opened|closed|merged|all)。复杂窗口(本周合入、按标签筛)留 P5
-/// ——口径等 P4 用户导入 maas 看真实需求再定,骨架先搭。`today` 参数留给
-/// P5 的日期窗口,这里 `_today` 暂不用。
+/// **查询口径**:只认最小词汇 `issues:<state>` / `mrs:<state>`
+/// (state=opened|closed|merged|all)。复杂窗口(本周合入、按标签筛)未
+/// 落地——`today` 参数(同 `Collect::collect(RemoteCount)` 契约面共用的
+/// 字段,`github.rs::expand_query` 真的用它展开 `@{Nd}` 这类滚动窗口)在
+/// 这个函数体里从未被消费,`_today` 前缀如实标注。
+///
+/// **终审 Important-8 订正(2026-08-11)**:这条注释此前写的是「口径等
+/// P4 用户导入 maas 看真实需求再定」——`P3`/`P4`/`P5` 挂在
+/// `docs/superpowers/plans/2026-07-28-codehub-integration-step1.md` 那条
+/// **v1 主线**自己的计划上,`maas` 是 v1 的真实项目;`plan/22`/`plan/23`
+/// (next 这条线)全文搜「maas」零命中,vNext 选的真实项目是 aihot / 个
+/// 人画像 / WorkflowHub,不会走到那条时间线。这段兑现条件挂在一条不会
+/// 在这里发生的计划上,是一个永远等不到触发条件的承诺——如实删掉指向
+/// v1 计划的引用,不再假装这里有一条正在推进的日期窗口路线图。`_today`
+/// 参数本身按主控裁决(死代码审计「需人判断」项,接线组)登记进
+/// `plan/23` §10,不在本次删除(它是共享契约字段,`github.rs` 那边真的
+/// 用;删的话要连 `Collect::collect(RemoteCount)` 契约一起改,超出这次
+/// 终审收尾的范围)。
 pub async fn collect_count(
     host: &str,
     path: &str,
