@@ -39,9 +39,10 @@ use std::process::ExitCode;
 use bw_core::{
     ArtifactId, HandoffId, IssueId, IssueStatus, MetricId, ObservationId, ProjectId, StageKind,
 };
-use bw_store::{
+use bw_store::{MetricTier, SqliteStore};
+use bw_store_import::{
     ImportArtifactRow, ImportHandoffRow, ImportIssueRow, ImportLedgerEntry, ImportMetricRow,
-    ImportObservationRow, ImportProjectRow, ImportStore, MetricTier, SqliteStore,
+    ImportObservationRow, ImportProjectRow, ImportSqliteStore, ImportStore,
 };
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Row, SqlitePool};
@@ -230,6 +231,11 @@ struct OldMetric {
     collect_kind: String,
     collect_query: String,
     origin: String,
+    /// 旧库 v1 schema.sql:`archived INTEGER NOT NULL DEFAULT 0` ——独立于
+    /// `archived_at` 的一个布尔标记(Important-2:两列各自维护,旧库可能
+    /// 出现 `archived=1` 但 `archived_at IS NULL` 这种"标了停用没记时刻"的
+    /// 数据形态)。
+    archived: i64,
     archived_at: Option<i64>,
     created_at: i64,
     updated_at: i64,
@@ -307,7 +313,7 @@ async fn read_old_projects(pool: &SqlitePool) -> Result<Vec<OldProject>, String>
 async fn read_old_metrics(pool: &SqlitePool) -> Result<Vec<OldMetric>, String> {
     let rows = sqlx::query(
         "SELECT id, project_id, role, stage_kind, name, def, target_raw, collect_kind, \
-         collect_query, origin, archived_at, created_at, updated_at FROM metric",
+         collect_query, origin, archived, archived_at, created_at, updated_at FROM metric",
     )
     .fetch_all(pool)
     .await
@@ -325,6 +331,7 @@ async fn read_old_metrics(pool: &SqlitePool) -> Result<Vec<OldMetric>, String> {
             collect_kind: r.get("collect_kind"),
             collect_query: r.get("collect_query"),
             origin: r.get("origin"),
+            archived: r.get("archived"),
             archived_at: r.get("archived_at"),
             created_at: r.get("created_at"),
             updated_at: r.get("updated_at"),
@@ -449,6 +456,15 @@ impl RawCounts {
     }
 }
 
+/// 北极星来源判定的依据(Important-3:裁决 6「读正本比名字」的判定依据打
+/// 进导入报告)——`basis` 是同一段人话原样打印进差异清单的那句话,不是
+/// 事后另算一遍摘要;指挥器对报告输出的断言查的就是这个字段。
+struct NorthStarOriginNote {
+    project_name: String,
+    origin: String,
+    basis: String,
+}
+
 struct ImportPlan {
     projects: Vec<ImportProjectRow>,
     metrics: Vec<ImportMetricRow>,
@@ -460,6 +476,8 @@ struct ImportPlan {
     /// 要逐行打印进差异清单(design §2.4:「这是导入器造了一个旧库里不存
     /// 在的名字,人必须看见」)。
     renamed: Vec<(String, String, String)>,
+    /// 北极星来源判定依据,一个定义了北极星的项目一条(Important-3)。
+    north_star_notes: Vec<NorthStarOriginNote>,
     /// 人话原因,§2.5 第 3 段「拒绝清单」。非空 = 整次导入一条都不写。
     rejected: Vec<String>,
     raw_counts: RawCounts,
@@ -553,6 +571,7 @@ async fn analyze(pool: &SqlitePool) -> Result<ImportPlan, String> {
     // 「手建」——这条规则的理由见 design §2.2②(同步器只碰来自正本的
     // 行,标错会在下一次同步正本时撞唯一索引或被误停用)。
     let mut north_star_metrics: Vec<ImportMetricRow> = Vec::new();
+    let mut north_star_notes: Vec<NorthStarOriginNote> = Vec::new();
     for p in &old_projects {
         if p.north_star.trim().is_empty() {
             continue; // 这个项目从未定过北极星,新库里也不该凭空长出一行
@@ -560,7 +579,12 @@ async fn analyze(pool: &SqlitePool) -> Result<ImportPlan, String> {
         let Some(&pid) = project_id_of.get(&p.id) else {
             continue; // 项目本身已经因为 id/active_stage 问题被拒绝
         };
-        let origin = determine_north_star_origin(&p.workspace_path, &p.north_star);
+        let judged = determine_north_star_origin(&p.workspace_path, &p.north_star);
+        north_star_notes.push(NorthStarOriginNote {
+            project_name: p.name.clone(),
+            origin: judged.origin.clone(),
+            basis: judged.basis.clone(),
+        });
         north_star_metrics.push(ImportMetricRow {
             id: MetricId::new(),
             project_id: pid,
@@ -570,7 +594,7 @@ async fn analyze(pool: &SqlitePool) -> Result<ImportPlan, String> {
             target_raw: String::new(), // design §2.2②:旧库没有北极星目标值,留空=未知,不点灯
             collect_kind: p.north_star_collect_kind.clone(),
             collect_query: p.north_star_collect_query.clone(),
-            origin,
+            origin: judged.origin,
             archived_at: None,
             created_at: p.created_at,
             updated_at: p.created_at,
@@ -703,6 +727,36 @@ async fn analyze(pool: &SqlitePool) -> Result<ImportPlan, String> {
                 effective_name[i].clone(),
             ));
         }
+        // Important-2 兜底分支(design §2.2③):旧库 `archived`(布尔)与
+        // `archived_at`(时刻)是两个独立列,可能出现"标了停用、没记时
+        // 刻"这种数据形态——新库 schema 只有 `archived_at`(有值=停用,
+        // `NULL`=在用),原样透传 `m.archived_at` 会把这种行悄悄读成"在
+        // 用",派生链重新把它捡回来。`archived != 0` 时若 `archived_at`
+        // 为空,取 `updated_at` 顶上,并逐行打印"这一行的停用时刻是估
+        // 的",不静默复活。
+        let resolved_archived_at = if m.archived != 0 {
+            match m.archived_at {
+                Some(ts) => Some(ts),
+                None => {
+                    let project_name = project_name_of
+                        .get(&m.project_id)
+                        .cloned()
+                        .unwrap_or_else(|| m.project_id.clone());
+                    println!(
+                        "  【停用时刻是估的】{project_name}:指标「{}」({}) archived=1 但 \
+                         archived_at 为空,取 updated_at({}) 顶上(design §2.2③兜底分支,\
+                         Important-2)",
+                        effective_name[i], m.id, m.updated_at
+                    );
+                    Some(m.updated_at)
+                }
+            }
+        } else {
+            // archived=0(在用):不管 archived_at 是否意外留有旧值,新库
+            // 只认 archived_at 是否为空这一条,原样搬会把"在用"的行错读成
+            // "停用"——同一个兜底分支,反方向同样不该发生。
+            None
+        };
         metrics.push(ImportMetricRow {
             id: MetricId::from_uuid(uuid),
             project_id: pid,
@@ -713,7 +767,7 @@ async fn analyze(pool: &SqlitePool) -> Result<ImportPlan, String> {
             collect_kind: m.collect_kind.clone(),
             collect_query: m.collect_query.clone(),
             origin: m.origin.clone(),
-            archived_at: m.archived_at,
+            archived_at: resolved_archived_at,
             created_at: m.created_at,
             updated_at: m.updated_at,
         });
@@ -906,6 +960,7 @@ async fn analyze(pool: &SqlitePool) -> Result<ImportPlan, String> {
         handoffs,
         artifacts,
         renamed,
+        north_star_notes,
         rejected,
         raw_counts,
     })
@@ -924,19 +979,59 @@ fn parse_issue_status(s: &str) -> Option<IssueStatus> {
     }
 }
 
+/// 北极星来源判定的结果——`origin` 是落库的值("file"|"manual"),`basis`
+/// 是 Important-3 要求的判定依据人话说明,原样打进导入报告(见
+/// `NorthStarOriginNote`/`print_diff`),不是另算的摘要。
+struct NorthStarOrigin {
+    origin: String,
+    basis: String,
+}
+
 /// 北极星来源判定(design §2.2②「判定规则」,2026-08-11 主控裁决 6:按
 /// 稿——读项目仓正本文件比名字)。`root_path` 空 = 项目从未配置本地检
-/// 出,直接判「手建」,不会去试着读一个不存在的目录。
-fn determine_north_star_origin(root_path: &str, ns_name: &str) -> String {
+/// 出,直接判「手建」,不会去试着读一个不存在的目录。**Important-3**:判
+/// 定依据(比中了哪个名字/没比中走了什么)不再只留在返回值里——调用方
+/// (`analyze`)把 `basis` 存进 `ImportPlan::north_star_notes`,`print_diff`
+/// 逐行打进差异清单,确认门前人能看见这次判定的依据。
+fn determine_north_star_origin(root_path: &str, ns_name: &str) -> NorthStarOrigin {
     if root_path.trim().is_empty() {
-        return "manual".to_string();
+        return NorthStarOrigin {
+            origin: "manual".to_string(),
+            basis: "项目没有配置本地检出根(root_path 为空),没有正本文件可比,判「手建」".to_string(),
+        };
     }
     match bw_workspace::metrics_lenient::read_lenient(root_path) {
         Ok(Some(file)) => match file.north_star {
-            Some(ns) if ns.name == ns_name => "file".to_string(),
-            _ => "manual".to_string(),
+            Some(ns) if ns.name == ns_name => NorthStarOrigin {
+                origin: "file".to_string(),
+                basis: format!(
+                    "正本 {root_path}/.bw/metrics.toml 读到北极星名字「{}」,与旧库项目表北极星\
+                     名字「{ns_name}」逐字相同,判「来自正本」",
+                    ns.name
+                ),
+            },
+            Some(ns) => NorthStarOrigin {
+                origin: "manual".to_string(),
+                basis: format!(
+                    "正本 {root_path}/.bw/metrics.toml 读到北极星名字「{}」,与旧库项目表北极星\
+                     名字「{ns_name}」不同,判「手建」",
+                    ns.name
+                ),
+            },
+            None => NorthStarOrigin {
+                origin: "manual".to_string(),
+                basis: "正本 .bw/metrics.toml 读到了,但没有 [north_star] 一节,判「手建」"
+                    .to_string(),
+            },
         },
-        _ => "manual".to_string(),
+        Ok(None) => NorthStarOrigin {
+            origin: "manual".to_string(),
+            basis: format!("{root_path}/.bw/metrics.toml 不存在,判「手建」"),
+        },
+        Err(e) => NorthStarOrigin {
+            origin: "manual".to_string(),
+            basis: format!("读 {root_path}/.bw/metrics.toml 失败({e}),判「手建」"),
+        },
     }
 }
 
@@ -961,6 +1056,29 @@ fn print_diff(plan: &ImportPlan) {
          不再增长\",与新工程读时现采的交付证据栏分开)",
         plan.artifacts.len()
     );
+    print_north_star_notes(plan);
+}
+
+/// Important-3(主控裁决 6 后半句):北极星来源的判定依据打进导入报告,
+/// 不止落在 `plan.metrics` 那一行的 `origin` 字段里——人在敲 `--confirm`
+/// 之前要能看见"这次判成什么、依据是什么",不用去翻数据库。
+fn print_north_star_notes(plan: &ImportPlan) {
+    println!("  == 北极星来源判定依据(design §2.2②/主控裁决 6)==");
+    if plan.north_star_notes.is_empty() {
+        println!("    (本次没有项目定义北极星)");
+        return;
+    }
+    for note in &plan.north_star_notes {
+        let origin_label = match note.origin.as_str() {
+            "file" => "来自正本",
+            "manual" => "手建",
+            other => other,
+        };
+        println!(
+            "    {}:判「{origin_label}」——{}",
+            note.project_name, note.basis
+        );
+    }
 }
 
 fn print_rejected(plan: &ImportPlan) {
@@ -980,14 +1098,25 @@ fn print_rejected(plan: &ImportPlan) {
 
 // ─────────────────────────── 真写(write_plan)───────────────────────────
 
+/// Important-4:每类实体除了「新增」(`import_*` 返回 `true`),再独立计一
+/// 份「撞主键被 `INSERT OR IGNORE` 静默挡下」(`import_*` 返回 `false`)。
+/// 两个计数器在同一次循环里各自累加、互不依赖对方算出来——`written +
+/// skipped` 因此是一条真的勾稽关系,不是「跳过 = 计划 - 新增」这种从一个
+/// 数字反推出另一个数字的同义反复。
 #[derive(Default, Clone, Copy)]
 struct WriteReport {
     project: i64,
+    project_skipped: i64,
     metric: i64,
+    metric_skipped: i64,
     observation: i64,
+    observation_skipped: i64,
     issue: i64,
+    issue_skipped: i64,
     handoff: i64,
+    handoff_skipped: i64,
     artifact: i64,
+    artifact_skipped: i64,
 }
 
 impl WriteReport {
@@ -999,11 +1128,76 @@ impl WriteReport {
     }
 }
 
+/// Important-4 处置:生产写入路径按实体打「计划 N / 实写 M / 跳过 K」,
+/// `N == M + K` 三数勾稽——`import_*` 全是 `INSERT OR IGNORE`,任何约束冲
+/// 突(不只是主键重复,比如 `uq_metric_identity`)都会被静默挡下,这条对
+/// 账让「少了一条」从「肉眼看不出来」变成「一行打印」。`plan.X.len()` 是
+/// N(独立于 `write_plan` 内部计数,来自 `analyze` 阶段就定下的计划规模);
+/// M/K 是 `write_plan` 循环里各自累加的独立计数——三者不自洽本身就是一次
+/// 真实的账目错误(比如某条 `import_*` 调用 panic 被外层吞掉、或者一次意
+/// 外的提前 `continue`),不是逻辑上永远成立的等式。返回 `false` 时调用方
+/// 应当判定整次运行失败,不能假装对上了。
+fn print_write_reconciliation(plan: &ImportPlan, report: &WriteReport) -> bool {
+    println!("== 写入对账(计划/实写/跳过,design 七-1 修复轮 Important-4)==");
+    let rows: [(&str, i64, i64, i64); 6] = [
+        (
+            "project",
+            plan.projects.len() as i64,
+            report.project,
+            report.project_skipped,
+        ),
+        (
+            "metric",
+            plan.metrics.len() as i64,
+            report.metric,
+            report.metric_skipped,
+        ),
+        (
+            "observation",
+            plan.observations.len() as i64,
+            report.observation,
+            report.observation_skipped,
+        ),
+        (
+            "issue",
+            plan.issues.len() as i64,
+            report.issue,
+            report.issue_skipped,
+        ),
+        (
+            "handoff",
+            plan.handoffs.len() as i64,
+            report.handoff,
+            report.handoff_skipped,
+        ),
+        (
+            "artifact",
+            plan.artifacts.len() as i64,
+            report.artifact,
+            report.artifact_skipped,
+        ),
+    ];
+    let mut ok = true;
+    for (label, planned, written, skipped) in rows {
+        let consistent = planned == written + skipped;
+        if !consistent {
+            ok = false;
+        }
+        let mark = if consistent {
+            ""
+        } else {
+            "  ← ASSERT FAILED:N ≠ M+K"
+        };
+        println!("  {label}:计划 {planned} / 实写 {written} / 跳过 {skipped}{mark}");
+    }
+    ok
+}
+
 /// 真写——只在 `plan.rejected` 为空时才会被调用(调用方负责这条门禁,
 /// design §2.5:「只要拒绝清单非空,就一条都不写」)。每个 `import_*` 返
-/// 回 `true`/`false` 分别计进「新增」/「重复跳过」,`WriteReport` 只统计
-/// 新增(design §2.6:第二次运行「新增 0 条」要能被看见)。
-async fn write_plan(store: &SqliteStore, plan: &ImportPlan) -> Result<WriteReport, String> {
+/// 回 `true`/`false` 分别计进「新增」/「撞主键跳过」两个独立计数器
+/// (Important-4:跳过也要被看见,不只是新增)。
+async fn write_plan(store: &ImportSqliteStore, plan: &ImportPlan) -> Result<WriteReport, String> {
     let mut report = WriteReport::default();
     for row in &plan.projects {
         if store
@@ -1012,6 +1206,8 @@ async fn write_plan(store: &SqliteStore, plan: &ImportPlan) -> Result<WriteRepor
             .map_err(|e| format!("import_project 失败:{e}"))?
         {
             report.project += 1;
+        } else {
+            report.project_skipped += 1;
         }
     }
     for row in &plan.metrics {
@@ -1021,6 +1217,8 @@ async fn write_plan(store: &SqliteStore, plan: &ImportPlan) -> Result<WriteRepor
             .map_err(|e| format!("import_metric 失败:{e}"))?
         {
             report.metric += 1;
+        } else {
+            report.metric_skipped += 1;
         }
     }
     for row in &plan.observations {
@@ -1030,6 +1228,8 @@ async fn write_plan(store: &SqliteStore, plan: &ImportPlan) -> Result<WriteRepor
             .map_err(|e| format!("import_observation 失败:{e}"))?
         {
             report.observation += 1;
+        } else {
+            report.observation_skipped += 1;
         }
     }
     for row in &plan.issues {
@@ -1039,6 +1239,8 @@ async fn write_plan(store: &SqliteStore, plan: &ImportPlan) -> Result<WriteRepor
             .map_err(|e| format!("import_issue 失败:{e}"))?
         {
             report.issue += 1;
+        } else {
+            report.issue_skipped += 1;
         }
     }
     for row in &plan.handoffs {
@@ -1048,6 +1250,8 @@ async fn write_plan(store: &SqliteStore, plan: &ImportPlan) -> Result<WriteRepor
             .map_err(|e| format!("import_handoff 失败:{e}"))?
         {
             report.handoff += 1;
+        } else {
+            report.handoff_skipped += 1;
         }
     }
     for row in &plan.artifacts {
@@ -1057,6 +1261,8 @@ async fn write_plan(store: &SqliteStore, plan: &ImportPlan) -> Result<WriteRepor
             .map_err(|e| format!("import_artifact 失败:{e}"))?
         {
             report.artifact += 1;
+        } else {
+            report.artifact_skipped += 1;
         }
     }
     Ok(report)
@@ -1064,31 +1270,49 @@ async fn write_plan(store: &SqliteStore, plan: &ImportPlan) -> Result<WriteRepor
 
 // ─────────────────────────── --from/--to 真实生产路径 ───────────────────
 
-async fn run_real(from: &Path, to: &Path, confirm: bool) -> ExitCode {
-    println!("旧库:{}", from.display());
-    println!("新库:{}", to.display());
+/// `run_real_core` 的结局——Important-1 处置:七A 报告自称「43 条断言全
+/// 过」时,`run_real`(将来真的对着用户日常库跑的那个函数)一次都没被自
+/// 测档调用过,自测档自己手工拼 `analyze`+`write_plan`,绕开了默认只看
+/// 门(:1099 原行号)与拒绝门(:1109 原行号)——2026-08-11 复审 M4 突变把
+/// 两条门同时废掉,43 条断言照旧全绿。这个枚举 + `run_real_core` 把
+/// `run_real` 唯一的编排逻辑抽成一个自测档也能直接调用的函数,`run_self_
+/// test` 从此调的是**同一份产品代码**,两条门被删,自测档会真的翻红,不
+/// 是被指挥器绕过去。
+enum RunOutcome {
+    /// 默认档(`!confirm`),或产品代码判定「不该往下走」时的门——一个字
+    /// 节没写入 `to`。
+    DryRun { plan: ImportPlan },
+    /// `--confirm` 但拒绝清单非空——一个字节没写入 `to`(`to` 这个文件本
+    /// 身也不会被创建,见 §2.7 手工核验:门在开新库之前就拦下了)。
+    RejectedNoWrite { plan: ImportPlan },
+    /// 真写完成。
+    Wrote {
+        plan: ImportPlan,
+        report: WriteReport,
+    },
+    /// 任何一步失败(旧库打不开、analyze 失败、开新库失败、写入失败、写
+    /// 入对账不自洽、旧库指纹跑飞……)——人话原因原样带出来,调用方决定
+    /// 怎么处理(CLI 路径打到 stderr + 非零退出;自测档记进 Ledger)。
+    Failed(String),
+}
 
+/// `run_real`(CLI 生产路径)与 `run_self_test`(自测档)共用的唯一编排
+/// 核心——Important-1 的落地:默认只看门与拒绝门都在**这个函数里**,不
+/// 是外层各自实现一遍。`confirm=false` 时旧库指纹跑前跑后必须相同——这
+/// 条检查在门 1 里,不是调用方的事。
+async fn run_real_core(from: &Path, to: &Path, confirm: bool) -> RunOutcome {
     let fp_before = match fingerprint(from) {
         Ok(f) => f,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return RunOutcome::Failed(e),
     };
 
     let old_pool = match open_legacy_readonly(from).await {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return RunOutcome::Failed(e),
     };
     let plan = match analyze(&old_pool).await {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return RunOutcome::Failed(e),
     };
     old_pool.close().await;
 
@@ -1096,38 +1320,49 @@ async fn run_real(from: &Path, to: &Path, confirm: bool) -> ExitCode {
     print_diff(&plan);
     print_rejected(&plan);
 
+    // 门 1(design §2.5「默认只看不写」):不给 --confirm,分析完就打住,
+    // 连新库文件都不碰。
     if !confirm {
         let fp_after = fingerprint(from).unwrap_or_default();
         if fp_after != fp_before {
-            eprintln!("ASSERT FAILED: 只看档跑完,旧库文件指纹变了({fp_before} → {fp_after})——绝不应该发生");
-            return ExitCode::FAILURE;
+            return RunOutcome::Failed(format!(
+                "ASSERT FAILED: 只看档跑完,旧库文件指纹变了({fp_before} → {fp_after})——绝不应该发生"
+            ));
         }
-        println!("IMPORT_DRYRUN_OK");
-        return ExitCode::SUCCESS;
+        return RunOutcome::DryRun { plan };
     }
 
+    // 门 2(design §2.5「拒绝清单非空就一条都不写」):这条门在开新库**之
+    // 前**——拒绝清单非空时,`to` 这个文件本身都不会被创建(§2.7 手工核
+    // 验实测:比设计稿要求的「一个字节不写」更硬)。
     if !plan.rejected.is_empty() {
         println!("拒绝清单非空,本次不写入任何实体(design §2.5)");
-        println!("IMPORT_REJECTED_NO_WRITE");
-        return ExitCode::SUCCESS;
+        return RunOutcome::RejectedNoWrite { plan };
     }
 
-    let store = match SqliteStore::open(&to.to_string_lossy()).await {
+    // 基础五表(project/metric/observation/issue/handoff)——只有
+    // `bw_store::SqliteStore::open` 知道 schema.sql,这是壳唯一会走的开
+    // 库路径,也是它「结构上不知道导入表存在」这条承诺的来源(Critical-1
+    // 修复轮)。开完立刻丢弃这个连接,真正的写入面是下面的
+    // `ImportSqliteStore`。
+    if let Err(e) = SqliteStore::open(&to.to_string_lossy()).await {
+        return RunOutcome::Failed(format!("开新库失败:{e}"));
+    }
+    let store = match ImportSqliteStore::open(&to.to_string_lossy()).await {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("开新库失败:{e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return RunOutcome::Failed(format!("开新库(导入写入面)失败:{e}")),
     };
     println!("即将写入……");
     plan.raw_counts.print();
     let report = match write_plan(&store, &plan).await {
         Ok(r) => r,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return RunOutcome::Failed(e),
     };
+    if !print_write_reconciliation(&plan, &report) {
+        return RunOutcome::Failed(
+            "写入对账不自洽(计划 N ≠ 实写 M + 跳过 K)——记账本身出了错,不能假装写完了".to_string(),
+        );
+    }
     let fp_now = fingerprint(from).unwrap_or_default();
     if let Err(e) = store
         .record_import_ledger(ImportLedgerEntry {
@@ -1142,15 +1377,37 @@ async fn run_real(from: &Path, to: &Path, confirm: bool) -> ExitCode {
         })
         .await
     {
-        eprintln!("记导入流水失败:{e}");
-        return ExitCode::FAILURE;
+        return RunOutcome::Failed(format!("记导入流水失败:{e}"));
     }
     if fp_now != fp_before {
-        eprintln!("ASSERT FAILED: 真写完,旧库文件指纹变了({fp_before} → {fp_now})——旧库不该被碰");
-        return ExitCode::FAILURE;
+        return RunOutcome::Failed(format!(
+            "ASSERT FAILED: 真写完,旧库文件指纹变了({fp_before} → {fp_now})——旧库不该被碰"
+        ));
     }
-    report.print("IMPORT_WROTE");
-    ExitCode::SUCCESS
+    RunOutcome::Wrote { plan, report }
+}
+
+async fn run_real(from: &Path, to: &Path, confirm: bool) -> ExitCode {
+    println!("旧库:{}", from.display());
+    println!("新库:{}", to.display());
+    match run_real_core(from, to, confirm).await {
+        RunOutcome::DryRun { .. } => {
+            println!("IMPORT_DRYRUN_OK");
+            ExitCode::SUCCESS
+        }
+        RunOutcome::RejectedNoWrite { .. } => {
+            println!("IMPORT_REJECTED_NO_WRITE");
+            ExitCode::SUCCESS
+        }
+        RunOutcome::Wrote { report, .. } => {
+            report.print("IMPORT_WROTE");
+            ExitCode::SUCCESS
+        }
+        RunOutcome::Failed(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 // ─────────────────────────── 合成老库指挥器(自测档)───────────────────
@@ -1297,6 +1554,11 @@ struct LegacyIds {
     project_aihot: String,
     project_workflowhub: String,
     issue_done: String,
+    /// Important-2 兜底分支的样本:`archived=1`、`archived_at=NULL`。
+    archived_no_ts_metric_id: String,
+    /// 上面这条指标的 `updated_at`——兜底逻辑应当把它当停用时刻顶上,读
+    /// 回断言直接比这个值,不是重新算一遍。
+    archived_no_ts_expected_at: i64,
 }
 
 /// 造「好」的合成旧库——覆盖 §2.2/§2.4 三处硬碰撞里的两处(阶段维度重名
@@ -1434,6 +1696,25 @@ collect = { kind = "connector", query = "content-analytics" }
     .await
     .map_err(|e| format!("插入填充指标失败:{e}"))?;
 
+    // Important-2 兜底分支的样本:archived=1、archived_at 留空——旧库真实
+    // 可能出现的一种数据形态(两列各自维护,不保证同时落值)。updated_at
+    // 与 created_at 故意不同(created_at 更早),这样"取 updated_at 顶上"
+    // 这条兜底逻辑能被读回精确核对,不会跟 created_at 混同。
+    let archived_no_ts_metric_id = Uuid::new_v4().to_string();
+    let archived_no_ts_expected_at = now - 400_000;
+    sqlx::query(
+        "INSERT INTO metric (id, project_id, role, name, origin, archived, archived_at, \
+         created_at, updated_at) \
+         VALUES (?, ?, 'lagging', '停用无时刻指标(合成)', 'manual', 1, NULL, ?, ?)",
+    )
+    .bind(&archived_no_ts_metric_id)
+    .bind(&project_workflowhub)
+    .bind(now - 500_000)
+    .bind(archived_no_ts_expected_at)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("插入停用无时刻指标失败:{e}"))?;
+
     // 活:aihot 3 件(待办/进行中/已完成),WorkflowHub 2 件(待办/评审中)。
     let issue_backlog = Uuid::new_v4().to_string();
     sqlx::query(
@@ -1569,6 +1850,8 @@ collect = { kind = "connector", query = "content-analytics" }
         project_aihot,
         project_workflowhub,
         issue_done,
+        archived_no_ts_metric_id,
+        archived_no_ts_expected_at,
     })
 }
 
@@ -1625,9 +1908,84 @@ async fn count_observations_for_metric(pool: &SqlitePool, metric_id: &str) -> Re
     Ok(row.get("n"))
 }
 
+/// Critical-1 修复轮的行为承诺兜底(task-s7a-review.md 验收标准 1):**只用
+/// 壳会走的那条开库路径**(`bw_store::SqliteStore::open`,不碰
+/// `bw_store_import` 一个字)开一个全新的库,直接读 `sqlite_master` 断言
+/// `import_ledger`/`artifact_archive` 这两张导入专用表不存在。这条断言不
+/// 是「查 cargo 依赖图」那类间接检法,是照着壳自己会做的事原样做一遍、
+/// 再读回——即便这次编译把 `bw-store-import` 统一进了某个中间产物(结构
+/// 解法之后这已经不可能发生,见 crate 文档),只要 `SqliteStore::open` 内
+/// 部真的不调用那份 schema,这两张表就永远不会出现在这里。
+async fn assert_shell_open_path_has_no_import_tables(l: &mut Ledger) {
+    let db_path = fresh_db_path("shell-open-path");
+    let store = match SqliteStore::open(&db_path.to_string_lossy()).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: {e}");
+            l.fail("Critical-1:壳路径(SqliteStore::open)开一个全新库成功");
+            return;
+        }
+    };
+    drop(store);
+    let verify = match SqlitePool::connect_with(
+        SqliteConnectOptions::new()
+            .filename(&db_path)
+            .read_only(true),
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ASSERT FAILED: {e}");
+            l.fail("Critical-1:壳路径新库的只读校验连接成功");
+            return;
+        }
+    };
+    for table in ["import_ledger", "artifact_archive"] {
+        match sqlx::query(
+            "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .bind(table)
+        .fetch_one(&verify)
+        .await
+        {
+            Ok(row) => {
+                let n: i64 = row.get("n");
+                l.check(
+                    n == 0,
+                    format!(
+                        "Critical-1:壳的开库路径(SqliteStore::open)不建 {table}(sqlite_master \
+                         读回,实得 {n} 行)"
+                    ),
+                );
+            }
+            Err(e) => {
+                eprintln!("ASSERT FAILED: {e}");
+                l.fail(format!(
+                    "Critical-1:查询 sqlite_master 里有没有 {table} 成功"
+                ));
+            }
+        }
+    }
+    verify.close().await;
+    let _ = std::fs::remove_file(&db_path);
+}
+
+fn outcome_label(o: &RunOutcome) -> &'static str {
+    match o {
+        RunOutcome::DryRun { .. } => "DryRun",
+        RunOutcome::RejectedNoWrite { .. } => "RejectedNoWrite",
+        RunOutcome::Wrote { .. } => "Wrote",
+        RunOutcome::Failed(_) => "Failed",
+    }
+}
+
 async fn run_self_test() -> ExitCode {
     clear_stale_dbs();
     let mut l = Ledger::new();
+
+    // ═══════════════ Critical-1:壳的开库路径绝不建导入表(行为承诺兜底)═══
+    assert_shell_open_path_has_no_import_tables(&mut l).await;
 
     // ═══════════════ good 库:主流程 + 幂等 + 只读证明 + 触发器 ═══════════════
     let legacy_good = fresh_db_path("legacy-good");
@@ -1659,30 +2017,25 @@ async fn run_self_test() -> ExitCode {
     let fp_before = fingerprint(&legacy_good).unwrap_or_default();
     println!("旧库(good)指纹(跑前):{fp_before}");
 
-    // ── dry-run ──
+    // ── dry-run(经 run_real_core——Important-1:自测档从此走产品代码里
+    //    那条真门,不是自己手工拼 analyze,两条门被删会真的翻红)──
     let new_good = fresh_db_path("new-good");
-    let old_pool = match open_legacy_readonly(&legacy_good).await {
-        Ok(p) => p,
-        Err(e) => {
+    println!("\n[good 库 · dry-run(经 run_real_core)]");
+    let plan = match run_real_core(&legacy_good, &new_good, false).await {
+        RunOutcome::DryRun { plan } => plan,
+        RunOutcome::Failed(e) => {
             eprintln!("ASSERT FAILED: {e}");
-            l.fail("旧库(good)只读打开成功");
+            l.fail("run_real_core(good, dry-run) 返回 DryRun(而不是 Failed)");
+            return finish(l);
+        }
+        other => {
+            l.fail(format!(
+                "run_real_core(good, dry-run) 应该返回 DryRun,实际:{}",
+                outcome_label(&other)
+            ));
             return finish(l);
         }
     };
-    let plan = match analyze(&old_pool).await {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("ASSERT FAILED: {e}");
-            l.fail("analyze(good) 成功");
-            return finish(l);
-        }
-    };
-    old_pool.close().await;
-
-    println!("\n[good 库 · dry-run]");
-    plan.raw_counts.print();
-    print_diff(&plan);
-    print_rejected(&plan);
     l.check(
         plan.rejected.is_empty(),
         "good 库:拒绝清单为空(三处硬碰撞里的重复编号只在 dirty 库造)",
@@ -1696,41 +2049,24 @@ async fn run_self_test() -> ExitCode {
     let fp_after_dryrun = fingerprint(&legacy_good).unwrap_or_default();
     l.check(fp_after_dryrun == fp_before, "dry-run 之后旧库指纹不变");
 
-    // ── confirm 第一次 ──
-    let store = match SqliteStore::open(&new_good.to_string_lossy()).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("ASSERT FAILED: 开新库失败:{e}");
-            l.fail("开新库(good)成功");
+    // ── confirm 第一次(同样经 run_real_core)──
+    println!("\n[good 库 · confirm 第 1 次(经 run_real_core)]");
+    let (plan, report1) = match run_real_core(&legacy_good, &new_good, true).await {
+        RunOutcome::Wrote { plan, report } => (plan, report),
+        RunOutcome::Failed(e) => {
+            eprintln!("ASSERT FAILED: {e}");
+            l.fail("run_real_core(good, confirm 第 1 次) 返回 Wrote(而不是 Failed)");
             return finish(l);
         }
-    };
-    println!("\n[good 库 · confirm 第 1 次]");
-    let report1 = match write_plan(&store, &plan).await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("ASSERT FAILED: {e}");
-            l.fail("write_plan(good, 第一次) 成功");
+        other => {
+            l.fail(format!(
+                "run_real_core(good, confirm 第 1 次) 应该返回 Wrote,实际:{}",
+                outcome_label(&other)
+            ));
             return finish(l);
         }
     };
     report1.print("IMPORT_WROTE");
-    if let Err(e) = store
-        .record_import_ledger(ImportLedgerEntry {
-            legacy_db_path: legacy_good.to_string_lossy().to_string(),
-            legacy_db_fingerprint: fp_before.clone(),
-            project_count: report1.project,
-            metric_count: report1.metric,
-            observation_count: report1.observation,
-            issue_count: report1.issue,
-            handoff_count: report1.handoff,
-            artifact_count: report1.artifact,
-        })
-        .await
-    {
-        eprintln!("ASSERT FAILED: 记导入流水失败:{e}");
-        l.fail("record_import_ledger(第一次) 成功");
-    }
 
     // 读回清单 1:七类实体各写入几条 = 计数表打印的数字。
     l.check(
@@ -1891,6 +2227,77 @@ async fn run_self_test() -> ExitCode {
         l.fail("读回 4 附:计划里能找到北极星那一行");
     }
 
+    // Important-3(主控裁决 6 后半句):北极星判定依据打进了报告输出——
+    // `plan.north_star_notes` 存的正是 `print_diff`/`print_north_star_notes`
+    // 打印的那份数据(不是重新算一遍摘要),这里断言它存在且与数据一致:
+    // 恰好一条(aihot,唯一定义了北极星的项目),判「来自正本」,依据文本
+    // 里能看到具体比中了哪个名字。
+    l.check(
+        plan.north_star_notes.len() == 1,
+        format!(
+            "Important-3:北极星判定依据条数与「定义了北极星的项目数」一致(期望 1,实得 {})",
+            plan.north_star_notes.len()
+        ),
+    );
+    if let Some(note) = plan.north_star_notes.first() {
+        l.check(
+            note.origin == "file"
+                && note.basis.contains("逐字相同")
+                && note.basis.contains("周活跃创作者数"),
+            format!(
+                "Important-3:北极星判定依据打进了报告(project={}, origin={}, basis={:?})",
+                note.project_name, note.origin, note.basis
+            ),
+        );
+    } else {
+        l.fail("Important-3:north_star_notes 里能找到 aihot 那一条");
+    }
+
+    // Important-2(design §2.2③兜底分支):archived=1 但 archived_at 为空的
+    // 那一条,导入后 archived_at 应当等于旧库的 updated_at(取的是兜底值,
+    // 不是被静默复活成"在用")。
+    if let Some(m) = plan
+        .metrics
+        .iter()
+        .find(|m| m.id.uuid().to_string() == ids.archived_no_ts_metric_id)
+    {
+        l.check(
+            m.archived_at == Some(ids.archived_no_ts_expected_at),
+            format!(
+                "Important-2:archived=1/archived_at=NULL 的行,计划里 archived_at 取了 updated_at \
+                 兜底(期望 {:?},实得 {:?})",
+                Some(ids.archived_no_ts_expected_at),
+                m.archived_at
+            ),
+        );
+    } else {
+        l.fail("Important-2:计划里能找到「停用无时刻指标(合成)」那一条");
+    }
+    // 同一件事在新库里再读回一遍(SQL 读回,不只是查内存里的 plan 对
+    // 象)——「报告不代答,读回为证」。
+    match sqlx::query("SELECT archived_at FROM metric WHERE id = ?")
+        .bind(&ids.archived_no_ts_metric_id)
+        .fetch_optional(&verify)
+        .await
+    {
+        Ok(Some(row)) => {
+            let archived_at: Option<i64> = row.get("archived_at");
+            l.check(
+                archived_at == Some(ids.archived_no_ts_expected_at),
+                format!(
+                    "Important-2:新库 SQL 读回 archived_at(期望 {:?},实得 {archived_at:?})——\
+                     不是静默复活成在用",
+                    Some(ids.archived_no_ts_expected_at)
+                ),
+            );
+        }
+        Ok(None) => l.fail("Important-2:「停用无时刻指标(合成)」应该能在新库里按旧编号查到"),
+        Err(e) => {
+            eprintln!("ASSERT FAILED: {e}");
+            l.fail("Important-2:查询 metric.archived_at 成功");
+        }
+    }
+
     // 历史存档表关联保全:artifact_archive.issue_id 原样保留(这是第三组
     // 突变自证的目标断言)。
     if let Some(a) = plan.artifacts.iter().find(|a| a.issue_id.is_some()) {
@@ -1969,13 +2376,20 @@ async fn run_self_test() -> ExitCode {
     // 读回清单 6:观测表的两条数据库触发器仍然生效(试一次更新、一次删除)。
     check_observation_triggers(&new_good, &plan, &mut l).await;
 
-    // ── confirm 第二次(幂等)──
-    println!("\n[good 库 · confirm 第 2 次(同一份旧库,幂等)]");
-    let report2 = match write_plan(&store, &plan).await {
-        Ok(r) => r,
-        Err(e) => {
+    // ── confirm 第二次(幂等,同样经 run_real_core)──
+    println!("\n[good 库 · confirm 第 2 次(同一份旧库,幂等,经 run_real_core)]");
+    let report2 = match run_real_core(&legacy_good, &new_good, true).await {
+        RunOutcome::Wrote { report, .. } => report,
+        RunOutcome::Failed(e) => {
             eprintln!("ASSERT FAILED: {e}");
-            l.fail("write_plan(good, 第二次) 成功");
+            l.fail("run_real_core(good, confirm 第 2 次) 返回 Wrote(而不是 Failed)");
+            return finish(l);
+        }
+        other => {
+            l.fail(format!(
+                "run_real_core(good, confirm 第 2 次) 应该返回 Wrote,实际:{}",
+                outcome_label(&other)
+            ));
             return finish(l);
         }
     };
@@ -1989,22 +2403,6 @@ async fn run_self_test() -> ExitCode {
             && report2.artifact == 0,
         "读回 5:第二次导入(同一旧库)七类实体新增全部是 0",
     );
-    if let Err(e) = store
-        .record_import_ledger(ImportLedgerEntry {
-            legacy_db_path: legacy_good.to_string_lossy().to_string(),
-            legacy_db_fingerprint: fp_before.clone(),
-            project_count: report2.project,
-            metric_count: report2.metric,
-            observation_count: report2.observation,
-            issue_count: report2.issue,
-            handoff_count: report2.handoff,
-            artifact_count: report2.artifact,
-        })
-        .await
-    {
-        eprintln!("ASSERT FAILED: 记导入流水(第二次)失败:{e}");
-        l.fail("record_import_ledger(第二次) 成功");
-    }
 
     let verify2 = match SqlitePool::connect_with(
         SqliteConnectOptions::new()
@@ -2066,85 +2464,42 @@ async fn run_self_test() -> ExitCode {
 
     let dirty_fp_before = fingerprint(&legacy_dirty).unwrap_or_default();
 
+    // 拒绝清单非空 → 一条都不写(design §2.5)。Important-1:经
+    // `run_real_core` 同一份产品代码——这条门本身在 `run_real_core` 里
+    // (`if !plan.rejected.is_empty()`),不是这里另写一份判断去绕过它。
     let new_dirty = fresh_db_path("new-dirty");
-    let old_pool_dirty = match open_legacy_readonly(&legacy_dirty).await {
-        Ok(p) => p,
-        Err(e) => {
+    let plan_dirty = match run_real_core(&legacy_dirty, &new_dirty, true).await {
+        RunOutcome::RejectedNoWrite { plan } => plan,
+        RunOutcome::Failed(e) => {
             eprintln!("ASSERT FAILED: {e}");
-            l.fail("旧库(dirty)只读打开成功");
+            l.fail("run_real_core(dirty, confirm) 返回 RejectedNoWrite(而不是 Failed)");
+            return finish(l);
+        }
+        other => {
+            l.fail(format!(
+                "run_real_core(dirty, confirm) 应该返回 RejectedNoWrite,实际:{}",
+                outcome_label(&other)
+            ));
             return finish(l);
         }
     };
-    let plan_dirty = match analyze(&old_pool_dirty).await {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("ASSERT FAILED: {e}");
-            l.fail("analyze(dirty) 成功");
-            return finish(l);
-        }
-    };
-    old_pool_dirty.close().await;
-
-    plan_dirty.raw_counts.print();
-    print_rejected(&plan_dirty);
     l.check(
         !plan_dirty.rejected.is_empty(),
         "dirty 库:重复的活编号被正确识别进拒绝清单",
     );
+    println!("IMPORT_REJECTED_NO_WRITE");
 
-    // 拒绝清单非空 → 一条都不写(design §2.5)。这里直接复用 run_real 同一
-    // 条门禁,不新写一份平行判断:不调用 write_plan,新库理应保持全空。
-    if plan_dirty.rejected.is_empty() {
-        l.fail("dirty 库理应触发拒绝清单(合成数据本身有问题)");
-    } else {
-        println!("拒绝清单非空,本次不写入任何实体");
-        println!("IMPORT_REJECTED_NO_WRITE");
-    }
-
-    // SqliteStore::open 本身会建表(schema 迁移),但一行数据都不该有。
-    let store_dirty = match SqliteStore::open(&new_dirty.to_string_lossy()).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("ASSERT FAILED: 开新库(dirty)失败:{e}");
-            l.fail("开新库(dirty)成功(即使不写入,建表本身也该成功)");
-            return finish(l);
-        }
-    };
-    drop(store_dirty);
-    let verify_dirty = match SqlitePool::connect_with(
-        SqliteConnectOptions::new()
-            .filename(&new_dirty)
-            .read_only(true),
-    )
-    .await
-    {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("ASSERT FAILED: {e}");
-            l.fail("新库(dirty)只读校验连接成功");
-            return finish(l);
-        }
-    };
-    for table in [
-        "project",
-        "metric",
-        "observation",
-        "issue",
-        "handoff",
-        "artifact_archive",
-    ] {
-        match count_table(&verify_dirty, table).await {
-            Ok(n) => l.check(
-                n == 0,
-                format!("读回 8:拒绝清单非空 → {table} 一条都没写(实得 {n})"),
-            ),
-            Err(e) => {
-                eprintln!("ASSERT FAILED: {e}");
-                l.fail(format!("COUNT({table})(dirty)查询成功"));
-            }
-        }
-    }
-    verify_dirty.close().await;
+    // 读回 8(比设计稿原文更硬的形态,§2.7 手工核验实测的同款结论):门 2
+    // 在 `run_real_core` 里挡在「开新库」之前,拒绝清单非空时 `new_dirty`
+    // 这个文件本身根本不会被创建——不是「建了表但零行」,是文件都不存
+    // 在,全局零写入。
+    l.check(
+        !new_dirty.exists(),
+        format!(
+            "读回 8:拒绝清单非空 → 新库文件根本没被创建({})",
+            new_dirty.display()
+        ),
+    );
 
     let dirty_fp_after = fingerprint(&legacy_dirty).unwrap_or_default();
     l.check(

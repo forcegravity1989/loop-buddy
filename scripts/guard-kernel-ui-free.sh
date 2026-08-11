@@ -47,7 +47,10 @@ check_next_workspace() {
     echo "… next/crates/app-desktop 尚不存在,next 档跳过(切片进度使然)"
     return 0
   fi
-  local KERNEL=(bw-core bw-workspace bw-engine bw-connector bw-store bw-app)
+  # 七-1 修复轮(task-s7a-review.md Critical-1):`bw-store-import` 是新开
+  # 的导入专用写入面 crate(见其顶部文档),同样不该拉界面框架——纳入这
+  # 条守卫,不留一个新 crate 不被查的空档。
+  local KERNEL=(bw-core bw-workspace bw-engine bw-connector bw-store bw-store-import bw-app)
   local fail=0
   for c in "${KERNEL[@]}"; do
     if (cd next && cargo tree -p "$c" --edges normal --prefix none 2>/dev/null) \

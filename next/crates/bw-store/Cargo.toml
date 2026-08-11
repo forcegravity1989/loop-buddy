@@ -1,19 +1,10 @@
 [package]
 name = "bw-store"
-description = "next 切片四A:最小存储层(SQLite/sqlx)。三张表(项目/活/运行)+ 迁移双守卫;「同一件活一个活着的交付运行」钉成数据库部分唯一索引,「结算一次/关门一次」用比较并置。只依赖 bw-core——编译期看不见 bw-connector 的协议类型,长不出业务判断(design-s4-runmanager.md §2.1)。next 切片五B 加指标/观测/交棒三张表(design-s5-hexpanel.md §2),同一条边界不变。next 切片七A 加一条导入专用写入面(`import` cargo 特性,默认关闭)——design-s7-real-project.md §2.4 第三处硬碰撞:壳的产物不开这个特性,`ImportStore` 那一整条 trait 与它的六类历史行类型在壳里根本不编译进来,不是「有但不许用」。"
+description = "next 切片四A:最小存储层(SQLite/sqlx)。三张表(项目/活/运行)+ 迁移双守卫;「同一件活一个活着的交付运行」钉成数据库部分唯一索引,「结算一次/关门一次」用比较并置。只依赖 bw-core——编译期看不见 bw-connector 的协议类型,长不出业务判断(design-s4-runmanager.md §2.1)。next 切片五B 加指标/观测/交棒三张表(design-s5-hexpanel.md §2),同一条边界不变。next 切片七A 曾经加过一条导入专用写入面(`import` cargo 特性,默认关闭);七-1 修复轮(task-s7a-review.md Critical-1)把它整个搬进独立 crate `bw-store-import`——2026-08-11 复审实测:cargo 的特性统一在仓库门禁自己跑的 `cargo check/clippy --workspace --all-targets` 下会无视 normal/dev 依赖边的区别,把这个特性统一进 app-desktop 链接的产物,特性开关本身挡不住这件事;这个 crate 现在完全不知道导入写入面的存在,不是「特性关了就不知道」。"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 rust-version.workspace = true
-
-[features]
-# next 切片七A(design-s7-real-project.md §2.4 第三处硬碰撞):导入要写的
-# 是历史时刻与历史状态,正常写入面(`IssueStore`/`MetricStore`/…)给「此
-# 刻正在发生的事」设计,一个方法都用不上。默认关闭——只有 `bw-app` 的
-# `import_legacy` 指挥器(经 [dev-dependencies] 显式开启)才会把这个特性
-# 拉进它自己的编译图;`app-desktop`(壳)的真实依赖图上永远不出现,
-# `scripts/guard-import-feature-off.sh` 查 `cargo tree -e normal` 断言这一点。
-import = []
 
 [dependencies]
 bw-core = { path = "../bw-core" }

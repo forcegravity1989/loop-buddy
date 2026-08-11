@@ -1,7 +1,9 @@
--- next 切片七A · 导入专用的两张表(design-s7-real-project.md §2.4 第三处
--- 硬碰撞 / §2.6 / §6.1)。这份文件只在 `import` cargo 特性开着时才被
--- `SqliteStore::open` 应用一次——壳的产物默认不开这个特性,这两张表在
--- 壳打开的库里根本不会被建出来(结构约束,不是纪律)。
+-- next 切片七A / 七-1 修复轮 · 导入专用的两张表(design-s7-real-project.md
+-- §2.4 第三处硬碰撞 / §2.6 / §6.1,task-s7a-review.md Critical-1)。这份
+-- 文件只被 `bw-store-import` 这个 crate 自己的 `ImportSqliteStore::open`
+-- 应用——`bw-store::SqliteStore::open`(壳唯一会调用的开库路径)完全不
+-- 知道这份文件的存在,不是「特性关了就不知道」,是 `bw-store` 编译期就
+-- 看不见它(结构约束,不是纪律;见 crate 文档「为什么这不算开后门」)。
 
 -- 导入流水:只追加。每次真写(`--confirm`)记一行,不是防重复的机制本身
 -- (防重复靠六类实体的身份编号原样沿用 + INSERT OR IGNORE),而是让第二

@@ -1,53 +1,104 @@
 #!/usr/bin/env bash
-# next 切片七A(design-s7-real-project.md §2.4 第三处硬碰撞/§8.1):导入
-# 专用写入面(`bw-store` 的 `ImportStore` trait + 六类历史行类型)只在开了
-# `import` 这个 cargo 特性时才编译进 `bw-store`。它收的是完整历史行(含所
-# 有时刻与状态),走「撞了就跳过」的插入,不经 `bw_core::can_transition_to`
-# 这类合法性守卫——这不是纪律上「有但不许用」,而是结构上「壳的产物里
-# 这些方法根本不存在」。这条守卫断言这件事在**真实依赖图**上成立。
+# next 切片七A/七-1 修复轮(design-s7-real-project.md §2.4 第三处硬碰撞/
+# §8.1,task-s7a-review.md Critical-1):导入专用写入面(`ImportStore` trait
+# + 六类历史行类型 + `schema_import.sql`)住在独立 crate `bw-store-import`
+# 里(七-1 修复轮之前是 `bw-store` 的一个 `import` cargo 特性——2026-08-11
+# 复审用编译期探针 + 产物比对 + 运行时建表三重实证发现:cargo 的特性统一
+# 对同一个 crate、同一个目标平台、同一次调用里的全部请求方一视同仁,不分
+# normal/dev 依赖边;仓库门禁自己跑的 `cargo check/clippy --workspace
+# --all-targets` 恰好会把 `bw-app` [dev-dependencies] 那份带 import 特性的
+# `bw-store` 与 `app-desktop` 依赖的那份统一编译成同一份产物,原来那句
+# 「resolver v2 分别做特性统一」的注释是错的)。结构解法:导入面挪进一个
+# `app-desktop` 永远不会依赖的独立 crate——没有特性可统一,壳的编译图上
+# 连这个 crate 的名字都不存在,不管用哪种 cargo 调用方式都是如此。
 #
-# 照既有分层守卫(`guard-app-layering.sh`)的做法查 cargo 自己算出来的依
-# 赖图,不查 manifest 文本——manifest 文本能被 `[dependencies.bw-store]`
-# 表头式、改名依赖等写法绕过,这是仓里已经踩过三次的教训(见
-# `guard-app-layering.sh` 头部注释)。查特性同理:`cargo tree -f "{p} [{f}]"`
-# 打印的是 cargo 解析后**真正参与这次编译**的特性集,不是 Cargo.toml 里
-# 写了什么请求。
-#
-# 用什么命令查:`cargo tree -p app-desktop -e normal -f "{p} [{f}]"`——
-# `-e normal` 只看正式(非 dev/build)依赖边,这正是「壳的产物」的真实依
-# 赖图;`bw-app` 的 `[dev-dependencies]` 里如果给 `bw-store` 开了 `import`
-# 特性(供 `import_legacy` 指挥器用),那条边不出现在这棵树里,不会被这
-# 条守卫误伤——resolver v2 对同一个 crate 的 normal 依赖边与 dev 依赖边
-# 分别做特性统一,`app-desktop` 的产物只链接 normal 那一份。
+# 这条守卫因此分两档:
+#   [隔离构建档] 原有检法(查 cargo tree 算出来的依赖图),照旧留着——对
+#     `cargo build -p app-desktop` 这种单独构建成立,但**不是**门禁真正跑
+#     的构建形态,如实改名,不再暗示它覆盖 workspace 统一构建。
+#   [workspace 统一构建产物档] 新增,直接复现门禁那条 `--workspace
+#     --all-targets` 调用、检查 app-desktop 链出来的**产物二进制**本身有
+#     没有导入专用 schema 的字节痕迹——查产物,不查 cargo 的解析结果
+#     (「查代理不查真实」的老坑,C1 复审踩过一次,同款教训)。
 set -euo pipefail
 cd "$(dirname "$0")/../next"
 
-echo "… 生成 app-desktop 的真实(非 dev)依赖图特性集(cargo tree -p app-desktop -e normal -f \"{p} [{f}]\")"
+# ── [隔离构建档] app-desktop 自己声明的依赖图 ──────────────────────────
+# 查 cargo 自己算出来的依赖图,不查 manifest 文本——manifest 文本能被
+# `[dependencies.bw-store]` 表头式、改名依赖等写法绕过,这是仓里已经踩过
+# 三次的教训(见 `guard-app-layering.sh` 头部注释)。这一档只回答「app-
+# desktop 自己有没有在 Cargo.toml 里显式请求 bw-store-import 或
+# bw-store 的 import 特性」——回答不了「这次真实构建里 cargo 有没有替它
+# 把别的包request 的东西统一进来」,那是下面第二档的事。
+echo "… [隔离构建档] app-desktop 的真实(非 dev)依赖图(cargo tree -p app-desktop -e normal)"
 tree_output="$(cargo tree -p app-desktop -e normal -f "{p} [{f}]" --prefix none 2>&1)" || {
   echo "✗ 无法生成 app-desktop 的真实依赖图(cargo tree 失败),原文:"
   echo "$tree_output"
   exit 1
 }
 
-# `bw-store` 在这棵树里至少出现一次(app-desktop 直接依赖 + 经 bw-app 间
-# 接依赖各一条边,cargo tree 按边而不是按包去重打印,行数不固定,但每一
-# 行的特性集必须都不含 `import`)。一行都没有反而是更大的问题——说明依
-# 赖图本身对不上「app-desktop 依赖 bw-store」这条已知前提,同样判红。
+if echo "$tree_output" | grep -qE '^bw-store-import v'; then
+  echo "✗ [隔离构建档] app-desktop 的真实(非 dev)依赖图里出现了 bw-store-import——"
+  echo "  导入专用写入面不该有任何路径能被壳依赖到,检查 app-desktop/bw-app 的"
+  echo "  [dependencies] 节(不是 [dev-dependencies])有没有误加了这一行。"
+  exit 1
+fi
+
 store_lines="$(echo "$tree_output" | grep -E '^bw-store v' || true)"
 if [ -z "$store_lines" ]; then
   echo "✗ app-desktop 的真实依赖图里找不到 bw-store 这一行——依赖图生成本身可能有问题,原文:"
   echo "$tree_output"
   exit 1
 fi
-
 echo "$store_lines" | sed 's/^/  /'
-
 if echo "$store_lines" | grep -qE '\[[^]]*\bimport\b[^]]*\]'; then
-  echo "✗ app-desktop 的真实(非 dev)依赖图里,bw-store 开着 import 特性——"
-  echo "  导入专用写入面(ImportStore)会被编译进壳的产物,design-s7-real-project.md"
-  echo "  §2.4 第三处硬碰撞的结构约束破了。检查 app-desktop/bw-app 的 [dependencies]"
-  echo "  节(不是 [dev-dependencies])有没有误把 features = [\"import\"] 写了进去。"
+  echo "✗ [隔离构建档] app-desktop 的真实(非 dev)依赖图里,bw-store 还留着 import 特性——"
+  echo "  七-1 修复轮已经把这个特性从 bw-store 里删掉了,出现说明有代码没跟着改。"
+  exit 1
+fi
+echo "✓ [隔离构建档] 没有 bw-store-import 依赖边,bw-store 也没有 import 特性(cargo tree -p app-desktop -e normal 核验)"
+
+# ── [workspace 统一构建产物档] 复现门禁真实构建形态,检产物 ──────────────
+# 门禁那条 `cargo check/clippy --workspace --all-targets` 会把整个
+# workspace(含 bw-app 的 [dev-dependencies])放进同一次特性/依赖解析。这
+# 一档直接跑 `cargo build --workspace --all-targets`(复用默认 target 目
+# 录——门禁前面几步的 `cargo check/clippy --workspace --all-targets` 已经
+# 把大部分类型检查/借用检查的中间产物缓存在这里,这一步只是在同一份缓存
+# 上补完代码生成 + 链接,不是从头再编一遍),然后直接 `strings` 链出来的
+# app-desktop 二进制,断言导入专用 schema(`schema_import.sql` 里的建表语
+# 句)不在里面——这是对**产物**的检查,不是对 cargo 解析结果的检查,
+# `bw-store-import` 即使被误统一进某个中间产物,只要它没有被 app-desktop
+# 的任何一条真实调用路径引用到,链接器的死代码剥离也会把它剥掉(见
+# task-s7a-review.md Evidence 2「import_impl 的 45 个符号被剥掉」的既有先
+# 例);唯一会让这条断言翻红的,是 app-desktop 的产物代码路径上**真的**存
+# 在一条会执行到导入 schema 的调用链。
+echo "… [workspace 统一构建产物档] cargo build --workspace --all-targets(复现门禁真实构建形态)"
+build_log="$(mktemp)"
+if ! cargo build --workspace --all-targets >"$build_log" 2>&1; then
+  echo "✗ workspace 统一构建失败,原文见下(尾 40 行):"
+  tail -n 40 "$build_log"
+  rm -f "$build_log"
+  exit 1
+fi
+rm -f "$build_log"
+
+bin_path="target/debug/bw-next"
+if [ ! -f "$bin_path" ]; then
+  echo "✗ 找不到 app-desktop 的产物二进制($bin_path)——workspace 统一构建没有产出它,这一档检法本身失效"
   exit 1
 fi
 
-echo "✓ app-desktop 的真实(非 dev)依赖图里,bw-store 没有开 import 特性(cargo tree -p app-desktop -e normal -f \"{p} [{f}]\" 核验)"
+leak_needles=("CREATE TABLE IF NOT EXISTS import_ledger" "CREATE TABLE IF NOT EXISTS artifact_archive")
+leaked=0
+for needle in "${leak_needles[@]}"; do
+  hits="$(strings "$bin_path" | grep -c -F "$needle" || true)"
+  if [ "$hits" -gt 0 ]; then
+    echo "✗ [workspace 统一构建产物档] app-desktop 产物二进制($bin_path)里出现了「$needle」——"
+    echo "  导入专用 schema 在门禁真跑的 --workspace --all-targets 构建形态下泄漏进了壳的产物。"
+    leaked=1
+  fi
+done
+if [ "$leaked" -ne 0 ]; then
+  exit 1
+fi
+echo "✓ [workspace 统一构建产物档] app-desktop 产物二进制($bin_path)里没有导入专用 schema 的痕迹(strings 核验,门禁构建形态下复测)"

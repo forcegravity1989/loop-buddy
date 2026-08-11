@@ -6,6 +6,9 @@ members = [
     "crates/bw-engine",
     "crates/bw-connector",
     "crates/bw-store",
+    # next 切片七-1 修复轮(task-s7a-review.md Critical-1):导入专用写入面
+    # 独立成包——`app-desktop` 永远不会依赖它,见该 crate 的顶部文档。
+    "crates/bw-store-import",
     "crates/bw-app",
     # next 切片五E(design-s5-hexpanel.md §4):界面框架第一次进 next/。
     # 唯一允许依赖 dioxus 的 crate——`scripts/guard-kernel-ui-free.sh`

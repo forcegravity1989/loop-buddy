@@ -1,0 +1,18 @@
+[package]
+name = "bw-store-import"
+description = "next 切片七-1 修复轮(design-s7-real-project.md §2.4 第三处硬碰撞的结构解法,task-s7a-review.md Critical-1):导入专用写入面独立成包——不再是 bw-store 的一个 cargo 特性。2026-08-11 复审用编译期探针 + 产物比对 + 运行时建表三重实证发现:cargo 的特性统一在 `cargo check/clippy --workspace --all-targets`(仓库门禁自己跑的构建形态)下,会把 bw-app [dev-dependencies] 里那份带 import 特性的 bw-store 与 app-desktop 依赖的那份统一编译成同一份产物——特性开关挡不住这件事。这个 crate 是唯一的结构解法:app-desktop 永远不会依赖它,没有特性可统一,壳的编译图上连这个 crate 的名字都不存在,不管用哪种 cargo 调用方式都是如此。自己开一条独立的 sqlite 连接,连到与主存储同一个数据库文件(`ImportSqliteStore::open` 要求文件已存在——不会抢在 bw-store::SqliteStore::open 之前建库);自己持有 schema_import.sql;两张导入专用表(import_ledger/artifact_archive)只在这个 crate 的 open 被真正调用时才建——这是「导入表只在导入入口被显式调用时才建」这条承诺的另一半(另一半是壳压根不依赖这个 crate,见 scripts/guard-import-feature-off.sh)。"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bw-core = { path = "../bw-core" }
+# 只借 bw-store 的 `MetricTier`/`metric_tier_text`(指标层级的编解码)与
+# `Result`/`StoreError`(错误类型,复用不新造第二套)——不借 `SqliteStore`
+# 内部状态,这个 crate 自己开独立连接(见上方 Cargo.toml 描述)。
+bw-store = { path = "../bw-store" }
+sqlx = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+time = { workspace = true, features = ["std"] }
