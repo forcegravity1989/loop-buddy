@@ -20,8 +20,16 @@
 //! `interval`。语义不变(键位表、resize 触发时机、UTF-8 跨批处理全部照
 //! 抄),只是传输机制从"拉"换成"推"——这同时也让 v1 原有的
 //! `sess.buffer`/`sess.ready`(等 Rust 来 poll 之前的字符串缓冲)不再需
-//! 要:输出改走这条 eval 自己的 `recv` 循环,写之前已经确认 xterm 就绪
-//! (`ready` 握手),没有"写得比初始化早"的竞态需要拿缓冲区兜底。
+//! 要:输出改走这条 eval 自己的 `recv` 循环。**纠偏(评审
+//! `task-s55-review.md` Important-2,2026-08-11)**:早到的写不丢,靠的
+//! **不是**一道 Rust 侧「先等 `ready` 握手再转发」的逻辑——`term_init_js`
+//! 确实发了一条 `{type:'ready'}`,但 Rust 侧收到即丢
+//! (`Ok(JsEvent::Ready) => {}`),不 gate 任何输出。真正兜底的是 dioxus
+//! 自己 JS 侧的消息队列(`dioxus-document-0.7.9/src/ts/eval.ts` 的
+//! `Channel::send`:没人 `recv()` 等着的时候消息先压进 `pending` 数组,
+//! `recv()` 先取 `pending`),这是上游未文档化的实现细节,不是本片写的
+//! 保护机制,dioxus 升级时需要复核(登记见 plan/23-opc-stitching-
+//! rebuild.md §10)。
 //!
 //! **字节从哪来**:壳不拉取,只订阅——`bw_app::run::RunManager::
 //! terminal_feed`(design-s5-hexpanel.md §5.3/主控裁决 7 落地,见
@@ -168,8 +176,13 @@ return (async function(id) {{
         dioxus.send({{ type: 'resize', cols: term.cols, rows: term.rows }});
     }}
 
-    // 就绪握手——Rust 侧收到这条之后才开始转发 PTY 输出批次,不依赖"消
-    // 息队列先进先出"这条实现细节兜底早到的写。
+    // 就绪信号——发出去,但**不是握手**:Rust 侧收到这条就丢
+    // (`Ok(JsEvent::Ready) => {{}}`),不 gate 任何输出转发(评审
+    // task-s55-review.md Important-2 纠偏,原注释这里曾经声称有一道握
+    // 手,不实)。早到的写不丢,靠的是 dioxus 自己 JS 侧消息队列的
+    // `pending` 缓冲(eval.ts `Channel::send`),不是这条消息。保留这条
+    // 发送只是留一个"xterm 初始化完成"的时间点标记,供以后需要时接诊
+    // 断/真握手用。
     dioxus.send({{ type: 'ready' }});
 
     // 输出循环:Rust 每收到一批 PTY 字节就 `eval.send({{type:'write',...}})`
@@ -286,6 +299,11 @@ pub fn TerminalWidget(run: RunRow) -> Element {
                 tokio::select! {
                     js_msg = eval.recv::<JsEvent>() => {
                         match js_msg {
+                            // 收到即丢,不 gate 任何东西——见本文件顶部模
+                            // 块文档「纠偏」段与 `term_init_js` 里
+                            // `dioxus.send({type:'ready'})` 旁边的注释:早
+                            // 到的写不靠这条消息兜底,靠的是 dioxus JS 侧
+                            // 消息队列自己的 `pending` 缓冲。
                             Ok(JsEvent::Ready) => {}
                             Ok(JsEvent::Input { data }) => {
                                 if let Some(m) = kernel.manager() {

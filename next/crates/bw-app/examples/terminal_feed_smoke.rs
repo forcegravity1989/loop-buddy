@@ -115,9 +115,15 @@ async fn main() -> ExitCode {
         },
     };
     let exec: Arc<dyn InteractiveExecutor> = Arc::new(SmokeMock { hold: HOLD_OPEN });
-    let conn = AgentCliConnector::from_entry(&entry, &CLAUDE, exec);
+    // 具体类型 `Arc<AgentCliConnector>` 单留一份(不经 `from_entry` 抹成
+    // `Arc<dyn Connector>`)——同 `run_races.rs` `Ctx::mock` 的既有先例
+    // (`Connector` trait 故意零 `dyn Any`,没有下转路径,只能在装配时多
+    // 留一份具体类型的把手)。§4 新增的尺寸读回断言要调
+    // `terminal_size_by_workspace`,那是 `AgentCliConnector` 自己的方法,
+    // 不在契约里。
+    let concrete = Arc::new(AgentCliConnector::new(binding.clone(), &CLAUDE, exec));
     let mut registry = ConnectorRegistry::default();
-    registry.register(entry, conn);
+    registry.register(entry, concrete.clone());
     let registry = Arc::new(registry);
 
     let manager = match RunManager::open(&db_path, registry, RunManagerConfig::default()).await {
@@ -178,6 +184,24 @@ async fn main() -> ExitCode {
         Ok(true) => println!("  ✓ terminal_input(Resize) 返回 true"),
         Ok(false) => return fail("terminal_input(Resize) 在会话存活期间返回了 false"),
         Err(e) => return fail(&format!("terminal_input(Resize) 报错:{e}")),
+    }
+
+    // next 切片 5.5 修(评审 task-s55-review.md Important-1):`terminal_
+    // input(Resize)` 返回 `true` 只证明字节送达了 PTY,证不了尺寸账目真
+    // 的落进了 `TerminalManager`——这条断言直接从管理器读回
+    // `current_size`,核对它等于刚才设的 100×40,而不是 `attach` 时的
+    // 80×24 默认值(`send_input` 若退回到走 `input()` 而不是
+    // `resize()`,`current_size` 会原地不动,这里就会读到 80×24 或者压根
+    // 对不上)。
+    match concrete.terminal_size_by_workspace(&workspace) {
+        Some((100, 40)) => println!("  ✓ 从 TerminalManager 读回的尺寸是 100×40,与所设一致"),
+        Some((80, 24)) => return fail(
+            "从 TerminalManager 读回的尺寸仍是 80×24 默认值——resize 没有真的走 TerminalManager::resize",
+        ),
+        Some((cols, rows)) => {
+            return fail(&format!("从 TerminalManager 读回的尺寸是 {cols}×{rows},与所设的 100×40 不一致"))
+        }
+        None => return fail("terminal_size_by_workspace 读回 None——会话应该还在管理器里活着"),
     }
 
     println!();

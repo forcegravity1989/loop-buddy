@@ -195,6 +195,15 @@ impl TerminalManager {
         self.sessions.remove(&conversation_id);
     }
 
+    /// 某会话此刻记的尺寸(读回用——同 `resize()`/`attach()` 写入的
+    /// `current_size` 字段)。next 切片 5.5 修(评审 task-s55-review.md
+    /// Important-1):`terminal_feed_smoke` 用它核对 `Interactive::
+    /// send_input(Resize)` 真的把尺寸账目写回了这里,不是只把字节塞进
+    /// PTY。会话不存在 → `None`,同本模块其余查询方法的既有口径。
+    pub fn current_size(&self, conversation_id: ConversationId) -> Option<(u16, u16)> {
+        self.sessions.get(&conversation_id).map(|s| s.current_size)
+    }
+
     /// 抽出所有会话自上次 drain 以来的输出,每项带 conversation_id。
     pub fn drain_events(&mut self) -> Vec<(ConversationId, Vec<u8>)> {
         let mut out = Vec::new();

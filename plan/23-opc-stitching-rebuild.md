@@ -298,3 +298,9 @@ E2E(深链 + sqlite 读回 + computer-use)+ /code-review,不写单元测试;连�
     - **来源**:本片没有任何用例需要「工作区根目录」这个概念——`RunIssue`(会用到它来给新开工的活分配工作区)没有接入壳(design §3.3/§8 范围裁剪),交付证据第③栏的工作区现采直接读 `project.root_path`(单个项目自己的检出根,不是一个「根目录」概念)。为一个没有真实消费者的环境变量写解析代码,会立刻在门禁里显出一处死代码,不如如实不实现,登记留痕。
     - **待办**:`RunIssue` 接入壳、需要给新开工的活自动供给工作区时,一并接上 `BW_WORKSPACES`(同 `bw-workspace::provision_issue_worktree` 的既有能力对接)。
     - **登记日**:2026-08-11。
+
+21. **嵌入终端的「就绪握手」依赖上游未文档化的 dioxus eval 消息队列缓冲行为,Rust 侧没有真的握手**(登记日 2026-08-11,切片 5.5 复审 `task-s55-review.md` Important-2 发现,修复轮登记)
+    - **现象**:`app-desktop/src/screens/terminal.rs` 的 `term_init_js` 在 xterm 初始化完成后发一条 `{type:'ready'}` 消息,修复前的注释声称「Rust 侧收到这条之后才开始转发 PTY 输出批次」——实际代码(`Ok(JsEvent::Ready) => {}`)收到即丢,不 gate 任何写入。让「字节泵在 xterm 就绪之前先到达」这个场景不丢字节的,是 dioxus 自身 JS 侧的消息队列(`dioxus-document-0.7.9/src/ts/eval.ts` 的 `Channel::send`——没人 `recv()` 等着的时候消息先压进 `pending` 数组,`recv()` 先取 `pending`),不是 BW 这边写的任何逻辑。
+    - **来源**:v1 原有 `sess.buffer`/`sess.ready`(Rust 侧真缓冲早到的写)在切片 5.5 移植时被删掉,报告以为改用了等价的「ready 握手」顶替,实际没有写这段逻辑;评审(`task-s55-review.md` Important-2)核实底层 `eval.ts` 源码后确认行为上不丢字节(不构成真实 bug),但记账本身失真——这正是「报告不代答、读回为证」要防的那类偏差。修复轮已把 `terminal.rs` 里所有声称「Rust 侧握手」的注释改写为如实描述,选择不实现一个多余的 Rust 侧 `carry` 早到缓冲:真正的安全网已经在 JS 侧被核实存在,重复造一个不会带来额外保障,只会多一处要维护的状态。
+    - **待办**:dioxus 升级时复核 `eval.ts` 的 `Channel`/`pending` 实现是否还是同一套语义——这是上游内部实现细节,不是公开契约,版本升级可能悄悄改掉。如果真的改了行为,需要把这条依赖换成 Rust 侧真握手(收到 `Ready` 前把字节留在 `carry` 里,不 `eval.send`)。
+    - **登记日**:2026-08-11。

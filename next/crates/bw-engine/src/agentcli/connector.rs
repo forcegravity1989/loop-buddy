@@ -306,6 +306,25 @@ impl AgentCliConnector {
             .get(req)
             .cloned()
     }
+
+    /// 供指挥器读回用:按工作区路径查这条会话在 `TerminalManager` 里记的
+    /// 真实尺寸(`current_size`)——不是契约的一部分,只给
+    /// `terminal_feed_smoke` 核对 `send_input(Resize)` 真的把尺寸账目写回
+    /// 了管理器(评审 task-s55-review.md Important-1 的修复轮新增)。工作
+    /// 区路径复用的是 `SessionTable::find_by_workspace` 这条既有索引(续
+    /// 接判定唯一入口),不新开一条平行的按名查找。
+    pub fn terminal_size_by_workspace(&self, workspace: &Path) -> Option<(u16, u16)> {
+        let conversation = self
+            .sessions
+            .lock()
+            .expect("session table mutex poisoned")
+            .find_by_workspace(workspace)?
+            .conversation;
+        self.terminals
+            .lock()
+            .expect("terminal manager mutex poisoned")
+            .current_size(conversation)
+    }
 }
 
 impl Connector for AgentCliConnector {
@@ -702,11 +721,32 @@ impl Interactive for AgentCliConnector {
         let Some(conversation) = self.session_row(ticket.req).map(|r| r.conversation) else {
             return false;
         };
-        let terminals = self
-            .terminals
-            .lock()
-            .expect("terminal manager mutex poisoned");
-        terminals.input(conversation, input.into())
+        // next 切片 5.5 修(评审 task-s55-review.md Important-1):resize 必
+        // 须走 `TerminalManager::resize`,不能跟字节输入一样只走
+        // `input()`——v1 `bw-app/src/lib.rs` 的 `Command::TerminalResize` 就
+        // 是这个分法(`terminal_manager.resize(...)`,失败时补
+        // `note_fit_size`)。`resize()` 才会真的更新 `current_size`/
+        // `last_fit_size` 两笔账(`terminal_manager.rs` 文档);这个连接器
+        // `start()` 里 `attach` 读的 `last_fit_size()`(本文件上方「④ 起
+        // PTY」那段)就是这笔账的唯一消费者——不走 `resize()`,它永远是
+        // `None`,新会话永远从 80×24 起步,拿不到用户上一次真实调整过的
+        // 终端尺寸。
+        match input {
+            TermInput::Resize { cols, rows } => {
+                let mut terminals = self
+                    .terminals
+                    .lock()
+                    .expect("terminal manager mutex poisoned");
+                terminals.resize(conversation, cols, rows)
+            }
+            bytes @ TermInput::Bytes(_) => {
+                let terminals = self
+                    .terminals
+                    .lock()
+                    .expect("terminal manager mutex poisoned");
+                terminals.input(conversation, bytes.into())
+            }
+        }
     }
 }
 
