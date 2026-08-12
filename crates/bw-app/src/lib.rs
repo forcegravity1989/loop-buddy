@@ -4249,6 +4249,20 @@ impl App {
                 });
             }
         }
+        // `create_project_init_mr` checks out `bw/project-init` and leaves
+        // HEAD there. Subsequent issue worktrees branch from current HEAD —
+        // without returning to the default branch, first-comer issue PRs can
+        // fork off the config branch. Best-effort: always try to sync back
+        // (merge Ok → pull project.toml; merge/PR fail → at least leave main).
+        if let Err(e) = bw_engine::github::sync_default_branch(dir).await {
+            self.emit(Event::ConnectorSynced {
+                name: format!("{} · project.toml", proj.name),
+                ok: false,
+                detail: format!(
+                    "project.toml 流程后工作区收拢默认分支失败(可能仍停在 bw/project-init,后续开活前请手动切回主干):{e}"
+                ),
+            });
+        }
     }
 
     async fn collect_project_metrics(
@@ -5416,6 +5430,13 @@ impl App {
             // persists under ~/.claude/projects/<encoded-cwd>/ from the
             // first run; `--resume <session_id>` re-enters the exact session.
             // session_id 来自 claude_conversation 行(hook 回传)。
+            // Spec §7.1 / 验收 11.5: 如实提示沿用首次上下文,要新版方法须新开执行。
+            self.emit(Event::ConnectorSynced {
+                name: format!("issue #{} · 恢复会话", issue.number),
+                ok: true,
+                detail: "沿用首次开工的系统提示词与主 Skill;规范文件已更新。若要换新方法请新开执行(不要指望恢复暗换)"
+                    .into(),
+            });
             let session_id = conv
                 .as_ref()
                 .map(|c| c.claude_session_id.as_str())
@@ -5474,12 +5495,19 @@ impl App {
                 Err(e) => return Err(e),
             };
             // §6.1 点3: 阶段默认 Skill 正文为空 = 资产损坏或打包遗漏。系统
-            // 提示词仍可用,但开工前在运行日志中明确告警,不假装已加载。
+            // 提示词仍可用,但开工前在界面和运行日志中明确告警,不假装已加载。
             if is_default && !effective_skill.is_empty() && skill_body.trim().is_empty() {
                 eprintln!(
                     "[BW_SKILL_WARN] 阶段默认方法 `{effective_skill}` 正文为空(issue #{}, stage {:?}),本次仅依据 buddy 规范处理",
                     issue.number, issue.stage
                 );
+                self.emit(Event::ConnectorSynced {
+                    name: format!("issue #{} · 阶段默认技能", issue.number),
+                    ok: false,
+                    detail: format!(
+                        "阶段默认方法 `{effective_skill}` 正文为空或缺失,本次仅依据 buddy 规范处理(不假装已加载默认 SOP)"
+                    ),
+                });
             }
             // §8: 显式选择的 Skill 正文为空(被删/被清空)→ 不悄悄回落、不假装
             // 已加载,告诉用户所选不可用,让其修正选择(不启动真实 Claude)。
@@ -7204,15 +7232,13 @@ impl App {
                 // 都失败、软降级回本地 mint 的项目)零标配票:不给建不了
                 // 仓、没有 PR 环可走的项目发一套没处交付的活,如实留白。
                 let first_issue = self.seed_standard_issue_trio(p).await?;
-                // V2-② Phase A (§6.2): later-comer — if the repo already has
-                // `.bw/project.toml` (cloned from a Buddy-managed repo), read
-                // back the canonical intent + metrics + connectors from the
-                // repo's own files. This happens AFTER UpdateBrief (which ran
-                // before CompleteCreation) so the repo's canonical values
-                // override the Intent card's local input — the repo is the
-                // source of truth, not what the later-comer typed. For
-                // first-comers (no project.toml), this is a no-op.
-                if has_project_toml(&proj.workspace_path) {
+                // V2-② Phase A (§6.1#4 / §6.2): both first-comer and later-comer
+                // read back metrics/connectors from the repo when a real
+                // workspace exists (mature repo may already have them before
+                // any project.toml). Later-comer also syncs project.toml so
+                // Intent-card local input is overridden by the repo正本.
+                // SyncProjectFile is a no-op when the file is absent.
+                if !proj.workspace_path.trim().is_empty() {
                     self.sync_project_file_for(p).await?;
                     self.sync_metrics_file_for(p).await?;
                     self.sync_connectors_file_for(p).await?;

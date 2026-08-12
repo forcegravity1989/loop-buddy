@@ -94,23 +94,33 @@ pub async fn materialize_standards(
 
     // ── 3. 写入采用临时文件后替换(§4.3 #7)──
     // 先创建目录,再逐文件写临时文件 → rename,最后写标记。
+    // 若本次开始时还没有托管标记,中途失败必须清掉半写目录——否则下次会被
+    // 判成 ForeignDirectory,真实开工永久锁死(§8)。
+    let had_marker = marker_path.exists();
+    let rollback_incomplete = |err: String| -> StandardsMaterializeError {
+        if !had_marker {
+            let _ = std::fs::remove_dir_all(&buddy_root);
+        }
+        StandardsMaterializeError::WriteFailure(err)
+    };
+
     tokio::fs::create_dir_all(&standards_root)
         .await
-        .map_err(|e| StandardsMaterializeError::WriteFailure(e.to_string()))?;
+        .map_err(|e| rollback_incomplete(e.to_string()))?;
 
     let mut written = 0;
     for (rel, content) in bw_core::buddy_assets::standards_files() {
         let target = standards_root.join(rel);
         write_atomic(&target, content)
             .await
-            .map_err(|e| StandardsMaterializeError::WriteFailure(e.to_string()))?;
+            .map_err(|e| rollback_incomplete(e.to_string()))?;
         written += 1;
     }
 
     // 写标记文件(原子写)。
     write_atomic(&marker_path, &fingerprint)
         .await
-        .map_err(|e| StandardsMaterializeError::WriteFailure(e.to_string()))?;
+        .map_err(|e| rollback_incomplete(e.to_string()))?;
     written += 1;
 
     Ok(StandardsMaterializeReport {
