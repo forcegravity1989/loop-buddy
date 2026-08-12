@@ -22,11 +22,6 @@ category: 标配
 > 指标体系对齐 / 自动化免疫检验等自建强项),改编只合入其判据与护栏结构,
 > 不是整体替换——测评全文与盲测证据见
 > `plan/19-metric-skills-evaluation.md` 与 `verification/skill-eval-2026-08-04/`。
->
-> V1 合入注(2026-08-06):原文这里把「`collect.kind` 五值枚举」也列为自建
-> 强项,V1 已把采集口径收成 `script`|`manual` 两 kind、并把整个格式契约移进
-> 衔接层 system prompt,故此处删去该项。判据与质量门本身是纯方法论,与
-> 「skill 只讲方法论、契约在衔接层」不冲突,原样保留。
 
 ## 何时用 / 前置条件
 
