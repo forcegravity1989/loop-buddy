@@ -139,6 +139,29 @@ impl Remote {
         }
     }
 
+    /// V2-② Phase A (§7): open a PR/MR for `.bw/project.toml` on the
+    /// `bw/project-init` branch — the first Buddy to adopt an existing repo
+    /// writes the project intent as a config PR (not an Issue PR). Buddy then
+    /// auto-merges via [`merge_mr`]. Parallels [`create_mr`] but without an
+    /// issue number (project.toml is a config file, not an Issue). Github
+    /// delegates to [`github::open_project_init_pr`]; codehub to
+    /// [`codehub::create_project_init_mr`]. **Never merges** — the caller
+    /// (bw-app's creation flow) auto-merges on success, or surfaces a tip on
+    /// failure. This is the one exception to "issue PR never auto-merges":
+    /// project.toml is configuration, not an Issue (§7,不破「Done 永不自动」).
+    pub async fn create_project_init_mr(
+        &self,
+        workspace: &Path,
+        title: &str,
+    ) -> Result<github::PrOpened, RemoteError> {
+        match self {
+            Remote::Github(_) => Ok(github::open_project_init_pr(workspace, title).await?),
+            Remote::Codehub { host, path } => {
+                Ok(codehub::create_project_init_mr(host, path, workspace, title).await?)
+            }
+        }
+    }
+
     /// V1 Issue2 Phase2a: read back whether an open PR/MR exists for the
     /// issue's `bw/issue-<n>` branch — the InReview detection poller's
     /// query (读回为证: buddy checks the remote itself, not agent self-report).

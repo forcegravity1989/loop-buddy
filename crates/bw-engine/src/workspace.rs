@@ -174,6 +174,25 @@ pub(crate) async fn stage_commit_push(
     issue_number: u32,
     title: &str,
 ) -> Result<(), ProvisionError> {
+    stage_commit_push_msg(
+        workspace,
+        branch,
+        &format!("issue #{issue_number}: {title}"),
+    )
+    .await
+}
+
+/// General form of [`stage_commit_push`] — takes an arbitrary commit message
+/// instead of formatting one from an issue number. Used by the project.toml
+/// PR path ([`crate::github::open_project_init_pr`] /
+/// [`crate::codehub::create_project_init_mr`]) where there is no issue number
+/// (the commit is `chore: …`, not `issue #<n>: …`). Same idempotent
+/// nothing-to-commit semantics, same authorship, same push.
+pub(crate) async fn stage_commit_push_msg(
+    workspace: &Path,
+    branch: &str,
+    commit_message: &str,
+) -> Result<(), ProvisionError> {
     git_in(workspace, &["add", "-A"]).await?;
     let commit = tokio::process::Command::new("git")
         .current_dir(workspace)
@@ -184,7 +203,7 @@ pub(crate) async fn stage_commit_push(
             "user.email=workbench@local",
             "commit",
             "-qm",
-            &format!("issue #{issue_number}: {title}"),
+            commit_message,
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -193,9 +212,6 @@ pub(crate) async fn stage_commit_push(
         .await
         .map_err(|e| ProvisionError::Git(e.to_string()))?;
     if !commit.status.success() {
-        // git prints "nothing to commit, working tree clean" on STDOUT, not
-        // stderr — an executor that committed its own work leaves a clean
-        // tree, and that idempotent case must not read as a failure (F5).
         let stderr = String::from_utf8_lossy(&commit.stderr);
         let stdout = String::from_utf8_lossy(&commit.stdout);
         let combined = format!("{stdout}\n{stderr}");

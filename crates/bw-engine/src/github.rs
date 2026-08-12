@@ -2,7 +2,7 @@
 //! subprocess pattern `workspace.rs` uses for local git. Relies entirely on
 //! the user's own `gh auth login` on this machine; no token handling here.
 
-use crate::workspace::{commit_initial, git_in, stage_commit_push};
+use crate::workspace::{commit_initial, git_in, stage_commit_push, stage_commit_push_msg};
 use std::path::Path;
 use std::process::Stdio;
 use time::Date;
@@ -401,6 +401,13 @@ pub fn issue_branch(github_number: u32) -> String {
     format!("bw/issue-{github_number}")
 }
 
+/// The branch `.bw/project.toml` rides on when the first Buddy to adopt an
+/// existing repo writes it via PR (§7) — `bw/project-init`. There is no issue
+/// number (project.toml is a config file, not an Issue), so this branch is
+/// named after the action, not an issue. One deterministic branch so a retry
+/// re-uses the same branch (and the same PR).
+pub const PROJECT_INIT_BRANCH: &str = "bw/project-init";
+
 fn git_err(prefix: &str, e: crate::workspace::ProvisionError) -> GithubError {
     GithubError::Command(format!("{prefix}:{e}"))
 }
@@ -595,6 +602,67 @@ pub async fn merge_pr(owner_repo: &str, pr_number: u32) -> Result<(), GithubErro
         return Err(GithubError::Command(stderr_text(&output)));
     }
     Ok(())
+}
+
+/// V2-② Phase A (§7): open a PR for `.bw/project.toml` on the
+/// [`PROJECT_INIT_BRANCH`] branch — the first Buddy to adopt an existing repo
+/// writes the project intent as a config PR (not an Issue PR) and Buddy
+/// auto-merges it. Parallels [`open_pr`] but without an issue number: the
+/// branch is `bw/project-init` (not `bw/issue-<n>`), the commit message is
+/// `chore: …` (not `issue #<n>: …`), and the PR body carries no `Closes`
+/// keyword (there's no Issue to close). Returns the PR number `gh` minted.
+/// **Never merges** — the caller (bw-app's creation flow) auto-merges via
+/// [`merge_pr`] on success, or surfaces a tip on failure.
+pub async fn open_project_init_pr(workspace: &Path, title: &str) -> Result<PrOpened, GithubError> {
+    let branch = PROJECT_INIT_BRANCH;
+    // Checkout the branch, creating it at HEAD the first time, re-using it
+    // on a retry (same idempotent semantics as `checkout_issue_branch`).
+    if git_in(workspace, &["checkout", "-b", branch])
+        .await
+        .is_err()
+    {
+        git_in(workspace, &["checkout", branch])
+            .await
+            .map_err(|e| git_err("切到 project-init 分支失败", e))?;
+    }
+    stage_commit_push_msg(
+        workspace,
+        branch,
+        "chore: project intent (.bw/project.toml)",
+    )
+    .await
+    .map_err(|e| git_err("暂存/提交/推送 project-init 分支失败", e))?;
+    let body = "BW 创建流写入的项目意图正本,自动合入落仓(配置文件,非 Issue)。";
+    let output = tokio::process::Command::new("gh")
+        .current_dir(workspace)
+        .args([
+            "pr", "create", "--head", branch, "--title", title, "--body", body,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        let stderr = stderr_text(&output);
+        // Same idempotent adoption as `open_pr`: a PR for this branch may
+        // already exist (a prior creation attempt). Any other failure (no
+        // permission, network, …) is `Err` unchanged.
+        if stderr.contains("already exists") {
+            match adopt_existing_pr(workspace, branch).await {
+                Ok(pr) => return Ok(PrOpened::Adopted(pr)),
+                Err(_) => return Err(GithubError::Command(stderr)),
+            }
+        }
+        return Err(GithubError::Command(stderr));
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    url.rsplit('/')
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(PrOpened::Created)
+        .ok_or_else(|| GithubError::Command(format!("无法从 gh 输出解析 PR 号:{url:?}")))
 }
 
 /// `gh issue view --json state` → `OPEN` / `CLOSED`. Lets `MergeIssuePr` verify

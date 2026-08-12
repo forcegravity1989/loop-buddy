@@ -9,7 +9,7 @@
 //! 不进 `Executor` 体系——`codehub-cli` 是 VCS 远端 API 客户端(对标 `gh`),
 //! 不是 agent 执行器(对标 `claude`)。两种 shell-out 模式别混。
 
-use crate::workspace::commit_initial;
+use crate::workspace::{commit_initial, stage_commit_push_msg};
 use std::path::Path;
 use std::process::Stdio;
 use time::Date;
@@ -373,6 +373,104 @@ pub async fn merge_mr(host: &str, path: &str, mr_iid: u32) -> Result<(), Codehub
             "merge 未生效(MR state={state},应 merged):{merge_stderr}"
         )))
     }
+}
+
+/// The branch `.bw/project.toml` rides on for a codehub project — mirrors
+/// [`crate::github::PROJECT_INIT_BRANCH`].
+const PROJECT_INIT_BRANCH: &str = "bw/project-init";
+
+/// V2-② Phase A (§7): open an MR for `.bw/project.toml` on the
+/// `bw/project-init` branch — the codehub parity of
+/// [`crate::github::open_project_init_pr`]. Parallels [`create_mr`] but
+/// without an issue number: the branch is `bw/project-init`, the commit
+/// message is `chore: …`, and the MR body carries no `Closes` keyword. Returns
+/// the new MR's iid as `PrOpened::Created`. **No `Adopted` path** (same as
+/// `create_mr` — honest failure if an MR already exists). **Never merges** —
+/// the caller auto-merges via [`merge_mr`] on success, or surfaces a tip.
+pub async fn create_project_init_mr(
+    host: &str,
+    path: &str,
+    workspace: &Path,
+    title: &str,
+) -> Result<crate::github::PrOpened, CodehubError> {
+    let branch = PROJECT_INIT_BRANCH;
+    // Checkout the branch, creating it at HEAD the first time.
+    let checkout = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(["checkout", "-b", branch])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !checkout.status.success() {
+        tokio::process::Command::new("git")
+            .current_dir(workspace)
+            .args(["checkout", branch])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(spawn_err)?;
+    }
+    stage_commit_push_msg(
+        workspace,
+        branch,
+        "chore: project intent (.bw/project.toml)",
+    )
+    .await
+    .map_err(|e| CodehubError::Command(format!("git 准备失败:{e}")))?;
+    // target-branch = project default, resolved at runtime (same as create_mr).
+    let tgt = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    let target = String::from_utf8_lossy(&tgt.stdout)
+        .trim()
+        .strip_prefix("refs/remotes/origin/")
+        .unwrap_or("master")
+        .to_string();
+    let body = "BW 创建流写入的项目意图正本,自动合入落仓(配置文件,非 Issue)。";
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "mr",
+            "create",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--source-branch",
+            branch,
+            "--target-branch",
+            &target,
+            "--title",
+            title,
+            "--description",
+            body,
+            "--jq",
+            ".iid",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let iid = text
+        .parse::<u32>()
+        .map_err(|_| CodehubError::Parse(format!("无法解析 codehub MR iid:{text:?}")))?;
+    Ok(crate::github::PrOpened::Created(iid))
 }
 
 /// `codehub-cli issue|mr list -p <path> -H <host> --state <state> -l 0 --jq length`
