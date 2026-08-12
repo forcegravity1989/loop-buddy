@@ -858,6 +858,7 @@
           <tr><td class="k">competitive-analysis</td><td>竞品分析(标配)</td><td><code>docs/skills/competitive-analysis/</code></td></tr>
           <tr><td class="k">north-star-discovery</td><td>找指标(标配)</td><td><code>docs/skills/north-star-discovery/</code></td></tr>
           <tr><td class="k">metrics-binding</td><td>绑数据(标配)</td><td><code>docs/skills/metrics-binding/</code></td></tr>
+          <tr><td class="k">metrics-render</td><td>渲染指标(手动选)</td><td><code>docs/skills/metrics-render/</code></td></tr>
         </tbody>
       </table>
       <p class="note-line">五阶段默认 Skill 各带一节「在 Claude CLI 会话里如何协作」:讲清主 Agent 负责什么、哪些环节调独立 SubAgent、交接什么产物、何时回用户确认、失败停哪、完成标准。不绑定固定 Agent 名称,不依赖旧阶段脚本。</p>
@@ -877,7 +878,7 @@
       </div>
       <p class="where">落点：技能正本 <code>docs/skills/</code>；注入/衔接层 <code>crates/bw-engine</code>（交互式）；Hub 登记 <code>skill</code> 表；蒸馏 <code>crates/bw-app</code>。</p>
 
-      <h2 class="sec"><span class="n">V2-①</span>issue 终端会话的 prompt 模型</h2>
+      <h2 class="sec"><span class="n">拼装</span>issue 终端会话的 prompt 模型</h2>
       <ul class="bullets">
         <li><strong>所有 issue ▶跑 都进嵌入终端</strong>（每卡一会话），不再只限找指标/绑数据两技能。</li>
         <li><strong>位置 prompt = issue 标题+描述</strong>（auto-submit 首句用户消息；描述空则只标题）。</li>
