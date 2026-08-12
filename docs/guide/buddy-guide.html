@@ -590,7 +590,7 @@
       <div class="ops">
         <div class="li"><div class="n">1</div><div class="t">卡片点 <code>▶ 跑</code>：队友开工，跳到工作流屏的嵌终端（每卡一会话）</div></div>
         <div class="li"><div class="n">2</div><div class="t">终端里<strong>自动出现的第一段</strong>只是 issue 标题+描述。buddy 系统提示词与主 Skill 在后台注入，聊天区通常看不见——不确定就问模型「铁律 / 主 Skill 是什么」。无显式技能时按阶段装默认方法；多 agent 由会话内 SubAgent 调度</div></div>
-        <div class="li"><div class="n">3</div><div class="t">活干完<strong>不会自动进「评审中」</strong>——agent 自提 MR 后 buddy 检测到才推评审中；无 MR 的活诚实停在「进行中」，不假装前进</div></div>
+        <div class="li"><div class="n">3</div><div class="t">活干完<strong>不会自动进「评审中」</strong>——agent 自提 MR 后 buddy 检测到才推评审中（通常十几秒内；看板进行中卡会提示「开放 MR 检出后进评审中」）；无 MR 的活诚实停在「进行中」，不假装前进</div></div>
         <div class="li"><div class="n">4</div><div class="t">评审通过：点 <strong>→已完成</strong>（「完成」永远由人点）</div></div>
       </div>
       <p class="note-line">终端会话已按「每卡一会话」重构：切到别的卡再切回来接回原会话；buddy 重启后点卡即按原路径恢复。阶段循环（方法循环卡）只用于 stage playbook / hub workflow / cron，issue 终端会话不显。实跑「▶ 跑后终端」截图 defer。</p>
@@ -964,7 +964,7 @@
         <li><strong>会话即记录</strong>：不另做对话摘要表；交互式<strong>不写</strong> <code>workflow_run</code>，弹窗「运行史」常空——以嵌终端为准。</li>
         <li><strong>交付降级咨询</strong>：issue 离开 InProgress（→InReview poll / →Done merge）且 PTY 仍活 → 降级为咨询（放 <code>active_run</code> 锁、不杀 PTY、不清 worktree）。降级 PTY 退出走 <code>cleanup_demoted_consultation</code>。</li>
         <li><strong>续聊</strong>：有 <code>claude_session_id</code>（在 <code>claude_conversation</code> 表）则 <code>--resume</code>；没有则按首次启动重灌。</li>
-        <li><strong>触发查 MR</strong>：agent 自提 MR 后，buddy 短周期轮询远端 → InReview。无 MR 的活诚实停 InProgress。</li>
+        <li><strong>触发查 MR</strong>：agent 自提 MR 后，buddy 读回远端开放 MR 才进「评审中」（不靠 agent 自报）。Stop hook 会立刻查一次；若当时远端还没挂上，对仍在「进行中 + 有会话 + 未关联 PR」的活约每 15 秒再查，通常十几秒内进评审中。无候选时降为 5 分钟兜底。无 MR 的活诚实停「进行中」。</li>
         <li><strong>网关抖动</strong>：真 <code>claude -p</code> / 交互式受 GLM 网关 529 抖动影响，只在 example / 监理脚本里跑（可安全重试），不作为常绿验证手段。</li>
       </ul>
 

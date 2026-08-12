@@ -1361,9 +1361,15 @@ pub struct AppState {
     /// V1 Issue2 Phase2a: unix ts of the last InReview poll for interactive
     /// issues. The poller checks codehub/github for open MRs on interactive
     /// issues that are InProgress + have a claude_conversation row (interactive) + `pr_number == 0`.
-    /// Throttled to once per 5 minutes so it doesn't hit the remote every
-    /// `tick_scheduler` fire. `0` = never polled (first tick runs it).
+    /// Adaptive throttle: ~15s while candidates wait for an open MR, 5 min
+    /// when idle — so a just-opened MR is not stuck behind a multi-minute
+    /// backstop. `0` = never polled (first tick runs it).
     pub last_inreview_poll: i64,
+    /// Set when `tick_scheduler` mutates UI-visible state without firing a
+    /// cron (notably InReview poll / Stop-triggered MR detection). The
+    /// desktop kernel rebuilds Vm when this is true even if `fired` is empty
+    /// — otherwise the board stays stale while toasts already say「评审中」.
+    pub scheduler_ui_dirty: bool,
     /// V1 Issue2 Phase2b: cwd → IssueId map for hook event routing. When
     /// `run_issue_interactive` spawns a session, it registers the worktree
     /// cwd here. When the hook listener receives a SessionStart/Stop event
@@ -1441,6 +1447,7 @@ impl Default for AppState {
             github_repos: Vec::new(),
             remote_project_probe: RemoteProjectProbe::Idle,
             last_inreview_poll: 0,
+            scheduler_ui_dirty: false,
             interactive_sessions: HashMap::new(),
             pending_stop_check: false,
             terminal_manager: TerminalManager::new(),
@@ -1602,6 +1609,12 @@ impl App {
     /// commands embed it.
     pub fn hook_port(&self) -> Option<u16> {
         self.hook_port
+    }
+
+    /// Desktop kernel: after `tick_scheduler`, rebuild Vm if the tick mutated
+    /// issues/connectors without returning a non-empty cron `fired` list.
+    pub fn take_scheduler_ui_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.state.scheduler_ui_dirty)
     }
 
     fn emit(&self, e: Event) {
@@ -2037,10 +2050,11 @@ impl App {
     ///
     /// Covers BOTH codehub and github (unlike `collect_github_issue_drift`
     /// which is github-only and manual-trigger). Called from
-    /// `tick_scheduler`, throttled to once per 5 minutes
-    /// (`INREVIEW_POLL_INTERVAL_SECS`) so it doesn't hit the remote every
-    /// tick. A failed remote query degrades honestly (toast + skip this
-    /// issue this round), never fabricating an InReview.
+    /// `tick_scheduler`, throttled adaptively (`INREVIEW_POLL_ACTIVE_SECS`
+    /// while candidates wait, `INREVIEW_POLL_IDLE_SECS` when idle) so a
+    /// just-opened MR lands in InReview in seconds–teens of seconds, not
+    /// multi-minute silence. A failed remote query degrades honestly (toast
+    /// + skip this issue this round), never fabricating an InReview.
     async fn poll_interactive_inreview(&mut self) -> Result<(), AppError> {
         for proj in self.state.projects.clone() {
             let remote_path = proj.remote_path.trim();
@@ -5084,31 +5098,38 @@ impl App {
         // V1 Issue2 Phase2b: Stop-triggered InReview check. When a `Stop`
         // hook event was received (agent finished a turn), run
         // `poll_interactive_inreview` immediately — the Stop is the real-time
-        // trigger (replaces 2a's 5-minute-only cadence). The tick's cadence
+        // trigger (replaces 2a's idle-only cadence). The tick's cadence
         // is the natural throttle (multiple Stops in one tick = one check).
         if self.state.pending_stop_check {
             self.state.pending_stop_check = false;
+            self.state.scheduler_ui_dirty = true;
             if let Err(e) = self.poll_interactive_inreview().await {
                 self.emit(Event::ConnectorSynced {
                     name: "InReview (Stop 触发)".into(),
                     ok: false,
-                    detail: format!("Stop 触发 InReview 检测失败,5min 轮询兜底:{e}"),
+                    detail: format!("Stop 触发 InReview 检测失败,短周期轮询兜底:{e}"),
                 });
             }
         }
 
-        // V1 Issue2 Phase2a: InReview detection poller (throttled backstop).
+        // V1 Issue2 Phase2a: InReview detection poller (adaptive backstop).
         // Checks codehub/github for open MRs on interactive issues (InProgress
         // + interactive (has conversation) + pr_number == 0). Not a cron task — a
-        // separate periodic check that rides `tick_scheduler`'s cadence
-        // but throttles to once per 5 min so it doesn't hit the remote
-        // every tick. Never auto-Done (铁律) — only backfills pr_number +
+        // separate periodic check that rides `tick_scheduler`'s cadence.
+        // While candidates wait for an MR, poll every ~15s so detection is
+        // seconds–teens of seconds (not multi-minute silence). Idle projects
+        // keep the 5 min interval to avoid flooding the remote API.
+        // Never auto-Done (铁律) — only backfills pr_number +
         // transitions to InReview. In Phase2b this is the BACKSTOP for the
         // Stop-triggered check above — catches MRs the Stop trigger missed
-        // (hook not installed, agent session not via buddy, etc.).
+        // (hook not installed, agent session not via buddy, MR not yet
+        // visible on the first Stop poll, etc.).
         let now_ts = now().unix_timestamp();
-        if now_ts - self.state.last_inreview_poll >= INREVIEW_POLL_INTERVAL_SECS {
+        let interval =
+            inreview_poll_interval_secs(self.has_inreview_poll_candidates().await.unwrap_or(false));
+        if now_ts - self.state.last_inreview_poll >= interval {
             self.state.last_inreview_poll = now_ts;
+            self.state.scheduler_ui_dirty = true;
             // Best-effort: a poller failure is recorded as a toast but never
             // blocks the scheduler's cron-fired list from returning.
             if let Err(e) = self.poll_interactive_inreview().await {
@@ -5120,6 +5141,38 @@ impl App {
             }
         }
         Ok(fired)
+    }
+
+    /// True when any project has at least one interactive InProgress issue
+    /// still waiting for an open MR (`pr_number == 0`). Drives the active
+    /// (short) InReview poll interval — idle projects stay on the long
+    /// backstop so we don't hammer the remote API every tick.
+    async fn has_inreview_poll_candidates(&self) -> Result<bool, AppError> {
+        for proj in &self.state.projects {
+            if proj.remote_path.trim().is_empty() {
+                continue;
+            }
+            let conv_ids: std::collections::HashSet<IssueId> = self
+                .store
+                .list_conversation_issue_ids(proj.id)
+                .await?
+                .into_iter()
+                .collect();
+            if conv_ids.is_empty() {
+                continue;
+            }
+            let issues = self
+                .store
+                .list_issues(proj.id, None, Some(IssueStatus::InProgress))
+                .await?;
+            if issues
+                .iter()
+                .any(|i| conv_ids.contains(&i.id) && i.pr_number == 0 && i.github_number != 0)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// A1: the create_issue cron path — mint a stage-scoped Issue (Todo,
@@ -9740,6 +9793,11 @@ impl App {
                 // re-merges (so `gh pr merge` stays called exactly once) and
                 // never re-accounts (settle-once already stands).
                 if issue.status == IssueStatus::Done || issue.settled_at.is_some() {
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("#{} · merge", issue.number),
+                        ok: true,
+                        detail: "已完成,无需重复合入".into(),
+                    });
                     return Ok(());
                 }
                 if issue.pr_number == 0 {
@@ -9768,6 +9826,15 @@ impl App {
                         issue.number
                     )));
                 }
+                // Immediate feedback while `merge_mr` awaits (often several
+                // seconds). Event forwarder runs concurrent with dispatch, so
+                // the toast appears before Done lands — pairs with the UI
+                // button busy state (Vm only rebuilds after this command).
+                self.emit(Event::ConnectorSynced {
+                    name: format!("#{} · merge", issue.number),
+                    ok: true,
+                    detail: format!("正在合入 PR/MR #{}…", issue.pr_number),
+                });
                 // merge PR/MR — the human验收 action, the ONLY place a merge is
                 // ever called (never from any executor/run path; plan/13
                 // D3+D11). Routed through the Remote factory (bug③ 2026-07-30):
@@ -10090,12 +10157,23 @@ fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
 }
 
-/// V1 Issue2 Phase2a: InReview poller throttle. The poller checks codehub/
-/// github for open MRs on interactive issues at most once per 5 minutes —
-/// it rides `tick_scheduler`'s cadence but doesn't hit the remote every
-/// tick (a tick may fire every 60s; 5 min is a reasonable detection lag
-/// without flooding the remote API).
-const INREVIEW_POLL_INTERVAL_SECS: i64 = 5 * 60;
+/// V1 Issue2 Phase2a: InReview poller throttle while interactive issues are
+/// waiting for an open MR. Rides `tick_scheduler` (~5s); 15s keeps detection
+/// in the "seconds–teens of seconds" band without flooding the remote every
+/// tick. Must stay ≥ the desktop ticker interval.
+const INREVIEW_POLL_ACTIVE_SECS: i64 = 15;
+/// Idle backstop when no InProgress+conversation+pr_number==0 candidates
+/// exist — avoid hammering codehub/github on quiet projects.
+const INREVIEW_POLL_IDLE_SECS: i64 = 5 * 60;
+
+/// Interval helper (testable): active while candidates wait, idle otherwise.
+fn inreview_poll_interval_secs(has_candidates: bool) -> i64 {
+    if has_candidates {
+        INREVIEW_POLL_ACTIVE_SECS
+    } else {
+        INREVIEW_POLL_IDLE_SECS
+    }
+}
 
 /// plan18-③ · `script` connector 的 config 解析结构。config 是 JSON 字符串,
 /// 存项目仓里既有采集脚本的相对工作区路径 + 输出文件 + 跑脚本的命令。
@@ -11671,6 +11749,49 @@ mod sync_remote_issues_tests {
         let b3 = store.get_issue(id12).await.unwrap().unwrap();
         assert_eq!(b3.standard_skill, "should-not-apply-when-we-set-first");
 
+        let _ = std::fs::remove_file(&db);
+    }
+}
+
+/// Bug A (cowelink · 找指标): InReview detection must not sit behind a
+/// multi-minute silence while candidates wait, and the desktop shell must
+/// rebuild Vm when the poller mutates issues without a cron fire.
+#[cfg(test)]
+mod inreview_poll_refresh_tests {
+    use super::{
+        inreview_poll_interval_secs, App, AppState, ClaudeCliConfig, Engine,
+        INREVIEW_POLL_ACTIVE_SECS, INREVIEW_POLL_IDLE_SECS,
+    };
+    use bw_engine::MockExecutor;
+    use bw_store::{SqliteStore, Store};
+    use std::sync::Arc;
+
+    #[test]
+    fn active_interval_is_teens_of_seconds_not_minutes() {
+        assert_eq!(inreview_poll_interval_secs(true), INREVIEW_POLL_ACTIVE_SECS);
+        assert!(INREVIEW_POLL_ACTIVE_SECS <= 30);
+        assert!(INREVIEW_POLL_ACTIVE_SECS >= 5);
+        assert_eq!(inreview_poll_interval_secs(false), INREVIEW_POLL_IDLE_SECS);
+        assert!(INREVIEW_POLL_IDLE_SECS >= 60);
+    }
+
+    #[tokio::test]
+    async fn take_scheduler_ui_dirty_clears_once() {
+        let db =
+            std::env::temp_dir().join(format!("bw_inreview_dirty_{}.db", uuid::Uuid::new_v4()));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db_s).await.expect("open"));
+        let mut app = App::new(
+            store,
+            Engine::new(Arc::new(MockExecutor::new())),
+            ClaudeCliConfig::default(),
+        );
+        assert!(!app.take_scheduler_ui_dirty());
+        app.state.scheduler_ui_dirty = true;
+        assert!(app.take_scheduler_ui_dirty());
+        assert!(!app.take_scheduler_ui_dirty());
+        let _ = AppState::default().scheduler_ui_dirty;
         let _ = std::fs::remove_file(&db);
     }
 }

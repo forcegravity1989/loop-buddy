@@ -699,9 +699,10 @@ pub fn spawn() -> Kernel {
                 // this loop (no `Arc<Mutex<_>>`), so an auto-fire tick has to
                 // interleave with command dispatch via `select!` rather than
                 // run on its own spawned task — same thread, same `&mut app`,
-                // no synchronization needed. A quiet tick (nothing due) is
-                // free: `Vm` is only rebuilt when `tick_scheduler` actually
-                // fired something, so idle polling costs nothing extra.
+                // no synchronization needed. A quiet tick (nothing due AND no
+                // InReview-poll / hook mutation) stays free: Vm rebuilds when
+                // cron fired *or* `scheduler_ui_dirty` (MR detection can move
+                // issues to InReview without any cron).
                 let mut ticker = tokio::time::interval(Duration::from_secs(5));
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 // V1 Issue2 Phase2b: fast timer for PTY terminal bytes —
@@ -736,10 +737,12 @@ pub fn spawn() -> Kernel {
                         }
                         _ = ticker.tick() => {
                             match app.tick_scheduler().await {
-                                Ok(fired) if !fired.is_empty() => {
-                                    let _ = vm_tx.send(build_vm(&app, &store).await);
+                                Ok(fired) => {
+                                    let dirty = app.take_scheduler_ui_dirty();
+                                    if !fired.is_empty() || dirty {
+                                        let _ = vm_tx.send(build_vm(&app, &store).await);
+                                    }
                                 }
-                                Ok(_) => {}
                                 Err(e) => {
                                     let _ = note_tx.send(UiNote::Error(e.to_string()));
                                 }
