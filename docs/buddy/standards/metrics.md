@@ -153,5 +153,5 @@ Skill 处理,不是文件格式问题。
 
 ## 完整样例
 
-见 [`docs/examples/metrics.toml.sample`](../examples/metrics.toml.sample)——
+见 [`docs/examples/metrics.toml.sample`](../../examples/metrics.toml.sample)——
 每个字段都带注释,可以直接复制到 `<项目工作区>/.bw/metrics.toml` 使用。

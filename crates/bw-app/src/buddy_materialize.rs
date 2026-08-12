@@ -72,11 +72,17 @@ pub async fn materialize_standards(
         }
         match tokio::fs::read_to_string(&marker_path).await {
             Ok(existing) if existing.trim() == fingerprint.trim() => {
-                // 版本一致,整条跳过。
-                return Ok(StandardsMaterializeReport {
-                    written: 0,
-                    unchanged: true,
-                });
+                // 版本一致。但若规范正文被误删(标记在、文件缺),不能当 unchanged
+                // (§4.3 #4:内容没变才不重写;文件丢失 ≠ 内容没变)—— 落到下面重写。
+                let all_present = bw_core::buddy_assets::standards_files()
+                    .iter()
+                    .all(|(rel, _)| standards_root.join(rel).exists());
+                if all_present {
+                    return Ok(StandardsMaterializeReport {
+                        written: 0,
+                        unchanged: true,
+                    });
+                }
             }
             Ok(_) => { /* buddy 托管但版本不同 —— 往下重写 */ }
             Err(_) => {
@@ -176,6 +182,9 @@ async fn write_atomic(target: &Path, content: &str) -> std::io::Result<()> {
     }
     let tmp = target.with_extension("tmp");
     tokio::fs::write(&tmp, content).await?;
-    tokio::fs::rename(&tmp, target).await?;
+    if let Err(e) = tokio::fs::rename(&tmp, target).await {
+        let _ = tokio::fs::remove_file(&tmp).await; // rename 失败清理 .tmp(§8)
+        return Err(e);
+    }
     Ok(())
 }
