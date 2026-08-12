@@ -56,7 +56,7 @@ use bw_store::{
     AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
     MetricsFileSync, NewAgent, NewArtifact, NewConnector, NewCronTask, NewIssue,
     NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewSkillFile, NewStage,
-    NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
+    NewWorkflowSpec, ProjectFileSync, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -372,6 +372,13 @@ pub enum Command {
     /// *definitions*, not values (collection execution is a later ticket,
     /// C7).
     SyncMetricsFile,
+    /// V2-② Phase A (§6): sync `.bw/project.toml` → SQLite `project` row.
+    /// The file is the source of truth (first-comer writes it, later-comer
+    /// reads it back); the project row's `name`/`kind`/`descr`/`benchmark`/
+    /// `opportunity` are a cache. Parallels `SyncMetricsFile` — file missing =
+    /// zero action zero noise, bad file = honest error toast, never triggers
+    /// recompute (intent fields aren't derived data).
+    SyncProjectFile,
     /// C7 · 采集器 (plan/13 D7): pull real data into the active project's
     /// metrics *right now* — the manual「立即采集」counterpart to the standard
     /// daily collect cron. For every `collect.kind = "github"` metric it runs
@@ -3928,6 +3935,19 @@ impl App {
         if proj.remote_path.trim().is_empty() {
             return Ok(None);
         }
+        // V2-② Phase A (§6.2/§5.2): later-comer gate — if the repo already
+        // has `.bw/project.toml` (another Buddy纳管过这个仓), skip the trio.
+        // The old gate (remote_path non-empty) fired for every repo-attached
+        // project, so a second Buddy adopting the same repo would re-create
+        // 3 duplicate Issues on the remote. The file's existence is the
+        // first-comer/later-comer判据 (§6): no file = first-comer (build the
+        // trio); file = later-comer (skip — the startup package was already
+        // issued by the first Buddy).
+        let project_toml = std::path::Path::new(&proj.workspace_path)
+            .join(bw_engine::project_file::PROJECT_FILE_REL_PATH);
+        if project_toml.exists() {
+            return Ok(None);
+        }
         const TRIO: [(&str, &str, &str); 3] = [
             (
                 "竞品分析",
@@ -4105,6 +4125,130 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// V2-② Phase A (§6): sync `.bw/project.toml` → SQLite `project` row
+    /// (`name`/`kind`/`descr`/`benchmark`/`opportunity`). Parallels
+    /// [`sync_metrics_file_for`] — the file is the source of truth, buddy DB
+    /// is a mirror. File missing = zero action zero noise (same idiom). Bad
+    /// file = honest error toast, cache untouched. Never triggers recompute
+    /// (intent fields aren't derived data). Called by the creation flow's
+    /// later-comer detection path and `Command::SyncProjectFile`.
+    async fn sync_project_file_for(&mut self, p: ProjectId) -> Result<(), AppError> {
+        let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+        match bw_engine::project_file::read(&proj.workspace_path) {
+            Ok(None) => {}
+            Ok(Some(file)) => {
+                let sync = project_file_sync(p, &file);
+                self.store.sync_project_file(sync).await?;
+                self.emit(Event::ProjectUpdated(p));
+                self.emit(Event::ConnectorSynced {
+                    name: "project.toml".into(),
+                    ok: true,
+                    detail: "项目意图正本已读回".into(),
+                });
+            }
+            Err(e) => {
+                self.emit(Event::ConnectorSynced {
+                    name: "project.toml".into(),
+                    ok: false,
+                    detail: e.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// V2-② Phase A (§7): existing-repo first-comer path — write
+    /// `.bw/project.toml` into the cloned workspace, open a PR on
+    /// `bw/project-init`, and Buddy auto-merge it. project.toml is
+    /// configuration (not an Issue), so auto-merge here doesn't break
+    /// "Done 永不自动" (that rule is about Issues; issue PRs are never
+    /// auto-merged — unchanged). On any failure (no merge permission, branch
+    /// protection, network), the file is still written to the workspace and
+    /// the PR may be open — a tip toast surfaces the error, Builder handles
+    /// it manually. Never blocks CompleteCreation itself.
+    async fn write_project_toml_pr(
+        &mut self,
+        proj: &ProjectRow,
+        dir: &std::path::Path,
+        toml: &str,
+    ) {
+        let action_name = format!("{} · project.toml PR", proj.name);
+        self.emit(Event::ActionProgress {
+            name: action_name.clone(),
+            state: ActionState::Started,
+        });
+        // Write the file (no commit — the PR path stages + commits via
+        // stage_commit_push_msg). git checkout -b carries untracked files to
+        // the new branch, so the written file is staged + committed there.
+        let toml_path = dir.join(bw_engine::project_file::PROJECT_FILE_REL_PATH);
+        if let Some(parent) = toml_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&toml_path, toml) {
+            self.emit(Event::ActionProgress {
+                name: action_name,
+                state: ActionState::Fail(format!("写入 .bw/project.toml 失败:{e}")),
+            });
+            return;
+        }
+        let remote = match bw_engine::remote::Remote::for_project(
+            &proj.provider,
+            &proj.remote_host,
+            &proj.remote_path,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                self.emit(Event::ActionProgress {
+                    name: action_name,
+                    state: ActionState::Fail(format!("远端配置错,无法提 PR:{e}")),
+                });
+                return;
+            }
+        };
+        match remote.create_project_init_mr(dir, "项目意图正本").await {
+            Ok(pr_opened) => {
+                let pr_num = pr_opened.number();
+                match remote.merge_mr(pr_num).await {
+                    Ok(()) => {
+                        self.emit(Event::ActionProgress {
+                            name: action_name,
+                            state: ActionState::Ok(format!("PR #{pr_num} 已合入")),
+                        });
+                    }
+                    Err(e) => {
+                        // PR is open but auto-merge failed — honest tip,
+                        // Builder can manually merge. The file is written +
+                        // committed on the branch.
+                        let detail = format!(
+                            "project.toml PR 已开(#{pr_num})但自动合入失败,请手动 merge:{e}"
+                        );
+                        self.emit(Event::ConnectorSynced {
+                            name: format!("{} · project.toml", proj.name),
+                            ok: false,
+                            detail: detail.clone(),
+                        });
+                        self.emit(Event::ActionProgress {
+                            name: action_name,
+                            state: ActionState::Fail(detail),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                let detail = format!("project.toml 提 PR 失败(文件已写入工作区,可手动提交):{e}");
+                self.emit(Event::ConnectorSynced {
+                    name: format!("{} · project.toml", proj.name),
+                    ok: false,
+                    detail: detail.clone(),
+                });
+                self.emit(Event::ActionProgress {
+                    name: action_name,
+                    state: ActionState::Fail(detail),
+                });
+            }
+        }
     }
 
     async fn collect_project_metrics(
@@ -6380,6 +6524,23 @@ impl App {
                                                 r.owner, r.repo
                                             )),
                                         });
+                                        // V2-② Phase A (§6.2): later-comer
+                                        // detection — if the cloned repo already
+                                        // has `.bw/project.toml`, this Buddy is
+                                        // a later-comer. The actual sync (reading
+                                        // back the canonical intent + metrics +
+                                        // connectors) happens in CompleteCreation
+                                        // (after UpdateBrief has run, so the
+                                        // synced values aren't overwritten by
+                                        // the Intent card's local input). This
+                                        // signal just informs the user.
+                                        if has_project_toml(&path) {
+                                            self.emit(Event::ConnectorSynced {
+                                                name: format!("{} · project.toml", proj.name),
+                                                ok: true,
+                                                detail: "仓里已有 .bw/project.toml(后来者接入),意图正本将在完成创建时读回".into(),
+                                            });
+                                        }
                                     }
                                     Err(e) => {
                                         // 不兜底本地 mint —— 拿一个跟用户选的仓无关
@@ -6437,6 +6598,15 @@ impl App {
                                             name: action_name,
                                             state: ActionState::Ok(path.clone()),
                                         });
+                                        // V2-② Phase A (§6.2): later-comer
+                                        // detection (same as github Existing).
+                                        if has_project_toml(&p) {
+                                            self.emit(Event::ConnectorSynced {
+                                                name: format!("{} · project.toml", proj.name),
+                                                ok: true,
+                                                detail: "仓里已有 .bw/project.toml(后来者接入),意图正本将在完成创建时读回".into(),
+                                            });
+                                        }
                                     }
                                     Err(e) => {
                                         let detail = format!("接入 codehub {host}/{path} 失败:{e}");
@@ -7034,6 +7204,19 @@ impl App {
                 // 都失败、软降级回本地 mint 的项目)零标配票:不给建不了
                 // 仓、没有 PR 环可走的项目发一套没处交付的活,如实留白。
                 let first_issue = self.seed_standard_issue_trio(p).await?;
+                // V2-② Phase A (§6.2): later-comer — if the repo already has
+                // `.bw/project.toml` (cloned from a Buddy-managed repo), read
+                // back the canonical intent + metrics + connectors from the
+                // repo's own files. This happens AFTER UpdateBrief (which ran
+                // before CompleteCreation) so the repo's canonical values
+                // override the Intent card's local input — the repo is the
+                // source of truth, not what the later-comer typed. For
+                // first-comers (no project.toml), this is a no-op.
+                if has_project_toml(&proj.workspace_path) {
+                    self.sync_project_file_for(p).await?;
+                    self.sync_metrics_file_for(p).await?;
+                    self.sync_connectors_file_for(p).await?;
+                }
                 self.store.recompute_signals(p, now()).await?;
                 if let Err(e) = write_charter(self, p, "完成创建").await {
                     self.emit(Event::ActionProgress {
@@ -7042,6 +7225,44 @@ impl App {
                             "章程未补写（PROJECT.md 完成创建段可能缺）：{e}"
                         )),
                     });
+                }
+                // V2-② Phase A (§6.1/§7): first-comer writes `.bw/project.toml`
+                // into the repo as the canonical intent正本. Later-comers are
+                // already handled by the sync above (the file exists, values
+                // read back). Two paths:
+                // - New-repo (owned workspace): write + commit on main (the
+                //   repo is ours, no branch protection). Goes with push_head.
+                // - Existing-repo (cloned, not owned): write + branch +
+                //   PR + Buddy auto-merge (§7 — main may be protected).
+                //   project.toml is configuration, not an Issue — auto-merge
+                //   here doesn't break "Done 永不自动" (that rule is about
+                //   Issues). Issue PRs are never auto-merged (unchanged).
+                if !proj.workspace_path.trim().is_empty() && !has_project_toml(&proj.workspace_path)
+                {
+                    let dir = std::path::Path::new(proj.workspace_path.trim());
+                    if let Some(toml) = project_toml_content(&proj) {
+                        if bw_engine::workspace::is_owned_workspace(dir).await {
+                            // New-repo first-comer: commit directly on main.
+                            if let Err(e) = bw_engine::workspace::commit_file(
+                                dir,
+                                bw_engine::project_file::PROJECT_FILE_REL_PATH,
+                                &toml,
+                                "chore: project intent (.bw/project.toml)",
+                            )
+                            .await
+                            {
+                                self.emit(Event::ActionProgress {
+                                    name: "写 project.toml".into(),
+                                    state: ActionState::Fail(format!(
+                                        "写入 .bw/project.toml 失败:{e}"
+                                    )),
+                                });
+                            }
+                        } else if !proj.remote_path.trim().is_empty() {
+                            // Existing-repo first-comer: branch + PR + auto-merge.
+                            self.write_project_toml_pr(&proj, dir, &toml).await;
+                        }
+                    }
                 }
                 // plan/13 D1(#31 记录的缺口):create_repo 只推了首 commit,
                 // 创建流途中的章程/组件标准提交停在本地——产品信息正本在
@@ -7452,6 +7673,11 @@ impl App {
                 // point). The UI button that fired this was retired per
                 // §3.2/§4 (merge auto-sync covers the normal flow).
                 self.sync_connectors_file_for(p).await?;
+            }
+
+            Command::SyncProjectFile => {
+                let p = self.active()?;
+                self.sync_project_file_for(p).await?;
             }
 
             Command::CollectMetrics => {
@@ -9860,6 +10086,34 @@ fn charter_md(proj: &ProjectRow) -> String {
     s
 }
 
+/// V2-② Phase A (§6.1): render the project's intent as `.bw/project.toml`
+/// content — the five fields a creation flow collects. The first-comer
+/// writes this into the repo as the canonical intent (later-comers read it
+/// back via `sync_project_file_for`). North star is **not** here (it lives in
+/// `.bw/metrics.toml`). Returns `None` if serialization fails (shouldn't
+/// happen for string-only data, but honest rather than panicking).
+fn project_toml_content(proj: &ProjectRow) -> Option<String> {
+    let file = bw_engine::project_file::ProjectFile {
+        name: proj.name.clone(),
+        kind: proj.kind.clone(),
+        brief: proj.desc.clone(),
+        benchmark: proj.benchmark.clone(),
+        opportunity: proj.opportunity.clone(),
+    };
+    bw_engine::project_file::render(&file).ok()
+}
+
+/// V2-② Phase A (§6): check whether the workspace already has
+/// `.bw/project.toml` — the first-comer/later-comer判据. Empty workspace →
+/// false (no file = first-comer, same as a workspace that simply has none
+/// yet).
+fn has_project_toml(workspace: &str) -> bool {
+    !workspace.trim().is_empty()
+        && std::path::Path::new(workspace)
+            .join(bw_engine::project_file::PROJECT_FILE_REL_PATH)
+            .exists()
+}
+
 /// P1: write the project's `PROJECT.md` charter into its OWNED workspace and
 /// commit it (`docs(bw): 项目章程 · <节>`)。Bound、pre-existing 仓永不写;
 /// 无工作区则 no-op。Best-effort —— 章程写失败不阻断创建流。
@@ -10136,6 +10390,24 @@ fn connectors_file_sync(
     ConnectorsFileSync {
         project_id,
         connectors,
+    }
+}
+
+/// V2-② Phase A: `bw_engine::project_file::ProjectFile` (parsed toml) →
+/// `ProjectFileSync` (the store's write shape). Pure reshaping — no
+/// validation here, `read` already guaranteed every field is present (a file
+/// missing `name`/`kind` fails to parse, never reaches this function).
+fn project_file_sync(
+    project_id: ProjectId,
+    file: &bw_engine::project_file::ProjectFile,
+) -> ProjectFileSync {
+    ProjectFileSync {
+        project_id,
+        name: file.name.clone(),
+        kind: file.kind.clone(),
+        brief: file.brief.clone(),
+        benchmark: file.benchmark.clone(),
+        opportunity: file.opportunity.clone(),
     }
 }
 
