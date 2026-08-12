@@ -1,6 +1,6 @@
 # 同一项目可被多台 Buddy 分别纳管
 
-> **30 秒导读**:本文设计 V2 的第二项能力,给后续原型、开发与验收使用。**现在作数**:产品边界、信息归属、首到者/后来者纳管流程均已对齐;实现切片待定。它不是团队协作设计;真正的多人协作与 Buddy 重构由另一个项目推导,本轮不提前实现。
+> **30 秒导读**:本文设计 V2 的第二项能力,给后续原型、开发与验收使用。**现在作数**:产品边界、信息归属、首到者/后来者纳管流程均已对齐;**Phase A(多人闭环)已实现**(`7a84e45`..`648ad48`,未 push);Phase B(回填)+ C(总览折线)设计已定、未开发。它不是团队协作设计;真正的多人协作与 Buddy 重构由另一个项目推导,本轮不提前实现。
 >
 > 初始意向见 [`roadmap.md`](roadmap.md) §2.2;产品命题见 [`../../plan/07-product-proposition.md`](../../plan/07-product-proposition.md);V2-①(调度逻辑简化)的设计见 [`issue-dispatch-prompt-skill.md`](issue-dispatch-prompt-skill.md)——两篇接口点见 §2.4。领域词以 [`../../CONTEXT.md`](../../CONTEXT.md) 为准。
 
@@ -134,19 +134,19 @@ V2-① 已在 v1 分支实现(未 push),把 issue 执行上下文拆成两个独
 
 ---
 
-## 5. 接入路径现状(代码读回,2026-08-12)
+## 5. 接入路径基线(改前读回 · 史实,2026-08-12)
 
-取证范围:现有"创建流·接入已有仓"端到端。锚点见各条。
+> **横幅**:本节是 Phase A **动手前**的代码读回,保留作决策史实。Phase A 落地后以 §6/§7/§9 与源码为准——三件套 gate、`.bw/project.toml`、创建流三连读回已实现;阶段对齐 UI / 回填仍属 follow-up。
 
-**5.1 接入已有仓今天就是一等公民。** Repo 卡"接入已有仓"→ `GithubOrigin::Existing` / `CodehubOrigin::Existing`,handler 真克隆(`gh repo clone`,`crates/bw-engine/src/github.rs:321`),写 `workspace_path` + `remote_path` + connector(`crates/bw-app/src/lib.rs:6265-6330`)。每个 Buddy 各自克隆到 `workspaces_root/<slug(project_name, id)>`,天然隔离,不冲突。
+**5.1 接入已有仓今天就是一等公民。** Repo 卡"接入已有仓"→ `GithubOrigin::Existing` / `CodehubOrigin::Existing`,handler 真克隆,写 `workspace_path` + `remote_path` + connector。每个 Buddy 各自克隆到 `workspaces_root/<slug>`,天然隔离。
 
-**5.2 三件套在接入路径会重复建、且推到远端 ——"最简多人"今天的硬阻塞。** `seed_standard_issue_trio`(`lib.rs:3918-3976`)只看 `remote_path` 非空(`lib.rs:3927`),**不区分新建/接入**;每张三件套 Issue 都 `sync_issue_to_github` 真跑 `gh issue create`(`lib.rs:3969`)。后果:B 接入 A 的仓 → 在 A 的远端仓上再造 3 张重复 Issue。
+**5.2(已修) 三件套曾在接入路径重复建。** 改前 `seed_standard_issue_trio` 只看 `remote_path` 非空。Phase A 改为以 `.bw/project.toml` 是否存在为判据(有=后来者跳过)。
 
-**5.3 接入时 Buddy 不读仓里任何 `.bw/` 正本。** 仓里只有 `.bw/metrics.toml` + `.bw/connectors.toml`(`crates/bw-engine/src/metrics_file.rs:17` / `connectors_file.rs:26`),**没有 `.bw/project.toml` 或任何项目意图正本**(全仓 grep `project.toml` 零命中)。`SyncMetricsFile` 在创建/接入时**不被调用**——只在手动按钮、PR merge 后、交互式运行后跑(`lib.rs:7367` / `9055` / `interactive_cli.rs:910`)。后果:A 在仓里写好的 `metrics.toml`,B 接入克隆下来后 Buddy 视而不见,B 落地时指标定义全空、北极星空。
+**5.3(已修) 接入时曾不读 `.bw/` 正本 / 无 project.toml。** Phase A 引入 `.bw/project.toml`,创建收尾对非空工作区跑 `SyncProjectFile` + `SyncMetricsFile` + `SyncConnectorsFile`。
 
-**5.4 初始状态硬编码,不读仓的成熟度。** `create_project` INSERT 写死 `phase='cold_start'` / `active_stage='prototype'`(`crates/bw-store/src/sqlite.rs:843`),`CompleteCreation` 翻 `phase→running`(`lib.rs:6904`),`active_stage` 全程不动。B 接入一个 A 已运营数月、阶段在"运营推广"的仓 → B 的 Buddy 显示 prototype。B 本地无 handoff 记录是诚实的,但 Buddy 也不读任何仓内事实来定位。
+**5.4(仍成立) 初始状态硬编码,不读仓的成熟度。** `create_project` 仍写死 `phase='cold_start'` / `active_stage='prototype'`;后来者阶段对齐 UI 仍是 follow-up(§9)。
 
-**5.5 不对称再确认。** 北极星有仓内正本(`metrics.toml`)但接入时不读(5.3);对标/机会/项目名/类型只在本地 `project` 行(`sqlite.rs:1025-1036` 的 `set_brief`),仓内无对应。单人时代漏的,多人场景逼出来。
+**5.5(部分已修)** 意图五字段正本已在 `project.toml`;北极星仍在 `metrics.toml`。单人时代漏的不对称由 Phase A 补上意图正本,回填历史仍归 Phase B。
 
 ---
 
@@ -182,9 +182,11 @@ V2-① 已在 v1 分支实现(未 push),把 issue 执行上下文拆成两个独
 
 ## 7. `.bw/project.toml` 的合入模型
 
-`.bw/project.toml` 是产品信息正本(**不是活**)。主分支常受保护、不让直接 push,所以首到者创建流:**建分支 + 起 PR + Buddy 默认合入**,合入失败用 Buddy tip 通知 Builder(对仗 ActionsBanner 的 Ok/Fail 回显,`create.rs:213`)。
+`.bw/project.toml` 是产品信息正本(**不是活**)。接入已有仓时主分支常受保护、不让直接 push,所以该路径走:**建分支 + 起 PR + Buddy 默认合入**;新建仓(owned)可直接上主干。合入失败用 Buddy tip 通知 Builder(对仗 ActionsBanner 的 Ok/Fail 回显)。
 
-- **首到者(新建仓或接入已有仓都一样)**:创建流把 `.bw/project.toml` 写进工作区 + commit + 建分支 + 起 PR + **Buddy 自动合入**。成功即落仓,不用 Builder 手点;失败(无合入权限、分支保护禁自合等)→ tip 通知,Builder 手动处理。这是创建流"创建即落仓"的一环,跟 initial commit、三件套 `gh issue create` 同一节奏。
+- **首到者写正本**(实现口径):
+  - **新建仓(owned 工作区)**:写 `.bw/project.toml` + 直接 commit 上默认主干(仓是我们刚建的,通常无分支保护),再随落地推送一起上远端。
+  - **接入已有仓(cloned,非 owned)**:写文件 + `bw/project-init` 分支 + 起 PR + **Buddy 自动合入**;合入后工作区收拢回默认主干。失败(无合入权限、分支保护禁自合等)→ tip 通知,Builder 手动处理。
 - **为什么不破"Done 永不自动"**:那条铁律管的是**活**(Issue 的完成永远人点);`.bw/project.toml` 是配置文件、不是活,创建时自动合入自己的意图正本 ≠ 自动完成一件活。**issue PR 永不自动合入**——这条不变。
 - **后续 intent 改动**(谁改了对标/机会):直接改 `.bw/project.toml`,走正常 git commit + PR 评审(跟改代码一样,Buddy 不掺合、不自动合入)。
 - **后来者**:只读回正本,不写不推。
@@ -230,14 +232,14 @@ Phase B 不是多人专属问题,而是"老项目接入 Buddy,指标不该只有
 - [x] `.bw/project.toml` 合入:首到者创建流建分支+起 PR+Buddy 默认合入(配置不是活,不破"Done 永不自动";issue PR 永不自动合入不变),失败 tip 通知(§7);
 - [x] 三件套按 `.bw/project.toml` 存在与否判建(有就不建,没有才建);
 - [x] 接入时对非手填指标跑回填采集,修掉"纳管才开始统计"假象;
-- [x] 阶段位置各算各的,后来者显式对齐 + 留痕,不从仓读 handoff;
+- [x] 阶段位置各算各的,不从仓读 handoff(后来者「对齐到哪一步」UI/留痕仍 follow-up,见下);
 - [x] 与 V2-① 接口点对齐:不碰 `docs/buddy/`+`docs/skills/`、不建共享物化副本、不做单独 viewer 模式;
 - [x] 回填约定(`--as-of`/series)写进 `docs/buddy/standards/connectors.md`(W1 标准手册,绑数据契约),让写脚本的经系统提示词渐进加载就知道(§8.2);
 - [x] V1 Issue 3(总览折线)纳入本窗口,与 Phase B 配对开发(§8.4)。
 
 尚待对齐 / 留 follow-up:
 
-- [~] 实现切片:A(多人闭环)已实现 + commit v1(7a84e45/fc3765a/b7302ca/648ad48),code-review 两轴过、verify headless 读回为证(门禁 6/6、SyncProjectFile 正本→缓存、坏文件不写半份、三件套 gate 早 return);真 E2E(深链渲染/真 PR 自动合入/双 Buddy)defer 用户。B(回填+更新 connectors.md)+ C(V1 Issue 3 折线)配对后行。
+- [~] 实现切片:A(多人闭环)已实现 + commit v1(7a84e45/fc3765a/b7302ca/648ad48)+ code-review 硬修(物化半写回滚、project-init 后收拢默认分支、首到者亦三连读回、resume/空默认 Skill toast);headless verify 以本轮门禁+读回为准;真 E2E(深链渲染/真 PR 自动合入/双 Buddy·cowelink)defer 用户。B(回填+更新 connectors.md)+ C(V1 Issue 3 折线)配对后行。
 - [ ] 诚实 gap:三件套 gate 负向(有 project.toml → 跳过)无自动化 test,仅代码确认(正向有 verify_c8 覆盖);Windows 本机全量 `cargo test` 会因页面文件耗尽(os 1455)失败,非代码问题,CI 在 Linux 跑全量不受影响;
 - [ ] `.bw/project.toml` 的确切字段集与格式(对仗 `metrics.toml` 的格式文档);
 - [ ] 回填机制选型:按天调脚本 N 次(`--as-of`)vs 一次产 series(§8.2,Phase B 开发前定);
