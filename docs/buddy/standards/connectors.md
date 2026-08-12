@@ -1,6 +1,6 @@
 # `.bw/connectors.toml` 格式规范
 
-> **30 秒导读**:这是脚本连接器定义文件的唯一格式正本,给「绑数据」Skill 和任何搭采集装置的 Issue 参考。现在作数。从 `docs/connectors-toml-format.md` 迁入 `docs/buddy/standards/connectors.md`,旧路径不留兼容副本。
+> **30 秒导读**:这是脚本连接器定义文件的唯一格式正本,给「绑数据」Skill 和任何搭采集装置的 Issue 参考。现在作数。
 
 脚本连接器(script connector)的正本。住在项目 git 工作区根下的
 `.bw/connectors.toml`,和 `.bw/metrics.toml` 一样过 PR 审核门槛;BW 只读
