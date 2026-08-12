@@ -470,30 +470,6 @@ fn git_err(prefix: &str, e: crate::workspace::ProvisionError) -> GithubError {
     GithubError::Command(format!("{prefix}:{e}"))
 }
 
-/// Quarantine a run's work onto the Issue's branch **before** the executor
-/// touches anything (plan/13 D3: the executor must never advance the base
-/// branch — only a human merge does). Checks out `bw/issue-<n>`, creating it
-/// at the current HEAD the first time and re-using it on a retry. All of the
-/// run's edits then land on this branch by construction, whatever the executor
-/// does (dirty tree or its own commits), leaving the base branch untouched.
-pub async fn checkout_issue_branch(
-    workspace: &Path,
-    github_number: u32,
-) -> Result<String, GithubError> {
-    let branch = issue_branch(github_number);
-    // First run: create the branch at HEAD. Retry: the branch already exists,
-    // so `-b` fails and we plain-checkout it (keeping any prior branch work).
-    if git_in(workspace, &["checkout", "-b", &branch])
-        .await
-        .is_err()
-    {
-        git_in(workspace, &["checkout", &branch])
-            .await
-            .map_err(|e| git_err("切到活分支失败", e))?;
-    }
-    Ok(branch)
-}
-
 /// P7-7A: distinguishes a brand-new PR from one `open_pr` merely *adopted*
 /// because the executor already opened it itself (executors are allowed
 /// `gh pr create` — only `gh pr merge` is disallowed,`claude_cli.rs`'s
@@ -656,7 +632,7 @@ pub async fn merge_pr(owner_repo: &str, pr_number: u32) -> Result<(), GithubErro
 pub async fn open_project_init_pr(workspace: &Path, title: &str) -> Result<PrOpened, GithubError> {
     let branch = PROJECT_INIT_BRANCH;
     // Checkout the branch, creating it at HEAD the first time, re-using it
-    // on a retry (same idempotent semantics as `checkout_issue_branch`).
+    // on a retry (idempotent).
     if git_in(workspace, &["checkout", "-b", branch])
         .await
         .is_err()
