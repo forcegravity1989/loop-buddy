@@ -382,7 +382,9 @@ pub enum Command {
     SyncProjectFile,
     /// V2-②-I: list open issues on the project's remote and rebuild/refresh
     /// local issue rows (Backlog). Never creates remote issues; never writes
-    /// local Done. Same path for creation-flow auto sync and the manual
+    /// local Done. Local rows whose remote is no longer open and that this
+    /// Buddy never settled → Cancelled (off-board); local Done stays for
+    /// resume. Same path for creation-flow auto sync and the manual
     ///「从仓同步 Issue」button.
     SyncRemoteIssues,
     /// V2-② Intent UX (§6.2): probe remote `.bw/project.toml` *before* clone,
@@ -4165,6 +4167,12 @@ impl App {
             Ok(Some(file)) => {
                 let sync = connectors_file_sync(p, &file);
                 let summary = self.store.sync_connectors_file(sync).await?;
+                // File→DB upsert alone is not enough for Hub/rail: UI reads
+                // `state.connectors`. Without refresh, a newly synced script
+                // connector (e.g. version-release after 绑数据 merge) stays
+                // invisible until Boot or an unrelated ConnectorsChanged path.
+                self.refresh_connectors().await?;
+                self.emit(Event::ConnectorsChanged);
                 self.emit(Event::ProjectUpdated(p));
                 self.emit(Event::ConnectorSynced {
                     name: "connectors.toml".into(),
@@ -4231,6 +4239,8 @@ impl App {
     /// - Never transitions to Done
     /// - Same `github_number` → refresh title/desc; fill empty skill only
     /// - New numbers → create local Backlog rows
+    /// - Local mapped row absent from open set + not Done/settled → Cancelled
+    ///   (board already hides Cancelled); local Done kept for resume
     ///
     /// `announce`: emit ActionProgress Started/Ok/Fail (manual + creation).
     async fn sync_remote_issues_for(
@@ -4285,13 +4295,13 @@ impl App {
                 return Ok(());
             }
         };
-        let (created, refreshed) = self
+        let (created, refreshed, pruned) = self
             .import_remote_open_issues(p, proj.active_stage, &opens)
             .await?;
         self.refresh_issues().await?;
         self.emit(Event::IssuesChanged);
         let detail = format!(
-            "新建 {created} · 刷新 {refreshed} · 远端 open {}",
+            "新建 {created} · 刷新 {refreshed} · 收起 {pruned} · 远端 open {}",
             opens.len()
         );
         if announce {
@@ -4309,12 +4319,14 @@ impl App {
     }
 
     /// Pure store-side apply for V2-②-I (unit-testable without network).
+    /// Returns `(created, refreshed, pruned)` where `pruned` is how many
+    /// unsettled local rows were Cancelled because their remote left open.
     async fn import_remote_open_issues(
         &mut self,
         p: ProjectId,
         stage: StageKind,
         opens: &[bw_engine::github::RemoteOpenIssue],
-    ) -> Result<(u32, u32), AppError> {
+    ) -> Result<(u32, u32, u32), AppError> {
         let existing = self.store.list_issues(p, None, None).await?;
         let mut by_number: std::collections::HashMap<u32, IssueId> = existing
             .into_iter()
@@ -4323,10 +4335,12 @@ impl App {
             .collect();
         let mut created = 0u32;
         let mut refreshed = 0u32;
+        let mut open_set = std::collections::HashSet::new();
         for remote in opens {
             if remote.number == 0 {
                 continue;
             }
+            open_set.insert(remote.number);
             let skill = Self::trio_skill_for_title(&remote.title);
             let body = remote.body.trim();
             if let Some(id) = by_number.get(&remote.number).copied() {
@@ -4357,7 +4371,35 @@ impl App {
                 created += 1;
             }
         }
-        Ok((created, refreshed))
+
+        // Remote closed (absent from open list): drop unsettled local rows
+        // off the board via Cancelled. Keep Done/settled — this Buddy's own
+        // completion ledger + resume chat. Local-only rows (github_number=0)
+        // are untouched.
+        let mut pruned = 0u32;
+        let after = self.store.list_issues(p, None, None).await?;
+        for issue in after {
+            if issue.github_number == 0 || open_set.contains(&issue.github_number) {
+                continue;
+            }
+            if issue.status == IssueStatus::Done || issue.settled_at.is_some() {
+                continue;
+            }
+            if issue.status == IssueStatus::Cancelled {
+                continue;
+            }
+            if !issue.status.can_transition_to(IssueStatus::Cancelled) {
+                continue;
+            }
+            self.store
+                .transition_issue(issue.id, IssueStatus::Cancelled)
+                .await?;
+            // If this issue held the delivery lock, release it (Cancelled via
+            // TransitionIssue also skips demote; sync must not leave a lock).
+            let _ = self.demote_delivery_to_consultation(issue.id).await;
+            pruned += 1;
+        }
+        Ok((created, refreshed, pruned))
     }
 
     /// V2-② Phase A (§7): existing-repo first-comer path — write
@@ -11695,11 +11737,11 @@ mod sync_remote_issues_tests {
                 body: "out of band".into(),
             },
         ];
-        let (c1, r1) = app
+        let (c1, r1, p1) = app
             .import_remote_open_issues(pid, StageKind::Prototype, &opens)
             .await
             .expect("import1");
-        assert_eq!((c1, r1), (2, 0));
+        assert_eq!((c1, r1, p1), (2, 0, 0));
 
         let issues = store.list_issues(pid, None, None).await.expect("list");
         assert_eq!(issues.len(), 2);
@@ -11712,19 +11754,26 @@ mod sync_remote_issues_tests {
         assert_eq!(b.standard_skill, "");
         assert_eq!(b.status, IssueStatus::Backlog);
 
-        // Second pass: refresh only, no duplicate rows.
+        // Second pass: refresh #11 only; #12 left open-set → Cancelled (off-board).
         let opens2 = vec![bw_engine::github::RemoteOpenIssue {
             number: 11,
             title: "找指标".into(),
             body: "updated body".into(),
         }];
-        let (c2, r2) = app
+        let (c2, r2, p2) = app
             .import_remote_open_issues(pid, StageKind::Prototype, &opens2)
             .await
             .expect("import2");
-        assert_eq!((c2, r2), (0, 1));
+        assert_eq!((c2, r2, p2), (0, 1, 1));
         let again = store.get_issue(a.id).await.expect("get").expect("row");
         assert_eq!(again.desc, "updated body");
+        assert_eq!(again.status, IssueStatus::Backlog);
+        let closed_elsewhere = store.get_issue(b.id).await.expect("get12").expect("row");
+        assert_eq!(
+            closed_elsewhere.status,
+            IssueStatus::Cancelled,
+            "remote-closed unsettled → Cancelled"
+        );
         assert_eq!(
             store.list_issues(pid, None, None).await.unwrap().len(),
             2,
@@ -11748,6 +11797,94 @@ mod sync_remote_issues_tests {
             .unwrap();
         let b3 = store.get_issue(id12).await.unwrap().unwrap();
         assert_eq!(b3.standard_skill, "should-not-apply-when-we-set-first");
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[tokio::test]
+    async fn remote_closed_keeps_local_done_cancels_unsettled() {
+        let db =
+            std::env::temp_dir().join(format!("bw_sync_remote_prune_{}.db", uuid::Uuid::new_v4()));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+
+        let opens = vec![
+            bw_engine::github::RemoteOpenIssue {
+                number: 21,
+                title: "我做完的".into(),
+                body: "".into(),
+            },
+            bw_engine::github::RemoteOpenIssue {
+                number: 22,
+                title: "别人关的".into(),
+                body: "".into(),
+            },
+            bw_engine::github::RemoteOpenIssue {
+                number: 23,
+                title: "我开跑中".into(),
+                body: "".into(),
+            },
+        ];
+        let (c, r, p) = app
+            .import_remote_open_issues(pid, StageKind::Prototype, &opens)
+            .await
+            .expect("seed");
+        assert_eq!((c, r, p), (3, 0, 0));
+
+        let issues = store.list_issues(pid, None, None).await.unwrap();
+        let mine = issues.iter().find(|i| i.github_number == 21).unwrap();
+        let theirs = issues.iter().find(|i| i.github_number == 22).unwrap();
+        let mine_wip = issues.iter().find(|i| i.github_number == 23).unwrap();
+
+        // Simulate this Buddy completing #21 through the real Done edge.
+        store
+            .transition_issue(mine.id, IssueStatus::Todo)
+            .await
+            .unwrap();
+        store
+            .transition_issue(mine.id, IssueStatus::InProgress)
+            .await
+            .unwrap();
+        store
+            .transition_issue(mine.id, IssueStatus::InReview)
+            .await
+            .unwrap();
+        app.dispatch(Command::TransitionIssue {
+            id: mine.id,
+            status: IssueStatus::Done,
+        })
+        .await
+        .expect("done");
+        let done_row = store.get_issue(mine.id).await.unwrap().unwrap();
+        assert_eq!(done_row.status, IssueStatus::Done);
+        assert!(done_row.settled_at.is_some());
+
+        store
+            .transition_issue(mine_wip.id, IssueStatus::Todo)
+            .await
+            .unwrap();
+        store
+            .transition_issue(mine_wip.id, IssueStatus::InProgress)
+            .await
+            .unwrap();
+
+        // Both remotes closed; open set empty → keep Done, cancel the rest.
+        let (c2, r2, p2) = app
+            .import_remote_open_issues(pid, StageKind::Prototype, &[])
+            .await
+            .expect("prune");
+        assert_eq!((c2, r2, p2), (0, 0, 2));
+
+        let kept = store.get_issue(mine.id).await.unwrap().unwrap();
+        assert_eq!(kept.status, IssueStatus::Done);
+        assert!(kept.settled_at.is_some());
+
+        let dropped = store.get_issue(theirs.id).await.unwrap().unwrap();
+        assert_eq!(dropped.status, IssueStatus::Cancelled);
+
+        let wip_dropped = store.get_issue(mine_wip.id).await.unwrap().unwrap();
+        assert_eq!(wip_dropped.status, IssueStatus::Cancelled);
 
         let _ = std::fs::remove_file(&db);
     }

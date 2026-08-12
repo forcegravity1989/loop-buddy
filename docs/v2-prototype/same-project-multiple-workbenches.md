@@ -111,7 +111,7 @@ V2-① 已在 v1 分支实现(未 push),把 issue 执行上下文拆成两个独
 - **北极星 + 指标定义**:已落定。正本 `.bw/metrics.toml`,沿用既有 `SyncMetricsFile`。
 - **指标历史观测**:已落定。接入时对非手填指标跑回填采集(脚本/github 连接器能产多久产多久),写成历史观测;observation append-only 支持任意 ts,不改 schema。手填指标不回填(人填的就是人填的,没有历史可捞)。
 - **阶段位置与 handoff**:已落定。过程信息,各算各的,**不从仓读**。后来者接入后显式"对齐到哪一步"+ 留痕;首到者从 prototype 起。
-- **Buddy 看板 Issue 状态 ↔ 仓平台 Issue 状态**:已落定(**V2-②-I**)。仓平台 open Issue 是共同事实;本地 Issue 行是这台 Buddy 的过程把手(可 ▶跑、可记账)。单向读回:远端 open → 本地 Backlog(待办池);同 `github_number` 幂等;读回绝不远端 create;远端 closed 本轮不拉;本地 Done 只跟人点的 Transition 走。不是双端状态实时互推。
+- **Buddy 看板 Issue 状态 ↔ 仓平台 Issue 状态**:已落定(**V2-②-I**)。仓平台 open Issue 是共同事实;本地 Issue 行是这台 Buddy 的过程把手(可 ▶跑、可记账)。单向读回:远端 open → 本地 Backlog(待办池);同 `github_number` 幂等;读回绝不远端 create;同步时远端已不在 open 且本机未 Done/未 settled → 本地 **Cancelled**(看板本来就不展示 Cancelled);本机已 Done/已 settled **保留**(续聊/账本);本地 Done 只跟人点的 Transition 走。不是双端状态实时互推。
 - **项目自有的技能/队友/工作流**:尚待对齐。正本应在仓里(产品信息),但当前技能/队友/工作流表无仓内正本,本轮不新建(留 follow-up)。
 
 原则:能从共同项目事实重新得到的,不依赖另一台 Buddy 的数据库;纯属个人工作过程的,不伪装成团队共同状态。
@@ -176,7 +176,7 @@ V2-① 已在 v1 分支实现(未 push),把 issue 执行上下文拆成两个独
 5. 阶段:Buddy 问一句"这个项目你现在接手到哪一步",后来者显式对齐 + 留痕(不从仓读 handoff——过程信息各算各的)。
 6. 运行 / 会话 / handoff 仍空(过程信息各算各的);**open Issue 经 V2-②-I 读回重建为本地行**(见下)。
 
-> **Issue 读回重建(V2-②-I · 已拍板)**:仓上 open Issue → 本地 Backlog 行(可 ▶跑)。触发:创建收尾自动一次 + 手动「从仓同步 Issue」;首到/后来者同一条。技能:三件套标题精确匹配(`竞品分析`/`找指标`/`绑数据`)才挂 `standard_skill`,其余空 skill 靠 buddy 系统提示词。幂等:同 `github_number` 不重复建;已有行只刷新标题/描述(空 skill 时可补挂);读回路径绝不 `create` 远端 Issue。closed 本轮不拉。偏差相对旧注:不再「本地看板从零」;不做只读列表形态(与 §2.4「有 Buddy=能跑」一致);不做双端实时互推。
+> **Issue 读回重建(V2-②-I · 已拍板)**:仓上 open Issue → 本地 Backlog 行(可 ▶跑)。触发:创建收尾自动一次 + 手动「从仓同步 Issue」;首到/后来者同一条。技能:三件套标题精确匹配(`竞品分析`/`找指标`/`绑数据`)才挂 `standard_skill`,其余空 skill 靠 buddy 系统提示词。幂等:同 `github_number` 不重复建;已有行只刷新标题/描述(空 skill 时可补挂);读回路径绝不 `create` 远端 Issue。同步收起:远端已不在 open、且本机未 Done/未 settled → 本地 Cancelled(不上板,含进行中/评审中);本机已完成的保留在「已完成」可续聊。不拉 closed 清单展示。偏差相对旧注:不再「本地看板从零」;不做只读列表形态(与 §2.4「有 Buddy=能跑」一致);不做双端实时互推。
 
 ---
 
@@ -248,6 +248,6 @@ Phase B 不是多人专属问题,而是"老项目接入 Buddy,指标不该只有
 - [x] 回填机制选型:一次产 `history` series(§8.2);Buddy 仓统计走 `.bw/collect_stats.py`;无 history 的业务脚本诚实单点;
 - [ ] 后来者"对齐到哪一步"的 UI 形态与留痕表;
 - [x] 仓平台 open Issue 单向读回重建本地行(**V2-②-I**;取代原「只读列表」follow-up——与 §2.4 一致,直接可跑);
-- [ ] 远端 closed Issue 是否/如何展示(本轮明确不拉);
+- [x] 同步时远端已关且本机未完成 → 本地 Cancelled 不上板;本机 Done 保留(V2-②-I 收起规则;不另拉 closed 列表展示);
 - [ ] 项目自有技能/队友/工作流的仓内正本(本轮不建,留 follow-up);
 - [ ] 可重复执行的双 Buddy 验收剧本。

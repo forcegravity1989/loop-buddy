@@ -819,11 +819,11 @@
 
       <div class="ex">
         <div class="eh">Example · 三件套从哪来</div>
-        <div class="ed">挂远端仓且仓里<strong>还没有</strong> <code>.bw/project.toml</code>（首到者）时，纳入收尾自动建：竞品分析 → 找指标 → 绑数据。仓里<strong>已有</strong>该文件（后来者）则跳过远端新建。创建收尾与看板「↻ 从仓同步 Issue」都会把远端 <strong>open</strong> Issue 读回成本地待办池行（同号幂等；closed 本轮不拉）。三件套标题精确匹配才挂对应 skill。纯本地无远端则不建。</div>
+        <div class="ed">挂远端仓且仓里<strong>还没有</strong> <code>.bw/project.toml</code>（首到者）时，纳入收尾自动建：竞品分析 → 找指标 → 绑数据。仓里<strong>已有</strong>该文件（后来者）则跳过远端新建。创建收尾与看板「↻ 从仓同步 Issue」都会把远端 <strong>open</strong> Issue 读回成本地待办池行（同号幂等）。再同步时：远端已关、本机又没点完成的本地行会收起（Cancelled，看板上不出现）；本机已完成的留在「已完成」可续聊。三件套标题精确匹配才挂对应 skill。纯本地无远端则不建。</div>
       </div>
       <div class="ex">
         <div class="eh">Example · 后来者本地可跑远端已有活</div>
-        <div class="ed">后来者（含本机删项目再接入同仓）：远端不新开起手 Issue、不重推正本；本地看板从仓上 open Issue 重建——可 ▶跑「找指标」等；再同步不重复建本地行、不 create 远端。</div>
+        <div class="ed">后来者（含本机删项目再接入同仓）：远端不新开起手 Issue、不重推正本；本地看板从仓上 open Issue 重建——可 ▶跑「找指标」等；再同步不重复建本地行、不 create 远端。别人已关掉、本机又没完成的票，再同步后从看板收起；本机已完成的仍留在「已完成」。</div>
       </div>
       <p class="where">落点：状态机 <code>crates/bw-core</code>；播种/调度/交付锁/降级咨询 <code>crates/bw-app</code>；PTY 会话 <code>crates/bw-engine/src/terminal_manager.rs</code>；身份表 <code>schema.sql</code> → <code>claude_conversation</code> + <code>issue</code>。</p>
       <div class="foot">怎么跑、怎么证 → <a href="#" onclick="go('m5');return false">执行与证据</a>。首到/后来者判据见 <a href="#" onclick="go('u2');return false">纳入项目</a>。</div>

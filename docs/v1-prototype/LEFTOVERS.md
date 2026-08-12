@@ -366,6 +366,20 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 ---
 
+## V2 · 手填观测不跨 Buddy / 不进仓（多人过程缺口）
+
+**产生**：V2-② cowelink E2E（后来者纳管 + 绑数据）。北极星「累计总用户数」、滞后「周安装用户数」等 `collect=manual` 指标在本机总览手填后有数；其它机器上的 Buddy 读不到这些 observation。
+
+**机制**：观测落本机 SQLite（过程信息）；Buddy 之间不同步库。手填不会写回 `.bw/metrics.toml`，也不会推远端。仓里正本只声明「这是 manual」，不承载数值。与「产品信息在仓、过程信息在本地」一致——但多人各自纳管时，非脚本采集的数等于「只在原始 Builder 那台机器上」。
+
+**产品判断（本轮）**：可接受为已知边界。理想态是指标尽量 script 自动采；manual 仅过渡。若将来要共享手填值，需另设计仓内正本或共享源（本轮不做）。
+
+**处置**：记遗留。不改 schema；指南/验收如实说「手填 = 本机过程数据」。
+
+**事实源**：`docs/v2-prototype/same-project-multiple-workbenches.md` §3（正本在仓 / 过程在本地）；cowelink 读回 `observation.source_kind=manual`。
+
+---
+
 ## Bug · 提 MR 后看板迟迟不进评审中 + merge 无忙态（cowelink 找指标 E2E）
 
 **产生**：V1 实践 · cowelink 找指标真 E2E（会话已停、MR 已开，看板约两分钟才变评审中；合入成功但点击后数秒无反馈）。
