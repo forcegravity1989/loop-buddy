@@ -3741,7 +3741,7 @@ mod tests {
 
         // Second sync: update leading's config (same name → upsert, same id),
         // drop north-star from the file (file deletion does NOT delete DB
-        // rows per design — §connectors-toml-format.md "正本里删掉的连接器").
+        // rows per design — docs/buddy/standards/connectors.md "正本里删掉的连接器").
         let sync2 = ConnectorsFileSync {
             project_id,
             connectors: vec![ConnectorDefSync {
