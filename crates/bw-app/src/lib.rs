@@ -5337,6 +5337,13 @@ impl App {
                     issue.number, issue.stage
                 );
             }
+            // §8: 显式选择的 Skill 正文为空(被删/被清空)→ 不悄悄回落、不假装
+            // 已加载,告诉用户所选不可用,让其修正选择(不启动真实 Claude)。
+            if !is_default && !effective_skill.is_empty() && skill_body.trim().is_empty() {
+                return Err(AppError::Invalid(format!(
+                    "所选技能 `{effective_skill}` 不可用(正文为空或已删除),请在 issue 上改选其它技能后再跑"
+                )));
+            }
             // V2-①: 系统提示词 = 静态正本(system-prompt.md) + 动态项目上下文 +
             // 主 Skill 正文 + 蒸馏块 + 目录块,用 `---` 分隔(§13.5)。
             // §6.5: 蒸馏/目录是补充,不冒充第二份主 Skill,不偷偷替换用户
