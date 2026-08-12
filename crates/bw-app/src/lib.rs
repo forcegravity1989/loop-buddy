@@ -5019,13 +5019,24 @@ impl App {
         // 系统提示词 + IssueRunPrep.distilled_block/catalog_block);这里只取
         // `standard_refs` 给 `spec.skills` 记 uses,格式化块不再拼进 spec。
         let (_, standard_refs) = self.standard_skill_block(p, &issue.standard_skill).await?;
+        // V2-① 第二轮: 蒸馏块排除的不是 issue.standard_skill(可能为空),
+        // 而是 effective_skill(显式 > 阶段默认)。否则当 issue 无显式技能、
+        // 用阶段默认做主 Skill 时,同名蒸馏技能会被同时注入为主 Skill 和
+        // 蒸馏补充,违反 §6.5「不冒充第二份主 Skill」。
+        let effective_exclude = if !issue.standard_skill.trim().is_empty() {
+            issue.standard_skill.clone()
+        } else {
+            bw_core::playbook::stage_skills(issue.stage)
+                .first()
+                .map(|s| s.name.to_string())
+                .unwrap_or_default()
+        };
         // Distilled (compounded) skills from this project, same-stage
-        // preferred, capped at 3. Exclude `issue.standard_skill` by name —
-        // since P3 a distilled skill can itself be picked as the standard
-        // slug, and without the exclusion it would double-count (see
-        // `distilled_skills_block`'s doc comment).
+        // preferred, capped at 3. Exclude the effective main Skill by name
+        // to avoid double-injecting the same content as both main Skill
+        // and distilled supplement (§6.5).
         let (distilled_block, distilled_refs) = self
-            .distilled_skills_block(p, issue.stage, &issue.standard_skill)
+            .distilled_skills_block(p, issue.stage, &effective_exclude)
             .await?;
         // 五角色归类的落地(2026-08-05):本阶段技能的目录进 prompt、正文物化到
         // 工作区。与上面两块的关键区别 —— 目录里的技能**不进** `spec.skills`,
@@ -5301,15 +5312,37 @@ impl App {
                 handoff_note,
                 workspace_hint,
             };
-            let skill_body = match self.fetch_skill_body(p, &standard_skill).await {
+            // V2-① 第二轮: issue 无显式 Skill 时按 issue.stage 装载阶段默认
+            // SOP;有显式则用显式(替换,不叠加)。§6.1: 一张 Issue 只选一份
+            // 主 Skill —— 显式 > 阶段默认 > 无。默认 SOP 按 issue 自身阶段
+            // 选,不随项目交棒改变。
+            let (effective_skill, is_default) = if !standard_skill.trim().is_empty() {
+                (standard_skill.clone(), false)
+            } else {
+                let default_slug = bw_core::playbook::stage_skills(issue.stage)
+                    .first()
+                    .map(|s| s.name.to_string())
+                    .unwrap_or_default();
+                (default_slug, true)
+            };
+            let skill_body = match self.fetch_skill_body(p, &effective_skill).await {
                 Ok(b) => b,
                 Err(e) => return Err(e),
             };
+            // §6.1 点3: 阶段默认 Skill 正文为空 = 资产损坏或打包遗漏。系统
+            // 提示词仍可用,但开工前在运行日志中明确告警,不假装已加载。
+            if is_default && !effective_skill.is_empty() && skill_body.trim().is_empty() {
+                eprintln!(
+                    "[BW_SKILL_WARN] 阶段默认方法 `{effective_skill}` 正文为空(issue #{}, stage {:?}),本次仅依据 buddy 规范处理",
+                    issue.number, issue.stage
+                );
+            }
             // V2-①: 系统提示词 = 静态正本(system-prompt.md) + 动态项目上下文 +
             // 主 Skill 正文 + 蒸馏块 + 目录块,用 `---` 分隔(§13.5)。
-            // 无技能也能跑 —— issue 内容(标题+描述)作位置 prompt;
-            // 空技能不报错,系统提示词的铁律与规范索引已就位。
-            let project_context = build_project_context_block(&playbook_ctx, &standard_skill);
+            // §6.5: 蒸馏/目录是补充,不冒充第二份主 Skill,不偷偷替换用户
+            // 显式选择的主 Skill。
+            let project_context =
+                build_project_context_block(&playbook_ctx, &effective_skill, is_default);
             let mut system_prompt = bw_core::buddy_assets::SYSTEM_PROMPT_MD.to_string();
             for block in [
                 &project_context,

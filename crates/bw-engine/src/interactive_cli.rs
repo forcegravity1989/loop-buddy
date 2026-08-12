@@ -357,9 +357,16 @@ pub fn build_consultation_resume_plan(
 /// (packed via `bw_core::buddy_assets::SYSTEM_PROMPT_MD`); the caller
 /// assembles: SYSTEM_PROMPT_MD + this block + main Skill body + distilled/catalog.
 ///
-/// Resume (§7.1) does NOT re-inject this — the session persists from the first
-/// run. Only the standards runtime copy is re-calibrated before resume.
-pub fn build_project_context_block(playbook_ctx: &PlaybookCtx, skill_slug: &str) -> String {
+/// `is_default` = true when the skill slug came from the issue's stage default
+/// (no explicit user selection) — the prompt says so, so the model knows it
+/// can be replaced. Resume (§7.1) does NOT re-inject this — the session
+/// persists from the first run. Only the standards runtime copy is
+/// re-calibrated before resume.
+pub fn build_project_context_block(
+    playbook_ctx: &PlaybookCtx,
+    skill_slug: &str,
+    is_default: bool,
+) -> String {
     let mut s = String::new();
     s.push_str("## 本次项目上下文\n");
     s.push_str(&format!("- 项目: {}\n", playbook_ctx.project_name));
@@ -387,9 +394,12 @@ pub fn build_project_context_block(playbook_ctx: &PlaybookCtx, skill_slug: &str)
     if !playbook_ctx.workspace_hint.trim().is_empty() {
         s.push_str(&format!("- 工作区: {}\n", playbook_ctx.workspace_hint));
     }
-    // 空技能(无技能 issue)显「未关联技能」;非空显 slug 让用户自查。
     if skill_slug.trim().is_empty() {
         s.push_str("\n未关联技能,由你驱动或按用户要求干活;buddy 规范与铁律已就位。\n");
+    } else if is_default {
+        s.push_str(&format!(
+            "\n未显式关联技能,使用本阶段默认方法: `{skill_slug}`(用户选了自己的技能时替换此默认)\n"
+        ));
     } else {
         s.push_str(&format!("\n你正在执行技能: `{skill_slug}`\n"));
     }
@@ -948,7 +958,7 @@ mod tests {
     #[test]
     fn build_project_context_block_has_project_fields() {
         let ctx = mock_playbook_ctx();
-        let block = build_project_context_block(&ctx, "north-star-discovery");
+        let block = build_project_context_block(&ctx, "north-star-discovery", false);
         assert!(block.contains("测试项目"));
         assert!(block.contains("竞品A"));
         assert!(block.contains("周活跃用户数"));
@@ -958,15 +968,24 @@ mod tests {
     #[test]
     fn build_project_context_block_unknown_skill_shows_skill_label() {
         let ctx = mock_playbook_ctx();
-        let block = build_project_context_block(&ctx, "some-unknown-skill");
+        let block = build_project_context_block(&ctx, "some-unknown-skill", false);
         assert!(block.contains("你正在执行技能: `some-unknown-skill`"));
     }
 
     #[test]
     fn build_project_context_block_empty_skill_shows_unspecified() {
         let ctx = mock_playbook_ctx();
-        let block = build_project_context_block(&ctx, "");
+        let block = build_project_context_block(&ctx, "", false);
         assert!(block.contains("未关联技能"));
+        assert!(!block.contains("你正在执行技能"));
+    }
+
+    #[test]
+    fn build_project_context_block_default_skill_shows_default_label() {
+        let ctx = mock_playbook_ctx();
+        let block = build_project_context_block(&ctx, "spec-to-tests", true);
+        assert!(block.contains("使用本阶段默认方法"));
+        assert!(block.contains("`spec-to-tests`"));
         assert!(!block.contains("你正在执行技能"));
     }
 
