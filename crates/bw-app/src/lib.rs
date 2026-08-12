@@ -50,7 +50,8 @@ use bw_engine::{
     build_resume_plan, build_startup_plan, evidence, ClaudeCliConfig, ClaudeCliExecutor,
     CodehubRepoSummary, ConversationMeta, Engine, GitCommit, GithubRepoSummary,
     InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
-    PhaseNode, RunCtx, RunEvent, SkillOutput, TerminalManager, UnsupportedCliExecutor, CLAUDE,
+    PhaseNode, ProjectFile, RunCtx, RunEvent, SkillOutput, TerminalManager, UnsupportedCliExecutor,
+    CLAUDE,
 };
 use bw_store::{
     AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
@@ -379,6 +380,22 @@ pub enum Command {
     /// zero action zero noise, bad file = honest error toast, never triggers
     /// recompute (intent fields aren't derived data).
     SyncProjectFile,
+    /// V2-② Intent UX (§6.2): probe remote `.bw/project.toml` *before* clone,
+    /// so the Intent card can readonly-prefill later-comers. `provider` =
+    /// `"codehub"` | `"github"`; `host` is the codehub alias (ignored for
+    /// github); `path` = `namespace/repo` (codehub) or `owner/repo` (github);
+    /// `default_branch` from the repo list (empty → engine falls back to
+    /// `main`). Absent file → first-comer; fetch/parse error → Failed (UI
+    /// stays editable — never pretend later-comer).
+    ProbeRemoteProjectToml {
+        provider: String,
+        host: String,
+        path: String,
+        default_branch: String,
+    },
+    /// Clear [`AppState::remote_project_probe`] when the user switches back to
+    ///「新建仓」or leaves the existing-repo picker.
+    ClearRemoteProjectProbe,
     /// C7 · 采集器 (plan/13 D7): pull real data into the active project's
     /// metrics *right now* — the manual「立即采集」counterpart to the standard
     /// daily collect cron. For every `collect.kind = "github"` metric it runs
@@ -916,6 +933,22 @@ pub enum Command {
     },
 }
 
+/// Result of [`Command::ProbeRemoteProjectToml`] — creation-flow UI state
+/// only (not persisted). Final later-comer gate after confirm is still the
+/// on-disk `.bw/project.toml` post-clone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum RemoteProjectProbe {
+    #[default]
+    Idle,
+    Probing,
+    /// Remote has no `.bw/project.toml` → first-comer Intent (editable).
+    Absent,
+    /// Parsed正本 → later-comer Intent (readonly prefill).
+    Present(ProjectFile),
+    /// Network/auth/parse failed — stay editable; confirm still uses clone gate.
+    Failed(String),
+}
+
 /// Kernel → UI facts (already happened).
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -1317,6 +1350,9 @@ pub struct AppState {
     /// internal cache of live GitHub data, not persisted — it's a direct
     /// read-through, not one of this app's own derived Signals.
     pub github_repos: Vec<GithubRepoSummary>,
+    /// V2-② Intent UX: last remote `.bw/project.toml` probe for the create
+    /// flow's「接入已有仓」path. Process-local; cleared on「新建仓」.
+    pub remote_project_probe: RemoteProjectProbe,
     /// V1 Issue2 Phase2a: unix ts of the last InReview poll for interactive
     /// issues. The poller checks codehub/github for open MRs on interactive
     /// issues that are InProgress + have a claude_conversation row (interactive) + `pr_number == 0`.
@@ -1398,6 +1434,7 @@ impl Default for AppState {
             cron_effectiveness: None,
             issue_detail: None,
             github_repos: Vec::new(),
+            remote_project_probe: RemoteProjectProbe::Idle,
             last_inreview_poll: 0,
             interactive_sessions: HashMap::new(),
             pending_stop_check: false,
@@ -6993,6 +7030,53 @@ impl App {
                     }
                 }
                 self.emit(Event::ProjectsChanged);
+            }
+
+            Command::ClearRemoteProjectProbe => {
+                self.state.remote_project_probe = RemoteProjectProbe::Idle;
+                self.emit(Event::ProjectsChanged);
+            }
+
+            Command::ProbeRemoteProjectToml {
+                provider,
+                host,
+                path,
+                default_branch,
+            } => {
+                // V2-② Intent UX (§6.2): pre-clone remote probe. Quiet on the
+                // action strip (Intent card shows Probing itself); never
+                // invent later-comer on error.
+                let path = path.trim().to_string();
+                if path.is_empty() {
+                    self.state.remote_project_probe = RemoteProjectProbe::Idle;
+                    self.emit(Event::ProjectsChanged);
+                } else {
+                    self.state.remote_project_probe = RemoteProjectProbe::Probing;
+                    self.emit(Event::ProjectsChanged);
+                    let result = if provider == "codehub" {
+                        bw_engine::codehub::fetch_project_toml(&host, &path, &default_branch)
+                            .await
+                            .map_err(|e| e.to_string())
+                    } else {
+                        // github: path = owner/repo
+                        let mut parts = path.splitn(2, '/');
+                        let owner = parts.next().unwrap_or("").to_string();
+                        let repo = parts.next().unwrap_or("").to_string();
+                        if owner.is_empty() || repo.is_empty() {
+                            Err("GitHub 仓路径应为 owner/repo".into())
+                        } else {
+                            bw_engine::github::fetch_project_toml(&owner, &repo, &default_branch)
+                                .await
+                                .map_err(|e| e.to_string())
+                        }
+                    };
+                    self.state.remote_project_probe = match result {
+                        Ok(Some(file)) => RemoteProjectProbe::Present(file),
+                        Ok(None) => RemoteProjectProbe::Absent,
+                        Err(e) => RemoteProjectProbe::Failed(e),
+                    };
+                    self.emit(Event::ProjectsChanged);
+                }
             }
 
             Command::SetCycle { cycle } => {

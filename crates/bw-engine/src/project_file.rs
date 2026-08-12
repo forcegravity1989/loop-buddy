@@ -38,7 +38,7 @@ pub enum ProjectFileError {
 /// `connectors_file.rs`): a typo'd top-level key must fail loudly, not
 /// silently parse into a partial file that then upserts fewer columns than
 /// the author intended.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectFile {
     pub name: String,
@@ -51,6 +51,15 @@ pub struct ProjectFile {
     pub benchmark: String,
     #[serde(default)]
     pub opportunity: String,
+}
+
+/// Parse a `.bw/project.toml` body already in memory (local file or remote
+/// raw fetch). Same shape / deny-unknown-fields rules as [`read`].
+pub fn parse(raw: &str) -> Result<ProjectFile, ProjectFileError> {
+    toml::from_str(raw).map_err(|e| ProjectFileError::Parse {
+        path: PROJECT_FILE_REL_PATH.into(),
+        source: e,
+    })
 }
 
 /// Read + parse `<workspace>/.bw/project.toml`.
@@ -78,12 +87,14 @@ pub fn read(workspace: &str) -> Result<Option<ProjectFile>, ProjectFileError> {
             })
         }
     };
-    toml::from_str(&raw)
-        .map(Some)
-        .map_err(|e| ProjectFileError::Parse {
+    match parse(&raw) {
+        Ok(f) => Ok(Some(f)),
+        Err(ProjectFileError::Parse { source, .. }) => Err(ProjectFileError::Parse {
             path: display,
-            source: e,
-        })
+            source,
+        }),
+        Err(e) => Err(e),
+    }
 }
 
 /// Serialize a [`ProjectFile`] to a TOML string — the inverse of [`read`],
@@ -214,6 +225,20 @@ north_star = "should not be here"
 
         let result = read(&tmp.to_string_lossy());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_accepts_in_memory_body() {
+        let f = parse(
+            r#"name = "cowelink"
+kind = "其他"
+brief = "hello"
+opportunity = "win"
+"#,
+        )
+        .expect("parse");
+        assert_eq!(f.name, "cowelink");
+        assert_eq!(f.opportunity, "win");
     }
 
     /// Create a temp directory for test isolation.

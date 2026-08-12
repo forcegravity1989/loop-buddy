@@ -169,8 +169,8 @@ V2-① 已在 v1 分支实现(未 push),把 issue 执行上下文拆成两个独
 
 一个已被 Buddy 纳管过的仓(已有 `.bw/project.toml`),第二个人接入。
 
-1. 走接入已有仓:clone → 检测到 `.bw/project.toml` → 走后来者分支。
-2. 跑 `SyncProjectFile` + `SyncMetricsFile` + `SyncConnectorsFile`:从仓里正本读回意图 + 指标定义 + 采集装置,本地落缓存。Intent 卡跳过(或预填只读)。
+1. 走接入已有仓:选仓后远端探测 `.bw/project.toml`(codehub `repo file raw` / github `gh api` contents raw,约 300ms)→ 有则 Intent **只读预填**正本五字段;无则 Intent 仍手填。确认后 clone → `SyncProjectFile` 等读回;最终三件套/写正本 gate 仍以 clone 后本地文件为准(探测失败不假装后来者)。
+2. 跑 `SyncProjectFile` + `SyncMetricsFile` + `SyncConnectorsFile`:从仓里正本读回意图 + 指标定义 + 采集装置,本地落缓存。
 3. **三件套不建**(判据:`.bw/project.toml` 已存在 = 已是 Buddy 项目,不需要再发启动包)。修掉 §5.2 的重复建问题。
 4. 对非手填指标跑回填采集:脚本能捞多久捞多久,写成历史观测。修掉"Buddy 纳管才开始统计"的假象。
 5. 阶段:Buddy 问一句"这个项目你现在接手到哪一步",后来者显式对齐 + 留痕(不从仓读 handoff——过程信息各算各的)。
@@ -238,10 +238,11 @@ Phase B 不是多人专属问题,而是"老项目接入 Buddy,指标不该只有
 - [x] 与 V2-① 接口点对齐:不碰 `docs/buddy/`+`docs/skills/`、不建共享物化副本、不做单独 viewer 模式;
 - [x] 回填约定(`--as-of`/series)写进 `docs/buddy/standards/connectors.md`(W1 标准手册,绑数据契约),让写脚本的经系统提示词渐进加载就知道(§8.2);
 - [x] V1 Issue 3(总览折线)纳入本窗口,与 Phase B 配对开发(§8.4)。
+- [x] Intent UX 已补(§6.2):选仓后远端探测 `.bw/project.toml` → 后来者 Intent 只读预填;首到者仍手填;探测失败可编辑且不假装后来者;确认后行为不变(toast/不建三件套/不推 toml)。指南 u2 等真实践后再改。
 
 尚待对齐 / 留 follow-up:
 
-- [~] 实现切片:A(多人闭环)已实现 + commit v1(7a84e45/fc3765a/b7302ca/648ad48)+ code-review 硬修;B(近 30 天 history 观测 + `connectors.md`)+ C(总览折线,横轴=周结束日 MM-DD)已落地本窗口。真 E2E(重启 Buddy → 立即采集 → sqlite 读回点数 / 总览 delta)defer 用户。
+- [~] 实现切片:A(多人闭环)+ Intent UX 已实现;B(近 30 天 history)+ C(总览折线)已落地。真 E2E(后来者选仓→只读 Intent→确认;首到者手填;采集读回)defer 用户。
 - [ ] 诚实 gap:三件套 gate 负向(有 project.toml → 跳过)无自动化 test,仅代码确认(正向有 verify_c8 覆盖);Windows 本机全量 `cargo test` 会因页面文件耗尽(os 1455)失败,非代码问题,CI 在 Linux 跑全量不受影响;
 - [ ] `.bw/project.toml` 的确切字段集与格式(对仗 `metrics.toml` 的格式文档);
 - [x] 回填机制选型:一次产 `history` series(§8.2);Buddy 仓统计走 `.bw/collect_stats.py`;无 history 的业务脚本诚实单点;

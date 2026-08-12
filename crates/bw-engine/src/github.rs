@@ -901,6 +901,45 @@ fn days_ago_iso(token: &str, today: Date) -> Option<String> {
     ))
 }
 
+/// V2-② Intent UX (§6.2): fetch `.bw/project.toml` via `gh api` raw contents
+/// without cloning. Same contract as [`crate::codehub::fetch_project_toml`]:
+/// `Ok(None)` = absent → first-comer; `Err` = soft-fail (stay editable).
+pub async fn fetch_project_toml(
+    owner: &str,
+    repo: &str,
+    git_ref: &str,
+) -> Result<Option<crate::project_file::ProjectFile>, GithubError> {
+    let git_ref = if git_ref.trim().is_empty() {
+        "main"
+    } else {
+        git_ref.trim()
+    };
+    let endpoint = format!(
+        "repos/{owner}/{repo}/contents/{}?ref={git_ref}",
+        crate::project_file::PROJECT_FILE_REL_PATH
+    );
+    let output = tokio::process::Command::new("gh")
+        .args(["api", "-H", "Accept: application/vnd.github.raw", &endpoint])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        let err = stderr_text(&output);
+        let lower = err.to_lowercase();
+        if lower.contains("404") || lower.contains("not found") {
+            return Ok(None);
+        }
+        return Err(GithubError::Command(err));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    crate::project_file::parse(raw.trim())
+        .map(Some)
+        .map_err(|e| GithubError::Command(e.to_string()))
+}
+
 /// C7 · 采集器: run one `kind = "github"` metric query as a real count.
 /// Expands BW placeholders against `remote` (`owner/repo`) + `today`, then asks
 /// GitHub's search API for the total number of matches via `gh`. Uses the

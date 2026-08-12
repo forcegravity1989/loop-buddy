@@ -409,6 +409,7 @@ fn Root() -> Element {
                         actions: actions().items,
                         github_repos: v.github_repos.clone(),
                         codehub_repos: v.codehub_repos.clone(),
+                        remote_project_probe: v.remote_project_probe.clone(),
                         // C12(plan/14): every card/state of the creation flow
                         // routes its exit here — including after a project row
                         // already exists (kernel `state.view` is already

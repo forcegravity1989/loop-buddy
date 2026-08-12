@@ -762,6 +762,59 @@ pub async fn create_repo(
     })
 }
 
+/// V2-② Intent UX (§6.2): fetch `.bw/project.toml` from the remote without
+/// cloning. Used by the creation flow after the user picks「接入已有仓」so
+/// Intent can readonly-prefill later-comers. `Ok(None)` = file absent (404)
+/// → first-comer; `Err` = network/auth/parse failure → UI stays editable and
+/// does **not** pretend later-comer. Final trio/write gate still uses the
+/// local file after clone.
+pub async fn fetch_project_toml(
+    host: &str,
+    path: &str,
+    git_ref: &str,
+) -> Result<Option<crate::project_file::ProjectFile>, CodehubError> {
+    let git_ref = if git_ref.trim().is_empty() {
+        "main"
+    } else {
+        git_ref.trim()
+    };
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "-H",
+            host,
+            "repo",
+            "file",
+            "raw",
+            "-p",
+            path,
+            "--file-path",
+            crate::project_file::PROJECT_FILE_REL_PATH,
+            "--ref",
+            git_ref,
+            "--no-cache",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        let err = stderr_text(&out);
+        let lower = err.to_lowercase();
+        if lower.contains("404") || lower.contains("not found") || lower.contains("does not exist")
+        {
+            return Ok(None);
+        }
+        return Err(CodehubError::Command(err));
+    }
+    let raw = String::from_utf8_lossy(&out.stdout);
+    match crate::project_file::parse(raw.trim()) {
+        Ok(f) => Ok(Some(f)),
+        Err(e) => Err(CodehubError::Parse(e.to_string())),
+    }
+}
+
 /// `codehub-cli -H <host> project list --mine --limit N --json` → 仓列表
 /// (对仗 `gh repo list`)。Read-only,无副作用。解析
 /// `path_with_namespace`/`visibility`/`default_branch`/`last_activity_at`/

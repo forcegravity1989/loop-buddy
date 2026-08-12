@@ -12,7 +12,7 @@
 //! persisted derive cache (`None` ⇒ Unknown), feeds are real records, stage
 //! methodology text is `StageKind`'s own static metadata.
 
-use bw_app::{ActionState, App, Command, Event, Panel, Scope, SettleReq, View};
+use bw_app::{ActionState, App, Command, Event, Panel, RemoteProjectProbe, Scope, SettleReq, View};
 use bw_core::model::{
     AgentRef, Author, CronMode, HubCard, IssueStatus, MaturityPeriod, Readiness, SessionStatus,
     Signal, SkillRef, StageKind, CONNECTOR_KIND_SCRIPT,
@@ -71,6 +71,8 @@ pub struct Vm {
     /// the Repo 卡片's「接入已有仓」refresh button dispatching
     /// `ListCodehubRepos{host}`.
     pub codehub_repos: Vec<CodehubRepoSummary>,
+    /// V2-② Intent UX: remote `.bw/project.toml` probe for「接入已有仓」.
+    pub remote_project_probe: RemoteProjectProbe,
     /// plan/17 S3: the in-flight backgrounded run's (project, issue), or
     /// `None` when nothing's running. The issue board uses this to show a
     /// 「⬇ 终止」 button on exactly the issue whose run is in flight, and to
@@ -946,6 +948,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         cron_effectiveness,
         github_repos: state.github_repos.clone(),
         codehub_repos: state.codehub_repos.clone(),
+        remote_project_probe: state.remote_project_probe.clone(),
         active_run: app.active_run(),
         pty_active: app.pty_active(),
         pty_conversation_id: app.focused_pty_conversation(),
