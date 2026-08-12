@@ -5,7 +5,7 @@
 # SQLite 作只读缓存——库里的值随时能由这份文件重新推导,文件本身才是权威。
 # 改指标定义 = 改这份文件 = 走 PR,和改代码一个审核门槛(plan/13 D5)。
 #
-# 完整格式说明见 docs/metrics-toml-format.md;这份是可以直接复制进
+# 完整格式说明见 docs/buddy/standards/metrics.md;这份是可以直接复制进
 # `<项目工作区>/.bw/metrics.toml` 的完整可用样例。
 
 schema_version = 1

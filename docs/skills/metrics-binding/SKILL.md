@@ -12,17 +12,16 @@ category: 标配
 让能点亮的先点亮,点不亮的如实说明最便宜的下一步是什么,**不是把定义改
 得"看起来能采"**。
 
-> **buddy 契约**(产出格式、`collect_kind` 词表、通用铁律)由衔接层 system
-> prompt(`build_bridge_system_prompt`)唯一持有——本 SKILL 只讲方法论(怎么
-> 诊断和搭采集装置),不重复格式细节。这样换业界 skill 当 prefill 产出仍
-> 对得上契约。
+> **buddy 规范**(产出格式、`collect_kind` 词表、通用铁律)由 `docs/buddy/`
+> 系统提示词与规范目录唯一持有——本 SKILL 只讲方法论(怎么诊断和搭采集
+> 装置),不重复格式细节。这样换业界 skill 当 prefill 产出仍对得上契约。
 
 ## 何时用 / 前置条件
 
 - `<workspace>/.bw/metrics.toml` 已存在。**不存在就不该跑这个 Skill**——
   先补跑找指标(north-star-discovery),那边负责"指标是什么",这里只负
   责"指标怎么采"。
-- 读一遍 `docs/metrics-toml-format.md`,确认对 `collect_kind` 词表、占位
+- 读一遍 `docs/buddy/standards/metrics.md`,确认对 `collect_kind` 词表、占位
   符语法(`{owner}` `{repo}` `@{Nd}`)、以及"改了再同步"的 upsert 语义(按
   `(层级, name)` 身份,改 `collect` 不影响历史观测)没有理解错。
 
@@ -75,15 +74,15 @@ category: 标配
    `manual` 本就允许留空,不强制填)。`name`/`def`/`target` 一律不动——改
    这些是找指标 Skill 的职责边界,越界即违反上面的硬性约束。
 2. **按 `(层级, name)` 原地更新**——不新建重复条目、不改名字(改名字等于
-   在 BW 侧新建一条指标,历史观测会跟丢,见 `docs/metrics-toml-format.md`
+   在 BW 侧新建一条指标,历史观测会跟丢,见 `docs/buddy/standards/metrics.md`
    "同步语义"一节)。
 3. **`kind` 保持在合法词表内**——写出词表外的值会让整份文件解析失败、
    零写入,不是"未知类型忽略"式的容错。词表见衔接层 system prompt +
-   `docs/metrics-toml-format.md`。
+   `docs/buddy/standards/metrics.md`。
 4. **搭装置**(`script` kind 的指标):在交互式会话里和用户一起写采集脚本
    到 `.bw/scripts/<slug>.py`(buddy 自带 instance 包 codehub/github CLI,或
    项目侧 `derive_*.py` 留原位)+ 写连接器清单 `.bw/connectors.toml`(格式
-   见 `docs/connectors-toml-format.md`)+ 给 metric 配 `collect_kind=
+   见 `docs/buddy/standards/connectors.md`)+ 给 metric 配 `collect_kind=
    'script'`+`collect_query=字段路径`(在 `.bw/metrics.toml`)。**PR 合入后
    buddy 感知**:`.bw/connectors.toml` → `connector` 行 upsert;cron 到点
    自动跑 script connector → 取字段 → observation → signal 点亮。agent 不

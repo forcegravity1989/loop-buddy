@@ -178,6 +178,24 @@
   .bullets{margin:8px 0 4px;padding-left:1.15em;font-size:13.5px}
   .bullets li{margin:5px 0}
   .note-line{font-size:13px;color:var(--muted);margin:6px 0 12px;line-height:1.55}
+
+  /* 打印 / ?print=1：全书展开 + 带图；侧栏顶栏隐藏 */
+  @media print{
+    body{display:block;overflow:visible;background:#fff}
+    aside.sidebar, header.topbar{display:none!important}
+    main.main{height:auto;overflow:visible}
+    .content{overflow:visible;padding:24px 28px 40px}
+    .screen{display:block!important;max-width:100%;page-break-after:always;animation:none}
+    .screen:last-child{page-break-after:auto}
+    img{max-width:100%!important;break-inside:avoid}
+    a{border-bottom:none}
+  }
+  body.print-all{display:block;overflow:auto}
+  body.print-all aside.sidebar, body.print-all header.topbar{display:none!important}
+  body.print-all main.main{height:auto;overflow:visible}
+  body.print-all .content{overflow:visible;padding:28px 36px 60px}
+  body.print-all .screen{display:block!important;max-width:880px;margin:0 auto 48px;padding-bottom:36px;border-bottom:1px solid var(--border);animation:none}
+  body.print-all .screen:last-child{border-bottom:none}
 </style>
 </head>
 <body>
@@ -682,7 +700,7 @@
           <tr><td class="k">命令</td><td>本机可执行的解释器（Windows 常需 <code>py</code>）</td><td>默认 <code>python</code> 不在 PATH → spawn 失败</td></tr>
         </tbody>
       </table>
-      <p class="note-line">格式正本 <code>docs/connectors-toml-format.md</code>。错键响亮失败已落地；output / Windows <code>py</code> 仍靠技能与本表约束。</p>
+      <p class="note-line">格式正本 <code>docs/buddy/standards/connectors.md</code>。错键响亮失败已落地；output / Windows <code>py</code> 仍靠技能与本表约束。</p>
 
       <h2 class="sec"><span class="n">六套件</span>一眼扫</h2>
       <table class="ktable">
@@ -715,7 +733,7 @@
         <div class="eh">Example · 删项目重建</div>
         <div class="ed">UI 删项目只清库，不清 <code>workspaces\&lt;名&gt;-*</code> clone（W3-9）。重建前人工清盘，否则会误认成「新建已有目录」。业务指标 / 业务 script 仍要等找指标、绑数据合入后才有。</div>
       </div>
-      <p class="where">落点：schema <code>crates/bw-store/src/schema.sql</code>；纳入播种 <code>crates/bw-app</code>；装置文件格式 <code>docs/connectors-toml-format.md</code>。</p>
+      <p class="where">落点：schema <code>crates/bw-store/src/schema.sql</code>；纳入播种 <code>crates/bw-app</code>；装置文件格式 <code>docs/buddy/standards/connectors.md</code>。</p>
       <div class="foot">采数链细节 → <a href="#" onclick="go('m6');return false">指标与健康</a>；技能注入 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>。</div>
     </section>
 
@@ -1017,9 +1035,9 @@
 
       <div class="ex">
         <div class="eh">Example · 绑数据合入后</div>
-        <div class="ed">MR 合入 → buddy 读 <code>.bw/metrics.toml</code> + <code>.bw/connectors.toml</code> 装表 → 每日 cron（或「立即采集」）跑 <code>.bw/scripts/*.py</code> → <code>observation.raw</code> 有值 → 总览业务卡亮灯。装置目录约定见 <code>docs/connectors-toml-format.md</code>。</div>
+        <div class="ed">MR 合入 → buddy 读 <code>.bw/metrics.toml</code> + <code>.bw/connectors.toml</code> 装表 → 每日 cron（或「立即采集」）跑 <code>.bw/scripts/*.py</code> → <code>observation.raw</code> 有值 → 总览业务卡亮灯。装置目录约定见 <code>docs/buddy/standards/connectors.md</code>。</div>
       </div>
-      <p class="where">落点：格式 <code>docs/metrics-toml-format.md</code>；解析 <code>crates/bw-engine</code>；采集/装表/重算 <code>crates/bw-app</code> + <code>crates/bw-store</code>；总览分层 <code>crates/ui</code> + <code>app-desktop</code>。</p>
+      <p class="where">落点：格式 <code>docs/buddy/standards/metrics.md</code>；解析 <code>crates/bw-engine</code>；采集/装表/重算 <code>crates/bw-app</code> + <code>crates/bw-store</code>；总览分层 <code>crates/ui</code> + <code>app-desktop</code>。</p>
       <div class="foot">W2/W3 主路径已实跑收口；仍开着的缺口：总览手填（P10）、cron/连接器文案（P12/P13）、北极星无 metric 行（W3-1）、终端/会话 UX（P1–P3/P11）等 → 见 LEFTOVERS / 验证台账。连接三层 → <a href="#" onclick="go('m2');return false">Hub 全局库</a>；铁律 → <a href="#" onclick="go('m1');return false">架构与铁律</a>。</div>
     </section>
 
@@ -1059,6 +1077,12 @@
     if(e.key === 'ArrowRight' && idx < screens.length - 1){ show(screens[idx+1].id); }
     else if(e.key === 'ArrowLeft' && idx > 0){ show(screens[idx-1].id); }
   });
+  var params = new URLSearchParams(location.search || '');
+  if(params.get('print') === '1'){
+    document.body.classList.add('print-all');
+    screens.forEach(function(s){ s.classList.add('active'); });
+    return;
+  }
   var saved = null; try{ saved = localStorage.getItem(KEY); }catch(e){}
   if(saved && document.getElementById(saved)){ show(saved); } else { show('u0'); }
 })();

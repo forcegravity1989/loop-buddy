@@ -4021,7 +4021,7 @@ impl App {
     /// ——不采集、不写零值,signal 保持既有(无数据即 Unknown,绝不假绿)。
     /// `gh` 失败:零新观测、如实计入失败(供 ok:false toast),signal 靠既有
     /// 过期降级自然变灰。北极星的采集方案落在 `project` 列(非 metric 行),没有
-    /// 可挂观测的 metric_id,v1 不采(留白见 docs/metrics-toml-format.md)。
+    /// 可挂观测的 metric_id,v1 不采(留白见 docs/buddy/standards/metrics.md)。
     /// `.bw/metrics.toml` 正本 → SQLite 缓存的同步本体。两个入口共用:
     /// `Command::SyncMetricsFile`(手动,active 项目)与 `MergeIssuePr`
     /// (plan/13 D5「merge 后同步进 SQLite 作缓存」——code-review Spec 轴
@@ -10360,17 +10360,17 @@ mod select_session_focus_tests {
         // 后 SelectSession 仍须把 focused_conversation 切回目标卡(与侧栏
         // 首切同一条 run_issue_now);并清掉 issue_detail,避免弹层 state
         // 残留。
-        let db = std::env::temp_dir().join(format!(
-            "bw_select_after_board_{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let db =
+            std::env::temp_dir().join(format!("bw_select_after_board_{}.db", uuid::Uuid::new_v4()));
         let db_s = db.to_string_lossy().to_string();
         let _ = std::fs::remove_file(&db);
         let (mut app, store, pid) = boot_project(&db_s).await;
 
         let issue_a = mk_issue(&mut app, "找指标").await;
         let issue_b = mk_issue(&mut app, "绑数据").await;
-        app.dispatch(Command::OpenProject(pid)).await.expect("reopen");
+        app.dispatch(Command::OpenProject(pid))
+            .await
+            .expect("reopen");
         let (num_a, title_a) = {
             let i = app.state.issues.iter().find(|i| i.id == issue_a).unwrap();
             (i.number, i.title.clone())
@@ -10435,10 +10435,7 @@ mod select_session_focus_tests {
             Some(cid_b),
             "看板点卡必须切到 B 的终端焦点"
         );
-        assert!(
-            app.state.issue_detail.is_some(),
-            "看板点卡仍应打开证据弹层"
-        );
+        assert!(app.state.issue_detail.is_some(), "看板点卡仍应打开证据弹层");
 
         // 再侧栏点回 A —— 用户报「就没用了」的那一步。
         app.dispatch(Command::SelectSession(Some(sess_a)))
@@ -10462,10 +10459,8 @@ mod select_session_focus_tests {
         // 侧栏唤不醒的命令层洞:active_run 仍挂本件但 PTY 已死时,旧逻辑
         // early-return 只 focus 死 id。应收掉 zombie 锁并允许再次走
         // interactive(本测用 mock 无 PTY 路径:清锁后不应再被「同项目忙碌」挡住)。
-        let db = std::env::temp_dir().join(format!(
-            "bw_zombie_active_run_{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let db =
+            std::env::temp_dir().join(format!("bw_zombie_active_run_{}.db", uuid::Uuid::new_v4()));
         let db_s = db.to_string_lossy().to_string();
         let _ = std::fs::remove_file(&db);
         let (mut app, store, pid) = boot_project(&db_s).await;
@@ -10499,12 +10494,7 @@ mod select_session_focus_tests {
             ),
             finalize: crate::FinalizeCtx {
                 spec: bw_core::model::stage_workflow(StageKind::Prototype),
-                proj: app
-                    .store
-                    .get_project(pid)
-                    .await
-                    .unwrap()
-                    .expect("proj"),
+                proj: app.store.get_project(pid).await.unwrap().expect("proj"),
                 p: pid,
                 issue_id: Some(issue),
             },

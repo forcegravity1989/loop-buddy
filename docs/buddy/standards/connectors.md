@@ -1,4 +1,6 @@
-# `.bw/connectors.toml` 格式说明(V1 Issue2 Phase 3 · §3.2)
+# `.bw/connectors.toml` 格式规范
+
+> **30 秒导读**:这是脚本连接器定义文件的唯一格式正本,给「绑数据」Skill 和任何搭采集装置的 Issue 参考。现在作数。从 `docs/connectors-toml-format.md` 迁入 `docs/buddy/standards/connectors.md`,旧路径不留兼容副本。
 
 脚本连接器(script connector)的正本。住在项目 git 工作区根下的
 `.bw/connectors.toml`,和 `.bw/metrics.toml` 一样过 PR 审核门槛;BW 只读
@@ -54,7 +56,7 @@ output = "..."
 `kind` 是固定词表——文件里出现 `"script"` 之外的值,整份文件解析失败(结
 构性错误,不是"未知类型就忽略"式的静默宽容)。`github`/`codehub`/`bw`/
 `connector` 是 `collect_kind` 的 legacy inline arm(见
-`docs/metrics-toml-format.md`),不是 `.bw/connectors.toml` 的 `kind` 词
+`docs/buddy/standards/metrics.md`),不是 `.bw/connectors.toml` 的 `kind` 词
 表——它们正在退休进 `script`(采数/总览窗口收尾)。
 
 ## 同步语义(`sync_connectors_file_for`)

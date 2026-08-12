@@ -465,7 +465,7 @@ fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
                     WorkflowPanel { op, stage: s, run, on_pick_hub }
                 }
             }
-        },
+        }
         (Panel::Routine, None) => rsx! { RoutineAll { op } },
         (Panel::Routine, Some(s)) => rsx! { RoutineStage { s } },
         (Panel::Artifact, _) => rsx! { ArtifactPanel { op } },
@@ -2879,7 +2879,7 @@ fn WorkflowPanel(
                     }
                 }
             }
-        },
+        }
     }
 }
 

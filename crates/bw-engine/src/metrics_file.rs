@@ -7,7 +7,7 @@
 //! read-only, real output, no fabrication.
 //!
 //! Format is documented (with a fully-commented sample) in
-//! `docs/metrics-toml-format.md` — that doc is the Skill contract the 找指标
+//! `docs/buddy/standards/metrics.md` — that doc is the Skill contract the 找指标
 //! Skill (a later ticket) writes against; this module is its parser.
 
 use serde::Deserialize;

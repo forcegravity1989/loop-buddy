@@ -32,7 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. **用词以 `CONTEXT.md` 词表为准**。要新造一个词,先进词表(给出定义和 _Avoid_)再使用;拿不准某个词读者懂不懂,就查词表——词表里没有,多半说明该换成人话。
 4. **代号先登记再使用**。要新开一批任务代号(比如下一批活想编成 X1-X5)之前,先查 `docs/code-schemes.md`:该字母已被占用就换一个,然后把新系列登记进去再用。历史上 P/S/W/R/L/A 六个字母都发生过「同字母、不同批次、含义完全不同」的撞车,根因就是没有登记表。
 5. **每篇新文档开头给 30 秒导读**:这文档是什么、给谁看、现在还作数吗。文档过时后不删,但必须在顶部加横幅注明「历史档案,现状以 XX 为准」——plan/00-05 和 iterations/ 的历史交接记录都已照此标注,新文档过时时照做。
-6. **写作范本**:`docs/metrics-toml-format.md`(零裸代号、术语随用随定义、有真实样例)和 `plan/07-product-proposition.md`(命题正文用人话、工程锚点单独进对照表)。写新文档前先看它们长什么样。
+6. **写作范本**:`docs/buddy/standards/metrics.md`(零裸代号、术语随用随定义、有真实样例)和 `plan/07-product-proposition.md`(命题正文用人话、工程锚点单独进对照表)。写新文档前先看它们长什么样。
 
 ## 改代码的原则:不为向后兼容留旧路径
 

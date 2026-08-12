@@ -39,7 +39,7 @@ category: 标配
 
 2. **来源徽记**。只有 `SourceKind::Manual` 戴「手填」徽——`github`/`script`/
    `codehub` 是机器采集、可独立重派生,给它们戴手填徽是谎报。`collect_kind` 是
-   `bw`/`connector` 的要标「v1 未接」(采集器状态见 `docs/metrics-toml-format.md`)。
+   `bw`/`connector` 的要标「v1 未接」(采集器状态见 `docs/buddy/standards/metrics.md`)。
 3. **数字可独立复核**。每条指标旁边给出**能直接粘进终端跑**的 `sqlite3` 命令,跑
    出来的就是页面上显示的那些点。页面自带自证方式——看的人不必信这段代码,也不必
    信你。

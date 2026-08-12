@@ -10,10 +10,9 @@ category: 标配
 接手时项目已经有(或应当先补齐)一份 `docs/competitive-analysis.md`——竞品分
 析是找指标的输入,不是并行活。
 
-> **buddy 契约**(产出格式、`collect_kind` 词表、通用铁律)由衔接层 system
-> prompt(`build_bridge_system_prompt`)唯一持有——本 SKILL 只讲方法论(怎么
-> 推导出「对的」指标),不重复格式细节。这样换业界 skill 当 prefill 产出仍
-> 对得上契约。
+> **buddy 规范**(产出格式、`collect_kind` 词表、通用铁律)由 `docs/buddy/`
+> 系统提示词与规范目录唯一持有——本 SKILL 只讲方法论(怎么推导出「对的」
+> 指标),不重复格式细节。这样换业界 skill 当 prefill 产出仍对得上契约。
 
 > **方法论来源(2026-08-04,plan/19 拿来主义测评)**:北极星判据打分部分改
 > 编自 amplitude/builder-skills · `north-star-metric`(北极星方法论原创方
@@ -195,9 +194,9 @@ category: 标配
    `manual`。**不为了显得"采得到"而编一个查不出真实数字的 query,也不为了
    显得体面把项目侧自采脚本降级成 `manual`**——后者等于把自动采谎报成人填。
    格式细节(`kind` 词表、`query` 写法、`collect` 内联表语法)见衔接层
-   system prompt + `docs/metrics-toml-format.md`。
+   system prompt + `docs/buddy/standards/metrics.md`。
 7. **落文件**:把三层指标写进工作区 `<workspace>/.bw/metrics.toml`,格式严
-   格遵照衔接层 system prompt 引用的 `docs/metrics-toml-format.md`。
+   格遵照衔接层 system prompt 引用的 `docs/buddy/standards/metrics.md`。
 8. **写推导文档**:`<workspace>/docs/metrics-rationale.md`——人读的推导过
    程,至少包含:输入摘要(竞品分析要点/项目意图)、北极星为什么是这条
    (以及被拒绝的虚荣指标候选是什么、为什么被拒)、滞后/引领指标的因果链

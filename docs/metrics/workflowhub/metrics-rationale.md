@@ -127,7 +127,7 @@ BDFE(这个项目的"用户"是 Builder 本人 + BW 自己):
    查不到出处,且已经 26 天没更新。** 三项叠加 → 不保留。
 2. **「5/5 阶段标准模板已入库,均可浏览 / 导入 / 执行」(现行北极星)**。
    判据 1 落位 **1 分**(供给段:模板被生产出来);更致命的是它**已经满分且不可能
-   再动**——一条永远 5/5 的北极星等于没有北极星,`docs/metrics-toml-format.md`
+   再动**——一条永远 5/5 的北极星等于没有北极星,`docs/buddy/standards/metrics.md`
    意义上它连一个可变的观测都不会再产生。它还夹带了一个**未经验证的断言**:
    「均可浏览 / 导入 / **执行**」——真实读回,这五条模板的 `workflow_run` 数
    **全部为 0**,从 2026-07-10 入库至今一次都没被执行过。「可执行」在这里是
@@ -243,7 +243,7 @@ flowchart TD
 (`workflow_spec` / `workflow_run` / `workflow_version` / `issue`),不经任何外部
 系统,`bw` 是语义上唯一正确的 kind。
 
-**诚实说明:采集器 v1 未接 `bw` 这一类**(见 `docs/metrics-toml-format.md` 的
+**诚实说明:采集器 v1 未接 `bw` 这一类**(见 `docs/buddy/standards/metrics.md` 的
 采集器状态表)。所以这五条落库后会**全部显示 Unknown 灰**,不会假绿。这比现在
 看板上那个 26 天没更新、查不到出处的手填 97 诚实——它们采不到,但每一条都写死了
 可以当场 `sqlite3` 跑出来的口径:
@@ -285,7 +285,7 @@ sqlite3 "$DB" "SELECT substr(error,1,80), COUNT(*) FROM workflow_run
 ```
 
 **埋点缺口**:要把这五条从 Unknown 点亮,缺的不是脚本而是 **`bw` 这一类采集器
-本身**(`docs/metrics-toml-format.md` 记为「v1 未接,留给后续票接 BW 自记账
+本身**(`docs/buddy/standards/metrics.md` 记为「v1 未接,留给后续票接 BW 自记账
 口径」)。上面这几条 SQL 就是它接进来时该实现的口径,已经写成可执行形式,不用
 再猜。
 

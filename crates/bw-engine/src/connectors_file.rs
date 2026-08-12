@@ -6,7 +6,7 @@
 //! caller's job. Same "collector never interprets" idiom as
 //! [`crate::metrics_file`]: read-only, real output, no fabrication.
 //!
-//! Format is documented in `docs/connectors-toml-format.md` — that doc is the
+//! Format is documented in `docs/buddy/standards/connectors.md` — that doc is the
 //! 绑数据 Skill's contract; this module is its parser.
 //!
 //! ## collect_kind context (§0 心智模型)

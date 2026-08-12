@@ -10,7 +10,7 @@
 //!
 //! 只读 `.bw/metrics.toml`、只写 metric 定义行(`origin='file'`)。**不产生任何
 //! 观测、不碰 observation 表、不动 Signal 派生链**——`SyncMetricsFile` 本身就
-//! 只同步定义不产生值(见 `docs/metrics-toml-format.md`「同步语义」),这里没有
+//! 只同步定义不产生值(见 `docs/buddy/standards/metrics.md`「同步语义」),这里没有
 //! 任何额外动作。执行器一律 MockExecutor:本例不跑活,挂它只是为了构造 `App`。
 //!
 //! 用法:
