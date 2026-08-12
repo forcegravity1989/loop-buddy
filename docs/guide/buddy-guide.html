@@ -534,7 +534,7 @@
           <div class="arr">→</div>
           <div class="box"><div class="t">选阶段</div><div class="d">阶段 chip</div></div>
           <div class="arr">→</div>
-          <div class="box"><div class="t">挂技能</div><div class="d">下拉（可空）</div></div>
+          <div class="box"><div class="t">挂技能</div><div class="d">可空<br>不选用默认</div></div>
           <div class="arr">→</div>
           <div class="box"><div class="t">＋创建</div><div class="d">落待办池</div></div>
           <div class="arr">→</div>
@@ -546,7 +546,7 @@
       <div class="ops">
         <div class="li"><div class="n">1</div><div class="t">Issue 看板最上方一行：填<strong>标题</strong>（作用域到选中的阶段）</div></div>
         <div class="li"><div class="n">2</div><div class="t">点 <strong>阶段 chip</strong> 选这件活属于哪个阶段（原型 / 构建 / 优化 / 运营推广 / 运维）</div></div>
-        <div class="li"><div class="n">3</div><div class="t"><strong>关联技能</strong>下拉选一条方法（可空）；选了，开工时会带着这条方法注入给队友</div></div>
+        <div class="li"><div class="n">3</div><div class="t"><strong>关联技能</strong>下拉选一条方法（可空）；不选时开工用本阶段默认方法，选了自己的技能则替换默认（不叠加）</div></div>
         <div class="li"><div class="n">4</div><div class="t">点 <code>＋ 创建 Issue</code>；新卡落在最左「待办池」</div></div>
         <div class="li"><div class="n">5</div><div class="t">在<strong>卡片</strong>上用「指派」下拉选队友——不在创建行绑；一张卡一个队友</div></div>
       </div>
@@ -564,9 +564,9 @@
       <h2 class="sec"><span class="n">你会得到</span></h2>
       <div class="res">
         <ul>
-          <li>一张待办卡，带着阶段和（若选了）技能</li>
+          <li>一张待办卡，带着阶段和技能信息（选了显式技能或用阶段默认）</li>
           <li>点 <code>▶ 跑</code> 即开工：所有 issue ▶跑 都进嵌入终端（每卡一会话），队友在真实工作目录改文件（见下）</li>
-          <li>无技能也跑：issue 标题+描述作首句 prompt，技能正文+蒸馏+目录块并入系统提示词</li>
+          <li>无显式技能也跑：按 issue 所在阶段自动装载默认方法（如构建段用 <code>spec-to-tests</code>）；issue 标题+描述作首句 prompt</li>
         </ul>
       </div>
 
@@ -578,7 +578,7 @@
       <h2 class="sec"><span class="n">▶ 跑 · 嵌终端 · 完成</span></h2>
       <div class="ops">
         <div class="li"><div class="n">1</div><div class="t">卡片点 <code>▶ 跑</code>：队友开工，跳到工作流屏的嵌终端（每卡一会话）</div></div>
-        <div class="li"><div class="n">2</div><div class="t">无技能也能跑：issue 标题+描述驱动；多 agent 在会话内由 claude 用 SubAgent 调度（技能方法论讲清）</div></div>
+        <div class="li"><div class="n">2</div><div class="t">无显式技能也能跑：按阶段自动装载默认方法（含 Claude CLI 协作 SOP）；issue 标题+描述驱动，多 agent 在会话内由 claude 用 SubAgent 调度</div></div>
         <div class="li"><div class="n">3</div><div class="t">活干完<strong>不会自动进「评审中」</strong>——agent 自提 MR 后 buddy 检测到才推评审中；无 MR 的活诚实停在「进行中」，不假装前进</div></div>
         <div class="li"><div class="n">4</div><div class="t">评审通过：点 <strong>→已完成</strong>（「完成」永远由人点）</div></div>
       </div>
@@ -817,37 +817,50 @@
     <section class="screen" id="m4" data-title="技能与 Prompt" data-sec-name="维护指南">
       <div class="eyebrow">维护指南 · 机制 04</div>
       <h1 class="disp">技能与 Prompt</h1>
-      <p class="lede">技能是可换的方法论；衔接层是不可换的 buddy 契约。换技能不能换掉「产出必须落仓内正本 + 守铁律」。</p>
-      <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">找指标</span><span class="s">绑数据</span></div>
+      <p class="lede">两个独立维度：buddy 系统提示词（所有 Issue 必带，不可换）+ Skill（按活选择，可换）。换 Skill 不能换掉「产出必须落仓内正本 + 守铁律」。</p>
+      <div class="stages"><span class="sl">用到此机制的阶段：</span><span class="s">全部</span></div>
 
       <h2 class="sec"><span class="n">注入结构</span>主图</h2>
       <div class="diagram">
-        <div class="cap">外层锁死契约 · 内层换方法论</div>
+        <div class="cap">A 不可换 · C 可换 · D/E 是补充</div>
         <div class="pipe">
-          <div class="box lock"><div class="t">衔接层</div><div class="d">项目上下文<br>+ 契约 + 铁律<br><strong>不可换</strong></div></div>
+          <div class="box lock"><div class="t">A 系统提示词</div><div class="d">身份+铁律<br>+规范索引<br><strong>不可换</strong></div></div>
           <div class="arr">+</div>
-          <div class="box"><div class="t">SKILL.md</div><div class="d">方法论步骤<br><strong>可换</strong></div></div>
+          <div class="box lock"><div class="t">B 项目上下文</div><div class="d">阶段/北极星<br>上一棒<br><strong>动态填</strong></div></div>
+          <div class="arr">+</div>
+          <div class="box"><div class="t">C 主 Skill</div><div class="d">方法论+协作SOP<br><strong>可换</strong></div></div>
+          <div class="arr">+</div>
+          <div class="box"><div class="t">D 蒸馏</div><div class="d">同项目经验<br>补充</div></div>
+          <div class="arr">+</div>
+          <div class="box"><div class="t">E 目录</div><div class="d">按需自读<br>补充</div></div>
           <div class="arr">→</div>
           <div class="box"><div class="t">claude 会话</div><div class="d">嵌终端多轮</div></div>
         </div>
       </div>
       <ul class="bullets">
-        <li><strong>衔接层</strong>：简述/对标/机会/北极星 + 写 <code>.bw/metrics.toml</code> / 装置进 <code>.bw/</code> + Done/settle/Unknown 铁律。</li>
-        <li><strong>技能正文</strong>：只写怎么推导/怎么搭装置；不重复契约。</li>
+        <li><strong>A 系统提示词</strong>：<code>docs/buddy/system-prompt.md</code>——身份、铁律、规范索引。所有 Issue 必带。</li>
+        <li><strong>B 项目上下文</strong>：项目名/意图/阶段/北极星/上一棒——buddy 每次启动从真实数据填。</li>
+        <li><strong>C 主 Skill</strong>：显式选的 > 阶段默认 > 无。显式选 = 替换默认（不叠加）。五阶段各有一份默认方法 + Claude CLI 协作 SOP。</li>
+        <li><strong>D 蒸馏 / E 目录</strong>：补充上下文，不冒充第二份主 Skill，不偷偷替换用户选的主 Skill。</li>
         <li><strong>种 A</strong>：项目仓扫入的技能可见，但<strong>永不注入</strong>（见 Hub）。</li>
         <li><strong>权限</strong>：交互式少询问，但 merge 仍在禁止名单——跳过询问 ≠ 允许人机代 merge。</li>
       </ul>
 
       <h2 class="sec"><span class="n">预制包</span></h2>
       <table class="ktable">
-        <thead><tr><th>技能</th><th>挂在哪张活</th><th>目录</th></tr></thead>
+        <thead><tr><th>技能</th><th>挂在哪</th><th>目录</th></tr></thead>
         <tbody>
-          <tr><td class="k">competitive-analysis</td><td>竞品分析</td><td><code>docs/skills/competitive-analysis/</code></td></tr>
-          <tr><td class="k">north-star-discovery</td><td>找指标</td><td><code>docs/skills/north-star-discovery/</code></td></tr>
-          <tr><td class="k">metrics-binding</td><td>绑数据</td><td><code>docs/skills/metrics-binding/</code></td></tr>
+          <tr><td class="k">evidence-first</td><td>原型段默认</td><td><code>docs/skills/evidence-first/</code></td></tr>
+          <tr><td class="k">spec-to-tests</td><td>构建段默认</td><td><code>docs/skills/spec-to-tests/</code></td></tr>
+          <tr><td class="k">baseline-before-touch</td><td>优化段默认</td><td><code>docs/skills/baseline-before-touch/</code></td></tr>
+          <tr><td class="k">fresh-eyes-funnel</td><td>运营推广段默认</td><td><code>docs/skills/fresh-eyes-funnel/</code></td></tr>
+          <tr><td class="k">breaking-drill</td><td>运维段默认</td><td><code>docs/skills/breaking-drill/</code></td></tr>
+          <tr><td class="k">competitive-analysis</td><td>竞品分析(标配)</td><td><code>docs/skills/competitive-analysis/</code></td></tr>
+          <tr><td class="k">north-star-discovery</td><td>找指标(标配)</td><td><code>docs/skills/north-star-discovery/</code></td></tr>
+          <tr><td class="k">metrics-binding</td><td>绑数据(标配)</td><td><code>docs/skills/metrics-binding/</code></td></tr>
         </tbody>
       </table>
-      <p class="note-line">另有五阶段方法论包（同在 <code>docs/skills/</code>），启动时播种进 Hub。</p>
+      <p class="note-line">五阶段默认 Skill 各带一节「在 Claude CLI 会话里如何协作」:讲清主 Agent 负责什么、哪些环节调独立 SubAgent、交接什么产物、何时回用户确认、失败停哪、完成标准。不绑定固定 Agent 名称,不依赖旧阶段脚本。</p>
 
       <div class="ex">
         <div class="eh">Example · 换技能会怎样</div>
@@ -864,17 +877,18 @@
       </div>
       <p class="where">落点：技能正本 <code>docs/skills/</code>；注入/衔接层 <code>crates/bw-engine</code>（交互式）；Hub 登记 <code>skill</code> 表；蒸馏 <code>crates/bw-app</code>。</p>
 
-      <h2 class="sec"><span class="n">V1 收口</span>issue 终端会话的 prompt 模型</h2>
+      <h2 class="sec"><span class="n">V2-①</span>issue 终端会话的 prompt 模型</h2>
       <ul class="bullets">
         <li><strong>所有 issue ▶跑 都进嵌入终端</strong>（每卡一会话），不再只限找指标/绑数据两技能。</li>
         <li><strong>位置 prompt = issue 标题+描述</strong>（auto-submit 首句用户消息；描述空则只标题）。</li>
-        <li><strong>系统提示词 = bridge prompt + 技能正文 + 蒸馏块 + 目录块</strong>（<code>--append-system-prompt</code>）；无技能也跑，经验复利在 issue 交付侧不静默丢失。</li>
-        <li><strong>bridge prompt 文案两档</strong>：空 slug 显「未关联技能,由你驱动或按用户要求干活;项目上下文与铁律已就位」；非空未知 slug 仍显「你正在执行技能: `<slug>`」（让用户看到 typo 能自查）。</li>
-        <li><strong>多 agent 转 prompt 驱动</strong>：技能方法论讲清 claude 在终端会话内用 SubAgent 调度各 agent（独立上下文）；buddy 不再脚本调度 issue 的 agent——per-agent 战绩记账不适用于 issue 活（PTY 看不见 claude 内部调度）。</li>
-        <li><strong>阶段循环只用于非 issue 命令</strong>：stage playbook / hub workflow / cron 仍用 buddy 脚本调度的阶段循环机器，不在本次收口范围。</li>
-        <li><strong>咨询态 §6.2 prompt</strong>：resume 一个 Done/InReview 活的会话时，在系统提示词追加「这活已由人验收，新交付请另开一件活」；<strong>仅 <code>open_conversation</code>（续聊）路径注入</strong>，交付 resume 不注入。降级 PTY 也不带（下次续聊才注入）——这是行为约定，不是技术只读。</li>
-        <li><strong>默认系统提示词 / 默认 skill</strong>：后续 V1 催熟设计点（留口，不假装已建）。</li>
-        <li><strong>macOS Unix PTY adapter</strong>：未建，留口。V1 交互式 Windows-only；macOS 适配按 <code>issue2-terminal-conversation-refactor.md</code> §8 补 Unix adapter（上层多会话/路由/xterm 不感知平台，已一次做完）。</li>
+        <li><strong>系统提示词 = A system-prompt.md + B 项目上下文 + C 主 Skill + D 蒸馏块 + E 目录块</strong>（<code>--append-system-prompt</code>），用 <code>---</code> 分段。</li>
+        <li><strong>C 主 Skill 选择规则</strong>：显式选的 > 阶段默认 > 无。显式选 = 替换默认（不叠加两份）。无显式选时按 issue 自身阶段取默认 SOP（不随项目交棒改变）。</li>
+        <li><strong>B 项目上下文文案三档</strong>：默认方法显「使用本阶段默认方法: <code>&lt;slug&gt;</code>（用户选了自己的技能时替换此默认）」；显式选显「你正在执行技能: <code>&lt;slug&gt;</code>」；无任何技能显「未关联技能」。</li>
+        <li><strong>五阶段默认 Skill 各带协作 SOP</strong>：讲清 Claude 在会话内何时调独立 SubAgent、各角色交接什么产物、何时回用户确认。buddy 不再脚本调度 issue 的 agent。</li>
+        <li><strong>D 蒸馏排除主 Skill</strong>：effective_skill（显式或默认）被排除出蒸馏候选,不冒充第二份主 Skill。</li>
+        <li><strong>阶段循环只用于非 issue 命令</strong>：stage playbook / hub workflow / cron 仍用 buddy 脚本调度的阶段循环机器。</li>
+        <li><strong>恢复不重灌</strong>（§7.1）：恢复前更新规范运行副本,然后接回原会话；系统提示词、项目上下文、主 Skill 仍是首次启动版本。</li>
+        <li><strong>macOS Unix PTY adapter</strong>：未建，留口。V1 交互式 Windows-only。</li>
       </ul>
       <div class="foot">执行两轨 → <a href="#" onclick="go('m5');return false">执行与证据</a>；终端会话身份 → <a href="#" onclick="go('m1');return false">架构与铁律</a>。</div>
     </section>
