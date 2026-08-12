@@ -237,7 +237,8 @@ Phase B 不是多人专属问题,而是"老项目接入 Buddy,指标不该只有
 
 尚待对齐 / 留 follow-up:
 
-- [ ] 实现切片顺序:A(多人闭环)独立先落 → B(回填,含更新 connectors.md 标准)+ C(V1 Issue 3 折线呈现)配对后行;
+- [~] 实现切片:A(多人闭环)已实现 + commit v1(7a84e45/fc3765a/b7302ca/648ad48),code-review 两轴过、verify headless 读回为证(门禁 6/6、SyncProjectFile 正本→缓存、坏文件不写半份、三件套 gate 早 return);真 E2E(深链渲染/真 PR 自动合入/双 Buddy)defer 用户。B(回填+更新 connectors.md)+ C(V1 Issue 3 折线)配对后行。
+- [ ] 诚实 gap:三件套 gate 负向(有 project.toml → 跳过)无自动化 test,仅代码确认(正向有 verify_c8 覆盖);Windows 本机全量 `cargo test` 会因页面文件耗尽(os 1455)失败,非代码问题,CI 在 Linux 跑全量不受影响;
 - [ ] `.bw/project.toml` 的确切字段集与格式(对仗 `metrics.toml` 的格式文档);
 - [ ] 回填机制选型:按天调脚本 N 次(`--as-of`)vs 一次产 series(§8.2,Phase B 开发前定);
 - [ ] 后来者"对齐到哪一步"的 UI 形态与留痕表;
