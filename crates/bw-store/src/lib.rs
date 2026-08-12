@@ -179,6 +179,22 @@ pub struct ConnectorsFileSyncSummary {
     pub connectors_synced: u32,
 }
 
+/// V2-② Phase A: the whole `.bw/project.toml` file, shaped for one atomic
+/// sync call. Parallel to [`MetricsFileSync`] / [`ConnectorsFileSync`]. The
+/// five intent fields map to the project row's `name`/`kind`/`descr`/
+/// `benchmark`/`opportunity` columns — the cache this upserts is overwritten
+/// by the file's canonical values (the repo is the source of truth). North
+/// star is **not** here (it lives in `.bw/metrics.toml`).
+pub struct ProjectFileSync {
+    pub project_id: ProjectId,
+    pub name: String,
+    pub kind: String,
+    /// Maps to the project row's `descr` column.
+    pub brief: String,
+    pub benchmark: String,
+    pub opportunity: String,
+}
+
 pub struct NewStage {
     pub project_id: ProjectId,
     pub kind: StageKind,
@@ -679,6 +695,12 @@ pub trait Store: Send + Sync {
         &self,
         sync: ConnectorsFileSync,
     ) -> Result<ConnectorsFileSyncSummary>;
+    /// V2-② Phase A: upsert `.bw/project.toml` intent fields into the
+    /// project row (`name`/`kind`/`descr`/`benchmark`/`opportunity`). Parallel
+    /// to [`sync_metrics_file`] — the file is the source of truth, the project
+    /// row is a cache. Never touches signals or calls `recompute_signals`
+    /// (intent fields aren't derived data). One UPDATE, idempotent.
+    async fn sync_project_file(&self, sync: ProjectFileSync) -> Result<()>;
     /// 停用(归档)/恢复一条指标 —— 指标退役的唯一形态,替代物理删除。
     /// `observation` 一个字节不碰(append-only 不可破:硬删 metric 行要么级联
     /// 抹掉真实历史、要么留下孤儿观测)。只翻 `metric.archived` + 盖

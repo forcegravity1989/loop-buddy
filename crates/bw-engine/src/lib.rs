@@ -32,6 +32,7 @@ pub mod github;
 pub mod interactive_cli;
 pub mod metrics_file;
 mod mock;
+pub mod project_file;
 pub mod remote;
 mod terminal_manager;
 mod unsupported_cli;
@@ -53,6 +54,7 @@ pub use metrics_file::{
     CollectKind, CollectPlan, MetricDef, MetricsFile, MetricsFileError, NorthStarDef,
 };
 pub use mock::MockExecutor;
+pub use project_file::{ProjectFile, ProjectFileError};
 pub use terminal_manager::{
     ConversationMeta, TerminalManager, TerminalSession, OUTPUT_BATCH_CAP, OUTPUT_BATCH_MAX_BYTES,
 };

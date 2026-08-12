@@ -14,8 +14,8 @@ use crate::{
     MetricSignal, MetricsFileSync, MetricsFileSyncSummary, NewAgent, NewArtifact, NewConnector,
     NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
     NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals,
-    ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow, StageRow, StageSignal,
-    Store, StoreError, WorkflowEdit,
+    ProjectFileSync, ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow,
+    StageRow, StageSignal, Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -1214,6 +1214,24 @@ impl Store for SqliteStore {
         Ok(ConnectorsFileSyncSummary {
             connectors_synced: sync.connectors.len() as u32,
         })
+    }
+
+    async fn sync_project_file(&self, sync: ProjectFileSync) -> Result<()> {
+        let t = now_unix();
+        sqlx::query(
+            "UPDATE project SET name=?, kind=?, descr=?, benchmark=?, opportunity=?,
+                updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(&sync.name)
+        .bind(&sync.kind)
+        .bind(&sync.brief)
+        .bind(&sync.benchmark)
+        .bind(&sync.opportunity)
+        .bind(t)
+        .bind(pid(sync.project_id))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn set_metric_archived(&self, metric: MetricId, archived: bool) -> Result<()> {
