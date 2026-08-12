@@ -836,11 +836,19 @@ fn IssuesPanel(op: OpVm) -> Element {
                     }
                 }
                 select {
-                    style: "border:1px solid {border};border-radius:7px;padding:7px 9px;font-size:12px;background:#FFF;color:{ink2};max-width:200px;",
-                    title: "关联技能(可空)——选中后该 Issue 开工时会带着这条方法",
+                    style: "border:1px solid {border};border-radius:7px;padding:7px 9px;font-size:12px;background:#FFF;color:{ink2};max-width:240px;",
+                    title: "关联技能(可空)——不选时开工用本阶段默认方法,选了则替换默认",
                     value: "{new_skill}",
                     onchange: move |e| new_skill.set(e.value()),
-                    option { value: "", "不关联技能" }
+                    {
+                        let default_slug = bw_core::playbook::stage_skills(new_stage())
+                            .first()
+                            .map(|s| s.name)
+                            .unwrap_or("");
+                        rsx! {
+                            option { value: "", "不选(用本阶段默认: {default_slug})" }
+                        }
+                    }
                     for s in skill_choices.iter() {
                         option {
                             key: "{s.id:?}",
@@ -1286,6 +1294,21 @@ fn IssueDetailOverlay(
                 }
                 div { style: "font-size:16px;color:{ink};margin:4px 0 2px;", "{d.title}" }
                 div { style: "font-size:12px;color:{ink2};margin-bottom:6px;", "指派:{assignee} · {d.priority_label}" }
+                // V2-①: 显式技能 vs 阶段默认——让用户看懂「默认用什么、选自己的会发生什么」。
+                {
+                    let skill_line = if !d.standard_skill.trim().is_empty() {
+                        format!("技能: {} (用户选择,替换阶段默认)", d.standard_skill)
+                    } else {
+                        let default_slug = bw_core::playbook::stage_skills(d.stage)
+                            .first()
+                            .map(|s| s.name)
+                            .unwrap_or("无");
+                        format!("技能: {} (本阶段默认,不选技能时用此)", default_slug)
+                    };
+                    rsx! {
+                        div { style: "font-size:11.5px;color:{ink3};font-family:{mono};margin-bottom:6px;", "{skill_line}" }
+                    }
+                }
                 // C5 · PR 验收环: 有 PR 号如实展示,验收=人 merge。
                 if d.pr_number != 0 {
                     div { style: "font-size:11.5px;color:{clay};font-family:{mono};margin-bottom:6px;", "PR #{d.pr_number} · 等待人工 merge 验收" }
