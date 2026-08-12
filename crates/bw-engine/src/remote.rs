@@ -85,6 +85,15 @@ impl Remote {
         }
     }
 
+    /// V2-②-I: list open issues on the remote — read-only. Never creates.
+    /// Used to rebuild local issue rows for later-comers / out-of-band opens.
+    pub async fn list_open_issues(&self) -> Result<Vec<github::RemoteOpenIssue>, RemoteError> {
+        match self {
+            Remote::Github(r) => Ok(github::list_open_issues(r).await?),
+            Remote::Codehub { host, path } => Ok(codehub::list_open_issues(host, path).await?),
+        }
+    }
+
     /// `gh api search/issues` total_count (github) / `codehub-cli issue|mr
     /// list --jq length` count (codehub). Read-only. codehub 查询口径见
     /// [`codehub::collect_count`](crate::codehub::collect_count)(P3 最小词汇

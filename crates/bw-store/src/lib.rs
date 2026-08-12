@@ -1066,6 +1066,12 @@ pub trait Store: Send + Sync {
     /// success — a failed/skipped mapping simply never calls it, leaving the
     /// honest `0` default in place.
     async fn set_issue_github_number(&self, id: IssueId, github_number: u32) -> Result<()>;
+    /// V2-②-I: refresh title/desc when re-syncing from the remote正本.
+    /// Does not touch status (local process state stays local).
+    async fn update_issue_content(&self, id: IssueId, title: &str, desc: &str) -> Result<()>;
+    /// V2-②-I: set `standard_skill` when importing/refreshing and the field
+    /// is still empty (never overwrite a non-empty user/trio choice).
+    async fn set_issue_standard_skill_if_empty(&self, id: IssueId, skill: &str) -> Result<()>;
     /// C5 · PR 验收环: record the pull-request number a run's `open_pr` opened
     /// for this Issue. The App layer calls this only after a real `gh pr
     /// create` success — a failed/skipped PR simply never calls it, leaving

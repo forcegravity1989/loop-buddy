@@ -3317,6 +3317,34 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn update_issue_content(&self, id: IssueId, title: &str, desc: &str) -> Result<()> {
+        sqlx::query("UPDATE issue SET title=?, descr=?, updated_at=? WHERE id=?")
+            .bind(title)
+            .bind(desc)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_issue_standard_skill_if_empty(&self, id: IssueId, skill: &str) -> Result<()> {
+        let skill = skill.trim();
+        if skill.is_empty() {
+            return Ok(());
+        }
+        sqlx::query(
+            "UPDATE issue SET standard_skill=?, updated_at=? \
+             WHERE id=? AND (standard_skill IS NULL OR standard_skill='')",
+        )
+        .bind(skill)
+        .bind(now_unix())
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn get_app_meta(&self, key: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT value FROM app_meta WHERE key=?")
             .bind(key)

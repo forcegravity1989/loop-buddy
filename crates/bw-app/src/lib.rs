@@ -380,6 +380,11 @@ pub enum Command {
     /// zero action zero noise, bad file = honest error toast, never triggers
     /// recompute (intent fields aren't derived data).
     SyncProjectFile,
+    /// V2-②-I: list open issues on the project's remote and rebuild/refresh
+    /// local issue rows (Backlog). Never creates remote issues; never writes
+    /// local Done. Same path for creation-flow auto sync and the manual
+    ///「从仓同步 Issue」button.
+    SyncRemoteIssues,
     /// V2-② Intent UX (§6.2): probe remote `.bw/project.toml` *before* clone,
     /// so the Intent card can readonly-prefill later-comers. `provider` =
     /// `"codehub"` | `"github"`; `host` is the codehub alias (ignored for
@@ -4196,6 +4201,151 @@ impl App {
         Ok(())
     }
 
+    /// V2-②-I: exact title → standard trio skill slug. Empty = no default skill.
+    fn trio_skill_for_title(title: &str) -> &'static str {
+        match title.trim() {
+            "竞品分析" => "competitive-analysis",
+            "找指标" => "north-star-discovery",
+            "绑数据" => "metrics-binding",
+            _ => "",
+        }
+    }
+
+    /// V2-②-I: import/refresh local issue rows from remote open issues.
+    ///
+    /// - Never calls remote `create_issue`
+    /// - Never transitions to Done
+    /// - Same `github_number` → refresh title/desc; fill empty skill only
+    /// - New numbers → create local Backlog rows
+    ///
+    /// `announce`: emit ActionProgress Started/Ok/Fail (manual + creation).
+    async fn sync_remote_issues_for(
+        &mut self,
+        p: ProjectId,
+        announce: bool,
+    ) -> Result<(), AppError> {
+        let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+        let path = proj.remote_path.trim();
+        if path.is_empty() {
+            return Ok(());
+        }
+        let action_name = format!("{} · 从仓同步 Issue", proj.name);
+        if announce {
+            self.emit(Event::ActionProgress {
+                name: action_name.clone(),
+                state: ActionState::Started,
+            });
+        }
+        let remote =
+            match bw_engine::remote::Remote::for_project(&proj.provider, &proj.remote_host, path) {
+                Ok(r) => r,
+                Err(e) => {
+                    if announce {
+                        self.emit(Event::ActionProgress {
+                            name: action_name,
+                            state: ActionState::Fail(e.to_string()),
+                        });
+                    }
+                    self.emit(Event::ConnectorSynced {
+                        name: "远端 Issue".into(),
+                        ok: false,
+                        detail: format!("远端配置错,无法读回 Issue:{e}"),
+                    });
+                    return Ok(());
+                }
+            };
+        let opens = match remote.list_open_issues().await {
+            Ok(v) => v,
+            Err(e) => {
+                if announce {
+                    self.emit(Event::ActionProgress {
+                        name: action_name,
+                        state: ActionState::Fail(e.to_string()),
+                    });
+                }
+                self.emit(Event::ConnectorSynced {
+                    name: "远端 Issue".into(),
+                    ok: false,
+                    detail: format!("列出远端 open Issue 失败:{e}"),
+                });
+                return Ok(());
+            }
+        };
+        let (created, refreshed) = self
+            .import_remote_open_issues(p, proj.active_stage, &opens)
+            .await?;
+        self.refresh_issues().await?;
+        self.emit(Event::IssuesChanged);
+        let detail = format!(
+            "新建 {created} · 刷新 {refreshed} · 远端 open {}",
+            opens.len()
+        );
+        if announce {
+            self.emit(Event::ActionProgress {
+                name: action_name,
+                state: ActionState::Ok(detail.clone()),
+            });
+        }
+        self.emit(Event::ConnectorSynced {
+            name: "远端 Issue".into(),
+            ok: true,
+            detail,
+        });
+        Ok(())
+    }
+
+    /// Pure store-side apply for V2-②-I (unit-testable without network).
+    async fn import_remote_open_issues(
+        &mut self,
+        p: ProjectId,
+        stage: StageKind,
+        opens: &[bw_engine::github::RemoteOpenIssue],
+    ) -> Result<(u32, u32), AppError> {
+        let existing = self.store.list_issues(p, None, None).await?;
+        let mut by_number: std::collections::HashMap<u32, IssueId> = existing
+            .into_iter()
+            .filter(|i| i.github_number != 0)
+            .map(|i| (i.github_number, i.id))
+            .collect();
+        let mut created = 0u32;
+        let mut refreshed = 0u32;
+        for remote in opens {
+            if remote.number == 0 {
+                continue;
+            }
+            let skill = Self::trio_skill_for_title(&remote.title);
+            let body = remote.body.trim();
+            if let Some(id) = by_number.get(&remote.number).copied() {
+                self.store
+                    .update_issue_content(id, &remote.title, body)
+                    .await?;
+                self.store
+                    .set_issue_standard_skill_if_empty(id, skill)
+                    .await?;
+                refreshed += 1;
+            } else {
+                let id = IssueId::new();
+                self.store
+                    .create_issue(NewIssue {
+                        id,
+                        project_id: p,
+                        stage,
+                        title: remote.title.clone(),
+                        desc: body.to_string(),
+                        priority: IssuePriority::Medium,
+                        standard_skill: skill.to_string(),
+                    })
+                    .await?;
+                self.store
+                    .set_issue_github_number(id, remote.number)
+                    .await?;
+                by_number.insert(remote.number, id);
+                created += 1;
+            }
+        }
+        Ok((created, refreshed))
+    }
+
     /// V2-② Phase A (§7): existing-repo first-comer path — write
     /// `.bw/project.toml` into the cloned workspace, open a PR on
     /// `bw/project-init`, and Buddy auto-merge it. project.toml is
@@ -7372,6 +7522,14 @@ impl App {
                 // 都失败、软降级回本地 mint 的项目)零标配票:不给建不了
                 // 仓、没有 PR 环可走的项目发一套没处交付的活,如实留白。
                 let first_issue = self.seed_standard_issue_trio(p).await?;
+                // V2-②-I: after trio (first-comer) or skip (later-comer), pull
+                // remote open issues into local Backlog rows. Idempotent on
+                // github_number — first-comer refreshes the trio it just
+                // minted; later-comer rebuilds so the board is runnable.
+                // Soft-fail: sync errors toast, never abort creation.
+                if !proj.remote_path.trim().is_empty() {
+                    let _ = self.sync_remote_issues_for(p, true).await;
+                }
                 // V2-② Phase A (§6.1#4 / §6.2): both first-comer and later-comer
                 // read back metrics/connectors from the repo when a real
                 // workspace exists (mature repo may already have them before
@@ -7844,6 +8002,11 @@ impl App {
             Command::SyncProjectFile => {
                 let p = self.active()?;
                 self.sync_project_file_for(p).await?;
+            }
+
+            Command::SyncRemoteIssues => {
+                let p = self.active()?;
+                self.sync_remote_issues_for(p, true).await?;
             }
 
             Command::CollectMetrics => {
@@ -11375,5 +11538,139 @@ mod history_series_tests {
     fn parse_ymd_rejects_bad() {
         assert!(parse_ymd("nope").is_none());
         assert_eq!(parse_ymd("2026-08-12").unwrap().month(), Month::August);
+    }
+}
+
+/// V2-②-I: remote open → local Backlog; idempotent on github_number.
+#[cfg(test)]
+mod sync_remote_issues_tests {
+    use super::*;
+    use bw_core::model::{IssueStatus, MaturityPeriod};
+    use bw_engine::MockExecutor;
+    use bw_store::SqliteStore;
+
+    async fn boot_project(db: &str) -> (App, Arc<dyn Store>, ProjectId) {
+        let store: Arc<dyn Store> = Arc::new(SqliteStore::open(db).await.expect("open db"));
+        let mut app = App::new(
+            store.clone(),
+            Engine::new(Arc::new(MockExecutor::new())),
+            ClaudeCliConfig::default(),
+        );
+        app.dispatch(Command::Boot).await.expect("boot");
+        let pid = ProjectId::new();
+        app.dispatch(Command::CreateProject {
+            provider: "github".into(),
+            id: pid,
+            name: "sync-remote-issues".into(),
+            kind: "test".into(),
+            desc: "V2-②-I".into(),
+            workspace: None,
+            github: None,
+            codehub: None,
+        })
+        .await
+        .expect("create");
+        app.dispatch(Command::SetCycle {
+            cycle: MaturityPeriod::Explore,
+        })
+        .await
+        .expect("cycle");
+        app.dispatch(Command::CompleteCreation {
+            cadence: Cadence::Weekly,
+            run_first: false,
+        })
+        .await
+        .expect("complete");
+        app.dispatch(Command::OpenProject(pid)).await.expect("open");
+        (app, store, pid)
+    }
+
+    #[test]
+    fn trio_skill_exact_title_only() {
+        assert_eq!(App::trio_skill_for_title("找指标"), "north-star-discovery");
+        assert_eq!(App::trio_skill_for_title(" 绑数据 "), "metrics-binding");
+        assert_eq!(
+            App::trio_skill_for_title("竞品分析"),
+            "competitive-analysis"
+        );
+        assert_eq!(App::trio_skill_for_title("找指标（重做）"), "");
+        assert_eq!(App::trio_skill_for_title("手工活"), "");
+    }
+
+    #[tokio::test]
+    async fn import_creates_backlog_and_is_idempotent() {
+        let db =
+            std::env::temp_dir().join(format!("bw_sync_remote_issues_{}.db", uuid::Uuid::new_v4()));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+
+        let opens = vec![
+            bw_engine::github::RemoteOpenIssue {
+                number: 11,
+                title: "找指标".into(),
+                body: "挂 Skill: north-star-discovery".into(),
+            },
+            bw_engine::github::RemoteOpenIssue {
+                number: 12,
+                title: "网页随手开的".into(),
+                body: "out of band".into(),
+            },
+        ];
+        let (c1, r1) = app
+            .import_remote_open_issues(pid, StageKind::Prototype, &opens)
+            .await
+            .expect("import1");
+        assert_eq!((c1, r1), (2, 0));
+
+        let issues = store.list_issues(pid, None, None).await.expect("list");
+        assert_eq!(issues.len(), 2);
+        let find = |n: u32| issues.iter().find(|i| i.github_number == n).unwrap();
+        let a = find(11);
+        assert_eq!(a.title, "找指标");
+        assert_eq!(a.status, IssueStatus::Backlog);
+        assert_eq!(a.standard_skill, "north-star-discovery");
+        let b = find(12);
+        assert_eq!(b.standard_skill, "");
+        assert_eq!(b.status, IssueStatus::Backlog);
+
+        // Second pass: refresh only, no duplicate rows.
+        let opens2 = vec![bw_engine::github::RemoteOpenIssue {
+            number: 11,
+            title: "找指标".into(),
+            body: "updated body".into(),
+        }];
+        let (c2, r2) = app
+            .import_remote_open_issues(pid, StageKind::Prototype, &opens2)
+            .await
+            .expect("import2");
+        assert_eq!((c2, r2), (0, 1));
+        let again = store.get_issue(a.id).await.expect("get").expect("row");
+        assert_eq!(again.desc, "updated body");
+        assert_eq!(
+            store.list_issues(pid, None, None).await.unwrap().len(),
+            2,
+            "no duplicate local rows"
+        );
+
+        // Empty skill can be filled on refresh; non-empty never overwritten.
+        let id12 = b.id;
+        store
+            .set_issue_standard_skill_if_empty(id12, "should-not-apply-when-we-set-first")
+            .await
+            .unwrap();
+        // Simulate user already having a skill — write via empty-gate twice:
+        // first fill wins.
+        let issues = store.list_issues(pid, None, None).await.unwrap();
+        let b2 = issues.iter().find(|i| i.id == id12).unwrap();
+        assert_eq!(b2.standard_skill, "should-not-apply-when-we-set-first");
+        store
+            .set_issue_standard_skill_if_empty(id12, "north-star-discovery")
+            .await
+            .unwrap();
+        let b3 = store.get_issue(id12).await.unwrap().unwrap();
+        assert_eq!(b3.standard_skill, "should-not-apply-when-we-set-first");
+
+        let _ = std::fs::remove_file(&db);
     }
 }

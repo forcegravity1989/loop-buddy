@@ -124,6 +124,63 @@ pub async fn create_issue(
         .map_err(|_| CodehubError::Parse(format!("无法解析 codehub issue iid:{text:?}")))
 }
 
+/// V2-②-I: `codehub-cli issue list --state opened -l 0` — read-only list of
+/// open issues. Never creates. `-l 0` = 全量(同 [`collect_count`]).
+pub async fn list_open_issues(
+    host: &str,
+    path: &str,
+) -> Result<Vec<crate::github::RemoteOpenIssue>, CodehubError> {
+    let out = tokio::process::Command::new("codehub-cli")
+        .args([
+            "issue",
+            "list",
+            "-p",
+            path,
+            "-H",
+            host,
+            "--state",
+            "opened",
+            "-l",
+            "0",
+            "--jq",
+            r#"[.[] | {number: .iid, title: (.title // ""), body: (.description // "")}]"#,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !out.status.success() {
+        return Err(CodehubError::Command(stderr_text(&out)));
+    }
+    parse_codehub_open_issues(&out.stdout)
+}
+
+#[derive(serde::Deserialize)]
+struct CodehubIssueJson {
+    number: u32,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    body: String,
+}
+
+fn parse_codehub_open_issues(
+    bytes: &[u8],
+) -> Result<Vec<crate::github::RemoteOpenIssue>, CodehubError> {
+    let rows: Vec<CodehubIssueJson> = serde_json::from_slice(bytes)
+        .map_err(|e| CodehubError::Parse(format!("无法解析 codehub issue list JSON:{e}")))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| crate::github::RemoteOpenIssue {
+            number: r.number,
+            title: r.title,
+            body: r.body,
+        })
+        .collect())
+}
+
 /// `codehub-cli mr create` — the codehub parity of [`crate::github::open_pr`]:
 /// stage + commit + push the run's edits on `bw/issue-<n>` (shared
 /// [`crate::workspace::stage_commit_push`]), then open a merge request from

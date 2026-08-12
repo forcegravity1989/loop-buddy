@@ -877,6 +877,20 @@ fn IssuesPanel(op: OpVm) -> Element {
                     },
                     "＋ 创建 Issue"
                 }
+                {
+                    let has_remote = !op.remote_path.trim().is_empty();
+                    let k_sync = k.clone();
+                    rsx! {
+                        if has_remote {
+                            button {
+                                style: "cursor:pointer;border:1px solid {border};border-radius:7px;background:#FFF;color:{ink2};padding:8px 14px;font-size:12px;flex:none;",
+                                title: "从仓平台拉 open Issue 到本地看板(不新建远端;不改本地完成态)",
+                                onclick: move |_| k_sync.send(Command::SyncRemoteIssues),
+                                "↻ 从仓同步 Issue"
+                            }
+                        }
+                    }
+                }
             }
             // P4: evidence overlay — covers the Issue board center only.
             // Must NOT use viewport `fixed;inset:0`: that painted over the

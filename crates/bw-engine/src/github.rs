@@ -359,6 +359,64 @@ pub async fn clone_repo(
     })
 }
 
+/// One open issue on the remote (V2-②-I read-back). `number` is the platform
+/// issue id (`gh` number / codehub `iid`); `body` may be empty.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteOpenIssue {
+    pub number: u32,
+    pub title: String,
+    pub body: String,
+}
+
+/// V2-②-I: `gh issue list --state open --json number,title,body` — read-only.
+/// Never creates. Cap 200 (gh default max per call); enough for Buddy boards.
+pub async fn list_open_issues(owner_repo: &str) -> Result<Vec<RemoteOpenIssue>, GithubError> {
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "issue",
+            "list",
+            "--repo",
+            owner_repo,
+            "--state",
+            "open",
+            "--limit",
+            "200",
+            "--json",
+            "number,title,body",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(spawn_err)?;
+    if !output.status.success() {
+        return Err(GithubError::Command(stderr_text(&output)));
+    }
+    parse_gh_open_issues(&output.stdout)
+}
+
+#[derive(serde::Deserialize)]
+struct GhIssueJson {
+    number: u32,
+    title: String,
+    #[serde(default)]
+    body: String,
+}
+
+fn parse_gh_open_issues(bytes: &[u8]) -> Result<Vec<RemoteOpenIssue>, GithubError> {
+    let rows: Vec<GhIssueJson> = serde_json::from_slice(bytes)
+        .map_err(|e| GithubError::Command(format!("无法解析 gh issue list JSON:{e}")))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| RemoteOpenIssue {
+            number: r.number,
+            title: r.title,
+            body: r.body,
+        })
+        .collect())
+}
+
 /// C4 · issue 身份映射: 经 `gh issue create` 真开一个 GitHub issue,返回
 /// `gh` 铸造的 issue 号(这就是这张 Issue 的跨系统身份)。`gh issue create`
 /// 成功时把新 issue 的 URL 打到 stdout(如
@@ -976,4 +1034,22 @@ pub async fn collect_github_count(
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     text.parse::<u64>()
         .map_err(|_| GithubError::Command(format!("无法解析 gh 计数输出:{text:?}")))
+}
+
+#[cfg(test)]
+mod list_open_issues_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parses_gh_issue_list_json() {
+        let raw = r#"[
+          {"number":3,"title":"find-metrics","body":"skill note"},
+          {"number":7,"title":"manual","body":""}
+        ]"#;
+        let got = parse_gh_open_issues(raw.as_bytes()).expect("parse");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].number, 3);
+        assert_eq!(got[0].title, "find-metrics");
+        assert_eq!(got[1].body, "");
+    }
 }
