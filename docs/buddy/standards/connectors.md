@@ -59,6 +59,44 @@ output = "..."
 `docs/buddy/standards/metrics.md`),不是 `.bw/connectors.toml` 的 `kind` 词
 表——它们正在退休进 `script`(采数/总览窗口收尾)。
 
+## 近 30 天历史(V2-② Phase B)
+
+采集(=「立即采集」/每日 cron / 创建收尾那一次)走**同一条**
+`collect_project_metrics`。能按日取值的脚本,一次产出里带上近 30 天的
+点;buddy 只把**本地还没有的日历天**写成 observation(`ts`=那天),已有天
+不重写。总览卡按周聚合这些点(折线 / vs 上周),不另开回填命令。
+
+### Buddy 自带仓统计(`.bw/collect_stats.sh` → `.bw/collect_stats.py`)
+
+挂远端仓的项目由 Buddy 写入这对文件(创建时 + 每次采集前覆盖刷新),喂
+「开放 Issue 数 / 已合入 MR 数」。输出形如:
+
+```json
+{
+  "open_issues": 3,
+  "merged_mrs": 6,
+  "history": {
+    "open_issues": [{"ts": "2026-07-14", "v": 2}, {"ts": "2026-07-15", "v": 2}],
+    "merged_mrs": [{"ts": "2026-07-14", "v": 1}, {"ts": "2026-07-15", "v": 1}]
+  }
+}
+```
+
+- 顶层标量 = 当天,兼容只读当日字段的旧路径。
+- `history.<字段>` = 含今天在内的近 30 个日历天;`open_issues` 按
+  `created_at`/`closed_at` 还原「那天仍开放」;`merged_mrs` 按 `merged_at`
+  累计。
+- 这是 **Buddy 仓指标**,不是项目业务指标;业务脚本仍由绑数据 Skill 写。
+
+### 项目业务脚本(第三方)
+
+- **只产当日标量**(无 `history`):诚实单点——总览「vs 上周」为「—」、折线
+  可能只有一点。不假装历史。
+- **要近 30 天**:在输出 JSON 里加 `history.<collect_query 字段>` 数组,元素
+  `{"ts":"YYYY-MM-DD","v":…}`。buddy 认这个形状就补缺测天;不必改
+  `ConnectorDef` 字段。
+- `manual` 指标不采集、不补历史。
+
 ## 同步语义(`sync_connectors_file_for`)
 
 - **merge 后自动**:`MergeIssuePr`(bw-app)merge PR 后,工作区收拢回默认

@@ -27,7 +27,7 @@ use dioxus::document;
 use dioxus::prelude::*;
 use std::time::Duration;
 use ui::vm::{IssueVm, MetricVm, SessionCardVm, VersionLogVm};
-use ui::{sparkline_path, SparkPath, WowDir};
+use ui::{sparkline_path, trend_chart, SparkPath, TrendChart, WowDir};
 
 /// Provider-aware web URL for a remote issue. codehub →
 /// `https://{domain}/{path}/issues/{iid}`; github → the canonical `github.com`
@@ -2270,6 +2270,116 @@ fn Spark(spark: SparkPath, color: String, w: f32, h: f32) -> Element {
     }
 }
 
+/// Card-sized weekly trend: y ticks, x week labels, value markers on points.
+/// Replaces the tiny sparkline on BizMetricCard (Issue 3 走势可读走势).
+#[component]
+fn WeeklyTrendChart(chart: TrendChart, color: String) -> Element {
+    let ink3 = theme::INK_3;
+    let ink4 = theme::INK_4;
+    let mono = theme::MONO;
+    if chart.points.is_empty() {
+        return rsx! {
+            div {
+                style: "height:120px;display:flex;align-items:center;justify-content:center;font-size:12px;color:{ink4};border:1px dashed #E2DCCF;border-radius:8px;",
+                "尚无观测 · 折线空"
+            }
+        };
+    }
+    let w = chart.width;
+    let h = chart.height;
+    let plot_bottom = chart.plot_top + chart.plot_h;
+    let plot_right = chart.plot_left + chart.plot_w;
+    let grid = "#E8E2D6";
+    rsx! {
+        div {
+            style: "width:100%;",
+            div {
+                style: "display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;",
+                span { style: "font-family:{mono};font-size:11px;color:{ink3};letter-spacing:0.02em;", "按周走势" }
+                span { style: "font-family:{mono};font-size:10px;color:{ink4};", "横轴=日期 · 纵轴=值" }
+            }
+            svg {
+                width: "100%",
+                height: "{h}",
+                view_box: "0 0 {w} {h}",
+                preserve_aspect_ratio: "xMidYMid meet",
+                // Plot frame
+                rect {
+                    x: "{chart.plot_left}",
+                    y: "{chart.plot_top}",
+                    width: "{chart.plot_w}",
+                    height: "{chart.plot_h}",
+                    fill: "#FBF9F4",
+                    stroke: "{grid}",
+                    stroke_width: "1",
+                }
+                // Horizontal grid + y labels
+                for (yi, (y, label)) in chart.y_ticks.iter().cloned().enumerate() {
+                    g {
+                        key: "yg{yi}",
+                        line {
+                            x1: "{chart.plot_left}",
+                            y1: "{y}",
+                            x2: "{plot_right}",
+                            y2: "{y}",
+                            stroke: "{grid}",
+                            stroke_width: "1",
+                            stroke_dasharray: "3 3",
+                        }
+                        text {
+                            x: "{chart.plot_left - 6.0}",
+                            y: "{y + 3.5}",
+                            text_anchor: "end",
+                            style: "font-family:{mono};font-size:10px;fill:{ink3};",
+                            "{label}"
+                        }
+                    }
+                }
+                // Area + line
+                if !chart.area.is_empty() {
+                    path { d: "{chart.area}", fill: "{color}", opacity: "0.12" }
+                }
+                polyline {
+                    points: "{chart.polyline}",
+                    fill: "none",
+                    stroke: "{color}",
+                    stroke_width: "2.2",
+                    stroke_linejoin: "round",
+                    stroke_linecap: "round",
+                }
+                // Points + value labels + x labels
+                for (i, p) in chart.points.iter().cloned().enumerate() {
+                    g {
+                        key: "pt{i}",
+                        circle {
+                            cx: "{p.x}",
+                            cy: "{p.y}",
+                            r: "3.2",
+                            fill: "#FFFDF8",
+                            stroke: "{color}",
+                            stroke_width: "1.8",
+                        }
+                        text {
+                            x: "{p.x}",
+                            y: "{p.y - 8.0}",
+                            text_anchor: "middle",
+                            style: "font-family:{mono};font-size:10px;font-weight:600;fill:{color};",
+                            "{p.value_label}"
+                        }
+                        text {
+                            x: "{p.x}",
+                            y: "{plot_bottom + 14.0}",
+                            text_anchor: "middle",
+                            style: "font-family:{mono};font-size:10px;fill:{ink3};",
+                            "{p.x_label}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Inline "record this week's value" form — the monitoring heartbeat.
 #[component]
 fn RecordInline(metric: MetricVm) -> Element {
@@ -2468,8 +2578,13 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
     };
     let has_obs = m.collection_chain.has_observation;
 
-    // Weekly sparkline geometry from weekly_spark (8-week, carry-forward).
-    let wk_spark = sparkline_path(&m.weekly_spark, 92.0, 24.0);
+    // Weekly trend chart (readable axes + value markers · from observation weeks).
+    // X labels = ISO week-end dates (MM-DD), same bucket as weekly_spark.
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let wk_chart = trend_chart(&m.weekly_spark, 320.0, 128.0, now_unix);
     let spark_color = sig_color.clone();
 
     // Delta: vs 上周 (green↑/red↓/grey—). None when <2 weeks of history.
@@ -2580,12 +2695,8 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
                     span { style: "color:{ink4};", "  无观测" }
                 }
             }
-            // Weekly sparkline (8-week trend · from observation ISO-week buckets)
-            div {
-                style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;",
-                Spark { spark: wk_spark, color: spark_color, w: 92.0, h: 24.0 }
-                span { style: "font-family:{mono};font-size:9.5px;color:{ink3};", "8 周走势" }
-            }
+            // Weekly trend (8-week · observation ISO-week buckets)
+            WeeklyTrendChart { chart: wk_chart, color: spark_color }
             // Collection chain footer (north star card or no-observation cards).
             // Honest: 无数据=Unknown≠绿.
             if show_chain {

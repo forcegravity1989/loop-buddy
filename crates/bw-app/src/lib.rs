@@ -62,7 +62,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
-use time::OffsetDateTime;
+use time::{Date, Month, OffsetDateTime, Time};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
@@ -4279,6 +4279,14 @@ impl App {
         let mut summary = MetricCollectSummary::default();
         let mut touched = false;
 
+        // V2-② Phase B: refresh Buddy-owned `.bw/collect_stats.{sh,py}` so
+        // already-onboarded workspaces pick up the 30-day history emitter
+        // without re-creating the project. Idempotent overwrite of buddy
+        // files only — never touches project business scripts.
+        if !proj.workspace_path.trim().is_empty() && !proj.remote_path.trim().is_empty() {
+            write_buddy_collect_stats(&proj);
+        }
+
         // plan18-③ · 预跑项目的 `script` connector,把脚本产出 JSON 缓存进
         // `script_outputs`,供下面 `script` kind 指标按字段路径取值。一个项目
         // 可有多个 script connector;每个脚本只跑一次(不是每指标跑一次)。
@@ -4434,6 +4442,17 @@ impl App {
             }
         }
 
+        // Days that already have an observation — fill only gaps (append-only,
+        // never rewrite). Shared across the script arm below.
+        let mut days_have: std::collections::HashMap<MetricId, std::collections::HashSet<Date>> =
+            std::collections::HashMap::new();
+        for o in self.store.list_observations(project).await? {
+            days_have
+                .entry(o.metric_id)
+                .or_default()
+                .insert(o.ts.date());
+        }
+
         for m in &sigs.metrics {
             // 停用的指标退出自动采集 —— 不拉数、不记点、也不计入本次采集
             // 回执的任何一个计数(它压根没参与,报进去就是虚的)。
@@ -4452,6 +4471,47 @@ impl App {
                     // 脚本跑失败(已记 failed)→ 这里 deferred,绝不伪造观测。
                     if script_outputs.is_empty() {
                         summary.deferred += 1;
+                        continue;
+                    }
+                    // V2-② Phase B: if any script output carries
+                    // `history.<collect_query> = [{ts,v},…]` (Buddy 仓统计),
+                    // fill missing calendar days in that series. Same collect
+                    // path as「立即采集」/cron — no separate backfill command.
+                    let mut filled_from_history = false;
+                    for out in &script_outputs {
+                        let Some(series) = history_series_for_field(out, &m.collect_query) else {
+                            continue;
+                        };
+                        let have = days_have.entry(m.id).or_default();
+                        for (day, value) in series {
+                            if have.contains(&day) {
+                                if day != today {
+                                    continue;
+                                }
+                                // Today already has a point: only append when
+                                // the value moved (same change-guard as the
+                                // today-only arm). Historical days stay put.
+                                if m.value_raw == value {
+                                    summary.unchanged += 1;
+                                    continue;
+                                }
+                            }
+                            let ts = if day == today {
+                                now()
+                            } else {
+                                date_at_noon_utc(day)
+                            };
+                            self.store
+                                .append_observation(m.id, SourceKind::Script, &value, ts)
+                                .await?;
+                            have.insert(day);
+                            summary.changed += 1;
+                            touched = true;
+                        }
+                        filled_from_history = true;
+                        break;
+                    }
+                    if filled_from_history {
                         continue;
                     }
                     let mut found: Option<String> = None;
@@ -6775,11 +6835,7 @@ impl App {
                     // §0 第 2 层业务脚本)。脚本写进 .bw/collect_stats.sh(相对
                     // 工作区,buddy 自有空间),collect arm 跑脚本 → 读输出 JSON。
                     if !proj.remote_path.trim().is_empty() {
-                        let script = build_collect_script(&proj);
-                        let bw_dir = std::path::Path::new(&proj.workspace_path).join(".bw");
-                        let _ = std::fs::create_dir_all(&bw_dir);
-                        let script_path = bw_dir.join("collect_stats.sh");
-                        let _ = std::fs::write(&script_path, &script);
+                        write_buddy_collect_stats(&proj);
                         let config = serde_json::json!({
                             "script": ".bw/collect_stats.sh",
                             "output": ".bw/collect_stats.json",
@@ -9954,39 +10010,329 @@ async fn provision_workspace(root: &std::path::Path, proj: &ProjectRow) -> Resul
     Ok(dir.to_string_lossy().into_owned())
 }
 
-/// V1 Issue 1 phase2 · Build the buddy-provided collect-stats script for a
-/// remote-backed project. The script runs two provider CLI commands (open
-/// issues + merged MRs/PRs), combines the counts into one JSON object, and
-/// writes it to `.bw/collect_stats.json` (the `ScriptConnectorConfig.output`
-/// the collect arm reads). Provider-split: codehub → `codehub-cli issue/mr
-/// list`; github → `gh api search/issues` (same endpoint the inline github
-/// arm uses, so the numbers match). Errors in either CLI call default to `0`
-/// (`|| echo 0`) — a failed count is honest zero, not a silent skip.
-fn build_collect_script(proj: &ProjectRow) -> String {
+/// V1 Issue 1 phase2 · Buddy-owned repo-stats collector for a remote-backed
+/// project. Writes `.bw/collect_stats.sh` (launcher) + `.bw/collect_stats.py`
+/// (real collector: today scalars + `history` of the last 30 calendar days).
+/// CreateProject and every `collect_project_metrics` call refresh these files
+/// so already-onboarded workspaces pick up Phase B without re-creating.
+fn write_buddy_collect_stats(proj: &ProjectRow) {
+    let root = proj.workspace_path.trim();
+    if root.is_empty() || proj.remote_path.trim().is_empty() {
+        return;
+    }
+    let bw_dir = Path::new(root).join(".bw");
+    let _ = std::fs::create_dir_all(&bw_dir);
+    let _ = std::fs::write(
+        bw_dir.join("collect_stats.py"),
+        build_collect_stats_py(proj),
+    );
+    let _ = std::fs::write(bw_dir.join("collect_stats.sh"), build_collect_stats_sh());
+}
+
+/// Thin sh launcher — collect arm keeps `command: sh` + `.bw/collect_stats.sh`
+/// for存量 connectors; delegates to the Python collector when available.
+fn build_collect_stats_sh() -> String {
+    r#"#!/bin/sh
+# BW 自带采集脚本 — 委托 .bw/collect_stats.py(当日值 + 近 30 天 history)
+# CreateProject / CollectMetrics 会覆盖本文件,勿手改。
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd) || exit 1
+cd "$ROOT" || exit 1
+run_py() {
+  if command -v py >/dev/null 2>&1; then py -3 "$@"
+  elif command -v python3 >/dev/null 2>&1; then python3 "$@"
+  elif command -v python >/dev/null 2>&1; then python "$@"
+  else return 1
+  fi
+}
+run_py .bw/collect_stats.py
+"#
+    .to_string()
+}
+
+/// Python body for Buddy 仓统计. Emits:
+/// ```json
+/// {"open_issues": N, "merged_mrs": M,
+///  "history": {"open_issues":[{"ts":"YYYY-MM-DD","v":n},…],
+///              "merged_mrs":[{"ts":"YYYY-MM-DD","v":m},…]}}
+/// ```
+/// `history` covers today and the previous 29 days (30 points). open_issues
+/// as-of day D = created on/before D and not closed on/before D; merged_mrs
+/// as-of D = merged_at date ≤ D.
+fn build_collect_stats_py(proj: &ProjectRow) -> String {
     match proj.provider.as_str() {
         "codehub" => format!(
-            r#"#!/bin/sh
-# BW 自带采集脚本 — codehub 仓统计 (CreateProject 生成,勿手改)
-HOST="{host}"
-PATH_NS="{path}"
-ISSUES=$(codehub-cli -H "$HOST" issue list -p "$PATH_NS" --state opened -l 0 --jq 'length' 2>/dev/null || echo 0)
-MRS=$(codehub-cli -H "$HOST" mr list -p "$PATH_NS" --state merged -l 0 --jq 'length' 2>/dev/null || echo 0)
-printf '{{"open_issues": %s, "merged_mrs": %s}}' "$ISSUES" "$MRS" > .bw/collect_stats.json
+            r#"#!/usr/bin/env python3
+# BW 自带采集 — codehub 仓统计(当日 + 近 30 天 history)。勿手改;Buddy 会覆盖。
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+HOST = "{host}"
+PATH_NS = "{path}"
+OUT = Path(".bw/collect_stats.json")
+HISTORY_DAYS = 30
+
+
+def run(argv: list[str]) -> str:
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return ""
+    if p.returncode != 0:
+        return ""
+    return (p.stdout or "").strip()
+
+
+def load_json(raw: str):
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(v, list):
+        return v
+    if isinstance(v, dict):
+        for k in ("items", "list", "data", "values"):
+            if isinstance(v.get(k), list):
+                return v[k]
+    return []
+
+
+def parse_dt(s: str | None):
+    if not s:
+        return None
+    s = s.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def as_date(dt: datetime | None) -> date | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone().date()
+    return dt.date()
+
+
+def open_count_as_of(issues, d: date) -> int:
+    n = 0
+    for iss in issues:
+        created = as_date(parse_dt(iss.get("created_at")))
+        if created is None or created > d:
+            continue
+        closed = as_date(parse_dt(iss.get("closed_at")))
+        if closed is not None and closed <= d:
+            continue
+        n += 1
+    return n
+
+
+def merged_count_as_of(mrs, d: date) -> int:
+    n = 0
+    for mr in mrs:
+        merged = as_date(parse_dt(mr.get("merged_at")))
+        if merged is not None and merged <= d:
+            n += 1
+    return n
+
+
+def main() -> int:
+    issues_raw = run([
+        "codehub-cli", "-H", HOST, "issue", "list", "-p", PATH_NS,
+        "--state", "all", "-l", "0", "-f", "json",
+        "--json", "id,state,created_at,closed_at",
+    ])
+    mrs_raw = run([
+        "codehub-cli", "-H", HOST, "mr", "list", "-p", PATH_NS,
+        "--state", "merged", "-l", "0", "-f", "json",
+        "--json", "id,merged_at",
+    ])
+    issues = load_json(issues_raw)
+    mrs = load_json(mrs_raw)
+    today = date.today()
+    hist_oi = []
+    hist_mm = []
+    for i in range(HISTORY_DAYS - 1, -1, -1):
+        d = today - timedelta(days=i)
+        hist_oi.append({{"ts": d.isoformat(), "v": open_count_as_of(issues, d)}})
+        hist_mm.append({{"ts": d.isoformat(), "v": merged_count_as_of(mrs, d)}})
+    out = {{
+        "open_issues": hist_oi[-1]["v"] if hist_oi else 0,
+        "merged_mrs": hist_mm[-1]["v"] if hist_mm else 0,
+        "history": {{"open_issues": hist_oi, "merged_mrs": hist_mm}},
+    }}
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 "#,
             host = proj.remote_host,
             path = proj.remote_path,
         ),
         _ => format!(
-            r#"#!/bin/sh
-# BW 自带采集脚本 — GitHub 仓统计 (CreateProject 生成,勿手改)
-REPO="{path}"
-ISSUES=$(gh api -X GET search/issues -f "q=is:issue is:open repo:$REPO" --jq '.total_count' 2>/dev/null || echo 0)
-PRS=$(gh api -X GET search/issues -f "q=is:pr is:merged repo:$REPO" --jq '.total_count' 2>/dev/null || echo 0)
-printf '{{"open_issues": %s, "merged_mrs": %s}}' "$ISSUES" "$PRS" > .bw/collect_stats.json
+            r#"#!/usr/bin/env python3
+# BW 自带采集 — GitHub 仓统计(当日 + 近 30 天 history)。勿手改;Buddy 会覆盖。
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+REPO = "{path}"
+OUT = Path(".bw/collect_stats.json")
+HISTORY_DAYS = 30
+
+
+def run(argv: list[str]) -> str:
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return ""
+    if p.returncode != 0:
+        return ""
+    return (p.stdout or "").strip()
+
+
+def load_json(raw: str):
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return v if isinstance(v, list) else []
+
+
+def parse_dt(s: str | None):
+    if not s:
+        return None
+    s = s.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def as_date(dt: datetime | None) -> date | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone().date()
+    return dt.date()
+
+
+def open_count_as_of(issues, d: date) -> int:
+    n = 0
+    for iss in issues:
+        created = as_date(parse_dt(iss.get("createdAt")))
+        if created is None or created > d:
+            continue
+        closed = as_date(parse_dt(iss.get("closedAt")))
+        if closed is not None and closed <= d:
+            continue
+        n += 1
+    return n
+
+
+def merged_count_as_of(prs, d: date) -> int:
+    n = 0
+    for pr in prs:
+        merged = as_date(parse_dt(pr.get("mergedAt")))
+        if merged is not None and merged <= d:
+            n += 1
+    return n
+
+
+def main() -> int:
+    issues = load_json(run([
+        "gh", "issue", "list", "--repo", REPO, "--state", "all",
+        "--limit", "1000", "--json", "createdAt,closedAt",
+    ]))
+    prs = load_json(run([
+        "gh", "pr", "list", "--repo", REPO, "--state", "merged",
+        "--limit", "1000", "--json", "mergedAt",
+    ]))
+    today = date.today()
+    hist_oi = []
+    hist_mm = []
+    for i in range(HISTORY_DAYS - 1, -1, -1):
+        d = today - timedelta(days=i)
+        hist_oi.append({{"ts": d.isoformat(), "v": open_count_as_of(issues, d)}})
+        hist_mm.append({{"ts": d.isoformat(), "v": merged_count_as_of(prs, d)}})
+    out = {{
+        "open_issues": hist_oi[-1]["v"] if hist_oi else 0,
+        "merged_mrs": hist_mm[-1]["v"] if hist_mm else 0,
+        "history": {{"open_issues": hist_oi, "merged_mrs": hist_mm}},
+    }}
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 "#,
             path = proj.remote_path,
         ),
     }
+}
+
+/// Parse `history.<field>` from a script output JSON into `(day, value)` pairs.
+/// Missing / malformed history → `None` (caller falls back to today-only).
+fn history_series_for_field(out: &serde_json::Value, field: &str) -> Option<Vec<(Date, String)>> {
+    let field = field.trim();
+    if field.is_empty() {
+        return None;
+    }
+    // Accept `history.open_issues` or top-level history + collect_query `open_issues`.
+    let path = field.strip_prefix("history.").unwrap_or(field);
+    let arr = out.pointer(&format!("/history/{path}"))?.as_array()?;
+    let mut series = Vec::with_capacity(arr.len());
+    for item in arr {
+        let ts = item.get("ts")?.as_str()?;
+        let day = parse_ymd(ts)?;
+        let v = item.get("v")?;
+        let value = match v {
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        series.push((day, value));
+    }
+    if series.is_empty() {
+        None
+    } else {
+        Some(series)
+    }
+}
+
+fn parse_ymd(s: &str) -> Option<Date> {
+    let mut parts = s.trim().split('-');
+    let y: i32 = parts.next()?.parse().ok()?;
+    let m: u8 = parts.next()?.parse().ok()?;
+    let d: u8 = parts.next()?.parse().ok()?;
+    let month = Month::try_from(m).ok()?;
+    Date::from_calendar_date(y, month, d).ok()
+}
+
+fn date_at_noon_utc(day: Date) -> OffsetDateTime {
+    OffsetDateTime::new_utc(day, Time::from_hms(12, 0, 0).expect("valid noon"))
 }
 
 /// PF1-R5c · Windows: app 进程的 PATH 可能缺 Git 的 bin/usr-bin(sh.exe/bash.exe
@@ -10909,5 +11255,41 @@ mod select_session_focus_tests {
             "zombie 锁不得再以「有活正在跑」挡住本件唤醒: {result:?}"
         );
         let _ = std::fs::remove_file(&db);
+    }
+}
+
+#[cfg(test)]
+mod history_series_tests {
+    use super::{history_series_for_field, parse_ymd};
+    use time::Month;
+
+    #[test]
+    fn parses_history_array_for_collect_query_field() {
+        let out = serde_json::json!({
+            "open_issues": 3,
+            "history": {
+                "open_issues": [
+                    {"ts": "2026-07-14", "v": 0},
+                    {"ts": "2026-08-12", "v": 3}
+                ]
+            }
+        });
+        let series = history_series_for_field(&out, "open_issues").expect("series");
+        assert_eq!(series.len(), 2);
+        assert_eq!(series[0].1, "0");
+        assert_eq!(series[1].1, "3");
+        assert_eq!(series[0].0, parse_ymd("2026-07-14").expect("day"));
+    }
+
+    #[test]
+    fn missing_history_is_none() {
+        let out = serde_json::json!({"open_issues": 3});
+        assert!(history_series_for_field(&out, "open_issues").is_none());
+    }
+
+    #[test]
+    fn parse_ymd_rejects_bad() {
+        assert!(parse_ymd("nope").is_none());
+        assert_eq!(parse_ymd("2026-08-12").unwrap().month(), Month::August);
     }
 }

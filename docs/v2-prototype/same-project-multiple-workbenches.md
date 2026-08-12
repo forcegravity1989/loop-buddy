@@ -1,6 +1,6 @@
 # 同一项目可被多台 Buddy 分别纳管
 
-> **30 秒导读**:本文设计 V2 的第二项能力,给后续原型、开发与验收使用。**现在作数**:产品边界、信息归属、首到者/后来者纳管流程均已对齐;**Phase A(多人闭环)已实现**(`7a84e45`..`648ad48`,未 push);Phase B(回填)+ C(总览折线)设计已定、未开发。它不是团队协作设计;真正的多人协作与 Buddy 重构由另一个项目推导,本轮不提前实现。
+> **30 秒导读**:本文设计 V2 的第二项能力,给后续原型、开发与验收使用。**现在作数**:产品边界、信息归属、首到者/后来者纳管流程均已对齐;**Phase A(多人闭环)已实现**(`7a84e45`..`648ad48`,未 push);**Phase B(近 30 天历史观测)已实现**(与 Issue 3 折线配对:横轴为周结束日 MM-DD);它不是团队协作设计;真正的多人协作与 Buddy 重构由另一个项目推导,本轮不提前实现。
 >
 > 初始意向见 [`roadmap.md`](roadmap.md) §2.2;产品命题见 [`../../plan/07-product-proposition.md`](../../plan/07-product-proposition.md);V2-①(调度逻辑简化)的设计见 [`issue-dispatch-prompt-skill.md`](issue-dispatch-prompt-skill.md)——两篇接口点见 §2.4。领域词以 [`../../CONTEXT.md`](../../CONTEXT.md) 为准。
 
@@ -193,28 +193,30 @@ V2-① 已在 v1 分支实现(未 push),把 issue 执行上下文拆成两个独
 
 ---
 
-## 8. 回填采集设计(Phase B · 与 V1 Issue 3 配对)
+## 8. 近 30 天历史观测(Phase B · 与 V1 Issue 3 配对)
 
-Phase B 不是多人专属问题,而是"老项目接入 Buddy,指标不该只有一点或空"——单人接入成熟仓同样要。已对齐用户口径:近 30 天(≈4 周)历史,当前值 + 上周增量 + 4 周折线,每周一看进展。
+Phase B 不是多人专属问题,而是"老项目接入 Buddy,指标不该只有一点或空"——单人接入成熟仓同样要。已对齐用户口径:**采集本身就带近 30 天**;总览呈现粒度是周(约 4 周折线 + vs 上周)。不另开「回填策略」分支。
 
-**8.1 触发与范围**
-- 接入时(首到者 on 成熟仓 + 后来者)跑一次回填;之后日常 `CollectMetrics` cron 继续追加当日观测(已有机制,`lib.rs:5171`)。
-- 回填范围:近 30 天,每天一个观测点 → 聚成 4-5 个周点画折线。
+**8.1 触发与范围(已实现)**
+- **同一条** `collect_project_metrics`:创建收尾那一次、「立即采集」、每日 `CollectMetrics` cron 都走它。
+- 脚本若产出 `history.<字段>`(近 30 个日历天),buddy 只把本地还没有的天写成 observation;已有天不重写;今天值变了才再追加。
+- 存量项目不必重接——再点一次「立即采集」即可补齐缺测天。
+- 呈现:既有 Issue 3 VM 按周聚合(`weekly_spark` / `weekly_delta`)。
 
-**8.2 按 collect_kind 分流(诚实)**
-- `script`:今天 `ConnectorDef`(`bw-engine/src/connectors_file.rs:53`)只有 `name/kind/script/command/output`,**没有日期参数**。回填需脚本支持按天取值——要么 `ConnectorDef` 加可选日期 arg(如 `--as-of <date>`),要么脚本一次产出 series。**脚本不支持日期 → 不回填,诚实留单点/Unknown**(不假装历史)。**这个约定写进 `docs/buddy/standards/connectors.md`(绑数据 skill 的契约,W1 那套标准手册)**——这样写脚本的 agent/人通过系统提示词的渐进加载就能知道"支持 `--as-of` 就能被回填";不支持就诚实留单点。V2-② 更新这个 W1 标准 doc(它是活的标准,不是冻结交付)。
-- `github`:查询串已带 `@{Nd}` 日期占位符,回填 = 按周跑不同日期窗的同一查询。
-- `manual`:不回填(人填的没有历史可捞)。
+**8.2 按 collect_kind 分流(诚实 · 选型已钉死)**
+- **选型**:脚本一次产出 `history` series(含今天),不是按天 N 次 `--as-of`。契约写在 `docs/buddy/standards/connectors.md`。
+- `script` / Buddy 仓统计:`.bw/collect_stats.py`(由 `.bw/collect_stats.sh` 委托)一次拉源,写当日标量 + `history`。采集前 Buddy 覆盖刷新这对文件,存量工作区自动升级。
+- `script` / 业务脚本:无 `history` → 诚实单点;有 `history.<collect_query>` → 补缺测天。
+- `github`/`codehub`/… legacy inline arm:代码里已 deferred,不复活;`@{Nd}` 路径不作本轮实现。
+- `manual`:不采集、不补历史。
 
 **8.3 写回与 DB 定位**
-- 每个回填点 = 一条 observation(append-only,`ts` = 那天)。observation 表本来就支持任意 ts,不改 schema。
-- **DB 是缓存,不是正本**——每个 Buddy 独立从源(script/github)采集回填,不共享 DB;"B 的库里有 A 的指标"这个担心因此消解:B 不读 A 的库,B 自己从同一个源捞。
-- 不走"DB 不管、每次现取"那条路:script 采集有副作用且慢,observation append-only 还负载着手填指标与审计追溯,不能废。
+- 每个历史点 = 一条 observation(append-only,`ts` = 那天中午 UTC)。不改 schema。
+- **DB 是缓存,不是正本**——每个 Buddy 独立从源采集,不共享 DB。
 
-**8.4 V1 Issue 3(总览折线)纳入本窗口**
-- V1 产品化时总览界面难看,根因正是 Issue 3(总览重构)**设计了但没开发**。用户拍板:把 Issue 3 并进本窗口——它与 Phase B 是一对:Phase B 填历史观测、Issue 3 画折线,两边一起落,折线才有数据。
-- Issue 3 的设计事实源 `docs/v1-prototype/issue3-overview-refactor.md`(高保真 mockup 已对齐,scope delta/提 issue 都完成,只差开发):业务指标卡 = `当前值+目标+灯 → delta 上周 → 按周折线从 observation 聚周`。本窗口按该设计照做,不重设计。
-- Issue 3 守它的窗口边界(见该文 §3):不动 `collect_kind` 枚举收口、不动绑数据 skill 正规化(那些归 W2 Phase3);只动总览 UI(`op.rs`/`wall.rs`/`ui/vm.rs`)+ VM 数据契约(聚周折线/delta)。
+**8.4 V1 Issue 3(总览折线)**
+- Issue 3 UI/VM **已先落地**;本 Phase B 补 observation,折线才有数据。不重做总览大改版。
+- 边界不变:不动 `collect_kind` 枚举收口、不动绑数据 skill 正规化。
 
 ---
 
@@ -239,10 +241,10 @@ Phase B 不是多人专属问题,而是"老项目接入 Buddy,指标不该只有
 
 尚待对齐 / 留 follow-up:
 
-- [~] 实现切片:A(多人闭环)已实现 + commit v1(7a84e45/fc3765a/b7302ca/648ad48)+ code-review 硬修(物化半写回滚、project-init 后收拢默认分支、首到者亦三连读回、resume/空默认 Skill toast);headless verify 以本轮门禁+读回为准;真 E2E(深链渲染/真 PR 自动合入/双 Buddy·cowelink)defer 用户。B(回填+更新 connectors.md)+ C(V1 Issue 3 折线)配对后行。
+- [~] 实现切片:A(多人闭环)已实现 + commit v1(7a84e45/fc3765a/b7302ca/648ad48)+ code-review 硬修;B(近 30 天 history 观测 + `connectors.md`)+ C(总览折线,横轴=周结束日 MM-DD)已落地本窗口。真 E2E(重启 Buddy → 立即采集 → sqlite 读回点数 / 总览 delta)defer 用户。
 - [ ] 诚实 gap:三件套 gate 负向(有 project.toml → 跳过)无自动化 test,仅代码确认(正向有 verify_c8 覆盖);Windows 本机全量 `cargo test` 会因页面文件耗尽(os 1455)失败,非代码问题,CI 在 Linux 跑全量不受影响;
 - [ ] `.bw/project.toml` 的确切字段集与格式(对仗 `metrics.toml` 的格式文档);
-- [ ] 回填机制选型:按天调脚本 N 次(`--as-of`)vs 一次产 series(§8.2,Phase B 开发前定);
+- [x] 回填机制选型:一次产 `history` series(§8.2);Buddy 仓统计走 `.bw/collect_stats.py`;无 history 的业务脚本诚实单点;
 - [ ] 后来者"对齐到哪一步"的 UI 形态与留痕表;
 - [ ] 仓平台 Issue 列表只读视图(本轮不实现,留 follow-up);
 - [ ] 项目自有技能/队友/工作流的仓内正本(本轮不建,留 follow-up);
