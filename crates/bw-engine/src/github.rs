@@ -272,13 +272,15 @@ pub async fn push_current_branch(workspace: &Path, branch: &str) -> Result<(), G
 
 /// merge 后把本地工作区收拢回默认分支(plan/13 D5:merge 后同步指标正本
 /// 需要读到 merge 进主干的 `.bw/metrics.toml`,而 run 结束后工作区还停在
-/// `bw/issue-N` 活分支上)。fetch → 解析 origin/HEAD(拿不到就依次试
-/// main/master)→ checkout → `pull --ff-only`。只 ff,绝不在这里制造
-/// merge commit——工作区的主干只由远端事实前进。
+/// `bw/issue-N` 活分支上)。fetch(尽力) → 解析 origin/HEAD(拿不到就依次试
+/// main/master)→ checkout → `pull --ff-only`(尽力)。只 ff,绝不在这里制造
+/// merge commit。fetch/pull 失败仍算成功——只要本地已回到默认分支,后续
+/// issue worktree 就不会从 `bw/project-init` 开出;远端尚未拉齐时由下次
+/// sync / 用户网络恢复补上。
 pub async fn sync_default_branch(dir: &Path) -> Result<(), GithubError> {
-    git_in(dir, &["fetch", "origin"])
-        .await
-        .map_err(|e| GithubError::Command(format!("fetch 失败:{e}")))?;
+    // Best-effort: no origin / offline must not leave callers stuck on a
+    // config branch. Checkout of a local default branch is the hard requirement.
+    let _ = git_in(dir, &["fetch", "origin"]).await;
     let head = tokio::process::Command::new("git")
         .current_dir(dir)
         .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
@@ -303,9 +305,7 @@ pub async fn sync_default_branch(dir: &Path) -> Result<(), GithubError> {
     for b in &candidates {
         match git_in(dir, &["checkout", b]).await {
             Ok(()) => {
-                git_in(dir, &["pull", "--ff-only", "origin", b])
-                    .await
-                    .map_err(|e| GithubError::Command(format!("pull {b} 失败:{e}")))?;
+                let _ = git_in(dir, &["pull", "--ff-only", "origin", b]).await;
                 return Ok(());
             }
             Err(e) => last_err = e.to_string(),

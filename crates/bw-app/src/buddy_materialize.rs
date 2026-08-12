@@ -198,3 +198,58 @@ async fn write_atomic(target: &Path, content: &str) -> std::io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn init_git(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        assert!(Command::new("git")
+            .args(["init"])
+            .current_dir(dir)
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    #[tokio::test]
+    async fn materialize_writes_marker_and_is_idempotent() {
+        let root = std::env::temp_dir().join(format!(
+            "bw-mat-ok-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        init_git(&root);
+        let r1 = materialize_standards(&root).await.expect("first");
+        assert!(!r1.unchanged && r1.written > 0);
+        assert!(root.join(".claude/buddy/.bw-managed").exists());
+        let r2 = materialize_standards(&root).await.expect("second");
+        assert!(r2.unchanged && r2.written == 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn foreign_directory_without_marker_is_refused_not_deleted() {
+        let root = std::env::temp_dir().join(format!(
+            "bw-mat-foreign-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        init_git(&root);
+        let buddy = root.join(".claude/buddy/standards");
+        std::fs::create_dir_all(&buddy).unwrap();
+        std::fs::write(buddy.join("user.md"), "mine").unwrap();
+        let err = materialize_standards(&root)
+            .await
+            .expect_err("foreign must fail");
+        assert!(matches!(err, StandardsMaterializeError::ForeignDirectory));
+        assert!(buddy.join("user.md").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
