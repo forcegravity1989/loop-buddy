@@ -319,19 +319,14 @@
         <img src="img/u2-step1-wall.png" alt="项目墙 · 点新建项目" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
         <div class="li"><div class="n">2</div><div class="t">「仓从哪来」：选平台（<code>codehub</code>/<code>github</code>）；起点选「新建仓」或「接入已有仓」；<code>codehub</code> 选区域（绿区/内源/黄区）；接入已有点「↻ 刷新列表」后从下拉选</div></div>
         <img src="img/u2-step2-repo.png" alt="仓从哪来 · 平台与起点" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
-        <div class="li"><div class="n">3</div><div class="t">「你想做什么」：项目名称（必填）+ 一句话意图 / 对标谁 / 三个月后怎样算成了（均可空）。<strong>现状</strong>：这张意图卡创建时仍空白可改；是否后来者要等点「确认」并 clone 之后才判定——确认后以仓里 <code>.bw/project.toml</code> 为准<strong>读回覆盖</strong>本地意图（与代码一致；设计希望后来者跳过或只读预填，尚未落地）</div></div>
+        <div class="li"><div class="n">3</div><div class="t">「你想做什么」：项目名称（必填）+ 一句话意图 / 对标谁 / 三个月后怎样算成了（均可空）。<strong>后来者</strong>（选仓后探测到远端已有 <code>.bw/project.toml</code>）：意图区<strong>只读预填</strong>正本字段，不必重填；<strong>首到者</strong>仍手填，确认后写入正本</div></div>
         <img src="img/u2-step3-intent.png" alt="命名 · 意图 · 确认建立" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
         <div class="li"><div class="n">4</div><div class="t">点「确认 · 建立项目」——一个按钮，背后连发整链；进度见上方条，完成后进项目</div></div>
       </div>
       <div class="callout">
         <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
-        <div class="body"><strong>判据</strong>：仓里有 <code>.bw/project.toml</code> = 后来者（读回正本、不建三件套）；没有 = 首到者（写正本、建三件套）。下拉只列出你当前登录能看到的项目。</div>
+        <div class="body"><strong>判据</strong>：仓里有 <code>.bw/project.toml</code> = 后来者（读回正本、不建三件套；选仓后意图只读预填）；没有 = 首到者（手填意图、写正本、建三件套）。下拉只列出你当前登录能看到的项目。</div>
       </div>
-      <div class="callout note">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
-        <div class="body"><strong>已知缺口 · 意图卡</strong>：后来者创建时意图区仍空白可编辑；读回发生在确认+clone 之后。设计要「跳过或只读预填」，未修——别把现状当成已跳过。</div>
-      </div>
-
       <h2 class="sec"><span class="n">背后</span>确认建立后系统执行了什么</h2>
       <div class="res">
         <div class="h">对远端代码仓（GitHub/CodeHub）</div>
@@ -373,7 +368,7 @@
       <p>起手三件套里的①「竞品分析」需要联网抓取对标产品的公开页面。当前本机 claude 环境暂不支持这类抓取——点了会失败。联网能力就绪后再开跑；现阶段先留着这张活，其余两件套可正常跑通。</p>
 
       <p class="linker">想看「连接器 / 定时器 / 三件套 / 正本读回」怎么设计的 → <a href="#" onclick="go('m2');return false">Hub 全局库</a> + <a href="#" onclick="go('m3');return false">Issue 与调度</a>。</p>
-      <div class="foot">事实源：V2-② Phase A + <strong>V2-②-I</strong>（仓平台 open Issue 单向读回）——首到：PR 合入 project.toml、本地 3 起手 Issue；后来者删后再接入：不重开远端三件套、不重推正本、读回 open Issue 到本地待办池。Intent 预填缺口见上。设计：<code>docs/v2-prototype/same-project-multiple-workbenches.md</code>。</div>
+      <div class="foot">事实源：V2-② Phase A + <strong>V2-②-I</strong>（仓平台 open Issue 单向读回）——首到：PR 合入 project.toml、本地 3 起手 Issue；后来者删后再接入：不重开远端三件套、不重推正本、读回 open Issue 到本地待办池。IntentUX（选仓后只读预填）已落地。设计：<code>docs/v2-prototype/same-project-multiple-workbenches.md</code>。</div>
     </section>
 
     <!-- ============ U3 找指标 ============ -->
@@ -403,6 +398,10 @@
         <div class="li"><div class="n">2</div><div class="t">工作流屏出现黑底嵌终端——技能已备好，直接打字聊</div></div>
         <img src="img/u3-run-issue.png" alt="找指标 · 嵌终端会话" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
         <p class="note-line">上图：找指标跑起来后，工作流屏嵌终端可多轮对话。</p>
+        <div class="callout">
+          <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+          <div class="body"><strong>嵌终端里自动出现的第一段字 ≠ buddy 系统提示词，也不等于 Skill 全文。</strong>那只是这张活的<strong>标题 + 描述</strong>（首条任务）。buddy 铁律、规范索引、以及挂上的方法（如 <code>north-star-discovery</code>）已在后台注入，聊天记录里通常<strong>看不见</strong>。想确认：直接问模型「有没有 buddy 铁律？主 Skill 是什么？」——能答出合并须人点、<code>north-star-discovery</code> 等即生效。机制 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a>。</div>
+        </div>
         <div class="li"><div class="n">3</div><div class="t">聊到你认可：北极星、引领/滞后；每条打算<strong>自动采</strong>还是<strong>以后手填</strong></div></div>
         <div class="li"><div class="n">4</div><div class="t">让模型把计划写进仓（<code>.bw/metrics.toml</code> 等）并自提合并请求——它合不了，只能你合</div></div>
         <div class="li"><div class="n">5</div><div class="t">卡变成「评审中」后：在 buddy 点 <strong>⬇ merge PR</strong>（合入并验收完成）；只有你已在网页合过时，才点 <strong>→已完成</strong></div></div>
@@ -433,8 +432,8 @@
         <div class="ed">同项目<strong>交付</strong>同时只一件（串行排队）。已完成 / 评审中可<strong>续聊</strong>（咨询），各卡各有会话、各自显示。弹窗里的「运行史」常常是空的——以嵌终端画面为准。若切卡时画面串台，属已知缺口，别当成正常能力。</div>
       </div>
 
-      <p class="linker">想了解背后怎么跑、怎么记账 → <a href="#" onclick="go('m5');return false">执行与证据</a> · <a href="#" onclick="go('m6');return false">指标与健康</a></p>
-      <div class="foot">事实源：cowelink 实跑 2026-08-06；2026-08-07 重跑（merge＝完成、续聊 resume）。</div>
+      <p class="linker">想了解背后怎么跑、怎么记账 → <a href="#" onclick="go('m5');return false">执行与证据</a> · <a href="#" onclick="go('m6');return false">指标与健康</a> · 提示词/Skill 为何看不见 → <a href="#" onclick="go('m4');return false">技能与 Prompt</a></p>
+      <div class="foot">事实源：cowelink 实跑 2026-08-06；2026-08-07 重跑（merge＝完成、续聊 resume）；2026-08-12 V2-① 找指标：会话内确认 buddy 系统提示词 + <code>north-star-discovery</code> 已注入（终端首段仅标题+描述属预期）。</div>
     </section>
 
     <!-- ============ U4 绑数据 ============ -->
@@ -590,7 +589,7 @@
       <h2 class="sec"><span class="n">▶ 跑 · 嵌终端 · 完成</span></h2>
       <div class="ops">
         <div class="li"><div class="n">1</div><div class="t">卡片点 <code>▶ 跑</code>：队友开工，跳到工作流屏的嵌终端（每卡一会话）</div></div>
-        <div class="li"><div class="n">2</div><div class="t">无显式技能也能跑：按阶段自动装载默认方法（含 Claude CLI 协作 SOP）；issue 标题+描述驱动，多 agent 在会话内由 claude 用 SubAgent 调度</div></div>
+        <div class="li"><div class="n">2</div><div class="t">终端里<strong>自动出现的第一段</strong>只是 issue 标题+描述。buddy 系统提示词与主 Skill 在后台注入，聊天区通常看不见——不确定就问模型「铁律 / 主 Skill 是什么」。无显式技能时按阶段装默认方法；多 agent 由会话内 SubAgent 调度</div></div>
         <div class="li"><div class="n">3</div><div class="t">活干完<strong>不会自动进「评审中」</strong>——agent 自提 MR 后 buddy 检测到才推评审中；无 MR 的活诚实停在「进行中」，不假装前进</div></div>
         <div class="li"><div class="n">4</div><div class="t">评审通过：点 <strong>→已完成</strong>（「完成」永远由人点）</div></div>
       </div>
@@ -895,21 +894,27 @@
       </div>
       <p class="where">落点：技能正本 <code>docs/skills/</code>；注入/衔接层 <code>crates/bw-engine</code>（交互式）；Hub 登记 <code>skill</code> 表；蒸馏 <code>crates/bw-app</code>。</p>
 
+      <h2 class="sec"><span class="n">可见 vs 不可见</span>别把首条任务当成没注入</h2>
+      <div class="callout">
+        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+        <div class="body"><strong>V2-① 已落地（cowelink 找指标实跑确认）</strong>：嵌终端里用户<strong>看得见</strong>的自动首段 = 位置 prompt（issue 标题+描述）。buddy 系统提示词 + 项目上下文 + 主 Skill 全文走 <code>claude --append-system-prompt</code>，属 Claude 的系统侧上下文——<strong>不会</strong>再以用户消息形式打在聊天气泡里。验收方式：会话内追问铁律 / 主 Skill slug；或本机看进程命令行是否带 <code>--append-system-prompt</code>。恢复会话不重灌这层（沿用首次）。</div>
+      </div>
+
       <h2 class="sec"><span class="n">拼装</span>issue 终端会话的 prompt 模型</h2>
       <ul class="bullets">
         <li><strong>所有 issue ▶跑 都进嵌入终端</strong>（每卡一会话），不再只限找指标/绑数据两技能。</li>
-        <li><strong>位置 prompt = issue 标题+描述</strong>（auto-submit 首句用户消息；描述空则只标题）。</li>
-        <li><strong>系统提示词 = A system-prompt.md + B 项目上下文 + C 主 Skill + D 蒸馏块 + E 目录块</strong>（<code>--append-system-prompt</code>），用 <code>---</code> 分段。</li>
+        <li><strong>位置 prompt = issue 标题+描述</strong>（auto-submit 首句用户消息；描述空则只标题）——<strong>唯一默认可见</strong>的那段。</li>
+        <li><strong>系统提示词 = A system-prompt.md + B 项目上下文 + C 主 Skill + D 蒸馏块 + E 目录块</strong>（<code>--append-system-prompt</code>），用 <code>---</code> 分段——对用户<strong>默认不可见</strong>，但对模型已加载。</li>
         <li><strong>C 主 Skill 选择规则</strong>：显式选的 > 阶段默认 > 无。显式选 = 替换默认（不叠加两份）。无显式选时按 issue 自身阶段取默认 SOP（不随项目交棒改变）。</li>
         <li><strong>B 项目上下文文案三档</strong>：默认方法显「使用本阶段默认方法: <code>&lt;slug&gt;</code>（用户选了自己的技能时替换此默认）」；显式选显「你正在执行技能: <code>&lt;slug&gt;</code>」；无任何技能显「未关联技能」。</li>
         <li><strong>五阶段默认 Skill 各带协作 SOP</strong>：讲清 Claude 在会话内何时调独立 SubAgent、各角色交接什么产物、何时回用户确认。buddy 不再脚本调度 issue 的 agent。</li>
         <li><strong>D 蒸馏排除主 Skill</strong>：effective_skill（显式或默认）被排除出蒸馏候选,不冒充第二份主 Skill。</li>
         <li><strong>阶段循环只用于非 issue 命令</strong>：stage playbook / hub workflow / cron 仍用 buddy 脚本调度的阶段循环机器。</li>
         <li><strong>恢复不重灌</strong>（§7.1）：恢复前更新规范运行副本,然后接回原会话；系统提示词、项目上下文、主 Skill 仍是首次启动版本；界面 toast 提示沿用首次上下文。</li>
-        <li><strong>规范物化</strong>：开工前写入工作区 <code>.claude/buddy/standards/</code>，带 <code>.bw-managed</code> 标记，并加入 Git <code>info/exclude</code>（不改用户 <code>.gitignore</code>）。半写失败会清掉不完整目录，避免下次被误判成用户冲突目录。</li>
+        <li><strong>规范物化</strong>：开工前写入工作区 <code>.claude/buddy/standards/metrics.md</code>（及 connectors），带 <code>.bw-managed</code>，并加入 Git <code>info/exclude</code>（不改用户 <code>.gitignore</code>）。路径须与系统提示词索引一致；半写失败会清掉不完整目录。</li>
         <li><strong>macOS Unix PTY adapter</strong>：未建，留口。V1 交互式 Windows-only。</li>
       </ul>
-      <div class="foot">执行两轨 → <a href="#" onclick="go('m5');return false">执行与证据</a>；终端会话身份 → <a href="#" onclick="go('m1');return false">架构与铁律</a>。</div>
+      <div class="foot">事实源：V2-① 设计 <code>docs/v2-prototype/issue-dispatch-prompt-skill.md</code>；cowelink 找指标 2026-08-12 会话内确认系统提示词 + <code>north-star-discovery</code>。执行两轨 → <a href="#" onclick="go('m5');return false">执行与证据</a>；终端会话身份 → <a href="#" onclick="go('m1');return false">架构与铁律</a>。</div>
     </section>
 
     <!-- ============ M5 执行与证据 ============ -->
@@ -1098,7 +1103,7 @@
         <div class="ed">不必重接项目：总览点「↻ 立即采集」即可。仓指标常一次补齐近 30 天缺测点；业务脚本没带 <code>history</code> 仍只有一点——如实，不假装曲线。</div>
       </div>
       <p class="where">落点：格式 <code>docs/buddy/standards/metrics.md</code> / <code>connectors.md</code>；解析 <code>crates/bw-engine</code>；采集/装表/重算 <code>crates/bw-app</code> + <code>crates/bw-store</code>；总览分层 <code>crates/ui</code> + <code>app-desktop</code>。</p>
-      <div class="foot">W2/W3 主路径 + V2-② Phase B（近 30 天 history）已按实践写入；仍开着：cron/连接器文案（P12/P13）、北极星无 metric 行（W3-1）、Intent 后来者预填、终端/会话 UX 等 → 见 LEFTOVERS。连接三层 → <a href="#" onclick="go('m2');return false">Hub 全局库</a>；铁律 → <a href="#" onclick="go('m1');return false">架构与铁律</a>。</div>
+      <div class="foot">W2/W3 主路径 + V2-② Phase B（近 30 天 history）已按实践写入；仍开着：cron/连接器文案（P12/P13）、北极星无 metric 行（W3-1）、终端/会话 UX 等 → 见 LEFTOVERS。连接三层 → <a href="#" onclick="go('m2');return false">Hub 全局库</a>；铁律 → <a href="#" onclick="go('m1');return false">架构与铁律</a>。</div>
     </section>
 
   </div>

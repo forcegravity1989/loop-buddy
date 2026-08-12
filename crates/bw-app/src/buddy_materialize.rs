@@ -74,9 +74,12 @@ pub async fn materialize_standards(
             Ok(existing) if existing.trim() == fingerprint.trim() => {
                 // 版本一致。但若规范正文被误删(标记在、文件缺),不能当 unchanged
                 // (§4.3 #4:内容没变才不重写;文件丢失 ≠ 内容没变)—— 落到下面重写。
+                // `standards_files` paths are relative to `.claude/buddy/`
+                // (e.g. `standards/metrics.md`) — join from buddy_root, not
+                // standards_root, or files land at standards/standards/*.
                 let all_present = bw_core::buddy_assets::standards_files()
                     .iter()
-                    .all(|(rel, _)| standards_root.join(rel).exists());
+                    .all(|(rel, _)| buddy_root.join(rel).exists());
                 if all_present {
                     return Ok(StandardsMaterializeReport {
                         written: 0,
@@ -110,7 +113,13 @@ pub async fn materialize_standards(
 
     let mut written = 0;
     for (rel, content) in bw_core::buddy_assets::standards_files() {
-        let target = standards_root.join(rel);
+        // rel is relative to `.claude/buddy/` (see buddy_assets::standards_files).
+        let target = buddy_root.join(rel);
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| rollback_incomplete(e.to_string()))?;
+        }
         write_atomic(&target, content)
             .await
             .map_err(|e| rollback_incomplete(e.to_string()))?;
@@ -227,6 +236,14 @@ mod tests {
         let r1 = materialize_standards(&root).await.expect("first");
         assert!(!r1.unchanged && r1.written > 0);
         assert!(root.join(".claude/buddy/.bw-managed").exists());
+        assert!(
+            root.join(".claude/buddy/standards/metrics.md").exists(),
+            "must be standards/metrics.md not standards/standards/"
+        );
+        assert!(root.join(".claude/buddy/standards/connectors.md").exists());
+        assert!(!root
+            .join(".claude/buddy/standards/standards/metrics.md")
+            .exists());
         let r2 = materialize_standards(&root).await.expect("second");
         assert!(r2.unchanged && r2.written == 0);
         let _ = std::fs::remove_dir_all(&root);
