@@ -1,9 +1,10 @@
 //! Interactive CLI engine (V1 Issue 2 Phase 1, option (c)).
 //!
 //! Launches a TUI agent (claude CLI) in an interactive terminal session,
-//! pre-loaded with a skill body (as the first user message) and a bridge
-//! system prompt (project context + buddy 契约). One skill = one
-//! interactive session (§2.3) — no phase splitting, no adversarial loop.
+//! pre-loaded with a skill body (as the first user message) and a buddy
+//! system prompt (static `system-prompt.md` + dynamic project context).
+//! One skill = one interactive session (§2.3) — no phase splitting, no
+//! adversarial loop.
 //!
 //! Phase 1 scope: spawn a system terminal running the launch plan +
 //! best-effort completion detection (wait on the process with a wall-clock
@@ -222,7 +223,7 @@ pub fn build_startup_plan(
     // not a wall: it doesn't cover `codehub-cli mr merge` (the CodeHub
     // equivalent) and a deny list under `--dangerously-skip-permissions` is
     // only as strong as the CLI's own enforcement. 「合并永远是人」的真正
-    // 约束在衔接层 system prompt 里说清楚(`build_bridge_system_prompt`),
+    // 约束在 buddy 系统提示词(`docs/buddy/system-prompt.md`)里说清楚,
     // 且 buddy 侧 Done 入边由状态机守死 —— 别把这两行当成拦得住的保证。
     args.push("--disallowedTools".to_string());
     args.push("Bash(gh pr merge)".to_string());
@@ -350,29 +351,18 @@ pub fn build_consultation_resume_plan(
 
 // ─── Bridge system prompt ──────────────────────────────────────────────
 
-/// Build the bridge (衔接层) system prompt — the persistent context the
-/// interactive agent operates under. This is NOT the skill body (which
-/// goes via the positional prompt); it's the project context + buddy
-/// 契约 that stays in the system prompt for the whole session.
+/// Build the dynamic project context block — the part of the system prompt
+/// that buddy fills from real project data at each startup. The static
+/// preamble (identity + 铁律 + 规范索引) lives in `docs/buddy/system-prompt.md`
+/// (packed via `bw_core::buddy_assets::SYSTEM_PROMPT_MD`); the caller
+/// assembles: SYSTEM_PROMPT_MD + this block + main Skill body + distilled/catalog.
 ///
-/// Contents:
-/// - Project context (`desc`/`benchmark`/`opportunity`/`north_star`/
-///   `ns_def`/`handoff_note`/`workspace_hint` from [`PlaybookCtx`])
-/// - Skill-specific产出契约 + 读上游 (north-star-discovery /
-///   metrics-binding)
-/// - 通用铁律 (Done 永不自动, settle-once, Signal derive-only,
-///   绝不伪造观测/Unknown≠绿, 禁 gh pr merge)
-pub fn build_bridge_system_prompt(playbook_ctx: &PlaybookCtx, skill_slug: &str) -> String {
+/// Resume (§7.1) does NOT re-inject this — the session persists from the first
+/// run. Only the standards runtime copy is re-calibrated before resume.
+pub fn build_project_context_block(playbook_ctx: &PlaybookCtx, skill_slug: &str) -> String {
     let mut s = String::new();
-    s.push_str("# Buddy 衔接层 system prompt\n\n");
-    s.push_str(
-        "你是 Builders' Workbench (buddy) 派出的交互式 AI 队友,在一个真实项目工作区里干活。\n",
-    );
-    s.push_str("下面是 buddy 给你的项目上下文 + 契约,请严格遵守。\n\n");
-
-    // ── Project context ──
-    s.push_str("## 项目上下文\n");
-    s.push_str(&format!("- 项目名: {}\n", playbook_ctx.project_name));
+    s.push_str("## 本次项目上下文\n");
+    s.push_str(&format!("- 项目: {}\n", playbook_ctx.project_name));
     if !playbook_ctx.project_kind.trim().is_empty() {
         s.push_str(&format!("- 项目类型: {}\n", playbook_ctx.project_kind));
     }
@@ -392,121 +382,17 @@ pub fn build_bridge_system_prompt(playbook_ctx: &PlaybookCtx, skill_slug: &str) 
         }
     }
     if !playbook_ctx.handoff_note.trim().is_empty() {
-        s.push_str(&format!("- 上一阶段交棒: {}\n", playbook_ctx.handoff_note));
+        s.push_str(&format!("- 上一棒备注: {}\n", playbook_ctx.handoff_note));
     }
     if !playbook_ctx.workspace_hint.trim().is_empty() {
         s.push_str(&format!("- 工作区: {}\n", playbook_ctx.workspace_hint));
     }
-    // V1 收口:空技能(无技能 issue)显「未关联技能」;非空(含未知 typo)显
-    // 「你正在执行技能: {slug}」让用户看到 slug 能自查。下方技能契约 match 对
-    // 未知 slug 走 `_` 臂只给通用铁律,空 slug 同样。
+    // 空技能(无技能 issue)显「未关联技能」;非空显 slug 让用户自查。
     if skill_slug.trim().is_empty() {
-        s.push_str("\n未关联技能,由你驱动或按用户要求干活;项目上下文与铁律已就位。\n");
+        s.push_str("\n未关联技能,由你驱动或按用户要求干活;buddy 规范与铁律已就位。\n");
     } else {
         s.push_str(&format!("\n你正在执行技能: `{skill_slug}`\n"));
     }
-
-    // ── Skill-specific 产出契约 + 读上游 ──
-    s.push_str("\n## 技能契约\n\n");
-    match skill_slug {
-        "north-star-discovery" => {
-            s.push_str("### 你的产出\n");
-            s.push_str(
-                "- 写 `<工作区>/.bw/metrics.toml`,严格按 `docs/metrics-toml-format.md` 的结构。\n",
-            );
-            s.push_str("- 三层结构:恰好 1 个 `[north_star]`,0..N 个 `[[lagging]]`,0..N 个 `[[leading]]`。\n");
-            s.push_str(
-                "- 每条指标(含北极星)必须附 `collect`。采集 kind 优先 `script`\
-                 (自动:机械解析数据源产出 JSON,`query`=字段在 JSON 里的点分路径;\
-                 buddy 自带 instance 包 codehub/github CLI,或项目侧 `derive_*.py`)\
-                 或 `manual`(人手填,戴「手填」徽)。`github`/`codehub`/`bw`/`connector`\
-                 是 legacy inline arm(格式档 `docs/metrics-toml-format.md` 仍列五值兼容),\
-                 正退休进 `script`——新写优先 `script`/`manual`,不写 legacy kind。\n",
-            );
-            s.push_str(
-                "- 产 `<工作区>/docs/metrics-rationale.md`(人读推导过程,四块:输入摘要/\
-                 北极星为什么是这条/滞后引领因果链/采集方案诚实评估)。\n\n",
-            );
-            s.push_str("### 读上游\n");
-            s.push_str(
-                "- 读 `<工作区>/docs/competitive-analysis.md`(若存在)——对标名单是北极星推导的第一手依据。\n",
-            );
-            s.push_str(
-                "- 读项目仓既有指标体系:扫 `governance/`、`derive_*.py`/`derive_*.sh`、\
-                 `connectors/`、`data-sources/`。三层指标优先对齐既有体系,不另起炉灶。\n",
-            );
-            s.push_str("- 读项目自身意图(`desc`/`benchmark`/`opportunity`)。\n\n");
-            s.push_str("### 硬约束\n");
-            s.push_str("- 北极星绝不为「采得到」退化成 commit/PR/issue 数这类工程虚荣指标。\n");
-            s.push_str("- 北极星必须落在「使用段」或「价值段」,不能落在「供给段」。\n");
-            s.push_str(
-                "- `script` kind 的 `query` 只写字段在脚本输出 JSON 里的点分路径\
-                 (如 `north_star.adoption_rate`),不含脚本路径。\n",
-            );
-        }
-        "metrics-binding" => {
-            s.push_str("### 你的产出\n");
-            s.push_str(
-                "- 改 `<工作区>/.bw/metrics.toml` 的 `collect` 字段(只改采集方案,\
-                 不动 `name`/`def`/`target`)。\n",
-            );
-            s.push_str("- 更新 `<工作区>/docs/metrics-rationale.md` 的绑定进度段落。\n\n");
-            s.push_str("### 读上游\n");
-            s.push_str("- 读 `.bw/metrics.toml`(已存在,是本技能的输入)。\n");
-            s.push_str(
-                "- 读 `docs/metrics-toml-format.md`(采集 kind 以 `script`|`manual` 两 kind\
-                 为方向;`github`/`codehub`/`bw`/`connector` 是 legacy 仍列五值兼容、正退休进 `script`;\
-                 占位符语法、upsert 语义)。\n",
-            );
-            s.push_str("- 读 `docs/metrics-rationale.md`(找指标技能留下的推导)。\n");
-            s.push_str(
-                "- 扫项目仓既有采集脚本:`governance/`、`derive_*.py`、`connectors/`、`data-sources/`。\n\n",
-            );
-            s.push_str("### 硬约束\n");
-            s.push_str("- 绝不伪造数据。Unknown 就是 Unknown,不因为跑过一遍就假装变绿。\n");
-            s.push_str("- 绝不为了点亮而改指标定义(`name`/`def`/`target` 一律不动)。\n");
-            s.push_str("- 项目侧自采脚本(`derive_*.py`)是 `script` kind,不是 `manual`——别降级。\n");
-            s.push_str(
-                "- 绑数据=搭采集装置:写采集脚本到 `.bw/scripts/`(buddy 自带 instance 包 \
-                 codehub/github CLI,或项目侧 `derive_*.py` 留原位)+ 写连接器清单 \
-                 `.bw/connectors.toml`(格式见 `docs/connectors-toml-format.md`,数组表键名 \
-                 是单数 `[[connector]]`,写成复数 `[[connectors]]` 会解析失败)+ \
-                 给 metric 配 `collect_kind='script'`+`collect_query=字段路径`。\
-                 **agent 不调 buddy API**——靠文件正本 + PR 合入后 buddy 感知 sync(\
-                 `.bw/connectors.toml` → `connector` 行 upsert,`.bw/metrics.toml` → \
-                 `metric` 行 upsert;cron 到点自动跑 script connector → observation → \
-                 signal)。`script` 的 `query` 只写字段在脚本输出 JSON 里的点分路径\
-                 (如 `leading.L1`),不含脚本路径。\n",
-            );
-            s.push_str(
-                "- **`.bw/connectors.toml` 的 `output` 字段必须真实写文件**:buddy 采集时\
-                 只读 `output` 指向的那个文件,完全不看脚本的 stdout——哪怕脚本 `print()` \
-                 出了正确的 JSON,不写进 `output` 文件也等于没接。脚本必须真的落盘一份 \
-                 JSON,再把相对路径填进 `output`,收尾前务必确认这个文件真的存在。\n",
-            );
-        }
-        _ => {
-            // Unknown skill slug — still give the generic 契约 below.
-        }
-    }
-
-    // ── 通用铁律 ──
-    s.push_str("\n## 通用铁律(不可违反)\n\n");
-    s.push_str(
-        "- **Done 永不自动**:你干完只到「评审中」,完成永远由人显式点。\
-         不要自行标记 Issue Done。\n",
-    );
-    s.push_str("- **settle-once**:每件活的记账只记一次,绝不重复。\n");
-    s.push_str(
-        "- **Signal derive-only**:健康灯只被真实数据点亮,无数据=Unknown≠绿,\
-         绝不伪造观测。\n",
-    );
-    s.push_str("- 改动落在活分支,正常提交 + 提 PR/MR,**合并永远是人手动作**。\n");
-    s.push_str(
-        "- **你只负责提上去,绝不自己合入**:`gh pr merge`、\
-         `codehub-cli mr merge` 以及任何等价的合并/直推主干动作一律不许执行。\
-         提完 PR/MR 把地址打屏给用户,合入由人在 buddy 里点。\n",
-    );
 
     s
 }
@@ -1060,56 +946,40 @@ mod tests {
     }
 
     #[test]
-    fn build_bridge_system_prompt_north_star() {
+    fn build_project_context_block_has_project_fields() {
         let ctx = mock_playbook_ctx();
-        let prompt = build_bridge_system_prompt(&ctx, "north-star-discovery");
-        // Project context
-        assert!(prompt.contains("测试项目"));
-        assert!(prompt.contains("竞品A"));
-        assert!(prompt.contains("周活跃用户数"));
-        // Skill-specific
-        assert!(prompt.contains("metrics.toml"));
-        assert!(prompt.contains("competitive-analysis.md"));
-        assert!(prompt.contains("governance/"));
-        assert!(prompt.contains("虚荣指标"));
-        // 通用铁律
-        assert!(prompt.contains("Done 永不自动"));
-        assert!(prompt.contains("settle-once"));
+        let block = build_project_context_block(&ctx, "north-star-discovery");
+        assert!(block.contains("测试项目"));
+        assert!(block.contains("竞品A"));
+        assert!(block.contains("周活跃用户数"));
+        assert!(block.contains("你正在执行技能: `north-star-discovery`"));
+    }
+
+    #[test]
+    fn build_project_context_block_unknown_skill_shows_skill_label() {
+        let ctx = mock_playbook_ctx();
+        let block = build_project_context_block(&ctx, "some-unknown-skill");
+        assert!(block.contains("你正在执行技能: `some-unknown-skill`"));
+    }
+
+    #[test]
+    fn build_project_context_block_empty_skill_shows_unspecified() {
+        let ctx = mock_playbook_ctx();
+        let block = build_project_context_block(&ctx, "");
+        assert!(block.contains("未关联技能"));
+        assert!(!block.contains("你正在执行技能"));
+    }
+
+    #[test]
+    fn system_prompt_md_has_iron_rules_and_standards_index() {
+        let prompt = bw_core::buddy_assets::SYSTEM_PROMPT_MD;
+        // 铁律(人话,不复述实现术语)
+        assert!(prompt.contains("完成永远由人确认"));
+        assert!(prompt.contains("绝不重复记账"));
         assert!(prompt.contains("Unknown"));
-    }
-
-    #[test]
-    fn build_bridge_system_prompt_metrics_binding() {
-        let ctx = mock_playbook_ctx();
-        let prompt = build_bridge_system_prompt(&ctx, "metrics-binding");
-        assert!(prompt.contains("metrics-binding"));
-        assert!(prompt.contains("绝不伪造数据"));
-        assert!(prompt.contains("不动 `name`/`def`/`target`"));
-        assert!(prompt.contains("derive_*.py"));
-        // P5 · 2026-08-06: output-file-not-stdout must be in the prompt an
-        // agent actually receives, not just in docs it may not read.
-        assert!(prompt.contains("完全不看脚本的 stdout"));
-    }
-
-    #[test]
-    fn build_bridge_system_prompt_unknown_skill_still_has_generic_rules() {
-        let ctx = mock_playbook_ctx();
-        let prompt = build_bridge_system_prompt(&ctx, "some-unknown-skill");
-        assert!(prompt.contains("Done 永不自动"));
-        assert!(prompt.contains("通用铁律"));
-        // 非空(含未知 typo)slug 仍显「你正在执行技能」,让用户自查。
-        assert!(prompt.contains("你正在执行技能: `some-unknown-skill`"));
-    }
-
-    #[test]
-    fn build_bridge_system_prompt_empty_skill_shows_unspecified_not_skill_label() {
-        // V1 收口:无技能 issue 也走终端 —— 空 slug 不报错,bridge 显
-        // 「未关联技能」(不假装在执行某技能),通用铁律仍在。
-        let ctx = mock_playbook_ctx();
-        let prompt = build_bridge_system_prompt(&ctx, "");
-        assert!(prompt.contains("Done 永不自动"));
-        assert!(prompt.contains("未关联技能"));
-        assert!(!prompt.contains("你正在执行技能"));
+        // 规范索引
+        assert!(prompt.contains(".claude/buddy/standards/metrics.md"));
+        assert!(prompt.contains(".claude/buddy/standards/connectors.md"));
     }
 
     #[tokio::test]

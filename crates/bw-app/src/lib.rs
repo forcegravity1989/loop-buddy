@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 mod agent_import;
+mod buddy_materialize;
 mod bw_canon;
 mod hook_listener;
 mod legacy_migration;
@@ -45,7 +46,7 @@ use bw_core::{
     MetricId, ProjectId, SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    allowed_tools_arg, build_bridge_system_prompt, build_consultation_resume_plan,
+    allowed_tools_arg, build_consultation_resume_plan, build_project_context_block,
     build_resume_plan, build_startup_plan, evidence, ClaudeCliConfig, ClaudeCliExecutor,
     CodehubRepoSummary, ConversationMeta, Engine, GitCommit, GithubRepoSummary,
     InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
@@ -5231,6 +5232,29 @@ impl App {
             .as_deref()
             .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
 
+        // V2-①: 物化 buddy 规范运行副本到工作区 `.claude/buddy/standards/`。
+        // 首次启动和恢复都做(§7.1:恢复前再次校准规范运行副本)。
+        // 无真实工作区的项目跳过(MockExecutor 路径,继续标【mock】)。
+        // 物化失败 → 不启动真实 Claude,如实报错给用户(§4.3 #3、§8)。
+        if !proj.workspace_path.trim().is_empty() {
+            match buddy_materialize::materialize_standards(workspace_cwd).await {
+                Ok(report) => {
+                    eprintln!(
+                        "[BW_BUDDY_MATERIALIZE] written={} unchanged={}",
+                        report.written, report.unchanged
+                    );
+                }
+                Err(e) => {
+                    if is_resume {
+                        self.state.pty_restoring = None;
+                    }
+                    return Err(AppError::Invalid(format!(
+                        "buddy 规范运行副本物化失败,不启动真实 Claude:{e}"
+                    )));
+                }
+            }
+        }
+
         // Build the plan: startup (first run) or resume (--resume <session_id>).
         let plan = if is_resume {
             // Resume: no new prompt, no bridge system prompt. The session
@@ -5281,15 +5305,21 @@ impl App {
                 Ok(b) => b,
                 Err(e) => return Err(e),
             };
-            // V1 收口:无技能也能跑 —— issue 内容(标题+描述)作位置 prompt
-            // (auto-submit 首句);技能正文 + 蒸馏 + 目录块并入系统提示词,让
-            // 「经验复利」在 issue 交付侧不静默丢失(原来只进 phase-loop 的
-            // spec.prompt)。空技能不报错,降级到 bridge 通用铁律。
-            let bridge_prompt = build_bridge_system_prompt(&playbook_ctx, &standard_skill);
-            let mut system_prompt = bridge_prompt;
-            for block in [&skill_body, &distilled_block, &catalog_block] {
-                if !block.trim().is_empty() {
-                    system_prompt.push_str("\n\n");
+            // V2-①: 系统提示词 = 静态正本(system-prompt.md) + 动态项目上下文 +
+            // 主 Skill 正文 + 蒸馏块 + 目录块,用 `---` 分隔(§13.5)。
+            // 无技能也能跑 —— issue 内容(标题+描述)作位置 prompt;
+            // 空技能不报错,系统提示词的铁律与规范索引已就位。
+            let project_context = build_project_context_block(&playbook_ctx, &standard_skill);
+            let mut system_prompt = bw_core::buddy_assets::SYSTEM_PROMPT_MD.to_string();
+            for block in [
+                &project_context,
+                &skill_body,
+                &distilled_block,
+                &catalog_block,
+            ] {
+                let block = block.trim();
+                if !block.is_empty() {
+                    system_prompt.push_str("\n\n---\n\n");
                     system_prompt.push_str(block);
                 }
             }
@@ -5518,6 +5548,15 @@ impl App {
         let workspace_cwd = issue_ws
             .as_deref()
             .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
+        // V2-①: 咨询 resume 也校准规范运行副本(§7.1)。
+        if !proj.workspace_path.trim().is_empty() {
+            if let Err(e) = buddy_materialize::materialize_standards(workspace_cwd).await {
+                self.state.pty_restoring = None;
+                return Err(AppError::Invalid(format!(
+                    "buddy 规范运行副本物化失败,不启动真实 Claude:{e}"
+                )));
+            }
+        }
         // 咨询 resume:注入 §6.2 规则;失败清 pty_restoring。
         let plan = match build_consultation_resume_plan(
             &CLAUDE,

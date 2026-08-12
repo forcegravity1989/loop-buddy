@@ -44,7 +44,7 @@ pub use evidence::{EvidenceError, WorkspaceEvidence, WorkspaceFile};
 pub use git_log::{read_commits, GitCommit, GitLogError};
 pub use github::{GithubError, GithubRepoRef, GithubRepoSummary};
 pub use interactive_cli::{
-    build_bridge_system_prompt, build_consultation_resume_plan, build_resume_plan,
+    build_consultation_resume_plan, build_project_context_block, build_resume_plan,
     build_startup_plan, InteractiveCliExecutor, InteractiveExecutor, LaunchPlan,
     MockInteractiveExecutor, PromptInjectionMode, PtyInput, SkillOutput, TuiAgentConfig, CLAUDE,
     CONSULTATION_APPEND_PROMPT, CURSOR,
