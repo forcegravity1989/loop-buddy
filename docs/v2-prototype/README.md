@@ -10,9 +10,9 @@
 |---|---|---|
 | [roadmap.md](roadmap.md) | V1 维护运营周节奏 + V2 迭代功能初始意向(调度简化 / 多人最简) | 初始意向源;V2-①/② 已各自落设计篇 |
 | [issue-dispatch-prompt-skill.md](issue-dispatch-prompt-skill.md) | **V2-①** 调度统一设计:所有 Issue 必带的 buddy 系统提示词与规范 + 按活选择的 Skill,两条独立资产线 | **已实现**(commit `4073ae2`..`8f35b6b`,未 push;行为层 E2E defer 用户) |
-| [same-project-multiple-workbenches.md](same-project-multiple-workbenches.md) | **V2-②** 最简多人设计:同一项目可被多台 Buddy 分别纳管(`.bw/project.toml` 正本 + 首到/后来者流程 + 回填 + 总览折线) | **Phase A(多人闭环)已实现**(`7a84e45`..`648ad48`,未 push;code-review + verify 过,读回为证);Phase B(回填)+ C(V1 Issue 3 总览折线)设计已定、未开发 |
+| [same-project-multiple-workbenches.md](same-project-multiple-workbenches.md) | **V2-②** 最简多人设计:同一项目可被多台 Buddy 分别纳管(`.bw/project.toml` 正本 + 首到/后来者流程 + 回填 + 总览折线 + open Issue 读回) | **Phase A/B 已实现**;**V2-②-I**(open Issue 单向读回重建本地行)已落地;closed 读回仍 follow-up |
 
-> **V2 实施进度**:V2-①(调度简化)已实现;V2-② 的 Phase A(多人闭环)已实现,Phase B(回填采集)+ Phase C(V1 Issue 3 总览折线)是配对后续切片,设计在 `same-project-multiple-workbenches.md` §8,尚未开发。所有 V2 commit 均在 `v1` 分支,**未 push**。
+> **V2 实施进度**:V2-①(调度简化)已实现;V2-② Phase A(多人闭环)/B(回填)/C(总览折线)与 **V2-②-I**(仓平台 open Issue 读回本地)已落地。所有 V2 commit 均在 `v1` 分支,**未 push**。
 
 ## 与 V1 目录的关系
 
