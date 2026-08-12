@@ -787,6 +787,32 @@ fn IssuesPanel(op: OpVm) -> Element {
     // V1-TermRefactor4: 点卡立刻亮「恢复中…」(dispatch 返回前 Vm 还不更新);
     // 与 op.pty_restoring 合并;焦点已活且 App 恢复标记已清 → 不再显示。
     let mut restoring_issue: dioxus::prelude::Signal<Option<IssueId>> = use_signal(|| None);
+    // Bug B: merge takes seconds; Vm only rebuilds after dispatch returns, so
+    // a local busy flag is the only immediate feedback. Shared with the
+    // detail overlay so board + popup stay in sync. Cleared when a merge
+    // result toast arrives (success or fail) — not merely when status moves,
+    // because a failed merge stays InReview.
+    let merging_issue: dioxus::prelude::Signal<Option<IssueId>> = use_signal(|| None);
+    let mut merge_note_listener = use_signal(|| false);
+    if !merge_note_listener() {
+        merge_note_listener.set(true);
+        let mut rx = k.notes();
+        let mut merging_clear = merging_issue;
+        spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(crate::kernel::UiNote::ConnectorSynced { name, detail, .. }) => {
+                        let merge_related = name.contains("· merge") || name.contains("· 验收");
+                        if merge_related && !detail.contains("正在合入") {
+                            merging_clear.set(None);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+    }
 
     let cols: [(IssueStatus, &str); 6] = [
         (IssueStatus::Backlog, "待办池"),
@@ -904,6 +930,7 @@ fn IssuesPanel(op: OpVm) -> Element {
                     sessions: op.sessions.clone(),
                     active_run: op.active_run,
                     project_id: op.id,
+                    merging_issue: merging_issue,
                     d: d,
                 }
             }
@@ -986,6 +1013,14 @@ fn IssuesPanel(op: OpVm) -> Element {
                                             }
                                             if is_restoring {
                                                 span { style: "color:{ink3};border:1px solid {border};border-radius:4px;padding:0 5px;font-size:10px;", "恢复中…" }
+                                            }
+                                        }
+                                        if i.github_number != 0 && i.pr_number == 0
+                                            && i.status == IssueStatus::InProgress
+                                        {
+                                            div {
+                                                style: "font-size:10.5px;color:{ink3};font-family:{mono};margin-top:2px;",
+                                                "开放 MR 检出后进评审中（通常十几秒内）"
                                             }
                                         }
                                         // C4 · issue 身份映射: 号非 0 才渲染。
@@ -1192,10 +1227,38 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                 // merge 是首选验收路径(人 merge → 关单)。
                                                 // 不硬拦下面的 →已完成(只留痕不拦人)。
                                                 if i.status == IssueStatus::InReview && i.pr_number != 0 {
-                                                    button {
-                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;font-weight:700;",
-                                                        onclick: move |_| k_merge.send(Command::MergeIssuePr { id: i_id }),
-                                                        "⛙ merge PR #{i.pr_number}"
+                                                    {
+                                                        let is_merging = merging_issue() == Some(i_id);
+                                                        let pr_n = i.pr_number;
+                                                        let (merge_label, merge_cursor, merge_color) =
+                                                            if is_merging {
+                                                                (
+                                                                    format!("正在合入 PR #{pr_n}…"),
+                                                                    "not-allowed",
+                                                                    ink3,
+                                                                )
+                                                            } else {
+                                                                (
+                                                                    format!("⬇ merge PR #{pr_n}"),
+                                                                    "pointer",
+                                                                    clay,
+                                                                )
+                                                            };
+                                                        let mut merging_set = merging_issue;
+                                                        rsx! {
+                                                            button {
+                                                                style: "cursor:{merge_cursor};background:transparent;border:none;color:{merge_color};font-size:11.5px;padding:0;font-weight:700;",
+                                                                disabled: is_merging,
+                                                                onclick: move |_| {
+                                                                    if merging_set() == Some(i_id) {
+                                                                        return;
+                                                                    }
+                                                                    merging_set.set(Some(i_id));
+                                                                    k_merge.send(Command::MergeIssuePr { id: i_id });
+                                                                },
+                                                                "{merge_label}"
+                                                            }
+                                                        }
                                                     }
                                                 }
                                                 if let Some(ns) = advance {
@@ -1243,6 +1306,7 @@ fn IssueDetailOverlay(
     active_run: Option<(ProjectId, IssueId)>,
     project_id: ProjectId,
     can_consult: bool,
+    mut merging_issue: dioxus::prelude::Signal<Option<IssueId>>,
 ) -> Element {
     let k = use_context::<Kernel>();
     let card = theme::card();
@@ -1487,13 +1551,37 @@ fn IssueDetailOverlay(
                         // 关单 → 走现有 InReview→Done 记账)。无 PR(存量/无仓活)→
                         // 保留裸「确认完成」路径(全活 PR 化是纪律不是硬闸)。
                         if d.pr_number != 0 {
-                            button {
-                                style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
-                                onclick: move |_| {
-                                    k_merge.send(Command::MergeIssuePr { id });
-                                    k_merge.send(Command::OpenIssueDetail(id));
-                                },
-                                "⛙ merge PR #{d.pr_number}(验收)"
+                            {
+                                let is_merging = merging_issue() == Some(id);
+                                let pr_n = d.pr_number;
+                                let (merge_label, merge_bg, merge_cursor) = if is_merging {
+                                    (
+                                        format!("正在合入 PR #{pr_n}…"),
+                                        "#B89A8E".to_string(),
+                                        "not-allowed",
+                                    )
+                                } else {
+                                    (
+                                        format!("⬇ merge PR #{pr_n}(验收)"),
+                                        clay.to_string(),
+                                        "pointer",
+                                    )
+                                };
+                                rsx! {
+                                    button {
+                                        style: "cursor:{merge_cursor};border:none;border-radius:7px;background:{merge_bg};color:#FFF;padding:7px 16px;font-size:12.5px;",
+                                        disabled: is_merging,
+                                        onclick: move |_| {
+                                            if merging_issue() == Some(id) {
+                                                return;
+                                            }
+                                            merging_issue.set(Some(id));
+                                            k_merge.send(Command::MergeIssuePr { id });
+                                            k_merge.send(Command::OpenIssueDetail(id));
+                                        },
+                                        "{merge_label}"
+                                    }
+                                }
                             }
                         } else {
                             button {

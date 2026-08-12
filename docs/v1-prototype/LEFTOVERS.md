@@ -363,3 +363,18 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 **处置**：✅ 记入 V2 整改队列，**本窗不改代码**。落地时走 `buddy-feature-dev`，设计归档到 [`docs/v2-prototype/`](../v2-prototype/README.md)(初始节奏与意向见 [`roadmap.md`](../v2-prototype/roadmap.md))，勿再堆进已发版的 V1 窗口号叙事。
 
 **事实源**：`docs/v1-prototype/issue2-all-issues-terminal-runs.md`（prompt 模型 + 多 agent 转 prompt）；`crates/bw-app/src/lib.rs` `run_issue_interactive` / `prepare_issue_run`（`spec.prompt`/`phase_prompts` 不再服务 issue）；`docs/guide/buddy-guide.html` m4「默认系统提示词 / 默认 skill」留口。
+
+---
+
+## Bug · 提 MR 后看板迟迟不进评审中 + merge 无忙态（cowelink 找指标 E2E）
+
+**产生**：V1 实践 · cowelink 找指标真 E2E（会话已停、MR 已开，看板约两分钟才变评审中；合入成功但点击后数秒无反馈）。
+
+**根因（已修）**：
+1. InReview 兜底轮询固定 5 分钟；Stop hook 若在 MR 尚不可见时查空，下一轮要等满 5 分钟。
+2. 半套刷新：`tick_scheduler` 里 poll 已改库并 toast，但桌面壳只在「本轮有 cron 触发」时重建 Vm → 看板状态可长期陈旧。
+3. `MergeIssuePr` 按钮无本地 busy；Vm 在命令返回后才刷新，等待远端 merge 的几秒里像没点上。
+
+**处置**：✅ 已修。有候选时约 15s 轮询 + `scheduler_ui_dirty` 强制重建 Vm；merge 点击即禁用并 toast「正在合入…」，完成/失败后再恢复；二次合入 Done 短电路提示。`SessionEnd` hook 仍未接（设计 md 已记），短周期轮询覆盖「会话关了但最后一次 Stop 没查到」场景。
+
+**事实源**：`crates/bw-app/src/lib.rs`（`poll_interactive_inreview` / `INREVIEW_POLL_*` / `MergeIssuePr`）；`crates/app-desktop/src/kernel.rs`（tick Vm rebuild）；`crates/app-desktop/src/screens/op.rs`（merge busy）；指南 `buddy-guide.html`「触发查 MR」。
