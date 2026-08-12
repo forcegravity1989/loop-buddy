@@ -4145,7 +4145,7 @@ impl App {
                 self.emit(Event::ConnectorSynced {
                     name: "project.toml".into(),
                     ok: true,
-                    detail: "项目意图正本已读回".into(),
+                    detail: "仓里 .bw/project.toml 正本已读回,本地意图字段已对齐正本".into(),
                 });
             }
             Err(e) => {

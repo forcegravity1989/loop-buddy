@@ -125,12 +125,15 @@ impl Remote {
         }
     }
 
-    /// Merge the open PR/MR — the **human验收** action (one-click merge → the
-    /// caller settles `Done`). Github: `gh pr merge --squash`; codehub:
-    /// `codehub-cli mr merge <iid> --squash -y`. On `Err` the Issue stays
-    /// `InReview` retryable — never fabricated, never reverse-settled. Only
-    /// ever called from `MergeIssuePr` (a human click), never from any
-    /// run/executor path. Bug③ (2026-07-30): before this, `MergeIssuePr`
+    /// Merge the open PR/MR. Github: `gh pr merge --squash`; codehub:
+    /// `codehub-cli mr merge <iid> --squash -y`. Two call sites with different
+    /// human/auto semantics (§7): `MergeIssuePr` — the **human验收** action
+    /// (one-click merge → caller settles `Done`); on `Err` the Issue stays
+    /// `InReview` retryable, never fabricated, never reverse-settled.
+    /// `write_project_toml_pr` — the **auto-merge** of a `.bw/project.toml`
+    /// config PR (project.toml is configuration, not an Issue, so auto-merging
+    /// it doesn't break "Done 永不自动"; issue PRs are never auto-merged —
+    /// that path is unchanged). Bug③ (2026-07-30): before this, `MergeIssuePr`
     /// crashed `gh pr merge` on codehub remotes.
     pub async fn merge_mr(&self, pr_number: u32) -> Result<(), RemoteError> {
         match self {
