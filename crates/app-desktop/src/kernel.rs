@@ -12,7 +12,7 @@
 //! persisted derive cache (`None` ⇒ Unknown), feeds are real records, stage
 //! methodology text is `StageKind`'s own static metadata.
 
-use bw_app::{ActionState, App, Command, Event, Panel, Scope, SettleReq, View};
+use bw_app::{ActionState, App, Command, Event, Panel, RemoteProjectProbe, Scope, SettleReq, View};
 use bw_core::model::{
     AgentRef, Author, CronMode, HubCard, IssueStatus, MaturityPeriod, Readiness, SessionStatus,
     Signal, SkillRef, StageKind, CONNECTOR_KIND_SCRIPT,
@@ -71,6 +71,8 @@ pub struct Vm {
     /// the Repo 卡片's「接入已有仓」refresh button dispatching
     /// `ListCodehubRepos{host}`.
     pub codehub_repos: Vec<CodehubRepoSummary>,
+    /// V2-② Intent UX: remote `.bw/project.toml` probe for「接入已有仓」.
+    pub remote_project_probe: RemoteProjectProbe,
     /// plan/17 S3: the in-flight backgrounded run's (project, issue), or
     /// `None` when nothing's running. The issue board uses this to show a
     /// 「⬇ 终止」 button on exactly the issue whose run is in flight, and to
@@ -697,9 +699,10 @@ pub fn spawn() -> Kernel {
                 // this loop (no `Arc<Mutex<_>>`), so an auto-fire tick has to
                 // interleave with command dispatch via `select!` rather than
                 // run on its own spawned task — same thread, same `&mut app`,
-                // no synchronization needed. A quiet tick (nothing due) is
-                // free: `Vm` is only rebuilt when `tick_scheduler` actually
-                // fired something, so idle polling costs nothing extra.
+                // no synchronization needed. A quiet tick (nothing due AND no
+                // InReview-poll / hook mutation) stays free: Vm rebuilds when
+                // cron fired *or* `scheduler_ui_dirty` (MR detection can move
+                // issues to InReview without any cron).
                 let mut ticker = tokio::time::interval(Duration::from_secs(5));
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 // V1 Issue2 Phase2b: fast timer for PTY terminal bytes —
@@ -734,10 +737,12 @@ pub fn spawn() -> Kernel {
                         }
                         _ = ticker.tick() => {
                             match app.tick_scheduler().await {
-                                Ok(fired) if !fired.is_empty() => {
-                                    let _ = vm_tx.send(build_vm(&app, &store).await);
+                                Ok(fired) => {
+                                    let dirty = app.take_scheduler_ui_dirty();
+                                    if !fired.is_empty() || dirty {
+                                        let _ = vm_tx.send(build_vm(&app, &store).await);
+                                    }
                                 }
-                                Ok(_) => {}
                                 Err(e) => {
                                     let _ = note_tx.send(UiNote::Error(e.to_string()));
                                 }
@@ -946,6 +951,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         cron_effectiveness,
         github_repos: state.github_repos.clone(),
         codehub_repos: state.codehub_repos.clone(),
+        remote_project_probe: state.remote_project_probe.clone(),
         active_run: app.active_run(),
         pty_active: app.pty_active(),
         pty_conversation_id: app.focused_pty_conversation(),

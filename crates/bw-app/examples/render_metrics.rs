@@ -8,7 +8,7 @@
 //!    (`latest_of`),零观测直接渲染「无数据」——不取 `metric.value_raw` 缓存、
 //!    不填 0、不沿用上一次的值、不插值。
 //! 2. **来源徽记**:`SourceKind::Manual` 戴「手填」徽;`collect_kind` 是
-//!    `bw`/`connector` 的标「v1 未接」(见 `docs/metrics-toml-format.md` 采集器
+//!    `bw`/`connector` 的标「v1 未接」(见 `docs/buddy/standards/metrics.md` 采集器
 //!    状态表);`origin` 区分正本(file)与界面手建(manual)。
 //! 3. **数字可独立复核**:每条指标自带一行能直接跑的 `sqlite3` 命令,跑出来的
 //!    就是它上面显示的那些点。页面自带自证方式,不需要信这段代码。

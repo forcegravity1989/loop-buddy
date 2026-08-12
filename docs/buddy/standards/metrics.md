@@ -1,12 +1,14 @@
-# `.bw/metrics.toml` 格式说明(plan/13 D5+D6 · C6)
+# `.bw/metrics.toml` 格式规范
+
+> **30 秒导读**:这是项目指标定义文件的唯一格式正本,给「找指标」「绑数据」Skill 和任何修改指标的 Issue 参考。现在作数。
 
 指标定义的正本。住在项目 git 工作区根下的 `.bw/metrics.toml`,和代码一样过
 PR 审核门槛;BW 只读它、同步进 SQLite 作缓存,绝不反向改写这份文件
 (plan/13 D1「产品信息正本在仓,过程信息在 BW」)。
 
-这份文档就是「找指标」Skill(后续票)的产出契约——它写出符合这个格式的文
-件,BW 的 `SyncMetricsFile` 命令(`bw-app::Command::SyncMetricsFile`,解析
-器在 `bw-engine::metrics_file`)负责读它、校验它、同步它。
+这份文档就是「找指标」Skill 的产出契约——它写出符合这个格式的文件,
+BW 的 `SyncMetricsFile` 命令(`bw-app::Command::SyncMetricsFile`,解析器
+在 `bw-engine::metrics_file`)负责读它、校验它、同步它。
 
 ## 放在哪
 
@@ -31,13 +33,13 @@ collect = { kind = "...", query = "..." }
 
 [[lagging]]
 name = "..."
-def = "..."
+def  = "..."
 target = "..."
 collect = { kind = "...", query = "..." }
 
 [[leading]]
 name = "..."
-def = "..."
+def  = "..."
 target = "..."
 collect = { kind = "...", query = "..." }
 ```
@@ -151,5 +153,5 @@ Skill 处理,不是文件格式问题。
 
 ## 完整样例
 
-见 [`docs/examples/metrics.toml.sample`](examples/metrics.toml.sample)——
+见 [`docs/examples/metrics.toml.sample`](../../examples/metrics.toml.sample)——
 每个字段都带注释,可以直接复制到 `<项目工作区>/.bw/metrics.toml` 使用。

@@ -40,6 +40,9 @@
 | **V1-TermClose1–3** | `docs/v1-prototype/issue2-all-issues-terminal-runs.md` | 终端会话重构收口:1 路由+prompt(所有 issue ▶跑 走终端、issue 内容作位置 prompt、蒸馏/目录并入系统提示词) / 2 删老路径+UI 门控 / 3 examples+文档 | 1–3 已落地 |
 | **V1-TermDemote** | `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §13 | Bug1:合入/Done 后 active_run 不释放 → 交付降级为咨询(放锁、不杀 PTY、不清 worktree) | 已落地 |
 | **V1-TermFocus** | `docs/v1-prototype/issue2-terminal-conversation-refactor.md` §13 | Bug2:左侧 session 卡 ↔ 嵌终端焦点双向同步 | 已落地 |
+| **V2-②-B** | `docs/v2-prototype/same-project-multiple-workbenches.md` §8 | Phase B:采集补齐近 30 天 observation(`history` series)+ Buddy `collect_stats.py`;与 Issue 3 折线配对;横轴为周结束日 MM-DD | 已落地 |
+| **V2-②-A-IntentUX** | `docs/v2-prototype/same-project-multiple-workbenches.md` §6.2 | 后来者选仓后远端探测 project.toml → Intent 只读预填(方案 A);首到者仍手填 | 已落地 |
+| **V2-②-I** | `docs/v2-prototype/same-project-multiple-workbenches.md` §6.2 / §3.3 | 仓平台 open Issue 单向读回重建本地行(可 ▶跑);创建收尾+手动同步;远端已关且本机未完成→Cancelled 不上板;本机 Done 保留可续聊;Done 永不自动 | 已落地 |
 
 散见的一次性编号(如 plan/16 的 P8、plan/17 的 C5)不单独列行,以所在文件的上下文为准。
 

@@ -14,8 +14,8 @@ use crate::{
     MetricSignal, MetricsFileSync, MetricsFileSyncSummary, NewAgent, NewArtifact, NewConnector,
     NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
     NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals,
-    ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow, StageRow, StageSignal,
-    Store, StoreError, WorkflowEdit,
+    ProjectFileSync, ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow,
+    StageRow, StageSignal, Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
@@ -1214,6 +1214,24 @@ impl Store for SqliteStore {
         Ok(ConnectorsFileSyncSummary {
             connectors_synced: sync.connectors.len() as u32,
         })
+    }
+
+    async fn sync_project_file(&self, sync: ProjectFileSync) -> Result<()> {
+        let t = now_unix();
+        sqlx::query(
+            "UPDATE project SET name=?, kind=?, descr=?, benchmark=?, opportunity=?,
+                updated_at=?, rev=rev+1 WHERE id=?",
+        )
+        .bind(&sync.name)
+        .bind(&sync.kind)
+        .bind(&sync.brief)
+        .bind(&sync.benchmark)
+        .bind(&sync.opportunity)
+        .bind(t)
+        .bind(pid(sync.project_id))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn set_metric_archived(&self, metric: MetricId, archived: bool) -> Result<()> {
@@ -3299,6 +3317,34 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn update_issue_content(&self, id: IssueId, title: &str, desc: &str) -> Result<()> {
+        sqlx::query("UPDATE issue SET title=?, descr=?, updated_at=? WHERE id=?")
+            .bind(title)
+            .bind(desc)
+            .bind(now_unix())
+            .bind(id.uuid().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_issue_standard_skill_if_empty(&self, id: IssueId, skill: &str) -> Result<()> {
+        let skill = skill.trim();
+        if skill.is_empty() {
+            return Ok(());
+        }
+        sqlx::query(
+            "UPDATE issue SET standard_skill=?, updated_at=? \
+             WHERE id=? AND (standard_skill IS NULL OR standard_skill='')",
+        )
+        .bind(skill)
+        .bind(now_unix())
+        .bind(id.uuid().to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn get_app_meta(&self, key: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT value FROM app_meta WHERE key=?")
             .bind(key)
@@ -3741,7 +3787,7 @@ mod tests {
 
         // Second sync: update leading's config (same name → upsert, same id),
         // drop north-star from the file (file deletion does NOT delete DB
-        // rows per design — §connectors-toml-format.md "正本里删掉的连接器").
+        // rows per design — docs/buddy/standards/connectors.md "正本里删掉的连接器").
         let sync2 = ConnectorsFileSync {
             project_id,
             connectors: vec![ConnectorDefSync {

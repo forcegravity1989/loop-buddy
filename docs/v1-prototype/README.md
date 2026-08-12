@@ -30,3 +30,5 @@
 
 - [`../../plan/`](../../plan/):整体设计与执行计划(`plan/06-08` 活跃,`plan/00-05` + `09-21` 历史档案,见 `plan/README.md` 导读)。
 - [`../../iterations/`](../../iterations/):实践日志与交接记录;`PRACTICE-buddy.md` 是唯一持续更新的活文档,其余为历史档案。
+- 工作流 skill(常青):[`.claude/skills/buddy-feature-dev`](../../.claude/skills/buddy-feature-dev/SKILL.md)(功能开发)、[`.claude/skills/buddy-bugfix`](../../.claude/skills/buddy-bugfix/SKILL.md)(缺陷);旧 `v1-product-delivery` 仅作跳转。W1/W2/W3 等窗口号是史实,不进 skill。
+- V2 规划入口:[`../v2-prototype/`](../v2-prototype/README.md)(维护节奏 + 调度简化 / 最简多人初始录入)。

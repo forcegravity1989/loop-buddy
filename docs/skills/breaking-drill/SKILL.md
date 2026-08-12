@@ -21,3 +21,20 @@ category: 运维
 
 「边界情况应该没问题」——没喂过坏输入就没有结论。真喂一遍,
 panic 当场修。
+
+## 在 Claude CLI 会话里如何协作
+
+你在一段可见的 Claude 会话里完成本阶段工作,需要多角色时自己调 SubAgent,buddy 不再逐阶段脚本驱动。
+
+**主 Agent 负责什么**:推进 SLO 定义 → 监控告警 → 事故响应 → 复盘回灌全链;产出落为 docs/SLO.md、scripts/healthcheck.sh、docs/incident-drill.md、docs/retro.md 和真实修复。
+
+**哪些环节调独立 SubAgent**:
+- 破坏性输入测试:调一个只拿工具 CLI 接口(不拿源码实现)的 SubAgent,让它系统性喂坏输入(不存在路径、空输入、超长输入、坏参数、坏编码)。它不知道实现细节,因此能覆盖你想不到的边界。产回每个输入的行为(友好报错/panic/不知所云)。
+
+**交接什么产物**:测试 SubAgent 交回 docs/incident-drill.md(逐条:输入 → 行为)。主 Agent 据此当场修 panic 为友好报错,修后重测并记录。
+
+**何时回用户确认**:SLO 红线定完后给用户看一眼——这些是不可妥协的吗。演练发现 panic 后报告用户修了什么。复盘写完报告下一圈原型的回流假设。
+
+**失败或证据不足停哪**:健康检查脚本写完跑不通就停下修,不假装能跑;复盘引用的文件或提交号写之前用 ls / git log 核实,不引用不存在的东西;事故修完不重测就不算修完。
+
+**完成标准**:scripts/healthcheck.sh 一键可跑且失败以非零码退出;docs/incident-drill.md 含逐条真实执行记录;docs/retro.md 引用的文件和提交号真实存在;有一次 git commit。

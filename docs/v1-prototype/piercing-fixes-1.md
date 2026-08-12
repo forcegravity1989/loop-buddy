@@ -339,5 +339,5 @@ SubAgent 列了 8 个拿不准点,主编排决议如下(dev SubAgent 照此建,�
 
 - 现状代码:`create.rs`(RepoCard github-new L440-520 / codehub-new L372-398 / IntentCard L725 / slug 槽 L924-939 / 提交闭包 L798-861 / host 选择器 L580 / signal 声明 L81-82)、`lib.rs`(cron 创建 L6031-6041 / `collect_project_metrics` L3679 脚本臂 L3704-3720 / tick L4064 / CompleteCreation L6317 / ListCodehubRepos L6089)、`model.rs`(CronMode L1656-1674 / label L1680-1688 / icon L1695-1704)、`cron_hub.rs`(CronTaskRowView L112-228 通用槽 L144 / RunSkill 分支 L149-170)、`connector_hub.rs`(ConnectorCard L57-101 显示 L81)、`vm.rs`(`connector_card` L1517)、`main.rs`(toast 渲染 L425-429 / 设值 L208-219)。
 - 指南:`docs/guide/buddy-guide.html` U2(L270-324 / callout L317-320 / 得到什么 L307-315)。
-- 纪律:`CLAUDE.md`、`docs/guide/填写规范.md`、`.claude/skills/v1-product-delivery/SKILL.md`。
+- 纪律:`CLAUDE.md`、`docs/guide/填写规范.md`、`.claude/skills/buddy-feature-dev/SKILL.md`(功能) / `.claude/skills/buddy-bugfix/SKILL.md`(缺陷);旧名 `v1-product-delivery` 已归档跳转。
 - 关联设计:`docs/v1-prototype/issue1-onboard-simplify.md`(W1 纳入,yellow 标注 §6)、`docs/v1-prototype/issue3-overview-refactor.md`(W3 总览,项目指标条)。

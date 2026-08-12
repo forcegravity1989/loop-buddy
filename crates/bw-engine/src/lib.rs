@@ -32,6 +32,7 @@ pub mod github;
 pub mod interactive_cli;
 pub mod metrics_file;
 mod mock;
+pub mod project_file;
 pub mod remote;
 mod terminal_manager;
 mod unsupported_cli;
@@ -44,7 +45,7 @@ pub use evidence::{EvidenceError, WorkspaceEvidence, WorkspaceFile};
 pub use git_log::{read_commits, GitCommit, GitLogError};
 pub use github::{GithubError, GithubRepoRef, GithubRepoSummary};
 pub use interactive_cli::{
-    build_bridge_system_prompt, build_consultation_resume_plan, build_resume_plan,
+    build_consultation_resume_plan, build_project_context_block, build_resume_plan,
     build_startup_plan, InteractiveCliExecutor, InteractiveExecutor, LaunchPlan,
     MockInteractiveExecutor, PromptInjectionMode, PtyInput, SkillOutput, TuiAgentConfig, CLAUDE,
     CONSULTATION_APPEND_PROMPT, CURSOR,
@@ -53,6 +54,7 @@ pub use metrics_file::{
     CollectKind, CollectPlan, MetricDef, MetricsFile, MetricsFileError, NorthStarDef,
 };
 pub use mock::MockExecutor;
+pub use project_file::{ProjectFile, ProjectFileError};
 pub use terminal_manager::{
     ConversationMeta, TerminalManager, TerminalSession, OUTPUT_BATCH_CAP, OUTPUT_BATCH_MAX_BYTES,
 };

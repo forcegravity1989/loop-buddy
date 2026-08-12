@@ -85,6 +85,15 @@ impl Remote {
         }
     }
 
+    /// V2-②-I: list open issues on the remote — read-only. Never creates.
+    /// Used to rebuild local issue rows for later-comers / out-of-band opens.
+    pub async fn list_open_issues(&self) -> Result<Vec<github::RemoteOpenIssue>, RemoteError> {
+        match self {
+            Remote::Github(r) => Ok(github::list_open_issues(r).await?),
+            Remote::Codehub { host, path } => Ok(codehub::list_open_issues(host, path).await?),
+        }
+    }
+
     /// `gh api search/issues` total_count (github) / `codehub-cli issue|mr
     /// list --jq length` count (codehub). Read-only. codehub 查询口径见
     /// [`codehub::collect_count`](crate::codehub::collect_count)(P3 最小词汇
@@ -125,17 +134,43 @@ impl Remote {
         }
     }
 
-    /// Merge the open PR/MR — the **human验收** action (one-click merge → the
-    /// caller settles `Done`). Github: `gh pr merge --squash`; codehub:
-    /// `codehub-cli mr merge <iid> --squash -y`. On `Err` the Issue stays
-    /// `InReview` retryable — never fabricated, never reverse-settled. Only
-    /// ever called from `MergeIssuePr` (a human click), never from any
-    /// run/executor path. Bug③ (2026-07-30): before this, `MergeIssuePr`
+    /// Merge the open PR/MR. Github: `gh pr merge --squash`; codehub:
+    /// `codehub-cli mr merge <iid> --squash -y`. Two call sites with different
+    /// human/auto semantics (§7): `MergeIssuePr` — the **human验收** action
+    /// (one-click merge → caller settles `Done`); on `Err` the Issue stays
+    /// `InReview` retryable, never fabricated, never reverse-settled.
+    /// `write_project_toml_pr` — the **auto-merge** of a `.bw/project.toml`
+    /// config PR (project.toml is configuration, not an Issue, so auto-merging
+    /// it doesn't break "Done 永不自动"; issue PRs are never auto-merged —
+    /// that path is unchanged). Bug③ (2026-07-30): before this, `MergeIssuePr`
     /// crashed `gh pr merge` on codehub remotes.
     pub async fn merge_mr(&self, pr_number: u32) -> Result<(), RemoteError> {
         match self {
             Remote::Github(r) => Ok(github::merge_pr(r, pr_number).await?),
             Remote::Codehub { host, path } => Ok(codehub::merge_mr(host, path, pr_number).await?),
+        }
+    }
+
+    /// V2-② Phase A (§7): open a PR/MR for `.bw/project.toml` on the
+    /// `bw/project-init` branch — the first Buddy to adopt an existing repo
+    /// writes the project intent as a config PR (not an Issue PR). Buddy then
+    /// auto-merges via [`merge_mr`]. Parallels [`create_mr`] but without an
+    /// issue number (project.toml is a config file, not an Issue). Github
+    /// delegates to [`github::open_project_init_pr`]; codehub to
+    /// [`codehub::create_project_init_mr`]. **Never merges** — the caller
+    /// (bw-app's creation flow) auto-merges on success, or surfaces a tip on
+    /// failure. This is the one exception to "issue PR never auto-merges":
+    /// project.toml is configuration, not an Issue (§7,不破「Done 永不自动」).
+    pub async fn create_project_init_mr(
+        &self,
+        workspace: &Path,
+        title: &str,
+    ) -> Result<github::PrOpened, RemoteError> {
+        match self {
+            Remote::Github(_) => Ok(github::open_project_init_pr(workspace, title).await?),
+            Remote::Codehub { host, path } => {
+                Ok(codehub::create_project_init_mr(host, path, workspace, title).await?)
+            }
         }
     }
 

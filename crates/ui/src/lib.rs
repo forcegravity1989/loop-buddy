@@ -9,6 +9,8 @@ pub mod vm;
 
 use bw_core::model::{Signal, StageKind};
 use serde::Serialize;
+use time::OffsetDateTime;
+use vm::iso_week_start_unix;
 
 /// `sigColor(s)` → hex. The fourth state, `Unknown`, gets the warm-paper grey
 /// that reads as "no data" — never green (plan `§6`).
@@ -80,6 +82,164 @@ pub struct SparkPath {
     /// Current-value endpoint (for the trailing dot).
     pub last_x: f32,
     pub last_y: f32,
+}
+
+/// One plotted sample for a labelled trend chart (axes + value markers).
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TrendPoint {
+    pub x: f32,
+    pub y: f32,
+    pub value: f32,
+    /// Short x-axis label: ISO week-end date `MM-DD` (Sunday).
+    pub x_label: String,
+    /// Value label drawn near the marker.
+    pub value_label: String,
+}
+
+/// Geometry for a readable weekly trend chart (not a tiny sparkline): plot
+/// box, polyline/area, per-point markers, and axis tick labels.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TrendChart {
+    pub width: f32,
+    pub height: f32,
+    pub plot_left: f32,
+    pub plot_top: f32,
+    pub plot_w: f32,
+    pub plot_h: f32,
+    pub polyline: String,
+    pub area: String,
+    pub points: Vec<TrendPoint>,
+    /// `(y_px, label)` for the left axis — max / mid / min.
+    pub y_ticks: Vec<(f32, String)>,
+    pub y_min: f32,
+    pub y_max: f32,
+}
+
+fn format_tick(v: f32) -> String {
+    if (v - v.round()).abs() < 0.05 {
+        format!("{}", v.round() as i32)
+    } else {
+        format!("{v:.1}")
+    }
+}
+
+/// Week-bucket x labels for an oldest→newest series ending at the current
+/// ISO week. Label = that week's Sunday (`MM-DD`), matching `weekly_spark`
+/// buckets so a Monday leadership read shows calendar dates, not "本周/−N".
+fn week_x_label(i: usize, n: usize, now_unix: i64) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let weeks_ago = (n - 1 - i) as i64;
+    const DAY: i64 = 86_400;
+    let week_start = iso_week_start_unix(now_unix);
+    let sunday = week_start + 6 * DAY - weeks_ago * 7 * DAY;
+    let dt = OffsetDateTime::from_unix_timestamp(sunday).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    format!("{:02}-{:02}", u8::from(dt.month()), dt.day())
+}
+
+/// Build a chart with left/bottom gutters for axis labels. `total_w`/`total_h`
+/// are the full SVG size; the plot sits inside padded margins. `now_unix`
+/// anchors week-end date labels to the same ISO week as `weekly_spark`.
+pub fn trend_chart(trend: &[f32], total_w: f32, total_h: f32, now_unix: i64) -> TrendChart {
+    let pad_l = 36.0;
+    let pad_r = 10.0;
+    let pad_t = 18.0; // room for value labels above markers
+    let pad_b = 22.0;
+    let plot_w = (total_w - pad_l - pad_r).max(1.0);
+    let plot_h = (total_h - pad_t - pad_b).max(1.0);
+
+    if trend.is_empty() {
+        return TrendChart {
+            width: total_w,
+            height: total_h,
+            plot_left: pad_l,
+            plot_top: pad_t,
+            plot_w,
+            plot_h,
+            polyline: String::new(),
+            area: String::new(),
+            points: Vec::new(),
+            y_ticks: Vec::new(),
+            y_min: 0.0,
+            y_max: 0.0,
+        };
+    }
+
+    let min = trend.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max = trend.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    // Flat series: give a 1-unit pad so the line isn't glued to the border.
+    let (y_min, y_max) = if (max - min) <= f32::EPSILON {
+        let base = min;
+        (base - 1.0, base + 1.0)
+    } else {
+        let pad = (max - min) * 0.08;
+        (min - pad, max + pad)
+    };
+    let span = (y_max - y_min).max(f32::EPSILON);
+    let n = trend.len();
+
+    let x_at = |i: usize| -> f32 {
+        let local = if n == 1 {
+            plot_w / 2.0
+        } else {
+            (i as f32 / (n - 1) as f32) * plot_w
+        };
+        pad_l + local
+    };
+    let y_at = |v: f32| -> f32 { pad_t + (plot_h - ((v - y_min) / span) * plot_h) };
+
+    let mut polyline = String::new();
+    let mut points = Vec::with_capacity(n);
+    for (i, &v) in trend.iter().enumerate() {
+        let x = x_at(i);
+        let y = y_at(v);
+        if i > 0 {
+            polyline.push(' ');
+        }
+        polyline.push_str(&format!("{x:.1},{y:.1}"));
+        points.push(TrendPoint {
+            x,
+            y,
+            value: v,
+            x_label: week_x_label(i, n, now_unix),
+            value_label: format_tick(v),
+        });
+    }
+
+    let area = if n == 1 {
+        String::new()
+    } else {
+        let bottom = pad_t + plot_h;
+        let mut a = format!("M {:.1},{:.1}", x_at(0), bottom);
+        for (i, &v) in trend.iter().enumerate() {
+            a.push_str(&format!(" L {:.1},{:.1}", x_at(i), y_at(v)));
+        }
+        a.push_str(&format!(" L {:.1},{:.1} Z", x_at(n - 1), bottom));
+        a
+    };
+
+    let mid = (y_min + y_max) / 2.0;
+    let y_ticks = vec![
+        (y_at(y_max), format_tick(y_max)),
+        (y_at(mid), format_tick(mid)),
+        (y_at(y_min), format_tick(y_min)),
+    ];
+
+    TrendChart {
+        width: total_w,
+        height: total_h,
+        plot_left: pad_l,
+        plot_top: pad_t,
+        plot_w,
+        plot_h,
+        polyline,
+        area,
+        points,
+        y_ticks,
+        y_min,
+        y_max,
+    }
 }
 
 /// Normalize a trend into an SVG polyline + filled area over a `w × h` box.
@@ -273,5 +433,41 @@ pub fn explain_failure(raw: &str) -> FailureExplanation {
         category: FailureCategory::Unknown,
         headline: "起草没走完,原因未归类——技术详情里是原始报错,可直接重试".to_string(),
         raw: raw.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod trend_chart_tests {
+    use super::trend_chart;
+    use time::{Date, Month, PrimitiveDateTime, Time};
+
+    fn unix_at(y: i32, month: Month, d: u8) -> i64 {
+        PrimitiveDateTime::new(
+            Date::from_calendar_date(y, month, d).expect("date"),
+            Time::from_hms(12, 0, 0).expect("time"),
+        )
+        .assume_utc()
+        .unix_timestamp()
+    }
+
+    #[test]
+    fn labels_axes_and_points_with_week_end_dates() {
+        // Wed 2026-08-12 → current ISO week ends Sun 08-16.
+        let now = unix_at(2026, Month::August, 12);
+        let c = trend_chart(&[1.0, 3.0, 6.0], 320.0, 128.0, now);
+        assert_eq!(c.points.len(), 3);
+        assert_eq!(c.points[0].x_label, "08-02");
+        assert_eq!(c.points[1].x_label, "08-09");
+        assert_eq!(c.points[2].x_label, "08-16");
+        assert_eq!(c.points[2].value_label, "6");
+        assert_eq!(c.y_ticks.len(), 3);
+        assert!(!c.polyline.is_empty());
+    }
+
+    #[test]
+    fn empty_trend_is_empty_chart() {
+        let c = trend_chart(&[], 320.0, 128.0, 0);
+        assert!(c.points.is_empty());
+        assert!(c.polyline.is_empty());
     }
 }

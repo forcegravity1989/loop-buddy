@@ -15,7 +15,7 @@ use crate::kernel::{
     ActionItem, CreateVm, Kernel, ACTION_FAIL_LINGER, ACTION_OK_LINGER, ACTION_PENDING_THRESHOLD,
 };
 use crate::theme;
-use bw_app::{CodehubOrigin, Command, GithubOrigin, Panel, Scope};
+use bw_app::{CodehubOrigin, Command, GithubOrigin, Panel, RemoteProjectProbe, Scope};
 use bw_core::model::Cadence;
 use bw_core::ProjectId;
 use bw_engine::{CodehubRepoSummary, GithubRepoSummary};
@@ -55,6 +55,8 @@ pub fn Create(
     actions: Vec<ActionItem>,
     github_repos: Vec<GithubRepoSummary>,
     codehub_repos: Vec<CodehubRepoSummary>,
+    /// V2-② Intent UX: remote `.bw/project.toml` probe for「接入已有仓」.
+    remote_project_probe: RemoteProjectProbe,
     on_cancel: EventHandler<()>,
 ) -> Element {
     let has_project = vm.is_some();
@@ -120,6 +122,7 @@ pub fn Create(
                         codehub_name,
                         codehub_visibility,
                         github_slug,
+                        remote_project_probe: remote_project_probe.clone(),
                         on_next: move |_| card.set(Card::Intent),
                     }
                 },
@@ -135,6 +138,7 @@ pub fn Create(
                         codehub_visibility,
                         github_slug,
                         submitting,
+                        remote_project_probe: remote_project_probe.clone(),
                     }
                 },
             }
@@ -282,6 +286,7 @@ fn RepoCard(
     codehub_name: Signal<String>,
     codehub_visibility: Signal<String>,
     github_slug: Signal<String>,
+    remote_project_probe: RemoteProjectProbe,
     on_next: EventHandler<()>,
 ) -> Element {
     let k = use_context::<Kernel>();
@@ -347,6 +352,18 @@ fn RepoCard(
         None
     };
 
+    let probe_hint: Option<&str> = match &remote_project_probe {
+        RemoteProjectProbe::Probing => Some("正在识别是否已是 Buddy 项目…"),
+        RemoteProjectProbe::Present(_) => {
+            Some("已识别：仓里有 .bw/project.toml（后来者 · 下一步只读预填）")
+        }
+        RemoteProjectProbe::Absent => Some("仓里尚无 .bw/project.toml（首到者 · 下一步手填意图）"),
+        RemoteProjectProbe::Failed(_) => {
+            Some("正本探测失败，下一步仍可手填（确认后以 clone 为准）")
+        }
+        RemoteProjectProbe::Idle => None,
+    };
+
     rsx! {
         div { style: "font-family:{serif};font-size:22px;font-weight:600;margin:14px 0 4px;", "仓从哪来？" }
         p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;", "每个项目背后是一个真实的代码仓 —— 新建一个,或者接入你已有的。" }
@@ -361,14 +378,18 @@ fn RepoCard(
             {chip_question(
                 "起点",
                 vec![("新建仓", is_new), ("接入已有仓", !is_new)],
-                move |i| {
-                    if i == 0 {
-                        choice.set(RepoChoice::New { private: true });
-                    } else {
-                        choice.set(RepoChoice::Existing {
-                            owner: String::new(),
-                            repo: String::new(),
-                        });
+                {
+                    let k = k.clone();
+                    move |i| {
+                        if i == 0 {
+                            choice.set(RepoChoice::New { private: true });
+                        } else {
+                            choice.set(RepoChoice::Existing {
+                                owner: String::new(),
+                                repo: String::new(),
+                            });
+                        }
+                        k.send(Command::ClearRemoteProjectProbe);
                     }
                 },
             )}
@@ -409,14 +430,39 @@ fn RepoCard(
                         label { style: "{label}", "选一个仓" }
                         button {
                             style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:6px;padding:3px 10px;font-size:11px;",
-                            onclick: move |_| k.send(Command::ListCodehubRepos { host: codehub_host() }),
+                            onclick: {
+                                let k = k.clone();
+                                move |_| k.send(Command::ListCodehubRepos { host: codehub_host() })
+                            },
                             "↻ 刷新列表"
                         }
                     }
                     select {
                         style: "{input} margin-top:6px;",
                         value: "{codehub_path()}",
-                        onchange: move |e| codehub_path.set(e.value()),
+                        onchange: {
+                            let k = k.clone();
+                            let codehub_repos = codehub_repos.clone();
+                            move |e| {
+                                let path = e.value();
+                                codehub_path.set(path.clone());
+                                if path.trim().is_empty() {
+                                    k.send(Command::ClearRemoteProjectProbe);
+                                } else {
+                                    let branch = codehub_repos
+                                        .iter()
+                                        .find(|r| r.path == path)
+                                        .map(|r| r.default_branch.clone())
+                                        .unwrap_or_default();
+                                    k.send(Command::ProbeRemoteProjectToml {
+                                        provider: "codehub".into(),
+                                        host: codehub_host(),
+                                        path,
+                                        default_branch: branch,
+                                    });
+                                }
+                            }
+                        },
                         option { value: "", "请选择…" }
                         for r in codehub_repos.iter() {
                             {
@@ -448,14 +494,18 @@ fn RepoCard(
             {chip_question(
                 "起点",
                 vec![("新建仓", is_new), ("接入已有仓", !is_new)],
-                move |i| {
-                    if i == 0 {
-                        choice.set(RepoChoice::New { private: true });
-                    } else {
-                        choice.set(RepoChoice::Existing {
-                            owner: String::new(),
-                            repo: String::new(),
-                        });
+                {
+                    let k = k.clone();
+                    move |i| {
+                        if i == 0 {
+                            choice.set(RepoChoice::New { private: true });
+                        } else {
+                            choice.set(RepoChoice::Existing {
+                                owner: String::new(),
+                                repo: String::new(),
+                            });
+                        }
+                        k.send(Command::ClearRemoteProjectProbe);
                     }
                 },
             )}
@@ -489,7 +539,10 @@ fn RepoCard(
                         label { style: "{label}", "选一个仓" }
                         button {
                             style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:6px;padding:3px 10px;font-size:11px;",
-                            onclick: move |_| k.send(Command::ListGithubRepos),
+                            onclick: {
+                                let k = k.clone();
+                                move |_| k.send(Command::ListGithubRepos)
+                            },
                             "↻ 刷新列表"
                         }
                     }
@@ -502,12 +555,31 @@ fn RepoCard(
                                 String::new()
                             }
                         },
-                        onchange: move |e| {
-                            if let Some((owner, repo)) = e.value().split_once('/') {
-                                choice.set(RepoChoice::Existing {
-                                    owner: owner.to_string(),
-                                    repo: repo.to_string(),
-                                });
+                        onchange: {
+                            let k = k.clone();
+                            let github_repos = github_repos.clone();
+                            move |e| {
+                                if let Some((owner, repo)) = e.value().split_once('/') {
+                                    let owner = owner.to_string();
+                                    let repo = repo.to_string();
+                                    choice.set(RepoChoice::Existing {
+                                        owner: owner.clone(),
+                                        repo: repo.clone(),
+                                    });
+                                    let branch = github_repos
+                                        .iter()
+                                        .find(|r| r.owner == owner && r.repo == repo)
+                                        .map(|r| r.default_branch.clone())
+                                        .unwrap_or_default();
+                                    k.send(Command::ProbeRemoteProjectToml {
+                                        provider: "github".into(),
+                                        host: String::new(),
+                                        path: format!("{owner}/{repo}"),
+                                        default_branch: branch,
+                                    });
+                                } else {
+                                    k.send(Command::ClearRemoteProjectProbe);
+                                }
                             }
                         },
                         option { value: "", "请选择…" }
@@ -538,13 +610,59 @@ fn RepoCard(
 
         div {
             style: "display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:14px;",
+            if let Some(h) = probe_hint {
+                span { style: "font-size:11.5px;color:{ink3};margin-right:auto;max-width:340px;line-height:1.5;", "{h}" }
+            }
             if !can_send {
                 span { style: "font-size:11.5px;color:#B0503A;", "{hint}" }
             }
             button {
                 style: "{theme::btn_primary()} opacity:{opacity};",
                 disabled: !can_send,
-                onclick: move |_| on_next.call(()),
+                onclick: {
+                    let k = k.clone();
+                    let github_repos = github_repos.clone();
+                    let codehub_repos = codehub_repos.clone();
+                    move |_| {
+                        // Re-fire probe on next if still Idle for an existing
+                        // pick (e.g. list refreshed after selection).
+                        if !is_new {
+                            if is_codehub {
+                                let path = codehub_path();
+                                if !path.trim().is_empty() {
+                                    let branch = codehub_repos
+                                        .iter()
+                                        .find(|r| r.path == path)
+                                        .map(|r| r.default_branch.clone())
+                                        .unwrap_or_default();
+                                    k.send(Command::ProbeRemoteProjectToml {
+                                        provider: "codehub".into(),
+                                        host: codehub_host(),
+                                        path,
+                                        default_branch: branch,
+                                    });
+                                }
+                            } else if let RepoChoice::Existing { owner, repo } = choice() {
+                                if !owner.is_empty() {
+                                    let branch = github_repos
+                                        .iter()
+                                        .find(|r| r.owner == owner && r.repo == repo)
+                                        .map(|r| r.default_branch.clone())
+                                        .unwrap_or_default();
+                                    k.send(Command::ProbeRemoteProjectToml {
+                                        provider: "github".into(),
+                                        host: String::new(),
+                                        path: format!("{owner}/{repo}"),
+                                        default_branch: branch,
+                                    });
+                                }
+                            }
+                        } else {
+                            k.send(Command::ClearRemoteProjectProbe);
+                        }
+                        on_next.call(());
+                    }
+                },
                 "下一步 →"
             }
         }
@@ -594,6 +712,7 @@ fn platform_selector(mut platform: Signal<String>) -> Element {
 /// yellow 需先 `codehub-cli -H yellow auth login`(tooltip 如实标)。
 /// 切换 host 时清空 path(旧 host 的仓列表不再适用)。
 fn codehub_host_selector(mut host: Signal<String>, mut path: Signal<String>) -> Element {
+    let k = use_context::<Kernel>();
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
     let chip = |sel: bool| -> (&'static str, &'static str, &'static str) {
@@ -616,18 +735,39 @@ fn codehub_host_selector(mut host: Signal<String>, mut path: Signal<String>) -> 
             div {
                 style: "display:flex;gap:6px;flex-wrap:wrap;",
                 div {
-                    onclick: move |_| { host.set("green".to_string()); path.set(String::new()); },
+                    onclick: {
+                        let k = k.clone();
+                        move |_| {
+                            host.set("green".to_string());
+                            path.set(String::new());
+                            k.send(Command::ClearRemoteProjectProbe);
+                        }
+                    },
                     style: "cursor:pointer;border:{grbd};background:{grbg};color:{grfg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
                     "绿区 green"
                 }
                 div {
-                    onclick: move |_| { host.set("open".to_string()); path.set(String::new()); },
+                    onclick: {
+                        let k = k.clone();
+                        move |_| {
+                            host.set("open".to_string());
+                            path.set(String::new());
+                            k.send(Command::ClearRemoteProjectProbe);
+                        }
+                    },
                     style: "cursor:pointer;border:{obd};background:{obg};color:{ofg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
                     "内源 open"
                 }
                 div {
                     title: "需先 `codehub-cli -H yellow auth login`",
-                    onclick: move |_| { host.set("yellow".to_string()); path.set(String::new()); },
+                    onclick: {
+                        let k = k.clone();
+                        move |_| {
+                            host.set("yellow".to_string());
+                            path.set(String::new());
+                            k.send(Command::ClearRemoteProjectProbe);
+                        }
+                    },
                     style: "cursor:pointer;border:{ybd};background:{ybg};color:{yfg};border-radius:15px;padding:6px 13px;font-size:12px;font-weight:500;",
                     "黄区 yellow"
                 }
@@ -751,26 +891,55 @@ fn IntentCard(
     codehub_visibility: Signal<String>,
     github_slug: Signal<String>,
     submitting: Signal<bool>,
+    remote_project_probe: RemoteProjectProbe,
 ) -> Element {
     let k = use_context::<Kernel>();
 
     // Extract initial values before hooks (can't move Option<CreateVm> into
-    // multiple use_signal closures).
+    // multiple use_signal closures). Prefer remote正本 when probe already
+    // returned Present (later-comer Intent UX).
     let v = vm.as_ref();
-    let init_name = v.map(|v| v.name.clone()).unwrap_or_default();
-    let init_kind = v
-        .map(|v| v.kind.clone())
-        .unwrap_or_else(|| KINDS[0].to_string());
-    let init_brief = v.map(|v| v.brief.clone()).unwrap_or_default();
-    let init_benchmark = v.map(|v| v.benchmark.clone()).unwrap_or_default();
-    let init_win = v.map(|v| v.win.clone()).unwrap_or_default();
+    let (seed_name, seed_kind, seed_brief, seed_benchmark, seed_win) =
+        if let RemoteProjectProbe::Present(f) = &remote_project_probe {
+            (
+                f.name.clone(),
+                f.kind.clone(),
+                f.brief.clone(),
+                f.benchmark.clone(),
+                f.opportunity.clone(),
+            )
+        } else {
+            (
+                v.map(|v| v.name.clone()).unwrap_or_default(),
+                v.map(|v| v.kind.clone())
+                    .unwrap_or_else(|| KINDS[0].to_string()),
+                v.map(|v| v.brief.clone()).unwrap_or_default(),
+                v.map(|v| v.benchmark.clone()).unwrap_or_default(),
+                v.map(|v| v.win.clone()).unwrap_or_default(),
+            )
+        };
     let is_resuming = vm.is_some();
 
-    let mut name = use_signal(move || init_name);
-    let mut kind = use_signal(move || init_kind);
-    let mut brief = use_signal(move || init_brief);
-    let mut benchmark = use_signal(move || init_benchmark);
-    let mut win = use_signal(move || init_win);
+    let mut name = use_signal(move || seed_name);
+    let mut kind = use_signal(move || seed_kind);
+    let mut brief = use_signal(move || seed_brief);
+    let mut benchmark = use_signal(move || seed_benchmark);
+    let mut win = use_signal(move || seed_win);
+
+    // If probe finishes after Intent mounts (user clicked 下一步 while
+    // Probing), apply Present fields once.
+    use_effect({
+        let probe = remote_project_probe.clone();
+        move || {
+            if let RemoteProjectProbe::Present(f) = &probe {
+                name.set(f.name.clone());
+                kind.set(f.kind.clone());
+                brief.set(f.brief.clone());
+                benchmark.set(f.benchmark.clone());
+                win.set(f.opportunity.clone());
+            }
+        }
+    });
 
     let card = theme::card();
     let serif = theme::SERIF;
@@ -779,8 +948,21 @@ fn IntentCard(
     let label = theme::label();
     let is_codehub = platform() == "codehub";
     let is_new_repo = matches!(repo_choice(), RepoChoice::New { .. });
+    let later_readonly = matches!(&remote_project_probe, RemoteProjectProbe::Present(_));
+    let probing = matches!(&remote_project_probe, RemoteProjectProbe::Probing);
+    let probe_failed = if let RemoteProjectProbe::Failed(e) = &remote_project_probe {
+        Some(e.clone())
+    } else {
+        None
+    };
+    let field_style = if later_readonly {
+        format!("{input} background:#F5F1E8;color:#57534A;")
+    } else {
+        input.clone()
+    };
 
     // can_send: name 非空(+ codehub 必要字段)。brief 改不强制。
+    // Probing: block confirm until we know later vs first (avoid blank submit).
     let codehub_ok = if is_codehub {
         if is_new_repo {
             !codehub_name().trim().is_empty() && !codehub_namespace().trim().is_empty()
@@ -790,7 +972,7 @@ fn IntentCard(
     } else {
         true
     };
-    let can_send = !name().trim().is_empty() && codehub_ok;
+    let can_send = !probing && !name().trim().is_empty() && codehub_ok;
 
     // Bug B: pending guard — 防连点(后台建项目非幂等)。点即置 true;
     // 成功由 kernel 翻 view→App 卸载本屏;失败由 main.rs 收
@@ -798,6 +980,8 @@ fn IntentCard(
     let pending = submitting();
     let (btn_label, btn_bg, btn_shadow, btn_cursor) = if pending {
         ("建立中…", "#B89A8E", "none", "not-allowed")
+    } else if probing {
+        ("识别中…", "#B89A8E", "none", "not-allowed")
     } else {
         (
             "确认 · 建立项目",
@@ -877,7 +1061,26 @@ fn IntentCard(
 
     rsx! {
         div { style: "font-family:{serif};font-size:22px;font-weight:600;margin:14px 0 4px;", "你想做什么？" }
-        p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;", "一个名字、一句你想做的事。对标和成功标准不强制,留空系统照常兜底。" }
+        p { style: "font-size:12.5px;color:{ink3};margin:0 0 14px;line-height:1.7;",
+            if later_readonly {
+                "已是 Buddy 项目：意图来自仓里 .bw/project.toml 正本（只读）。确认后读回本地，不重开三件套、不重推正本。"
+            } else if probing {
+                "正在识别仓里是否已有 .bw/project.toml…"
+            } else {
+                "一个名字、一句你想做的事。对标和成功标准不强制,留空系统照常兜底。"
+            }
+        }
+        if later_readonly {
+            div {
+                style: "display:inline-block;font-family:{theme::MONO};font-size:11px;font-weight:600;letter-spacing:.04em;color:#5F7355;background:#E8F0E4;border:1px solid #C5D6BE;border-radius:6px;padding:4px 10px;margin:0 0 12px;",
+                "已是 Buddy 项目 · 正本只读"
+            }
+        }
+        if let Some(err) = probe_failed.as_ref() {
+            p { style: "font-size:11.5px;color:#B5862F;margin:0 0 12px;line-height:1.6;",
+                "正本探测失败（{err}）。可先手填；确认建立后仍以 clone 后的仓文件为准。"
+            }
+        }
         div {
             style: "{card} padding:18px 20px;",
             div {
@@ -885,20 +1088,28 @@ fn IntentCard(
                 div {
                     label { style: "{label}", "项目名称 *" }
                     input {
-                        style: "{input}",
+                        style: "{field_style}",
                         placeholder: "例:增长实验看板",
                         value: "{name}",
+                        readonly: later_readonly,
                         oninput: move |e| {
-                            name.set(e.value());
+                            if !later_readonly {
+                                name.set(e.value());
+                            }
                         },
                     }
                 }
                 div {
                     label { style: "{label}", "项目类型" }
                     select {
-                        style: "{input}",
+                        style: "{field_style}",
                         value: "{kind}",
-                        onchange: move |e| kind.set(e.value()),
+                        disabled: later_readonly,
+                        onchange: move |e| {
+                            if !later_readonly {
+                                kind.set(e.value());
+                            }
+                        },
                         for kd in KINDS {
                             option { value: "{kd}", "{kd}" }
                         }
@@ -907,29 +1118,44 @@ fn IntentCard(
             }
             label { style: "{label}", "你想做什么" }
             textarea {
-                style: "{input} min-height:70px;",
+                style: "{field_style} min-height:70px;",
                 placeholder: "一句话即可,不强制。例:把 agent 会话里长出的工作流沉淀成可复用资产,导入即跑。",
                 value: "{brief}",
-                oninput: move |e| brief.set(e.value()),
+                readonly: later_readonly,
+                oninput: move |e| {
+                    if !later_readonly {
+                        brief.set(e.value());
+                    }
+                },
             }
             div {
                 style: "display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;",
                 div {
                     label { style: "{label}", "最像的对标(不强制)" }
                     textarea {
-                        style: "{input} min-height:52px;",
+                        style: "{field_style} min-height:52px;",
                         placeholder: "例:\nLinear\nHeight",
                         value: "{benchmark}",
-                        oninput: move |e| benchmark.set(e.value()),
+                        readonly: later_readonly,
+                        oninput: move |e| {
+                            if !later_readonly {
+                                benchmark.set(e.value());
+                            }
+                        },
                     }
                 }
                 div {
                     label { style: "{label}", "三个月后怎样算成了(不强制)" }
                     textarea {
-                        style: "{input} min-height:52px;",
+                        style: "{field_style} min-height:52px;",
                         placeholder: "例:被持续复用、效率可量化提升……",
                         value: "{win}",
-                        oninput: move |e| win.set(e.value()),
+                        readonly: later_readonly,
+                        oninput: move |e| {
+                            if !later_readonly {
+                                win.set(e.value());
+                            }
+                        },
                     }
                 }
             }
@@ -943,14 +1169,20 @@ fn IntentCard(
             div {
                 style: "display:flex;justify-content:flex-end;margin-top:14px;",
                 button {
-                    disabled: pending,
+                    disabled: pending || probing,
                     style: "cursor:{btn_cursor};background:{btn_bg};color:#fff;border:none;border-radius:8px;padding:10px 22px;font:600 13px/1 inherit;box-shadow:{btn_shadow};opacity:{opacity};",
                     onclick: send,
                     "{btn_label}"
                 }
             }
         }
-        p { style: "font-size:11.5px;color:{ink3};margin:10px 2px 0;", "提交后系统自动建仓 + connector + cron + 标配三件套;进度见上方条,完成自动进项目墙。" }
+        p { style: "font-size:11.5px;color:{ink3};margin:10px 2px 0;",
+            if later_readonly {
+                "确认后 clone + 读回正本；不建三件套、不推 project.toml。进度见上方条。"
+            } else {
+                "提交后系统自动建仓 + connector + cron + 标配三件套;进度见上方条,完成自动进项目墙。"
+            }
+        }
     }
 }
 

@@ -988,6 +988,10 @@ pub struct IssueDetailVm {
     pub runs: Vec<IssueRunRowVm>,
     /// (path, short commit, bytes) per registered artifact version.
     pub artifacts: Vec<(String, String, u64)>,
+    /// V2-①: the issue's explicit skill slug (empty = stage default will
+    /// be used at run time). Shown in the detail popup so the user can
+    /// see what method will be loaded.
+    pub standard_skill: String,
     /// P2 (2026-08-06 cowelink 验证): 交互式活(找指标/绑数据)不写
     /// `workflow_run` 行(§2.6 设计决定——过程在嵌入终端/`session.jsonl`
     /// 里,不解析成摘要),`runs` 因此对交互式活恒为空。弹窗此前对空
@@ -1071,6 +1075,7 @@ pub fn issue_detail_vm(
                 (a.path.clone(), short, a.bytes)
             })
             .collect(),
+        standard_skill: issue.standard_skill.clone(),
         is_interactive,
     }
 }

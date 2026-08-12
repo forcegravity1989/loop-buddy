@@ -26,8 +26,8 @@ use bw_store::SessionKind;
 use dioxus::document;
 use dioxus::prelude::*;
 use std::time::Duration;
-use ui::vm::{MetricVm, SessionCardVm, VersionLogVm};
-use ui::{sparkline_path, SparkPath, WowDir};
+use ui::vm::{IssueVm, MetricVm, SessionCardVm, VersionLogVm};
+use ui::{sparkline_path, trend_chart, SparkPath, TrendChart, WowDir};
 
 /// Provider-aware web URL for a remote issue. codehub →
 /// `https://{domain}/{path}/issues/{iid}`; github → the canonical `github.com`
@@ -66,6 +66,13 @@ fn remote_mr_url(provider: &str, host: &str, path: &str, n: u32) -> String {
 #[component]
 pub fn Op(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     let paper = theme::PAPER;
+    // Live PTY: center column fills height so the terminal can flex vertically.
+    // Other panels keep scrollable content.
+    let center = if op.panel == Panel::Workflow && op.pty_active {
+        "flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:14px 22px 16px;"
+    } else {
+        "flex:1;min-width:0;overflow-y:auto;padding:18px 22px 40px;"
+    };
     rsx! {
         div {
             style: "display:flex;flex-direction:column;height:100%;background:{paper};",
@@ -76,7 +83,7 @@ pub fn Op(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
                 style: "flex:1;display:flex;min-height:0;",
                 LeftRail { op: op.clone() }
                 div {
-                    style: "flex:1;min-width:0;overflow-y:auto;padding:18px 22px 40px;",
+                    style: "{center}",
                     Center { op, run, on_pick_hub }
                 }
             }
@@ -270,6 +277,8 @@ fn ActiveSessionsRail(op: OpVm) -> Element {
     let ink3 = theme::INK_3;
     let card_alt = theme::CARD_ALT;
     let needs_you: Vec<SessionCardVm> = op.sessions.iter().filter(|s| s.active).cloned().collect();
+    let sessions = op.sessions.clone();
+    let issues = op.issues.clone();
     rsx! {
         div { style: "font-size:11px;color:{ink3};letter-spacing:.06em;margin-bottom:8px;", "进行中 · 待你介入" }
         if needs_you.is_empty() {
@@ -279,18 +288,24 @@ fn ActiveSessionsRail(op: OpVm) -> Element {
             {
                 let k = k.clone();
                 let sid = s.id;
+                let title = s.title.clone();
                 let stage = s.stage_kind;
                 let stage_label = stage.map(|x| x.label()).unwrap_or("项目");
+                let sessions = sessions.clone();
+                let issues = issues.clone();
                 rsx! {
                     button {
-                        key: "{s.title}",
+                        key: "{sid.uuid()}",
                         style: "width:100%;text-align:left;background:{card_alt};border:1px solid #DBD4C5;border-radius:8px;padding:9px 10px;margin-bottom:7px;cursor:pointer;",
                         onclick: move |_| {
-                            if let Some(kind) = stage {
-                                k.send(Command::SetScope(Scope::Stage(kind)));
-                            }
-                            k.send(Command::SetPanel(Panel::Workflow));
-                            k.send(Command::SelectSession(Some(sid)));
+                            wake_session_like_board(
+                                &k,
+                                &sessions,
+                                &issues,
+                                sid,
+                                &title,
+                                stage,
+                            );
                         },
                         div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
                         div { style: "font-size:11px;color:{ink3};", "{stage_label} · {s.status_label}" }
@@ -331,29 +346,47 @@ fn StageSessions(op: OpVm) -> Element {
         if !creates.is_empty() {
             div { style: "font-size:11px;color:{ink3};margin:6px 0;", "创建" }
             for s in creates {
-                SessionCard { s: s.clone(), selected: active_id == Some(s.id) }
+                SessionCard {
+                    s: s.clone(),
+                    selected: active_id == Some(s.id),
+                    sessions: op.sessions.clone(),
+                    issues: op.issues.clone(),
+                }
             }
         }
         if !opts.is_empty() {
             div { style: "font-size:11px;color:{agent};margin:8px 0 6px;", "优化" }
             for s in opts {
-                SessionCard { s: s.clone(), selected: active_id == Some(s.id) }
+                SessionCard {
+                    s: s.clone(),
+                    selected: active_id == Some(s.id),
+                    sessions: op.sessions.clone(),
+                    issues: op.issues.clone(),
+                }
             }
         }
     }
 }
 
 #[component]
-fn SessionCard(s: SessionCardVm, selected: bool) -> Element {
+fn SessionCard(
+    s: SessionCardVm,
+    selected: bool,
+    sessions: Vec<SessionCardVm>,
+    issues: Vec<IssueVm>,
+) -> Element {
     let k = use_context::<Kernel>();
     let ink3 = theme::INK_3;
     let bd = if selected { theme::CLAY } else { "#DBD4C5" };
     let card_alt = theme::CARD_ALT;
     let sid = s.id;
+    let title = s.title.clone();
+    let stage_kind = s.stage_kind;
     let mut confirming_delete = use_signal(|| false);
     let k_del = k.clone();
     rsx! {
         div {
+            key: "{sid.uuid()}",
             style: "width:100%;text-align:left;background:{card_alt};border:1.4px solid {bd};border-radius:8px;padding:9px 10px;margin-bottom:7px;",
             div {
                 style: "display:flex;align-items:flex-start;gap:6px;",
@@ -361,8 +394,14 @@ fn SessionCard(s: SessionCardVm, selected: bool) -> Element {
                     style: "flex:1;text-align:left;background:transparent;border:none;cursor:pointer;padding:0;font:inherit;color:inherit;",
                     onclick: move |e| {
                         e.stop_propagation();
-                        k.send(Command::SetPanel(Panel::Workflow));
-                        k.send(Command::SelectSession(Some(sid)));
+                        wake_session_like_board(
+                            &k,
+                            &sessions,
+                            &issues,
+                            sid,
+                            &title,
+                            stage_kind,
+                        );
                     },
                     div { style: "font-size:12.5px;margin-bottom:3px;", "{s.title}" }
                     div { style: "font-size:11px;color:{ink3};", "{s.status_label}" }
@@ -414,7 +453,19 @@ fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     match (op.panel, stage) {
         (Panel::Progress, None) => rsx! { ProgressAll { op } },
         (Panel::Progress, Some(s)) => rsx! { ProgressStage { op, s } },
-        (Panel::Workflow, s) => rsx! { WorkflowPanel { op, stage: s, run, on_pick_hub } },
+        (Panel::Workflow, s) => {
+            let fill = if op.pty_active {
+                "height:100%;min-height:0;display:flex;flex-direction:column;"
+            } else {
+                ""
+            };
+            rsx! {
+                div {
+                    style: "{fill}",
+                    WorkflowPanel { op, stage: s, run, on_pick_hub }
+                }
+            }
+        }
         (Panel::Routine, None) => rsx! { RoutineAll { op } },
         (Panel::Routine, Some(s)) => rsx! { RoutineStage { s } },
         (Panel::Artifact, _) => rsx! { ArtifactPanel { op } },
@@ -621,6 +672,45 @@ fn existing_issue_session(
         .map(|s| s.id)
 }
 
+/// Sidebar → same wake chain as board ▶跑/续聊 (Bug2 再发,2026-08-10).
+/// Pure stage-playbook cards (title not `#N …`) keep SelectSession-only.
+fn wake_session_like_board(
+    k: &Kernel,
+    sessions: &[SessionCardVm],
+    issues: &[IssueVm],
+    sid: SessionId,
+    title: &str,
+    stage_kind: Option<StageKind>,
+) {
+    let issue = issues
+        .iter()
+        .find(|i| format!("#{} {}", i.number, i.title) == title);
+    let Some(issue) = issue else {
+        if let Some(kind) = stage_kind {
+            k.send(Command::SetScope(Scope::Stage(kind)));
+        }
+        k.send(Command::SetPanel(Panel::Workflow));
+        k.send(Command::SelectSession(Some(sid)));
+        return;
+    };
+    let stage = issue.stage;
+    let sess_title = format!("#{} {}", issue.number, issue.title);
+    let sess_id = existing_issue_session(sessions, stage, &sess_title).unwrap_or(sid);
+    k.send(Command::StartSession {
+        id: sess_id,
+        stage_kind: Some(stage),
+        kind: SessionKind::Create,
+        title: sess_title,
+    });
+    k.send(Command::RunIssue {
+        session: sess_id,
+        id: issue.id,
+    });
+    k.send(Command::SetScope(Scope::Stage(stage)));
+    k.send(Command::SetPanel(Panel::Workflow));
+    k.send(Command::SelectSession(Some(sess_id)));
+}
+
 fn next_issue_status(s: IssueStatus) -> Option<IssueStatus> {
     match s {
         IssueStatus::Backlog => Some(IssueStatus::Todo),
@@ -697,6 +787,32 @@ fn IssuesPanel(op: OpVm) -> Element {
     // V1-TermRefactor4: 点卡立刻亮「恢复中…」(dispatch 返回前 Vm 还不更新);
     // 与 op.pty_restoring 合并;焦点已活且 App 恢复标记已清 → 不再显示。
     let mut restoring_issue: dioxus::prelude::Signal<Option<IssueId>> = use_signal(|| None);
+    // Bug B: merge takes seconds; Vm only rebuilds after dispatch returns, so
+    // a local busy flag is the only immediate feedback. Shared with the
+    // detail overlay so board + popup stay in sync. Cleared when a merge
+    // result toast arrives (success or fail) — not merely when status moves,
+    // because a failed merge stays InReview.
+    let merging_issue: dioxus::prelude::Signal<Option<IssueId>> = use_signal(|| None);
+    let mut merge_note_listener = use_signal(|| false);
+    if !merge_note_listener() {
+        merge_note_listener.set(true);
+        let mut rx = k.notes();
+        let mut merging_clear = merging_issue;
+        spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(crate::kernel::UiNote::ConnectorSynced { name, detail, .. }) => {
+                        let merge_related = name.contains("· merge") || name.contains("· 验收");
+                        if merge_related && !detail.contains("正在合入") {
+                            merging_clear.set(None);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+    }
 
     let cols: [(IssueStatus, &str); 6] = [
         (IssueStatus::Backlog, "待办池"),
@@ -746,11 +862,19 @@ fn IssuesPanel(op: OpVm) -> Element {
                     }
                 }
                 select {
-                    style: "border:1px solid {border};border-radius:7px;padding:7px 9px;font-size:12px;background:#FFF;color:{ink2};max-width:200px;",
-                    title: "关联技能(可空)——选中后该 Issue 开工时会带着这条方法",
+                    style: "border:1px solid {border};border-radius:7px;padding:7px 9px;font-size:12px;background:#FFF;color:{ink2};max-width:240px;",
+                    title: "关联技能(可空)——不选时开工用本阶段默认方法,选了则替换默认",
                     value: "{new_skill}",
                     onchange: move |e| new_skill.set(e.value()),
-                    option { value: "", "不关联技能" }
+                    {
+                        let default_slug = bw_core::playbook::stage_skills(new_stage())
+                            .first()
+                            .map(|s| s.name)
+                            .unwrap_or("");
+                        rsx! {
+                            option { value: "", "不选(用本阶段默认: {default_slug})" }
+                        }
+                    }
                     for s in skill_choices.iter() {
                         option {
                             key: "{s.id:?}",
@@ -779,14 +903,34 @@ fn IssuesPanel(op: OpVm) -> Element {
                     },
                     "＋ 创建 Issue"
                 }
+                {
+                    let has_remote = !op.remote_path.trim().is_empty();
+                    let k_sync = k.clone();
+                    rsx! {
+                        if has_remote {
+                            button {
+                                style: "cursor:pointer;border:1px solid {border};border-radius:7px;background:#FFF;color:{ink2};padding:8px 14px;font-size:12px;flex:none;",
+                                title: "从仓平台拉 open Issue 到本地看板(不新建远端;不改本地完成态)",
+                                onclick: move |_| k_sync.send(Command::SyncRemoteIssues),
+                                "↻ 从仓同步 Issue"
+                            }
+                        }
+                    }
+                }
             }
-            // P4: the evidence overlay — floats above the board while open.
+            // P4: evidence overlay — covers the Issue board center only.
+            // Must NOT use viewport `fixed;inset:0`: that painted over the
+            // left session rail too, so after opening a card from the board
+            // the sidebar looked dead (clicks hit the dimmer). Absolute
+            // within this relative board root keeps LeftRail clickable.
+            div { style: "position:relative;min-height:60vh;",
             if let Some(d) = op.issue_detail.clone() {
                 IssueDetailOverlay {
                     can_consult: op.consultable_issues.contains(&d.id),
                     sessions: op.sessions.clone(),
                     active_run: op.active_run,
                     project_id: op.id,
+                    merging_issue: merging_issue,
                     d: d,
                 }
             }
@@ -869,6 +1013,14 @@ fn IssuesPanel(op: OpVm) -> Element {
                                             }
                                             if is_restoring {
                                                 span { style: "color:{ink3};border:1px solid {border};border-radius:4px;padding:0 5px;font-size:10px;", "恢复中…" }
+                                            }
+                                        }
+                                        if i.github_number != 0 && i.pr_number == 0
+                                            && i.status == IssueStatus::InProgress
+                                        {
+                                            div {
+                                                style: "font-size:10.5px;color:{ink3};font-family:{mono};margin-top:2px;",
+                                                "开放 MR 检出后进评审中（通常十几秒内）"
                                             }
                                         }
                                         // C4 · issue 身份映射: 号非 0 才渲染。
@@ -1075,10 +1227,38 @@ fn IssuesPanel(op: OpVm) -> Element {
                                                 // merge 是首选验收路径(人 merge → 关单)。
                                                 // 不硬拦下面的 →已完成(只留痕不拦人)。
                                                 if i.status == IssueStatus::InReview && i.pr_number != 0 {
-                                                    button {
-                                                        style: "cursor:pointer;background:transparent;border:none;color:{clay};font-size:11.5px;padding:0;font-weight:700;",
-                                                        onclick: move |_| k_merge.send(Command::MergeIssuePr { id: i_id }),
-                                                        "⛙ merge PR #{i.pr_number}"
+                                                    {
+                                                        let is_merging = merging_issue() == Some(i_id);
+                                                        let pr_n = i.pr_number;
+                                                        let (merge_label, merge_cursor, merge_color) =
+                                                            if is_merging {
+                                                                (
+                                                                    format!("正在合入 PR #{pr_n}…"),
+                                                                    "not-allowed",
+                                                                    ink3,
+                                                                )
+                                                            } else {
+                                                                (
+                                                                    format!("⬇ merge PR #{pr_n}"),
+                                                                    "pointer",
+                                                                    clay,
+                                                                )
+                                                            };
+                                                        let mut merging_set = merging_issue;
+                                                        rsx! {
+                                                            button {
+                                                                style: "cursor:{merge_cursor};background:transparent;border:none;color:{merge_color};font-size:11.5px;padding:0;font-weight:700;",
+                                                                disabled: is_merging,
+                                                                onclick: move |_| {
+                                                                    if merging_set() == Some(i_id) {
+                                                                        return;
+                                                                    }
+                                                                    merging_set.set(Some(i_id));
+                                                                    k_merge.send(Command::MergeIssuePr { id: i_id });
+                                                                },
+                                                                "{merge_label}"
+                                                            }
+                                                        }
                                                     }
                                                 }
                                                 if let Some(ns) = advance {
@@ -1107,6 +1287,7 @@ fn IssuesPanel(op: OpVm) -> Element {
                     }
                 }
             }
+            }
         }
     }
 }
@@ -1125,6 +1306,7 @@ fn IssueDetailOverlay(
     active_run: Option<(ProjectId, IssueId)>,
     project_id: ProjectId,
     can_consult: bool,
+    mut merging_issue: dioxus::prelude::Signal<Option<IssueId>>,
 ) -> Element {
     let k = use_context::<Kernel>();
     let card = theme::card();
@@ -1137,6 +1319,7 @@ fn IssueDetailOverlay(
     let mono = theme::MONO;
     let id = d.id;
     let k_close = k.clone();
+    let k_close_x = k.clone();
     let k_done = k.clone();
     let k_back = k.clone();
     let k_run = k.clone();
@@ -1170,21 +1353,40 @@ fn IssueDetailOverlay(
 
     rsx! {
         div {
-            style: "position:fixed;inset:0;background:rgba(35,33,28,.38);z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;",
+            style: "position:absolute;inset:0;background:rgba(35,33,28,.38);z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;",
+            // Backdrop click closes — left rail stays outside this absolute
+            // layer (parent is the board center `position:relative` root).
+            onclick: move |_| k_close.send(Command::CloseIssueDetail),
             div {
                 style: "{card} width:720px;max-width:96vw;max-height:82vh;overflow-y:auto;padding:18px 22px;",
+                onclick: move |e| e.stop_propagation(),
                 // ── header ──
                 div { style: "display:flex;align-items:baseline;gap:10px;",
                     div { style: "font-size:11.5px;color:{ink3};font-family:{mono};", "#{d.number} · {d.stage_label} · {d.status_label}" }
                     div { style: "flex:1;" }
                     button {
                         style: "cursor:pointer;background:transparent;border:none;color:{ink3};font-size:14px;",
-                        onclick: move |_| k_close.send(Command::CloseIssueDetail),
+                        onclick: move |_| k_close_x.send(Command::CloseIssueDetail),
                         "✕"
                     }
                 }
                 div { style: "font-size:16px;color:{ink};margin:4px 0 2px;", "{d.title}" }
                 div { style: "font-size:12px;color:{ink2};margin-bottom:6px;", "指派:{assignee} · {d.priority_label}" }
+                // V2-①: 显式技能 vs 阶段默认——让用户看懂「默认用什么、选自己的会发生什么」。
+                {
+                    let skill_line = if !d.standard_skill.trim().is_empty() {
+                        format!("技能: {} (用户选择,替换阶段默认)", d.standard_skill)
+                    } else {
+                        let default_slug = bw_core::playbook::stage_skills(d.stage)
+                            .first()
+                            .map(|s| s.name)
+                            .unwrap_or("无");
+                        format!("技能: {} (本阶段默认,不选技能时用此)", default_slug)
+                    };
+                    rsx! {
+                        div { style: "font-size:11.5px;color:{ink3};font-family:{mono};margin-bottom:6px;", "{skill_line}" }
+                    }
+                }
                 // C5 · PR 验收环: 有 PR 号如实展示,验收=人 merge。
                 if d.pr_number != 0 {
                     div { style: "font-size:11.5px;color:{clay};font-family:{mono};margin-bottom:6px;", "PR #{d.pr_number} · 等待人工 merge 验收" }
@@ -1349,13 +1551,37 @@ fn IssueDetailOverlay(
                         // 关单 → 走现有 InReview→Done 记账)。无 PR(存量/无仓活)→
                         // 保留裸「确认完成」路径(全活 PR 化是纪律不是硬闸)。
                         if d.pr_number != 0 {
-                            button {
-                                style: "cursor:pointer;border:none;border-radius:7px;background:{clay};color:#FFF;padding:7px 16px;font-size:12.5px;",
-                                onclick: move |_| {
-                                    k_merge.send(Command::MergeIssuePr { id });
-                                    k_merge.send(Command::OpenIssueDetail(id));
-                                },
-                                "⛙ merge PR #{d.pr_number}(验收)"
+                            {
+                                let is_merging = merging_issue() == Some(id);
+                                let pr_n = d.pr_number;
+                                let (merge_label, merge_bg, merge_cursor) = if is_merging {
+                                    (
+                                        format!("正在合入 PR #{pr_n}…"),
+                                        "#B89A8E".to_string(),
+                                        "not-allowed",
+                                    )
+                                } else {
+                                    (
+                                        format!("⬇ merge PR #{pr_n}(验收)"),
+                                        clay.to_string(),
+                                        "pointer",
+                                    )
+                                };
+                                rsx! {
+                                    button {
+                                        style: "cursor:{merge_cursor};border:none;border-radius:7px;background:{merge_bg};color:#FFF;padding:7px 16px;font-size:12.5px;",
+                                        disabled: is_merging,
+                                        onclick: move |_| {
+                                            if merging_issue() == Some(id) {
+                                                return;
+                                            }
+                                            merging_issue.set(Some(id));
+                                            k_merge.send(Command::MergeIssuePr { id });
+                                            k_merge.send(Command::OpenIssueDetail(id));
+                                        },
+                                        "{merge_label}"
+                                    }
+                                }
                             }
                         } else {
                             button {
@@ -2146,6 +2372,116 @@ fn Spark(spark: SparkPath, color: String, w: f32, h: f32) -> Element {
     }
 }
 
+/// Card-sized weekly trend: y ticks, x week labels, value markers on points.
+/// Replaces the tiny sparkline on BizMetricCard (Issue 3 走势可读走势).
+#[component]
+fn WeeklyTrendChart(chart: TrendChart, color: String) -> Element {
+    let ink3 = theme::INK_3;
+    let ink4 = theme::INK_4;
+    let mono = theme::MONO;
+    if chart.points.is_empty() {
+        return rsx! {
+            div {
+                style: "height:120px;display:flex;align-items:center;justify-content:center;font-size:12px;color:{ink4};border:1px dashed #E2DCCF;border-radius:8px;",
+                "尚无观测 · 折线空"
+            }
+        };
+    }
+    let w = chart.width;
+    let h = chart.height;
+    let plot_bottom = chart.plot_top + chart.plot_h;
+    let plot_right = chart.plot_left + chart.plot_w;
+    let grid = "#E8E2D6";
+    rsx! {
+        div {
+            style: "width:100%;",
+            div {
+                style: "display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;",
+                span { style: "font-family:{mono};font-size:11px;color:{ink3};letter-spacing:0.02em;", "按周走势" }
+                span { style: "font-family:{mono};font-size:10px;color:{ink4};", "横轴=日期 · 纵轴=值" }
+            }
+            svg {
+                width: "100%",
+                height: "{h}",
+                view_box: "0 0 {w} {h}",
+                preserve_aspect_ratio: "xMidYMid meet",
+                // Plot frame
+                rect {
+                    x: "{chart.plot_left}",
+                    y: "{chart.plot_top}",
+                    width: "{chart.plot_w}",
+                    height: "{chart.plot_h}",
+                    fill: "#FBF9F4",
+                    stroke: "{grid}",
+                    stroke_width: "1",
+                }
+                // Horizontal grid + y labels
+                for (yi, (y, label)) in chart.y_ticks.iter().cloned().enumerate() {
+                    g {
+                        key: "yg{yi}",
+                        line {
+                            x1: "{chart.plot_left}",
+                            y1: "{y}",
+                            x2: "{plot_right}",
+                            y2: "{y}",
+                            stroke: "{grid}",
+                            stroke_width: "1",
+                            stroke_dasharray: "3 3",
+                        }
+                        text {
+                            x: "{chart.plot_left - 6.0}",
+                            y: "{y + 3.5}",
+                            text_anchor: "end",
+                            style: "font-family:{mono};font-size:10px;fill:{ink3};",
+                            "{label}"
+                        }
+                    }
+                }
+                // Area + line
+                if !chart.area.is_empty() {
+                    path { d: "{chart.area}", fill: "{color}", opacity: "0.12" }
+                }
+                polyline {
+                    points: "{chart.polyline}",
+                    fill: "none",
+                    stroke: "{color}",
+                    stroke_width: "2.2",
+                    stroke_linejoin: "round",
+                    stroke_linecap: "round",
+                }
+                // Points + value labels + x labels
+                for (i, p) in chart.points.iter().cloned().enumerate() {
+                    g {
+                        key: "pt{i}",
+                        circle {
+                            cx: "{p.x}",
+                            cy: "{p.y}",
+                            r: "3.2",
+                            fill: "#FFFDF8",
+                            stroke: "{color}",
+                            stroke_width: "1.8",
+                        }
+                        text {
+                            x: "{p.x}",
+                            y: "{p.y - 8.0}",
+                            text_anchor: "middle",
+                            style: "font-family:{mono};font-size:10px;font-weight:600;fill:{color};",
+                            "{p.value_label}"
+                        }
+                        text {
+                            x: "{p.x}",
+                            y: "{plot_bottom + 14.0}",
+                            text_anchor: "middle",
+                            style: "font-family:{mono};font-size:10px;fill:{ink3};",
+                            "{p.x_label}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Inline "record this week's value" form — the monitoring heartbeat.
 #[component]
 fn RecordInline(metric: MetricVm) -> Element {
@@ -2344,8 +2680,13 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
     };
     let has_obs = m.collection_chain.has_observation;
 
-    // Weekly sparkline geometry from weekly_spark (8-week, carry-forward).
-    let wk_spark = sparkline_path(&m.weekly_spark, 92.0, 24.0);
+    // Weekly trend chart (readable axes + value markers · from observation weeks).
+    // X labels = ISO week-end dates (MM-DD), same bucket as weekly_spark.
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let wk_chart = trend_chart(&m.weekly_spark, 320.0, 128.0, now_unix);
     let spark_color = sig_color.clone();
 
     // Delta: vs 上周 (green↑/red↓/grey—). None when <2 weeks of history.
@@ -2456,12 +2797,8 @@ fn BizMetricCard(m: MetricVm, is_north_star: bool) -> Element {
                     span { style: "color:{ink4};", "  无观测" }
                 }
             }
-            // Weekly sparkline (8-week trend · from observation ISO-week buckets)
-            div {
-                style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;",
-                Spark { spark: wk_spark, color: spark_color, w: 92.0, h: 24.0 }
-                span { style: "font-family:{mono};font-size:9.5px;color:{ink3};", "8 周走势" }
-            }
+            // Weekly trend (8-week · observation ISO-week buckets)
+            WeeklyTrendChart { chart: wk_chart, color: spark_color }
             // Collection chain footer (north star card or no-observation cards).
             // Honest: 无数据=Unknown≠绿.
             if show_chain {
@@ -2755,7 +3092,30 @@ fn WorkflowPanel(
                 HubOverviewStrip { hub: op.hub.clone(), on_pick_hub }
             }
         },
-        Some(s) => rsx! { WorkflowStage { op, s, run } },
+        Some(s) => {
+            // Dioxus 0.7: a lone child's `key` is ignored (diff_vcomponent
+            // never reads it). Keyed `for` → Fragment → diff_keyed_children,
+            // so SetScope remounts the stage tree (Issues↔Workflow heal).
+            let stage_items = vec![s];
+            let fill = if op.pty_active {
+                "height:100%;min-height:0;display:flex;flex-direction:column;"
+            } else {
+                ""
+            };
+            rsx! {
+                div {
+                    style: "{fill}",
+                    for s in stage_items {
+                        {
+                            let stage_key = format!("{:?}", s.kind);
+                            rsx! {
+                                WorkflowStage { key: "{stage_key}", op: op.clone(), s, run: run.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2825,7 +3185,7 @@ fn RunBanner(run: RunVm) -> Element {
     let workflow_name = run.workflow_name.clone();
     rsx! {
         div {
-            style: "background:{card_alt};border:1px solid #DBD4C5;border-radius:10px;padding:14px 16px;margin-bottom:14px;",
+            style: "flex:none;background:{card_alt};border:1px solid #DBD4C5;border-radius:10px;padding:14px 16px;margin-bottom:14px;",
             div {
                 style: "display:flex;align-items:baseline;gap:8px;margin-bottom:10px;",
                 if !workflow_name.is_empty() {
@@ -2976,95 +3336,122 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
         // into a box whose "reply" is a canned echo that goes nowhere, right
         // above the terminal where their input actually reaches claude.
         Some(chat) if !op.pty_active => rsx! { Chat { chat } },
-        Some(_) => rsx! {},
-        None => rsx! {
+        None if !op.pty_active => rsx! {
             div { style: "color:{ink3};font-size:12.5px;", "到「Issue」面板点「▶ 跑」开工——记录会出现在这里。" }
         },
+        _ => rsx! {},
+    };
+    // Key includes stage + focus: cross-SetScope remounts the host; focus
+    // flips remount the newly-visible widget onto a real-size div (same heal
+    // as Issues↔Workflow). Unfocused peers stay mounted off-screen so PTY
+    // byte pumps keep running.
+    let stage_key = format!("{:?}", s.kind);
+    let live_terms: Vec<(ConversationId, bool, String)> = if op.pty_active {
+        op.pty_live_ids
+            .iter()
+            .map(|cid| {
+                let focused = op.pty_conversation_id == Some(*cid);
+                let focus_tag = if focused { "f" } else { "h" };
+                let term_key = format!("{}-{stage_key}-{focus_tag}", cid.uuid());
+                (*cid, focused, term_key)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let stage_fill = if op.pty_active {
+        "display:flex;flex-direction:column;height:100%;min-height:0;"
+    } else {
+        ""
     };
     rsx! {
-        RunBanner { run: run.clone() }
-        // V1-TermClose2 · UI 门控:方法循环卡(来自 stage_workflow)只在无终端
-        // 会话(!pty_active)时显——issue 终端会话无 phase loop,显这张卡会误导。
-        // 阶段循环会话(stage playbook / hub workflow / cron,无 PTY)仍显。
-        // 内含的「↑ 沉淀为静态」按钮语义不变(只 op.chat.is_some() && !pty_active
-        // 时显,本卡门控不改变其条件)。
-        if !op.pty_active {
-            div {
-                style: "{card} padding:18px 20px;margin-bottom:14px;",
+        div {
+            style: "{stage_fill}",
+            RunBanner { run: run.clone() }
+            // V1-TermClose2 · UI 门控:方法循环卡(来自 stage_workflow)只在无终端
+            // 会话(!pty_active)时显——issue 终端会话无 phase loop,显这张卡会误导。
+            // 阶段循环会话(stage playbook / hub workflow / cron,无 PTY)仍显。
+            // 内含的「↑ 沉淀为静态」按钮语义不变(只 op.chat.is_some() && !pty_active
+            // 时显,本卡门控不改变其条件)。
+            if !op.pty_active {
                 div {
-                    style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
-                    span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{spec_preview.name}" }
-                }
-                div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
-                div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
-                if op.chat.is_some() && !op.pty_active {
-                    button {
-                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
-                        onclick: promote,
-                        "↑ 沉淀为静态"
-                    }
-                }
-            }
-        }
-        RunOutputs {
-            phases: run.phases.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
-            msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
-        }
-        {chat_area}
-        // 重启恢复:点卡到首包之间显示「恢复中…」(首包后 pty_restoring 清空)。
-        if op.pty_restoring.is_some() {
-            div {
-                style: "{card} padding:10px 14px;margin-bottom:10px;font-size:12.5px;color:{ink3};",
-                "恢复中…"
-            }
-        }
-        // V1-TermRefactor5 · 咨询态:终端区显式「转成新活」(不做自动意图分类;不宣称只读)。
-        if let Some((promote_stage, promote_number, promote_title)) = consult_promote {
-            {
-                let k_new = k.clone();
-                rsx! {
+                    style: "{card} padding:18px 20px;margin-bottom:14px;",
                     div {
-                        style: "display:flex;align-items:center;gap:10px;margin:0 0 8px;",
-                        span { style: "font-size:11.5px;color:{ink3};", "咨询中 · 新交付请另开一件活" }
+                        style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
+                        span { style: "font-family:{serif};font-size:15px;font-weight:600;", "{spec_preview.name}" }
+                    }
+                    div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
+                    div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
+                    if op.chat.is_some() && !op.pty_active {
                         button {
-                            style: "cursor:pointer;border:1px solid {theme::BORDER};border-radius:7px;background:transparent;color:{theme::INK_2};padding:5px 12px;font-size:11.5px;",
-                            title: "在同项目新建一件活,承接咨询里冒出的新交付诉求",
-                            onclick: move |_| {
-                                k_new.send(Command::CreateIssue {
-                                    id: IssueId::new(),
-                                    stage: promote_stage,
-                                    title: format!("来自咨询：{promote_title}"),
-                                    desc: format!(
-                                        "从 #{} 「{}」的咨询会话转来。",
-                                        promote_number, promote_title
-                                    ),
-                                    priority: IssuePriority::Medium,
-                                    standard_skill: String::new(),
-                                });
-                                k_new.send(Command::SetPanel(Panel::Issues));
-                            },
-                            "转成新活"
+                            style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
+                            onclick: promote,
+                            "↑ 沉淀为静态"
                         }
                     }
                 }
             }
-        }        // 多会话常驻:所有活 PTY 挂 xterm;仅焦点可见(隐藏的仍收字节)。
-        if op.pty_active {
-            for cid in op.pty_live_ids.clone() {
+            RunOutputs {
+                phases: run.phases.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
+                msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
+            }
+            {chat_area}
+            // 重启恢复:点卡到首包之间显示「恢复中…」(首包后 pty_restoring 清空)。
+            if op.pty_restoring.is_some() {
+                div {
+                    style: "{card} padding:10px 14px;margin-bottom:10px;font-size:12.5px;color:{ink3};",
+                    "恢复中…"
+                }
+            }
+            // V1-TermRefactor5 · 咨询态:终端区显式「转成新活」(不做自动意图分类;不宣称只读)。
+            if let Some((promote_stage, promote_number, promote_title)) = consult_promote {
                 {
-                    let is_focused = op.pty_conversation_id == Some(cid);
+                    let k_new = k.clone();
+                    rsx! {
+                        div {
+                            style: "display:flex;align-items:center;gap:10px;margin:0 0 8px;flex:none;",
+                            span { style: "font-size:11.5px;color:{ink3};", "咨询中 · 新交付请另开一件活" }
+                            button {
+                                style: "cursor:pointer;border:1px solid {theme::BORDER};border-radius:7px;background:transparent;color:{theme::INK_2};padding:5px 12px;font-size:11.5px;",
+                                title: "在同项目新建一件活,承接咨询里冒出的新交付诉求",
+                                onclick: move |_| {
+                                    k_new.send(Command::CreateIssue {
+                                        id: IssueId::new(),
+                                        stage: promote_stage,
+                                        title: format!("来自咨询：{promote_title}"),
+                                        desc: format!(
+                                            "从 #{} 「{}」的咨询会话转来。",
+                                            promote_number, promote_title
+                                        ),
+                                        priority: IssuePriority::Medium,
+                                        standard_skill: String::new(),
+                                    });
+                                    k_new.send(Command::SetPanel(Panel::Issues));
+                                },
+                                "转成新活"
+                            }
+                        }
+                    }
+                }
+            }
+            // 多会话常驻:所有活 PTY 挂 xterm;仅焦点可见(隐藏的仍收字节)。
+            for term in live_terms.iter() {
+                {
+                    let cid = term.0;
+                    let is_focused = term.1;
+                    let term_key = term.2.clone();
                     rsx! {
                         TerminalWidget {
-                            key: "{cid.uuid()}",
+                            key: "{term_key}",
                             conversation_id: cid,
                             focused: is_focused,
                         }
                     }
                 }
             }
-        }
-        if let Some(msg) = promoted_msg() {
-            Toast { msg, onclose: move |_| promoted_msg.set(None) }
+            if let Some(msg) = promoted_msg() {
+                Toast { msg, onclose: move |_| promoted_msg.set(None) }
+            }
         }
     }
 }
@@ -3086,7 +3473,7 @@ fn RunOutputs(phases: Vec<String>, msgs: Vec<MsgVm>) -> Element {
     let ink3 = theme::INK_3;
     rsx! {
         div {
-            style: "{card} padding:16px 18px;margin-bottom:14px;",
+            style: "flex:none;{card} padding:16px 18px;margin-bottom:14px;",
             div { style: "font-size:12.5px;font-weight:600;margin-bottom:2px;", "产出" }
             div { style: "font-size:10.5px;color:{ink3};margin-bottom:10px;", "按完成顺序把每条 agent 产出与对应阶段配对(最佳努力对齐)" }
             for (i , m) in agent_msgs.iter().enumerate() {
@@ -3317,6 +3704,32 @@ window.__bw_term_drain = function(id) {
     if (input === null && resize === null) return null;
     return { input: input, resize: resize, ready: !!sess.ready };
 };
+// Bug2: display:none → 0×0 open 假成功;非焦点离屏保尺寸;焦点回来 re-home+fit+refresh。
+window.__bw_term_refocus = function(id) {
+    var sess = window.__bw_term_sessions && window.__bw_term_sessions[id];
+    var div = document.getElementById('__bw_terminal_' + id);
+    if (!sess || !sess.term || !div) return false;
+    if (sess.term.element && !div.contains(sess.term.element)) {
+        try { div.appendChild(sess.term.element); } catch (e) {}
+    }
+    var tries = 0;
+    var go = function() {
+        tries++;
+        var el = sess.term.element || div;
+        var w = el.clientWidth || 0;
+        var h = el.clientHeight || 0;
+        if (w > 0 && h > 0) {
+            try { if (sess.fit) sess.fit.fit(); } catch (e) {}
+            try { sess.term.refresh(0, Math.max(0, sess.term.rows - 1)); } catch (e) {}
+            try { sess.term.focus(); } catch (e) {}
+            sess.resize = { cols: sess.term.cols, rows: sess.term.rows };
+            return;
+        }
+        if (tries < 20) requestAnimationFrame(go);
+    };
+    requestAnimationFrame(function() { requestAnimationFrame(go); });
+    return true;
+};
 "#;
 
 /// Build the per-conversation init IIFE. `id` is the conversation uuid
@@ -3376,10 +3789,16 @@ return (async function(id) {{
     if (sess.term) {{
         if (sess.term.element && !div.contains(sess.term.element)) {{
             div.appendChild(sess.term.element);
-            if (sess.fit) sess.fit.fit();
-            wireDiv(div, sess.term);
         }}
-        return {{ ok: true, reason: 'already-initialized' }};
+        try {{
+            if (sess.fit && div.clientWidth > 0 && div.clientHeight > 0) {{
+                sess.fit.fit();
+                sess.term.refresh(0, Math.max(0, sess.term.rows - 1));
+                sess.resize = {{ cols: sess.term.cols, rows: sess.term.rows }};
+            }}
+        }} catch (e) {{}}
+        wireDiv(div, sess.term);
+        return {{ ok: true, reason: 'already-initialized', w: div.clientWidth, h: div.clientHeight }};
     }}
 
     if (!window.Terminal || !window.FitAddon) {{
@@ -3557,22 +3976,49 @@ fn TerminalWidget(conversation_id: ConversationId, focused: bool) -> Element {
     });
 
     let border = theme::BORDER;
+    // Never use display:none for unfocused xterms. Cross-stage remount used
+    // to open FitAddon at 0×0; later refocus returned ok but the canvas stayed
+    // blank (2026-08-11 log: fitted path Ok(true), user still saw no CLI).
+    // Off-screen fixed box keeps real width/height so open/fit stay healthy;
+    // focus flips CSS + remount (key f/h) onto a flex-growing host. Byte pumps
+    // stay mounted for all live ids.
     let wrap = if focused {
-        format!("margin-top:14px;border:1px solid {border};border-radius:8px;overflow:hidden;")
+        format!(
+            "margin-top:14px;border:1px solid {border};border-radius:8px;overflow:hidden;\
+             flex:1;min-height:0;display:flex;flex-direction:column;"
+        )
     } else {
-        "display:none;".into()
+        "position:fixed;left:-10000px;top:0;width:800px;height:360px;overflow:hidden;opacity:0;pointer-events:none;".into()
     };
+
+    // Dioxus 0.7: subscribe focused with use_reactive (bare bool prop is not
+    // reactive — focus-only updates used to skip this effect entirely).
+    use_effect(use_reactive((&focused, &cid_str), |(focused, cid_str)| {
+        if !focused {
+            return;
+        }
+        let cid_json = serde_json::to_string(&cid_str).unwrap_or_else(|_| "\"\"".into());
+        spawn(async move {
+            // Two frames for CSS/layout after remount, then refit.
+            tokio::time::sleep(Duration::from_millis(48)).await;
+            let script = format!(
+                "return window.__bw_term_refocus ? window.__bw_term_refocus({cid_json}) : false"
+            );
+            let _ = document::eval(&script).await;
+        });
+    }));
+
     rsx! {
         div {
             style: "{wrap}",
             div {
-                style: "background:#1e1e2e;color:#cdd6f4;font-family:JetBrains Mono,Consolas,monospace;font-size:11px;padding:4px 10px;display:flex;align-items:center;gap:6px;",
+                style: "flex:none;background:#1e1e2e;color:#cdd6f4;font-family:JetBrains Mono,Consolas,monospace;font-size:11px;padding:4px 10px;display:flex;align-items:center;gap:6px;",
                 span { style: "opacity:0.7;", "● in-app terminal" }
                 span { style: "opacity:0.4;margin-left:auto;", "claude interactive session" }
             }
             div {
                 id: "{div_id}",
-                style: "min-height:320px;background:#1e1e2e;",
+                style: "flex:1;min-height:0;height:100%;background:#1e1e2e;",
             }
         }
     }

@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 mod agent_import;
+mod buddy_materialize;
 mod bw_canon;
 mod hook_listener;
 mod legacy_migration;
@@ -45,23 +46,24 @@ use bw_core::{
     MetricId, ProjectId, SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    allowed_tools_arg, build_bridge_system_prompt, build_consultation_resume_plan,
+    allowed_tools_arg, build_consultation_resume_plan, build_project_context_block,
     build_resume_plan, build_startup_plan, evidence, ClaudeCliConfig, ClaudeCliExecutor,
     CodehubRepoSummary, ConversationMeta, Engine, GitCommit, GithubRepoSummary,
     InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
-    PhaseNode, RunCtx, RunEvent, SkillOutput, TerminalManager, UnsupportedCliExecutor, CLAUDE,
+    PhaseNode, ProjectFile, RunCtx, RunEvent, SkillOutput, TerminalManager, UnsupportedCliExecutor,
+    CLAUDE,
 };
 use bw_store::{
     AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
     MetricsFileSync, NewAgent, NewArtifact, NewConnector, NewCronTask, NewIssue,
     NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewSkillFile, NewStage,
-    NewWorkflowSpec, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
+    NewWorkflowSpec, ProjectFileSync, ProjectRow, SessionKind, SkillEdit, Store, WorkflowEdit,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
-use time::OffsetDateTime;
+use time::{Date, Month, OffsetDateTime, Time};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
@@ -371,6 +373,36 @@ pub enum Command {
     /// *definitions*, not values (collection execution is a later ticket,
     /// C7).
     SyncMetricsFile,
+    /// V2-② Phase A (§6): sync `.bw/project.toml` → SQLite `project` row.
+    /// The file is the source of truth (first-comer writes it, later-comer
+    /// reads it back); the project row's `name`/`kind`/`descr`/`benchmark`/
+    /// `opportunity` are a cache. Parallels `SyncMetricsFile` — file missing =
+    /// zero action zero noise, bad file = honest error toast, never triggers
+    /// recompute (intent fields aren't derived data).
+    SyncProjectFile,
+    /// V2-②-I: list open issues on the project's remote and rebuild/refresh
+    /// local issue rows (Backlog). Never creates remote issues; never writes
+    /// local Done. Local rows whose remote is no longer open and that this
+    /// Buddy never settled → Cancelled (off-board); local Done stays for
+    /// resume. Same path for creation-flow auto sync and the manual
+    ///「从仓同步 Issue」button.
+    SyncRemoteIssues,
+    /// V2-② Intent UX (§6.2): probe remote `.bw/project.toml` *before* clone,
+    /// so the Intent card can readonly-prefill later-comers. `provider` =
+    /// `"codehub"` | `"github"`; `host` is the codehub alias (ignored for
+    /// github); `path` = `namespace/repo` (codehub) or `owner/repo` (github);
+    /// `default_branch` from the repo list (empty → engine falls back to
+    /// `main`). Absent file → first-comer; fetch/parse error → Failed (UI
+    /// stays editable — never pretend later-comer).
+    ProbeRemoteProjectToml {
+        provider: String,
+        host: String,
+        path: String,
+        default_branch: String,
+    },
+    /// Clear [`AppState::remote_project_probe`] when the user switches back to
+    ///「新建仓」or leaves the existing-repo picker.
+    ClearRemoteProjectProbe,
     /// C7 · 采集器 (plan/13 D7): pull real data into the active project's
     /// metrics *right now* — the manual「立即采集」counterpart to the standard
     /// daily collect cron. For every `collect.kind = "github"` metric it runs
@@ -908,6 +940,22 @@ pub enum Command {
     },
 }
 
+/// Result of [`Command::ProbeRemoteProjectToml`] — creation-flow UI state
+/// only (not persisted). Final later-comer gate after confirm is still the
+/// on-disk `.bw/project.toml` post-clone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum RemoteProjectProbe {
+    #[default]
+    Idle,
+    Probing,
+    /// Remote has no `.bw/project.toml` → first-comer Intent (editable).
+    Absent,
+    /// Parsed正本 → later-comer Intent (readonly prefill).
+    Present(ProjectFile),
+    /// Network/auth/parse failed — stay editable; confirm still uses clone gate.
+    Failed(String),
+}
+
 /// Kernel → UI facts (already happened).
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -1309,12 +1357,21 @@ pub struct AppState {
     /// internal cache of live GitHub data, not persisted — it's a direct
     /// read-through, not one of this app's own derived Signals.
     pub github_repos: Vec<GithubRepoSummary>,
+    /// V2-② Intent UX: last remote `.bw/project.toml` probe for the create
+    /// flow's「接入已有仓」path. Process-local; cleared on「新建仓」.
+    pub remote_project_probe: RemoteProjectProbe,
     /// V1 Issue2 Phase2a: unix ts of the last InReview poll for interactive
     /// issues. The poller checks codehub/github for open MRs on interactive
     /// issues that are InProgress + have a claude_conversation row (interactive) + `pr_number == 0`.
-    /// Throttled to once per 5 minutes so it doesn't hit the remote every
-    /// `tick_scheduler` fire. `0` = never polled (first tick runs it).
+    /// Adaptive throttle: ~15s while candidates wait for an open MR, 5 min
+    /// when idle — so a just-opened MR is not stuck behind a multi-minute
+    /// backstop. `0` = never polled (first tick runs it).
     pub last_inreview_poll: i64,
+    /// Set when `tick_scheduler` mutates UI-visible state without firing a
+    /// cron (notably InReview poll / Stop-triggered MR detection). The
+    /// desktop kernel rebuilds Vm when this is true even if `fired` is empty
+    /// — otherwise the board stays stale while toasts already say「评审中」.
+    pub scheduler_ui_dirty: bool,
     /// V1 Issue2 Phase2b: cwd → IssueId map for hook event routing. When
     /// `run_issue_interactive` spawns a session, it registers the worktree
     /// cwd here. When the hook listener receives a SessionStart/Stop event
@@ -1390,7 +1447,9 @@ impl Default for AppState {
             cron_effectiveness: None,
             issue_detail: None,
             github_repos: Vec::new(),
+            remote_project_probe: RemoteProjectProbe::Idle,
             last_inreview_poll: 0,
+            scheduler_ui_dirty: false,
             interactive_sessions: HashMap::new(),
             pending_stop_check: false,
             terminal_manager: TerminalManager::new(),
@@ -1552,6 +1611,12 @@ impl App {
     /// commands embed it.
     pub fn hook_port(&self) -> Option<u16> {
         self.hook_port
+    }
+
+    /// Desktop kernel: after `tick_scheduler`, rebuild Vm if the tick mutated
+    /// issues/connectors without returning a non-empty cron `fired` list.
+    pub fn take_scheduler_ui_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.state.scheduler_ui_dirty)
     }
 
     fn emit(&self, e: Event) {
@@ -1895,14 +1960,25 @@ impl App {
         }
     }
 
-    /// Bug2(V1-TermFocus): 左→终端——解析 session→issue。session 的 title 是
-    /// `#N 标题`(见 op.rs `run_sess_title = format!("#{} {}", i.number,
-    /// i.title)`),按 number+title 在 `self.state.issues` 里匹配 issue。
-    /// 匹配到 + 活 PTY → `focus_conversation`;匹配到 + 无活 PTY 但有
-    /// `claude_session_id` → `run_issue_now`(与 `OpenIssueDetail` 一致:
-    /// Done/InReview 进 `open_conversation`、InProgress 进 resume);匹配不到
-    /// (纯 stage-playbook 跑的阶段记录,不挂 issue)→ 保持原行为。
+    /// Bug2(V1-TermFocus)+收口补洞:左→终端——解析 session→issue 后走与
+    /// issue 看板「▶跑/续聊」相同的 `run_issue_now`(活 PTY 切焦点 /
+    /// Done·InReview resume 进 `open_conversation` / 否则起交互式)。
+    ///
+    /// 旧实现只在「已有 conversation 且(活 PTY|非空 claude_session_id)」时
+    /// 动作,缺行或 hook 未回填 session_id 时静默 no-op → 阶段记录高亮了、
+    /// 工作流区仍空(看板因直接 `RunIssue` 不受影响)。匹配不到 `#N 标题`
+    /// (纯 stage-playbook 阶段记录)→ 保持原行为(只设 active_session)。
     async fn sync_session_to_terminal(&mut self, sid: SessionId) -> Result<(), AppError> {
+        let Some(issue_id) = self.resolve_issue_for_session(sid).await? else {
+            return Ok(());
+        };
+        self.run_issue_now(sid, issue_id).await
+    }
+
+    /// 阶段记录 session.title = `#N 标题`(op.rs `run_sess_title`)。按
+    /// number+title 在 `self.state.issues` 匹配;匹配不到 = 不挂 issue 的
+    /// 纯阶段循环会话。
+    async fn resolve_issue_for_session(&self, sid: SessionId) -> Result<Option<IssueId>, AppError> {
         let p = self.active()?;
         let title = self
             .store
@@ -1912,25 +1988,14 @@ impl App {
             .find(|s| s.id == sid)
             .map(|s| s.title);
         let Some(title) = title else {
-            return Ok(());
+            return Ok(None);
         };
-        let issue_id = self
+        Ok(self
             .state
             .issues
             .iter()
             .find(|i| format!("#{} {}", i.number, i.title) == title)
-            .map(|i| i.id);
-        let Some(issue_id) = issue_id else {
-            return Ok(());
-        };
-        if let Some(c) = self.store.get_conversation_by_issue(issue_id).await? {
-            if self.state.terminal_manager.is_live(c.id) {
-                self.focus_conversation(c.id, issue_id).await;
-            } else if !c.claude_session_id.is_empty() {
-                self.run_issue_now(SessionId::new(), issue_id).await?;
-            }
-        }
-        Ok(())
+            .map(|i| i.id))
     }
 
     fn clear_focus_if(&mut self, conversation_id: ConversationId) {
@@ -1987,10 +2052,11 @@ impl App {
     ///
     /// Covers BOTH codehub and github (unlike `collect_github_issue_drift`
     /// which is github-only and manual-trigger). Called from
-    /// `tick_scheduler`, throttled to once per 5 minutes
-    /// (`INREVIEW_POLL_INTERVAL_SECS`) so it doesn't hit the remote every
-    /// tick. A failed remote query degrades honestly (toast + skip this
-    /// issue this round), never fabricating an InReview.
+    /// `tick_scheduler`, throttled adaptively (`INREVIEW_POLL_ACTIVE_SECS`
+    /// while candidates wait, `INREVIEW_POLL_IDLE_SECS` when idle) so a
+    /// just-opened MR lands in InReview in seconds–teens of seconds, not
+    /// multi-minute silence. A failed remote query degrades honestly (toast
+    /// + skip this issue this round), never fabricating an InReview.
     async fn poll_interactive_inreview(&mut self) -> Result<(), AppError> {
         for proj in self.state.projects.clone() {
             let remote_path = proj.remote_path.trim();
@@ -3927,6 +3993,19 @@ impl App {
         if proj.remote_path.trim().is_empty() {
             return Ok(None);
         }
+        // V2-② Phase A (§6.2/§5.2): later-comer gate — if the repo already
+        // has `.bw/project.toml` (another Buddy纳管过这个仓), skip the trio.
+        // The old gate (remote_path non-empty) fired for every repo-attached
+        // project, so a second Buddy adopting the same repo would re-create
+        // 3 duplicate Issues on the remote. The file's existence is the
+        // first-comer/later-comer判据 (§6): no file = first-comer (build the
+        // trio); file = later-comer (skip — the startup package was already
+        // issued by the first Buddy).
+        let project_toml = std::path::Path::new(&proj.workspace_path)
+            .join(bw_engine::project_file::PROJECT_FILE_REL_PATH);
+        if project_toml.exists() {
+            return Ok(None);
+        }
         const TRIO: [(&str, &str, &str); 3] = [
             (
                 "竞品分析",
@@ -4021,7 +4100,7 @@ impl App {
     /// ——不采集、不写零值,signal 保持既有(无数据即 Unknown,绝不假绿)。
     /// `gh` 失败:零新观测、如实计入失败(供 ok:false toast),signal 靠既有
     /// 过期降级自然变灰。北极星的采集方案落在 `project` 列(非 metric 行),没有
-    /// 可挂观测的 metric_id,v1 不采(留白见 docs/metrics-toml-format.md)。
+    /// 可挂观测的 metric_id,v1 不采(留白见 docs/buddy/standards/metrics.md)。
     /// `.bw/metrics.toml` 正本 → SQLite 缓存的同步本体。两个入口共用:
     /// `Command::SyncMetricsFile`(手动,active 项目)与 `MergeIssuePr`
     /// (plan/13 D5「merge 后同步进 SQLite 作缓存」——code-review Spec 轴
@@ -4088,6 +4167,12 @@ impl App {
             Ok(Some(file)) => {
                 let sync = connectors_file_sync(p, &file);
                 let summary = self.store.sync_connectors_file(sync).await?;
+                // File→DB upsert alone is not enough for Hub/rail: UI reads
+                // `state.connectors`. Without refresh, a newly synced script
+                // connector (e.g. version-release after 绑数据 merge) stays
+                // invisible until Boot or an unrelated ConnectorsChanged path.
+                self.refresh_connectors().await?;
+                self.emit(Event::ConnectorsChanged);
                 self.emit(Event::ProjectUpdated(p));
                 self.emit(Event::ConnectorSynced {
                     name: "connectors.toml".into(),
@@ -4106,6 +4191,323 @@ impl App {
         Ok(())
     }
 
+    /// V2-② Phase A (§6): sync `.bw/project.toml` → SQLite `project` row
+    /// (`name`/`kind`/`descr`/`benchmark`/`opportunity`). Parallels
+    /// [`sync_metrics_file_for`] — the file is the source of truth, buddy DB
+    /// is a mirror. File missing = zero action zero noise (same idiom). Bad
+    /// file = honest error toast, cache untouched. Never triggers recompute
+    /// (intent fields aren't derived data). Called by the creation flow's
+    /// later-comer detection path and `Command::SyncProjectFile`.
+    async fn sync_project_file_for(&mut self, p: ProjectId) -> Result<(), AppError> {
+        let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+        match bw_engine::project_file::read(&proj.workspace_path) {
+            Ok(None) => {}
+            Ok(Some(file)) => {
+                let sync = project_file_sync(p, &file);
+                self.store.sync_project_file(sync).await?;
+                self.emit(Event::ProjectUpdated(p));
+                self.emit(Event::ConnectorSynced {
+                    name: "project.toml".into(),
+                    ok: true,
+                    detail: "仓里 .bw/project.toml 正本已读回,本地意图字段已对齐正本".into(),
+                });
+            }
+            Err(e) => {
+                self.emit(Event::ConnectorSynced {
+                    name: "project.toml".into(),
+                    ok: false,
+                    detail: e.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// V2-②-I: exact title → standard trio skill slug. Empty = no default skill.
+    fn trio_skill_for_title(title: &str) -> &'static str {
+        match title.trim() {
+            "竞品分析" => "competitive-analysis",
+            "找指标" => "north-star-discovery",
+            "绑数据" => "metrics-binding",
+            _ => "",
+        }
+    }
+
+    /// V2-②-I: import/refresh local issue rows from remote open issues.
+    ///
+    /// - Never calls remote `create_issue`
+    /// - Never transitions to Done
+    /// - Same `github_number` → refresh title/desc; fill empty skill only
+    /// - New numbers → create local Backlog rows
+    /// - Local mapped row absent from open set + not Done/settled → Cancelled
+    ///   (board already hides Cancelled); local Done kept for resume
+    ///
+    /// `announce`: emit ActionProgress Started/Ok/Fail (manual + creation).
+    async fn sync_remote_issues_for(
+        &mut self,
+        p: ProjectId,
+        announce: bool,
+    ) -> Result<(), AppError> {
+        let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
+        let path = proj.remote_path.trim();
+        if path.is_empty() {
+            return Ok(());
+        }
+        let action_name = format!("{} · 从仓同步 Issue", proj.name);
+        if announce {
+            self.emit(Event::ActionProgress {
+                name: action_name.clone(),
+                state: ActionState::Started,
+            });
+        }
+        let remote =
+            match bw_engine::remote::Remote::for_project(&proj.provider, &proj.remote_host, path) {
+                Ok(r) => r,
+                Err(e) => {
+                    if announce {
+                        self.emit(Event::ActionProgress {
+                            name: action_name,
+                            state: ActionState::Fail(e.to_string()),
+                        });
+                    }
+                    self.emit(Event::ConnectorSynced {
+                        name: "远端 Issue".into(),
+                        ok: false,
+                        detail: format!("远端配置错,无法读回 Issue:{e}"),
+                    });
+                    return Ok(());
+                }
+            };
+        let opens = match remote.list_open_issues().await {
+            Ok(v) => v,
+            Err(e) => {
+                if announce {
+                    self.emit(Event::ActionProgress {
+                        name: action_name,
+                        state: ActionState::Fail(e.to_string()),
+                    });
+                }
+                self.emit(Event::ConnectorSynced {
+                    name: "远端 Issue".into(),
+                    ok: false,
+                    detail: format!("列出远端 open Issue 失败:{e}"),
+                });
+                return Ok(());
+            }
+        };
+        let (created, refreshed, pruned) = self
+            .import_remote_open_issues(p, proj.active_stage, &opens)
+            .await?;
+        self.refresh_issues().await?;
+        self.emit(Event::IssuesChanged);
+        let detail = format!(
+            "新建 {created} · 刷新 {refreshed} · 收起 {pruned} · 远端 open {}",
+            opens.len()
+        );
+        if announce {
+            self.emit(Event::ActionProgress {
+                name: action_name,
+                state: ActionState::Ok(detail.clone()),
+            });
+        }
+        self.emit(Event::ConnectorSynced {
+            name: "远端 Issue".into(),
+            ok: true,
+            detail,
+        });
+        Ok(())
+    }
+
+    /// Pure store-side apply for V2-②-I (unit-testable without network).
+    /// Returns `(created, refreshed, pruned)` where `pruned` is how many
+    /// unsettled local rows were Cancelled because their remote left open.
+    async fn import_remote_open_issues(
+        &mut self,
+        p: ProjectId,
+        stage: StageKind,
+        opens: &[bw_engine::github::RemoteOpenIssue],
+    ) -> Result<(u32, u32, u32), AppError> {
+        let existing = self.store.list_issues(p, None, None).await?;
+        let mut by_number: std::collections::HashMap<u32, IssueId> = existing
+            .into_iter()
+            .filter(|i| i.github_number != 0)
+            .map(|i| (i.github_number, i.id))
+            .collect();
+        let mut created = 0u32;
+        let mut refreshed = 0u32;
+        let mut open_set = std::collections::HashSet::new();
+        for remote in opens {
+            if remote.number == 0 {
+                continue;
+            }
+            open_set.insert(remote.number);
+            let skill = Self::trio_skill_for_title(&remote.title);
+            let body = remote.body.trim();
+            if let Some(id) = by_number.get(&remote.number).copied() {
+                self.store
+                    .update_issue_content(id, &remote.title, body)
+                    .await?;
+                self.store
+                    .set_issue_standard_skill_if_empty(id, skill)
+                    .await?;
+                refreshed += 1;
+            } else {
+                let id = IssueId::new();
+                self.store
+                    .create_issue(NewIssue {
+                        id,
+                        project_id: p,
+                        stage,
+                        title: remote.title.clone(),
+                        desc: body.to_string(),
+                        priority: IssuePriority::Medium,
+                        standard_skill: skill.to_string(),
+                    })
+                    .await?;
+                self.store
+                    .set_issue_github_number(id, remote.number)
+                    .await?;
+                by_number.insert(remote.number, id);
+                created += 1;
+            }
+        }
+
+        // Remote closed (absent from open list): drop unsettled local rows
+        // off the board via Cancelled. Keep Done/settled — this Buddy's own
+        // completion ledger + resume chat. Local-only rows (github_number=0)
+        // are untouched.
+        let mut pruned = 0u32;
+        let after = self.store.list_issues(p, None, None).await?;
+        for issue in after {
+            if issue.github_number == 0 || open_set.contains(&issue.github_number) {
+                continue;
+            }
+            if issue.status == IssueStatus::Done || issue.settled_at.is_some() {
+                continue;
+            }
+            if issue.status == IssueStatus::Cancelled {
+                continue;
+            }
+            if !issue.status.can_transition_to(IssueStatus::Cancelled) {
+                continue;
+            }
+            self.store
+                .transition_issue(issue.id, IssueStatus::Cancelled)
+                .await?;
+            // If this issue held the delivery lock, release it (Cancelled via
+            // TransitionIssue also skips demote; sync must not leave a lock).
+            let _ = self.demote_delivery_to_consultation(issue.id).await;
+            pruned += 1;
+        }
+        Ok((created, refreshed, pruned))
+    }
+
+    /// V2-② Phase A (§7): existing-repo first-comer path — write
+    /// `.bw/project.toml` into the cloned workspace, open a PR on
+    /// `bw/project-init`, and Buddy auto-merge it. project.toml is
+    /// configuration (not an Issue), so auto-merge here doesn't break
+    /// "Done 永不自动" (that rule is about Issues; issue PRs are never
+    /// auto-merged — unchanged). On any failure (no merge permission, branch
+    /// protection, network), the file is still written to the workspace and
+    /// the PR may be open — a tip toast surfaces the error, Builder handles
+    /// it manually. Never blocks CompleteCreation itself.
+    async fn write_project_toml_pr(
+        &mut self,
+        proj: &ProjectRow,
+        dir: &std::path::Path,
+        toml: &str,
+    ) {
+        let action_name = format!("{} · project.toml PR", proj.name);
+        self.emit(Event::ActionProgress {
+            name: action_name.clone(),
+            state: ActionState::Started,
+        });
+        // Write the file (no commit — the PR path stages + commits via
+        // stage_commit_push_msg). git checkout -b carries untracked files to
+        // the new branch, so the written file is staged + committed there.
+        let toml_path = dir.join(bw_engine::project_file::PROJECT_FILE_REL_PATH);
+        if let Some(parent) = toml_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&toml_path, toml) {
+            self.emit(Event::ActionProgress {
+                name: action_name,
+                state: ActionState::Fail(format!("写入 .bw/project.toml 失败:{e}")),
+            });
+            return;
+        }
+        let remote = match bw_engine::remote::Remote::for_project(
+            &proj.provider,
+            &proj.remote_host,
+            &proj.remote_path,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                self.emit(Event::ActionProgress {
+                    name: action_name,
+                    state: ActionState::Fail(format!("远端配置错,无法提 PR:{e}")),
+                });
+                return;
+            }
+        };
+        match remote.create_project_init_mr(dir, "项目意图正本").await {
+            Ok(pr_opened) => {
+                let pr_num = pr_opened.number();
+                match remote.merge_mr(pr_num).await {
+                    Ok(()) => {
+                        self.emit(Event::ActionProgress {
+                            name: action_name,
+                            state: ActionState::Ok(format!("PR #{pr_num} 已合入")),
+                        });
+                    }
+                    Err(e) => {
+                        // PR is open but auto-merge failed — honest tip,
+                        // Builder can manually merge. The file is written +
+                        // committed on the branch.
+                        let detail = format!(
+                            "project.toml PR 已开(#{pr_num})但自动合入失败,请手动 merge:{e}"
+                        );
+                        self.emit(Event::ConnectorSynced {
+                            name: format!("{} · project.toml", proj.name),
+                            ok: false,
+                            detail: detail.clone(),
+                        });
+                        self.emit(Event::ActionProgress {
+                            name: action_name,
+                            state: ActionState::Fail(detail),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                let detail = format!("project.toml 提 PR 失败(文件已写入工作区,可手动提交):{e}");
+                self.emit(Event::ConnectorSynced {
+                    name: format!("{} · project.toml", proj.name),
+                    ok: false,
+                    detail: detail.clone(),
+                });
+                self.emit(Event::ActionProgress {
+                    name: action_name,
+                    state: ActionState::Fail(detail),
+                });
+            }
+        }
+        // `create_project_init_mr` checks out `bw/project-init` and leaves
+        // HEAD there. Subsequent issue worktrees branch from current HEAD —
+        // without returning to the default branch, first-comer issue PRs can
+        // fork off the config branch. Best-effort: always try to sync back
+        // (merge Ok → pull project.toml; merge/PR fail → at least leave main).
+        if let Err(e) = bw_engine::github::sync_default_branch(dir).await {
+            self.emit(Event::ConnectorSynced {
+                name: format!("{} · project.toml", proj.name),
+                ok: false,
+                detail: format!(
+                    "project.toml 流程后工作区收拢默认分支失败(可能仍停在 bw/project-init,后续开活前请手动切回主干):{e}"
+                ),
+            });
+        }
+    }
+
     async fn collect_project_metrics(
         &mut self,
         project: ProjectId,
@@ -4119,6 +4521,14 @@ impl App {
         let today = now().date();
         let mut summary = MetricCollectSummary::default();
         let mut touched = false;
+
+        // V2-② Phase B: refresh Buddy-owned `.bw/collect_stats.{sh,py}` so
+        // already-onboarded workspaces pick up the 30-day history emitter
+        // without re-creating the project. Idempotent overwrite of buddy
+        // files only — never touches project business scripts.
+        if !proj.workspace_path.trim().is_empty() && !proj.remote_path.trim().is_empty() {
+            write_buddy_collect_stats(&proj);
+        }
 
         // plan18-③ · 预跑项目的 `script` connector,把脚本产出 JSON 缓存进
         // `script_outputs`,供下面 `script` kind 指标按字段路径取值。一个项目
@@ -4275,6 +4685,17 @@ impl App {
             }
         }
 
+        // Days that already have an observation — fill only gaps (append-only,
+        // never rewrite). Shared across the script arm below.
+        let mut days_have: std::collections::HashMap<MetricId, std::collections::HashSet<Date>> =
+            std::collections::HashMap::new();
+        for o in self.store.list_observations(project).await? {
+            days_have
+                .entry(o.metric_id)
+                .or_default()
+                .insert(o.ts.date());
+        }
+
         for m in &sigs.metrics {
             // 停用的指标退出自动采集 —— 不拉数、不记点、也不计入本次采集
             // 回执的任何一个计数(它压根没参与,报进去就是虚的)。
@@ -4293,6 +4714,47 @@ impl App {
                     // 脚本跑失败(已记 failed)→ 这里 deferred,绝不伪造观测。
                     if script_outputs.is_empty() {
                         summary.deferred += 1;
+                        continue;
+                    }
+                    // V2-② Phase B: if any script output carries
+                    // `history.<collect_query> = [{ts,v},…]` (Buddy 仓统计),
+                    // fill missing calendar days in that series. Same collect
+                    // path as「立即采集」/cron — no separate backfill command.
+                    let mut filled_from_history = false;
+                    for out in &script_outputs {
+                        let Some(series) = history_series_for_field(out, &m.collect_query) else {
+                            continue;
+                        };
+                        let have = days_have.entry(m.id).or_default();
+                        for (day, value) in series {
+                            if have.contains(&day) {
+                                if day != today {
+                                    continue;
+                                }
+                                // Today already has a point: only append when
+                                // the value moved (same change-guard as the
+                                // today-only arm). Historical days stay put.
+                                if m.value_raw == value {
+                                    summary.unchanged += 1;
+                                    continue;
+                                }
+                            }
+                            let ts = if day == today {
+                                now()
+                            } else {
+                                date_at_noon_utc(day)
+                            };
+                            self.store
+                                .append_observation(m.id, SourceKind::Script, &value, ts)
+                                .await?;
+                            have.insert(day);
+                            summary.changed += 1;
+                            touched = true;
+                        }
+                        filled_from_history = true;
+                        break;
+                    }
+                    if filled_from_history {
                         continue;
                     }
                     let mut found: Option<String> = None;
@@ -4678,31 +5140,38 @@ impl App {
         // V1 Issue2 Phase2b: Stop-triggered InReview check. When a `Stop`
         // hook event was received (agent finished a turn), run
         // `poll_interactive_inreview` immediately — the Stop is the real-time
-        // trigger (replaces 2a's 5-minute-only cadence). The tick's cadence
+        // trigger (replaces 2a's idle-only cadence). The tick's cadence
         // is the natural throttle (multiple Stops in one tick = one check).
         if self.state.pending_stop_check {
             self.state.pending_stop_check = false;
+            self.state.scheduler_ui_dirty = true;
             if let Err(e) = self.poll_interactive_inreview().await {
                 self.emit(Event::ConnectorSynced {
                     name: "InReview (Stop 触发)".into(),
                     ok: false,
-                    detail: format!("Stop 触发 InReview 检测失败,5min 轮询兜底:{e}"),
+                    detail: format!("Stop 触发 InReview 检测失败,短周期轮询兜底:{e}"),
                 });
             }
         }
 
-        // V1 Issue2 Phase2a: InReview detection poller (throttled backstop).
+        // V1 Issue2 Phase2a: InReview detection poller (adaptive backstop).
         // Checks codehub/github for open MRs on interactive issues (InProgress
         // + interactive (has conversation) + pr_number == 0). Not a cron task — a
-        // separate periodic check that rides `tick_scheduler`'s cadence
-        // but throttles to once per 5 min so it doesn't hit the remote
-        // every tick. Never auto-Done (铁律) — only backfills pr_number +
+        // separate periodic check that rides `tick_scheduler`'s cadence.
+        // While candidates wait for an MR, poll every ~15s so detection is
+        // seconds–teens of seconds (not multi-minute silence). Idle projects
+        // keep the 5 min interval to avoid flooding the remote API.
+        // Never auto-Done (铁律) — only backfills pr_number +
         // transitions to InReview. In Phase2b this is the BACKSTOP for the
         // Stop-triggered check above — catches MRs the Stop trigger missed
-        // (hook not installed, agent session not via buddy, etc.).
+        // (hook not installed, agent session not via buddy, MR not yet
+        // visible on the first Stop poll, etc.).
         let now_ts = now().unix_timestamp();
-        if now_ts - self.state.last_inreview_poll >= INREVIEW_POLL_INTERVAL_SECS {
+        let interval =
+            inreview_poll_interval_secs(self.has_inreview_poll_candidates().await.unwrap_or(false));
+        if now_ts - self.state.last_inreview_poll >= interval {
             self.state.last_inreview_poll = now_ts;
+            self.state.scheduler_ui_dirty = true;
             // Best-effort: a poller failure is recorded as a toast but never
             // blocks the scheduler's cron-fired list from returning.
             if let Err(e) = self.poll_interactive_inreview().await {
@@ -4714,6 +5183,38 @@ impl App {
             }
         }
         Ok(fired)
+    }
+
+    /// True when any project has at least one interactive InProgress issue
+    /// still waiting for an open MR (`pr_number == 0`). Drives the active
+    /// (short) InReview poll interval — idle projects stay on the long
+    /// backstop so we don't hammer the remote API every tick.
+    async fn has_inreview_poll_candidates(&self) -> Result<bool, AppError> {
+        for proj in &self.state.projects {
+            if proj.remote_path.trim().is_empty() {
+                continue;
+            }
+            let conv_ids: std::collections::HashSet<IssueId> = self
+                .store
+                .list_conversation_issue_ids(proj.id)
+                .await?
+                .into_iter()
+                .collect();
+            if conv_ids.is_empty() {
+                continue;
+            }
+            let issues = self
+                .store
+                .list_issues(proj.id, None, Some(IssueStatus::InProgress))
+                .await?;
+            if issues
+                .iter()
+                .any(|i| conv_ids.contains(&i.id) && i.pr_number == 0 && i.github_number != 0)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// A1: the create_issue cron path — mint a stage-scoped Issue (Todo,
@@ -4895,13 +5396,18 @@ impl App {
         if is_resume && matches!(issue.status, IssueStatus::Done | IssueStatus::InReview) {
             return self.open_conversation(id).await;
         }
-        // 本件交付已在跑 → 只切焦点。
+        // 本件交付已在跑且 PTY 仍活 → 只切焦点。
+        // PTY 已死但 active_run 仍挂(zombie 锁)时不要 early-return:
+        // 旧逻辑 focus 死 id 后直接 Ok,侧栏「唤不醒」、看板因完整 ▶跑/
+        // remount 仍能救回来。
         if let Some(ar) = &self.state.active_run {
             if ar.issue.id == id {
-                if let Some(c) = conv {
-                    self.focus_conversation(c.id, id).await;
+                if let Some(c) = &conv {
+                    if self.state.terminal_manager.is_live(c.id) {
+                        self.focus_conversation(c.id, id).await;
+                        return Ok(());
+                    }
                 }
-                return Ok(());
             }
         }
         // 咨询 PTY 已活 → 只切焦点。
@@ -4913,8 +5419,13 @@ impl App {
         }
 
         // Fail fast on a same-project in-flight run before touching anything.
+        // 本件 zombie(锁在、PTY 死)放行:清掉名额后再走 interactive resume。
         if let Some(ar) = &self.state.active_run {
-            if ar.project == p {
+            if ar.issue.id == id {
+                let _zombie = self.state.active_run.take();
+                // handle/guard drop with ActiveRun — PTY already gone; settle
+                // may still arrive and no-op via cleanup paths.
+            } else if ar.project == p {
                 return Err(AppError::Invalid(
                     "该项目有活正在跑，等它到评审中/干完再开下一张".into(),
                 ));
@@ -5008,13 +5519,24 @@ impl App {
         // 系统提示词 + IssueRunPrep.distilled_block/catalog_block);这里只取
         // `standard_refs` 给 `spec.skills` 记 uses,格式化块不再拼进 spec。
         let (_, standard_refs) = self.standard_skill_block(p, &issue.standard_skill).await?;
+        // V2-① 第二轮: 蒸馏块排除的不是 issue.standard_skill(可能为空),
+        // 而是 effective_skill(显式 > 阶段默认)。否则当 issue 无显式技能、
+        // 用阶段默认做主 Skill 时,同名蒸馏技能会被同时注入为主 Skill 和
+        // 蒸馏补充,违反 §6.5「不冒充第二份主 Skill」。
+        let effective_exclude = if !issue.standard_skill.trim().is_empty() {
+            issue.standard_skill.clone()
+        } else {
+            bw_core::playbook::stage_skills(issue.stage)
+                .first()
+                .map(|s| s.name.to_string())
+                .unwrap_or_default()
+        };
         // Distilled (compounded) skills from this project, same-stage
-        // preferred, capped at 3. Exclude `issue.standard_skill` by name —
-        // since P3 a distilled skill can itself be picked as the standard
-        // slug, and without the exclusion it would double-count (see
-        // `distilled_skills_block`'s doc comment).
+        // preferred, capped at 3. Exclude the effective main Skill by name
+        // to avoid double-injecting the same content as both main Skill
+        // and distilled supplement (§6.5).
         let (distilled_block, distilled_refs) = self
-            .distilled_skills_block(p, issue.stage, &issue.standard_skill)
+            .distilled_skills_block(p, issue.stage, &effective_exclude)
             .await?;
         // 五角色归类的落地(2026-08-05):本阶段技能的目录进 prompt、正文物化到
         // 工作区。与上面两块的关键区别 —— 目录里的技能**不进** `spec.skills`,
@@ -5221,12 +5743,42 @@ impl App {
             .as_deref()
             .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
 
+        // V2-①: 物化 buddy 规范运行副本到工作区 `.claude/buddy/standards/`。
+        // 首次启动和恢复都做(§7.1:恢复前再次校准规范运行副本)。
+        // 无真实工作区的项目跳过(MockExecutor 路径,继续标【mock】)。
+        // 物化失败 → 不启动真实 Claude,如实报错给用户(§4.3 #3、§8)。
+        if !proj.workspace_path.trim().is_empty() {
+            match buddy_materialize::materialize_standards(workspace_cwd).await {
+                Ok(report) => {
+                    eprintln!(
+                        "[BW_BUDDY_MATERIALIZE] written={} unchanged={}",
+                        report.written, report.unchanged
+                    );
+                }
+                Err(e) => {
+                    if is_resume {
+                        self.state.pty_restoring = None;
+                    }
+                    return Err(AppError::Invalid(format!(
+                        "buddy 规范运行副本物化失败,不启动真实 Claude:{e}"
+                    )));
+                }
+            }
+        }
+
         // Build the plan: startup (first run) or resume (--resume <session_id>).
         let plan = if is_resume {
             // Resume: no new prompt, no bridge system prompt. The session
             // persists under ~/.claude/projects/<encoded-cwd>/ from the
             // first run; `--resume <session_id>` re-enters the exact session.
             // session_id 来自 claude_conversation 行(hook 回传)。
+            // Spec §7.1 / 验收 11.5: 如实提示沿用首次上下文,要新版方法须新开执行。
+            self.emit(Event::ConnectorSynced {
+                name: format!("issue #{} · 恢复会话", issue.number),
+                ok: true,
+                detail: "沿用首次开工的系统提示词与主 Skill;规范文件已更新。若要换新方法请新开执行(不要指望恢复暗换)"
+                    .into(),
+            });
             let session_id = conv
                 .as_ref()
                 .map(|c| c.claude_session_id.as_str())
@@ -5267,19 +5819,61 @@ impl App {
                 handoff_note,
                 workspace_hint,
             };
-            let skill_body = match self.fetch_skill_body(p, &standard_skill).await {
+            // V2-① 第二轮: issue 无显式 Skill 时按 issue.stage 装载阶段默认
+            // SOP;有显式则用显式(替换,不叠加)。§6.1: 一张 Issue 只选一份
+            // 主 Skill —— 显式 > 阶段默认 > 无。默认 SOP 按 issue 自身阶段
+            // 选,不随项目交棒改变。
+            let (effective_skill, is_default) = if !standard_skill.trim().is_empty() {
+                (standard_skill.clone(), false)
+            } else {
+                let default_slug = bw_core::playbook::stage_skills(issue.stage)
+                    .first()
+                    .map(|s| s.name.to_string())
+                    .unwrap_or_default();
+                (default_slug, true)
+            };
+            let skill_body = match self.fetch_skill_body(p, &effective_skill).await {
                 Ok(b) => b,
                 Err(e) => return Err(e),
             };
-            // V1 收口:无技能也能跑 —— issue 内容(标题+描述)作位置 prompt
-            // (auto-submit 首句);技能正文 + 蒸馏 + 目录块并入系统提示词,让
-            // 「经验复利」在 issue 交付侧不静默丢失(原来只进 phase-loop 的
-            // spec.prompt)。空技能不报错,降级到 bridge 通用铁律。
-            let bridge_prompt = build_bridge_system_prompt(&playbook_ctx, &standard_skill);
-            let mut system_prompt = bridge_prompt;
-            for block in [&skill_body, &distilled_block, &catalog_block] {
-                if !block.trim().is_empty() {
-                    system_prompt.push_str("\n\n");
+            // §6.1 点3: 阶段默认 Skill 正文为空 = 资产损坏或打包遗漏。系统
+            // 提示词仍可用,但开工前在界面和运行日志中明确告警,不假装已加载。
+            if is_default && !effective_skill.is_empty() && skill_body.trim().is_empty() {
+                eprintln!(
+                    "[BW_SKILL_WARN] 阶段默认方法 `{effective_skill}` 正文为空(issue #{}, stage {:?}),本次仅依据 buddy 规范处理",
+                    issue.number, issue.stage
+                );
+                self.emit(Event::ConnectorSynced {
+                    name: format!("issue #{} · 阶段默认技能", issue.number),
+                    ok: false,
+                    detail: format!(
+                        "阶段默认方法 `{effective_skill}` 正文为空或缺失,本次仅依据 buddy 规范处理(不假装已加载默认 SOP)"
+                    ),
+                });
+            }
+            // §8: 显式选择的 Skill 正文为空(被删/被清空)→ 不悄悄回落、不假装
+            // 已加载,告诉用户所选不可用,让其修正选择(不启动真实 Claude)。
+            if !is_default && !effective_skill.is_empty() && skill_body.trim().is_empty() {
+                return Err(AppError::Invalid(format!(
+                    "所选技能 `{effective_skill}` 不可用(正文为空或已删除),请在 issue 上改选其它技能后再跑"
+                )));
+            }
+            // V2-①: 系统提示词 = 静态正本(system-prompt.md) + 动态项目上下文 +
+            // 主 Skill 正文 + 蒸馏块 + 目录块,用 `---` 分隔(§13.5)。
+            // §6.5: 蒸馏/目录是补充,不冒充第二份主 Skill,不偷偷替换用户
+            // 显式选择的主 Skill。
+            let project_context =
+                build_project_context_block(&playbook_ctx, &effective_skill, is_default);
+            let mut system_prompt = bw_core::buddy_assets::SYSTEM_PROMPT_MD.to_string();
+            for block in [
+                &project_context,
+                &skill_body,
+                &distilled_block,
+                &catalog_block,
+            ] {
+                let block = block.trim();
+                if !block.is_empty() {
+                    system_prompt.push_str("\n\n---\n\n");
                     system_prompt.push_str(block);
                 }
             }
@@ -5459,17 +6053,20 @@ impl App {
                 "会话尚无 claude_session_id,无法 resume".into(),
             ));
         }
-        if self.state.terminal_manager.is_live(conv.id)
-            || self.state.consultation_runs.contains_key(&conv.id)
-        {
-            // 既有咨询会话:活 PTY 直接聚焦;PTY 刚退出、settle 尚未处理间
-            // 也聚焦 —— 不二度 spawn,否则旧 handle 的 ConsultationEnded
-            // settle 会误清新 handle(HashMap insert 覆盖旧 key后,remove
-            // 取到新 cr)。等排队 settle 清掉记录后,下次点卡才走 spawn。
+        if self.state.terminal_manager.is_live(conv.id) {
+            // 活 PTY:只切焦点。consultation_runs 有记录但 PTY 已死时不要
+            // 短路——否则侧栏/续聊 focus 死 id,看起来「唤不醒」(看板完整
+            // ▶跑 序列常能 remount 救回来)。settle 排队间的竞态由
+            // ConsultationEnded 收尾后再点一次覆盖。
             self.focus_conversation(conv.id, id).await;
             self.clear_restoring_if(conv.id);
             self.emit(Event::IssuesChanged);
             return Ok(());
+        }
+        // PTY 已死但仍占着 consultation_runs:清掉残骸再 spawn,避免旧
+        // ConsultationEnded settle 误清新 handle(见原注释竞态)。
+        if let Some(cr) = self.state.consultation_runs.remove(&conv.id) {
+            drop(cr);
         }
         if !self.state.pty_enabled {
             return Err(AppError::Invalid("咨询需要嵌入终端(PTY);当前未启用".into()));
@@ -5505,6 +6102,15 @@ impl App {
         let workspace_cwd = issue_ws
             .as_deref()
             .unwrap_or_else(|| Path::new(proj.workspace_path.trim()));
+        // V2-①: 咨询 resume 也校准规范运行副本(§7.1)。
+        if !proj.workspace_path.trim().is_empty() {
+            if let Err(e) = buddy_materialize::materialize_standards(workspace_cwd).await {
+                self.state.pty_restoring = None;
+                return Err(AppError::Invalid(format!(
+                    "buddy 规范运行副本物化失败,不启动真实 Claude:{e}"
+                )));
+            }
+        }
         // 咨询 resume:注入 §6.2 规则;失败清 pty_restoring。
         let plan = match build_consultation_resume_plan(
             &CLAUDE,
@@ -6288,6 +6894,23 @@ impl App {
                                                 r.owner, r.repo
                                             )),
                                         });
+                                        // V2-② Phase A (§6.2): later-comer
+                                        // detection — if the cloned repo already
+                                        // has `.bw/project.toml`, this Buddy is
+                                        // a later-comer. The actual sync (reading
+                                        // back the canonical intent + metrics +
+                                        // connectors) happens in CompleteCreation
+                                        // (after UpdateBrief has run, so the
+                                        // synced values aren't overwritten by
+                                        // the Intent card's local input). This
+                                        // signal just informs the user.
+                                        if has_project_toml(&path) {
+                                            self.emit(Event::ConnectorSynced {
+                                                name: format!("{} · project.toml", proj.name),
+                                                ok: true,
+                                                detail: "仓里已有 .bw/project.toml(后来者接入),意图正本将在完成创建时读回".into(),
+                                            });
+                                        }
                                     }
                                     Err(e) => {
                                         // 不兜底本地 mint —— 拿一个跟用户选的仓无关
@@ -6345,6 +6968,15 @@ impl App {
                                             name: action_name,
                                             state: ActionState::Ok(path.clone()),
                                         });
+                                        // V2-② Phase A (§6.2): later-comer
+                                        // detection (same as github Existing).
+                                        if has_project_toml(&p) {
+                                            self.emit(Event::ConnectorSynced {
+                                                name: format!("{} · project.toml", proj.name),
+                                                ok: true,
+                                                detail: "仓里已有 .bw/project.toml(后来者接入),意图正本将在完成创建时读回".into(),
+                                            });
+                                        }
                                     }
                                     Err(e) => {
                                         let detail = format!("接入 codehub {host}/{path} 失败:{e}");
@@ -6485,11 +7117,7 @@ impl App {
                     // §0 第 2 层业务脚本)。脚本写进 .bw/collect_stats.sh(相对
                     // 工作区,buddy 自有空间),collect arm 跑脚本 → 读输出 JSON。
                     if !proj.remote_path.trim().is_empty() {
-                        let script = build_collect_script(&proj);
-                        let bw_dir = std::path::Path::new(&proj.workspace_path).join(".bw");
-                        let _ = std::fs::create_dir_all(&bw_dir);
-                        let script_path = bw_dir.join("collect_stats.sh");
-                        let _ = std::fs::write(&script_path, &script);
+                        write_buddy_collect_stats(&proj);
                         let config = serde_json::json!({
                             "script": ".bw/collect_stats.sh",
                             "output": ".bw/collect_stats.json",
@@ -6647,6 +7275,53 @@ impl App {
                     }
                 }
                 self.emit(Event::ProjectsChanged);
+            }
+
+            Command::ClearRemoteProjectProbe => {
+                self.state.remote_project_probe = RemoteProjectProbe::Idle;
+                self.emit(Event::ProjectsChanged);
+            }
+
+            Command::ProbeRemoteProjectToml {
+                provider,
+                host,
+                path,
+                default_branch,
+            } => {
+                // V2-② Intent UX (§6.2): pre-clone remote probe. Quiet on the
+                // action strip (Intent card shows Probing itself); never
+                // invent later-comer on error.
+                let path = path.trim().to_string();
+                if path.is_empty() {
+                    self.state.remote_project_probe = RemoteProjectProbe::Idle;
+                    self.emit(Event::ProjectsChanged);
+                } else {
+                    self.state.remote_project_probe = RemoteProjectProbe::Probing;
+                    self.emit(Event::ProjectsChanged);
+                    let result = if provider == "codehub" {
+                        bw_engine::codehub::fetch_project_toml(&host, &path, &default_branch)
+                            .await
+                            .map_err(|e| e.to_string())
+                    } else {
+                        // github: path = owner/repo
+                        let mut parts = path.splitn(2, '/');
+                        let owner = parts.next().unwrap_or("").to_string();
+                        let repo = parts.next().unwrap_or("").to_string();
+                        if owner.is_empty() || repo.is_empty() {
+                            Err("GitHub 仓路径应为 owner/repo".into())
+                        } else {
+                            bw_engine::github::fetch_project_toml(&owner, &repo, &default_branch)
+                                .await
+                                .map_err(|e| e.to_string())
+                        }
+                    };
+                    self.state.remote_project_probe = match result {
+                        Ok(Some(file)) => RemoteProjectProbe::Present(file),
+                        Ok(None) => RemoteProjectProbe::Absent,
+                        Err(e) => RemoteProjectProbe::Failed(e),
+                    };
+                    self.emit(Event::ProjectsChanged);
+                }
             }
 
             Command::SetCycle { cycle } => {
@@ -6942,6 +7617,25 @@ impl App {
                 // 都失败、软降级回本地 mint 的项目)零标配票:不给建不了
                 // 仓、没有 PR 环可走的项目发一套没处交付的活,如实留白。
                 let first_issue = self.seed_standard_issue_trio(p).await?;
+                // V2-②-I: after trio (first-comer) or skip (later-comer), pull
+                // remote open issues into local Backlog rows. Idempotent on
+                // github_number — first-comer refreshes the trio it just
+                // minted; later-comer rebuilds so the board is runnable.
+                // Soft-fail: sync errors toast, never abort creation.
+                if !proj.remote_path.trim().is_empty() {
+                    let _ = self.sync_remote_issues_for(p, true).await;
+                }
+                // V2-② Phase A (§6.1#4 / §6.2): both first-comer and later-comer
+                // read back metrics/connectors from the repo when a real
+                // workspace exists (mature repo may already have them before
+                // any project.toml). Later-comer also syncs project.toml so
+                // Intent-card local input is overridden by the repo正本.
+                // SyncProjectFile is a no-op when the file is absent.
+                if !proj.workspace_path.trim().is_empty() {
+                    self.sync_project_file_for(p).await?;
+                    self.sync_metrics_file_for(p).await?;
+                    self.sync_connectors_file_for(p).await?;
+                }
                 self.store.recompute_signals(p, now()).await?;
                 if let Err(e) = write_charter(self, p, "完成创建").await {
                     self.emit(Event::ActionProgress {
@@ -6950,6 +7644,44 @@ impl App {
                             "章程未补写（PROJECT.md 完成创建段可能缺）：{e}"
                         )),
                     });
+                }
+                // V2-② Phase A (§6.1/§7): first-comer writes `.bw/project.toml`
+                // into the repo as the canonical intent正本. Later-comers are
+                // already handled by the sync above (the file exists, values
+                // read back). Two paths:
+                // - New-repo (owned workspace): write + commit on main (the
+                //   repo is ours, no branch protection). Goes with push_head.
+                // - Existing-repo (cloned, not owned): write + branch +
+                //   PR + Buddy auto-merge (§7 — main may be protected).
+                //   project.toml is configuration, not an Issue — auto-merge
+                //   here doesn't break "Done 永不自动" (that rule is about
+                //   Issues). Issue PRs are never auto-merged (unchanged).
+                if !proj.workspace_path.trim().is_empty() && !has_project_toml(&proj.workspace_path)
+                {
+                    let dir = std::path::Path::new(proj.workspace_path.trim());
+                    if let Some(toml) = project_toml_content(&proj) {
+                        if bw_engine::workspace::is_owned_workspace(dir).await {
+                            // New-repo first-comer: commit directly on main.
+                            if let Err(e) = bw_engine::workspace::commit_file(
+                                dir,
+                                bw_engine::project_file::PROJECT_FILE_REL_PATH,
+                                &toml,
+                                "chore: project intent (.bw/project.toml)",
+                            )
+                            .await
+                            {
+                                self.emit(Event::ActionProgress {
+                                    name: "写 project.toml".into(),
+                                    state: ActionState::Fail(format!(
+                                        "写入 .bw/project.toml 失败:{e}"
+                                    )),
+                                });
+                            }
+                        } else if !proj.remote_path.trim().is_empty() {
+                            // Existing-repo first-comer: branch + PR + auto-merge.
+                            self.write_project_toml_pr(&proj, dir, &toml).await;
+                        }
+                    }
                 }
                 // plan/13 D1(#31 记录的缺口):create_repo 只推了首 commit,
                 // 创建流途中的章程/组件标准提交停在本地——产品信息正本在
@@ -7257,16 +7989,14 @@ impl App {
                 let issue = self.store.get_issue(id).await?.ok_or(AppError::NotFound)?;
                 let conv = self.store.get_conversation_by_issue(id).await?;
                 let is_interactive = conv.is_some();
-                // 切卡:有活 PTY 则只切焦点(不 spawn)。
-                // 重启恢复:PTY 已死但有可 resume 的 session_id → 点卡唤醒
-                // (走现有 run_issue_now → open_conversation / is_resume 分支;
-                // 不造第二条路径;Boot 不批量起)。
-                if let Some(c) = &conv {
-                    if self.state.terminal_manager.is_live(c.id) {
-                        self.focus_conversation(c.id, id).await;
-                    } else if !c.claude_session_id.is_empty() {
-                        self.run_issue_now(SessionId::new(), id).await?;
-                    }
+                // Bug2 半套收齐:有 conversation 行时点卡唤醒与阶段记录
+                // SelectSession / ▶跑 同一条 `run_issue_now`(活 PTY 切焦点 /
+                // Done·InReview 咨询 / 空 session_id 起手)。旧窄门还要求
+                // 「活 PTY | 非空 session_id」,缺行或 hook 未回填时只开弹层
+                // 不切终端。无 conversation 行 = 从未跑过,只开证据弹层、
+                // 不因点标题误开工(开工仍走 ▶跑)。
+                if conv.is_some() {
+                    self.run_issue_now(SessionId::new(), id).await?;
                 }
                 let runs = self.store.list_runs_for_issue(id).await?;
                 let artifacts = self.store.list_artifacts_for_issue(id).await?;
@@ -7362,6 +8092,16 @@ impl App {
                 // point). The UI button that fired this was retired per
                 // §3.2/§4 (merge auto-sync covers the normal flow).
                 self.sync_connectors_file_for(p).await?;
+            }
+
+            Command::SyncProjectFile => {
+                let p = self.active()?;
+                self.sync_project_file_for(p).await?;
+            }
+
+            Command::SyncRemoteIssues => {
+                let p = self.active()?;
+                self.sync_remote_issues_for(p, true).await?;
             }
 
             Command::CollectMetrics => {
@@ -9095,6 +9835,11 @@ impl App {
                 // re-merges (so `gh pr merge` stays called exactly once) and
                 // never re-accounts (settle-once already stands).
                 if issue.status == IssueStatus::Done || issue.settled_at.is_some() {
+                    self.emit(Event::ConnectorSynced {
+                        name: format!("#{} · merge", issue.number),
+                        ok: true,
+                        detail: "已完成,无需重复合入".into(),
+                    });
                     return Ok(());
                 }
                 if issue.pr_number == 0 {
@@ -9123,6 +9868,15 @@ impl App {
                         issue.number
                     )));
                 }
+                // Immediate feedback while `merge_mr` awaits (often several
+                // seconds). Event forwarder runs concurrent with dispatch, so
+                // the toast appears before Done lands — pairs with the UI
+                // button busy state (Vm only rebuilds after this command).
+                self.emit(Event::ConnectorSynced {
+                    name: format!("#{} · merge", issue.number),
+                    ok: true,
+                    detail: format!("正在合入 PR/MR #{}…", issue.pr_number),
+                });
                 // merge PR/MR — the human验收 action, the ONLY place a merge is
                 // ever called (never from any executor/run path; plan/13
                 // D3+D11). Routed through the Remote factory (bug③ 2026-07-30):
@@ -9400,15 +10154,17 @@ impl App {
             Command::SetScope(s) => self.state.scope = s,
             Command::SelectSession(s) => {
                 self.state.active_session = s;
-                // Bug2(V1-TermFocus): 左→终端——解析 session→issue(session
-                // title 是 `#N 标题`,按 number+title 匹配 issue),有活 PTY
-                // 则切焦点,无活 PTY 但有 claude_session_id 则唤醒(与
-                // OpenIssueDetail 一致——Done/InReview 进 open_conversation、
-                // InProgress 进 resume)。解析不到(纯阶段记录不挂 issue)→
-                // 保持原行为(只设 active_session)。best-effort:错误不阻塞。
+                // Bug2(V1-TermFocus)+收口补洞:左→终端走 run_issue_now(与看板
+                // ▶跑/续聊等价)。错误上浮 → kernel 打 UiNote::Error,不再静默
+                // 吞掉(旧 `let _ =` 让用户只看见空工作流区、无任何提示)。
+                // 解析不到 issue(纯阶段循环会话)→ sync 内 early Ok,只亮高亮。
                 if let Some(sid) = s {
-                    let _ = self.sync_session_to_terminal(sid).await;
+                    self.sync_session_to_terminal(sid).await?;
                 }
+                // 侧栏切会话时收起看板证据弹层——弹层曾用 fixed inset:0 盖住
+                // 整窗(含侧栏),关掉后若 state 仍挂着 issue_detail,回 Issue
+                // 面板会再次挡住侧栏;切会话即清,两侧导航一致。
+                self.state.issue_detail = None;
             }
             // V1 终端会话重构·底座: 按 conversation_id 转发到 TerminalManager。
             Command::TerminalInput {
@@ -9443,12 +10199,23 @@ fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
 }
 
-/// V1 Issue2 Phase2a: InReview poller throttle. The poller checks codehub/
-/// github for open MRs on interactive issues at most once per 5 minutes —
-/// it rides `tick_scheduler`'s cadence but doesn't hit the remote every
-/// tick (a tick may fire every 60s; 5 min is a reasonable detection lag
-/// without flooding the remote API).
-const INREVIEW_POLL_INTERVAL_SECS: i64 = 5 * 60;
+/// V1 Issue2 Phase2a: InReview poller throttle while interactive issues are
+/// waiting for an open MR. Rides `tick_scheduler` (~5s); 15s keeps detection
+/// in the "seconds–teens of seconds" band without flooding the remote every
+/// tick. Must stay ≥ the desktop ticker interval.
+const INREVIEW_POLL_ACTIVE_SECS: i64 = 15;
+/// Idle backstop when no InProgress+conversation+pr_number==0 candidates
+/// exist — avoid hammering codehub/github on quiet projects.
+const INREVIEW_POLL_IDLE_SECS: i64 = 5 * 60;
+
+/// Interval helper (testable): active while candidates wait, idle otherwise.
+fn inreview_poll_interval_secs(has_candidates: bool) -> i64 {
+    if has_candidates {
+        INREVIEW_POLL_ACTIVE_SECS
+    } else {
+        INREVIEW_POLL_IDLE_SECS
+    }
+}
 
 /// plan18-③ · `script` connector 的 config 解析结构。config 是 JSON 字符串,
 /// 存项目仓里既有采集脚本的相对工作区路径 + 输出文件 + 跑脚本的命令。
@@ -9610,39 +10377,329 @@ async fn provision_workspace(root: &std::path::Path, proj: &ProjectRow) -> Resul
     Ok(dir.to_string_lossy().into_owned())
 }
 
-/// V1 Issue 1 phase2 · Build the buddy-provided collect-stats script for a
-/// remote-backed project. The script runs two provider CLI commands (open
-/// issues + merged MRs/PRs), combines the counts into one JSON object, and
-/// writes it to `.bw/collect_stats.json` (the `ScriptConnectorConfig.output`
-/// the collect arm reads). Provider-split: codehub → `codehub-cli issue/mr
-/// list`; github → `gh api search/issues` (same endpoint the inline github
-/// arm uses, so the numbers match). Errors in either CLI call default to `0`
-/// (`|| echo 0`) — a failed count is honest zero, not a silent skip.
-fn build_collect_script(proj: &ProjectRow) -> String {
+/// V1 Issue 1 phase2 · Buddy-owned repo-stats collector for a remote-backed
+/// project. Writes `.bw/collect_stats.sh` (launcher) + `.bw/collect_stats.py`
+/// (real collector: today scalars + `history` of the last 30 calendar days).
+/// CreateProject and every `collect_project_metrics` call refresh these files
+/// so already-onboarded workspaces pick up Phase B without re-creating.
+fn write_buddy_collect_stats(proj: &ProjectRow) {
+    let root = proj.workspace_path.trim();
+    if root.is_empty() || proj.remote_path.trim().is_empty() {
+        return;
+    }
+    let bw_dir = Path::new(root).join(".bw");
+    let _ = std::fs::create_dir_all(&bw_dir);
+    let _ = std::fs::write(
+        bw_dir.join("collect_stats.py"),
+        build_collect_stats_py(proj),
+    );
+    let _ = std::fs::write(bw_dir.join("collect_stats.sh"), build_collect_stats_sh());
+}
+
+/// Thin sh launcher — collect arm keeps `command: sh` + `.bw/collect_stats.sh`
+/// for存量 connectors; delegates to the Python collector when available.
+fn build_collect_stats_sh() -> String {
+    r#"#!/bin/sh
+# BW 自带采集脚本 — 委托 .bw/collect_stats.py(当日值 + 近 30 天 history)
+# CreateProject / CollectMetrics 会覆盖本文件,勿手改。
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd) || exit 1
+cd "$ROOT" || exit 1
+run_py() {
+  if command -v py >/dev/null 2>&1; then py -3 "$@"
+  elif command -v python3 >/dev/null 2>&1; then python3 "$@"
+  elif command -v python >/dev/null 2>&1; then python "$@"
+  else return 1
+  fi
+}
+run_py .bw/collect_stats.py
+"#
+    .to_string()
+}
+
+/// Python body for Buddy 仓统计. Emits:
+/// ```json
+/// {"open_issues": N, "merged_mrs": M,
+///  "history": {"open_issues":[{"ts":"YYYY-MM-DD","v":n},…],
+///              "merged_mrs":[{"ts":"YYYY-MM-DD","v":m},…]}}
+/// ```
+/// `history` covers today and the previous 29 days (30 points). open_issues
+/// as-of day D = created on/before D and not closed on/before D; merged_mrs
+/// as-of D = merged_at date ≤ D.
+fn build_collect_stats_py(proj: &ProjectRow) -> String {
     match proj.provider.as_str() {
         "codehub" => format!(
-            r#"#!/bin/sh
-# BW 自带采集脚本 — codehub 仓统计 (CreateProject 生成,勿手改)
-HOST="{host}"
-PATH_NS="{path}"
-ISSUES=$(codehub-cli -H "$HOST" issue list -p "$PATH_NS" --state opened -l 0 --jq 'length' 2>/dev/null || echo 0)
-MRS=$(codehub-cli -H "$HOST" mr list -p "$PATH_NS" --state merged -l 0 --jq 'length' 2>/dev/null || echo 0)
-printf '{{"open_issues": %s, "merged_mrs": %s}}' "$ISSUES" "$MRS" > .bw/collect_stats.json
+            r#"#!/usr/bin/env python3
+# BW 自带采集 — codehub 仓统计(当日 + 近 30 天 history)。勿手改;Buddy 会覆盖。
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+HOST = "{host}"
+PATH_NS = "{path}"
+OUT = Path(".bw/collect_stats.json")
+HISTORY_DAYS = 30
+
+
+def run(argv: list[str]) -> str:
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return ""
+    if p.returncode != 0:
+        return ""
+    return (p.stdout or "").strip()
+
+
+def load_json(raw: str):
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(v, list):
+        return v
+    if isinstance(v, dict):
+        for k in ("items", "list", "data", "values"):
+            if isinstance(v.get(k), list):
+                return v[k]
+    return []
+
+
+def parse_dt(s: str | None):
+    if not s:
+        return None
+    s = s.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def as_date(dt: datetime | None) -> date | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone().date()
+    return dt.date()
+
+
+def open_count_as_of(issues, d: date) -> int:
+    n = 0
+    for iss in issues:
+        created = as_date(parse_dt(iss.get("created_at")))
+        if created is None or created > d:
+            continue
+        closed = as_date(parse_dt(iss.get("closed_at")))
+        if closed is not None and closed <= d:
+            continue
+        n += 1
+    return n
+
+
+def merged_count_as_of(mrs, d: date) -> int:
+    n = 0
+    for mr in mrs:
+        merged = as_date(parse_dt(mr.get("merged_at")))
+        if merged is not None and merged <= d:
+            n += 1
+    return n
+
+
+def main() -> int:
+    issues_raw = run([
+        "codehub-cli", "-H", HOST, "issue", "list", "-p", PATH_NS,
+        "--state", "all", "-l", "0", "-f", "json",
+        "--json", "id,state,created_at,closed_at",
+    ])
+    mrs_raw = run([
+        "codehub-cli", "-H", HOST, "mr", "list", "-p", PATH_NS,
+        "--state", "merged", "-l", "0", "-f", "json",
+        "--json", "id,merged_at",
+    ])
+    issues = load_json(issues_raw)
+    mrs = load_json(mrs_raw)
+    today = date.today()
+    hist_oi = []
+    hist_mm = []
+    for i in range(HISTORY_DAYS - 1, -1, -1):
+        d = today - timedelta(days=i)
+        hist_oi.append({{"ts": d.isoformat(), "v": open_count_as_of(issues, d)}})
+        hist_mm.append({{"ts": d.isoformat(), "v": merged_count_as_of(mrs, d)}})
+    out = {{
+        "open_issues": hist_oi[-1]["v"] if hist_oi else 0,
+        "merged_mrs": hist_mm[-1]["v"] if hist_mm else 0,
+        "history": {{"open_issues": hist_oi, "merged_mrs": hist_mm}},
+    }}
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 "#,
             host = proj.remote_host,
             path = proj.remote_path,
         ),
         _ => format!(
-            r#"#!/bin/sh
-# BW 自带采集脚本 — GitHub 仓统计 (CreateProject 生成,勿手改)
-REPO="{path}"
-ISSUES=$(gh api -X GET search/issues -f "q=is:issue is:open repo:$REPO" --jq '.total_count' 2>/dev/null || echo 0)
-PRS=$(gh api -X GET search/issues -f "q=is:pr is:merged repo:$REPO" --jq '.total_count' 2>/dev/null || echo 0)
-printf '{{"open_issues": %s, "merged_mrs": %s}}' "$ISSUES" "$PRS" > .bw/collect_stats.json
+            r#"#!/usr/bin/env python3
+# BW 自带采集 — GitHub 仓统计(当日 + 近 30 天 history)。勿手改;Buddy 会覆盖。
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+REPO = "{path}"
+OUT = Path(".bw/collect_stats.json")
+HISTORY_DAYS = 30
+
+
+def run(argv: list[str]) -> str:
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return ""
+    if p.returncode != 0:
+        return ""
+    return (p.stdout or "").strip()
+
+
+def load_json(raw: str):
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return v if isinstance(v, list) else []
+
+
+def parse_dt(s: str | None):
+    if not s:
+        return None
+    s = s.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def as_date(dt: datetime | None) -> date | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone().date()
+    return dt.date()
+
+
+def open_count_as_of(issues, d: date) -> int:
+    n = 0
+    for iss in issues:
+        created = as_date(parse_dt(iss.get("createdAt")))
+        if created is None or created > d:
+            continue
+        closed = as_date(parse_dt(iss.get("closedAt")))
+        if closed is not None and closed <= d:
+            continue
+        n += 1
+    return n
+
+
+def merged_count_as_of(prs, d: date) -> int:
+    n = 0
+    for pr in prs:
+        merged = as_date(parse_dt(pr.get("mergedAt")))
+        if merged is not None and merged <= d:
+            n += 1
+    return n
+
+
+def main() -> int:
+    issues = load_json(run([
+        "gh", "issue", "list", "--repo", REPO, "--state", "all",
+        "--limit", "1000", "--json", "createdAt,closedAt",
+    ]))
+    prs = load_json(run([
+        "gh", "pr", "list", "--repo", REPO, "--state", "merged",
+        "--limit", "1000", "--json", "mergedAt",
+    ]))
+    today = date.today()
+    hist_oi = []
+    hist_mm = []
+    for i in range(HISTORY_DAYS - 1, -1, -1):
+        d = today - timedelta(days=i)
+        hist_oi.append({{"ts": d.isoformat(), "v": open_count_as_of(issues, d)}})
+        hist_mm.append({{"ts": d.isoformat(), "v": merged_count_as_of(prs, d)}})
+    out = {{
+        "open_issues": hist_oi[-1]["v"] if hist_oi else 0,
+        "merged_mrs": hist_mm[-1]["v"] if hist_mm else 0,
+        "history": {{"open_issues": hist_oi, "merged_mrs": hist_mm}},
+    }}
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 "#,
             path = proj.remote_path,
         ),
     }
+}
+
+/// Parse `history.<field>` from a script output JSON into `(day, value)` pairs.
+/// Missing / malformed history → `None` (caller falls back to today-only).
+fn history_series_for_field(out: &serde_json::Value, field: &str) -> Option<Vec<(Date, String)>> {
+    let field = field.trim();
+    if field.is_empty() {
+        return None;
+    }
+    // Accept `history.open_issues` or top-level history + collect_query `open_issues`.
+    let path = field.strip_prefix("history.").unwrap_or(field);
+    let arr = out.pointer(&format!("/history/{path}"))?.as_array()?;
+    let mut series = Vec::with_capacity(arr.len());
+    for item in arr {
+        let ts = item.get("ts")?.as_str()?;
+        let day = parse_ymd(ts)?;
+        let v = item.get("v")?;
+        let value = match v {
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        series.push((day, value));
+    }
+    if series.is_empty() {
+        None
+    } else {
+        Some(series)
+    }
+}
+
+fn parse_ymd(s: &str) -> Option<Date> {
+    let mut parts = s.trim().split('-');
+    let y: i32 = parts.next()?.parse().ok()?;
+    let m: u8 = parts.next()?.parse().ok()?;
+    let d: u8 = parts.next()?.parse().ok()?;
+    let month = Month::try_from(m).ok()?;
+    Date::from_calendar_date(y, month, d).ok()
+}
+
+fn date_at_noon_utc(day: Date) -> OffsetDateTime {
+    OffsetDateTime::new_utc(day, Time::from_hms(12, 0, 0).expect("valid noon"))
 }
 
 /// PF1-R5c · Windows: app 进程的 PATH 可能缺 Git 的 bin/usr-bin(sh.exe/bash.exe
@@ -9766,6 +10823,34 @@ fn charter_md(proj: &ProjectRow) -> String {
     }
     s.push_str("---\n\n> 本章程由 Builders' Workbench 在创建流程中逐步写就,每次更新留一次提交。\n");
     s
+}
+
+/// V2-② Phase A (§6.1): render the project's intent as `.bw/project.toml`
+/// content — the five fields a creation flow collects. The first-comer
+/// writes this into the repo as the canonical intent (later-comers read it
+/// back via `sync_project_file_for`). North star is **not** here (it lives in
+/// `.bw/metrics.toml`). Returns `None` if serialization fails (shouldn't
+/// happen for string-only data, but honest rather than panicking).
+fn project_toml_content(proj: &ProjectRow) -> Option<String> {
+    let file = bw_engine::project_file::ProjectFile {
+        name: proj.name.clone(),
+        kind: proj.kind.clone(),
+        brief: proj.desc.clone(),
+        benchmark: proj.benchmark.clone(),
+        opportunity: proj.opportunity.clone(),
+    };
+    bw_engine::project_file::render(&file).ok()
+}
+
+/// V2-② Phase A (§6): check whether the workspace already has
+/// `.bw/project.toml` — the first-comer/later-comer判据. Empty workspace →
+/// false (no file = first-comer, same as a workspace that simply has none
+/// yet).
+fn has_project_toml(workspace: &str) -> bool {
+    !workspace.trim().is_empty()
+        && std::path::Path::new(workspace)
+            .join(bw_engine::project_file::PROJECT_FILE_REL_PATH)
+            .exists()
 }
 
 /// P1: write the project's `PROJECT.md` charter into its OWNED workspace and
@@ -10047,6 +11132,24 @@ fn connectors_file_sync(
     }
 }
 
+/// V2-② Phase A: `bw_engine::project_file::ProjectFile` (parsed toml) →
+/// `ProjectFileSync` (the store's write shape). Pure reshaping — no
+/// validation here, `read` already guaranteed every field is present (a file
+/// missing `name`/`kind` fails to parse, never reaches this function).
+fn project_file_sync(
+    project_id: ProjectId,
+    file: &bw_engine::project_file::ProjectFile,
+) -> ProjectFileSync {
+    ProjectFileSync {
+        project_id,
+        name: file.name.clone(),
+        kind: file.kind.clone(),
+        brief: file.brief.clone(),
+        benchmark: file.benchmark.clone(),
+        opportunity: file.opportunity.clone(),
+    }
+}
+
 /// Worse signals sort higher. `Unknown` sits between green and amber — more
 /// pessimistic than green, less than a known amber.
 fn severity(s: Signal) -> u8 {
@@ -10070,4 +11173,762 @@ fn five_stages(project: ProjectId, cadence: Cadence) -> Vec<NewStage> {
             schedule: cadence.clone(),
         })
         .collect()
+}
+
+/// V1-TermFocus 缺口读回:阶段记录 `SelectSession` 必须把焦点切到对应
+/// conversation(与 issue 看板 `RunIssue` 路径等价)。无 UI,纯命令层。
+#[cfg(test)]
+mod select_session_focus_tests {
+    use super::*;
+    use bw_core::model::{IssuePriority, MaturityPeriod};
+    use bw_engine::MockExecutor;
+    use bw_store::SqliteStore;
+    use std::path::PathBuf;
+
+    async fn boot_project(db: &str) -> (App, Arc<dyn Store>, ProjectId) {
+        let store: Arc<dyn Store> = Arc::new(SqliteStore::open(db).await.expect("open db"));
+        let mut app = App::new(
+            store.clone(),
+            Engine::new(Arc::new(MockExecutor::new())),
+            ClaudeCliConfig::default(),
+        )
+        .with_pty();
+        app.dispatch(Command::Boot).await.expect("boot");
+        let pid = ProjectId::new();
+        app.dispatch(Command::CreateProject {
+            provider: "github".into(),
+            id: pid,
+            name: "focus-switch".into(),
+            kind: "test".into(),
+            desc: "SelectSession focus".into(),
+            workspace: None,
+            github: None,
+            codehub: None,
+        })
+        .await
+        .expect("create");
+        app.dispatch(Command::SetCycle {
+            cycle: MaturityPeriod::Explore,
+        })
+        .await
+        .expect("cycle");
+        app.dispatch(Command::CompleteCreation {
+            cadence: Cadence::Weekly,
+            run_first: false,
+        })
+        .await
+        .expect("complete");
+        app.dispatch(Command::OpenProject(pid)).await.expect("open");
+        (app, store, pid)
+    }
+
+    async fn mk_issue(app: &mut App, title: &str) -> IssueId {
+        let id = IssueId::new();
+        app.dispatch(Command::CreateIssue {
+            id,
+            stage: StageKind::Prototype,
+            title: title.into(),
+            desc: String::new(),
+            priority: IssuePriority::Medium,
+            standard_skill: String::new(),
+        })
+        .await
+        .expect("create issue");
+        id
+    }
+
+    fn attach_live(app: &mut App, cid: ConversationId, issue: IssueId, session_id: &str) {
+        let meta = ConversationMeta {
+            conversation_id: cid,
+            issue_id: issue,
+            claude_session_id: session_id.into(),
+            workspace_path: PathBuf::from("/tmp/focus-switch"),
+            branch_name: String::new(),
+        };
+        let _ = app.state.terminal_manager.attach(cid, meta, Some((80, 24)));
+    }
+
+    #[tokio::test]
+    async fn select_session_switches_focused_live_pty() {
+        let db = std::env::temp_dir().join(format!(
+            "bw_select_session_focus_{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+
+        let issue_a = mk_issue(&mut app, "找指标").await;
+        let issue_b = mk_issue(&mut app, "绑数据").await;
+        // refresh_issues happens inside CreateIssue; re-read numbers.
+        app.dispatch(Command::OpenProject(pid))
+            .await
+            .expect("reopen");
+        let (num_a, title_a) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue_a).unwrap();
+            (i.number, i.title.clone())
+        };
+        let (num_b, title_b) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue_b).unwrap();
+            (i.number, i.title.clone())
+        };
+
+        let sess_a = SessionId::new();
+        let sess_b = SessionId::new();
+        app.dispatch(Command::StartSession {
+            id: sess_a,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num_a} {title_a}"),
+        })
+        .await
+        .expect("sess a");
+        app.dispatch(Command::StartSession {
+            id: sess_b,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num_b} {title_b}"),
+        })
+        .await
+        .expect("sess b");
+
+        let cid_a = store
+            .ensure_conversation(issue_a, pid, "/tmp/a", "bw/a")
+            .await
+            .unwrap();
+        let cid_b = store
+            .ensure_conversation(issue_b, pid, "/tmp/b", "bw/b")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue_a, "claude-a")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue_b, "claude-b")
+            .await
+            .unwrap();
+
+        attach_live(&mut app, cid_a, issue_a, "claude-a");
+        attach_live(&mut app, cid_b, issue_b, "claude-b");
+        app.focus_conversation(cid_a, issue_a).await;
+        assert_eq!(app.state.focused_conversation, Some(cid_a));
+
+        // 阶段记录点击路径:只发 SelectSession(不发 RunIssue)。
+        app.dispatch(Command::SelectSession(Some(sess_b)))
+            .await
+            .expect("select b");
+
+        assert_eq!(
+            app.state.focused_conversation,
+            Some(cid_b),
+            "阶段记录 SelectSession 必须把嵌终端焦点切到 B(TermFocus 左→终端)"
+        );
+        assert_eq!(app.state.active_session, Some(sess_b));
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[tokio::test]
+    async fn select_session_empty_claude_session_id_runs_like_board() {
+        // 旧洞:有 conversation 行但 claude_session_id 空(hook 未回填)时,
+        // sync 静默 no-op → 阶段记录高亮、工作流空;看板 ▶跑 走 RunIssue
+        // 能起手。收口后 SelectSession 必须同样走 run_issue_now。
+        let db = std::env::temp_dir().join(format!(
+            "bw_select_session_empty_sid_{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+        let issue = mk_issue(&mut app, "找指标").await;
+        app.dispatch(Command::OpenProject(pid)).await.unwrap();
+        let (num, title) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue).unwrap();
+            (i.number, i.title.clone())
+        };
+        let sess = SessionId::new();
+        app.dispatch(Command::StartSession {
+            id: sess,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num} {title}"),
+        })
+        .await
+        .unwrap();
+        store
+            .ensure_conversation(issue, pid, "/tmp/x", "")
+            .await
+            .unwrap();
+        // 故意不 set_conversation_session_id —— 模拟 hook 未 fire。
+
+        app.dispatch(Command::SelectSession(Some(sess)))
+            .await
+            .expect("SelectSession 应像看板一样起手,不再静默");
+
+        app.dispatch(Command::OpenProject(pid)).await.unwrap();
+        let status = app
+            .state
+            .issues
+            .iter()
+            .find(|i| i.id == issue)
+            .map(|i| i.status)
+            .expect("issue");
+        assert_eq!(
+            status,
+            IssueStatus::InProgress,
+            "空 claude_session_id 时阶段记录点击也必须真正开工(与 RunIssue 等价)"
+        );
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[tokio::test]
+    async fn select_session_propagates_resume_errors() {
+        // 旧洞:`let _ = sync` 吞掉 open_conversation 错误 → 用户只见空白。
+        // Done + 有 session_id + 无 settle 通道(headless)→ 必须 Err 上浮。
+        let db =
+            std::env::temp_dir().join(format!("bw_select_session_err_{}.db", uuid::Uuid::new_v4()));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+        let issue = mk_issue(&mut app, "找指标").await;
+        for st in [
+            IssueStatus::Todo,
+            IssueStatus::InProgress,
+            IssueStatus::InReview,
+            IssueStatus::Done,
+        ] {
+            app.dispatch(Command::TransitionIssue {
+                id: issue,
+                status: st,
+            })
+            .await
+            .unwrap();
+        }
+        app.dispatch(Command::OpenProject(pid)).await.unwrap();
+        let (num, title) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue).unwrap();
+            (i.number, i.title.clone())
+        };
+        let sess = SessionId::new();
+        app.dispatch(Command::StartSession {
+            id: sess,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num} {title}"),
+        })
+        .await
+        .unwrap();
+        store
+            .ensure_conversation(issue, pid, "/tmp/x", "")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue, "claude-resume")
+            .await
+            .unwrap();
+
+        let err = app
+            .dispatch(Command::SelectSession(Some(sess)))
+            .await
+            .expect_err("无 settle 通道时咨询 resume 失败必须上浮,不能 Ok(())");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("settle")
+                || msg.contains("咨询")
+                || msg.contains("PTY")
+                || msg.contains("终端"),
+            "错误应说明咨询/终端路径不可用,实际:{msg}"
+        );
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[tokio::test]
+    async fn select_session_still_switches_after_open_issue_detail() {
+        // 用户实跑(2026-08-10):重启后侧栏 SelectSession 能切;一经由看板
+        // OpenIssueDetail 切过焦点,侧栏再点就「没用」。命令层回归:看板点卡
+        // 后 SelectSession 仍须把 focused_conversation 切回目标卡(与侧栏
+        // 首切同一条 run_issue_now);并清掉 issue_detail,避免弹层 state
+        // 残留。
+        let db =
+            std::env::temp_dir().join(format!("bw_select_after_board_{}.db", uuid::Uuid::new_v4()));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+
+        let issue_a = mk_issue(&mut app, "找指标").await;
+        let issue_b = mk_issue(&mut app, "绑数据").await;
+        app.dispatch(Command::OpenProject(pid))
+            .await
+            .expect("reopen");
+        let (num_a, title_a) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue_a).unwrap();
+            (i.number, i.title.clone())
+        };
+        let (num_b, title_b) = {
+            let i = app.state.issues.iter().find(|i| i.id == issue_b).unwrap();
+            (i.number, i.title.clone())
+        };
+
+        let sess_a = SessionId::new();
+        let sess_b = SessionId::new();
+        app.dispatch(Command::StartSession {
+            id: sess_a,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num_a} {title_a}"),
+        })
+        .await
+        .expect("sess a");
+        app.dispatch(Command::StartSession {
+            id: sess_b,
+            stage_kind: Some(StageKind::Prototype),
+            kind: SessionKind::Create,
+            title: format!("#{num_b} {title_b}"),
+        })
+        .await
+        .expect("sess b");
+
+        let cid_a = store
+            .ensure_conversation(issue_a, pid, "/tmp/a", "bw/a")
+            .await
+            .unwrap();
+        let cid_b = store
+            .ensure_conversation(issue_b, pid, "/tmp/b", "bw/b")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue_a, "claude-a")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue_b, "claude-b")
+            .await
+            .unwrap();
+
+        attach_live(&mut app, cid_a, issue_a, "claude-a");
+        attach_live(&mut app, cid_b, issue_b, "claude-b");
+
+        // 侧栏先切到 A(重启后首切路径)。
+        app.dispatch(Command::SelectSession(Some(sess_a)))
+            .await
+            .expect("sidebar A");
+        assert_eq!(app.state.focused_conversation, Some(cid_a));
+        assert!(app.state.issue_detail.is_none());
+
+        // 看板点 B 标题 → OpenIssueDetail(旧半套窄门曾只 focus;现走 run_issue_now)。
+        app.dispatch(Command::OpenIssueDetail(issue_b))
+            .await
+            .expect("board open B");
+        assert_eq!(
+            app.state.focused_conversation,
+            Some(cid_b),
+            "看板点卡必须切到 B 的终端焦点"
+        );
+        assert!(app.state.issue_detail.is_some(), "看板点卡仍应打开证据弹层");
+
+        // 再侧栏点回 A —— 用户报「就没用了」的那一步。
+        app.dispatch(Command::SelectSession(Some(sess_a)))
+            .await
+            .expect("sidebar A again");
+        assert_eq!(
+            app.state.focused_conversation,
+            Some(cid_a),
+            "看板切过之后,侧栏 SelectSession 仍须能切回 A"
+        );
+        assert!(
+            app.state.issue_detail.is_none(),
+            "侧栏切会话应收起看板证据弹层,避免回 Issue 面板再挡侧栏"
+        );
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[tokio::test]
+    async fn run_issue_now_respawns_when_active_run_zombie() {
+        // 侧栏唤不醒的命令层洞:active_run 仍挂本件但 PTY 已死时,旧逻辑
+        // early-return 只 focus 死 id。应收掉 zombie 锁并允许再次走
+        // interactive(本测用 mock 无 PTY 路径:清锁后不应再被「同项目忙碌」挡住)。
+        let db =
+            std::env::temp_dir().join(format!("bw_zombie_active_run_{}.db", uuid::Uuid::new_v4()));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+        let issue = mk_issue(&mut app, "找指标").await;
+        app.dispatch(Command::OpenProject(pid)).await.unwrap();
+        let cid = store
+            .ensure_conversation(issue, pid, "/tmp/z", "bw/z")
+            .await
+            .unwrap();
+        store
+            .set_conversation_session_id(issue, "claude-z")
+            .await
+            .unwrap();
+
+        // 伪造「锁在、PTY 不在」:写入 active_run 但不 attach。
+        let issue_row = app
+            .state
+            .issues
+            .iter()
+            .find(|i| i.id == issue)
+            .cloned()
+            .expect("issue");
+        let handle = tokio::spawn(async {});
+        app.state.active_run = Some(crate::ActiveRun {
+            project: pid,
+            issue: issue_row,
+            handle,
+            guard: bw_engine::workspace::IssueWorktreeGuard::new(
+                std::path::PathBuf::from("/tmp"),
+                None,
+            ),
+            finalize: crate::FinalizeCtx {
+                spec: bw_core::model::stage_workflow(StageKind::Prototype),
+                proj: app.store.get_project(pid).await.unwrap().expect("proj"),
+                p: pid,
+                issue_id: Some(issue),
+            },
+            is_resume: true,
+        });
+        assert!(
+            !app.state.terminal_manager.is_live(cid),
+            "本测前提:无活 PTY"
+        );
+
+        // run_issue_now 必须能越过 zombie(headless 无 settle 通道时 Done
+        // 咨询会 Err;先把状态保持可交付的 InProgress 路径)。
+        app.dispatch(Command::TransitionIssue {
+            id: issue,
+            status: IssueStatus::Todo,
+        })
+        .await
+        .ok();
+        app.dispatch(Command::TransitionIssue {
+            id: issue,
+            status: IssueStatus::InProgress,
+        })
+        .await
+        .ok();
+
+        let result = app.run_issue_now(SessionId::new(), issue).await;
+        assert!(
+            app.state.active_run.is_none()
+                || result.is_ok()
+                || result
+                    .as_ref()
+                    .err()
+                    .map(|e| !e.to_string().contains("有活正在跑"))
+                    .unwrap_or(false),
+            "zombie 锁不得再以「有活正在跑」挡住本件唤醒: {result:?}"
+        );
+        let _ = std::fs::remove_file(&db);
+    }
+}
+
+#[cfg(test)]
+mod history_series_tests {
+    use super::{history_series_for_field, parse_ymd};
+    use time::Month;
+
+    #[test]
+    fn parses_history_array_for_collect_query_field() {
+        let out = serde_json::json!({
+            "open_issues": 3,
+            "history": {
+                "open_issues": [
+                    {"ts": "2026-07-14", "v": 0},
+                    {"ts": "2026-08-12", "v": 3}
+                ]
+            }
+        });
+        let series = history_series_for_field(&out, "open_issues").expect("series");
+        assert_eq!(series.len(), 2);
+        assert_eq!(series[0].1, "0");
+        assert_eq!(series[1].1, "3");
+        assert_eq!(series[0].0, parse_ymd("2026-07-14").expect("day"));
+    }
+
+    #[test]
+    fn missing_history_is_none() {
+        let out = serde_json::json!({"open_issues": 3});
+        assert!(history_series_for_field(&out, "open_issues").is_none());
+    }
+
+    #[test]
+    fn parse_ymd_rejects_bad() {
+        assert!(parse_ymd("nope").is_none());
+        assert_eq!(parse_ymd("2026-08-12").unwrap().month(), Month::August);
+    }
+}
+
+/// V2-②-I: remote open → local Backlog; idempotent on github_number.
+#[cfg(test)]
+mod sync_remote_issues_tests {
+    use super::*;
+    use bw_core::model::{IssueStatus, MaturityPeriod};
+    use bw_engine::MockExecutor;
+    use bw_store::SqliteStore;
+
+    async fn boot_project(db: &str) -> (App, Arc<dyn Store>, ProjectId) {
+        let store: Arc<dyn Store> = Arc::new(SqliteStore::open(db).await.expect("open db"));
+        let mut app = App::new(
+            store.clone(),
+            Engine::new(Arc::new(MockExecutor::new())),
+            ClaudeCliConfig::default(),
+        );
+        app.dispatch(Command::Boot).await.expect("boot");
+        let pid = ProjectId::new();
+        app.dispatch(Command::CreateProject {
+            provider: "github".into(),
+            id: pid,
+            name: "sync-remote-issues".into(),
+            kind: "test".into(),
+            desc: "V2-②-I".into(),
+            workspace: None,
+            github: None,
+            codehub: None,
+        })
+        .await
+        .expect("create");
+        app.dispatch(Command::SetCycle {
+            cycle: MaturityPeriod::Explore,
+        })
+        .await
+        .expect("cycle");
+        app.dispatch(Command::CompleteCreation {
+            cadence: Cadence::Weekly,
+            run_first: false,
+        })
+        .await
+        .expect("complete");
+        app.dispatch(Command::OpenProject(pid)).await.expect("open");
+        (app, store, pid)
+    }
+
+    #[test]
+    fn trio_skill_exact_title_only() {
+        assert_eq!(App::trio_skill_for_title("找指标"), "north-star-discovery");
+        assert_eq!(App::trio_skill_for_title(" 绑数据 "), "metrics-binding");
+        assert_eq!(
+            App::trio_skill_for_title("竞品分析"),
+            "competitive-analysis"
+        );
+        assert_eq!(App::trio_skill_for_title("找指标（重做）"), "");
+        assert_eq!(App::trio_skill_for_title("手工活"), "");
+    }
+
+    #[tokio::test]
+    async fn import_creates_backlog_and_is_idempotent() {
+        let db =
+            std::env::temp_dir().join(format!("bw_sync_remote_issues_{}.db", uuid::Uuid::new_v4()));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+
+        let opens = vec![
+            bw_engine::github::RemoteOpenIssue {
+                number: 11,
+                title: "找指标".into(),
+                body: "挂 Skill: north-star-discovery".into(),
+            },
+            bw_engine::github::RemoteOpenIssue {
+                number: 12,
+                title: "网页随手开的".into(),
+                body: "out of band".into(),
+            },
+        ];
+        let (c1, r1, p1) = app
+            .import_remote_open_issues(pid, StageKind::Prototype, &opens)
+            .await
+            .expect("import1");
+        assert_eq!((c1, r1, p1), (2, 0, 0));
+
+        let issues = store.list_issues(pid, None, None).await.expect("list");
+        assert_eq!(issues.len(), 2);
+        let find = |n: u32| issues.iter().find(|i| i.github_number == n).unwrap();
+        let a = find(11);
+        assert_eq!(a.title, "找指标");
+        assert_eq!(a.status, IssueStatus::Backlog);
+        assert_eq!(a.standard_skill, "north-star-discovery");
+        let b = find(12);
+        assert_eq!(b.standard_skill, "");
+        assert_eq!(b.status, IssueStatus::Backlog);
+
+        // Second pass: refresh #11 only; #12 left open-set → Cancelled (off-board).
+        let opens2 = vec![bw_engine::github::RemoteOpenIssue {
+            number: 11,
+            title: "找指标".into(),
+            body: "updated body".into(),
+        }];
+        let (c2, r2, p2) = app
+            .import_remote_open_issues(pid, StageKind::Prototype, &opens2)
+            .await
+            .expect("import2");
+        assert_eq!((c2, r2, p2), (0, 1, 1));
+        let again = store.get_issue(a.id).await.expect("get").expect("row");
+        assert_eq!(again.desc, "updated body");
+        assert_eq!(again.status, IssueStatus::Backlog);
+        let closed_elsewhere = store.get_issue(b.id).await.expect("get12").expect("row");
+        assert_eq!(
+            closed_elsewhere.status,
+            IssueStatus::Cancelled,
+            "remote-closed unsettled → Cancelled"
+        );
+        assert_eq!(
+            store.list_issues(pid, None, None).await.unwrap().len(),
+            2,
+            "no duplicate local rows"
+        );
+
+        // Empty skill can be filled on refresh; non-empty never overwritten.
+        let id12 = b.id;
+        store
+            .set_issue_standard_skill_if_empty(id12, "should-not-apply-when-we-set-first")
+            .await
+            .unwrap();
+        // Simulate user already having a skill — write via empty-gate twice:
+        // first fill wins.
+        let issues = store.list_issues(pid, None, None).await.unwrap();
+        let b2 = issues.iter().find(|i| i.id == id12).unwrap();
+        assert_eq!(b2.standard_skill, "should-not-apply-when-we-set-first");
+        store
+            .set_issue_standard_skill_if_empty(id12, "north-star-discovery")
+            .await
+            .unwrap();
+        let b3 = store.get_issue(id12).await.unwrap().unwrap();
+        assert_eq!(b3.standard_skill, "should-not-apply-when-we-set-first");
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[tokio::test]
+    async fn remote_closed_keeps_local_done_cancels_unsettled() {
+        let db =
+            std::env::temp_dir().join(format!("bw_sync_remote_prune_{}.db", uuid::Uuid::new_v4()));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let (mut app, store, pid) = boot_project(&db_s).await;
+
+        let opens = vec![
+            bw_engine::github::RemoteOpenIssue {
+                number: 21,
+                title: "我做完的".into(),
+                body: "".into(),
+            },
+            bw_engine::github::RemoteOpenIssue {
+                number: 22,
+                title: "别人关的".into(),
+                body: "".into(),
+            },
+            bw_engine::github::RemoteOpenIssue {
+                number: 23,
+                title: "我开跑中".into(),
+                body: "".into(),
+            },
+        ];
+        let (c, r, p) = app
+            .import_remote_open_issues(pid, StageKind::Prototype, &opens)
+            .await
+            .expect("seed");
+        assert_eq!((c, r, p), (3, 0, 0));
+
+        let issues = store.list_issues(pid, None, None).await.unwrap();
+        let mine = issues.iter().find(|i| i.github_number == 21).unwrap();
+        let theirs = issues.iter().find(|i| i.github_number == 22).unwrap();
+        let mine_wip = issues.iter().find(|i| i.github_number == 23).unwrap();
+
+        // Simulate this Buddy completing #21 through the real Done edge.
+        store
+            .transition_issue(mine.id, IssueStatus::Todo)
+            .await
+            .unwrap();
+        store
+            .transition_issue(mine.id, IssueStatus::InProgress)
+            .await
+            .unwrap();
+        store
+            .transition_issue(mine.id, IssueStatus::InReview)
+            .await
+            .unwrap();
+        app.dispatch(Command::TransitionIssue {
+            id: mine.id,
+            status: IssueStatus::Done,
+        })
+        .await
+        .expect("done");
+        let done_row = store.get_issue(mine.id).await.unwrap().unwrap();
+        assert_eq!(done_row.status, IssueStatus::Done);
+        assert!(done_row.settled_at.is_some());
+
+        store
+            .transition_issue(mine_wip.id, IssueStatus::Todo)
+            .await
+            .unwrap();
+        store
+            .transition_issue(mine_wip.id, IssueStatus::InProgress)
+            .await
+            .unwrap();
+
+        // Both remotes closed; open set empty → keep Done, cancel the rest.
+        let (c2, r2, p2) = app
+            .import_remote_open_issues(pid, StageKind::Prototype, &[])
+            .await
+            .expect("prune");
+        assert_eq!((c2, r2, p2), (0, 0, 2));
+
+        let kept = store.get_issue(mine.id).await.unwrap().unwrap();
+        assert_eq!(kept.status, IssueStatus::Done);
+        assert!(kept.settled_at.is_some());
+
+        let dropped = store.get_issue(theirs.id).await.unwrap().unwrap();
+        assert_eq!(dropped.status, IssueStatus::Cancelled);
+
+        let wip_dropped = store.get_issue(mine_wip.id).await.unwrap().unwrap();
+        assert_eq!(wip_dropped.status, IssueStatus::Cancelled);
+
+        let _ = std::fs::remove_file(&db);
+    }
+}
+
+/// Bug A (cowelink · 找指标): InReview detection must not sit behind a
+/// multi-minute silence while candidates wait, and the desktop shell must
+/// rebuild Vm when the poller mutates issues without a cron fire.
+#[cfg(test)]
+mod inreview_poll_refresh_tests {
+    use super::{
+        inreview_poll_interval_secs, App, AppState, ClaudeCliConfig, Engine,
+        INREVIEW_POLL_ACTIVE_SECS, INREVIEW_POLL_IDLE_SECS,
+    };
+    use bw_engine::MockExecutor;
+    use bw_store::{SqliteStore, Store};
+    use std::sync::Arc;
+
+    #[test]
+    fn active_interval_is_teens_of_seconds_not_minutes() {
+        assert_eq!(inreview_poll_interval_secs(true), INREVIEW_POLL_ACTIVE_SECS);
+        assert!(INREVIEW_POLL_ACTIVE_SECS <= 30);
+        assert!(INREVIEW_POLL_ACTIVE_SECS >= 5);
+        assert_eq!(inreview_poll_interval_secs(false), INREVIEW_POLL_IDLE_SECS);
+        assert!(INREVIEW_POLL_IDLE_SECS >= 60);
+    }
+
+    #[tokio::test]
+    async fn take_scheduler_ui_dirty_clears_once() {
+        let db =
+            std::env::temp_dir().join(format!("bw_inreview_dirty_{}.db", uuid::Uuid::new_v4()));
+        let db_s = db.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&db);
+        let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db_s).await.expect("open"));
+        let mut app = App::new(
+            store,
+            Engine::new(Arc::new(MockExecutor::new())),
+            ClaudeCliConfig::default(),
+        );
+        assert!(!app.take_scheduler_ui_dirty());
+        app.state.scheduler_ui_dirty = true;
+        assert!(app.take_scheduler_ui_dirty());
+        assert!(!app.take_scheduler_ui_dirty());
+        let _ = AppState::default().scheduler_ui_dirty;
+        let _ = std::fs::remove_file(&db);
+    }
 }
