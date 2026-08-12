@@ -618,24 +618,6 @@ async fn adopt_existing_pr(workspace: &Path, branch: &str) -> Result<u32, Github
         .map_err(|_| GithubError::Command("认领已存在 PR 时读回号码失败".to_string()))
 }
 
-/// 查 PR 状态 (plan/13 D3; C7 之前本票自用): `gh pr view --json state` → the
-/// raw state string (`OPEN` / `MERGED` / `CLOSED`). Read-only, no side effects
-/// — used to detect drift (a PR merged on the web) without ever rewriting it.
-pub async fn pr_state(owner_repo: &str, pr_number: u32) -> Result<String, GithubError> {
-    gh_json_field(&[
-        "pr",
-        "view",
-        &pr_number.to_string(),
-        "--repo",
-        owner_repo,
-        "--json",
-        "state",
-        "--jq",
-        ".state",
-    ])
-    .await
-}
-
 /// merge PR (plan/13 D3): the **human** verification action — merges the PR,
 /// which (via `Closes #<n>`) closes the Issue. Called only from bw-app's
 /// `MergeIssuePr` command, never from any executor/run path. Squash-merge keeps
