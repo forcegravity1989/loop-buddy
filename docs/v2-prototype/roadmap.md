@@ -59,7 +59,7 @@
 ## 3. 建议的后续落盘顺序
 
 1. 运营周:问题进 LEFTOVERS 或本目录运营台账 → 周四 V1.x 收一组可验证修复。  
-2. V2-2.1:单独开设计篇(如 `issue-dispatch-skill-prompt.md`)→ scope delta → 再开发。  
+2. V2-2.1:详细设计已落 [`issue-dispatch-prompt-skill.md`](issue-dispatch-prompt-skill.md)；按「统一提示词与规范资产 → 阶段默认 SOP 与用户 Skill 替换」两轮开发。
 3. V2-2.2:workbuddy 调研笔记 → 最简多人 delta → 再开发。
 
 ---

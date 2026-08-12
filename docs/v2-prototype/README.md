@@ -9,6 +9,7 @@
 | 文件 | 是什么 | 状态 |
 |---|---|---|
 | [roadmap.md](roadmap.md) | V1 维护运营周节奏 + V2 迭代功能初始录入(调度简化 / 多人最简) | **当前活跃**,初始信息源 |
+| [issue-dispatch-prompt-skill.md](issue-dispatch-prompt-skill.md) | V2 调度统一设计：所有 Issue 必带的 buddy 提示词与规范，和按活选择的 Skill 两条独立资产线 | **设计已定，尚未开发** |
 
 ## 与 V1 目录的关系
 
