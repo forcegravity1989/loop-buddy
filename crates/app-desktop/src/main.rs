@@ -8,6 +8,7 @@
 
 mod flow;
 mod kernel;
+mod open_design;
 mod screens;
 mod theme;
 
@@ -35,6 +36,23 @@ use screens::workflow_hub::WorkflowHub;
 use tokio::sync::broadcast::error::RecvError;
 
 fn main() {
+    // Prototype progress iframes Open Design's loopback page. WebView2's
+    // local-network checks can refuse that; OD itself disables the same
+    // feature. Set before the webview process starts.
+    #[cfg(windows)]
+    {
+        const FLAG: &str = "--disable-features=LocalNetworkAccessChecks";
+        match std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+            Ok(existing) if existing.contains("LocalNetworkAccessChecks") => {}
+            Ok(existing) if !existing.trim().is_empty() => {
+                std::env::set_var(
+                    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                    format!("{existing} {FLAG}"),
+                );
+            }
+            _ => std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", FLAG),
+        }
+    }
     dioxus::LaunchBuilder::new()
         .with_cfg(
             dioxus::desktop::Config::new().with_window(
