@@ -130,15 +130,12 @@ fn Root() -> Element {
     }
     let mut sel = use_signal(move || initial_sel);
     let mut creating = use_signal(|| false);
-    // Bug B: the末卡「确认·建立项目」button's local pending guard — set true
+    // Bug B: the末卡「确认·建立项目」button's pending guard — set true
     // the instant the user clicks (so a fast second click is a no-op, not a
-    // second `CompleteCreation` dispatch), released when that creation
-    // attempt truly ends. Success ends it by the kernel flipping `view` to
-    // App (the Create screen unmounts, same optimistic-flip spirit as
-    // IntentCard); failure ends it here, on the real `UiNote::Error` that
-    // the dispatch-error path already raises — re-enabling the button for an
-    // honest retry. Sibling to `creating`/`pending_cron`: client-side
-    // orchestration knowledge the kernel doesn't carry.
+    // second `CompleteCreation` dispatch). Released on `UiNote::Error`,
+    // when Create is not showing (success / cancel / wall), or on "+ 新建".
+    // Lives here (not inside Create) so the notes listener can clear it;
+    // unmounting Create does not drop this signal.
     let mut submitting = use_signal(|| false);
     let mut toast = use_signal(|| None::<String>);
     // PF1-5: toast 自清的 epoch —— 每次 set_toast 自增,spawn 的 8s timer
@@ -292,6 +289,16 @@ fn Root() -> Element {
         creating.set(false);
     }
     let show_create = creating() || v.view == View::Create;
+    // Bug B leftover: `submitting` lives on this parent so the notes
+    // listener can release it on `UiNote::Error`. Success / cancel unmount
+    // Create but do not drop this signal — a later visit (new project or
+    // cold-start resume) inherited `true` and showed「建立中…」before
+    // anyone clicked confirm. Clone soft-fail is `ConnectorSynced`, not
+    // `UiNote::Error`, so the first failed attempt never released it.
+    // Release whenever Create is not showing.
+    if !show_create && submitting() {
+        submitting.set(false);
+    }
     let show_op = !show_create && v.view == View::App;
 
     // Cron Hub's "▶ 立即执行": resolve the real project + workflow from this
@@ -420,7 +427,7 @@ fn Root() -> Element {
                         vm: v.create.clone(),
                         // Bug B: pending guard for the Intent card's confirm
                         // button — set on click, released on real Error (above)
-                        // or by the screen unmounting on success (view→App).
+                        // or when Create is not showing / "+ 新建".
                         submitting,
                         // plan/14 C14: raw action-progress facts — `Create`
                         // renders the pending/ok/fail strip from these.
@@ -441,6 +448,7 @@ fn Root() -> Element {
                         on_cancel: move |_| {
                             kernel.send(Command::BackToProjects);
                             creating.set(false);
+                            submitting.set(false);
                         },
                     }
                 } else if show_op {
@@ -462,7 +470,10 @@ fn Root() -> Element {
                 } else {
                     Wall {
                         projects: v.projects.clone(),
-                        on_new: move |_| creating.set(true),
+                        on_new: move |_| {
+                            submitting.set(false);
+                            creating.set(true);
+                        },
                     }
                 }
             }

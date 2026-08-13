@@ -8,8 +8,8 @@
 //! minted at Intent's confirm (fresh) or already exists (resume). The
 //! Bug-B submitting guard lives on the Intent confirm button: set true on
 //! click, released by `main.rs` on a real `UiNote::Error` (failure → retry),
-//! or naturally when the kernel flips `view` to App on success (this screen
-//! unmounts).
+//! when Create is not showing (success / cancel / back to wall — the signal
+//! lives on the parent, so unmount alone does not reset it), or on "+ 新建".
 
 use crate::kernel::{
     ActionItem, CreateVm, Kernel, ACTION_FAIL_LINGER, ACTION_OK_LINGER, ACTION_PENDING_THRESHOLD,
@@ -43,10 +43,9 @@ enum RepoChoice {
 pub fn Create(
     vm: Option<CreateVm>,
     // Bug B: the Intent card's confirm-button pending guard. Set true on
-    // click; released by `main.rs` on a real `UiNote::Error` (failure →
-    // retry), or naturally when the kernel flips `view` to App on success
-    // (this screen unmounts). Local signal passed down, not a global busy
-    // state — buddy keeps no such global.
+    // click; released by `main.rs` on a real `UiNote::Error`, when Create
+    // is not showing, or on "+ 新建". The signal lives on the parent —
+    // unmounting this screen does not reset it.
     submitting: Signal<bool>,
     // plan/14 C14: raw Started/Ok/Fail facts for this flow's background
     // actions (建仓/克隆/仓列表加载/标配建单/落地推送) — rendered by
@@ -975,8 +974,7 @@ fn IntentCard(
     let can_send = !probing && !name().trim().is_empty() && codehub_ok;
 
     // Bug B: pending guard — 防连点(后台建项目非幂等)。点即置 true;
-    // 成功由 kernel 翻 view→App 卸载本屏;失败由 main.rs 收
-    // UiNote::Error 复位,可重试。
+    // 离开创建屏 / 「+ 新建」/ UiNote::Error 由 main.rs 复位。
     let pending = submitting();
     let (btn_label, btn_bg, btn_shadow, btn_cursor) = if pending {
         ("建立中…", "#B89A8E", "none", "not-allowed")

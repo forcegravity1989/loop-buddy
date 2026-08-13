@@ -143,7 +143,8 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
   - **path 空能提交**(Q1,`f66814b`):RepoCard `can_send` `||` 优先级漏,codehub 下 `is_new` 盖过 path 要求 → **改** `if is_codehub { path 必填 } else { ... }`,gate 放 Repo「下一步」源头,置灰显「path 未填」。
   - **codehub 录入却碰 github**(Q2,已修):Repo 卡 `platform` 默认 github + chip 一点就 fire `gh repo list` → codehub 用户没切平台就碰 github → **改** `ListGithubRepos` 从 chip 急触发改「↻ 刷新列表」按钮懒触发(codehub 用户根本不碰 github 块)。
   - **claude spawn "program not found"**:默认裸 `"claude"` → Windows Rust `Command::new` 不做 PATHEXT → os error 193 → **改**(不碰代码)设 `BW_CLAUDE_BIN=…\claude.exe`(持久 User env);config gap 非代码 bug。自动探测留后续。
-  - **重复点「建立项目」非幂等**(Bug B,`1dbd76c`):confirm 按钮无 pending 守卫 → 多点建多套 trio + codehub 孤儿 issue → **改** confirm 起手置 `creating=true` 置灰「建立中…」,完成/失败后翻页/解禁。
+  - **重复点「建立项目」非幂等**(Bug B,`1dbd76c`):confirm 按钮无 pending 守卫 → 多点建多套 trio + codehub 孤儿 issue → **改** confirm 起手置 `submitting=true` 置灰「建立中…」,完成/失败后翻页/解禁。
+  - **【归正·Bug B 半套】**(`submitting` 在 `main.rs` 父组件,Create 卸载不清):clone 软失败走 `ConnectorSynced` 不是 `UiNote::Error`,第一次点确认后标志一直为 true。同事修完 SSH 再进创建流,还没点确认按钮已是灰色「建立中」。**改**离开创建屏 / 「+ 新建」/ 返回项目墙时复位。
   - **auto-mint(clone 失败悄悄本地 mint 像接上了)**:**判断**对齐 github(Existing clone 失败 CompleteCreation 也 auto-mint 空项目)→ clone SSH 修好后非空不触发。真「失败就停」需持久化「尝试过远端」标志位 → ⚠ 长期 TODO,见 §4.10。
 
 ### 步3·进 Op 侧边栏(看本项目有什么)
