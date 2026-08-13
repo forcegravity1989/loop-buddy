@@ -68,8 +68,12 @@ pub fn Op(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     let paper = theme::PAPER;
     // Live PTY: center column fills height so the terminal can flex vertically.
     // Other panels keep scrollable content.
+    let embed_od =
+        op.panel == Panel::Progress && matches!(op.scope, Scope::Stage(StageKind::Prototype));
     let center = if op.panel == Panel::Workflow && op.pty_active {
         "flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:14px 22px 16px;"
+    } else if embed_od {
+        "flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:10px 14px 10px;"
     } else {
         "flex:1;min-width:0;overflow-y:auto;padding:18px 22px 40px;"
     };
@@ -452,7 +456,19 @@ fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     };
     match (op.panel, stage) {
         (Panel::Progress, None) => rsx! { ProgressAll { op } },
-        (Panel::Progress, Some(s)) => rsx! { ProgressStage { op, s } },
+        (Panel::Progress, Some(s)) => {
+            let fill = if s.kind == StageKind::Prototype {
+                "height:100%;min-height:0;display:flex;flex-direction:column;"
+            } else {
+                ""
+            };
+            rsx! {
+                div {
+                    style: "{fill}",
+                    ProgressStage { op, s }
+                }
+            }
+        }
         (Panel::Workflow, s) => {
             let fill = if op.pty_active {
                 "height:100%;min-height:0;display:flex;flex-direction:column;"
@@ -2980,6 +2996,113 @@ fn StageDetailCard(op: OpVm, s: StageVm) -> Element {
 
 #[component]
 fn ProgressStage(op: OpVm, s: StageVm) -> Element {
+    if s.kind == StageKind::Prototype {
+        return rsx! { PrototypeProgress { op, s } };
+    }
+    rsx! { ProgressStageLegacy { op, s } }
+}
+
+/// Run Open Design discovery off the UI task. The dioxus Signal is unsync,
+/// so the blocking work stays on a std thread and the result comes back
+/// over a oneshot onto this runtime.
+fn spawn_open_design_probe(
+    mut url: dioxus::prelude::Signal<Option<String>>,
+    mut probing: dioxus::prelude::Signal<bool>,
+) {
+    spawn(async move {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::open_design::discover_web_url());
+        });
+        url.set(rx.await.ok().flatten());
+        probing.set(false);
+    });
+}
+
+/// Prototype progress: live Open Design home, collapsible DoD/handoff.
+/// Empty metrics / manual % were unused after the overview refactor.
+#[component]
+fn PrototypeProgress(op: OpVm, s: StageVm) -> Element {
+    let serif = theme::SERIF;
+    let ink3 = theme::INK_3;
+    let clay = theme::CLAY;
+    let card = theme::card();
+    let (chip_bg, chip_fg, _) = ui::stage_tint(s.kind);
+    let chip = theme::chip(chip_bg, chip_fg);
+    let url = use_signal(|| None::<String>);
+    let mut probing = use_signal(|| true);
+    let mut dod_open = use_signal(|| false);
+    let mut probe_started = use_signal(|| false);
+    if !probe_started() {
+        probe_started.set(true);
+        spawn_open_design_probe(url, probing);
+    }
+    let retry = move |_| {
+        if probing() {
+            return;
+        }
+        probing.set(true);
+        spawn_open_design_probe(url, probing);
+    };
+    rsx! {
+        div {
+            style: "height:100%;min-height:0;display:flex;flex-direction:column;gap:8px;",
+            div {
+                style: "display:flex;align-items:center;gap:10px;flex:none;",
+                span { style: "font-family:{serif};font-size:18px;font-weight:600;", "{s.n} {s.kind.label()}" }
+                span { style: "{chip}", "{s.kind.role_short()}" }
+                span { style: "font-size:12px;color:{ink3};", "Open Design · 首页" }
+                button {
+                    style: "margin-left:auto;cursor:pointer;background:transparent;color:{clay};border:1px solid {clay};border-radius:7px;padding:5px 12px;font-size:12px;",
+                    disabled: probing(),
+                    onclick: retry,
+                    if probing() { "正在发现…" } else { "重新发现" }
+                }
+            }
+            div {
+                style: "flex:1;min-height:0;border:1px solid {theme::BORDER};border-radius:10px;overflow:hidden;background:#FFF;",
+                if let Some(src) = url() {
+                    iframe {
+                        src: "{src}/",
+                        style: "width:100%;height:100%;border:0;display:block;",
+                        allow: "clipboard-read; clipboard-write; fullscreen",
+                    }
+                } else {
+                    div {
+                        style: "{card} height:100%;box-sizing:border-box;padding:28px 24px;border:none;box-shadow:none;",
+                        div { style: "font-weight:600;margin-bottom:8px;",
+                            if probing() { "正在寻找 Open Design" } else { "还没有接到 Open Design" }
+                        }
+                        p {
+                            style: "color:{theme::INK_2};font-size:13px;margin:0 0 14px;line-height:1.7;",
+                            if probing() {
+                                "正在问本机已打开的 Open Design 要首页地址，马上就好。"
+                            } else {
+                                "本屏会嵌本机已打开的 Open Design 首页。请先打开 Open Design，再点「重新发现」。不另弹窗口；没接到就不假装嵌进去了。"
+                            }
+                        }
+                    }
+                }
+            }
+            div { style: "flex:none;",
+                button {
+                    style: "cursor:pointer;background:transparent;border:1px solid {theme::BORDER};border-radius:8px;padding:7px 12px;font-size:12px;color:{theme::INK_2};width:100%;text-align:left;",
+                    onclick: move |_| dod_open.set(!dod_open()),
+                    if dod_open() { "▾ 完成清单与交棒" } else { "▸ 完成清单与交棒" }
+                }
+                if dod_open() {
+                    div {
+                        style: "max-height:40vh;overflow-y:auto;",
+                        StageDetailCard { op: op.clone(), s: s.clone() }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ProgressStageLegacy(op: OpVm, s: StageVm) -> Element {
     let k = use_context::<Kernel>();
     // C7 · 立即采集: a manual pull entrance alongside the standard daily cron.
     // Cloned up front because `set_progress` below moves `k`.

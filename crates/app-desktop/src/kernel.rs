@@ -681,6 +681,21 @@ pub fn spawn() -> Kernel {
                             };
                             let _ = app.dispatch(Command::SetPanel(panel)).await;
                         }
+                        // BW_SCOPE=prototype|build|optimize|growth|ops — stage
+                        // axis selection. Prototype progress embeds Open Design.
+                        if let Ok(sc) = std::env::var("BW_SCOPE") {
+                            let scope = match sc.trim() {
+                                "prototype" => Some(Scope::Stage(StageKind::Prototype)),
+                                "build" => Some(Scope::Stage(StageKind::Build)),
+                                "optimize" => Some(Scope::Stage(StageKind::Optimize)),
+                                "growth" => Some(Scope::Stage(StageKind::Growth)),
+                                "ops" => Some(Scope::Stage(StageKind::Ops)),
+                                _ => None,
+                            };
+                            if let Some(scope) = scope {
+                                let _ = app.dispatch(Command::SetScope(scope)).await;
+                            }
+                        }
                         let s = app.snapshot();
                         eprintln!(
                             "[BW_OPEN] {name:?} -> view={:?} panel={:?} projects={} issues={}",

@@ -43,6 +43,7 @@
 | **V2-②-B** | `docs/v2-prototype/same-project-multiple-workbenches.md` §8 | Phase B:采集补齐近 30 天 observation(`history` series)+ Buddy `collect_stats.py`;与 Issue 3 折线配对;横轴为周结束日 MM-DD | 已落地 |
 | **V2-②-A-IntentUX** | `docs/v2-prototype/same-project-multiple-workbenches.md` §6.2 | 后来者选仓后远端探测 project.toml → Intent 只读预填(方案 A);首到者仍手填 | 已落地 |
 | **V2-②-I** | `docs/v2-prototype/same-project-multiple-workbenches.md` §6.2 / §3.3 | 仓平台 open Issue 单向读回重建本地行(可 ▶跑);创建收尾+手动同步;远端已关且本机未完成→Cancelled 不上板;本机 Done 保留可续聊;Done 永不自动 | 已落地 |
+| **V3-OD-embed** | `docs/v3-prototype/README.md` | 原型进度内嵌本机 Open Design 首页(管道发现 URL + iframe);提示词注入不在本轮 | v3 分支,未 push |
 
 散见的一次性编号(如 plan/16 的 P8、plan/17 的 C5)不单独列行,以所在文件的上下文为准。
 
