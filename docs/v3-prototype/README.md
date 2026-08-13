@@ -1,6 +1,6 @@
 # docs/v3-prototype/ · V3 设计导读
 
-> **30 秒导读**:V3 从「原型进度内嵌 Open Design」开始。分支 `v3`，**未提交、未 push**。穿刺记录仍在 V2 目录的 spike 文；本目录只放 V3 范围说明。
+> **30 秒导读**:V3 从「原型进度内嵌 Open Design」开始。分支 `v3`，**已提交、未 push**。穿刺记录仍在 V2 目录的 spike 文；本目录只放 V3 范围说明。
 
 穿刺事实源:[`../v2-prototype/open-design-embed-spike.md`](../v2-prototype/open-design-embed-spike.md)
 

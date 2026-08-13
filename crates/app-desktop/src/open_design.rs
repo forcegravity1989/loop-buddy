@@ -4,6 +4,11 @@
 //! Discovery order: `BW_OPEN_DESIGN_URL` → named-pipe / unix-socket STATUS
 //! (see `docs/v2-prototype/open-design-embed-spike.md`). Port is assigned
 //! per launch; never hard-code it.
+//!
+//! Callers must not run this on the UI thread: pipe `CreateFile` can block
+//! with no open timeout (`#![forbid(unsafe_code)]` bars `WaitNamedPipe`).
+//! The 400ms cap below only waits for a worker; a wedged open stays on that
+//! worker and is dropped.
 
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -55,8 +60,10 @@ fn sidecar_status_paths() -> Vec<String> {
     }
     #[cfg(not(windows))]
     {
+        // Packaged Mac: `release-stable`. Packaged Linux: `release-stable-linux`.
         [
-            "/tmp/open-design/ipc/release-stable-win/web.sock",
+            "/tmp/open-design/ipc/release-stable/web.sock",
+            "/tmp/open-design/ipc/release-stable-linux/web.sock",
             "/tmp/open-design/ipc/default/web.sock",
         ]
         .into_iter()
@@ -114,6 +121,22 @@ fn parse_status_url(bytes: &[u8]) -> Option<String> {
     }
 }
 
+/// `http://127.0.0.1:<port>` or `http://localhost:<port>` only. Rejects
+/// userinfo (`@`), missing port, and anything that is not a loopback host.
 fn looks_loopback_http(url: &str) -> bool {
-    url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:")
+    let rest = match url.trim().strip_prefix("http://") {
+        Some(r) => r,
+        None => return false,
+    };
+    if rest.contains('@') {
+        return false;
+    }
+    let hostport = rest.split('/').next().unwrap_or("");
+    let Some((host, port)) = hostport.rsplit_once(':') else {
+        return false;
+    };
+    if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    host == "127.0.0.1" || host.eq_ignore_ascii_case("localhost")
 }

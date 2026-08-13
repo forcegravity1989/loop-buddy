@@ -3002,6 +3002,23 @@ fn ProgressStage(op: OpVm, s: StageVm) -> Element {
     rsx! { ProgressStageLegacy { op, s } }
 }
 
+/// Run Open Design discovery off the UI task. The dioxus Signal is unsync,
+/// so the blocking work stays on a std thread and the result comes back
+/// over a oneshot onto this runtime.
+fn spawn_open_design_probe(
+    mut url: dioxus::prelude::Signal<Option<String>>,
+    mut probing: dioxus::prelude::Signal<bool>,
+) {
+    spawn(async move {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::open_design::discover_web_url());
+        });
+        url.set(rx.await.ok().flatten());
+        probing.set(false);
+    });
+}
+
 /// Prototype progress: live Open Design home, collapsible DoD/handoff.
 /// Empty metrics / manual % were unused after the overview refactor.
 #[component]
@@ -3012,10 +3029,20 @@ fn PrototypeProgress(op: OpVm, s: StageVm) -> Element {
     let card = theme::card();
     let (chip_bg, chip_fg, _) = ui::stage_tint(s.kind);
     let chip = theme::chip(chip_bg, chip_fg);
-    let mut url = use_signal(crate::open_design::discover_web_url);
+    let url = use_signal(|| None::<String>);
+    let mut probing = use_signal(|| true);
     let mut dod_open = use_signal(|| false);
+    let mut probe_started = use_signal(|| false);
+    if !probe_started() {
+        probe_started.set(true);
+        spawn_open_design_probe(url, probing);
+    }
     let retry = move |_| {
-        url.set(crate::open_design::discover_web_url());
+        if probing() {
+            return;
+        }
+        probing.set(true);
+        spawn_open_design_probe(url, probing);
     };
     rsx! {
         div {
@@ -3027,8 +3054,9 @@ fn PrototypeProgress(op: OpVm, s: StageVm) -> Element {
                 span { style: "font-size:12px;color:{ink3};", "Open Design · 首页" }
                 button {
                     style: "margin-left:auto;cursor:pointer;background:transparent;color:{clay};border:1px solid {clay};border-radius:7px;padding:5px 12px;font-size:12px;",
+                    disabled: probing(),
                     onclick: retry,
-                    "重新发现"
+                    if probing() { "正在发现…" } else { "重新发现" }
                 }
             }
             div {
@@ -3042,10 +3070,16 @@ fn PrototypeProgress(op: OpVm, s: StageVm) -> Element {
                 } else {
                     div {
                         style: "{card} height:100%;box-sizing:border-box;padding:28px 24px;border:none;box-shadow:none;",
-                        div { style: "font-weight:600;margin-bottom:8px;", "还没有接到 Open Design" }
+                        div { style: "font-weight:600;margin-bottom:8px;",
+                            if probing() { "正在寻找 Open Design" } else { "还没有接到 Open Design" }
+                        }
                         p {
                             style: "color:{theme::INK_2};font-size:13px;margin:0 0 14px;line-height:1.7;",
-                            "本屏会嵌本机已打开的 Open Design 首页。请先打开 Open Design，再点「重新发现」。不另弹窗口；没接到就不假装嵌进去了。"
+                            if probing() {
+                                "正在问本机已打开的 Open Design 要首页地址，马上就好。"
+                            } else {
+                                "本屏会嵌本机已打开的 Open Design 首页。请先打开 Open Design，再点「重新发现」。不另弹窗口；没接到就不假装嵌进去了。"
+                            }
                         }
                     }
                 }
