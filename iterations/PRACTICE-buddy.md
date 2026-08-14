@@ -68,6 +68,7 @@
   - [4.12 plan18 step3 收尾·代码侧已交付 + 未决(指回步5/6/7)](#412-plan18-step3-收尾代码侧已交付--未决指回步567)
   - [4.13 V3 两篇方案已记、未落地(指回 §3 issues / 一张工作台)](#413-v3-两篇方案已记未落地指回-3-issues--一张工作台)
   - [4.14 第一包 / 开发包 + 删阶段记录缺列(2026-08-14)](#414-第一包--开发包--删阶段记录缺列2026-08-14)
+  - [4.15 采集仍跑旧脚本·合入是否更新主目录(2026-08-14)](#415-采集仍跑旧脚本合入是否更新主目录2026-08-14)
   - [待记(后续会话补)](#待记后续会话补)
 - [5. 认知(buddy 是什么、能带来什么)](#5-认知buddy-是什么能带来什么)
   - [两个面(buddy = 看板 + AI 小队)](#两个面buddy--看板--ai-小队)
@@ -203,7 +204,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 ### 步7·交棒 / merge
 
 - 你做:InReview 卡点「merge」(或 codehub 网页 merge)。
-- buddy 干:`MergeIssuePr` → `Remote.merge_mr`(codehub `codehub-cli mr merge <iid> --squash -y`)→ merge 成功推 Done(InReview→Done,人点的 merge 触发,非自动)。
+- buddy 干:`MergeIssuePr` → `Remote.merge_mr`(codehub `codehub-cli mr merge <iid> --squash -y`)→ merge 成功推 Done(InReview→Done,人点的 merge 触发,非自动)。Done 记账口再对**主工作区**(`project.workspace_path`,不是 issue worktree)跑 `sync_default_branch`:fetch → checkout 默认分支 → `pull --ff-only` → 从主目录读 `.bw/metrics.toml` / `connectors.toml` 装进库 → 立刻采一轮。worktree 里的新脚本不会直接拷进主目录,是远端合入后再拉回主目录。`pull` 失败被吞掉仍算收拢成功(见 §4.15)。
 - ⚠ **merge 403 不是 buddy bug**:`merge_mr` 命令对(真打 codehub 拿 403「target branch is protected, you do not have MERGE permission」)——是 maas master 保护分支 + CLI token 无 merge 权限的治理问题。buddy 如实报错、issue 留 InReview 可重试。解法在 codehub 侧:网页有权限账号 merge / 解保 master / target 真实开发分支(`a_develop`)。
 - **实测(2026-07-31,trio 走通)**:找指标 MR 11 + 绑数据 MR 12(冲突手解)都 codehub 网页合入 → buddy 点「⬇ merge PR」(`MergeIssuePr`)→ `merge_mr` 读回 state==merged(见步5 `b02047b`,不看退出码)→ Done + `SyncMetricsFile` 拉 master + 装 trio 指标(metric 表 7→13,北极星+3滞后+3引领进表,全 unknown 诚实)。**trio 生命周期(跳过竞品分析)端到端走通**:定义(找指标)→采集方案(绑数据)→merge→Done→指标进表。⚠ 实测中撞过 merge_mr 假 Done bug(`codehub-cli mr merge` 退出码靠不住→假成功→Done 但 MR 没合+没装指标),手动 reset 两 issue 回 InReview(清 settled_at),`b02047b` 修好后重试真合。
 - **【归正·codehub issue 自动关单】**(`a76c6c5`):实测 issue 31/32/33 merge 后仍 `opened`——**`--issue-nums` 只 link MR↔issue,不触发自动关单**(我之前假设它自动关,错了)。codehub(GitLab)自动关单靠 **MR description 里的 `Closes #<iid>`**(和 github `Closes #n` 一样,merge 时自动关引用的 issue)。**改**:`codehub::create_mr` body 加 `Closes #<iid>`;`MergeIssuePr` 的 gh issue 补关仍 gate github-only(codehub 靠 body Closes,不走 gh 补关)。现有 31/32/33 历史 MR body 没 Closes、issue 仍开(可 codehub 网页手关);未来 codehub MR 会自动关。**未验**(`Closes #` 在 codehub body 是否真触发自动关,待下次 codehub MR merge 实测;GitLab 标准行为,默认 ON)。
@@ -279,7 +280,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
   - **connector**:BW connector 探针(如 git-repo 喂工作区 commits/docs)。
   - **bw**:BW 自身记账(issue settle-count / run telemetry / stage done count)。
   - **manual**:人手填,无采集器自动填(带「手填」徽)。
-- **实采呈现**:等 cron tick 或手动 `CollectMetrics` → shell-out 取计数 → 写 `observation` 表(append-only,一个观测=一个点,绝不插值;window-guard:同窗口同值才跳过)→ `recompute_signals` 重算 → 指标卡点亮。公共指标(开放 Issue 数/已合入 MR 数)开机默认 seed。
+- **实采呈现**:等 cron tick 或手动 `CollectMetrics` → 在**主工作区**(`project.workspace_path`)shell-out 跑 script connector → 写 `observation` 表(append-only,一个观测=一个点,绝不插值;window-guard:同窗口同值才跳过)→ `recompute_signals` 重算 → 指标卡点亮。公共指标(开放 Issue 数/已合入 MR 数)开机默认 seed。**「立即采集」不拉主目录、不看 issue worktree**(见 §4.15)。每次采集还会覆盖 buddy 自带的 `.bw/collect_stats.{sh,py}`(项目业务脚本不动)。
 - **健康灯 derive-only**:Signal 只能经封口 `Derived<Signal>` 进缓存,store 无 `set_signal`,`recompute_signals` 唯一写入者;**无数据=Unknown≠绿**,数据过期降级,手填带徽。任何界面数字能 `sqlite3` 独立查证。
 
 #### artifacts(产物登记)
@@ -399,6 +400,21 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - **开发包** `BuildersWorkbench-Dev-Setup.exe`：第一包超集 + MinGW zip + sqlite3 + 装完脚本（Rust 走 rsproxy 现拉 `rustup-init`，clone v3）。`rustup-init.exe` 进不了 payload（本机安全软件隔离）。
 - **首次点跑卡住**：不重做 V1 调度。结论见当次对话——更像安装器 `cmd start` + 当时那颗 CUI exe 抢焦点/首开 PTY，不是 settle_tx 丢了。
 - **待测试窗验**：结束页能读、立即运行无黑框、项目墙「测一下」未测为灰。
+- **出包脚本不进仓（2026-08-14 后补）**：`D:\2026\buddy-setup` 不建独立仓、也不拷进 loop-buddy。打包内部用，都从这台机器出包。脚本和产物都留本机。
+- **release 闪 cmd + 唤醒 spawn 报错（2026-08-14）**：不是 V3 产品功能把版本做坏了。出包时为藏主窗口黑框给 release 加了 `windows_subsystem=windows`；子进程没 `CREATE_NO_WINDOW` 就闪 cmd。**已改** `win_cmd` 藏窗。
+- **唤醒 `environment variable name must not contain =`（2026-08-14 后补）**：新报错钉死不是找不到 `claude.exe`、也不是工作目录先丢了。ConPTY 把整份进程环境再 `env()` 一遍，windows-spawn 校验名字；Windows 隐藏项（`=C:` / `=ExitCode`，安装器 `cmd start` 的 GUI 父进程里常见）带 `=` 被拒。失败后 `IssueWorktreeGuard` 会拆掉本次 worktree，所以目录随后看起来「没了」。**已改**：子进程继承环境，只摘掉嵌套执行变量，不再整表重放。要新编 release / 重出包再验唤醒。
+
+### 4.15 采集仍跑旧脚本·合入是否更新主目录(2026-08-14)
+
+> 同事反馈:找指标脚本在 worktree 里优化完,界面点采集仍跑旧的。本窗只查代码、不改产品。指回步7 / §3.2 metrics。
+
+- **问1 · merge 会不会更新主目录**:会,这是设计。点 merge(或网页合完再点「→已完成」)走 Done 口,对主工作区 `sync_default_branch`(fetch + checkout 默认分支 + `pull --ff-only`),再装 toml、立刻采一轮。不是把 worktree 目录拷进主目录,是远端合入后再拉回主目录。
+- **问2 · 采集按钮要不要默认先更新主目录**:现状**不拉**。`CollectMetrics` 只在主工作区跑已有脚本,不看 worktree。**当前决议:不加**。采集是记观测,更新主目录是验收(merge/Done)的事;没合入的优化本来就不该被采集看见。采集里自动 checkout/pull 也碰「破坏性永不自动」。
+- **同事这条更像哪条**:worktree 里改完直接点采集(主目录还是旧的,预期如此);或网页合了但没在 buddy 点 merge/「→已完成」(Done 口没跑,主目录没拉);或 Done 口跑了但 `pull --ff-only` 失败被吞(`github.rs` `let _ = pull`,仍 Ok)——主目录其实没跟上,界面却当收拢成功。
+- **旁路**:每次采集会覆盖 `.bw/collect_stats.{sh,py}`(buddy 自带仓统计,注释写明勿手改)。优化若写在这两份文件上,点采集会被 Buddy 内置稿盖回去。项目业务脚本(`derive_*.py` 等)不受这条影响。
+- **待什么条件回头**:先对同事那次复盘是「没走 Done」还是「pull 被吞」。若要改,优先让收拢失败诚实报错,不把 pull 塞进采集按钮。动手前提 issue。
+- **本机取证(2026-08-14)**:用户本地 `welink-bridge` 主工作区(`…/workspaces/welink-bridge-e25bd532`)在 `dev`,fetch 后**落后 origin/dev 8 个提交**。同事合入的 `bw/metrics-rewrite`(改 `.bw/scripts/derive_shield.py` + `.bw/metrics.toml`)已在远端,本地没拉。工作区脏文件只有 buddy 每次采集会覆盖的 `.bw/collect_stats.{py,sh}`。还原这两份后快进拉到 `eedbbad`。这就是「点采集跑旧脚本」在本机的实锤:不是采集按钮漏了更新,是主目录没跟上远端。Buddy 库里的指标定义还要再点「↻ 同步指标文件」才会换新口径,然后「立即采集」才按新脚本出数。
+- **机制怎么补(2026-08-14 傍晚,用户已看到新数后问)**:现有四个「↻」各管一层,不要塞进「从仓同步 Issue」。**当前决议(未落地,动手前提 issue)**:加独立「↻ 收拢工作区」(复用已有 `sync_default_branch`),成功后再跑 project/metrics/connectors 三份正本进库;**不**自动采集、**不**改看板 Issue。`pull` 失败必须诚实报错,不许再吞。采集 / 同步 Issue / 同步指标文件职责不变。这是后来者读回仓里共同事实的缺口,不是把采集变成 `git pull`。
 
 ### 待记(后续会话补)
 - _待补:步3 agent 真跑——bug① 修好后竞品分析能不能真联网出报告 + 产出 PR?_

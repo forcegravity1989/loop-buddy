@@ -4602,7 +4602,7 @@ impl App {
                 let candidates = script_interpreter_candidates(&command);
                 let mut out: Option<std::process::Output> = None;
                 for cand in &candidates {
-                    let run = tokio::process::Command::new(cand)
+                    let run = bw_engine::tokio_cmd(cand)
                         .arg(&script_path)
                         .current_dir(&proj.workspace_path)
                         .stdin(std::process::Stdio::null())
@@ -10360,7 +10360,7 @@ pub const METRIC_WS_DOCS: &str = "剧本产物文档数";
 /// `claude --version` probe with a hard timeout — the `claude-cli`
 /// connector's real health check. Returns the version line on success.
 async fn claude_version_probe(binary: &str) -> Result<String, String> {
-    let fut = tokio::process::Command::new(binary)
+    let fut = bw_engine::tokio_cmd(binary)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -10384,15 +10384,14 @@ async fn codehub_cli_probe() -> EnvCheck {
     let bin = std::env::var("USERPROFILE")
         .ok()
         .map(|h| {
-            let p = std::path::PathBuf::from(h)
+            std::path::PathBuf::from(h)
                 .join("bin")
-                .join("codehub-cli.exe");
-            p
+                .join("codehub-cli.exe")
         })
         .filter(|p| p.is_file())
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "codehub-cli".into());
-    let fut = tokio::process::Command::new(&bin)
+    let fut = bw_engine::tokio_cmd(&bin)
         .args(["-H", "open", "project", "list", "--mine", "--limit", "1"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

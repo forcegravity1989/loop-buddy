@@ -47,7 +47,7 @@ pub async fn read_commits(
     }
 
     let format = format!("%H{FIELD_SEP}%h{FIELD_SEP}%an{FIELD_SEP}%ad{FIELD_SEP}%s{RECORD_SEP}");
-    let output = tokio::process::Command::new("git")
+    let output = crate::win_cmd::tokio_cmd("git")
         .current_dir(workspace_path)
         .arg("log")
         .arg(format!("--max-count={limit}"))

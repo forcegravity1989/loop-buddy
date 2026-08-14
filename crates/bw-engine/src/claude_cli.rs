@@ -228,7 +228,7 @@ impl Executor for ClaudeCliExecutor {
         let mut attempt = 0usize;
         loop {
             let mut cmd =
-                tokio::process::Command::new(self.config.binary.as_deref().unwrap_or("claude"));
+                crate::win_cmd::tokio_cmd(self.config.binary.as_deref().unwrap_or("claude"));
             // 宿主若本身运行在 Claude Code 会话内（嵌套执行），环境里会注入会话级
             // 令牌/网关地址/模型别名——子 CLI 用它们会 401。剥离后子进程回落到
             // 用户自己的 CLI 配置，这是唯一对子进程有效的凭据。

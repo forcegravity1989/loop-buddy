@@ -52,7 +52,7 @@ fn stderr_text(output: &std::process::Output) -> String {
 }
 
 async fn current_login() -> Result<String, GithubError> {
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args(["api", "user", "--jq", ".login"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -79,7 +79,7 @@ pub async fn create_repo(
 ) -> Result<GithubRepoRef, GithubError> {
     let owner = current_login().await?;
     let vis_flag = if private { "--private" } else { "--public" };
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .current_dir(dest_root)
         .args(["repo", "create", slug, vis_flag, "--clone"])
         .stdin(Stdio::null())
@@ -119,7 +119,7 @@ pub async fn push_head(dir: &Path) -> Result<(), GithubError> {
 /// plan/13 D12: github-repo 连接器的真探针——`gh repo view` 一次,回
 /// 可见性与最近推送时间。探不通就如实报错,绝不伪造"已同步"。
 pub async fn probe_repo(owner_repo: &str) -> Result<String, GithubError> {
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args([
             "repo",
             "view",
@@ -158,7 +158,7 @@ pub async fn probe_repo(owner_repo: &str) -> Result<String, GithubError> {
 /// 目录建的项目的常态——`git remote get-url origin` 以非零退出,这不是
 /// bug);其余 git 失败照实报错,这是一次真读,不吞错误。
 pub async fn origin_remote_url(workspace: &Path) -> Result<Option<String>, GithubError> {
-    let output = tokio::process::Command::new("git")
+    let output = crate::win_cmd::tokio_cmd("git")
         .current_dir(workspace)
         .args(["remote", "get-url", "origin"])
         .stdin(Stdio::null())
@@ -247,7 +247,7 @@ pub async fn reconcile_local_remote(
 /// 调用方把「空」当成「没有可推的分支」处理,不是硬错误、更不会瞎编一个
 /// 分支名去推。
 pub async fn current_branch(workspace: &Path) -> Result<String, GithubError> {
-    let output = tokio::process::Command::new("git")
+    let output = crate::win_cmd::tokio_cmd("git")
         .current_dir(workspace)
         .args(["branch", "--show-current"])
         .stdin(Stdio::null())
@@ -281,7 +281,7 @@ pub async fn sync_default_branch(dir: &Path) -> Result<(), GithubError> {
     // Best-effort: no origin / offline must not leave callers stuck on a
     // config branch. Checkout of a local default branch is the hard requirement.
     let _ = git_in(dir, &["fetch", "origin"]).await;
-    let head = tokio::process::Command::new("git")
+    let head = crate::win_cmd::tokio_cmd("git")
         .current_dir(dir)
         .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
         .stdin(Stdio::null())
@@ -324,7 +324,7 @@ pub async fn clone_repo(
     dest: &Path,
 ) -> Result<GithubRepoRef, GithubError> {
     let owner_repo = format!("{owner}/{repo}");
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args(["repo", "clone", &owner_repo, &dest.to_string_lossy()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -335,7 +335,7 @@ pub async fn clone_repo(
     if !output.status.success() {
         return Err(GithubError::Command(stderr_text(&output)));
     }
-    let view = tokio::process::Command::new("gh")
+    let view = crate::win_cmd::tokio_cmd("gh")
         .args(["repo", "view", &owner_repo, "--json", "isPrivate"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -371,7 +371,7 @@ pub struct RemoteOpenIssue {
 /// V2-②-I: `gh issue list --state open --json number,title,body` — read-only.
 /// Never creates. Cap 200 (gh default max per call); enough for Buddy boards.
 pub async fn list_open_issues(owner_repo: &str) -> Result<Vec<RemoteOpenIssue>, GithubError> {
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args([
             "issue",
             "list",
@@ -423,7 +423,7 @@ fn parse_gh_open_issues(bytes: &[u8]) -> Result<Vec<RemoteOpenIssue>, GithubErro
 /// `https://github.com/owner/repo/issues/42`),号即 URL 末段。只做 create
 /// ——close/PR 是另一票的事。
 pub async fn create_issue(owner_repo: &str, title: &str, body: &str) -> Result<u32, GithubError> {
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args([
             "issue", "create", "--repo", owner_repo, "--title", title, "--body", body,
         ])
@@ -556,7 +556,7 @@ pub async fn open_pr(
     let body = format!(
         "BW 执行器为 Issue #{github_number} 提交的改动,等待人工 merge 验收。\n\nCloses #{github_number}"
     );
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .current_dir(workspace)
         .args([
             "pr", "create", "--head", &branch, "--title", title, "--body", &body,
@@ -600,7 +600,7 @@ pub async fn open_pr(
 /// question `gh` itself just answered in its error message — but by an
 /// independent read, not by parsing that error text.
 async fn adopt_existing_pr(workspace: &Path, branch: &str) -> Result<u32, GithubError> {
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .current_dir(workspace)
         .args(["pr", "view", branch, "--json", "number", "--jq", ".number"])
         .stdin(Stdio::null())
@@ -623,7 +623,7 @@ async fn adopt_existing_pr(workspace: &Path, branch: &str) -> Result<u32, Github
 /// `MergeIssuePr` command, never from any executor/run path. Squash-merge keeps
 /// the base branch history one-commit-per-Issue.
 pub async fn merge_pr(owner_repo: &str, pr_number: u32) -> Result<(), GithubError> {
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args([
             "pr",
             "merge",
@@ -673,7 +673,7 @@ pub async fn open_project_init_pr(workspace: &Path, title: &str) -> Result<PrOpe
     .await
     .map_err(|e| git_err("暂存/提交/推送 project-init 分支失败", e))?;
     let body = "BW 创建流写入的项目意图正本,自动合入落仓(配置文件,非 Issue)。";
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .current_dir(workspace)
         .args([
             "pr", "create", "--head", branch, "--title", title, "--body", body,
@@ -737,7 +737,7 @@ pub async fn open_pr_for_branch(
     owner_repo: &str,
     head_branch: &str,
 ) -> Result<Option<u32>, GithubError> {
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args([
             "pr",
             "list",
@@ -777,7 +777,7 @@ pub async fn open_pr_for_branch(
 /// when `issue_state` still reads `OPEN` (the `Closes` keyword should have done
 /// it). `gh issue close` on an already-closed issue is a no-op success.
 pub async fn close_issue(owner_repo: &str, github_number: u32) -> Result<(), GithubError> {
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args([
             "issue",
             "close",
@@ -799,7 +799,7 @@ pub async fn close_issue(owner_repo: &str, github_number: u32) -> Result<(), Git
 
 /// Run a read-only `gh ... --json ... --jq ...` and return the trimmed stdout.
 async fn gh_json_field(args: &[&str]) -> Result<String, GithubError> {
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -848,7 +848,7 @@ struct RepoJson {
 /// `nameWithOwner`。回显真实 metadata(描述/可见性/默认分支/最近推送),不再
 /// 只是干巴巴一个仓名。
 pub async fn list_repos(limit: u32) -> Result<Vec<GithubRepoSummary>, GithubError> {
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args([
             "repo",
             "list",
@@ -958,7 +958,7 @@ pub async fn fetch_project_toml(
         "repos/{owner}/{repo}/contents/{}?ref={git_ref}",
         crate::project_file::PROJECT_FILE_REL_PATH
     );
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args(["api", "-H", "Accept: application/vnd.github.raw", &endpoint])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -993,7 +993,7 @@ pub async fn collect_github_count(
     today: Date,
 ) -> Result<u64, GithubError> {
     let q = expand_query(query, remote, today);
-    let output = tokio::process::Command::new("gh")
+    let output = crate::win_cmd::tokio_cmd("gh")
         .args([
             "api",
             "-X",

@@ -19,7 +19,7 @@ pub enum ProvisionError {
 }
 
 pub(crate) async fn git_in(dir: &Path, args: &[&str]) -> Result<(), ProvisionError> {
-    let output = tokio::process::Command::new("git")
+    let output = crate::win_cmd::tokio_cmd("git")
         .current_dir(dir)
         .args(args)
         .stdin(Stdio::null())
@@ -109,7 +109,7 @@ pub async fn commit_file(
     git_in(dir, &["add", "--", rel_path]).await?;
     // `git commit` exits non-zero when nothing is staged; that is the
     // idempotent re-confirm case, not a failure.
-    let out = tokio::process::Command::new("git")
+    let out = crate::win_cmd::tokio_cmd("git")
         .current_dir(dir)
         .args([
             "-c",
@@ -194,7 +194,7 @@ pub(crate) async fn stage_commit_push_msg(
     commit_message: &str,
 ) -> Result<(), ProvisionError> {
     git_in(workspace, &["add", "-A"]).await?;
-    let commit = tokio::process::Command::new("git")
+    let commit = crate::win_cmd::tokio_cmd("git")
         .current_dir(workspace)
         .args([
             "-c",
@@ -268,7 +268,7 @@ impl Drop for IssueWorktreeGuard {
             ["worktree", "remove", "--force", s].as_slice(),
             ["worktree", "prune"].as_slice(),
         ] {
-            let _ = std::process::Command::new("git")
+            let _ = crate::win_cmd::std_cmd("git")
                 .current_dir(&self.main_workspace)
                 .args(args)
                 .stdin(Stdio::null())
@@ -311,7 +311,7 @@ pub async fn provision_issue_worktree(
     // prune with a `.git` worktree file, it's a live worktree for this branch
     // — reuse it (idempotent retry, mirroring `checkout_issue_branch`).
     if sibling.exists() {
-        let _ = tokio::process::Command::new("git")
+        let _ = crate::win_cmd::tokio_cmd("git")
             .current_dir(main_workspace)
             .args(["worktree", "prune"])
             .stdin(Stdio::null())
@@ -349,7 +349,7 @@ pub async fn is_owned_workspace(dir: &Path) -> bool {
     if !dir.join(".git").exists() {
         return false;
     }
-    let out = match tokio::process::Command::new("git")
+    let out = match crate::win_cmd::tokio_cmd("git")
         .current_dir(dir)
         .args(["log", "--max-parents=0", "--format=%an"])
         .output()
@@ -384,7 +384,7 @@ pub async fn diff_numstat(
     from: &str,
     to: &str,
 ) -> Result<Vec<FileChange>, String> {
-    let output = tokio::process::Command::new("git")
+    let output = crate::win_cmd::tokio_cmd("git")
         .current_dir(workspace)
         .args(["diff", "--numstat", &format!("{from}..{to}")])
         .stdin(Stdio::null())

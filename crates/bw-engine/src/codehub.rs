@@ -64,7 +64,7 @@ fn stderr_text(o: &std::process::Output) -> String {
 /// `codehub-cli project view -p <path> -H <host>` → 一行人话详情
 /// (`path · 可见性[ · 已归档] · 最近活跃`)。Read-only,零仓副作用。
 pub async fn probe(host: &str, path: &str) -> Result<String, CodehubError> {
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args(["project", "view", "-p", path, "-H", host])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -95,7 +95,7 @@ pub async fn create_issue(
     title: &str,
     body: &str,
 ) -> Result<u32, CodehubError> {
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "issue",
             "create",
@@ -130,7 +130,7 @@ pub async fn list_open_issues(
     host: &str,
     path: &str,
 ) -> Result<Vec<crate::github::RemoteOpenIssue>, CodehubError> {
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "issue",
             "list",
@@ -215,7 +215,7 @@ pub async fn create_mr(
         .await
         .map_err(|e| CodehubError::Command(format!("git 准备失败:{e}")))?;
     // target-branch = project default, resolved at runtime (see doc comment).
-    let tgt = tokio::process::Command::new("git")
+    let tgt = crate::win_cmd::tokio_cmd("git")
         .current_dir(workspace)
         .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
         .stdin(Stdio::null())
@@ -241,7 +241,7 @@ pub async fn create_mr(
     // iid back via `mr list --source-branch` (never guessed, same honesty as
     // github's `adopt_existing_pr`). Falls through to `mr create` when no
     // existing MR (or the list call itself fails — then `mr create` reports).
-    let list = tokio::process::Command::new("codehub-cli")
+    let list = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "mr",
             "list",
@@ -273,7 +273,7 @@ pub async fn create_mr(
     let body = format!(
         "BW 执行器为 Issue #{issue_number} 提交的改动,等待人工 merge 验收。\n\nCloses #{issue_number}"
     );
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "mr",
             "create",
@@ -326,7 +326,7 @@ pub async fn open_mr_for_branch(
     path: &str,
     branch: &str,
 ) -> Result<Option<u32>, CodehubError> {
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "mr",
             "list",
@@ -368,7 +368,7 @@ pub async fn open_mr_for_branch(
 /// never fabricated. **Only ever called from `MergeIssuePr` (a human click),
 /// never from any run/executor path** (plan/13 D3+D11).
 pub async fn merge_mr(host: &str, path: &str, mr_iid: u32) -> Result<(), CodehubError> {
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "mr",
             "merge",
@@ -395,7 +395,7 @@ pub async fn merge_mr(host: &str, path: &str, mr_iid: u32) -> Result<(), Codehub
     // stderr)、MR 实际没合(state 仍 "opened")。只信「MR state 真变 merged」
     // 才算成功,绝不假 Done。复跑 mr view 拿 state(`--jq .merged` 对未合 MR
     // 返 null,故用 `.state`)。
-    let verify = tokio::process::Command::new("codehub-cli")
+    let verify = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "mr",
             "view",
@@ -452,7 +452,7 @@ pub async fn create_project_init_mr(
 ) -> Result<crate::github::PrOpened, CodehubError> {
     let branch = PROJECT_INIT_BRANCH;
     // Checkout the branch, creating it at HEAD the first time.
-    let checkout = tokio::process::Command::new("git")
+    let checkout = crate::win_cmd::tokio_cmd("git")
         .current_dir(workspace)
         .args(["checkout", "-b", branch])
         .stdin(Stdio::null())
@@ -462,7 +462,7 @@ pub async fn create_project_init_mr(
         .await
         .map_err(spawn_err)?;
     if !checkout.status.success() {
-        tokio::process::Command::new("git")
+        crate::win_cmd::tokio_cmd("git")
             .current_dir(workspace)
             .args(["checkout", branch])
             .stdin(Stdio::null())
@@ -480,7 +480,7 @@ pub async fn create_project_init_mr(
     .await
     .map_err(|e| CodehubError::Command(format!("git 准备失败:{e}")))?;
     // target-branch = project default, resolved at runtime (same as create_mr).
-    let tgt = tokio::process::Command::new("git")
+    let tgt = crate::win_cmd::tokio_cmd("git")
         .current_dir(workspace)
         .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
         .stdin(Stdio::null())
@@ -495,7 +495,7 @@ pub async fn create_project_init_mr(
         .unwrap_or("master")
         .to_string();
     let body = "BW 创建流写入的项目意图正本,自动合入落仓(配置文件,非 Issue)。";
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "mr",
             "create",
@@ -562,7 +562,7 @@ pub async fn collect_count(
             )))
         }
     };
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             list_cmd,
             "list",
@@ -606,7 +606,7 @@ pub async fn collect_count(
 /// 免非交互卡死)+ `BatchMode=yes`(只走 key、不弹密码,密码会挂死非交互进程)。
 pub async fn clone_repo(host: &str, path: &str, dest: &Path) -> Result<(), CodehubError> {
     // 1. 取 ssh_url(--template 出裸串,无引号)
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "project",
             "view",
@@ -638,7 +638,7 @@ pub async fn clone_repo(host: &str, path: &str, dest: &Path) -> Result<(), Codeh
         )));
     }
     // 2. raw git clone(SSH key 认证,不经代理)
-    let out = tokio::process::Command::new("git")
+    let out = crate::win_cmd::tokio_cmd("git")
         .args(["clone", &ssh_url, &dest.to_string_lossy()])
         .env(
             "GIT_SSH_COMMAND",
@@ -676,7 +676,7 @@ async fn resolve_personal_namespace_id(
     host: &str,
     namespace: &str,
 ) -> Result<Option<u32>, CodehubError> {
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "-H",
             host,
@@ -770,7 +770,7 @@ pub async fn create_repo(
     }
     args.push("--json".into());
     args.push("ssh_url_to_repo,path_with_namespace,visibility".into());
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -793,7 +793,7 @@ pub async fn create_repo(
         )));
     }
     // 3. raw git clone(SSH key 认证,同 clone_repo)
-    let out = tokio::process::Command::new("git")
+    let out = crate::win_cmd::tokio_cmd("git")
         .args(["clone", &ssh_url, &dest.to_string_lossy()])
         .env(
             "GIT_SSH_COMMAND",
@@ -835,7 +835,7 @@ pub async fn fetch_project_toml(
     } else {
         git_ref.trim()
     };
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "-H",
             host,
@@ -877,7 +877,7 @@ pub async fn fetch_project_toml(
 /// `path_with_namespace`/`visibility`/`default_branch`/`last_activity_at`/
 /// `description` 成 [`CodehubRepoSummary`]。
 pub async fn list_repos(host: &str, limit: u32) -> Result<Vec<CodehubRepoSummary>, CodehubError> {
-    let out = tokio::process::Command::new("codehub-cli")
+    let out = crate::win_cmd::tokio_cmd("codehub-cli")
         .args([
             "-H",
             host,

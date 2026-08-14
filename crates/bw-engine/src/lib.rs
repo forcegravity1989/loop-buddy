@@ -36,7 +36,10 @@ pub mod project_file;
 pub mod remote;
 mod terminal_manager;
 mod unsupported_cli;
+pub mod win_cmd;
 pub mod workspace;
+
+pub use win_cmd::{std_cmd, tokio_cmd};
 
 pub use claude_cli::{allowed_tools_arg, ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
 pub use codehub::{CodehubError, CodehubRepoRef, CodehubRepoSummary};
