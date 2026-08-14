@@ -145,6 +145,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
   - **claude spawn "program not found"**:默认裸 `"claude"` → Windows Rust `Command::new` 不做 PATHEXT → os error 193 → **改**(不碰代码)设 `BW_CLAUDE_BIN=…\claude.exe`(持久 User env);config gap 非代码 bug。自动探测留后续。
   - **重复点「建立项目」非幂等**(Bug B,`1dbd76c`):confirm 按钮无 pending 守卫 → 多点建多套 trio + codehub 孤儿 issue → **改** confirm 起手置 `submitting=true` 置灰「建立中…」,完成/失败后翻页/解禁。
   - **【归正·Bug B 半套】**(`submitting` 在 `main.rs` 父组件,Create 卸载不清):clone 软失败走 `ConnectorSynced` 不是 `UiNote::Error`,第一次点确认后标志一直为 true。同事修完 SSH 再进创建流,还没点确认按钮已是灰色「建立中」。**改**离开创建屏 / 「+ 新建」/ 返回项目墙时复位。
+  - **合入后立刻采一轮**:绑数据 merge / 点「→已完成」原先只装 `.bw/metrics.toml`+`connectors.toml`,不跑采集,总览空着等人发现「立即采集」。**改** Done 记账口在 sync 之后走同一条 `collect_project_metrics` 并 toast 结果;失败不回滚验收。
   - **auto-mint(clone 失败悄悄本地 mint 像接上了)**:**判断**对齐 github(Existing clone 失败 CompleteCreation 也 auto-mint 空项目)→ clone SSH 修好后非空不触发。真「失败就停」需持久化「尝试过远端」标志位 → ⚠ 长期 TODO,见 §4.10。
 
 ### 步3·进 Op 侧边栏(看本项目有什么)

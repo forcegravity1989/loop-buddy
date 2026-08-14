@@ -440,7 +440,7 @@
     <section class="screen" id="u4" data-title="绑数据" data-sec-name="使用指导">
       <div class="eyebrow">使用指导 · 阶段 03</div>
       <h1 class="disp">绑数据</h1>
-      <p class="lede">一句话：把「打算怎么采」搭成真装置——能自动的写脚本登记连接器，不能自动的保持手填。合入后<strong>不用新建定时器</strong>：原来那条每日采集会跑本项目全部脚本。</p>
+      <p class="lede">一句话：把「打算怎么采」搭成真装置——能自动的写脚本登记连接器，不能自动的保持手填。合入后<strong>立刻采一轮</strong>，之后<strong>不用新建定时器</strong>：原来那条每日采集会跑本项目全部脚本。</p>
 
       <div class="diagram">
         <div class="cap">装置怎么进系统</div>
@@ -462,7 +462,7 @@
         <div class="li"><div class="n">1</div><div class="t">「绑数据」点 <code>▶跑(交互)</code>——它会读你已合入的指标计划</div></div>
         <div class="li"><div class="n">2</div><div class="t">能自动采的：让模型写脚本并登记到 <code>.bw/connectors.toml</code>；只能手填的：保持计划即可</div></div>
         <div class="li"><div class="n">3</div><div class="t">提合并请求 → 看板 <strong>⬇ merge PR</strong>（或网页合完再点「已完成」）</div></div>
-        <div class="li"><div class="n">4</div><div class="t">总览点「↻ 立即采集」，或等每日定时，看业务卡是否出数</div></div>
+        <div class="li"><div class="n">4</div><div class="t">合入后 buddy 会立刻采一轮；总览应已有数。没有再点「↻ 立即采集」，或等每日定时</div></div>
       </div>
       <img src="img/u4-hub-connectors.png" alt="左侧连接器 · 仓与业务脚本" style="max-width:100%;border:1px solid var(--border);border-radius:10px;margin:10px 0">
       <p class="note-line">看左侧「连接器」：除了仓本身，还应出现你刚绑上的业务脚本。定时任务多半还是原来那一条——这是正常的。</p>
@@ -1041,7 +1041,7 @@
       <div class="diagram">
         <div class="cap">不另开回填命令 · 缺测天才追加 · 手填不补</div>
         <div class="pipe">
-          <div class="box"><div class="t">立即采集<br>/ cron / 创建尾</div><div class="d">同一条<br>collect_project_metrics</div></div>
+          <div class="box"><div class="t">立即采集<br>/ cron / 创建尾<br>/ 合入完成</div><div class="d">同一条<br>collect_project_metrics</div></div>
           <div class="arr">→</div>
           <div class="box"><div class="t">script JSON</div><div class="d">当日标量<br>+ 可选 history</div></div>
           <div class="arr">→</div>
@@ -1096,7 +1096,7 @@
 
       <div class="ex">
         <div class="eh">Example · 绑数据合入后</div>
-        <div class="ed">MR 合入 → buddy 读 <code>.bw/metrics.toml</code> + <code>.bw/connectors.toml</code> 装表 → 每日 cron（或「立即采集」）跑 <code>.bw/scripts/*.py</code> → <code>observation.raw</code> 有值 → 总览业务卡亮灯。装置目录约定见 <code>docs/buddy/standards/connectors.md</code>。</div>
+        <div class="ed">MR 合入 → buddy 读 <code>.bw/metrics.toml</code> + <code>.bw/connectors.toml</code> 装表 → <strong>立刻采一轮</strong>（与「立即采集」同一条）→ <code>observation.raw</code> 有值 → 总览业务卡出数。之后靠每日 cron 续采。装置目录约定见 <code>docs/buddy/standards/connectors.md</code>。</div>
       </div>
       <div class="ex">
         <div class="eh">Example · 存量项目补历史</div>
