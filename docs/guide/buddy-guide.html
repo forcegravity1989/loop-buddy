@@ -283,28 +283,59 @@
     <!-- ============ U1 前置准备 ============ -->
     <section class="screen" id="u1" data-title="前置准备" data-sec-name="使用指导">
       <div class="eyebrow">使用指导 · 前置准备</div>
-      <h1 class="disp">开工前先装齐这些</h1>
-      <p class="lede">buddy 是本机桌面应用。装齐下面三样，再启动即可；数据库与工作区有默认路径，一般不用配。</p>
+      <h1 class="disp">先跑安装器，再从开始菜单打开</h1>
+      <p class="lede">同事装的是第一包：内部用的 Windows 安装器 <code>BuildersWorkbench-Setup.exe</code>。装包前先备齐安装器不管的三样；装完从开始菜单或桌面图标打开。不要把从源码启动当成终端用户的路径。</p>
 
-      <h2 class="sec"><span class="n">必装</span></h2>
+      <h2 class="sec"><span class="n">必装</span>安装器不管，装包前要有</h2>
       <div class="checklist">
-        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">git</div><div class="d">项目纳入靠 SSH clone。</div></div></div>
-        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">claude CLI</div><div class="d">本机能跑通 <code>claude</code>，buddy 靠它真开工。</div></div></div>
-        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">codehub-cli / gh</div><div class="d">按仓所在平台选装：CodeHub 用 <code>codehub-cli</code>（需登录态 / token）；GitHub 用 <code>gh</code>。列仓、开 Issue、采指标都靠它。</div></div></div>
+        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">Claude Code</div><div class="d">用 npm 全局安装 <code>@anthropic-ai/claude-code</code>，buddy 靠它真开工。安装器会找 <code>%APPDATA%\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe</code>；找不到就中止，不会帮你建目录。</div></div></div>
+        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">git</div><div class="d">纳入项目靠 SSH clone。安装器不装 git。</div></div></div>
+        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">WebView2 Runtime</div><div class="d">系统里已经有这份网页控件运行时即可。安装器不检测、也不替你装；它只把配套的 <code>WebView2Loader.dll</code> 放进程序目录。</div></div></div>
+      </div>
+      <div class="callout warn">
+        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+        <div class="body"><strong>先装 Claude Code，再跑安装器</strong>找不到那份 <code>claude.exe</code> 时，向导会直接停住。请先全局装好，再双击安装包。</div>
+      </div>
+
+      <h2 class="sec"><span class="n">第一包</span>跑安装器（已实践）</h2>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">向出包的同事要 <code>BuildersWorkbench-Setup.exe</code>（内部用，从出包机器拿，不进 loop-buddy 仓），双击跑向导</div></div>
+        <div class="li"><div class="n">2</div><div class="t">默认装到 <code>D:\BuildersWorkbench</code>，向导里可以改</div></div>
+        <div class="li"><div class="n">3</div><div class="t">装完从<strong>开始菜单</strong>或<strong>桌面图标</strong>打开，不要再把 <code>cargo run -p app-desktop</code> 当成终端用户的启动方式</div></div>
+      </div>
+      <div class="res">
+        <div class="h">安装器会替你做</div>
+        <ul>
+          <li><span class="b"></span><div>写用户环境变量 <code>BW_CLAUDE_BIN</code>，指向上面那份 <code>claude.exe</code> 全路径</div></li>
+          <li><span class="b"></span><div>本机已有 <code>codehub-cli</code> 时不覆盖、卸载也不删；没有才拷一份到 <code>%USERPROFILE%\bin</code></div></li>
+        </ul>
+      </div>
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>GitHub 仓要另装</strong>若仓在 GitHub，需另装 <code>gh</code>。第一包面向内部 Windows + CodeHub，不带 <code>gh</code>。</div>
+      </div>
+
+      <h2 class="sec"><span class="n">装完必做</span>结束页写的那几条</h2>
+      <p>向导结束页标题是「装完必做」。按下面做完，再去纳入项目。</p>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">关掉安装器，从开始菜单重新打开 buddy</div></div>
+        <div class="li"><div class="n">2</div><div class="t">在终端登录 CodeHub 命令行：</div></div>
+        <pre class="code">codehub-cli auth login</pre>
+        <div class="li"><div class="n">3</div><div class="t">clone 用的 SSH 地址是 <code>szv-open.codehub.huawei.com:2222</code>，和 <code>codehub-cli</code> 登录用的 API 地址不是同一个，别混</div></div>
+        <div class="li"><div class="n">4</div><div class="t">claude 打到哪台网关，写在本机 <code>~/.claude.json</code> 里，不是 buddy 里配</div></div>
+        <div class="li"><div class="n">5</div><div class="t">程序在你向导里选的目录；数据库和工作区在 <code>%APPDATA%\BuildersWorkbench</code></div></div>
       </div>
 
       <h2 class="sec"><span class="n">选装</span>从源码构建时才需要</h2>
       <div class="checklist">
-        <div class="chk opt"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">Rust 工具链 + mingw<span class="tag opt">开发</span></div><div class="d">本地 <code>cargo run -p app-desktop</code> 构建桌面壳。</div></div></div>
+        <div class="chk opt"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">Rust 工具链 + mingw<span class="tag opt">开发</span></div><div class="d">只有从源码构建桌面壳才需要。开发机命令仍是下面这一条，不是同事装第一包的路径。</div></div></div>
       </div>
-
-      <h2 class="sec"><span class="n">启动</span></h2>
       <pre class="code">cargo run -p app-desktop</pre>
-      <div class="callout warn">
-        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
-        <div class="body"><strong>Windows</strong>请用上面这条启动，别直接跑 <code>target/</code> 下 exe（会以 0xC0000135 崩溃）。若找不到 <code>claude</code>，再设用户环境变量 <code>BW_CLAUDE_BIN</code> 指向 <code>claude.exe</code> 全路径。</div>
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>开发包不是同事主路径</strong><code>BuildersWorkbench-Dev-Setup</code> 不要写成已经就绪的安装方式。本机拉 Rust 安装程序时曾被安全软件隔离，没有作为同事验收路径。</div>
       </div>
-      <div class="foot">数据库与工作区默认在本机用户目录下的 BuildersWorkbench；一般不用改。</div>
+      <div class="foot">事实源：<code>iterations/PRACTICE-buddy.md</code> §1 前置、§4.14（第一包已在开发机装过并验过）。安装器在仓外，不进 loop-buddy。</div>
     </section>
 
     <!-- ============ U2 纳入项目 ============ -->
@@ -610,7 +641,7 @@
       <div class="diagram">
         <div class="cap">数据 / 意图自上而下 · 领域自下而上</div>
         <div class="stack">
-          <div class="ly"><div class="nm">app-desktop</div><div class="ds">桌面壳（Dioxus）。<strong>唯一</strong>允许碰 UI 框架的地方。用户点按钮 → 发意图。</div></div>
+          <div class="ly"><div class="nm">app-desktop</div><div class="ds">桌面壳（Dioxus）。<strong>唯一</strong>允许碰 UI 框架的地方。用户点按钮 → 发意图。原型阶段进度里已嵌本机 Open Design 首页（2026-08-14 已实践）。</div></div>
           <div class="ly"><div class="nm">ui</div><div class="ds">纯函数：状态 → 可渲染 DTO。无 IO。</div></div>
           <div class="ly"><div class="nm">bw-app</div><div class="ds">编排大脑：用例、守卫、调度、重算。几乎所有「业务发生」都在这。</div></div>
           <div class="ly"><div class="nm">bw-store</div><div class="ds">SQLite 哑存储。观测/交棒只追加；信号列是缓存，不是手填入口；<code>claude_conversation</code> 表存终端会话持久身份（PTY 句柄在内存，不在库里）。</div></div>
