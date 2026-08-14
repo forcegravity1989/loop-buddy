@@ -248,6 +248,10 @@
       <div class="eyebrow">使用指导 · 概览</div>
       <h1 class="disp">一个 Builder + Agent Loop 的项目管理工作台</h1>
       <p class="lede">Builders' Workbench（口语「buddy」）把传统项目管理的 5 角色 10 流程压成「1 个构建者 + AI 执行小队」。人守质量门与验收，活让 agent 干。本使用指导按<strong>界面操作的一个个阶段</strong>组织——实践推进到哪，就写到哪。</p>
+      <div class="callout">
+        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+        <div class="body"><strong>已经拿到安装包的</strong>先看<a href="#u1" onclick="go('u1');return false">前置准备</a>：装包前要有 Claude Code 和 git，装完从开始菜单打开，再去纳入项目。</div>
+      </div>
 
       <h2 class="sec"><span class="n">当前阶段</span>实践到、能见到的</h2>
       <div class="flow">
@@ -284,7 +288,7 @@
     <section class="screen" id="u1" data-title="前置准备" data-sec-name="使用指导">
       <div class="eyebrow">使用指导 · 前置准备</div>
       <h1 class="disp">先跑安装器，再从开始菜单打开</h1>
-      <p class="lede">同事装的是第一包：内部用的 Windows 安装器 <code>BuildersWorkbench-Setup.exe</code>。装包前先备齐安装器不管的三样；装完从开始菜单或桌面图标打开。不要把从源码启动当成终端用户的路径。</p>
+      <p class="lede">你手里的安装包就是第一包 <code>BuildersWorkbench-Setup.exe</code>。装包前先备齐安装器不管的三样；装完从开始菜单或桌面图标打开。不要从源码启动。</p>
 
       <h2 class="sec"><span class="n">必装</span>安装器不管，装包前要有</h2>
       <div class="checklist">
@@ -299,7 +303,7 @@
 
       <h2 class="sec"><span class="n">第一包</span>跑安装器（已实践）</h2>
       <div class="ops">
-        <div class="li"><div class="n">1</div><div class="t">向出包的同事要 <code>BuildersWorkbench-Setup.exe</code>（内部用，从出包机器拿，不进 loop-buddy 仓），双击跑向导</div></div>
+        <div class="li"><div class="n">1</div><div class="t">双击你收到的 <code>BuildersWorkbench-Setup.exe</code>，按向导装完</div></div>
         <div class="li"><div class="n">2</div><div class="t">默认装到 <code>D:\BuildersWorkbench</code>，向导里可以改</div></div>
         <div class="li"><div class="n">3</div><div class="t">装完从<strong>开始菜单</strong>或<strong>桌面图标</strong>打开，不要再把 <code>cargo run -p app-desktop</code> 当成终端用户的启动方式</div></div>
       </div>
@@ -1163,6 +1167,8 @@
     badge.textContent = isMaint ? 'Maintenance' : 'Usage';
     badge.className = 'badge ' + (isMaint ? 'maint' : 'use');
     try{ localStorage.setItem(KEY, id); }catch(e){}
+    if(history.replaceState){ history.replaceState(null, '', '#' + id); }
+    else { location.hash = id; }
     content.scrollTop = 0;
   }
   items.forEach(function(n){ n.addEventListener('click', function(){ show(n.dataset.screen); }); });
@@ -1179,8 +1185,11 @@
     screens.forEach(function(s){ s.classList.add('active'); });
     return;
   }
+  var fromHash = (location.hash || '').replace(/^#/, '');
   var saved = null; try{ saved = localStorage.getItem(KEY); }catch(e){}
-  if(saved && document.getElementById(saved)){ show(saved); } else { show('u0'); }
+  if(fromHash && document.getElementById(fromHash)){ show(fromHash); }
+  else if(saved && document.getElementById(saved)){ show(saved); }
+  else { show('u0'); }
 })();
 </script>
 </body>
