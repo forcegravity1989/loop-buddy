@@ -92,6 +92,8 @@ pub struct Vm {
     pub consultable_issues: Vec<bw_core::IssueId>,
     /// 任意状态、有非空 claude_session_id 的 issue(重启后点卡可 resume)。
     pub resumable_issues: Vec<bw_core::IssueId>,
+    /// 项目墙本机环境探测（未测 = Unknown）。
+    pub local_env: bw_app::LocalEnvProbe,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -975,6 +977,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         focused_issue: app.focused_pty_issue(),
         consultable_issues: Vec::new(),
         resumable_issues: Vec::new(),
+        local_env: state.local_env.clone(),
     };
 
     let Some(pid) = state.active_project else {

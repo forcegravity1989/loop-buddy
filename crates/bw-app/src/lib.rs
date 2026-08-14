@@ -914,12 +914,12 @@ pub enum Command {
     /// counterpart to `CreateProject` — irreversible; the UI is responsible
     /// for confirming with the user before dispatching this.
     DeleteProject(ProjectId),
-    /// W2-2: hard-delete a single session + its messages, clearing the
-    /// `issue.session_id` dangling reference (issue row stays). Irreversible;
-    /// the UI confirms with the user before dispatching. Used to clean up the
-    /// historical duplicate "阶段记录" cards that piled up before the
-    /// `(stage_kind, title)` dedup guard landed.
+    /// 硬删一条阶段记录（session + message）。issue 行留下；
+    /// claude_conversation 不删，看板仍可按现设计唤醒。
     DeleteSession(SessionId),
+    /// 项目墙「测一下」：真跑 claude --version 与 codehub-cli 探活。
+    /// 未测过是 Unknown，不装绿。
+    ProbeLocalEnv,
     BackToProjects,
     SetPanel(Panel),
     SetScope(Scope),
@@ -938,6 +938,22 @@ pub enum Command {
         cols: u16,
         rows: u16,
     },
+}
+
+/// 项目墙本机环境探测。未点「测一下」= Unknown，不装绿。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum EnvCheck {
+    #[default]
+    Unknown,
+    Probing,
+    Ok(String),
+    Fail(String),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalEnvProbe {
+    pub claude: EnvCheck,
+    pub codehub: EnvCheck,
 }
 
 /// Result of [`Command::ProbeRemoteProjectToml`] — creation-flow UI state
@@ -1405,6 +1421,8 @@ pub struct AppState {
     /// process-internal cache pattern as `github_repos` — a direct read-through
     /// of `codehub-cli project list --mine`, not a derived Signal.
     pub codehub_repos: Vec<CodehubRepoSummary>,
+    /// 项目墙「测一下」最近一次结果。未测过是 Unknown。
+    pub local_env: LocalEnvProbe,
 }
 
 /// P4: everything the Issue-detail overlay shows, assembled read-only at
@@ -1459,6 +1477,7 @@ impl Default for AppState {
             pty_restoring: None,
             pty_enabled: false,
             codehub_repos: Vec::new(),
+            local_env: LocalEnvProbe::default(),
         }
     }
 }
@@ -10152,16 +10171,41 @@ impl App {
 
             Command::DeleteSession(id) => {
                 self.store.delete_session(id).await?;
-                // If the deleted session was the chat-focused one, drop the
-                // stale pointer so the workflow panel doesn't try to render
-                // messages for a session that no longer exists.
                 if self.state.active_session == Some(id) {
                     self.state.active_session = None;
                 }
-                // review: refresh issues so state.issues doesn't hold a stale
-                // session_id ref (delete_session nulled it in the DB; this
-                // re-reads the honest NULL into state).
+                // session 行已删；issue / claude_conversation 仍在，看板可唤醒。
                 self.refresh_issues().await?;
+                self.emit(Event::ViewChanged(self.state.view));
+            }
+            Command::ProbeLocalEnv => {
+                self.state.local_env.claude = EnvCheck::Probing;
+                self.state.local_env.codehub = EnvCheck::Probing;
+                self.emit(Event::ViewChanged(self.state.view));
+                let binary = self
+                    .state
+                    .claude_config
+                    .binary
+                    .clone()
+                    .or_else(|| std::env::var("BW_CLAUDE_BIN").ok())
+                    .or_else(|| {
+                        std::env::var("APPDATA").ok().and_then(|a| {
+                            let p = std::path::PathBuf::from(a)
+                                .join("npm")
+                                .join("node_modules")
+                                .join("@anthropic-ai")
+                                .join("claude-code")
+                                .join("bin")
+                                .join("claude.exe");
+                            p.is_file().then(|| p.to_string_lossy().into_owned())
+                        })
+                    })
+                    .unwrap_or_else(|| "claude".into());
+                self.state.local_env.claude = match claude_version_probe(&binary).await {
+                    Ok(v) => EnvCheck::Ok(v),
+                    Err(e) => EnvCheck::Fail(e),
+                };
+                self.state.local_env.codehub = codehub_cli_probe().await;
                 self.emit(Event::ViewChanged(self.state.view));
             }
 
@@ -10333,6 +10377,51 @@ async fn claude_version_probe(binary: &str) -> Result<String, String> {
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// 项目墙探测：codehub-cli 在不在、open 域是否已登录。未登录如实 Fail，不装绿。
+async fn codehub_cli_probe() -> EnvCheck {
+    let bin = std::env::var("USERPROFILE")
+        .ok()
+        .map(|h| {
+            let p = std::path::PathBuf::from(h)
+                .join("bin")
+                .join("codehub-cli.exe");
+            p
+        })
+        .filter(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "codehub-cli".into());
+    let fut = tokio::process::Command::new(&bin)
+        .args(["-H", "open", "project", "list", "--mine", "--limit", "1"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(15), fut).await {
+        Err(_) => return EnvCheck::Fail("codehub-cli 探针超时(15s)".into()),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return EnvCheck::Fail("codehub-cli 未安装或不在 PATH".into());
+        }
+        Ok(Err(e)) => return EnvCheck::Fail(format!("无法运行 {bin}:{e}")),
+        Ok(Ok(o)) => o,
+    };
+    if output.status.success() {
+        return EnvCheck::Ok("已登录 open".into());
+    }
+    let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let low = err.to_lowercase();
+    if low.contains("login") || err.contains("未登录") || err.contains("auth") {
+        EnvCheck::Fail(format!(
+            "未登录:先本机 `codehub-cli -H open auth login`（{err}）"
+        ))
+    } else {
+        EnvCheck::Fail(if err.is_empty() {
+            "codehub-cli 探活失败".into()
+        } else {
+            err
+        })
+    }
 }
 
 /// Filesystem-safe slug for a project's workspace directory: ascii

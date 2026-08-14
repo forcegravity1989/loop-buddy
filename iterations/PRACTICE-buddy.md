@@ -66,6 +66,8 @@
   - [4.10 auto-mint「失败就停」需持久化标志位(指回步2)](#410-auto-mint失败就停需持久化标志位指回步2)
   - [4.11 滞后指标 UI 渲染 GAP(指回步6 / §3.2 metrics)](#411-滞后指标-ui-渲染-gap指回步6--32-metrics)
   - [4.12 plan18 step3 收尾·代码侧已交付 + 未决(指回步5/6/7)](#412-plan18-step3-收尾代码侧已交付--未决指回步567)
+  - [4.13 V3 两篇方案已记、未落地(指回 §3 issues / 一张工作台)](#413-v3-两篇方案已记未落地指回-3-issues--一张工作台)
+  - [4.14 第一包 / 开发包 + 删阶段记录缺列(2026-08-14)](#414-第一包--开发包--删阶段记录缺列2026-08-14)
   - [待记(后续会话补)](#待记后续会话补)
 - [5. 认知(buddy 是什么、能带来什么)](#5-认知buddy-是什么能带来什么)
   - [两个面(buddy = 看板 + AI 小队)](#两个面buddy--看板--ai-小队)
@@ -75,6 +77,8 @@
   - [skill / agent 形态归宿(2026-07-31 钉死)](#skill--agent-形态归宿2026-07-31-钉死)
   - [plan18 step3 收尾认知(2026-08-03)](#plan18-step3-收尾认知2026-08-03)
   - [run 调度层认知(2026-08-03,plan17 S1-S5 落地钉)](#run-调度层认知2026-08-03plan17-s1-s5-落地钉)
+  - [V3 一张工作台 + 执行器预研(2026-08-14)](#v3-一张工作台--执行器预研2026-08-14)
+  - [实践收口的一句话价值(2026-08-14)](#实践收口的一句话价值2026-08-14)
   - [反命题(buddy 不是什么)](#反命题buddy-不是什么)
 
 ---
@@ -377,9 +381,29 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 **北极星方案A 维持 deferred**:本次合体**不做**方案A(§4.12 已标)。正规路径北极星不采集/不上卷/项目灯不亮属已知 gap,留主窗口稳做。
 
+### 4.13 V3 两篇方案已记、未落地(指回 §3 issues / 一张工作台)
+
+> 2026-08-14 会话:Open Design 内嵌成立之后,讨论 Cursor CLI 与 cowelink。**只落设计,不改代码。**
+
+- **Issue 用 Cursor 还是 Claude**:今天没地方配。开工写死 `claude`;Hub 智能体「执行引擎」只读。方案与配置面见 [`docs/v3-prototype/cursor-agent-executor.md`](../docs/v3-prototype/cursor-agent-executor.md)(代号 V3-cursor-cli)。
+- **cowelink**:不弹窗。要嵌,先让 cowelink 长出本机网页旁路,buddy 再 iframe。见 [`docs/v3-prototype/cowelink-web-sidecar.md`](../docs/v3-prototype/cowelink-web-sidecar.md)(代号 V3-cowelink-sidecar)。第一张穿刺打在 cowelink 仓。
+- **orca 整窗**:不做。多会话已在 Issue 终端里。
+- **待什么条件回头**:用户点头落地、并先提 issue。Cursor 还要本机 `agent login` 后穿一张「`AGENTS.md` 是否真注入」。
+
+### 4.14 第一包 / 开发包 + 删阶段记录缺列(2026-08-14)
+
+> 卡住的开发窗口半套落地后，本窗收口。安装器在仓外 `D:\2026\buddy-setup`，不进 loop-buddy。
+
+- **删阶段记录**：`delete_session` 仍 `UPDATE issue SET session_id=NULL`，列已 DROP → `no such column: session_id`。点卡能醒是因为走 `claude_conversation`。**已改**：只删 `message` + `session`，不碰 issue / conversation。本机库旧 SQL 复现失败；新 SQL 删 throwaway 行后 issue 行数不变。
+- **第一包** `BuildersWorkbench-Setup.exe`：结束页正文改写进 iss（不再 `LoadFromFile` 读无 BOM UTF-8）；exe 编成 Windows 子系统（PE subsystem=2），带 `WebView2Loader.dll`。
+- **开发包** `BuildersWorkbench-Dev-Setup.exe`：第一包超集 + MinGW zip + sqlite3 + 装完脚本（Rust 走 rsproxy 现拉 `rustup-init`，clone v3）。`rustup-init.exe` 进不了 payload（本机安全软件隔离）。
+- **首次点跑卡住**：不重做 V1 调度。结论见当次对话——更像安装器 `cmd start` + 当时那颗 CUI exe 抢焦点/首开 PTY，不是 settle_tx 丢了。
+- **待测试窗验**：结束页能读、立即运行无黑框、项目墙「测一下」未测为灰。
+
 ### 待记(后续会话补)
 - _待补:步3 agent 真跑——bug① 修好后竞品分析能不能真联网出报告 + 产出 PR?_
 - _待补:推广给别人时,别人的前置装/配跟我的差异。_
+- _待补:第一包/开发包装完由测试窗对照验收。_
 
 ---
 
@@ -432,9 +456,28 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - **worktree guard 跨 spawn→settle 边界**:`IssueWorktreeGuard` 移进 `ActiveRun` 持有,在 `run_issue_settle` 里 `finalize_run` 读 `head_after` 之后、`issue_run_tail` 的 `create_mr`(`stage_commit_push`)之后才 Drop 拆 worktree——保证产物登记/MR 创建读得到 worktree 内容。
 - **`settle_tx: Option` 的边界收口**:examples/headless 调 `dispatch(RunIssue).await` 期望同步跑完,不接 settle_tx(default None)→ `run_issue_now` 走 inline `run_issue_body` 字节级不变;只有桌面 kernel `with_settle_channel` 接上才 background,S3 blast radius 收桌面一处。
 
+### V3 一张工作台 + 执行器预研(2026-08-14)
+
+- **一张工作台**:Builders 只在 buddy 里干活。Open Design 能嵌,是因为它有本机网页口。cowelink 今天没有,外开窗口不对;正确补法是 cowelink 自己长出网页旁路(与 Open Design 同构)。orca 整窗不嵌——多会话 Issue 终端已经做了。
+- **执行器是本机事实**:Issue 开工今天写死 claude,界面没有「换 Cursor」的开关。落地时应是设置里的本机默认 + 智能体卡「执行引擎」,不在单张 Issue 上再选。Cursor 路径走 `agent` 不是 `cursor.exe`,系统提示词走工作区 `AGENTS.md`,花费封顶第一版没有。
+
+### 实践收口的一句话价值(2026-08-14)
+
+> 用户在 V1 / V2 / V3 实践后口述。不是新命题,是 [`plan/07`](../plan/07-product-proposition.md) 引子页给**传统开发者**听的压缩。原文四个控制点一个没改。
+
+**一句话**:buddy 是 AI Coding 里、一个人的一张工作台——让传统开发者按 Builder 的方式干,用大约三个月把一个小项目从想法管到能验收的结果。
+
+三根柱子:
+
+1. **一张工作台**。设计(嵌 Open Design)、干活(Issue 里的 agent)、通信处理(cowelink 旁路,未落地)、指标与交棒,都在 buddy 里完成。不弹一堆工具窗。
+2. **人从开发变成 Builder**。不是多一块看板。角色从「自己写代码」换成「1 个 Builder + Agent Loop」:人守对标、每周能否从真数据看演进、验收门、北极星;活让 agent 干,完成永远人点。
+3. **大约三个月的小项目**。命题原文就是「每周可验证增量、≤90 天视野」。一站式管完一个小项目,走完留下可复制的方法,不只是卡片。不是大厂十道流程、五个专职角色;也不是十二个月多人项目的协作平台。
+
+「好的结果」不靠感觉,仍看四个控制点:知道对标谁 / 每周在正常演进 / agent 真干活、人只守门 / 目标清晰且难造假。
+
 ### 反命题(buddy 不是什么)
 - 不是团队协作平台(无成员/群聊/收件箱)。
 - 不是通用看板(无拖拽/甘特;回退不给 UI)。
 - 不是审批系统(交棒只留痕不拦人)。
-- 不是云服务(AI 执行=本机 `claude` CLI,单次花费封顶)。
+- 不是云服务(AI 执行=本机 CLI;今天是 `claude`,Cursor 路径设计已记未落地)。
 - 永远不替用户捏造健康。

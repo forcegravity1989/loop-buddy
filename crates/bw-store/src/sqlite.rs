@@ -950,14 +950,8 @@ impl Store for SqliteStore {
     async fn delete_session(&self, id: SessionId) -> Result<()> {
         let sid = id.uuid().to_string();
         let mut tx = self.pool.begin().await?;
-        // message.session_id has a REFERENCES session(id) FK — must go first.
+        // message.session_id REFERENCES session(id) — 先删消息再删 session。
         sqlx::query("DELETE FROM message WHERE session_id=?")
-            .bind(&sid)
-            .execute(&mut *tx)
-            .await?;
-        // issue.session_id has no FK constraint but a dangling pointer is
-        // wrong — clear it so a later run re-mints its own session.
-        sqlx::query("UPDATE issue SET session_id=NULL WHERE session_id=?")
             .bind(&sid)
             .execute(&mut *tx)
             .await?;
@@ -965,6 +959,9 @@ impl Store for SqliteStore {
             .bind(&sid)
             .execute(&mut *tx)
             .await?;
+        // 不碰 issue 行、不碰 claude_conversation：看板 ▶跑 / 点卡唤醒走
+        // claude_conversation，不读已删除的 session 行。issue.session_id
+        // 列在 V1 终端会话重构后已 DROP，这里再 UPDATE 会 no such column。
         tx.commit().await?;
         Ok(())
     }

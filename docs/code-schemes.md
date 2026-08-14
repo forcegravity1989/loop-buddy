@@ -44,6 +44,8 @@
 | **V2-②-A-IntentUX** | `docs/v2-prototype/same-project-multiple-workbenches.md` §6.2 | 后来者选仓后远端探测 project.toml → Intent 只读预填(方案 A);首到者仍手填 | 已落地 |
 | **V2-②-I** | `docs/v2-prototype/same-project-multiple-workbenches.md` §6.2 / §3.3 | 仓平台 open Issue 单向读回重建本地行(可 ▶跑);创建收尾+手动同步;远端已关且本机未完成→Cancelled 不上板;本机 Done 保留可续聊;Done 永不自动 | 已落地 |
 | **V3-OD-embed** | `docs/v3-prototype/README.md` | 原型进度内嵌本机 Open Design 首页(管道发现 URL + iframe);提示词注入不在本轮 | v3 分支,未 push |
+| **V3-cursor-cli** | `docs/v3-prototype/cursor-agent-executor.md` | Issue 调度接 Cursor Agent CLI(`agent`,非 `cursor.exe`);配置面=本机默认+智能体执行引擎 | 设计已记,未落地 |
+| **V3-cowelink-sidecar** | `docs/v3-prototype/cowelink-web-sidecar.md` | cowelink 长出本机网页旁路,buddy iframe 内嵌;不弹窗、不 HWND | 设计已记,未落地 |
 
 散见的一次性编号(如 plan/16 的 P8、plan/17 的 C5)不单独列行,以所在文件的上下文为准。
 

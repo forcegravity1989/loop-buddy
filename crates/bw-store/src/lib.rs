@@ -630,12 +630,9 @@ pub trait Store: Send + Sync {
     /// after-the-fact editing/correction. Irreversible; the caller is
     /// responsible for any user-facing confirmation.
     async fn delete_project(&self, id: ProjectId) -> Result<()>;
-    /// W2-2: hard-delete a single session row + its messages, and clear the
-    /// dangling `issue.session_id` reference (set to NULL, issue row stays).
-    /// `session` is a work product (not an observation/issue state-machine),
-    /// so deleting it touches none of the ironclad rules. Transaction-internal
-    /// order is message → issue.session_id → session so the `message.session_id`
-    /// FK constraint holds. Irreversible; the caller confirms with the user.
+    /// 硬删一条阶段记录（`session` 行 + 其 `message`）。issue 行留下；
+    /// `claude_conversation` 不删——看板 ▶跑 / 点卡唤醒走那张表，不读
+    /// 已删的 session。不再写 `issue.session_id`（该列已 DROP）。
     async fn delete_session(&self, id: SessionId) -> Result<()>;
     async fn set_project_phase(&self, id: ProjectId, phase: Readiness) -> Result<()>;
     async fn set_project_cycle(&self, id: ProjectId, cycle: MaturityPeriod) -> Result<()>;
