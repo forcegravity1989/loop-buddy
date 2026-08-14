@@ -10929,8 +10929,9 @@ async fn write_component_standards(app: &App, p: ProjectId) -> Result<(), AppErr
 /// trigger; no IO, no secrets.
 /// Forward one engine [`RunEvent`] to the live UI stream (T9 helper — shared by
 /// every `run_phase_range` call inside the adversarial loop so a subscriber sees
-/// phases advance and re-advance across rounds). `WorkflowDone` is emitted by
-/// the loop itself once the whole run truly finishes, so it's a no-op here.
+/// phases advance and re-advance across rounds). Whole-run completion is not an
+/// engine event: the loop itself sends [`Event::WorkflowDone`] once the run truly
+/// finishes.
 fn forward_progress(live: &broadcast::Sender<Event>, e: RunEvent) {
     match e {
         RunEvent::PhaseStarted { idx, name } => {
@@ -10948,7 +10949,6 @@ fn forward_progress(live: &broadcast::Sender<Event>, e: RunEvent) {
         RunEvent::WorkflowFailed { error } => {
             let _ = live.send(Event::WorkflowFailed(error));
         }
-        RunEvent::WorkflowDone { .. } => {}
     }
 }
 
