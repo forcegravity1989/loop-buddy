@@ -283,10 +283,10 @@ impl Drop for IssueWorktreeGuard {
 /// workspace's HEAD (master), so two concurrent/back-to-back issue runs in
 /// one project never collide on the shared working tree. The worktree lives
 /// in a sibling directory `<main_workspace>-issue-<n>` and carries branch
-/// `bw/issue-<n>` (created here if missing, same retry-fallback semantics
-/// as `github::checkout_issue_branch`). Main workspace stays on master —
-/// only the issue worktree carries the issue branch. The caller wraps the
-/// returned path in an [`IssueWorktreeGuard`] so cleanup is automatic.
+/// `bw/issue-<n>` (created here if missing, re-used as-is on a retry). Main
+/// workspace stays on master — only the issue worktree carries the issue
+/// branch. The caller wraps the returned path in an [`IssueWorktreeGuard`]
+/// so cleanup is automatic.
 pub async fn provision_issue_worktree(
     main_workspace: &Path,
     issue_number: u32,
@@ -309,7 +309,7 @@ pub async fn provision_issue_worktree(
     // A prior run that crashed before its guard's `Drop` ran leaves the
     // sibling dir behind. Prune stale worktree metadata; if the dir survives
     // prune with a `.git` worktree file, it's a live worktree for this branch
-    // — reuse it (idempotent retry, mirroring `checkout_issue_branch`).
+    // — reuse it (idempotent retry).
     if sibling.exists() {
         let _ = tokio::process::Command::new("git")
             .current_dir(main_workspace)
