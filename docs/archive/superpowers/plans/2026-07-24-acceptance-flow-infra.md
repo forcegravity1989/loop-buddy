@@ -1,5 +1,7 @@
 # 验收动作流基建 Implementation Plan
 
+> ⚠️ **历史档案(2026-08-17 归档)**。这是一份已经执行完毕的实施计划,记录的是当时怎么拆步骤,不是现状。结论去向:`plan/15-acceptance-flow-workflow.md`(`scripts/*flow*` 工具链的权威说明)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 落地 plan/15:第 0 阶段三关闸门实测 → 验收基建(打包脚本、五条常青考卷、证据报告生成器)→ 首次验收跑产出 report.html 交用户终审。

@@ -1,5 +1,7 @@
 # design/ — Builders 工作台设计稿件归档
 
+> ⚠️ **历史档案(2026-07-15 冻结,2026-08-17 从仓库根 `design/` 归档到此)**。这里是 Rust 重写之前的 HTML 交互原型稿与设计评审材料——`plan/00`(同在 `docs/archive/plan/`)重写方案的原型依据。产品现状以 `plan/07-product-proposition.md`(命题)与 `docs/v1~v3-prototype/`(当前迭代)为准;当前界面的视觉事实源是 `docs/v1-prototype/issue3-overview-mockup.html`,不是这里的 `.dc.html`。用浏览器打开子目录下的 `.dc.html` 仍可正常渲染(相对路径未变)。
+
 本目录收录 Builders 工作台项目管理体系的全部交互原型稿（`.dc.html`）、配套运行时与设计评审材料，按**文档族**分子目录存放——每个子目录内是同一设计主题的多个版本迭代，而不是互不相关的文件堆放。
 
 这里是**待评审的设计探索**。如果要找"真实跑出来的验证报告/演示"，见 [`../verification/`](../verification)。

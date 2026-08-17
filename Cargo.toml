@@ -13,9 +13,10 @@ members = [
 # pull the Dioxus/wry dependency tree. Build the desktop shell explicitly with
 # `cargo build -p app-desktop` (or `dx serve --package app-desktop`).
 #
-# `app-web` is intentionally NOT a member: it is the "以后也许的 Web" stub
-# (plan 04 §5). The architecture keeps the door open at zero cost (wasm32 CI
-# check + Store trait + sync columns), but it does not compile in the MVP.
+# There is no `app-web` crate: the Web shell is "以后也许" (docs/archive/plan/04
+# §5). The architecture keeps the door open at zero cost (wasm32 CI check on
+# bw-core/ui + Store trait + sync columns); the empty placeholder directory was
+# removed 2026-08-17 — add the crate here when that day comes.
 default-members = [
     "crates/bw-core",
     "crates/bw-engine",

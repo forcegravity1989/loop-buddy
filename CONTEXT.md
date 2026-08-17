@@ -12,6 +12,10 @@
 
 ### 人与角色
 
+**Builders' Workbench / BW / buddy / loop-buddy**:
+同一件东西的几个称呼:**Builders' Workbench(BW)**是产品名;**buddy** 是产品里那个 AI 队友/程序对自己的称呼(系统提示词、`docs/buddy/`、`docs/v1~v3-prototype/` 里通篇这么叫);**loop-buddy** 是 GitHub 仓库真名。写文档时说产品用 BW,说「它替你做了什么」用 buddy,都可以——别把它们当三个不同的东西。
+_Avoid_: 把 buddy 理解成某个具体队友的名字(它是程序整体的自称);workbuddy(另一款产品)。
+
 **Builder / 构建者**:
 使用工作台的那个人——端到端 own 一个项目的单人系统设计者,产品的主角。全局唯一,专指人类。
 _Avoid_: user、owner、开发者;不要用 "Builder" 指构建阶段的角色(那是**构建师**)。

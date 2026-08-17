@@ -1,5 +1,7 @@
 # CodeHub 对接 · 步1 执行计划
 
+> ⚠️ **历史档案(2026-08-17 归档)**。这是一份已经执行完毕的实施计划,记录的是当时怎么拆步骤,不是现状。结论去向:`crates/bw-engine/src/codehub.rs` 源码与 `docs/buddy/standards/connectors.md`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Phases use checkbox (`- [ ]`) syntax for tracking.
 >
 > **本件自足**:不读对话也能接手。所有锚点(文件:行号)已核实。V3 规划收敛见 `three-step-plan-2026-07-28-v3.html` 第六章;本件是步1 的落地执行版。

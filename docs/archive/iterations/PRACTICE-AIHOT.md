@@ -1,5 +1,7 @@
 # 践行日志 · aihot 日报(零 mock,真实践行)
 
+> ⚠️ **历史档案(2026-07-20~27 的践行日志,2026-08-17 归档)**。记录的是用 aihot 日报从零践行 MVP 那一批的逐轮实况,已执行完毕;数字证据在同目录 `AIHOT-EVIDENCE.json`,样板间库见 `examples/aihot/`。现状以 `plan/06`、`docs/v1~v3-prototype/` 与 `iterations/PRACTICE-buddy.md` 为准。
+
 > 2026-07-20 用户拍板:以真实项目「aihot 日报」践行 plan/09 的五堵墙 + 「模板能力」
 > (agent-standards.md 等标准文件,规范项目基础形态)。用户切至 sonnet5 并授权整夜
 > 自主执行、自己解决问题、不等待响应。本文件逐轮如实记录:假设→动作→真实输出→结论。
@@ -279,8 +281,8 @@ Failed——3 次失败如实是 §0 记的账号级配额墙探测,不是被掩
 
 **补记(同日,用户拍板)**:JSON 快照可读但不可"打开"——用户明确要一份能被
 BW 真实加载的样板间(show-flat),不只是文本证据。于是把这份 DB 本体真实复制进
-[`examples/aihot/bw-aihot.db`](../examples/aihot/bw-aihot.db)(见
-[`examples/README.md`](../examples/README.md)),`practice-aihot/` 本身仍按
+[`examples/aihot/bw-aihot.db`](../../../examples/aihot/bw-aihot.db)(见
+[`examples/README.md`](../../../examples/README.md)),`practice-aihot/` 本身仍按
 `.gitignore` 不进仓——这是**这一份**经过挑选的真实样板间的例外提交,不是把
 gitignore 规则撤销。深链验证过真的能打开:
 

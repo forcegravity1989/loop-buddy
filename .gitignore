@@ -20,8 +20,8 @@ node_modules/
 demo-workspaces/
 
 # 2026-07-20 aihot 践行:践行过程中反复重跑产生的真实 DB + 真实本地 git 工作区
-# (自带嵌套 .git),不是源码,不进本仓——真实产物见 iterations/PRACTICE-AIHOT.md
-# 的读回记录。2026-07-27 补:那个工作区已作为独立公开仓发布
+# (自带嵌套 .git),不是源码,不进本仓——真实产物见
+# docs/archive/iterations/PRACTICE-AIHOT.md 的读回记录。2026-07-27 补:那个工作区已作为独立公开仓发布
 # (github.com/forcegravity1989/aihot,含完整 32 次提交历史),样板间 DB 记
 # github_remote 指向它,不再往本仓夹带副本;技能库在 examples/skill-libraries/。
 # 见 examples/README.md。这条规则挡的只是本地反复重跑的临时产物。
@@ -31,14 +31,24 @@ demo-workspaces/
 /.worktrees/
 
 # 验收动作流(plan/15)执行产物:步骤截图/run.log/readback——现场证据,
-# 不是源码。终审通过后由人挑选归档进 iterations/evidence/(那份进 git)。
+# 不是源码。终审通过后由人挑选归档进 docs/archive/iterations/evidence/(那份进 git)。
 e2e/reports/
 
 # 验收报告是给人看的,不进仓:仓里的东西会变成 agent 上下文,而报告是
 # 人工终审用的大件(带图 4MB+)。报告留在 e2e/reports/ 本地,或挂到 PR/Release。
-iterations/evidence/**/*.html
+docs/archive/iterations/evidence/**/*.html
 
 # 指南截图本地占位（验证时填，不进仓——文字自洽，截图是补充不是必需）
 docs/guide/img/
 
+# 找指标 skill 测评的证据包(本机存档,不入仓;方法论正文见
+# docs/archive/plan/19 与 21)。旧位置 verification/ 已归档进 docs/archive/,两处都挡。
 verification/skill-eval-*/
+docs/archive/verification/skill-eval-*/
+
+# 另一条重建线(claude/opc-control-plane-review 分支上的 next/ 工程)偶尔会被
+# checkout 到本目录;不属于 main 的 workspace,不进本分支。
+/next/
+
+# superpowers 插件的本地工作目录(自带 .gitignore 挡住内容,这里连目录一起挡)。
+/.superpowers/

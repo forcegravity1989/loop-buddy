@@ -1,5 +1,7 @@
 # GitHub 为主体的创建引导流 Implementation Plan
 
+> ⚠️ **历史档案(2026-08-17 归档)**。这是一份已经执行完毕的实施计划,记录的是当时怎么拆步骤,不是现状。结论去向:`plan/13-github-mainline-creation-flow.md`(决定仍生效)与配套设计 `docs/superpowers/specs/2026-07-22-github-centric-onboarding-design.md`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把"创建项目"的起点从本地目录换成 GitHub 仓——引导流第一步选新建/接入 GitHub 仓,之后的方法论设置(周期/北极星/指标/阶段)不变。

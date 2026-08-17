@@ -1,5 +1,7 @@
 # P4 GAP 诊断记录(2026-07-28,用户录 maas 后)
 
+> ⚠️ **历史档案(2026-08-17 归档)**。一次性诊断记录,下一行自陈「已解决」。
+
 > **状态(2026-07-29 更新):已解决。** 本件记录的 clone HTTPS 504 根因,由
 > 后续 `P4-fix` commit 修掉——**走 SSH clone(本件「候选修复方向 A」)**:`codehub::clone_repo`
 > 先 `project view --template .ssh_url_to_repo` 取 SSH URL(SSH host szv-open:2222

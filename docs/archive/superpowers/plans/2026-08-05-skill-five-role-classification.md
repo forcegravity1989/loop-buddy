@@ -1,5 +1,7 @@
 # 通用 skill 按五角色归类 · 实施计划
 
+> ⚠️ **历史档案(2026-08-17 归档)**。这是一份已经执行完毕的实施计划,记录的是当时怎么拆步骤,不是现状。结论去向:`docs/superpowers/specs/2026-08-05-skill-five-role-classification-design.md`(仍作数,被 `crates/bw-core/src/stage_catalog.rs` 引用)与 `plan/16`/`plan/20`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把技能库里 57 条无阶段归属的技能按五角色多值归类，并让归类真正到达执行现场——run 时按 Issue 阶段把本阶段技能目录写进 prompt、正文物化到工作区 `.claude/skills/`。
@@ -8,7 +10,7 @@
 
 **Tech Stack:** Rust workspace（bw-core 零 IO/wasm32 可编译 · bw-store sqlx+SQLite · bw-app 编排 · ui 纯函数 selector · app-desktop Dioxus 0.7 hard-pin =0.7.9）。
 
-**Spec:** [`docs/superpowers/specs/2026-08-05-skill-five-role-classification-design.md`](../specs/2026-08-05-skill-five-role-classification-design.md)
+**Spec:** [`docs/superpowers/specs/2026-08-05-skill-five-role-classification-design.md`](../../../superpowers/specs/2026-08-05-skill-five-role-classification-design.md)
 
 ## Global Constraints
 

@@ -43,7 +43,7 @@
 
 任何一关卡死:停下,拿实测证据找用户定夺(备选=A 路线应用内自截做落盘、B 路线做驱动的混合),**绝不静默换路线**。
 
-### 2.1 实测结果与路线转向(2026-07-24 Fable 亲驾,证据 `iterations/evidence/gate-2026-07-24/GATE.md`)
+### 2.1 实测结果与路线转向(2026-07-24 Fable 亲驾,证据 `docs/archive/iterations/evidence/gate-2026-07-24/GATE.md`)
 
 | 关 | 裁决 | 实况 |
 |---|---|---|
@@ -125,7 +125,7 @@ expect = "Done 且 settled_at 非空"               # 预期陈述;报告永远�
 
 **逐步协议**:截图→定位→动作→截图→与流文件预期对照→记 verdict(`ok/fail/skipped`)+耗时。失败如实停在原地,**绝不补拍"看起来对"的截图**,绝不跳步续跑(后续步全记 skipped)。
 
-**报告** `report.html`:`scripts/gen-flow-report.py` 装配(python 先例:make_demo_video.py),单文件自包含(PNG base64 内嵌),设计 token 用暖纸底/clay 主色(plan/00 §6)。三态如实:**绿=全过 / 红=失败(附失败现场截图) / 灰=未跑或环境中断**——绝不假绿,与健康信号灯同一哲学。每条 verify 展示 SQL 语句、原值、预期陈述三列,读者自行对照。
+**报告** `report.html`:`scripts/gen-flow-report.py` 装配(python 先例:`docs/archive/scripts/make_demo_video.py`),单文件自包含(PNG base64 内嵌),设计 token 用暖纸底/clay 主色(plan/00 §6)。三态如实:**绿=全过 / 红=失败(附失败现场截图) / 灰=未跑或环境中断**——绝不假绿,与健康信号灯同一哲学。每条 verify 展示 SQL 语句、原值、预期陈述三列,读者自行对照。
 
 ### 5.1 报告不进 git(2026-07-25 拍板)
 
@@ -170,7 +170,7 @@ expect = "Done 且 settled_at 非空"               # 预期陈述;报告永远�
 | 考卷 | `e2e/flows/core/*.toml` |
 | 打包 | `scripts/bundle-desktop.sh`(dx bundle) |
 | 报告生成 | `scripts/gen-flow-report.py` |
-| 证据落盘 | `e2e/reports/`(gitignored)+ `iterations/evidence/`(归档进 git) |
+| 证据落盘 | `e2e/reports/`(gitignored)+ `docs/archive/iterations/evidence/`(归档进 git) |
 | 深链启动 | 复用 `BW_DB/BW_OPEN/BW_PANEL/BW_HUB/BW_SEL`(main.rs 既有) |
 | 点击驱动 | `BW_FLOW` 应用内注入(§2.1 转向后新增,app-desktop 侧) |
 | 人眼证据 | MCP computer-use `screenshot` 拍 BW.app 真窗口 |

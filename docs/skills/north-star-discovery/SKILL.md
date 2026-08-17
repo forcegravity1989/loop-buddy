@@ -21,7 +21,7 @@ category: 标配
 > `metric-tree-builder`(盲测业界最佳,8.75/10)。两库都不带 BW 语境(既有
 > 指标体系对齐 / 自动化免疫检验等自建强项),改编只合入其判据与护栏结构,
 > 不是整体替换——测评全文与盲测证据见
-> `plan/19-metric-skills-evaluation.md` 与 `verification/skill-eval-2026-08-04/`。
+> `docs/archive/plan/19-metric-skills-evaluation.md` 与 `verification/skill-eval-2026-08-04/`。
 
 ## 何时用 / 前置条件
 

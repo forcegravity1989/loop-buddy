@@ -1,5 +1,7 @@
 # loop-buddy ↔ aihot 接线与核心资产补硬(样板间 v2)
 
+> ⚠️ **历史档案(2026-08-17 归档)**。样板间 v2 的接线设计,已执行;结果见 `examples/README.md`(样板间库)与 `docs/archive/iterations/PRACTICE-AIHOT.md`。现状以 `plan/06` 与 `docs/v1~v3-prototype/` 为准。
+
 日期:2026-07-27 · 状态:spec 定稿,待拆票执行
 来源:本次 brainstorming 全记录(用户五次拍板,逐条记在下方「拍板记录」)
 上承:`plan/13-github-mainline-creation-flow.md`(GitHub 主体化,D1-D12)、

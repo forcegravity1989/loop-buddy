@@ -80,7 +80,7 @@ cargo run -p bw-app --example build_aihot_fixture
 
 ## 相关材料(互补,不重复)
 
-- [`iterations/PRACTICE-AIHOT.md`](../iterations/PRACTICE-AIHOT.md)——完整叙事:
+- [`docs/archive/iterations/PRACTICE-AIHOT.md`](../docs/archive/iterations/PRACTICE-AIHOT.md)——完整叙事:
   假设→动作→真实输出→结论,逐轮记录。
-- [`iterations/AIHOT-EVIDENCE.json`](../iterations/AIHOT-EVIDENCE.json)——数字侧
+- [`docs/archive/iterations/AIHOT-EVIDENCE.json`](../docs/archive/iterations/AIHOT-EVIDENCE.json)——数字侧
   证据快照(不打开 DB 也能读的纯文本版本)。

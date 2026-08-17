@@ -1,5 +1,7 @@
 # V2 设计综合 — 完整形态 Builders' Workbench = multica 优点 × BW 设计初衷
 
+> ⚠️ **历史档案(2026-07-15 的设计综合稿,2026-08-17 归档)**。注意:这里的「V2」是「完整形态 = multica 优点 × BW 初衷」那次融合方案,**与 `docs/v2-prototype/`(2026-08 的产品迭代 V2:调度简化 / 最简多人)无关,只是同名**。现状以 `plan/06-overall-alignment.md` 为准。
+
 > **谱系注(2026-07-15)**:本文写于 `claude/bw-complete-form` 分支;R1/R2 已经
 > merge `c723480` 并入主线 `claude/builders-workbench-multica-0517f4`,并在 `fc5bded`
 > 补上 Issue Done 边沿的真实记账联动。**对齐后的单一方案见 `plan/06-overall-alignment.md`**。

@@ -4,7 +4,7 @@
 >
 > **读法**:正文(§0-§9)只用日常语言,讲结论与理由;所有源码 / 测试 / commit 锚点集中在 §10「工程对照表」供核验者查——结构照 [`plan/07-product-proposition.md`](07-product-proposition.md) 的规矩:**结论不许无锚,锚不许上正文**。看不懂的代号查 [`../docs/code-schemes.md`](../docs/code-schemes.md)。
 
-> **本文从哪来**:此前存在两份平行设计——`plan/05-complete-form-design.md`(fable5+glm5.2,主线,九类实体的完整形态,含 G1-G11 缺口台账;G=Gap,当时清点出的十一个缺口)与 `iterations/V2-DESIGN.md`(glm5.2,融合分支,把 multica 的 Issue 层融进来,提出 R1/R2 两件融合任务)。**本文档是两者的对齐收口**:代码已合为一体,记账联动已焊死(合并与焊接的 commit 见 §10-0)。从本文件起,「完整形态」只有一个方案,不再有两条线。每条陈述可对源码/测试/数据库核验;缺口如实标注,不假装。
+> **本文从哪来**:此前存在两份平行设计——`docs/archive/plan/05-complete-form-design.md`(fable5+glm5.2,主线,九类实体的完整形态,含 G1-G11 缺口台账;G=Gap,当时清点出的十一个缺口)与 `docs/archive/iterations/V2-DESIGN.md`(glm5.2,融合分支,把 multica 的 Issue 层融进来,提出 R1/R2 两件融合任务)。**本文档是两者的对齐收口**:代码已合为一体,记账联动已焊死(合并与焊接的 commit 见 §10-0)。从本文件起,「完整形态」只有一个方案,不再有两条线。每条陈述可对源码/测试/数据库核验;缺口如实标注,不假装。
 
 ---
 
@@ -17,7 +17,7 @@
 | 来源 | 贡献 | 归宿 |
 |---|---|---|
 | `plan/05`(fable5+glm5.2,主线) | 九类实体全部实体化:技能带正文/队友带指令与战绩/连接器真探针/产物版本史/建项目即开代码仓/五角色剧本/证据回流 | **保留为基座**,G 系列缺口台账仍有效(§5) |
-| `iterations/V2-DESIGN.md`(glm5.2,融合分支) | 融合洞察;Issue 状态机照 multica 真实语义(待办池=停车场,先收着不排期);R1「Issue 层」、R2「技能复利」(蒸馏物记得来源);Issue 看板 | **整体并入主线**(合并 commit 见 §10-0) |
+| `docs/archive/iterations/V2-DESIGN.md`(glm5.2,融合分支) | 融合洞察;Issue 状态机照 multica 真实语义(待办池=停车场,先收着不排期);R1「Issue 层」、R2「技能复利」(蒸馏物记得来源);Issue 看板 | **整体并入主线**(合并 commit 见 §10-0) |
 | 本轮新增(fable5) | 蒸馏出的技能必须带正文、不是空卡片(R2 与 G7 的交汇);**活被点「完成」的那一下同时入账**(R1 与 G8/G5/G10 的交汇);深链直达 Issue 看板 | 两个 commit,见 §10-0 |
 
 对照 multica 的诚实边界不变(V2-DESIGN §6.5 经真实源码核验):「活挂在哪个阶段」是 multica 真实存在的字段,BW 把这个裸标签增强为方法论阶段;R2 的自动复利(做完的活自动沉淀成可复用技能)是 BW 相对 multica 的**真实增量**——multica 的技能是手工创建的;BW 只借鉴概念,零代码复制。
@@ -113,7 +113,7 @@ G 系列(G=Gap,缺口)承自 plan/05;R 系列(R=融合任务)承自 V2-DESIGN,�
 1. 演示数字一律从演示数据库/工作区读回,报告不代答。
 2. 演示路径自我标注(【mock】前缀/文档注明),绝不冒充真实执行。
 3. 信号只能从数据推导;观测只追加;无数据 = 「未知」灰 ≠ 绿。
-4. 真实运行被网关挡住时:监理脚本幂等重试 + **编排后端真实工程**(真代码/真测试/真提交)经工作台公开记账接口落账——产物与度量全真,执行方如实标注(`iterations/TAKEOVER-REPORT-GLM52.md` §4.1 先例)。
+4. 真实运行被网关挡住时:监理脚本幂等重试 + **编排后端真实工程**(真代码/真测试/真提交)经工作台公开记账接口落账——产物与度量全真,执行方如实标注(`docs/archive/iterations/TAKEOVER-REPORT-GLM52.md` §4.1 先例)。
 5. 门禁每步过:格式检查 / lint 零警告 / 测试 / wasm32 双编译 / 内核无 UI 依赖守卫(写作日清单;2026-07-17 起测试基线被 E2E 纪律取代,现行清单见 CLAUDE.md)。
 
 ## 7. 融合未补全清单(2026-07-15 复盘 · 以融合命题为尺)
@@ -133,7 +133,7 @@ G 系列(G=Gap,缺口)承自 plan/05;R 系列(R=融合任务)承自 V2-DESIGN,�
 | G | **Autopilot 缺位**(定时任务→自动建活) | multica 有此模式;BW 调度器已真,只差建活一步 | 规格已冻结在交接件(见 §10-7) |
 | H | **看板交互半身**——卡片只有「前进」;不能在界面上指派、不能带原因阻塞 | 可指派工作台的「指派」动作反而要走无界面通道 | 卡片加指派下拉(五角色)+ 带原因的阻塞;**倒退/重开故意不给界面**(接口层有一次性入账兜底) |
 
-**定位性留白(不补,防蔓延)**:Squad、多 CLI provider、云 runtime/WebSocket、甘特/泳道、Inbox——multica 的多人/分布式面,与 BW 单人桌面定位相斥(论证见 `iterations/V2-DESIGN.md` §2.3)。
+**定位性留白(不补,防蔓延)**:Squad、多 CLI provider、云 runtime/WebSocket、甘特/泳道、Inbox——multica 的多人/分布式面,与 BW 单人桌面定位相斥(论证见 `docs/archive/iterations/V2-DESIGN.md` §2.3)。
 
 ## 8. 修订执行队列(v3 · 两轨,接棒照此走)
 
@@ -232,7 +232,7 @@ G 系列(G=Gap,缺口)承自 plan/05;R 系列(R=融合任务)承自 V2-DESIGN,�
 | D | Done 边沿按 `feed_workspace_metrics` 的 change-guard 模式追加机器源观测 |
 | E | `HandoffStage` 统计离段非终态 Issue:>0 则强制 `risky=true` 并在 note 自动追加「留 N 件未完」 |
 | F | 写作日 `transition_issue` 接受任意跳转;补:App 层合法转移表 + `issue.blocked_reason` 列,转 Blocked 必填 |
-| G | 规格冻结件:`iterations/HANDOFF-2026-07-15.md` P-A1(三守卫列/CronMode/tick 分支/四测试) |
+| G | 规格冻结件:`docs/archive/iterations/HANDOFF-2026-07-15.md` P-A1(三守卫列/CronMode/tick 分支/四测试) |
 | H | 看板卡片指派下拉(五角色实体)+ Blocked 原因输入;倒退/重开不给 UI,API 层 settle-once 兜底 |
 
 ### 10-8 队列条目的工程细节(对照 §8)
@@ -243,8 +243,8 @@ G 系列(G=Gap,缺口)承自 plan/05;R 系列(R=融合任务)承自 V2-DESIGN,�
 | A3 | 注入规则:同项目 `distilled_from_issue IS NOT NULL`,同阶段优先、蒸馏时间倒序,上限 3,经现有 `skills_prompt_block` 注入;Done 只能由既有 `TransitionIssue` 从命令面触发,InReview→Done 用测试锁死;确认者 actor 不建模,留口 |
 | A0 | 单测一条链:蒸馏 → 后续 run prompt 含其 `content` → 该技能 `uses+1` |
 | A4 | 指标名常量化(如 `bw_app::METRIC_STAGE_ISSUES_DONE`);`CompleteCreation` 播种 + Boot 幂等补种(同 `seed_stage_entities_if_missing` 模式);Done 边沿 change-guard 追加观测 |
-| A1 | 按 `iterations/HANDOFF-2026-07-15.md` P-A1 冻结规格落地 |
+| A1 | 按 `docs/archive/iterations/HANDOFF-2026-07-15.md` P-A1 冻结规格落地 |
 | A5 | 转移守卫 + `issue.blocked_reason` + 看板指派;项目墙卡片带开放 Issue 计数 |
 | B1 | 两条 stale `running` 行标 Failed + 注记「529 时代中断」后再跑新 run(401 判定与步骤见交接件) |
-| B2/B3 | 依赖 B1;后备按 `iterations/TAKEOVER-REPORT-GLM52.md` §4.1 先例 |
+| B2/B3 | 依赖 B1;后备按 `docs/archive/iterations/TAKEOVER-REPORT-GLM52.md` §4.1 先例 |
 | B6 | 需屏幕录制授权;数字一律 DB 读回 |

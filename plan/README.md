@@ -1,47 +1,44 @@
 # plan/ 目录导读(先读这篇,30 秒知道哪些还作数)
 
-> 本目录是按时间累积的计划文档:早期的路线选型(00-05)→ 对齐后的设计与执行计划(06-08,**当前活跃**)→ 一批批的执行记录(09-21,做完一批留一篇)。**编号是时间序,不是重要度**——直接从 00 读起会先撞上已被取代的旧设计。
+> 本目录只留**现在还作数**的计划与规范(7 篇)。历史批次的计划——早期路线选型(00-05)与做完即历史的执行记录(09-12、14、17-19、21)——2026-08-17 起统一归档到 [`../docs/archive/plan/`](../docs/archive/plan/),编号语义不变(源码注释与文档里的 `plan/NN §M` 锚点按号去那里找)。**编号是时间序,不是重要度**。
 >
-> 看不懂的词查 [`../CONTEXT.md`](../CONTEXT.md) 词表;看不懂的代号(P2、W6、R1……)查 [`../docs/code-schemes.md`](../docs/code-schemes.md)。
+> 看不懂的词查 [`../CONTEXT.md`](../CONTEXT.md) 词表;看不懂的代号(P2、W6、R1……)查 [`../docs/code-schemes.md`](../docs/code-schemes.md)。**当前迭代在做什么**(V1 产品化 → V2 调度/多人 → V3 内嵌 Open Design)不在本目录,在 [`../docs/v1-prototype/`](../docs/v1-prototype/) → [`../docs/v2-prototype/`](../docs/v2-prototype/) → [`../docs/v3-prototype/`](../docs/v3-prototype/);全仓文档地图见 [`../docs/README.md`](../docs/README.md)。
 
-## 现在还作数的(改东西之前读这三篇)
+## 现在还作数的
 
-| 文件 | 是什么 |
-|---|---|
-| [06-overall-alignment.md](06-overall-alignment.md) | **设计唯一事实源**。含缺口台账(G 系列)与执行队列;末尾持续追加「转向(用户拍板)」记录,新决定以最晚一条为准 |
-| [07-product-proposition.md](07-product-proposition.md) | **产品命题**:原型引子页原文 + 用户语言拆解 + 工程对照表。命题正文只用人话——这是全目录的写作范本 |
-| [08-mvp-execution-plan.md](08-mvp-execution-plan.md) | **MVP 执行计划,当前接手工作的入口**。开头「进度实况」表持续更新,先看它再看正文 |
+| 文件 | 是什么 | 怎么用 |
+|---|---|---|
+| [06-overall-alignment.md](06-overall-alignment.md) | **设计唯一事实源**。含缺口台账(G 系列)与执行队列;末尾持续追加「转向(用户拍板)」记录 | 设计层面拿不准就查它;新决定以最晚一条「转向」为准 |
+| [07-product-proposition.md](07-product-proposition.md) | **产品命题**:原型引子页原文 + 用户语言拆解 + 工程对照表 | 全目录的写作范本;命题正文只用人话 |
+| [08-mvp-execution-plan.md](08-mvp-execution-plan.md) | MVP 的**定义**(项目的生命周期 × workflow 的生命周期)与当时的执行队列 | §1 定义仍作数;**执行队列已被 `docs/v1~v3-prototype/` 接管**(顶部横幅写明),别再照它排活 |
+| [13-github-mainline-creation-flow.md](13-github-mainline-creation-flow.md) | GitHub 为正本的创建流(D1-D12 十二条拍板) | 决定仍生效:issue = GitHub issue、验收 = merge、`.bw/metrics.toml` 正本 |
+| [15-acceptance-flow-workflow.md](15-acceptance-flow-workflow.md) | 验收流(考卷/真点击/证据报告)与 `scripts/*flow*` 工具链的权威说明 | 用 `scripts/run-flow.py` 之前读它;注意 ▶跑 已改走内嵌终端,`e2e/flows/core/02` 那张考卷可能过时(见 `docs/BACKLOG.md`) |
+| [16-skill-standard-spec.md](16-skill-standard-spec.md) | 技能规范(S1-S7 硬规) | **规范长期有效**;`audit_skills` 例子按它巡检 |
+| [20-asset-scope-isolation.md](20-asset-scope-isolation.md) | 资产按项目归属的三层隔离(R1-R5 规则) | **规则活跃**;`scoped_pick` 是唯一按名解析器 |
 
-## 路线与选型背景(00-05,已是历史,各文件顶部有横幅)
+## 已归档到 `docs/archive/plan/` 的(去那里读,各文件顶部有横幅)
 
 | 文件 | 一句话 | 还有效的部分 |
 |---|---|---|
-| [00-PLAN.md](00-PLAN.md) | 最初的总路线图(七控制点/双团队时期) | §6 设计系统 token 仍被 CLAUDE.md 引用 |
-| [01-prototype-inventory.md](01-prototype-inventory.md) | HTML 原型逐项转录(七步向导时期) | 原型仍是产品命题出处 |
-| [02-rust-stack-evaluation.md](02-rust-stack-evaluation.md) | UI 技术选型评估 | **结论至今成立**(Dioxus 0.7 pin =0.7.9) |
-| [03-architecture-and-engine.md](03-architecture-and-engine.md) | 架构与引擎设计 | §2.5 L0-L6 派生链定义**至今是权威定义** |
-| [04-effort-and-mvp.md](04-effort-and-mvp.md) | 工作量估算与 MVP 切线 | 无(前提已被推翻,仅决策背景) |
-| [05-complete-form-design.md](05-complete-form-design.md) | 完整形态设计(multica 融合分支) | G 系列缺口台账由 06 接管;文首谱系注写明 |
-
-## 执行批次记录(09-21,一批一篇;做完即历史,但含当批的权威定义)
-
-| 文件 | 一句话(当批做了什么) | 特别说明 |
-|---|---|---|
-| [09-aihot-practice-run.md](09-aihot-practice-run.md) | 用真实项目「aihot 日报」从零践行 | 其 cron 设计已被 11 的 §L5 明确推翻 |
-| [10-personal-kanban-and-real-run.md](10-personal-kanban-and-real-run.md) | 个人看板 + 真执行首跑(K0-K4) | 已完工 |
-| [11-boards-process-cards-and-real-aihot-loop.md](11-boards-process-cards-and-real-aihot-loop.md) | 看板/流程卡 + aihot 双环 | 自我纠错范本:§L5 主动推翻 09 |
-| [12-skill-agent-workflow-cron-truthful-modeling.md](12-skill-agent-workflow-cron-truthful-modeling.md) | 技能/队友/工作流/定时任务的真实建模(T1-T17) | 已全部交付 |
-| [13-github-mainline-creation-flow.md](13-github-mainline-creation-flow.md) | GitHub 为正本的创建流(D1-D12 十二条拍板) | 决定仍生效 |
-| [14-creation-experience.md](14-creation-experience.md) | 创建体验批(C12-C16) | 已验收 |
-| [15-acceptance-flow-workflow.md](15-acceptance-flow-workflow.md) | 验收流(考卷/真点击/证据报告) | 结论已吸收进 CLAUDE.md 与词表 |
-| [16-skill-standard-spec.md](16-skill-standard-spec.md) | 技能规范(S1-S7 硬规) | **规范长期有效** |
-| [17-run-scheduling-redesign.md](17-run-scheduling-redesign.md) | 运行调度重设计(串行锁/worktree 隔离) | 已落地;项目代号自此从 aihot 换为 buddy |
-| [18-step3-metric-loop-tie-up.md](18-step3-metric-loop-tie-up.md) | 指标环收尾(找指标技能修正 + L6 聚合缝) | 已落地 |
-| [19-metric-skills-evaluation.md](19-metric-skills-evaluation.md) | 业界找指标技能盲测与引入 | 已执行;§8 更新了 §0 的结论 |
-| [20-asset-scope-isolation.md](20-asset-scope-isolation.md) | 资产按项目归属的三层隔离(R1-R5 规则) | **规则活跃**;落地了 plan/08 的 S1 |
-| [21-metric-render-skill-evaluation.md](21-metric-render-skill-evaluation.md) | 业界指标渲染技能选型测评 | 自陈仅第一轮(搜索+内容核验),同模盲测未跑,如实标未测 |
+| 00-PLAN | 最初的总路线图(七控制点/双团队时期) | §6 设计系统 token(暖纸底/clay 主色/三态信号色)仍被 CLAUDE.md 引用 |
+| 01-prototype-inventory | HTML 原型逐项转录 | 原型仍是产品命题出处 |
+| 02-rust-stack-evaluation | UI 技术选型评估 | **结论至今成立**(Dioxus 0.7 pin =0.7.9) |
+| 03-architecture-and-engine | 架构与引擎设计 | §2.5 L0-L6 派生链定义**至今是权威定义** |
+| 04-effort-and-mvp | 工作量估算与 MVP 切线 | 无(前提已被推翻) |
+| 05-complete-form-design | 完整形态设计(multica 融合分支) | G 系列缺口台账由 06 接管 |
+| 09-aihot-practice-run | 用真实项目「aihot 日报」从零践行 | cron 设计已被 11 §L5 推翻 |
+| 10-personal-kanban-and-real-run | 个人看板 + 真执行首跑(K0-K4) | 已完工 |
+| 11-boards-process-cards-and-real-aihot-loop | 看板/流程卡 + aihot 双环 | 自我纠错范本 |
+| 12-skill-agent-workflow-cron-truthful-modeling | 技能/队友/工作流/定时任务的真实建模(T1-T17) | 已全部交付 |
+| 14-creation-experience | 创建体验批(C12-C16) | 已验收 |
+| 17-run-scheduling-redesign | 运行调度重设计(串行锁/worktree 隔离) | 已落地;项目代号自此从 aihot 换为 buddy |
+| 18-step3-metric-loop-tie-up | 指标环收尾 | 已落地 |
+| 19-metric-skills-evaluation | 业界找指标技能盲测与引入 | 已执行;方法论沉淀进 `docs/skills/north-star-discovery/` |
+| 21-metric-render-skill-evaluation | 业界指标渲染技能选型测评 | 自陈仅第一轮,如实标未测 |
 
 ## 相关目录
 
-- `../iterations/`:交接记录与实践日志,全部是历史档案(顶部有横幅),唯一持续更新的是 `PRACTICE-buddy.md`。
-- `../DEVELOPMENT.md`:开发指南(命令与架构速览);`../CLAUDE.md`:给 AI 的工作说明,含写作纪律。
+- [`../docs/README.md`](../docs/README.md):全仓文档地图(现役 / 运行时资产 / 伙伴迭代线 / 归档)。
+- [`../docs/BACKLOG.md`](../docs/BACKLOG.md):缓做的冗余功能与后续 issue 清单。
+- [`../iterations/PRACTICE-buddy.md`](../iterations/PRACTICE-buddy.md):唯一持续更新的实践日志;其余交接记录已归档到 `../docs/archive/iterations/`。
+- [`../DEVELOPMENT.md`](../DEVELOPMENT.md):开发指南;[`../CLAUDE.md`](../CLAUDE.md):给 AI 的工作说明,含写作纪律。
