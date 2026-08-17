@@ -700,7 +700,17 @@ impl InteractiveExecutor for InteractiveCliExecutor {
             )));
         }
 
-        let mut cmd = PtyCommand::new(binary);
+        // `.cmd`/`.bat` are not PE images — CreateProcess fails unless we
+        // host them with cmd.exe. win_cmd::tokio_cmd does the same wrap;
+        // ConPTY must not go through that helper (CREATE_NO_WINDOW).
+        let mut cmd = if crate::win_cmd::is_windows_script(binary) {
+            let mut c = PtyCommand::new("cmd.exe");
+            c.arg("/c");
+            c.arg(binary);
+            c
+        } else {
+            PtyCommand::new(binary)
+        };
         cmd.args(&plan.args);
         apply_child_env(&mut cmd);
         cmd.current_dir(&plan.cwd);

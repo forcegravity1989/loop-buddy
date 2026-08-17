@@ -69,6 +69,7 @@
   - [4.13 V3 两篇方案已记、未落地(指回 §3 issues / 一张工作台)](#413-v3-两篇方案已记未落地指回-3-issues--一张工作台)
   - [4.14 第一包 / 开发包 + 删阶段记录缺列(2026-08-14)](#414-第一包--开发包--删阶段记录缺列2026-08-14)
   - [4.15 采集仍跑旧脚本·合入是否更新主目录(2026-08-14)](#415-采集仍跑旧脚本合入是否更新主目录2026-08-14)
+  - [4.16 V3 使用问题(2026-08-17)](#416-v3-使用问题2026-08-17)
   - [待记(后续会话补)](#待记后续会话补)
 - [5. 认知(buddy 是什么、能带来什么)](#5-认知buddy-是什么能带来什么)
   - [两个面(buddy = 看板 + AI 小队)](#两个面buddy--看板--ai-小队)
@@ -91,7 +92,7 @@
 | 项 | 装啥/配啥 | 为啥 |
 |---|---|---|
 | **git** | 任何 clone/workspace 操作都要 | 通用 |
-| **claude CLI** + **`BW_CLAUDE_BIN`** | AI 干活(issue 执行器)shell-out `claude -p`,要给全路径(Windows 上 Rust `Command::new("claude")` 不做 PATHEXT,只认 .exe/.cmd,见 §2 步2) | `BW_CLAUDE_BIN=C:\Users\<你>\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`(持久 User 环境变量) |
+| **claude CLI** + **`BW_CLAUDE_BIN`** | AI 干活(issue 执行器)shell-out `claude`,要给全路径(Windows 上 Rust `Command::new("claude")` 不做 PATHEXT;`.cmd` 还要包 `cmd.exe /c`,见 §4.16) | 优先 `...\claude-code\bin\claude.exe`;没有 exe 时认 `%APPDATA%\npm\claude.cmd`。安装器与应用同一顺序,写入/解析 `BW_CLAUDE_BIN` |
 | **LLM 网关** | `claude -p` 真跑要打到 LLM 网关 | 我的 claude 已指向 GLM first-party(`~/.claude.json` 配置,非 buddy 配);529 间歇,仓里 `claude_cli.rs` 已重试退避 |
 
 ### 按项目 provider 选装
@@ -415,6 +416,23 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - **待什么条件回头**:先对同事那次复盘是「没走 Done」还是「pull 被吞」。若要改,优先让收拢失败诚实报错,不把 pull 塞进采集按钮。动手前提 issue。
 - **本机取证(2026-08-14)**:用户本地 `welink-bridge` 主工作区(`…/workspaces/welink-bridge-e25bd532`)在 `dev`,fetch 后**落后 origin/dev 8 个提交**。同事合入的 `bw/metrics-rewrite`(改 `.bw/scripts/derive_shield.py` + `.bw/metrics.toml`)已在远端,本地没拉。工作区脏文件只有 buddy 每次采集会覆盖的 `.bw/collect_stats.{py,sh}`。还原这两份后快进拉到 `eedbbad`。这就是「点采集跑旧脚本」在本机的实锤:不是采集按钮漏了更新,是主目录没跟上远端。Buddy 库里的指标定义还要再点「↻ 同步指标文件」才会换新口径,然后「立即采集」才按新脚本出数。
 - **机制怎么补(2026-08-14 傍晚,用户已看到新数后问)**:现有四个「↻」各管一层,不要塞进「从仓同步 Issue」。**当前决议(未落地,动手前提 issue)**:加独立「↻ 收拢工作区」(复用已有 `sync_default_branch`),成功后再跑 project/metrics/connectors 三份正本进库;**不**自动采集、**不**改看板 Issue。`pull` 失败必须诚实报错,不许再吞。采集 / 同步 Issue / 同步指标文件职责不变。这是后来者读回仓里共同事实的缺口,不是把采集变成 `git pull`。
+
+### 4.16 V3 使用问题(2026-08-17)
+
+> 实践里撞到。指回步2 创建流 / 第一包安装器。设计见 [`docs/v3-prototype/onboard-list-and-claude-resolve.md`](../docs/v3-prototype/onboard-list-and-claude-resolve.md)(代号 V3-use-fix)。动手前提 issue。
+
+- **安装器只认一条死路径 `bin\claude.exe`**(指回 §1 前置 / 第一包):Inno 脚本原先只查 `%APPDATA%\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`。终端里 `claude` 能用(走 `%APPDATA%\npm\claude.cmd`)也不算。同事有主包目录、没有 `bin`,安装包直接中止。`bin\claude.exe` 是 npm `postinstall` 从可选包拷过来的,不是解压自带。
+  - **没有 exe,Issue 还能跑吗**:终端能跑 ≠ buddy 能开工。V3 开工是 ConPTY,`CreateProcess` 直接打 `.cmd` 会不是合法 Win32 映像。只放行安装、不包 `cmd.exe /c`,点跑仍失败。
+  - **【2026-08-17 归正·本窗落地】**:安装器认 exe **或** `%APPDATA%\npm\claude.cmd`,`BW_CLAUDE_BIN` 写实际找到的那条(优先 exe)。应用启动同一顺序解析;路径以 `.cmd`/`.bat` 结尾时 PTY 与 `tokio_cmd` 都走 `cmd.exe /c`。仓外脚本 `D:\2026\buddy-setup\BuildersWorkbench.iss` + Dev 包同步改。要新编 release / 重出包再生效。
+- **绿区「↻ 刷新列表」截前 30 条,成员仓也会丢**(指回步2):buddy 原先调 `codehub-cli -H green project list --mine --limit 30`。`--mine` 与 `--membership` 本机对照都是 79 个(我是成员就算,含组继承;不是「必须我拥有」——`--owned` 只有 2 个)。`aipdu/oh-my-hw-claudecode` 我是组继承 Developer(`access_level=30`),排在 `--mine` 第 **74** 名,被 30 截掉。界面文案「仓不在列表=需先成为 member」不完整。默认排序不是最近活跃(该仓 8/13 还在动)。
+  - **【2026-08-17 归正·本窗落地】**:limit 改为 200(codehub/github 对称);下拉上方加搜索,只过滤已加载列表(path/描述/默认分支)。文案改成「已加载 N 个(最多 200);仍没有 = 不是 member,或排在 200 以外」。不恢复手填 path。远端按最近活跃重排、200 以外翻页——未做。
+  - **【2026-08-17 归正·拉与画拆开】**:200 仍偏少(人仓数常 >200);搜索补不上没拉下来的。改成**拉 999 / 下拉只画 30**(当前选中始终留在列表)。搜索仍只过滤已加载。999 以外翻页/远端搜索——未做。
+  - **【2026-08-17 归正·可搜索下拉 + 图标】**:装包后反馈两件。① 搜索框和原生 `<select>` 是两套控件,打字不能直接点出匹配项——改成一个可搜索下拉(聚焦/打字弹出最多 30 条,点选)。② 程序仍无图标——补几何标记(clay 方砖 + 纸色环 + 小台面),贴 exe / 窗口 / 安装器。要新编 release / 重出包才看见。
+- **纳入时选分支 / 一仓两项目**(指回步2,2026-08-17):有人一个仓两条分支、每条分支当一个项目,希望纳入时能选分支。**当前决议:不接这个产品形态,本轮不动。** buddy 的项目身份是「一个仓 + 一条主干」;产品信息正本(`.bw/project.toml` / 指标)住在仓里,clone / 开工出支 / 合入收拢都按远端默认分支。选分支看起来只是下拉多一项,后面 MR 目标、收拢主干、后来者读正本都得变成「每个 buddy 项目自带一条主干」,等于承认「分支 = 项目」。那是仓治理问题,不是纳入缺口。对方若真是两个项目,应拆成两个仓(或两个 path)再分别纳入。
+- **一个项目、多条在跑的版本线**(指回总览 / 版本面板 / 步2,2026-08-17):同一产品同时维护 `main`(2.0)和 `release/1.x`(补丁)是真需求,和「一仓两项目」不是一件事。但「哪条线」会渗进几乎所有控制点,本轮**整条不开发**,另开设计再做。摊开如下。
+  - **今天总览看的是谁(诚实)**:进度/健康灯/采集,用的是主工作区当前检出上采上来的数,通常就是远端默认主干。版本面板只是这份工作区的 `git log`,不是版本线。没有「看哪个版本」的切换,也就**不假装**在看全部版本或某一指定版本。
+  - **若做成一等能力,至少这些面都要回答「哪条线」**:总览那盏灯(1.x 绿、2.0 红混成一盏=造假);北极星/指标正本(两条线口径可能不同);采集与定时;Issue 从哪条拉出、MR 合回哪条;五阶段/交棒(1.x 已在运维、2.0 还在构建?);版本面板(这才是版本线该住的地方);产物归属;纳入时 clone/探测正本。
+  - **现在明确不做**:纳入选分支;总览版本切换;Issue 挂目标版本线;采集/信号按线切开;阶段环按线复制;整仓来回 checkout;把版本面板从提交列表改成版本线管理。第一刀若回头做,应先设计「总览一盏灯怎么诚实」,不是纳入下拉多一项。
 
 ### 待记(后续会话补)
 - _待补:步3 agent 真跑——bug① 修好后竞品分析能不能真联网出报告 + 产出 PR?_

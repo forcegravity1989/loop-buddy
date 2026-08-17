@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use bw_core::model::{verdict_contract_suffix, AgentRef, PhaseRole, SkillRef, WorkflowSpec};
 use bw_core::{ProjectId, WorkflowId};
 
+pub mod claude_bin;
 pub mod claude_cli;
 pub mod codehub;
 pub mod connectors_file;
@@ -39,8 +40,9 @@ mod unsupported_cli;
 pub mod win_cmd;
 pub mod workspace;
 
-pub use win_cmd::{std_cmd, tokio_cmd};
+pub use win_cmd::{is_windows_script, std_cmd, tokio_cmd};
 
+pub use claude_bin::{claude_binary_candidates, resolve_claude_binary};
 pub use claude_cli::{allowed_tools_arg, ClaudeCliConfig, ClaudeCliExecutor, PermissionMode};
 pub use codehub::{CodehubError, CodehubRepoRef, CodehubRepoSummary};
 pub use connectors_file::{ConnectorDef, ConnectorKind, ConnectorsFile, ConnectorsFileError};

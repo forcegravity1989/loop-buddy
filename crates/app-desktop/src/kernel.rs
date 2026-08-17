@@ -19,7 +19,8 @@ use bw_core::model::{
 };
 use bw_core::{ConversationId, MetricId, SessionId};
 use bw_engine::{
-    ClaudeCliConfig, CodehubRepoSummary, Engine, GithubRepoSummary, MockExecutor, PermissionMode,
+    resolve_claude_binary, ClaudeCliConfig, CodehubRepoSummary, Engine, GithubRepoSummary,
+    MockExecutor, PermissionMode,
 };
 use bw_store::{MetricRole, SqliteStore, Store};
 use std::collections::HashMap;
@@ -509,9 +510,9 @@ fn workspaces_root() -> std::path::PathBuf {
 /// `allow_commands`) lives in the store instead — see `Command::SetWorkspace`.
 fn claude_config_from_env() -> ClaudeCliConfig {
     let mut config = ClaudeCliConfig::default();
-    if let Ok(bin) = std::env::var("BW_CLAUDE_BIN") {
-        config.binary = Some(bin);
-    }
+    // Prefer a file that exists (exe, then npm claude.cmd). A stale
+    // BW_CLAUDE_BIN pointing at a missing bin\claude.exe must not win.
+    config.binary = resolve_claude_binary(None);
     if let Ok(cap) = std::env::var("BW_CLAUDE_MAX_BUDGET_USD") {
         if let Ok(v) = cap.parse() {
             config.max_budget_usd = v;

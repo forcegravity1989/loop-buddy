@@ -11,6 +11,7 @@
 | 本 README | V3 范围入口 | 作数 |
 | [cursor-agent-executor.md](cursor-agent-executor.md) | **V3-cursor-cli**：Issue 调度接 Cursor Agent CLI；配置面 + 最小代价接法 | **设计已记，未落地** |
 | [cowelink-web-sidecar.md](cowelink-web-sidecar.md) | **V3-cowelink-sidecar**：cowelink 长出本机网页旁路，buddy iframe 内嵌（不弹窗） | **设计已记，未落地** |
+| [onboard-list-and-claude-resolve.md](onboard-list-and-claude-resolve.md) | **V3-use-fix**：安装器/探测认 `claude.cmd` + 创建流拉 999、可搜索下拉、程序图标 | **本轮落地** |
 
 穿刺事实源（Open Design，已落地到原型进度）：[`../v2-prototype/open-design-embed-spike.md`](../v2-prototype/open-design-embed-spike.md)
 

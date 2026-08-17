@@ -47,8 +47,8 @@ use bw_core::{
 };
 use bw_engine::{
     allowed_tools_arg, build_consultation_resume_plan, build_project_context_block,
-    build_resume_plan, build_startup_plan, evidence, ClaudeCliConfig, ClaudeCliExecutor,
-    CodehubRepoSummary, ConversationMeta, Engine, GitCommit, GithubRepoSummary,
+    build_resume_plan, build_startup_plan, evidence, resolve_claude_binary, ClaudeCliConfig,
+    ClaudeCliExecutor, CodehubRepoSummary, ConversationMeta, Engine, GitCommit, GithubRepoSummary,
     InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
     PhaseNode, ProjectFile, RunCtx, RunEvent, SkillOutput, TerminalManager, UnsupportedCliExecutor,
     CLAUDE,
@@ -66,6 +66,10 @@ use std::time::Instant;
 use time::{Date, Month, OffsetDateTime, Time};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
+
+/// 「接入已有仓」一次拉多少条。搜索只过滤已加载的，所以要多拉、下拉少画
+/// （PRACTICE §4.16：30 截掉第 74 名；200 仍盖不住很多人的仓数）。
+pub const ONBOARD_REPO_LIST_LIMIT: u32 = 999;
 
 /// Top-level workspace view (only meaningful for `hub == workspace`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -7245,7 +7249,7 @@ impl App {
                     name: ACTION_NAME.into(),
                     state: ActionState::Started,
                 });
-                match bw_engine::github::list_repos(30).await {
+                match bw_engine::github::list_repos(ONBOARD_REPO_LIST_LIMIT).await {
                     Ok(repos) => {
                         self.emit(Event::ActionProgress {
                             name: ACTION_NAME.into(),
@@ -7279,7 +7283,7 @@ impl App {
                     name: ACTION_NAME.into(),
                     state: ActionState::Started,
                 });
-                match bw_engine::codehub::list_repos(&host, 30).await {
+                match bw_engine::codehub::list_repos(&host, ONBOARD_REPO_LIST_LIMIT).await {
                     Ok(repos) => {
                         self.emit(Event::ActionProgress {
                             name: ACTION_NAME.into(),
@@ -10187,19 +10191,8 @@ impl App {
                     .claude_config
                     .binary
                     .clone()
-                    .or_else(|| std::env::var("BW_CLAUDE_BIN").ok())
-                    .or_else(|| {
-                        std::env::var("APPDATA").ok().and_then(|a| {
-                            let p = std::path::PathBuf::from(a)
-                                .join("npm")
-                                .join("node_modules")
-                                .join("@anthropic-ai")
-                                .join("claude-code")
-                                .join("bin")
-                                .join("claude.exe");
-                            p.is_file().then(|| p.to_string_lossy().into_owned())
-                        })
-                    })
+                    .filter(|p| std::path::Path::new(p).is_file())
+                    .or_else(|| resolve_claude_binary(None))
                     .unwrap_or_else(|| "claude".into());
                 self.state.local_env.claude = match claude_version_probe(&binary).await {
                     Ok(v) => EnvCheck::Ok(v),
