@@ -886,6 +886,13 @@ impl InteractiveExecutor for MockInteractiveExecutor {
 /// not a hot path; `tokio::fs` would need the `fs` feature (not enabled in
 /// bw-engine's tokio dep, and Phase 1 adds no new features).
 fn write_mock_metrics_toml(cwd: &Path) -> std::io::Result<()> {
+    // No workspace (empty cwd) → nothing to write. Without this guard a mock
+    // run for a workspace-less project writes `.bw/metrics.toml` into
+    // whatever the process cwd happens to be (seen: `crates/bw-app/` during
+    // `cargo test`).
+    if cwd.as_os_str().is_empty() {
+        return Ok(());
+    }
     let bw_dir = cwd.join(".bw");
     std::fs::create_dir_all(&bw_dir)?;
     let metrics_path = bw_dir.join("metrics.toml");
