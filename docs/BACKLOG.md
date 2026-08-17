@@ -28,9 +28,10 @@
 | 11 | `crates/app-desktop/src/screens/op.rs` 继续拆 | 2026-08-17 拆出 Issue 看板/详情与内嵌终端;剩下六个面板仍在一个文件 | 每个面板一文件;`ProgressStageLegacy` 已改名(它是四个阶段的现役渲染器,不是遗留) |
 | 12 | 字体打包 | `theme.rs` 字体栈依赖系统装的中文字体(Songti/PingFang/雅黑),未打包 Noto Serif/Sans SC + JetBrains Mono(设计 token 见 `docs/archive/plan/00-PLAN.md` §6) | 打包进 app bundle,或明确「依赖系统字体」写进 README |
 | 13 | `hook_listener::uninstall_hooks_config` 未接线 | `crates/bw-app/src/hook_listener.rs:406` 有实现,只有测试在调;应用退出/卸载时不清 `~/.claude/settings.json` 里的 hook 条目 | 桌面壳退出钩子里调一次;或 SettingsHub 加「移除 hook」按钮 |
-| 14 | 内嵌终端 Windows 后端未真机验证 | `crates/bw-engine/src/pty_backend.rs::windows` 从原函数体整段搬入(+`env_clear()`),只经 `cargo check --target x86_64-pc-windows-gnu` 交叉编译核对;开发机是 macOS | 有 Windows 机器时跑 `cargo run -p bw-engine --example pty_smoke`(需把 `bash -c` 换成 `cmd /C echo pty-ok`) |
+| 14 | 内嵌终端 Windows 后端未真机验证 | `crates/bw-engine/src/pty_backend.rs::windows` 从原函数体搬入(改动四处:读 `binary` 参数、`env_clear()`、写线程、`is_finished()` 收尾,模块文档逐条列了),只经 `cargo check --target x86_64-pc-windows-gnu` 交叉编译核对;开发机是 macOS | 有 Windows 机器时跑 `cargo run -p bw-engine --example pty_smoke`(需把 `bash -c` 换成 `cmd /C echo pty-ok`) |
 | 15 | 内嵌终端首启自动提交是启发式 | `pty_backend.rs` 两平台都在首启 2000ms 后发 `\r` 提交位置 prompt(claude 交互式 TUI 不自动提交),不是就绪侦测 | 改成侦测 TUI 就绪信号(比如读到输入框提示符字节)再发;或让 claude 自己提交(`--print` 之外的官方途径) |
 | 16 | 内联单元测试的定位 | 约 1,960 行内联测试(伙伴 V1/V2 引入),CI `cargo test` 在跑;CLAUDE.md 2026-07-17 曾写「不再写/留单元测试」 | 已在 CLAUDE.md 改成如实表述:不要求写、现存的随 CI 跑、改到就顺手维护、不建回归大坝。这条留作提醒,无需再动 |
+| 17 | PTY 运行的 `completed` 与队友战绩记账太粗 | `pty_backend.rs` 两平台都在子进程退出(读到 EOF **或读错误**)后返回 `completed: true`,退出码不看;bw-app 结算把它当 `run_ok` 记进 `record_agent_run`(胜场 +1)。于是一次 I/O 断掉或 claude 非零退出也算队友「赢了一场」——「队友胜率由真实战绩算出」这条承诺在这条路径上是粗粒度的(2026-08-17 `/code-review` 抓出,评审中/完成的判定**不受影响**:评审中由 PR 轮询推导) | 收尾时把 `wait()` 拿到的退出码带回 `SkillOutput`(非零 → `completed: false`);读错误与 EOF 分开记;`record_agent_run` 只在真正 `completed` 时计胜 |
 
 ## C. 已删(不是 backlog,是收据;找不到东西时先看这里)
 

@@ -46,7 +46,7 @@ cargo run -p app-desktop          # 启动桌面应用(见下方环境变量)
 # E2E 验证(核心纪律,行为正确性的主要手段):
 BW_DB=<db> BW_OPEN=<项目名> BW_PANEL=<panel> ./target/debug/builders-workbench  # 深链启动(用环境变量直接跳到指定项目/面板),stderr [BW_BOOT]/[BW_OPEN] = 启动/渲染证明
 sqlite3 <db> "SELECT …"           # 数字一律 SQL 读回(「读回」=把数字从数据库重新查出来核对,比截图更硬)
-cargo run -p bw-engine --example pty_smoke [-- --teardown]   # 内嵌终端 PTY 后端在本机能起子进程/读回/收尾(不碰 claude、不碰网关)
+cargo run -p bw-engine --example pty_smoke [-- --teardown|--abort]   # 内嵌终端 PTY 后端在本机能起子进程/读回/收尾/被中止后不留孤儿(不碰 claude、不碰网关)
 ```
 
 **门禁(每个 commit 前全过,与 CI 完全一致;「门禁」=提交前必须全部通过的检查组)**:
@@ -109,7 +109,7 @@ app-desktop 真壳(Dioxus 0.7 hard-pin =0.7.9):kernel 桥(独立 tokio 线程)+ 
 2. **mock 必须自我标注**。MockExecutor 路径的产出带【mock】/「流程演示」字样,文档如实注明;mock 存在的唯一目的是廉价验证管线本身,绝不冒充真实执行。
 3. **E2E 验证绝不依赖网关**。验证动作 = 临时/演示 DB + 深链启动到目标面板(stderr 见 `[BW_OPEN]` 即渲染成功、无 panic)→ `sqlite3` 读回核数 → 截图存档;必要时 computer-use 驱动交互。真实 `claude -p` 执行受 GLM 网关 529 抖动影响,只在 example/监理脚本里跑,可安全重试,**不作为常绿验证手段**。
 
-   **内嵌终端在 macOS 上能跑(2026-08-17 起)**:▶跑 走的 `run_skill_pty` 在所有平台都有 PTY 后端(`bw-engine/src/pty_backend.rs`),不再是 Windows 专属;不碰 claude 的读回证据是 `cargo run -p bw-engine --example pty_smoke`(起 `bash -c 'echo pty-ok'` 读回)与 `-- --teardown`(丢输入端后进程组被连坐)。真跑 `claude` 仍受信任对话框/网关影响,不作为门禁。
+   **内嵌终端在 macOS 上能跑(2026-08-17 起)**:▶跑 走的 `run_skill_pty` 在所有平台都有 PTY 后端(`bw-engine/src/pty_backend.rs`),不再是 Windows 专属;不碰 claude 的读回证据是 `cargo run -p bw-engine --example pty_smoke`(起 `bash -c 'echo pty-ok'` 读回)、`-- --teardown`(丢输入端后进程组被连坐)与 `-- --abort`(`abort()` 丢弃 future 后子进程照样收尾——App 的「中止」走的就是这条)。真跑 `claude` 仍受信任对话框/网关影响,不作为门禁。
 
    **computer-use 摸桌面应用(2026-07-30 踩出来的坑,别重踩)**:`~/Applications/BWDev.app`(bundle id `dev.buildersworkbench.bwdev`)是长期稳定的验证壳,任何 worktree 跑一次 `./scripts/point-bwdev-here.sh`(编译 + 把最新二进制拷进这个 app)即可接上,不需要新建/重注册 app——computer-use 的 `request_access` 认的"已安装应用"名单在同一次会话里现造的新 app 认不出来,必须提前存在。**screenshot 真实可用,click/key 永久受阻**(两种打包方式——exec 转符号链接、直接拷二进制进 bundle——都测过,结果一样,是 Dioxus/wry 这层更深的窗口限制,不是权限或封装问题):验证手段因此是 `BW_HUB=<hub>` / `BW_SEL=skill:<uuid>` 等 env 深链**直接终端调用** `Contents/MacOS/bwdev-launcher`(不要用 `open -a`,env 传不进去)把目标视图摆到位,再截图,不要指望点击导航。另外,agent 自身的 `screencapture`/`Read` 拿不到真实桌面像素(sandbox 只看得到壁纸)——真实证据只能靠 computer-use 自己截图当场看,或者把上面那条命令原样给用户,让用户在自己屏幕上核验。
 4. **Done 永不自动,破坏性永不自动**(产品铁律)。run 成功只推「评审中」;「评审中」→「完成」必须来自显式 `TransitionIssue` 命令(状态机 `can_transition_to` 守卫锁死,E2E 读回 `settled_at` 抽查)。

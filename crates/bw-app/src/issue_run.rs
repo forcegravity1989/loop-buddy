@@ -892,8 +892,12 @@ impl App {
     }
 
     /// plan/17 S3 (① 中止): abort the in-flight backgrounded interactive run
-    /// on an issue. `abort` the `JoinHandle` (the `claude` subprocess is killed
-    /// via `kill_on_drop`), then close the PTY + drop the worktree guard. The
+    /// on an issue. `abort` the `JoinHandle` —— future 被丢弃时 `claude` 子进程
+    /// 也随之收尾:非 PTY 的 `run_skill` 路径靠 `tokio::process` 的
+    /// `kill_on_drop`;PTY 路径 Windows 靠 conpty-oxide 托管会话 kill-on-drop、
+    /// Unix 靠 `pty_backend::unix::ChildGuard` 的 `Drop` 按进程组杀(2026-08-17
+    /// 评审前 Unix 这条缺失,中止一次漏一个孤儿 `claude`;`pty_smoke -- --abort`
+    /// 读回为证)—— then close the PTY + drop the worktree guard. The
     /// issue STAYS `InProgress` (retryable), `settled_at` stays empty (no
     /// auto-Done, 铁律). No `finalize_run` accounting: agent/skill `uses` are NOT
     /// bumped — a cancelled run did not complete, so not counting it as a use
@@ -910,7 +914,7 @@ impl App {
             self.state.active_run = Some(ar);
             return Ok(());
         }
-        ar.handle.abort(); // drop the spawned round-loop future → kill_on_drop
+        ar.handle.abort(); // drop the spawned run future → 子进程随之收尾(见函数文档)
                            // 只关本件交付 PTY,不伤其它会话。
         if let Ok(Some(c)) = self.store.get_conversation_by_issue(ar.issue.id).await {
             self.state.terminal_manager.close(c.id);

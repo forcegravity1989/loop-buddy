@@ -701,10 +701,12 @@ pub async fn issue_state(owner_repo: &str, github_number: u32) -> Result<String,
 
 /// P7-7B (plan/13 用户故事 22, D22): read-only probe for whether an Issue's
 /// deterministic work branch (`issue_branch`) currently has an OPEN PR
-/// against it — `RefreshIssues`' GitHub drift collector uses this to catch a
-/// PR a teammate opened on their own (executors are allowed `gh pr create`;
-/// only `gh pr merge` is disallowed) without BW ever calling `open_pr` for
-/// it. Addressed purely via `--repo`, unlike `open_pr`/`adopt_existing_pr`
+/// against it. **现役调用方**(2026-08-17 起唯一一个):`Remote::open_mr_for_branch`
+/// ← bw-app `poll_interactive_inreview`(调度器每次 tick 轮询「评审中」候选,
+/// 队友自己 `gh pr create` 的 PR 就靠这条探针发现;最初为它而写的
+/// `RefreshIssues` 漂移采集器已随 2026-08-17 减负重构删除——别因为 grep 不到
+/// `RefreshIssues` 就把本函数当死码)。Executors are allowed `gh pr create`;
+/// only `gh pr merge` is disallowed. Addressed purely via `--repo`, unlike `open_pr`/`adopt_existing_pr`
 /// which run from inside a checked-out workspace — this never touches the
 /// local git state, so it's safe to call for an issue whose branch the
 /// caller hasn't (and may never) check out. `Ok(None)` = no open PR for that

@@ -342,6 +342,17 @@ impl SqliteStore {
         // the specific name (PF1-3a ①) and don't match. Storage name 是审计
         // 口径的活物,这次用户明确要 DB 读回也清楚,故走数据迁移而非 VM 派生。
         migrate_cron_collect_metrics_name(&pool).await?;
+        // 2026-08-17 减负重构:「周评注」(weekly_review)功能连命令带表一起
+        // 退役,`schema.sql` 不再建这张表。但存量库里它还在——而它的
+        // `project_id … REFERENCES project(id)` 没带 ON DELETE CASCADE,连接又
+        // 开着 `foreign_keys(true)`,`delete_project` 里那句 `DELETE FROM
+        // weekly_review` 一删,老库删项目就撞外键(/code-review 用 sqlite3
+        // 复现:FOREIGN KEY constraint failed)。按「不为向后兼容留旧路径」的
+        // 规矩,这里把旧表真删掉,而不是把 DELETE 语句加回去养着一张死表。
+        // 幂等:表不在就 no-op;它是子表,带行 DROP 也不违反外键。
+        sqlx::query("DROP TABLE IF EXISTS weekly_review")
+            .execute(&pool)
+            .await?;
 
         Ok(Self { pool })
     }

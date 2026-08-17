@@ -542,6 +542,9 @@ impl InteractiveExecutor for InteractiveCliExecutor {
         {
             let mut cmd = tokio::process::Command::new(binary);
             cmd.args(&plan.args);
+            // 与 PTY 后端同一条规矩:`plan.env` 是子进程环境的唯一来源,不清
+            // 空的话被 `build_startup_plan` 剥掉的嵌套会话变量会原样继承回去。
+            cmd.env_clear();
             for (k, v) in &plan.env {
                 cmd.env(k, v);
             }
@@ -591,6 +594,8 @@ impl InteractiveExecutor for InteractiveCliExecutor {
             // (would need xterm/gnome-terminal wrapper) — best-effort.
             let mut cmd = tokio::process::Command::new(binary);
             cmd.args(&plan.args);
+            // 同上:`plan.env` 是子进程环境的唯一来源。
+            cmd.env_clear();
             for (k, v) in &plan.env {
                 cmd.env(k, v);
             }

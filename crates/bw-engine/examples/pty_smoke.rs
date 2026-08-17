@@ -7,7 +7,8 @@
 //!
 //! ```bash
 //! cargo run -p bw-engine --example pty_smoke              # 起 bash 读回 pty-ok
-//! cargo run -p bw-engine --example pty_smoke -- --teardown # 收尾:杀整个进程组
+//! cargo run -p bw-engine --example pty_smoke -- --teardown # 收尾:丢输入端 → 杀整个进程组
+//! cargo run -p bw-engine --example pty_smoke -- --abort    # 中止:abort() 丢弃 future → 子进程也得死
 //! ```
 //!
 //! `--teardown` 场景模拟「用户关掉运行、App 丢掉输入端」:子进程是
@@ -15,10 +16,16 @@
 //! 500ms 后丢输入端,断言后端 5s 内返回、且孙进程 `sleep 30` 也被连坐——
 //! 只杀顶层 pid 的实现会让它活到自然结束。
 //!
+//! `--abort` 场景模拟 bw-app `cancel_run` 的真实做法——对跑着后端的 tokio
+//! 任务调 `JoinHandle::abort()`,future 在 `select!` 中途被丢弃、正常收尾代码
+//! 根本不会执行。断言 3s 内顶层与孙进程都没了(靠 `ChildGuard` 的 `Drop`)。
+//! 2026-08-17 评审抓出的真 bug:改前 macOS 上中止一次就漏一个孤儿 `claude`。
+//!
 //! 退出码:0 = 通过;1 = 没读到 / 后端报错 / 收尾超时或孙进程残留。stderr
 //! 打 `[PTY_SMOKE]` 行,方便脚本抓。
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use bw_engine::interactive_cli::{
     InteractiveCliExecutor, InteractiveExecutor, LaunchPlan, PtyInput,
@@ -32,22 +39,12 @@ async fn main() {
         teardown_scenario().await;
         return;
     }
-    let cwd = std::env::current_dir().expect("cwd");
-    // 与 build_startup_plan 同款:整份环境快照当子进程环境(这里不需要
-    // 剥嵌套会话变量——跑的是 bash,不是 claude)。
-    let env: HashMap<String, String> = std::env::vars().collect();
-    let plan = LaunchPlan {
-        binary: "bash".to_string(),
-        args: vec!["-c".to_string(), "echo pty-ok".to_string()],
-        env,
-        cwd,
-        // 不是 claude 首启,不需要自动按 Enter。
-        submit_prompt: false,
-    };
-    let ctx = RunCtx {
-        project: bw_core::ProjectId::nil(),
-        workflow: bw_core::WorkflowId::nil(),
-    };
+    if std::env::args().any(|a| a == "--abort") {
+        abort_scenario().await;
+        return;
+    }
+    let plan = bash_plan("echo pty-ok");
+    let ctx = nil_ctx();
 
     let (bytes_tx, mut bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (input_tx, input_rx) = mpsc::unbounded_channel::<PtyInput>();
@@ -93,39 +90,61 @@ async fn main() {
     }
 }
 
-/// 收尾场景:子进程还活着时 App 丢掉输入端 → 后端必须按进程组把子孙一起
-/// 杀掉并及时返回。用一个独一无二的 sleep 时长当标记,事后 `pgrep -f` 核对
-/// 没有残留(读回为证,不信返回值)。
-async fn teardown_scenario() {
-    let marker = format!("sleep 30.{}", std::process::id());
-    let cwd = std::env::current_dir().expect("cwd");
+/// 起 `bash -c <script>` 的启动计划。与 `build_startup_plan` 同款:整份环境
+/// 快照当子进程环境(这里不需要剥嵌套会话变量——跑的是 bash,不是 claude);
+/// 不是 claude 首启,不需要自动按 Enter。
+fn bash_plan(script: &str) -> LaunchPlan {
     let env: HashMap<String, String> = std::env::vars().collect();
-    let plan = LaunchPlan {
+    LaunchPlan {
         binary: "bash".to_string(),
-        args: vec![
-            "-c".to_string(),
-            format!("nohup {marker} >/dev/null 2>&1 & {marker}"),
-        ],
+        args: vec!["-c".to_string(), script.to_string()],
         env,
-        cwd,
+        cwd: std::env::current_dir().expect("cwd"),
         submit_prompt: false,
-    };
-    let ctx = RunCtx {
+    }
+}
+
+/// 烟测不属于任何项目/工作流,`RunCtx` 全 nil。
+fn nil_ctx() -> RunCtx {
+    RunCtx {
         project: bw_core::ProjectId::nil(),
         workflow: bw_core::WorkflowId::nil(),
-    };
+    }
+}
+
+/// 「顶层 + 一个 nohup 脱离出去的孙进程」都睡在一个独一无二的时长上,事后
+/// 用 `pgrep -f <marker>` 读回有没有残留(读回为证,不信返回值)。
+fn marked_sleep_script(marker: &str) -> String {
+    format!("nohup {marker} >/dev/null 2>&1 & {marker}")
+}
+
+fn survivors_of(marker: &str) -> String {
+    std::process::Command::new("pgrep")
+        .arg("-f")
+        .arg(marker)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// 收尾场景:子进程还活着时 App 丢掉输入端 → 后端必须按进程组把子孙一起
+/// 杀掉并及时返回。
+async fn teardown_scenario() {
+    let marker = format!("sleep 30.{}", std::process::id());
+    let plan = bash_plan(&marked_sleep_script(&marker));
+    let ctx = nil_ctx();
     let (bytes_tx, mut bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (input_tx, input_rx) = mpsc::unbounded_channel::<PtyInput>();
     let executor = InteractiveCliExecutor::new();
 
     let drain = tokio::spawn(async move { while bytes_rx.recv().await.is_some() {} });
     let dropper = tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
         drop(input_tx);
     });
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let outcome = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        Duration::from_secs(5),
         executor.run_skill_pty(&plan, &ctx, bytes_tx, input_rx),
     )
     .await;
@@ -147,16 +166,61 @@ async fn teardown_scenario() {
         }
     }
     // 读回:标记 sleep 不能还活着(顶层 + nohup 孙进程都得没了)。
-    let survivors = std::process::Command::new("pgrep")
-        .arg("-f")
-        .arg(&marker)
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
+    let survivors = survivors_of(&marker);
     if survivors.is_empty() {
         eprintln!("[PTY_SMOKE] OK — no `{marker}` survivors (process group reaped)");
     } else {
         eprintln!("[PTY_SMOKE] FAIL — survivors after teardown: {survivors}");
+        std::process::exit(1);
+    }
+}
+
+/// 中止场景:和 bw-app `cancel_run` 一模一样地 `abort()` 掉跑着后端的任务。
+/// 输入端故意一直握着——要证明的是「future 被丢弃」这一件事就足以收尾,
+/// 不靠输入端关闭那条正常路径。
+async fn abort_scenario() {
+    let marker = format!("sleep 31.{}", std::process::id());
+    let plan = bash_plan(&marked_sleep_script(&marker));
+    let (bytes_tx, mut bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (input_tx, input_rx) = mpsc::unbounded_channel::<PtyInput>();
+
+    let drain = tokio::spawn(async move { while bytes_rx.recv().await.is_some() {} });
+    let handle = tokio::spawn(async move {
+        let executor = InteractiveCliExecutor::new();
+        let ctx = nil_ctx();
+        executor
+            .run_skill_pty(&plan, &ctx, bytes_tx, input_rx)
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let alive_before = survivors_of(&marker);
+    if alive_before.is_empty() {
+        eprintln!("[PTY_SMOKE] FAIL — `{marker}` never started (nothing to abort)");
+        std::process::exit(1);
+    }
+    let started = Instant::now();
+    handle.abort();
+    // `handle.await` 得到 JoinError::Cancelled —— 正是 cancel_run 看到的样子。
+    let _ = handle.await;
+    // 收尾在独立线程上进行,最多等 3s(宽限本身 ≤200ms)。
+    let deadline = started + Duration::from_secs(3);
+    let mut survivors = survivors_of(&marker);
+    while !survivors.is_empty() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        survivors = survivors_of(&marker);
+    }
+    // 读线程随主端 EOF/EIO 退出后 `bytes_tx` 才释放、drain 才结束——也给它
+    // 一个上限,读线程没退出同样算失败(下面 survivors 非空会一起暴露)。
+    let _ = tokio::time::timeout(Duration::from_secs(3), drain).await;
+    drop(input_tx);
+    if survivors.is_empty() {
+        eprintln!(
+            "[PTY_SMOKE] OK — abort() reaped `{marker}` (was pid(s) {}) in {:?}",
+            alive_before.replace('\n', ","),
+            started.elapsed()
+        );
+    } else {
+        eprintln!("[PTY_SMOKE] FAIL — survivors after abort(): {survivors}");
         std::process::exit(1);
     }
 }
