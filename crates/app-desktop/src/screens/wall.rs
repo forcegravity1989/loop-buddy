@@ -89,7 +89,7 @@ fn LocalEnvBar(local_env: LocalEnvProbe) -> Element {
                 }
             }
             p { style: "font-size:12px;color:{ink3};line-height:1.55;margin:10px 0 0;",
-                "未测是灰、不是绿。装完请：关安装器从开始菜单重开 · codehub-cli -H open auth login · 配 SSH 公钥 · clone host 是 szv-open.codehub.huawei.com:2222（≠ API host）· claude 网关在 ~/.claude.json"
+                "未测是灰、不是绿。装完请：关安装器从开始菜单重开 · 按自己的区 `codehub-cli -H green|open|yellow auth login` · 配 SSH 公钥 · clone host 与 API host 不是同一个 · claude 网关在 ~/.claude.json"
             }
         }
     }

@@ -10372,7 +10372,34 @@ async fn claude_version_probe(binary: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// 项目墙探测：codehub-cli 在不在、open 域是否已登录。未登录如实 Fail，不装绿。
+/// Hosts `codehub-cli auth status` may list. Alias is what `-H` wants;
+/// `host_needle` matches the table URL; `label` is what the wall shows.
+const CODEHUB_AUTH_ZONES: &[(&str, &str, &str)] = &[
+    ("green", "codehub-g.huawei.com", "绿区"),
+    ("open", "open.codehub.huawei.com", "内源"),
+    ("yellow", "codehub-y.huawei.com", "黄区"),
+];
+
+/// Zones whose `auth status` row has a logged-in token. Table parse only —
+/// never returns token text. Order follows [`CODEHUB_AUTH_ZONES`].
+fn logged_in_codehub_zones(status: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for line in status.lines() {
+        let low = line.to_ascii_lowercase();
+        for (_, host, label) in CODEHUB_AUTH_ZONES {
+            if !low.contains(host) {
+                continue;
+            }
+            if low.split_whitespace().any(|w| w == "yes") {
+                out.push(*label);
+            }
+        }
+    }
+    out
+}
+
+/// 项目墙探测：codehub-cli 在不在、至少一区已登录。未登录如实 Fail，不装绿。
+/// 旧实现只打 `-H open`，黄区/绿区 token 正常也会红。
 async fn codehub_cli_probe() -> EnvCheck {
     let bin = std::env::var("USERPROFILE")
         .ok()
@@ -10385,7 +10412,7 @@ async fn codehub_cli_probe() -> EnvCheck {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "codehub-cli".into());
     let fut = bw_engine::tokio_cmd(&bin)
-        .args(["-H", "open", "project", "list", "--mine", "--limit", "1"])
+        .args(["auth", "status"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -10398,22 +10425,16 @@ async fn codehub_cli_probe() -> EnvCheck {
         Ok(Err(e)) => return EnvCheck::Fail(format!("无法运行 {bin}:{e}")),
         Ok(Ok(o)) => o,
     };
-    if output.status.success() {
-        return EnvCheck::Ok("已登录 open".into());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let zones = logged_in_codehub_zones(&stdout);
+    if !zones.is_empty() {
+        return EnvCheck::Ok(format!("已登录 {}", zones.join(" / ")));
     }
     let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let low = err.to_lowercase();
-    if low.contains("login") || err.contains("未登录") || err.contains("auth") {
-        EnvCheck::Fail(format!(
-            "未登录:先本机 `codehub-cli -H open auth login`（{err}）"
-        ))
-    } else {
-        EnvCheck::Fail(if err.is_empty() {
-            "codehub-cli 探活失败".into()
-        } else {
-            err
-        })
+    if !output.status.success() && !err.is_empty() {
+        return EnvCheck::Fail(err);
     }
+    EnvCheck::Fail("未登录任何区:先本机 `codehub-cli -H green|open|yellow auth login`".into())
 }
 
 /// Filesystem-safe slug for a project's workspace directory: ascii
@@ -12035,5 +12056,47 @@ mod inreview_poll_refresh_tests {
         assert!(!app.take_scheduler_ui_dirty());
         let _ = AppState::default().scheduler_ui_dirty;
         let _ = std::fs::remove_file(&db);
+    }
+}
+
+/// Wall「测一下」must accept any logged-in CodeHub zone, not only 内源.
+#[cfg(test)]
+mod codehub_env_probe_tests {
+    use super::logged_in_codehub_zones;
+
+    const STATUS_THREE_ROWS: &str = "\
+               HOST                  AUTH TYPE    USERNAME      TOKEN     EXPIRES AT  LOGIN          LOGIN AT           DEFAULT  ACTIVE
+  https://codehub-g.huawei.com     private-token  tester     abcd...wxyz  -           yes    2026-07-28T15:29:21+08:00
+  https://open.codehub.huawei.com  private-token  tester     efgh...ijkl  -           yes    2026-07-28T15:29:56+08:00  yes      yes
+  https://codehub-y.huawei.com     private-token  -          -            -           no     -
+";
+
+    const STATUS_YELLOW_ONLY: &str = "\
+  https://codehub-g.huawei.com     private-token  -          -            -           no     -
+  https://open.codehub.huawei.com  private-token  -          -            -           no     -
+  https://codehub-y.huawei.com     private-token  someone    abcd...wxyz  -           yes    2026-08-17T10:00:00+08:00
+";
+
+    #[test]
+    fn yellow_only_counts_as_logged_in() {
+        assert_eq!(logged_in_codehub_zones(STATUS_YELLOW_ONLY), vec!["黄区"]);
+    }
+
+    #[test]
+    fn green_and_open_both_count() {
+        assert_eq!(
+            logged_in_codehub_zones(STATUS_THREE_ROWS),
+            vec!["绿区", "内源"]
+        );
+    }
+
+    #[test]
+    fn none_logged_in_is_empty() {
+        let none = "\
+  https://codehub-g.huawei.com     private-token  -          -            -           no     -
+  https://open.codehub.huawei.com  private-token  -          -            -           no     -
+  https://codehub-y.huawei.com     private-token  -          -            -           no     -
+";
+        assert!(logged_in_codehub_zones(none).is_empty());
     }
 }
