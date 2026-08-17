@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "macos"))]
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -507,6 +508,9 @@ pub struct InteractiveCliExecutor {
     /// in real time, so this is generous. On timeout we declare
     /// `completed = true` (the user may still be working — we can't block
     /// the run forever, and the worktree's git state is the real evidence).
+    /// Only the Windows/Linux `run_skill` branches wait on the child; the
+    /// macOS branch (osascript) cannot, so the field is compiled out there.
+    #[cfg(not(target_os = "macos"))]
     timeout: Duration,
 }
 
@@ -514,6 +518,7 @@ impl InteractiveCliExecutor {
     pub fn new() -> Self {
         Self {
             claude_binary: None,
+            #[cfg(not(target_os = "macos"))]
             timeout: Duration::from_secs(60 * 60), // 1 hour
         }
     }
@@ -756,6 +761,7 @@ impl InteractiveExecutor for InteractiveCliExecutor {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 impl InteractiveCliExecutor {
     /// Wait for a spawned child process to exit, with a wall-clock timeout.
     /// On normal exit → `completed = true`. On timeout → `completed = true`

@@ -10,11 +10,6 @@
 //! [`ClaudeCliExecutor`] per call for any project that HAS configured a
 //! workspace — `workspace_path`/`allow_commands` are per-project runtime data
 //! read from the store, not something fixed at [`App::new`] time.
-//! [`Command::RunDraftWorkflow`] is the one deliberate exception: the
-//! creation flow's 体系起草 run, hard-locked to the shared Mock `Engine`
-//! forever, independent of the project's `workspace_path` (plan/14 C13, D8
-//! 回锁 — real system-drafting work belongs to the standard-Issue trio, run
-//! through the ordinary `RunIssue`/`run_workflow_inner` route instead).
 
 #![forbid(unsafe_code)]
 
@@ -373,13 +368,6 @@ pub enum Command {
     /// *definitions*, not values (collection execution is a later ticket,
     /// C7).
     SyncMetricsFile,
-    /// V2-② Phase A (§6): sync `.bw/project.toml` → SQLite `project` row.
-    /// The file is the source of truth (first-comer writes it, later-comer
-    /// reads it back); the project row's `name`/`kind`/`descr`/`benchmark`/
-    /// `opportunity` are a cache. Parallels `SyncMetricsFile` — file missing =
-    /// zero action zero noise, bad file = honest error toast, never triggers
-    /// recompute (intent fields aren't derived data).
-    SyncProjectFile,
     /// V2-②-I: list open issues on the project's remote and rebuild/refresh
     /// local issue rows (Backlog). Never creates remote issues; never writes
     /// local Done. Local rows whose remote is no longer open and that this
@@ -422,29 +410,6 @@ pub enum Command {
         title: String,
     },
     RunWorkflow {
-        session: SessionId,
-        spec: WorkflowSpec,
-    },
-    /// The creation flow's 体系起草 run (plan/14 C13, D8 回锁). Looks
-    /// identical to `RunWorkflow` from the UI's point of view — same
-    /// `Engine`/progress-event stream, same session-message trail — but
-    /// `run_workflow_inner` is told `force_mock = true`: the shared
-    /// `MockExecutor` runs it regardless of whether the active project
-    /// already has a real configured `workspace_path`.
-    ///
-    /// Without this, a project born through the GitHub-主体 creation flow
-    /// (P1 建项目即建仓, plan/13) already has a real workspace by the time
-    /// the Questions 卡 submits, so the ordinary `agent_cli == "claude-code"
-    /// && workspace_path non-empty` rule in `run_workflow_inner` would route
-    /// the drafting run to a *real* `claude -p` call — one real invocation
-    /// per phase, through the gateway, up to the $0.5/30min budget cap. That
-    /// silently violated plan/13 D8's "创建流不跑真 agent" ruling (root cause
-    /// plan/14 §「技术成因」). Real system-drafting work belongs to the
-    /// standard-Issue trio (竞品分析→找指标→绑数据, D8) instead, dispatched
-    /// through the ordinary `RunIssue`/`run_workflow_inner` route — this
-    /// command is the creation flow's *only* run path and stays mock-locked
-    /// on purpose, forever, independent of project workspace state.
-    RunDraftWorkflow {
         session: SessionId,
         spec: WorkflowSpec,
     },
@@ -893,14 +858,6 @@ pub enum Command {
         id: IssueId,
         reason: String,
     },
-    /// P7-7B (plan/13 D22): for a repo-attached project, first pulls real
-    /// GitHub state (open PRs / issue state) for its mapped, unsettled
-    /// Issues and backfills `pr_number` / derives `InReview` — **read-only**,
-    /// never rewrites GitHub, never reaches `Done` — then reloads from the
-    /// store (mirrors `RefreshHubs` for the hub library, but project-scoped).
-    /// No active project / no `remote_path` ⇒ the GitHub step is skipped
-    /// and this is the same bare local reload it always was.
-    RefreshIssues,
     SendSessionMessage {
         session: SessionId,
         text: String,
@@ -1705,107 +1662,6 @@ impl App {
         Ok(())
     }
 
-    /// P7-7B(plan/13 用户故事 22, D22 「BW 与 GitHub 永不打架」): `RefreshIssues`
-    /// used to be a bare local reload — it never looked at GitHub, so a PR a
-    /// teammate opened on its own (executors may run `gh pr create`; only
-    /// `gh pr merge` is disallowed) was invisible to BW and `MergeIssuePr`'s
-    /// two guards (`pr_number == 0` / `status != InReview`) blocked the
-    /// human's only accounting-safe merge path. This pulls real GitHub state
-    /// for the project's repo-mapped Issues and backfills it — **read-only**:
-    /// it never calls a GitHub write endpoint, never reopens/closes anything,
-    /// and never rewrites what a human did on github.com (D22: 漂移只采集、
-    /// 只展示,不反向改写). It also never reaches `Done` — that edge stays
-    /// exclusively a human `MergeIssuePr`/`TransitionIssue`; this collector's
-    /// only write is a `pr_number` backfill plus, at most, one push to
-    /// `InReview` (D3: 评审中由存在开放 PR 派生).
-    ///
-    /// 采集范围(性能口径,如实写清楚,不是"少采装作采全"): 只查
-    /// `github_number != 0 && settled_at.is_none()` 的 Issue —— 未映射到
-    /// GitHub 的 Issue 没有可采的远端状态,已 settle(Done/Cancelled 走过
-    /// 结算)的 Issue 无论采到什么都不会再改变任何东西,采了也是白跑
-    /// `gh`。这不是采样,是这个命令定义下的**全部**有意义范围;项目里
-    /// 未结算的挂仓 Issue 再多,也是逐个真实查询,不做上限截断。
-    ///
-    /// 每张候选 Issue 最多打两次 `gh`:先查活分支(`issue_branch`)是否有
-    /// 开放 PR(`open_pr_for_branch`,`--repo` 寻址,不碰本地工作区);只有
-    /// 「查到开放 PR 且当前是 InProgress」这一条真分支才会再查一次
-    /// `issue_state` 来确认 GitHub 侧的 issue 本身仍是 OPEN(不是被绕过 BW
-    /// 直接在网页关闭/wontfix)——这一步只在真要做转移判断时才发生,不对
-    /// 每张 Issue 都白打第二枪。
-    async fn collect_github_issue_drift(&mut self, project: ProjectId) -> Result<(), AppError> {
-        let proj = self
-            .store
-            .get_project(project)
-            .await?
-            .ok_or(AppError::NotFound)?;
-        let remote = proj.remote_path.trim().to_string();
-        if remote.is_empty() {
-            // 无仓项目:整段跳过,今天的行为逐字节不变。
-            return Ok(());
-        }
-        let candidates: Vec<_> = self
-            .store
-            .list_issues(project, None, None)
-            .await?
-            .into_iter()
-            .filter(|i| i.github_number != 0 && i.settled_at.is_none())
-            .collect();
-        for issue in candidates {
-            let branch = bw_engine::github::issue_branch(issue.github_number);
-            let open_pr = match bw_engine::github::open_pr_for_branch(&remote, &branch).await {
-                Ok(v) => v,
-                Err(e) => {
-                    // gh 调用失败 = 如实降级:该 issue 保持原状,诚实 toast,
-                    // 不阻断这一轮其它 issue 的采集(同 sync_issue_to_github
-                    // 的软降级口径)。
-                    self.emit(Event::ConnectorSynced {
-                        name: format!("#{} · GitHub 采集", issue.number),
-                        ok: false,
-                        detail: format!("查活分支 PR 状态失败,该活保持原状:{e}"),
-                    });
-                    continue;
-                }
-            };
-            let Some(pr) = open_pr else {
-                continue; // 没有开放 PR——真实状态,什么都不改。
-            };
-            if pr != issue.pr_number {
-                self.store.set_issue_pr_number(issue.id, pr).await?;
-            }
-            if issue.status != IssueStatus::InProgress {
-                // 已经在评审中/其它状态,pr_number 已经如实回填,不需要再
-                // 判断转移(且绝不会从这里走到 Done)。
-                continue;
-            }
-            match bw_engine::github::issue_state(&remote, issue.github_number).await {
-                Ok(state) if state.eq_ignore_ascii_case("OPEN") => {
-                    // D3: 评审中由「存在开放 PR」派生。走既有 TransitionIssue
-                    // 命令复用其 can_transition_to 守卫,不新开一条转移路径。
-                    Box::pin(self.dispatch(Command::TransitionIssue {
-                        id: issue.id,
-                        status: IssueStatus::InReview,
-                    }))
-                    .await?;
-                }
-                Ok(_) => {
-                    // GitHub 侧 issue 已经不是 OPEN(例如被人绕过 BW 直接在
-                    // 网页关闭)——只展示、不处理:D22 铁律,漂移只采集不
-                    // 反向改写,也不擅自把它推进 InReview。
-                }
-                Err(e) => {
-                    self.emit(Event::ConnectorSynced {
-                        name: format!("#{} · GitHub 采集", issue.number),
-                        ok: false,
-                        detail: format!(
-                            "pr_number 已回填,但核对 issue 状态失败,暂不转评审中,可重试:{e}"
-                        ),
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
     async fn refresh_activity(&mut self) -> Result<(), AppError> {
         self.state.recent_activity = self.store.list_recent_handoffs(50).await?;
         Ok(())
@@ -2165,21 +2021,13 @@ impl App {
     }
 
     /// Shared by `Command::RunWorkflow`, `Command::RunHubWorkflow`,
-    /// `Command::RunDraftWorkflow`, and `tick_scheduler`'s real auto-fire —
+    /// `Command::RunStagePlaybook` and `tick_scheduler`'s real auto-fire —
     /// they differ only in how `spec` was obtained (a hub lookup + a `uses`
-    /// bump, or a hard mock lock) and look identical once they have one.
+    /// bump) and look identical once they have one.
     /// `project` is explicit (not read off `self.state.active_project`) so a
     /// background scheduler fire can run a workflow against its *bound*
     /// project without touching — let alone hijacking — whatever project the
     /// user currently has open.
-    ///
-    /// `force_mock` (plan/14 C13, D8 回锁): when `true`, the engine-selection
-    /// step below is skipped entirely and this run executes on the shared
-    /// `MockExecutor` no matter what `agent_cli`/`workspace_path` would
-    /// otherwise select — the creation flow's *only* caller of this bool.
-    /// Every other caller passes `false`, preserving the pre-existing
-    /// "workspace configured → real executor" routing byte-for-byte (most
-    /// notably `RunIssue`, which must keep routing to the real executor).
     #[allow(clippy::too_many_arguments)]
     async fn run_workflow_inner(
         &mut self,
@@ -2189,7 +2037,6 @@ impl App {
         trigger: RunTrigger,
         cron_task_id: Option<CronTaskId>,
         issue_id: Option<IssueId>,
-        force_mock: bool,
         // plan/17 S2: isolated per-issue worktree for the executor + evidence
         // + PR tail. None = main workspace (pre-S2 behavior; every caller
         // except run_issue_body passes None). run_issue_body passes its
@@ -2215,7 +2062,6 @@ impl App {
                 trigger,
                 cron_task_id,
                 issue_id,
-                force_mock,
                 issue_worktree,
             )
             .await?;
@@ -2268,7 +2114,6 @@ impl App {
         trigger: RunTrigger,
         cron_task_id: Option<CronTaskId>,
         issue_id: Option<IssueId>,
-        force_mock: bool,
         issue_worktree: Option<&Path>,
     ) -> Result<PreparedRun, AppError> {
         let p = project;
@@ -2328,7 +2173,6 @@ impl App {
             &agent_cli,
             &agent_tools,
             allowed_tools.as_deref(),
-            force_mock,
         );
 
         // The review gate: the FIRST Evaluator phase (T8's real `role`, not a
@@ -2368,46 +2212,36 @@ impl App {
         // builds the same fresh one-shot executor, just owned rather than
         // borrowed. Inline path passes it by `&` into `run_round_loop`.
         //
-        // plan/14 C13 (D8 回锁): `force_mock` short-circuits everything below —
-        // checked BEFORE the `agent_cli` match, so the creation flow's drafting
-        // run never reaches real-executor selection no matter what workspace
-        // the active project has. Every other caller (`RunIssue` included)
-        // passes `force_mock = false` and falls through unchanged.
-        //
-        // T6 (plan/12 §3): the `agent_cli` match happens FIRST (once past the
-        // force_mock gate), before the mock/real branch below — an unsupported
+        // T6 (plan/12 §3): the `agent_cli` match happens FIRST, before the
+        // mock/real branch below — an unsupported
         // CLI ("codex"/"cursor"/…) routes to the honest `UnsupportedCliExecutor`
         // regardless of whether this project even has a real workspace
         // configured. Only `"claude-code"` (the default for an unassigned
         // issue or any other caller) reaches the existing mock-vs-real split,
         // unchanged.
-        let engine: Engine = if force_mock {
-            self.mock_engine.clone()
-        } else {
-            match agent_cli.as_str() {
-                "claude-code" => {
-                    if proj.workspace_path.trim().is_empty() {
-                        self.mock_engine.clone()
-                    } else {
-                        let executor = ClaudeCliExecutor::new(
-                            self.state.claude_config.clone(),
-                            issue_worktree
-                                .map(PathBuf::from)
-                                .unwrap_or_else(|| PathBuf::from(proj.workspace_path.trim())),
-                            proj.allow_commands,
-                            agent_tools.clone(),
-                        );
-                        Engine::new(Arc::new(executor))
-                    }
-                }
-                other => {
-                    // 诚实报错,绝不静默回落到 claude-code:本机没有为 codex/cursor
-                    // 等值接好真实执行器。Reuses the `Executor` trait seam — this
-                    // executor's first (and only) call errors, and the existing
-                    // "executor failed → settle Failed" path records it honestly.
-                    let executor = UnsupportedCliExecutor::new(other.to_string());
+        let engine: Engine = match agent_cli.as_str() {
+            "claude-code" => {
+                if proj.workspace_path.trim().is_empty() {
+                    self.mock_engine.clone()
+                } else {
+                    let executor = ClaudeCliExecutor::new(
+                        self.state.claude_config.clone(),
+                        issue_worktree
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from(proj.workspace_path.trim())),
+                        proj.allow_commands,
+                        agent_tools.clone(),
+                    );
                     Engine::new(Arc::new(executor))
                 }
+            }
+            other => {
+                // 诚实报错,绝不静默回落到 claude-code:本机没有为 codex/cursor
+                // 等值接好真实执行器。Reuses the `Executor` trait seam — this
+                // executor's first (and only) call errors, and the existing
+                // "executor failed → settle Failed" path records it honestly.
+                let executor = UnsupportedCliExecutor::new(other.to_string());
+                Engine::new(Arc::new(executor))
             }
         };
 
@@ -5032,7 +4866,6 @@ impl App {
                                 RunTrigger::Scheduled,
                                 Some(c.id),
                                 None,
-                                false,
                                 None,
                             )
                             .await;
@@ -5102,7 +4935,6 @@ impl App {
                     RunTrigger::Scheduled,
                     Some(c.id),
                     None,
-                    false,
                     None,
                 )
                 .await;
@@ -8094,11 +7926,6 @@ impl App {
                 self.sync_connectors_file_for(p).await?;
             }
 
-            Command::SyncProjectFile => {
-                let p = self.active()?;
-                self.sync_project_file_for(p).await?;
-            }
-
             Command::SyncRemoteIssues => {
                 let p = self.active()?;
                 self.sync_remote_issues_for(p, true).await?;
@@ -8147,35 +7974,8 @@ impl App {
 
             Command::RunWorkflow { session, spec } => {
                 let p = self.active()?;
-                self.run_workflow_inner(
-                    p,
-                    session,
-                    spec,
-                    RunTrigger::Manual,
-                    None,
-                    None,
-                    false,
-                    None,
-                )
-                .await?;
-            }
-
-            // plan/14 C13 (D8 回锁): the creation flow's drafting run —
-            // force_mock=true is the ONLY thing that distinguishes this from
-            // `RunWorkflow` above; see the command's doc comment for why.
-            Command::RunDraftWorkflow { session, spec } => {
-                let p = self.active()?;
-                self.run_workflow_inner(
-                    p,
-                    session,
-                    spec,
-                    RunTrigger::Manual,
-                    None,
-                    None,
-                    true,
-                    None,
-                )
-                .await?;
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, None)
+                    .await?;
             }
 
             Command::RunStagePlaybook {
@@ -8216,17 +8016,8 @@ impl App {
                     workspace_hint,
                 };
                 let spec = stage_workflow_with_playbook(stage_kind, &ctx);
-                self.run_workflow_inner(
-                    p,
-                    session,
-                    spec,
-                    RunTrigger::Manual,
-                    None,
-                    None,
-                    false,
-                    None,
-                )
-                .await?;
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, None)
+                    .await?;
             }
 
             Command::RefreshHubs => {
@@ -8333,17 +8124,8 @@ impl App {
                     .ok_or(AppError::NotFound)?;
                 self.store.record_workflow_use(workflow_id).await?;
                 self.refresh_workflow_specs().await?;
-                self.run_workflow_inner(
-                    p,
-                    session,
-                    spec,
-                    RunTrigger::Manual,
-                    None,
-                    None,
-                    false,
-                    None,
-                )
-                .await?;
+                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, None)
+                    .await?;
             }
 
             Command::RunIssue { session, id } => {
@@ -10004,17 +9786,6 @@ impl App {
                 self.emit(Event::IssuesChanged);
             }
 
-            Command::RefreshIssues => {
-                // P7-7B (D22): 先真采 GitHub、再本地刷新——无活跃项目/无
-                // remote_path 的项目在 collect_github_issue_drift 内部短
-                // 路跳过,行为与升级前逐字节一致。
-                if let Some(p) = self.state.active_project {
-                    self.collect_github_issue_drift(p).await?;
-                }
-                self.refresh_issues().await?;
-                self.emit(Event::IssuesChanged);
-            }
-
             Command::SendSessionMessage { session, text } => {
                 self.store
                     .append_message(session, Author::Builder, &text)
@@ -11019,19 +10790,12 @@ fn cron_prompt_workflow(name: String, prompt: String) -> WorkflowSpec {
 /// parameters read back from `params_json` regardless of whether the
 /// executor call itself ever completes (an `UnsupportedCliExecutor` errors
 /// on its very first call; a real `claude -p` call may hit a flaky gateway).
-///
-/// `force_mock` (plan/14 C13) is recorded verbatim so an E2E readback can
-/// prove a creation-flow drafting run never had a chance to reach the real
-/// executor, independent of what `agent_cli`/`workspace_path` say — "报告不
-/// 代答,读回为证" applies to the routing decision itself, not just the run's
-/// outcome.
 fn run_params_snapshot(
     spec: &WorkflowSpec,
     trigger: RunTrigger,
     agent_cli: &str,
     tools: &[String],
     allowed_tools_arg: Option<&str>,
-    force_mock: bool,
 ) -> String {
     // serde_json::Value keeps this stable as the spec grows — adding a field
     // later is additive, not a schema break on historical run rows.
@@ -11053,7 +10817,6 @@ fn run_params_snapshot(
         "agent_cli": agent_cli,
         "tools": tools,
         "allowed_tools_arg": allowed_tools_arg,
-        "force_mock": force_mock,
     });
     v.to_string()
 }
