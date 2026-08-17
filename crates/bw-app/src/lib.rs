@@ -30,10 +30,10 @@ use bw_core::model::{
     workflow_parse_contract_suffix, AgentCard, AgentRef, Artifact, Author, Cadence, Connector,
     ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus,
     KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, PhaseRole, Readiness,
-    RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, Verdict,
-    WorkflowKind, WorkflowSpec, BW_PROJECT_ASSETS_LIBRARY, BW_STANDARD_LIBRARY,
-    CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO,
-    CONNECTOR_KIND_GIT_REPO, CONNECTOR_KIND_SCRIPT,
+    RunStatus, RunTrigger, SkillCard, SkillRef, SourceKind, StageKind, Verdict, WorkflowKind,
+    WorkflowSpec, BW_PROJECT_ASSETS_LIBRARY, BW_STANDARD_LIBRARY, CONNECTOR_KIND_CLAUDE_CLI,
+    CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO, CONNECTOR_KIND_GIT_REPO,
+    CONNECTOR_KIND_SCRIPT,
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
@@ -222,14 +222,6 @@ pub enum Command {
         target: String,
         amber: AmberBand,
         value: String,
-    },
-    /// Week-plan edit: new target + this week's driver. No value is touched;
-    /// recompute re-derives against the new target.
-    UpdateWeekPlan {
-        metric: MetricId,
-        new_target: String,
-        last_target: String,
-        driver: String,
     },
     /// 停用(归档)或恢复一条指标 —— 指标退役的唯一产品路径,**没有物理
     /// 删除**。`observation` 是 append-only 的:硬删 metric 行要么级联抹掉
@@ -447,12 +439,6 @@ pub enum Command {
     CancelRun {
         id: IssueId,
     },
-    /// Reload the hub library (`workflow_specs`/`skills`/`agents`) from the
-    /// store. Called at `Boot`; also dispatchable standalone for a manual
-    /// refresh. Deliberately separate from `Boot` — hub data has nothing to
-    /// do with project-signal staleness, so this keeps `Boot`'s own contract
-    /// unchanged.
-    RefreshHubs,
     CreateWorkflowSpec {
         id: WorkflowId,
         name: String,
@@ -862,10 +848,6 @@ pub enum Command {
         session: SessionId,
         text: String,
     },
-    AnnotateWeeklyReview {
-        human_override: Option<Signal>,
-        reason: String,
-    },
     OpenProject(ProjectId),
     /// Delete a project and everything scoped to it. The CRUD-completeness
     /// counterpart to `CreateProject` — irreversible; the UI is responsible
@@ -940,7 +922,6 @@ pub enum Event {
     },
     WorkflowDone,
     WorkflowFailed(String),
-    WeeklyReviewAnnotated,
     StageHandoff {
         from: StageKind,
         to: StageKind,
@@ -7263,22 +7244,6 @@ impl App {
                 self.emit(Event::ProjectUpdated(p));
             }
 
-            Command::UpdateWeekPlan {
-                metric,
-                new_target,
-                last_target,
-                driver,
-            } => {
-                let p = self.active()?;
-                self.store
-                    .update_week_plan(metric, &new_target, &last_target, &driver)
-                    .await?;
-                // The target moved ⇒ the same value may now mean a different
-                // signal. Re-derive; never patch by hand.
-                self.store.recompute_signals(p, now()).await?;
-                self.emit(Event::ProjectUpdated(p));
-            }
-
             Command::SetMetricArchived { metric, archived } => {
                 let p = self.active()?;
                 // 作用域守卫:只能停用/恢复当前项目自己的指标。指标跟着项目
@@ -8018,12 +7983,6 @@ impl App {
                 let spec = stage_workflow_with_playbook(stage_kind, &ctx);
                 self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, None)
                     .await?;
-            }
-
-            Command::RefreshHubs => {
-                self.refresh_workflow_specs().await?;
-                self.refresh_skills().await?;
-                self.refresh_agents().await?;
             }
 
             Command::CreateWorkflowSpec {
@@ -9807,31 +9766,6 @@ impl App {
                 });
             }
 
-            Command::AnnotateWeeklyReview {
-                human_override,
-                reason,
-            } => {
-                let p = self.active()?;
-                let derived = self
-                    .store
-                    .persisted_signals(p)
-                    .await?
-                    .project
-                    .unwrap_or(Signal::Unknown);
-                // MVP rule (plan §2.5): an override may only be *more* pessimistic.
-                if let Some(ov) = human_override {
-                    if severity(ov) < severity(derived) {
-                        return Err(AppError::Invalid(
-                            "周复盘 override 只能更悲观,不能更乐观".into(),
-                        ));
-                    }
-                }
-                self.store
-                    .annotate_weekly_review(p, now(), derived, human_override, &reason)
-                    .await?;
-                self.emit(Event::WeeklyReviewAnnotated);
-            }
-
             Command::OpenProject(id) => {
                 let proj = self
                     .store
@@ -10910,17 +10844,6 @@ fn project_file_sync(
         brief: file.brief.clone(),
         benchmark: file.benchmark.clone(),
         opportunity: file.opportunity.clone(),
-    }
-}
-
-/// Worse signals sort higher. `Unknown` sits between green and amber — more
-/// pessimistic than green, less than a known amber.
-fn severity(s: Signal) -> u8 {
-    match s {
-        Signal::Green => 0,
-        Signal::Unknown => 1,
-        Signal::Amber => 2,
-        Signal::Red => 3,
     }
 }
 

@@ -709,16 +709,6 @@ pub trait Store: Send + Sync {
     /// recompute 重新派生。调用方负责在其后触发 recompute,好让项目/阶段的
     /// 上卷把这条的进/出反映出来。
     async fn set_metric_archived(&self, metric: MetricId, archived: bool) -> Result<()>;
-    /// Week-plan edit: update a metric's target + this week's driver, keeping
-    /// the previous target as `last_target`. Touches no value and no signal —
-    /// recompute re-derives against the new target.
-    async fn update_week_plan(
-        &self,
-        metric: MetricId,
-        new_target: &str,
-        last_target: &str,
-        driver: &str,
-    ) -> Result<()>;
     /// Append-only — the sole birthplace of a value.
     async fn append_observation(
         &self,
@@ -764,18 +754,6 @@ pub trait Store: Send + Sync {
     /// **The sole signal writer** — reads observations + targets, derives via
     /// `bw_core`, writes every `signal` / `hit` cache for the project.
     async fn recompute_signals(&self, project_id: ProjectId, now: OffsetDateTime) -> Result<()>;
-
-    /// Record a weekly-review snapshot. `derived` is the machine truth; an
-    /// optional `human_override` is stored *alongside* it (never overwriting) so
-    /// the divergence stays auditable (plan `§2.5`).
-    async fn annotate_weekly_review(
-        &self,
-        project_id: ProjectId,
-        week_of: OffsetDateTime,
-        derived: Signal,
-        human_override: Option<Signal>,
-        reason: &str,
-    ) -> Result<()>;
 
     // reads
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>>;

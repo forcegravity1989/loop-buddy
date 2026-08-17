@@ -931,10 +931,6 @@ impl Store for SqliteStore {
             .bind(&p)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM weekly_review WHERE project_id=?")
-            .bind(&p)
-            .execute(&mut *tx)
-            .await?;
         sqlx::query("DELETE FROM handoff WHERE project_id=?")
             .bind(&p)
             .execute(&mut *tx)
@@ -1244,26 +1240,6 @@ impl Store for SqliteStore {
         // 留着一个陈旧的停用时刻会让人误以为它还停着。
         .bind(if archived { Some(t) } else { None })
         .bind(t)
-        .bind(metric.uuid().to_string())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn update_week_plan(
-        &self,
-        metric: MetricId,
-        new_target: &str,
-        last_target: &str,
-        driver: &str,
-    ) -> Result<()> {
-        sqlx::query(
-            "UPDATE metric SET target_raw=?, last_target=?, driver=?, updated_at=?, rev=rev+1 WHERE id=?",
-        )
-        .bind(new_target)
-        .bind(last_target)
-        .bind(driver)
-        .bind(now_unix())
         .bind(metric.uuid().to_string())
         .execute(&self.pool)
         .await?;
@@ -1588,30 +1564,6 @@ impl Store for SqliteStore {
         .execute(&self.pool)
         .await?;
 
-        Ok(())
-    }
-
-    async fn annotate_weekly_review(
-        &self,
-        project_id: ProjectId,
-        week_of: OffsetDateTime,
-        derived: Signal,
-        human_override: Option<Signal>,
-        reason: &str,
-    ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO weekly_review (id, project_id, week_of, derived_signal, human_override, override_reason, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind(pid(project_id))
-        .bind(week_of.unix_timestamp())
-        .bind(sig_text(derived))
-        .bind(human_override.map(sig_text))
-        .bind(reason)
-        .bind(now_unix())
-        .execute(&self.pool)
-        .await?;
         Ok(())
     }
 
