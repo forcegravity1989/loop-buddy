@@ -299,6 +299,7 @@ dependencies = [
  "async-trait",
  "bw-core",
  "conpty-oxide",
+ "nix",
  "portable-pty",
  "serde",
  "serde_json",

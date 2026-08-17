@@ -33,6 +33,7 @@ pub mod interactive_cli;
 pub mod metrics_file;
 mod mock;
 pub mod project_file;
+pub mod pty_backend;
 pub mod remote;
 mod terminal_manager;
 mod unsupported_cli;

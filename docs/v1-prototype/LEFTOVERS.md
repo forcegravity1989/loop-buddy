@@ -294,6 +294,8 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 **事实源**：`crates/bw-engine/src/interactive_cli.rs`（`run_skill_pty` 的 `#[cfg(windows)]` L686、trait 默认实现「PTY not supported」L517、macOS `osascript` 分支 L608、`wait_child` 超时宣告 completed L809）、`crates/bw-app/src/lib.rs`（`run_issue_interactive` 按 `pty_enabled` 二选一 L5225）、`crates/app-desktop/src/kernel.rs:573`（无条件 `.with_pty()`）、`crates/bw-engine/Cargo.toml`（`portable-pty` non-Windows keepalive）。
 
+**2026-08-17 更新（减负重构会话，`docs/superpowers/specs/2026-08-17-debt-reduction-refactor-design.md` §2.4）**：未决点 1 已解——PTY 平台分叉抽成 `crates/bw-engine/src/pty_backend.rs`（Windows 仍 conpty-oxide；macOS/Linux 用 portable-pty，收尾按进程组杀），`run_skill_pty` 在所有平台都有实现。读回证据：`cargo run -p bw-engine --example pty_smoke`（起 `bash -c 'echo pty-ok'` 读回字节）与 `-- --teardown`（丢输入端后 5s 内返回、`nohup` 孙进程被连坐）在 macOS 上通过。未决点 2（`run_skill` 的 macOS 分支）此前已改成如实报 `completed = false`；未决点 3（错误人话映射）随 PTY 后端落地后不再是 macOS 的主路径问题，剩余情形见 `docs/BACKLOG.md`。真跑 `claude` 仍受信任对话框/网关影响，不作为门禁。
+
 ---
 
 ## 索引 · 穿刺修复批次 1（cowelink W1 穿刺 7 条反馈）
