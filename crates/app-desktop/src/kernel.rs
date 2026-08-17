@@ -633,29 +633,10 @@ pub fn spawn() -> Kernel {
                 if let Err(e) = app.dispatch(Command::Boot).await {
                     let _ = note_tx.send(UiNote::Error(e.to_string()));
                 }
-
-                // T14 (2026-07-24, plan/12 §10 v1.1): real-daily-DB one-shot
-                // legacy-shell migration — dispatched right after `Boot` with
-                // the real DB path this thread already opened the store
-                // from (see `Command::MigrateLegacyShellsIfNeeded`'s doc
-                // comment for why it's threaded in rather than read off the
-                // store). A fresh DB, or one already migrated, is a true
-                // no-op inside the handler; failure surfaces as a
-                // `UiNote::Error` the same way any other dispatch failure
-                // does — never a boot-blocking panic. `[BW_MIGRATE]` stderr
-                // line is this ticket's own render/readback proof, same
-                // discipline as `[BW_OPEN]`/`[BW_HUB]` below and in
-                // `main.rs`.
-                if let Err(e) = app
-                    .dispatch(Command::MigrateLegacyShellsIfNeeded {
-                        db_path: real_db_path.clone(),
-                    })
-                    .await
-                {
-                    let _ = note_tx.send(UiNote::Error(e.to_string()));
-                }
+                // Boot readback proof (same discipline as `[BW_OPEN]`/`[BW_HUB]`
+                // below and in `main.rs`): the hub library the UI will render.
                 eprintln!(
-                    "[BW_MIGRATE] skills={} agents={}",
+                    "[BW_BOOT] skills={} agents={}",
                     app.snapshot().skills.len(),
                     app.snapshot().agents.len()
                 );
