@@ -92,6 +92,55 @@ iterations/                  只剩 PRACTICE-buddy.md(伙伴的实践日志,原�
 6. 拆分切片(lib.rs / op.rs 机械拆分)
 7. 终审:全门禁 + 新库深链启动(`[BW_OPEN]` 日志)+ `/code-review`
 
-## 5. 执行实录(执行时回填)
+## 5. 执行实录(2026-08-17,回填)
 
-(见文末追加。)
+分支 `claude/debt-reduction-refactor-2026-08-17`,**未 push、未开 PR**(用户没要求;下一步由用户决定)。全仓 Rust 60,195 行 → 49,555 行(−10,640,约 −18%;含评审跟进补回的约 150 行守卫/写线程/烟测);`git diff --shortstat main...HEAD`:157 files, +12,260 / −22,596。八个 commit(七个减负切片 + 一个评审跟进),每个都过全门禁(fmt / clippy -D warnings / wasm32×2 / guard-kernel-ui-free / app-desktop check / cargo test)。
+
+| 片 | commit | 做了什么 | 读回证据 |
+|---|---|---|---|
+| 设计稿 | 8afe395 | 本文 | — |
+| 死码切片 | 838590c | 删 `checkout_issue_branch`、`Command::SyncProjectFile`/`RefreshIssues`/`RunDraftWorkflow`、GitHub 漂移采集器、`drafting_workflow`;−931 行 | 门禁绿;grep 零引用 |
+| mock 写守卫 | 1b5bca1 | 无工作区时 MockInteractiveExecutor 不再往进程 cwd 写 `.bw/metrics.toml`(`cargo test` 曾在 `crates/bw-app/` 留下脏文件) | 重跑 `cargo test` 后 `git status` 干净 |
+| 示例切片 | 159359c | `crates/bw-app/examples/` 41 → 12 个 .rs(删 29 个一次性验证脚本)+ 随之孤儿化的 `UpdateWeekPlan`/`RefreshHubs`/`AnnotateWeeklyReview` 与 `weekly_review` 表(无读者);−9,682 行 | 保留清单进 DEVELOPMENT.md;删前逐个 grep 零引用 |
+| 迁移切片 | 1ed62db | 删 `legacy_migration.rs` + `MigrateLegacyShellsIfNeeded` + kernel 启动派发;−843 行 | 真实日常库 `app_meta` 四个 done 标记全在(只读查询);新库本就 no-op;`[BW_MIGRATE]` 日志改为 `[BW_BOOT] skills=N agents=M` |
+| 终端切片 | 748e514 | 新 `bw-engine/src/pty_backend.rs`(PtyBackend trait;Windows conpty 整段搬入;Unix portable-pty + `nix::killpg` 进程组收尾);`run_skill_pty` 全平台委托;两后端 `env_clear()` 让 `plan.env` 真成唯一环境来源;修「读循环先结束再 await JoinHandle 会 panic」;新 `examples/pty_smoke.rs`(+`--teardown`);LEFTOVERS V1-P1 追加处置段 | macOS:`pty_smoke` 读回 `pty-ok`(8 字节);`--teardown` ~700ms 返回、`pgrep` 无孙进程残留;`cargo check --target x86_64-pc-windows-gnu -p bw-engine` 过(Windows 未真机) |
+| 文档切片 | 2182b2c | 新 README.md / docs/README.md / docs/BACKLOG.md / docs/archive/README.md;`plan/` 只留 7 篇,其余 + iterations(除 PRACTICE-buddy)+ design + verification + docs/*.png + superpowers/plans + make_demo_video.py → `docs/archive/`(git mv);无横幅的归档件补横幅;plan/README 重写、plan/08 加状态注;CLAUDE.md 导航三层化 + 单测口径如实化 + 门禁补 cargo test + 架构表刷新;DEVELOPMENT.md 加 headless 例子清单;AGENTS/Cargo.toml/CONTEXT.md(产品名条目)/.gitignore;三处「未 push」纠正;`crates/app-web/` 删 | 仓内 markdown 相对链接全查:现役文档零断链 |
+| 拆分切片 | 9aa0cbf | `bw-app/src/lib.rs` 11,100 → 1,680 行,拆成 command/dispatch/issue_run/terminal/scheduler/metrics/project_sync/prompts/workflow_engine 九个子模块(`use super::*` + 分散 `impl App`,被搬私有方法改 `pub(crate)`);`op.rs` 4,148 → 2,805 行,拆出 `op/issues.rs`(993)与 `op/terminal_widget.rs`(363);`ProgressStageLegacy` → `ProgressStageGeneric` | 行多重集比对:旧 lib.rs 与新十文件逐行 1:1(仅 10 个签名因 `pub(crate)` 超长被 rustfmt 换行);cargo test 通过数与拆前一致 |
+| 评审跟进 | 9d1c7f2 | `/code-review` 抓出的 15 条处理 13 条(下节);新 `pty_smoke -- --abort` 场景;`weekly_review` 旧表 DROP 迁移;两平台 PTY 写线程;`ChildGuard` 收尾守卫 | `--abort`:abort() 后 87ms 顶层+孙进程全消失(pgrep 读回);demo.db 副本:插 weekly_review 行 → 删项目撞外键(错误 19)→ 新代码开一次 → 表没了、项目 2 条原样;门禁绿 + Windows 交叉编译 check |
+
+**终审(2026-08-17)**:
+- 全门禁绿(含 `cargo test --workspace --exclude app-desktop`,66 个测试通过)。
+- 新库深链启动:`BW_DB=<空库> BW_HUB=skill` → stderr `[BW_BOOT] skills=11 agents=5` + `[BW_HUB] "skill" -> Skill`;sqlite 读回 21 张表、skill=11、agent=5、无 `weekly_review` 表;无 panic。
+- 老库(`e2e/fixtures/demo.db`,2026-07-25)深链:`BW_OPEN=linkcheck-md BW_PANEL=issues` → `[BW_OPEN] "linkcheck-md" -> view=App panel=Issues projects=2 issues=3`;`PRAGMA table_info(issue)` 读回后加的列(github_number/pr_number/standard_skill…)全在(add_column_if_missing 守卫在工作);issue 状态 todo/in_review/done 各 1 未被自动推进;`settled_at` 只有 done 那条非空。
+- 拆分脚本踩过一次坑:按「fn 行到下一 fn 行」切被多行签名坑(切在参数中间),改成「见到第一个 `{` 后配对到 depth 0」+ 空隙检查后零空隙落盘;写进 commit message 供下次拆分借鉴。
+- `/code-review`:见下「评审结果」——抓出 3 条真 bug,已在第八个 commit(9d1c7f2)修掉。
+
+**评审结果(`/code-review`,xhigh:7 个发现角度 → 逐条核实 → 一轮补漏;子代理全用 sonnet)**:
+
+15 条上报,按严重度排,前四条是真 bug,全部有读回证据;第 5、7 条如实留下;其余是文档/清理。
+
+| # | 在哪 | 是什么(人话) | 核实 | 处置 |
+|---|---|---|---|---|
+| 1 | `bw-store/sqlite.rs` `delete_project` | 「周评注」表退役后老库里表还在,外键开着,删项目就撞外键 | 确认(sqlite3 复现错误 19) | 修:open() 里 `DROP TABLE IF EXISTS weekly_review`,老库真删旧表 |
+| 2 | `bw-app/issue_run.rs` `cancel_run` | macOS 上「中止」用 abort() 丢弃 future,Unix 后端收尾代码跑不到,`claude` 变孤儿 | 确认(读源码 + portable-pty 源码;conpty-oxide 侧托管会话本就 kill-on-drop) | 修:`ChildGuard` 的 Drop 在独立线程按进程组收尾;`pty_smoke -- --abort` 87ms 内全消失 |
+| 3 | `bw-engine/pty_backend.rs` 写键盘字节 | 同步阻塞写跑在桌面壳的 current_thread 运行时上,子进程不读 + 大段粘贴 = 整个内核卡死 | 确认(kernel.rs `new_current_thread` + portable-pty 无 O_NONBLOCK) | 修:两平台都改写线程 |
+| 4 | `pty_backend.rs` 早退错误路径 | 只 kill 不 wait,留僵尸 | 确认 | 修:统一走 `ChildGuard` |
+| 5 | `pty_backend.rs` 读循环 | 读错误与正常 EOF 都返回 completed:true、退出码不看,上层记成队友一场胜利 | 大概率(评审中/完成判定不受影响,由 PR 轮询推导) | **留**:BACKLOG 第 17 条,不在本次改语义 |
+| 6 | `interactive_cli.rs` `run_skill` 回退路径 | Windows/Linux `tokio::process` 分支没 `env_clear()`,剥掉的嵌套会话变量漏回子进程 | 确认 | 修:补 `env_clear()` |
+| 7 | `app-desktop/kernel.rs` | 一次性 legacy 迁移删除后没有手动触发口 | 确认机制(真实日常库 done 标记全在;样板库无可迁移内容) | **留**:§2 的既定决定,未迁移旧库只是 Hub 留几条空壳 |
+| 8 | `terminal_manager.rs` 文档 | 还说「Unix adapter 本阶段不实现」 | 确认 | 修 |
+| 9 | `github.rs` `open_pr_for_branch` 文档 | 说它为已删的 RefreshIssues 服务,下次会被当死码删掉(现役调用方是评审中轮询) | 确认(补漏轮抓出) | 修:写明现役调用链 |
+| 10 | `pty_backend.rs` 收尾 | 固定睡 200ms,哪怕子进程早退了 | 确认 | 修:先 try_wait,已退零等待 |
+| 11-15 | `pty_backend.rs` / `pty_smoke.rs` | 手工 `read_finished` 标志、2000ms 常量重复、`bytes_tx.clone()` 多余、RunCtx 字面量重复、模块文档漏列一处改动 | 确认 | 全修 |
+
+被驳回的两条(没上报):「输出通道无背压会涨内存」——TerminalManager 有每会话有界环形缓冲(64 批 × 8KB,满丢最老),搬迁前就是这样;「mock 写守卫是创可贴」——空 cwd 只在无工作区且已选 mock 执行器时出现,守卫就在唯一的文件系统副作用点上,是正确深度。
+
+评审的另一个副产品:两平台 PTY 后端的 select! 主循环长得几乎一样但**刻意不抽公共骨架**(类型完全不同,硬抽会变一堆泛型),这条取舍写进了模块文档,免得下一位又提。
+
+**偏差(与 §2/§3 的计划相比,如实记)**:
+- §2.1 说 `RunStagePlaybook` 删——**没删**:`real_demo` 指挥器还在用它驱动五阶段环;转成 BACKLOG 第 1 条的一部分。
+- §2.1 说 `CreateAutopilotTask` 按「零派发即删」——**没删**:它是产品命题「定时任务只自动建活」的执行体,缺的是表单不是命令;登记为 BACKLOG 第 2 条。
+- 进程组杀用 `nix`(安全封装)而不是 next 分支那样的 `libc` 裸调用:bw-engine 整 crate `#![forbid(unsafe_code)]`,不为一个 syscall 开口子。
+- 示例实际删 29 个(41 → 12),不是 §1 估的 34:`sync_metrics_files`/`render_metrics`/`build_aihot_fixture`/`verify_stage_catalog`/`audit_skills` 逐个核实有现役用途,留下。
+- `CONTEXT.md` 计划里说不动(伙伴在改),实际加了一条「Builders' Workbench / BW / buddy / loop-buddy 是一件东西」词条——docs/README 里用了这句,按写作纪律第 3 条得先进词表。
+- 已知 flaky:bw-store `sync_connectors_file_empty_is_noop` 一次偶发失败(临时库文件名纳秒撞名),重跑即过,与本次改动无关,未动。
