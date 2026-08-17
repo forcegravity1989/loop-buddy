@@ -18,7 +18,7 @@
 > 叙述(非流水账;自己修 A 引发 B 不重复申明);**未解决/待修**进 §4 未决,关联指回
 > 主流程/分支操作的哪一步。归正注保留原始过程 + 修正,不抹。读回为证,不硬编。
 >
-> 维护规范见 `.claude/skills/practice-buddy-landing/SKILL.md` §6。
+> 维护规范见 `.claude/skills/practice-buddy-landing/SKILL.md` §6。文档写哪见 `docs/doc-boundaries.md`；还没干的活见 `docs/LEFTOVERS.md`；版本出包见 `docs/releases.md`。
 
 ## 目录
 
@@ -53,7 +53,7 @@
     - [artifacts(产物登记)](#artifacts产物登记)
     - [version(版本日志)](#version版本日志)
     - [sessions(会话)](#sessions会话)
-- [4. 未决事项(按主题,关联指回主流程/分支操作哪步)](#4-未决事项按主题关联指回主流程分支操作哪步)
+- [4. 未决事项(当周发现;总表在 docs/LEFTOVERS.md)](#4-未决事项按主题关联指回主流程分支操作哪步)
   - [4.1 创建流 UI 该不该收窄(指回步2)](#41-创建流-ui-该不该收窄指回步2)
   - [4.2 创建时不该自动开工(run_first / auto-run,指回步2)](#42-创建时不该自动开工run_first--auto-run指回步2)
   - [4.3 bug① 冻死·RunIssue 甩后台 + 并行 run 无 worktree(指回步4/5/6)](#43-bug-冻死runissue-甩后台--并行-run-无-worktree指回步456)
@@ -119,6 +119,8 @@
 - `BW_CLAUDE_MAX_BUDGET_USD`(单次 agent 花费封顶;1000 = 实际不设防 + 兜底防 runaway;0 在 claude CLI 里 = 允许花 $0 立即报错,不是无限)
 
 ### 启动
+
+终端用户跑安装包(版本见 `docs/releases.md`,当前 `0.3.0-v3`)。开发机:
 
 ```bash
 cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Windows 崩 0xC0000135 无窗口)
@@ -297,6 +299,8 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 ## 4. 未决事项(按主题,关联指回主流程/分支操作哪步)
 
+> **还没干完的唯一清单是 [`docs/LEFTOVERS.md`](../docs/LEFTOVERS.md)。** 本节只记当周发现;消化后迁进那份清单或关掉,不在这里养第二份总表。文档边界见 [`docs/doc-boundaries.md`](../docs/doc-boundaries.md)；版本出包见 [`docs/releases.md`](../docs/releases.md)。
+>
 > 讨论有价值但非当前主要矛盾、现在做了也不一定对的事。每条:讨论啥 + 当前决议 + 待什么条件回头。
 
 ### 4.1 创建流 UI 该不该收窄(指回步2)

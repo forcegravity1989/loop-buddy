@@ -17,7 +17,7 @@
 
 - Done 永不自动 / 信号只能从数据推导 / 同一件活不重复记账 / UI 无关内核——见 `CLAUDE.md`。
 - 修缺陷走 `buddy-bugfix`;V1.x 易用性若变成新形态再走 `buddy-feature-dev`。
-- 问题与延期项继续可记进 `docs/v1-prototype/LEFTOVERS.md`,或本目录后续「运营台账」文(未建则先写 LEFTOVERS)。
+- 问题与延期项只记 [`../LEFTOVERS.md`](../LEFTOVERS.md)。
 
 ---
 

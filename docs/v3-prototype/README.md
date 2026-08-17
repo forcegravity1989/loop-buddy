@@ -1,6 +1,6 @@
 # docs/v3-prototype/ · V3 设计导读
 
-> **30 秒导读**:V3 从「原型进度内嵌 Open Design」开始。分支 `v3`，**已提交、未 push**。本目录是 V3 范围与后续方案的入口；穿刺记录仍有一部分在 V2 目录的 spike 文。
+> **30 秒导读**:V3 的设计与使用修复入口。**当前阶段：V3 修 bug / 推广，V4 特性另见 [`../v4-prototype/`](../v4-prototype/README.md)。** 出包与版本号见 [`../releases.md`](../releases.md)；还没干的活见 [`../LEFTOVERS.md`](../LEFTOVERS.md)。Open Design 穿刺过程仍在 V2 的 spike 文，那是史实。
 
 看不懂的词查 [`../../CONTEXT.md`](../../CONTEXT.md)；代号查 [`../code-schemes.md`](../code-schemes.md)。
 
@@ -16,6 +16,8 @@
 穿刺事实源（Open Design，已落地到原型进度）：[`../v2-prototype/open-design-embed-spike.md`](../v2-prototype/open-design-embed-spike.md)
 
 本轮已见行为:项目里点阶段轴「原型」、停在「进度」→ 中间是本机 Open Design 首页。总览和其它阶段进度不动。Open Design 没开着就显示空态。完成清单收到底栏。
+
+未落地两篇同时挂在 [`../LEFTOVERS.md`](../LEFTOVERS.md)（V3 可排）。
 
 ## 未落地两篇怎么读
 

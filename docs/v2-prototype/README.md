@@ -1,6 +1,6 @@
 # docs/v2-prototype/ · V2 设计文档导读
 
-> **30 秒导读**:本目录是 **V2** 的设计与节奏入口,给接手开发的会话或人看。**现在作数**——与 `docs/v1-prototype/`(V1 史实与遗留)分工:V1 已合入 main,日常维护运营 + V1.x 修 bug/易用性在周四版本节奏里收;V2 功能迭代在本目录落设计后再开发。
+> **30 秒导读**:本目录是 **V2 史实**（调度统一、同一仓多台 buddy 纳管）。对照当时怎么定的，可以读；**新的未决和 V4 特性不要往这里写**。遗留只认 [`../LEFTOVERS.md`](../LEFTOVERS.md)；当前是 V3 修 bug、V4 规划，见 [`../releases.md`](../releases.md)。
 >
 > 看不懂的词查 [`../../CONTEXT.md`](../../CONTEXT.md);代号查 [`../code-schemes.md`](../code-schemes.md);铁律与门禁见 [`../../CLAUDE.md`](../../CLAUDE.md)。工作流 skill:功能用 `buddy-feature-dev`,缺陷用 `buddy-bugfix`。
 
@@ -25,5 +25,5 @@
 
 - 产品命题:[`../../plan/07-product-proposition.md`](../../plan/07-product-proposition.md)
 - 设计层事实源(仍有效的内核/铁律):[`../../plan/06-overall-alignment.md`](../../plan/06-overall-alignment.md)
-- V1 遗留里与 V2 调度相关的条目:`../v1-prototype/LEFTOVERS.md` →「V2 · 阶段默认 Skill / 系统提示词与规范手册」
+- 遗留清单:[`../LEFTOVERS.md`](../LEFTOVERS.md)（含已落地的 V2-① 归正）
 - V1 Issue 3(总览折线,被 V2-② Phase C 并入):[`../v1-prototype/issue3-overview-refactor.md`](../v1-prototype/issue3-overview-refactor.md)

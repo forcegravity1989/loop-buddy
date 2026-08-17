@@ -124,6 +124,7 @@ app-web     非 workspace 成员,"以后也许"的预留位,不编译
 
 ## 文档与协作约定
 
+- **文档写哪**:`docs/doc-boundaries.md`(设计 / 实践 / 遗留 / 版本登记)。还没干的活只认 `docs/LEFTOVERS.md`;出包与版本号认 `docs/releases.md`。当前节奏:V3 修 bug,V4 规划特性。
 - **先读什么**:`plan/README.md` 是 plan/ 目录的导读(哪些文档还作数、哪些是历史档案)。当前活跃三件:
   - `plan/06-overall-alignment.md` — 设计唯一事实源,含「缺口台账」(=持续追加的问题与任务登记表,G1-G11/R1-R4 编号)与执行队列;
   - `plan/07-product-proposition.md` — 产品命题:引子页原文 + 用户语言拆解 + 工程对照表(命题正文用人话,源码/测试锚点只进对照表);
