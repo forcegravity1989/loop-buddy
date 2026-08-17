@@ -9,6 +9,7 @@
 use std::ffi::OsStr;
 use std::path::Path;
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// True when `program` is a Windows batch script (not a PE image).
@@ -22,41 +23,42 @@ pub fn is_windows_script(program: impl AsRef<OsStr>) -> bool {
 pub fn tokio_cmd(program: impl AsRef<OsStr>) -> tokio::process::Command {
     #[cfg(windows)]
     {
-        if is_windows_script(&program) {
+        let mut cmd = if is_windows_script(&program) {
             let mut cmd = tokio::process::Command::new("cmd.exe");
             cmd.arg("/c");
             cmd.arg(program);
-            cmd.creation_flags(CREATE_NO_WINDOW);
-            return cmd;
-        }
-    }
-    let mut cmd = tokio::process::Command::new(program);
-    #[cfg(windows)]
-    {
+            cmd
+        } else {
+            tokio::process::Command::new(program)
+        };
         cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd
     }
-    cmd
+    #[cfg(not(windows))]
+    {
+        tokio::process::Command::new(program)
+    }
 }
 
 pub fn std_cmd(program: impl AsRef<OsStr>) -> std::process::Command {
     #[cfg(windows)]
     {
-        if is_windows_script(&program) {
-            use std::os::windows::process::CommandExt;
+        use std::os::windows::process::CommandExt;
+        let mut cmd = if is_windows_script(&program) {
             let mut cmd = std::process::Command::new("cmd.exe");
             cmd.arg("/c");
             cmd.arg(program);
-            cmd.creation_flags(CREATE_NO_WINDOW);
-            return cmd;
-        }
-    }
-    let mut cmd = std::process::Command::new(program);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
+            cmd
+        } else {
+            std::process::Command::new(program)
+        };
         cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd
     }
-    cmd
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new(program)
+    }
 }
 
 #[cfg(test)]
