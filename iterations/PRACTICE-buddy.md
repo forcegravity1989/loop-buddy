@@ -18,7 +18,7 @@
 > 叙述(非流水账;自己修 A 引发 B 不重复申明);**未解决/待修**进 §4 未决,关联指回
 > 主流程/分支操作的哪一步。归正注保留原始过程 + 修正,不抹。读回为证,不硬编。
 >
-> 维护规范见 `.claude/skills/practice-buddy-landing/SKILL.md` §6。
+> 维护规范见 `.claude/skills/practice-buddy-landing/SKILL.md` §6。文档写哪见 `docs/doc-boundaries.md`；还没干的活见 `docs/LEFTOVERS.md`；版本出包见 `docs/releases.md`。
 
 ## 目录
 
@@ -53,7 +53,7 @@
     - [artifacts(产物登记)](#artifacts产物登记)
     - [version(版本日志)](#version版本日志)
     - [sessions(会话)](#sessions会话)
-- [4. 未决事项(按主题,关联指回主流程/分支操作哪步)](#4-未决事项按主题关联指回主流程分支操作哪步)
+- [4. 未决事项(当周发现;总表在 docs/LEFTOVERS.md)](#4-未决事项按主题关联指回主流程分支操作哪步)
   - [4.1 创建流 UI 该不该收窄(指回步2)](#41-创建流-ui-该不该收窄指回步2)
   - [4.2 创建时不该自动开工(run_first / auto-run,指回步2)](#42-创建时不该自动开工run_first--auto-run指回步2)
   - [4.3 bug① 冻死·RunIssue 甩后台 + 并行 run 无 worktree(指回步4/5/6)](#43-bug-冻死runissue-甩后台--并行-run-无-worktree指回步456)
@@ -66,6 +66,10 @@
   - [4.10 auto-mint「失败就停」需持久化标志位(指回步2)](#410-auto-mint失败就停需持久化标志位指回步2)
   - [4.11 滞后指标 UI 渲染 GAP(指回步6 / §3.2 metrics)](#411-滞后指标-ui-渲染-gap指回步6--32-metrics)
   - [4.12 plan18 step3 收尾·代码侧已交付 + 未决(指回步5/6/7)](#412-plan18-step3-收尾代码侧已交付--未决指回步567)
+  - [4.13 V3 两篇方案已记、未落地(指回 §3 issues / 一张工作台)](#413-v3-两篇方案已记未落地指回-3-issues--一张工作台)
+  - [4.14 第一包 / 开发包 + 删阶段记录缺列(2026-08-14)](#414-第一包--开发包--删阶段记录缺列2026-08-14)
+  - [4.15 采集仍跑旧脚本·合入是否更新主目录(2026-08-14)](#415-采集仍跑旧脚本合入是否更新主目录2026-08-14)
+  - [4.16 V3 使用问题(2026-08-17)](#416-v3-使用问题2026-08-17)
   - [待记(后续会话补)](#待记后续会话补)
 - [5. 认知(buddy 是什么、能带来什么)](#5-认知buddy-是什么能带来什么)
   - [两个面(buddy = 看板 + AI 小队)](#两个面buddy--看板--ai-小队)
@@ -75,6 +79,8 @@
   - [skill / agent 形态归宿(2026-07-31 钉死)](#skill--agent-形态归宿2026-07-31-钉死)
   - [plan18 step3 收尾认知(2026-08-03)](#plan18-step3-收尾认知2026-08-03)
   - [run 调度层认知(2026-08-03,plan17 S1-S5 落地钉)](#run-调度层认知2026-08-03plan17-s1-s5-落地钉)
+  - [V3 一张工作台 + 执行器预研(2026-08-14)](#v3-一张工作台--执行器预研2026-08-14)
+  - [实践收口的一句话价值(2026-08-14)](#实践收口的一句话价值2026-08-14)
   - [反命题(buddy 不是什么)](#反命题buddy-不是什么)
 
 ---
@@ -86,7 +92,7 @@
 | 项 | 装啥/配啥 | 为啥 |
 |---|---|---|
 | **git** | 任何 clone/workspace 操作都要 | 通用 |
-| **claude CLI** + **`BW_CLAUDE_BIN`** | AI 干活(issue 执行器)shell-out `claude -p`,要给全路径(Windows 上 Rust `Command::new("claude")` 不做 PATHEXT,只认 .exe/.cmd,见 §2 步2) | `BW_CLAUDE_BIN=C:\Users\<你>\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`(持久 User 环境变量) |
+| **claude CLI** + **`BW_CLAUDE_BIN`** | AI 干活(issue 执行器)shell-out `claude`,要给全路径(Windows 上 Rust `Command::new("claude")` 不做 PATHEXT;`.cmd` 还要包 `cmd.exe /c`,见 §4.16) | 优先 `...\claude-code\bin\claude.exe`;没有 exe 时认 `%APPDATA%\npm\claude.cmd`。安装器与应用同一顺序,写入/解析 `BW_CLAUDE_BIN` |
 | **LLM 网关** | `claude -p` 真跑要打到 LLM 网关 | 我的 claude 已指向 GLM first-party(`~/.claude.json` 配置,非 buddy 配);529 间歇,仓里 `claude_cli.rs` 已重试退避 |
 
 ### 按项目 provider 选装
@@ -113,6 +119,8 @@
 - `BW_CLAUDE_MAX_BUDGET_USD`(单次 agent 花费封顶;1000 = 实际不设防 + 兜底防 runaway;0 在 claude CLI 里 = 允许花 $0 立即报错,不是无限)
 
 ### 启动
+
+终端用户跑安装包(版本见 `docs/releases.md`,当前 `0.3.0-v3`)。开发机:
 
 ```bash
 cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Windows 崩 0xC0000135 无窗口)
@@ -145,6 +153,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
   - **claude spawn "program not found"**:默认裸 `"claude"` → Windows Rust `Command::new` 不做 PATHEXT → os error 193 → **改**(不碰代码)设 `BW_CLAUDE_BIN=…\claude.exe`(持久 User env);config gap 非代码 bug。自动探测留后续。
   - **重复点「建立项目」非幂等**(Bug B,`1dbd76c`):confirm 按钮无 pending 守卫 → 多点建多套 trio + codehub 孤儿 issue → **改** confirm 起手置 `submitting=true` 置灰「建立中…」,完成/失败后翻页/解禁。
   - **【归正·Bug B 半套】**(`submitting` 在 `main.rs` 父组件,Create 卸载不清):clone 软失败走 `ConnectorSynced` 不是 `UiNote::Error`,第一次点确认后标志一直为 true。同事修完 SSH 再进创建流,还没点确认按钮已是灰色「建立中」。**改**离开创建屏 / 「+ 新建」/ 返回项目墙时复位。
+  - **合入后立刻采一轮**:绑数据 merge / 点「→已完成」原先只装 `.bw/metrics.toml`+`connectors.toml`,不跑采集,总览空着等人发现「立即采集」。**改** Done 记账口在 sync 之后走同一条 `collect_project_metrics` 并 toast 结果;失败不回滚验收。
   - **auto-mint(clone 失败悄悄本地 mint 像接上了)**:**判断**对齐 github(Existing clone 失败 CompleteCreation 也 auto-mint 空项目)→ clone SSH 修好后非空不触发。真「失败就停」需持久化「尝试过远端」标志位 → ⚠ 长期 TODO,见 §4.10。
 
 ### 步3·进 Op 侧边栏(看本项目有什么)
@@ -198,7 +207,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 ### 步7·交棒 / merge
 
 - 你做:InReview 卡点「merge」(或 codehub 网页 merge)。
-- buddy 干:`MergeIssuePr` → `Remote.merge_mr`(codehub `codehub-cli mr merge <iid> --squash -y`)→ merge 成功推 Done(InReview→Done,人点的 merge 触发,非自动)。
+- buddy 干:`MergeIssuePr` → `Remote.merge_mr`(codehub `codehub-cli mr merge <iid> --squash -y`)→ merge 成功推 Done(InReview→Done,人点的 merge 触发,非自动)。Done 记账口再对**主工作区**(`project.workspace_path`,不是 issue worktree)跑 `sync_default_branch`:fetch → checkout 默认分支 → `pull --ff-only` → 从主目录读 `.bw/metrics.toml` / `connectors.toml` 装进库 → 立刻采一轮。worktree 里的新脚本不会直接拷进主目录,是远端合入后再拉回主目录。`pull` 失败被吞掉仍算收拢成功(见 §4.15)。
 - ⚠ **merge 403 不是 buddy bug**:`merge_mr` 命令对(真打 codehub 拿 403「target branch is protected, you do not have MERGE permission」)——是 maas master 保护分支 + CLI token 无 merge 权限的治理问题。buddy 如实报错、issue 留 InReview 可重试。解法在 codehub 侧:网页有权限账号 merge / 解保 master / target 真实开发分支(`a_develop`)。
 - **实测(2026-07-31,trio 走通)**:找指标 MR 11 + 绑数据 MR 12(冲突手解)都 codehub 网页合入 → buddy 点「⬇ merge PR」(`MergeIssuePr`)→ `merge_mr` 读回 state==merged(见步5 `b02047b`,不看退出码)→ Done + `SyncMetricsFile` 拉 master + 装 trio 指标(metric 表 7→13,北极星+3滞后+3引领进表,全 unknown 诚实)。**trio 生命周期(跳过竞品分析)端到端走通**:定义(找指标)→采集方案(绑数据)→merge→Done→指标进表。⚠ 实测中撞过 merge_mr 假 Done bug(`codehub-cli mr merge` 退出码靠不住→假成功→Done 但 MR 没合+没装指标),手动 reset 两 issue 回 InReview(清 settled_at),`b02047b` 修好后重试真合。
 - **【归正·codehub issue 自动关单】**(`a76c6c5`):实测 issue 31/32/33 merge 后仍 `opened`——**`--issue-nums` 只 link MR↔issue,不触发自动关单**(我之前假设它自动关,错了)。codehub(GitLab)自动关单靠 **MR description 里的 `Closes #<iid>`**(和 github `Closes #n` 一样,merge 时自动关引用的 issue)。**改**:`codehub::create_mr` body 加 `Closes #<iid>`;`MergeIssuePr` 的 gh issue 补关仍 gate github-only(codehub 靠 body Closes,不走 gh 补关)。现有 31/32/33 历史 MR body 没 Closes、issue 仍开(可 codehub 网页手关);未来 codehub MR 会自动关。**未验**(`Closes #` 在 codehub body 是否真触发自动关,待下次 codehub MR merge 实测;GitLab 标准行为,默认 ON)。
@@ -274,7 +283,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
   - **connector**:BW connector 探针(如 git-repo 喂工作区 commits/docs)。
   - **bw**:BW 自身记账(issue settle-count / run telemetry / stage done count)。
   - **manual**:人手填,无采集器自动填(带「手填」徽)。
-- **实采呈现**:等 cron tick 或手动 `CollectMetrics` → shell-out 取计数 → 写 `observation` 表(append-only,一个观测=一个点,绝不插值;window-guard:同窗口同值才跳过)→ `recompute_signals` 重算 → 指标卡点亮。公共指标(开放 Issue 数/已合入 MR 数)开机默认 seed。
+- **实采呈现**:等 cron tick 或手动 `CollectMetrics` → 在**主工作区**(`project.workspace_path`)shell-out 跑 script connector → 写 `observation` 表(append-only,一个观测=一个点,绝不插值;window-guard:同窗口同值才跳过)→ `recompute_signals` 重算 → 指标卡点亮。公共指标(开放 Issue 数/已合入 MR 数)开机默认 seed。**「立即采集」不拉主目录、不看 issue worktree**(见 §4.15)。每次采集还会覆盖 buddy 自带的 `.bw/collect_stats.{sh,py}`(项目业务脚本不动)。
 - **健康灯 derive-only**:Signal 只能经封口 `Derived<Signal>` 进缓存,store 无 `set_signal`,`recompute_signals` 唯一写入者;**无数据=Unknown≠绿**,数据过期降级,手填带徽。任何界面数字能 `sqlite3` 独立查证。
 
 #### artifacts(产物登记)
@@ -290,6 +299,8 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 ## 4. 未决事项(按主题,关联指回主流程/分支操作哪步)
 
+> **还没干完的唯一清单是 [`docs/LEFTOVERS.md`](../docs/LEFTOVERS.md)。** 本节只记当周发现;消化后迁进那份清单或关掉,不在这里养第二份总表。文档边界见 [`docs/doc-boundaries.md`](../docs/doc-boundaries.md)；版本出包见 [`docs/releases.md`](../docs/releases.md)。
+>
 > 讨论有价值但非当前主要矛盾、现在做了也不一定对的事。每条:讨论啥 + 当前决议 + 待什么条件回头。
 
 ### 4.1 创建流 UI 该不该收窄(指回步2)
@@ -376,9 +387,64 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 **北极星方案A 维持 deferred**:本次合体**不做**方案A(§4.12 已标)。正规路径北极星不采集/不上卷/项目灯不亮属已知 gap,留主窗口稳做。
 
+### 4.13 V3 两篇方案已记、未落地(指回 §3 issues / 一张工作台)
+
+> 2026-08-14 会话:Open Design 内嵌成立之后,讨论 Cursor CLI 与 cowelink。**只落设计,不改代码。**
+
+- **Issue 用 Cursor 还是 Claude**:今天没地方配。开工写死 `claude`;Hub 智能体「执行引擎」只读。方案与配置面见 [`docs/v3-prototype/cursor-agent-executor.md`](../docs/v3-prototype/cursor-agent-executor.md)(代号 V3-cursor-cli)。
+- **cowelink**:不弹窗。要嵌,先让 cowelink 长出本机网页旁路,buddy 再 iframe。见 [`docs/v3-prototype/cowelink-web-sidecar.md`](../docs/v3-prototype/cowelink-web-sidecar.md)(代号 V3-cowelink-sidecar)。第一张穿刺打在 cowelink 仓。
+- **orca 整窗**:不做。多会话已在 Issue 终端里。
+- **待什么条件回头**:用户点头落地、并先提 issue。Cursor 还要本机 `agent login` 后穿一张「`AGENTS.md` 是否真注入」。
+
+### 4.14 第一包 / 开发包 + 删阶段记录缺列(2026-08-14)
+
+> 卡住的开发窗口半套落地后，本窗收口。安装器在仓外 `D:\2026\buddy-setup`，不进 loop-buddy。
+
+- **删阶段记录**：`delete_session` 仍 `UPDATE issue SET session_id=NULL`，列已 DROP → `no such column: session_id`。点卡能醒是因为走 `claude_conversation`。**已改**：只删 `message` + `session`，不碰 issue / conversation。本机库旧 SQL 复现失败；新 SQL 删 throwaway 行后 issue 行数不变。
+- **第一包** `BuildersWorkbench-Setup.exe`：结束页正文改写进 iss（不再 `LoadFromFile` 读无 BOM UTF-8）；exe 编成 Windows 子系统（PE subsystem=2），带 `WebView2Loader.dll`。
+- **开发包** `BuildersWorkbench-Dev-Setup.exe`：第一包超集 + MinGW zip + sqlite3 + 装完脚本（Rust 走 rsproxy 现拉 `rustup-init`，clone v3）。`rustup-init.exe` 进不了 payload（本机安全软件隔离）。
+- **首次点跑卡住**：不重做 V1 调度。结论见当次对话——更像安装器 `cmd start` + 当时那颗 CUI exe 抢焦点/首开 PTY，不是 settle_tx 丢了。
+- **待测试窗验**：结束页能读、立即运行无黑框、项目墙「测一下」未测为灰。
+- **出包脚本不进仓（2026-08-14 后补）**：`D:\2026\buddy-setup` 不建独立仓、也不拷进 loop-buddy。打包内部用，都从这台机器出包。脚本和产物都留本机。
+- **release 闪 cmd + 唤醒 spawn 报错（2026-08-14）**：不是 V3 产品功能把版本做坏了。出包时为藏主窗口黑框给 release 加了 `windows_subsystem=windows`；子进程没 `CREATE_NO_WINDOW` 就闪 cmd。**已改** `win_cmd` 藏窗。
+- **唤醒 `environment variable name must not contain =`（2026-08-14 后补）**：新报错钉死不是找不到 `claude.exe`、也不是工作目录先丢了。ConPTY 把整份进程环境再 `env()` 一遍，windows-spawn 校验名字；Windows 隐藏项（`=C:` / `=ExitCode`，安装器 `cmd start` 的 GUI 父进程里常见）带 `=` 被拒。失败后 `IssueWorktreeGuard` 会拆掉本次 worktree，所以目录随后看起来「没了」。**已改**：子进程继承环境，只摘掉嵌套执行变量，不再整表重放。要新编 release / 重出包再验唤醒。
+
+### 4.15 采集仍跑旧脚本·合入是否更新主目录(2026-08-14)
+
+> 同事反馈:找指标脚本在 worktree 里优化完,界面点采集仍跑旧的。本窗只查代码、不改产品。指回步7 / §3.2 metrics。
+
+- **问1 · merge 会不会更新主目录**:会,这是设计。点 merge(或网页合完再点「→已完成」)走 Done 口,对主工作区 `sync_default_branch`(fetch + checkout 默认分支 + `pull --ff-only`),再装 toml、立刻采一轮。不是把 worktree 目录拷进主目录,是远端合入后再拉回主目录。
+- **问2 · 采集按钮要不要默认先更新主目录**:现状**不拉**。`CollectMetrics` 只在主工作区跑已有脚本,不看 worktree。**当前决议:不加**。采集是记观测,更新主目录是验收(merge/Done)的事;没合入的优化本来就不该被采集看见。采集里自动 checkout/pull 也碰「破坏性永不自动」。
+- **同事这条更像哪条**:worktree 里改完直接点采集(主目录还是旧的,预期如此);或网页合了但没在 buddy 点 merge/「→已完成」(Done 口没跑,主目录没拉);或 Done 口跑了但 `pull --ff-only` 失败被吞(`github.rs` `let _ = pull`,仍 Ok)——主目录其实没跟上,界面却当收拢成功。
+- **旁路**:每次采集会覆盖 `.bw/collect_stats.{sh,py}`(buddy 自带仓统计,注释写明勿手改)。优化若写在这两份文件上,点采集会被 Buddy 内置稿盖回去。项目业务脚本(`derive_*.py` 等)不受这条影响。
+- **待什么条件回头**:先对同事那次复盘是「没走 Done」还是「pull 被吞」。若要改,优先让收拢失败诚实报错,不把 pull 塞进采集按钮。动手前提 issue。
+- **本机取证(2026-08-14)**:用户本地 `welink-bridge` 主工作区(`…/workspaces/welink-bridge-e25bd532`)在 `dev`,fetch 后**落后 origin/dev 8 个提交**。同事合入的 `bw/metrics-rewrite`(改 `.bw/scripts/derive_shield.py` + `.bw/metrics.toml`)已在远端,本地没拉。工作区脏文件只有 buddy 每次采集会覆盖的 `.bw/collect_stats.{py,sh}`。还原这两份后快进拉到 `eedbbad`。这就是「点采集跑旧脚本」在本机的实锤:不是采集按钮漏了更新,是主目录没跟上远端。Buddy 库里的指标定义还要再点「↻ 同步指标文件」才会换新口径,然后「立即采集」才按新脚本出数。
+- **机制怎么补(2026-08-14 傍晚,用户已看到新数后问)**:现有四个「↻」各管一层,不要塞进「从仓同步 Issue」。**当前决议(未落地,动手前提 issue)**:加独立「↻ 收拢工作区」(复用已有 `sync_default_branch`),成功后再跑 project/metrics/connectors 三份正本进库;**不**自动采集、**不**改看板 Issue。`pull` 失败必须诚实报错,不许再吞。采集 / 同步 Issue / 同步指标文件职责不变。这是后来者读回仓里共同事实的缺口,不是把采集变成 `git pull`。
+
+### 4.16 V3 使用问题(2026-08-17)
+
+> 实践里撞到。指回步2 创建流 / 第一包安装器。设计见 [`docs/v3-prototype/onboard-list-and-claude-resolve.md`](../docs/v3-prototype/onboard-list-and-claude-resolve.md)(代号 V3-use-fix)。动手前提 issue。
+
+- **安装器只认一条死路径 `bin\claude.exe`**(指回 §1 前置 / 第一包):Inno 脚本原先只查 `%APPDATA%\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`。终端里 `claude` 能用(走 `%APPDATA%\npm\claude.cmd`)也不算。同事有主包目录、没有 `bin`,安装包直接中止。`bin\claude.exe` 是 npm `postinstall` 从可选包拷过来的,不是解压自带。
+  - **没有 exe,Issue 还能跑吗**:终端能跑 ≠ buddy 能开工。V3 开工是 ConPTY,`CreateProcess` 直接打 `.cmd` 会不是合法 Win32 映像。只放行安装、不包 `cmd.exe /c`,点跑仍失败。
+  - **【2026-08-17 归正·本窗落地】**:安装器认 exe **或** `%APPDATA%\npm\claude.cmd`,`BW_CLAUDE_BIN` 写实际找到的那条(优先 exe)。应用启动同一顺序解析;路径以 `.cmd`/`.bat` 结尾时 PTY 与 `tokio_cmd` 都走 `cmd.exe /c`。仓外脚本 `D:\2026\buddy-setup\BuildersWorkbench.iss` + Dev 包同步改。要新编 release / 重出包再生效。
+- **绿区「↻ 刷新列表」截前 30 条,成员仓也会丢**(指回步2):buddy 原先调 `codehub-cli -H green project list --mine --limit 30`。`--mine` 与 `--membership` 本机对照都是 79 个(我是成员就算,含组继承;不是「必须我拥有」——`--owned` 只有 2 个)。`aipdu/oh-my-hw-claudecode` 我是组继承 Developer(`access_level=30`),排在 `--mine` 第 **74** 名,被 30 截掉。界面文案「仓不在列表=需先成为 member」不完整。默认排序不是最近活跃(该仓 8/13 还在动)。
+  - **【2026-08-17 归正·本窗落地】**:limit 改为 200(codehub/github 对称);下拉上方加搜索,只过滤已加载列表(path/描述/默认分支)。文案改成「已加载 N 个(最多 200);仍没有 = 不是 member,或排在 200 以外」。不恢复手填 path。远端按最近活跃重排、200 以外翻页——未做。
+  - **【2026-08-17 归正·拉与画拆开】**:200 仍偏少(人仓数常 >200);搜索补不上没拉下来的。改成**拉 999 / 下拉只画 30**(当前选中始终留在列表)。搜索仍只过滤已加载。999 以外翻页/远端搜索——未做。
+  - **【2026-08-17 归正·可搜索下拉 + 图标】**:装包后反馈两件。① 搜索框和原生 `<select>` 是两套控件,打字不能直接点出匹配项——改成一个可搜索下拉(聚焦/打字弹出最多 30 条,点选)。② 程序仍无图标——补几何标记(clay 方砖 + 纸色环 + 小台面),贴 exe / 窗口 / 安装器。要新编 release / 重出包才看见。
+- **项目墙「测一下」只打一区**(指回步1):探针写死 `codehub-cli -H open project list`(内源)。黄区(或只登了绿区)token 正常,测一下仍红。文案还写「先 `-H open auth login`」。
+  - **【2026-08-17 归正】**:改读 `codehub-cli auth status`(一次列出绿/内源/黄)。任一区 LOGIN=yes 即过,墙上写「已登录 黄区」这类;三区都没有才红,提示 `-H green|open|yellow`。不装绿、不猜默认区。
+- **GitHub 下拉只列自己名下的仓**(指回步2,2026-08-17):`gh repo list` 不列 collaborator / org 仓。codehub `--mine` 已含成员仓(组继承也算)。用户问要不要对称成「我参与的」。**当前未做**。改法小:`list_repos` 改 `gh api user/repos?affiliation=owner,collaborator,organization_member`,JSON 字段换一套,两个 verify stub 跟着改。不列只 star / 只看过的仓。「我提交过但不是 member」是另一条、更大。动手前提 issue。
+- **纳入时选分支 / 一仓两项目**(指回步2,2026-08-17):有人一个仓两条分支、每条分支当一个项目,希望纳入时能选分支。**当前决议:不接这个产品形态,本轮不动。** buddy 的项目身份是「一个仓 + 一条主干」;产品信息正本(`.bw/project.toml` / 指标)住在仓里,clone / 开工出支 / 合入收拢都按远端默认分支。选分支看起来只是下拉多一项,后面 MR 目标、收拢主干、后来者读正本都得变成「每个 buddy 项目自带一条主干」,等于承认「分支 = 项目」。那是仓治理问题,不是纳入缺口。对方若真是两个项目,应拆成两个仓(或两个 path)再分别纳入。
+- **一个项目、多条在跑的版本线**(指回总览 / 版本面板 / 步2,2026-08-17):同一产品同时维护 `main`(2.0)和 `release/1.x`(补丁)是真需求,和「一仓两项目」不是一件事。但「哪条线」会渗进几乎所有控制点,本轮**整条不开发**,另开设计再做。摊开如下。
+  - **今天总览看的是谁(诚实)**:进度/健康灯/采集,用的是主工作区当前检出上采上来的数,通常就是远端默认主干。版本面板只是这份工作区的 `git log`,不是版本线。没有「看哪个版本」的切换,也就**不假装**在看全部版本或某一指定版本。
+  - **若做成一等能力,至少这些面都要回答「哪条线」**:总览那盏灯(1.x 绿、2.0 红混成一盏=造假);北极星/指标正本(两条线口径可能不同);采集与定时;Issue 从哪条拉出、MR 合回哪条;五阶段/交棒(1.x 已在运维、2.0 还在构建?);版本面板(这才是版本线该住的地方);产物归属;纳入时 clone/探测正本。
+  - **现在明确不做**:纳入选分支;总览版本切换;Issue 挂目标版本线;采集/信号按线切开;阶段环按线复制;整仓来回 checkout;把版本面板从提交列表改成版本线管理。第一刀若回头做,应先设计「总览一盏灯怎么诚实」,不是纳入下拉多一项。
+
 ### 待记(后续会话补)
 - _待补:步3 agent 真跑——bug① 修好后竞品分析能不能真联网出报告 + 产出 PR?_
 - _待补:推广给别人时,别人的前置装/配跟我的差异。_
+- _待补:第一包/开发包装完由测试窗对照验收。_
 
 ---
 
@@ -431,9 +497,28 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 - **worktree guard 跨 spawn→settle 边界**:`IssueWorktreeGuard` 移进 `ActiveRun` 持有,在 `run_issue_settle` 里 `finalize_run` 读 `head_after` 之后、`issue_run_tail` 的 `create_mr`(`stage_commit_push`)之后才 Drop 拆 worktree——保证产物登记/MR 创建读得到 worktree 内容。
 - **`settle_tx: Option` 的边界收口**:examples/headless 调 `dispatch(RunIssue).await` 期望同步跑完,不接 settle_tx(default None)→ `run_issue_now` 走 inline `run_issue_body` 字节级不变;只有桌面 kernel `with_settle_channel` 接上才 background,S3 blast radius 收桌面一处。
 
+### V3 一张工作台 + 执行器预研(2026-08-14)
+
+- **一张工作台**:Builders 只在 buddy 里干活。Open Design 能嵌,是因为它有本机网页口。cowelink 今天没有,外开窗口不对;正确补法是 cowelink 自己长出网页旁路(与 Open Design 同构)。orca 整窗不嵌——多会话 Issue 终端已经做了。
+- **执行器是本机事实**:Issue 开工今天写死 claude,界面没有「换 Cursor」的开关。落地时应是设置里的本机默认 + 智能体卡「执行引擎」,不在单张 Issue 上再选。Cursor 路径走 `agent` 不是 `cursor.exe`,系统提示词走工作区 `AGENTS.md`,花费封顶第一版没有。
+
+### 实践收口的一句话价值(2026-08-14)
+
+> 用户在 V1 / V2 / V3 实践后口述。不是新命题,是 [`plan/07`](../plan/07-product-proposition.md) 引子页给**传统开发者**听的压缩。原文四个控制点一个没改。
+
+**一句话**:buddy 是 AI Coding 里、一个人的一张工作台——让传统开发者按 Builder 的方式干,用大约三个月把一个小项目从想法管到能验收的结果。
+
+三根柱子:
+
+1. **一张工作台**。设计(嵌 Open Design)、干活(Issue 里的 agent)、通信处理(cowelink 旁路,未落地)、指标与交棒,都在 buddy 里完成。不弹一堆工具窗。
+2. **人从开发变成 Builder**。不是多一块看板。角色从「自己写代码」换成「1 个 Builder + Agent Loop」:人守对标、每周能否从真数据看演进、验收门、北极星;活让 agent 干,完成永远人点。
+3. **大约三个月的小项目**。命题原文就是「每周可验证增量、≤90 天视野」。一站式管完一个小项目,走完留下可复制的方法,不只是卡片。不是大厂十道流程、五个专职角色;也不是十二个月多人项目的协作平台。
+
+「好的结果」不靠感觉,仍看四个控制点:知道对标谁 / 每周在正常演进 / agent 真干活、人只守门 / 目标清晰且难造假。
+
 ### 反命题(buddy 不是什么)
 - 不是团队协作平台(无成员/群聊/收件箱)。
 - 不是通用看板(无拖拽/甘特;回退不给 UI)。
 - 不是审批系统(交棒只留痕不拦人)。
-- 不是云服务(AI 执行=本机 `claude` CLI,单次花费封顶)。
+- 不是云服务(AI 执行=本机 CLI;今天是 `claude`,Cursor 路径设计已记未落地)。
 - 永远不替用户捏造健康。

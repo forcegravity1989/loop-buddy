@@ -43,5 +43,5 @@
 
 ## 相关目录
 
-- `../iterations/`:交接记录与实践日志,全部是历史档案(顶部有横幅),唯一持续更新的是 `PRACTICE-buddy.md`。
+- `../iterations/`:交接记录是历史档案;`PRACTICE-buddy.md` 是实践过程日志。还没干的活只认 [`../docs/LEFTOVERS.md`](../docs/LEFTOVERS.md)。文档边界见 [`../docs/doc-boundaries.md`](../docs/doc-boundaries.md)；版本出包见 [`../docs/releases.md`](../docs/releases.md)。
 - `../DEVELOPMENT.md`:开发指南(命令与架构速览);`../CLAUDE.md`:给 AI 的工作说明,含写作纪律。

@@ -47,8 +47,8 @@ use bw_core::{
 };
 use bw_engine::{
     allowed_tools_arg, build_consultation_resume_plan, build_project_context_block,
-    build_resume_plan, build_startup_plan, evidence, ClaudeCliConfig, ClaudeCliExecutor,
-    CodehubRepoSummary, ConversationMeta, Engine, GitCommit, GithubRepoSummary,
+    build_resume_plan, build_startup_plan, evidence, resolve_claude_binary, ClaudeCliConfig,
+    ClaudeCliExecutor, CodehubRepoSummary, ConversationMeta, Engine, GitCommit, GithubRepoSummary,
     InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
     PhaseNode, ProjectFile, RunCtx, RunEvent, SkillOutput, TerminalManager, UnsupportedCliExecutor,
     CLAUDE,
@@ -66,6 +66,10 @@ use std::time::Instant;
 use time::{Date, Month, OffsetDateTime, Time};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
+
+/// 「接入已有仓」一次拉多少条。搜索只过滤已加载的，所以要多拉、下拉少画
+/// （PRACTICE §4.16：30 截掉第 74 名；200 仍盖不住很多人的仓数）。
+pub const ONBOARD_REPO_LIST_LIMIT: u32 = 999;
 
 /// Top-level workspace view (only meaningful for `hub == workspace`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -914,12 +918,12 @@ pub enum Command {
     /// counterpart to `CreateProject` — irreversible; the UI is responsible
     /// for confirming with the user before dispatching this.
     DeleteProject(ProjectId),
-    /// W2-2: hard-delete a single session + its messages, clearing the
-    /// `issue.session_id` dangling reference (issue row stays). Irreversible;
-    /// the UI confirms with the user before dispatching. Used to clean up the
-    /// historical duplicate "阶段记录" cards that piled up before the
-    /// `(stage_kind, title)` dedup guard landed.
+    /// 硬删一条阶段记录（session + message）。issue 行留下；
+    /// claude_conversation 不删，看板仍可按现设计唤醒。
     DeleteSession(SessionId),
+    /// 项目墙「测一下」：真跑 claude --version 与 codehub-cli 探活。
+    /// 未测过是 Unknown，不装绿。
+    ProbeLocalEnv,
     BackToProjects,
     SetPanel(Panel),
     SetScope(Scope),
@@ -938,6 +942,22 @@ pub enum Command {
         cols: u16,
         rows: u16,
     },
+}
+
+/// 项目墙本机环境探测。未点「测一下」= Unknown，不装绿。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum EnvCheck {
+    #[default]
+    Unknown,
+    Probing,
+    Ok(String),
+    Fail(String),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalEnvProbe {
+    pub claude: EnvCheck,
+    pub codehub: EnvCheck,
 }
 
 /// Result of [`Command::ProbeRemoteProjectToml`] — creation-flow UI state
@@ -1405,6 +1425,8 @@ pub struct AppState {
     /// process-internal cache pattern as `github_repos` — a direct read-through
     /// of `codehub-cli project list --mine`, not a derived Signal.
     pub codehub_repos: Vec<CodehubRepoSummary>,
+    /// 项目墙「测一下」最近一次结果。未测过是 Unknown。
+    pub local_env: LocalEnvProbe,
 }
 
 /// P4: everything the Issue-detail overlay shows, assembled read-only at
@@ -1459,6 +1481,7 @@ impl Default for AppState {
             pty_restoring: None,
             pty_enabled: false,
             codehub_repos: Vec::new(),
+            local_env: LocalEnvProbe::default(),
         }
     }
 }
@@ -4583,7 +4606,7 @@ impl App {
                 let candidates = script_interpreter_candidates(&command);
                 let mut out: Option<std::process::Output> = None;
                 for cand in &candidates {
-                    let run = tokio::process::Command::new(cand)
+                    let run = bw_engine::tokio_cmd(cand)
                         .arg(&script_path)
                         .current_dir(&proj.workspace_path)
                         .stdin(std::process::Stdio::null())
@@ -4808,6 +4831,31 @@ impl App {
             self.emit(Event::ProjectUpdated(project));
         }
         Ok(summary)
+    }
+
+    /// Same pass as [`Self::collect_project_metrics`], plus the honest
+    /// 「指标采集」toast used by「立即采集」. Callers that just installed
+    /// definitions (Done / merge) use this so the overview is not empty
+    /// until someone discovers the button.
+    async fn collect_project_metrics_announced(
+        &mut self,
+        project: ProjectId,
+    ) -> Result<MetricCollectSummary, AppError> {
+        let s = self.collect_project_metrics(project).await?;
+        let ok = s.is_success();
+        let mut detail = format!(
+            "采集 · {} 更新 · {} 未变 · {} 未接（legacy 或脚本未产出）",
+            s.changed, s.unchanged, s.deferred
+        );
+        if let Some(err) = &s.first_error {
+            detail.push_str(&format!(";首个失败:{err}"));
+        }
+        self.emit(Event::ConnectorSynced {
+            name: "指标采集".into(),
+            ok,
+            detail,
+        });
+        Ok(s)
     }
 
     /// Scan `workspace` (real `git ls-files` + `stat` + short HEAD) and
@@ -7201,7 +7249,7 @@ impl App {
                     name: ACTION_NAME.into(),
                     state: ActionState::Started,
                 });
-                match bw_engine::github::list_repos(30).await {
+                match bw_engine::github::list_repos(ONBOARD_REPO_LIST_LIMIT).await {
                     Ok(repos) => {
                         self.emit(Event::ActionProgress {
                             name: ACTION_NAME.into(),
@@ -7235,7 +7283,7 @@ impl App {
                     name: ACTION_NAME.into(),
                     state: ActionState::Started,
                 });
-                match bw_engine::codehub::list_repos(&host, 30).await {
+                match bw_engine::codehub::list_repos(&host, ONBOARD_REPO_LIST_LIMIT).await {
                     Ok(repos) => {
                         self.emit(Event::ActionProgress {
                             name: ACTION_NAME.into(),
@@ -8106,23 +8154,7 @@ impl App {
 
             Command::CollectMetrics => {
                 let p = self.active()?;
-                let s = self.collect_project_metrics(p).await?;
-                // Honest toast: only a pass that really measured at least one
-                // metric, with no failures or deferred definitions, is ok.
-                // "Nothing collected" must not wear a success colour.
-                let ok = s.is_success();
-                let mut detail = format!(
-                    "采集 · {} 更新 · {} 未变 · {} 未接（legacy 或脚本未产出）",
-                    s.changed, s.unchanged, s.deferred
-                );
-                if let Some(err) = &s.first_error {
-                    detail.push_str(&format!(";首个失败:{err}"));
-                }
-                self.emit(Event::ConnectorSynced {
-                    name: "指标采集".into(),
-                    ok,
-                    detail,
-                });
+                self.collect_project_metrics_announced(p).await?;
             }
 
             Command::StartSession {
@@ -9764,13 +9796,13 @@ impl App {
                     // 验收兜底,不管走的是 `MergeIssuePr`(内部 dispatch 到这里)
                     // 还是网页上把 PR 合了、回 buddy 裸点「→已完成」——两条路都
                     // 该把远端可能已经合入的改动拉回本地、把 `.bw/metrics.toml`/
-                    // `.bw/connectors.toml` 正本同步进 SQLite 缓存。此前只有
-                    // `MergeIssuePr` 路径做这件事,裸 `TransitionIssue`(网页合
-                    // MR 场景)完全跳过 sync,业务指标停在 seed 值——这是本条
-                    // 验证日志的头号发现。挪到这唯一的 Done 记账口后,两条入口
-                    // 共用同一次 pull+sync,不重复跑(`MergeIssuePr` 内部通过
-                    // `dispatch` 到这里,不再自己另跑一遍)。收拢/同步失败只软
-                    // 降级 toast,不因此回滚已经发生的验收。
+                    // `.bw/connectors.toml` 正本同步进 SQLite 缓存,并立刻采
+                    // 一轮(总览不该空着等「立即采集」)。此前只有
+                    // `MergeIssuePr` 路径做 sync,裸 `TransitionIssue`(网页合
+                    // MR 场景)完全跳过——这是本条验证日志的头号发现。挪到这
+                    // 唯一的 Done 记账口后,两条入口共用同一次 pull+sync+采,
+                    // 不重复跑(`MergeIssuePr` 内部通过 `dispatch` 到这里)。
+                    // 收拢/同步/采集失败只软降级 toast,不回滚已经发生的验收。
                     if let Ok(Some(proj)) = self.store.get_project(issue.project_id).await {
                         if !proj.workspace_path.trim().is_empty()
                             && !proj.remote_path.trim().is_empty()
@@ -9783,6 +9815,21 @@ impl App {
                                 Ok(()) => {
                                     self.sync_metrics_file_for(issue.project_id).await?;
                                     self.sync_connectors_file_for(issue.project_id).await?;
+                                    // 装上定义/装置后立刻采一轮——合入后总览
+                                    // 不该空着等用户自己发现「立即采集」。
+                                    // 采集失败只 toast,不回滚已经发生的验收。
+                                    if let Err(e) = self
+                                        .collect_project_metrics_announced(issue.project_id)
+                                        .await
+                                    {
+                                        self.emit(Event::ConnectorSynced {
+                                            name: "指标采集".into(),
+                                            ok: false,
+                                            detail: format!(
+                                                "验收后已装上采集装置,但这一次没采到:{e}"
+                                            ),
+                                        });
+                                    }
                                 }
                                 Err(e) => {
                                     self.emit(Event::ConnectorSynced {
@@ -10128,16 +10175,30 @@ impl App {
 
             Command::DeleteSession(id) => {
                 self.store.delete_session(id).await?;
-                // If the deleted session was the chat-focused one, drop the
-                // stale pointer so the workflow panel doesn't try to render
-                // messages for a session that no longer exists.
                 if self.state.active_session == Some(id) {
                     self.state.active_session = None;
                 }
-                // review: refresh issues so state.issues doesn't hold a stale
-                // session_id ref (delete_session nulled it in the DB; this
-                // re-reads the honest NULL into state).
+                // session 行已删；issue / claude_conversation 仍在，看板可唤醒。
                 self.refresh_issues().await?;
+                self.emit(Event::ViewChanged(self.state.view));
+            }
+            Command::ProbeLocalEnv => {
+                self.state.local_env.claude = EnvCheck::Probing;
+                self.state.local_env.codehub = EnvCheck::Probing;
+                self.emit(Event::ViewChanged(self.state.view));
+                let binary = self
+                    .state
+                    .claude_config
+                    .binary
+                    .clone()
+                    .filter(|p| std::path::Path::new(p).is_file())
+                    .or_else(|| resolve_claude_binary(None))
+                    .unwrap_or_else(|| "claude".into());
+                self.state.local_env.claude = match claude_version_probe(&binary).await {
+                    Ok(v) => EnvCheck::Ok(v),
+                    Err(e) => EnvCheck::Fail(e),
+                };
+                self.state.local_env.codehub = codehub_cli_probe().await;
                 self.emit(Event::ViewChanged(self.state.view));
             }
 
@@ -10292,7 +10353,7 @@ pub const METRIC_WS_DOCS: &str = "剧本产物文档数";
 /// `claude --version` probe with a hard timeout — the `claude-cli`
 /// connector's real health check. Returns the version line on success.
 async fn claude_version_probe(binary: &str) -> Result<String, String> {
-    let fut = tokio::process::Command::new(binary)
+    let fut = bw_engine::tokio_cmd(binary)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -10309,6 +10370,71 @@ async fn claude_version_probe(binary: &str) -> Result<String, String> {
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Hosts `codehub-cli auth status` may list. Alias is what `-H` wants;
+/// `host_needle` matches the table URL; `label` is what the wall shows.
+const CODEHUB_AUTH_ZONES: &[(&str, &str, &str)] = &[
+    ("green", "codehub-g.huawei.com", "绿区"),
+    ("open", "open.codehub.huawei.com", "内源"),
+    ("yellow", "codehub-y.huawei.com", "黄区"),
+];
+
+/// Zones whose `auth status` row has a logged-in token. Table parse only —
+/// never returns token text. Order follows [`CODEHUB_AUTH_ZONES`].
+fn logged_in_codehub_zones(status: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for line in status.lines() {
+        let low = line.to_ascii_lowercase();
+        for (_, host, label) in CODEHUB_AUTH_ZONES {
+            if !low.contains(host) {
+                continue;
+            }
+            if low.split_whitespace().any(|w| w == "yes") {
+                out.push(*label);
+            }
+        }
+    }
+    out
+}
+
+/// 项目墙探测：codehub-cli 在不在、至少一区已登录。未登录如实 Fail，不装绿。
+/// 旧实现只打 `-H open`，黄区/绿区 token 正常也会红。
+async fn codehub_cli_probe() -> EnvCheck {
+    let bin = std::env::var("USERPROFILE")
+        .ok()
+        .map(|h| {
+            std::path::PathBuf::from(h)
+                .join("bin")
+                .join("codehub-cli.exe")
+        })
+        .filter(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "codehub-cli".into());
+    let fut = bw_engine::tokio_cmd(&bin)
+        .args(["auth", "status"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(15), fut).await {
+        Err(_) => return EnvCheck::Fail("codehub-cli 探针超时(15s)".into()),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return EnvCheck::Fail("codehub-cli 未安装或不在 PATH".into());
+        }
+        Ok(Err(e)) => return EnvCheck::Fail(format!("无法运行 {bin}:{e}")),
+        Ok(Ok(o)) => o,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let zones = logged_in_codehub_zones(&stdout);
+    if !zones.is_empty() {
+        return EnvCheck::Ok(format!("已登录 {}", zones.join(" / ")));
+    }
+    let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() && !err.is_empty() {
+        return EnvCheck::Fail(err);
+    }
+    EnvCheck::Fail("未登录任何区:先本机 `codehub-cli -H green|open|yellow auth login`".into())
 }
 
 /// Filesystem-safe slug for a project's workspace directory: ascii
@@ -11930,5 +12056,47 @@ mod inreview_poll_refresh_tests {
         assert!(!app.take_scheduler_ui_dirty());
         let _ = AppState::default().scheduler_ui_dirty;
         let _ = std::fs::remove_file(&db);
+    }
+}
+
+/// Wall「测一下」must accept any logged-in CodeHub zone, not only 内源.
+#[cfg(test)]
+mod codehub_env_probe_tests {
+    use super::logged_in_codehub_zones;
+
+    const STATUS_THREE_ROWS: &str = "\
+               HOST                  AUTH TYPE    USERNAME      TOKEN     EXPIRES AT  LOGIN          LOGIN AT           DEFAULT  ACTIVE
+  https://codehub-g.huawei.com     private-token  tester     abcd...wxyz  -           yes    2026-07-28T15:29:21+08:00
+  https://open.codehub.huawei.com  private-token  tester     efgh...ijkl  -           yes    2026-07-28T15:29:56+08:00  yes      yes
+  https://codehub-y.huawei.com     private-token  -          -            -           no     -
+";
+
+    const STATUS_YELLOW_ONLY: &str = "\
+  https://codehub-g.huawei.com     private-token  -          -            -           no     -
+  https://open.codehub.huawei.com  private-token  -          -            -           no     -
+  https://codehub-y.huawei.com     private-token  someone    abcd...wxyz  -           yes    2026-08-17T10:00:00+08:00
+";
+
+    #[test]
+    fn yellow_only_counts_as_logged_in() {
+        assert_eq!(logged_in_codehub_zones(STATUS_YELLOW_ONLY), vec!["黄区"]);
+    }
+
+    #[test]
+    fn green_and_open_both_count() {
+        assert_eq!(
+            logged_in_codehub_zones(STATUS_THREE_ROWS),
+            vec!["绿区", "内源"]
+        );
+    }
+
+    #[test]
+    fn none_logged_in_is_empty() {
+        let none = "\
+  https://codehub-g.huawei.com     private-token  -          -            -           no     -
+  https://open.codehub.huawei.com  private-token  -          -            -           no     -
+  https://codehub-y.huawei.com     private-token  -          -            -           no     -
+";
+        assert!(logged_in_codehub_zones(none).is_empty());
     }
 }

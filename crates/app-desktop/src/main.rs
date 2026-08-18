@@ -5,6 +5,7 @@
 //! (signals, trends, feeds, transcripts) arrives pre-derived in the [`Vm`].
 
 #![forbid(unsafe_code)]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod flow;
 mod kernel;
@@ -470,6 +471,7 @@ fn Root() -> Element {
                 } else {
                     Wall {
                         projects: v.projects.clone(),
+                        local_env: v.local_env.clone(),
                         on_new: move |_| {
                             submitting.set(false);
                             creating.set(true);

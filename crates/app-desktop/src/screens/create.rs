@@ -15,7 +15,9 @@ use crate::kernel::{
     ActionItem, CreateVm, Kernel, ACTION_FAIL_LINGER, ACTION_OK_LINGER, ACTION_PENDING_THRESHOLD,
 };
 use crate::theme;
-use bw_app::{CodehubOrigin, Command, GithubOrigin, Panel, RemoteProjectProbe, Scope};
+use bw_app::{
+    CodehubOrigin, Command, GithubOrigin, Panel, RemoteProjectProbe, Scope, ONBOARD_REPO_LIST_LIMIT,
+};
 use bw_core::model::Cadence;
 use bw_core::ProjectId;
 use bw_engine::{CodehubRepoSummary, GithubRepoSummary};
@@ -296,6 +298,49 @@ fn RepoCard(
     let input = theme::input();
     let is_new = matches!(choice(), RepoChoice::New { .. });
     let is_codehub = platform() == "codehub";
+    let selected_gh = match &choice() {
+        RepoChoice::Existing { owner, repo } => format!("{owner}/{repo}"),
+        RepoChoice::New { .. } => String::new(),
+    };
+    let combo_ch: Vec<RepoComboItem> = codehub_repos
+        .iter()
+        .map(|r| {
+            let branch = if r.default_branch.trim().is_empty() {
+                "?"
+            } else {
+                r.default_branch.as_str()
+            };
+            RepoComboItem {
+                value: r.path.clone(),
+                title: r.path.clone(),
+                meta: format!("{} · {branch}", r.visibility),
+                haystack: format!("{} {} {}", r.path, r.description, r.default_branch)
+                    .to_lowercase(),
+            }
+        })
+        .collect();
+    let combo_gh: Vec<RepoComboItem> = github_repos
+        .iter()
+        .map(|r| {
+            let value = format!("{}/{}", r.owner, r.repo);
+            let vis = if r.private { "private" } else { "public" };
+            let branch = if r.default_branch.trim().is_empty() {
+                "?"
+            } else {
+                r.default_branch.as_str()
+            };
+            RepoComboItem {
+                value: value.clone(),
+                title: value,
+                meta: format!("{vis} · {branch}"),
+                haystack: format!(
+                    "{}/{} {} {}",
+                    r.owner, r.repo, r.description, r.default_branch
+                )
+                .to_lowercase(),
+            }
+        })
+        .collect();
 
     // can_send gate: github = same as before (new always ok, existing needs
     // owner); codehub new = name+namespace non-empty; codehub existing =
@@ -436,14 +481,16 @@ fn RepoCard(
                             "↻ 刷新列表"
                         }
                     }
-                    select {
-                        style: "{input} margin-top:6px;",
-                        value: "{codehub_path()}",
-                        onchange: {
+                    RepoCombobox {
+                        selected: codehub_path(),
+                        placeholder: "搜索 path / 描述 / 默认分支，点一条选中".to_string(),
+                        loaded: codehub_repos.len(),
+                        empty_hint: format!("没读到仓库列表 —— 点「↻ 刷新列表」加载(需本机 codehub-cli 已登录:codehub-cli -H {} auth status)。", codehub_host()),
+                        items: combo_ch,
+                        on_select: {
                             let k = k.clone();
                             let codehub_repos = codehub_repos.clone();
-                            move |e| {
-                                let path = e.value();
+                            move |path: String| {
                                 codehub_path.set(path.clone());
                                 if path.trim().is_empty() {
                                     k.send(Command::ClearRemoteProjectProbe);
@@ -462,26 +509,6 @@ fn RepoCard(
                                 }
                             }
                         },
-                        option { value: "", "请选择…" }
-                        for r in codehub_repos.iter() {
-                            {
-                                let value = r.path.clone();
-                                let vis = r.visibility.clone();
-                                let branch = if r.default_branch.trim().is_empty() {
-                                    "?".to_string()
-                                } else {
-                                    r.default_branch.clone()
-                                };
-                                rsx! {
-                                    option { key: "{value}", value: "{value}", "{value} · {vis} · {branch}" }
-                                }
-                            }
-                        }
-                    }
-                    if codehub_repos.is_empty() {
-                        p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 点「↻ 刷新列表」加载(需本机 codehub-cli 已登录:codehub-cli -H {codehub_host()} auth status)。" }
-                    } else {
-                        p { style: "font-size:11px;color:{ink3};margin-top:8px;", "仓不在列表=需先成为 member,不留手填 fallback(如实约束)。" }
                     }
                     if let Some(meta) = selected_ch_meta {
                         {codehub_repo_metadata_block(&meta)}
@@ -545,20 +572,17 @@ fn RepoCard(
                             "↻ 刷新列表"
                         }
                     }
-                    select {
-                        style: "{input} margin-top:6px;",
-                        value: {
-                            if let RepoChoice::Existing { owner, repo } = &choice() {
-                                format!("{owner}/{repo}")
-                            } else {
-                                String::new()
-                            }
-                        },
-                        onchange: {
+                    RepoCombobox {
+                        selected: selected_gh.clone(),
+                        placeholder: "搜索 owner/repo / 描述 / 默认分支，点一条选中".to_string(),
+                        loaded: github_repos.len(),
+                        empty_hint: "没读到仓库列表 —— 点「↻ 刷新列表」加载(需本机 gh 已登录:gh auth status)。".to_string(),
+                        items: combo_gh,
+                        on_select: {
                             let k = k.clone();
                             let github_repos = github_repos.clone();
-                            move |e| {
-                                if let Some((owner, repo)) = e.value().split_once('/') {
+                            move |value: String| {
+                                if let Some((owner, repo)) = value.split_once('/') {
                                     let owner = owner.to_string();
                                     let repo = repo.to_string();
                                     choice.set(RepoChoice::Existing {
@@ -581,24 +605,6 @@ fn RepoCard(
                                 }
                             }
                         },
-                        option { value: "", "请选择…" }
-                        for r in github_repos.iter() {
-                            {
-                                let value = format!("{}/{}", r.owner, r.repo);
-                                let vis = if r.private { "private" } else { "public" };
-                                let branch = if r.default_branch.trim().is_empty() {
-                                    "?".to_string()
-                                } else {
-                                    r.default_branch.clone()
-                                };
-                                rsx! {
-                                    option { key: "{value}", value: "{value}", "{value} · {vis} · {branch}" }
-                                }
-                            }
-                        }
-                    }
-                    if github_repos.is_empty() {
-                        p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "没读到仓库列表 —— 点「↻ 刷新列表」加载(需本机 gh 已登录:gh auth status)。" }
                     }
                     if let Some(meta) = selected_gh_meta {
                         {repo_metadata_block(&meta)}
@@ -1185,6 +1191,173 @@ fn IntentCard(
 }
 
 // ───────────────────────── helpers ─────────────────────────
+
+/// How many matching repos the combobox panel paints. Fetch is
+/// [`ONBOARD_REPO_LIST_LIMIT`]; search filters that loaded set.
+const ONBOARD_REPO_DROPDOWN_CAP: usize = 30;
+
+#[derive(Clone, PartialEq)]
+struct RepoComboItem {
+    value: String,
+    title: String,
+    meta: String,
+    haystack: String,
+}
+
+/// One field: type to filter the already-loaded list, click a row to pick.
+/// Native `<select>` cannot do this; a separate search box + select is not
+/// the conventional combobox the create flow needs.
+#[component]
+fn RepoCombobox(
+    selected: String,
+    placeholder: String,
+    loaded: usize,
+    empty_hint: String,
+    items: Vec<RepoComboItem>,
+    on_select: EventHandler<String>,
+) -> Element {
+    let mut query = use_signal(String::new);
+    let mut open = use_signal(|| false);
+    let mut highlight = use_signal(|| 0usize);
+    let ink3 = theme::INK_3;
+    let input = theme::input();
+    let q = query().trim().to_lowercase();
+    let shown: Vec<RepoComboItem> = items
+        .iter()
+        .filter(|r| q.is_empty() || r.haystack.contains(&q))
+        .take(ONBOARD_REPO_DROPDOWN_CAP)
+        .cloned()
+        .collect();
+    let hi = if shown.is_empty() {
+        0
+    } else {
+        highlight().min(shown.len() - 1)
+    };
+    let display = if open() {
+        query()
+    } else if !selected.is_empty() {
+        selected.clone()
+    } else {
+        String::new()
+    };
+    let field_placeholder = if selected.is_empty() {
+        placeholder.clone()
+    } else {
+        selected.clone()
+    };
+
+    let pick = {
+        let mut query = query;
+        let mut open = open;
+        move |value: String| {
+            query.set(String::new());
+            open.set(false);
+            on_select.call(value);
+        }
+    };
+
+    rsx! {
+        div { style: "position:relative;margin-top:8px;",
+            input {
+                style: "{input}",
+                placeholder: "{field_placeholder}",
+                value: "{display}",
+                onfocus: move |_| open.set(true),
+                oninput: move |e| {
+                    query.set(e.value());
+                    open.set(true);
+                    highlight.set(0);
+                },
+                onkeydown: {
+                    let shown = shown.clone();
+                    let mut pick = pick.clone();
+                    move |e: KeyboardEvent| {
+                        let key = e.key();
+                        match key {
+                            Key::Escape => {
+                                query.set(String::new());
+                                open.set(false);
+                            }
+                            Key::ArrowDown => {
+                                e.prevent_default();
+                                if shown.is_empty() {
+                                    return;
+                                }
+                                let next = (highlight() + 1).min(shown.len() - 1);
+                                highlight.set(next);
+                            }
+                            Key::ArrowUp => {
+                                e.prevent_default();
+                                if highlight() > 0 {
+                                    highlight.set(highlight() - 1);
+                                }
+                            }
+                            Key::Enter => {
+                                e.prevent_default();
+                                if let Some(item) = shown.get(highlight()) {
+                                    pick(item.value.clone());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                },
+                onblur: move |_| {
+                    open.set(false);
+                    query.set(String::new());
+                },
+            }
+            if open() && !items.is_empty() {
+                div {
+                    style: "position:absolute;left:0;right:0;top:100%;z-index:20;margin-top:4px;max-height:240px;overflow:auto;background:#FFFDF8;border:1px solid {theme::BORDER_DEEP};border-radius:8px;box-shadow:{theme::SHADOW};",
+                    if shown.is_empty() {
+                        div { style: "padding:10px 12px;font-size:12px;color:{ink3};",
+                            "已加载 {loaded} 个，没有匹配「{query}」。换关键词；仍没有 = 不是 member，或排在 {ONBOARD_REPO_LIST_LIMIT} 以外。"
+                        }
+                    } else {
+                        for (i, item) in shown.iter().enumerate() {
+                            {
+                                let value = item.value.clone();
+                                let title = item.title.clone();
+                                let meta = item.meta.clone();
+                                let active = i == hi;
+                                let is_sel = value == selected;
+                                let bg = if active {
+                                    "#F4E4DC"
+                                } else if is_sel {
+                                    "#F7F1E8"
+                                } else {
+                                    "transparent"
+                                };
+                                let mut pick = pick.clone();
+                                rsx! {
+                                    div {
+                                        key: "{value}",
+                                        style: "padding:8px 12px;cursor:pointer;background:{bg};",
+                                        onmousedown: move |e| {
+                                            e.prevent_default();
+                                            pick(value.clone());
+                                        },
+                                        onmouseenter: move |_| highlight.set(i),
+                                        div { style: "font-size:13px;line-height:1.4;", "{title}" }
+                                        div { style: "font-size:11px;color:{ink3};margin-top:2px;", "{meta}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if items.is_empty() {
+            p { style: "font-size:11.5px;color:{ink3};margin-top:8px;", "{empty_hint}" }
+        } else {
+            p { style: "font-size:11px;color:{ink3};margin-top:8px;",
+                "已加载 {loaded} 个（最多 {ONBOARD_REPO_LIST_LIMIT}）。框里搜索，下拉最多 {ONBOARD_REPO_DROPDOWN_CAP} 条。仍没有 = 不是 member，或排在 {ONBOARD_REPO_LIST_LIMIT} 以外。"
+            }
+        }
+    }
+}
 
 /// A row of selectable chips for one question. `options` = (label, selected).
 fn chip_question(

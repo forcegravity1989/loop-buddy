@@ -36,3 +36,8 @@ serde_yaml = { workspace = true }
 # transitively (via the dioxus/wry dependency chain, see Cargo.lock) — this
 # just names it directly so app-desktop can call it.
 base64 = "0.22"
+
+[build-dependencies]
+# Embed assets/app.ico as the Windows exe icon (resource 32512).
+# Dioxus reads that id for the window; Explorer / shortcuts use the same.
+winresource = "0.1"
