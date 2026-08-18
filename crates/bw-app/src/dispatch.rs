@@ -2612,25 +2612,26 @@ impl App {
                     self.store
                         .mark_issue_settled(id, now().unix_timestamp())
                         .await?;
-                    // The Done edge is the issue-side settle: the same real
-                    // accounting a workflow-run settle does, fed by the same
-                    // store functions. An issue completed by an agent teammate
-                    // is one real run + one real win for that agent —
-                    // `win_rate` derives from these counters, never hand-set.
-                    // (Cancelled records nothing: dropping an issue is not
-                    // evidence about the agent's work, and inventing a loss
-                    // would fabricate a metric. Reopen-and-redo also records
-                    // nothing new: one work item, one credit — the first win
-                    // stands in the append-only history.)
-                    if let Some(agent_id) = issue.assignee {
-                        if let Some(agent) = self.store.get_agent(agent_id).await? {
-                            // plan/20 R3: by-id——此前按 name 全表 UPDATE,
-                            // W1 之后每个项目都有同名五角色副本,一次 Done
-                            // 会给所有项目的同名队友齐记战绩(真 bug)。
-                            self.store.record_agent_run(agent.id, true).await?;
-                            self.refresh_agents().await?;
-                            self.emit(Event::AgentsChanged);
-                        }
+                    // The Done edge is where a teammate's WIN is recorded —
+                    // the human confirmed the work item; a run that merely
+                    // completed is not a win, a run that failed was already
+                    // recorded as a loss at settle (`finalize_run_interactive`).
+                    // One work item, one credit — `win_rate` derives from these
+                    // counters, never hand-set. (Cancelled records nothing:
+                    // dropping an issue is not evidence about the agent's work,
+                    // and inventing a loss would fabricate a metric.
+                    // Reopen-and-redo also records nothing new: the first win
+                    // stands in the append-only history.) Same identity rule as
+                    // the settle side (`credited_agent`: assignee, else the
+                    // stage's role teammate in this project, by-id — plan/20 R3:
+                    // 此前按 name 全表 UPDATE 会给所有项目的同名队友齐记战绩).
+                    if let Some(agent_id) = self
+                        .credited_agent(issue.project_id, issue.assignee, issue.stage)
+                        .await?
+                    {
+                        self.store.record_agent_run(agent_id, true).await?;
+                        self.refresh_agents().await?;
+                        self.emit(Event::AgentsChanged);
                     }
                     // Bug1(V1-TermDemote):issue → Done。若交付 PTY 仍活
                     // (claude 提完 MR 往往不退出),降级为咨询 → 放 active_run

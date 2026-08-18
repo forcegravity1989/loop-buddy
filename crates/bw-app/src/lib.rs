@@ -139,6 +139,11 @@ struct FinalizeCtx {
     /// workspace, mock run — heads stay `None`, never invented).
     heads_workspace: String,
     head_before: Option<String>,
+    /// Who gets the teammate credit for this work item — see
+    /// [`App::credited_agent`]. Snapshotted at start so a reassignment
+    /// mid-run doesn't move the loss onto someone else.
+    issue_stage: StageKind,
+    assignee: Option<AgentId>,
 }
 
 /// plan/17 S3 + V1 Issue2 Phase1: outcome a backgrounded run reports back

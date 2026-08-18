@@ -24,12 +24,11 @@ impl App {
             p,
             issue_id,
             run_id,
-            started,
-            heads_workspace,
-            head_before,
+            issue_stage,
+            assignee,
+            ..
         } = fin;
         let (p, issue_id, run_id) = (*p, *issue_id, *run_id);
-        let _ = (started, heads_workspace, head_before); // read via `settle_run_row`
         let run_ok = skill_output.completed;
 
         // Settle the run row exactly once — the same honest Ok/Failed row the
@@ -37,22 +36,23 @@ impl App {
         self.settle_run_row(fin, run_ok, &skill_output.summary)
             .await?;
 
-        // Agent/skill uses accounting — same as `finalize_run`: one real
-        // work item = one agent run, one skill use. Doing this once per
-        // interactive session (not per phase) keeps the compounding loop
-        // honest. plan/20 R3(main 合入): by-id via `scope::scoped_pick`,
-        // 同一条就近规则,他项目的同名五角色副本绝不被连带 bump。
-        let agent_catalog = self.store.list_agents().await?;
-        for a in &spec.agents {
-            if let Some(row) = bw_core::scope::scoped_pick(
-                agent_catalog.iter(),
-                Some(p),
-                |x| x.project_id,
-                |x| x.name == a.name,
-            ) {
-                self.store.record_agent_run(row.id, run_ok).await?;
+        // Teammate record — one work item, one credit, never two: a session
+        // that FAILED is a loss recorded here; a session that completed is
+        // not yet a win — the win is recorded when the human moves the Issue
+        // to Done (`TransitionIssue`, the only settle a human confirms).
+        // Before 2026-08-18 both places credited a run+win, so every Done
+        // issue showed runs=2/wins=2 (sqlite 读回抓出,违反「同一件活绝不
+        // 重复记账」)。Same identity rule as the Done edge (`credited_agent`).
+        if !run_ok {
+            if let Some(agent_id) = self.credited_agent(p, *assignee, *issue_stage).await? {
+                self.store.record_agent_run(agent_id, false).await?;
+                self.refresh_agents().await?;
+                self.emit(Event::AgentsChanged);
             }
         }
+        // Skill uses: once per interactive session (not per phase). plan/20
+        // R3: by-id via `scope::scoped_pick`,同一条就近规则,他项目的同名
+        // 副本绝不被连带 bump。
         let skill_catalog = self.store.list_skills().await?;
         for s in &spec.skills {
             if let Some(row) = bw_core::scope::scoped_pick(
@@ -63,10 +63,6 @@ impl App {
             ) {
                 self.store.record_skill_use(row.id).await?;
             }
-        }
-        if !spec.agents.is_empty() {
-            self.refresh_agents().await?;
-            self.emit(Event::AgentsChanged);
         }
         if !spec.skills.is_empty() {
             self.refresh_skills().await?;
@@ -102,6 +98,36 @@ impl App {
         } else {
             Err(AppError::Engine(skill_output.summary))
         }
+    }
+
+    /// The one identity rule for teammate credit on a work item: the
+    /// Issue's assignee when it has one, else the stage's built-in role
+    /// teammate (原型师/构建师/…) resolved by name **within this project**
+    /// (`scope::scoped_pick` — the same project-first rule every by-name
+    /// lookup uses, so another project's same-named copy is never touched).
+    /// Both the failure credit at run settle and the win credit at the
+    /// human's Done use this, so a work item's loss and win land on the same
+    /// row. `None` when neither resolves (nothing is credited — never a
+    /// made-up teammate).
+    pub(crate) async fn credited_agent(
+        &self,
+        project: ProjectId,
+        assignee: Option<AgentId>,
+        stage: StageKind,
+    ) -> Result<Option<AgentId>, AppError> {
+        if let Some(id) = assignee {
+            if self.store.get_agent(id).await?.is_some() {
+                return Ok(Some(id));
+            }
+        }
+        let catalog = self.store.list_agents().await?;
+        Ok(bw_core::scope::scoped_pick(
+            catalog.iter(),
+            Some(project),
+            |a| a.project_id,
+            |a| a.name == stage.role_short(),
+        )
+        .map(|a| a.id))
     }
 
     /// The resume path's settle accounting — a slimmed
@@ -744,6 +770,8 @@ impl App {
                 started: Instant::now(),
                 heads_workspace,
                 head_before,
+                issue_stage: issue.stage,
+                assignee: issue.assignee,
             })
         };
 
