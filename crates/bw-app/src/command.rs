@@ -342,24 +342,11 @@ pub enum Command {
         kind: SessionKind,
         title: String,
     },
-    RunWorkflow {
-        session: SessionId,
-        spec: WorkflowSpec,
-    },
-    /// Run one stage's **playbook** workflow for the active project: the
-    /// kernel assembles the real project context (brief/north star/last
-    /// handoff note/workspace state) into `stage_workflow_with_playbook`'s
-    /// per-phase instructions, then executes through the same
-    /// `run_workflow_inner` path as any other run. This is the "五角色真实
-    /// 执行" entry point — the UI/conductor names the stage; the kernel owns
-    /// what the role actually gets told.
-    RunStagePlaybook {
-        session: SessionId,
-        stage_kind: StageKind,
-    },
-    /// A3: run an Issue — assemble the issue's title/desc + its stage's role
-    /// playbook + any distilled (compounded) skills from the same project into
-    /// one real run through `run_workflow_inner`. The run records the issue_id,
+    /// Run an Issue — the one real "干活" entry: the issue's title/desc + its
+    /// stage's role playbook + any distilled (compounded) skills from the same
+    /// project are assembled into one prompt and handed to the interactive
+    /// executor (embedded-terminal PTY, or the mock when the project has no
+    /// workspace). Every run writes a `workflow_run` row bound to the issue,
     /// so the issue's detail answers "which runs/产物 did this produce?". The
     /// issue is pushed `InProgress` at start, `InReview` on success, and left
     /// `InProgress` on failure — **never auto-Done** (Done is a human
@@ -398,24 +385,9 @@ pub enum Command {
         source: HubSource,
         trigger: Option<String>,
     },
-    /// Promote the workflow most recently run in `session` (reconstructed
-    /// from the session's `stage_kind`, since a `Dynamic` spec is never
-    /// itself persisted) into a new `Static` hub entry.
-    PromoteWorkflow {
-        new_id: WorkflowId,
-        session: SessionId,
-        source: HubSource,
-    },
-    /// Run a workflow already stored in the hub. Looks the spec up, bumps its
-    /// `uses` counter, then executes identically to `RunWorkflow`.
-    RunHubWorkflow {
-        session: SessionId,
-        workflow_id: WorkflowId,
-    },
     /// "优化" an existing **Static** hub workflow — revise its authored
     /// content in place (bumps `version`; `uses`/`maturity`/`source` are
-    /// untouched). Distinct from `PromoteWorkflow` (mints a brand-new row
-    /// from a session run) and `CreateWorkflowSpec` (a fresh spec).
+    /// untouched). Distinct from `CreateWorkflowSpec` (a fresh spec).
     UpdateWorkflowSpec {
         id: WorkflowId,
         prompt: String,
@@ -428,23 +400,6 @@ pub enum Command {
         skills: Vec<SkillRef>,
         /// Why this "优化" happened — frozen onto the version snapshot (iter 5).
         note: String,
-    },
-    /// T17 (plan/12 §10 v1.1#4): "🔍 解析为流程图" — read `WorkflowSpec.content`
-    /// (the workflow's real authored MD document) through the SAME
-    /// Executor/agent_cli routing seam every real run goes through, and
-    /// strict-parse the executor's real output for a structured `phases`
-    /// list (name/role/reject_to_phase/agent/skills), same output-contract
-    /// discipline as T9's evaluator verdict. On a valid contract block that
-    /// passes every value-domain check, the workflow's `phases` are
-    /// overwritten (with a `WorkflowVersion` snapshot taken first, reusing
-    /// the same mechanism `UpdateWorkflowSpec` already uses — "解析一次用
-    /// 一世", re-running this command later re-parses and snapshots again).
-    /// On ANY problem (missing content, executor failure, missing/malformed
-    /// contract block, an out-of-domain field) this returns `Err` and
-    /// leaves `phases` completely untouched — an honest "未解析,仅文本",
-    /// never a partial or guessed adoption.
-    ParseWorkflowContent {
-        workflow_id: WorkflowId,
     },
     CreateSkill {
         id: SkillId,
@@ -684,10 +639,6 @@ pub enum Command {
         id: IssueId,
         reason: String,
     },
-    SendSessionMessage {
-        session: SessionId,
-        text: String,
-    },
     OpenProject(ProjectId),
     /// Delete a project and everything scoped to it. The CRUD-completeness
     /// counterpart to `CreateProject` — irreversible; the UI is responsible
@@ -741,27 +692,10 @@ pub enum Event {
     ProjectsChanged,
     ProjectUpdated(ProjectId),
     ViewChanged(View),
-    SessionMessageAdded {
-        session: SessionId,
-        role: Author,
-        text: String,
-    },
-    /// A run is really about to begin — carries the spec's own name/agents/
-    /// skills so the UI can show what's actually behind this run (real
-    /// `AgentRef`/`SkillRef` data from the spec, never invented) before the
-    /// first `WorkflowProgress` phase event arrives. Emitted once, first,
-    /// ahead of any `WorkflowProgress` for the same run.
-    RunStarted {
-        workflow_name: String,
-        agents: Vec<AgentRef>,
-        skills: Vec<SkillRef>,
-    },
-    WorkflowProgress {
-        phase_idx: usize,
-        status: String,
-    },
-    WorkflowDone,
-    WorkflowFailed(String),
+    /// An Issue run failed or was aborted — the human-readable reason. The
+    /// desktop shows it as a toast; the Issue itself stays where it was
+    /// (InProgress, retryable — never faked forward).
+    RunFailed(String),
     StageHandoff {
         from: StageKind,
         to: StageKind,
@@ -825,14 +759,6 @@ pub enum Event {
     ArtifactsChanged,
     /// L1(plan/11): the `AppState.cron_effectiveness` snapshot was (re)loaded.
     CronEffectivenessChanged,
-    /// The self-driving optimization cycle (iter 18) just ran. Carries the
-    /// full report — scanned workflows, proposals generated, what was
-    /// auto-applied (safe/positive), and what was deferred to a human. A
-    /// subscriber can surface "N opportunities found" without the cycle
-    /// having changed anything destructive.
-    OptimizationCycleReported {
-        report: OptimizationReport,
-    },
 }
 
 /// Three-state visibility for one `Event::ActionProgress` — see that

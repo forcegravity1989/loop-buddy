@@ -13,7 +13,7 @@
 
 use bw_app::{App, Command};
 use bw_core::model::HubSource;
-use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
+use bw_engine::ClaudeCliConfig;
 use bw_store::{SqliteStore, Store};
 use std::sync::Arc;
 
@@ -40,11 +40,7 @@ async fn main() {
     let _ = std::fs::remove_file(&db_path);
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db_path).await.unwrap());
-    let mut app = App::new(
-        store.clone(),
-        Engine::new(Arc::new(MockExecutor::new())),
-        ClaudeCliConfig::default(),
-    );
+    let mut app = App::new(store.clone(), ClaudeCliConfig::default());
     app.dispatch(Command::Boot).await.unwrap();
 
     let skills_before = store.list_skills().await.unwrap().len();

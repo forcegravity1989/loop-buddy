@@ -1364,7 +1364,7 @@ impl App {
                             .await?;
                         self.state.active_session = Some(session);
                         if let Err(e) = self.run_issue_now(session, issue_id).await {
-                            self.emit(Event::WorkflowFailed(format!(
+                            self.emit(Event::RunFailed(format!(
                                 "创建流「立即开工」失败,竞品分析活留在可重试状态:{e}"
                             )));
                         }
@@ -1714,54 +1714,6 @@ impl App {
                 self.state.active_session = Some(id);
             }
 
-            Command::RunWorkflow { session, spec } => {
-                let p = self.active()?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, None)
-                    .await?;
-            }
-
-            Command::RunStagePlaybook {
-                session,
-                stage_kind,
-            } => {
-                let p = self.active()?;
-                let proj = self.store.get_project(p).await?.ok_or(AppError::NotFound)?;
-                // The baton this stage received — the latest real handoff
-                // note (empty on a project's very first stage).
-                // `list_handoffs` is newest-first (ORDER BY created_at DESC),
-                // so the latest note is `.first()`.
-                let handoff_note = self
-                    .store
-                    .list_handoffs(p)
-                    .await?
-                    .first()
-                    .map(|h| h.note.clone())
-                    .unwrap_or_default();
-                let workspace_hint = if proj.workspace_path.trim().is_empty() {
-                    "（未配置真实工作区 —— 本次运行在 MockExecutor 上，产出仅为流程演示）"
-                        .to_string()
-                } else {
-                    format!(
-                        "工作区 {}（git 仓库）。请在其中完成一切产出；之前阶段的产出也在这里，先查看现状再动手。",
-                        proj.workspace_path.trim()
-                    )
-                };
-                let ctx = bw_core::playbook::PlaybookCtx {
-                    project_name: proj.name.clone(),
-                    project_kind: proj.kind.clone(),
-                    project_desc: proj.desc.clone(),
-                    benchmark: proj.benchmark.clone(),
-                    opportunity: proj.opportunity.clone(),
-                    north_star: proj.north_star.clone(),
-                    ns_def: proj.ns_def.clone(),
-                    handoff_note,
-                    workspace_hint,
-                };
-                let spec = stage_workflow_with_playbook(stage_kind, &ctx);
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, None)
-                    .await?;
-            }
-
             Command::CreateWorkflowSpec {
                 id,
                 name,
@@ -1824,46 +1776,6 @@ impl App {
                 self.emit(Event::WorkflowSpecsChanged);
             }
 
-            Command::PromoteWorkflow {
-                new_id,
-                session,
-                source,
-            } => {
-                let p = self.active()?;
-                let sess = self
-                    .store
-                    .list_sessions(p)
-                    .await?
-                    .into_iter()
-                    .find(|s| s.id == session)
-                    .ok_or(AppError::NotFound)?;
-                let spec = match sess.stage_kind {
-                    Some(kind) => stage_workflow(kind),
-                    None => {
-                        return Err(AppError::Invalid("会话未关联阶段,无法沉淀".into()));
-                    }
-                };
-                self.store.promote_workflow(new_id, &spec, source).await?;
-                self.refresh_workflow_specs().await?;
-                self.emit(Event::WorkflowSpecsChanged);
-            }
-
-            Command::RunHubWorkflow {
-                session,
-                workflow_id,
-            } => {
-                let p = self.active()?;
-                let spec = self
-                    .store
-                    .get_workflow_spec(workflow_id)
-                    .await?
-                    .ok_or(AppError::NotFound)?;
-                self.store.record_workflow_use(workflow_id).await?;
-                self.refresh_workflow_specs().await?;
-                self.run_workflow_inner(p, session, spec, RunTrigger::Manual, None, None, None)
-                    .await?;
-            }
-
             Command::RunIssue { session, id } => {
                 self.run_issue_now(session, id).await?;
             }
@@ -1907,10 +1819,6 @@ impl App {
                     .await?;
                 self.refresh_workflow_specs().await?;
                 self.emit(Event::WorkflowSpecsChanged);
-            }
-
-            Command::ParseWorkflowContent { workflow_id } => {
-                self.parse_workflow_content(workflow_id).await?;
             }
 
             Command::CreateSkill {
@@ -2986,27 +2894,6 @@ impl App {
                 self.store.block_issue(id, &reason).await?;
                 self.refresh_issues().await?;
                 self.emit(Event::IssuesChanged);
-            }
-
-            Command::SendSessionMessage { session, text } => {
-                self.store
-                    .append_message(session, Author::Builder, &text)
-                    .await?;
-                self.emit(Event::SessionMessageAdded {
-                    session,
-                    role: Author::Builder,
-                    text: text.clone(),
-                });
-                // Deterministic mock reply (the real agent reply arrives via Tier C).
-                let reply = format!("【mock】已收到:{text}");
-                self.store
-                    .append_message(session, Author::Agent, &reply)
-                    .await?;
-                self.emit(Event::SessionMessageAdded {
-                    session,
-                    role: Author::Agent,
-                    text: reply,
-                });
             }
 
             Command::OpenProject(id) => {

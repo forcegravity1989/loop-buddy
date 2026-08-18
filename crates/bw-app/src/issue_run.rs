@@ -4,31 +4,38 @@
 use super::*;
 
 impl App {
-    /// V1 Issue2 Phase1: the interactive path's settle accounting — the
-    /// counterpart of `finalize_run` for one-shot TUI agent sessions.
-    /// Does the same agent/skill `uses` bumping + artifact reflux, but
-    /// SKIPS the phase-based parts (no `workflow_run` row → no HEAD diff
-    /// via `set_run_heads`, no `LoopEnd` conversion). The interactive
-    /// session's terminal scrollback + session.jsonl is the record (§2.5
-    /// 砍了对话摘要 collector); the worktree's git state + artifacts are
-    /// the file-level evidence buddy keeps.
-    ///
-    /// DEVIATION: HEAD diff is not recorded for interactive runs (no
-    /// `workflow_run` row to attach `set_run_heads` to). The worktree's
-    /// own git log IS the diff evidence — it just isn't indexed in
-    /// buddy's `workflow_run.head_before/after` columns. Recorded in the
-    /// commit deviation note; Phase 2 can add a `workflow_run` row for
-    /// interactive sessions if needed.
-    #[allow(clippy::too_many_arguments)]
+    /// The interactive path's settle accounting for a FIRST run (resume goes
+    /// through `finalize_run_interactive_resume`): settle the `workflow_run`
+    /// row opened at start (Ok / Failed, real duration, before→after heads),
+    /// bump agent/skill `uses` once per session, and scan the workspace for
+    /// new artifact versions bound to this run + issue. The interactive
+    /// session's terminal scrollback + session.jsonl is the process record;
+    /// the worktree's git state + artifacts are the file-level evidence.
+    /// Returns `Err` when the session reported `completed = false` (the
+    /// issue stays InProgress, retryable — never auto-Done).
     pub(crate) async fn finalize_run_interactive(
         &mut self,
-        spec: &WorkflowSpec,
-        proj: &ProjectRow,
-        p: ProjectId,
-        issue_id: Option<IssueId>,
+        fin: &FinalizeCtx,
         skill_output: SkillOutput,
-    ) -> Result<RunOutcome, AppError> {
+    ) -> Result<(), AppError> {
+        let FinalizeCtx {
+            spec,
+            proj,
+            p,
+            issue_id,
+            run_id,
+            started,
+            heads_workspace,
+            head_before,
+        } = fin;
+        let (p, issue_id, run_id) = (*p, *issue_id, *run_id);
+        let _ = (started, heads_workspace, head_before); // read via `settle_run_row`
         let run_ok = skill_output.completed;
+
+        // Settle the run row exactly once — the same honest Ok/Failed row the
+        // Issue detail's「运行」list and `list_runs_for_issue` read back.
+        self.settle_run_row(fin, run_ok, &skill_output.summary)
+            .await?;
 
         // Agent/skill uses accounting — same as `finalize_run`: one real
         // work item = one agent run, one skill use. Doing this once per
@@ -67,9 +74,7 @@ impl App {
         }
 
         // Artifact reflux: scan the real workspace and register new file
-        // versions. No `workflow_run_id` (interactive sessions don't create
-        // one) — artifacts bind to the issue via `issue_id`. Scan errors
-        // are a 0-fresh no-op, same as the phase-loop path.
+        // versions bound to this run + issue. Scan errors are a 0-fresh no-op.
         if !proj.workspace_path.trim().is_empty() {
             let stage_kind = spec
                 .stage_ref
@@ -78,7 +83,7 @@ impl App {
                 .scan_and_register_artifacts(
                     p,
                     &proj.workspace_path,
-                    None, // no workflow_run row for interactive
+                    Some(run_id),
                     stage_kind,
                     issue_id,
                 )
@@ -90,22 +95,22 @@ impl App {
             }
         }
 
-        // Convert SkillOutput → RunOutcome. `completed = true` → Completed
-        // (the caller's tail advances to InReview iff a PR opens). `false`
-        // → Err (the issue stays InProgress, never auto-Done).
-        if skill_output.completed {
-            Ok(RunOutcome::Completed)
+        // `completed = false` → Err: the issue stays InProgress, never
+        // auto-Done; the run row above already says Failed with the reason.
+        if run_ok {
+            Ok(())
         } else {
             Err(AppError::Engine(skill_output.summary))
         }
     }
 
-    /// V1 Issue2 Phase2a: the resume path's settle accounting — a slimmed
+    /// The resume path's settle accounting — a slimmed
     /// `finalize_run_interactive` that does artifact scan ONLY (no agent/skill
-    /// `uses` bump — settle-once: the first run already counted the use; no
-    /// MR creation — the agent creates it in-session; no status transition —
-    /// InReview comes from the `poll_interactive_inreview` poller). Called
-    /// from `run_issue_settle` when `ar.is_resume` is true.
+    /// `uses` bump and no new `workflow_run` row — settle-once: the first run
+    /// already counted the use and owns the run row; no MR creation — the
+    /// agent creates it in-session; no status transition — InReview comes
+    /// from the `poll_interactive_inreview` poller). Called from
+    /// `run_issue_settle` when `ar.is_resume` is true.
     pub(crate) async fn finalize_run_interactive_resume(
         &mut self,
         proj: &ProjectRow,
@@ -118,7 +123,7 @@ impl App {
                 .scan_and_register_artifacts(
                     p,
                     &proj.workspace_path,
-                    None, // no workflow_run row for interactive
+                    None, // resume: no new run row (the first run owns it)
                     Some(stage),
                     issue_id,
                 )
@@ -694,13 +699,53 @@ impl App {
             workflow: spec.id,
         };
 
-        // Announce (same event as the phase-loop path — the UI shows
-        // "this run uses X/Y").
-        self.emit(Event::RunStarted {
-            workflow_name: spec.name.clone(),
-            agents: spec.agents.clone(),
-            skills: spec.skills.clone(),
-        });
+        // Open the run row (first run only — a resume re-enters the same
+        // session and the first run's row already owns it; settle-once).
+        // `heads_workspace` = the issue worktree when one exists, else the
+        // project workspace; empty for a mock run (heads stay NULL).
+        let heads_workspace = workspace_cwd.to_str().unwrap_or("").to_string();
+        let finalize = if is_resume {
+            None
+        } else {
+            let head_before = if heads_workspace.trim().is_empty() {
+                None
+            } else {
+                evidence::head_commit(&heads_workspace).await.ok().flatten()
+            };
+            let params_json = serde_json::json!({
+                "mode": "interactive",
+                "executor": if proj.workspace_path.trim().is_empty() { "mock" } else { "claude" },
+                "pty": self.state.pty_enabled,
+                "stage_ref": spec.stage_ref,
+                "agents": spec.agents.len(),
+                "skills": spec.skills.len(),
+            })
+            .to_string();
+            let run_id = self
+                .store
+                .record_workflow_run_start(bw_store::NewWorkflowRun {
+                    workflow_id: spec.id,
+                    workflow_name: &spec.name,
+                    project_id: Some(p),
+                    session_id: Some(_session),
+                    trigger: RunTrigger::Manual,
+                    started_at: OffsetDateTime::now_utc().unix_timestamp(),
+                    cron_task_id: None,
+                    params_json: &params_json,
+                })
+                .await?;
+            self.store.set_run_issue(run_id, id).await?;
+            Some(FinalizeCtx {
+                spec: spec.clone(),
+                proj: proj.clone(),
+                p,
+                issue_id: Some(id),
+                run_id,
+                started: Instant::now(),
+                heads_workspace,
+                head_before,
+            })
+        };
 
         // V1 Issue2 Phase2b: when PTY mode is enabled (desktop kernel wires
         // it via `App::with_pty`), the backgrounded path creates byte-stream
@@ -770,13 +815,8 @@ impl App {
                 issue,
                 handle,
                 guard,
-                finalize: FinalizeCtx {
-                    spec,
-                    proj: proj.clone(),
-                    p,
-                    issue_id: Some(id),
-                },
-                is_resume,
+                finalize,
+                proj,
             });
             Ok(())
         } else {
@@ -791,13 +831,14 @@ impl App {
             // MR creation — agent does it in-session; InReview comes from
             // polling). First run: uses + artifacts. Resume: artifacts only
             // (settle-once — uses were bumped on the first run).
-            if is_resume {
-                self.finalize_run_interactive_resume(&proj, p, Some(id), issue.stage)
-                    .await?;
-            } else {
-                let _ = self
-                    .finalize_run_interactive(&spec, &proj, p, Some(id), skill_output)
-                    .await?;
+            match finalize {
+                None => {
+                    self.finalize_run_interactive_resume(&proj, p, Some(id), issue.stage)
+                        .await?;
+                }
+                Some(fin) => {
+                    self.finalize_run_interactive(&fin, skill_output).await?;
+                }
             }
             // Guard drops on return (worktree cleanup). Issue stays in its
             // current state (InProgress on first run; unchanged on resume).
@@ -851,28 +892,27 @@ impl App {
         // `poll_interactive_inreview` 检测;无 MR 的活诚实停在 InProgress,不假装
         // 前进(铁律:Done 永不自动)。
         let outcome = match req.outcome {
-            SettleOutcome::Interactive(Ok(skill_output)) => {
-                if ar.is_resume {
+            SettleOutcome::Interactive(Ok(skill_output)) => match &ar.finalize {
+                None => {
                     self.finalize_run_interactive_resume(
-                        &ar.finalize.proj,
-                        ar.finalize.p,
-                        ar.finalize.issue_id,
+                        &ar.proj,
+                        ar.project,
+                        Some(ar.issue.id),
                         ar.issue.stage,
                     )
                     .await
-                    .map(|_| RunOutcome::Completed)
-                } else {
-                    self.finalize_run_interactive(
-                        &ar.finalize.spec,
-                        &ar.finalize.proj,
-                        ar.finalize.p,
-                        ar.finalize.issue_id,
-                        skill_output,
-                    )
-                    .await
                 }
+                Some(fin) => self.finalize_run_interactive(fin, skill_output).await,
+            },
+            SettleOutcome::Interactive(Err(e)) => {
+                // The executor itself failed (spawn error, PTY died…): settle
+                // the run row Failed with the reason so the table never shows
+                // a run that started and vanished.
+                if let Some(fin) = &ar.finalize {
+                    self.settle_run_failed(fin, &e.to_string()).await;
+                }
+                Err(e)
             }
-            SettleOutcome::Interactive(Err(e)) => Err(e),
             SettleOutcome::ConsultationEnded { .. } => unreachable!("handled above"),
         };
         // No `issue_run_tail` — the agent creates the MR in-session and the
@@ -888,7 +928,53 @@ impl App {
         drop(ar.guard);
         self.refresh_issues().await?;
         self.emit(Event::IssuesChanged);
-        outcome.map(|_| ())
+        outcome
+    }
+
+    /// Settle a first-run's `workflow_run` row exactly once: `Ok` (1 phase,
+    /// no error) or `Failed` (0 phases, `reason`), real finished_at /
+    /// duration, and — for a real workspace only — the before→after git
+    /// heads (mock runs keep both NULL, never invented). Idempotent at the
+    /// store (`settle_workflow_run` is a no-op on an already-settled row).
+    pub(crate) async fn settle_run_row(
+        &self,
+        fin: &FinalizeCtx,
+        ok: bool,
+        reason: &str,
+    ) -> Result<(), AppError> {
+        let (status, phases_completed, error) = if ok {
+            (RunStatus::Ok, 1, "")
+        } else {
+            (RunStatus::Failed, 0, reason)
+        };
+        self.store
+            .settle_workflow_run(
+                fin.run_id,
+                status,
+                OffsetDateTime::now_utc().unix_timestamp(),
+                fin.started.elapsed().as_millis() as i64,
+                phases_completed,
+                error,
+            )
+            .await?;
+        if !fin.heads_workspace.trim().is_empty() {
+            let head_after = evidence::head_commit(&fin.heads_workspace)
+                .await
+                .ok()
+                .flatten();
+            self.store
+                .set_run_heads(fin.run_id, fin.head_before.clone(), head_after)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// `settle_run_row(ok = false)` for the executor-error and cancel paths,
+    /// where there is no `SkillOutput` to hand to `finalize_run_interactive`.
+    /// Store errors are swallowed: the run already failed/was cancelled, and a
+    /// second error toast about the bookkeeping would hide the real one.
+    async fn settle_run_failed(&self, fin: &FinalizeCtx, reason: &str) {
+        let _ = self.settle_run_row(fin, false, reason).await;
     }
 
     /// plan/17 S3 (① 中止): abort the in-flight backgrounded interactive run
@@ -922,10 +1008,11 @@ impl App {
             self.clear_restoring_if(c.id);
         }
         self.forget_interactive_session(ar.issue.id);
-        self.emit(Event::WorkflowFailed(format!(
-            "Issue #{} 已中止",
-            ar.issue.number
-        )));
+        let reason = format!("Issue #{} 已中止", ar.issue.number);
+        if let Some(fin) = &ar.finalize {
+            self.settle_run_failed(fin, &reason).await;
+        }
+        self.emit(Event::RunFailed(reason));
         // The abort already succeeded — `active_run` was cleared by `take()`
         // above and the guard will clean the worktree when `ar` drops at fn
         // exit. A `refresh_issues` failure here is NOT the user's cancel

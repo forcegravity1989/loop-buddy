@@ -18,9 +18,7 @@ use bw_core::model::{
     CONNECTOR_KIND_SCRIPT,
 };
 use bw_core::{ConversationId, MetricId, SessionId};
-use bw_engine::{
-    ClaudeCliConfig, CodehubRepoSummary, Engine, GithubRepoSummary, MockExecutor, PermissionMode,
-};
+use bw_engine::{ClaudeCliConfig, CodehubRepoSummary, GithubRepoSummary, PermissionMode};
 use bw_store::{MetricRole, SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -472,26 +470,20 @@ pub fn spawn() -> Kernel {
                         return;
                     }
                 };
-                let mut app = App::new(
-                    store.clone(),
-                    Engine::new(Arc::new(MockExecutor::with_delay(Duration::from_millis(
-                        450,
-                    )))),
-                    claude_config_from_env(),
-                )
-                // All-in-one-codebase default: projects born through the
-                // creation flow get their own real git repo next to the DB.
-                .with_workspaces_root(workspaces_root())
-                // plan/17 S3: wire the back-channel that turns `RunIssue`
-                // from a blocking inline call into a backgrounded one. The
-                // matching `settle_rx` is polled in the `select!` loop
-                // below; examples / headless drivers never wire this →
-                // `RunIssue` stays inline there.
-                .with_settle_channel(settle_tx)
-                // V1 Issue2 Phase2b: enable PTY mode — interactive issue runs
-                // spawn claude in a PTY (portable-pty) instead of a system
-                // terminal, streaming bytes to the UI's xterm.js widget.
-                .with_pty();
+                let mut app = App::new(store.clone(), claude_config_from_env())
+                    // All-in-one-codebase default: projects born through the
+                    // creation flow get their own real git repo next to the DB.
+                    .with_workspaces_root(workspaces_root())
+                    // plan/17 S3: wire the back-channel that turns `RunIssue`
+                    // from a blocking inline call into a backgrounded one. The
+                    // matching `settle_rx` is polled in the `select!` loop
+                    // below; examples / headless drivers never wire this →
+                    // `RunIssue` stays inline there.
+                    .with_settle_channel(settle_tx)
+                    // V1 Issue2 Phase2b: enable PTY mode — interactive issue runs
+                    // spawn claude in a PTY (portable-pty) instead of a system
+                    // terminal, streaming bytes to the UI's xterm.js widget.
+                    .with_pty();
 
                 // Live event → transient note forwarding. Runs concurrently with
                 // dispatch (progress events are emitted mid-run).
@@ -500,7 +492,7 @@ pub fn spawn() -> Kernel {
                 tokio::spawn(async move {
                     while let Ok(e) = ev.recv().await {
                         let note = match e {
-                            Event::WorkflowFailed(err) => UiNote::RunFailed(err),
+                            Event::RunFailed(err) => UiNote::RunFailed(err),
                             Event::StageHandoff { from, to, risky } => {
                                 UiNote::Handoff { from, to, risky }
                             }

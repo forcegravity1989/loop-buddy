@@ -1,61 +1,9 @@
-//! 注入队友的提示词片段:技能正文块、蒸馏技能块、阶段目录块、标准技能块。
+//! 注入队友的提示词片段:蒸馏技能块、阶段目录块、标准技能块。
 //! 从 lib.rs 机械拆出(2026-08-17),逻辑未改。
 
 use super::*;
 
 impl App {
-    /// Resolve skill refs against the hub and render the non-empty bodies as
-    /// a prompt block. Pure read; the honest empty string when nothing
-    /// resolves. Capped so a pathological catalog can't drown the task.
-    ///
-    /// plan/20 R2: 按名解析走 `scope::scoped_pick` 就近优先——本项目行遮蔽
-    /// 全局同名行,他项目的行永不命中。遮蔽是行级的:被遮蔽定位到的行
-    /// content 为空则如实不注入,绝不再「就近找下一条能用的」——否则记账行
-    /// (R3,`finalize_run` 同一条规则解析)会与注入行分家。
-    pub(crate) async fn skills_prompt_block(
-        &self,
-        project: ProjectId,
-        refs: &[SkillRef],
-    ) -> Result<String, AppError> {
-        const MAX_BLOCK_CHARS: usize = 6000;
-        let catalog = self.store.list_skills().await?;
-        let mut bodies = Vec::new();
-        let mut total = 0usize;
-        for r in refs {
-            let Some(skill) = bw_core::scope::scoped_pick(
-                catalog.iter(),
-                Some(project),
-                |s| s.project_id,
-                |s| s.name == r.name,
-            ) else {
-                continue;
-            };
-            if skill.content.trim().is_empty() {
-                continue;
-            }
-            // plan/16 S7: bodies are spec-shaped SKILL.md text opening at
-            // `#`; the injector nests them two levels down so they sit
-            // correctly under this block's own H2 (see
-            // `bw_core::skill_body::demote_headings`). 变换**先做**再记账:
-            // 降级每个标题多两个 `#`,按变换前的长度记账会让这道「病态目录
-            // 不许淹掉任务」的护栏不再是它声称的那个硬上限。
-            let body = bw_core::skill_body::demote_headings(skill.content.trim(), 2);
-            let chars = body.chars().count();
-            if total + chars > MAX_BLOCK_CHARS {
-                break;
-            }
-            total += chars;
-            bodies.push(body);
-        }
-        if bodies.is_empty() {
-            return Ok(String::new());
-        }
-        Ok(format!(
-            "\n\n## 技能(工作方法,来自技能库)\n{}\n",
-            bodies.join("\n\n")
-        ))
-    }
-
     /// A3: render up to 3 distilled (compounded) skills for project `p` as a
     /// prompt block, same-stage preferred then proven-first (`uses` desc as the
     /// distill-time proxy — `SkillCard` carries no timestamp). Only skills with

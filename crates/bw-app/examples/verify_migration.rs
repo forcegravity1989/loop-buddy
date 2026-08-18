@@ -39,7 +39,7 @@
 //! Run: `cargo run -p bw-app --example verify_migration -- <db-path>`
 
 use bw_app::{App, Command};
-use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
+use bw_engine::ClaudeCliConfig;
 use bw_store::{SqliteStore, Store};
 use sqlx::Row;
 use std::sync::Arc;
@@ -61,11 +61,7 @@ async fn main() {
     // guard in SqliteStore::open — this is the actual migration path the
     // desktop app takes on every real launch, not a simulation of it.
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db_path).await.unwrap());
-    let mut app = App::new(
-        store.clone(),
-        Engine::new(Arc::new(MockExecutor::new())),
-        ClaudeCliConfig::default(),
-    );
+    let mut app = App::new(store.clone(), ClaudeCliConfig::default());
     app.dispatch(Command::Boot).await.unwrap();
 
     let skills = store.list_skills().await.unwrap();

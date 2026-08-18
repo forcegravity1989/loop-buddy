@@ -947,16 +947,11 @@ impl App {
 mod sync_remote_issues_tests {
     use super::*;
     use bw_core::model::{IssueStatus, MaturityPeriod};
-    use bw_engine::MockExecutor;
     use bw_store::SqliteStore;
 
     async fn boot_project(db: &str) -> (App, Arc<dyn Store>, ProjectId) {
         let store: Arc<dyn Store> = Arc::new(SqliteStore::open(db).await.expect("open db"));
-        let mut app = App::new(
-            store.clone(),
-            Engine::new(Arc::new(MockExecutor::new())),
-            ClaudeCliConfig::default(),
-        );
+        let mut app = App::new(store.clone(), ClaudeCliConfig::default());
         app.dispatch(Command::Boot).await.expect("boot");
         let pid = ProjectId::new();
         app.dispatch(Command::CreateProject {

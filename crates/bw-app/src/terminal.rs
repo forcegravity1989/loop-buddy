@@ -563,12 +563,12 @@ impl App {
         // 降级:首次 run 补记 skill uses(resume 不记,settle-once);不记
         // agent(Done 边 8845 已记 / 会记)。与 `finalize_run_interactive`
         // 的 skill 记账块同形(by-name scoped_pick,他项目不连带 bump)。
-        if !ar.is_resume {
+        if let Some(fin) = &ar.finalize {
             let skill_catalog = self.store.list_skills().await?;
-            for s in &ar.finalize.spec.skills {
+            for s in &fin.spec.skills {
                 if let Some(row) = bw_core::scope::scoped_pick(
                     skill_catalog.iter(),
-                    Some(ar.finalize.p),
+                    Some(fin.p),
                     |x| x.project_id,
                     |x| x.name == s.name,
                 ) {
@@ -577,6 +577,9 @@ impl App {
             }
             self.refresh_skills().await?;
             self.emit(Event::SkillsChanged);
+            // 交付到此结束(PTY 留作咨询):把首跑的 run 行按 Ok 结清,
+            // 不让它永远挂在 Running。
+            self.settle_run_row(fin, true, "").await?;
         }
         // handle + guard 迁到 consultation_runs;active_run 已 take(放锁)。
         self.state.consultation_runs.insert(
@@ -620,18 +623,12 @@ impl App {
 mod select_session_focus_tests {
     use super::*;
     use bw_core::model::{IssuePriority, MaturityPeriod};
-    use bw_engine::MockExecutor;
     use bw_store::SqliteStore;
     use std::path::PathBuf;
 
     async fn boot_project(db: &str) -> (App, Arc<dyn Store>, ProjectId) {
         let store: Arc<dyn Store> = Arc::new(SqliteStore::open(db).await.expect("open db"));
-        let mut app = App::new(
-            store.clone(),
-            Engine::new(Arc::new(MockExecutor::new())),
-            ClaudeCliConfig::default(),
-        )
-        .with_pty();
+        let mut app = App::new(store.clone(), ClaudeCliConfig::default()).with_pty();
         app.dispatch(Command::Boot).await.expect("boot");
         let pid = ProjectId::new();
         app.dispatch(Command::CreateProject {
@@ -1021,13 +1018,8 @@ mod select_session_focus_tests {
                 std::path::PathBuf::from("/tmp"),
                 None,
             ),
-            finalize: crate::FinalizeCtx {
-                spec: bw_core::model::stage_workflow(StageKind::Prototype),
-                proj: app.store.get_project(pid).await.unwrap().expect("proj"),
-                p: pid,
-                issue_id: Some(issue),
-            },
-            is_resume: true,
+            finalize: None,
+            proj: app.store.get_project(pid).await.unwrap().expect("proj"),
         });
         assert!(
             !app.state.terminal_manager.is_live(cid),
@@ -1070,10 +1062,9 @@ mod select_session_focus_tests {
 #[cfg(test)]
 mod inreview_poll_refresh_tests {
     use super::{
-        inreview_poll_interval_secs, App, AppState, ClaudeCliConfig, Engine,
-        INREVIEW_POLL_ACTIVE_SECS, INREVIEW_POLL_IDLE_SECS,
+        inreview_poll_interval_secs, App, AppState, ClaudeCliConfig, INREVIEW_POLL_ACTIVE_SECS,
+        INREVIEW_POLL_IDLE_SECS,
     };
-    use bw_engine::MockExecutor;
     use bw_store::{SqliteStore, Store};
     use std::sync::Arc;
 
@@ -1093,11 +1084,7 @@ mod inreview_poll_refresh_tests {
         let db_s = db.to_string_lossy().to_string();
         let _ = std::fs::remove_file(&db);
         let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db_s).await.expect("open"));
-        let mut app = App::new(
-            store,
-            Engine::new(Arc::new(MockExecutor::new())),
-            ClaudeCliConfig::default(),
-        );
+        let mut app = App::new(store, ClaudeCliConfig::default());
         assert!(!app.take_scheduler_ui_dirty());
         app.state.scheduler_ui_dirty = true;
         assert!(app.take_scheduler_ui_dirty());

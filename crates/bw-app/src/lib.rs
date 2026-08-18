@@ -43,18 +43,16 @@ mod project_sync;
 mod prompts;
 mod scheduler;
 mod terminal;
-mod workflow_engine;
 
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    classify_artifact_path, cron_due, parse_phase_outcome, parse_workflow_phases, stage_workflow,
-    stage_workflow_with_playbook, workflow_parse_contract_suffix, AgentCard, AgentRef, Artifact,
-    Author, Cadence, Connector, ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue,
+    classify_artifact_path, cron_due, stage_workflow_with_playbook, AgentCard, AgentRef, Artifact,
+    Cadence, Connector, ConnectorStatus, CronMode, CronStatus, CronTask, HubSource, Issue,
     IssuePriority, IssueStatus, KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta,
-    PhaseRole, Readiness, RunStatus, RunTrigger, SkillCard, SkillRef, SourceKind, StageKind,
-    Verdict, WorkflowKind, WorkflowSpec, BW_PROJECT_ASSETS_LIBRARY, BW_STANDARD_LIBRARY,
-    CONNECTOR_KIND_CLAUDE_CLI, CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO,
-    CONNECTOR_KIND_GIT_REPO, CONNECTOR_KIND_SCRIPT,
+    Readiness, RunStatus, RunTrigger, SkillCard, SkillRef, SourceKind, StageKind, WorkflowKind,
+    WorkflowSpec, BW_PROJECT_ASSETS_LIBRARY, BW_STANDARD_LIBRARY, CONNECTOR_KIND_CLAUDE_CLI,
+    CONNECTOR_KIND_CODEHUB_REPO, CONNECTOR_KIND_GITHUB_REPO, CONNECTOR_KIND_GIT_REPO,
+    CONNECTOR_KIND_SCRIPT,
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
@@ -62,12 +60,10 @@ use bw_core::{
     MetricId, ProjectId, SessionId, SkillId, WorkflowId, WorkflowRunId,
 };
 use bw_engine::{
-    allowed_tools_arg, build_consultation_resume_plan, build_project_context_block,
-    build_resume_plan, build_startup_plan, evidence, ClaudeCliConfig, ClaudeCliExecutor,
-    CodehubRepoSummary, ConversationMeta, Engine, GitCommit, GithubRepoSummary,
-    InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor, PermissionMode,
-    PhaseNode, ProjectFile, RunCtx, RunEvent, SkillOutput, TerminalManager, UnsupportedCliExecutor,
-    CLAUDE,
+    build_consultation_resume_plan, build_project_context_block, build_resume_plan,
+    build_startup_plan, evidence, ClaudeCliConfig, CodehubRepoSummary, ConversationMeta, GitCommit,
+    GithubRepoSummary, InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor,
+    PermissionMode, ProjectFile, RunCtx, SkillOutput, TerminalManager, CLAUDE,
 };
 use bw_store::{
     AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
@@ -82,24 +78,6 @@ use std::time::Instant;
 use time::{Date, Month, OffsetDateTime, Time};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
-
-/// The outcome of one self-driving optimization cycle (iter 18) — the
-/// measure→propose→gate loop's receipt. Every count is real (derived from the
-/// store), never asserted. `auto_applied`/`defer_to_human` carry the human-
-/// readable titles so a UI can render them directly.
-#[derive(Clone, Debug)]
-pub struct OptimizationReport {
-    /// Hub workflows scanned this cycle.
-    pub scanned: u32,
-    /// Total proposals generated across all workflows.
-    pub proposals: u32,
-    /// Safe/positive proposals the loop applied on its own (titles).
-    pub auto_applied: Vec<String>,
-    /// Proposals needing a human's judgement before acting (titles).
-    pub defer_to_human: Vec<String>,
-    /// Proposals rejected for insufficient evidence (count only).
-    pub rejected: u32,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -140,81 +118,27 @@ fn guard_skill_name(name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// How a `run_workflow_inner` call resolved once its adversarial review loop
-/// settled (T9, plan/12 §4). An honest *failure* (executor error, or a review
-/// output with no parseable verdict) is NOT an outcome here — it surfaces as
-/// `Err(AppError)`, leaving any associated Issue untouched (RunIssue keeps it
-/// `InProgress` for a retry).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RunOutcome {
-    /// The workflow ran to completion — a straight pipeline with no gate, or a
-    /// gated one whose Evaluator finally rendered `PASS`. The caller advances a
-    /// bound Issue to `InReview` (never `Done` — that stays a human decision).
-    Completed,
-    /// The Evaluator kept rejecting up to `loop_config.max_iter` rounds. Not a
-    /// failure and never auto-`Failed`: the caller parks a bound Issue in
-    /// `Blocked` (with this reason) for a human to decide (retry / rework the
-    /// workflow / drop). A run with no bound Issue just leaves its honest
-    /// per-round rows — no fabricated Issue (plan/12 §4).
-    BlockedAtCap { reason: String },
-}
-
-/// How the adversarial review loop in `run_workflow_inner` terminated —
-/// internal to that function (the outward-facing shape is [`RunOutcome`] /
-/// `Err`). Carried out of the `loop` as its break value so the after-loop
-/// accounting runs exactly once for every terminal path.
-enum LoopEnd {
-    /// The workflow passed (a gate rendered `PASS`, or there was no gate).
-    Passed,
-    /// The gate kept rejecting up to `max_iter` rounds — a Blocked outcome
-    /// (never auto-`Failed`).
-    Blocked(String),
-    /// An honest failure: an executor error, or a review output with no
-    /// parseable verdict. Surfaces as `Err`.
-    Failed(AppError),
-}
-
-/// plan/17 S3: everything `run_round_loop` needs to drive one issue-run's
-/// adversarial round loop, and everything `finalize_run` needs to settle the
-/// after-loop accounting. Built once on the main thread (`prepare_run`) so the
-/// long round loop can run on a `tokio::spawn` with NO `&mut App` (the loop
-/// only ever touched `self.store`/`self.emit` — shared borrows — per the
-/// long-standing `lib.rs` comment; S3 just makes that structural). The owned
-/// `Engine` is what unblocked the extraction: mock path clones the shared
-/// `mock_engine`'s `Arc`, real path clones a fresh one-shot executor's `Arc`.
-#[derive(Clone)]
-struct PreparedRun {
-    engine: Engine,
-    spec: WorkflowSpec,
-    ctx: RunCtx,
-    params_json: String,
-    eval_idx: Option<usize>,
-    num_phases: usize,
-    max_iter: u32,
-    /// One past the last phase index the loop runs each round (through the
-    /// gate, inclusive; or `num_phases` when there's no gate).
-    range_end: usize,
-    heads_workspace: String,
-    head_before: Option<String>,
-    proj: ProjectRow,
-    p: ProjectId,
-    session: SessionId,
-    issue_id: Option<IssueId>,
-    trigger: RunTrigger,
-    cron_task_id: Option<CronTaskId>,
-}
-
-/// plan/17 S3: the slice of [`PreparedRun`] that `finalize_run` reads after
-/// the loop returns — kept on the main thread (in [`ActiveRun`]) so the
-/// after-loop accounting (change window, agent/skill usage, artifact scan)
-/// runs under `&mut self`, exactly as it did inline. The `Engine` + loop
-/// locals are NOT here — they lived inside the spawn and are gone by settle.
+/// Everything `finalize_run_interactive` / `run_issue_settle` needs to close
+/// out one Issue run on the main thread (under `&mut self`) after the
+/// interactive session ends: the stage spec + project (for agent/skill
+/// accounting and the artifact scan) plus the `workflow_run` row this run
+/// opened at start — `run_id` / `started` / `head_before` let settle write the
+/// honest Ok/Failed row (duration, before→after heads) instead of leaving the
+/// run table empty.
 #[derive(Clone)]
 struct FinalizeCtx {
     spec: WorkflowSpec,
     proj: ProjectRow,
     p: ProjectId,
     issue_id: Option<IssueId>,
+    /// The `workflow_run` row opened by `record_workflow_run_start` when the
+    /// interactive session began. Settled exactly once (Ok / Failed).
+    run_id: WorkflowRunId,
+    started: Instant,
+    /// Workspace whose git head is compared before/after (empty = no
+    /// workspace, mock run — heads stay `None`, never invented).
+    heads_workspace: String,
+    head_before: Option<String>,
 }
 
 /// plan/17 S3 + V1 Issue2 Phase1: outcome a backgrounded run reports back
@@ -246,12 +170,12 @@ pub struct SettleReq {
     pub(crate) outcome: SettleOutcome,
 }
 
-/// V1 收口:issue ▶跑 全走嵌入终端(`run_issue_interactive`)后,issue 脚本
-/// 调度路径退场。`ActiveRun` 只服务交互式交付(same-project 串行锁 +
-/// `CancelRun` 的 `abort` + settle 的 `finalize_run_interactive(_resume)` +
-/// worktree guard)。`proj`/`issue_ws`/`pr_eligible` 三字段曾服务 `issue_run_tail`
-/// 的 create_mr/transition,随该函数一并删去。`finalize: FinalizeCtx` 承载 settle
-/// 所需的 spec/proj/issue_id;`is_resume` 选 finalize 分支(settle-once)。
+/// The one in-flight interactive delivery run (issue ▶跑): same-project
+/// serial lock + `CancelRun`'s `abort` + what settle needs on the main
+/// thread + the worktree guard. `finalize` is `Some` for a first run (owns
+/// the `workflow_run` row → `finalize_run_interactive`) and `None` for a
+/// resume (artifact scan only via `finalize_run_interactive_resume` —
+/// settle-once, the first run already counted uses and owns the row).
 struct ActiveRun {
     project: ProjectId,
     /// The bound Issue (id + number + github_number + title) — used to match
@@ -259,13 +183,9 @@ struct ActiveRun {
     issue: Issue,
     handle: JoinHandle<()>,
     guard: bw_engine::workspace::IssueWorktreeGuard,
-    finalize: FinalizeCtx,
-    /// V1 Issue2 Phase2a: whether this run is a resume (not the first run).
-    /// Set from the conversation's claude_session_id at dispatch time. The settle arm
-    /// uses it to pick `finalize_run_interactive_resume` (artifact scan only,
-    /// no uses bump — settle-once) vs `finalize_run_interactive` (first run:
-    /// uses + artifacts). Issue stays in its current state (never auto-Done).
-    is_resume: bool,
+    finalize: Option<FinalizeCtx>,
+    /// The project row (resume settle scans its workspace for artifacts).
+    proj: ProjectRow,
 }
 
 /// 咨询态 PTY(Done/InReview 续聊)。不进 active_run。
@@ -471,7 +391,6 @@ impl Default for AppState {
 /// The orchestration brain.
 pub struct App {
     store: Arc<dyn Store>,
-    mock_engine: Engine,
     state: AppState,
     events: broadcast::Sender<Event>,
     /// Root under which `CompleteCreation` auto-provisions each new project's
@@ -501,7 +420,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(store: Arc<dyn Store>, mock_engine: Engine, claude_config: ClaudeCliConfig) -> Self {
+    pub fn new(store: Arc<dyn Store>, claude_config: ClaudeCliConfig) -> Self {
         let (tx, _rx) = broadcast::channel(256);
         // V1 Issue2 Phase2b: start the hook listener (localhost HTTP server
         // that receives claude SessionStart/Stop hook events). Best-effort —
@@ -536,7 +455,6 @@ impl App {
         };
         Self {
             store,
-            mock_engine,
             state: AppState {
                 claude_config,
                 ..AppState::default()
@@ -1443,48 +1361,6 @@ async fn write_component_standards(app: &App, p: ProjectId) -> Result<(), AppErr
     Ok(())
 }
 
-/// Snapshot of the spec's shape at run time, serialized into the run's
-/// `params_json` (iter 3). Records what a run *actually executed* — so after
-/// a later `UpdateWorkflowSpec` rewrites the phases, a past run's history
-/// still truthfully shows the phases it ran. Pure function of the spec +
-/// trigger; no IO, no secrets.
-/// Forward one engine [`RunEvent`] to the live UI stream (T9 helper — shared by
-/// every `run_phase_range` call inside the adversarial loop so a subscriber sees
-/// phases advance and re-advance across rounds). `WorkflowDone` is emitted by
-/// the loop itself once the whole run truly finishes, so it's a no-op here.
-fn forward_progress(live: &broadcast::Sender<Event>, e: RunEvent) {
-    match e {
-        RunEvent::PhaseStarted { idx, name } => {
-            let _ = live.send(Event::WorkflowProgress {
-                phase_idx: idx,
-                status: format!("started:{name}"),
-            });
-        }
-        RunEvent::PhaseCompleted { idx, .. } => {
-            let _ = live.send(Event::WorkflowProgress {
-                phase_idx: idx,
-                status: "completed".into(),
-            });
-        }
-        RunEvent::WorkflowFailed { error } => {
-            let _ = live.send(Event::WorkflowFailed(error));
-        }
-        RunEvent::WorkflowDone { .. } => {}
-    }
-}
-
-/// The tail slice of a review output — enough context to seed the next round's
-/// reject baton or an honest error message, without dragging a whole transcript.
-fn review_tail(text: &str) -> String {
-    const MAX: usize = 400;
-    let t = text.trim();
-    let n = t.chars().count();
-    if n <= MAX {
-        return t.to_string();
-    }
-    t.chars().skip(n - MAX).collect()
-}
-
 /// desc 的第一句,按字符数截断。技能的 description 上限 1024 字符,整句进目录
 /// 会把 prompt 撑得没法读;第一句恰好是触发段所在。
 fn first_sentence_capped(desc: &str, cap: usize) -> String {
@@ -1501,43 +1377,6 @@ fn first_sentence_capped(desc: &str, cap: usize) -> String {
     }
     let cut: String = head.chars().take(cap).collect();
     format!("{cut}…")
-}
-
-/// `agent_cli`/`tools`/`allowed_tools_arg` are T6 (plan/12 §3) additions: the
-/// resolved Agent-CLI route and the exact `--allowedTools` value it implies,
-/// snapshotted BEFORE the engine runs — so a run's real invocation
-/// parameters read back from `params_json` regardless of whether the
-/// executor call itself ever completes (an `UnsupportedCliExecutor` errors
-/// on its very first call; a real `claude -p` call may hit a flaky gateway).
-fn run_params_snapshot(
-    spec: &WorkflowSpec,
-    trigger: RunTrigger,
-    agent_cli: &str,
-    tools: &[String],
-    allowed_tools_arg: Option<&str>,
-) -> String {
-    // serde_json::Value keeps this stable as the spec grows — adding a field
-    // later is additive, not a schema break on historical run rows.
-    let v = serde_json::json!({
-        "phases": spec.phases,
-        "phase_count": spec.phases.len(),
-        // Whether this run executed per-phase playbook instructions (vs the
-        // legacy shared prompt) — an A/B axis for later run analytics.
-        "playbook": !spec.phase_prompts.is_empty(),
-        "loop": { "retries": spec.loop_config.retries, "max_iter": spec.loop_config.max_iter },
-        "agents": spec.agents.len(),
-        "skills": spec.skills.len(),
-        "stage_ref": spec.stage_ref,
-        "trigger": trigger.text(),
-        "kind": match &spec.kind {
-            WorkflowKind::Static { version, .. } => format!("static:v{version}"),
-            WorkflowKind::Dynamic { origin, .. } => format!("dynamic:{origin}"),
-        },
-        "agent_cli": agent_cli,
-        "tools": tools,
-        "allowed_tools_arg": allowed_tools_arg,
-    });
-    v.to_string()
 }
 
 /// Compact, real `"YYYY-MM-DD HH:MM"` label for `CronTask.last_run` — a

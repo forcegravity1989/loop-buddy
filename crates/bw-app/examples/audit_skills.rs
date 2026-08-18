@@ -24,7 +24,7 @@
 use bw_app::{App, Command};
 use bw_core::model::HubSource;
 use bw_core::skill_spec::{check_skill_card, must_fix_count, SpecSeverity};
-use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
+use bw_engine::ClaudeCliConfig;
 use bw_store::{SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -221,11 +221,7 @@ async fn main() {
     }
 
     // ── 真实 Boot:bw-standard pristine 升源 + desc/content 自愈对账 ──
-    let mut app = App::new(
-        store.clone(),
-        Engine::new(Arc::new(MockExecutor::new())),
-        ClaudeCliConfig::default(),
-    );
+    let mut app = App::new(store.clone(), ClaudeCliConfig::default());
     app.dispatch(Command::Boot).await.unwrap();
 
     if fix {

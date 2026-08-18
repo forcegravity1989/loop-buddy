@@ -24,7 +24,7 @@
 use bw_app::{App, Command};
 use bw_core::model::{IssuePriority, IssueStatus, StageKind};
 use bw_core::IssueId;
-use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
+use bw_engine::{ClaudeCliConfig, PermissionMode};
 use bw_store::{SqliteStore, Store};
 use std::sync::Arc;
 
@@ -186,7 +186,6 @@ async fn main() {
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db_path).await.expect("open db"));
     let mut app = App::new(
         store.clone(),
-        Engine::new(Arc::new(MockExecutor::new())),
         ClaudeCliConfig {
             binary: None,
             max_budget_usd: 0.75,
