@@ -12,7 +12,7 @@
 | [07-product-proposition.md](07-product-proposition.md) | **产品命题**:原型引子页原文 + 用户语言拆解 + 工程对照表 | 全目录的写作范本;命题正文只用人话 |
 | [08-mvp-execution-plan.md](08-mvp-execution-plan.md) | MVP 的**定义**(项目的生命周期 × workflow 的生命周期)与当时的执行队列 | §1 定义仍作数;**执行队列已被 `docs/v1~v3-prototype/` 接管**(顶部横幅写明),别再照它排活 |
 | [13-github-mainline-creation-flow.md](13-github-mainline-creation-flow.md) | GitHub 为正本的创建流(D1-D12 十二条拍板) | 决定仍生效:issue = GitHub issue、验收 = merge、`.bw/metrics.toml` 正本 |
-| [15-acceptance-flow-workflow.md](15-acceptance-flow-workflow.md) | 验收流(考卷/真点击/证据报告)与 `scripts/*flow*` 工具链的权威说明 | 用 `scripts/run-flow.py` 之前读它;注意 ▶跑 已改走内嵌终端,`e2e/flows/core/02` 那张考卷可能过时(见 `docs/BACKLOG.md`) |
+| [15-acceptance-flow-workflow.md](15-acceptance-flow-workflow.md) | 验收流(考卷/真点击/证据报告)与 `scripts/*flow*` 工具链的权威说明 | 用 `scripts/run-flow.py` 之前读它;注意 ▶跑 已改走内嵌终端,`e2e/flows/core/02` 那张考卷可能过时(见 `docs/LEFTOVERS.md` 减负-8) |
 | [16-skill-standard-spec.md](16-skill-standard-spec.md) | 技能规范(S1-S7 硬规) | **规范长期有效**;`audit_skills` 例子按它巡检 |
 | [20-asset-scope-isolation.md](20-asset-scope-isolation.md) | 资产按项目归属的三层隔离(R1-R5 规则) | **规则活跃**;`scoped_pick` 是唯一按名解析器 |
 

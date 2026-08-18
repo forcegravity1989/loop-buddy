@@ -1,6 +1,6 @@
 # 08 · MVP 执行计划(v2.1)— 项目的生命周期 × workflow 的生命周期 · 项目自有,Hub 只管搜索与共享
 
-> ⚠️ **2026-08-17 状态注**:本文的 **§1 MVP 定义(项目的生命周期 × workflow 的生命周期)与归属决定仍作数**;但 §0 进度实况与 §3 执行队列**已不再是接手工作的入口**——2026-08 起的迭代排活在 [`../docs/v1-prototype/`](../docs/v1-prototype/)(V1 产品化)→ [`../docs/v2-prototype/`](../docs/v2-prototype/)(V2 调度/多人)→ [`../docs/v3-prototype/`](../docs/v3-prototype/)(V3 内嵌 Open Design),遗留问题清单在 `docs/v1-prototype/LEFTOVERS.md`,缓做的冗余功能在 [`../docs/BACKLOG.md`](../docs/BACKLOG.md)。下面的正文按写作时原样保留,不再更新。
+> ⚠️ **2026-08-17 状态注**:本文的 **§1 MVP 定义(项目的生命周期 × workflow 的生命周期)与归属决定仍作数**;但 §0 进度实况与 §3 执行队列**已不再是接手工作的入口**——2026-08 起的迭代排活在 [`../docs/v1-prototype/`](../docs/v1-prototype/)(V1 产品化)→ [`../docs/v2-prototype/`](../docs/v2-prototype/)(V2 调度/多人)→ [`../docs/v3-prototype/`](../docs/v3-prototype/)(V3 内嵌 Open Design),还没干的活(含缓做的冗余功能)只认 [`../docs/LEFTOVERS.md`](../docs/LEFTOVERS.md)。下面的正文按写作时原样保留,不再更新。
 
 > **30 秒导读**:本文是 **MVP 执行计划**——先看 §0 进度实况知道做到哪了,再看 §3 执行队列知道每件要做成什么样。给两类人看:接棒干活的会话,和核验真伪的人。期间两次「转向(用户拍板)」调整过接棒入口,原文集中在 §0.1 时间线,新决定以最晚一条为准。
 >

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **看不懂词先查这两处**:领域词(队友、交棒、观测、蒸馏……)与工程操作词(读回、门禁、记账……)见 `CONTEXT.md` 词表;字母数字代号(P2、W6、R1……)见 `docs/code-schemes.md` 代号索引。写任何给人看的东西之前,先读下方「写作纪律」。**找文档先看 `docs/README.md`(全仓文档地图);现在在做什么看 `docs/v1-prototype/` → `v2-prototype/` → `v3-prototype/`;缓做的冗余功能看 `docs/BACKLOG.md`。**
+> **看不懂词先查这两处**:领域词(队友、交棒、观测、蒸馏……)与工程操作词(读回、门禁、记账……)见 `CONTEXT.md` 词表;字母数字代号(P2、W6、R1……)见 `docs/code-schemes.md` 代号索引。写任何给人看的东西之前,先读下方「写作纪律」。**找文档先看 `docs/README.md`(全仓文档地图);现在在做什么看 `docs/v1-prototype/` → `v2-prototype/` → `v3-prototype/`(V4 规划在 `docs/v4-prototype/`);还没干的活(含缓做的冗余功能与结构债)只认 `docs/LEFTOVERS.md`;文档写到哪看 `docs/doc-boundaries.md`。**
 
 ## 这个仓库在做什么
 

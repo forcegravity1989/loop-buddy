@@ -31,7 +31,7 @@ crates/         bw-core(领域内核,wasm32 可编)· bw-engine(执行器/PTY/�
                 · bw-app(编排大脑,Command/Event 总线)· ui(ViewModel)· app-desktop(Dioxus 壳)
 plan/           现役计划与规范 7 篇(README 说明哪些作数)
 docs/           文档地图 docs/README.md · 当前迭代线 v1~v3-prototype/ · 运行时资产 buddy/ skills/
-                · 缓做清单 BACKLOG.md · 历史档案 archive/
+                · 遗留清单 LEFTOVERS.md(全产品唯一)· 文档边界 doc-boundaries.md · 版本登记 releases.md · 历史档案 archive/
 iterations/     PRACTICE-buddy.md(实践日志)
 e2e/ examples/ scripts/   验收流考卷与种子库 · 样板间库与 vendor 技能库 · 门禁与联调脚本
 ```

@@ -21,17 +21,36 @@
 | **P3 / P3b** | 单例 PTY 不能回看历史；Done 后无只读 resume 入口 | V3 可排 | |
 | **P7** | 创建未见章程/标准：静默失败还是 owned 判定 | V3 可排 | 未复现 |
 | **P9** | `connectors.toml` 的 `schedule` 不建独立 cron | V3 可排 | 一条 Daily 覆盖全部 script，字段只是文档 |
-| **P11** | Done 后阶段区退回空 Chat；会话卡永远「进行中」 | V3 可排 | |
+| **P11** | ~~Done 后阶段区退回空 Chat~~；会话卡永远「进行中」 | V3 可排 | ① 已随聊天视图整体删除而消失（2026-08-18 `d9ed28b`，Chat 视图不存在了）；② 仍开着，与 **减负-18** 同根（`session` 表只剩壳） |
 | **收拢工作区** | 后来者主目录落后远端，采集跑旧脚本；要独立「↻ 收拢」且 pull 失败必须报错 | V3 可排 | PRACTICE §4.15，未落地 |
 | **列仓 999 以外** | 创建流已拉 999、下拉画 30；再多要翻页/远端搜索 | V3 可排 | V3-use-fix 明确本轮不做 |
-| **V1-P1** | macOS 交互式终端不可用（实际 Windows-only） | 可排，非推广阻塞 | 文档勿再宣称 macOS 交互式可用 |
+| **V1-P1** | ~~macOS 交互式终端不可用~~ | ✅ 已修（2026-08-17 `748e514`） | PTY 后端抽成 `bw-engine/src/pty_backend.rs`：Windows conpty-oxide、macOS/Linux portable-pty；macOS 读回 `cargo run -p bw-engine --example pty_smoke`（三种模式）。Windows 分支仍只交叉编译核对、未真机（见 **减负-14**） |
 | **W1-4** | 四份组件标准内容打磨 | 低 | 模板已落 |
 | **W2-4 / W2-5** | 指南 m6 等校准；Hub 四组件完整规范 | 低 | |
 | **W2-7** | 诊断 spike 源文件是否清干净 | 低 | 待核实 |
 | **手填观测** | 手填指标不跨 buddy、不进仓 | 已知边界 | 指南如实说「本机过程数据」 |
 | **多版本线** | 同一项目多条在跑的版本线 | **V4 规划，不进 V3** | PRACTICE §4.16；先设计总览那盏灯怎么诚实 |
+| **减负-3** | 技能/队友批量导入无界面（只有三个 headless 例子 `import_skill_library` / `import_skill_package` / `import_ecc_agents`） | 低（新功能，非减负） | 要么 Hub 加「从目录导入」，要么明确「导入永远是命令行动作」（DEVELOPMENT.md 已写） |
+| **减负-4** | ConnectorHub / KnowledgeHub 只是登记单，无实际同步/读者 | V4 一并处理（Hub 屏 V4 重做） | 收进 Settings 一节 / KnowledgeHub 下线；连接器登记被创建流探针用到，别单删屏幕 |
+| **减负-5** | Routine 面板并入 Progress（同源观测流） | V4 一并处理（面板 V4 重做） | Progress 底部加「最近观测」折叠区，删 `Panel::Routine` |
+| **减负-6** | Artifact + Version 面板合并成一个「工作区」面板 | V4 一并处理 | 上半 git log、下半产物 |
+| **减负-7** | ProgressAll 继续减法（按 issue3「关口收件箱」思路） | V4 一并处理 | 不新增卡片 |
+| **减负-8** | `e2e/flows/core/02-issue-run-to-review.toml` 考卷按旧引擎写，未在内嵌终端路径重跑 | 低 | 用 `BW_FLOW` 在 mock 交互执行器上重跑五张考卷，过时的重写 |
+| **减负-9** | `bw-app/src/dispatch.rs` 的 3,000+ 行 `match` 仍是一个函数 | 结构债，随手做 | 每个 `Command::X =>` 臂提成 `fn handle_x`，逐臂一 commit |
+| **减负-10** | `bw-store/src/sqlite.rs` 3,800+ 行单文件 | 结构债 | 按表族拆 `sqlite/{schema,project,issue,skill,agent,workflow,cron,connector,observation,ledger}.rs`；同表列清单先抽 `const COLS_*` |
+| **减负-11** | `app-desktop/src/screens/op.rs` 六个面板仍在一个文件 | 结构债 / V4 一并 | 每面板一文件 |
+| **减负-12** | 字体未打包（依赖系统中文字体） | 低 | 打包 Noto Serif/Sans SC + JetBrains Mono，或 README 明写依赖系统字体 |
+| **减负-13** | `hook_listener::uninstall_hooks_config` 未接线（退出/卸载不清 `~/.claude/settings.json` 里的 hook） | 低 | 桌面壳退出钩子调一次，或 Settings 加「移除 hook」 |
+| **减负-14** | 内嵌终端 **Windows 后端未真机验证**（`pty_backend.rs::windows` 从原函数体搬入 + 2026-08-18 合入 main V3 的四处改动，只经 `cargo check --target x86_64-pc-windows-gnu`） | **V3 可排（有 Windows 机就跑）** | `cargo run -p bw-engine --example pty_smoke`（`bash -c` 换 `cmd /C echo pty-ok`）；PR #102 描述如实标注 |
+| **减负-15** | 内嵌终端首启 2000ms 后自动发 `\r` 是启发式，不是就绪侦测 | 低 | 侦测 TUI 就绪信号再发 |
+| **减负-16** | 内联单元测试的定位（约 2,000 行随 CI 跑；不要求写、改到就维护、不建回归大坝） | 已定，提醒 | CLAUDE.md 已如实表述 |
+| **减负-17** | PTY 运行的 `completed` 太粗：子进程退出（EOF 或读错误）一律 `completed: true`，退出码不看 | V3 可排 | `wait()` 退出码带回 `SkillOutput`（非零 → `completed: false`）；读错误与 EOF 分开记 |
+| **减负-18** | `session` 表只剩壳（正文 `message` 已删）：左栏「阶段记录」仍按 `SessionId` 索引、`RunIssue{session,id}` / `workflow_run.session_id` 带一个几乎无意义的会话 id | V4 一并处理（左栏 V4 重做） | 左栏改按 Issue / `claude_conversation` 索引；`RunIssue` 去 `session` 参数；`workflow_run.session_id` 停写；`session` 表 DROP（老库迁移）。P11 ② 同根 |
+| **减负-19** | `WorkflowSpec.phases` / `phase_prompts` / `LoopConfig` 只剩展示用途；`stage_workflow_with_playbook` 每次 ▶跑 仍渲染整套 `phase_prompts`（无人读）；`PhaseMeta.reject_to_phase`、`LoopConfig.retries/max_iter` 无消费者；Hub 卡「运行战绩」按 `workflow_run.workflow_id` 统计，而 Issue 运行的 spec id 每次新造，永远对不上 | V4 一并处理（Workflow 库 V4 不带） | `WorkflowSpec` 收成「名字 + 目标 + 阶段名 + 技能引用」；`rendered_phase_prompts` 删；老库列保留 |
+| **减负-20** | 项目级 `allow_commands` 是死旋钮（只被已删的一次性执行器消费；交互式恒 `--dangerously-skip-permissions`） | V3 可排 | 删 UI 开关 + `Command::SetWorkspace.allow_commands` + `ProjectRow.allow_commands`；列删除走 `drop_column_if_present` |
+| **减负-21** | bw-store 内联测试 `sync_connectors_file_empty_is_noop` 偶发失败（`tempdb_path()` 进程 id + 纳秒撞名） | 低 | 改 `tempfile::NamedTempFile` 或原子计数器后缀 |
 
-已关闭、已接受的条目仍在下方史实里，表里不重复。
+已关闭、已接受的条目仍在下方史实里，表里不重复。**减负-N** 系列是 2026-08-17/18 减负重构会话从 `docs/BACKLOG.md` 并入的（该文件已删，序号沿用；1、2 两条已做，收据在下方「减负重构收据」）。
 
 ### 归正（迁入时）
 
@@ -330,6 +349,8 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 
 **处置**：V1 不解。**V1 的实际目标平台按落成情况是 Windows-only**，文档不要再宣称 macOS 上交互式可用；转 issue 时按「macOS 交互式 PTY 后端」单独排一件，连带处理上面第 2、3 点。
 
+**2026-08-17 更新（减负重构会话，`docs/superpowers/specs/2026-08-17-debt-reduction-refactor-design.md` §2.4，commit `748e514`）**：✅ 未决点 1 已解——PTY 平台分叉抽成 `crates/bw-engine/src/pty_backend.rs`（Windows 仍 conpty-oxide；macOS/Linux 用 portable-pty，收尾按进程组杀），`run_skill_pty` 在所有平台都有实现。读回证据：`cargo run -p bw-engine --example pty_smoke`（起 `bash -c 'echo pty-ok'` 读回字节）、`-- --teardown`（丢输入端后 5s 内返回、`nohup` 孙进程被连坐）、`-- --abort`（`abort()` 丢弃 future 后子进程照样收割）在 macOS 上通过。未决点 2（`run_skill` 的 macOS 分支）此前已改成如实报 `completed = false`；未决点 3（错误人话映射）随 PTY 后端落地后不再是 macOS 的主路径问题。真跑 `claude` 仍受信任对话框/网关影响，不作为门禁。Windows 分支未真机验证 → **减负-14**。
+
 **事实源**：`crates/bw-engine/src/interactive_cli.rs`（`run_skill_pty` 的 `#[cfg(windows)]` L686、trait 默认实现「PTY not supported」L517、macOS `osascript` 分支 L608、`wait_child` 超时宣告 completed L809）、`crates/bw-app/src/lib.rs`（`run_issue_interactive` 按 `pty_enabled` 二选一 L5225）、`crates/app-desktop/src/kernel.rs:573`（无条件 `.with_pty()`）、`crates/bw-engine/Cargo.toml`（`portable-pty` non-Windows keepalive）。
 
 ---
@@ -430,3 +451,17 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 **处置**：✅ 已修。有候选时约 15s 轮询 + `scheduler_ui_dirty` 强制重建 Vm；merge 点击即禁用并 toast「正在合入…」，完成/失败后再恢复；二次合入 Done 短电路提示。`SessionEnd` hook 仍未接（设计 md 已记），短周期轮询覆盖「会话关了但最后一次 Stop 没查到」场景。
 
 **事实源**：`crates/bw-app/src/lib.rs`（`poll_interactive_inreview` / `INREVIEW_POLL_*` / `MergeIssuePr`）；`crates/app-desktop/src/kernel.rs`（tick Vm rebuild）；`crates/app-desktop/src/screens/op.rs`（merge busy）；指南 `buddy-guide.html`「触发查 MR」。
+
+---
+
+## 减负重构收据（2026-08-17/18，从 `docs/BACKLOG.md` 并入；找不到东西时先看这里）
+
+设计稿与两轮执行实录：`docs/superpowers/specs/2026-08-17-debt-reduction-refactor-design.md`（§5 第一轮、§6 第二轮、§6.4 评审）。分支 `claude/debt-reduction-refactor-2026-08-17`（PR #102，一个 PR 覆盖两轮）。
+
+**✅ 减负-1 · 旧聊天式执行引擎退役**（2026-08-18 六片：`0f4428f` 定时任务收敛 → `d9ed28b` 桌面旧视图 → `d2b4cbf` real_demo 重写 → `5fdbcce` bw-app 引擎胶水 → `26805f8` bw-engine 执行器 + bw-core 契约/分析层 → `ea7800d` store message 表；`788b80c` 记账修正；`531b042` 评审跟进）。删掉的：`crates/bw-app/src/workflow_engine.rs`、`crates/bw-engine/src/{mock,contract,unsupported_cli}.rs`、`bw_engine::{Engine,Executor,PhaseNode,PhaseOutput,RunEvent,RunSummary,ClaudeCliExecutor,allowed_tools_arg,build_prompt}`、`bw_core::model::{Verdict,PhaseOutcome,verdict_contract_suffix,parse_phase_outcome,workflow_parse_contract_suffix,parse_workflow_phases,Author,WorkflowRunAnalytics,WorkflowVersion,CronEffectiveness}`、`crates/bw-core/src/analysis.rs`；命令 `RunWorkflow/RunHubWorkflow/RunStagePlaybook/ParseWorkflowContent/SendSessionMessage/PromoteWorkflow/LoadCronEffectiveness`、事件 `RunStarted/WorkflowProgress/WorkflowDone/SessionMessageAdded/OptimizationCycleReported/CronEffectivenessChanged`（`WorkflowFailed` 改名 `RunFailed`）；`CronMode::{RunWorkflow,RunSkill,RunPrompt}`（老库行迁 `create_issue`）；桌面 `Chat/RunOutputs/RunBanner/PhaseTrack` 视图、`ChatVm/MsgVm/RunVm/CronEffectivenessVm`、WorkflowHub「⚡ 临时任务」/「确认导入(运行)」/「解析为流程图」/「N 次复用」、CronHub「▶ 立即执行」与详情「真实有效性」面板；`ClaudeCliConfig` 的 `max_budget_usd/default_mode/commands_mode` 与 `PermissionMode`（设置页三个不起作用的旋钮）、`BW_CLAUDE_MAX_BUDGET_USD`；Store 方法 `append_message/session_messages/promote_workflow/record_workflow_use/refresh_workflow_template_phases/delete_workflow_spec/list_workflow_runs/list_all_workflow_runs/workflow_analytics/list_workflow_versions/get_app_meta/set_app_meta/cron_effectiveness`；`message` 表（老库 `DROP TABLE IF EXISTS`）；`crates/bw-app/examples/seed_demo.rs`；`scripts/supervise-real-demo.sh`。**留下的**：`session` 表（减负-18）、`WorkflowSpec.phases/LoopConfig` 数据（减负-19）。**现在唯一的干活入口是 Issue ▶跑**（`Command::RunIssue`），每次运行写一行 `workflow_run`。
+
+**✅ 减负-2 · Autopilot 建活有界面了**（`0f4428f`）：CronHub 表单两型「到点建活（不自动跑）」/「到点采集指标」，派发 `CreateAutopilotTask`。
+
+**顺手修的真 bug**：队友战绩一件活记两次（`788b80c`）→ 失败在结算记败、胜在人点完成记胜；再收紧为只记「被指派且真跑过」的队友（`531b042`，此前从没跑过的活被人点完成也会给阶段角色队友记胜）；开工后早退的运行行必结成失败，不留永远「运行中」的行。**产品口径变化待用户过目**：CLAUDE.md 反命题「单次花费封顶」改为「全程可见、可中止，花费由用户把握」（交互式会话按设计不设预算、恒 `--dangerously-skip-permissions`；W2-3 那条「已接受的偏差」因此更彻底了）。
+
+**第一轮删掉的**（2026-08-17，git 历史可找回 `git log --diff-filter=D --summary`）：死代码 `bw_engine::github::checkout_issue_branch`、`Command::SyncProjectFile/RefreshIssues/RunDraftWorkflow/UpdateWeekPlan/RefreshHubs/AnnotateWeeklyReview/MigrateLegacyShellsIfNeeded` 及 handler、`Event::WeeklyReviewAnnotated/LegacyShellsMigrated`、`weekly_review` 表、`bw_core::model::drafting_workflow`；一次性存量迁移 `legacy_migration.rs` 全链；`crates/bw-app/examples/` 41 → 12（保留清单见 `DEVELOPMENT.md`）；`crates/app-web/` 占位；文档没删只搬 `docs/archive/`（规则见其 README）。

@@ -23,7 +23,7 @@
 //! - `metrics.rs` — metric seeding, `.bw/metrics.toml` sync, connector collection.
 //! - `project_sync.rs` — workspace probe, GitHub/CodeHub issue sync, assets, artifacts.
 //! - `prompts.rs` — prompt blocks injected into teammate sessions.
-//! - `workflow_engine.rs` — the old chat-style workflow engine (retirement: docs/BACKLOG.md #1).
+//! - `workflow_engine.rs` — the old chat-style workflow engine (deleted 2026-08-18; receipt: docs/LEFTOVERS.md 减负-1).
 
 #![forbid(unsafe_code)]
 

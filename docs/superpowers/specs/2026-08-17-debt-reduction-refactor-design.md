@@ -1,5 +1,7 @@
 # 2026-08-17 · 减负重构设计(删冗余 · 拆大文件 · 理文档 · 重排目录)
 
+> **2026-08-18 收尾注**:本文写作时的「`docs/BACKLOG.md`」已于合入 main 时并进 [`docs/LEFTOVERS.md`](../../LEFTOVERS.md)(全产品唯一遗留清单;条目改称 **减负-N**,序号沿用)并删除;下文的 BACKLOG 字样按此理解,不再逐句改写。
+>
 > **30 秒导读**:这篇是 2026-08-17 一次自主会话的设计稿:用户定的目标是「删冗余代码、做重构、把仓库负债降下来;冗余功能转成后续 issue 滞后处理;核心是做出一个**可用的工作台**(执行态、工作态,不是结果态);同时清理冗余文档、刷新文档、重构目录」。会话是无人值守模式,所有取舍都写在这里,**假设写明,方便事后推翻**。给两类人看:回来审核这次改动的用户,和下一个接手的会话。**现在作数**(执行结果见文末「执行实录」)。
 
 ## 0. 三条假设(自主会话替用户做的判断,如不同意请推翻)
@@ -125,7 +127,7 @@ iterations/                  只剩 PRACTICE-buddy.md(伙伴的实践日志,原�
 | 2 | `bw-app/issue_run.rs` `cancel_run` | macOS 上「中止」用 abort() 丢弃 future,Unix 后端收尾代码跑不到,`claude` 变孤儿 | 确认(读源码 + portable-pty 源码;conpty-oxide 侧托管会话本就 kill-on-drop) | 修:`ChildGuard` 的 Drop 在独立线程按进程组收尾;`pty_smoke -- --abort` 87ms 内全消失 |
 | 3 | `bw-engine/pty_backend.rs` 写键盘字节 | 同步阻塞写跑在桌面壳的 current_thread 运行时上,子进程不读 + 大段粘贴 = 整个内核卡死 | 确认(kernel.rs `new_current_thread` + portable-pty 无 O_NONBLOCK) | 修:两平台都改写线程 |
 | 4 | `pty_backend.rs` 早退错误路径 | 只 kill 不 wait,留僵尸 | 确认 | 修:统一走 `ChildGuard` |
-| 5 | `pty_backend.rs` 读循环 | 读错误与正常 EOF 都返回 completed:true、退出码不看,上层记成队友一场胜利 | 大概率(评审中/完成判定不受影响,由 PR 轮询推导) | **留**:BACKLOG 第 17 条,不在本次改语义 |
+| 5 | `pty_backend.rs` 读循环 | 读错误与正常 EOF 都返回 completed:true、退出码不看,上层记成队友一场胜利 | 大概率(评审中/完成判定不受影响,由 PR 轮询推导) | **留**:减负-17,不在本次改语义 |
 | 6 | `interactive_cli.rs` `run_skill` 回退路径 | Windows/Linux `tokio::process` 分支没 `env_clear()`,剥掉的嵌套会话变量漏回子进程 | 确认 | 修:补 `env_clear()` |
 | 7 | `app-desktop/kernel.rs` | 一次性 legacy 迁移删除后没有手动触发口 | 确认机制(真实日常库 done 标记全在;样板库无可迁移内容) | **留**:§2 的既定决定,未迁移旧库只是 Hub 留几条空壳 |
 | 8 | `terminal_manager.rs` 文档 | 还说「Unix adapter 本阶段不实现」 | 确认 | 修 |
@@ -138,8 +140,8 @@ iterations/                  只剩 PRACTICE-buddy.md(伙伴的实践日志,原�
 评审的另一个副产品:两平台 PTY 后端的 select! 主循环长得几乎一样但**刻意不抽公共骨架**(类型完全不同,硬抽会变一堆泛型),这条取舍写进了模块文档,免得下一位又提。
 
 **偏差(与 §2/§3 的计划相比,如实记)**:
-- §2.1 说 `RunStagePlaybook` 删——**没删**:`real_demo` 指挥器还在用它驱动五阶段环;转成 BACKLOG 第 1 条的一部分。
-- §2.1 说 `CreateAutopilotTask` 按「零派发即删」——**没删**:它是产品命题「定时任务只自动建活」的执行体,缺的是表单不是命令;登记为 BACKLOG 第 2 条。
+- §2.1 说 `RunStagePlaybook` 删——**没删**:`real_demo` 指挥器还在用它驱动五阶段环;转成 减负-1的一部分。
+- §2.1 说 `CreateAutopilotTask` 按「零派发即删」——**没删**:它是产品命题「定时任务只自动建活」的执行体,缺的是表单不是命令;登记为 减负-2。
 - 进程组杀用 `nix`(安全封装)而不是 next 分支那样的 `libc` 裸调用:bw-engine 整 crate `#![forbid(unsafe_code)]`,不为一个 syscall 开口子。
 - 示例实际删 29 个(41 → 12),不是 §1 估的 34:`sync_metrics_files`/`render_metrics`/`build_aihot_fixture`/`verify_stage_catalog`/`audit_skills` 逐个核实有现役用途,留下。
 - `CONTEXT.md` 计划里说不动(伙伴在改),实际加了一条「Builders' Workbench / BW / buddy / loop-buddy 是一件东西」词条——docs/README 里用了这句,按写作纪律第 3 条得先进词表。
@@ -153,7 +155,7 @@ iterations/                  只剩 PRACTICE-buddy.md(伙伴的实践日志,原�
 
 **证据(真实日常库,只读)**:定时任务只有 `collect_metrics` 1 条、`create_issue` 2 条,`run_workflow`/`run_skill`/`run_prompt` **零条**;旧引擎写的 `session`/`message` 最后一条 2026-07-28——8 月初内嵌终端主环落地后再没人碰过它。
 
-**依赖图(sonnet 子代理逐符号核过,纠正了 BACKLOG 第 1 条两处过时说法)**:
+**依赖图(sonnet 子代理逐符号核过,纠正了 减负-1两处过时说法)**:
 - 「无仓项目走 `mock_engine` 回退」——**过时**:无仓项目早已走 `MockInteractiveExecutor`,`App.mock_engine` 在 Issue 路径里从未被读。
 - `session` 表**不能删**:主环拿它当左栏「进行中 · 待你介入」的索引(每张 Issue ▶跑 前先 `StartSession`);能删的是 `message`(纯聊天记录,零读者)。
 
@@ -165,7 +167,7 @@ iterations/                  只剩 PRACTICE-buddy.md(伙伴的实践日志,原�
 | 2 | `ClaudeCliConfig`/`PermissionMode` | **留**(`claude_cli.rs` 精简成只有配置) | 交互式路径读 `binary`;`Command::SetClaudeConfig` 在用 |
 | 3 | `crates/bw-app/src/workflow_engine.rs` 整文件 + `PreparedRun`/`LoopEnd`/`forward_progress`/`cron_prompt_workflow`/`run_params_snapshot`/`stage_workflow` | **删** | 全是旧链内部;`finalize_run` 与交互式的 `finalize_run_interactive` 是各自独立实现的兄弟,不是共用 |
 | 4 | `Command::RunWorkflow`/`RunHubWorkflow`/`RunStagePlaybook`/`ParseWorkflowContent`/`SendSessionMessage`;`Event::WorkflowProgress`/`WorkflowDone`/`SessionMessageAdded`/`OptimizationCycleReported` | **删** | 派发点全在旧链的界面按钮;`ParseWorkflowContent` 解析出的 phases 只有旧引擎的阶段循环会执行,Issue 路径一次不读 |
-| 5 | 定时任务 `CronMode::RunWorkflow`/`RunSkill`/`RunPrompt` | **删**;只剩 `CreateIssue`(建活)与 `CollectMetrics`(采集);CronHub 表单改成这两型(顺手关闭 BACKLOG #2「Autopilot 建活无界面」);「▶ 立即执行」删;老库 `mode IN ('run_*')` 迁移为 `create_issue` | 产品铁律「定时任务只自动建活」+ 真实库零行;"到点跑"的执行体就是旧引擎 |
+| 5 | 定时任务 `CronMode::RunWorkflow`/`RunSkill`/`RunPrompt` | **删**;只剩 `CreateIssue`(建活)与 `CollectMetrics`(采集);CronHub 表单改成这两型(顺手关闭 减负-2「Autopilot 建活无界面」);「▶ 立即执行」删;老库 `mode IN ('run_*')` 迁移为 `create_issue` | 产品铁律「定时任务只自动建活」+ 真实库零行;"到点跑"的执行体就是旧引擎 |
 | 6 | `message` 表 | **DROP TABLE 迁移** | 零读者;与 `weekly_review` 同一条规矩「不为向后兼容留旧路径」 |
 | 7 | `session` 表 + `ensure_session`/`list_sessions`/`delete_session` | **留** | 主环左栏索引;换成按 Issue 键的导航是另一张票 → BACKLOG |
 | 8 | `workflow_run` 表 | **留,并让交互式运行开始/结算写行** | 删了引擎后它零写入者却仍有读者(Issue 详情「运行记录」、WorkflowHub 运行数、产物归属);产品承诺「每次运行的成败与耗时自动入账」目前在交互路径上是空的——填上比删掉更对 |
@@ -203,7 +205,7 @@ S1 定时任务收敛 → S2 桌面旧视图 → S3a `real_demo` 重写 + `seed_
 - 第 1/12 行之外补删 bw-core `Verdict/PhaseOutcome/verdict_contract_suffix/parse_phase_outcome/workflow_parse_contract_suffix/parse_workflow_phases`(评审门与「解析为流程图」的机器契约)与 `analysis.rs`(优化分析层)——引擎没了,它们零读者。
 - 第 6 行之外补删 10 个 Store 方法(其中 `get_app_meta/set_app_meta/delete_workflow_spec/refresh_workflow_template_phases` 是本分支之前就已无人调用、第一轮漏删)。
 - 表外顺手修了队友战绩双记账(`788b80c`),因为 S3a 重写指挥器后 SQL 读回第一次把它暴露出来。
-- 未动:项目级 `allow_commands`(同样是死旋钮,但牵涉 project 表列删除)→ BACKLOG #20。
+- 未动:项目级 `allow_commands`(同样是死旋钮,但牵涉 project 表列删除)→ 减负-20。
 
 **/code-review**:见文末「6.4 评审」。
 
@@ -216,14 +218,14 @@ S1 定时任务收敛 → S2 桌面旧视图 → S3a `real_demo` 重写 + `seed_
 | 1 | `issue_run.rs` 开工段 | `record_workflow_run_start` 之后 `set_run_issue` 若出错,`?` 直接返回,run 行永远「运行中」 | **修**:出错先把行结成失败再返回 |
 | 2 | `issue_run.rs` 内联路径(headless 例子) | 执行器起不来时 `?` 在结算之前返回,同样留下开着的行 | **修**:与后台路径同款,先 `settle_run_failed` 再返回错误 |
 | 3 | `dispatch.rs` Done 边 | `credited_agent` 回落到阶段角色队友:没指派、从没跑过、人手工做完点完成的活,也给「原型师」记一场胜——胜率被编出来 | **修**:只记**被指派且真跑过**的队友(库里有绑这张 Issue 的 `workflow_run` 行);结算侧记败用同一条规则;`FinalizeCtx.issue_stage` 随之删除 |
-| 4 | CronHub 详情页「真实有效性」 | 按 `trigger='scheduled'` 的 `workflow_run` 行统计;定时任务只建活/采集后再没人写这种行,面板永远「触发 0 次」 | **删整链**(store 方法、类型、命令、事件、状态槽、VM、面板);任务自身状态/上次触发仍显示;正解若要做见 BACKLOG 收据 |
+| 4 | CronHub 详情页「真实有效性」 | 按 `trigger='scheduled'` 的 `workflow_run` 行统计;定时任务只建活/采集后再没人写这种行,面板永远「触发 0 次」 | **删整链**(store 方法、类型、命令、事件、状态槽、VM、面板);任务自身状态/上次触发仍显示;正解若要做见 LEFTOVERS「减负重构收据」 |
 | 5 | WorkflowHub 卡片 + 详情 | 「N 次复用」读的 `uses` 字段,`record_workflow_use` 已删,数字冻结 | **删字段与文案**(`WorkflowHubRowVm.uses`) |
 | 6 | `issue_run.rs` / `terminal.rs` | 技能 uses 记账循环两处同形 | **抽 `credit_skill_uses`**,两处共用 |
 | 7 | `issue_run.rs` / `cron_hub.rs` | 手写 `StageKind::ALL.find(index==n)` | **改用 `StageKind::from_index`** |
 | 8 | `cancel_run` 文档注释 | 还在说「不做 finalize_run 记账」「偏差 vs 正常 Failed 路径」——旧引擎的措辞;没说 run 行在这里结成失败 | **改注释**如实 |
 | 9 | `run_issue_settle` 执行器崩溃分支 | 只结 run 行为失败,不给队友记败 | **不改,补注释**:claude 根本没起来是基础设施故障,不是队友的战绩证据 |
 | 10 | `terminal.rs` 降级咨询 | 人点完成时 PTY 还活着就把 run 行结成成功 | **不改,补注释**:结的是「交付」不是进程;之后的 I/O 属咨询,不再碰这一行 |
-| 11 | `model.rs::stage_workflow_with_playbook` | 每次 ▶跑 渲染整套 `phase_prompts`,没人读 | **滞后**:BACKLOG #19(WorkflowSpec 精简),不是 bug |
+| 11 | `model.rs::stage_workflow_with_playbook` | 每次 ▶跑 渲染整套 `phase_prompts`,没人读 | **滞后**:减负-19(WorkflowSpec 精简),不是 bug |
 | 12 | `scripts/probe-competitive-analysis-search.sh` | 注释引用已删的 `supervise-real-demo.sh` | **改注释** |
 
 **修后读回**(`real_demo` 全新库):`workflow_run` ok|10、issue_id 全绑;每位队友 runs=1 wins=1;10 件 Done 全有 `settled_at`;技能 uses 4/3/2 复利照旧。门禁全绿(含 `cargo test` 66 个内联测试)。

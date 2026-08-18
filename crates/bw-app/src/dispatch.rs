@@ -1,4 +1,4 @@
-//! `App::dispatch`:Command → 用例的唯一路由。一个大 match,按臂提取见 docs/BACKLOG.md 第 9 条。
+//! `App::dispatch`:Command → 用例的唯一路由。一个大 match,按臂提取见 docs/LEFTOVERS.md 减负-9。
 //! 从 lib.rs 机械拆出(2026-08-17),逻辑未改。
 
 use super::*;
