@@ -791,7 +791,7 @@ impl App {
                     name: ACTION_NAME.into(),
                     state: ActionState::Started,
                 });
-                match bw_engine::github::list_repos(30).await {
+                match bw_engine::github::list_repos(ONBOARD_REPO_LIST_LIMIT).await {
                     Ok(repos) => {
                         self.emit(Event::ActionProgress {
                             name: ACTION_NAME.into(),
@@ -825,7 +825,7 @@ impl App {
                     name: ACTION_NAME.into(),
                     state: ActionState::Started,
                 });
-                match bw_engine::codehub::list_repos(&host, 30).await {
+                match bw_engine::codehub::list_repos(&host, ONBOARD_REPO_LIST_LIMIT).await {
                     Ok(repos) => {
                         self.emit(Event::ActionProgress {
                             name: ACTION_NAME.into(),
@@ -1653,23 +1653,7 @@ impl App {
 
             Command::CollectMetrics => {
                 let p = self.active()?;
-                let s = self.collect_project_metrics(p).await?;
-                // Honest toast: only a pass that really measured at least one
-                // metric, with no failures or deferred definitions, is ok.
-                // "Nothing collected" must not wear a success colour.
-                let ok = s.is_success();
-                let mut detail = format!(
-                    "采集 · {} 更新 · {} 未变 · {} 未接（legacy 或脚本未产出）",
-                    s.changed, s.unchanged, s.deferred
-                );
-                if let Some(err) = &s.first_error {
-                    detail.push_str(&format!(";首个失败:{err}"));
-                }
-                self.emit(Event::ConnectorSynced {
-                    name: "指标采集".into(),
-                    ok,
-                    detail,
-                });
+                self.collect_project_metrics_announced(p).await?;
             }
 
             Command::StartSession {
@@ -2635,13 +2619,13 @@ impl App {
                     // 验收兜底,不管走的是 `MergeIssuePr`(内部 dispatch 到这里)
                     // 还是网页上把 PR 合了、回 buddy 裸点「→已完成」——两条路都
                     // 该把远端可能已经合入的改动拉回本地、把 `.bw/metrics.toml`/
-                    // `.bw/connectors.toml` 正本同步进 SQLite 缓存。此前只有
-                    // `MergeIssuePr` 路径做这件事,裸 `TransitionIssue`(网页合
-                    // MR 场景)完全跳过 sync,业务指标停在 seed 值——这是本条
-                    // 验证日志的头号发现。挪到这唯一的 Done 记账口后,两条入口
-                    // 共用同一次 pull+sync,不重复跑(`MergeIssuePr` 内部通过
-                    // `dispatch` 到这里,不再自己另跑一遍)。收拢/同步失败只软
-                    // 降级 toast,不因此回滚已经发生的验收。
+                    // `.bw/connectors.toml` 正本同步进 SQLite 缓存,并立刻采
+                    // 一轮(总览不该空着等「立即采集」)。此前只有
+                    // `MergeIssuePr` 路径做 sync,裸 `TransitionIssue`(网页合
+                    // MR 场景)完全跳过——这是本条验证日志的头号发现。挪到这
+                    // 唯一的 Done 记账口后,两条入口共用同一次 pull+sync+采,
+                    // 不重复跑(`MergeIssuePr` 内部通过 `dispatch` 到这里)。
+                    // 收拢/同步/采集失败只软降级 toast,不回滚已经发生的验收。
                     if let Ok(Some(proj)) = self.store.get_project(issue.project_id).await {
                         if !proj.workspace_path.trim().is_empty()
                             && !proj.remote_path.trim().is_empty()
@@ -2654,6 +2638,21 @@ impl App {
                                 Ok(()) => {
                                     self.sync_metrics_file_for(issue.project_id).await?;
                                     self.sync_connectors_file_for(issue.project_id).await?;
+                                    // 装上定义/装置后立刻采一轮——合入后总览
+                                    // 不该空着等用户自己发现「立即采集」。
+                                    // 采集失败只 toast,不回滚已经发生的验收。
+                                    if let Err(e) = self
+                                        .collect_project_metrics_announced(issue.project_id)
+                                        .await
+                                    {
+                                        self.emit(Event::ConnectorSynced {
+                                            name: "指标采集".into(),
+                                            ok: false,
+                                            detail: format!(
+                                                "验收后已装上采集装置,但这一次没采到:{e}"
+                                            ),
+                                        });
+                                    }
                                 }
                                 Err(e) => {
                                     self.emit(Event::ConnectorSynced {
@@ -2942,16 +2941,30 @@ impl App {
 
             Command::DeleteSession(id) => {
                 self.store.delete_session(id).await?;
-                // If the deleted session was the chat-focused one, drop the
-                // stale pointer so the workflow panel doesn't try to render
-                // messages for a session that no longer exists.
                 if self.state.active_session == Some(id) {
                     self.state.active_session = None;
                 }
-                // review: refresh issues so state.issues doesn't hold a stale
-                // session_id ref (delete_session nulled it in the DB; this
-                // re-reads the honest NULL into state).
+                // session 行已删；issue / claude_conversation 仍在，看板可唤醒。
                 self.refresh_issues().await?;
+                self.emit(Event::ViewChanged(self.state.view));
+            }
+            Command::ProbeLocalEnv => {
+                self.state.local_env.claude = EnvCheck::Probing;
+                self.state.local_env.codehub = EnvCheck::Probing;
+                self.emit(Event::ViewChanged(self.state.view));
+                let binary = self
+                    .state
+                    .claude_config
+                    .binary
+                    .clone()
+                    .filter(|p| std::path::Path::new(p).is_file())
+                    .or_else(|| resolve_claude_binary(None))
+                    .unwrap_or_else(|| "claude".into());
+                self.state.local_env.claude = match claude_version_probe(&binary).await {
+                    Ok(v) => EnvCheck::Ok(v),
+                    Err(e) => EnvCheck::Fail(e),
+                };
+                self.state.local_env.codehub = codehub_cli_probe().await;
                 self.emit(Event::ViewChanged(self.state.view));
             }
 

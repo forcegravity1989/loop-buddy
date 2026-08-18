@@ -131,8 +131,9 @@ app-desktop 真壳(Dioxus 0.7 hard-pin =0.7.9):kernel 桥(独立 tokio 线程)+ 
 
 ## 文档与协作约定
 
+- **文档写哪**:`docs/doc-boundaries.md`(设计 / 实践 / 遗留 / 版本登记)。还没干的活只认 `docs/LEFTOVERS.md`;出包与版本号认 `docs/releases.md`。当前节奏:V3 修 bug,V4 规划特性。
 - **先读什么**:`docs/README.md` 是全仓文档地图(现役 / 运行时资产 / 伙伴迭代线 / 归档)。按需要分三层:
-  - **现在在做什么**:`docs/v1-prototype/`(V1 产品化)→ `docs/v2-prototype/`(V2 调度/多人)→ `docs/v3-prototype/`(V3 内嵌 Open Design),各有 README 与逐文件状态表;遗留问题唯一完整清单是 `docs/v1-prototype/LEFTOVERS.md`;缓做的冗余功能与结构债在 `docs/BACKLOG.md`。
+  - **现在在做什么**:`docs/v1-prototype/`(V1 产品化)→ `docs/v2-prototype/`(V2 调度/多人)→ `docs/v3-prototype/`(V3 内嵌 Open Design),各有 README 与逐文件状态表;还没干的活(含缓做的冗余功能与结构债)只认 `docs/LEFTOVERS.md`;出包与版本号认 `docs/releases.md`。
   - **设计与命题**:`plan/README.md` 说明 plan/ 里 7 篇现役文档各管什么——`plan/06-overall-alignment.md`(设计唯一事实源,含「缺口台账」=持续追加的问题与任务登记表,G1-G11/R1-R4 编号)、`plan/07-product-proposition.md`(产品命题:引子页原文 + 用户语言拆解 + 工程对照表)、`plan/08-mvp-execution-plan.md`(MVP 定义=项目的生命周期 × workflow 的生命周期;其执行队列已被 docs/v1~v3-prototype 接管,顶部有注)、`plan/13`(GitHub 为正本的创建流拍板)、`plan/15`(验收流工具链)、`plan/16`(技能规范)、`plan/20`(资产三层隔离规则)。
   - **运行时资产**:`docs/buddy/`(系统提示词、`.bw/*.toml` 格式规范)与 `docs/skills/`(自带技能包)被 `include_str!` 编进二进制——改它就是改产品行为,不要搬。
 - **历史档案**:统一在 `docs/archive/`(规则见其 README):`plan/00~05` 路线与选型背景(七控制点模型、双团队分工等前提已被 06-08 取代)、`plan/09-12,14,17-19,21` 做完即历史的执行批次、`iterations/` 交接记录与 aihot 践行日志、`design/` Rust 重写前的 HTML 原型稿、`verification/` 2026-07 的演示报告。**编号语义保留**:源码注释里的 `plan/09 §2` 去 `docs/archive/plan/09-…` 找。顶部均有横幅,读时别当现状。`DEVELOPMENT.md` 是开发指南(工作区布局、门禁、headless 例子清单、验证方式)。

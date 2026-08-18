@@ -39,6 +39,5 @@
 ## 相关目录
 
 - [`../docs/README.md`](../docs/README.md):全仓文档地图(现役 / 运行时资产 / 伙伴迭代线 / 归档)。
-- [`../docs/BACKLOG.md`](../docs/BACKLOG.md):缓做的冗余功能与后续 issue 清单。
-- [`../iterations/PRACTICE-buddy.md`](../iterations/PRACTICE-buddy.md):唯一持续更新的实践日志;其余交接记录已归档到 `../docs/archive/iterations/`。
+- `../iterations/`:交接记录已归档到 `../docs/archive/iterations/`;[`../iterations/PRACTICE-buddy.md`](../iterations/PRACTICE-buddy.md) 是唯一持续更新的实践日志。还没干的活只认 [`../docs/LEFTOVERS.md`](../docs/LEFTOVERS.md)。文档边界见 [`../docs/doc-boundaries.md`](../docs/doc-boundaries.md);版本出包见 [`../docs/releases.md`](../docs/releases.md)。
 - [`../DEVELOPMENT.md`](../DEVELOPMENT.md):开发指南;[`../CLAUDE.md`](../CLAUDE.md):给 AI 的工作说明,含写作纪律。

@@ -8,16 +8,21 @@
 //!
 //! - [`windows::WindowsPtyBackend`] —— conpty-oxide,原函数体搬过来。相对搬迁
 //!   前的原函数体,改动有四处,逐条列出好对账:① 「读 `self.claude_binary`
-//!   字段」改成「读调用方传进来的 `binary` 参数」;② 起步 `env_clear()`(见
-//!   下);③ 键盘字节改由独立写线程落盘(见下「写线程」);④ 收尾按
+//!   字段」改成「读调用方传进来的 `binary` 参数」;② 子进程环境按下方那条
+//!   规矩处理(2026-08-18 合入 main V3 的写法后与 main 一致:`.cmd`/`.bat` 用
+//!   `cmd.exe /c` 托起、起步前先查工作目录与执行器路径存在、spawn 错误带
+//!   OS 错误码与 cwd);③ 键盘字节改由独立写线程落盘(见下「写线程」);④ 收尾按
 //!   `JoinHandle::is_finished()` 判断读线程是否已被 `select!` 轮询到 Ready,
 //!   不再二次 `.await`(tokio 会 panic「JoinHandle polled after completion」)。
 //! - [`unix::UnixPtyBackend`] —— portable-pty,补上 macOS/Linux 那一半。
 //!
-//! 两份后端起步都 `env_clear()` 再逐条套用 `LaunchPlan.env`——`plan.env` 本身
-//! 就是「当前进程全量环境 − 嵌套会话变量」的快照(见
-//! `interactive_cli::build_startup_plan`),不清空的话子进程会先整份继承父进程
-//! 环境,被删掉的 `ANTHROPIC_AUTH_TOKEN`/`CLAUDECODE` 等又原样漏回去。
+//! 两份后端的子进程环境都是「继承当前进程环境,再摘掉嵌套会话变量」
+//! (`interactive_cli::apply_child_env`,与系统终端那条 tokio `Command` 路径同一
+//! 张清单):不整份 `env_clear()` 再回放 `LaunchPlan.env`——V3 在 Windows 真机
+//! 踩到 windows-spawn 拒绝 `=C:` 这类隐藏环境名(2026-08 main `3410401`),
+//! 回放整张表反而起不来;只 `env_remove` 被禁的几个名字,`ANTHROPIC_AUTH_TOKEN`
+//! /`CLAUDECODE` 等就漏不回去,其余原样继承。`plan.env` 仍是那份快照,供测试与
+//! 读回核对,不再由后端回放。
 //!
 //! **写线程**:往 PTY 主端写键盘字节是同步阻塞的 fd 写(portable-pty 与
 //! conpty-oxide 都不开非阻塞),而这个 `run` future 被 bw-app `tokio::spawn`
@@ -112,8 +117,17 @@ pub mod windows {
     use tokio::sync::mpsc;
 
     use super::{PtyBackend, SUBMIT_READY_DELAY};
-    use crate::interactive_cli::{LaunchPlan, PtyInput, SkillOutput};
+    use crate::interactive_cli::{apply_child_env, EnvSink, LaunchPlan, PtyInput, SkillOutput};
     use crate::ExecError;
+
+    /// Same strip list as the tokio `Command` paths — see
+    /// `interactive_cli::apply_child_env` (never replay the full process map
+    /// through conpty-oxide: windows-spawn rejects hidden `=C:` names).
+    impl EnvSink for PtyCommand {
+        fn remove_env(&mut self, key: &str) {
+            self.env_remove(key);
+        }
+    }
 
     pub struct WindowsPtyBackend;
 
@@ -145,21 +159,44 @@ pub mod windows {
             // redirected parent cannot leak its stdio into the child), and no
             // handles are inherited (a leaked output pipe copy would keep the
             // session from ever reaching EOF).
-            let mut cmd = PtyCommand::new(binary);
-            cmd.args(&plan.args);
-            // `plan.env` 是子进程环境的唯一来源(见模块文档)。
-            cmd.env_clear();
-            for (k, v) in &plan.env {
-                cmd.env(k, v);
+            if !plan.cwd.as_os_str().is_empty() && !plan.cwd.is_dir() {
+                return Err(ExecError::Failed(format!(
+                    "conpty-oxide spawn failed: 工作目录不存在 {}（无法启动 {binary}）",
+                    plan.cwd.display()
+                )));
             }
+            if !std::path::Path::new(binary).is_file() && std::path::Path::new(binary).is_absolute()
+            {
+                return Err(ExecError::Failed(format!(
+                    "conpty-oxide spawn failed: 找不到执行器 {binary}"
+                )));
+            }
+
+            // `.cmd`/`.bat` are not PE images — CreateProcess fails unless we
+            // host them with cmd.exe. win_cmd::tokio_cmd does the same wrap;
+            // ConPTY must not go through that helper (CREATE_NO_WINDOW).
+            let mut cmd = if crate::win_cmd::is_windows_script(binary) {
+                let mut c = PtyCommand::new("cmd.exe");
+                c.arg("/c");
+                c.arg(binary);
+                c
+            } else {
+                PtyCommand::new(binary)
+            };
+            cmd.args(&plan.args);
+            apply_child_env(&mut cmd);
             cmd.current_dir(&plan.cwd);
 
             // Spawn the managed ConPTY session. The returned Session owns its
             // pseudoconsole, I/O, child process, and a kill-on-close Job. into_parts
             // separates ownership without detaching the child.
-            let session = cmd
-                .spawn()
-                .map_err(|e| ExecError::Failed(format!("conpty-oxide spawn failed: {e}")))?;
+            let session = cmd.spawn().map_err(|e| {
+                let os = e.io_error().map(|i| format!("; {i}")).unwrap_or_default();
+                ExecError::Failed(format!(
+                    "conpty-oxide spawn failed: {e}{os}; cwd={}",
+                    plan.cwd.display()
+                ))
+            })?;
             let parts = session.into_parts();
             let mut child = parts.child;
             let output = parts.output; // moved into the read thread below
@@ -291,8 +328,16 @@ pub mod unix {
     use tokio::sync::mpsc;
 
     use super::{PtyBackend, SUBMIT_READY_DELAY};
-    use crate::interactive_cli::{LaunchPlan, PtyInput, SkillOutput};
+    use crate::interactive_cli::{apply_child_env, EnvSink, LaunchPlan, PtyInput, SkillOutput};
     use crate::ExecError;
+
+    /// Same strip list as the tokio `Command` paths and the Windows backend —
+    /// see `interactive_cli::apply_child_env`.
+    impl EnvSink for CommandBuilder {
+        fn remove_env(&mut self, key: &str) {
+            self.env_remove(key);
+        }
+    }
 
     pub struct UnixPtyBackend;
 
@@ -341,12 +386,9 @@ pub mod unix {
             for a in &plan.args {
                 cmd.arg(a);
             }
-            // `CommandBuilder::new` 起步就整份拷贝了当前进程环境;清空后
-            // `plan.env` 才真正成为子进程环境的唯一来源(见模块文档)。
-            cmd.env_clear();
-            for (k, v) in &plan.env {
-                cmd.env(k, v);
-            }
+            // `CommandBuilder::new` 起步就整份拷贝了当前进程环境;只摘掉嵌套
+            // 会话变量(与 tokio Command / Windows 后端同一张清单,见模块文档)。
+            apply_child_env(&mut cmd);
             cmd.cwd(&plan.cwd);
 
             let child = pair

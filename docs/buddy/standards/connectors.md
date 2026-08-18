@@ -101,7 +101,8 @@ output = "..."
 
 - **merge 后自动**:`MergeIssuePr`(bw-app)merge PR 后,工作区收拢回默认
   分支,自动调 `sync_connectors_file_for`(与 `sync_metrics_file_for` 并
-  列)。
+  列),并立刻采一轮(`collect_project_metrics`,与「立即采集」同一条)。
+  网页合 MR 后点「→已完成」走同一条 Done 口,不另开路径。
 - **upsert-by-name**:按 `(project_id, name)` 身份 upsert——文件没有 id
   概念,name 就是这条连接器的身份。已存在则原地更新 `config`(JSON
   `{script, command, output}`);不存在则新建一行 `connector`(`kind =
@@ -114,8 +115,8 @@ output = "..."
   只报错、不写库——文件必须整份解析成功才会有任何 SQLite 写入,不存在
   "写一半"的中间态。
 - **一个字节不碰**:`observation` 表、`Signal` 派生链、
-  `recompute_signals` 全部不涉及——这个命令只同步*连接器定义*,不产生
-  *值*(把这些定义变成真实观测是 `CollectMetrics` cron 的事)。
+  `recompute_signals` 全部不涉及——这个命令只同步*连接器定义*。把定义
+  变成观测的是紧跟着的那一次采集,以及之后的每日 cron /「立即采集」。
 
 ## 与 `.bw/metrics.toml` 的关系
 

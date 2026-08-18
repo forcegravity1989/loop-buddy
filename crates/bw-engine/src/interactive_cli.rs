@@ -151,6 +151,56 @@ pub struct LaunchPlan {
     pub submit_prompt: bool,
 }
 
+/// Host-injected vars that must not leak into a child `claude` (same list
+/// as [`crate::ClaudeCliExecutor`]). A GUI parent started from `cmd` also
+/// carries Windows hidden names (`=C:`, `=ExitCode`); those cannot be
+/// replayed through conpty-oxide / windows-spawn (`env` name must not
+/// contain `=`).
+const NESTED_EXEC_ENV: &[&str] = &[
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "CLAUDECODE",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+];
+
+fn is_spawnable_env_key(key: &str) -> bool {
+    !key.is_empty() && !key.contains('=') && !key.contains('\0')
+}
+
+fn child_env_from_process() -> HashMap<String, String> {
+    std::env::vars()
+        .filter(|(k, _)| is_spawnable_env_key(k))
+        .filter(|(k, _)| {
+            !NESTED_EXEC_ENV
+                .iter()
+                .any(|banned| k.eq_ignore_ascii_case(banned))
+        })
+        .collect()
+}
+
+pub(crate) fn apply_child_env(cmd: &mut impl EnvSink) {
+    for var in NESTED_EXEC_ENV {
+        cmd.remove_env(var);
+    }
+}
+
+/// Small sink so PTY and tokio Command share the same strip list without
+/// replaying the full process map (that rebuild trips windows-spawn). The
+/// PTY command types implement it in `pty_backend` (conpty-oxide on Windows,
+/// portable-pty on unix) — same list, same rule on every platform.
+pub(crate) trait EnvSink {
+    fn remove_env(&mut self, key: &str);
+}
+
+impl EnvSink for tokio::process::Command {
+    fn remove_env(&mut self, key: &str) {
+        self.env_remove(key);
+    }
+}
+
 /// Build the startup plan for an interactive agent session.
 ///
 /// For claude (`supported = true`):
@@ -179,21 +229,10 @@ pub fn build_startup_plan(
         )));
     }
 
-    // Strip nested-execution env vars: the host may be running inside a
-    // Claude Code session whose injected tokens/gateway/model alias cause
-    // 401 in the child.
-    let mut env: HashMap<String, String> = std::env::vars().collect();
-    for var in [
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_MODEL",
-        "CLAUDECODE",
-        "CLAUDE_CODE_SESSION_ID",
-        "CLAUDE_CODE_CHILD_SESSION",
-        "CLAUDE_CODE_ENTRYPOINT",
-    ] {
-        env.remove(var);
-    }
+    // Inherit process env, minus nested-execution vars and Windows hidden
+    // names (`=C:`). Do not replay this map through ConPTY `env()` — see
+    // `apply_child_env`.
+    let env = child_env_from_process();
 
     let mut args = Vec::with_capacity(8);
     // System prompt — appended to claude's default system prompt. Caller
@@ -266,18 +305,7 @@ pub fn build_resume_plan(
         )));
     }
 
-    let mut env: HashMap<String, String> = std::env::vars().collect();
-    for var in [
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_MODEL",
-        "CLAUDECODE",
-        "CLAUDE_CODE_SESSION_ID",
-        "CLAUDE_CODE_CHILD_SESSION",
-        "CLAUDE_CODE_ENTRYPOINT",
-    ] {
-        env.remove(var);
-    }
+    let env = child_env_from_process();
 
     // --resume <session_id> (precise) or --continue (fallback). No positional
     // prompt (the session continues from where it left off). Same permission
@@ -540,14 +568,9 @@ impl InteractiveExecutor for InteractiveCliExecutor {
         // spawn directly (best-effort — may not open a terminal window).
         #[cfg(target_os = "windows")]
         {
-            let mut cmd = tokio::process::Command::new(binary);
+            let mut cmd = crate::win_cmd::tokio_cmd(binary);
             cmd.args(&plan.args);
-            // 与 PTY 后端同一条规矩:`plan.env` 是子进程环境的唯一来源,不清
-            // 空的话被 `build_startup_plan` 剥掉的嵌套会话变量会原样继承回去。
-            cmd.env_clear();
-            for (k, v) in &plan.env {
-                cmd.env(k, v);
-            }
+            apply_child_env(&mut cmd);
             cmd.current_dir(&plan.cwd);
             cmd.kill_on_drop(true);
             // Inherit stdin/stdout/stderr — the console window provides the
@@ -572,7 +595,7 @@ impl InteractiveExecutor for InteractiveCliExecutor {
                 cmd_line.push_str(&shell_quote(a));
             }
             let script = format!("tell application \"Terminal\" to do script \"{cmd_line}\"");
-            let mut cmd = tokio::process::Command::new("osascript");
+            let mut cmd = crate::win_cmd::tokio_cmd("osascript");
             cmd.arg("-e").arg(&script);
             cmd.kill_on_drop(true);
             let _child = cmd.spawn().map_err(|e| {
@@ -592,13 +615,9 @@ impl InteractiveExecutor for InteractiveCliExecutor {
         {
             // Linux/other: spawn directly. May not open a terminal window
             // (would need xterm/gnome-terminal wrapper) — best-effort.
-            let mut cmd = tokio::process::Command::new(binary);
+            let mut cmd = crate::win_cmd::tokio_cmd(binary);
             cmd.args(&plan.args);
-            // 同上:`plan.env` 是子进程环境的唯一来源。
-            cmd.env_clear();
-            for (k, v) in &plan.env {
-                cmd.env(k, v);
-            }
+            apply_child_env(&mut cmd);
             cmd.current_dir(&plan.cwd);
             cmd.kill_on_drop(true);
             let child = cmd.spawn().map_err(|e| {
@@ -838,8 +857,18 @@ mod tests {
         // Env vars stripped
         assert!(!plan.env.contains_key("ANTHROPIC_AUTH_TOKEN"));
         assert!(!plan.env.contains_key("CLAUDECODE"));
+        assert!(plan.env.keys().all(|k| is_spawnable_env_key(k)));
         // Cwd preserved
         assert_eq!(plan.cwd, tmp);
+    }
+
+    #[test]
+    fn spawnable_env_key_rejects_windows_hidden_names() {
+        assert!(!is_spawnable_env_key(""));
+        assert!(!is_spawnable_env_key("=C:"));
+        assert!(!is_spawnable_env_key("=ExitCode"));
+        assert!(is_spawnable_env_key("PATH"));
+        assert!(is_spawnable_env_key("BW_CLAUDE_BIN"));
     }
 
     #[test]

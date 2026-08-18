@@ -41,7 +41,7 @@ pub enum EvidenceError {
 }
 
 async fn git_stdout(workspace: &str, args: &[&str]) -> Result<Option<String>, EvidenceError> {
-    let output = tokio::process::Command::new("git")
+    let output = crate::win_cmd::tokio_cmd("git")
         .current_dir(workspace)
         .args(args)
         .stdin(Stdio::null())

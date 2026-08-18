@@ -3,13 +3,17 @@
 //! a real project the user created through the creation flow.
 
 use crate::theme;
-use bw_app::Command;
+use bw_app::{Command, EnvCheck, LocalEnvProbe};
 use bw_core::model::Signal;
 use dioxus::prelude::*;
 use ui::vm::ProjectCardVm;
 
 #[component]
-pub fn Wall(projects: Vec<ProjectCardVm>, on_new: EventHandler<()>) -> Element {
+pub fn Wall(
+    projects: Vec<ProjectCardVm>,
+    local_env: LocalEnvProbe,
+    on_new: EventHandler<()>,
+) -> Element {
     let serif = theme::SERIF;
     let ink2 = theme::INK_2;
     let clay = theme::CLAY;
@@ -26,6 +30,7 @@ pub fn Wall(projects: Vec<ProjectCardVm>, on_new: EventHandler<()>) -> Element {
                 span { style: "font-size:13px;color:{ink2};", "Builders' 工作台" }
             }
             h1 { style: "font-family:{serif};font-weight:600;font-size:30px;margin:0 0 6px;", "我的项目" }
+            LocalEnvBar { local_env }
             // V1-Issue3 · cross-project health overview — moved here from the
             // ProgressAll page (where it was per-project). The wall is the entry
             // point: a glance at all projects' signals before you pick one.
@@ -43,6 +48,48 @@ pub fn Wall(projects: Vec<ProjectCardVm>, on_new: EventHandler<()>) -> Element {
                     ProjectCard { card: p }
                 }
                 NewCard { on_new }
+            }
+        }
+    }
+}
+
+fn env_line(check: &EnvCheck) -> (String, String) {
+    match check {
+        EnvCheck::Unknown => ("未测".into(), theme::INK_3.to_string()),
+        EnvCheck::Probing => ("探测中…".into(), theme::INK_2.to_string()),
+        EnvCheck::Ok(v) => (v.clone(), theme::INK.to_string()),
+        EnvCheck::Fail(v) => (v.clone(), theme::ALERT_DEEP.to_string()),
+    }
+}
+
+/// 项目墙本机探测。未点「测一下」= Unknown，不装绿。
+#[component]
+fn LocalEnvBar(local_env: LocalEnvProbe) -> Element {
+    let k = use_context::<crate::kernel::Kernel>();
+    let card = theme::card();
+    let ink3 = theme::INK_3;
+    let mono = theme::MONO;
+    let (claude_text, claude_color) = env_line(&local_env.claude);
+    let (codehub_text, codehub_color) = env_line(&local_env.codehub);
+    let probing = matches!(local_env.claude, EnvCheck::Probing)
+        || matches!(local_env.codehub, EnvCheck::Probing);
+    rsx! {
+        div {
+            style: "{card} padding:14px 18px;margin-bottom:18px;",
+            div {
+                style: "display:flex;align-items:center;gap:14px;flex-wrap:wrap;",
+                span { style: "font-family:{mono};font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:{ink3};", "本机环境" }
+                span { style: "font-size:13px;color:{claude_color};", "claude · {claude_text}" }
+                span { style: "font-size:13px;color:{codehub_color};", "codehub-cli · {codehub_text}" }
+                button {
+                    disabled: probing,
+                    style: "margin-left:auto;cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:6px;padding:5px 11px;font-size:11.5px;",
+                    onclick: move |_| k.send(Command::ProbeLocalEnv),
+                    if probing { "探测中…" } else { "测一下" }
+                }
+            }
+            p { style: "font-size:12px;color:{ink3};line-height:1.55;margin:10px 0 0;",
+                "未测是灰、不是绿。装完请：关安装器从开始菜单重开 · 按自己的区 `codehub-cli -H green|open|yellow auth login` · 配 SSH 公钥 · clone host 与 API host 不是同一个 · claude 网关在 ~/.claude.json"
             }
         }
     }

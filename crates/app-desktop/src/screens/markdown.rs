@@ -665,7 +665,7 @@ fn open_external(url: &str) {
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("cmd")
+        let _ = bw_engine::std_cmd("cmd")
             .args(["/C", "start", "", url])
             .spawn();
     }

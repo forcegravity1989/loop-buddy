@@ -18,7 +18,7 @@ use bw_core::model::{
     CONNECTOR_KIND_SCRIPT,
 };
 use bw_core::{ConversationId, MetricId, SessionId};
-use bw_engine::{ClaudeCliConfig, CodehubRepoSummary, GithubRepoSummary};
+use bw_engine::{resolve_claude_binary, ClaudeCliConfig, CodehubRepoSummary, GithubRepoSummary};
 use bw_store::{MetricRole, SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -85,6 +85,8 @@ pub struct Vm {
     pub consultable_issues: Vec<bw_core::IssueId>,
     /// 任意状态、有非空 claude_session_id 的 issue(重启后点卡可 resume)。
     pub resumable_issues: Vec<bw_core::IssueId>,
+    /// 项目墙本机环境探测（未测 = Unknown）。
+    pub local_env: bw_app::LocalEnvProbe,
 }
 
 /// The Workflow/Skill/Agent hub library, plus the 3-card "从 Hub 导入"
@@ -416,8 +418,11 @@ fn workspaces_root() -> std::path::PathBuf {
 /// Process-wide `claude` CLI config, env-override-else-default (same pattern
 /// as [`db_path`]): `BW_CLAUDE_BIN` overrides the binary resolved from PATH.
 fn claude_config_from_env() -> ClaudeCliConfig {
+    // Prefer a file that exists (`BW_CLAUDE_BIN` first, then the Windows
+    // installer's exe, then npm claude.cmd). A stale BW_CLAUDE_BIN pointing
+    // at a missing bin\claude.exe must not win. `None` → PATH lookup.
     ClaudeCliConfig {
-        binary: std::env::var("BW_CLAUDE_BIN").ok(),
+        binary: resolve_claude_binary(None),
     }
 }
 
@@ -814,6 +819,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         focused_issue: app.focused_pty_issue(),
         consultable_issues: Vec::new(),
         resumable_issues: Vec::new(),
+        local_env: state.local_env.clone(),
     };
 
     let Some(pid) = state.active_project else {

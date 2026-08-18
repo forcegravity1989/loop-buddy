@@ -61,9 +61,9 @@ use bw_core::{
 };
 use bw_engine::{
     build_consultation_resume_plan, build_project_context_block, build_resume_plan,
-    build_startup_plan, evidence, ClaudeCliConfig, CodehubRepoSummary, ConversationMeta, GitCommit,
-    GithubRepoSummary, InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor,
-    ProjectFile, RunCtx, SkillOutput, TerminalManager, CLAUDE,
+    build_startup_plan, evidence, resolve_claude_binary, ClaudeCliConfig, CodehubRepoSummary,
+    ConversationMeta, GitCommit, GithubRepoSummary, InteractiveCliExecutor, InteractiveExecutor,
+    MockInteractiveExecutor, ProjectFile, RunCtx, SkillOutput, TerminalManager, CLAUDE,
 };
 use bw_store::{
     AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
@@ -331,6 +331,8 @@ pub struct AppState {
     /// process-internal cache pattern as `github_repos` — a direct read-through
     /// of `codehub-cli project list --mine`, not a derived Signal.
     pub codehub_repos: Vec<CodehubRepoSummary>,
+    /// 项目墙「测一下」最近一次结果。未测过是 Unknown。
+    pub local_env: LocalEnvProbe,
 }
 
 /// P4: everything the Issue-detail overlay shows, assembled read-only at
@@ -384,6 +386,7 @@ impl Default for AppState {
             pty_restoring: None,
             pty_enabled: false,
             codehub_repos: Vec::new(),
+            local_env: LocalEnvProbe::default(),
         }
     }
 }
@@ -731,7 +734,7 @@ pub const METRIC_WS_DOCS: &str = "剧本产物文档数";
 /// `claude --version` probe with a hard timeout — the `claude-cli`
 /// connector's real health check. Returns the version line on success.
 async fn claude_version_probe(binary: &str) -> Result<String, String> {
-    let fut = tokio::process::Command::new(binary)
+    let fut = bw_engine::tokio_cmd(binary)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -748,6 +751,113 @@ async fn claude_version_probe(binary: &str) -> Result<String, String> {
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Hosts `codehub-cli auth status` may list. Alias is what `-H` wants;
+/// `host_needle` matches the table URL; `label` is what the wall shows.
+const CODEHUB_AUTH_ZONES: &[(&str, &str, &str)] = &[
+    ("green", "codehub-g.huawei.com", "绿区"),
+    ("open", "open.codehub.huawei.com", "内源"),
+    ("yellow", "codehub-y.huawei.com", "黄区"),
+];
+
+/// Zones whose `auth status` row has a logged-in token. Table parse only —
+/// never returns token text. Order follows [`CODEHUB_AUTH_ZONES`].
+fn logged_in_codehub_zones(status: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for line in status.lines() {
+        let low = line.to_ascii_lowercase();
+        for (_, host, label) in CODEHUB_AUTH_ZONES {
+            if !low.contains(host) {
+                continue;
+            }
+            if low.split_whitespace().any(|w| w == "yes") {
+                out.push(*label);
+            }
+        }
+    }
+    out
+}
+
+/// 项目墙探测：codehub-cli 在不在、至少一区已登录。未登录如实 Fail，不装绿。
+/// 旧实现只打 `-H open`，黄区/绿区 token 正常也会红。
+async fn codehub_cli_probe() -> EnvCheck {
+    let bin = std::env::var("USERPROFILE")
+        .ok()
+        .map(|h| {
+            std::path::PathBuf::from(h)
+                .join("bin")
+                .join("codehub-cli.exe")
+        })
+        .filter(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "codehub-cli".into());
+    let fut = bw_engine::tokio_cmd(&bin)
+        .args(["auth", "status"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(15), fut).await {
+        Err(_) => return EnvCheck::Fail("codehub-cli 探针超时(15s)".into()),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return EnvCheck::Fail("codehub-cli 未安装或不在 PATH".into());
+        }
+        Ok(Err(e)) => return EnvCheck::Fail(format!("无法运行 {bin}:{e}")),
+        Ok(Ok(o)) => o,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let zones = logged_in_codehub_zones(&stdout);
+    if !zones.is_empty() {
+        return EnvCheck::Ok(format!("已登录 {}", zones.join(" / ")));
+    }
+    let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() && !err.is_empty() {
+        return EnvCheck::Fail(err);
+    }
+    EnvCheck::Fail("未登录任何区:先本机 `codehub-cli -H green|open|yellow auth login`".into())
+}
+
+/// Wall「测一下」must accept any logged-in CodeHub zone, not only 内源.
+#[cfg(test)]
+mod codehub_env_probe_tests {
+    use super::logged_in_codehub_zones;
+
+    const STATUS_THREE_ROWS: &str = "\
+               HOST                  AUTH TYPE    USERNAME      TOKEN     EXPIRES AT  LOGIN          LOGIN AT           DEFAULT  ACTIVE
+  https://codehub-g.huawei.com     private-token  tester     abcd...wxyz  -           yes    2026-07-28T15:29:21+08:00
+  https://open.codehub.huawei.com  private-token  tester     efgh...ijkl  -           yes    2026-07-28T15:29:56+08:00  yes      yes
+  https://codehub-y.huawei.com     private-token  -          -            -           no     -
+";
+
+    const STATUS_YELLOW_ONLY: &str = "\
+  https://codehub-g.huawei.com     private-token  -          -            -           no     -
+  https://open.codehub.huawei.com  private-token  -          -            -           no     -
+  https://codehub-y.huawei.com     private-token  someone    abcd...wxyz  -           yes    2026-08-17T10:00:00+08:00
+";
+
+    #[test]
+    fn yellow_only_counts_as_logged_in() {
+        assert_eq!(logged_in_codehub_zones(STATUS_YELLOW_ONLY), vec!["黄区"]);
+    }
+
+    #[test]
+    fn green_and_open_both_count() {
+        assert_eq!(
+            logged_in_codehub_zones(STATUS_THREE_ROWS),
+            vec!["绿区", "内源"]
+        );
+    }
+
+    #[test]
+    fn none_logged_in_is_empty() {
+        let none = "\
+  https://codehub-g.huawei.com     private-token  -          -            -           no     -
+  https://open.codehub.huawei.com  private-token  -          -            -           no     -
+  https://codehub-y.huawei.com     private-token  -          -            -           no     -
+";
+        assert!(logged_in_codehub_zones(none).is_empty());
+    }
 }
 
 /// Filesystem-safe slug for a project's workspace directory: ascii

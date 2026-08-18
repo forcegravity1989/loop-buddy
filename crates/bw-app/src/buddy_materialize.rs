@@ -166,7 +166,7 @@ fn ensure_git_exclude(workspace: &Path, pattern: &str) -> Result<(), StandardsMa
 
 /// 用 `git rev-parse --git-path info/exclude` 找当前工作区的本地排除文件路径。
 fn git_info_exclude_path(workspace: &Path) -> Result<PathBuf, StandardsMaterializeError> {
-    let output = std::process::Command::new("git")
+    let output = bw_engine::std_cmd("git")
         .current_dir(workspace)
         .args(["rev-parse", "--git-path", "info/exclude"])
         .stdin(Stdio::null())

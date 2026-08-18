@@ -3,6 +3,10 @@
 
 use super::*;
 
+/// 「接入已有仓」一次拉多少条。搜索只过滤已加载的，所以要多拉、下拉少画
+/// （PRACTICE §4.16：30 截掉第 74 名；200 仍盖不住很多人的仓数）。
+pub const ONBOARD_REPO_LIST_LIMIT: u32 = 999;
+
 /// Top-level workspace view (only meaningful for `hub == workspace`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum View {
@@ -637,12 +641,12 @@ pub enum Command {
     /// counterpart to `CreateProject` — irreversible; the UI is responsible
     /// for confirming with the user before dispatching this.
     DeleteProject(ProjectId),
-    /// W2-2: hard-delete a single session + its messages, clearing the
-    /// `issue.session_id` dangling reference (issue row stays). Irreversible;
-    /// the UI confirms with the user before dispatching. Used to clean up the
-    /// historical duplicate "阶段记录" cards that piled up before the
-    /// `(stage_kind, title)` dedup guard landed.
+    /// 硬删一条阶段记录（session 行；message 表已随旧引擎删除）。issue 行留下；
+    /// claude_conversation 不删，看板仍可按现设计唤醒。
     DeleteSession(SessionId),
+    /// 项目墙「测一下」：真跑 claude --version 与 codehub-cli 探活。
+    /// 未测过是 Unknown，不装绿。
+    ProbeLocalEnv,
     BackToProjects,
     SetPanel(Panel),
     SetScope(Scope),
@@ -661,6 +665,22 @@ pub enum Command {
         cols: u16,
         rows: u16,
     },
+}
+
+/// 项目墙本机环境探测。未点「测一下」= Unknown，不装绿。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum EnvCheck {
+    #[default]
+    Unknown,
+    Probing,
+    Ok(String),
+    Fail(String),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalEnvProbe {
+    pub claude: EnvCheck,
+    pub codehub: EnvCheck,
 }
 
 /// Result of [`Command::ProbeRemoteProjectToml`] — creation-flow UI state

@@ -957,16 +957,15 @@ impl Store for SqliteStore {
     async fn delete_session(&self, id: SessionId) -> Result<()> {
         let sid = id.uuid().to_string();
         let mut tx = self.pool.begin().await?;
-        // issue.session_id has no FK constraint but a dangling pointer is
-        // wrong — clear it so a later run re-mints its own session.
-        sqlx::query("UPDATE issue SET session_id=NULL WHERE session_id=?")
-            .bind(&sid)
-            .execute(&mut *tx)
-            .await?;
+        // `message` 表已于 2026-08-18 随旧聊天式引擎 DROP,没有子行要先删;
+        // 只删 session 行本身。
         sqlx::query("DELETE FROM session WHERE id=?")
             .bind(&sid)
             .execute(&mut *tx)
             .await?;
+        // 不碰 issue 行、不碰 claude_conversation：看板 ▶跑 / 点卡唤醒走
+        // claude_conversation，不读已删除的 session 行。issue.session_id
+        // 列在 V1 终端会话重构后已 DROP，这里再 UPDATE 会 no such column。
         tx.commit().await?;
         Ok(())
     }

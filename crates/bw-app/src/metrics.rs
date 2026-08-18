@@ -333,7 +333,7 @@ impl App {
                 let candidates = script_interpreter_candidates(&command);
                 let mut out: Option<std::process::Output> = None;
                 for cand in &candidates {
-                    let run = tokio::process::Command::new(cand)
+                    let run = bw_engine::tokio_cmd(cand)
                         .arg(&script_path)
                         .current_dir(&proj.workspace_path)
                         .stdin(std::process::Stdio::null())
@@ -558,6 +558,31 @@ impl App {
             self.emit(Event::ProjectUpdated(project));
         }
         Ok(summary)
+    }
+
+    /// Same pass as [`Self::collect_project_metrics`], plus the honest
+    /// 「指标采集」toast used by「立即采集」. Callers that just installed
+    /// definitions (Done / merge) use this so the overview is not empty
+    /// until someone discovers the button.
+    pub(crate) async fn collect_project_metrics_announced(
+        &mut self,
+        project: ProjectId,
+    ) -> Result<MetricCollectSummary, AppError> {
+        let s = self.collect_project_metrics(project).await?;
+        let ok = s.is_success();
+        let mut detail = format!(
+            "采集 · {} 更新 · {} 未变 · {} 未接（legacy 或脚本未产出）",
+            s.changed, s.unchanged, s.deferred
+        );
+        if let Some(err) = &s.first_error {
+            detail.push_str(&format!(";首个失败:{err}"));
+        }
+        self.emit(Event::ConnectorSynced {
+            name: "指标采集".into(),
+            ok,
+            detail,
+        });
+        Ok(s)
     }
 }
 
