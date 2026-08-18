@@ -3,25 +3,24 @@
 //!
 //! Everything rendered here traces back to persisted rows: signals from the
 //! derive cache, trends from observation history, feeds from real records,
-//! chat transcripts from the message table, methodology text from
-//! `StageKind`'s own static metadata. The two live loops:
+//! methodology text from `StageKind`'s own static metadata. The two live
+//! loops:
 //!
 //! * **监控**: 记录观测值 → RecordObservation → recompute → 信号翻转可见;
-//! * **运行**: 运行标准工作流 → MockExecutor 流式推进 → 阶段横幅实时更新 →
-//!   产出落为会话消息(同事团队的真执行器经同一 trait 热插拔)。
+//! * **运行**: Issue 看板「▶ 跑」→ 内嵌终端里真跑(`RunIssue`)→ 最远到
+//!   「评审中」,「完成」由人点。
 //!
 //! Plus the handoff loop: 勾 DoD → 交棒(可带险,永不静默拦截)→ 下一段自动换装,
 //! `运维 → 原型` 回流闭环。
 
-use crate::kernel::{ChatVm, Kernel, MsgVm, OpVm, RunVm, StageVm};
-use crate::screens::chrome::Toast;
+use crate::kernel::{Kernel, OpVm, StageVm};
 use crate::theme;
 use bw_app::{Command, Panel, Scope};
 use bw_core::model::{
-    stage_workflow, FeedLevel, HubKind, HubSource, IssuePriority, IssueStatus, MaturityPeriod,
-    Signal, StageKind,
+    stage_workflow, FeedLevel, HubKind, IssuePriority, IssueStatus, MaturityPeriod, Signal,
+    StageKind,
 };
-use bw_core::{ConversationId, IssueId, ProjectId, SessionId, SkillId, WorkflowId};
+use bw_core::{ConversationId, IssueId, ProjectId, SessionId, SkillId};
 use bw_store::SessionKind;
 use dioxus::document;
 use dioxus::prelude::*;
@@ -35,7 +34,7 @@ use issues::IssuesPanel;
 use terminal_widget::TerminalWidget;
 
 #[component]
-pub fn Op(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
+pub fn Op(op: OpVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     let paper = theme::PAPER;
     // Live PTY: center column fills height so the terminal can flex vertically.
     // Other panels keep scrollable content.
@@ -59,7 +58,7 @@ pub fn Op(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
                 LeftRail { op: op.clone() }
                 div {
                     style: "{center}",
-                    Center { op, run, on_pick_hub }
+                    Center { op, on_pick_hub }
                 }
             }
         }
@@ -257,7 +256,7 @@ fn ActiveSessionsRail(op: OpVm) -> Element {
     rsx! {
         div { style: "font-size:11px;color:{ink3};letter-spacing:.06em;margin-bottom:8px;", "进行中 · 待你介入" }
         if needs_you.is_empty() {
-            div { style: "font-size:12px;color:{ink3};line-height:1.7;", "没有进行中的会话——到「工作流」面板运行一轮标准工作流开始。" }
+            div { style: "font-size:12px;color:{ink3};line-height:1.7;", "没有进行中的会话——到「Issue」面板点「▶ 跑」开工。" }
         }
         for s in needs_you {
             {
@@ -303,7 +302,7 @@ fn StageSessions(op: OpVm) -> Element {
     let Scope::Stage(kind) = op.scope else {
         return rsx! { span {} };
     };
-    let active_id = op.chat.as_ref().map(|c| c.id);
+    let active_id = op.active_session;
     let mine: Vec<SessionCardVm> = op
         .sessions
         .iter()
@@ -316,7 +315,7 @@ fn StageSessions(op: OpVm) -> Element {
     rsx! {
         div { style: "font-size:11px;color:{ink3};letter-spacing:.06em;margin-bottom:8px;", "阶段记录" }
         if empty {
-            div { style: "font-size:12px;color:{ink3};line-height:1.7;", "该阶段暂无记录。到「工作流」面板运行一轮标准工作流,记录会出现在这里。" }
+            div { style: "font-size:12px;color:{ink3};line-height:1.7;", "该阶段暂无记录。到「Issue」面板点「▶ 跑」开工,记录会出现在这里。" }
         }
         if !creates.is_empty() {
             div { style: "font-size:11px;color:{ink3};margin:6px 0;", "创建" }
@@ -420,7 +419,7 @@ fn SessionCard(
 // ───────────────────────── center ─────────────────────────
 
 #[component]
-fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
+fn Center(op: OpVm, on_pick_hub: EventHandler<HubKind>) -> Element {
     let stage = match op.scope {
         Scope::Stage(kind) => op.stages.iter().find(|s| s.kind == kind).cloned(),
         Scope::All => None,
@@ -449,7 +448,7 @@ fn Center(op: OpVm, run: RunVm, on_pick_hub: EventHandler<HubKind>) -> Element {
             rsx! {
                 div {
                     style: "{fill}",
-                    WorkflowPanel { op, stage: s, run, on_pick_hub }
+                    WorkflowPanel { op, stage: s, on_pick_hub }
                 }
             }
         }
@@ -936,7 +935,8 @@ fn EditProjectCard(op: OpVm) -> Element {
 
 /// Real-executor workspace config — a persistent strip at the top of
 /// 「进度 · 全部」. Unconfigured (empty `workspace_path`) shows a plain
-/// "未配置" state (every run stays on `MockExecutor`); configured shows the
+/// "未配置" state (every Issue run stays on the self-labelled mock
+/// interactive executor); configured shows the
 /// path + permission tier with a "修改" button. Not part of the creation
 /// flow — the target directory is a post-creation, advanced, optional
 /// capability.
@@ -2218,12 +2218,7 @@ fn ProgressStageGeneric(op: OpVm, s: StageVm) -> Element {
 // ── workflow panel ──
 
 #[component]
-fn WorkflowPanel(
-    op: OpVm,
-    stage: Option<StageVm>,
-    run: RunVm,
-    on_pick_hub: EventHandler<HubKind>,
-) -> Element {
+fn WorkflowPanel(op: OpVm, stage: Option<StageVm>, on_pick_hub: EventHandler<HubKind>) -> Element {
     match stage {
         None => rsx! {
             div {
@@ -2251,7 +2246,7 @@ fn WorkflowPanel(
                         {
                             let stage_key = format!("{:?}", s.kind);
                             rsx! {
-                                WorkflowStage { key: "{stage_key}", op: op.clone(), s, run: run.clone() }
+                                WorkflowStage { key: "{stage_key}", op: op.clone(), s }
                             }
                         }
                     }
@@ -2304,127 +2299,8 @@ fn HubOverviewStrip(hub: crate::kernel::HubVm, on_pick_hub: EventHandler<HubKind
     }
 }
 
-/// Live run visualization: a real step-track (not a flat pill row) fed
-/// purely by `RunVm` — every node/line color is derived from real
-/// `PhaseStarted`/`PhaseCompleted`/`RunFailed` facts, plus the real
-/// `AgentRef`/`SkillRef` crew `RunStarted` announced for this run (empty is
-/// an honest "this run declared none", not a placeholder).
 #[component]
-fn RunBanner(run: RunVm) -> Element {
-    let card_alt = theme::CARD_ALT;
-    let ink2 = theme::INK_2;
-    let ink3 = theme::INK_3;
-    if run.phases.is_empty() {
-        return rsx! { span {} };
-    }
-    let status = if let Some(e) = &run.failed {
-        format!("运行失败:{e}")
-    } else if run.running {
-        "运行中…".to_string()
-    } else {
-        "本轮完成 · 产出已写入会话".to_string()
-    };
-    let workflow_name = run.workflow_name.clone();
-    rsx! {
-        div {
-            style: "flex:none;background:{card_alt};border:1px solid #DBD4C5;border-radius:10px;padding:14px 16px;margin-bottom:14px;",
-            div {
-                style: "display:flex;align-items:baseline;gap:8px;margin-bottom:10px;",
-                if !workflow_name.is_empty() {
-                    span { style: "font-size:12.5px;font-weight:600;", "{workflow_name}" }
-                }
-                span { style: "font-size:12px;color:{ink3};", "{status}" }
-            }
-            PhaseTrack { run: run.clone() }
-            if !run.agents.is_empty() || !run.skills.is_empty() {
-                div {
-                    style: "display:flex;flex-wrap:wrap;gap:5px;margin-top:12px;padding-top:10px;border-top:1px dashed {theme::BORDER};",
-                    for (i , a) in run.agents.iter().enumerate() {
-                        span {
-                            key: "ag{i}",
-                            title: "{a.def}",
-                            style: "{theme::chip(\"#EDE8F5\", theme::AGENT)}",
-                            "◆ {a.name}"
-                        }
-                    }
-                    for (i , s) in run.skills.iter().enumerate() {
-                        span {
-                            key: "sk{i}",
-                            title: "{s.def}",
-                            style: "{theme::chip(\"#EFE9DA\", ink2)}",
-                            "🧩 {s.name}"
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// A numbered step-track: circular phase badges connected by a progress
-/// line, colored by real status — done (✓ green) / running (● clay,
-/// pulsing) / failed (✕ red, only the phase that was in flight when it
-/// failed) / pending (○ gray, hasn't started).
-#[component]
-fn PhaseTrack(run: RunVm) -> Element {
-    let ink2 = theme::INK_2;
-    let green = ui::signal_color(Signal::Green);
-    let red = ui::signal_color(Signal::Red);
-    let clay = theme::CLAY;
-    let gray = "#D8D2C4";
-    let current_idx = run.phases.iter().position(|(_, done)| !done);
-    let n = run.phases.len();
-
-    rsx! {
-        div {
-            style: "display:flex;align-items:flex-start;width:100%;",
-            for (i, (name, done)) in run.phases.iter().enumerate() {
-                {
-                    let is_current = current_idx == Some(i);
-                    let failed_here = is_current && run.failed.is_some();
-                    let (badge_bg, badge_border, badge_fg, mark): (&str, &str, &str, String) = if *done {
-                        ("#FFFDF8", green, green, "✓".into())
-                    } else if failed_here {
-                        ("#FFFDF8", red, red, "✕".into())
-                    } else if is_current {
-                        (clay, clay, "#FFF", (i + 1).to_string())
-                    } else {
-                        ("#FFFDF8", gray, "#B4AD9C", (i + 1).to_string())
-                    };
-                    let prev_done = i > 0 && run.phases[i - 1].1;
-                    let left_color = if prev_done { green } else { gray };
-                    let right_color = if *done { green } else { gray };
-                    rsx! {
-                        div {
-                            key: "{i}",
-                            style: "display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;",
-                            div {
-                                style: "display:flex;align-items:center;width:100%;",
-                                div {
-                                    style: if i == 0 { "flex:1;height:2px;background:transparent;".to_string() } else { format!("flex:1;height:2px;background:{left_color};") },
-                                }
-                                div {
-                                    style: "width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none;background:{badge_bg};color:{badge_fg};border:2px solid {badge_border};",
-                                    "{mark}"
-                                }
-                                div {
-                                    style: if i + 1 == n { "flex:1;height:2px;background:transparent;".to_string() } else { format!("flex:1;height:2px;background:{right_color};") },
-                                }
-                            }
-                            span {
-                                style: "font-size:10px;color:{ink2};margin-top:5px;text-align:center;padding:0 2px;line-height:1.3;",
-                                "{name}"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
+fn WorkflowStage(op: OpVm, s: StageVm) -> Element {
     let k = use_context::<Kernel>();
     let card = theme::card();
     let serif = theme::SERIF;
@@ -2438,22 +2314,6 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
         .collect::<Vec<_>>()
         .join(" → ");
     let goal = spec_preview.goal.clone();
-    let mut promoted_msg = use_signal(|| None::<String>);
-    let promote = {
-        let k = k.clone();
-        let session = op.chat.as_ref().map(|c| c.id);
-        move |_| {
-            let Some(session) = session else {
-                return;
-            };
-            k.send(Command::PromoteWorkflow {
-                new_id: WorkflowId::new(),
-                session,
-                source: HubSource::SelfBuilt,
-            });
-            promoted_msg.set(Some("已沉淀为静态工作流 → WorkflowHub".into()));
-        }
-    };
     // V1-TermRefactor5 · 咨询态:焦点是 Done/InReview 续聊时,终端上方给「转成新活」。
     let consult_promote = op.focused_issue.and_then(|fid| {
         if !op.consultable_issues.contains(&fid) {
@@ -2464,25 +2324,11 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
             .find(|i| i.id == fid)
             .map(|i| (i.stage, i.number, i.title.clone()))
     });
-    // V1-Issue2-PTY-cleanup: the old 「▶ 运行」 button (`Command::RunStagePlaybook`)
-    // spawned a fresh mock-chat session on every click, titled "{stage}·第N轮" —
-    // an ever-growing pile of dead 「找指标」/「绑数据」 session records with no
-    // real executor behind them (`SendSessionMessage`'s reply is always a
-    // hardcoded 【mock】 echo). Real work now starts exclusively from an
-    // Issue card's 「▶ 跑」 (`Command::RunIssue`) on the Issues panel — this
-    // stage view is read-only: the method-loop preview, and whatever a real
-    // run (chat-based non-interactive, or the PTY terminal below) produced.
-    let chat_area = match op.chat.clone() {
-        // A live PTY session (`op.pty_active`) is the one place a real reply
-        // exists — showing the 发送 box next to it invites the user to type
-        // into a box whose "reply" is a canned echo that goes nowhere, right
-        // above the terminal where their input actually reaches claude.
-        Some(chat) if !op.pty_active => rsx! { Chat { chat } },
-        None if !op.pty_active => rsx! {
-            div { style: "color:{ink3};font-size:12.5px;", "到「Issue」面板点「▶ 跑」开工——记录会出现在这里。" }
-        },
-        _ => rsx! {},
-    };
+    // Real work starts exclusively from an Issue card's 「▶ 跑」
+    // (`Command::RunIssue`) on the Issues panel — this stage view is
+    // read-only: the method-loop preview, and the embedded terminal(s) of
+    // whatever is running. (The old chat-style engine's transcript/banner
+    // views were removed with that engine, 2026-08-18.)
     // Key includes stage + focus: cross-SetScope remounts the host; focus
     // flips remount the newly-visible widget onto a real-size div (same heal
     // as Issues↔Workflow). Unfocused peers stay mounted off-screen so PTY
@@ -2509,12 +2355,8 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
     rsx! {
         div {
             style: "{stage_fill}",
-            RunBanner { run: run.clone() }
             // V1-TermClose2 · UI 门控:方法循环卡(来自 stage_workflow)只在无终端
             // 会话(!pty_active)时显——issue 终端会话无 phase loop,显这张卡会误导。
-            // 阶段循环会话(stage playbook / hub workflow / cron,无 PTY)仍显。
-            // 内含的「↑ 沉淀为静态」按钮语义不变(只 op.chat.is_some() && !pty_active
-            // 时显,本卡门控不改变其条件)。
             if !op.pty_active {
                 div {
                     style: "{card} padding:18px 20px;margin-bottom:14px;",
@@ -2524,20 +2366,9 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
                     }
                     div { style: "font-size:12.5px;color:{ink2};margin-bottom:4px;", "方法循环:{phases}" }
                     div { style: "font-size:12px;color:{ink3};margin-bottom:8px;", "验收:{goal} · loop ≤3 迭代" }
-                    if op.chat.is_some() && !op.pty_active {
-                        button {
-                            style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:5px 12px;font-size:11.5px;",
-                            onclick: promote,
-                            "↑ 沉淀为静态"
-                        }
-                    }
                 }
+                div { style: "color:{ink3};font-size:12.5px;", "到「Issue」面板点「▶ 跑」开工——终端会出现在这里。" }
             }
-            RunOutputs {
-                phases: run.phases.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
-                msgs: op.chat.as_ref().map(|c| c.msgs.clone()).unwrap_or_default(),
-            }
-            {chat_area}
             // 重启恢复:点卡到首包之间显示「恢复中…」(首包后 pty_restoring 清空)。
             if op.pty_restoring.is_some() {
                 div {
@@ -2589,121 +2420,6 @@ fn WorkflowStage(op: OpVm, s: StageVm, run: RunVm) -> Element {
                             focused: is_focused,
                         }
                     }
-                }
-            }
-            if let Some(msg) = promoted_msg() {
-                Toast { msg, onclose: move |_| promoted_msg.set(None) }
-            }
-        }
-    }
-}
-
-/// "结果呈现": pairs the run's real phase names (from `RunVm`, so it reflects
-/// whatever actually ran — the stage's own template, an imported hub
-/// workflow, or an ad-hoc dynamic one — not just the stage's default
-/// preview) with the real `Author::Agent` session messages, in order. A
-/// best-effort zip (agent messages are appended in completion order, one per
-/// phase, by `run_workflow_inner`) — honestly labeled as such, not a hard
-/// per-phase binding the store actually tracks.
-#[component]
-fn RunOutputs(phases: Vec<String>, msgs: Vec<MsgVm>) -> Element {
-    let agent_msgs: Vec<&MsgVm> = msgs.iter().filter(|m| m.agent).collect();
-    if agent_msgs.is_empty() {
-        return rsx! {};
-    }
-    let card = theme::card();
-    let ink3 = theme::INK_3;
-    rsx! {
-        div {
-            style: "flex:none;{card} padding:16px 18px;margin-bottom:14px;",
-            div { style: "font-size:12.5px;font-weight:600;margin-bottom:2px;", "产出" }
-            div { style: "font-size:10.5px;color:{ink3};margin-bottom:10px;", "按完成顺序把每条 agent 产出与对应阶段配对(最佳努力对齐)" }
-            for (i , m) in agent_msgs.iter().enumerate() {
-                {
-                    let phase_label = phases.get(i).cloned().unwrap_or_else(|| format!("第{}步", i + 1));
-                    let text = m.text.clone();
-                    rsx! {
-                        div {
-                            key: "{i}",
-                            style: "margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed {theme::BORDER};",
-                            div { style: "font-size:11px;color:{theme::CLAY};font-weight:600;margin-bottom:4px;", "{i + 1}. {phase_label}" }
-                            div { style: "font-size:12.5px;color:{theme::INK};line-height:1.6;white-space:pre-wrap;", "{text}" }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn Chat(chat: ChatVm) -> Element {
-    let k = use_context::<Kernel>();
-    let mut text = use_signal(String::new);
-    let card = theme::card();
-    let ink = theme::INK;
-    let ink3 = theme::INK_3;
-    let agent = theme::AGENT;
-    let input = theme::input();
-    let clay = theme::CLAY;
-    let sid = chat.id;
-    let send = move |_| {
-        let t = text().trim().to_string();
-        if !t.is_empty() {
-            k.send(Command::SendSessionMessage {
-                session: sid,
-                text: t,
-            });
-            text.set(String::new());
-        }
-    };
-    rsx! {
-        div {
-            style: "{card} padding:16px 18px;",
-            div {
-                style: "display:flex;align-items:center;gap:8px;margin-bottom:12px;",
-                span { style: "font-size:13.5px;font-weight:600;", "{chat.title}" }
-                span { style: "font-size:11px;color:{ink3};border:1px solid #E2DCCF;border-radius:6px;padding:1px 7px;", "{chat.status_label}" }
-            }
-            div {
-                style: "display:flex;flex-direction:column;gap:8px;max-height:420px;overflow-y:auto;margin-bottom:12px;",
-                if chat.msgs.is_empty() {
-                    span { style: "font-size:12px;color:{ink3};", "还没有消息。" }
-                }
-                for (i, m) in chat.msgs.iter().enumerate() {
-                    {
-                        let (align, bg, fg, who) = if m.agent {
-                            ("flex-start", "#FFFDF8", ink, "Agent")
-                        } else {
-                            ("flex-end", ink, "#F6F3EC", "Builder")
-                        };
-                        let text = m.text.clone();
-                        rsx! {
-                            div {
-                                key: "{i}",
-                                style: "display:flex;flex-direction:column;align-items:{align};",
-                                span { style: "font-size:10px;color:{agent};margin-bottom:2px;", "{who}" }
-                                span {
-                                    style: "max-width:72%;background:{bg};color:{fg};border:1px solid #E2DCCF;border-radius:10px;padding:8px 12px;font-size:13px;line-height:1.65;white-space:pre-wrap;",
-                                    "{text}"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            div {
-                style: "display:flex;gap:8px;",
-                textarea {
-                    style: "{input} min-height:44px;font-size:13px;",
-                    placeholder: "把要求说给这条会话…(真实回复由同事团队的执行器经 Executor trait 接入)",
-                    value: "{text}",
-                    oninput: move |e| text.set(e.value()),
-                }
-                button {
-                    style: "cursor:pointer;background:{clay};color:#FFF;border:none;border-radius:8px;padding:0 18px;font-size:13px;flex:none;",
-                    onclick: send,
-                    "发送"
                 }
             }
         }

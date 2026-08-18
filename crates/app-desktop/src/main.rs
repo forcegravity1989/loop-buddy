@@ -15,7 +15,7 @@ mod theme;
 use bw_app::{Command, View};
 use bw_core::model::HubKind;
 use dioxus::prelude::*;
-use kernel::{ActionsVm, RunVm, UiNote, Vm};
+use kernel::{ActionsVm, UiNote, Vm};
 use screens::activity_hub::ActivityHub;
 use screens::agent_hub::AgentHub;
 use screens::chrome::{BootFrame, FatalFrame, Hub, IconRail, Toast};
@@ -140,7 +140,6 @@ fn Root() -> Element {
     // 到点只在 epoch 仍匹配时清(新 toast 替换重置)。决议 5:所有 toast 8s
     // 自动清,不区分关键/非关键。
     let mut toast_epoch = use_signal(|| 0u64);
-    let mut run = use_signal(RunVm::default);
     // plan/14 C14: raw Started/Ok/Fail facts for the creation flow's
     // background actions (repo create/clone, repo list, standard-Issue
     // trio, landing push) — `screens::create::ActionsBanner` turns this into
@@ -199,8 +198,7 @@ fn Root() -> Element {
                                 }
                             }
                             UiNote::RunFailed(e) => {
-                                set_toast(format!("工作流失败:{e}"));
-                                run.with_mut(|r| r.apply(&note));
+                                set_toast(format!("运行失败:{e}"));
                             }
                             // A real, unattended scheduler fire — a toast,
                             // deliberately never a navigation. See
@@ -226,7 +224,7 @@ fn Root() -> Element {
                             UiNote::ActionProgress { .. } => {
                                 actions.with_mut(|a| a.apply(&note));
                             }
-                            _ => run.with_mut(|r| r.apply(&note)),
+                            UiNote::Handoff { .. } => {}
                         },
                         Err(RecvError::Lagged(_)) => continue,
                         Err(RecvError::Closed) => break,
@@ -302,7 +300,6 @@ fn Root() -> Element {
                     WorkflowHub {
                         hub: v.hub.clone(),
                         projects: v.projects.clone(),
-                        on_run: move |_| hub.set(Hub::Workspace),
                         // T16 (plan/12 §10 v1.1#3): a phase's agent/skill
                         // chip click — same `sel`/`hub` navigation
                         // `ProjectRail`'s `on_pick` below already drives.
@@ -373,7 +370,6 @@ fn Root() -> Element {
                     if v.op.is_some() {
                         Op {
                             op: v.op.clone().unwrap(),
-                            run: run(),
                             on_pick_hub: move |hk: HubKind| {
                                 hub.set(match hk {
                                     HubKind::Workflow => Hub::Workflow,

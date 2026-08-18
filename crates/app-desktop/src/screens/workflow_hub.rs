@@ -2,17 +2,18 @@
 //! plus a 6th cross-cutting "指标层" bucket, with independent stage/source
 //! filter chips, matching the prototype's WorkflowHub (its richest, most
 //! fully-realized hub — 50 real sample rows, not a stub). Real store-backed
-//! CRUD, and real *execution* reachable from here, not just cataloging:
+//! CRUD:
 //!
 //! - **创建**(`CreateWorkflowForm`)/**优化**(`OptimizeWorkflowForm`, "优化 →"
 //!   on any row) both go through a real skill/agent picker
 //!   (`SkillAgentPicker`) backed by the real Skill/AgentHub catalog — a
 //!   workflow's `agents`/`skills` are real `AgentRef`/`SkillRef`, not always
 //!   empty.
-//! - **导入到项目**("确认导入") and the new **⚡ 临时任务** (ad-hoc `Dynamic`
-//!   workflow) both really run (`RunHubWorkflow`/`RunWorkflow`) *and*
-//!   navigate the caller to go watch it (`on_run`) — running a workflow from
-//!   here no longer fires-and-forgets silently.
+//! - **导入到项目**("确认引入") copies the row into the chosen project
+//!   (`Command::AdoptIntoProject`, plan/20 R5 — 复制不是引用). 2026-08-18
+//!   拔旧引擎前它还顺手跑一轮旧聊天式引擎(`RunHubWorkflow`),那半截连同
+//!   「⚡ 临时任务」表单、「🔍 解析为流程图」按钮一起删了:工作流库是目录,
+//!   跑活只从 Issue 看板的「▶ 跑」进内嵌终端。
 //!
 //! T7 (2026-07-23, plan/12 §0): a stage-role filter chip row shared with
 //! `SkillHub`/`AgentHub` via `ui::vm::RoleFilter`/`role_chip_counts` — but
@@ -25,12 +26,10 @@ use crate::screens::component_detail::ComponentSel;
 use crate::screens::markdown::MarkdownView;
 use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
+use bw_app::AdoptTarget;
 use bw_app::Command;
-use bw_core::model::{
-    AgentRef, LoopConfig, PhaseMeta, SkillRef, StageKind, WorkflowKind, WorkflowSpec,
-};
-use bw_core::{SessionId, WorkflowId};
-use bw_store::SessionKind;
+use bw_core::model::{AgentRef, LoopConfig, SkillRef, StageKind};
+use bw_core::WorkflowId;
 use dioxus::prelude::*;
 use std::collections::{HashMap, HashSet};
 use ui::vm::{AgentCardVm, ProjectCardVm, SkillCardVm, WorkflowDetailVm, WorkflowHubRowVm};
@@ -39,7 +38,6 @@ use ui::vm::{AgentCardVm, ProjectCardVm, SkillCardVm, WorkflowDetailVm, Workflow
 pub fn WorkflowHub(
     hub: HubVm,
     projects: Vec<ProjectCardVm>,
-    on_run: EventHandler<()>,
     // T16 (plan/12 §10 v1.1#3): a phase's agent/skill chip click, bubbled up
     // to `main.rs` Root — reuses the exact `sel`/`hub` navigation
     // `ProjectRail`'s `on_pick` already drives, no second mechanism.
@@ -54,7 +52,6 @@ pub fn WorkflowHub(
     let card = theme::card();
 
     let mut creating = use_signal(|| false);
-    let mut adhoc = use_signal(|| false);
     // T7 (plan/12 §0/§2/§3): shared `RoleFilter` — same "全部/五角色/通用"
     // dimension `SkillHub`/`AgentHub` now filter by too (`ui::vm::RoleFilter`),
     // replacing the bare `Option<StageKind>` this signal used to be (which had
@@ -112,41 +109,15 @@ pub fn WorkflowHub(
                     span { style: "font-family:{serif};font-size:22px;font-weight:600;", "工作流库" }
                     span { style: "font-size:12.5px;color:{ink3};", "{n} 工作流" }
                 }
-                div {
-                    style: "display:flex;gap:8px;",
-                    button {
-                        style: "cursor:pointer;background:transparent;color:{ink2};border:1px solid {theme::BORDER};border-radius:7px;padding:6px 14px;font-size:12.5px;",
-                        onclick: move |_| {
-                            adhoc.set(!adhoc());
-                            creating.set(false);
-                        },
-                        if adhoc() { "取消" } else { "⚡ 临时任务" }
-                    }
-                    button {
-                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:6px 14px;font-size:12.5px;",
-                        onclick: move |_| {
-                            creating.set(!creating());
-                            adhoc.set(false);
-                        },
-                        if creating() { "取消" } else { "+ 新建工作流" }
-                    }
+                button {
+                    style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:6px 14px;font-size:12.5px;",
+                    onclick: move |_| creating.set(!creating()),
+                    if creating() { "取消" } else { "+ 新建工作流" }
                 }
             }
-            // plan/20 R1: Hub 是全局语境,这里编出来的工作流(含临时编队)
-            // 引用池只列全局行——引用的作用域不得宽于引用者;项目自有资产
-            // 由此天然不会被别的项目的全局工作流引走(种A 行都挂 project_id,
-            // 也一并被这个口径排除)。
-            if adhoc() {
-                AdHocWorkflowForm {
-                    skills: hub.skills.iter().filter(|s| s.project_id.is_none()).cloned().collect(),
-                    agents: hub.agents.iter().filter(|a| a.project_id.is_none()).cloned().collect(),
-                    projects: projects.clone(),
-                    on_run: move |_| {
-                        adhoc.set(false);
-                        on_run.call(());
-                    },
-                }
-            }
+            // plan/20 R1: Hub 是全局语境,这里编出来的工作流引用池只列全局
+            // 行——引用的作用域不得宽于引用者;项目自有资产由此天然不会被别的
+            // 项目的全局工作流引走(种A 行都挂 project_id,也一并被这个口径排除)。
             if creating() {
                 CreateWorkflowForm {
                     skills: hub.skills.iter().filter(|s| s.project_id.is_none()).cloned().collect(),
@@ -251,14 +222,11 @@ pub fn WorkflowHub(
                                 for row in rows {
                                     {
                                         let k = k.clone();
-                                        let on_run = on_run;
                                         let projects = projects.clone();
                                         let row_id = row.id;
                                         let is_open = expanded() == Some(row_id);
                                         let picker_open = importing() == Some(row_id);
                                         let editing = optimizing() == Some(row_id);
-                                        let stage_ref = row.stage_ref;
-                                        let row_name = row.name.clone();
                                         let detail = details_by_id.get(&row_id).cloned();
                                         // plan/20 R1: 编队池随本行的作用域走——全局工作流只
                                         // 引全局行;项目自有工作流可引本项目行 + 全局行;他
@@ -323,33 +291,12 @@ pub fn WorkflowHub(
                                                             // 正文/全流程主区。
                                                             {
                                                                 let is_doc = doc_view().contains(&row_id);
-                                                                let has_content = !row.content.trim().is_empty();
-                                                                let k = k.clone();
                                                                 rsx! {
                                                                     div {
                                                                         style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;",
                                                                         span { style: "font-size:11.5px;color:{ink3};", if is_doc { "文档" } else { "全流程" } }
                                                                         div {
                                                                             style: "display:flex;gap:4px;align-items:center;",
-                                                                            // T17(plan/12 §10 v1.1#4):显式触发的解析动作——
-                                                                            // content 为空(结构化定义/未撰写正文)诚实禁用,
-                                                                            // 绝不假装能解析一份不存在的文档。
-                                                                            button {
-                                                                                style: if has_content {
-                                                                                    "cursor:pointer;background:transparent;border:1px solid {theme::CLAY};color:{theme::CLAY};border-radius:6px;padding:2px 10px;font-size:10.5px;"
-                                                                                } else {
-                                                                                    "cursor:not-allowed;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;opacity:.55;"
-                                                                                },
-                                                                                disabled: !has_content,
-                                                                                title: if has_content { "读文档,真实执行解析,成功后覆盖流程图(先留版本快照)" } else { "无原始文档,无可解析" },
-                                                                                onclick: move |_| {
-                                                                                    if has_content {
-                                                                                        k.send(Command::ParseWorkflowContent { workflow_id: row_id });
-                                                                                        doc_view.write().remove(&row_id);
-                                                                                    }
-                                                                                },
-                                                                                "🔍 解析为流程图"
-                                                                            }
                                                                             button {
                                                                                 style: if is_doc {
                                                                                     "cursor:pointer;background:transparent;border:1px solid {theme::BORDER};color:{ink3};border-radius:6px;padding:2px 10px;font-size:10.5px;"
@@ -435,24 +382,17 @@ pub fn WorkflowHub(
                                                                     }
                                                                     button {
                                                                         style: "{theme::btn_primary()} padding:6px 14px;font-size:12px;",
+                                                                        title: "复制一份到该项目(plan/20 R5:复制不是引用,之后各改各的);只能引入共享目录(全局)里的行",
                                                                         onclick: move |_| {
                                                                             if let Some(target) = projects.get(import_target()) {
-                                                                                let session = SessionId::new();
-                                                                                k.send(Command::OpenProject(target.id));
-                                                                                k.send(Command::StartSession {
-                                                                                    id: session,
-                                                                                    stage_kind: stage_ref
-                                                                                        .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n)),
-                                                                                    kind: SessionKind::Create,
-                                                                                    title: format!("{row_name} · 导入"),
+                                                                                k.send(Command::AdoptIntoProject {
+                                                                                    target: AdoptTarget::Workflow(row_id),
+                                                                                    project_id: target.id,
                                                                                 });
-                                                                                k.send(Command::RunHubWorkflow { session, workflow_id: row_id });
-                                                                                k.send(Command::SelectSession(Some(session)));
                                                                                 importing.set(None);
-                                                                                on_run.call(());
                                                                             }
                                                                         },
-                                                                        "确认导入 · 运行"
+                                                                        "确认引入"
                                                                     }
                                                                     button {
                                                                         style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid {theme::BORDER};border-radius:7px;padding:6px 12px;font-size:12px;",
@@ -859,189 +799,6 @@ fn OptimizeWorkflowForm(
                     onclick: move |_| on_done.call(()),
                     "取消"
                 }
-            }
-        }
-    }
-}
-
-/// The "dynamic workflow creation" surface: author a one-off `WorkflowKind::
-/// Dynamic` spec (prompt/phases/crew, no hub entry) and run it for real
-/// against a chosen project via `Command::RunWorkflow` — the same
-/// `run_workflow_inner` engine the stage-template path used before the old
-/// `RunStagePlaybook` button was retired (V1 Issue2 PTY cleanup — real work
-/// now starts from an Issue card's 「▶ 跑」), just with a user-authored spec
-/// instead of `stage_workflow(kind)`. Once it runs, the session's normal
-/// "沉淀为静态工作流" action (in the operating view) is the "运维" half of
-/// this loop — promote it, or let it stay a one-off.
-#[component]
-fn AdHocWorkflowForm(
-    skills: Vec<SkillCardVm>,
-    agents: Vec<AgentCardVm>,
-    projects: Vec<ProjectCardVm>,
-    on_run: EventHandler<()>,
-) -> Element {
-    let k = use_context::<Kernel>();
-    let input = theme::input();
-    let label = theme::label();
-    let ink3 = theme::INK_3;
-
-    let mut name = use_signal(String::new);
-    let mut prompt = use_signal(String::new);
-    let mut goal = use_signal(String::new);
-    let mut phases_text = use_signal(String::new);
-    let mut project_idx = use_signal(|| 0usize);
-    let mut stage_ref = use_signal(|| None::<StageKind>);
-    let mut selected_skills = use_signal(HashSet::<String>::new);
-    let mut selected_agents = use_signal(HashSet::<String>::new);
-
-    let skills_for_run = skills.clone();
-    let agents_for_run = agents.clone();
-    let projects_for_run = projects.clone();
-    let run = move |_| {
-        let n = name().trim().to_string();
-        let p = prompt().trim().to_string();
-        if n.is_empty() || p.is_empty() {
-            return;
-        }
-        let Some(target) = projects_for_run
-            .get(project_idx())
-            .map(|p: &ProjectCardVm| p.id)
-        else {
-            return;
-        };
-        let mut phases: Vec<String> = phases_text()
-            .split(['→', ','])
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if phases.is_empty() {
-            phases.push("执行".into());
-        }
-        let (agent_refs, skill_refs) = resolve_refs(
-            &skills_for_run,
-            &agents_for_run,
-            &selected_skills(),
-            &selected_agents(),
-        );
-        let kind = stage_ref();
-        let spec = WorkflowSpec {
-            id: WorkflowId::new(),
-            name: n.clone(),
-            kind: WorkflowKind::Dynamic {
-                origin: "临时任务".into(),
-                stage: kind
-                    .map(|s| s.label().to_string())
-                    .unwrap_or_else(|| "指标层".into()),
-            },
-            prompt: p,
-            goal: goal().trim().to_string(),
-            stage_ref: kind.map(|s| s.index()),
-            // Ad-hoc text form — no role-editing UI, so every phase is
-            // honestly `Neutral` (same rule as `CreateWorkflowSpec`/
-            // `UpdateWorkflowSpec`'s handlers in bw-app).
-            phases: phases.into_iter().map(PhaseMeta::neutral).collect(),
-            phase_prompts: vec![],
-            agents: agent_refs,
-            skills: skill_refs,
-            loop_config: LoopConfig {
-                retries: 1,
-                max_iter: 1,
-            },
-            // 临时任务不进 Hub 库(见下方 UI 文案),这个字段对持久化查询没有
-            // 意义——但它确实是为 `target` 这个项目跑的,如实标注。
-            project_id: Some(target),
-            // 临时任务文本表单没有正文录入——如实留空。
-            content: String::new(),
-        };
-        let session = SessionId::new();
-        k.send(Command::OpenProject(target));
-        k.send(Command::StartSession {
-            id: session,
-            stage_kind: kind,
-            kind: SessionKind::Create,
-            title: format!("⚡ {n}"),
-        });
-        k.send(Command::RunWorkflow { session, spec });
-        k.send(Command::SelectSession(Some(session)));
-        name.set(String::new());
-        prompt.set(String::new());
-        goal.set(String::new());
-        phases_text.set(String::new());
-        selected_skills.write().clear();
-        selected_agents.write().clear();
-        on_run.call(());
-    };
-
-    rsx! {
-        div {
-            style: "background:{theme::CARD_ALT};border:1px dashed {theme::BORDER_DEEP};border-radius:9px;padding:14px 16px;margin-bottom:16px;",
-            div { style: "font-size:12px;color:{ink3};margin-bottom:10px;line-height:1.6;",
-                "临时任务是一次性的动态工作流(WorkflowKind::Dynamic)——不进入库,跑完只留在会话记录里。\
-                 觉得好用,可在运行结果里点「沉淀为静态工作流」升格进 WorkflowHub。"
-            }
-            div {
-                style: "display:grid;grid-template-columns:1.4fr 1fr;gap:12px;margin-bottom:10px;",
-                div {
-                    div { style: "{label}", "名称" }
-                    input {
-                        style: "{input}",
-                        placeholder: "如 排查一次性能回退",
-                        value: "{name}",
-                        oninput: move |e| name.set(e.value()),
-                    }
-                }
-                div {
-                    div { style: "{label}", "在哪个项目跑" }
-                    select {
-                        style: "{input}",
-                        disabled: projects.is_empty(),
-                        onchange: move |e| {
-                            if let Ok(i) = e.value().parse::<usize>() {
-                                project_idx.set(i);
-                            }
-                        },
-                        for (i , p) in projects.iter().enumerate() {
-                            option { key: "{i}", value: "{i}", "{p.name}" }
-                        }
-                    }
-                }
-            }
-            div { style: "{label}", "关联阶段(可选)" }
-            select {
-                style: "{input} margin-bottom:10px;",
-                onchange: move |e| {
-                    stage_ref.set(StageKind::ALL.into_iter().find(|s| s.label() == e.value()));
-                },
-                option { value: "", "不关联特定阶段" }
-                for sk in StageKind::ALL {
-                    option { key: "{sk.index()}", value: "{sk.label()}", "{sk.label()}" }
-                }
-            }
-            div { style: "{label}", "Prompt(这次要做什么)" }
-            textarea {
-                style: "{input} min-height:60px;margin-bottom:10px;",
-                value: "{prompt}",
-                oninput: move |e| prompt.set(e.value()),
-            }
-            div { style: "{label}", "验收目标(可选)" }
-            input {
-                style: "{input} margin-bottom:10px;",
-                value: "{goal}",
-                oninput: move |e| goal.set(e.value()),
-            }
-            div { style: "{label}", "步骤(用「→」或逗号分隔,留空默认单步「执行」)" }
-            input {
-                style: "{input} margin-bottom:10px;",
-                placeholder: "如 复现 → 定位 → 修复 → 验证",
-                value: "{phases_text}",
-                oninput: move |e| phases_text.set(e.value()),
-            }
-            SkillAgentPicker { skills, agents, selected_skills, selected_agents }
-            button {
-                style: "cursor:pointer;background:{theme::CLAY};color:#FFF;border:none;border-radius:7px;padding:7px 16px;font-size:12.5px;",
-                disabled: projects.is_empty(),
-                onclick: run,
-                "▶ 立即运行"
             }
         }
     }
