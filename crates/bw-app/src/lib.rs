@@ -1503,37 +1503,6 @@ fn first_sentence_capped(desc: &str, cap: usize) -> String {
     format!("{cut}…")
 }
 
-/// T10 (plan/12 §5): the ephemeral spec `tick_scheduler` runs a `RunSkill`/
-/// `RunPrompt` cron task through — same `run_workflow_inner` engine/executor
-/// path a `RunWorkflow` cron task uses (so evidence lands in `workflow_run`/
-/// `CronEffectiveness` identically), just one neutral phase carrying the
-/// skill's `content` or the bare prompt text instead of a real hub workflow's
-/// phases. Never persisted — minted fresh on every fire, like `stage_workflow`'s
-/// throwaway `Dynamic` specs.
-fn cron_prompt_workflow(name: String, prompt: String) -> WorkflowSpec {
-    WorkflowSpec {
-        id: WorkflowId::new(),
-        name,
-        kind: WorkflowKind::Dynamic {
-            origin: "定时任务".into(),
-            stage: String::new(),
-        },
-        prompt,
-        goal: "定时任务真实执行".into(),
-        stage_ref: None,
-        phases: vec![PhaseMeta::neutral("执行")],
-        phase_prompts: vec![],
-        agents: vec![],
-        skills: vec![],
-        loop_config: LoopConfig {
-            retries: 1,
-            max_iter: 1,
-        },
-        project_id: None,
-        content: String::new(),
-    }
-}
-
 /// `agent_cli`/`tools`/`allowed_tools_arg` are T6 (plan/12 §3) additions: the
 /// resolved Agent-CLI route and the exact `--allowedTools` value it implies,
 /// snapshotted BEFORE the engine runs — so a run's real invocation

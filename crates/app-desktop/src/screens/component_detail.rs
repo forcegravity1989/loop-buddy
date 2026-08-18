@@ -429,17 +429,6 @@ fn CronDetailCard(
     let eff = cron_effectiveness
         .filter(|(eid, _)| *eid == id)
         .map(|(_, e)| e);
-    // T10 (plan/12 §5): the raw `target` column is a real `SkillId`/full
-    // prompt text for the two new modes — never show that opaque payload as
-    // "目标"; show the honest human-facing reading `CronRowVm` already
-    // derived instead (skill name / "(技能已删除)" / prompt preview).
-    let target_display = if let Some(skill_label) = &c.skill_target_label {
-        skill_label.clone()
-    } else if let Some(preview) = &c.prompt_preview {
-        preview.clone()
-    } else {
-        c.target.clone()
-    };
     rsx! {
         div {
             style: "{card} padding:22px 26px;max-width:680px;",
@@ -471,23 +460,24 @@ fn CronDetailCard(
                             span { "到点:📈 {subtitle}" }
                         }
                     }
-                } else if !c.mode_icon.is_empty() {
-                    "到点:{c.mode_icon} {c.mode_label} · 目标「{target_display}」"
                 } else {
-                    "到点:{c.mode_label} · 目标「{target_display}」"
+                    "到点:{c.mode_label}"
                 }
             }
             div {
                 style: "font-family:{mono};font-size:12px;color:{ink3};margin-bottom:6px;",
                 "{c.schedule_label} · 上次 {c.last_run} · 下次 {c.next_run}"
             }
-            if let Some(stage) = c.issue_stage_label {
-                div {
-                    style: "font-size:12px;color:{ink3};margin-bottom:14px;",
-                    if let Some(who) = &c.issue_assignee {
-                        "建活作用阶段:{stage} · 指派:{who}"
-                    } else {
-                        "建活作用阶段:{stage} · 未指派"
+            if !c.is_collect_metrics {
+                {
+                    // 建活任务:作用阶段(空 = 到点取项目当前阶段)+ 指派对象。
+                    let stage = c.issue_stage_label.unwrap_or("项目当前阶段");
+                    let who = c.issue_assignee.clone().unwrap_or_else(|| "未指派".to_string());
+                    rsx! {
+                        div {
+                            style: "font-size:12px;color:{ink3};margin-bottom:14px;",
+                            "建活作用阶段:{stage} · 指派:{who}"
+                        }
                     }
                 }
             } else {

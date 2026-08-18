@@ -864,7 +864,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // 访问,所以这里(kernel build_vm)填。best-effort:读失败空 Vec。
     let mut cron_tasks: Vec<CronRowVm> = Vec::with_capacity(state.cron_tasks.len());
     for c in state.cron_tasks.iter() {
-        let mut row = cron_row(c, &project_names, &state.skills, now);
+        let mut row = cron_row(c, &project_names, now);
         if matches!(c.mode, CronMode::CollectMetrics) {
             if let Some(pid) = c.project_id {
                 if let Ok(sigs) = store.persisted_signals(pid).await {

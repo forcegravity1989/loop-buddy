@@ -13,9 +13,6 @@
 //!   workflow) both really run (`RunHubWorkflow`/`RunWorkflow`) *and*
 //!   navigate the caller to go watch it (`on_run`) — running a workflow from
 //!   here no longer fires-and-forgets silently.
-//! - **设为定时任务** dispatches straight into Cron Hub's own
-//!   `Command::CreateCronTask` (same `schedule: Weekly, project_id: None`
-//!   defaults Cron Hub's own create form uses).
 //!
 //! T7 (2026-07-23, plan/12 §0): a stage-role filter chip row shared with
 //! `SkillHub`/`AgentHub` via `ui::vm::RoleFilter`/`role_chip_counts` — but
@@ -30,9 +27,9 @@ use crate::screens::workflow_flow::WorkflowFlow;
 use crate::theme;
 use bw_app::Command;
 use bw_core::model::{
-    AgentRef, Cadence, LoopConfig, PhaseMeta, SkillRef, StageKind, WorkflowKind, WorkflowSpec,
+    AgentRef, LoopConfig, PhaseMeta, SkillRef, StageKind, WorkflowKind, WorkflowSpec,
 };
-use bw_core::{CronTaskId, SessionId, WorkflowId};
+use bw_core::{SessionId, WorkflowId};
 use bw_store::SessionKind;
 use dioxus::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -68,7 +65,6 @@ pub fn WorkflowHub(
     let mut importing = use_signal(|| None::<WorkflowId>);
     let mut optimizing = use_signal(|| None::<WorkflowId>);
     let mut import_target = use_signal(|| 0usize);
-    let mut cron_added = use_signal(HashSet::<WorkflowId>::new);
     // T16: per-row 文档⇄流程图 view toggle. Keyed by row id so switching one
     // row's view doesn't affect any other expanded row; defaults to 流程图
     // (unchanged pre-T16 layout for the common "no content yet" case).
@@ -480,24 +476,6 @@ pub fn WorkflowHub(
                                                                             importing.set(None);
                                                                         },
                                                                         "优化 →"
-                                                                    }
-                                                                    if cron_added().contains(&row_id) {
-                                                                        span { style: "font-size:11.5px;color:{ink3};", "✓ 已加入 Cron Hub · 每周" }
-                                                                    } else {
-                                                                        button {
-                                                                            style: "cursor:pointer;background:transparent;color:{ink3};border:1px solid {theme::BORDER};border-radius:7px;padding:6px 12px;font-size:12px;",
-                                                                            onclick: move |_| {
-                                                                                k.send(Command::CreateCronTask {
-                                                                                    id: CronTaskId::new(),
-                                                                                    name: format!("{row_name} · 定时执行"),
-                                                                                    target: row_name.clone(),
-                                                                                    schedule: Cadence::Weekly,
-                                                                                    project_id: None,
-                                                                                });
-                                                                                cron_added.write().insert(row_id);
-                                                                            },
-                                                                            "设为定时任务 →"
-                                                                        }
                                                                     }
                                                                 }
                                                             }

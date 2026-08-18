@@ -440,7 +440,7 @@ pub const BW_STANDARD_LIBRARY: &str = "bw-standard";
 /// `agents/<name>.md`) — the project's own runtime/maintenance assets, not a
 /// BW-authored library and not an external curated import. Scoped to the
 /// project by `project_id`; registered-visible only (种A: 不进任何注入下拉
-/// — issue standard_skill / issue assignee / workflow crew / cron RunSkill).
+/// — issue standard_skill / issue assignee / workflow crew).
 /// Like any `Official` library other than `bw-standard`, it counts as
 /// `is_external_official()` → plan/16 spec findings degrade to Advisory
 /// (project's own text, honestly shown, never rewritten in place).
@@ -468,7 +468,7 @@ impl HubSource {
     /// plan/渠道6: `true` iff this row was scanned in from a project's own
     /// workspace (`BW_PROJECT_ASSETS_LIBRARY`). Such rows are registered-
     /// visible only (种A) — they must not appear in any injection picker
-    /// (issue standard_skill / assignee / workflow crew / cron RunSkill). A
+    /// (issue standard_skill / assignee / workflow crew). A
     /// VM projects this onto an `is_project_assets` bool because the UI tier
     /// doesn't see `HubSource`, only `source_label` (which is "官方选型" for
     /// every `Official` library and can't discriminate this one).
@@ -1487,73 +1487,52 @@ pub enum CronStatus {
     Paused,
 }
 
-/// What a [`CronTask`] does when due (A1; extended T10, plan/12 §5).
-/// `RunWorkflow` (the default) resolves `target` as a hub workflow and runs
-/// it — the original behavior. `RunSkill`/`RunPrompt` (T10) also really
-/// execute (through the same engine/executor path `RunWorkflow` uses), just
-/// against a single ad-hoc prompt instead of a full hub workflow's phases:
-/// `RunSkill` takes its prompt from a real Skill's `content` (a genuine
-/// `SkillId` reference — never free-text name matching, so a deleted/renamed
-/// skill can never silently resolve to the wrong row); `RunPrompt` runs a bare
-/// prompt with no entity involved at all. `CreateIssue` is autopilot: it
-/// mints a stage-scoped Issue. No-hijack by construction: a `CreateIssue` task
-/// never auto-runs anything, it only creates work — unaffected by T10.
+/// What a [`CronTask`] does when due. 2026-08-18 起只剩两种,而且都
+/// **不执行任何工作**——这是产品铁律「定时任务只自动建活,绝不自动完成活」
+/// 落到类型上的样子:
 ///
-/// Wire note: `CronMode` itself is never serialized as JSON on disk — the
-/// `cron_task.mode`/`cron_task.target` TEXT columns already round-trip it by
-/// hand (`bw_store::cron_mode_text`/`parse_cron_mode`), so the two new
-/// variants need no schema migration: `target` (already free text, already
-/// unused by `CreateIssue`) doubles as the payload column — a skill's real
-/// id (text) for `RunSkill`, the raw prompt text for `RunPrompt`. The two
-/// pre-T10 modes' storage is untouched.
+/// - [`CronMode::CreateIssue`](autopilot):到点造一张阶段内的 Issue,状态
+///   Normal,等人(或人点 ▶跑)去干。
+/// - [`CronMode::CollectMetrics`](采集器,plan/13 D7):到点把真实数据
+///   (GitHub 查询等)拉进项目指标当追加观测。采集是观测不是活,不结算任何
+///   东西。
+///
+/// 历史:曾有 `RunWorkflow`/`RunSkill`/`RunPrompt` 三种「到点跑」模式,它们的
+/// 执行体是旧的聊天式工作流引擎(`claude -p` 批处理);2026-08-18 随引擎一起
+/// 删除(真实日常库里三种模式零条,`docs/superpowers/specs/2026-08-17-…` §6)。
+/// 老库里残留的 `cron_task.mode IN ('run_workflow','run_skill','run_prompt')`
+/// 由 `bw_store` 打开时迁移成 `create_issue`——最接近的存活语义:「到点建一张
+/// 同名的活」;`parse_cron_mode` 对认不出的文本也落到 `CreateIssue`。
+///
+/// Wire note: `CronMode` 不以 JSON 落盘,`cron_task.mode` TEXT 列由
+/// `bw_store::cron_mode_text`/`parse_cron_mode` 手工往返。
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CronMode {
+    /// autopilot:到点只建一件活,绝不自动跑。
     #[default]
-    RunWorkflow,
-    /// T10: run a real Skill's `content` as the prompt when due.
-    RunSkill {
-        skill_id: SkillId,
-    },
-    /// T10: run a bare prompt when due — no entity involved.
-    RunPrompt {
-        prompt: String,
-    },
     CreateIssue,
-    /// C7 · 采集器 (plan/13 D7): pull real data (GitHub queries) into the
-    /// project's metrics as append-only observations. No-hijack like
-    /// `CreateIssue`: collecting is *observation*, never *work* — it never
-    /// runs a workflow and never settles anything, so it can auto-fire
-    /// without breaching 「Done 永不自动」.
+    /// 采集器 (plan/13 D7): pull real data (GitHub queries) into the
+    /// project's metrics as append-only observations. Collecting is
+    /// *observation*, never *work* — it never runs anything and never
+    /// settles anything, so it can auto-fire without breaching 「Done 永不自动」.
     CollectMetrics,
 }
 
 impl CronMode {
-    /// L1(plan/11); extended T10(RunSkill/RunPrompt)+ C7(CollectMetrics)。
-    /// Cron 详情卡要如实标出「到点做什么」——运行工作流/技能/Prompt、只建
-    /// 一件活(autopilot,no-hijack)、还是采集指标(pull → 观测)。
+    /// Cron 详情卡如实标出「到点做什么」。
     pub fn label(&self) -> &'static str {
         match self {
-            CronMode::RunWorkflow => "运行工作流",
-            CronMode::RunSkill { .. } => "运行技能",
-            CronMode::RunPrompt { .. } => "运行 Prompt",
             CronMode::CreateIssue => "建活(autopilot · 不自动跑)",
             CronMode::CollectMetrics => "采集指标(脚本 → 观测)",
         }
     }
 
-    /// T10(plan/12 §5): the row-front icon that lets CronHub's list tell the
-    /// four modes apart at a glance. `CreateIssue` deliberately keeps the
-    /// pre-T10 "no icon" look (the issue asked to leave it 沿用现状) — its
-    /// distinctiveness already comes from `label()`'s explicit "autopilot"
-    /// text, not an icon.
+    /// CronHub 列表行首图标。`CreateIssue` 无图标(靠 `label()` 的 autopilot
+    /// 字样区分);采集用与「立即同步」同族的图标。
     pub fn icon(&self) -> &'static str {
         match self {
-            CronMode::RunWorkflow => "🔄",
-            CronMode::RunSkill { .. } => "⚙",
-            CronMode::RunPrompt { .. } => "💬",
             CronMode::CreateIssue => "",
-            // C7(合流): 采集是观测不是活,用与「立即同步」同族的图标。
             CronMode::CollectMetrics => "📈",
         }
     }
@@ -1574,16 +1553,9 @@ impl CronStatus {
 pub struct CronTask {
     pub id: CronTaskId,
     pub name: String,
-    /// What it runs — free text (e.g. a workflow/routine name); not a hard FK
-    /// since a cron target may be a hub workflow, a connector sync, or
-    /// something outside this app entirely. T10 (plan/12 §5): also doubles as
-    /// the payload column for the two new [`CronMode`] variants — a
-    /// `RunSkill` task stores its referenced `SkillId` here (as text), a
-    /// `RunPrompt` task stores its raw prompt text here. `mode` is always the
-    /// typed, authoritative read of "what this really is"; `target` is the
-    /// storage-level string both `mode` and this field derive from (see
-    /// `bw_store::parse_cron_mode`) — unused (empty) for `CreateIssue`, as
-    /// before.
+    /// 历史字段:曾是「到点跑什么」的自由文本(工作流名 / 技能 id / 裸
+    /// prompt)。「到点跑」三种模式 2026-08-18 已删,现存两种模式都不读它,
+    /// 新建任务一律写空串;列保留只为老库读回不崩。
     pub target: String,
     pub schedule: Cadence,
     /// `None` = 全部项目 (all projects), matching the prototype's own
@@ -1596,13 +1568,11 @@ pub struct CronTask {
     /// `last_run` display string — this is what `cron_due` compares against,
     /// never a parsed-back label.
     pub last_run_at: Option<OffsetDateTime>,
-    /// A1: what this task does when due. `RunWorkflow` (default) runs `target`;
-    /// `CreateIssue` mints a stage-scoped Issue (autopilot, no-hijack);
-    /// `RunSkill`/`RunPrompt` (T10) really execute too — see `CronMode`'s doc.
+    /// 到点做什么(建活 / 采集),见 [`CronMode`]。
     #[serde(default)]
     pub mode: CronMode,
-    /// A1: the stage a `CreateIssue` task scopes its Issue to (`None` for
-    /// `RunWorkflow` tasks).
+    /// A1: the stage a `CreateIssue` task scopes its Issue to (`None` =
+    /// 项目当前阶段;`CollectMetrics` 不用).
     #[serde(default)]
     pub issue_stage: Option<StageKind>,
     /// A1: agent NAME a `CreateIssue` task assigns its Issue to (`None` =

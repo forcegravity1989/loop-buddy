@@ -593,56 +593,27 @@ pub enum Command {
         source_path: String,
         official_library: Option<String>,
     },
-    CreateCronTask {
-        id: CronTaskId,
-        name: String,
-        target: String,
-        schedule: Cadence,
-        project_id: Option<ProjectId>,
-    },
     /// A1: an autopilot cron task — when due, it mints a stage-scoped Issue
-    /// (Todo, optionally assigned) instead of running a workflow. No-hijack: it
+    /// (Todo, optionally assigned) instead of running anything. No-hijack: it
     /// never auto-runs anything. `assignee` is an agent NAME matched at fire
-    /// time (no match ⇒ honest unassigned Issue, not a failure).
+    /// time (no match ⇒ honest unassigned Issue, not a failure). `stage: None`
+    /// = mint into whatever stage the project is in at fire time.
+    ///
+    /// 2026-08-18:这是 Cron Hub 表单唯一能建的类型。「采集指标」定时器由
+    /// `CreateProject`(挂了远端仓的项目)自动配一条,不走表单;旧的
+    /// 「运行工作流 / 运行技能 / 运行 Prompt」三种到点跑旧聊天式引擎的模式
+    /// 随引擎一起拔掉。
     CreateAutopilotTask {
         id: CronTaskId,
         name: String,
         schedule: Cadence,
         project_id: Option<ProjectId>,
-        stage: StageKind,
+        stage: Option<StageKind>,
         assignee: Option<String>,
-    },
-    /// T10 (plan/12 §5): a cron task that, when due, really runs a Skill's
-    /// `content` as the prompt — a genuine `SkillId` reference, resolved at
-    /// *fire* time (never at creation time), so an honest "技能已删除"
-    /// failure is possible without ever crashing.
-    CreateRunSkillCronTask {
-        id: CronTaskId,
-        name: String,
-        schedule: Cadence,
-        project_id: Option<ProjectId>,
-        skill_id: SkillId,
-    },
-    /// T10: a cron task that, when due, really runs a bare prompt — no
-    /// entity involved at all.
-    CreateRunPromptCronTask {
-        id: CronTaskId,
-        name: String,
-        schedule: Cadence,
-        project_id: Option<ProjectId>,
-        prompt: String,
     },
     /// Pause/resume a cron task — the "人工介入" lever. Pure status flip;
     /// never touches `last_run` since nothing actually ran.
     SetCronStatus {
-        id: CronTaskId,
-        status: CronStatus,
-    },
-    /// Record that a cron task's target really ran just now (this app has no
-    /// background scheduler — manually triggered from Cron Hub's "▶ 立即执行").
-    /// `status` is the real outcome (`Running` when the caller fires this
-    /// before dispatching the actual run, `Normal`/`Failed` once it's known).
-    MarkCronRun {
         id: CronTaskId,
         status: CronStatus,
     },

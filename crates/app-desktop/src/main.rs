@@ -13,9 +13,7 @@ mod screens;
 mod theme;
 
 use bw_app::{Command, View};
-use bw_core::model::{CronStatus, HubKind, StageKind};
-use bw_core::{CronTaskId, SessionId};
-use bw_store::SessionKind;
+use bw_core::model::HubKind;
 use dioxus::prelude::*;
 use kernel::{ActionsVm, RunVm, UiNote, Vm};
 use screens::activity_hub::ActivityHub;
@@ -150,13 +148,6 @@ fn Root() -> Element {
     // `kernel::ACTION_PENDING_THRESHOLD` itself (render-time, from real
     // `Instant`s — see that component).
     let mut actions = use_signal(ActionsVm::default);
-    // Set right before a Cron Hub "▶ 立即执行" trigger fires; consumed (and
-    // cleared) by the notes listener below once that run's real `RunDone`/
-    // `RunFailed` arrives, closing the loop with a real `MarkCronRun`. Lives
-    // here (not in `RunVm`) because "which cron task triggered this" is
-    // client-side orchestration knowledge the kernel doesn't have.
-    let mut pending_cron = use_signal(|| None::<CronTaskId>);
-
     // Latest kernel snapshot → the one rendering source of truth.
     use_future({
         let kernel = kernel.clone();
@@ -173,16 +164,11 @@ fn Root() -> Element {
         }
     });
 
-    // Transient notes: live run progress + dispatch errors. Also the one
-    // place that closes the Cron Hub trigger loop: if this run was fired by
-    // "▶ 立即执行" (`pending_cron` is set), the real `RunDone`/`RunFailed`
-    // that ends it becomes a real `Command::MarkCronRun` with the real
-    // outcome — never optimistically marked at trigger time.
+    // Transient notes: live run progress + dispatch errors.
     use_future({
         let kernel = kernel.clone();
         move || {
             let mut rx = kernel.notes();
-            let kernel = kernel.clone();
             async move {
                 // PF1-5: 所有 toast 8s 自动清(spawn 8s timer,到点 epoch 仍
                 // 匹配才清;新 toast 替换重置 epoch)。失败/非关键 toast 不滞留。
@@ -215,27 +201,9 @@ fn Root() -> Element {
                             UiNote::RunFailed(e) => {
                                 set_toast(format!("工作流失败:{e}"));
                                 run.with_mut(|r| r.apply(&note));
-                                if let Some(cid) = pending_cron() {
-                                    kernel.send(Command::MarkCronRun {
-                                        id: cid,
-                                        status: CronStatus::Failed,
-                                    });
-                                    pending_cron.set(None);
-                                }
                             }
-                            UiNote::RunDone => {
-                                run.with_mut(|r| r.apply(&note));
-                                if let Some(cid) = pending_cron() {
-                                    kernel.send(Command::MarkCronRun {
-                                        id: cid,
-                                        status: CronStatus::Normal,
-                                    });
-                                    pending_cron.set(None);
-                                }
-                            }
-                            // A real, unattended scheduler fire (not this
-                            // click-driven `pending_cron` flow at all) — a
-                            // toast, deliberately never a navigation. See
+                            // A real, unattended scheduler fire — a toast,
+                            // deliberately never a navigation. See
                             // `App::tick_scheduler`'s own doc comment for why
                             // it must not touch the user's current screen.
                             UiNote::CronAutoFired { name, ok } => {
@@ -301,52 +269,6 @@ fn Root() -> Element {
     }
     let show_op = !show_create && v.view == View::App;
 
-    // Cron Hub's "▶ 立即执行": resolve the real project + workflow from this
-    // render's hub snapshot, dispatch the exact same real Command sequence
-    // WorkflowHub's "确认导入" uses, mark the task Running for real, then
-    // navigate to go watch it (same as any other real run).
-    let hub_for_cron = v.hub.clone();
-    let kernel_for_cron = kernel.clone();
-    let on_trigger_cron = move |cron_id: CronTaskId| {
-        let Some(c) = hub_for_cron.cron_tasks.iter().find(|x| x.id == cron_id) else {
-            return;
-        };
-        let Some(pid) = c.project_id else {
-            return;
-        };
-        // plan/20 R2: 与 tick_scheduler 同一条就近规则——本项目行优先、
-        // 全局兜底、他项目行永不命中。
-        let Some(wf) = bw_core::scope::scoped_pick(
-            hub_for_cron.workflows.iter(),
-            Some(pid),
-            |w| w.project_id,
-            |w| w.name == c.target,
-        ) else {
-            return;
-        };
-        let session = SessionId::new();
-        kernel_for_cron.send(Command::OpenProject(pid));
-        kernel_for_cron.send(Command::StartSession {
-            id: session,
-            stage_kind: wf
-                .stage_ref
-                .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n)),
-            kind: SessionKind::Optimize,
-            title: format!("⏰ 定时触发 · {}", c.name),
-        });
-        kernel_for_cron.send(Command::MarkCronRun {
-            id: cron_id,
-            status: CronStatus::Running,
-        });
-        kernel_for_cron.send(Command::RunHubWorkflow {
-            session,
-            workflow_id: wf.id,
-        });
-        kernel_for_cron.send(Command::SelectSession(Some(session)));
-        pending_cron.set(Some(cron_id));
-        hub.set(Hub::Workspace);
-    };
-
     rsx! {
         GlobalChrome {}
         div {
@@ -394,11 +316,7 @@ fn Root() -> Element {
                 } else if hub() == Hub::Agent {
                     AgentHub { hub: v.hub.clone(), projects: v.projects.clone() }
                 } else if hub() == Hub::Cron {
-                    CronHub {
-                        hub: v.hub.clone(),
-                        projects: v.projects.clone(),
-                        on_trigger: on_trigger_cron,
-                    }
+                    CronHub { hub: v.hub.clone(), projects: v.projects.clone() }
                 } else if hub() == Hub::Connector {
                     ConnectorHub { hub: v.hub.clone() }
                 } else if hub() == Hub::Knowledge {

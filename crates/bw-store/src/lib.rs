@@ -1192,41 +1192,23 @@ pub(crate) fn parse_session_status(s: &str) -> SessionStatus {
     }
 }
 
-/// The `cron_task.mode` discriminant text. T10: `RunSkill`/`RunPrompt` carry
-/// data now, but that data lives in `cron_task.target` (see `parse_cron_mode`
-/// below), so this stays a plain by-reference discriminant lookup — no
-/// column, no migration.
+/// The `cron_task.mode` discriminant text(手工往返,不走 JSON)。
 pub(crate) fn cron_mode_text(m: &CronMode) -> &'static str {
     match m {
-        CronMode::RunWorkflow => "run_workflow",
-        CronMode::RunSkill { .. } => "run_skill",
-        CronMode::RunPrompt { .. } => "run_prompt",
         CronMode::CreateIssue => "create_issue",
         CronMode::CollectMetrics => "collect_metrics",
     }
 }
 
-/// Reconstruct a full [`CronMode`] from the two raw columns that carry it:
-/// `mode` (the discriminant) and `target` (T10's payload column — a real
-/// `SkillId` as text for `run_skill`, the raw prompt for `run_prompt`; unused
-/// by the two pre-T10 variants, whose own `target` semantics are untouched).
-/// An unparseable `run_skill` target (should never happen — the id is only
-/// ever written by this same code) reads back as the nil id rather than
-/// panicking — `App::tick_scheduler`'s `get_skill` lookup then honestly
-/// reports "not found", same as an actually-deleted skill.
-pub(crate) fn parse_cron_mode(mode: &str, target: &str) -> CronMode {
+/// `cron_task.mode` 文本 → [`CronMode`]。认不出的文本(包括 2026-08-18 已删的
+/// `run_workflow`/`run_skill`/`run_prompt`,以及任何将来的脏值)一律落到
+/// `CreateIssue`——最接近的存活语义,也是 `CronMode::default()`;老库里这三种
+/// 文本在 `open()` 时会被真正改写成 `create_issue`(见 `sqlite.rs`),这里的
+/// 兜底只是防守。
+pub(crate) fn parse_cron_mode(mode: &str) -> CronMode {
     match mode {
-        "create_issue" => CronMode::CreateIssue,
         "collect_metrics" => CronMode::CollectMetrics,
-        "run_skill" => CronMode::RunSkill {
-            skill_id: uuid::Uuid::parse_str(target)
-                .map(SkillId::from_uuid)
-                .unwrap_or_else(|_| SkillId::from_uuid(uuid::Uuid::nil())),
-        },
-        "run_prompt" => CronMode::RunPrompt {
-            prompt: target.to_string(),
-        },
-        _ => CronMode::RunWorkflow,
+        _ => CronMode::CreateIssue,
     }
 }
 

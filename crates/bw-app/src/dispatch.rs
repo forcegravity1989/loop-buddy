@@ -2558,33 +2558,6 @@ impl App {
                 self.emit(Event::AgentsChanged);
             }
 
-            Command::CreateCronTask {
-                id,
-                name,
-                target,
-                schedule,
-                project_id,
-            } => {
-                if name.trim().is_empty() {
-                    return Err(AppError::Invalid("名称不能为空".into()));
-                }
-                self.store
-                    .create_cron_task(NewCronTask {
-                        id,
-                        name,
-                        target,
-                        schedule,
-                        project_id,
-                        mode: CronMode::RunWorkflow,
-                        issue_stage: None,
-                        issue_assignee: None,
-                        last_run_at: None,
-                    })
-                    .await?;
-                self.refresh_cron_tasks().await?;
-                self.emit(Event::CronTasksChanged);
-            }
-
             Command::CreateAutopilotTask {
                 id,
                 name,
@@ -2600,73 +2573,12 @@ impl App {
                     .create_cron_task(NewCronTask {
                         id,
                         name,
-                        target: String::new(), // unused in create_issue mode
+                        target: String::new(), // 历史字段,建活模式不用
                         schedule,
                         project_id,
                         mode: CronMode::CreateIssue,
-                        issue_stage: Some(stage),
+                        issue_stage: stage,
                         issue_assignee: assignee,
-                        last_run_at: None,
-                    })
-                    .await?;
-                self.refresh_cron_tasks().await?;
-                self.emit(Event::CronTasksChanged);
-            }
-
-            Command::CreateRunSkillCronTask {
-                id,
-                name,
-                schedule,
-                project_id,
-                skill_id,
-            } => {
-                if name.trim().is_empty() {
-                    return Err(AppError::Invalid("名称不能为空".into()));
-                }
-                self.store
-                    .create_cron_task(NewCronTask {
-                        id,
-                        name,
-                        // T10: the real skill id is the payload — round-tripped
-                        // through `target` (see `bw_store::parse_cron_mode`).
-                        target: skill_id.uuid().to_string(),
-                        schedule,
-                        project_id,
-                        mode: CronMode::RunSkill { skill_id },
-                        issue_stage: None,
-                        issue_assignee: None,
-                        last_run_at: None,
-                    })
-                    .await?;
-                self.refresh_cron_tasks().await?;
-                self.emit(Event::CronTasksChanged);
-            }
-
-            Command::CreateRunPromptCronTask {
-                id,
-                name,
-                schedule,
-                project_id,
-                prompt,
-            } => {
-                if name.trim().is_empty() {
-                    return Err(AppError::Invalid("名称不能为空".into()));
-                }
-                if prompt.trim().is_empty() {
-                    return Err(AppError::Invalid("Prompt 不能为空".into()));
-                }
-                self.store
-                    .create_cron_task(NewCronTask {
-                        id,
-                        name,
-                        // T10: the prompt text itself is the payload — same
-                        // `target` column `RunSkill`/`RunWorkflow` reuse.
-                        target: prompt.clone(),
-                        schedule,
-                        project_id,
-                        mode: CronMode::RunPrompt { prompt },
-                        issue_stage: None,
-                        issue_assignee: None,
                         last_run_at: None,
                     })
                     .await?;
@@ -2676,14 +2588,6 @@ impl App {
 
             Command::SetCronStatus { id, status } => {
                 self.store.set_cron_status(id, status).await?;
-                self.refresh_cron_tasks().await?;
-                self.emit(Event::CronTasksChanged);
-            }
-
-            Command::MarkCronRun { id, status } => {
-                self.store
-                    .record_cron_run(id, status, run_at_label(now()))
-                    .await?;
                 self.refresh_cron_tasks().await?;
                 self.emit(Event::CronTasksChanged);
             }

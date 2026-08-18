@@ -731,36 +731,23 @@ async fn main() {
             }
         }
 
-        // ── 运维段绑定真实周期巡检（真实调度器有真实对象可管）──
+        // ── 运维段绑定一条「定时建活」(真实调度器有真实对象可管;到点只
+        // 建活,绝不自动跑活)──
         if ring_ok {
             let cron_name = format!("{} · 每日健康巡检", req.name);
             let existing = store.list_cron_tasks().await.unwrap();
             if !existing.iter().any(|c| c.name == cron_name) {
-                let ops_template = app
-                    .snapshot()
-                    .workflow_specs
-                    .iter()
-                    .find(|w| {
-                        w.stage_ref == Some(StageKind::Ops.index())
-                            && matches!(
-                                &w.kind,
-                                bw_core::model::WorkflowKind::Static { source, .. }
-                                    if *source == bw_core::model::HubSource::SelfBuilt
-                            )
-                    })
-                    .map(|w| w.name.clone());
-                if let Some(target) = ops_template {
-                    app.dispatch(Command::CreateCronTask {
-                        id: CronTaskId::new(),
-                        name: cron_name,
-                        target,
-                        schedule: Cadence::Daily,
-                        project_id: Some(project),
-                    })
-                    .await
-                    .expect("create cron");
-                    println!("  [定时任务] 每日健康巡检已绑定（真实调度器接管）");
-                }
+                app.dispatch(Command::CreateAutopilotTask {
+                    id: CronTaskId::new(),
+                    name: cron_name,
+                    schedule: Cadence::Daily,
+                    project_id: Some(project),
+                    stage: Some(StageKind::Ops),
+                    assignee: None,
+                })
+                .await
+                .expect("create cron");
+                println!("  [定时任务] 每日健康巡检建活已绑定（真实调度器接管,只建活不跑活）");
             }
         }
 

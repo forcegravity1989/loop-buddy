@@ -6,27 +6,27 @@ use super::*;
 impl App {
     /// The real scheduler tick — call this on an interval (see
     /// `app-desktop/src/kernel.rs`) to really auto-fire due cron tasks, no
-    /// click required. Reads cron tasks + hub specs fresh from the store
+    /// click required. Reads cron tasks fresh from the store
     /// (never trusts a possibly-stale in-memory snapshot for a decision this
     /// consequential), fires each task whose `bw_core::model::cron_due` says
     /// yes, and returns which ones fired — `[]` on a quiet tick, which is
     /// the common case and not an error.
     ///
     /// Deliberately does **not** touch `self.state.active_project`/`view`/
-    /// `panel`/`scope`/`active_session`: unlike the desktop UI's manual "▶
-    /// 立即执行" (which *does* navigate the caller to go watch, because a
-    /// human just asked for that), an unattended background fire must not
-    /// yank whatever project/screen the user currently has open. Real
+    /// `panel`/`scope`/`active_session`: an unattended background fire must
+    /// not yank whatever project/screen the user currently has open. Real
     /// "monitoring" here means `Event::CronAutoFired` + the cron row's own
     /// persisted status/`last_run`, not a hijacked view.
     ///
-    /// One task failing (a real `run_workflow_inner` error) is recorded as
+    /// 到点只做两种事,都不执行任何工作(产品铁律「定时任务只自动建活,绝不
+    /// 自动完成活」):`CreateIssue` 建一张 Issue;`CollectMetrics` 拉真实数据
+    /// 当观测。曾经的「到点跑工作流/技能/Prompt」三种模式连同旧执行引擎一起
+    /// 于 2026-08-18 删除(设计稿 §6)。One task failing is recorded as
     /// `CronStatus::Failed` and does not stop the rest of this tick from
     /// evaluating the remaining tasks.
     pub async fn tick_scheduler(&mut self) -> Result<Vec<CronTaskId>, AppError> {
         let now_ts = now();
         let tasks = self.store.list_cron_tasks().await?;
-        let specs = self.store.list_workflow_specs().await?;
         let mut fired = Vec::new();
 
         for c in tasks {
@@ -41,11 +41,17 @@ impl App {
             }
 
             // A1: autopilot — a create_issue task mints a stage-scoped Issue
-            // (Todo, optionally assigned) instead of running a workflow. No-hijack
-            // by construction: this branch never calls run_workflow_inner.
+            // (Todo, optionally assigned). No-hijack by construction: it only
+            // creates work, never runs it. `issue_stage` 为空(老库从「到点跑」
+            // 模式迁移过来的行,或表单没选)就落到项目当前阶段——不能因为少
+            // 选一个阶段就永远静默不触发。
             if c.mode == CronMode::CreateIssue {
-                let Some(stage) = c.issue_stage else {
-                    continue; // misconfigured — no stage to scope the Issue to
+                let stage = match c.issue_stage {
+                    Some(s) => s,
+                    None => match self.store.get_project(pid).await? {
+                        Some(proj) => proj.active_stage,
+                        None => continue, // 项目已删——任务成孤儿,跳过
+                    },
                 };
                 self.store
                     .record_cron_run(c.id, CronStatus::Running, run_at_label(now_ts))
@@ -75,7 +81,7 @@ impl App {
 
             // C7: the standard collector — pull real data into the project's
             // metrics as append-only observations. No-hijack by construction:
-            // this branch never calls run_workflow_inner, never settles
+            // this branch never runs anything, never settles
             // anything — collecting is observation, not work, so an unattended
             // auto-fire can't breach 「Done 永不自动」.
             if c.mode == CronMode::CollectMetrics {
@@ -101,186 +107,8 @@ impl App {
                 continue;
             }
 
-            // T10 (plan/12 §5): RunSkill / RunPrompt — both really execute,
-            // through the identical run_workflow_inner engine/executor path
-            // the RunWorkflow branch below uses, against a single ad-hoc
-            // prompt (`cron_prompt_workflow`) instead of a real hub
-            // workflow's phases. Resolved fresh on every fire, never cached:
-            // a RunSkill task whose skill was deleted since creation fails
-            // honestly right here — no crash, no silent no-op, no fabricated
-            // success.
-            let adhoc_spec = match &c.mode {
-                CronMode::RunSkill { skill_id } => {
-                    Some(match self.store.get_skill(*skill_id).await? {
-                        Some(skill) => Ok(cron_prompt_workflow(
-                            format!("⚙ 定时技能 · {}", skill.name),
-                            skill.content.clone(),
-                        )),
-                        None => Err("引用的技能已删除".to_string()),
-                    })
-                }
-                CronMode::RunPrompt { prompt } => Some(Ok(cron_prompt_workflow(
-                    format!("💬 定时 Prompt · {}", c.name),
-                    prompt.clone(),
-                ))),
-                _ => None,
-            };
-
-            if let Some(adhoc_spec) = adhoc_spec {
-                self.store
-                    .record_cron_run(c.id, CronStatus::Running, run_at_label(now_ts))
-                    .await?;
-                self.refresh_cron_tasks().await?;
-                self.emit(Event::CronTasksChanged);
-
-                let ok = match adhoc_spec {
-                    Err(reason) => {
-                        // Nothing to execute (referenced skill gone) — an
-                        // honest failed fire, recorded as a real workflow_run
-                        // row so CronEffectiveness reflects it exactly like an
-                        // engine failure would (settle-once, never a
-                        // fabricated success or a silently skipped fire).
-                        let started_at = OffsetDateTime::now_utc().unix_timestamp();
-                        let run_id = self
-                            .store
-                            .record_workflow_run_start(bw_store::NewWorkflowRun {
-                                workflow_id: WorkflowId::new(),
-                                workflow_name: &c.name,
-                                project_id: Some(pid),
-                                session_id: None,
-                                trigger: RunTrigger::Scheduled,
-                                started_at,
-                                cron_task_id: Some(c.id),
-                                params_json: "",
-                            })
-                            .await?;
-                        self.store
-                            .settle_workflow_run(
-                                run_id,
-                                RunStatus::Failed,
-                                OffsetDateTime::now_utc().unix_timestamp(),
-                                0,
-                                0,
-                                &reason,
-                            )
-                            .await?;
-                        false
-                    }
-                    Ok(spec) => {
-                        let session = SessionId::new();
-                        self.store
-                            .ensure_session(NewSession {
-                                id: session,
-                                project_id: pid,
-                                stage_kind: None,
-                                kind: SessionKind::Optimize,
-                                title: format!("⏰ 定时触发 · {}", c.name),
-                                snippet: String::new(),
-                            })
-                            .await?;
-                        let result = self
-                            .run_workflow_inner(
-                                pid,
-                                session,
-                                spec,
-                                RunTrigger::Scheduled,
-                                Some(c.id),
-                                None,
-                                None,
-                            )
-                            .await;
-                        matches!(result, Ok(RunOutcome::Completed))
-                    }
-                };
-
-                let outcome = if ok {
-                    CronStatus::Normal
-                } else {
-                    CronStatus::Failed
-                };
-                self.store
-                    .record_cron_run(c.id, outcome, run_at_label(now()))
-                    .await?;
-                self.refresh_cron_tasks().await?;
-                self.emit(Event::CronTasksChanged);
-                self.emit(Event::CronAutoFired {
-                    id: c.id,
-                    name: c.name.clone(),
-                    ok,
-                });
-                fired.push(c.id);
-                continue;
-            }
-
-            // plan/20 R2: cron 按名找 workflow 走同一条就近规则——本项目行
-            // 优先、全局兜底、他项目行永不命中(plan/08 S1「cron 的按名找
-            // workflow 同样本项目优先」)。
-            let Some(spec) = bw_core::scope::scoped_pick(
-                specs.iter(),
-                Some(pid),
-                |w| w.project_id,
-                |w| w.name == c.target,
-            )
-            .cloned() else {
-                continue; // target doesn't (yet) name a real hub workflow — same rule as the manual trigger.
-            };
-
-            self.store
-                .record_cron_run(c.id, CronStatus::Running, run_at_label(now_ts))
-                .await?;
-            self.refresh_cron_tasks().await?;
-            self.emit(Event::CronTasksChanged);
-
-            let session = SessionId::new();
-            self.store
-                .ensure_session(NewSession {
-                    id: session,
-                    project_id: pid,
-                    stage_kind: spec
-                        .stage_ref
-                        .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n)),
-                    kind: SessionKind::Optimize,
-                    title: format!("⏰ 定时触发 · {}", c.name),
-                    snippet: String::new(),
-                })
-                .await?;
-            self.store.record_workflow_use(spec.id).await?;
-            self.refresh_workflow_specs().await?;
-
-            let result = self
-                .run_workflow_inner(
-                    pid,
-                    session,
-                    spec,
-                    RunTrigger::Scheduled,
-                    Some(c.id),
-                    None,
-                    None,
-                )
-                .await;
-            // A scheduled run "succeeds" only when the workflow actually passed.
-            // A hit review cap (`BlockedAtCap`) has no bound Issue to park here
-            // (cron RunWorkflow passes `issue_id = None`) — its honest per-round
-            // rows already record "上限未通过", so we surface it as Failed rather
-            // than a fake green (no fabricated Issue — plan/12 §4).
-            let ok = matches!(result, Ok(RunOutcome::Completed));
-            let outcome = if ok {
-                CronStatus::Normal
-            } else {
-                CronStatus::Failed
-            };
-            self.store
-                .record_cron_run(c.id, outcome, run_at_label(now()))
-                .await?;
-            self.refresh_cron_tasks().await?;
-            self.emit(Event::CronTasksChanged);
-            self.emit(Event::CronAutoFired {
-                id: c.id,
-                name: c.name.clone(),
-                ok,
-            });
-
-            fired.push(c.id);
+            // 认不出的模式(不该发生:`parse_cron_mode` 兜底到 CreateIssue)——
+            // 如实跳过,不猜。
         }
         // V1 Issue2 Phase2b: drain hook events from the listener (localhost
         // HTTP server). SessionStart → store session_id (F1 fix); Stop → set

@@ -353,6 +353,17 @@ impl SqliteStore {
         sqlx::query("DROP TABLE IF EXISTS weekly_review")
             .execute(&pool)
             .await?;
+        // 2026-08-18 拔旧执行引擎:定时任务只剩两种——「建活」与「采集指标」。
+        // 老库里可能还躺着 run_workflow / run_skill / run_prompt 三种旧模式行
+        // (它们跑的是被拔掉的旧聊天式引擎),统一归到「建活」:定时任务本来
+        // 就只该自动**建**活、绝不自动跑活(CLAUDE.md 铁律),归并方向没有歧义。
+        // 幂等:再跑一次匹配不到行。旧 `target` 列保留不动(历史字段,读回可查)。
+        sqlx::query(
+            "UPDATE cron_task SET mode = 'create_issue'
+             WHERE mode IN ('run_workflow', 'run_skill', 'run_prompt')",
+        )
+        .execute(&pool)
+        .await?;
 
         Ok(Self { pool })
     }
@@ -3561,7 +3572,7 @@ fn cron_task_row(r: sqlx::sqlite::SqliteRow) -> Result<CronTask> {
     let last_run_at_raw: i64 = r.get("last_run_at");
     let target: String = r.get("target");
     let mode_text: String = r.get("mode");
-    let mode = parse_cron_mode(&mode_text, &target);
+    let mode = parse_cron_mode(&mode_text);
     Ok(CronTask {
         id,
         name: r.get("name"),
