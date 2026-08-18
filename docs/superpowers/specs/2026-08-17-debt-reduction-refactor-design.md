@@ -144,3 +144,41 @@ iterations/                  只剩 PRACTICE-buddy.md(伙伴的实践日志,原�
 - 示例实际删 29 个(41 → 12),不是 §1 估的 34:`sync_metrics_files`/`render_metrics`/`build_aihot_fixture`/`verify_stage_catalog`/`audit_skills` 逐个核实有现役用途,留下。
 - `CONTEXT.md` 计划里说不动(伙伴在改),实际加了一条「Builders' Workbench / BW / buddy / loop-buddy 是一件东西」词条——docs/README 里用了这句,按写作纪律第 3 条得先进词表。
 - 已知 flaky:bw-store `sync_connectors_file_empty_is_noop` 一次偶发失败(临时库文件名纳秒撞名),重跑即过,与本次改动无关,未动。
+
+---
+
+## 6. 第二轮:真删旧聊天式执行引擎(2026-08-18,用户拍板「删更能体现能力」)
+
+**为什么第一轮没删**:第一轮把所有"界面够得着"的东西都归到「冗余功能滞后处理」,结果清扫做完了(示例/文档/归档),跑起来的程序只净减 753 行。用户看过截图后指出「删 2W+ 对使用没影响、前端几乎不变——那算什么瘦身」,并明确「重构我认可,删这个动作更能体现能力,我相信你」。这一轮只做一件事:把与主环平行的那条旧执行路径整根拔掉。
+
+**证据(真实日常库,只读)**:定时任务只有 `collect_metrics` 1 条、`create_issue` 2 条,`run_workflow`/`run_skill`/`run_prompt` **零条**;旧引擎写的 `session`/`message` 最后一条 2026-07-28——8 月初内嵌终端主环落地后再没人碰过它。
+
+**依赖图(sonnet 子代理逐符号核过,纠正了 BACKLOG 第 1 条两处过时说法)**:
+- 「无仓项目走 `mock_engine` 回退」——**过时**:无仓项目早已走 `MockInteractiveExecutor`,`App.mock_engine` 在 Issue 路径里从未被读。
+- `session` 表**不能删**:主环拿它当左栏「进行中 · 待你介入」的索引(每张 Issue ▶跑 前先 `StartSession`);能删的是 `message`(纯聊天记录,零读者)。
+
+### 6.1 决定表
+
+| # | 项 | 决定 | 理由 |
+|---|---|---|---|
+| 1 | `Engine`/`Executor` trait/`MockExecutor`/`ClaudeCliExecutor`(执行体)/`UnsupportedCliExecutor`/`contract.rs`/`PhaseNode`/`RunEvent`… | **删** | 只有旧链在用;`Engine::run_workflow` 甚至连旧链自己都没调用 |
+| 2 | `ClaudeCliConfig`/`PermissionMode` | **留**(`claude_cli.rs` 精简成只有配置) | 交互式路径读 `binary`;`Command::SetClaudeConfig` 在用 |
+| 3 | `crates/bw-app/src/workflow_engine.rs` 整文件 + `PreparedRun`/`LoopEnd`/`forward_progress`/`cron_prompt_workflow`/`run_params_snapshot`/`stage_workflow` | **删** | 全是旧链内部;`finalize_run` 与交互式的 `finalize_run_interactive` 是各自独立实现的兄弟,不是共用 |
+| 4 | `Command::RunWorkflow`/`RunHubWorkflow`/`RunStagePlaybook`/`ParseWorkflowContent`/`SendSessionMessage`;`Event::WorkflowProgress`/`WorkflowDone`/`SessionMessageAdded`/`OptimizationCycleReported` | **删** | 派发点全在旧链的界面按钮;`ParseWorkflowContent` 解析出的 phases 只有旧引擎的阶段循环会执行,Issue 路径一次不读 |
+| 5 | 定时任务 `CronMode::RunWorkflow`/`RunSkill`/`RunPrompt` | **删**;只剩 `CreateIssue`(建活)与 `CollectMetrics`(采集);CronHub 表单改成这两型(顺手关闭 BACKLOG #2「Autopilot 建活无界面」);「▶ 立即执行」删;老库 `mode IN ('run_*')` 迁移为 `create_issue` | 产品铁律「定时任务只自动建活」+ 真实库零行;"到点跑"的执行体就是旧引擎 |
+| 6 | `message` 表 | **DROP TABLE 迁移** | 零读者;与 `weekly_review` 同一条规矩「不为向后兼容留旧路径」 |
+| 7 | `session` 表 + `ensure_session`/`list_sessions`/`delete_session` | **留** | 主环左栏索引;换成按 Issue 键的导航是另一张票 → BACKLOG |
+| 8 | `workflow_run` 表 | **留,并让交互式运行开始/结算写行** | 删了引擎后它零写入者却仍有读者(Issue 详情「运行记录」、WorkflowHub 运行数、产物归属);产品承诺「每次运行的成败与耗时自动入账」目前在交互路径上是空的——填上比删掉更对 |
+| 9 | `real_demo` 指挥器 | **重写**成主环驱动器:每阶段 CreateIssue → AssignIssue → RunIssue(mock 交互执行器,无仓)→ 脚本代人 TransitionIssue Done(输出里明写「脚本代人点完成」)→ DistillIssue → 证据/DoD → HandoffStage;幂等按 Issue 标题;`--mock` 旗标取消(永远 mock;真跑只在桌面内嵌终端) | 它以前跑的是旧引擎的"剧本",连 Issue 都不建;重写后跑的才是产品真正的环 |
+| 10 | `seed_demo` 例子、`scripts/supervise-real-demo.sh` | **删** | 前者价值被重写后的 `real_demo` 覆盖;后者是给真跑 `claude -p` 网关抖动用的重试监理,mock 不需要 |
+| 11 | 桌面视图:op.rs `Chat`/`RunOutputs`/`RunBanner`/`PhaseTrack` 与 chat_area 分支;kernel.rs `ChatVm`/`MsgVm`/`RunVm` 与相关 `UiNote`;WorkflowHub「⚡ 临时任务」表单、「确认导入·运行」的运行半截、两处「解析正文」按钮;main.rs `pending_cron` | **删** | 全是旧链的显示面;`RunBanner` 对 Issue 运行本就从不渲染(只有 `WorkflowProgress` 会填 phases) |
+| 12 | `run_optimization_cycle`/`OptimizationReport` | **删** | 零调用者(25 轮自举那次的遗物) |
+| 13 | `WorkflowSpec.phases`/`LoopConfig` 数据字段与 WorkflowHub 的展示 | **留** | 是目录元数据的一部分;精简 WorkflowHub 是产品取舍 → BACKLOG |
+
+### 6.2 切片(每片门禁绿)
+
+S1 定时任务收敛 → S2 桌面旧视图 → S3a `real_demo` 重写 + `seed_demo` 删 → S3b bw-app 命令/引擎胶水删 + `App::new` 去 `mock_engine` + 交互式运行写 `workflow_run` → S4 bw-engine 旧执行器删 → S5 store `message` DROP → S6 文档。验收:`real_demo` 新版跑出的库深链截图(Issue 看板五阶段各一张 Done、蒸馏出的技能、交棒记录),`sqlite3` 读回,`/code-review`。
+
+### 6.3 执行实录(回填)
+
+(见文末追加。)
