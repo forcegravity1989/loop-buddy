@@ -561,24 +561,16 @@ impl App {
             return Ok(());
         }
         // 降级:首次 run 补记 skill uses(resume 不记,settle-once);不记
-        // agent(Done 边 8845 已记 / 会记)。与 `finalize_run_interactive`
-        // 的 skill 记账块同形(by-name scoped_pick,他项目不连带 bump)。
+        // agent(Done 边已记 / 会记)。与 `finalize_run_interactive` 共用
+        // `credit_skill_uses`(by-id scoped_pick,他项目不连带 bump)。
         if let Some(fin) = &ar.finalize {
-            let skill_catalog = self.store.list_skills().await?;
-            for s in &fin.spec.skills {
-                if let Some(row) = bw_core::scope::scoped_pick(
-                    skill_catalog.iter(),
-                    Some(fin.p),
-                    |x| x.project_id,
-                    |x| x.name == s.name,
-                ) {
-                    self.store.record_skill_use(row.id).await?;
-                }
-            }
-            self.refresh_skills().await?;
-            self.emit(Event::SkillsChanged);
-            // 交付到此结束(PTY 留作咨询):把首跑的 run 行按 Ok 结清,
-            // 不让它永远挂在 Running。
+            let (p, skills) = (fin.p, fin.spec.skills.clone());
+            self.credit_skill_uses(p, &skills).await?;
+            // 交付到此结束(人已点 Done,PTY 只是留作咨询):把首跑的 run 行
+            // 按 Ok 结清,不让它永远挂在 Running。这里结清的是「交付」这件
+            // 事,不是 PTY 进程——进程还活着,但它之后的输入输出属于咨询,
+            // 不再改这一行;PTY 真退出时走 `cleanup_demoted_consultation`,
+            // 不会再碰 run 行(settle-once)。
             self.settle_run_row(fin, true, "").await?;
         }
         // handle + guard 迁到 consultation_runs;active_run 已 take(放锁)。

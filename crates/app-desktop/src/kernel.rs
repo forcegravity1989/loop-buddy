@@ -54,11 +54,6 @@ pub struct Vm {
     pub hub: HubVm,
     /// The real, editable `ClaudeCliConfig` (Settings hub) — also global.
     pub settings: SettingsVm,
-    /// L1(plan/11): last-loaded cron task's real fire history — lives at the
-    /// top level (not `OpVm`) because the component-detail overlay that
-    /// shows it is rendered outside any one project's `Op` tree, same as
-    /// `hub`. `None` until `Command::LoadCronEffectiveness` runs for a task.
-    pub cron_effectiveness: Option<(bw_core::CronTaskId, ui::vm::CronEffectivenessVm)>,
     /// GitHub 为主体的创建流: last `Command::ListGithubRepos` result — lives
     /// at the top level (not `CreateVm`) because the Repo 卡片 renders before
     /// any project row exists. Empty until the Repo 卡片 first dispatches
@@ -799,13 +794,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     };
     let settings = settings_vm(state.claude_config.binary.as_deref());
 
-    // L1(plan/11): pre-format the last-loaded cron task's fire history, if
-    // any — same explicit single-slot pattern as `version_log`/`artifacts`.
-    let cron_effectiveness = state
-        .cron_effectiveness
-        .as_ref()
-        .map(|(id, e)| (*id, ui::vm::cron_effectiveness_vm(e)));
-
     let mut vm = Vm {
         ready: true,
         fatal: None,
@@ -815,7 +803,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         op: None,
         hub: hub.clone(),
         settings,
-        cron_effectiveness,
         github_repos: state.github_repos.clone(),
         codehub_repos: state.codehub_repos.clone(),
         remote_project_probe: state.remote_project_probe.clone(),

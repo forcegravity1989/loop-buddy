@@ -836,27 +836,6 @@ pub struct WorkflowRun {
 /// state (assembled at detail-open time) and the view layer.
 pub type RunChanges = (WorkflowRunId, Result<Vec<(String, u32, u32)>, String>);
 
-/// Effectiveness of one cron schedule (iter 4): of the times this task's
-/// target auto-fired, how many succeeded? The answer to "is this schedule
-/// actually doing anything useful, or just burning runs?" — the gating input
-/// for cadence auto-tune (iter 10) and the self-improving loop (iter 18).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CronEffectiveness {
-    pub cron_task_id: CronTaskId,
-    /// Scheduled fires attributed to this task (manual runs of the same
-    /// workflow are excluded — this is purely the schedule's track record).
-    pub fires: u32,
-    pub ok_fires: u32,
-    pub failed_fires: u32,
-    /// `ok_fires / fires`. `None` when the task has never fired — "no
-    /// evidence", mirroring `success_rate`.
-    pub effectiveness: Option<f32>,
-    /// Mean scheduled-run duration — the schedule's typical cost.
-    pub avg_duration_ms: Option<i64>,
-    pub last_fire_at: Option<i64>,
-    pub last_fire_ok: Option<bool>,
-}
-
 /// One workflow's position in the global usage ranking (iter 6) — the
 /// answer to "which workflows are actually earning their keep?" The hottest
 /// (most-run) sit at the top; the coldest (never or rarely run) at the

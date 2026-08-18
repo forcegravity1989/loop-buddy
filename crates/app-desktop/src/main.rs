@@ -329,7 +329,6 @@ fn Root() -> Element {
                         sel: sel().unwrap(),
                         hub: v.hub.clone(),
                         projects: v.projects.clone(),
-                        cron_effectiveness: v.cron_effectiveness.clone(),
                         // plan/20 R5: 「引入本项目」按钮的归宿——当前打开的项目。
                         active_project: v.op.as_ref().map(|o| o.id),
                         on_close: move |_| sel.set(None),

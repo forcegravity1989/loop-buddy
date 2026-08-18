@@ -632,7 +632,6 @@ pub struct WorkflowHubRowVm {
     pub primary_agent: String,
     /// Pre-formatted, e.g. `"v3"`.
     pub version_label: String,
-    pub uses: u32,
     pub goal: String,
     pub phases_count: usize,
     /// Pre-formatted, e.g. `"重试1·迭代3"`.
@@ -694,7 +693,6 @@ pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
     let WorkflowKind::Static {
         maturity,
         version,
-        uses,
         source,
         trigger,
         ..
@@ -714,7 +712,6 @@ pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
             .map(|a| a.name.clone())
             .unwrap_or_else(|| "—".into()),
         version_label: format!("v{version}"),
-        uses: *uses,
         goal: spec.goal.clone(),
         phases_count: spec.phases.len(),
         loop_label: format!(
@@ -1508,42 +1505,6 @@ pub fn cron_row(
         collect_targets: Vec::new(),
         // PF1-3a fixup: 稳定判别,不靠 mode_label 字符串(文案改不失效)。
         is_collect_metrics: matches!(c.mode, CronMode::CollectMetrics),
-    }
-}
-
-/// L1(plan/11): a cron task's real fire history — `bw_core::model::
-/// CronEffectiveness` computed by the store (`Store::cron_effectiveness`) but
-/// never surfaced past it. Pre-formatted the same "no evidence, never a fake
-/// 0%" way every other rate in this app already reads.
-#[derive(Clone, PartialEq, Debug)]
-pub struct CronEffectivenessVm {
-    pub fires: u32,
-    pub ok_fires: u32,
-    pub failed_fires: u32,
-    /// `"67%"`, or `"—(尚无触发)"` when `fires == 0`.
-    pub effectiveness_label: String,
-    pub avg_duration_label: String,
-    /// `"最近 07-21"`, empty when never fired.
-    pub last_fire_label: String,
-}
-
-pub fn cron_effectiveness_vm(e: &bw_core::model::CronEffectiveness) -> CronEffectivenessVm {
-    let effectiveness_label = match e.effectiveness {
-        Some(r) => format!("{:.0}%", r * 100.0),
-        None => "—(尚无触发)".to_string(),
-    };
-    let last_fire_label = e
-        .last_fire_at
-        .and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok())
-        .map(|t| format!("最近 {:02}-{:02}", u8::from(t.month()), t.day()))
-        .unwrap_or_default();
-    CronEffectivenessVm {
-        fires: e.fires,
-        ok_fires: e.ok_fires,
-        failed_fires: e.failed_fires,
-        effectiveness_label,
-        avg_duration_label: duration_label(e.avg_duration_ms),
-        last_fire_label,
     }
 }
 

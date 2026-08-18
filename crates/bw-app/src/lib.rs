@@ -142,7 +142,6 @@ struct FinalizeCtx {
     /// Who gets the teammate credit for this work item — see
     /// [`App::credited_agent`]. Snapshotted at start so a reassignment
     /// mid-run doesn't move the loss onto someone else.
-    issue_stage: StageKind,
     assignee: Option<AgentId>,
 }
 
@@ -277,9 +276,6 @@ pub struct AppState {
     /// Registered artifacts of the active project (Artifact panel) — same
     /// explicit-load, project-tagged pattern as `version_log`.
     pub artifacts: Option<(ProjectId, Vec<Artifact>)>,
-    /// L1(plan/11): last-loaded cron task's real fire history — same single-
-    /// slot, task-tagged explicit-load pattern as `artifacts`/`version_log`.
-    pub cron_effectiveness: Option<(CronTaskId, bw_core::model::CronEffectiveness)>,
     /// P4: the explicitly-opened Issue detail (board overlay) — same
     /// explicit-load pattern as `artifacts`. `None` = no overlay open.
     pub issue_detail: Option<IssueDetailData>,
@@ -374,7 +370,6 @@ impl Default for AppState {
             claude_config: ClaudeCliConfig::default(),
             version_log: None,
             artifacts: None,
-            cron_effectiveness: None,
             issue_detail: None,
             github_repos: Vec::new(),
             remote_project_probe: RemoteProjectProbe::Idle,

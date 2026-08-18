@@ -19,7 +19,7 @@ use crate::theme;
 use bw_app::{AdoptTarget, Command};
 use bw_core::{AgentId, ConnectorId, CronTaskId, SkillId, WorkflowId};
 use dioxus::prelude::*;
-use ui::vm::{CronEffectivenessVm, ProjectCardVm};
+use ui::vm::ProjectCardVm;
 
 /// Which component the project rail currently has open. `Copy` — this is a
 /// cheap id-sized selection, not owned data (the actual VM is looked up out
@@ -79,7 +79,6 @@ pub fn ComponentDetail(
     sel: ComponentSel,
     hub: HubVm,
     projects: Vec<ProjectCardVm>,
-    cron_effectiveness: Option<(CronTaskId, CronEffectivenessVm)>,
     // plan/20 R5: 当前打开的项目(无则 None)——「引入本项目」按钮的归宿;
     // Hub 深链没开项目时按钮如实不出现,不猜目标。
     active_project: Option<bw_core::ProjectId>,
@@ -108,7 +107,7 @@ pub fn ComponentDetail(
                 ComponentSel::Skill(id) => rsx! { SkillDetailCard { id, hub, projects, active_project } },
                 ComponentSel::Agent(id) => rsx! { AgentDetailCard { id, hub, projects, active_project } },
                 ComponentSel::Workflow(id) => rsx! { WorkflowDetailCard { id, hub, projects, active_project, on_select } },
-                ComponentSel::Cron(id) => rsx! { CronDetailCard { id, hub, projects, cron_effectiveness } },
+                ComponentSel::Cron(id) => rsx! { CronDetailCard { id, hub, projects } },
                 ComponentSel::Connector(id) => rsx! { ConnectorDetailCard { id, hub, projects } },
             }
         }
@@ -313,9 +312,9 @@ fn WorkflowDetailCard(
             div {
                 style: "font-family:{mono};font-size:12px;color:{ink3};margin-bottom:10px;",
                 if row.last_run_label.is_empty() {
-                    "{row.version_label} · {row.uses} 次复用 · {row.record_label}"
+                    "{row.version_label} · {row.record_label}"
                 } else {
-                    "{row.version_label} · {row.uses} 次复用 · {row.record_label} · {row.last_run_label}"
+                    "{row.version_label} · {row.record_label} · {row.last_run_label}"
                 }
             }
             div {
@@ -390,13 +389,7 @@ fn WorkflowDetailCard(
 }
 
 #[component]
-fn CronDetailCard(
-    id: CronTaskId,
-    hub: HubVm,
-    projects: Vec<ProjectCardVm>,
-    cron_effectiveness: Option<(CronTaskId, CronEffectivenessVm)>,
-) -> Element {
-    let k = use_context::<Kernel>();
+fn CronDetailCard(id: CronTaskId, hub: HubVm, projects: Vec<ProjectCardVm>) -> Element {
     let card = theme::card();
     let ink2 = theme::INK_2;
     let ink3 = theme::INK_3;
@@ -405,9 +398,6 @@ fn CronDetailCard(
         return rsx! { div { style: "{card} padding:20px;color:{ink3};", "这个定时任务已不存在(可能被删除)。" } };
     };
     let owner = owner_project_name(c.project_id, &projects);
-    let eff = cron_effectiveness
-        .filter(|(eid, _)| *eid == id)
-        .map(|(_, e)| e);
     rsx! {
         div {
             style: "{card} padding:22px 26px;max-width:680px;",
@@ -462,26 +452,10 @@ fn CronDetailCard(
             } else {
                 div { style: "margin-bottom:14px;", "" }
             }
-            div { style: "font-size:11px;color:{ink3};margin-bottom:8px;border-top:1px dashed {theme::BORDER};padding-top:12px;", "真实有效性(cron_effectiveness · 按真实触发记录算)" }
-            match eff {
-                Some(e) => rsx! {
-                    div {
-                        style: "font-family:{mono};font-size:12.5px;color:{ink2};line-height:1.9;",
-                        div { "触发 {e.fires} 次 · 成功 {e.ok_fires} · 失败 {e.failed_fires} · 有效性 {e.effectiveness_label}" }
-                        div { "平均耗时 {e.avg_duration_label}" }
-                        if !e.last_fire_label.is_empty() {
-                            div { "{e.last_fire_label}" }
-                        }
-                    }
-                },
-                None => rsx! {
-                    button {
-                        style: "cursor:pointer;background:transparent;color:{theme::CLAY};border:1px solid {theme::CLAY};border-radius:7px;padding:6px 14px;font-size:12px;",
-                        onclick: move |_| k.send(Command::LoadCronEffectiveness(id)),
-                        "读取有效性"
-                    }
-                },
-            }
+            // 「真实有效性」面板(按 trigger='scheduled' 的 workflow_run 统计触发/
+            // 成败)随「到点跑」三模式于 2026-08-18 一起删除:定时任务现在只建活
+            // /采集,不再开 run 行,那块面板会永远显示「触发 0 次」——冻结数字比
+            // 没有更骗人。任务自身的状态与上次触发时间仍在上一行如实显示。
         }
     }
 }

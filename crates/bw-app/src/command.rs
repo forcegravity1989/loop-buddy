@@ -264,10 +264,6 @@ pub enum Command {
     /// Load the active project's registered artifacts into state (Artifact
     /// panel). Same explicit-load pattern as `LoadVersionLog`.
     LoadArtifacts,
-    /// L1(plan/11): load one cron task's real fire history
-    /// (`Store::cron_effectiveness` — always existed, never had a caller).
-    /// Same explicit-load pattern as `LoadArtifacts`.
-    LoadCronEffectiveness(CronTaskId),
     /// P4: assemble one Issue's detail (its runs + each run's real file
     /// changes + its artifacts) into state for the board overlay. Read-only.
     OpenIssueDetail(IssueId),
@@ -754,8 +750,6 @@ pub enum Event {
     },
     /// The `AppState.artifacts` snapshot was (re)loaded.
     ArtifactsChanged,
-    /// L1(plan/11): the `AppState.cron_effectiveness` snapshot was (re)loaded.
-    CronEffectivenessChanged,
 }
 
 /// Three-state visibility for one `Event::ActionProgress` — see that

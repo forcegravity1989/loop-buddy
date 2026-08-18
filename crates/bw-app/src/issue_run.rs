@@ -24,7 +24,6 @@ impl App {
             p,
             issue_id,
             run_id,
-            issue_stage,
             assignee,
             ..
         } = fin;
@@ -44,37 +43,19 @@ impl App {
         // issue showed runs=2/wins=2 (sqlite 读回抓出,违反「同一件活绝不
         // 重复记账」)。Same identity rule as the Done edge (`credited_agent`).
         if !run_ok {
-            if let Some(agent_id) = self.credited_agent(p, *assignee, *issue_stage).await? {
+            if let Some(agent_id) = self.credited_agent(*assignee, issue_id).await? {
                 self.store.record_agent_run(agent_id, false).await?;
                 self.refresh_agents().await?;
                 self.emit(Event::AgentsChanged);
             }
         }
-        // Skill uses: once per interactive session (not per phase). plan/20
-        // R3: by-id via `scope::scoped_pick`,同一条就近规则,他项目的同名
-        // 副本绝不被连带 bump。
-        let skill_catalog = self.store.list_skills().await?;
-        for s in &spec.skills {
-            if let Some(row) = bw_core::scope::scoped_pick(
-                skill_catalog.iter(),
-                Some(p),
-                |x| x.project_id,
-                |x| x.name == s.name,
-            ) {
-                self.store.record_skill_use(row.id).await?;
-            }
-        }
-        if !spec.skills.is_empty() {
-            self.refresh_skills().await?;
-            self.emit(Event::SkillsChanged);
-        }
+        // Skill uses: once per interactive session (not per phase).
+        self.credit_skill_uses(p, &spec.skills).await?;
 
         // Artifact reflux: scan the real workspace and register new file
         // versions bound to this run + issue. Scan errors are a 0-fresh no-op.
         if !proj.workspace_path.trim().is_empty() {
-            let stage_kind = spec
-                .stage_ref
-                .and_then(|n| StageKind::ALL.into_iter().find(|s| s.index() == n));
+            let stage_kind = spec.stage_ref.and_then(StageKind::from_index);
             if let Ok(fresh) = self
                 .scan_and_register_artifacts(
                     p,
@@ -100,34 +81,59 @@ impl App {
         }
     }
 
-    /// The one identity rule for teammate credit on a work item: the
-    /// Issue's assignee when it has one, else the stage's built-in role
-    /// teammate (原型师/构建师/…) resolved by name **within this project**
-    /// (`scope::scoped_pick` — the same project-first rule every by-name
-    /// lookup uses, so another project's same-named copy is never touched).
-    /// Both the failure credit at run settle and the win credit at the
-    /// human's Done use this, so a work item's loss and win land on the same
-    /// row. `None` when neither resolves (nothing is credited — never a
-    /// made-up teammate).
+    /// The one identity rule for teammate credit on a work item: the Issue's
+    /// **assignee**, and only when that teammate actually ran the issue at
+    /// least once (a `workflow_run` row bound to it exists — a mock run
+    /// counts, it is self-labelled). Both the loss credit at run settle and
+    /// the win credit at the human's Done use this, so a work item's loss and
+    /// win land on the same row. `None` = nothing is credited: an unassigned
+    /// issue, an assignee row that no longer exists, or an assigned issue the
+    /// human did by hand and clicked Done on without ever pressing ▶跑 —
+    /// none of those is evidence about a teammate's work, and inventing a
+    /// win/loss would fabricate `win_rate` (2026-08-18 评审:此前回落到
+    /// 阶段角色队友,导致从未跑过的活也给角色队友记胜)。
     pub(crate) async fn credited_agent(
         &self,
-        project: ProjectId,
         assignee: Option<AgentId>,
-        stage: StageKind,
+        issue_id: Option<IssueId>,
     ) -> Result<Option<AgentId>, AppError> {
-        if let Some(id) = assignee {
-            if self.store.get_agent(id).await?.is_some() {
-                return Ok(Some(id));
+        let (Some(agent_id), Some(issue_id)) = (assignee, issue_id) else {
+            return Ok(None);
+        };
+        if self.store.get_agent(agent_id).await?.is_none() {
+            return Ok(None);
+        }
+        let ran = !self.store.list_runs_for_issue(issue_id).await?.is_empty();
+        Ok(ran.then_some(agent_id))
+    }
+
+    /// Bump `uses` once for each skill the session was started with. plan/20
+    /// R3: by-id via `scope::scoped_pick`,同一条就近规则,他项目的同名副本
+    /// 绝不被连带 bump。Shared by the first-run settle and the Done-edge
+    /// demote (`demote_delivery_to_consultation`), which settle the same
+    /// session by two different exits.
+    pub(crate) async fn credit_skill_uses(
+        &mut self,
+        project: ProjectId,
+        skills: &[bw_core::model::SkillRef],
+    ) -> Result<(), AppError> {
+        if skills.is_empty() {
+            return Ok(());
+        }
+        let skill_catalog = self.store.list_skills().await?;
+        for s in skills {
+            if let Some(row) = bw_core::scope::scoped_pick(
+                skill_catalog.iter(),
+                Some(project),
+                |x| x.project_id,
+                |x| x.name == s.name,
+            ) {
+                self.store.record_skill_use(row.id).await?;
             }
         }
-        let catalog = self.store.list_agents().await?;
-        Ok(bw_core::scope::scoped_pick(
-            catalog.iter(),
-            Some(project),
-            |a| a.project_id,
-            |a| a.name == stage.role_short(),
-        )
-        .map(|a| a.id))
+        self.refresh_skills().await?;
+        self.emit(Event::SkillsChanged);
+        Ok(())
     }
 
     /// The resume path's settle accounting — a slimmed
@@ -760,8 +766,7 @@ impl App {
                     params_json: &params_json,
                 })
                 .await?;
-            self.store.set_run_issue(run_id, id).await?;
-            Some(FinalizeCtx {
+            let fin = FinalizeCtx {
                 spec: spec.clone(),
                 proj: proj.clone(),
                 p,
@@ -770,9 +775,16 @@ impl App {
                 started: Instant::now(),
                 heads_workspace,
                 head_before,
-                issue_stage: issue.stage,
                 assignee: issue.assignee,
-            })
+            };
+            // The row is open from here on: any early exit below must settle
+            // it Failed rather than leave a run that never ends. Binding it
+            // to the issue is the first such step.
+            if let Err(e) = self.store.set_run_issue(run_id, id).await {
+                self.settle_run_failed(&fin, &e.to_string()).await;
+                return Err(e.into());
+            }
+            Some(fin)
         };
 
         // V1 Issue2 Phase2b: when PTY mode is enabled (desktop kernel wires
@@ -849,12 +861,22 @@ impl App {
             Ok(())
         } else {
             // ── Inline (examples / headless drivers) ──
-            let skill_output = if is_resume {
+            let skill_output = match if is_resume {
                 executor.run_skill_resume(&plan, &ctx).await
             } else {
                 executor.run_skill(&plan, &ctx).await
-            }
-            .map_err(|e| AppError::Engine(e.to_string()))?;
+            } {
+                Ok(o) => o,
+                Err(e) => {
+                    // Executor failed to run at all (spawn error etc.): the
+                    // run row opened above must not stay open forever — same
+                    // handling as the backgrounded path's `Interactive(Err)`.
+                    if let Some(fin) = &finalize {
+                        self.settle_run_failed(fin, &e.to_string()).await;
+                    }
+                    return Err(AppError::Engine(e.to_string()));
+                }
+            };
             // V1 Issue2 Phase2a: interactive path skips issue_run_tail (no
             // MR creation — agent does it in-session; InReview comes from
             // polling). First run: uses + artifacts. Resume: artifacts only
@@ -935,7 +957,11 @@ impl App {
             SettleOutcome::Interactive(Err(e)) => {
                 // The executor itself failed (spawn error, PTY died…): settle
                 // the run row Failed with the reason so the table never shows
-                // a run that started and vanished.
+                // a run that started and vanished. Deliberately NO teammate
+                // loss here (unlike a session that ran and reported
+                // `completed = false`): a `claude` that never started is an
+                // infrastructure failure, not evidence about the teammate's
+                // work — recording a loss would fabricate `win_rate`.
                 if let Some(fin) = &ar.finalize {
                     self.settle_run_failed(fin, &e.to_string()).await;
                 }
@@ -1013,12 +1039,15 @@ impl App {
     /// 评审前 Unix 这条缺失,中止一次漏一个孤儿 `claude`;`pty_smoke -- --abort`
     /// 读回为证)—— then close the PTY + drop the worktree guard. The
     /// issue STAYS `InProgress` (retryable), `settled_at` stays empty (no
-    /// auto-Done, 铁律). No `finalize_run` accounting: agent/skill `uses` are NOT
-    /// bumped — a cancelled run did not complete, so not counting it as a use
-    /// is the honest call (偏差 vs the normal `Failed` path which does
-    /// finalize with `run_ok=false`; noted in the commit). A normal
-    /// completion that already sent a settle req is a no-op here (`active_run`
-    /// already taken / being taken by the settle arm).
+    /// auto-Done, 铁律). The `workflow_run` row is settled `Failed` with
+    /// 「已中止」as the reason (a run that started must end in the table);
+    /// no teammate loss and no skill `uses`: the human pulled the plug, which
+    /// says nothing about the teammate's work, and a cancelled session is not
+    /// a use of the skill. (Same stance as the executor-error path in
+    /// `run_issue_settle`; the only path that debits a teammate is a session
+    /// that ran and reported `completed = false`.) A normal completion that
+    /// already sent a settle req is a no-op here (`active_run` already taken /
+    /// being taken by the settle arm).
     pub(crate) async fn cancel_run(&mut self, id: IssueId) -> Result<(), AppError> {
         let Some(ar) = self.state.active_run.take() else {
             return Ok(()); // no in-flight run — nothing to cancel

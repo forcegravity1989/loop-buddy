@@ -1533,15 +1533,6 @@ impl App {
                 self.emit(Event::ArtifactsChanged);
             }
 
-            // L1(plan/11): a real backend function (`cron_effectiveness`)
-            // that has existed since the cron-run-attribution work landed but
-            // never had a caller — this is that caller.
-            Command::LoadCronEffectiveness(id) => {
-                let e = self.store.cron_effectiveness(id).await?;
-                self.state.cron_effectiveness = Some((id, e));
-                self.emit(Event::CronEffectivenessChanged);
-            }
-
             // P4: assemble one Issue's evidence — its runs, what each run
             // really changed (diff between the recorded HEAD pair), and its
             // registered artifacts. Read-only; every number the overlay shows
@@ -2622,12 +2613,12 @@ impl App {
                     // and inventing a loss would fabricate a metric.
                     // Reopen-and-redo also records nothing new: the first win
                     // stands in the append-only history.) Same identity rule as
-                    // the settle side (`credited_agent`: assignee, else the
-                    // stage's role teammate in this project, by-id — plan/20 R3:
-                    // 此前按 name 全表 UPDATE 会给所有项目的同名队友齐记战绩).
-                    if let Some(agent_id) = self
-                        .credited_agent(issue.project_id, issue.assignee, issue.stage)
-                        .await?
+                    // the settle side (`credited_agent`: the assignee, by-id, and
+                    // only if that teammate actually ran this issue — an issue
+                    // the human did by hand credits nobody; plan/20 R3: 此前按
+                    // name 全表 UPDATE 会给所有项目的同名队友齐记战绩).
+                    if let Some(agent_id) =
+                        self.credited_agent(issue.assignee, Some(issue.id)).await?
                     {
                         self.store.record_agent_run(agent_id, true).await?;
                         self.refresh_agents().await?;

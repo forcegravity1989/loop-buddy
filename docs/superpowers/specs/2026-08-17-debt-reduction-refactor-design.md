@@ -206,3 +206,24 @@ S1 定时任务收敛 → S2 桌面旧视图 → S3a `real_demo` 重写 + `seed_
 - 未动:项目级 `allow_commands`(同样是死旋钮,但牵涉 project 表列删除)→ BACKLOG #20。
 
 **/code-review**:见文末「6.4 评审」。
+
+### 6.4 评审(2026-08-18 `/code-review`,xhigh:5+5 角度找 → 逐条核 → 补漏扫)
+
+12 条进报告(9 条已修、2 条按设计不改并补了说明注释、1 条按计划滞后)。全部核过源码,不是猜的。
+
+| # | 在哪 | 是什么 | 处置 |
+|---|---|---|---|
+| 1 | `issue_run.rs` 开工段 | `record_workflow_run_start` 之后 `set_run_issue` 若出错,`?` 直接返回,run 行永远「运行中」 | **修**:出错先把行结成失败再返回 |
+| 2 | `issue_run.rs` 内联路径(headless 例子) | 执行器起不来时 `?` 在结算之前返回,同样留下开着的行 | **修**:与后台路径同款,先 `settle_run_failed` 再返回错误 |
+| 3 | `dispatch.rs` Done 边 | `credited_agent` 回落到阶段角色队友:没指派、从没跑过、人手工做完点完成的活,也给「原型师」记一场胜——胜率被编出来 | **修**:只记**被指派且真跑过**的队友(库里有绑这张 Issue 的 `workflow_run` 行);结算侧记败用同一条规则;`FinalizeCtx.issue_stage` 随之删除 |
+| 4 | CronHub 详情页「真实有效性」 | 按 `trigger='scheduled'` 的 `workflow_run` 行统计;定时任务只建活/采集后再没人写这种行,面板永远「触发 0 次」 | **删整链**(store 方法、类型、命令、事件、状态槽、VM、面板);任务自身状态/上次触发仍显示;正解若要做见 BACKLOG 收据 |
+| 5 | WorkflowHub 卡片 + 详情 | 「N 次复用」读的 `uses` 字段,`record_workflow_use` 已删,数字冻结 | **删字段与文案**(`WorkflowHubRowVm.uses`) |
+| 6 | `issue_run.rs` / `terminal.rs` | 技能 uses 记账循环两处同形 | **抽 `credit_skill_uses`**,两处共用 |
+| 7 | `issue_run.rs` / `cron_hub.rs` | 手写 `StageKind::ALL.find(index==n)` | **改用 `StageKind::from_index`** |
+| 8 | `cancel_run` 文档注释 | 还在说「不做 finalize_run 记账」「偏差 vs 正常 Failed 路径」——旧引擎的措辞;没说 run 行在这里结成失败 | **改注释**如实 |
+| 9 | `run_issue_settle` 执行器崩溃分支 | 只结 run 行为失败,不给队友记败 | **不改,补注释**:claude 根本没起来是基础设施故障,不是队友的战绩证据 |
+| 10 | `terminal.rs` 降级咨询 | 人点完成时 PTY 还活着就把 run 行结成成功 | **不改,补注释**:结的是「交付」不是进程;之后的 I/O 属咨询,不再碰这一行 |
+| 11 | `model.rs::stage_workflow_with_playbook` | 每次 ▶跑 渲染整套 `phase_prompts`,没人读 | **滞后**:BACKLOG #19(WorkflowSpec 精简),不是 bug |
+| 12 | `scripts/probe-competitive-analysis-search.sh` | 注释引用已删的 `supervise-real-demo.sh` | **改注释** |
+
+**修后读回**(`real_demo` 全新库):`workflow_run` ok|10、issue_id 全绑;每位队友 runs=1 wins=1;10 件 Done 全有 `settled_at`;技能 uses 4/3/2 复利照旧。门禁全绿(含 `cargo test` 66 个内联测试)。

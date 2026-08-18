@@ -263,10 +263,7 @@ fn CreateCronForm(projects: Vec<ProjectCardVm>, on_done: EventHandler<()>) -> El
                         style: "{input}",
                         onchange: move |e| {
                             stage_choice.set(
-                                e.value()
-                                    .parse::<u8>()
-                                    .ok()
-                                    .and_then(|i| StageKind::ALL.into_iter().find(|s| s.index() == i)),
+                                e.value().parse::<u8>().ok().and_then(StageKind::from_index),
                             );
                         },
                         option { value: "", selected: true, "项目当前阶段(跟着交棒走)" }

@@ -23,10 +23,9 @@ use bw_core::derive::{
 };
 use bw_core::model::{
     AgentCard, AgentRef, AgentSkillTag, Artifact, ArtifactKind, ClaudeConversation, Connector,
-    ConnectorStatus, CronEffectiveness, CronStatus, CronTask, HubSource, Issue, IssueStatus,
-    KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness, RunStatus,
-    RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
-    WorkflowRun, WorkflowSpec,
+    ConnectorStatus, CronStatus, CronTask, HubSource, Issue, IssueStatus, KnowledgeSource,
+    LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness, RunStatus, RunTrigger, Signal,
+    SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
@@ -1919,57 +1918,6 @@ impl Store for SqliteStore {
                 Ok(())
             }
         }
-    }
-
-    async fn cron_effectiveness(&self, cron_task_id: CronTaskId) -> Result<CronEffectiveness> {
-        // Only runs this task auto-fired (trigger='scheduled' AND linked to
-        // this task). Manual runs of the same workflow are excluded — a
-        // schedule's track record is its own, not contaminated by ad-hoc fires.
-        let row = sqlx::query(
-            "SELECT
-                COUNT(*)                                                         AS fires,
-                SUM(CASE WHEN status='ok'     THEN 1 ELSE 0 END)                AS ok_n,
-                SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END)                AS fail_n,
-                AVG(CASE WHEN status IN ('ok','failed') THEN duration_ms END)   AS avg_dur,
-                MAX(started_at)                                                  AS last_at
-             FROM workflow_run WHERE cron_task_id=? AND trigger='scheduled'",
-        )
-        .bind(cron_task_id.uuid().to_string())
-        .fetch_one(&self.pool)
-        .await?;
-        let fires: i64 = row.get("fires");
-        let ok_fires: i64 = row.get("ok_n");
-        let failed_fires: i64 = row.get("fail_n");
-        let avg_dur: Option<f64> = row.get("avg_dur");
-        let last_at: Option<i64> = row.get("last_at");
-        let last_fire_ok = if fires > 0 {
-            // Read the most recent fire's status in a second cheap query —
-            // keeping it separate avoids a window-function dependency.
-            let last = sqlx::query(
-                "SELECT status FROM workflow_run WHERE cron_task_id=? AND trigger='scheduled'
-                 ORDER BY started_at DESC, rowid DESC LIMIT 1",
-            )
-            .bind(cron_task_id.uuid().to_string())
-            .fetch_one(&self.pool)
-            .await?;
-            Some(RunStatus::parse(&last.get::<String, _>("status")) == RunStatus::Ok)
-        } else {
-            None
-        };
-        Ok(CronEffectiveness {
-            cron_task_id,
-            fires: fires as u32,
-            ok_fires: ok_fires as u32,
-            failed_fires: failed_fires as u32,
-            effectiveness: if fires > 0 {
-                Some(ok_fires as f32 / fires as f32)
-            } else {
-                None
-            },
-            avg_duration_ms: avg_dur.map(|v| v as i64),
-            last_fire_at: last_at,
-            last_fire_ok,
-        })
     }
 
     async fn update_workflow_spec(&self, id: WorkflowId, edit: WorkflowEdit) -> Result<()> {

@@ -19,11 +19,11 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    AgentCard, AgentRef, Cadence, ClaudeConversation, Connector, ConnectorStatus,
-    CronEffectiveness, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority,
-    IssueStatus, KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness,
-    RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind,
-    UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
+    AgentCard, AgentRef, Cadence, ClaudeConversation, Connector, ConnectorStatus, CronMode,
+    CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource,
+    LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness, RunStatus, RunTrigger,
+    SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
+    WorkflowRun, WorkflowSpec,
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
@@ -222,9 +222,9 @@ pub struct NewWorkflowRun<'a> {
     pub session_id: Option<SessionId>,
     pub trigger: RunTrigger,
     pub started_at: i64,
-    /// The cron task that fired this run, if any (iter 4). `None` for manual
-    /// runs; `Some` only on the scheduler's auto-fire path, so a per-task
-    /// effectiveness aggregate can attribute outcomes correctly.
+    /// The cron task that fired this run. Always `None` since 2026-08-18: the
+    /// scheduler only creates Issues / collects metrics and never opens a run
+    /// row; the column stays for the rows the retired「到点跑」modes wrote.
     pub cron_task_id: Option<CronTaskId>,
     /// Snapshot of the spec's shape at run time (iter 3) — what this run is
     /// actually executing, frozen before the engine runs. `''` is valid
@@ -799,10 +799,6 @@ pub trait Store: Send + Sync {
         phases_completed: u32,
         error: &str,
     ) -> Result<()>;
-    /// Effectiveness of one cron schedule over its auto-fired runs (iter 4).
-    /// Manual runs of the same workflow are excluded — this is purely the
-    /// schedule's track record. `fires = 0` (never fired) is not an error.
-    async fn cron_effectiveness(&self, cron_task_id: CronTaskId) -> Result<CronEffectiveness>;
     /// Revise an existing **Static** spec's authored content ("优化" a hub
     /// workflow) — bumps `version`; `uses`/`maturity`/`source`/`scope`/
     /// `trigger` are preserved untouched from the row being edited. Errors

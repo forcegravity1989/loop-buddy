@@ -254,13 +254,13 @@ pub fn WorkflowHub(
                                                 }
                                                 // ── 2. 一句话价值主张:这个工作流解决什么问题(L3 详情页画流程图前的文字版)──
                                                 div { style: "font-size:12px;color:{ink2};margin-top:6px;", "解决:{row.goal}" }
-                                                // ── 3. 社会证明:真实复用数 + 真实运行战绩(暂无运行=诚实冷,绝不 0%)──
+                                                // ── 3. 社会证明:真实运行战绩(暂无运行=诚实冷,绝不 0%;「N 次复用」计数器随旧引擎删除后不再增长,2026-08-18 摘掉,不显示冻结数字)──
                                                 div {
                                                     style: "font-family:{mono};font-size:11.5px;color:{ink3};margin-top:6px;",
                                                     if row.last_run_label.is_empty() {
-                                                        "{row.version_label} · {row.uses} 次复用 · {row.record_label}"
+                                                        "{row.version_label} · {row.record_label}"
                                                     } else {
-                                                        "{row.version_label} · {row.uses} 次复用 · {row.record_label} · {row.last_run_label}"
+                                                        "{row.version_label} · {row.record_label} · {row.last_run_label}"
                                                     }
                                                 }
                                                 // ── 4. 出处可信度 + 怎么用:来源 · 触发词 · 主责 agent ──
