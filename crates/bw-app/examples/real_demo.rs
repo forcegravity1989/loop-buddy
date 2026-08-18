@@ -1,37 +1,47 @@
-//! **real_demo — 完整形态实跑指挥器（headless conductor）。**
+//! **real_demo — 主环指挥器(headless conductor)。**
 //!
-//! 把 1–2 个真实小需求，从 0→1 走完 Builders' Workbench 的完整生命周期：
-//! 创建流程 → 五阶段环（每阶段 = 该角色的剧本工作流，经 `ClaudeCliExecutor`
-//! 真实执行，产出真实文件/提交/测试）→ 真实证据采集回流度量派生链 →
-//! DoD 按证据勾选 → 交棒（含 Ops→Prototype 回流）。
+//! 不开界面,直接驱动内核把 1–2 个小需求从 0→1 走完 Builders' Workbench 的
+//! 真正生命周期——**产品的主环**,而不是任何"剧本":
 //!
-//! 诚实约束（与 dogfood_workflowhub 同一血统，全部沿用）：
-//! 1. **绝不 mock 数据**：默认模式下每个阶段都是真实 `claude -p` 子进程在
-//!    真实工作区里干活；观测值全部来自真实命令输出（git/cargo）。
-//!    （`--mock` 旗标存在的唯一目的是让管线自身可以先被廉价地验证——
-//!    它跑出来的东西会如实标注为 mock，绝不冒充真实证据。）
-//! 2. **幂等**：每个阶段以会话标题为幂等键；重跑只补没发生过的阶段，
-//!    不重复、不覆盖已真实发生的历史。
-//! 3. **DoD 只按证据勾**：谓词能核实的才勾；核实不了的如实不勾，
-//!    险交棒并在 note 里写明缺什么。
-//! 4. **结论真实读回**：结尾的汇总与导出的 evidence JSON 全部从 DB 与
-//!    工作区读回，绝不硬编码。
+//! ```text
+//! 创建流程 → 每个阶段:建一张 Issue → 指派给该阶段的 AI 队友 → ▶跑
+//!           (`RunIssue`,与桌面 Issue 看板同一条命令)→ 队友干完停在
+//!           「进行中」→ 脚本**代人**推到「评审中」再点「完成」(输出里明写)
+//!           → 一键蒸馏成技能(记着来自哪件活)→ 证据采集回流观测 → DoD
+//!           按证据勾 → 交棒(缺什么如实带险)→ 运维回流原型
+//! ```
 //!
-//! 用法：
-//!   cargo run -p bw-app --example real_demo -- <db-path> <workspaces-root> [--mock] [--only <slug>]
+//! **它永远是 mock**:项目不配真实工作区(`workspace_path` 为空),所以每次
+//! `RunIssue` 都落在 `MockInteractiveExecutor` 上——完成即返回、产出自我标注
+//! 【mock】。真跑 `claude` 只发生在桌面内嵌终端里(受信任对话框/网关影响,
+//! 不是常绿验证手段——CLAUDE.md 核心纪律 3)。这个例子存在的意义是廉价、
+//! 无网关依赖地证明**管线本身**是真的:Issue 状态机、指派/战绩、技能 uses、
+//! 蒸馏来源、交棒记录、观测/信号,全部经真实 `Command` 落库,`sqlite3` 可读回。
+//!
+//! 诚实约束:
+//! 1. **幂等**:每个阶段以 Issue 标题为幂等键;重跑只补没发生过的步骤(未建的
+//!    建、未跑的跑、未 Done 的推、未蒸馏的蒸馏、未交棒的交),不重复、不覆盖。
+//! 2. **「完成」由脚本代人点,输出里明写**——产品铁律是「完成永远由人显式
+//!    点」,这里脚本扮演的就是那个人,不是自动完成。
+//! 3. **DoD 只按证据勾**:谓词能核实的才勾;核实不了的如实不勾,险交棒并在
+//!    note 里写明缺什么。mock 跑不产出文件,所以大多数项会如实留空。
+//! 4. **结论真实读回**:结尾的汇总与导出的 evidence JSON 全部从 DB 与工作区
+//!    读回,绝不硬编码。
+//!
+//! 用法:
+//!   cargo run -p bw-app --example real_demo -- <db-path> <workspaces-root> [--only <slug>]
 
-use bw_app::{App, Command, Event};
+use bw_app::{App, Command};
 use bw_core::model::{
-    Cadence, MaturityPeriod, SourceKind, StageKind, CONNECTOR_KIND_CLAUDE_CLI,
+    Cadence, IssuePriority, IssueStatus, MaturityPeriod, SourceKind, StageKind,
     CONNECTOR_KIND_GIT_REPO,
 };
-use bw_core::{ConnectorId, CronTaskId, MetricId, ProjectId, SessionId};
+use bw_core::{ConnectorId, CronTaskId, IssueId, MetricId, ProjectId, SessionId, SkillId};
 use bw_engine::{evidence, ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
 use bw_store::{MetricRole, SessionKind, SqliteStore, Store};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
 
 /// One real, small requirement to take 0→1.
 struct Requirement {
@@ -104,7 +114,9 @@ async fn run_in(dir: &Path, cmd: &str, args: &[&str]) -> (bool, String) {
 /// Create (idempotently) the requirement's real workspace — the same
 /// provisioner `CompleteCreation` uses (README from the requirement's own
 /// brief + .gitignore + one real first commit), so conductor-made and
-/// creation-flow-made repos are indistinguishable.
+/// creation-flow-made repos are indistinguishable. The project itself is
+/// NOT pointed at it (mock stays mock); it exists so the git-repo connector
+/// and the artifact scan have a real directory to read.
 async fn ensure_workspace(root: &Path, req: &Requirement) -> PathBuf {
     let dir = root.join(req.slug);
     let existed = dir.join(".git").exists();
@@ -196,7 +208,9 @@ async fn find_or_create_metric(
 /// The evidence-gated DoD plan for one stage: which checklist boxes the
 /// conductor may honestly check, given what it can really verify in the
 /// workspace. Everything else stays unchecked and is named in the handoff
-/// note — an unverifiable claim is never a checked box.
+/// note — an unverifiable claim is never a checked box. (A mock run writes
+/// no files, so most boxes stay honestly empty; the predicates are kept so
+/// the same conductor reads a real workspace correctly.)
 async fn dod_evidence(kind: StageKind, ws: &Path) -> (Vec<bool>, Vec<String>) {
     let exists = |p: &str| ws.join(p).exists();
     let mut checks = vec![false; kind.dod_items().len()];
@@ -205,168 +219,291 @@ async fn dod_evidence(kind: StageKind, ws: &Path) -> (Vec<bool>, Vec<String>) {
         StageKind::Prototype => {
             // [0] 原型经真实使用·dogfood 验证 ← 验证记录文件真实存在
             checks[0] = exists("docs/validation.md");
-            // [1] 北极星草案已定 ← 创建流真实录入（恒真于本 conductor 流程）
+            // [1] 北极星草案已定 ← 创建流真实录入(恒真于本 conductor 流程)
             checks[1] = true;
-            // [2] Spec 骨架已从原型固化 ← SPEC 在构建段才写，如实不勾
-            why.push("Spec 骨架在构建段才固化，如实不勾".into());
+            // [2] Spec 骨架已从原型固化 ← SPEC 在构建段才写,如实不勾
+            why.push("Spec 骨架在构建段才固化,如实不勾".into());
         }
         StageKind::Build => {
-            // [0] 生产可用 v1 已部署 ← 本地 CLI 无部署动作，如实不勾
-            why.push("本地 CLI 无「部署」动作，如实不勾（growth 段验证可安装性）".into());
-            // [1] 埋点齐全·北极星可采集 ← 无遥测埋点，如实不勾
-            why.push("无遥测埋点，如实不勾".into());
-            // [2] 性能基线已测 ← 基线在优化段测，如实不勾
-            why.push("性能基线在优化段才测，如实不勾".into());
+            why.push("本地 CLI 无「部署」动作,如实不勾(growth 段验证可安装性)".into());
+            why.push("无遥测埋点,如实不勾".into());
+            why.push("性能基线在优化段才测,如实不勾".into());
         }
         StageKind::Optimize => {
-            // [0] 性能/成本/体验预算全绿 ← conductor 独立复测 test 全绿代表其中
-            //     可测的部分；预算体系并未真实定义，如实不勾
-            why.push("预算体系未正式定义，如实不勾（test/clippy 结果见观测值）".into());
-            // [1] 债务台账已建·下线清单已执行 ← 两份真实文档都在才算
+            why.push("预算体系未正式定义,如实不勾(test/clippy 结果见观测值)".into());
             checks[1] = exists("docs/bottlenecks.md") && exists("docs/regression.md");
-            // [2] 可扛 10× 流量的压测证据 ← 没做压测，如实不勾
-            why.push("未做压测，如实不勾".into());
+            why.push("未做压测,如实不勾".into());
         }
         StageKind::Growth => {
-            // [0] ≥1 个可复制的增长循环 ← 漏斗与实验结论文档真实存在
             checks[0] = exists("docs/funnel.md") && exists("docs/growth-verdict.md");
-            // [1] 获客/渗透成本可归因 ← 无真实投放，对本地工具不适用，如实不勾
-            why.push("无真实投放渠道，「获客成本归因」不适用，如实不勾".into());
-            // [2] 稳定流量下的 SLO 需求清单 ← SLO 在运维段定义，如实不勾
-            why.push("SLO 清单在运维段产出，如实不勾".into());
+            why.push("无真实投放渠道,「获客成本归因」不适用,如实不勾".into());
+            why.push("SLO 清单在运维段产出,如实不勾".into());
         }
         StageKind::Ops => {
-            // [0] SLO/错误预算持续达标 ← 单次绿 ≠「持续」，如实不勾
-            why.push("healthcheck 只有单次运行记录，「持续达标」谈不上，如实不勾".into());
-            // [1] 本轮事故已复盘 ← 演练记录真实存在
+            why.push("healthcheck 只有单次运行记录,「持续达标」谈不上,如实不勾".into());
             checks[1] = exists("docs/incident-drill.md");
-            // [2] 复盘洞察已回流原型段 ← retro 真实存在（其内容就是回流交接词）
             checks[2] = exists("docs/retro.md");
         }
     }
     (checks, why)
 }
 
-/// Drive one stage of the ring: run its playbook workflow for real, collect
-/// real evidence, feed metrics, check what's honestly checkable, hand off.
-/// Idempotent by session title. Returns `false` if the stage failed (the
+/// The stage's role agent (「原型师」/「构建师」…) as seen from this project —
+/// same by-name, scope-aware pick the desktop's assign menu and the
+/// scheduler's autopilot use. `None` = no such teammate (honest unassigned).
+fn stage_agent(app: &App, project: ProjectId, kind: StageKind) -> Option<bw_core::AgentId> {
+    let snap = app.snapshot();
+    bw_core::scope::scoped_pick(
+        snap.agents.iter(),
+        Some(project),
+        |a| a.project_id,
+        |a| a.name == kind.role_short(),
+    )
+    .map(|a| a.id)
+}
+
+/// The distilled-skill name for one stage of one requirement — kebab-case
+/// per the skill spec (plan/16 S1), unique per project pool.
+fn distilled_name(req: &Requirement, kind: StageKind) -> String {
+    let stage_key = match kind {
+        StageKind::Prototype => "prototype",
+        StageKind::Build => "build",
+        StageKind::Optimize => "optimize",
+        StageKind::Growth => "growth",
+        StageKind::Ops => "ops",
+    };
+    format!("demo-{}-{stage_key}", req.slug)
+}
+
+/// Drive one stage of the ring through the real main loop. Idempotent by
+/// Issue title. Returns `false` if the stage could not be advanced (the
 /// caller stops the ring for this project rather than pretending onward).
-#[allow(clippy::too_many_arguments)]
 async fn run_stage(
     app: &mut App,
     store: &Arc<dyn Store>,
+    req: &Requirement,
     project: ProjectId,
     kind: StageKind,
     ws: &Path,
     metrics: &DemoMetrics,
-    real_executor: bool,
 ) -> bool {
-    let title_base = format!("剧本实跑 · {} · {}", kind.label(), kind.role_short());
-    // Idempotency = "a session with this stage's title has a settled-OK run".
-    // A session whose run failed (or never settled — crash) does NOT count:
-    // a re-invocation honestly re-attempts the stage under a numbered title
-    // instead of skipping work that never actually succeeded.
-    let sessions = store.list_sessions(project).await.expect("list sessions");
-    let runs = store.list_all_workflow_runs(1000).await.expect("list runs");
-    let attempts: Vec<_> = sessions
-        .iter()
-        .filter(|s| s.title.starts_with(&title_base))
-        .collect();
-    let succeeded = attempts.iter().any(|s| {
-        runs.iter()
-            .any(|r| r.session_id == Some(s.id) && r.status.is_ok())
-    });
+    let title = format!("主环实跑 · {} · {}", kind.label(), kind.role_short());
 
-    if succeeded {
-        println!("  [{}] 已真实成功过，幂等跳过", kind.label());
-    } else {
-        let title = if attempts.is_empty() {
-            title_base.clone()
-        } else {
-            format!("{title_base} · 第{}次尝试", attempts.len() + 1)
-        };
-        let session = SessionId::new();
+    // ── ① 建活(幂等:同名 Issue 已在就续)──
+    let existing = store
+        .list_issues(project, None, None)
+        .await
+        .expect("list issues")
+        .into_iter()
+        .find(|i| i.title == title);
+    let issue_id = match existing {
+        Some(i) => {
+            println!(
+                "  [{}] Issue #{} 已在({}),续跑",
+                kind.label(),
+                i.number,
+                i.status.label()
+            );
+            i.id
+        }
+        None => {
+            let id = IssueId::new();
+            app.dispatch(Command::CreateIssue {
+                id,
+                stage: kind,
+                title: title.clone(),
+                desc: format!(
+                    "{}阶段的一件演示活:按「{}」的方法循环把这一段的产出做出来。\
+                     (real_demo 指挥器建的活;项目未配真实工作区,▶跑 落在 mock 交互执行器上)",
+                    kind.label(),
+                    kind.role_short()
+                ),
+                priority: IssuePriority::Medium,
+                standard_skill: String::new(),
+            })
+            .await
+            .expect("create issue");
+            let n = store
+                .get_issue(id)
+                .await
+                .expect("get issue")
+                .map(|i| i.number)
+                .unwrap_or(0);
+            println!("  [{}] 建活 Issue #{n}「{title}」", kind.label());
+            id
+        }
+    };
+    let issue = store
+        .get_issue(issue_id)
+        .await
+        .expect("get issue")
+        .expect("issue exists");
+
+    // ── ② 指派给该阶段的 AI 队友(幂等:已指派就不动)──
+    if issue.assignee.is_none() {
+        match stage_agent(app, project, kind) {
+            Some(aid) => {
+                app.dispatch(Command::AssignIssue {
+                    id: issue_id,
+                    assignee: Some(aid),
+                })
+                .await
+                .expect("assign issue");
+                println!("  [{}] 指派给队友「{}」", kind.label(), kind.role_short());
+            }
+            None => println!(
+                "  [{}] 没找到队友「{}」——如实不指派(蒸馏那一步会因此跳过)",
+                kind.label(),
+                kind.role_short()
+            ),
+        }
+    }
+
+    // ── ③ ▶跑(与桌面 Issue 看板同一条命令;mock 交互执行器,完成即返回)──
+    let issue = store.get_issue(issue_id).await.unwrap().unwrap();
+    if matches!(
+        issue.status,
+        IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress
+    ) {
+        // The desktop's ▶跑 opens a session titled `#N title` first (the
+        // left rail's index) — same here.
+        let sess_title = format!("#{} {}", issue.number, issue.title);
+        let session = store
+            .list_sessions(project)
+            .await
+            .expect("list sessions")
+            .into_iter()
+            .find(|s| s.stage_kind == Some(kind) && s.title == sess_title)
+            .map(|s| s.id)
+            .unwrap_or_else(SessionId::new);
         app.dispatch(Command::StartSession {
             id: session,
             stage_kind: Some(kind),
             kind: SessionKind::Create,
-            title: title.clone(),
+            title: sess_title,
         })
         .await
         .expect("start session");
-
-        println!(
-            "  [{}] {} 开始真实执行（{} 个 phase，{}）…",
-            kind.label(),
-            kind.role_short(),
-            kind.method_loop().len(),
-            now_label()
-        );
         let t0 = std::time::Instant::now();
-        // The kernel assembles the playbook (role + real project context +
-        // last handoff note + workspace state) — same command the desktop
-        // UI's ▶运行 dispatches. A hung claude subprocess must not hang the
-        // whole demo: 75 min cap per stage (sanity probe measured ~4.5 min
-        // TTFT on a trivial call, so 4-5 real phases need generous headroom);
-        // on timeout the run row honestly stays "started, never settled" —
-        // the crash path telemetry was built for.
-        let run = tokio::time::timeout(
-            Duration::from_secs(75 * 60),
-            app.dispatch(Command::RunStagePlaybook {
+        match app
+            .dispatch(Command::RunIssue {
                 session,
-                stage_kind: kind,
-            }),
-        )
-        .await;
-        match run {
-            Err(_) => {
-                println!("  [{}] ✗ 超时（75min），如实中止该项目的环", kind.label());
+                id: issue_id,
+            })
+            .await
+        {
+            Ok(()) => println!(
+                "  [{}] ▶跑 完成(mock 交互执行器,{:.2}s)——活停在「{}」,不自动前进",
+                kind.label(),
+                t0.elapsed().as_secs_f32(),
+                store
+                    .get_issue(issue_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .status
+                    .label()
+            ),
+            Err(e) => {
+                println!("  [{}] ✗ ▶跑 失败:{e}(活如实留在原地,可重试)", kind.label());
                 return false;
-            }
-            Ok(Err(e)) => {
-                println!(
-                    "  [{}] ✗ 执行失败：{e}（run 已如实落 Failed）",
-                    kind.label()
-                );
-                return false;
-            }
-            Ok(Ok(())) => {
-                println!(
-                    "  [{}] ✓ 完成，真实耗时 {:.1}s",
-                    kind.label(),
-                    t0.elapsed().as_secs_f32()
-                );
-            }
-        }
-
-        // Permission-denial escalation: if the CLI reported denied actions,
-        // flip the process-wide commands mode to BypassPermissions — the
-        // documented fallback when acceptEdits+allowedTools can't unlock
-        // command execution. Logged loudly; never silent.
-        if real_executor {
-            let msgs = store.session_messages(session).await.unwrap_or_default();
-            let denied = msgs.iter().any(|m| m.text.contains("[权限提示]"));
-            if denied
-                && app.snapshot().claude_config.commands_mode != PermissionMode::BypassPermissions
-            {
-                println!(
-                    "  [{}] ⚠ 检测到权限拒绝 —— 升级 commands_mode 为 BypassPermissions（claude_cli.rs 文档中的既定退路），后续阶段生效",
-                    kind.label()
-                );
-                let cfg = app.snapshot().claude_config.clone();
-                app.dispatch(Command::SetClaudeConfig {
-                    binary: cfg.binary.clone(),
-                    max_budget_usd: cfg.max_budget_usd,
-                    default_mode: cfg.default_mode,
-                    commands_mode: PermissionMode::BypassPermissions,
-                })
-                .await
-                .expect("escalate commands mode");
             }
         }
     }
 
-    // ── 真实证据采集（无论本次是真跑还是幂等跳过，都对当前工作区重新测量）──
+    // ── ④ 脚本代人:「评审中」→「完成」(产品铁律:完成永远由人显式点;
+    //      这里脚本就是那个人,输出里明写。真实运行里「评审中」由 MR 检测
+    //      推,这里 mock 没有 MR,同样由脚本代推。)──
+    let issue = store.get_issue(issue_id).await.unwrap().unwrap();
+    if issue.status == IssueStatus::InProgress {
+        app.dispatch(Command::TransitionIssue {
+            id: issue_id,
+            status: IssueStatus::InReview,
+        })
+        .await
+        .expect("to in_review");
+        println!(
+            "  [{}] 脚本代队友推到「评审中」(mock 无 MR;真实运行由 MR 检测推)",
+            kind.label()
+        );
+    }
+    let issue = store.get_issue(issue_id).await.unwrap().unwrap();
+    if issue.status == IssueStatus::InReview {
+        app.dispatch(Command::TransitionIssue {
+            id: issue_id,
+            status: IssueStatus::Done,
+        })
+        .await
+        .expect("to done");
+        println!(
+            "  [{}] **脚本代人点「完成」**(settle-once:队友记一次胜场、settled_at 打点)",
+            kind.label()
+        );
+    }
+    let issue = store.get_issue(issue_id).await.unwrap().unwrap();
+    if issue.status != IssueStatus::Done {
+        println!(
+            "  [{}] Issue #{} 处于「{}」,不是 Done——如实停在这里,不假装往前",
+            kind.label(),
+            issue.number,
+            issue.status.label()
+        );
+        return false;
+    }
+
+    // ── ⑤ 蒸馏成技能(幂等:同名技能已在本项目池就跳过;需 Done + 有指派)──
+    let skill_name = distilled_name(req, kind);
+    let already = store
+        .list_skills()
+        .await
+        .expect("list skills")
+        .iter()
+        .any(|s| s.name == skill_name && s.project_id == Some(project));
+    if already {
+        println!("  [{}] 技能 `{skill_name}` 已蒸馏过,幂等跳过", kind.label());
+    } else if issue.assignee.is_none() {
+        println!(
+            "  [{}] 未指派,蒸馏如实跳过(蒸馏要求活已完成且有指派)",
+            kind.label()
+        );
+    } else {
+        app.dispatch(Command::DistillSkillFromIssue {
+            skill_id: SkillId::new(),
+            issue_id,
+            name: skill_name.clone(),
+            desc: format!(
+                "从 Issue #{}「{}」蒸馏(real_demo,mock 运行)——{}阶段「{}」方法的一次沉淀",
+                issue.number,
+                issue.title,
+                kind.label(),
+                kind.role_short()
+            ),
+            category: kind.role_short().to_string(),
+            content: format!(
+                "# {skill_name}\n\n\
+                 来源:Issue #{}「{}」({}阶段,指派「{}」)。\n\n\
+                 本技能由 real_demo 指挥器在 **mock** 运行后蒸馏,正文是流程说明,\
+                 不是真实方法沉淀:\n\n\
+                 1. 按「{}」的方法循环拆解这一段的产出;\n\
+                 2. 队友在项目工作区里干活,干完停在「评审中」;\n\
+                 3. 人验收后点「完成」,再一键蒸馏——下次同类活自动注入本技能。\n",
+                issue.number,
+                issue.title,
+                kind.label(),
+                kind.role_short(),
+                kind.role_short()
+            ),
+        })
+        .await
+        .expect("distill skill");
+        println!(
+            "  [{}] 蒸馏成技能 `{skill_name}`(记着来自 Issue #{})",
+            kind.label(),
+            issue.number
+        );
+    }
+
+    // ── ⑥ 真实证据采集(对当前工作区重新测量;git-repo 连接器是常驻采集者)──
     let ev = evidence::collect(&ws.to_string_lossy())
         .await
         .expect("collect evidence");
@@ -374,12 +511,6 @@ async fn run_stage(
         "  [证据] commits={} tracked={} docs={} dirty={}",
         ev.commit_count, ev.tracked_files, ev.docs_files, ev.dirty_paths
     );
-    // Connector 真喂指标 (Tier D): the project's own git-repo connector probes
-    // the workspace and feeds 工作区真实提交数/剧本产物文档数 as
-    // `SourceKind::Connector` observations (change-guarded — a stage that
-    // moved nothing appends nothing). Replaces the conductor's former direct
-    // `RecordCollectedObservation(GitPr)` writes for these two metrics: the
-    // standing connector, not the demo script, is now the collector.
     let repo_conn = store
         .list_connectors()
         .await
@@ -395,7 +526,7 @@ async fn run_stage(
         None => println!("  [警告] 该项目没有 git-repo 连接器——工作区指标本轮无人喂"),
     }
     if let Some((passed, total)) = measure_tests(ws).await {
-        println!("  [证据] cargo test 真实结果：{passed}/{total}");
+        println!("  [证据] cargo test 真实结果:{passed}/{total}");
         if total > 0 {
             app.dispatch(Command::RecordCollectedObservation {
                 metric: metrics.tests,
@@ -407,7 +538,7 @@ async fn run_stage(
         }
     }
 
-    // ── DoD：证据谓词过了才勾；ToggleDod 是翻转，先读当前值防重复翻转 ──
+    // ── ⑦ DoD:证据谓词过了才勾;ToggleDod 是翻转,先读当前值防重复翻转 ──
     let (want, why) = dod_evidence(kind, ws).await;
     let stages = store.list_stages(project).await.unwrap();
     let current = stages
@@ -425,8 +556,7 @@ async fn run_stage(
             .expect("toggle dod");
         }
     }
-
-    // 阶段进度是计划数据：真实跑完 = 100。
+    // 阶段进度是计划数据:这一段的活 Done 了 = 100。
     app.dispatch(Command::SetStageProgress {
         stage_kind: kind,
         progress: 100,
@@ -434,7 +564,7 @@ async fn run_stage(
     .await
     .expect("set progress");
 
-    // ── 交棒（幂等：这一段已交过就不再交）──
+    // ── ⑧ 交棒(幂等:这一段已交过就不再交)──
     let handed = store
         .list_handoffs(project)
         .await
@@ -448,26 +578,19 @@ async fn run_stage(
         let unchecked_why = if why.is_empty() {
             String::new()
         } else {
-            format!("；未勾项：{}", why.join("；"))
+            format!(";未勾项:{}", why.join(";"))
         };
-        let recent = ev
-            .recent_subjects
-            .iter()
-            .take(3)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("｜");
         app.dispatch(Command::HandoffStage {
             risky,
             note: format!(
-                "真实证据：工作区 {} 个提交、{} 个 docs 产物；最近提交：{}。DoD {checked}/{total_dod} 按证据勾选{unchecked_why}",
-                ev.commit_count, ev.docs_files, recent
+                "Issue #{} 已完成(mock 运行,脚本代人点完成)。真实证据:工作区 {} 个提交、{} 个 docs 产物。DoD {checked}/{total_dod} 按证据勾选{unchecked_why}",
+                issue.number, ev.commit_count, ev.docs_files
             ),
         })
         .await
         .expect("handoff");
         println!(
-            "  [{}] 交棒（{}，DoD {}/{}）\n",
+            "  [{}] 交棒({},DoD {}/{})\n",
             kind.label(),
             if risky { "险交棒·如实" } else { "非险" },
             checked,
@@ -486,16 +609,9 @@ struct DemoMetrics {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let db_path = args
-        .get(1)
-        .cloned()
-        .expect("usage: real_demo <db-path> <workspaces-root> [--mock] [--only slug]");
-    let ws_root = PathBuf::from(
-        args.get(2)
-            .cloned()
-            .expect("usage: real_demo <db-path> <workspaces-root> [--mock] [--only slug]"),
-    );
-    let mock = args.iter().any(|a| a == "--mock");
+    let usage = "usage: real_demo <db-path> <workspaces-root> [--only <slug>]";
+    let db_path = args.get(1).cloned().expect(usage);
+    let ws_root = PathBuf::from(args.get(2).cloned().expect(usage));
     let only = args
         .iter()
         .position(|a| a == "--only")
@@ -517,71 +633,12 @@ async fn main() {
     );
     app.dispatch(Command::Boot).await.expect("boot");
 
-    // Live progress stream — the same Event bus the desktop UI consumes.
-    let mut rx = app.subscribe();
-    tokio::spawn(async move {
-        while let Ok(ev) = rx.recv().await {
-            match ev {
-                Event::RunStarted {
-                    workflow_name,
-                    agents,
-                    ..
-                } => {
-                    let who = agents
-                        .first()
-                        .map(|a| a.name.clone())
-                        .unwrap_or_else(|| "-".into());
-                    println!("      ▶ {workflow_name}（执行角色：{who}）");
-                }
-                Event::WorkflowProgress { phase_idx, status } => {
-                    println!("      · phase {} {}", phase_idx + 1, status);
-                }
-                Event::WorkflowFailed(e) => println!("      ✗ {e}"),
-                _ => {}
-            }
-        }
-    });
-
     println!(
-        "=== real_demo（{}模式）· db={} · workspaces={} · {} ===\n",
-        if mock {
-            "MOCK 管线自检"
-        } else {
-            "真实执行"
-        },
+        "=== real_demo(主环 · mock 交互执行器)· db={} · workspaces={} · {} ===\n",
         db_path,
         ws_root.display(),
         now_label()
     );
-
-    // ── 执行器连接器(全局一次):claude CLI 的真实版本探针 ──
-    {
-        let conns = store.list_connectors().await.unwrap();
-        let cli_conn = match conns.iter().find(|c| c.kind == CONNECTOR_KIND_CLAUDE_CLI) {
-            Some(c) => c.id,
-            None => {
-                let id = ConnectorId::new();
-                app.dispatch(Command::CreateConnector {
-                    id,
-                    name: "claude CLI · 执行器".into(),
-                    kind: CONNECTOR_KIND_CLAUDE_CLI.into(),
-                    scope: "全部项目".into(),
-                    project_id: None,
-                    config: String::new(),
-                })
-                .await
-                .expect("create claude-cli connector");
-                id
-            }
-        };
-        app.dispatch(Command::SyncConnector { id: cli_conn })
-            .await
-            .expect("sync claude-cli connector");
-        let after = store.list_connectors().await.unwrap();
-        if let Some(c) = after.iter().find(|c| c.id == cli_conn) {
-            println!("[执行器探针] {} → {}\n", c.name, c.status.label());
-        }
-    }
 
     for req in REQUIREMENTS {
         if let Some(o) = &only {
@@ -589,10 +646,10 @@ async fn main() {
                 continue;
             }
         }
-        println!("━━ 需求「{}」（{}）━━", req.name, req.kind);
+        println!("━━ 需求「{}」({})━━", req.name, req.kind);
         let ws = ensure_workspace(&ws_root, req).await;
 
-        // ── 创建流程（幂等：项目已存在则直接续跑）──
+        // ── 创建流程(幂等:项目已存在则直接续跑)──
         let project = match store
             .list_projects()
             .await
@@ -612,7 +669,6 @@ async fn main() {
                     name: req.name.into(),
                     kind: req.kind.into(),
                     desc: req.desc.into(),
-
                     workspace: None,
                     github: None,
                     codehub: None,
@@ -642,27 +698,17 @@ async fn main() {
                 })
                 .await
                 .expect("complete creation");
-                println!("  [创建流程完成] 5 阶段落库，active_stage=原型");
+                println!("  [创建流程完成] 5 阶段落库,active_stage=原型");
                 id
             }
         };
         app.dispatch(Command::OpenProject(project))
             .await
             .expect("open project");
+        // 项目**不**指向真实工作区:workspace_path 留空 = 每次 ▶跑 都在 mock
+        // 交互执行器上,产出自我标注【mock】(见文件顶部)。
 
-        // Real executor: point the project at its real workspace (unless
-        // --mock, in which case the empty workspace_path keeps every run
-        // honestly on MockExecutor).
-        if !mock {
-            app.dispatch(Command::SetWorkspace {
-                path: ws.to_string_lossy().into_owned(),
-                allow_commands: true,
-            })
-            .await
-            .expect("set workspace");
-        }
-
-        // ── 项目的 git-repo 连接器（工作区指标的常驻采集者）──
+        // ── 项目的 git-repo 连接器(工作区指标的常驻采集者)──
         let existing_conns = store.list_connectors().await.unwrap();
         if !existing_conns
             .iter()
@@ -675,7 +721,7 @@ async fn main() {
                 scope: req.name.into(),
                 project_id: Some(project),
                 // config = the real repo path — the probe's fallback when the
-                // project runs --mock (workspace_path left empty on purpose).
+                // project has no workspace_path (left empty on purpose).
                 config: ws.to_string_lossy().into_owned(),
             })
             .await
@@ -683,15 +729,15 @@ async fn main() {
             println!("  [连接器] git-repo 已绑定(工作区指标的常驻采集者)");
         }
 
-        // ── 三个机器采集指标（初值 = 真实当前态）——
-        // docs/commits 定义在此,喂入由 git-repo 连接器负责(名字即契约:
-        // bw_app::METRIC_WS_DOCS / METRIC_WS_COMMITS)。
+        // ── 三个机器采集指标(初值 = 真实当前态)——docs/commits 定义在此,
+        // 喂入由 git-repo 连接器负责(名字即契约:bw_app::METRIC_WS_DOCS /
+        // METRIC_WS_COMMITS)。
         let _ = find_or_create_metric(
             &mut app,
             &store,
             project,
             bw_app::METRIC_WS_DOCS,
-            "工作区 docs/ 下被 git 追踪的 .md 数 —— 五角色剧本的真实产出物（Connector 采集）",
+            "工作区 docs/ 下被 git 追踪的 .md 数 —— 真实产出物(Connector 采集)",
             MetricRole::Leading,
             "≥10",
             "0",
@@ -702,7 +748,7 @@ async fn main() {
             &store,
             project,
             bw_app::METRIC_WS_COMMITS,
-            "git rev-list --count HEAD —— 阶段产出被真实合入的次数（Connector 采集）",
+            "git rev-list --count HEAD —— 阶段产出被真实合入的次数(Connector 采集)",
             MetricRole::Leading,
             "≥5",
             "1",
@@ -714,7 +760,7 @@ async fn main() {
                 &store,
                 project,
                 "测试通过率",
-                "cargo test 真实运行的 passed/total（Ci 采集）；构建段起才有测试",
+                "cargo test 真实运行的 passed/total(Ci 采集);构建段起才有测试",
                 MetricRole::Lagging,
                 "100%",
                 "0%",
@@ -722,10 +768,10 @@ async fn main() {
             .await,
         };
 
-        // ── 五阶段环：原型 → 构建 → 优化 → 运营推广 → 运维（→ 回流）──
+        // ── 五阶段环:原型 → 构建 → 优化 → 运营推广 → 运维(→ 回流)──
         let mut ring_ok = true;
         for kind in StageKind::ALL {
-            if !run_stage(&mut app, &store, project, kind, &ws, &metrics, !mock).await {
+            if !run_stage(&mut app, &store, req, project, kind, &ws, &metrics).await {
                 ring_ok = false;
                 break;
             }
@@ -743,87 +789,98 @@ async fn main() {
                     schedule: Cadence::Daily,
                     project_id: Some(project),
                     stage: Some(StageKind::Ops),
-                    assignee: None,
+                    assignee: Some(StageKind::Ops.role_short().to_string()),
                 })
                 .await
                 .expect("create cron");
-                println!("  [定时任务] 每日健康巡检建活已绑定（真实调度器接管,只建活不跑活）");
+                println!("  [定时任务] 每日健康巡检建活已绑定(真实调度器接管,只建活不跑活)");
             }
         }
 
-        // ── 产物登记:真实运行已自动登记;这里再做一次显式采集兜底。
-        // --mock 时项目没有 workspace_path(执行留在 Mock 是刻意的),仅为
-        // 扫描临时绑定再清空——期间不发生任何执行。
-        if mock {
-            app.dispatch(Command::SetWorkspace {
-                path: ws.to_string_lossy().into_owned(),
-                allow_commands: false,
-            })
-            .await
-            .expect("bind ws for scan");
-        }
+        // ── 产物登记:项目没有 workspace_path(mock 是刻意的),仅为扫描
+        // 临时绑定再清空——期间不发生任何执行。
+        app.dispatch(Command::SetWorkspace {
+            path: ws.to_string_lossy().into_owned(),
+            allow_commands: false,
+        })
+        .await
+        .expect("bind ws for scan");
         app.dispatch(Command::CollectArtifacts)
             .await
             .expect("collect artifacts");
-        if mock {
-            app.dispatch(Command::SetWorkspace {
-                path: String::new(),
-                allow_commands: false,
-            })
-            .await
-            .expect("unbind ws after scan");
-        }
+        app.dispatch(Command::SetWorkspace {
+            path: String::new(),
+            allow_commands: false,
+        })
+        .await
+        .expect("unbind ws after scan");
 
-        // ── 结论：全部真实读回 ──
+        // ── 结论:全部真实读回 ──
         let proj = store.get_project(project).await.unwrap().unwrap();
         let handoffs = store.list_handoffs(project).await.unwrap();
         let sessions = store.list_sessions(project).await.unwrap();
-        let runs = store.list_all_workflow_runs(500).await.unwrap();
-        let my_runs: Vec<_> = runs
-            .iter()
-            .filter(|r| r.project_id == Some(project))
-            .collect();
+        let issues = store.list_issues(project, None, None).await.unwrap();
         let obs = store.list_observations(project).await.unwrap();
         let sigs = store.persisted_signals(project).await.unwrap();
         let artifacts = store.list_artifacts(project).await.unwrap();
         let connectors = store.list_connectors().await.unwrap();
-        let role_agents: Vec<_> = store
-            .list_agents()
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|a| StageKind::ALL.iter().any(|k| a.name == k.role_short()))
+        let agents = store.list_agents().await.unwrap();
+        let role_agents: Vec<_> = agents
+            .iter()
+            .filter(|a| {
+                bw_core::scope::in_scope(a.project_id, Some(project))
+                    && StageKind::ALL.iter().any(|k| a.name == k.role_short())
+            })
             .collect();
-        let stage_skills: Vec<_> = store
+        let distilled: Vec<_> = store
             .list_skills()
             .await
             .unwrap()
             .into_iter()
-            .filter(|s| {
-                StageKind::ALL
-                    .iter()
-                    .flat_map(|k| bw_core::playbook::stage_skills(*k))
-                    .any(|sk| sk.name == s.name)
-            })
+            .filter(|s| s.project_id == Some(project) && s.name.starts_with("demo-"))
             .collect();
         println!("\n  ── 「{}」真实读回 ──", req.name);
+        println!("  active_stage = {:?}(环闭合后回到原型)", proj.active_stage);
         println!(
-            "  active_stage = {:?}（环闭合后回到原型）",
-            proj.active_stage
-        );
-        println!(
-            "  交接 {} 次 · 会话 {} 个 · 真实 run {} 条（ok {} / failed {}）",
-            handoffs.len(),
-            sessions.len(),
-            my_runs.len(),
-            my_runs.iter().filter(|r| r.status.is_ok()).count(),
-            my_runs
+            "  Issue {} 张(Done {} · 有 settled_at {})· 会话 {} 个 · 交接 {} 次",
+            issues.len(),
+            issues
                 .iter()
-                .filter(|r| matches!(r.status, bw_core::model::RunStatus::Failed))
+                .filter(|i| i.status == IssueStatus::Done)
                 .count(),
+            issues.iter().filter(|i| i.settled_at.is_some()).count(),
+            sessions.len(),
+            handoffs.len(),
         );
+        for i in &issues {
+            let who = i
+                .assignee
+                .and_then(|aid| agents.iter().find(|a| a.id == aid))
+                .map(|a| a.name.as_str())
+                .unwrap_or("未指派");
+            println!(
+                "    #{} {} · {} · {} · settled_at={}",
+                i.number,
+                i.title,
+                i.status.label(),
+                who,
+                i.settled_at
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| "-".into())
+            );
+        }
+        println!("  蒸馏技能 {} 条:", distilled.len());
+        for s in &distilled {
+            println!(
+                "    {} · 来源 Issue={} · uses={} · 正文 {} 字",
+                s.name,
+                s.distilled_from_issue.map(|_| "有").unwrap_or("无"),
+                s.uses,
+                s.content.chars().count()
+            );
+        }
         println!(
-            "  观测 {} 条（其中机器采集 {} 条）· 项目信号 = {:?}",
+            "  观测 {} 条(其中机器采集 {} 条)· 项目信号 = {:?}",
             obs.len(),
             obs.iter()
                 .filter(|o| !matches!(o.source, SourceKind::Manual))
@@ -831,23 +888,17 @@ async fn main() {
             sigs.project,
         );
         println!(
-            "  产物登记 {} 个版本（{} 个文件）· 其中 run 产出归属 {} 个",
+            "  产物登记 {} 个版本 · 连接器 {} 个",
             artifacts.len(),
-            {
-                let mut paths: Vec<_> = artifacts.iter().map(|a| a.path.as_str()).collect();
-                paths.sort_unstable();
-                paths.dedup();
-                paths.len()
-            },
-            artifacts
+            connectors
                 .iter()
-                .filter(|a| a.workflow_run_id.is_some())
-                .count(),
+                .filter(|c| c.project_id == Some(project))
+                .count()
         );
         for a in &role_agents {
             if a.runs > 0 {
                 println!(
-                    "  角色记账:{} 运行 {} 次 · 成功率 {}",
+                    "  队友战绩:{} 运行 {} 次 · 胜率 {}",
                     a.name,
                     a.runs,
                     if a.win_rate.is_empty() {
@@ -860,7 +911,7 @@ async fn main() {
         }
         println!();
 
-        // ── 证据导出（报告的数据源；全部读回值，无一手写）──
+        // ── 证据导出(报告的数据源;全部读回值,无一手写)──
         let export = serde_json::json!({
             "project": {
                 "name": proj.name,
@@ -871,6 +922,20 @@ async fn main() {
                 "workspace_path": proj.workspace_path,
                 "signal": proj.signal.map(|s| format!("{s:?}")),
             },
+            "issues": issues.iter().map(|i| serde_json::json!({
+                "number": i.number,
+                "title": i.title,
+                "stage": i.stage.label(),
+                "status": i.status.label(),
+                "assignee": i.assignee.and_then(|aid| agents.iter().find(|a| a.id == aid)).map(|a| a.name.clone()),
+                "settled_at": i.settled_at,
+            })).collect::<Vec<_>>(),
+            "distilled_skills": distilled.iter().map(|s| serde_json::json!({
+                "name": s.name,
+                "uses": s.uses,
+                "has_source_issue": s.distilled_from_issue.is_some(),
+                "content_chars": s.content.chars().count(),
+            })).collect::<Vec<_>>(),
             "handoffs": handoffs.iter().map(|h| serde_json::json!({
                 "from": h.from_stage.label(),
                 "to": h.to_stage.label(),
@@ -881,15 +946,6 @@ async fn main() {
             "sessions": sessions.iter().map(|s| serde_json::json!({
                 "title": s.title,
                 "stage": s.stage_kind.map(|k| k.label()),
-            })).collect::<Vec<_>>(),
-            "runs": my_runs.iter().map(|r| serde_json::json!({
-                "workflow": r.workflow_name,
-                "status": r.status.text(),
-                "duration_ms": r.duration_ms,
-                "phases_completed": r.phases_completed,
-                "trigger": r.trigger.text(),
-                "started_at": r.started_at,
-                "params": serde_json::from_str::<serde_json::Value>(&r.params_json).unwrap_or(serde_json::Value::Null),
             })).collect::<Vec<_>>(),
             "observations": obs.iter().map(|o| serde_json::json!({
                 "metric": sigs.metrics.iter().find(|m| m.id == o.metric_id).map(|m| m.name.clone()),
@@ -907,7 +963,6 @@ async fn main() {
                 "kind": a.kind.text(),
                 "bytes": a.bytes,
                 "git_commit": a.git_commit,
-                "from_run": a.workflow_run_id.is_some(),
                 "stage": a.stage_kind.map(|k| k.label()),
             })).collect::<Vec<_>>(),
             "connectors": connectors.iter().map(|c| serde_json::json!({
@@ -921,12 +976,6 @@ async fn main() {
                 "name": a.name,
                 "runs": a.runs,
                 "win_rate": a.win_rate,
-                "has_instructions": !a.instructions.trim().is_empty(),
-            })).collect::<Vec<_>>(),
-            "stage_skills": stage_skills.iter().map(|s| serde_json::json!({
-                "name": s.name,
-                "uses": s.uses,
-                "has_content": !s.content.trim().is_empty(),
             })).collect::<Vec<_>>(),
         });
         let export_path = ws_root.join(format!("evidence-{}.json", req.slug));
@@ -939,6 +988,6 @@ async fn main() {
         println!();
     }
 
-    println!("=== real_demo 结束（{}）===", now_label());
-    println!("打开桌面应用查看:BW_DB=\"{db_path}\" cargo run -p app-desktop");
+    println!("=== real_demo 结束({})===", now_label());
+    println!("打开桌面应用查看:BW_DB=\"{db_path}\" BW_OPEN=linkcheck-md BW_PANEL=issues cargo run -p app-desktop");
 }
