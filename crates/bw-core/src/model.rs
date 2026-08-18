@@ -382,15 +382,6 @@ pub enum SessionStatus {
     Done,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Author {
-    /// Builder (the human) — right, dark bubble.
-    Builder,
-    /// Agent — left, white bubble.
-    Agent,
-}
-
 // ─────────────────────────── workflow ───────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -845,32 +836,6 @@ pub struct WorkflowRun {
 /// state (assembled at detail-open time) and the view layer.
 pub type RunChanges = (WorkflowRunId, Result<Vec<(String, u32, u32)>, String>);
 
-/// Per-workflow aggregate over its run history — the read-side shape optimization
-/// intelligence consumes. Every field is derived from settled `workflow_run`
-/// rows; a workflow with no runs returns `success_rate = None` (not 0 —
-/// "unknown" must not masquerade as "always fails", mirroring `Signal::Unknown`).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkflowRunAnalytics {
-    pub workflow_id: WorkflowId,
-    pub workflow_name: String,
-    /// Total rows ever recorded (running + ok + failed).
-    pub total_runs: u32,
-    pub ok_runs: u32,
-    pub failed_runs: u32,
-    pub running_runs: u32,
-    /// `ok_runs / settled_runs`. `None` when no run has settled yet — "no
-    /// evidence", not "0%". The single most important optimization input.
-    pub success_rate: Option<f32>,
-    /// Mean `duration_ms` over settled runs. `None` if none settled.
-    pub avg_duration_ms: Option<i64>,
-    /// Median `duration_ms` over settled runs — robust to one slow outlier,
-    /// a better "typical cost" than the mean for optimization decisions.
-    pub median_duration_ms: Option<i64>,
-    /// Unix seconds of the most recent run (any status), if any.
-    pub last_run_at: Option<i64>,
-    pub last_status: Option<RunStatus>,
-}
-
 /// Effectiveness of one cron schedule (iter 4): of the times this task's
 /// target auto-fired, how many succeeded? The answer to "is this schedule
 /// actually doing anything useful, or just burning runs?" — the gating input
@@ -890,36 +855,6 @@ pub struct CronEffectiveness {
     pub avg_duration_ms: Option<i64>,
     pub last_fire_at: Option<i64>,
     pub last_fire_ok: Option<bool>,
-}
-
-/// One frozen version of a Static workflow's content (iter 5) — snapshotted
-/// the instant before `UpdateWorkflowSpec` overwrites it. Together the series
-/// is the spec's evolution: what changed, when, and (via `note`) why.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkflowVersion {
-    pub id: WorkflowRunId,
-    pub workflow_id: WorkflowId,
-    /// The `Static.version` this snapshot was taken at (pre-update).
-    pub version: u32,
-    pub name: String,
-    pub prompt: String,
-    pub goal: String,
-    /// T8: structured (see `WorkflowSpec.phases`); same serde-compat with
-    /// pre-T8 plain-string-array snapshots.
-    pub phases: Vec<PhaseMeta>,
-    /// Per-phase instructions frozen with the rest of the content — an
-    /// evolution history that dropped them would misreport what old versions
-    /// actually executed. Empty for pre-playbook snapshots.
-    #[serde(default)]
-    pub phase_prompts: Vec<String>,
-    pub agents: Vec<AgentRef>,
-    pub skills: Vec<SkillRef>,
-    pub loop_retries: u8,
-    pub loop_max_iter: u8,
-    /// Caller's reason for the change that replaced this version (the "优化"
-    /// note). `''` when none was given.
-    pub note: String,
-    pub created_at: i64,
 }
 
 /// One workflow's position in the global usage ranking (iter 6) — the

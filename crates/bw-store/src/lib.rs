@@ -19,11 +19,11 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    AgentCard, AgentRef, Author, Cadence, ClaudeConversation, Connector, ConnectorStatus,
+    AgentCard, AgentRef, Cadence, ClaudeConversation, Connector, ConnectorStatus,
     CronEffectiveness, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority,
     IssueStatus, KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness,
     RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind,
-    UsageRank, WorkflowKind, WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
+    UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
@@ -613,12 +613,6 @@ pub struct SessionRow {
     pub status: SessionStatus,
 }
 
-#[derive(Clone, Debug)]
-pub struct MessageRow {
-    pub role: Author,
-    pub text: String,
-}
-
 // ───────────────────────────── the trait ─────────────────────────────
 
 #[async_trait]
@@ -749,8 +743,6 @@ pub trait Store: Send + Sync {
     ) -> Result<()>;
 
     async fn ensure_session(&self, s: NewSession) -> Result<()>;
-    async fn append_message(&self, session_id: SessionId, role: Author, text: &str) -> Result<()>;
-
     /// **The sole signal writer** — reads observations + targets, derives via
     /// `bw_core`, writes every `signal` / `hit` cache for the project.
     async fn recompute_signals(&self, project_id: ProjectId, now: OffsetDateTime) -> Result<()>;
@@ -770,56 +762,10 @@ pub trait Store: Send + Sync {
     /// `limit` — the real feed behind Activity Hub.
     async fn list_recent_handoffs(&self, limit: u32) -> Result<Vec<GlobalHandoffRow>>;
     async fn list_sessions(&self, project_id: ProjectId) -> Result<Vec<SessionRow>>;
-    async fn session_messages(&self, session_id: SessionId) -> Result<Vec<MessageRow>>;
-
     // ── hub library (global — no active-project gate) ──
     async fn create_workflow_spec(&self, w: NewWorkflowSpec) -> Result<()>;
     async fn list_workflow_specs(&self) -> Result<Vec<WorkflowSpec>>;
     async fn get_workflow_spec(&self, id: WorkflowId) -> Result<Option<WorkflowSpec>>;
-    /// Promote a `Dynamic` spec to a new `Static` hub entry: mints a fresh row
-    /// (`maturity: Fresh, version: 1, uses: 0`), copying prompt/goal/phases/
-    /// agents/skills/stage_ref/loop_config from `from`. The session that
-    /// inspired it is untouched — this is purely additive, never a mutation
-    /// of run history.
-    async fn promote_workflow(
-        &self,
-        new_id: WorkflowId,
-        from: &WorkflowSpec,
-        source: HubSource,
-    ) -> Result<()>;
-    /// Bump a hub spec's `uses` counter by 1 — called when it's run via
-    /// `RunHubWorkflow`.
-    async fn record_workflow_use(&self, id: WorkflowId) -> Result<()>;
-    /// T16.5 (GH#54): raw `phases`/`phase_prompts` column overwrite for one
-    /// `workflow_spec` row — deliberately bypasses `update_workflow_spec`'s
-    /// "optimize" path (no version bump, no `workflow_version` snapshot
-    /// written, `kind_json`/`name`/`prompt`/`goal`/`agents_json`/
-    /// `skills_json` untouched). This is the one-shot legacy-migration's own
-    /// narrow tool: refresh a built-in stage template's phase metadata from
-    /// the current playbook without disturbing its `uses`/`version`/other
-    /// track-record columns. Business judgement (which row, which values)
-    /// lives in `bw-app`'s `legacy_migration` module, never here — this is a
-    /// dumb column write, same "store 无业务判断" rule every other `Store`
-    /// method already follows.
-    async fn refresh_workflow_template_phases(
-        &self,
-        id: WorkflowId,
-        phases: Vec<PhaseMeta>,
-        phase_prompts: Vec<String>,
-    ) -> Result<()>;
-    /// T14.5 (2026-07-24, GH#59): delete one `workflow_spec` row outright.
-    /// Mechanics only — same "store 无业务判断" split as `delete_skill`/
-    /// `delete_agent`: bw-app decides which rows are safe (directory-import
-    /// source, zero `workflow_run` rows, zero `uses`, unreferenced by any
-    /// `run_workflow`-mode cron target, not a built-in stage template), this
-    /// is purely the mechanical single-table delete once that decision is
-    /// made. Deliberately does NOT cascade into `workflow_run`/
-    /// `workflow_version` — both already document their own no-FK "outlives
-    /// its spec being deleted" design (see `schema.sql`: "the history is the
-    /// point"), the same real precedent `delete_agent`'s own doc comment
-    /// notes for `issue.assignee`.
-    async fn delete_workflow_spec(&self, id: WorkflowId) -> Result<()>;
-
     // ── workflow_run: append-only execution telemetry (iter 1) ──────────────
     /// Insert a fresh run row at `status = Running`, returning the minted id
     /// the caller passes to [`Store::settle_workflow_run`] when the engine
@@ -853,16 +799,6 @@ pub trait Store: Send + Sync {
         phases_completed: u32,
         error: &str,
     ) -> Result<()>;
-    /// Recorded runs for one workflow, newest first — the series optimization
-    /// analytics (iter 2) aggregates over.
-    async fn list_workflow_runs(&self, workflow_id: WorkflowId) -> Result<Vec<WorkflowRun>>;
-    /// All recorded runs across every workflow, newest first — for a global
-    /// "what actually ran" feed / cross-workflow analytics.
-    async fn list_all_workflow_runs(&self, limit: u32) -> Result<Vec<WorkflowRun>>;
-    /// Aggregate analytics for one workflow over its run history (iter 2).
-    /// Returns a zeroed-name row with `total_runs = 0` if the workflow has
-    /// never run — never an error, so a caller can show "未运行" honestly.
-    async fn workflow_analytics(&self, workflow_id: WorkflowId) -> Result<WorkflowRunAnalytics>;
     /// Effectiveness of one cron schedule over its auto-fired runs (iter 4).
     /// Manual runs of the same workflow are excluded — this is purely the
     /// schedule's track record. `fires = 0` (never fired) is not an error.
@@ -873,12 +809,6 @@ pub trait Store: Send + Sync {
     /// if `id` resolves to a `Dynamic` spec (nothing durable to edit) or to
     /// no row at all.
     async fn update_workflow_spec(&self, id: WorkflowId, edit: WorkflowEdit) -> Result<()>;
-    /// The frozen content-history of a Static workflow (iter 5), newest
-    /// version first — every prior prompt/goal/phases/agents/skills, each
-    /// with the reason it was replaced. Empty for a spec never updated.
-    async fn list_workflow_versions(&self, workflow_id: WorkflowId)
-        -> Result<Vec<WorkflowVersion>>;
-
     /// Global usage ranking of every hub workflow by real run history
     /// (iter 6) — hottest (most-run) first, coldest (never-run) last.
     async fn hub_usage_ranking(&self) -> Result<Vec<UsageRank>>;
@@ -1111,16 +1041,6 @@ pub trait Store: Send + Sync {
     /// the project wall's "open work" badge. Same predicate as the A4 handoff
     /// risky-guard, so the two numbers never disagree.
     async fn count_open_issues(&self, project_id: ProjectId) -> Result<i64>;
-
-    // ── app_meta: tiny key/value table for one-shot app-level markers ──
-    /// T14 (2026-07-24, plan/12 §10 v1.1): read a marker's value, `None` if
-    /// never set (including "table exists but this key was never written" —
-    /// the honest default for every pre-T14 DB and every fresh one).
-    async fn get_app_meta(&self, key: &str) -> Result<Option<String>>;
-    /// Upsert a marker. Used by the legacy-shell migration to record
-    /// "already ran" so a second boot is a real zero-op, not a re-scan that
-    /// happens to find nothing.
-    async fn set_app_meta(&self, key: &str, value: &str) -> Result<()>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────
