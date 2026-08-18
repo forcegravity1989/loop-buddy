@@ -164,8 +164,8 @@ pub struct LaunchPlan {
 ///
 /// No `-p`/`--print` (interactive), no `--max-budget-usd` (interactive
 /// sessions are user-paced, no per-call cap). The env is inherited from
-/// the process but the nested-execution vars are stripped (same as
-/// [`crate::ClaudeCliExecutor`]) so the child uses its own CLI config.
+/// the process but the nested-execution vars are stripped so the child uses
+/// its own CLI config.
 pub fn build_startup_plan(
     agent: &TuiAgentConfig,
     position_prompt: &str,
@@ -179,9 +179,9 @@ pub fn build_startup_plan(
         )));
     }
 
-    // Strip nested-execution env vars (same rationale as ClaudeCliExecutor:
-    // the host may be running inside a Claude Code session whose injected
-    // tokens/gateway/model alias cause 401 in the child).
+    // Strip nested-execution env vars: the host may be running inside a
+    // Claude Code session whose injected tokens/gateway/model alias cause
+    // 401 in the child.
     let mut env: HashMap<String, String> = std::env::vars().collect();
     for var in [
         "ANTHROPIC_AUTH_TOKEN",
@@ -696,7 +696,7 @@ fn shell_quote(s: &str) -> String {
 /// interactive path's downstream (SyncMetricsFile, artifact scan) has
 /// something to chew on in tests / no-claude environments.
 ///
-/// The counterpart of [`crate::MockExecutor`] for the interactive path:
+/// The self-labeled mock for the interactive path:
 /// its sole purpose is to cheaply verify the interactive plumbing works
 /// end-to-end without a real `claude` CLI or gateway. Never pretend to be
 /// real execution — the 【mock】 label is honest.

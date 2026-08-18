@@ -37,7 +37,7 @@ use bw_core::model::{
     CONNECTOR_KIND_GIT_REPO,
 };
 use bw_core::{ConnectorId, CronTaskId, IssueId, MetricId, ProjectId, SessionId, SkillId};
-use bw_engine::{evidence, ClaudeCliConfig, PermissionMode};
+use bw_engine::{evidence, ClaudeCliConfig};
 use bw_store::{MetricRole, SessionKind, SqliteStore, Store};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -621,15 +621,7 @@ async fn main() {
     std::fs::create_dir_all(&ws_root).expect("create workspaces root");
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db_path).await.expect("open db"));
-    let mut app = App::new(
-        store.clone(),
-        ClaudeCliConfig {
-            binary: None,
-            max_budget_usd: 0.75,
-            default_mode: PermissionMode::AcceptEdits,
-            commands_mode: PermissionMode::AcceptEdits,
-        },
-    );
+    let mut app = App::new(store.clone(), ClaudeCliConfig::default());
     app.dispatch(Command::Boot).await.expect("boot");
 
     println!(

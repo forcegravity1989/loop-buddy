@@ -255,9 +255,6 @@ pub enum Command {
     /// process's lifetime instead of frozen.
     SetClaudeConfig {
         binary: Option<String>,
-        max_budget_usd: f64,
-        default_mode: PermissionMode,
-        commands_mode: PermissionMode,
     },
     /// Real `git log` on the active project's `workspace_path` (Version
     /// panel). Explicit, user-triggered — never fetched eagerly on `Boot`,

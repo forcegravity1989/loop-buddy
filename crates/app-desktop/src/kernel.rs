@@ -18,7 +18,7 @@ use bw_core::model::{
     CONNECTOR_KIND_SCRIPT,
 };
 use bw_core::{ConversationId, MetricId, SessionId};
-use bw_engine::{ClaudeCliConfig, CodehubRepoSummary, GithubRepoSummary, PermissionMode};
+use bw_engine::{ClaudeCliConfig, CodehubRepoSummary, GithubRepoSummary};
 use bw_store::{MetricRole, SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -418,20 +418,12 @@ fn workspaces_root() -> std::path::PathBuf {
     }
 }
 
-/// Process-wide `ClaudeCliExecutor` config, env-override-else-default (same
-/// pattern as [`db_path`]). Per-project data (`workspace_path`/
-/// `allow_commands`) lives in the store instead — see `Command::SetWorkspace`.
+/// Process-wide `claude` CLI config, env-override-else-default (same pattern
+/// as [`db_path`]): `BW_CLAUDE_BIN` overrides the binary resolved from PATH.
 fn claude_config_from_env() -> ClaudeCliConfig {
-    let mut config = ClaudeCliConfig::default();
-    if let Ok(bin) = std::env::var("BW_CLAUDE_BIN") {
-        config.binary = Some(bin);
+    ClaudeCliConfig {
+        binary: std::env::var("BW_CLAUDE_BIN").ok(),
     }
-    if let Ok(cap) = std::env::var("BW_CLAUDE_MAX_BUDGET_USD") {
-        if let Ok(v) = cap.parse() {
-            config.max_budget_usd = v;
-        }
-    }
-    config
 }
 
 /// Spawn the kernel thread. Returns immediately; the first real [`Vm`] arrives
@@ -805,12 +797,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         activity,
         notifications,
     };
-    let settings = settings_vm(
-        state.claude_config.binary.as_deref(),
-        state.claude_config.max_budget_usd,
-        state.claude_config.default_mode == PermissionMode::BypassPermissions,
-        state.claude_config.commands_mode == PermissionMode::BypassPermissions,
-    );
+    let settings = settings_vm(state.claude_config.binary.as_deref());
 
     // L1(plan/11): pre-format the last-loaded cron task's fire history, if
     // any — same explicit single-slot pattern as `version_log`/`artifacts`.

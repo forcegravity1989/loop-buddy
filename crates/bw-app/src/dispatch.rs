@@ -1511,21 +1511,8 @@ impl App {
                 self.emit(Event::ProjectUpdated(p));
             }
 
-            Command::SetClaudeConfig {
-                binary,
-                max_budget_usd,
-                default_mode,
-                commands_mode,
-            } => {
-                if max_budget_usd <= 0.0 {
-                    return Err(AppError::Invalid("预算上限必须大于 0".into()));
-                }
-                self.state.claude_config = ClaudeCliConfig {
-                    binary,
-                    max_budget_usd,
-                    default_mode,
-                    commands_mode,
-                };
+            Command::SetClaudeConfig { binary } => {
+                self.state.claude_config = ClaudeCliConfig { binary };
                 self.emit(Event::ClaudeConfigChanged);
             }
 

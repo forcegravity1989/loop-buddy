@@ -1793,35 +1793,20 @@ pub fn notify_feed(
 
 // ───────────────────────── settings hub ─────────────────────────
 
-/// The real, process-wide `ClaudeCliExecutor` config — `ui` can't depend on
+/// The real, process-wide `claude` CLI config — `ui` can't depend on
 /// `bw-engine` (must stay wasm32-clean), so `app-desktop` unpacks
-/// `ClaudeCliConfig`/`PermissionMode` into primitives before calling
-/// [`settings_vm`]. No new table: this mirrors how the value already lived
-/// only in memory (env-var-seeded at boot), just now editable at runtime via
-/// `Command::SetClaudeConfig` instead of frozen for the process's lifetime.
+/// `ClaudeCliConfig` into primitives before calling [`settings_vm`]. No new
+/// table: the value lives only in memory (env-var-seeded at boot), editable
+/// at runtime via `Command::SetClaudeConfig`.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct SettingsVm {
     /// Raw text for the edit field — empty means "resolve from PATH".
     pub binary_raw: String,
     /// Display copy for the read-only summary row.
     pub binary_label: String,
-    pub max_budget_usd: f64,
-    pub max_budget_label: String,
-    /// `true` iff the mode used when a project has NOT opted into command
-    /// execution is `BypassPermissions` — off by default and flagged in the
-    /// UI, never silently defaulted on.
-    pub bypass_default: bool,
-    /// Same, for the mode used when a project HAS opted into command
-    /// execution (`allow_commands = true`).
-    pub bypass_commands: bool,
 }
 
-pub fn settings_vm(
-    binary: Option<&str>,
-    max_budget_usd: f64,
-    bypass_default: bool,
-    bypass_commands: bool,
-) -> SettingsVm {
+pub fn settings_vm(binary: Option<&str>) -> SettingsVm {
     let binary_raw = binary.unwrap_or_default().to_string();
     let binary_label = if binary_raw.trim().is_empty() {
         "自动从 PATH 解析".to_string()
@@ -1831,10 +1816,6 @@ pub fn settings_vm(
     SettingsVm {
         binary_raw,
         binary_label,
-        max_budget_usd,
-        max_budget_label: format!("${max_budget_usd:.2}"),
-        bypass_default,
-        bypass_commands,
     }
 }
 

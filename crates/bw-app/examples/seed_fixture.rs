@@ -24,7 +24,7 @@
 use bw_app::{App, Command};
 use bw_core::model::{IssuePriority, IssueStatus, StageKind};
 use bw_core::IssueId;
-use bw_engine::{ClaudeCliConfig, PermissionMode};
+use bw_engine::ClaudeCliConfig;
 use bw_store::{SqliteStore, Store};
 use std::sync::Arc;
 
@@ -184,15 +184,7 @@ async fn main() {
     let db_path = args.get(1).cloned().expect("usage: seed_fixture <db-path>");
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db_path).await.expect("open db"));
-    let mut app = App::new(
-        store.clone(),
-        ClaudeCliConfig {
-            binary: None,
-            max_budget_usd: 0.75,
-            default_mode: PermissionMode::AcceptEdits,
-            commands_mode: PermissionMode::AcceptEdits,
-        },
-    );
+    let mut app = App::new(store.clone(), ClaudeCliConfig::default());
     app.dispatch(Command::Boot).await.expect("boot");
 
     println!("=== seed_fixture · db={db_path} ===\n");

@@ -63,7 +63,7 @@ use bw_engine::{
     build_consultation_resume_plan, build_project_context_block, build_resume_plan,
     build_startup_plan, evidence, ClaudeCliConfig, CodehubRepoSummary, ConversationMeta, GitCommit,
     GithubRepoSummary, InteractiveCliExecutor, InteractiveExecutor, MockInteractiveExecutor,
-    PermissionMode, ProjectFile, RunCtx, SkillOutput, TerminalManager, CLAUDE,
+    ProjectFile, RunCtx, SkillOutput, TerminalManager, CLAUDE,
 };
 use bw_store::{
     AgentEdit, ConnectorDefSync, ConnectorsFileSync, GlobalHandoffRow, MetricDefSync, MetricRole,
