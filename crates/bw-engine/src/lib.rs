@@ -122,14 +122,7 @@ pub enum ExecError {
 pub enum RunEvent {
     PhaseStarted { idx: usize, name: String },
     PhaseCompleted { idx: usize, output: PhaseOutput },
-    WorkflowDone { summary: RunSummary },
     WorkflowFailed { error: String },
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct RunSummary {
-    pub phases_run: usize,
-    pub final_output: String,
 }
 
 /// Drives a [`WorkflowSpec`] through its phases using one [`Executor`].
@@ -152,36 +145,6 @@ pub struct Engine {
 impl Engine {
     pub fn new(executor: Arc<dyn Executor>) -> Self {
         Self { executor }
-    }
-
-    /// Run every phase in order, once, then signal `WorkflowDone`. The
-    /// straight-pipeline convenience wrapper over [`run_phase_range`] — used for
-    /// workflows with no review gate. Each phase loops until the executor
-    /// reports `done` or `max_iter` is hit (so a stuck phase can't spin forever).
-    ///
-    /// The **adversarial** review loop (an Evaluator phase打回 → 重跑 → 重审) is
-    /// NOT driven here — that policy (parse the verdict, decide the reject
-    /// target, cap the rounds, park the Issue in Blocked) lives in `bw-app`,
-    /// which composes [`run_phase_range`] one round at a time so each round
-    /// leaves its own settled `workflow_run` row (plan/12 §4, T9).
-    pub async fn run_workflow(
-        &self,
-        spec: &WorkflowSpec,
-        ctx: &RunCtx,
-        mut on_event: impl FnMut(RunEvent),
-    ) -> Result<RunSummary, ExecError> {
-        let n = spec.phases.len();
-        let outputs = self
-            .run_phase_range(spec, ctx, 0..n, None, &mut on_event)
-            .await?;
-        let summary = RunSummary {
-            phases_run: outputs.len(),
-            final_output: outputs.last().map(|o| o.text.clone()).unwrap_or_default(),
-        };
-        on_event(RunEvent::WorkflowDone {
-            summary: summary.clone(),
-        });
-        Ok(summary)
     }
 
     /// Run the phases in `range` (absolute 0-based indices into `spec.phases`),
