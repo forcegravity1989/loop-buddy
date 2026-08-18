@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. **健康难造假**。健康信号灯只能被真实数据点亮:数据点(观测)只追加、不修改;信号只能从数据推导出来,不能手动设置(`Derived<Signal>` 类型是密封的,store 层根本没有 set_signal 方法)。**没有数据就显示 Unknown 灰,绝不假装绿**;数据过期自动降级;手工填的数据带「手填」徽记。干活过程自动留痕:队友战绩、产物登记、每次运行的成败与耗时、阶段吞吐指标,全部自动入账,且同一件活绝不重复记账(代码里这条约束叫 settle-once)。界面上任何数字都能用 `sqlite3` 直接查库核对。
 4. **经验复利,越用越强**。做完的 Issue 可以一键「蒸馏」成一篇带正文的技能(永远记着它来自哪件活);下次干同类活时自动注入给队友,用一次记一次。队友胜率由真实战绩算出,绝不手工设定。
 
-**反命题(防蔓延)**:不是团队协作平台(没有成员/群聊/收件箱)、不是通用看板(无拖拽/甘特;回退不给 UI)、不是审批系统(交棒只留痕不拦人)、不是云服务(AI 执行=本机 `claude` CLI,单次花费封顶);永远不替用户捏造健康。
+**反命题(防蔓延)**:不是团队协作平台(没有成员/群聊/收件箱)、不是通用看板(无拖拽/甘特;回退不给 UI)、不是审批系统(交棒只留痕不拦人)、不是云服务(AI 执行=本机 `claude` CLI,在内嵌终端里全程可见、可中止,花费由用户自己把握);永远不替用户捏造健康。
 
 ## 写作纪律(给人看的东西,先让人看得懂)
 
@@ -62,24 +62,25 @@ cargo test --workspace --exclude app-desktop   # CI 也跑:现存内联测试必
 # 行为正确性靠 E2E(深链启动 + sqlite 读回 + computer-use)+ /code-review;单元测试不是交付物
 ```
 
-**headless 实跑指挥器**(「指挥器」=不开界面、直接驱动内核走完完整生命周期的脚本):
+**headless 主环指挥器**(「指挥器」=不开界面、直接驱动内核走完完整生命周期的脚本;2026-08-18 起走的就是产品主环:建活 → 指派 → ▶跑(mock 交互执行器,项目无真实工作区)→ 代人点完成 → 蒸馏成技能 → 交棒;不碰 claude、不碰网关,重复跑不产生重复数据):
 
 ```bash
-cargo run -p bw-app --example real_demo -- <db-path> <workspaces-root> [--mock] [--only <slug>]
-./scripts/supervise-real-demo.sh <slug>   # 网关抖动期的重试监理脚本(失败自动重跑,重复跑不产生重复数据)
+cargo run -p bw-app --example real_demo -- <db-path> <workspaces-root> [--only <slug>]
 ```
 
-**环境变量**:`BW_DB`(覆盖数据库路径)· `BW_OPEN=<项目名>` + `BW_PANEL=progress|workflow|routine|artifact|version|issues`(启动深链,stderr 打 `[BW_OPEN]` 日志,是桌面渲染的可靠证明)· `BW_HUB=skill|agent|workflow|cron|connector|knowledge|activity|notify|settings` / `BW_SEL=<kind>:<uuid>`(深链到 Hub / 组件详情)· `BW_WORKSPACES` · `BW_CLAUDE_BIN` / `BW_CLAUDE_MAX_BUDGET_USD`(执行器配置)· `BW_FLOW=<command-file>`(进程内点击/断言脚本,验收流用)。
+**环境变量**:`BW_DB`(覆盖数据库路径)· `BW_OPEN=<项目名>` + `BW_PANEL=progress|workflow|routine|artifact|version|issues`(启动深链,stderr 打 `[BW_OPEN]` 日志,是桌面渲染的可靠证明)· `BW_HUB=skill|agent|workflow|cron|connector|knowledge|activity|notify|settings` / `BW_SEL=<kind>:<uuid>`(深链到 Hub / 组件详情)· `BW_WORKSPACES` · `BW_CLAUDE_BIN`(覆盖 `claude` 二进制路径)· `BW_FLOW=<command-file>`(进程内点击/断言脚本,验收流用)。
 
 ## 架构(crate 一览与数据流)
 
 ```
 bw-core     领域内核:StageKind 五阶段元数据 / Issue 状态机与合法转移表 / 度量派生链类型
             (零 IO 零 UI,必须 wasm32 可编译;默认无 idgen 特性)
-bw-engine   Executor trait + MockExecutor(可配延迟)+ ClaudeCliExecutor(shell 出 `claude -p`,
-            真实读写文件)+ InteractiveCliExecutor(交互式 `claude`;内嵌终端经 pty_backend.rs:
-            Windows conpty-oxide / macOS·Linux portable-pty)+ evidence.rs(从工作区采集
-            git/docs/测试真状态回流观测)+ github/codehub/metrics_file/connectors_file
+bw-engine   InteractiveExecutor trait:InteractiveCliExecutor(交互式 `claude`;内嵌终端经
+            pty_backend.rs:Windows conpty-oxide / macOS·Linux portable-pty)+ MockInteractiveExecutor
+            (无工作区时的自标注替身)+ workspace.rs(项目仓/issue worktree 供给)+ evidence.rs
+            (从工作区采集 git/docs/测试真状态回流观测)+ github/codehub/metrics_file/connectors_file
+            (2026-07 那条 `claude -p` 按阶段循环的旧引擎 Engine/Executor/MockExecutor/
+            ClaudeCliExecutor 已于 2026-08-18 整链删除)
 bw-store    SQLite(sqlx):schema.sql + add_column_if_missing 迁移守卫;handoff/observation 等
             只追加(append-only)表;store 无业务判断(哑存储)
 bw-app      编排大脑:App + Command/Event 总线,所有用例与守卫都在这层;E2E 的命令层主战场
@@ -88,7 +89,7 @@ app-desktop 真壳(Dioxus 0.7 hard-pin =0.7.9):kernel 桥(独立 tokio 线程)+ 
 (Web 版="以后也许":wasm32 keepalive + Store trait 留着门,仓里没有 app-web crate)
 ```
 
-数据流:UI 只发 `Command`、收 `Event`;`bw-app` 执行用例 → store 写入数据库 → `recompute_signals` 重算 → 事件流回 UI。执行器按项目热插拔:未配置真实工作区的项目走 MockExecutor(产出自我标注为演示),配置了的每次调用新建 ClaudeCliExecutor。
+数据流:UI 只发 `Command`、收 `Event`;`bw-app` 执行用例 → store 写入数据库 → `recompute_signals` 重算 → 事件流回 UI。**唯一的干活入口是 Issue 的 ▶跑**(`Command::RunIssue`):项目配了真实工作区就在 issue 自己的 git worktree 里起交互式 `claude`(内嵌终端 PTY),没配就落到 MockInteractiveExecutor(产出自我标注为演示);每次运行都写一行 `workflow_run`(开工/结清/成败/耗时/前后 git head)绑到这张 Issue。
 
 **两条不可妥协(已钉进类型与 CI)**:
 
@@ -101,13 +102,13 @@ app-desktop 真壳(Dioxus 0.7 hard-pin =0.7.9):kernel 桥(独立 tokio 线程)+ 
 
 1. **报告不代答,读回为证**。任何"已完成/数字是 X"的陈述必须能从 DB 或工作区独立复核:
    ```bash
-   sqlite3 demo-workspaces/bw-demo.db "PRAGMA table_info(issue);"     # 结构核验(demo-workspaces/ 不入库,需先跑 real_demo/监理脚本生成)
+   sqlite3 <db> "PRAGMA table_info(issue);"                           # 结构核验(演示库先用 real_demo 指挥器生成)
    sqlite3 <db> "SELECT ... "                                          # 数字一律 SQL 读回
    BW_OPEN=<项目名> BW_PANEL=issues target/debug/builders-workbench   # 深链 stderr 日志 = 渲染证明
    ```
    演示/报告里的每个数字都从真实 DB 读出,绝不硬编码(`real_demo` 的 evidence JSON 模式)。
-2. **mock 必须自我标注**。MockExecutor 路径的产出带【mock】/「流程演示」字样,文档如实注明;mock 存在的唯一目的是廉价验证管线本身,绝不冒充真实执行。
-3. **E2E 验证绝不依赖网关**。验证动作 = 临时/演示 DB + 深链启动到目标面板(stderr 见 `[BW_OPEN]` 即渲染成功、无 panic)→ `sqlite3` 读回核数 → 截图存档;必要时 computer-use 驱动交互。真实 `claude -p` 执行受 GLM 网关 529 抖动影响,只在 example/监理脚本里跑,可安全重试,**不作为常绿验证手段**。
+2. **mock 必须自我标注**。MockInteractiveExecutor 路径的产出带【mock】/「流程演示」字样,文档如实注明;mock 存在的唯一目的是廉价验证管线本身,绝不冒充真实执行。
+3. **E2E 验证绝不依赖网关**。验证动作 = 临时/演示 DB + 深链启动到目标面板(stderr 见 `[BW_OPEN]` 即渲染成功、无 panic)→ `sqlite3` 读回核数 → 截图存档;必要时 computer-use 驱动交互。真跑 `claude`(内嵌终端)受信任对话框与网关抖动影响,**不作为常绿验证手段**;`real_demo` 指挥器只走 mock 交互执行器。
 
    **内嵌终端在 macOS 上能跑(2026-08-17 起)**:▶跑 走的 `run_skill_pty` 在所有平台都有 PTY 后端(`bw-engine/src/pty_backend.rs`),不再是 Windows 专属;不碰 claude 的读回证据是 `cargo run -p bw-engine --example pty_smoke`(起 `bash -c 'echo pty-ok'` 读回)、`-- --teardown`(丢输入端后进程组被连坐)与 `-- --abort`(`abort()` 丢弃 future 后子进程照样收尾——App 的「中止」走的就是这条)。真跑 `claude` 仍受信任对话框/网关影响,不作为门禁。
 

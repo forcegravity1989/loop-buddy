@@ -179,6 +179,30 @@ iterations/                  只剩 PRACTICE-buddy.md(伙伴的实践日志,原�
 
 S1 定时任务收敛 → S2 桌面旧视图 → S3a `real_demo` 重写 + `seed_demo` 删 → S3b bw-app 命令/引擎胶水删 + `App::new` 去 `mock_engine` + 交互式运行写 `workflow_run` → S4 bw-engine 旧执行器删 → S5 store `message` DROP → S6 文档。验收:`real_demo` 新版跑出的库深链截图(Issue 看板五阶段各一张 Done、蒸馏出的技能、交棒记录),`sqlite3` 读回,`/code-review`。
 
-### 6.3 执行实录(回填)
+### 6.3 执行实录(2026-08-18 回填)
 
-(见文末追加。)
+分支 `claude/cut-legacy-engine-2026-08-18`(基于第一轮分支尖 `54dc38c`),八个 commit,每片门禁全绿(fmt / clippy -D warnings / wasm32 bw-core+ui / guard / app-desktop / cargo test)。
+
+| 片 | commit | 做了什么 | 读回证据 |
+|---|---|---|---|
+| 登记 | `d549fab` | 本节 §6.1/6.2 先登记再动手 | — |
+| S1 | `0f4428f` | `CronMode` 只剩「建活」「采集」;CronHub 表单两型;老库三种旧模式 `UPDATE … SET mode='create_issue'` | fixture 副本:2 行 run_workflow → create_issue |
+| S2 | `d9ed28b` | 桌面删 Chat/RunOutputs/RunBanner/PhaseTrack、ChatVm/MsgVm/RunVm、「⚡ 临时任务」/「确认导入·运行」/「解析正文」/「▶ 立即执行」 | 四次深链 `[BW_OPEN]`/`[BW_HUB]` 无 panic |
+| S3a | `d2b4cbf` | `real_demo` 重写成主环指挥器;删 `seed_demo`、`supervise-real-demo.sh` | fresh DB:issue done/settled 10、handoff 10、蒸馏技能 10(uses 4/3/2/0/0);重跑幂等 |
+| S3b | `5fdbcce` | 删 `workflow_engine.rs`(894 行)+ 6 命令 + 5 事件 + `PreparedRun/LoopEnd/RunOutcome/OptimizationReport/forward_progress/review_tail/run_params_snapshot/skills_prompt_block`;`App::new` 两参;**交互式运行写 `workflow_run`**(开工 record_workflow_run_start+set_run_issue,结算 Ok/Failed+heads,中止/执行器失败结 Failed,降级咨询结 Ok;resume 不开新行) | `SELECT status,count(*),sum(issue_id IS NOT NULL),sum(phases_completed) FROM workflow_run` → ok\|10\|10\|10;heads 全 NULL(mock 不编);同库重跑仍 10 行 |
+| S4 | `26805f8` | bw-engine 删 `mock.rs/contract.rs/unsupported_cli.rs`、`Engine/Executor/PhaseNode/PhaseOutput/RunEvent/RunSummary`、`ClaudeCliExecutor` 执行体;`ClaudeCliConfig` 缩成 `binary`(删预算/权限旋钮 + 设置页 + `BW_CLAUDE_MAX_BUDGET_USD`);bw-core 删裁决/解析契约(~230 行)与 `analysis.rs`(546 行) | real_demo ok\|10;`BW_HUB=settings` 深链无 panic |
+| S5 | `ea7800d` | store `DROP TABLE IF EXISTS message` 迁移 + 删 12 个无调用方法 + `MessageRow/Author/WorkflowRunAnalytics/WorkflowVersion` | 老 fixture:打开前 message 42 行 → 打开后 sqlite_master 无 message、cron 全 create_issue、session 10 行未动 |
+| 修账 | `788b80c` | 队友战绩一件活只记一次(结算记败 / Done 记胜 / 同一身份规则 `credited_agent`) | 十件 Done:每位队友 runs=1 wins=1(改前 2/2) |
+| S6 | (本 commit) | CLAUDE.md / DEVELOPMENT.md / CONTEXT.md / e2e/fixtures/README.md / BACKLOG(#1 #2 收据、新增 18-21)/ 本节 | 12 个 headless 例子逐个实跑通过;BWDev.app 深链截图:Issue 看板 5 张 Done + 定时任务自动建的 #6、技能库 21 条含蒸馏出的 `demo-linkcheck-md-prototype`(4 次使用)、设置页只剩二进制一项 |
+
+**行数(`crates/*/src`,`git ls-tree` 逐文件 `wc -l`)**:第一轮尖 `54dc38c` 45,938 → 本轮尖 41,159,**−4,779**;其中 bw-app 12,889→11,320、bw-engine 6,232→5,479、bw-core 4,951→4,081、bw-store 5,577→5,182、app-desktop 13,730→12,614、ui 2,559→2,483。`examples/` 3,546→3,207。与 main 合并基线相比两轮合计 src 46,691→41,159(−5,532)、examples 13,659→3,207(−10,452)。
+
+**与 §6.1 决定表的偏差(全是「删得比表多」)**:
+- 第 2 行说 `ClaudeCliConfig`/`PermissionMode` **留**——实际只留了 `binary`:`max_budget_usd`/`default_mode`/`commands_mode` 只被删掉的一次性执行器消费,交互式会话按设计不设单次预算、恒 `--dangerously-skip-permissions`,留着就是设置页三个不起作用的旋钮。CLAUDE.md 反命题「单次花费封顶」随之改口为「全程可见、可中止,花费由用户把握」。**这是产品口径的变化,请用户过目**。
+- 第 4 行之外补删 `PromoteWorkflow`(按钮 S2 已删,唯一其它调用方 `seed_demo` 已删)。
+- 第 1/12 行之外补删 bw-core `Verdict/PhaseOutcome/verdict_contract_suffix/parse_phase_outcome/workflow_parse_contract_suffix/parse_workflow_phases`(评审门与「解析为流程图」的机器契约)与 `analysis.rs`(优化分析层)——引擎没了,它们零读者。
+- 第 6 行之外补删 10 个 Store 方法(其中 `get_app_meta/set_app_meta/delete_workflow_spec/refresh_workflow_template_phases` 是本分支之前就已无人调用、第一轮漏删)。
+- 表外顺手修了队友战绩双记账(`788b80c`),因为 S3a 重写指挥器后 SQL 读回第一次把它暴露出来。
+- 未动:项目级 `allow_commands`(同样是死旋钮,但牵涉 project 表列删除)→ BACKLOG #20。
+
+**/code-review**:见文末「6.4 评审」。

@@ -3,20 +3,28 @@
 E2E 验收动作流(plan/15)用的种子库,不是随手攒的假数据——`demo.db` 是两步
 真实生成的产物:
 
-1. `real_demo --mock` 走完两个项目的完整五阶段环(`--mock` 只是让管线本身
-   可以廉价、无网关依赖地被验证——CLAUDE.md 纪律 3:E2E 绝不依赖网关,不是
-   伪造数据);
+1. `real_demo` 走完两个项目的完整五阶段环(mock 执行器只是让管线本身可以
+   廉价、无网关依赖地被验证——CLAUDE.md 纪律 3:E2E 绝不依赖网关,不是伪造
+   数据);
 2. `seed_fixture` 打开同一个库,对 `linkcheck-md` 项目补三张 Issue 卡——
    全部经真实 `Command`(`CreateIssue`/`TransitionIssue`)派生,状态机合法
    转移表、settle-once 记账、`settled_at` 打点全部真实触发,**没有一行是
    裸 SQL 塞进去的**。
 
+> **2026-08-18 注**:仓里这份 `demo.db` 是 2026-07-25 用当时的 `real_demo`
+> (旧 `claude -p` 引擎的 mock 路径,带 `--mock` 参数、写 `session`/`message`
+> 表)生成的,**故意不重生成**——它现在的价值正是「一份存量老库」:打开它
+> 会真实走一遍 `SqliteStore::open` 的迁移(`message` 表 DROP、cron 旧模式归并
+> 到「建活」),`verify_migration` 例子读回为证。新版 `real_demo` 已改成主环
+> 指挥器(建活 → 指派 → ▶跑 mock → 代人点完成 → 蒸馏 → 交棒,无 `--mock`
+> 参数),要一份**新式**演示库就按下面命令生成到别的路径,不要覆盖这份。
+
 ## 来源与再生成(两步,顺序不能反)
 
 ```bash
 mkdir -p e2e/fixtures
-# 第一步:五阶段环(两个项目)
-cargo run -p bw-app --example real_demo -- e2e/fixtures/demo.db "$(mktemp -d)" --mock
+# 第一步:五阶段主环(两个项目)—— 新式指挥器,不带 --mock(执行器恒为 mock)
+cargo run -p bw-app --example real_demo -- e2e/fixtures/demo.db "$(mktemp -d)"
 # 第二步:补三张 Issue(Todo/InReview/Done 各一),真 Command 播种
 cargo run -p bw-app --example seed_fixture -- e2e/fixtures/demo.db
 # 读回核验
@@ -54,7 +62,7 @@ $ sqlite3 e2e/fixtures/demo.db "SELECT number, title, settled_at, (settled_at IS
 优化→运营推广→运维→回到原型),真实交接/会话/run/信号/产物记账都在库里。
 `linkcheck-md` 额外挂了三张 Issue 卡,标题都带「【fixture】」前缀(不会被误
 当成真实待办),`workspace_path` 全程为空——两个项目、三张 Issue 卡的每一次
-`RunIssue`/剧本执行都留在 `MockExecutor` 上,不碰真实网关。可用
+`RunIssue`/剧本执行都留在 mock 执行器上,不碰真实网关。可用
 `BW_DB=e2e/fixtures/demo.db cargo run -p app-desktop` 打开核验。
 
 三张卡分别覆盖 plan/15 §4 的三个常青验收点:

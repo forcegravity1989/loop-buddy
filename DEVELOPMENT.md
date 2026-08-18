@@ -10,11 +10,12 @@ crates/
                 反模式等静态元数据)+ MaturityPeriod(时期)+ Issue 状态机与合法
                 转移表 + 度量派生链类型 + 技能规范机检 + 自带技能包正本
                 (include_str! docs/skills、docs/buddy)。零 IO 零 UI,必须 wasm32 可编译。
-  bw-engine/    Executor trait + MockExecutor(演示替身)+ ClaudeCliExecutor(shell 出
-                `claude -p`)+ InteractiveCliExecutor(交互式 `claude`,内嵌终端走
-                pty_backend.rs:Windows conpty-oxide / macOS·Linux portable-pty)+
-                evidence.rs(从工作区采集 git/docs/测试真实状态,回流成观测)+
-                github/codehub/metrics_file/connectors_file(gh/codehub CLI 与 .bw/*.toml)
+  bw-engine/    InteractiveExecutor trait:InteractiveCliExecutor(交互式 `claude`,内嵌
+                终端走 pty_backend.rs:Windows conpty-oxide / macOS·Linux portable-pty)+
+                MockInteractiveExecutor(无工作区时的自标注替身)+ workspace.rs(项目仓 /
+                issue worktree 供给)+ evidence.rs(从工作区采集 git/docs/测试真实状态,
+                回流成观测)+ github/codehub/metrics_file/connectors_file(gh/codehub CLI
+                与 .bw/*.toml)。2026-07 的 `claude -p` 按阶段循环旧引擎已于 2026-08-18 删除。
   bw-store/     SQLite(sqlx):schema.sql + add_column_if_missing 迁移守卫;
                 交棒/观测等只追加表;store 不做业务判断(哑存储)
   bw-app/       编排大脑:App + Command/Event 总线,所有用例与守卫都在这层;
@@ -42,14 +43,14 @@ cargo check -p app-desktop
 cargo test --workspace --exclude app-desktop   # CI 也跑;现存内联测试要过(见「怎么验证」)
 ```
 
-**环境变量**:`BW_DB`(数据库路径;默认 macOS `~/Library/Application Support/BuildersWorkbench/workbench.db`)· `BW_OPEN=<项目名>` + `BW_PANEL=progress|workflow|routine|artifact|version|issues`(启动深链到指定项目/面板,stderr 打 `[BW_OPEN]` 即渲染证明)· `BW_HUB=skill|agent|workflow|cron|connector|knowledge|activity|notify|settings` / `BW_SEL=skill|agent|workflow|cron|connector:<uuid>`(深链到 Hub / 组件详情)· `BW_WORKSPACES`(工作区根)· `BW_CLAUDE_BIN` / `BW_CLAUDE_MAX_BUDGET_USD`(执行器配置)· `BW_FLOW=<command-file>`(进程内点击/断言脚本,验收流用)。
+**环境变量**:`BW_DB`(数据库路径;默认 macOS `~/Library/Application Support/BuildersWorkbench/workbench.db`)· `BW_OPEN=<项目名>` + `BW_PANEL=progress|workflow|routine|artifact|version|issues`(启动深链到指定项目/面板,stderr 打 `[BW_OPEN]` 即渲染证明)· `BW_HUB=skill|agent|workflow|cron|connector|knowledge|activity|notify|settings` / `BW_SEL=skill|agent|workflow|cron|connector:<uuid>`(深链到 Hub / 组件详情)· `BW_WORKSPACES`(工作区根)· `BW_CLAUDE_BIN`(覆盖 `claude` 二进制路径)· `BW_FLOW=<command-file>`(进程内点击/断言脚本,验收流用)。
 
 ## headless 例子(不开界面直接驱动内核;每个都有现役用途)
 
 | 例子 | 干什么 | 跑法 |
 |---|---|---|
-| `real_demo` | **唯一指挥器**:走完完整五阶段生命周期(真执行或 `--mock`),产出 evidence JSON | `cargo run -p bw-app --example real_demo -- <db> <workspaces-root> [--mock] [--only <slug>]`;网关抖动期用 `./scripts/supervise-real-demo.sh <slug>` 幂等重试 |
-| `seed_demo` / `seed_fixture` | 生成/补齐 e2e 种子库(`e2e/fixtures/demo.db`) | 见 `e2e/fixtures/README.md` |
+| `real_demo` | **唯一指挥器**:两个演示项目各走一圈产品主环——每阶段建活 → 指派阶段角色 → ▶跑(mock 交互执行器,项目无真实工作区)→ 代人点「完成」→ 蒸馏成技能 → 交棒到下一阶段;产出 evidence JSON。不碰 claude、不碰网关;同库重跑幂等 | `cargo run -p bw-app --example real_demo -- <db> <workspaces-root> [--only <slug>]` |
+| `seed_fixture` | 给 e2e 种子库(`e2e/fixtures/demo.db`)补三张 fixture Issue | 见 `e2e/fixtures/README.md` |
 | `verify_migration` | 打开一份**存量**库验证 schema 迁移不崩(只开不删) | `cargo run -p bw-app --example verify_migration -- <db>` |
 | `verify_stage_catalog` | 技能五角色静态归类表自证(条数/重名/五阶段计数) | `cargo run -p bw-app --example verify_stage_catalog` |
 | `audit_skills` | 按 `plan/16` 技能规范巡检整库(`--fix` 只做台账允许的修补) | `cargo run -p bw-app --example audit_skills -- <db> [--fix]` |
