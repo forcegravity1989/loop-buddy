@@ -95,6 +95,20 @@
 4. 开工工具首批三个(Open Design / Claude CLI / Cursor)与「按类别默认」的映射,是否覆盖大家的真实工作方式?缺哪一个?
 5. leader 视图 = 纳入所有人的仓 + 项目墙,不做成员 / 权限体系——对内推广时够不够?
 
+## 11 · 评审结果与处置(2026-08-19 内部专家评审,会后补)
+
+专家的意见与会议结论已全部折进草案(第四轮),编号 待拍-24~28,一句话对应:
+
+| 专家意见 | 处置 |
+|---|---|
+| 配置里的开工工具映射去掉 agent,只留 类别 → 开工工具 → workflow;workflow 的入口就是 SOP 类的 skill,它自己调度 agent(mattpocock-skills 是完整开发工作流,grillme 只是单个 skill);buddy 带通用件,各人可导入自己的 | 映射改三列;buddy 不再维护 agent 名单,战绩记在 workflow / 技能上;配置屏 = 映射 / workflow 表 / skill 表 / 连接器 + 定时(待拍-24;预研 `research/workflow-skill-packages.md`)|
+| 计划的 Issue 卡片能不能拖,提高易用性;待办池和待办有什么区别 | 拖拽只用于排期(待办池 ⇄ 待办 = 排进 / 移出本周,列内排序),状态流转仍走按钮(▶开工要起 agent、✓完成是铁律里人显式点的那一下,拖错一下代价太大);待办池 = 未排进任何一周,待办 = 已排进本周,写在列头(待拍-25;预研 `research/kanban-drag-dioxus.md`)|
+| 总览加项目元数据「群号」;群像 codehub / GitHub 一样分内外(内部 WeLink,外部待定),工厂模式;用途:通知直达群、定计划时收上周群消息 | 名片加「项目群」;群适配按工厂,接口两个函数(发消息 / 拉历史);通知同步(评审中 / 已合入 / 发版)+ 运作活①喂上周群摘要;WeLink 收发实现由同事负责(待拍-26;预研 `research/chat-group.md`)|
+| 第 0-6 站流程要保持易用 | 新增 §3.5 每站几下的审视表:不加步骤、每站 ≤ 3 下、能自动的自动、待办带行内动作、「合入并完成」一键(待拍-28)|
+| 老项目进来,能按它千奇百怪的记录回填成 buddy 规范下的信息,总览看到过去的运作 | 运作活③多一步「历史回填」:git 历史 / 仓内文档 / 远端 issue·MR / 群历史 → 发版记录历史段、按周历史运作、章程草稿、指标候选、issue 行(来源 = 回填,不算战绩、不点灯);总览多「历史运作(回填)」块(待拍-27;预研 `research/legacy-backfill.md`)|
+
+会议整体结论:**易用性是为了推广,老项目捞回来是为了 MVP 一出组内所有项目就能纳入**;流程保持简单,后面看大家用的反馈再加。详细设计已开写:`../design/`。
+
 ## 附:全套材料
 
-高保真原型 `../hifi/index.html`(浏览器直接开,样例是 buddy 自己的仓)· 全貌草案 `../mvp-blueprint-draft.md`(+ 同名 html 审阅版)· 规范铺底模块 `../standard-module-draft.md` · 预研 `../research/`(Orca / DeepSeek Harness / codegraph)· 用户口述原文 `../intake-user-brief.md`。
+高保真原型 `../hifi/index.html`(浏览器直接开,样例是 buddy 自己的仓)· 全貌草案 `../mvp-blueprint-draft.md`(+ 同名 html 审阅版)· 规范铺底模块 `../standard-module-draft.md` · 预研 `../research/`(Orca / DeepSeek Harness / codegraph;第四轮补 workflow 技能包 / 项目群 / 老项目回填 / 看板拖拽)· 详细设计 `../design/` · 用户口述原文 `../intake-user-brief.md`。
