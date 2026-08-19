@@ -5,6 +5,7 @@
 //! 命令失败就把失败的原话放进 `Vm::note`,不假装做成了。
 
 mod vm_build;
+mod vm_panels;
 
 use crate::vm::Vm;
 use bw_v4::app::App;
