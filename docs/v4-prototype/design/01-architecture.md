@@ -112,7 +112,7 @@ crates/app-shell/
 |---|---|---|---|
 | 计划 | `ScheduleIssue{id, week_of: Option<String>}` | 排进(或移出)本周待办(设/清空 `week_of`),待拍-25「待办池⇄待办」的排进方向(设计期统一:06 篇把早期分开的 `ScheduleIssue`+`UnscheduleIssue` 合并成一条,本表据此回填) | 新 |
 | 计划 | `ReorderIssue` | 待办池/待办列内排先后,纯展示,不动状态机 | 新 |
-| 计划 | `CutRelease` | 「发版本」:选本周完成的活→填版本号→写 `docs/releases.md` 一行+可选 tag(待拍-12) | 新 |
+| 计划 | `CutRelease` | 「发版本」:选本周完成的活→填版本号→确认——建一张轻量活「发版本 vX」+分支提交 `docs/releases.md` 一行+MR(待拍-12;06 篇 §2.4 已定:`release` 表一行与可选 tag 落在这张活「合入并完成」的那一刻,不在 `CutRelease` 命令本身返回时) | 新 |
 | 计划/总览 | `TogglePreview{id: Option<IssueId>}` | 合入前预览某活 worktree 里的 `.bw/metrics.toml`/`docs/plan/`(待拍-21,形态留 06 篇;设计期统一:06 篇把早期只能「开」的 `PreviewIssueWorktree` 改成能开能关的 `TogglePreview`,本表据此改名) | 新 |
 | 计划 | `SetCurrentVersion{version}` | 切在研版本,纯本机动作,不建活(06 篇新增,本表据此回填) | 新 |
 | 计划/总览 | `IssueScheduled` / `ReleaseCut`(Event) | 排期/发版真实发生的回执 | 新 |
@@ -131,13 +131,13 @@ crates/app-shell/
 | 运作活 | `BackfillHistory{project_id}` | 单独重跑历史回填(不重跑第 1/2 步),覆盖上次带回填标记的段落(03 篇新增,本表据此回填) | 新 |
 | 运作活 | `ReconcileStandard{project_id}` | 纯读:按「缺/过期/人改过」三类对账,不建活不写仓,给知识库屏渲染用(03 篇新增,本表据此回填) | 新 |
 | 运作活 | `UpgradeStandard{project_id, files}` | 人选中要升的文件后触发升级流程,最终提 MR(03 篇新增,本表据此回填) | 新 |
-| 运作活 | `CreateAutopilotTask` 加 `auto_run: bool` | 运作活②「资产盘点与代码微重构」到点**自动建活并自动▶开工**——今天该命令(`command.rs:558-565`)只建活不跑,复用它加一个字段,不另开平行调度路径 | 改 |
+| 运作活 | `CreateAutopilotTask` 加 `auto_run: bool` | 运作活②「资产盘点」到点**自动建活并自动▶开工**(默认 mode=weekly)——今天该命令(`command.rs:558-565`)只建活不跑,复用它加一个字段,不另开平行调度路径 | 改 |
 | 运作活 | `OpsWorkflowAutoFired`(Event) | 区别于既有 `CronAutoFired`(只覆盖建活):这条标"建活+自动开工"真的发生了 | 新 |
 | 会话 | `OpenRootShell` | 打开/聚焦仓根常驻 shell 会话(待拍-11 借 Orca:不用自己开 PowerShell) | 新 |
 | 会话 | `OpenFileTab{issue_id, path}` | 右栏点文件→中栏打开只读代码视图(设计期统一:05 篇是会话屏正主,把早期的 `OpenFile{path}` 改名改签名,本表据此回填) | 新 |
 | 会话 | `OpenDiffTab{issue_id, path}` | 中栏打开该活改动文件的 diff(设计期统一:同上,05 篇把早期的 `ShowDiff` 改名改签名) | 新 |
 | 会话 | `ExpandTreeDir{issue_id, dir_path}` | 懒加载展开文件树某目录(05 篇新增,本表原缺,据此回填) | 新 |
-| 会话 | `RunIssue`/`CancelRun`/`AssignIssue`/`BlockIssue`/`TransitionIssue`/`MergeIssuePr`/`DistillSkillFromIssue`(既有)| 干活/评审/蒸馏语义不变;"按活类别选开工工具、分发到哪个 `adapters/` 模块"是新加的路由层,命令本身不变 | 沿用 |
+| 会话 | `RunIssue`/`CancelRun`/`AssignIssue`/`BlockIssue`/`TransitionIssue`/`MergeIssuePr`/`DistillSkillFromIssue`(既有)| 干活/评审/蒸馏语义不变;"按活类别选开工工具、分发到哪个 `adapters/` 模块"是新加的路由层,命令本身不变。**新增触发路径(第五轮,06 篇 §2.3 定义,待拍-25 改)**:计划屏拖一张活到进行中/评审中/已完成/阻塞列,松手弹确认框,确认后发的就是这几条既有命令——拖拽不新增命令、不绕过 `can_transition_to`,只是给这几条命令多一条触发路径(另一条是详情面板按钮),两条路径最终调用同一套用例 | 沿用 |
 | 配置 | `CreateSkill`/`UpdateSkill`/`ImportSkillPackage`/`ImportSkillLibrary`(既有)| workflow 表与 skill 表的数据来源,字段增删留 04 篇 | 沿用,字段留口 |
 | 配置 | `SetIssueWorkflow{id, workflow}` | 活详情面板换 workflow/单技能,写 `issue.workflow`(04 篇新增;字段名统一为 `workflow`——04 篇早期草案叫 `workflow_ref`,与 `issue.workflow` 列名对齐后本表据此回填) | 新 |
 | 配置 | `SaveToolMapping` | 配置屏第①段保存一行「类别→工具→workflow」映射(04 篇新增,本表据此回填) | 新 |

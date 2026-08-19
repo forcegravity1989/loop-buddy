@@ -14,7 +14,7 @@
 
 ## 1 · 用户看到什么、做什么
 
-**配置一次开工方式**:配置屏第①段「开工工具映射」是一张表——六行(原型/构建/优化/运维/运营推广/运作)三列(类别/工具/workflow)。铺底时已按规范默认值填好(原型→Open Design→原型设计 workflow;构建/优化/运维→Claude CLI→superpowers 或 mattpocock-skills 二选一;运营推广→Claude CLI→空,提示"从鱼塘挑";运作→Claude CLI→三张自建运作 workflow)。想换(比如把某类改用 Cursor),下拉选一下、保存。
+**配置一次开工方式**:配置屏第①段「开工工具映射」是一张表——六行(原型/构建/优化/运维/运营推广/运作)三列(类别/工具/workflow)。铺底时已按规范默认值填好(原型→Open Design→原型设计 workflow;构建/优化/运维→Claude CLI→**mattpocock-skills**(第五轮用户拍板改的默认,superpowers 在下拉里可换);运营推广→Claude CLI→空,提示"从鱼塘挑";运作→Claude CLI→三张自建运作 workflow)。想换(比如把某类改用 Cursor,或把默认 workflow 换回 superpowers),下拉选一下、保存。
 
 **导入一个新 workflow 包**:第②段「workflow 表」右上「导入」,三选一(本机目录/git 仓地址/从另一个项目)。buddy 探测这是不是一个「包」(有没有 `plugin.json`、`skills/` 下是不是多个技能目录),是就整包导入进表(名称/来源/入口/自带 agent 数/用过几次),不是就退回单技能、进第③段「skill 表」。猜不出入口技能就显示"未标注",可手动点一个补标。
 
@@ -87,11 +87,13 @@ capabilities = ["inject_skills"]   # 见 §2.7 开放问题
 | category | tool | workflow |
 |---|---|---|
 | prototype(原型) | open_design | 原型设计 |
-| build(构建) | claude_cli | superpowers |
-| optimize(优化) | claude_cli | superpowers |
-| maintain(运维) | claude_cli | superpowers |
+| build(构建) | claude_cli | **mattpocock-skills**(第五轮用户改定为默认;superpowers 可在活上换) |
+| optimize(优化) | claude_cli | mattpocock-skills(同构建默认;活上可换成 diagnosing-bugs/systematic-debugging 这类单技能起手) |
+| maintain(运维) | claude_cli | mattpocock-skills(同构建默认) |
 | growth(运营推广) | claude_cli | ""(无默认,活上从鱼塘挑) |
 | ops(运作) | claude_cli | ""(三张运作活各自指定,不共用一行) |
+
+**第五轮改动**:build/optimize/maintain 三个类别的默认 workflow 从 superpowers 改成 **mattpocock-skills**(用户拍板;两者都是完整开发工作流,superpowers 仍是下拉里的常规备选,不是被淘汰)。
 
 建活(既有 `Command::CreateIssue`)时按类别标签查这张表,填 `issue.tool`/`issue.workflow` 默认值,活上可再单独换。运作活①②③不查这张表,建活时由 buddy 直接指定固定 workflow 名。
 
@@ -228,7 +230,7 @@ agent 表 · agent_import.rs · CreateAgent/UpdateAgent/ImportAgentDefinition   
 
 ## 4 · 边界与失败
 
-**不做的事**:不建 agent 名单(workflow 包自己决定用哪个内置子代理,"自带 agent 数"如实显示实测的 0);不做技能市场界面(鱼塘只在配置屏走§2.8 导入,不做浏览/搜索 UI);不整体嵌 DSH(deepseek-harness 结论已定,只借三条接口判断;将来接 DSH 一类网页 agent 走新增一条 `web_embed` 声明,和接 Open Design 同一条路);不塞整包进系统提示词(§2.7 实测数字已堵死这条路)。
+**不做的事**:不建 agent 名单(workflow 包自己决定用哪个内置子代理,"自带 agent 数"如实显示实测的 0)——**用户原话定性**:agent 暂不作为单体维护,小事单技能干,大事 workflow 带着自己的 agent 与脚本干(00-handshake 第 2 条);不做技能市场界面(鱼塘只在配置屏走§2.8 导入,不做浏览/搜索 UI);不整体嵌 DSH(deepseek-harness 结论已定,只借三条接口判断;将来接 DSH 一类网页 agent 走新增一条 `web_embed` 声明,和接 Open Design 同一条路);不塞整包进系统提示词(§2.7 实测数字已堵死这条路)。**workflow 自己产的文档不额外管**(第五轮用户拍板,待拍-10 改):mattpocock-skills、superpowers 这类业界包物化进项目仓后,会往仓里写自己的东西(研究笔记、领域模型、决策记录……),这些内容与 buddy 规范的知识库天然有重叠——**MVP 不过度设计**,规范只约束 buddy 自己必需的基础限制(PROJECT.md/AGENTS.md、`.bw/*`、`docs/plan/`、`docs/releases.md`),workflow 自产的目录不管、不收编、不搬家;知识库「知识」页签把它们当普通仓内文档树展示;运作活②(资产盘点)盘点时只登记不整理;第一版试点实践后再看要不要收编。
 
 **失败如实显示,不假装**:工具未装(探活失败)→ 灰态+"怎么装→",不隐藏该行;导入的目录/仓不满足判据 A/B → 如实按单技能导入并提示"看起来不是 workflow 包";`issue.workflow` 名字解析不到 → 如实跳过、不记账、不错记,活照常能开工;Open Design 打开通用首页而非本活 worktree(§2.7 开放问题)→ 中栏标注"未定位到本活工作区(设计中)";Cursor 今天 `supported=false` → 下拉里仍出现,选中后▶开工如实报错"Phase 1 仅 Claude CLI",不从下拉里拿掉。
 

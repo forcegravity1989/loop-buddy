@@ -1,6 +1,6 @@
 # 09 · 运作活的 workflow 剧本
 
-> **30 秒导读**:这篇写三张「运作活」(buddy 自己发起的标准动作,不是用户的业务需求)各自的 workflow(技术上讲是一份 SKILL.md 入口 + 支撑文件的技能包,agent 读它决定怎么干活)剧本——触发条件、给 agent 塞什么材料、SKILL.md 长什么样、agent 和人什么时候说话、干出什么、怎么保证只能停在「评审中」、干砸了怎么办、大概多久。三张:①「更新指标 + 制定本周计划」②「资产盘点与代码微重构」③「规范铺底」(本篇只写其中需要 agent 的两步:合并调整、历史回填)。也管这三份 workflow 在 `standard/` 放哪、版本怎么钉、和已有的 `north-star-discovery`/`metrics-binding` 两份技能怎么合并、系统提示词要不要加一句。给复核设计的用户、下一步写代码的会话、接手运作活这块的同事看。**现在作数吗**:详细设计稿,待用户复核,尚未开工写代码。与母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md))冲突时以母文档为准。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本文不新开代号系列,分步骤一律写「第 N 步」。
+> **30 秒导读**:这篇写三张「运作活」(buddy 自己发起的标准动作,不是用户的业务需求)各自的 workflow(技术上讲是一份 SKILL.md 入口 + 支撑文件的技能包,agent 读它决定怎么干活)剧本——触发条件、给 agent 塞什么材料、SKILL.md 长什么样、agent 和人什么时候说话、干出什么、怎么保证只能停在「评审中」、干砸了怎么办、大概多久。三张:①「更新指标 + 制定本周计划」②「资产盘点」(第五轮改名,原叫「资产盘点与代码微重构」;范围 = 仓内全部资产,微重构不再由它动手,只出建议活草稿;老项目历史回填是它的**首次模式**,见 2.2/2.3)③「规范铺底」(本篇只写其中需要 agent 的一步:合并调整)。也管这三份 workflow 在 `standard/` 放哪、版本怎么钉、和已有的 `north-star-discovery`/`metrics-binding` 两份技能怎么合并、系统提示词要不要加一句。给复核设计的用户、下一步写代码的会话、接手运作活这块的同事看。**现在作数吗**:详细设计稿,待用户复核,尚未开工写代码。与母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md))冲突时以母文档为准。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本文不新开代号系列,分步骤一律写「第 N 步」。
 
 ---
 
@@ -8,7 +8,7 @@
 
 **管**:对应母文档 §2.5、§2.6、第 0/2-3/6 站,[standard-module-draft.md](../standard-module-draft.md) 第 7 类。具体是三张运作活各自的触发判据、五层渐进加载之上额外注入什么、入口 SKILL.md 节标题与每节要求、对话节点(首/中/尾)、产出(仓文件·库行·MR)、如何保证最远只到「评审中」、失败与边界、一次会话大概多久多少轮(标「估计」)。也管三张运作 workflow 在 `standard/` 的正本位置、版本怎么随 `standard/VERSION` 走、与 `docs/skills/north-star-discovery`、`docs/skills/metrics-binding` 的合并关系、buddy 系统提示词(第 0 层)要不要加一句。
 
-**不管**:运作活③完整三步(第 1 步 buddy 写模板不起 agent、老项目历史探测判据、三层流水线里"buddy 先算数、agent 只抄"的架构)是 [03-standard-and-backfill.md](03-standard-and-backfill.md) 的事(已成稿,本篇 2.3/3.2 与它对齐、有分歧处以它为准),本篇只写第 2/3 步需要 agent 的两个 SKILL.md 怎么写、怎么停在评审中;计划屏的看板拖拽、「预览·未合入」切换是 [06-plan-screen.md](06-plan-screen.md) 的事(已成稿,本篇不重复);总览「本周运作」栏、历史运作(回填)块怎么渲染是 [08-overview-derivation.md](08-overview-derivation.md) 的事(已成稿,本篇只引用结论);项目群适配工厂实现是 [07-notify-and-chat-group.md](07-notify-and-chat-group.md) 的事(已成稿),本篇只消费它产出的「上周群摘要」文件;开工工具注册、workflow 识别与导入、技能战绩记账机制是 [04-tools-and-workflows.md](04-tools-and-workflows.md) 的事(已成稿,本篇 3.4 记账口径与它对齐);数据模型表结构以 [02-data-and-files.md](02-data-and-files.md) 为正本,本篇第 3 节只引用列名——**设计期统一:战绩以 02 篇 `workflow_credit` 台账表为事实源(04 篇已同步改写),本篇 §3.4 写清挂载点**。
+**不管**:运作活③第 1 步(buddy 写模板不起 agent)、老项目历史探测判据是 [03-standard-and-backfill.md](03-standard-and-backfill.md) 的事(已成稿,本篇 2.3/3.2 与它对齐、有分歧处以它为准),本篇只写运作活③里需要 agent 的一步「合并调整」怎么写、怎么停在评审中——**第五轮改动**:「历史回填」不再是运作活③自己的一步,它是运作活②「资产盘点」workflow 的**首次模式**(见 2.2/2.3,三层流水线"buddy 先算数、agent 只抄"的架构仍全盘采纳 03 篇 §2.4,本篇只改"这套架构挂在哪个 workflow 包下面");计划屏的看板拖拽、「预览·未合入」切换是 [06-plan-screen.md](06-plan-screen.md) 的事(已成稿,本篇不重复);总览「本周运作」栏、历史运作(回填)块怎么渲染是 [08-overview-derivation.md](08-overview-derivation.md) 的事(已成稿,本篇只引用结论);项目群适配工厂实现是 [07-notify-and-chat-group.md](07-notify-and-chat-group.md) 的事(已成稿),本篇只消费它产出的「上周群摘要」文件(**只喂给运作活①,运作活②/③都不读群历史**);开工工具注册、workflow 识别与导入、技能战绩记账机制是 [04-tools-and-workflows.md](04-tools-and-workflows.md) 的事(已成稿,本篇 3.4 记账口径与它对齐);数据模型表结构以 [02-data-and-files.md](02-data-and-files.md) 为正本,本篇第 3 节只引用列名——**设计期统一:战绩以 02 篇 `workflow_credit` 台账表为事实源(04 篇已同步改写),本篇 §3.4 写清挂载点**。
 
 ---
 
@@ -16,9 +16,9 @@
 
 周一(或任何时候)Builder 打开总览,若本周还没有 `docs/plan/YYYY-Www.md`,顶部有横幅「本周还没有计划 → 开始本周」。点一下,buddy 建运作活①、跳到会话屏自动 ▶开工——agent 先复盘上周,再把绑不上数据的指标接上最便宜的采集路径,最后和人一起敲定这周要干的几张活。人不写周目标,只在开头点「开始本周」、结尾看草稿改几个字、点「确认」——buddy 真建这几张活(本地+远端都有),`.bw/metrics.toml` 和计划文件走一个 MR,人再点合入、点完成,一次会话约二三十分钟。
 
-周五晚八点(默认,可改)buddy 自己建运作活②、自己开工——盘点这周新增文档有没有登记、代码里有没有该清理的死码或过长文件,写份盘点报告追加进计划文件、提个 MR,人下周一打开总览时它已经停在「评审中」。
+周五晚八点(默认,可改)buddy 自己建运作活②「资产盘点」、自己开工——盘点这周仓内**全部资产**:文档、产物、技能与 workflow 登记、`docs/plan/`/`docs/releases.md` 齐不齐、规范对账、指标数据新不新鲜、代码图大文件榜,写份盘点报告追加进计划文件、提个 MR;发现可做可不做的代码微重构(死码、格式、命名、该拆的大文件),**不再直接动手**,只列成「建议活」草稿(类别「优化」),人下周一打开总览时报告已经停在「评审中」,评审报告、合入、点完成的同时勾选要建的建议活。
 
-项目第一次接入(或老项目重铺规范)时人只填两张卡片——若是老仓,buddy 接着自动起一次 agent 会话,把 buddy 约定合进已有文件、把能找到的历史整理成带「回填」标记的文档,一个 MR 全带上,人评审、合入、点完成——总览多出「历史运作(回填)」块,老项目瞬间有了和新项目一样的骨架。
+项目第一次接入(或老项目重铺规范)时人只填两张卡片——若是老仓,buddy 接着自动起一次 agent 会话,把 buddy 约定合进已有文件;若仓有历史,同一张活再多一步——起**运作活②「资产盘点」workflow 的首次模式**,把能找到的历史整理成带「回填」标记的文档(第五轮定性:老项目历史回填就是资产盘点第一次跑,以后每周跑的是同一个 workflow 的增量模式),一个 MR 全带上,人评审、合入、点完成——总览多出「历史运作(回填)」块,老项目瞬间有了和新项目一样的骨架。
 
 三张活共同的体感:**agent 干活的过程始终看得见,人可以随时插话、随时点停;但推进到「完成」永远是人自己点的那一下**,不管是不是自动建、自动开工。
 
@@ -40,7 +40,7 @@
 > - **第一步·复盘上周**:读上一周 `docs/plan/` 与 `docs/releases.md`;没有上一周文件就如实说明「首次制定周计划,无历史可复盘」,不假装有数据;只读不改。
 > - **第二步·更新指标**:调用子技能 `metrics-refresh`(合并自 north-star-discovery/metrics-binding,见 2.4)——补缺的引领/滞后、给绑不上的找最便宜采集路径、改 `.bw/connectors.toml`、跑一次采集;绝不伪造观测、绝不为点亮改指标定义。改动先不提交,和第四步合成一次提交。
 > - **第三步·引导出本周**:结合指标现状、代码现状(codegraph)、上周记录(及群摘要),交流出周目标一句 + 业务活草稿(每张:标题/说明/类别/预期推动的指标/建议工具与 workflow)。**不许自己下结论**——写完草稿必须停下,等待人明确的确认信号才能进第四步。
-> - **第四步(需人确认后才能做)·落文件**:写入 `.bw/metrics.toml`/`docs/plan/YYYY-Www.md`/`docs/metrics.md`,正常提交,`gh pr create`(允许)/`gh pr merge`(禁止,与所有 Issue 共用铁律一致),把 PR 地址打屏。
+> - **第四步(需人确认后才能做)·落文件**:写入 `.bw/metrics.toml`/`docs/plan/YYYY-Www.md`/`docs/metrics.md`,`docs/plan/YYYY-Www.md` 里除周目标、业务活清单外新增一段**「本周指标读数」**(第五轮新增,待拍-29:每个已绑定的引领/滞后指标各一行——数字 · 来源 · 采集时间,把这一步刚更新完的指标现状抄一份进周计划文件,随 MR 进仓,让别人打开仓就能看到数,不用装 buddy 或连库);正常提交,`gh pr create`(允许)/`gh pr merge`(禁止,与所有 Issue 共用铁律一致),把 PR 地址打屏。
 > - **DoD**:三份文件结构合法;改动是活分支真实提交;仍 Unknown 的指标有诚实说明。
 > - **常见坑**:把「引导」做成「代写」;跳过复盘直接进第三步;给绑不上的指标编假 query。
 
@@ -54,7 +54,7 @@
 | 尾(确认建活) | 「已确认,建 N 张活并提 MR」 | 说「确认」 | 不许自己 merge |
 | 尾(评审,属第 5 站)| — | 看 diff、合入、完成 | — |
 
-**产出**:仓——`.bw/metrics.toml`/`.bw/connectors.toml`(若新增采集)/`docs/metrics.md`/新建 `docs/plan/YYYY-Www.md`;库——运作活①本身一行(`kind='ops'`/`origin='human'`/`workflow='更新指标与周计划'`)+ 每张确认业务活各一行(`origin='agent_split'`,待拍-08)+ `issue_metric`/`week_plan` 索引行;MR——一个,标题「周计划 2026-Www」,挂在运作活①上。
+**产出**:仓——`.bw/metrics.toml`/`.bw/connectors.toml`(若新增采集)/`docs/metrics.md`/新建 `docs/plan/YYYY-Www.md`(含新增的「本周指标读数」段,待拍-29);库——运作活①本身一行(`kind='ops'`/`origin='human'`/`workflow='更新指标与周计划'`)+ 每张确认业务活各一行(`origin='agent_split'`,待拍-08)+ `issue_metric`/`week_plan` 索引行;MR——一个,标题「周计划 2026-Www」,挂在运作活①上。
 
 **停在评审中怎么保证**:会话收尾走既有 `finalize_run_interactive`(`issue_run.rs`)→ `open_pr`(`github.rs`,codehub 走 `create_mr`)——暂存+提交+推送+开 PR;若 agent 已自己跑过 `gh pr create`,遇「already exists」诚实认领(`adopt_existing_pr`)不重复开。随后 hook 的 `Stop` 事件触发 `poll_interactive_inreview`,探测到分支有开着的 PR 就推 `InReview`——这是「评审中」的**唯一**来源,`Done` 仍须人手动 `TransitionIssue`。
 
@@ -64,80 +64,76 @@
 
 ---
 
-### 2.2 运作活②「资产盘点与代码微重构」
+### 2.2 运作活②「资产盘点」(第五轮改名,含首次模式 = 老项目历史回填)
 
-**触发与判据**:**定时**,默认每周五 20:00(`.bw/issue-policy.toml` 的 `[cadence] ops2_schedule`,可改),`tick_scheduler` 到点自动建 issue(`origin='auto'`)**并自动 ▶开工**——三张里唯一不需要人点一下才开工的一张。前提 buddy 当时在运行;错过不需要额外补建逻辑——`cron_due` 本来就是「到点即算数」,下次启动的第一次 tick 天然补建。
+**改动说明(第五轮,用户拍板)**:原名「资产盘点与代码微重构」改为「资产盘点」——范围从「文档+代码」扩到仓内**全部资产**;代码微重构不再由这个 workflow 直接动手,只产出「建议活」草稿,人勾选才真建。老项目历史回填(原设计里挂在运作活③下的独立子技能)**改为这个 workflow 的首次模式**——同一个 workflow 包 `asset-audit`,读一个 `mode` 参数:`mode=weekly`(默认,定时触发)只盘这一周的变化;`mode=first`(接入老项目时,由运作活③第 3 步或 `BackfillHistory` 命令触发一次)全量回填历史。两种模式**共用同一份 SKILL.md 入口**,第一步先判断 `mode`,后续步骤按模式分支——不是两份文档、两套战绩挂载点。
 
-**注入清单**:第 0 层系统提示词、第 1 层 `AGENTS.md`、第 2 层本活技能 `asset-audit`、第 3 层规范第 3 类「目录与知识结构」件+第 6 类「默认件与鱼塘」件、第 4 层 `PROJECT.md`+本周 `docs/plan/`(盘点报告要追加进去)+codegraph 索引。**②排除**项目群摘要——内部盘点不需要「上周群里聊了什么」。
+**触发与判据**:两条触发路径,读同一个 workflow:
+- **`mode=weekly`(默认)**:**定时**,默认每周五 20:00(`.bw/issue-policy.toml` 的 `[cadence] ops2_schedule`,可改),`tick_scheduler` 到点自动建 issue(`origin='auto'`)**并自动 ▶开工**——三张运作活里唯一不需要人点一下才开工的一张。前提 buddy 当时在运行;错过不需要额外补建逻辑——`cron_due` 本来就是「到点即算数」,下次启动的第一次 tick 天然补建。
+- **`mode=first`**:铺底(运作活③)探测到仓有历史时,不再是"运作活③自己的一步",而是另起一次会话跑这个 `asset-audit` workflow、传 `mode=first`(触发机制细节见 2.3 与 3.2);也可以事后单独由 `BackfillHistory{project_id}` 命令重跑——**这条命令名字不变,但语义收窄为"给 `asset-audit` workflow 传一次 `mode=first`",不是另开一条独立流水线**(03 篇 §2.4 的三层流水线架构原样适用,只是现在挂在这个 workflow 包下面)。**`mode` 怎么传**:不新增 `Command::RunIssue` 字段(04 篇已定该命令签名不变)——写进这张②活自己的说明(body)里一句结构化文字(如 `mode: first`),复用既有"活的说明进初始 prompt"机制,`asset-audit` SKILL.md 第一步读自己的 issue 说明即可判断模式;定时触发建的②活恒为 `mode: weekly`(不写也是默认值)。
+
+**注入清单**:第 0 层系统提示词、第 1 层 `AGENTS.md`、第 2 层本活技能 `asset-audit`(含 `mode` 参数)、第 3 层规范第 3 类「目录与知识结构」件+第 6 类「默认件与鱼塘」件(`mode=first` 额外注入 03 篇 §2.4 描述的本机 evidence 文件,不进仓不进库,同「上周群消息摘要」待遇)、第 4 层 `PROJECT.md`+本周 `docs/plan/`(盘点报告要追加进去)+codegraph 索引。**②排除**项目群摘要——不管哪种模式都不读群历史,内部盘点/历史回填都不需要「群里聊了什么」(母文档 §2.6 用户四问第 2 条已定,03 篇 §4 同步排除)。
 
 **入口 SKILL.md 大纲**:
 
-> `name: asset-audit` · `description: 盘点文档产物登记、找该清理的死码/超长文件,小范围微重构后提 MR` · `category: 运作`
+> `name: asset-audit` · `description: 盘点仓内全部资产(mode=weekly)或回填老项目历史(mode=first),找该清理的东西只写建议、不动手改` · `category: 运作`
 >
-> - **何时用**:只由定时触发,**这次会话很可能无人在场**,不要假设有人立刻回应终端。
-> - **第一步·盘点文档**:`docs/plan/`、`docs/releases.md` 是否齐全,新增文档是否登记进知识库资产页。
-> - **第二步·盘点默认件**:对照 `.bw/managed.toml` 指纹,检查规范件版本是否落后;只记录差异**不擅自升级**。
-> - **第三步·找大文件**:`codegraph files -j` 找超行数上限的文件。**不做「零调用者就当死码删」**——`codegraph` 对 `dyn Trait` 分发看不见,会误判;疑似未使用的只写进报告不动手删。
-> - **第四步·小范围微重构**:只做格式/命名/经反复核实安全的死码清理,**范围限定 `docs/`、`.bw/` 与小范围代码**;需要动业务逻辑或公开接口签名的一律只写建议。
-> - **第五步·写盘点报告**:追加进本周 `docs/plan/` 尾段;没有可重构的东西是正常结果,如实写「无」不硬造改动。
-> - **第六步**:提交+MR,打屏(多半没人看,仍要打)。
-> - **DoD**:报告确实追加;若有代码改动,范围可用 `git diff --stat` 核对确实限定在声明范围内。
-> - **常见坑**:把「疑似未使用」升级成删除而未反复核实;报告写空话;无人应答就卡住等待——**没人在场按"能做的先做、拿不准写进报告"推进**。
+> - **何时用**:`mode=weekly` 只由定时触发,**这次会话很可能无人在场**,不要假设有人立刻回应终端;`mode=first` 只由运作活③探测到历史、或 `BackfillHistory` 命令触发,一个项目通常只跑一次。
+> - **第一步·判断模式**:读传入的 `mode`。`weekly` 走下面第二至五步;`first` 转到 03 篇 §2.4 的三层流水线(buddy 先算 evidence → agent 只读文本填产物 → 人确认),产出五项(发版记录历史段、`docs/plan/history.md`、PROJECT.md 草稿、指标候选、回填的 issue 行),细节以 03 篇为准,本处不重复。
+> - **第二步(`mode=weekly`)·盘点仓内全部资产**:①文档——`docs/plan/`、`docs/releases.md` 是否齐全,新增文档是否登记进知识库资产页;②产物与技能/workflow——新增的有没有登记;③规范对账——对照 `.bw/managed.toml` 指纹,检查规范件版本是否落后、有没有人改过,只记录差异**不擅自升级**;④指标数据新鲜度——哪些指标超过保鲜期没有真实观测;⑤代码图大文件榜——`codegraph files -j` 找超行数上限的文件。**不做「零调用者就当死码删」**——`codegraph` 对 `dyn Trait` 分发看不见,会误判;疑似未使用的只写进报告不动手删。
+> - **第三步(`mode=weekly`)·把可做可不做的代码微重构列成建议活,不动手**:格式/命名/疑似死码/该拆的大文件这类"可做可不做"的改动,**不在这个 workflow 里直接改代码**——每条整理成一张「建议活」草稿(标题、说明、类别「优化」、`origin='agent_split'`),连同盘点报告一起进这次的 MR 说明,人在周一评审时勾选要建的,勾选的那些才真的调 `CreateIssue` 建成正式活;需要动业务逻辑或公开接口签名的一律只写建议、连草稿都不生成。
+> - **第四步(`mode=weekly`)·写盘点报告**:追加进本周 `docs/plan/` 尾段;没有可重构的东西是正常结果,如实写「无」不硬造改动。
+> - **第五步**:提交+MR,打屏(多半没人看,仍要打)。
+> - **DoD**:`mode=weekly` 时报告确实追加、建议活草稿都在 MR 说明里、这个 workflow 自己没有直接改动业务代码(`git diff --stat` 应只见格式/命名类小改动或完全没有代码改动);`mode=first` 时 DoD 见 03 篇。
+> - **常见坑**:把「疑似未使用」直接删掉而不是先写成建议活;报告写空话;把微重构悄悄做了却不在 MR 说明里说清楚它是"这次自己动手改的"还是"一条建议";无人应答就卡住等待——**没人在场按"能做的先做、拿不准写进报告"推进**。
 
 **对话节点表**(与①最大不同:不能假设人在场):
 
 | 时刻 | agent 说什么 | 人做什么 | 不许什么 |
 |---|---|---|---|
-| 首(定时触发) | 「本周运作」栏出现「已自动开工」 | 通常不在场,随时能点进看 | — |
-| 中(自主推进) | 逐步播报盘点结果,拿不准写进报告 | 若在场可插话 | 不许因无人应答卡住不推进 |
-| 尾(周一评审) | — | 看报告/diff、合入、完成 | 不属于本次会话 |
+| 首(定时触发,或运作活③/`BackfillHistory` 传 `mode=first`) | 「本周运作」栏出现「已自动开工」(`mode=weekly`)或总览显示「历史回填进行中」(`mode=first`)| 通常不在场,随时能点进看 | — |
+| 中(自主推进) | 逐步播报盘点结果,拿不准写进报告;`mode=weekly` 遇到可微重构的地方只说"已列为建议活" | 若在场可插话 | 不许因无人应答卡住不推进;`mode=weekly` 不许直接动业务代码 |
+| 尾(周一评审) | — | 看报告/diff、合入、完成、勾选要建的建议活 | 不属于本次会话 |
 
-**产出**:仓——盘点报告(追加进 plan 尾段)+微重构改动(若有);库——运作活②一行(`origin='auto'`/`workflow='资产盘点与微重构'`)、定时触发记录;MR——一个,通常周一才被看到。
+**产出**:仓——`mode=weekly`:盘点报告(追加进 plan 尾段)+ 建议活草稿(写进 MR 说明,不直接落库)+ 极小范围微重构改动(若有,限定格式/命名);`mode=first`:见 03 篇五项产物。库——运作活②一行(`origin='auto'`,`workflow='资产盘点'`)、定时触发记录(`mode=weekly`)或历史回填相关 issue 行(`mode=first`,`origin='backfill'`);人勾选建议活草稿后才新增业务活行(`origin='agent_split'`,类别「优化」)。MR——一个,`mode=weekly` 通常周一才被看到,`mode=first` 见 03 篇「一个 MR 与人介入」。
 
-**停在评审中**:与①同一条机制(`finalize_run_interactive` → `open_pr` → hook `Stop` → `poll_interactive_inreview` 推 `InReview`)——自动开工与人工开工用同一条交互式执行器和状态机通路,没有特殊待遇。
+**停在评审中**:与①同一条机制(`finalize_run_interactive` → `open_pr` → hook `Stop` → `poll_interactive_inreview` 推 `InReview`)——自动开工与人工开工用同一条交互式执行器和状态机通路,没有特殊待遇,两种模式同样适用。
 
-**失败与边界**:工作区不可用 → 如实跳过不建活,`cron_run` 记 `Failed`;无东西可重构 → 报告写「无」;agent 中途断 → 停 `InProgress` 可重试。
+**失败与边界**:工作区不可用 → 如实跳过不建活,`cron_run` 记 `Failed`;无东西可重构 → 报告写「无」;agent 中途断 → 停 `InProgress` 可重试;`mode=first` 的失败与边界以 03 篇 §4 为准,不重复。
 
-**时长与轮次(估计)**:约 10-25 分钟,人机对话通常 0 轮。
+**时长与轮次(估计)**:`mode=weekly` 约 10-25 分钟,人机对话通常 0 轮;`mode=first` 差异大,见 2.3 节「历史回填」原有的估计段(03 篇/legacy-backfill.md 已提示大仓可能明显更长)。
 
 ---
 
-### 2.3 运作活③「规范铺底」——agent 的两步:合并调整、历史回填
+### 2.3 运作活③「规范铺底」——agent 的一步:合并调整(历史回填已改到 2.2)
 
-三步整体流程(判据、探测逻辑、第 1 步无 agent 的模板写入)属于 [03-standard-and-backfill.md](03-standard-and-backfill.md)(已成稿),本节只写第 2/3 步需要 agent 的部分,消费 03 篇「已探测到需要合并调整」「已探测到仓有历史」两个判据结果,并把 03 篇 §2.3/§2.4 给的任务清单写成本篇统一的剧本格式。
+三步整体流程(判据、探测逻辑、第 1 步无 agent 的模板写入)属于 [03-standard-and-backfill.md](03-standard-and-backfill.md)(已成稿),本节只写第 2 步需要 agent 的部分,消费 03 篇「已探测到需要合并调整」的判据结果,把 03 篇 §2.3 给的任务清单写成本篇统一的剧本格式。**第五轮改动**:原来的第 3 步「历史回填」不再是运作活③自己的一个子技能——探测到仓有历史时,运作活③改为**触发运作活②「资产盘点」workflow、传 `mode=first`**(见 2.2),复用同一份 `asset-audit` SKILL.md,不是本篇另起一份剧本;03 篇 §2.4 描述的三层流水线架构原样成立,只是挂载的 workflow 包换了。
 
-**触发与判据**:人填两卡完成接入 → buddy **自动建**一次性运作活③(`RunStandardBootstrap`,`origin='auto'`——建活本身是 buddy 做的,虽由表单提交间接触发)。第 1 步(写模板)不起 agent,直接由 Rust 代码完成。**仅当探测到已有手写 README/CLAUDE.md/AGENTS.md** 才追加起一次 agent 会话跑「合并调整」;**仅当探测到仓有历史**(提交/标签/远端 issue·MR/CHANGELOG/群)才追加「历史回填」。两者都不需要时运作活③由第 1 步收尾,本节不适用。
+**触发与判据**:人填两卡完成接入 → buddy **自动建**一次性运作活③(`RunStandardBootstrap`,`origin='auto'`——建活本身是 buddy 做的,虽由表单提交间接触发)。第 1 步(写模板)不起 agent,直接由 Rust 代码完成。**仅当探测到已有手写 README/CLAUDE.md/AGENTS.md** 才追加起一次 agent 会话跑「合并调整」(本节剧本);**仅当探测到仓有历史**(提交/标签/远端 issue·MR/CHANGELOG)才**另起**一次 `asset-audit(mode=first)` 会话(2.2 节剧本,不在本节重复)。两者都命中时先合并调整、再资产盘点首次模式(回填要读的仓内文档可能含合并后的 AGENTS.md),两次会话的改动最终合成同一个 MR(见「产出」)。都不需要时运作活③由第 1 步收尾,本节不适用。
 
-**注入清单**:第 0 层系统提示词;第 1 层尚在写入的 `AGENTS.md` 模板草案;第 2 层本活技能 `standard-bootstrap-agent`(入口)+ 按需子技能 `merge-adjust`/`history-backfill`;第 3 层规范第 2 类「agent 工作约定」件+第 3 类「目录与知识结构」件;第 4 层(合并调整独有)已有 README/CLAUDE.md/AGENTS.md 原文,(历史回填独有)buddy 预先算好的本机 evidence 文件+仓内 README/CHANGELOG/RELEASES 原文——**不含项目群历史**:03 篇 §4 已明确群历史只喂给运作活①生成本机摘要,和历史回填这条产线不搭界。
+**注入清单**:第 0 层系统提示词;第 1 层尚在写入的 `AGENTS.md` 模板草案;第 2 层本活技能 `merge-adjust`;第 3 层规范第 2 类「agent 工作约定」件+第 3 类「目录与知识结构」件;第 4 层已有 README/CLAUDE.md/AGENTS.md 原文。
 
 **入口 SKILL.md 大纲**:
 
-> `name: standard-bootstrap-agent` · `description: 规范铺底里需要 agent 的部分——合并已有文件、回填老项目历史`
->
-> - **何时用**:只由 `RunStandardBootstrap` 在探测为真时调用。第 1 步已在同一分支提交过,本技能继续提交,**最终只开一个 MR**。
-> - 探测到已有手写文件 → 调用子技能 `merge-adjust`。
-> - 探测到仓有历史 → 调用子技能 `history-backfill`。两者都命中时**先合并调整,再历史回填**(回填要读的仓内文档可能含合并后的 AGENTS.md)。
-> - **DoD**:两个子技能各自 DoD 都满足;改动在同一分支提交历史里,最终一次开 PR(或被第 1 步的直接 MR 收编,见 §3)。
-
 > `name: merge-adjust` · **合并调整**(任务清单抄自 03 篇 §2.3)——①读现有 `AGENTS.md`;没有就看 `CLAUDE.md`,再没有就看 `README.md` 里类似"开发约定"的章节。②**合并原则,不是拼接不是覆盖**:已有内容一字不删、一段不改;buddy 固定章节(读什么/活怎么做/指标怎么碰/禁止事项/代码图怎么用)插在**靠前位置**(标题之后、原文之前),不追到文件末尾——很多 agent 工具按上下文预算截断长文件,强约束必须优先被读到;标题字面撞车时不覆盖原标题,buddy 版本标题后缀"(buddy 补充)"插入,MR 说明里提醒人核对;项目自定义段(模板第 8 段)原样保留。③`CLAUDE.md` 单独处理:不存在只写一行 `@AGENTS.md`;空壳/纯导入行换成标准写法;有实质内容就在最前插入导入行+分隔说明,原内容后移不删。④agent 不判断"合并得对不对"(人评审的事),只把每个文件按哪种情况处理的写进 MR 说明草稿。**DoD**:原有内容一字未删、七类固定内容都在。**常见坑**:把"合并"做成"覆盖";把原有历史说明当冲突强行改写;追加到文件末尾而非靠前插入。
 
-> `name: history-backfill` · **历史回填**——**三层流水线**(架构抄自 03 篇 §2.4,agent 只担第 2 层):第 1 层 buddy 主机代码在起 agent **之前**把能算的都算完,写成本机 evidence 文件(不进仓不进库,用完即弃,同"上周群摘要"待遇)——git 本地(提交总数、首末提交日、作者分布、标签、双亲结构判定的合入记录、近 8-10 个 ISO 周提交数/合入数/目录 Top3)、远端(open+closed issue、merged PR/MR,探不通就只留本地部分,不阻塞)。**agent 不跑 git/gh 命令、不自己数数**,任务说明写明「数字照抄 evidence,不一致以脚本为准」;agent 只做:①从 README 首段填 PROJECT.md「想做什么」(仅当原字段待填);②尽力解析 CHANGELOG/RELEASES,不出来的留空;③把 evidence 数字原样填进产物表格;④把仓里已有的量整理成指标候选,标"候选,不绑定"。第 3 层"人确认"不归 agent——北极星、对标、「在研版本」起点这类推不出来的字段原样留空等人。落产物(位置抄 03 篇五项表):`docs/releases.md`「历史运作(回填)」节、`docs/plan/history.md`(新文件,顶部一行"累计贡献者:N 位")、PROJECT.md 草稿补空字段、指标候选(**写进 MR 说明或 `docs/metrics.md` 候选小节,不直接写 `.bw/metrics.toml`**)、`issue` 行(`origin='backfill'`)。**防伪**:合入记录按双亲结构不按文字匹配;远端 MR/PR 计数与本地合并提交计数分开报;无标签无 CHANGELOG 就写"未发现",不拿 commit 日期倒推版本号;批量关闭不当活跃信号,只提示不改数字。**DoD**:每个数字对应 evidence 里的复算命令、没数据是诚实的空、`origin=backfill` 照远端映射。**常见坑**:agent 自己跑 git 命令而不读 evidence;回填候选直接写进正式定义;把回填数据当可点灯的真实观测。
+历史回填的 SKILL.md 大纲(`asset-audit` 的 `mode=first` 分支)见 2.2 节,本节不重复。
 
 **对话节点表**:
 
 | 时刻 | agent 说什么 | 人做什么 | 不许什么 |
 |---|---|---|---|
 | 首(自动触发) | 总览显示"规范铺底进行中" | 通常不在场 | — |
-| 中(合并/回填播报) | 「检测到已有 AGENTS.md,正在合并……」;远端未认证如实说明 | 可旁观 | 不许删除原有说明、不许编造远端数据 |
-| 尾(评审) | — | 一次性看完整个 MR、合入、完成 | — |
+| 中(合并调整播报) | 「检测到已有 AGENTS.md,正在合并……」 | 可旁观 | 不许删除原有说明 |
+| 尾(评审) | — | 一次性看完整个 MR(可能含 `asset-audit(mode=first)` 那次会话的改动)、合入、完成 | — |
 
-**产出**:仓——合并后的 AGENTS.md/CLAUDE.md/README(若适用)、`docs/releases.md` 历史段、`docs/plan/history.md`、PROJECT.md 草稿更新、`docs/metrics.md` 回填候选小节;库——远端 issue 同步行(`origin='backfill'`,状态照远端,不进战绩,见 §3.4)、`release` 行(`origin='backfill'`);MR——一个,覆盖模板+合并调整+历史回填全部。
+**产出**:仓——合并后的 AGENTS.md/CLAUDE.md/README(若适用);库——本节不产生 `origin='backfill'` 的行(那是 2.2 节 `asset-audit(mode=first)` 的产出)。MR——一个,若同时命中「合并调整」与「历史回填(资产盘点首次模式)」,两次会话的改动最终合并进同一个 MR(第 1 步写模板 → 合并调整 → 资产盘点首次模式,三段提交同一条分支,合入前统一由「一次性开 PR」的既有机制收口,不产生两个通知)。
 
-**停在评审中怎么保证**:**先有一个例外**——探测为"空仓/buddy 自己的仓"(`probe.owned`,03 篇 §2.2)时,第 1 步直接在当前分支提交+推送,不开 PR,走「确认完成(人裁)」既有路径,不适用"停在评审中"这条(这类仓通常也不会命中第 2/3 步的探测条件)。其余情况:第 1 步文件先提交在 `bw/issue-<n>` 分支上**先不开 PR**;若命中第 2/3 步,agent 在同一分支继续提交,全部写完后由 `open_bootstrap_pr`(§3,若无 agent 步骤)或会话收尾的 `finalize_run_interactive` → `open_pr`(若有 agent 步骤)一次性开 PR,遇「already exists」→ `adopt_existing_pr` 认领不重复开——复用既有「提 PR 幂等」设计,避免评审者收到"先看一半"的两次通知。之后同样靠 hook/轮询推 `InReview`。
+**停在评审中怎么保证**:**先有一个例外**——探测为"空仓/buddy 自己的仓"(`probe.owned`,03 篇 §2.2)时,第 1 步直接在当前分支提交+推送,不开 PR,走「确认完成(人裁)」既有路径,不适用"停在评审中"这条(这类仓通常也不会命中合并调整/历史回填的探测条件)。其余情况:第 1 步文件先提交在 `bw/issue-<n>` 分支上**先不开 PR**;若命中合并调整和/或资产盘点首次模式,agent 在同一分支继续提交,全部写完后由 `open_bootstrap_pr`(§3,若无 agent 步骤)或会话收尾的 `finalize_run_interactive` → `open_pr`(若有 agent 步骤)一次性开 PR,遇「already exists」→ `adopt_existing_pr` 认领不重复开——复用既有「提 PR 幂等」设计,避免评审者收到"先看一半"的两次通知。之后同样靠 hook/轮询推 `InReview`。
 
-**失败与边界**:仓太大(万级提交)→ 只精细统计最近 N 周,更早给累计数字;CHANGELOG 解析不出来 → 留空;无 tag 无 CHANGELOG(如 buddy 自己的仓)→ 历史段照实写「未发现」;agent 中途断 → 停 `InProgress` 可重试。
+**失败与边界**:合并调整会话如实停在"进行中"、可重试;资产盘点首次模式(历史回填)的失败与边界以 2.2 节/03 篇 §4 为准,不重复。
 
-**时长与轮次(估计)**:差异大。纯合并调整约 10-20 分钟;历史回填小仓约 10-15 分钟,大仓(万级提交)可能明显更长(legacy-backfill.md §6 已提示按周统计可能跑到分钟级),具体数字留试点验证。人机对话通常 0 轮。
+**时长与轮次(估计)**:纯合并调整约 10-20 分钟,人机对话通常 0 轮;历史回填(资产盘点首次模式)的估计见 2.2 节末尾。
 
 ---
 
@@ -151,11 +147,10 @@ standard/06-defaults/ops/
 ├── week-planning/
 │   ├── SKILL.md                  # 入口①
 │   └── skills/metrics-refresh/SKILL.md  # 子技能,合并自 north-star-discovery+metrics-binding
-├── asset-audit/SKILL.md          # 入口②
+├── asset-audit/SKILL.md          # 入口②——读 mode 参数分支:weekly(默认,每周)/ first(老项目历史回填,
+│                                  #   第五轮改动:原挂在③下的「历史回填」子技能并进这里,不再单独存在)
 └── standard-bootstrap-agent/
-    ├── SKILL.md                  # 入口③(需要 agent 的部分)
-    ├── merge-adjust/SKILL.md
-    └── history-backfill/SKILL.md
+    └── merge-adjust/SKILL.md     # 入口③需要 agent 的唯一一步(第五轮改动:history-backfill 已迁出,见 asset-audit)
 ```
 
 铺底(运作活③第 1 步)时把整棵目录物化进项目仓的 `.claude/skills/`,带 `.bw-managed` 标记,与规范第 6 类既有约定一致。
@@ -183,10 +178,11 @@ standard/06-defaults/ops/
 | 活 | `kind` | `origin` | `tool` | `workflow` |
 |---|---|---|---|---|
 | ①更新指标 + 制定本周计划 | `ops` | `human` | `claude_cli` | `更新指标与周计划` |
-| ②资产盘点与代码微重构 | `ops` | `auto` | `claude_cli` | `资产盘点与微重构` |
+| ②资产盘点(`mode=weekly`) | `ops` | `auto` | `claude_cli` | `资产盘点` |
+| ②资产盘点(`mode=first`,老项目历史回填)| `ops` | `auto` | `claude_cli` | `资产盘点` |
 | ③规范铺底 | `ops` | `auto` | `claude_cli`(仅追加 agent 步骤时才有一次交互式会话)| `规范铺底` |
 
-① 引导出的每张业务活各自是独立 `issue` 行(`kind='business'`,`origin='agent_split'`,待拍-08);③ 探测到远端已有 issue 回填成的行 `origin='backfill'`,与运作活③本身这张 `kind='ops'` 行是两回事。
+① 引导出的每张业务活各自是独立 `issue` 行(`kind='business'`,`origin='agent_split'`,待拍-08);②`mode=weekly` 里人勾选的建议活同样是 `origin='agent_split'`、类别「优化」;探测到远端已有 issue 回填成的行 `origin='backfill'`(第五轮改动:这条来自②的 `mode=first`,不再是③自己产的),与运作活②/③本身这两张 `kind='ops'` 行是两回事。
 
 ### 3.2 触发命令(伪码,未拍板)
 
@@ -209,34 +205,52 @@ pub async fn start_week_planning(&mut self, project_id: ProjectId) -> Result<Iss
 }
 
 // ②tick_scheduler 新分支:复用 CronMode::CreateIssue 的 autopilot_fire,只加一行——
-// 建完立刻当作"已▶开工"分发,不另开一条"无人值守执行器"
+// 建完立刻当作"已▶开工"分发,不另开一条"无人值守执行器"。mode 默认 weekly,
+// 定时触发只走这一条分支,不涉及 mode=first。
 if c.mode == CronMode::CreateIssue && c.auto_run {
     let issue_id = self.autopilot_fire(pid, &c.name, stage, c.issue_assignee.as_deref(), now_ts).await?;
     self.store.set_issue_kind_origin(issue_id, IssueKind::Ops, IssueOrigin::Auto).await?;
-    self.store.set_issue_workflow(issue_id, "资产盘点与微重构").await?;
+    self.store.set_issue_workflow(issue_id, "资产盘点").await?;
+    // mode 不进 Command::RunIssue 签名(04 篇已定该命令「签名不变」)——写进这张
+    // issue 自己的说明(body)里一句结构化文字("mode: weekly"),复用既有"活的
+    // 说明进初始 prompt"机制,asset-audit SKILL.md 第一步读自己的 issue 说明即可
+    // 判断模式,不新增命令字段。定时触发这里恒为 weekly。
     self.dispatch(Command::RunIssue { id: issue_id, session: None }).await?;
     self.emit(Event::OpsWorkflowAutoFired { id: c.id, issue_id, ok: true });
 }
 
-// ③第 1 步无 agent,buddy 直接写模板;是否追加 agent 步骤由探测结果分三支。
-// 函数名与探测结构体照抄 03 篇 §3.1/§3.2(probe/BootstrapProbe 已在那边定义,
-// 本篇不重复设计、不再自造 write_standard_template/detect_existing_docs 这类名字)。
+// ③第 1 步无 agent,buddy 直接写模板;是否追加 agent 步骤由探测结果分两条独立分支——
+// 合并调整(运作活③自己的一步)与历史回填(改为触发运作活②同一个 asset-audit
+// workflow、传 mode=first,不是运作活③的子技能)。函数名与探测结构体照抄 03 篇
+// §3.1/§3.2(probe/BootstrapProbe 已在那边定义,本篇不重复设计)。
 pub(crate) async fn run_standard_bootstrap(&mut self, p: ProjectId) -> Result<(), AppError> {
     let probe = bw_engine::standard_bootstrap::probe(&workspace).await;
     let issue_id = self.create_ops_issue(p, &title_for(&probe), &body_for(&probe)).await?;
     self.write_standard_core_files(p, &probe).await?; // 第1步,同步,不起 agent
     if probe.owned {
         // 空仓例外:直推,走"确认完成(人裁)"既有路径,不开 PR(03 篇 §3.2)
-    } else if probe.has_agent_docs || probe.has_history {
-        // 有 agent 步骤(合并调整/历史回填其一或两者):复用运作活②同一条
-        // "自动▶开工"能力(auto_start_run,底层即 01 篇 CreateAutopilotTask{auto_run}),
-        // 起交互式会话跑 standard-bootstrap-agent,条件调用两个子技能(见 2.3);
-        // 收尾走既有 finalize_run_interactive → open_pr,"already exists" 时诚实认领。
-        self.auto_start_run(issue_id).await?;
     } else {
-        // 两条探测都为假:没有 agent 步骤,buddy 直接开 PR——评审中靠下次
-        // 兜底轮询探测到(没有 hook Stop 事件可触发)
-        self.open_bootstrap_pr(p, issue_id).await?;
+        // 合并调整与历史回填各自独立判断是否需要,命中的按顺序在同一分支继续提交
+        // (先合并调整、再资产盘点首次模式,见 2.3),都不命中则直接开 PR。
+        let need_agent_step = probe.has_agent_docs || probe.has_history;
+        if need_agent_step {
+            // 复用运作活②同一条"自动▶开工"能力(auto_start_run,底层即 01 篇
+            // CreateAutopilotTask{auto_run}),同一分支内按需依次起两次交互式会话:
+            if probe.has_agent_docs {
+                self.auto_start_run_with_skill(issue_id, "merge-adjust").await?;   // 2.3 节
+            }
+            if probe.has_history {
+                // 不是"标准铺底"自己的技能——起同一个 asset-audit workflow(2.2 节),
+                // 把 mode: first 写进这张②活自己的说明(body)里(同上,不加命令字段),
+                // 复用同一个 workflow 包,不是另开一条平行流水线。
+                self.auto_start_run_with_skill(issue_id, "asset-audit").await?;
+            }
+            // 收尾走既有 finalize_run_interactive → open_pr,"already exists" 时诚实认领。
+        } else {
+            // 两条探测都为假:没有 agent 步骤,buddy 直接开 PR——评审中靠下次
+            // 兜底轮询探测到(没有 hook Stop 事件可触发)
+            self.open_bootstrap_pr(p, issue_id).await?;
+        }
     }
     Ok(())
 }
@@ -254,8 +268,8 @@ pub(crate) async fn run_standard_bootstrap(&mut self, p: ProjectId) -> Result<()
 
 - 挂载点不变,复用既有「同一件活绝不记两次」的判定——`dispatch.rs` 的 `TransitionIssue` Done 边(`newly_done`)与 run 失败两处(`finalize_run_interactive`)。
 - 记账主体从"按 `issue.assignee` 找 agent"换成"按 `issue.workflow` 名字解析出 `skill_package` 或裸 `skill` 行"(找不到就如实记「名字对不上,不记账」,不错记到别的行),向 `workflow_credit` 插入一行(`subject_kind`='workflow'|'skill')。
-- ①「更新指标与周计划」记在同名 `skill_package` 对应的一行 `workflow_credit`(`subject_kind='workflow'`)上;③「规范铺底」用到的 `merge-adjust`/`history-backfill` 若各自是独立技能(未打包)则各自记一行(`subject_kind='skill'`),若归在 `standard-bootstrap-agent` 同一个包里则整包记一行(04 篇 §2.9:「包被物化时成员技能 `uses` 各自 +1,但只有包本身在 `workflow_credit` 上记一行」)。
-- 回填出的业务 issue(`origin='backfill'`)Done 边直接跳过记账(04 篇 §2.9「回填的活不进战绩」);运作活③自己(`kind='ops'`)是真实 agent 会话跑出来的,正常记账。
+- ①「更新指标与周计划」记在同名 `skill_package` 对应的一行 `workflow_credit`(`subject_kind='workflow'`)上;②「资产盘点」不论 `mode=weekly` 还是 `mode=first` 都记在同一个 `skill_package`(名字仍是"资产盘点")的一行上——两种模式是同一个包,不因模式不同拆成两行;③「规范铺底」用到的 `merge-adjust` 若是独立技能(未打包)则单独记一行(`subject_kind='skill'`),若归在 `standard-bootstrap-agent` 包里则整包记一行(04 篇 §2.9:「包被物化时成员技能 `uses` 各自 +1,但只有包本身在 `workflow_credit` 上记一行」)。
+- 回填出的业务 issue(`origin='backfill'`)Done 边直接跳过记账(04 篇 §2.9「回填的活不进战绩」);运作活②③自己(`kind='ops'`)是真实 agent 会话跑出来的,正常记账——**唯一例外**是②的 `mode=first` 那次会话本身产生的是 `origin='backfill'` 的**业务** issue 行(历史回填出的老 issue),这些行跳过记账,但②这张 `kind='ops'` 活自己完成时仍正常记账,两者不要混。
 
 ---
 
@@ -264,9 +278,9 @@ pub(crate) async fn run_standard_bootstrap(&mut self, p: ProjectId) -> Result<()
 **不做什么**:
 
 - **自动完成**——三张活不管触发方式,最远只能到「评审中」,`Done` 永远需人手动 `TransitionIssue`/`MergeIssuePr`。
-- **运作活②对业务代码大改**——范围硬限定 `docs/`、`.bw/` 和"小范围"代码重构,需动业务逻辑或公开接口签名的一律只写建议不动手。
+- **运作活②(`mode=weekly`)直接改业务代码**——第五轮改动:连"小范围重构"也不再由它动手,可做可不做的改动(死码、格式、命名、该拆的大文件)一律只产出「建议活」草稿,人勾选才真建;它自己在这次会话里的改动范围只有盘点报告本身(追加进 `docs/plan/` 尾段)。
 - **运作活①替人写周目标、不确认就建活**——第三步做完必须停下等确认,第四步只在收到确认后才执行。
-- **群消息进库**——①的上周摘要是本机文件参考,读完即用,不落库不落仓,与健康信号无关;③探测第 3 步要不要跑时,"项目群已配置"只是五个判据之一(03 篇 §2.1),群历史本身不作为回填内容的输入源(03 篇 §4 已排除)。
+- **群消息进库**——①的上周摘要是本机文件参考,读完即用,不落库不落仓,与健康信号无关;探测要不要追加②的 `mode=first`(历史回填,第五轮改动:不再是"运作活③第 3 步",而是触发②同一个 workflow)时,"项目群已配置"只是五个判据之一(03 篇 §2.1),群历史本身不作为回填内容的输入源(03 篇 §4 已排除),`mode=weekly`/`mode=first` 都不读群历史。
 
 **失败如实(汇总,逐活细节见 §2)**:
 
@@ -275,7 +289,7 @@ pub(crate) async fn run_standard_bootstrap(&mut self, p: ProjectId) -> Result<()
 | 采集脚本失败(①)| 对应指标保持灰,`docs/metrics.md` 写明原因 |
 | 远端 issue 建失败(①确认建活)| 本地行仍建、标"未同步",不阻塞其余 |
 | 定时触发但工作区不可用(②)| 如实跳过不建活,`cron_run` 记 `Failed` |
-| 远端未认证(③历史回填)| 只完成 git 本地部分,远端字段留空 |
+| 远端未认证(②`mode=first` 历史回填)| 只完成 git 本地部分,远端字段留空 |
 | agent 中途断(通用)| 停 `InProgress`,`settled_at` 留空,可重试 |
 | MR 开不出来(通用)| 停原状态,不假装到了「评审中」|
 
@@ -290,18 +304,20 @@ pub(crate) async fn run_standard_bootstrap(&mut self, p: ProjectId) -> Result<()
 | ①判据生效 | 连续调用两次 `StartWeekPlanning`(mock)| 第二次返回 `WeekPlanAlreadyExists` |
 | ①产出文件 | `test -f <workspace>/docs/plan/<本周>.md && echo ok` | `ok` |
 | ①业务活挂 workflow | `sqlite3 <db> "SELECT kind,origin,workflow,week_of FROM issue WHERE project_id='<pid>' AND kind='ops' AND workflow='更新指标与周计划';"` | 一行,`origin='human'` |
-| ②定时自动建+自动开工 | 手动调 `tick_scheduler`(时间戳设到 `ops2_schedule` 之后)| 新建 issue id;`sqlite3 <db> "SELECT status FROM issue WHERE id='<id>';"` 不是 `Todo` |
-| ②盘点报告落地 | `grep "运作活②盘点尾段" <workspace>/docs/plan/<本周>.md` | 命中 |
-| ③三张活最远评审中 | `sqlite3 <db> "SELECT workflow,status,settled_at FROM issue WHERE project_id='<pid>' AND kind='ops';"` | 三行,`status` 落在 `InReview`(或更早的失败态),`settled_at IS NULL` |
+| ②定时自动建+自动开工(`mode=weekly`)| 手动调 `tick_scheduler`(时间戳设到 `ops2_schedule` 之后)| 新建 issue id;`sqlite3 <db> "SELECT status FROM issue WHERE id='<id>';"` 不是 `Todo`;`workflow='资产盘点'` |
+| ②盘点报告落地(`mode=weekly`)| `grep "运作活②盘点尾段" <workspace>/docs/plan/<本周>.md` | 命中 |
+| ②微重构只出建议活、不直接改代码 | 跑完一次 `mode=weekly`,`git diff --stat`(该次会话分支)| 除 `docs/plan/` 尾段外无业务代码改动;MR 说明里能看到建议活草稿列表 |
+| ②首次模式(历史回填)与③挂在同一个 workflow | `sqlite3 <db> "SELECT workflow FROM issue WHERE kind='ops' AND origin='auto' ORDER BY created_at;"` | 出现历史回填那一行时 `workflow='资产盘点'`,不是「规范铺底」也不是别的名字 |
+| 三张运作活最远评审中 | `sqlite3 <db> "SELECT workflow,status,settled_at FROM issue WHERE project_id='<pid>' AND kind='ops';"` | 每行 `status` 落在 `InReview`(或更早的失败态),`settled_at IS NULL` |
 | Done 只能人点 | 跑完①②③,不手动调 `TransitionIssue` | `sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE kind='ops' AND settled_at IS NOT NULL;"` 为 `0`,直到显式调用才变化 |
-| ③回填不进战绩 | 回填前后各查一次 `sqlite3 <db> "SELECT COUNT(*) FROM workflow_credit WHERE subject_kind='workflow' AND subject_id=(SELECT id FROM skill_package WHERE name='规范铺底');"` | 两次数字相同——插入 `origin='backfill'` 的 issue 行本身不触发 §3.4 的记账挂载点 |
+| ②`mode=first` 回填不进战绩 | 回填前后各查一次 `sqlite3 <db> "SELECT COUNT(*) FROM workflow_credit WHERE subject_kind='workflow' AND subject_id=(SELECT id FROM skill_package WHERE name='资产盘点');"` | 两次数字相同——插入 `origin='backfill'` 的 issue 行本身不触发 §3.4 的记账挂载点 |
 | 深链截图 | `BW_OPEN=<项目名> BW_PANEL=session BW_SEL=issue:<id>` | stderr `[BW_OPEN]` 日志 + 截图存进 `docs/v4-prototype/` |
 
 ---
 
 ## 6 · 开放问题(≤5)
 
-1. **母文档与 03 篇在"群历史算不算回填原料"上不一致,不是本篇能填的空**——母文档 §2.6 把群历史列为回填四种原料之一,但 03 篇 §4 已明确写"群历史不进仓不进库——只用于给运作活①生成本机摘要,和历史回填这条产线不搭界",[legacy-backfill.md](../research/legacy-backfill.md) 也早把它划出预研范围。本篇 2.3 按 03 篇写(回填不碰群历史),但母文档这处措辞需要用户确认要不要一并更新,避免下次有人照母文档字面另起一条产线。
+1. ~~母文档与 03 篇在"群历史算不算回填原料"上不一致~~ **已定(第五轮,00-handshake 第 4 条「回填不主动喂群历史」)**:母文档 §2.6/第 0 站现已改成三种原料(git 本地历史、仓内文档、远端 issue/MR)并明确排除群历史,与 03 篇 §4、本篇 2.2/2.3 口径一致,不用再改。
 2. ~~02 篇 `workflow_credit` 表与 04 篇 `skill_package`/`skill` 战绩列口径不一致~~ **已定(设计期统一)**:以 02 篇 `workflow_credit` 台账表为事实源,04 篇已同步改为「配置屏读数由 SQL 现算,不存 runs/wins/win_rate 列」,见 §3.4。
 3. **`north-star-discovery`/`metrics-binding` 旧文件的迁移时机**——同一次改动删除还是先并存一个版本周期,按「不为向后兼容留旧路径」倾向前者,落地顺序留实现时的 commit 拆分决定。
 4. **系统提示词是否真要加 2.4 建议的那一句**——具体措辞是否合适、是否采纳,需用户确认。

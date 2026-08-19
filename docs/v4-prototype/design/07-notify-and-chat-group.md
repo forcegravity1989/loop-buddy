@@ -128,7 +128,7 @@ Builder 平时不会主动点开「通知」——左栏「通知」入口的徽
 - **容错**:`fetch_history` 拿到 `HistoryUnsupported`/`NotConfigured` 都安静跳过,不阻塞运作活①,只是少一份参考。
 - **摘要格式**:按天分组,每条一行 `HH:MM 昵称 文本`;去表情与图片(图片类占位「[图片]」,不整条丢弃);长度设上限(数字留第 6 节拍,原则「宁可截断也别比周计划本身还长」)。
 - **住哪**:本机文件,不进仓不进库,与 claude/Cursor 路径同一层;用完可删。
-- **怎么喂**:作为第 4 层项目知识旁的参考件,和 `docs/plan/`、`.bw/metrics.toml`、codegraph 索引一起注入;注入时机由 [09-ops-workflows.md](09-ops-workflows.md) 引用本篇。
+- **怎么喂**:作为第 4 层项目知识旁的参考件,和 `docs/plan/`、`.bw/metrics.toml`、codegraph 索引一起注入;注入时机由 [09-ops-workflows.md](09-ops-workflows.md) 引用本篇。**`fetch_history`/群摘要只喂给运作活①这一张活**(确认:00-handshake 第 4 条「回填不主动喂群历史」)——运作活②「资产盘点」不论 `mode=weekly` 还是 `mode=first`(老项目历史回填)都不调用 `fetch_history`,03/09 两篇已按此口径写,本篇不重复。
 - **隐私边界**:只做参考,**不做数据点、不点灯**——健康信号只从真实观测推导;发言人可脱敏,不落库不进仓,用完即焚。
 
 ### 2.9 给同事的对接说明
@@ -214,6 +214,7 @@ pub fn for_project(provider: &str, group_id: &str) -> Box<dyn ChatGroup> {
 - **群里点按钮改活状态**——违反「完成永远人点」铁律,不给群消息任何改状态的权力。
 - **多群**——一个项目一个群,不做多群路由。
 - **正式实现除 WeLink 外的任何一家**——飞书/Slack/企业微信/钉钉/Teams 只是预研用来抽公共接口的调研对象,工厂位「外部待定」先占着。
+- **buddy 侧自己实现 WeLink**——`crates/bw-engine/src/chat/welink.rs` 里 `send`/`fetch_history`/`probe` 三个函数的真实实现由内部同事**增量补**(00-handshake C1),buddy 这边(本篇+ 09 篇)只定 trait、工厂位、mock/none 两个可跑实现,以及 2.9 节给同事的对接说明——**试点不依赖 WeLink 真实跑通**(00-handshake C2:试点连不到 codehub 就用 buddy 自己的仓,同样地,项目群这条线试点期可以全程只用 `mock`/`none` 验证 buddy 侧调用链,WeLink 真实凭证到位后再补验)。
 - **企业微信「会话内容存档」这类合规重型方案**——门槛高且定位是企业合规监管,不作为拉历史的备选路径。
 - **通知屏自己的收件箱语义**(标记已读、批量已读、归档)——2.3 已论证,待处理段不需要,事件流段只要一个极轻的「看到哪个时间点」时间戳。
 

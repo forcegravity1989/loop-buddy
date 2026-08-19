@@ -54,7 +54,7 @@
 
 **项目自有 / 蒸馏技能**:查 `skill` 表 `project_id=当前项目`,按 `distilled_from_issue` 是否为空分两组(空=项目自己导入,非空=蒸馏出来的;见 [04 篇](04-tools-and-workflows.md) §2.6——`package_id` 非空的成员随所属 workflow 在下一区块列,不重复)。蒸馏技能带「来源活」链接,点击触发 `OpenDistillSource`,跳到会话屏定位当初蒸馏它的那张活。
 
-**workflow**:查 `skill_package` 表(`project_id=当前项目 OR project_id IS NULL`),列名称 / 来源(`builtin`/`imported`)/ 入口技能 / 用过几次(`runs`)/ 胜率(`win_rate`,永远现算不手写)。buddy 自建的三张运作 workflow(更新指标与周计划 / 资产盘点与微重构 / 规范铺底)混在同一张表里,来源显示 `builtin`,不单独开区块——它们和业务 workflow 是同一张表、同一套字段。
+**workflow**:查 `skill_package` 表(`project_id=当前项目 OR project_id IS NULL`),列名称 / 来源(`builtin`/`imported`)/ 入口技能 / 用过几次(`runs`)/ 胜率(`win_rate`,永远现算不手写)。buddy 自建的三张运作 workflow(更新指标与周计划 / 资产盘点(含首次模式=历史回填) / 规范铺底)混在同一张表里,来源显示 `builtin`,不单独开区块——它们和业务 workflow 是同一张表、同一套字段。
 
 **产物登记**:查既有 `artifact` 表(`crates/bw-store/src/schema.sql` 已有,V4 不改结构),列路径 / 类型 / 字节数 / 登记时 git commit / 关联的活。这张表今天已是「活推 Done 边自动写入」的记账表,V4 只是从旧的独立「产物面板」搬进这一页签。
 

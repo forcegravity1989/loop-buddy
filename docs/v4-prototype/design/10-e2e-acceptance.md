@@ -28,7 +28,7 @@
 |---|---|---|---|---|
 | 两份周计划文件在仓里 | `ls <ws>/docs/plan/*.md`(排除 history.md)| ≥2 个 `YYYY-Www.md`,含「周目标」「业务活」两节 | 06篇§5 | 只追加 |
 | 两轮运作活①在库 | `SELECT week_of,status FROM issue WHERE kind='ops' AND workflow='更新指标与周计划' ORDER BY week_of` | ≥2 行,week_of 不同,均 done 或 in_review | 09篇§5-3 | 人点完成 |
-| 两轮运作活②在库 | `SELECT week_of,status,origin FROM issue WHERE kind='ops' AND workflow='资产盘点与微重构'` | ≥2 行,origin='auto' | 09篇§5-4/6 | 到点真触发 |
+| 两轮运作活②在库 | `SELECT week_of,status,origin FROM issue WHERE kind='ops' AND workflow='资产盘点'` | ≥2 行,origin='auto' | 09篇§5-4/6 | 到点真触发 |
 | 至少一次发版记录 | `SELECT version,released_at,origin FROM release WHERE origin='human'` + `tail <ws>/docs/releases.md` | 库与仓各≥1 行,对应一致 | 06篇§5 | 绝不记两次 |
 
 以上读回命令均跑在真实仓上,有对应 `git log` 提交,不是口头声称。
@@ -105,7 +105,7 @@ cargo run -p bw-app --example real_demo_v4 -- <db-path> <workspaces-root> [--pro
 | 3-4 | 开始本周①、确认建活 | `StartWeekPlanning`(mock 代替真实对话,产出固定草稿标【mock】)+ 指挥器代人确认(明写"脚本代人确认")| `week_plan` 出现本周,`test -f docs/plan/<周>.md`;`issue WHERE week_of='<周>' AND origin='agent_split'` 有行 | "当前周无文件"天然幂等,重跑返回 `WeekPlanAlreadyExists`;建活按标题幂等 |
 | 5-6 | 一张业务活▶开工、推评审中、完成 | `RunIssue`(未配工作区,天然落 MockInteractiveExecutor,标【mock】);未配远端不会真开 PR,指挥器代人推 InReview 再推 Done(同 `real_demo` 步骤④模式,明写),即既有"无PR→人点确认完成(人裁)"路径 | `issue.status`;`settled_at` 非空且只一次 | 按状态判断是否重跑,天然幂等 |
 | 7 | 发版本 | `CutRelease`(选步骤6完成的活,版本号取 current_version 或首次 v0.1)| 代人推完成后 `release` 表出现一行 | 按版本号幂等 |
-| 8-9 | 定时触发运作活②、项目群 mock outbox | 手动调 `tick_scheduler`(时钟设到 `ops2_schedule` 之后);`chat_provider='mock'`,步骤6/7各触发一次 `SyncNotifyToChat` | `issue WHERE workflow='资产盘点与微重构'`;`chat_outbox` 事件行 | origin='auto' 且 status 非 Todo(证明真自动开工);部分唯一索引物理保证不重发 |
+| 8-9 | 定时触发运作活②、项目群 mock outbox | 手动调 `tick_scheduler`(时钟设到 `ops2_schedule` 之后);`chat_provider='mock'`,步骤6/7各触发一次 `SyncNotifyToChat` | `issue WHERE workflow='资产盘点'`;`chat_outbox` 事件行 | origin='auto' 且 status 非 Todo(证明真自动开工);部分唯一索引物理保证不重发 |
 | 10 | evidence 导出 | 全部真实读回写一份 JSON,不手写数字 | `cat evidence-v4-<slug>.json` | 每次重跑覆盖同名文件 |
 
 **四条取舍**:①工作区用 buddy 仓浅拷贝(`git clone --local` 到临时目录)而非空仓——2b 要读真实 git 历史验证"防伪规则",数字可对照[样本](../research/legacy-backfill-sample-buddy.md)。②不真开 MR(CLAUDE.md 纪律3)——"开MR才能进评审中"的步骤退化成既有"无PR→人点确认完成(人裁)"路径并代人推进明写;真远端完整合入链路只手动验证一次,不进指挥器(见§4)。③重复跑不产生重复数据——项目按名字、Issue 按标题、周计划按 `week_plan_exists`、发版按版本号,`workflow_credit`/`chat_outbox` 靠数据库唯一约束兜底,同 `real_demo` 幂等纪律。④evidence JSON 不手写数字,是§2.1 多条读回的现成来源。
@@ -120,7 +120,7 @@ cargo run -p bw-app --example real_demo_v4 -- <db-path> <workspaces-root> [--pro
 
 ### 2.4 试点两周计划
 
-前提:§8-1"一个真实内部项目"、§8-7"至少一个内部老仓"由用户在试点前指定(母文档"点名四个之一,用户在内部选",这篇未列候选,见§6)。
+前提:**§8-1 的主试点项目已定(第五轮,00-handshake C2)——buddy 自己的仓(GitHub),不连 codehub**(开发环境连不到 codehub 就用自己;codehub 项目的接入留给内部试用时验,不阻塞这两周)。§8-7"至少一个内部老仓"仍需用户在试点前指定(buddy 自己的仓已经是一个有效的历史回填样本,03 篇 §5 已跑过,但母文档 §8-7 要求"另找≥1 个真内部老仓重复验证,证明逻辑不是只对 buddy 仓调好的",这条人选未定,见§6)。
 
 | 周 | 谁做 | 每天做什么 | 出问题记哪 |
 |---|---|---|---|
@@ -164,6 +164,8 @@ async fn export_evidence(store: &S, p: ProjectId, out: &Path); // 10
 ## 4 · 边界与失败
 
 **不做什么**:不真跑 `claude` 当门禁——`real_demo_v4` 全程 mock,真跑只在试点由人手动做(§2.4)。不依赖网关——指挥器不配真实远端,"开MR"步骤走既有诚实退化路径,WeLink 同理只手动验证一次。不做单元测试大坝——总表全是行为级 E2E,`app-shell` 与 `app-desktop` 同等不要求写 UI 单测。不假装 UI 测试——"界面看到了什么"一律要求深链+`[BW_OPEN]`+截图。不在这篇重新定义任何一篇的判据,有问题回对应那篇改;§8-7/8-8"真实环境"部分如实标注"未验证过"。
+
+**数据库在本机(第五轮,00-handshake B2/待拍-29,§8-4 验收的前提说明)**:§8-4"第二台 buddy 纳入同一仓"验收的是**仓与远端 issue 的一致性**,不是库同步——库本身是**本机**的(SQLite,只做记账与推导,不是云服务),多人看同一个项目时,每人各自的库只含自己机器上发生过的运作(运行记录、战绩、本机采集/手填的观测值),两台机器的 health 灯可能因此不同(各自数据各自算),这不是 bug;项目仓内文件(`docs/plan/`、`docs/releases.md`、`.bw/*`)才是共享正本,§8-4 的"两台总览一致"验收的是**从同一份仓 + 远端 issue 能重算出一致的名片/指标定义/计划**,不是"两台库的原始数据一模一样"。**MVP 不做远端库、不做库同步**——运作活①把「本周指标读数」段(02 篇模板已加)写进周计划文件随 MR 进仓,是这条铁律下让"别人在仓里也能看到数"的唯一补丁,§2.1「§8-4」那一行的读回口径据此理解,不要误测成"两台库表内容逐行相等"。
 
 **失败如实显示**:`real_demo_v4` 任一步失败都停在那一步、打印真实错误、非零退出码结束,不静默跳过——延续 `real_demo`"如实停在这里,不假装往前"的纪律。
 
@@ -212,7 +214,7 @@ JSON 格式(指挥器 `export_evidence` 或批量脚本产出时用):
 ## 6 · 开放问题(≤5)
 
 1. **`real_demo_v4` 是不是最终名字**:共存期清楚表明"V4 指挥器、real_demo 是 V3 的"。旧壳被删、`real_demo` 一并退役那次,要不要改回 `real_demo`(呼应 `bw-v4-dev`→`builders-workbench` 同一模式)?倾向"改回",但应与旧壳删除同一次改动,不提前做。
-2. **试点主项目选哪个**:§8-1"点名四个之一,用户在内部选"——母文档未列具体候选,需用户在试点前明确指定。
+2. ~~试点主项目选哪个~~ **已定(第五轮,00-handshake C2)**:§8-1 的主试点项目 = buddy 自己的仓(GitHub),不连 codehub;codehub 接入留内部试用时验,不用等它才能开始两周试点。
 3. **老项目回填验证仓选哪个**:§8-7 要求"至少一个内部老仓",除 buddy 仓外建议再选一个真实内部老项目,人选未定;暂无候选就先只用 buddy 仓过这条,第二仓列进试点后待办。
 4. **Windows 试点机器谁提供**:§2.3 需要一台真实 Windows 机器与一位同事跑一遍安装流程,人选未定,建议试点启动时一并确定。
 5. **`docs/v4-prototype/e2e/` 现在建不建**:这篇仍是待复核设计稿,尚无真实代码可跑,倾向从定稿、正式开工后再开始累积证据;用户若想现在用 buddy 仓既有数据(如03篇§5 已跑过的回填样例)补几条,也可以现在建目录。

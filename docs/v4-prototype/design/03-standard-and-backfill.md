@@ -1,6 +1,6 @@
 # 03 · 规范铺底怎么跑:三步流程、对账、升级
 
-> **30 秒导读**:这篇管运作活③「规范铺底」——项目接入时自动出现的一次性活——具体怎么跑:第 1 步 buddy 自己写模板核心件、第 2 步(成熟仓才有)agent 把 buddy 约定合进已有的 README/CLAUDE.md/AGENTS.md、第 3 步(有历史的仓才有)agent 把老项目自己的历史记录回填成 buddy 认得的文件。外加铺完底之后的日常动作:对账(缺什么、过期什么)、升级(出新版规范怎么走 MR)、`standard/` 正本怎么让同事贡献。**详细设计稿,待用户复核,尚未开工写代码**。给三种人看:复核设计的用户、下一步写代码的会话、以后往 `standard/` 提 PR 的同事。母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) 第 0 站、§2.6、待拍-02/15/16/20/27)与 [`../standard-module-draft.md`](../standard-module-draft.md)(八大类)是设计事实源,冲突时以它们为准;预研 [`../research/legacy-backfill.md`](../research/legacy-backfill.md) + 样例 [`legacy-backfill-sample-buddy.md`](../research/legacy-backfill-sample-buddy.md) 的结论**全部采纳**,本篇的细化/补答另标注。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——不新开代号系列,三步就叫「第 1/2/3 步」。
+> **30 秒导读**:这篇管运作活③「规范铺底」——项目接入时自动出现的一次性活——具体怎么跑:第 1 步 buddy 自己写模板核心件、第 2 步(成熟仓才有)agent 把 buddy 约定合进已有的 README/CLAUDE.md/AGENTS.md、第 3 步(有历史的仓才有)把老项目自己的历史记录回填成 buddy 认得的文件。外加铺完底之后的日常动作:对账(缺什么、过期什么)、升级(出新版规范怎么走 MR)、`standard/` 正本怎么让同事贡献。**第五轮改动(用户拍板,待拍-05/27 改)**:第 3 步「历史回填」不再是运作活③自己养的一个独立子技能——它就是**运作活②「资产盘点」workflow 的首次模式**(同一个 `asset-audit` workflow 包,`mode=first` 全量回填历史、`mode=weekly` 每周增量盘点),本篇 §2.4 描述的三层流水线架构原样成立,只是挂载的 workflow 包换了,谁触发它、剧本怎么写归 [09-ops-workflows.md](09-ops-workflows.md) §2.2/§2.3 管,本篇只管"探测到历史该不该跑""跑出来的原料/产物/防伪规则长什么样"。**详细设计稿,待用户复核,尚未开工写代码**。给三种人看:复核设计的用户、下一步写代码的会话、以后往 `standard/` 提 PR 的同事。母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) 第 0 站、§2.6、待拍-02/15/16/20/27)与 [`../standard-module-draft.md`](../standard-module-draft.md)(八大类)是设计事实源,冲突时以它们为准;预研 [`../research/legacy-backfill.md`](../research/legacy-backfill.md) + 样例 [`legacy-backfill-sample-buddy.md`](../research/legacy-backfill-sample-buddy.md) 的结论**全部采纳**,本篇的细化/补答另标注。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——不新开代号系列,三步就叫「第 1/2/3 步」。
 
 ---
 
@@ -48,7 +48,7 @@
    - 第 3 类 → `docs/releases.md`(空表头)、`docs/design/README.md`(约定说明);`docs/plan/YYYY-Www.md` 不在这一步写,那是运作活①第一次跑才有的东西;
    - 第 4 类 → `.bw/metrics.toml`/`.bw/connectors.toml`/`.bw/collect_stats.*`/`docs/metrics.md`:创建流已写过的不重写内容,只登记指纹;没有的写空骨架;
    - 第 5 类 → `.bw/issue-policy.toml`(02 篇 §2.8 给的默认三列映射 + review/cadence/kanban 四段);
-   - 第 6 类 → buddy 自建运作技能三份(更新指标与周计划/资产盘点与微重构/规范铺底)写进 `.claude/skills/`;**业界包(superpowers、mattpocock-skills)不复制文件进项目仓**,`issue-policy.toml` 的 `workflow` 列只记名字,假设本机 Claude CLI 已装对应插件——判定细节留 04 篇,本篇只声明边界;
+   - 第 6 类 → buddy 自建运作技能三份(更新指标与周计划/资产盘点/规范铺底)写进 `.claude/skills/`;**业界包(superpowers、mattpocock-skills)不复制文件进项目仓**,`issue-policy.toml` 的 `workflow` 列只记名字,假设本机 Claude CLI 已装对应插件——判定细节留 04 篇,本篇只声明边界;
    - 第 8 类 → 最后写 `.bw/standard.toml`(`version = STANDARD_VERSION`)与 `.bw/managed.toml`。
 3. 每写一个文件同时往 `.bw/managed.toml` 追加一条(`path`+`version`+`fingerprint`,算法见 2.6);这份清单**最后写**,保证记的指纹是刚落盘那一刻的真实内容。
 4. 人手改过不覆盖:只在**目标路径不存在**或**存在但指纹与记录一致**时才写;两者都不满足就跳过,在 Issue 说明追加一行「`XXX.md` 已存在且非 buddy 管理,跳过」——和第 2 步"不覆盖已有 AGENTS.md"是同一精神在不同文件上的应用。
@@ -71,9 +71,9 @@
 
 **产出**:合并后的 `AGENTS.md`/`CLAUDE.md`,提交在同一条分支上,不单独开 MR。
 
-### 2.4 第 3 步 · 历史回填(采纳预研,仅有历史的仓)
+### 2.4 第 3 步 · 历史回填(采纳预研,仅有历史的仓;第五轮定性:即运作活②「资产盘点」workflow 的首次模式)
 
-全盘采纳 [legacy-backfill.md](../research/legacy-backfill.md) 的结论——双亲结构判定合入、口径 A/B 分开报、无标签无 CHANGELOG 就诚实留空、"不点灯"边界、自动/agent/人确认三分类。这一节把预研落成"谁在什么时机跑什么代码"。
+**与运作活②的关系(第五轮用户点破,待拍-05/27 改)**:老项目历史回填不是一条独立产线,它就是「资产盘点」这个 workflow 第一次跑——同一个 workflow 包,`mode=first` 时多产出本节说的五项回填件,`mode=weekly`(每周)只盘变化、不产出这些历史件。触发时机不变:铺底探测到仓有历史(§2.1)时,运作活③在同一张活的分支上另起一次会话跑这个 workflow(SKILL.md 剧本见 09 篇 §2.2);原料仍是三种——①git 本地历史、②仓内已有文档、③远端 issue 与 MR 列表,**群历史不算原料**(与母文档、09 篇口径一致,见下)。产出不变:发版记录历史段、`docs/plan/history.md`、PROJECT.md 草稿字段、指标候选、`origin='backfill'` 的 issue 行——不算任何人/workflow 的战绩、不点灯。全盘采纳 [legacy-backfill.md](../research/legacy-backfill.md) 的结论——双亲结构判定合入、口径 A/B 分开报、无标签无 CHANGELOG 就诚实留空、"不点灯"边界、自动/agent/人确认三分类。这一节把预研落成"谁在什么时机跑什么代码"。
 
 **三层流水线**:
 
@@ -92,6 +92,8 @@
 | e) 回填的 issue 行 | 库 `issue` 表 | `origin='backfill'`、`number`、`title`、`status`(照远端原样)、`closed_at` |
 
 `docs/plan/history.md` 顶部加一行"累计贡献者:N 位(git 作者分布去重计数)"——供 08 篇总览⑧块的"贡献者数"读取(定在这份文件而不是 PROJECT.md,因为它是历史统计,不是项目身份)。
+
+**代码微重构建议也在首次盘点里顺手列为建议活**(第五轮,与 09 篇 §2.2 每周模式同一条规矩):`mode=first` 跑的时候若顺带发现明显的死码/超长文件/命名问题,同样只列成「建议活」草稿(类别「优化」,`origin='agent_split'`)写进 MR 说明,不直接改代码,人评审这次铺底 MR 时一并勾选要建的——不单独为老项目开一条"回填顺便重构"的例外通道。
 
 **防伪规则**(逐条,证据均见样例文件):
 
@@ -166,7 +168,7 @@ standard/
 | 命令 | 一句话 |
 |---|---|
 | `RunStandardBootstrap { project_id }` | 一次性运作活③入口:探测 → 建活 → 第 1 步同步写核心件 → 按探测结果决定要不要自动触发第 2/3 步的交互式运行 → 一个 MR(01 篇已列,本篇细化内部编排) |
-| `BackfillHistory { project_id }` | 单独重跑历史回填(不重跑第 1/2 步):建一张轻量活("历史回填 · 重跑"),开新分支重走 2.4 节流水线,覆盖上次带回填标记的段落 |
+| `BackfillHistory { project_id }` | 单独重跑历史回填(不重跑第 1/2 步):建一张运作活("历史回填 · 重跑"),开新分支起一次「资产盘点」workflow 会话、传 `mode=first`(第五轮改动,见本篇导读与 09 篇 §2.2——第 2 层仍要 agent 读文本产出候选,不是无会话的轻量活),重走 2.4 节流水线,覆盖上次带回填标记的段落 |
 | `ReconcileStandard { project_id }` | 纯读:按 2.6 节算「缺/过期/人改过」三类,不建活不写仓,给知识库屏渲染用 |
 | `UpgradeStandard { project_id, files }` | 人选中要升的文件后触发:按 2.6 节升级流程建轻量活(纯替换)或一次 agent 会话(需合并),最终提 MR |
 
