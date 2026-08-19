@@ -17,6 +17,58 @@ pub fn view(p: &ProjectVm, bridge: &Bridge) -> Element {
             {mapping_block(p, bridge)}
             {skill_block(p)}
             {connector_block(p, bridge)}
+            {standard_block(p, bridge)}
+        }
+    }
+}
+
+/// ④ 规范件与在研版本。对账是**纯读**的:只回报缺 / 过期 / 人改过,不动仓、
+/// 不建活 —— 要不要补由人决定。
+fn standard_block(p: &ProjectVm, bridge: &Bridge) -> Element {
+    let b_rec = bridge.clone();
+    let b_ver = bridge.clone();
+    let pid = p.id;
+    let mut version = use_signal(|| p.card.current_version.clone());
+    let std_ver = if p.card.standard_version.is_empty() {
+        "—(这个仓还没铺过规范件)".to_string()
+    } else {
+        p.card.standard_version.clone()
+    };
+    rsx! {
+        div {
+            style: "{theme::card()}padding:20px 22px;",
+            div { style: "font-family:{theme::SERIF};font-size:18px;margin-bottom:14px;", "④ 规范件与在研版本" }
+            div {
+                style: "display:flex;gap:8px;font-size:13px;padding:6px 0;align-items:center;",
+                div { style: "width:88px;flex:none;color:{theme::INK_4};", "规范版本" }
+                div { style: "color:{theme::INK_2};flex:1;", "{std_ver}" }
+                button {
+                    style: "{theme::btn_ghost()}",
+                    onclick: move |_| b_rec.cmd(Command::ReconcileStandard { project_id: pid }),
+                    "对一遍账"
+                }
+            }
+            div {
+                style: "font-size:12px;color:{theme::INK_3};line-height:1.8;padding-bottom:8px;",
+                "对账只看不改:缺哪几份、哪几份过期了、哪几份被人手改过,结果显示在页脚回执里。"
+            }
+            div {
+                style: "display:flex;gap:8px;font-size:13px;padding:6px 0;align-items:center;                        border-top:1px solid {theme::BORDER};",
+                div { style: "width:88px;flex:none;color:{theme::INK_4};", "在研版本" }
+                input {
+                    style: "{theme::input()}width:140px;",
+                    value: "{version}",
+                    oninput: move |e| version.set(e.value()),
+                }
+                button {
+                    style: "{theme::btn_ghost()}",
+                    onclick: move |_| b_ver.cmd(Command::SetCurrentVersion {
+                        project_id: pid,
+                        version: version.read().trim().to_string(),
+                    }),
+                    "保存"
+                }
+            }
         }
     }
 }
