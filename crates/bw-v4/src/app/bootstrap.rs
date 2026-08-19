@@ -7,7 +7,7 @@
 
 use super::{App, AppError, Result};
 use crate::command::Event;
-use crate::model::{Issue, IssueKind, IssueOrigin, ProjectId};
+use crate::model::{Issue, IssueOrigin, ProjectId};
 use crate::repo::managed_file::{self, Reconcile};
 use crate::repo::project_file;
 use crate::standard;
@@ -41,24 +41,16 @@ impl App {
             pending_steps(&probe)
         );
 
-        let events = self
-            .create_issue(
+        let (issue_id, _) = self
+            .create_ops_issue(
                 project_id,
                 title,
                 body.clone(),
-                None,
-                IssueKind::Ops,
+                super::OPS3_WORKFLOW,
                 IssueOrigin::Auto,
                 String::new(),
             )
             .await?;
-        let issue_id = events
-            .iter()
-            .find_map(|e| match e {
-                Event::IssueCreated { id, .. } => Some(*id),
-                _ => None,
-            })
-            .ok_or_else(|| AppError::Refused("铺底的运作活没建出来".into()))?;
 
         let remote = if project.has_remote() {
             format!("{} · `{}`", project.provider, project.remote_path)

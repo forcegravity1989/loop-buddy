@@ -116,16 +116,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             week: week.clone(),
         })
         .await?;
-    let drafts = match events.first() {
-        Some(Event::WeekPlanStarted { draft_titles, .. }) => {
-            say(&mut log, "步骤 3 · 开始本周:周计划文件已写出(mock 草稿)");
-            draft_titles.clone()
-        }
-        Some(Event::WeekPlanAlreadyExists { .. }) => {
-            say(&mut log, "步骤 3 · 本周文件已存在,跳过(重跑不产生重复数据)");
-            Vec::new()
-        }
-        _ => Vec::new(),
+    // 「开始本周」现在回一串事件:建运作活① → ▶跑 → 周计划已写出。**按类型
+    // 找,不按位置取** —— 上一版取 events.first(),运作活①插进来之后这一步
+    // 就默默什么都不做了,日志里连行都没有。
+    let drafts = if let Some(Event::WeekPlanStarted { draft_titles, .. }) = events
+        .iter()
+        .find(|e| matches!(e, Event::WeekPlanStarted { .. }))
+    {
+        say(
+            &mut log,
+            "步骤 3 · 开始本周:建了运作活①、开了工,周计划文件已写出(mock 草稿)",
+        );
+        draft_titles.clone()
+    } else if events
+        .iter()
+        .any(|e| matches!(e, Event::WeekPlanAlreadyExists { .. }))
+    {
+        say(&mut log, "步骤 3 · 本周文件已存在,跳过(重跑不产生重复数据)");
+        Vec::new()
+    } else {
+        Vec::new()
     };
     if !drafts.is_empty() {
         app.dispatch(Command::ConfirmWeekDraft {
@@ -237,6 +247,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         );
     }
+
+    // ── 步骤 8:定时的一跳 ────────────────────────────────
+    // 判据是「到点了没有」+「本周有没有那张活」。**不改系统时间、不假装到
+    // 点**:周五 20:00 之前跑这个指挥器,这一跳就该什么都不做,如实说没到点。
+    // 演示项目的节律先改成「周一 00:00」——**不是伪造时间**,是把这个项目自
+    // 己的配置改成一个已经过去的时刻,让这一跳真的到点。正式项目的默认值是
+    // 周五 20:00,`.bw/issue-policy.toml` 里写着,人随时能改。
+    if let Ok(Some(mut policy)) = bw_v4::repo::issue_policy_file::read(&workspace) {
+        if let Some(c) = policy.cadence.as_mut() {
+            c.ops2_schedule = "mon 00:00".into();
+        }
+        let _ = bw_v4::repo::issue_policy_file::write(&workspace, &policy);
+        say(
+            &mut log,
+            "步骤 8 前置 · 把演示项目的 ops2_schedule 改成「mon 00:00」(正式默认是 fri 20:00)",
+        );
+    }
+    let before: usize = store.issues(pid).await?.len();
+    app.dispatch(Command::TickScheduler { project_id: pid })
+        .await?;
+    let after = store.issues(pid).await?;
+    let audit = after
+        .iter()
+        .find(|i| i.workflow == bw_v4::app::OPS2_WORKFLOW && i.week_of == week);
+    say(
+        &mut log,
+        &match audit {
+            Some(i) => format!(
+                "步骤 8 · 定时:本周的「资产盘点」在了 —— #{} 来源 {} 状态「{}」\
+                 (自动建的活绝不被自动推进到完成)",
+                i.number,
+                i.origin.label(),
+                i.status.label()
+            ),
+            None if after.len() == before => {
+                "步骤 8 · 定时:还没到 .bw/issue-policy.toml 里那个时刻,这一跳什么都没做".into()
+            }
+            None => "步骤 8 · 定时:建出了活但不是资产盘点 —— 判据对不上,如实记下".into(),
+        },
+    );
 
     // 收尾提交:周计划与发版记录是铺底之后才写的,这里一并进仓,免得下一次
     // 跑的时候被上一轮的残留改动混进提交里。
