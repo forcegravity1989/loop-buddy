@@ -6,11 +6,15 @@
 //! 已经开出来的:
 //!
 //! - [`claude_cli`] —— Claude CLI 开工工具(声明 + 探活)
-//! - [`chat_group`] —— 项目群工厂(只有 trait 与「没配群」的实现)
+//! - [`codegraph`] —— 代码图子进程(探活三态 + 大文件榜)
 //! - [`terminal_xterm`] —— 内嵌终端(xterm.js + PTY 字节桥)
 //!
-//! 还没开的(各自随对应的刀落地):Cursor、Open Design 内嵌、代码图。
+//! 还没开的(各自随对应的刀落地):Cursor、Open Design 内嵌。
+//!
+//! **项目群不在这里**:它是内核那一层的能力(通知同步、周计划拉群历史都在
+//! 用例里发生,不是界面动作),正本在 `bw_v4::chat`。这里曾经放过一份只有
+//! trait 的占位,C 刀真实现落地后已经删掉 —— 不留两份接口。
 
-pub mod chat_group;
 pub mod claude_cli;
+pub mod codegraph;
 pub mod terminal_xterm;

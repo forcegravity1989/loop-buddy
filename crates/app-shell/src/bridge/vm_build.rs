@@ -11,9 +11,9 @@ use bw_v4::model::{IssueStatus, Project, ProjectId};
 use bw_v4::repo::{issue_policy_file, project_file, release_file, week_plan_file};
 use bw_v4::V4Store;
 
+use super::vm_kb::build_kb;
 use super::vm_panels::{
-    build_board, build_config, build_kb, build_metrics, build_sessions, build_weeks,
-    build_workbench,
+    build_board, build_config, build_metrics, build_sessions, build_weeks, build_workbench,
 };
 
 /// 读一份仓文件:读不出来就把原话记进 `warnings`,再退回默认值。
@@ -46,6 +46,13 @@ pub struct UiState {
     pub session_tab: crate::vm::SessionTab,
     pub expanded_dirs: Vec<String>,
     pub open_file: String,
+    /// 知识库屏在看哪个页签,以及代码图/资产两个页签**上一次点开时**跑出来的
+    /// 结果。这两样各要起好几个子进程(codegraph、`git log --name-only`、仓
+    /// 统计),每重拼一次 ViewModel 就重跑一遍会把界面拖垮 —— 所以只在人点
+    /// 页签或点「重新跑一次」那一刻跑,结果放在这里。
+    pub kb_tab: crate::vm::KbTab,
+    pub kb_codegraph: Option<crate::vm::CodeGraphVm>,
+    pub kb_assets: Option<crate::vm::AssetsVm>,
     pub db_path: String,
     pub workspaces_root: String,
 }
@@ -397,7 +404,11 @@ async fn build_project(
                 .and_then(|v| v.parse().ok()),
         },
         config: build_config(store, id, &ws, policy.as_ref(), &p).await,
-        kb: build_kb(&ws, ui.open_doc.as_deref()),
+        kb: KbVm {
+            codegraph: ui.kb_codegraph.clone(),
+            assets: ui.kb_assets.clone(),
+            ..build_kb(&ws, ui.kb_tab, ui.open_doc.as_deref())
+        },
     })
 }
 

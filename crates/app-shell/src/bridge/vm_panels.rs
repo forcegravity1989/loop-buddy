@@ -11,6 +11,7 @@ use bw_v4::V4Store;
 use std::path::Path;
 
 use super::vm_build::{card_item, probe_env, remote_label};
+use super::vm_kb::skill_origin;
 
 /// 六列看板。待办池那一列装的是没排进任何一周的活,其余五列按状态分。
 pub(super) fn build_board(
@@ -312,6 +313,7 @@ pub(super) async fn build_config(
                             .map(|(_, n)| *n)
                             .unwrap_or(0),
                         title: slug.clone(),
+                        origin: skill_origin(ws, &slug),
                         slug,
                     }
                 })
@@ -326,6 +328,7 @@ pub(super) async fn build_config(
                 slug: w.clone(),
                 title: format!("{w}(包不在本仓 .claude/skills/)"),
                 uses: *n,
+                origin: "不在本仓".into(),
             });
         }
     }
@@ -386,38 +389,5 @@ fn blank_dash(s: &str) -> &str {
         "—"
     } else {
         s
-    }
-}
-
-pub(super) fn build_kb(ws: &Path, open: Option<&str>) -> KbVm {
-    let mut docs = Vec::new();
-    collect_docs(&ws.join("docs"), ws, &mut docs, 0);
-    docs.sort();
-    KbVm {
-        open_doc: open.and_then(|rel| {
-            std::fs::read_to_string(ws.join(rel))
-                .ok()
-                .map(|body| (rel.to_string(), body))
-        }),
-        docs,
-    }
-}
-
-fn collect_docs(dir: &Path, root: &Path, out: &mut Vec<String>, depth: usize) {
-    if depth > 4 {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let path = e.path();
-        if path.is_dir() {
-            collect_docs(&path, root, out, depth + 1);
-        } else if path.extension().is_some_and(|x| x == "md") {
-            if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.display().to_string());
-            }
-        }
     }
 }

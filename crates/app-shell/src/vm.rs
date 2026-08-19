@@ -282,12 +282,97 @@ pub struct SkillVm {
     pub slug: String,
     pub title: String,
     pub uses: u32,
+    /// 「内置」(随 buddy 出厂、铺底时复制进来)/「项目自有」/「蒸馏」。
+    pub origin: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KbTab {
+    #[default]
+    Docs,
+    CodeGraph,
+    Assets,
+}
+
+impl KbTab {
+    pub fn label(self) -> &'static str {
+        match self {
+            KbTab::Docs => "知识",
+            KbTab::CodeGraph => "代码图",
+            KbTab::Assets => "资产",
+        }
+    }
+
+    pub const ALL: [KbTab; 3] = [KbTab::Docs, KbTab::CodeGraph, KbTab::Assets];
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KbVm {
-    /// 仓内 `docs/` 的文档树(相对路径,已排序)。
-    pub docs: Vec<String>,
-    /// 打开的那份文档:路径 + 原文。
+    pub tab: KbTab,
+    /// 知识页签:按规范八大类分组的文件清单。**只列存在的文件**,不列位置。
+    pub groups: Vec<KbGroupVm>,
+    /// 打开的那份文档:路径 + 原文。懒加载 —— 点了才现读。
     pub open_doc: Option<(String, String)>,
+    /// 代码图页签。`None` = 还没跑过(没点过这个页签)。
+    pub codegraph: Option<CodeGraphVm>,
+    /// 资产页签。`None` = 还没扫过。
+    pub assets: Option<AssetsVm>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KbGroupVm {
+    pub title: String,
+    pub files: Vec<KbFileVm>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KbFileVm {
+    /// 仓内相对路径,也是打开它的 key。
+    pub rel: String,
+    pub label: String,
+    /// 「回填」这类小徽记。回填的周文件与人写的同目录同格式,只靠这个区分。
+    pub badge: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CodeGraphVm {
+    /// `ready` / `not_installed` / `not_indexed`。
+    pub state: String,
+    /// 灰态时的下一步该干什么。
+    pub hint: String,
+    pub rows: Vec<CodeFileVm>,
+    /// 子进程失败的原文。**原样显示**,不留空白也不静默重试。
+    pub error: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CodeFileVm {
+    pub path: String,
+    pub language: String,
+    pub nodes: u64,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AssetsVm {
+    /// 项目自己的技能包(扫 `.claude/skills/**/SKILL.md` 得到)。
+    pub skills: Vec<SkillVm>,
+    /// 蒸馏产出的技能。V4 还没有蒸馏这颗按钮,所以今天恒为空 —— 不放假数据。
+    pub distilled: Vec<SkillVm>,
+    /// 产物登记 = `git log --name-only`,没有登记表。
+    pub artifacts: Vec<ArtifactVm>,
+    pub releases: Vec<ReleaseVm>,
+    /// 仓统计:与总览第⑤块同一次采集逻辑。
+    pub repo_stats: Vec<(String, String)>,
+    /// 采不到时的原话。
+    pub error: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ArtifactVm {
+    pub path: String,
+    pub commit: String,
+    pub subject: String,
+    /// 提交消息里解析到的活号。解析不到就空着,不强凑。
+    pub issue: String,
 }

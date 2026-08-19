@@ -99,11 +99,3 @@ pub fn input() -> String {
 pub fn label() -> String {
     format!("font-size:12px;color:{INK_3};margin:0 0 6px;display:block;")
 }
-
-/// 「还没建」的占位块。**不放模拟数据** —— 留白如实标注是纪律,不是偷懒。
-pub fn not_built() -> String {
-    format!(
-        "padding:28px;border:1px dashed {BORDER_DEEP};border-radius:10px;color:{INK_3};\
-         font-size:13px;line-height:1.8;text-align:center;background:{CARD_ALT};"
-    )
-}

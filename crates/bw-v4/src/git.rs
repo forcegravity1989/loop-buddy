@@ -401,3 +401,64 @@ pub async fn tags_with_dates(workspace: &Path) -> Vec<(String, String)> {
         })
         .collect()
 }
+
+/// 一条产物登记。**没有登记表**——`git log --name-only` 就是登记表。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Artifact {
+    pub path: String,
+    /// 最近一次碰它的提交(短 hash)。
+    pub commit: String,
+    pub subject: String,
+    /// 提交消息里解析得到的活号。解析不到就是 `None` —— **不强凑**。
+    pub issue_number: Option<u32>,
+}
+
+/// 现扫产物登记:按提交从新到旧走 `--name-only`,每个文件只记最近碰它的那一次。
+///
+/// `max_commits` 是往回看多少个提交;老仓全量扫一遍既慢又没意义(几年前动过
+/// 的文件不是「本项目的产物」这个问题的答案)。
+pub async fn artifacts(workspace: &Path, max_commits: usize) -> Result<Vec<Artifact>, GitError> {
+    // 记录分隔用 \x1e(记录分隔符),文件名里不可能出现它;比按空行切稳。
+    let out = git(
+        workspace,
+        &[
+            "log",
+            &format!("-n{max_commits}"),
+            "--name-only",
+            "--no-merges",
+            "--pretty=format:\x1e%h\x1f%s",
+        ],
+    )
+    .await?;
+
+    let mut seen: Vec<Artifact> = Vec::new();
+    for chunk in out.split('\x1e') {
+        let chunk = chunk.trim_start_matches('\n');
+        if chunk.is_empty() {
+            continue;
+        }
+        let mut lines = chunk.lines();
+        let Some(head) = lines.next() else { continue };
+        let (commit, subject) = head.split_once('\x1f').unwrap_or((head, ""));
+        let issue_number = parse_issue_number(subject);
+        for path in lines.filter(|l| !l.trim().is_empty()) {
+            if seen.iter().any(|a| a.path == path) {
+                continue;
+            }
+            seen.push(Artifact {
+                path: path.to_string(),
+                commit: commit.to_string(),
+                subject: subject.to_string(),
+                issue_number,
+            });
+        }
+    }
+    Ok(seen)
+}
+
+/// 从提交消息里找 `#<号>`。找不到就 `None`,**不猜**。
+fn parse_issue_number(subject: &str) -> Option<u32> {
+    let rest = subject.split_once('#')?.1;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}

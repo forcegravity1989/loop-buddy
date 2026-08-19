@@ -5,6 +5,7 @@
 //! 命令失败就把失败的原话放进 `Vm::note`,不假装做成了。
 
 mod vm_build;
+mod vm_kb;
 mod vm_panels;
 
 use crate::vm::Vm;
@@ -130,6 +131,9 @@ pub enum Req {
         path: String,
         diff: bool,
     },
+    /// 知识库屏切页签。代码图与资产两个页签**切过去那一刻现跑一次**
+    /// (起 codegraph 子进程、走 `git log`、采仓统计),结果留到下次再点。
+    KbTab(crate::vm::KbTab),
     /// 重新算一遍并推一份新的 ViewModel。
     Refresh,
 }
@@ -269,6 +273,9 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     session_tab: crate::vm::SessionTab::default(),
                     expanded_dirs: Vec::new(),
                     open_file: String::new(),
+                    kb_tab: crate::vm::KbTab::default(),
+                    kb_codegraph: None,
+                    kb_assets: None,
                     viewing_week: bw_v4::isoweek::current_week(),
                     open_doc: None,
                     note: None,
@@ -293,6 +300,37 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
 
                 let mut vm = vm_build::build(&app, &ui).await;
                 eprintln!("[BW_BOOT] projects={} db={db}", vm.projects.len());
+                // BW_KB_DUMP=1:把知识库三个页签的数字打进 stderr,好让人拿
+                // `git ls-files` / `codegraph files -j` / `cat docs/releases.md`
+                // 当场对。截图对不了数,这个能。
+                if std::env::var("BW_KB_DUMP").is_ok_and(|v| v != "0") {
+                    if let Some(pid) = ui.open {
+                        if let Ok(ws) = app.workspace_of(pid).await {
+                            let kb = vm_kb::build_kb(&ws, crate::vm::KbTab::Docs, None);
+                            for g in &kb.groups {
+                                eprintln!("[BW_KB] 组「{}」{} 个文件", g.title, g.files.len());
+                            }
+                            let cg = vm_kb::build_codegraph(&ws);
+                            eprintln!(
+                                "[BW_KB] 代码图 state={} 榜上 {} 行 头一名={} 头一名体积={} err={:?}",
+                                cg.state,
+                                cg.rows.len(),
+                                cg.rows.first().map(|r| r.path.as_str()).unwrap_or("—"),
+                                cg.rows.first().map(|r| r.size).unwrap_or(0),
+                                cg.error
+                            );
+                            let a = vm_kb::build_assets(&store, pid, &ws).await;
+                            eprintln!(
+                                "[BW_KB] 资产:技能 {} · 蒸馏 {} · 产物 {} · 发版 {} · 仓统计 {:?}",
+                                a.skills.len(),
+                                a.distilled.len(),
+                                a.artifacts.len(),
+                                a.releases.len(),
+                                a.repo_stats
+                            );
+                        }
+                    }
+                }
                 // 仓文件读不动的实话也打进 stderr:界面上有横幅,命令行验收
                 // 也看得见,不用靠截图。
                 for w in &vm.warnings {
@@ -399,6 +437,26 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             } else {
                                 crate::vm::SessionTab::File
                             };
+                        }
+                        Req::KbTab(t) => {
+                            ui.kb_tab = t;
+                            // 每次点页签就是一次全新的现跑 —— 不缓存,和「对账
+                            // 是纯读操作不需要缓存」同一个取舍。
+                            ui.kb_codegraph = None;
+                            ui.kb_assets = None;
+                            if let Some(pid) = ui.open {
+                                let ws = app.workspace_of(pid).await.ok();
+                                match (t, ws) {
+                                    (crate::vm::KbTab::CodeGraph, Some(ws)) => {
+                                        ui.kb_codegraph = Some(vm_kb::build_codegraph(&ws));
+                                    }
+                                    (crate::vm::KbTab::Assets, Some(ws)) => {
+                                        ui.kb_assets =
+                                            Some(vm_kb::build_assets(&store, pid, &ws).await);
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                         Req::Refresh => {}
                     }
