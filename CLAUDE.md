@@ -87,7 +87,21 @@ bw-app      编排大脑:App + Command/Event 总线,所有用例与守卫都在�
 ui          纯函数 selector + ViewModel(state→可渲染 DTO),可单测/E2E 核验
 app-desktop 真壳(Dioxus 0.7 hard-pin =0.7.9):kernel 桥(独立 tokio 线程)+ 各屏
 (Web 版="以后也许":wasm32 keepalive + Store trait 留着门,仓里没有 app-web crate)
+
+# ── 以下两个是 V4 的,和上面六个并存,互不依赖 ───────────────────────
+bw-v4       V4 内核:**只有四张表**的本机库(project / issue / claude_conversation / app_meta)
+            + 仓文件解析(PROJECT.md / .bw/*.toml / docs/plan/*.md / docs/releases.md /
+            .claude/skills/**/SKILL.md)+ 现算推导 + 自己的一对 Command/Event。
+            复用 bw-core(状态机、Signal、身份)与 bw-engine(执行器、worktree、git、PTY);
+            **不依赖 bw-store / bw-app / ui**
+app-shell   V4 新壳(bin 名 bw-v4-dev):六入口 + 三顶层屏,一屏一模块,适配模块在 adapters/
 ```
+
+**V4 与 V3 的关系(2026-08-19/20 起)**:两套并存,谁也不动谁。V3 用 `workbench.db`,V4 用
+`workbench-v4.db`,schema 从新写、**不写迁移**(老库不兼容)。V4 的核心变化是「**仓是正本**」——
+库只放定位与显示缓存,健康、指标读数、周列表、用过几次、文件树、diff 全部**现算**,一张索引表都
+没有。删旧壳的判据见 `docs/v4-prototype/design/01-architecture.md` §2.11(逐条核对过,今天一条都
+不满足,所以旧壳还在)。V4 没做完的部分只认 `docs/LEFTOVERS.md` 的 V4A/V4B/V4C 三组。
 
 数据流:UI 只发 `Command`、收 `Event`;`bw-app` 执行用例 → store 写入数据库 → `recompute_signals` 重算 → 事件流回 UI。**唯一的干活入口是 Issue 的 ▶跑**(`Command::RunIssue`):项目配了真实工作区就在 issue 自己的 git worktree 里起交互式 `claude`(内嵌终端 PTY),没配就落到 MockInteractiveExecutor(产出自我标注为演示);每次运行都写一行 `workflow_run`(开工/结清/成败/耗时/前后 git head)绑到这张 Issue。
 
