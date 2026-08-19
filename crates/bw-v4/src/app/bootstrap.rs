@@ -39,7 +39,7 @@ impl App {
             .create_issue(
                 project_id,
                 title,
-                body,
+                body.clone(),
                 None,
                 IssueKind::Ops,
                 IssueOrigin::Auto,
@@ -75,9 +75,11 @@ impl App {
         };
         let report = boot::write_core_files(&ws, &vars)?;
 
-        // 跳过的件如实追加进这张活的说明,评审的人不用猜为什么少了一份。
+        // 跳过的件如实写进这张活的说明,评审的人不用猜为什么少了一份。
+        // 注意是**从头拼一遍再整体覆盖**,不是往现有正文后面追加 —— 建活是按
+        // 标题幂等的,重跑会拿到同一张活,追加就会把「跳过的件」滚成两份。
         if !report.skipped.is_empty() {
-            let mut b = self.issue_or_err(issue_id).await?.body;
+            let mut b = body;
             b.push_str("\n\n跳过的件:\n");
             for (path, why) in &report.skipped {
                 b.push_str(&format!("- `{path}`:{why}\n"));
