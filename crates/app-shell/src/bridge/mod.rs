@@ -118,6 +118,8 @@ pub enum Req {
     ViewWeek(String),
     /// 知识库屏打开某份文档。
     OpenDoc(Option<String>),
+    /// 「先不建」——把还没确认的草稿丢掉。草稿本来就没进库,丢掉不留痕。
+    DropDrafts,
     /// 重新算一遍并推一份新的 ViewModel。
     Refresh,
 }
@@ -180,6 +182,16 @@ fn dirs_home() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// 从一批事件里挑出「开始本周」产出的草稿活标。
+fn drafts_of(events: &[bw_v4::command::Event]) -> Option<(String, Vec<String>)> {
+    events.iter().find_map(|e| match e {
+        bw_v4::command::Event::WeekPlanStarted {
+            week, draft_titles, ..
+        } => Some((week.clone(), draft_titles.clone())),
+        _ => None,
+    })
+}
+
 /// 起内核线程。返回的桥可以被界面各处 clone。
 pub fn spawn(deep_link: DeepLink) -> Bridge {
     let (tx, mut rx) = mpsc::unbounded_channel::<Req>();
@@ -220,6 +232,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     viewing_week: bw_v4::isoweek::current_week(),
                     open_doc: None,
                     note: None,
+                    pending_drafts: None,
                     db_path: db.clone(),
                     workspaces_root: root.display().to_string(),
                 };
@@ -244,11 +257,24 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
 
                 while let Some(req) = rx.recv().await {
                     match req {
-                        Req::Cmd(c) => match app.dispatch(c).await {
-                            Ok(events) => ui.note = vm_build::note_of(&events),
-                            // 失败就把失败的原话摆出来。壳不替内核圆场。
-                            Err(e) => ui.note = Some(format!("没做成:{e}")),
-                        },
+                        Req::Cmd(c) => {
+                            let confirming = matches!(c, Command::ConfirmWeekDraft { .. });
+                            match app.dispatch(c).await {
+                                Ok(events) => {
+                                    ui.note = vm_build::note_of(&events);
+                                    // 「开始本周」产出的草稿活标先接住,等人在计划屏
+                                    // 点确认才真的建活。
+                                    if let Some((week, titles)) = drafts_of(&events) {
+                                        ui.pending_drafts = Some((week, titles));
+                                    }
+                                    if confirming {
+                                        ui.pending_drafts = None;
+                                    }
+                                }
+                                // 失败就把失败的原话摆出来。壳不替内核圆场。
+                                Err(e) => ui.note = Some(format!("没做成:{e}")),
+                            }
+                        }
                         Req::Open(id) => {
                             ui.open = id;
                             ui.open_doc = None;
@@ -256,6 +282,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         }
                         Req::ViewWeek(w) => ui.viewing_week = w,
                         Req::OpenDoc(p) => ui.open_doc = p,
+                        Req::DropDrafts => ui.pending_drafts = None,
                         Req::Refresh => {}
                     }
                     vm = vm_build::build(&app, &ui).await;

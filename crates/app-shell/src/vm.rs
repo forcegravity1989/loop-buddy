@@ -67,6 +67,9 @@ pub struct ProjectVm {
     /// 正在看哪一周。
     pub viewing_week: String,
     pub board: BoardVm,
+    /// 「开始本周」刚产出、**还没经人确认**的草稿活标。确认之前一张活都不建
+    /// —— 这是「活由人确认才存在」那条,不是界面装饰。
+    pub pending_drafts: Vec<String>,
     pub releases: Vec<ReleaseVm>,
     pub sessions: Vec<SessionVm>,
     pub notify: NotifyVm,

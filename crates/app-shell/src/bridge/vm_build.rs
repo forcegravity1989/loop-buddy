@@ -21,6 +21,8 @@ pub struct UiState {
     pub viewing_week: String,
     pub open_doc: Option<String>,
     pub note: Option<String>,
+    /// 「开始本周」回来的草稿活标,连同是哪一周。人确认前只存在这里,不进库。
+    pub pending_drafts: Option<(String, Vec<String>)>,
     pub db_path: String,
     pub workspaces_root: String,
 }
@@ -246,6 +248,10 @@ async fn build_project(app: &App, id: ProjectId, ui: &UiState) -> Option<Project
         current_week,
         viewing_week: viewing_week.clone(),
         board: build_board(&issues, &viewing_week, policy.as_ref()),
+        pending_drafts: match &ui.pending_drafts {
+            Some((week, titles)) if *week == viewing_week => titles.clone(),
+            _ => Vec::new(),
+        },
         releases: release_file::read(&ws)
             .ok()
             .flatten()

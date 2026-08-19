@@ -38,6 +38,7 @@ pub fn view(p: &ProjectVm, bridge: &Bridge) -> Element {
             div {
                 style: "flex:1;min-width:0;",
                 {board_head(p, bridge)}
+                {draft_confirm(p, bridge)}
                 if !bounced.read().is_empty() {
                     div {
                         style: "margin-bottom:10px;padding:8px 12px;border-radius:8px;\
@@ -160,6 +161,52 @@ fn board_head(p: &ProjectVm, bridge: &Bridge) -> Element {
                     week_of: week.clone(),
                 }),
                 "新建活"
+            }
+        }
+    }
+}
+
+/// 「开始本周」产出的草稿活标,等人确认。**确认之前一张活都没建** —— 草稿
+/// 只在界面里活着,库里查不到。人点「先不建」就丢掉,不留痕。
+fn draft_confirm(p: &ProjectVm, bridge: &Bridge) -> Element {
+    if p.pending_drafts.is_empty() {
+        return rsx! {};
+    }
+    let b_ok = bridge.clone();
+    let b_no = bridge.clone();
+    let pid = p.id;
+    let week = p.viewing_week.clone();
+    let titles = p.pending_drafts.clone();
+    rsx! {
+        div {
+            style: "{theme::card()}padding:16px;margin-bottom:12px;",
+            div {
+                style: "font-size:13px;color:{theme::INK_2};margin-bottom:10px;line-height:1.8;",
+                "{week} 的周计划文件写好了,下面是草稿活标。确认之前一张活都还没建。"
+            }
+            for t in titles.iter() {
+                div {
+                    key: "{t}",
+                    style: "font-size:13px;padding:5px 0;color:{theme::INK};",
+                    "· {t}"
+                }
+            }
+            div {
+                style: "display:flex;gap:10px;margin-top:12px;",
+                button {
+                    style: "{theme::btn_primary()}",
+                    onclick: move |_| b_ok.cmd(Command::ConfirmWeekDraft {
+                        project_id: pid,
+                        week: week.clone(),
+                        titles: titles.clone(),
+                    }),
+                    "确认,按这些建活"
+                }
+                button {
+                    style: "{theme::btn_ghost()}",
+                    onclick: move |_| b_no.send(Req::DropDrafts),
+                    "先不建"
+                }
             }
         }
     }
