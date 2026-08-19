@@ -138,13 +138,33 @@ impl Bridge {
     }
 }
 
+/// 库文件默认落在**和旧壳同一个目录、不同名字**:旧壳开 `workbench.db`,
+/// 新壳开 `workbench-v4.db`。两个库互不相扰,但放在一起,人找得到、备份
+/// 一起带走。`BW_DB` 覆盖。
 pub fn db_path() -> String {
-    std::env::var("BW_DB").unwrap_or_else(|_| {
-        workspaces_root()
-            .join(bw_v4::DEFAULT_DB_FILENAME)
-            .display()
-            .to_string()
-    })
+    if let Ok(p) = std::env::var("BW_DB") {
+        return p;
+    }
+    let base = if cfg!(target_os = "macos") {
+        std::env::var("HOME")
+            .map(|h| format!("{h}/Library/Application Support/BuildersWorkbench"))
+            .ok()
+    } else if cfg!(target_os = "windows") {
+        std::env::var("APPDATA")
+            .map(|a| format!("{a}\\BuildersWorkbench"))
+            .ok()
+    } else {
+        std::env::var("HOME")
+            .map(|h| format!("{h}/.local/share/builders-workbench"))
+            .ok()
+    };
+    match base {
+        Some(dir) => {
+            let _ = std::fs::create_dir_all(&dir);
+            format!("{dir}/{}", bw_v4::DEFAULT_DB_FILENAME)
+        }
+        None => bw_v4::DEFAULT_DB_FILENAME.to_string(),
+    }
 }
 
 pub fn workspaces_root() -> PathBuf {
