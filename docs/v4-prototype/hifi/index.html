@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html data-proto="v4-hifi" data-version="4" lang="zh-CN">
+<html data-proto="v4-hifi" data-version="5" lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -475,6 +475,7 @@ var WEEKS=['W34','W33','W32','W31'];
 var VERSIONS=['0.4.0-v4','0.3.0-v3','0.2.0-v3'];
 var KANBAN_COLS=[['pool','待办池'],['todo','待办'],['doing','进行中'],['review','评审中'],['done','已完成'],['blocked','阻塞']];
 var KANBAN_COL_DEF={pool:'未排进任何一周',todo:'已排进本周,等开工',doing:'agent 在干',review:'MR 开着,等人审',done:'人点过完成',blocked:'填了原因'};
+var COL_LABEL={}; KANBAN_COLS.forEach(function(c){ COL_LABEL[c[0]]=c[1]; });
 var HISTORY_WEEKLY_PR=[['W26',0],['W27',1],['W28',3],['W29',3],['W30',12],['W31',7],['W32',17],['W33',3],['W34',3]];
 function colOf(status){
   if(status==='review'||status==='merged')return 'review';
@@ -515,15 +516,15 @@ function buildOps2Transcript(pid,issueId){
   var mrLabel=(issue&&issue.mr&&issue.mr.label)||('!'+branch);
   return [
     {cls:'sys',text:'[buddy] 系统提示词已注入 · 单人构建者工作台 · 一活一分支一 MR · 完成永远由人点'},
-    {cls:'sys',text:'[workflow] workflow 已注入:资产盘点与微重构'},
+    {cls:'sys',text:'[workflow] workflow 已注入:资产盘点'},
     {cls:'sys',text:'[read] docs/'},
     {cls:'sys',text:'[read] .bw/standard.toml(默认件清单与版本)'},
-    {cls:'agent',text:'agent> 盘点 docs/:产物、周计划、发版记录是否齐全登记。'},
-    {cls:'agent',text:'agent> 核对默认件:.claude/skills/ 是否与 standard/ 声明的版本一致。'},
-    {cls:'agent',text:'agent> codegraph files -j 找候选大文件,评估是否值得拆。'},
-    {cls:'agent',text:'agent> 发现 3 处可微重构点(命名、格式、一个死码函数),小范围改动。'},
+    {cls:'agent',text:'agent> 盘点 docs/、产物登记、技能与 workflow、周计划与发版记录是否齐全。'},
+    {cls:'agent',text:'agent> 规范对账、核对指标数据新不新鲜:.claude/skills/ 是否与 standard/ 声明的版本一致。'},
+    {cls:'agent',text:'agent> codegraph files -j 找候选大文件,列进大文件榜。'},
+    {cls:'agent',text:'agent> 发现 3 处可微重构点,已列为建议活草稿(类别:优化),等你勾选'},
     {cls:'git',text:'[write] 盘点报告写入 docs/plan/2026-'+wk+'.md 尾段'},
-    {cls:'git',text:'[git] 分支 '+branch+' → 提交微重构改动'},
+    {cls:'git',text:'[git] 分支 '+branch+' → 提交盘点报告'},
     {cls:'git',text:'[mr] 已提 MR '+mrLabel},
     {cls:'git',text:'[hook] 已推到评审中'}
   ];
@@ -539,7 +540,7 @@ function categoryWorkHint(category){
 function buildGenericTranscript(pid,issueId){
   var issue=getIssue(pid,issueId);
   if(!issue)return OPS1_TRANSCRIPT;
-  var wfName=issue.workflow||'superpowers';
+  var wfName=issue.workflow||'mattpocock-skills';
   var files=changedFilesFor(issue),branch=branchOf(issueId);
   var mrLabel=(issue.mr&&issue.mr.label)||('!'+branch);
   var lines=[
@@ -576,20 +577,21 @@ var DISTILL_NAMES={'std-1':'规范铺底核对清单','pr-102':'旧引擎退役�
 /* ===================== 数据工厂 ===================== */
 function makeIssues(){
   return {
-    'v4-1':{id:'v4-1',title:'V4 MVP 全貌草案三轮 grilling 收口',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'superpowers',skill:'grillme',desc:'把口述原文收口成设计事实源(mvp-blueprint-draft.md),三轮 grilling 走完拍板,22 条已定。'},
-    'v4-2':{id:'v4-2',title:'规范铺底模块设计稿',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'superpowers',skill:'grillme',desc:'standard-module-draft.md:八大类规范怎么落地、正本住哪、怎么演进。'},
+    'v4-1':{id:'v4-1',title:'V4 MVP 全貌草案三轮 grilling 收口',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'mattpocock-skills',skill:'grillme',desc:'把口述原文收口成设计事实源(mvp-blueprint-draft.md),三轮 grilling 走完拍板,22 条已定。'},
+    'v4-2':{id:'v4-2',title:'规范铺底模块设计稿',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'mattpocock-skills',skill:'grillme',desc:'standard-module-draft.md:八大类规范怎么落地、正本住哪、怎么演进。'},
     'v4-3':{id:'v4-3',title:'Orca / DSH / codegraph 预研',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'agent 拆',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'mattpocock-skills',skill:'research',desc:'三条并行预研:Orca 借模式、DeepSeek Harness 接口、codegraph 用法。'},
     'v4-4':{id:'v4-4',title:'V4 高保真可点击原型',category:'原型',tool:'open_design',kind:'business',status:'doing',source:'人建',metricIds:['lead-1'],mr:null,week:'W34',version:'0.4.0-v4',workflow:'原型设计 workflow',skill:'—',desc:'五入口可点击原型,证明「一周一圈」在界面上走不走得通。'},
-    'pr-102':{id:'pr-102',title:'减负线两轮收尾合入(删旧聊天式引擎,唯一入口 Issue ▶跑)',category:'构建',tool:'claude_cli',kind:'business',status:'review',source:'人建',metricIds:['lead-1'],mr:{id:'#102',label:'PR #102',status:'open'},week:'W34',version:'0.4.0-v4',workflow:'superpowers',skill:'—',desc:'两轮收尾把旧聊天式工作流引擎整链删除,唯一开工入口收敛到 Issue ▶跑。22 commit,等待合入。'},
-    'w1-2':{id:'w1-2',title:'纳入时 codehub clone 堵命令循环',category:'优化',tool:'cursor',kind:'business',status:'todo',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'superpowers',skill:'systematic-debugging',desc:'纳入已有仓时 codehub clone 在某些网络下会卡住命令循环,需要加超时与重试。'},
-    'std-1':{id:'std-1',title:'规范铺底模块落地(standard/ 目录 + 铺底命令)',category:'构建',tool:'claude_cli',kind:'business',status:'pool',source:'人建',metricIds:['lag-1'],mr:null,week:'W34',version:'0.4.0-v4',workflow:'superpowers',skill:'—',desc:'把 standard-module-draft.md 落成 standard/ 目录 + 铺底命令 + 对账。'},
+    'pr-102':{id:'pr-102',title:'减负线两轮收尾合入(删旧聊天式引擎,唯一入口 Issue ▶跑)',category:'构建',tool:'claude_cli',kind:'business',status:'review',source:'人建',metricIds:['lead-1'],mr:{id:'#102',label:'PR #102',status:'open'},week:'W34',version:'0.4.0-v4',workflow:'mattpocock-skills',skill:'—',desc:'两轮收尾把旧聊天式工作流引擎整链删除,唯一开工入口收敛到 Issue ▶跑。22 commit,等待合入。'},
+    'w1-2':{id:'w1-2',title:'纳入时 codehub clone 堵命令循环',category:'优化',tool:'cursor',kind:'business',status:'todo',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'mattpocock-skills',skill:'systematic-debugging',desc:'纳入已有仓时 codehub clone 在某些网络下会卡住命令循环,需要加超时与重试。'},
+    'std-1':{id:'std-1',title:'规范铺底模块落地(standard/ 目录 + 铺底命令)',category:'构建',tool:'claude_cli',kind:'business',status:'pool',source:'人建',metricIds:['lag-1'],mr:null,week:'W34',version:'0.4.0-v4',workflow:'mattpocock-skills',skill:'—',desc:'把 standard-module-draft.md 落成 standard/ 目录 + 铺底命令 + 对账。'},
+    'suggest-1':{id:'suggest-1',title:'建议活 · 拆 op.rs(2524 行)',category:'优化',tool:'claude_cli',kind:'business',status:'pool',source:'建议',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'mattpocock-skills',skill:'—',desc:'运作活②「资产盘点 2026-W33」评审后生成的建议活草稿:crates/app-desktop/src/screens/op.rs 单文件 2524 行,建议按屏拆分。人勾选后才真正建活,agent 不自己动代码。'},
     'ops1-w34':{id:'ops1-w34',title:'运作活①更新指标 + 制定本周计划 2026-W34',category:'运作',tool:'claude_cli',kind:'ops',status:'done',doneDate:'08-17',source:'人触发',metricIds:[],mr:{id:'!bw/plan-2026-W34',label:'!bw/plan-2026-W34',status:'merged'},week:'W34',version:'0.4.0-v4',workflow:'更新指标与周计划',skill:'—',desc:'复盘上周 → 更新指标 → 引导本周目标与活清单。MR 已合入。'},
-    'ops2-w33':{id:'ops2-w33',title:'运作活②资产盘点与代码微重构 2026-W33',category:'运作',tool:'claude_cli',kind:'ops',status:'review',source:'自动建 08-14 20:00',auto:true,metricIds:[],mr:{id:'!bw/ops-2026-W33',label:'!bw/ops-2026-W33',status:'open'},week:'W33',version:'0.3.0-v3',workflow:'资产盘点与微重构',skill:'—',desc:'盘点 docs/、产物、默认件是否齐 → 小范围微重构 → 提 MR。周五自动开工,等人评审。'},
-    'ops3':{id:'ops3',title:'运作活③规范铺底 v4.0(含合并调整)',category:'运作',tool:'claude_cli',kind:'ops',status:'done',doneDate:'08-17',doneAssumed:true,source:'自动建(接入时)',auto:true,metricIds:[],mr:{id:'!bw/standard-4.0',label:'!bw/standard-4.0',status:'merged'},week:'W33',version:'0.3.0-v3',workflow:'规范铺底(含合并调整 · 历史回填)',skill:'—',desc:'建分支写全套核心件;检测到已有 README,多一步 agent「合并调整」再提 MR。'},
-    'w33-legacy':{id:'w33-legacy',title:'减负线第一轮六切片(旧聊天式引擎整链退役第一轮)',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-17',source:'人建',metricIds:['lead-1'],mr:{id:'#102',label:'PR #102(第一轮)',status:'merged'},week:'W33',version:'0.3.0-v3',workflow:'superpowers',skill:'—',desc:'六个切片依次删除旧聊天式工作流引擎的各处依赖,为第二轮收尾铺路。'},
-    'w33-usefix':{id:'w33-usefix',title:'V3-use-fix:Claude 探测 / 列仓搜索 / 测一下',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-17',source:'人建',metricIds:[],mr:{id:'#101',label:'PR #101',status:'merged'},week:'W33',version:'0.3.0-v3',workflow:'superpowers',skill:'—',desc:'三张真实体验修复:claude 可执行探测、列仓搜索、探活「测一下」按钮。'},
+    'ops2-w33':{id:'ops2-w33',title:'运作活②资产盘点 2026-W33',category:'运作',tool:'claude_cli',kind:'ops',status:'review',source:'自动建 08-14 20:00',auto:true,metricIds:[],mr:{id:'!bw/ops-2026-W33',label:'!bw/ops-2026-W33',status:'open'},week:'W33',version:'0.3.0-v3',workflow:'资产盘点',skill:'—',desc:'盘点仓内全部资产(文档 / 产物 / 技能与 workflow / 周计划与发版记录 / 规范对账 / 指标新鲜度 / 代码图大文件榜),报告写进本周 docs/plan/ 尾段;微重构只列成建议活草稿,人勾选才建。周五自动开工,等人评审。'},
+    'ops3':{id:'ops3',title:'运作活③规范铺底 v4.0(含合并调整)',category:'运作',tool:'claude_cli',kind:'ops',status:'done',doneDate:'08-17',doneAssumed:true,source:'自动建(接入时)',auto:true,metricIds:[],mr:{id:'!bw/standard-4.0',label:'!bw/standard-4.0',status:'merged'},week:'W33',version:'0.3.0-v3',workflow:'规范铺底(含合并调整 · 历史回填)',skill:'—',desc:'写核心件 → 合并调整(检测到已有 README,合入 CLAUDE.md/AGENTS.md)→ 历史回填(= 资产盘点首次模式)。'},
+    'w33-legacy':{id:'w33-legacy',title:'减负线第一轮六切片(旧聊天式引擎整链退役第一轮)',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-17',source:'人建',metricIds:['lead-1'],mr:{id:'#102',label:'PR #102(第一轮)',status:'merged'},week:'W33',version:'0.3.0-v3',workflow:'mattpocock-skills',skill:'—',desc:'六个切片依次删除旧聊天式工作流引擎的各处依赖,为第二轮收尾铺路。'},
+    'w33-usefix':{id:'w33-usefix',title:'V3-use-fix:Claude 探测 / 列仓搜索 / 测一下',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-17',source:'人建',metricIds:[],mr:{id:'#101',label:'PR #101',status:'merged'},week:'W33',version:'0.3.0-v3',workflow:'mattpocock-skills',skill:'—',desc:'三张真实体验修复:claude 可执行探测、列仓搜索、探活「测一下」按钮。'},
     'w32-odembed':{id:'w32-odembed',title:'V3-OD-embed:原型进度内嵌 Open Design',category:'原型',tool:'open_design',kind:'business',status:'done',doneDate:'08-12',source:'人建',metricIds:[],mr:{id:'#99',label:'PR #99',status:'merged'},week:'W32',version:'0.3.0-v3',workflow:'原型设计 workflow',skill:'—',desc:'原型阶段进度面板内嵌本机 Open Design 首页,替换占位卡。'},
-    'w32-v2prod':{id:'w32-v2prod',title:'V2 产品化',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-10',source:'人建',metricIds:[],mr:{id:'#97',label:'PR #97',status:'merged'},week:'W32',version:'0.2.0-v3',workflow:'superpowers',skill:'—',desc:'V2 阶段收尾产品化改动,合入 main。'}
+    'w32-v2prod':{id:'w32-v2prod',title:'V2 产品化',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-10',source:'人建',metricIds:[],mr:{id:'#97',label:'PR #97',status:'merged'},week:'W32',version:'0.2.0-v3',workflow:'mattpocock-skills',skill:'—',desc:'V2 阶段收尾产品化改动,合入 main。'}
   };
 }
 function makeMetrics(){
@@ -617,8 +619,8 @@ function makeWorkflows(){
     {name:'mattpocock-skills',source:'buddy 内置',entry:'mattpocock-skills/SKILL.md(插件包,内含多个子技能)✱',agents:'不固定 ✱ · 按环节起子代理',oneliner:'研究 → 领域建模 → TDD → 评审的完整开发工作流'},
     {name:'原型设计 workflow',source:'buddy 内置',entry:'standard/workflows/prototype-design/SKILL.md ✱',agents:'0 ✱ · 不额外起子代理',oneliner:'配 Open Design,人与 agent 一起把原型问题磨清楚'},
     {name:'更新指标与周计划',source:'buddy 内置 · 运作',entry:'standard/workflows/weekly-plan/SKILL.md ✱',agents:'0 ✱ · 单会话直接执行',oneliner:'复盘上周 → 更新指标 → 引导出本周目标与活清单'},
-    {name:'资产盘点与微重构',source:'buddy 内置 · 运作',entry:'standard/workflows/asset-audit/SKILL.md ✱',agents:'0 ✱ · 单会话直接执行',oneliner:'盘点仓内产物与默认件是否齐 → 小范围微重构'},
-    {name:'规范铺底(含合并调整 · 历史回填)',source:'buddy 内置 · 运作',entry:'standard/workflows/standard-scaffold/SKILL.md ✱',agents:'0 ✱ · 单会话直接执行',oneliner:'铺全套核心件;成熟仓多一步合并调整;有历史再多一步历史回填'}
+    {name:'资产盘点',source:'buddy 内置 · 运作',entry:'standard/workflows/asset-audit/SKILL.md ✱',agents:'0 ✱ · 单会话直接执行',oneliner:'每周模式;接入老项目时的历史回填是它的首次模式'},
+    {name:'规范铺底(含合并调整 · 历史回填)',source:'buddy 内置 · 运作',entry:'standard/workflows/standard-scaffold/SKILL.md ✱',agents:'0 ✱ · 单会话直接执行',oneliner:'铺全套核心件;成熟仓多一步合并调整;有历史再多一步历史回填(= 资产盘点首次模式)'}
   ];
 }
 function workflowUsage(pid,name){ return allIssuesArr(pid).filter(function(i){return i.workflow===name;}).length; }
@@ -630,16 +632,16 @@ function makeConnectors(){
 }
 function makeCrons(){
   return [
-    {id:'cron-ops2',name:'运作活②资产盘点与代码微重构',schedule:'每周五 20:00',lastRun:'2026-08-14 20:00',nextRun:'2026-08-21 20:00',status:'normal'},
+    {id:'cron-ops2',name:'运作活②资产盘点',schedule:'每周五 20:00',lastRun:'2026-08-14 20:00',nextRun:'2026-08-21 20:00',status:'normal'},
     {id:'cron-metrics',name:'指标采集',schedule:'每日 09:00',lastRun:'2026-08-18 09:00',nextRun:'2026-08-19 09:00',status:'normal'}
   ];
 }
 function makeToolmap(){
   return [
     {cat:'原型',tool:'open_design',workflow:'原型设计 workflow'},
-    {cat:'构建',tool:'claude_cli',workflow:'superpowers'},
-    {cat:'优化',tool:'claude_cli',workflow:'superpowers'},
-    {cat:'运维',tool:'claude_cli',workflow:'superpowers'},
+    {cat:'构建',tool:'claude_cli',workflow:'mattpocock-skills'},
+    {cat:'优化',tool:'claude_cli',workflow:'mattpocock-skills'},
+    {cat:'运维',tool:'claude_cli',workflow:'mattpocock-skills'},
     {cat:'运营推广',tool:'claude_cli',workflow:'无'},
     {cat:'运作',tool:'claude_cli',workflow:'更新指标与周计划'}
   ];
@@ -739,7 +741,7 @@ function freshState(){
     settings:{workspaceRoot:'D:\\bw-workspaces',chatLogin:{welink:false}},
     inbox:{buddy:[
       {id:'inbox-pr102',kind:'issue',issueId:'pr-102',text:'PR #102 评审中',state:'pending'},
-      {id:'inbox-ops2',kind:'issue',issueId:'ops2-w33',text:'运作活②「资产盘点与微重构 2026-W33」评审中(MR,周五自动跑的)',state:'pending'},
+      {id:'inbox-ops2',kind:'issue',issueId:'ops2-w33',text:'运作活②「资产盘点 2026-W33」评审中(MR,周五自动跑的)',state:'pending'},
       {id:'inbox-metrics',kind:'metric',text:'指标「周循环跑通率」「默认件被真实使用次数」无观测',state:'pending',link:'ops1-w34'}
     ]},
     notifyEvents:{buddy:makeNotifyEvents()},
@@ -777,10 +779,10 @@ function freshState(){
   };
 }
 var state = loadState() || freshState();
-function saveState(){ try{ localStorage.setItem('bw-v4-hifi4-state', JSON.stringify(state)); }catch(_){} }
+function saveState(){ try{ localStorage.setItem('bw-v4-hifi5-state', JSON.stringify(state)); }catch(_){} }
 function loadState(){
   try{
-    var raw = localStorage.getItem('bw-v4-hifi4-state');
+    var raw = localStorage.getItem('bw-v4-hifi5-state');
     if(!raw) return null;
     var s = JSON.parse(raw);
     if(!s || !s.projects) return null;
@@ -849,7 +851,7 @@ var ACTIONS = {
   goWall:function(){ nav('#/wall'); },
   goSettings:function(){ nav('#/settings'); },
   goOnboard:function(){ nav('#/onboard'); },
-  resetDemo:function(){ try{ localStorage.removeItem('bw-v4-hifi4-state'); }catch(_){}
+  resetDemo:function(){ try{ localStorage.removeItem('bw-v4-hifi5-state'); }catch(_){}
     state=freshState(); nav('#/wall'); render(); toast('演示已重置'); },
   mergeInbox:function(pid,id){ var item=findInboxItem(pid,id); if(!item)return; item.state='merged'; if(item.issueId)mergeIssueGeneric(pid,item.issueId); render(); toast('已合入 · 相关指标与待人处理计数已更新'); },
   completeInbox:function(pid,id){ var item=findInboxItem(pid,id); if(!item)return; if(item.issueId)completeIssueGeneric(pid,item.issueId);
@@ -895,7 +897,7 @@ var ACTIONS = {
     var isNewRepo = ob.tab==='new';
     var ops3Desc = isNewRepo
       ? '新建空仓,无历史可回填:buddy 建分支写入 8 类核心件,提 MR !1。'
-      : '检测到已有 README(成熟仓):①写核心件 → ②合并调整(把 buddy 约定合进已有 README/CLAUDE.md/AGENTS.md)→ ③历史回填(检测到提交 / 标签 / 远端 issue,把历史整理进 docs/releases.md、docs/plan/history.md);三步同一个 MR !1。';
+      : '检测到已有 README(成熟仓):①写核心件 → ②合并调整(把 buddy 约定合进已有 README/CLAUDE.md/AGENTS.md)→ ③历史回填(= 资产盘点首次模式;检测到提交 / 标签 / 远端 issue,把历史整理进 docs/releases.md、docs/plan/history.md);三步同一个 MR !1。';
     state.issues.new={ 'ops3-new':{id:'ops3-new',title:'运作活③规范铺底 v4.0(含合并调整'+(isNewRepo?'':' · 历史回填')+')',category:'运作',tool:'claude_cli',kind:'ops',status:'review',source:'自动建(接入时)',auto:true,metricIds:[],mr:{id:'!1',label:'!1',status:'open'},workflow:'规范铺底(含合并调整 · 历史回填)',skill:'—',desc:ops3Desc} };
     state.inbox.new=[{id:'inbox-new-ops3',kind:'issue',issueId:'ops3-new',text:'运作活③「规范铺底」评审中(MR !1'+(isNewRepo?'':',已做合并调整 + 历史回填')+')',state:'pending'}];
     state.metrics.new={ northstar:{id:'northstar',tier:'北极星',label:state.newProject.card.northstar,gray:true,drivenBy:[]} };
@@ -976,7 +978,7 @@ var ACTIONS = {
     var id='draft-'+Date.now();
     var wk=state.ui.selectedWeek[m.pid]||CURRENT_WEEK;
     state.issues[m.pid]=state.issues[m.pid]||{};
-    state.issues[m.pid][id]={ id:id,title:m.title,category:m.category,tool:m.tool,kind:'business',status:'todo',source:'人建',metricIds:[],mr:null,week:wk,version:(getProject(m.pid)||{}).version,skill:'—',workflow:m.tool==='open_design'?'原型设计 workflow':'superpowers',desc:'(演示)新建活草稿。' };
+    state.issues[m.pid][id]={ id:id,title:m.title,category:m.category,tool:m.tool,kind:'business',status:'todo',source:'人建',metricIds:[],mr:null,week:wk,version:(getProject(m.pid)||{}).version,skill:'—',workflow:m.tool==='open_design'?'原型设计 workflow':'mattpocock-skills',desc:'(演示)新建活草稿。' };
     state.ui.modal=null; render(); toast('已新建活「'+m.title+'」');
   },
   openReleaseModal:function(pid){
@@ -1005,7 +1007,7 @@ var ACTIONS = {
   selectSession:function(pid,id){ state.ui.currentSession[pid]=id; nav('#/p/'+pid+'/session/'+id); },
   startWork:function(pid,issueId){
     var issue=getIssue(pid,issueId); if(!issue)return;
-    if(issue.status==='todo'||issue.status==='pool')issue.status='doing';
+    issue.status='doing';
     if(state.ui.playing[issueId]) return;
     state.ui.playing[issueId]=true;
     if(issue.tool==='open_design'){
@@ -1055,6 +1057,39 @@ var ACTIONS = {
     state.notifyEvents[pid]=state.notifyEvents[pid]||[];
     state.notifyEvents[pid].unshift({id:'ev-done-'+issueId,text:'「'+(issue?issue.title:issueId)+'」已完成',time:TODAY_SHORT+' 刚刚',link:issueId,processed:true});
     render(); toast('已完成 · 同一件活不会重复记账');
+  },
+  mergeAndCompleteIssue:function(pid,issueId){
+    var issue=getIssue(pid,issueId); if(!issue)return;
+    mergeIssueGeneric(pid,issueId);
+    completeIssueGeneric(pid,issueId);
+    var item=getInbox(pid).filter(function(x){return x.issueId===issueId;})[0];
+    if(item){ state.inbox[pid]=getInbox(pid).filter(function(x){return x.id!==item.id;}); }
+    state.notifyEvents[pid]=state.notifyEvents[pid]||[];
+    state.notifyEvents[pid].unshift({id:'ev-mergedone-'+issueId,text:'「'+issue.title+'」已合入并完成',time:TODAY_SHORT+' 刚刚',link:issueId,processed:true});
+    render(); toast('已合入并完成 · 同一件活不会重复记账');
+  },
+  revertToTodo:function(pid,issueId){
+    var i=getIssue(pid,issueId); if(!i)return;
+    if(state.ui.playing[issueId])state.ui.playing[issueId]=false;
+    i.status='todo'; render(); toast('已退回待办');
+  },
+  confirmKanbanAction:function(){
+    var m=state.ui.modal; if(!m||m.type!=='kanban-confirm')return;
+    var pid=m.pid, issueId=m.issueId, issue=getIssue(pid,issueId);
+    if(!issue){ state.ui.modal=null; render(); return; }
+    if(m.kind==='block' && !(m.reason&&m.reason.trim())){ toast('请填写阻塞原因'); return; }
+    state.ui.modal=null;
+    if(m.kind==='start'){ ACTIONS.startWork(pid,issueId); }
+    else if(m.kind==='review'){ ACTIONS.pushReview(pid,issueId); }
+    else if(m.kind==='done'){
+      if(issue.status==='merged'){ ACTIONS.completeIssue(pid,issueId); }
+      else { ACTIONS.mergeAndCompleteIssue(pid,issueId); }
+    }
+    else if(m.kind==='block'){
+      issue.prevStatus=issue.status; issue.status='blocked'; issue.blockReason=m.reason.trim();
+      render(); toast('已标记阻塞:'+issue.blockReason);
+    }
+    else if(m.kind==='revert'){ ACTIONS.revertToTodo(pid,issueId); }
   },
   blockIssue:function(pid,issueId){ var i=getIssue(pid,issueId); if(!i)return; i.prevStatus=i.status; i.status='blocked'; render(); toast('已标记阻塞'); },
   unblockIssue:function(pid,issueId,target){ var i=getIssue(pid,issueId); if(!i)return; i.status=target||i.prevStatus||'todo'; render(); toast('已解除阻塞'); },
@@ -1137,7 +1172,7 @@ var ACTIONS = {
   toastOnly:function(msg){ toast(msg||'演示动作'); }
 };
 
-/* ===================== 看板拖拽:只用于排期(待办池 ⇄ 待办),状态流转仍走按钮 ===================== */
+/* ===================== 看板拖拽:六列统一,排期直接生效 / 状态动作弹窗确认 ===================== */
 var dragState={issueId:null,fromCol:null};
 function kanbanOrderArr(pid,col){ state.kanbanOrder=state.kanbanOrder||{}; state.kanbanOrder[pid]=state.kanbanOrder[pid]||{}; state.kanbanOrder[pid][col]=state.kanbanOrder[pid][col]||[]; return state.kanbanOrder[pid][col]; }
 function removeFromOrder(pid,col,id){ var arr=kanbanOrderArr(pid,col); var i=arr.indexOf(id); if(i>=0)arr.splice(i,1); }
@@ -1155,20 +1190,51 @@ function sortByOrder(pid,col,items){
     return ai-bi;
   });
 }
+/* 真实状态机(IssueStatus::can_transition_to)在看板列级别的镜像:哪列能拖到哪列 */
+var KANBAN_LEGAL={ pool:['todo','doing'], todo:['pool','doing','blocked'], doing:['todo','review','blocked'], review:['doing','done','blocked'], blocked:['todo','doing'], done:['todo','doing'] };
+var KANBAN_ILLEGAL_REASON={
+  'pool>review':'待办池不能直接进入评审中,要先经过待办与进行中',
+  'pool>done':'待办池不能直接完成,要先经过评审中',
+  'pool>blocked':'待办池不能直接标记阻塞,要先排进待办或开工',
+  'todo>review':'待办不能直接进入评审中,要先开工',
+  'todo>done':'待办不能直接完成,要先经过进行中与评审中',
+  'doing>pool':'进行中不能退回待办池,只能退回待办',
+  'doing>done':'进行中不能直接完成,要先推到评审中',
+  'review>pool':'评审中不能退回待办池,只能退回进行中',
+  'review>todo':'评审中不能直接退回待办,只能退回进行中或标记阻塞',
+  'blocked>pool':'阻塞不能直接回到待办池,只能退回待办或进行中',
+  'blocked>review':'阻塞不能直接进入评审中,要先解除阻塞',
+  'blocked>done':'阻塞不能直接完成,要先解除阻塞',
+  'done>pool':'已完成不能退回待办池,只能退回待办或进行中',
+  'done>review':'已完成不能直接回到评审中',
+  'done>blocked':'已完成不能直接标记阻塞'
+};
+function kanbanLegal(fromCol,toCol){ if(fromCol===toCol)return true; return (KANBAN_LEGAL[fromCol]||[]).indexOf(toCol)>=0; }
+function openKanbanConfirm(kind,pid,issueId,fromCol,toCol){
+  state.ui.modal={type:'kanban-confirm',kind:kind,pid:pid,issueId:issueId,fromCol:fromCol,toCol:toCol,reason:''};
+  render();
+}
 function handleKanbanDrop(pid,issueId,fromCol,toCol,overId){
   var issue=getIssue(pid,issueId); if(!issue)return;
-  if(toCol!=='pool' && toCol!=='todo'){
-    toast('状态流转用卡片上的按钮(▶开工 / ⬇合入 / ✓完成 / ⛔阻塞)');
+  if(fromCol===toCol){ insertIntoOrder(pid,toCol,issueId,overId===issueId?null:overId); render(); return; }
+  if(!kanbanLegal(fromCol,toCol)){
+    var reason=KANBAN_ILLEGAL_REASON[fromCol+'>'+toCol]||'状态不允许这样跳转';
+    toast((COL_LABEL[fromCol]||fromCol)+' → '+(COL_LABEL[toCol]||toCol)+' 不允许:'+reason);
+    render();
     return;
   }
-  if(fromCol!==toCol){
+  if((fromCol==='pool'&&toCol==='todo')||(fromCol==='todo'&&toCol==='pool')){
     var wk=state.ui.planLeft[pid]; if(!wk||wk==='all') wk=CURRENT_WEEK;
     if(toCol==='todo'){ issue.status='todo'; issue.week=wk; toast('已排进 2026-'+wk); }
     else { issue.status='pool'; issue.week=''; toast('已移出本周,回到待办池'); }
     removeFromOrder(pid,fromCol,issueId);
+    insertIntoOrder(pid,toCol,issueId,overId===issueId?null:overId);
+    render();
+    return;
   }
-  insertIntoOrder(pid,toCol,issueId,overId===issueId?null:overId);
-  render();
+  var kind = toCol==='doing' ? 'start' : toCol==='review' ? 'review' : toCol==='done' ? 'done' : toCol==='blocked' ? 'block' : toCol==='todo' ? 'revert' : null;
+  if(!kind){ render(); return; }
+  openKanbanConfirm(kind,pid,issueId,fromCol,toCol);
 }
 document.addEventListener('dragstart', function(e){
   var el=e.target.closest('.kcard[draggable="true"]'); if(!el)return;
@@ -1183,7 +1249,7 @@ document.addEventListener('dragover', function(e){
   var col=e.target.closest('.kanban-col'); if(!col)return;
   e.preventDefault();
   var key=col.getAttribute('data-col');
-  var allowed=(key==='pool'||key==='todo');
+  var allowed=kanbanLegal(dragState.fromCol,key);
   col.classList.remove('kanban-col-droppable','kanban-col-noDrop');
   col.classList.add(allowed?'kanban-col-droppable':'kanban-col-noDrop');
 });
@@ -1366,6 +1432,34 @@ function modalHTML(){
       +   '<label class="check-row"><input type="checkbox" '+(d.sync.release?'checked':'')+' data-action="toggleChatSync" data-arg=\'"release"\'> 发版</label>'
       + '</div>'
       + '<div class="modal-actions"><button class="btn" data-action="closeModal">取消</button><button class="btn btn-primary" data-action="saveChatGroup">保存</button></div></div></div>';
+  }
+  if(m.type==='kanban-confirm'){
+    var issue=getIssue(m.pid,m.issueId);
+    if(!issue) return '';
+    var kindMeta={
+      start:{title:'开工确认',label:'开工'},
+      review:{title:'推到评审中确认',label:'推到评审中'},
+      done:{title:'完成确认',label:'完成'},
+      block:{title:'标记阻塞',label:'确认阻塞'},
+      revert:{title:'退回待办确认',label:'退回待办'}
+    }[m.kind]||{title:'确认',label:'确认'};
+    var bodyHTML='<div class="detail-row"><div class="k">活</div>'+esc(issue.title)+'</div>';
+    if(m.kind==='start'){
+      bodyHTML+='<div class="detail-row"><div class="k">开工工具</div>'+esc(TOOL_LABEL[issue.tool]||'—')+'</div>'
+        + '<div class="detail-row"><div class="k">workflow</div>'+esc(issue.workflow||'—')+'</div>';
+    }
+    if(m.kind==='done'){
+      bodyHTML+='<div style="font-size:11.5px;color:var(--ink-3);margin:2px 0 10px;">完成永远由人点——这一下就是。</div>';
+    }
+    if(m.kind==='block'){
+      bodyHTML+='<div class="formrow"><label class="label">阻塞原因(必填)</label><textarea class="textarea" data-bind="ui.modal.reason" placeholder="写清楚卡在哪">'+esc(m.reason||'')+'</textarea></div>';
+    }
+    if(m.kind==='revert'){
+      bodyHTML+='<div style="font-size:11.5px;color:var(--ink-3);margin:2px 0 10px;">从「'+esc(COL_LABEL[m.fromCol]||m.fromCol)+'」退回「待办」。</div>';
+    }
+    return '<div class="modal-backdrop" data-action="closeModal"><div class="modal">'
+      + '<h3>'+kindMeta.title+'</h3>' + bodyHTML
+      + '<div class="modal-actions"><button class="btn" data-action="closeModal">取消</button><button class="btn btn-primary" data-action="confirmKanbanAction">'+kindMeta.label+'</button></div></div></div>';
   }
   return '';
 }
@@ -1678,7 +1772,8 @@ function issueActionsHTML(pid,i){
       + '<button data-action="blockIssue" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--ink-3);">⛔ 阻塞</button>';
   }
   if(i.status==='review'){
-    if(i.mr){ return '<button data-action="mergeMR" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--clay);">⬇ 合入 '+esc(i.mr.label)+'</button>'; }
+    if(i.mr){ return '<button data-action="mergeMR" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--clay);">⬇ 合入 '+esc(i.mr.label)+'</button>'
+      + '<button data-action="mergeAndCompleteIssue" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--clay);font-weight:600;">合入并完成</button>'; }
     return '<span style="color:var(--ink-3);">等待提 MR</span>';
   }
   if(i.status==='merged'){
@@ -1690,20 +1785,16 @@ function issueActionsHTML(pid,i){
   return '';
 }
 function issueCardHTML(pid,i){
-  var kindChip = i.kind==='ops' ? '<span class="chip chip-outline">运作</span>' : (i.auto?'<span class="chip chip-gray">自动</span>':'');
-  var col=colOf(i.status);
-  var draggable=(col==='pool'||col==='todo');
-  return '<div class="kcard" data-issue="'+i.id+'" '+(draggable?'draggable="true"':'')+' style="border-left-color:var(--'+STATUS_DOT[i.status]+');">'
-    + '<div class="kcard-top"><span>#'+esc(issueSuffix(i.id))+' · '+esc(i.category)+'</span>'+kindChip+'</div>'
+  var kindChip = i.kind==='ops' ? '<span class="chip chip-outline">运作</span>' : (i.auto?'<span class="chip chip-gray">自动</span>':(i.source==='建议'?'<span class="chip chip-gray">待确认</span>':''));
+  return '<div class="kcard" data-issue="'+i.id+'" draggable="true" style="border-left-color:var(--'+STATUS_DOT[i.status]+');">'
+    + '<div class="kcard-top"><span class="chip chip-outline">'+esc(i.category)+'</span>'+kindChip+'<span style="margin-left:auto;" title="'+esc(STATUS_LABEL[i.status]||'')+'">'+lightDot(STATUS_DOT[i.status])+'</span></div>'
     + '<div class="kcard-title" data-action="selectPlanIssue" data-arg=\'["'+pid+'","'+i.id+'"]\'>'+esc(i.title)+'</div>'
-    + '<div class="kcard-actions">'+issueActionsHTML(pid,i)+'</div>'
     + '</div>';
 }
 function kanbanHTML(pid,issuesList){
   var byCol={pool:[],todo:[],doing:[],review:[],done:[],blocked:[]};
   issuesList.forEach(function(i){ (byCol[colOf(i.status)]=byCol[colOf(i.status)]||[]).push(i); });
-  byCol.pool=sortByOrder(pid,'pool',byCol.pool);
-  byCol.todo=sortByOrder(pid,'todo',byCol.todo);
+  KANBAN_COLS.forEach(function(c){ byCol[c[0]]=sortByOrder(pid,c[0],byCol[c[0]]); });
   var cols=KANBAN_COLS.map(function(c){
     var key=c[0],label=c[1],items=byCol[key]||[];
     return '<div class="kanban-col" data-col="'+key+'" data-pid="'+pid+'"><div class="kanban-col-head">'+label+' · '+items.length+'<div class="kanban-col-def">'+esc(KANBAN_COL_DEF[key]||'')+'</div></div>'
@@ -1781,6 +1872,7 @@ function renderPlan(pid){
       + '<div class="detail-row"><div class="k">MR</div>'+(di.mr?('<span class="mono">'+esc(di.mr.label)+'</span> · '+esc(di.mr.status)):'—')+'</div>'
       + '<div class="detail-row"><div class="k">来源</div>'+esc(di.source||'—')+'</div>'
       + '<div class="detail-row"><div class="k">week_of / 版本</div>'+esc(di.week||'—')+' / '+esc(di.version||'—')+'</div>'
+      + '<div class="detail-row"><div class="k">操作(键盘 / 替代路径,拖拽同效)</div><div class="kcard-actions" style="margin-top:3px;">'+issueActionsHTML(pid,di)+'</div></div>'
       + '<div class="detail-actions"><button class="btn btn-primary btn-sm" data-action="goSession" data-arg=\'["'+pid+'","'+di.id+'"]\'>去会话 →</button><button class="btn btn-sm" data-action="distill" data-arg=\'["'+pid+'","'+di.id+'"]\'>蒸馏</button></div>'
       + '</div></div>';
   }
@@ -1975,7 +2067,7 @@ function workflowsSectionHTML(pid){
   return '<div class="cfg-section"><div class="cfg-section-head"><h3>workflow(SOP 类技能包)</h3><button class="btn btn-sm" data-action="openImportModal" data-arg=\'["'+pid+'","workflow"]\'>导入</button></div>'
     + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>名称</th><th>来源</th><th>入口</th><th>自带 agent 数</th><th>用过几次</th><th>一句话</th></tr></thead><tbody>'
     + wfs.map(function(w){
-      var uses = w.name==='superpowers' ? (workflowUsage(pid,'superpowers')+' ✱') : '—(无使用记录)';
+      var uses = w.name==='mattpocock-skills' ? (workflowUsage(pid,'mattpocock-skills')+' ✱') : '—(无使用记录)';
       return '<tr><td>'+esc(w.name)+'</td><td>'+esc(w.source)+'</td><td class="mono" style="font-size:10.4px;">'+esc(w.entry)+'</td><td>'+esc(w.agents)+'</td><td class="mono">'+uses+'</td><td>'+esc(w.oneliner)+'</td></tr>';
     }).join('') + '</tbody></table></div>'
     + '<div class="cfg-readonly-note">workflow 的入口是一份 SKILL.md,写的是一整套做事流程,自己调度该用哪个 agent;buddy 不再单独维护 agent 名单,战绩记在 workflow / 技能上。buddy 带的都是通用件,各人 / 各项目可导入自己的。</div></div>';
