@@ -164,12 +164,154 @@ fn section_text(raw: &str, heading: &str) -> Option<String> {
     None
 }
 
+/// 把某一节里的那张表**原地换掉**,这一节别的内容(说明文字、人自己加的
+/// 段落)一个字不动。找不到这一节就返回 `None`,由调用方决定怎么办。
+///
+/// 为什么必须原地换而不是整份重渲染:周计划文件是正本,人会往里写周目标的
+/// 第二段、写风险、加自己的小节;而拖一张卡片就会触发一次回写。整份重渲染
+/// 等于每拖一下就把人这周写的东西抹掉一次,而且顺手 commit 了。
+pub fn replace_table(raw: &str, heading: &str, new_table: &str) -> Option<String> {
+    let needle = format!("\n## {heading}");
+    let sec_start = raw.find(&needle)? + needle.len();
+    let rest = &raw[sec_start..];
+    let sec_end = sec_start + rest.find("\n## ").unwrap_or(rest.len());
+
+    let body = &raw[sec_start..sec_end];
+    let lines: Vec<&str> = body.split_inclusive('\n').collect();
+    let is_table_line = |l: &str| {
+        let t = l.trim();
+        t.starts_with('|') || (t.starts_with("<!--") && t.ends_with("-->"))
+    };
+    let first = lines.iter().position(|l| l.trim().starts_with('|'));
+
+    let (block_start, block_end) = match first {
+        Some(i) => {
+            // 表格前面紧挨着的说明性注释也算这块的一部分(渲染时是我们自己写的)。
+            let mut a = i;
+            while a > 0 && lines[a - 1].trim().starts_with("<!--") {
+                a -= 1;
+            }
+            let mut b = i;
+            while b < lines.len() && is_table_line(lines[b]) {
+                b += 1;
+            }
+            (a, b)
+        }
+        // 这一节还没有表(人手删了或者格式不同):补在节末,不动已有文字。
+        None => (lines.len(), lines.len()),
+    };
+
+    let prefix: String = lines[..block_start].concat();
+    let suffix: String = lines[block_end..].concat();
+    let mut out = String::with_capacity(raw.len() + new_table.len());
+    out.push_str(&raw[..sec_start]);
+    out.push_str(&prefix);
+    if !prefix.ends_with("\n\n") && !prefix.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(new_table);
+    if !suffix.starts_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&suffix);
+    out.push_str(&raw[sec_end..]);
+    Some(out)
+}
+
+/// 只渲染「业务活」那张表(表头 + 分隔行 + 数据行),给 [`replace_table`] 用。
+pub fn render_activity_table(rows: &[ActivityRow]) -> String {
+    let mut s = String::from(
+        "| 顺序 | 标题 | 类别 | 工具 | workflow | 预期推动的指标 | 远端 issue |\n\
+         |---|---|---|---|---|---|---|\n",
+    );
+    if rows.is_empty() {
+        s.push_str("<!-- 还没有排进本周的业务活。排一张活进来这里就会多一行。 -->\n");
+    }
+    for a in rows {
+        s.push_str(&activity_line(a));
+    }
+    s
+}
+
+/// 只渲染「本周运作」那张表。
+pub fn render_ops_table(rows: &[OpsRow]) -> String {
+    let mut s = String::from("| 活 | 状态 | 说明 |\n|---|---|---|\n");
+    if rows.is_empty() {
+        s.push_str("<!-- 本周还没有运作活。 -->\n");
+    }
+    for o in rows {
+        s.push_str(&ops_line(o));
+    }
+    s
+}
+
 fn section_body<'a>(raw: &'a str, heading: &str) -> Option<&'a str> {
     let needle = format!("\n## {heading}");
     let start = raw.find(&needle)? + needle.len();
     let rest = &raw[start..];
     let end = rest.find("\n## ").unwrap_or(rest.len());
     Some(&rest[..end])
+}
+
+/// 往表格里写一个单元格:竖线要转义,换行压成空格。
+///
+/// 不做这一步的后果是真的:一张活的标题里带一个 `|`(标题是自由文本,名片
+/// 编辑那张轻量活的标题就直接拼用户输入),这一行的每一列都会串一格 ——
+/// 而周计划文件是正本。
+pub fn escape_cell(v: &str) -> String {
+    v.replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace(['\n', '\r'], " ")
+        .trim()
+        .to_string()
+}
+
+/// 读回来时还原 [`escape_cell`] 的转义。
+fn unescape_cell(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    let mut chars = v.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('|') => out.push('|'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// 按**没转义的**竖线切一行表格。`\|` 不算列分隔。
+fn split_row(line: &str) -> Vec<String> {
+    let inner = line.trim().trim_matches('|');
+    let mut cells = Vec::new();
+    let mut cur = String::new();
+    let mut chars = inner.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(&next) = chars.peek() {
+                cur.push('\\');
+                cur.push(next);
+                chars.next();
+                continue;
+            }
+            cur.push('\\');
+        } else if c == '|' {
+            cells.push(unescape_cell(cur.trim()));
+            cur.clear();
+        } else {
+            cur.push(c);
+        }
+    }
+    cells.push(unescape_cell(cur.trim()));
+    cells
 }
 
 /// 扫一个 Markdown 表格,返回每行的单元格(已去掉表头与分隔行)。
@@ -180,11 +322,7 @@ fn table_rows(body: &str) -> Vec<Vec<String>> {
         if !t.starts_with('|') || !t.ends_with('|') {
             continue;
         }
-        let cells: Vec<String> = t
-            .trim_matches('|')
-            .split('|')
-            .map(|c| c.trim().to_string())
-            .collect();
+        let cells: Vec<String> = split_row(t);
         // 分隔行(---|---|---)不是数据。
         if cells
             .iter()
@@ -342,27 +480,7 @@ pub fn render(d: &WeekPlanDraft) -> String {
     s.push_str("\n\n");
 
     s.push_str("## 业务活\n\n");
-    s.push_str("| 顺序 | 标题 | 类别 | 工具 | workflow | 预期推动的指标 | 远端 issue |\n");
-    s.push_str("|---|---|---|---|---|---|---|\n");
-    if d.activities.is_empty() {
-        s.push_str("<!-- 还没有排进本周的业务活。排一张活进来这里就会多一行。 -->\n");
-    }
-    for a in &d.activities {
-        s.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} |\n",
-            trim_order(a.order),
-            a.title,
-            category_label(a.category),
-            tool_label(&a.tool),
-            dash_if_empty(&a.workflow),
-            dash_if_empty(&a.metric_key),
-            if a.remote_number == 0 {
-                "—".to_string()
-            } else {
-                format!("#{}", a.remote_number)
-            }
-        ));
-    }
+    s.push_str(&render_activity_table(&d.activities));
     s.push('\n');
 
     s.push_str("## 本周指标读数\n\n");
@@ -377,18 +495,16 @@ pub fn render(d: &WeekPlanDraft) -> String {
     for r in &d.readings {
         s.push_str(&format!(
             "| {} | {} | {} | {} |\n",
-            r.name, r.value, r.source, r.collected_at
+            escape_cell(&r.name),
+            escape_cell(&r.value),
+            escape_cell(&r.source),
+            escape_cell(&r.collected_at)
         ));
     }
     s.push('\n');
 
-    s.push_str("## 本周运作\n\n| 活 | 状态 | 说明 |\n|---|---|---|\n");
-    if d.ops.is_empty() {
-        s.push_str("<!-- 本周还没有运作活。 -->\n");
-    }
-    for o in &d.ops {
-        s.push_str(&format!("| {} | {} | {} |\n", o.title, o.status, o.note));
-    }
+    s.push_str("## 本周运作\n\n");
+    s.push_str(&render_ops_table(&d.ops));
     s.push('\n');
 
     s.push_str(&format!("## 上周完成情况({last_week})\n\n"));
@@ -416,4 +532,30 @@ fn dash_if_empty(s: &str) -> &str {
     } else {
         s
     }
+}
+
+fn activity_line(a: &ActivityRow) -> String {
+    format!(
+        "| {} | {} | {} | {} | {} | {} | {} |\n",
+        trim_order(a.order),
+        escape_cell(&a.title),
+        category_label(a.category),
+        tool_label(&a.tool),
+        escape_cell(dash_if_empty(&a.workflow)),
+        escape_cell(dash_if_empty(&a.metric_key)),
+        if a.remote_number == 0 {
+            "—".to_string()
+        } else {
+            format!("#{}", a.remote_number)
+        }
+    )
+}
+
+fn ops_line(o: &OpsRow) -> String {
+    format!(
+        "| {} | {} | {} |\n",
+        escape_cell(&o.title),
+        escape_cell(&o.status),
+        escape_cell(&o.note)
+    )
 }

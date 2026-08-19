@@ -251,3 +251,70 @@ fn tempdir(tag: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(&d).unwrap();
     d
 }
+
+/// 拖一张卡会触发一次周计划文件回写。**人手写在这份文件里的东西一个字都不能
+/// 少** —— 它是正本,而且回写完还会被顺手 commit。
+#[test]
+fn replacing_the_activity_table_keeps_everything_a_human_wrote() {
+    let raw = "---\nweek: 2026-W34\norigin: human\n---\n\n# 2026-W34 周计划\n\n\
+        ## 周目标\n\n第一段目标。\n\n第二段:我还想顺手把门禁修绿。\n\n\
+        ## 业务活\n\n这一段说明是我手写的。\n\n\
+        | 顺序 | 标题 | 类别 | 工具 | workflow | 预期推动的指标 | 远端 issue |\n\
+        |---|---|---|---|---|---|---|\n\
+        | 1 | 老的一张活 | 构建 | Claude CLI | — | — | — |\n\n\
+        ## 我自己加的一节:风险\n\n- 风险一:网关抖\n- 风险二:时间不够\n\n\
+        ## 本周指标读数\n\n| 指标 | 数值 | 来源 | 采集时间 |\n|---|---|---|---|\n\n";
+
+    let rows = vec![week_plan_file::ActivityRow {
+        order: 2.0,
+        title: "新排进来的活".into(),
+        category: None,
+        tool: "claude_cli".into(),
+        workflow: "mattpocock-skills".into(),
+        metric_key: String::new(),
+        remote_number: 0,
+    }];
+    let out =
+        week_plan_file::replace_table(raw, "业务活", &week_plan_file::render_activity_table(&rows))
+            .expect("这一节找得到");
+
+    assert!(
+        out.contains("第二段:我还想顺手把门禁修绿。"),
+        "周目标第二段没了"
+    );
+    assert!(
+        out.contains("这一段说明是我手写的。"),
+        "业务活上面那段说明没了"
+    );
+    assert!(out.contains("## 我自己加的一节:风险"), "人自己加的一节没了");
+    assert!(out.contains("- 风险一:网关抖"), "风险条目没了");
+    assert!(out.contains("## 本周指标读数"), "后面的小节没了");
+    assert!(out.contains("新排进来的活"), "新活没写进去");
+    assert!(!out.contains("老的一张活"), "旧表没被换掉");
+}
+
+/// 标题里带一个竖线,整行不能串列 —— 标题是自由文本,文件是正本。
+#[test]
+fn a_pipe_in_the_title_does_not_shift_every_column() {
+    let rows = vec![week_plan_file::ActivityRow {
+        order: 1.0,
+        title: "修 a|b 解析".into(),
+        category: None,
+        tool: "claude_cli".into(),
+        workflow: "mattpocock-skills".into(),
+        metric_key: "本周合入活数".into(),
+        remote_number: 7,
+    }];
+    let body = format!(
+        "---\nweek: 2026-W34\norigin: human\n---\n\n# x\n\n## 业务活\n\n{}\n",
+        week_plan_file::render_activity_table(&rows)
+    );
+    let plan = week_plan_file::parse(&body);
+    assert_eq!(plan.activities.len(), 1);
+    let a = &plan.activities[0];
+    assert_eq!(a.title, "修 a|b 解析");
+    assert_eq!(a.tool, "claude_cli");
+    assert_eq!(a.workflow, "mattpocock-skills");
+    assert_eq!(a.metric_key, "本周合入活数");
+    assert_eq!(a.remote_number, 7);
+}

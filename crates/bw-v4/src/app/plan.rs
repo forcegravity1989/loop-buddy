@@ -289,20 +289,25 @@ impl App {
             .collect();
         let ops = dedupe_ops(ops);
 
-        let draft = WeekPlanDraft {
-            week: week.to_string(),
-            origin: existing
-                .front_matter
-                .as_ref()
-                .map(|f| f.origin.clone())
-                .unwrap_or_else(|| "human".into()),
-            goal: existing.goal.clone(),
-            activities,
-            readings: existing.readings.clone(),
-            ops,
-            last_week_lines: last_week_section(&existing.raw),
-        };
-        week_plan_file::write(&ws, week, &week_plan_file::render(&draft))?;
+        // **原地换两张表,别的一个字不动。** 周计划文件是正本,人会往里写周目标
+        // 的第二段、写风险、加自己的小节;而拖一张卡片就会触发一次回写。整份
+        // 重渲染等于每拖一下就把人这周写的东西抹掉一次,而且顺手 commit 了。
+        let mut raw = existing.raw.clone();
+        if let Some(next) = week_plan_file::replace_table(
+            &raw,
+            "业务活",
+            &week_plan_file::render_activity_table(&activities),
+        ) {
+            raw = next;
+        }
+        if let Some(next) =
+            week_plan_file::replace_table(&raw, "本周运作", &week_plan_file::render_ops_table(&ops))
+        {
+            raw = next;
+        }
+        if raw != existing.raw {
+            week_plan_file::write(&ws, week, &raw)?;
+        }
         Ok(())
     }
 
@@ -320,17 +325,6 @@ fn dedupe_ops(rows: Vec<OpsRow>) -> Vec<OpsRow> {
     let mut seen = std::collections::HashSet::new();
     rows.into_iter()
         .filter(|r| seen.insert(r.title.clone()))
-        .collect()
-}
-
-/// 从已有文件里把「上周完成情况」那一段的条目原样取回来,重写时不丢。
-fn last_week_section(raw: &str) -> Vec<String> {
-    let Some(start) = raw.find("\n## 上周完成情况") else {
-        return Vec::new();
-    };
-    raw[start..]
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("- ").map(str::to_string))
         .collect()
 }
 
