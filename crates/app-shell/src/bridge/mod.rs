@@ -15,7 +15,7 @@ use bw_v4::V4Store;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 /// 深链要跳到哪。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -145,7 +145,12 @@ pub struct Bridge {
     /// PTY 字节流,按会话 id 分批。**不走 ViewModel**——终端一秒钟能吐几百
     /// 批字节,每一批都重拼一次整个 ViewModel 会把界面拖垮;而且字节流是
     /// 一次性的,进了 ViewModel 就会在每次重渲染时被重复写进终端。
-    pub pty: watch::Receiver<Vec<(bw_v4::model::ConversationId, Vec<u8>)>>,
+    ///
+    /// **是 broadcast 不是 watch**:watch 只留最新一个值,一轮渲染慢过一跳就把
+    /// 上一批**静默覆盖**掉 —— claude 大段刷屏(编译输出、长 diff)时终端会缺
+    /// 段,而且断口两侧的字节被拼起来,跨批的汉字直接变乱码。broadcast 留一整
+    /// 个队列,真丢的时候会明说丢了多少(`Lagged`),不装作没发生。
+    pub pty: broadcast::Sender<Vec<(bw_v4::model::ConversationId, Vec<u8>)>>,
 }
 
 impl PartialEq for Bridge {
@@ -220,7 +225,11 @@ fn drafts_of(events: &[bw_v4::command::Event]) -> Option<(String, Vec<String>)> 
 pub fn spawn(deep_link: DeepLink) -> Bridge {
     let (tx, mut rx) = mpsc::unbounded_channel::<Req>();
     let (vm_tx, vm_rx) = watch::channel(Vm::default());
-    let (pty_tx, pty_rx) = watch::channel(Vec::new());
+    // 1024 批 ≈ 一分钟的密集输出。真的堆到这个数还没人取,说明界面那头已经
+    // 卡住了,丢批是次要问题。
+    let (pty_tx, _) = broadcast::channel(1024);
+
+    let pty_tx_handle = pty_tx.clone();
 
     std::thread::Builder::new()
         .name("bw-v4-kernel".into())
@@ -324,6 +333,18 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             continue;
                         }
                     };
+                    // 终端的键盘与尺寸**不重拼 ViewModel**。重拼一次要跑十来个
+                    // git 子进程(健康三判据 + 改动文件 + 领先落后)、扫一遍
+                    // docs/plan/、解析四个 toml —— 而人打字时每 30ms 就来一条。
+                    // 全串在内核这条单线程上,终端会明显卡顿,pty 那一跳也排不
+                    // 上队。这两条命令本来也不改任何会显示的东西。
+                    if let Req::Cmd(
+                        c @ (Command::TerminalInput { .. } | Command::TerminalResize { .. }),
+                    ) = req
+                    {
+                        let _ = app.dispatch(c).await;
+                        continue;
+                    }
                     match req {
                         Req::Cmd(c) => {
                             let confirming = matches!(c, Command::ConfirmWeekDraft { .. });
@@ -391,6 +412,6 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
     Bridge {
         tx,
         vm: vm_rx,
-        pty: pty_rx,
+        pty: pty_tx_handle,
     }
 }

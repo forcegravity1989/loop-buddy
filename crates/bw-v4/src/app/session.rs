@@ -90,7 +90,27 @@ impl App {
         if !ws.is_dir() {
             return Ok(false);
         }
-        let branch = format!("bw/issue-{}", issue.number);
+
+        // 这张活的终端还开着就别重开。`attach` 第一件事是 close 掉同 id 的旧会
+        // 话(整个进程组被 kill),而 `--resume` 那条路今天走不通(见下),所以
+        // 重开一定是**从头一次新对话** —— 人跟 agent 谈到一半的上下文就这么没
+        // 了,还没有任何提示。顶栏「▶开工」和「■停止」是挨着放的,误点很容易。
+        if let Some(existing) = self.store.conversation_for_issue(id).await? {
+            if self.terminal.is_live(existing.id) {
+                return Err(AppError::Refused(
+                    "这张活的终端还开着。要重开先点「■ 停止」——重开是从头一次新对话,                     不是接着刚才那段聊。"
+                        .into(),
+                ));
+            }
+        }
+
+        // 分支名记的是**这个工作区当前真的在哪个分支上**,不是拼一个
+        // `bw/issue-N` 出来。V4 还没有给每张活开 worktree 与分支(见
+        // `docs/LEFTOVERS.md`),拼一个不存在的名字摆在界面上,人拿
+        // `git rev-parse --abbrev-ref HEAD` 一对就对不上。
+        let branch = crate::git::current_branch(&ws)
+            .await
+            .unwrap_or_else(|_| "—(读不出当前分支)".into());
 
         let conv = self
             .store

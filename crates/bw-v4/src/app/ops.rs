@@ -48,7 +48,15 @@ impl App {
         workflow: &str,
         origin: IssueOrigin,
         week_of: String,
-    ) -> Result<(IssueId, Vec<Event>)> {
+    ) -> Result<(IssueId, bool, Vec<Event>)> {
+        // 建活是按标题幂等的。调用方**必须知道这一张是不是新建的** —— 定时那
+        // 条路会在建完之后立刻开工,拿到一张老活还去开工,就会把上一次正跑着
+        // 的会话掐掉重开。
+        let created = self
+            .store
+            .issue_by_title(project_id, &title)
+            .await?
+            .is_none();
         let events = self
             .create_issue(
                 project_id,
@@ -75,7 +83,7 @@ impl App {
                 .set_issue_dispatch(id, "claude_cli", workflow, &issue.metric_key)
                 .await?;
         }
-        Ok((id, events))
+        Ok((id, created, events))
     }
 
     /// 定时:到点就自己建运作活②并自己开工。
@@ -99,20 +107,24 @@ impl App {
         }
 
         let week = isoweek::current_week();
-        let already = self
+        let title = format!("资产盘点 {week}");
+        // **判据必须和建活的幂等键是同一个东西**(都是标题)。以前这里查的是
+        // 「本周有没有 kind=ops 且 workflow=资产盘点 的活」—— 人把那张卡从本周
+        // 拖回待办池,`week_of` 变空,判据就查不到了;而建活按标题去重又拿回同
+        // 一张老活,于是每分钟对它重开一次会话。
+        if self
             .store
-            .issues_in_week(project_id, &week)
+            .issue_by_title(project_id, &title)
             .await?
-            .into_iter()
-            .any(|i| i.kind == IssueKind::Ops && i.workflow == OPS2_WORKFLOW);
-        if already {
+            .is_some()
+        {
             return Ok(vec![]);
         }
 
-        let (id, mut events) = self
+        let (id, created, mut events) = self
             .create_ops_issue(
                 project_id,
-                format!("资产盘点 {week}"),
+                title,
                 // mode 不进 `Command::RunIssue` 的签名——写在这张活自己的说明
                 // 里,剧本第一步读自己的说明就知道走哪条路。定时建的恒为 weekly。
                 "mode: weekly\n\n盘点这一周仓内的全部资产,微重构只写建议不动手。".into(),
@@ -121,6 +133,11 @@ impl App {
                 week.clone(),
             )
             .await?;
+        if !created {
+            // 上面那条判据已经挡住了,走到这里说明有别的路径先建了同名活。
+            // 不开工 —— 开工的责任归建它的那条路径。
+            return Ok(events);
+        }
         events.push(Event::OpsAutoFired {
             id,
             workflow: OPS2_WORKFLOW.into(),
@@ -147,6 +164,17 @@ impl App {
             .project(issue.project_id)
             .await?
             .ok_or_else(|| AppError::NoSuchProject(issue.project_id.uuid().to_string()))?;
+
+        // **先问状态机答不答应,再动远端**。反过来的话:MR 在 GitHub 上真的被
+        // squash 合了,而 `InProgress → Done` 不合法,错误抛出去,人看到「没做
+        // 成」以为什么都没发生 —— 实际远端已经合了,再点一次还会因为 PR 已
+        // merged 报错,这张活再也走不到完成。
+        if issue.status != IssueStatus::Done && !issue.status.can_transition_to(IssueStatus::Done) {
+            return Err(AppError::IllegalTransition {
+                from: issue.status.label().to_string(),
+                to: IssueStatus::Done.label().to_string(),
+            });
+        }
 
         let merged = if issue.pr_number > 0 && project.has_remote() {
             bw_engine::github::merge_pr(&project.remote_path, issue.pr_number)

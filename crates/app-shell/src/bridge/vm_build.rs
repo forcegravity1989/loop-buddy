@@ -97,6 +97,7 @@ pub fn note_of(events: &[Event]) -> Option<String> {
             human_edited.len()
         ),
         Event::WeekPlanStarted { week, .. } => format!("{week} 的周计划文件已写出,等你确认草稿"),
+        Event::HistoryBackfilled { note, .. } => note.clone(),
         Event::IssueMerged {
             pr_number, merged, ..
         } => {

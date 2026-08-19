@@ -267,16 +267,31 @@ pub fn TerminalWidget(conversation_id: ConversationId, focused: bool, bridge: Br
                 eprintln!("[pty] terminal init {cid_str}: {init:?}");
             }
 
-            let mut pty_rx = k.pty.clone();
-            let _ = pty_rx.borrow_and_update();
+            // 订阅在这里开始 —— 这一刻之前的字节这个终端拿不到,但 agent 的输出
+            // 是开工那一下才开始产生的,而挂件比开工先在。
+            let mut pty_rx = k.pty.subscribe();
             let mut carry: Vec<u8> = Vec::new();
             loop {
                 tokio::select! {
-                    result = pty_rx.changed() => {
-                        if result.is_err() {
-                            break;
-                        }
-                        let batches = pty_rx.borrow().clone();
+                    result = pty_rx.recv() => {
+                        let batches = match result {
+                            Ok(b) => b,
+                            // 队列被写满冲掉了 n 批 —— 真丢了就说丢了,不装作
+                            // 没发生。终端里也留一行,免得人以为 agent 沉默了。
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                eprintln!("[BW_WARN] 终端 {cid_str} 落后,丢了 {n} 批输出");
+                                let note = format!("\r\n[BW] 界面跟不上,丢了 {n} 批输出\r\n");
+                                let escaped = serde_json::to_string(&note)
+                                    .unwrap_or_else(|_| "\"\"".into());
+                                let _ = document::eval(&format!(
+                                    "window.__bw_term_write({cid_json}, {escaped})"
+                                )).await;
+                                carry.clear();
+                                continue;
+                            }
+                            // 发送端没了 = 内核线程结束,这个挂件也没事可做了。
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        };
                         for (batch_cid, bytes) in batches {
                             if batch_cid != cid || bytes.is_empty() {
                                 continue;

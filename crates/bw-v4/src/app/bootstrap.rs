@@ -41,7 +41,7 @@ impl App {
             pending_steps(&probe)
         );
 
-        let (issue_id, _) = self
+        let (issue_id, _, _) = self
             .create_ops_issue(
                 project_id,
                 title,

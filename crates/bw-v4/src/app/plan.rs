@@ -59,7 +59,7 @@ impl App {
         // 真正干这件事的是一次 agent 会话:复盘上周、更新指标、和人聊出本周
         // 要干什么。buddy 只负责把活建出来、把骨架文件写下去,然后立刻开工
         // —— 人点的那一下「开始本周」就到此为止,剩下的在会话屏里发生。
-        let (issue_id, mut events) = self
+        let (issue_id, _, mut events) = self
             .create_ops_issue(
                 project_id,
                 format!("更新指标 + 制定本周计划 {week}"),

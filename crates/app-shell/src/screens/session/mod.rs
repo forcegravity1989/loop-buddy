@@ -6,10 +6,11 @@
 //! 1. **左列只显示「运行中 / 空闲」两态**。「等你输入」这种细粒度状态要靠
 //!    claude 的 hook 回传,还没接 —— 唯一真实的信号是 PTY 进程还在不在,
 //!    所以只显示这一个,不猜。
-//! 2. **终端跨屏不卸载**。切到别的屏再切回来,agent 中间说的话还在:终端
-//!    没被焦点隐藏,只是挪到屏外去了,字节照收。
+//! 2. **终端本体不在这个文件里**。它挂在整个应用的根上(`main.rs`),因为挂在
+//!    这里的话人一切面板就整屏卸载,收字节的循环跟着没,agent 那段时间说的话
+//!    是真丢的。这里只留一条 300px 的信息带(会话列表 / 工具条 / 文件树),
+//!    终端在它下面铺开。
 
-use crate::adapters::terminal_xterm::TerminalWidget;
 use crate::bridge::{Bridge, Req};
 use crate::theme;
 use crate::vm::{ProjectVm, SessionTab, SessionVm};
@@ -23,9 +24,17 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
         .session_open
         .and_then(|id| p.sessions.iter().find(|s| s.issue_id == id));
 
+    // 终端铺开的时候,上面这条信息带缩成固定一条;不然终端只剩一条缝。
+    let terminal_open = p.workbench.tab == SessionTab::Terminal && p.session_open.is_some();
+    let band = if terminal_open {
+        "flex:0 0 300px;"
+    } else {
+        "flex:1;"
+    };
+
     rsx! {
         div {
-            style: "display:flex;gap:14px;align-items:stretch;height:calc(100vh - 150px);",
+            style: "display:flex;gap:14px;align-items:stretch;min-height:0;{band}",
             // ── 左:会话列表 ──
             div {
                 style: "width:230px;flex:none;{theme::card()}padding:12px;overflow:auto;",
@@ -59,16 +68,6 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
             }
         }
 
-        // 终端本体挂在这里,**不随页签卸载**:切走只是移到屏外,字节照收。
-        // 每个活着的会话各挂一个,焦点那个显示在中栏的槽位里。
-        for s in p.sessions.iter() {
-            TerminalWidget {
-                key: "{s.conversation_id:?}",
-                conversation_id: s.conversation_id,
-                focused: p.session_open == Some(s.issue_id) && p.workbench.tab == SessionTab::Terminal,
-                bridge: bridge.clone(),
-            }
-        }
     }
 }
 
@@ -205,16 +204,15 @@ fn tab_btn(label: &str, tab: SessionTab, cur: SessionTab, bridge: &Bridge) -> El
 fn middle(p: &ProjectVm) -> Element {
     let w = &p.workbench;
     if w.tab == SessionTab::Terminal {
-        let hint = if p.session_open.is_none() {
-            "选一个会话,终端出现在这里。"
-        } else {
-            ""
-        };
+        // 选中了会话,终端就在这条信息带的正下方,中栏不再占位。
+        if p.session_open.is_some() {
+            return rsx! {};
+        }
         return rsx! {
             div {
                 style: "flex:1;min-height:0;{theme::card()}padding:0;display:flex;\
                         align-items:center;justify-content:center;color:{theme::INK_4};font-size:12px;",
-                "{hint}"
+                "选一个会话,终端出现在这里。"
             }
         };
     }
