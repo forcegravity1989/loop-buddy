@@ -152,12 +152,12 @@ sqlite3 <db> "SELECT count(*) FROM issue WHERE project_id='<pid>' AND origin='ba
 
 ## 3 · 工程对照
 
-**模块位置**(遵循 §7「一屏一模块」):界面代码在 `app-desktop` 新目录(建议 `app-desktop/src/screens/overview/`),数据计算(selector)在 `bw-app` 新增只读查询模块(建议 `bw-app/src/overview.rs`),ViewModel 在 `crates/ui/src/vm.rs` 追加(沿用今天 `MetricVm`/`metric_vm` 模式,不新开平行类型)。总览屏只通过命令 / 事件与内核通信,不直接碰 `bw-store`。
+**模块位置,A 刀落地后重写。** 原文按「V4 摞在旧内核上」的前提建议了三个落点:界面进 `app-desktop`、selector 进 `bw-app/src/overview.rs`、ViewModel 追加进 `crates/ui/src/vm.rs`。这个前提在 01 篇 §2.6 已经不成立,三处建议全部落空。实况:总览屏的界面代码在 `crates/app-shell/src/screens/overview/mod.rs`;健康与指标的现算逻辑在 `crates/bw-v4/src/app/health.rs`(`collect_health_inputs`/`recompute_health`)与 `crates/bw-v4/src/derive/mod.rs`(纯函数 `derive_project_health`,密封类型见 `derive/sealed.rs`);把这些现算结果拼成界面能直接渲染的结构,发生在 `crates/app-shell/src/bridge/vm_build.rs`(总体拼装)与 `vm_panels.rs`(计划屏/指标/会话等分块拼装);ViewModel 类型是 `crates/app-shell/src/vm.rs` 里全新定义的一批结构体(`HealthVm`/`MetricsVm`/`MetricCardVm`/`WeekVm`/`ReleaseVm` 等)。`crates/ui` 这个 V3 的 crate 在这条链路里一行没用到——V4 的 ViewModel 不与它共享任何类型。总览屏只通过命令 / 事件与内核通信,不直接碰任何 SQL,这一条原文说对了,继续成立。
 
 ### 3.1 复用现有(不重写)
 
 - `bw_core::derive::measure` / `evaluate_metric` / `Derived<Signal>`(`crates/bw-core/src/derive/`):每条业务指标(②③④)自身的 Signal 沿用这条已跑通、wasm 可编译的 L1→L2 链,V4 只改输入来源(从查 `metric`/`observation` 两张表改成读 `.bw/metrics.toml` 定义 + 现算 / 文件读数,见 3.3)。
-- `crates/ui/src/vm.rs::MetricVm` / `metric_vm()`:指标卡字段结构(目标 / 现值 / 保鲜期 / 趋势 / 手填徽记)直接沿用;`weekly_spark()` / `weekly_delta()` 这两个算法本身(输入一串数值算出走势 / 环比)可以沿用,但**喂给它们的数据来源要换**——今天是查 `observation` 表最近 8 行,V4 要么对过去 8 周现算、要么回扫 8 份周计划文件,两者拼出同样形状的输入序列(2.3 节②)。
+- **指标卡 ViewModel,A 刀落地后改。** 原文说复用 `crates/ui/src/vm.rs::MetricVm`/`metric_vm()`,包括 `weekly_spark()`/`weekly_delta()` 两个算法。实况是 `crates/ui` 没有被用到——V4 的指标卡结构是 `crates/app-shell/src/vm.rs::MetricCardVm`(与 `MetricsVm` 一起),全新定义,不复用 `crates/ui` 的任何类型或函数。`weekly_spark()`/`weekly_delta()` 这两个"输入一串数值算出走势/环比"的算法思路本身可以借鉴,但既然没有复用原来的函数,实现时要在 `app-shell` 这一侧重新写一份同类算法,喂给它的数据来源按 2.3 节②的口径:要么对过去 8 周现算、要么回扫 8 份周计划文件。
 - `bw_engine::evidence::collect()`(`crates/bw-engine/src/evidence.rs`):⑤块的仓统计子进程读取。
 - `bw_engine::metrics_file::read()` / `bw_engine::project_file::read()`:铺底与名片编辑读写正本用的既有解析器;`.bw/project.toml` 的 `[chat]` 段要同步加进 `ProjectFile` struct(`deny_unknown_fields` 已开,漏改会让老版本 buddy 读新文件解析失败)。
 - `bw_engine::week_plan_file.rs::extract_goal()` / `extract_activities()` / `extract_front_matter()`(02 篇 §3.3 新增,本篇直接消费):⑥块的周目标、业务活清单,以及判断某份周文件是不是回填(front matter `origin`),都靠这三个函数。
@@ -185,41 +185,65 @@ sqlite3 <db> "SELECT count(*) FROM issue WHERE project_id='<pid>' AND origin='ba
 
 今天(V3)是「写透缓存」模式:`Store::recompute_signals`(`crates/bw-store/src/sqlite.rs:1411`)在相关命令执行后被调用,把算好的 Signal 写进 `metric.signal` / `op_stage.routine_signal` / `project.signal` / `project.weekly_signal` 四个缓存列,界面读缓存。`project.weekly_signal` 听起来像「周快照」,但读代码可见它和 `signal` 每次都被同一条 UPDATE 写成相同值(`sqlite.rs:1538` 附近),从未真正按周冻结,只是历史遗留命名。
 
-V4 总览的 health(2.4 节)**不走这条缓存链**:母文档明确「读时现算,库里不存灯」;(a)(b)(c) 本来就按时间窗口现算,换参数即可回算历史周。`recompute_signals` 原本依赖 `op_stage.routine_schedule` 取保鲜期,但 `op_stage` 表在 V4 已经整表不存在(阶段降级为活的类别标签,02 篇 §2.1),这条路径本来就走不通了——新算法直接改成**固定 `Cadence::Weekly`**(是否按指标细分见第 6 节)。`metric` 表(连同它的 `signal`/`hit` 两列)在 V4 也整表不存在(02 篇 §2.1)——指标卡小圆点复用的是 3.1 节说的「派生链函数沿用、输入换成 `.bw/metrics.toml` 定义 + 现算 / 文件读数」,不再有一张表能缓存它的结果。`project.signal`/`weekly_signal` 两列结构不变(02 篇 §2.1),但如 2.4 节末段所说,它们只服务项目墙的显示缓存,总览屏自己从不读它们当输入,只在算完一次 health 后顺手写回。
+V4 总览的 health(2.4 节)**不走这条缓存链**:母文档明确「读时现算,库里不存灯」;(a)(b)(c) 本来就按时间窗口现算,换参数即可回算历史周。`recompute_signals` 原本依赖 `op_stage.routine_schedule` 取保鲜期,但 `op_stage` 表在 V4 已经整表不存在(阶段降级为活的类别标签,02 篇 §2.1),这条路径本来就走不通了——新算法直接改成**固定 `Cadence::Weekly`**(是否按指标细分见第 6 节)。`metric` 表(连同它的 `signal`/`hit` 两列)在 V4 也整表不存在(02 篇 §2.1),指标卡小圆点不再有一张表能缓存它的结果。`project.signal`/`weekly_signal` 两列结构不变(02 篇 §2.1),但如 2.4 节末段所说,它们只服务项目墙的显示缓存,总览屏自己从不读它们当输入,只在算完一次 health 后顺手写回。
 
-伪码(仅本节允许出现,只示意结构,真实命令见 2.3/2.4 节读回段):
+**判定伪码,A 刀落地后按真实代码重写。** 原文的伪码结构本身设想大致成立,但把三层放错了地方(单文件 `bw-app/src/overview.rs` 一次算完),也没有把"git 读不读得动"当成一条独立输入。真实代码把"收集输入"和"判定颜色"拆成两处:输入采集在 `crates/bw-v4/src/app/health.rs::collect_health_inputs`,只读不判断;唯一判定颜色的纯函数在 `crates/bw-v4/src/derive/mod.rs::derive_project_health`,输入之外没有任何隐藏状态,同样的输入永远同样的输出。判定顺序也不是原文写的"先判绿":
 
 ```rust
-// bw-app/src/overview.rs(新)
-pub async fn compute_overview_health(
-    workspace: &Path, store: &dyn Store, pid: ProjectId, now: OffsetDateTime,
-) -> HealthResult {
-    let (week, last_week) = (iso_week_of(now), iso_week_of(now - Duration::weeks(1)));
-    let plan = week_plan_file::read(workspace, &week)?;                 // 仓文件,02 篇 §3.3
-    let has_goal = plan.as_ref().is_some_and(|p| p.goal.is_some());
-    let progressed = has_real_git_commits(workspace, &week, now).await?;       // git log --all --since=<周一>
-    let progressed_last = has_real_git_commits(workspace, &last_week, now).await?;
+// crates/bw-v4/src/app/health.rs —— 只负责从仓现场取三条判据的输入
+pub async fn collect_health_inputs(workspace: &Path, week: &str) -> HealthInputs {
+    let last_week = isoweek::previous_week(week).unwrap_or_default();
+    let this_plan = week_plan_file::read(workspace, week).ok().flatten();
+    let last_plan = week_plan_file::read(workspace, &last_week).ok().flatten();
 
-    let metrics = metrics_file::read(workspace)?;                        // .bw/metrics.toml,既有解析器
-    let (mut any_red, mut has_reading) = (false, false);
-    for m in metrics.lagging.iter().chain(metrics.leading.iter()) {
-        let reading = read_metric_value(workspace, m, &week, &last_week)?;    // 现算 或「本周指标读数」段
-        has_reading |= reading.is_some();
-        if let Some(v) = &reading {
-            any_red |= bw_core::derive::evaluate_metric(v, &m.target).signal() == Signal::Red;
-        }
+    // 「这个仓 git 读得动吗」是一条独立输入,不是"零提交"的旁注——读不动的
+    // 时候零提交说明不了任何事,新接入的项目不该因此第一眼就看到红灯。
+    let git_readable = crate::git::is_repo(workspace).await;
+    let committed_this_week = crate::git::has_commits_in_week(workspace, week).await.unwrap_or(false);
+    let committed_last_week = crate::git::has_commits_in_week(workspace, &last_week).await.unwrap_or(false);
+    let merged_last_week = crate::git::has_merges_in_week(workspace, &last_week).await.unwrap_or(false);
+    let released = /* docs/releases.md 上周有没有新增一行,02 篇 §2.5 的发版记录 */;
+
+    HealthInputs {
+        has_week_goal: this_plan.as_ref().is_some_and(|p| p.has_goal()),
+        committed_this_week,
+        committed_last_week,
+        git_readable,
+        has_metric_reading: this_plan.as_ref().is_some_and(|p| p.has_reading())
+            || last_plan.as_ref().is_some_and(|p| p.has_reading()),
+        // 读数是否越线要按 `.bw/metrics.toml` 的目标比对 —— A 刀还没接这一步,
+        // 如实给 false,不假装判过。见下方说明②。
+        any_metric_red: false,
+        delivered_last_week: merged_last_week || released,
     }
+}
 
-    let had_delivery = had_merge_or_release(workspace, &last_week).await?;     // git --merges 或 docs/releases.md
-    let (a, b, c) = (has_goal && progressed, has_reading, had_delivery);
-    let level = if a && b && c { Signal::Green }
-        else if !progressed && !progressed_last { Signal::Red }
-        else if any_red { Signal::Red }
-        else if !a && !b && !c { Signal::Unknown }
-        else { Signal::Amber };
-    HealthResult { level, reasons: build_reasons(a, b, c) }
+// crates/bw-v4/src/derive/mod.rs —— 唯一判定颜色的纯函数
+pub fn derive_project_health(inputs: &HealthInputs) -> DerivedHealth {
+    let (a, b, c) = (
+        inputs.has_week_goal && inputs.committed_this_week,  // (a) 本周定了目标且真有提交
+        inputs.has_metric_reading,                            // (b)
+        inputs.delivered_last_week,                           // (c)
+    );
+    // 判红排在最前面:三条判据齐了但指标越线,那是红,不是绿。
+    let stalled = inputs.git_readable && !inputs.committed_this_week && !inputs.committed_last_week;
+    let signal = if inputs.any_metric_red || stalled {
+        Signal::Red   // 指标越线,或者读得动 git 而连着两周一条提交都没有——真的停了
+    } else if a && b && c {
+        Signal::Green
+    } else if !a && !b && !c {
+        Signal::Unknown   // 三条判据都不成立,又没有"确实停了"的证据:就是没数据
+    } else {
+        Signal::Amber
+    };
+    DerivedHealth { signal, reasons: /* 三条判据各自一句人话理由 */ }
 }
 ```
+
+两条特别说明(原文的伪码没有覆盖,是这次改写新补的):
+
+1. **「git 读不读得动」是一条独立输入,不是零提交的同义词。** `git_readable` 单独判一次(`crate::git::is_repo`)——没配工作区、目录不是 git 仓、机器上没装 git,这一条是假,此时"两周零提交"这句话本身没有意义,不能拿去判红。没数据的项目显示的是灰(`Signal::Unknown`),不是红,也不是绿。
+2. **「指标越线」这条输入目前恒为 `false`。** `.bw/metrics.toml` 的目标比对(某条读数按目标算下来是不是超线)这一刀还没接,`any_metric_red` 如实写死 `false`——这意味着灯现在**不会**因为指标读数难看而变红,只会因为"两周零提交"这一条硬判据变红。这是已知留白,不是这段代码的 bug,接上目标比对是后面的刀要做的事。
 
 ## 4 · 边界与失败
 

@@ -20,7 +20,7 @@
 
 **拖拽**统一到六列都能拖(第五轮用户拍板改的,待拍-25 已按此改;用户原话「拖动要统一,都能拖」):待办池⇄待办之间(或列内部)是「排期」动作,松手直接生效,不改任何状态;拖到进行中/评审中/已完成/阻塞是「状态动作」,松手弹一个确认框才真正发生——拖到进行中 = ▶开工(框里显示开工工具/workflow,确认才真起 agent 会话);拖到评审中 = 推到评审中;拖到已完成 = ✓完成(仍是铁律里「人显式点」的那一下,只是点在弹窗上,且只有评审中的活能被拖进这一列);拖到阻塞 = ⛔阻塞(框里填原因,必填)。不合法的转移(状态机不允许的,比如待办池直接拖到已完成)松手即弹回原位并提示原因,不静默失败。**卡面因此不摆按钮**——拖拽+确认弹窗覆盖日常操作,卡片只留标题与 1-2 个 chip;§2.2 给的全部按钮语义原样保留在右侧详情面板(§2.6),当作不想拖时的替代路径。第一轮「不拖拽」、第四轮「只拖排期」两种写法都已作废,见 §2.3。
 
-**发版本**是三步——勾这周完成的活(默认全勾)→ 填版本号(默认接在研版本,新项目默认 `v0.1`)→ 确认;确认后 buddy 建一张 `kind='light'` 的轻量活「发版本 vX」(不起 agent 会话)、开分支把这行说明提交进 `docs/releases.md`、开 MR,这张活停在评审中等人处理——**库里没有 `release` 表要写**,`docs/releases.md` 那一行本身就是随这个 MR 提交的内容,有权限的人后续点「合入并完成」的那一刻(§2.4),这一行连同这张活自己的合入+完成记账一起落地,不再有第二处库写入。可选「让 agent 起草说明」。**预览未合入**只在当前周有一张运作活①(或③的合并调整/历史回填)还在评审中、MR 未合入时能点开,从它的 worktree 读文件渲染周头,顶部横幅「预览 · 未合入」,关掉恢复正常(§2.5)。
+**发版本**(A 刀落地后改,细节见 §2.4):**是一个按钮,一次点击直接生效**——不是三步向导。点下去自动取本周「已完成」列的全部活、按在研版本算出下一个版本号、说明写死成「本周完成的活」,直接往 `docs/releases.md` 追加一行并给这些活回填版本号;不建活、不开分支、不开 PR、没有等人处理这一步。版本号认不出格式(比如还没设过在研版本)按钮就是灰的,内核也会拒收。**预览未合入**只在当前周有一张运作活①(或③的合并调整/历史回填)还在评审中、MR 未合入时能点开,从它的 worktree 读文件渲染周头,顶部横幅「预览 · 未合入」,关掉恢复正常(§2.5)。
 
 ## 2 · 设计
 
@@ -84,15 +84,15 @@
 - **可拖 = 六列全部的卡**,不再限定只有待办池/待办两列带 `draggable`。
 - **排期动作(待办池⇄待办、列内排序)**:效果不变,直接生效,不改任何状态——跨列发 `ScheduleIssue{id,week_of}`(拖进待办 `week_of=Some(选中周)`,拖回待办池 `week_of=None`);同列发 `ReorderIssue{id,after}`(列内调先后)。**落点是三处,不是只写库**——02 篇 §2.2/§3.4 把这条时序的具体设计留给本篇,下面单独展开(见「排期的三层写入」)。
 
-**排期的三层写入(缓存 / 文件 / 远端标签)**:`ScheduleIssue`/`ReorderIssue` 发出后,不是只写库这一件事——02 篇 §2.2 定了正本在 `docs/plan/YYYY-Www.md` 活清单那一行、`issue` 9 列只是缓存,并把"缓存先动、文件随后走 MR 追上"这条时序的具体设计留给本篇。三层顺序与失败处理:
+**排期的三层写入(缓存 / 文件 / 远端标签),A 刀落地后改第②③层。** 原文①层(缓存)与实况一致,保留不动。②③两层原文设计成"文件层走 MR、远端标签尽力而为",这套设计和 03 篇 §2.5 说的一样,建立在「已经有开分支/开 PR 能力」这个不成立的前提上。三层实况:
 
-1. **缓存层(立即,同步)**:命令一发出,先 upsert `issue` 表对应的 `week_of`/`sort_order` 两列,立刻发 `IssueScheduled{id}`/`IssueReordered{id}` 事件,看板马上跟手反映拖拽结果——这一步是乐观更新,不等文件或 MR。
-2. **文件层(异步,走 MR,防抖合并)**:后台把这次改动应用到目标周 `docs/plan/YYYY-Www.md` 的「业务活」表格(§2.5 样例,顺序列对应 `sort_order`)。为避免"一次拖拽一个 MR"的噪音,复用和 `CutRelease`(§2.4)同一种"轻量活+MR"基础设施,按周去重:这一周如果已经有一张 `kind='light'`、标题形如「排期调整 · 2026-W34」的活正处于 `InReview`(MR 开着),后续拖拽直接把 `issue` 缓存表当前最新状态整体重新渲染成这份周文件的活清单表格,覆盖式提交(push 追加一次 commit)到同一分支,不新开 MR;没有这样一张活时,首次拖拽触发新建一张、开分支、提交、开 MR,状态进 `InReview`,和其它「待人处理」的活一样等人合入。**如果这一周此刻正有运作活①(或③的合并调整)自己的 MR 开着**,排期改动直接并到那条分支上,不另开一张「排期调整」轻量活——一份草稿只对应一份正在准备合入的周文件,不产生两条相互覆盖的分支。这张轻量活的合入方式和 `CutRelease` 的「发版本 vX」完全对称:有权限的人点「合入并完成」(`MergeIssuePr` 接 `TransitionIssue{Done}`),合入那一刻周文件的活清单表格成为主干正本,和这张轻量活自己的合入+完成记账同一时刻发生,不再有第二处库写入需要补(缓存早就是最新状态)。
-3. **远端标签(镜像,尽力而为,不阻塞)**:若这张活的 `remote_number` 非零,best-effort 打/挪一个 `bw/week:2026-W34` 这类标签到远端 issue,失败不重试、不提示、不影响任何功能——纯粹方便在网页上顺手看,打不上就打不上(母文档 §6.1「远端标签是镜像不是正本」)。
+1. **缓存层(立即,同步)**:命令一发出,先 upsert `issue` 表对应的 `week_of`/`sort_order` 两列,立刻发 `IssueScheduled{id}`/`IssueReordered{id}` 事件,看板马上跟手反映拖拽结果——这一步是乐观更新,不等文件写完。这一层与原文一致。
+2. **文件层(同步,原地换表,不走 MR)**:`schedule_issue`/`reorder_issue`(`crates/bw-v4/src/app/plan.rs`)在更新完缓存之后,直接调用 `rewrite_week_activities` 把目标周 `docs/plan/YYYY-Www.md` 里「业务活」「本周运作」两节的表格**原地换掉**(`week_plan_file::replace_table`),文件里人自己写的周目标第二段、风险记录、自定义小节等其它内容一个字不动。这一步是**同步直接写工作区文件**,不建活、不开分支、不开 PR、不提交 git——原文说的「轻量活+MR、按周去重、覆盖式 push」这一整套机制不存在。没有"MR 开着"这个中间状态,拖拽落定的那一刻,文件已经是新内容。
+3. **远端标签(镜像,尽力而为)**:原文设计给活对应的远端 issue 打/挪一个 `bw/week:2026-W34` 这类标签,**这一刀一行没做**——`crates/bw-v4/src/git.rs` 没有远端标签相关的函数,也没有任何调用远端 issue API 打标签的代码。设计本身保留(母文档 §6.1「远端标签是镜像不是正本」仍然成立),只是还没接。
 
-**MR 还没合入期间界面显示什么状态**:看板本身不需要专门"预览"——缓存已经是拖拽后的最新真相,看板显示的就是这个结果,这点和 §2.5「预览·未合入」服务的场景相反(那里是运作活①的草稿**还没写回缓存**,必须专门去读 worktree 才能看到;这里恰恰是缓存**已经抢跑**在文件前面)。因此只需要一个轻量提示,不复用 §2.5 那套"整份周头换目录重渲染"的机制:这张「排期调整」活关联到的卡片,在详情面板加一行不阻断的小字「排期改动待合入 · MR #N」,提示这次改动还没有落进 `docs/plan/` 正本,直到 MR 合入才消失。
+**界面显示什么状态,同样改写**:原文设计的「排期改动待合入 · MR #N」这类小标依赖 MR 机制,现在不适用——文件层是同步直接写的,拖拽落定的那一刻文件已经是最新内容,没有"待合入"这个中间态要提示,看板与详情面板都不需要为此加一行小字。
 
-**文件层写入失败时**(网络/权限异常导致完全没能开出 MR):缓存不回滚——缓存已经是当前 UI 的事实来源,用户体验不受影响;卡片持续显示「排期待合入」,下一次同类拖拽,或人工点「刷新」时重试整套「新建/追加轻量活+MR」流程。**这张 MR 被人工关闭而不合入时**(判断这次拖拽是误操作):不需要一条专门的"撤销拖拽"命令——下一次 `RefreshIssueCacheFromPlan`(02 篇 §3.4,项目打开自动跑一次或人工点「刷新」触发)会用仍停留在上一次合入版本的 `docs/plan/YYYY-Www.md` 覆盖缓存,"文件与缓存分歧时以文件为准"(02 篇 §2.2)这条既有对账规则在这个场景下自然生效。
+**文件层写入失败时**:`rewrite_week_activities` 走的是本机文件系统写入(`std::fs::write` 一层),失败原因通常是磁盘/权限问题而不是网络;失败时缓存不回滚(缓存已经是当前 UI 的事实来源),但也没有"重试开 MR"这件事可做——原文「下一次同类拖拽或人工点刷新时重试整套新建/追加轻量活+MR 流程」不再适用,重试就是再触发一次同一条 `ScheduleIssue`/`ReorderIssue` 命令。「文件与缓存分歧时以文件为准」这条既有对账规则(靠 `RefreshIssueCacheFromPlan`)仍然成立,不受这次改写影响。
 
 - **状态动作(拖到进行中/评审中/已完成/阻塞)**:松手**不直接改状态**,先弹一个确认框,确认才真正发生对应命令——
   - 拖到**进行中** = ▶开工:框里显示这张活、开工工具与 workflow(默认按类别填好,可改),确认才发既有 `RunIssue`(真起 agent 会话,不是免费动作,不能只靠松手就触发)。
@@ -107,15 +107,18 @@
 - **Windows**:wry 默认的文件拖放处理器会让 WebView2 屏蔽页面内拖放,**必须**在 `Config::new()` 链加 `.with_disable_drag_drop_handler(true)`(`dioxus-desktop-0.7.9/src/config.rs:164-166` 官方注释原话)——落在 01 篇 §3.1 的 `main.rs` 骨架,01 篇当前没有,**本篇提出要求,01 篇据此回填**;BW 未用「文件拖进窗口」,加这行没代价。
 - **macOS**:预研没查到会拦截页面内拖放的框架级机制,但「WKWebView 桌面端对 `draggable` 的支持程度」没有权威一手文档确认——**如实标注:还没有真机验证过一次**,§5 补一条。
 
-### 2.4 发版本三步
+### 2.4 发版本:一次点击直接写,不是三步向导
 
-周头「发版本」三步(形态留 04 篇/高保真定,本篇只定步骤与数据):
+**A 刀落地后重写。** 原文设计的是一个三步向导——选活(默认全勾本周已完成的活,可取消个别)→ 填版本号(默认接在研版本,可改)→ 确认(建一张轻量活+分支+PR,停在评审中等人合入,可选让 agent 起草说明)。这套设计的前提同样是「写仓一律走分支+MR」已经有底层能力——03 篇 §2.5 已经说明这个前提在 A 刀不成立:`crates/bw-v4/src/git.rs` 没有开分支、开 PR 的函数。发版本这个动作因此也没有走上那套向导,而是做成了周头一个按钮,点一下直接写仓:
 
-1. **选活**:默认全勾「这周状态是已完成的活」(`week_of=选中周 AND status=Done`,业务活+运作活都算),可取消个别不想计入的。
-2. **版本号**:默认现读 `.bw/project.toml` 的 `current_version` 字段(不进库,§2.1 已定);从没设过时(新项目第一次)默认 `v0.1`(待拍-04/§3 第 0 站)。可改。
-3. **确认**:不直接写仓——按母文档 §2.6「三条不变的规矩」第①条「凡写仓都是活,写仓一律走分支+MR」,buddy 建一张 `kind='light'` 的轻量活「发版本 vX」(不起 agent 会话,和「编辑项目信息」同一种轻量活+MR 模式)、开分支、把这次选的活/版本号/说明写成 `docs/releases.md` 的一行提交上去、开 MR。这张活停在评审中,出现在待人处理里。「用 agent 起草说明」是确认前的可选动作——起一次读了 `docs/plan/YYYY-Www.md` 和合入记录的简短会话生成草稿给人改,不选就人自己写这行说明;这次会话只影响说明文字的来源,不改变这张轻量活本身不带 agent 会话这件事。
+- **没有选活步骤**:按钮点下去自动取**当前看板里「已完成」列的全部卡片**(`crates/app-shell/src/screens/plan/mod.rs::board_head`——`p.board.columns` 里 `status == Done` 那一列的所有卡),不弹框让人勾选,也不区分业务活/运作活。
+- **没有版本号输入框**:版本号是从 `.bw/project.toml` 的 `current_version` 按 `主.次` 递增算出来的下一个版本(`next_version()`:取最后一个 `.` 之后的数字 +1),人不填、也改不了这次要发哪个号。
+- **说明写死**:传给 `CutRelease` 的 `note` 固定是字符串「本周完成的活」,没有「用 agent 起草说明」这个可选动作,也没有别的文案入口。
+- **没有活、没有分支、没有 PR**:点下去直接调用 `bw_v4::app::plan::cut_release`——先给 `docs/releases.md` 补空骨架(如果还没有这份文件),再把选中的活挨个查出编号,把这一行(版本号、今天日期、写死的说明、活号列表、来源"人发")追加进这份文件,**成功写进文件之后才把这些活的 `issue.version` 回填成这个版本号**——先写发版记录、写成了再回填版本号,顺序不能反,否则重复点一个已经存在的版本号会把活打上标签、发版记录里却没有这一次,账就对不上。整个过程不建 `kind='light'` 的轻量活,不开分支,不开 PR,没有"停在评审中等人合入"这一步——写完这一刻就是发布完成。
 
-**合入那一刻,`docs/releases.md` 那一行就是唯一要落地的东西——库里没有 `release` 表要写**(02 篇第七轮盘点已删除 `release`/`release_issue` 两张表,§2.1):有权限的人对这张「发版本 vX」活点「合入并完成」(01 篇已定义的 `MergeAndComplete`,内部仍是 `MergeIssuePr` 接 `TransitionIssue{Done}` 两步,同一件活绝不重复记账)——**这一下**让 MR 里已经提交好的 `docs/releases.md` 那一行成为主干正本,和这张轻量活自己的合入+完成记账同一时刻发生,不再有第二处"写 `release` 表行"的动作;可选打同名 git tag 仍然发生,但只是一次 git 操作,不写库。「包含哪些活」这件事完全由 `docs/releases.md` 那一行的自由文本(活号列表)携带,活挂哪个版本只用 `issue.version` 一列,两者拼起来就是完整信息(02 篇 §2.5「`docs/releases.md`」样例)。这是母文档 §2.6 一处自相矛盾(规矩①「凡写仓都是活」vs 早先「发版本」表格行写的「纯 UI」)被按规矩①改正、又经 02 篇第七轮删表进一步收紧后的口径,本篇不再有张力需要留进开放问题。
+**两条护栏,补在原文没有的地方**:①版本号认不出「数字.数字」格式(最常见的是还没设过在研版本、`current_version` 还是「(待填)」这类占位文案)时,`next_version()` 返回空字符串,按钮直接置灰点不动;`cut_release` 内核侧同样拒收——版本号是空的或包含 `(` 这种明显是占位文案的字符,直接报错拒绝,双重防线不给发版记录写进一行叫「(待填)」的版本。②`release_file::append_row` 按版本号幂等:同一个版本号已经存在的行不会追加第二次,也就不会给活重复打标签。
+
+原文关于「合入那一刻 `docs/releases.md` 那一行才成为主干正本」的说法也不再适用——没有分支就没有"合入"这一步,写文件的那一刻就是主干上的内容。「包含哪些活」这件事仍然完全由 `docs/releases.md` 那一行的自由文本(活号列表)携带,活挂哪个版本仍然只用 `issue.version` 一列,这一点原文说对了,予以保留。
 
 ### 2.5 预览未合入
 
@@ -137,7 +140,7 @@
 | 类别 | `issue.stage` | 一般创建时定,改动影响默认映射,留 04 篇决定要不要开放改 |
 | 开工工具 | `issue.tool` | 可改 → 04 篇范围的命令,本篇只留入口 |
 | workflow/加挂技能 | `issue.workflow` | 可改 → `SetIssueWorkflow{id,workflow}`(新命令,§3)|
-| 推动指标 | `issue.metric_key` 单列(02 篇 §2.2 第七轮改定:一活一指标,不建 `issue_metric` 关联表;要挂多个就拆活)| 可改(单选一个已定义的引领/滞后指标;命令留 02/04 篇范围)|
+| 推动指标 | `issue.metric_key` 单列(02 篇 §2.2 第七轮改定:一活一指标,不建 `issue_metric` 关联表;要挂多个就拆活)| **未做**(A 刀落地后改):设计是可改,单选一个已定义的引领/滞后指标;实际没有对应命令(见 §3——`SetIssueMetric` 没有接进 `crates/bw-v4/src/command.rs`),建活时这一列恒为空字符串,详情面板这一行目前只能显示"未挂" |
 | 周 | `issue.week_of` | 可改 → `ScheduleIssue{id,week_of}`——和拖拽同一条命令,详情面板给个下拉,不强迫必须靠拖拽(可达性,也让「全部」视角选中的卡能改周);走 §2.3「排期的三层写入」同一条路径,不是详情面板专属的另一套逻辑 |
 | 版本 | `issue.version` | 由所属周/发版决定,本篇不在这里开放改 |
 | 来源 | `issue.origin` | 只读,历史事实不允许事后改 |
@@ -155,11 +158,11 @@
 
 | 命令/事件 | 一句话 |
 |---|---|
-| `ScheduleIssue` | 把活排进(或移出)某一周;跨列拖拽/右键菜单/详情面板改周都发它;bw-app 内部触发§2.3「排期的三层写入」——缓存立即动,文件随后走一张按周去重的轻量活+MR 追上,UI 不额外发命令 |
+| `ScheduleIssue` | 把活排进(或移出)某一周;跨列拖拽/右键菜单/详情面板改周都发它;`crates/bw-v4` 内部触发§2.3「排期的三层写入」——缓存立即动,文件层同步原地换表追上,UI 不额外发命令(A 刀落地后改:不再是"轻量活+MR",见 §2.3)|
 | `ReorderIssue` | 待办池/待办列内调先后,不碰状态;同样触发§2.3 三层写入 |
 | `CreateIssue`(含默认映射填充)| 「新建活」按钮,创建时按类别自动填工具/workflow 默认值 |
 | `StartWeekPlanning` | 「开始本周」:建运作活①并跳会话屏 ▶开工 |
-| `CutRelease` | 发版三步的第三步:建 `kind='light'` 轻量活「发版本 vX」+分支提交 `docs/releases.md` 一行+MR;库里没有 `release` 表要写,合入即生效(见 §2.4)|
+| `CutRelease` | 「发版本」按钮一次点击直接生效:自动取本周已完成的活、算出下一个版本号、写死说明,直接往 `docs/releases.md` 追加一行并给这些活回填 `issue.version`;不建活、不开分支、不开 PR(A 刀落地后改,见 §2.4)|
 | `SetCurrentVersion` | 切在研版本;母文档原文归类"纯本机动作,不建活",但 02 篇已把 `current_version` 移出 `project` 表、只存在 `.bw/project.toml` 这份仓文件里——这处母文档与 02 篇之间没消解的张力,本篇不擅自选边,列入 §6 开放问题 |
 | `TogglePreview` | 开/关「预览·未合入」,换一次读的来源 |
 
@@ -167,7 +170,9 @@
 
 ## 3 · 工程对照
 
-**crate/目录**:`crates/app-shell/src/screens/plan/`(01 篇目录树已画出位置),内核侧不新开 crate,沿用 `bw-app::command`/`bw-store::sqlite`/`bw-core::model`。
+**crate/目录**:`crates/app-shell/src/screens/plan/`(01 篇目录树已画出位置)。
+
+**A 刀落地后改。** 原文说内核侧不新开 crate,沿用 `bw-app::command`/`bw-store::sqlite`/`bw-core::model`——这句话建立在「V4 摞在旧内核上」这个前提上,01 篇 §2.6 已经说明这个前提不成立:库缩到四张表之后,`bw-store`/`bw-app` 那套用例接不上,V4 开了自己的 `crates/bw-v4`。计划屏用的实际是 `bw_v4::command`(`Command`/`Event` 全新一对枚举)、`bw_v4::store::V4Store::open()`、`bw_v4::model`——一个字都不与旧内核共享,旧 crate 一行没改。
 
 **`issue` 表增量(照抄 02 篇 §2.2/§3.1,本篇不再另定一套字段名)**:
 
@@ -204,14 +209,10 @@ ScheduleIssue { id: IssueId, week_of: Option<String> },  // None = 移出回待�
 // 等价,01 篇据此改名)。
 ReorderIssue { id: IssueId, after: Option<IssueId> },    // None = 排到列首
 
-// 较 01 篇改动:语义收窄为「建轻量活+分支提交+MR」,不直接写仓——02 篇第七
-// 轮盘点已删除 release/release_issue 两张表,库里没有"release 行"这个概念
-// 要写。合入那一刻,MR 里已经提交好的 docs/releases.md 那一行本身就成为
-// 主干正本,不再有第二处写入(母文档 §2.6 规矩①「凡写仓都是活」改正后的
-// 口径,取代本篇较早版本按「纯 UI」表格行设计的直接写仓方案,也取代了更
-// 早一版"合入时补写 release 表行"的过渡设计)。version/note/
-// included_issue_ids 三项随这张轻量活的标题/说明落地。
-CutRelease { version: String, note: String, included_issue_ids: Vec<IssueId> },
+// A 刀落地后重写:原文签名不带 project_id,语义是「建轻量活+分支+MR,合入
+// 才生效」——03 篇 §2.5 已经说明这套分支+MR 的底层能力在 A 刀不存在。真实
+// 命令(crates/bw-v4/src/command.rs)直接写仓,没有中间的活/分支/MR:
+CutRelease { project_id: ProjectId, version: String, note: String, included: Vec<IssueId> },
 
 // 较 01 篇改动:01 篇早期叫 PreviewIssueWorktree{id}(只有「开」)。
 // 本篇需要能开能关,改名 TogglePreview、id 包进 Option,01 篇据此改名。
@@ -225,16 +226,20 @@ TogglePreview { id: Option<IssueId> },
 // 签名先按"仍不建活,但落点改成写仓文件"的保守读法占位,等用户裁决。
 SetCurrentVersion { version: String },
 
-SetIssueWorkflow { id: IssueId, workflow: String },  // 新增,详情面板改 workflow 用
-SetIssueMetric { id: IssueId, metric_key: String },  // 新增,详情面板改「推动指标」用;单选,对应 issue.metric_key 单列(02 篇 §2.2)
+SetIssueWorkflow { id: IssueId, workflow: String },  // 已实现,详情面板改 workflow 用
 
-// CreateIssue「含默认映射填充」不是加字段:bw-app 处理命令时按
-// issue.stage 查 04 篇 issue-policy.toml 映射自动填 tool/workflow,UI 不
-// 自己传这两个字段(避免和 04 篇映射表出现两份真相)。只新增
-// week_of: Option<String>(周头「新建活」传选中周,其它入口传 None)。
+// SetIssueMetric 未做(A 刀落地后改)。原文列了这条命令,当作「详情面板改
+// 『推动指标』」的既定实现——`crates/bw-v4/src/command.rs` 里没有这一条,
+// `issue.metric_key` 这一列建活时恒为空字符串,目前没有任何命令能改它。
+// 「推动指标」这个字段因此挪进 §2.6/§4「未做」的表述,不再当作已定的命令。
+
+// CreateIssue「含默认映射填充」不是加字段:crates/bw-v4/src/app/issue.rs
+// 处理命令时按 category 查 issue-policy.toml 映射自动填 tool/workflow
+// (已实现),UI 不自己传这两个字段(避免和 04 篇映射表出现两份真相)。只
+// 新增 week_of: Option<String>(周头「新建活」传选中周,其它入口传 None)。
 ```
 
-事件:`IssueScheduled{id}`、`IssueReordered{id}`(新,§2.3 三层写入的缓存层立即发出)、`IssuePlanFileSynced{id, pr_number}`(新,§2.3 文件层的轻量活开出/追加 MR 那一刻发出,驱动卡片「排期待合入」小标的显隐)、`ReleaseCut{version}`(改:现在在 `MergeAndComplete` 合入这张「发版本 vX」轻量活成功那一刻才发出,不是 `CutRelease` 命令本身返回时;库里不再有 `release` 表行要写,这个事件只是通知 UI 刷新 `docs/releases.md` 的解析结果)、`CurrentVersionChanged{version}`(新)、`PreviewToggled{id: Option<IssueId>}`(新,替代 01 篇只覆盖「开」的旧事件)、`IssueWorkflowChanged{id}`(新)、`IssueMetricChanged{id}`(新)。PTY/终端事件不属于本篇(05 篇范围)。
+事件(A 刀落地后改,与真实 `crate::command::Event` 对齐):`IssueScheduled{id, week_of}`、`IssueReordered{id}`(§2.3 三层写入的缓存层立即发出,文件层是同步写、不再单独发一个"文件已同步"事件——原文设计的 `IssuePlanFileSynced{id, pr_number}` 依赖的是不存在的 MR 机制,已经没有意义)、`ReleaseCut{version, rows_written}`(改:`CutRelease` 命令处理完就同步发出,不是等谁合入才发——A 刀没有"合入"这一步;`rows_written` 是这次追加有没有真的落地,已经存在的版本号会是 `false`)、`CurrentVersionChanged{version}`、`IssueCacheRefreshed{week, updated}`(`RefreshIssueCacheFromPlan` 跑完发出)。`PreviewToggled`/`IssueWorkflowChanged`/`IssueMetricChanged` 这几条原文设计的事件目前都没有对应的命令接进来(`TogglePreview`/`SetIssueMetric` 未实现,`SetIssueWorkflow` 已实现但目前复用其它事件通知界面刷新,没有专属事件)。PTY/终端事件不属于本篇(05 篇范围)。
 
 **`sort_order` 类型**:本篇选浮点数插入排序(新卡片插进两张卡之间取中间值),不是每次拖动重排整列——多数拖动只改一行,代价是精度用尽后需要一次性重新铺号,再平衡算法本篇不展开。预研 §9 开放问题②没选定方案,本篇选定了类型但没展开再平衡算法。
 
@@ -254,7 +259,7 @@ SetIssueMetric { id: IssueId, metric_key: String },  // 新增,详情面板改�
 
 - **拖拽排期,SQL 读回(缓存层)**:`sqlite3 <db> "SELECT week_of, sort_order FROM issue WHERE id='<uuid>';"` ——拖一张活到某周待办列,读回 `week_of` 变成目标周文本;再做一次列内排序,读回 `sort_order` 顺序符合拖动结果。这条同时验证「杀进程重开顺序一致」:`sort_order` 落库而不是像 `hifi/index.html:1123` 那样只活在前端内存的 `state.kanbanOrder` 里,重启后 `ORDER BY sort_order, number` 读出来的顺序应与关闭前一致;顺带确认左栏周列表顺序、待办池是否仍显示全部未排期活也和重开前一致。
 
-- **拖拽排期,文件层读回(§2.3 三层写入的第②层)**:拖拽后等文件层跑完(或人工触发一次重试),`git -C <ws> log --oneline -3 <排期调整分支名>` 应看到一次新提交;`cat <ws>/docs/plan/2026-W34.md` 的「业务活」表格「顺序」列应和刚才读到的 `sort_order` 对应;`sqlite3 <db> "SELECT status, pr_number FROM issue WHERE kind='light' AND title LIKE '排期调整 %' ORDER BY created_at DESC LIMIT 1;"` 应为 `in_review` 且 `pr_number` 非零。再拖第二张活到同一周,应看到同一条分支多了一次提交、`pr_number` 不变(按周去重,没有开出第二个 MR)。
+- **拖拽排期,文件层读回(§2.3 三层写入的第②层,A 刀落地后改)**:文件层是同步直写,拖拽命令返回时文件应该已经是新内容,不需要等谁跑完——`cat <ws>/docs/plan/2026-W34.md` 的「业务活」表格「顺序」列应和刚才读到的 `sort_order` 对应,文件里周目标、风险这类人手写的其它内容应该一个字没变;`git -C <ws> status --porcelain <ws>/docs/plan/2026-W34.md` 应显示这份文件有未提交的改动(A 刀这一层不提交 git,只是工作区文件写入);`sqlite3 <db> "SELECT count(*) FROM issue WHERE kind='light' AND title LIKE '排期调整 %';"` 应为 0——不建"排期调整"这张活。再拖第二张活到同一周,`docs/plan/2026-W34.md` 的表格应该整体反映两次拖拽后的最新结果,不产生历史痕迹。
 
 - **状态动作走确认框,SQL 读回**:拖一张 `InReview` 的活到已完成列,确认框点确认后 `sqlite3 <db> "SELECT status, settled_at FROM issue WHERE id='<uuid>';"` 应变成 `Done` 且 `settled_at` 非空;拖一张 `Todo` 的活到进行中列,确认框点确认后应出现一行新的 `claude_conversation`(真起了会话,不是假装;V4 没有 `workflow_run` 表,「真起了会话」的证据是这张表而不是一行运行记账,见 §2.2)。
 
@@ -262,18 +267,14 @@ SetIssueMetric { id: IssueId, metric_key: String },  // 新增,详情面板改�
 
 - **`can_transition_to` 守卫读回(非法转移)**:故意拖一张待办池的活到已完成列(模拟误拖),应松手即弹回、不出现确认框,`sqlite3 <db> "SELECT status FROM issue WHERE id='<uuid>';"` 前后各查一次应完全没变;再故意构造一次非法转移(比如给 `Backlog` 的活发 `TransitionIssue{Blocked}`),应被拒绝且 `status` 原地不动。
 
-- **发版本,两段式读回**:确认三步后先读回这张轻量活确实是「建活+MR」而不是直接写仓——评审中、有 PR、没有 agent 会话、库里没有独立 `release` 表可查:
+- **发版本,一次性读回(A 刀落地后改:不再是两段式)**:原文按"建活+MR、合入才生效"设计了两段读回,§2.4 已经说明这套机制不存在——点一下按钮,写入与回填版本号在同一次命令处理里同步完成,没有"评审中等合入"这个中间态。读回改成一次性核对:
   ```bash
-  sqlite3 <db> "SELECT status, pr_number, kind FROM issue WHERE title LIKE '发版本 %' ORDER BY created_at DESC LIMIT 1;"   # 应为 in_review、pr_number 非零、kind='light'
-  sqlite3 <db> "SELECT count(*) FROM claude_conversation WHERE issue_id=(SELECT id FROM issue WHERE title LIKE '发版本 %' ORDER BY created_at DESC LIMIT 1);"   # 应为 0——轻量活不起会话
+  tail -n 3 <ws>/docs/releases.md   # 点完按钮那一刻这一行已经在主干仓文件里,不需要等第二步
+  sqlite3 <db> "SELECT number, version FROM issue WHERE version != '' AND project_id='<pid>' ORDER BY updated_at DESC LIMIT 5;"   # 这次选中的活应该已经回填了这个版本号
   sqlite3 <db> "SELECT name FROM sqlite_master WHERE type='table' AND name='release';"   # 空结果——V4 schema 里从未定义过这张表(02 篇 §2.1/§2.7)
-  tail -n 3 <ws>/docs/releases.md   # 这一行此刻只存在于 MR 的分支上,主干 docs/releases.md 还看不到它
+  sqlite3 <db> "SELECT count(*) FROM issue WHERE title LIKE '发版本 %';"   # 应为 0——不建活,这条查询是反证:不该有一张叫「发版本 vX」的 issue
   ```
-  「合入并完成」之后再读一次,确认 `docs/releases.md` 那一行和这张轻量活的合入+完成记账同一时刻落地,库里始终没有第二处写入:
-  ```bash
-  sqlite3 <db> "SELECT status, settled_at, version FROM issue WHERE title LIKE '发版本 %' ORDER BY created_at DESC LIMIT 1;"   # status=done、settled_at 非空、version=这次发的版本号
-  tail -n 3 <ws>/docs/releases.md   # 追加的一行现在在主干仓文件里了
-  ```
+  再点一次同一个版本号(模拟重复点击):`docs/releases.md` 不应该多出重复行,已经回填过版本号的活也不会被再处理一次(`release_file::append_row` 按版本号幂等)。
 
 - **深链截图**:`BW_OPEN=<项目名> BW_PANEL=plan` 启动,stderr 打出 `[BW_OPEN]` 即渲染证据;「选中本周」和「全部」两种视角各截一张,点一张卡再截一次详情面板,确认渲染的是真实数据而非占位假数据。
 
@@ -286,7 +287,7 @@ SetIssueMetric { id: IssueId, metric_key: String },  // 新增,详情面板改�
 3. **`TogglePreview` 的并发场景**:待拍-21 只定了「合入前可以预览」,没定「同一周有两张评审中的运作活同时挂着」时预览开关该切哪一张、要不要给选择器。
 4. **「全部」视角下要不要也开放拖拽**:§2.3 排除在首版范围外(「全部」不按周分列,拖拽改哪一周不直观),但用户是否希望至少能把一张待办池的卡直接拖进当前在研的这一周,本篇没有验证过这个需求。
 5. **`SetCurrentVersion` 该不该建活,母文档与 02 篇之间有没消解的张力**:母文档「三条不变的规矩」原文把「切在研版本」和「合入、点完成」并列为「只动本机库、不碰仓的纯人工动作」,归类不建活;但 02 篇第七轮已把 `current_version` 移出 `project` 表、只存进 `.bw/project.toml`——这是一份仓文件,按同一条规矩「凡写仓都是活,写仓一律走分支+MR,唯一例外是新建空仓首提交」,切版本号已经不再"只动本机库"了。本篇不擅自替母文档拍板(既不单方面加一条新的"直接写仓不经 MR"例外,也不单方面把它并入常规轻量活+MR 流程),按 02 篇的存储位置如实设计存根签名(§3),具体走哪条路径留给用户裁决。
-6. **排期文件层的合并窗口**:§2.3「排期的三层写入」按周去重、复用同一张「排期调整」轻量活的分支,但"连续拖拽之间要不要有一个防抖窗口再统一 push"(比如攒够几秒或几笔改动再提交一次,而不是每次拖拽都单独 push 一次 commit)没有展开,留到实现阶段按实际拖拽频率决定,还是现在就定一个具体数字?
+6. **排期文件层要不要防抖(A 刀落地后改问题本身)**:原问题问的是"轻量活+MR 要不要按防抖窗口合并 push",这套机制已经不存在(§2.3)。实况是每次 `ScheduleIssue`/`ReorderIssue` 都同步触发一次 `rewrite_week_activities`,连续快速拖拽会连续触发多次文件写入——要不要为高频拖拽加一个防抖(攒够几次改动或几百毫秒再写一次文件),还是接受"逐次直写"现在这个更简单的实现,留到实现阶段按真实拖拽频率决定。
 
 (原第 2 条「发版本是否要走活+MR」已按母文档 §2.6 规矩①改正,不再是开放问题,见 §2.4。)
 

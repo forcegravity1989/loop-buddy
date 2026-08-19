@@ -387,7 +387,9 @@ Linear(工作流/看板的产品体验对标,不是功能照抄)
 
 #### `.claude/skills/**/SKILL.md`(技能与 workflow,预置包随 buddy 出厂)
 
-不给一份完整样例(SKILL.md 格式见 [`plan/16-skill-spec`](../../archive/plan/16-skill-spec.md) 与仓里现成的 `.claude/skills/`),本文只落一句话:**预置包(mattpocock-skills / superpowers / buddy 自建运作 workflow)随 buddy 二进制分发,铺底时复制进项目仓 `.claude/skills/` 目录**(待拍-32)——Claude CLI 只在项目仓里找技能,不会去读 buddy 安装目录;复制这一步因此是必需的,不是可选的便利。`.bw/issue-policy.toml` 里同时用名字引用它们(§2.5 的 `[[mapping]]` 段),但目录本身才是"有没有这个技能"的唯一判据,扫一遍 `.claude/skills/**/SKILL.md` 就是完整清单,不建登记表。
+不给一份完整样例(SKILL.md 格式见 [`plan/16-skill-spec`](../../archive/plan/16-skill-spec.md) 与仓里现成的 `.claude/skills/`)。
+
+**A 刀落地后改。** 原文说预置包是「三份自建运作 workflow + mattpocock-skills / superpowers」——这是设计目标,不是这一刀铺进去的东西。实际铺进项目仓 `.claude/skills/` 的是 buddy 自带的**九篇方法论技能包**(`crates/bw-v4/src/standard/mod.rs::preset_skill_packages()`,复用已经编进二进制的 `bw_core::bw_library::bw_standard_skill_docs()`,不重新抄一份):`evidence-first`/`spec-to-tests`/`baseline-before-touch`/`fresh-eyes-funnel`/`breaking-drill` 五篇按五阶段方法论各配一篇,外加 `competitive-analysis`/`north-star-discovery`/`metrics-binding`/`metrics-render` 四篇通用件。三份 buddy 自建运作 workflow(更新指标与周计划/资产盘点/规范铺底)与业界包(mattpocock-skills、superpowers)**一个都还没进** `standard/06-defaults/`——这个目录目前还不存在(§2.7 已定)。这是替身,不是最终形态:铺底第 1 步(03 篇 §2.2)的复制动作本身是真的在跑,但复制的是当前手头能复用的九篇现成方法论文档,不是设计里说的那三类件。Claude CLI 只在项目仓里找技能,不会去读 buddy 安装目录,复制这一步因此是必需的,不是可选的便利。`.bw/issue-policy.toml` 里的 `[[mapping]]` 段仍然按设计目标(`mattpocock-skills`/`superpowers` 等)写默认 workflow 名——这些名字目前在项目仓里找不到对应目录,是已知的留白,不是这一段文档的错字。目录本身才是"有没有这个技能"的唯一判据,扫一遍 `.claude/skills/**/SKILL.md` 就是完整清单,不建登记表。
 
 ### 2.6 信息住哪:一张盘点表
 
@@ -473,23 +475,29 @@ add_column_if_missing(&pool, "issue", "metric_key", "TEXT NOT NULL DEFAULT ''").
 
 这只是一个示例格式,试点前的 `issue` 9 列本身不需要这行代码(它们随新库首次创建就已经在 `CREATE TABLE` 语句里)。
 
-### 3.3 新增仓文件解析器模块(`crates/bw-engine/src/`)
+### 3.3 仓文件解析器落在哪(`crates/bw-v4/src/repo/`)
 
-跟随 `project_file.rs`/`metrics_file.rs`/`connectors_file.rs` 已立好的模式:只读+解析,`deny_unknown_fields`,`Ok(None)` = 文件不存在(诚实无事发生),解析失败是 `Err` 且绝不写半份缓存。四个新增点,**全部只读、不 upsert 任何库表**:
+**A 刀落地后重写。** 原文说这是在 `crates/bw-engine/src/` 里新增四个解析器、改 `project_file.rs` 一个现有文件——前提是 V4 继续摞在 `bw-engine`/`bw-app` 那套内核之上。这个前提在 01 篇 §2.6 已经不成立:库缩到四张表之后,V4 开了自己的 `crates/bw-v4`,不碰旧 crate;仓文件解析器跟着挪了地方,不是在旧文件上加代码。
 
-- `issue_policy_file.rs`(新):`IssuePolicyFile { tools: Vec<ToolDecl{name,kind,probe,capabilities,..}>, mappings: Vec<CategoryMapping{category,tool,workflow}>, review, cadence, kanban }`,对照 §2.5 样例逐段声明;`read(workspace) -> Result<Option<IssuePolicyFile>, _>` 同 `project_file::read` 骨架。
-- `standard_file.rs`(新):`StandardFile { version, enabled: Vec<String>, extensions: Vec<String>, source }`,对照 `.bw/standard.toml` 样例。
-- `week_plan_file.rs`(新):Markdown 不走 serde,只有一个 `extract_goal(markdown) -> Option<String>`,取「## 周目标」后第一段非空文本,供计划屏渲染周头时现读现用;`extract_activities(markdown) -> Vec<ActivityRow{order,title,category,tool,workflow,metric_key,remote_number}>` 解析「业务活」表格,供 §2.2 说的缓存对账用;`extract_front_matter(markdown) -> Option<WeekFrontMatter{week, origin}>` 供周列表判断某个文件是不是回填。
-- `release_file.rs`(新):Markdown 表格解析器,`read(workspace) -> Result<Option<Vec<ReleaseRow{version, released_at, note, included_issue_numbers, origin}>>, _>`,供总览发版记录块与计划屏发版时直接渲染;「包含的活」列的号解析成 `Vec<u64>`,找不到对应 issue 时该号跳过并记警告,不是解析失败。
-- `project_file.rs`(改现有文件,不新开):`ProjectFile` 加三个字段——`#[serde(default)] pub chat: Option<ChatConfig>`、`#[serde(default)] pub standard_version: String`、`#[serde(default)] pub current_version: String`;新增 `ChatConfig { provider: String, group_id: String, #[serde(default)] notify: Vec<String> }`,同款 `deny_unknown_fields`。**这四个新字段读出来只给界面直接用,不同步进库**(§2.6)。
+实况:五个解析器全部是 `crates/bw-v4/src/repo/` 下的新文件,读法沿用 `bw-engine` 已经立好的风格(只读+解析,`deny_unknown_fields`,`Ok(None)` = 文件不存在,解析失败是 `Err` 且绝不写半份缓存):
 
-### 3.4 `bw-app` 命令:新增什么、取消什么
+- `issue_policy_file.rs`:`IssuePolicyFile { schema_version, tools: Vec<ToolDecl{name,kind,probe,version_cmd,capabilities}>, mappings: Vec<CategoryMapping{category,tool,workflow}>, review: Option<ReviewPolicy>, cadence: Option<Cadence>, kanban: Option<KanbanLabels> }`,对照 §2.5 样例逐段声明,`mapping_for(category)`/`tool(name)` 两个查表方法。
+- `standard_file.rs`:`StandardFile { version, enabled: Vec<String>, extensions: Vec<String>, source }`,对照 `.bw/standard.toml` 样例。
+- `managed_file.rs`:`.bw/managed.toml` 的读写(`ManagedFile`/`ManagedEntry`)+ 指纹算法(`fingerprint(bytes) -> String`)+ 对账判定——`reconcile(entry, disk_bytes, version) -> Reconcile`,`Reconcile` 是 `Missing`/`Stale`/`HumanEdited`/`UpToDate` 四态,03 篇 §2.6 的对账分类直接对应这个枚举。
+- `week_plan_file.rs`:周计划 Markdown 的解析与改写。`read(workspace, week) -> Result<Option<WeekPlan>, _>` 解出的 `WeekPlan` 带 `has_goal()`/`has_reading()` 两个判据(08 篇健康推导直接用);`replace_table(raw, heading, new_table)` 原地换掉某个标题下的表格,不动文件其它内容(06 篇排期写回用的就是它);`render_activity_table`/`render_ops_table` 是反向渲染;`list_weeks(workspace)` 扫 `docs/plan/` 目录给周列表。
+- `release_file.rs`:`docs/releases.md` 表格解析与追加。`read(workspace) -> Result<Option<Vec<ReleaseRow{version, released_at, note, included_numbers, origin}>>, _>` 只认 §6 那张五列表头(`HEADER = ["版本号","发版日","说明","包含的活","来源"]`)下面的行,文件里别的表格一概不碰;`append_row` 按版本号幂等,找不到 buddy 那张表就在文件末尾另起一段「## buddy 管理的发版记录」,绝不因为认不出表头就把行塞进一张列对不上的老表(有回归测试守着,见 §6 第 3 条)。
 
-**取消(第七轮,对应表被取消)**:`SyncIssuePolicyFile`/`SyncStandardFile` 这类"把文件内容同步进库"的命令不需要——`.bw/issue-policy.toml`/`.bw/standard.toml`/`.bw/managed.toml` 全部不入库(§2.6),配置屏、▶开工、资产盘点都是现读现解析 §3.3 的解析器,没有中间的"同步"环节。`RecordChatOutbox`(第六轮草案)不需要——没有 `chat_outbox` 表可写,项目群适配模块([07 篇](07-notify-and-chat-group.md))发送即完成。`RecordWorkflowCredit`(第六轮草案)不需要——没有 `workflow_credit` 表可写,「用了几次」是 §2.3 的现算查询,「成没成」看远端 MR。
+`project_file.rs` 也是 `crates/bw-v4/src/repo/` 下**新写的一份**,不是去改 `crates/bw-engine/src/project_file.rs`——那份是 V3 在用的正本,这一刀说好了不碰旧 crate,两份 `project_file.rs` 并存、互不引用,`ProjectFile` 的 `chat`/`standard_version`/`current_version` 三个新字段只存在于 `bw-v4` 这一份里。唯一的例外是 `.bw/metrics.toml`:这份文件的解析复用了 `bw-engine::metrics_file.rs`,没有另写一份。
 
-**新增(第七轮,让缓存追上文件)**:`RefreshIssueCacheFromPlan { project_id, week }`——读 `week_plan_file.rs::extract_activities` 解析出的活清单,按远端 issue 号 upsert 本机 `issue` 缓存表的 9 个扩展列(§2.2);触发时机(项目打开时自动跑一次 / 人工点「刷新」/ MR 合入 webhook)留给 [04 篇](04-tools-and-workflows.md)/[06 篇](06-plan-screen.md)定,本文只定这条命令的语义:**幂等**(重复跑得到同一结果)、**文件说了算**(缓存里有文件没有的行,不删除该行,只是不再更新——避免误删还没排进周计划就先建了活的记录)。
+### 3.4 命令落在哪:`crates/bw-v4/src/command.rs`,不是 `bw-app`
 
-`ScheduleIssue`/`ReorderIssue`/`UpdateIssueMeta` 这类改 9 个扩展列的命令签名留给 [06 篇](06-plan-screen.md)/[04 篇](04-tools-and-workflows.md)定,本文只定它们最终落哪 9 列(§2.2)与"缓存先动、文件随后走 MR 追上"这条时序(§2.2)。
+**A 刀落地后重写。** 原文把这一节写成「在 `bw-app` 那套命令上做加法/减法」,同样是建立在「V4 摞在 `bw-app` 之上」这个已经不成立的前提上(§3.3 已说明)。实况是 `Command`/`Event` 在 `crates/bw-v4/src/command.rs` 里是**全新的一对枚举**,和 `bw-app::command` 没有继承关系、不互相引用——本节说的"取消""新增"都是相对于母文档/早期草案设想的命令表,不是相对于 `bw-app` 现有的命令做加减法。
+
+A 刀真接了实现的是哪 20 条,已经在 01 篇 §2.6 命令表后列全,这里不重抄。与本文数据设计直接相关的几点:
+
+- `.bw/issue-policy.toml`/`.bw/standard.toml`/`.bw/managed.toml` 全部不入库(§2.6),没有"同步进库"这类命令——配置屏、▶开工、资产盘点都是现读现解析 §3.3 的解析器。项目群通知的去重账本、技能/workflow 战绩台账同理没有对应的记账命令(02 篇 §2.3/§2.4 已定它们不做)。
+- `RefreshIssueCacheFromPlan { project_id, week }` 是 A 刀真接了的一条:读 `week_plan_file::read` 解析出的活清单,按标题匹配本机 `issue` 缓存表的行、覆盖它的 9 个扩展列(§2.2);只更新、不删除——缓存里有文件没有的行原样留着(可能是刚建出来还没排进周计划的活)。触发时机(项目打开时自动跑一次 / 人工点「刷新」)留给 [06 篇](06-plan-screen.md)定,本文只定这条命令的语义:幂等、文件说了算。
+- `ScheduleIssue`/`ReorderIssue`/`SetIssueWorkflow` 这几条改 9 个扩展列的命令,A 刀都已实现,签名与落地时序见 [06 篇](06-plan-screen.md)——本文只定它们最终落哪 9 列(§2.2)。
 
 ## 4 · 边界与失败
 
@@ -520,6 +528,7 @@ add_column_if_missing(&pool, "issue", "metric_key", "TEXT NOT NULL DEFAULT ''").
 
 1. **缓存与仓文件不一致时的对账触发时机。** §3.4 提议了 `RefreshIssueCacheFromPlan` 命令,但"什么时候自动跑一次"(项目打开时?轮询?MR 合入 webhook?)没有定,留给 [04 篇](04-tools-and-workflows.md)/[06 篇](06-plan-screen.md)。
 2. **`.bw/managed.toml` 的指纹算法与对账触发时机。** 本文只定文件形状(§2.5),具体摘要算法、比对时机留给 [03-standard-and-backfill.md](03-standard-and-backfill.md)。
-3. **`release_file.rs` 解析老项目已有 `docs/releases.md` 的鲁棒性边界。** 如果项目铺底前就有一份格式不同的发版记录,历史回填要规范化它、并行开新文件、还是兼容多种表头?属于回填流程细节,留给 03。
-4. **万级提交老仓的现算性能。** 母文档 §6.3 代价①提到"将来可能要加内存缓存",具体加在哪一层(git 层的 shallow 统计缓存?issue 缓存表多存几个派生列?)留待试点反馈后再定,不预先设计。
-5. **「用了几次」现算要不要跨历史周文件全量扫描。** §2.3 的查询目前只扫本机 `issue` 缓存表(可能只覆盖较近的周);要不要为了拿到"从项目接入以来总共用了几次"这类更长视窗的数字去扫全部历史周文件,还是接受缓存表的滚动窗口,留给 04 篇按实践需要再定。
+3. **万级提交老仓的现算性能。** 母文档 §6.3 代价①提到"将来可能要加内存缓存",具体加在哪一层(git 层的 shallow 统计缓存?issue 缓存表多存几个派生列?)留待试点反馈后再定,不预先设计。
+4. **「用了几次」现算要不要跨历史周文件全量扫描。** §2.3 的查询目前只扫本机 `issue` 缓存表(可能只覆盖较近的周);要不要为了拿到"从项目接入以来总共用了几次"这类更长视窗的数字去扫全部历史周文件,还是接受缓存表的滚动窗口,留给 04 篇按实践需要再定。
+
+(原第 3 条「`release_file.rs` 解析老项目已有 `docs/releases.md` 的鲁棒性边界」**A 刀落地后已答,不再是开放问题**:`crates/bw-v4/src/repo/release_file.rs` 只认 buddy 自己那张五列表头——版本号、发版日、说明、包含的活、来源——下面的行;认不出这张表头就在文件末尾另起一段「## buddy 管理的发版记录」,项目原有的发版表一个字都不动、也不往里面塞行。回归测试 `crates/bw-v4/tests/repo_files.rs::foreign_release_table_is_never_written_into` 守着这条行为:构造一份列数列名都不同的老发版记录,追加一行后原表原样保留,新内容落进新起的那一段。见 §3.3。)
