@@ -1,0 +1,251 @@
+# 07 · 通知入口与项目群适配工厂
+
+> **30 秒导读**:这篇管两件事——(A)**通知入口**:总览之外「待处理什么事、发生过什么事」唯一的落脚点,含行内动作与「合入并完成」一键;(B)**项目群适配工厂**:项目在聊天工具里本来就有的群,buddy 只做「往群里发一条」「定计划时拉上周群消息当参考」两件事,接口怎么定、WeLink 怎么接、外部群怎么留位。**给谁看**:下一步写代码的会话(第 3 节是开工清单)、接手 WeLink 实现的同事(第 2.8 节是对接骨架)、复核设计的用户。**现在作数吗**:详细设计稿,待用户复核,尚未开工写代码。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)(本篇不新开代号)。**2026-08-20 按用户第七轮盘点整块重写了 §2.2/§2.5/§2.7、§3 的表与命令、§4 失败表、§5 验收与 §6 开放问题里所有依赖 `chat_outbox`(群通知去重账本,已取消)与「聊天工具登录」按钮(已取消)的部分。**
+
+---
+
+## 0 · 这篇管什么、不管什么
+
+**管什么**:
+
+- 通知入口(左栏「通知」屏)的条目类型清单——上段「待处理」五类、下段「事件流」六类——每类怎么判定、行内动作是什么、点了之后状态怎么变;未读/徽章怎么算;项目墙卡片 ⚑ 数的来源。
+- 「合入并完成」这一个命令:流程、失败态、和现有合入/点完成路径的关系。
+- 项目群适配工厂:接口形状、两层配置、通知同步流程(默认同步哪些事、文案模板、去重与重试)、运作活①的群摘要(拉取窗口、文件格式、隐私边界)、给 WeLink 实现者的对接说明。
+
+**不管什么**(边界):
+
+- 计划屏六列看板本身、卡片按钮语义——见 [06-plan-screen.md](06-plan-screen.md)。
+- health 灯的完整推导规则——见 [08-overview-derivation.md](08-overview-derivation.md);本篇只用到「指标过期」这一条判据。
+- `.bw/project.toml`/`.bw/metrics.toml` 的完整 schema 与迁移——见 [02-data-and-files.md](02-data-and-files.md);本篇只引用已经在 02 篇 §2.4/§2.5 与 `standard-module-draft.md` 第 1 类里定形状的 `[chat]` 段(正本住 `.bw/project.toml`,库不留副本;不建群通知去重账本),不重新定义。
+- 运作活①「更新指标 + 制定本周计划」的完整剧本(复盘、绑数据、引导周目标)——见 [09-ops-workflows.md](09-ops-workflows.md);本篇只管它用到的「群摘要」这一份参考件怎么来。
+- WeLink 群组消息的参数级细节(access_token 怎么换、群标识具体形态)——预研已核实到公开文档的上限,留给同事对着真实 WeLink 开放平台账号核实(预研开放问题 1,本篇不重复)。
+
+**对应母文档**:[`mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) §1 愿景③与反命题段、§2.6 触发与介入全景表(通知列、运作活①群摘要、评审行「合入并完成」)、第 5 站(验证闭环)、§3.5 易用性表、§5 信息架构(通知行 / 配置行④ / 设置行)、§6 信息住哪盘点表(`[chat]` 段正本在 `.bw/project.toml`,不建 `chat_outbox` 去重账本)、§7 建法(项目群适配工厂段)、§8 验收第 8 条、待拍-13/26/28/31。
+
+**与预研的关系**:[`research/chat-group.md`](../research/chat-group.md) 是刚写完的预研,核实了 buddy 现有 `Remote` 工厂的做法与六家聊天工具的 API 事实,并给出了一版接口建议。本篇第 2、3 节**采纳它 §3 的 trait + 工厂设计**,以及 §4 的通知同步与群摘要流程——凡是照抄的地方会写「采纳预研建议」;有调整的地方会说明为什么。
+
+---
+
+## 1 · 用户看到什么、做什么(旅程视角)
+
+Builder 平时不会主动点开「通知」——左栏「通知」入口的徽章和项目墙卡片右上角的 ⚑ 数会告诉他「有 N 件事等你」。
+
+**一次典型处理**:徽章从 2 跳到 3,点进去,「待处理」多了一行「#57 修复登录页样式 · 评审中 · MR !23 待合入」,右边一个按钮「合入并完成」。点下去:buddy 依次「合入 MR !23」「把 #57 从评审中转完成」,成功后这一行消失、移到事件流变成「#57 已完成」;配了群的话,群里同时收到「【已合入】#57 修复登录页样式 · MR !23 · → 打开工作台」。
+
+**committer 视角**:老王把仓纳入自己的 buddy,总览是同一份,通知里看到同一行「#57 评审中待合入」——他没有改代码的权限但有合入权限,点「合入并完成」一步做完;Builder 那边刷新后这一行已消失,状态从库/远端读回,不会两边各记一次账。
+
+**配项目群**:总览名片区「项目群:未配 · 配置」,点开填提供方(内部选 WeLink,填群号)和「哪些事同步到群」(默认评审中/已合入/发版三个都勾)——走的是与「编辑项目信息」相同的轻量活 + MR 流程(08 篇),合入后名片变「项目群:后端小组 · 通知同步中」;之后每次真的发出一条通知,通知行右边会短暂多出一个「已发到群 ✓」小字——这个提示不落库、只在这次运行进程里活一下(02 篇 §2.4:群通知发送即完成,不留发送记录),应用重启后不会重新出现。
+
+**运作活①的参考**:周一点「开始本周」,agent 在终端里说「读了上周群消息,看到大家在讨论登录页兼容性,要不要拉进本周计划?」——这是 buddy 在 agent 开工前拉了「上周一→本周一」的群历史、生成本机摘要文件塞进第 4 层项目知识,文件不进仓不进库,人在通知里看不到它,只有这一次会话里的 agent 读得到。
+
+**没配群的项目**:通知同步与群摘要两件事安静跳过,不报错、不提示「你应该配一个群」——项目群是「适配一个本来就存在的群」,不是 buddy 发明的协作面。
+
+---
+
+## 2 · 设计
+
+### 2.1 通知入口:上段「待处理」五类
+
+判定全部是**推导**,没有一张「待处理」表——和今天 V3 的 `notify_feed`(`crates/ui/src/vm.rs:1704`)是同一种做法:每一行对应别处一个真实状态,状态变了这一行就自动消失,不需要「标记已读」或「删除」这类动作。
+
+| 类型 | 怎么判定 | 行内动作 | 点了之后 |
+|---|---|---|---|
+| **评审中待合入** | `status = InReview` 且 `pr_number ≠ 0`,远端 MR/PR 仍 open(与「评审中」本身的派生条件相同,见 2.3) | **合入并完成** | 见 2.3 |
+| **已合入待点完成** | `status = InReview` 且 `pr_number ≠ 0`,轮询发现该 MR/PR 已不在 open 列表、合入状态为「已合并」——别人在网页上合了,或另一台 buddy 已经合过 | **点完成** | 直接 `TransitionIssue(InReview→Done)`,**不再调用 `merge_mr`**;同一条「同一件事绝不记两次」的记账路径 |
+| **指标过期** | 某个引领/滞后指标声明了保鲜期(天数,字段形状见 [02-data-and-files.md](02-data-and-files.md)),最近观测早于「现在 − 保鲜期」,或从未有过观测 | **去补数据** | 跳到知识库/配置里该指标的绑定入口,或直接手填一次观测(带「手填」徽记),补上后本行消失 |
+| **带险交棒** | 内核 append-only 交接记录(`Command::HandoffStage`)里 `risky = true` 的最近一条,与 V3 `notify_feed`「风险交接」分支同源判定 | **打开会话** | 纯只读跳转;不因「看过」消失,只因更新的交棒记录覆盖才变化(append-only) |
+| **名片修改待合入** | 编辑项目信息产生的轻量活(08 篇「名片编辑」)处于 `InReview` | **合入并完成** | 与「评审中待合入」同一条命令——无 agent 会话、只有一次分支提交,合入后直接结清,同一条 InReview→Done 路径 |
+
+**「带险交棒」的现状说明(详见第 6 节开放问题 1)**:`Command::HandoffStage` 今天唯一的 UI 触发点是不随 V4 新壳搬迁的旧「阶段轴」屏幕(`crates/app-desktop/src/screens/op.rs`,待拍-17)。本篇仍把它列进类型表(母文档 §2.6/§5 明确保留、且 append-only 交棒记录是「继承不再讨论」的四条铁律之一),但如实说明:V4 上线初期这一行大概率长期是空的——不是判定逻辑有问题,是产生数据的动作暂时没有 UI 触发点。
+
+### 2.2 通知入口:下段「事件流」六类
+
+纯时间线,倒序排列,每条可点跳转到对应的活/连接器/知识库位置,**不参与「待处理」计数**——它记录的是「发生过什么」而不是「等你做什么」。
+
+| 类型 | 来源 |
+|---|---|
+| agent 等你输入 | 交互式执行器的 hook 回报(现有 `hook_listener.rs` 机制,沿用) |
+| 定时活已建并开工 | `tick_scheduler` 自动建运作活②(或将来别的定时活)那一刻的记录 |
+| MR 检查失败 | **需要新增能力**:今天 `Remote`(`crates/bw-engine/src/remote.rs`)没有查 MR 检查(CI)状态的方法,只有 `probe`/`create_issue`/`create_mr`/`merge_mr`/`list_open_issues`/`open_mr_for_branch` 这几个;本篇提出给 `Remote` 加一个检查状态查询方法作为增量需求,具体签名留给 01/03 篇或实现时定 |
+| 蒸馏完成 | 蒸馏动作(会话屏顶部按钮)成功后的记录,沿用现有蒸馏命令 |
+| 采集完成 | 指标采集(定时或手动「立即采集」)成功后的记录,沿用现有指标管道 |
+| 已同步到项目群 | `SyncNotifyToChat` 发送成功那一刻触发的一次进程内 `Event`(不落库)——和通知行上的「已发到群 ✓」小字同源于这一个事件;02 篇 §2.4 判定群通知不建去重/送达记录表,这一条因此只在当前运行的会话里可见,应用重启后不会重新出现在事件流里,这是接受的代价而不是遗漏 |
+
+### 2.3 未读怎么算——不建表,「看到哪」写进 `app_meta`
+
+**结论**:「待处理」段的徽章(通知入口左栏徽章、项目墙卡片 ⚑ 数)**就是待处理条目的 SQL/推导计数**,不是「未读数」。这一点母文档 §5 与 hifi §2.6 已经定案(「徽章 = 待处理数;项目墙卡片 ⚑ 数同步」),本篇不是新决定,只是把理由讲清楚:待处理段本身没有「已读」这个中间态可言——一行要么还在待处理(状态没变),要么处理完自动消失,和今天 V3 `notify_hub.rs` 头部注释写的「没有'标记已读',因为没有需要人工消灭的东西」是同一条道理,不需要一张表来记「谁看过哪一行」。
+
+事件流段是纯日志,同样不需要「已读/未读」的业务语义——它不驱动任何待办。但为了让人一眼看出「上次看过之后又发生了什么」,需要记一个「这个项目的事件流我看到了哪个时间点」。**这件事不值得为它开一张表**:02 篇第七轮盘点后库里只有 `project`/`issue`/`claude_conversation`/`app_meta` 四张表,而 `app_meta` 本来就是 key/value 的杂物抽屉——**这个时间戳就以 `notify_seen:<project_id>` 为键写进 `app_meta`,值是 RFC3339 时间串**,每次打开通知屏更新一次。事件流里晚于这个时间点的条目在界面上加粗/带一个小圆点,仅此而已——**它完全不参与徽章计数**,纯视觉辅助,丢了、清零都不影响任何业务状态。这是 `MarkNotifySeen` 命令存在的唯一理由,见第 3 节。
+
+### 2.4 「合入并完成」:不是新机制,是把已有行为正式命名
+
+**核心发现**(读代码得到,不是设计臆测):今天 V3 的 `Command::MergeIssuePr`(`crates/bw-app/src/command.rs:624`、`crates/bw-app/src/dispatch.rs:2701`)已经就是「合入 + 完成」一步到位——它调用 `remote.merge_mr()`,成功后**内部 `Box::pin` 递归调用自己的 `Command::TransitionIssue { status: Done }`**,复用同一条「同一件事绝不记两次」的记账路径(`crates/bw-app/src/dispatch.rs:2779`)。V3 UI 里那颗写着「合入」的按钮,点下去背后就是这整条链路,用户体感上早就是「一键合入并完成」,只是没有被当作一个独立的产品概念来命名和在通知行上统一暴露。
+
+**V4 的改动**:把这条已有链路正式命名为 `MergeAndComplete`,作为通知行、看板卡片上统一可见的按钮标签和命令,语义与今天的 `MergeIssuePr` **完全一致**,不重新设计状态机、不加新守卫——改名是因为 V4 要在通知、计划看板、总览待人处理多处复用同一个产品语言,需要一个见名知意的名字。01 篇(架构)尚未成文,本篇是第一篇详细设计,先按母文档用词定为 `MergeAndComplete`;01 篇若已有既定命名惯例,以 01 篇为准。
+
+**流程(与今天的守卫链条一字不差,任何一步失败都停在那一步、如实显示,不出现「合入成功但没记账」或「记了账但没真合入」这种中间态)**:
+
+① `settled_at` 已有值或 `status == Done` → 幂等短路,提示「已完成,无需重复合入」,不重复调用远端、不重复记账。② `status == InReview` 且 `pr_number ≠ 0` 才继续,否则拒绝并提示改用「点完成」。③ 项目未挂远端仓(`remote_path` 为空)→ 拒绝。④ 调用 `remote.merge_mr(pr_number)`(经 `Remote::for_project` 路由到 github/codehub)——失败则「merge PR/MR #N 失败,活留在评审中:<错误原文>」,状态不变、可重试。⑤ 成功后 `Box::pin` dispatch `Command::TransitionIssue { status: Done }`,复用既有「同一件事绝不记两次」的守卫(`settled_at` 写入 + 状态机入边)。**V4 这一步比 V3 轻**:没有战绩台账、没有 artifact 登记表、没有指标观测写入(02 篇 §2.1 全部取消),所以「记账」在 V4 就只剩 `settled_at` 这一笔,别的数字都在下次打开界面时从 git / 远端 / 仓文件现算。⑥ 项目配了群且 `notify` 勾了 `"merged"` → `SyncNotifyToChat` 异步发一条,失败不回滚已发生的合入与记账(见第 4 节)。
+
+本篇没有引入新的守卫,只是把已有的两条守卫(`can_transition_to` 的 `(InReview, Done)` 边、`settled_at` 幂等)原样复用。
+
+**「点完成」保留、不合并进「合入并完成」**:「已合入待点完成」(2.1 第二类)与「无 PR 的活」两种场景,点的是**裸 `TransitionIssue { status: Done }`**,不经过 `MergeAndComplete`——因为这两种场景下 `merge_mr` 要么会失败(MR 已经不是 open 状态)要么根本没有 PR 可合,重新尝试合入是浪费一次远端调用。两个按钮共享同一条 Done 记账尾巴,只是「要不要先合入」这一步有没有发生。
+
+### 2.5 项目群:配置两层
+
+与母文档 §6「谨慎数据库」三层信息架构一致,项目群相关信息分两处住:
+
+- **项目正本**:`.bw/project.toml` 的 `[chat]` 段——`provider`(`"welink"`/外部提供方名/未配)、`group_id`(群号)、`notify = ["review", "merged", "release"]`(哪些事同步到群)。这一段的形状已经在 `standard-module-draft.md` 第 1 类定过,本篇不重新定义,只引用。**改它走「编辑项目信息」同一条轻量活 + MR 流程**(见 08 篇),与改北极星、改对标是同一个入口、同一条 InReview→Done 链路——不给项目群开一条平行的配置命令通道。
+- **本机环境,只探活不登录**(待拍-31,00-handshake 第六轮已定):设置屏**不放**「聊天工具登录」这颗按钮——WeLink 登录态不归 buddy 管,用户在本机用官方渠道自己登好(一次基本永久),buddy 不碰、不存这份凭证。buddy 唯一要做的是在项目墙「本机环境 · 测一下」这条环境检查栏(与 claude/cursor 路径检查、Open Design 探活并列)里加一项 **welink-cli 探活**:检查这台机器上 welink-cli 有没有装、有没有登录态,不依赖任何具体项目的群号(登录是机器级的一次性状态)。探活函数本篇只留位——`fn probe_welink_cli() -> ProbeResult` 一类签名,真实实现留给内部同事(00-handshake C1,与 2.9 节「给同事的对接说明」同一批交付)。这与下面 §2.6/§2.9 已定的 `ChatGroup::probe()`(经 `for_project(provider, group_id)` 测"这个项目配置的具体群是否可达")是两件互补的事——前者答"这台机器有没有登好 WeLink",后者答"这个项目配的群号对不对",都不需要一个登录按钮。群号是项目的事(进仓 `.bw/project.toml` 的 `[chat]` 段),登录是机器的事(留本机,buddy 完全不管)。
+
+### 2.6 接口:采纳预研的 `ChatGroup` trait + 工厂
+
+**采纳预研建议**——预研 §3 给出的接口形状直接落进设计,不做改动:核心是一个 trait(`send` 必选、`fetch_history` 尽力、`probe` 可选)+ 一个按 provider 名字造实现的工厂,仿照 `crates/bw-engine/src/remote.rs` 里 `Remote::for_project` 「调用点只调方法、provider 分支只在工厂这一处」的做法(预研 §1 已核实这条纪律是仓里已有先例,不是本篇新发明)。
+
+**为什么不照抄 `Remote` 的 enum 形状**:`Remote` 两个变体字段几乎一样(host + path),适合塞进一个 enum;项目群的提供方天生更杂(群号 vs channel ID vs chat_id,认证方式各不相同),且第一版就要装「未配置」「本机自测」两个非真实提供方——`Box<dyn ChatGroup>` + 工厂函数在异构场景下比 enum 更合适,核心思想(provider 分支只在一处)不变。
+
+**类型与 trait 形状**(采纳预研 §3 原文,伪码放第 3 节):`ChatMessage`(`time`/`sender`/`text`/`link`/`markdown`,发消息与拉历史共用一个类型)、`ChatError`(`NotConfigured`/`HistoryUnsupported`/`Auth`/`Network` 四个分支)、`trait ChatGroup { send, fetch_history, probe }`。**`HistoryUnsupported` 是正常返回值,不是异常**——预研核实到六家聊天工具里钉钉/企业微信/Teams 的群机器人都是只发不读,接口必须把「这个 provider 天生做不到拉历史」当成诚实的正常状态,调用方(通知同步、运作活①群摘要)看到这个分支要安静跳过,不重试、不报错。
+
+**工厂的四个提供方位**:
+
+| provider 值 | 实现 | 状态 |
+|---|---|---|
+| `welink` | `crates/bw-engine/src/chat/welink.rs` | 同事实现,buddy 侧只留接口(见 2.8) |
+| `none` / `""` / 未知值 | `crates/bw-engine/src/chat/none.rs` | 本篇范围内实现:`send`/`fetch_history` 都直接返回 `NotConfigured`,让「没配群时别的流程不会崩」这件事可验证 |
+| `mock` | `crates/bw-engine/src/chat/mock.rs` | 本篇范围内实现:内存态假群,`send` 记进一个 `Vec`,`fetch_history` 返回调用方提前塞好的消息——E2E 与联调用,见第 5 节 |
+| 外部(飞书/Slack/…) | 未定 | 工厂留位,不预先选型、不预先写代码(预研 §「MVP 不做」;待拍-26) |
+
+### 2.7 通知同步流程
+
+- **默认同步事件**:评审中(`review`)、已合入(`merged`)、发版(`release`),对应 `[chat] notify` 数组;勾选变化走名片编辑的轻量活 + MR(改的是仓内正本)。
+- **文案模板(一行,采纳预研 §4①)**:`【<事件>】#<活号> <活标题> · <MR/PR 号与状态> · <谁该动> → <工作台深链>`。示例(演示):`【评审中】#57 修复登录页样式 · MR !23 待合入 · 该 committer 处理 → bw://open?issue=57`。`text` 是所有提供方共同兜底,能发富文本的额外填 `link`;**不 @ 人**(buddy 不建成员,没有身份映射可 @)。
+- **不做去重,发送即完成**(02 篇 §2.4 已拍板,采纳其口径):项目群适配模块调用 `ChatGroup::send` 就是整件事的终点——不写库、不记「尝试中/成功/失败」哪张表、不做幂等键查重。**代价如实写**:极小概率下(比如 buddy 进程在发送前后意外重启)同一事件可能被重复推送一条消息进群,用户已知情接受(母文档 §6.3「重发一条能忍」)。要不要在 `crates/bw-engine/src/chat/` 内部按内容做一层不落库的轻量幂等(比如内存里记最近几条已发送的事件指纹),留到实践中真的碰到扰人的重复再加,不是本篇现在要做的事。
+- **失败如实,但不是"重试队列"**:`send` 失败不回滚已经发生的合入/完成/发版——这两件事的记账早已在 `MergeAndComplete` 第⑤步完成(见 2.4),群通知只是这条链路末尾一个"锦上添花、失败不影响主干"的旁支。失败这一刻在当时的界面上如实提示一次(例如「合入并完成成功,但发群失败:<错误原文>」的一条即时提示),**没有持久状态支撑的自动重试**——不再有 `tick_scheduler` 定期扫一张待重试表这回事(那张表就是被取消的 `chat_outbox`)。想让消息重新发出去,只能等下一次同类事件自然发生(比如这张活后续又经历一次会触发 `notify` 的状态变化),这不是"重试同一条失败",而是"下一次全新的一次尝试"——如实说清楚这个区别,不假装有一套可靠的失败恢复机制。
+
+### 2.8 运作活①的群摘要
+
+- **拉取窗口**:「上周一 00:00 → 本周一 00:00」,本机时区、ISO 周对齐,与 `docs/plan/YYYY-Www.md` 周边界一致(采纳预研 §4②)。
+- **容错**:`fetch_history` 拿到 `HistoryUnsupported`/`NotConfigured` 都安静跳过,不阻塞运作活①,只是少一份参考。
+- **摘要格式**:按天分组,每条一行 `HH:MM 昵称 文本`;去表情与图片(图片类占位「[图片]」,不整条丢弃);长度设上限(数字留第 6 节拍,原则「宁可截断也别比周计划本身还长」)。
+- **住哪**:本机文件,不进仓不进库,与 claude/Cursor 路径同一层;用完可删。
+- **怎么喂**:作为第 4 层项目知识旁的参考件,和 `docs/plan/`、`.bw/metrics.toml`、codegraph 索引一起注入;注入时机由 [09-ops-workflows.md](09-ops-workflows.md) 引用本篇。**`fetch_history`/群摘要只喂给运作活①这一张活**(确认:00-handshake 第 4 条「回填不主动喂群历史」)——运作活②「资产盘点」不论 `mode=weekly` 还是 `mode=first`(老项目历史回填)都不调用 `fetch_history`,03/09 两篇已按此口径写,本篇不重复。
+- **隐私边界**:只做参考,**不做数据点、不点灯**——健康信号只从真实观测推导;发言人可脱敏,不落库不进仓,用完即焚。
+
+### 2.9 给同事的对接说明
+
+- **要实现的函数、输入输出、错误约定**:见 2.6——`send` 必须实现,`fetch_history` 尽力(做不到就稳定返回 `HistoryUnsupported`,不抛异常不 panic),`probe` 可选但建议做(项目群配置卡片自己的「测一下」——验证"这个项目配的群号对不对",和 2.5 节新增的机器级 welink-cli 探活是两回事,体验好很多);`Auth`/`Network` 把 WeLink SDK/HTTP 的原始错误文本原样带上,**绝不吞掉错误伪装成功**(全仓「读回为证」纪律的延伸)。
+- **放哪个模块**:`crates/bw-engine/src/chat/welink.rs`,与今天 `codehub.rs`/`github.rs` 平级,配一份模块文档记「怎么鉴权、群标识什么形态、已知限制」,写法参照 `codehub.rs` 顶部那段(母文档 §7「一个外部能力一个适配模块」)。
+- **不用真群怎么自测**:先对着 `mock`(2.6 表格,本篇范围内落地)把 buddy 这边的调用链(通知同步、运作活①摘要生成)跑通,再换真实 WeLink 凭证验证 `send`/`fetch_history` 本身;`none` 用来验证「没配群时别的流程不会崩」。
+
+---
+
+## 3 · 工程对照
+
+**crate / 模块**(新增,遵循「一个外部能力一个适配模块」):
+
+```
+crates/bw-engine/src/chat/
+  mod.rs        // ChatMessage / ChatError / trait ChatGroup / for_project 工厂
+  welink.rs     // 同事实现;顶部模块文档记鉴权方式、群标识形态、已知限制
+  none.rs       // 未配置:send/fetch_history 都返回 NotConfigured
+  mock.rs       // 本机自测:内存态假群,预置 Vec<ChatMessage> 供 fetch_history 返回
+```
+
+**trait 与工厂**(采纳预研 §3,原样落地,类型细节以预研文件为准):
+
+```rust
+pub struct ChatMessage {
+    pub time: Option<OffsetDateTime>,
+    pub sender: Option<String>,
+    pub text: String,
+    pub link: Option<(String, String)>,
+    pub markdown: Option<String>,
+}
+
+pub enum ChatError { NotConfigured, HistoryUnsupported, Auth(String), Network(String) }
+
+pub trait ChatGroup: Send + Sync {
+    fn send(&self, msg: &ChatMessage) -> BoxFuture<'_, Result<(), ChatError>>;
+    fn fetch_history(&self, since: OffsetDateTime, until: OffsetDateTime)
+        -> BoxFuture<'_, Result<Vec<ChatMessage>, ChatError>>;
+    fn probe(&self) -> BoxFuture<'_, Result<String, ChatError>> {
+        Box::pin(async { Err(ChatError::NotConfigured) })
+    }
+}
+
+pub fn for_project(provider: &str, group_id: &str) -> Box<dyn ChatGroup> {
+    match provider.trim() {
+        "welink" => Box::new(welink::WelinkChatGroup::new(group_id)),
+        "mock" => Box::new(mock::MockChatGroup::new(group_id)),
+        _ => Box::new(none::NoneChatGroup),
+    }
+}
+```
+
+**命令**(只列名 + 一句话;完整参数形状留实现时随手改):
+
+| 命令 | 一句话 |
+|---|---|
+| `MergeAndComplete { id }` | 合入该 issue 的 PR/MR,成功后立即结清为 Done——语义等同今天的 `MergeIssuePr`,只是正式命名进 V4 产品语言(见 2.4) |
+| `SetProjectChat { project_id, provider, group_id, notify }` | 走「编辑项目信息」轻量活 + MR,把 `[chat]` 段的变更写进 `.bw/project.toml` |
+| `SyncNotifyToChat { issue_id, event_type }` | 按 2.7 的模板拼一条消息、经工厂拿到的 `ChatGroup` 发出去——**调用即完成,不写库**(02 篇 §2.4);成功与失败各自只在当次触发的界面上留一次即时提示(2.7) |
+| `FetchChatDigest { project_id, since, until }` | 供运作活①调用:拉一段历史、生成本机摘要文件(2.8);拿到 `HistoryUnsupported`/`NotConfigured` 安静返回「无摘要」 |
+| `MarkNotifySeen { project_id, at }` | 记「这个项目的事件流看到哪个时间点」,只影响事件流的加粗/圆点这类视觉状态,不参与待处理徽章计数(见 2.3) |
+
+**表**(02 篇是权威来源,本篇不重复定义 schema 细节;02 篇第七轮盘点后库里**只有** `project`/`issue`/`claude_conversation`/`app_meta` 四张表,别的都不建):
+
+- `project`:**没有** `chat_provider`/`chat_group_id` 这类库存副本——`[chat]` 段唯一正本是 `.bw/project.toml`,总览/通知同步/配置屏都现读现解析这份仓文件(02 篇 §2.5/§2.6/§5 验收表已把这一条写进读回清单)。
+- ~~`chat_outbox`~~——**02 篇 §2.4 已取消**:事件类型、活、时间、成败不落库,通知同步不做去重也不做失败重试队列(见 2.7)。
+- **不新增表**:事件流「看到哪个时间点」以 `notify_seen:<project_id>` 为键存进已有的 `app_meta`(key/value),不是第五张表——见 2.3。
+
+**对 02 篇的建议已被采纳(设计期统一)**:母文档 §6 `issue.kind` 原本只有「业务活 / 运作活」两个取值,但「名片修改待合入」这类活既不占周计划、也不是①②③三张具名运作活之一。02 篇已采纳本篇建议,`kind` 加了第三个取值 `'light'`(轻量活:无 agent 会话、不占周目标、不绑推动指标),2.1 表里「名片修改待合入」的判定用 `kind = 'light' AND status = InReview`。
+
+**对 `Remote` 的一个增量需求**:2.1「已合入待点完成」与 2.2「MR 检查失败」都需要一个「查 MR 当前状态/检查结果」的方法,今天 `crates/bw-engine/src/remote.rs` 没有(只有 `open_mr_for_branch` 返回「是否存在开放 MR」)。本篇不设计这个方法的完整签名,只标记这是通知屏要能工作所必需的一个能力缺口,留给实现或 01/04 篇补。
+
+**事件**:沿用现有 `Event` 总线的做法(如 `Event::IssuesChanged`/`Event::ConnectorSynced`)新增对应变体即可,不需要新总线;新增 `Event::ChatNotifySent { issue_id, event_type, ok }`,`SyncNotifyToChat` 调用 `send` 返回后立即发出——通知行上的「已发到群 ✓」小字与事件流「已同步到项目群」这一条是同一个事件在两处的展示,不需要两套事件,也**不落库**(02 篇 §2.4),两处展示都只在当前运行的会话里存在。
+
+---
+
+## 4 · 边界与失败
+
+**MVP 不做**(采纳预研「推荐 / 不做什么」,理由同源):
+
+- **双向对话机器人**——群里 @buddy 发指令,超出「发通知 + 拉参考」的范围。
+- **群里点按钮改活状态**——违反「完成永远人点」铁律,不给群消息任何改状态的权力。
+- **多群**——一个项目一个群,不做多群路由。
+- **正式实现除 WeLink 外的任何一家**——飞书/Slack/企业微信/钉钉/Teams 只是预研用来抽公共接口的调研对象,工厂位「外部待定」先占着。
+- **buddy 侧自己实现 WeLink**——`crates/bw-engine/src/chat/welink.rs` 里 `send`/`fetch_history`/`probe` 三个函数的真实实现由内部同事**增量补**(00-handshake C1),buddy 这边(本篇+ 09 篇)只定 trait、工厂位、mock/none 两个可跑实现,以及 2.9 节给同事的对接说明——**试点不依赖 WeLink 真实跑通**(00-handshake C2:试点连不到 codehub 就用 buddy 自己的仓,同样地,项目群这条线试点期可以全程只用 `mock`/`none` 验证 buddy 侧调用链,WeLink 真实凭证到位后再补验)。
+- **企业微信「会话内容存档」这类合规重型方案**——门槛高且定位是企业合规监管,不作为拉历史的备选路径。
+- **通知屏自己的收件箱语义**(标记已读、批量已读、归档)——2.3 已论证,待处理段不需要,事件流段只要一个极轻的「看到哪个时间点」时间戳。
+
+**失败如实,逐条对应**:
+
+| 场景 | 界面上怎么说 |
+|---|---|
+| `MergeAndComplete` 第④步 `merge_mr` 失败 | 「merge PR/MR #N 失败,活留在评审中:<错误原文>」,状态不回滚,可重试 |
+| `MergeAndComplete` 无 PR / 不在评审中 | 拒绝并提示改用「点完成」 |
+| `SyncNotifyToChat` 调用 `send` 返回 `Auth`/`Network` | 当次即时提示「发群失败:<错误原文>」,不影响已经发生的合入/完成/发版;**不是**持久化的"待重试"状态,没有下一次自动重试(见 2.7 节改写) |
+| `SyncNotifyToChat` 调用 `send` 返回 `NotConfigured` | 不算失败,直接跳过,不产生任何记录(本来就不落库,项目没配群这件事本身是诚实状态) |
+| `FetchChatDigest` 返回 `HistoryUnsupported` | 运作活①继续,agent 少一份参考,不阻塞、不重试 |
+| `FetchChatDigest` 返回 `Network`/`Auth` | 同上安静跳过,但记一条本机日志(不进库)供人手动排查,不打断运作活① |
+| WeLink 未按预研骨架实现某个函数(如 `probe` 没写) | trait 默认实现兜底返回 `NotConfigured`,项目群配置卡片「测一下」按钮显示「该提供方未提供测活能力」,不崩 |
+
+---
+
+## 5 · 验收与读回
+
+1. **`mock` 提供方真实发出消息、且如实不去重**:演示项目提供方设 `mock`,依次触发一次评审中、一次合入、一次发版——`MockChatGroup` 不落库,读回改走它的内存态:`send` 时把每条 `ChatMessage` 连同 `event_type` 一起写一行 `[BW_CHAT_SENT] event=<type> issue=<id> text=<...>` 到 stderr(同一套"stderr 结构化日志即证据"的做法,和 `[BW_OPEN]` 是同一条纪律),E2E 核对 stderr 里出现三行、`event` 分别是 `review`/`merged`/`release`;对同一活重复触发一次评审中事件,stderr 里出现第二条几乎相同的 `event=review` 行——这正是设计上接受的重复推送代价(02 篇 §2.4/母文档 §6.3「重发一条能忍」),验收时确认它"确实会重复"而不是反过来验证"不会重复"。
+2. **运作活①读到群摘要**:同一演示项目预置几条 mock 历史消息,触发运作活①开工,深链到会话屏(`BW_OPEN=<项目名> BW_PANEL=session`)看嵌入终端 transcript 里 agent 提到了摘要内容(mock 历史关键词);本机检查摘要文件按 2.8 格式生成(按天分组、`HH:MM 昵称 文本`)。
+3. **通知屏深链与读数**:`BW_OPEN=<项目名> BW_PANEL=notify` 启动,stderr 出现 `[BW_OPEN]` 即渲染成功;截图核对「待处理」条数与项目墙 ⚑ 数一致,且都等于 `sqlite3` 查出的待处理行数(逐类型 COUNT 相加)。
+4. **「合入并完成」`settled_at` 只有一条**:对一个 InReview 且有 PR 的演示活点「合入并完成」,`sqlite3 <db> "SELECT settled_at FROM issue WHERE id = <id>"` 只有一个非空值;再点一次(幂等短路),`settled_at` 不变、不产生第二条战绩(`sqlite3 <db> "SELECT COUNT(*) FROM agent_runs WHERE issue_id = <id> AND win = 1"` 恒为 1)。
+5. **`none` 提供方不崩**:演示项目 `.bw/project.toml` 不写 `[chat]` 段(或 `provider` 留空/写 `"none"`),触发一次合入与一次运作活①,stderr 里不出现任何 `[BW_CHAT_SENT]` 行,运作活①正常走完,验证「没配群时别的流程不会崩」——这一条不查库,因为群通知本来就不落库(02 篇 §2.4)。
+
+---
+
+## 6 · 开放问题(≤5)
+
+1. **「带险交棒」在 V4 里还有没有触发路径**:`Command::HandoffStage` 今天唯一的 UI 入口是不随 V4 新壳搬迁的旧「阶段轴」屏幕。要不要在 V4 第一版通知屏里就把这一行类型隐藏(等以后有新的项目级阶段治理动作再加回来),还是按本篇现状保留、大概率长期空着?
+2. ~~`issue.kind` 要不要加第三个取值「轻量活」~~ **已定:`kind='light'`**(02 篇已采纳,见 02 篇 §2.2)。
+3. ~~`chat_outbox` 去重键的粒度~~ **问题随表一起撤销**:02 篇 §2.4 判定不做去重账本,`(issue_id, event_type)` 这个粒度问题不再存在。~~`notify_seen` 要不要开第五张表~~ **已定:不开表**,事件流「看到哪个时间点」写进已有的 `app_meta`(键 `notify_seen:<project_id>`),库里仍然恰好四张表(见 2.3、第 3 节)。
+4. ~~通知失败重试的具体节律~~ **已定:不做自动重试**(02 篇 §2.4:发送即完成,不落库、不建重试队列;详见 2.7 节改写)。
+5. **摘要文件的截断上限具体数字**(继承预研开放问题 3):字符数/行数截断的具体数字、图片类消息「占位 vs 整条丢弃」的最终取舍,本篇只给了方向(占位),数字留用户拍。
