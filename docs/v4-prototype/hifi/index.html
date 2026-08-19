@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html data-proto="v4-hifi" data-version="3" lang="zh-CN">
+<html data-proto="v4-hifi" data-version="4" lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -234,9 +234,14 @@ h1,h2,h3,h4{font-family:var(--serif);font-weight:700;margin:0 0 8px;}
 .detail-actions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;}
 
 .kanban{flex:1;display:flex;gap:11px;min-height:0;overflow-x:auto;padding-bottom:4px;}
-.kanban-col{flex:1 1 0;min-width:186px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px;display:flex;flex-direction:column;overflow-y:auto;}
+.kanban-col{flex:1 1 0;min-width:186px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px;display:flex;flex-direction:column;overflow-y:auto;transition:background .12s,outline .12s;}
+.kanban-col.kanban-col-droppable{outline:2px dashed var(--clay);outline-offset:-2px;background:#FBEEE9;}
+.kanban-col.kanban-col-noDrop{outline:2px dashed var(--ink-4);outline-offset:-2px;opacity:.72;}
 .kanban-col-head{font-size:11.3px;color:var(--ink-3);margin-bottom:8px;flex:none;}
+.kanban-col-def{font-size:9.3px;color:var(--ink-4);font-weight:400;margin-top:2px;line-height:1.4;}
 .kcard{background:#fff;border:1px solid var(--border);border-left:3px solid var(--border-deep);border-radius:8px;padding:10px 11px;margin-bottom:8px;flex:none;}
+.kcard[draggable="true"]{cursor:grab;}
+.kcard.dragging{opacity:.4;}
 .kcard-top{font-family:var(--mono);font-size:10.6px;color:var(--ink-3);display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;}
 .kcard-title{font-size:12.6px;color:var(--ink);margin-bottom:8px;line-height:1.4;cursor:pointer;}
 .kcard-title:hover{color:var(--clay);}
@@ -469,6 +474,8 @@ var CATS=['构建','构建(文档)','原型','优化','运维','运营推广','�
 var WEEKS=['W34','W33','W32','W31'];
 var VERSIONS=['0.4.0-v4','0.3.0-v3','0.2.0-v3'];
 var KANBAN_COLS=[['pool','待办池'],['todo','待办'],['doing','进行中'],['review','评审中'],['done','已完成'],['blocked','阻塞']];
+var KANBAN_COL_DEF={pool:'未排进任何一周',todo:'已排进本周,等开工',doing:'agent 在干',review:'MR 开着,等人审',done:'人点过完成',blocked:'填了原因'};
+var HISTORY_WEEKLY_PR=[['W26',0],['W27',1],['W28',3],['W29',3],['W30',12],['W31',7],['W32',17],['W33',3],['W34',3]];
 function colOf(status){
   if(status==='review'||status==='merged')return 'review';
   if(KANBAN_COLS.some(function(c){return c[0]===status;}))return status;
@@ -484,7 +491,7 @@ var GUIDE_CHAPTERS=[
 /* ===================== 终端 transcript(沿用第一版三套) ===================== */
 var OPS1_TRANSCRIPT=[
   {cls:'sys',text:'[buddy] 系统提示词已注入 · 单人构建者工作台 · 一活一分支一 MR · 完成永远由人点'},
-  {cls:'sys',text:'[skill] 技能已注入:更新指标与周计划(合并自 north-star-discovery + metrics-binding)'},
+  {cls:'sys',text:'[workflow] workflow 已注入:更新指标与周计划(buddy 自建 · 合并自 north-star-discovery + metrics-binding)'},
   {cls:'sys',text:'[read] AGENTS.md'},
   {cls:'sys',text:'[read] PROJECT.md'},
   {cls:'sys',text:'[read] docs/plan/2026-W33.md'},
@@ -508,7 +515,7 @@ function buildOps2Transcript(pid,issueId){
   var mrLabel=(issue&&issue.mr&&issue.mr.label)||('!'+branch);
   return [
     {cls:'sys',text:'[buddy] 系统提示词已注入 · 单人构建者工作台 · 一活一分支一 MR · 完成永远由人点'},
-    {cls:'sys',text:'[skill] 技能已注入:资产盘点与微重构'},
+    {cls:'sys',text:'[workflow] workflow 已注入:资产盘点与微重构'},
     {cls:'sys',text:'[read] docs/'},
     {cls:'sys',text:'[read] .bw/standard.toml(默认件清单与版本)'},
     {cls:'agent',text:'agent> 盘点 docs/:产物、周计划、发版记录是否齐全登记。'},
@@ -532,12 +539,15 @@ function categoryWorkHint(category){
 function buildGenericTranscript(pid,issueId){
   var issue=getIssue(pid,issueId);
   if(!issue)return OPS1_TRANSCRIPT;
-  var skillName=(issue.skill&&issue.skill!=='—')?issue.skill:'superpowers';
+  var wfName=issue.workflow||'superpowers';
   var files=changedFilesFor(issue),branch=branchOf(issueId);
   var mrLabel=(issue.mr&&issue.mr.label)||('!'+branch);
-  return [
+  var lines=[
     {cls:'sys',text:'[buddy] 系统提示词已注入 · 单人构建者工作台 · 一活一分支一 MR · 完成永远由人点'},
-    {cls:'sys',text:'[skill] 技能已注入:'+skillName},
+    {cls:'sys',text:'[workflow] workflow 已注入:'+wfName+'(自己调度 agent)'}
+  ];
+  if(issue.skill && issue.skill!=='—'){ lines.push({cls:'sys',text:'[skill] 技能已注入:'+issue.skill}); }
+  lines.push(
     {cls:'sys',text:'[read] AGENTS.md'},
     {cls:'sys',text:'[read] PROJECT.md'},
     {cls:'sys',text:'[read] docs/plan/2026-'+(issue.week||CURRENT_WEEK)+'.md'},
@@ -547,7 +557,8 @@ function buildGenericTranscript(pid,issueId){
     {cls:'git',text:'[git] 分支 '+branch+' → 提交改动'},
     {cls:'git',text:'[mr] 已提 MR '+mrLabel},
     {cls:'git',text:'[hook] 已推到评审中'}
-  ];
+  );
+  return lines;
 }
 function TRANSCRIPTS_FOR(pid,issueId){
   if(/^ops1-/.test(issueId))return OPS1_TRANSCRIPT;
@@ -565,20 +576,20 @@ var DISTILL_NAMES={'std-1':'规范铺底核对清单','pr-102':'旧引擎退役�
 /* ===================== 数据工厂 ===================== */
 function makeIssues(){
   return {
-    'v4-1':{id:'v4-1',title:'V4 MVP 全貌草案三轮 grilling 收口',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',skill:'grillme',teammate:'构建师',desc:'把口述原文收口成设计事实源(mvp-blueprint-draft.md),三轮 grilling 走完拍板,22 条已定。'},
-    'v4-2':{id:'v4-2',title:'规范铺底模块设计稿',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',skill:'grillme',teammate:'构建师',desc:'standard-module-draft.md:八大类规范怎么落地、正本住哪、怎么演进。'},
-    'v4-3':{id:'v4-3',title:'Orca / DSH / codegraph 预研',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'agent 拆',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',skill:'research',teammate:'构建师',desc:'三条并行预研:Orca 借模式、DeepSeek Harness 接口、codegraph 用法。'},
-    'v4-4':{id:'v4-4',title:'V4 高保真可点击原型',category:'原型',tool:'open_design',kind:'business',status:'doing',source:'人建',metricIds:['lead-1'],mr:null,week:'W34',version:'0.4.0-v4',skill:'原型设计技能',teammate:'原型师',desc:'五入口可点击原型,证明「一周一圈」在界面上走不走得通。'},
-    'pr-102':{id:'pr-102',title:'减负线两轮收尾合入(删旧聊天式引擎,唯一入口 Issue ▶跑)',category:'构建',tool:'claude_cli',kind:'business',status:'review',source:'人建',metricIds:['lead-1'],mr:{id:'#102',label:'PR #102',status:'open'},week:'W34',version:'0.4.0-v4',skill:'superpowers',teammate:'构建师',desc:'两轮收尾把旧聊天式工作流引擎整链删除,唯一开工入口收敛到 Issue ▶跑。22 commit,等待合入。'},
-    'w1-2':{id:'w1-2',title:'纳入时 codehub clone 堵命令循环',category:'优化',tool:'cursor',kind:'business',status:'todo',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',skill:'systematic-debugging',teammate:'构建师',desc:'纳入已有仓时 codehub clone 在某些网络下会卡住命令循环,需要加超时与重试。'},
-    'std-1':{id:'std-1',title:'规范铺底模块落地(standard/ 目录 + 铺底命令)',category:'构建',tool:'claude_cli',kind:'business',status:'pool',source:'人建',metricIds:['lag-1'],mr:null,week:'W34',version:'0.4.0-v4',skill:'规范铺底(含合并调整)',teammate:'构建师',desc:'把 standard-module-draft.md 落成 standard/ 目录 + 铺底命令 + 对账。'},
-    'ops1-w34':{id:'ops1-w34',title:'运作活①更新指标 + 制定本周计划 2026-W34',category:'运作',tool:'claude_cli',kind:'ops',status:'done',doneDate:'08-17',source:'人触发',metricIds:[],mr:{id:'!bw/plan-2026-W34',label:'!bw/plan-2026-W34',status:'merged'},week:'W34',version:'0.4.0-v4',skill:'更新指标与周计划',teammate:'构建师',desc:'复盘上周 → 更新指标 → 引导本周目标与活清单。MR 已合入。'},
-    'ops2-w33':{id:'ops2-w33',title:'运作活②资产盘点与代码微重构 2026-W33',category:'运作',tool:'claude_cli',kind:'ops',status:'review',source:'自动建 08-14 20:00',auto:true,metricIds:[],mr:{id:'!bw/ops-2026-W33',label:'!bw/ops-2026-W33',status:'open'},week:'W33',version:'0.3.0-v3',skill:'资产盘点与微重构',teammate:'构建师',desc:'盘点 docs/、产物、默认件是否齐 → 小范围微重构 → 提 MR。周五自动开工,等人评审。'},
-    'ops3':{id:'ops3',title:'运作活③规范铺底 v4.0(含合并调整)',category:'运作',tool:'claude_cli',kind:'ops',status:'done',doneDate:'08-17',doneAssumed:true,source:'自动建(接入时)',auto:true,metricIds:[],mr:{id:'!bw/standard-4.0',label:'!bw/standard-4.0',status:'merged'},week:'W33',version:'0.3.0-v3',skill:'规范铺底(含合并调整)',teammate:'构建师',desc:'建分支写全套核心件;检测到已有 README,多一步 agent「合并调整」再提 MR。'},
-    'w33-legacy':{id:'w33-legacy',title:'减负线第一轮六切片(旧聊天式引擎整链退役第一轮)',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-17',source:'人建',metricIds:['lead-1'],mr:{id:'#102',label:'PR #102(第一轮)',status:'merged'},week:'W33',version:'0.3.0-v3',skill:'superpowers',teammate:'构建师',desc:'六个切片依次删除旧聊天式工作流引擎的各处依赖,为第二轮收尾铺路。'},
-    'w33-usefix':{id:'w33-usefix',title:'V3-use-fix:Claude 探测 / 列仓搜索 / 测一下',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-17',source:'人建',metricIds:[],mr:{id:'#101',label:'PR #101',status:'merged'},week:'W33',version:'0.3.0-v3',skill:'superpowers',teammate:'构建师',desc:'三张真实体验修复:claude 可执行探测、列仓搜索、探活「测一下」按钮。'},
-    'w32-odembed':{id:'w32-odembed',title:'V3-OD-embed:原型进度内嵌 Open Design',category:'原型',tool:'open_design',kind:'business',status:'done',doneDate:'08-12',source:'人建',metricIds:[],mr:{id:'#99',label:'PR #99',status:'merged'},week:'W32',version:'0.3.0-v3',skill:'原型设计技能',teammate:'原型师',desc:'原型阶段进度面板内嵌本机 Open Design 首页,替换占位卡。'},
-    'w32-v2prod':{id:'w32-v2prod',title:'V2 产品化',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-10',source:'人建',metricIds:[],mr:{id:'#97',label:'PR #97',status:'merged'},week:'W32',version:'0.2.0-v3',skill:'superpowers',teammate:'构建师',desc:'V2 阶段收尾产品化改动,合入 main。'}
+    'v4-1':{id:'v4-1',title:'V4 MVP 全貌草案三轮 grilling 收口',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'superpowers',skill:'grillme',desc:'把口述原文收口成设计事实源(mvp-blueprint-draft.md),三轮 grilling 走完拍板,22 条已定。'},
+    'v4-2':{id:'v4-2',title:'规范铺底模块设计稿',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'superpowers',skill:'grillme',desc:'standard-module-draft.md:八大类规范怎么落地、正本住哪、怎么演进。'},
+    'v4-3':{id:'v4-3',title:'Orca / DSH / codegraph 预研',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'agent 拆',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'mattpocock-skills',skill:'research',desc:'三条并行预研:Orca 借模式、DeepSeek Harness 接口、codegraph 用法。'},
+    'v4-4':{id:'v4-4',title:'V4 高保真可点击原型',category:'原型',tool:'open_design',kind:'business',status:'doing',source:'人建',metricIds:['lead-1'],mr:null,week:'W34',version:'0.4.0-v4',workflow:'原型设计 workflow',skill:'—',desc:'五入口可点击原型,证明「一周一圈」在界面上走不走得通。'},
+    'pr-102':{id:'pr-102',title:'减负线两轮收尾合入(删旧聊天式引擎,唯一入口 Issue ▶跑)',category:'构建',tool:'claude_cli',kind:'business',status:'review',source:'人建',metricIds:['lead-1'],mr:{id:'#102',label:'PR #102',status:'open'},week:'W34',version:'0.4.0-v4',workflow:'superpowers',skill:'—',desc:'两轮收尾把旧聊天式工作流引擎整链删除,唯一开工入口收敛到 Issue ▶跑。22 commit,等待合入。'},
+    'w1-2':{id:'w1-2',title:'纳入时 codehub clone 堵命令循环',category:'优化',tool:'cursor',kind:'business',status:'todo',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',workflow:'superpowers',skill:'systematic-debugging',desc:'纳入已有仓时 codehub clone 在某些网络下会卡住命令循环,需要加超时与重试。'},
+    'std-1':{id:'std-1',title:'规范铺底模块落地(standard/ 目录 + 铺底命令)',category:'构建',tool:'claude_cli',kind:'business',status:'pool',source:'人建',metricIds:['lag-1'],mr:null,week:'W34',version:'0.4.0-v4',workflow:'superpowers',skill:'—',desc:'把 standard-module-draft.md 落成 standard/ 目录 + 铺底命令 + 对账。'},
+    'ops1-w34':{id:'ops1-w34',title:'运作活①更新指标 + 制定本周计划 2026-W34',category:'运作',tool:'claude_cli',kind:'ops',status:'done',doneDate:'08-17',source:'人触发',metricIds:[],mr:{id:'!bw/plan-2026-W34',label:'!bw/plan-2026-W34',status:'merged'},week:'W34',version:'0.4.0-v4',workflow:'更新指标与周计划',skill:'—',desc:'复盘上周 → 更新指标 → 引导本周目标与活清单。MR 已合入。'},
+    'ops2-w33':{id:'ops2-w33',title:'运作活②资产盘点与代码微重构 2026-W33',category:'运作',tool:'claude_cli',kind:'ops',status:'review',source:'自动建 08-14 20:00',auto:true,metricIds:[],mr:{id:'!bw/ops-2026-W33',label:'!bw/ops-2026-W33',status:'open'},week:'W33',version:'0.3.0-v3',workflow:'资产盘点与微重构',skill:'—',desc:'盘点 docs/、产物、默认件是否齐 → 小范围微重构 → 提 MR。周五自动开工,等人评审。'},
+    'ops3':{id:'ops3',title:'运作活③规范铺底 v4.0(含合并调整)',category:'运作',tool:'claude_cli',kind:'ops',status:'done',doneDate:'08-17',doneAssumed:true,source:'自动建(接入时)',auto:true,metricIds:[],mr:{id:'!bw/standard-4.0',label:'!bw/standard-4.0',status:'merged'},week:'W33',version:'0.3.0-v3',workflow:'规范铺底(含合并调整 · 历史回填)',skill:'—',desc:'建分支写全套核心件;检测到已有 README,多一步 agent「合并调整」再提 MR。'},
+    'w33-legacy':{id:'w33-legacy',title:'减负线第一轮六切片(旧聊天式引擎整链退役第一轮)',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-17',source:'人建',metricIds:['lead-1'],mr:{id:'#102',label:'PR #102(第一轮)',status:'merged'},week:'W33',version:'0.3.0-v3',workflow:'superpowers',skill:'—',desc:'六个切片依次删除旧聊天式工作流引擎的各处依赖,为第二轮收尾铺路。'},
+    'w33-usefix':{id:'w33-usefix',title:'V3-use-fix:Claude 探测 / 列仓搜索 / 测一下',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-17',source:'人建',metricIds:[],mr:{id:'#101',label:'PR #101',status:'merged'},week:'W33',version:'0.3.0-v3',workflow:'superpowers',skill:'—',desc:'三张真实体验修复:claude 可执行探测、列仓搜索、探活「测一下」按钮。'},
+    'w32-odembed':{id:'w32-odembed',title:'V3-OD-embed:原型进度内嵌 Open Design',category:'原型',tool:'open_design',kind:'business',status:'done',doneDate:'08-12',source:'人建',metricIds:[],mr:{id:'#99',label:'PR #99',status:'merged'},week:'W32',version:'0.3.0-v3',workflow:'原型设计 workflow',skill:'—',desc:'原型阶段进度面板内嵌本机 Open Design 首页,替换占位卡。'},
+    'w32-v2prod':{id:'w32-v2prod',title:'V2 产品化',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-10',source:'人建',metricIds:[],mr:{id:'#97',label:'PR #97',status:'merged'},week:'W32',version:'0.2.0-v3',workflow:'superpowers',skill:'—',desc:'V2 阶段收尾产品化改动,合入 main。'}
   };
 }
 function makeMetrics(){
@@ -591,24 +602,26 @@ function makeMetrics(){
     'lead-3':{id:'lead-3',tier:'引领③',label:'默认件被真实使用次数',gray:true,drivenBy:[]}
   };
 }
-function makeSkills(){
+function makeSkillsList(){
   return [
-    {name:'superpowers',source:'业界',version:'latest ✱',uses:'3 ✱',enabled:true},
-    {name:'grillme',source:'业界',version:'latest ✱',uses:'2 ✱',enabled:true},
-    {name:'更新指标与周计划',source:'规范默认 · buddy 自建(合并自 north-star-discovery + metrics-binding)',version:'0.4.0-v4',uses:'1 ✱',enabled:true,ops:true},
-    {name:'资产盘点与微重构',source:'规范默认 · buddy 自建',version:'0.4.0-v4',uses:'0',enabled:true,ops:true},
-    {name:'规范铺底(含合并调整)',source:'规范默认 · buddy 自建',version:'4.0',uses:'1 ✱',enabled:true,ops:true},
-    {name:'原型设计技能',source:'项目自有',version:'0.2',uses:'1 ✱',enabled:true},
-    {name:'systematic-debugging',source:'业界',version:'latest ✱',uses:'1 ✱',enabled:true},
-    {name:'E2E 读回',source:'蒸馏(来源活:减负线两轮收尾合入 PR #102)',version:'0.1',uses:'0',enabled:true,distilled:true,assumed:true}
+    {name:'grillme',source:'buddy 内置(业界引入)',pkg:'独立(可被 superpowers 等 workflow 调用)',desc:'只引导模型追着用户问,不是一套流程。',enabled:true},
+    {name:'蒸馏',source:'buddy 内置 · buddy 自建',pkg:'独立',desc:'把做完的活的会话与产物写成一份带正文的技能,永远记着来自哪件活。',enabled:true},
+    {name:'research',source:'buddy 内置(业界引入)',pkg:'mattpocock-skills 包内',desc:'针对高置信源做调研,把结论落成仓内 md。',enabled:true},
+    {name:'systematic-debugging',source:'buddy 内置(业界引入)',pkg:'独立(可挂在优化 / 运维类活上起手)',desc:'先复现、定位、再修,系统化排障步骤单。',enabled:true},
+    {name:'E2E 读回',source:'蒸馏(来源活:减负线两轮收尾合入 PR #102)',pkg:'独立',desc:'活完成后怎么用 sqlite 读回 + 深链启动核验数字与状态,可复用的验收步骤单。',enabled:true,distilled:true,assumed:true}
   ];
 }
-function makeTeammates(){
+function makeWorkflows(){
   return [
-    {name:'原型师',tool:'open_design',desc:'原型类活默认 agent',record:'—(无运行证据)',source:'规范默认'},
-    {name:'构建师',tool:'claude_cli / cursor',desc:'构建 / 优化 / 运维 / 运作类活默认 agent',record:'12 胜 3 败 ✱',assumed:true,source:'规范默认'}
+    {name:'superpowers',source:'buddy 内置',entry:'superpowers/SKILL.md(插件包,内含多个子技能)✱',agents:'不固定 ✱ · 按步骤动态起子代理',oneliner:'头脑风暴 → 写计划 → 子代理执行 → 验证的完整开发工作流'},
+    {name:'mattpocock-skills',source:'buddy 内置',entry:'mattpocock-skills/SKILL.md(插件包,内含多个子技能)✱',agents:'不固定 ✱ · 按环节起子代理',oneliner:'研究 → 领域建模 → TDD → 评审的完整开发工作流'},
+    {name:'原型设计 workflow',source:'buddy 内置',entry:'standard/workflows/prototype-design/SKILL.md ✱',agents:'0 ✱ · 不额外起子代理',oneliner:'配 Open Design,人与 agent 一起把原型问题磨清楚'},
+    {name:'更新指标与周计划',source:'buddy 内置 · 运作',entry:'standard/workflows/weekly-plan/SKILL.md ✱',agents:'0 ✱ · 单会话直接执行',oneliner:'复盘上周 → 更新指标 → 引导出本周目标与活清单'},
+    {name:'资产盘点与微重构',source:'buddy 内置 · 运作',entry:'standard/workflows/asset-audit/SKILL.md ✱',agents:'0 ✱ · 单会话直接执行',oneliner:'盘点仓内产物与默认件是否齐 → 小范围微重构'},
+    {name:'规范铺底(含合并调整 · 历史回填)',source:'buddy 内置 · 运作',entry:'standard/workflows/standard-scaffold/SKILL.md ✱',agents:'0 ✱ · 单会话直接执行',oneliner:'铺全套核心件;成熟仓多一步合并调整;有历史再多一步历史回填'}
   ];
 }
+function workflowUsage(pid,name){ return allIssuesArr(pid).filter(function(i){return i.workflow===name;}).length; }
 function makeConnectors(){
   return [
     {name:'GitHub',target:'forcegravity1989/loop-buddy',status:'connected',lastSync:'2026-08-18 09:02'},
@@ -623,19 +636,13 @@ function makeCrons(){
 }
 function makeToolmap(){
   return [
-    {cat:'原型',tool:'open_design',agent:'原型师',skills:['原型设计技能']},
-    {cat:'构建',tool:'claude_cli',agent:'构建师',skills:['superpowers','grillme']},
-    {cat:'优化',tool:'claude_cli',agent:'构建师',skills:['systematic-debugging']},
-    {cat:'运维',tool:'claude_cli',agent:'构建师',skills:['systematic-debugging']},
-    {cat:'运营推广',tool:'claude_cli',agent:'构建师',skills:[]},
-    {cat:'运作',tool:'claude_cli',agent:'构建师',skills:['更新指标与周计划','资产盘点与微重构']}
+    {cat:'原型',tool:'open_design',workflow:'原型设计 workflow'},
+    {cat:'构建',tool:'claude_cli',workflow:'superpowers'},
+    {cat:'优化',tool:'claude_cli',workflow:'superpowers'},
+    {cat:'运维',tool:'claude_cli',workflow:'superpowers'},
+    {cat:'运营推广',tool:'claude_cli',workflow:'无'},
+    {cat:'运作',tool:'claude_cli',workflow:'更新指标与周计划'}
   ];
-}
-var BUILTIN_SKILLS=['superpowers','grillme','更新指标与周计划','资产盘点与微重构','规范铺底(含合并调整)'];
-function skillSourceLabel(s){
-  if(BUILTIN_SKILLS.indexOf(s.name)>=0) return 'buddy 内置';
-  if(s.distilled) return '项目导入 · 蒸馏';
-  return '项目导入';
 }
 function makeNotifyEvents(){
   return [
@@ -699,7 +706,7 @@ var KNOWLEDGE_DOCS=[
 /* ===================== 项目 / 状态 ===================== */
 function freshProjects(){
   return {
-    buddy:{id:'buddy',kind:'real',light:'yellow',name:"Builders' Workbench(buddy)",shortName:'buddy',
+    buddy:{id:'buddy',kind:'real',light:'yellow',name:"Builders' Workbench(buddy)",shortName:'buddy',hasHistory:true,
       oneLiner:'V4 MVP 高保真中,减负线待合入',version:'0.4.0-v4',repo:'forcegravity1989/loop-buddy',owner:'Gravity',standardVersion:'4.0',lastDelivery:'08-17',
       card:{name:"Builders' Workbench(buddy)",intent:'AI Coding 里一个人的一张工作台,把一个小项目从想法管到能验收的结果',benchmark:'Linear / Orca 的工作台形态;传统 PM 的五角色十流程',northstar:'2026-11-18 前,5 个内部项目在 buddy 上各跑完 ≥4 个完整周循环',northstarAssumed:true}},
     jianmu:{id:'jianmu',kind:'placeholder',light:'green',name:'建木',shortName:'建木',oneLiner:'✱ 内部项目,演示假设值',version:'v0.1 ✱',repo:'jianmu ✱',owner:'Gravity',standardVersion:'—',lastDelivery:'—',
@@ -724,10 +731,12 @@ function freshState(){
   return {
     projects:freshProjects(), newProject:null,
     issues:{buddy:makeIssues()}, metrics:{buddy:makeMetrics()},
-    skills:{buddy:makeSkills()}, teammates:{buddy:makeTeammates()},
+    skills:{buddy:makeSkillsList()}, workflows:{buddy:makeWorkflows()},
     connectors:{buddy:makeConnectors()}, crons:{buddy:makeCrons()},
     toolmap:{buddy:makeToolmap()},
-    settings:{workspaceRoot:'D:\\bw-workspaces'},
+    chatGroup:{buddy:{configured:false,provider:'welink',kind:'internal',groupId:'',sync:{review:true,merged:true,release:true}}},
+    kanbanOrder:{},
+    settings:{workspaceRoot:'D:\\bw-workspaces',chatLogin:{welink:false}},
     inbox:{buddy:[
       {id:'inbox-pr102',kind:'issue',issueId:'pr-102',text:'PR #102 评审中',state:'pending'},
       {id:'inbox-ops2',kind:'issue',issueId:'ops2-w33',text:'运作活②「资产盘点与微重构 2026-W33」评审中(MR,周五自动跑的)',state:'pending'},
@@ -768,10 +777,10 @@ function freshState(){
   };
 }
 var state = loadState() || freshState();
-function saveState(){ try{ localStorage.setItem('bw-v4-hifi-state', JSON.stringify(state)); }catch(_){} }
+function saveState(){ try{ localStorage.setItem('bw-v4-hifi4-state', JSON.stringify(state)); }catch(_){} }
 function loadState(){
   try{
-    var raw = localStorage.getItem('bw-v4-hifi-state');
+    var raw = localStorage.getItem('bw-v4-hifi4-state');
     if(!raw) return null;
     var s = JSON.parse(raw);
     if(!s || !s.projects) return null;
@@ -819,6 +828,10 @@ function onIssueCompleted(pid,issue){
     state.weekPlans[pid]=state.weekPlans[pid]||{};
     if(!state.weekPlans[pid][wk]){ state.weekPlans[pid][wk]={goal:'(演示)已由运作活①产出周目标',version:getProject(pid).version}; }
   }
+  if(issue.kind==='release'){
+    state.releases[pid]=state.releases[pid]||[];
+    state.releases[pid].push({version:issue.releaseVersion||issue.version,date:TODAY,note:issue.releaseNote||'',issues:issue.releaseIssues||[]});
+  }
 }
 function mergeIssueGeneric(pid,issueId){
   var issue=getIssue(pid,issueId); if(!issue)return;
@@ -836,7 +849,7 @@ var ACTIONS = {
   goWall:function(){ nav('#/wall'); },
   goSettings:function(){ nav('#/settings'); },
   goOnboard:function(){ nav('#/onboard'); },
-  resetDemo:function(){ try{ localStorage.removeItem('bw-v4-hifi-state'); }catch(_){}
+  resetDemo:function(){ try{ localStorage.removeItem('bw-v4-hifi4-state'); }catch(_){}
     state=freshState(); nav('#/wall'); render(); toast('演示已重置'); },
   mergeInbox:function(pid,id){ var item=findInboxItem(pid,id); if(!item)return; item.state='merged'; if(item.issueId)mergeIssueGeneric(pid,item.issueId); render(); toast('已合入 · 相关指标与待人处理计数已更新'); },
   completeInbox:function(pid,id){ var item=findInboxItem(pid,id); if(!item)return; if(item.issueId)completeIssueGeneric(pid,item.issueId);
@@ -844,6 +857,16 @@ var ACTIONS = {
     state.notifyEvents[pid]=state.notifyEvents[pid]||[];
     state.notifyEvents[pid].unshift({id:'ev-done-'+id,text:(item.text||'')+' · 已完成',time:TODAY_SHORT+' 刚刚',link:item.issueId||item.link||null,processed:true});
     render(); toast('已标记完成 · 同一件活不会重复记账'); },
+  mergeAndCompleteInbox:function(pid,id){
+    var item=findInboxItem(pid,id); if(!item||!item.issueId)return;
+    var issue=getIssue(pid,item.issueId);
+    mergeIssueGeneric(pid,item.issueId);
+    completeIssueGeneric(pid,item.issueId);
+    state.inbox[pid]=getInbox(pid).filter(function(x){return x.id!==id;});
+    state.notifyEvents[pid]=state.notifyEvents[pid]||[];
+    state.notifyEvents[pid].unshift({id:'ev-mergedone-'+id,text:(issue?issue.title:item.text)+' · 已合入并完成',time:TODAY_SHORT+' 刚刚',link:item.issueId,processed:true});
+    render(); toast('已合入并完成 · 两下合一下,仍是你点的');
+  },
   openInboxIssue:function(pid,id){ var item=findInboxItem(pid,id); if(item&&item.issueId){ nav('#/p/'+pid+'/session/'+item.issueId); } else if(item&&item.link){ nav('#/p/'+pid+'/session/'+item.link); } else { render(); } },
   goEventLink:function(pid,link){ if(!link)return; nav('#/p/'+pid+'/session/'+link); },
   toggleDelete:function(pid){ state.ui.deleteConfirm[pid]=!state.ui.deleteConfirm[pid]; render(); },
@@ -869,10 +892,15 @@ var ACTIONS = {
       oneLiner:'刚接入,规范铺底待合入',version:'v0.1',repo:repoLabel&&repoLabel.real?repoLabel.id:repoName,
       owner:'Gravity',standardVersion:'4.0(待合入)',lastDelivery:'—',
       card:{name:displayName,intent:ob.intentWhat||'(未填,沿用仓 README)',benchmark:ob.intentBenchmark||'(未填)',northstar:ob.intentNorthstar||'(未填)',northstarAssumed:!ob.intentNorthstar}};
-    state.issues.new={ 'ops3-new':{id:'ops3-new',title:'运作活③规范铺底 v4.0(含合并调整)',category:'运作',tool:'claude_cli',kind:'ops',status:'review',source:'自动建(接入时)',auto:true,metricIds:[],mr:{id:'!1',label:'!1',status:'open'},skill:'规范铺底(含合并调整)',teammate:'构建师',desc:'检测到已有 README(成熟仓):buddy 建分支写入 8 类核心件,agent 合并调整后提 MR !1。'} };
-    state.inbox.new=[{id:'inbox-new-ops3',kind:'issue',issueId:'ops3-new',text:'运作活③「规范铺底」评审中(MR !1,已做合并调整)',state:'pending'}];
+    var isNewRepo = ob.tab==='new';
+    var ops3Desc = isNewRepo
+      ? '新建空仓,无历史可回填:buddy 建分支写入 8 类核心件,提 MR !1。'
+      : '检测到已有 README(成熟仓):①写核心件 → ②合并调整(把 buddy 约定合进已有 README/CLAUDE.md/AGENTS.md)→ ③历史回填(检测到提交 / 标签 / 远端 issue,把历史整理进 docs/releases.md、docs/plan/history.md);三步同一个 MR !1。';
+    state.issues.new={ 'ops3-new':{id:'ops3-new',title:'运作活③规范铺底 v4.0(含合并调整'+(isNewRepo?'':' · 历史回填')+')',category:'运作',tool:'claude_cli',kind:'ops',status:'review',source:'自动建(接入时)',auto:true,metricIds:[],mr:{id:'!1',label:'!1',status:'open'},workflow:'规范铺底(含合并调整 · 历史回填)',skill:'—',desc:ops3Desc} };
+    state.inbox.new=[{id:'inbox-new-ops3',kind:'issue',issueId:'ops3-new',text:'运作活③「规范铺底」评审中(MR !1'+(isNewRepo?'':',已做合并调整 + 历史回填')+')',state:'pending'}];
     state.metrics.new={ northstar:{id:'northstar',tier:'北极星',label:state.newProject.card.northstar,gray:true,drivenBy:[]} };
-    state.skills.new=[]; state.teammates.new=[]; state.connectors.new=[]; state.crons.new=[];
+    state.skills.new=[]; state.workflows.new=[]; state.connectors.new=[]; state.crons.new=[]; state.toolmap.new=[];
+    state.chatGroup.new={configured:false,provider:'welink',kind:'internal',groupId:'',sync:{review:true,merged:true,release:true}};
     state.releases.new=[]; state.weekPlans.new={}; state.health.new={level:'gray',reasons:[{ok:false,text:'刚接入,还没有一周真实数据',jump:'week'}]};
     state.ui.selectedIssue.new=null; state.ui.currentSession.new='shell'; state.ui.treeExpanded.new={'':true};
     nav('#/p/new/overview');
@@ -898,13 +926,40 @@ var ACTIONS = {
     state.notifyEvents[pid]=state.notifyEvents[pid]||[]; state.notifyEvents[pid].unshift({id:'ev-charter-'+Date.now(),text:'名片修改已完成',time:TODAY_SHORT+' 刚刚',link:null,processed:true});
     render(); toast('已完成 · 同一件活不会重复记账'); },
   jumpBlock:function(blk){ var el=document.querySelector('[data-block="'+blk+'"]'); if(el&&el.scrollIntoView){ el.scrollIntoView({behavior:'smooth',block:'center'}); el.style.outline='2px solid var(--clay)'; setTimeout(function(){ el.style.outline=''; },1200); } },
+  openChatGroupModal:function(pid){
+    var cur=state.chatGroup[pid]||{configured:false,provider:'welink',kind:'internal',groupId:'',sync:{review:true,merged:true,release:true}};
+    state.ui.modal={type:'chat-group',pid:pid,draft:clone(cur)}; render();
+  },
+  toggleChatSync:function(field){ var m=state.ui.modal; if(!m||m.type!=='chat-group')return; m.draft.sync=m.draft.sync||{}; m.draft.sync[field]=!m.draft.sync[field]; render(); },
+  saveChatGroup:function(){
+    var m=state.ui.modal; if(!m||m.type!=='chat-group')return;
+    if(!m.draft.groupId){ toast('请填群号'); return; }
+    m.draft.configured=true; m.draft.provider='welink'; m.draft.kind='internal';
+    state.chatGroup[m.pid]=m.draft; state.ui.modal=null;
+    var reviewIssue=allIssuesArr(m.pid).filter(function(i){return i.status==='review';})[0];
+    if(m.draft.sync.review && reviewIssue){
+      state.notifyEvents[m.pid]=state.notifyEvents[m.pid]||[];
+      state.notifyEvents[m.pid].unshift({id:'ev-chatsync-'+Date.now(),text:'已同步到项目群:「'+reviewIssue.title+'」进入评审中',time:TODAY_SHORT+' 刚刚',link:reviewIssue.id});
+    }
+    render(); toast('项目群已配置 · 通知同步中');
+  },
+  toggleChatSyncCfg:function(pid,field){
+    var g=state.chatGroup[pid];
+    if(!g||!g.configured){ toast('先配置群号'); return; }
+    g.sync=g.sync||{}; g.sync[field]=!g.sync[field]; render();
+  },
+  toggleChatLogin:function(){
+    state.settings.chatLogin=state.settings.chatLogin||{welink:false};
+    state.settings.chatLogin.welink=!state.settings.chatLogin.welink;
+    render(); toast(state.settings.chatLogin.welink?'已登录 WeLink(演示)':'已退出登录(演示)');
+  },
   startWeek:function(pid){
     var proj=getProject(pid); if(!proj)return;
     var wk=CURRENT_WEEK; state.weekPlans[pid]=state.weekPlans[pid]||{};
     if(state.weekPlans[pid][wk]){ nav('#/p/'+pid+'/plan'); return; }
     var opsId='ops1-'+pid;
     state.issues[pid]=state.issues[pid]||{};
-    state.issues[pid][opsId]={ id:opsId,title:'运作活①更新指标 + 制定本周计划 2026-'+wk,category:'运作',tool:'claude_cli',kind:'ops',status:'todo',source:'人触发',metricIds:[],mr:null,week:wk,skill:'更新指标与周计划',teammate:'构建师',desc:'复盘上周 → 更新指标 → 引导本周目标与活清单。' };
+    state.issues[pid][opsId]={ id:opsId,title:'运作活①更新指标 + 制定本周计划 2026-'+wk,category:'运作',tool:'claude_cli',kind:'ops',status:'todo',source:'人触发',metricIds:[],mr:null,week:wk,workflow:'更新指标与周计划',skill:'—',desc:'复盘上周 → 更新指标 → 引导本周目标与活清单。' };
     state.ui.selectedIssue[pid]=opsId; state.ui.currentSession[pid]=opsId;
     nav('#/p/'+pid+'/session/'+opsId);
   },
@@ -921,7 +976,7 @@ var ACTIONS = {
     var id='draft-'+Date.now();
     var wk=state.ui.selectedWeek[m.pid]||CURRENT_WEEK;
     state.issues[m.pid]=state.issues[m.pid]||{};
-    state.issues[m.pid][id]={ id:id,title:m.title,category:m.category,tool:m.tool,kind:'business',status:'todo',source:'人建',metricIds:[],mr:null,week:wk,version:(getProject(m.pid)||{}).version,skill:'—',teammate:m.tool==='open_design'?'原型师':'构建师',desc:'(演示)新建活草稿。' };
+    state.issues[m.pid][id]={ id:id,title:m.title,category:m.category,tool:m.tool,kind:'business',status:'todo',source:'人建',metricIds:[],mr:null,week:wk,version:(getProject(m.pid)||{}).version,skill:'—',workflow:m.tool==='open_design'?'原型设计 workflow':'superpowers',desc:'(演示)新建活草稿。' };
     state.ui.modal=null; render(); toast('已新建活「'+m.title+'」');
   },
   openReleaseModal:function(pid){
@@ -933,10 +988,17 @@ var ACTIONS = {
   },
   toggleReleaseCheck:function(id){ var m=state.ui.modal; if(!m||m.type!=='release')return; var i=m.checked.indexOf(id); if(i>=0)m.checked.splice(i,1); else m.checked.push(id); render(); },
   confirmRelease:function(){
-    var m=state.ui.modal; if(!m)return;
-    state.releases[m.pid]=state.releases[m.pid]||[];
-    state.releases[m.pid].push({version:m.version,date:TODAY,note:'agent 起草说明(演示)',issues:m.checked.slice()});
-    state.ui.modal=null; render(); toast('发版记录 +1(本原型只改内存)');
+    var m=state.ui.modal; if(!m||m.type!=='release')return;
+    var pid=m.pid, relId='release-'+m.version.replace(/[^a-zA-Z0-9.]/g,'')+'-'+Date.now();
+    var title='发版本 '+m.version;
+    state.issues[pid]=state.issues[pid]||{};
+    state.issues[pid][relId]={ id:relId,title:title,category:'运作',tool:'—',kind:'release',status:'review',source:'人触发',metricIds:[],
+      mr:{id:'!bw/release-'+m.version,label:'!bw/release-'+m.version,status:'open'},week:m.wk,version:m.version,workflow:'—',skill:'—',
+      releaseVersion:m.version,releaseNote:m.desc,releaseIssues:m.checked.slice(),
+      desc:'写仓一律走分支 + MR:'+m.desc };
+    state.inbox[pid]=state.inbox[pid]||[];
+    state.inbox[pid].push({id:'inbox-'+relId,kind:'issue',issueId:relId,text:'「'+title+'」待合入',state:'pending'});
+    state.ui.modal=null; render(); toast('已建活「'+title+'」,停在评审中 · 通知里合入并完成才算真发版');
   },
   closeModal:function(){ state.ui.modal=null; render(); },
 
@@ -996,6 +1058,14 @@ var ACTIONS = {
   },
   blockIssue:function(pid,issueId){ var i=getIssue(pid,issueId); if(!i)return; i.prevStatus=i.status; i.status='blocked'; render(); toast('已标记阻塞'); },
   unblockIssue:function(pid,issueId,target){ var i=getIssue(pid,issueId); if(!i)return; i.status=target||i.prevStatus||'todo'; render(); toast('已解除阻塞'); },
+  scheduleToWeek:function(pid,issueId){
+    var issue=getIssue(pid,issueId); if(!issue)return;
+    var wk=state.ui.planLeft[pid]; if(!wk||wk==='all') wk=CURRENT_WEEK;
+    issue.status='todo'; issue.week=wk;
+    removeFromOrder(pid,'pool',issueId);
+    insertIntoOrder(pid,'todo',issueId,null);
+    render(); toast('已排进 2026-'+wk);
+  },
   closePlanDetail:function(pid){ state.ui.selectedIssue[pid]=null; render(); },
   distill:function(pid,issueId){
     var issue=getIssue(pid,issueId); if(!issue)return;
@@ -1051,8 +1121,8 @@ var ACTIONS = {
     var m=state.ui.modal; if(!m||m.type!=='import')return;
     if(!m.name){ toast('请填名称'); return; }
     var srcLabel={dir:'本机目录',git:'git 仓地址',project:'从另一个项目'}[m.srcType||'dir'];
-    if(m.kind==='skill'){ state.skills[m.pid]=state.skills[m.pid]||[]; state.skills[m.pid].push({name:m.name,source:'项目导入('+srcLabel+(m.src?(' · '+m.src):'')+')',version:'—',uses:'0',enabled:true}); }
-    else { state.teammates[m.pid]=state.teammates[m.pid]||[]; state.teammates[m.pid].push({name:m.name,tool:'claude_cli',desc:'导入 agent',record:'—(无运行证据)',source:'项目导入('+srcLabel+(m.src?(' · '+m.src):'')+')'}); }
+    if(m.kind==='skill'){ state.skills[m.pid]=state.skills[m.pid]||[]; state.skills[m.pid].push({name:m.name,source:'项目导入('+srcLabel+(m.src?(' · '+m.src):'')+')',pkg:'独立',desc:'(演示)导入的技能,一句话以仓内 SKILL.md 为准。',enabled:true}); }
+    else { state.workflows[m.pid]=state.workflows[m.pid]||[]; state.workflows[m.pid].push({name:m.name,source:'项目导入('+srcLabel+(m.src?(' · '+m.src):'')+')',entry:'(演示)入口以仓内 SKILL.md 为准',agents:'—(未登记)',oneliner:'(演示)导入的 workflow,自己调度 agent。'}); }
     state.ui.modal=null; render(); toast('已导入「'+m.name+'」');
   },
   saveToolmap:function(pid){ toast('已保存写回 .bw/issue-policy.toml(演示)'); },
@@ -1066,6 +1136,78 @@ var ACTIONS = {
   pickAsset:function(name){ toast('已复制「'+name+'」到项目 buddy(演示)'); },
   toastOnly:function(msg){ toast(msg||'演示动作'); }
 };
+
+/* ===================== 看板拖拽:只用于排期(待办池 ⇄ 待办),状态流转仍走按钮 ===================== */
+var dragState={issueId:null,fromCol:null};
+function kanbanOrderArr(pid,col){ state.kanbanOrder=state.kanbanOrder||{}; state.kanbanOrder[pid]=state.kanbanOrder[pid]||{}; state.kanbanOrder[pid][col]=state.kanbanOrder[pid][col]||[]; return state.kanbanOrder[pid][col]; }
+function removeFromOrder(pid,col,id){ var arr=kanbanOrderArr(pid,col); var i=arr.indexOf(id); if(i>=0)arr.splice(i,1); }
+function insertIntoOrder(pid,col,id,beforeId){
+  var arr=kanbanOrderArr(pid,col); var i=arr.indexOf(id); if(i>=0)arr.splice(i,1);
+  if(beforeId && beforeId!==id){ var bi=arr.indexOf(beforeId); if(bi>=0){ arr.splice(bi,0,id); return; } }
+  arr.push(id);
+}
+function sortByOrder(pid,col,items){
+  var order=(state.kanbanOrder&&state.kanbanOrder[pid]&&state.kanbanOrder[pid][col])||[];
+  if(!order.length) return items;
+  var idx={}; order.forEach(function(id,i){ idx[id]=i; });
+  return items.slice().sort(function(a,b){
+    var ai=idx.hasOwnProperty(a.id)?idx[a.id]:9999, bi=idx.hasOwnProperty(b.id)?idx[b.id]:9999;
+    return ai-bi;
+  });
+}
+function handleKanbanDrop(pid,issueId,fromCol,toCol,overId){
+  var issue=getIssue(pid,issueId); if(!issue)return;
+  if(toCol!=='pool' && toCol!=='todo'){
+    toast('状态流转用卡片上的按钮(▶开工 / ⬇合入 / ✓完成 / ⛔阻塞)');
+    return;
+  }
+  if(fromCol!==toCol){
+    var wk=state.ui.planLeft[pid]; if(!wk||wk==='all') wk=CURRENT_WEEK;
+    if(toCol==='todo'){ issue.status='todo'; issue.week=wk; toast('已排进 2026-'+wk); }
+    else { issue.status='pool'; issue.week=''; toast('已移出本周,回到待办池'); }
+    removeFromOrder(pid,fromCol,issueId);
+  }
+  insertIntoOrder(pid,toCol,issueId,overId===issueId?null:overId);
+  render();
+}
+document.addEventListener('dragstart', function(e){
+  var el=e.target.closest('.kcard[draggable="true"]'); if(!el)return;
+  dragState.issueId=el.getAttribute('data-issue');
+  var colEl=el.closest('.kanban-col');
+  dragState.fromCol=colEl?colEl.getAttribute('data-col'):null;
+  el.classList.add('dragging');
+  if(e.dataTransfer){ e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain',dragState.issueId); }catch(_){} }
+});
+document.addEventListener('dragover', function(e){
+  if(!dragState.issueId)return;
+  var col=e.target.closest('.kanban-col'); if(!col)return;
+  e.preventDefault();
+  var key=col.getAttribute('data-col');
+  var allowed=(key==='pool'||key==='todo');
+  col.classList.remove('kanban-col-droppable','kanban-col-noDrop');
+  col.classList.add(allowed?'kanban-col-droppable':'kanban-col-noDrop');
+});
+document.addEventListener('dragleave', function(e){
+  var col=e.target.closest('.kanban-col');
+  if(col && (!e.relatedTarget || !col.contains(e.relatedTarget))){ col.classList.remove('kanban-col-droppable','kanban-col-noDrop'); }
+});
+document.addEventListener('drop', function(e){
+  if(!dragState.issueId)return;
+  var col=e.target.closest('.kanban-col'); if(!col)return;
+  e.preventDefault();
+  col.classList.remove('kanban-col-droppable','kanban-col-noDrop');
+  var overCard=e.target.closest('.kcard');
+  var toCol=col.getAttribute('data-col'), pid=col.getAttribute('data-pid');
+  var overId=overCard?overCard.getAttribute('data-issue'):null;
+  handleKanbanDrop(pid,dragState.issueId,dragState.fromCol,toCol,overId);
+  dragState.issueId=null; dragState.fromCol=null;
+});
+document.addEventListener('dragend', function(e){
+  var el=e.target.closest('.kcard'); if(el)el.classList.remove('dragging');
+  document.querySelectorAll('.kanban-col').forEach(function(c){ c.classList.remove('kanban-col-droppable','kanban-col-noDrop'); });
+  dragState.issueId=null; dragState.fromCol=null;
+});
+
 document.addEventListener('click', function(e){
   var el=e.target.closest('[data-action]'); if(!el)return;
   var name=el.getAttribute('data-action');
@@ -1189,7 +1331,8 @@ function modalHTML(){
       + '<h3>发版本</h3>' + rows
       + '<div class="formrow" style="margin-top:10px;"><label class="label">版本号</label><input class="input" data-bind="ui.modal.version" value="'+esc(m.version)+'"></div>'
       + '<div class="formrow"><label class="label">说明</label><textarea class="textarea" data-bind="ui.modal.desc">'+esc(m.desc)+'</textarea></div>'
-      + '<div class="modal-actions"><button class="btn" data-action="closeModal">取消</button><button class="btn btn-primary" data-action="confirmRelease">确认发版</button></div></div></div>';
+      + '<div style="font-size:11.3px;color:var(--ink-3);margin:2px 0 10px;">写仓一律走分支 + MR:确认后建一张轻量活「发版本 '+esc(m.version)+'」(不起 agent 会话)+ MR,活先停在评审中;去通知里「合入并完成」才算真发版。</div>'
+      + '<div class="modal-actions"><button class="btn" data-action="closeModal">取消</button><button class="btn btn-primary" data-action="confirmRelease">确认 · 建发版活</button></div></div></div>';
   }
   if(m.type==='new-issue'){
     return '<div class="modal-backdrop" data-action="closeModal"><div class="modal">'
@@ -1204,11 +1347,25 @@ function modalHTML(){
     var st=m.srcType||'dir';
     var srcLabel={dir:'本机目录路径',git:'git 仓地址',project:'项目名'}[st];
     return '<div class="modal-backdrop" data-action="closeModal"><div class="modal">'
-      + '<h3>导入'+(m.kind==='skill'?'技能':'agent')+'</h3>'
+      + '<h3>导入'+(m.kind==='skill'?'技能':'workflow')+'</h3>'
       + '<div class="formrow"><label class="label">名称</label><input class="input" data-bind="ui.modal.name" value="'+esc(m.name)+'"></div>'
       + '<div class="pillrow">'+srcTypes.map(function(t){return '<span class="pill '+(st===t[0]?'active':'')+'" data-action="setImportSrcType" data-arg=\'"'+t[0]+'"\'>'+t[1]+'</span>';}).join('')+'</div>'
       + '<div class="formrow"><label class="label">'+srcLabel+'</label><input class="input" data-bind="ui.modal.src" value="'+esc(m.src)+'"></div>'
       + '<div class="modal-actions"><button class="btn" data-action="closeModal">取消</button><button class="btn btn-primary" data-action="confirmImport">确认导入</button></div></div></div>';
+  }
+  if(m.type==='chat-group'){
+    var d=m.draft;
+    return '<div class="modal-backdrop" data-action="closeModal"><div class="modal">'
+      + '<h3>配置项目群</h3>'
+      + '<div class="label">提供方 · 群和 codehub / GitHub 一样,有内部 / 外部之分(工厂设计)</div>'
+      + '<div class="pillrow"><span class="pill active">WeLink · 内部</span><span class="pill" style="opacity:.45;cursor:not-allowed;" title="工厂留位,提供方待定,暂未接入">外部 · 待定</span></div>'
+      + '<div class="formrow"><label class="label">群号</label><input class="input" data-bind="ui.modal.draft.groupId" value="'+esc(d.groupId)+'" placeholder="例如 638201"></div>'
+      + '<div class="formrow"><label class="label">同步哪些通知(直接发到群,不只是工作台里看)</label>'
+      +   '<label class="check-row"><input type="checkbox" '+(d.sync.review?'checked':'')+' data-action="toggleChatSync" data-arg=\'"review"\'> 评审中</label>'
+      +   '<label class="check-row"><input type="checkbox" '+(d.sync.merged?'checked':'')+' data-action="toggleChatSync" data-arg=\'"merged"\'> 已合入</label>'
+      +   '<label class="check-row"><input type="checkbox" '+(d.sync.release?'checked':'')+' data-action="toggleChatSync" data-arg=\'"release"\'> 发版</label>'
+      + '</div>'
+      + '<div class="modal-actions"><button class="btn" data-action="closeModal">取消</button><button class="btn btn-primary" data-action="saveChatGroup">保存</button></div></div></div>';
   }
   return '';
 }
@@ -1339,7 +1496,14 @@ function renderSettings(){
     return '<div class="settings-row"><div><div class="k">'+esc(r.k)+'</div><div class="v">'+esc(r.v)+'</div></div>'
       + lightDot(r.light,true) + '</div>';
   }).join('');
-  return '<section data-screen="settings"><h1 style="font-size:20px;">设置</h1><div class="settings-list">'+wrRow+body+'</div></section>';
+  var chatLogin=state.settings.chatLogin||{welink:false};
+  var chatRow='<div class="settings-row"><div><div class="k">聊天工具登录</div>'
+    + '<div class="v">WeLink(内部)· '+(chatLogin.welink?'已登录':'未登录')+' &nbsp; · &nbsp; 外部(待定)</div></div>'
+    + '<div style="display:flex;align-items:center;gap:8px;">'
+    +   '<button class="btn btn-sm '+(chatLogin.welink?'':'btn-primary')+'" data-action="toggleChatLogin">'+(chatLogin.welink?'退出登录':'登录')+'</button>'
+    +   '<span class="chip chip-gray" style="opacity:.55;" title="工厂留位,暂未接入">外部 · 待定</span>'
+    + '</div></div>';
+  return '<section data-screen="settings"><h1 style="font-size:20px;">设置</h1><div class="settings-list">'+wrRow+body+chatRow+'</div></section>';
 }
 
 /* ===================== 渲染:总览 ===================== */
@@ -1362,6 +1526,48 @@ function metricCardHTML(pid,m,big){
     + (m.currentNote?('<div class="mcard-sub">'+esc(m.currentNote)+'</div>'):'') + wk
     + (m.freshness?('<div class="mcard-sub">保鲜期 '+esc(m.freshness)+(m.obsNote?(' · '+esc(m.obsNote)):'')+'</div>'):'')
     + (driven?('<div class="mcard-driven">'+driven+'</div>'):'')
+    + '</div>';
+}
+function chatGroupLineHTML(pid){
+  var g=state.chatGroup[pid];
+  if(!g||!g.configured){
+    return '未配 <button class="btn btn-sm btn-ghost" data-action="openChatGroupModal" data-arg=\'"'+pid+'"\'>配置</button>';
+  }
+  return 'WeLink · 群 '+esc(g.groupId)+' · 通知同步中 <button class="btn btn-sm btn-ghost" data-action="openChatGroupModal" data-arg=\'"'+pid+'"\'>改</button>';
+}
+function historyBarsHTML(weeks){
+  var max=Math.max.apply(null, weeks.map(function(w){return w[1];}))||1;
+  return '<div style="display:flex;align-items:flex-end;gap:6px;height:76px;margin:8px 0 2px;">'
+    + weeks.map(function(w){
+        var h=w[1]? Math.round((w[1]/max)*54)+4 : 2;
+        return '<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1;">'
+          + '<div class="mono" style="font-size:10px;color:var(--ink-3);">'+w[1]+'</div>'
+          + '<div style="width:100%;max-width:26px;height:'+h+'px;background:var(--clay-dim);border-radius:3px 3px 0 0;"></div>'
+          + '<div class="mono" style="font-size:9.3px;color:var(--ink-4);">'+esc(w[0])+'</div>'
+          + '</div>';
+      }).join('')
+    + '</div>';
+}
+function historyOpsBlockHTML(pid){
+  var proj=getProject(pid);
+  if(!proj || !proj.hasHistory) return '';
+  function badge(src){ return '<span class="chip chip-gray" style="margin-left:5px;">回填自 '+esc(src)+'</span>'; }
+  return '<div class="card ov-block" data-block="history">'
+    + '<div class="ov-block-title">历史运作(回填)</div>'
+    + '<div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;line-height:1.6;">回填只解释历史,不算战绩、不点灯;灯从接入那天起只看真实观测。</div>'
+    + '<div class="repo-metric-grid">'
+    +   '<div class="repo-metric-item"><div class="v mono">2026-06-21</div><div class="k">首次提交'+badge('git')+'</div></div>'
+    +   '<div class="repo-metric-item"><div class="v mono">615</div><div class="k">累计提交'+badge('git')+'</div></div>'
+    +   '<div class="repo-metric-item"><div class="v mono">50</div><div class="k">合入的 PR'+badge('GitHub')+'</div></div>'
+    +   '<div class="repo-metric-item"><div class="v mono">46</div><div class="k">远端 issue'+badge('GitHub')+'</div></div>'
+    +   '<div class="repo-metric-item"><div class="v mono">6</div><div class="k">git 作者(含 2 个机器人)'+badge('git')+'</div></div>'
+    + '</div>'
+    + '<div class="ov-block-title" style="margin-top:14px;">近九周合入 PR 数'+badge('GitHub')+'</div>'
+    + historyBarsHTML(HISTORY_WEEKLY_PR)
+    + '<div class="ov-block-title" style="margin-top:14px;">版本时间线'+badge('docs/releases.md')+'</div>'
+    + '<div class="release-line">V1 切片 · ~2026-08-06</div>'
+    + '<div class="release-line">V2 切片 · ~2026-08-10</div>'
+    + '<div class="release-line">0.3.0-v3 · 2026-08-14 首包 / 08-17 重出</div>'
     + '</div>';
 }
 function renderOverview(pid){
@@ -1410,6 +1616,7 @@ function renderOverview(pid){
             + '<div class="charter-line"><span class="k">想做什么</span>'+esc(card.intent)+'</div>'
             + '<div class="charter-line"><span class="k">对标</span>'+esc(card.benchmark)+'</div>'
             + '<div class="charter-line"><span class="k">北极星</span>'+esc(card.northstar)+(card.northstarAssumed?' <span class="asterisk">✱</span>':'')+'</div>'
+            + '<div class="charter-line"><span class="k">项目群</span>'+chatGroupLineHTML(pid)+'</div>'
             + '<div class="charter-meta"><span class="mono">'+esc(proj.repo)+'</span><span>负责人 '+esc(proj.owner)+'</span><span>规范 v'+esc(proj.standardVersion)+'</span><span style="margin-left:auto;"><button class="btn btn-sm" data-action="editCard" data-arg=\'"'+pid+'"\'>编辑</button></span></div>'))
     +     mrBanner
     +   '</div>'
@@ -1443,6 +1650,7 @@ function renderOverview(pid){
     +   '<div class="version-cols"><div class="version-col"><div class="k">在研版本</div><div class="v mono">'+esc(proj.version)+'</div></div></div>'
     +   releases.map(function(r){ return '<div class="release-line">'+esc(r.version)+' · '+esc(r.date)+' · '+esc(r.note)+'</div>'; }).join('')
     + '</div>'
+    + historyOpsBlockHTML(pid)
     + '</div></section>';
 }
 
@@ -1456,7 +1664,11 @@ function issueActionsHTML(pid,i){
   if(playing){
     return '<button data-action="stopWork" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--alert-deep);font-weight:600;">■ 停止</button>';
   }
-  if(i.status==='pool'||i.status==='todo'){
+  if(i.status==='pool'){
+    return '<button data-action="startWork" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--clay);">▶ 开工</button>'
+      + '<button data-action="scheduleToWeek" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--ink-3);">排进本周</button>';
+  }
+  if(i.status==='todo'){
     return '<button data-action="startWork" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--clay);">▶ 开工</button>'
       + '<button data-action="blockIssue" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--ink-3);">⛔ 阻塞</button>';
   }
@@ -1479,7 +1691,9 @@ function issueActionsHTML(pid,i){
 }
 function issueCardHTML(pid,i){
   var kindChip = i.kind==='ops' ? '<span class="chip chip-outline">运作</span>' : (i.auto?'<span class="chip chip-gray">自动</span>':'');
-  return '<div class="kcard" data-issue="'+i.id+'" style="border-left-color:var(--'+STATUS_DOT[i.status]+');">'
+  var col=colOf(i.status);
+  var draggable=(col==='pool'||col==='todo');
+  return '<div class="kcard" data-issue="'+i.id+'" '+(draggable?'draggable="true"':'')+' style="border-left-color:var(--'+STATUS_DOT[i.status]+');">'
     + '<div class="kcard-top"><span>#'+esc(issueSuffix(i.id))+' · '+esc(i.category)+'</span>'+kindChip+'</div>'
     + '<div class="kcard-title" data-action="selectPlanIssue" data-arg=\'["'+pid+'","'+i.id+'"]\'>'+esc(i.title)+'</div>'
     + '<div class="kcard-actions">'+issueActionsHTML(pid,i)+'</div>'
@@ -1488,9 +1702,11 @@ function issueCardHTML(pid,i){
 function kanbanHTML(pid,issuesList){
   var byCol={pool:[],todo:[],doing:[],review:[],done:[],blocked:[]};
   issuesList.forEach(function(i){ (byCol[colOf(i.status)]=byCol[colOf(i.status)]||[]).push(i); });
+  byCol.pool=sortByOrder(pid,'pool',byCol.pool);
+  byCol.todo=sortByOrder(pid,'todo',byCol.todo);
   var cols=KANBAN_COLS.map(function(c){
     var key=c[0],label=c[1],items=byCol[key]||[];
-    return '<div class="kanban-col" data-col="'+key+'"><div class="kanban-col-head">'+label+' · '+items.length+'</div>'
+    return '<div class="kanban-col" data-col="'+key+'" data-pid="'+pid+'"><div class="kanban-col-head">'+label+' · '+items.length+'<div class="kanban-col-def">'+esc(KANBAN_COL_DEF[key]||'')+'</div></div>'
       + items.map(function(i){return issueCardHTML(pid,i);}).join('')
       + '</div>';
   }).join('');
@@ -1560,7 +1776,7 @@ function renderPlan(pid){
       + '<div class="detail-row"><div class="k">说明</div>'+esc(di.desc||'—')+'</div>'
       + '<div class="detail-row"><div class="k">类别</div>'+esc(di.category)+'</div>'
       + '<div class="detail-row"><div class="k">开工工具</div>'+esc(TOOL_LABEL[di.tool]||'—')+'</div>'
-      + '<div class="detail-row"><div class="k">技能 / agent</div>'+esc(di.skill||'—')+' / '+esc(di.teammate||'—')+'</div>'
+      + '<div class="detail-row"><div class="k">workflow / 技能</div>'+esc(di.workflow||'—')+' / '+esc(di.skill||'—')+'</div>'
       + '<div class="detail-row"><div class="k">推动指标</div>'+((di.metricIds||[]).map(function(mid){var m=getMetric(pid,mid);return m?esc(m.label):'';}).join('、')||'—')+'</div>'
       + '<div class="detail-row"><div class="k">MR</div>'+(di.mr?('<span class="mono">'+esc(di.mr.label)+'</span> · '+esc(di.mr.status)):'—')+'</div>'
       + '<div class="detail-row"><div class="k">来源</div>'+esc(di.source||'—')+'</div>'
@@ -1737,40 +1953,64 @@ function renderSession(pid,sidParam){
 var TOOL_OPTIONS=['open_design','claude_cli','cursor'];
 function toolmapSectionHTML(pid){
   var rows=state.toolmap[pid]||[];
-  var agentNames=(state.teammates[pid]||[]).map(function(t){return t.name;});
-  var skillNames=(state.skills[pid]||[]).map(function(s){return s.name;});
+  var wfNames=(state.workflows[pid]||[]).map(function(w){return w.name;});
   var body=rows.map(function(r,idx){
     var toolSel='<select class="select-sm" data-bindchange="toolmap.'+pid+'.'+idx+'.tool">'+TOOL_OPTIONS.map(function(t){return '<option value="'+t+'" '+(r.tool===t?'selected':'')+'>'+TOOL_LABEL[t]+'</option>';}).join('')+'</select>';
-    var agentSel='<select class="select-sm" data-bindchange="toolmap.'+pid+'.'+idx+'.agent">'+agentNames.map(function(a){return '<option '+(r.agent===a?'selected':'')+'>'+esc(a)+'</option>';}).join('')+'</select>';
-    var skillMulti='<select class="select-multi" multiple size="'+Math.min(4,Math.max(2,skillNames.length))+'" data-bindchange-multi="toolmap.'+pid+'.'+idx+'.skills">'+skillNames.map(function(s){return '<option '+((r.skills||[]).indexOf(s)>=0?'selected':'')+'>'+esc(s)+'</option>';}).join('')+'</select>';
-    return '<tr><td>'+esc(r.cat)+'</td><td>'+toolSel+'</td><td>'+agentSel+'</td><td>'+skillMulti+'</td></tr>';
+    var wfCell;
+    if(r.cat==='运作'){
+      wfCell='<select class="select-sm" disabled><option>'+esc(r.workflow)+'</option></select>'
+        + '<div style="font-size:10px;color:var(--ink-3);margin-top:3px;">运作活按活自动选对应运作 workflow</div>';
+    } else {
+      var opts=wfNames.concat(['无']);
+      wfCell='<select class="select-sm" data-bindchange="toolmap.'+pid+'.'+idx+'.workflow">'+opts.map(function(w){return '<option '+(r.workflow===w?'selected':'')+'>'+esc(w)+'</option>';}).join('')+'</select>';
+    }
+    return '<tr><td>'+esc(r.cat)+'</td><td>'+toolSel+'</td><td>'+wfCell+'</td></tr>';
   }).join('');
   return '<div class="cfg-section"><div class="cfg-section-head"><h3>开工工具映射</h3><button class="btn btn-sm btn-primary" data-action="saveToolmap" data-arg=\'"'+pid+'"\'>保存</button></div>'
-    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>类别</th><th>开工工具</th><th>agent</th><th>skill</th></tr></thead><tbody>'+body+'</tbody></table></div>'
-    + '<div class="cfg-readonly-note">保存后写回 .bw/issue-policy.toml(演示)。</div></div>';
+    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>类别</th><th>开工工具</th><th>workflow</th></tr></thead><tbody>'+body+'</tbody></table></div>'
+    + '<div class="cfg-readonly-note">保存后写回 .bw/issue-policy.toml(演示)。workflow = SOP 类技能包,自己调度 agent,buddy 不单独维护 agent 名单;下拉里含项目导入的 workflow。</div></div>';
+}
+function workflowsSectionHTML(pid){
+  var wfs=state.workflows[pid]||[];
+  return '<div class="cfg-section"><div class="cfg-section-head"><h3>workflow(SOP 类技能包)</h3><button class="btn btn-sm" data-action="openImportModal" data-arg=\'["'+pid+'","workflow"]\'>导入</button></div>'
+    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>名称</th><th>来源</th><th>入口</th><th>自带 agent 数</th><th>用过几次</th><th>一句话</th></tr></thead><tbody>'
+    + wfs.map(function(w){
+      var uses = w.name==='superpowers' ? (workflowUsage(pid,'superpowers')+' ✱') : '—(无使用记录)';
+      return '<tr><td>'+esc(w.name)+'</td><td>'+esc(w.source)+'</td><td class="mono" style="font-size:10.4px;">'+esc(w.entry)+'</td><td>'+esc(w.agents)+'</td><td class="mono">'+uses+'</td><td>'+esc(w.oneliner)+'</td></tr>';
+    }).join('') + '</tbody></table></div>'
+    + '<div class="cfg-readonly-note">workflow 的入口是一份 SKILL.md,写的是一整套做事流程,自己调度该用哪个 agent;buddy 不再单独维护 agent 名单,战绩记在 workflow / 技能上。buddy 带的都是通用件,各人 / 各项目可导入自己的。</div></div>';
 }
 function skillsSectionHTML(pid){
   var skills=state.skills[pid]||[];
-  return '<div class="cfg-section"><div class="cfg-section-head"><h3>skill</h3><button class="btn btn-sm" data-action="openImportModal" data-arg=\'["'+pid+'","skill"]\'>导入</button></div>'
-    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>名称</th><th>来源</th><th>版本</th><th>本项目用过次数</th><th>启用</th></tr></thead><tbody>'
+  return '<div class="cfg-section"><div class="cfg-section-head"><h3>skill(单个技能)</h3><button class="btn btn-sm" data-action="openImportModal" data-arg=\'["'+pid+'","skill"]\'>导入</button></div>'
+    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>名称</th><th>来源</th><th>属于哪个包</th><th>一句话</th><th>启用</th></tr></thead><tbody>'
     + skills.map(function(s){
-      return '<tr><td>'+esc(s.name)+(s.distilled?' <span class="chip chip-green">蒸馏</span>':'')+'</td><td>'+esc(skillSourceLabel(s))+'</td><td class="mono">'+esc(s.version)+'</td><td class="mono">'+esc(s.uses)+'</td>'
+      return '<tr><td>'+esc(s.name)+(s.distilled?' <span class="chip chip-green">蒸馏</span>':'')+'</td><td>'+esc(s.source)+'</td><td>'+esc(s.pkg||'独立')+'</td><td>'+esc(s.desc||'')+'</td>'
         + '<td><span class="tglswitch '+(s.enabled?'on':'')+'" data-action="toggleSkill" data-arg=\'["'+pid+'",'+JSON.stringify(s.name)+']\'><span class="knob"></span></span></td></tr>';
     }).join('') + '</tbody></table></div></div>';
 }
-function agentsSectionHTML(pid){
-  var tms=state.teammates[pid]||[];
-  return '<div class="cfg-section"><div class="cfg-section-head"><h3>agent</h3><button class="btn btn-sm" data-action="openImportModal" data-arg=\'["'+pid+'","teammate"]\'>导入</button></div>'
-    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>名称</th><th>工具</th><th>说明</th><th>战绩</th></tr></thead><tbody>'
-    + tms.map(function(t){ return '<tr><td>'+esc(t.name)+'</td><td class="mono">'+esc(TOOL_LABEL[t.tool]||t.tool)+'</td><td>'+esc(t.desc)+'</td><td class="mono">'+esc(t.record)+'</td></tr>'; }).join('')
-    + '</tbody></table></div><div class="cfg-readonly-note">战绩只读,由真实运行记录推导。</div></div>';
+function chatGroupBlockHTML(pid){
+  var g=state.chatGroup[pid]||{configured:false,sync:{}};
+  var toggles=[['review','评审中'],['merged','已合入'],['release','发版']].map(function(t){
+    return '<label style="display:inline-flex;align-items:center;gap:5px;margin-right:12px;font-size:11.3px;"><span class="tglswitch '+((g.sync&&g.sync[t[0]])?'on':'')+'" data-action="toggleChatSyncCfg" data-arg=\'["'+pid+'","'+t[0]+'"]\'><span class="knob"></span></span>'+t[1]+'</label>';
+  }).join('');
+  return '<div style="border-top:1px dashed var(--border);margin-top:12px;padding-top:12px;font-size:12.2px;">'
+    + '<div style="font-weight:600;margin-bottom:7px;">项目群</div>'
+    + '<div style="display:flex;flex-direction:column;gap:7px;">'
+    + '<div>提供方 <span class="chip chip-clay">WeLink · 内部</span> <span class="chip chip-gray" style="opacity:.55;" title="工厂留位,暂未接入">外部 · 待定</span></div>'
+    + '<div>群号 <span class="mono">'+esc(g.groupId||'—')+'</span> <button class="btn btn-sm btn-ghost" data-action="openChatGroupModal" data-arg=\'"'+pid+'"\'>'+(g.configured?'改':'配置')+'</button></div>'
+    + '<div>同步哪些通知 '+toggles+'</div>'
+    + '<div>状态 <span class="chip '+(g.configured?'chip-green':'')+'">'+(g.configured?'已配':'未配')+'</span></div>'
+    + '</div></div>';
 }
 function connectorsCronsSectionHTML(pid){
   var cs=state.connectors[pid]||[], crons=state.crons[pid]||[];
   var connHTML='<div class="cfg-section"><div class="cfg-section-head"><h3>连接器</h3></div>'
     + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>连接器</th><th>目标</th><th>状态</th><th>上次同步</th></tr></thead><tbody>'
     + cs.map(function(c){ return '<tr><td>'+esc(c.name)+'</td><td class="mono">'+esc(c.target)+'</td><td><span class="chip '+(c.status==='connected'?'chip-green':'')+'">'+(c.status==='connected'?'已连接':'未配置')+'</span></td><td class="mono">'+esc(c.lastSync)+'</td></tr>'; }).join('')
-    + '</tbody></table></div></div>';
+    + '</tbody></table></div>'
+    + chatGroupBlockHTML(pid)
+    + '</div>';
   var cronHTML='<div class="cfg-section"><div class="cfg-section-head"><h3>定时</h3></div>'
     + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>任务</th><th>频率</th><th>下次触发</th><th>状态</th><th>操作</th></tr></thead><tbody>'
     + crons.map(function(c){
@@ -1783,8 +2023,8 @@ function connectorsCronsSectionHTML(pid){
 function renderConfig(pid){
   return '<section data-screen="config">'
     + toolmapSectionHTML(pid)
+    + workflowsSectionHTML(pid)
     + skillsSectionHTML(pid)
-    + agentsSectionHTML(pid)
     + connectorsCronsSectionHTML(pid)
     + '</section>';
 }
@@ -1846,9 +2086,8 @@ function renderSpace(pid,subTab){
       + '<div class="graph-foot">索引时间 2026-08-18 09:10 · codegraph explore</div>'
       + '</div>';
   } else if(tab==='assets'){
-    var skills=state.skills[pid]||[], tms=state.teammates[pid]||[];
-    var own=skills.filter(function(s){return !s.ops&&!s.distilled&&s.source==='项目自有';});
-    var ops=skills.filter(function(s){return s.ops;});
+    var skills=state.skills[pid]||[], wfs=state.workflows[pid]||[];
+    var own=skills.filter(function(s){return !s.distilled && /^项目导入/.test(s.source||'');});
     var distilled=skills.filter(function(s){return s.distilled;});
     function assetCards(list,metaFn){ return '<div class="asset-grid">'+list.map(function(x){return '<div class="card asset-card"><div class="name">'+esc(x.name)+'</div><div class="meta">'+esc(metaFn(x))+'</div></div>';}).join('')+'</div>'; }
     var artifacts=[
@@ -1858,10 +2097,9 @@ function renderSpace(pid,subTab){
       {name:'hifi/index.html',meta:'V4 高保真可点击原型(本文件)'}
     ];
     body=''
-      + '<div class="asset-sect-title">项目自有技能</div>' + (own.length?assetCards(own,function(s){return s.version+' · 用过 '+s.uses;}):'<div class="detail-empty">暂无</div>')
+      + '<div class="asset-sect-title">项目自有技能</div>' + (own.length?assetCards(own,function(s){return (s.pkg||'独立')+' · '+(s.desc||'');}):'<div class="detail-empty">暂无</div>')
       + '<div class="asset-sect-title">蒸馏技能</div>' + (distilled.length?assetCards(distilled,function(s){return s.source;}):'<div class="detail-empty">暂无</div>')
-      + '<div class="asset-sect-title">agent</div>' + assetCards(tms,function(t){return TOOL_LABEL[t.tool]||t.tool;})
-      + '<div class="asset-sect-title">运作技能</div>' + assetCards(ops,function(s){return s.version;})
+      + '<div class="asset-sect-title">workflow</div>' + (wfs.length?assetCards(wfs,function(w){return w.source+' · '+w.oneliner;}):'<div class="detail-empty">暂无</div>')
       + '<div class="asset-sect-title">产物登记</div>' + assetCards(artifacts,function(a){return a.meta;})
       + '<div class="asset-sect-title">仓统计指标</div>'
       + '<div class="repostats" style="border:none;padding:0;">30 天提交 464 · Rust 115 文件 / 60,824 行 · docs 80 篇 · 技能 9 · 30 天 PR 数 7 · 开放 PR 4</div>';
@@ -1871,21 +2109,34 @@ function renderSpace(pid,subTab){
 }
 
 /* ===================== 渲染:通知 ===================== */
+function chatSyncChipHTML(pid,kind){
+  var g=state.chatGroup[pid];
+  if(g && g.configured && g.sync && g.sync[kind]){ return ' <span class="chip chip-green">已发到群 ✓</span>'; }
+  return '';
+}
 function renderNotify(pid){
   var pending=getInbox(pid);
   var events=(state.notifyEvents[pid]||[]).slice();
+  var g=state.chatGroup[pid];
+  var groupHintHTML = (!g||!g.configured)
+    ? '<div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;">配了项目群,这些通知能直达群 → <span style="color:var(--clay);cursor:pointer;" data-action="nav" data-arg=\'"#/p/'+pid+'/config"\'>配置</span></div>'
+    : '';
   var pendingHTML=pending.length? pending.map(function(it){
     var acts='';
+    var chip='';
     if(it.kind==='metric'){
       acts='<button class="btn btn-sm btn-ghost" data-action="openInboxIssue" data-arg=\'["'+pid+'","'+it.id+'"]\'>去补</button>';
     } else if(it.state==='pending'){
+      chip=chatSyncChipHTML(pid,'review');
       acts='<button class="btn btn-sm btn-ghost" data-action="openInboxIssue" data-arg=\'["'+pid+'","'+it.id+'"]\'>打开</button>'
-        + '<button class="btn btn-sm" data-action="mergeInbox" data-arg=\'["'+pid+'","'+it.id+'"]\'>合入</button>';
+        + '<button class="btn btn-sm" data-action="mergeInbox" data-arg=\'["'+pid+'","'+it.id+'"]\'>合入</button>'
+        + '<button class="btn btn-sm btn-primary" data-action="mergeAndCompleteInbox" data-arg=\'["'+pid+'","'+it.id+'"]\'>合入并完成</button>';
     } else if(it.state==='merged'){
+      chip=chatSyncChipHTML(pid,'merged');
       acts='<button class="btn btn-sm btn-primary" data-action="completeInbox" data-arg=\'["'+pid+'","'+it.id+'"]\'>点完成</button>';
     }
     return '<div class="drawer-item"'+(it.issueId?(' data-issue="'+it.issueId+'"'):'')+'>'
-      + '<div class="desc">'+esc(it.text)+(it.state==='merged'?' <span class="chip chip-green">已合入</span>':'')+'</div>'
+      + '<div class="desc">'+esc(it.text)+(it.state==='merged'?' <span class="chip chip-green">已合入</span>':'')+chip+'</div>'
       + '<div class="acts">'+acts+'</div></div>';
   }).join('') : '<div class="drawer-empty">待处理已清空</div>';
   var eventsHTML=events.length? events.map(function(e){
@@ -1895,6 +2146,7 @@ function renderNotify(pid){
   }).join('') : '<div class="drawer-empty">暂无事件</div>';
   return '<section data-screen="notify" data-notify>'
     + '<h1 style="font-size:20px;">通知</h1>'
+    + groupHintHTML
     + '<div class="notify-sect-title">待处理 · '+pending.length+'</div>'
     + '<div class="notify-list">'+pendingHTML+'</div>'
     + '<div class="notify-sect-title">事件</div>'
