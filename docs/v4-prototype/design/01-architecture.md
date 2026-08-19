@@ -1,6 +1,6 @@
 # 01 · 新壳怎么搭
 
-> **30 秒导读**:这篇回答一个问题——**V4 新壳(六入口界面)落在哪个 crate、目录怎么分、模块怎么防止互相纠缠、命令/事件总线加什么、旧壳何时能删**。不讲某一屏具体长什么样(那是 02-10 篇的事)。**现在作数,待用户复核,尚未开工写代码**。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。全文数字来自真实读代码(`wc -l`/`grep`/`cargo tree`),不是猜的。
+> **30 秒导读**:这篇回答一个问题——**V4 新壳(六入口界面)落在哪个 crate、目录怎么分、模块怎么防止互相纠缠、命令/事件总线加什么、旧壳何时能删**。不讲某一屏具体长什么样(那是 02-10 篇的事)。**现在作数,待用户复核,尚未开工写代码**。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。全文数字来自真实读代码(`wc -l`/`grep`/`cargo tree`),不是猜的。**2026-08-20 按用户第七轮盘点重写了 §2.6 命令总表里技能/群通知/发版三类命令的落点表述(不再假设 `chat_outbox`/`skill_package`/`release`/`agent` 等已取消的表存在),并同步修正 §3.5 代码骨架与 §6 开放问题第 5 条。**
 
 ---
 
@@ -96,7 +96,7 @@ crates/app-shell/
 3. **指标卡两形态**`MetricCard`/`BizMetricCard` 与「已停用」折叠区(均 `op.rs`)——进 `screens/overview/`。
 4. **Issue 列表行与六列看板卡片**(`op.rs` 的 `IssuesPanel`,尤其按钮语义分层——同一按钮位置按状态互斥切换文案颜色,不堆砌常驻按钮)——进 `screens/plan/`。
 5. **嵌入终端面板** `TerminalWidget`(含暗色标题条与离屏保活写法)——进 `terminal_xterm` 适配模块,被 `screens/session/` 用。
-6. **Hub 列表行**(SkillHub/AgentHub 卡片网格与 `SkillFileBrowser` 双栏文件浏览器)——拆进 `screens/config/`(workflow 表、skill 表)与 `screens/kb/`(资产页签),"哪怕只有一个文件也套文件树外壳"这个模板决定原样保留。
+6. **Hub 列表行**(SkillHub/AgentHub 卡片网格与 `SkillFileBrowser` 双栏文件浏览器)——拆进 `screens/config/`(workflow/skill 清单区)与 `screens/kb/`(资产页签)。**这两个清单区不再有库表可查**——第七轮盘点后 `skill`/`skill_package` 等表全部取消,清单现扫 `.claude/skills/**/SKILL.md` 目录得到(02 篇 §2.6),"哪怕只有一个文件也套文件树外壳"这个模板决定原样保留。
 7. **创建流两卡**(`create.rs` 全部,含 `RemoteProjectProbe` 探活三态)——进 `screens/onboard/`,待拍-01 的四字段意图卡在这基础上改字段,不改骨架。
 8. **`ActionsBanner` 后台动作条**——三态+阈值门槛(秒级完成不显示),新壳任何后台命令(建 MR、拉群历史、跑历史回填)都复用,建议放 `theme/` 或独立小模块共享,不是 `onboard` 专属。
 
@@ -112,7 +112,7 @@ crates/app-shell/
 |---|---|---|---|
 | 计划 | `ScheduleIssue{id, week_of: Option<String>}` | 排进(或移出)本周待办(设/清空 `week_of`),待拍-25「待办池⇄待办」的排进方向(设计期统一:06 篇把早期分开的 `ScheduleIssue`+`UnscheduleIssue` 合并成一条,本表据此回填) | 新 |
 | 计划 | `ReorderIssue` | 待办池/待办列内排先后,纯展示,不动状态机 | 新 |
-| 计划 | `CutRelease` | 「发版本」:选本周完成的活→填版本号→确认——建一张轻量活「发版本 vX」+分支提交 `docs/releases.md` 一行+MR(待拍-12;06 篇 §2.4 已定:`release` 表一行与可选 tag 落在这张活「合入并完成」的那一刻,不在 `CutRelease` 命令本身返回时) | 新 |
+| 计划 | `CutRelease` | 「发版本」:选本周完成的活→填版本号→确认——建一张轻量活「发版本 vX」+分支提交 `docs/releases.md` 一行+MR(待拍-12;06 篇 §2.4 已定:`docs/releases.md` 新增一行与可选 tag 落在这张活「合入并完成」的那一刻,不在 `CutRelease` 命令本身返回时;`docs/releases.md` 是发版记录**唯一正本**,不建 `release` 表存副本——02 篇 §2.1/§2.5) | 新 |
 | 计划/总览 | `TogglePreview{id: Option<IssueId>}` | 合入前预览某活 worktree 里的 `.bw/metrics.toml`/`docs/plan/`(待拍-21,形态留 06 篇;设计期统一:06 篇把早期只能「开」的 `PreviewIssueWorktree` 改成能开能关的 `TogglePreview`,本表据此改名) | 新 |
 | 计划 | `SetCurrentVersion{version}` | 切在研版本,纯本机动作,不建活(06 篇新增,本表据此回填) | 新 |
 | 计划/总览 | `IssueScheduled` / `ReleaseCut`(Event) | 排期/发版真实发生的回执 | 新 |
@@ -122,7 +122,7 @@ crates/app-shell/
 | 总览 | `ProjectCardEditPending`(Event) | 名片编辑的轻量活已建、MR 已开,总览横幅可以显示了(08 篇新增,本表据此回填) | 新 |
 | 总览 | `ProjectCardMerged`(Event) | 名片 MR 已合入,库缓存已同步,总览可以刷新显示新值了(08 篇新增,本表据此回填) | 新 |
 | 通知 | `MergeAndComplete` | 一键做完「合入」+「完成」——**内部仍两步**:先 `MergeIssuePr` 再走既有 `TransitionIssue` InReview→Done 记账路径,同一件活绝不记两次不因按钮合并而改变 | 新(组合既有命令,不新开记账路径)|
-| 通知 | `SyncNotifyToChat{issue_id, event_type}` | 评审中/已合入/发版且配了群时,写 `chat_outbox` 并调用 `chat_group` 适配器发送(设计期统一:字段名以 07 篇为准,`chat_outbox` 表列名同步改成 `issue_id`+`event_type`,见 02 篇) | 新 |
+| 通知 | `SyncNotifyToChat{issue_id, event_type}` | 评审中/已合入/发版且配了群时,直接调用 `chat_group` 适配器发送——**不写去重账本**,发送即完成(第七轮盘点:`chat_outbox` 表取消,"没人取的不存";重发一条能忍,是知情代价而非 bug,见 02 篇 §2.4;字段名以 07 篇为准) | 新 |
 | 通知 | `FetchChatDigest{project_id, since, until}` | 拉一段时间群历史,生成本机摘要文件(不进仓不进库;设计期统一:字段以 07 篇为准,补上原缺的 `project_id`) | 新 |
 | 通知 | `MarkNotifySeen{project_id, at}` | 记「这个项目的事件流看到哪个时间点」,只影响视觉状态,不参与待处理徽章计数(07 篇新增,本表据此回填) | 新 |
 | 通知 | `NotifySyncedToChat`(Event) | 一条通知真实发到群了(或失败带原因) | 新 |
@@ -138,14 +138,15 @@ crates/app-shell/
 | 会话 | `OpenDiffTab{issue_id, path}` | 中栏打开该活改动文件的 diff(设计期统一:同上,05 篇把早期的 `ShowDiff` 改名改签名) | 新 |
 | 会话 | `ExpandTreeDir{issue_id, dir_path}` | 懒加载展开文件树某目录(05 篇新增,本表原缺,据此回填) | 新 |
 | 会话 | `RunIssue`/`CancelRun`/`AssignIssue`/`BlockIssue`/`TransitionIssue`/`MergeIssuePr`/`DistillSkillFromIssue`(既有)| 干活/评审/蒸馏语义不变;"按活类别选开工工具、分发到哪个 `adapters/` 模块"是新加的路由层,命令本身不变。**新增触发路径(第五轮,06 篇 §2.3 定义,待拍-25 改)**:计划屏拖一张活到进行中/评审中/已完成/阻塞列,松手弹确认框,确认后发的就是这几条既有命令——拖拽不新增命令、不绕过 `can_transition_to`,只是给这几条命令多一条触发路径(另一条是详情面板按钮),两条路径最终调用同一套用例 | 沿用 |
-| 配置 | `CreateSkill`/`UpdateSkill`/`ImportSkillPackage`/`ImportSkillLibrary`(既有)| workflow 表与 skill 表的数据来源,字段增删留 04 篇 | 沿用,字段留口 |
+| 配置 | `CreateSkill`/`UpdateSkill`/`ImportSkillLibrary`(既有)| 写 `.claude/skills/**/SKILL.md` 技能文件(蒸馏、人手加、从技能库单独导入一个技能)——**不落库表**,"有没有这个技能"扫目录即得(02 篇 §2.6);字段增删留 04 篇 | 沿用,字段留口 |
+| 配置 | `ImportSkillPackage`(既有)| **取消**——预置技能包(mattpocock-skills / superpowers / buddy 自建运作 workflow)随 `RunStandardBootstrap`(运作活③规范铺底)一次性复制进项目仓 `.claude/skills/`(02 篇 §2.5/待拍-32),不需要单独的导入命令,更不需要登记表(`skill_package` 表第七轮取消) | 删除 |
 | 配置 | `SetIssueWorkflow{id, workflow}` | 活详情面板换 workflow/单技能,写 `issue.workflow`(04 篇新增;字段名统一为 `workflow`——04 篇早期草案叫 `workflow_ref`,与 `issue.workflow` 列名对齐后本表据此回填) | 新 |
 | 配置 | `SaveToolMapping` | 配置屏第①段保存一行「类别→工具→workflow」映射(04 篇新增,本表据此回填) | 新 |
 | 配置 | `ProbeTool` | 手动探活一次(配置屏/项目墙"测一下"复用,04 篇新增,本表据此回填) | 新 |
 | 配置 | `MarkEntrySkill` | 人工补标"这是入口技能"(04 篇新增,本表据此回填) | 新 |
-| 配置 | `CreateAgent`/`UpdateAgent`/`ImportAgentDefinition`(既有)| 待拍-24 已定"不再单独维护 agent 名单,agent 随 workflow 包走"——配置屏不再有独立 agent 表,这三条**同一次迁移里硬删**(设计期统一:与 02/04 篇一致,`agent` 表 `DROP TABLE IF EXISTS`,不可逆,已提请用户点头,见 00-handshake 第 2 条) | 删除 |
+| 配置 | `CreateAgent`/`UpdateAgent`/`ImportAgentDefinition`(既有)| 待拍-24 已定"不再单独维护 agent 名单,agent 随 workflow 包走"——配置屏不再有独立 agent 表,这三条**同一次迁移里硬删**(设计期统一:与 02/04 篇一致;V4 用的是**新的库文件**,`schema.sql` 从未定义过 `agent` 表——不是"删表",是"新库从未建过",效果同样是存量队友定义不迁移、不可逆,已提请用户点头,见 00-handshake 第 2 条) | 删除 |
 
-**数得上的增量**:新命令约 24 条、改动 1 条、新事件约 7 条、硬删 3 条既有命令。没有一条要求改内核的状态机/信号只能从数据推导这条铁律/只追加表等铁律机制,都是 `Command`/`Event` 两个枚举上的加法。
+**数得上的增量**:新命令约 24 条、改动 1 条、新事件约 7 条、硬删 4 条既有命令(`CreateAgent`/`UpdateAgent`/`ImportAgentDefinition`/`ImportSkillPackage`)。没有一条要求改内核的状态机/信号只能从数据推导这条铁律/只追加表等铁律机制,都是 `Command`/`Event` 两个枚举上的加法。
 
 ### 2.7 深链环境变量:六入口怎么映射
 
@@ -322,7 +323,10 @@ pub enum Command {
 // 既有变体改动(非新增):CreateAutopilotTask 加 auto_run: bool ——
 // true = 到点自动建活后立刻自动 ▶开工(运作活②);false = 今天行为不变(只建活)。
 // 硬删(非新增,见表格「配置」行):CreateAgent / UpdateAgent / ImportAgentDefinition ——
-// 同一次迁移随 agent 表一起 DROP,不可逆,已提请用户点头(00-handshake 第 2 条)。
+// V4 新库 schema.sql 从未定义 agent 表(不是删表,是新库从未建过),存量队友定义
+// 不迁移,不可逆,已提请用户点头(00-handshake 第 2 条)。
+// 硬删(非新增):ImportSkillPackage —— 预置技能包铺底改由 RunStandardBootstrap
+// 一次性复制进 .claude/skills/(02 篇 §2.5),不需要单独的导入命令与登记表。
 
 pub enum Event {
     // ...既有 18 个变体不动...
@@ -375,7 +379,7 @@ let panel = match pl.as_str() {
 2. **文件行数守卫阻断还是只报警**:本篇推荐直接阻断(2.8 节理由),这是条新门禁,建议用户确认后再正式写进 `CLAUDE.md` 门禁清单。
 3. **旧壳删除的时间点判据**(2.11 节四条)是否采纳,还是要更严格/更宽松的标准——例如是否要求"内部试点跑完两周"(母文档 §8)也算进删除判据,而不是"六屏验收过了就删"。
 4. **`BW_SCOPE` 环境变量去留**:五阶段视角切换在 V4 计划屏无直接对应物,初步判断退役,但计划屏是否需要新的"按类别标签筛选"深链变量,待 06 篇确认后再回来改这条。
-5. ~~`CreateAgent`/`UpdateAgent`/`ImportAgentDefinition` 退场后存量数据怎么处理~~ **已定(设计期统一)**:硬删,存量队友定义不迁移——`agent` 表同一次迁移 `DROP TABLE IF EXISTS`(与 02/04 篇一致,理由见 02 篇 §2.4、04 篇 §2.10)。
+5. ~~`CreateAgent`/`UpdateAgent`/`ImportAgentDefinition` 退场后存量数据怎么处理~~ **已定(设计期统一)**:硬删,存量队友定义不迁移——V4 新库 `schema.sql` 从未定义过 `agent` 表(不是"删表",是"新库从未建过",效果同样不可逆),与 02/04 篇一致,理由见 02 篇 §2.3、04 篇 §2.10。
 
 ---
 

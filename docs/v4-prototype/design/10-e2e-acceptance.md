@@ -1,6 +1,6 @@
 # 10 · 验收怎么做:总表、指挥器、试点
 
-> **30 秒导读**:01-09 篇各自定义了「怎么证明做对了」,这篇把它们收成一张**总表**——按母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md),下称母文档)§8 的 8 条骨架展开成可执行检查项,并给出一个**headless 指挥器**(不开界面、直接驱动内核走完一整套 V4 主环的脚本)、深链与截图操作手册、内部试点两周怎么走。给复核设计的用户、写代码的会话、跑试点的同事看。**现在作数吗**:详细设计稿,待用户复核,尚未开工写代码。与母文档冲突以母文档为准,拿不准的进第 6 节。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本篇不新开代号系列,沿用「待拍-NN」与「第 N 篇」。
+> **30 秒导读**:01-09 篇各自定义了「怎么证明做对了」,这篇把它们收成一张**总表**——按母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md),下称母文档)§8 的 8 条骨架展开成可执行检查项,并给出一个**headless 指挥器**(不开界面、直接驱动内核走完一整套 V4 主环的脚本)、深链与截图操作手册、内部试点两周怎么走。给复核设计的用户、写代码的会话、跑试点的同事看。**现在作数吗**:详细设计稿,待用户复核,尚未开工写代码。与母文档冲突以母文档为准,拿不准的进第 6 节。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本篇不新开代号系列,沿用「待拍-NN」与「第 N 篇」。**2026-08-20 按用户第七轮盘点重写了本篇涉及库表的全部读回命令——库只剩 `project`/`issue`/`claude_conversation`/`app_meta` 四张表,`release`/`week_plan`/`chat_outbox`/`workflow_credit`/`skill_package`/`artifact`/`metric`/`issue_metric` 等读回一律改成仓文件(`docs/plan/`、`docs/releases.md`、`.bw/metrics.toml`)+ git + `issue` 缓存表三种手段组合,详见 02 篇 §5。**
 
 ## 0 · 这篇管什么、不管什么
 
@@ -20,16 +20,16 @@
 
 ### 2.1 验收总表(母文档 §8 八条展开)
 
-「出处」=判据来自哪篇第 5 节(正本仍在那篇,这里只归并);无标注是本篇新提出的整体检查。「铁律」简称:**人点完成**(完成永远人显式点)、**绝不记两次**(settle-once)、**只追加**、**推导健康**(无数据=灰,不假绿)、**迁移不崩**、**到点真触发**(自动建活绝不自动完成)、**回填不点灯**、**群不重发**。
+「出处」=判据来自哪篇第 5 节(正本仍在那篇,这里只归并);无标注是本篇新提出的整体检查。「铁律」简称:**人点完成**(完成永远人显式点)、**绝不记两次**(settle-once)、**只追加**、**推导健康**(无数据=灰,不假绿)、**迁移不崩**、**到点真触发**(自动建活绝不自动完成)、**回填不点灯**。**「群不重发」已不是铁律**(第七轮改判):`chat_outbox` 去重账本第七轮盘点后取消,群通知发送即完成、不做去重,重发一条是知情代价(母文档 §6.3),§8-8 不再核验"不重发",只核验"三类事件各真发出一条"。
 
 #### §8-1 一个真实项目跑完两个完整周循环
 
 | 检查项 | 读回 | 预期 | 出处 | 铁律 |
 |---|---|---|---|---|
-| 两份周计划文件在仓里 | `ls <ws>/docs/plan/*.md`(排除 history.md)| ≥2 个 `YYYY-Www.md`,含「周目标」「业务活」两节 | 06篇§5 | 只追加 |
+| 两份周计划文件在仓里 | `ls <ws>/docs/plan/*.md`,逐个 `cat` 看 front matter,只数 `origin: human` 的(排除 `origin: backfill` 回填周——两者同目录同格式,不是靠文件名区分,02 篇 §2.5)| ≥2 个 `YYYY-Www.md`,含「周目标」「业务活」两节 | 06篇§5 | 只追加 |
 | 两轮运作活①在库 | `SELECT week_of,status FROM issue WHERE kind='ops' AND workflow='更新指标与周计划' ORDER BY week_of` | ≥2 行,week_of 不同,均 done 或 in_review | 09篇§5-3 | 人点完成 |
-| 两轮运作活②在库 | `SELECT week_of,status,origin FROM issue WHERE kind='ops' AND workflow='资产盘点'` | ≥2 行,origin='auto' | 09篇§5-4/6 | 到点真触发 |
-| 至少一次发版记录 | `SELECT version,released_at,origin FROM release WHERE origin='human'` + `tail <ws>/docs/releases.md` | 库与仓各≥1 行,对应一致 | 06篇§5 | 绝不记两次 |
+| 两轮运作活②在库 | `SELECT week_of,status,origin FROM issue WHERE kind='ops' AND workflow='asset-audit'` | ≥2 行,origin='auto' | 09篇§5-4/6 | 到点真触发 |
+| 至少一次发版记录 | `tail <ws>/docs/releases.md`(看「来源」列=人发的行,这是**唯一正本**)+ `sqlite3 <db> "SELECT DISTINCT version FROM issue WHERE version!='';"` | 仓文件≥1 行「人发」;库里 `issue.version` 出现同一版本号,两者对应一致——**没有独立 `release` 表可查**(02 篇 §2.1/§2.5)| 06篇§5 | 绝不记两次 |
 
 以上读回命令均跑在真实仓上,有对应 `git log` 提交,不是口头声称。
 
@@ -38,7 +38,7 @@
 | 检查项 | 读回 | 预期 | 出处 |
 |---|---|---|---|
 | health 大灯非灰、三条理由可核对 | 深链 `BW_PANEL=overview` 截图 + 08篇§2.4 的 (a)(b)(c) SQL,理由文字对照理由模板 | ≥1 项为真灯黄或绿;理由与判据值一致非占位 | 08篇§5 |
-| 引领指标卡挂活、重开数字一致 | `issue_metric` 关联 `metric.role='leading'` 查有无行;杀进程重开同一深链再截图再查一次 | ≥1 行;灯色/理由/数字不变(health 纯函数现算)| 02/08篇§5 |
+| 引领指标卡挂活、重开数字一致 | `cat <ws>/.bw/metrics.toml`(找 `[[leading]]` 段取其 `id`)+ `sqlite3 <db> "SELECT title FROM issue WHERE metric_key='<该leading指标id>';"`(无独立 `issue_metric` 关联表,单列反查即可,02 篇 §2.2);杀进程重开同一深链再截图再查一次 | ≥1 行;灯色/理由/数字不变(health 纯函数现算)| 02/08篇§5 |
 
 #### §8-3 三种开工工具至少各一张活
 
@@ -47,7 +47,7 @@
 | Claude CLI 开工,产物进仓+技能整包物化 | `BW_PANEL=session` 点▶开工;`git -C <worktree> log --oneline`;`ls <worktree>/.claude/skills/` | 分支有真实提交;挂的 workflow 整包出现,各带 `.bw-managed` | 05篇§5、04篇§5-2 |
 | Open Design 开工一张原型活 | 会话屏中栏「Open Design」标签(探活成功前提下) | WebView 有内容非空白 | 05篇§4 |
 | Cursor 开工(装了才测) | 同上,tool='cursor' | 探活成功可开工;失败如实报错不悄悄退回 | 05篇§4、04篇§5-4 |
-| 终端可复制、右栏文件一致、战绩记在 workflow | 复制核对;截图右栏对照 `git status --porcelain`;`skill_package` 前后各查一次 runs | 均一致;Done 后 runs +1 且只 +1 | 05篇§2.2/§3、04篇§5-3 |
+| 终端可复制、右栏文件一致、workflow 用量可现算复核 | 复制核对;截图右栏对照 `git status --porcelain`;跑完前后各查一次 `sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE workflow='<该workflow名>' AND kind='business';"`(02 篇 §2.3 现算查询,没有 `skill_package`/`runs` 战绩表可查)| 均一致;这张活挂了该 workflow 且已计入缓存后,这条 COUNT 比跑之前 +1 | 05篇§2.2/§3、04篇§5-3 |
 
 #### §8-4 第二台 buddy 纳入同一仓
 
@@ -74,9 +74,9 @@
 | 检查项 | 读回 | 预期 | 出处 |
 |---|---|---|---|
 | 探测正确判定有历史 | `SELECT title FROM issue WHERE kind='ops' AND workflow LIKE '%铺底%'` | 标题含「含历史回填」| 03篇§5-2 |
-| 按周数字、贡献者数可复算 | `history.md` 对照 `git log --merges`/`--numstat`、`git shortlog -sn --all \| wc -l` 重算 | 一致;无标签仓如实写「未发现」| 03篇§5-3/§3.4,命令见[样本](../research/legacy-backfill-sample-buddy.md) |
-| 版本时间线对回 tag、远端 issue 数对回远端 | `release WHERE origin='backfill'` 对照 `git tag -l --sort=creatordate`;`issue WHERE origin='backfill'` 计数对照 `gh issue list --state all \| wc -l` | 一一对应无 tag 则空;数字一致(codehub 侧未在真实环境验证,记「未取到」)| 02篇§5、03篇§5-4 |
-| 回填不进战绩、不参与 health(铁律:回填不点灯)| `workflow_credit` 关联 `issue.origin='backfill'` 数应为 `0`;对比 08篇§2.4 三判据 | 计数 `0`;三判据均不读 backfill 行 | 02/03/08/09篇§5 |
+| 按周数字可复算(贡献者数第七轮已取消产出,03 篇 §2.4:没界面读就不产) | 回填的 `docs/plan/YYYY-Www.md`(front matter `origin: backfill`,与本周文件同目录同格式,不是单独的 `history.md`——02 篇 §2.5)里「按周历史统计」表格 对照 `git log --merges`/`--numstat` 重算 | 一致;无标签仓如实写「未发现」| 03篇§5-3/§3.4,命令见[样本](../research/legacy-backfill-sample-buddy.md) |
+| 版本时间线对回 tag、远端 issue 数对回远端 | `docs/releases.md` 里「来源」=回填的行(唯一正本,无 `release` 表)对照 `git tag -l --sort=creatordate`;`sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE origin='backfill';"` 对照 `gh issue list --state all \| wc -l` | 一一对应无 tag 则空;数字一致(codehub 侧未在真实环境验证,记「未取到」)| 02篇§5、03篇§5-4 |
+| 回填不进量、不参与 health(铁律:回填不点灯)| `sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE origin='backfill' AND week_of='<当前 ISO 周>';"`(回填的历史周不应冒充当前周);对比 02 篇 §2.6 health 三判据(本周有周目标且有真实 git 提交/本周或上周文件有指标读数/上周有合入或发版)——三判据只读当前周与仓最新状态,不读 `origin='backfill'` 的历史周文件(没有 `workflow_credit` 战绩表可查) | 计数 `0`;三判据均不受 backfill 行影响 | 02/03/08/09篇§5 |
 
 样本:buddy 自己的仓(03篇§5 已用过);试点时另找≥1 个真内部老仓重复验证,证明逻辑不是只对 buddy 仓调好的。
 
@@ -84,8 +84,8 @@
 
 | 检查项 | 读回 | 预期 | 出处 |
 |---|---|---|---|
-| 三类事件各发一条(mock)、不重发(铁律:群不重发)| 触发一次评审中/合入/发版,`SELECT event_type,status FROM chat_outbox ORDER BY id`;同一 `(issue_id,event_type)` 重复触发 | 恰好三行均 status='ok';仍三行(部分唯一索引物理拒绝)| 07篇§5-1、02/07篇§5 |
-| 运作活①引用群摘要、`none` 提供方不崩 | 预置 mock 历史消息触发「开始本周」看 transcript;`chat_provider='none'` 触发合入/运作活① | 出现摘要关键词按天分组生成;`chat_outbox` 无新行流程正常 | 07篇§5-2/§5-5 |
+| 三类事件各发一条(mock)| 触发一次评审中/合入/发版,查 mock `chat_group` 适配器的调用记录(指挥器/日志里打印调用次数与参数,不进库、不进仓——02 篇 §2.4 已取消 `chat_outbox` 去重账本);同一事件重复触发一次 | 三类各触发一次都成功;重复触发允许再发一条(不做去重,这是知情代价而非 bug,02 篇 §2.4)| 07篇§5-1、02篇§2.4 |
+| 运作活①引用群摘要、`none` 提供方不崩 | 预置 mock 历史消息触发「开始本周」看 transcript;`chat_provider='none'` 触发合入/运作活① | 出现摘要关键词按天分组生成;`none` 提供方下发送调用被跳过、流程正常完成不报错(未配群不发送,不查库——02 篇 §2.4)| 07篇§5-2/§5-5 |
 | WeLink 真实环境(**待同事**)| 真实凭证重复上面四条 | 与 mock 一致;不作常绿验收(网关/第三方 API 抖动同 CLAUDE.md 纪律3)| 07篇§2.9 |
 
 ### 2.2 headless 指挥器:`real_demo_v4`
@@ -102,13 +102,13 @@ cargo run -p bw-app --example real_demo_v4 -- <db-path> <workspaces-root> [--pro
 |---|---|---|---|---|
 | 1 | 接入项目 | `CreateProject`(不配远端,避免依赖网关)+ 两卡四字段 | `SELECT name,north_star FROM project WHERE id='<pid>'` 非空 | 按项目名查重复 |
 | 2(含2a合并调整/2b历史回填)| 规范铺底③ | `RunStandardBootstrap`;工作区用 buddy 仓浅拷贝(见下);mock 执行器分别跑两个子技能,**2b 的 git 本地采集是真代码**不受 mock 影响 | `git log` 有提交;`.bw/managed.toml` 出现指纹;`AGENTS.md` 命中约定关键词;`history.md` 数字与直接跑 git 命令一致(见§8-7)| `.bw/standard.toml` 已存在则跳过;2b 每次重跑整段覆盖不追加重复段落 |
-| 3-4 | 开始本周①、确认建活 | `StartWeekPlanning`(mock 代替真实对话,产出固定草稿标【mock】)+ 指挥器代人确认(明写"脚本代人确认")| `week_plan` 出现本周,`test -f docs/plan/<周>.md`;`issue WHERE week_of='<周>' AND origin='agent_split'` 有行 | "当前周无文件"天然幂等,重跑返回 `WeekPlanAlreadyExists`;建活按标题幂等 |
+| 3-4 | 开始本周①、确认建活 | `StartWeekPlanning`(mock 代替真实对话,产出固定草稿标【mock】)+ 指挥器代人确认(明写"脚本代人确认")| `test -f docs/plan/<周>.md` 且 front matter `week=<周>`(**唯一正本,不查库索引**——02 篇 §2.5 已取消 `week_plan` 表);`issue WHERE week_of='<周>' AND origin='agent_split'` 有行 | "当前周无文件"天然幂等,重跑返回 `WeekPlanAlreadyExists`;建活按标题幂等 |
 | 5-6 | 一张业务活▶开工、推评审中、完成 | `RunIssue`(未配工作区,天然落 MockInteractiveExecutor,标【mock】);未配远端不会真开 PR,指挥器代人推 InReview 再推 Done(同 `real_demo` 步骤④模式,明写),即既有"无PR→人点确认完成(人裁)"路径 | `issue.status`;`settled_at` 非空且只一次 | 按状态判断是否重跑,天然幂等 |
-| 7 | 发版本 | `CutRelease`(选步骤6完成的活,版本号取 current_version 或首次 v0.1)| 代人推完成后 `release` 表出现一行 | 按版本号幂等 |
-| 8-9 | 定时触发运作活②、项目群 mock outbox | 手动调 `tick_scheduler`(时钟设到 `ops2_schedule` 之后);`chat_provider='mock'`,步骤6/7各触发一次 `SyncNotifyToChat` | `issue WHERE workflow='资产盘点'`;`chat_outbox` 事件行 | origin='auto' 且 status 非 Todo(证明真自动开工);部分唯一索引物理保证不重发 |
+| 7 | 发版本 | `CutRelease`(选步骤6完成的活,版本号取 current_version 或首次 v0.1)| 代人推完成后 `tail <ws>/docs/releases.md` 新增一行(**唯一正本,库里无 `release` 表可查**——02 篇 §2.1/§2.5)| 按版本号幂等 |
+| 8-9 | 定时触发运作活②、项目群 mock outbox | 手动调 `tick_scheduler`(时钟设到 `ops2_schedule` 之后);`chat_provider='mock'`,步骤6/7各触发一次 `SyncNotifyToChat` | `sqlite3 <db> "SELECT status,origin FROM issue WHERE workflow='asset-audit';"`;mock `chat_group` 适配器调用记录(**不进库**——02 篇 §2.4 已取消 `chat_outbox` 表,指挥器自己打印/断言调用次数)| `origin='auto'` 且 `status` 非 Todo(证明真自动开工);`SyncNotifyToChat` 被调用两次(步骤6/7各一次),重复触发不做去重比对(02 篇 §2.4,重发是已知代价)|
 | 10 | evidence 导出 | 全部真实读回写一份 JSON,不手写数字 | `cat evidence-v4-<slug>.json` | 每次重跑覆盖同名文件 |
 
-**四条取舍**:①工作区用 buddy 仓浅拷贝(`git clone --local` 到临时目录)而非空仓——2b 要读真实 git 历史验证"防伪规则",数字可对照[样本](../research/legacy-backfill-sample-buddy.md)。②不真开 MR(CLAUDE.md 纪律3)——"开MR才能进评审中"的步骤退化成既有"无PR→人点确认完成(人裁)"路径并代人推进明写;真远端完整合入链路只手动验证一次,不进指挥器(见§4)。③重复跑不产生重复数据——项目按名字、Issue 按标题、周计划按 `week_plan_exists`、发版按版本号,`workflow_credit`/`chat_outbox` 靠数据库唯一约束兜底,同 `real_demo` 幂等纪律。④evidence JSON 不手写数字,是§2.1 多条读回的现成来源。
+**四条取舍**:①工作区用 buddy 仓浅拷贝(`git clone --local` 到临时目录)而非空仓——2b 要读真实 git 历史验证"防伪规则",数字可对照[样本](../research/legacy-backfill-sample-buddy.md)。②不真开 MR(CLAUDE.md 纪律3)——"开MR才能进评审中"的步骤退化成既有"无PR→人点确认完成(人裁)"路径并代人推进明写;真远端完整合入链路只手动验证一次,不进指挥器(见§4)。③重复跑不产生重复数据——项目按名字、Issue 按标题、周计划按文件是否已存在(`test -f docs/plan/<周>.md`)、发版按版本号(`docs/releases.md` 有没有这行)判断是否跳过;第七轮盘点后 `workflow_credit`/`chat_outbox` 表已取消,没有数据库唯一约束可以兜底——`SyncNotifyToChat` 重复触发允许真的重发一条(02 篇 §2.4 知情代价),幂等只对项目/活/周计划/发版这几类文件与缓存成立,同 `real_demo` 幂等纪律。④evidence JSON 不手写数字,是§2.1 多条读回的现成来源。
 
 ### 2.3 深链与截图
 
@@ -159,7 +159,7 @@ async fn export_evidence(store: &S, p: ProjectId, out: &Path); // 10
 
 **`docs/v4-prototype/e2e/` 目录**(§5 给完整格式):`README.md` 指向本篇;`pilot-log-<项目slug>.md` 是§2.4 试点日志;`01-architecture/`…`09-ops-workflows/` 按篇分类一条检查一个文件;`blueprint-s8/<1-8>-<slug>.md` 存§2.1 里无单篇出处的整体检查。
 
-**引用但不重复定义**(均已在01-09篇定义,这篇只是调用方):`RunStandardBootstrap`、`StartWeekPlanning`、`RunIssue`、`TransitionIssue`、`CutRelease`、`MergeAndComplete`、`SyncNotifyToChat`、`CreateAutopilotTask{auto_run}`、`week_plan`/`release`/`chat_outbox`/`workflow_credit` 表。
+**引用但不重复定义**(均已在01-09篇定义,这篇只是调用方):`RunStandardBootstrap`、`StartWeekPlanning`、`RunIssue`、`TransitionIssue`、`CutRelease`、`MergeAndComplete`、`SyncNotifyToChat`、`CreateAutopilotTask{auto_run}`;`docs/plan/*.md`(周计划正本)、`docs/releases.md`(发版正本)——**这两份是仓文件,不是库表**(`week_plan`/`release`/`chat_outbox`/`workflow_credit` 表第七轮盘点后全部取消,见 02 篇 §2.1/§2.6)。
 
 ## 4 · 边界与失败
 
@@ -173,7 +173,7 @@ async fn export_evidence(store: &S, p: ProjectId, out: &Path); // 10
 
 这篇自己的验收 = 两件事:
 
-1. **指挥器一次跑通**:`cargo run -p bw-app --example real_demo_v4 -- <临时db> <临时workspaces-root>` 完整跑完§2.2 十个步骤不中途非预期退出,与 `evidence-v4-*.json` 互相一致;**重跑一次**验证幂等——所有计数不因重跑增长(`chat_outbox`/`workflow_credit` 同批事件不重复计数除外)。
+1. **指挥器一次跑通**:`cargo run -p bw-app --example real_demo_v4 -- <临时db> <临时workspaces-root>` 完整跑完§2.2 十个步骤不中途非预期退出,与 `evidence-v4-*.json` 互相一致;**重跑一次**验证幂等——项目/活/周计划文件/发版记录这几类文件与缓存的计数不因重跑增长(§2.2「四条取舍」③的幂等键判断);`SyncNotifyToChat` 重复触发允许真的重发一条(02 篇 §2.4,没有 `chat_outbox`/`workflow_credit` 去重表兜底,这是知情代价不是 bug),不计入这条幂等断言。
 
 2. **总表每条至少一次读回记录进 `docs/v4-prototype/e2e/`**——§2.1 每行跑完动作后存一份记录。Markdown 格式(`docs/v4-prototype/e2e/<篇号或blueprint-s8>/<检查项slug>.md`):
 

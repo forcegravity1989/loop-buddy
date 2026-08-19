@@ -1,6 +1,6 @@
 # 05 · 会话屏
 
-> **30 秒导读**:这篇管 V4 会话屏——一件活怎么在这个屏里被 agent 真干起来、人怎么在这里陪着看。给三种人看:复核设计的用户、以后写代码的会话、以后接新开工工具(比如再接一个 CLI)的同事。**状态:详细设计稿,待用户复核,尚未开工写代码。** 设计事实源是 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(下称母文档),与它冲突时以母文档为准,本篇只是把母文档第 4 站落到模块、字段、命令的粒度。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本篇不新开代号系列。
+> **30 秒导读**:这篇管 V4 会话屏——一件活怎么在这个屏里被 agent 真干起来、人怎么在这里陪着看。给三种人看:复核设计的用户、以后写代码的会话、以后接新开工工具(比如再接一个 CLI)的同事。**状态:详细设计稿,待用户复核,尚未开工写代码。** 设计事实源是 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(下称母文档),与它冲突时以母文档为准,本篇只是把母文档第 4 站落到模块、字段、命令的粒度。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本篇不新开代号系列。**2026-08-20 按用户第七轮盘点整块重写了 §2.5(蒸馏产出不再落库)、§3 会话线索表(`workflow_run` 已取消)与 §5 对应的读回命令。**
 
 ## 0 · 这篇管什么、不管什么
 
@@ -76,7 +76,7 @@
 
 ### 2.5 蒸馏
 
-顶部「蒸馏」是活的附属动作,不是新命令——直接复用已有的 `Command::DistillSkillFromIssue`。点一下起一次真实的交互式会话(和▶开工走同一套 `InteractiveExecutor`),agent 把这件活的过程整理成一篇技能草稿,人确认名字/描述/正文,落库后产出到项目仓 `.claude/skills/`,记着来源活(`source_issue_id`)。这条链路 V1/V2 已用真实数据跑通,V4 只是把入口从旧界面搬到会话屏顶部,机制不变。
+顶部「蒸馏」是活的附属动作,不是新命令——直接复用已有的 `Command::DistillSkillFromIssue`。点一下起一次真实的交互式会话(和▶开工走同一套 `InteractiveExecutor`),agent 把这件活的过程整理成一篇技能草稿,人确认名字/描述/正文,直接产出到项目仓 `.claude/skills/`——**不再有落库这一步**:V1/V2 时代有一张 `skill` 表登记技能与来源活的关系,02 篇第七轮盘点后判定"没人取的不存",这张表连同它的 `source_issue_id` 列一起被取消(仓内 `.claude/skills/**/SKILL.md` 扫目录即得,见 02 篇 §2.5/§2.6)。「记着来源活」这件事因此挪进产出的文件本身——具体用哪个 frontmatter 字段名装来源活号,留给 [04-tools-and-workflows.md](04-tools-and-workflows.md)(技能包格式的地盘)定,05 只提出这条诉求。这条蒸馏链路本身(交互式会话产出草稿、人确认、写仓)V1/V2 已用真实数据跑通,V4 只是把入口从旧界面搬到会话屏顶部、去掉库这一步,别的机制不变。
 
 ### 2.6 模块边界
 
@@ -97,8 +97,8 @@
 
 **库 schema**:05 需要的字段以 02 篇([02-data-and-files.md](02-data-and-files.md))的正本为准,这里只列 05 视角下用到/需要补的:
 - `issue.tool`(claude_cli / cursor / open_design)——母文档 §6 已定义,05 只读。
-- `claude_conversation` 表(id / project_id / issue_id UNIQUE / claude_session_id / workspace_path / branch_name / created_at / last_opened_at)——**已有**,左列会话分组直接复用,不新建表。若要给 Cursor 会话也走同一张表,字段名 `claude_session_id` 要不要泛化成 `session_ref`,留给 02 篇定夺,05 只提出诉求。
-- `workflow_run` 表——**已有**,05 用它做左列"最近时间"的数据源。
+- `claude_conversation` 表(id / project_id / issue_id UNIQUE / claude_session_id / workspace_path / branch_name / created_at / last_opened_at)——**已有**,左列会话分组直接复用,不新建表;02 篇第七轮盘点后确认这是会话线索**唯一**要住的一张表(见 02 篇 §2.1),不再有别的会话/运行记录表。若要给 Cursor 会话也走同一张表,字段名 `claude_session_id` 要不要泛化成 `session_ref`,留给 02 篇定夺,05 只提出诉求。
+- ~~`workflow_run` 表~~——**02 篇第七轮盘点已取消**(它装的是每次 ▶跑 的开工/结清/成败/耗时,母文档 §6.3 与 02 篇 §2.3 判定这条"自动记账成败与耗时"的铁律在 V4 没有持久载体了,换成更硬的判据:活干没干成看远端 MR 合没合入)。05 因此**不再展示"成败/耗时"这类字段**,受影响两处:①左列"最近一次动静的时间"改读 `claude_conversation.last_opened_at`(这一列本记的是"这个会话上次被打开"的时间,不是"agent 最近一次真实动作"的精确时间戳——运行期间更细的实时状态由 §2.4 的 hook 事件驱动、不落库;`last_opened_at` 只是应用重启后退化可用的近似值,如实标注不是精确替代);②「这一轮跑成没成」不再是本屏要回答、也不再能从任何库表的 `outcome` 字段查到的问题——评审中的活能不能合入,看右栏 MR 卡的检查状态与远端合入结果(§2.3、§3「MR 卡"检查"列」),不查 `workflow_run.outcome`。
 - agent 运行态(运行中/等你输入/空闲)**不落库**——过程数据,重启后本该从"这个 worktree 有没有活着的 PTY"重新推导,`TerminalManager` 已有的内存态够用,不新建表。
 
 **命令(Command)**:
@@ -165,12 +165,11 @@ pub static CURSOR: TuiAgentConfig = TuiAgentConfig {
 
 - **`cargo run -p bw-engine --example pty_smoke`** 三种模式,原样沿用、不重做:默认模式起 `bash -c 'echo pty-ok'` 读回字节里确有 `pty-ok`;`-- --teardown` 模拟"用户关掉运行、App 丢掉输入端",断言 5 秒内整个进程组(含一个 `nohup` 出去的孙进程)被连坐清空;`-- --abort` 模拟 `CancelRun` 真实走的 `JoinHandle::abort()`,断言 3 秒内顶层与孙进程都消失。这条验收证明"内嵌终端在这台机器上能真起子进程、真读到输出、真收尾、中止不留孤儿"——会话屏的地基,V4 不改,只是列进本篇验收清单。
 - **深链**:`BW_OPEN=<项目名> BW_PANEL=session BW_SEL=issue:<uuid>` 直接打开指定活的会话屏,stderr 的 `[BW_OPEN]` 日志就是"真的渲染到了"的证明。
-- **SQL 读回**(核对左列最近时间/会话身份/顶部状态词/蒸馏产物来源,均非编造):
+- **SQL 读回**(核对左列会话身份/最近时间/顶部状态词,均非编造;蒸馏产物已不落库,改用文件读回):
   ```bash
-  sqlite3 <db> "SELECT started_at, ended_at, outcome FROM workflow_run WHERE issue_id='<uuid>' ORDER BY started_at DESC LIMIT 1;"
-  sqlite3 <db> "SELECT claude_session_id, workspace_path, branch_name FROM claude_conversation WHERE issue_id='<uuid>';"
-  sqlite3 <db> "SELECT status FROM issue WHERE id='<uuid>';"
-  sqlite3 <db> "SELECT id, source_issue_id FROM skill WHERE source_issue_id='<uuid>';"
+  sqlite3 <db> "SELECT claude_session_id, workspace_path, branch_name, last_opened_at FROM claude_conversation WHERE issue_id='<uuid>';"   # 会话身份 + 左列"最近时间"的数据源(workflow_run 已取消,见 §3)
+  sqlite3 <db> "SELECT status, pr_number FROM issue WHERE id='<uuid>';"   # 顶部状态词;这张活"跑成没成"看这一行的 pr_number 对应远端 MR 是否已合入,不查任何库表的 outcome 字段
+  grep -rl "<来源活的远端号或标识>" <ws>/.claude/skills/*/SKILL.md   # 蒸馏产物来源(skill 表已取消,见 §2.5);具体标记来源的字段/写法以 04 篇定的技能包格式为准
   ```
 - **截图**:会话屏三栏各截一张——左列能看到多个分组、中栏终端里有真实字节滚动、右栏文件树 + MR 卡都有数据,存进 `docs/v4-prototype/`(具体目录跟 10 篇的验收清单一起定,05 不抢先造目录结构)。
 

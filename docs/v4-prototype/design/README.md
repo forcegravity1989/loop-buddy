@@ -1,15 +1,15 @@
 # V4 MVP 详细设计(第一版,2026-08-19 夜):目录、读法、写法
 
-> **30 秒导读**:这个目录是 V4 MVP 的**详细设计稿**——把 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(全貌草案,作数的设计事实源,已折入 2026-08-19 内部专家评审的五条反馈)与 [`../standard-module-draft.md`](../standard-module-draft.md)(规范铺底模块)里的每一站、每一屏、每一条规矩,落到「模块怎么分、数据怎么存、文件长什么样、命令叫什么、失败怎么显示、E2E 怎么读回」的粒度。给三种人看:**用户(复核设计)**、**下一步写代码的会话(照着做)**、**同事(接 WeLink 群适配、往 `standard/` 贡献件)**。**状态:待用户复核(先看 [00-handshake.md](00-handshake.md)),尚未开工写代码**;**2026-08-20 第五轮:用户回握手 17 条已折入各篇**(拖拽统一、默认 workflow 改 mattpocock-skills、运作活②改名「资产盘点」并把老项目历史回填并入它的首次模式、库是本机的、试点用 buddy 自己的仓等,见 [00-handshake.md](00-handshake.md) 顶部「用户回复与处置」表)——用户定的顺序是先高保真 → 反馈 → 再详细设计 → 开发,现在在第三步。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
+> **30 秒导读**:这个目录是 V4 MVP 的**详细设计稿**——把 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(全貌草案,作数的设计事实源,已折入 2026-08-19 内部专家评审的五条反馈)与 [`../standard-module-draft.md`](../standard-module-draft.md)(规范铺底模块)里的每一站、每一屏、每一条规矩,落到「模块怎么分、数据怎么存、文件长什么样、命令叫什么、失败怎么显示、E2E 怎么读回」的粒度。给三种人看:**用户(复核设计)**、**下一步写代码的会话(照着做)**、**同事(接 WeLink 群适配、往 `standard/` 贡献件)**。**状态:待用户复核(先看 [00-handshake.md](00-handshake.md)),尚未开工写代码**;**2026-08-20 第五轮:用户回握手 17 条已折入各篇**(拖拽统一、默认 workflow 改 mattpocock-skills、运作活②改名「资产盘点」并把老项目历史回填并入它的首次模式、库是本机的、试点用 buddy 自己的仓等,见 [00-handshake.md](00-handshake.md) 顶部「用户回复与处置」表)——用户定的顺序是先高保真 → 反馈 → 再详细设计 → 开发,现在在第三步。**2026-08-20 第七轮:用户逐条盘完数据,库只剩四张表(`project`/`issue`/`claude_conversation`/`app_meta`),各篇受影响小节已整块重写**(母文档 §6)。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ## 目录(按建议阅读顺序)
 
 | 编号 | 文件 | 管什么 | 依赖的预研 | 状态 |
 |---|---|---|---|---|
 | 01 | [01-architecture.md](01-architecture.md) | 新壳怎么搭:crate / 目录、一屏一模块、一个外部能力一个适配模块、命令与事件总线增量、文件行数守卫、与旧内核的接缝 | [orca](../research/orca.md)、[deepseek-harness](../research/deepseek-harness.md) | 稿 |
-| 02 | [02-data-and-files.md](02-data-and-files.md) | 库 schema 增量(列级 + 迁移双守卫)、仓文件格式(`.bw/project.toml` 含 `[chat]`、`.bw/issue-policy.toml` 三列映射、`.bw/standard.toml`、`docs/plan/YYYY-Www.md`、`docs/plan/history.md`、`docs/releases.md`)、信息三层住法 | — | 稿 |
+| 02 | [02-data-and-files.md](02-data-and-files.md) | 库只剩四张表(`project`/`issue`/`claude_conversation`/`app_meta`,`issue` 8 个缓存列)、仓文件格式(`.bw/project.toml` 含 `[chat]`、`.bw/issue-policy.toml` 三列映射、`.bw/standard.toml`、`docs/plan/YYYY-Www.md`、`docs/releases.md`)、信息住哪一张盘点表 | — | 稿 |
 | 03 | [03-standard-and-backfill.md](03-standard-and-backfill.md) | 运作活③「规范铺底」三步(写核心件 → 合并调整 → 老项目历史回填)的流程、对账、升级;回填的原料 / 产物 / 可信度 | [legacy-backfill](../research/legacy-backfill.md) | 稿 |
-| 04 | [04-tools-and-workflows.md](04-tools-and-workflows.md) | 开工工具注册(终端类 / 本机网页内嵌类)、workflow(SOP 类技能包)怎么识别 / 注入 / 导入、映射三列、战绩记在 workflow / 技能上 | [workflow-skill-packages](../research/workflow-skill-packages.md)、deepseek-harness | 稿 |
+| 04 | [04-tools-and-workflows.md](04-tools-and-workflows.md) | 开工工具注册(终端类 / 本机网页内嵌类)、workflow(SOP 类技能包)怎么识别 / 注入,预置包随 buddy 出厂、铺底复制进 `.claude/skills/`,用了几次现算(不建战绩表) | [workflow-skill-packages](../research/workflow-skill-packages.md)、deepseek-harness | 稿 |
 | 05 | [05-session-screen.md](05-session-screen.md) | 会话屏:按 worktree 分组的会话、嵌入终端(PTY、复制)、文件树 / diff / MR 卡、agent 状态回报、Open Design 内嵌、Cursor 接法 | orca | 稿 |
 | 06 | [06-plan-screen.md](06-plan-screen.md) | 计划屏:周视角 + 六列看板一个界面、拖拽统一(第五轮:所有列都能拖,排期直接生效、状态动作弹确认框)、周头、发版、预览未合入 | [kanban-drag-dioxus](../research/kanban-drag-dioxus.md) | 稿 |
 | 07 | [07-notify-and-chat-group.md](07-notify-and-chat-group.md) | 通知入口(待处理 / 事件流 / 行内动作 / 「合入并完成」一键)+ 项目群适配工厂(发消息 / 拉历史两函数;WeLink 内部由同事实现、外部待定;通知同步与运作活①群摘要) | [chat-group](../research/chat-group.md) | 稿 |

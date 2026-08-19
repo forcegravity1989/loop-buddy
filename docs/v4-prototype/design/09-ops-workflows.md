@@ -1,6 +1,6 @@
 # 09 · 运作活的 workflow 剧本
 
-> **30 秒导读**:这篇写三张「运作活」(buddy 自己发起的标准动作,不是用户的业务需求)各自的 workflow(技术上讲是一份 SKILL.md 入口 + 支撑文件的技能包,agent 读它决定怎么干活)剧本——触发条件、给 agent 塞什么材料、SKILL.md 长什么样、agent 和人什么时候说话、干出什么、怎么保证只能停在「评审中」、干砸了怎么办、大概多久。三张:①「更新指标 + 制定本周计划」②「资产盘点」(第五轮改名,原叫「资产盘点与代码微重构」;范围 = 仓内全部资产,微重构不再由它动手,只出建议活草稿;老项目历史回填是它的**首次模式**,见 2.2/2.3)③「规范铺底」(本篇只写其中需要 agent 的一步:合并调整)。也管这三份 workflow 在 `standard/` 放哪、版本怎么钉、和已有的 `north-star-discovery`/`metrics-binding` 两份技能怎么合并、系统提示词要不要加一句。给复核设计的用户、下一步写代码的会话、接手运作活这块的同事看。**现在作数吗**:详细设计稿,待用户复核,尚未开工写代码。与母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md))冲突时以母文档为准。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本文不新开代号系列,分步骤一律写「第 N 步」。
+> **30 秒导读**:这篇写三张「运作活」(buddy 自己发起的标准动作,不是用户的业务需求)各自的 workflow(技术上讲是一份 SKILL.md 入口 + 支撑文件的技能包,agent 读它决定怎么干活)剧本——触发条件、给 agent 塞什么材料、SKILL.md 长什么样、agent 和人什么时候说话、干出什么、怎么保证只能停在「评审中」、干砸了怎么办、大概多久。三张:①「更新指标 + 制定本周计划」②「资产盘点」(第五轮改名,原叫「资产盘点与代码微重构」;范围 = 仓内全部资产,微重构不再由它动手,只出建议活草稿;老项目历史回填是它的**首次模式**,见 2.2/2.3)③「规范铺底」(本篇只写其中需要 agent 的一步:合并调整)。也管这三份 workflow 在 `standard/` 放哪、版本怎么钉、和已有的 `north-star-discovery`/`metrics-binding` 两份技能怎么合并、系统提示词要不要加一句。给复核设计的用户、下一步写代码的会话、接手运作活这块的同事看。**现在作数吗**:详细设计稿,待用户复核,尚未开工写代码。与母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md))冲突时以母文档为准。**2026-08-20 按用户第七轮盘点(库从 20 张表砍到 4 张)整块重写了 §2.2 定时判据、§3.2 触发命令伪码、§3.4 记账口径**:`cron_task`/`workflow_credit` 等表全部取消,判据与"用了几次"改成查 `issue` 表现算。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本文不新开代号系列,分步骤一律写「第 N 步」。
 
 ---
 
@@ -8,7 +8,7 @@
 
 **管**:对应母文档 §2.5、§2.6、第 0/2-3/6 站,[standard-module-draft.md](../standard-module-draft.md) 第 7 类。具体是三张运作活各自的触发判据、五层渐进加载之上额外注入什么、入口 SKILL.md 节标题与每节要求、对话节点(首/中/尾)、产出(仓文件·库行·MR)、如何保证最远只到「评审中」、失败与边界、一次会话大概多久多少轮(标「估计」)。也管三张运作 workflow 在 `standard/` 的正本位置、版本怎么随 `standard/VERSION` 走、与 `docs/skills/north-star-discovery`、`docs/skills/metrics-binding` 的合并关系、buddy 系统提示词(第 0 层)要不要加一句。
 
-**不管**:运作活③第 1 步(buddy 写模板不起 agent)、老项目历史探测判据是 [03-standard-and-backfill.md](03-standard-and-backfill.md) 的事(已成稿,本篇 2.3/3.2 与它对齐、有分歧处以它为准),本篇只写运作活③里需要 agent 的一步「合并调整」怎么写、怎么停在评审中——**第五轮改动**:「历史回填」不再是运作活③自己的一步,它是运作活②「资产盘点」workflow 的**首次模式**(见 2.2/2.3,三层流水线"buddy 先算数、agent 只抄"的架构仍全盘采纳 03 篇 §2.4,本篇只改"这套架构挂在哪个 workflow 包下面");计划屏的看板拖拽、「预览·未合入」切换是 [06-plan-screen.md](06-plan-screen.md) 的事(已成稿,本篇不重复);总览「本周运作」栏、历史运作(回填)块怎么渲染是 [08-overview-derivation.md](08-overview-derivation.md) 的事(已成稿,本篇只引用结论);项目群适配工厂实现是 [07-notify-and-chat-group.md](07-notify-and-chat-group.md) 的事(已成稿),本篇只消费它产出的「上周群摘要」文件(**只喂给运作活①,运作活②/③都不读群历史**);开工工具注册、workflow 识别与导入、技能战绩记账机制是 [04-tools-and-workflows.md](04-tools-and-workflows.md) 的事(已成稿,本篇 3.4 记账口径与它对齐);数据模型表结构以 [02-data-and-files.md](02-data-and-files.md) 为正本,本篇第 3 节只引用列名——**设计期统一:战绩以 02 篇 `workflow_credit` 台账表为事实源(04 篇已同步改写),本篇 §3.4 写清挂载点**。
+**不管**:运作活③第 1 步(buddy 写模板不起 agent)、老项目历史探测判据是 [03-standard-and-backfill.md](03-standard-and-backfill.md) 的事(已成稿,本篇 2.3/3.2 与它对齐、有分歧处以它为准),本篇只写运作活③里需要 agent 的一步「合并调整」怎么写、怎么停在评审中——**第五轮改动**:「历史回填」不再是运作活③自己的一步,它是运作活②「资产盘点」workflow 的**首次模式**(见 2.2/2.3,三层流水线"buddy 先算数、agent 只抄"的架构仍全盘采纳 03 篇 §2.4,本篇只改"这套架构挂在哪个 workflow 包下面");计划屏的看板拖拽、「预览·未合入」切换是 [06-plan-screen.md](06-plan-screen.md) 的事(已成稿,本篇不重复);总览「本周运作」栏、历史运作(回填)块怎么渲染是 [08-overview-derivation.md](08-overview-derivation.md) 的事(已成稿,本篇只引用结论);项目群适配工厂实现是 [07-notify-and-chat-group.md](07-notify-and-chat-group.md) 的事(已成稿),本篇只消费它产出的「上周群摘要」文件(**只喂给运作活①,运作活②/③都不读群历史**);开工工具注册、workflow 识别与导入是 [04-tools-and-workflows.md](04-tools-and-workflows.md) 的事(已成稿);数据模型表结构以 [02-data-and-files.md](02-data-and-files.md) 为正本,本篇第 3 节只引用列名——**第七轮盘点后战绩这件事本身已经取消(02 篇 §2.3):不建战绩台账表,"用了几次"改成现算查询,"干没干成"看远端 MR 合没合入,本篇 §3.4 按此改写,不再与 04 篇(仍是旧写法)对齐,04 篇的同步留给它自己下一轮**。**2026-08-20 按用户第七轮盘点整块重写了 §2.2 定时判据与 §3.2/§3.4**:`cron_task` 表取消后,运作活②的"本周建过没有"判据改成直接查 `issue` 表;`workflow_credit` 表取消后,§3.4 的记账挂载点整段改写成 02 篇 §2.3 的现算方案。
 
 ---
 
@@ -54,7 +54,7 @@
 | 尾(确认建活) | 「已确认,建 N 张活并提 MR」 | 说「确认」 | 不许自己 merge |
 | 尾(评审,属第 5 站)| — | 看 diff、合入、完成 | — |
 
-**产出**:仓——`.bw/metrics.toml`/`.bw/connectors.toml`(若新增采集)/`docs/metrics.md`/新建 `docs/plan/YYYY-Www.md`(含新增的「本周指标读数」段,待拍-29);库——运作活①本身一行(`kind='ops'`/`origin='human'`/`workflow='更新指标与周计划'`)+ 每张确认业务活各一行(`origin='agent_split'`,待拍-08)+ `issue_metric`/`week_plan` 索引行;MR——一个,标题「周计划 2026-Www」,挂在运作活①上。
+**产出**:仓——`.bw/metrics.toml`/`.bw/connectors.toml`(若新增采集)/`docs/metrics.md`/新建 `docs/plan/YYYY-Www.md`(含新增的「本周指标读数」段,待拍-29);库——运作活①本身一行(`kind='ops'`/`origin='human'`/`workflow='更新指标与周计划'`)+ 每张确认业务活各一行(`origin='agent_split'`,待拍-08,`week_of`/`version`/`tool`/`metric_key` 等 8 个缓存列随建活一起写入,02 篇 §2.2)——**没有 `issue_metric`/`week_plan` 这类关联表或索引表**(第七轮已取消):指标挂哪由 `issue.metric_key` 单列表达,周列表靠扫 `docs/plan/` 目录得到(02 篇 §2.1/§2.6)。MR——一个,标题「周计划 2026-Www」,挂在运作活①上。
 
 **停在评审中怎么保证**:会话收尾走既有 `finalize_run_interactive`(`issue_run.rs`)→ `open_pr`(`github.rs`,codehub 走 `create_mr`)——暂存+提交+推送+开 PR;若 agent 已自己跑过 `gh pr create`,遇「already exists」诚实认领(`adopt_existing_pr`)不重复开。随后 hook 的 `Stop` 事件触发 `poll_interactive_inreview`,探测到分支有开着的 PR 就推 `InReview`——这是「评审中」的**唯一**来源,`Done` 仍须人手动 `TransitionIssue`。
 
@@ -69,7 +69,7 @@
 **改动说明(第五轮,用户拍板)**:原名「资产盘点与代码微重构」改为「资产盘点」——范围从「文档+代码」扩到仓内**全部资产**;代码微重构不再由这个 workflow 直接动手,只产出「建议活」草稿,人勾选才真建。老项目历史回填(原设计里挂在运作活③下的独立子技能)**改为这个 workflow 的首次模式**——同一个 workflow 包 `asset-audit`,读一个 `mode` 参数:`mode=weekly`(默认,定时触发)只盘这一周的变化;`mode=first`(接入老项目时,由运作活③第 3 步或 `BackfillHistory` 命令触发一次)全量回填历史。两种模式**共用同一份 SKILL.md 入口**,第一步先判断 `mode`,后续步骤按模式分支——不是两份文档、两套战绩挂载点。
 
 **触发与判据**:两条触发路径,读同一个 workflow:
-- **`mode=weekly`(默认)**:**定时**,默认每周五 20:00(`.bw/issue-policy.toml` 的 `[cadence] ops2_schedule`,可改),`tick_scheduler` 到点自动建 issue(`origin='auto'`)**并自动 ▶开工**——三张运作活里唯一不需要人点一下才开工的一张。前提 buddy 当时在运行;错过不需要额外补建逻辑——`cron_due` 本来就是「到点即算数」,下次启动的第一次 tick 天然补建。
+- **`mode=weekly`(默认)**:**定时**,默认每周五 20:00(`.bw/issue-policy.toml` 的 `[cadence] ops2_schedule`,可改),`tick_scheduler` 到点自动建 issue(`origin='auto'`)**并自动 ▶开工**——三张运作活里唯一不需要人点一下才开工的一张。**判据(第七轮改写,02 篇 §2.1/§2.6 已定)**:到了 `ops2_schedule` 那一刻,查**本周(`week_of` = 当前 ISO 周)有没有一张 `kind='ops' AND workflow='asset-audit'` 的活**——查的是 `issue` 表这一行在不在,不是查一张 `cron_task` 表里"上次触发过没有"的状态(V4 没有 `cron_task` 表,§3.2 展开)。前提 buddy 当时在运行;错过不需要额外补建逻辑——同一条"本周有没有"判据下次启动的第一次 tick 天然成立,自动补建,不需要另一张表记"错过了没有"。
 - **`mode=first`**:铺底(运作活③)探测到仓有历史时,不再是"运作活③自己的一步",而是另起一次会话跑这个 `asset-audit` workflow、传 `mode=first`(触发机制细节见 2.3 与 3.2);也可以事后单独由 `BackfillHistory{project_id}` 命令重跑——**这条命令名字不变,但语义收窄为"给 `asset-audit` workflow 传一次 `mode=first`",不是另开一条独立流水线**(03 篇 §2.4 的三层流水线架构原样适用,只是现在挂在这个 workflow 包下面)。**`mode` 怎么传**:不新增 `Command::RunIssue` 字段(04 篇已定该命令签名不变)——写进这张②活自己的说明(body)里一句结构化文字(如 `mode: first`),复用既有"活的说明进初始 prompt"机制,`asset-audit` SKILL.md 第一步读自己的 issue 说明即可判断模式;定时触发建的②活恒为 `mode: weekly`(不写也是默认值)。
 
 **注入清单**:第 0 层系统提示词、第 1 层 `AGENTS.md`、第 2 层本活技能 `asset-audit`(含 `mode` 参数)、第 3 层规范第 3 类「目录与知识结构」件+第 6 类「默认件与鱼塘」件(`mode=first` 额外注入 03 篇 §2.4 描述的本机 evidence 文件,不进仓不进库,同「上周群消息摘要」待遇)、第 4 层 `PROJECT.md`+本周 `docs/plan/`(盘点报告要追加进去)+codegraph 索引。**②排除**项目群摘要——不管哪种模式都不读群历史,内部盘点/历史回填都不需要「群里聊了什么」(母文档 §2.6 用户四问第 2 条已定,03 篇 §4 同步排除)。
@@ -79,7 +79,7 @@
 > `name: asset-audit` · `description: 盘点仓内全部资产(mode=weekly)或回填老项目历史(mode=first),找该清理的东西只写建议、不动手改` · `category: 运作`
 >
 > - **何时用**:`mode=weekly` 只由定时触发,**这次会话很可能无人在场**,不要假设有人立刻回应终端;`mode=first` 只由运作活③探测到历史、或 `BackfillHistory` 命令触发,一个项目通常只跑一次。
-> - **第一步·判断模式**:读传入的 `mode`。`weekly` 走下面第二至五步;`first` 转到 03 篇 §2.4 的三层流水线(buddy 先算 evidence → agent 只读文本填产物 → 人确认),产出五项(发版记录历史段、`docs/plan/history.md`、PROJECT.md 草稿、指标候选、回填的 issue 行),细节以 03 篇为准,本处不重复。
+> - **第一步·判断模式**:读传入的 `mode`。`weekly` 走下面第二至五步;`first` 转到 03 篇 §2.4 的三层流水线(buddy 先算 evidence → agent 只读文本填产物 → 人确认),产出四份仓文件(历史周文件 `docs/plan/YYYY-Www.md`、`docs/releases.md` 历史版本行、PROJECT.md 草稿、指标候选)+ 一行库缓存例外(回填的 issue 行,`origin='backfill'`),细节以 03 篇为准,本处不重复。
 > - **第二步(`mode=weekly`)·盘点仓内全部资产**:①文档——`docs/plan/`、`docs/releases.md` 是否齐全,新增文档是否登记进知识库资产页;②产物与技能/workflow——新增的有没有登记;③规范对账——对照 `.bw/managed.toml` 指纹,检查规范件版本是否落后、有没有人改过,只记录差异**不擅自升级**;④指标数据新鲜度——哪些指标超过保鲜期没有真实观测;⑤代码图大文件榜——`codegraph files -j` 找超行数上限的文件。**不做「零调用者就当死码删」**——`codegraph` 对 `dyn Trait` 分发看不见,会误判;疑似未使用的只写进报告不动手删。
 > - **第三步(`mode=weekly`)·把可做可不做的代码微重构列成建议活,不动手**:格式/命名/疑似死码/该拆的大文件这类"可做可不做"的改动,**不在这个 workflow 里直接改代码**——每条整理成一张「建议活」草稿(标题、说明、类别「优化」、`origin='agent_split'`),连同盘点报告一起进这次的 MR 说明,人在周一评审时勾选要建的,勾选的那些才真的调 `CreateIssue` 建成正式活;需要动业务逻辑或公开接口签名的一律只写建议、连草稿都不生成。
 > - **第四步(`mode=weekly`)·写盘点报告**:追加进本周 `docs/plan/` 尾段;没有可重构的东西是正常结果,如实写「无」不硬造改动。
@@ -95,11 +95,11 @@
 | 中(自主推进) | 逐步播报盘点结果,拿不准写进报告;`mode=weekly` 遇到可微重构的地方只说"已列为建议活" | 若在场可插话 | 不许因无人应答卡住不推进;`mode=weekly` 不许直接动业务代码 |
 | 尾(周一评审) | — | 看报告/diff、合入、完成、勾选要建的建议活 | 不属于本次会话 |
 
-**产出**:仓——`mode=weekly`:盘点报告(追加进 plan 尾段)+ 建议活草稿(写进 MR 说明,不直接落库)+ 极小范围微重构改动(若有,限定格式/命名);`mode=first`:见 03 篇五项产物。库——运作活②一行(`origin='auto'`,`workflow='资产盘点'`)、定时触发记录(`mode=weekly`)或历史回填相关 issue 行(`mode=first`,`origin='backfill'`);人勾选建议活草稿后才新增业务活行(`origin='agent_split'`,类别「优化」)。MR——一个,`mode=weekly` 通常周一才被看到,`mode=first` 见 03 篇「一个 MR 与人介入」。
+**产出**:仓——`mode=weekly`:盘点报告(追加进 plan 尾段)+ 建议活草稿(写进 MR 说明,不直接落库)+ 极小范围微重构改动(若有,限定格式/命名);`mode=first`:见 03 篇五项产物。库——运作活②一行(`origin='auto'`,`workflow='asset-audit'`)、定时触发记录(`mode=weekly`)或历史回填相关 issue 行(`mode=first`,`origin='backfill'`);人勾选建议活草稿后才新增业务活行(`origin='agent_split'`,类别「优化」)。MR——一个,`mode=weekly` 通常周一才被看到,`mode=first` 见 03 篇「一个 MR 与人介入」。
 
 **停在评审中**:与①同一条机制(`finalize_run_interactive` → `open_pr` → hook `Stop` → `poll_interactive_inreview` 推 `InReview`)——自动开工与人工开工用同一条交互式执行器和状态机通路,没有特殊待遇,两种模式同样适用。
 
-**失败与边界**:工作区不可用 → 如实跳过不建活,`cron_run` 记 `Failed`;无东西可重构 → 报告写「无」;agent 中途断 → 停 `InProgress` 可重试;`mode=first` 的失败与边界以 03 篇 §4 为准,不重复。
+**失败与边界**:工作区不可用 → 如实跳过不建活,不产生任何库记录(没有 `cron_task`/`cron_run` 这类表可写,§3.2)——下次 tick 用同一条"本周有没有"判据重试,自然补建;无东西可重构 → 报告写「无」;agent 中途断 → 停 `InProgress` 可重试;`mode=first` 的失败与边界以 03 篇 §4 为准,不重复。
 
 **时长与轮次(估计)**:`mode=weekly` 约 10-25 分钟,人机对话通常 0 轮;`mode=first` 差异大,见 2.3 节「历史回填」原有的估计段(03 篇/legacy-backfill.md 已提示大仓可能明显更长)。
 
@@ -187,10 +187,13 @@ standard/06-defaults/ops/
 ### 3.2 触发命令(伪码,未拍板)
 
 ```rust
-// ①判据复用 week_plan 索引表(02 篇 2.6):命中即拒绝,幂等,不建出第二张本周①
+// ①判据是文件存在性,不是库表——02 篇 §2.1/§2.6 已定:没有 week_plan 表,
+// 「有没有本周计划」直接看 docs/plan/YYYY-Www.md 这份文件在不在。命中即拒绝,
+// 幂等,不建出第二张本周①。
 pub async fn start_week_planning(&mut self, project_id: ProjectId) -> Result<IssueId, AppError> {
     let week_of = current_iso_week();
-    if self.store.week_plan_exists(project_id, &week_of).await? {
+    let plan_path = format!("{workspace}/docs/plan/{week_of}.md");
+    if std::path::Path::new(&plan_path).exists() {
         return Err(AppError::WeekPlanAlreadyExists(week_of));
     }
     let issue_id = self.dispatch(Command::CreateIssue {
@@ -204,19 +207,41 @@ pub async fn start_week_planning(&mut self, project_id: ProjectId) -> Result<Iss
     self.dispatch(Command::RunIssue { id: issue_id, session: None }).await // 同人点▶开工的路径
 }
 
-// ②tick_scheduler 新分支:复用 CronMode::CreateIssue 的 autopilot_fire,只加一行——
-// 建完立刻当作"已▶开工"分发,不另开一条"无人值守执行器"。mode 默认 weekly,
-// 定时触发只走这一条分支,不涉及 mode=first。
-if c.mode == CronMode::CreateIssue && c.auto_run {
-    let issue_id = self.autopilot_fire(pid, &c.name, stage, c.issue_assignee.as_deref(), now_ts).await?;
+// ②V4 只有这一条定时(02 篇 §2.1「cron_task 表已取消」/00-handshake 七-6):
+// 不再是"tick_scheduler 遍历 cron_task 表里到点的任意配置行",而是每次 tick
+// 直接读 .bw/issue-policy.toml 的 [cadence] 段、查一条 SQL。判据是"本周
+// (week_of=当前 ISO 周)有没有一张 kind='ops' AND workflow='asset-audit' 的活",
+// 不是查一张记"上次触发时间"的表——这条 SQL 本身就是幂等锁,错过一次 tick
+// 不需要补建逻辑,下次 tick 天然成立。函数名/参数是本篇伪码,未拍板;精确的
+// 时刻解析("fri 20:00"落在哪个具体时间戳)留给实现。
+pub async fn maybe_fire_asset_audit(&mut self, pid: ProjectId, now_ts: i64) -> Result<(), AppError> {
+    let Some(policy) = bw_engine::issue_policy_file::read(&workspace).await? else { return Ok(()) };
+    let week_of = current_iso_week();
+    if !policy.cadence.ops2_due(now_ts, &week_of) {
+        return Ok(()); // 还没到 ops2_schedule("fri 20:00" 默认值)这一刻
+    }
+    // 判据本身,不是另开一张状态表——对应 SQL:
+    //   SELECT COUNT(*) FROM issue WHERE project_id=? AND kind='ops'
+    //   AND workflow='asset-audit' AND week_of=?
+    let already = self.store.count_ops_issue(pid, "资产盘点", &week_of).await?;
+    if already > 0 {
+        return Ok(()); // 本周已建过(正常一次,或上次没错过的一次),不重复建
+    }
+    let issue_id = self.dispatch(Command::CreateIssue {
+        id: IssueId::new(), stage: current_stage,
+        title: format!("资产盘点 {week_of}"), desc: "mode: weekly".into(),
+        priority: IssuePriority::Normal, standard_skill: "asset-audit".into(),
+    }).await?;
     self.store.set_issue_kind_origin(issue_id, IssueKind::Ops, IssueOrigin::Auto).await?;
     self.store.set_issue_workflow(issue_id, "资产盘点").await?;
-    // mode 不进 Command::RunIssue 签名(04 篇已定该命令「签名不变」)——写进这张
-    // issue 自己的说明(body)里一句结构化文字("mode: weekly"),复用既有"活的
-    // 说明进初始 prompt"机制,asset-audit SKILL.md 第一步读自己的 issue 说明即可
-    // 判断模式,不新增命令字段。定时触发这里恒为 weekly。
+    self.store.set_issue_week_of(issue_id, &week_of).await?; // 供下次 tick 的判据 SQL 查到这一行
+    // mode 不进 Command::RunIssue 签名(04 篇已定该命令「签名不变」)——已经写进
+    // 这张 issue 自己的说明(body,上面的 desc)里一句结构化文字("mode: weekly"),
+    // asset-audit SKILL.md 第一步读自己的 issue 说明即可判断模式,不新增命令
+    // 字段。定时触发这里恒为 weekly。
     self.dispatch(Command::RunIssue { id: issue_id, session: None }).await?;
-    self.emit(Event::OpsWorkflowAutoFired { id: c.id, issue_id, ok: true });
+    self.emit(Event::OpsWorkflowAutoFired { id: issue_id }); // 01 篇字段:{ id: IssueId }
+    Ok(())
 }
 
 // ③第 1 步无 agent,buddy 直接写模板;是否追加 agent 步骤由探测结果分两条独立分支——
@@ -258,18 +283,25 @@ pub(crate) async fn run_standard_bootstrap(&mut self, p: ProjectId) -> Result<()
 
 ### 3.3 活草稿 → 真建活(①第四步)
 
-人在终端确认草稿后两条动作并行(细节留实现时与计划屏交互一并定稿):①agent 继续在自己的会话里提交 `.bw/metrics.toml`/`docs/plan/`、开 PR(2.1 第四步);②buddy(不经过 agent)批量调既有 `Command::CreateIssue` 为每张确认的业务活各建一行(含远端 issue 创建),`week_of`/`version`/`tool` 创建后一并写入,推动指标各插一行 `issue_metric` 关联表(02 篇 §2.2)。两条动作各自失败互不阻塞,失败表现按 §4 处理。
+人在终端确认草稿后两条动作并行(细节留实现时与计划屏交互一并定稿):①agent 继续在自己的会话里提交 `.bw/metrics.toml`/`docs/plan/`、开 PR(2.1 第四步);②buddy(不经过 agent)批量调既有 `Command::CreateIssue` 为每张确认的业务活各建一行(含远端 issue 创建),`week_of`/`version`/`tool`/`metric_key` 等 8 个缓存列创建后一并写入——**没有 `issue_metric` 关联表**(第七轮已取消):一张活推动的指标就是 `issue.metric_key` 这一列,不需要另插一行关联表(02 篇 §2.2)。两条动作各自失败互不阻塞,失败表现按 §4 处理。
 
-### 3.4 战绩记账:以 02 篇 `workflow_credit` 台账表为事实源(设计期统一)
+### 3.4 "用了几次"怎么算:02 篇 §2.3 的现算方案(第七轮改写,取代原 `workflow_credit` 台账)
 
-**两篇口径分歧已收敛**:02 篇 §2.4 给的独立台账表 `workflow_credit`(`subject_kind`/`subject_id`/`issue_id`,`UNIQUE` 三元组防重、一活一主体一行)与 04 篇早先版本「列在 `skill_package`/`skill` 表本身」的 `runs`/`wins`/`win_rate` 三列曾经并存,现已统一:以 02 篇 `workflow_credit` 为准,04 篇 §2.9 已同步改成「配置屏读数由 SQL 从 `workflow_credit` 现算」,不落缓存列。本篇按此写。
+**与 04 篇的口径分歧本篇直接按 02 篇改写,不再等两篇互相对齐**:02 篇第七轮盘点后连"战绩"这个持久账本概念本身都取消了(母文档 §6.3)——不建 `workflow_credit` 表,也不在 `skill_package`/`skill` 上存 `runs`/`wins`/`win_rate`。"用了几次"改成现算查询,"干没干成"不再由 buddy 自己判定和记账,看的是**远端 MR 合没合入**。04 篇目前仍是"以 `workflow_credit` 为事实源"的旧写法,与 02 篇不一致——按 CLAUDE.md「不为向后兼容留旧路径」的原则,以 02 篇(更新的正本)为准;04 篇自身的同步留给它下一轮修订,不在本篇处理范围。
 
-记账口径(照 04 篇 §2.4「就近优先」解析规则 + §2.9 挂载点):
+**"用过几次"怎么算**(直接引用 02 篇 §2.3 的查询,不重新定义):
 
-- 挂载点不变,复用既有「同一件活绝不记两次」的判定——`dispatch.rs` 的 `TransitionIssue` Done 边(`newly_done`)与 run 失败两处(`finalize_run_interactive`)。
-- 记账主体从"按 `issue.assignee` 找 agent"换成"按 `issue.workflow` 名字解析出 `skill_package` 或裸 `skill` 行"(找不到就如实记「名字对不上,不记账」,不错记到别的行),向 `workflow_credit` 插入一行(`subject_kind`='workflow'|'skill')。
-- ①「更新指标与周计划」记在同名 `skill_package` 对应的一行 `workflow_credit`(`subject_kind='workflow'`)上;②「资产盘点」不论 `mode=weekly` 还是 `mode=first` 都记在同一个 `skill_package`(名字仍是"资产盘点")的一行上——两种模式是同一个包,不因模式不同拆成两行;③「规范铺底」用到的 `merge-adjust` 若是独立技能(未打包)则单独记一行(`subject_kind='skill'`),若归在 `standard-bootstrap-agent` 包里则整包记一行(04 篇 §2.9:「包被物化时成员技能 `uses` 各自 +1,但只有包本身在 `workflow_credit` 上记一行」)。
-- 回填出的业务 issue(`origin='backfill'`)Done 边直接跳过记账(04 篇 §2.9「回填的活不进战绩」);运作活②③自己(`kind='ops'`)是真实 agent 会话跑出来的,正常记账——**唯一例外**是②的 `mode=first` 那次会话本身产生的是 `origin='backfill'` 的**业务** issue 行(历史回填出的老 issue),这些行跳过记账,但②这张 `kind='ops'` 活自己完成时仍正常记账,两者不要混。
+```sql
+SELECT workflow, COUNT(*) AS uses
+FROM issue WHERE project_id = ? AND kind = 'business' AND workflow != ''
+GROUP BY workflow;
+```
+
+三张运作活各自的 `workflow` 取值见 §3.1;配置屏「用过几次」就是这条查询按 `workflow` 名字过滤后的结果,不缓存汇总数,每次现查——不需要"挂载点""结算时机"这类设计,因为没有一次插入动作要做。
+
+**"干没干成"怎么判**:不再有 `TransitionIssue` Done 边/run 失败两处的记账挂载点——这两个时机今天仍然触发状态机原有的职责(推进/停留),但不再附带"往战绩表插一行"这个副作用。一件活(业务活或运作活)真正"干成了"看的是它对应的远端 PR/MR 合没合入,这条判据直接读 git/远端,不读库,和母文档 §6.3「代价」一节的表述一致。
+
+**回填的活自然不参与"用过几次"**:`origin='backfill'` 的历史 issue 行 `workflow` 列通常是空字符串(远端老 issue 没有关联到任何本地 workflow),上面查询的 `WHERE workflow != ''` 条件天然把它们排除在外——不需要一条专门的"回填跳过记账"规则,这本来就是空值过滤的自然结果(03 篇同步简化了对应描述)。
 
 ---
 
@@ -288,7 +320,7 @@ pub(crate) async fn run_standard_bootstrap(&mut self, p: ProjectId) -> Result<()
 |---|---|
 | 采集脚本失败(①)| 对应指标保持灰,`docs/metrics.md` 写明原因 |
 | 远端 issue 建失败(①确认建活)| 本地行仍建、标"未同步",不阻塞其余 |
-| 定时触发但工作区不可用(②)| 如实跳过不建活,`cron_run` 记 `Failed` |
+| 定时触发但工作区不可用(②)| 如实跳过不建活,不产生任何库记录(没有 `cron_task`/`cron_run` 这类表可写);下次 tick 用同一条"本周有没有"判据重试 |
 | 远端未认证(②`mode=first` 历史回填)| 只完成 git 本地部分,远端字段留空 |
 | agent 中途断(通用)| 停 `InProgress`,`settled_at` 留空,可重试 |
 | MR 开不出来(通用)| 停原状态,不假装到了「评审中」|
@@ -304,13 +336,13 @@ pub(crate) async fn run_standard_bootstrap(&mut self, p: ProjectId) -> Result<()
 | ①判据生效 | 连续调用两次 `StartWeekPlanning`(mock)| 第二次返回 `WeekPlanAlreadyExists` |
 | ①产出文件 | `test -f <workspace>/docs/plan/<本周>.md && echo ok` | `ok` |
 | ①业务活挂 workflow | `sqlite3 <db> "SELECT kind,origin,workflow,week_of FROM issue WHERE project_id='<pid>' AND kind='ops' AND workflow='更新指标与周计划';"` | 一行,`origin='human'` |
-| ②定时自动建+自动开工(`mode=weekly`)| 手动调 `tick_scheduler`(时间戳设到 `ops2_schedule` 之后)| 新建 issue id;`sqlite3 <db> "SELECT status FROM issue WHERE id='<id>';"` 不是 `Todo`;`workflow='资产盘点'` |
+| ②定时自动建+自动开工(`mode=weekly`)| 手动调 `tick_scheduler`(时间戳设到 `ops2_schedule` 之后)| 新建 issue id;`sqlite3 <db> "SELECT status FROM issue WHERE id='<id>';"` 不是 `Todo`;`workflow='asset-audit'` |
 | ②盘点报告落地(`mode=weekly`)| `grep "运作活②盘点尾段" <workspace>/docs/plan/<本周>.md` | 命中 |
 | ②微重构只出建议活、不直接改代码 | 跑完一次 `mode=weekly`,`git diff --stat`(该次会话分支)| 除 `docs/plan/` 尾段外无业务代码改动;MR 说明里能看到建议活草稿列表 |
-| ②首次模式(历史回填)与③挂在同一个 workflow | `sqlite3 <db> "SELECT workflow FROM issue WHERE kind='ops' AND origin='auto' ORDER BY created_at;"` | 出现历史回填那一行时 `workflow='资产盘点'`,不是「规范铺底」也不是别的名字 |
+| ②首次模式(历史回填)与③挂在同一个 workflow | `sqlite3 <db> "SELECT workflow FROM issue WHERE kind='ops' AND origin='auto' ORDER BY created_at;"` | 出现历史回填那一行时 `workflow='asset-audit'`(显示名「资产盘点」),不是规范铺底那一个包,也不是别的名字 |
 | 三张运作活最远评审中 | `sqlite3 <db> "SELECT workflow,status,settled_at FROM issue WHERE project_id='<pid>' AND kind='ops';"` | 每行 `status` 落在 `InReview`(或更早的失败态),`settled_at IS NULL` |
 | Done 只能人点 | 跑完①②③,不手动调 `TransitionIssue` | `sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE kind='ops' AND settled_at IS NOT NULL;"` 为 `0`,直到显式调用才变化 |
-| ②`mode=first` 回填不进战绩 | 回填前后各查一次 `sqlite3 <db> "SELECT COUNT(*) FROM workflow_credit WHERE subject_kind='workflow' AND subject_id=(SELECT id FROM skill_package WHERE name='资产盘点');"` | 两次数字相同——插入 `origin='backfill'` 的 issue 行本身不触发 §3.4 的记账挂载点 |
+| ②`mode=first` 回填不参与"用了几次"现算 | `sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE project_id='<pid>' AND kind='business' AND workflow!='' AND origin='backfill';"` | 应为 `0`——回填出的历史 issue 行 `workflow` 列是空字符串,§3.4 现算查询的 `WHERE workflow!=''` 天然把它们排除在外 |
 | 深链截图 | `BW_OPEN=<项目名> BW_PANEL=session BW_SEL=issue:<id>` | stderr `[BW_OPEN]` 日志 + 截图存进 `docs/v4-prototype/` |
 
 ---
@@ -318,7 +350,7 @@ pub(crate) async fn run_standard_bootstrap(&mut self, p: ProjectId) -> Result<()
 ## 6 · 开放问题(≤5)
 
 1. ~~母文档与 03 篇在"群历史算不算回填原料"上不一致~~ **已定(第五轮,00-handshake 第 4 条「回填不主动喂群历史」)**:母文档 §2.6/第 0 站现已改成三种原料(git 本地历史、仓内文档、远端 issue/MR)并明确排除群历史,与 03 篇 §4、本篇 2.2/2.3 口径一致,不用再改。
-2. ~~02 篇 `workflow_credit` 表与 04 篇 `skill_package`/`skill` 战绩列口径不一致~~ **已定(设计期统一)**:以 02 篇 `workflow_credit` 台账表为事实源,04 篇已同步改为「配置屏读数由 SQL 现算,不存 runs/wins/win_rate 列」,见 §3.4。
+2. ~~02 篇 `workflow_credit` 表与 04 篇 `skill_package`/`skill` 战绩列口径不一致~~ **已定,且第七轮盘点后进一步简化**:原「以 02 篇 `workflow_credit` 台账表为事实源」的设计期统一结论已被取代——02 篇第七轮盘点后连 `workflow_credit` 表本身也取消,"用了几次"改成现算查询、"干没干成"看远端 MR,不再有任何持久战绩表,见 §3.4。04 篇仍是"以 `workflow_credit` 为事实源"的旧写法,留给它自己下一轮同步,不在本篇处理范围。
 3. **`north-star-discovery`/`metrics-binding` 旧文件的迁移时机**——同一次改动删除还是先并存一个版本周期,按「不为向后兼容留旧路径」倾向前者,落地顺序留实现时的 commit 拆分决定。
 4. **系统提示词是否真要加 2.4 建议的那一句**——具体措辞是否合适、是否采纳,需用户确认。
 5. **运作活③纯模板路径(无 agent)时"评审中"怎么被探测到**——§3.2 提到这种情况没有 hook `Stop` 事件,只能靠既有 5 分钟兜底轮询。这条路径此前只服务"project-init"特殊场景,V4 里第一次成为常规路径,轮询节律要不要为此加速,留待实现时评估。

@@ -1,12 +1,12 @@
 # 03 · 规范铺底怎么跑:三步流程、对账、升级
 
-> **30 秒导读**:这篇管运作活③「规范铺底」——项目接入时自动出现的一次性活——具体怎么跑:第 1 步 buddy 自己写模板核心件、第 2 步(成熟仓才有)agent 把 buddy 约定合进已有的 README/CLAUDE.md/AGENTS.md、第 3 步(有历史的仓才有)把老项目自己的历史记录回填成 buddy 认得的文件。外加铺完底之后的日常动作:对账(缺什么、过期什么)、升级(出新版规范怎么走 MR)、`standard/` 正本怎么让同事贡献。**第五轮改动(用户拍板,待拍-05/27 改)**:第 3 步「历史回填」不再是运作活③自己养的一个独立子技能——它就是**运作活②「资产盘点」workflow 的首次模式**(同一个 `asset-audit` workflow 包,`mode=first` 全量回填历史、`mode=weekly` 每周增量盘点),本篇 §2.4 描述的三层流水线架构原样成立,只是挂载的 workflow 包换了,谁触发它、剧本怎么写归 [09-ops-workflows.md](09-ops-workflows.md) §2.2/§2.3 管,本篇只管"探测到历史该不该跑""跑出来的原料/产物/防伪规则长什么样"。**2026-08-20 按用户第二轮回复(六-3)整块重写了 §2.4「五个产物」**:回填产出改成与运作活①同模板的历史周文件(`docs/plan/YYYY-Www.md`,`origin: backfill`),`docs/plan/history.md` 与「界面另开回填块」两种说法全部取消。**详细设计稿,待用户复核,尚未开工写代码**。给三种人看:复核设计的用户、下一步写代码的会话、以后往 `standard/` 提 PR 的同事。母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) 第 0 站、§2.6、§6、待拍-02/15/16/20/27/29)与 [`../standard-module-draft.md`](../standard-module-draft.md)(八大类)是设计事实源,冲突时以它们为准;预研 [`../research/legacy-backfill.md`](../research/legacy-backfill.md) + 样例 [`legacy-backfill-sample-buddy.md`](../research/legacy-backfill-sample-buddy.md) 的结论**全部采纳**,本篇的细化/补答另标注。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——不新开代号系列,三步就叫「第 1/2/3 步」。
+> **30 秒导读**:这篇管运作活③「规范铺底」——项目接入时自动出现的一次性活——具体怎么跑:第 1 步 buddy 自己写模板核心件、第 2 步(成熟仓才有)agent 把 buddy 约定合进已有的 README/CLAUDE.md/AGENTS.md、第 3 步(有历史的仓才有)把老项目自己的历史记录回填成 buddy 认得的文件。外加铺完底之后的日常动作:对账(缺什么、过期什么)、升级(出新版规范怎么走 MR)、`standard/` 正本怎么让同事贡献。**第五轮改动(用户拍板,待拍-05/27 改)**:第 3 步「历史回填」不再是运作活③自己养的一个独立子技能——它就是**运作活②「资产盘点」workflow 的首次模式**(同一个 `asset-audit` workflow 包,`mode=first` 全量回填历史、`mode=weekly` 每周增量盘点),本篇 §2.4 描述的三层流水线架构原样成立,只是挂载的 workflow 包换了,谁触发它、剧本怎么写归 [09-ops-workflows.md](09-ops-workflows.md) §2.2/§2.3 管,本篇只管"探测到历史该不该跑""跑出来的原料/产物/防伪规则长什么样"。**2026-08-20 按用户第二轮回复(六-3)整块重写了 §2.4「五个产物」**:回填产出改成与运作活①同模板的历史周文件(`docs/plan/YYYY-Www.md`,`origin: backfill`),`docs/plan/history.md` 与「界面另开回填块」两种说法全部取消。**2026-08-20 按用户第七轮盘点(库从 20 张表砍到 4 张)再整块重写了 §2.2 第 6 类产出、§2.4「五个产物」的落地细节与防伪规则、§2.6、§3.4**:铺底不复制预置技能包的旧说法作废——预置包随 buddy 出厂,铺底第 1 步就要把它复制进项目仓 `.claude/skills/`;历史回填从"五个产物"收窄成四份仓文件(不再有 `docs/plan/history.md`、`docs/releases.md` 独立"历史运作(回填)"节这类新文件/新分段),库里唯一落地的是 `issue` 缓存表本来就有的 `origin='backfill'` 行,不是新建的表;`workflow_credit`/`release`/`week_plan` 这些第六轮及更早草案里出现过的表全部不复存在,回填因此也不再有"要不要计入战绩"这个问题。**详细设计稿,待用户复核,尚未开工写代码**。给三种人看:复核设计的用户、下一步写代码的会话、以后往 `standard/` 提 PR 的同事。母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) 第 0 站、§2.6、§6、待拍-02/15/16/20/27/29)与 [`../standard-module-draft.md`](../standard-module-draft.md)(八大类)是设计事实源,冲突时以它们为准;预研 [`../research/legacy-backfill.md`](../research/legacy-backfill.md) + 样例 [`legacy-backfill-sample-buddy.md`](../research/legacy-backfill-sample-buddy.md) 的结论**全部采纳**,本篇的细化/补答另标注。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——不新开代号系列,三步就叫「第 1/2/3 步」。
 
 ---
 
 ## 0 · 这篇管什么、不管什么
 
-**管**:①探测——两卡填完后怎么判断运作活③跑几步,空仓例外怎么判定;②第 1 步「写核心件」全流程;③第 2 步「合并调整」agent 任务清单(合并原则,非 SKILL.md 正文);④第 3 步「历史回填」全设计——原料分给脚本/agent/人、五个产物字段、防伪规则、幂等、限时/抽样、缺的函数清单;⑤三步合成一个 MR、人怎么评审;⑥对账与升级流程;⑦`standard/` 正本结构、版本号、同事怎么贡献;⑧本篇命令/事件名字。
+**管**:①探测——两卡填完后怎么判断运作活③跑几步,空仓例外怎么判定;②第 1 步「写核心件」全流程;③第 2 步「合并调整」agent 任务清单(合并原则,非 SKILL.md 正文);④第 3 步「历史回填」全设计——原料分给脚本/agent/人、四份仓文件产出物字段(+ 一行库缓存例外)、防伪规则、幂等、限时/抽样、缺的函数清单;⑤三步合成一个 MR、人怎么评审;⑥对账与升级流程;⑦`standard/` 正本结构、版本号、同事怎么贡献;⑧本篇命令/事件名字。
 
 **不管**:`standard/` 放哪、怎么进二进制、版本常量叫什么——[01-architecture.md](01-architecture.md) §2.9 已定,本篇直接引用。`.bw/*.toml` 与仓文件**格式**——[02-data-and-files.md](02-data-and-files.md) 已给,本篇只补留白处(`.bw/managed.toml` 指纹算法、回填历史周文件里"累计贡献者"字段落在哪一份文件)。「合并调整」「历史回填」两个技能的 **SKILL.md 正文剧本**——[09-ops-workflows.md](09-ops-workflows.md)管,本篇只给任务清单。计划屏周列表 / 总览发版记录怎么把回填的历史周、历史版本渲染出来(不另开专门块,只带徽记)——[06-plan-screen.md](06-plan-screen.md)/[08-overview-derivation.md](08-overview-derivation.md) 已给,本篇只保证产出的形状(同格式的历史周文件、`docs/releases.md` 历史版本行)能被它们直接消费。开工工具注册、workflow 识别——[04-tools-and-workflows.md](04-tools-and-workflows.md)管。
 
@@ -48,7 +48,7 @@
    - 第 3 类 → `docs/releases.md`(空表头)、`docs/design/README.md`(约定说明);`docs/plan/YYYY-Www.md` 不在这一步写,那是运作活①第一次跑才有的东西;
    - 第 4 类 → `.bw/metrics.toml`/`.bw/connectors.toml`/`.bw/collect_stats.*`/`docs/metrics.md`:创建流已写过的不重写内容,只登记指纹;没有的写空骨架;
    - 第 5 类 → `.bw/issue-policy.toml`(02 篇 §2.8 给的默认三列映射 + review/cadence/kanban 四段);
-   - 第 6 类 → buddy 自建运作技能三份(更新指标与周计划/资产盘点/规范铺底)写进 `.claude/skills/`;**业界包(superpowers、mattpocock-skills)不复制文件进项目仓**,`issue-policy.toml` 的 `workflow` 列只记名字,假设本机 Claude CLI 已装对应插件——判定细节留 04 篇,本篇只声明边界;
+   - 第 6 类 → 复制预置技能包进 `.claude/skills/`:buddy 自建运作技能三份(更新指标与周计划/资产盘点/规范铺底)+ **业界包(mattpocock-skills、superpowers)**(第七轮改动,待拍-32、02 篇 §2.5 已定:预置包随 buddy 二进制分发,Claude CLI 只在项目仓里找技能,不复制进来就读不到——铺底第 1 步因此必须真的把这些包的文件复制进项目仓,不是只记一个名字假设本机另装了插件);`.bw/issue-policy.toml` 的 `workflow` 列记的就是复制进来的包名。哪些包算"默认要复制的预置件"、哪些留在 `standard/pond/` 鱼塘不复制,由 04 篇的严选清单定,本篇只声明"铺底第 1 步会做复制这个动作";
    - 第 8 类 → 最后写 `.bw/standard.toml`(`version = STANDARD_VERSION`)与 `.bw/managed.toml`。
 3. 每写一个文件同时往 `.bw/managed.toml` 追加一条(`path`+`version`+`fingerprint`,算法见 2.6);这份清单**最后写**,保证记的指纹是刚落盘那一刻的真实内容。
 4. 人手改过不覆盖:只在**目标路径不存在**或**存在但指纹与记录一致**时才写;两者都不满足就跳过,在 Issue 说明追加一行「`XXX.md` 已存在且非 buddy 管理,跳过」——和第 2 步"不覆盖已有 AGENTS.md"是同一精神在不同文件上的应用。
@@ -83,28 +83,29 @@
 2. **agent 只读文本,不算数字**:拿到 evidence 文件(任务说明写明"数字照抄,不要自己数,和脚本不一致以脚本为准")+ 项目自己的 README/CHANGELOG/RELEASES(若存在)。要做的事:①从 README 首段提炼"想做什么"填 PROJECT.md 草稿(仅当原字段是"待填"占位);②尝试解析 CHANGELOG/RELEASES,解析不出来的行留空,完全解析不出就写"未发现可识别的版本记录格式";③把 evidence 数字原样填进两份产物的表格(agent 只做排版措辞,不算数);④把"仓里本来就在量的东西"整理成 `.bw/metrics.toml` 候选列表,标"候选,不绑定"。
 3. **人确认**:北极星、对标、"在研版本"起点——任何脚本或 agent 都推不出来,不尝试填(见下)。人评审 MR 时确认整体靠不靠谱,是唯一确认动作,不逐字段勾选。
 
-**五个产物**(字段定义引用样例文件 [§6](../research/legacy-backfill-sample-buddy.md#6-渲染样例如果对本仓做一次回填产物长什么样),不重复贴):
+**四份仓文件产出物**(字段定义引用样例文件 [§6](../research/legacy-backfill-sample-buddy.md#6-渲染样例如果对本仓做一次回填产物长什么样),不重复贴;第七轮盘点后从"五个产物"收窄成四份仓文件 + 一行库缓存例外,`docs/plan/history.md`、`docs/releases.md` 独立"历史运作(回填)"节这两种旧说法都不再存在):
 
-| 产物 | 位置 | 字段 |
+| 产出物 | 位置 | 字段 |
 |---|---|---|
-| a) 发版记录历史段 | `docs/releases.md` 新增"历史运作(回填)"节 | 版本号、日期、来源徽记、一句话说明 |
-| b) 按周历史运作 | `docs/plan/history.md`(新文件) | 周、合入 MR 数(口径 B)、提交数、目录 Top3、关闭 issue 数、当周版本 |
+| a) 历史周文件 | `docs/plan/YYYY-Www.md`(与运作活①写的本周文件**同一套模板**,front matter `origin: backfill`,样例见 02 篇 §2.5) | 周目标(未发现就写"未发现——历史周没有周计划记录,不倒推")、业务活清单(未发现结构化清单就写"未发现";远端已关闭 issue 单独走下面这行)、本周运作(回填周早于 buddy 接入,写"不适用")、按周历史统计(合入 MR 数口径 B、提交数、目录 Top3、关闭 issue 数、当周版本) |
+| b) 历史发版行 | `docs/releases.md`(**不新开分段**,直接按现有表头追加行,样例见 02 篇 §2.5) | 版本号、发版日、说明、包含的活、来源(标"回填 · git tag"等) |
 | c) PROJECT.md 草稿字段 | `PROJECT.md` 补空字段 | 想做什么(若原为待填)、对标(留空待填)、北极星(留空待填) |
 | d) 指标候选 | 写进 MR 说明或 `docs/metrics.md` 候选小节,不直接写入 `.bw/metrics.toml` | 候选指标名、数据来源、能否取到、备注 |
-| e) 回填的 issue 行 | 库 `issue` 表 | `origin='backfill'`、`number`、`title`、`status`(照远端原样)、`closed_at` |
 
-`docs/plan/history.md` 顶部加一行"累计贡献者:N 位(git 作者分布去重计数)"——供 08 篇总览⑧块的"贡献者数"读取(定在这份文件而不是 PROJECT.md,因为它是历史统计,不是项目身份)。
+**唯一落库的例外**:回填探测到的远端 issue,原样同步进本机 `issue` 缓存表一行,`origin='backfill'`、`number`、`title`、`status`(照远端原样)、`closed_at`——这是 `issue` 表本来就有的缓存行为(02 篇 §2.1/§2.2),不是历史回填新建的表或列。四份仓文件产出(a-d)全部不写任何库表。
+
+此前给 `docs/plan/history.md` 顶部加"累计贡献者:N 位"的做法随这份文件一起取消(六-3 已定 `history.md` 不建)——目前没有任何界面块要取这个数(总览原有的⑧块也已取消,08 篇已同步),按"没人取的不存"暂不产出;以后若某界面确实要展示贡献者数,应该先在那篇设计里定读哪份文件、怎么取,再回头给这里补产出逻辑,不预先猜一个没人读的字段。
 
 **代码微重构建议也在首次盘点里顺手列为建议活**(第五轮,与 09 篇 §2.2 每周模式同一条规矩):`mode=first` 跑的时候若顺带发现明显的死码/超长文件/命名问题,同样只列成「建议活」草稿(类别「优化」,`origin='agent_split'`)写进 MR 说明,不直接改代码,人评审这次铺底 MR 时一并勾选要建的——不单独为老项目开一条"回填顺便重构"的例外通道。
 
 **防伪规则**(逐条,证据均见样例文件):
 
 1. 合入记录用双亲结构判定(`git log --merges`),不用消息文字匹配——文字匹配会漏掉手写合并提交(样例:71 条真实合入漏掉 23 条)。
-2. 远端 MR/PR 数(口径 B)与本地合并提交数(口径 A)分开报——`docs/plan/history.md`"合入 MR 数"用口径 B,口径 A 只在完全没有远端连接时当退化替代且要注明"本地口径"(样例两口径分别是 71 和 50,不可混用)。
+2. 远端 MR/PR 数(口径 B)与本地合并提交数(口径 A)分开报——历史周文件「按周历史统计」表的"合入 MR 数"列用口径 B,口径 A 只在完全没有远端连接时当退化替代且要注明"本地口径"(样例两口径分别是 71 和 50,不可混用)。
 3. 无标签无 CHANGELOG 就诚实写"未发现可回填的版本记录",绝不拿 commit 日期倒推版本号(buddy 自己仓就是这个真实边界样例)。
 4. 批量关闭事件不当速率信号:数字照实呈现,单周关闭数占总关闭数比例 >50% 时附一句提示,不改数字本身(样例:44 个已关闭里 34 个集中一周)。
 5. 每个数字标复算命令:evidence 文件里每个字段附一个"用什么命令算出来的"字符串,产物拼装时原样带出(呈现位置由 UI 定)。
-6. 回填标记贯穿到底(本篇对 02 篇「回填标记怎么实现」的答案):`docs/plan/history.md` 整份由回填生成,重跑整份覆盖,不需要标记;`docs/releases.md`/`PROJECT.md` 是回填内容与人写内容共存,用一对 HTML 注释 `<!-- bw:backfill:section=... --> … <!-- /bw:backfill -->` 界定重跑只覆盖这一段;库里 `issue.origin='backfill'`/`release.origin='backfill'` 是数据侧对应标记。
+6. 回填标记贯穿到底(本篇对 02 篇「回填标记怎么实现」的答案,第七轮改写,替换原 HTML 注释包段方案):历史周文件(`docs/plan/YYYY-Www.md`,`origin: backfill`)整份由回填生成,重跑同一周就整份覆盖那一份文件,不追加重复段落——和运作活①「这份文件归它管」是同一个契约,不需要额外标记机制;`docs/releases.md` 是回填内容与人写内容共存在**同一张表**里(不再有独立的"历史运作(回填)"节可以用 HTML 注释包住),重跑时按"版本号"列去重:该版本号已有一行(不论来源)就跳过或只更新说明字段,没有就追加新行,不产生重复行;库里 `issue.origin='backfill'` 是数据侧对应标记——`release` 表已取消,不再有 `release.origin` 列可打。
 
 **buddy 今天缺的函数**(列名+模块+返回什么,不写实现,取自 legacy-backfill.md 最小集):
 
@@ -118,9 +119,9 @@
 
 **人确认与不点灯**:「在研版本」起点(**本篇对 legacy-backfill.md 开放问题 1 的答案**)——有真实标签/CHANGELOG 能识别出当前版本的老项目,`current_version` 直接取那个值;完全没有版本记录的老项目(如 buddy 自己),`current_version` 保持空,**不自动定成 v0.1**——`v0.1` 只属于待拍-04 的"新建项目"场景,老项目找不到版本历史就如实显示"未设置",直到人显式给一个。
 
-回填绝不算战绩:`RecordWorkflowCredit` 在插入回填 issue 行这个动作本身不调用。**这不等于这条 issue 从此永远拿不到战绩**(本篇对 legacy-backfill.md 开放问题 3 的答案,细化 02 篇原有措辞):`origin` 记的是"这行数据当初怎么进的库",永久不改;但如果这张老 issue 后来被真的指派、▶开工、走完一次真实运行并 settle,那次记账判断的是"这次是不是真实运行的结果",不是"origin 是什么"——回填只挡住"回填动作本身不能凭空造战绩",不该把这条 issue 永久排除在未来真实战绩之外(界面影响留 §6)。
+回填不产生任何"要不要算战绩"的问题(本篇对 legacy-backfill.md 开放问题 3 的答案,第七轮改写,大幅简化):V4 没有战绩台账这回事(02 篇 §2.3)——"干没干成"永远直接看远端 MR 合没合入,没有一张表可以"记"或"不记"。回填进来的这批老 issue 沿用同一条判据:`origin` 只记"这行数据当初怎么进的库",永久不改;这条老 issue 后来若被真的指派、▶开工、走完一次真实运行,它算不算"干成了"看的是那次运行对应的远端 MR 合没合入,和 `origin` 是什么无关——不需要任何"回填要不要计入战绩"的排除规则,也没有界面特殊处理要做(原「界面影响留 §6」这句一并撤回,不再是开放问题)。
 
-不点灯:`docs/plan/history.md`/`docs/releases.md` 历史段/总览⑧块不参与 health 推导。唯一流入健康灯、也碰 git 合入记录的信号是第 1 站 health 输入 (c)「上周有交付」,但那是从**当前**记录实时推导的真实观测,与"回填一段历史给人看"是两次不同的计算(08 篇已定,不重复)。
+不点灯:回填产出的历史周文件、`docs/releases.md` 里标"回填"的版本行,只解释过去,不参与健康灯推导。唯一流入健康灯、也碰 git 合入记录的信号是**当前**周的"上周有交付"判据(08 篇已定),那是从当前记录实时现算的真实观测,与"回填一段历史给人看"是两次不同的计算,不重复。
 
 ### 2.5 一个 MR 与人介入
 
@@ -139,7 +140,7 @@
 
 **升级**:人在知识库屏对"过期"文件点「看差异 → 升级」→ buddy 算文本差异(纯 diff),"人改过"里同时落后的文件一起列出并标"需要人工合并"→ 人确认要升级哪些文件(可只选一部分)→ "过期但没人改过"的文件建一张轻量活(和 `EditProjectCard` 同形状:无 agent 会话,建分支写新内容提 MR,`origin='human'`);"过期且人改过"的文件走一次真实 agent 会话(用第 2 步同一套合并原则),纳入同一张升级活一起提 MR → 合入后 `.bw/standard.toml` 与 `.bw/managed.toml` 一起更新。
 
-`docs/releases.md` 老项目解析健壮性(本篇对 02 篇开放问题 4 的答案):如果铺底前项目已有自己格式的 `docs/releases.md`,`release_file.rs` **不尝试解析、不改写**——只在文件末尾追加标准格式的"历史运作(回填)"节(用防伪规则 6 的 HTML 注释包住),原有内容原样留上面。宁可一个文件两种格式并存,不冒"解析错了改坏别人记录"的险。
+`docs/releases.md` 老项目解析健壮性(本篇对 02 篇开放问题 4 的答案,第七轮改写):第 1 步「写核心件」已经先挡住了一层——如果铺底探测到项目接入前就有一份 `docs/releases.md`(非 buddy 管理),第 1 步按"人手改过不覆盖"规则直接跳过、不写标准骨架(§2.2 第 4 步)。到历史回填这一步,`release_file.rs`(02 篇 §3.3)按标准 5 列表头(版本号/发版日/说明/包含的活/来源)去解析这份已有文件:表头匹配就在文件末尾追加回填行,按版本号去重不产生重复行;表头对不上标准格式就整份不碰、不追加一行,只在这次回填 MR 说明里写一行"识别到 N 个历史版本,`docs/releases.md` 现有格式无法识别,留给人工整理"。宁可让人手动补,不冒"解析错了改坏别人记录"的险。
 
 ### 2.7 `standard/` 正本与同事贡献
 
@@ -170,7 +171,7 @@ standard/
 | 命令 | 一句话 |
 |---|---|
 | `RunStandardBootstrap { project_id }` | 一次性运作活③入口:探测 → 建活 → 第 1 步同步写核心件 → 按探测结果决定要不要自动触发第 2/3 步的交互式运行 → 一个 MR(01 篇已列,本篇细化内部编排) |
-| `BackfillHistory { project_id }` | 单独重跑历史回填(不重跑第 1/2 步):建一张运作活("历史回填 · 重跑"),开新分支起一次「资产盘点」workflow 会话、传 `mode=first`(第五轮改动,见本篇导读与 09 篇 §2.2——第 2 层仍要 agent 读文本产出候选,不是无会话的轻量活),重走 2.4 节流水线,覆盖上次带回填标记的段落 |
+| `BackfillHistory { project_id }` | 单独重跑历史回填(不重跑第 1/2 步):建一张运作活("历史回填 · 重跑"),开新分支起一次「资产盘点」workflow 会话、传 `mode=first`(第五轮改动,见本篇导读与 09 篇 §2.2——第 2 层仍要 agent 读文本产出候选,不是无会话的轻量活),重走 2.4 节流水线,按 3.4 节的幂等规则重新产出(历史周文件整份覆盖对应周、`docs/releases.md` 按版本号去重更新) |
 | `ReconcileStandard { project_id }` | 纯读:按 2.6 节算「缺/过期/人改过」三类,不建活不写仓,给知识库屏渲染用 |
 | `UpgradeStandard { project_id, files }` | 人选中要升的文件后触发:按 2.6 节升级流程建轻量活(纯替换)或一次 agent 会话(需合并),最终提 MR |
 
@@ -250,19 +251,16 @@ fingerprint = "sha256:9f2a1c7ec3b8...(64位完整hex,此处省略中段仅为文
 
 对账判定(伪码):`enabled` 无对应 `managed` 记录、或记录了但磁盘无该路径 → `Missing`;磁盘指纹 == 记录指纹 且 `managed.version < STANDARD_VERSION` → `Stale`;磁盘指纹 != 记录指纹(不看版本号)→ `HumanEdited`;其余 → `UpToDate`。
 
-### 3.4 回填文件的补充字段与标记
+### 3.4 回填产出怎么做到重跑幂等(第七轮改写,替换原 HTML 注释包段方案)
 
-`docs/plan/history.md` 顶部横幅追加一句"累计贡献者:6 位"。`docs/releases.md`/`PROJECT.md` 用一对 HTML 注释包住回填段:
+不再需要一套通用的"标记包段落"机制、也不需要一个独立的 `backfill_marker.rs`——四份产出物(§2.4 表格 a-d)各自靠自身文件结构解决幂等:
 
-```markdown
-<!-- bw:backfill:section=releases-history v=4.0 generated_at=2026-08-19T10:00:00Z -->
-## 历史运作(回填)
-未发现可回填的版本记录:仓内无 git 标签、无 CHANGELOG/RELEASES 文件、
-提交信息里也没有识别出版本号模式。
-<!-- /bw:backfill -->
-```
+- **历史周文件**(a):`docs/plan/2026-W32.md` 这类文件本身按 ISO 周一一对应,重跑 `BackfillHistory` 时对某一周"整份重新渲染、原地覆盖"即可——这份文件从创建起就整份归回填管,不存在"文件里一半回填一半人写"的情况(人写的是本周/正在过的周,历史周不会有人手改)。
+- **`docs/releases.md`**(b):`release_file.rs`(02 篇 §3.3)解析出的现有行按"版本号"去重——已存在同版本号的行就跳过(或按需要更新"说明"字段),不存在就追加一行,普通 Markdown 表格操作,不需要 HTML 注释包段落。
+- **`PROJECT.md`**(c):只在字段仍是"待填"占位时才写(§2.2 第 4 步同一条"人手改过不覆盖"规则的自然复用)——重跑时如果上次已经填过(不管是回填填的还是人后来改的),这次不再覆盖。
+- **指标候选**(d):每次都是全新写进这次 MR 说明的一段文字,不是持久文件里的一块,天然不存在"重跑要不要覆盖"的问题。
 
-重跑 `BackfillHistory` 时只替换这对标记之间的内容,标记外内容(人写的"现在用的"表)原样保留——和第 2 步"不覆盖已有内容"共用同一段解析逻辑(放 `managed_file.rs` 或独立小文件 `backfill_marker.rs`,归属留给写代码时定)。
+`managed_file.rs`(02 篇 §3.3/本篇 §3.1 已定义)只负责规范核心件(`AGENTS.md`/`.bw/*.toml` 等)的指纹对账,不管这四份回填产出——两套机制服务两类不同的文件,不合并成一套。
 
 ---
 
@@ -285,16 +283,16 @@ fingerprint = "sha256:9f2a1c7ec3b8...(64位完整hex,此处省略中段仅为文
 
 1. **第 1 步产物**:深链 `BW_OPEN=<样例项目名> BW_PANEL=kb`,stderr 见 `[BW_OPEN]`;分支(或 owned 情形的默认分支)上出现 `PROJECT.md`/`AGENTS.md`/`CLAUDE.md`/`.bw/issue-policy.toml`/`.bw/standard.toml`/`.bw/managed.toml`,`git show <分支>:.bw/managed.toml` 读到每个文件的指纹。
 2. **探测正确性**:`sqlite3 <db> "SELECT title FROM issue WHERE kind='ops' AND workflow LIKE '%铺底%';"` 读回的标题应出现"含历史回填"(buddy 仓有 615 条提交、50 个已合并 PR)。
-3. **第 3 步数字对照样例**:`docs/plan/history.md` 里 2026-W33/W34 两行"提交数"应为 51/38,与样例文件 §2 一致;`docs/releases.md` 历史段应渲染"未发现可回填的版本记录"(该仓无 tag)。
-4. **不算战绩**:`SELECT origin, COUNT(*) FROM issue WHERE project_id='<pid>' GROUP BY origin;` 应见 `backfill` 档非零(对应真实远端 issue #78/#81);`SELECT COUNT(*) FROM workflow_credit wc JOIN issue i ON wc.issue_id=i.id WHERE i.origin='backfill';` 应为 `0`。
+3. **第 3 步数字对照样例**:`docs/plan/2026-W33.md`/`docs/plan/2026-W34.md`(两份历史周文件)「按周历史统计」表里的"提交数"列应分别为 51/38,与样例文件 §2 一致;`docs/releases.md` 不应新增任何行(该仓无 tag/CHANGELOG,防伪规则 3 已定不倒推版本号),这次回填 MR 的说明里应能看到一句"未发现可回填的版本记录:仓内无 git 标签、无 CHANGELOG/RELEASES 文件"。
+4. **回填不产生可查的"战绩"**:`SELECT origin, COUNT(*) FROM issue WHERE project_id='<pid>' GROUP BY origin;` 应见 `backfill` 档非零(对应真实远端 issue #78/#81);`sqlite3 <db> "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_credit';"` 应为空结果——库里根本没有这张表可查(02 篇 §2.1 已定),"干没干成"改看远端 MR 状态,不是查库。
 5. **对账**:改动一个已铺底文件的一个字符后跑 `ReconcileStandard`,该文件应归类 `HumanEdited`;对账无直接对应表(纯读派生),用界面截图+手工核对指纹字符串读回。
-6. **老库升级不崩**:对没有 `.bw/managed.toml` 概念的存量库开新版程序,`PRAGMA table_info(issue);` 应看到 02 篇定义的新列全部存在——延续 CLAUDE.md「schema 迁移双守卫」纪律,在这批具体数据上再核一遍。
+6. **新库 schema 一次到位,不涉及老库迁移**:V4 不给存量库加列(02 篇 §2.7 已定:新库用新文件名,`schema.sql` 直接建全)——`sqlite3 <db> "PRAGMA table_info(issue);"` 对一个全新建出的 V4 库应直接看到 02 篇定义的全部 8 个扩展列,不依赖任何 `add_column_if_missing` 参与;这条验收不涉及"给存量库开新版程序"这类迁移场景(那是试点起才恢复的守卫,见 02 篇 §3.2)。
 
 ---
 
 ## 6 · 开放问题(≤5)
 
-1. **`origin='backfill'` 的 issue 后续被真实推进后,界面"回填活数"会不会随时间减少、需不需要另一个"曾经是回填"的历史标记**——本篇处理(2.4)是 `origin` 永久不改、真实 settle 照常记战绩,数据层自洽,但总览⑧块的"远端 issue 累计"会不会因此让人觉得数字对不上直觉,需要用户判断要不要加一层区分。
+1. **`origin='backfill'` 的 issue 后续被真实推进后,界面上还要不要区分"这条曾经是回填的"**——本篇处理(2.4)是 `origin` 永久不改、真实进展看远端 MR 合没合入(没有战绩表可记,也没有"记/不记"的选择),数据层自洽,但总览"远端 issue 累计"这类计数会不会因此让人觉得数字对不上直觉,需要用户判断要不要在界面上加一层区分。
 2. **目录黑名单(vendor/node_modules 这类噪声)要不要做成项目可配置**,还是本篇给的默认硬编码清单(`vendor/`、`node_modules/`、`dist/`、`build/`、`target/`、`.venv/`)先够用。
 3. **决策记录(`docs/decisions/`)回填要不要留一个未来钩子**——本轮明确不做,但值不值得在 schema 或文件格式上预留位置,避免以后要做时多一次迁移。
 4. **codehub 侧「已关闭 issue / 已合并 MR」明细列表命令尚未在真实 codehub 环境验证**——谁来协调第一次真实验证,是定稿后立刻做,还是等真有 codehub 老项目接入时再做。
