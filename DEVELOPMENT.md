@@ -23,6 +23,15 @@ crates/
   ui/           纯函数 selector + ViewModel(state → 可渲染 DTO)
   app-desktop/  真壳(Dioxus 0.7,hard-pin =0.7.9):kernel 桥(独立 tokio 线程)+ 各屏
                 (wall/create/op/各 Hub)+ 深链 + BW_FLOW 进程内点击脚本
+
+  ── 以下两个是 V4 新起的,和上面的 V3 链条并存、互不影响 ──
+  bw-v4/        V4 内核:四张表的本机库(project/issue/claude_conversation/app_meta)+
+                仓文件解析(PROJECT.md、.bw/*.toml、docs/plan/周文件、docs/releases.md)+
+                现算推导(健康灯、指标读数、周列表)+ 命令/事件总线 + 标准件铺设。
+                复用 bw-core 与 bw-engine,不依赖 bw-store / bw-app。
+  app-shell/    V4 新壳(Dioxus 0.7):九屏(项目墙/总览/计划/会话/通知/配置/知识库/
+                落地/设置)+ theme(视觉沿用 V3)+ bridge(独立 tokio 线程跑 bw-v4)。
+                二进制名 `bw-v4-dev`,和老壳 `builders-workbench` 各跑各的。
 ```
 
 `default-members` 只含无头内核 + ui,故日常 `cargo check` **不编译 Dioxus**;桌面壳需显式 `-p app-desktop`。Web 版是「以后也许」——架构靠 wasm32 keepalive 与 `Store` trait 留着门,仓里没有 app-web crate。
@@ -31,7 +40,12 @@ crates/
 
 ```bash
 cargo check -p bw-app             # 日常最快的编译检查(内核+应用,不编 Dioxus)
-cargo run -p app-desktop          # 启动桌面应用(BW_DB=path 可覆盖数据库位置)
+cargo run -p app-desktop          # 启动 V3 桌面应用(BW_DB=path 可覆盖数据库位置)
+
+# V4 新壳(和老壳并存,库文件也是另一份 workbench-v4.db):
+cargo check -p bw-v4              # V4 内核日常编译检查(不编 Dioxus,最快)
+cargo run -p app-shell            # 启动 V4 新壳(二进制名 bw-v4-dev)
+cargo run -p bw-v4 --example real_demo_v4 -- <db> <workspaces-root>   # V4 指挥器:不开界面跑完主环
 
 # 提交前门禁(与 CI 完全一致,一条不能少):
 cargo fmt --all --check
@@ -39,11 +53,16 @@ cargo clippy --workspace --exclude app-desktop -- -D warnings
 cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features
 cargo check -p ui --target wasm32-unknown-unknown
 ./scripts/guard-kernel-ui-free.sh
+./scripts/guard-no-cross-screen-import.sh      # V4:一屏一模块,屏与屏之间不互相 import
+./scripts/guard-file-lines.sh                  # V4:单文件 1500 行硬上限、600 行软提醒
 cargo check -p app-desktop
-cargo test --workspace --exclude app-desktop   # CI 也跑;现存内联测试要过(见「怎么验证」)
+cargo check -p app-shell
+cargo test --workspace --exclude app-desktop --exclude app-shell   # CI 也跑;现存内联测试要过(见「怎么验证」)
 ```
 
 **环境变量**:`BW_DB`(数据库路径;默认 macOS `~/Library/Application Support/BuildersWorkbench/workbench.db`)· `BW_OPEN=<项目名>` + `BW_PANEL=progress|workflow|routine|artifact|version|issues`(启动深链到指定项目/面板,stderr 打 `[BW_OPEN]` 即渲染证明)· `BW_HUB=skill|agent|workflow|cron|connector|knowledge|activity|notify|settings` / `BW_SEL=skill|agent|workflow|cron|connector:<uuid>`(深链到 Hub / 组件详情)· `BW_WORKSPACES`(工作区根)· `BW_CLAUDE_BIN`(覆盖 `claude` 二进制路径)· `BW_FLOW=<command-file>`(进程内点击/断言脚本,验收流用)。
+
+**V4 新壳的环境变量**(自成一套,别和上面那套混用):`BW_DB`(默认 `~/Library/Application Support/BuildersWorkbench/workbench-v4.db`)· `BW_OPEN=<项目 slug 或名字>` + `BW_PANEL=overview|plan|session|notify|config|kb` · `BW_VIEW=onboard|settings`(直接开落地页/设置页)· `BW_WORKSPACES`。启动时 stderr 打两行:`[BW_OPEN] …`(深链解析结果)与 `[BW_BOOT] projects=N db=…`(界面已渲染的证明)。
 
 ## headless 例子(不开界面直接驱动内核;每个都有现役用途)
 
@@ -57,6 +76,7 @@ cargo test --workspace --exclude app-desktop   # CI 也跑;现存内联测试要
 | `import_skill_library` / `import_skill_package` / `import_ecc_agents` | 灌库:从目录/单包/ECC 仓导入技能与队友(**应用内无导入界面,这是唯一路径**) | 各文件头有用法 |
 | `sync_metrics_files` / `render_metrics` | 把各项目 `.bw/metrics.toml` 同步进库 / 把库里指标渲染成一页 HTML(配 `docs/skills/metrics-render`) | 各文件头有用法 |
 | `build_aihot_fixture` | 从真实日常库再生 `examples/aihot/bw-aihot.db` 样板间 | 见 `examples/README.md` |
+| `real_demo_v4`(bw-v4) | **V4 指挥器**:建项目 → 铺标准件 → 起周计划 → 建活 → ▶跑(mock 交互执行器)→ 代人点完成 → 发版 → 现算健康灯;产出 evidence JSON。不碰 claude、不碰网关;同库重跑幂等 | `cargo run -p bw-v4 --example real_demo_v4 -- <db> <workspaces-root> [--only <slug>]` |
 | `pty_smoke`(bw-engine) | 走 ▶跑 同一条 `run_skill_pty` 路径起 `bash -c 'echo pty-ok'` 读回;`-- --teardown` 验证丢输入端后进程组被连坐;`-- --abort` 验证 `JoinHandle::abort()` 丢弃 future 后子进程照样被收尾(bw-app 中止走的就是这条) | `cargo run -p bw-engine --example pty_smoke [-- --teardown\|--abort]` |
 
 2026-08-17 前 `crates/bw-app/examples/` 有 41 个例子,29 个是历史批次的一次性验证脚本(「已发货 commit 的收据」),已删,git 历史可找回。

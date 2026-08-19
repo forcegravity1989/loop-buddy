@@ -33,15 +33,28 @@
 # 用法:cd 到目标 worktree,跑 ./scripts/point-bwdev-here.sh,然后:
 #   BW_SEL=skill:<uuid> ~/Applications/BWDev.app/Contents/MacOS/bwdev-launcher &
 # 配合 computer-use screenshot 使用。
+#
+# 带一个可选参数选壳(默认 v3):
+#   ./scripts/point-bwdev-here.sh v3   # 老壳 app-desktop(builders-workbench)
+#   ./scripts/point-bwdev-here.sh v4   # 新壳 app-shell(bw-v4-dev)
+# 两个壳共用同一个 BWDev.app 身份(见上面第 1 条:新造的 app 认不出来),
+# 所以同一时刻只能接一个;换壳就再跑一次这个脚本。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo build -p app-desktop
+SHELL_KIND=${1:-v3}
+case "$SHELL_KIND" in
+  v3) PKG=app-desktop; BIN=builders-workbench ;;
+  v4) PKG=app-shell;   BIN=bw-v4-dev ;;
+  *) echo "用法:$0 [v3|v4]" >&2; exit 2 ;;
+esac
+
+cargo build -p "$PKG"
 
 APP=~/Applications/BWDev.app
-cp target/debug/builders-workbench "$APP/Contents/MacOS/bwdev-launcher"
+cp "target/debug/$BIN" "$APP/Contents/MacOS/bwdev-launcher"
 chmod +x "$APP/Contents/MacOS/bwdev-launcher"
 codesign --sign - --force --deep "$APP" >/dev/null 2>&1
 
-echo "[point-bwdev-here] BWDev.app 现在是这个 worktree 的最新构建:$(pwd)"
+echo "[point-bwdev-here] BWDev.app 现在接的是 $SHELL_KIND 壳($PKG),来自:$(pwd)"
 echo "[point-bwdev-here] 用法示例:BW_SEL=skill:<uuid> $APP/Contents/MacOS/bwdev-launcher &"
