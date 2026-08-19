@@ -24,7 +24,10 @@
 #![forbid(unsafe_code)]
 
 pub mod derive;
+pub mod git;
+pub mod isoweek;
 pub mod model;
+pub mod repo;
 pub mod store;
 
 pub use model::{Issue, IssueKind, IssueOrigin, IssueStatus, Project, Signal};
