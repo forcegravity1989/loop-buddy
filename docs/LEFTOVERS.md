@@ -50,7 +50,23 @@
 | **减负-20** | 项目级 `allow_commands` 是死旋钮（只被已删的一次性执行器消费；交互式恒 `--dangerously-skip-permissions`） | V3 可排 | 删 UI 开关 + `Command::SetWorkspace.allow_commands` + `ProjectRow.allow_commands`；列删除走 `drop_column_if_present` |
 | **减负-21** | bw-store 内联测试 `sync_connectors_file_empty_is_noop` 偶发失败（`tempdb_path()` 进程 id + 纳秒撞名） | 低 | 改 `tempfile::NamedTempFile` 或原子计数器后缀 |
 
-已关闭、已接受的条目仍在下方史实里，表里不重复。**减负-N** 系列是 2026-08-17/18 减负重构会话从 `docs/BACKLOG.md` 并入的（该文件已删，序号沿用；1、2 两条已做，收据在下方「减负重构收据」）。
+| **V4A-1** | 名片改不了:`EditProjectCard` / `SetProjectChat` 两条命令内核里有,总览的名片块上没有编辑入口 | V4 可排 | 名片块加编辑态;改动走轻量活等评审(命令已经是这个语义) |
+| **V4A-2** | 看板只能跨列拖,同一列内拖动排序没接(`ReorderIssue` 命令内核里有,界面没调用) | V4 可排 | 卡片之间加落点;`sort_order` 取前后中点,已实现 |
+| **V4A-3** | 活的详情面板改不了 workflow(`SetIssueWorkflow` 命令内核里有,界面没调用) | V4 可排 | 详情面板加一个下拉,选项来自项目仓 `.claude/skills/` |
+| **V4A-4** | 规范铺底只做了第 1 步(buddy 自己写核心件)。第 2 步「合并调整」(把 buddy 的固定章节并进已有 AGENTS.md / CLAUDE.md)与第 3 步「历史回填」都没做 | B / C 刀 | 那张活的说明里已如实列出没跑的步骤,不假装做过 |
+| **V4A-5** | 健康三判据里「指标见红」这一条恒为不成立 —— 周计划文件里的读数还没和 `.bw/metrics.toml` 的 target 比过 | V4 可排 | 接上 target 的迷你 DSL(`≥5` `≤24h` 这类)比较;在此之前灯只可能是绿/黄/灰,不会因为指标变红 |
+| **V4A-6** | 预置技能包只随出厂了 buddy 自己的九个方法论包;三张运作 workflow 的正本与业界包(mattpocock-skills / superpowers)还没进 `standard/06-defaults/` | B / C 刀 | 三张运作 workflow 是 B 刀的正事;业界包要先定「随出厂还是本机库」 |
+| **V4A-7** | 所有 ▶跑 都走自我标注的替身执行器(产出带【mock】) | B 刀 | 内嵌终端 + 真 `claude` 是 B 刀;现在接一个假的真执行器只会让人以为它真跑了 |
+| **V4A-8** | 会话屏只如实列了会话记录,没有内嵌终端 / 文件树 / diff 页签 | B 刀 | 屏上已写明「还没建」,没放占位终端框 |
+| **V4A-9** | 通知屏没有「合入并完成」按钮 | B 刀 | 现在只列「评审中」与「阻塞」两组 |
+| **V4A-10** | 知识库只有仓内 `docs/` 文档树 + Markdown 渲染,没有代码图谱页签与资产页签 | C 刀 | |
+| **V4A-11** | 远端一条没接:活是本机建的,`remote_number` 恒空;发版、排期都不打远端标签 | C 刀及以后 | `.bw/project.toml` 里的远端地址目前只用来显示与探活 |
+| **V4A-12** | Windows 安装包 `0.4.0-v4` 没打;新壳只在 macOS 上跑过 | C 刀 | 拖拽在 Windows 上要 `with_disable_drag_drop_handler(true)`,代码里已经这么写,未真机验证 |
+| **V4A-13** | 旧壳 `app-desktop` 与旧库 `workbench.db` 原样留着,删除判据(design/01 §2.11)还没核对 | C 刀 | 这一刀只保证旧壳继续编译,一行没改 |
+| **V4A-14** | `welink-cli` 探活恒为「还没接实现」(灰,不是红) | 试点期 | 留位是有意的:没接的东西显示灰,不显示红也不显示绿 |
+
+
+已关闭、已接受的条目仍在下方史实里，表里不重复。**减负-N** 系列是 2026-08-17/18 减负重构会话从 `docs/BACKLOG.md` 并入的（该文件已删，序号沿用；1、2 两条已做，收据在下方「减负重构收据」）。**V4A-N** 系列是 V4 A 刀(骨架 + 数据 + 主环)交付时如实登记的没做完的部分,代号已进 `code-schemes.md`。
 
 ### 归正（迁入时）
 
