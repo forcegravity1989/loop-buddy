@@ -817,6 +817,8 @@ fn write_mock_metrics_toml(cwd: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     use super::*;
     use bw_core::playbook::PlaybookCtx;
 
@@ -1103,10 +1105,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "bw-interactive-test-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            // 进程内自增,不用时间戳:并行跑的两个测试可能在同一纳秒取到同一个
+            // 名字,于是共用一个临时目录、互相看见对方写的文件(这就是
+            // LEFTOVERS 里「减负-21」那条偶发失败的根因)。
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir

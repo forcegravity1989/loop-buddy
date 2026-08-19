@@ -48,7 +48,7 @@
 | **减负-18** | `session` 表只剩壳（正文 `message` 已删）：左栏「阶段记录」仍按 `SessionId` 索引、`RunIssue{session,id}` / `workflow_run.session_id` 带一个几乎无意义的会话 id | V4 一并处理（左栏 V4 重做） | 左栏改按 Issue / `claude_conversation` 索引；`RunIssue` 去 `session` 参数；`workflow_run.session_id` 停写；`session` 表 DROP（老库迁移）。P11 ② 同根 |
 | **减负-19** | `WorkflowSpec.phases` / `phase_prompts` / `LoopConfig` 只剩展示用途；`stage_workflow_with_playbook` 每次 ▶跑 仍渲染整套 `phase_prompts`（无人读）；`PhaseMeta.reject_to_phase`、`LoopConfig.retries/max_iter` 无消费者；Hub 卡「运行战绩」按 `workflow_run.workflow_id` 统计，而 Issue 运行的 spec id 每次新造，永远对不上 | V4 一并处理（Workflow 库 V4 不带） | `WorkflowSpec` 收成「名字 + 目标 + 阶段名 + 技能引用」；`rendered_phase_prompts` 删；老库列保留 |
 | **减负-20** | 项目级 `allow_commands` 是死旋钮（只被已删的一次性执行器消费；交互式恒 `--dangerously-skip-permissions`） | V3 可排 | 删 UI 开关 + `Command::SetWorkspace.allow_commands` + `ProjectRow.allow_commands`；列删除走 `drop_column_if_present` |
-| **减负-21** | bw-store 内联测试 `sync_connectors_file_empty_is_noop` 偶发失败（`tempdb_path()` 进程 id + 纳秒撞名） | 低 | 改 `tempfile::NamedTempFile` 或原子计数器后缀 |
+| **减负-21** | ~~bw-store 内联测试 `sync_connectors_file_empty_is_noop` 偶发失败（`tempdb_path()` 进程 id + 纳秒撞名）~~ | ✅ 已修（2026-08-19，V4 A 刀顺手） | 五处临时目录/库名的时间戳换成进程内原子自增（`bw-store/sqlite.rs`、`bw-engine` 的 connectors_file / project_file / interactive_cli、`bw-app/hook_listener.rs`）。同根的还有 `bw-engine` 那几个 `connectors_file::tests`，一并修了；连跑八轮门禁不再抖 |
 
 | **V4A-1** | 名片改不了:`EditProjectCard` / `SetProjectChat` 两条命令内核里有,总览的名片块上没有编辑入口 | V4 可排 | 名片块加编辑态;改动走轻量活等评审(命令已经是这个语义) |
 | **V4A-2** | 看板只能跨列拖,同一列内拖动排序没接(`ReorderIssue` 命令内核里有,界面没调用) | V4 可排 | 卡片之间加落点;`sort_order` 取前后中点,已实现 |

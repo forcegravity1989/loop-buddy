@@ -3345,6 +3345,8 @@ fn conversation_row(r: sqlx::sqlite::SqliteRow) -> Result<ClaudeConversation> {
 
 #[cfg(test)]
 mod tests {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     use super::*;
     use crate::{ConnectorDefSync, ConnectorsFileSync, NewProject};
 
@@ -3544,10 +3546,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "bw-store-test-{}-{}.db",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            // 进程内自增,不用时间戳:并行跑的两个测试可能在同一纳秒取到同一个
+            // 名字,于是共用一个库文件、互相看见对方写的行(这就是 LEFTOVERS 里
+            // 「减负-21」那条偶发失败的根因)。
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         // Remove any stale file from a previous run.
         let _ = std::fs::remove_file(&dir);
