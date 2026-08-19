@@ -118,7 +118,8 @@ fn board_head(p: &ProjectVm, bridge: &Bridge) -> Element {
     let pid = p.id;
     let week = p.viewing_week.clone();
     let week2 = p.viewing_week.clone();
-    let version = p.card.current_version.clone();
+    let version = p.card.current_version_raw.clone();
+    let can_release = !next_version(&version).is_empty();
     let done_ids: Vec<IssueId> = p
         .board
         .columns
@@ -142,7 +143,8 @@ fn board_head(p: &ProjectVm, bridge: &Bridge) -> Element {
             }
             button {
                 style: "{theme::btn_ghost()}",
-                disabled: done_ids.is_empty(),
+                // 在研版本填了、而且本周真有完成的活,才发得了版。
+                disabled: done_ids.is_empty() || !can_release,
                 onclick: move |_| b_rel.cmd(Command::CutRelease {
                     project_id: pid,
                     version: next_version(&version),
@@ -214,15 +216,16 @@ fn draft_confirm(p: &ProjectVm, bridge: &Bridge) -> Element {
     }
 }
 
-/// `v0.3` → `v0.4`。认不出格式就原样返回 —— 不猜一个版本号出来。
+/// `v0.3` → `v0.4`。**认不出格式就返回空**,由调用方把按钮置灰 —— 不猜一个
+/// 版本号出来,更不能把「(待填)」这种给人看的占位文案当版本号发出去。
 fn next_version(cur: &str) -> String {
     let t = cur.trim().trim_start_matches('v');
-    match t.rsplit_once('.') {
-        Some((head, tail)) => match tail.parse::<u32>() {
-            Ok(n) => format!("v{head}.{}", n + 1),
-            Err(_) => cur.to_string(),
-        },
-        None => cur.to_string(),
+    let Some((head, tail)) = t.rsplit_once('.') else {
+        return String::new();
+    };
+    match tail.parse::<u32>() {
+        Ok(n) if !head.is_empty() => format!("v{head}.{}", n + 1),
+        _ => String::new(),
     }
 }
 

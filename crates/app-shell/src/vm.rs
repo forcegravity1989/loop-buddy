@@ -20,6 +20,11 @@ pub struct Vm {
     pub settings: SettingsVm,
     /// 最近一条后台动作的回执(建活、铺底、发版这类)。
     pub note: Option<String>,
+    /// 仓文件读不动或者解析炸了的实话。**不退回默认值假装文件不存在** ——
+    /// `.bw/*.toml` 是 deny-unknown-fields 的,一个手误的键就让整份文件读不出
+    /// 来,退回默认值的表现是「名片全是(待填)、配置屏说你还没铺过规范件」,
+    /// 而真相是文件在、只是有一行写错了。
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -84,7 +89,12 @@ pub struct CardVm {
     pub benchmark: String,
     pub north_star: String,
     pub remote: String,
+    /// 在研版本,**显示用**:空的时候是「(待填)」。
     pub current_version: String,
+    /// 在研版本,**机读用**:空就是空。发版这类要把它当负载送进命令的地方
+    /// 只能用这一个 —— 把「(待填)」当版本号发出去,发版记录里就多一行叫
+    /// 「(待填)」的版本,而且按版本号幂等,这个项目以后再也发不出版。
+    pub current_version_raw: String,
     pub standard_version: String,
     /// 项目群。没配就是「未配」。
     pub chat: String,

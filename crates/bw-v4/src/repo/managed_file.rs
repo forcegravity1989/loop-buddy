@@ -97,9 +97,15 @@ pub fn write(workspace: &Path, f: &ManagedFile) -> Result<String> {
     );
     for e in &f.files {
         s.push_str("\n[[file]]\n");
-        s.push_str(&format!("path        = \"{}\"\n", e.path));
-        s.push_str(&format!("version     = \"{}\"\n", e.version));
-        s.push_str(&format!("fingerprint = \"{}\"\n", e.fingerprint));
+        s.push_str(&format!("path        = {}\n", super::toml_string(&e.path)));
+        s.push_str(&format!(
+            "version     = {}\n",
+            super::toml_string(&e.version)
+        ));
+        s.push_str(&format!(
+            "fingerprint = {}\n",
+            super::toml_string(&e.fingerprint)
+        ));
     }
     write_file(workspace, REL_PATH, &s)?;
     Ok(s)

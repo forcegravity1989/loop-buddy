@@ -240,9 +240,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 收尾提交:周计划与发版记录是铺底之后才写的,这里一并进仓,免得下一次
     // 跑的时候被上一轮的残留改动混进提交里。
-    let tail = bw_v4::git::commit_all(&workspace, "docs(bw): 本周计划与发版记录(指挥器)")
-        .await
-        .unwrap_or(false);
+    let tail = bw_v4::git::commit_paths(
+        &workspace,
+        &[
+            "docs/plan".to_string(),
+            "docs/releases.md".to_string(),
+            ".bw".to_string(),
+        ],
+        "docs(bw): 本周计划与发版记录(指挥器)",
+    )
+    .await
+    .unwrap_or(false);
     say(
         &mut log,
         &format!(

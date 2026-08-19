@@ -263,6 +263,11 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
 
                 let mut vm = vm_build::build(&app, &ui).await;
                 eprintln!("[BW_BOOT] projects={} db={db}", vm.projects.len());
+                // 仓文件读不动的实话也打进 stderr:界面上有横幅,命令行验收
+                // 也看得见,不用靠截图。
+                for w in &vm.warnings {
+                    eprintln!("[BW_WARN] {w}");
+                }
                 let _ = vm_tx.send(vm.clone());
 
                 while let Some(req) = rx.recv().await {

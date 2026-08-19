@@ -192,13 +192,21 @@ pub async fn probe(workspace: &Path) -> BootstrapProbe {
 }
 
 /// 这张活的标题:固定前缀 + 命中项后缀。写死进标题,是「打算跑什么」的快照。
-pub fn issue_title(probe: &BootstrapProbe) -> String {
-    let mut t = format!("规范铺底 v{}", standard::version());
+/// 铺底那张活的标题。**只跟规范版本走,不跟探测结果走** —— 它同时是建活的
+/// 幂等键,跟着探测结果变的话重跑就会多建一张活(第一次铺底自己写了
+/// `CLAUDE.md` 并提交,第二次探测结论就不一样了)。
+pub fn issue_title() -> String {
+    format!("规范铺底 v{}", standard::version())
+}
+
+/// 探测到需要跑哪几步 —— 这句话写进活的正文,不写进标题。
+pub fn planned_steps(probe: &BootstrapProbe) -> String {
+    let mut steps = vec!["写核心件"];
     if probe.has_agent_docs {
-        t.push_str(" · 含合并调整");
+        steps.push("合并调整(仓里已有 AGENTS.md / CLAUDE.md)");
     }
     if probe.has_history {
-        t.push_str(" · 含历史回填");
+        steps.push("历史回填(这个仓已经有历史了)");
     }
-    t
+    steps.join("、")
 }

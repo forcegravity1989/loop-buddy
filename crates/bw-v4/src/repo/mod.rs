@@ -76,3 +76,28 @@ pub(crate) fn parse_toml<T: serde::de::DeserializeOwned>(rel: &str, raw: &str) -
         source: e,
     })
 }
+
+/// 把一个字符串写成合法的 TOML basic string(带引号)。
+///
+/// 接入页的「想做什么 / 北极星」是多行输入框:粘一段带换行的文字进去,不转义
+/// 就写出一份非法 TOML,之后每次读都报错 —— 界面上看起来就是「这个项目什么
+/// 都没有」。控制字符同理。
+pub fn toml_string(v: &str) -> String {
+    let mut out = String::with_capacity(v.len() + 2);
+    out.push('"');
+    for c in v.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\u{:04X}", c as u32))
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}

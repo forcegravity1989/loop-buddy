@@ -15,6 +15,22 @@ use super::vm_panels::{
     build_board, build_config, build_kb, build_metrics, build_sessions, build_weeks,
 };
 
+/// 读一份仓文件:读不出来就把原话记进 `warnings`,再退回默认值。
+/// 「退回默认值」本身没问题,**不说话**才是问题。
+pub(super) fn read_or_warn<T>(
+    what: &str,
+    r: Result<Option<T>, bw_v4::repo::RepoFileError>,
+    warnings: &mut Vec<String>,
+) -> Option<T> {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            warnings.push(format!("{what} 读不出来:{e}"));
+            None
+        }
+    }
+}
+
 /// 壳这边的纯导航状态(打开了哪个项目、在看哪一周)。不进库。
 pub struct UiState {
     pub open: Option<ProjectId>,
@@ -123,11 +139,17 @@ pub fn note_of(events: &[Event]) -> Option<String> {
 pub async fn build(app: &App, ui: &UiState) -> Vm {
     let store = app.store();
     let projects = store.projects().await.unwrap_or_default();
+    let mut warnings: Vec<String> = Vec::new();
 
     let mut cards = Vec::with_capacity(projects.len());
     for p in &projects {
         let ws = app.workspace_of(p.id).await.unwrap_or_default();
-        let file = project_file::read(&ws).ok().flatten().unwrap_or_default();
+        let file = read_or_warn(
+            &format!("{} 的 .bw/project.toml", p.slug),
+            project_file::read(&ws),
+            &mut warnings,
+        )
+        .unwrap_or_default();
         let week = bw_v4::isoweek::current_week();
         let in_week = store.issues_in_week(p.id, &week).await.unwrap_or_default();
         cards.push(ProjectCardVm {
@@ -148,7 +170,7 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
 
     let open = match ui.open {
         None => None,
-        Some(id) => build_project(app, id, ui).await,
+        Some(id) => build_project(app, id, ui, &mut warnings).await,
     };
 
     Vm {
@@ -163,6 +185,7 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
             claude_binary: bw_engine::resolve_claude_binary(None),
         },
         note: ui.note.clone(),
+        warnings,
     }
 }
 
@@ -205,11 +228,17 @@ pub(super) fn probe_env() -> Vec<ToolProbeVm> {
     ]
 }
 
-async fn build_project(app: &App, id: ProjectId, ui: &UiState) -> Option<ProjectVm> {
+async fn build_project(
+    app: &App,
+    id: ProjectId,
+    ui: &UiState,
+    warnings: &mut Vec<String>,
+) -> Option<ProjectVm> {
     let store = app.store();
     let p = store.project(id).await.ok()??;
     let ws = app.workspace_of(id).await.ok()?;
-    let file = project_file::read(&ws).ok().flatten().unwrap_or_default();
+    let file =
+        read_or_warn(".bw/project.toml", project_file::read(&ws), warnings).unwrap_or_default();
     let issues = store.issues(id).await.unwrap_or_default();
     let current_week = bw_v4::isoweek::current_week();
     let viewing_week = if ui.viewing_week.is_empty() {
@@ -222,8 +251,16 @@ async fn build_project(app: &App, id: ProjectId, ui: &UiState) -> Option<Project
     let inputs = bw_v4::app::collect_health_inputs(&ws, &current_week).await;
     let derived = bw_v4::derive::derive_project_health(&inputs);
 
-    let policy = issue_policy_file::read(&ws).ok().flatten();
-    let plan = week_plan_file::read(&ws, &viewing_week).ok().flatten();
+    let policy = read_or_warn(
+        ".bw/issue-policy.toml",
+        issue_policy_file::read(&ws),
+        warnings,
+    );
+    let plan = read_or_warn(
+        &format!("docs/plan/{viewing_week}.md"),
+        week_plan_file::read(&ws, &viewing_week),
+        warnings,
+    );
 
     Some(ProjectVm {
         id,
@@ -235,6 +272,7 @@ async fn build_project(app: &App, id: ProjectId, ui: &UiState) -> Option<Project
             north_star: or_blank(&file.opportunity),
             remote: remote_label(&p),
             current_version: or_blank(&file.current_version),
+            current_version_raw: file.current_version.clone(),
             standard_version: or_blank(&file.standard_version),
             chat: match &file.chat {
                 None => "未配".into(),

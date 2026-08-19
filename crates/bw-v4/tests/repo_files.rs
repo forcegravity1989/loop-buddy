@@ -318,3 +318,26 @@ fn a_pipe_in_the_title_does_not_shift_every_column() {
     assert_eq!(a.metric_key, "本周合入活数");
     assert_eq!(a.remote_number, 7);
 }
+
+/// 接入页的「想做什么 / 北极星」是多行输入框。粘一段带换行、带引号的文字
+/// 进去,写出来的 TOML 必须还读得回来 —— 读不回来的表现是「这个项目什么都
+/// 没有」,而不是一句报错。
+#[test]
+fn a_multiline_brief_survives_a_write_read_round_trip() {
+    let dir = tempdir("toml-escape");
+    let f = project_file::ProjectFile {
+        name: "带\"引号\"的项目".into(),
+        kind: String::new(),
+        brief: "第一行\n第二行\t带制表符\n还有一个反斜杠 \\".into(),
+        benchmark: "Linear".into(),
+        opportunity: "北极星\n也是多行的".into(),
+        standard_version: "4.0".into(),
+        current_version: "v0.1".into(),
+        chat: None,
+    };
+    project_file::write(&dir, &f).expect("写得出去");
+    let back = project_file::read(&dir).expect("读得回来").expect("文件在");
+    assert_eq!(back.name, f.name);
+    assert_eq!(back.brief, f.brief);
+    assert_eq!(back.opportunity, f.opportunity);
+}

@@ -101,5 +101,5 @@ pub fn render(f: &ProjectFile) -> String {
 }
 
 fn quote(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    super::toml_string(s)
 }

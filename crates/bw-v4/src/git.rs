@@ -21,7 +21,12 @@ pub enum GitError {
     BadWeek(String),
 }
 
-/// 一周的 git 读数。每个字段旁边的注释就是复算它的命令。
+/// 一周的 git 读数。**每个字段旁边的注释就是真跑的那条命令** —— 界面上的
+/// 每个数字都要能在终端一字不差地复算出来,这是纪律不是修辞。
+///
+/// 特别地:这里跑的是当前分支,**不带 `--all`**。带上 `--all` 会把
+/// remote-tracking 分支和别的 worktree 的提交都算进「本周有没有真实提交」,
+/// 一次 `git fetch` 就能把健康灯点亮 —— 那就成了可以造假的数字。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WeekStats {
     pub week: String,
@@ -80,7 +85,6 @@ pub async fn week_stats(workspace: &Path, week: &str) -> Result<WeekStats, GitEr
         workspace,
         &[
             "log",
-            "--all",
             &format!("--since={since}"),
             &format!("--until={until}"),
             "--pretty=format:%H",
@@ -91,7 +95,6 @@ pub async fn week_stats(workspace: &Path, week: &str) -> Result<WeekStats, GitEr
         workspace,
         &[
             "log",
-            "--all",
             "--merges",
             &format!("--since={since}"),
             &format!("--until={until}"),
@@ -103,7 +106,6 @@ pub async fn week_stats(workspace: &Path, week: &str) -> Result<WeekStats, GitEr
         workspace,
         &[
             "log",
-            "--all",
             &format!("--since={since}"),
             &format!("--until={until}"),
             "--numstat",
@@ -153,11 +155,26 @@ pub async fn is_dirty(workspace: &Path) -> Result<bool, GitError> {
         .is_empty())
 }
 
-/// 把仓里的改动提交上去(铺底第 1 步、发版本这类 buddy 自己写仓的动作)。
+/// 提交**这次 buddy 自己写过的那几个文件**(铺底第 1 步、发版本这类动作)。
 /// 没有改动就返回 `Ok(false)`,不造一个空提交。
-pub async fn commit_all(workspace: &Path, message: &str) -> Result<bool, GitError> {
-    git(workspace, &["add", "-A"]).await?;
-    if !is_dirty(workspace).await? {
+///
+/// 只 add 点名的路径,不用 `add -A`:用户点「规范铺底」的时候工作区多半是
+/// 脏的,`add -A` 会把他手上没写完的改动一起打包提交,commit message 还写
+/// 着「规范铺底」—— 那是在替他做他没同意的事。
+pub async fn commit_paths(
+    workspace: &Path,
+    paths: &[String],
+    message: &str,
+) -> Result<bool, GitError> {
+    if paths.is_empty() {
+        return Ok(false);
+    }
+    for p in paths {
+        git(workspace, &["add", "--", p]).await?;
+    }
+    // 只看**暂存区**有没有东西:工作区别的地方脏不脏与这次提交无关。
+    let staged = git(workspace, &["diff", "--cached", "--name-only"]).await?;
+    if staged.trim().is_empty() {
         return Ok(false);
     }
     git(workspace, &["commit", "-m", message]).await?;

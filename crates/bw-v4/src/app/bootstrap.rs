@@ -27,11 +27,17 @@ impl App {
         let file = project_file::read(&ws)?.unwrap_or_default();
 
         let probe = boot::probe(&ws).await;
-        let title = boot::issue_title(&probe);
+        // 幂等键是标题,所以标题**只能是「规范铺底 v<版本>」**,不能随探测结果
+        // 变。之前把「· 含合并调整」拼进标题,而第一次铺底自己写了 CLAUDE.md、
+        // 提交之后第二次探测结论就变了 —— 标题跟着变,幂等失效,重跑多建一张
+        // 活。探测到了什么写进正文,不写进标题。
+        let title = boot::issue_title();
         let body = format!(
-            "探测结果:{}。\n\n本次执行:写核心件(buddy 自己写,不起 agent)。\
+            "探测结果:{}。\n\n本次要跑的步骤:{}\
+             \n\n本次执行:写核心件(buddy 自己写,不起 agent)。\
              \n\n还没跑的步骤如实列在这里,不假装做过:{}",
             probe.reasons.join("、"),
+            boot::planned_steps(&probe),
             pending_steps(&probe)
         );
 
@@ -89,8 +95,11 @@ impl App {
 
         // 空仓例外(仓是 buddy 自己建的)直接提交当前分支;否则也提交在当前
         // 分支上,开分支与 MR 是后面刀的事——这里如实回报提交没提交。
-        let committed = crate::git::commit_all(
+        // 只提交这次真写下去的那些件。用户点铺底的时候工作区多半是脏的,
+        // 把他手上没写完的改动一起打包进「规范铺底」那个提交是不能接受的。
+        let committed = crate::git::commit_paths(
             &ws,
+            &report.written,
             &format!("docs(bw): 规范铺底 v{} · 核心件", standard::version()),
         )
         .await

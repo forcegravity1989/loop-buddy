@@ -81,11 +81,22 @@ fn doc_row(path: &str, open: Option<&str>, bridge: &Bridge) -> Element {
 }
 
 /// 纯 Rust CommonMark 渲染。不联网、不加载外部样式。
+///
+/// **文档里内嵌的原始 HTML 一律丢掉。** 这些 Markdown 来自项目仓的 `docs/`
+/// —— agent 天天在往里写东西的地方。原样透传的话,一份带
+/// `<img src=x onerror=…>` 的文档打开就在桌面壳的 WebView 里执行 JS;一个
+/// 远程 `<img>` 就把「不联网」这句话变成假话。
 fn render_markdown(body: &str) -> Element {
+    use pulldown_cmark::Event;
     let mut opts = pulldown_cmark::Options::empty();
     opts.insert(pulldown_cmark::Options::ENABLE_TABLES);
     opts.insert(pulldown_cmark::Options::ENABLE_STRIKETHROUGH);
-    let parser = pulldown_cmark::Parser::new_ext(body, opts);
+    let parser = pulldown_cmark::Parser::new_ext(body, opts).filter_map(|e| match e {
+        // HTML 块整块丢掉;行内 HTML 降级成纯文本,让人看得见原文写了什么。
+        Event::Html(_) => None,
+        Event::InlineHtml(raw) => Some(Event::Text(raw)),
+        other => Some(other),
+    });
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, parser);
     rsx! {

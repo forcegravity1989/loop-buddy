@@ -35,7 +35,7 @@ pub fn read(workspace: &Path) -> Result<Option<StandardFile>> {
 }
 
 pub fn write(workspace: &Path, f: &StandardFile) -> Result<String> {
-    let q = |s: &str| format!("\"{}\"", s.replace('"', "\\\""));
+    let q = super::toml_string;
     let arr = |v: &[String]| {
         let items: Vec<String> = v.iter().map(|x| q(x)).collect();
         format!("[{}]", items.join(", "))

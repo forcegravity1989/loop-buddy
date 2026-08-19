@@ -181,6 +181,15 @@ fn Root() -> Element {
                     }
                 }
             }
+            // ── 仓文件读不动的实话 ─────────────────────────
+            for w in v.warnings.iter() {
+                div {
+                    key: "{w}",
+                    style: "padding:8px 18px;background:#F6E7E2;border-bottom:1px solid {theme::BORDER};\
+                            font-size:12px;color:{theme::ALERT_DEEP};",
+                    "{w}"
+                }
+            }
             // ── 后台动作回执 ───────────────────────────────
             if let Some(note) = &v.note {
                 div {

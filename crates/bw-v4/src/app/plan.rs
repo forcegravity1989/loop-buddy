@@ -32,9 +32,11 @@ impl App {
         // A 刀这一步是替身:真正的运作活①会起一次 agent 会话,和人一起复盘上
         // 周、更新指标、聊出本周目标与活。这里产出的草稿活标自带【mock】字样,
         // 绝不冒充真实对话的结论。
+        // 标题里必须带周号:建活是按标题幂等的,两周用同样的标题的话,第二周
+        // 确认草稿拿回的是上周那两张活的 id,一张新活都建不出来。
         let draft_titles = vec![
-            "【mock】本周第一件业务活(草稿,等人确认)".to_string(),
-            "【mock】本周第二件业务活(草稿,等人确认)".to_string(),
+            format!("【mock】{week} 第一件业务活(草稿,等人确认)"),
+            format!("【mock】{week} 第二件业务活(草稿,等人确认)"),
         ];
 
         let draft = WeekPlanDraft {
@@ -194,14 +196,24 @@ impl App {
         note: String,
         included: Vec<IssueId>,
     ) -> Result<Vec<Event>> {
+        let version = version.trim().to_string();
+        if version.is_empty() || version.contains('(') {
+            // 「(待填)」这类占位文案是给人看的,不是版本号。放进去的后果是
+            // 发版记录里多一行叫「(待填)」的版本,而且按版本号幂等 —— 这个
+            // 项目以后再也发不出版。
+            return Err(AppError::Refused(format!(
+                "「{version}」不像一个版本号。先在配置屏把在研版本填好再发版。"
+            )));
+        }
         let ws = self.workspace_of(project_id).await?;
         release_file::write_default_if_missing(&ws)?;
 
+        // **先写发版记录,写成了再回填版本号。** 反过来的话,用一个已经存在的
+        // 版本号再发一次,活会被打上这个标签(还覆盖掉它上一次的版本号),而
+        // 发版记录里根本没有这一次 —— 账就对不上了。
         let mut numbers = Vec::new();
         for id in &included {
-            let issue = self.issue_or_err(*id).await?;
-            self.store.set_issue_version(*id, &version).await?;
-            numbers.push(issue.number);
+            numbers.push(self.issue_or_err(*id).await?.number);
         }
 
         let today = crate::isoweek::today_local().to_string();
@@ -215,6 +227,11 @@ impl App {
                 origin: "人发".into(),
             },
         )?;
+        if rows_written {
+            for id in &included {
+                self.store.set_issue_version(*id, &version).await?;
+            }
+        }
 
         Ok(vec![Event::ReleaseCut {
             version,
