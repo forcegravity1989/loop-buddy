@@ -228,3 +228,133 @@ fn top_dirs(numstat: &str, n: usize) -> Vec<String> {
     v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     v.into_iter().take(n).map(|(d, _)| d).collect()
 }
+
+/// 一个改动文件:`git status --porcelain` 的一行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedFile {
+    /// 两个字母的状态码,如 `" M"`、`"??"`、`"A "`。
+    pub code: String,
+    pub path: String,
+}
+
+impl ChangedFile {
+    /// 给人看的一句话。**认不出的状态码原样回显**,不猜成「已修改」。
+    pub fn label(&self) -> String {
+        match self.code.trim() {
+            "M" => "改过".into(),
+            "A" => "新加".into(),
+            "D" => "删了".into(),
+            "R" => "改名".into(),
+            "??" => "没跟踪".into(),
+            other => other.to_string(),
+        }
+    }
+}
+
+/// 工作区里相对上次提交的改动(提没提交都算)。
+///
+/// 这不是 `diff_numstat` 能回答的问题——那个比较的是两个已经落库的提交,而这
+/// 里要的正是「还没提交的东西长什么样」。
+pub async fn changed_files(workspace: &Path) -> Result<Vec<ChangedFile>, GitError> {
+    let out = git(workspace, &["status", "--porcelain"]).await?;
+    Ok(out
+        .lines()
+        .filter(|l| l.len() > 3)
+        .map(|l| ChangedFile {
+            code: l[..2].to_string(),
+            // 改名行是 `R  old -> new`,取箭头右边那个,人关心的是新名字。
+            path: l[3..]
+                .rsplit(" -> ")
+                .next()
+                .unwrap_or(&l[3..])
+                .trim()
+                .to_string(),
+        })
+        .collect())
+}
+
+/// 单个文件的 diff 正文。没跟踪的文件 `git diff` 是空的——这时退回整份文件
+/// 内容并在头部标一行,而不是给人看一片空白。
+pub async fn file_diff(workspace: &Path, rel: &str) -> Result<String, GitError> {
+    let tracked = git(workspace, &["ls-files", "--error-unmatch", rel])
+        .await
+        .is_ok();
+    if !tracked {
+        let body = std::fs::read_to_string(workspace.join(rel)).unwrap_or_default();
+        return Ok(format!("(这个文件还没进版本控制,下面是它的全文)\n\n{body}"));
+    }
+    let staged = git(workspace, &["diff", "--cached", "--", rel])
+        .await
+        .unwrap_or_default();
+    let unstaged = git(workspace, &["diff", "--", rel])
+        .await
+        .unwrap_or_default();
+    let both = format!("{staged}{unstaged}");
+    if both.trim().is_empty() {
+        return Ok("(相对上次提交没有改动)".into());
+    }
+    Ok(both)
+}
+
+/// 分支与主干的领先/落后。拿不到就是拿不到(没有上游、没有主干),返回
+/// `None`,界面显示「—」,不显示 0。
+pub async fn ahead_behind(workspace: &Path, base: &str) -> Option<(u32, u32)> {
+    let out = git(
+        workspace,
+        &[
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{base}...HEAD"),
+        ],
+    )
+    .await
+    .ok()?;
+    let mut it = out.split_whitespace();
+    let behind: u32 = it.next()?.parse().ok()?;
+    let ahead: u32 = it.next()?.parse().ok()?;
+    Some((ahead, behind))
+}
+
+/// 一层目录的内容。懒加载:点开哪个目录才读哪一层,不一次扫整棵树。
+///
+/// 三个目录永远不进结果:`.git`(不是项目内容)、`target` 与 `node_modules`
+/// (构建产物,量大且没人在文件树里点它们)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeEntry {
+    /// 相对仓根的路径。
+    pub rel: String,
+    pub name: String,
+    pub is_dir: bool,
+}
+
+pub fn list_dir(workspace: &Path, rel: &str) -> Vec<TreeEntry> {
+    const SKIP: &[&str] = &[".git", "target", "node_modules"];
+    let dir = if rel.is_empty() {
+        workspace.to_path_buf()
+    } else {
+        workspace.join(rel)
+    };
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<TreeEntry> = rd
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if SKIP.contains(&name.as_str()) {
+                return None;
+            }
+            let is_dir = e.file_type().ok()?.is_dir();
+            let rel = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            Some(TreeEntry { rel, name, is_dir })
+        })
+        .collect();
+    // 目录在前,同类按名字。文件树里最烦的是每次展开顺序都不一样。
+    out.sort_by(|a, b| (!a.is_dir, &a.name).cmp(&(!b.is_dir, &b.name)));
+    out
+}

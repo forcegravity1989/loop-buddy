@@ -114,6 +114,16 @@ impl App {
             )));
         }
 
+        // 桌面壳里开工 = 起一个内嵌终端,人看着 agent 干活。这条路不等执行器
+        // 返回,所以下面阻塞那一段不再走。
+        if self.run_issue_pty(id).await? {
+            return Ok(vec![Event::IssueRan {
+                id,
+                ok: true,
+                summary: "已在内嵌终端里开工,过程看会话屏".into(),
+            }]);
+        }
+
         let ws = self.workspace_of(issue.project_id).await?;
         // 先推进行中 —— 界面上立刻看得出它开工了。
         if issue.status != IssueStatus::InProgress {

@@ -7,7 +7,7 @@
 //! 悄悄什么都不做的命令,比没有这条命令更糟;会话屏、项目群、回填那几条随
 //! B / C 刀落地时再加。
 
-use crate::model::{Category, IssueId, IssueStatus, ProjectId};
+use crate::model::{Category, ConversationId, IssueId, IssueStatus, ProjectId};
 
 /// 接入一个项目时填的四个字段(意图卡)。
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -134,6 +134,21 @@ pub enum Command {
     /// 那张资产盘点活,没有就建一张并自动开工。没到点、已经有了,都是原地
     /// 返回空事件,不是错误。
     TickScheduler { project_id: ProjectId },
+
+    /// ■停止:关掉这件活的内嵌终端。**状态原地不动**——停下来既不是失败也
+    /// 不是完成,人随时能再点▶跑接回去。
+    CancelRun { id: IssueId },
+    /// 人在内嵌终端里敲的字节。
+    TerminalInput {
+        conversation_id: ConversationId,
+        bytes: Vec<u8>,
+    },
+    /// 终端框大小变了,PTY 那头也要跟着变,否则 agent 输出会按 80×24 折行。
+    TerminalResize {
+        conversation_id: ConversationId,
+        cols: u16,
+        rows: u16,
+    },
 }
 
 /// 一个工具探活的结果。探不到就是探不到,不猜。
@@ -231,6 +246,11 @@ pub enum Event {
     IssueCacheRefreshed {
         week: String,
         updated: u32,
+    },
+    /// ■停止按下去之后。`was_live=false` = 本来就没有活着的终端可停。
+    RunCancelled {
+        id: IssueId,
+        was_live: bool,
     },
     /// 定时真的建出了一张活。界面上「本周运作」栏据此显示「已自动开工」。
     OpsAutoFired {

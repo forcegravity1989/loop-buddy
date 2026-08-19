@@ -10,6 +10,7 @@
 //! - [`issue`] —— 建活、▶跑、状态转移
 //! - [`bootstrap`] —— 规范铺底与对账
 //! - [`ops`] —— 三张运作活:周计划、资产盘点、规范铺底
+//! - [`session`] —— 内嵌终端的 PTY 生命周期
 //! - [`tools`] —— 开工工具映射与探活
 //! - [`health`] —— 三条判据的现算
 
@@ -19,6 +20,7 @@ mod issue;
 mod ops;
 mod plan;
 mod project;
+mod session;
 mod tools;
 
 pub use health::collect_health_inputs;
@@ -28,7 +30,7 @@ use crate::command::{Command, Event};
 use crate::model::ProjectId;
 use crate::repo::RepoFileError;
 use crate::store::{StoreError, V4Store};
-use bw_engine::InteractiveExecutor;
+use bw_engine::{InteractiveExecutor, TerminalManager};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -65,6 +67,11 @@ pub struct App {
     /// 干活入口的后端。没配真实工作区的项目用自我标注的替身
     /// ([`bw_engine::MockInteractiveExecutor`]),产出带【mock】字样。
     pub(crate) executor: Arc<dyn InteractiveExecutor>,
+    /// 活着的 PTY 会话。纯内存,进程死了就没了 —— 会话的**身份**在
+    /// `claude_conversation` 表里,那才是重启后接得回来的东西。
+    pub(crate) terminal: TerminalManager,
+    /// 桌面壳开、headless 不开。见 [`App::with_pty`]。
+    pub(crate) pty_enabled: bool,
 }
 
 impl App {
@@ -77,6 +84,8 @@ impl App {
             store,
             workspaces_root: workspaces_root.into(),
             executor,
+            terminal: TerminalManager::new(),
+            pty_enabled: false,
         }
     }
 
@@ -186,6 +195,16 @@ impl App {
                 self.mark_notify_seen(project_id, at).await
             }
             Command::TickScheduler { project_id } => self.tick_scheduler(project_id).await,
+            Command::CancelRun { id } => self.cancel_run(id).await,
+            Command::TerminalInput {
+                conversation_id,
+                bytes,
+            } => self.terminal_input(conversation_id, bytes).await,
+            Command::TerminalResize {
+                conversation_id,
+                cols,
+                rows,
+            } => self.terminal_resize(conversation_id, cols, rows).await,
         }
     }
 }
