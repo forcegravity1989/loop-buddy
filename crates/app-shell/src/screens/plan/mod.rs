@@ -23,8 +23,6 @@ struct PendingMove {
     title: String,
     from: IssueStatus,
     to: IssueStatus,
-    /// 排期方向要知道排进哪一周 —— 就是左栏正在看的那一周。
-    week: String,
 }
 
 pub fn view(p: &ProjectVm, bridge: &Bridge) -> Element {
@@ -50,7 +48,7 @@ pub fn view(p: &ProjectVm, bridge: &Bridge) -> Element {
                 div {
                     style: "display:flex;gap:12px;overflow-x:auto;padding-bottom:12px;",
                     for col in p.board.columns.iter() {
-                        {column(col, &p.viewing_week, dragging, pending, selected, bounced)}
+                        {column(col, &p.viewing_week, bridge, dragging, pending, selected, bounced)}
                     }
                 }
             }
@@ -182,6 +180,7 @@ fn next_version(cur: &str) -> String {
 fn column(
     col: &ColumnVm,
     viewing_week: &str,
+    bridge: &Bridge,
     mut dragging: Signal<Option<CardItemVm>>,
     mut pending: Signal<Option<PendingMove>>,
     selected: Signal<Option<CardItemVm>>,
@@ -189,6 +188,7 @@ fn column(
 ) -> Element {
     let target = col.status;
     let week = viewing_week.to_string();
+    let b_drop = bridge.clone();
     let drop = move |_| {
         let Some(card) = dragging.read().clone() else {
             return;
@@ -201,13 +201,16 @@ fn column(
         if matches!(target, IssueStatus::Backlog | IssueStatus::Todo)
             && matches!(card.status, IssueStatus::Backlog | IssueStatus::Todo)
         {
-            pending.set(Some(PendingMove {
+            bounced.set(String::new());
+            b_drop.cmd(Command::ScheduleIssue {
                 id: card.id,
-                title: card.title.clone(),
-                from: card.status,
-                to: target,
-                week: week.clone(),
-            }));
+                // 拖回待办池 = 清空排期;拖进待办 = 排进左栏正在看的那一周。
+                week_of: if target == IssueStatus::Backlog {
+                    None
+                } else {
+                    Some(week.clone())
+                },
+            });
             return;
         }
         if !card.status.can_transition_to(target) {
@@ -225,7 +228,6 @@ fn column(
             title: card.title.clone(),
             from: card.status,
             to: target,
-            week: week.clone(),
         }));
     };
 
@@ -393,26 +395,14 @@ fn confirm_dialog(
     bridge: &Bridge,
 ) -> Element {
     let b = bridge.clone();
-    let is_schedule = matches!(pm.to, IssueStatus::Backlog | IssueStatus::Todo)
-        && matches!(pm.from, IssueStatus::Backlog | IssueStatus::Todo);
     let pm2 = pm.clone();
+    // 走到这里的一定是**状态动作** —— 排期在松手那一刻就直接发命令了,不经过
+    // 这个框(见本文件顶部的说明)。
     let confirm = move |_| {
-        if is_schedule {
-            b.cmd(Command::ScheduleIssue {
-                id: pm2.id,
-                // 拖回待办池 = 清空排期(None);拖进待办 = 排进左栏正在看的那一周。
-                week_of: if pm2.to == IssueStatus::Backlog {
-                    None
-                } else {
-                    Some(pm2.week.clone())
-                },
-            });
-        } else {
-            b.cmd(Command::TransitionIssue {
-                id: pm2.id,
-                to: pm2.to,
-            });
-        }
+        b.cmd(Command::TransitionIssue {
+            id: pm2.id,
+            to: pm2.to,
+        });
         pending.set(None);
     };
     rsx! {
