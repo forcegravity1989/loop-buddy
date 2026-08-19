@@ -325,6 +325,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "bw-v4"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bw-core",
+ "bw-engine",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "toml 0.8.2",
+ "uuid",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

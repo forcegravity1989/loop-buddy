@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CARGO="${CARGO:-cargo}"
-KERNEL=(bw-core bw-engine bw-store bw-app ui)
+KERNEL=(bw-core bw-engine bw-store bw-app ui bw-v4)
 FORBIDDEN='dioxus|tauri|wry|leptos|dioxus-desktop'
 
 fail=0
@@ -27,7 +27,7 @@ done
 if [ "$fail" -ne 0 ]; then
   echo
   echo "Kernel crates must stay UI-agnostic (command in, event out). Move the"
-  echo "offending dependency into app-desktop / app-web."
+  echo "offending dependency into app-desktop / app-shell."
   exit 1
 fi
 echo "All kernel crates are UI-free."

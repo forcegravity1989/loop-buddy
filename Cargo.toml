@@ -7,6 +7,10 @@ members = [
     "crates/bw-app",
     "crates/ui",
     "crates/app-desktop",
+    # V4:四表库 + 仓文件解析 + 现算推导 + 命令/事件总线。与 bw-store/bw-app
+    # 并列而不是改它们——库从 20 张表砍到 4 张后两边接不上,旧 crate 一行不动
+    # 才能保住旧壳继续编译可跑。见 docs/v4-prototype/design/01-architecture.md。
+    "crates/bw-v4",
 ]
 # `default-members` = the headless kernel + shared UI selector. Routine
 # `cargo test` / `cargo check` therefore stay UI-free and fast — they never
@@ -23,6 +27,7 @@ default-members = [
     "crates/bw-store",
     "crates/bw-app",
     "crates/ui",
+    "crates/bw-v4",
 ]
 
 [workspace.package]
@@ -62,6 +67,7 @@ bw-core = { path = "crates/bw-core", default-features = false }
 bw-engine = { path = "crates/bw-engine" }
 bw-store = { path = "crates/bw-store" }
 bw-app = { path = "crates/bw-app" }
+bw-v4 = { path = "crates/bw-v4" }
 ui = { path = "crates/ui" }
 
 # --- UI stack: hard-pinned (plan 00 §8 risk-2). 0.8.0-alpha is on the way and

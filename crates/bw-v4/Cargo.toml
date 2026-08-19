@@ -1,0 +1,33 @@
+[package]
+name = "bw-v4"
+description = "V4 内核:四张表的本机库、仓文件解析器、现算推导、命令/事件总线。仓是正本,库只放定位与显示缓存。"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# 复用 V3 内核里仍然作数的东西:身份、Signal、活的状态机(Done 入边只有
+# 「评审中」这条铁律就锁在 can_transition_to 里)、五阶段元数据(V4 降级成
+# 活的类别标签)。不复用 bw-core 的实体图——V4 的 Project/Issue 字段集与
+# V3 不同(见 docs/v4-prototype/design/02-data-and-files.md §2.1)。
+bw-core = { workspace = true, features = ["idgen"] }
+# 干活入口:交互式执行器 + 工作区/worktree 供给 + git 读数,全部沿用。
+bw-engine = { workspace = true }
+
+sqlx = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs"] }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+time = { workspace = true, features = ["std", "formatting", "parsing", "macros"] }
+uuid = { workspace = true, features = ["v4"] }
+# `.bw/managed.toml` 的指纹(03 篇 §3.1:sha256:<hex>)。已在 lock 里,不新增下载。
+sha2 = "0.10"
+
+[dev-dependencies]
+tokio = { workspace = true }
+# 库形状读回(tests/schema_shape.rs)直接查 pragma_table_info。
+sqlx = { workspace = true }
