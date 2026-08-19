@@ -52,6 +52,7 @@ cargo run -p app-desktop          # 启动 V3 桌面应用(BW_DB=path 可覆盖�
 # V4 新壳(和老壳并存,库文件也是另一份 workbench-v4.db):
 cargo check -p bw-v4              # V4 内核日常编译检查(不编 Dioxus,最快)
 cargo run -p app-shell            # 启动 V4 新壳(二进制名 bw-v4-dev)
+./scripts/bundle-desktop.sh v4    # 打成 dist/BW-V4.app(macOS;Windows 包见 LEFTOVERS)
 cargo run -p bw-v4 --example real_demo_v4 -- <db> <workspaces-root>   # V4 指挥器:不开界面跑完主环
 
 # 提交前门禁(与 CI 完全一致,一条不能少):
@@ -70,7 +71,7 @@ cargo test --workspace --exclude app-desktop --exclude app-shell   # CI 也跑;�
 
 **环境变量**:`BW_DB`(数据库路径;默认 macOS `~/Library/Application Support/BuildersWorkbench/workbench.db`)· `BW_OPEN=<项目名>` + `BW_PANEL=progress|workflow|routine|artifact|version|issues`(启动深链到指定项目/面板,stderr 打 `[BW_OPEN]` 即渲染证明)· `BW_HUB=skill|agent|workflow|cron|connector|knowledge|activity|notify|settings` / `BW_SEL=skill|agent|workflow|cron|connector:<uuid>`(深链到 Hub / 组件详情)· `BW_WORKSPACES`(工作区根)· `BW_CLAUDE_BIN`(覆盖 `claude` 二进制路径)· `BW_FLOW=<command-file>`(进程内点击/断言脚本,验收流用)。
 
-**V4 新壳的环境变量**(自成一套,别和上面那套混用):`BW_DB`(默认 `~/Library/Application Support/BuildersWorkbench/workbench-v4.db`)· `BW_OPEN=<项目 slug 或名字>` + `BW_PANEL=overview|plan|session|notify|config|kb` · `BW_VIEW=onboard|settings`(直接开落地页/设置页)· `BW_WORKSPACES` · `BW_PTY_DEBUG=1`(内嵌终端把初始化结果与键盘字节打进 stderr)。启动时 stderr 打两行:`[BW_OPEN] …`(深链解析结果)与 `[BW_BOOT] projects=N db=…`(界面已渲染的证明)。
+**V4 新壳的环境变量**(自成一套,别和上面那套混用):`BW_DB`(默认 `~/Library/Application Support/BuildersWorkbench/workbench-v4.db`)· `BW_OPEN=<项目 slug 或名字>` + `BW_PANEL=overview|plan|session|notify|config|kb` · `BW_VIEW=onboard|settings`(直接开落地页/设置页)· `BW_WORKSPACES` · `BW_PTY_DEBUG=1`(内嵌终端把初始化结果与键盘字节打进 stderr)· `BW_KB_DUMP=1`(把知识库三个页签的数字打进 stderr:每组几个文件、代码图头一名是谁多大、资产五个区块各几条,好拿 `ls` / `codegraph files -j` / `cat docs/releases.md` 当场对)。启动时 stderr 打两行:`[BW_OPEN] …`(深链解析结果)与 `[BW_BOOT] projects=N db=…`(界面已渲染的证明);项目群走假群时每发一条打一行 `[BW_CHAT_SENT] …`。
 
 ## headless 例子(不开界面直接驱动内核;每个都有现役用途)
 
