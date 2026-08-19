@@ -42,7 +42,13 @@ pub async fn find_project(store: &V4Store, want: &str) -> Option<Project> {
 
 pub fn note_of(events: &[Event]) -> Option<String> {
     events.first().map(|e| match e {
-        Event::ProjectCreated { slug, .. } => format!("项目 {slug} 已接入"),
+        Event::ProjectCreated { slug, adopted, .. } => {
+            if *adopted {
+                format!("接手了已有项目 {slug} —— 仓里原有的 .bw/project.toml 一个字没动")
+            } else {
+                format!("项目 {slug} 已接入")
+            }
+        }
         Event::ProjectCardEditPending { .. } => "名片改动已建成一张轻量活,等评审合入".into(),
         Event::ProjectChatChanged { .. } => "项目群配置已写进 .bw/project.toml".into(),
         Event::StandardBootstrapped {

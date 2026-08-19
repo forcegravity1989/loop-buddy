@@ -147,6 +147,9 @@ pub enum Event {
     ProjectCreated {
         id: ProjectId,
         slug: String,
+        /// 仓里本来就有 `.bw/project.toml` —— 这次是「接手已有项目」,
+        /// 人手填过的字段一个都没覆盖。
+        adopted: bool,
     },
     ProjectCardEditPending {
         issue_id: IssueId,

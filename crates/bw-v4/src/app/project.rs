@@ -23,6 +23,7 @@ impl App {
             return Ok(vec![Event::ProjectCreated {
                 id: existing.id,
                 slug,
+                adopted: true,
             }]);
         }
 
@@ -51,22 +52,28 @@ impl App {
             path: ws.display().to_string(),
             source: e,
         })?;
-        project_file::write(
-            &ws,
-            &ProjectFile {
-                name: intent.name.clone(),
-                kind: String::new(),
-                brief: intent.brief.clone(),
-                benchmark: intent.benchmark.clone(),
-                opportunity: intent.north_star.clone(),
-                standard_version: standard::version().to_string(),
-                // 新建项目默认在研版本 v0.1。
-                current_version: "v0.1".into(),
-                chat: None,
-            },
-        )?;
+        // **仓里已经有 `.bw/project.toml` 就以它为准**(后来者接入:同事先接过
+        // 这个项目,或者开发期删库重建之后重新接入)。人手填过的东西一个字都
+        // 不覆盖,只补空着的字段;读不出来(文件坏了)也不覆盖,如实往上报。
+        let existing = project_file::read(&ws)?;
+        let adopted = existing.is_some();
+        let mut file = existing.unwrap_or_else(|| ProjectFile {
+            standard_version: standard::version().to_string(),
+            // 新建项目默认在研版本 v0.1。
+            current_version: "v0.1".into(),
+            ..Default::default()
+        });
+        fill_if_blank(&mut file.name, &intent.name);
+        fill_if_blank(&mut file.brief, &intent.brief);
+        fill_if_blank(&mut file.benchmark, &intent.benchmark);
+        fill_if_blank(&mut file.opportunity, &intent.north_star);
+        project_file::write(&ws, &file)?;
 
-        Ok(vec![Event::ProjectCreated { id: row.id, slug }])
+        Ok(vec![Event::ProjectCreated {
+            id: row.id,
+            slug,
+            adopted,
+        }])
     }
 
     pub(super) async fn edit_project_card(
@@ -178,5 +185,12 @@ pub(super) fn chat_label(chat: &Option<ChatConfig>) -> String {
     match chat {
         None => "未配".into(),
         Some(c) => format!("{}(群号 {})", c.provider, c.group_id),
+    }
+}
+
+/// 只在原来是空的时候填 —— 人手写过的一个字都不动。
+fn fill_if_blank(slot: &mut String, value: &str) {
+    if slot.trim().is_empty() {
+        *slot = value.to_string();
     }
 }
