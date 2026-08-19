@@ -197,13 +197,27 @@ V4 改法:
 
 **computer-use 用的 `~/Applications/BWDev.app` 怎么办**:`scripts/point-bwdev-here.sh` 今天固定拷 `target/debug/builders-workbench` 进这个长期稳定的 bundle(同一次 computer-use 会话里现造的新 app 身份认不出来,复用已注册 bundle id 是唯一路径)。共存期建议验证新壳时复用同一 bundle,只换拷贝 `target/debug/bw-v4-dev`——给脚本加个可选参数,不新注册第二个 app bundle(会重踩"新身份认不出来"的坑)。**A 刀已经改了**:`./scripts/point-bwdev-here.sh v3|v4`,默认 `v3`;两个壳共用同一个 bundle 身份,同一时刻只能接一个,换壳再跑一次。
 
-### 2.11 删除旧壳的判据
+### 2.11 删除旧壳的判据(C 刀落地后整块重写:逐条核对过,**今天一条都不满足,旧壳不能删**)
 
-把待拍-17"跑通后删旧壳"落成可核对的判据(是否采纳待用户拍板):
-1. 六项目内入口 + 三顶层屏对应的 04-09 篇,每篇第 5 节「验收与读回」都跑过至少一次,证据(深链+SQL 读回+截图)已进 `docs/v4-prototype/`。
-2. 母文档 §8 整体验收 8 条全部满足(两个周循环、总览灯非灰、Open Design/Claude CLI 各至少一张活跑通、第二台 buddy 纳入同仓能审核合入、Windows 安装包装得上跑得起、老项目历史回填、项目群通知)。
-3. 没有任何一条 04-10 篇标"未建"的功能挡在用户日常路径上。
-4. 满足以上后同一次改动:删 `crates/app-desktop`、`Cargo.toml` 去掉这一行、`app-shell` bin 名改回 `builders-workbench`、`point-bwdev-here.sh` 只指新壳、`BW_HUB` 彻底删除读取代码。**不分批半删**——「发现过时的实现路径,直接移除它」,半吊子共存本身就是要避免的过渡态。
+把待拍-17"跑通后删旧壳"落成可核对的判据。C 刀收尾时逐条对了一遍实况:
+
+| # | 判据 | 今天满足没有 | 差在哪 |
+|---|---|---|---|
+| 1 | 04-09 篇每篇第 5 节「验收与读回」跑过至少一次,证据进 `docs/v4-prototype/` | **否** | 读回跑过(深链 + `sqlite3` + `[BW_KB]` / `[BW_CHAT_SENT]` / `pty_smoke`),但**证据没有落成文件进仓**,而且按用户这次的要求没做截图 —— 全旅程由用户自己点 |
+| 2 | 母文档 §8 整体验收 8 条全满足 | **否** | 差 5 条:两个真实周循环(要真过两周)、真跑 `claude` 各跑通一张活(受信任对话框/网关影响,不作门禁)、第二台 buddy 纳入同仓审核合入(没做)、Windows 安装包(见下)、项目群真连(只有 mock) |
+| 3 | 没有标"未建"的功能挡在日常路径上 | **否** | 至少五处:蒸馏按钮、MR「检查过没过」那一列、Cursor 开工工具、内嵌 Open Design 页签、会话四态(今天只有运行中/空闲) |
+| 4 | 满足以上后**同一次改动**删干净 | 不适用 | 前三条没满足 |
+
+**Windows 安装包的实情(C 刀查过)**:`BuildersWorkbench-Setup.exe` 的 Inno 脚本**不在这个仓里** ——
+仓里只有 `scripts/bundle-desktop.sh`(macOS `.app`),`.iss` 当初是在 Windows 机器上单独维护的。
+所以 `0.4.0-v4` 这一包这台机器上出不了,C 刀能做的只是把 macOS 那条路补齐:
+`./scripts/bundle-desktop.sh v4` 打出 `dist/BW-V4.app`(版本号写 `0.4.0-v4`),
+`./scripts/point-bwdev-here.sh v4` 接 computer-use 的稳定壳。Windows 包记进 `docs/LEFTOVERS.md`。
+
+**删的时候一次删干净**:删 `crates/app-desktop`、`Cargo.toml` 去掉那一行(顺带去掉 `crates/ui`、
+`bw-app`、`bw-store` —— 新壳一个都不依赖)、`app-shell` 的 bin 名改回 `builders-workbench`、
+`point-bwdev-here.sh` 只指新壳、`BW_HUB` 读取代码彻底删除、`real_demo` 指挥器退役。
+**不分批半删** —— 半吊子共存本身就是要避免的过渡态。
 
 ### 2.12 Web 版留门(不多做)
 

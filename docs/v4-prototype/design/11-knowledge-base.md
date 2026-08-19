@@ -86,16 +86,30 @@
 
 ## 3 · 工程对照
 
-**模块位置**(遵循 [01 篇](01-architecture.md) §2.3「一屏一模块」):界面代码在 `crates/app-shell/src/screens/kb/`(01 篇目录树已列),按三页签再分子模块;数据查询(selector)在 `bw-app` 新增只读模块(建议 `bw-app/src/kb.rs`),风格对齐 [08 篇](08-overview-derivation.md) §3 的 `overview.rs`;`codegraph` 子进程封装在 `crates/app-shell/src/adapters/codegraph/`(01 篇 §2.2 已列位置,本篇是第一个真实消费者)。
+**模块位置(C 刀落地后整块重写)**:界面在 `crates/app-shell/src/screens/kb/`(三个页签在同一个文件里,
+还没到要拆子模块的体量);数据拼装在 `crates/app-shell/src/bridge/vm_kb.rs`(**不是** `bw-app/src/kb.rs` ——
+V4 不动旧 crate,而且这三个页签全是现扫文件/现跑子进程,没有一句业务判断,放 ViewModel 拼装层正合适);
+`codegraph` 子进程封装在 `crates/app-shell/src/adapters/codegraph/`(带 README,三段:借了什么、没借什么)。
 
 ```rust
-// crates/app-shell/src/adapters/codegraph/mod.rs(新)
-pub fn detect() -> CodegraphAvailability { /* which codegraph;探测到再看 .codegraph/ 是否存在;
-    返回 NotInstalled | NotIndexed | Ready,三态映射 2.3 节灰态文案 */ }
-pub fn run_query(workspace: &Path, kind: QueryKind, args: &[String]) -> Result<String, CodegraphError> {
-    /* std::process::Command 起 `codegraph <kind> ... -j`(或 --symbols-only),stdout 原样返回;
-       非 0 退出把 stderr 原文包进 CodegraphError,不吞错误 */ }
+// crates/app-shell/src/adapters/codegraph/mod.rs(已落地)
+pub enum Availability { NotInstalled, NotIndexed, Ready }
+pub fn detect(workspace: &Path) -> Availability;
+pub fn big_files(workspace: &Path, top: usize) -> Result<Vec<FileRow>, String>;
 ```
+
+**代码图三样只做了一样**:大文件榜(`codegraph files -j`,按体积排序取前 20)。**符号搜索**与
+**模块依赖概览**(`codegraph explore`)没做 —— 前者要一个搜索框加一条查询分发,后者连有没有稳定的结构化
+输出都还没核实过(§6 开放问题 1)。两样都记进 `docs/LEFTOVERS.md`,界面上没有占位框。
+
+**这两个页签不跟着每次重拼 ViewModel 跑**:代码图要起 codegraph 子进程,资产要走 `git log --name-only`
+再采一次仓统计,加起来好几个子进程。人在别的屏点一下就把它们跑一遍是不能接受的,所以只在**点页签或点
+「重新跑一次」那一刻**跑,结果留在壳自己的导航状态里。这不违背「不缓存」的取舍 —— 每次点开都是全新的
+子进程调用,只是不替人自动重跑。
+
+**读回口子**:`BW_KB_DUMP=1` 启动时把三个页签的数字打进 stderr(每组几个文件、代码图头一名是谁多大、
+资产五个区块各几条),好让人拿 `ls` / `codegraph files -j` / `cat docs/releases.md` 当场对。截图对不了数,
+这个能。
 
 **没有新增数据模型,也不查任何登记表**——资产页签五个区块全部现扫仓目录(`.claude/skills/`)、现算 git(`git log --name-only`)、或解析仓文件(`docs/releases.md`);02 篇 §2.6「信息住哪」总表已把这些数据点全部划给"仓正本"或"现算",本篇只新增只读查询/扫描路径。知识 / 代码图页签同样不落库,现算现显。
 

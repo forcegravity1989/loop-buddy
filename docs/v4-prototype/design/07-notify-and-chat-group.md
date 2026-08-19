@@ -141,46 +141,27 @@ Builder 平时不会主动点开「通知」——左栏「通知」入口的徽
 
 ## 3 · 工程对照
 
-**crate / 模块**(新增,遵循「一个外部能力一个适配模块」):
+**crate / 模块(C 刀落地后整块重写)**:
 
 ```
-crates/bw-engine/src/chat/
-  mod.rs        // ChatMessage / ChatError / trait ChatGroup / for_project 工厂
-  welink.rs     // 同事实现;顶部模块文档记鉴权方式、群标识形态、已知限制
-  none.rs       // 未配置:send/fetch_history 都返回 NotConfigured
-  mock.rs       // 本机自测:内存态假群,预置 Vec<ChatMessage> 供 fetch_history 返回
+crates/bw-v4/src/chat/
+  mod.rs        // ChatMessage / ChatError / trait ChatGroup / for_project 工厂 / 文案模板
+  welink.rs     // 只留位;顶部模块文档写清要实现什么、错误怎么带、登录态为什么不归 buddy 管
+  none.rs       // 没配群:send/fetch_history 都返回 NotConfigured
+  mock.rs       // 本机自测:内存假群,每发一条往 stderr 打一行 [BW_CHAT_SENT]
+crates/bw-v4/src/app/chat_notify.rs   // 三件事的同步:进评审 / 已合入 / 发了版
 ```
 
-**trait 与工厂**(采纳预研 §3,原样落地,类型细节以预研文件为准):
+**两处偏差,都是有意的**:
 
-```rust
-pub struct ChatMessage {
-    pub time: Option<OffsetDateTime>,
-    pub sender: Option<String>,
-    pub text: String,
-    pub link: Option<(String, String)>,
-    pub markdown: Option<String>,
-}
+1. **放在 `crates/bw-v4/` 不是 `crates/bw-engine/`**。V4 这一刀的既定偏差是不动旧 crate;而且仓文件解析
+   (`.bw/project.toml` 的 `[chat]` 段就住在那儿)本来就全在 bw-v4 这一层,放过去要跨 crate 拿配置。
+   同事补 WeLink 实现时改的是 `crates/bw-v4/src/chat/welink.rs`,别的说明(2.9 节)一字不变。
+2. **trait 用 `#[async_trait]` 不是 `BoxFuture`**。`bw-engine` 现有的执行器 trait 就是这么写的,
+   同一个仓里两种异步 trait 写法没有意义。签名形状与预研给的完全一致,只是脱糖方式不同。
 
-pub enum ChatError { NotConfigured, HistoryUnsupported, Auth(String), Network(String) }
-
-pub trait ChatGroup: Send + Sync {
-    fn send(&self, msg: &ChatMessage) -> BoxFuture<'_, Result<(), ChatError>>;
-    fn fetch_history(&self, since: OffsetDateTime, until: OffsetDateTime)
-        -> BoxFuture<'_, Result<Vec<ChatMessage>, ChatError>>;
-    fn probe(&self) -> BoxFuture<'_, Result<String, ChatError>> {
-        Box::pin(async { Err(ChatError::NotConfigured) })
-    }
-}
-
-pub fn for_project(provider: &str, group_id: &str) -> Box<dyn ChatGroup> {
-    match provider.trim() {
-        "welink" => Box::new(welink::WelinkChatGroup::new(group_id)),
-        "mock" => Box::new(mock::MockChatGroup::new(group_id)),
-        _ => Box::new(none::NoneChatGroup),
-    }
-}
-```
+**`app-shell` 里那份只有 trait 的项目群占位已经删掉**(`crates/app-shell/src/adapters/chat_group/`)——
+真实现落地后留两份接口就是"为向后兼容留旧路径",直接移除。
 
 **命令**(只列名 + 一句话;完整参数形状留实现时随手改):
 
