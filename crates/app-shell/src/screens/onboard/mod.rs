@@ -9,7 +9,9 @@ use crate::vm::Vm;
 use bw_v4::command::{Command, ProjectIntent, RemoteRef};
 use dioxus::prelude::*;
 
-pub fn view(vm: &Vm, bridge: &Bridge, close: impl FnMut(MouseEvent) + 'static) -> Element {
+#[component]
+pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element {
+    let (vm, bridge) = (&vm, &bridge);
     let mut name = use_signal(String::new);
     let mut brief = use_signal(String::new);
     let mut benchmark = use_signal(String::new);

@@ -8,7 +8,9 @@ use crate::theme;
 use crate::vm::ProjectVm;
 use dioxus::prelude::*;
 
-pub fn view(p: &ProjectVm, bridge: &Bridge) -> Element {
+#[component]
+pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
+    let (p, bridge) = (&p, &bridge);
     rsx! {
         div {
             style: "display:flex;gap:16px;align-items:flex-start;",

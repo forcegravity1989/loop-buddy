@@ -8,9 +8,11 @@ use crate::theme;
 use crate::vm::{ProjectCardVm, ToolProbeVm, Vm};
 use dioxus::prelude::*;
 
-pub fn view(vm: &Vm, bridge: &Bridge, go_top: impl FnMut(TopView) + Clone + 'static) -> Element {
-    let mut go_onboard = go_top.clone();
-    let mut go_settings = go_top;
+#[component]
+pub fn View(vm: Vm, bridge: Bridge, go_top: EventHandler<TopView>) -> Element {
+    let (vm, bridge) = (&vm, &bridge);
+    let go_onboard = go_top;
+    let go_settings = go_top;
     rsx! {
         div {
             style: "max-width:1180px;margin:0 auto;padding:32px 24px 60px;",

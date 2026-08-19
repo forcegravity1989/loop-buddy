@@ -55,6 +55,7 @@ cargo check -p ui --target wasm32-unknown-unknown
 ./scripts/guard-kernel-ui-free.sh
 ./scripts/guard-no-cross-screen-import.sh      # V4:一屏一模块,屏与屏之间不互相 import
 ./scripts/guard-file-lines.sh                  # V4:单文件 1500 行硬上限、600 行软提醒
+./scripts/guard-screen-hooks.sh                # V4:用 Dioxus hook 的函数必须是组件(否则切屏必 panic)
 cargo check -p app-desktop
 cargo check -p app-shell
 cargo test --workspace --exclude app-desktop --exclude app-shell   # CI 也跑;现存内联测试要过(见「怎么验证」)

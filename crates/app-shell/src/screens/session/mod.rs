@@ -7,7 +7,9 @@ use crate::theme;
 use crate::vm::ProjectVm;
 use dioxus::prelude::*;
 
-pub fn view(p: &ProjectVm) -> Element {
+#[component]
+pub fn View(p: ProjectVm) -> Element {
+    let p = &p;
     rsx! {
         div {
             style: "max-width:900px;margin:0 auto;",

@@ -25,7 +25,9 @@ struct PendingMove {
     to: IssueStatus,
 }
 
-pub fn view(p: &ProjectVm, bridge: &Bridge) -> Element {
+#[component]
+pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
+    let (p, bridge) = (&p, &bridge);
     let dragging = use_signal(|| None::<CardItemVm>);
     let pending = use_signal(|| None::<PendingMove>);
     let selected = use_signal(|| None::<CardItemVm>);

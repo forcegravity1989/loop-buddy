@@ -7,7 +7,9 @@ use crate::theme;
 use crate::vm::Vm;
 use dioxus::prelude::*;
 
-pub fn view(vm: &Vm, close: impl FnMut(MouseEvent) + 'static) -> Element {
+#[component]
+pub fn View(vm: Vm, close: EventHandler<MouseEvent>) -> Element {
+    let vm = &vm;
     let s = &vm.settings;
     rsx! {
         div {

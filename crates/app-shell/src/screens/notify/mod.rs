@@ -10,7 +10,9 @@ use bw_v4::command::Command;
 use bw_v4::model::IssueStatus;
 use dioxus::prelude::*;
 
-pub fn view(p: &ProjectVm, bridge: &Bridge) -> Element {
+#[component]
+pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
+    let (p, bridge) = (&p, &bridge);
     let b = bridge.clone();
     let pid = p.id;
     let n = &p.notify;

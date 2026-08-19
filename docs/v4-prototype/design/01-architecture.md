@@ -22,11 +22,16 @@
 
 ## 2 · 设计
 
-### 2.1 新壳放在哪个 crate
+### 2.1 V4 新开哪两个 crate
 
-**建议:新增 `crates/app-shell`**(备选名字见第 6 节开放问题)。
+**A 刀落地后重写。** 原文只讨论了新壳一个 crate,前提是内核继续用 `bw-store` + `bw-app`。真开工才发现这个前提不成立:第七轮盘点把本机库缩到四张表之后,`bw-store` 的二十张表与 `bw-app` 架在这些表上的用例整片接不上,改它等于把旧库拆了重装,还会连累仍在跑的 V3。于是 V4 开了**两个** crate:
 
-理由:跟现有 `app-desktop` 同属"UI 相关、允许依赖 dioxus/wry"一层——`scripts/guard-kernel-ui-free.sh` 稽查的五个内核 crate 是 `bw-core bw-engine bw-store bw-app ui`(该脚本 `KERNEL=(...)` 一行),`app-desktop` 不在名单里,新 crate 同样不进,继续用 `app-` 前缀一眼认出"这是壳"。用"shell"不用"desktop":这次真正变的是分层方式(六入口+一屏一模块+适配模块化),不是出新平台;叫 `app-v4` 会把版本号焊进一个要长期活下去的名字里,不合"不为向后兼容留旧路径"——旧壳删除后这个 crate 自然是唯一桌面壳,不必再改名。
+- **`crates/bw-v4`(V4 内核)**:四张表的库 + 仓文件解析 + 现算推导 + 命令/事件总线 + 规范铺底。复用 `bw-core`(五阶段元数据、活的状态机、id)与 `bw-engine`(执行器、工作区、`.bw/metrics.toml` 解析),**不依赖 `bw-store` / `bw-app`**。它是第六个内核 crate,已经加进 `scripts/guard-kernel-ui-free.sh` 的稽查名单(该脚本原本管 `bw-core bw-engine bw-store bw-app ui` 五个)。
+- **`crates/app-shell`(V4 新壳)**:九屏 + theme + 桥。跟现有 `app-desktop` 同属"UI 相关、允许依赖 dioxus/wry"一层,不进稽查名单,继续用 `app-` 前缀一眼认出"这是壳"。
+
+用"shell"不用"desktop":这次真正变的是分层方式(六入口+一屏一模块+适配模块化),不是出新平台;叫 `app-v4` 会把版本号焊进一个要长期活下去的名字里,不合"不为向后兼容留旧路径"——旧壳删除后这个 crate 自然是唯一桌面壳,不必再改名。`bw-v4` 这个名字里的版本号同理,删旧内核那次一并改。
+
+**旧 crate 一行没改**:`bw-core` / `bw-engine` / `bw-store` / `bw-app` / `ui` / `app-desktop` 六个包在 A 刀里零改动(只有测试辅助函数为修门禁偶发红改过),`cargo check -p app-desktop` 一直是绿的。
 
 **两个 package,不用同 crate 内 feature 切换**:待拍-17 已定"旧屏幕一律不搬",物理分开比拉 feature gate 更彻底——新旧代码不出现在同一份 `Cargo.toml`/依赖树里,删旧壳时只需在 `members` 去掉一行。`crates/app-shell` 加进根 `Cargo.toml` 的 `members`,**不**加进 `default-members`(和 `app-desktop` 今天待遇一样),日常 `cargo check`/`cargo test` 不因多一个 UI crate 变慢。
 
@@ -69,7 +74,9 @@ crates/app-shell/
 待拍-11 原话:"每个借鉴/缝合的外部能力是一个独立模块,以后持续借鉴也不会散弹修改"。落到工程手段,三层:
 
 1. **每屏只有一个公开出口**:`screens/<name>/mod.rs` 只 `pub` 一个函数(签名见 §3),接收这一屏的 ViewModel + 往内核发命令的回调,返回 Dioxus `Element`。屏内部随便拆文件,但除这一个函数外目录下不再有第二个能被外部引用的 `pub` 项。
-2. **共享数据只能经 `ui` crate**:`ui/` 已是"纯函数 selector + ViewModel"独立 crate。若 `plan` 屏和 `overview` 屏都要展示"活的推动指标",这个 DTO 类型定义在 `ui` crate,两屏各自 `use ui::...`,**永远不允许** `plan` 里出现 `use crate::screens::overview::...`——每层只能向下依赖,不能跨并列层互相 reach into。
+2. **共享数据只能经一个共用的 ViewModel 模块**:`plan` 屏和 `overview` 屏都要展示"活的推动指标"时,这个 DTO 类型定义在共用模块里,两屏各自 `use crate::vm::...`,**永远不允许** `plan` 里出现 `use crate::screens::overview::...`——每层只能向下依赖,不能跨并列层互相 reach into。
+
+   **A 刀落地后改**:原文说这个共用模块是 `crates/ui`。真做的时候没有用它——`ui` 是 V3 的 crate,里面的 ViewModel 全部架在旧库的二十张表上,V4 一条也用不上,而这一刀说好了不动旧 crate。V4 的 ViewModel 因此就近放在新壳自己的 `crates/app-shell/src/vm.rs`,`crates/ui` 一行没改。等旧壳删掉、`ui` 跟着退场,这个模块要不要单独成 crate 再说 —— 现在多一个 crate 只是多一层没人用的间接。
 3. **guard 脚本兜底**(§3 给完整脚本):新增 `scripts/guard-no-cross-screen-import.sh`,对 `crates/app-shell/src/screens/*/` 逐目录 grep `crate::screens::`,命中除自己以外的屏幕名就报错。和 `guard-kernel-ui-free.sh` 并列进门禁清单(建议,不改 CLAUDE.md,由用户后续拍板)。
 
 ### 2.4 「一个外部能力一个适配模块」
@@ -104,9 +111,11 @@ crates/app-shell/
 
 ### 2.6 命令 / 事件总线增量
 
-现状:`bw-app` 的 `Command` 枚举(`crates/bw-app/src/command.rs:85-668`)约 65 个变体,`Event` 枚举(同文件 704-773)18 个变体——这是要在上面加东西的基础,不是要重写的东西。新壳仍走"UI 只发 `Command`、收 `Event`"这条唯一通路,`bw-app` 继续是唯一执行用例的地方。
+**实况(A 刀落地后重写)**:这一节原本写的是「在 `bw-app` 那 65 个变体上做加法」。真做的时候发现加不上去——库缩到四张表之后,`bw-store` 的二十张表和 `bw-app` 的用例整片接不上,于是 V4 开了自己的 `crates/bw-v4`,`Command` / `Event` 是**全新的一对枚举**(`crates/bw-v4/src/command.rs`),和 `bw-app` 的那对没有继承关系,也不互相引用。旧 crate 一行没改,旧壳照常编译。
 
-下表只列名字和一句话(实现细节留 04-09/02 篇;**本表是 03-08 篇写完后的回填 pass**,与各正主篇同步过一轮,标「设计期统一」的地方是与正主篇核对后的改法):
+不变的是通路本身:UI 只发 `Command`、只收 `Event`,`bw-v4` 是唯一执行用例的地方(`crates/bw-v4/src/app/`)。
+
+下表是**设计目标**,不是落地清单——A 刀只实到了其中 20 条(见表后一段),其余的随 B / C 刀补。实现细节留 04-09/02 篇;标「设计期统一」的地方是与各正主篇核对后的改法:
 
 | 屏 | 命令/事件 | 一句话 | 标注 |
 |---|---|---|---|
@@ -146,7 +155,11 @@ crates/app-shell/
 | 配置 | `MarkEntrySkill` | 人工补标"这是入口技能"(04 篇新增,本表据此回填) | 新 |
 | 配置 | `CreateAgent`/`UpdateAgent`/`ImportAgentDefinition`(既有)| 待拍-24 已定"不再单独维护 agent 名单,agent 随 workflow 包走"——配置屏不再有独立 agent 表,这三条**同一次迁移里硬删**(设计期统一:与 02/04 篇一致;V4 用的是**新的库文件**,`schema.sql` 从未定义过 `agent` 表——不是"删表",是"新库从未建过",效果同样是存量队友定义不迁移、不可逆,已提请用户点头,见 00-handshake 第 2 条) | 删除 |
 
-**数得上的增量**:新命令约 24 条、改动 1 条、新事件约 7 条、硬删 4 条既有命令(`CreateAgent`/`UpdateAgent`/`ImportAgentDefinition`/`ImportSkillPackage`)。没有一条要求改内核的状态机/信号只能从数据推导这条铁律/只追加表等铁律机制,都是 `Command`/`Event` 两个枚举上的加法。
+**A 刀真接了哪些**(`crates/bw-v4/src/command.rs`,20 条):`CreateProject` / `EditProjectCard` / `SetProjectChat` / `RunStandardBootstrap` / `ReconcileStandard` / `StartWeekPlanning` / `ConfirmWeekDraft` / `CreateIssue` / `ScheduleIssue` / `ReorderIssue` / `SetIssueWorkflow` / `SetCurrentVersion` / `CutRelease` / `RefreshIssueCacheFromPlan` / `RunIssue` / `TransitionIssue` / `BlockIssue` / `SaveToolMapping` / `ProbeTool` / `MarkNotifySeen`。签名与上表有两处出入:`EditProjectCard` 不含 `chat` 字段(项目群走独立的 `SetProjectChat`);`ConfirmWeekDraft` 是上表没有的一条 —— 「开始本周」返回的是草稿活标,人确认之后才真的建活,这一步需要自己的命令。
+
+**表里有、A 刀没接的**:`TogglePreview`、`MergeAndComplete`、`SyncNotifyToChat`、`FetchChatDigest`、`BackfillHistory`、`UpgradeStandard`、`CreateAutopilotTask{auto_run}`、`OpenRootShell`、`OpenFileTab`、`OpenDiffTab`、`ExpandTreeDir`、`MarkEntrySkill`、`SetIssueMetric`,以及所有 `MergeIssuePr` / `DistillSkillFromIssue` 这类「沿用 `bw-app` 既有命令」的行 —— `bw-v4` 没有继承它们,要用得自己写一遍。这些都记在 `docs/LEFTOVERS.md`。
+
+没有一条要求改内核的状态机、「信号只能从数据推导」这条铁律、或只追加表的机制:`bw-v4` 复用 `bw-core` 的 `IssueStatus::can_transition_to`,健康灯由 `bw-v4` 自己那个密封的 `DerivedHealth` 守着(`crates/bw-v4/src/derive/`),store 层没有任何设置信号的方法。
 
 ### 2.7 深链环境变量:六入口怎么映射
 
@@ -175,14 +188,14 @@ V4 改法:
 内容与八大类是 [`../../standard-module-draft.md`](../../standard-module-draft.md) 的事,这里只钉三件:
 
 - **放哪**:仓根 `standard/`,和 `crates/`/`docs/` 平级(03 篇 §3 已定)。
-- **怎么进二进制**:今天 `docs/buddy/`、`docs/skills/` 都经 `crates/bw-core/src/buddy_assets.rs`(`include_str!("../../../docs/buddy/system-prompt.md")` 等)与 `bw_library.rs`(八份方法论 SKILL.md)在编译期读进常量,零 IO、wasm32 可编译——`standard/` 照这个已验证的模式,新增 `crates/bw-core/src/standard_assets.rs`。放进 `bw-core` 而非新壳自己的 crate,因为"往项目仓写规范文件"是内核层用例,新壳的 `RunStandardBootstrap` 只是从 UI 触发一次已有能力。
-- **版本号从哪读**:仓根放纯文本 `standard/VERSION`(如 `4.0`),`include_str!` 读入 `trim()` 成 `pub const STANDARD_VERSION: &str`,铺底/对账命令都读这一个常量。**别和项目仓生成的 `.bw/standard.toml` 混**(03 篇「规范大类 8」)——后者记"某项目用的是哪版"(项目侧,随项目走),前者记"当前 buddy 二进制自带哪版"(buddy 侧,随发布走),数值常相等但含义不同,不合并成一个字段。
+- **怎么进二进制**:今天 `docs/buddy/`、`docs/skills/` 都经 `crates/bw-core/src/buddy_assets.rs` 与 `bw_library.rs` 在编译期 `include_str!` 读进常量,零 IO、wasm32 可编译——`standard/` 照这个已验证的模式。**A 刀落地后改落点**:原文说新增 `crates/bw-core/src/standard_assets.rs`,实际放在 `crates/bw-v4/src/standard/mod.rs`。理由是 `bw-core` 里那些资产是 V3 也在用的,而 `standard/` 只有 V4 用;放进 `bw-v4` 既不动旧 crate,也让"往项目仓写规范文件"这个用例和它的素材待在一起。预置技能包是个例外:它复用 `bw_core::bw_library::bw_standard_skill_docs()` 已经编进去的那几篇,不再抄一份。
+- **版本号从哪读**:仓根放纯文本 `standard/VERSION`(现在是 `4.0`),`include_str!` 读入 `trim()`,铺底/对账命令都读这一个常量(`bw_v4::standard::version()`)。**别和项目仓生成的 `.bw/standard.toml` 混**(03 篇「规范大类 8」)——后者记"某项目用的是哪版"(项目侧,随项目走),前者记"当前 buddy 二进制自带哪版"(buddy 侧,随发布走),数值常相等但含义不同,不合并成一个字段。
 
 ### 2.10 与旧壳共存
 
 跑通前 `app-desktop` 整个保留、正常编译发布——这段时间事实上有两个可运行程序:`cargo run -p app-desktop`(十图标+阶段轴,`BW_HUB`/旧 `BW_PANEL` 值继续有效,给未搬功能兜底)、`cargo run -p app-shell`(六入口新壳,未落地的屏如实显示「未建」,不铺占位假数据)。
 
-**computer-use 用的 `~/Applications/BWDev.app` 怎么办**:`scripts/point-bwdev-here.sh` 今天固定拷 `target/debug/builders-workbench` 进这个长期稳定的 bundle(同一次 computer-use 会话里现造的新 app 身份认不出来,复用已注册 bundle id 是唯一路径)。共存期建议验证新壳时复用同一 bundle,只换拷贝 `target/debug/bw-v4-dev`——给脚本加个可选参数或建姊妹脚本,不新注册第二个 app bundle(会重踩"新身份认不出来"的坑)。**这次不改脚本**,留给开工时处理。
+**computer-use 用的 `~/Applications/BWDev.app` 怎么办**:`scripts/point-bwdev-here.sh` 今天固定拷 `target/debug/builders-workbench` 进这个长期稳定的 bundle(同一次 computer-use 会话里现造的新 app 身份认不出来,复用已注册 bundle id 是唯一路径)。共存期建议验证新壳时复用同一 bundle,只换拷贝 `target/debug/bw-v4-dev`——给脚本加个可选参数,不新注册第二个 app bundle(会重踩"新身份认不出来"的坑)。**A 刀已经改了**:`./scripts/point-bwdev-here.sh v3|v4`,默认 `v3`;两个壳共用同一个 bundle 身份,同一时刻只能接一个,换壳再跑一次。
 
 ### 2.11 删除旧壳的判据
 
@@ -200,146 +213,94 @@ V4 改法:
 
 ## 3 · 工程对照
 
-### 3.1 workspace `Cargo.toml` 增量(伪码)
+### 3.1 workspace `Cargo.toml` 增量(A 刀实况)
 
 ```toml
 [workspace]
 members = [
     "crates/bw-core", "crates/bw-engine", "crates/bw-store",
     "crates/bw-app", "crates/ui",
+    "crates/bw-v4",         # V4 内核(新增)
     "crates/app-desktop",   # 共存期保留,删除旧壳时去掉
-    "crates/app-shell",     # 新增
+    "crates/app-shell",     # V4 新壳(新增)
 ]
-# default-members 不变——两个 UI crate 都不进日常 cargo check/test 的默认范围。
+default-members = [ /* …原有的无头内核 + ui… */, "crates/bw-v4" ]
+# bw-v4 进 default-members(它不编 Dioxus,日常 cargo check 该覆盖它);
+# 两个 UI crate 都不进。
 ```
 
 ```toml
-# crates/app-shell/Cargo.toml 骨架(参照 app-desktop/Cargo.toml 的依赖形状)
-[package]
-name = "app-shell"
-edition.workspace = true
-version.workspace = true
-
+# crates/app-shell/Cargo.toml —— 依赖只有 bw-v4,没有 bw-store / bw-app / ui
 [[bin]]
 name = "bw-v4-dev"   # 共存期用这个名字;删除旧壳时改回 "builders-workbench"
-path = "src/main.rs"
 
 [dependencies]
 dioxus = { workspace = true, features = ["desktop"] }
 bw-core = { workspace = true, features = ["idgen"] }
 bw-engine = { workspace = true }
-bw-store = { workspace = true }
-bw-app = { workspace = true }
-ui = { workspace = true }
+bw-v4 = { workspace = true }
 tokio = { workspace = true }
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
 ```
 
-### 3.2 每屏唯一出口(伪码)
+原文这里列的是 `bw-store` / `bw-app` / `ui` 三个依赖,那是"新壳架在旧内核上"的写法。实况是新壳只依赖 `bw-v4`(外加 `bw-core` / `bw-engine` 两个共用件),旧内核三个包一个都不进依赖树 —— 删旧壳那次因此只用在 `members` 去掉两行,不必先拆依赖。
+
+### 3.2 每屏唯一出口(A 刀实况)
 
 ```rust
 // crates/app-shell/src/screens/overview/mod.rs —— 唯一允许被外部调用的东西
-pub fn view(vm: &ui::OverviewVm, on_command: &dyn Fn(bw_app::Command)) -> dioxus::prelude::Element {
-    todo!() // 内部随便拆多少私有子组件,除 view 外本模块不再 pub 任何东西
-}
-
-// crates/app-shell/src/screens/mod.rs —— 唯一知道"有几个屏"的地方
-pub enum ScreenId { Wall, Onboard, Settings, Overview, Plan, Session, Notify, Config, Kb }
-pub fn route(id: ScreenId /* 各屏各自的 vm */) -> dioxus::prelude::Element {
-    match id { ScreenId::Overview => overview::view(/* .. */), /* ... */ }
+pub fn view(p: &crate::vm::ProjectVm, bridge: &crate::bridge::Bridge) -> Element {
+    // 内部随便拆多少私有函数,除 view 外本模块不再 pub 任何东西
 }
 ```
 
-### 3.3 `guard-no-cross-screen-import.sh`(建议全文)
+和原文伪码的两处出入:①ViewModel 类型来自 `crate::vm`,不是 `ui` crate(见 §2.3);②发命令不走 `on_command` 回调,走一个可 clone 的 `Bridge` 句柄(`bridge.cmd(Command::…)`)—— 回调在 Dioxus 的事件闭包里要处处借用,句柄 clone 一份进闭包更顺手,通路语义没变:UI 只发命令、只收 ViewModel。
 
-```bash
-#!/usr/bin/env bash
-# 一屏一模块:screens/<name>/ 不许 `use crate::screens::<别的名字>::...`。
-# 共享数据一律走 ui crate。
-set -euo pipefail
-cd "$(dirname "$0")/.."
-SCREENS_DIR="crates/app-shell/src/screens"
-fail=0
-for dir in "$SCREENS_DIR"/*/; do
-  name=$(basename "$dir")
-  hits=$(grep -rn "crate::screens::" "$dir" | grep -v "crate::screens::${name}::" || true)
-  if [ -n "$hits" ]; then
-    echo "✗ screens/$name 跨屏引用了别的屏幕模块:"; echo "$hits" | sed 's/^/    /'; fail=1
-  else
-    echo "✓ screens/$name 无跨屏引用"
-  fi
-done
-[ "$fail" -eq 0 ] || { echo "共享数据请经 ui crate 的 ViewModel。"; exit 1; }
-echo "所有屏幕模块只经命令/事件与 ui crate 通信。"
-```
+### 3.3–3.4 两道守门脚本(已落地,正本在 `scripts/`)
 
-### 3.4 `guard-file-lines.sh`(建议全文)
+原文这里贴了两份建议全文。**A 刀已经把它们写进仓里**,以脚本本身为准,这里只记差异:
 
-```bash
-#!/usr/bin/env bash
-# 单文件超限直接拒绝——不再走回 op.rs 2524 行的老路。只查新壳,不追溯旧壳。
-set -euo pipefail
-cd "$(dirname "$0")/.."
-LIMIT=1500
-fail=0
-while IFS= read -r -d '' f; do
-  n=$(wc -l < "$f")
-  [ "$n" -gt "$LIMIT" ] && { echo "✗ $f 有 $n 行,超过约定上限 $LIMIT 行"; fail=1; }
-done < <(find crates/app-shell/src -name '*.rs' -print0)
-[ "$fail" -eq 0 ] || exit 1
-echo "app-shell 下没有文件超过 $LIMIT 行。"
-```
+- **`scripts/guard-no-cross-screen-import.sh`**:逐个 `crates/app-shell/src/screens/<屏>/` 目录 grep `crate::screens::`,命中除自己以外的屏幕名就报错、退出码非零。和建议稿的唯一出入是错误提示里那句"共享数据请经 `ui` crate"改成了"经 ViewModel 或命令/事件绕一圈"(见 §2.3:V4 的 ViewModel 不在 `ui` crate)。
+- **`scripts/guard-file-lines.sh`**:1500 行硬上限(阻断)+ 600 行软目标(只提醒不阻断,建议稿没有这一档)。查 `crates/app-shell/src` 与 `crates/bw-v4/src` 两处,不只查新壳 —— 新内核同样是从零写的,同样该守规矩。目录不存在时退出码 0(方便在还没建 crate 的分支上跑门禁)。
 
-### 3.5 `Command`/`Event` 增量(签名级,不写实现体)
+- **`scripts/guard-screen-hooks.sh`**(建议稿没有,A 刀评审抓到真 bug 后补的):用了 `use_signal` / `use_future` 这类 Dioxus hook 的函数,必须是组件(`#[component]`)。普通函数在 `rsx!` 里被直接调用时,它的 hook 落在**调用方**的 hook 表上按序号取;切一次屏,序号还在、类型换了(接入屏那格是 `String`,计划屏那格是 `Option<CardItemVm>`),Dioxus 取 hook 时 downcast 失败,整次渲染 panic —— 用户看到的是一块空白面板,编译期一点征兆都没有。放在 `for` 循环里更糟:hook 数量随列表长度变,行与行的输入框内容会串位。
+
+三条都已进 `DEVELOPMENT.md` 的门禁清单。A 刀交付时的实际水位:没有文件超过 1500 行,超过 600 行软目标的 0 个(`vm_build.rs` 长到 609 行时按软目标拆成了 `vm_build.rs` + `vm_panels.rs`)。
+
+### 3.5 `Command`/`Event`(A 刀实况:全新一对枚举)
+
+原文这里贴的是"在 `bw-app` 既有 65 个变体上并列新增"的伪码。实况是 `crates/bw-v4/src/command.rs` 里**全新的一对枚举**(为什么见 §2.1),`bw-app` 那对一行没动。A 刀真写进去的签名:
 
 ```rust
-// crates/bw-app/src/command.rs 新增变体(与既有约 65 个变体并列,不新开枚举)
+// crates/bw-v4/src/command.rs —— 只列 A 刀真接了实现的
 pub enum Command {
-    // ...既有变体不动...
-    ScheduleIssue { id: IssueId, week_of: Option<String> },  // None = 移出回待办池(设计期统一:合并原 UnscheduleIssue,06 篇口径)
-    ReorderIssue { id: IssueId, after: Option<IssueId> },    // 字段名统一用 after(06 篇口径)
-    CutRelease { version: String, note: String, included_issue_ids: Vec<IssueId> },
-    TogglePreview { id: Option<IssueId> },  // 设计期统一:替代早期只能「开」的 PreviewIssueWorktree(06 篇口径)
-    SetCurrentVersion { version: String },  // 06 篇新增
+    CreateProject { intent: ProjectIntent, remote: Option<RemoteRef> },
+    EditProjectCard { project_id: ProjectId, intent: ProjectIntent },   // 项目群不在这里,走下面那条
     SetProjectChat { project_id: ProjectId, provider: String, group_id: String, notify: Vec<String> },
-    EditProjectCard { brief: String, benchmark: String, north_star: String, chat: Option<ChatConfig> },  // 设计期统一:去掉 kind/descr,按 02/08 两篇一致的字段改写
-    MergeAndComplete { id: IssueId },
-    SyncNotifyToChat { issue_id: IssueId, event_type: String },  // 设计期统一:字段名以 07 篇为准
-    FetchChatDigest { project_id: ProjectId, since: String, until: String },  // 设计期统一:字段以 07 篇为准
-    MarkNotifySeen { project_id: ProjectId, at: String },  // 07 篇新增
-    StartWeekPlanning,
     RunStandardBootstrap { project_id: ProjectId },
-    BackfillHistory { project_id: ProjectId },              // 03 篇新增
-    ReconcileStandard { project_id: ProjectId },             // 03 篇新增
-    UpgradeStandard { project_id: ProjectId, files: Vec<String> },  // 03 篇新增
-    OpenRootShell,
-    OpenFileTab { issue_id: IssueId, path: String },        // 设计期统一:05 篇口径,替代早期 OpenFile{path}
-    OpenDiffTab { issue_id: IssueId, path: String },         // 设计期统一:05 篇口径,替代早期 ShowDiff
-    ExpandTreeDir { issue_id: IssueId, dir_path: String },   // 05 篇新增
-    SetIssueWorkflow { id: IssueId, workflow: String },      // 04 篇新增,字段名统一为 workflow
-    SaveToolMapping { project_id: ProjectId, category: String, tool: String, workflow: String },  // 04 篇新增
-    ProbeTool { name: String },                              // 04 篇新增
-    MarkEntrySkill { skill_id: SkillId, package_id: SkillPackageId },  // 04 篇新增
-}
-// 既有变体改动(非新增):CreateAutopilotTask 加 auto_run: bool ——
-// true = 到点自动建活后立刻自动 ▶开工(运作活②);false = 今天行为不变(只建活)。
-// 硬删(非新增,见表格「配置」行):CreateAgent / UpdateAgent / ImportAgentDefinition ——
-// V4 新库 schema.sql 从未定义 agent 表(不是删表,是新库从未建过),存量队友定义
-// 不迁移,不可逆,已提请用户点头(00-handshake 第 2 条)。
-// 硬删(非新增):ImportSkillPackage —— 预置技能包铺底改由 RunStandardBootstrap
-// 一次性复制进 .claude/skills/(02 篇 §2.5),不需要单独的导入命令与登记表。
-
-pub enum Event {
-    // ...既有 18 个变体不动...
-    IssueScheduled { id: IssueId },
-    ReleaseCut { version: String },
-    ProjectChatChanged,
-    ProjectCardEditPending { id: IssueId },        // 08 篇新增
-    ProjectCardMerged { project_id: ProjectId },    // 08 篇新增
-    NotifySyncedToChat { id: IssueId, ok: bool },
-    OpsWorkflowAutoFired { id: IssueId }, // 区别于既有 CronAutoFired(只覆盖建活)
-    ChatDigestFetched { since: String },
+    ReconcileStandard { project_id: ProjectId },
+    StartWeekPlanning { project_id: ProjectId, week: String },
+    ConfirmWeekDraft { project_id: ProjectId, week: String, titles: Vec<String> },  // 原表没有:草稿要人确认才建活
+    CreateIssue { project_id: ProjectId, title: String, body: String,
+                  category: Option<Category>, kind: IssueKind, origin: IssueOrigin, week_of: String },
+    ScheduleIssue { id: IssueId, week_of: Option<String> },   // None = 移回待办池
+    ReorderIssue { id: IssueId, after: Option<IssueId> },
+    SetIssueWorkflow { id: IssueId, workflow: String },
+    SetCurrentVersion { project_id: ProjectId, version: String },
+    CutRelease { project_id: ProjectId, version: String, note: String, included: Vec<IssueId> },
+    RefreshIssueCacheFromPlan { project_id: ProjectId, week: String },
+    RunIssue { id: IssueId },
+    TransitionIssue { id: IssueId, to: IssueStatus },
+    BlockIssue { id: IssueId, reason: String },
+    SaveToolMapping { project_id: ProjectId, category: Category, tool: String, workflow: String },
+    ProbeTool { name: String },
+    MarkNotifySeen { project_id: ProjectId },
 }
 ```
+
+`Event` 同样是新枚举,20 个变体,一条命令对一到几条回执(`IssueCreated` / `IssueScheduled` / `IssueRan` / `IssueTransitioned{settled}` / `ReleaseCut{rows_written}` / `StandardBootstrapped{files,committed}` / `HealthDerived{signal}` 等)。回执里带的是**真发生了什么**,不是"命令收到了":比如 `ReleaseCut.rows_written` 为假就表示这个版本号已经在发版记录里、这次没写第二行。
+
+**表里有、A 刀没接的那批**见 §2.6 表后一段。`CreateAgent` / `UpdateAgent` / `ImportAgentDefinition` / `ImportSkillPackage` 四条"硬删"自然消失了 —— 新枚举里从来没有它们,不存在删的动作;V4 新库的 `schema.sql` 也从未定义过 `agent` 表,存量队友定义不迁移、不可逆(00-handshake 第 2 条已提请用户点头)。
 
 ### 3.6 深链读取点(伪码,对照 `kernel.rs:526-566` 改写,细节见 2.7)
 

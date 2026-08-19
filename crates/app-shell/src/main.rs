@@ -122,8 +122,12 @@ fn Root() -> Element {
             div {
                 style: "min-height:100vh;background:{theme::PAPER};font-family:{theme::SANS};color:{theme::INK};",
                 match tv {
-                    TopView::Onboard => screens::onboard::view(&v, &b, close),
-                    TopView::Settings => screens::settings::view(&v, close),
+                    TopView::Onboard => rsx! {
+                        screens::onboard::View { vm: v.clone(), bridge: b.clone(), close }
+                    },
+                    TopView::Settings => rsx! {
+                        screens::settings::View { vm: v.clone(), close }
+                    },
                 }
             }
         };
@@ -135,7 +139,11 @@ fn Root() -> Element {
             GlobalChrome {}
             div {
                 style: "min-height:100vh;background:{theme::PAPER};font-family:{theme::SANS};color:{theme::INK};",
-                {screens::wall::view(&v, &b, move |tv| top_view.set(Some(tv)))}
+                screens::wall::View {
+                    vm: v.clone(),
+                    bridge: b.clone(),
+                    go_top: move |tv| top_view.set(Some(tv)),
+                }
             }
         };
     };

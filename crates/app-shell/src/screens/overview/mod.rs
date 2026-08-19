@@ -10,7 +10,9 @@ use crate::vm::{MetricCardVm, ProjectVm};
 use bw_v4::command::Command;
 use dioxus::prelude::*;
 
-pub fn view(p: &ProjectVm, bridge: &Bridge) -> Element {
+#[component]
+pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
+    let (p, bridge) = (&p, &bridge);
     rsx! {
         div {
             style: "max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:16px;",

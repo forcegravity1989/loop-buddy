@@ -10,21 +10,25 @@ use bw_v4::command::Command;
 use bw_v4::model::category_from_key;
 use dioxus::prelude::*;
 
-pub fn view(p: &ProjectVm, bridge: &Bridge) -> Element {
+#[component]
+pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
+    let (p, bridge) = (&p, &bridge);
     rsx! {
         div {
             style: "max-width:960px;margin:0 auto;display:flex;flex-direction:column;gap:16px;",
             {mapping_block(p, bridge)}
             {skill_block(p)}
             {connector_block(p, bridge)}
-            {standard_block(p, bridge)}
+            StandardBlock { p: p.clone(), bridge: bridge.clone() }
         }
     }
 }
 
 /// ④ 规范件与在研版本。对账是**纯读**的:只回报缺 / 过期 / 人改过,不动仓、
 /// 不建活 —— 要不要补由人决定。
-fn standard_block(p: &ProjectVm, bridge: &Bridge) -> Element {
+#[component]
+fn StandardBlock(p: ProjectVm, bridge: Bridge) -> Element {
+    let (p, bridge) = (&p, &bridge);
     let b_rec = bridge.clone();
     let b_ver = bridge.clone();
     let pid = p.id;
@@ -90,13 +94,17 @@ fn mapping_block(p: &ProjectVm, bridge: &Bridge) -> Element {
                 }
             }
             for m in p.config.mappings.iter() {
-                {mapping_row(m, p.id, bridge)}
+                MappingRow { key: "{m.category_key}", m: m.clone(), pid: p.id, bridge: bridge.clone() }
             }
         }
     }
 }
 
-fn mapping_row(m: &MappingVm, pid: bw_v4::model::ProjectId, bridge: &Bridge) -> Element {
+/// 一行映射。**必须是组件**:它有自己的 `use_signal`,而它是在 `for` 循环里
+/// 渲染的 —— 做成普通函数的话,hook 数量会随映射条数变,行与行的输入框内容
+/// 会串位(改 A 类别却存到 B 类别上)。
+#[component]
+fn MappingRow(m: MappingVm, pid: bw_v4::model::ProjectId, bridge: Bridge) -> Element {
     let mut tool = use_signal(|| m.tool.clone());
     let mut workflow = use_signal(|| m.workflow.clone());
     let b = bridge.clone();
@@ -114,7 +122,6 @@ fn mapping_row(m: &MappingVm, pid: bw_v4::model::ProjectId, bridge: &Bridge) -> 
     };
     rsx! {
         div {
-            key: "{m.category_key}",
             style: "display:flex;gap:10px;align-items:center;padding:9px 0;\
                     border-top:1px solid {theme::BORDER};",
             div { style: "width:88px;flex:none;font-size:13px;", "{m.category_label}" }

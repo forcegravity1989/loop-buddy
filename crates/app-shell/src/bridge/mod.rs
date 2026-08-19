@@ -124,10 +124,20 @@ pub enum Req {
     Refresh,
 }
 
+/// 桥是整个进程共用的**一个**句柄,clone 出来的都指向同一个内核线程,
+/// 因此永远相等 —— 这样它才能当 Dioxus 组件的 props(props 要求 `PartialEq`,
+/// Dioxus 用它判断要不要重渲染;桥本身不携带会变的状态,变的是它推过来的
+/// ViewModel)。
 #[derive(Clone)]
 pub struct Bridge {
     tx: mpsc::UnboundedSender<Req>,
     pub vm: watch::Receiver<Vm>,
+}
+
+impl PartialEq for Bridge {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 impl Bridge {
