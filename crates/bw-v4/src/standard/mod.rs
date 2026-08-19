@@ -102,6 +102,47 @@ pub fn render(template: &str, vars: &[(&str, &str)]) -> String {
     out
 }
 
+/// 三张运作 workflow 的正本(规范第 6 类「默认件与鱼塘」)。
+///
+/// 和预置技能包一样必须**真的复制进项目仓**——agent 开工时按活的 `workflow`
+/// 字段找剧本,找的是项目仓 `.claude/skills/` 下的文件,不是 buddy 的安装目录。
+///
+/// `standard/06-defaults/ops/README.md` 不在这张表里:它说的是 buddy 自己
+/// `standard/` 目录怎么排版、版本怎么走,项目仓里没人读得到用处。
+pub const WEEK_PLANNING_SKILL: &str =
+    include_str!("../../../../standard/06-defaults/ops/week-planning/SKILL.md");
+pub const METRICS_REFRESH_SKILL: &str = include_str!(
+    "../../../../standard/06-defaults/ops/week-planning/skills/metrics-refresh/SKILL.md"
+);
+pub const ASSET_AUDIT_SKILL: &str =
+    include_str!("../../../../standard/06-defaults/ops/asset-audit/SKILL.md");
+pub const MERGE_ADJUST_SKILL: &str = include_str!(
+    "../../../../standard/06-defaults/ops/standard-bootstrap-agent/merge-adjust/SKILL.md"
+);
+
+/// 项目仓内的落点 → 正文。子技能 `metrics-refresh` 挂在入口包目录下面,
+/// 不是平级的第二个技能——它只由 `week-planning` 第二步调用。
+pub fn ops_workflow_packages() -> Vec<(String, &'static str)> {
+    vec![
+        (
+            ".claude/skills/week-planning/SKILL.md".into(),
+            WEEK_PLANNING_SKILL,
+        ),
+        (
+            ".claude/skills/week-planning/skills/metrics-refresh/SKILL.md".into(),
+            METRICS_REFRESH_SKILL,
+        ),
+        (
+            ".claude/skills/asset-audit/SKILL.md".into(),
+            ASSET_AUDIT_SKILL,
+        ),
+        (
+            ".claude/skills/merge-adjust/SKILL.md".into(),
+            MERGE_ADJUST_SKILL,
+        ),
+    ]
+}
+
 /// 预置技能包:buddy 自带的九份方法论技能。
 ///
 /// Claude CLI 只在项目仓里找技能,不会去读 buddy 的安装目录——所以铺底必须

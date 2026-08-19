@@ -81,6 +81,15 @@ pub fn write_core_files(
         }
     }
 
+    // 三张运作 workflow 的剧本,同理必须真复制进来。
+    for (target, body) in standard::ops_workflow_packages() {
+        let before = report.written.len();
+        lay_one(workspace, &target, body, version, &mut managed, &mut report)?;
+        if report.written.len() > before {
+            report.skills.push(target);
+        }
+    }
+
     // 指纹清单最后写 —— 记的必须是刚落盘那一刻的内容。
     managed_file::write(workspace, &managed)?;
     report.written.push(managed_file::REL_PATH.to_string());
