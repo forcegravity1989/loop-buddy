@@ -1,0 +1,1955 @@
+<!DOCTYPE html>
+<html data-proto="v4-hifi" data-version="3" lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Builders' Workbench</title>
+<style>
+:root{
+  --paper:#EFEBE2; --rail-bg:#E9E3D7; --clay:#C5654A; --clay-dim:#e2b2a4;
+  --card:#FBFAF6; --card-alt:#F4F0E7; --border:#E2DCCF; --border-deep:#DBD4C5;
+  --ink:#23211C; --ink-2:#57534A; --ink-3:#8C867A; --ink-4:#A19B8D;
+  --agent:#5A4E7A; --alert-deep:#A33D29;
+  --green:#6B8E5A; --amber:#D3A24A; --red:#C0463A; --gray:#9A9590;
+  --up:#5F7355; --down:#B0503A; --warn-text:#B5862F;
+  --shadow:0 8px 26px rgba(35,33,28,.08);
+  --serif:'Noto Serif SC','Songti SC','STSong','SimSun',serif;
+  --sans:'Noto Sans SC','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+  --mono:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;height:100%;}
+::selection{background:#E7CFC4;}
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-thumb{background:#D8D1C2;border-radius:6px;border:3px solid var(--paper);}
+::-webkit-scrollbar-track{background:transparent;}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55;font-size:13px;-webkit-font-smoothing:antialiased;}
+button{font-family:inherit;cursor:pointer;}
+input,textarea,select{font-family:inherit;color:var(--ink);}
+textarea{resize:vertical;}
+input:focus,textarea:focus,select:focus{outline:1.5px solid var(--clay);outline-offset:0;}
+a{color:inherit;text-decoration:none;}
+h1,h2,h3,h4{font-family:var(--serif);font-weight:700;margin:0 0 8px;}
+
+/* ---------- atoms ---------- */
+.mono{font-family:var(--mono);}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);}
+.chip{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;line-height:16px;white-space:nowrap;background:#EFE9DA;color:var(--ink-2);}
+.chip-clay{background:var(--clay);color:#fff;}
+.chip-outline{background:transparent;border:1px solid var(--clay);color:var(--clay);}
+.chip-green{background:#E7EDE2;color:#4A5E42;}
+.chip-red{background:#F3DFD8;color:var(--alert-deep);}
+.chip-gray{background:#EFEADF;color:var(--ink-3);}
+.btn{cursor:pointer;background:#fff;border:1px solid var(--border);color:var(--ink);border-radius:8px;padding:7px 14px;font-size:12.5px;white-space:nowrap;}
+.btn:hover{border-color:var(--clay);color:var(--clay);}
+.btn:disabled{opacity:.45;cursor:not-allowed;}
+.btn:disabled:hover{border-color:var(--border);color:var(--ink);}
+.btn-primary{cursor:pointer;background:var(--clay);border:1px solid var(--clay);color:#fff;border-radius:8px;padding:9px 20px;font-size:13.5px;font-weight:500;}
+.btn-primary:hover{background:#B1573F;}
+.btn-primary:disabled{opacity:.45;cursor:not-allowed;background:#B89A8E;border-color:#B89A8E;}
+.btn-sm{padding:4px 10px;font-size:11.5px;border-radius:6px;}
+.btn-ghost{background:transparent;border:1px solid transparent;}
+.btn-ghost:hover{background:#EFE9DA;border-color:transparent;color:var(--ink);}
+.btn-danger{background:var(--alert-deep);color:#fff;border:1px solid var(--alert-deep);}
+.btn.active{background:var(--clay);color:#fff;border-color:var(--clay);}
+.input,.textarea,select.select{width:100%;background:#FFFDF8;border:1px solid var(--border-deep);border-radius:8px;padding:8px 11px;font-size:13px;line-height:1.5;font-family:inherit;}
+.textarea{resize:vertical;min-height:44px;}
+.label{font-size:11.5px;color:var(--ink-3);margin:0 0 5px;display:block;}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:none;}
+.dot-lg{width:13px;height:13px;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.32;}}
+.dot-run{animation:pulse 1.2s ease-in-out infinite;}
+.asterisk{color:var(--clay);font-weight:700;}
+.spacer{flex:1;}
+.hidden{display:none !important;}
+
+/* ---------- shell ---------- */
+#app{display:flex;height:100vh;overflow:hidden;background:var(--paper);}
+.iconrail{width:64px;flex:0 0 64px;background:var(--rail-bg);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:4px;}
+.rail-logo{width:34px;height:34px;border-radius:9px;background:var(--clay);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:700;font-size:17px;margin-bottom:10px;flex:none;}
+.rail-btn{width:40px;height:40px;border:none;border-radius:9px;background:transparent;display:flex;align-items:center;justify-content:center;color:var(--ink-3);}
+.rail-btn svg{width:19px;height:19px;}
+.rail-btn:hover{background:#DED5C2;}
+.rail-btn.active{background:#DED5C2;color:var(--ink);}
+
+.projectrail{width:198px;flex:0 0 198px;background:var(--rail-bg);border-right:1px solid var(--border);padding:16px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:14px;}
+.pr-back{font-size:12px;color:var(--ink-2);display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 2px;}
+.pr-back svg{width:13px;height:13px;}
+.pr-back:hover{color:var(--clay);}
+.pr-head{padding-bottom:10px;border-bottom:1px solid var(--border);}
+.pr-head-name{font-family:var(--serif);font-weight:700;font-size:14.5px;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.pr-head-meta{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink-3);font-family:var(--mono);}
+.pr-nav{display:flex;flex-direction:column;gap:2px;}
+.pr-link{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:8px;font-size:12.5px;color:var(--ink-2);cursor:pointer;}
+.pr-link svg{width:15px;height:15px;flex:none;}
+.pr-link:hover{background:#DED5C2;}
+.pr-link.active{background:var(--clay);color:#fff;}
+
+.main{flex:1;display:flex;flex-direction:column;min-width:0;}
+.topbar{height:52px;flex:0 0 52px;border-bottom:1px solid var(--border);background:var(--card);display:flex;align-items:center;padding:0 18px;gap:12px;}
+.topbar-title{font-family:var(--serif);font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.demo-tag{font-size:10.5px;color:var(--ink-3);background:transparent;border:1px solid var(--border);border-radius:999px;padding:2px 10px;white-space:nowrap;}
+.avatar-chip{width:26px;height:26px;border-radius:50%;background:var(--clay);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none;}
+.pr-badge{margin-left:auto;background:var(--clay);color:#fff;font-size:10px;border-radius:8px;padding:0 5px;min-width:14px;text-align:center;line-height:16px;flex:none;}
+.env-help{color:var(--clay);cursor:pointer;font-size:11px;margin-left:2px;}
+.env-help:hover{text-decoration:underline;}
+.content{flex:1;overflow-y:auto;padding:20px 24px 60px;min-width:0;}
+
+/* ---------- wall ---------- */
+[data-screen="wall"]{max-width:1300px;}
+.wall-topline{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
+.wall-topline h1{font-size:21px;margin:0;}
+.envbar,.healthbar{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:11px 16px;margin-bottom:11px;}
+.bar-label{font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--ink-3);text-transform:uppercase;flex:none;}
+.env-item{font-size:12px;color:var(--ink-2);display:flex;align-items:center;gap:6px;}
+.env-item.fail{color:var(--alert-deep);}
+.health-group{font-size:12px;color:var(--ink-2);display:flex;align-items:center;gap:6px;}
+.wall-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
+.pcard{background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:15px 17px;cursor:pointer;}
+.pcard:hover{border-color:var(--clay);}
+.pcard-top{display:flex;align-items:center;gap:6px;margin-bottom:11px;}
+.pcard-x{margin-left:auto;background:transparent;border:none;color:var(--ink-3);font-size:14px;padding:0 0 0 6px;}
+.pcard-x:hover{color:var(--alert-deep);}
+.pcard-name{font-family:var(--serif);font-size:18px;font-weight:600;margin-bottom:5px;}
+.pcard-oneliner{font-size:12.5px;color:var(--ink-2);line-height:1.5;margin-bottom:9px;min-height:19px;}
+.pcard-meta{font-size:11.5px;color:var(--ink-3);margin-bottom:9px;display:flex;gap:13px;flex-wrap:wrap;}
+.pcard-bar{height:6px;border-radius:3px;background:#E6E0D2;overflow:hidden;}
+.pcard-bar-fill{height:100%;background:var(--clay);border-radius:3px;}
+.pcard-del{margin-top:11px;padding-top:11px;border-top:1px dashed var(--ink-3);display:flex;align-items:center;gap:8px;font-size:11.5px;}
+.newcard{border:1.6px dashed var(--border-deep);border-radius:10px;min-height:150px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;cursor:pointer;color:var(--ink-3);}
+.newcard:hover{border-color:var(--clay);}
+.newcard .plus{font-size:24px;color:var(--clay);}
+
+/* ---------- onboard ---------- */
+[data-screen="onboard"]{max-width:880px;}
+.ob-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.ob-cards{display:flex;flex-direction:column;gap:14px;}
+.ob-card{padding:17px 19px;}
+.ob-card h3{font-size:14.5px;margin-bottom:11px;}
+.tabrow{display:flex;gap:6px;margin-bottom:11px;}
+.pillrow{display:flex;gap:7px;margin-bottom:11px;flex-wrap:wrap;}
+.pill{padding:6px 14px;border-radius:15px;border:1px solid var(--border-deep);font-size:12.5px;cursor:pointer;background:#fff;color:var(--ink-2);}
+.pill.active{border:1.5px solid var(--clay);color:var(--clay);font-weight:600;}
+.repolist{display:flex;flex-direction:column;gap:4px;max-height:180px;overflow-y:auto;margin-top:8px;}
+.repo-row{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border:1px solid var(--border);border-radius:7px;cursor:pointer;font-size:12.5px;}
+.repo-row:hover{border-color:var(--clay);}
+.repo-row.sel{border-color:var(--clay);background:#FBEEE9;}
+.formrow{margin-bottom:11px;}
+.formgrid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.probe3{display:flex;gap:16px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);font-size:11.5px;color:var(--ink-3);flex-wrap:wrap;}
+.ob-actions{display:flex;justify-content:flex-end;margin-top:2px;gap:8px;}
+
+/* ---------- settings ---------- */
+[data-screen="settings"]{max-width:640px;}
+.settings-list{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#fff;}
+.settings-row{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);gap:12px;}
+.settings-row:last-child{border-bottom:none;}
+.settings-row .k{font-size:13px;font-weight:600;}
+.settings-row .v{font-size:12px;color:var(--ink-3);}
+
+/* ---------- overview ---------- */
+[data-screen="overview"]{max-width:1120px;}
+.ov-stack{display:flex;flex-direction:column;gap:14px;}
+.ov-banner{background:#FBEEE9;border:1px solid var(--clay-dim);border-radius:9px;padding:9px 14px;display:flex;align-items:center;justify-content:space-between;font-size:12.5px;flex-wrap:wrap;gap:8px;}
+.ov-block{padding:16px 18px;}
+.ov-block1{display:flex;gap:22px;flex-wrap:wrap;}
+.ov-block1 .info{flex:1.7;min-width:280px;}
+.ov-block1 .health{flex:1;min-width:230px;padding-left:22px;border-left:1px solid var(--border);}
+@media (max-width:760px){ .ov-block1 .health{border-left:none;padding-left:0;border-top:1px dashed var(--border);padding-top:14px;} }
+.ov-block-title{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:9px;}
+.ov-row{display:flex;gap:14px;flex-wrap:wrap;}
+.ov-row .mcard{flex:1;min-width:200px;}
+.repo-metric-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+.repo-metric-head h3{font-family:var(--serif);font-size:15px;margin:0;}
+.repo-metric-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;}
+.repo-metric-item{background:#fff;border:1px solid var(--border);border-radius:8px;padding:9px 11px;}
+.repo-metric-item .v{font-family:var(--mono);font-weight:700;font-size:16px;}
+.repo-metric-item .k{font-size:10.3px;color:var(--ink-3);margin-top:2px;}
+.week-counts{display:flex;gap:16px;font-size:12px;color:var(--ink-2);margin:2px 0 10px;flex-wrap:wrap;}
+.week-counts b{font-family:var(--mono);color:var(--ink);}
+.ops-chip-row{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 12px;}
+
+.charter-name{font-family:var(--serif);font-size:19px;font-weight:700;margin-bottom:6px;}
+.charter-line{font-size:12.8px;color:var(--ink-2);margin-bottom:5px;line-height:1.5;}
+.charter-line .k{color:var(--ink-3);font-size:11px;margin-right:4px;}
+.charter-meta{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-3);margin-top:10px;padding-top:10px;border-top:1px solid var(--border);align-items:center;}
+.mr-banner{margin-top:11px;background:#F3E3C4;border:1px solid #E3C78F;border-radius:8px;padding:8px 12px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+
+.health-big{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.health-word{font-weight:700;font-size:15px;font-family:var(--serif);}
+.health-reasons{display:flex;flex-direction:column;gap:4px;}
+.health-reason{display:flex;gap:7px;font-size:12.3px;padding:5px 6px;border-radius:6px;cursor:pointer;}
+.health-reason:hover{background:#EEE6D3;}
+.health-reason .mark{flex:none;}
+
+.metric-col{flex:1;display:flex;flex-direction:column;gap:8px;min-width:190px;}
+.metric-col-title{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);}
+.mcard{background:#fff;border:1px solid var(--border);border-radius:9px;padding:11px 13px;}
+.mcard.gray{background:#F1EEE4;}
+.mcard.north{border-left:4px solid var(--clay);}
+.mcard-head{display:flex;align-items:center;gap:6px;margin-bottom:6px;}
+.mcard-name{font-family:var(--serif);font-size:13px;font-weight:600;flex:1;min-width:0;}
+.mcard-name.big{font-size:15px;}
+.mcard-value-row{display:flex;align-items:baseline;gap:6px;margin-bottom:3px;}
+.mcard-value{font-family:var(--mono);font-weight:700;font-size:19px;}
+.mcard-value.big{font-size:23px;}
+.mcard-target{font-family:var(--mono);font-size:11.3px;color:var(--ink-3);}
+.mcard-sub{font-size:10.3px;color:var(--ink-3);}
+.mcard-driven{margin-top:7px;display:flex;gap:4px;flex-wrap:wrap;}
+.badge-manual{display:inline-block;font-size:9.5px;background:#E7E0CF;border-radius:4px;padding:0 5px;margin-left:4px;color:var(--ink-3);}
+
+.week-goal{font-size:13.2px;margin-bottom:8px;}
+.week-progress{height:10px;border-radius:5px;overflow:hidden;display:flex;border:1px solid var(--border);margin-bottom:10px;}
+
+.version-cols{display:flex;gap:24px;flex-wrap:wrap;margin-bottom:9px;}
+.version-col .k{font-size:11px;color:var(--ink-3);}
+.version-col .v{font-family:var(--mono);font-size:15px;font-weight:700;}
+.release-line{font-size:11.3px;color:var(--ink-3);margin-top:3px;}
+.repostats{font-size:11px;color:var(--ink-3);margin-top:10px;padding-top:9px;border-top:1px solid var(--border);font-family:var(--mono);line-height:1.7;}
+
+/* ---------- plan ---------- */
+[data-screen="plan"]{height:calc(100vh - 92px);max-width:1560px;}
+.plan-grid{display:grid;grid-template-columns:180px 1fr;gap:14px;height:100%;min-height:0;}
+.plan-col{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow-y:auto;padding:12px;}
+.plan-allrow{padding:8px 9px;border-radius:7px;font-size:13px;cursor:pointer;font-weight:600;margin-bottom:6px;}
+.plan-allrow:hover{background:#EEE6D3;}
+.plan-allrow.active{background:var(--clay);color:#fff;}
+.plan-weekrow{padding:7px 9px;border-radius:7px;font-size:12.5px;cursor:pointer;margin-bottom:2px;display:flex;justify-content:space-between;align-items:center;}
+.plan-weekrow:hover{background:#EEE6D3;}
+.plan-weekrow.active{background:var(--clay);color:#fff;}
+.plan-versionsel{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
+.plan-mid{display:flex;flex-direction:column;min-width:0;height:100%;background:transparent;border:none;box-shadow:none;padding:0;overflow:visible;}
+.plan-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;gap:10px;flex-wrap:wrap;flex:none;}
+.plan-toolbar .left{font-size:14px;font-family:var(--serif);font-weight:700;}
+.plan-toolbar .right{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.switch{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-3);cursor:pointer;user-select:none;}
+.goal-box{background:#fff;border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:13.2px;margin-bottom:9px;flex:none;}
+.filter-bar{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;flex:none;}
+.filter-bar select,.filter-bar input{padding:5px 8px;font-size:11.5px;border:1px solid var(--border);border-radius:6px;background:#fff;}
+.filter-bar input{width:150px;}
+.detail-empty{font-size:12.5px;color:var(--ink-3);padding:16px 4px;}
+.detail-title{font-size:15px;font-weight:700;font-family:var(--serif);margin-bottom:10px;}
+.detail-row{margin-bottom:9px;font-size:12.5px;}
+.detail-row .k{font-size:10.5px;color:var(--ink-3);margin-bottom:2px;}
+.detail-actions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;}
+
+.kanban{flex:1;display:flex;gap:11px;min-height:0;overflow-x:auto;padding-bottom:4px;}
+.kanban-col{flex:1 1 0;min-width:186px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px;display:flex;flex-direction:column;overflow-y:auto;}
+.kanban-col-head{font-size:11.3px;color:var(--ink-3);margin-bottom:8px;flex:none;}
+.kcard{background:#fff;border:1px solid var(--border);border-left:3px solid var(--border-deep);border-radius:8px;padding:10px 11px;margin-bottom:8px;flex:none;}
+.kcard-top{font-family:var(--mono);font-size:10.6px;color:var(--ink-3);display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;}
+.kcard-title{font-size:12.6px;color:var(--ink);margin-bottom:8px;line-height:1.4;cursor:pointer;}
+.kcard-title:hover{color:var(--clay);}
+.kcard-actions{display:flex;gap:10px;flex-wrap:wrap;font-size:11.3px;}
+.kcard-actions button{background:transparent;border:none;padding:0;font-size:11.3px;cursor:pointer;font-family:inherit;}
+.kcard-actions button:hover{text-decoration:underline;}
+.plan-detail{position:fixed;top:52px;right:0;bottom:0;width:360px;background:var(--card);border-left:1px solid var(--border);box-shadow:var(--shadow);z-index:55;display:flex;flex-direction:column;}
+.plan-detail-head{padding:15px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex:none;}
+.plan-detail-body{flex:1;overflow-y:auto;padding:16px 18px;}
+
+/* ---------- session (Orca-style) ---------- */
+[data-screen="session"]{height:calc(100vh - 92px);max-width:1600px;}
+.sess-grid{display:grid;grid-template-columns:216px 1fr 264px;gap:14px;height:100%;min-height:0;}
+.sess-col{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;min-height:0;}
+.sess-left-scroll{overflow-y:auto;padding:9px;flex:1;}
+.sess-group-label{font-size:10.3px;color:var(--ink-3);font-family:var(--mono);padding:9px 6px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sess-row{display:flex;align-items:flex-start;gap:8px;padding:8px 8px;border-radius:8px;cursor:pointer;margin-bottom:2px;}
+.sess-row:hover{background:#EEE6D3;}
+.sess-row.sel{background:var(--clay);color:#fff;}
+.sess-row .dot{margin-top:4px;}
+.sess-row .body{flex:1;min-width:0;}
+.sess-row .ttl{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sess-row .sub{font-size:10.3px;color:var(--ink-3);margin-top:1px;}
+.sess-row.sel .sub{color:rgba(255,255,255,.78);}
+.sess-addnew{font-size:10.3px;color:var(--ink-3);padding:3px 8px 8px;cursor:pointer;}
+.sess-addnew:hover{color:var(--clay);}
+.sess-mid{min-width:0;}
+.sess-actionbar{display:flex;align-items:center;gap:8px;padding:10px 13px;border-bottom:1px solid var(--border);background:#FBF8EF;flex-wrap:wrap;flex:none;}
+.sess-actionbar .ttl{font-weight:700;font-size:13px;flex:1;min-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sess-tabs{display:flex;gap:2px;padding:7px 8px 0;border-bottom:1px solid var(--border);flex:none;overflow-x:auto;}
+.sess-tab{padding:6px 12px;font-size:11.3px;border-radius:7px 7px 0 0;cursor:pointer;color:var(--ink-3);white-space:nowrap;display:flex;align-items:center;gap:6px;}
+.sess-tab.active{background:#fff;color:var(--ink);border:1px solid var(--border);border-bottom-color:#fff;margin-bottom:-1px;}
+.sess-tab .x{opacity:.5;padding:0 2px;}
+.sess-tab .x:hover{opacity:1;color:var(--alert-deep);}
+.sess-body{flex:1;min-height:0;display:flex;flex-direction:column;padding:9px;}
+
+.terminal{flex:1;background:#1c1b19;border-radius:9px;display:flex;flex-direction:column;overflow:hidden;min-height:0;}
+.term-titlebar{background:#2a2825;color:#c9c5b8;font-size:11px;padding:7px 12px;display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);flex:none;gap:10px;}
+.term-titlebar .copybtn{background:transparent;border:1px solid #4c4a44;color:#c9c5b8;border-radius:5px;padding:2px 8px;font-size:10.5px;}
+.term-titlebar .copybtn:hover{border-color:var(--amber);color:var(--amber);}
+.term-body{flex:1;overflow-y:auto;padding:11px 13px;font-family:var(--mono);font-size:12px;color:#d8d4c6;white-space:pre-wrap;word-break:break-word;user-select:text;}
+.term-line{margin-bottom:4px;}
+.term-line.sys{color:#8f9c7b;}
+.term-line.agent{color:#e3b479;}
+.term-line.human{color:#8fb3d9;}
+.term-line.git{color:#7fbf8a;}
+.term-idle{color:#77746a;}
+.term-input-row{display:flex;gap:8px;padding:8px 11px;border-top:1px solid #38352f;flex:none;}
+.term-input-row input{flex:1;background:#100f0e;border:1px solid #3c3a34;border-radius:6px;color:#e5e1d4;padding:6px 9px;font-family:var(--mono);font-size:12px;}
+.term-input-row input:focus{outline:1px solid var(--amber);}
+
+.codeview{flex:1;background:#fff;border:1px solid var(--border);border-radius:9px;overflow:hidden;display:flex;flex-direction:column;min-height:0;}
+.codeview-head{background:var(--card-alt);padding:6px 12px;font-family:var(--mono);font-size:11px;color:var(--ink-3);border-bottom:1px solid var(--border);flex:none;}
+.codeview-body{flex:1;overflow:auto;font-family:var(--mono);font-size:11.5px;line-height:1.7;padding:4px 0;}
+.codeline{display:flex;}
+.codeline .ln{flex:none;width:38px;text-align:right;padding-right:10px;color:var(--ink-4);user-select:none;}
+.codeline .src{flex:1;white-space:pre;padding-right:12px;}
+.tok-kw{color:#8B4A9C;}
+.tok-str{color:#B0764A;}
+.tok-com{color:var(--ink-3);font-style:italic;}
+
+.diffview{flex:1;background:#fff;border:1px solid var(--border);border-radius:9px;overflow:auto;font-family:var(--mono);font-size:11.5px;line-height:1.7;}
+.diffline{padding:1px 12px;white-space:pre;}
+.diffline.add{background:#E9F1E3;color:#3E5A32;}
+.diffline.del{background:#F7E4DE;color:var(--alert-deep);}
+.diffline.ctx{color:var(--ink-3);}
+
+.od-embed{flex:1;border:1px solid var(--border);border-radius:9px;overflow:hidden;display:flex;flex-direction:column;background:#fff;}
+.od-embed-head{background:var(--rail-bg);padding:6px 12px;font-size:11px;font-family:var(--mono);color:var(--ink-3);border-bottom:1px solid var(--border);}
+.od-embed-canvas{flex:1;display:flex;align-items:center;justify-content:center;background:repeating-linear-gradient(45deg,#faf7ee,#faf7ee 12px,#f2eede 12px,#f2eede 24px);color:var(--ink-3);font-size:13px;flex-direction:column;gap:8px;}
+
+.sess-right-scroll{overflow-y:auto;padding:11px;flex:1;}
+.sr-h{font-size:10px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px;}
+.sr-h:first-child{margin-top:0;}
+.tree-node{font-family:var(--mono);font-size:11.3px;line-height:1.85;cursor:pointer;display:flex;align-items:center;gap:4px;border-radius:4px;}
+.tree-node:hover{background:#EEE6D3;}
+.tree-node.dir{color:var(--ink-2);}
+.tree-node.file{color:var(--ink);}
+.tree-node.changed{color:var(--clay);font-weight:600;}
+.tree-arrow{width:11px;display:inline-block;color:var(--ink-3);flex:none;}
+.changed-row{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10.8px;padding:3px 2px;border-bottom:1px dashed var(--border);cursor:pointer;}
+.changed-row:hover{color:var(--clay);}
+.diffnum .plus{color:var(--up);}
+.diffnum .minus{color:var(--down);margin-left:4px;}
+.git-box{font-family:var(--mono);font-size:11.3px;background:#fff;border:1px solid var(--border);border-radius:7px;padding:8px 10px;line-height:1.8;}
+.mr-card{margin-top:8px;font-size:12px;background:#fff;border:1px solid var(--border);border-radius:8px;padding:9px 10px;}
+.mr-card .row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
+
+/* ---------- config ---------- */
+.tabbtn-row{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;}
+.tabbtn{padding:6px 14px;border-radius:7px;font-size:12.5px;cursor:pointer;border:1px solid var(--border);background:var(--card);color:var(--ink-2);}
+.tabbtn.active{background:var(--clay);color:#fff;border-color:var(--clay);}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:9px;background:#fff;}
+table.tbl{width:100%;border-collapse:collapse;font-size:12.2px;min-width:520px;}
+table.tbl th{text-align:left;font-size:10.3px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.03em;padding:8px 12px;border-bottom:1px solid var(--border);background:#FAF6EA;white-space:nowrap;}
+table.tbl td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:middle;}
+table.tbl tr:last-child td{border-bottom:none;}
+.tglswitch{width:32px;height:18px;border-radius:9px;background:var(--border-deep);position:relative;display:inline-block;flex:none;}
+.tglswitch.on{background:var(--clay);}
+.tglswitch .knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .15s;}
+.tglswitch.on .knob{left:16px;}
+.cfg-topbtn{display:flex;justify-content:flex-end;margin-bottom:12px;}
+.cfg-readonly-note{font-size:11.3px;color:var(--ink-3);margin-top:8px;}
+[data-screen="config"]{max-width:1120px;}
+.cfg-section{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:16px;}
+.cfg-section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap;}
+.cfg-section-head h3{font-size:14.5px;margin:0;font-family:var(--serif);}
+.cfg-pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.cfg-pair .cfg-section{margin-bottom:0;}
+@media (max-width:760px){ .cfg-pair{grid-template-columns:1fr;} }
+select.select-sm{padding:5px 7px;font-size:11.8px;border:1px solid var(--border-deep);border-radius:6px;background:#FFFDF8;}
+select.select-multi{padding:3px;font-size:11.5px;border:1px solid var(--border-deep);border-radius:6px;background:#FFFDF8;min-width:130px;}
+
+/* ---------- space ---------- */
+.sp-topinfo{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px;padding:10px 14px;font-size:12px;}
+.sp-layout{display:grid;grid-template-columns:230px 1fr;gap:14px;}
+.sp-tree{padding:10px;height:fit-content;}
+.sp-tree-group{font-size:10px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em;padding:8px 8px 3px;}
+.sp-tree-item{padding:7px 9px;border-radius:7px;cursor:pointer;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sp-tree-item:hover{background:#EEE6D3;}
+.sp-tree-item.active{background:var(--clay);color:#fff;}
+.sp-preview{background:#fff;padding:18px 20px;min-height:420px;}
+.sp-preview h4{font-family:var(--serif);font-size:14.5px;margin-bottom:10px;}
+.sp-preview .path{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-bottom:12px;}
+.sp-preview .field{margin-bottom:9px;font-size:12.5px;}
+.sp-preview .field .k{font-size:10.3px;color:var(--ink-3);}
+.sp-preview pre{white-space:pre-wrap;font-family:var(--mono);font-size:12px;background:#FAF7EF;border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.7;}
+
+.graph-svgbox{background:#fff;border:1px solid var(--border);border-radius:9px;padding:14px;margin-bottom:14px;}
+.graph-lower{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.leaderboard-row{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11.3px;padding:5px 2px;border-bottom:1px dashed var(--border);}
+.symbol-result{font-family:var(--mono);font-size:11.3px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;margin-bottom:5px;background:#fff;}
+.symbol-result .h{color:var(--clay);font-weight:700;margin-bottom:3px;}
+.graph-foot{font-size:10.3px;color:var(--ink-3);font-family:var(--mono);margin-top:8px;}
+
+.asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(216px,1fr));gap:10px;margin-top:8px;}
+.asset-card{padding:11px 13px;display:flex;flex-direction:column;gap:6px;}
+.asset-card .name{font-weight:700;font-size:12.6px;}
+.asset-card .meta{font-size:10.8px;color:var(--ink-3);}
+.asset-sect-title{font-size:13.3px;font-weight:700;margin:18px 0 4px;font-family:var(--serif);}
+.asset-sect-title:first-child{margin-top:0;}
+
+/* ---------- drawer / modal / toast ---------- */
+.drawer-backdrop{position:fixed;inset:0;background:rgba(35,33,28,.32);z-index:60;}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:380px;background:var(--card);border-left:1px solid var(--border);box-shadow:var(--shadow);z-index:61;display:flex;flex-direction:column;}
+.drawer-head{padding:15px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.drawer-head h3{font-size:15px;margin:0;}
+.drawer-close{background:transparent;border:none;font-size:16px;color:var(--ink-3);}
+.drawer-close:hover{color:var(--clay);}
+.drawer-body{flex:1;overflow-y:auto;padding:12px 14px;}
+.drawer-item{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;}
+.drawer-item .desc{font-size:12.3px;margin-bottom:8px;line-height:1.5;}
+.drawer-item .acts{display:flex;gap:6px;flex-wrap:wrap;}
+.drawer-empty{font-size:12.5px;color:var(--ink-3);padding:24px 4px;text-align:center;}
+
+.modal-backdrop{position:fixed;inset:0;background:rgba(35,33,28,.45);display:flex;align-items:center;justify-content:center;z-index:70;padding:20px;}
+.modal{background:#fff;border-radius:12px;max-width:540px;width:100%;padding:20px 22px;max-height:82vh;overflow-y:auto;}
+.modal h3{font-size:15.5px;margin-bottom:14px;}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
+.check-row{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:5px 0;}
+
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:9px 16px;border-radius:8px;font-size:12.5px;z-index:100;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;max-width:520px;text-align:center;}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(-6px);}
+
+/* ---------- guide drawer (wall) ---------- */
+.guide-tab{position:fixed;top:130px;right:0;background:var(--card);border:1px solid var(--border);border-right:none;border-radius:8px 0 0 8px;padding:12px 7px;writing-mode:vertical-rl;font-size:12px;color:var(--ink-2);cursor:pointer;box-shadow:var(--shadow);z-index:50;letter-spacing:.05em;}
+.guide-tab:hover{color:var(--clay);border-color:var(--clay);}
+.guide-panel{position:fixed;top:0;right:0;bottom:0;width:320px;background:var(--card);border-left:1px solid var(--border);box-shadow:var(--shadow);z-index:56;display:flex;flex-direction:column;}
+.guide-panel-head{padding:15px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex:none;}
+.guide-chapters{display:flex;flex-direction:column;padding:8px;border-bottom:1px solid var(--border);flex:none;}
+.guide-chapter{padding:8px 10px;border-radius:7px;font-size:12.5px;cursor:pointer;color:var(--ink-2);}
+.guide-chapter:hover{background:#EEE6D3;}
+.guide-chapter.active{background:var(--clay);color:#fff;}
+.guide-body{flex:1;overflow-y:auto;padding:14px 18px;font-size:12.7px;line-height:1.75;color:var(--ink-2);}
+.guide-report{padding:11px 18px;border-top:1px dashed var(--border);color:var(--ink-4);font-size:11.3px;cursor:not-allowed;flex:none;}
+
+/* ---------- notify ---------- */
+[data-screen="notify"]{max-width:820px;}
+.notify-sect-title{font-size:11.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em;margin:20px 0 9px;font-family:var(--mono);}
+.notify-sect-title:first-of-type{margin-top:6px;}
+.notify-list{display:flex;flex-direction:column;gap:8px;}
+.notify-events{display:flex;flex-direction:column;}
+.notify-event{display:flex;gap:10px;padding:8px 6px;border-bottom:1px dashed var(--border);font-size:12.5px;align-items:baseline;}
+.notify-event:hover{background:#F6F1E5;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast" class="toast"></div>
+<script>
+(function(){
+'use strict';
+window.addEventListener('error', function(e){
+  try{ console.error('[v4-hifi] 运行时异常:', e.message, e.filename, e.lineno); }catch(_){}
+});
+
+/* ===================== 工具函数 ===================== */
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function clone(o){return JSON.parse(JSON.stringify(o));}
+function getPath(o,p){return p.split('.').reduce(function(a,k){return (a==null)?a:a[k];},o);}
+function setPath(o,p,v){var parts=p.split('.'),c=o;for(var i=0;i<parts.length-1;i++){c=c[parts[i]];if(c==null)return;}c[parts[parts.length-1]]=v;}
+var toastTimer=null;
+function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.classList.remove('show');},2600);}
+function icon(name){
+  var p={
+    wall:'<rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/>',
+    settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>',
+    overview:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6"/>',
+    plan:'<path d="M5 6h14M5 12h14M5 18h9"/>',
+    session:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
+    config:'<path d="M4 7h9M17 7h3M4 12h3M9 12h11M4 17h13M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="6" cy="12" r="2"/><circle cx="17" cy="17" r="2"/>',
+    space:'<path d="M4 6a2 2 0 012-2h6l2 2h6a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/><path d="M4 9h16"/>',
+    back:'<path d="M15 5l-7 7 7 7"/>',
+    notify:'<path d="M6 8a6 6 0 0112 0c0 4 1.6 5.4 1.6 5.4H4.4S6 12 6 8z"/><path d="M9.5 17a2.5 2.5 0 005 0"/>',
+    dir:'<path d="M3 6a1 1 0 011-1h4l1.6 1.6H20a1 1 0 011 1V17a1 1 0 01-1 1H4a1 1 0 01-1-1V6z"/>',
+    file:'<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>'
+  }[name]||'';
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';
+}
+function lightDot(color,big){return '<span class="dot'+(big?' dot-lg':'')+'" style="background:'+colorOf(color)+'"></span>';}
+function colorOf(c){return {green:'var(--green)',yellow:'var(--amber)',amber:'var(--amber)',red:'var(--red)',gray:'var(--gray)'}[c]||'var(--gray)';}
+
+/* ===================== 常量 ===================== */
+var TODAY='2026-08-18', TODAY_SHORT='08-18', CURRENT_WEEK='W34';
+var TOOL_LABEL={claude_cli:'Claude CLI',cursor:'Cursor',open_design:'Open Design'};
+var TOOL_ICON={claude_cli:'▣',cursor:'◧',open_design:'◐'};
+var STATUS_LABEL={pool:'待办池',todo:'待办',doing:'进行中',review:'评审中',merged:'评审中·已合入',done:'完成',blocked:'阻塞'};
+var STATUS_DOT={pool:'gray',todo:'gray',doing:'amber',review:'amber',merged:'amber',done:'green',blocked:'red'};
+var CATS=['构建','构建(文档)','原型','优化','运维','运营推广','运作'];
+var WEEKS=['W34','W33','W32','W31'];
+var VERSIONS=['0.4.0-v4','0.3.0-v3','0.2.0-v3'];
+var KANBAN_COLS=[['pool','待办池'],['todo','待办'],['doing','进行中'],['review','评审中'],['done','已完成'],['blocked','阻塞']];
+function colOf(status){
+  if(status==='review'||status==='merged')return 'review';
+  if(KANBAN_COLS.some(function(c){return c[0]===status;}))return status;
+  return 'todo';
+}
+var GUIDE_CHAPTERS=[
+  {id:'env',label:'环境准备',body:'claude CLI、Open Design、codehub-cli 三项本机环境按需安装,缺一项不影响开工,只影响对应类别的活能不能开工。「测一下」会真实探活,结果记进健康信号,不假装绿。'},
+  {id:'onboard',label:'接入项目',body:'接入只问两件事:仓在哪、这个项目想做什么。规范铺底(运作活③)会在后台自动建分支、写核心件、提 MR,评审中合入即可,不用手填目录或分支。'},
+  {id:'cycle',label:'一周一圈',body:'每周由运作活①开场:复盘上周 → 更新指标 → 引导出本周目标与活清单。活从待办池推到评审中都是 agent 干的,「完成」永远由你在看板上点一下。'},
+  {id:'faq',label:'常见问题',body:'常见问题会随实际使用逐步收进这里。当前先看前三章;遇到没写清楚的地方,用下面的「问题上报」占位记一笔(暂未接入真实上报)。'}
+];
+
+/* ===================== 终端 transcript(沿用第一版三套) ===================== */
+var OPS1_TRANSCRIPT=[
+  {cls:'sys',text:'[buddy] 系统提示词已注入 · 单人构建者工作台 · 一活一分支一 MR · 完成永远由人点'},
+  {cls:'sys',text:'[skill] 技能已注入:更新指标与周计划(合并自 north-star-discovery + metrics-binding)'},
+  {cls:'sys',text:'[read] AGENTS.md'},
+  {cls:'sys',text:'[read] PROJECT.md'},
+  {cls:'sys',text:'[read] docs/plan/2026-W33.md'},
+  {cls:'agent',text:'agent> 复盘上周(2026-W33):减负线两轮收尾在途、V4 全貌草案与规范铺底稿收口,原型仍在做。'},
+  {cls:'agent',text:'agent> 更新指标:「默认件被真实使用次数」目前无数据源,建议在 .bw/connectors.toml 加一段采集脚本。'},
+  {cls:'human',text:'人> 先记一条 TODO,这周先把高保真原型和减负线合入收口。'},
+  {cls:'agent',text:'agent> 引导本周目标:「V4 MVP 从口述收口成设计事实源并出高保真;减负线合入 main」,你看呢?'},
+  {cls:'human',text:'人> 可以,就这句。'},
+  {cls:'agent',text:'agent> 已按类别拆出业务活草稿,你确认后我建活。'},
+  {cls:'human',text:'人> 确认,建吧。'},
+  {cls:'git',text:'[write] 活草稿已写入,含类别 / 预期推动指标 / 建议开工工具'},
+  {cls:'git',text:'[git] 分支 bw/issue-plan-2026-W34 → 提交 .bw/metrics.toml、docs/plan/2026-W34.md'},
+  {cls:'git',text:'[mr] 已提 MR !bw/plan-2026-W34'},
+  {cls:'git',text:'[hook] 已推到评审中'}
+];
+function issueSuffix(id){return String(id).replace(/^pr-/,'');}
+function branchOf(id){return 'bw/issue-'+issueSuffix(id);}
+function worktreeOf(id){return 'loop-buddy-issue-'+issueSuffix(id);}
+function buildOps2Transcript(pid,issueId){
+  var issue=getIssue(pid,issueId),wk=(issue&&issue.week)||CURRENT_WEEK,branch=branchOf(issueId);
+  var mrLabel=(issue&&issue.mr&&issue.mr.label)||('!'+branch);
+  return [
+    {cls:'sys',text:'[buddy] 系统提示词已注入 · 单人构建者工作台 · 一活一分支一 MR · 完成永远由人点'},
+    {cls:'sys',text:'[skill] 技能已注入:资产盘点与微重构'},
+    {cls:'sys',text:'[read] docs/'},
+    {cls:'sys',text:'[read] .bw/standard.toml(默认件清单与版本)'},
+    {cls:'agent',text:'agent> 盘点 docs/:产物、周计划、发版记录是否齐全登记。'},
+    {cls:'agent',text:'agent> 核对默认件:.claude/skills/ 是否与 standard/ 声明的版本一致。'},
+    {cls:'agent',text:'agent> codegraph files -j 找候选大文件,评估是否值得拆。'},
+    {cls:'agent',text:'agent> 发现 3 处可微重构点(命名、格式、一个死码函数),小范围改动。'},
+    {cls:'git',text:'[write] 盘点报告写入 docs/plan/2026-'+wk+'.md 尾段'},
+    {cls:'git',text:'[git] 分支 '+branch+' → 提交微重构改动'},
+    {cls:'git',text:'[mr] 已提 MR '+mrLabel},
+    {cls:'git',text:'[hook] 已推到评审中'}
+  ];
+}
+function categoryWorkHint(category){
+  category=category||'';
+  if(/构建/.test(category))return '构建类:先把需求打磨清楚再写代码。';
+  if(/优化/.test(category))return '优化类:先复现再改。';
+  if(/运维/.test(category))return '运维类:先复现再改。';
+  if(/运营推广/.test(category))return '运营推广类:无默认技能,从鱼塘挑合适的打法。';
+  return '按活说明与类别默认打法推进。';
+}
+function buildGenericTranscript(pid,issueId){
+  var issue=getIssue(pid,issueId);
+  if(!issue)return OPS1_TRANSCRIPT;
+  var skillName=(issue.skill&&issue.skill!=='—')?issue.skill:'superpowers';
+  var files=changedFilesFor(issue),branch=branchOf(issueId);
+  var mrLabel=(issue.mr&&issue.mr.label)||('!'+branch);
+  return [
+    {cls:'sys',text:'[buddy] 系统提示词已注入 · 单人构建者工作台 · 一活一分支一 MR · 完成永远由人点'},
+    {cls:'sys',text:'[skill] 技能已注入:'+skillName},
+    {cls:'sys',text:'[read] AGENTS.md'},
+    {cls:'sys',text:'[read] PROJECT.md'},
+    {cls:'sys',text:'[read] docs/plan/2026-'+(issue.week||CURRENT_WEEK)+'.md'},
+    {cls:'agent',text:'agent> 读活说明:'+issue.title},
+    {cls:'agent',text:'agent> '+categoryWorkHint(issue.category)},
+    {cls:'git',text:'[write] 改了 '+files.length+' 个文件:'+files.map(function(f){return f[0];}).join('、')},
+    {cls:'git',text:'[git] 分支 '+branch+' → 提交改动'},
+    {cls:'git',text:'[mr] 已提 MR '+mrLabel},
+    {cls:'git',text:'[hook] 已推到评审中'}
+  ];
+}
+function TRANSCRIPTS_FOR(pid,issueId){
+  if(/^ops1-/.test(issueId))return OPS1_TRANSCRIPT;
+  if(/^ops2-/.test(issueId))return buildOps2Transcript(pid,issueId);
+  return buildGenericTranscript(pid,issueId);
+}
+function changedFilesFor(issue){
+  if(issue.tool==='open_design')return [['docs/design/v4-hifi-notes.md','+42','-0'],['docs/v4-prototype/hifi/index.html','+880','-0']];
+  return [['standard/README.md','+120','-0'],['standard/01-charter/PROJECT.md.tmpl','+40','-0'],
+    ['crates/bw-app/src/standard/mod.rs','+85','-3'],['crates/bw-store/src/sqlite.rs','+12','-1'],
+    ['docs/plan/2026-'+(issue.week||CURRENT_WEEK)+'.md','+6','-0']];
+}
+var DISTILL_NAMES={'std-1':'规范铺底核对清单','pr-102':'旧引擎退役核对法','w1-2':'codehub clone 排障笔记','v4-4':'高保真原型走查法'};
+
+/* ===================== 数据工厂 ===================== */
+function makeIssues(){
+  return {
+    'v4-1':{id:'v4-1',title:'V4 MVP 全貌草案三轮 grilling 收口',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',skill:'grillme',teammate:'构建师',desc:'把口述原文收口成设计事实源(mvp-blueprint-draft.md),三轮 grilling 走完拍板,22 条已定。'},
+    'v4-2':{id:'v4-2',title:'规范铺底模块设计稿',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',skill:'grillme',teammate:'构建师',desc:'standard-module-draft.md:八大类规范怎么落地、正本住哪、怎么演进。'},
+    'v4-3':{id:'v4-3',title:'Orca / DSH / codegraph 预研',category:'构建(文档)',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-18',source:'agent 拆',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',skill:'research',teammate:'构建师',desc:'三条并行预研:Orca 借模式、DeepSeek Harness 接口、codegraph 用法。'},
+    'v4-4':{id:'v4-4',title:'V4 高保真可点击原型',category:'原型',tool:'open_design',kind:'business',status:'doing',source:'人建',metricIds:['lead-1'],mr:null,week:'W34',version:'0.4.0-v4',skill:'原型设计技能',teammate:'原型师',desc:'五入口可点击原型,证明「一周一圈」在界面上走不走得通。'},
+    'pr-102':{id:'pr-102',title:'减负线两轮收尾合入(删旧聊天式引擎,唯一入口 Issue ▶跑)',category:'构建',tool:'claude_cli',kind:'business',status:'review',source:'人建',metricIds:['lead-1'],mr:{id:'#102',label:'PR #102',status:'open'},week:'W34',version:'0.4.0-v4',skill:'superpowers',teammate:'构建师',desc:'两轮收尾把旧聊天式工作流引擎整链删除,唯一开工入口收敛到 Issue ▶跑。22 commit,等待合入。'},
+    'w1-2':{id:'w1-2',title:'纳入时 codehub clone 堵命令循环',category:'优化',tool:'cursor',kind:'business',status:'todo',source:'人建',metricIds:[],mr:null,week:'W34',version:'0.4.0-v4',skill:'systematic-debugging',teammate:'构建师',desc:'纳入已有仓时 codehub clone 在某些网络下会卡住命令循环,需要加超时与重试。'},
+    'std-1':{id:'std-1',title:'规范铺底模块落地(standard/ 目录 + 铺底命令)',category:'构建',tool:'claude_cli',kind:'business',status:'pool',source:'人建',metricIds:['lag-1'],mr:null,week:'W34',version:'0.4.0-v4',skill:'规范铺底(含合并调整)',teammate:'构建师',desc:'把 standard-module-draft.md 落成 standard/ 目录 + 铺底命令 + 对账。'},
+    'ops1-w34':{id:'ops1-w34',title:'运作活①更新指标 + 制定本周计划 2026-W34',category:'运作',tool:'claude_cli',kind:'ops',status:'done',doneDate:'08-17',source:'人触发',metricIds:[],mr:{id:'!bw/plan-2026-W34',label:'!bw/plan-2026-W34',status:'merged'},week:'W34',version:'0.4.0-v4',skill:'更新指标与周计划',teammate:'构建师',desc:'复盘上周 → 更新指标 → 引导本周目标与活清单。MR 已合入。'},
+    'ops2-w33':{id:'ops2-w33',title:'运作活②资产盘点与代码微重构 2026-W33',category:'运作',tool:'claude_cli',kind:'ops',status:'review',source:'自动建 08-14 20:00',auto:true,metricIds:[],mr:{id:'!bw/ops-2026-W33',label:'!bw/ops-2026-W33',status:'open'},week:'W33',version:'0.3.0-v3',skill:'资产盘点与微重构',teammate:'构建师',desc:'盘点 docs/、产物、默认件是否齐 → 小范围微重构 → 提 MR。周五自动开工,等人评审。'},
+    'ops3':{id:'ops3',title:'运作活③规范铺底 v4.0(含合并调整)',category:'运作',tool:'claude_cli',kind:'ops',status:'done',doneDate:'08-17',doneAssumed:true,source:'自动建(接入时)',auto:true,metricIds:[],mr:{id:'!bw/standard-4.0',label:'!bw/standard-4.0',status:'merged'},week:'W33',version:'0.3.0-v3',skill:'规范铺底(含合并调整)',teammate:'构建师',desc:'建分支写全套核心件;检测到已有 README,多一步 agent「合并调整」再提 MR。'},
+    'w33-legacy':{id:'w33-legacy',title:'减负线第一轮六切片(旧聊天式引擎整链退役第一轮)',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-17',source:'人建',metricIds:['lead-1'],mr:{id:'#102',label:'PR #102(第一轮)',status:'merged'},week:'W33',version:'0.3.0-v3',skill:'superpowers',teammate:'构建师',desc:'六个切片依次删除旧聊天式工作流引擎的各处依赖,为第二轮收尾铺路。'},
+    'w33-usefix':{id:'w33-usefix',title:'V3-use-fix:Claude 探测 / 列仓搜索 / 测一下',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-17',source:'人建',metricIds:[],mr:{id:'#101',label:'PR #101',status:'merged'},week:'W33',version:'0.3.0-v3',skill:'superpowers',teammate:'构建师',desc:'三张真实体验修复:claude 可执行探测、列仓搜索、探活「测一下」按钮。'},
+    'w32-odembed':{id:'w32-odembed',title:'V3-OD-embed:原型进度内嵌 Open Design',category:'原型',tool:'open_design',kind:'business',status:'done',doneDate:'08-12',source:'人建',metricIds:[],mr:{id:'#99',label:'PR #99',status:'merged'},week:'W32',version:'0.3.0-v3',skill:'原型设计技能',teammate:'原型师',desc:'原型阶段进度面板内嵌本机 Open Design 首页,替换占位卡。'},
+    'w32-v2prod':{id:'w32-v2prod',title:'V2 产品化',category:'构建',tool:'claude_cli',kind:'business',status:'done',doneDate:'08-10',source:'人建',metricIds:[],mr:{id:'#97',label:'PR #97',status:'merged'},week:'W32',version:'0.2.0-v3',skill:'superpowers',teammate:'构建师',desc:'V2 阶段收尾产品化改动,合入 main。'}
+  };
+}
+function makeMetrics(){
+  return {
+    northstar:{id:'northstar',tier:'北极星',label:'在 buddy 上跑完 ≥4 个周循环的内部项目数',current:0,target:'5',freshness:'30 天',obsNote:'2026-08-18 手填',manual:true,assumed:true,drivenBy:[]},
+    'lag-1':{id:'lag-1',tier:'滞后①',label:'已接入并铺底的内部项目数',current:1,currentNote:'buddy 自己',target:'5',targetAssumed:true,drivenBy:['std-1']},
+    'lag-2':{id:'lag-2',tier:'滞后②',label:'周循环跑通率',gray:true,drivenBy:[]},
+    'lead-1':{id:'lead-1',tier:'引领①',label:'本周合入活数',current:1,currentNote:'PR #101',target:'≥3',weekTarget:'≥3',achieved:false,drivenBy:['pr-102','v4-4','w33-legacy']},
+    'lead-2':{id:'lead-2',tier:'引领②',label:'本周发版次数',current:1,currentNote:'0.3.0-v3 重出,08-17',target:'≥1',weekTarget:'≥1',achieved:true,drivenBy:[]},
+    'lead-3':{id:'lead-3',tier:'引领③',label:'默认件被真实使用次数',gray:true,drivenBy:[]}
+  };
+}
+function makeSkills(){
+  return [
+    {name:'superpowers',source:'业界',version:'latest ✱',uses:'3 ✱',enabled:true},
+    {name:'grillme',source:'业界',version:'latest ✱',uses:'2 ✱',enabled:true},
+    {name:'更新指标与周计划',source:'规范默认 · buddy 自建(合并自 north-star-discovery + metrics-binding)',version:'0.4.0-v4',uses:'1 ✱',enabled:true,ops:true},
+    {name:'资产盘点与微重构',source:'规范默认 · buddy 自建',version:'0.4.0-v4',uses:'0',enabled:true,ops:true},
+    {name:'规范铺底(含合并调整)',source:'规范默认 · buddy 自建',version:'4.0',uses:'1 ✱',enabled:true,ops:true},
+    {name:'原型设计技能',source:'项目自有',version:'0.2',uses:'1 ✱',enabled:true},
+    {name:'systematic-debugging',source:'业界',version:'latest ✱',uses:'1 ✱',enabled:true},
+    {name:'E2E 读回',source:'蒸馏(来源活:减负线两轮收尾合入 PR #102)',version:'0.1',uses:'0',enabled:true,distilled:true,assumed:true}
+  ];
+}
+function makeTeammates(){
+  return [
+    {name:'原型师',tool:'open_design',desc:'原型类活默认 agent',record:'—(无运行证据)',source:'规范默认'},
+    {name:'构建师',tool:'claude_cli / cursor',desc:'构建 / 优化 / 运维 / 运作类活默认 agent',record:'12 胜 3 败 ✱',assumed:true,source:'规范默认'}
+  ];
+}
+function makeConnectors(){
+  return [
+    {name:'GitHub',target:'forcegravity1989/loop-buddy',status:'connected',lastSync:'2026-08-18 09:02'},
+    {name:'codehub',target:'—',status:'unconfigured',lastSync:'—'}
+  ];
+}
+function makeCrons(){
+  return [
+    {id:'cron-ops2',name:'运作活②资产盘点与代码微重构',schedule:'每周五 20:00',lastRun:'2026-08-14 20:00',nextRun:'2026-08-21 20:00',status:'normal'},
+    {id:'cron-metrics',name:'指标采集',schedule:'每日 09:00',lastRun:'2026-08-18 09:00',nextRun:'2026-08-19 09:00',status:'normal'}
+  ];
+}
+function makeToolmap(){
+  return [
+    {cat:'原型',tool:'open_design',agent:'原型师',skills:['原型设计技能']},
+    {cat:'构建',tool:'claude_cli',agent:'构建师',skills:['superpowers','grillme']},
+    {cat:'优化',tool:'claude_cli',agent:'构建师',skills:['systematic-debugging']},
+    {cat:'运维',tool:'claude_cli',agent:'构建师',skills:['systematic-debugging']},
+    {cat:'运营推广',tool:'claude_cli',agent:'构建师',skills:[]},
+    {cat:'运作',tool:'claude_cli',agent:'构建师',skills:['更新指标与周计划','资产盘点与微重构']}
+  ];
+}
+var BUILTIN_SKILLS=['superpowers','grillme','更新指标与周计划','资产盘点与微重构','规范铺底(含合并调整)'];
+function skillSourceLabel(s){
+  if(BUILTIN_SKILLS.indexOf(s.name)>=0) return 'buddy 内置';
+  if(s.distilled) return '项目导入 · 蒸馏';
+  return '项目导入';
+}
+function makeNotifyEvents(){
+  return [
+    {id:'ev-1',text:'agent 等你输入(减负线收尾会话)',time:'08-18 14:20',link:'pr-102'},
+    {id:'ev-2',text:'运作活② 已于 08-14 20:00 自动建并开工',time:'08-14 20:00',link:'ops2-w33'},
+    {id:'ev-3',text:'MR #102 检查通过',time:'08-14 11:40',link:'pr-102'},
+    {id:'ev-4',text:'蒸馏完成「E2E 读回」',time:'08-13 19:05',link:null},
+    {id:'ev-5',text:'指标采集 09:00 完成',time:'08-13 09:00',link:null}
+  ];
+}
+var FILE_TREE={name:'loop-buddy',type:'dir',path:'',children:[
+  {name:'crates',type:'dir',path:'crates',children:[
+    {name:'bw-core',type:'dir',path:'crates/bw-core',children:[{name:'src',type:'dir',path:'crates/bw-core/src',children:[{name:'model.rs',type:'file',path:'crates/bw-core/src/model.rs'}]}]},
+    {name:'bw-engine',type:'dir',path:'crates/bw-engine',children:[]},
+    {name:'bw-store',type:'dir',path:'crates/bw-store',children:[{name:'src',type:'dir',path:'crates/bw-store/src',children:[{name:'sqlite.rs',type:'file',path:'crates/bw-store/src/sqlite.rs'}]}]},
+    {name:'bw-app',type:'dir',path:'crates/bw-app',children:[{name:'src',type:'dir',path:'crates/bw-app/src',children:[{name:'lib.rs',type:'file',path:'crates/bw-app/src/lib.rs'},{name:'standard',type:'dir',path:'crates/bw-app/src/standard',children:[{name:'mod.rs',type:'file',path:'crates/bw-app/src/standard/mod.rs'}]}]}]},
+    {name:'ui',type:'dir',path:'crates/ui',children:[{name:'src',type:'dir',path:'crates/ui/src',children:[{name:'vm.rs',type:'file',path:'crates/ui/src/vm.rs'}]}]},
+    {name:'app-desktop',type:'dir',path:'crates/app-desktop',children:[{name:'src',type:'dir',path:'crates/app-desktop/src',children:[{name:'screens',type:'dir',path:'crates/app-desktop/src/screens',children:[{name:'overview.rs',type:'file',path:'crates/app-desktop/src/screens/overview.rs'}]}]}]}
+  ]},
+  {name:'docs',type:'dir',path:'docs',children:[
+    {name:'plan',type:'dir',path:'docs/plan',children:[{name:'2026-W34.md',type:'file',path:'docs/plan/2026-W34.md'},{name:'2026-W33.md',type:'file',path:'docs/plan/2026-W33.md'}]},
+    {name:'v4-prototype',type:'dir',path:'docs/v4-prototype',children:[{name:'hifi',type:'dir',path:'docs/v4-prototype/hifi',children:[{name:'index.html',type:'file',path:'docs/v4-prototype/hifi/index.html'}]}]},
+    {name:'releases.md',type:'file',path:'docs/releases.md'}
+  ]},
+  {name:'standard',type:'dir',path:'standard',children:[{name:'README.md',type:'file',path:'standard/README.md'}]},
+  {name:'.bw',type:'dir',path:'.bw',children:[{name:'metrics.toml',type:'file',path:'.bw/metrics.toml'},{name:'project.toml',type:'file',path:'.bw/project.toml'}]},
+  {name:'AGENTS.md',type:'file',path:'AGENTS.md'},
+  {name:'PROJECT.md',type:'file',path:'PROJECT.md'},
+  {name:'Cargo.toml',type:'file',path:'Cargo.toml'}
+]};
+var FILE_CONTENTS={
+  'crates/bw-core/src/model.rs':['// bw-core/src/model.rs · 领域内核:五阶段元数据与状态机','pub enum StageKind { Prototype, Build, Optimize, Growth, Ops }','','pub enum IssueStatus { Todo, Doing, Review, Done, Blocked }','','impl IssueStatus {','    pub fn can_transition_to(&self, next: &IssueStatus) -> bool {','        match (self, next) {','            (IssueStatus::Review, IssueStatus::Done) => true,','            (IssueStatus::Todo, IssueStatus::Doing) => true,','            (IssueStatus::Doing, IssueStatus::Review) => true,','            _ => false,','        }','    }','}'],
+  'crates/bw-app/src/lib.rs':['// bw-app/src/lib.rs · 编排大脑:Command / Event 总线','pub struct App { store: Store, executor: Box<dyn Executor> }','','impl App {','    pub fn dispatch(&mut self, cmd: Command) -> Vec<Event> {','        let events = self.handle(cmd);','        self.store.recompute_signals();','        events','    }','}'],
+  'crates/bw-app/src/standard/mod.rs':['// bw-app/src/standard/mod.rs · 规范铺底:按 manifest 写核心件','pub fn scaffold(project: &Project, manifest: &StandardManifest) -> Vec<FileWrite> {','    // 建分支 → 写核心件 → 提 MR,不直接提交','    manifest.core_files.iter().map(render_template).collect()','}'],
+  'crates/bw-store/src/sqlite.rs':['// bw-store/src/sqlite.rs · SQLite 存取,store 层无业务判断','pub fn add_column_if_missing(conn: &Connection, table: &str, col: &str, ty: &str) {','    // CREATE TABLE IF NOT EXISTS 对存量表不会加新列,这里补上','}'],
+  'crates/ui/src/vm.rs':['// ui/src/vm.rs · 纯函数 selector:state → 可渲染 DTO','pub fn signal_color(signal: &Derived<Signal>) -> &\'static str {','    match signal.value() {','        Some(Signal::Green) => "transparent",','        Some(Signal::Amber) => "#D3A24A",','        Some(Signal::Red) => "#C0463A",','        None => "#9A9590",','    }','}'],
+  'crates/app-desktop/src/screens/overview.rs':['// app-desktop/src/screens/overview.rs · V4 总览屏','pub fn Overview(pid: ProjectId) -> Element {','    let health = use_health(pid);','    let metrics = use_metrics(pid);','    rsx! { OverviewGrid { health, metrics } }','}'],
+  'docs/plan/2026-W34.md':['# 2026-W34 周计划','','## 本周目标','V4 MVP 从口述收口成设计事实源并出高保真;减负线合入 main','','## 业务活','- v4-4 V4 高保真可点击原型(原型 · Open Design)','- pr-102 减负线两轮收尾合入(构建 · Claude CLI)','- std-1 规范铺底模块落地(构建 · Claude CLI)'],
+  'docs/plan/2026-W33.md':['# 2026-W33 周计划','','## 本周目标','减负线两轮收尾;V4 口述转设计事实源起草 ✱','','## 业务活','- w33-legacy 减负线第一轮六切片','- w33-usefix V3-use-fix 三张'],
+  'docs/releases.md':['# 发版记录','','## 0.3.0-v3 · 2026-08-17','重出(V3-use-fix),PR #101 合入。','','## 0.3.0-v3 · 2026-08-14','首包。'],
+  'standard/README.md':['# 规范铺底模块','','八大类核心件,按 manifest 铺进项目仓:','章程 · agent 工作约定 · 指标正本 · 周计划 · 发版记录 · 目录与知识结构 · 活的约定 · 默认件与鱼塘。'],
+  '.bw/metrics.toml':['# .bw/metrics.toml · 指标正本','[northstar]','label = "在 buddy 上跑完 ≥4 个周循环的内部项目数"','target = 5'],
+  '.bw/project.toml':['# .bw/project.toml','name = "Builders\' Workbench (buddy)"','standard_version = "4.0"','current_version = "0.4.0-v4"'],
+  'AGENTS.md':['# AGENTS.md · agent 工作约定正本','','先读 PROJECT.md,再读本周 docs/plan/。','指标改动一律走 MR,不直接提交。','代码结构问题优先用 codegraph explore / node / callers / impact。'],
+  'PROJECT.md':['# PROJECT.md · 项目章程','','Builders\' Workbench(buddy):AI Coding 里一个人的一张工作台。','对标:Linear / Orca 的工作台形态;传统 PM 的五角色十流程。'],
+  'Cargo.toml':['[workspace]','members = ["bw-core","bw-engine","bw-store","bw-app","ui","app-desktop"]','','[workspace.package]','edition = "2021"']
+};
+var KNOWLEDGE_DOCS=[
+  {group:'章程',id:'k-project',name:'PROJECT.md',path:'PROJECT.md'},
+  {group:'章程',id:'k-agents',name:'AGENTS.md',path:'AGENTS.md'},
+  {group:'规范件',id:'k-metrics',name:'.bw/metrics.toml',path:'.bw/metrics.toml'},
+  {group:'规范件',id:'k-projecttoml',name:'.bw/project.toml',path:'.bw/project.toml'},
+  {group:'周计划',id:'k-w34',name:'docs/plan/2026-W34.md',path:'docs/plan/2026-W34.md'},
+  {group:'周计划',id:'k-w33',name:'docs/plan/2026-W33.md',path:'docs/plan/2026-W33.md'},
+  {group:'发版记录',id:'k-releases',name:'docs/releases.md',path:'docs/releases.md'},
+  {group:'决策记录',id:'k-adr1',name:'ADR0001 · 通用语言',path:null,fallback:'record'},
+  {group:'设计产物',id:'k-blueprint',name:'mvp-blueprint-draft.md',path:null,fallback:'design'},
+  {group:'设计产物',id:'k-standard',name:'standard-module-draft.md',path:'standard/README.md'}
+];
+
+/* ===================== 项目 / 状态 ===================== */
+function freshProjects(){
+  return {
+    buddy:{id:'buddy',kind:'real',light:'yellow',name:"Builders' Workbench(buddy)",shortName:'buddy',
+      oneLiner:'V4 MVP 高保真中,减负线待合入',version:'0.4.0-v4',repo:'forcegravity1989/loop-buddy',owner:'Gravity',standardVersion:'4.0',lastDelivery:'08-17',
+      card:{name:"Builders' Workbench(buddy)",intent:'AI Coding 里一个人的一张工作台,把一个小项目从想法管到能验收的结果',benchmark:'Linear / Orca 的工作台形态;传统 PM 的五角色十流程',northstar:'2026-11-18 前,5 个内部项目在 buddy 上各跑完 ≥4 个完整周循环',northstarAssumed:true}},
+    jianmu:{id:'jianmu',kind:'placeholder',light:'green',name:'建木',shortName:'建木',oneLiner:'✱ 内部项目,演示假设值',version:'v0.1 ✱',repo:'jianmu ✱',owner:'Gravity',standardVersion:'—',lastDelivery:'—',
+      card:{name:'建木',intent:'✱ 未展开',benchmark:'✱ 未展开',northstar:'✱ 未展开',northstarAssumed:true}},
+    opsboard:{id:'opsboard',kind:'placeholder',light:'gray',name:'运维看板',shortName:'运维看板',oneLiner:'✱ 刚接入,无数据',version:'v0.1 ✱',repo:'ops-board ✱',owner:'Gravity',standardVersion:'—',lastDelivery:'—',
+      card:{name:'运维看板',intent:'✱ 未展开',benchmark:'✱ 未展开',northstar:'✱ 未展开',northstarAssumed:true}},
+    benchmark:{id:'benchmark',kind:'placeholder',light:'yellow',name:'benchmark',shortName:'benchmark',oneLiner:'✱ 演示假设值',version:'v0.1 ✱',repo:'benchmark ✱',owner:'Gravity',standardVersion:'—',lastDelivery:'—',
+      card:{name:'benchmark',intent:'✱ 未展开',benchmark:'✱ 未展开',northstar:'✱ 未展开',northstarAssumed:true}},
+    bridge:{id:'bridge',kind:'placeholder',light:'gray',name:'bridge',shortName:'bridge',oneLiner:'✱ 演示假设值',version:'v0.1 ✱',repo:'bridge ✱',owner:'Gravity',standardVersion:'—',lastDelivery:'—',
+      card:{name:'bridge',intent:'✱ 未展开',benchmark:'✱ 未展开',northstar:'✱ 未展开',northstarAssumed:true}}
+  };
+}
+var REPO_LIST=[
+  {id:'forcegravity1989/loop-buddy',label:'forcegravity1989/loop-buddy',real:true},
+  {id:'jianmu',label:'jianmu ✱',real:false},
+  {id:'ops-board',label:'ops-board ✱',real:false},
+  {id:'benchmark',label:'benchmark ✱',real:false},
+  {id:'bridge',label:'bridge ✱',real:false},
+  {id:'demo-new',label:'demo-new ✱',real:false}
+];
+function freshState(){
+  return {
+    projects:freshProjects(), newProject:null,
+    issues:{buddy:makeIssues()}, metrics:{buddy:makeMetrics()},
+    skills:{buddy:makeSkills()}, teammates:{buddy:makeTeammates()},
+    connectors:{buddy:makeConnectors()}, crons:{buddy:makeCrons()},
+    toolmap:{buddy:makeToolmap()},
+    settings:{workspaceRoot:'D:\\bw-workspaces'},
+    inbox:{buddy:[
+      {id:'inbox-pr102',kind:'issue',issueId:'pr-102',text:'PR #102 评审中',state:'pending'},
+      {id:'inbox-ops2',kind:'issue',issueId:'ops2-w33',text:'运作活②「资产盘点与微重构 2026-W33」评审中(MR,周五自动跑的)',state:'pending'},
+      {id:'inbox-metrics',kind:'metric',text:'指标「周循环跑通率」「默认件被真实使用次数」无观测',state:'pending',link:'ops1-w34'}
+    ]},
+    notifyEvents:{buddy:makeNotifyEvents()},
+    releases:{buddy:[{version:'0.3.0-v3',date:'2026-08-14',note:'首包',issues:[]},{version:'0.3.0-v3',date:'2026-08-17',note:'重出(V3-use-fix)',issues:['w33-usefix']}]},
+    weekPlans:{buddy:{
+      W34:{goal:'V4 MVP 从口述收口成设计事实源并出高保真;减负线合入 main',version:'0.4.0-v4'},
+      W33:{goal:'✱ 减负线两轮收尾;V4 口述转设计事实源起草',version:'0.3.0-v3',assumed:true},
+      W32:{goal:'✱ 演示占位:上上周目标',version:'0.3.0-v3',assumed:true},
+      W31:{goal:'✱ 演示占位:更早周目标',version:'0.2.0-v3',assumed:true}
+    }},
+    health:{buddy:{level:'yellow',reasons:[
+      {ok:true,text:'本周有周目标,3 张业务活有进展',jump:'week'},
+      {ok:false,text:'业务指标 5 个里 2 个无观测(灰)',jump:'lagging'},
+      {ok:true,text:'上周有交付:PR #101 合入(08-17)、0.3.0-v3 重出包(08-17)',jump:'version'}
+    ]}},
+    onboard:{tab:'existing',platform:'github',selectedRepo:'demo-new',search:'',visibility:'private',intentName:'',intentWhat:'',intentBenchmark:'',intentNorthstar:'',namespace:'',repoName:''},
+    ui:{
+      terminalLines:{},playing:{},
+      guideOpen:false, guideChapter:'env',
+      envTesting:false, envStatus:{claude:'unknown',codehub:'unknown',od:'unknown'}, obEnvOk:false,
+      workspaceRootEditing:false,
+      deleteConfirm:{},
+      charterEditing:{},charterDraft:{},
+      selectedWeek:{buddy:CURRENT_WEEK}, planLeft:{buddy:CURRENT_WEEK}, selectedIssue:{buddy:'pr-102'},
+      planFilter:{buddy:{cat:'',version:'',source:'',keyword:''}},
+      planSort:{buddy:{col:'week',dir:'desc'}},
+      previewMode:{buddy:false},
+      currentSession:{buddy:'pr-102'},
+      sessionTabs:{}, sessionActiveTab:{},
+      treeExpanded:{buddy:{'':true,'crates':true,'docs':true}},
+      spaceTab:{buddy:'knowledge'}, spaceDoc:{buddy:'k-project'},
+      symbolQuery:{buddy:''},
+      modal:null, settingsProbe:{}
+    }
+  };
+}
+var state = loadState() || freshState();
+function saveState(){ try{ localStorage.setItem('bw-v4-hifi-state', JSON.stringify(state)); }catch(_){} }
+function loadState(){
+  try{
+    var raw = localStorage.getItem('bw-v4-hifi-state');
+    if(!raw) return null;
+    var s = JSON.parse(raw);
+    if(!s || !s.projects) return null;
+    return s;
+  }catch(_){ return null; }
+}
+
+/* ===================== 数据访问 ===================== */
+function getProject(pid){ return pid==='new' ? state.newProject : (state.projects[pid]||null); }
+function getIssues(pid){ return state.issues[pid]||{}; }
+function getIssue(pid,id){ return (state.issues[pid]||{})[id]||null; }
+function allIssuesArr(pid){ var m=getIssues(pid); return Object.keys(m).map(function(k){return m[k];}); }
+function getMetric(pid,id){ return (state.metrics[pid]||{})[id]||null; }
+function getInbox(pid){ return state.inbox[pid]||[]; }
+function inboxCount(pid){ return getInbox(pid).filter(function(x){return x.state!=='merged'&&x.state!=='done';}).length; }
+function findInboxItem(pid,id){ return getInbox(pid).filter(function(x){return x.id===id;})[0]||null; }
+function weekProgress(pid,week){
+  var issues=allIssuesArr(pid).filter(function(i){return i.kind==='business'&&i.week===week;});
+  var c={todo:0,doing:0,review:0,done:0};
+  issues.forEach(function(i){
+    if(i.status==='done')c.done++; else if(i.status==='doing')c.doing++;
+    else if(i.status==='review'||i.status==='merged')c.review++; else c.todo++;
+  });
+  return c;
+}
+function opsIssuesFor(pid){ return allIssuesArr(pid).filter(function(i){return i.kind==='ops';}); }
+function opsChipsHTML(pid){
+  var all=opsIssuesFor(pid);
+  var nums=['①','②','③'];
+  return ['ops1','ops2','ops3'].map(function(prefix,idx){
+    var iss=all.filter(function(o){return o.id.indexOf(prefix)===0;})[0];
+    if(!iss) return '';
+    return '<span class="chip mono" data-issue="'+iss.id+'" data-action="goSession" data-arg=\'["'+pid+'","'+iss.id+'"]\' style="cursor:pointer;border-left:3px solid var(--'+STATUS_DOT[iss.status]+');">'+nums[idx]+' '+esc(STATUS_LABEL[iss.status])+'</span>';
+  }).join('');
+}
+
+/* ===================== 路由 ===================== */
+function parseHash(){ var h=location.hash||'#/wall'; h=h.replace(/^#\/?/,''); return h.split('/').filter(Boolean); }
+function nav(hash){ location.hash=hash; }
+
+/* ===================== 动作 ===================== */
+function onIssueCompleted(pid,issue){
+  if(issue.category==='运作' && /运作活①/.test(issue.title)){
+    var wk=issue.week||CURRENT_WEEK;
+    state.weekPlans[pid]=state.weekPlans[pid]||{};
+    if(!state.weekPlans[pid][wk]){ state.weekPlans[pid][wk]={goal:'(演示)已由运作活①产出周目标',version:getProject(pid).version}; }
+  }
+}
+function mergeIssueGeneric(pid,issueId){
+  var issue=getIssue(pid,issueId); if(!issue)return;
+  issue.status='merged'; if(issue.mr)issue.mr.status='merged';
+  if(issue.kind==='charter'&&issue.draft){ Object.assign(getProject(pid).card,issue.draft); }
+  (issue.metricIds||[]).forEach(function(mid){ var m=getMetric(pid,mid); if(m&&typeof m.current==='number'){ m.current+=1; } });
+}
+function completeIssueGeneric(pid,issueId){
+  var issue=getIssue(pid,issueId); if(!issue)return;
+  issue.status='done'; issue.doneDate=TODAY_SHORT; onIssueCompleted(pid,issue);
+}
+var ACTIONS = {
+  nav:function(h){ nav(h); },
+  openProject:function(pid){ nav('#/p/'+pid+'/overview'); },
+  goWall:function(){ nav('#/wall'); },
+  goSettings:function(){ nav('#/settings'); },
+  goOnboard:function(){ nav('#/onboard'); },
+  resetDemo:function(){ try{ localStorage.removeItem('bw-v4-hifi-state'); }catch(_){}
+    state=freshState(); nav('#/wall'); render(); toast('演示已重置'); },
+  mergeInbox:function(pid,id){ var item=findInboxItem(pid,id); if(!item)return; item.state='merged'; if(item.issueId)mergeIssueGeneric(pid,item.issueId); render(); toast('已合入 · 相关指标与待人处理计数已更新'); },
+  completeInbox:function(pid,id){ var item=findInboxItem(pid,id); if(!item)return; if(item.issueId)completeIssueGeneric(pid,item.issueId);
+    state.inbox[pid]=getInbox(pid).filter(function(x){return x.id!==id;});
+    state.notifyEvents[pid]=state.notifyEvents[pid]||[];
+    state.notifyEvents[pid].unshift({id:'ev-done-'+id,text:(item.text||'')+' · 已完成',time:TODAY_SHORT+' 刚刚',link:item.issueId||item.link||null,processed:true});
+    render(); toast('已标记完成 · 同一件活不会重复记账'); },
+  openInboxIssue:function(pid,id){ var item=findInboxItem(pid,id); if(item&&item.issueId){ nav('#/p/'+pid+'/session/'+item.issueId); } else if(item&&item.link){ nav('#/p/'+pid+'/session/'+item.link); } else { render(); } },
+  goEventLink:function(pid,link){ if(!link)return; nav('#/p/'+pid+'/session/'+link); },
+  toggleDelete:function(pid){ state.ui.deleteConfirm[pid]=!state.ui.deleteConfirm[pid]; render(); },
+  confirmDelete:function(pid){ delete state.projects[pid]; render(); toast('已删除(演示)'); },
+  testEnv:function(){ state.ui.envTesting=true; render();
+    setTimeout(function(){ state.ui.envTesting=false; state.ui.envStatus={claude:'ok',od:'ok',codehub:'fail'}; render(); },700); },
+  openGuide:function(){ state.ui.guideOpen=true; render(); },
+  closeGuide:function(){ state.ui.guideOpen=false; render(); },
+  selectGuideChapter:function(id){ state.ui.guideChapter=id; state.ui.guideOpen=true; render(); },
+  toggleWorkspaceRootEdit:function(){ state.ui.workspaceRootEditing=!state.ui.workspaceRootEditing; render(); },
+
+  setOnboardTab:function(t){ state.onboard.tab=t; render(); },
+  setOnboardPlatform:function(p){ state.onboard.platform=p; render(); },
+  setOnboardVisibility:function(v){ state.onboard.visibility=v; render(); },
+  selectRepo:function(id){ state.onboard.selectedRepo=id; if(!state.onboard.intentName){ state.onboard.intentName=id.split('/').pop(); } render(); },
+  testOnboardEnv:function(){ state.ui.envTesting=true; render(); setTimeout(function(){ state.ui.envTesting=false; state.ui.obEnvOk=true; render(); },700); },
+  completeOnboarding:function(){
+    var ob=state.onboard;
+    var repoLabel=REPO_LIST.filter(function(r){return r.id===ob.selectedRepo;})[0];
+    var repoName=ob.tab==='new' ? ((ob.namespace?ob.namespace+'/':'')+(ob.repoName||'new-repo')) : (ob.selectedRepo||'demo-new');
+    var displayName=ob.intentName||repoName.split('/').pop();
+    state.newProject={ id:'new',kind:'onboarded',light:'gray',name:displayName,shortName:displayName,
+      oneLiner:'刚接入,规范铺底待合入',version:'v0.1',repo:repoLabel&&repoLabel.real?repoLabel.id:repoName,
+      owner:'Gravity',standardVersion:'4.0(待合入)',lastDelivery:'—',
+      card:{name:displayName,intent:ob.intentWhat||'(未填,沿用仓 README)',benchmark:ob.intentBenchmark||'(未填)',northstar:ob.intentNorthstar||'(未填)',northstarAssumed:!ob.intentNorthstar}};
+    state.issues.new={ 'ops3-new':{id:'ops3-new',title:'运作活③规范铺底 v4.0(含合并调整)',category:'运作',tool:'claude_cli',kind:'ops',status:'review',source:'自动建(接入时)',auto:true,metricIds:[],mr:{id:'!1',label:'!1',status:'open'},skill:'规范铺底(含合并调整)',teammate:'构建师',desc:'检测到已有 README(成熟仓):buddy 建分支写入 8 类核心件,agent 合并调整后提 MR !1。'} };
+    state.inbox.new=[{id:'inbox-new-ops3',kind:'issue',issueId:'ops3-new',text:'运作活③「规范铺底」评审中(MR !1,已做合并调整)',state:'pending'}];
+    state.metrics.new={ northstar:{id:'northstar',tier:'北极星',label:state.newProject.card.northstar,gray:true,drivenBy:[]} };
+    state.skills.new=[]; state.teammates.new=[]; state.connectors.new=[]; state.crons.new=[];
+    state.releases.new=[]; state.weekPlans.new={}; state.health.new={level:'gray',reasons:[{ok:false,text:'刚接入,还没有一周真实数据',jump:'week'}]};
+    state.ui.selectedIssue.new=null; state.ui.currentSession.new='shell'; state.ui.treeExpanded.new={'':true};
+    nav('#/p/new/overview');
+  },
+
+  editCard:function(pid){ state.ui.charterEditing[pid]=true; state.ui.charterDraft[pid]=clone(getProject(pid).card); render(); },
+  cancelCardEdit:function(pid){ state.ui.charterEditing[pid]=false; render(); },
+  saveCard:function(pid){
+    state.ui.charterEditing[pid]=false;
+    var draft=state.ui.charterDraft[pid];
+    state.issues[pid]=state.issues[pid]||{};
+    state.issues[pid]['charter-edit']={ id:'charter-edit',title:'名片修改',category:'轻量活',tool:null,kind:'charter',status:'review',source:'人建',metricIds:[],
+      mr:{id:'!bw/charter-edit',label:'!bw/charter-edit',status:'open'},desc:'更新想做什么 / 对标 / 三个月长成什么样。',draft:draft };
+    state.inbox[pid]=state.inbox[pid]||[];
+    if(!state.inbox[pid].some(function(x){return x.id==='inbox-charter';})){
+      state.inbox[pid].unshift({id:'inbox-charter',kind:'issue',issueId:'charter-edit',text:'名片修改已提 MR !bw/charter-edit',state:'pending'});
+    }
+    render(); toast('已提 MR !bw/charter-edit · 待人处理 +1');
+  },
+  previewCard:function(pid){ var issue=getIssue(pid,'charter-edit'); if(!issue||!issue.draft)return; state.ui.modal={type:'preview-charter',pid:pid,draft:issue.draft}; render(); },
+  mergeCard:function(pid){ mergeIssueGeneric(pid,'charter-edit'); var item=findInboxItem(pid,'inbox-charter'); if(item)item.state='merged'; render(); toast('已合入 · 名片已更新,待你点完成'); },
+  completeCard:function(pid){ completeIssueGeneric(pid,'charter-edit'); state.inbox[pid]=getInbox(pid).filter(function(x){return x.id!=='inbox-charter';});
+    state.notifyEvents[pid]=state.notifyEvents[pid]||[]; state.notifyEvents[pid].unshift({id:'ev-charter-'+Date.now(),text:'名片修改已完成',time:TODAY_SHORT+' 刚刚',link:null,processed:true});
+    render(); toast('已完成 · 同一件活不会重复记账'); },
+  jumpBlock:function(blk){ var el=document.querySelector('[data-block="'+blk+'"]'); if(el&&el.scrollIntoView){ el.scrollIntoView({behavior:'smooth',block:'center'}); el.style.outline='2px solid var(--clay)'; setTimeout(function(){ el.style.outline=''; },1200); } },
+  startWeek:function(pid){
+    var proj=getProject(pid); if(!proj)return;
+    var wk=CURRENT_WEEK; state.weekPlans[pid]=state.weekPlans[pid]||{};
+    if(state.weekPlans[pid][wk]){ nav('#/p/'+pid+'/plan'); return; }
+    var opsId='ops1-'+pid;
+    state.issues[pid]=state.issues[pid]||{};
+    state.issues[pid][opsId]={ id:opsId,title:'运作活①更新指标 + 制定本周计划 2026-'+wk,category:'运作',tool:'claude_cli',kind:'ops',status:'todo',source:'人触发',metricIds:[],mr:null,week:wk,skill:'更新指标与周计划',teammate:'构建师',desc:'复盘上周 → 更新指标 → 引导本周目标与活清单。' };
+    state.ui.selectedIssue[pid]=opsId; state.ui.currentSession[pid]=opsId;
+    nav('#/p/'+pid+'/session/'+opsId);
+  },
+
+  selectPlanLeft:function(pid,key){ state.ui.planLeft[pid]=key; render(); },
+  selectPlanIssue:function(pid,id){ state.ui.selectedIssue[pid]=id; render(); },
+  togglePreview:function(pid){ state.ui.previewMode[pid]=!state.ui.previewMode[pid]; render(); },
+  setPlanFilter:function(pid,field,val){ state.ui.planFilter[pid]=state.ui.planFilter[pid]||{}; state.ui.planFilter[pid][field]=val; render(); },
+  goSession:function(pid,id){ nav('#/p/'+pid+'/session/'+id); },
+  newIssueDraft:function(pid){ state.ui.modal={type:'new-issue',pid:pid,title:'',category:'构建',tool:'claude_cli'}; render(); },
+  confirmNewIssue:function(){
+    var m=state.ui.modal; if(!m||m.type!=='new-issue')return;
+    if(!m.title){ toast('请填标题'); return; }
+    var id='draft-'+Date.now();
+    var wk=state.ui.selectedWeek[m.pid]||CURRENT_WEEK;
+    state.issues[m.pid]=state.issues[m.pid]||{};
+    state.issues[m.pid][id]={ id:id,title:m.title,category:m.category,tool:m.tool,kind:'business',status:'todo',source:'人建',metricIds:[],mr:null,week:wk,version:(getProject(m.pid)||{}).version,skill:'—',teammate:m.tool==='open_design'?'原型师':'构建师',desc:'(演示)新建活草稿。' };
+    state.ui.modal=null; render(); toast('已新建活「'+m.title+'」');
+  },
+  openReleaseModal:function(pid){
+    var wk=state.ui.selectedWeek[pid]||CURRENT_WEEK;
+    var done=allIssuesArr(pid).filter(function(i){return i.kind==='business'&&i.week===wk&&i.status==='done';});
+    var proj=getProject(pid);
+    state.ui.modal={type:'release',pid:pid,wk:wk,checked:done.map(function(i){return i.id;}),version:proj.version,desc:'agent 起草(演示):本次发版包含 '+done.length+' 张已完成活,详见各活 MR。'};
+    render();
+  },
+  toggleReleaseCheck:function(id){ var m=state.ui.modal; if(!m||m.type!=='release')return; var i=m.checked.indexOf(id); if(i>=0)m.checked.splice(i,1); else m.checked.push(id); render(); },
+  confirmRelease:function(){
+    var m=state.ui.modal; if(!m)return;
+    state.releases[m.pid]=state.releases[m.pid]||[];
+    state.releases[m.pid].push({version:m.version,date:TODAY,note:'agent 起草说明(演示)',issues:m.checked.slice()});
+    state.ui.modal=null; render(); toast('发版记录 +1(本原型只改内存)');
+  },
+  closeModal:function(){ state.ui.modal=null; render(); },
+
+  selectSession:function(pid,id){ state.ui.currentSession[pid]=id; nav('#/p/'+pid+'/session/'+id); },
+  startWork:function(pid,issueId){
+    var issue=getIssue(pid,issueId); if(!issue)return;
+    if(issue.status==='todo'||issue.status==='pool')issue.status='doing';
+    if(state.ui.playing[issueId]) return;
+    state.ui.playing[issueId]=true;
+    if(issue.tool==='open_design'){
+      state.ui.sessionActiveTab[issueId]='od';
+      render();
+      setTimeout(function(){ state.ui.playing[issueId]=false; render(); },650);
+      return;
+    }
+    state.ui.sessionActiveTab[issueId]='terminal';
+    render();
+    var lines=TRANSCRIPTS_FOR(pid,issueId);
+    var shown=state.ui.terminalLines[issueId]||0;
+    function tick(){
+      if(!state.ui.playing[issueId])return;
+      if(shown>=lines.length){ state.ui.playing[issueId]=false; updateActionBar(issueId); return; }
+      var body=document.querySelector('[data-terminal-body="'+issueId+'"]');
+      if(!body){ state.ui.playing[issueId]=false; updateActionBar(issueId); return; }
+      var idle=body.querySelector('.term-idle'); if(idle)idle.remove();
+      var line=lines[shown];
+      var div=document.createElement('div'); div.className='term-line '+(line.cls||''); div.textContent=line.text;
+      body.appendChild(div); body.scrollTop=body.scrollHeight;
+      shown++; state.ui.terminalLines[issueId]=shown;
+      setTimeout(tick,380);
+    }
+    updateActionBar(issueId); tick();
+  },
+  stopWork:function(pid,issueId){ state.ui.playing[issueId]=false; updateActionBar(issueId); },
+  pushReview:function(pid,issueId){
+    var issue=getIssue(pid,issueId); if(!issue)return;
+    issue.status='review'; if(!issue.mr){ issue.mr={id:'!'+branchOf(issueId),label:'!'+branchOf(issueId),status:'open'}; }
+    state.inbox[pid]=state.inbox[pid]||[];
+    if(!state.inbox[pid].some(function(x){return x.issueId===issueId;})){
+      state.inbox[pid].push({id:'inbox-'+issueId,kind:'issue',issueId:issueId,text:'「'+issue.title+'」已推到评审中',state:'pending'});
+    }
+    render(); toast('已推到评审中 · 待人处理 +1');
+  },
+  mergeMR:function(pid,issueId){
+    var issue=getIssue(pid,issueId); if(!issue)return;
+    mergeIssueGeneric(pid,issueId);
+    var item=getInbox(pid).filter(function(x){return x.issueId===issueId;})[0]; if(item)item.state='merged';
+    render(); toast('已合入 · 待你点完成');
+  },
+  completeIssue:function(pid,issueId){
+    var issue=getIssue(pid,issueId);
+    completeIssueGeneric(pid,issueId);
+    state.inbox[pid]=getInbox(pid).filter(function(x){return x.issueId!==issueId;});
+    state.notifyEvents[pid]=state.notifyEvents[pid]||[];
+    state.notifyEvents[pid].unshift({id:'ev-done-'+issueId,text:'「'+(issue?issue.title:issueId)+'」已完成',time:TODAY_SHORT+' 刚刚',link:issueId,processed:true});
+    render(); toast('已完成 · 同一件活不会重复记账');
+  },
+  blockIssue:function(pid,issueId){ var i=getIssue(pid,issueId); if(!i)return; i.prevStatus=i.status; i.status='blocked'; render(); toast('已标记阻塞'); },
+  unblockIssue:function(pid,issueId,target){ var i=getIssue(pid,issueId); if(!i)return; i.status=target||i.prevStatus||'todo'; render(); toast('已解除阻塞'); },
+  closePlanDetail:function(pid){ state.ui.selectedIssue[pid]=null; render(); },
+  distill:function(pid,issueId){
+    var issue=getIssue(pid,issueId); if(!issue)return;
+    var name=DISTILL_NAMES[issueId]||(issue.title.slice(0,10)+'·蒸馏技能');
+    state.skills[pid]=state.skills[pid]||[];
+    state.skills[pid].push({name:name,source:'蒸馏(来源活:'+issue.title+')',version:'0.1',uses:'0',enabled:true,distilled:true,assumed:true});
+    render(); toast('已蒸馏技能「'+name+'」→ 知识库可见');
+  },
+  copyTerminal:function(issueId){
+    var body=document.querySelector('[data-terminal-body="'+issueId+'"]'); if(!body)return;
+    var text=body.innerText;
+    function ok(){ toast('已复制终端文字'); } function fail(){ toast('未能自动复制,可全选后手动复制'); }
+    try{
+      if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(ok,fail); }
+      else { var ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select();
+        var ok2=false; try{ ok2=document.execCommand('copy'); }catch(e){ ok2=false; } document.body.removeChild(ta); ok2?ok():fail(); }
+    }catch(e){ fail(); }
+  },
+  submitTermInput:function(pid,issueId,value){
+    if(!value)return;
+    var body=document.querySelector('[data-terminal-body="'+issueId+'"]');
+    if(body){ var div=document.createElement('div'); div.className='term-line human'; div.textContent='人> '+value; body.appendChild(div); body.scrollTop=body.scrollHeight; }
+  },
+  openInCursor:function(){ toast('已在 Cursor 中打开(演示)'); },
+  selectTab:function(sid,tabId){ state.ui.sessionActiveTab[sid]=tabId; render(); },
+  closeTab:function(sid,tabId){
+    var tabs=state.ui.sessionTabs[sid]||[];
+    state.ui.sessionTabs[sid]=tabs.filter(function(t){return t.id!==tabId;});
+    if(state.ui.sessionActiveTab[sid]===tabId){ state.ui.sessionActiveTab[sid]='terminal'; }
+    render();
+  },
+  openFileTab:function(pid,sid,path){
+    var tabs=state.ui.sessionTabs[sid]=state.ui.sessionTabs[sid]||[];
+    var tabId='file:'+path;
+    if(!tabs.some(function(t){return t.id===tabId;})){ tabs.push({id:tabId,kind:'file',path:path,label:path.split('/').pop()}); }
+    state.ui.sessionActiveTab[sid]=tabId; render();
+  },
+  openDiffTab:function(pid,sid,path){
+    var tabs=state.ui.sessionTabs[sid]=state.ui.sessionTabs[sid]||[];
+    var tabId='diff:'+path;
+    if(!tabs.some(function(t){return t.id===tabId;})){ tabs.push({id:tabId,kind:'diff',path:path,label:path.split('/').pop()+' diff'}); }
+    state.ui.sessionActiveTab[sid]=tabId; render();
+  },
+  toggleTreeDir:function(pid,dirPath){
+    var ex=state.ui.treeExpanded[pid]=state.ui.treeExpanded[pid]||{};
+    ex[dirPath]=!ex[dirPath]; render();
+  },
+
+  toggleSkill:function(pid,name){ (state.skills[pid]||[]).forEach(function(s){ if(s.name===name)s.enabled=!s.enabled; }); render(); },
+  openImportModal:function(pid,kind){ state.ui.modal={type:'import',pid:pid,kind:kind,name:'',src:'',srcType:'dir'}; render(); },
+  setImportSrcType:function(t){ if(state.ui.modal)state.ui.modal.srcType=t; render(); },
+  confirmImport:function(){
+    var m=state.ui.modal; if(!m||m.type!=='import')return;
+    if(!m.name){ toast('请填名称'); return; }
+    var srcLabel={dir:'本机目录',git:'git 仓地址',project:'从另一个项目'}[m.srcType||'dir'];
+    if(m.kind==='skill'){ state.skills[m.pid]=state.skills[m.pid]||[]; state.skills[m.pid].push({name:m.name,source:'项目导入('+srcLabel+(m.src?(' · '+m.src):'')+')',version:'—',uses:'0',enabled:true}); }
+    else { state.teammates[m.pid]=state.teammates[m.pid]||[]; state.teammates[m.pid].push({name:m.name,tool:'claude_cli',desc:'导入 agent',record:'—(无运行证据)',source:'项目导入('+srcLabel+(m.src?(' · '+m.src):'')+')'}); }
+    state.ui.modal=null; render(); toast('已导入「'+m.name+'」');
+  },
+  saveToolmap:function(pid){ toast('已保存写回 .bw/issue-policy.toml(演示)'); },
+  runCron:function(pid,cronId){ (state.crons[pid]||[]).forEach(function(c){ if(c.id===cronId){ c.lastRun=TODAY+' '+(new Date()).toTimeString().slice(0,5); c.status='running'; } }); render();
+    setTimeout(function(){ (state.crons[pid]||[]).forEach(function(c){ if(c.id===cronId)c.status='normal'; }); render(); toast('定时任务已跑一次(演示)'); },500); },
+  toggleCron:function(pid,cronId){ (state.crons[pid]||[]).forEach(function(c){ if(c.id===cronId){ c.status=(c.status==='paused')?'normal':'paused'; } }); render(); },
+
+  setSpaceTab:function(pid,tab){ state.ui.spaceTab[pid]=tab; nav('#/p/'+pid+'/kb/'+tab); },
+  selectKDoc:function(pid,id){ state.ui.spaceDoc[pid]=id; render(); },
+  searchSymbol:function(pid,q){ state.ui.symbolQuery[pid]=q; render(); },
+  pickAsset:function(name){ toast('已复制「'+name+'」到项目 buddy(演示)'); },
+  toastOnly:function(msg){ toast(msg||'演示动作'); }
+};
+document.addEventListener('click', function(e){
+  var el=e.target.closest('[data-action]'); if(!el)return;
+  var name=el.getAttribute('data-action');
+  if(name==='closeModal' && el.classList.contains('modal-backdrop') && e.target!==el) return;
+  var raw=el.getAttribute('data-arg');
+  var args=[];
+  if(raw){ try{ args=JSON.parse(raw); if(!Array.isArray(args))args=[args]; }catch(_){ args=[raw]; } }
+  var fn=ACTIONS[name]; if(fn) fn.apply(null,args);
+});
+document.addEventListener('input', function(e){
+  var el=e.target; var bind=el.getAttribute&&el.getAttribute('data-bind'); if(!bind)return;
+  setPath(state,bind,el.value); render();
+});
+document.addEventListener('change', function(e){
+  var el=e.target;
+  var bindMulti=el.getAttribute&&el.getAttribute('data-bindchange-multi');
+  if(bindMulti){ var vals=Array.prototype.slice.call(el.selectedOptions).map(function(o){return o.value;}); setPath(state,bindMulti,vals); render(); return; }
+  var bind=el.getAttribute&&el.getAttribute('data-bindchange'); if(!bind)return;
+  setPath(state,bind,el.value); render();
+});
+document.addEventListener('keydown', function(e){
+  if(e.key!=='Enter')return;
+  var el=e.target; if(!el.matches)return;
+  if(el.matches('[data-term-input]')){
+    var pid=el.getAttribute('data-pid'), sid=el.getAttribute('data-sid');
+    ACTIONS.submitTermInput(pid,sid,el.value); el.value='';
+  }
+  if(el.matches('[data-symbol-input]')){
+    var pid2=el.getAttribute('data-pid');
+    ACTIONS.searchSymbol(pid2, el.value);
+  }
+});
+function updateActionBar(issueId){
+  var bar=document.querySelector('[data-actionbar="'+issueId+'"]'); if(!bar)return;
+  var st=bar.querySelector('[data-status-text]'); var issue=null;
+  Object.keys(state.issues).some(function(pid){ var i=getIssue(pid,issueId); if(i){issue=i;return true;} return false; });
+  if(st&&issue) st.textContent=STATUS_LABEL[issue.status]||issue.status;
+  var play=bar.querySelector('[data-btn="play"]'), stop=bar.querySelector('[data-btn="stop"]');
+  if(play) play.disabled=!!state.ui.playing[issueId];
+  if(stop) stop.disabled=!state.ui.playing[issueId];
+}
+
+/* ===================== 渲染:外壳 ===================== */
+function navToplevelHTML(cur){
+  return ''
+    + '<button class="rail-btn '+(cur==='wall'?'active':'')+'" data-nav="wall" data-action="nav" data-arg=\'"#/wall"\' title="项目墙">'+icon('wall')+'</button>'
+    + '<div class="spacer"></div>'
+    + '<button class="rail-btn '+(cur==='settings'?'active':'')+'" data-nav="settings" data-action="nav" data-arg=\'"#/settings"\' title="设置">'+icon('settings')+'</button>';
+}
+function iconRailHTML(inProject,cur){
+  return '<div class="iconrail">'
+    + '<div class="rail-logo">B</div>'
+    + (inProject
+      ? ('<button class="rail-btn" data-action="nav" data-arg=\'"#/wall"\' title="项目墙">'+icon('back')+'</button><div class="spacer"></div><button class="rail-btn" data-nav="settings" data-action="nav" data-arg=\'"#/settings"\' title="设置">'+icon('settings')+'</button>')
+      : navToplevelHTML(cur))
+    + '</div>';
+}
+function projectRailHTML(pid,screenSeg){
+  var proj=getProject(pid); if(!proj) return '';
+  function link(key,label,ic,badge){
+    return '<div class="pr-link '+(screenSeg===key?'active':'')+'" data-nav="'+key+'" data-action="nav" data-arg=\'"#/p/'+pid+'/'+key+'"\'>'
+      + '<span style="width:15px;height:15px;display:flex;">'+icon(ic)+'</span><span>'+label+'</span>'+(badge?('<span class="pr-badge">'+badge+'</span>'):'')+'</div>';
+  }
+  var pending=inboxCount(pid);
+  return '<div class="projectrail">'
+    + '<div class="pr-back" data-action="nav" data-arg=\'"#/wall"\'>'+icon('back')+'<span>项目墙</span></div>'
+    + '<div class="pr-head"><div class="pr-head-name">'+esc(proj.shortName||proj.name)+'</div>'
+    +   '<div class="pr-head-meta"><span>'+esc(proj.version||'—')+'</span>'+lightDot(proj.light)+'</div></div>'
+    + '<nav class="pr-nav">'
+    +   link('overview','总览','overview') + link('plan','计划','plan') + link('session','会话','session')
+    +   link('notify','通知','notify',pending>0?pending:null)
+    +   link('config','配置','config') + link('kb','知识库','space')
+    + '</nav></div>';
+}
+function topbarHTML(inProject,pid,screenSeg){
+  var titleMap={wall:'项目墙',onboard:'接入项目',settings:'设置',overview:'总览',plan:'计划',session:'会话',notify:'通知',config:'配置',kb:'知识库'};
+  var proj=inProject?getProject(pid):null;
+  return '<div class="topbar">'
+    + '<div class="topbar-title">'+esc(titleMap[screenSeg]||'')+(proj?(' · '+esc(proj.shortName||proj.name)):'')+'</div>'
+    + '<div class="spacer"></div>'
+    + '<span class="demo-tag">演示数据 <span class="asterisk">✱</span></span>'
+    + '<button class="btn btn-sm btn-ghost" data-action="resetDemo">重置</button>'
+    + '<div class="avatar-chip" title="Gravity">G</div>'
+    + '</div>';
+}
+function guideMarkupHTML(){
+  var open=state.ui.guideOpen;
+  var ch=state.ui.guideChapter||'env';
+  if(!open){
+    return '<div data-guide><div class="guide-tab" data-action="openGuide">指南</div></div>';
+  }
+  var chaptersHTML=GUIDE_CHAPTERS.map(function(c){
+    return '<div class="guide-chapter '+(ch===c.id?'active':'')+'" data-action="selectGuideChapter" data-arg=\'"'+c.id+'"\'>'+esc(c.label)+'</div>';
+  }).join('');
+  var cur=GUIDE_CHAPTERS.filter(function(c){return c.id===ch;})[0]||GUIDE_CHAPTERS[0];
+  return '<div data-guide><div class="guide-panel">'
+    + '<div class="guide-panel-head"><h3 style="font-size:15px;margin:0;font-family:var(--serif);">指南</h3><button class="drawer-close" data-action="closeGuide">✕</button></div>'
+    + '<div class="guide-chapters">'+chaptersHTML+'</div>'
+    + '<div class="guide-body">'+esc(cur.body)+'</div>'
+    + '<div class="guide-report" title="暂未接入">⚑ 问题上报</div>'
+    + '</div></div>';
+}
+function modalHTML(){
+  var m=state.ui.modal; if(!m) return '';
+  if(m.type==='preview-charter'){
+    var d=m.draft;
+    return '<div class="modal-backdrop" data-action="closeModal"><div class="modal">'
+      + '<h3>预览 · 未合入</h3>'
+      + '<div class="charter-line"><span class="k">名称</span>'+esc(d.name)+'</div>'
+      + '<div class="charter-line"><span class="k">想做什么</span>'+esc(d.intent)+'</div>'
+      + '<div class="charter-line"><span class="k">对标</span>'+esc(d.benchmark)+'</div>'
+      + '<div class="charter-line"><span class="k">北极星</span>'+esc(d.northstar)+'</div>'
+      + '<div class="modal-actions"><button class="btn" data-action="closeModal">关闭</button></div></div></div>';
+  }
+  if(m.type==='release'){
+    var doneIssues=allIssuesArr(m.pid).filter(function(i){return i.kind==='business'&&i.week===m.wk&&i.status==='done';});
+    var rows=doneIssues.map(function(i){
+      return '<label class="check-row"><input type="checkbox" '+(m.checked.indexOf(i.id)>=0?'checked':'')+' data-action="toggleReleaseCheck" data-arg=\'"'+i.id+'"\'> '+esc(i.title)+'</label>';
+    }).join('') || '<div class="detail-empty">本周暂无已完成活</div>';
+    return '<div class="modal-backdrop" data-action="closeModal"><div class="modal">'
+      + '<h3>发版本</h3>' + rows
+      + '<div class="formrow" style="margin-top:10px;"><label class="label">版本号</label><input class="input" data-bind="ui.modal.version" value="'+esc(m.version)+'"></div>'
+      + '<div class="formrow"><label class="label">说明</label><textarea class="textarea" data-bind="ui.modal.desc">'+esc(m.desc)+'</textarea></div>'
+      + '<div class="modal-actions"><button class="btn" data-action="closeModal">取消</button><button class="btn btn-primary" data-action="confirmRelease">确认发版</button></div></div></div>';
+  }
+  if(m.type==='new-issue'){
+    return '<div class="modal-backdrop" data-action="closeModal"><div class="modal">'
+      + '<h3>新建活</h3>'
+      + '<div class="formrow"><label class="label">标题</label><input class="input" data-bind="ui.modal.title" value="'+esc(m.title)+'"></div>'
+      + '<div class="formrow"><label class="label">类别</label><select class="select" data-bindchange="ui.modal.category">'+CATS.map(function(c){return '<option '+(m.category===c?'selected':'')+'>'+c+'</option>';}).join('')+'</select></div>'
+      + '<div class="formrow"><label class="label">开工工具</label><select class="select" data-bindchange="ui.modal.tool"><option value="claude_cli" '+(m.tool==='claude_cli'?'selected':'')+'>Claude CLI</option><option value="cursor" '+(m.tool==='cursor'?'selected':'')+'>Cursor</option><option value="open_design" '+(m.tool==='open_design'?'selected':'')+'>Open Design</option></select></div>'
+      + '<div class="modal-actions"><button class="btn" data-action="closeModal">取消</button><button class="btn btn-primary" data-action="confirmNewIssue">创建</button></div></div></div>';
+  }
+  if(m.type==='import'){
+    var srcTypes=[['dir','本机目录'],['git','git 仓地址'],['project','从另一个项目']];
+    var st=m.srcType||'dir';
+    var srcLabel={dir:'本机目录路径',git:'git 仓地址',project:'项目名'}[st];
+    return '<div class="modal-backdrop" data-action="closeModal"><div class="modal">'
+      + '<h3>导入'+(m.kind==='skill'?'技能':'agent')+'</h3>'
+      + '<div class="formrow"><label class="label">名称</label><input class="input" data-bind="ui.modal.name" value="'+esc(m.name)+'"></div>'
+      + '<div class="pillrow">'+srcTypes.map(function(t){return '<span class="pill '+(st===t[0]?'active':'')+'" data-action="setImportSrcType" data-arg=\'"'+t[0]+'"\'>'+t[1]+'</span>';}).join('')+'</div>'
+      + '<div class="formrow"><label class="label">'+srcLabel+'</label><input class="input" data-bind="ui.modal.src" value="'+esc(m.src)+'"></div>'
+      + '<div class="modal-actions"><button class="btn" data-action="closeModal">取消</button><button class="btn btn-primary" data-action="confirmImport">确认导入</button></div></div></div>';
+  }
+  return '';
+}
+
+/* ===================== 渲染:项目墙 ===================== */
+function renderWall(){
+  var order=['buddy','jianmu','opsboard','benchmark','bridge'].filter(function(id){return !!state.projects[id];});
+  var totalN=order.length;
+  var counts={green:0,yellow:0,red:0,gray:0};
+  order.forEach(function(id){ var l=state.projects[id].light; if(counts[l]===undefined)counts.gray++; else counts[l]++; });
+  var es=state.ui.envStatus||{claude:'unknown',codehub:'unknown',od:'unknown'};
+  function envItemHTML(label,status){
+    var color=status==='ok'?'green':(status==='fail'?'red':'gray');
+    var text=status==='ok'?'可用':(status==='fail'?'失败':'未测');
+    var help=status!=='ok'?(' <span class="env-help" data-action="selectGuideChapter" data-arg=\'"env"\'>怎么处理 →</span>'):'';
+    return '<span class="env-item'+(status==='fail'?' fail':'')+'">'+lightDot(color)+' '+label+' · '+text+help+'</span>';
+  }
+  var cards=order.map(function(pid){
+    var p=state.projects[pid];
+    var inbox=pid==='buddy'?inboxCount('buddy'):0;
+    var wk=pid==='buddy'?getPath(state,'weekPlans.buddy.'+CURRENT_WEEK+'.goal'):null;
+    var prog=pid==='buddy'?weekProgress('buddy',CURRENT_WEEK):{todo:1,doing:0,review:0,done:0};
+    var totalIssues=prog.todo+prog.doing+prog.review+prog.done;
+    var pct=totalIssues? Math.round(prog.done/totalIssues*100) : (pid==='buddy'?0:20);
+    var delConfirm=state.ui.deleteConfirm[pid];
+    return '<div class="pcard" data-action="openProject" data-arg=\'"'+pid+'"\'>'
+      + '<div class="pcard-top">'
+      +   '<span class="chip chip-outline mono">'+esc(p.version)+'</span>'
+      +   '<span class="chip">'+CURRENT_WEEK+'</span>'
+      +   (inbox>0?'<span class="chip chip-clay">⚑ '+inbox+'</span>':'')
+      +   '<span style="margin-left:auto;"></span>' + lightDot(p.light,true)
+      +   '<button class="pcard-x" data-action="toggleDelete" data-arg=\'"'+pid+'"\'>×</button>'
+      + '</div>'
+      + '<div class="pcard-name">'+esc(p.name)+'</div>'
+      + '<div class="pcard-oneliner">'+esc(p.oneLiner)+'</div>'
+      + '<div class="pcard-meta">'
+      +   (wk?('<span>本周目标:'+esc(wk.length>30?wk.slice(0,30)+'…':wk)+'</span>'):'<span>本周目标:'+(pid==='buddy'?'—':'✱ 未展开')+'</span>')
+      +   '<span>上次交付 '+esc(p.lastDelivery)+'</span>'
+      + '</div>'
+      + '<div class="pcard-bar"><div class="pcard-bar-fill" style="width:'+pct+'%"></div></div>'
+      + (delConfirm? ('<div class="pcard-del"><span>将删除项目数据(演示)…</span><button class="btn btn-sm btn-danger" data-action="confirmDelete" data-arg=\'"'+pid+'"\'>确认删除</button><button class="btn btn-sm" data-action="toggleDelete" data-arg=\'"'+pid+'"\'>取消</button></div>') : '')
+      + '</div>';
+  }).join('');
+  return '<section data-screen="wall">'
+    + '<div class="wall-topline"><h1>项目墙</h1><button class="btn btn-primary" data-action="goOnboard">+ 接入项目</button></div>'
+    + '<div class="card envbar">'
+    +   '<span class="bar-label">本机环境</span>'
+    +   envItemHTML('claude',es.claude)
+    +   envItemHTML('codehub-cli',es.codehub)
+    +   envItemHTML('Open Design',es.od)
+    +   '<span style="margin-left:auto;"></span>'
+    +   '<button class="btn btn-sm" data-action="testEnv" '+(state.ui.envTesting?'disabled':'')+'>'+(state.ui.envTesting?'探测中…':'测一下')+'</button>'
+    + '</div>'
+    + '<div class="card healthbar">'
+    +   '<span class="bar-label">健康概览</span>'
+    +   '<span class="health-group">'+lightDot('green')+' 平稳 '+counts.green+'</span>'
+    +   '<span class="health-group">'+lightDot('yellow')+' 需要关注 '+counts.yellow+'</span>'
+    +   '<span class="health-group">'+lightDot('red')+' 阻塞 '+counts.red+'</span>'
+    +   '<span class="health-group">'+lightDot('gray')+' 无数据 '+counts.gray+'</span>'
+    +   '<span style="margin-left:auto;">共 '+totalN+' 个项目</span>'
+    + '</div>'
+    + '<div class="wall-grid">'+cards+'</div>'
+    + '</section>';
+}
+
+/* ===================== 渲染:接入项目 ===================== */
+function renderOnboard(){
+  var ob=state.onboard;
+  var repos=REPO_LIST.filter(function(r){ if(!ob.search)return true; return r.label.toLowerCase().indexOf(ob.search.toLowerCase())>=0; });
+  var repoRows=repos.map(function(r){
+    return '<div class="repo-row '+(ob.selectedRepo===r.id?'sel':'')+'" data-action="selectRepo" data-arg=\'"'+esc(r.id)+'"\'>'
+      + '<span>'+esc(r.label)+'</span>' + (r.real?'<span class="chip chip-clay">已连接</span>':'') + '</div>';
+  }).join('');
+  var repoBody = ob.tab==='existing'
+    ? ('<input class="input" style="margin-bottom:8px;" placeholder="搜索仓,或直接粘贴地址…" data-bind="onboard.search" value="'+esc(ob.search)+'">'
+      + '<div class="repolist">'+repoRows+'</div>')
+    : ('<div class="formgrid2">'
+      + (ob.platform==='codehub'?('<div class="formrow"><label class="label">命名空间</label><input class="input" data-bind="onboard.namespace" value="'+esc(ob.namespace)+'"></div>'):'<div></div>')
+      + '<div class="formrow"><label class="label">仓库名</label><input class="input" data-bind="onboard.repoName" value="'+esc(ob.repoName)+'"></div></div>'
+      + '<div class="pillrow"><span class="pill '+(ob.visibility==='private'?'active':'')+'" data-action="setOnboardVisibility" data-arg=\'"private"\'>Private</span><span class="pill '+(ob.visibility==='public'?'active':'')+'" data-action="setOnboardVisibility" data-arg=\'"public"\'>Public</span></div>');
+  var obEnvOk=state.ui.obEnvOk;
+  return '<section data-screen="onboard">'
+    + '<div class="ob-head"><h1 style="font-size:20px;margin:0;">接入项目</h1><button class="btn btn-ghost btn-sm" data-action="goWall">← 项目墙</button></div>'
+    + '<div class="ob-cards">'
+    + '<div class="card ob-card"><h3>项目地址</h3>'
+    +   '<div class="tabrow"><button class="btn btn-sm '+(ob.tab==='new'?'active':'')+'" data-action="setOnboardTab" data-arg=\'"new"\'>新建</button><button class="btn btn-sm '+(ob.tab==='existing'?'active':'')+'" data-action="setOnboardTab" data-arg=\'"existing"\'>已有</button></div>'
+    +   '<div class="pillrow"><span class="pill '+(ob.platform==='codehub'?'active':'')+'" data-action="setOnboardPlatform" data-arg=\'"codehub"\'>codehub</span><span class="pill '+(ob.platform==='github'?'active':'')+'" data-action="setOnboardPlatform" data-arg=\'"github"\'>GitHub</span></div>'
+    +   repoBody
+    +   '<div class="probe3">'
+    +     '<span>'+lightDot(obEnvOk?'green':'yellow')+' 登录态</span>'
+    +     '<span>'+lightDot(obEnvOk?'green':'yellow')+' claude</span>'
+    +     '<span>'+lightDot(obEnvOk?'green':'gray')+' Open Design</span>'
+    +     '<span style="margin-left:auto;"></span>'
+    +     '<button class="btn btn-sm" data-action="testOnboardEnv" '+(state.ui.envTesting?'disabled':'')+'>'+(state.ui.envTesting?'探测中…':'测一下')+'</button>'
+    +   '</div></div>'
+    + '<div class="card ob-card"><h3>基础信息</h3>'
+    +   '<div class="formgrid2">'
+    +     '<div class="formrow"><label class="label">项目名称</label><input class="input" data-bind="onboard.intentName" value="'+esc(ob.intentName)+'"></div>'
+    +     '<div class="formrow"><label class="label">最像的对标</label><input class="input" data-bind="onboard.intentBenchmark" value="'+esc(ob.intentBenchmark)+'"></div>'
+    +   '</div>'
+    +   '<div class="formrow"><label class="label">你想做什么</label><textarea class="textarea" data-bind="onboard.intentWhat">'+esc(ob.intentWhat)+'</textarea></div>'
+    +   '<div class="formrow"><label class="label">三个月长成什么样(北极星)</label><textarea class="textarea" data-bind="onboard.intentNorthstar">'+esc(ob.intentNorthstar)+'</textarea></div>'
+    + '</div>'
+    + '<div class="ob-actions"><button class="btn-primary" data-action="completeOnboarding">完成接入</button></div>'
+    + '</div></section>';
+}
+
+/* ===================== 渲染:设置 ===================== */
+function renderSettings(){
+  var rows=[
+    {k:'claude 路径',v:'/usr/local/bin/claude(已找到)',light:'green'},
+    {k:'Cursor Agent CLI',v:'未安装',light:'gray'},
+    {k:'Open Design',v:'本机已探活',light:'green'},
+    {k:'GitHub 登录',v:'已登录 forcegravity1989',light:'green'},
+    {k:'codehub',v:'未配置',light:'gray'}
+  ];
+  var wr=state.settings.workspaceRoot, wrEditing=state.ui.workspaceRootEditing;
+  var wrRow='<div class="settings-row"><div style="flex:1;min-width:0;"><div class="k">工作区根目录</div>'
+    + (wrEditing
+        ? '<input class="input mono" style="margin-top:5px;max-width:320px;" data-bind="settings.workspaceRoot" value="'+esc(wr)+'">'
+        : '<div class="v mono">'+esc(wr)+'</div>')
+    + '</div>'
+    + (wrEditing
+        ? '<button class="btn btn-sm btn-primary" data-action="toggleWorkspaceRootEdit">保存</button>'
+        : '<button class="btn btn-sm" data-action="toggleWorkspaceRootEdit">更改…</button>')
+    + '</div>';
+  var body=rows.map(function(r){
+    return '<div class="settings-row"><div><div class="k">'+esc(r.k)+'</div><div class="v">'+esc(r.v)+'</div></div>'
+      + lightDot(r.light,true) + '</div>';
+  }).join('');
+  return '<section data-screen="settings"><h1 style="font-size:20px;">设置</h1><div class="settings-list">'+wrRow+body+'</div></section>';
+}
+
+/* ===================== 渲染:总览 ===================== */
+function issueChip(pid,issueId){
+  var i=getIssue(pid,issueId); if(!i)return '';
+  return '<span class="chip mono" data-issue="'+i.id+'" data-action="goSession" data-arg=\'["'+pid+'","'+i.id+'"]\' style="cursor:pointer;">'+esc(i.title.slice(0,14))+(i.title.length>14?'…':'')+'</span>';
+}
+function metricCardHTML(pid,m,big){
+  if(!m) return '';
+  if(m.gray){
+    return '<div class="mcard gray'+(big?' north':'')+'"><div class="mcard-head"><span class="mcard-name'+(big?' big':'')+'">'+esc(m.label)+'</span><span class="chip badge-manual">手填 · 未接入</span></div>'
+      + '<div class="mcard-value-row"><span class="mcard-value'+(big?' big':'')+'" style="color:var(--ink-4);">—</span><span class="mcard-target">目标未设</span></div>'
+      + '<div class="mcard-sub">无观测 · Unknown ≠ 绿</div></div>';
+  }
+  var driven=(m.drivenBy||[]).map(function(id){return issueChip(pid,id);}).join('');
+  var wk = m.weekTarget ? ('<div class="mcard-sub">本周目标 '+esc(m.weekTarget)+' '+(m.achieved?'●':'○')+'</div>') : '';
+  return '<div class="mcard'+(big?' north':'')+'"><div class="mcard-head"><span class="dot" style="background:'+(m.manual?'var(--amber)':'var(--green)')+'"></span>'
+    + '<span class="mcard-name'+(big?' big':'')+'">'+esc(m.label)+'</span>'+(m.manual?'<span class="chip badge-manual">手填</span>':'')+'</div>'
+    + '<div class="mcard-value-row"><span class="mcard-value'+(big?' big':'')+'">'+esc(m.current)+'</span><span class="mcard-target">目标 '+esc(m.target)+(m.targetAssumed?' ✱':'')+'</span></div>'
+    + (m.currentNote?('<div class="mcard-sub">'+esc(m.currentNote)+'</div>'):'') + wk
+    + (m.freshness?('<div class="mcard-sub">保鲜期 '+esc(m.freshness)+(m.obsNote?(' · '+esc(m.obsNote)):'')+'</div>'):'')
+    + (driven?('<div class="mcard-driven">'+driven+'</div>'):'')
+    + '</div>';
+}
+function renderOverview(pid){
+  var proj=getProject(pid); if(!proj) return '<section data-screen="overview"><div class="detail-empty">项目不存在</div></section>';
+  var wk=getPath(state,'weekPlans.'+pid+'.'+CURRENT_WEEK);
+  var showStartBanner = !wk;
+  var health=(state.health[pid])||{level:'gray',reasons:[]};
+  var editing=state.ui.charterEditing[pid];
+  var card=proj.card;
+  var charterEditHTML='';
+  if(editing){
+    var d=state.ui.charterDraft[pid];
+    charterEditHTML='<div class="formrow"><label class="label">想做什么</label><textarea class="textarea" data-bind="ui.charterDraft.'+pid+'.intent">'+esc(d.intent)+'</textarea></div>'
+      + '<div class="formrow"><label class="label">最像的对标</label><input class="input" data-bind="ui.charterDraft.'+pid+'.benchmark" value="'+esc(d.benchmark)+'"></div>'
+      + '<div class="formrow"><label class="label">三个月长成什么样(北极星)</label><textarea class="textarea" data-bind="ui.charterDraft.'+pid+'.northstar">'+esc(d.northstar)+'</textarea></div>'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end;"><button class="btn btn-sm" data-action="cancelCardEdit" data-arg=\'"'+pid+'"\'>取消</button><button class="btn btn-sm btn-primary" data-action="saveCard" data-arg=\'"'+pid+'"\'>保存</button></div>';
+  }
+  var charterEdit=getIssue(pid,'charter-edit');
+  var mrBanner='';
+  if(charterEdit&&(charterEdit.status==='review'||charterEdit.status==='merged')){
+    if(charterEdit.status==='review'){
+      mrBanner='<div class="mr-banner"><span>修改已提 MR '+esc(charterEdit.mr.label)+' · 待合入</span><span style="display:flex;gap:6px;"><button class="btn btn-sm" data-action="previewCard" data-arg=\'"'+pid+'"\'>预览</button><button class="btn btn-sm btn-primary" data-action="mergeCard" data-arg=\'"'+pid+'"\'>合入</button></span></div>';
+    } else {
+      mrBanner='<div class="mr-banner"><span>MR '+esc(charterEdit.mr.label)+' 已合入</span><button class="btn btn-sm btn-primary" data-action="completeCard" data-arg=\'"'+pid+'"\'>点完成</button></div>';
+    }
+  }
+  var reasons=health.reasons.map(function(r){
+    return '<div class="health-reason" data-action="jumpBlock" data-arg=\'"'+(r.jump||'card')+'"\'><span class="mark">'+(r.ok?'✓':'○')+'</span><span>'+esc(r.text)+'</span></div>';
+  }).join('');
+  var metrics=state.metrics[pid]||{};
+  var lagCols=['lag-1','lag-2'].map(function(id){return metricCardHTML(pid,metrics[id],false);}).join('');
+  var leadCols=['lead-1','lead-2','lead-3'].map(function(id){return metricCardHTML(pid,metrics[id],false);}).join('');
+  var weekProg=weekProgress(pid,CURRENT_WEEK);
+  var totalW=weekProg.todo+weekProg.doing+weekProg.review+weekProg.done;
+  function segPct(n){ return totalW? Math.round(n/totalW*100) : 0; }
+  var releases=(state.releases[pid]||[]).slice(-2);
+  var repoMetricItems=[['464','30 天提交'],['115 / 60,824','Rust 文件 / 行'],['80','docs 篇'],['7','30 天 PR'],['4','开放 PR'],['9','技能(真值)']];
+  var repoMetricsHTML=repoMetricItems.map(function(it){ return '<div class="repo-metric-item"><div class="v mono">'+esc(it[0])+'</div><div class="k">'+esc(it[1])+'</div></div>'; }).join('');
+  var opsChips=opsChipsHTML(pid);
+  return '<section data-screen="overview"><div class="ov-stack">'
+    + (showStartBanner ? ('<div class="ov-banner"><span>本周还没有计划</span><button class="btn btn-primary btn-sm" data-action="startWeek" data-arg=\'"'+pid+'"\'>开始本周</button></div>') : '')
+    + '<div class="card ov-block ov-block1" data-block="card">'
+    +   '<div class="info">'
+    +     (editing ? ('<div class="charter-name">'+esc(proj.name)+'</div>'+charterEditHTML)
+          : ('<div class="charter-name">'+esc(card.name)+'</div>'
+            + '<div class="charter-line"><span class="k">想做什么</span>'+esc(card.intent)+'</div>'
+            + '<div class="charter-line"><span class="k">对标</span>'+esc(card.benchmark)+'</div>'
+            + '<div class="charter-line"><span class="k">北极星</span>'+esc(card.northstar)+(card.northstarAssumed?' <span class="asterisk">✱</span>':'')+'</div>'
+            + '<div class="charter-meta"><span class="mono">'+esc(proj.repo)+'</span><span>负责人 '+esc(proj.owner)+'</span><span>规范 v'+esc(proj.standardVersion)+'</span><span style="margin-left:auto;"><button class="btn btn-sm" data-action="editCard" data-arg=\'"'+pid+'"\'>编辑</button></span></div>'))
+    +     mrBanner
+    +   '</div>'
+    +   '<div class="health">'
+    +     '<div class="health-big">'+lightDot(health.level,true)+'<span class="health-word">'+({green:'平稳',yellow:'需要关注',red:'阻塞',gray:'无数据'}[health.level]||'无数据')+'</span></div>'
+    +     '<div class="health-reasons">'+(reasons||'<div class="detail-empty">暂无理由</div>')+'</div>'
+    +   '</div>'
+    + '</div>'
+    + '<div class="card ov-block" data-block="northstar"><div class="ov-block-title">北极星</div>'+metricCardHTML(pid,metrics.northstar,true)+'</div>'
+    + '<div class="card ov-block" data-block="lagging"><div class="ov-block-title">滞后性指标</div><div class="ov-row">'+lagCols+'</div></div>'
+    + '<div class="card ov-block" data-block="leading"><div class="ov-block-title">引领性指标</div><div class="ov-row">'+leadCols+'</div></div>'
+    + '<div class="card ov-block" data-block="repo">'
+    +   '<div class="repo-metric-head"><h3>项目指标 · 代码仓级</h3><button class="btn btn-sm" data-action="toastOnly" data-arg=\'"已重新采集(演示)"\'>↻ 立即采集</button></div>'
+    +   '<div class="repo-metric-grid">'+repoMetricsHTML+'</div>'
+    + '</div>'
+    + '<div class="card ov-block" data-block="week">'
+    +   '<div class="ov-block-title">本周计划进度</div>'
+    +   '<div class="week-goal"><b>'+CURRENT_WEEK+'</b> · '+esc(wk?wk.goal:'（未开始本周）')+(wk&&wk.assumed?' <span class="asterisk">✱</span>':'')+'</div>'
+    +   '<div class="week-progress">'
+    +     '<div style="width:'+segPct(weekProg.done)+'%;background:var(--green);"></div>'
+    +     '<div style="width:'+segPct(weekProg.review)+'%;background:var(--amber);"></div>'
+    +     '<div style="width:'+segPct(weekProg.doing)+'%;background:var(--clay);"></div>'
+    +     '<div style="width:'+segPct(weekProg.todo)+'%;background:#E4DDC8;"></div>'
+    +   '</div>'
+    +   '<div class="week-counts"><span>待办 <b>'+weekProg.todo+'</b></span><span>进行中 <b>'+weekProg.doing+'</b></span><span>评审中 <b>'+weekProg.review+'</b></span><span>完成 <b>'+weekProg.done+'</b></span></div>'
+    +   (opsChips?('<div class="ops-chip-row">'+opsChips+'</div>'):'')
+    +   '<button class="btn btn-sm" data-action="nav" data-arg=\'"#/p/'+pid+'/plan"\'>去计划 →</button>'
+    + '</div>'
+    + '<div class="card ov-block" data-block="version">'
+    +   '<div class="ov-block-title">在研版本与发版记录</div>'
+    +   '<div class="version-cols"><div class="version-col"><div class="k">在研版本</div><div class="v mono">'+esc(proj.version)+'</div></div></div>'
+    +   releases.map(function(r){ return '<div class="release-line">'+esc(r.version)+' · '+esc(r.date)+' · '+esc(r.note)+'</div>'; }).join('')
+    + '</div>'
+    + '</div></section>';
+}
+
+/* ===================== 渲染:计划 ===================== */
+function issueActionsHTML(pid,i){
+  var playing=!!state.ui.playing[i.id];
+  if(i.status==='blocked'){
+    return '<span style="color:var(--alert-deep);">⛔ 阻塞</span>'
+      + '<button data-action="unblockIssue" data-arg=\'["'+pid+'","'+i.id+'","todo"]\' style="color:var(--clay);">解除→待办</button>';
+  }
+  if(playing){
+    return '<button data-action="stopWork" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--alert-deep);font-weight:600;">■ 停止</button>';
+  }
+  if(i.status==='pool'||i.status==='todo'){
+    return '<button data-action="startWork" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--clay);">▶ 开工</button>'
+      + '<button data-action="blockIssue" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--ink-3);">⛔ 阻塞</button>';
+  }
+  if(i.status==='doing'){
+    return '<button data-action="goSession" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--clay);">续聊</button>'
+      + '<button data-action="pushReview" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--clay);">推到评审</button>'
+      + '<button data-action="blockIssue" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--ink-3);">⛔ 阻塞</button>';
+  }
+  if(i.status==='review'){
+    if(i.mr){ return '<button data-action="mergeMR" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--clay);">⬇ 合入 '+esc(i.mr.label)+'</button>'; }
+    return '<span style="color:var(--ink-3);">等待提 MR</span>';
+  }
+  if(i.status==='merged'){
+    return '<button data-action="completeIssue" data-arg=\'["'+pid+'","'+i.id+'"]\' style="color:var(--clay);font-weight:600;">✓ 点完成</button>';
+  }
+  if(i.status==='done'){
+    return '<span style="color:var(--ink-3);">已完成'+(i.doneDate?(' · '+esc(i.doneDate)):'')+'</span>';
+  }
+  return '';
+}
+function issueCardHTML(pid,i){
+  var kindChip = i.kind==='ops' ? '<span class="chip chip-outline">运作</span>' : (i.auto?'<span class="chip chip-gray">自动</span>':'');
+  return '<div class="kcard" data-issue="'+i.id+'" style="border-left-color:var(--'+STATUS_DOT[i.status]+');">'
+    + '<div class="kcard-top"><span>#'+esc(issueSuffix(i.id))+' · '+esc(i.category)+'</span>'+kindChip+'</div>'
+    + '<div class="kcard-title" data-action="selectPlanIssue" data-arg=\'["'+pid+'","'+i.id+'"]\'>'+esc(i.title)+'</div>'
+    + '<div class="kcard-actions">'+issueActionsHTML(pid,i)+'</div>'
+    + '</div>';
+}
+function kanbanHTML(pid,issuesList){
+  var byCol={pool:[],todo:[],doing:[],review:[],done:[],blocked:[]};
+  issuesList.forEach(function(i){ (byCol[colOf(i.status)]=byCol[colOf(i.status)]||[]).push(i); });
+  var cols=KANBAN_COLS.map(function(c){
+    var key=c[0],label=c[1],items=byCol[key]||[];
+    return '<div class="kanban-col" data-col="'+key+'"><div class="kanban-col-head">'+label+' · '+items.length+'</div>'
+      + items.map(function(i){return issueCardHTML(pid,i);}).join('')
+      + '</div>';
+  }).join('');
+  return '<div class="kanban">'+cols+'</div>';
+}
+function renderPlan(pid){
+  var proj=getProject(pid); if(!proj) return '<section data-screen="plan"><div class="detail-empty">项目不存在</div></section>';
+  var left=state.ui.planLeft[pid]||CURRENT_WEEK;
+  var selIssue=state.ui.selectedIssue[pid];
+  var preview=state.ui.previewMode[pid];
+  var weekRows=WEEKS.map(function(w){
+    return '<div class="plan-weekrow '+(left===w?'active':'')+'" data-action="selectPlanLeft" data-arg=\'["'+pid+'","'+w+'"]\'><span>2026-'+w+(w===CURRENT_WEEK?' · 本周':'')+'</span></div>';
+  }).join('');
+  var leftHTML='<div class="plan-allrow '+(left==='all'?'active':'')+'" data-action="selectPlanLeft" data-arg=\'["'+pid+'","all"]\'>全部</div>'
+    + weekRows
+    + '<div class="plan-versionsel"><label class="label">在研版本</label><select class="select"><option>'+esc(proj.version)+'</option></select></div>';
+
+  var midHTML='';
+  if(left==='all'){
+    var filt=state.ui.planFilter[pid]||{};
+    var rows=allIssuesArr(pid).filter(function(i){
+      if(filt.cat&&i.category!==filt.cat)return false;
+      if(filt.version&&i.version!==filt.version)return false;
+      if(filt.source&&(i.source||'').indexOf(filt.source)<0)return false;
+      if(filt.keyword&&i.title.toLowerCase().indexOf(filt.keyword.toLowerCase())<0)return false;
+      return true;
+    });
+    midHTML='<div class="plan-toolbar"><div class="left">全部活</div></div>'
+      + '<div class="filter-bar">'
+      +   '<select data-bindchange="ui.planFilter.'+pid+'.cat"><option value="">类别·全部</option>'+CATS.map(function(c){return '<option value="'+c+'">'+c+'</option>';}).join('')+'</select>'
+      +   '<select data-bindchange="ui.planFilter.'+pid+'.version"><option value="">版本·全部</option>'+VERSIONS.map(function(v){return '<option value="'+v+'">'+v+'</option>';}).join('')+'</select>'
+      +   '<select data-bindchange="ui.planFilter.'+pid+'.source"><option value="">来源·全部</option><option value="人建">人建</option><option value="agent">agent 拆</option><option value="自动建">自动建</option><option value="人触发">人触发</option></select>'
+      +   '<input data-bind="ui.planFilter.'+pid+'.keyword" value="'+esc(filt.keyword||'')+'" placeholder="关键字…">'
+      + '</div>'
+      + kanbanHTML(pid,rows);
+  } else {
+    var wk=getPath(state,'weekPlans.'+pid+'.'+left);
+    var weekIssues=allIssuesArr(pid).filter(function(i){return i.kind==='business'&&i.week===left;});
+    var opsRows=opsIssuesFor(pid).filter(function(i){return i.week===left;});
+    var weekProg=weekProgress(pid,left);
+    var totalW=weekProg.todo+weekProg.doing+weekProg.review+weekProg.done;
+    function segPct(n){ return totalW? Math.round(n/totalW*100) : 0; }
+    midHTML='<div class="plan-toolbar"><div class="left">2026-'+left+(left===CURRENT_WEEK?' · 本周':'')+'</div>'
+      + '<div class="right">'
+      +   '<button class="btn btn-sm" data-action="newIssueDraft" data-arg=\'"'+pid+'"\'>新建活</button>'
+      +   '<button class="btn btn-sm" data-action="openReleaseModal" data-arg=\'"'+pid+'"\'>发版本</button>'
+      +   '<label class="switch"><input type="checkbox" '+(preview?'checked':'')+' data-action="togglePreview" data-arg=\'"'+pid+'"\'> 预览 · 未合入</label>'
+      + '</div></div>'
+      + (preview? '<div class="mr-banner" style="margin:0 0 8px;">预览:活 worktree 内的 .bw/metrics.toml、docs/plan/ 效果(未合入)</div>' : '')
+      + '<div class="goal-box">'+esc(wk?wk.goal:'（本周尚无计划)')+'</div>'
+      + '<div class="week-progress">'
+      +   '<div style="width:'+segPct(weekProg.done)+'%;background:var(--green);"></div>'
+      +   '<div style="width:'+segPct(weekProg.review)+'%;background:var(--amber);"></div>'
+      +   '<div style="width:'+segPct(weekProg.doing)+'%;background:var(--clay);"></div>'
+      +   '<div style="width:'+segPct(weekProg.todo)+'%;background:#E4DDC8;"></div>'
+      + '</div>'
+      + '<div class="ops-chip-row">'+opsChipsHTML(pid)+'</div>'
+      + kanbanHTML(pid,weekIssues.concat(opsRows));
+  }
+
+  var detailHTML='';
+  var di=selIssue?getIssue(pid,selIssue):null;
+  if(di){
+    detailHTML='<div class="plan-detail"><div class="plan-detail-head"><h3 style="font-size:15px;margin:0;font-family:var(--serif);">详情</h3><button class="drawer-close" data-action="closePlanDetail" data-arg=\'"'+pid+'"\'>✕</button></div>'
+      + '<div class="plan-detail-body">'
+      + '<div class="detail-title">'+esc(di.title)+'</div>'
+      + '<div class="detail-row"><div class="k">说明</div>'+esc(di.desc||'—')+'</div>'
+      + '<div class="detail-row"><div class="k">类别</div>'+esc(di.category)+'</div>'
+      + '<div class="detail-row"><div class="k">开工工具</div>'+esc(TOOL_LABEL[di.tool]||'—')+'</div>'
+      + '<div class="detail-row"><div class="k">技能 / agent</div>'+esc(di.skill||'—')+' / '+esc(di.teammate||'—')+'</div>'
+      + '<div class="detail-row"><div class="k">推动指标</div>'+((di.metricIds||[]).map(function(mid){var m=getMetric(pid,mid);return m?esc(m.label):'';}).join('、')||'—')+'</div>'
+      + '<div class="detail-row"><div class="k">MR</div>'+(di.mr?('<span class="mono">'+esc(di.mr.label)+'</span> · '+esc(di.mr.status)):'—')+'</div>'
+      + '<div class="detail-row"><div class="k">来源</div>'+esc(di.source||'—')+'</div>'
+      + '<div class="detail-row"><div class="k">week_of / 版本</div>'+esc(di.week||'—')+' / '+esc(di.version||'—')+'</div>'
+      + '<div class="detail-actions"><button class="btn btn-primary btn-sm" data-action="goSession" data-arg=\'["'+pid+'","'+di.id+'"]\'>去会话 →</button><button class="btn btn-sm" data-action="distill" data-arg=\'["'+pid+'","'+di.id+'"]\'>蒸馏</button></div>'
+      + '</div></div>';
+  }
+  return '<section data-screen="plan"><div class="plan-grid">'
+    + '<div class="plan-col">'+leftHTML+'</div>'
+    + '<div class="plan-col plan-mid">'+midHTML+'</div>'
+    + '</div>'+detailHTML+'</section>';
+}
+
+/* ===================== 渲染:会话(Orca 式三栏) ===================== */
+function sessionGroups(pid){
+  var proj=getProject(pid); if(!proj) return [];
+  var repoShort=(proj.repo||'repo').split('/').pop();
+  var groups=[{sid:'shell',groupLabel:repoShort+' · main',title:'仓根 shell',sub:'常驻',dot:'gray',issue:null}];
+  var ids = pid==='buddy' ? ['pr-102','w1-2','v4-4','ops2-w33'] : Object.keys(getIssues(pid)).filter(function(id){var i=getIssue(pid,id);return i&&i.kind!=='charter'&&i.status!=='done';});
+  ids.forEach(function(id){
+    var i=getIssue(pid,id); if(!i)return;
+    var dot='gray', sub='空闲';
+    if(state.ui.playing[id]){ dot='green'; sub='运行中'; }
+    else if(i.tool==='open_design'){ dot='green'; sub='Open Design 打开中'; }
+    else if(i.status==='review'||i.status==='merged'){ dot='amber'; sub=(i.auto?'自动 · 已推评审':'等你输入 · 3 分钟前'); }
+    else if(i.status==='doing'){ dot='amber'; sub='等你输入'; }
+    else if(i.status==='done'){ dot='gray'; sub='已完成'; }
+    groups.push({sid:id,groupLabel:repoShort+'-issue-'+issueSuffix(id)+' · '+branchOf(id),title:i.title,sub:sub,dot:dot,issue:i});
+  });
+  return groups;
+}
+function baseTabs(issue){
+  var tabs=[];
+  if(issue&&issue.tool==='open_design'){ tabs.push({id:'od',kind:'od',label:'Open Design'}); }
+  tabs.push({id:'terminal',kind:'terminal',label:'终端'});
+  return tabs;
+}
+function highlightLine(line){
+  var trimmed=line.replace(/^\s*/,'');
+  if(/^(\/\/|#)/.test(trimmed)){ return '<span class="tok-com">'+esc(line)+'</span>'; }
+  var out=esc(line);
+  out=out.replace(/(&quot;.*?&quot;)/g,'<span class="tok-str">$1</span>');
+  out=out.replace(/\b(fn|let|pub|struct|impl|match|if|else|return|use|mod|const|static|async|await|self|mut|for|while|loop|enum|trait|type|where|dyn|Self|workspace|members|label|target)\b/g,'<span class="tok-kw">$1</span>');
+  return out;
+}
+function terminalHTML(pid,sid,issue){
+  if(!issue){
+    var proj=getProject(pid);
+    return '<div class="terminal" data-terminal><div class="term-titlebar"><span>'+esc((proj&&proj.repo)||'')+' · main</span><span style="opacity:.5;">演示</span></div>'
+      + '<div class="term-body" data-terminal-body="'+sid+'"><div class="term-line term-idle">$ 等待输入…</div></div>'
+      + '<div class="term-input-row"><input placeholder="在此输入…" data-term-input data-pid="'+pid+'" data-sid="'+sid+'"></div></div>';
+  }
+  var shownCount=state.ui.terminalLines[sid]||0;
+  var lines=TRANSCRIPTS_FOR(pid,sid).slice(0,shownCount);
+  var body=lines.map(function(l){return '<div class="term-line '+l.cls+'">'+esc(l.text)+'</div>';}).join('')||'<div class="term-line term-idle">$ 等待 ▶开工…</div>';
+  return '<div class="terminal" data-terminal><div class="term-titlebar"><span>'+esc(branchOf(sid))+' · '+esc(TOOL_LABEL[issue.tool]||'')+'</span><span style="opacity:.5;">演示</span><span class="spacer"></span><button class="copybtn" data-action="copyTerminal" data-arg=\'"'+sid+'"\'>复制</button></div>'
+    + '<div class="term-body" data-terminal-body="'+sid+'">'+body+'</div>'
+    + '<div class="term-input-row"><input placeholder="继续对话…" data-term-input data-pid="'+pid+'" data-sid="'+sid+'"></div></div>';
+}
+function codeViewHTML(path){
+  var lines=FILE_CONTENTS[path]||['// '+path,'(未纳入原型演示内容,真实内容以仓为准)'];
+  var body=lines.map(function(l,idx){return '<div class="codeline"><span class="ln">'+(idx+1)+'</span><span class="src">'+highlightLine(l)+'</span></div>';}).join('');
+  return '<div class="codeview"><div class="codeview-head">'+esc(path)+' · 只读</div><div class="codeview-body">'+body+'</div></div>';
+}
+function diffViewHTML(issue,path){
+  var files=issue?changedFilesFor(issue):[];
+  var f=files.filter(function(x){return x[0]===path;})[0]||[path,'+4','-1'];
+  var plus=parseInt(f[1])||1, minus=Math.abs(parseInt(f[2]))||0;
+  var lines=[{t:'ctx',s:'--- a/'+path},{t:'ctx',s:'+++ b/'+path},{t:'ctx',s:'@@ -1,'+Math.max(1,minus)+' +1,'+Math.max(1,plus)+' @@'}];
+  for(var i=0;i<Math.min(6,Math.max(1,plus));i++){ lines.push({t:'add',s:'+ '+(i===0?'// 新增改动(演示行)':'    line_'+(i+1)+'();')}); }
+  if(minus>0){ lines.push({t:'del',s:'- // 旧实现(已移除,演示行)'}); }
+  var body=lines.map(function(l){return '<div class="diffline '+l.t+'">'+esc(l.s)+'</div>';}).join('');
+  return '<div class="diffview">'+body+'</div>';
+}
+function odEmbedHTML(){
+  return '<div class="od-embed"><div class="od-embed-head">Open Design · 本机内嵌(演示)</div><div class="od-embed-canvas"><span style="font-size:22px;">◐</span><span>Open Design</span></div></div>';
+}
+function renderTree(pid,sid,node,depth,changedSet){
+  var ex=state.ui.treeExpanded[pid]=state.ui.treeExpanded[pid]||{};
+  var html='';
+  if(node.type==='dir'){
+    var expanded=ex.hasOwnProperty(node.path)?ex[node.path]:(node.path===''||node.path==='crates'||node.path==='docs');
+    html+='<div class="tree-node dir" style="padding-left:'+(depth*12)+'px;" data-action="toggleTreeDir" data-arg=\'["'+pid+'","'+node.path+'"]\'><span class="tree-arrow">'+(expanded?'▾':'▸')+'</span>'+esc(node.name)+'/</div>';
+    if(expanded&&node.children){ node.children.forEach(function(c){ html+=renderTree(pid,sid,c,depth+1,changedSet); }); }
+  } else {
+    var changed=changedSet[node.path];
+    html+='<div class="tree-node file'+(changed?' changed':'')+'" style="padding-left:'+(depth*12+11)+'px;" data-action="openFileTab" data-arg=\'["'+pid+'","'+sid+'","'+node.path+'"]\'>'+esc(node.name)+(changed?' ✱':'')+'</div>';
+  }
+  return html;
+}
+function sessionRightHTML(pid,sid,issue){
+  var changedSet={}, changedList=issue?changedFilesFor(issue):[];
+  changedList.forEach(function(f){ changedSet[f[0]]=f; });
+  var treeHTML=renderTree(pid,sid,FILE_TREE,0,changedSet);
+  var changedHTML=changedList.length?changedList.map(function(f){
+    return '<div class="changed-row" data-action="openDiffTab" data-arg=\'["'+pid+'","'+sid+'","'+f[0]+'"]\'><span>'+esc(f[0])+'</span><span class="diffnum"><span class="plus">'+f[1]+'</span><span class="minus">'+f[2]+'</span></span></div>';
+  }).join(''):'<div class="detail-empty" style="padding:6px 2px;">无改动</div>';
+  var gitHTML=issue
+    ?('<div class="git-box">分支 '+esc(branchOf(sid))+'<br>ahead '+(changedList.length||1)+' · behind 0<br>未提交 '+(issue.status==='doing'?1:0)+'</div>')
+    :('<div class="git-box">分支 main<br>ahead 0 · behind 0<br>未提交 0</div>');
+  var mrHTML='';
+  if(issue&&issue.mr){
+    mrHTML='<div class="mr-card"><div class="row"><span class="mono">'+esc(issue.mr.label)+'</span><span class="chip '+(issue.mr.status==='merged'?'chip-green':'chip-outline')+'">'+esc(issue.mr.status==='merged'?'已合入':'开着')+'</span></div>'
+      + '<div style="font-size:11px;color:var(--ink-3);margin-bottom:6px;">检查 ✓ 通过</div>'
+      + (issue.status==='review'?('<button class="btn btn-sm btn-primary" data-action="mergeMR" data-arg=\'["'+pid+'","'+sid+'"]\'>合入</button>'):'')
+      + '</div>';
+  }
+  return '<div class="sr-h">文件树</div><div data-filetree>'+treeHTML+'</div>'
+    + '<div class="sr-h">改动文件</div>'+changedHTML
+    + '<div class="sr-h">git</div>'+gitHTML
+    + (mrHTML?('<div class="sr-h">MR</div>'+mrHTML):'');
+}
+function renderSession(pid,sidParam){
+  var proj=getProject(pid); if(!proj) return '<section data-screen="session"><div class="detail-empty">项目不存在</div></section>';
+  var groups=sessionGroups(pid);
+  var sid=sidParam||state.ui.currentSession[pid]||(groups[1]?groups[1].sid:'shell');
+  if(!groups.some(function(g){return g.sid===sid;})){
+    var dynIssue=getIssue(pid,sid);
+    if(dynIssue){
+      var repoShort=(proj.repo||'repo').split('/').pop();
+      groups.push({sid:sid,groupLabel:repoShort+'-issue-'+issueSuffix(sid)+' · '+branchOf(sid),title:dynIssue.title,sub:STATUS_LABEL[dynIssue.status],dot:STATUS_DOT[dynIssue.status]==='red'?'red':(dynIssue.status==='done'?'gray':'amber'),issue:dynIssue});
+    } else { sid='shell'; }
+  }
+  state.ui.currentSession[pid]=sid;
+  var leftHTML=groups.map(function(g){
+    return '<div class="sess-group-label">'+esc(g.groupLabel)+'</div>'
+      + '<div class="sess-row '+(sid===g.sid?'sel':'')+'"'+(g.issue?(' data-issue="'+g.issue.id+'"'):'')+' data-action="selectSession" data-arg=\'["'+pid+'","'+g.sid+'"]\'>'
+      +   '<span class="dot'+(g.dot==='green'?' dot-run':'')+'" style="background:'+colorOf(g.dot)+';margin-top:4px;"></span>'
+      +   '<div class="body"><div class="ttl">'+esc(g.title)+'</div><div class="sub">'+esc(g.sub)+'</div></div>'
+      + '</div>'
+      + '<div class="sess-addnew">+ 新会话</div>';
+  }).join('');
+  var cur=groups.filter(function(g){return g.sid===sid;})[0];
+  var issue=cur?cur.issue:null;
+  var tabs=baseTabs(issue).concat(state.ui.sessionTabs[sid]||[]);
+  var activeTab=state.ui.sessionActiveTab[sid]||tabs[0].id;
+  if(!tabs.some(function(t){return t.id===activeTab;}))activeTab=tabs[0].id;
+  var tabsHTML=tabs.map(function(t){
+    var closable=t.kind==='file'||t.kind==='diff';
+    return '<div class="sess-tab '+(activeTab===t.id?'active':'')+'" data-action="selectTab" data-arg=\'["'+sid+'","'+t.id+'"]\'><span>'+esc(t.label)+'</span>'+(closable?('<span class="x" data-action="closeTab" data-arg=\'["'+sid+'","'+t.id+'"]\'>✕</span>'):'')+'</div>';
+  }).join('');
+  var bodyHTML='', activeTabObj=tabs.filter(function(t){return t.id===activeTab;})[0];
+  if(activeTabObj){
+    if(activeTabObj.kind==='terminal') bodyHTML=terminalHTML(pid,sid,issue);
+    else if(activeTabObj.kind==='od') bodyHTML=odEmbedHTML();
+    else if(activeTabObj.kind==='file') bodyHTML=codeViewHTML(activeTabObj.path);
+    else if(activeTabObj.kind==='diff') bodyHTML=diffViewHTML(issue,activeTabObj.path);
+  }
+  var actionBar='';
+  if(issue){
+    var playing=!!state.ui.playing[sid];
+    var canPlay=!playing&&issue.status!=='review'&&issue.status!=='merged'&&issue.status!=='done';
+    var canPush=issue.status==='todo'||issue.status==='pool'||issue.status==='doing';
+    actionBar='<div class="sess-actionbar" data-actionbar="'+sid+'">'
+      + '<span class="ttl">'+esc(issue.title)+'</span>'
+      + '<span class="chip" data-status-text>'+esc(STATUS_LABEL[issue.status])+'</span>'
+      + '<button class="btn btn-sm" data-btn="play" data-action="startWork" data-arg=\'["'+pid+'","'+sid+'"]\' '+(canPlay?'':'disabled')+'>▶ 开工</button>'
+      + '<button class="btn btn-sm" data-btn="stop" data-action="stopWork" data-arg=\'["'+pid+'","'+sid+'"]\' '+(playing?'':'disabled')+'>■ 停止</button>'
+      + '<button class="btn btn-sm" data-action="pushReview" data-arg=\'["'+pid+'","'+sid+'"]\' '+(canPush?'':'disabled')+'>推到评审</button>'
+      + '<button class="btn btn-sm" data-action="distill" data-arg=\'["'+pid+'","'+sid+'"]\'>蒸馏</button>'
+      + (issue.tool==='cursor'?'<button class="btn btn-sm" data-action="openInCursor">在 Cursor 中打开</button>':'')
+      + '</div>';
+  } else {
+    actionBar='<div class="sess-actionbar"><span class="ttl">仓根 · main</span><span class="chip">常驻 shell</span></div>';
+  }
+  return '<section data-screen="session"><div class="sess-grid">'
+    + '<div class="sess-col"><div class="sess-left-scroll">'+leftHTML+'</div></div>'
+    + '<div class="sess-col sess-mid">'+actionBar+'<div class="sess-tabs">'+tabsHTML+'</div><div class="sess-body">'+bodyHTML+'</div></div>'
+    + '<div class="sess-col"><div class="sess-right-scroll">'+sessionRightHTML(pid,sid,issue)+'</div></div>'
+    + '</div></section>';
+}
+
+/* ===================== 渲染:配置 ===================== */
+var TOOL_OPTIONS=['open_design','claude_cli','cursor'];
+function toolmapSectionHTML(pid){
+  var rows=state.toolmap[pid]||[];
+  var agentNames=(state.teammates[pid]||[]).map(function(t){return t.name;});
+  var skillNames=(state.skills[pid]||[]).map(function(s){return s.name;});
+  var body=rows.map(function(r,idx){
+    var toolSel='<select class="select-sm" data-bindchange="toolmap.'+pid+'.'+idx+'.tool">'+TOOL_OPTIONS.map(function(t){return '<option value="'+t+'" '+(r.tool===t?'selected':'')+'>'+TOOL_LABEL[t]+'</option>';}).join('')+'</select>';
+    var agentSel='<select class="select-sm" data-bindchange="toolmap.'+pid+'.'+idx+'.agent">'+agentNames.map(function(a){return '<option '+(r.agent===a?'selected':'')+'>'+esc(a)+'</option>';}).join('')+'</select>';
+    var skillMulti='<select class="select-multi" multiple size="'+Math.min(4,Math.max(2,skillNames.length))+'" data-bindchange-multi="toolmap.'+pid+'.'+idx+'.skills">'+skillNames.map(function(s){return '<option '+((r.skills||[]).indexOf(s)>=0?'selected':'')+'>'+esc(s)+'</option>';}).join('')+'</select>';
+    return '<tr><td>'+esc(r.cat)+'</td><td>'+toolSel+'</td><td>'+agentSel+'</td><td>'+skillMulti+'</td></tr>';
+  }).join('');
+  return '<div class="cfg-section"><div class="cfg-section-head"><h3>开工工具映射</h3><button class="btn btn-sm btn-primary" data-action="saveToolmap" data-arg=\'"'+pid+'"\'>保存</button></div>'
+    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>类别</th><th>开工工具</th><th>agent</th><th>skill</th></tr></thead><tbody>'+body+'</tbody></table></div>'
+    + '<div class="cfg-readonly-note">保存后写回 .bw/issue-policy.toml(演示)。</div></div>';
+}
+function skillsSectionHTML(pid){
+  var skills=state.skills[pid]||[];
+  return '<div class="cfg-section"><div class="cfg-section-head"><h3>skill</h3><button class="btn btn-sm" data-action="openImportModal" data-arg=\'["'+pid+'","skill"]\'>导入</button></div>'
+    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>名称</th><th>来源</th><th>版本</th><th>本项目用过次数</th><th>启用</th></tr></thead><tbody>'
+    + skills.map(function(s){
+      return '<tr><td>'+esc(s.name)+(s.distilled?' <span class="chip chip-green">蒸馏</span>':'')+'</td><td>'+esc(skillSourceLabel(s))+'</td><td class="mono">'+esc(s.version)+'</td><td class="mono">'+esc(s.uses)+'</td>'
+        + '<td><span class="tglswitch '+(s.enabled?'on':'')+'" data-action="toggleSkill" data-arg=\'["'+pid+'",'+JSON.stringify(s.name)+']\'><span class="knob"></span></span></td></tr>';
+    }).join('') + '</tbody></table></div></div>';
+}
+function agentsSectionHTML(pid){
+  var tms=state.teammates[pid]||[];
+  return '<div class="cfg-section"><div class="cfg-section-head"><h3>agent</h3><button class="btn btn-sm" data-action="openImportModal" data-arg=\'["'+pid+'","teammate"]\'>导入</button></div>'
+    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>名称</th><th>工具</th><th>说明</th><th>战绩</th></tr></thead><tbody>'
+    + tms.map(function(t){ return '<tr><td>'+esc(t.name)+'</td><td class="mono">'+esc(TOOL_LABEL[t.tool]||t.tool)+'</td><td>'+esc(t.desc)+'</td><td class="mono">'+esc(t.record)+'</td></tr>'; }).join('')
+    + '</tbody></table></div><div class="cfg-readonly-note">战绩只读,由真实运行记录推导。</div></div>';
+}
+function connectorsCronsSectionHTML(pid){
+  var cs=state.connectors[pid]||[], crons=state.crons[pid]||[];
+  var connHTML='<div class="cfg-section"><div class="cfg-section-head"><h3>连接器</h3></div>'
+    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>连接器</th><th>目标</th><th>状态</th><th>上次同步</th></tr></thead><tbody>'
+    + cs.map(function(c){ return '<tr><td>'+esc(c.name)+'</td><td class="mono">'+esc(c.target)+'</td><td><span class="chip '+(c.status==='connected'?'chip-green':'')+'">'+(c.status==='connected'?'已连接':'未配置')+'</span></td><td class="mono">'+esc(c.lastSync)+'</td></tr>'; }).join('')
+    + '</tbody></table></div></div>';
+  var cronHTML='<div class="cfg-section"><div class="cfg-section-head"><h3>定时</h3></div>'
+    + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>任务</th><th>频率</th><th>下次触发</th><th>状态</th><th>操作</th></tr></thead><tbody>'
+    + crons.map(function(c){
+      return '<tr><td>'+esc(c.name)+'</td><td class="mono">'+esc(c.schedule)+'</td><td class="mono">'+esc(c.nextRun)+'</td>'
+        + '<td><span class="chip '+(c.status==='running'?'chip-clay':(c.status==='paused'?'':'chip-green'))+'">'+({normal:'正常',running:'运行中',paused:'已暂停'}[c.status]||c.status)+'</span></td>'
+        + '<td><button class="btn btn-sm" data-action="runCron" data-arg=\'["'+pid+'","'+c.id+'"]\'>立即执行</button> <button class="btn btn-sm btn-ghost" data-action="toggleCron" data-arg=\'["'+pid+'","'+c.id+'"]\'>'+(c.status==='paused'?'恢复':'暂停')+'</button></td></tr>';
+    }).join('') + '</tbody></table></div></div>';
+  return '<div class="cfg-pair">'+connHTML+cronHTML+'</div>';
+}
+function renderConfig(pid){
+  return '<section data-screen="config">'
+    + toolmapSectionHTML(pid)
+    + skillsSectionHTML(pid)
+    + agentsSectionHTML(pid)
+    + connectorsCronsSectionHTML(pid)
+    + '</section>';
+}
+
+/* ===================== 渲染:知识库(内部沿用 space/spaceTab 命名) ===================== */
+function codeGraphSVG(){
+  function box(x,y,w,h,label,lines){
+    return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="7" fill="#FBFAF6" stroke="#C5654A" stroke-width="1.3"/>'
+      + '<text x="'+(x+w/2)+'" y="'+(y+h/2-3)+'" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="12" fill="#23211C">'+label+'</text>'
+      + '<text x="'+(x+w/2)+'" y="'+(y+h/2+13)+'" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10.5" fill="#8C867A">'+lines+' 行</text>';
+  }
+  function arrow(x1,y1,x2,y2){ return '<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="#8C867A" stroke-width="1.3" marker-end="url(#gArrow)"/>'; }
+  return '<svg viewBox="0 0 760 220" width="100%" style="max-width:760px;display:block;">'
+    + '<defs><marker id="gArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#8C867A"/></marker></defs>'
+    + arrow(130,113,190,63) + arrow(130,113,190,173) + arrow(300,63,380,103) + arrow(300,173,380,123) + arrow(490,113,560,63) + arrow(490,113,560,173)
+    + box(20,90,110,46,'bw-core','4,997') + box(190,30,110,46,'bw-engine','6,098') + box(190,150,110,46,'bw-store','5,630')
+    + box(380,90,110,46,'bw-app','27,572') + box(560,30,110,46,'ui','2,559') + box(560,150,110,46,'app-desktop','13,968')
+    + '</svg>';
+}
+function renderSpace(pid,subTab){
+  var tab=subTab||state.ui.spaceTab[pid]||'knowledge';
+  state.ui.spaceTab[pid]=tab;
+  var tabsHTML=[['knowledge','知识'],['graph','代码图'],['assets','资产']].map(function(t){return '<div class="tabbtn '+(tab===t[0]?'active':'')+'" data-action="setSpaceTab" data-arg=\'["'+pid+'","'+t[0]+'"]\'>'+t[1]+'</div>';}).join('');
+  var body='';
+  if(tab==='knowledge'){
+    var docId=state.ui.spaceDoc[pid]||'k-project';
+    var groups={};
+    KNOWLEDGE_DOCS.forEach(function(d){ groups[d.group]=groups[d.group]||[]; groups[d.group].push(d); });
+    var treeHTML=Object.keys(groups).map(function(g){
+      return '<div class="sp-tree-group">'+esc(g)+'</div>' + groups[g].map(function(d){
+        return '<div class="sp-tree-item '+(docId===d.id?'active':'')+'" data-action="selectKDoc" data-arg=\'["'+pid+'","'+d.id+'"]\'>'+esc(d.name)+'</div>';
+      }).join('');
+    }).join('');
+    var doc=KNOWLEDGE_DOCS.filter(function(d){return d.id===docId;})[0];
+    var previewHTML='<div class="detail-empty">选一份文档查看</div>';
+    if(doc){
+      var lines=doc.path?(FILE_CONTENTS[doc.path]||['(演示未内嵌内容)']):['(演示未内嵌内容,正本以仓文件为准)'];
+      previewHTML='<h4>'+esc(doc.name)+'</h4>'+(doc.path?('<div class="path">'+esc(doc.path)+'</div>'):'')+'<pre>'+esc(lines.join('\n'))+'</pre>';
+    }
+    body='<div class="sp-layout"><div class="card sp-tree">'+treeHTML+'</div><div class="card sp-preview">'+previewHTML+'</div></div>';
+  } else if(tab==='graph'){
+    var q=(state.ui.symbolQuery[pid]||'').trim();
+    var SYMBOL_RESULTS={
+      'recompute_signals':[['crates/bw-store/src/sqlite.rs','persist_observation() 观测写入后触发'],['crates/bw-app/src/lib.rs','dispatch() 每次命令处理后调用'],['crates/ui/src/vm.rs','signal_color() 间接读取结果']],
+      'can_transition_to':[['crates/bw-app/src/lib.rs','transition_issue() 状态机守卫'],['crates/app-desktop/src/screens/issues.rs','on_click_next() 按钮可见性判断']]
+    };
+    var results=SYMBOL_RESULTS[q];
+    var resultsHTML=q?(results?results.map(function(r){return '<div class="symbol-result"><div class="h">'+esc(r[0])+'</div><div>'+esc(r[1])+'</div></div>';}).join(''):'<div class="detail-empty">—</div>'):'';
+    body='<div class="graph-wrap">'
+      + '<div class="graph-svgbox" data-codegraph>'+codeGraphSVG()+'</div>'
+      + '<div class="graph-lower">'
+      +   '<div class="card" style="padding:12px 14px;"><div class="sr-h" style="margin-top:0;">大文件榜</div>'
+      +     [['crates/bw-app/src/lib.rs','12,102'],['crates/app-desktop/src/screens/op.rs','4,148'],['crates/bw-store/src/sqlite.rs','3,940'],['crates/bw-core/src/model.rs','2,238'],['crates/ui/src/vm.rs','2,086']].map(function(r){return '<div class="leaderboard-row"><span>'+esc(r[0])+'</span><span>'+r[1]+' 行</span></div>';}).join('')
+      +   '</div>'
+      +   '<div class="card" style="padding:12px 14px;"><div class="sr-h" style="margin-top:0;">符号 → 调用者 / 影响面</div>'
+      +     '<input class="input symbol-search-input" placeholder="recompute_signals / can_transition_to" data-symbol-input data-pid="'+pid+'" value="'+esc(q)+'">'
+      +     resultsHTML + '</div>'
+      + '</div>'
+      + '<div class="graph-foot">索引时间 2026-08-18 09:10 · codegraph explore</div>'
+      + '</div>';
+  } else if(tab==='assets'){
+    var skills=state.skills[pid]||[], tms=state.teammates[pid]||[];
+    var own=skills.filter(function(s){return !s.ops&&!s.distilled&&s.source==='项目自有';});
+    var ops=skills.filter(function(s){return s.ops;});
+    var distilled=skills.filter(function(s){return s.distilled;});
+    function assetCards(list,metaFn){ return '<div class="asset-grid">'+list.map(function(x){return '<div class="card asset-card"><div class="name">'+esc(x.name)+'</div><div class="meta">'+esc(metaFn(x))+'</div></div>';}).join('')+'</div>'; }
+    var artifacts=[
+      {name:'mvp-blueprint-draft.md / .html',meta:'V4 全貌草案(三轮 grilling 收口)'},
+      {name:'standard-module-draft.md',meta:'规范铺底模块设计稿'},
+      {name:'research-orca.md 等预研三篇',meta:'Orca / DSH / codegraph 借鉴判断'},
+      {name:'hifi/index.html',meta:'V4 高保真可点击原型(本文件)'}
+    ];
+    body=''
+      + '<div class="asset-sect-title">项目自有技能</div>' + (own.length?assetCards(own,function(s){return s.version+' · 用过 '+s.uses;}):'<div class="detail-empty">暂无</div>')
+      + '<div class="asset-sect-title">蒸馏技能</div>' + (distilled.length?assetCards(distilled,function(s){return s.source;}):'<div class="detail-empty">暂无</div>')
+      + '<div class="asset-sect-title">agent</div>' + assetCards(tms,function(t){return TOOL_LABEL[t.tool]||t.tool;})
+      + '<div class="asset-sect-title">运作技能</div>' + assetCards(ops,function(s){return s.version;})
+      + '<div class="asset-sect-title">产物登记</div>' + assetCards(artifacts,function(a){return a.meta;})
+      + '<div class="asset-sect-title">仓统计指标</div>'
+      + '<div class="repostats" style="border:none;padding:0;">30 天提交 464 · Rust 115 文件 / 60,824 行 · docs 80 篇 · 技能 9 · 30 天 PR 数 7 · 开放 PR 4</div>';
+  }
+  return '<section data-screen="kb"><div class="card sp-topinfo"><span>规范 v4.0(最新)</span><span>对账 8 类核心件 <span style="color:var(--green);">✓</span></span><span style="margin-left:auto;"></span><button class="btn btn-sm" data-action="toastOnly" data-arg=\'"演示:规范差异为空,已是最新"\'>看差异</button><button class="btn btn-sm" data-action="toastOnly" data-arg=\'"演示:规范已是最新,无需升级"\'>升级</button></div>'
+    + '<div class="tabbtn-row">'+tabsHTML+'</div>' + body + '</section>';
+}
+
+/* ===================== 渲染:通知 ===================== */
+function renderNotify(pid){
+  var pending=getInbox(pid);
+  var events=(state.notifyEvents[pid]||[]).slice();
+  var pendingHTML=pending.length? pending.map(function(it){
+    var acts='';
+    if(it.kind==='metric'){
+      acts='<button class="btn btn-sm btn-ghost" data-action="openInboxIssue" data-arg=\'["'+pid+'","'+it.id+'"]\'>去补</button>';
+    } else if(it.state==='pending'){
+      acts='<button class="btn btn-sm btn-ghost" data-action="openInboxIssue" data-arg=\'["'+pid+'","'+it.id+'"]\'>打开</button>'
+        + '<button class="btn btn-sm" data-action="mergeInbox" data-arg=\'["'+pid+'","'+it.id+'"]\'>合入</button>';
+    } else if(it.state==='merged'){
+      acts='<button class="btn btn-sm btn-primary" data-action="completeInbox" data-arg=\'["'+pid+'","'+it.id+'"]\'>点完成</button>';
+    }
+    return '<div class="drawer-item"'+(it.issueId?(' data-issue="'+it.issueId+'"'):'')+'>'
+      + '<div class="desc">'+esc(it.text)+(it.state==='merged'?' <span class="chip chip-green">已合入</span>':'')+'</div>'
+      + '<div class="acts">'+acts+'</div></div>';
+  }).join('') : '<div class="drawer-empty">待处理已清空</div>';
+  var eventsHTML=events.length? events.map(function(e){
+    var clickable=!!e.link;
+    return '<div class="notify-event"'+(clickable?(' data-action="goEventLink" data-arg=\'["'+pid+'","'+esc(e.link)+'"]\' style="cursor:pointer;"'):'')+'>'
+      + '<span class="mono" style="color:var(--ink-3);flex:none;">'+esc(e.time)+'</span><span style="flex:1;">'+esc(e.text)+(e.processed?' <span class="chip chip-green">已处理</span>':'')+'</span></div>';
+  }).join('') : '<div class="drawer-empty">暂无事件</div>';
+  return '<section data-screen="notify" data-notify>'
+    + '<h1 style="font-size:20px;">通知</h1>'
+    + '<div class="notify-sect-title">待处理 · '+pending.length+'</div>'
+    + '<div class="notify-list">'+pendingHTML+'</div>'
+    + '<div class="notify-sect-title">事件</div>'
+    + '<div class="notify-events">'+eventsHTML+'</div>'
+    + '</section>';
+}
+
+/* ===================== 主渲染 / 路由分发 ===================== */
+function screenHTML(){
+  var parts=parseHash();
+  var top=parts[0]||'wall';
+  var screenSeg='wall', pid=null, sub2=null;
+  if(top==='wall'||!parts.length){ screenSeg='wall'; }
+  else if(top==='onboard'){ screenSeg='onboard'; }
+  else if(top==='settings'){ screenSeg='settings'; }
+  else if(top==='p'){ pid=parts[1]; screenSeg=parts[2]||'overview'; sub2=parts[3]; }
+  else { screenSeg='wall'; }
+  var inProject = top==='p' && !!getProject(pid);
+  if(top==='p' && !inProject){ screenSeg='wall'; }
+  var html='';
+  if(!inProject && screenSeg==='wall') html=renderWall();
+  else if(!inProject && screenSeg==='onboard') html=renderOnboard();
+  else if(!inProject && screenSeg==='settings') html=renderSettings();
+  else if(inProject && screenSeg==='overview') html=renderOverview(pid);
+  else if(inProject && screenSeg==='plan') html=renderPlan(pid);
+  else if(inProject && screenSeg==='session') html=renderSession(pid,sub2);
+  else if(inProject && screenSeg==='notify') html=renderNotify(pid);
+  else if(inProject && screenSeg==='config') html=renderConfig(pid);
+  else if(inProject && screenSeg==='kb') html=renderSpace(pid,sub2);
+  else html=renderWall();
+  return {html:html,inProject:inProject,pid:pid,screenSeg:screenSeg};
+}
+function shellHTML(){
+  var r=screenHTML();
+  return iconRailHTML(r.inProject,r.screenSeg)
+    + (r.inProject?projectRailHTML(r.pid,r.screenSeg):'')
+    + '<div class="main">'+topbarHTML(r.inProject,r.pid,r.screenSeg)+'<div class="content">'+r.html+'</div></div>'
+    + (!r.inProject&&r.screenSeg==='wall'?guideMarkupHTML():'')
+    + modalHTML();
+}
+function render(){
+  var active=document.activeElement;
+  var bind=active&&active.getAttribute&&(active.getAttribute('data-bind')||active.getAttribute('data-bindchange'));
+  var selStart=active&&typeof active.selectionStart==='number'?active.selectionStart:null;
+  var selEnd=active&&typeof active.selectionEnd==='number'?active.selectionEnd:null;
+  document.getElementById('app').innerHTML=shellHTML();
+  saveState();
+  if(bind){
+    var el=document.querySelector('[data-bind="'+bind+'"], [data-bindchange="'+bind+'"]');
+    if(el){ el.focus(); if(selStart!=null&&el.setSelectionRange){ try{ el.setSelectionRange(selStart,selEnd); }catch(_){} } }
+  }
+}
+window.addEventListener('hashchange', render);
+render();
+})();
+</script>
+</body>
+</html>
