@@ -165,20 +165,35 @@ pub async fn commit_paths(
     workspace: &Path,
     paths: &[String],
     message: &str,
-) -> Result<bool, GitError> {
+) -> Result<CommitOutcome, GitError> {
+    let mut out = CommitOutcome::default();
     if paths.is_empty() {
-        return Ok(false);
+        return Ok(out);
     }
     for p in paths {
-        git(workspace, &["add", "--", p]).await?;
+        // **单个路径 add 失败不能拖垮整次提交。** 最常见的原因是项目把这个路径
+        // 写进了 `.gitignore`(buddy 自己的仓就忽略 `.claude/`)—— 那是项目的
+        // 决定,不该用 `-f` 顶回去,如实记一笔就好。
+        if git(workspace, &["add", "--", p]).await.is_err() {
+            out.refused.push(p.clone());
+        }
     }
     // 只看**暂存区**有没有东西:工作区别的地方脏不脏与这次提交无关。
     let staged = git(workspace, &["diff", "--cached", "--name-only"]).await?;
     if staged.trim().is_empty() {
-        return Ok(false);
+        return Ok(out);
     }
     git(workspace, &["commit", "-m", message]).await?;
-    Ok(true)
+    out.committed = true;
+    Ok(out)
+}
+
+/// 一次提交的结果。`refused` 是仓自己(多半经 `.gitignore`)拒收的路径 ——
+/// 文件写下去了,但没进版本控制,这件事必须说出来,不能让人以为进仓了。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommitOutcome {
+    pub committed: bool,
+    pub refused: Vec<String>,
 }
 
 /// 根提交的作者 —— 判「这个仓是不是 buddy 自己建的空仓」。

@@ -81,29 +81,39 @@ impl App {
         };
         let report = boot::write_core_files(&ws, &vars)?;
 
-        // 跳过的件如实写进这张活的说明,评审的人不用猜为什么少了一份。
-        // 注意是**从头拼一遍再整体覆盖**,不是往现有正文后面追加 —— 建活是按
-        // 标题幂等的,重跑会拿到同一张活,追加就会把「跳过的件」滚成两份。
-        if !report.skipped.is_empty() {
-            let mut b = body;
-            b.push_str("\n\n跳过的件:\n");
-            for (path, why) in &report.skipped {
-                b.push_str(&format!("- `{path}`:{why}\n"));
-            }
-            self.store.set_issue_body(issue_id, &b).await?;
-        }
-
         // 空仓例外(仓是 buddy 自己建的)直接提交当前分支;否则也提交在当前
         // 分支上,开分支与 MR 是后面刀的事——这里如实回报提交没提交。
         // 只提交这次真写下去的那些件。用户点铺底的时候工作区多半是脏的,
         // 把他手上没写完的改动一起打包进「规范铺底」那个提交是不能接受的。
-        let committed = crate::git::commit_paths(
+        let outcome = crate::git::commit_paths(
             &ws,
             &report.written,
             &format!("docs(bw): 规范铺底 v{} · 核心件", standard::version()),
         )
         .await
-        .unwrap_or(false);
+        .unwrap_or_default();
+        let committed = outcome.committed;
+
+        // 跳过的件如实写进这张活的说明,评审的人不用猜为什么少了一份。
+        // 注意是**从头拼一遍再整体覆盖**,不是往现有正文后面追加 —— 建活是按
+        // 标题幂等的,重跑会拿到同一张活,追加就会把「跳过的件」滚成两份。
+        let mut b = body;
+        if !report.skipped.is_empty() {
+            b.push_str("\n\n跳过的件:\n");
+            for (path, why) in &report.skipped {
+                b.push_str(&format!("- `{path}`:{why}\n"));
+            }
+        }
+        if !outcome.refused.is_empty() {
+            b.push_str(
+                "\n\n写下去了但**没进版本控制**的件(这个仓的 .gitignore 忽略了它们,\
+                 buddy 不用 -f 顶回去 —— 那是项目自己的决定):\n",
+            );
+            for path in &outcome.refused {
+                b.push_str(&format!("- `{path}`\n"));
+            }
+        }
+        self.store.set_issue_body(issue_id, &b).await?;
 
         Ok(vec![Event::StandardBootstrapped {
             project_id,

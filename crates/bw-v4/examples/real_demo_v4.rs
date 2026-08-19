@@ -250,7 +250,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "docs(bw): 本周计划与发版记录(指挥器)",
     )
     .await
-    .unwrap_or(false);
+    .unwrap_or_default()
+    .committed;
     say(
         &mut log,
         &format!(
