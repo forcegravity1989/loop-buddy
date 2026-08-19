@@ -217,6 +217,9 @@ h1,h2,h3,h4{font-family:var(--serif);font-weight:700;margin:0 0 8px;}
 .plan-weekrow{padding:7px 9px;border-radius:7px;font-size:12.5px;cursor:pointer;margin-bottom:2px;display:flex;justify-content:space-between;align-items:center;}
 .plan-weekrow:hover{background:#EEE6D3;}
 .plan-weekrow.active{background:var(--clay);color:#fff;}
+.plan-weekgroup{margin:10px 0 4px;font-size:11px;letter-spacing:.4px;color:var(--ink-3);}
+.chip-muted{background:#E4DCCB;color:var(--ink-3);font-size:10.5px;padding:1px 5px;border-radius:5px;}
+.plan-weekrow.active .chip-muted{background:rgba(255,255,255,.25);color:#fff;}
 .plan-versionsel{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
 .plan-mid{display:flex;flex-direction:column;min-width:0;height:100%;background:transparent;border:none;box-shadow:none;padding:0;overflow:visible;}
 .plan-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;gap:10px;flex-wrap:wrap;flex:none;}
@@ -473,6 +476,8 @@ var STATUS_DOT={pool:'gray',todo:'gray',doing:'amber',review:'amber',merged:'amb
 var CATS=['构建','构建(文档)','原型','优化','运维','运营推广','运作'];
 var WEEKS=['W34'];
 var HISTORY_WEEKS=['W33','W32','W31','W30','W29','W28','W27'];
+// 回填出来的历史周:数字来自 buddy 自己仓的 git 合入记录(按 ISO 周),回填时写进同格式的 docs/plan/2026-Www.md
+var HISTORY_WEEK_MERGED={W33:3,W32:17,W31:7,W30:12,W29:3,W28:3,W27:1};
 var VERSIONS=['0.4.0-v4','0.3.0-v3','0.2.0-v3'];
 var KANBAN_COLS=[['pool','待办池'],['todo','待办'],['doing','进行中'],['review','评审中'],['done','已完成'],['blocked','阻塞']];
 var KANBAN_COL_DEF={pool:'未排进任何一周',todo:'已排进本周,等开工',doing:'agent 在干',review:'MR 开着,等人审',done:'人点过完成',blocked:'填了原因'};
@@ -1784,8 +1789,13 @@ function renderPlan(pid){
   var weekRows=WEEKS.map(function(w){
     return '<div class="plan-weekrow '+(left===w?'active':'')+'" data-action="selectPlanLeft" data-arg=\'["'+pid+'","'+w+'"]\'><span>2026-'+w+(w===CURRENT_WEEK?' · 本周':'')+'</span></div>';
   }).join('');
+  var histRows=HISTORY_WEEKS.map(function(w){
+    return '<div class="plan-weekrow '+(left===w?'active':'')+'" data-action="selectPlanLeft" data-arg=\'["'+pid+'","'+w+'"]\'><span>2026-'+w+'</span><span class="chip chip-muted">回填</span></div>';
+  }).join('');
   var leftHTML='<div class="plan-allrow '+(left==='all'?'active':'')+'" data-action="selectPlanLeft" data-arg=\'["'+pid+'","all"]\'>全部</div>'
     + weekRows
+    + '<div class="plan-weekgroup">历史周</div>'
+    + histRows
     + '<div class="plan-versionsel"><label class="label">在研版本</label><select class="select"><option>'+esc(proj.version)+'</option></select></div>';
 
   var midHTML='';
@@ -1806,6 +1816,14 @@ function renderPlan(pid){
       +   '<input data-bind="ui.planFilter.'+pid+'.keyword" value="'+esc(filt.keyword||'')+'" placeholder="关键字…">'
       + '</div>'
       + kanbanHTML(pid,rows);
+  } else if(HISTORY_WEEKS.indexOf(left)>=0){
+    // 回填出来的历史周:和普通周同一个文件格式(docs/plan/2026-Www.md,origin: backfill),
+    // 界面不做特殊处理——就是把那份文件里的内容渲染出来;没有周目标就照实说没有。
+    var mg=HISTORY_WEEK_MERGED[left]||0;
+    midHTML='<div class="plan-toolbar"><div class="left">2026-'+left+' <span class="chip chip-muted">回填</span></div>'
+      + '<div class="right"><span class="muted" style="font-size:12px;">docs/plan/2026-'+left+'.md</span></div></div>'
+      + '<div class="goal-box">(回填,无周目标)本周合入 '+mg+' 个 MR</div>'
+      + '<div class="detail-empty" style="margin-top:10px;">这一周是接入时由「资产盘点」首次模式从 git 历史回填出来的:同格式的周计划文件,记着这周合了什么、动了哪些目录、关了几个 issue。当时项目还没在 buddy 上运作,所以没有活卡。</div>';
   } else {
     var wk=getPath(state,'weekPlans.'+pid+'.'+left);
     var weekIssues=allIssuesArr(pid).filter(function(i){return i.kind==='business'&&i.week===left;});
