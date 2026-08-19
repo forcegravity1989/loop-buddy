@@ -22,6 +22,9 @@ pub async fn collect_health_inputs(workspace: &Path, week: &str) -> HealthInputs
         week_plan_file::read(workspace, &last_week).ok().flatten()
     };
 
+    // 「这个仓 git 读得动吗」单独问一次:读不动的时候「零提交」说明不了任何
+    // 事,不能拿去判红(新接入的项目第一眼看到红灯,是在编)。
+    let git_readable = crate::git::is_repo(workspace).await;
     let committed_this_week = crate::git::has_commits_in_week(workspace, week)
         .await
         .unwrap_or(false);
@@ -52,6 +55,7 @@ pub async fn collect_health_inputs(workspace: &Path, week: &str) -> HealthInputs
         has_week_goal: this_plan.as_ref().is_some_and(|p| p.has_goal()),
         committed_this_week,
         committed_last_week,
+        git_readable,
         has_metric_reading: this_plan.as_ref().is_some_and(|p| p.has_reading())
             || last_plan.as_ref().is_some_and(|p| p.has_reading()),
         // 读数是否越线要按 `.bw/metrics.toml` 的目标判 —— A 刀还没接指标目标

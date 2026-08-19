@@ -28,6 +28,10 @@ pub struct HealthInputs {
     pub committed_this_week: bool,
     /// 上周仓里有真实 git 提交。两周都没动是硬红。
     pub committed_last_week: bool,
+    /// **git 到底读到没读到**。没配工作区、目录不是 git 仓、机器上没有 git,
+    /// 这一条是假 —— 此时「两周零提交」说明不了任何事,不能当成「这个项目
+    /// 停了」判红。没数据是灰,不是红,也不是绿。
+    pub git_readable: bool,
     /// (b) 本周或上周的周计划文件里有「本周指标读数」段且非空。
     pub has_metric_reading: bool,
     /// 任何一条指标读数按 `.bw/metrics.toml` 的目标判下来是红。
@@ -43,6 +47,7 @@ impl HealthInputs {
             has_week_goal: false,
             committed_this_week: false,
             committed_last_week: false,
+            git_readable: false,
             has_metric_reading: false,
             any_metric_red: false,
             delivered_last_week: false,
@@ -69,15 +74,16 @@ pub fn derive_project_health(inputs: &HealthInputs) -> DerivedHealth {
         inputs.delivered_last_week,
     );
 
-    let signal = if a && b && c {
+    // 判红在判绿之前:三条判据齐了但指标越线,那是红,不是绿。
+    let stalled = inputs.git_readable && !inputs.committed_this_week && !inputs.committed_last_week;
+    let signal = if inputs.any_metric_red || stalled {
+        // 指标越线,或者读到了 git 而连着两周一条提交都没有 —— 后者不是
+        // 「说不准」,是真的停了。
+        Signal::Red
+    } else if a && b && c {
         Signal::Green
-    } else if !inputs.committed_this_week && !inputs.committed_last_week {
-        // 连着两周没有任何真实提交 —— 这不是「说不准」,是真的停了。
-        Signal::Red
-    } else if inputs.any_metric_red {
-        Signal::Red
     } else if !a && !b && !c {
-        // 一条判据都不成立,而且不是「停了」那种红:就是没数据。
+        // 一条判据都不成立,又没有任何「确实停了」的证据:就是没数据。
         Signal::Unknown
     } else {
         Signal::Amber
