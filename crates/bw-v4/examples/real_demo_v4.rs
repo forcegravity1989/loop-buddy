@@ -29,6 +29,8 @@ use std::sync::Arc;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 起任何线程之前先把本机时区定住 —— 周是按本机时区算的。
+    bw_v4::isoweek::init_local_offset();
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
         eprintln!(

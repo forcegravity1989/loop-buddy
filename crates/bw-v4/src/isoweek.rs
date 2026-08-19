@@ -3,7 +3,31 @@
 //! 周是 V4 的时间单位——周计划文件按周一份、活按周排、健康三条判据按周窗口
 //! 算。这里只有换算,没有任何业务判断。
 
-use time::{Date, Duration, OffsetDateTime, Weekday};
+use std::sync::OnceLock;
+use time::{Date, Duration, OffsetDateTime, UtcOffset, Weekday};
+
+/// 本机时区偏移。**必须在起任何线程之前调一次**(`main` / 指挥器的第一行):
+/// Unix 上「当前时区」这个系统调用在多线程进程里不保证安全,`time` crate 因此
+/// 只在单线程阶段才肯给准确答案。取不到就退回 UTC,并如实说一声。
+///
+/// 为什么值得费这个事:周是 V4 的时间单位,而中国用户在 UTC+8。周一早上
+/// 八点前按 UTC 算还是上一周 —— 而周一早上正是人开周计划的时候。
+static LOCAL_OFFSET: OnceLock<UtcOffset> = OnceLock::new();
+
+pub fn init_local_offset() {
+    let offset = match UtcOffset::current_local_offset() {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("[BW_TIME] 取不到本机时区,周按 UTC 算");
+            UtcOffset::UTC
+        }
+    };
+    let _ = LOCAL_OFFSET.set(offset);
+}
+
+fn now_local() -> OffsetDateTime {
+    OffsetDateTime::now_utc().to_offset(*LOCAL_OFFSET.get().unwrap_or(&UtcOffset::UTC))
+}
 
 /// 某一天属于哪个 ISO 周,形如 `2026-W34`。
 pub fn iso_week_of(date: Date) -> String {
@@ -11,9 +35,14 @@ pub fn iso_week_of(date: Date) -> String {
     format!("{year}-W{week:02}")
 }
 
-/// 现在是哪个 ISO 周(UTC)。
+/// 今天是几月几号,按本机时区算 —— 发版日这类「人眼里的今天」用它。
+pub fn today_local() -> Date {
+    now_local().date()
+}
+
+/// 现在是哪个 ISO 周,按**本机时区**算(见 [`init_local_offset`])。
 pub fn current_week() -> String {
-    iso_week_of(OffsetDateTime::now_utc().date())
+    iso_week_of(now_local().date())
 }
 
 /// `2026-W34` → 那一周的周一。认不出格式返回 `None`,不猜。

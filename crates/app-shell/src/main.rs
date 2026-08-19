@@ -23,6 +23,8 @@ use bridge::{DeepLink, Panel, Req, TopView};
 use dioxus::prelude::*;
 
 fn main() {
+    // 起任何线程之前先把本机时区定住 —— 周是按本机时区算的。
+    bw_v4::isoweek::init_local_offset();
     let deep_link = bridge::read_deep_link();
     let builder = dioxus::desktop::WindowBuilder::new()
         .with_title("Builders' Workbench")

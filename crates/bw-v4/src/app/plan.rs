@@ -204,7 +204,7 @@ impl App {
             numbers.push(issue.number);
         }
 
-        let today = time::OffsetDateTime::now_utc().date().to_string();
+        let today = crate::isoweek::today_local().to_string();
         let rows_written = release_file::append_row(
             &ws,
             &release_file::ReleaseRow {
