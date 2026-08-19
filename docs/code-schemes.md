@@ -48,7 +48,7 @@
 | **V3-cowelink-sidecar** | `docs/v3-prototype/cowelink-web-sidecar.md` | cowelink 长出本机网页旁路,buddy iframe 内嵌;不弹窗、不 HWND | 设计已记,未落地 |
 | **V3-use-fix** | `docs/v3-prototype/onboard-list-and-claude-resolve.md` | V3 实践使用:安装器/探测认 claude.cmd + 创建流拉 999/可搜索下拉 + 程序图标;纳入选分支不在本轮 | 本轮落地 |
 | **减负-1 … 减负-21** | `docs/LEFTOVERS.md`「当前开着」表 + 文末「减负重构收据」 | 2026-08-17/18 减负重构会话的滞后清单(冗余功能 / 结构债 / 已删收据),从 `docs/BACKLOG.md` 并入时沿用原序号;中文前缀,不与任何字母系列撞车 | 1、2 已做;其余按表内「阶段」列排 |
-| **V4-待拍-01–28** | `docs/v4-prototype/mvp-blueprint-draft.md` §11 | V4 MVP 全貌草案的决策项编号(两轮用户反馈 22 条 + 高保真期新增 23 + 2026-08-19 内部专家评审新增 24–28:映射三列 / 看板拖拽只排期 / 项目群 / 老项目回填 / 易用性守则);正文里写作「待拍-NN」 | 已定,随草案转作数 |
+| **V4-待拍-01–29** | `docs/v4-prototype/mvp-blueprint-draft.md` §11 | V4 MVP 全貌草案的决策项编号(两轮用户反馈 22 条 + 高保真期新增 23 + 2026-08-19 内部专家评审新增 24–28:映射三列 / 看板拖拽 / 项目群 / 老项目回填 / 易用性守则 + 2026-08-20 用户回握手清单新增 29:库本机 + 周计划记指标读数);正文里写作「待拍-NN」 | 已定,随草案转作数 |
 | **V4-规范大类 1–8** | `docs/v4-prototype/standard-module-draft.md` §2 | 规范铺底模块的八个大类,**故意用数字不用字母**(A-H 会与本表 A/B/G 撞车);正文里写作「第 N 类」+ 名称 | 已定 |
 | **V4-加载五层** | `docs/v4-prototype/mvp-blueprint-draft.md` §2.6 | agent 会话里规范手册的渐进加载层次,**故意不编字母**(与 plan/03 的 L0–L6 派生链撞车),正文写「第 0–4 层」 | 已定 |
 
