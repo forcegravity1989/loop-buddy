@@ -25,7 +25,7 @@
 
 | 路径 | 是什么 | 谁在维护 |
 |---|---|---|
-| [`v1-prototype/`](v1-prototype/) → [`v2-prototype/`](v2-prototype/) → [`v3-prototype/`](v3-prototype/) | **当前迭代线**:V1 产品化(纳入项目简化 / 交互式指标环 / 内嵌终端 / 总览重构)→ V2(调度统一 / 最简多人)→ V3(原型进度页内嵌 Open Design)。每个目录自带 README 与逐文件状态表;V4 规划在 [`v4-prototype/`](v4-prototype/)(草案在另一 worktree,尚未 commit)。遗留清单已升格到 `docs/LEFTOVERS.md`(下一行),`v1-prototype/LEFTOVERS.md` 只剩指针 | 伙伴会话(V1/V2/V3 分支已全部合入 main;V4 规划中) |
+| [`v1-prototype/`](v1-prototype/) → [`v2-prototype/`](v2-prototype/) → [`v3-prototype/`](v3-prototype/) | **当前迭代线**:V1 产品化(纳入项目简化 / 交互式指标环 / 内嵌终端 / 总览重构)→ V2(调度统一 / 最简多人)→ V3(原型进度页内嵌 Open Design)。每个目录自带 README 与逐文件状态表;V4 规划在 [`v4-prototype/`](v4-prototype/)(全貌草案已作数,高保真原型与专家评审包见其 README)。遗留清单已升格到 `docs/LEFTOVERS.md`(下一行),`v1-prototype/LEFTOVERS.md` 只剩指针 | 伙伴会话(V1/V2/V3 分支已全部合入 main;V4 规划中) |
 | [`LEFTOVERS.md`](LEFTOVERS.md) | 还没干的活的**唯一**清单(全产品;含减负重构并入的「减负-N」冗余功能/结构债条目与已删收据) | main 2026-08-17 升格为全产品清单;原 `BACKLOG.md` 已并入删除 |
 | [`doc-boundaries.md`](doc-boundaries.md) | 文档边界:什么写到哪、不写到哪 | 现在作数 |
 | [`releases.md`](releases.md) | 版本登记:出包与运作 | 现在作数 |
