@@ -129,6 +129,11 @@ pub enum Command {
     // ── 通知 ──────────────────────────────────────────────
     /// 记「这个项目的事件流看到哪个时间点」。只影响视觉状态,不参与待处理计数。
     MarkNotifySeen { project_id: ProjectId, at: i64 },
+
+    /// 定时的一跳。**只会自动建活,绝不自动完成活**——到点了就查本周有没有
+    /// 那张资产盘点活,没有就建一张并自动开工。没到点、已经有了,都是原地
+    /// 返回空事件,不是错误。
+    TickScheduler { project_id: ProjectId },
 }
 
 /// 一个工具探活的结果。探不到就是探不到,不猜。
@@ -174,6 +179,8 @@ pub enum Event {
     WeekPlanStarted {
         project_id: ProjectId,
         week: String,
+        /// 运作活①本身那张活。界面据此跳会话屏。
+        issue_id: IssueId,
         draft_titles: Vec<String>,
     },
     /// 本周文件已经存在,这次什么都没做 —— 重跑不产生重复数据。
@@ -224,6 +231,12 @@ pub enum Event {
     IssueCacheRefreshed {
         week: String,
         updated: u32,
+    },
+    /// 定时真的建出了一张活。界面上「本周运作」栏据此显示「已自动开工」。
+    OpsAutoFired {
+        id: IssueId,
+        workflow: String,
+        week: String,
     },
     NotifySeenMarked {
         project_id: ProjectId,

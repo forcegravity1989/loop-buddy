@@ -9,17 +9,20 @@
 //! - [`plan`] —— 开始本周、排期、发版本、缓存对账
 //! - [`issue`] —— 建活、▶跑、状态转移
 //! - [`bootstrap`] —— 规范铺底与对账
+//! - [`ops`] —— 三张运作活:周计划、资产盘点、规范铺底
 //! - [`tools`] —— 开工工具映射与探活
 //! - [`health`] —— 三条判据的现算
 
 mod bootstrap;
 mod health;
 mod issue;
+mod ops;
 mod plan;
 mod project;
 mod tools;
 
 pub use health::collect_health_inputs;
+pub use ops::{skill_slug, OPS1_WORKFLOW, OPS2_WORKFLOW, OPS3_WORKFLOW};
 
 use crate::command::{Command, Event};
 use crate::model::ProjectId;
@@ -182,6 +185,7 @@ impl App {
             Command::MarkNotifySeen { project_id, at } => {
                 self.mark_notify_seen(project_id, at).await
             }
+            Command::TickScheduler { project_id } => self.tick_scheduler(project_id).await,
         }
     }
 }

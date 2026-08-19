@@ -56,11 +56,28 @@ impl App {
         };
         week_plan_file::write(&ws, &week, &week_plan_file::render(&draft))?;
 
-        Ok(vec![Event::WeekPlanStarted {
+        // 真正干这件事的是一次 agent 会话:复盘上周、更新指标、和人聊出本周
+        // 要干什么。buddy 只负责把活建出来、把骨架文件写下去,然后立刻开工
+        // —— 人点的那一下「开始本周」就到此为止,剩下的在会话屏里发生。
+        let (issue_id, mut events) = self
+            .create_ops_issue(
+                project_id,
+                format!("更新指标 + 制定本周计划 {week}"),
+                "复盘上周、补齐 .bw/metrics.toml、和人交流出本周目标与业务活草稿。\n\n草稿没经人确认之前不许建活、不许落文件。"
+                    .into(),
+                super::OPS1_WORKFLOW,
+                IssueOrigin::Human,
+                week.clone(),
+            )
+            .await?;
+        events.extend(self.run_issue(issue_id).await?);
+        events.push(Event::WeekPlanStarted {
             project_id,
             week,
+            issue_id,
             draft_titles,
-        }])
+        });
+        Ok(events)
     }
 
     /// 人确认草稿之后真的建活,并把活写进周计划文件的活清单。

@@ -141,6 +141,11 @@ impl App {
                     .into_iter()
                     .map(|(p, _)| p),
             )
+            .chain(
+                standard::ops_workflow_packages()
+                    .into_iter()
+                    .map(|(p, _)| p),
+            )
             .collect();
 
         for target in targets {
@@ -179,9 +184,26 @@ fn pending_steps(probe: &boot::BootstrapProbe) -> String {
 
 /// ▶开工 时注入给 agent 的系统提示词。
 ///
-/// A 刀先给最小的一段:这张活是什么、铁律是什么。完整的 workflow 正文注入
-/// (按 `issue.workflow` 找技能包、把正文拼进来)是运作活那一刀的事。
-pub(crate) fn agent_system_prompt(issue: &Issue) -> String {
+/// 两段:这张活是什么 + 两条铁律,然后是这张活挂的 workflow 剧本正文
+/// ([`workflow_body`] 从项目仓里读)。剧本读不到就如实少这一段,不编。
+pub(crate) fn agent_system_prompt(issue: &Issue, workflow_body: Option<&str>) -> String {
+    let mut prompt = base_prompt(issue);
+    if let Some(body) = workflow_body {
+        prompt.push_str("\n以下是这件活挂的 workflow 剧本正文,照它干:\n\n---\n\n");
+        prompt.push_str(body);
+    }
+    prompt
+}
+
+/// 这张活挂的 workflow 剧本正文。正本是**项目仓里**的
+/// `.claude/skills/<slug>/SKILL.md`——铺底时复制进去的那一份,不是 buddy 自己
+/// 安装目录里那一份。读不到就返回 `None`,调用方如实少注入一段。
+pub(crate) fn workflow_body(workspace: &std::path::Path, workflow: &str) -> Option<String> {
+    let slug = super::ops::skill_slug(workflow)?;
+    std::fs::read_to_string(workspace.join(format!(".claude/skills/{slug}/SKILL.md"))).ok()
+}
+
+fn base_prompt(issue: &Issue) -> String {
     format!(
         "你在 Builders' Workbench 管理的项目仓里干一件活。\n\
          \n活:#{} {}\n类别:{}\n用的 workflow:{}\n\

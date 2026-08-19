@@ -76,3 +76,44 @@ pub fn previous_week(week: &str) -> Option<String> {
 pub fn starts_on_monday(week: &str) -> bool {
     week_start(week).is_some_and(|d| d.weekday() == Weekday::Monday)
 }
+
+/// `"fri 20:00"` → 星期几(周一 = 1)+ 时 + 分。认不出返回 `None`,不猜。
+///
+/// 只认这一种写法。cron 表达式不支持——`.bw/issue-policy.toml` 是给人读的,
+/// 一周一次的节律不值得请一整套 cron 语法进来。
+pub fn parse_schedule(spec: &str) -> Option<(u8, u8, u8)> {
+    let spec = spec.trim().to_ascii_lowercase();
+    let (day, time) = spec.split_once(char::is_whitespace)?;
+    let dow = match &day[..day.len().min(3)] {
+        "mon" => 1,
+        "tue" => 2,
+        "wed" => 3,
+        "thu" => 4,
+        "fri" => 5,
+        "sat" => 6,
+        "sun" => 7,
+        _ => return None,
+    };
+    let (h, m) = time.trim().split_once(':')?;
+    let h: u8 = h.parse().ok()?;
+    let m: u8 = m.parse().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some((dow, h, m))
+}
+
+/// 本周的这个时刻过了没有。
+///
+/// 判据只看「星期几 + 几点几分」在本周之内的先后,不算具体时间戳——因为幂等
+/// 靠的是「本周有没有建过这张活」那条查询,这里只要回答「这一周里该触发的那
+/// 一刻是不是已经过去了」。错过一次(比如那会儿 buddy 没开着)下次照样成立,
+/// 自动补建,不需要另记一张「上次触发时间」的表。
+pub fn schedule_passed_this_week(spec: &str) -> bool {
+    let Some((dow, h, m)) = parse_schedule(spec) else {
+        return false;
+    };
+    let now = now_local();
+    let today = now.weekday().number_from_monday();
+    (today, now.hour(), now.minute()) >= (dow, h, m)
+}

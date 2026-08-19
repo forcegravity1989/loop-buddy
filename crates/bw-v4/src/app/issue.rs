@@ -124,7 +124,8 @@ impl App {
 
         let agent: &TuiAgentConfig = &CLAUDE;
         let prompt = format!("#{} {}\n\n{}", issue.number, issue.title, issue.body);
-        let system_prompt = super::bootstrap::agent_system_prompt(&issue);
+        let workflow_body = super::bootstrap::workflow_body(&ws, &issue.workflow);
+        let system_prompt = super::bootstrap::agent_system_prompt(&issue, workflow_body.as_deref());
         let plan = build_startup_plan(agent, &prompt, &system_prompt, &ws)
             .map_err(|e| AppError::Exec(e.to_string()))?;
         let ctx = RunCtx {
