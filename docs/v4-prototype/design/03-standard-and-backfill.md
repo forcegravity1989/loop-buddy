@@ -152,7 +152,7 @@
 
 正本住仓根 `standard/`(01 篇已定,与 `crates/`/`docs/` 平级),结构照 [standard-module-draft.md](../standard-module-draft.md) §3 设计成八大类。
 
-**A 刀落地后改。** 原文的目录树是八大类全部铺开的目标态,读起来像已经建齐。实况是仓根 `standard/` 目前只有下面这些目录/文件,`CHANGELOG.md`、`06-defaults/`、`07-cadence/`、`pond/` 都还没建:
+**A 刀落地后改。** 原文的目录树是八大类全部铺开的目标态,读起来像已经建齐。实况(B 刀之后):仓根 `standard/` 有下面这些目录/文件。`06-defaults/ops/` 已经建了——里面是三份自建运作 workflow 的正本;`CHANGELOG.md`、`07-cadence/`、`pond/` 仍然没建。
 
 ```
 standard/
@@ -173,20 +173,27 @@ standard/
 │   └── metrics.toml.tmpl
 ├── 05-issue-policy/
 │   └── issue-policy.toml.tmpl
+├── 06-defaults/
+│   └── ops/                          # B 刀建的:三份自建运作 workflow 正本
+│       ├── README.md                 # 三张活的总说明 + 版本怎么走
+│       ├── week-planning/SKILL.md    # 运作活①入口
+│       ├── week-planning/skills/metrics-refresh/SKILL.md
+│       │                             #   子技能,由 north-star-discovery +
+│       │                             #   metrics-binding 两份合并而成
+│       ├── asset-audit/SKILL.md      # 运作活②入口(mode=weekly / first 分支)
+│       └── standard-bootstrap-agent/merge-adjust/SKILL.md   # 运作活③需要 agent 的那一步
 └── 08-meta/
     └── standard.toml.tmpl
 
 # 还没建的(不是遗漏,是如实标注未建):
 # CHANGELOG.md   —— 每次改动一行,含"试点里用没用上"的证据
-# 06-defaults/   —— 自建运作技能三份(02 篇 §2.5 已说明:铺底第 1 步目前复制的
-#                    是九篇现成方法论技能包代替,不是这三份)
 # 07-cadence/    —— 运作节律文字说明(实际配置目前在 05-issue-policy 一起铺)
 # pond/          —— 鱼塘:未严选的技能/workflow
 ```
 
 `05-issue-policy/issue-policy.toml.tmpl` 里「类别→工具→workflow」那张映射是**五行**,对应五阶段方法论(原型/构建/优化/运维/运营推广)各一行,不是六行——模板文件自己的注释写得很直白:「铺底默认给五个活的类别……各配一行默认映射……这里只有五行,没有第六类:五阶段方法论本身就是五个阶段,不无中生有出一个第六类别」。
 
-**同事怎么贡献**:一条 PR 直接改 `standard/`,和改代码一样过评审(人 + `/code-review`)、合入、`CHANGELOG.md` 加一行(建好之后)、`VERSION` 按需 +0.1——buddy 不需要为此改任何 Rust 代码。最常见场景是往 `06-defaults/` 或 `pond/`(建好之后)加一份新的 AGENTS.md 模板变体、内置 workflow 定义,或添一条"值得进鱼塘"的第三方技能记录——这条贡献路径本身仍是设计,`06-defaults/`/`pond/` 目录不存在的当下还谈不上真的有人这么贡献过。评审判据怎么进 CHANGELOG(§3 已定,本篇引用):每类 README 写"为什么要它、不要它会怎样";试点两周后把"用没用上、agent 读没读、人改没改"记进 CHANGELOG,决定下一版降为扩展还是进鱼塘——和技能严选同一逻辑。
+**同事怎么贡献**:一条 PR 直接改 `standard/`,和改代码一样过评审(人 + `/code-review`)、合入、`CHANGELOG.md` 加一行(建好之后)、`VERSION` 按需 +0.1——buddy 不需要为此改任何 Rust 代码。最常见场景是往 `06-defaults/` 加一份新的内置 workflow(B 刀之后这个目录真的在了,三份运作 workflow 就住在 `06-defaults/ops/`,照着加第四份即可),或往 `pond/`(还没建)添一条"值得进鱼塘"的第三方技能记录。评审判据怎么进 CHANGELOG(§3 已定,本篇引用):每类 README 写"为什么要它、不要它会怎样";试点两周后把"用没用上、agent 读没读、人改没改"记进 CHANGELOG,决定下一版降为扩展还是进鱼塘——和技能严选同一逻辑。
 
 ### 2.8 命令 / 事件(名字 + 一句话)
 
