@@ -256,21 +256,27 @@ impl ChangedFile {
 /// 这不是 `diff_numstat` 能回答的问题——那个比较的是两个已经落库的提交,而这
 /// 里要的正是「还没提交的东西长什么样」。
 pub async fn changed_files(workspace: &Path) -> Result<Vec<ChangedFile>, GitError> {
-    let out = git(workspace, &["status", "--porcelain"]).await?;
-    Ok(out
-        .lines()
-        .filter(|l| l.len() > 3)
-        .map(|l| ChangedFile {
-            code: l[..2].to_string(),
-            // 改名行是 `R  old -> new`,取箭头右边那个,人关心的是新名字。
-            path: l[3..]
-                .rsplit(" -> ")
-                .next()
-                .unwrap_or(&l[3..])
-                .trim()
-                .to_string(),
-        })
-        .collect())
+    // **必须用 `-z`**。不带它的时候,git 会把带空格或非 ASCII 的路径用引号包起
+    // 来、还把中文转成八进制转义(`"\344\270\255…"`)。那串东西直接拿去当
+    // pathspec 查 diff 是查不到的 —— 界面会对一个明明改过的文件说「它还没进版
+    // 本控制」,然后给人看一片空白。`-z` 用 NUL 分隔,一个字节都不转义。
+    let out = git(workspace, &["status", "--porcelain", "-z"]).await?;
+    let mut fields = out.split('\0').filter(|f| !f.is_empty());
+    let mut rows = Vec::new();
+    while let Some(entry) = fields.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+        let code = entry[..2].to_string();
+        let path = entry[3..].to_string();
+        // 改名/复制的记录后面**紧跟一个额外字段**装原路径。不把它读掉,下一轮
+        // 就会把原路径当成一条独立的改动行。人关心的是新名字,原路径丢掉。
+        if code.starts_with('R') || code.starts_with('C') {
+            let _ = fields.next();
+        }
+        rows.push(ChangedFile { code, path });
+    }
+    Ok(rows)
 }
 
 /// 单个文件的 diff 正文。没跟踪的文件 `git diff` 是空的——这时退回整份文件
@@ -357,4 +363,41 @@ pub fn list_dir(workspace: &Path, rel: &str) -> Vec<TreeEntry> {
     // 目录在前,同类按名字。文件树里最烦的是每次展开顺序都不一样。
     out.sort_by(|a, b| (!a.is_dir, &a.name).cmp(&(!b.is_dir, &b.name)));
     out
+}
+
+/// 仓里最早那条提交的日期(`YYYY-MM-DD`)。空仓返回 `None`。
+///
+/// 回填的起点靠它 —— 从这一天所在的那一周开始往今天扫。
+pub async fn first_commit_date(workspace: &Path) -> Option<String> {
+    let out = git(
+        workspace,
+        &["log", "--reverse", "--date=short", "--pretty=format:%ad"],
+    )
+    .await
+    .ok()?;
+    out.lines().next().map(|s| s.trim().to_string())
+}
+
+/// 标签 + 它指向那条提交的日期。**取的是提交日期,不是打标签的日期**:标签
+/// 可以事后补打,提交日期才是那个版本真正发生的时刻。
+pub async fn tags_with_dates(workspace: &Path) -> Vec<(String, String)> {
+    let Ok(out) = git(
+        workspace,
+        &[
+            "for-each-ref",
+            "--sort=creatordate",
+            "--format=%(refname:short)\t%(committerdate:short)",
+            "refs/tags",
+        ],
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+    out.lines()
+        .filter_map(|l| {
+            let (tag, date) = l.split_once('\t')?;
+            Some((tag.trim().to_string(), date.trim().to_string()))
+        })
+        .collect()
 }

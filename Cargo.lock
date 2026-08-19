@@ -76,6 +76,7 @@ dependencies = [
  "bw-v4",
  "dioxus",
  "pulldown-cmark",
+ "serde_json",
  "time",
  "tokio",
  "uuid",

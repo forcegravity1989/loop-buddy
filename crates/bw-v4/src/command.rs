@@ -135,6 +135,10 @@ pub enum Command {
     /// 返回空事件,不是错误。
     TickScheduler { project_id: ProjectId },
 
+    /// 老项目历史回填 —— 把「本该有但老项目没攒出来」的周计划文件与发版行补
+    /// 出来。语义是「给资产盘点这个 workflow 传一次 `mode=first`」,不是另开
+    /// 一条平行流水线。重跑安全:已有的周文件不碰,发版行按版本号去重。
+    BackfillHistory { project_id: ProjectId },
     /// 通知屏的「合入并完成」。先真的合 MR,再把活推「完成」——顺序反了,
     /// 合入失败就会留下一张已完成、改动却还挂在分支上的活。
     MergeAndSettle { id: IssueId },
@@ -249,6 +253,13 @@ pub enum Event {
     IssueCacheRefreshed {
         week: String,
         updated: u32,
+    },
+    /// 回填跑完了。`weeks`/`releases` 是**真的写出去**的那些,不是"扫到的"。
+    HistoryBackfilled {
+        project_id: ProjectId,
+        weeks: Vec<String>,
+        releases: Vec<String>,
+        note: String,
     },
     /// 合入并完成走完了。`merged=false` = 这张活本来就没有 MR 可合(本地项目
     /// 或者还没开 PR),只走了「完成」那一步。

@@ -254,9 +254,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 演示项目的节律先改成「周一 00:00」——**不是伪造时间**,是把这个项目自
     // 己的配置改成一个已经过去的时刻,让这一跳真的到点。正式项目的默认值是
     // 周五 20:00,`.bw/issue-policy.toml` 里写着,人随时能改。
+    let mut restore_schedule: Option<String> = None;
     if let Ok(Some(mut policy)) = bw_v4::repo::issue_policy_file::read(&workspace) {
         if let Some(c) = policy.cadence.as_mut() {
-            c.ops2_schedule = "mon 00:00".into();
+            restore_schedule = Some(std::mem::replace(&mut c.ops2_schedule, "mon 00:00".into()));
         }
         let _ = bw_v4::repo::issue_policy_file::write(&workspace, &policy);
         say(
@@ -287,6 +288,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None => "步骤 8 · 定时:建出了活但不是资产盘点 —— 判据对不上,如实记下".into(),
         },
     );
+
+    // 这一跳完了就把节律改回去 —— 这是演示为了让「到点」真的发生临时动的,
+    // 留在仓里的话人打开演示项目会看见一个不是默认值的时刻,以为产品就长这样。
+    if let Some(orig) = restore_schedule {
+        if let Ok(Some(mut policy)) = bw_v4::repo::issue_policy_file::read(&workspace) {
+            if let Some(c) = policy.cadence.as_mut() {
+                c.ops2_schedule = orig.clone();
+            }
+            let _ = bw_v4::repo::issue_policy_file::write(&workspace, &policy);
+            say(
+                &mut log,
+                &format!("步骤 8 收尾 · ops2_schedule 改回「{orig}」"),
+            );
+        }
+    }
+
+    // ── 步骤 9:老项目历史回填 ────────────────────────────
+    // 这个演示项目是 buddy 自己的仓 `git clone --local` 出来的,所以它有真实
+    // 历史 —— 回填出来的每一份周文件都能拿 git 复算。
+    let events = app
+        .dispatch(Command::BackfillHistory { project_id: pid })
+        .await?;
+    if let Some(Event::HistoryBackfilled {
+        weeks,
+        releases,
+        note,
+        ..
+    }) = events.first()
+    {
+        say(&mut log, &format!("步骤 9 · 历史回填:{note}"));
+        // 抽一份出来标明怎么复算 —— 报告里给命令,不给结论。
+        if let Some(w) = weeks.first() {
+            say(
+                &mut log,
+                &format!(
+                    "  复算样例:git -C <ws> log --since=<{w} 周一> --until=<下周一> --pretty=format:%H | wc -l",
+                ),
+            );
+        }
+        if let Some(v) = releases.first() {
+            say(&mut log, &format!("  回填的第一个版本:{v}(来自 git 标签)"));
+        }
+    }
 
     // 收尾提交:周计划与发版记录是铺底之后才写的,这里一并进仓,免得下一次
     // 跑的时候被上一轮的残留改动混进提交里。

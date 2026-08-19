@@ -9,11 +9,13 @@
 //! - [`plan`] —— 开始本周、排期、发版本、缓存对账
 //! - [`issue`] —— 建活、▶跑、状态转移
 //! - [`bootstrap`] —— 规范铺底与对账
+//! - [`backfill`] —— 老项目历史回填(资产盘点的首次模式)
 //! - [`ops`] —— 三张运作活:周计划、资产盘点、规范铺底
 //! - [`session`] —— 内嵌终端的 PTY 生命周期
 //! - [`tools`] —— 开工工具映射与探活
 //! - [`health`] —— 三条判据的现算
 
+mod backfill;
 mod bootstrap;
 mod health;
 mod issue;
@@ -196,6 +198,7 @@ impl App {
             }
             Command::TickScheduler { project_id } => self.tick_scheduler(project_id).await,
             Command::MergeAndSettle { id } => self.merge_and_settle(id).await,
+            Command::BackfillHistory { project_id } => self.backfill_history(project_id).await,
             Command::CancelRun { id } => self.cancel_run(id).await,
             Command::TerminalInput {
                 conversation_id,

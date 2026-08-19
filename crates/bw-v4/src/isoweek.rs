@@ -72,6 +72,11 @@ pub fn previous_week(week: &str) -> Option<String> {
     week_start(week).map(|d| iso_week_of(d - Duration::weeks(1)))
 }
 
+/// 下一周。认不出返回 `None`。
+pub fn next_week(week: &str) -> Option<String> {
+    week_start(week).map(|d| iso_week_of(d + Duration::weeks(1)))
+}
+
 /// 一周里的周一是不是真的周一 —— 给读回用的自检。
 pub fn starts_on_monday(week: &str) -> bool {
     week_start(week).is_some_and(|d| d.weekday() == Weekday::Monday)
@@ -84,7 +89,12 @@ pub fn starts_on_monday(week: &str) -> bool {
 pub fn parse_schedule(spec: &str) -> Option<(u8, u8, u8)> {
     let spec = spec.trim().to_ascii_lowercase();
     let (day, time) = spec.split_once(char::is_whitespace)?;
-    let dow = match &day[..day.len().min(3)] {
+    // **按字符取前三个,不是按字节**。`&day[..3]` 在 "mié 20:00"(第 4 个字节
+    // 落在 é 中间)这种输入上直接 panic,而这条解析跑在内核线程里 —— 一次
+    // panic 整条线程静默死掉,界面停在最后一帧,点什么都没反应。
+    // 这个值是人手写进 `.bw/issue-policy.toml` 的,什么都可能写。
+    let head: String = day.chars().take(3).collect();
+    let dow = match head.as_str() {
         "mon" => 1,
         "tue" => 2,
         "wed" => 3,
