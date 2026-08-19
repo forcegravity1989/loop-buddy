@@ -84,6 +84,12 @@ impl App {
         }
         let issue = self.issue_or_err(id).await?;
         let ws = self.workspace_of(issue.project_id).await?;
+        // 工作区目录压根不在,就别起终端 —— 在一个不存在的目录里 spawn
+        // claude,人看到的是一屏报错。退回阻塞那条路,那边会用自我标注的替身
+        // 跑一遍,产出带【mock】字样,谁都不会误以为它真干了活。
+        if !ws.is_dir() {
+            return Ok(false);
+        }
         let branch = format!("bw/issue-{}", issue.number);
 
         let conv = self

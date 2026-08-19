@@ -323,7 +323,7 @@ fn tree_row(
     let b = bridge.clone();
     let rel = e.rel.clone();
     let is_dir = e.is_dir;
-    let expanded = is_dir && p.workbench.expanded.iter().any(|d| *d == e.rel);
+    let expanded = is_dir && p.workbench.expanded.contains(&e.rel);
     let mark = if !is_dir {
         " "
     } else if expanded {

@@ -13,7 +13,7 @@ use crate::command::Event;
 use crate::model::{Category, Issue, IssueId, IssueKind, IssueOrigin, IssueStatus, ProjectId};
 use crate::repo::issue_policy_file;
 use bw_core::WorkflowId;
-use bw_engine::{build_startup_plan, RunCtx, TuiAgentConfig, CLAUDE};
+use bw_engine::{build_startup_plan, InteractiveExecutor, RunCtx, TuiAgentConfig, CLAUDE};
 
 impl App {
     #[allow(clippy::too_many_arguments)]
@@ -143,7 +143,15 @@ impl App {
             workflow: WorkflowId::nil(),
         };
 
-        let out = self.executor.run_skill(&plan, &ctx).await;
+        // 没有真实工作区的项目走自我标注的替身:产出带【mock】字样,不冒充
+        // 真的干过活。有工作区但没开 PTY(指挥器、headless)时也走这条。
+        let out = if ws.is_dir() {
+            self.executor.run_skill(&plan, &ctx).await
+        } else {
+            bw_engine::MockInteractiveExecutor::new()
+                .run_skill(&plan, &ctx)
+                .await
+        };
         match out {
             Ok(o) if o.completed => {
                 // 最远到「评审中」。这一步不是人点的,所以到此为止。
