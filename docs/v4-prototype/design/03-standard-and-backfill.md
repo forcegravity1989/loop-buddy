@@ -1,6 +1,6 @@
 # 03 · 规范铺底怎么跑:三步流程、对账、升级
 
-> **30 秒导读**:这篇管运作活③「规范铺底」——项目接入时自动出现的一次性活——具体怎么跑:第 1 步 buddy 自己写模板核心件、第 2 步(成熟仓才有)agent 把 buddy 约定合进已有的 README/CLAUDE.md/AGENTS.md、第 3 步(有历史的仓才有)把老项目自己的历史记录回填成 buddy 认得的文件。外加铺完底之后的日常动作:对账(缺什么、过期什么)、升级(出新版规范怎么走 MR)、`standard/` 正本怎么让同事贡献。**第五轮改动(用户拍板,待拍-05/27 改)**:第 3 步「历史回填」不再是运作活③自己养的一个独立子技能——它就是**运作活②「资产盘点」workflow 的首次模式**(同一个 `asset-audit` workflow 包,`mode=first` 全量回填历史、`mode=weekly` 每周增量盘点),本篇 §2.4 描述的三层流水线架构原样成立,只是挂载的 workflow 包换了,谁触发它、剧本怎么写归 [09-ops-workflows.md](09-ops-workflows.md) §2.2/§2.3 管,本篇只管"探测到历史该不该跑""跑出来的原料/产物/防伪规则长什么样"。**详细设计稿,待用户复核,尚未开工写代码**。给三种人看:复核设计的用户、下一步写代码的会话、以后往 `standard/` 提 PR 的同事。母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) 第 0 站、§2.6、待拍-02/15/16/20/27)与 [`../standard-module-draft.md`](../standard-module-draft.md)(八大类)是设计事实源,冲突时以它们为准;预研 [`../research/legacy-backfill.md`](../research/legacy-backfill.md) + 样例 [`legacy-backfill-sample-buddy.md`](../research/legacy-backfill-sample-buddy.md) 的结论**全部采纳**,本篇的细化/补答另标注。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——不新开代号系列,三步就叫「第 1/2/3 步」。
+> **30 秒导读**:这篇管运作活③「规范铺底」——项目接入时自动出现的一次性活——具体怎么跑:第 1 步 buddy 自己写模板核心件、第 2 步(成熟仓才有)agent 把 buddy 约定合进已有的 README/CLAUDE.md/AGENTS.md、第 3 步(有历史的仓才有)把老项目自己的历史记录回填成 buddy 认得的文件。外加铺完底之后的日常动作:对账(缺什么、过期什么)、升级(出新版规范怎么走 MR)、`standard/` 正本怎么让同事贡献。**第五轮改动(用户拍板,待拍-05/27 改)**:第 3 步「历史回填」不再是运作活③自己养的一个独立子技能——它就是**运作活②「资产盘点」workflow 的首次模式**(同一个 `asset-audit` workflow 包,`mode=first` 全量回填历史、`mode=weekly` 每周增量盘点),本篇 §2.4 描述的三层流水线架构原样成立,只是挂载的 workflow 包换了,谁触发它、剧本怎么写归 [09-ops-workflows.md](09-ops-workflows.md) §2.2/§2.3 管,本篇只管"探测到历史该不该跑""跑出来的原料/产物/防伪规则长什么样"。**2026-08-20 按用户第二轮回复(六-3)整块重写了 §2.4「五个产物」**:回填产出改成与运作活①同模板的历史周文件(`docs/plan/YYYY-Www.md`,`origin: backfill`),`docs/plan/history.md` 与「界面另开回填块」两种说法全部取消。**详细设计稿,待用户复核,尚未开工写代码**。给三种人看:复核设计的用户、下一步写代码的会话、以后往 `standard/` 提 PR 的同事。母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) 第 0 站、§2.6、§6、待拍-02/15/16/20/27/29)与 [`../standard-module-draft.md`](../standard-module-draft.md)(八大类)是设计事实源,冲突时以它们为准;预研 [`../research/legacy-backfill.md`](../research/legacy-backfill.md) + 样例 [`legacy-backfill-sample-buddy.md`](../research/legacy-backfill-sample-buddy.md) 的结论**全部采纳**,本篇的细化/补答另标注。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——不新开代号系列,三步就叫「第 1/2/3 步」。
 
 ---
 
@@ -8,7 +8,7 @@
 
 **管**:①探测——两卡填完后怎么判断运作活③跑几步,空仓例外怎么判定;②第 1 步「写核心件」全流程;③第 2 步「合并调整」agent 任务清单(合并原则,非 SKILL.md 正文);④第 3 步「历史回填」全设计——原料分给脚本/agent/人、五个产物字段、防伪规则、幂等、限时/抽样、缺的函数清单;⑤三步合成一个 MR、人怎么评审;⑥对账与升级流程;⑦`standard/` 正本结构、版本号、同事怎么贡献;⑧本篇命令/事件名字。
 
-**不管**:`standard/` 放哪、怎么进二进制、版本常量叫什么——[01-architecture.md](01-architecture.md) §2.9 已定,本篇直接引用。`.bw/*.toml` 与仓文件**格式**——[02-data-and-files.md](02-data-and-files.md) 已给,本篇只补留白处(`.bw/managed.toml` 指纹算法、`docs/plan/history.md` 贡献者行)。「合并调整」「历史回填」两个技能的 **SKILL.md 正文剧本**——[09-ops-workflows.md](09-ops-workflows.md)管,本篇只给任务清单。总览「历史运作(回填)」块的渲染规则——[08-overview-derivation.md](08-overview-derivation.md) 已给,本篇只保证产出的形状能被它消费。开工工具注册、workflow 识别——[04-tools-and-workflows.md](04-tools-and-workflows.md)管。
+**不管**:`standard/` 放哪、怎么进二进制、版本常量叫什么——[01-architecture.md](01-architecture.md) §2.9 已定,本篇直接引用。`.bw/*.toml` 与仓文件**格式**——[02-data-and-files.md](02-data-and-files.md) 已给,本篇只补留白处(`.bw/managed.toml` 指纹算法、回填历史周文件里"累计贡献者"字段落在哪一份文件)。「合并调整」「历史回填」两个技能的 **SKILL.md 正文剧本**——[09-ops-workflows.md](09-ops-workflows.md)管,本篇只给任务清单。计划屏周列表 / 总览发版记录怎么把回填的历史周、历史版本渲染出来(不另开专门块,只带徽记)——[06-plan-screen.md](06-plan-screen.md)/[08-overview-derivation.md](08-overview-derivation.md) 已给,本篇只保证产出的形状(同格式的历史周文件、`docs/releases.md` 历史版本行)能被它们直接消费。开工工具注册、workflow 识别——[04-tools-and-workflows.md](04-tools-and-workflows.md)管。
 
 ---
 
@@ -16,7 +16,7 @@
 
 **新项目(空仓)**:填完接入两卡点完成的那一刻,`onboard` 屏不用等——运作活③一两秒内跑完第 1 步,核心件直接推上默认分支(空仓例外,见 2.1)。总览的项目信息已经是刚填的内容,仓里已有 `PROJECT.md`/`AGENTS.md`/`.bw/*` 骨架;活列表里能看到「规范铺底 v4.0」,因为没有 PR 可评审,它走 CONTEXT.md 已定义的「没有 PR → 人点『确认完成(人裁)』」这条既有路——不是自动完成,只是不用等合入。
 
-**接入已有仓(成熟项目)**:总览「待人处理」很快多一条「规范铺底 v4.0 · 含合并调整」或「… · 含合并调整 + 历史回填」,标题已写清楚跑几步。会话屏能看到真实 Claude CLI 会话在这个活的 worktree 里跑,完事推到「评审中」,MR 里能看到:`standard/` 骨架文件、被合并的 `AGENTS.md`/`CLAUDE.md`(原文一字未删,buddy 章节插在靠前位置)、`docs/plan/history.md`(有历史才有)、`docs/releases.md` 多出的历史段、PROJECT.md 补的草稿字段。人看一眼评审要点(2.5 节)就能合入、点完成,有权限时「合入并完成」一键。合入后总览立刻提示「本周还没有计划 → 开始本周」。
+**接入已有仓(成熟项目)**:总览「待人处理」很快多一条「规范铺底 v4.0 · 含合并调整」或「… · 含合并调整 + 历史回填」,标题已写清楚跑几步。会话屏能看到真实 Claude CLI 会话在这个活的 worktree 里跑,完事推到「评审中」,MR 里能看到:`standard/` 骨架文件、被合并的 `AGENTS.md`/`CLAUDE.md`(原文一字未删,buddy 章节插在靠前位置)、`docs/plan/` 下新增的若干份**历史周文件**(`origin: backfill`,有历史才有,和运作活①写的周计划同一模板)、`docs/releases.md` 多出的历史版本行、PROJECT.md 补的草稿字段。人看一眼评审要点(2.5 节)就能合入、点完成,有权限时「合入并完成」一键。合入后总览立刻提示「本周还没有计划 → 开始本周」;计划屏左栏周列表能直接看到这些历史周(带回填徽记),总览发版记录也能看到刚回填的历史版本——**不出现任何专门的"回填"区块**,历史资产就混在正常列表里(第六轮用户拍板,见 §2.4)。
 
 **平时**:知识库屏顶部有一条不打扰的小字提示——对账发现「缺 2 项 / 过期 1 项 / 你改过 1 项」,点开看具体文件、要不要升级。不是弹窗;运作活②每周跑时顺带算一遍,写进那周 `docs/plan/` 尾段。
 
@@ -73,7 +73,9 @@
 
 ### 2.4 第 3 步 · 历史回填(采纳预研,仅有历史的仓;第五轮定性:即运作活②「资产盘点」workflow 的首次模式)
 
-**与运作活②的关系(第五轮用户点破,待拍-05/27 改)**:老项目历史回填不是一条独立产线,它就是「资产盘点」这个 workflow 第一次跑——同一个 workflow 包,`mode=first` 时多产出本节说的五项回填件,`mode=weekly`(每周)只盘变化、不产出这些历史件。触发时机不变:铺底探测到仓有历史(§2.1)时,运作活③在同一张活的分支上另起一次会话跑这个 workflow(SKILL.md 剧本见 09 篇 §2.2);原料仍是三种——①git 本地历史、②仓内已有文档、③远端 issue 与 MR 列表,**群历史不算原料**(与母文档、09 篇口径一致,见下)。产出不变:发版记录历史段、`docs/plan/history.md`、PROJECT.md 草稿字段、指标候选、`origin='backfill'` 的 issue 行——不算任何人/workflow 的战绩、不点灯。全盘采纳 [legacy-backfill.md](../research/legacy-backfill.md) 的结论——双亲结构判定合入、口径 A/B 分开报、无标签无 CHANGELOG 就诚实留空、"不点灯"边界、自动/agent/人确认三分类。这一节把预研落成"谁在什么时机跑什么代码"。
+**与运作活②的关系(第五轮用户点破,待拍-05/27 改)**:老项目历史回填不是一条独立产线,它就是「资产盘点」这个 workflow 第一次跑——同一个 workflow 包,`mode=first` 时多产出本节说的四项回填件,`mode=weekly`(每周)只盘变化、不产出这些历史件。触发时机不变:铺底探测到仓有历史(§2.1)时,运作活③在同一张活的分支上另起一次会话跑这个 workflow(SKILL.md 剧本见 09 篇 §2.2);原料仍是三种——①git 本地历史、②仓内已有文档、③远端 issue 与 MR 列表,**群历史不算原料**(与母文档、09 篇口径一致,见下)。
+
+**产出形态(第六轮改动,用户第二轮回复六-3):不再是一份独立的"历史运作(回填)"新文件,而是补出"本该有但老项目没攒出来"的**同格式**正常文件**——回填探测到某个历史 ISO 周有过合入或提交、但当时没有 `docs/plan/YYYY-Www.md`,就按运作活①写周计划**同一套模板**给它补一份,front matter 标 `origin: backfill`;回填探测到某个历史版本(git tag/CHANGELOG)但 `docs/releases.md` 里没有对应行,就按同一张表格式补一行,「来源」列标"回填"。用户原话:「期望资产盘点发现老项目没有周计划 md / 发版本 md,就把这些回溯补起来,总览和计划 UI 不需要特殊处理,本身就是对照资产渲染」——落地就是:计划屏左栏周列表天然会多出这些历史周(06 篇),总览发版记录天然会多出这些历史版本行(08 篇),**不建 `docs/plan/history.md`,界面不为回填开辟任何专门区块**,历史资产与人写的资产用同一套渲染逻辑,只在每一行上带一个小「回填」徽记做区分。全盘采纳 [legacy-backfill.md](../research/legacy-backfill.md) 的结论——双亲结构判定合入、口径 A/B 分开报、无标签无 CHANGELOG 就诚实留空、"不点灯"边界、自动/agent/人确认三分类。这一节把预研落成"谁在什么时机跑什么代码"。
 
 **三层流水线**:
 

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html data-proto="v4-hifi" data-version="5" lang="zh-CN">
+<html data-proto="v4-hifi" data-version="6" lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -471,19 +471,21 @@ var TOOL_ICON={claude_cli:'▣',cursor:'◧',open_design:'◐'};
 var STATUS_LABEL={pool:'待办池',todo:'待办',doing:'进行中',review:'评审中',merged:'评审中·已合入',done:'完成',blocked:'阻塞'};
 var STATUS_DOT={pool:'gray',todo:'gray',doing:'amber',review:'amber',merged:'amber',done:'green',blocked:'red'};
 var CATS=['构建','构建(文档)','原型','优化','运维','运营推广','运作'];
-var WEEKS=['W34','W33','W32','W31'];
+var WEEKS=['W34'];
+var HISTORY_WEEKS=['W33','W32','W31','W30','W29','W28','W27'];
 var VERSIONS=['0.4.0-v4','0.3.0-v3','0.2.0-v3'];
 var KANBAN_COLS=[['pool','待办池'],['todo','待办'],['doing','进行中'],['review','评审中'],['done','已完成'],['blocked','阻塞']];
 var KANBAN_COL_DEF={pool:'未排进任何一周',todo:'已排进本周,等开工',doing:'agent 在干',review:'MR 开着,等人审',done:'人点过完成',blocked:'填了原因'};
 var COL_LABEL={}; KANBAN_COLS.forEach(function(c){ COL_LABEL[c[0]]=c[1]; });
 var HISTORY_WEEKLY_PR=[['W26',0],['W27',1],['W28',3],['W29',3],['W30',12],['W31',7],['W32',17],['W33',3],['W34',3]];
+var HISTORY_WEEKLY_MR={}; HISTORY_WEEKLY_PR.forEach(function(w){ HISTORY_WEEKLY_MR[w[0]]=w[1]; });
 function colOf(status){
   if(status==='review'||status==='merged')return 'review';
   if(KANBAN_COLS.some(function(c){return c[0]===status;}))return status;
   return 'todo';
 }
 var GUIDE_CHAPTERS=[
-  {id:'env',label:'环境准备',body:'claude CLI、Open Design、codehub-cli 三项本机环境按需安装,缺一项不影响开工,只影响对应类别的活能不能开工。「测一下」会真实探活,结果记进健康信号,不假装绿。'},
+  {id:'env',label:'环境准备',body:'claude CLI、Open Design、codehub-cli 三项本机环境按需安装,缺一项不影响开工,只影响对应类别的活能不能开工。「测一下」会真实探活,结果记进健康信号,不假装绿。welink-cli 探活函数还没内部实现,先留位显示灰色 Unknown,不会因为点了「测一下」就变绿。'},
   {id:'onboard',label:'接入项目',body:'接入只问两件事:仓在哪、这个项目想做什么。规范铺底(运作活③)会在后台自动建分支、写核心件、提 MR,评审中合入即可,不用手填目录或分支。'},
   {id:'cycle',label:'一周一圈',body:'每周由运作活①开场:复盘上周 → 更新指标 → 引导出本周目标与活清单。活从待办池推到评审中都是 agent 干的,「完成」永远由你在看板上点一下。'},
   {id:'faq',label:'常见问题',body:'常见问题会随实际使用逐步收进这里。当前先看前三章;遇到没写清楚的地方,用下面的「问题上报」占位记一笔(暂未接入真实上报)。'}
@@ -699,6 +701,12 @@ var KNOWLEDGE_DOCS=[
   {group:'规范件',id:'k-projecttoml',name:'.bw/project.toml',path:'.bw/project.toml'},
   {group:'周计划',id:'k-w34',name:'docs/plan/2026-W34.md',path:'docs/plan/2026-W34.md'},
   {group:'周计划',id:'k-w33',name:'docs/plan/2026-W33.md',path:'docs/plan/2026-W33.md'},
+  {group:'周计划',id:'k-w32',name:'docs/plan/2026-W32.md',path:'docs/plan/2026-W32.md'},
+  {group:'周计划',id:'k-w31',name:'docs/plan/2026-W31.md',path:'docs/plan/2026-W31.md'},
+  {group:'周计划',id:'k-w30',name:'docs/plan/2026-W30.md',path:'docs/plan/2026-W30.md'},
+  {group:'周计划',id:'k-w29',name:'docs/plan/2026-W29.md',path:'docs/plan/2026-W29.md'},
+  {group:'周计划',id:'k-w28',name:'docs/plan/2026-W28.md',path:'docs/plan/2026-W28.md'},
+  {group:'周计划',id:'k-w27',name:'docs/plan/2026-W27.md',path:'docs/plan/2026-W27.md'},
   {group:'发版记录',id:'k-releases',name:'docs/releases.md',path:'docs/releases.md'},
   {group:'决策记录',id:'k-adr1',name:'ADR0001 · 通用语言',path:null,fallback:'record'},
   {group:'设计产物',id:'k-blueprint',name:'mvp-blueprint-draft.md',path:null,fallback:'design'},
@@ -738,19 +746,21 @@ function freshState(){
     toolmap:{buddy:makeToolmap()},
     chatGroup:{buddy:{configured:false,provider:'welink',kind:'internal',groupId:'',sync:{review:true,merged:true,release:true}}},
     kanbanOrder:{},
-    settings:{workspaceRoot:'D:\\bw-workspaces',chatLogin:{welink:false}},
+    settings:{workspaceRoot:'D:\\bw-workspaces'},
     inbox:{buddy:[
       {id:'inbox-pr102',kind:'issue',issueId:'pr-102',text:'PR #102 评审中',state:'pending'},
       {id:'inbox-ops2',kind:'issue',issueId:'ops2-w33',text:'运作活②「资产盘点 2026-W33」评审中(MR,周五自动跑的)',state:'pending'},
       {id:'inbox-metrics',kind:'metric',text:'指标「周循环跑通率」「默认件被真实使用次数」无观测',state:'pending',link:'ops1-w34'}
     ]},
     notifyEvents:{buddy:makeNotifyEvents()},
-    releases:{buddy:[{version:'0.3.0-v3',date:'2026-08-14',note:'首包',issues:[]},{version:'0.3.0-v3',date:'2026-08-17',note:'重出(V3-use-fix)',issues:['w33-usefix']}]},
+    releases:{buddy:[
+      {version:'V1 切片',date:'~2026-08-06',note:'',issues:[],backfill:true},
+      {version:'V2 切片',date:'~2026-08-10',note:'',issues:[],backfill:true},
+      {version:'0.3.0-v3',date:'2026-08-14',note:'首包',issues:[],backfill:true},
+      {version:'0.3.0-v3',date:'2026-08-17',note:'重出(V3-use-fix)',issues:['w33-usefix'],backfill:true}
+    ]},
     weekPlans:{buddy:{
-      W34:{goal:'V4 MVP 从口述收口成设计事实源并出高保真;减负线合入 main',version:'0.4.0-v4'},
-      W33:{goal:'✱ 减负线两轮收尾;V4 口述转设计事实源起草',version:'0.3.0-v3',assumed:true},
-      W32:{goal:'✱ 演示占位:上上周目标',version:'0.3.0-v3',assumed:true},
-      W31:{goal:'✱ 演示占位:更早周目标',version:'0.2.0-v3',assumed:true}
+      W34:{goal:'V4 MVP 从口述收口成设计事实源并出高保真;减负线合入 main',version:'0.4.0-v4'}
     }},
     health:{buddy:{level:'yellow',reasons:[
       {ok:true,text:'本周有周目标,3 张业务活有进展',jump:'week'},
@@ -779,10 +789,10 @@ function freshState(){
   };
 }
 var state = loadState() || freshState();
-function saveState(){ try{ localStorage.setItem('bw-v4-hifi5-state', JSON.stringify(state)); }catch(_){} }
+function saveState(){ try{ localStorage.setItem('bw-v4-hifi6-state', JSON.stringify(state)); }catch(_){} }
 function loadState(){
   try{
-    var raw = localStorage.getItem('bw-v4-hifi5-state');
+    var raw = localStorage.getItem('bw-v4-hifi6-state');
     if(!raw) return null;
     var s = JSON.parse(raw);
     if(!s || !s.projects) return null;
@@ -851,7 +861,7 @@ var ACTIONS = {
   goWall:function(){ nav('#/wall'); },
   goSettings:function(){ nav('#/settings'); },
   goOnboard:function(){ nav('#/onboard'); },
-  resetDemo:function(){ try{ localStorage.removeItem('bw-v4-hifi5-state'); }catch(_){}
+  resetDemo:function(){ try{ localStorage.removeItem('bw-v4-hifi6-state'); }catch(_){}
     state=freshState(); nav('#/wall'); render(); toast('演示已重置'); },
   mergeInbox:function(pid,id){ var item=findInboxItem(pid,id); if(!item)return; item.state='merged'; if(item.issueId)mergeIssueGeneric(pid,item.issueId); render(); toast('已合入 · 相关指标与待人处理计数已更新'); },
   completeInbox:function(pid,id){ var item=findInboxItem(pid,id); if(!item)return; if(item.issueId)completeIssueGeneric(pid,item.issueId);
@@ -897,7 +907,7 @@ var ACTIONS = {
     var isNewRepo = ob.tab==='new';
     var ops3Desc = isNewRepo
       ? '新建空仓,无历史可回填:buddy 建分支写入 8 类核心件,提 MR !1。'
-      : '检测到已有 README(成熟仓):①写核心件 → ②合并调整(把 buddy 约定合进已有 README/CLAUDE.md/AGENTS.md)→ ③历史回填(= 资产盘点首次模式;检测到提交 / 标签 / 远端 issue,把历史整理进 docs/releases.md、docs/plan/history.md);三步同一个 MR !1。';
+      : '检测到已有 README(成熟仓):①写核心件 → ②合并调整(把 buddy 约定合进已有 README/CLAUDE.md/AGENTS.md)→ ③历史回填(= 资产盘点首次模式;检测到提交 / 标签 / 远端 issue,产出和正常运作同格式的历史周计划文件 docs/plan/YYYY-Www.md 与 docs/releases.md 里的历史版本行,不另开一份 history.md);三步同一个 MR !1。';
     state.issues.new={ 'ops3-new':{id:'ops3-new',title:'运作活③规范铺底 v4.0(含合并调整'+(isNewRepo?'':' · 历史回填')+')',category:'运作',tool:'claude_cli',kind:'ops',status:'review',source:'自动建(接入时)',auto:true,metricIds:[],mr:{id:'!1',label:'!1',status:'open'},workflow:'规范铺底(含合并调整 · 历史回填)',skill:'—',desc:ops3Desc} };
     state.inbox.new=[{id:'inbox-new-ops3',kind:'issue',issueId:'ops3-new',text:'运作活③「规范铺底」评审中(MR !1'+(isNewRepo?'':',已做合并调整 + 历史回填')+')',state:'pending'}];
     state.metrics.new={ northstar:{id:'northstar',tier:'北极星',label:state.newProject.card.northstar,gray:true,drivenBy:[]} };
@@ -949,11 +959,6 @@ var ACTIONS = {
     var g=state.chatGroup[pid];
     if(!g||!g.configured){ toast('先配置群号'); return; }
     g.sync=g.sync||{}; g.sync[field]=!g.sync[field]; render();
-  },
-  toggleChatLogin:function(){
-    state.settings.chatLogin=state.settings.chatLogin||{welink:false};
-    state.settings.chatLogin.welink=!state.settings.chatLogin.welink;
-    render(); toast(state.settings.chatLogin.welink?'已登录 WeLink(演示)':'已退出登录(演示)');
   },
   startWeek:function(pid){
     var proj=getProject(pid); if(!proj)return;
@@ -1510,6 +1515,7 @@ function renderWall(){
     +   envItemHTML('claude',es.claude)
     +   envItemHTML('codehub-cli',es.codehub)
     +   envItemHTML('Open Design',es.od)
+    +   '<span class="env-item">'+lightDot('gray')+' welink-cli · 探活函数待内部补(留位)</span>'
     +   '<span style="margin-left:auto;"></span>'
     +   '<button class="btn btn-sm" data-action="testEnv" '+(state.ui.envTesting?'disabled':'')+'>'+(state.ui.envTesting?'探测中…':'测一下')+'</button>'
     + '</div>'
@@ -1590,14 +1596,7 @@ function renderSettings(){
     return '<div class="settings-row"><div><div class="k">'+esc(r.k)+'</div><div class="v">'+esc(r.v)+'</div></div>'
       + lightDot(r.light,true) + '</div>';
   }).join('');
-  var chatLogin=state.settings.chatLogin||{welink:false};
-  var chatRow='<div class="settings-row"><div><div class="k">聊天工具登录</div>'
-    + '<div class="v">WeLink(内部)· '+(chatLogin.welink?'已登录':'未登录')+' &nbsp; · &nbsp; 外部(待定)</div></div>'
-    + '<div style="display:flex;align-items:center;gap:8px;">'
-    +   '<button class="btn btn-sm '+(chatLogin.welink?'':'btn-primary')+'" data-action="toggleChatLogin">'+(chatLogin.welink?'退出登录':'登录')+'</button>'
-    +   '<span class="chip chip-gray" style="opacity:.55;" title="工厂留位,暂未接入">外部 · 待定</span>'
-    + '</div></div>';
-  return '<section data-screen="settings"><h1 style="font-size:20px;">设置</h1><div class="settings-list">'+wrRow+body+chatRow+'</div></section>';
+  return '<section data-screen="settings"><h1 style="font-size:20px;">设置</h1><div class="settings-list">'+wrRow+body+'</div></section>';
 }
 
 /* ===================== 渲染:总览 ===================== */
@@ -1628,41 +1627,6 @@ function chatGroupLineHTML(pid){
     return '未配 <button class="btn btn-sm btn-ghost" data-action="openChatGroupModal" data-arg=\'"'+pid+'"\'>配置</button>';
   }
   return 'WeLink · 群 '+esc(g.groupId)+' · 通知同步中 <button class="btn btn-sm btn-ghost" data-action="openChatGroupModal" data-arg=\'"'+pid+'"\'>改</button>';
-}
-function historyBarsHTML(weeks){
-  var max=Math.max.apply(null, weeks.map(function(w){return w[1];}))||1;
-  return '<div style="display:flex;align-items:flex-end;gap:6px;height:76px;margin:8px 0 2px;">'
-    + weeks.map(function(w){
-        var h=w[1]? Math.round((w[1]/max)*54)+4 : 2;
-        return '<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1;">'
-          + '<div class="mono" style="font-size:10px;color:var(--ink-3);">'+w[1]+'</div>'
-          + '<div style="width:100%;max-width:26px;height:'+h+'px;background:var(--clay-dim);border-radius:3px 3px 0 0;"></div>'
-          + '<div class="mono" style="font-size:9.3px;color:var(--ink-4);">'+esc(w[0])+'</div>'
-          + '</div>';
-      }).join('')
-    + '</div>';
-}
-function historyOpsBlockHTML(pid){
-  var proj=getProject(pid);
-  if(!proj || !proj.hasHistory) return '';
-  function badge(src){ return '<span class="chip chip-gray" style="margin-left:5px;">回填自 '+esc(src)+'</span>'; }
-  return '<div class="card ov-block" data-block="history">'
-    + '<div class="ov-block-title">历史运作(回填)</div>'
-    + '<div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;line-height:1.6;">回填只解释历史,不算战绩、不点灯;灯从接入那天起只看真实观测。</div>'
-    + '<div class="repo-metric-grid">'
-    +   '<div class="repo-metric-item"><div class="v mono">2026-06-21</div><div class="k">首次提交'+badge('git')+'</div></div>'
-    +   '<div class="repo-metric-item"><div class="v mono">615</div><div class="k">累计提交'+badge('git')+'</div></div>'
-    +   '<div class="repo-metric-item"><div class="v mono">50</div><div class="k">合入的 PR'+badge('GitHub')+'</div></div>'
-    +   '<div class="repo-metric-item"><div class="v mono">46</div><div class="k">远端 issue'+badge('GitHub')+'</div></div>'
-    +   '<div class="repo-metric-item"><div class="v mono">6</div><div class="k">git 作者(含 2 个机器人)'+badge('git')+'</div></div>'
-    + '</div>'
-    + '<div class="ov-block-title" style="margin-top:14px;">近九周合入 PR 数'+badge('GitHub')+'</div>'
-    + historyBarsHTML(HISTORY_WEEKLY_PR)
-    + '<div class="ov-block-title" style="margin-top:14px;">版本时间线'+badge('docs/releases.md')+'</div>'
-    + '<div class="release-line">V1 切片 · ~2026-08-06</div>'
-    + '<div class="release-line">V2 切片 · ~2026-08-10</div>'
-    + '<div class="release-line">0.3.0-v3 · 2026-08-14 首包 / 08-17 重出</div>'
-    + '</div>';
 }
 function renderOverview(pid){
   var proj=getProject(pid); if(!proj) return '<section data-screen="overview"><div class="detail-empty">项目不存在</div></section>';
@@ -1697,9 +1661,15 @@ function renderOverview(pid){
   var weekProg=weekProgress(pid,CURRENT_WEEK);
   var totalW=weekProg.todo+weekProg.doing+weekProg.review+weekProg.done;
   function segPct(n){ return totalW? Math.round(n/totalW*100) : 0; }
-  var releases=(state.releases[pid]||[]).slice(-2);
-  var repoMetricItems=[['464','30 天提交'],['115 / 60,824','Rust 文件 / 行'],['80','docs 篇'],['7','30 天 PR'],['4','开放 PR'],['9','技能(真值)']];
-  var repoMetricsHTML=repoMetricItems.map(function(it){ return '<div class="repo-metric-item"><div class="v mono">'+esc(it[0])+'</div><div class="k">'+esc(it[1])+'</div></div>'; }).join('');
+  var releases=(state.releases[pid]||[]).slice(-8);
+  var repoMetricItems=[
+    ['464','30 天提交'],['115 / 60,824','Rust 文件 / 行'],['80','docs 篇'],['7','30 天 PR'],['4','开放 PR'],['9','技能(真值)'],
+    ['2026-06-21','首次提交','git'],['615','累计提交','git'],['50','合入的 PR','GitHub'],['46','远端 issue','GitHub'],['6','git 作者(含 2 个机器人)','git']
+  ];
+  var repoMetricsHTML=repoMetricItems.map(function(it){
+    var badge=it[2]?(' <span class="chip chip-gray" style="margin-left:4px;">回填自 '+esc(it[2])+'</span>'):'';
+    return '<div class="repo-metric-item"><div class="v mono">'+esc(it[0])+'</div><div class="k">'+esc(it[1])+badge+'</div></div>';
+  }).join('');
   var opsChips=opsChipsHTML(pid);
   return '<section data-screen="overview"><div class="ov-stack">'
     + (showStartBanner ? ('<div class="ov-banner"><span>本周还没有计划</span><button class="btn btn-primary btn-sm" data-action="startWeek" data-arg=\'"'+pid+'"\'>开始本周</button></div>') : '')
@@ -1742,9 +1712,12 @@ function renderOverview(pid){
     + '<div class="card ov-block" data-block="version">'
     +   '<div class="ov-block-title">在研版本与发版记录</div>'
     +   '<div class="version-cols"><div class="version-col"><div class="k">在研版本</div><div class="v mono">'+esc(proj.version)+'</div></div></div>'
-    +   releases.map(function(r){ return '<div class="release-line">'+esc(r.version)+' · '+esc(r.date)+' · '+esc(r.note)+'</div>'; }).join('')
+    +   releases.map(function(r){
+          var parts=[esc(r.version),esc(r.date)]; if(r.note)parts.push(esc(r.note));
+          var badge=r.backfill?' <span class="chip chip-gray" style="margin-left:5px;">回填</span>':'';
+          return '<div class="release-line">'+parts.join(' · ')+badge+'</div>';
+        }).join('')
     + '</div>'
-    + historyOpsBlockHTML(pid)
     + '</div></section>';
 }
 
