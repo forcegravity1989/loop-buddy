@@ -470,30 +470,6 @@ fn git_err(prefix: &str, e: crate::workspace::ProvisionError) -> GithubError {
     GithubError::Command(format!("{prefix}:{e}"))
 }
 
-/// Quarantine a run's work onto the Issue's branch **before** the executor
-/// touches anything (plan/13 D3: the executor must never advance the base
-/// branch — only a human merge does). Checks out `bw/issue-<n>`, creating it
-/// at the current HEAD the first time and re-using it on a retry. All of the
-/// run's edits then land on this branch by construction, whatever the executor
-/// does (dirty tree or its own commits), leaving the base branch untouched.
-pub async fn checkout_issue_branch(
-    workspace: &Path,
-    github_number: u32,
-) -> Result<String, GithubError> {
-    let branch = issue_branch(github_number);
-    // First run: create the branch at HEAD. Retry: the branch already exists,
-    // so `-b` fails and we plain-checkout it (keeping any prior branch work).
-    if git_in(workspace, &["checkout", "-b", &branch])
-        .await
-        .is_err()
-    {
-        git_in(workspace, &["checkout", &branch])
-            .await
-            .map_err(|e| git_err("切到活分支失败", e))?;
-    }
-    Ok(branch)
-}
-
 /// P7-7A: distinguishes a brand-new PR from one `open_pr` merely *adopted*
 /// because the executor already opened it itself (executors are allowed
 /// `gh pr create` — only `gh pr merge` is disallowed,`claude_cli.rs`'s
@@ -725,10 +701,12 @@ pub async fn issue_state(owner_repo: &str, github_number: u32) -> Result<String,
 
 /// P7-7B (plan/13 用户故事 22, D22): read-only probe for whether an Issue's
 /// deterministic work branch (`issue_branch`) currently has an OPEN PR
-/// against it — `RefreshIssues`' GitHub drift collector uses this to catch a
-/// PR a teammate opened on their own (executors are allowed `gh pr create`;
-/// only `gh pr merge` is disallowed) without BW ever calling `open_pr` for
-/// it. Addressed purely via `--repo`, unlike `open_pr`/`adopt_existing_pr`
+/// against it. **现役调用方**(2026-08-17 起唯一一个):`Remote::open_mr_for_branch`
+/// ← bw-app `poll_interactive_inreview`(调度器每次 tick 轮询「评审中」候选,
+/// 队友自己 `gh pr create` 的 PR 就靠这条探针发现;最初为它而写的
+/// `RefreshIssues` 漂移采集器已随 2026-08-17 减负重构删除——别因为 grep 不到
+/// `RefreshIssues` 就把本函数当死码)。Executors are allowed `gh pr create`;
+/// only `gh pr merge` is disallowed. Addressed purely via `--repo`, unlike `open_pr`/`adopt_existing_pr`
 /// which run from inside a checked-out workspace — this never touches the
 /// local git state, so it's safe to call for an issue whose branch the
 /// caller hasn't (and may never) check out. `Ok(None)` = no open PR for that

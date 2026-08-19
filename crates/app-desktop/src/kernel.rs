@@ -14,14 +14,11 @@
 
 use bw_app::{ActionState, App, Command, Event, Panel, RemoteProjectProbe, Scope, SettleReq, View};
 use bw_core::model::{
-    AgentRef, Author, CronMode, HubCard, IssueStatus, MaturityPeriod, Readiness, SessionStatus,
-    Signal, SkillRef, StageKind, CONNECTOR_KIND_SCRIPT,
+    CronMode, HubCard, IssueStatus, MaturityPeriod, Readiness, SessionStatus, Signal, StageKind,
+    CONNECTOR_KIND_SCRIPT,
 };
 use bw_core::{ConversationId, MetricId, SessionId};
-use bw_engine::{
-    resolve_claude_binary, ClaudeCliConfig, CodehubRepoSummary, Engine, GithubRepoSummary,
-    MockExecutor, PermissionMode,
-};
+use bw_engine::{resolve_claude_binary, ClaudeCliConfig, CodehubRepoSummary, GithubRepoSummary};
 use bw_store::{MetricRole, SqliteStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -57,11 +54,6 @@ pub struct Vm {
     pub hub: HubVm,
     /// The real, editable `ClaudeCliConfig` (Settings hub) — also global.
     pub settings: SettingsVm,
-    /// L1(plan/11): last-loaded cron task's real fire history — lives at the
-    /// top level (not `OpVm`) because the component-detail overlay that
-    /// shows it is rendered outside any one project's `Op` tree, same as
-    /// `hub`. `None` until `Command::LoadCronEffectiveness` runs for a task.
-    pub cron_effectiveness: Option<(bw_core::CronTaskId, ui::vm::CronEffectivenessVm)>,
     /// GitHub 为主体的创建流: last `Command::ListGithubRepos` result — lives
     /// at the top level (not `CreateVm`) because the Repo 卡片 renders before
     /// any project row exists. Empty until the Repo 卡片 first dispatches
@@ -163,20 +155,6 @@ pub struct StageVm {
 }
 
 #[derive(Clone, PartialEq)]
-pub struct MsgVm {
-    pub agent: bool,
-    pub text: String,
-}
-
-#[derive(Clone, PartialEq)]
-pub struct ChatVm {
-    pub id: SessionId,
-    pub title: String,
-    pub status_label: &'static str,
-    pub msgs: Vec<MsgVm>,
-}
-
-#[derive(Clone, PartialEq)]
 pub struct OpVm {
     pub id: bw_core::ProjectId,
     pub name: String,
@@ -196,8 +174,8 @@ pub struct OpVm {
     /// `create.rs`, unreachable post-creation).
     pub benchmark: String,
     pub opportunity: String,
-    /// Real-executor target directory. Empty = unconfigured — this project
-    /// only ever runs `RunWorkflow` on `MockExecutor`.
+    /// Real-executor target directory. Empty = unconfigured — this project's
+    /// Issue runs go through the mock interactive executor (self-labelled).
     pub workspace_path: String,
     pub allow_commands: bool,
     /// "owner/repo" — empty = this project isn't attached to GitHub (local-
@@ -221,7 +199,10 @@ pub struct OpVm {
     /// The project's Issues (R1) — assignable work units scoped to a stage,
     /// the multica-style board the operating view now surfaces.
     pub issues: Vec<IssueVm>,
-    pub chat: Option<ChatVm>,
+    /// The session the left rail's「阶段记录」highlights (`App.state.
+    /// active_session`) — an index into the sidebar, nothing more; the run
+    /// itself lives in the embedded terminal keyed by conversation.
+    pub active_session: Option<SessionId>,
     /// Threaded down for the "从 Hub 导入" overview strip in the Workflow
     /// panel — same data as the top-level `Vm.hub`, just also reachable from
     /// deep inside `Op`'s component tree without re-prop-drilling `Vm` itself.
@@ -255,25 +236,10 @@ pub struct OpVm {
     pub resumable_issues: Vec<bw_core::IssueId>,
 }
 
-/// Transient, non-persistent notices (live run progress, dispatch errors).
+/// Transient, non-persistent notices (run failures, dispatch errors, toasts).
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiNote {
-    /// A run is really about to begin — the canonical "new run, reset the
-    /// banner" signal (not the `PhaseStarted{idx:0}` heuristic this replaced),
-    /// carrying the spec's own real name/agents/skills.
-    RunStarted {
-        workflow_name: String,
-        agents: Vec<AgentRef>,
-        skills: Vec<SkillRef>,
-    },
-    PhaseStarted {
-        idx: usize,
-        name: String,
-    },
-    PhaseCompleted {
-        idx: usize,
-    },
-    RunDone,
+    /// An Issue run failed or was aborted (`Event::RunFailed`) — a toast.
     RunFailed(String),
     Handoff {
         from: StageKind,
@@ -283,8 +249,8 @@ pub enum UiNote {
     Error(String),
     /// A real, unattended scheduler auto-fire just finished (see
     /// `App::tick_scheduler`) — surfaced as a toast, never a navigation:
-    /// unlike a manual "▶ 立即执行", nothing about the user's current screen
-    /// should change just because a background task ran.
+    /// nothing about the user's current screen should change just because
+    /// a background task ran.
     CronAutoFired {
         name: String,
         ok: bool,
@@ -306,62 +272,6 @@ pub enum UiNote {
         name: String,
         state: ActionState,
     },
-}
-
-/// Folded run-progress state the UI renders as the live banner. Fed purely by
-/// [`UiNote`]s — it reflects what the engine actually reported, nothing more.
-#[derive(Clone, PartialEq, Default)]
-pub struct RunVm {
-    pub running: bool,
-    /// The spec name currently (or most recently) running — empty until the
-    /// first `RunStarted`.
-    pub workflow_name: String,
-    /// Real `AgentRef`/`SkillRef` from the spec that's running — empty is
-    /// honest ("this run declared none"), not a loading state.
-    pub agents: Vec<AgentRef>,
-    pub skills: Vec<SkillRef>,
-    /// (phase name, completed) in start order.
-    pub phases: Vec<(String, bool)>,
-    pub failed: Option<String>,
-}
-
-impl RunVm {
-    pub fn apply(&mut self, note: &UiNote) {
-        match note {
-            UiNote::RunStarted {
-                workflow_name,
-                agents,
-                skills,
-            } => {
-                self.running = true;
-                self.workflow_name = workflow_name.clone();
-                self.agents = agents.clone();
-                self.skills = skills.clone();
-                self.phases.clear();
-                self.failed = None;
-            }
-            UiNote::PhaseStarted { name, .. } => {
-                self.running = true;
-                self.phases.push((name.clone(), false));
-            }
-            UiNote::PhaseCompleted { idx } => {
-                if let Some(p) = self.phases.get_mut(*idx) {
-                    p.1 = true;
-                }
-            }
-            UiNote::RunDone => self.running = false,
-            UiNote::RunFailed(e) => {
-                self.running = false;
-                self.failed = Some(e.clone());
-            }
-            UiNote::Handoff { .. }
-            | UiNote::Error(_)
-            | UiNote::CronAutoFired { .. }
-            | UiNote::ArtifactsRegistered { .. }
-            | UiNote::ConnectorSynced { .. }
-            | UiNote::ActionProgress { .. } => {}
-        }
-    }
 }
 
 // ─────────────────────── plan/14 C14 · action progress ───────────────────────
@@ -505,20 +415,15 @@ fn workspaces_root() -> std::path::PathBuf {
     }
 }
 
-/// Process-wide `ClaudeCliExecutor` config, env-override-else-default (same
-/// pattern as [`db_path`]). Per-project data (`workspace_path`/
-/// `allow_commands`) lives in the store instead — see `Command::SetWorkspace`.
+/// Process-wide `claude` CLI config, env-override-else-default (same pattern
+/// as [`db_path`]): `BW_CLAUDE_BIN` overrides the binary resolved from PATH.
 fn claude_config_from_env() -> ClaudeCliConfig {
-    let mut config = ClaudeCliConfig::default();
-    // Prefer a file that exists (exe, then npm claude.cmd). A stale
-    // BW_CLAUDE_BIN pointing at a missing bin\claude.exe must not win.
-    config.binary = resolve_claude_binary(None);
-    if let Ok(cap) = std::env::var("BW_CLAUDE_MAX_BUDGET_USD") {
-        if let Ok(v) = cap.parse() {
-            config.max_budget_usd = v;
-        }
+    // Prefer a file that exists (`BW_CLAUDE_BIN` first, then the Windows
+    // installer's exe, then npm claude.cmd). A stale BW_CLAUDE_BIN pointing
+    // at a missing bin\claude.exe must not win. `None` → PATH lookup.
+    ClaudeCliConfig {
+        binary: resolve_claude_binary(None),
     }
-    config
 }
 
 /// Spawn the kernel thread. Returns immediately; the first real [`Vm`] arrives
@@ -557,32 +462,20 @@ pub fn spawn() -> Kernel {
                         return;
                     }
                 };
-                // MockExecutor with visible latency: the run flow must *stream*
-                // in the UI (per-phase), not land as one burst. This is the
-                // shared, long-lived engine every project without a configured
-                // workspace_path runs on; a configured project instead gets a
-                // fresh ClaudeCliExecutor built per-call inside bw-app's
-                // RunWorkflow dispatch.
-                let mut app = App::new(
-                    store.clone(),
-                    Engine::new(Arc::new(MockExecutor::with_delay(Duration::from_millis(
-                        450,
-                    )))),
-                    claude_config_from_env(),
-                )
-                // All-in-one-codebase default: projects born through the
-                // creation flow get their own real git repo next to the DB.
-                .with_workspaces_root(workspaces_root())
-                // plan/17 S3: wire the back-channel that turns `RunIssue`
-                // from a blocking inline call into a backgrounded one. The
-                // matching `settle_rx` is polled in the `select!` loop
-                // below; examples / headless drivers never wire this →
-                // `RunIssue` stays inline there.
-                .with_settle_channel(settle_tx)
-                // V1 Issue2 Phase2b: enable PTY mode — interactive issue runs
-                // spawn claude in a PTY (portable-pty) instead of a system
-                // terminal, streaming bytes to the UI's xterm.js widget.
-                .with_pty();
+                let mut app = App::new(store.clone(), claude_config_from_env())
+                    // All-in-one-codebase default: projects born through the
+                    // creation flow get their own real git repo next to the DB.
+                    .with_workspaces_root(workspaces_root())
+                    // plan/17 S3: wire the back-channel that turns `RunIssue`
+                    // from a blocking inline call into a backgrounded one. The
+                    // matching `settle_rx` is polled in the `select!` loop
+                    // below; examples / headless drivers never wire this →
+                    // `RunIssue` stays inline there.
+                    .with_settle_channel(settle_tx)
+                    // V1 Issue2 Phase2b: enable PTY mode — interactive issue runs
+                    // spawn claude in a PTY (portable-pty) instead of a system
+                    // terminal, streaming bytes to the UI's xterm.js widget.
+                    .with_pty();
 
                 // Live event → transient note forwarding. Runs concurrently with
                 // dispatch (progress events are emitted mid-run).
@@ -591,27 +484,7 @@ pub fn spawn() -> Kernel {
                 tokio::spawn(async move {
                     while let Ok(e) = ev.recv().await {
                         let note = match e {
-                            Event::RunStarted {
-                                workflow_name,
-                                agents,
-                                skills,
-                            } => UiNote::RunStarted {
-                                workflow_name,
-                                agents,
-                                skills,
-                            },
-                            Event::WorkflowProgress { phase_idx, status } => {
-                                if let Some(name) = status.strip_prefix("started:") {
-                                    UiNote::PhaseStarted {
-                                        idx: phase_idx,
-                                        name: name.to_string(),
-                                    }
-                                } else {
-                                    UiNote::PhaseCompleted { idx: phase_idx }
-                                }
-                            }
-                            Event::WorkflowDone => UiNote::RunDone,
-                            Event::WorkflowFailed(err) => UiNote::RunFailed(err),
+                            Event::RunFailed(err) => UiNote::RunFailed(err),
                             Event::StageHandoff { from, to, risky } => {
                                 UiNote::Handoff { from, to, risky }
                             }
@@ -636,29 +509,10 @@ pub fn spawn() -> Kernel {
                 if let Err(e) = app.dispatch(Command::Boot).await {
                     let _ = note_tx.send(UiNote::Error(e.to_string()));
                 }
-
-                // T14 (2026-07-24, plan/12 §10 v1.1): real-daily-DB one-shot
-                // legacy-shell migration — dispatched right after `Boot` with
-                // the real DB path this thread already opened the store
-                // from (see `Command::MigrateLegacyShellsIfNeeded`'s doc
-                // comment for why it's threaded in rather than read off the
-                // store). A fresh DB, or one already migrated, is a true
-                // no-op inside the handler; failure surfaces as a
-                // `UiNote::Error` the same way any other dispatch failure
-                // does — never a boot-blocking panic. `[BW_MIGRATE]` stderr
-                // line is this ticket's own render/readback proof, same
-                // discipline as `[BW_OPEN]`/`[BW_HUB]` below and in
-                // `main.rs`.
-                if let Err(e) = app
-                    .dispatch(Command::MigrateLegacyShellsIfNeeded {
-                        db_path: real_db_path.clone(),
-                    })
-                    .await
-                {
-                    let _ = note_tx.send(UiNote::Error(e.to_string()));
-                }
+                // Boot readback proof (same discipline as `[BW_OPEN]`/`[BW_HUB]`
+                // below and in `main.rs`): the hub library the UI will render.
                 eprintln!(
-                    "[BW_MIGRATE] skills={} agents={}",
+                    "[BW_BOOT] skills={} agents={}",
                     app.snapshot().skills.len(),
                     app.snapshot().agents.len()
                 );
@@ -886,7 +740,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
     // 访问,所以这里(kernel build_vm)填。best-effort:读失败空 Vec。
     let mut cron_tasks: Vec<CronRowVm> = Vec::with_capacity(state.cron_tasks.len());
     for c in state.cron_tasks.iter() {
-        let mut row = cron_row(c, &project_names, &state.skills, now);
+        let mut row = cron_row(c, &project_names, now);
         if matches!(c.mode, CronMode::CollectMetrics) {
             if let Some(pid) = c.project_id {
                 if let Ok(sigs) = store.persisted_signals(pid).await {
@@ -943,19 +797,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         activity,
         notifications,
     };
-    let settings = settings_vm(
-        state.claude_config.binary.as_deref(),
-        state.claude_config.max_budget_usd,
-        state.claude_config.default_mode == PermissionMode::BypassPermissions,
-        state.claude_config.commands_mode == PermissionMode::BypassPermissions,
-    );
-
-    // L1(plan/11): pre-format the last-loaded cron task's fire history, if
-    // any — same explicit single-slot pattern as `version_log`/`artifacts`.
-    let cron_effectiveness = state
-        .cron_effectiveness
-        .as_ref()
-        .map(|(id, e)| (*id, ui::vm::cron_effectiveness_vm(e)));
+    let settings = settings_vm(state.claude_config.binary.as_deref());
 
     let mut vm = Vm {
         ready: true,
@@ -966,7 +808,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         op: None,
         hub: hub.clone(),
         settings,
-        cron_effectiveness,
         github_repos: state.github_repos.clone(),
         codehub_repos: state.codehub_repos.clone(),
         remote_project_probe: state.remote_project_probe.clone(),
@@ -1203,33 +1044,6 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
         })
         .collect();
 
-    let chat = match state.active_session {
-        Some(sid) => {
-            let title = session_cards
-                .iter()
-                .find(|s| s.id == sid)
-                .map(|s| (s.title.clone(), s.status_label))
-                .unwrap_or_else(|| ("会话".to_string(), "进行中"));
-            let msgs = store
-                .session_messages(sid)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| MsgVm {
-                    agent: m.role == Author::Agent,
-                    text: m.text,
-                })
-                .collect();
-            Some(ChatVm {
-                id: sid,
-                title: title.0,
-                status_label: title.1,
-                msgs,
-            })
-        }
-        None => None,
-    };
-
     let version_log = version_log_vm(state.version_log.as_ref().and_then(|(vpid, result)| {
         (*vpid == pid).then(|| {
             result
@@ -1327,7 +1141,7 @@ async fn build_vm(app: &App, store: &Arc<dyn Store>) -> Vm {
             .iter()
             .map(|i| issue_card(i, &state.agents))
             .collect(),
-        chat,
+        active_session: state.active_session,
         hub,
         version_log,
         artifacts,

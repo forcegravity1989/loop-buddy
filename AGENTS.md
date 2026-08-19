@@ -19,4 +19,7 @@ shared snapshot after `main` passes CI. Runtime files such as WAL/SHM files,
 logs, sockets, and PID files stay machine-local.
 
 Repository-specific product, architecture, verification, and writing rules
-remain in `CLAUDE.md` and apply alongside this file.
+remain in `CLAUDE.md` and apply alongside this file. Start at `README.md` for
+what the repo is and how to run it; `docs/README.md` is the map of every doc
+tree (active docs, runtime assets baked in via `include_str!`, the partner's
+`docs/v1~v3-prototype/` iteration line, and `docs/archive/`).

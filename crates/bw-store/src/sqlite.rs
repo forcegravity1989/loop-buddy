@@ -10,23 +10,22 @@ use crate::{
     parse_hub_source, parse_issue_priority, parse_issue_status, parse_maturity,
     parse_session_status, parse_sig, parse_stage_kind, session_status_text, sig_text,
     stage_kind_text, AgentEdit, ConnectorDefSync, ConnectorsFileSync, ConnectorsFileSyncSummary,
-    GlobalHandoffRow, HandoffRow, MessageRow, MetricDefSync, MetricOrigin, MetricRole,
-    MetricSignal, MetricsFileSync, MetricsFileSyncSummary, NewAgent, NewArtifact, NewConnector,
-    NewCronTask, NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill,
-    NewSkillFile, NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals,
-    ProjectFileSync, ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow,
-    StageRow, StageSignal, Store, StoreError, WorkflowEdit,
+    GlobalHandoffRow, HandoffRow, MetricDefSync, MetricOrigin, MetricRole, MetricSignal,
+    MetricsFileSync, MetricsFileSyncSummary, NewAgent, NewArtifact, NewConnector, NewCronTask,
+    NewIssue, NewKnowledgeSource, NewMetric, NewProject, NewSession, NewSkill, NewSkillFile,
+    NewStage, NewWorkflowRun, NewWorkflowSpec, ObservationRow, PersistedSignals, ProjectFileSync,
+    ProjectRow, Result, SessionKind, SessionRow, SkillEdit, SkillFileRow, StageRow, StageSignal,
+    Store, StoreError, WorkflowEdit,
 };
 use async_trait::async_trait;
 use bw_core::derive::{
     evaluate_metric, measure, parse_target_with, reduce_worst_of, AmberBand, Measurement,
 };
 use bw_core::model::{
-    AgentCard, AgentRef, AgentSkillTag, Artifact, ArtifactKind, Author, ClaudeConversation,
-    Connector, ConnectorStatus, CronEffectiveness, CronStatus, CronTask, HubSource, Issue,
-    IssueStatus, KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness,
-    RunStatus, RunTrigger, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank,
-    WorkflowKind, WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
+    AgentCard, AgentRef, AgentSkillTag, Artifact, ArtifactKind, ClaudeConversation, Connector,
+    ConnectorStatus, CronStatus, CronTask, HubSource, Issue, IssueStatus, KnowledgeSource,
+    LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness, RunStatus, RunTrigger, Signal,
+    SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind, WorkflowRun, WorkflowSpec,
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
@@ -342,6 +341,36 @@ impl SqliteStore {
         // the specific name (PF1-3a ①) and don't match. Storage name 是审计
         // 口径的活物,这次用户明确要 DB 读回也清楚,故走数据迁移而非 VM 派生。
         migrate_cron_collect_metrics_name(&pool).await?;
+        // 2026-08-17 减负重构:「周评注」(weekly_review)功能连命令带表一起
+        // 退役,`schema.sql` 不再建这张表。但存量库里它还在——而它的
+        // `project_id … REFERENCES project(id)` 没带 ON DELETE CASCADE,连接又
+        // 开着 `foreign_keys(true)`,`delete_project` 里那句 `DELETE FROM
+        // weekly_review` 一删,老库删项目就撞外键(/code-review 用 sqlite3
+        // 复现:FOREIGN KEY constraint failed)。按「不为向后兼容留旧路径」的
+        // 规矩,这里把旧表真删掉,而不是把 DELETE 语句加回去养着一张死表。
+        // 幂等:表不在就 no-op;它是子表,带行 DROP 也不违反外键。
+        sqlx::query("DROP TABLE IF EXISTS weekly_review")
+            .execute(&pool)
+            .await?;
+        // 2026-08-18 拔旧执行引擎:定时任务只剩两种——「建活」与「采集指标」。
+        // 老库里可能还躺着 run_workflow / run_skill / run_prompt 三种旧模式行
+        // (它们跑的是被拔掉的旧聊天式引擎),统一归到「建活」:定时任务本来
+        // 就只该自动**建**活、绝不自动跑活(CLAUDE.md 铁律),归并方向没有歧义。
+        // 幂等:再跑一次匹配不到行。旧 `target` 列保留不动(历史字段,读回可查)。
+        sqlx::query(
+            "UPDATE cron_task SET mode = 'create_issue'
+             WHERE mode IN ('run_workflow', 'run_skill', 'run_prompt')",
+        )
+        .execute(&pool)
+        .await?;
+        // 2026-08-18 拔旧执行引擎:`message` 表(对话面板里 builder/agent 的
+        // 聊天气泡)随聊天式引擎一起退场——issue 的过程记录在内嵌终端的
+        // 回滚缓冲与 claude 自己的 session.jsonl 里,BW 不再存聊天正文。
+        // 老库直接 DROP(不为向后兼容留旧路径);幂等:表不在就 no-op。
+        // 它是 session 的子表,整表 DROP 不违反外键。
+        sqlx::query("DROP TABLE IF EXISTS message")
+            .execute(&pool)
+            .await?;
 
         Ok(Self { pool })
     }
@@ -621,18 +650,6 @@ fn parse_phase(s: &str) -> Readiness {
         _ => Readiness::ColdStart,
     }
 }
-fn role_text(r: Author) -> &'static str {
-    match r {
-        Author::Builder => "builder",
-        Author::Agent => "agent",
-    }
-}
-fn parse_role(s: &str) -> Author {
-    match s {
-        "agent" => Author::Agent,
-        _ => Author::Builder,
-    }
-}
 fn source_text(s: SourceKind) -> &'static str {
     match s {
         SourceKind::GatewayLog => "gateway_log",
@@ -867,12 +884,6 @@ impl Store for SqliteStore {
         .bind(&p)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
-            "DELETE FROM message WHERE session_id IN (SELECT id FROM session WHERE project_id=?)",
-        )
-        .bind(&p)
-        .execute(&mut *tx)
-        .await?;
         // A project-owned skill's extra files, and a project-owned workflow's
         // version history — children of rows this fn deletes below, so they
         // have to go first or they outlive their parent as orphans. Global
@@ -931,10 +942,6 @@ impl Store for SqliteStore {
             .bind(&p)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM weekly_review WHERE project_id=?")
-            .bind(&p)
-            .execute(&mut *tx)
-            .await?;
         sqlx::query("DELETE FROM handoff WHERE project_id=?")
             .bind(&p)
             .execute(&mut *tx)
@@ -950,11 +957,8 @@ impl Store for SqliteStore {
     async fn delete_session(&self, id: SessionId) -> Result<()> {
         let sid = id.uuid().to_string();
         let mut tx = self.pool.begin().await?;
-        // message.session_id REFERENCES session(id) — 先删消息再删 session。
-        sqlx::query("DELETE FROM message WHERE session_id=?")
-            .bind(&sid)
-            .execute(&mut *tx)
-            .await?;
+        // `message` 表已于 2026-08-18 随旧聊天式引擎 DROP,没有子行要先删;
+        // 只删 session 行本身。
         sqlx::query("DELETE FROM session WHERE id=?")
             .bind(&sid)
             .execute(&mut *tx)
@@ -1247,26 +1251,6 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn update_week_plan(
-        &self,
-        metric: MetricId,
-        new_target: &str,
-        last_target: &str,
-        driver: &str,
-    ) -> Result<()> {
-        sqlx::query(
-            "UPDATE metric SET target_raw=?, last_target=?, driver=?, updated_at=?, rev=rev+1 WHERE id=?",
-        )
-        .bind(new_target)
-        .bind(last_target)
-        .bind(driver)
-        .bind(now_unix())
-        .bind(metric.uuid().to_string())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     async fn append_observation(
         &self,
         metric_id: MetricId,
@@ -1424,29 +1408,6 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn append_message(&self, session_id: SessionId, role: Author, text: &str) -> Result<()> {
-        let sid = session_id.uuid().to_string();
-        let seq: i64 = sqlx::query(
-            "SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM message WHERE session_id=?",
-        )
-        .bind(&sid)
-        .fetch_one(&self.pool)
-        .await?
-        .get("next");
-        sqlx::query(
-            "INSERT INTO message (id, session_id, seq, role, text, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind(&sid)
-        .bind(seq)
-        .bind(role_text(role))
-        .bind(text)
-        .bind(now_unix())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     async fn recompute_signals(&self, project_id: ProjectId, now: OffsetDateTime) -> Result<()> {
         let p = pid(project_id);
         let t = now.unix_timestamp();
@@ -1585,30 +1546,6 @@ impl Store for SqliteStore {
         .execute(&self.pool)
         .await?;
 
-        Ok(())
-    }
-
-    async fn annotate_weekly_review(
-        &self,
-        project_id: ProjectId,
-        week_of: OffsetDateTime,
-        derived: Signal,
-        human_override: Option<Signal>,
-        reason: &str,
-    ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO weekly_review (id, project_id, week_of, derived_signal, human_override, override_reason, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind(pid(project_id))
-        .bind(week_of.unix_timestamp())
-        .bind(sig_text(derived))
-        .bind(human_override.map(sig_text))
-        .bind(reason)
-        .bind(now_unix())
-        .execute(&self.pool)
-        .await?;
         Ok(())
     }
 
@@ -1839,20 +1776,6 @@ impl Store for SqliteStore {
             .collect()
     }
 
-    async fn session_messages(&self, session_id: SessionId) -> Result<Vec<MessageRow>> {
-        let rows = sqlx::query("SELECT role, text FROM message WHERE session_id=? ORDER BY seq")
-            .bind(session_id.uuid().to_string())
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| MessageRow {
-                role: parse_role(&r.get::<String, _>("role")),
-                text: r.get("text"),
-            })
-            .collect())
-    }
-
     // ── hub library (global — no active-project gate) ──
 
     async fn create_workflow_spec(&self, w: NewWorkflowSpec) -> Result<()> {
@@ -1906,93 +1829,6 @@ impl Store for SqliteStore {
         .fetch_optional(&self.pool)
         .await?;
         row.map(workflow_spec_row).transpose()
-    }
-
-    async fn promote_workflow(
-        &self,
-        new_id: WorkflowId,
-        from: &WorkflowSpec,
-        source: HubSource,
-    ) -> Result<()> {
-        let kind = WorkflowKind::Static {
-            maturity: Maturity::Fresh,
-            version: 1,
-            uses: 0,
-            scope: String::new(),
-            source,
-            trigger: None,
-        };
-        let t = now_unix();
-        sqlx::query(
-            "INSERT INTO workflow_spec
-                (id, name, kind_json, prompt, goal, stage_ref, phases, phase_prompts, agents_json,
-                 skills_json, loop_retries, loop_max_iter, content, created_at, updated_at, rev)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
-        )
-        .bind(new_id.uuid().to_string())
-        .bind(&from.name)
-        .bind(serde_json::to_string(&kind)?)
-        .bind(&from.prompt)
-        .bind(&from.goal)
-        .bind(from.stage_ref.map(i64::from))
-        .bind(serde_json::to_string(&from.phases)?)
-        .bind(serde_json::to_string(&from.phase_prompts)?)
-        .bind(serde_json::to_string(&from.agents)?)
-        .bind(serde_json::to_string(&from.skills)?)
-        .bind(i64::from(from.loop_config.retries))
-        .bind(i64::from(from.loop_config.max_iter))
-        .bind(&from.content)
-        .bind(t)
-        .bind(t)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn record_workflow_use(&self, id: WorkflowId) -> Result<()> {
-        let row = sqlx::query("SELECT kind_json FROM workflow_spec WHERE id=?")
-            .bind(id.uuid().to_string())
-            .fetch_optional(&self.pool)
-            .await?
-            .ok_or_else(|| StoreError::Other("workflow spec not found".into()))?;
-        let mut kind: WorkflowKind = serde_json::from_str(&row.get::<String, _>("kind_json"))?;
-        if let WorkflowKind::Static { uses, .. } = &mut kind {
-            *uses += 1;
-        }
-        sqlx::query("UPDATE workflow_spec SET kind_json=?, updated_at=?, rev=rev+1 WHERE id=?")
-            .bind(serde_json::to_string(&kind)?)
-            .bind(now_unix())
-            .bind(id.uuid().to_string())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn refresh_workflow_template_phases(
-        &self,
-        id: WorkflowId,
-        phases: Vec<PhaseMeta>,
-        phase_prompts: Vec<String>,
-    ) -> Result<()> {
-        sqlx::query(
-            "UPDATE workflow_spec SET phases=?, phase_prompts=?, updated_at=?, rev=rev+1
-             WHERE id=?",
-        )
-        .bind(serde_json::to_string(&phases)?)
-        .bind(serde_json::to_string(&phase_prompts)?)
-        .bind(now_unix())
-        .bind(id.uuid().to_string())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn delete_workflow_spec(&self, id: WorkflowId) -> Result<()> {
-        sqlx::query("DELETE FROM workflow_spec WHERE id=?")
-            .bind(id.uuid().to_string())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 
     async fn record_workflow_run_start(&self, run: NewWorkflowRun<'_>) -> Result<WorkflowRunId> {
@@ -2083,166 +1919,6 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn list_workflow_runs(&self, workflow_id: WorkflowId) -> Result<Vec<WorkflowRun>> {
-        let rows = sqlx::query(
-            "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id, head_before, head_after
-             FROM workflow_run WHERE workflow_id=? ORDER BY started_at DESC, rowid DESC",
-        )
-        .bind(workflow_id.uuid().to_string())
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows.iter().map(parse_run_row).collect())
-    }
-
-    async fn list_all_workflow_runs(&self, limit: u32) -> Result<Vec<WorkflowRun>> {
-        let rows = sqlx::query(
-            "SELECT id, workflow_id, workflow_name, project_id, session_id, trigger, status,
-                    started_at, finished_at, duration_ms, phases_completed, error, params_json, cron_task_id, issue_id, head_before, head_after
-             FROM workflow_run ORDER BY started_at DESC, rowid DESC LIMIT ?",
-        )
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows.iter().map(parse_run_row).collect())
-    }
-
-    async fn workflow_analytics(&self, workflow_id: WorkflowId) -> Result<WorkflowRunAnalytics> {
-        // One aggregation query: counts + mean over settled runs. Median is
-        // computed in Rust over the fetched series (SQLite has no native
-        // MEDIAN), which also gives us last_run_at/last_status in the same
-        // pass. A workflow with no rows returns total_runs=0, success_rate=None.
-        let agg = sqlx::query(
-            "SELECT
-                COUNT(*)                                               AS total,
-                SUM(CASE WHEN status='ok'      THEN 1 ELSE 0 END)     AS ok_n,
-                SUM(CASE WHEN status='failed'  THEN 1 ELSE 0 END)     AS fail_n,
-                SUM(CASE WHEN status='running' THEN 1 ELSE 0 END)     AS run_n,
-                AVG(CASE WHEN status IN ('ok','failed') THEN duration_ms END) AS avg_dur
-             FROM workflow_run WHERE workflow_id=?",
-        )
-        .bind(workflow_id.uuid().to_string())
-        .fetch_one(&self.pool)
-        .await?;
-        let total: i64 = agg.get("total");
-        let ok_runs: i64 = agg.get("ok_n");
-        let failed_runs: i64 = agg.get("fail_n");
-        let running_runs: i64 = agg.get("run_n");
-        let avg_dur: Option<f64> = agg.get("avg_dur");
-        let settled = ok_runs + failed_runs;
-
-        // Name + last run + the duration series (for median) in one fetch.
-        let name_row = sqlx::query("SELECT workflow_name, started_at, status FROM workflow_run WHERE workflow_id=? ORDER BY started_at DESC, rowid DESC LIMIT 1")
-            .bind(workflow_id.uuid().to_string())
-            .fetch_optional(&self.pool)
-            .await?;
-        let (workflow_name, last_run_at, last_status) = match name_row {
-            Some(r) => (
-                r.get::<String, _>("workflow_name"),
-                Some(r.get::<i64, _>("started_at")),
-                Some(RunStatus::parse(&r.get::<String, _>("status"))),
-            ),
-            None => (String::new(), None, None),
-        };
-
-        // Median over settled durations — robust to a single slow outlier.
-        let median = if settled > 0 {
-            let dur_rows = sqlx::query(
-                "SELECT duration_ms FROM workflow_run
-                 WHERE workflow_id=? AND status IN ('ok','failed') AND duration_ms IS NOT NULL
-                 ORDER BY duration_ms",
-            )
-            .bind(workflow_id.uuid().to_string())
-            .fetch_all(&self.pool)
-            .await?;
-            let ds: Vec<i64> = dur_rows
-                .iter()
-                .map(|r| r.get::<i64, _>("duration_ms"))
-                .collect();
-            if ds.is_empty() {
-                None
-            } else {
-                let mid = ds.len() / 2;
-                Some(if ds.len() % 2 == 0 {
-                    (ds[mid - 1] + ds[mid]) / 2
-                } else {
-                    ds[mid]
-                })
-            }
-        } else {
-            None
-        };
-
-        Ok(WorkflowRunAnalytics {
-            workflow_id,
-            workflow_name,
-            total_runs: total as u32,
-            ok_runs: ok_runs as u32,
-            failed_runs: failed_runs as u32,
-            running_runs: running_runs as u32,
-            success_rate: if settled > 0 {
-                Some(ok_runs as f32 / settled as f32)
-            } else {
-                None
-            },
-            avg_duration_ms: avg_dur.map(|v| v as i64),
-            median_duration_ms: median,
-            last_run_at,
-            last_status,
-        })
-    }
-
-    async fn cron_effectiveness(&self, cron_task_id: CronTaskId) -> Result<CronEffectiveness> {
-        // Only runs this task auto-fired (trigger='scheduled' AND linked to
-        // this task). Manual runs of the same workflow are excluded — a
-        // schedule's track record is its own, not contaminated by ad-hoc fires.
-        let row = sqlx::query(
-            "SELECT
-                COUNT(*)                                                         AS fires,
-                SUM(CASE WHEN status='ok'     THEN 1 ELSE 0 END)                AS ok_n,
-                SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END)                AS fail_n,
-                AVG(CASE WHEN status IN ('ok','failed') THEN duration_ms END)   AS avg_dur,
-                MAX(started_at)                                                  AS last_at
-             FROM workflow_run WHERE cron_task_id=? AND trigger='scheduled'",
-        )
-        .bind(cron_task_id.uuid().to_string())
-        .fetch_one(&self.pool)
-        .await?;
-        let fires: i64 = row.get("fires");
-        let ok_fires: i64 = row.get("ok_n");
-        let failed_fires: i64 = row.get("fail_n");
-        let avg_dur: Option<f64> = row.get("avg_dur");
-        let last_at: Option<i64> = row.get("last_at");
-        let last_fire_ok = if fires > 0 {
-            // Read the most recent fire's status in a second cheap query —
-            // keeping it separate avoids a window-function dependency.
-            let last = sqlx::query(
-                "SELECT status FROM workflow_run WHERE cron_task_id=? AND trigger='scheduled'
-                 ORDER BY started_at DESC, rowid DESC LIMIT 1",
-            )
-            .bind(cron_task_id.uuid().to_string())
-            .fetch_one(&self.pool)
-            .await?;
-            Some(RunStatus::parse(&last.get::<String, _>("status")) == RunStatus::Ok)
-        } else {
-            None
-        };
-        Ok(CronEffectiveness {
-            cron_task_id,
-            fires: fires as u32,
-            ok_fires: ok_fires as u32,
-            failed_fires: failed_fires as u32,
-            effectiveness: if fires > 0 {
-                Some(ok_fires as f32 / fires as f32)
-            } else {
-                None
-            },
-            avg_duration_ms: avg_dur.map(|v| v as i64),
-            last_fire_at: last_at,
-            last_fire_ok,
-        })
-    }
-
     async fn update_workflow_spec(&self, id: WorkflowId, edit: WorkflowEdit) -> Result<()> {
         // iter 5: snapshot the CURRENT content into workflow_version BEFORE
         // the overwrite — so the evolution history survives. Read everything
@@ -2324,45 +2000,6 @@ impl Store for SqliteStore {
         .execute(&self.pool)
         .await?;
         Ok(())
-    }
-
-    async fn list_workflow_versions(
-        &self,
-        workflow_id: WorkflowId,
-    ) -> Result<Vec<WorkflowVersion>> {
-        let rows = sqlx::query(
-            "SELECT id, workflow_id, version, name, prompt, goal, phases, phase_prompts,
-                    agents_json, skills_json, loop_retries, loop_max_iter, note, created_at
-             FROM workflow_version WHERE workflow_id=? ORDER BY version DESC",
-        )
-        .bind(workflow_id.uuid().to_string())
-        .fetch_all(&self.pool)
-        .await?;
-        rows.iter()
-            .map(|r| {
-                let wid = parse_uuid(&r.get::<String, _>("workflow_id"), WorkflowId::from_uuid)
-                    .unwrap_or(WorkflowId::nil());
-                let id = parse_uuid(&r.get::<String, _>("id"), WorkflowRunId::from_uuid)
-                    .unwrap_or(WorkflowRunId::nil());
-                Ok(WorkflowVersion {
-                    id,
-                    workflow_id: wid,
-                    version: r.get::<i64, _>("version") as u32,
-                    name: r.get("name"),
-                    prompt: r.get("prompt"),
-                    goal: r.get("goal"),
-                    phases: serde_json::from_str(&r.get::<String, _>("phases"))?,
-                    phase_prompts: serde_json::from_str(&r.get::<String, _>("phase_prompts"))
-                        .unwrap_or_default(),
-                    agents: serde_json::from_str(&r.get::<String, _>("agents_json"))?,
-                    skills: serde_json::from_str(&r.get::<String, _>("skills_json"))?,
-                    loop_retries: r.get::<i64, _>("loop_retries") as u8,
-                    loop_max_iter: r.get::<i64, _>("loop_max_iter") as u8,
-                    note: r.get("note"),
-                    created_at: r.get("created_at"),
-                })
-            })
-            .collect()
     }
 
     async fn hub_usage_ranking(&self) -> Result<Vec<UsageRank>> {
@@ -3341,27 +2978,6 @@ impl Store for SqliteStore {
         .await?;
         Ok(())
     }
-
-    async fn get_app_meta(&self, key: &str) -> Result<Option<String>> {
-        let row = sqlx::query("SELECT value FROM app_meta WHERE key=?")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|r| r.get::<String, _>("value")))
-    }
-
-    async fn set_app_meta(&self, key: &str, value: &str) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO app_meta (key, value, updated_at) VALUES (?, ?, ?)
-             ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-        )
-        .bind(key)
-        .bind(value)
-        .bind(now_unix())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
 }
 
 fn parse_run_row(r: &sqlx::sqlite::SqliteRow) -> WorkflowRun {
@@ -3595,7 +3211,7 @@ fn cron_task_row(r: sqlx::sqlite::SqliteRow) -> Result<CronTask> {
     let last_run_at_raw: i64 = r.get("last_run_at");
     let target: String = r.get("target");
     let mode_text: String = r.get("mode");
-    let mode = parse_cron_mode(&mode_text, &target);
+    let mode = parse_cron_mode(&mode_text);
     Ok(CronTask {
         id,
         name: r.get("name"),

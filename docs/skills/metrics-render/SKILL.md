@@ -14,7 +14,7 @@ category: 标配
 > 官方,10,830 装);单文件自包含 + KPI 卡布局的形态借自同仓 `build-dashboard`
 > ——但**明确反转了它的造数条款**(见下方硬性约束第一条)。业界没有一件带真实性
 > 护栏的渲染 skill,这件的存在理由就是那些护栏,不是画图技巧。测评全文见
-> `plan/21-metric-render-skill-evaluation.md`。
+> `docs/archive/plan/21-metric-render-skill-evaluation.md`。
 
 ## 何时用 / 前置条件
 

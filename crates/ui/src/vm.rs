@@ -632,7 +632,6 @@ pub struct WorkflowHubRowVm {
     pub primary_agent: String,
     /// Pre-formatted, e.g. `"v3"`.
     pub version_label: String,
-    pub uses: u32,
     pub goal: String,
     pub phases_count: usize,
     /// Pre-formatted, e.g. `"重试1·迭代3"`.
@@ -694,7 +693,6 @@ pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
     let WorkflowKind::Static {
         maturity,
         version,
-        uses,
         source,
         trigger,
         ..
@@ -714,7 +712,6 @@ pub fn workflow_hub_row(spec: &WorkflowSpec) -> Option<WorkflowHubRowVm> {
             .map(|a| a.name.clone())
             .unwrap_or_else(|| "—".into()),
         version_label: format!("v{version}"),
-        uses: *uses,
         goal: spec.goal.clone(),
         phases_count: spec.phases.len(),
         loop_label: format!(
@@ -1453,29 +1450,13 @@ pub struct CronRowVm {
     /// L1(plan/11): 到点做什么——`bw_core::model::CronMode` 一直在 domain
     /// struct 上,此前从没有一个 VM 字段读出来过。
     pub mode_label: &'static str,
-    /// T10(plan/12 §5): row-front icon distinguishing all four modes at a
-    /// glance (🔄/⚙/💬; `CreateIssue` deliberately keeps no icon — see
-    /// `CronMode::icon`'s doc).
+    /// Row-front icon (📈 for `CollectMetrics`; `CreateIssue` deliberately
+    /// keeps no icon — see `CronMode::icon`'s doc).
     pub mode_icon: &'static str,
-    /// `CreateIssue` 任务的 Issue 作用阶段;`RunWorkflow` 任务恒 `None`。
+    /// `CreateIssue` 任务的 Issue 作用阶段;`None` = 到点取项目当前阶段。
     pub issue_stage_label: Option<&'static str>,
     /// `CreateIssue` 任务的 Issue 指派对象名(自由文本,同全仓 by-name 约定)。
     pub issue_assignee: Option<String>,
-    /// T10: `RunSkill`'s target line — the real skill's current name, or the
-    /// honest `"(技能已删除)"` when the referenced `SkillId` no longer
-    /// resolves against the live Skill Hub. `None` for every other mode.
-    pub skill_target_label: Option<String>,
-    /// T10: `true` only for a `RunSkill` task whose referenced skill no
-    /// longer exists — CronHub's honest "失联" marker. The row still
-    /// renders, still lets the task be paused; it just can't fire for real
-    /// until re-pointed at a live skill (or deleted).
-    pub skill_missing: bool,
-    /// T10: `RunPrompt`'s first-40-character preview (a real truncation of
-    /// `prompt_full`, never a placeholder). `None` for every other mode.
-    pub prompt_preview: Option<String>,
-    /// T10: `RunPrompt`'s full text, for the "点击展开全文" affordance.
-    /// `None` for every other mode.
-    pub prompt_full: Option<String>,
     /// PF1-3a: `CollectMetrics` 任务的采集目标名(从该项目
     /// `collect_kind='script'` 的 metric name 派生,kernel 填)。cron 卡
     /// 用它显示「采集代码仓指标(开放 Issue / 已合入 MR)· 每日」副标题。
@@ -1487,30 +1468,13 @@ pub struct CronRowVm {
     pub is_collect_metrics: bool,
 }
 
-/// A real, honest first-40-character preview — counts chars (not bytes), so
-/// CJK text truncates at a sane visual length instead of mid-codepoint.
-/// Appends `…` only when something was actually cut.
-fn preview_chars(s: &str, max: usize) -> String {
-    let trimmed = s.trim();
-    if trimmed.chars().count() <= max {
-        return trimmed.to_string();
-    }
-    let mut out: String = trimmed.chars().take(max).collect();
-    out.push('…');
-    out
-}
-
 /// `project_names` resolves `CronTask.project_id` to a display name — pass
 /// the real project rows' `(id, name)` pairs, not a hand-maintained lookup.
-/// `skills` resolves a `RunSkill` task's real `SkillId` to its current name
-/// (or an honest "deleted" reading if it no longer exists) — pass the live
-/// Skill Hub rows, not a cached/stale list. `now` feeds `cron_next_run_label`
-/// — the real scheduler's own due-check, not the always-empty
-/// `CronTask.next_run` column (nothing ever wrote it).
+/// `now` feeds `cron_next_run_label` — the real scheduler's own due-check,
+/// not the always-empty `CronTask.next_run` column (nothing ever wrote it).
 pub fn cron_row(
     c: &CronTask,
     project_names: &[(ProjectId, String)],
-    skills: &[SkillCard],
     now: OffsetDateTime,
 ) -> CronRowVm {
     let project_label = match c.project_id {
@@ -1520,17 +1484,6 @@ pub fn cron_row(
             .find(|(id, _)| *id == pid)
             .map(|(_, name)| name.clone())
             .unwrap_or_else(|| "(项目已删除)".to_string()),
-    };
-    let (skill_target_label, skill_missing) = match &c.mode {
-        CronMode::RunSkill { skill_id } => match skills.iter().find(|s| s.id == *skill_id) {
-            Some(s) => (Some(s.name.clone()), false),
-            None => (Some("(技能已删除)".to_string()), true),
-        },
-        _ => (None, false),
-    };
-    let (prompt_preview, prompt_full) = match &c.mode {
-        CronMode::RunPrompt { prompt } => (Some(preview_chars(prompt, 40)), Some(prompt.clone())),
-        _ => (None, None),
     };
     CronRowVm {
         id: c.id,
@@ -1547,51 +1500,11 @@ pub fn cron_row(
         mode_icon: c.mode.icon(),
         issue_stage_label: c.issue_stage.map(|s| s.label()),
         issue_assignee: c.issue_assignee.clone(),
-        skill_target_label,
-        skill_missing,
-        prompt_preview,
-        prompt_full,
         // PF1-3a: cron_row 无 store 访问,kernel 在 build_vm 里按项目指标派生后
         // 覆盖;这里先空,保证非 CollectMetrics 模式与未填充时为零 Vec。
         collect_targets: Vec::new(),
         // PF1-3a fixup: 稳定判别,不靠 mode_label 字符串(文案改不失效)。
         is_collect_metrics: matches!(c.mode, CronMode::CollectMetrics),
-    }
-}
-
-/// L1(plan/11): a cron task's real fire history — `bw_core::model::
-/// CronEffectiveness` computed by the store (`Store::cron_effectiveness`) but
-/// never surfaced past it. Pre-formatted the same "no evidence, never a fake
-/// 0%" way every other rate in this app already reads.
-#[derive(Clone, PartialEq, Debug)]
-pub struct CronEffectivenessVm {
-    pub fires: u32,
-    pub ok_fires: u32,
-    pub failed_fires: u32,
-    /// `"67%"`, or `"—(尚无触发)"` when `fires == 0`.
-    pub effectiveness_label: String,
-    pub avg_duration_label: String,
-    /// `"最近 07-21"`, empty when never fired.
-    pub last_fire_label: String,
-}
-
-pub fn cron_effectiveness_vm(e: &bw_core::model::CronEffectiveness) -> CronEffectivenessVm {
-    let effectiveness_label = match e.effectiveness {
-        Some(r) => format!("{:.0}%", r * 100.0),
-        None => "—(尚无触发)".to_string(),
-    };
-    let last_fire_label = e
-        .last_fire_at
-        .and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok())
-        .map(|t| format!("最近 {:02}-{:02}", u8::from(t.month()), t.day()))
-        .unwrap_or_default();
-    CronEffectivenessVm {
-        fires: e.fires,
-        ok_fires: e.ok_fires,
-        failed_fires: e.failed_fires,
-        effectiveness_label,
-        avg_duration_label: duration_label(e.avg_duration_ms),
-        last_fire_label,
     }
 }
 
@@ -1796,19 +1709,10 @@ pub fn notify_feed(
     let mut items = Vec::new();
     for c in cron_tasks {
         if c.status == CronStatus::Failed {
-            // T10: `target` is a real `SkillId`/full prompt text for the two
-            // new modes — never dump that raw payload into a notify line;
-            // `mode.label()` says honestly what kind of task this is instead.
-            let target_display = match &c.mode {
-                CronMode::RunSkill { .. } | CronMode::RunPrompt { .. } => {
-                    c.mode.label().to_string()
-                }
-                _ => c.target.clone(),
-            };
             items.push(NotifyItemVm {
                 level: NotifyLevel::Alert,
                 title: format!("定时任务「{}」失败", c.name),
-                detail: format!("目标：{} · 上次运行 {}", target_display, c.last_run),
+                detail: format!("{} · 上次运行 {}", c.mode.label(), c.last_run),
                 time_label: c.last_run.clone(),
             });
         }
@@ -1850,35 +1754,20 @@ pub fn notify_feed(
 
 // ───────────────────────── settings hub ─────────────────────────
 
-/// The real, process-wide `ClaudeCliExecutor` config — `ui` can't depend on
+/// The real, process-wide `claude` CLI config — `ui` can't depend on
 /// `bw-engine` (must stay wasm32-clean), so `app-desktop` unpacks
-/// `ClaudeCliConfig`/`PermissionMode` into primitives before calling
-/// [`settings_vm`]. No new table: this mirrors how the value already lived
-/// only in memory (env-var-seeded at boot), just now editable at runtime via
-/// `Command::SetClaudeConfig` instead of frozen for the process's lifetime.
+/// `ClaudeCliConfig` into primitives before calling [`settings_vm`]. No new
+/// table: the value lives only in memory (env-var-seeded at boot), editable
+/// at runtime via `Command::SetClaudeConfig`.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct SettingsVm {
     /// Raw text for the edit field — empty means "resolve from PATH".
     pub binary_raw: String,
     /// Display copy for the read-only summary row.
     pub binary_label: String,
-    pub max_budget_usd: f64,
-    pub max_budget_label: String,
-    /// `true` iff the mode used when a project has NOT opted into command
-    /// execution is `BypassPermissions` — off by default and flagged in the
-    /// UI, never silently defaulted on.
-    pub bypass_default: bool,
-    /// Same, for the mode used when a project HAS opted into command
-    /// execution (`allow_commands = true`).
-    pub bypass_commands: bool,
 }
 
-pub fn settings_vm(
-    binary: Option<&str>,
-    max_budget_usd: f64,
-    bypass_default: bool,
-    bypass_commands: bool,
-) -> SettingsVm {
+pub fn settings_vm(binary: Option<&str>) -> SettingsVm {
     let binary_raw = binary.unwrap_or_default().to_string();
     let binary_label = if binary_raw.trim().is_empty() {
         "自动从 PATH 解析".to_string()
@@ -1888,10 +1777,6 @@ pub fn settings_vm(
     SettingsVm {
         binary_raw,
         binary_label,
-        max_budget_usd,
-        max_budget_label: format!("${max_budget_usd:.2}"),
-        bypass_default,
-        bypass_commands,
     }
 }
 

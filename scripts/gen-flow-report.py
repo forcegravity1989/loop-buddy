@@ -24,7 +24,7 @@
   1. 不装 python@3.11 —— 会让这个工具依赖一台机器上不一定有的非默认解释
      器,对一个把"可复现证据"当命根子的仓库来说是长期脆弱性,不值。
   2. 不装 pip 第三方包(如 `tomli`)—— 违反本仓库 python 脚本 stdlib-only
-     的纪律(`scripts/make_demo_video.py` 除外那是历史遗留,且本任务 brief
+     的纪律(`docs/archive/scripts/make_demo_video.py` 除外那是历史遗留,且本任务 brief
      明确要求 stdlib only)。
   3. 不手写一个通用 TOML 解析器 —— 过度工程;而且解析细节一旦有偏差,报告
      可能悄悄读错 expect/sql 却不自知,这和本仓库"绝不假绿"的纪律直接冲突。

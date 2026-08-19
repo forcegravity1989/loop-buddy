@@ -20,7 +20,7 @@
 //! 再跑真库**——它会真的写你的 metric 表。
 
 use bw_app::{App, Command};
-use bw_engine::{ClaudeCliConfig, Engine, MockExecutor, PermissionMode};
+use bw_engine::ClaudeCliConfig;
 use bw_store::{SqliteStore, Store};
 use std::sync::Arc;
 
@@ -39,16 +39,7 @@ async fn main() {
     let only: Vec<String> = args.collect();
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&db_path).await.expect("open db"));
-    let mut app = App::new(
-        store.clone(),
-        Engine::new(Arc::new(MockExecutor::new())),
-        ClaudeCliConfig {
-            binary: None,
-            max_budget_usd: 0.0,
-            default_mode: PermissionMode::AcceptEdits,
-            commands_mode: PermissionMode::AcceptEdits,
-        },
-    );
+    let mut app = App::new(store.clone(), ClaudeCliConfig::default());
     app.dispatch(Command::Boot).await.expect("boot");
 
     let projects = store.list_projects().await.expect("list_projects");

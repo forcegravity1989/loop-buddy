@@ -43,10 +43,11 @@
 | **V2-②-B** | `docs/v2-prototype/same-project-multiple-workbenches.md` §8 | Phase B:采集补齐近 30 天 observation(`history` series)+ Buddy `collect_stats.py`;与 Issue 3 折线配对;横轴为周结束日 MM-DD | 已落地 |
 | **V2-②-A-IntentUX** | `docs/v2-prototype/same-project-multiple-workbenches.md` §6.2 | 后来者选仓后远端探测 project.toml → Intent 只读预填(方案 A);首到者仍手填 | 已落地 |
 | **V2-②-I** | `docs/v2-prototype/same-project-multiple-workbenches.md` §6.2 / §3.3 | 仓平台 open Issue 单向读回重建本地行(可 ▶跑);创建收尾+手动同步;远端已关且本机未完成→Cancelled 不上板;本机 Done 保留可续聊;Done 永不自动 | 已落地 |
-| **V3-OD-embed** | `docs/v3-prototype/README.md` | 原型进度内嵌本机 Open Design 首页(管道发现 URL + iframe);提示词注入不在本轮 | v3 分支,未 push |
+| **V3-OD-embed** | `docs/v3-prototype/README.md` | 原型进度内嵌本机 Open Design 首页(管道发现 URL + iframe);提示词注入不在本轮 | 已随 v3 分支经 PR #99 合入 main(2026-08-13) |
 | **V3-cursor-cli** | `docs/v3-prototype/cursor-agent-executor.md` | Issue 调度接 Cursor Agent CLI(`agent`,非 `cursor.exe`);配置面=本机默认+智能体执行引擎 | 设计已记,未落地 |
 | **V3-cowelink-sidecar** | `docs/v3-prototype/cowelink-web-sidecar.md` | cowelink 长出本机网页旁路,buddy iframe 内嵌;不弹窗、不 HWND | 设计已记,未落地 |
 | **V3-use-fix** | `docs/v3-prototype/onboard-list-and-claude-resolve.md` | V3 实践使用:安装器/探测认 claude.cmd + 创建流拉 999/可搜索下拉 + 程序图标;纳入选分支不在本轮 | 本轮落地 |
+| **减负-1 … 减负-21** | `docs/LEFTOVERS.md`「当前开着」表 + 文末「减负重构收据」 | 2026-08-17/18 减负重构会话的滞后清单(冗余功能 / 结构债 / 已删收据),从 `docs/BACKLOG.md` 并入时沿用原序号;中文前缀,不与任何字母系列撞车 | 1、2 已做;其余按表内「阶段」列排 |
 
 散见的一次性编号(如 plan/16 的 P8、plan/17 的 C5)不单独列行,以所在文件的上下文为准。
 

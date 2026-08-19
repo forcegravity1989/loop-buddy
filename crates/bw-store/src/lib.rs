@@ -19,11 +19,11 @@
 use async_trait::async_trait;
 use bw_core::derive::AmberBand;
 use bw_core::model::{
-    AgentCard, AgentRef, Author, Cadence, ClaudeConversation, Connector, ConnectorStatus,
-    CronEffectiveness, CronMode, CronStatus, CronTask, HubSource, Issue, IssuePriority,
-    IssueStatus, KnowledgeSource, LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness,
-    RunStatus, RunTrigger, SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind,
-    UsageRank, WorkflowKind, WorkflowRun, WorkflowRunAnalytics, WorkflowSpec, WorkflowVersion,
+    AgentCard, AgentRef, Cadence, ClaudeConversation, Connector, ConnectorStatus, CronMode,
+    CronStatus, CronTask, HubSource, Issue, IssuePriority, IssueStatus, KnowledgeSource,
+    LoopConfig, Maturity, MaturityPeriod, PhaseMeta, Readiness, RunStatus, RunTrigger,
+    SessionStatus, Signal, SkillCard, SkillRef, SourceKind, StageKind, UsageRank, WorkflowKind,
+    WorkflowRun, WorkflowSpec,
 };
 use bw_core::stage_catalog::StageOrigin;
 use bw_core::{
@@ -222,9 +222,9 @@ pub struct NewWorkflowRun<'a> {
     pub session_id: Option<SessionId>,
     pub trigger: RunTrigger,
     pub started_at: i64,
-    /// The cron task that fired this run, if any (iter 4). `None` for manual
-    /// runs; `Some` only on the scheduler's auto-fire path, so a per-task
-    /// effectiveness aggregate can attribute outcomes correctly.
+    /// The cron task that fired this run. Always `None` since 2026-08-18: the
+    /// scheduler only creates Issues / collects metrics and never opens a run
+    /// row; the column stays for the rows the retired「到点跑」modes wrote.
     pub cron_task_id: Option<CronTaskId>,
     /// Snapshot of the spec's shape at run time (iter 3) — what this run is
     /// actually executing, frozen before the engine runs. `''` is valid
@@ -613,12 +613,6 @@ pub struct SessionRow {
     pub status: SessionStatus,
 }
 
-#[derive(Clone, Debug)]
-pub struct MessageRow {
-    pub role: Author,
-    pub text: String,
-}
-
 // ───────────────────────────── the trait ─────────────────────────────
 
 #[async_trait]
@@ -630,9 +624,9 @@ pub trait Store: Send + Sync {
     /// after-the-fact editing/correction. Irreversible; the caller is
     /// responsible for any user-facing confirmation.
     async fn delete_project(&self, id: ProjectId) -> Result<()>;
-    /// 硬删一条阶段记录（`session` 行 + 其 `message`）。issue 行留下；
-    /// `claude_conversation` 不删——看板 ▶跑 / 点卡唤醒走那张表，不读
-    /// 已删的 session。不再写 `issue.session_id`（该列已 DROP）。
+    /// 硬删一条阶段记录(`session` 行;`message` 表已随旧引擎 DROP,无子行)。
+    /// issue 行留下;`claude_conversation` 不删——看板 ▶跑 / 点卡唤醒走那张
+    /// 表,不读已删的 session。不写 `issue.session_id`(该列已 DROP)。
     async fn delete_session(&self, id: SessionId) -> Result<()>;
     async fn set_project_phase(&self, id: ProjectId, phase: Readiness) -> Result<()>;
     async fn set_project_cycle(&self, id: ProjectId, cycle: MaturityPeriod) -> Result<()>;
@@ -706,16 +700,6 @@ pub trait Store: Send + Sync {
     /// recompute 重新派生。调用方负责在其后触发 recompute,好让项目/阶段的
     /// 上卷把这条的进/出反映出来。
     async fn set_metric_archived(&self, metric: MetricId, archived: bool) -> Result<()>;
-    /// Week-plan edit: update a metric's target + this week's driver, keeping
-    /// the previous target as `last_target`. Touches no value and no signal —
-    /// recompute re-derives against the new target.
-    async fn update_week_plan(
-        &self,
-        metric: MetricId,
-        new_target: &str,
-        last_target: &str,
-        driver: &str,
-    ) -> Result<()>;
     /// Append-only — the sole birthplace of a value.
     async fn append_observation(
         &self,
@@ -756,23 +740,9 @@ pub trait Store: Send + Sync {
     ) -> Result<()>;
 
     async fn ensure_session(&self, s: NewSession) -> Result<()>;
-    async fn append_message(&self, session_id: SessionId, role: Author, text: &str) -> Result<()>;
-
     /// **The sole signal writer** — reads observations + targets, derives via
     /// `bw_core`, writes every `signal` / `hit` cache for the project.
     async fn recompute_signals(&self, project_id: ProjectId, now: OffsetDateTime) -> Result<()>;
-
-    /// Record a weekly-review snapshot. `derived` is the machine truth; an
-    /// optional `human_override` is stored *alongside* it (never overwriting) so
-    /// the divergence stays auditable (plan `§2.5`).
-    async fn annotate_weekly_review(
-        &self,
-        project_id: ProjectId,
-        week_of: OffsetDateTime,
-        derived: Signal,
-        human_override: Option<Signal>,
-        reason: &str,
-    ) -> Result<()>;
 
     // reads
     async fn get_project(&self, id: ProjectId) -> Result<Option<ProjectRow>>;
@@ -789,56 +759,10 @@ pub trait Store: Send + Sync {
     /// `limit` — the real feed behind Activity Hub.
     async fn list_recent_handoffs(&self, limit: u32) -> Result<Vec<GlobalHandoffRow>>;
     async fn list_sessions(&self, project_id: ProjectId) -> Result<Vec<SessionRow>>;
-    async fn session_messages(&self, session_id: SessionId) -> Result<Vec<MessageRow>>;
-
     // ── hub library (global — no active-project gate) ──
     async fn create_workflow_spec(&self, w: NewWorkflowSpec) -> Result<()>;
     async fn list_workflow_specs(&self) -> Result<Vec<WorkflowSpec>>;
     async fn get_workflow_spec(&self, id: WorkflowId) -> Result<Option<WorkflowSpec>>;
-    /// Promote a `Dynamic` spec to a new `Static` hub entry: mints a fresh row
-    /// (`maturity: Fresh, version: 1, uses: 0`), copying prompt/goal/phases/
-    /// agents/skills/stage_ref/loop_config from `from`. The session that
-    /// inspired it is untouched — this is purely additive, never a mutation
-    /// of run history.
-    async fn promote_workflow(
-        &self,
-        new_id: WorkflowId,
-        from: &WorkflowSpec,
-        source: HubSource,
-    ) -> Result<()>;
-    /// Bump a hub spec's `uses` counter by 1 — called when it's run via
-    /// `RunHubWorkflow`.
-    async fn record_workflow_use(&self, id: WorkflowId) -> Result<()>;
-    /// T16.5 (GH#54): raw `phases`/`phase_prompts` column overwrite for one
-    /// `workflow_spec` row — deliberately bypasses `update_workflow_spec`'s
-    /// "optimize" path (no version bump, no `workflow_version` snapshot
-    /// written, `kind_json`/`name`/`prompt`/`goal`/`agents_json`/
-    /// `skills_json` untouched). This is the one-shot legacy-migration's own
-    /// narrow tool: refresh a built-in stage template's phase metadata from
-    /// the current playbook without disturbing its `uses`/`version`/other
-    /// track-record columns. Business judgement (which row, which values)
-    /// lives in `bw-app`'s `legacy_migration` module, never here — this is a
-    /// dumb column write, same "store 无业务判断" rule every other `Store`
-    /// method already follows.
-    async fn refresh_workflow_template_phases(
-        &self,
-        id: WorkflowId,
-        phases: Vec<PhaseMeta>,
-        phase_prompts: Vec<String>,
-    ) -> Result<()>;
-    /// T14.5 (2026-07-24, GH#59): delete one `workflow_spec` row outright.
-    /// Mechanics only — same "store 无业务判断" split as `delete_skill`/
-    /// `delete_agent`: bw-app decides which rows are safe (directory-import
-    /// source, zero `workflow_run` rows, zero `uses`, unreferenced by any
-    /// `run_workflow`-mode cron target, not a built-in stage template), this
-    /// is purely the mechanical single-table delete once that decision is
-    /// made. Deliberately does NOT cascade into `workflow_run`/
-    /// `workflow_version` — both already document their own no-FK "outlives
-    /// its spec being deleted" design (see `schema.sql`: "the history is the
-    /// point"), the same real precedent `delete_agent`'s own doc comment
-    /// notes for `issue.assignee`.
-    async fn delete_workflow_spec(&self, id: WorkflowId) -> Result<()>;
-
     // ── workflow_run: append-only execution telemetry (iter 1) ──────────────
     /// Insert a fresh run row at `status = Running`, returning the minted id
     /// the caller passes to [`Store::settle_workflow_run`] when the engine
@@ -872,32 +796,12 @@ pub trait Store: Send + Sync {
         phases_completed: u32,
         error: &str,
     ) -> Result<()>;
-    /// Recorded runs for one workflow, newest first — the series optimization
-    /// analytics (iter 2) aggregates over.
-    async fn list_workflow_runs(&self, workflow_id: WorkflowId) -> Result<Vec<WorkflowRun>>;
-    /// All recorded runs across every workflow, newest first — for a global
-    /// "what actually ran" feed / cross-workflow analytics.
-    async fn list_all_workflow_runs(&self, limit: u32) -> Result<Vec<WorkflowRun>>;
-    /// Aggregate analytics for one workflow over its run history (iter 2).
-    /// Returns a zeroed-name row with `total_runs = 0` if the workflow has
-    /// never run — never an error, so a caller can show "未运行" honestly.
-    async fn workflow_analytics(&self, workflow_id: WorkflowId) -> Result<WorkflowRunAnalytics>;
-    /// Effectiveness of one cron schedule over its auto-fired runs (iter 4).
-    /// Manual runs of the same workflow are excluded — this is purely the
-    /// schedule's track record. `fires = 0` (never fired) is not an error.
-    async fn cron_effectiveness(&self, cron_task_id: CronTaskId) -> Result<CronEffectiveness>;
     /// Revise an existing **Static** spec's authored content ("优化" a hub
     /// workflow) — bumps `version`; `uses`/`maturity`/`source`/`scope`/
     /// `trigger` are preserved untouched from the row being edited. Errors
     /// if `id` resolves to a `Dynamic` spec (nothing durable to edit) or to
     /// no row at all.
     async fn update_workflow_spec(&self, id: WorkflowId, edit: WorkflowEdit) -> Result<()>;
-    /// The frozen content-history of a Static workflow (iter 5), newest
-    /// version first — every prior prompt/goal/phases/agents/skills, each
-    /// with the reason it was replaced. Empty for a spec never updated.
-    async fn list_workflow_versions(&self, workflow_id: WorkflowId)
-        -> Result<Vec<WorkflowVersion>>;
-
     /// Global usage ranking of every hub workflow by real run history
     /// (iter 6) — hottest (most-run) first, coldest (never-run) last.
     async fn hub_usage_ranking(&self) -> Result<Vec<UsageRank>>;
@@ -1130,16 +1034,6 @@ pub trait Store: Send + Sync {
     /// the project wall's "open work" badge. Same predicate as the A4 handoff
     /// risky-guard, so the two numbers never disagree.
     async fn count_open_issues(&self, project_id: ProjectId) -> Result<i64>;
-
-    // ── app_meta: tiny key/value table for one-shot app-level markers ──
-    /// T14 (2026-07-24, plan/12 §10 v1.1): read a marker's value, `None` if
-    /// never set (including "table exists but this key was never written" —
-    /// the honest default for every pre-T14 DB and every fresh one).
-    async fn get_app_meta(&self, key: &str) -> Result<Option<String>>;
-    /// Upsert a marker. Used by the legacy-shell migration to record
-    /// "already ran" so a second boot is a real zero-op, not a re-scan that
-    /// happens to find nothing.
-    async fn set_app_meta(&self, key: &str, value: &str) -> Result<()>;
 }
 
 // ───────────────────────── text codecs (shared) ─────────────────────────
@@ -1211,41 +1105,23 @@ pub(crate) fn parse_session_status(s: &str) -> SessionStatus {
     }
 }
 
-/// The `cron_task.mode` discriminant text. T10: `RunSkill`/`RunPrompt` carry
-/// data now, but that data lives in `cron_task.target` (see `parse_cron_mode`
-/// below), so this stays a plain by-reference discriminant lookup — no
-/// column, no migration.
+/// The `cron_task.mode` discriminant text(手工往返,不走 JSON)。
 pub(crate) fn cron_mode_text(m: &CronMode) -> &'static str {
     match m {
-        CronMode::RunWorkflow => "run_workflow",
-        CronMode::RunSkill { .. } => "run_skill",
-        CronMode::RunPrompt { .. } => "run_prompt",
         CronMode::CreateIssue => "create_issue",
         CronMode::CollectMetrics => "collect_metrics",
     }
 }
 
-/// Reconstruct a full [`CronMode`] from the two raw columns that carry it:
-/// `mode` (the discriminant) and `target` (T10's payload column — a real
-/// `SkillId` as text for `run_skill`, the raw prompt for `run_prompt`; unused
-/// by the two pre-T10 variants, whose own `target` semantics are untouched).
-/// An unparseable `run_skill` target (should never happen — the id is only
-/// ever written by this same code) reads back as the nil id rather than
-/// panicking — `App::tick_scheduler`'s `get_skill` lookup then honestly
-/// reports "not found", same as an actually-deleted skill.
-pub(crate) fn parse_cron_mode(mode: &str, target: &str) -> CronMode {
+/// `cron_task.mode` 文本 → [`CronMode`]。认不出的文本(包括 2026-08-18 已删的
+/// `run_workflow`/`run_skill`/`run_prompt`,以及任何将来的脏值)一律落到
+/// `CreateIssue`——最接近的存活语义,也是 `CronMode::default()`;老库里这三种
+/// 文本在 `open()` 时会被真正改写成 `create_issue`(见 `sqlite.rs`),这里的
+/// 兜底只是防守。
+pub(crate) fn parse_cron_mode(mode: &str) -> CronMode {
     match mode {
-        "create_issue" => CronMode::CreateIssue,
         "collect_metrics" => CronMode::CollectMetrics,
-        "run_skill" => CronMode::RunSkill {
-            skill_id: uuid::Uuid::parse_str(target)
-                .map(SkillId::from_uuid)
-                .unwrap_or_else(|_| SkillId::from_uuid(uuid::Uuid::nil())),
-        },
-        "run_prompt" => CronMode::RunPrompt {
-            prompt: target.to_string(),
-        },
-        _ => CronMode::RunWorkflow,
+        _ => CronMode::CreateIssue,
     }
 }
 

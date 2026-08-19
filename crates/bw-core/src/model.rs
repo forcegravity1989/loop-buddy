@@ -382,15 +382,6 @@ pub enum SessionStatus {
     Done,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Author {
-    /// Builder (the human) — right, dark bubble.
-    Builder,
-    /// Agent — left, white bubble.
-    Agent,
-}
-
 // ─────────────────────────── workflow ───────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -440,7 +431,7 @@ pub const BW_STANDARD_LIBRARY: &str = "bw-standard";
 /// `agents/<name>.md`) — the project's own runtime/maintenance assets, not a
 /// BW-authored library and not an external curated import. Scoped to the
 /// project by `project_id`; registered-visible only (种A: 不进任何注入下拉
-/// — issue standard_skill / issue assignee / workflow crew / cron RunSkill).
+/// — issue standard_skill / issue assignee / workflow crew).
 /// Like any `Official` library other than `bw-standard`, it counts as
 /// `is_external_official()` → plan/16 spec findings degrade to Advisory
 /// (project's own text, honestly shown, never rewritten in place).
@@ -468,7 +459,7 @@ impl HubSource {
     /// plan/渠道6: `true` iff this row was scanned in from a project's own
     /// workspace (`BW_PROJECT_ASSETS_LIBRARY`). Such rows are registered-
     /// visible only (种A) — they must not appear in any injection picker
-    /// (issue standard_skill / assignee / workflow crew / cron RunSkill). A
+    /// (issue standard_skill / assignee / workflow crew). A
     /// VM projects this onto an `is_project_assets` bool because the UI tier
     /// doesn't see `HubSource`, only `source_label` (which is "官方选型" for
     /// every `Official` library and can't discriminate this one).
@@ -699,234 +690,6 @@ impl<'de> Deserialize<'de> for PhaseMeta {
     }
 }
 
-/// T9 (plan/12 §4): the real runtime verdict an **Evaluator** phase renders on
-/// the work it just reviewed — parsed from the phase's actual output text, never
-/// machine-guessed. This is the runtime companion to the design-time
-/// [`PhaseMeta`]/[`PhaseRole`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Verdict {
-    /// The reviewed work passes the gate — the workflow proceeds.
-    Pass,
-    /// The reviewed work is rejected; the `u8` is the evaluator's **proposed**
-    /// 0-based target phase to restart from. A **Dynamic** workflow honours this
-    /// proposal; a **Static** one ignores it and uses the phase's declared
-    /// [`PhaseMeta::reject_to_phase`] instead (plan/12 §4).
-    RejectToPhase(u8),
-}
-
-/// The structured decision block an Evaluator phase must emit (verdict + a
-/// human-readable reason). Produced by [`parse_phase_outcome`] from real output.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PhaseOutcome {
-    pub verdict: Verdict,
-    pub reason: String,
-}
-
-/// The machine-parseable verdict contract appended to every Evaluator phase's
-/// prompt (by `bw_engine`). It tells a real executor exactly how to render its
-/// decision so [`parse_phase_outcome`] can read it back. Kept next to the parser
-/// so the emit-side format and the parse-side format can never drift apart.
-pub fn verdict_contract_suffix() -> &'static str {
-    "\n\n────────────\n【评审裁决 · 机器解析(必须严格执行)】\n\
-     完成本次评审后,在输出的最末尾单独成行给出结构化裁决,二选一:\n\
-     • 通过 —— 输出一行:\n\
-     VERDICT: PASS\n\
-     • 打回 —— 输出两行(REJECT_TO_PHASE 后接要打回到的阶段的 0 基索引):\n\
-     VERDICT: REJECT_TO_PHASE=<阶段索引>\n\
-     REASON: <一句话说明打回原因>\n\
-     解析只认最后一次出现的 VERDICT / REASON 行。缺少可解析的 VERDICT 行会被判为\
-     评审失败(绝不会被当作通过)。\n"
-}
-
-/// Parse an Evaluator phase's real output for its structured [`PhaseOutcome`].
-///
-/// Robust to LLM chatter: scans every line and keeps the **last** line whose
-/// trimmed, case-insensitive form starts with `VERDICT:` (and likewise the last
-/// `REASON:` line) — so an evaluator that quotes the contract mid-output, then
-/// renders its true verdict at the end, still reads correctly.
-///
-/// Accepted forms (case-insensitive on the marker and the `PASS`/`REJECT`
-/// token): `VERDICT: PASS`; `VERDICT: REJECT_TO_PHASE=2` (also `= 2`, `:2`, or a
-/// bare trailing number). Returns **`None`** when there is no well-formed
-/// `VERDICT:` line, or a reject verdict carries no parseable target — an honest
-/// parse failure the caller MUST treat as a failed review, never a default pass
-/// (plan/12 §4, T9).
-pub fn parse_phase_outcome(text: &str) -> Option<PhaseOutcome> {
-    let mut verdict_value: Option<String> = None;
-    let mut reason: Option<String> = None;
-    for raw in text.lines() {
-        let line = raw.trim();
-        let upper = line.to_ascii_uppercase();
-        if upper.starts_with("VERDICT:") {
-            // Slice the ORIGINAL line after its first ':' so casing/spacing of
-            // the value is preserved for reason/target extraction.
-            if let Some(colon) = line.find(':') {
-                verdict_value = Some(line[colon + 1..].trim().to_string());
-            }
-        } else if upper.starts_with("REASON:") {
-            if let Some(colon) = line.find(':') {
-                reason = Some(line[colon + 1..].trim().to_string());
-            }
-        }
-    }
-    let value = verdict_value?;
-    let value_upper = value.to_ascii_uppercase();
-    if value_upper == "PASS" {
-        return Some(PhaseOutcome {
-            verdict: Verdict::Pass,
-            reason: reason.unwrap_or_default(),
-        });
-    }
-    if value_upper.starts_with("REJECT") {
-        // Extract the target index: the first contiguous run of ASCII digits in
-        // the value (`REJECT_TO_PHASE=2` → `2`). No digits ⇒ un-actionable
-        // reject ⇒ honest parse failure (never guess a target).
-        let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
-        let target = digits.parse::<u8>().ok()?;
-        return Some(PhaseOutcome {
-            verdict: Verdict::RejectToPhase(target),
-            reason: reason.unwrap_or_default(),
-        });
-    }
-    // A VERDICT line with an unrecognised token is not a pass — fail honestly.
-    None
-}
-
-/// T17 (plan/12 §10 v1.1#4): marker lines wrapping the JSON payload a
-/// "解析为流程图" parse call must emit — the multi-line analogue of T9's
-/// single-line `VERDICT:` marker (a `phases` array can't fit the "last
-/// matching line" scheme a scalar verdict uses). [`parse_workflow_phases`]
-/// takes the **last** `WORKFLOW_PHASES_BEGIN…WORKFLOW_PHASES_END` block in the
-/// output, so an executor that echoes the contract's own worked example
-/// before rendering its real answer still reads back correctly.
-pub const WORKFLOW_PHASES_BEGIN: &str = "WORKFLOW_PHASES_BEGIN";
-pub const WORKFLOW_PHASES_END: &str = "WORKFLOW_PHASES_END";
-
-/// The machine-parseable phase-structure contract appended to a workflow-
-/// parse call's prompt (by `bw-app`'s `App::parse_workflow_content`) — the
-/// T17 counterpart to [`verdict_contract_suffix`]. Kept next to
-/// [`parse_workflow_phases`] so the emit-side format and the parse-side
-/// format can never drift apart.
-pub fn workflow_parse_contract_suffix() -> &'static str {
-    "\n\n────────────\n【工作流阶段解析 · 机器解析(必须严格执行)】\n\
-     阅读以上文档的真实内容,识别工作流的阶段序列,在输出的最末尾单独一段给出下面\
-     两条标记行包裹的 JSON(只这一段,不要额外解释,不要 Markdown 代码块围栏):\n\
-     WORKFLOW_PHASES_BEGIN\n\
-     {\"phases\":[{\"name\":\"阶段名\",\"role\":\"generator\",\"reject_to_phase\":null,\"agent\":null,\"skills\":[]}]}\n\
-     WORKFLOW_PHASES_END\n\
-     字段值域(严格,不接受值域外的任何变体):\n\
-     • name:阶段名称,字符串,不能为空\n\
-     • role:必须是以下四个英文小写值之一:generator(产出)/ evaluator(评审门,\
-     唯一允许带 reject_to_phase 的角色)/ optimizer(打磨已有产出)/ neutral(其余情况)\n\
-     • reject_to_phase:只有 role=evaluator 时才允许非 null,值为打回目标阶段在\
-     phases 数组里的 0 基索引(整数,必须落在数组范围内);role 不是 evaluator 时必\
-     须是 null\n\
-     • agent:该阶段真实绑定的 Agent 名称(字符串),或 null 表示沿用工作流默认执行者\n\
-     • skills:该阶段真实绑定的 Skill 名称数组,可以是空数组 [] 表示沿用工作流默认技能\n\
-     示例(两阶段:「起草」生成,「评审」打回第 0 阶段):\n\
-     WORKFLOW_PHASES_BEGIN\n\
-     {\"phases\":[{\"name\":\"起草\",\"role\":\"generator\",\"reject_to_phase\":null,\"agent\":\"writer\",\"skills\":[\"drafting\"]},{\"name\":\"评审\",\"role\":\"evaluator\",\"reject_to_phase\":0,\"agent\":null,\"skills\":[]}]}\n\
-     WORKFLOW_PHASES_END\n\
-     解析只认最后一次出现的 WORKFLOW_PHASES_BEGIN…WORKFLOW_PHASES_END 区块。区块缺\
-     失、JSON 不合法、或任何字段值域不合法,都会被判为解析失败——绝不会被当作部分\
-     成功采纳,绝不会被按关键词猜测结构。\n"
-}
-
-/// One phase entry as it appears on the wire inside a
-/// `WORKFLOW_PHASES_BEGIN`/`END` block — `role` reuses [`PhaseRole`]'s own
-/// `Deserialize` (already `#[serde(rename_all = "snake_case")]`), so an
-/// out-of-domain `role` string fails with serde's own honest "unknown
-/// variant" message instead of a hand-rolled one.
-#[derive(Deserialize)]
-struct ParsedPhaseOnDisk {
-    name: String,
-    role: PhaseRole,
-    #[serde(default)]
-    reject_to_phase: Option<u8>,
-    #[serde(default)]
-    agent: Option<String>,
-    #[serde(default)]
-    skills: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct ParsedPhasesPayload {
-    phases: Vec<ParsedPhaseOnDisk>,
-}
-
-/// Parse a workflow-parse call's real output for its structured phase list
-/// (T17, plan/12 §10 v1.1#4) — the JSON-block analogue of
-/// [`parse_phase_outcome`]. Takes the **last**
-/// `WORKFLOW_PHASES_BEGIN…WORKFLOW_PHASES_END` block in `text` (robust to an
-/// executor that quotes the contract's own worked example before rendering
-/// its real answer), strict-parses the JSON inside, then validates every
-/// field's value domain. Returns `Err(reason)` — a human-readable, honest
-/// failure description — on ANY problem: no block found, no paired end
-/// marker, malformed JSON, an empty `phases` array, a blank `name`, an
-/// out-of-domain `role` (surfaced by serde itself), a `reject_to_phase` on a
-/// non-`evaluator` phase, or a `reject_to_phase` index outside the array's
-/// own bounds. The caller MUST treat `Err` as "未解析,仅文本" and leave the
-/// workflow's stored `phases` completely untouched — never a partial
-/// adoption, never a keyword-guessed default structure.
-pub fn parse_workflow_phases(text: &str) -> Result<Vec<PhaseMeta>, String> {
-    let Some(begin_at) = text.rfind(WORKFLOW_PHASES_BEGIN) else {
-        return Err(format!(
-            "输出中没有找到 {WORKFLOW_PHASES_BEGIN} 标记 —— 未解析,仅文本"
-        ));
-    };
-    let after_begin = &text[begin_at + WORKFLOW_PHASES_BEGIN.len()..];
-    let Some(end_rel) = after_begin.find(WORKFLOW_PHASES_END) else {
-        return Err(format!(
-            "找到 {WORKFLOW_PHASES_BEGIN} 但没有找到配对的 {WORKFLOW_PHASES_END} —— 未解析,仅文本"
-        ));
-    };
-    let json_str = after_begin[..end_rel].trim();
-    if json_str.is_empty() {
-        return Err(format!(
-            "{WORKFLOW_PHASES_BEGIN}/{WORKFLOW_PHASES_END} 区块为空 —— 未解析,仅文本"
-        ));
-    }
-    let payload: ParsedPhasesPayload = serde_json::from_str(json_str)
-        .map_err(|e| format!("JSON 解析失败:{e} —— 未解析,仅文本"))?;
-    if payload.phases.is_empty() {
-        return Err("phases 数组为空 —— 未解析,仅文本".to_string());
-    }
-    let n = payload.phases.len();
-    let mut out = Vec::with_capacity(n);
-    for (i, p) in payload.phases.into_iter().enumerate() {
-        let name = p.name.trim().to_string();
-        if name.is_empty() {
-            return Err(format!("第 {i} 项 name 为空 —— 未解析,仅文本"));
-        }
-        let role = p.role;
-        if let Some(idx) = p.reject_to_phase {
-            if role != PhaseRole::Evaluator {
-                return Err(format!(
-                    "第 {i} 项「{name}」role={role:?} 但携带 reject_to_phase —— 只有 evaluator 阶段允许 —— 未解析,仅文本"
-                ));
-            }
-            if idx as usize >= n {
-                return Err(format!(
-                    "第 {i} 项「{name}」reject_to_phase={idx} 越界(阶段总数 {n})—— 未解析,仅文本"
-                ));
-            }
-        }
-        out.push(PhaseMeta {
-            name,
-            role,
-            reject_to_phase: p.reject_to_phase,
-            agent: p.agent.filter(|a| !a.trim().is_empty()),
-            skills: p
-                .skills
-                .into_iter()
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-        });
-    }
-    Ok(out)
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowSpec {
     pub id: WorkflowId,
@@ -1072,83 +835,6 @@ pub struct WorkflowRun {
 /// -deleted)) | Err(为何不可用的诚实原因))`. The shared shape between app
 /// state (assembled at detail-open time) and the view layer.
 pub type RunChanges = (WorkflowRunId, Result<Vec<(String, u32, u32)>, String>);
-
-/// Per-workflow aggregate over its run history — the read-side shape optimization
-/// intelligence consumes. Every field is derived from settled `workflow_run`
-/// rows; a workflow with no runs returns `success_rate = None` (not 0 —
-/// "unknown" must not masquerade as "always fails", mirroring `Signal::Unknown`).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkflowRunAnalytics {
-    pub workflow_id: WorkflowId,
-    pub workflow_name: String,
-    /// Total rows ever recorded (running + ok + failed).
-    pub total_runs: u32,
-    pub ok_runs: u32,
-    pub failed_runs: u32,
-    pub running_runs: u32,
-    /// `ok_runs / settled_runs`. `None` when no run has settled yet — "no
-    /// evidence", not "0%". The single most important optimization input.
-    pub success_rate: Option<f32>,
-    /// Mean `duration_ms` over settled runs. `None` if none settled.
-    pub avg_duration_ms: Option<i64>,
-    /// Median `duration_ms` over settled runs — robust to one slow outlier,
-    /// a better "typical cost" than the mean for optimization decisions.
-    pub median_duration_ms: Option<i64>,
-    /// Unix seconds of the most recent run (any status), if any.
-    pub last_run_at: Option<i64>,
-    pub last_status: Option<RunStatus>,
-}
-
-/// Effectiveness of one cron schedule (iter 4): of the times this task's
-/// target auto-fired, how many succeeded? The answer to "is this schedule
-/// actually doing anything useful, or just burning runs?" — the gating input
-/// for cadence auto-tune (iter 10) and the self-improving loop (iter 18).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CronEffectiveness {
-    pub cron_task_id: CronTaskId,
-    /// Scheduled fires attributed to this task (manual runs of the same
-    /// workflow are excluded — this is purely the schedule's track record).
-    pub fires: u32,
-    pub ok_fires: u32,
-    pub failed_fires: u32,
-    /// `ok_fires / fires`. `None` when the task has never fired — "no
-    /// evidence", mirroring `success_rate`.
-    pub effectiveness: Option<f32>,
-    /// Mean scheduled-run duration — the schedule's typical cost.
-    pub avg_duration_ms: Option<i64>,
-    pub last_fire_at: Option<i64>,
-    pub last_fire_ok: Option<bool>,
-}
-
-/// One frozen version of a Static workflow's content (iter 5) — snapshotted
-/// the instant before `UpdateWorkflowSpec` overwrites it. Together the series
-/// is the spec's evolution: what changed, when, and (via `note`) why.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkflowVersion {
-    pub id: WorkflowRunId,
-    pub workflow_id: WorkflowId,
-    /// The `Static.version` this snapshot was taken at (pre-update).
-    pub version: u32,
-    pub name: String,
-    pub prompt: String,
-    pub goal: String,
-    /// T8: structured (see `WorkflowSpec.phases`); same serde-compat with
-    /// pre-T8 plain-string-array snapshots.
-    pub phases: Vec<PhaseMeta>,
-    /// Per-phase instructions frozen with the rest of the content — an
-    /// evolution history that dropped them would misreport what old versions
-    /// actually executed. Empty for pre-playbook snapshots.
-    #[serde(default)]
-    pub phase_prompts: Vec<String>,
-    pub agents: Vec<AgentRef>,
-    pub skills: Vec<SkillRef>,
-    pub loop_retries: u8,
-    pub loop_max_iter: u8,
-    /// Caller's reason for the change that replaced this version (the "优化"
-    /// note). `''` when none was given.
-    pub note: String,
-    pub created_at: i64,
-}
 
 /// One workflow's position in the global usage ranking (iter 6) — the
 /// answer to "which workflows are actually earning their keep?" The hottest
@@ -1323,52 +1009,6 @@ pub fn stage_template_workflow(kind: StageKind) -> WorkflowSpec {
     }
 }
 
-/// The drafting run for the creation flow: one workflow, phases matching the
-/// "正在按方法论起草体系" loading copy. Runs through the same `Engine` as any
-/// other workflow, but dispatched via `Command::RunDraftWorkflow` (plan/14
-/// C13, D8 回锁) — that command *always* forces the shared `MockExecutor`
-/// regardless of whether the active project has a real configured
-/// workspace, so this never routes to a real `claude -p` call; the true
-/// system-drafting agent work belongs to the standard-Issue trio (plan/13
-/// D8) instead. `MockExecutor` produces a clearly-labeled mock transcript;
-/// nothing here is injected into the editable draft fields as fact.
-///
-/// Phases (2026-07-24, plan/14 C13): the maturity period (`MaturityPeriod`)
-/// is a chip the user picks by hand on the Questions 卡 *before* this run
-/// even starts — it is never a phase the machine "judges", so there is no
-/// "周期判定" phase here. The three phases below are an honest description
-/// of what the Review 卡 that follows actually shows: a north-star
-/// candidate, a leading/lagging metric framework, and the Prototype stage
-/// lighting up as active.
-#[cfg(feature = "idgen")]
-pub fn drafting_workflow() -> WorkflowSpec {
-    WorkflowSpec {
-        id: WorkflowId::new(),
-        name: "创建 · 体系起草".into(),
-        kind: WorkflowKind::Dynamic {
-            origin: "创建流程".into(),
-            stage: StageKind::Prototype.label().into(),
-        },
-        prompt: "北极星起草 → 指标框架 → 阶段激活".into(),
-        goal: "产出可编辑的北极星候选 + 指标框架草案".into(),
-        stage_ref: Some(StageKind::Prototype.index()),
-        phases: vec![
-            PhaseMeta::neutral("北极星起草"),
-            PhaseMeta::neutral("指标框架"),
-            PhaseMeta::neutral("阶段激活"),
-        ],
-        phase_prompts: vec![],
-        agents: vec![],
-        skills: vec![],
-        loop_config: LoopConfig {
-            retries: 1,
-            max_iter: 1,
-        },
-        project_id: None,
-        content: String::new(),
-    }
-}
-
 // ─────────────────────────── skill / agent hub ───────────────────────────
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1533,73 +1173,52 @@ pub enum CronStatus {
     Paused,
 }
 
-/// What a [`CronTask`] does when due (A1; extended T10, plan/12 §5).
-/// `RunWorkflow` (the default) resolves `target` as a hub workflow and runs
-/// it — the original behavior. `RunSkill`/`RunPrompt` (T10) also really
-/// execute (through the same engine/executor path `RunWorkflow` uses), just
-/// against a single ad-hoc prompt instead of a full hub workflow's phases:
-/// `RunSkill` takes its prompt from a real Skill's `content` (a genuine
-/// `SkillId` reference — never free-text name matching, so a deleted/renamed
-/// skill can never silently resolve to the wrong row); `RunPrompt` runs a bare
-/// prompt with no entity involved at all. `CreateIssue` is autopilot: it
-/// mints a stage-scoped Issue. No-hijack by construction: a `CreateIssue` task
-/// never auto-runs anything, it only creates work — unaffected by T10.
+/// What a [`CronTask`] does when due. 2026-08-18 起只剩两种,而且都
+/// **不执行任何工作**——这是产品铁律「定时任务只自动建活,绝不自动完成活」
+/// 落到类型上的样子:
 ///
-/// Wire note: `CronMode` itself is never serialized as JSON on disk — the
-/// `cron_task.mode`/`cron_task.target` TEXT columns already round-trip it by
-/// hand (`bw_store::cron_mode_text`/`parse_cron_mode`), so the two new
-/// variants need no schema migration: `target` (already free text, already
-/// unused by `CreateIssue`) doubles as the payload column — a skill's real
-/// id (text) for `RunSkill`, the raw prompt text for `RunPrompt`. The two
-/// pre-T10 modes' storage is untouched.
+/// - [`CronMode::CreateIssue`](autopilot):到点造一张阶段内的 Issue,状态
+///   Normal,等人(或人点 ▶跑)去干。
+/// - [`CronMode::CollectMetrics`](采集器,plan/13 D7):到点把真实数据
+///   (GitHub 查询等)拉进项目指标当追加观测。采集是观测不是活,不结算任何
+///   东西。
+///
+/// 历史:曾有 `RunWorkflow`/`RunSkill`/`RunPrompt` 三种「到点跑」模式,它们的
+/// 执行体是旧的聊天式工作流引擎(`claude -p` 批处理);2026-08-18 随引擎一起
+/// 删除(真实日常库里三种模式零条,`docs/superpowers/specs/2026-08-17-…` §6)。
+/// 老库里残留的 `cron_task.mode IN ('run_workflow','run_skill','run_prompt')`
+/// 由 `bw_store` 打开时迁移成 `create_issue`——最接近的存活语义:「到点建一张
+/// 同名的活」;`parse_cron_mode` 对认不出的文本也落到 `CreateIssue`。
+///
+/// Wire note: `CronMode` 不以 JSON 落盘,`cron_task.mode` TEXT 列由
+/// `bw_store::cron_mode_text`/`parse_cron_mode` 手工往返。
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CronMode {
+    /// autopilot:到点只建一件活,绝不自动跑。
     #[default]
-    RunWorkflow,
-    /// T10: run a real Skill's `content` as the prompt when due.
-    RunSkill {
-        skill_id: SkillId,
-    },
-    /// T10: run a bare prompt when due — no entity involved.
-    RunPrompt {
-        prompt: String,
-    },
     CreateIssue,
-    /// C7 · 采集器 (plan/13 D7): pull real data (GitHub queries) into the
-    /// project's metrics as append-only observations. No-hijack like
-    /// `CreateIssue`: collecting is *observation*, never *work* — it never
-    /// runs a workflow and never settles anything, so it can auto-fire
-    /// without breaching 「Done 永不自动」.
+    /// 采集器 (plan/13 D7): pull real data (GitHub queries) into the
+    /// project's metrics as append-only observations. Collecting is
+    /// *observation*, never *work* — it never runs anything and never
+    /// settles anything, so it can auto-fire without breaching 「Done 永不自动」.
     CollectMetrics,
 }
 
 impl CronMode {
-    /// L1(plan/11); extended T10(RunSkill/RunPrompt)+ C7(CollectMetrics)。
-    /// Cron 详情卡要如实标出「到点做什么」——运行工作流/技能/Prompt、只建
-    /// 一件活(autopilot,no-hijack)、还是采集指标(pull → 观测)。
+    /// Cron 详情卡如实标出「到点做什么」。
     pub fn label(&self) -> &'static str {
         match self {
-            CronMode::RunWorkflow => "运行工作流",
-            CronMode::RunSkill { .. } => "运行技能",
-            CronMode::RunPrompt { .. } => "运行 Prompt",
             CronMode::CreateIssue => "建活(autopilot · 不自动跑)",
             CronMode::CollectMetrics => "采集指标(脚本 → 观测)",
         }
     }
 
-    /// T10(plan/12 §5): the row-front icon that lets CronHub's list tell the
-    /// four modes apart at a glance. `CreateIssue` deliberately keeps the
-    /// pre-T10 "no icon" look (the issue asked to leave it 沿用现状) — its
-    /// distinctiveness already comes from `label()`'s explicit "autopilot"
-    /// text, not an icon.
+    /// CronHub 列表行首图标。`CreateIssue` 无图标(靠 `label()` 的 autopilot
+    /// 字样区分);采集用与「立即同步」同族的图标。
     pub fn icon(&self) -> &'static str {
         match self {
-            CronMode::RunWorkflow => "🔄",
-            CronMode::RunSkill { .. } => "⚙",
-            CronMode::RunPrompt { .. } => "💬",
             CronMode::CreateIssue => "",
-            // C7(合流): 采集是观测不是活,用与「立即同步」同族的图标。
             CronMode::CollectMetrics => "📈",
         }
     }
@@ -1620,16 +1239,9 @@ impl CronStatus {
 pub struct CronTask {
     pub id: CronTaskId,
     pub name: String,
-    /// What it runs — free text (e.g. a workflow/routine name); not a hard FK
-    /// since a cron target may be a hub workflow, a connector sync, or
-    /// something outside this app entirely. T10 (plan/12 §5): also doubles as
-    /// the payload column for the two new [`CronMode`] variants — a
-    /// `RunSkill` task stores its referenced `SkillId` here (as text), a
-    /// `RunPrompt` task stores its raw prompt text here. `mode` is always the
-    /// typed, authoritative read of "what this really is"; `target` is the
-    /// storage-level string both `mode` and this field derive from (see
-    /// `bw_store::parse_cron_mode`) — unused (empty) for `CreateIssue`, as
-    /// before.
+    /// 历史字段:曾是「到点跑什么」的自由文本(工作流名 / 技能 id / 裸
+    /// prompt)。「到点跑」三种模式 2026-08-18 已删,现存两种模式都不读它,
+    /// 新建任务一律写空串;列保留只为老库读回不崩。
     pub target: String,
     pub schedule: Cadence,
     /// `None` = 全部项目 (all projects), matching the prototype's own
@@ -1642,13 +1254,11 @@ pub struct CronTask {
     /// `last_run` display string — this is what `cron_due` compares against,
     /// never a parsed-back label.
     pub last_run_at: Option<OffsetDateTime>,
-    /// A1: what this task does when due. `RunWorkflow` (default) runs `target`;
-    /// `CreateIssue` mints a stage-scoped Issue (autopilot, no-hijack);
-    /// `RunSkill`/`RunPrompt` (T10) really execute too — see `CronMode`'s doc.
+    /// 到点做什么(建活 / 采集),见 [`CronMode`]。
     #[serde(default)]
     pub mode: CronMode,
-    /// A1: the stage a `CreateIssue` task scopes its Issue to (`None` for
-    /// `RunWorkflow` tasks).
+    /// A1: the stage a `CreateIssue` task scopes its Issue to (`None` =
+    /// 项目当前阶段;`CollectMetrics` 不用).
     #[serde(default)]
     pub issue_stage: Option<StageKind>,
     /// A1: agent NAME a `CreateIssue` task assigns its Issue to (`None` =

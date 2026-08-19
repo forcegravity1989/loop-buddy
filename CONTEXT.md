@@ -12,6 +12,10 @@
 
 ### 人与角色
 
+**Builders' Workbench / BW / buddy / loop-buddy**:
+同一件东西的几个称呼:**Builders' Workbench(BW)**是产品名;**buddy** 是产品里那个 AI 队友/程序对自己的称呼(系统提示词、`docs/buddy/`、`docs/v1~v3-prototype/` 里通篇这么叫);**loop-buddy** 是 GitHub 仓库真名。写文档时说产品用 BW,说「它替你做了什么」用 buddy,都可以——别把它们当三个不同的东西。
+_Avoid_: 把 buddy 理解成某个具体队友的名字(它是程序整体的自称);workbuddy(另一款产品)。
+
 **Builder / 构建者**:
 使用工作台的那个人——端到端 own 一个项目的单人系统设计者,产品的主角。全局唯一,专指人类。
 _Avoid_: user、owner、开发者;不要用 "Builder" 指构建阶段的角色(那是**构建师**)。
@@ -361,7 +365,7 @@ _Avoid_: 保存(口语)、sync。
 _Avoid_: 清单(一次性勾完就扔的才叫清单)、backlog 混称。
 
 **遗留清单 / LEFTOVERS**:
-实践中冒出、但不在当前窗口解的问题的唯一完整清单(`docs/v1-prototype/LEFTOVERS.md`),每条带产生窗口、现象、未决点、处置。与「台账」是近亲:台账登记设计缺口,遗留清单收实践溢出物。
+实践中冒出、但不在当前窗口解的问题的唯一完整清单(`docs/LEFTOVERS.md`,全产品一份;2026-08-17 起从 `docs/v1-prototype/LEFTOVERS.md` 升格,旧路径只剩指针),每条带产生窗口、现象、未决点、处置。减负重构并入的冗余功能/结构债条目以「减负-N」编号也在这里。与「台账」是近亲:台账登记设计缺口,遗留清单收实践溢出物。
 _Avoid_: 散落在各设计文档里各记各的(已归拢,读遗留只看这一份)。
 
 **留痕 / Append-only record**:
@@ -393,7 +397,7 @@ _Avoid_: 同步(对账有明确的正本方向,不是双向合并)。
 _Avoid_: runner、driver;和「监理」混用(指挥器干活,监理盯着重试)。
 
 **监理 / Supervisor script**:
-盯着一个容易被网关抖动打断的长流程、失败自动重试的守护脚本(如 `supervise-real-demo.sh`)。要求幂等:重复跑不产生重复数据。
+盯着一个容易被网关抖动打断的长流程、失败自动重试的守护脚本。要求幂等:重复跑不产生重复数据。仓里的实例 `supervise-real-demo.sh` 已随旧 `claude -p` 引擎于 2026-08-18 删除(指挥器 `real_demo` 现只走 mock,不再需要监理);词保留给将来真跑长流程时用。
 _Avoid_: 重试循环(监理还负责判断状态、决定停不停)。
 
 **棒次 / 交接件 (Baton leg / Handoff doc)**:

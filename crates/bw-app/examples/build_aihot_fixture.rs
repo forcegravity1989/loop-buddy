@@ -30,7 +30,7 @@
 
 use bw_app::{App, Command, Event};
 use bw_core::model::CONNECTOR_KIND_GIT_REPO;
-use bw_engine::{ClaudeCliConfig, Engine, MockExecutor};
+use bw_engine::ClaudeCliConfig;
 use bw_store::{SqliteStore, Store};
 use std::sync::Arc;
 
@@ -93,11 +93,7 @@ async fn main() {
     std::fs::copy(&src, &out).expect("copy source db");
 
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&out).await.expect("open output db"));
-    let mut app = App::new(
-        store.clone(),
-        Engine::new(Arc::new(MockExecutor::new())),
-        ClaudeCliConfig::default(),
-    );
+    let mut app = App::new(store.clone(), ClaudeCliConfig::default());
     app.dispatch(Command::Boot).await.expect("boot");
     let mut sub = app.subscribe();
 

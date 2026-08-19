@@ -14,26 +14,20 @@
 //! status) via the existing `issue_run_tail` / `finalize_run` path.
 //!
 //! The [`InteractiveExecutor`] trait is the seam Phase 2 widened (PTY/xterm/
-//! hook); Phase 1's concrete impl is a plain OS terminal spawn, still used as
-//! the non-Windows fallback.
+//! hook). `run_skill_pty` (the desktop shell's path on every platform) delegates
+//! to [`crate::pty_backend`]; `run_skill` (plain OS terminal spawn) remains for
+//! headless callers with `pty_enabled == false`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "macos"))]
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bw_core::playbook::PlaybookCtx;
 use tokio::sync::mpsc;
 
-// V1 Issue2 W2 (§9): Windows uses conpty-oxide (portable-pty 0.9.0's ConPTY
-// impl doesn't deliver child stdout to the reader). The blocking Command +
-// Size are imported here for the windows run_skill_pty impl; non-Windows has
-// no run_skill_pty override (falls back to the InteractiveExecutor trait
-// default — PTY not supported, caller uses run_skill). bw-engine keeps
-// portable-pty as a non-Windows keepalive dep only (see Cargo.toml).
-#[cfg(windows)]
-use conpty_oxide::{blocking::Command as PtyCommand, Size};
-
+use crate::pty_backend::PtyBackend;
 use crate::{ExecError, RunCtx};
 
 // ─── PtyInput (V1 Issue2 Phase2b) ───────────────────────────────────────
@@ -187,26 +181,21 @@ fn child_env_from_process() -> HashMap<String, String> {
         .collect()
 }
 
-fn apply_child_env(cmd: &mut impl EnvSink) {
+pub(crate) fn apply_child_env(cmd: &mut impl EnvSink) {
     for var in NESTED_EXEC_ENV {
         cmd.remove_env(var);
     }
 }
 
 /// Small sink so PTY and tokio Command share the same strip list without
-/// replaying the full process map (that rebuild trips windows-spawn).
-trait EnvSink {
+/// replaying the full process map (that rebuild trips windows-spawn). The
+/// PTY command types implement it in `pty_backend` (conpty-oxide on Windows,
+/// portable-pty on unix) — same list, same rule on every platform.
+pub(crate) trait EnvSink {
     fn remove_env(&mut self, key: &str);
 }
 
 impl EnvSink for tokio::process::Command {
-    fn remove_env(&mut self, key: &str) {
-        self.env_remove(key);
-    }
-}
-
-#[cfg(windows)]
-impl EnvSink for PtyCommand {
     fn remove_env(&mut self, key: &str) {
         self.env_remove(key);
     }
@@ -225,8 +214,8 @@ impl EnvSink for PtyCommand {
 ///
 /// No `-p`/`--print` (interactive), no `--max-budget-usd` (interactive
 /// sessions are user-paced, no per-call cap). The env is inherited from
-/// the process but the nested-execution vars are stripped (same as
-/// [`crate::ClaudeCliExecutor`]) so the child uses its own CLI config.
+/// the process but the nested-execution vars are stripped so the child uses
+/// its own CLI config.
 pub fn build_startup_plan(
     agent: &TuiAgentConfig,
     position_prompt: &str,
@@ -540,6 +529,9 @@ pub struct InteractiveCliExecutor {
     /// in real time, so this is generous. On timeout we declare
     /// `completed = true` (the user may still be working — we can't block
     /// the run forever, and the worktree's git state is the real evidence).
+    /// Only the Windows/Linux `run_skill` branches wait on the child; the
+    /// macOS branch (osascript) cannot, so the field is compiled out there.
+    #[cfg(not(target_os = "macos"))]
     timeout: Duration,
 }
 
@@ -547,6 +539,7 @@ impl InteractiveCliExecutor {
     pub fn new() -> Self {
         Self {
             claude_binary: None,
+            #[cfg(not(target_os = "macos"))]
             timeout: Duration::from_secs(60 * 60), // 1 hour
         }
     }
@@ -647,168 +640,31 @@ impl InteractiveExecutor for InteractiveCliExecutor {
         self.run_skill(plan, ctx).await
     }
 
-    /// V1 Issue2 W2 (§9): spawn `claude` in a PTY (conpty-oxide on Windows)
-    /// and stream bytes. Replaces the portable-pty 0.9.0 impl whose ConPTY
-    /// backend doesn't deliver child stdout to the reader (see §9).
+    /// Spawn the agent in a PTY and stream bytes. The platform split
+    /// (conpty-oxide on Windows, portable-pty on macOS/Linux) lives in
+    /// [`crate::pty_backend`]; this method only resolves the binary override
+    /// and delegates.
     ///
-    /// Flow (conpty-oxide `blocking::Command` + `Session::into_parts`):
-    ///  - `Command::new(binary).args().env().current_dir().spawn()` → `Session`
-    ///  - `Session::into_parts()` → `{ child, output, input, controller }`
-    ///  - `output` (OwnedReadHalf: std::io::Read) → spawn_blocking read loop →
-    ///    `bytes_tx` (drains ConPTY output so the pipe can't fill —
-    ///    `Child::wait` deadlocks otherwise, per conpty-oxide module docs)
-    ///  - `input` (OwnedWriteHalf: std::io::Write) ← `PtyInput::Bytes`
-    ///  - `controller.resize(Size)` ← `PtyInput::Resize`
-    ///  - §9.5: on first run (`plan.submit_prompt`), send `\r` after a brief
-    ///    ready-wait to submit the positional skill body (claude interactive
-    ///    positional argv doesn't auto-submit in buddy's GLM-gateway env).
-    ///  - Child exit (EOF on output) → kill (idempotent) → return completed.
-    ///
-    /// Non-Windows has no override here → the trait default returns
-    /// `Err("PTY not supported")`. Only a caller with `pty_enabled == false`
-    /// (headless/examples) falls back to `run_skill`; **the desktop shell
-    /// wires `App::with_pty()` unconditionally**, so on macOS/Linux an
-    /// interactive run fails outright with that error rather than opening a
-    /// system terminal. V1 is Windows-only in practice — see LEFTOVERS
-    /// `V1-P1`. portable-pty remains a non-Windows keepalive dep (Cargo.toml).
-    #[cfg(windows)]
+    /// Flow: read loop drains PTY output → `bytes_tx`; `input_rx` bytes are
+    /// written to the PTY, resizes applied; on first run (`plan.submit_prompt`)
+    /// a `\r` is sent after a brief ready-wait to submit the positional skill
+    /// body (claude interactive positional argv doesn't auto-submit in buddy's
+    /// GLM-gateway env); child exit → kill (idempotent) → return completed.
     async fn run_skill_pty(
         &self,
         plan: &LaunchPlan,
         _ctx: &RunCtx,
         bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
-        mut input_rx: mpsc::UnboundedReceiver<PtyInput>,
+        input_rx: mpsc::UnboundedReceiver<PtyInput>,
     ) -> Result<SkillOutput, ExecError> {
-        use std::io::{Read, Write};
         let binary = self.claude_binary.as_deref().unwrap_or(&plan.binary);
-
-        // Build the spawn command. conpty-oxide's Command mirrors
-        // std::process::Command (builder takes &mut self). The child's stdio
-        // is the pseudoconsole (handles set to INVALID_HANDLE_VALUE — a
-        // redirected parent cannot leak its stdio into the child), and no
-        // handles are inherited (a leaked output pipe copy would keep the
-        // session from ever reaching EOF).
-        if !plan.cwd.as_os_str().is_empty() && !plan.cwd.is_dir() {
-            return Err(ExecError::Failed(format!(
-                "conpty-oxide spawn failed: 工作目录不存在 {}（无法启动 {binary}）",
-                plan.cwd.display()
-            )));
-        }
-        if !std::path::Path::new(binary).is_file() && std::path::Path::new(binary).is_absolute() {
-            return Err(ExecError::Failed(format!(
-                "conpty-oxide spawn failed: 找不到执行器 {binary}"
-            )));
-        }
-
-        // `.cmd`/`.bat` are not PE images — CreateProcess fails unless we
-        // host them with cmd.exe. win_cmd::tokio_cmd does the same wrap;
-        // ConPTY must not go through that helper (CREATE_NO_WINDOW).
-        let mut cmd = if crate::win_cmd::is_windows_script(binary) {
-            let mut c = PtyCommand::new("cmd.exe");
-            c.arg("/c");
-            c.arg(binary);
-            c
-        } else {
-            PtyCommand::new(binary)
-        };
-        cmd.args(&plan.args);
-        apply_child_env(&mut cmd);
-        cmd.current_dir(&plan.cwd);
-
-        // Spawn the managed ConPTY session. The returned Session owns its
-        // pseudoconsole, I/O, child process, and a kill-on-close Job. into_parts
-        // separates ownership without detaching the child.
-        let session = cmd.spawn().map_err(|e| {
-            let os = e.io_error().map(|i| format!("; {i}")).unwrap_or_default();
-            ExecError::Failed(format!(
-                "conpty-oxide spawn failed: {e}{os}; cwd={}",
-                plan.cwd.display()
-            ))
-        })?;
-        let parts = session.into_parts();
-        let mut child = parts.child;
-        let output = parts.output; // moved into the read thread below
-        let mut writer = parts.input; // held until teardown (dropping it ends the session)
-        let controller = parts.controller; // Clone; resize/clear control
-
-        // Read loop (blocking, spawn_blocking): drains ConPTY output → bytes_tx.
-        // MUST run on a separate thread: conpty-oxide's module docs warn that
-        // Child::wait (and the console host generally) can stop making progress
-        // once conout's pipe buffer fills, so a caller that blocks without
-        // draining output can deadlock.
-        let read_tx = bytes_tx.clone();
-        let read_handle = tokio::task::spawn_blocking(move || {
-            let mut reader = output;
-            let mut buf = [0u8; 8192];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break, // EOF — child exited (broken pipe → Ok(0))
-                    Ok(n) => {
-                        if read_tx.send(buf[..n].to_vec()).is_err() {
-                            break; // App dropped the receiver — stop reading
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        // §9.5: claude interactive positional argv doesn't auto-submit in
-        // buddy's GLM-gateway environment — the TUI starts and waits for
-        // Enter. On first run (submit_prompt), wait briefly for the TUI to
-        // load, then send `\r` to submit the positional skill body. The read
-        // loop drains concurrently so the pipe can't fill during this wait.
-        // Resume (submit_prompt=false) has no positional — nothing to submit.
-        let submit_delay = tokio::time::sleep(Duration::from_millis(2000));
-        tokio::pin!(submit_delay);
-        let mut submitted = !plan.submit_prompt;
-
-        tokio::pin!(read_handle);
-        loop {
-            tokio::select! {
-                // Read loop finished (child exited / EOF / App dropped bytes_rx).
-                _ = &mut read_handle => break,
-                // User input from the App (typed bytes or resize).
-                input = input_rx.recv() => match input {
-                    Some(PtyInput::Bytes(bytes)) => {
-                        // OwnedWriteHalf: bytes written become console input;
-                        // line-oriented programs expect `\r\n`. flush is a no-op.
-                        let _ = writer.write_all(&bytes);
-                        let _ = writer.flush();
-                    }
-                    Some(PtyInput::Resize { cols, rows }) => {
-                        // Size::try_new takes (cols, rows) — cols first.
-                        if let Ok(size) = Size::try_new(cols, rows) {
-                            let _ = controller.resize(size);
-                        }
-                    }
-                    None => break, // App dropped the input sender — stop.
-                },
-                // Submit the positional prompt after the TUI loads (first run).
-                _ = &mut submit_delay, if !submitted => {
-                    submitted = true;
-                    let _ = writer.write_all(b"\r");
-                    let _ = writer.flush();
-                }
-            }
-        }
-
-        // Teardown: kill the child tree (idempotent — no-op if it already
-        // exited via EOF). This unblocks the read thread if it's still
-        // draining (kill → child exit → output EOF → read thread returns).
-        // `writer` and `controller` then drop, closing conin and tearing down
-        // the pseudoconsole — held until now so a still-running child isn't
-        // terminated before we've drained its output.
-        let _ = child.kill();
-        let _ = tokio::time::timeout(Duration::from_secs(2), read_handle).await;
-
-        Ok(SkillOutput {
-            completed: true,
-            summary: "(pty session ended)".to_string(),
-        })
+        crate::pty_backend::active()
+            .run(binary, plan, bytes_tx, input_rx)
+            .await
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 impl InteractiveCliExecutor {
     /// Wait for a spawned child process to exit, with a wall-clock timeout.
     /// On normal exit → `completed = true`. On timeout → `completed = true`
@@ -859,7 +715,7 @@ fn shell_quote(s: &str) -> String {
 /// interactive path's downstream (SyncMetricsFile, artifact scan) has
 /// something to chew on in tests / no-claude environments.
 ///
-/// The counterpart of [`crate::MockExecutor`] for the interactive path:
+/// The self-labeled mock for the interactive path:
 /// its sole purpose is to cheaply verify the interactive plumbing works
 /// end-to-end without a real `claude` CLI or gateway. Never pretend to be
 /// real execution — the 【mock】 label is honest.
@@ -933,6 +789,13 @@ impl InteractiveExecutor for MockInteractiveExecutor {
 /// not a hot path; `tokio::fs` would need the `fs` feature (not enabled in
 /// bw-engine's tokio dep, and Phase 1 adds no new features).
 fn write_mock_metrics_toml(cwd: &Path) -> std::io::Result<()> {
+    // No workspace (empty cwd) → nothing to write. Without this guard a mock
+    // run for a workspace-less project writes `.bw/metrics.toml` into
+    // whatever the process cwd happens to be (seen: `crates/bw-app/` during
+    // `cargo test`).
+    if cwd.as_os_str().is_empty() {
+        return Ok(());
+    }
     let bw_dir = cwd.join(".bw");
     std::fs::create_dir_all(&bw_dir)?;
     let metrics_path = bw_dir.join("metrics.toml");

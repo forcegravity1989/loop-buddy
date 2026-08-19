@@ -132,27 +132,6 @@ CREATE TABLE IF NOT EXISTS session (
     rev         INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS message (
-    id          TEXT PRIMARY KEY,
-    session_id  TEXT NOT NULL REFERENCES session(id),
-    seq         INTEGER NOT NULL,
-    role        TEXT NOT NULL,                   -- 'builder' | 'agent'
-    text        TEXT NOT NULL,
-    created_at  INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_message_session_seq ON message(session_id, seq);
-
--- Weekly snapshot + auditable human override (never silently overwrites derived).
-CREATE TABLE IF NOT EXISTS weekly_review (
-    id              TEXT PRIMARY KEY,
-    project_id      TEXT NOT NULL REFERENCES project(id),
-    week_of         INTEGER NOT NULL,
-    derived_signal  TEXT NOT NULL,
-    human_override  TEXT,
-    override_reason TEXT,
-    created_at      INTEGER NOT NULL
-);
-
 -- Append-only stage-transition audit log (体系重构 v2 §07③: 交棒清单 checked or
 -- not, the handoff still happens — just marked risky). `Ops → Prototype` is
 -- the reflux that closes the loop, same table, no special-casing.
