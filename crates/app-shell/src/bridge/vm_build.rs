@@ -97,6 +97,15 @@ pub fn note_of(events: &[Event]) -> Option<String> {
             human_edited.len()
         ),
         Event::WeekPlanStarted { week, .. } => format!("{week} 的周计划文件已写出,等你确认草稿"),
+        Event::IssueMerged {
+            pr_number, merged, ..
+        } => {
+            if *merged {
+                format!("MR #{pr_number} 已合入,活已完成")
+            } else {
+                "这张活没有可合的 MR,只标了完成".into()
+            }
+        }
         Event::RunCancelled { was_live, .. } => {
             if *was_live {
                 "已停止。这张活还停在「进行中」,再点▶跑就接回去。".into()

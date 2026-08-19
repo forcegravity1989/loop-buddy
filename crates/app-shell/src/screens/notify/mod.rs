@@ -35,9 +35,10 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
 
             {section(
                 "等人评审合入",
-                "跑完的活最远只到这一步。点进去确认完成,活才算结清。",
+                "跑完的活最远只到这一步。「合入并完成」先真的把 MR 合了,再把活推到完成 —— \
+                 合入没成就整条不算数,活留在原地可以重试。没挂远端的项目只走「完成」那一步。",
                 &n.in_review,
-                Some(IssueStatus::Done),
+                true,
                 bridge,
             )}
             div { style: "height:16px;" }
@@ -45,7 +46,7 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
                 "卡住了",
                 "如实停在原地,可以重试。卡在哪写在活的说明里。",
                 &n.blocked,
-                None,
+                false,
                 bridge,
             )}
         }
@@ -56,7 +57,7 @@ fn section(
     title: &str,
     hint: &str,
     items: &[CardItemVm],
-    action: Option<IssueStatus>,
+    mergeable: bool,
     bridge: &Bridge,
 ) -> Element {
     rsx! {
@@ -72,14 +73,14 @@ fn section(
                 div { style: "font-size:13px;color:{theme::INK_4};padding:6px 0;", "没有。" }
             }
             for c in items.iter() {
-                {row(c, action, bridge)}
+                {row(c, mergeable, bridge)}
             }
         }
     }
 }
 
-fn row(c: &CardItemVm, action: Option<IssueStatus>, bridge: &Bridge) -> Element {
-    let b = bridge.clone();
+fn row(c: &CardItemVm, mergeable: bool, bridge: &Bridge) -> Element {
+    let (b, b2) = (bridge.clone(), bridge.clone());
     let id = c.id;
     rsx! {
         div {
@@ -89,11 +90,19 @@ fn row(c: &CardItemVm, action: Option<IssueStatus>, bridge: &Bridge) -> Element 
             span { style: "font-family:{theme::MONO};font-size:11px;color:{theme::INK_4};", "#{c.number}" }
             span { style: "font-size:13px;flex:1;", "{c.title}" }
             span { style: "{theme::chip(theme::CARD_ALT, theme::INK_3)}", "{c.category}" }
-            if let Some(to) = action {
+            if mergeable {
+                button {
+                    style: "{theme::btn_ghost()}padding:6px 12px;font-size:12px;",
+                    onclick: move |_| b.cmd(Command::TransitionIssue {
+                        id,
+                        to: IssueStatus::Done,
+                    }),
+                    "只标完成"
+                }
                 button {
                     style: "{theme::btn_primary()}padding:6px 14px;font-size:12px;",
-                    onclick: move |_| b.cmd(Command::TransitionIssue { id, to }),
-                    "确认完成"
+                    onclick: move |_| b2.cmd(Command::MergeAndSettle { id }),
+                    "合入并完成"
                 }
             }
         }

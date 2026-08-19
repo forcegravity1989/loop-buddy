@@ -135,6 +135,9 @@ pub enum Command {
     /// 返回空事件,不是错误。
     TickScheduler { project_id: ProjectId },
 
+    /// 通知屏的「合入并完成」。先真的合 MR,再把活推「完成」——顺序反了,
+    /// 合入失败就会留下一张已完成、改动却还挂在分支上的活。
+    MergeAndSettle { id: IssueId },
     /// ■停止:关掉这件活的内嵌终端。**状态原地不动**——停下来既不是失败也
     /// 不是完成,人随时能再点▶跑接回去。
     CancelRun { id: IssueId },
@@ -246,6 +249,13 @@ pub enum Event {
     IssueCacheRefreshed {
         week: String,
         updated: u32,
+    },
+    /// 合入并完成走完了。`merged=false` = 这张活本来就没有 MR 可合(本地项目
+    /// 或者还没开 PR),只走了「完成」那一步。
+    IssueMerged {
+        id: IssueId,
+        pr_number: u32,
+        merged: bool,
     },
     /// ■停止按下去之后。`was_live=false` = 本来就没有活着的终端可停。
     RunCancelled {

@@ -195,6 +195,7 @@ impl App {
                 self.mark_notify_seen(project_id, at).await
             }
             Command::TickScheduler { project_id } => self.tick_scheduler(project_id).await,
+            Command::MergeAndSettle { id } => self.merge_and_settle(id).await,
             Command::CancelRun { id } => self.cancel_run(id).await,
             Command::TerminalInput {
                 conversation_id,

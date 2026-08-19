@@ -17,7 +17,7 @@
 use super::{App, AppError, Result};
 use crate::command::Event;
 use crate::isoweek;
-use crate::model::{IssueId, IssueKind, IssueOrigin, ProjectId};
+use crate::model::{IssueId, IssueKind, IssueOrigin, IssueStatus, ProjectId};
 use crate::repo::issue_policy_file;
 
 /// 运作活①的 `workflow` 字段值,同时是它在 `.claude/skills/` 里的剧本名
@@ -127,6 +127,44 @@ impl App {
             week,
         });
         events.extend(self.run_issue(id).await?);
+        Ok(events)
+    }
+}
+
+impl App {
+    /// 「合入并完成」:先真的把 MR 合了,再把活推到「完成」。
+    ///
+    /// 顺序不能反。先推完成再合入的话,合入失败就留下一张「已完成」但改动还
+    /// 挂在分支上的活 —— 账目和仓对不上,而且完成是结清过的,回不去。
+    ///
+    /// **合入失败就整条失败**,活留在「评审中」原地,人看得见原话、可以重试。
+    /// 没挂远端或者这张活没有 MR,就只走「完成」那一步(本地项目本来就没有
+    /// 可合的东西),并在事件里如实说没合。
+    pub(super) async fn merge_and_settle(&mut self, id: IssueId) -> Result<Vec<Event>> {
+        let issue = self.issue_or_err(id).await?;
+        let project = self
+            .store
+            .project(issue.project_id)
+            .await?
+            .ok_or_else(|| AppError::NoSuchProject(issue.project_id.uuid().to_string()))?;
+
+        let merged = if issue.pr_number > 0 && project.has_remote() {
+            bw_engine::github::merge_pr(&project.remote_path, issue.pr_number)
+                .await
+                .map_err(|e| AppError::Exec(format!("合入 MR #{} 没成:{e}", issue.pr_number)))?;
+            true
+        } else {
+            false
+        };
+
+        let mut events = vec![Event::IssueMerged {
+            id,
+            pr_number: issue.pr_number,
+            merged,
+        }];
+        // 合入这件事排在前面,界面上那句话说的才是人刚做的动作;结清事件跟在
+        // 后面,读回时两条都在。
+        events.extend(self.transition_issue(id, IssueStatus::Done).await?);
         Ok(events)
     }
 }
