@@ -5,7 +5,7 @@
 //!
 //! 这一层不算任何东西:每个字段都是内核那边现算好塞进来的。壳只渲染和转发意图。
 
-use bw_v4::model::{IssueId, IssueStatus, ProjectId, Signal};
+use bw_v4::model::{ConversationId, IssueId, IssueStatus, ProjectId, Signal};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Vm {
@@ -77,6 +77,9 @@ pub struct ProjectVm {
     pub pending_drafts: Vec<String>,
     pub releases: Vec<ReleaseVm>,
     pub sessions: Vec<SessionVm>,
+    /// 会话屏选中的那一个(按活)。
+    pub session_open: Option<IssueId>,
+    pub workbench: WorkbenchVm,
     pub notify: NotifyVm,
     pub config: ConfigVm,
     pub kb: KbVm,
@@ -181,12 +184,65 @@ pub struct ReleaseVm {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionVm {
     pub issue_id: IssueId,
+    pub conversation_id: ConversationId,
     pub issue_number: u32,
     pub issue_title: String,
+    pub issue_status: String,
     pub branch: String,
     pub workspace_path: String,
     /// claude 的 resume id。空 = 还没捕获到,如实留空。
     pub session_id: String,
+    /// PTY 进程还活着没有。**只有这一个信号是真的**——「等你输入」那种细粒度
+    /// 状态要靠 claude 的 hook 回传,还没接,所以不显示,不猜。
+    pub live: bool,
+}
+
+/// 会话屏中栏三个页签。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionTab {
+    #[default]
+    Terminal,
+    /// 从文件树点开的只读视图。
+    File,
+    /// 从改动文件列表点开的单文件 diff。
+    Diff,
+}
+
+/// 会话屏右栏:文件树 / 改动文件 / git 状态 / MR 卡。全部现算,没有一张表
+/// 缓存它们。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WorkbenchVm {
+    /// 当前选中的那个会话在哪个 worktree 里干活。空 = 没选中任何会话。
+    pub workspace: String,
+    pub branch: String,
+    /// 相对主干领先 / 落后。`None` = 问不出来(没有主干、没有上游),
+    /// 界面显示「—」,不显示 0。
+    pub ahead_behind: Option<(u32, u32)>,
+    pub dirty: bool,
+    /// 展开着的目录(相对仓根)。根目录恒在里面。
+    pub expanded: Vec<String>,
+    /// 已经读出来的目录内容:`(目录, 这一层的条目)`。
+    pub tree: Vec<(String, Vec<TreeEntryVm>)>,
+    pub changed: Vec<ChangedFileVm>,
+    /// MR 号 + 状态。0 = 没有 MR,如实说没有,不编一个号。
+    pub pr_number: u32,
+    pub tab: SessionTab,
+    /// 中栏打开的文件:路径 + 正文(只读)或 diff 正文。
+    pub open_path: String,
+    pub open_body: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TreeEntryVm {
+    pub rel: String,
+    pub name: String,
+    pub is_dir: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ChangedFileVm {
+    pub path: String,
+    pub label: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

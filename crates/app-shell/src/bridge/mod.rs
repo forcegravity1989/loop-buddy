@@ -14,6 +14,7 @@ use bw_v4::model::ProjectId;
 use bw_v4::V4Store;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 /// 深链要跳到哪。
@@ -120,6 +121,15 @@ pub enum Req {
     OpenDoc(Option<String>),
     /// 「先不建」——把还没确认的草稿丢掉。草稿本来就没进库,丢掉不留痕。
     DropDrafts,
+    /// 会话屏:选中哪个会话 / 切页签 / 展开某个目录 / 中栏开哪个文件。
+    /// 全是纯导航,一律不进库。
+    SelectSession(Option<bw_v4::model::IssueId>),
+    SessionTab(crate::vm::SessionTab),
+    ToggleDir(String),
+    OpenFile {
+        path: String,
+        diff: bool,
+    },
     /// 重新算一遍并推一份新的 ViewModel。
     Refresh,
 }
@@ -132,6 +142,10 @@ pub enum Req {
 pub struct Bridge {
     tx: mpsc::UnboundedSender<Req>,
     pub vm: watch::Receiver<Vm>,
+    /// PTY 字节流,按会话 id 分批。**不走 ViewModel**——终端一秒钟能吐几百
+    /// 批字节,每一批都重拼一次整个 ViewModel 会把界面拖垮;而且字节流是
+    /// 一次性的,进了 ViewModel 就会在每次重渲染时被重复写进终端。
+    pub pty: watch::Receiver<Vec<(bw_v4::model::ConversationId, Vec<u8>)>>,
 }
 
 impl PartialEq for Bridge {
@@ -206,6 +220,7 @@ fn drafts_of(events: &[bw_v4::command::Event]) -> Option<(String, Vec<String>)> 
 pub fn spawn(deep_link: DeepLink) -> Bridge {
     let (tx, mut rx) = mpsc::unbounded_channel::<Req>();
     let (vm_tx, vm_rx) = watch::channel(Vm::default());
+    let (pty_tx, pty_rx) = watch::channel(Vec::new());
 
     std::thread::Builder::new()
         .name("bw-v4-kernel".into())
@@ -229,16 +244,22 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                 };
                 let root = workspaces_root();
                 let _ = std::fs::create_dir_all(&root);
+                // 桌面壳里 ▶跑 起的是真的 claude,挂在内嵌终端里,人全程看得
+                // 见、随时能停。指挥器那条路仍然走自我标注的替身 —— 它没有界
+                // 面渲染字节流。
                 let mut app = App::new(
                     store.clone(),
                     root.clone(),
-                    // A 刀所有 ▶跑 都走自我标注的替身:内嵌终端是下一刀的事,
-                    // 现在接一个假的真执行器只会让人以为它真跑了。
-                    Arc::new(bw_engine::MockInteractiveExecutor::new()),
-                );
+                    Arc::new(bw_engine::InteractiveCliExecutor::new()),
+                )
+                .with_pty();
 
                 let mut ui = vm_build::UiState {
                     open: None,
+                    session_open: None,
+                    session_tab: crate::vm::SessionTab::default(),
+                    expanded_dirs: Vec::new(),
+                    open_file: String::new(),
                     viewing_week: bw_v4::isoweek::current_week(),
                     open_doc: None,
                     note: None,
@@ -270,7 +291,39 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                 }
                 let _ = vm_tx.send(vm.clone());
 
-                while let Some(req) = rx.recv().await {
+                // 两个节拍器。终端字节 60ms 一次(约 16fps,人眼看着连续,而
+                // 且不重拼 ViewModel);定时判据 60s 一次 —— 它查的是「本周有
+                // 没有那张活」,快一点慢一点都不影响结论。
+                let mut pty_tick = tokio::time::interval(Duration::from_millis(60));
+                let mut sched_tick = tokio::time::interval(Duration::from_secs(60));
+                loop {
+                    let req = tokio::select! {
+                        r = rx.recv() => match r {
+                            Some(r) => r,
+                            None => break,
+                        },
+                        _ = pty_tick.tick() => {
+                            let batches = app.drain_pty_events();
+                            if !batches.is_empty() {
+                                let _ = pty_tx.send(batches);
+                            }
+                            continue;
+                        }
+                        _ = sched_tick.tick() => {
+                            // 只对打开着的项目跑定时。没打开任何项目时不动 ——
+                            // 后台替一堆项目自动建活,人一打开就看见一片自己没
+                            // 点过的活,不是好体验。
+                            let Some(pid) = ui.open else { continue };
+                            match app.dispatch(Command::TickScheduler { project_id: pid }).await {
+                                Ok(events) if events.is_empty() => continue,
+                                Ok(events) => ui.note = vm_build::note_of(&events),
+                                Err(e) => ui.note = Some(format!("定时没跑成:{e}")),
+                            }
+                            vm = vm_build::build(&app, &ui).await;
+                            let _ = vm_tx.send(vm.clone());
+                            continue;
+                        }
+                    };
                     match req {
                         Req::Cmd(c) => {
                             let confirming = matches!(c, Command::ConfirmWeekDraft { .. });
@@ -298,6 +351,34 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         Req::ViewWeek(w) => ui.viewing_week = w,
                         Req::OpenDoc(p) => ui.open_doc = p,
                         Req::DropDrafts => ui.pending_drafts = None,
+                        Req::SelectSession(id) => {
+                            ui.session_open = id;
+                            // 换会话 = 换工作区,上一个会话展开的目录、开着的
+                            // 文件在新工作区里多半不存在,一律清掉重来。
+                            ui.expanded_dirs.clear();
+                            ui.open_file.clear();
+                            ui.session_tab = crate::vm::SessionTab::default();
+                        }
+                        Req::SessionTab(t) => ui.session_tab = t,
+                        Req::ToggleDir(d) => {
+                            if let Some(i) = ui.expanded_dirs.iter().position(|x| *x == d) {
+                                ui.expanded_dirs.remove(i);
+                                // 收起一个目录,它下面所有已展开的子目录也一起
+                                // 收起,不然再点开它会看见一堆孤儿层。
+                                ui.expanded_dirs
+                                    .retain(|x| !x.starts_with(&format!("{d}/")));
+                            } else {
+                                ui.expanded_dirs.push(d);
+                            }
+                        }
+                        Req::OpenFile { path, diff } => {
+                            ui.open_file = path;
+                            ui.session_tab = if diff {
+                                crate::vm::SessionTab::Diff
+                            } else {
+                                crate::vm::SessionTab::File
+                            };
+                        }
                         Req::Refresh => {}
                     }
                     vm = vm_build::build(&app, &ui).await;
@@ -307,5 +388,9 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
         })
         .expect("内核线程起不来");
 
-    Bridge { tx, vm: vm_rx }
+    Bridge {
+        tx,
+        vm: vm_rx,
+        pty: pty_rx,
+    }
 }

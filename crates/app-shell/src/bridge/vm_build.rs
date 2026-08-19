@@ -13,6 +13,7 @@ use bw_v4::V4Store;
 
 use super::vm_panels::{
     build_board, build_config, build_kb, build_metrics, build_sessions, build_weeks,
+    build_workbench,
 };
 
 /// 读一份仓文件:读不出来就把原话记进 `warnings`,再退回默认值。
@@ -39,6 +40,12 @@ pub struct UiState {
     pub note: Option<String>,
     /// 「开始本周」回来的草稿活标,连同是哪一周。人确认前只存在这里,不进库。
     pub pending_drafts: Option<(String, Vec<String>)>,
+    /// 会话屏选中哪个会话、开着哪个页签、展开了哪些目录、中栏开着哪个文件。
+    /// 纯导航状态,一律不进库。
+    pub session_open: Option<bw_v4::model::IssueId>,
+    pub session_tab: crate::vm::SessionTab,
+    pub expanded_dirs: Vec<String>,
+    pub open_file: String,
     pub db_path: String,
     pub workspaces_root: String,
 }
@@ -90,6 +97,16 @@ pub fn note_of(events: &[Event]) -> Option<String> {
             human_edited.len()
         ),
         Event::WeekPlanStarted { week, .. } => format!("{week} 的周计划文件已写出,等你确认草稿"),
+        Event::RunCancelled { was_live, .. } => {
+            if *was_live {
+                "已停止。这张活还停在「进行中」,再点▶跑就接回去。".into()
+            } else {
+                "本来就没有活着的终端可停。".into()
+            }
+        }
+        Event::OpsAutoFired { workflow, week, .. } => {
+            format!("定时到点:{week} 的「{workflow}」已自动建活并开工")
+        }
         Event::WeekPlanAlreadyExists { week, .. } => format!("{week} 已经有周计划文件了,没有重写"),
         Event::IssueCreated { number, .. } => format!("建了一张活 #{number}"),
         Event::IssueScheduled { week_of, .. } => {
@@ -199,13 +216,20 @@ pub(super) fn remote_label(p: &Project) -> String {
 
 /// 本机环境条。探不到就是探不到;还没接实现的返回「不知道」显示灰,不是红。
 pub(super) fn probe_env() -> Vec<ToolProbeVm> {
-    let claude = bw_engine::resolve_claude_binary(None);
+    // 探活与「要什么才能用」都问适配模块要,不在这里重写一遍 —— 加一个新的
+    // 开工工具应该只是加一个适配模块目录,不改这个文件。
+    let claude = crate::adapters::claude_cli::detect();
     vec![
         ToolProbeVm {
             name: "claude_cli".into(),
             label: "Claude CLI".into(),
             ok: Some(claude.is_some()),
-            detail: claude.unwrap_or_else(|| "本机路径里找不到 claude".into()),
+            detail: claude.unwrap_or_else(|| {
+                format!(
+                    "本机路径里找不到 claude。要用它得先有:{}",
+                    crate::adapters::claude_cli::REQUIRES.join("、")
+                )
+            }),
         },
         ToolProbeVm {
             name: "cursor".into(),
@@ -240,6 +264,7 @@ async fn build_project(
     let file =
         read_or_warn(".bw/project.toml", project_file::read(&ws), warnings).unwrap_or_default();
     let issues = store.issues(id).await.unwrap_or_default();
+    let sessions = build_sessions(app, id, &issues).await;
     let current_week = bw_v4::isoweek::current_week();
     let viewing_week = if ui.viewing_week.is_empty() {
         current_week.clone()
@@ -317,7 +342,17 @@ async fn build_project(
                 origin: r.origin,
             })
             .collect(),
-        sessions: build_sessions(store, id, &issues).await,
+        sessions: sessions.clone(),
+        session_open: ui.session_open,
+        workbench: build_workbench(
+            &sessions,
+            &issues,
+            ui.session_open,
+            ui.session_tab,
+            &ui.expanded_dirs,
+            &ui.open_file,
+        )
+        .await,
         notify: NotifyVm {
             in_review: issues
                 .iter()

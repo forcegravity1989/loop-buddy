@@ -41,7 +41,7 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
                             br { }
                             br { }
                             span {
-                                style: "color:{theme::INK_4};",
+                                style: "{theme::not_built()}",
                                 "代码图与资产页签还没建。"
                             }
                         }

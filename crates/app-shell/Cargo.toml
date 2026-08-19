@@ -20,5 +20,7 @@ bw-v4 = { workspace = true }
 tokio = { workspace = true }
 time = { workspace = true, features = ["std"] }
 uuid = { workspace = true }
+# 内嵌终端把字节 / 尺寸经 document::eval 送进 WebView,靠它做 JS 字面量转义。
+serde_json = { workspace = true }
 # 知识库屏渲染仓内 Markdown。只进这个 crate,内核零新增依赖。
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }

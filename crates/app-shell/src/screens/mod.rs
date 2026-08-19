@@ -30,7 +30,7 @@ pub fn route(panel: Panel, project: &ProjectVm, bridge: &Bridge) -> Element {
     match panel {
         Panel::Overview => rsx! { overview::View { p, bridge: b } },
         Panel::Plan => rsx! { plan::View { p, bridge: b } },
-        Panel::Session => rsx! { session::View { p } },
+        Panel::Session => rsx! { session::View { p, bridge: b } },
         Panel::Notify => rsx! { notify::View { p, bridge: b } },
         Panel::Config => rsx! { config::View { p, bridge: b } },
         Panel::Kb => rsx! { kb::View { p, bridge: b } },

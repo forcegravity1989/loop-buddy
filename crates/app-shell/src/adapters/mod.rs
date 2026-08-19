@@ -7,9 +7,10 @@
 //!
 //! - [`claude_cli`] —— Claude CLI 开工工具(声明 + 探活)
 //! - [`chat_group`] —— 项目群工厂(只有 trait 与「没配群」的实现)
+//! - [`terminal_xterm`] —— 内嵌终端(xterm.js + PTY 字节桥)
 //!
-//! 还没开的(各自随对应的刀落地):嵌入终端(xterm + PTY)、Cursor、
-//! Open Design 内嵌、代码图。
+//! 还没开的(各自随对应的刀落地):Cursor、Open Design 内嵌、代码图。
 
 pub mod chat_group;
 pub mod claude_cli;
+pub mod terminal_xterm;
