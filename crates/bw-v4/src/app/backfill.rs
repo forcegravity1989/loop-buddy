@@ -59,21 +59,31 @@ impl App {
                 .map(isoweek::iso_week_of)
                 .unwrap_or_else(|_| current.clone());
 
-        let mut weeks = Vec::new();
-        let mut truncated = false;
-        for n in 0.. {
-            if week == current {
-                break;
-            }
-            if n >= MAX_WEEKS {
-                truncated = true;
-                break;
-            }
+        // 先把「首条提交那一周 → 本周」这条链列出来,再**只取最后 104 周**。
+        // 从最早那一周开始数着往前补是反的:接一个五年历史的仓,预算会全花在
+        // 2021 年那头,最近三年一份都没有,而人打开计划屏最先看的就是最近。
+        let mut chain = Vec::new();
+        while week != current {
             let this = week.clone();
             let Some(next) = isoweek::next_week(&this) else {
                 break;
             };
+            chain.push(this);
             week = next;
+            // 未来的周、或者链条本身坏了,不要转成死循环。
+            if chain.len() > 4000 {
+                break;
+            }
+        }
+        let truncated = chain.len() > MAX_WEEKS;
+        let skipped_old = chain.len().saturating_sub(MAX_WEEKS);
+        if truncated {
+            chain.drain(..skipped_old);
+        }
+
+        let mut weeks = Vec::new();
+        let mut unreadable = 0usize;
+        for this in chain {
             // 那一周之后才建的仓 / 未来的周,week_bounds 解不出来就跳过。
             if isoweek::week_start(&this).is_none_or(|d| d > today) {
                 continue;
@@ -82,7 +92,15 @@ impl App {
             if week_plan_file::exists(&ws, &this) {
                 continue;
             }
-            let stats = crate::git::week_stats(&ws, &this).await.unwrap_or_default();
+            // git 读不动这一周不能当成「这周没提交」—— 那是把失败伪装成
+            // 「没发生」。单独记一笔,最后如实说出来。
+            let stats = match crate::git::week_stats(&ws, &this).await {
+                Ok(s) => s,
+                Err(_) => {
+                    unreadable += 1;
+                    continue;
+                }
+            };
             // 那一周什么都没发生,就不要给它凭空造一份文件。
             if stats.commits == 0 {
                 continue;
@@ -142,13 +160,19 @@ impl App {
             }
         }
 
-        let note = match (weeks.len(), releases.len(), truncated) {
-            (0, 0, _) => "没有可回填的东西:历史周都已经有文件了,标签也都在发版记录里".into(),
-            (w, r, true) => format!(
-                "回填了 {w} 份历史周文件、{r} 行历史版本;只回填到 {MAX_WEEKS} 周之前为止,更早的没扫"
-            ),
-            (w, r, false) => format!("回填了 {w} 份历史周文件、{r} 行历史版本"),
+        let mut note = match (weeks.len(), releases.len()) {
+            (0, 0) => "没有可回填的东西:历史周都已经有文件了,标签也都在发版记录里".to_string(),
+            (w, r) => format!("回填了 {w} 份历史周文件、{r} 行历史版本"),
         };
+        if truncated {
+            note.push_str(&format!(
+                ";只补了最近 {MAX_WEEKS} 周,更早的 {skipped_old} 周没扫"
+            ));
+        }
+        if unreadable > 0 {
+            // 失败不能伪装成「那几周没提交」。说清有几周没读成。
+            note.push_str(&format!(";另有 {unreadable} 周的 git 记录读不出来,跳过了"));
+        }
         Ok(vec![Event::HistoryBackfilled {
             project_id,
             weeks,

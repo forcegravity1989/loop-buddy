@@ -32,11 +32,11 @@ impl App {
         if provider.is_empty() || provider == "none" {
             return None;
         }
-        // `notify` 没写就用默认三件事;写了就以写的为准(写了空数组 = 一件都不发)。
-        let wanted: Vec<String> = if cfg.notify.is_empty() {
-            chat::DEFAULT_NOTIFY.iter().map(|s| s.to_string()).collect()
-        } else {
-            cfg.notify.clone()
+        // 整行没写 = 用默认那三件事;写了就以写的为准 —— 写了空数组就是静音,
+        // 一件都不发。
+        let wanted: Vec<String> = match &cfg.notify {
+            None => chat::DEFAULT_NOTIFY.iter().map(|s| s.to_string()).collect(),
+            Some(list) => list.clone(),
         };
         if !wanted.iter().any(|w| w == event) {
             return None;

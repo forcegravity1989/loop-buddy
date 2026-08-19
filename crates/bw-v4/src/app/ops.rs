@@ -169,7 +169,17 @@ impl App {
         // squash 合了,而 `InProgress → Done` 不合法,错误抛出去,人看到「没做
         // 成」以为什么都没发生 —— 实际远端已经合了,再点一次还会因为 PR 已
         // merged 报错,这张活再也走不到完成。
-        if issue.status != IssueStatus::Done && !issue.status.can_transition_to(IssueStatus::Done) {
+        // 已经完成的活直接短路。不短路的话下面还会再打一次远端:对着一个
+        // 已经 merged 的 PR 再合一次必然报错,人看到一条像出了大事的红字,
+        // 而这张活其实好好的。
+        if issue.status == IssueStatus::Done {
+            return Ok(vec![Event::IssueMerged {
+                id,
+                pr_number: issue.pr_number,
+                merged: false,
+            }]);
+        }
+        if !issue.status.can_transition_to(IssueStatus::Done) {
             return Err(AppError::IllegalTransition {
                 from: issue.status.label().to_string(),
                 to: IssueStatus::Done.label().to_string(),

@@ -20,8 +20,12 @@ pub struct ChatConfig {
     pub provider: String,
     pub group_id: String,
     /// 同步哪些事件:`review` / `merged` / `release`。
+    ///
+    /// **`None`(整行没写)和 `Some(vec![])`(写了空数组)是两件事**:没写 =
+    /// 用默认那三样;写了空数组 = 一件都不发(静音)。合成一个 `Vec` 的话,
+    /// 人为了静音写 `notify = []`,群里照样收到三类消息。
     #[serde(default)]
-    pub notify: Vec<String>,
+    pub notify: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -93,8 +97,12 @@ pub fn render(f: &ProjectFile) -> String {
             s.push_str("\n[chat]\n");
             s.push_str(&format!("provider = {}\n", quote(&c.provider)));
             s.push_str(&format!("group_id = {}\n", quote(&c.group_id)));
-            let items: Vec<String> = c.notify.iter().map(|n| quote(n)).collect();
-            s.push_str(&format!("notify = [{}]\n", items.join(", ")));
+            // 没写就整行不写(= 用默认三样);写了就原样写回,空数组也照写
+            // —— 那是「静音」这个明确的选择,不是「没配」。
+            if let Some(notify) = &c.notify {
+                let items: Vec<String> = notify.iter().map(|n| quote(n)).collect();
+                s.push_str(&format!("notify = [{}]\n", items.join(", ")));
+            }
         }
     }
     s

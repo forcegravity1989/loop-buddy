@@ -72,11 +72,12 @@ sqlite3 /tmp/bw-v4-demo.db ".tables" && sqlite3 -header /tmp/bw-v4-demo.db "SELE
 
 ```bash
 # 4 仓文件读回:周计划(含回填的历史周)、发版记录、规范件与指纹、复制进来的预置技能包
-ls /tmp/bw-v4-ws/buddy-v4-demo/docs/plan | wc -l && grep -l "origin: backfill" /tmp/bw-v4-ws/buddy-v4-demo/docs/plan/*.md | wc -l && grep -c "^\[\[file\]\]" /tmp/bw-v4-ws/buddy-v4-demo/.bw/managed.toml && ls /tmp/bw-v4-ws/buddy-v4-demo/.claude/skills && cat /tmp/bw-v4-ws/buddy-v4-demo/docs/plan/$(date +%G-W%V).md
+ls /tmp/bw-v4-ws/buddy-v4-demo/docs/plan | wc -l && grep -lx "origin: backfill" /tmp/bw-v4-ws/buddy-v4-demo/docs/plan/*.md | wc -l && grep -c "^\[\[file\]\]" /tmp/bw-v4-ws/buddy-v4-demo/.bw/managed.toml && ls /tmp/bw-v4-ws/buddy-v4-demo/.claude/skills && cat /tmp/bw-v4-ws/buddy-v4-demo/docs/plan/$(date +%G-W%V).md
 ```
 
-演示项目是 buddy 自己的仓 `git clone --local` 出来的,所以周计划有 11 份(10 份回填 + 1 份本周)、
-18 条铺底指纹、12 个技能包。**发版记录里一条「回填」行都没有是对的** —— buddy 自己的仓没有 git 标签,
+演示项目是 buddy 自己的仓 `git clone --local` 出来的,所以 `docs/plan/` 下有 11 个文件 ——
+**9 份回填的历史周(W25–W33)+ 1 份本周(W34,人写的)+ 1 份 README**;18 条铺底指纹、12 个技能包。
+(数回填那条要用 `grep -lx`:README 里讲的就是 `origin: backfill` 这个字段,不加 `-x` 会把它也数进去。)**发版记录里一条「回填」行都没有是对的** —— buddy 自己的仓没有 git 标签,
 无标签就诚实留空,绝不拿提交日期倒推版本号。
 
 ```bash

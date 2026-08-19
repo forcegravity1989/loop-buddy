@@ -281,12 +281,13 @@ fn assets_tab(a: Option<&AssetsVm>, bridge: &Bridge) -> Element {
                     {skill_row(s)}
                 }
             })}
-            {block("产物登记", "没有登记表 —— git log --name-only 就是登记表。列的是最近 200 个 \
-                    提交碰过的文件,每个文件记最近碰它的那一次。", rsx! {
+            {block("产物登记", &format!("没有登记表 —— git log --name-only 就是登记表。扫最近 200 个 \
+                    提交,每个文件记最近碰它的那一次,一共 {} 个文件{}。", a.artifacts.len(),
+                    if a.artifacts.len() > ARTIFACT_ROWS { format!(",下面只列前 {ARTIFACT_ROWS} 个") } else { String::new() }), rsx! {
                 if a.artifacts.is_empty() {
                     div { style: "font-size:13px;color:{theme::INK_4};", "暂无登记产物" }
                 }
-                for f in a.artifacts.iter().take(60) {
+                for f in a.artifacts.iter().take(ARTIFACT_ROWS) {
                     div {
                         key: "{f.path}",
                         style: "display:flex;gap:10px;align-items:baseline;padding:6px 0;\
@@ -347,6 +348,10 @@ fn assets_tab(a: Option<&AssetsVm>, bridge: &Bridge) -> Element {
     }
 }
 
+/// 产物区块最多列多少行。再多人也读不完,而且每行都是一个 DOM 节点。
+/// **列不下的要说出来** —— 说明里带总数和这个上限。
+const ARTIFACT_ROWS: usize = 60;
+
 fn skill_row(s: &SkillVm) -> Element {
     rsx! {
         div {
@@ -373,19 +378,27 @@ fn block(title: &str, hint: &str, body: Element) -> Element {
 
 /// 纯 Rust CommonMark 渲染。不联网、不加载外部样式。
 ///
-/// **文档里内嵌的原始 HTML 一律丢掉。** 这些 Markdown 来自项目仓的 `docs/`
-/// —— agent 天天在往里写东西的地方。原样透传的话,一份带
-/// `<img src=x onerror=…>` 的文档打开就在桌面壳的 WebView 里执行 JS;一个
-/// 远程 `<img>` 就把「不联网」这句话变成假话。
+/// 这些 Markdown 来自项目仓的 `docs/` —— agent 天天在往里写东西的地方,
+/// 所以三样东西一律不放过去:
+///
+/// 1. **内嵌的原始 HTML**。一份带 `<img src=x onerror=…>` 的文档打开就在桌面壳
+///    的 WebView 里执行 JS。HTML 块整块丢掉,行内 HTML 降级成纯文本 ——
+///    让人看得见原文写了什么,但它不再是标签。
+/// 2. **图片**。markdown 原生的 `![](https://…)` 一样会让 WebView 去外部主机取
+///    图,「不联网」那句话照样变成假话。整块丢掉,`alt` 文字留着。
+/// 3. **链接**。降级成纯文本 —— 这是一个只读文档预览,不是浏览器;而且
+///    `[点我](javascript:…)` 渲染出来就是一颗能点的雷。
 fn render_markdown(body: &str) -> Element {
-    use pulldown_cmark::Event;
+    use pulldown_cmark::{Event, Tag, TagEnd};
     let mut opts = pulldown_cmark::Options::empty();
     opts.insert(pulldown_cmark::Options::ENABLE_TABLES);
     opts.insert(pulldown_cmark::Options::ENABLE_STRIKETHROUGH);
     let parser = pulldown_cmark::Parser::new_ext(body, opts).filter_map(|e| match e {
-        // HTML 块整块丢掉;行内 HTML 降级成纯文本,让人看得见原文写了什么。
         Event::Html(_) => None,
         Event::InlineHtml(raw) => Some(Event::Text(raw)),
+        // 丢掉 Start/End 这一对,中间的 alt / 链接文字照常留下来当正文。
+        Event::Start(Tag::Image { .. }) | Event::End(TagEnd::Image) => None,
+        Event::Start(Tag::Link { .. }) | Event::End(TagEnd::Link) => None,
         other => Some(other),
     });
     let mut html = String::new();

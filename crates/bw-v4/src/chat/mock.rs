@@ -14,7 +14,9 @@ use time::OffsetDateTime;
 pub struct MockChatGroup {
     group_id: String,
     sent: Mutex<Vec<ChatMessage>>,
-    history: Vec<ChatMessage>,
+    /// `None` = 没预置过历史。**不是空数组** —— 空数组会被调用方读成「上周
+    /// 群里没人说话」,那是编出来的答案;没预置就该说拉不了。
+    history: Option<Vec<ChatMessage>>,
 }
 
 impl MockChatGroup {
@@ -22,7 +24,7 @@ impl MockChatGroup {
         Self {
             group_id: group_id.to_string(),
             sent: Mutex::new(Vec::new()),
-            history: Vec::new(),
+            history: None,
         }
     }
 
@@ -30,7 +32,7 @@ impl MockChatGroup {
         Self {
             group_id: group_id.to_string(),
             sent: Mutex::new(Vec::new()),
-            history,
+            history: Some(history),
         }
     }
 
@@ -57,8 +59,12 @@ impl ChatGroup for MockChatGroup {
         since: OffsetDateTime,
         until: OffsetDateTime,
     ) -> Result<Vec<ChatMessage>, ChatError> {
-        Ok(self
-            .history
+        // 经工厂拿到的假群走的是 `new`,没预置历史 —— 如实说拉不了,不给一个
+        // 空数组当「上周没人说话」。要预置得用 `with_history` 直接造。
+        let Some(history) = self.history.as_ref() else {
+            return Err(ChatError::HistoryUnsupported);
+        };
+        Ok(history
             .iter()
             .filter(|m| match m.time {
                 // 没有时间戳的消息一律留着 —— 丢掉不如留着,调用方看得见。

@@ -161,7 +161,9 @@ impl App {
             Some(ChatConfig {
                 provider,
                 group_id,
-                notify,
+                // 命令带过来的名单原样写回。空数组 = 静音,是一个明确的选择,
+                // 不折成「没写」。
+                notify: Some(notify),
             })
         };
         project_file::write(&ws, &file)?;

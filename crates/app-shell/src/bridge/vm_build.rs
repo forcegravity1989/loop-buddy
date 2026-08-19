@@ -70,7 +70,29 @@ pub async fn find_project(store: &V4Store, want: &str) -> Option<Project> {
         .find(|p| p.name == want)
 }
 
+/// 一次命令回来一串事件,界面上那条回执只有一行 —— 取第一条,那是人刚做的
+/// 那个动作。
+///
+/// **发群失败是个例外**:它永远排在末尾(合入、结清、发版这些账先记完,群通知
+/// 是末尾一个失败也不影响主干的旁支),取第一条就把它盖掉了,人得到的回音会是
+/// 完全的沉默。所以失败时把它附在主句后面 —— 这一条不显示的话,那句
+/// 「发群失败」的文案就是死代码。
 pub fn note_of(events: &[Event]) -> Option<String> {
+    let mut note = primary_note(events)?;
+    // 第一条就是它的时候(人主动点「同步到群」),主句已经说过了,别说两遍。
+    if matches!(events.first(), Some(Event::ChatNotifySent { .. })) {
+        return Some(note);
+    }
+    if let Some(Event::ChatNotifySent { note: why, .. }) = events
+        .iter()
+        .find(|e| matches!(e, Event::ChatNotifySent { ok: false, .. }))
+    {
+        note.push_str(&format!(";但发群没成:{why}(不会自动重发)"));
+    }
+    Some(note)
+}
+
+fn primary_note(events: &[Event]) -> Option<String> {
     events.first().map(|e| match e {
         Event::ProjectCreated { slug, adopted, .. } => {
             if *adopted {

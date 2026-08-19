@@ -98,7 +98,7 @@ impl App {
         if let Some(existing) = self.store.conversation_for_issue(id).await? {
             if self.terminal.is_live(existing.id) {
                 return Err(AppError::Refused(
-                    "这张活的终端还开着。要重开先点「■ 停止」——重开是从头一次新对话,                     不是接着刚才那段聊。"
+                    "这张活的终端还开着。要重开先点「■ 停止」——重开是从头一次新对话,不是接着刚才那段聊。"
                         .into(),
                 ));
             }

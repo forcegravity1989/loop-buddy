@@ -134,6 +134,13 @@ pub enum Req {
     /// 知识库屏切页签。代码图与资产两个页签**切过去那一刻现跑一次**
     /// (起 codegraph 子进程、走 `git log`、采仓统计),结果留到下次再点。
     KbTab(crate::vm::KbTab),
+    /// 上面那一跑的结果回来了。**不是界面发的** —— 是内核自己派出去的那个任务
+    /// 算完之后发回来的,见 `Req::KbTab` 的处理。
+    KbComputed {
+        tab: crate::vm::KbTab,
+        codegraph: Option<crate::vm::CodeGraphVm>,
+        assets: Option<crate::vm::AssetsVm>,
+    },
     /// 重新算一遍并推一份新的 ViewModel。
     Refresh,
 }
@@ -234,6 +241,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
     let (pty_tx, _) = broadcast::channel(1024);
 
     let pty_tx_handle = pty_tx.clone();
+    // 内核往自己这条队列里回发用的口子(知识库那两个页签算完之后发回来)。
+    let tx_back = tx.clone();
 
     std::thread::Builder::new()
         .name("bw-v4-kernel".into())
@@ -310,7 +319,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             for g in &kb.groups {
                                 eprintln!("[BW_KB] 组「{}」{} 个文件", g.title, g.files.len());
                             }
-                            let cg = vm_kb::build_codegraph(&ws);
+                            let cg = vm_kb::build_codegraph(&ws).await;
                             eprintln!(
                                 "[BW_KB] 代码图 state={} 榜上 {} 行 头一名={} 头一名体积={} err={:?}",
                                 cg.state,
@@ -406,6 +415,13 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             ui.open = id;
                             ui.open_doc = None;
                             ui.viewing_week = bw_v4::isoweek::current_week();
+                            // 知识库那两个页签的结果是**上一个项目**的:它的技能
+                            // 清单、它的 git 产物、它的发版记录、它的仓统计。留着
+                            // 的话换个项目点进去,一屏数字没有一个是这个项目的,
+                            // 而且什么提示都没有。一律清空,让它显示「点一下就现扫」。
+                            ui.kb_tab = crate::vm::KbTab::default();
+                            ui.kb_codegraph = None;
+                            ui.kb_assets = None;
                         }
                         Req::ViewWeek(w) => ui.viewing_week = w,
                         Req::OpenDoc(p) => ui.open_doc = p,
@@ -444,18 +460,48 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             // 是纯读操作不需要缓存」同一个取舍。
                             ui.kb_codegraph = None;
                             ui.kb_assets = None;
-                            if let Some(pid) = ui.open {
-                                let ws = app.workspace_of(pid).await.ok();
-                                match (t, ws) {
-                                    (crate::vm::KbTab::CodeGraph, Some(ws)) => {
-                                        ui.kb_codegraph = Some(vm_kb::build_codegraph(&ws));
-                                    }
-                                    (crate::vm::KbTab::Assets, Some(ws)) => {
-                                        ui.kb_assets =
-                                            Some(vm_kb::build_assets(&store, pid, &ws).await);
-                                    }
-                                    _ => {}
+                            // **派出去算,不在这条循环里等**。这两样各要起好几个
+                            // 子进程(codegraph、git log、仓统计),在这里 await
+                            // 就等于把内核这条单线程连同 60ms 的终端节拍一起按住
+                            // —— 人正看着 agent 刷屏时点一下「代码图」,终端就卡住
+                            // 了。算完经 KbComputed 发回来。
+                            let want = matches!(
+                                t,
+                                crate::vm::KbTab::CodeGraph | crate::vm::KbTab::Assets
+                            );
+                            if let (true, Some(pid)) = (want, ui.open) {
+                                if let Ok(ws) = app.workspace_of(pid).await {
+                                    let back = tx_back.clone();
+                                    let st = store.clone();
+                                    tokio::spawn(async move {
+                                        let (codegraph, assets) =
+                                            if t == crate::vm::KbTab::CodeGraph {
+                                                (Some(vm_kb::build_codegraph(&ws).await), None)
+                                            } else {
+                                                (
+                                                    None,
+                                                    Some(vm_kb::build_assets(&st, pid, &ws).await),
+                                                )
+                                            };
+                                        let _ = back.send(Req::KbComputed {
+                                            tab: t,
+                                            codegraph,
+                                            assets,
+                                        });
+                                    });
                                 }
+                            }
+                        }
+                        Req::KbComputed {
+                            tab,
+                            codegraph,
+                            assets,
+                        } => {
+                            // 算的时候人可能已经切走了。结果就丢掉 —— 把上一个
+                            // 页签的数字贴到当前页签上比不显示更糟。
+                            if ui.kb_tab == tab {
+                                ui.kb_codegraph = codegraph;
+                                ui.kb_assets = assets;
                             }
                         }
                         Req::Refresh => {}

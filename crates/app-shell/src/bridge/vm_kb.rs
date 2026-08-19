@@ -9,16 +9,39 @@ use bw_v4::repo::{managed_file, release_file};
 use bw_v4::V4Store;
 use std::path::Path;
 
-/// 技能包是哪来的:铺底时随 buddy 复制进来的(`.bw/managed.toml` 里有它的
-/// 指纹)算「内置」,其余算项目自有。**不猜**——文件不在管账里就是项目自己的。
-pub(super) fn skill_origin(ws: &Path, slug: &str) -> String {
-    let managed = managed_file::read(ws).ok().flatten();
-    let hit = managed.is_some_and(|m| {
-        m.files
-            .iter()
-            .any(|e| e.path.starts_with(&format!(".claude/skills/{slug}/")))
-    });
+/// 铺底管账里登记过的文件路径。**一次读完传下去** —— 原来是每个技能包各读
+/// 一次、各解析一次 `.bw/managed.toml`,十几个包就是十几次全文解析,而这段
+/// 每重拼一次 ViewModel 就跑一遍。
+pub(super) fn managed_paths(ws: &Path) -> Vec<String> {
+    managed_file::read(ws)
+        .ok()
+        .flatten()
+        .map(|m| m.files.into_iter().map(|e| e.path).collect())
+        .unwrap_or_default()
+}
+
+/// 技能包是哪来的:铺底时随 buddy 复制进来的(管账里有它的指纹)算「内置」,
+/// 其余算项目自有。**不猜**——文件不在管账里就是项目自己的。
+pub(super) fn skill_origin(managed: &[String], slug: &str) -> String {
+    let prefix = format!(".claude/skills/{slug}/");
+    let hit = managed.iter().any(|p| p.starts_with(&prefix));
     if hit { "内置" } else { "项目自有" }.to_string()
+}
+
+/// 只读文件开头这么多字节。周文件的徽记就在 front matter 里,为了一行标记把
+/// 一份几十 KB 的周计划整篇读进内存不值 —— 老项目回填后这里有上百份。
+const HEAD_BYTES: usize = 512;
+
+fn read_head(path: &Path) -> String {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let mut buf = vec![0u8; HEAD_BYTES];
+    let n = f.read(&mut buf).unwrap_or(0);
+    buf.truncate(n);
+    // 截断可能切在半个汉字上,按有损转换 —— 这段只用来找一行 ASCII 标记。
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 /// 知识页签的树:**不扫全仓**,按规范八大类固定分组、每组按约定路径找文件。
@@ -64,10 +87,12 @@ pub(super) fn build_kb(ws: &Path, tab: KbTab, open: Option<&str>) -> KbVm {
                 .map(|e| {
                     let name = e.file_name().to_string_lossy().to_string();
                     let rel = format!("docs/plan/{name}");
-                    // 徽记只看头里那一行,不整篇读 —— 老项目回填后这里可能几十份。
-                    let backfilled = std::fs::read_to_string(e.path())
-                        .map(|b| b.lines().take(12).any(|l| l.trim() == "origin: backfill"))
-                        .unwrap_or(false);
+                    // 徽记只看头里那几行,不整篇读 —— 老项目回填后这里可能上百份,
+                    // 而这段每重拼一次 ViewModel 就跑一遍。
+                    let backfilled = read_head(&e.path())
+                        .lines()
+                        .take(12)
+                        .any(|l| l.trim() == "origin: backfill");
                     KbFileVm {
                         label: name.trim_end_matches(".md").to_string(),
                         rel,
@@ -141,9 +166,9 @@ fn push_group(out: &mut Vec<KbGroupVm>, title: &str, files: Vec<KbFileVm>) {
 }
 
 /// 代码图页签:每次点开就是一次全新的子进程调用,不缓存。
-pub(super) fn build_codegraph(ws: &Path) -> CodeGraphVm {
+pub(super) async fn build_codegraph(ws: &Path) -> CodeGraphVm {
     use crate::adapters::codegraph::{big_files, detect, Availability};
-    let state = detect(ws);
+    let state = detect(ws).await;
     if state != Availability::Ready {
         return CodeGraphVm {
             state: match state {
@@ -154,7 +179,7 @@ pub(super) fn build_codegraph(ws: &Path) -> CodeGraphVm {
             ..CodeGraphVm::default()
         };
     }
-    match big_files(ws, 20) {
+    match big_files(ws, 20).await {
         Ok(rows) => CodeGraphVm {
             state: "ready".into(),
             rows: rows
@@ -180,6 +205,7 @@ pub(super) fn build_codegraph(ws: &Path) -> CodeGraphVm {
 /// 没有登记表可查(V4 库里只有四张表)。
 pub(super) async fn build_assets(store: &V4Store, id: ProjectId, ws: &Path) -> AssetsVm {
     let usage = store.workflow_usage(id).await.unwrap_or_default();
+    let managed = managed_paths(ws);
     let mut skills: Vec<SkillVm> = std::fs::read_dir(ws.join(".claude/skills"))
         .map(|d| {
             d.flatten()
@@ -193,7 +219,7 @@ pub(super) async fn build_assets(store: &V4Store, id: ProjectId, ws: &Path) -> A
                             .map(|(_, n)| *n)
                             .unwrap_or(0),
                         title: slug.clone(),
-                        origin: skill_origin(ws, &slug),
+                        origin: skill_origin(&managed, &slug),
                         slug,
                     }
                 })

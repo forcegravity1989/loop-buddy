@@ -11,7 +11,7 @@ use bw_v4::V4Store;
 use std::path::Path;
 
 use super::vm_build::{card_item, probe_env, remote_label};
-use super::vm_kb::skill_origin;
+use super::vm_kb::{managed_paths, skill_origin};
 
 /// 六列看板。待办池那一列装的是没排进任何一周的活,其余五列按状态分。
 pub(super) fn build_board(
@@ -278,6 +278,7 @@ pub(super) async fn build_config(
     project: &Project,
 ) -> ConfigVm {
     let usage = store.workflow_usage(id).await.unwrap_or_default();
+    let managed = managed_paths(ws);
     let mappings = policy
         .map(|p| {
             p.mappings
@@ -313,7 +314,7 @@ pub(super) async fn build_config(
                             .map(|(_, n)| *n)
                             .unwrap_or(0),
                         title: slug.clone(),
-                        origin: skill_origin(ws, &slug),
+                        origin: skill_origin(&managed, &slug),
                         slug,
                     }
                 })
@@ -364,18 +365,19 @@ fn chat_label(ws: &Path) -> String {
     else {
         return "—(没配项目群。配了就在 .bw/project.toml 里加一段 [chat])".into();
     };
-    let notify = if cfg.notify.is_empty() {
-        bw_v4::chat::DEFAULT_NOTIFY
+    // 整行没写 = 默认那三样;写了空数组 = 静音,如实说「一件都不发」。
+    let notify = match &cfg.notify {
+        None => bw_v4::chat::DEFAULT_NOTIFY
             .iter()
             .map(|e| bw_v4::chat::event_label(e))
             .collect::<Vec<_>>()
-            .join(" / ")
-    } else {
-        cfg.notify
+            .join(" / "),
+        Some(list) if list.is_empty() => "一件都不发(静音)".to_string(),
+        Some(list) => list
             .iter()
             .map(|e| bw_v4::chat::event_label(e))
             .collect::<Vec<_>>()
-            .join(" / ")
+            .join(" / "),
     };
     format!(
         "{} · 群 {} · 同步 {notify}",
