@@ -332,6 +332,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // ── 步骤 10:项目群(mock 提供方)────────────────────
+    // 真实提供方(WeLink)还没接,所以这里用自我标注的假群:每发一条往 stderr
+    // 打一行 `[BW_CHAT_SENT]`,不落库、不进仓。**同一件事连发两次就打两行** ——
+    // 要确认的正是「它确实会重复」,不是反过来验证「不会重复」。
+    let chat_before = bw_v4::repo::project_file::read(&workspace).ok().flatten();
+    if let Some(mut file) = chat_before.clone() {
+        file.chat = Some(bw_v4::repo::project_file::ChatConfig {
+            provider: "mock".into(),
+            group_id: "demo-group".into(),
+            notify: vec!["review".into(), "merged".into(), "release".into()],
+        });
+        let _ = bw_v4::repo::project_file::write(&workspace, &file);
+    }
+    if let Some(one) = store
+        .issues(pid)
+        .await?
+        .into_iter()
+        .find(|i| i.kind == bw_v4::IssueKind::Business)
+    {
+        for _ in 0..2 {
+            app.dispatch(Command::SyncNotifyToChat {
+                issue_id: one.id,
+                event_type: "review".into(),
+            })
+            .await?;
+        }
+        say(
+            &mut log,
+            &format!(
+                "步骤 10 · 项目群(mock):对 #{} 连发两次「评审中」—— stderr 上应该有两行 \
+                 [BW_CHAT_SENT],这是设计上认了的重复,不是 bug",
+                one.number
+            ),
+        );
+    }
+    // 演示完把 [chat] 段改回去 —— 假群留在仓里,人打开演示项目会以为真配了群。
+    if let Some(file) = chat_before {
+        let _ = bw_v4::repo::project_file::write(&workspace, &file);
+        say(&mut log, "步骤 10 收尾 · [chat] 段改回演示项目原来的样子");
+    }
+
     // 收尾提交:周计划与发版记录是铺底之后才写的,这里一并进仓,免得下一次
     // 跑的时候被上一轮的残留改动混进提交里。
     let tail = bw_v4::git::commit_paths(

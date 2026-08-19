@@ -158,11 +158,15 @@ impl App {
                 self.store
                     .set_issue_status(id, IssueStatus::InReview)
                     .await?;
-                Ok(vec![Event::IssueRan {
+                let mut events = vec![Event::IssueRan {
                     id,
                     ok: true,
                     summary: o.summary,
-                }])
+                }];
+                if let Some(e) = self.chat_notify_issue(id, "review").await {
+                    events.push(e);
+                }
+                Ok(events)
             }
             Ok(o) => Ok(vec![Event::IssueRan {
                 id,
@@ -205,7 +209,14 @@ impl App {
         } else {
             false
         };
-        Ok(vec![Event::IssueTransitioned { id, to, settled }])
+        let mut events = vec![Event::IssueTransitioned { id, to, settled }];
+        // 进评审 = 该人看一眼了,配了群就往群里说一声。
+        if to == IssueStatus::InReview {
+            if let Some(e) = self.chat_notify_issue(id, "review").await {
+                events.push(e);
+            }
+        }
+        Ok(events)
     }
 
     pub(super) async fn block_issue(&mut self, id: IssueId, reason: String) -> Result<Vec<Event>> {

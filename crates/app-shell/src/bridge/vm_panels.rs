@@ -6,7 +6,7 @@
 
 use crate::vm::*;
 use bw_v4::model::{IssueStatus, Project, ProjectId};
-use bw_v4::repo::{issue_policy_file, week_plan_file};
+use bw_v4::repo::{issue_policy_file, project_file, week_plan_file};
 use bw_v4::V4Store;
 use std::path::Path;
 
@@ -347,7 +347,38 @@ pub(super) async fn build_config(
                 )
             })
             .unwrap_or_else(|| "—(.bw/issue-policy.toml 里没有节律段)".into()),
+        chat: chat_label(ws),
     }
+}
+
+/// 项目群一行话。没配就明说没配 —— 没配群不是错,是诚实状态。
+fn chat_label(ws: &Path) -> String {
+    let Some(cfg) = project_file::read(ws)
+        .ok()
+        .flatten()
+        .and_then(|f| f.chat)
+        .filter(|c| !c.provider.trim().is_empty() && c.provider.trim() != "none")
+    else {
+        return "—(没配项目群。配了就在 .bw/project.toml 里加一段 [chat])".into();
+    };
+    let notify = if cfg.notify.is_empty() {
+        bw_v4::chat::DEFAULT_NOTIFY
+            .iter()
+            .map(|e| bw_v4::chat::event_label(e))
+            .collect::<Vec<_>>()
+            .join(" / ")
+    } else {
+        cfg.notify
+            .iter()
+            .map(|e| bw_v4::chat::event_label(e))
+            .collect::<Vec<_>>()
+            .join(" / ")
+    };
+    format!(
+        "{} · 群 {} · 同步 {notify}",
+        cfg.provider,
+        blank_dash(&cfg.group_id)
+    )
 }
 
 fn blank_dash(s: &str) -> &str {

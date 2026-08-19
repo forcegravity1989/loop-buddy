@@ -9,6 +9,7 @@
 //! - [`plan`] —— 开始本周、排期、发版本、缓存对账
 //! - [`issue`] —— 建活、▶跑、状态转移
 //! - [`bootstrap`] —— 规范铺底与对账
+//! - [`chat_notify`] —— 三件事同步进项目群(发出去就算完,不记账)
 //! - [`backfill`] —— 老项目历史回填(资产盘点的首次模式)
 //! - [`ops`] —— 三张运作活:周计划、资产盘点、规范铺底
 //! - [`session`] —— 内嵌终端的 PTY 生命周期
@@ -17,6 +18,7 @@
 
 mod backfill;
 mod bootstrap;
+mod chat_notify;
 mod health;
 mod issue;
 mod ops;
@@ -198,6 +200,10 @@ impl App {
             }
             Command::TickScheduler { project_id } => self.tick_scheduler(project_id).await,
             Command::MergeAndSettle { id } => self.merge_and_settle(id).await,
+            Command::SyncNotifyToChat {
+                issue_id,
+                event_type,
+            } => self.sync_notify_to_chat(issue_id, event_type).await,
             Command::BackfillHistory { project_id } => self.backfill_history(project_id).await,
             Command::CancelRun { id } => self.cancel_run(id).await,
             Command::TerminalInput {

@@ -205,6 +205,20 @@ fn connector_block(p: &ProjectVm, bridge: &Bridge) -> Element {
                 div { style: "color:{theme::INK_2};", "{p.config.cadence}" }
             }
             div {
+                style: "display:flex;gap:8px;font-size:13px;padding:6px 0;",
+                div { style: "width:88px;flex:none;color:{theme::INK_4};", "项目群" }
+                div {
+                    style: "color:{theme::INK_2};",
+                    "{p.config.chat}"
+                    div {
+                        style: "font-size:12px;color:{theme::INK_3};margin-top:4px;line-height:1.7;",
+                        "进评审 / 已合入 / 发版这三件事会往群里发一条。发出去就算完:\
+                         不记账、不去重、失败不自动重发 —— 极小概率下同一件事会重推一条,\
+                         这是已经认了的代价。改群号或改勾选走「编辑项目信息」那条活 + MR。"
+                    }
+                }
+            }
+            div {
                 style: "margin-top:12px;padding-top:12px;border-top:1px solid {theme::BORDER};",
                 div { style: "font-size:12px;color:{theme::INK_3};margin-bottom:10px;", "开工工具探活" }
                 div {

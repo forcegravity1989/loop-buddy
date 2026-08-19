@@ -19,6 +19,7 @@
 //! - [`store`] —— 四张表的哑存储,不做业务判断。
 //! - [`repo`] —— 仓文件解析与写入。**仓是正本**,这一层是读正本的唯一入口。
 //! - [`git`] / [`isoweek`] —— 现算的两个输入源:git 与 ISO 周换算。
+//! - [`chat`] —— 项目群适配工厂:trait + 按提供方名字造实现,认哪家只在一处。
 //! - [`derive`] —— 健康三判据的现算,带密封类型。
 //! - [`standard`] —— 规范件模板正本,编译期打进二进制。
 //! - [`command`] —— 界面只发 `Command`、只收 `Event` 的那两个枚举。
@@ -27,6 +28,7 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
+pub mod chat;
 pub mod command;
 pub mod derive;
 pub mod git;

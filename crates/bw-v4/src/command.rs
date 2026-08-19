@@ -142,6 +142,13 @@ pub enum Command {
     /// 通知屏的「合入并完成」。先真的合 MR,再把活推「完成」——顺序反了,
     /// 合入失败就会留下一张已完成、改动却还挂在分支上的活。
     MergeAndSettle { id: IssueId },
+
+    /// 把一件事同步进项目群。**调用即完成**:不写库、不去重、不排重试队列。
+    SyncNotifyToChat {
+        issue_id: IssueId,
+        /// `review` / `merged` / `release`。
+        event_type: String,
+    },
     /// ■停止:关掉这件活的内嵌终端。**状态原地不动**——停下来既不是失败也
     /// 不是完成,人随时能再点▶跑接回去。
     CancelRun { id: IssueId },
@@ -263,6 +270,16 @@ pub enum Event {
     },
     /// 合入并完成走完了。`merged=false` = 这张活本来就没有 MR 可合(本地项目
     /// 或者还没开 PR),只走了「完成」那一步。
+    /// 往项目群发了(或没发成)一条。**不落库**——通知行上那句「已发到群 ✓」
+    /// 和事件流里那一条是同一个事件在两处的展示,只在当前这次运行里存在。
+    ChatNotifySent {
+        number: u32,
+        event_type: String,
+        ok: bool,
+        /// 失败原文。成功时为空。
+        note: String,
+    },
+
     IssueMerged {
         id: IssueId,
         pr_number: u32,

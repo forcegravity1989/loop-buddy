@@ -264,6 +264,9 @@ pub struct ConfigVm {
     pub remote: String,
     /// `.bw/issue-policy.toml` 的 `[cadence]` 段:定时节律。
     pub cadence: String,
+    /// `.bw/project.toml` 的 `[chat]` 段:项目群。**仓是正本**,这里只显示;
+    /// 改它走「编辑项目信息」那条轻量活 + MR,不在配置屏直接写仓。
+    pub chat: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -250,10 +250,19 @@ impl App {
             }
         }
 
-        Ok(vec![Event::ReleaseCut {
-            version,
+        let mut events = vec![Event::ReleaseCut {
+            version: version.clone(),
             rows_written,
-        }])
+        }];
+        // 只有真写进发版记录的那一次才往群里说 —— 同一个版本号发第二次不写第
+        // 二行,群里也不该多一条。
+        if rows_written {
+            let text = crate::chat::notify_text("release", 0, &format!("发版 {version}"), "", "");
+            if let Some(e) = self.chat_send(project_id, "release", 0, text).await {
+                events.push(e);
+            }
+        }
+        Ok(events)
     }
 
     /// 用周计划文件覆盖库里的缓存列 —— **文件说了算**。

@@ -114,6 +114,21 @@ pub fn note_of(events: &[Event]) -> Option<String> {
                 "本来就没有活着的终端可停。".into()
             }
         }
+        Event::ChatNotifySent {
+            event_type,
+            ok,
+            note,
+            ..
+        } => {
+            let label = bw_v4::chat::event_label(event_type);
+            if *ok {
+                format!("已发到项目群:{label}")
+            } else {
+                // 发群失败不回滚已经发生的合入/完成/发版,只在这里说一次;
+                // 没有下一次自动重试,如实说清楚。
+                format!("发群失败(合入/完成本身已经生效,不会自动重发):{note}")
+            }
+        }
         Event::OpsAutoFired { workflow, week, .. } => {
             format!("定时到点:{week} 的「{workflow}」已自动建活并开工")
         }

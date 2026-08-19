@@ -193,6 +193,10 @@ impl App {
         // 合入这件事排在前面,界面上那句话说的才是人刚做的动作;结清事件跟在
         // 后面,读回时两条都在。
         events.extend(self.transition_issue(id, IssueStatus::Done).await?);
+        // 群通知排在最后:发不出去也不影响上面已经记完的账。
+        if let Some(e) = self.chat_notify_issue(id, "merged").await {
+            events.push(e);
+        }
         Ok(events)
     }
 }
