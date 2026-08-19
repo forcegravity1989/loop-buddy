@@ -1,0 +1,221 @@
+//! ViewModel:内核算好的、可直接渲染的数据。
+//!
+//! 屏与屏之间**只经这里**共享数据结构——`screens/plan/` 永远不许
+//! `use crate::screens::overview::…`(`guard-no-cross-screen-import.sh` 守着)。
+//!
+//! 这一层不算任何东西:每个字段都是内核那边现算好塞进来的。壳只渲染和转发意图。
+
+use bw_v4::model::{IssueId, IssueStatus, ProjectId, Signal};
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Vm {
+    pub ready: bool,
+    /// 起不来就如实说起不来,不给一个空界面假装正常。
+    pub fatal: Option<String>,
+    pub projects: Vec<ProjectCardVm>,
+    /// 本机环境条:各个开工工具探到没探到。
+    pub env: Vec<ToolProbeVm>,
+    /// 打开了哪个项目。`None` = 还在项目墙。
+    pub open: Option<ProjectVm>,
+    pub settings: SettingsVm,
+    /// 最近一条后台动作的回执(建活、铺底、发版这类)。
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SettingsVm {
+    pub workspaces_root: String,
+    pub db_path: String,
+    pub claude_binary: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProjectCardVm {
+    pub id: ProjectId,
+    pub slug: String,
+    pub name: String,
+    /// 「想做什么」一句话,来自 `PROJECT.md` / `.bw/project.toml`。
+    pub brief: String,
+    pub signal: Option<Signal>,
+    pub workspace_path: String,
+    pub remote: String,
+    /// 本周排了几张活、完成了几张。
+    pub week_total: u32,
+    pub week_done: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolProbeVm {
+    pub name: String,
+    pub label: String,
+    /// `Some(true)` 探到、`Some(false)` 没装、`None` 还没接实现(灰,不是红)。
+    pub ok: Option<bool>,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProjectVm {
+    pub id: ProjectId,
+    pub slug: String,
+    pub name: String,
+    pub card: CardVm,
+    pub health: HealthVm,
+    pub metrics: MetricsVm,
+    pub current_week: String,
+    /// 计划屏左栏:扫 `docs/plan/` 得到的周列表(新的在前)。
+    pub weeks: Vec<WeekVm>,
+    /// 正在看哪一周。
+    pub viewing_week: String,
+    pub board: BoardVm,
+    pub releases: Vec<ReleaseVm>,
+    pub sessions: Vec<SessionVm>,
+    pub notify: NotifyVm,
+    pub config: ConfigVm,
+    pub kb: KbVm,
+}
+
+/// 名片。四个字段的正本是 `PROJECT.md` 与 `.bw/project.toml`,不在库里。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CardVm {
+    pub brief: String,
+    pub benchmark: String,
+    pub north_star: String,
+    pub remote: String,
+    pub current_version: String,
+    pub standard_version: String,
+    /// 项目群。没配就是「未配」。
+    pub chat: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HealthVm {
+    pub signal: Option<Signal>,
+    /// 三条判据,每条一句人话 +「成不成立」。
+    pub reasons: Vec<(bool, String)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MetricsVm {
+    pub north_star: Option<MetricCardVm>,
+    pub lagging: Vec<MetricCardVm>,
+    pub leading: Vec<MetricCardVm>,
+    /// 读不到 `.bw/metrics.toml` 时的实话。
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MetricCardVm {
+    pub id: String,
+    pub name: String,
+    /// 本周读数。`None` = 没读数,显示「无数据」而不是 0。
+    pub reading: Option<String>,
+    pub source: String,
+    pub collected_at: String,
+    /// 本周哪些活在推它。
+    pub driving: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WeekVm {
+    pub week: String,
+    /// 回填出来的历史周带徽记。
+    pub backfill: bool,
+    pub goal: Option<String>,
+    pub activity_count: u32,
+}
+
+/// 六列看板。列的顺序就是活的生命周期顺序。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BoardVm {
+    pub columns: Vec<ColumnVm>,
+    pub pool_label: String,
+    pub todo_label: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnVm {
+    pub status: IssueStatus,
+    pub title: String,
+    pub cards: Vec<CardItemVm>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CardItemVm {
+    pub id: IssueId,
+    pub number: u32,
+    pub title: String,
+    pub category: String,
+    pub tool: String,
+    pub workflow: String,
+    pub kind: String,
+    pub origin: String,
+    pub week_of: String,
+    pub version: String,
+    pub metric_key: String,
+    pub settled: bool,
+    pub status: IssueStatus,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReleaseVm {
+    pub version: String,
+    pub released_at: String,
+    pub note: String,
+    pub included: String,
+    pub origin: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionVm {
+    pub issue_id: IssueId,
+    pub issue_number: u32,
+    pub issue_title: String,
+    pub branch: String,
+    pub workspace_path: String,
+    /// claude 的 resume id。空 = 还没捕获到,如实留空。
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NotifyVm {
+    /// 评审中、等人合入的活。
+    pub in_review: Vec<CardItemVm>,
+    /// 阻塞的活。
+    pub blocked: Vec<CardItemVm>,
+    pub seen_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConfigVm {
+    /// 「类别→工具→workflow」三列映射。
+    pub mappings: Vec<MappingVm>,
+    /// 项目仓 `.claude/skills/` 里扫出来的技能包 + 现算的「用过几次」。
+    pub skills: Vec<SkillVm>,
+    pub tools: Vec<ToolProbeVm>,
+    pub remote: String,
+    /// `.bw/issue-policy.toml` 的 `[cadence]` 段:定时节律。
+    pub cadence: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MappingVm {
+    pub category_key: String,
+    pub category_label: String,
+    pub tool: String,
+    pub workflow: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkillVm {
+    pub slug: String,
+    pub title: String,
+    pub uses: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KbVm {
+    /// 仓内 `docs/` 的文档树(相对路径,已排序)。
+    pub docs: Vec<String>,
+    /// 打开的那份文档:路径 + 原文。
+    pub open_doc: Option<(String, String)>,
+}
