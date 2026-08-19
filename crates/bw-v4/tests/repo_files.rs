@@ -115,6 +115,43 @@ fn release_rows_parse_and_append_is_idempotent() {
 }
 
 #[test]
+fn foreign_release_table_is_never_written_into() {
+    // 老项目仓里已经有一份格式不同的发版记录 —— 列数与列名都不一样。
+    let dir = tempdir("foreign-release");
+    std::fs::create_dir_all(dir.join("docs")).unwrap();
+    let foreign = "# 版本登记\n\n| 版本号 | 出包日 | 阶段 | 这一版是什么 | 修了什么 |\n|---|---|---|---|---|\n| 0.3.0 | 2026-08-14 | V3 | 首个安装包 | — |\n";
+    std::fs::write(dir.join("docs/releases.md"), foreign).unwrap();
+
+    let row = release_file::ReleaseRow {
+        version: "v0.1".into(),
+        released_at: "2026-08-20".into(),
+        note: "主环跑通".into(),
+        included_numbers: vec![4],
+        origin: "人发".into(),
+    };
+    assert!(release_file::append_row(&dir, &row).unwrap());
+
+    let body = std::fs::read_to_string(dir.join("docs/releases.md")).unwrap();
+    assert!(
+        body.contains("| 0.3.0 | 2026-08-14 | V3 | 首个安装包 | — |"),
+        "人家原来那张表一个字都不该动"
+    );
+    assert!(
+        body.contains("## buddy 管理的发版记录"),
+        "认不出 buddy 那张表时该另起一段,不是往陌生的表里塞行"
+    );
+    // 解析只认 buddy 那张表 —— 老项目那行不该被当成 buddy 的发版记录。
+    let rows = release_file::read(&dir).unwrap().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].version, "v0.1");
+    assert_eq!(rows[0].note, "主环跑通", "列不能错位");
+    // 再来一次仍然只有一行。
+    assert!(!release_file::append_row(&dir, &row).unwrap());
+    assert_eq!(release_file::read(&dir).unwrap().unwrap().len(), 1);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn issue_policy_round_trips_and_maps_categories() {
     let raw = r#"
 schema_version = 1

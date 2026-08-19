@@ -1,0 +1,101 @@
+{
+  "slug": "buddy-v4-demo",
+  "week": "2026-W34",
+  "workflow 用过几次(现算,没有战绩表)": [
+    [
+      "mattpocock-skills",
+      3
+    ]
+  ],
+  "workspace": "/tmp/bw-v4-ws/buddy-v4-demo",
+  "仓文件": {
+    "发版记录": true,
+    "周计划": true,
+    "指纹清单": true,
+    "活的约定": true,
+    "规范元信息": true,
+    "预置技能包数": 9
+  },
+  "库里的表": [
+    "app_meta",
+    "claude_conversation",
+    "issue",
+    "project"
+  ],
+  "步骤日志": [
+    "本周 = 2026-W34",
+    "步骤 1 · 接入项目:工作区 = /tmp/bw-v4-ws/buddy-v4-demo",
+    "步骤 2 · 规范铺底:落盘 15 个文件,已提交",
+    "步骤 3 · 开始本周:周计划文件已写出(mock 草稿)",
+    "步骤 4 · 脚本代人确认,建了 2 张业务活",
+    "步骤 5 · ▶跑:成功(执行器原话:【mock】交互式技能会话完成(流程演示,未真 spawn claude))",
+    "步骤 6b · 脚本代人点「完成」:这次真结清了",
+    "步骤 7 · 发版本 v0.1:发版记录新增一行",
+    "收尾提交:周计划与发版记录已进仓",
+    "健康现算:Amber"
+  ],
+  "活": [
+    {
+      "category": null,
+      "kind": "Ops",
+      "number": 1,
+      "origin": "Auto",
+      "settled": false,
+      "status": "Backlog",
+      "title": "规范铺底 v4.0 · 含合并调整 · 含历史回填",
+      "tool": "",
+      "version": "",
+      "week_of": "",
+      "workflow": ""
+    },
+    {
+      "category": "构建",
+      "kind": "Business",
+      "number": 2,
+      "origin": "AgentSplit",
+      "settled": false,
+      "status": "Todo",
+      "title": "【mock】本周第一件业务活(草稿,等人确认)",
+      "tool": "claude_cli",
+      "version": "",
+      "week_of": "2026-W34",
+      "workflow": "mattpocock-skills"
+    },
+    {
+      "category": "构建",
+      "kind": "Business",
+      "number": 3,
+      "origin": "AgentSplit",
+      "settled": false,
+      "status": "Todo",
+      "title": "【mock】本周第二件业务活(草稿,等人确认)",
+      "tool": "claude_cli",
+      "version": "",
+      "week_of": "2026-W34",
+      "workflow": "mattpocock-skills"
+    },
+    {
+      "category": "构建",
+      "kind": "Business",
+      "number": 4,
+      "origin": "Human",
+      "settled": true,
+      "status": "Done",
+      "title": "把 V4 主环跑通一次",
+      "tool": "claude_cli",
+      "version": "v0.1",
+      "week_of": "2026-W34",
+      "workflow": "mattpocock-skills"
+    }
+  ],
+  "说明": "每个数字都是从真实库与真实仓文件读回来的,没有一个是硬编码。▶跑走的是自我标注的替身执行器(产出带【mock】字样);推评审中与点完成是脚本代人(没挂远端,没有 MR 可合)。",
+  "项目": {
+    "name": "buddy V4 演示项目",
+    "灯": "Amber",
+    "灯的理由": [
+      "✓ 本周定了周目标,仓里也有真实提交",
+      "✗ 最近两周都没有记过指标读数",
+      "✓ 上周有合入或发版"
+    ]
+  }
+}

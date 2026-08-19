@@ -27,27 +27,55 @@ pub fn read(workspace: &Path) -> Result<Option<Vec<ReleaseRow>>> {
     }
 }
 
-pub fn parse(raw: &str) -> Vec<ReleaseRow> {
-    let mut rows = Vec::new();
-    let mut seen_header = false;
-    for line in raw.lines() {
-        let t = line.trim();
-        if !t.starts_with('|') || !t.ends_with('|') {
-            continue;
-        }
-        let cells: Vec<String> = t
-            .trim_matches('|')
+/// buddy 这张表的表头。**只认这张表** —— 老项目仓里可能已经有一份格式完全
+/// 不同的发版记录(列数、列名都不一样),把行往那种表里塞会把值错位到别的
+/// 列上。认表头是最简单也最不会出错的判据。
+pub const HEADER: [&str; 5] = ["版本号", "发版日", "说明", "包含的活", "来源"];
+
+fn cells_of(line: &str) -> Option<Vec<String>> {
+    let t = line.trim();
+    if !t.starts_with('|') || !t.ends_with('|') {
+        return None;
+    }
+    Some(
+        t.trim_matches('|')
             .split('|')
             .map(|c| c.trim().to_string())
-            .collect();
-        if cells
+            .collect(),
+    )
+}
+
+fn is_separator(cells: &[String]) -> bool {
+    !cells.is_empty()
+        && cells
             .iter()
             .all(|c| !c.is_empty() && c.chars().all(|ch| ch == '-' || ch == ':'))
-        {
+}
+
+fn is_our_header(cells: &[String]) -> bool {
+    cells.len() >= 4
+        && HEADER
+            .iter()
+            .take(4)
+            .enumerate()
+            .all(|(i, h)| cells[i] == *h)
+}
+
+/// 只解析 buddy 那张表里的行。文件里别的表格(老项目自己的发版流水)一概
+/// 不碰,也不当成解析失败。
+pub fn parse(raw: &str) -> Vec<ReleaseRow> {
+    let mut rows = Vec::new();
+    let mut in_our_table = false;
+    for line in raw.lines() {
+        let Some(cells) = cells_of(line) else {
+            in_our_table = false;
+            continue;
+        };
+        if is_our_header(&cells) {
+            in_our_table = true;
             continue;
         }
-        if !seen_header {
-            seen_header = true; // 第一行是表头
+        if !in_our_table || is_separator(&cells) {
             continue;
         }
         if cells.len() < 4 || cells[0].is_empty() {
@@ -93,34 +121,50 @@ pub fn append_row(workspace: &Path, row: &ReleaseRow) -> Result<bool> {
         },
         row.origin
     );
-    // 新版本排在表格最上面(最新的在前),表头与分隔行之后插入。
-    let body = match insert_after_separator(&existing, &line) {
-        Some(b) => b,
-        None => format!("{}{}", ensure_trailing_newline(&existing), line),
-    };
+    // 新版本排在表格最上面(最新的在前)。找不到 buddy 那张表就另起一段,
+    // 绝不往老项目自己那张表里塞行 —— 列对不上会把值错位到别的列上。
+    let body = insert_under_our_header(&existing, &line)
+        .unwrap_or_else(|| append_our_section(&existing, &line));
     write_file(workspace, REL_PATH, &body)?;
     Ok(true)
 }
 
-fn insert_after_separator(existing: &str, line: &str) -> Option<String> {
+/// 把新行插进 buddy 那张表的表头之后(最新的在最上面)。找不到那张表就返回
+/// `None`,由调用方另起一段,而不是往一张陌生的表里塞行。
+fn insert_under_our_header(existing: &str, line: &str) -> Option<String> {
     let mut out = String::new();
-    let mut inserted = false;
+    let mut state = 0; // 0=还没找到表头 1=刚过表头等分隔行 2=插完了
     for l in existing.lines() {
         out.push_str(l);
         out.push('\n');
-        if !inserted {
-            let t = l.trim();
-            if t.starts_with('|')
-                && t.trim_matches('|').split('|').all(|c| {
-                    !c.trim().is_empty() && c.trim().chars().all(|ch| ch == '-' || ch == ':')
-                })
-            {
-                out.push_str(line);
-                inserted = true;
+        match state {
+            0 => {
+                if cells_of(l).is_some_and(|c| is_our_header(&c)) {
+                    state = 1;
+                }
             }
+            1 if cells_of(l).is_some_and(|c| is_separator(&c)) => {
+                out.push_str(line);
+                state = 2;
+            }
+            _ => {}
         }
     }
-    inserted.then_some(out)
+    (state == 2).then_some(out)
+}
+
+/// 老项目已经有一份格式不同的发版记录时:另起一段 buddy 自己的表,不动人家
+/// 原来那张。MR 说明里会提到这件事,由人决定要不要合并两张表。
+fn append_our_section(existing: &str, line: &str) -> String {
+    format!(
+        "{}\n## buddy 管理的发版记录\n\n\
+         > 这个仓原本已经有一份格式不同的发版记录,buddy 不改它,另起一张表。\n\
+         > 两张表要不要并成一张,由人决定。\n\n\
+         | {} |\n|---|---|---|---|---|\n{}",
+        ensure_trailing_newline(existing),
+        HEADER.join(" | "),
+        line
+    )
 }
 
 fn ensure_trailing_newline(s: &str) -> String {
