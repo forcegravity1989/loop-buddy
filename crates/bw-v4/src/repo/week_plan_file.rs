@@ -301,3 +301,119 @@ pub fn category_machine_key(c: Option<Category>) -> &'static str {
 pub fn write(workspace: &Path, week: &str, body: &str) -> Result<PathBuf> {
     write_file(workspace, &rel_path(week), body)
 }
+
+/// 一份周计划文件要写的全部内容。渲染是纯格式化 —— 数字从哪来是调用方的事,
+/// 这里一个值都不发明。
+#[derive(Debug, Clone, Default)]
+pub struct WeekPlanDraft {
+    pub week: String,
+    /// `human` 或 `backfill`。
+    pub origin: String,
+    pub goal: Option<String>,
+    pub activities: Vec<ActivityRow>,
+    pub readings: Vec<MetricReading>,
+    pub ops: Vec<OpsRow>,
+    /// 「上周完成情况」段的正文行。空 = 没查到,写一句留白。
+    pub last_week_lines: Vec<String>,
+}
+
+/// 空段落统一写成括号包着的一句话 —— 界面据此认出「这里是留白,不是 0」。
+const EMPTY_GOAL: &str = "(未填——本周还没定目标)";
+
+pub fn render(d: &WeekPlanDraft) -> String {
+    let last_week = crate::isoweek::previous_week(&d.week).unwrap_or_default();
+    let origin = if d.origin.is_empty() {
+        "human"
+    } else {
+        &d.origin
+    };
+    let mut s = format!(
+        "---\nweek: {}\norigin: {}\n---\n\n# {} 周计划\n\n",
+        d.week, origin, d.week
+    );
+    s.push_str(
+        "> 正本文件。buddy 读它驱动计划屏与总览的「本周计划进度」块;**没有库内\n\
+         > 索引表** —— 计划屏左栏的周列表靠扫 `docs/plan/` 目录得到。库里活的排期、\n\
+         > 工具、workflow 那几列只是缓存,与这份文件不一致时以这份文件为准。\n\n",
+    );
+
+    s.push_str("## 周目标\n\n");
+    s.push_str(d.goal.as_deref().unwrap_or(EMPTY_GOAL));
+    s.push_str("\n\n");
+
+    s.push_str("## 业务活\n\n");
+    s.push_str("| 顺序 | 标题 | 类别 | 工具 | workflow | 预期推动的指标 | 远端 issue |\n");
+    s.push_str("|---|---|---|---|---|---|---|\n");
+    if d.activities.is_empty() {
+        s.push_str("<!-- 还没有排进本周的业务活。排一张活进来这里就会多一行。 -->\n");
+    }
+    for a in &d.activities {
+        s.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            trim_order(a.order),
+            a.title,
+            category_label(a.category),
+            tool_label(&a.tool),
+            dash_if_empty(&a.workflow),
+            dash_if_empty(&a.metric_key),
+            if a.remote_number == 0 {
+                "—".to_string()
+            } else {
+                format!("#{}", a.remote_number)
+            }
+        ));
+    }
+    s.push('\n');
+
+    s.push_str("## 本周指标读数\n\n");
+    s.push_str(
+        "<!-- 更新指标那一步把刚读到的现状抄一份进来,随 MR 进仓——多台机器\n\
+         \x20    看到同一份数字靠的是这一段,不是同步数据库。 -->\n",
+    );
+    s.push_str("| 指标 | 数值 | 来源 | 采集时间 |\n|---|---|---|---|\n");
+    if d.readings.is_empty() {
+        s.push_str("<!-- 本周还没有记过指标读数。没有读数 = 健康灯的第二条判据不成立。 -->\n");
+    }
+    for r in &d.readings {
+        s.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            r.name, r.value, r.source, r.collected_at
+        ));
+    }
+    s.push('\n');
+
+    s.push_str("## 本周运作\n\n| 活 | 状态 | 说明 |\n|---|---|---|\n");
+    if d.ops.is_empty() {
+        s.push_str("<!-- 本周还没有运作活。 -->\n");
+    }
+    for o in &d.ops {
+        s.push_str(&format!("| {} | {} | {} |\n", o.title, o.status, o.note));
+    }
+    s.push('\n');
+
+    s.push_str(&format!("## 上周完成情况({last_week})\n\n"));
+    if d.last_week_lines.is_empty() {
+        s.push_str("(未发现——上周没有可读回的合入或发版记录)\n");
+    } else {
+        for l in &d.last_week_lines {
+            s.push_str(&format!("- {l}\n"));
+        }
+    }
+    s
+}
+
+fn trim_order(n: f64) -> String {
+    if (n - n.round()).abs() < f64::EPSILON {
+        format!("{}", n.round() as i64)
+    } else {
+        format!("{n}")
+    }
+}
+
+fn dash_if_empty(s: &str) -> &str {
+    if s.trim().is_empty() {
+        "—"
+    } else {
+        s
+    }
+}

@@ -17,18 +17,25 @@
 //!
 //! - [`model`] —— V4 的领域类型(零 IO)。
 //! - [`store`] —— 四张表的哑存储,不做业务判断。
+//! - [`repo`] —— 仓文件解析与写入。**仓是正本**,这一层是读正本的唯一入口。
+//! - [`git`] / [`isoweek`] —— 现算的两个输入源:git 与 ISO 周换算。
 //! - [`derive`] —— 健康三判据的现算,带密封类型。
-//!
-//! 仓文件解析(`repo`)、命令总线(`command`)、编排(`app`)随后几步加进来。
+//! - [`standard`] —— 规范件模板正本,编译期打进二进制。
+//! - [`command`] —— 界面只发 `Command`、只收 `Event` 的那两个枚举。
+//! - [`app`] —— 编排:所有用例与守卫都在这一层。
 
 #![forbid(unsafe_code)]
 
+pub mod app;
+pub mod command;
 pub mod derive;
 pub mod git;
 pub mod isoweek;
 pub mod model;
 pub mod repo;
+pub mod standard;
 pub mod store;
 
+pub use command::{Command, Event};
 pub use model::{Issue, IssueKind, IssueOrigin, IssueStatus, Project, Signal};
 pub use store::{V4Store, DEFAULT_DB_FILENAME};

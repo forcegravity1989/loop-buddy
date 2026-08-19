@@ -216,6 +216,17 @@ impl V4Store {
         Ok(())
     }
 
+    /// 改活的说明正文(阻塞原因、草稿补充这类)。
+    pub async fn set_issue_body(&self, id: IssueId, body: &str) -> Result<()> {
+        sqlx::query("UPDATE issue SET body=?2, updated_at=?3 WHERE id=?1")
+            .bind(id.uuid().to_string())
+            .bind(body)
+            .bind(now_ts())
+            .execute(self.pool())
+            .await?;
+        Ok(())
+    }
+
     /// 给活挂版本标签(发版本那一刻写)。
     pub async fn set_issue_version(&self, id: IssueId, version: &str) -> Result<()> {
         sqlx::query("UPDATE issue SET version=?2, updated_at=?3 WHERE id=?1")

@@ -1,0 +1,71 @@
+schema_version = 1
+
+# 铺底默认给五个活的类别(原型 / 构建 / 优化 / 运营推广 / 运维,和产品的
+# 五阶段方法论一一对应)各配一行默认映射——这里只有五行,没有第六类:
+# 五阶段方法论本身就是五个阶段,不无中生有出一个第六类别。
+
+# 开工工具声明:name → 接法类型(kind:terminal 终端类 / web_embed 本机网
+# 页内嵌类)→ 探活方式 → 能力清单。这里的 kind 与下面 [[mapping]] 段的
+# category(活的类别标签)是两件不同的事,字段名特意分开,不要混。
+[[tool]]
+name = "claude_cli"
+kind = "terminal"
+probe = "path_candidates"
+capabilities = ["inject_skills", "resume", "hooks"]
+
+[[tool]]
+name = "cursor"
+kind = "terminal"
+probe = "version_cmd"
+version_cmd = "agent --version"   # 真实二进制名是 agent,不是 cursor.exe
+capabilities = []                 # Phase 1 未支持,如实留空
+
+[[tool]]
+name = "open_design"
+kind = "web_embed"
+probe = "socket"
+capabilities = ["inject_skills"]
+
+# 三列映射:类别 → 默认开工工具 → 默认 workflow。
+# workflow = SOP 类技能包(自己调度 agent),不是单个技能。
+[[mapping]]
+category = "prototype"            # 原型
+tool     = "open_design"
+workflow = "proto-design"
+
+[[mapping]]
+category = "build"                # 构建
+tool     = "claude_cli"
+workflow = "mattpocock-skills"    # 默认,项目可换成 superpowers
+
+[[mapping]]
+category = "optimize"             # 优化
+tool     = "claude_cli"
+workflow = "mattpocock-skills"
+
+[[mapping]]
+category = "ops"                  # 运维,和优化同款默认
+tool     = "claude_cli"
+workflow = "mattpocock-skills"
+
+[[mapping]]
+category = "growth"               # 运营推广
+tool     = "claude_cli"
+workflow = ""                     # 无默认,从鱼塘挑
+
+[review]
+who_can_merge  = "repo_write"     # 不存角色,谁有仓权限谁能点
+require_pr_for = ["code", "docs", "prototype"]
+
+[cadence]
+ops1_trigger  = "manual"          # 运作活①:人触发,判据 = 当前周没有 docs/plan/ 文件
+ops2_trigger  = "scheduled"
+ops2_schedule = "fri 20:00"       # 运作活②「资产盘点」:定时,默认周五晚,可改;
+                                    # 判据 = 本周有没有这张活(查 issue,不查 cron 表)
+
+[kanban]
+pool_label = "待办池 · 未排进任何一周"
+todo_label = "待办 · 已排进本周,等开工"
+# 所有列都能拖——排期(待办池⇄待办)直接生效,拖到进行中/评审中/已完成/阻塞
+# 四列是状态动作,弹确认框才真正发生,不合法的转移松手即弹回;不再有
+# drag_scope 这种"限定能拖哪些列"的开关。

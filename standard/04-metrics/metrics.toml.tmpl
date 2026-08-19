@@ -1,0 +1,43 @@
+schema_version = 1
+
+# .bw/metrics.toml 是这个项目指标定义的唯一正本 —— 改指标就是改这份文件,
+# 和改代码一样要过评审;buddy 只读它,把读数同步进本机做展示缓存,绝不
+# 反过来改写这份文件。
+#
+# 规则:
+# - 北极星([north_star])恰好一个,是这个项目当前唯一的顶层目标。
+# - 滞后指标([[lagging]])与引领指标([[leading]])各 0 到多条,不强求填满。
+# - 每一条指标(含北极星)都必须带一个采集方案 collect —— 没有采集方案
+#   不等于这条指标不对,但必须如实标注"这个数字现在怎么来"。collect.kind
+#   只能是 "github" / "script" / "bw" / "connector" / "manual" 五个词之一。
+# - 没有真实数据的指标,对应的健康灯显示灰色未知,不会因为"看起来该是绿
+#   的"就手动填一个数字把它点亮。
+#
+# 完整格式说明见 docs/buddy/standards/metrics.md。
+
+[north_star]
+name = "{{north_star}}"
+def = ""
+# TODO:上面这条 collect 目前是占位的人工方案(kind = "manual"、query 留
+# 空)。这个项目应该尽快把它换成能自动采集的方案——参考
+# docs/buddy/standards/metrics.md 里 collect.kind 的五种取值,选一种换掉,
+# 不要长期靠人手填一个北极星数字。
+collect = { kind = "manual", query = "" }
+
+# ── 滞后指标示例(结果性:动作做完之后才看得出好坏)──────────────────
+# 取消下面几行的注释、把内容换成真实指标,即可加入第一条滞后指标。
+#
+# [[lagging]]
+# name   = "标准工作流执行成功率"
+# def    = "过去 30 天内成功次数 ÷ 总次数"
+# target = "≥70%"
+# collect = { kind = "bw", query = "..." }
+
+# ── 引领指标示例(过程性:当下可以直接影响,并且对滞后指标有预测性)───
+# 取消下面几行的注释、把内容换成真实指标,即可加入第一条引领指标。
+#
+# [[leading]]
+# name   = "30 天内被真实执行过的标准模板数"
+# def    = "..."
+# target = "≥3"
+# collect = { kind = "script", query = "leading.L1" }

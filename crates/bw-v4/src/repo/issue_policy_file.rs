@@ -79,7 +79,7 @@ pub struct KanbanLabels {
     pub todo_label: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct IssuePolicyFile {
     #[serde(default)]
