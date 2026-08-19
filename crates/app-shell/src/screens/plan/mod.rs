@@ -30,7 +30,7 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
     let (p, bridge) = (&p, &bridge);
     let dragging = use_signal(|| None::<CardItemVm>);
     let pending = use_signal(|| None::<PendingMove>);
-    let selected = use_signal(|| None::<CardItemVm>);
+    let selected = use_signal(|| None::<IssueId>);
     let bounced = use_signal(String::new);
 
     rsx! {
@@ -55,7 +55,7 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
                     }
                 }
             }
-            {detail_panel(selected, bridge)}
+            {detail_panel(p, selected, bridge)}
         }
         if let Some(pm) = pending.read().clone() {
             {confirm_dialog(pm, pending, bridge)}
@@ -235,7 +235,7 @@ fn column(
     bridge: &Bridge,
     mut dragging: Signal<Option<CardItemVm>>,
     mut pending: Signal<Option<PendingMove>>,
-    selected: Signal<Option<CardItemVm>>,
+    selected: Signal<Option<IssueId>>,
     mut bounced: Signal<String>,
 ) -> Element {
     let target = col.status;
@@ -308,17 +308,17 @@ fn column(
 fn card_view(
     c: &CardItemVm,
     mut dragging: Signal<Option<CardItemVm>>,
-    mut selected: Signal<Option<CardItemVm>>,
+    mut selected: Signal<Option<IssueId>>,
 ) -> Element {
     let c1 = c.clone();
-    let c2 = c.clone();
+    let cid = c.id;
     rsx! {
         div {
             key: "{c.id:?}",
             draggable: true,
             ondragstart: move |_| dragging.set(Some(c1.clone())),
             ondragend: move |_| dragging.set(None),
-            onclick: move |_| selected.set(Some(c2.clone())),
+            onclick: move |_| selected.set(Some(cid)),
             style: "background:{theme::CARD};border:1px solid {theme::BORDER};border-radius:8px;\
                     padding:10px 11px;margin-bottom:8px;",
             div {
@@ -341,8 +341,19 @@ fn card_view(
     }
 }
 
-fn detail_panel(mut selected: Signal<Option<CardItemVm>>, bridge: &Bridge) -> Element {
-    let Some(c) = selected.read().clone() else {
+/// 右侧详情面板。**按 id 从最新的 ViewModel 里现查**,不拿点卡片那一刻的
+/// 快照 —— 拿快照的话,▶开工 之后活已经到「评审中」了,面板还显示「▶ 开工」,
+/// 再点一次只会收到一句「这张活现在不是能开工的状态」。
+fn detail_panel(p: &ProjectVm, mut selected: Signal<Option<IssueId>>, bridge: &Bridge) -> Element {
+    let picked = selected.read().and_then(|id| {
+        p.board
+            .columns
+            .iter()
+            .flat_map(|col| col.cards.iter())
+            .find(|c| c.id == id)
+            .cloned()
+    });
+    let Some(c) = picked else {
         return rsx! {
             div {
                 style: "width:260px;flex:none;{theme::card()}padding:16px;color:{theme::INK_4};\

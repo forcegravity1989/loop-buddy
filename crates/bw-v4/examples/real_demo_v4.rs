@@ -269,8 +269,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── 步骤 10:证据 JSON,数字全部真实读回 ──────────────
     let evidence = build_evidence(&store, pid, &slug, &workspace, &week, &health, &log).await?;
-    let out = format!("evidence-v4-{slug}.json");
+    // 证据写在**工作区根旁边**,不写进当前目录 —— 从仓里跑一次指挥器就把仓
+    // 弄脏(git status 多一行),那不像话。
+    let out = ws_root.join(format!("evidence-v4-{slug}.json"));
     std::fs::write(&out, &evidence)?;
+    let out = out.display();
     println!("{evidence}");
     eprintln!("[REAL_DEMO_V4] 证据已写入 {out}");
     Ok(())

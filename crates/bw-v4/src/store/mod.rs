@@ -95,11 +95,14 @@ pub fn now_ts() -> i64 {
 
 /// 把带 `#[serde(rename_all = "snake_case")]` 的枚举写成库里的字符串。
 /// 手写 match 会和 serde 名字慢慢漂移,这里让 serde 当唯一事实源。
+/// 序列化不出一个字符串就直接炸。今天这几个枚举都是纯 unit variant,炸不了;
+/// 哪天有人给枚举加了负载,静默写一个空串进 `NOT NULL` 列会让整行以后都读
+/// 不出来 —— 那是把坏数据藏起来,不如当场停。
 pub(crate) fn enum_to_db<T: serde::Serialize>(v: &T) -> String {
     serde_json::to_value(v)
         .ok()
         .and_then(|x| x.as_str().map(str::to_string))
-        .unwrap_or_default()
+        .expect("枚举必须能序列化成一个字符串(带负载的变体不能进库这一列)")
 }
 
 /// [`enum_to_db`] 的逆。库里读到不认识的值就报错,不静默 fallback 到某个

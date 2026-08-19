@@ -53,3 +53,4 @@ docs/archive/verification/skill-eval-*/
 
 # superpowers 插件的本地工作目录(自带 .gitignore 挡住内容,这里连目录一起挡)。
 /.superpowers/
+evidence-v4-*.json

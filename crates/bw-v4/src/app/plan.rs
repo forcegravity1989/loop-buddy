@@ -330,11 +330,13 @@ impl App {
 
     async fn next_sort_order(&self, project_id: ProjectId, week: &str) -> Result<f64> {
         let siblings = self.store.issues_in_week(project_id, week).await?;
-        Ok(siblings
+        // 从 `f64::NEG_INFINITY` 起 fold,不是从 0:排序值可以是负的
+        // (`reorder_issue` 往队首插就会产生负值),从 0 起会让新活挤到中间。
+        let max = siblings
             .iter()
             .map(|i| i.sort_order)
-            .fold(0.0_f64, f64::max)
-            + 1.0)
+            .fold(f64::NEG_INFINITY, f64::max);
+        Ok(if max.is_finite() { max + 1.0 } else { 1.0 })
     }
 }
 

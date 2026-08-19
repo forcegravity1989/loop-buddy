@@ -128,8 +128,12 @@ pub(super) fn build_metrics(
             ..Default::default()
         };
     };
+    // 精确按名字对,不用 contains:指标名互为前缀时会认错,空名字会命中第一条。
     let reading_of = |name: &str| -> Option<&week_plan_file::MetricReading> {
-        plan?.readings.iter().find(|r| r.name.contains(name))
+        if name.trim().is_empty() {
+            return None;
+        }
+        plan?.readings.iter().find(|r| r.name.trim() == name.trim())
     };
     let driving_of = |key: &str| -> Vec<String> {
         issues

@@ -4,7 +4,7 @@
 
 ## 0 · 这篇管什么、不管什么
 
-**管**:①`crates/bw-store/src/schema.sql` 最终只剩哪四张表、`issue` 表要加哪 8 列;②项目代码仓里 `.bw/*.toml`、`docs/plan/*.md`、`docs/releases.md`、`PROJECT.md` 的完整格式,每个给一份可以直接抄的样例;③一样信息该住在仓、本机文件、还是「现算(不存)」,谁来取、丢了能不能重建。
+**管**:①`crates/bw-store/src/schema.sql` 最终只剩哪四张表、`issue` 表要加哪 9 列;②项目代码仓里 `.bw/*.toml`、`docs/plan/*.md`、`docs/releases.md`、`PROJECT.md` 的完整格式,每个给一份可以直接抄的样例;③一样信息该住在仓、本机文件、还是「现算(不存)」,谁来取、丢了能不能重建。
 
 **不管**:规范铺底怎么把这些文件第一次写进仓、怎么升级、怎么对账(见 [03-standard-and-backfill.md](03-standard-and-backfill.md));开工工具怎么注册、技能包(workflow)扫描与注入的实现细节(见 [04-tools-and-workflows.md](04-tools-and-workflows.md),本文只在信息住哪总表里提一笔它住在仓的哪个目录);会话屏、计划屏、通知屏的界面结构(见 05/06/07 篇);项目群适配的工厂实现细节(母文档 §6/§7 已定接口是「发消息/拉历史」两个函数,具体留给 07)。本文只管数据落在哪、文件长什么样,不管谁在什么时机去读写它们。
 
@@ -25,7 +25,7 @@
 | 表 | 装什么 | 备注 |
 |---|---|---|
 | `project` | 项目定位(路径/远端/id/名称)+ 项目墙用的健康灯显示缓存(既有的 `signal`/`weekly_signal`/`signal_derived_rev`/`signal_derived_at` 四列) | 结构不新增列;推导算法据 §2.6/[08 篇](08-overview-derivation.md)改成现算 git + 仓文件,但缓存列本身沿用 |
-| `issue` | 远端 issue 的本机缓存 + 8 个 V4 扩展列(排期/工具/workflow/类别/来源/顺序/挂的指标) | 这 8 列的**正本是周计划文件的活清单行**,库里只是缓存(§2.2) |
+| `issue` | 远端 issue 的本机缓存 + 9 个 V4 扩展列(排期/版本/工具/种类/来源/workflow/类别/顺序/挂的指标) | 这 9 列的**正本是周计划文件的活清单行**,库里只是缓存(§2.2) |
 | `claude_conversation` | 活 ↔ claude 会话 ↔ worktree ↔ 分支,恢复会话必需 | 结构不变(V3 已有) |
 | `app_meta` | schema 版本等 key/value;通知屏「事件流看到哪个时间点」也以 `notify_seen:<project_id>` 为键放这里(07 篇 §2.3),不为它开第五张表 | 结构不变(V3 已有) |
 
@@ -67,7 +67,7 @@ sort_order   REAL    NOT NULL DEFAULT 0   -- 看板同列内排序(含待办池)
 metric_key   TEXT    NOT NULL DEFAULT ''   -- 这张活预期推动的指标键(`.bw/metrics.toml` 里那条指标的 id 字段),''=不挂;一活只挂一个,要挂多个就拆活
 ```
 
-**这 8 列是缓存,不是正本**(第七轮定性,比第六轮更进一步):排期、工具、workflow、类别、来源、顺序、挂的指标——这些属性的**正本是 `docs/plan/YYYY-Www.md` 里活清单那一行**(§2.5)。库里这 8 列存在的唯一理由是:①计划屏、会话屏要能离线快速渲染、按列/按周做 SQL 过滤与排序,不能每次开屏都解析 Markdown;②拖卡片要即时视觉反馈,不能等一次 MR 合入才看到卡片动了。写入顺序因此是"缓存先动、文件随后追上"——拖拽/改工具的命令先更新这 8 列(界面立刻反映),再驱动一次仓文件改动(走 MR,见 [06 篇](06-plan-screen.md));**文件与缓存出现分歧时以文件为准**,下一次对账扫描(项目打开、或人工点「刷新」)用文件内容覆盖缓存,不是反过来。这条对账机制的具体触发时机是留待 06/04 篇定的开放问题(见 §6)。
+**这 9 列是缓存,不是正本**(第七轮定性,比第六轮更进一步):排期、版本、工具、种类、来源、workflow、类别、顺序、挂的指标——这些属性的**正本是 `docs/plan/YYYY-Www.md` 里活清单那一行**(§2.5)。库里这 9 列存在的唯一理由是:①计划屏、会话屏要能离线快速渲染、按列/按周做 SQL 过滤与排序,不能每次开屏都解析 Markdown;②拖卡片要即时视觉反馈,不能等一次 MR 合入才看到卡片动了。写入顺序因此是"缓存先动、文件随后追上"——拖拽/改工具的命令先更新这 9 列(界面立刻反映),再驱动一次仓文件改动(走 MR,见 [06 篇](06-plan-screen.md));**文件与缓存出现分歧时以文件为准**,下一次对账扫描(项目打开、或人工点「刷新」)用文件内容覆盖缓存,不是反过来。这条对账机制的具体触发时机是留待 06/04 篇定的开放问题(见 §6)。
 
 `week_of` 不外键指到任何周索引表——用 ISO 周文本软关联,一件活可以先标好周、文件还没建出来。`version` 落的是母文档「里程碑不单建实体,版本就是里程碑」这句话。`origin` 里 `backfill` 状态照远端、**不影响任何计数或排序特权**。`workflow` 是"这个技能包用了几次"现算查询(§2.3)的唯一数据源。`sort_order` 对应仓文件活清单里的「顺序」列(§2.5)。
 
@@ -413,7 +413,7 @@ Linear(工作流/看板的产品体验对标,不是功能照抄)
 | 表 | 为什么它非在库不可 |
 |---|---|
 | `project` | 项目墙要在**不打开任何项目**时列出 N 个项目的名字与灯——不能每次启动扫 N 个仓。只存定位 + 显示缓存,打开项目时以仓文件为准刷新 |
-| `issue` | 远端 issue 的**本机缓存**(离线可看、启动快);没配远端的项目它是唯一落脚点。8 个扩展列正本在周计划文件,这里是缓存(§2.2) |
+| `issue` | 远端 issue 的**本机缓存**(离线可看、启动快);没配远端的项目它是唯一落脚点。9 个扩展列正本在周计划文件,这里是缓存(§2.2) |
 | `claude_conversation` | 活 ↔ claude 会话 ↔ worktree ↔ 分支,恢复会话必需。纯本机、纯过程 |
 | `app_meta` | schema 版本、`notify_seen:<project_id>` 等 key/value |
 
@@ -471,7 +471,7 @@ metric_key TEXT NOT NULL DEFAULT '',
 add_column_if_missing(&pool, "issue", "metric_key", "TEXT NOT NULL DEFAULT ''").await?;
 ```
 
-这只是一个示例格式,试点前的 `issue` 8 列本身不需要这行代码(它们随新库首次创建就已经在 `CREATE TABLE` 语句里)。
+这只是一个示例格式,试点前的 `issue` 9 列本身不需要这行代码(它们随新库首次创建就已经在 `CREATE TABLE` 语句里)。
 
 ### 3.3 新增仓文件解析器模块(`crates/bw-engine/src/`)
 
@@ -487,9 +487,9 @@ add_column_if_missing(&pool, "issue", "metric_key", "TEXT NOT NULL DEFAULT ''").
 
 **取消(第七轮,对应表被取消)**:`SyncIssuePolicyFile`/`SyncStandardFile` 这类"把文件内容同步进库"的命令不需要——`.bw/issue-policy.toml`/`.bw/standard.toml`/`.bw/managed.toml` 全部不入库(§2.6),配置屏、▶开工、资产盘点都是现读现解析 §3.3 的解析器,没有中间的"同步"环节。`RecordChatOutbox`(第六轮草案)不需要——没有 `chat_outbox` 表可写,项目群适配模块([07 篇](07-notify-and-chat-group.md))发送即完成。`RecordWorkflowCredit`(第六轮草案)不需要——没有 `workflow_credit` 表可写,「用了几次」是 §2.3 的现算查询,「成没成」看远端 MR。
 
-**新增(第七轮,让缓存追上文件)**:`RefreshIssueCacheFromPlan { project_id, week }`——读 `week_plan_file.rs::extract_activities` 解析出的活清单,按远端 issue 号 upsert 本机 `issue` 缓存表的 8 个扩展列(§2.2);触发时机(项目打开时自动跑一次 / 人工点「刷新」/ MR 合入 webhook)留给 [04 篇](04-tools-and-workflows.md)/[06 篇](06-plan-screen.md)定,本文只定这条命令的语义:**幂等**(重复跑得到同一结果)、**文件说了算**(缓存里有文件没有的行,不删除该行,只是不再更新——避免误删还没排进周计划就先建了活的记录)。
+**新增(第七轮,让缓存追上文件)**:`RefreshIssueCacheFromPlan { project_id, week }`——读 `week_plan_file.rs::extract_activities` 解析出的活清单,按远端 issue 号 upsert 本机 `issue` 缓存表的 9 个扩展列(§2.2);触发时机(项目打开时自动跑一次 / 人工点「刷新」/ MR 合入 webhook)留给 [04 篇](04-tools-and-workflows.md)/[06 篇](06-plan-screen.md)定,本文只定这条命令的语义:**幂等**(重复跑得到同一结果)、**文件说了算**(缓存里有文件没有的行,不删除该行,只是不再更新——避免误删还没排进周计划就先建了活的记录)。
 
-`ScheduleIssue`/`ReorderIssue`/`UpdateIssueMeta` 这类改 8 个扩展列的命令签名留给 [06 篇](06-plan-screen.md)/[04 篇](04-tools-and-workflows.md)定,本文只定它们最终落哪 8 列(§2.2)与"缓存先动、文件随后走 MR 追上"这条时序(§2.2)。
+`ScheduleIssue`/`ReorderIssue`/`UpdateIssueMeta` 这类改 9 个扩展列的命令签名留给 [06 篇](06-plan-screen.md)/[04 篇](04-tools-and-workflows.md)定,本文只定它们最终落哪 9 列(§2.2)与"缓存先动、文件随后走 MR 追上"这条时序(§2.2)。
 
 ## 4 · 边界与失败
 
@@ -504,7 +504,7 @@ add_column_if_missing(&pool, "issue", "metric_key", "TEXT NOT NULL DEFAULT ''").
 | 核验什么 | 读回 | 预期 |
 |---|---|---|
 | 库里恰好四张表 | `sqlite3 <db> "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"` | 恰好 `app_meta`、`claude_conversation`、`issue`、`project` 四行,不多不少 |
-| `issue` 8 个缓存列齐全,一次到位 | `sqlite3 <db> "PRAGMA table_info(issue);"` | 直接看到全部 8 列(`week_of`/`version`/`tool`/`kind`/`origin`/`workflow`/`sort_order`/`metric_key`),不需要任何 `add_column_if_missing` 参与 |
+| `issue` 9 个缓存列齐全,一次到位 | `sqlite3 <db> "PRAGMA table_info(issue);"` | 直接看到全部 9 列(`week_of`/`version`/`tool`/`kind`/`origin`/`workflow`/`category`/`sort_order`/`metric_key`),不需要任何 `add_column_if_missing` 参与 |
 | 19 张被取消的表全部不存在 | `sqlite3 <db> "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('agent','release','release_issue','week_plan','issue_metric','workflow_credit','chat_outbox','skill_package','observation','metric','workflow_run','artifact','cron_task','connector','skill','skill_file','skill_stage','workflow_spec','workflow_version','op_stage','handoff','session','knowledge_source');"` | 空结果——新 schema 里从未定义过这些表 |
 | `project` 表没有名片/群/版本副本列 | `sqlite3 <db> "PRAGMA table_info(project);"` | 不出现 `standard_version`/`current_version`/`chat_provider`/`chat_group_id`/`chat_notify` |
 | 回填 issue 的来源分布 | `sqlite3 <db> "SELECT origin, COUNT(*) FROM issue GROUP BY origin;"` | 老项目接入后 `backfill` 一档非零;新项目只有 `human`/`auto`/`agent_split` |

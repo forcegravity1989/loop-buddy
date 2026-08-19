@@ -23,9 +23,11 @@ pub fn View(p: ProjectVm) -> Element {
                 div {
                     style: "{theme::card()}padding:34px;text-align:center;color:{theme::INK_3};\
                             font-size:13px;line-height:2;",
-                    "还没有任何会话。"
+                    "还没有任何会话记录。"
                     br {}
-                    "去计划屏点一张活的「▶ 开工」,跑起来之后这里会出现它的会话。"
+                    "会话记录要等内嵌终端那一刀 —— 现在的 ▶跑 走的是自我标注的"
+                    br {}
+                    "替身执行器,不起真的 claude 会话,所以这里一直是空的。"
                 }
             }
             for s in p.sessions.iter() {

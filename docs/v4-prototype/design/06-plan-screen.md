@@ -4,7 +4,7 @@
 
 ## 0 · 这篇管什么、不管什么
 
-**管**:计划屏——左栏周列表怎么算、中栏六列看板每列是什么/卡片长什么样/按钮各走哪条命令、拖拽的范围与替代路径、周头(周目标/进度/运作活 chip/新建活/发版本/预览开关)、「全部」视角的筛选条、右侧活详情滑出、发版本三步、预览未合入。对应母文档第 2/3 站、§2.5(指标/周目标/活的关系)、§2.6 全景表里排期相关部分、§5 计划入口、§6「信息住哪」;数据落点见 02 篇——`issue` 表 8 个扩展列(排期/工具/workflow/类别/来源/顺序/挂的指标),**没有 `week_plan`/`release` 这两张表**,周列表靠扫 `docs/plan/` 目录、发版记录唯一正本是 `docs/releases.md`;待拍-04/05/06/07/08/12/21/25。
+**管**:计划屏——左栏周列表怎么算、中栏六列看板每列是什么/卡片长什么样/按钮各走哪条命令、拖拽的范围与替代路径、周头(周目标/进度/运作活 chip/新建活/发版本/预览开关)、「全部」视角的筛选条、右侧活详情滑出、发版本三步、预览未合入。对应母文档第 2/3 站、§2.5(指标/周目标/活的关系)、§2.6 全景表里排期相关部分、§5 计划入口、§6「信息住哪」;数据落点见 02 篇——`issue` 表 9 个扩展列(排期/版本/工具/种类/来源/workflow/类别/顺序/挂的指标),**没有 `week_plan`/`release` 这两张表**,周列表靠扫 `docs/plan/` 目录、发版记录唯一正本是 `docs/releases.md`;待拍-04/05/06/07/08/12/21/25。
 
 **不管**:运作活①会话里 agent 具体做什么——[09-ops-workflows.md](09-ops-workflows.md),本篇只消费它挂了 `week_of` 的产出。开工工具/workflow 怎么注入——[04-tools-and-workflows.md](04-tools-and-workflows.md)。会话屏三栏、终端——[05-session-screen.md](05-session-screen.md)。项目群通知——[07-notify-and-chat-group.md](07-notify-and-chat-group.md)。规范铺底/`.bw/issue-policy.toml` 正本——[03-standard-and-backfill.md](03-standard-and-backfill.md)。
 
@@ -31,7 +31,7 @@
 **周列表怎么算(没有索引表,现算)**:「全部」下面列出的周 = 扫 `docs/plan/` 目录得到的文件名(`docs/plan/YYYY-Www.md`,取文件名里的 `YYYY-Www` 部分;可选读一下 front matter 的 `origin` 供小徽记区分本周/回填,见 02 篇 §2.5)∪ `issue.week_of` 缓存列上出现过的周(哪怕这周还没有正式文件,比如刚被拖进一个新周但运作活①还没跑),取并集去重。**本周永远置顶**,哪怕它还没有 `docs/plan/` 文件、也没有活排进去——空的本周才有地方触发「开始本周」。这条扫描每次打开计划屏现跑一次,不缓存进库(母文档 §6.3 代价①已知情:buddy 自己仓几百个文件是毫秒级,万级历史周的老项目将来可能要加内存缓存,留 02 篇 §6 开放问题)。
 
 **周头数据来源(全部现读仓文件,没有一样经过库内索引表)**:
-- **周目标**:现读 `docs/plan/YYYY-Www.md`,用 02 篇 §3.3 定义的解析器 `week_plan_file.rs::extract_goal(markdown)` 取「## 周目标」后第一段非空文本——每次打开计划屏/切周都现读现解析,不经过任何库内缓存,`issue` 表 8 列里也没有一列装周目标。
+- **周目标**:现读 `docs/plan/YYYY-Www.md`,用 02 篇 §3.3 定义的解析器 `week_plan_file.rs::extract_goal(markdown)` 取「## 周目标」后第一段非空文本——每次打开计划屏/切周都现读现解析,不经过任何库内缓存,`issue` 表 9 列里也没有一列装周目标。
 - **进度条**:按 `week_of` 匹配到的业务活+运作活状态分段,查的是 `issue` 缓存表(§2.2),这条不变。
 - **运作活①②③ chip**:直接查这周 `kind='ops'` 的三张活状态,查 `issue` 缓存表,这条不变。
 - **发版默认版本号**:现读 `.bw/project.toml` 的 `current_version` 字段(02 篇 §2.5/§3.3 的 `project_file.rs` 解析器新增字段)——**这个值不在 `project` 表里**,02 篇明确「这四项(连同现有五字段)都不落库存副本」(02 篇 §2.5),`project` 表结构没有新增列(02 篇 §3.1)。计划屏每次要显示在研版本都现解析这份文件,和「配置」屏读同一个解析结果。
@@ -84,11 +84,11 @@
 - **可拖 = 六列全部的卡**,不再限定只有待办池/待办两列带 `draggable`。
 - **排期动作(待办池⇄待办、列内排序)**:效果不变,直接生效,不改任何状态——跨列发 `ScheduleIssue{id,week_of}`(拖进待办 `week_of=Some(选中周)`,拖回待办池 `week_of=None`);同列发 `ReorderIssue{id,after}`(列内调先后)。**落点是三处,不是只写库**——02 篇 §2.2/§3.4 把这条时序的具体设计留给本篇,下面单独展开(见「排期的三层写入」)。
 
-**排期的三层写入(缓存 / 文件 / 远端标签)**:`ScheduleIssue`/`ReorderIssue` 发出后,不是只写库这一件事——02 篇 §2.2 定了正本在 `docs/plan/YYYY-Www.md` 活清单那一行、`issue` 8 列只是缓存,并把"缓存先动、文件随后走 MR 追上"这条时序的具体设计留给本篇。三层顺序与失败处理:
+**排期的三层写入(缓存 / 文件 / 远端标签)**:`ScheduleIssue`/`ReorderIssue` 发出后,不是只写库这一件事——02 篇 §2.2 定了正本在 `docs/plan/YYYY-Www.md` 活清单那一行、`issue` 9 列只是缓存,并把"缓存先动、文件随后走 MR 追上"这条时序的具体设计留给本篇。三层顺序与失败处理:
 
 1. **缓存层(立即,同步)**:命令一发出,先 upsert `issue` 表对应的 `week_of`/`sort_order` 两列,立刻发 `IssueScheduled{id}`/`IssueReordered{id}` 事件,看板马上跟手反映拖拽结果——这一步是乐观更新,不等文件或 MR。
 2. **文件层(异步,走 MR,防抖合并)**:后台把这次改动应用到目标周 `docs/plan/YYYY-Www.md` 的「业务活」表格(§2.5 样例,顺序列对应 `sort_order`)。为避免"一次拖拽一个 MR"的噪音,复用和 `CutRelease`(§2.4)同一种"轻量活+MR"基础设施,按周去重:这一周如果已经有一张 `kind='light'`、标题形如「排期调整 · 2026-W34」的活正处于 `InReview`(MR 开着),后续拖拽直接把 `issue` 缓存表当前最新状态整体重新渲染成这份周文件的活清单表格,覆盖式提交(push 追加一次 commit)到同一分支,不新开 MR;没有这样一张活时,首次拖拽触发新建一张、开分支、提交、开 MR,状态进 `InReview`,和其它「待人处理」的活一样等人合入。**如果这一周此刻正有运作活①(或③的合并调整)自己的 MR 开着**,排期改动直接并到那条分支上,不另开一张「排期调整」轻量活——一份草稿只对应一份正在准备合入的周文件,不产生两条相互覆盖的分支。这张轻量活的合入方式和 `CutRelease` 的「发版本 vX」完全对称:有权限的人点「合入并完成」(`MergeIssuePr` 接 `TransitionIssue{Done}`),合入那一刻周文件的活清单表格成为主干正本,和这张轻量活自己的合入+完成记账同一时刻发生,不再有第二处库写入需要补(缓存早就是最新状态)。
-3. **远端标签(镜像,尽力而为,不阻塞)**:若这张活的 `github_number` 非零,best-effort 打/挪一个 `bw/week:2026-W34` 这类标签到远端 issue,失败不重试、不提示、不影响任何功能——纯粹方便在网页上顺手看,打不上就打不上(母文档 §6.1「远端标签是镜像不是正本」)。
+3. **远端标签(镜像,尽力而为,不阻塞)**:若这张活的 `remote_number` 非零,best-effort 打/挪一个 `bw/week:2026-W34` 这类标签到远端 issue,失败不重试、不提示、不影响任何功能——纯粹方便在网页上顺手看,打不上就打不上(母文档 §6.1「远端标签是镜像不是正本」)。
 
 **MR 还没合入期间界面显示什么状态**:看板本身不需要专门"预览"——缓存已经是拖拽后的最新真相,看板显示的就是这个结果,这点和 §2.5「预览·未合入」服务的场景相反(那里是运作活①的草稿**还没写回缓存**,必须专门去读 worktree 才能看到;这里恰恰是缓存**已经抢跑**在文件前面)。因此只需要一个轻量提示,不复用 §2.5 那套"整份周头换目录重渲染"的机制:这张「排期调整」活关联到的卡片,在详情面板加一行不阻断的小字「排期改动待合入 · MR #N」,提示这次改动还没有落进 `docs/plan/` 正本,直到 MR 合入才消失。
 
@@ -141,7 +141,7 @@
 | 周 | `issue.week_of` | 可改 → `ScheduleIssue{id,week_of}`——和拖拽同一条命令,详情面板给个下拉,不强迫必须靠拖拽(可达性,也让「全部」视角选中的卡能改周);走 §2.3「排期的三层写入」同一条路径,不是详情面板专属的另一套逻辑 |
 | 版本 | `issue.version` | 由所属周/发版决定,本篇不在这里开放改 |
 | 来源 | `issue.origin` | 只读,历史事实不允许事后改 |
-| 远端 issue/MR | `github_number`/`pr_number` | 只读 |
+| 远端 issue/MR | `remote_number`/`pr_number` | 只读 |
 | 会话记录 | `claude_conversation` 按 `issue_id` 查(05 篇已把这张表定为"会话与活的对应关系"正本;02 篇第七轮删除了 `workflow_run`,这里不再有"每次运行的成败与耗时"这类字段——那条记账铁律在 V4 没有持久载体了,判据换成远端 MR 合没合入,母文档 §6.3 已知情)| 只读,时间倒序,展示 `claude_session_id`/`workspace_path`/`branch_name` 这类会话身份线索,不展示逐次运行成败 |
 | 产物 | 现算,`git log --name-only` 查该活分支/worktree 改过的文件(02 篇 §2.6「现算」表,没有产物登记表)| 只读 |
 
@@ -182,9 +182,9 @@ metric_key TEXT NOT NULL DEFAULT ''
 -- metric_key: 这张活预期推动的指标键(`.bw/metrics.toml` 里那条指标的 id),单列;一活一指标,要挂多个就拆活(02 篇 §2.2,不建 issue_metric 关联表)
 ```
 
-**这 8 列全部是缓存,不是正本**——排期/工具/workflow/类别/来源/顺序/挂的指标的正本是 `docs/plan/YYYY-Www.md` 活清单那一行,写入顺序、对账时机见 §2.3(02 篇 §2.2 已定性,本篇负责落地时序)。
+**这 9 列全部是缓存,不是正本**——排期/版本/工具/种类/来源/workflow/类别/顺序/挂的指标的正本是 `docs/plan/YYYY-Www.md` 活清单那一行,写入顺序、对账时机见 §2.3(02 篇 §2.2 已定性,本篇负责落地时序)。
 
-**V4 是新库,直接写全,不是给存量表加列**(02 篇 §2.7/§3.1/§3.2):开发期 `schema.sql` 每次改了删库重建,`sqlite.rs::SqliteStore::open()` **不需要**为这 8 列写 `add_column_if_missing`——它们随新库首次创建就已经在 `issue` 的 `CREATE TABLE` 语句里,不是增量 diff。`add_column_if_missing` 双守卫从"第一个真实用户开始用 V4 库存了数据"(内部试点)那一刻起恢复执行,此前不适用(CLAUDE.md「schema 迁移双守卫」保护的是存量库,V4 开发期还没有这样的库)。`list_issues`(`sqlite.rs:2716-2747`)的 `SELECT` 加这 8 列,`ORDER BY` 从写死的 `number ASC` 改成「先 `sort_order`(非空时)再 `number` 兜底」;`Issue` 结构体(`model.rs:1694-`)与 `ui` crate 的看板 VM 按需加。memory 里有真实踩过的坑(`project_id` 进了 schema 但读侧全链路没接上)——schema → 领域结构体 → SELECT → VM 四处要一起改。
+**V4 是新库,直接写全,不是给存量表加列**(02 篇 §2.7/§3.1/§3.2):开发期 `schema.sql` 每次改了删库重建,`V4Store::open()`(`crates/bw-v4/src/store/mod.rs`) **不需要**为这 9 列写 `add_column_if_missing`——它们随新库首次创建就已经在 `issue` 的 `CREATE TABLE` 语句里,不是增量 diff。`add_column_if_missing` 双守卫从"第一个真实用户开始用 V4 库存了数据"(内部试点)那一刻起恢复执行,此前不适用(CLAUDE.md「schema 迁移双守卫」保护的是存量库,V4 开发期还没有这样的库)。读活的 `SELECT`(`crates/bw-v4/src/store/issue.rs`)一次列全这 9 列,`ORDER BY` 是「先 `sort_order` 再 `number` 兜底」;领域结构体是 `crates/bw-v4/src/model.rs` 的 `Issue`,看板 VM 在 `crates/app-shell/src/vm.rs`。memory 里有真实踩过的坑(`project_id` 进了 schema 但读侧全链路没接上)——schema → 领域结构体 → SELECT → VM 四处要一起改。
 
 **没有 `week_plan`/`release` 两张表——02 篇第七轮盘点已删除,本篇不再新建**:
 - **周列表**靠扫 `docs/plan/` 目录现算(§2.1),不需要一张索引表告诉 buddy 有哪些周。
@@ -243,7 +243,7 @@ SetIssueMetric { id: IssueId, metric_key: String },  // 新增,详情面板改�
 **不做**:甘特图/里程碑实体(待拍-04 已定,版本就是里程碑);拖拽绕过确认弹窗直接改状态(§2.3 确认框是状态动作的唯一入口,拖拽本身不允许跳过它直接发 `TransitionIssue`/`RunIssue`/`BlockIssue`);多版本线(待拍-04);「全部」视角下的跨列拖拽(§2.3 排除在首版范围外,`draggable` 只在选中某周模式下挂,见 §6 开放问题 4)。
 
 **失败如实标注**:
-- **远端 issue 建失败**(网络/权限/仓未挂载):本地活照样落库、显示在看板,只带「未同步」小标,`github_number` 留 `0`(既有「创建不破」口径,`model.rs:1699-1706`)——不因远端失败就整张活创建失败,也不假装已同步。
+- **远端 issue 建失败**(网络/权限/仓未挂载):本地活照样落库、显示在看板,只带「未同步」小标,`remote_number` 留 `0`(既有「创建不破」口径,`model.rs:1699-1706`)——不因远端失败就整张活创建失败,也不假装已同步。
 - **预览 worktree 缺文件**:该 worktree 缺 `.bw/metrics.toml`/`docs/plan/`(比如运作活①还没跑到写这一步)时周头对应字段显示灰态「预览:暂无内容」,不报错崩溃、也不悄悄回退去读主干正式文件。
 - **拖拽到不合法的状态转移**:不发命令、只弹回原位并提示原因,不静默失败也不报错(§2.3)。
 - **状态动作的确认框被取消**:不发任何命令,卡片留在原列原位置,和什么都没发生一样(§2.3)。
@@ -292,4 +292,4 @@ SetIssueMetric { id: IssueId, metric_key: String },  // 新增,详情面板改�
 
 ## 与代码的关系
 
-这篇不改 `crates/`。开工时按 §2/§3 顺序在 `crates/app-shell/src/screens/plan/` 建文件,`issue` 表的 8 列增量随 V4 新库的 `schema.sql` 一次写全(§3——开发期不需要 `add_column_if_missing`,试点起才恢复双守卫);**没有 `week_plan`/`release` 需要落地**,周列表靠扫目录、发版记录靠解析 `docs/releases.md`,都是只读解析器(02 篇 §3.3),不是 schema。第 3 节是开工清单,第 5 节是验收清单。01 篇需据此回填 §2.6 命令表的几处改名(`ScheduleIssue`/`UnscheduleIssue` 合并、`PreviewIssueWorktree`→`TogglePreview`、补 `SetCurrentVersion`/`SetIssueMetric`)和 `main.rs` 的 Windows 拖放配置。
+这篇不改 `crates/`。开工时按 §2/§3 顺序在 `crates/app-shell/src/screens/plan/` 建文件,`issue` 表的 9 列增量随 V4 新库的 `schema.sql` 一次写全(§3——开发期不需要 `add_column_if_missing`,试点起才恢复双守卫);**没有 `week_plan`/`release` 需要落地**,周列表靠扫目录、发版记录靠解析 `docs/releases.md`,都是只读解析器(02 篇 §3.3),不是 schema。第 3 节是开工清单,第 5 节是验收清单。01 篇需据此回填 §2.6 命令表的几处改名(`ScheduleIssue`/`UnscheduleIssue` 合并、`PreviewIssueWorktree`→`TogglePreview`、补 `SetCurrentVersion`/`SetIssueMetric`)和 `main.rs` 的 Windows 拖放配置。

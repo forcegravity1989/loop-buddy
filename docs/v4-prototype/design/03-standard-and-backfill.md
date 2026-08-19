@@ -286,7 +286,7 @@ fingerprint = "sha256:9f2a1c7ec3b8...(64位完整hex,此处省略中段仅为文
 3. **第 3 步数字对照样例**:`docs/plan/2026-W33.md`/`docs/plan/2026-W34.md`(两份历史周文件)「按周历史统计」表里的"提交数"列应分别为 51/38,与样例文件 §2 一致;`docs/releases.md` 不应新增任何行(该仓无 tag/CHANGELOG,防伪规则 3 已定不倒推版本号),这次回填 MR 的说明里应能看到一句"未发现可回填的版本记录:仓内无 git 标签、无 CHANGELOG/RELEASES 文件"。
 4. **回填不产生可查的"战绩"**:`SELECT origin, COUNT(*) FROM issue WHERE project_id='<pid>' GROUP BY origin;` 应见 `backfill` 档非零(对应真实远端 issue #78/#81);`sqlite3 <db> "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_credit';"` 应为空结果——库里根本没有这张表可查(02 篇 §2.1 已定),"干没干成"改看远端 MR 状态,不是查库。
 5. **对账**:改动一个已铺底文件的一个字符后跑 `ReconcileStandard`,该文件应归类 `HumanEdited`;对账无直接对应表(纯读派生),用界面截图+手工核对指纹字符串读回。
-6. **新库 schema 一次到位,不涉及老库迁移**:V4 不给存量库加列(02 篇 §2.7 已定:新库用新文件名,`schema.sql` 直接建全)——`sqlite3 <db> "PRAGMA table_info(issue);"` 对一个全新建出的 V4 库应直接看到 02 篇定义的全部 8 个扩展列,不依赖任何 `add_column_if_missing` 参与;这条验收不涉及"给存量库开新版程序"这类迁移场景(那是试点起才恢复的守卫,见 02 篇 §3.2)。
+6. **新库 schema 一次到位,不涉及老库迁移**:V4 不给存量库加列(02 篇 §2.7 已定:新库用新文件名,`schema.sql` 直接建全)——`sqlite3 <db> "PRAGMA table_info(issue);"` 对一个全新建出的 V4 库应直接看到 02 篇定义的全部 9 个扩展列,不依赖任何 `add_column_if_missing` 参与;这条验收不涉及"给存量库开新版程序"这类迁移场景(那是试点起才恢复的守卫,见 02 篇 §3.2)。
 
 ---
 

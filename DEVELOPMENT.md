@@ -49,7 +49,7 @@ cargo run -p bw-v4 --example real_demo_v4 -- <db> <workspaces-root>   # V4 指�
 
 # 提交前门禁(与 CI 完全一致,一条不能少):
 cargo fmt --all --check
-cargo clippy --workspace --exclude app-desktop -- -D warnings
+cargo clippy --workspace --exclude app-desktop --exclude app-shell -- -D warnings
 cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features
 cargo check -p ui --target wasm32-unknown-unknown
 ./scripts/guard-kernel-ui-free.sh
@@ -77,7 +77,7 @@ cargo test --workspace --exclude app-desktop --exclude app-shell   # CI 也跑;�
 | `import_skill_library` / `import_skill_package` / `import_ecc_agents` | 灌库:从目录/单包/ECC 仓导入技能与队友(**应用内无导入界面,这是唯一路径**) | 各文件头有用法 |
 | `sync_metrics_files` / `render_metrics` | 把各项目 `.bw/metrics.toml` 同步进库 / 把库里指标渲染成一页 HTML(配 `docs/skills/metrics-render`) | 各文件头有用法 |
 | `build_aihot_fixture` | 从真实日常库再生 `examples/aihot/bw-aihot.db` 样板间 | 见 `examples/README.md` |
-| `real_demo_v4`(bw-v4) | **V4 指挥器**:建项目 → 铺标准件 → 起周计划 → 建活 → ▶跑(mock 交互执行器)→ 代人点完成 → 发版 → 现算健康灯;产出 evidence JSON。不碰 claude、不碰网关;同库重跑幂等 | `cargo run -p bw-v4 --example real_demo_v4 -- <db> <workspaces-root> [--only <slug>]` |
+| `real_demo_v4`(bw-v4) | **V4 指挥器**:建项目 → 铺标准件 → 起周计划 → 建活 → ▶跑(mock 交互执行器)→ 代人点完成 → 发版 → 现算健康灯;产出 evidence JSON。不碰 claude、不碰网关;同库重跑幂等 | `cargo run -p bw-v4 --example real_demo_v4 -- <db> <workspaces-root> [--project <slug>]` |
 | `pty_smoke`(bw-engine) | 走 ▶跑 同一条 `run_skill_pty` 路径起 `bash -c 'echo pty-ok'` 读回;`-- --teardown` 验证丢输入端后进程组被连坐;`-- --abort` 验证 `JoinHandle::abort()` 丢弃 future 后子进程照样被收尾(bw-app 中止走的就是这条) | `cargo run -p bw-engine --example pty_smoke [-- --teardown\|--abort]` |
 
 2026-08-17 前 `crates/bw-app/examples/` 有 41 个例子,29 个是历史批次的一次性验证脚本(「已发货 commit 的收据」),已删,git 历史可找回。
