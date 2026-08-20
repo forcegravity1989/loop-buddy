@@ -7,14 +7,21 @@
 
 `standard/` 是 Builders' Workbench(buddy)接入一个项目时,往那个项目仓里
 铺的那一整套骨架文件的**正本**。项目仓里看到的 `.bw/PROJECT.md`、
-`.bw/AGENTS.md`、`.bw/metrics.toml` 这些文件,内容都来自这里的模板渲染——改
+`.bw/metrics.toml`、仓根 `AGENTS.md` 这些文件,内容都来自这里的模板渲染——改
 这里的模板,就是在改 buddy 给每个新项目铺出来的起点长什么样。
 
-**铺进用户仓的东西全部收进 `.bw/`**,仓根只多一份一行的 `CLAUDE.md`
-(`@.bw/AGENTS.md`,Claude Code 的自动发现入口,唯一躲不掉的)。这样「bw 的
-资产到底是哪些」一眼可数,也不会和项目自己的 `README.md` / `CLAUDE.md` /
-`docs/` 打架。规范版本因此从 4.0 跳到 **5.0** —— 落点变了,老版本铺出来的
-文件在新版本眼里就是「不在册」,不做迁移。
+**落点分两类,别混**:
+
+- **`.bw/` 下的是 buddy 的资产** —— 名片、指标、周计划、发版记录、规范清单。
+  收在一个目录里,「bw 到底往我仓里放了什么」一眼可数,也不会和项目自己的
+  `README.md` / `docs/` 打架。
+- **仓根 `AGENTS.md` 与 `CLAUDE.md` 是项目自己的** —— 那是 Claude Code /
+  Cursor / Codex 都在找的位置,塞进 `.bw/` 谁都读不到。buddy 只在它们
+  **不存在**时搭一份初稿,已经有就一个字不动,补齐交给规范铺底第 2 步的
+  agent 会话去谈。
+
+规范版本因此从 4.0 跳到 **5.0** —— 落点变了,老版本铺出来的文件在新版本眼里
+就是「不在册」,不做迁移。
 
 这套规范一共分八个大类(见
 [`docs/v4-prototype/design/03-standard-and-backfill.md`](../docs/v4-prototype/design/03-standard-and-backfill.md)
@@ -29,8 +36,8 @@
   铺底命令运行时从二进制里取模板写进项目仓,不是运行时去读磁盘上的这个
   目录——**改这里任何一份文件的内容,就是在改 buddy 的产品行为**,不是
   改一份纯文档。
-- **agent**:铺进项目仓之后,`.bw/AGENTS.md`(经仓根 `CLAUDE.md` 一行导入)
-  会被每次开工的 agent 会话读到;其余模板渲染出的文件(`.bw/PROJECT.md`、
+- **agent**:铺进项目仓之后,仓根 `AGENTS.md`(经 `CLAUDE.md` 一行导入)会被
+  每次开工的 agent 会话读到;其余模板渲染出的文件(`.bw/PROJECT.md`、
   `.bw/*.toml` 等)是项目
   自己的正本文件,供人和 agent 日常打开查阅、按需要修改。
 
@@ -40,8 +47,8 @@
 |---|---|
 | `VERSION` | 当前规范版本号,铺底与对账时读这个值 |
 | `01-charter/PROJECT.md.tmpl` | 项目章程模板:想做什么、最像的对标、北极星、项目信息 |
-| `02-agents/AGENTS.md.tmpl` | 给 agent 的工作约定模板:先读什么、活怎么做、指标怎么碰、禁止事项等 |
-| `02-agents/CLAUDE.md.tmpl` | 仓根那一行,把 `.bw/AGENTS.md` 接进 Claude CLI 会自动读的路径 |
+| `02-agents/AGENTS.md.tmpl` | **这个项目自己的**开发与维护手册骨架:怎么建/跑/测(从构建文件探出来)、目录导览、提交与评审、代码图。铺到**仓根**,不在 `.bw/` 里 |
+| `02-agents/CLAUDE.md.tmpl` | 仓根那一行 `@AGENTS.md`,把手册接进 Claude CLI 会自动读的路径 |
 | `03-docs/plan/README.md` | 说明 `.bw/plan/` 目录的用途、正本地位、`origin` 字段含义 |
 | `03-docs/plan/WEEK.md.tmpl` | 每周一份的周计划模板:周目标、业务活、指标读数、本周运作、上周完成情况 |
 | `03-docs/releases.md.tmpl` | 发版记录模板,空表头,铺底时直接写进项目 `.bw/releases.md` |
@@ -54,7 +61,7 @@
 
 规范第 6 类「默认件与鱼塘」的**运作技能已经建好**,在
 `standard/06-defaults/ops/`(更新指标与周计划 / 资产盘点 / 规范铺底的
-合并调整)。它们和九份方法论技能(正本 `docs/skills/`)一起编进二进制,
+写开发手册)。它们和九份方法论技能(正本 `docs/skills/`)一起编进二进制,
 开工时摊在 **buddy 自己的资产目录**,**不复制进用户的仓** —— 用户的
 `.gitignore` 怎么写不该由 buddy 决定,而每个项目复制一份 buddy 自带的
 东西也没有道理。系统提示词里只给名字 + 一句话 + 路径,正文按需读(见

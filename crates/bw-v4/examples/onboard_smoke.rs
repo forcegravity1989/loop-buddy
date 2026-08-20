@@ -211,6 +211,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     std::fs::write(&mature.join("AGENTS.md"), "# 人写的 AGENTS.md\n也别动我\n")?;
     std::fs::write(&mature.join("README.md"), "# 人写的 README\n")?;
+    // 有构建文件,才验得了「怎么建怎么测」那一节是真探出来的还是编的。
+    std::fs::write(
+        &mature.join("Cargo.toml"),
+        "[package]\nname = \"mature\"\nversion = \"0.1.0\"\n",
+    )?;
+    std::fs::create_dir_all(mature.join("src"))?;
+    std::fs::write(mature.join("src/lib.rs"), "")?;
     git(&mature, &["add", "-A"]).await;
     git(
         &mature,
@@ -268,6 +275,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "主检出里还留着吗={}(该是 false)· 分支上有吗={}(该是 true)",
             twin.exists(),
             on_branch
+        ),
+    );
+
+    // ── 10 · 开发手册是**探出来的**,不是模板里编的 ──────────
+    // 仓根 AGENTS.md 是给这个项目自己的开发手册。buddy 第 1 步不起 agent,只写
+    // 读文件就能确定的部分:有 Cargo.toml 就写 cargo 那几条,顶层目录照实列。
+    // 这个仓的仓根本来就有人写的 AGENTS.md,所以 buddy 一个字都不该写 ——
+    // 补齐是第 2 步 agent 会话的活。用空仓那个项目验探测本身。
+    say(
+        "档 10 · 成熟仓的仓根 AGENTS.md",
+        &format!(
+            "还是人写的那份={}(该是 true —— 已存在就一个字不覆盖)",
+            std::fs::read_to_string(mature.join("AGENTS.md"))
+                .unwrap_or_default()
+                .contains("人写的")
+        ),
+    );
+    let detected = bw_v4::standard::detect::build_commands(&mature);
+    say(
+        "档 10 · 从这个仓探出来的构建命令",
+        &format!(
+            "认出 cargo={} · 认出 CI={} · 编了一条命令={}",
+            detected.contains("cargo test"),
+            detected.contains("门禁以 CI 为准") || !mature.join(".github").exists(),
+            detected.contains("npm") || detected.contains("pytest")
         ),
     );
 

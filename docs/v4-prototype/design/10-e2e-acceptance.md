@@ -112,7 +112,7 @@ cargo run -p bw-app --example real_demo_v4 -- <db-path> <workspaces-root> [--pro
 | # | 步骤 | 怎么做 | 读回断言 | 幂等键 |
 |---|---|---|---|---|
 | 1 | 接入项目 | `CreateProject`(不配远端,避免依赖网关)+ 两卡四字段 | `SELECT name,north_star FROM project WHERE id='<pid>'` 非空 | 按项目名查重复 |
-| 2(含2a合并调整/2b历史回填)| 规范铺底③ | `RunStandardBootstrap`;工作区用 buddy 仓浅拷贝(见下);mock 执行器分别跑两个子技能,**2b 的 git 本地采集是真代码**不受 mock 影响 | `git log` 有提交;`.bw/managed.toml` 出现指纹;`.bw/AGENTS.md` 命中约定关键词;`history.md` 数字与直接跑 git 命令一致(见§8-7)| `.bw/standard.toml` 已存在则跳过;2b 每次重跑整段覆盖不追加重复段落 |
+| 2(含2a写开发手册/2b历史回填)| 规范铺底③ | `RunStandardBootstrap`;工作区用 buddy 仓浅拷贝(见下);mock 执行器分别跑两个子技能,**2b 的 git 本地采集是真代码**不受 mock 影响 | `git log` 有提交;`.bw/managed.toml` 出现指纹;仓根 `AGENTS.md` 里的构建命令与仓里真实构建文件对得上、仓里原本就有那份时一个字未改;回填的周文件数字与直接跑 git 命令一致(见§8-7)| `.bw/standard.toml` 已存在则跳过;2b 每次重跑整段覆盖不追加重复段落 |
 | 3-4 | 开始本周①、确认建活 | `StartWeekPlanning`(mock 代替真实对话,产出固定草稿标【mock】)+ 指挥器代人确认(明写"脚本代人确认")| `test -f .bw/plan/<周>.md` 且 front matter `week=<周>`(**唯一正本,不查库索引**——02 篇 §2.5 已取消 `week_plan` 表);`issue WHERE week_of='<周>' AND origin='agent_split'` 有行 | "当前周无文件"天然幂等,重跑返回 `WeekPlanAlreadyExists`;建活按标题幂等 |
 | 5-6 | 一张业务活▶开工、推评审中、完成 | `RunIssue`(未配工作区,天然落 MockInteractiveExecutor,标【mock】);未配远端不会真开 PR,指挥器代人推 InReview 再推 Done(同 `real_demo` 步骤④模式,明写),即既有"无PR→人点确认完成(人裁)"路径 | `issue.status`;`settled_at` 非空且只一次 | 按状态判断是否重跑,天然幂等 |
 | 7 | 发版本 | `CutRelease`(选步骤6完成的活,版本号取 current_version 或首次 v0.1)| 代人推完成后 `tail <ws>/.bw/releases.md` 新增一行(**唯一正本,库里无 `release` 表可查**——02 篇 §2.1/§2.5)| 按版本号幂等 |

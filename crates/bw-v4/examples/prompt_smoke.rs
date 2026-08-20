@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // ── 3 · 铺几份进去,再看索引 ──────────────────────────────
-    let laid = [".bw/PROJECT.md", ".bw/AGENTS.md", "CLAUDE.md"];
+    let laid = [".bw/PROJECT.md", "AGENTS.md", "CLAUDE.md"];
     for rel in laid {
         let p = repo.join(rel);
         std::fs::create_dir_all(p.parent().unwrap())?;

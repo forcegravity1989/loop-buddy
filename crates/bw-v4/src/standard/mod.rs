@@ -13,6 +13,7 @@
 //! 两个值常常相等,含义不同,不合并成一个字段。
 
 pub mod bootstrap;
+pub mod detect;
 pub mod skills;
 
 /// 一个规范件模板:属于哪个大类、渲染到项目仓的哪个路径、模板正文。
@@ -71,10 +72,14 @@ pub enum LayAt {
 /// 铺底要落的核心件,按落盘顺序。`.bw/managed.toml` 不在表里——它记的是
 /// 「这些件的指纹」,所以必须**最后**写,保证记的是刚落盘那一刻的真实内容。
 ///
-/// **除了 `CLAUDE.md` 全在 `.bw/` 里。** 仓根那一份只有一行 `@.bw/AGENTS.md`,
-/// 是 Claude Code 的自动发现入口,唯一躲不掉的;它一行长,不会和项目自己的
-/// `CLAUDE.md` 内容打架。这样「bw 的资产到底是哪些」一眼可数,也不会因为项目
-/// 把 `docs/` 或 `.claude/` 写进 .gitignore 就有件悄悄进不了版本控制。
+/// **落点分两类,别混**:
+///
+/// - **`.bw/` 下的是 buddy 的资产** —— 名片、指标、周计划、发版记录、规范清单。
+///   收在一个目录里,「bw 到底往我仓里放了什么」一眼可数,也不会因为项目把
+///   `docs/` 或 `.claude/` 写进 .gitignore 就有件悄悄进不了版本控制。
+/// - **仓根的 `AGENTS.md` 与 `CLAUDE.md` 是项目自己的** —— 它们是整个生态约定
+///   俗成的位置(Claude Code / Cursor / Codex 都在仓根找),塞进 `.bw/` 谁都
+///   读不到。buddy 只在它们**不存在**时搭一份初稿,已经有就一个字不动。
 pub const CORE_TEMPLATES: &[Template] = &[
     Template {
         category: "charter",
@@ -85,17 +90,21 @@ pub const CORE_TEMPLATES: &[Template] = &[
     },
     Template {
         category: "agents",
-        target: ".bw/AGENTS.md",
+        // **仓根,不在 `.bw/` 里。** 这一份是**项目自己的**开发与维护手册,不是
+        // buddy 的资产 —— Claude Code / Cursor / Codex 都在仓根找它,塞进 `.bw/`
+        // 反而谁都读不到。buddy 只搭初稿、只维护里面那一小段带 `bw:managed`
+        // 标记的话;仓里已经有这份文件就一个字不写,交给规范铺底第 2 步去谈。
+        target: "AGENTS.md",
         body: AGENTS_TMPL,
         lay_at: LayAt::Adopt,
-        note: "这个项目对 agent 的工作约定(仓根 CLAUDE.md 只是指到这里的一行)",
+        note: "这个项目自己的开发与维护手册:怎么建、怎么跑、怎么测、目录、规矩",
     },
     Template {
         category: "agents",
         target: "CLAUDE.md",
         body: CLAUDE_TMPL,
         lay_at: LayAt::Adopt,
-        note: "Claude Code 的自动发现入口,一行,指向 .bw/AGENTS.md",
+        note: "Claude Code 的自动发现入口,一行,指向仓根 AGENTS.md",
     },
     Template {
         category: "meta",

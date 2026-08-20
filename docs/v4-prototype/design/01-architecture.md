@@ -134,7 +134,7 @@ crates/app-shell/
 | 通知 | `MarkNotifySeen{project_id, at}` | 记「这个项目的事件流看到哪个时间点」,只影响视觉状态,不参与待处理徽章计数(07 篇新增,本表据此回填) | 新 |
 | 通知 | `NotifySyncedToChat`(Event) | 一条通知真实发到群了(或失败带原因) | 新 |
 | 运作活 | `StartWeekPlanning` | 总览「开始本周」:建运作活①并跳到会话屏 ▶开工(母文档 §2.6 用户四问第 2 条) | 新 |
-| 运作活 | `RunStandardBootstrap` | 一次性运作活③「规范铺底」,内部按检测结果决定要不要多跑「合并调整」「历史回填」,最终一个 MR(待拍-20/27) | 新 |
+| 运作活 | `RunStandardBootstrap` | 一次性运作活③「规范铺底」,内部按检测结果决定要不要多跑「写开发手册」「历史回填」,最终一个 MR(待拍-20/27) | 新 |
 | 运作活 | `BackfillHistory{project_id}` | 单独重跑历史回填(不重跑第 1/2 步),覆盖上次带回填标记的段落(03 篇新增,本表据此回填) | 新 |
 | 运作活 | `ReconcileStandard{project_id}` | 纯读:按「缺/过期/人改过」三类对账,不建活不写仓,给知识库屏渲染用(03 篇新增,本表据此回填) | 新 |
 | 运作活 | `UpgradeStandard{project_id, files}` | 人选中要升的文件后触发升级流程,最终提 MR(03 篇新增,本表据此回填) | 新 |

@@ -26,7 +26,7 @@
 
 ### 2.2 知识页签:仓内文档树
 
-**树从哪来**:不是扫全仓,是按规范八大类固定分组、每组按约定路径找文件——`.bw/PROJECT.md`/`.bw/AGENTS.md`(章程)、`.bw/metrics.toml`/`.bw/project.toml`/`.bw/issue-policy.toml`/`.bw/standard.toml`(规范件)、`.bw/plan/YYYY-Www.md`(周计划,倒序)、`.bw/releases.md`(发版记录)、`.bw/decisions/*.md`(决策记录,扩展,可能不存在)、`.bw/design/`(设计产物,扩展)。**老项目的历史回填周不是单独一组**:回填的 `.bw/plan/YYYY-Www.md` 与人写的本周文件**同目录、同格式**,靠 front matter `origin: backfill` 与树上的小徽记区分,不是两套渲染逻辑——盘点之后已取消单独的 `.bw/plan/history.md` 文件(格式见 [02 篇](02-data-and-files.md) §2.5)。
+**树从哪来**:不是扫全仓,是按规范八大类固定分组、每组按约定路径找文件——`.bw/PROJECT.md`/`AGENTS.md`(仓根)(章程)、`.bw/metrics.toml`/`.bw/project.toml`/`.bw/issue-policy.toml`/`.bw/standard.toml`(规范件)、`.bw/plan/YYYY-Www.md`(周计划,倒序)、`.bw/releases.md`(发版记录)、`.bw/decisions/*.md`(决策记录,扩展,可能不存在)、`.bw/design/`(设计产物,扩展)。**老项目的历史回填周不是单独一组**:回填的 `.bw/plan/YYYY-Www.md` 与人写的本周文件**同目录、同格式**,靠 front matter `origin: backfill` 与树上的小徽记区分,不是两套渲染逻辑——盘点之后已取消单独的 `.bw/plan/history.md` 文件(格式见 [02 篇](02-data-and-files.md) §2.5)。
 
 **懒加载**:打开页签只拿文件清单(是否存在),点了才现读那一个文件、渲染进预览区——`.bw/plan/*.md` 老项目回填后可能几十个,没必要一次全读。
 

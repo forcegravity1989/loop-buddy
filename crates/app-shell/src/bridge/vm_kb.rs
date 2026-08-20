@@ -43,7 +43,10 @@ pub(super) fn build_kb(ws: &Path, tab: KbTab, open: Option<&str>) -> KbVm {
     let mut groups = Vec::new();
 
     let mut charter = Vec::new();
-    for (rel, label) in [("PROJECT.md", "项目章程"), ("AGENTS.md", "给 agent 的规矩")] {
+    for (rel, label) in [
+        (".bw/PROJECT.md", "项目名片"),
+        ("AGENTS.md", "这个项目的开发与维护手册"),
+    ] {
         if ws.join(rel).is_file() {
             charter.push(KbFileVm {
                 rel: rel.into(),

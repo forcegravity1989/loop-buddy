@@ -1,9 +1,12 @@
 //! 规范铺底(运作活③)与规范对账。
 //!
-//! 只做**第 1 步**:buddy 自己把核心件写进项目仓、复制预置技能包、记指纹,
-//! 在**这张活自己的 worktree 和分支上**提交,推上去,开一个 MR 等人合。第 2
-//! 步「合并调整」与第 3 步「历史回填」要起 agent 会话,还没做——探测到了什么
-//! 如实写进这张活的正文,但那两步没跑就是没跑。
+//! 只做**第 1 步**:buddy 自己把核心件写进项目仓、记指纹,在**这张活自己的
+//! worktree 和分支上**提交,推上去,开一个 MR 等人合。第 2 步「写开发手册」与
+//! 第 3 步「历史回填」要起 agent 会话,还没做——探测到了什么如实写进这张活的
+//! 正文,但那两步没跑就是没跑。
+//!
+//! **技能不往用户仓里复制**(2026-08-20 改):buddy 自带那十三份摊在自己的资产
+//! 目录,开工时只把名字、一句话和完整路径写进系统提示词,正文让 agent 按需读。
 //!
 //! **不在主检出上动手**。写文件、提交、开分支全在
 //! [`worktree`](super::worktree) 供给的那棵树里发生,人自己的工作目录一个字节
@@ -36,7 +39,7 @@ impl App {
 
         let probe = boot::probe(&ws).await;
         // 幂等键是标题,所以标题**只能是「规范铺底 v<版本>」**,不能随探测结果
-        // 变。之前把「· 含合并调整」拼进标题,而第一次铺底自己写了 CLAUDE.md、
+        // 变。之前把「· 含写开发手册」拼进标题,而第一次铺底自己写了 CLAUDE.md、
         // 提交之后第二次探测结论就变了 —— 标题跟着变,幂等失效,重跑多建一张
         // 活。探测到了什么写进正文,不写进标题。
         let title = boot::issue_title();
@@ -69,11 +72,20 @@ impl App {
         } else {
             "—(还没挂远端)".to_string()
         };
+        // 名片四格可能是空的(接入时人没填)。渲染进模板时补一句「(还没填)」——
+        // 留空的话文件里就是一节空标题,看不出是没填还是漏渲染了。
+        let or_blank = |v: &str| {
+            if v.trim().is_empty() {
+                "(还没填)".to_string()
+            } else {
+                v.trim().to_string()
+            }
+        };
         let vars = BootstrapVars {
             name: file.name.clone(),
-            brief: file.brief.clone(),
-            benchmark: file.benchmark.clone(),
-            north_star: file.opportunity.clone(),
+            brief: or_blank(&file.brief),
+            benchmark: or_blank(&file.benchmark),
+            north_star: or_blank(&file.opportunity),
             remote,
             owner: "—(单人项目,Builder 本人)".into(),
             current_version: if file.current_version.is_empty() {
@@ -82,6 +94,10 @@ impl App {
                 file.current_version.clone()
             },
             chat: super::project::chat_label(&file.chat),
+            // 这两节从**主检出**探 —— 那才是这个仓完整的样子;活自己的 worktree
+            // 这会儿还没建出来,而且就算建了内容也一样。
+            build_commands: standard::detect::build_commands(&ws),
+            layout: standard::detect::layout(&ws),
         };
         // 这张活自己的一棵树、自己的一个分支。人的主检出不动。
         let issue = self.issue_or_err(issue_id).await?;
@@ -304,7 +320,7 @@ async fn drop_untracked_twin(main: &std::path::Path, tree: &std::path::Path, rel
 fn pending_steps(probe: &boot::BootstrapProbe) -> String {
     let mut v = Vec::new();
     if probe.has_agent_docs {
-        v.push("合并调整(把 buddy 的固定章节并进已有 AGENTS.md / CLAUDE.md)");
+        v.push("写开发手册(让 agent 读一遍仓,把 AGENTS.md 里「还没填」那几节填成真的)");
     }
     if probe.has_history {
         v.push("历史回填(把老项目的历史周与历史版本补成同格式的正常文件)");
@@ -407,7 +423,9 @@ fn base_prompt(issue: &Issue) -> String {
          动作一律不许执行)。提完把地址打屏,合入由人在 buddy 里点。\n\
          3. 指标读数只能来自真实采集,没数据就是未知,不许为了让灯变绿手工改数。\n\
          4. 干砸了如实停下说明,不假装流程前进。\n\
-         \n仓根的 `CLAUDE.md` 指向 `.bw/AGENTS.md`,那是这个项目对 agent 的工作约定。\n",
+         \n仓根的 `AGENTS.md` 是这个项目自己的开发与维护手册(怎么建、怎么跑、\
+         怎么测、目录约定)。动手前读它 —— 它写的是这个项目怎么开发,和上面几条\
+         不是一回事,上面几条是 buddy 的规矩。\n",
         issue.number,
         issue.title,
         issue.category.map(|c| c.label()).unwrap_or("—(没定类别)"),
