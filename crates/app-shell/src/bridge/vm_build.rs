@@ -481,8 +481,9 @@ async fn build_project(
         warnings,
     );
 
-    // 本周计数在构造之前算好 —— `current_week` 会被 move 进结构体。
+    // 本周计数与本周运作点在构造之前算好 —— `current_week` 会被 move 进结构体。
     let week_counts_now = build_week_counts(&issues, Some(current_week.as_str()));
+    let ops_now = build_ops(&issues, current_week.as_str());
 
     // 周列表 = 扫 `.bw/plan/` 目录 ∪ 库里活排过的周(设计 06 §2.1 的并集),
     // 且**本周永远在列表里**——空的本周才有地方触发「开始本周」,真跑路径下
@@ -576,7 +577,8 @@ async fn build_project(
                 Some(viewing_week.as_str())
             },
         ),
-        ops: build_ops(plan.as_ref()),
+        ops: ops_now,
+        board_ops: build_ops(&issues, viewing_week.as_str()),
         // 采不采由界面点 —— 现算一次要起好几个 git 子进程,不能每次重拼
         // ViewModel 都跑一遍(人打字时每 30ms 就重拼一次)。
         repo_stats: ui.repo_stats.clone(),

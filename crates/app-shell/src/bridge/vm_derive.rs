@@ -6,7 +6,6 @@
 
 use crate::vm::*;
 use bw_v4::model::IssueStatus;
-use bw_v4::repo::week_plan_file;
 use std::path::Path;
 
 /// 某一周的五段计数。`week` 传 `None` = 不按周过滤(计划屏的「全部活」视图)。
@@ -38,19 +37,47 @@ pub(super) fn build_week_counts(issues: &[bw_v4::Issue], week: Option<&str>) -> 
     }
 }
 
-/// 「本周运作」那张表。周计划文件里没有这一段就是空的 —— 不替它编三行。
-pub(super) fn build_ops(plan: Option<&week_plan_file::WeekPlan>) -> Vec<OpsChipVm> {
-    plan.map(|p| {
-        p.ops
+/// 运作活①②③三个状态点 —— **查活缓存,不读周计划文件**(设计 06 §2.1:
+/// chip 按 `kind='ops'` 的活按 workflow 归类取状态)。真跑路径下周计划文件要
+/// 等 MR 合入才落地,读文件的话整场会话期间三个点都是「未建」,而活明明在跑。
+///
+/// ①②按当前周查(它们每周一张);③规范铺底是接入时的一次性动作,不挂周,
+/// 取最新那张。没建就是灰点「未建」,不编。
+pub(super) fn build_ops(issues: &[bw_v4::Issue], current_week: &str) -> Vec<OpsChipVm> {
+    use bw_v4::app::{OPS1_WORKFLOW, OPS2_WORKFLOW, OPS3_WORKFLOW};
+    let ops = |wf: &str| {
+        issues
             .iter()
-            .map(|r| OpsChipVm {
-                title: r.title.clone(),
-                status: r.status.clone(),
-                note: r.note.clone(),
-            })
-            .collect()
-    })
-    .unwrap_or_default()
+            .filter(|i| i.kind == bw_v4::model::IssueKind::Ops && i.workflow == wf)
+            .filter(|i| wf == OPS3_WORKFLOW || i.week_of == current_week)
+            .max_by_key(|i| i.number)
+    };
+    let chip = |label: &str, wf: &str, when: &str| {
+        let found = ops(wf);
+        OpsChipVm {
+            title: label.to_string(),
+            status: found
+                .map(|i| i.status.label().to_string())
+                .unwrap_or_else(|| "未建".into()),
+            note: match found {
+                Some(i) => format!("#{} {}", i.number, i.title),
+                None => when.to_string(),
+            },
+        }
+    };
+    vec![
+        chip(
+            "运作活① 更新指标与周计划",
+            OPS1_WORKFLOW,
+            "点总览的「开始本周」触发",
+        ),
+        chip(
+            "运作活② 资产盘点",
+            OPS2_WORKFLOW,
+            "到点自动建(节律配在 .bw/issue-policy.toml)",
+        ),
+        chip("运作活③ 规范铺底", OPS3_WORKFLOW, "接入项目时铺"),
+    ]
 }
 
 /// 名片改动那张在途的轻量活。名片是仓文件,改它走分支 + MR,所以总览要能

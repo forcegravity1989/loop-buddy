@@ -161,8 +161,11 @@ pub struct ProjectVm {
     /// 计划屏正在看的那个看板的五段计数(看某一周就是那一周,点了「全部」就是
     /// 全部)。它跟着左栏走,所以**不能拿去当「本周」**。
     pub board_counts: WeekCountsVm,
-    /// 本周计划文件「本周运作」那张表的行 —— 三张运作活各自走到哪了。
+    /// **当前周**的运作活①②③状态点(查活缓存现算)。总览那块用它。
     pub ops: Vec<OpsChipVm>,
+    /// 计划屏正在看的那一周的运作活状态点。跟着左栏走,**不能拿去当「本周」**
+    /// —— 和 `board_counts` 同一个理由。
+    pub board_ops: Vec<OpsChipVm>,
     /// 代码仓级指标。**现算很贵(要起好几个 git 子进程),所以按需**:
     /// `None` = 还没采过,界面显示一颗「立即采集」。
     pub repo_stats: Option<RepoStatsVm>,

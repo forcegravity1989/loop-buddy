@@ -242,9 +242,9 @@ fn week_head(p: &ProjectVm) -> Element {
             div { style: "width:{c.pct(c.blocked)}%;background:var(--red);" }
             div { style: "width:{c.pct(c.todo)}%;background:#E4DDC8;" }
         }
-        if !p.ops.is_empty() {
+        if !p.board_ops.is_empty() {
             div { class: "ops-chip-row",
-                for o in p.ops.iter() {
+                for o in p.board_ops.iter() {
                     span { key: "{o.title}", class: "chip chip-outline", title: "{o.note}",
                         "{o.title} · {o.status}"
                     }
