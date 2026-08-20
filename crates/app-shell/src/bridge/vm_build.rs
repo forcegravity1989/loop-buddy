@@ -482,7 +482,13 @@ async fn build_project(
     // 的情况下列出 N 个项目的灯,不能每次启动扫 N 个仓。此前壳里没有一处写过
     // 这两列,于是项目墙的灯永远是灰的,哪怕总览上算出来是黄的。写的是刚算出
     // 来的那个值,不重算(重算要再起一遍 git 子进程)。
-    let _ = store.cache_project_health(id, &derived).await;
+    //
+    // **只在灯真变了的时候写**:这个函数每重拼一次 ViewModel 就跑一次(人打字
+    // 时每 30ms 一次),而这条 UPDATE 顺带会把项目的 `updated_at` 顶新 —— 每次
+    // 都写等于让「这个项目最近动过」永远是刚刚,那是假的。
+    if p.signal != Some(derived.signal()) || p.weekly_signal != Some(derived.weekly_signal()) {
+        let _ = store.cache_project_health(id, &derived).await;
+    }
 
     let policy = read_or_warn(
         ".bw/issue-policy.toml",

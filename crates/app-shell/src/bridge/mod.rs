@@ -611,6 +611,26 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                     if let Some((week, titles)) = drafts_of(&events) {
                                         ui.pending_drafts = Some((week, titles));
                                     }
+                                    // 「开始本周」起了一场会话,就把它选中 ——
+                                    // 总览那颗按钮会把人带到会话屏,落地时该正
+                                    // 好停在这场会话上,而不是让人自己在左列里
+                                    // 找哪一条是刚才那下点出来的。
+                                    if let Some(bw_v4::command::Event::WeekPlanStarted {
+                                        issue_id,
+                                        ..
+                                    }) = events
+                                        .iter()
+                                        .find(|e| {
+                                            matches!(
+                                                e,
+                                                bw_v4::command::Event::WeekPlanStarted { .. }
+                                            )
+                                        })
+                                    {
+                                        ui.session_open = Some(*issue_id);
+                                        ui.expanded_dirs.clear();
+                                        ui.open_file.clear();
+                                    }
                                     if confirming {
                                         ui.pending_drafts = None;
                                     }
