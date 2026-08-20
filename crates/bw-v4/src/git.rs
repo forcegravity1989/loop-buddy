@@ -6,7 +6,7 @@
 //! 每个数字都能用同一条 git 命令在终端里复算出来。
 
 use crate::isoweek;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 #[derive(Debug, thiserror::Error)]
@@ -539,4 +539,78 @@ fn parse_issue_number(subject: &str) -> Option<u32> {
     let rest = subject.split_once('#')?.1;
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     digits.parse().ok()
+}
+
+/// 这个仓在浏览器里的根地址,比如 `https://github.com/owner/repo`。
+///
+/// **从 `origin` 的地址推**,不从库里的 `remote_host` 拼 —— codehub 的 host 存的
+/// 是区的别名(`green`/`open`/`yellow`),不是域名,拼不出能点的地址;而 `origin`
+/// 里躺着的是真域名。推不出来就返回 `None`,调用方**不给链接**,不编一个。
+///
+/// **不起子进程,直接读 `.git/config`** —— 这个值每重拼一次界面数据就要一次,
+/// 起一次 `git remote get-url` 是白花的几十毫秒。worktree 里的 `.git` 是个文件,
+/// 指向主仓那份 config,跟过去读。
+pub fn browse_base(workspace: &Path) -> Option<String> {
+    let dot_git = workspace.join(".git");
+    let config = if dot_git.is_dir() {
+        dot_git.join("config")
+    } else {
+        // `gitdir: /主仓/.git/worktrees/<名>` —— config 在 `/主仓/.git/config`。
+        let text = std::fs::read_to_string(&dot_git).ok()?;
+        let gitdir = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+        gitdir.parent()?.parent()?.join("config")
+    };
+    let text = std::fs::read_to_string(config).ok()?;
+    let mut in_origin = false;
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with('[') {
+            in_origin = l.replace(' ', "") == "[remote\"origin\"]";
+            continue;
+        }
+        if in_origin {
+            if let Some(url) = l.strip_prefix("url") {
+                if let Some(url) = url.trim_start().strip_prefix('=') {
+                    return normalize_browse(url.trim());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `git@host:路径.git` / `https://host/路径[.git]` / `ssh://git@host/路径` →
+/// `https://host/路径`。认不出的写法返回 `None`。
+fn normalize_browse(url: &str) -> Option<String> {
+    if url.is_empty() {
+        return None;
+    }
+    let rest = if let Some(r) = url.strip_prefix("ssh://git@") {
+        r.to_string()
+    } else if let Some(scp) = url.strip_prefix("git@") {
+        // `git@github.com:owner/repo.git` —— 冒号是 host 与路径的分界。
+        scp.replacen(':', "/", 1)
+    } else if let Some(r) = url.strip_prefix("https://").or(url.strip_prefix("http://")) {
+        // `https://user@host/路径` 里那段凭据不该出现在给人点的链接里。
+        r.split_once('@').map(|(_, r)| r).unwrap_or(r).to_string()
+    } else {
+        return None;
+    };
+    let rest = rest.trim_end_matches('/').trim_end_matches(".git");
+    if !rest.contains('/') {
+        return None;
+    }
+    Some(format!("https://{rest}"))
+}
+
+/// 这个路径被 git 跟踪着没有。
+///
+/// 用 `ls-files`(跟踪着就打印路径,没跟踪就打印空)而不是 `--error-unmatch`:
+/// 后者「没跟踪」和「git 根本没跑起来」都是非零退出,分不开。**分不开的时候
+/// 返回 `Some(true)`** —— 这个判断的下游是删文件,拿不准就别删。
+pub async fn is_tracked(workspace: &Path, rel: &str) -> bool {
+    match git(workspace, &["ls-files", "--", rel]).await {
+        Ok(out) => !out.trim().is_empty(),
+        Err(_) => true,
+    }
 }

@@ -307,3 +307,22 @@ pub fn Toast(note: Option<String>, seq: u64) -> Element {
         }
     }
 }
+
+/// 在系统默认浏览器里打开一个地址。
+///
+/// **只收 `https://` 开头的**:这个函数的入参最终来自仓里的 `origin`,那是文件
+/// 内容,不该被当成命令。挡在这里,`open` 就不会被喂进一个 `-a`、`file://` 或者
+/// 别的什么东西。打不开就静静算了 —— 为一个链接弹一句错不值。
+pub fn open_in_browser(url: &str) {
+    if !url.starts_with("https://") {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}

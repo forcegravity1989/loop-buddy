@@ -79,7 +79,7 @@ impl App {
             if adopted {
                 "仓里本来就有名片,一个字没覆盖,只补了空着的字段".to_string()
             } else {
-                "名片写进了仓里的 .bw/project.toml(还没提交,下一步铺底会带上)".to_string()
+                "名片写好了,下一步铺底会把它提交到这张活的分支上".to_string()
             },
         ));
 

@@ -68,6 +68,9 @@ pub enum Req {
     /// 会话屏:选中哪个会话 / 切页签 / 展开某个目录 / 中栏开哪个文件。
     /// 全是纯导航,一律不进库。
     SelectSession(Option<bw_v4::model::IssueId>),
+    /// 计划屏右侧详情抽屉开着哪张活。**通知点过去也走这条** —— 通知只负责
+    /// 「告诉你有 MR 等着」,看活、看会话、看 MR 都在活的详情里,不在通知里。
+    SelectIssue(Option<bw_v4::model::IssueId>),
     SessionTab(crate::vm::SessionTab),
     ToggleDir(String),
     OpenFile {
@@ -274,7 +277,7 @@ async fn list_repos(github: bool, host: &str) -> (Vec<crate::vm::RepoRowVm>, Opt
     } else if host.trim().is_empty() {
         (
             Vec::new(),
-            Some("要先填 codehub 域名 —— buddy 不知道你们内部那台在哪".into()),
+            Some("没选区 —— codehub 要 -H green/open/yellow 之一".into()),
         )
     } else {
         match bw_engine::codehub::list_repos(host.trim(), LIMIT).await {
@@ -425,6 +428,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                 let mut ui = vm_build::UiState {
                     open: None,
                     session_open: None,
+                    selected_issue: None,
                     session_tab: crate::vm::SessionTab::default(),
                     expanded_dirs: Vec::new(),
                     open_file: String::new(),
@@ -677,6 +681,16 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         Req::ViewAll(v) => ui.view_all = v,
                         Req::OpenDoc(p) => ui.open_doc = p,
                         Req::DropDrafts => ui.pending_drafts = None,
+                        Req::SelectIssue(id) => {
+                            ui.selected_issue = id;
+                            // **顺手切到「全部活」**。这条只有通知屏会发,而通知
+                            // 里那张活很可能没排进正在看的那一周(铺底活就没排
+                            // 周)—— 不切的话看板里根本没有这张卡,详情抽屉找不
+                            // 到它,人点过去看到的是一片空白。
+                            if id.is_some() {
+                                ui.view_all = true;
+                            }
+                        }
                         Req::SelectSession(id) => {
                             // **选中一张有会话的活 = 把上次那场对话接回来。**
                             // 光切视图的话人看到的是一片空白 —— V3 本来就是接

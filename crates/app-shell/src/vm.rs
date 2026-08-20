@@ -169,6 +169,11 @@ pub struct ProjectVm {
     pub sessions: Vec<SessionVm>,
     /// 会话屏选中的那一个(按活)。
     pub session_open: Option<IssueId>,
+    /// 计划屏右侧详情抽屉开着哪张活。通知点「去看这张活」也是设这个。
+    pub selected_issue: Option<IssueId>,
+    /// 这个仓在浏览器里的根地址(`https://host/命名空间/仓名`),从 `.git/config`
+    /// 的 origin 推出来。**推不出来就是空串** —— 那时候详情里不给链接,不编一个。
+    pub browse_base: String,
     pub workbench: WorkbenchVm,
     pub notify: NotifyVm,
     pub config: ConfigVm,
@@ -321,6 +326,12 @@ pub struct CardItemVm {
     pub status: IssueStatus,
     /// 远端 MR 号。0 = 还没开 MR。通知那一类的判据就是它 > 0。
     pub pr_number: u32,
+    /// 远端 issue 号。0 = 这张活只在本机,没有对应的远端 issue。
+    pub remote_number: u32,
+    /// 这张活的分支。空 = 还没开过工。
+    pub branch: String,
+    /// 活的正文。详情抽屉里要看的就是它 —— 光有标题看不出这张活要干什么。
+    pub body: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]

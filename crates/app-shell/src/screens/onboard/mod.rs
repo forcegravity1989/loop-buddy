@@ -33,6 +33,10 @@ use dioxus::prelude::*;
 /// 下拉里最多画几行。检索是在**已经拉下来的那批**里过滤,不是再去问平台。
 const DROPDOWN_CAP: usize = 30;
 
+/// codehub 的三个区。`codehub-cli -H <这个 key>` —— 收的是别名,不是域名。
+/// V3 用了大半年就是这三个,别再让人填一个 buddy 自己也不知道的域名。
+const CODEHUB_ZONES: &[(&str, &str)] = &[("green", "绿区"), ("open", "内源"), ("yellow", "黄区")];
+
 #[component]
 pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element {
     let (vm, bridge) = (&vm, &bridge);
@@ -40,7 +44,7 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
     let mut step = use_signal(|| 1u8);
     // 「新建」= buddy 只在本机把目录建出来;「已有」= 指到一个已经存在的仓。
     let mut existing_tab = use_signal(|| false);
-    let mut github = use_signal(|| true);
+    let github = use_signal(|| true);
 
     let mut name = use_signal(String::new);
     let mut brief = use_signal(String::new);
@@ -49,7 +53,12 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
     let mut slug = use_signal(String::new);
     let mut workspace = use_signal(String::new);
     let mut remote = use_signal(String::new);
-    let mut host = use_signal(String::new);
+    // codehub 的 `-H` 收的是**区的别名**,不是域名 —— V3 用了大半年的就是这三个
+    // (`codehub-cli -H green|open|yellow`)。默认内源区,和 V3 的默认值一致。
+    // 原来这里是个空的「内部域名,得你填」输入框:人一点 codehub 就先撞一句
+    // 「要先填域名」,而 GitHub 那边一点就把仓列出来了 —— 两边不一样的根子在
+    // 这儿,不是 codehub-cli 少了什么能力。
+    let host = use_signal(|| "open".to_string());
 
     // ── 「完成接入」按下之后,一步一句地把后台在干什么摆出来 ──────────
     // 内核那条队列此刻正卡在 clone 上,ViewModel 一动不动,所以这些行是从
@@ -140,6 +149,9 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
         || !workspace.read().trim().is_empty()
         || !remote.read().trim().is_empty();
     let at_addr = *step.read() == 1;
+    // 渲染那一刻选中的是哪个区。`host.read()` 直接写进 rsx 会留下一个活不过
+    // 这条语句的临时借用,先取一份快照。
+    let zone = host.read().clone();
 
     rsx! {
         section {
@@ -170,36 +182,18 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                                 "已有"
                             }
                         }
-                        div { class: "pillrow",
-                            span {
-                                class: if !*github.read() { "pill active" } else { "pill" },
-                                onclick: move |_| github.set(false),
-                                "codehub"
-                            }
-                            span {
-                                class: if *github.read() { "pill active" } else { "pill" },
-                                onclick: move |_| github.set(true),
-                                "GitHub"
-                            }
-                        }
+                        {platform_pills(*github.read(), github, &zone, bridge)}
 
                         if !*github.read() {
                             div { class: "formrow",
-                                label { class: "label", "codehub 域名" }
-                                input {
-                                    class: "input mono", value: "{host}",
-                                    placeholder: "内部域名,buddy 不知道,得你填",
-                                    oninput: move |e| host.set(e.value()),
-                                }
+                                label { class: "label", "哪个区" }
+                                {zone_pills(&zone, host, bridge)}
                             }
                         }
 
                         if *existing_tab.read() {
                             div { class: "formrow",
-                                label { class: "label",
-                                    if *github.read() { "远端仓(打字即检索,也可以直接填 owner/repo)" }
-                                    else { "远端仓(打字即检索,也可以直接填 命名空间/仓名)" }
-                                }
+                                label { class: "label", "远端仓(打字即检索,也可以直接填 命名空间/仓名)" }
                                 RepoField {
                                     vm: vm.clone(),
                                     bridge: bridge.clone(),
@@ -244,9 +238,7 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                                 }
                             }
                             div { class: "formrow",
-                                label { class: "label",
-                                    if *github.read() { "远端仓(owner/repo,可留空)" } else { "远端仓(命名空间/仓名,可留空)" }
-                                }
+                                label { class: "label", "远端仓(命名空间/仓名,可留空)" }
                                 input {
                                     class: "input mono", value: "{remote}",
                                     placeholder: "forcegravity1989/loop-buddy",
@@ -620,6 +612,54 @@ fn shown(typed: &str, fallback: &str) -> String {
 
 /// 卡一底下那行探活。项目墙的环境条是同一份数据,这里只挑与接入直接相关的
 /// 三项:平台 CLI、claude、Open Design。**探不出来的照实说探不出来。**
+/// 平台那排 pill。**换平台当场重列一次仓** —— 不然切过去看到的还是上一个平台
+/// 列出来的那批,人还得自己去点刷新才知道两边其实是一样的。
+fn platform_pills(gh: bool, mut github: Signal<bool>, zone: &str, bridge: &Bridge) -> Element {
+    let pills: Vec<Element> = [(false, "codehub"), (true, "GitHub")]
+        .into_iter()
+        .map(|(want_gh, label)| {
+            let (b, z) = (bridge.clone(), zone.to_string());
+            rsx! {
+                span {
+                    key: "{label}",
+                    class: if gh == want_gh { "pill active" } else { "pill" },
+                    onclick: move |_| {
+                        github.set(want_gh);
+                        b.send(Req::ListRepos { github: want_gh, host: z.clone() });
+                    },
+                    "{label}"
+                }
+            }
+        })
+        .collect();
+    rsx! { div { class: "pillrow", {pills.into_iter()} } }
+}
+
+/// codehub 三个区的选择器。**和平台那排 pill 长一样** —— 换区就当场重列一次仓,
+/// 人不需要知道「换完还得点一下刷新」。
+fn zone_pills(zone: &str, mut host: Signal<String>, bridge: &Bridge) -> Element {
+    let pills: Vec<Element> = CODEHUB_ZONES
+        .iter()
+        .copied()
+        .map(|(key, label)| {
+            let b = bridge.clone();
+            rsx! {
+                span {
+                    key: "{key}",
+                    class: if zone == key { "pill active" } else { "pill" },
+                    onclick: move |_| {
+                        host.set(key.to_string());
+                        // 换了区,上一个区列出来的仓就不作数了,当场重问一次。
+                        b.send(Req::ListRepos { github: false, host: key.to_string() });
+                    },
+                    "{label}"
+                }
+            }
+        })
+        .collect();
+    rsx! { div { class: "pillrow", {pills.into_iter()} } }
+}
+
 fn probe_row(env: &[ToolProbeVm], github: bool) -> Element {
     let pick = |name: &str| env.iter().find(|t| t.name == name);
     let platform = if github { "gh" } else { "codehub" };

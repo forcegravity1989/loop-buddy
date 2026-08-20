@@ -246,6 +246,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // ── 9 · 名片没在主检出里留一份「未跟踪的双胞胎」 ──────────
+    // 接入那一步为了让界面立刻有东西看,把名片写进主检出;铺底又把同一份提交
+    // 进分支。两份都留着的话,人合完 MR 一 `git pull`,git 会一句
+    // 「untracked working tree files would be overwritten by merge」顶回来,
+    // 拉不动。所以提交成功之后主检出那份要没了 —— 正本在分支上。
+    let twin = mature.join(bw_v4::repo::project_file::REL_PATH);
+    let on_branch = std::process::Command::new("git")
+        .args([
+            "-C",
+            mature.to_str().unwrap(),
+            "show",
+            "bw/issue-1:.bw/project.toml",
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    say(
+        "档 9 · 名片",
+        &format!(
+            "主检出里还留着吗={}(该是 false)· 分支上有吗={}(该是 true)",
+            twin.exists(),
+            on_branch
+        ),
+    );
+
     // ── 7 · 从工作台移走 ────────────────────────────────────
     // 项目卡右上角那个 ×。只动库,绝不动仓 —— 这条要能读回来,不然「移走」
     // 就成了「删掉我的代码」。

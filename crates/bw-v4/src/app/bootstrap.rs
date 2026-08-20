@@ -191,6 +191,9 @@ impl App {
         self.store
             .set_issue_remote(issue_id, &tree.branch, pr_number, issue.remote_number)
             .await?;
+        if committed && tree.isolated {
+            drop_untracked_twin(&ws, &tree.path, project_file::REL_PATH).await;
+        }
 
         self.step(if committed {
             ProgressLine::ok(
@@ -272,6 +275,30 @@ impl App {
             human_edited,
         }])
     }
+}
+
+/// 名片进了分支之后,**把主检出里那份没跟踪的同名文件删掉**。
+///
+/// 接入那一步为了让界面立刻有东西看,把名片写进了主检出;铺底又把同一份写进
+/// 分支。两份内容一样,但主检出那份是**未跟踪**的 —— 等人合了 MR 再 `git pull`,
+/// git 会一句 `untracked working tree files would be overwritten by merge` 顶回来,
+/// 拉不动。这不是理论风险,是必然发生。
+///
+/// 三道闸:只在真提交了、只在文件确实没被 git 跟踪、只在两份内容逐字相同的时候
+/// 删。人自己动过那份就留着 —— 那时候两边不一样,该让人自己看见冲突。
+async fn drop_untracked_twin(main: &std::path::Path, tree: &std::path::Path, rel: &str) {
+    let here = main.join(rel);
+    let Ok(mine) = std::fs::read(&here) else {
+        return;
+    };
+    match std::fs::read(tree.join(rel)) {
+        Ok(theirs) if theirs == mine => {}
+        _ => return,
+    }
+    if crate::git::is_tracked(main, rel).await {
+        return;
+    }
+    let _ = std::fs::remove_file(&here);
 }
 
 fn pending_steps(probe: &boot::BootstrapProbe) -> String {

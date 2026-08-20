@@ -89,10 +89,17 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
     }
 }
 
-/// 等人合入的活。「合入并完成」先真的把 MR 合了,再把活推到完成 —— 合入没成
-/// 就整条不算数,活留在原地可以重试。库里没记 MR 号的,内核会拿这张活的分支
-/// 去远端现查一次(队友自己开的 MR 就这么找到);确实没有 MR 可合的(项目没
-/// 挂远端),只走「完成」那一步,事件里如实说没合。
+/// 等人合入的活。
+///
+/// **通知只负责「告诉你有一张活等着你合」,不负责给你看东西。** 点「去看这张活」
+/// 落到计划屏、并把这张活的详情抽屉打开 —— 会话、MR 链接、远端 issue 链接、正文
+/// 全在那儿。原来这里直接跳会话屏,那张活要是从没起过会话(buddy 自己写的铺底活
+/// 就是),人点过去看到的是一片空白。
+///
+/// 「合入并完成」先真的把 MR 合了,再把活推到完成 —— 合入没成就整条不算数,活留
+/// 在原地可以重试。库里没记 MR 号的,内核会拿这张活的分支去远端现查一次(队友
+/// 自己开的 MR 就这么找到);确实没有 MR 可合的(项目没挂远端),只走「完成」
+/// 那一步,事件里如实说没合。
 fn review_item(c: &CardItemVm, bridge: &Bridge, nav: PanelNav) -> Element {
     let (b_open, b_merge) = (bridge.clone(), bridge.clone());
     let id = c.id;
@@ -104,18 +111,16 @@ fn review_item(c: &CardItemVm, bridge: &Bridge, nav: PanelNav) -> Element {
                 span { class: "chip chip-gray", style: "margin-left:4px;", "{c.category}" }
             }
             div { style: "font-size:11px;color:var(--ink-3);margin-bottom:6px;",
-                "先看一眼产出它的那场会话再决定合不合。"
+                "先去看一眼这张活干了什么再决定合不合 —— 会话、MR、正文都在它的详情里。"
             }
             div { class: "acts",
                 button {
                     class: "btn btn-sm btn-ghost",
-                    // 落到这张活的会话屏,并**把上次那场对话接回来** —— 光切
-                    // 视图不接回,人看到的是一片空白。
                     onclick: move |_| {
-                        b_open.send(Req::SelectSession(Some(id)));
-                        nav.go(Panel::Session);
+                        b_open.send(Req::SelectIssue(Some(id)));
+                        nav.go(Panel::Plan);
                     },
-                    "看会话"
+                    "去看这张活"
                 }
                 button {
                     class: "btn btn-sm btn-primary",

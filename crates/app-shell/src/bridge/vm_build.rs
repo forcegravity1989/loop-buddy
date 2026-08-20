@@ -49,6 +49,8 @@ pub struct UiState {
     /// 会话屏选中哪个会话、开着哪个页签、展开了哪些目录、中栏开着哪个文件。
     /// 纯导航状态,一律不进库。
     pub session_open: Option<bw_v4::model::IssueId>,
+    /// 计划屏详情抽屉开着哪张活。纯导航状态,不进库。
+    pub selected_issue: Option<bw_v4::model::IssueId>,
     pub session_tab: crate::vm::SessionTab,
     pub expanded_dirs: Vec<String>,
     pub open_file: String,
@@ -439,6 +441,8 @@ async fn build_project(
         .flatten()
         .and_then(|v| v.parse().ok());
     let sessions = build_sessions(app, id, &issues).await;
+    // 详情抽屉里那两条链接的前缀。读 `.git/config`,不起子进程。
+    let browse_base = bw_v4::git::browse_base(&ws).unwrap_or_default();
     let current_week = bw_v4::isoweek::current_week();
     let viewing_week = if ui.viewing_week.is_empty() {
         current_week.clone()
@@ -547,6 +551,8 @@ async fn build_project(
             .collect(),
         sessions: sessions.clone(),
         session_open: ui.session_open,
+        selected_issue: ui.selected_issue,
+        browse_base: browse_base.clone(),
         workbench: build_workbench(
             &sessions,
             &issues,
@@ -608,5 +614,8 @@ pub(super) fn card_item(i: &bw_v4::Issue) -> CardItemVm {
         settled: i.settled_at.is_some(),
         status: i.status,
         pr_number: i.pr_number,
+        remote_number: i.remote_number,
+        branch: i.branch.clone(),
+        body: i.body.clone(),
     }
 }

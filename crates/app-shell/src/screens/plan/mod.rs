@@ -45,10 +45,24 @@ impl Filters {
 
 #[component]
 pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
+    // 通知屏塞过来的那张活。**在借用 `p` 之前取走** —— 下面那行把 `p` 变成引用,
+    // 引用进不了 `'static` 的 effect 闭包。
+    let p_sel = p.selected_issue;
     let (p, bridge) = (&p, &bridge);
     let dragging = use_signal(|| None::<CardItemVm>);
     let pending = use_signal(|| None::<PendingMove>);
-    let selected = use_signal(|| None::<IssueId>);
+    let mut selected = use_signal(|| None::<IssueId>);
+    // 通知屏点「去看这张活」时先把活号放进 ViewModel,再切到这一屏 —— 这里把它
+    // 接过来打开详情抽屉。**只在它变了的那一次接**:之后人在这一屏点别的卡片、
+    // 或者关掉抽屉,都不该被这个值拽回去。
+    let mut came_from = use_signal(|| None::<IssueId>);
+    use_effect(move || {
+        let want = p_sel;
+        if want.is_some() && want != *came_from.peek() {
+            selected.set(want);
+        }
+        came_from.set(want);
+    });
     let bounced = use_signal(String::new);
     let filters = use_signal(Filters::default);
 
