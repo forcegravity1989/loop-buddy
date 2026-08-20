@@ -329,8 +329,9 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
     }
 }
 
-/// 选仓的那一格:**一个输入框**。点「刷新」把你账号下的仓拉进来,打字即在拉下来
-/// 的那批里检索,点一行即选中;不想理列表就直接把地址打进去,一样算数。
+/// 选仓的那一格:**一个输入框**。光标点进去就自动去列你账号下的仓,打字即在拉下来
+/// 的那批里检索,点一行即选中;不想理列表就直接把地址打进去,一样算数。想重新拉一次,
+/// 点框里右边那个 ⟳。
 ///
 /// 交互照 V3 的 `RepoCombobox`(`app-desktop/src/screens/create.rs`)—— 原生
 /// `<select>` 做不了「打字过滤」,而「搜索框 + 下拉框」两个控件是把一件事拆成两下。
@@ -362,16 +363,24 @@ fn RepoField(
         .collect();
 
     let b_list = bridge.clone();
+    let b_focus = bridge.clone();
     let (gh_l, host_l) = (github, host.clone());
+    let (gh_f, host_f) = (github, host.clone());
+    // 还没问过、也不在问的路上 —— 光标一进这格就替人去问一次,不用先点什么。
+    let need_first_fetch = !r.asked && !r.loading;
     rsx! {
         div { style: "position:relative;",
-            div { style: "display:flex;gap:8px;align-items:center;",
+            div { class: "repo-field",
                 input {
                     class: "input mono",
-                    style: "flex:1;min-width:0;",
                     value: "{remote}",
                     placeholder: "forcegravity1989/loop-buddy",
-                    onfocus: move |_| open.set(true),
+                    onfocus: move |_| {
+                        open.set(true);
+                        if need_first_fetch {
+                            b_focus.send(Req::ListRepos { github: gh_f, host: host_f.clone() });
+                        }
+                    },
                     oninput: move |e| {
                         // 打的字既是检索词,也是最终的地址 —— 不想用列表的人
                         // 直接打完就走,不用先点开什么。
@@ -382,14 +391,17 @@ fn RepoField(
                     onblur: move |_| open.set(false),
                 }
                 button {
-                    class: "btn btn-sm",
+                    class: if r.loading { "repo-refresh spinning" } else { "repo-refresh" },
                     disabled: r.loading,
-                    title: if github { "去问 gh repo list" } else { "去问 codehub-cli" },
-                    onclick: move |_| {
+                    title: if github { "重新问一次 gh repo list" } else { "重新问一次 codehub-cli" },
+                    // 按下去不能让上面那格失焦 —— 一失焦下拉就收了,人会以为
+                    // 刷新反而把列表刷没了。
+                    onmousedown: move |e| {
+                        e.prevent_default();
                         open.set(true);
                         b_list.send(Req::ListRepos { github: gh_l, host: host_l.clone() });
                     },
-                    if r.loading { "刷新中…" } else { "刷新" }
+                    "⟳"
                 }
             }
 
@@ -400,10 +412,14 @@ fn RepoField(
                     if github { "多半是没装 gh 或者没登录(gh auth login)。地址直接打进上面那格也一样能用。" }
                     else { "多半是没装 codehub-cli、没登录,或者域名填错了。地址直接打进上面那格也一样能用。" }
                 }
-            } else if r.asked && !r.loading && r.rows.is_empty() {
-                div { class: "ob-note", "这个账号下一个仓都没列到。" }
+            } else if r.loading {
+                div { class: "ob-note",
+                    if github { "正在问 gh repo list…" } else { "正在问 codehub-cli…" }
+                }
+            } else if r.asked && r.rows.is_empty() {
+                div { class: "ob-note", "这个账号下一个仓都没列到。地址直接打进上面那格也一样能用。" }
             } else if !r.asked {
-                div { class: "ob-note", "点「刷新」把你账号下的仓拉进来,然后在上面那格打字挑。" }
+                div { class: "ob-note", "光标点进上面那格,就去列你账号下的仓;也可以直接把地址打进去。" }
             }
 
             if *open.read() && !r.rows.is_empty() {
@@ -414,7 +430,7 @@ fn RepoField(
                         }
                     } else {
                         for row in shown_rows.iter() {
-                            {repo_option(row, &bridge, github, &host, &root, remote, workspace)}
+                            {repo_option(row, &bridge, github, &host, &root, remote, workspace, query, open)}
                         }
                     }
                 }
@@ -434,6 +450,8 @@ fn repo_option(
     root: &str,
     mut remote: Signal<String>,
     mut workspace: Signal<String>,
+    mut query: Signal<String>,
+    mut open: Signal<bool>,
 ) -> Element {
     let b = bridge.clone();
     let (path, host2) = (row.path.clone(), host.to_string());
@@ -453,6 +471,13 @@ fn repo_option(
             onmousedown: move |e| {
                 e.prevent_default();
                 remote.set(path.clone());
+                // 选完就收起来。这里按的是 mousedown 且拦了默认行为(不拦的话
+                // 上面那格会先失焦、这一下就点空了),所以「失焦收起」那条走不到,
+                // 必须自己收 —— 少这一句,选完下拉就关不上。
+                open.set(false);
+                // 检索词清掉:下次光标再进那格,看到的是整张列表,而不是被
+                // 上一次选中的仓名筛得只剩一行。
+                query.set(String::new());
                 if workspace.read().trim().is_empty() {
                     workspace.set(guess.clone());
                 }

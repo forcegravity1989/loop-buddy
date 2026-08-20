@@ -12,6 +12,9 @@
  *      永远不可点,所以它 `pointer-events:none`、底色是墨黑。真壳这条位置
  *      放的是命令回执(可能是一整句失败原话),必须点得到 ✕、也不该是一坨
  *      黑块压在暖纸底色上。
+ *   4. 「真壳补充」里另加了接入屏那格的三小节:两步走的步骤条(.ob-steps)、
+ *      仓下拉(.repo-pop)、以及输入框内嵌的刷新小图标(.repo-field)——
+ *      原型上「接入」屏是手填地址,没有这几样东西。
  *
  * 除此之外一行没改。类名照搬,屏里直接用 class,不再写行内样式。
  */
@@ -504,3 +507,16 @@ select.select-multi{padding:3px;font-size:11.5px;border:1px solid var(--border-d
 .repo-opt:hover{background:#F4E4DC;}
 .repo-opt-desc{font-size:11px;color:var(--ink-3);margin-top:2px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* 接入屏「项目地址」那格:刷新做成输入框里的小图标,不单独占一个按钮位。
+   试点第一天用户提的——一个输入框旁边挂个「刷新」按钮太重。 */
+.repo-field{position:relative;display:block;}
+.repo-field .input{width:100%;padding-right:32px;}
+.repo-refresh{position:absolute;right:1px;top:1px;bottom:1px;width:30px;
+  display:flex;align-items:center;justify-content:center;
+  background:transparent;border:0;border-radius:0 7px 7px 0;
+  color:var(--ink-3);font-size:14px;line-height:1;cursor:pointer;padding:0;}
+.repo-refresh:hover{background:#F4E4DC;color:var(--clay);}
+.repo-refresh[disabled]{cursor:default;color:var(--ink-4);background:transparent;}
+.repo-refresh.spinning{animation:repo-spin .9s linear infinite;}
+@keyframes repo-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
