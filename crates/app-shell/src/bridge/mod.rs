@@ -204,10 +204,14 @@ pub fn workspaces_root() -> PathBuf {
 /// 工作区走** —— 它是 buddy 自带的东西,和用户把仓放在哪没关系;工作区根目录
 /// 是可以随时改的,资产不该跟着搬家。
 pub fn asset_root() -> PathBuf {
-    PathBuf::from(db_path())
-        .parent()
-        .map(|d| d.join("assets"))
-        .unwrap_or_else(|| dirs_home().join(".builders-workbench").join("assets"))
+    // `BW_DB=v4.db` 这种裸文件名的 `parent()` 是空串,直接 join 会得到相对路径
+    // `assets` —— 而这个路径要作为 `--add-dir` 传给 agent,agent 的工作目录是活
+    // 自己的 worktree,相对路径在那儿指向的是另一个地方。空的就回落到家目录。
+    let db = PathBuf::from(db_path());
+    match db.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.join("assets"),
+        _ => dirs_home().join(".builders-workbench").join("assets"),
+    }
 }
 
 fn dirs_home() -> PathBuf {
