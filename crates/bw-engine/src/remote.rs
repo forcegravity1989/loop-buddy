@@ -134,6 +134,32 @@ impl Remote {
         }
     }
 
+    /// 在**已经推上去的分支**上开 PR/MR —— 和 [`Self::create_mr`] 的区别是:
+    /// 这里不替调用方 `git add -A` 提交,分支上有什么就提什么;正文也由调用方
+    /// 给,**不自动挂 `Closes #<n>`**。
+    ///
+    /// V4 走的是这条:活是本机连续号,和远端 issue 号没有对应关系,拼一句
+    /// `Closes #3` 会去关掉那个仓里毫不相干的第 3 号 issue;而且规范铺底只
+    /// 提交自己写下去的那几个文件,`add -A` 会把人手上没写完的改动一起打包。
+    /// **绝不合入** —— 合入永远是人点的那一下。
+    pub async fn create_mr_on_branch(
+        &self,
+        workspace: &Path,
+        branch: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<github::PrOpened, RemoteError> {
+        match self {
+            Remote::Github(_) => {
+                Ok(github::create_pr_on_branch(workspace, branch, title, body).await?)
+            }
+            Remote::Codehub { host, path } => Ok(codehub::create_mr_on_branch(
+                host, path, workspace, branch, title, body, None,
+            )
+            .await?),
+        }
+    }
+
     /// Merge the open PR/MR. Github: `gh pr merge --squash`; codehub:
     /// `codehub-cli mr merge <iid> --squash -y`. Two call sites with different
     /// human/auto semantics (§7): `MergeIssuePr` — the **human验收** action
