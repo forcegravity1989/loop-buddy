@@ -1,0 +1,13 @@
+name = "workbench"
+kind = ""
+brief = "mvp v4的愿景"
+benchmark = "workbuddy"
+opportunity = "更多的项目纳入到workbench中演进"
+
+# 规范版本与在研版本。这两个值不进本机库,总览与计划屏每次要
+# 显示都现解析这个文件。
+standard_version = "5.0"
+current_version = "v0.1"
+
+# 项目群没配。配了就在这里加一段 [chat](提供方 / 群号 / 同步哪些
+# 事件),总览名片会显示群名与「通知同步中」。

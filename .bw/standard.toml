@@ -1,0 +1,6 @@
+# .bw/standard.toml —— 这个项目当前铺了哪版规范、启用了哪些大类、扩展了
+# 哪些大类。buddy 用它做对账(缺什么、过期什么)和"要不要提示升级"的判断。
+version    = "5.0"
+enabled    = ["charter", "agents", "docs-core", "metrics", "issue-policy", "defaults-core", "cadence"]
+extensions = ["decisions", "method"]
+source     = "builtin"
