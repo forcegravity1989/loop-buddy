@@ -145,10 +145,15 @@ pub(super) fn build_metrics(
     };
     // `.bw/metrics.toml` 里的指标没有单独的 id 字段 —— 名字就是它的键。
     // `issue.metric_key` 存的因此是指标的名字。
-    let mk = |name: &str| MetricCardVm {
+    // `target` / `def` / 采集方式来自指标定义文件;读数来自周计划文件。两边
+    // 各是各的正本,这里只是拼到同一张卡上。
+    let mk = |name: &str, def: &str, target: &str, manual: bool| MetricCardVm {
         id: name.to_string(),
         name: name.to_string(),
         reading: reading_of(name).map(|r| r.value.clone()),
+        target: target.to_string(),
+        def: def.to_string(),
+        manual,
         source: reading_of(name)
             .map(|r| r.source.clone())
             .unwrap_or_default(),
@@ -157,12 +162,83 @@ pub(super) fn build_metrics(
             .unwrap_or_default(),
         driving: driving_of(name),
     };
+    let is_manual =
+        |k: bw_engine::metrics_file::CollectKind| k == bw_engine::metrics_file::CollectKind::Manual;
     MetricsVm {
-        north_star: Some(mk(&m.north_star.name)),
-        lagging: m.lagging.iter().map(|d| mk(&d.name)).collect(),
-        leading: m.leading.iter().map(|d| mk(&d.name)).collect(),
+        // 北极星没有 target 字段 —— 它的目标就是它自己那句定义。
+        north_star: Some(mk(
+            &m.north_star.name,
+            &m.north_star.def,
+            "",
+            is_manual(m.north_star.collect.kind),
+        )),
+        lagging: m
+            .lagging
+            .iter()
+            .map(|d| mk(&d.name, &d.def, &d.target, is_manual(d.collect.kind)))
+            .collect(),
+        leading: m
+            .leading
+            .iter()
+            .map(|d| mk(&d.name, &d.def, &d.target, is_manual(d.collect.kind)))
+            .collect(),
         note: None,
     }
+}
+
+/// 本周四段计数。待办池不算进去 —— 它按定义就是「没排进任何一周」。
+pub(super) fn build_week_counts(board: &BoardVm) -> WeekCountsVm {
+    let n = |st: IssueStatus| {
+        board
+            .columns
+            .iter()
+            .find(|c| c.status == st)
+            .map(|c| c.cards.len())
+            .unwrap_or(0)
+    };
+    WeekCountsVm {
+        todo: n(IssueStatus::Todo),
+        doing: n(IssueStatus::InProgress),
+        review: n(IssueStatus::InReview),
+        done: n(IssueStatus::Done),
+    }
+}
+
+/// 「本周运作」那张表。周计划文件里没有这一段就是空的 —— 不替它编三行。
+pub(super) fn build_ops(plan: Option<&week_plan_file::WeekPlan>) -> Vec<OpsChipVm> {
+    plan.map(|p| {
+        p.ops
+            .iter()
+            .map(|r| OpsChipVm {
+                title: r.title.clone(),
+                status: r.status.clone(),
+                note: r.note.clone(),
+            })
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// 名片改动那张在途的轻量活。名片是仓文件,改它走分支 + MR,所以总览要能
+/// 看见「改了、还没合」。只认最新的一张。
+pub(super) fn build_card_mr(issues: &[bw_v4::Issue]) -> Option<CardMrVm> {
+    let i = issues
+        .iter()
+        .filter(|i| i.title.starts_with("编辑项目名片"))
+        .filter(|i| {
+            matches!(
+                i.status,
+                IssueStatus::InReview | IssueStatus::InProgress | IssueStatus::Todo
+            )
+        })
+        .max_by_key(|i| i.number)?;
+    Some(CardMrVm {
+        issue_id: Some(i.id),
+        number: i.number,
+        status: i.status.label().to_string(),
+        pr_number: i.pr_number,
+        mergeable: i.status == IssueStatus::InReview,
+    })
 }
 
 pub(super) async fn build_sessions(
@@ -391,5 +467,50 @@ fn blank_dash(s: &str) -> &str {
         "—"
     } else {
         s
+    }
+}
+
+/// 代码仓级指标。**每一项都注明从哪采的**;采不到就整块给出原话,不填 0。
+///
+/// 高保真那张网格上还有几项是远端来的(合入的 PR、远端 issue、开放 PR),
+/// 那要走 GitHub / codehub 的接口,今天还没接 —— 与其编几个数,不如只列采得
+/// 到的,并在界面上说清楚少了哪几项(见 `docs/LEFTOVERS.md`)。
+pub(super) async fn collect_repo_stats(ws: &Path) -> RepoStatsVm {
+    let e = match bw_engine::evidence::collect(&ws.display().to_string()).await {
+        Ok(e) => e,
+        Err(err) => {
+            return RepoStatsVm {
+                items: Vec::new(),
+                error: format!("读不到仓统计:{err}"),
+            }
+        }
+    };
+    let mut items = vec![
+        (e.commit_count.to_string(), "累计提交".into(), "git".into()),
+        (
+            e.tracked_files.to_string(),
+            "跟踪的文件".into(),
+            "git".into(),
+        ),
+        (
+            e.dirty_paths.to_string(),
+            "没提交的改动".into(),
+            "git".into(),
+        ),
+        (
+            e.docs_files.to_string(),
+            "docs/ 下的文件".into(),
+            "git".into(),
+        ),
+    ];
+    if let Some(d) = bw_v4::git::first_commit_date(ws).await {
+        items.push((d, "首次提交".into(), "git".into()));
+    }
+    if let Ok(tags) = bw_v4::git::tags(ws).await {
+        items.push((tags.len().to_string(), "打过的标签".into(), "git".into()));
+    }
+    RepoStatsVm {
+        items,
+        error: String::new(),
     }
 }

@@ -22,6 +22,8 @@ fail=0
 while IFS= read -r -d '' f; do
   bad=$(awk '
     /^[[:space:]]*#\[component\]/ { is_component = 1; next }
+    # 注释行整行跳过 —— 文档注释里提一句 use_context 不是在调 hook。
+    /^[[:space:]]*\/\// { next }
     /^[[:space:]]*(pub )?(async )?fn / {
       fn_line = NR; fn_name = $0; fn_is_component = is_component; is_component = 0; next
     }

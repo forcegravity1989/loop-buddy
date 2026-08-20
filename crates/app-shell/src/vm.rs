@@ -72,6 +72,15 @@ pub struct ProjectVm {
     /// 正在看哪一周。
     pub viewing_week: String,
     pub board: BoardVm,
+    /// 本周四段计数:待办 / 进行中 / 评审中 / 完成。总览与计划屏的进度条都用它。
+    pub week_counts: WeekCountsVm,
+    /// 本周计划文件「本周运作」那张表的行 —— 三张运作活各自走到哪了。
+    pub ops: Vec<OpsChipVm>,
+    /// 代码仓级指标。**现算很贵(要起好几个 git 子进程),所以按需**:
+    /// `None` = 还没采过,界面显示一颗「立即采集」。
+    pub repo_stats: Option<RepoStatsVm>,
+    /// 名片改动那张轻量活走到哪了。`None` = 没有在途的名片改动。
+    pub card_mr: Option<CardMrVm>,
     /// 「开始本周」刚产出、**还没经人确认**的草稿活标。确认之前一张活都不建
     /// —— 这是「活由人确认才存在」那条,不是界面装饰。
     pub pending_drafts: Vec<String>,
@@ -125,6 +134,12 @@ pub struct MetricCardVm {
     pub name: String,
     /// 本周读数。`None` = 没读数,显示「无数据」而不是 0。
     pub reading: Option<String>,
+    /// `.bw/metrics.toml` 里写的目标。空 = 还没定目标,显示「目标未设」。
+    pub target: String,
+    /// 这条指标的定义(`def`),给人看「这个数到底数的是什么」。
+    pub def: String,
+    /// 采集方式是「手填」。手填的数带徽记,一眼看得出它不是自动采来的。
+    pub manual: bool,
     pub source: String,
     pub collected_at: String,
     /// 本周哪些活在推它。
@@ -138,6 +153,57 @@ pub struct WeekVm {
     pub backfill: bool,
     pub goal: Option<String>,
     pub activity_count: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WeekCountsVm {
+    pub todo: usize,
+    pub doing: usize,
+    pub review: usize,
+    pub done: usize,
+}
+
+impl WeekCountsVm {
+    pub fn total(&self) -> usize {
+        self.todo + self.doing + self.review + self.done
+    }
+
+    /// 进度条一段占多宽。总数是 0 就全都是 0 —— 不给空周画一条满的。
+    pub fn pct(&self, n: usize) -> u32 {
+        if self.total() == 0 {
+            0
+        } else {
+            (n * 100 / self.total()) as u32
+        }
+    }
+}
+
+/// 「本周运作」表里的一行。正本是周计划文件,不是库。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpsChipVm {
+    pub title: String,
+    pub status: String,
+    pub note: String,
+}
+
+/// 代码仓级指标。每一项都带「这个数从哪来」——采不到就整块给出原话,不填 0。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RepoStatsVm {
+    /// `(数值, 这个数是什么, 从哪采的)`。
+    pub items: Vec<(String, String, String)>,
+    pub error: String,
+}
+
+/// 名片改动那张轻量活。名片是仓文件,改它一律走分支 + MR。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CardMrVm {
+    pub issue_id: Option<IssueId>,
+    pub number: u32,
+    /// 活现在的状态标签(「评审中」/「已完成」这种)。
+    pub status: String,
+    pub pr_number: u32,
+    /// 能不能点「合入并完成」——只有停在评审中的才能。
+    pub mergeable: bool,
 }
 
 /// 六列看板。列的顺序就是活的生命周期顺序。

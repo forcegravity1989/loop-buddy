@@ -64,6 +64,19 @@ impl Panel {
     ];
 }
 
+/// 「跳到另一个入口」的口子。六入口之间切换是**纯本机导航**,不经内核 ——
+/// 所以它不是一条 `Req`,而是一个各屏都拿得到的信号。屏里想跳(总览的
+/// 「去计划 →」、通知里点一条跳会话)就 `use_context::<PanelNav>()`。
+#[derive(Clone, Copy)]
+pub struct PanelNav(pub dioxus::prelude::Signal<Panel>);
+
+impl PanelNav {
+    pub fn go(mut self, p: Panel) {
+        use dioxus::prelude::WritableExt;
+        self.0.set(p);
+    }
+}
+
 /// 顶层三屏里不依赖「打开某个项目」的那两个。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TopView {
@@ -141,6 +154,10 @@ pub enum Req {
         codegraph: Option<crate::vm::CodeGraphVm>,
         assets: Option<crate::vm::AssetsVm>,
     },
+    /// 总览那块「项目指标 · 代码仓级」:现采一次。
+    CollectRepoStats,
+    /// 上面那一采的结果。**不是界面发的**,是派出去的那个任务算完发回来的。
+    RepoStatsComputed(crate::vm::RepoStatsVm),
     /// 重新算一遍并推一份新的 ViewModel。
     Refresh,
 }
@@ -285,6 +302,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     kb_tab: crate::vm::KbTab::default(),
                     kb_codegraph: None,
                     kb_assets: None,
+                    repo_stats: None,
                     viewing_week: bw_v4::isoweek::current_week(),
                     open_doc: None,
                     note: None,
@@ -422,6 +440,9 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             ui.kb_tab = crate::vm::KbTab::default();
                             ui.kb_codegraph = None;
                             ui.kb_assets = None;
+                            // 仓统计同理:留着就是把上一个项目的提交数摆在这个
+                            // 项目的总览上。
+                            ui.repo_stats = None;
                         }
                         Req::ViewWeek(w) => ui.viewing_week = w,
                         Req::OpenDoc(p) => ui.open_doc = p,
@@ -504,6 +525,22 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                 ui.kb_assets = assets;
                             }
                         }
+                        Req::CollectRepoStats => {
+                            // 和知识库那两个页签同一个做法:派出去算,不在这条
+                            // 循环里 await —— 它要起好几个 git 子进程,在这里等
+                            // 就把内核这条单线程连同终端的 60ms 节拍一起按住。
+                            if let Some(pid) = ui.open {
+                                if let Ok(ws) = app.workspace_of(pid).await {
+                                    let back = tx_back.clone();
+                                    tokio::spawn(async move {
+                                        let _ = back.send(Req::RepoStatsComputed(
+                                            vm_panels::collect_repo_stats(&ws).await,
+                                        ));
+                                    });
+                                }
+                            }
+                        }
+                        Req::RepoStatsComputed(s) => ui.repo_stats = Some(s),
                         Req::Refresh => {}
                     }
                     vm = vm_build::build(&app, &ui).await;

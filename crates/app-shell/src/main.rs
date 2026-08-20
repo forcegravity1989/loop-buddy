@@ -73,7 +73,8 @@ fn Root() -> Element {
     let bridge = use_context_provider(move || bridge::spawn(deep_link));
 
     let mut vm = use_signal(vm::Vm::default);
-    let mut panel = use_signal(move || initial_panel);
+    let nav = use_context_provider(move || bridge::PanelNav(Signal::new(initial_panel)));
+    let mut panel = nav.0;
     let mut top_view = use_signal(move || initial_view);
 
     // 订阅内核推过来的 ViewModel。

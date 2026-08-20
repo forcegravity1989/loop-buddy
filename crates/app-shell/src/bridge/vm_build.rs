@@ -13,7 +13,8 @@ use bw_v4::V4Store;
 
 use super::vm_kb::build_kb;
 use super::vm_panels::{
-    build_board, build_config, build_metrics, build_sessions, build_weeks, build_workbench,
+    build_board, build_card_mr, build_config, build_metrics, build_ops, build_sessions,
+    build_week_counts, build_weeks, build_workbench,
 };
 
 /// 读一份仓文件:读不出来就把原话记进 `warnings`,再退回默认值。
@@ -53,6 +54,9 @@ pub struct UiState {
     pub kb_tab: crate::vm::KbTab,
     pub kb_codegraph: Option<crate::vm::CodeGraphVm>,
     pub kb_assets: Option<crate::vm::AssetsVm>,
+    /// 总览那块「项目指标 · 代码仓级」上一次采到的数。同理:采一次要起好几个
+    /// git 子进程,只在人点「立即采集」那一刻跑。
+    pub repo_stats: Option<crate::vm::RepoStatsVm>,
     pub db_path: String,
     pub workspaces_root: String,
 }
@@ -341,6 +345,7 @@ async fn build_project(
         warnings,
     );
 
+    let week_counts;
     Some(ProjectVm {
         id,
         slug: p.slug.clone(),
@@ -370,7 +375,17 @@ async fn build_project(
         weeks: build_weeks(&ws),
         current_week,
         viewing_week: viewing_week.clone(),
-        board: build_board(&issues, &viewing_week, policy.as_ref()),
+        board: {
+            let b = build_board(&issues, &viewing_week, policy.as_ref());
+            week_counts = build_week_counts(&b);
+            b
+        },
+        week_counts,
+        ops: build_ops(plan.as_ref()),
+        // 采不采由界面点 —— 现算一次要起好几个 git 子进程,不能每次重拼
+        // ViewModel 都跑一遍(人打字时每 30ms 就重拼一次)。
+        repo_stats: ui.repo_stats.clone(),
+        card_mr: build_card_mr(&issues),
         pending_drafts: match &ui.pending_drafts {
             Some((week, titles)) if *week == viewing_week => titles.clone(),
             _ => Vec::new(),

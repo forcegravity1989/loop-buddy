@@ -30,6 +30,7 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
 fn StandardBlock(p: ProjectVm, bridge: Bridge) -> Element {
     let (p, bridge) = (&p, &bridge);
     let b_rec = bridge.clone();
+    let b_boot = bridge.clone();
     let b_ver = bridge.clone();
     let pid = p.id;
     let mut version = use_signal(|| p.card.current_version.clone());
@@ -50,6 +51,11 @@ fn StandardBlock(p: ProjectVm, bridge: Bridge) -> Element {
                     style: "{theme::btn_ghost()}",
                     onclick: move |_| b_rec.cmd(Command::ReconcileStandard { project_id: pid }),
                     "对一遍账"
+                }
+                button {
+                    style: "{theme::btn_ghost()}",
+                    onclick: move |_| b_boot.cmd(Command::RunStandardBootstrap { project_id: pid }),
+                    "规范铺底"
                 }
             }
             div {
