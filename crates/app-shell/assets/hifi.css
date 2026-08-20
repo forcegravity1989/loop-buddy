@@ -8,6 +8,10 @@
  *      自己渲染的一个 div,Dioxus 的挂载点另有其名)。
  *   2. 末尾追加了「真壳补充」一节 —— 原型没有的东西:xterm.js 的容器、
  *      不在焦点上的终端挪到屏外的挂载位、拖拽中的列高亮。
+ *   3. toast 在「真壳补充」里被整条改写:原型的 toast 2.6 秒自动消失、
+ *      永远不可点,所以它 `pointer-events:none`、底色是墨黑。真壳这条位置
+ *      放的是命令回执(可能是一整句失败原话),必须点得到 ✕、也不该是一坨
+ *      黑块压在暖纸底色上。
  *
  * 除此之外一行没改。类名照搬,屏里直接用 class,不再写行内样式。
  */
@@ -468,3 +472,35 @@ select.select-multi{padding:3px;font-size:11.5px;border:1px solid var(--border-d
 /* 仓文件读不动这类实话,原型没有对应位置(原型的文件都是内嵌的)。 */
 .warnbar{padding:8px 18px;background:#F6E7E2;border-bottom:1px solid var(--border);
   font-size:12px;color:var(--alert-deep);}
+
+/* toast:原型那条是 2.6 秒自动消失的浮层,所以它 pointer-events:none、底色
+   用的是墨黑。真壳这条不自动消失(放的是失败原话,自动消失=把失败藏起来),
+   于是两件事都得改:
+     · pointer-events 必须恢复,否则 ✕ 根本点不到 —— 试点第一天用户第一句
+       就是「tip 关不掉」,就是这条。
+     · 底色从墨黑改成暖纸卡片 + 描边,和整屏一个调子;左边一条 clay 竖杠标出
+       这是一条回执。 */
+.toast{background:var(--paper);color:var(--ink);border:1px solid var(--border-deep);
+  border-left:3px solid var(--clay);box-shadow:0 4px 16px rgba(60,45,35,.13);
+  text-align:left;padding:10px 14px;display:flex;align-items:flex-start;gap:10px;}
+.toast.show{pointer-events:auto;}
+.toast-x{cursor:pointer;color:var(--ink-3);flex:none;line-height:1.4;}
+.toast-x:hover{color:var(--clay);}
+
+/* 接入屏改成两步(原型是并排两张卡)。第二步的四个字段取决于第一步选了哪个仓
+   —— 那个仓被 buddy 接管过的话名片是回显的,并排摆着等于让人先对着空格子填一遍。 */
+.ob-steps{display:flex;align-items:center;gap:10px;margin:0 0 14px;}
+.ob-step{font-size:12.5px;color:var(--ink-3);}
+.ob-step.active{color:var(--clay);font-weight:600;}
+.ob-step.done{color:var(--ink-2);}
+.ob-step-line{flex:none;width:28px;height:1px;background:var(--border-deep);}
+.ob-note{font-size:11.5px;color:var(--ink-3);line-height:1.8;margin-top:6px;}
+
+/* 选仓那一格的下拉。挂在输入框下面,浮在卡片之上。 */
+.repo-pop{position:absolute;left:0;right:0;top:100%;z-index:20;margin-top:4px;
+  max-height:260px;overflow:auto;background:#FFFDF8;border:1px solid var(--border-deep);
+  border-radius:8px;box-shadow:0 4px 16px rgba(60,45,35,.13);}
+.repo-opt{padding:8px 12px;cursor:pointer;font-size:12.5px;}
+.repo-opt:hover{background:#F4E4DC;}
+.repo-opt-desc{font-size:11px;color:var(--ink-3);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}

@@ -197,6 +197,34 @@ fn dirs_home() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// 刷新的回执。**报刚读出来的数**,不报「读过了」—— 这样人一眼能看出刷没刷到
+/// 东西:数变了就是仓里真有新东西,数没变就是确实没变化,而不是按钮坏了。
+fn refresh_note(vm: &Vm) -> String {
+    let tools = vm.env.iter().filter(|t| t.ok == Some(true)).count();
+    match &vm.open {
+        Some(p) => {
+            let w = &p.week_counts;
+            format!(
+                "刷新完:{} · 本周 待办{} 进行中{} 评审中{} 完成{} 阻塞{} · 本机工具 {}/{} 可用",
+                p.name,
+                w.todo,
+                w.doing,
+                w.review,
+                w.done,
+                w.blocked,
+                tools,
+                vm.env.len()
+            )
+        }
+        None => format!(
+            "刷新完:{} 个项目 · 本机工具 {}/{} 可用",
+            vm.projects.len(),
+            tools,
+            vm.env.len()
+        ),
+    }
+}
+
 /// 去平台列「我账号下的仓」。**两个平台各自的 CLI 都已经有这个能力**
 /// (`github::list_repos` / `codehub::list_repos`,V3 就在用),这里只是把它接到
 /// 界面上。列不出来就把 CLI 的原话端回去 —— 多半是没装、没登录、或者 codehub
@@ -347,6 +375,9 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     workspaces_root: root.display().to_string(),
                     repos: crate::vm::RepoPickerVm::default(),
                 };
+
+                // 「刷新」按下了没有。回执要等 ViewModel 拼完才写得出来。
+                let mut refresh_receipt = false;
 
                 // 深链:BW_OPEN=<slug 或项目名> 打开某个项目。
                 if let Some(want) = &deep_link.open {
@@ -690,13 +721,22 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             }
                         }
                         Req::Refresh => {
-                            // 探活、仓文件、git 都是在拼 ViewModel 的时候现跑的,
-                            // 所以「刷新」本身不用干活 —— 但必须给一句回执,
-                            // 不然人分不清「刷过了没变化」和「这按钮是坏的」。
-                            ui.set_note(Some("重新读了一遍:仓文件、git、本机环境".into()));
+                            // 「刷新」本身不用干活 —— 探活、仓文件、git 都是拼
+                            // ViewModel 那一刻现跑的。但回执必须**带上刚读出来的
+                            // 数**:一句「重新读了一遍」等于什么都没说,人还是不
+                            // 知道刷没刷、刷出了什么。数要等下面 build 完才有,
+                            // 所以这里只立个旗。
+                            refresh_receipt = true;
                         }
                     }
                     vm = vm_build::build(&app, &ui).await;
+                    // 刷新的回执在这里补:此刻的 vm 才是「刚读出来的那一份」。
+                    if refresh_receipt {
+                        refresh_receipt = false;
+                        ui.set_note(Some(refresh_note(&vm)));
+                        vm.note = ui.note.clone();
+                        vm.note_seq = ui.note_seq;
+                    }
                     let _ = vm_tx.send(vm.clone());
                 }
             });

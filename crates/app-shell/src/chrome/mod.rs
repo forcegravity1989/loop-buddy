@@ -264,7 +264,8 @@ pub fn Toast(note: Option<String>, seq: u64) -> Element {
         div { class: "toast show",
             "{text}"
             span {
-                style: "margin-left:10px;cursor:pointer;opacity:.6;",
+                class: "toast-x",
+                style: "margin-left:auto;",
                 onclick: move |_| dismissed.set(seq),
                 "✕"
             }
