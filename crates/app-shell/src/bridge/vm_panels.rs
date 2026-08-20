@@ -301,6 +301,10 @@ pub(super) async fn build_config(
     ws: &Path,
     policy: Option<&issue_policy_file::IssuePolicyFile>,
     project: &Project,
+    // 名片文件由上层读一次(而且是走 `read_or_warn`,文件坏了会说话)。这里
+    // **不再自己读一遍** —— 自己读的那条路 `.ok()` 会把解析错误吞掉,表现成
+    // 「项目群未配」,而真相是文件里有一行写错了。
+    file: &project_file::ProjectFile,
 ) -> ConfigVm {
     let usage = store.workflow_usage(id).await.unwrap_or_default();
     let managed = managed_paths(ws);
@@ -380,9 +384,9 @@ pub(super) async fn build_config(
             .unwrap_or_else(|| "—(.bw/issue-policy.toml 里没有节律段)".into()),
         crons: build_crons(policy),
         connectors: build_connectors(ws),
-        chat_provider: chat_provider(ws),
-        chat_group: chat_group(ws),
-        chat_events: chat_events(ws),
+        chat_provider: chat_provider(file.chat.as_ref()),
+        chat_group: chat_group(file.chat.as_ref()),
+        chat_events: chat_events(file.chat.as_ref()),
         chat: chat_label(ws),
     }
 }
@@ -448,28 +452,22 @@ fn build_connectors(ws: &Path) -> Vec<ConnectorVm> {
         .unwrap_or_default()
 }
 
-fn chat_cfg(ws: &Path) -> Option<project_file::ChatConfig> {
-    project_file::read(ws).ok().flatten().and_then(|f| f.chat)
-}
-
-fn chat_provider(ws: &Path) -> String {
-    chat_cfg(ws)
-        .map(|c| c.provider)
+fn chat_provider(chat: Option<&project_file::ChatConfig>) -> String {
+    chat.map(|c| c.provider.clone())
         .unwrap_or_else(|| "未配".into())
 }
 
-fn chat_group(ws: &Path) -> String {
-    chat_cfg(ws)
-        .map(|c| c.group_id)
+fn chat_group(chat: Option<&project_file::ChatConfig>) -> String {
+    chat.map(|c| c.group_id.clone())
         .filter(|g| !g.is_empty())
         .unwrap_or_else(|| "—".into())
 }
 
 /// 同步哪些事件。`notify` 没写 = 用默认三件;写成空列表 = 明确要求安静。
-fn chat_events(ws: &Path) -> Vec<(String, bool)> {
-    let on: Vec<String> = match chat_cfg(ws) {
+fn chat_events(chat: Option<&project_file::ChatConfig>) -> Vec<(String, bool)> {
+    let on: Vec<String> = match chat {
         None => return Vec::new(),
-        Some(c) => c.notify.unwrap_or_else(|| {
+        Some(c) => c.notify.clone().unwrap_or_else(|| {
             bw_v4::chat::DEFAULT_NOTIFY
                 .iter()
                 .map(|s| s.to_string())

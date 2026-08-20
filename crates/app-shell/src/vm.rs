@@ -20,6 +20,9 @@ pub struct Vm {
     pub settings: SettingsVm,
     /// 最近一条后台动作的回执(建活、铺底、发版这类)。
     pub note: Option<String>,
+    /// 这是第几条回执。**同一句话第二次发生时序号也会变**,toast 才不会把它
+    /// 当成「已经关过的那条」而静默吞掉。
+    pub note_seq: u64,
     /// 仓文件读不动或者解析炸了的实话。**不退回默认值假装文件不存在** ——
     /// `.bw/*.toml` 是 deny-unknown-fields 的,一个手误的键就让整份文件读不出
     /// 来,退回默认值的表现是「名片全是(待填)、配置屏说你还没铺过规范件」,
@@ -86,7 +89,11 @@ pub struct ProjectVm {
     pub view_all: bool,
     pub board: BoardVm,
     /// 本周四段计数:待办 / 进行中 / 评审中 / 完成。总览与计划屏的进度条都用它。
+    /// **当前周**的五段计数。总览那块「本周计划进度」用它。
     pub week_counts: WeekCountsVm,
+    /// 计划屏正在看的那个看板的五段计数(看某一周就是那一周,点了「全部」就是
+    /// 全部)。它跟着左栏走,所以**不能拿去当「本周」**。
+    pub board_counts: WeekCountsVm,
     /// 本周计划文件「本周运作」那张表的行 —— 三张运作活各自走到哪了。
     pub ops: Vec<OpsChipVm>,
     /// 代码仓级指标。**现算很贵(要起好几个 git 子进程),所以按需**:
@@ -174,11 +181,13 @@ pub struct WeekCountsVm {
     pub doing: usize,
     pub review: usize,
     pub done: usize,
+    /// 卡住的那几张。**单独一段** —— 混进别的段或者干脆不数,等于把红灯藏了。
+    pub blocked: usize,
 }
 
 impl WeekCountsVm {
     pub fn total(&self) -> usize {
-        self.todo + self.doing + self.review + self.done
+        self.todo + self.doing + self.review + self.done + self.blocked
     }
 
     /// 进度条一段占多宽。总数是 0 就全都是 0 —— 不给空周画一条满的。
@@ -331,6 +340,10 @@ pub struct NotifyVm {
     /// 阻塞的活。
     pub blocked: Vec<CardItemVm>,
     pub seen_at: Option<i64>,
+    /// 还没看过的动静有几件。**和项目墙卡片上那个 ⚑ 是同一个定义**(评审中/
+    /// 阻塞里、更新时间晚于「读到这里」的);项目轨的红点用它,点过「读到
+    /// 这里」之后它会掉到 0,而不是永远亮着。
+    pub unread: u32,
     /// 事件流。**没有事件表** —— 这条流是从四张表里现算出来的:活什么时候建
     /// 的、什么时候结清的、会话什么时候开的。存不下来的事(比如某次运行失败)
     /// 就不在流里,不补一条假的。

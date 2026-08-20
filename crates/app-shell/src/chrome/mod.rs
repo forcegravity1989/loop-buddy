@@ -192,7 +192,7 @@ const CHAPTERS: [Chapter; 4] = [
     Chapter {
         id: "env",
         label: "环境准备",
-        body: "claude CLI、Open Design、codehub-cli 三项本机环境按需安装,缺一项不影响开工,只影响对应类别的活能不能开工。「测一下」会真实探活,结果记进健康信号,不假装绿。welink-cli 的探活还没实现,先留位显示灰色无数据,不会因为点了「测一下」就变绿。",
+        body: "项目墙那条环境条上有六项。claude / cursor-agent / codehub / gh 是真探的:在本机 PATH 里找得到就绿、找不到就红,「测一下」重新找一遍。gh 只报装没装——登录没登录要跑 gh auth status,起子进程那条路还没接,所以不拿「装了」冒充「登录了」。Open Design 内嵌与 welink-cli 的探活还没实现,一直是灰的,点「测一下」也不会变绿。这条环境条与项目健康无关:健康只从观测推导,探活不写进任何信号。缺哪一项都不影响别的活开工,只影响对应类别的活能不能开工。",
     },
     Chapter {
         id: "onboard",
@@ -249,21 +249,23 @@ pub fn GuideDrawer() -> Element {
 
 /// 命令回执。**不自动消失** —— 这里放的是「铺底失败,原话是……」这种话。
 #[component]
-pub fn Toast(note: Option<String>) -> Element {
-    let mut dismissed = use_signal(String::new);
+pub fn Toast(note: Option<String>, seq: u64) -> Element {
+    // **按第几条记,不按正文记**。按正文记的话,同一句失败第二次出现会被当成
+    // 「已经关过的那条」直接不显示 —— 改完再点一次、又是同样的错,界面上什么
+    // 都不弹,看起来像是成功了。
+    let mut dismissed = use_signal(|| 0u64);
     let Some(text) = note else {
         return rsx! {};
     };
-    if *dismissed.read() == text {
+    if *dismissed.read() == seq {
         return rsx! {};
     }
-    let t = text.clone();
     rsx! {
         div { class: "toast show",
             "{text}"
             span {
                 style: "margin-left:10px;cursor:pointer;opacity:.6;",
-                onclick: move |_| dismissed.set(t.clone()),
+                onclick: move |_| dismissed.set(seq),
                 "✕"
             }
         }

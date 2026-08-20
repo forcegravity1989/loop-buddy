@@ -133,10 +133,9 @@ fn Root() -> Element {
     };
 
     let b_rail = bridge.clone();
-    let unread = project
-        .as_ref()
-        .map(|p| (p.notify.in_review.len() + p.notify.blocked.len()) as u32)
-        .unwrap_or(0);
+    // 项目轨的红点和项目墙卡片上的 ⚑ 是同一个数(见 `NotifyVm::unread`)——
+    // 点过「读到这里」它就该掉下去,不能永远等于「评审中 + 阻塞」。
+    let unread = project.as_ref().map(|p| p.notify.unread).unwrap_or(0);
 
     rsx! {
         GlobalChrome {}
@@ -188,7 +187,7 @@ fn Root() -> Element {
             if !in_project && tv.is_none() {
                 chrome::GuideDrawer {}
             }
-            chrome::Toast { note: v.note.clone() }
+            chrome::Toast { note: v.note.clone(), seq: v.note_seq }
         }
     }
 }

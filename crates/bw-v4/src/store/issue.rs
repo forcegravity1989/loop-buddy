@@ -146,6 +146,25 @@ impl V4Store {
         rows.iter().map(row_to_issue).collect()
     }
 
+    /// 该人看一眼、而且人还没看过的活有几张:评审中或阻塞,且更新时间晚于
+    /// 「读到这里」那一下。**在库里数**,不要把整张 issue 表取回内存再 filter
+    /// ——项目墙上每个项目每次重拼界面都要这个数。
+    pub async fn count_unseen(&self, project_id: ProjectId, seen_at: i64) -> Result<u32> {
+        // 两个状态值也走 `enum_to_db`,不在 SQL 里写死字面量 —— 写死的话
+        // 哪天枚举的 serde 名字改了,这条查询会静默返回 0,而不是报错。
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM issue WHERE project_id = ?1 \
+             AND status IN (?2, ?3) AND updated_at > ?4",
+        )
+        .bind(project_id.uuid().to_string())
+        .bind(enum_to_db(&IssueStatus::InReview))
+        .bind(enum_to_db(&IssueStatus::Blocked))
+        .bind(seen_at)
+        .fetch_one(self.pool())
+        .await?;
+        Ok(row.0 as u32)
+    }
+
     /// 只改状态。**不校验合不合法** —— 那是 `crate::app` 的事。
     pub async fn set_issue_status(&self, id: IssueId, status: IssueStatus) -> Result<()> {
         sqlx::query("UPDATE issue SET status=?2, updated_at=?3 WHERE id=?1")

@@ -41,6 +41,9 @@ pub struct UiState {
     pub view_all: bool,
     pub open_doc: Option<String>,
     pub note: Option<String>,
+    /// 这是第几条回执。toast 靠它判断「这条我关过没有」—— 按正文判断的话,
+    /// 同一句失败第二次出现会被当成已关过的那条,静默不弹。
+    pub note_seq: u64,
     /// 「开始本周」回来的草稿活标,连同是哪一周。人确认前只存在这里,不进库。
     pub pending_drafts: Option<(String, Vec<String>)>,
     /// 会话屏选中哪个会话、开着哪个页签、展开了哪些目录、中栏开着哪个文件。
@@ -213,6 +216,15 @@ fn primary_note(events: &[Event]) -> Option<String> {
     })
 }
 
+impl UiState {
+    /// 写一条回执,并把序号往前推一格。**所有写 `note` 的地方都走这里**,
+    /// 漏掉一处就会出现「关过一次之后同样的话再也不弹」。
+    pub fn set_note(&mut self, note: Option<String>) {
+        self.note = note;
+        self.note_seq = self.note_seq.wrapping_add(1);
+    }
+}
+
 pub async fn build(app: &App, ui: &UiState) -> Vm {
     let store = app.store();
     let projects = store.projects().await.unwrap_or_default();
@@ -238,16 +250,7 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
             .flatten()
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
-        let unread = store
-            .issues(p.id)
-            .await
-            .unwrap_or_default()
-            .iter()
-            .filter(|i| {
-                matches!(i.status, IssueStatus::InReview | IssueStatus::Blocked)
-                    && i.updated_at > seen_at
-            })
-            .count() as u32;
+        let unread = store.count_unseen(p.id, seen_at).await.unwrap_or(0);
         let week_goal = week_plan_file::read(&ws, &week)
             .ok()
             .flatten()
@@ -300,6 +303,7 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
             claude_binary: bw_engine::resolve_claude_binary(None),
         },
         note: ui.note.clone(),
+        note_seq: ui.note_seq,
         warnings,
     }
 }
@@ -386,6 +390,13 @@ async fn build_project(
         read_or_warn(".bw/project.toml", project_file::read(&ws), warnings).unwrap_or_default();
     let issues = store.issues(id).await.unwrap_or_default();
     let conversations = store.conversations(id).await.unwrap_or_default();
+    // 「读到这里」是哪一刻。通知屏和项目轨的红点用的是同一个值,读一次就够。
+    let notify_seen: Option<i64> = store
+        .meta(&bw_v4::store::notify_seen_key(id))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok());
     let sessions = build_sessions(app, id, &issues).await;
     let current_week = bw_v4::isoweek::current_week();
     let viewing_week = if ui.viewing_week.is_empty() {
@@ -409,7 +420,8 @@ async fn build_project(
         warnings,
     );
 
-    let week_counts;
+    // 本周计数在构造之前算好 —— `current_week` 会被 move 进结构体。
+    let week_counts_now = build_week_counts(&issues, Some(current_week.as_str()));
     Some(ProjectVm {
         id,
         slug: p.slug.clone(),
@@ -440,17 +452,28 @@ async fn build_project(
         current_week,
         viewing_week: viewing_week.clone(),
         view_all: ui.view_all,
-        board: {
-            let scope = if ui.view_all {
+        board: build_board(
+            &issues,
+            if ui.view_all {
                 None
             } else {
                 Some(viewing_week.as_str())
-            };
-            let b = build_board(&issues, scope, policy.as_ref());
-            week_counts = build_week_counts(&b);
-            b
-        },
-        week_counts,
+            },
+            policy.as_ref(),
+        ),
+        // 两份计数,各有各的归属:总览那块标题写着「本周」,就只能是本周;
+        // 计划屏的进度条画在它正在看的那个看板上面,就跟着看板的范围走。
+        // **共用一份的后果**是人在计划屏点了历史周,总览的「本周」下面摆着
+        // 那一周的数。
+        week_counts: week_counts_now,
+        board_counts: build_week_counts(
+            &issues,
+            if ui.view_all {
+                None
+            } else {
+                Some(viewing_week.as_str())
+            },
+        ),
         ops: build_ops(plan.as_ref()),
         // 采不采由界面点 —— 现算一次要起好几个 git 子进程,不能每次重拼
         // ViewModel 都跑一遍(人打字时每 30ms 就重拼一次)。
@@ -503,15 +526,14 @@ async fn build_project(
                 .filter(|i| i.status == IssueStatus::Blocked)
                 .map(card_item)
                 .collect(),
-            seen_at: store
-                .meta(&bw_v4::store::notify_seen_key(id))
-                .await
-                .ok()
-                .flatten()
-                .and_then(|v| v.parse().ok()),
+            seen_at: notify_seen,
             events: build_notify_events(&issues, &conversations),
+            unread: store
+                .count_unseen(id, notify_seen.unwrap_or(0))
+                .await
+                .unwrap_or(0),
         },
-        config: build_config(store, id, &ws, policy.as_ref(), &p).await,
+        config: build_config(store, id, &ws, policy.as_ref(), &p, &file).await,
         kb: KbVm {
             codegraph: ui.kb_codegraph.clone(),
             assets: ui.kb_assets.clone(),

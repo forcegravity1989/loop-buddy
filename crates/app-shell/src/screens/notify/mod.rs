@@ -78,6 +78,9 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
                 "事件流是从库里那四张表现算的:活什么时候建的、什么时候结清的、会话\
                  什么时候开的。存不下来的事(某一次运行失败、某条群消息发没发出去)\
                  不在这条流里 —— 少一条,不编一条。"
+                br {}
+                "只列最近 80 条。更早的事没有消失,是这条流没往下翻 —— 要查更早的\
+                 直接查库(issue 的 created_at / settled_at、claude_conversation 的 created_at)。"
             }
         }
     }

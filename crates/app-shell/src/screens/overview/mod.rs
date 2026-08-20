@@ -371,6 +371,7 @@ fn week_block(p: &ProjectVm, nav: PanelNav) -> Element {
                 div { style: "width:{c.pct(c.done)}%;background:var(--green);" }
                 div { style: "width:{c.pct(c.review)}%;background:var(--amber);" }
                 div { style: "width:{c.pct(c.doing)}%;background:var(--clay);" }
+                div { style: "width:{c.pct(c.blocked)}%;background:var(--red);" }
                 div { style: "width:{c.pct(c.todo)}%;background:#E4DDC8;" }
             }
             div { class: "week-counts",
@@ -378,6 +379,9 @@ fn week_block(p: &ProjectVm, nav: PanelNav) -> Element {
                 span { "进行中 " b { "{c.doing}" } }
                 span { "评审中 " b { "{c.review}" } }
                 span { "完成 " b { "{c.done}" } }
+                if c.blocked > 0 {
+                    span { style: "color:var(--alert-deep);", "阻塞 " b { "{c.blocked}" } }
+                }
             }
             if !p.ops.is_empty() {
                 div { class: "ops-chip-row",

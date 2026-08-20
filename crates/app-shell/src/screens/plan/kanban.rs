@@ -52,10 +52,18 @@ pub fn board(
 ) -> Element {
     // 筛选器只在「全部活」视图上生效;看某一周时不过滤。
     let f = if p.view_all { filters } else { None };
+    // 拖进「待办」= 排进哪一周。看某一周就排进那一周;「全部活」视图下左栏
+    // 并没有选中任何一周,`viewing_week` 只是上次点过的值(可能是历史周),
+    // 拿它排期会把活悄悄塞进过去的一周 —— 这种时候一律排进当前周。
+    let drop_week = if p.view_all {
+        p.current_week.as_str()
+    } else {
+        p.viewing_week.as_str()
+    };
     rsx! {
         div { class: "kanban",
             for col in p.board.columns.iter() {
-                {column(col, f.clone(), &p.viewing_week, bridge, dragging, pending, selected, bounced)}
+                {column(col, f.clone(), drop_week, bridge, dragging, pending, selected, bounced)}
             }
         }
     }
@@ -65,7 +73,7 @@ pub fn board(
 fn column(
     col: &ColumnVm,
     filters: Option<Filters>,
-    viewing_week: &str,
+    drop_week: &str,
     bridge: &Bridge,
     mut dragging: Signal<Option<CardItemVm>>,
     mut pending: Signal<Option<PendingMove>>,
@@ -73,7 +81,7 @@ fn column(
     mut bounced: Signal<String>,
 ) -> Element {
     let target = col.status;
-    let week = viewing_week.to_string();
+    let week = drop_week.to_string();
     let b_drop = bridge.clone();
     let drop = move |_| {
         let Some(card) = dragging.read().clone() else {

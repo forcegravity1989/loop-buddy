@@ -9,21 +9,32 @@ use bw_v4::model::IssueStatus;
 use bw_v4::repo::week_plan_file;
 use std::path::Path;
 
-/// 本周四段计数。待办池不算进去 —— 它按定义就是「没排进任何一周」。
-pub(super) fn build_week_counts(board: &BoardVm) -> WeekCountsVm {
+/// 某一周的五段计数。`week` 传 `None` = 不按周过滤(计划屏的「全部活」视图)。
+///
+/// **直接数活,不数看板列**:看板的范围跟着计划屏左栏走,总览那块「本周计划
+/// 进度」要的是本周,两者不能共用一份数——共用的后果是人在计划屏点了历史周,
+/// 总览的「本周」标题下摆着那一周的数。
+///
+/// 待办池不算进去,它按定义就是「没排进任何一周」;**阻塞单独一段**,不能像
+/// 早先那样整列漏掉——红的那张活正是最该被看见的。
+pub(super) fn build_week_counts(issues: &[bw_v4::Issue], week: Option<&str>) -> WeekCountsVm {
+    let in_scope = |i: &&bw_v4::Issue| match week {
+        None => true,
+        Some(w) => i.week_of == w,
+    };
     let n = |st: IssueStatus| {
-        board
-            .columns
+        issues
             .iter()
-            .find(|c| c.status == st)
-            .map(|c| c.cards.len())
-            .unwrap_or(0)
+            .filter(in_scope)
+            .filter(|i| i.status == st)
+            .count()
     };
     WeekCountsVm {
         todo: n(IssueStatus::Todo),
         doing: n(IssueStatus::InProgress),
         review: n(IssueStatus::InReview),
         done: n(IssueStatus::Done),
+        blocked: n(IssueStatus::Blocked),
     }
 }
 
@@ -174,8 +185,12 @@ pub(super) fn build_notify_events(
 }
 
 /// 时间戳按**本机时区**格式化 —— 周也是按本机时区算的,两处得一致。
+///
+/// 偏移取的是 `isoweek` 在启动单线程阶段探好存下来的那一份。**这里绝不能自己
+/// 再调一次 `current_local_offset()`**:那个系统调用在多线程进程里必然返回
+/// Err,退回 UTC 之后事件流比真实时间早 8 小时,而同屏的周号仍是本机周。
 fn stamp(unix: i64) -> String {
-    let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+    let offset = bw_v4::isoweek::local_offset();
     match time::OffsetDateTime::from_unix_timestamp(unix) {
         Ok(t) => {
             let t = t.to_offset(offset);

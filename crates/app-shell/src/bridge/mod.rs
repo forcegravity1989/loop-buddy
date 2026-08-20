@@ -87,7 +87,12 @@ pub enum Req {
     /// 总览那块「项目指标 · 代码仓级」:现采一次。
     CollectRepoStats,
     /// 上面那一采的结果。**不是界面发的**,是派出去的那个任务算完发回来的。
-    RepoStatsComputed(crate::vm::RepoStatsVm),
+    /// 带着「这是给哪个项目采的」——采一次要几百毫秒,人完全来得及在这期间
+    /// 切走,不认项目就会把上一个项目的提交数摆在新项目的总览上。
+    RepoStatsComputed {
+        project: ProjectId,
+        stats: crate::vm::RepoStatsVm,
+    },
     /// 重新算一遍并推一份新的 ViewModel。
     Refresh,
 }
@@ -237,6 +242,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     view_all: false,
                     open_doc: None,
                     note: None,
+                    note_seq: 0,
                     pending_drafts: None,
                     db_path: db.clone(),
                     workspaces_root: root.display().to_string(),
@@ -273,14 +279,29 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         o.notify.blocked.len(),
                         o.config.skills.len(),
                     );
+                    // 事件流最新那一条的时间戳也打出来 —— 它是**本机时区**
+                    // 的实证:能直接和 `date -r <unix>` 对上,对不上就说明
+                    // 时区那条路又退回 UTC 了(见 vm_derive::stamp)。
+                    // 总览那条「本周计划进度」的五段。**只认当前周**,与计划屏
+                    // 左栏看的是哪一周无关 —— 这一行就是那条纪律的读回。
+                    let c = &o.week_counts;
                     eprintln!(
-                        "[BW_VM] 映射={} 连接器={} 定时={} 群={} 指标={}",
+                        "[BW_VM] 本周{} 待办={} 进行中={} 评审中={} 完成={} 阻塞={}",
+                        o.current_week, c.todo, c.doing, c.review, c.done, c.blocked,
+                    );
+                    if let Some(e) = o.notify.events.first() {
+                        eprintln!("[BW_VM] 最新事件 {} · {}", e.time, e.text);
+                    }
+                    eprintln!(
+                        "[BW_VM] 映射={} 连接器={} 定时={} 群={} 指标={} 未读={}",
                         o.config.mappings.len(),
                         o.config.connectors.len(),
                         o.config.crons.len(),
                         o.config.chat_provider,
-                        o.metrics.lagging.len() + o.metrics.leading.len()
+                        o.metrics.lagging.len()
+                            + o.metrics.leading.len()
                             + usize::from(o.metrics.north_star.is_some()),
+                        o.notify.unread,
                     );
                 }
                 // BW_KB_DUMP=1:把知识库三个页签的数字打进 stderr,好让人拿
@@ -346,8 +367,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             let Some(pid) = ui.open else { continue };
                             match app.dispatch(Command::TickScheduler { project_id: pid }).await {
                                 Ok(events) if events.is_empty() => continue,
-                                Ok(events) => ui.note = vm_build::note_of(&events),
-                                Err(e) => ui.note = Some(format!("定时没跑成:{e}")),
+                                Ok(events) => ui.set_note(vm_build::note_of(&events)),
+                                Err(e) => ui.set_note(Some(format!("定时没跑成:{e}"))),
                             }
                             vm = vm_build::build(&app, &ui).await;
                             let _ = vm_tx.send(vm.clone());
@@ -371,7 +392,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             let confirming = matches!(c, Command::ConfirmWeekDraft { .. });
                             match app.dispatch(c).await {
                                 Ok(events) => {
-                                    ui.note = vm_build::note_of(&events);
+                                    ui.set_note(vm_build::note_of(&events));
                                     // 「开始本周」产出的草稿活标先接住,等人在计划屏
                                     // 点确认才真的建活。
                                     if let Some((week, titles)) = drafts_of(&events) {
@@ -382,7 +403,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                     }
                                 }
                                 // 失败就把失败的原话摆出来。壳不替内核圆场。
-                                Err(e) => ui.note = Some(format!("没做成:{e}")),
+                                Err(e) => ui.set_note(Some(format!("没做成:{e}"))),
                             }
                         }
                         Req::Open(id) => {
@@ -494,14 +515,21 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                 if let Ok(ws) = app.workspace_of(pid).await {
                                     let back = tx_back.clone();
                                     tokio::spawn(async move {
-                                        let _ = back.send(Req::RepoStatsComputed(
-                                            vm_derive::collect_repo_stats(&ws).await,
-                                        ));
+                                        let _ = back.send(Req::RepoStatsComputed {
+                                            project: pid,
+                                            stats: vm_derive::collect_repo_stats(&ws).await,
+                                        });
                                     });
                                 }
                             }
                         }
-                        Req::RepoStatsComputed(s) => ui.repo_stats = Some(s),
+                        // 采的时候是哪个项目,回来时还得是哪个项目 —— 不是就
+                        // 整份丢掉,宁可让人再点一次,也不摆错项目的数。
+                        Req::RepoStatsComputed { project, stats } => {
+                            if ui.open == Some(project) {
+                                ui.repo_stats = Some(stats);
+                            }
+                        }
                         Req::Refresh => {}
                     }
                     vm = vm_build::build(&app, &ui).await;

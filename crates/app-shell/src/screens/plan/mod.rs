@@ -212,13 +212,15 @@ fn week_head(p: &ProjectVm) -> Element {
     let goal = w
         .and_then(|w| w.goal.clone())
         .unwrap_or_else(|| "(这一周还没写周目标)".into());
-    let c = &p.week_counts;
+    // 这条进度条画在它正上方那个看板上,所以数的是看板的范围,不是本周。
+    let c = &p.board_counts;
     rsx! {
         div { class: "goal-box", "{goal}" }
         div { class: "week-progress",
             div { style: "width:{c.pct(c.done)}%;background:var(--green);" }
             div { style: "width:{c.pct(c.review)}%;background:var(--amber);" }
             div { style: "width:{c.pct(c.doing)}%;background:var(--clay);" }
+            div { style: "width:{c.pct(c.blocked)}%;background:var(--red);" }
             div { style: "width:{c.pct(c.todo)}%;background:#E4DDC8;" }
         }
         if !p.ops.is_empty() {
