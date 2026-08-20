@@ -1,6 +1,6 @@
 # 08 · 总览推导
 
-> **30 秒导读**:这篇讲总览屏一列七块,每块的每个数字从哪来、怎么算、没数据时显示什么;health(健康)大灯的判定算法;名片(含新增的「项目群」行)怎么编辑。**详细设计稿,待用户复核,尚未开工写代码**。给三种人看:复核设计的用户、下一步写代码的会话、接手总览这块的同事。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md)。**2026-08-20 按用户第七轮盘点整块重写了 §2.2/§2.3/§2.4/§2.5/§2.6/§3.1/§3.2/§3.3 的数据来源**——库从 20 张表砍到 4 张,指标定义、发版记录、周计划全部搬到仓文件与现算,本篇原来挂在 `metric`/`observation`/`release`/`week_plan` 等表上的字段全部改成读 `.bw/metrics.toml`/`docs/plan/`/`docs/releases.md` 或现场算;**同时按第六轮反馈整块删掉了原第⑧块「历史运作(回填)」**——总览不为老项目多长一块,回填产出的是同格式的历史周文件与历史发版行,由⑦块和计划屏原样渲染。
+> **30 秒导读**:这篇讲总览屏一列七块,每块的每个数字从哪来、怎么算、没数据时显示什么;健康大灯的判定算法;项目名片(含「项目群」一行)怎么编辑。**总览一个数都不存**——指标定义读 `.bw/metrics.toml`,读数读 `docs/plan/`,发版记录读 `docs/releases.md`,其余现场算;没数据就是灰,不假装绿。给接着做 V4 的会话看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ## 0 · 这篇管什么、不管什么
 
@@ -10,7 +10,7 @@
 
 ## 1 · 用户看到什么、做什么
 
-Builder 在项目栏点进一个项目,默认落在总览。一列横块从上到下:先看名片 + health——一眼知道这个项目要不要管;往下是北极星、滞后、引领三层指标,每张卡下面挂着「本周谁在推它」的活;再往下是纯只读的代码仓统计;然后是本周计划进度条 + 运作活①②③三个状态点,一个「去计划 →」按钮带人到计划屏细看;再往下是在研版本与发版记录。**老项目没有额外的块**——回填出来的历史周文件与历史发版行和新项目的产出同格式,⑦块的发版记录里混排(带「回填」小字),历史周在计划屏左栏的「历史周」分组里,总览与计划屏都不做特殊处理(第六轮定,待拍-27 改写)。
+Builder 在项目栏点进一个项目,默认落在总览。一列横块从上到下:先看名片 + health——一眼知道这个项目要不要管;往下是北极星、滞后、引领三层指标,每张卡下面挂着「本周谁在推它」的活;再往下是纯只读的代码仓统计;然后是本周计划进度条 + 运作活①②③三个状态点,一个「去计划 →」按钮带人到计划屏细看;再往下是在研版本与发版记录。**老项目没有额外的块**——回填出来的历史周文件与历史发版行和新项目的产出同格式,⑦块的发版记录里混排(带「回填」小字),历史周在计划屏左栏的「历史周」分组里,总览与计划屏都不做特殊处理(定,待拍-27 改写)。
 
 总览本身几乎不可操作——按母文档「待人处理不在总览」的决定,合入 / 点完成这些动作在左栏「通知」入口,总览这一屏只有两处可点:①名片的「编辑」;②本周还没有计划时出现的「开始本周」横幅按钮。
 
@@ -136,7 +136,7 @@ cat <workspace>/docs/releases.md
 sqlite3 <db> "SELECT id, title, version FROM issue WHERE project_id='<pid>' AND version != '' ORDER BY updated_at DESC LIMIT 5;"
 ```
 
-#### 老项目的历史怎么显示——不单开块(第六轮改写,原第⑧块整块删除)
+#### 老项目的历史怎么显示——不单开块(改写,原第⑧块整块删除)
 
 老项目 = 铺底时探测到仓有历史(提交 / 标签 / 远端 issue·MR / CHANGELOG / 名片配了群 之一为真),运作活③「规范铺底」多跑一步「历史回填」(= 运作活②「资产盘点」workflow 的首次模式,03 篇)。**回填的产出不是一块新 UI,而是同格式的仓文件**:历史周文件(`docs/plan/YYYY-Www.md`,front matter `origin: backfill`)与 `docs/releases.md` 里标「回填 · git tag」的历史行。因此总览这边**不多一块**——历史发版行就混在⑦块的发版记录里(带「回填」小字区分),历史周在计划屏左栏单独成一个「历史周」分组(06 篇),两处都是既有渲染路径,不写老项目专用代码。**新项目什么都不缺,老项目也不留一个永远空着的坑。**
 
@@ -152,12 +152,12 @@ sqlite3 <db> "SELECT count(*) FROM issue WHERE project_id='<pid>' AND origin='ba
 
 ## 3 · 工程对照
 
-**模块位置,A 刀落地后重写。** 原文按「V4 摞在旧内核上」的前提建议了三个落点:界面进 `app-desktop`、selector 进 `bw-app/src/overview.rs`、ViewModel 追加进 `crates/ui/src/vm.rs`。这个前提在 01 篇 §2.6 已经不成立,三处建议全部落空。实况:总览屏的界面代码在 `crates/app-shell/src/screens/overview/mod.rs`;健康与指标的现算逻辑在 `crates/bw-v4/src/app/health.rs`(`collect_health_inputs`/`recompute_health`)与 `crates/bw-v4/src/derive/mod.rs`(纯函数 `derive_project_health`,密封类型见 `derive/sealed.rs`);把这些现算结果拼成界面能直接渲染的结构,发生在 `crates/app-shell/src/bridge/vm_build.rs`(总体拼装)与 `vm_panels.rs`(计划屏/指标/会话等分块拼装);ViewModel 类型是 `crates/app-shell/src/vm.rs` 里全新定义的一批结构体(`HealthVm`/`MetricsVm`/`MetricCardVm`/`WeekVm`/`ReleaseVm` 等)。`crates/ui` 这个 V3 的 crate 在这条链路里一行没用到——V4 的 ViewModel 不与它共享任何类型。总览屏只通过命令 / 事件与内核通信,不直接碰任何 SQL,这一条原文说对了,继续成立。
+**模块位置**:总览屏的界面代码在 `crates/app-shell/src/screens/overview/mod.rs`;健康与指标的现算逻辑在 `crates/bw-v4/src/app/health.rs`(`collect_health_inputs`/`recompute_health`)与 `crates/bw-v4/src/derive/mod.rs`(纯函数 `derive_project_health`,密封类型见 `derive/sealed.rs`);把这些现算结果拼成界面能直接渲染的结构,发生在 `crates/app-shell/src/bridge/vm_build.rs`(总体拼装)与 `vm_panels.rs`(计划屏/指标/会话等分块拼装);ViewModel 类型是 `crates/app-shell/src/vm.rs` 里全新定义的一批结构体(`HealthVm`/`MetricsVm`/`MetricCardVm`/`WeekVm`/`ReleaseVm` 等)。`crates/ui` 这个 V3 的 crate 在这条链路里一行没用到——V4 的 ViewModel 不与它共享任何类型。总览屏只通过命令 / 事件与内核通信,不直接碰任何 SQL。
 
 ### 3.1 复用现有(不重写)
 
 - `bw_core::derive::measure` / `evaluate_metric` / `Derived<Signal>`(`crates/bw-core/src/derive/`):每条业务指标(②③④)自身的 Signal 沿用这条已跑通、wasm 可编译的 L1→L2 链,V4 只改输入来源(从查 `metric`/`observation` 两张表改成读 `.bw/metrics.toml` 定义 + 现算 / 文件读数,见 3.3)。
-- **指标卡 ViewModel,A 刀落地后改。** 原文说复用 `crates/ui/src/vm.rs::MetricVm`/`metric_vm()`,包括 `weekly_spark()`/`weekly_delta()` 两个算法。实况是 `crates/ui` 没有被用到——V4 的指标卡结构是 `crates/app-shell/src/vm.rs::MetricCardVm`(与 `MetricsVm` 一起),全新定义,不复用 `crates/ui` 的任何类型或函数。`weekly_spark()`/`weekly_delta()` 这两个"输入一串数值算出走势/环比"的算法思路本身可以借鉴,但既然没有复用原来的函数,实现时要在 `app-shell` 这一侧重新写一份同类算法,喂给它的数据来源按 2.3 节②的口径:要么对过去 8 周现算、要么回扫 8 份周计划文件。
+- **指标卡 ViewModel**:是 `crates/app-shell/src/vm.rs::MetricCardVm`(与 `MetricsVm` 一起),全新定义,不复用 `crates/ui` 的任何类型或函数——`ui` 是 V3 的 crate,它的 ViewModel 全部架在旧库的二十张表上。走势与环比那两个「输入一串数值算出走势 / 环比」的算法要在 `app-shell` 这一侧自己写,喂给它的数据按 2.3 节②的口径:要么对过去 8 周现算、要么回扫 8 份周计划文件。
 - `bw_engine::evidence::collect()`(`crates/bw-engine/src/evidence.rs`):⑤块的仓统计子进程读取。
 - `bw_engine::metrics_file::read()` / `bw_engine::project_file::read()`:铺底与名片编辑读写正本用的既有解析器;`.bw/project.toml` 的 `[chat]` 段要同步加进 `ProjectFile` struct(`deny_unknown_fields` 已开,漏改会让老版本 buddy 读新文件解析失败)。
 - `bw_engine::week_plan_file.rs::extract_goal()` / `extract_activities()` / `extract_front_matter()`(02 篇 §3.3 新增,本篇直接消费):⑥块的周目标、业务活清单,以及判断某份周文件是不是回填(front matter `origin`),都靠这三个函数。
@@ -177,7 +177,7 @@ sqlite3 <db> "SELECT count(*) FROM issue WHERE project_id='<pid>' AND origin='ba
 | ⑦ | `docs/releases.md`(02 篇 §2.5/§3.3;历史回填行混排其中) |
 | ⑦ | `issue` 缓存表 `origin='backfill'` 的行计数(只用于历史行的小字标注) |
 
-**本篇不再保留任何库增量表**:第六轮草案曾设想过的 `metric.role='north_star'` 一行、新建 `release`/`release_issue`/`week_plan` 三张表、`project` 新增 `standard_version`/`current_version`/`chat_provider`/`chat_group_id` 四列、新建 `chat_outbox` 表,**第七轮盘点后全部取消**(02 篇 §2.1「其余 16 张……以及第六轮草案曾计划新建又被取消的 3 张」)。本篇原来那版增量表已按此删除,不再保留。
+**本篇不再保留任何库增量表**:早期草案曾设想过的 `metric.role='north_star'` 一行、新建 `release`/`release_issue`/`week_plan` 三张表、`project` 新增 `standard_version`/`current_version`/`chat_provider`/`chat_group_id` 四列、新建 `chat_outbox` 表,**盘点之后全部取消**(02 篇 §2.1「其余 16 张……以及早期草案曾计划新建、后来取消的 3 张」)。本篇原来那版增量表已按此删除,不再保留。
 
 迁移守则见 02 篇 §2.7/§3.2:开发期改 `schema.sql` 直接删库重建;试点起恢复 `add_column_if_missing` 双守卫。本篇没有新增任何列,不需要单独交代迁移步骤。
 
@@ -187,7 +187,7 @@ sqlite3 <db> "SELECT count(*) FROM issue WHERE project_id='<pid>' AND origin='ba
 
 V4 总览的 health(2.4 节)**不走这条缓存链**:母文档明确「读时现算,库里不存灯」;(a)(b)(c) 本来就按时间窗口现算,换参数即可回算历史周。`recompute_signals` 原本依赖 `op_stage.routine_schedule` 取保鲜期,但 `op_stage` 表在 V4 已经整表不存在(阶段降级为活的类别标签,02 篇 §2.1),这条路径本来就走不通了——新算法直接改成**固定 `Cadence::Weekly`**(是否按指标细分见第 6 节)。`metric` 表(连同它的 `signal`/`hit` 两列)在 V4 也整表不存在(02 篇 §2.1),指标卡小圆点不再有一张表能缓存它的结果。`project.signal`/`weekly_signal` 两列结构不变(02 篇 §2.1),但如 2.4 节末段所说,它们只服务项目墙的显示缓存,总览屏自己从不读它们当输入,只在算完一次 health 后顺手写回。
 
-**判定伪码,A 刀落地后按真实代码重写。** 原文的伪码结构本身设想大致成立,但把三层放错了地方(单文件 `bw-app/src/overview.rs` 一次算完),也没有把"git 读不读得动"当成一条独立输入。真实代码把"收集输入"和"判定颜色"拆成两处:输入采集在 `crates/bw-v4/src/app/health.rs::collect_health_inputs`,只读不判断;唯一判定颜色的纯函数在 `crates/bw-v4/src/derive/mod.rs::derive_project_health`,输入之外没有任何隐藏状态,同样的输入永远同样的输出。判定顺序也不是原文写的"先判绿":
+**判定分两处,不在一个函数里算完**:输入采集在 `crates/bw-v4/src/app/health.rs::collect_health_inputs`,只读不判断;唯一判定颜色的纯函数在 `crates/bw-v4/src/derive/mod.rs::derive_project_health`,输入之外没有任何隐藏状态,同样的输入永远同样的输出。判定顺序也不是设计里写的「先判绿」:
 
 ```rust
 // crates/bw-v4/src/app/health.rs —— 只负责从仓现场取三条判据的输入
@@ -220,11 +220,9 @@ pub async fn collect_health_inputs(workspace: &Path, week: &str) -> HealthInputs
 
 // crates/bw-v4/src/derive/mod.rs —— 唯一判定颜色的纯函数
 pub fn derive_project_health(inputs: &HealthInputs) -> DerivedHealth {
-    let (a, b, c) = (
-        inputs.has_week_goal && inputs.committed_this_week,  // (a) 本周定了目标且真有提交
+    let (a, b, c) = (inputs.has_week_goal && inputs.committed_this_week,  // (a) 本周定了目标且真有提交
         inputs.has_metric_reading,                            // (b)
-        inputs.delivered_last_week,                           // (c)
-    );
+        inputs.delivered_last_week,                           // (c));
     // 判红排在最前面:三条判据齐了但指标越线,那是红,不是绿。
     let stalled = inputs.git_readable && !inputs.committed_this_week && !inputs.committed_last_week;
     let signal = if inputs.any_metric_red || stalled {
@@ -240,7 +238,7 @@ pub fn derive_project_health(inputs: &HealthInputs) -> DerivedHealth {
 }
 ```
 
-两条特别说明(原文的伪码没有覆盖,是这次改写新补的):
+两条特别说明:
 
 1. **「git 读不读得动」是一条独立输入,不是零提交的同义词。** `git_readable` 单独判一次(`crate::git::is_repo`)——没配工作区、目录不是 git 仓、机器上没装 git,这一条是假,此时"两周零提交"这句话本身没有意义,不能拿去判红。没数据的项目显示的是灰(`Signal::Unknown`),不是红,也不是绿。
 2. **「指标越线」这条输入目前恒为 `false`。** `.bw/metrics.toml` 的目标比对(某条读数按目标算下来是不是超线)这一刀还没接,`any_metric_red` 如实写死 `false`——这意味着灯现在**不会**因为指标读数难看而变红,只会因为"两周零提交"这一条硬判据变红。这是已知留白,不是这段代码的 bug,接上目标比对是后面的刀要做的事。

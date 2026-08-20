@@ -136,6 +136,21 @@ fn primary_note(events: &[Event]) -> Option<String> {
         ),
         Event::WeekPlanStarted { week, .. } => format!("{week} 的周计划文件已写出,等你确认草稿"),
         Event::HistoryBackfilled { note, .. } => note.clone(),
+        Event::IssueSubmitted {
+            branch,
+            commits,
+            pr_number,
+            note,
+            ..
+        } => {
+            if *pr_number > 0 {
+                format!("`{branch}` 上 {commits} 个提交已推上去,MR {note},活进「评审中」")
+            } else {
+                // 没有 MR 的时候必须把原因原样端出来 —— 只说「已提交」会让人
+                // 以为远端已经有东西等着评审了。
+                format!("`{branch}` 上 {commits} 个提交已提交,活进「评审中」。没有 MR:{note}")
+            }
+        }
         Event::IssueMerged {
             pr_number, merged, ..
         } => {

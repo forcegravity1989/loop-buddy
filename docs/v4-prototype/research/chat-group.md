@@ -1,6 +1,6 @@
 # 项目群接口预研:让「WeLink 由同事实现、外部群随便换」不用碰 buddy 架构
 
-> **30 秒导读**:这是一篇**预研**(不是设计定稿),给谁看——要接手「项目群」这块的人(包括写 WeLink 实现的同事)和后续做详细设计的人。**作数吗**:调研结论(buddy 现有连接器怎么做、各聊天工具群 API 长什么样)是核实过的事实,可以直接引用;§3 的接口形状是**建议**,还没拍板,写进 [`mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) 前需要再过一轮评审。背景与需求见母文档 §1 愿景③、§2.6、第 1 站、§6、§7、待拍-26,规范文件里 `[chat]` 段的雏形见 [`standard-module-draft.md`](../standard-module-draft.md) 第 1 类。看不懂的词先查 [`../../../CONTEXT.md`](../../../CONTEXT.md)。
+> **30 秒导读**:这篇写清楚「项目群」这块的接口该长什么样——buddy 只做两件事(往群里发一条、拉一段群历史),外加各家聊天工具的群 API 事实。**为什么还留着**:**WeLink 的实现还没写**,这份是给接手同事的对接底稿(§5 是给实现者的说明骨架)。**作数吗**:调研到的事实作数;接口形状已经定稿并落地成 `crates/bw-v4/src/chat/` 的 `ChatGroup` trait 与工厂(今天只有 mock / none 两个可跑实现),最终口径以 [`../design/07-notify-and-chat-group.md`](../design/07-notify-and-chat-group.md) 与源码为准。
 
 ---
 
@@ -97,11 +97,9 @@ pub trait ChatGroup: Send + Sync {
     /// 「上周一 → 本周一」这类小窗口,调用方不需要感知游标)。
     /// `Err(ChatError::HistoryUnsupported)` 是「这个 provider 天生没有这个
     /// 能力」的专属分支——调用方据此**跳过**,不当错误处理、不重试。
-    fn fetch_history(
-        &self,
+    fn fetch_history(&self,
         since: OffsetDateTime,
-        until: OffsetDateTime,
-    ) -> BoxFuture<'_, Result<Vec<ChatMessage>, ChatError>>;
+        until: OffsetDateTime) -> BoxFuture<'_, Result<Vec<ChatMessage>, ChatError>>;
 
     /// 可选:验证群号/凭证有效(配置页「测一下」按钮用)。默认实现可以直接
     /// 拿最近一个极小窗口跑一次 fetch_history 顶替,具体提供方也可以更便宜地

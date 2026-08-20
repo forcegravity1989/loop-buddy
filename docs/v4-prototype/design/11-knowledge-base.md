@@ -1,6 +1,6 @@
 # 11 · 知识库
 
-> **30 秒导读**:知识库屏(左栏第六入口,原「项目空间」)的详细设计——三个页签(知识 / 代码图 / 资产)各自数据从哪来、怎么刷新、空时显示什么、命令叫什么。**详细设计稿,待用户复核**,不改代码。母文档 [`mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) §5 把版本面板、产物面板、技能盘点、仓统计并进了这一屏的「资产」页签,评审子代理已指出这屏一直没有专篇([`REVIEW-2026-08-19.md`](REVIEW-2026-08-19.md) 6.1.1),本篇补上。**2026-08-20 按用户第七轮盘点整块重写了 §2.4「资产页签」**——`skill`/`skill_package`/`artifact`/`release` 等登记表全部取消,五个区块改成现扫 `.claude/skills/`、`git log`、解析 `docs/releases.md`,不读任何登记表;§2.2 知识页签的分组也据此改写(不再有独立的 `docs/plan/history.md`)。
+> **30 秒导读**:知识库屏(左栏第六入口)的设计——三个页签(知识 / 代码图 / 资产)各自数据从哪来、怎么刷新、空时显示什么、命令叫什么。**三个页签一张登记表都不读**:现扫仓内 `docs/`、现跑 codegraph、现读 `git log` 与 `docs/releases.md`。给接着做 V4 的会话看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 代码图只做了大文件榜,符号搜索与依赖图没做。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ## 0 · 这篇管什么、不管什么
 
@@ -26,7 +26,7 @@
 
 ### 2.2 知识页签:仓内文档树
 
-**树从哪来**:不是扫全仓,是按规范八大类固定分组、每组按约定路径找文件——`PROJECT.md`/`AGENTS.md`(章程)、`.bw/metrics.toml`/`.bw/project.toml`/`.bw/issue-policy.toml`/`.bw/standard.toml`(规范件)、`docs/plan/YYYY-Www.md`(周计划,倒序)、`docs/releases.md`(发版记录)、`docs/decisions/*.md`(决策记录,扩展,可能不存在)、`docs/design/`(设计产物,扩展)。**老项目的历史回填周不是单独一组**:回填的 `docs/plan/YYYY-Www.md` 与人写的本周文件**同目录、同格式**,靠 front matter `origin: backfill` 与树上的小徽记区分,不是两套渲染逻辑——第七轮盘点后已取消单独的 `docs/plan/history.md` 文件(格式见 [02 篇](02-data-and-files.md) §2.5)。
+**树从哪来**:不是扫全仓,是按规范八大类固定分组、每组按约定路径找文件——`PROJECT.md`/`AGENTS.md`(章程)、`.bw/metrics.toml`/`.bw/project.toml`/`.bw/issue-policy.toml`/`.bw/standard.toml`(规范件)、`docs/plan/YYYY-Www.md`(周计划,倒序)、`docs/releases.md`(发版记录)、`docs/decisions/*.md`(决策记录,扩展,可能不存在)、`docs/design/`(设计产物,扩展)。**老项目的历史回填周不是单独一组**:回填的 `docs/plan/YYYY-Www.md` 与人写的本周文件**同目录、同格式**,靠 front matter `origin: backfill` 与树上的小徽记区分,不是两套渲染逻辑——盘点之后已取消单独的 `docs/plan/history.md` 文件(格式见 [02 篇](02-data-and-files.md) §2.5)。
 
 **懒加载**:打开页签只拿文件清单(是否存在),点了才现读那一个文件、渲染进预览区——`docs/plan/*.md` 老项目回填后可能几十个,没必要一次全读。
 
@@ -41,7 +41,7 @@
 
 **探测**:每次打开先探测 `codegraph` 命令在不在 PATH。探测不到 → 整块置灰,「未安装 codegraph → `npm install --global @colbymchenry/codegraph@1.5.0` 然后 `codegraph init`」(版本号是本仓 CI 钉住的版本,`scripts/codegraph-version`)。装了但该仓 `.codegraph/` 不存在(没跑过 `codegraph init`)→「未建索引 → codegraph init」。
 
-**装了之后现跑三样**(预研 [`research/codegraph.md`](../research/codegraph.md) §3/§5 实测过):①**大文件榜**——`codegraph files -j`,按 `size`/`nodeCount` 排序取前若干行,预研实测几十毫秒级返回;②**符号搜索**——提交后跑 `codegraph node -f <文件> --symbols-only` 拿符号列表,或对某符号跑 `codegraph callers/impact <符号> -j`(预研实测确认 BW 大量用 `dyn Trait` 动态派发会让 `callers` 漏边即假阴性,结果如实展示原始数字,不产出「零调用者=死代码」结论);③**模块依赖概览**——现跑 `codegraph explore`(官方定位「一个强工具」的泛用查询),**如实说明**:预研未逐字段核实该命令是否有稳定 `--json` 模块依赖输出,首版按文本块原样展示,渲染形式留第 6 节开放问题。
+**装了之后现跑三样**(预研 [`research/codegraph.md`](../../archive/v4-prototype/research/codegraph.md) §3/§5 实测过):①**大文件榜**——`codegraph files -j`,按 `size`/`nodeCount` 排序取前若干行,预研实测几十毫秒级返回;②**符号搜索**——提交后跑 `codegraph node -f <文件> --symbols-only` 拿符号列表,或对某符号跑 `codegraph callers/impact <符号> -j`(预研实测确认 BW 大量用 `dyn Trait` 动态派发会让 `callers` 漏边即假阴性,结果如实展示原始数字,不产出「零调用者=死代码」结论);③**模块依赖概览**——现跑 `codegraph explore`(官方定位「一个强工具」的泛用查询),**如实说明**:预研未逐字段核实该命令是否有稳定 `--json` 模块依赖输出,首版按文本块原样展示,渲染形式留第 6 节开放问题。
 
 每次打开页签或提交一次搜索都是新的子进程调用,**不缓存**——和 03 篇「对账是纯读操作不需要缓存」同一取舍。**不做**死代码判定(见第 4 节)。
 
@@ -52,11 +52,11 @@
 
 ### 2.4 资产页签:五个区块
 
-**没有登记表可查**——第七轮盘点后 `skill`/`skill_package`/`artifact`/`release` 这些登记表全部取消(02 篇 §2.1/§2.6):库里只剩 `project`/`issue`/`claude_conversation`/`app_meta` 四张表。资产页签五个区块因此全部改成现扫仓目录、解析仓文件、或复用 `issue` 缓存表的现算查询,不是查库表。
+**没有登记表可查**——盘点之后 `skill`/`skill_package`/`artifact`/`release` 这些登记表全部取消(02 篇 §2.1/§2.6):库里只剩 `project`/`issue`/`claude_conversation`/`app_meta` 四张表。资产页签五个区块因此全部改成现扫仓目录、解析仓文件、或复用 `issue` 缓存表的现算查询,不是查库表。
 
 **项目自有 / 蒸馏技能**:扫 `.claude/skills/**/SKILL.md`(02 篇 §2.5/§2.6,正本即目录,不建索引),按文件内容分两组——项目自己写的/人手加的一组,蒸馏产出(蒸馏时把「来自哪件活」写进 SKILL.md 正文或 front matter,具体字段格式留 [04 篇](04-tools-and-workflows.md)定)一组。蒸馏技能带「来源活」链接,点击触发 `OpenDistillSource`,跳到会话屏定位当初蒸馏它的那张活——链接目标解析自文件内容,不是关联表查询。
 
-**workflow**:同样扫 `.claude/skills/` 目录里符合 SOP 类技能包结构的条目(04 篇定义识别规则),列名称 / 来源(预置随 buddy 出厂或项目自有,按铺底时是否被复制进来判断)/ 入口技能 / 用过几次。**没有胜率数字**——第七轮盘点后"战绩"这个持久账本概念本身被取消(02 篇 §2.3):"用了几次"是现算查询(`SELECT workflow, COUNT(*) FROM issue WHERE kind='business' AND workflow!='' GROUP BY workflow`),"成没成"改看远端 MR 合没合入,本页签不展示胜率。buddy 自建的三张运作 workflow(更新指标与周计划 / 资产盘点(含首次模式=历史回填) / 规范铺底)混在同一份清单里,来源标「内置」,不单独开区块——它们和业务 workflow 走同一套扫描逻辑、同一套字段。
+**workflow**:同样扫 `.claude/skills/` 目录里符合 SOP 类技能包结构的条目(04 篇定义识别规则),列名称 / 来源(预置随 buddy 出厂或项目自有,按铺底时是否被复制进来判断)/ 入口技能 / 用过几次。**没有胜率数字**——盘点之后"战绩"这个持久账本概念本身被取消(02 篇 §2.3):"用了几次"是现算查询(`SELECT workflow, COUNT(*) FROM issue WHERE kind='business' AND workflow!='' GROUP BY workflow`),"成没成"改看远端 MR 合没合入,本页签不展示胜率。buddy 自建的三张运作 workflow(更新指标与周计划 / 资产盘点(含首次模式=历史回填) / 规范铺底)混在同一份清单里,来源标「内置」,不单独开区块——它们和业务 workflow 走同一套扫描逻辑、同一套字段。
 
 **产物登记**:不建表,`git log --name-only` 就是产物登记(02 篇 §2.6)——列文件路径 / 登记时 git commit / 提交信息里能解析到的关联活号(commit message 或标题里的 `#<号>`,解析不到就不关联,不强凑)。CLAUDE.md「产物登记」这句老描述在 V4 的新落点:不再是活推 Done 边时自动写库表,是 git 提交本身就是记录,查询时现扫现算。
 
@@ -86,7 +86,7 @@
 
 ## 3 · 工程对照
 
-**模块位置(C 刀落地后整块重写)**:界面在 `crates/app-shell/src/screens/kb/`(三个页签在同一个文件里,
+**模块位置**:界面在 `crates/app-shell/src/screens/kb/`(三个页签在同一个文件里,
 还没到要拆子模块的体量);数据拼装在 `crates/app-shell/src/bridge/vm_kb.rs`(**不是** `bw-app/src/kb.rs` ——
 V4 不动旧 crate,而且这三个页签全是现扫文件/现跑子进程,没有一句业务判断,放 ViewModel 拼装层正合适);
 `codegraph` 子进程封装在 `crates/app-shell/src/adapters/codegraph/`(带 README,三段:借了什么、没借什么)。
@@ -117,7 +117,7 @@ pub fn big_files(workspace: &Path, top: usize) -> Result<Vec<FileRow>, String>;
 
 ## 4 · 边界与失败
 
-**不做**:①**编辑文档**——只读,不提供编辑框。改 `PROJECT.md` 走总览「编辑」名片(08 篇 `EditProjectCard`);改本周计划走计划屏 / 运作活①嵌入终端;升级规范文件走 2.1 节「升级」按钮——一律走活 + MR,不在本屏直接改仓。②**全文搜索**——首版没有跨文件文本检索,只有分组树浏览 + 符号名精确搜索,文档量级小时够用。③**代码图死码删除判断**——预研([`research/codegraph.md`](../research/codegraph.md) §2/§5)已实测 `dyn Trait` 动态派发会让 `callers` 漏边,「零调用者」不能直接当死代码结论;本屏只如实展示查询原始数字,运作活②要用这类数据做微重构时同样需人工复核(09 篇负责)。
+**不做**:①**编辑文档**——只读,不提供编辑框。改 `PROJECT.md` 走总览「编辑」名片(08 篇 `EditProjectCard`);改本周计划走计划屏 / 运作活①嵌入终端;升级规范文件走 2.1 节「升级」按钮——一律走活 + MR,不在本屏直接改仓。②**全文搜索**——首版没有跨文件文本检索,只有分组树浏览 + 符号名精确搜索,文档量级小时够用。③**代码图死码删除判断**——预研([`research/codegraph.md`](../../archive/v4-prototype/research/codegraph.md) §2/§5)已实测 `dyn Trait` 动态派发会让 `callers` 漏边,「零调用者」不能直接当死代码结论;本屏只如实展示查询原始数字,运作活②要用这类数据做微重构时同样需人工复核(09 篇负责)。
 
 **失败如实显示**:
 

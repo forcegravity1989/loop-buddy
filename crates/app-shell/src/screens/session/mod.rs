@@ -90,7 +90,12 @@ fn action_bar(open: Option<&SessionVm>, bridge: &Bridge) -> Element {
             }
         };
     };
-    let (b_run, b_stop, b_review) = (bridge.clone(), bridge.clone(), bridge.clone());
+    let (b_run, b_stop, b_review, b_submit) = (
+        bridge.clone(),
+        bridge.clone(),
+        bridge.clone(),
+        bridge.clone(),
+    );
     let id = s.issue_id;
     rsx! {
         div { class: "sess-actionbar",
@@ -111,12 +116,20 @@ fn action_bar(open: Option<&SessionVm>, bridge: &Bridge) -> Element {
                 "■ 停止"
             }
             button {
+                class: "btn btn-sm btn-primary",
+                title: "把这棵树里 agent 干出来的改动提交、推分支、开 MR,然后把活推到「评审中」。\
+                        「完成」还是你评审完之后再点一次。",
+                onclick: move |_| b_submit.cmd(Command::SubmitIssueWork { id }),
+                "提交并开 MR"
+            }
+            button {
                 class: "btn btn-sm",
+                title: "只改状态,不碰仓 —— 给「改动不在这棵树里」或者「远端还没挂上」的情况留的。",
                 onclick: move |_| b_review.cmd(Command::TransitionIssue {
                     id,
                     to: bw_v4::model::IssueStatus::InReview,
                 }),
-                "推到评审"
+                "只推到评审"
             }
             // 高保真上这里还有「蒸馏」与「在 Cursor 中打开」。前者 V4 还没有
             // 这条命令,后者要按活的开工工具决定露不露 —— 都还没接,做成灰态。

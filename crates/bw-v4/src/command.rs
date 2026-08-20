@@ -109,6 +109,13 @@ pub enum Command {
     // ── 干活 ──────────────────────────────────────────────
     /// 唯一的干活入口。跑完最远只到「评审中」。
     RunIssue { id: IssueId },
+    /// 「提交并开 MR」:把这张活 worktree 里 agent 干出来的改动提交、推分支、
+    /// 开 MR,然后把活推到「评审中」。
+    ///
+    /// **由人点**。agent 什么时候算干完只有人知道;而且这一下之后活就进了别人
+    /// 的视线,不该由程序替人决定。它**最远只到「评审中」** —— 「完成」还是得
+    /// 人在评审完之后再点一次。
+    SubmitIssueWork { id: IssueId },
     /// 状态转移。合法性由 `can_transition_to` 守;「完成」只能从「评审中」来,
     /// 而且只能是人显式发这条命令。
     TransitionIssue { id: IssueId, to: IssueStatus },
@@ -233,6 +240,15 @@ pub enum Event {
         id: IssueId,
         ok: bool,
         summary: String,
+    },
+    /// 「提交并开 MR」走完了。`commits` 是这条分支上比基线多出来的提交数,
+    /// `pr_number = 0` 时 `note` 说明为什么没有 MR —— 绝不摆一个空号。
+    IssueSubmitted {
+        id: IssueId,
+        branch: String,
+        commits: u32,
+        pr_number: u32,
+        note: String,
     },
     IssueTransitioned {
         id: IssueId,
