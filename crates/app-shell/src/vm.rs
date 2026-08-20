@@ -319,6 +319,8 @@ pub struct CardItemVm {
     pub metric_key: String,
     pub settled: bool,
     pub status: IssueStatus,
+    /// 远端 MR 号。0 = 还没开 MR。通知那一类的判据就是它 > 0。
+    pub pr_number: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -396,14 +398,18 @@ pub struct ChangedFileVm {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NotifyVm {
-    /// 评审中、等人合入的活。
-    pub in_review: Vec<CardItemVm>,
-    /// 阻塞的活。
-    pub blocked: Vec<CardItemVm>,
+    /// **通知只有一类:有 MR 等你合入。**
+    ///
+    /// 试点第一天定的边界:通知就该是「有件事非你不可、而且现在就能做」。
+    /// 「活阻塞了」「agent 停下来等你回话」这些是**状态**,该在计划屏和会话屏
+    /// 上看见,不该也来占通知位 —— 尤其「等你回话」那种,真要提醒也该是系统级
+    /// 的弹窗,不是一个你得先点进来才看得到的列表。那些等实践清楚了再单独设计,
+    /// 现在不摆冗余的位。
+    pub to_merge: Vec<CardItemVm>,
     pub seen_at: Option<i64>,
-    /// 还没看过的动静有几件。**和项目墙卡片上那个 ⚑ 是同一个定义**(评审中/
-    /// 阻塞里、更新时间晚于「读到这里」的);项目轨的红点用它,点过「读到
-    /// 这里」之后它会掉到 0,而不是永远亮着。
+    /// 还没看过的动静有几件。**和项目墙卡片上那个 ⚑ 是同一个定义**,也和上面
+    /// 那一类同口径:评审中、有 MR、更新时间晚于「读到这里」。点过「读到这里」
+    /// 之后它会掉到 0,而不是永远亮着。
     pub unread: u32,
     /// 事件流。**没有事件表** —— 这条流是从四张表里现算出来的:活什么时候建
     /// 的、什么时候结清的、会话什么时候开的。存不下来的事(比如某次运行失败)

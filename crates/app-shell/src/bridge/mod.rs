@@ -463,14 +463,13 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                 // 比截图硬。
                 if let Some(o) = &vm.open {
                     eprintln!(
-                        "[BW_VM] project={} 活={} 会话={} 事件={} 周={} 待评审={} 阻塞={} 技能={}",
+                        "[BW_VM] project={} 活={} 会话={} 事件={} 周={} 等你合入={} 技能={}",
                         o.slug,
                         o.board.columns.iter().map(|c| c.cards.len()).sum::<usize>(),
                         o.sessions.len(),
                         o.notify.events.len(),
                         o.weeks.len(),
-                        o.notify.in_review.len(),
-                        o.notify.blocked.len(),
+                        o.notify.to_merge.len(),
                         o.config.skills.len(),
                     );
                     // 事件流最新那一条的时间戳也打出来 —— 它是**本机时区**
@@ -664,6 +663,26 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         Req::OpenDoc(p) => ui.open_doc = p,
                         Req::DropDrafts => ui.pending_drafts = None,
                         Req::SelectSession(id) => {
+                            // **选中一张有会话的活 = 把上次那场对话接回来。**
+                            // 光切视图的话人看到的是一片空白 —— V3 本来就是接
+                            // 回来的,V4 这条掉了。只在「真有会话、而且没开着」
+                            // 时才发命令:没有会话的活(buddy 自己写的、回填的)
+                            // 发过去只会弹一句「还没有过会话」,那不是错误,是
+                            // 常态。
+                            if let Some(iid) = id {
+                                if let Ok(Some(conv)) =
+                                    app.store().conversation_for_issue(iid).await
+                                {
+                                    if !app.pty_live(conv.id) {
+                                        if let Err(e) = app
+                                            .dispatch(Command::ReopenSession { issue_id: iid })
+                                            .await
+                                        {
+                                            ui.set_note(Some(format!("接不回上次那场会话:{e}")));
+                                        }
+                                    }
+                                }
+                            }
                             ui.session_open = id;
                             // 换会话 = 换工作区,上一个会话展开的目录、开着的
                             // 文件在新工作区里多半不存在,一律清掉重来。

@@ -62,6 +62,11 @@ pub enum Command {
     /// 把一个项目从工作台上移走。**只动库,不动仓** —— 仓是正本,里面是真实
     /// 的劳动成果。界面上要人点两下才发得出这条(第一下问「真移走?」)。
     RemoveProject { project_id: ProjectId },
+    /// 把这张活上次那场会话接回来看看(`claude --resume <id>`)。
+    ///
+    /// **不改活的状态、不发任何 prompt** —— 纯粹是「让我看看上次聊到哪了」。
+    /// 和 ▶开工 的区别就在这:▶开工 会把活推到「进行中」,这条不会。
+    ReopenSession { issue_id: IssueId },
     /// 纯读:按「缺 / 过期 / 人改过 / 一致」四类对账,不建活不写仓。
     ReconcileStandard { project_id: ProjectId },
 
@@ -214,6 +219,11 @@ pub enum Event {
         slug: String,
         issues: u64,
         workspace: String,
+    },
+    /// 上次那场会话接回来了。`live` = 之前就开着、这次什么都没做。
+    SessionReopened {
+        issue_id: IssueId,
+        live: bool,
     },
     StandardBootstrapped {
         project_id: ProjectId,

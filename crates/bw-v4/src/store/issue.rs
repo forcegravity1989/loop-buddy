@@ -150,15 +150,17 @@ impl V4Store {
     /// 「读到这里」那一下。**在库里数**,不要把整张 issue 表取回内存再 filter
     /// ——项目墙上每个项目每次重拼界面都要这个数。
     pub async fn count_unseen(&self, project_id: ProjectId, seen_at: i64) -> Result<u32> {
-        // 两个状态值也走 `enum_to_db`,不在 SQL 里写死字面量 —— 写死的话
-        // 哪天枚举的 serde 名字改了,这条查询会静默返回 0,而不是报错。
+        // 口径和通知屏那一类**必须一样**:评审中 + 真有 MR。两边各写一套的
+        // 话,红点上写着 3 而列表里只有 1,人会以为界面坏了。
+        //
+        // 状态值走 `enum_to_db`,不在 SQL 里写死字面量 —— 写死的话哪天枚举的
+        // serde 名字改了,这条查询会静默返回 0,而不是报错。
         let row: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM issue WHERE project_id = ?1 \
-             AND status IN (?2, ?3) AND updated_at > ?4",
+             AND status = ?2 AND pr_number > 0 AND updated_at > ?3",
         )
         .bind(project_id.uuid().to_string())
         .bind(enum_to_db(&IssueStatus::InReview))
-        .bind(enum_to_db(&IssueStatus::Blocked))
         .bind(seen_at)
         .fetch_one(self.pool())
         .await?;

@@ -188,6 +188,15 @@ fn card_view(
                 if c.origin == "自动建" {
                     span { class: "chip chip-gray", "自动" }
                 }
+                // 没排周的活在每一周的视图里都露面(运作活按设计就不排周)。
+                // 不挂这个徽记的话,人会以为它属于正在看的这一周。
+                if c.week_of.is_empty() {
+                    span {
+                        class: "chip chip-gray",
+                        title: "这张活没排进任何一周,在哪一周看都能看到它",
+                        "未排周"
+                    }
+                }
                 span { style: "margin-left:auto;", title: "{c.status.label()}", {light_dot(sig, false)} }
             }
             div {

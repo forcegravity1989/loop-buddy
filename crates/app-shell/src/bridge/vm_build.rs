@@ -113,6 +113,13 @@ fn primary_note(events: &[Event]) -> Option<String> {
                 format!("项目 {slug} 已接入")
             }
         }
+        Event::SessionReopened { live, .. } => {
+            if *live {
+                "这场会话本来就开着".into()
+            } else {
+                "把上次那场会话接回来了 —— 它不会自己动手,你说话它才动".into()
+            }
+        }
         Event::ProjectRemoved {
             slug,
             issues,
@@ -550,14 +557,11 @@ async fn build_project(
         )
         .await,
         notify: NotifyVm {
-            in_review: issues
+            // 评审中 **且真有 MR**。没 MR 的评审中活不是通知 —— 它在计划屏的
+            // 评审中那一列里,人在那儿点完成。
+            to_merge: issues
                 .iter()
-                .filter(|i| i.status == IssueStatus::InReview)
-                .map(card_item)
-                .collect(),
-            blocked: issues
-                .iter()
-                .filter(|i| i.status == IssueStatus::Blocked)
+                .filter(|i| i.status == IssueStatus::InReview && i.pr_number > 0)
                 .map(card_item)
                 .collect(),
             seen_at: notify_seen,
@@ -603,5 +607,6 @@ pub(super) fn card_item(i: &bw_v4::Issue) -> CardItemVm {
         metric_key: i.metric_key.clone(),
         settled: i.settled_at.is_some(),
         status: i.status,
+        pr_number: i.pr_number,
     }
 }

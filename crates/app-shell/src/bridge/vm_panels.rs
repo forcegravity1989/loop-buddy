@@ -13,7 +13,18 @@ use std::path::Path;
 use super::vm_build::{card_item, probe_env, remote_label};
 use super::vm_kb::{managed_paths, skill_origin};
 
-/// 六列看板。待办池那一列装的是没排进任何一周的活,其余五列按状态分。
+/// 六列看板。
+///
+/// **两条维度别混**:待办池是「排没排周」,其余五列是「干到哪一步」。原来
+/// 待办池只看 `week_of` 空不空、不看状态,于是一张**已经干完在等评审、连 MR
+/// 都开好了**的活(运作活按设计就不排周)照样躺在待办池里,而看某一周时它又
+/// 因为周对不上从评审中消失 —— 试点第一天用户当场问「明明已经有 PR 了为什么
+/// 在待办池」。
+///
+/// 现在的规矩:**待办池只装还没动过的活**(没排周 + 状态还在待办池/待办);
+/// **动过的活一律按状态进列,不管排没排周** —— 没排周的在卡片上挂一个「未排周」
+/// 徽记,不藏起来也不假装它属于这一周。
+///
 /// `week` 传 `None` = 「全部活」视图,不按周过滤(左栏点「全部」时)。
 pub(super) fn build_board(
     issues: &[bw_v4::Issue],
@@ -30,18 +41,23 @@ pub(super) fn build_board(
         .map(|k| k.todo_label.clone())
         .unwrap_or_else(|| "待办 · 已排进本周,等开工".into());
 
+    // 没排周的活在任何一周的视图里都露面 —— 它不属于哪一周,但它是真事,
+    // 藏起来人就再也找不到它了(运作活就是这种)。
     let in_week = |i: &&bw_v4::Issue| match week {
         None => true,
-        Some(w) => i.week_of == w,
+        Some(w) => i.week_of == w || i.week_of.is_empty(),
     };
+    let untouched =
+        |i: &&bw_v4::Issue| matches!(i.status, IssueStatus::Backlog | IssueStatus::Todo);
     let columns = vec![
         ColumnVm {
             status: IssueStatus::Backlog,
             title: pool_label.clone(),
-            // 待办池按定义就是「没排进任何一周」,不按正在看的那一周过滤。
+            // 待办池按定义就是「没排进任何一周」,不按正在看的那一周过滤;
+            // 但**已经动过的活不在这里** —— 它们在自己的状态列里。
             cards: issues
                 .iter()
-                .filter(|i| i.week_of.is_empty())
+                .filter(|i| i.week_of.is_empty() && untouched(i))
                 .map(card_item)
                 .collect(),
         },
@@ -50,7 +66,7 @@ pub(super) fn build_board(
             title: todo_label.clone(),
             cards: issues
                 .iter()
-                .filter(|i| in_week(i) && i.status == IssueStatus::Todo)
+                .filter(|i| !i.week_of.is_empty() && in_week(i) && i.status == IssueStatus::Todo)
                 .map(card_item)
                 .collect(),
         },

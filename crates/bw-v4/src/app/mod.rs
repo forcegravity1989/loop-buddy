@@ -157,6 +157,7 @@ impl App {
                     .await
             }
             Command::RemoveProject { project_id } => self.remove_project(project_id).await,
+            Command::ReopenSession { issue_id } => self.reopen_session(issue_id).await,
             Command::EditProjectCard { project_id, intent } => {
                 self.edit_project_card(project_id, intent).await
             }
