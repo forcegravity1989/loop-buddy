@@ -48,34 +48,56 @@
 - 子代理分工:主线程做骨架与接缝(Cargo、bridge、`Command` / `Event` 签名、schema);子代理填屏(每屏一个,sonnet)、填指挥器(sonnet)、评审(opus);主线程合并、跑门禁、`/code-review`。
 - 看不准的细节按 design/ 对应篇的默认答案;design/ 与母文档冲突以母文档 §6 / §11 为准;再拿不准就按「简单 / 规范」的来并在 PR「偏差」段写明。
 
-### 2.4 次日早上的验收读回(用户照着跑)
+### 2.4 次日早上的验收读回(用户照着跑;三刀做完后按实况整块重写)
+
+**改了三处,原来那版在这台机器上跑不通**:指挥器在 `bw-v4` 不在 `bw-app`;`app-shell` 不用从门禁里排除
+(它过 clippy);macOS 没有 `timeout` 这个命令,深链那条换成 `perl -e 'alarm N; exec @ARGV'`。
 
 ```bash
-# 1 门禁(与 CI 一致 + 两个新守卫)
-cargo fmt --all --check && cargo clippy --workspace --exclude app-desktop --exclude app-shell -- -D warnings && cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features && cargo check -p ui --target wasm32-unknown-unknown && ./scripts/guard-kernel-ui-free.sh && cargo check -p app-desktop && cargo check -p app-shell && cargo test --workspace --exclude app-desktop --exclude app-shell && ./scripts/guard-no-cross-screen-import.sh && ./scripts/guard-file-lines.sh
+# 1 门禁(与 CI 一致 + 三个新守卫)
+cargo fmt --all --check && cargo clippy --workspace --exclude app-desktop -- -D warnings && cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features && cargo check -p ui --target wasm32-unknown-unknown && ./scripts/guard-kernel-ui-free.sh && cargo check -p app-desktop && cargo test --workspace --exclude app-desktop && ./scripts/guard-no-cross-screen-import.sh && ./scripts/guard-file-lines.sh && ./scripts/guard-screen-hooks.sh
 ```
 
 ```bash
-# 2 指挥器从空库跑一遍(重跑不产生重复数据)
-rm -rf /tmp/bw-v4-demo.db /tmp/bw-v4-ws && cargo run -p bw-app --example real_demo_v4 -- /tmp/bw-v4-demo.db /tmp/bw-v4-ws && cargo run -p bw-app --example real_demo_v4 -- /tmp/bw-v4-demo.db /tmp/bw-v4-ws
+# 2 指挥器从空库跑两遍(第二遍不产生任何重复数据)
+rm -rf /tmp/bw-v4-demo.db /tmp/bw-v4-ws && cargo run -p bw-v4 --example real_demo_v4 -- /tmp/bw-v4-demo.db /tmp/bw-v4-ws && cargo run -p bw-v4 --example real_demo_v4 -- /tmp/bw-v4-demo.db /tmp/bw-v4-ws
 ```
 
 ```bash
-# 3 数据读回:库里只有四张表 / issue 缓存列齐 / 活的周·来源·工具·workflow·版本 / 完成只结一次
-sqlite3 /tmp/bw-v4-demo.db ".tables" && sqlite3 /tmp/bw-v4-demo.db "PRAGMA table_info(issue);" | grep -E "week_of|version|tool|kind|origin|workflow|sort_order|metric_key" && sqlite3 -header /tmp/bw-v4-demo.db "SELECT title,status,week_of,origin,tool,workflow,version,settled_at IS NOT NULL AS settled FROM issue ORDER BY created_at;"
+# 3 数据读回:库里只有四张表 / 活的周·来源·工具·workflow·版本 / 完成只结一次
+sqlite3 /tmp/bw-v4-demo.db ".tables" && sqlite3 -header /tmp/bw-v4-demo.db "SELECT number,title,status,week_of,origin,tool,workflow,version,settled_at IS NOT NULL AS settled FROM issue ORDER BY number;" && sqlite3 /tmp/bw-v4-demo.db "SELECT COUNT(*) AS 结清了几条 FROM issue WHERE settled_at IS NOT NULL;"
+```
+
+跑两遍之后该看到:恰好四张表;恰好 6 张活(编号 1-6,不多不少);结清恰好 1 条。
+
+```bash
+# 4 仓文件读回:周计划(含回填的历史周)、发版记录、规范件与指纹、复制进来的预置技能包
+ls /tmp/bw-v4-ws/buddy-v4-demo/docs/plan | wc -l && grep -lx "origin: backfill" /tmp/bw-v4-ws/buddy-v4-demo/docs/plan/*.md | wc -l && grep -c "^\[\[file\]\]" /tmp/bw-v4-ws/buddy-v4-demo/.bw/managed.toml && ls /tmp/bw-v4-ws/buddy-v4-demo/.claude/skills && cat /tmp/bw-v4-ws/buddy-v4-demo/docs/plan/$(date +%G-W%V).md
+```
+
+演示项目是 buddy 自己的仓 `git clone --local` 出来的,所以 `docs/plan/` 下有 11 个文件 ——
+**9 份回填的历史周(W25–W33)+ 1 份本周(W34,人写的)+ 1 份 README**;18 条铺底指纹、12 个技能包。
+(数回填那条要用 `grep -lx`:README 里讲的就是 `origin: backfill` 这个字段,不加 `-x` 会把它也数进去。)**发版记录里一条「回填」行都没有是对的** —— buddy 自己的仓没有 git 标签,
+无标签就诚实留空,绝不拿提交日期倒推版本号。
+
+```bash
+# 5 新壳六入口深链各起一次,stderr 见 [BW_OPEN] 且无 panic(会开窗,看一眼关掉)
+cargo build -p app-shell && for p in overview plan session notify config kb; do BW_DB=/tmp/bw-v4-demo.db BW_OPEN=buddy-v4-demo BW_PANEL=$p perl -e 'alarm 10; exec @ARGV' ./target/debug/bw-v4-dev 2>&1 | grep -m1 "\[BW_OPEN\]"; done
 ```
 
 ```bash
-# 4 仓文件读回:周计划文件(活清单 + 指标读数段)、发版记录、规范件与指纹、复制进来的预置技能包
-ls -R /tmp/bw-v4-ws/buddy-v4-demo/.bw /tmp/bw-v4-ws/buddy-v4-demo/.claude/skills && cat /tmp/bw-v4-ws/buddy-v4-demo/docs/plan/2026-W34.md && cat /tmp/bw-v4-ws/buddy-v4-demo/docs/releases.md && git -C /tmp/bw-v4-ws/buddy-v4-demo log --oneline | head
+# 5b 知识库三个页签的数字,拿终端命令当场对
+BW_KB_DUMP=1 BW_DB=/tmp/bw-v4-demo.db BW_OPEN=buddy-v4-demo BW_PANEL=kb perl -e 'alarm 20; exec @ARGV' ./target/debug/bw-v4-dev 2>&1 | grep BW_KB
 ```
 
 ```bash
-# 5 新壳六入口深链各起一次,stderr 见 [BW_OPEN] 且无 panic(看一眼就关)
-cargo build -p app-shell && for p in overview plan session notify config kb; do BW_DB=/tmp/bw-v4-demo.db BW_OPEN=buddy-v4-demo BW_PANEL=$p timeout 8 ./target/debug/bw-v4-dev 2>&1 | grep -m1 "\[BW_OPEN\]"; done
+# 5c 内嵌终端的 PTY 后端(不碰 claude、不碰网关)
+cargo run -p bw-engine --example pty_smoke && cargo run -p bw-engine --example pty_smoke -- --teardown && cargo run -p bw-engine --example pty_smoke -- --abort
 ```
 
-然后你自己开 `bw-v4-dev` 点全旅程(项目墙 → 接入 → 总览 → 计划拖四下 → 配置改映射 → 设置),把感受回我;这一步不归我。
+然后你自己开 `bw-v4-dev` 点全旅程(项目墙 → 接入 → 总览 → 计划拖四下 → 配置改映射 → 会话 → 通知 →
+知识库三页签 → 设置),把感受回我;这一步不归我。要打成 macOS 的 app 再点:
+`./scripts/bundle-desktop.sh v4` → `dist/BW-V4.app`。
 
 ### 2.5 卡住预案
 
@@ -90,7 +112,18 @@ cargo build -p app-shell && for p in overview plan session notify config kb; do 
 
 ## 4 · 与代码的关系
 
-本篇本身不改 `crates/`;切片 A 开工的第一个 commit 就是 A1。每刀结束本篇 §2 的表按实况补「做到哪 / 偏差」一列,不另开日志文件。
+本篇本身不改 `crates/`;切片 A 开工的第一个 commit 就是 A1。
+
+**三刀都做完了(2026-08-19/20 一次挂上连着做),全在 PR #105,未合。** 每刀做到哪、偏差是什么,
+不在本篇重复写 —— 三个地方说了同一件事,只会互相漂移:
+
+- **做到哪**:各篇 design 的第 3 节(工程对照)已按实况整块重写,标着「A/B/C 刀落地后重写」。
+- **没做完的**:`docs/LEFTOVERS.md` 的 V4A-N / V4B-N / V4C-N 三组。
+- **偏差与怎么验**:PR #105 正文三段(做到哪 / 偏差 / 早上怎么验)。
+
+最大的一条偏差在这里点一句,免得看本篇的人漏掉:**V4 另开了 `crates/bw-v4` 与 `crates/app-shell`
+两个新 crate,没有在 `bw-app` / `bw-store` 上做加法**——库从二十张表缩到四张之后,旧内核的用例
+整片接不上。旧的五个 crate 一行没动,旧壳 `app-desktop` 照常编译。
 
 ## 5 · 挂任务时粘贴的指令
 

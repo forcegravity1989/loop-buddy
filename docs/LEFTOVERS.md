@@ -48,9 +48,46 @@
 | **减负-18** | `session` 表只剩壳（正文 `message` 已删）：左栏「阶段记录」仍按 `SessionId` 索引、`RunIssue{session,id}` / `workflow_run.session_id` 带一个几乎无意义的会话 id | V4 一并处理（左栏 V4 重做） | 左栏改按 Issue / `claude_conversation` 索引；`RunIssue` 去 `session` 参数；`workflow_run.session_id` 停写；`session` 表 DROP（老库迁移）。P11 ② 同根 |
 | **减负-19** | `WorkflowSpec.phases` / `phase_prompts` / `LoopConfig` 只剩展示用途；`stage_workflow_with_playbook` 每次 ▶跑 仍渲染整套 `phase_prompts`（无人读）；`PhaseMeta.reject_to_phase`、`LoopConfig.retries/max_iter` 无消费者；Hub 卡「运行战绩」按 `workflow_run.workflow_id` 统计，而 Issue 运行的 spec id 每次新造，永远对不上 | V4 一并处理（Workflow 库 V4 不带） | `WorkflowSpec` 收成「名字 + 目标 + 阶段名 + 技能引用」；`rendered_phase_prompts` 删；老库列保留 |
 | **减负-20** | 项目级 `allow_commands` 是死旋钮（只被已删的一次性执行器消费；交互式恒 `--dangerously-skip-permissions`） | V3 可排 | 删 UI 开关 + `Command::SetWorkspace.allow_commands` + `ProjectRow.allow_commands`；列删除走 `drop_column_if_present` |
-| **减负-21** | bw-store 内联测试 `sync_connectors_file_empty_is_noop` 偶发失败（`tempdb_path()` 进程 id + 纳秒撞名） | 低 | 改 `tempfile::NamedTempFile` 或原子计数器后缀 |
+| **减负-21** | ~~bw-store 内联测试 `sync_connectors_file_empty_is_noop` 偶发失败（`tempdb_path()` 进程 id + 纳秒撞名）~~ | ✅ 已修（2026-08-19，V4 A 刀顺手） | 五处临时目录/库名的时间戳换成进程内原子自增（`bw-store/sqlite.rs`、`bw-engine` 的 connectors_file / project_file / interactive_cli、`bw-app/hook_listener.rs`）。同根的还有 `bw-engine` 那几个 `connectors_file::tests`，一并修了；连跑八轮门禁不再抖 |
 
-已关闭、已接受的条目仍在下方史实里，表里不重复。**减负-N** 系列是 2026-08-17/18 减负重构会话从 `docs/BACKLOG.md` 并入的（该文件已删，序号沿用；1、2 两条已做，收据在下方「减负重构收据」）。
+| **V4A-1** | 名片改不了:`EditProjectCard` / `SetProjectChat` 两条命令内核里有,总览的名片块上没有编辑入口 | V4 可排 | 名片块加编辑态;改动走轻量活等评审(命令已经是这个语义) |
+| **V4A-2** | 看板只能跨列拖,同一列内拖动排序没接(`ReorderIssue` 命令内核里有,界面没调用) | V4 可排 | 卡片之间加落点;`sort_order` 取前后中点,已实现 |
+| **V4A-3** | 活的详情面板改不了 workflow(`SetIssueWorkflow` 命令内核里有,界面没调用) | V4 可排 | 详情面板加一个下拉,选项来自项目仓 `.claude/skills/` |
+| **V4A-4** | 规范铺底的第 2 步「合并调整」与第 3 步的 agent 侧都还没起会话。**C 刀把第 3 步的确定性那半做了**(历史回填直接算 git 写文件,见 V4C-1),agent 那半仍未做 | 试点期 | 两份剧本(`merge-adjust` / `asset-audit`)已铺进项目仓,缺的是「探测到之后自动起一次会话」那段编排 |
+| **V4A-5** | 健康三判据里「指标见红」这一条恒为不成立 —— 周计划文件里的读数还没和 `.bw/metrics.toml` 的 target 比过 | V4 可排 | 接上 target 的迷你 DSL(`≥5` `≤24h` 这类)比较;在此之前灯只可能是绿/黄/灰,不会因为指标变红 |
+| **V4A-6** | 业界包(mattpocock-skills / superpowers)还没进 `standard/06-defaults/`,而 `.bw/issue-policy.toml` 的三列映射里已经写着这些名字当默认 workflow —— 项目仓里找不到对应目录。**三张运作 workflow 已由 B 刀补齐** | C 刀 / 试点期 | 先定「随出厂还是本机库」;在此之前映射里那几个名字是已知留白 |
+| ~~**V4A-7**~~ | ~~所有 ▶跑 都走自我标注的替身执行器~~ **B 刀做完**:桌面壳挂真 `claude`(内嵌终端);工作区目录不存在的项目仍退回替身,产出带【mock】 | ✅ B 刀 | |
+| ~~**V4A-8**~~ | ~~会话屏只如实列了会话记录~~ **B 刀做完**:三栏(会话列表 / 终端·文件·diff 三页签 / 文件树·改动·git·MR) | ✅ B 刀 | agent 只有「运行中/空闲」两态,见 V4B-3 |
+| ~~**V4A-9**~~ | ~~通知屏没有「合入并完成」按钮~~ **B 刀做完**:先真合 MR 再推完成,合入失败整条失败 | ✅ B 刀 | |
+| ~~**V4A-10**~~ | ~~知识库只有仓内 `docs/` 文档树~~ **C 刀做完**:三页签(知识 / 代码图 / 资产),知识树改成按规范几大类找固定路径 | ✅ C 刀 | 代码图只做了大文件榜,见 V4C-3 |
+| **V4A-11** | 远端一条没接:活是本机建的,`remote_number` 恒空;发版、排期都不打远端标签 | C 刀及以后 | `.bw/project.toml` 里的远端地址目前只用来显示与探活 |
+| **V4A-12** | Windows 安装包 `0.4.0-v4` 没打;新壳只在 macOS 上跑过。**C 刀查清了为什么打不了**:`BuildersWorkbench-Setup.exe` 的 Inno `.iss` 脚本**不在这个仓里**(当初在 Windows 机器上单独维护),这台 mac 上出不了这一包 | 试点期(要 Windows 机器) | C 刀把 macOS 那条补齐了:`./scripts/bundle-desktop.sh v4` → `dist/BW-V4.app`(版本号 `0.4.0-v4`)。拖拽在 Windows 上要 `with_disable_drag_drop_handler(true)`,代码里已经这么写,未真机验证 |
+| **V4A-13** | 旧壳 `app-desktop` 与旧库 `workbench.db` 原样留着。**C 刀逐条核对过删除判据**(design/01 §2.11 已整块重写):四条**一条都不满足**,今天不能删 | 试点期之后 | 差得最远的是母文档 §8 那八条整体验收(两个真实周循环、真跑 claude、第二台 buddy、Windows 包、项目群真连) |
+| **V4A-14** | `welink-cli` 探活恒为「还没接实现」(灰,不是红) | 试点期 | 留位是有意的:没接的东西显示灰,不显示红也不显示绿 |
+
+
+| **V4A-15** | **写仓不走分支与 MR**:设计里「凡是写项目仓的动作都是一张活、走分支开 MR、等人合入」这条,A 刀一条都没实现 —— `bw-v4` 的 git 模块里没有建分支/push/开 PR 的函数。改名片、发版本、拖卡片回写周计划、规范铺底,全是直接改工作区文件,铺底与指挥器收尾会直接提交当前分支 | V4 可排(结构性) | 这是 A 刀最大的偏差。design/03 §2.5 与 06 §2.4 已按实况标注。接远端(V4A-11)之前做不了完整的 MR 流,但「先建一张活、把改动落在这张活的分支上」这半截可以先做 |
+| **V4A-15b** | 项目仓把 `.claude/` 写进 `.gitignore` 时(buddy 自己的仓就是),铺进去的九个预置技能包**进不了版本控制** —— 文件在本机有,换台机器 clone 下来就没有。buddy 如实记在铺底那张活的说明里,不用 `-f` 顶回去 | V4 需要拍板 | 三条路:说服项目别忽略 `.claude/`、把技能包铺到别的目录、或者接受「技能包是本机的、不随仓走」。这是产品决定,不是 bug |
+| ~~**V4A-16**~~ | ~~`claude_conversation` 表永远是空的~~ **B 刀做完**:▶跑 走 PTY 那条路时真写会话行 | ✅ B 刀 | 指挥器(替身路径)仍然不写这张表 —— 没起过真会话就不该有会话行,见 V4B-4 |
+| **V4A-17** | 同一件事有两份会漂移的定义:周计划文件的格式在 `standard/03-docs/plan/WEEK.md.tmpl` 和 `week_plan_file::render` 各写了一遍(模板编进了二进制但没人读);`docs/releases.md` 的默认正文同理 | 结构债,随手做 | 让 render 读模板,或者把模板删掉只留一份 |
+| **V4A-18** | 内核线程里任何一处 panic 都会让线程静默死掉:界面停在最后一份 ViewModel 上,之后发出去的命令石沉大海,而且没有任何提示 | V4 可排 | 在内核循环外面裹一层 `catch_unwind`,把死因送进「起不来」那块红字 |
+| **V4B-1** | 运作活②的 agent 侧产出没法读回:盘点报告落地、微重构只出建议不改代码这两条,要真 agent 会话才验得了,B 刀跑的是替身 | 试点期 | 剧本(`asset-audit/SKILL.md`)里 DoD 与常见坑都写死了,缺的是真跑一次 |
+| **V4B-2** | `north-star-discovery` / `metrics-binding` 两份旧技能**和合并后的 `metrics-refresh` 并存**:内容已经合并进 `standard/06-defaults/ops/week-planning/skills/metrics-refresh/SKILL.md`,但旧的两份文件还在 `docs/skills/`、仍被 `bw_core::bw_library` 编进二进制、仍随铺底复制进项目仓 | V4 可排(结构债) | 违反「不为向后兼容留旧路径」。删旧文件 + 从 `bw_library` 摘掉两个常量,一次改完 |
+| **V4B-3** | 会话屏 agent 状态只有「运行中 / 空闲」两态。设计里的四态(加「等你输入」「已推评审」)要靠 claude 的 hook 回传 `Notification` / `PreToolUse`,`hook_listener` 那套增量没做 | V4 可排 | 现在只显示进程在不在 —— 唯一真实的信号。不猜,不显示第三态 |
+| **V4B-4** | 指挥器(替身执行器路径)不写 `claude_conversation` 行,所以拿指挥器生成的库开会话屏,左列是空的 | 有意如此 | 没起过真会话就不该有会话行。要看会话屏得用真工作区点一次 ▶跑 |
+| **V4B-5** | MR 卡只有号码,没有「检查是否通过」那一列 —— `gh pr checks` 对应的函数今天不存在 | C 刀及以后 | design/05 §3 已把它列成缺口 |
+| **V4B-6** | 会话屏的三件没做:Cursor 适配(`CURSOR` 常量仍 `supported: false`)、内嵌 Open Design 页签、蒸馏按钮(V4 还没有 `DistillSkillFromIssue` 对应命令) | C 刀及以后 | |
+| **V4B-7** | 定时只对**当前打开着的项目**跑。没打开任何项目时不动 | 有意如此 | 后台替一堆项目自动建活,人一打开就看见一片自己没点过的活,不是好体验。要改成全局跑得先想清楚这件事 |
+| **V4C-1** | 历史回填只做了**三层流水线的第 1 层**(buddy 自己算 git 写文件)。第 2 层(agent 读文本补 PROJECT.md 草稿、解析 CHANGELOG、列指标候选)与第 3 层(人评审 MR)都没做 | 试点期 | design/03 §2.4 已整块重写成实况。第 2 层要起真 agent 会话,剧本在 `asset-audit/SKILL.md` 里 |
+| **V4C-2** | 回填**不算这三样**:作者分布、按周一级目录 Top3、远端 issue 与 MR 明细 | 需要时再做 | 前两样今天没有界面读(没人读的不算);第三样要连远端,和 V4A-11 同一条线 |
+| **V4C-3** | 代码图三样只做了大文件榜。**符号搜索**与**模块依赖概览**(`codegraph explore`)没做 | V4 可排 | 后者连有没有稳定的结构化输出都没核实过(design/11 §6 开放问题 1),不猜一个解析格式 |
+| **V4C-4** | 群摘要没做:`FetchChatDigest` 这条命令不存在,运作活①拿不到上周群消息当参考 | 试点期 | `ChatGroup::fetch_history` 的接口与 mock 实现都在,缺的是「拉一段、按天分组写成本机文件、注入给运作活①」那段 |
+| **V4C-5** | 项目群只能在仓文件里改:`SetProjectChat` 命令内核里有,配置屏只显示不编辑 | V4 可排 | 设计上它要走「编辑项目信息」那条轻量活 + MR,而那条链路本身卡在 V4A-15(写仓不走分支与 MR) |
+| **V4C-6** | 会话回放不存:切走一个**已经跑完**的会话再切回来,终端是空的 | V4 可排 | 只挂「进程还活着」或「正被选中」的会话,是为了不让一堆死会话各留一条 30ms 轮询。要留回放得把 PTY 字节落盘,那是另一件事 |
+| **V4C-7** | `[BW_CHAT_SENT]` 只验到了「评审中」这一类与「重复会真的重复」。合入与发版两类的触发点接上了,但演示项目没挂远端,没真走到过 | 接上远端之后 | 触发点在 `MergeAndSettle` / `CutRelease` 末尾,读回办法同 §8-8 |
+
+
+已关闭、已接受的条目仍在下方史实里，表里不重复。**减负-N** 系列是 2026-08-17/18 减负重构会话从 `docs/BACKLOG.md` 并入的（该文件已删，序号沿用；1、2 两条已做，收据在下方「减负重构收据」）。**V4A-N** / **V4B-N** / **V4C-N** 系列分别是 V4 A 刀(骨架 + 数据 + 主环)、B 刀(运作活 + 会话屏)、C 刀(回填 + 项目群 + 知识库 + 包)交付时如实登记的没做完的部分,代号已进 `code-schemes.md`。
 
 ### 归正（迁入时）
 

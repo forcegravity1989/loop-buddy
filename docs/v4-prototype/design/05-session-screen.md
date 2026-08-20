@@ -1,6 +1,6 @@
 # 05 · 会话屏
 
-> **30 秒导读**:这篇管 V4 会话屏——一件活怎么在这个屏里被 agent 真干起来、人怎么在这里陪着看。给三种人看:复核设计的用户、以后写代码的会话、以后接新开工工具(比如再接一个 CLI)的同事。**状态:详细设计稿,待用户复核,尚未开工写代码。** 设计事实源是 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(下称母文档),与它冲突时以母文档为准,本篇只是把母文档第 4 站落到模块、字段、命令的粒度。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本篇不新开代号系列。**2026-08-20 按用户第七轮盘点整块重写了 §2.5(蒸馏产出不再落库)、§3 会话线索表(`workflow_run` 已取消)与 §5 对应的读回命令。**
+> **30 秒导读**:这篇管 V4 会话屏——一件活怎么在这个屏里被 agent 真干起来、人怎么在这里陪着看。给三种人看:复核设计的用户、以后写代码的会话、以后接新开工工具(比如再接一个 CLI)的同事。**状态:B 刀已落地三栏主体(内嵌终端 / 文件树 / 改动 diff / git 状态 / MR 号),§3 已按真代码整块重写;Cursor 适配、内嵌 Open Design、蒸馏按钮、agent 四态 hook 都还没做,在 §3 末尾如实列着。** 设计事实源是 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(下称母文档),与它冲突时以母文档为准,本篇只是把母文档第 4 站落到模块、字段、命令的粒度。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本篇不新开代号系列。**2026-08-20 按用户第七轮盘点整块重写了 §2.5(蒸馏产出不再落库)、§3 会话线索表(`workflow_run` 已取消)与 §5 对应的读回命令。**
 
 ## 0 · 这篇管什么、不管什么
 
@@ -93,58 +93,61 @@
 
 ## 3 · 工程对照
 
-**crate/目录**:桌面壳新增 `crates/app-desktop/src/screens/session/`(布局)与 `crates/app-desktop/src/adapters/{terminal_pty,claude_cli,cursor_cli,open_design,agent_hooks,codegraph}/`(每个一份 README)。内核侧不新建 crate,沿用 `bw-engine::{interactive_cli, pty_backend, terminal_manager, workspace, evidence, github, codehub}` 与 `bw-app::{command, terminal, hook_listener}`,按 01 篇"新壳+旧内核"原则改造而非重写。
+> **B 刀落地后整节重写。** 原文写在「V4 摞在 `app-desktop` 上」这个前提上,而 V4 另开了
+> `crates/bw-v4` + `crates/app-shell`(01 篇 §2.6),原文点名的落点、命令名、函数名多数
+> 落空。下面是真代码,不是计划。
 
-**库 schema**:05 需要的字段以 02 篇([02-data-and-files.md](02-data-and-files.md))的正本为准,这里只列 05 视角下用到/需要补的:
-- `issue.tool`(claude_cli / cursor / open_design)——母文档 §6 已定义,05 只读。
-- `claude_conversation` 表(id / project_id / issue_id UNIQUE / claude_session_id / workspace_path / branch_name / created_at / last_opened_at)——**已有**,左列会话分组直接复用,不新建表;02 篇第七轮盘点后确认这是会话线索**唯一**要住的一张表(见 02 篇 §2.1),不再有别的会话/运行记录表。若要给 Cursor 会话也走同一张表,字段名 `claude_session_id` 要不要泛化成 `session_ref`,留给 02 篇定夺,05 只提出诉求。
-- ~~`workflow_run` 表~~——**02 篇第七轮盘点已取消**(它装的是每次 ▶跑 的开工/结清/成败/耗时,母文档 §6.3 与 02 篇 §2.3 判定这条"自动记账成败与耗时"的铁律在 V4 没有持久载体了,换成更硬的判据:活干没干成看远端 MR 合没合入)。05 因此**不再展示"成败/耗时"这类字段**,受影响两处:①左列"最近一次动静的时间"改读 `claude_conversation.last_opened_at`(这一列本记的是"这个会话上次被打开"的时间,不是"agent 最近一次真实动作"的精确时间戳——运行期间更细的实时状态由 §2.4 的 hook 事件驱动、不落库;`last_opened_at` 只是应用重启后退化可用的近似值,如实标注不是精确替代);②「这一轮跑成没成」不再是本屏要回答、也不再能从任何库表的 `outcome` 字段查到的问题——评审中的活能不能合入,看右栏 MR 卡的检查状态与远端合入结果(§2.3、§3「MR 卡"检查"列」),不查 `workflow_run.outcome`。
-- agent 运行态(运行中/等你输入/空闲)**不落库**——过程数据,重启后本该从"这个 worktree 有没有活着的 PTY"重新推导,`TerminalManager` 已有的内存态够用,不新建表。
+**目录**:界面在 `crates/app-shell/src/screens/session/mod.rs`(三栏布局 + 顶部条,只管布局
+与状态);内嵌终端在 `crates/app-shell/src/adapters/terminal_xterm/`(xterm.js 资产、初始化
+脚本、PTY 字节桥,一份 `README.md` 记借了什么没借什么)。内核侧新增
+`crates/bw-v4/src/app/session.rs`(PTY 生命周期)与 `crates/bw-v4/src/git.rs` 里的四个现算
+查询。`bw_engine::{interactive_cli, pty_backend, terminal_manager}` 原样沿用,一行没改。
 
-**命令(Command)**:
-- 复用:`RunIssue`、`CancelRun`、`TransitionIssue`、`MergeIssuePr`、`DistillSkillFromIssue`、`TerminalInput`、`TerminalResize`、`SelectSession`(均已在 `crates/bw-app/src/command.rs`)。
-- 新增(05 提出,纯 UI 只读查询,不改库):`OpenFileTab { issue_id, path }`(打开右栏文件到中栏只读视图)、`OpenDiffTab { issue_id, path }`(打开单文件 diff)、`ExpandTreeDir { issue_id, dir_path }`(懒加载展开文件树某目录)。要不要走 UI→内核的 `Command` 总线、还是允许桌面壳内部直接处理,取决于 01 篇对总线粒度的约定;05 建议仍走总线,保持"UI 只发 Command、收 Event"统一,不为省事开后门。
-- ▶开工不新开一条按工具区分的命令——`RunIssue` 内部按 `issue.tool` 分发到 `claude_cli`/`cursor_cli`/`open_design` 三个适配模块(分发规则本身由 04 篇定)。
+**库**:只用 `claude_conversation` 一张表,存的是**身份**(`ConversationId` / `--resume` id /
+worktree 路径 / 分支名),`issue_id UNIQUE` 就是「一件活最多一个会话」这条规则本身。进程本
+身在内存的 `TerminalManager` 里,死了就没了,也不该存。`workflow_run` 表在 02 篇第七轮已取
+消,所以本屏**不展示成败与耗时**——一轮跑成没成看远端 MR 合没合入,不查任何 `outcome` 列。
 
-**Event**:PTY 字节流沿用已有的特殊设计——不走 `Event` 总线,走独立的 watch channel(`crates/app-desktop/src/kernel.rs` 的 100ms 轮询,`drain_pty_events`),05 不改这个设计。新增 `Event::AgentStatusChanged { issue_id, state }`(05 提出):`hook_listener` 收到 `SessionStart`/`Stop`/`Notification`/`PreToolUse` 后,由 `poll_hook_events`(`crates/bw-app/src/terminal.rs`)推导出四态之一并发出这个事件,驱动左列状态点与顶部 chip 刷新,不写库。
+**命令**(全部在 `crates/bw-v4/src/command.rs`,不是 `bw-app`):
 
-**`hook_listener.rs` 增量**(05 提出的具体改动;现状 `BW_HOOK_EVENTS` 只有 `["SessionStart", "Stop"]`):
+| 命令 | 干什么 |
+|---|---|
+| `RunIssue { id }` | ▶开工。工作区目录在就起内嵌终端跑真 claude;不在就退回阻塞那条路用自我标注的替身,产出带【mock】字样 |
+| `CancelRun { id }` | ■停止。**只关 PTY,状态原地不动**——停下来既不是失败也不是完成 |
+| `TransitionIssue { id, to }` | 推到评审。Done 那条边由 `bw_core` 的状态机守着,会话屏根本没有「完成」按钮 |
+| `MergeAndSettle { id }` | 通知屏的「合入并完成」,不在本屏(见 07 篇) |
+| `TerminalInput { conversation_id, bytes }` / `TerminalResize { conversation_id, cols, rows }` | 键盘与尺寸 |
 
-```rust
-// 现状(crates/bw-app/src/hook_listener.rs):
-const BW_HOOK_EVENTS: &[&str] = &["SessionStart", "Stop"];
+原文提的 `OpenFileTab`/`OpenDiffTab`/`ExpandTreeDir` 三条**没有做成 `Command`**:它们不改任何
+数据,是纯导航。做成命令会让「命令 = 会改变什么」这条线变模糊。实际走的是桥自己的
+`Req::{SelectSession, SessionTab, ToggleDir, OpenFile}`(`crates/app-shell/src/bridge/mod.rs`),
+只改壳这边的 `UiState`,一律不进库。
 
-// V4 增量:
-const BW_HOOK_EVENTS: &[&str] = &["SessionStart", "Stop", "Notification", "PreToolUse"];
-```
+**PTY 字节流不走 ViewModel、也不走 `Event`**:桥上单开一条 `watch` 通道
+(`Bridge::pty`),内核线程 60ms 一跳 `App::drain_pty_events()` 往里推。理由有两条,都是真
+的会出事:终端一秒能吐几百批字节,每批都重拼一次 ViewModel 会把界面拖垮;而且字节是一次性
+的流,进了 ViewModel 每次重渲染都会被重新写进终端一遍。
 
-`HookEvent` enum 在 `SessionStart`/`Stop` 旁加 `Notification { session_id, cwd }` 与 `PreToolUse { session_id, cwd }`,`match event_name` 补两支。端口沿用 `BW_HOOK_PORT = 51790`,`install_hooks_config` 的 idempotent 合并逻辑(按 URL path 识别 buddy 管理的 hook 行、不清用户自己的其它 hook)不用改。
+**agent 状态:只有两态,而且都是真的。** 原文设想的四态(运行中/等你输入/空闲/已推评审)要
+靠 claude 的 hook 回传 `Notification`/`PreToolUse`,**这一步没做**——`hook_listener` 那套增量
+留在 `docs/LEFTOVERS.md`。今天唯一真实的信号是 `TerminalManager::is_live`:进程在 = 运行中,
+不在 = 空闲。「等你输入」不显示,不猜。这和「没数据就是 Unknown、绝不假装绿」是同一条精神。
 
-**Cursor 适配落地**(05 提出,依据 `docs/v3-prototype/cursor-agent-executor.md`):`crates/bw-engine/src/interactive_cli.rs` 的 `CURSOR` 常量今天是:
+**右栏四类数据全部现算**,函数在 `crates/bw-v4/src/git.rs`(不是原文说的 `bw-engine::workspace`):
 
-```rust
-pub static CURSOR: TuiAgentConfig = TuiAgentConfig {
-    slug: "cursor",
-    detect_cmd: "cursor --version",
-    launch_cmd: "cursor",  // 落地改 "agent"(Cursor Agent CLI,不是编辑器 cursor.exe)
-    prompt_injection_mode: PromptInjectionMode::PositionalArgv,
-    yolo_flag: "",          // 落地补 "--force"
-    resume_flag: "--continue",
-    resume_id_flag: "--resume",
-    supported: false,       // 落地改 true
-};
-```
+| 要什么 | 函数 | 说明 |
+|---|---|---|
+| 文件树 | `git::list_dir(ws, rel)` | 懒加载,点开哪层读哪层;跳过 `.git`/`target`/`node_modules`;目录在前、同类按名字排 |
+| 改动文件 | `git::changed_files(ws)` | `git status --porcelain`,提没提交都算;改名行取箭头右边的新名字 |
+| 单文件 diff | `git::file_diff(ws, rel)` | 暂存 + 未暂存两段拼起来;没跟踪的文件退回全文并标一行,不给人看空白 |
+| 分支状态 | `git::ahead_behind(ws, "main")` | 问不出来返回 `None`,界面显示「—」,**不显示 0**(0 会被读成「和主干一样」) |
 
-首启不走 `--append-system-prompt`(该 CLI 没有对应的正式旗标),改为在这件活的 worktree 里写一份 `AGENTS.md`,CLI 自己会读;首条消息仍走位置参数(标题+描述,与 claude 一致);建立可续接的身份靠 `agent create-chat` 先拿一个 id,再用 `--resume <id>` 接上(伪命令、验证记录见 V3 设计稿原文)。
+**MR 卡**只有号码,没有「检查是否通过」那一列——`gh pr checks` 那个函数今天不存在,原文把它
+列成缺口,B 刀没补,仍是缺口(见 `docs/LEFTOVERS.md`)。
 
-**文件树 / 改动文件 / diff / git 状态的数据源**(05 提出,今天没有对应函数,是这篇的新增缺口清单):
-- 文件树:在 `evidence::list_workspace_files`(已有,今天是一次性扁平列表)上包一层懒加载的目录结构,忽略规则(`.git`/`target`/`node_modules`)硬编码在这个适配函数里。
-- 改动文件列表:新函数 `workspace::status_porcelain(workspace: &Path) -> Vec<FileChange>`(跑 `git status --porcelain=v1`),区别于已有的 `diff_numstat`(比较两个已落库的 commit,不适用于还没提交的进行中状态)。
-- 单文件 diff 正文:新函数 `workspace::diff_file(workspace: &Path, path: &str) -> Result<String, String>`(跑 `git diff -- <path>`,working tree 版本)。
-- git 状态:新函数 `workspace::branch_status(workspace: &Path) -> BranchStatus { branch, ahead, behind, dirty }`(跑 `git status -sb`)。
-- MR 卡「检查」列:今天 `github.rs`/`codehub.rs` 都没有查 CI 检查状态的函数(现有的只有 `open_pr`/`merge_pr`/`issue_state`)——真实缺口,新函数形如 `github::pr_checks(owner_repo, pr_number) -> Vec<CheckRun>`(封 `gh pr checks --json`),codehub 侧对等函数;若 03/04 篇已覆盖,并入那边,不两处各写一份。
-
-**codegraph 留口**(呼应待拍-22):右栏文件树模块预留方法签名 `fn symbols(&self, path: &Path) -> Option<Vec<SymbolRow>>`,首版直接返回 `None`。以后要接,只是在 `adapters/codegraph/` 里加一次 `codegraph node -f <文件> --symbols-only` 子进程调用并接上这个方法,`screens/session/` 一行不改——"一个外部能力一个适配模块"这条建法原则在这里的验证。
+**没做的三件**,如实列在这里而不是留在正文里当描述:Cursor 适配(`CURSOR` 常量仍
+`supported: false`)、内嵌 Open Design 页签、蒸馏按钮(`DistillSkillFromIssue` 在 V4 还没有对
+应命令)。codegraph 留口同样没建。
 
 ## 4 · 边界与失败
 

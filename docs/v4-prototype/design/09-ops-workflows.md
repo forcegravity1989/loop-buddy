@@ -1,6 +1,6 @@
 # 09 · 运作活的 workflow 剧本
 
-> **30 秒导读**:这篇写三张「运作活」(buddy 自己发起的标准动作,不是用户的业务需求)各自的 workflow(技术上讲是一份 SKILL.md 入口 + 支撑文件的技能包,agent 读它决定怎么干活)剧本——触发条件、给 agent 塞什么材料、SKILL.md 长什么样、agent 和人什么时候说话、干出什么、怎么保证只能停在「评审中」、干砸了怎么办、大概多久。三张:①「更新指标 + 制定本周计划」②「资产盘点」(第五轮改名,原叫「资产盘点与代码微重构」;范围 = 仓内全部资产,微重构不再由它动手,只出建议活草稿;老项目历史回填是它的**首次模式**,见 2.2/2.3)③「规范铺底」(本篇只写其中需要 agent 的一步:合并调整)。也管这三份 workflow 在 `standard/` 放哪、版本怎么钉、和已有的 `north-star-discovery`/`metrics-binding` 两份技能怎么合并、系统提示词要不要加一句。给复核设计的用户、下一步写代码的会话、接手运作活这块的同事看。**现在作数吗**:详细设计稿,待用户复核,尚未开工写代码。与母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md))冲突时以母文档为准。**2026-08-20 按用户第七轮盘点(库从 20 张表砍到 4 张)整块重写了 §2.2 定时判据、§3.2 触发命令伪码、§3.4 记账口径**:`cron_task`/`workflow_credit` 等表全部取消,判据与"用了几次"改成查 `issue` 表现算。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本文不新开代号系列,分步骤一律写「第 N 步」。
+> **30 秒导读**:这篇写三张「运作活」(buddy 自己发起的标准动作,不是用户的业务需求)各自的 workflow(技术上讲是一份 SKILL.md 入口 + 支撑文件的技能包,agent 读它决定怎么干活)剧本——触发条件、给 agent 塞什么材料、SKILL.md 长什么样、agent 和人什么时候说话、干出什么、怎么保证只能停在「评审中」、干砸了怎么办、大概多久。三张:①「更新指标 + 制定本周计划」②「资产盘点」(第五轮改名,原叫「资产盘点与代码微重构」;范围 = 仓内全部资产,微重构不再由它动手,只出建议活草稿;老项目历史回填是它的**首次模式**,见 2.2/2.3)③「规范铺底」(本篇只写其中需要 agent 的一步:合并调整)。也管这三份 workflow 在 `standard/` 放哪、版本怎么钉、和已有的 `north-star-discovery`/`metrics-binding` 两份技能怎么合并、系统提示词要不要加一句。给复核设计的用户、下一步写代码的会话、接手运作活这块的同事看。**现在作数吗**:作数。B 刀已按本篇落地了三份 SKILL.md 正本、运作活①的真会话、运作活②的定时自动建与自动开工;§5 是真实跑得出来的读回。没做的部分(②的 agent 侧产出、③的合并调整会话、`mode=first` 历史回填)在 §5 末尾与 `docs/LEFTOVERS.md` 逐条列着。与母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md))冲突时以母文档为准。**2026-08-20 按用户第七轮盘点(库从 20 张表砍到 4 张)整块重写了 §2.2 定时判据、§3.2 触发命令伪码、§3.4 记账口径**:`cron_task`/`workflow_credit` 等表全部取消,判据与"用了几次"改成查 `issue` 表现算。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本文不新开代号系列,分步骤一律写「第 N 步」。
 
 ---
 
@@ -329,28 +329,41 @@ GROUP BY workflow;
 
 ## 5 · 验收与读回
 
-三张活目前没有专用 headless 指挥器(`real_demo` 走业务活主环,不覆盖 `kind='ops'` 支线)。建议给 `real_demo` 加一个可选场景(或另建 `ops_loop_demo`,命名留实现时定,不新开代号),用 `MockInteractiveExecutor` 依次走①→②→③,逐步 SQL 读回。
+> **B 刀落地后整节重写。** 原文说"三张活目前没有专用指挥器,建议给 `real_demo` 加一个可选
+> 场景"。实况:`cargo run -p bw-v4 --example real_demo_v4` 的主线本身就覆盖了①和②,③在步骤 2
+> 就跑掉了。下面是真实跑得出来的读回,不是建议。
 
-| 核验什么 | 命令/SQL | 预期 |
+跑一遍(从空库开始,重跑不产生重复数据):
+
+```bash
+cargo run -p bw-v4 --example real_demo_v4 -- <db> <workspaces-root>
+```
+
+| 核验什么 | 命令 / SQL | 真实结果 |
 |---|---|---|
-| ①判据生效 | 连续调用两次 `StartWeekPlanning`(mock)| 第二次返回 `WeekPlanAlreadyExists` |
-| ①产出文件 | `test -f <workspace>/docs/plan/<本周>.md && echo ok` | `ok` |
-| ①业务活挂 workflow | `sqlite3 <db> "SELECT kind,origin,workflow,week_of FROM issue WHERE project_id='<pid>' AND kind='ops' AND workflow='更新指标与周计划';"` | 一行,`origin='human'` |
-| ②定时自动建+自动开工(`mode=weekly`)| 手动调 `tick_scheduler`(时间戳设到 `ops2_schedule` 之后)| 新建 issue id;`sqlite3 <db> "SELECT status FROM issue WHERE id='<id>';"` 不是 `Todo`;`workflow='asset-audit'` |
-| ②盘点报告落地(`mode=weekly`)| `grep "运作活②盘点尾段" <workspace>/docs/plan/<本周>.md` | 命中 |
-| ②微重构只出建议活、不直接改代码 | 跑完一次 `mode=weekly`,`git diff --stat`(该次会话分支)| 除 `docs/plan/` 尾段外无业务代码改动;MR 说明里能看到建议活草稿列表 |
-| ②首次模式(历史回填)与③挂在同一个 workflow | `sqlite3 <db> "SELECT workflow FROM issue WHERE kind='ops' AND origin='auto' ORDER BY created_at;"` | 出现历史回填那一行时 `workflow='asset-audit'`(显示名「资产盘点」),不是规范铺底那一个包,也不是别的名字 |
-| 三张运作活最远评审中 | `sqlite3 <db> "SELECT workflow,status,settled_at FROM issue WHERE project_id='<pid>' AND kind='ops';"` | 每行 `status` 落在 `InReview`(或更早的失败态),`settled_at IS NULL` |
-| Done 只能人点 | 跑完①②③,不手动调 `TransitionIssue` | `sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE kind='ops' AND settled_at IS NOT NULL;"` 为 `0`,直到显式调用才变化 |
-| ②`mode=first` 回填不参与"用了几次"现算 | `sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE project_id='<pid>' AND kind='business' AND workflow!='' AND origin='backfill';"` | 应为 `0`——回填出的历史 issue 行 `workflow` 列是空字符串,§3.4 现算查询的 `WHERE workflow!=''` 天然把它们排除在外 |
-| 深链截图 | `BW_OPEN=<项目名> BW_PANEL=session BW_SEL=issue:<id>` | stderr `[BW_OPEN]` 日志 + 截图存进 `docs/v4-prototype/` |
+| 三张运作活各自的身份 | `sqlite3 <db> "SELECT number,kind,origin,workflow,week_of,status FROM issue WHERE kind='ops';"` | `1\|ops\|auto\|规范铺底\|\|backlog` · `2\|ops\|human\|更新指标与周计划\|2026-W34\|in_review` · `6\|ops\|auto\|资产盘点\|2026-W34\|in_review` |
+| ①判据生效(不建第二张) | 指挥器跑第二遍 | 日志:「步骤 3 · 本周文件已存在,跳过(重跑不产生重复数据)」 |
+| ①产出文件 | `test -f <ws>/docs/plan/2026-W34.md && echo ok` | `ok`,里面有「本周指标读数」段 |
+| ②定时真的到点建活并开工 | 指挥器步骤 8 | 日志:「本周的『资产盘点』在了 —— #6 来源 定时自动建 状态『评审中』」 |
+| **自动建的活绝不被自动推进到完成** | `sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE kind='ops' AND settled_at IS NOT NULL;"` | `0` |
+| 三份剧本真复制进了项目仓 | `ls <ws>/.claude/skills/{week-planning,asset-audit,merge-adjust}/SKILL.md` | 三份都在;`week-planning/skills/metrics-refresh/SKILL.md` 也在 |
+| 剧本记了指纹(规范对账认得出) | `grep -c '^\[\[file\]\]' <ws>/.bw/managed.toml` | `18` |
+| 「用过几次」现算(没有台账表) | `sqlite3 <db> "SELECT workflow, COUNT(*) FROM issue WHERE kind='business' AND workflow!='' GROUP BY workflow;"` | 按 workflow 名分组的实数 |
+| 会话屏能打开不炸 | `BW_DB=<db> BW_OPEN=<项目名> BW_PANEL=session ./target/debug/bw-v4-dev` | stderr 见 `[BW_OPEN] … panel=Session`,无 panic |
 
----
+**关于「到点」怎么验**:判据是本机时间的「星期几 + 几点几分」有没有越过 `.bw/issue-policy.toml`
+里 `[cadence] ops2_schedule` 那一刻(默认 `"fri 20:00"`)。指挥器**不改系统时间**——它把演示
+项目自己的这一行改成 `"mon 00:00"`,让那一刻真的已经过去,并在日志里明说改了。正式项目的默认
+值不变。
+
+**②的这两条还没法读回**,因为 `mode=weekly` 的盘点报告与建议活草稿要靠真 agent 会话产出,B 刀
+跑的是自我标注的替身:盘点报告落地(`grep` 报告尾段)、微重构只出建议不改代码
+(`git diff --stat`)。`mode=first` 的历史回填整条是 C 刀的事。
 
 ## 6 · 开放问题(≤5)
 
 1. ~~母文档与 03 篇在"群历史算不算回填原料"上不一致~~ **已定(第五轮,00-handshake 第 4 条「回填不主动喂群历史」)**:母文档 §2.6/第 0 站现已改成三种原料(git 本地历史、仓内文档、远端 issue/MR)并明确排除群历史,与 03 篇 §4、本篇 2.2/2.3 口径一致,不用再改。
 2. ~~02 篇 `workflow_credit` 表与 04 篇 `skill_package`/`skill` 战绩列口径不一致~~ **已定,且第七轮盘点后进一步简化**:原「以 02 篇 `workflow_credit` 台账表为事实源」的设计期统一结论已被取代——02 篇第七轮盘点后连 `workflow_credit` 表本身也取消,"用了几次"改成现算查询、"干没干成"看远端 MR,不再有任何持久战绩表,见 §3.4。04 篇仍是"以 `workflow_credit` 为事实源"的旧写法,留给它自己下一轮同步,不在本篇处理范围。
-3. **`north-star-discovery`/`metrics-binding` 旧文件的迁移时机**——同一次改动删除还是先并存一个版本周期,按「不为向后兼容留旧路径」倾向前者,落地顺序留实现时的 commit 拆分决定。
+3. ~~`north-star-discovery`/`metrics-binding` 旧文件的迁移时机~~ **B 刀落地后如实更新**:内容已经合并进 `standard/06-defaults/ops/week-planning/skills/metrics-refresh/SKILL.md`,但**旧的两份文件还在** `docs/skills/` 里、也仍然被 `bw_core::bw_library` 编进二进制、仍然随铺底复制进项目仓。也就是说现在两份并存,违反「不为向后兼容留旧路径」。删除动作记在 `docs/LEFTOVERS.md`,没做就是没做,不在这里写成"已迁移"。
 4. **系统提示词是否真要加 2.4 建议的那一句**——具体措辞是否合适、是否采纳,需用户确认。
 5. **运作活③纯模板路径(无 agent)时"评审中"怎么被探测到**——§3.2 提到这种情况没有 hook `Stop` 事件,只能靠既有 5 分钟兜底轮询。这条路径此前只服务"project-init"特殊场景,V4 里第一次成为常规路径,轮询节律要不要为此加速,留待实现时评估。
