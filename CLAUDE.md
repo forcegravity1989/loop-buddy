@@ -49,18 +49,27 @@ sqlite3 <db> "SELECT …"           # 数字一律 SQL 读回(「读回」=把�
 cargo run -p bw-engine --example pty_smoke [-- --teardown|--abort]   # 内嵌终端 PTY 后端在本机能起子进程/读回/收尾/被中止后不留孤儿(不碰 claude、不碰网关)
 ```
 
-**门禁(每个 commit 前全过,与 CI 完全一致;「门禁」=提交前必须全部通过的检查组)**:
+**门禁(每个 commit 前全过;「门禁」=提交前必须全部通过的检查组)**:
 
 ```bash
 cargo fmt --all --check
-cargo clippy --workspace --exclude app-desktop -- -D warnings
+cargo clippy --workspace --exclude app-desktop -- -D warnings   # 本机连 app-shell 一起查
 cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features
 cargo check -p ui --target wasm32-unknown-unknown
 ./scripts/guard-kernel-ui-free.sh
-cargo check -p app-desktop        # 桌面壳编译过
+./scripts/guard-no-cross-screen-import.sh   # V4 新壳:屏与屏不互相引用
+./scripts/guard-screen-hooks.sh             # V4 新壳:用 hook 的函数必须是组件
+./scripts/guard-file-lines.sh               # 单文件 1500 行硬上限
+cargo check -p app-desktop        # 旧壳编译过
+cargo check -p app-shell          # V4 新壳编译过
 cargo test --workspace --exclude app-desktop   # CI 也跑:现存内联测试必须过(纪律见下「核心纪律」第 6 条)
 # 行为正确性靠 E2E(深链启动 + sqlite 读回 + computer-use)+ /code-review;单元测试不是交付物
 ```
+
+**本机比 CI 多查两样,不是笔误**:两个壳(`app-desktop` 与 `app-shell`)都吃 Dioxus/wry 那棵树,在
+Linux 上要系统 WebKit/GTK,而 CI 那台 ubuntu 上没有 `glib-2.0`,构建脚本在 clippy 看到任何代码之前就
+链接失败。所以 CI 把两个壳都排除掉,**壳的 clippy 只在本机跑**(macOS 不需要 pkg-config)。三个结构
+守卫是纯 grep、不编译,所以 CI 里照跑 —— 新壳的布局规矩每次 push 都拦。
 
 **headless 主环指挥器**(「指挥器」=不开界面、直接驱动内核走完完整生命周期的脚本;2026-08-18 起走的就是产品主环:建活 → 指派 → ▶跑(mock 交互执行器,项目无真实工作区)→ 代人点完成 → 蒸馏成技能 → 交棒;不碰 claude、不碰网关,重复跑不产生重复数据):
 

@@ -23,10 +23,18 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
-      # app-desktop needs system WebKit/GTK to build; the kernel job stays light
-      # and never compiles it. Desktop build/packaging is a separate matrix (Tier B).
+      # Both shells (app-desktop and the V4 app-shell) pull the Dioxus/wry tree,
+      # which needs system WebKit/GTK — glib-2.0 is not on the plain ubuntu
+      # runner, so linking dies in the build script before clippy sees any code.
+      # This job stays light and never compiles either shell; shell build and
+      # packaging is a separate matrix (Tier B).
+      #
+      # What that costs, stated plainly: neither shell's clippy runs here. They
+      # are gated locally (macOS builds them without pkg-config), and the three
+      # structural guards below — which are pure text checks and cost nothing —
+      # run in CI so the new shell's layout rules are enforced on every push.
       - name: Clippy (default members)
-        run: cargo clippy --workspace --exclude app-desktop -- -D warnings
+        run: cargo clippy --workspace --exclude app-desktop --exclude app-shell -- -D warnings
 
       - name: Test (kernel + selectors + compile-fail doctests)
         run: cargo test
@@ -38,3 +46,11 @@ jobs:
 
       - name: Kernel stays UI-free
         run: ./scripts/guard-kernel-ui-free.sh
+
+      # V4 shell layout rules. Pure grep — no compilation, so they run here even
+      # though app-shell itself is not built on this runner.
+      - name: V4 shell stays laid out the way it says it is
+        run: |
+          ./scripts/guard-no-cross-screen-import.sh
+          ./scripts/guard-screen-hooks.sh
+          ./scripts/guard-file-lines.sh
