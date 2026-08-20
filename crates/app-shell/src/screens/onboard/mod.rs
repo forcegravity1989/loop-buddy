@@ -19,6 +19,7 @@
 use crate::bridge::{Bridge, Req};
 use crate::chrome::light_dot;
 use crate::vm::{RepoProbe, RepoRowVm, ToolProbeVm, Vm};
+use bw_v4::app::{ProgressLine, StepState};
 use bw_v4::command::{Command, ProjectIntent, RemoteRef};
 use bw_v4::Signal as HealthSignal;
 use dioxus::prelude::*;
@@ -44,8 +45,34 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
     let mut remote = use_signal(String::new);
     let mut host = use_signal(String::new);
 
+    // ── 「完成接入」按下之后,一步一句地把后台在干什么摆出来 ──────────
+    // 内核那条队列此刻正卡在 clone 上,ViewModel 一动不动,所以这些行是从
+    // 旁边那条 broadcast 直接来的(和内嵌终端同一个路子)。
+    let mut log = use_signal(Vec::<ProgressLine>::new);
+    // 按下那一刻的回执序号。命令做完(不管成没成)序号会变 —— 用它判断
+    // 「还在做吗」,不用再造一套状态。做成了这屏会被自动关掉,看不到。
+    let mut submitted_at = use_signal(|| None::<u64>);
+    let busy = *submitted_at.read() == Some(vm.note_seq);
+
+    let prog = bridge.progress.clone();
+    use_future(move || {
+        let mut rx = prog.subscribe();
+        async move {
+            while let Ok(line) = rx.recv().await {
+                // 按步号原地覆盖:「正在 clone…」被「clone 好了」换掉,
+                // 而不是堆成两行。
+                let mut rows = log.write();
+                match rows.iter().position(|r: &ProgressLine| r.step == line.step) {
+                    Some(i) => rows[i] = line,
+                    None => rows.push(line),
+                }
+            }
+        }
+    });
+
     let b = bridge.clone();
     let b_next = bridge.clone();
+    let vm_seq = vm.note_seq;
     let vm_probed = vm.repos.picked.clone();
     let root = vm.settings.workspaces_root.clone();
     // 从远端仓读回来的名片。**人没动过的格子才用它** —— 见 `shown` / `pick`。
@@ -58,6 +85,8 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
     );
 
     let submit = move |_| {
+        log.write().clear();
+        submitted_at.set(Some(vm_seq));
         // 人填的优先,没填就用从远端仓回显的那份。
         let eff_name = pick(&name.read(), &pf_name);
         let s = if slug.read().trim().is_empty() {
@@ -308,13 +337,43 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                         }
                     }
 
+                    if !log.read().is_empty() {
+                        div { class: "ob-log",
+                            for line in log.read().iter() {
+                                div {
+                                    key: "{line.step}",
+                                    class: "ob-log-row",
+                                    span {
+                                        class: match line.state {
+                                            StepState::Doing => "ob-log-mark spinning",
+                                            StepState::Ok => "ob-log-mark ok",
+                                            StepState::Fail => "ob-log-mark fail",
+                                        },
+                                        match line.state {
+                                            StepState::Doing => "⟳",
+                                            StepState::Ok => "✓",
+                                            StepState::Fail => "✕",
+                                        }
+                                    }
+                                    span { "{line.text}" }
+                                }
+                            }
+                        }
+                    }
+
                     div { class: "ob-actions",
                         button {
                             class: "btn btn-ghost",
+                            disabled: busy,
                             onclick: move |_| step.set(1),
                             "← 上一步"
                         }
-                        button { class: "btn btn-primary", onclick: submit, "完成接入" }
+                        button {
+                            class: "btn btn-primary",
+                            disabled: busy,
+                            onclick: submit,
+                            if busy { "接入中…" } else { "完成接入" }
+                        }
                     }
                 }
 

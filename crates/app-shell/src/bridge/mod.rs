@@ -143,6 +143,10 @@ pub struct Bridge {
     /// 段,而且断口两侧的字节被拼起来,跨批的汉字直接变乱码。broadcast 留一整
     /// 个队列,真丢的时候会明说丢了多少(`Lagged`),不装作没发生。
     pub pty: broadcast::Sender<Vec<(bw_v4::model::ConversationId, Vec<u8>)>>,
+    /// 长命令的「一步一句」回执(接入项目就是靠它才不像死了)。**和 PTY 同理
+    /// 走 broadcast、不走 ViewModel**:命令还没做完,ViewModel 根本没重拼的机会
+    /// —— 内核那条队列此刻正卡在 `dispatch` 里,进度得从旁边这条道出来。
+    pub progress: broadcast::Sender<bw_v4::app::ProgressLine>,
 }
 
 impl PartialEq for Bridge {
@@ -356,8 +360,11 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
     // 1024 批 ≈ 一分钟的密集输出。真的堆到这个数还没人取,说明界面那头已经
     // 卡住了,丢批是次要问题。
     let (pty_tx, _) = broadcast::channel(1024);
+    // 一条长命令十来行顶天了,64 够用;没人订的时候 send 直接丢,不阻塞。
+    let (prog_tx, _) = broadcast::channel(64);
 
     let pty_tx_handle = pty_tx.clone();
+    let prog_tx_handle = prog_tx.clone();
     // 内核往自己这条队列里回发用的口子(知识库那两个页签算完之后发回来)。
     let tx_back = tx.clone();
 
@@ -397,7 +404,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     root.clone(),
                     Arc::new(bw_engine::InteractiveCliExecutor::new()),
                 )
-                .with_pty();
+                .with_pty()
+                .with_progress(prog_tx.clone());
 
                 let mut ui = vm_build::UiState {
                     open: None,
@@ -586,6 +594,24 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                     }
                                     if confirming {
                                         ui.pending_drafts = None;
+                                    }
+                                    // 接完一个项目就把它打开 —— 人点「完成接入」
+                                    // 要的是进这个项目,不是停在接入屏上自己再点
+                                    // 一遍项目墙。
+                                    if let Some(bw_v4::command::Event::ProjectCreated {
+                                        id,
+                                        ..
+                                    }) = events.first()
+                                    {
+                                        ui.open = Some(*id);
+                                        ui.open_doc = None;
+                                        ui.viewing_week = bw_v4::isoweek::current_week();
+                                        ui.view_all = false;
+                                        ui.kb_tab = crate::vm::KbTab::default();
+                                        ui.kb_codegraph = None;
+                                        ui.kb_assets = None;
+                                        ui.repo_stats = None;
+                                        ui.repos = crate::vm::RepoPickerVm::default();
                                     }
                                     // 改了工作区根目录:设置屏那一行要立刻显示
                                     // 新值,不能等下次重启。
@@ -805,5 +831,6 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
         tx,
         vm: vm_rx,
         pty: pty_tx_handle,
+        progress: prog_tx_handle,
     }
 }

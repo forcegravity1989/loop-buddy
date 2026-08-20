@@ -24,6 +24,7 @@ mod health;
 mod issue;
 mod ops;
 mod plan;
+mod progress;
 mod project;
 mod session;
 mod tools;
@@ -31,6 +32,7 @@ mod worktree;
 
 pub use health::collect_health_inputs;
 pub use ops::{skill_slug, OPS1_WORKFLOW, OPS2_WORKFLOW, OPS3_WORKFLOW};
+pub use progress::{ProgressLine, StepState};
 
 use crate::command::{Command, Event};
 use crate::model::ProjectId;
@@ -78,6 +80,9 @@ pub struct App {
     pub(crate) terminal: TerminalManager,
     /// 桌面壳开、headless 不开。见 [`App::with_pty`]。
     pub(crate) pty_enabled: bool,
+    /// 长命令边做边报的口子。桌面壳接上,headless 不接。见
+    /// [`progress`](crate::app::progress) —— 只为让人看得见,不承担账目。
+    pub(crate) progress: Option<tokio::sync::broadcast::Sender<ProgressLine>>,
 }
 
 impl App {
@@ -92,6 +97,20 @@ impl App {
             executor,
             terminal: TerminalManager::new(),
             pty_enabled: false,
+            progress: None,
+        }
+    }
+
+    /// 把「一步一句」的回执接出去。不接的话长命令照跑,只是没人看得见中间过程。
+    pub fn with_progress(mut self, tx: tokio::sync::broadcast::Sender<ProgressLine>) -> Self {
+        self.progress = Some(tx);
+        self
+    }
+
+    /// 报一步。**没人订就丢掉** —— 报不出去绝不影响命令本身。
+    pub(crate) fn step(&self, line: ProgressLine) {
+        if let Some(tx) = &self.progress {
+            let _ = tx.send(line);
         }
     }
 
@@ -111,11 +130,18 @@ impl App {
             .project(id)
             .await?
             .ok_or_else(|| AppError::NoSuchProject(id.uuid().to_string()))?;
-        Ok(if p.workspace_path.is_empty() {
-            self.workspaces_root.join(&p.slug)
+        Ok(self.workspace_at(&p.slug, &p.workspace_path))
+    }
+
+    /// 仓该落在哪:项目行里配了路径就用它,没配就是 `<工作区根目录>/<slug>`。
+    /// **接入的时候项目行还不存在**(要先把仓取下来才建行),所以这条规矩单
+    /// 独提出来一份,两处共用 —— 两边各写一遍就会走散。
+    pub(crate) fn workspace_at(&self, slug: &str, workspace_path: &str) -> PathBuf {
+        if workspace_path.trim().is_empty() {
+            self.workspaces_root.join(slug)
         } else {
-            PathBuf::from(&p.workspace_path)
-        })
+            PathBuf::from(workspace_path.trim())
+        }
     }
 
     /// 唯一的入口。

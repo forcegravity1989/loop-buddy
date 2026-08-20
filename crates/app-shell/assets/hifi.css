@@ -520,3 +520,14 @@ select.select-multi{padding:3px;font-size:11.5px;border:1px solid var(--border-d
 .repo-refresh[disabled]{cursor:default;color:var(--ink-4);background:transparent;}
 .repo-refresh.spinning{animation:repo-spin .9s linear infinite;}
 @keyframes repo-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+
+/* 接入屏「完成接入」按下之后的一步一句回执。人点完那一下总得看见事情在动,
+   否则会以为没点上、然后猛点 —— 试点第一天用户提的。 */
+.ob-log{margin:14px 0 0;padding:10px 12px;background:var(--card-alt);
+  border:1px solid var(--border);border-radius:8px;font-size:12.5px;color:var(--ink-2);}
+.ob-log-row{display:flex;align-items:flex-start;gap:8px;padding:3px 0;line-height:1.5;}
+.ob-log-mark{flex:none;width:14px;text-align:center;line-height:1.5;}
+.ob-log-mark.ok{color:var(--green);}
+.ob-log-mark.fail{color:var(--red);}
+.ob-log-mark.spinning{color:var(--clay);display:inline-block;
+  animation:repo-spin .9s linear infinite;}
