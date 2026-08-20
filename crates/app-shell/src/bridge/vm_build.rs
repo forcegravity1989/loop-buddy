@@ -527,15 +527,12 @@ async fn build_project(
     // 横幅判据:文件在不在(不看列表),以及本周运作活①走到哪了。已完成的
     // 不算「在途」——文件若还是没有,人应该能再点一次「开始本周」。
     let week_file_exists = week_plan_file::exists(&ws, &current_week);
+    // 按**标题**找那张活,和内核的幂等键一致 —— 按 `week_of` 找的话,卡片被
+    // 拖回待办池之后横幅会重新给出「开始本周」,而点下去内核只会平静挡住。
+    let ops1_title = bw_v4::app::ops1_title(&current_week);
     let ops1_status = issues
         .iter()
-        .filter(|i| {
-            i.kind == bw_v4::model::IssueKind::Ops
-                && i.workflow == bw_v4::app::OPS1_WORKFLOW
-                && i.week_of == current_week
-                && i.status != IssueStatus::Done
-        })
-        .max_by_key(|i| i.number)
+        .find(|i| i.title == ops1_title && i.status != IssueStatus::Done)
         .map(|i| i.status.label().to_string());
     Some(ProjectVm {
         id,

@@ -27,24 +27,20 @@ impl App {
         // 真跑路径下文件要等 MR 合入才落地,上面那道锁这期间是开着的 —— 所以
         // 还得按活再锁一道:本周的运作活①只要还没走到「完成」,就是还在路上,
         // 平静挡住,不重复建、也不去动那场可能正开着的会话。
-        if let Some(open) = self
-            .store
-            .issues_in_week(project_id, &week)
-            .await?
-            .into_iter()
-            .filter(|i| {
-                i.kind == IssueKind::Ops
-                    && i.workflow == super::OPS1_WORKFLOW
-                    && i.status != IssueStatus::Done
-            })
-            .max_by_key(|i| i.number)
-        {
-            return Ok(vec![Event::WeekPlanInProgress {
-                project_id,
-                week,
-                issue_id: open.id,
-                status: open.status.label().to_string(),
-            }]);
+        //
+        // **按标题查,不按 `week_of` 查**:按周查的话,人把这张卡拖回待办池就
+        // 查不到了,而下面建活按标题去重又拿回同一张活,等于对一张评审中的活
+        // 重新开工(见 [`super::ops::ops1_title`])。
+        let title = super::ops1_title(&week);
+        if let Some(open) = self.store.issue_by_title(project_id, &title).await? {
+            if open.status != IssueStatus::Done {
+                return Ok(vec![Event::WeekPlanInProgress {
+                    project_id,
+                    week,
+                    issue_id: open.id,
+                    status: open.status.label().to_string(),
+                }]);
+            }
         }
 
         // 真跑与替身是两条路,文件的产出方不同,别混:
@@ -97,7 +93,7 @@ impl App {
         let (issue_id, _, mut events) = self
             .create_ops_issue(
                 project_id,
-                format!("更新指标 + 制定本周计划 {week}"),
+                title,
                 "复盘上周、补齐 .bw/metrics.toml、和人交流出本周目标与业务活草稿。\n\n草稿没经人确认之前不许建活、不许落文件。"
                     .into(),
                 super::OPS1_WORKFLOW,

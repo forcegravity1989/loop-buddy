@@ -29,6 +29,15 @@ pub const OPS3_WORKFLOW: &str = "规范铺底";
 /// 剧本名。开工时按这个 slug 在 **buddy 自己的技能目录**里找到那份
 /// `SKILL.md`,把**名字 + 一句话 + 路径**给 agent(正文它自己按需读,见
 /// [`crate::standard::skills`])。
+/// 运作活①这一周那张活的标题。**它同时是建活的幂等键和「本周开没开过工」
+/// 的判据** —— 两者必须是同一个东西:按 `week_of` 查的话,人把这张卡从本周拖
+/// 回待办池,判据就落空了,而建活按标题去重又拿回同一张活,于是「开始本周」
+/// 会对一张已经在评审中的活重新开工,弹一句「不是能开工的状态」。定时那条路
+/// 早踩过同一个坑(见 [`App::tick_scheduler`]),这里不重踩。
+pub fn ops1_title(week: &str) -> String {
+    format!("更新指标 + 制定本周计划 {week}")
+}
+
 pub fn skill_slug(workflow: &str) -> Option<&'static str> {
     match workflow {
         OPS1_WORKFLOW => Some("week-planning"),

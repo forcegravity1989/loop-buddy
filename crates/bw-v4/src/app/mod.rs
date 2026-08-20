@@ -32,7 +32,7 @@ mod worktree;
 
 pub use bootstrap::{agent_system_prompt, skill_pointer, SkillPointer};
 pub use health::collect_health_inputs;
-pub use ops::{skill_slug, OPS1_WORKFLOW, OPS2_WORKFLOW, OPS3_WORKFLOW};
+pub use ops::{ops1_title, skill_slug, OPS1_WORKFLOW, OPS2_WORKFLOW, OPS3_WORKFLOW};
 pub use progress::{ProgressLine, StepState};
 
 use crate::command::{Command, Event};
