@@ -49,7 +49,6 @@ pub const INK: &str = "#23211C";
 pub const INK_2: &str = "#57534A";
 pub const INK_3: &str = "#8C867A";
 pub const INK_4: &str = "#A19B8D";
-pub const ALERT_DEEP: &str = "#A33D29";
 pub const SHADOW: &str = "0 8px 26px rgba(35,33,28,.08)";
 
 pub fn dot(color: &str, size: u32) -> String {

@@ -93,7 +93,7 @@ pub(super) async fn collect_repo_stats(ws: &Path) -> RepoStatsVm {
         ),
         (
             e.docs_files.to_string(),
-            "docs/ 下的文件".into(),
+            "docs/ 下的 .md".into(),
             "git".into(),
         ),
     ];

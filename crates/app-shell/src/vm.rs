@@ -424,6 +424,9 @@ impl KbTab {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KbVm {
     pub tab: KbTab,
+    /// 规范管账(`.bw/managed.toml`)里登记了几份核心件。**不做对账** ——
+    /// 对账是配置屏那颗按钮的事,这里只报个数。
+    pub managed_count: usize,
     /// 知识页签:按规范八大类分组的文件清单。**只列存在的文件**,不列位置。
     pub groups: Vec<KbGroupVm>,
     /// 打开的那份文档:路径 + 原文。懒加载 —— 点了才现读。
