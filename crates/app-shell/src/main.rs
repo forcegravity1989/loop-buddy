@@ -176,7 +176,10 @@ fn Root() -> Element {
                 for w in v.warnings.iter() {
                     div { key: "{w}", class: "warnbar", "{w}" }
                 }
-                div { class: "content",
+                // 会话屏的三栏由 .content 自己摆 —— 终端挂在这一层,靠这套
+                // 网格落进中栏下半格(理由见 screens/session 的头注)。
+                div {
+                    class: if in_project && cur == Panel::Session { "content session-mode" } else { "content" },
                     {body(tv, cur, &v, &project, &bridge, top_view)}
                 }
             }

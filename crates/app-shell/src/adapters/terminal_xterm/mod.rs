@@ -8,7 +8,6 @@
 //! 借了什么、没借什么见 `README.md`。
 
 use crate::bridge::Bridge;
-use crate::theme;
 use bw_v4::command::Command;
 use bw_v4::model::ConversationId;
 use dioxus::prelude::*;
@@ -341,20 +340,19 @@ pub fn TerminalWidget(conversation_id: ConversationId, focused: bool, bridge: Br
         }
     });
 
-    let border = theme::BORDER;
-    // Never use display:none for unfocused xterms. Cross-stage remount used
-    // to open FitAddon at 0×0; later refocus returned ok but the canvas stayed
-    // blank (2026-08-11 log: fitted path Ok(true), user still saw no CLI).
-    // Off-screen fixed box keeps real width/height so open/fit stay healthy;
-    // focus flips CSS + remount (key f/h) onto a flex-growing host. Byte pumps
-    // stay mounted for all live ids.
+    // 不在焦点上的终端**绝不能 display:none**:跨屏重挂时 FitAddon 会以 0×0
+    // 打开,之后再 refocus 返回 ok 但画布一片空白(2026-08-11 的日志里
+    // fitted 路径 Ok(true),人还是看不见 CLI)。挪到屏外的固定盒子保住真实
+    // 宽高,open/fit 才是健康的;拿到焦点时换类名 + 重挂(key 里带 f/h)到
+    // 一个会长大的宿主上。收字节那条循环对所有活着的会话一直挂着。
+    //
+    // 焦点态用的两个类名(`sess-col sess-midbody`)是**会话屏中栏下半格**在
+    // `.content.session-mode` 那套网格里的位置。终端挂在 `.content` 上而不是
+    // 挂在会话屏里 —— 挂在屏里会被切面板连屏卸载,字节就真丢了。
     let wrap = if focused {
-        format!(
-            "margin-top:14px;border:1px solid {border};border-radius:8px;overflow:hidden;\
-             flex:1;min-height:0;display:flex;flex-direction:column;"
-        )
+        "sess-col sess-midbody"
     } else {
-        "position:fixed;left:-10000px;top:0;width:800px;height:360px;overflow:hidden;opacity:0;pointer-events:none;".into()
+        "term-offscreen"
     };
 
     // Dioxus 0.7: subscribe focused with use_reactive (bare bool prop is not
@@ -376,15 +374,17 @@ pub fn TerminalWidget(conversation_id: ConversationId, focused: bool, bridge: Br
 
     rsx! {
         div {
-            style: "{wrap}",
-            div {
-                style: "flex:none;background:#1e1e2e;color:#cdd6f4;font-family:JetBrains Mono,Consolas,monospace;font-size:11px;padding:4px 10px;display:flex;align-items:center;gap:6px;",
-                span { style: "opacity:0.7;", "● 内嵌终端" }
-                span { style: "opacity:0.4;margin-left:auto;", "claude 交互式会话" }
+            class: "{wrap} terminal",
+            style: "padding:0;",
+            div { class: "term-titlebar",
+                span { "● 内嵌终端" }
+                span { class: "spacer" }
+                span { style: "opacity:.5;", "claude 交互式会话" }
             }
             div {
                 id: "{div_id}",
-                style: "flex:1;min-height:0;height:100%;background:#1e1e2e;",
+                class: "xterm-host",
+                style: "background:#1c1b19;",
             }
         }
     }

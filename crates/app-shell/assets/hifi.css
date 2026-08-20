@@ -452,6 +452,19 @@ select.select-multi{padding:3px;font-size:11.5px;border:1px solid var(--border-d
 .kanban-col.drop-ok{outline:2px dashed var(--clay);outline-offset:-2px;background:#FBEEE9;}
 .kanban-col.drop-no{outline:2px dashed var(--ink-4);outline-offset:-2px;opacity:.72;}
 
+
+/* 会话屏的三栏,在真壳里必须由 .content 自己摆 —— 原型可以把终端画在中栏
+   里面,真壳不行:终端是活的 PTY,挂进会话屏就会被「切到别的面板」连屏卸载,
+   那期间 agent 说的话是真丢的。所以终端始终挂在 .content 上,靠这套网格落到
+   中栏下半格。中栏因此被拆成上下两格(动作条+页签 / 正文),行间距设 0 再把
+   圆角接起来,看上去还是一整张卡。 */
+.content.session-mode{display:grid;grid-template-columns:216px minmax(0,1fr) 264px;
+  grid-template-rows:auto minmax(0,1fr);gap:0 14px;overflow:hidden;padding:20px 24px 24px;}
+.sess-left{grid-column:1;grid-row:1 / span 2;}
+.sess-midhead{grid-column:2;grid-row:1;border-radius:10px 10px 0 0;border-bottom:none;}
+.sess-midbody{grid-column:2;grid-row:2;min-height:0;border-radius:0 0 10px 10px;border-top:none;}
+.sess-right{grid-column:3;grid-row:1 / span 2;}
+
 /* 仓文件读不动这类实话,原型没有对应位置(原型的文件都是内嵌的)。 */
 .warnbar{padding:8px 18px;background:#F6E7E2;border-bottom:1px solid var(--border);
   font-size:12px;color:var(--alert-deep);}
