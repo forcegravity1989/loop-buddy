@@ -170,6 +170,52 @@ pub async fn push_branch(workspace: &Path, branch: &str) -> Result<(), GitError>
     Ok(())
 }
 
+/// 把这个检出快进到远端最新(`git fetch origin <当前分支>` +
+/// `git merge --ff-only FETCH_HEAD`),返回 HEAD 有没有真的往前挪。
+///
+/// **只快进,绝不制造 merge 提交**。这里改的是人自己的检出,岔开了就该停下来
+/// 报错让人自己处理,不能替他合。工作区脏、没挂远端、没网、本机主干和远端岔
+/// 开——每一种都如实报错,由调用方原话端到界面上,不吞。
+pub async fn pull_ff(workspace: &Path) -> Result<bool, GitError> {
+    let before = head_sha(workspace).await?;
+    let branch = current_branch(workspace).await?;
+    // `git fetch origin <branch>` 一定会写 `FETCH_HEAD`;`origin/<branch>` 这个
+    // 远端跟踪引用要不要跟着更新,取决于这个仓的 refspec 配置。所以下一步认
+    // `FETCH_HEAD`,不认 `origin/<branch>` —— 后者在个别配置下会是个旧值。
+    git(workspace, &["fetch", "origin", &branch]).await?;
+    git(workspace, &["merge", "--ff-only", "FETCH_HEAD"]).await?;
+    let after = head_sha(workspace).await?;
+    Ok(before != after)
+}
+
+/// 本机有没有这条分支。
+pub async fn branch_exists(workspace: &Path, branch: &str) -> bool {
+    git(
+        workspace,
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+    )
+    .await
+    .is_ok()
+}
+
+/// 收掉一条**已经合过**的本机分支。
+///
+/// 先试 `git branch -d`,让 git 自己确认它真的合过。远端按 squash 合的时候这
+/// 一步会被拒:squash 把一串提交压成主干上的一条新提交,原来那几条并不是主干
+/// 的祖先,git 看不出「合过」——而 buddy 这两个远端(GitHub / codehub)合 MR
+/// 走的都是 squash。所以这里会退到 `-D`。
+///
+/// **只准在读回确认远端真的合了之后调用**:那时候改动已经在远端主干上、分支
+/// 本身也推上去过,`-D` 删掉的是本机的一个指针,不是劳动成果。没合成的分支
+/// 绝不能拿它删。
+pub async fn delete_merged_branch(workspace: &Path, branch: &str) -> Result<(), GitError> {
+    if git(workspace, &["branch", "-d", branch]).await.is_ok() {
+        return Ok(());
+    }
+    git(workspace, &["branch", "-D", branch]).await?;
+    Ok(())
+}
+
 /// 收掉一棵 worktree(`git worktree remove` + `prune`)。
 ///
 /// **不带 `--force`**:带上它会连未提交的改动一起删。调用方

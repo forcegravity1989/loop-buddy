@@ -15,6 +15,9 @@ pub struct PendingMove {
     pub title: String,
     pub from: IssueStatus,
     pub to: IssueStatus,
+    /// 这张活的 MR 号,`0` = 没有。确认框据此说清楚这一下到底会不会去合 MR ——
+    /// 拖进「已完成」发的是「合入并完成」,人得先知道要合的是哪一个。
+    pub pr_number: u32,
 }
 
 /// 每一列一句「什么样的活会在这一列」。照高保真的 KANBAN_COL_DEF。
@@ -122,6 +125,7 @@ fn column(
             title: card.title.clone(),
             from: card.status,
             to: target,
+            pr_number: card.pr_number,
         }));
     };
 

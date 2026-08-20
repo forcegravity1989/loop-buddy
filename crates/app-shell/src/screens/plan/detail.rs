@@ -5,6 +5,7 @@
 //! (MR 链接、远端 issue 链接)、以及怎么去看过程(去会话)。链接只在真推得出
 //! 地址时才给,推不出就说明为什么,不摆一个点了报错的链接。
 
+use super::kanban::PendingMove;
 use crate::bridge::{Bridge, Panel, PanelNav, Req};
 use crate::vm::ProjectVm;
 use bw_v4::command::Command;
@@ -15,7 +16,15 @@ use dioxus::prelude::*;
 /// 话,▶开工 之后活已经到「评审中」了,面板还显示「▶ 开工」,再点一次只会
 /// 收到一句「这张活现在不是能开工的状态」。
 #[component]
-pub fn DetailPanel(p: ProjectVm, mut selected: Signal<Option<IssueId>>, bridge: Bridge) -> Element {
+pub fn DetailPanel(
+    p: ProjectVm,
+    mut selected: Signal<Option<IssueId>>,
+    /// 「✓ 点完成」不直接发命令,而是把这一下**塞进和拖卡片同一个确认框**。
+    /// 两个入口发的是同一条命令,拦的也该是同一下 —— 一个有拦、一个没拦,
+    /// 就成了「哪个按钮危险取决于你从哪儿点进来」。
+    mut pending: Signal<Option<PendingMove>>,
+    bridge: Bridge,
+) -> Element {
     let (p, bridge) = (&p, &bridge);
     let picked = selected.read().and_then(|id| {
         p.board
@@ -30,11 +39,13 @@ pub fn DetailPanel(p: ProjectVm, mut selected: Signal<Option<IssueId>>, bridge: 
     };
     let b_run = bridge.clone();
     let b_review = bridge.clone();
-    let b_done = bridge.clone();
     let b_block = bridge.clone();
     let b_sess = bridge.clone();
     let nav = use_context::<PanelNav>();
     let id = c.id;
+    // 先快照出来:`c` 是借来的,闭包要活到点击那一刻。
+    let title = c.title.clone();
+    let pr = c.pr_number;
     // 链接只在**真推得出地址**时才有。`browse_base` 是从 `.git/config` 的 origin
     // 推的,没有 origin(本机仓)就是空串,那时候只显示号码、不给链接。
     let base = p.browse_base.trim().trim_end_matches('/');
@@ -91,13 +102,19 @@ pub fn DetailPanel(p: ProjectVm, mut selected: Signal<Option<IssueId>>, bridge: 
                                     "▶ 开工"
                                 }
                             },
+                            // 「✓ 点完成」和看板上把卡片拖进「已完成」是同一条
+                            // 路:同一个确认框、同一条命令 —— 两个入口不能一个
+                            // 合一个不合,也不能一个拦一下一个不拦。
                             IssueStatus::InReview => rsx! {
                                 button {
                                     class: "btn btn-sm btn-primary",
-                                    onclick: move |_| b_done.cmd(Command::TransitionIssue {
+                                    onclick: move |_| pending.set(Some(PendingMove {
                                         id,
+                                        title: title.clone(),
+                                        from: IssueStatus::InReview,
                                         to: IssueStatus::Done,
-                                    }),
+                                        pr_number: pr,
+                                    })),
                                     "✓ 点完成"
                                 }
                             },

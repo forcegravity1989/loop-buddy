@@ -7,6 +7,11 @@
 //! - 拖进进行中 / 评审中 / 已完成 / 阻塞是**状态动作**,松手弹确认框,确认了
 //!   才真的发命令;状态机不允许的转移松手即弹回,连确认框都不弹。
 //!
+//! **拖进「已完成」= 合入并完成**:人把卡片拖过去,意思就是「这活我认了,合
+//! 进去吧」,所以确认之后发的是「合入并完成」——先真的把 MR 合了,再结清;
+//! 合不成就整条不算数。详情抽屉里那颗「✓ 点完成」发的是同一条命令,**两个入
+//! 口不能一个合一个不合**。
+//!
 //! 卡面上没有按钮 —— 按钮全在右侧详情抽屉。同一个位置按状态互斥切换文案,
 //! 不堆一排常驻按钮。
 
@@ -83,7 +88,7 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
                 {board(p, Some(filters.read().clone()), bridge, dragging, pending, selected, bounced)}
             }
         }
-        DetailPanel { p: p.clone(), selected, bridge: bridge.clone() }
+        DetailPanel { p: p.clone(), selected, pending, bridge: bridge.clone() }
         if let Some(pm) = pending.read().clone() {
             {confirm_dialog(pm, pending, bridge)}
         }
@@ -339,11 +344,19 @@ fn confirm_dialog(
     let pm2 = pm.clone();
     // 走到这里的一定是**状态动作** —— 排期在松手那一刻就直接发命令了,不经过
     // 这个框(见本文件顶部的说明)。
+    //
+    // 拖进「已完成」发的是「合入并完成」,不是光改状态:人把卡片拖到已完成,
+    // 意思就是「这活我认了,合进去吧」。详情抽屉里那颗「✓ 点完成」发的是同一
+    // 条命令 —— **两个入口不能一个合一个不合**。
     let confirm = move |_| {
-        b.cmd(Command::TransitionIssue {
-            id: pm2.id,
-            to: pm2.to,
-        });
+        if pm2.to == IssueStatus::Done {
+            b.cmd(Command::MergeAndSettle { id: pm2.id });
+        } else {
+            b.cmd(Command::TransitionIssue {
+                id: pm2.id,
+                to: pm2.to,
+            });
+        }
         pending.set(None);
     };
     rsx! {
@@ -352,9 +365,14 @@ fn confirm_dialog(
                 h3 { "确认一下" }
                 div { style: "font-size:13px;line-height:1.85;color:var(--ink-2);margin-bottom:8px;",
                     "把「{pm.title}」从「{pm.from.label()}」移到「{pm.to.label()}」。"
-                    if pm.to == IssueStatus::Done {
+                    if pm.to == IssueStatus::Done && pm.pr_number > 0 {
                         br {}
-                        "这一下就是「人点完成」——活会在这一刻结清,只结这一次。"
+                        "这一下就是「人点完成」:先把 MR #{pm.pr_number} 合进主干,再把这张活\
+                         结清 —— 只结这一次。合不成就整条不算数,活留在原地,可以重试。"
+                    }
+                    if pm.to == IssueStatus::Done && pm.pr_number == 0 {
+                        br {}
+                        "这一下就是「人点完成」——活会在这一刻结清,只结这一次。这张活没有 MR。"
                     }
                     if pm.to == IssueStatus::InReview {
                         br {}

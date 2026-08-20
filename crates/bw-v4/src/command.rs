@@ -316,8 +316,6 @@ pub enum Event {
         releases: Vec<String>,
         note: String,
     },
-    /// 合入并完成走完了。`merged=false` = 这张活本来就没有 MR 可合(本地项目
-    /// 或者还没开 PR),只走了「完成」那一步。
     /// 往项目群发了(或没发成)一条。**不落库**——通知行上那句「已发到群 ✓」
     /// 和事件流里那一条是同一个事件在两处的展示,只在当前这次运行里存在。
     ChatNotifySent {
@@ -328,10 +326,16 @@ pub enum Event {
         note: String,
     },
 
+    /// 合入并完成走完了。`merged=false` = 这张活本来就没有 MR 可合(本地项目
+    /// 或者还没开 PR),只走了「完成」那一步。
     IssueMerged {
         id: IssueId,
         pr_number: u32,
         merged: bool,
+        /// 合入之后在本机做的收尾:主检出有没有拉到最新、那条活分支有没有
+        /// 收掉。**拉不动就写拉不动、删不掉就写删不掉**,绝不假装做过了。
+        /// `merged=false` 时为空(没合过就没有收尾这回事)。
+        local_note: String,
     },
     /// ■停止按下去之后。`was_live=false` = 本来就没有活着的终端可停。
     RunCancelled {

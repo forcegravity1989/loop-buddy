@@ -7,12 +7,19 @@
 //! 单独设计,现在**不摆冗余的位、不留冗余的代码**(阻塞那一段连同它的按钮已经
 //! 整段删掉,不是注释掉)。
 //!
-//! 两条如实:
+//! 三条如实:
 //!
-//! 1. **事件流没有事件表**。它是从四张表里现算的(活什么时候建的、什么时候
-//!    结清的、会话什么时候开的)。存不下来的事就不在流里,不补一条假的。
-//! 2. **不做已读未读的账本**。「看到哪个时间点」只是一个 key/value,不参与
+//! 1. **事件流没有事件表**。它是从四张表里现算的:活什么时候建的
+//!    (`issue.created_at`)、什么时候结清的(`issue.settled_at`)、会话什么
+//!    时候开的(`claude_conversation.created_at`)。存不下来的事(某一次运行
+//!    失败、某条群消息发没发出去)就不在流里,少一条,不补一条假的。
+//! 2. **只列最近 80 条**(上限在 `bridge::vm_derive::build_notify_events` 里)。
+//!    更早的事没有消失,是这条流没往下翻 —— 要查更早的直接查库。
+//! 3. **不做已读未读的账本**。「看到哪个时间点」只是一个 key/value,不参与
 //!    任何计数。
+//!
+//! 上面这三条是**给改这个文件的人看的**,不摆到界面上 —— 用户要的是「谁在
+//! 等我」,不是这条流怎么算出来的。
 
 use crate::bridge::{Bridge, Panel, PanelNav, Req};
 use crate::vm::{CardItemVm, ProjectVm};
@@ -77,31 +84,21 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
                     {event_row(i, e, bridge, nav)}
                 }
             }
-            div { style: "font-size:10.5px;color:var(--ink-4);margin-top:10px;line-height:1.8;",
-                "事件流是从库里那四张表现算的:活什么时候建的、什么时候结清的、会话\
-                 什么时候开的。存不下来的事(某一次运行失败、某条群消息发没发出去)\
-                 不在这条流里 —— 少一条,不编一条。"
-                br {}
-                "只列最近 80 条。更早的事没有消失,是这条流没往下翻 —— 要查更早的\
-                 直接查库(issue 的 created_at / settled_at、claude_conversation 的 created_at)。"
-            }
         }
     }
 }
 
-/// 等人合入的活。
+/// 等人合入的活。**通知只负责把信息通知到位,一个决定都不在这儿下。**
 ///
-/// **通知只负责「告诉你有一张活等着你合」,不负责给你看东西。** 点「去看这张活」
-/// 落到计划屏、并把这张活的详情抽屉打开 —— 会话、MR 链接、远端 issue 链接、正文
-/// 全在那儿。原来这里直接跳会话屏,那张活要是从没起过会话(buddy 自己写的铺底活
-/// 就是),人点过去看到的是一片空白。
+/// 所以这一条上只有「去看这张活」一颗按钮:点它落到计划屏、并把这张活的详情抽
+/// 屉打开 —— 会话、MR 链接、远端 issue 链接、正文全在那儿,看完了在那边点完成
+/// (那一下才是真合)。这里原先还有一颗「合入并完成」,**已整段删掉**:它让人
+/// 不看就能合,和「先看,再决定」这条旅程是反的。
 ///
-/// 「合入并完成」先真的把 MR 合了,再把活推到完成 —— 合入没成就整条不算数,活留
-/// 在原地可以重试。库里没记 MR 号的,内核会拿这张活的分支去远端现查一次(队友
-/// 自己开的 MR 就这么找到);确实没有 MR 可合的(项目没挂远端),只走「完成」
-/// 那一步,事件里如实说没合。
+/// 原来这里跳的是会话屏,那张活要是从没起过会话(buddy 自己写的铺底活就是),
+/// 人点过去看到的是一片空白。
 fn review_item(c: &CardItemVm, bridge: &Bridge, nav: PanelNav) -> Element {
-    let (b_open, b_merge) = (bridge.clone(), bridge.clone());
+    let b_open = bridge.clone();
     let id = c.id;
     rsx! {
         div { key: "{c.id:?}", class: "drawer-item",
@@ -109,9 +106,6 @@ fn review_item(c: &CardItemVm, bridge: &Bridge, nav: PanelNav) -> Element {
                 "#{c.number} {c.title}"
                 span { class: "chip chip-clay", style: "margin-left:6px;", "MR #{c.pr_number}" }
                 span { class: "chip chip-gray", style: "margin-left:4px;", "{c.category}" }
-            }
-            div { style: "font-size:11px;color:var(--ink-3);margin-bottom:6px;",
-                "先去看一眼这张活干了什么再决定合不合 —— 会话、MR、正文都在它的详情里。"
             }
             div { class: "acts",
                 button {
@@ -121,11 +115,6 @@ fn review_item(c: &CardItemVm, bridge: &Bridge, nav: PanelNav) -> Element {
                         nav.go(Panel::Plan);
                     },
                     "去看这张活"
-                }
-                button {
-                    class: "btn btn-sm btn-primary",
-                    onclick: move |_| b_merge.cmd(Command::MergeAndSettle { id }),
-                    "合入并完成"
                 }
             }
         }

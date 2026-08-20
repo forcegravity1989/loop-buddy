@@ -210,10 +210,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for e in &events {
         match e {
             Event::IssueMerged {
-                pr_number, merged, ..
+                pr_number,
+                merged,
+                local_note,
+                ..
             } => say(
                 "步骤 6 · 合入并完成",
-                &format!("MR号={pr_number} 真合了={merged}"),
+                &format!("MR号={pr_number} 真合了={merged} 本机收尾={local_note:?}"),
             ),
             Event::IssueTransitioned { to, settled, .. } => say(
                 "步骤 6 · 结清",

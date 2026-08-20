@@ -179,10 +179,15 @@ fn primary_note(events: &[Event]) -> Option<String> {
             }
         }
         Event::IssueMerged {
-            pr_number, merged, ..
+            pr_number,
+            merged,
+            local_note,
+            ..
         } => {
             if *merged {
-                format!("MR #{pr_number} 已合入,活已完成")
+                // 本机收尾的下落必须跟着一起说 —— 拉没拉到最新决定了工作区里
+                // 那几份 `.bw/` 件读不读得到,人得当场知道。
+                format!("MR #{pr_number} 已合入,活已完成。{local_note}")
             } else {
                 "这张活没有可合的 MR,只标了完成".into()
             }
