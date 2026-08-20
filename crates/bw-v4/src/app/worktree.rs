@@ -23,6 +23,7 @@
 //! 的 worktree 里,下一张活开新 worktree 就读不到剧本了。见 [`mirror_ignored`]。
 
 use super::{AppError, Result};
+use crate::model::Project;
 use std::path::{Path, PathBuf};
 
 /// 一张活干活的地方。
@@ -119,4 +120,66 @@ pub(super) fn mirror_ignored(main: &Path, tree: &Path, rels: &[String]) -> Vec<(
         }
     }
     out
+}
+
+/// 开 MR 的结果。`number == 0` = 没有 MR,`note` 说明为什么 —— 两件事永远一起
+/// 走,界面上不会出现一个来历不明的空号。
+pub(super) struct MrOutcome {
+    pub number: u32,
+    pub note: String,
+}
+
+impl MrOutcome {
+    pub fn none(why: &str) -> MrOutcome {
+        MrOutcome {
+            number: 0,
+            note: why.to_string(),
+        }
+    }
+}
+
+/// 把这张活的分支推上去,再开一个 MR。**每一条不做的理由都说出来**。
+///
+/// 两处在用:规范铺底(buddy 自己写的核心件)和「提交并开 MR」(agent 干完的
+/// 活)。两边准备分支的方式不同,推分支和开 MR 这一步是同一件事,只留一份。
+///
+/// `has_work` = 这条分支上到底有没有可评审的东西。调用方各自判断:铺底看这次
+/// 有没有提交出文件,提交并开 MR 看这棵树比基线多几个提交。
+pub(super) async fn push_and_open_mr(
+    project: &Project,
+    tree: &IssueTree,
+    has_work: bool,
+    title: &str,
+    body: &str,
+) -> MrOutcome {
+    if !has_work {
+        return MrOutcome::none("这条分支上没有可评审的改动,没开");
+    }
+    if !tree.isolated {
+        return MrOutcome::none("这个工作区不是 git 仓,没有分支可提");
+    }
+    if !project.has_remote() {
+        return MrOutcome::none("这个项目还没挂远端,分支只在本机(合的时候直接 merge 这个分支)");
+    }
+    if let Err(e) = crate::git::push_branch(&tree.path, &tree.branch).await {
+        return MrOutcome::none(&format!("推分支没成,原话:{e}"));
+    }
+    let remote = match bw_engine::remote::Remote::for_project(
+        &project.provider,
+        &project.remote_host,
+        &project.remote_path,
+    ) {
+        Ok(r) => r,
+        Err(e) => return MrOutcome::none(&format!("认不出远端类型:{e}")),
+    };
+    match remote
+        .create_mr_on_branch(&tree.path, &tree.branch, title, body)
+        .await
+    {
+        Ok(pr) => MrOutcome {
+            number: pr.number(),
+            note: format!("#{}", pr.number()),
+        },
+        Err(e) => MrOutcome::none(&format!("开 MR 没成,原话:{e}")),
+    }
 }

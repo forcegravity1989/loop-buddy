@@ -103,14 +103,17 @@ impl App {
 
         // 推分支 + 开 MR。没挂远端、没隔出树、或者压根没提交出东西,就都不做
         // ——如实记下为什么没有 MR,不摆一个空号。
-        let mr = self
-            .push_and_open_mr(
-                &project,
-                &tree,
-                committed,
-                &format!("规范铺底 v{} · 核心件", standard::version()),
-            )
-            .await;
+        let mr = worktree::push_and_open_mr(
+            &project,
+            &tree,
+            committed,
+            &format!("规范铺底 v{} · 核心件", standard::version()),
+            concat!(
+                "buddy 的「规范铺底」写下的核心件。合入之后这个项目就有管理体系的正本了。\n\n",
+                "这些件全是 buddy 自己写的,没有起 agent。"
+            ),
+        )
+        .await;
 
         // 跳过的件如实写进这张活的说明,评审的人不用猜为什么少了一份。
         // 注意是**从头拼一遍再整体覆盖**,不是往现有正文后面追加 —— 建活是按
@@ -190,51 +193,6 @@ impl App {
         Ok(events)
     }
 
-    /// 推分支 + 开 MR。**每一条不做的理由都说出来**,界面上不会出现一个来历
-    /// 不明的空 MR 号。
-    async fn push_and_open_mr(
-        &self,
-        project: &crate::model::Project,
-        tree: &worktree::IssueTree,
-        committed: bool,
-        title: &str,
-    ) -> MrOutcome {
-        if !committed {
-            return MrOutcome::none("这次没有新东西要提交,没开");
-        }
-        if !tree.isolated {
-            return MrOutcome::none("这个工作区不是 git 仓,没有分支可提");
-        }
-        if !project.has_remote() {
-            return MrOutcome::none("这个项目还没挂远端,分支只在本机(合的时候直接 merge 这个分支)");
-        }
-        if let Err(e) = crate::git::push_branch(&tree.path, &tree.branch).await {
-            return MrOutcome::none(&format!("推分支没成,原话:{e}"));
-        }
-        let remote = match bw_engine::remote::Remote::for_project(
-            &project.provider,
-            &project.remote_host,
-            &project.remote_path,
-        ) {
-            Ok(r) => r,
-            Err(e) => return MrOutcome::none(&format!("认不出远端类型:{e}")),
-        };
-        let body = concat!(
-            "buddy 的「规范铺底」写下的核心件。合入之后这个项目就有管理体系的正本了。\n\n",
-            "这些件全是 buddy 自己写的,没有起 agent。"
-        );
-        match remote
-            .create_mr_on_branch(&tree.path, &tree.branch, title, body)
-            .await
-        {
-            Ok(pr) => MrOutcome {
-                number: pr.number(),
-                note: format!("#{}", pr.number()),
-            },
-            Err(e) => MrOutcome::none(&format!("开 MR 没成,原话:{e}")),
-        }
-    }
-
     /// 纯读的对账:缺 / 过期 / 人改过。不建活、不写仓。
     pub(super) async fn reconcile_standard(&mut self, project_id: ProjectId) -> Result<Vec<Event>> {
         let ws = self.workspace_of(project_id).await?;
@@ -276,22 +234,6 @@ impl App {
             stale,
             human_edited,
         }])
-    }
-}
-
-/// 开 MR 的结果。`number == 0` = 没有 MR,`note` 说明为什么 —— 两件事永远
-/// 一起走,不会出现「没号也没理由」。
-struct MrOutcome {
-    number: u32,
-    note: String,
-}
-
-impl MrOutcome {
-    fn none(why: &str) -> MrOutcome {
-        MrOutcome {
-            number: 0,
-            note: why.to_string(),
-        }
     }
 }
 

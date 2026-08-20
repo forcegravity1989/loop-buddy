@@ -208,6 +208,43 @@ pub async fn commit_paths(
     Ok(out)
 }
 
+/// 把这棵树里的**全部**改动提交掉,返回有没有真的产生一个提交。
+///
+/// **只准对「一张活自己的 worktree」用**。那棵树整棵都属于这一张活,里面每一个
+/// 改动都是这次干活的产物,所以 `git add -A` 是对的。规范铺底那边不能用它 ——
+/// 那边写的是**人的主检出**,`add -A` 会把人手上没写完的改动一起打包进去。
+pub async fn commit_all(workspace: &Path, message: &str) -> Result<bool, GitError> {
+    git(workspace, &["add", "-A"]).await?;
+    let staged = git(workspace, &["diff", "--cached", "--name-only"]).await?;
+    if staged.trim().is_empty() {
+        return Ok(false);
+    }
+    git(workspace, &["commit", "-m", message]).await?;
+    Ok(true)
+}
+
+/// 当前 HEAD 的完整 sha。
+pub async fn head_sha(workspace: &Path) -> Result<String, GitError> {
+    Ok(git(workspace, &["rev-parse", "HEAD"])
+        .await?
+        .trim()
+        .to_string())
+}
+
+/// 这棵树上有几个提交是 `base` 上没有的 —— 「这张活到底干出东西没有」的判据。
+///
+/// `base` 传 sha 而不是分支名:分支名要在**这棵树里**解析,而活的 worktree 上
+/// `main` 指向哪里取决于它是什么时候开出来的;调用方手里已经有主检出当下的
+/// sha,直接传过来,这个数就没有歧义。
+pub async fn commits_ahead_of(workspace: &Path, base: &str) -> Result<u32, GitError> {
+    let out = git(
+        workspace,
+        &["rev-list", "--count", &format!("{base}..HEAD")],
+    )
+    .await?;
+    Ok(out.trim().parse().unwrap_or(0))
+}
+
 /// 一次提交的结果。`refused` 是仓自己(多半经 `.gitignore`)拒收的路径 ——
 /// 文件写下去了,但没进版本控制,这件事必须说出来,不能让人以为进仓了。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

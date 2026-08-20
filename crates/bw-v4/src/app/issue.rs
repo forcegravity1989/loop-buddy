@@ -203,6 +203,107 @@ impl App {
         }
     }
 
+    /// 「提交并开 MR」——第 4 站到第 5 站之间那一下。
+    ///
+    /// agent 在这张活的 worktree 里把文件改完了,这一下把它变成**可评审的东西**:
+    /// 提交(agent 自己已经提交过的就跳过)→ 推分支 → 开 MR → 活进「评审中」。
+    ///
+    /// **由人点,而且最远只到「评审中」**。agent 什么时候算干完只有人知道;
+    /// 「完成」还是得评审完之后再点一次。
+    ///
+    /// 任何一步没成都如实回报、活留在原地可以重试:推分支失败不会假装开了 MR,
+    /// 开 MR 失败不会假装进了评审。**只有一种情况直接弹回**——这棵树上压根没有
+    /// 比基线多出来的提交,那就是没干出东西,没有可评审的改动。
+    pub(super) async fn submit_issue_work(&mut self, id: IssueId) -> Result<Vec<Event>> {
+        let issue = self.issue_or_err(id).await?;
+        if !matches!(
+            issue.status,
+            IssueStatus::InProgress | IssueStatus::InReview | IssueStatus::Blocked
+        ) {
+            return Err(AppError::Refused(format!(
+                "这张活现在是「{}」,还没开过工,没有可提交的改动",
+                issue.status.label()
+            )));
+        }
+        let project = self
+            .store
+            .project(issue.project_id)
+            .await?
+            .ok_or_else(|| AppError::NoSuchProject(issue.project_id.uuid().to_string()))?;
+        let ws = self.workspace_of(issue.project_id).await?;
+        // 幂等:这张活开过工就已经有一棵树,这里拿到的是同一棵。
+        let tree = worktree::provision(&ws, issue.number).await?;
+        if !tree.isolated {
+            return Err(AppError::Refused(
+                "这个工作区不是 git 仓,没有分支可提,也就没有可开的 MR".into(),
+            ));
+        }
+
+        // 基线取主检出**当下**的 HEAD。要问的是「这棵树上有没有主检出还没有的
+        // 提交」,所以基线跟着主检出走:主检出后来往前走了,那些提交本来就在
+        // 基线这一侧,不会被算到这张活的账上。
+        let base = crate::git::head_sha(&ws).await.unwrap_or_default();
+        // agent 常常自己就提交了;没提交的这一下替它提交掉。
+        crate::git::commit_all(&tree.path, &format!("#{} {}", issue.number, issue.title)).await?;
+        let commits = if base.is_empty() {
+            0
+        } else {
+            crate::git::commits_ahead_of(&tree.path, &base)
+                .await
+                .unwrap_or(0)
+        };
+        if commits == 0 {
+            return Err(AppError::Refused(format!(
+                "`{}` 这棵树上没有比主检出多出来的提交 —— 这张活还没干出东西,没有可评审的改动",
+                tree.path.display()
+            )));
+        }
+
+        // 注意别用 `\` 续行拼这段正文:rustfmt 会把缩进原样留在字符串里,
+        // MR 正文上就会多出一串空格。要接就用 `concat!` 或者分段 push。
+        let mut body = format!(
+            "buddy 管理的第 {} 号活「{}」干出来的改动,等人评审。\n\n",
+            issue.number, issue.title
+        );
+        body.push_str(&format!(
+            "这条分支上有 {commits} 个提交。合入之后回 buddy 点「合入并完成」结清这张活。"
+        ));
+        let mr = worktree::push_and_open_mr(
+            &project,
+            &tree,
+            true,
+            &format!("#{} {}", issue.number, issue.title),
+            &body,
+        )
+        .await;
+
+        // MR 号只在真开出来时才写,0 不许把上一次记下的号冲掉。
+        let pr_number = if mr.number > 0 {
+            mr.number
+        } else {
+            issue.pr_number
+        };
+        self.store
+            .set_issue_remote(id, &tree.branch, pr_number, issue.remote_number)
+            .await?;
+
+        let mut events = vec![Event::IssueSubmitted {
+            id,
+            branch: tree.branch.clone(),
+            commits,
+            pr_number,
+            note: mr.note,
+        }];
+        // 推「评审中」。阻塞态要先回「进行中」——状态机不许从阻塞直接进评审。
+        if issue.status != IssueStatus::InReview {
+            if issue.status.can_transition_to(IssueStatus::InProgress) {
+                events.extend(self.transition_issue(id, IssueStatus::InProgress).await?);
+            }
+            events.extend(self.transition_issue(id, IssueStatus::InReview).await?);
+        }
+        Ok(events)
+    }
+
     /// 状态转移。合法性由 `bw_core` 的状态机守——不合法就如实报错弹回,不悄悄
     /// 换成一个合法的转移。
     pub(super) async fn transition_issue(

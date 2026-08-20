@@ -185,6 +185,7 @@ impl App {
                 self.refresh_issue_cache(project_id, week).await
             }
             Command::RunIssue { id } => self.run_issue(id).await,
+            Command::SubmitIssueWork { id } => self.submit_issue_work(id).await,
             Command::TransitionIssue { id, to } => self.transition_issue(id, to).await,
             Command::BlockIssue { id, reason } => self.block_issue(id, reason).await,
             Command::SaveToolMapping {
