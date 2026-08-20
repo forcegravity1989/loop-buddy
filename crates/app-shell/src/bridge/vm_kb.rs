@@ -47,6 +47,7 @@ fn read_head(path: &Path) -> String {
 /// 知识页签的树:**不扫全仓**,按规范八大类固定分组、每组按约定路径找文件。
 /// 只列真实存在的,不列位置。
 pub(super) fn build_kb(ws: &Path, tab: KbTab, open: Option<&str>) -> KbVm {
+    let managed_count = managed_paths(ws).len();
     let mut groups = Vec::new();
 
     let mut charter = Vec::new();
@@ -149,6 +150,7 @@ pub(super) fn build_kb(ws: &Path, tab: KbTab, open: Option<&str>) -> KbVm {
                 .ok()
         }),
         groups,
+        managed_count,
         codegraph: None,
         assets: None,
     }
@@ -220,6 +222,7 @@ pub(super) async fn build_assets(store: &V4Store, id: ProjectId, ws: &Path) -> A
                             .unwrap_or(0),
                         title: slug.clone(),
                         origin: skill_origin(&managed, &slug),
+                        desc: super::vm_panels::skill_desc(&e.path().join("SKILL.md")),
                         slug,
                     }
                 })
@@ -269,7 +272,7 @@ pub(super) async fn build_assets(store: &V4Store, id: ProjectId, ws: &Path) -> A
                 ("提交数".to_string(), e.commit_count.to_string()),
                 ("跟踪的文件".to_string(), e.tracked_files.to_string()),
                 ("没提交的改动".to_string(), e.dirty_paths.to_string()),
-                ("docs/ 下的文件".to_string(), e.docs_files.to_string()),
+                ("docs/ 下的 .md".to_string(), e.docs_files.to_string()),
             ],
             String::new(),
         ),

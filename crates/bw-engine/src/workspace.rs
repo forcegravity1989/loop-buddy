@@ -279,6 +279,17 @@ impl Drop for IssueWorktreeGuard {
     }
 }
 
+/// Where an issue's worktree lives: the sibling directory
+/// `<main_workspace>-issue-<n>`. **The one place that rule is written down** —
+/// [`provision_issue_worktree`] creates it here, and cleanup paths (V4 settles
+/// the issue, then removes the tree) find it here. `None` when the main
+/// workspace has no parent directory or a non-UTF-8 name.
+pub fn issue_worktree_path(main_workspace: &Path, issue_number: u32) -> Option<PathBuf> {
+    let parent = main_workspace.parent()?;
+    let stem = main_workspace.file_name().and_then(|n| n.to_str())?;
+    Some(parent.join(format!("{stem}-issue-{issue_number}")))
+}
+
 /// plan/17 S2: provision an isolated per-issue git worktree off the main
 /// workspace's HEAD (master), so two concurrent/back-to-back issue runs in
 /// one project never collide on the shared working tree. The worktree lives
@@ -292,14 +303,12 @@ pub async fn provision_issue_worktree(
     issue_number: u32,
 ) -> Result<PathBuf, ProvisionError> {
     let branch = crate::github::issue_branch(issue_number);
-    let parent = main_workspace.parent().ok_or_else(|| {
-        ProvisionError::CreateDir(format!("主工作区无 parent:{}", main_workspace.display()))
+    let sibling = issue_worktree_path(main_workspace, issue_number).ok_or_else(|| {
+        ProvisionError::CreateDir(format!(
+            "算不出 worktree 路径(主工作区没有上级目录,或者目录名不是 UTF-8):{}",
+            main_workspace.display()
+        ))
     })?;
-    let stem = main_workspace
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("workspace");
-    let sibling = parent.join(format!("{stem}-issue-{issue_number}"));
     let sibling_str = sibling
         .to_str()
         .ok_or_else(|| {

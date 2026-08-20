@@ -4,9 +4,13 @@
 //! 一份 [`Vm`] → 经 watch 通道推回来 → 界面重画。**壳自己绝不伪造成功事件**:
 //! 命令失败就把失败的原话放进 `Vm::note`,不假装做成了。
 
+mod nav;
 mod vm_build;
+mod vm_derive;
 mod vm_kb;
 mod vm_panels;
+
+pub use nav::{GuideNav, Panel, PanelNav, TopView};
 
 use crate::vm::Vm;
 use bw_v4::app::App;
@@ -17,69 +21,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
-
-/// 深链要跳到哪。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Panel {
-    #[default]
-    Overview,
-    Plan,
-    Session,
-    Notify,
-    Config,
-    Kb,
-}
-
-impl Panel {
-    pub fn parse(s: &str) -> Option<Panel> {
-        Some(match s {
-            "overview" => Panel::Overview,
-            "plan" => Panel::Plan,
-            "session" => Panel::Session,
-            "notify" => Panel::Notify,
-            "config" => Panel::Config,
-            "kb" => Panel::Kb,
-            _ => return None,
-        })
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Panel::Overview => "总览",
-            Panel::Plan => "计划",
-            Panel::Session => "会话",
-            Panel::Notify => "通知",
-            Panel::Config => "配置",
-            Panel::Kb => "知识库",
-        }
-    }
-
-    pub const ALL: [Panel; 6] = [
-        Panel::Overview,
-        Panel::Plan,
-        Panel::Session,
-        Panel::Notify,
-        Panel::Config,
-        Panel::Kb,
-    ];
-}
-
-/// 顶层三屏里不依赖「打开某个项目」的那两个。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TopView {
-    Onboard,
-    Settings,
-}
-
-impl TopView {
-    pub fn parse(s: &str) -> Option<TopView> {
-        Some(match s {
-            "onboard" => TopView::Onboard,
-            "settings" => TopView::Settings,
-            _ => return None,
-        })
-    }
-}
 
 /// 启动时从环境变量读到的深链意图。
 #[derive(Clone, Debug, Default)]
@@ -118,6 +59,8 @@ pub enum Req {
     Open(Option<ProjectId>),
     /// 计划屏切到看某一周。
     ViewWeek(String),
+    /// 计划屏左栏点「全部」/ 点回某一周。
+    ViewAll(bool),
     /// 知识库屏打开某份文档。
     OpenDoc(Option<String>),
     /// 「先不建」——把还没确认的草稿丢掉。草稿本来就没进库,丢掉不留痕。
@@ -140,6 +83,15 @@ pub enum Req {
         tab: crate::vm::KbTab,
         codegraph: Option<crate::vm::CodeGraphVm>,
         assets: Option<crate::vm::AssetsVm>,
+    },
+    /// 总览那块「项目指标 · 代码仓级」:现采一次。
+    CollectRepoStats,
+    /// 上面那一采的结果。**不是界面发的**,是派出去的那个任务算完发回来的。
+    /// 带着「这是给哪个项目采的」——采一次要几百毫秒,人完全来得及在这期间
+    /// 切走,不认项目就会把上一个项目的提交数摆在新项目的总览上。
+    RepoStatsComputed {
+        project: ProjectId,
+        stats: crate::vm::RepoStatsVm,
     },
     /// 重新算一遍并推一份新的 ViewModel。
     Refresh,
@@ -285,9 +237,12 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     kb_tab: crate::vm::KbTab::default(),
                     kb_codegraph: None,
                     kb_assets: None,
+                    repo_stats: None,
                     viewing_week: bw_v4::isoweek::current_week(),
+                    view_all: false,
                     open_doc: None,
                     note: None,
+                    note_seq: 0,
                     pending_drafts: None,
                     db_path: db.clone(),
                     workspaces_root: root.display().to_string(),
@@ -309,6 +264,57 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
 
                 let mut vm = vm_build::build(&app, &ui).await;
                 eprintln!("[BW_BOOT] projects={} db={db}", vm.projects.len());
+                // 环境条的探活结果也打出来 —— 它说「找不到 claude」的时候,人
+                // 得能在终端里拿 `which claude` 当场对。2026-08-20 就栽在这上面:
+                // 探活在 macOS 上恒返回「找不到」,而界面上没有任何办法核。
+                for t in &vm.env {
+                    let state = match t.ok {
+                        Some(true) => "有",
+                        Some(false) => "没有",
+                        None => "没探",
+                    };
+                    eprintln!("[BW_ENV] {} = {} · {}", t.label, state, t.detail);
+                }
+                // 打开了项目就把这一份 ViewModel 的关键计数打出来 —— 这些数
+                // 都能用 sqlite3 当场对(活数 / 会话数 / 事件数 / 周数),
+                // 比截图硬。
+                if let Some(o) = &vm.open {
+                    eprintln!(
+                        "[BW_VM] project={} 活={} 会话={} 事件={} 周={} 待评审={} 阻塞={} 技能={}",
+                        o.slug,
+                        o.board.columns.iter().map(|c| c.cards.len()).sum::<usize>(),
+                        o.sessions.len(),
+                        o.notify.events.len(),
+                        o.weeks.len(),
+                        o.notify.in_review.len(),
+                        o.notify.blocked.len(),
+                        o.config.skills.len(),
+                    );
+                    // 事件流最新那一条的时间戳也打出来 —— 它是**本机时区**
+                    // 的实证:能直接和 `date -r <unix>` 对上,对不上就说明
+                    // 时区那条路又退回 UTC 了(见 vm_derive::stamp)。
+                    // 总览那条「本周计划进度」的五段。**只认当前周**,与计划屏
+                    // 左栏看的是哪一周无关 —— 这一行就是那条纪律的读回。
+                    let c = &o.week_counts;
+                    eprintln!(
+                        "[BW_VM] 本周{} 待办={} 进行中={} 评审中={} 完成={} 阻塞={}",
+                        o.current_week, c.todo, c.doing, c.review, c.done, c.blocked,
+                    );
+                    if let Some(e) = o.notify.events.first() {
+                        eprintln!("[BW_VM] 最新事件 {} · {}", e.time, e.text);
+                    }
+                    eprintln!(
+                        "[BW_VM] 映射={} 连接器={} 定时={} 群={} 指标={} 未读={}",
+                        o.config.mappings.len(),
+                        o.config.connectors.len(),
+                        o.config.crons.len(),
+                        o.config.chat_provider,
+                        o.metrics.lagging.len()
+                            + o.metrics.leading.len()
+                            + usize::from(o.metrics.north_star.is_some()),
+                        o.notify.unread,
+                    );
+                }
                 // BW_KB_DUMP=1:把知识库三个页签的数字打进 stderr,好让人拿
                 // `git ls-files` / `codegraph files -j` / `cat docs/releases.md`
                 // 当场对。截图对不了数,这个能。
@@ -372,8 +378,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             let Some(pid) = ui.open else { continue };
                             match app.dispatch(Command::TickScheduler { project_id: pid }).await {
                                 Ok(events) if events.is_empty() => continue,
-                                Ok(events) => ui.note = vm_build::note_of(&events),
-                                Err(e) => ui.note = Some(format!("定时没跑成:{e}")),
+                                Ok(events) => ui.set_note(vm_build::note_of(&events)),
+                                Err(e) => ui.set_note(Some(format!("定时没跑成:{e}"))),
                             }
                             vm = vm_build::build(&app, &ui).await;
                             let _ = vm_tx.send(vm.clone());
@@ -397,7 +403,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             let confirming = matches!(c, Command::ConfirmWeekDraft { .. });
                             match app.dispatch(c).await {
                                 Ok(events) => {
-                                    ui.note = vm_build::note_of(&events);
+                                    ui.set_note(vm_build::note_of(&events));
                                     // 「开始本周」产出的草稿活标先接住,等人在计划屏
                                     // 点确认才真的建活。
                                     if let Some((week, titles)) = drafts_of(&events) {
@@ -408,13 +414,14 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                     }
                                 }
                                 // 失败就把失败的原话摆出来。壳不替内核圆场。
-                                Err(e) => ui.note = Some(format!("没做成:{e}")),
+                                Err(e) => ui.set_note(Some(format!("没做成:{e}"))),
                             }
                         }
                         Req::Open(id) => {
                             ui.open = id;
                             ui.open_doc = None;
                             ui.viewing_week = bw_v4::isoweek::current_week();
+                            ui.view_all = false;
                             // 知识库那两个页签的结果是**上一个项目**的:它的技能
                             // 清单、它的 git 产物、它的发版记录、它的仓统计。留着
                             // 的话换个项目点进去,一屏数字没有一个是这个项目的,
@@ -422,8 +429,15 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             ui.kb_tab = crate::vm::KbTab::default();
                             ui.kb_codegraph = None;
                             ui.kb_assets = None;
+                            // 仓统计同理:留着就是把上一个项目的提交数摆在这个
+                            // 项目的总览上。
+                            ui.repo_stats = None;
                         }
-                        Req::ViewWeek(w) => ui.viewing_week = w,
+                        Req::ViewWeek(w) => {
+                            ui.viewing_week = w;
+                            ui.view_all = false;
+                        }
+                        Req::ViewAll(v) => ui.view_all = v,
                         Req::OpenDoc(p) => ui.open_doc = p,
                         Req::DropDrafts => ui.pending_drafts = None,
                         Req::SelectSession(id) => {
@@ -502,6 +516,29 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             if ui.kb_tab == tab {
                                 ui.kb_codegraph = codegraph;
                                 ui.kb_assets = assets;
+                            }
+                        }
+                        Req::CollectRepoStats => {
+                            // 和知识库那两个页签同一个做法:派出去算,不在这条
+                            // 循环里 await —— 它要起好几个 git 子进程,在这里等
+                            // 就把内核这条单线程连同终端的 60ms 节拍一起按住。
+                            if let Some(pid) = ui.open {
+                                if let Ok(ws) = app.workspace_of(pid).await {
+                                    let back = tx_back.clone();
+                                    tokio::spawn(async move {
+                                        let _ = back.send(Req::RepoStatsComputed {
+                                            project: pid,
+                                            stats: vm_derive::collect_repo_stats(&ws).await,
+                                        });
+                                    });
+                                }
+                            }
+                        }
+                        // 采的时候是哪个项目,回来时还得是哪个项目 —— 不是就
+                        // 整份丢掉,宁可让人再点一次,也不摆错项目的数。
+                        Req::RepoStatsComputed { project, stats } => {
+                            if ui.open == Some(project) {
+                                ui.repo_stats = Some(stats);
                             }
                         }
                         Req::Refresh => {}

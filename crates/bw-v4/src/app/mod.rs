@@ -14,6 +14,7 @@
 //! - [`ops`] —— 三张运作活:周计划、资产盘点、规范铺底
 //! - [`session`] —— 内嵌终端的 PTY 生命周期
 //! - [`tools`] —— 开工工具映射与探活
+//! - [`worktree`] —— 每张活一棵自己的 worktree 与分支
 //! - [`health`] —— 三条判据的现算
 
 mod backfill;
@@ -26,6 +27,7 @@ mod plan;
 mod project;
 mod session;
 mod tools;
+mod worktree;
 
 pub use health::collect_health_inputs;
 pub use ops::{skill_slug, OPS1_WORKFLOW, OPS2_WORKFLOW, OPS3_WORKFLOW};

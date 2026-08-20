@@ -32,7 +32,7 @@ pub mod workspace;
 
 pub use win_cmd::{is_windows_script, std_cmd, tokio_cmd};
 
-pub use claude_bin::{claude_binary_candidates, resolve_claude_binary};
+pub use claude_bin::{claude_binary_candidates, resolve_claude_binary, which_on_path};
 pub use claude_cli::ClaudeCliConfig;
 pub use codehub::{CodehubError, CodehubRepoRef, CodehubRepoSummary};
 pub use connectors_file::{ConnectorDef, ConnectorKind, ConnectorsFile, ConnectorsFileError};

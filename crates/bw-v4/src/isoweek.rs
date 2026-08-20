@@ -25,8 +25,15 @@ pub fn init_local_offset() {
     let _ = LOCAL_OFFSET.set(offset);
 }
 
+/// 启动那一刻探到的本机时区偏移。**要格式化时间就用它**,不要再调一次
+/// `UtcOffset::current_local_offset()` —— 那个调用在多线程进程里必然失败,
+/// 静默退回 UTC,于是同一屏上时间戳按 UTC、周号按本机时区,差 8 小时。
+pub fn local_offset() -> UtcOffset {
+    *LOCAL_OFFSET.get().unwrap_or(&UtcOffset::UTC)
+}
+
 fn now_local() -> OffsetDateTime {
-    OffsetDateTime::now_utc().to_offset(*LOCAL_OFFSET.get().unwrap_or(&UtcOffset::UTC))
+    OffsetDateTime::now_utc().to_offset(local_offset())
 }
 
 /// 某一天属于哪个 ISO 周,形如 `2026-W34`。

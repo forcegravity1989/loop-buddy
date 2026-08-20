@@ -1,282 +1,438 @@
-//! 项目内 · 总览。一列横块,不分阶段视角。
+//! 项目内 · 总览。**结构照 `hifi/index.html` 的 `renderOverview` 排**:七块
+//! 竖排,名片与健康并排在第一块的左右两栏。
 //!
 //! 每一块的数字都是现算的:名片来自 `PROJECT.md` / `.bw/project.toml`,健康来
-//! 自仓文件与 git 的三条判据,指标读数来自周计划文件的「本周指标读数」段,
-//! 发版记录来自 `docs/releases.md`。**没有读数就显示「无数据」,不显示 0**。
+//! 自仓文件与 git 的三条判据,指标定义来自 `.bw/metrics.toml`、读数来自周计划
+//! 文件的「本周指标读数」段,发版记录来自 `docs/releases.md`。**没有读数就说
+//! 无数据,不显示 0**。
 
-use crate::bridge::Bridge;
-use crate::theme;
+use crate::bridge::{Bridge, Panel, PanelNav, Req};
+use crate::chrome::light_dot;
 use crate::vm::{MetricCardVm, ProjectVm};
-use bw_v4::command::Command;
+use bw_v4::command::{Command, ProjectIntent};
 use dioxus::prelude::*;
 
 #[component]
 pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
-    let (p, bridge) = (&p, &bridge);
+    // 名片是不是正在编辑,以及编辑中的三个字段。纯本机状态,没确认前不发命令。
+    let nav = use_context::<PanelNav>();
+    let editing = use_signal(|| false);
+    let draft = use_signal(|| (String::new(), String::new(), String::new()));
+
+    let has_week = p.weeks.iter().any(|w| w.week == p.current_week);
     rsx! {
-        div {
-            style: "max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:16px;",
-            {card_block(p, bridge)}
-            {health_block(p)}
-            {metrics_block(p)}
-            {week_block(p, bridge)}
-            {release_block(p)}
+        section { class: "ov-stack", style: "max-width:1120px;",
+            if !has_week {
+                {start_banner(&p, &bridge)}
+            }
+            {card_and_health(&p, &bridge, editing, draft)}
+            {north_star_block(&p)}
+            {metric_row_block("滞后性指标", &p.metrics.lagging, p.metrics.note.as_deref())}
+            {metric_row_block("引领性指标", &p.metrics.leading, None)}
+            {repo_block(&p, &bridge)}
+            {week_block(&p, nav)}
+            {version_block(&p)}
         }
     }
 }
 
-fn card_block(p: &ProjectVm, bridge: &Bridge) -> Element {
+fn start_banner(p: &ProjectVm, bridge: &Bridge) -> Element {
     let b = bridge.clone();
-    let pid = p.id;
+    let (pid, week) = (p.id, p.current_week.clone());
+    rsx! {
+        div { class: "ov-banner",
+            span { "本周({p.current_week})还没有周计划文件" }
+            button {
+                class: "btn btn-primary btn-sm",
+                onclick: move |_| b.cmd(Command::StartWeekPlanning {
+                    project_id: pid,
+                    week: week.clone(),
+                }),
+                "开始本周"
+            }
+        }
+    }
+}
+
+// ── ① 名片 + 健康(并排两栏)────────────────────────────
+
+fn card_and_health(
+    p: &ProjectVm,
+    bridge: &Bridge,
+    mut editing: Signal<bool>,
+    mut draft: Signal<(String, String, String)>,
+) -> Element {
     let c = &p.card;
-    rsx! {
-        div {
-            style: "{theme::card()}padding:20px 22px;",
-            div {
-                style: "display:flex;align-items:baseline;gap:10px;margin-bottom:14px;",
-                div { style: "font-family:{theme::SERIF};font-size:19px;", "项目名片" }
-                div { style: "flex:1;" }
-                button {
-                    style: "{theme::btn_ghost()}",
-                    onclick: move |_| b.cmd(Command::RunStandardBootstrap { project_id: pid }),
-                    "规范铺底"
-                }
-            }
-            {field("想做什么", &c.brief)}
-            {field("最像的对标", &c.benchmark)}
-            {field("三个月长成什么样", &c.north_star)}
-            div {
-                style: "display:flex;gap:22px;flex-wrap:wrap;margin-top:12px;padding-top:12px;\
-                        border-top:1px solid {theme::BORDER};font-size:12px;color:{theme::INK_3};",
-                span { "仓:{c.remote}" }
-                span { "在研版本:{c.current_version}" }
-                span { "规范版本:{c.standard_version}" }
-                span { "项目群:{c.chat}" }
-            }
-        }
-    }
-}
-
-fn field(label: &str, value: &str) -> Element {
-    rsx! {
-        div {
-            style: "margin-bottom:10px;",
-            div { style: "font-size:12px;color:{theme::INK_3};margin-bottom:3px;", "{label}" }
-            div { style: "font-size:14px;line-height:1.75;color:{theme::INK};", "{value}" }
-        }
-    }
-}
-
-fn health_block(p: &ProjectVm) -> Element {
-    let color = theme::signal_color(p.health.signal);
-    let label = theme::signal_label(p.health.signal);
-    rsx! {
-        div {
-            style: "{theme::card()}padding:20px 22px;",
-            div {
-                style: "display:flex;align-items:center;gap:10px;margin-bottom:12px;",
-                div { style: "{theme::dot(color, 14)}" }
-                div { style: "font-family:{theme::SERIF};font-size:19px;", "健康 · {label}" }
-                div { style: "flex:1;" }
-                div {
-                    style: "font-size:11px;color:{theme::INK_4};",
-                    "每次打开现算,库里不存这盏灯"
-                }
-            }
-            if p.health.reasons.is_empty() {
-                div { style: "color:{theme::INK_3};font-size:13px;", "还没有任何真实数据。" }
-            }
-            for (ok, text) in p.health.reasons.iter() {
-                {reason_row(*ok, text)}
-            }
-        }
-    }
-}
-
-fn reason_row(ok: bool, text: &str) -> Element {
-    let ink = if ok { theme::INK } else { theme::INK_2 };
-    let mark_color = if ok { "#5C8A5E" } else { theme::INK_4 };
-    let mark = if ok { "✓" } else { "✗" };
-    rsx! {
-        div {
-            style: "display:flex;gap:8px;align-items:flex-start;padding:5px 0;font-size:13px;\
-                    line-height:1.7;color:{ink};",
-            span { style: "color:{mark_color};flex:none;", "{mark}" }
-            span { "{text}" }
-        }
-    }
-}
-
-fn metrics_block(p: &ProjectVm) -> Element {
-    let m = &p.metrics;
-    rsx! {
-        div {
-            style: "{theme::card()}padding:20px 22px;",
-            div { style: "font-family:{theme::SERIF};font-size:19px;margin-bottom:14px;", "指标" }
-            if let Some(note) = &m.note {
-                div { style: "color:{theme::INK_3};font-size:13px;", "{note}" }
-            }
-            if let Some(ns) = &m.north_star {
-                {metric_card(ns, "北极星", true)}
-            }
-            if !m.lagging.is_empty() {
-                div { style: "font-size:12px;color:{theme::INK_3};margin:14px 0 8px;", "滞后指标" }
-                div {
-                    style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;",
-                    for x in m.lagging.iter() { {metric_card(x, "滞后", false)} }
-                }
-            }
-            if !m.leading.is_empty() {
-                div { style: "font-size:12px;color:{theme::INK_3};margin:14px 0 8px;", "引领指标" }
-                div {
-                    style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;",
-                    for x in m.leading.iter() { {metric_card(x, "引领", false)} }
-                }
-            }
-        }
-    }
-}
-
-fn metric_card(m: &MetricCardVm, kind: &str, wide: bool) -> Element {
-    let has = m.reading.is_some();
-    let value = m.reading.clone().unwrap_or_else(|| "无数据".into());
-    let width = if wide { "100%" } else { "auto" };
-    let size = if wide { 26 } else { 20 };
-    let value_color = if has { theme::INK } else { theme::INK_4 };
-    rsx! {
-        div {
-            key: "{m.id}",
-            style: "background:{theme::CARD_ALT};border:1px solid {theme::BORDER};border-radius:9px;\
-                    padding:14px 16px;width:{width};",
-            div {
-                style: "display:flex;align-items:baseline;gap:8px;",
-                div { style: "{theme::chip(theme::CARD, theme::INK_3)}", "{kind}" }
-                div { style: "font-size:13px;color:{theme::INK_2};", "{m.name}" }
-            }
-            div {
-                style: "font-family:{theme::MONO};font-size:{size}px;margin-top:8px;color:{value_color};",
-                "{value}"
-            }
-            if has {
-                div {
-                    style: "font-size:11px;color:{theme::INK_4};margin-top:4px;",
-                    "{m.source} · {m.collected_at}"
-                }
-            } else {
-                div {
-                    style: "font-size:11px;color:{theme::INK_4};margin-top:4px;",
-                    "本周与上周的周计划文件里都没有这条读数"
-                }
-            }
-            if !m.driving.is_empty() {
-                div {
-                    style: "margin-top:10px;padding-top:8px;border-top:1px solid {theme::BORDER};\
-                            font-size:11px;color:{theme::INK_3};line-height:1.8;",
-                    "本周在推它的活:"
-                    for t in m.driving.iter() {
-                        div { style: "color:{theme::INK_2};", "· {t}" }
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn week_block(p: &ProjectVm, bridge: &Bridge) -> Element {
-    let b = bridge.clone();
+    let is_editing = *editing.read();
+    let b_edit = bridge.clone();
     let pid = p.id;
-    let week = p.current_week.clone();
-    let this_week = p.weeks.iter().find(|w| w.week == p.current_week);
-    let done = p
-        .board
-        .columns
-        .iter()
-        .find(|c| c.status == bw_v4::model::IssueStatus::Done)
-        .map(|c| c.cards.len())
-        .unwrap_or(0);
-    let total: usize = p
-        .board
-        .columns
-        .iter()
-        .filter(|c| c.status != bw_v4::model::IssueStatus::Backlog)
-        .map(|c| c.cards.len())
-        .sum();
-    rsx! {
-        div {
-            style: "{theme::card()}padding:20px 22px;",
-            div {
-                style: "display:flex;align-items:baseline;gap:10px;margin-bottom:12px;",
-                div { style: "font-family:{theme::SERIF};font-size:19px;", "本周 · {p.current_week}" }
-                div { style: "flex:1;" }
-                if this_week.is_none() {
-                    button {
-                        style: "{theme::btn_primary()}",
-                        onclick: move |_| b.cmd(Command::StartWeekPlanning {
-                            project_id: pid,
-                            week: week.clone(),
-                        }),
-                        "开始本周"
-                    }
-                }
-            }
-            match this_week {
-                None => rsx! {
-                    div {
-                        style: "color:{theme::INK_3};font-size:13px;line-height:1.9;",
-                        "本周还没有周计划文件。点「开始本周」会在仓里写出 docs/plan/{p.current_week}.md,\
-                         复盘上周、更新指标、引导出这一周要干的活。"
-                    }
-                },
-                Some(w) => rsx! {
-                    div {
-                        style: "font-size:13px;line-height:1.85;color:{theme::INK};margin-bottom:10px;",
-                        {w.goal.clone().unwrap_or_else(|| "(这一周还没写周目标)".into())}
-                    }
-                    div {
-                        style: "font-size:12px;color:{theme::INK_3};",
-                        "排了 {total} 张活,完成 {done} 张。"
-                    }
-                },
-            }
-        }
-    }
-}
+    let name = p.name.clone();
 
-fn release_block(p: &ProjectVm) -> Element {
+    let start_edit = {
+        let (brief, benchmark, north) =
+            (c.brief.clone(), c.benchmark.clone(), c.north_star.clone());
+        move |_| {
+            draft.set((brief.clone(), benchmark.clone(), north.clone()));
+            editing.set(true);
+        }
+    };
+
     rsx! {
-        div {
-            style: "{theme::card()}padding:20px 22px;",
-            div { style: "font-family:{theme::SERIF};font-size:19px;margin-bottom:12px;", "发版记录" }
-            if p.releases.is_empty() {
-                div {
-                    style: "color:{theme::INK_3};font-size:13px;",
-                    "还没有发过版。仓里的 docs/releases.md 是这份记录的唯一正本,库里不存副本。"
-                }
-            } else {
-                table {
-                    style: "width:100%;border-collapse:collapse;font-size:13px;",
-                    thead {
-                        tr {
-                            style: "color:{theme::INK_3};font-size:12px;text-align:left;",
-                            th { style: "padding:6px 8px;font-weight:400;", "版本" }
-                            th { style: "padding:6px 8px;font-weight:400;", "发版日" }
-                            th { style: "padding:6px 8px;font-weight:400;", "说明" }
-                            th { style: "padding:6px 8px;font-weight:400;", "包含的活" }
-                            th { style: "padding:6px 8px;font-weight:400;", "来源" }
+        div { class: "card ov-block ov-block1",
+            div { class: "info",
+                div { class: "charter-name", "{name}" }
+                if is_editing {
+                    div { class: "formrow",
+                        label { class: "label", "想做什么" }
+                        textarea {
+                            class: "textarea",
+                            value: "{draft.read().0}",
+                            oninput: move |e| draft.write().0 = e.value(),
                         }
                     }
-                    tbody {
-                        for r in p.releases.iter() {
-                            tr {
-                                key: "{r.version}",
-                                style: "border-top:1px solid {theme::BORDER};",
-                                td { style: "padding:8px;font-family:{theme::MONO};", "{r.version}" }
-                                td { style: "padding:8px;color:{theme::INK_2};", "{r.released_at}" }
-                                td { style: "padding:8px;color:{theme::INK_2};", "{r.note}" }
-                                td { style: "padding:8px;font-family:{theme::MONO};color:{theme::INK_3};", "{r.included}" }
-                                td { style: "padding:8px;", span { style: "{theme::chip(theme::CARD_ALT, theme::INK_3)}", "{r.origin}" } }
+                    div { class: "formrow",
+                        label { class: "label", "最像的对标" }
+                        input {
+                            class: "input",
+                            value: "{draft.read().1}",
+                            oninput: move |e| draft.write().1 = e.value(),
+                        }
+                    }
+                    div { class: "formrow",
+                        label { class: "label", "三个月长成什么样(北极星)" }
+                        textarea {
+                            class: "textarea",
+                            value: "{draft.read().2}",
+                            oninput: move |e| draft.write().2 = e.value(),
+                        }
+                    }
+                    div { style: "display:flex;gap:8px;justify-content:flex-end;",
+                        button {
+                            class: "btn btn-sm",
+                            onclick: move |_| editing.set(false),
+                            "取消"
+                        }
+                        button {
+                            class: "btn btn-sm btn-primary",
+                            onclick: move |_| {
+                                let d = draft.read().clone();
+                                b_edit.cmd(Command::EditProjectCard {
+                                    project_id: pid,
+                                    intent: ProjectIntent {
+                                        name: name.clone(),
+                                        brief: d.0,
+                                        benchmark: d.1,
+                                        north_star: d.2,
+                                    },
+                                });
+                                editing.set(false);
+                            },
+                            "保存 · 建一张活提 MR"
+                        }
+                    }
+                } else {
+                    {charter_line("想做什么", &c.brief)}
+                    {charter_line("对标", &c.benchmark)}
+                    {charter_line("北极星", &c.north_star)}
+                    {charter_line("项目群", &c.chat)}
+                    div { class: "charter-meta",
+                        span { class: "mono", "{c.remote}" }
+                        span { "规范 v{c.standard_version}" }
+                        span { style: "margin-left:auto;",
+                            button { class: "btn btn-sm", onclick: start_edit, "编辑" }
+                        }
+                    }
+                }
+                {card_mr_banner(p, bridge)}
+            }
+            div { class: "health",
+                div { class: "health-big",
+                    {light_dot(p.health.signal, true)}
+                    span { class: "health-word", "{crate::theme::signal_label(p.health.signal)}" }
+                }
+                if p.health.reasons.is_empty() {
+                    div { class: "detail-empty", "还没有任何真实数据 —— 灰不是绿。" }
+                } else {
+                    div { class: "health-reasons",
+                        for (i, (ok, text)) in p.health.reasons.iter().enumerate() {
+                            div { key: "{i}", class: "health-reason",
+                                span { class: "mark", {if *ok { "✓" } else { "○" }} }
+                                span { "{text}" }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn charter_line(k: &str, v: &str) -> Element {
+    rsx! {
+        div { class: "charter-line",
+            span { class: "k", "{k}" }
+            "{v}"
+        }
+    }
+}
+
+/// 名片是仓文件,改它一律走分支 + MR。改完到合入之间这条横幅一直在。
+fn card_mr_banner(p: &ProjectVm, bridge: &Bridge) -> Element {
+    let Some(mr) = p.card_mr.as_ref() else {
+        return rsx! {};
+    };
+    let b = bridge.clone();
+    let id = mr.issue_id;
+    let pr = if mr.pr_number > 0 {
+        format!("MR !{}", mr.pr_number)
+    } else {
+        "还没提 MR".to_string()
+    };
+    rsx! {
+        div { class: "mr-banner",
+            span { "名片改动在 #{mr.number}「{mr.status}」· {pr}" }
+            if mr.mergeable {
+                if let Some(id) = id {
+                    button {
+                        class: "btn btn-sm btn-primary",
+                        onclick: move |_| b.cmd(Command::MergeAndSettle { id }),
+                        "合入并完成"
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── ②③④ 指标 ────────────────────────────────────────
+
+fn north_star_block(p: &ProjectVm) -> Element {
+    rsx! {
+        div { class: "card ov-block",
+            div { class: "ov-block-title", "北极星" }
+            match p.metrics.north_star.as_ref() {
+                Some(m) => metric_card(m, true),
+                None => rsx! { div { class: "detail-empty", "还没定北极星。" } },
+            }
+        }
+    }
+}
+
+fn metric_row_block(title: &str, cards: &[MetricCardVm], note: Option<&str>) -> Element {
+    rsx! {
+        div { class: "card ov-block",
+            div { class: "ov-block-title", "{title}" }
+            if let Some(n) = note {
+                div { class: "detail-empty", "{n}" }
+            }
+            if cards.is_empty() && note.is_none() {
+                div { class: "detail-empty", "这一档还没有指标。" }
+            }
+            div { class: "ov-row",
+                for m in cards.iter() {
+                    {metric_card(m, false)}
+                }
+            }
+        }
+    }
+}
+
+/// 指标卡。**没读数走灰卡** —— 灰卡上写的是「无观测 · Unknown ≠ 绿」,
+/// 不是一个 0。
+fn metric_card(m: &MetricCardVm, big: bool) -> Element {
+    let name_cls = if big { "mcard-name big" } else { "mcard-name" };
+    let value_cls = if big {
+        "mcard-value big"
+    } else {
+        "mcard-value"
+    };
+    let target = if m.target.is_empty() {
+        "目标未设".to_string()
+    } else {
+        format!("目标 {}", m.target)
+    };
+    let Some(reading) = m.reading.as_ref() else {
+        let cls = if big {
+            "mcard gray north"
+        } else {
+            "mcard gray"
+        };
+        return rsx! {
+            div { key: "{m.id}", class: "{cls}", title: "{m.def}",
+                div { class: "mcard-head",
+                    span { class: "{name_cls}", "{m.name}" }
+                    if m.manual {
+                        span { class: "chip badge-manual", "手填" }
+                    }
+                }
+                div { class: "mcard-value-row",
+                    span { class: "{value_cls}", style: "color:var(--ink-4);", "—" }
+                    span { class: "mcard-target", "{target}" }
+                }
+                div { class: "mcard-sub", "无观测 · Unknown ≠ 绿(本周与上周的周计划文件里都没有这条读数)" }
+            }
+        };
+    };
+    let dot_color = if m.manual {
+        "var(--amber)"
+    } else {
+        "var(--green)"
+    };
+    let cls = if big { "mcard north" } else { "mcard" };
+    rsx! {
+        div { key: "{m.id}", class: "{cls}", title: "{m.def}",
+            div { class: "mcard-head",
+                span { class: "dot", style: "background:{dot_color};" }
+                span { class: "{name_cls}", "{m.name}" }
+                if m.manual {
+                    span { class: "chip badge-manual", "手填" }
+                }
+            }
+            div { class: "mcard-value-row",
+                span { class: "{value_cls}", "{reading}" }
+                span { class: "mcard-target", "{target}" }
+            }
+            if !m.source.is_empty() || !m.collected_at.is_empty() {
+                div { class: "mcard-sub", "来源 {m.source} · 采于 {m.collected_at}" }
+            }
+            if !m.driving.is_empty() {
+                div { class: "mcard-driven",
+                    for t in m.driving.iter() {
+                        span { key: "{t}", class: "chip", "{t}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── ⑤ 项目指标 · 代码仓级 ────────────────────────────
+
+fn repo_block(p: &ProjectVm, bridge: &Bridge) -> Element {
+    let b = bridge.clone();
+    rsx! {
+        div { class: "card ov-block",
+            div { class: "repo-metric-head",
+                h3 { "项目指标 · 代码仓级" }
+                button {
+                    class: "btn btn-sm",
+                    onclick: move |_| b.send(Req::CollectRepoStats),
+                    {if p.repo_stats.is_some() { "↻ 重新采集" } else { "↻ 立即采集" }}
+                }
+            }
+            match p.repo_stats.as_ref() {
+                None => rsx! {
+                    div { class: "detail-empty",
+                        "还没采过。采一次要在项目仓里跑好几条 git —— 所以不在每次\
+                         打开时自动跑,点上面那颗按钮才采。"
+                    }
+                },
+                Some(s) if !s.error.is_empty() => rsx! {
+                    div { class: "detail-empty", style: "color:var(--alert-deep);", "{s.error}" }
+                },
+                Some(s) => rsx! {
+                    div { class: "repo-metric-grid",
+                        for (v, k, src) in s.items.iter() {
+                            div { key: "{k}", class: "repo-metric-item",
+                                div { class: "v mono", "{v}" }
+                                div { class: "k",
+                                    "{k}"
+                                    span { class: "chip chip-gray", style: "margin-left:4px;", "{src}" }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "cfg-readonly-note",
+                        "远端那几项(合入的 MR、远端 issue、开着的 MR)要走 GitHub / codehub 的接口,\
+                         还没接 —— 少列几项,不编几个数。"
+                    }
+                },
+            }
+        }
+    }
+}
+
+// ── ⑥ 本周计划进度 ──────────────────────────────────
+
+fn week_block(p: &ProjectVm, nav: PanelNav) -> Element {
+    let w = p.weeks.iter().find(|w| w.week == p.current_week);
+    let goal = w
+        .and_then(|w| w.goal.clone())
+        .unwrap_or_else(|| "(本周尚无计划)".into());
+    let c = &p.week_counts;
+    rsx! {
+        div { class: "card ov-block",
+            div { class: "ov-block-title", "本周计划进度" }
+            div { class: "week-goal",
+                b { "{p.current_week}" }
+                " · {goal}"
+            }
+            div { class: "week-progress",
+                div { style: "width:{c.pct(c.done)}%;background:var(--green);" }
+                div { style: "width:{c.pct(c.review)}%;background:var(--amber);" }
+                div { style: "width:{c.pct(c.doing)}%;background:var(--clay);" }
+                div { style: "width:{c.pct(c.blocked)}%;background:var(--red);" }
+                div { style: "width:{c.pct(c.todo)}%;background:#E4DDC8;" }
+            }
+            div { class: "week-counts",
+                span { "待办 " b { "{c.todo}" } }
+                span { "进行中 " b { "{c.doing}" } }
+                span { "评审中 " b { "{c.review}" } }
+                span { "完成 " b { "{c.done}" } }
+                if c.blocked > 0 {
+                    span { style: "color:var(--alert-deep);", "阻塞 " b { "{c.blocked}" } }
+                }
+            }
+            if !p.ops.is_empty() {
+                div { class: "ops-chip-row",
+                    for o in p.ops.iter() {
+                        span { key: "{o.title}", class: "chip chip-outline", title: "{o.note}",
+                            "{o.title} · {o.status}"
+                        }
+                    }
+                }
+            }
+            button {
+                class: "btn btn-sm",
+                onclick: move |_| nav.go(Panel::Plan),
+                "去计划 →"
+            }
+        }
+    }
+}
+
+// ── ⑦ 在研版本与发版记录 ────────────────────────────
+
+fn version_block(p: &ProjectVm) -> Element {
+    rsx! {
+        div { class: "card ov-block",
+            div { class: "ov-block-title", "在研版本与发版记录" }
+            div { class: "version-cols",
+                div { class: "version-col",
+                    div { class: "k", "在研版本" }
+                    div { class: "v mono", "{p.card.current_version}" }
+                }
+                div { class: "version-col",
+                    div { class: "k", "已发版次数" }
+                    div { class: "v mono", "{p.releases.len()}" }
+                }
+            }
+            if p.releases.is_empty() {
+                div { class: "detail-empty",
+                    "还没有发过版。docs/releases.md 是这份记录的唯一正本,库里不存副本。"
+                }
+            }
+            for r in p.releases.iter() {
+                div { key: "{r.version}", class: "release-line",
+                    "{r.version} · {r.released_at}"
+                    if !r.note.is_empty() {
+                        " · {r.note}"
+                    }
+                    if !r.included.is_empty() {
+                        " · 含 {r.included}"
+                    }
+                    if r.origin != "human" {
+                        span { class: "chip chip-gray", style: "margin-left:5px;", "{r.origin}" }
                     }
                 }
             }

@@ -214,7 +214,44 @@ pub async fn create_mr(
     crate::workspace::stage_commit_push(workspace, &branch, issue_number, title)
         .await
         .map_err(|e| CodehubError::Command(format!("git 准备失败:{e}")))?;
-    // target-branch = project default, resolved at runtime (see doc comment).
+    let body = format!(
+        "BW 执行器为 Issue #{issue_number} 提交的改动,等待人工 merge 验收。\n\nCloses #{issue_number}"
+    );
+    create_mr_on_branch(
+        host,
+        path,
+        workspace,
+        &branch,
+        title,
+        &body,
+        Some(issue_number),
+    )
+    .await
+}
+
+/// 在**已经推上去的分支**上开一个 MR —— `codehub-cli mr create` 就这一处实现。
+///
+/// 调用方各自准备分支的方式不同([`create_mr`] 走 `stage_commit_push`、
+/// [`create_project_init_mr`] 先 checkout 再提交、V4 的规范铺底自己在 worktree
+/// 里只提交点名的那几个文件),开 MR 这一步是同一段代码,只留一份。
+///
+/// `body` 与 `issue_number` 都由调用方给:**带不带 `Closes` / `--issue-nums`
+/// 是调用方的决定**。V4 的活是本机号,和远端 issue 号没有对应关系,自作主张
+/// 挂上去会把那个仓里毫不相干的一号活关掉。
+///
+/// target-branch = 项目默认分支,运行时从 `origin/HEAD` 解析(maas 是
+/// `master`,别的项目可能是 `main`/`develop`)。`symbolic-ref` 在没设
+/// `origin/HEAD` 的克隆上会非零退出且 stdout 为空,这时退回 `master` —— 基线
+/// 猜错会由 codehub-cli 的「branch not found」如实报出来,不会假装成功。
+pub async fn create_mr_on_branch(
+    host: &str,
+    path: &str,
+    workspace: &Path,
+    branch: &str,
+    title: &str,
+    body: &str,
+    issue_number: Option<u32>,
+) -> Result<crate::github::PrOpened, CodehubError> {
     let tgt = crate::win_cmd::tokio_cmd("git")
         .current_dir(workspace)
         .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
@@ -224,12 +261,6 @@ pub async fn create_mr(
         .output()
         .await
         .map_err(spawn_err)?;
-    // `symbolic-ref` exits non-zero with empty stdout when the clone has no
-    // `origin/HEAD` set (rare for a normal clone). Fall back to `master`
-    // rather than hard-failing: for a wrong-base non-master project this
-    // surfaces honestly as codehub-cli's "branch not found" — never
-    // fabricated success. (Code-review 2026-07-30: the prior early `Err`
-    // made the doc's promised master fallback unreachable on this path.)
     let target = String::from_utf8_lossy(&tgt.stdout)
         .trim()
         .strip_prefix("refs/remotes/origin/")
@@ -238,62 +269,36 @@ pub async fn create_mr(
     // P7-7A parity: adopt an already-open MR for this branch if one exists.
     // A prior run (or a manual smoke) may have opened an MR that BW didn't
     // record — `mr create` would then fail "already exists". Read the real
-    // iid back via `mr list --source-branch` (never guessed, same honesty as
-    // github's `adopt_existing_pr`). Falls through to `mr create` when no
-    // existing MR (or the list call itself fails — then `mr create` reports).
-    let list = crate::win_cmd::tokio_cmd("codehub-cli")
-        .args([
-            "mr",
-            "list",
-            "-p",
-            path,
-            "-H",
-            host,
-            "--source-branch",
-            &branch,
-            "--state",
-            "opened",
-            "--jq",
-            ".[0].iid",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(spawn_err)?;
-    if list.status.success() {
-        let text = String::from_utf8_lossy(&list.stdout).trim().to_string();
-        if !text.is_empty() && text != "null" {
-            if let Ok(iid) = text.parse::<u32>() {
-                return Ok(crate::github::PrOpened::Adopted(iid));
-            }
-        }
+    // iid back (never guessed, same honesty as github's `adopt_existing_pr`).
+    // 读回失败(网络/权限)就落到下面的 `mr create`,由它如实报错。
+    if let Ok(Some(iid)) = open_mr_for_branch(host, path, branch).await {
+        return Ok(crate::github::PrOpened::Adopted(iid));
     }
-    let body = format!(
-        "BW 执行器为 Issue #{issue_number} 提交的改动,等待人工 merge 验收。\n\nCloses #{issue_number}"
-    );
+    let issue_nums = issue_number.map(|n| format!("issue{n}"));
+    let mut args: Vec<&str> = vec![
+        "mr",
+        "create",
+        "-p",
+        path,
+        "-H",
+        host,
+        "--source-branch",
+        branch,
+        "--target-branch",
+        &target,
+        "--title",
+        title,
+        "--description",
+        body,
+    ];
+    if let Some(nums) = issue_nums.as_deref() {
+        args.push("--issue-nums");
+        args.push(nums);
+    }
+    args.push("--jq");
+    args.push(".iid");
     let out = crate::win_cmd::tokio_cmd("codehub-cli")
-        .args([
-            "mr",
-            "create",
-            "-p",
-            path,
-            "-H",
-            host,
-            "--source-branch",
-            &branch,
-            "--target-branch",
-            &target,
-            "--title",
-            title,
-            "--description",
-            &body,
-            "--issue-nums",
-            &format!("issue{issue_number}"),
-            "--jq",
-            ".iid",
-        ])
+        .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -440,9 +445,9 @@ const PROJECT_INIT_BRANCH: &str = "bw/project-init";
 /// `bw/project-init` branch — the codehub parity of
 /// [`crate::github::open_project_init_pr`]. Parallels [`create_mr`] but
 /// without an issue number: the branch is `bw/project-init`, the commit
-/// message is `chore: …`, and the MR body carries no `Closes` keyword. Returns
-/// the new MR's iid as `PrOpened::Created`. **No `Adopted` path** (same as
-/// `create_mr` — honest failure if an MR already exists). **Never merges** —
+/// message is `chore: …`, and the MR body carries no `Closes` keyword。开 MR
+/// 那一步和 [`create_mr`] 共用 [`create_mr_on_branch`],所以**同样会认领**
+/// 分支上已经存在的那个 MR(读回真 iid,不猜)。**Never merges** —
 /// the caller auto-merges via [`merge_mr`] on success, or surfaces a tip.
 pub async fn create_project_init_mr(
     host: &str,
@@ -479,55 +484,8 @@ pub async fn create_project_init_mr(
     )
     .await
     .map_err(|e| CodehubError::Command(format!("git 准备失败:{e}")))?;
-    // target-branch = project default, resolved at runtime (same as create_mr).
-    let tgt = crate::win_cmd::tokio_cmd("git")
-        .current_dir(workspace)
-        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(spawn_err)?;
-    let target = String::from_utf8_lossy(&tgt.stdout)
-        .trim()
-        .strip_prefix("refs/remotes/origin/")
-        .unwrap_or("master")
-        .to_string();
     let body = "BW 创建流写入的项目意图正本,自动合入落仓(配置文件,非 Issue)。";
-    let out = crate::win_cmd::tokio_cmd("codehub-cli")
-        .args([
-            "mr",
-            "create",
-            "-p",
-            path,
-            "-H",
-            host,
-            "--source-branch",
-            branch,
-            "--target-branch",
-            &target,
-            "--title",
-            title,
-            "--description",
-            body,
-            "--jq",
-            ".iid",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(spawn_err)?;
-    if !out.status.success() {
-        return Err(CodehubError::Command(stderr_text(&out)));
-    }
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let iid = text
-        .parse::<u32>()
-        .map_err(|_| CodehubError::Parse(format!("无法解析 codehub MR iid:{text:?}")))?;
-    Ok(crate::github::PrOpened::Created(iid))
+    create_mr_on_branch(host, path, workspace, branch, title, body, None).await
 }
 
 /// `codehub-cli issue|mr list -p <path> -H <host> --state <state> -l 0 --jq length`

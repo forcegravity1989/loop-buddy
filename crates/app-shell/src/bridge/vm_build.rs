@@ -11,6 +11,7 @@ use bw_v4::model::{IssueStatus, Project, ProjectId};
 use bw_v4::repo::{issue_policy_file, project_file, release_file, week_plan_file};
 use bw_v4::V4Store;
 
+use super::vm_derive::{build_card_mr, build_notify_events, build_ops, build_week_counts};
 use super::vm_kb::build_kb;
 use super::vm_panels::{
     build_board, build_config, build_metrics, build_sessions, build_weeks, build_workbench,
@@ -36,8 +37,13 @@ pub(super) fn read_or_warn<T>(
 pub struct UiState {
     pub open: Option<ProjectId>,
     pub viewing_week: String,
+    /// 计划屏左栏点的是「全部」。
+    pub view_all: bool,
     pub open_doc: Option<String>,
     pub note: Option<String>,
+    /// 这是第几条回执。toast 靠它判断「这条我关过没有」—— 按正文判断的话,
+    /// 同一句失败第二次出现会被当成已关过的那条,静默不弹。
+    pub note_seq: u64,
     /// 「开始本周」回来的草稿活标,连同是哪一周。人确认前只存在这里,不进库。
     pub pending_drafts: Option<(String, Vec<String>)>,
     /// 会话屏选中哪个会话、开着哪个页签、展开了哪些目录、中栏开着哪个文件。
@@ -53,6 +59,9 @@ pub struct UiState {
     pub kb_tab: crate::vm::KbTab,
     pub kb_codegraph: Option<crate::vm::CodeGraphVm>,
     pub kb_assets: Option<crate::vm::AssetsVm>,
+    /// 总览那块「项目指标 · 代码仓级」上一次采到的数。同理:采一次要起好几个
+    /// git 子进程,只在人点「立即采集」那一刻跑。
+    pub repo_stats: Option<crate::vm::RepoStatsVm>,
     pub db_path: String,
     pub workspaces_root: String,
 }
@@ -207,6 +216,15 @@ fn primary_note(events: &[Event]) -> Option<String> {
     })
 }
 
+impl UiState {
+    /// 写一条回执,并把序号往前推一格。**所有写 `note` 的地方都走这里**,
+    /// 漏掉一处就会出现「关过一次之后同样的话再也不弹」。
+    pub fn set_note(&mut self, note: Option<String>) {
+        self.note = note;
+        self.note_seq = self.note_seq.wrapping_add(1);
+    }
+}
+
 pub async fn build(app: &App, ui: &UiState) -> Vm {
     let store = app.store();
     let projects = store.projects().await.unwrap_or_default();
@@ -223,6 +241,30 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
         .unwrap_or_default();
         let week = bw_v4::isoweek::current_week();
         let in_week = store.issues_in_week(p.id, &week).await.unwrap_or_default();
+        // 未读 = 评审中/阻塞里、更新时间晚于「读到这里」那一下的。没点过通知屏
+        // 就是全部算未读。这个数是现算的,库里没有未读表。
+        let seen_at: i64 = store
+            .meta(&bw_v4::store::notify_seen_key(p.id))
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let unread = store.count_unseen(p.id, seen_at).await.unwrap_or(0);
+        let week_goal = week_plan_file::read(&ws, &week)
+            .ok()
+            .flatten()
+            .filter(|pl| pl.has_goal())
+            .and_then(|pl| pl.goal)
+            .unwrap_or_default();
+        // 上次交付 = 发版记录最后一行。仓里没有那份表就留空,不拿最近一次
+        // commit 冒充「交付」——提交不是交付。
+        let last_delivery = release_file::read(&ws)
+            .ok()
+            .flatten()
+            .and_then(|rows| rows.last().cloned())
+            .map(|r| format!("{} {}", r.released_at, r.version))
+            .unwrap_or_default();
         cards.push(ProjectCardVm {
             id: p.id,
             slug: p.slug.clone(),
@@ -236,6 +278,11 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
                 .iter()
                 .filter(|i| i.status == IssueStatus::Done)
                 .count() as u32,
+            version: file.current_version.clone(),
+            week,
+            unread,
+            week_goal,
+            last_delivery,
         });
     }
 
@@ -256,6 +303,7 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
             claude_binary: bw_engine::resolve_claude_binary(None),
         },
         note: ui.note.clone(),
+        note_seq: ui.note_seq,
         warnings,
     }
 }
@@ -272,11 +320,18 @@ pub(super) fn remote_label(p: &Project) -> String {
 pub(super) fn probe_env() -> Vec<ToolProbeVm> {
     // 探活与「要什么才能用」都问适配模块要,不在这里重写一遍 —— 加一个新的
     // 开工工具应该只是加一个适配模块目录,不改这个文件。
+    //
+    // 六项分成两类,**界面上分得清**:能在 `PATH` 里当场找出来的(claude /
+    // cursor-agent / codehub / gh)给 `Some(..)`,红绿都是真的;还没接实现的
+    // (Open Design 内嵌、welink-cli)给 `None` —— 灰,不是绿,也不是红。
     let claude = crate::adapters::claude_cli::detect();
+    let cursor = bw_engine::which_on_path("cursor-agent");
+    let codehub = bw_engine::which_on_path("codehub");
+    let gh = bw_engine::which_on_path("gh");
     vec![
         ToolProbeVm {
             name: "claude_cli".into(),
-            label: "Claude CLI".into(),
+            label: "claude".into(),
             ok: Some(claude.is_some()),
             detail: claude.unwrap_or_else(|| {
                 format!(
@@ -287,19 +342,35 @@ pub(super) fn probe_env() -> Vec<ToolProbeVm> {
         },
         ToolProbeVm {
             name: "cursor".into(),
-            label: "Cursor".into(),
-            ok: None,
-            detail: "点「测一下」现探(探活要起子进程,不在开屏时做)".into(),
+            label: "cursor-agent".into(),
+            ok: Some(cursor.is_some()),
+            detail: cursor.unwrap_or_else(|| "本机路径里找不到 cursor-agent".into()),
+        },
+        ToolProbeVm {
+            name: "codehub".into(),
+            label: "codehub-cli".into(),
+            ok: Some(codehub.is_some()),
+            detail: codehub.unwrap_or_else(|| "本机路径里找不到 codehub".into()),
+        },
+        ToolProbeVm {
+            name: "gh".into(),
+            label: "GitHub CLI".into(),
+            ok: Some(gh.is_some()),
+            // 装没装能当场看出来;**登录没登录看不出来** —— 那要跑
+            // `gh auth status`,起子进程的事没接,就别拿「装了」冒充「登录了」。
+            detail: gh
+                .map(|p| format!("{p}(登录态没探,探它要起子进程)"))
+                .unwrap_or_else(|| "本机路径里找不到 gh".into()),
         },
         ToolProbeVm {
             name: "open_design".into(),
             label: "Open Design".into(),
             ok: None,
-            detail: "点「测一下」现探".into(),
+            detail: "内嵌还没接,探不出结果".into(),
         },
         ToolProbeVm {
             name: "welink_cli".into(),
-            label: "WeLink CLI".into(),
+            label: "welink-cli".into(),
             ok: None,
             detail: "还没接,探不出结果".into(),
         },
@@ -318,6 +389,14 @@ async fn build_project(
     let file =
         read_or_warn(".bw/project.toml", project_file::read(&ws), warnings).unwrap_or_default();
     let issues = store.issues(id).await.unwrap_or_default();
+    let conversations = store.conversations(id).await.unwrap_or_default();
+    // 「读到这里」是哪一刻。通知屏和项目轨的红点用的是同一个值,读一次就够。
+    let notify_seen: Option<i64> = store
+        .meta(&bw_v4::store::notify_seen_key(id))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok());
     let sessions = build_sessions(app, id, &issues).await;
     let current_week = bw_v4::isoweek::current_week();
     let viewing_week = if ui.viewing_week.is_empty() {
@@ -341,6 +420,8 @@ async fn build_project(
         warnings,
     );
 
+    // 本周计数在构造之前算好 —— `current_week` 会被 move 进结构体。
+    let week_counts_now = build_week_counts(&issues, Some(current_week.as_str()));
     Some(ProjectVm {
         id,
         slug: p.slug.clone(),
@@ -370,7 +451,34 @@ async fn build_project(
         weeks: build_weeks(&ws),
         current_week,
         viewing_week: viewing_week.clone(),
-        board: build_board(&issues, &viewing_week, policy.as_ref()),
+        view_all: ui.view_all,
+        board: build_board(
+            &issues,
+            if ui.view_all {
+                None
+            } else {
+                Some(viewing_week.as_str())
+            },
+            policy.as_ref(),
+        ),
+        // 两份计数,各有各的归属:总览那块标题写着「本周」,就只能是本周;
+        // 计划屏的进度条画在它正在看的那个看板上面,就跟着看板的范围走。
+        // **共用一份的后果**是人在计划屏点了历史周,总览的「本周」下面摆着
+        // 那一周的数。
+        week_counts: week_counts_now,
+        board_counts: build_week_counts(
+            &issues,
+            if ui.view_all {
+                None
+            } else {
+                Some(viewing_week.as_str())
+            },
+        ),
+        ops: build_ops(plan.as_ref()),
+        // 采不采由界面点 —— 现算一次要起好几个 git 子进程,不能每次重拼
+        // ViewModel 都跑一遍(人打字时每 30ms 就重拼一次)。
+        repo_stats: ui.repo_stats.clone(),
+        card_mr: build_card_mr(&issues),
         pending_drafts: match &ui.pending_drafts {
             Some((week, titles)) if *week == viewing_week => titles.clone(),
             _ => Vec::new(),
@@ -418,14 +526,14 @@ async fn build_project(
                 .filter(|i| i.status == IssueStatus::Blocked)
                 .map(card_item)
                 .collect(),
-            seen_at: store
-                .meta(&bw_v4::store::notify_seen_key(id))
+            seen_at: notify_seen,
+            events: build_notify_events(&issues, &conversations),
+            unread: store
+                .count_unseen(id, notify_seen.unwrap_or(0))
                 .await
-                .ok()
-                .flatten()
-                .and_then(|v| v.parse().ok()),
+                .unwrap_or(0),
         },
-        config: build_config(store, id, &ws, policy.as_ref(), &p).await,
+        config: build_config(store, id, &ws, policy.as_ref(), &p, &file).await,
         kb: KbVm {
             codegraph: ui.kb_codegraph.clone(),
             assets: ui.kb_assets.clone(),

@@ -526,16 +526,35 @@ pub async fn open_pr(
     stage_commit_push(workspace, &branch, github_number, title)
         .await
         .map_err(|e| git_err("暂存/提交/推送活分支失败", e))?;
-    // gh infers the base repo + default base branch from the origin remote in
-    // `workspace`; `Closes #<n>` in the body is what auto-closes the Issue on
-    // merge (D3: issue 关闭是 merge 的后果).
+    // `Closes #<n>` in the body is what auto-closes the Issue on merge
+    // (D3: issue 关闭是 merge 的后果).
     let body = format!(
         "BW 执行器为 Issue #{github_number} 提交的改动,等待人工 merge 验收。\n\nCloses #{github_number}"
     );
+    create_pr_on_branch(workspace, &branch, title, &body).await
+}
+
+/// 在**已经推上去的分支**上开一个 PR —— `gh pr create` 就这一处实现。
+///
+/// 三个调用方各自准备分支的方式不同([`open_pr`] 走 `stage_commit_push`、
+/// [`open_project_init_pr`] 先 checkout 再提交、V4 的规范铺底自己在 worktree
+/// 里只提交点名的那几个文件),但「开 PR」这一步是同一段代码,所以只留一份。
+///
+/// `body` 由调用方给:带不带 `Closes #<n>` 是调用方的决定 —— **不能默认带**。
+/// V4 的活是本机号,和远端 issue 号没有对应关系,拼一句 `Closes #3` 会去关掉
+/// 那个仓里毫不相干的第 3 号 issue。
+///
+/// gh 从 `workspace` 的 origin 远端推断目标仓与默认基线分支。
+pub async fn create_pr_on_branch(
+    workspace: &Path,
+    branch: &str,
+    title: &str,
+    body: &str,
+) -> Result<PrOpened, GithubError> {
     let output = crate::win_cmd::tokio_cmd("gh")
         .current_dir(workspace)
         .args([
-            "pr", "create", "--head", &branch, "--title", title, "--body", &body,
+            "pr", "create", "--head", branch, "--title", title, "--body", body,
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -552,7 +571,7 @@ pub async fn open_pr(
         // 禁的只有 `gh pr merge`)。任何其它失败(无权限/网络/分支没推……)
         // 原样 `Err`,绝不吞掉当"提 PR 幂等"处理。
         if stderr.contains("already exists") {
-            match adopt_existing_pr(workspace, &branch).await {
+            match adopt_existing_pr(workspace, branch).await {
                 Ok(pr) => return Ok(PrOpened::Adopted(pr)),
                 // 读回也失败(罕见的竞态/权限边缘情况)——如实把原始
                 // create 失败信息交回,不假装认领成功。
@@ -649,36 +668,7 @@ pub async fn open_project_init_pr(workspace: &Path, title: &str) -> Result<PrOpe
     .await
     .map_err(|e| git_err("暂存/提交/推送 project-init 分支失败", e))?;
     let body = "BW 创建流写入的项目意图正本,自动合入落仓(配置文件,非 Issue)。";
-    let output = crate::win_cmd::tokio_cmd("gh")
-        .current_dir(workspace)
-        .args([
-            "pr", "create", "--head", branch, "--title", title, "--body", body,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(spawn_err)?;
-    if !output.status.success() {
-        let stderr = stderr_text(&output);
-        // Same idempotent adoption as `open_pr`: a PR for this branch may
-        // already exist (a prior creation attempt). Any other failure (no
-        // permission, network, …) is `Err` unchanged.
-        if stderr.contains("already exists") {
-            match adopt_existing_pr(workspace, branch).await {
-                Ok(pr) => return Ok(PrOpened::Adopted(pr)),
-                Err(_) => return Err(GithubError::Command(stderr)),
-            }
-        }
-        return Err(GithubError::Command(stderr));
-    }
-    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    url.rsplit('/')
-        .next()
-        .and_then(|s| s.parse::<u32>().ok())
-        .map(PrOpened::Created)
-        .ok_or_else(|| GithubError::Command(format!("无法从 gh 输出解析 PR 号:{url:?}")))
+    create_pr_on_branch(workspace, branch, title, body).await
 }
 
 /// `gh issue view --json state` → `OPEN` / `CLOSED`. Lets `MergeIssuePr` verify

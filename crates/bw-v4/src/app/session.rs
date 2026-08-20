@@ -12,6 +12,7 @@
 //! 阻塞的 `run_skill`——没有界面去渲染字节流,起个 PTY 只会留下一个没人读的
 //! 子进程。
 
+use super::worktree;
 use super::{App, AppError, Result};
 use crate::command::Event;
 use crate::model::{ConversationId, IssueId, IssueStatus};
@@ -104,13 +105,11 @@ impl App {
             }
         }
 
-        // 分支名记的是**这个工作区当前真的在哪个分支上**,不是拼一个
-        // `bw/issue-N` 出来。V4 还没有给每张活开 worktree 与分支(见
-        // `docs/LEFTOVERS.md`),拼一个不存在的名字摆在界面上,人拿
-        // `git rev-parse --abbrev-ref HEAD` 一对就对不上。
-        let branch = crate::git::current_branch(&ws)
-            .await
-            .unwrap_or_else(|_| "—(读不出当前分支)".into());
+        // agent 不在人的主检出里干活,在**这张活自己的一棵 worktree** 里干,
+        // 分支是 `bw/issue-<号>`。两张活同时开工也就互不干扰了。分支名不是拼
+        // 出来的:worktree 真的在这个分支上,`git rev-parse --abbrev-ref HEAD`
+        // 一对就对得上。
+        let tree = worktree::provision(&ws, issue.number).await?;
 
         let conv = self
             .store
@@ -119,21 +118,32 @@ impl App {
                 project_id: issue.project_id,
                 issue_id: id,
                 claude_session_id: String::new(),
-                workspace_path: ws.display().to_string(),
-                branch_name: branch.clone(),
+                workspace_path: tree.path.display().to_string(),
+                branch_name: tree.branch.clone(),
                 created_at: 0,
                 last_opened_at: 0,
             })
             .await?;
+        // 界面上这张活的分支从这里来。**变了才写** —— 反复停止/重开时分支根本
+        // 没变,白写一条 UPDATE 还会把 `updated_at` 顶新,让这张活在「最近动过」
+        // 里排到前面,而它其实什么都没变。
+        if issue.branch != tree.branch {
+            self.store
+                .set_issue_remote(id, &tree.branch, issue.pr_number, issue.remote_number)
+                .await?;
+        }
 
         let prompt = format!("#{} {}\n\n{}", issue.number, issue.title, issue.body);
-        let workflow_body = super::bootstrap::workflow_body(&ws, &issue.workflow);
+        // 剧本先在这棵树里找,找不到再回主工作区找 —— 有些仓(buddy 自己的就
+        // 是)把 `.claude/` 写进了 .gitignore,技能包进不了分支,只在主检出里。
+        let workflow_body = super::bootstrap::workflow_body(&tree.path, &issue.workflow)
+            .or_else(|| super::bootstrap::workflow_body(&ws, &issue.workflow));
         let system_prompt = super::bootstrap::agent_system_prompt(&issue, workflow_body.as_deref());
         // 有 `--resume` id 就精确接回那一次对话,不是模糊地接「最近一次」。
         let plan = if conv.claude_session_id.is_empty() {
-            build_startup_plan(&CLAUDE, &prompt, &system_prompt, &ws)
+            build_startup_plan(&CLAUDE, &prompt, &system_prompt, &tree.path)
         } else {
-            build_resume_plan(&CLAUDE, Some(&conv.claude_session_id), &ws)
+            build_resume_plan(&CLAUDE, Some(&conv.claude_session_id), &tree.path)
         }
         .map_err(|e| AppError::Exec(e.to_string()))?;
 
@@ -141,8 +151,8 @@ impl App {
             conversation_id: conv.id,
             issue_id: id,
             claude_session_id: conv.claude_session_id.clone(),
-            workspace_path: ws.clone(),
-            branch_name: branch,
+            workspace_path: tree.path.clone(),
+            branch_name: tree.branch,
         };
         let (bytes_tx, input_rx) = self.terminal.attach(conv.id, meta, None);
 

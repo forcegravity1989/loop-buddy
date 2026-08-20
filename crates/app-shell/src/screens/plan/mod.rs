@@ -1,4 +1,5 @@
-//! 项目内 · 计划。左栏周列表 + 六列看板。
+//! 项目内 · 计划。**结构照 `hifi/index.html` 的 `renderPlan` 排**:左栏 180px
+//! 周列表 + 中栏工具条 / 周目标 / 进度条 / 六列看板,右侧 360px 详情抽屉。
 //!
 //! **所有列都能拖**,但两种拖不是一回事:
 //!
@@ -6,23 +7,40 @@
 //! - 拖进进行中 / 评审中 / 已完成 / 阻塞是**状态动作**,松手弹确认框,确认了
 //!   才真的发命令;状态机不允许的转移松手即弹回,连确认框都不弹。
 //!
-//! 卡面上没有按钮 —— 按钮全在右侧详情面板。同一个位置按状态互斥切换文案,
+//! 卡面上没有按钮 —— 按钮全在右侧详情抽屉。同一个位置按状态互斥切换文案,
 //! 不堆一排常驻按钮。
 
+mod detail;
+mod kanban;
+
 use crate::bridge::{Bridge, Req};
-use crate::theme;
-use crate::vm::{CardItemVm, ColumnVm, ProjectVm};
+use crate::vm::{CardItemVm, ProjectVm};
 use bw_v4::command::Command;
 use bw_v4::model::{IssueId, IssueStatus};
 use dioxus::prelude::*;
 
-/// 松手之后等人确认的那一下。
-#[derive(Clone, PartialEq)]
-struct PendingMove {
-    id: IssueId,
-    title: String,
-    from: IssueStatus,
-    to: IssueStatus,
+use detail::DetailPanel;
+use kanban::{board, PendingMove};
+
+/// 「全部活」视图上的四个筛选器。纯界面过滤,不发命令。
+#[derive(Clone, Default, PartialEq)]
+struct Filters {
+    category: String,
+    version: String,
+    origin: String,
+    keyword: String,
+}
+
+impl Filters {
+    fn keep(&self, c: &CardItemVm) -> bool {
+        (self.category.is_empty() || c.category == self.category)
+            && (self.version.is_empty() || c.version == self.version)
+            && (self.origin.is_empty() || c.origin == self.origin)
+            && (self.keyword.is_empty()
+                || c.title
+                    .to_lowercase()
+                    .contains(&self.keyword.to_lowercase()))
+    }
 }
 
 #[component]
@@ -32,86 +50,90 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
     let pending = use_signal(|| None::<PendingMove>);
     let selected = use_signal(|| None::<IssueId>);
     let bounced = use_signal(String::new);
+    let filters = use_signal(Filters::default);
 
     rsx! {
-        div {
-            style: "display:flex;gap:16px;align-items:flex-start;",
-            {week_rail(p, bridge)}
-            div {
-                style: "flex:1;min-width:0;",
-                {board_head(p, bridge)}
+        section { class: "plan-grid", style: "height:calc(100vh - 112px);",
+            div { class: "plan-col", {week_rail(p, bridge)} }
+            div { class: "plan-col plan-mid",
+                {toolbar(p, bridge)}
+                if p.view_all {
+                    {filter_bar(filters)}
+                } else {
+                    {week_head(p)}
+                }
                 {draft_confirm(p, bridge)}
                 if !bounced.read().is_empty() {
-                    div {
-                        style: "margin-bottom:10px;padding:8px 12px;border-radius:8px;\
-                                background:#F6E7E2;color:{theme::ALERT_DEEP};font-size:12px;",
-                        "{bounced}"
-                    }
+                    div { class: "mr-banner", style: "margin:0 0 8px;color:var(--alert-deep);", "{bounced}" }
                 }
-                div {
-                    style: "display:flex;gap:12px;overflow-x:auto;padding-bottom:12px;",
-                    for col in p.board.columns.iter() {
-                        {column(col, &p.viewing_week, bridge, dragging, pending, selected, bounced)}
-                    }
-                }
+                {board(p, Some(filters.read().clone()), bridge, dragging, pending, selected, bounced)}
             }
-            {detail_panel(p, selected, bridge)}
         }
+        DetailPanel { p: p.clone(), selected, bridge: bridge.clone() }
         if let Some(pm) = pending.read().clone() {
             {confirm_dialog(pm, pending, bridge)}
         }
     }
 }
 
+// ── 左栏 ────────────────────────────────────────────
+
 fn week_rail(p: &ProjectVm, bridge: &Bridge) -> Element {
+    let b_all = bridge.clone();
+    let (current, history): (Vec<_>, Vec<_>) = p.weeks.iter().partition(|w| !w.backfill);
     rsx! {
         div {
-            style: "width:210px;flex:none;{theme::card()}padding:14px;max-height:calc(100vh - 160px);\
-                    overflow:auto;",
-            div { style: "font-size:12px;color:{theme::INK_3};margin-bottom:10px;", "周" }
-            if p.weeks.is_empty() {
-                div {
-                    style: "font-size:12px;color:{theme::INK_4};line-height:1.8;",
-                    "docs/plan/ 里还没有周计划文件。周列表是扫这个目录得到的,没有索引表。"
-                }
+            class: if p.view_all { "plan-allrow active" } else { "plan-allrow" },
+            onclick: move |_| b_all.send(Req::ViewAll(true)),
+            "全部"
+        }
+        if p.weeks.is_empty() {
+            div { class: "detail-empty",
+                "docs/plan/ 里还没有周计划文件。周列表是扫这个目录得到的,没有索引表。"
             }
-            for w in p.weeks.iter() {
-                {week_row(w, &p.viewing_week, bridge)}
-            }
+        }
+        for w in current.iter() {
+            {week_row(w, p, bridge)}
+        }
+        if !history.is_empty() {
+            div { class: "plan-weekgroup", "历史周(回填)" }
+        }
+        for w in history.iter() {
+            {week_row(w, p, bridge)}
+        }
+        div { class: "plan-versionsel",
+            label { class: "label", "在研版本" }
+            div { class: "mono", style: "font-size:13px;", "{p.card.current_version}" }
         }
     }
 }
 
-fn week_row(w: &crate::vm::WeekVm, viewing: &str, bridge: &Bridge) -> Element {
+fn week_row(w: &crate::vm::WeekVm, p: &ProjectVm, bridge: &Bridge) -> Element {
     let b = bridge.clone();
     let week = w.week.clone();
-    let active = w.week == viewing;
-    let bg = if active {
-        theme::CARD_ALT
-    } else {
-        "transparent"
-    };
+    let active = !p.view_all && w.week == p.viewing_week;
+    let is_current = w.week == p.current_week;
     rsx! {
         div {
             key: "{w.week}",
-            style: "padding:8px 10px;border-radius:8px;cursor:pointer;background:{bg};margin-bottom:2px;",
+            class: if active { "plan-weekrow active" } else { "plan-weekrow" },
             onclick: move |_| b.send(Req::ViewWeek(week.clone())),
-            div {
-                style: "display:flex;align-items:center;gap:6px;",
-                div { style: "font-family:{theme::MONO};font-size:12px;", "{w.week}" }
-                if w.backfill {
-                    span { style: "{theme::chip(theme::CARD, theme::INK_4)}", "回填" }
-                }
+            span {
+                "{w.week}"
+                if is_current { " · 本周" }
             }
-            div {
-                style: "font-size:11px;color:{theme::INK_4};margin-top:2px;",
-                "{w.activity_count} 张业务活"
+            if w.backfill {
+                span { class: "chip-muted", "回填" }
+            } else {
+                span { class: "chip-muted", "{w.activity_count}" }
             }
         }
     }
 }
 
-fn board_head(p: &ProjectVm, bridge: &Bridge) -> Element {
+// ── 中栏顶部 ────────────────────────────────────────
+
+fn toolbar(p: &ProjectVm, bridge: &Bridge) -> Element {
     let b_new = bridge.clone();
     let b_rel = bridge.clone();
     let b_refresh = bridge.clone();
@@ -127,44 +149,116 @@ fn board_head(p: &ProjectVm, bridge: &Bridge) -> Element {
         .find(|c| c.status == IssueStatus::Done)
         .map(|c| c.cards.iter().map(|x| x.id).collect())
         .unwrap_or_default();
+    let title = if p.view_all {
+        "全部活".to_string()
+    } else if p.viewing_week == p.current_week {
+        format!("{} · 本周", p.viewing_week)
+    } else {
+        p.viewing_week.clone()
+    };
     rsx! {
-        div {
-            style: "display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
-            div { style: "font-family:{theme::SERIF};font-size:19px;", "{p.viewing_week}" }
-            div { style: "font-size:12px;color:{theme::INK_3};", "在研版本 {p.card.current_version}" }
-            div { style: "flex:1;" }
-            button {
-                style: "{theme::btn_ghost()}",
-                onclick: move |_| b_refresh.cmd(Command::RefreshIssueCacheFromPlan {
-                    project_id: pid,
-                    week: week2.clone(),
-                }),
-                "按文件刷新"
+        div { class: "plan-toolbar",
+            div { class: "left", "{title}" }
+            div { class: "right",
+                if !p.view_all {
+                    button {
+                        class: "btn btn-sm",
+                        onclick: move |_| b_refresh.cmd(Command::RefreshIssueCacheFromPlan {
+                            project_id: pid,
+                            week: week2.clone(),
+                        }),
+                        "按文件刷新"
+                    }
+                    button {
+                        class: "btn btn-sm",
+                        // 在研版本填了、而且这一周真有完成的活,才发得了版。
+                        disabled: done_ids.is_empty() || !can_release,
+                        onclick: move |_| b_rel.cmd(Command::CutRelease {
+                            project_id: pid,
+                            version: next_version(&version),
+                            note: "本周完成的活".into(),
+                            included: done_ids.clone(),
+                        }),
+                        "发版本"
+                    }
+                    button {
+                        class: "btn btn-sm btn-primary",
+                        onclick: move |_| b_new.cmd(Command::CreateIssue {
+                            project_id: pid,
+                            title: format!("新活 · {week}"),
+                            body: String::new(),
+                            category: Some(bw_v4::model::StageKind::Build),
+                            kind: bw_v4::model::IssueKind::Business,
+                            origin: bw_v4::model::IssueOrigin::Human,
+                            week_of: week.clone(),
+                        }),
+                        "新建活"
+                    }
+                    // 高保真上这里还有一颗「预览 · 未合入」开关:看活自己的
+                    // worktree 里那份还没合入的 .bw/metrics.toml 与 docs/plan/。
+                    // 还没接,做成明确的灰态,点不动 —— 不放一个点了没反应的开关。
+                    label { class: "switch", title: "还没接:要去读活自己 worktree 里未合入的仓文件",
+                        input { r#type: "checkbox", disabled: true }
+                        " 预览 · 未合入"
+                    }
+                }
             }
-            button {
-                style: "{theme::btn_ghost()}",
-                // 在研版本填了、而且本周真有完成的活,才发得了版。
-                disabled: done_ids.is_empty() || !can_release,
-                onclick: move |_| b_rel.cmd(Command::CutRelease {
-                    project_id: pid,
-                    version: next_version(&version),
-                    note: "本周完成的活".into(),
-                    included: done_ids.clone(),
-                }),
-                "发版本"
+        }
+    }
+}
+
+fn week_head(p: &ProjectVm) -> Element {
+    let w = p.weeks.iter().find(|w| w.week == p.viewing_week);
+    let goal = w
+        .and_then(|w| w.goal.clone())
+        .unwrap_or_else(|| "(这一周还没写周目标)".into());
+    // 这条进度条画在它正上方那个看板上,所以数的是看板的范围,不是本周。
+    let c = &p.board_counts;
+    rsx! {
+        div { class: "goal-box", "{goal}" }
+        div { class: "week-progress",
+            div { style: "width:{c.pct(c.done)}%;background:var(--green);" }
+            div { style: "width:{c.pct(c.review)}%;background:var(--amber);" }
+            div { style: "width:{c.pct(c.doing)}%;background:var(--clay);" }
+            div { style: "width:{c.pct(c.blocked)}%;background:var(--red);" }
+            div { style: "width:{c.pct(c.todo)}%;background:#E4DDC8;" }
+        }
+        if !p.ops.is_empty() {
+            div { class: "ops-chip-row",
+                for o in p.ops.iter() {
+                    span { key: "{o.title}", class: "chip chip-outline", title: "{o.note}",
+                        "{o.title} · {o.status}"
+                    }
+                }
             }
-            button {
-                style: "{theme::btn_primary()}",
-                onclick: move |_| b_new.cmd(Command::CreateIssue {
-                    project_id: pid,
-                    title: format!("新活 · {week}"),
-                    body: String::new(),
-                    category: Some(bw_v4::model::StageKind::Build),
-                    kind: bw_v4::model::IssueKind::Business,
-                    origin: bw_v4::model::IssueOrigin::Human,
-                    week_of: week.clone(),
-                }),
-                "新建活"
+        }
+    }
+}
+
+fn filter_bar(mut filters: Signal<Filters>) -> Element {
+    rsx! {
+        div { class: "filter-bar",
+            select {
+                onchange: move |e| filters.write().category = e.value(),
+                option { value: "", "类别 · 全部" }
+                for c in bw_v4::model::StageKind::ALL {
+                    option { key: "{c:?}", value: "{c.label()}", "{c.label()}" }
+                }
+            }
+            input {
+                placeholder: "版本…",
+                oninput: move |e| filters.write().version = e.value(),
+            }
+            select {
+                onchange: move |e| filters.write().origin = e.value(),
+                option { value: "", "来源 · 全部" }
+                option { value: "人建", "人建" }
+                option { value: "自动建", "自动建" }
+                option { value: "agent 拆", "agent 拆" }
+            }
+            input {
+                placeholder: "关键字…",
+                oninput: move |e| filters.write().keyword = e.value(),
             }
         }
     }
@@ -182,23 +276,16 @@ fn draft_confirm(p: &ProjectVm, bridge: &Bridge) -> Element {
     let week = p.viewing_week.clone();
     let titles = p.pending_drafts.clone();
     rsx! {
-        div {
-            style: "{theme::card()}padding:16px;margin-bottom:12px;",
-            div {
-                style: "font-size:13px;color:{theme::INK_2};margin-bottom:10px;line-height:1.8;",
+        div { class: "card", style: "padding:14px 16px;margin-bottom:10px;flex:none;",
+            div { style: "font-size:12.5px;color:var(--ink-2);margin-bottom:8px;line-height:1.8;",
                 "{week} 的周计划文件写好了,下面是草稿活标。确认之前一张活都还没建。"
             }
             for t in titles.iter() {
-                div {
-                    key: "{t}",
-                    style: "font-size:13px;padding:5px 0;color:{theme::INK};",
-                    "· {t}"
-                }
+                div { key: "{t}", style: "font-size:12.5px;padding:3px 0;", "· {t}" }
             }
-            div {
-                style: "display:flex;gap:10px;margin-top:12px;",
+            div { style: "display:flex;gap:8px;margin-top:10px;",
                 button {
-                    style: "{theme::btn_primary()}",
+                    class: "btn btn-sm btn-primary",
                     onclick: move |_| b_ok.cmd(Command::ConfirmWeekDraft {
                         project_id: pid,
                         week: week.clone(),
@@ -207,7 +294,7 @@ fn draft_confirm(p: &ProjectVm, bridge: &Bridge) -> Element {
                     "确认,按这些建活"
                 }
                 button {
-                    style: "{theme::btn_ghost()}",
+                    class: "btn btn-sm",
                     onclick: move |_| b_no.send(Req::DropDrafts),
                     "先不建"
                 }
@@ -229,229 +316,6 @@ fn next_version(cur: &str) -> String {
     }
 }
 
-fn column(
-    col: &ColumnVm,
-    viewing_week: &str,
-    bridge: &Bridge,
-    mut dragging: Signal<Option<CardItemVm>>,
-    mut pending: Signal<Option<PendingMove>>,
-    selected: Signal<Option<IssueId>>,
-    mut bounced: Signal<String>,
-) -> Element {
-    let target = col.status;
-    let week = viewing_week.to_string();
-    let b_drop = bridge.clone();
-    let drop = move |_| {
-        let Some(card) = dragging.read().clone() else {
-            return;
-        };
-        dragging.set(None);
-        if card.status == target {
-            return;
-        }
-        // 待办池 ⇄ 待办 是排期,直接生效,不弹框。
-        if matches!(target, IssueStatus::Backlog | IssueStatus::Todo)
-            && matches!(card.status, IssueStatus::Backlog | IssueStatus::Todo)
-        {
-            bounced.set(String::new());
-            b_drop.cmd(Command::ScheduleIssue {
-                id: card.id,
-                // 拖回待办池 = 清空排期;拖进待办 = 排进左栏正在看的那一周。
-                week_of: if target == IssueStatus::Backlog {
-                    None
-                } else {
-                    Some(week.clone())
-                },
-            });
-            return;
-        }
-        if !card.status.can_transition_to(target) {
-            bounced.set(format!(
-                "「{}」不能直接从「{}」拖到「{}」——卡片弹回原处,状态没动。",
-                card.title,
-                card.status.label(),
-                target.label()
-            ));
-            return;
-        }
-        bounced.set(String::new());
-        pending.set(Some(PendingMove {
-            id: card.id,
-            title: card.title.clone(),
-            from: card.status,
-            to: target,
-        }));
-    };
-
-    rsx! {
-        div {
-            key: "{col.status:?}",
-            style: "width:250px;flex:none;background:{theme::CARD_ALT};border:1px solid {theme::BORDER};\
-                    border-radius:10px;padding:10px;min-height:220px;",
-            ondragover: move |e| e.prevent_default(),
-            ondrop: drop,
-            div {
-                style: "font-size:12px;color:{theme::INK_2};margin-bottom:8px;display:flex;gap:6px;",
-                span { "{col.title}" }
-                span { style: "color:{theme::INK_4};", "{col.cards.len()}" }
-            }
-            for c in col.cards.iter() {
-                {card_view(c, dragging, selected)}
-            }
-            if col.cards.is_empty() {
-                div { style: "font-size:11px;color:{theme::INK_4};padding:10px 4px;", "空" }
-            }
-        }
-    }
-}
-
-fn card_view(
-    c: &CardItemVm,
-    mut dragging: Signal<Option<CardItemVm>>,
-    mut selected: Signal<Option<IssueId>>,
-) -> Element {
-    let c1 = c.clone();
-    let cid = c.id;
-    rsx! {
-        div {
-            key: "{c.id:?}",
-            draggable: true,
-            ondragstart: move |_| dragging.set(Some(c1.clone())),
-            ondragend: move |_| dragging.set(None),
-            onclick: move |_| selected.set(Some(cid)),
-            style: "background:{theme::CARD};border:1px solid {theme::BORDER};border-radius:8px;\
-                    padding:10px 11px;margin-bottom:8px;",
-            div {
-                style: "display:flex;gap:6px;align-items:baseline;",
-                span { style: "font-family:{theme::MONO};font-size:11px;color:{theme::INK_4};", "#{c.number}" }
-                span { style: "font-size:13px;line-height:1.55;flex:1;", "{c.title}" }
-            }
-            div {
-                style: "display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;",
-                span { style: "{theme::chip(theme::CARD_ALT, theme::INK_3)}", "{c.category}" }
-                span { style: "{theme::chip(theme::CARD_ALT, theme::INK_3)}", "{c.tool}" }
-                if c.kind != "业务活" {
-                    span { style: "{theme::chip(theme::CARD_ALT, theme::INK_3)}", "{c.kind}" }
-                }
-                if !c.version.is_empty() {
-                    span { style: "{theme::chip(theme::CARD_ALT, theme::INK_3)}", "{c.version}" }
-                }
-            }
-        }
-    }
-}
-
-/// 右侧详情面板。**按 id 从最新的 ViewModel 里现查**,不拿点卡片那一刻的
-/// 快照 —— 拿快照的话,▶开工 之后活已经到「评审中」了,面板还显示「▶ 开工」,
-/// 再点一次只会收到一句「这张活现在不是能开工的状态」。
-fn detail_panel(p: &ProjectVm, mut selected: Signal<Option<IssueId>>, bridge: &Bridge) -> Element {
-    let picked = selected.read().and_then(|id| {
-        p.board
-            .columns
-            .iter()
-            .flat_map(|col| col.cards.iter())
-            .find(|c| c.id == id)
-            .cloned()
-    });
-    let Some(c) = picked else {
-        return rsx! {
-            div {
-                style: "width:260px;flex:none;{theme::card()}padding:16px;color:{theme::INK_4};\
-                        font-size:12px;line-height:1.9;",
-                "点一张卡片看详情。卡面上不放按钮 —— 动作都在这里。"
-            }
-        };
-    };
-    let b_run = bridge.clone();
-    let b_review = bridge.clone();
-    let b_done = bridge.clone();
-    let b_block = bridge.clone();
-    let id = c.id;
-    rsx! {
-        div {
-            style: "width:260px;flex:none;{theme::card()}padding:16px;max-height:calc(100vh - 160px);overflow:auto;",
-            div {
-                style: "display:flex;align-items:baseline;gap:6px;margin-bottom:10px;",
-                span { style: "font-family:{theme::MONO};font-size:11px;color:{theme::INK_4};", "#{c.number}" }
-                div { style: "flex:1;" }
-                button {
-                    style: "cursor:pointer;background:none;border:none;color:{theme::INK_4};font-size:16px;",
-                    onclick: move |_| selected.set(None),
-                    "×"
-                }
-            }
-            div { style: "font-family:{theme::SERIF};font-size:15px;line-height:1.6;margin-bottom:12px;", "{c.title}" }
-            {meta_row("状态", c.status.label())}
-            {meta_row("类别", &c.category)}
-            {meta_row("开工工具", &c.tool)}
-            {meta_row("workflow", &c.workflow)}
-            {meta_row("种类", &c.kind)}
-            {meta_row("来源", &c.origin)}
-            {meta_row("排在", if c.week_of.is_empty() { "待办池" } else { &c.week_of })}
-            {meta_row("版本", if c.version.is_empty() { "—" } else { &c.version })}
-            {meta_row("推的指标", if c.metric_key.is_empty() { "—" } else { &c.metric_key })}
-            {meta_row("结清", if c.settled { "已结清(只结这一次)" } else { "未结清" })}
-
-            div { style: "height:14px;" }
-            // 同一个位置按状态互斥切换,不堆一排常驻按钮。
-            match c.status {
-                IssueStatus::Backlog | IssueStatus::Todo | IssueStatus::InProgress => rsx! {
-                    button {
-                        style: "{theme::btn_primary()}width:100%;",
-                        onclick: move |_| b_run.cmd(Command::RunIssue { id }),
-                        "▶ 开工"
-                    }
-                },
-                IssueStatus::InReview => rsx! {
-                    button {
-                        style: "{theme::btn_primary()}width:100%;",
-                        onclick: move |_| b_done.cmd(Command::TransitionIssue { id, to: IssueStatus::Done }),
-                        "确认完成"
-                    }
-                    div {
-                        style: "font-size:11px;color:{theme::INK_4};margin-top:8px;line-height:1.8;",
-                        "「完成」永远是人点的。跑完的活最远只到这一步。"
-                    }
-                },
-                IssueStatus::Done => rsx! {
-                    div {
-                        style: "font-size:12px;color:{theme::INK_3};line-height:1.9;",
-                        "这张活已经完成并结清了。"
-                    }
-                },
-                IssueStatus::Blocked => rsx! {
-                    button {
-                        style: "{theme::btn_ghost()}width:100%;",
-                        onclick: move |_| b_review.cmd(Command::TransitionIssue { id, to: IssueStatus::Todo }),
-                        "解除阻塞,回待办"
-                    }
-                },
-                IssueStatus::Cancelled => rsx! { div { style: "font-size:12px;color:{theme::INK_3};", "已取消。" } },
-            }
-            if !matches!(c.status, IssueStatus::Done | IssueStatus::Blocked | IssueStatus::Cancelled) {
-                button {
-                    style: "{theme::btn_ghost()}width:100%;margin-top:8px;",
-                    onclick: move |_| b_block.cmd(Command::BlockIssue {
-                        id,
-                        reason: "在计划屏手动标为阻塞".into(),
-                    }),
-                    "标为阻塞"
-                }
-            }
-        }
-    }
-}
-
-fn meta_row(k: &str, v: &str) -> Element {
-    rsx! {
-        div {
-            style: "display:flex;gap:8px;font-size:12px;padding:3px 0;",
-            div { style: "width:66px;flex:none;color:{theme::INK_4};", "{k}" }
-            div { style: "color:{theme::INK_2};word-break:break-all;", "{v}" }
-        }
-    }
-}
-
 fn confirm_dialog(
     pm: PendingMove,
     mut pending: Signal<Option<PendingMove>>,
@@ -469,28 +333,19 @@ fn confirm_dialog(
         pending.set(None);
     };
     rsx! {
-        div {
-            style: "position:fixed;inset:0;background:rgba(35,33,28,.34);display:flex;\
-                    align-items:center;justify-content:center;z-index:50;",
-            div {
-                style: "{theme::card()}padding:22px;max-width:420px;",
-                div { style: "font-family:{theme::SERIF};font-size:17px;margin-bottom:10px;", "确认一下" }
-                div {
-                    style: "font-size:13px;line-height:1.85;color:{theme::INK_2};margin-bottom:18px;",
+        div { class: "modal-backdrop",
+            div { class: "modal", style: "max-width:420px;",
+                h3 { "确认一下" }
+                div { style: "font-size:13px;line-height:1.85;color:var(--ink-2);margin-bottom:8px;",
                     "把「{pm.title}」从「{pm.from.label()}」移到「{pm.to.label()}」。"
                     if pm.to == IssueStatus::Done {
                         br {}
                         "这一下就是「人点完成」——活会在这一刻结清,只结这一次。"
                     }
                 }
-                div {
-                    style: "display:flex;gap:10px;justify-content:flex-end;",
-                    button {
-                        style: "{theme::btn_ghost()}",
-                        onclick: move |_| pending.set(None),
-                        "算了"
-                    }
-                    button { style: "{theme::btn_primary()}", onclick: confirm, "确认" }
+                div { class: "modal-actions",
+                    button { class: "btn", onclick: move |_| pending.set(None), "算了" }
+                    button { class: "btn btn-primary", onclick: confirm, "确认" }
                 }
             }
         }

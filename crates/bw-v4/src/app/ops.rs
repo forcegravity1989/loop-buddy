@@ -155,8 +155,12 @@ impl App {
     /// 挂在分支上的活 —— 账目和仓对不上,而且完成是结清过的,回不去。
     ///
     /// **合入失败就整条失败**,活留在「评审中」原地,人看得见原话、可以重试。
-    /// 没挂远端或者这张活没有 MR,就只走「完成」那一步(本地项目本来就没有
-    /// 可合的东西),并在事件里如实说没合。
+    /// 没挂远端或者这张活确实没有 MR,就只走「完成」那一步(本地项目本来就没
+    /// 有可合的东西),并在事件里如实说没合。
+    ///
+    /// 库里 `pr_number = 0` **不等于**远端没有 MR:队友自己在会话里
+    /// `gh pr create` 开的那个 buddy 从没记过。所以合之前先拿分支去远端问一次,
+    /// 问到了顺手记进库。
     pub(super) async fn merge_and_settle(&mut self, id: IssueId) -> Result<Vec<Event>> {
         let issue = self.issue_or_err(id).await?;
         let project = self
@@ -186,18 +190,51 @@ impl App {
             });
         }
 
-        let merged = if issue.pr_number > 0 && project.has_remote() {
-            bw_engine::github::merge_pr(&project.remote_path, issue.pr_number)
-                .await
-                .map_err(|e| AppError::Exec(format!("合入 MR #{} 没成:{e}", issue.pr_number)))?;
-            true
+        // **按 provider 分发**。以前这里写死 `github::merge_pr`,codehub 项目
+        // 点「合入并完成」就是拿 `gh` 去打一个 gh 根本不认识的仓。
+        let remote = if project.has_remote() {
+            Some(
+                bw_engine::remote::Remote::for_project(
+                    &project.provider,
+                    &project.remote_host,
+                    &project.remote_path,
+                )
+                .map_err(|e| AppError::Exec(format!("认不出远端类型:{e}")))?,
+            )
         } else {
-            false
+            None
+        };
+
+        // 库里没记 MR 号不等于远端没有 MR —— 队友自己在会话里 `gh pr create`
+        // 开的那个,buddy 从来没记过。**去远端问一次**(读回为证,不是听谁说
+        // 的);问到了顺手记进库,下次不用再问。
+        let mut pr_number = issue.pr_number;
+        if pr_number == 0 && !issue.branch.is_empty() {
+            if let Some(r) = &remote {
+                if let Ok(Some(n)) = r.open_mr_for_branch(&issue.branch).await {
+                    pr_number = n;
+                    self.store
+                        .set_issue_remote(id, &issue.branch, n, issue.remote_number)
+                        .await?;
+                }
+            }
+        }
+
+        let merged = match (&remote, pr_number) {
+            (Some(r), n) if n > 0 => {
+                r.merge_mr(n)
+                    .await
+                    .map_err(|e| AppError::Exec(format!("合入 MR #{n} 没成:{e}")))?;
+                true
+            }
+            // 没挂远端、或者这张活确实没有 MR:只走「完成」那一步,并在事件里
+            // 如实说没合。**不假装合过**。
+            _ => false,
         };
 
         let mut events = vec![Event::IssueMerged {
             id,
-            pr_number: issue.pr_number,
+            pr_number,
             merged,
         }];
         // 合入这件事排在前面,界面上那句话说的才是人刚做的动作;结清事件跟在

@@ -14,9 +14,10 @@ use super::vm_build::{card_item, probe_env, remote_label};
 use super::vm_kb::{managed_paths, skill_origin};
 
 /// 六列看板。待办池那一列装的是没排进任何一周的活,其余五列按状态分。
+/// `week` 传 `None` = 「全部活」视图,不按周过滤(左栏点「全部」时)。
 pub(super) fn build_board(
     issues: &[bw_v4::Issue],
-    week: &str,
+    week: Option<&str>,
     policy: Option<&issue_policy_file::IssuePolicyFile>,
 ) -> BoardVm {
     let labels = policy.and_then(|p| p.kanban.clone());
@@ -29,7 +30,10 @@ pub(super) fn build_board(
         .map(|k| k.todo_label.clone())
         .unwrap_or_else(|| "待办 · 已排进本周,等开工".into());
 
-    let in_week = |i: &&bw_v4::Issue| i.week_of == week;
+    let in_week = |i: &&bw_v4::Issue| match week {
+        None => true,
+        Some(w) => i.week_of == w,
+    };
     let columns = vec![
         ColumnVm {
             status: IssueStatus::Backlog,
@@ -145,10 +149,15 @@ pub(super) fn build_metrics(
     };
     // `.bw/metrics.toml` 里的指标没有单独的 id 字段 —— 名字就是它的键。
     // `issue.metric_key` 存的因此是指标的名字。
-    let mk = |name: &str| MetricCardVm {
+    // `target` / `def` / 采集方式来自指标定义文件;读数来自周计划文件。两边
+    // 各是各的正本,这里只是拼到同一张卡上。
+    let mk = |name: &str, def: &str, target: &str, manual: bool| MetricCardVm {
         id: name.to_string(),
         name: name.to_string(),
         reading: reading_of(name).map(|r| r.value.clone()),
+        target: target.to_string(),
+        def: def.to_string(),
+        manual,
         source: reading_of(name)
             .map(|r| r.source.clone())
             .unwrap_or_default(),
@@ -157,10 +166,26 @@ pub(super) fn build_metrics(
             .unwrap_or_default(),
         driving: driving_of(name),
     };
+    let is_manual =
+        |k: bw_engine::metrics_file::CollectKind| k == bw_engine::metrics_file::CollectKind::Manual;
     MetricsVm {
-        north_star: Some(mk(&m.north_star.name)),
-        lagging: m.lagging.iter().map(|d| mk(&d.name)).collect(),
-        leading: m.leading.iter().map(|d| mk(&d.name)).collect(),
+        // 北极星没有 target 字段 —— 它的目标就是它自己那句定义。
+        north_star: Some(mk(
+            &m.north_star.name,
+            &m.north_star.def,
+            "",
+            is_manual(m.north_star.collect.kind),
+        )),
+        lagging: m
+            .lagging
+            .iter()
+            .map(|d| mk(&d.name, &d.def, &d.target, is_manual(d.collect.kind)))
+            .collect(),
+        leading: m
+            .leading
+            .iter()
+            .map(|d| mk(&d.name, &d.def, &d.target, is_manual(d.collect.kind)))
+            .collect(),
         note: None,
     }
 }
@@ -276,6 +301,10 @@ pub(super) async fn build_config(
     ws: &Path,
     policy: Option<&issue_policy_file::IssuePolicyFile>,
     project: &Project,
+    // 名片文件由上层读一次(而且是走 `read_or_warn`,文件坏了会说话)。这里
+    // **不再自己读一遍** —— 自己读的那条路 `.ok()` 会把解析错误吞掉,表现成
+    // 「项目群未配」,而真相是文件里有一行写错了。
+    file: &project_file::ProjectFile,
 ) -> ConfigVm {
     let usage = store.workflow_usage(id).await.unwrap_or_default();
     let managed = managed_paths(ws);
@@ -315,6 +344,7 @@ pub(super) async fn build_config(
                             .unwrap_or(0),
                         title: slug.clone(),
                         origin: skill_origin(&managed, &slug),
+                        desc: skill_desc(&e.path().join("SKILL.md")),
                         slug,
                     }
                 })
@@ -330,6 +360,7 @@ pub(super) async fn build_config(
                 title: format!("{w}(包不在本仓 .claude/skills/)"),
                 uses: *n,
                 origin: "不在本仓".into(),
+                desc: String::new(),
             });
         }
     }
@@ -351,8 +382,107 @@ pub(super) async fn build_config(
                 )
             })
             .unwrap_or_else(|| "—(.bw/issue-policy.toml 里没有节律段)".into()),
+        crons: build_crons(policy),
+        connectors: build_connectors(ws),
+        chat_provider: chat_provider(file.chat.as_ref()),
+        chat_group: chat_group(file.chat.as_ref()),
+        chat_events: chat_events(file.chat.as_ref()),
         chat: chat_label(ws),
     }
+}
+
+/// SKILL.md 头里的 `description:`。**读不到就空着**,不替它写一句。
+pub(super) fn skill_desc(path: &Path) -> String {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    raw.lines()
+        .take(20)
+        .find_map(|l| l.strip_prefix("description:"))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .unwrap_or_default()
+}
+
+/// 定时那张表。**没有定时表** —— 判据写在这里,让人知道它到底看什么。
+fn build_crons(policy: Option<&issue_policy_file::IssuePolicyFile>) -> Vec<CronVm> {
+    let Some(c) = policy.and_then(|p| p.cadence.clone()) else {
+        return Vec::new();
+    };
+    let word = |t: &str| match t {
+        "manual" => "人触发".to_string(),
+        "scheduled" => "到点自动建".to_string(),
+        "" => "—".to_string(),
+        other => other.to_string(),
+    };
+    vec![
+        CronVm {
+            name: "更新指标与制定本周计划".into(),
+            trigger: word(&c.ops1_trigger),
+            schedule: "—".into(),
+            rule: "当前周还没有周计划文件".into(),
+        },
+        CronVm {
+            name: "资产盘点".into(),
+            trigger: word(&c.ops2_trigger),
+            schedule: blank_dash(&c.ops2_schedule).to_string(),
+            rule: "本周还没有这张活(不查任何定时表)".into(),
+        },
+    ]
+}
+
+/// 连接器。`.bw/connectors.toml` 没有就是空的 —— 不摆一行「未配置」占位。
+fn build_connectors(ws: &Path) -> Vec<ConnectorVm> {
+    bw_engine::connectors_file::read(&ws.display().to_string())
+        .ok()
+        .flatten()
+        .map(|f| {
+            f.connectors
+                .into_iter()
+                .map(|c| ConnectorVm {
+                    kind: c.kind.as_str().to_string(),
+                    target: if c.script.is_empty() {
+                        c.command.clone()
+                    } else {
+                        c.script.clone()
+                    },
+                    name: c.name,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn chat_provider(chat: Option<&project_file::ChatConfig>) -> String {
+    chat.map(|c| c.provider.clone())
+        .unwrap_or_else(|| "未配".into())
+}
+
+fn chat_group(chat: Option<&project_file::ChatConfig>) -> String {
+    chat.map(|c| c.group_id.clone())
+        .filter(|g| !g.is_empty())
+        .unwrap_or_else(|| "—".into())
+}
+
+/// 同步哪些事件。`notify` 没写 = 用默认三件;写成空列表 = 明确要求安静。
+fn chat_events(chat: Option<&project_file::ChatConfig>) -> Vec<(String, bool)> {
+    let on: Vec<String> = match chat {
+        None => return Vec::new(),
+        Some(c) => c.notify.clone().unwrap_or_else(|| {
+            bw_v4::chat::DEFAULT_NOTIFY
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        }),
+    };
+    bw_v4::chat::DEFAULT_NOTIFY
+        .iter()
+        .map(|e| {
+            (
+                bw_v4::chat::event_label(e).to_string(),
+                on.iter().any(|x| x == e),
+            )
+        })
+        .collect()
 }
 
 /// 项目群一行话。没配就明说没配 —— 没配群不是错,是诚实状态。

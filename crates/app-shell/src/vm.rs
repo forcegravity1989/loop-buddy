@@ -20,6 +20,9 @@ pub struct Vm {
     pub settings: SettingsVm,
     /// 最近一条后台动作的回执(建活、铺底、发版这类)。
     pub note: Option<String>,
+    /// 这是第几条回执。**同一句话第二次发生时序号也会变**,toast 才不会把它
+    /// 当成「已经关过的那条」而静默吞掉。
+    pub note_seq: u64,
     /// 仓文件读不动或者解析炸了的实话。**不退回默认值假装文件不存在** ——
     /// `.bw/*.toml` 是 deny-unknown-fields 的,一个手误的键就让整份文件读不出
     /// 来,退回默认值的表现是「名片全是(待填)、配置屏说你还没铺过规范件」,
@@ -47,6 +50,17 @@ pub struct ProjectCardVm {
     /// 本周排了几张活、完成了几张。
     pub week_total: u32,
     pub week_done: u32,
+    /// 在研版本(仓里 `.bw/project.toml` 写的)。没写就是空,不猜一个。
+    pub version: String,
+    /// 当前 ISO 周,卡片上那个周 chip 显示它。
+    pub week: String,
+    /// 还没看过的动静:评审中 + 阻塞里,更新时间晚于「读到这里」那一下的。
+    /// 通知屏点过之后这个数会掉下去。
+    pub unread: u32,
+    /// 本周目标,来自仓里的周计划文件。文件没有 / 目标还是占位符 = 空。
+    pub week_goal: String,
+    /// 上次交付:发版记录最后一行的日期与版本。仓里没有发版记录 = 空。
+    pub last_delivery: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,7 +85,22 @@ pub struct ProjectVm {
     pub weeks: Vec<WeekVm>,
     /// 正在看哪一周。
     pub viewing_week: String,
+    /// 左栏点的是「全部」——看板不按周过滤。
+    pub view_all: bool,
     pub board: BoardVm,
+    /// 本周四段计数:待办 / 进行中 / 评审中 / 完成。总览与计划屏的进度条都用它。
+    /// **当前周**的五段计数。总览那块「本周计划进度」用它。
+    pub week_counts: WeekCountsVm,
+    /// 计划屏正在看的那个看板的五段计数(看某一周就是那一周,点了「全部」就是
+    /// 全部)。它跟着左栏走,所以**不能拿去当「本周」**。
+    pub board_counts: WeekCountsVm,
+    /// 本周计划文件「本周运作」那张表的行 —— 三张运作活各自走到哪了。
+    pub ops: Vec<OpsChipVm>,
+    /// 代码仓级指标。**现算很贵(要起好几个 git 子进程),所以按需**:
+    /// `None` = 还没采过,界面显示一颗「立即采集」。
+    pub repo_stats: Option<RepoStatsVm>,
+    /// 名片改动那张轻量活走到哪了。`None` = 没有在途的名片改动。
+    pub card_mr: Option<CardMrVm>,
     /// 「开始本周」刚产出、**还没经人确认**的草稿活标。确认之前一张活都不建
     /// —— 这是「活由人确认才存在」那条,不是界面装饰。
     pub pending_drafts: Vec<String>,
@@ -125,6 +154,12 @@ pub struct MetricCardVm {
     pub name: String,
     /// 本周读数。`None` = 没读数,显示「无数据」而不是 0。
     pub reading: Option<String>,
+    /// `.bw/metrics.toml` 里写的目标。空 = 还没定目标,显示「目标未设」。
+    pub target: String,
+    /// 这条指标的定义(`def`),给人看「这个数到底数的是什么」。
+    pub def: String,
+    /// 采集方式是「手填」。手填的数带徽记,一眼看得出它不是自动采来的。
+    pub manual: bool,
     pub source: String,
     pub collected_at: String,
     /// 本周哪些活在推它。
@@ -138,6 +173,59 @@ pub struct WeekVm {
     pub backfill: bool,
     pub goal: Option<String>,
     pub activity_count: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WeekCountsVm {
+    pub todo: usize,
+    pub doing: usize,
+    pub review: usize,
+    pub done: usize,
+    /// 卡住的那几张。**单独一段** —— 混进别的段或者干脆不数,等于把红灯藏了。
+    pub blocked: usize,
+}
+
+impl WeekCountsVm {
+    pub fn total(&self) -> usize {
+        self.todo + self.doing + self.review + self.done + self.blocked
+    }
+
+    /// 进度条一段占多宽。总数是 0 就全都是 0 —— 不给空周画一条满的。
+    pub fn pct(&self, n: usize) -> u32 {
+        if self.total() == 0 {
+            0
+        } else {
+            (n * 100 / self.total()) as u32
+        }
+    }
+}
+
+/// 「本周运作」表里的一行。正本是周计划文件,不是库。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpsChipVm {
+    pub title: String,
+    pub status: String,
+    pub note: String,
+}
+
+/// 代码仓级指标。每一项都带「这个数从哪来」——采不到就整块给出原话,不填 0。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RepoStatsVm {
+    /// `(数值, 这个数是什么, 从哪采的)`。
+    pub items: Vec<(String, String, String)>,
+    pub error: String,
+}
+
+/// 名片改动那张轻量活。名片是仓文件,改它一律走分支 + MR。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CardMrVm {
+    pub issue_id: Option<IssueId>,
+    pub number: u32,
+    /// 活现在的状态标签(「评审中」/「已完成」这种)。
+    pub status: String,
+    pub pr_number: u32,
+    /// 能不能点「合入并完成」——只有停在评审中的才能。
+    pub mergeable: bool,
 }
 
 /// 六列看板。列的顺序就是活的生命周期顺序。
@@ -252,6 +340,25 @@ pub struct NotifyVm {
     /// 阻塞的活。
     pub blocked: Vec<CardItemVm>,
     pub seen_at: Option<i64>,
+    /// 还没看过的动静有几件。**和项目墙卡片上那个 ⚑ 是同一个定义**(评审中/
+    /// 阻塞里、更新时间晚于「读到这里」的);项目轨的红点用它,点过「读到
+    /// 这里」之后它会掉到 0,而不是永远亮着。
+    pub unread: u32,
+    /// 事件流。**没有事件表** —— 这条流是从四张表里现算出来的:活什么时候建
+    /// 的、什么时候结清的、会话什么时候开的。存不下来的事(比如某次运行失败)
+    /// 就不在流里,不补一条假的。
+    pub events: Vec<NotifyEventVm>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NotifyEventVm {
+    /// 本机时区的「MM-DD HH:MM」。
+    pub time: String,
+    pub text: String,
+    /// 点它跳到哪张活。`None` = 不可点。
+    pub issue: Option<IssueId>,
+    /// 这件事后来被处理掉了(活已完成)。
+    pub done: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -262,8 +369,16 @@ pub struct ConfigVm {
     pub skills: Vec<SkillVm>,
     pub tools: Vec<ToolProbeVm>,
     pub remote: String,
-    /// `.bw/issue-policy.toml` 的 `[cadence]` 段:定时节律。
+    /// `.bw/issue-policy.toml` 的 `[cadence]` 段:定时节律。原样一句话。
     pub cadence: String,
+    /// 节律拆成表格行:哪张运作活、怎么触发、判据是什么。
+    pub crons: Vec<CronVm>,
+    /// `.bw/connectors.toml` 里声明的连接器。文件没有就是空的。
+    pub connectors: Vec<ConnectorVm>,
+    /// 项目群三件:提供方 / 群号 / 同步哪些事件。仓是正本,这里只显示。
+    pub chat_provider: String,
+    pub chat_group: String,
+    pub chat_events: Vec<(String, bool)>,
     /// `.bw/project.toml` 的 `[chat]` 段:项目群。**仓是正本**,这里只显示;
     /// 改它走「编辑项目信息」那条轻量活 + MR,不在配置屏直接写仓。
     pub chat: String,
@@ -284,6 +399,30 @@ pub struct SkillVm {
     pub uses: u32,
     /// 「内置」(随 buddy 出厂、铺底时复制进来)/「项目自有」/「蒸馏」。
     pub origin: String,
+    /// SKILL.md 头里的 `description:`。读不到就空着,不替它写一句。
+    pub desc: String,
+}
+
+/// 定时那张表的一行。**没有定时表** —— 判据是「本周有没有这张活」,
+/// 所以这里没有「下次触发时间」那一列,有的是「判据」。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CronVm {
+    pub name: String,
+    /// `manual` / `scheduled`,翻成人话。
+    pub trigger: String,
+    /// 形如 `fri 20:00`;手动触发的就是「—」。
+    pub schedule: String,
+    /// 到底看什么才算「该跑了」。
+    pub rule: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConnectorVm {
+    pub name: String,
+    /// `script` / `command` 这类。
+    pub kind: String,
+    /// 具体跑什么。
+    pub target: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -309,6 +448,9 @@ impl KbTab {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KbVm {
     pub tab: KbTab,
+    /// 规范管账(`.bw/managed.toml`)里登记了几份核心件。**不做对账** ——
+    /// 对账是配置屏那颗按钮的事,这里只报个数。
+    pub managed_count: usize,
     /// 知识页签:按规范八大类分组的文件清单。**只列存在的文件**,不列位置。
     pub groups: Vec<KbGroupVm>,
     /// 打开的那份文档:路径 + 原文。懒加载 —— 点了才现读。
