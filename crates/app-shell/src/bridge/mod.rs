@@ -131,6 +131,8 @@ pub enum Req {
     Open(Option<ProjectId>),
     /// 计划屏切到看某一周。
     ViewWeek(String),
+    /// 计划屏左栏点「全部」/ 点回某一周。
+    ViewAll(bool),
     /// 知识库屏打开某份文档。
     OpenDoc(Option<String>),
     /// 「先不建」——把还没确认的草稿丢掉。草稿本来就没进库,丢掉不留痕。
@@ -304,6 +306,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     kb_assets: None,
                     repo_stats: None,
                     viewing_week: bw_v4::isoweek::current_week(),
+                    view_all: false,
                     open_doc: None,
                     note: None,
                     pending_drafts: None,
@@ -433,6 +436,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             ui.open = id;
                             ui.open_doc = None;
                             ui.viewing_week = bw_v4::isoweek::current_week();
+                            ui.view_all = false;
                             // 知识库那两个页签的结果是**上一个项目**的:它的技能
                             // 清单、它的 git 产物、它的发版记录、它的仓统计。留着
                             // 的话换个项目点进去,一屏数字没有一个是这个项目的,
@@ -444,7 +448,11 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             // 项目的总览上。
                             ui.repo_stats = None;
                         }
-                        Req::ViewWeek(w) => ui.viewing_week = w,
+                        Req::ViewWeek(w) => {
+                            ui.viewing_week = w;
+                            ui.view_all = false;
+                        }
+                        Req::ViewAll(v) => ui.view_all = v,
                         Req::OpenDoc(p) => ui.open_doc = p,
                         Req::DropDrafts => ui.pending_drafts = None,
                         Req::SelectSession(id) => {

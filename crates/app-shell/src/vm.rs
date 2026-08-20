@@ -71,6 +71,8 @@ pub struct ProjectVm {
     pub weeks: Vec<WeekVm>,
     /// 正在看哪一周。
     pub viewing_week: String,
+    /// 左栏点的是「全部」——看板不按周过滤。
+    pub view_all: bool,
     pub board: BoardVm,
     /// 本周四段计数:待办 / 进行中 / 评审中 / 完成。总览与计划屏的进度条都用它。
     pub week_counts: WeekCountsVm,

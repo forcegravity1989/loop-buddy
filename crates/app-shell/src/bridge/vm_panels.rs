@@ -14,9 +14,10 @@ use super::vm_build::{card_item, probe_env, remote_label};
 use super::vm_kb::{managed_paths, skill_origin};
 
 /// 六列看板。待办池那一列装的是没排进任何一周的活,其余五列按状态分。
+/// `week` 传 `None` = 「全部活」视图,不按周过滤(左栏点「全部」时)。
 pub(super) fn build_board(
     issues: &[bw_v4::Issue],
-    week: &str,
+    week: Option<&str>,
     policy: Option<&issue_policy_file::IssuePolicyFile>,
 ) -> BoardVm {
     let labels = policy.and_then(|p| p.kanban.clone());
@@ -29,7 +30,10 @@ pub(super) fn build_board(
         .map(|k| k.todo_label.clone())
         .unwrap_or_else(|| "待办 · 已排进本周,等开工".into());
 
-    let in_week = |i: &&bw_v4::Issue| i.week_of == week;
+    let in_week = |i: &&bw_v4::Issue| match week {
+        None => true,
+        Some(w) => i.week_of == w,
+    };
     let columns = vec![
         ColumnVm {
             status: IssueStatus::Backlog,

@@ -37,6 +37,8 @@ pub(super) fn read_or_warn<T>(
 pub struct UiState {
     pub open: Option<ProjectId>,
     pub viewing_week: String,
+    /// 计划屏左栏点的是「全部」。
+    pub view_all: bool,
     pub open_doc: Option<String>,
     pub note: Option<String>,
     /// 「开始本周」回来的草稿活标,连同是哪一周。人确认前只存在这里,不进库。
@@ -375,8 +377,14 @@ async fn build_project(
         weeks: build_weeks(&ws),
         current_week,
         viewing_week: viewing_week.clone(),
+        view_all: ui.view_all,
         board: {
-            let b = build_board(&issues, &viewing_week, policy.as_ref());
+            let scope = if ui.view_all {
+                None
+            } else {
+                Some(viewing_week.as_str())
+            };
+            let b = build_board(&issues, scope, policy.as_ref());
             week_counts = build_week_counts(&b);
             b
         },
