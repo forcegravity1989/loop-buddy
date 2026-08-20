@@ -518,7 +518,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     );
                 }
                 // BW_KB_DUMP=1:把知识库三个页签的数字打进 stderr,好让人拿
-                // `git ls-files` / `codegraph files -j` / `cat docs/releases.md`
+                // `git ls-files` / `codegraph files -j` / `cat .bw/releases.md`
                 // 当场对。截图对不了数,这个能。
                 if std::env::var("BW_KB_DUMP").is_ok_and(|v| v != "0") {
                     if let Some(pid) = ui.open {
@@ -590,7 +590,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     };
                     // 终端的键盘与尺寸**不重拼 ViewModel**。重拼一次要跑十来个
                     // git 子进程(健康三判据 + 改动文件 + 领先落后)、扫一遍
-                    // docs/plan/、解析四个 toml —— 而人打字时每 30ms 就来一条。
+                    // .bw/plan/、解析四个 toml —— 而人打字时每 30ms 就来一条。
                     // 全串在内核这条单线程上,终端会明显卡顿,pty 那一跳也排不
                     // 上队。这两条命令本来也不改任何会显示的东西。
                     if let Req::Cmd(

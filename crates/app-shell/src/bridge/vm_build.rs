@@ -489,7 +489,7 @@ async fn build_project(
         warnings,
     );
     let plan = read_or_warn(
-        &format!("docs/plan/{viewing_week}.md"),
+        &format!("{}/{viewing_week}.md", week_plan_file::DIR),
         week_plan_file::read(&ws, &viewing_week),
         warnings,
     );

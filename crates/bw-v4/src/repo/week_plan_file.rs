@@ -1,4 +1,4 @@
-//! `docs/plan/YYYY-Www.md` —— 周计划,V4 的核心正本。
+//! `.bw/plan/YYYY-Www.md` —— 周计划,V4 的核心正本。
 //!
 //! 一周一份文件。**没有库内索引表**:计划屏左栏那份周列表靠扫这个目录得到。
 //! 回填出来的历史周与人写的本周**是同一份规范、同一套段落结构**,只有 front
@@ -103,7 +103,7 @@ pub fn exists(workspace: &Path, week: &str) -> bool {
     workspace.join(rel_path(week)).is_file()
 }
 
-/// 扫 `docs/plan/` 出周列表(新的在前)。这就是计划屏左栏周列表的全部来源
+/// 扫 `.bw/plan/` 出周列表(新的在前)。这是计划屏左栏周列表的仓文件那一半来源
 /// ——没有索引表可查。
 pub fn list_weeks(workspace: &Path) -> Vec<String> {
     let dir: PathBuf = workspace.join(DIR);
@@ -471,7 +471,7 @@ pub fn render(d: &WeekPlanDraft) -> String {
     );
     s.push_str(
         "> 正本文件。buddy 读它驱动计划屏与总览的「本周计划进度」块;**没有库内\n\
-         > 索引表** —— 计划屏左栏的周列表靠扫 `docs/plan/` 目录得到。库里活的排期、\n\
+         > 索引表** —— 计划屏左栏的周列表靠扫 `.bw/plan/` 目录得到。库里活的排期、\n\
          > 工具、workflow 那几列只是缓存,与这份文件不一致时以这份文件为准。\n\n",
     );
 

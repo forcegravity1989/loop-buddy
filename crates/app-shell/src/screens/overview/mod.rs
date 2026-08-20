@@ -3,7 +3,7 @@
 //!
 //! 每一块的数字都是现算的:名片来自 `PROJECT.md` / `.bw/project.toml`,健康来
 //! 自仓文件与 git 的三条判据,指标定义来自 `.bw/metrics.toml`、读数来自周计划
-//! 文件的「本周指标读数」段,发版记录来自 `docs/releases.md`。**没有读数就说
+//! 文件的「本周指标读数」段,发版记录来自 `.bw/releases.md`。**没有读数就说
 //! 无数据,不显示 0**。
 
 use crate::bridge::{Bridge, Panel, PanelNav, Req};
@@ -447,7 +447,7 @@ fn version_block(p: &ProjectVm) -> Element {
             }
             if p.releases.is_empty() {
                 div { class: "detail-empty",
-                    "还没有发过版。docs/releases.md 是这份记录的唯一正本,库里不存副本。"
+                    "还没有发过版。.bw/releases.md 是这份记录的唯一正本,库里不存副本。"
                 }
             }
             for r in p.releases.iter() {

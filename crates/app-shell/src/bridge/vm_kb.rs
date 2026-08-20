@@ -76,13 +76,13 @@ pub(super) fn build_kb(ws: &Path, tab: KbTab, open: Option<&str>) -> KbVm {
     push_group(&mut groups, "规范件", spec);
 
     // 周计划倒序:最近的在最上面。回填出来的和人写的同目录同格式,只挂一个徽记。
-    let mut weeks: Vec<KbFileVm> = std::fs::read_dir(ws.join("docs/plan"))
+    let mut weeks: Vec<KbFileVm> = std::fs::read_dir(ws.join(week_plan_file::DIR))
         .map(|d| {
             d.flatten()
                 .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
                 .map(|e| {
                     let name = e.file_name().to_string_lossy().to_string();
-                    let rel = format!("docs/plan/{name}");
+                    let rel = format!("{}/{name}", week_plan_file::DIR);
                     // 徽记只看头里那几行,不整篇读 —— 老项目回填后这里可能上百份,
                     // 而这段每重拼一次 ViewModel 就跑一遍。
                     let backfilled = read_head(&e.path())
@@ -106,16 +106,16 @@ pub(super) fn build_kb(ws: &Path, tab: KbTab, open: Option<&str>) -> KbVm {
     push_group(&mut groups, "周计划", weeks);
 
     let mut rel_files = Vec::new();
-    if ws.join("docs/releases.md").is_file() {
+    if ws.join(release_file::REL_PATH).is_file() {
         rel_files.push(KbFileVm {
-            rel: "docs/releases.md".into(),
+            rel: release_file::REL_PATH.into(),
             label: "发版记录".into(),
             badge: String::new(),
         });
     }
     push_group(&mut groups, "发版记录", rel_files);
 
-    for (dir, title) in [("docs/decisions", "决策记录"), ("docs/design", "设计产物")] {
+    for (dir, title) in [(".bw/decisions", "决策记录"), (".bw/design", "设计产物")] {
         let mut files: Vec<KbFileVm> = std::fs::read_dir(ws.join(dir))
             .map(|d| {
                 d.flatten()

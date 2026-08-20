@@ -113,7 +113,7 @@ pub(super) fn build_board(
     }
 }
 
-/// 周列表靠扫 `docs/plan/` 得到 —— 没有索引表。
+/// 周列表靠扫 `.bw/plan/` 得到 —— 没有索引表。
 pub(super) fn build_weeks(ws: &Path) -> Vec<WeekVm> {
     week_plan_file::list_weeks(ws)
         .into_iter()

@@ -27,7 +27,7 @@ use crate::repo::release_file::{self, ReleaseRow};
 use crate::repo::week_plan_file::{self, OpsRow, WeekPlanDraft};
 
 /// 往前最多回填多少周。两年 —— 再往前的周文件对今天的管理没有帮助,只是把
-/// `docs/plan/` 撑大。扫到就停,不是"扫不动",这一条如实写进回填报告。
+/// `.bw/plan/` 撑大。扫到就停,不是"扫不动",这一条如实写进回填报告。
 const MAX_WEEKS: usize = 104;
 
 impl App {
