@@ -320,6 +320,21 @@ pub struct NotifyVm {
     /// 阻塞的活。
     pub blocked: Vec<CardItemVm>,
     pub seen_at: Option<i64>,
+    /// 事件流。**没有事件表** —— 这条流是从四张表里现算出来的:活什么时候建
+    /// 的、什么时候结清的、会话什么时候开的。存不下来的事(比如某次运行失败)
+    /// 就不在流里,不补一条假的。
+    pub events: Vec<NotifyEventVm>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NotifyEventVm {
+    /// 本机时区的「MM-DD HH:MM」。
+    pub time: String,
+    pub text: String,
+    /// 点它跳到哪张活。`None` = 不可点。
+    pub issue: Option<IssueId>,
+    /// 这件事后来被处理掉了(活已完成)。
+    pub done: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

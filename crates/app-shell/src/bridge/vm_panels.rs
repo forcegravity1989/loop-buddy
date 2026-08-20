@@ -518,3 +518,85 @@ pub(super) async fn collect_repo_stats(ws: &Path) -> RepoStatsVm {
         error: String::new(),
     }
 }
+
+/// 事件流。**没有事件表** —— 这条流是从四张表里现算的:
+///
+/// - 活建出来了(`issue.created_at`)
+/// - 活结清了(`issue.settled_at`,只结一次,所以这条不会重复)
+/// - 会话开出来了(`claude_conversation.created_at`)
+///
+/// 存不下来的事(某一次运行失败、某一条群消息发没发出去)就**不在流里**。
+/// 与其补一条编的,不如少一条。
+pub(super) fn build_notify_events(
+    issues: &[bw_v4::Issue],
+    convs: &[bw_v4::model::Conversation],
+) -> Vec<NotifyEventVm> {
+    let mut out: Vec<(i64, NotifyEventVm)> = Vec::new();
+    let done_of = |id| {
+        issues
+            .iter()
+            .find(|i| i.id == id)
+            .is_some_and(|i| i.status == IssueStatus::Done)
+    };
+    for i in issues {
+        if i.created_at > 0 {
+            out.push((
+                i.created_at,
+                NotifyEventVm {
+                    time: stamp(i.created_at),
+                    text: format!("建了活 #{} {}", i.number, i.title),
+                    issue: Some(i.id),
+                    done: done_of(i.id),
+                },
+            ));
+        }
+        if let Some(t) = i.settled_at {
+            out.push((
+                t,
+                NotifyEventVm {
+                    time: stamp(t),
+                    text: format!("#{} {} 完成并结清", i.number, i.title),
+                    issue: Some(i.id),
+                    done: true,
+                },
+            ));
+        }
+    }
+    for c in convs {
+        let Some(i) = issues.iter().find(|i| i.id == c.issue_id) else {
+            continue;
+        };
+        if c.created_at > 0 {
+            out.push((
+                c.created_at,
+                NotifyEventVm {
+                    time: stamp(c.created_at),
+                    text: format!("#{} {} 开了会话({})", i.number, i.title, c.branch_name),
+                    issue: Some(i.id),
+                    done: done_of(i.id),
+                },
+            ));
+        }
+    }
+    // 新的在前。同一秒的保持稳定顺序,不让它每次重拼都跳。
+    out.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+    out.into_iter().take(80).map(|(_, e)| e).collect()
+}
+
+/// 时间戳按**本机时区**格式化 —— 周也是按本机时区算的,两处得一致。
+fn stamp(unix: i64) -> String {
+    let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+    match time::OffsetDateTime::from_unix_timestamp(unix) {
+        Ok(t) => {
+            let t = t.to_offset(offset);
+            format!(
+                "{:02}-{:02} {:02}:{:02}",
+                t.month() as u8,
+                t.day(),
+                t.hour(),
+                t.minute()
+            )
+        }
+        Err(_) => String::new(),
+    }
+}

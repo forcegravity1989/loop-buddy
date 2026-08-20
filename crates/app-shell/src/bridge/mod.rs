@@ -330,6 +330,22 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
 
                 let mut vm = vm_build::build(&app, &ui).await;
                 eprintln!("[BW_BOOT] projects={} db={db}", vm.projects.len());
+                // 打开了项目就把这一份 ViewModel 的关键计数打出来 —— 这些数
+                // 都能用 sqlite3 当场对(活数 / 会话数 / 事件数 / 周数),
+                // 比截图硬。
+                if let Some(o) = &vm.open {
+                    eprintln!(
+                        "[BW_VM] project={} 活={} 会话={} 事件={} 周={} 待评审={} 阻塞={} 技能={}",
+                        o.slug,
+                        o.board.columns.iter().map(|c| c.cards.len()).sum::<usize>(),
+                        o.sessions.len(),
+                        o.notify.events.len(),
+                        o.weeks.len(),
+                        o.notify.in_review.len(),
+                        o.notify.blocked.len(),
+                        o.config.skills.len(),
+                    );
+                }
                 // BW_KB_DUMP=1:把知识库三个页签的数字打进 stderr,好让人拿
                 // `git ls-files` / `codegraph files -j` / `cat docs/releases.md`
                 // 当场对。截图对不了数,这个能。

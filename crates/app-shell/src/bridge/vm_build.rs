@@ -13,8 +13,8 @@ use bw_v4::V4Store;
 
 use super::vm_kb::build_kb;
 use super::vm_panels::{
-    build_board, build_card_mr, build_config, build_metrics, build_ops, build_sessions,
-    build_week_counts, build_weeks, build_workbench,
+    build_board, build_card_mr, build_config, build_metrics, build_notify_events, build_ops,
+    build_sessions, build_week_counts, build_weeks, build_workbench,
 };
 
 /// 读一份仓文件:读不出来就把原话记进 `warnings`,再退回默认值。
@@ -324,6 +324,7 @@ async fn build_project(
     let file =
         read_or_warn(".bw/project.toml", project_file::read(&ws), warnings).unwrap_or_default();
     let issues = store.issues(id).await.unwrap_or_default();
+    let conversations = store.conversations(id).await.unwrap_or_default();
     let sessions = build_sessions(app, id, &issues).await;
     let current_week = bw_v4::isoweek::current_week();
     let viewing_week = if ui.viewing_week.is_empty() {
@@ -447,6 +448,7 @@ async fn build_project(
                 .ok()
                 .flatten()
                 .and_then(|v| v.parse().ok()),
+            events: build_notify_events(&issues, &conversations),
         },
         config: build_config(store, id, &ws, policy.as_ref(), &p).await,
         kb: KbVm {
