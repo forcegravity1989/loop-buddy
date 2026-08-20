@@ -32,7 +32,7 @@
 | [`code-schemes.md`](code-schemes.md) | 代号索引(P/S/W/R/L/A/D/G/K/M/T/V……),新开一批代号先来这里登记 | 谁开代号谁登记 |
 | [`adr/0001-ubiquitous-language.md`](adr/0001-ubiquitous-language.md) | 确立 `CONTEXT.md` 为领域语言规范的决定 + 改名台账 | 改术语时更新 |
 | [`superpowers/specs/`](superpowers/specs/) | 仍作数的设计稿三篇:2026-07-22 GitHub 主体化入门(plan/13 引用)、2026-08-05 技能五角色归类(`bw-core/src/stage_catalog.rs` 引用)、2026-08-17 减负重构(本次) | 过时即搬 `archive/superpowers/` |
-| [`guide/`](guide/) | 产品指南 HTML 原型 + `填写规范.md`(自称「整个产品指南的种子」) | 伙伴会话 |
+| [`guide/`](guide/) | 给同事用的产品指南,**只写已实践**:[`v4-用户使用指南.md`](guide/v4-用户使用指南.md)(V4 新壳一站一站的流程,跟着伴飞长,没走到的站写明没走到)+ V1 期留下的指南 HTML 原型与 `填写规范.md` | V4 指南:伴飞中,每走完一站补一站 |
 | [`metrics/workflowhub/metrics-rationale.md`](metrics/workflowhub/metrics-rationale.md) | 本仓自己作为「项目」时的指标推导记录,配根目录 `.bw/metrics.toml` | 指标变动时 |
 | [`examples/metrics.toml.sample`](examples/metrics.toml.sample) | `.bw/metrics.toml` 可复制样例 | 格式变动时 |
 
