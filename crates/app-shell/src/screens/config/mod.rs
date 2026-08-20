@@ -331,6 +331,25 @@ fn StandardBlock(p: ProjectVm, bridge: Bridge) -> Element {
     let b_ver = bridge.clone();
     let pid = p.id;
     let mut version = use_signal(|| p.card.current_version_raw.clone());
+    // 「规范铺底」要写仓、提交、推分支、开 MR —— 十几秒起步。不报进度的话
+    // 按下去界面一动不动,人会以为没点上。和接入屏同一条通道、同一种画法。
+    let mut log = use_signal(Vec::<bw_v4::app::ProgressLine>::new);
+    let prog = bridge.progress.clone();
+    use_future(move || {
+        let mut rx = prog.subscribe();
+        async move {
+            while let Ok(line) = rx.recv().await {
+                let mut rows = log.write();
+                match rows
+                    .iter()
+                    .position(|r: &bw_v4::app::ProgressLine| r.step == line.step)
+                {
+                    Some(i) => rows[i] = line,
+                    None => rows.push(line),
+                }
+            }
+        }
+    });
     let std_ver = if p.card.standard_version.is_empty() {
         "—(这个仓还没铺过规范件)".to_string()
     } else {
@@ -348,7 +367,10 @@ fn StandardBlock(p: ProjectVm, bridge: Bridge) -> Element {
                     }
                     button {
                         class: "btn btn-sm btn-primary",
-                        onclick: move |_| b_boot.cmd(Command::RunStandardBootstrap { project_id: pid }),
+                        onclick: move |_| {
+                            log.write().clear();
+                            b_boot.cmd(Command::RunStandardBootstrap { project_id: pid });
+                        },
                         "规范铺底"
                     }
                 }
@@ -377,6 +399,7 @@ fn StandardBlock(p: ProjectVm, bridge: Bridge) -> Element {
                     }
                 }
             }
+            {crate::chrome::progress_log(&log.read())}
             div { class: "cfg-readonly-note",
                 "对账只看不改:缺哪几份、哪几份过期了、哪几份被人手改过,结果显示在页脚回执里。\
                  「规范铺底」会真的写仓 —— 建分支、写核心件、建一张活提 MR,停在评审中等人合。"

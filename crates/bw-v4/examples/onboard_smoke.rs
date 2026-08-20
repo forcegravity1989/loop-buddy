@@ -14,6 +14,8 @@
 //! 3. 目录里有东西、又不是 git 仓 → **弹回**,而且库里不许留下半个项目
 //! 4. 同一个 slug 再接一次 → 幂等,不建第二行
 //! 5. 填了远端、目录不在 → 真 clone 下来,HEAD 能读回
+//! 6. 每一档接完都自动建了那张「规范铺底」的活,而且**它最远只到评审中**
+//! 7. 从工作台移走一个项目:库里干干净净,**仓一个字节都不动**
 //!
 //! 第 3 档是这个例子最要紧的一条:V4 没有「删项目」这条命令,接入中途失败要是
 //! 在库里留了一行,那一行就永远赖在项目墙上了。
@@ -163,6 +165,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &format!(
             "接之前 {before} → 接之后 {}(该一样)",
             store.projects().await?.len()
+        ),
+    );
+
+    // ── 6 · 接入自动建的那张「规范铺底」活 ────────────────────
+    // 母文档 §2 第 0 站:接入完 buddy 自己建一张一次性运作活③。这里读回它
+    // 真的建了、来源是 auto、而且**状态最远只到评审中** —— 自动建的活绝不
+    // 自动完成,这条是铁律。
+    for slug in ["no-remote", "already"] {
+        let pid = store.project_by_slug(slug).await?.unwrap().id;
+        let rows = store.issues(pid).await?;
+        let shown: Vec<String> = rows
+            .iter()
+            .map(|i| {
+                format!(
+                    "#{} 「{}」 来源={:?} 状态={:?}",
+                    i.number, i.title, i.origin, i.status
+                )
+            })
+            .collect();
+        say(
+            &format!("档 6 · {slug} 接完自动建的活"),
+            &format!("{} 张:{}", rows.len(), shown.join(" | ")),
+        );
+        say(
+            &format!("档 6 · {slug} 有没有活被推到「完成」"),
+            &format!(
+                "{}(该是 false —— 自动建的活绝不自动完成)",
+                rows.iter()
+                    .any(|i| i.status == bw_v4::model::IssueStatus::Done)
+            ),
+        );
+    }
+
+    // ── 7 · 从工作台移走 ────────────────────────────────────
+    // 项目卡右上角那个 ×。只动库,绝不动仓 —— 这条要能读回来,不然「移走」
+    // 就成了「删掉我的代码」。
+    let gone = store.project_by_slug("already").await?.unwrap().id;
+    let ws_before = already.join(".git").is_dir();
+    let ev = app
+        .dispatch(Command::RemoveProject { project_id: gone })
+        .await?;
+    say("档 7 · 移走的回执", &format!("{ev:?}"));
+    say(
+        "档 7 · 库里还有它吗",
+        &format!(
+            "项目={:?} · 活={} 张(都该是空)",
+            store.project_by_slug("already").await?.map(|p| p.slug),
+            store.issues(gone).await?.len()
+        ),
+    );
+    say(
+        "档 7 · 仓还在吗",
+        &format!(
+            "移走前 .git={ws_before} → 移走后 .git={} · 目录还在={}",
+            already.join(".git").is_dir(),
+            already.is_dir()
         ),
     );
 

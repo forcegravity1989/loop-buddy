@@ -69,6 +69,14 @@ pub async fn is_repo(workspace: &Path) -> bool {
     git(workspace, &["rev-parse", "--git-dir"]).await.is_ok()
 }
 
+/// 这个仓有没有第一条提交。**刚 `git init` 或者刚建出来的空仓没有 HEAD**,
+/// 从它身上开分支会被 git 顶回来(`invalid reference`),所以要先问这一句。
+pub async fn has_head(workspace: &Path) -> bool {
+    git(workspace, &["rev-parse", "--verify", "HEAD"])
+        .await
+        .is_ok()
+}
+
 /// 某一周有没有真实提交。健康判据 (a) 的后半句。
 pub async fn has_commits_in_week(workspace: &Path, week: &str) -> Result<bool, GitError> {
     Ok(week_stats(workspace, week).await?.commits > 0)
@@ -141,10 +149,16 @@ pub async fn tags(workspace: &Path) -> Result<Vec<String>, GitError> {
 
 /// 当前分支名。
 pub async fn current_branch(workspace: &Path) -> Result<String, GitError> {
-    Ok(git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .await?
-        .trim()
-        .to_string())
+    // 一条提交都没有的仓,`rev-parse HEAD` 会失败 —— 但分支名是有的
+    // (`git init` 就定好了,main 还是 master),`symbolic-ref` 读得出来。
+    // 读不出名字就报「没有分支」,不要在这种时候编一个。
+    match git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"]).await {
+        Ok(s) => Ok(s.trim().to_string()),
+        Err(e) => match git(workspace, &["symbolic-ref", "--short", "HEAD"]).await {
+            Ok(s) => Ok(s.trim().to_string()),
+            Err(_) => Err(e),
+        },
+    }
 }
 
 /// 把分支推到 `origin` 并建立跟踪(`git push -u origin <branch>`)。

@@ -10,7 +10,7 @@
 //! 都不会被碰;两张活同时在跑也不会撞在一起。
 
 use super::worktree;
-use super::{App, AppError, Result};
+use super::{App, AppError, ProgressLine, Result};
 use crate::command::Event;
 use crate::model::{Issue, IssueOrigin, IssueStatus, ProjectId};
 use crate::repo::managed_file::{self, Reconcile};
@@ -46,6 +46,10 @@ impl App {
             pending_steps(&probe)
         );
 
+        self.step(ProgressLine::doing(
+            5,
+            "规范铺底:建活、开一棵这张活自己的树…",
+        ));
         let (issue_id, _, _) = self
             .create_ops_issue(
                 project_id,
@@ -79,6 +83,7 @@ impl App {
         // 这张活自己的一棵树、自己的一个分支。人的主检出不动。
         let issue = self.issue_or_err(issue_id).await?;
         let tree = worktree::provision(&ws, issue.number).await?;
+        self.step(ProgressLine::doing(5, "规范铺底:往那棵树里写规范骨架…"));
         let report = boot::write_core_files(&tree.path, &vars)?;
 
         // 只提交这次真写下去的那些件,不用 `add -A`:这棵树是干净的检出,但
@@ -103,6 +108,7 @@ impl App {
 
         // 推分支 + 开 MR。没挂远端、没隔出树、或者压根没提交出东西,就都不做
         // ——如实记下为什么没有 MR,不摆一个空号。
+        self.step(ProgressLine::doing(5, "规范铺底:提交、推分支、开 MR…"));
         let mr = worktree::push_and_open_mr(
             &project,
             &tree,
@@ -171,6 +177,34 @@ impl App {
         self.store
             .set_issue_remote(issue_id, &tree.branch, pr_number, issue.remote_number)
             .await?;
+
+        self.step(if committed {
+            ProgressLine::ok(
+                5,
+                format!(
+                    "规范铺底:写了 {} 个规范件,提交在分支 {} 上 · MR:{}",
+                    report.written.len(),
+                    tree.branch,
+                    mr.note
+                ),
+            )
+        } else if report.written.is_empty() {
+            // 一个件都没写下去 = 重跑,件本来就在。
+            ProgressLine::ok(5, "规范铺底:件本来就都在,这次没写也没提交")
+        } else {
+            // **写下去了却没提交出来**。这不是「件都在了」—— 说成那样就是在
+            // 骗人。多半是这个工作区压根不是 git 仓(接入时没填远端,只建了个
+            // 空目录),件真在硬盘上,只是没进版本控制。
+            ProgressLine::ok(
+                5,
+                format!(
+                    "规范铺底:写了 {} 个规范件到 {},但**没提交**(这个工作区不是 git 仓或者提交被拒)· MR:{}",
+                    report.written.len(),
+                    tree.path.display(),
+                    mr.note
+                ),
+            )
+        });
 
         let mut events = vec![Event::StandardBootstrapped {
             project_id,

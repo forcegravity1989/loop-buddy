@@ -15,11 +15,17 @@
 //!
 //! 四个基础字段全部落仓文件(`PROJECT.md` 与 `.bw/project.toml`),库里只记路径
 //! 与显示用的名字 —— 名片的正本在仓里,换台机器拉下来就有。
+//!
+//! **「完成接入」按下去会发生什么**(母文档 §2 第 0 站):把仓弄到本机(该 clone
+//! 就 clone)→ 库里落一行项目 → 读/写仓里的名片 → 自动建一张运作活③「规范铺底」,
+//! 它写规范骨架、开一条分支、提一个 MR,**停在评审中等人合** → 进这个项目。
+//! 每一步都往那条 broadcast 通道报一行,界面上原地覆盖 —— 这一下要十几秒,不报
+//! 进度人会以为没点上、然后猛点。
 
 use crate::bridge::{Bridge, Req};
-use crate::chrome::light_dot;
+use crate::chrome::{light_dot, progress_log};
 use crate::vm::{RepoProbe, RepoRowVm, ToolProbeVm, Vm};
-use bw_v4::app::{ProgressLine, StepState};
+use bw_v4::app::ProgressLine;
 use bw_v4::command::{Command, ProjectIntent, RemoteRef};
 use bw_v4::Signal as HealthSignal;
 use dioxus::prelude::*;
@@ -337,29 +343,7 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                         }
                     }
 
-                    if !log.read().is_empty() {
-                        div { class: "ob-log",
-                            for line in log.read().iter() {
-                                div {
-                                    key: "{line.step}",
-                                    class: "ob-log-row",
-                                    span {
-                                        class: match line.state {
-                                            StepState::Doing => "ob-log-mark spinning",
-                                            StepState::Ok => "ob-log-mark ok",
-                                            StepState::Fail => "ob-log-mark fail",
-                                        },
-                                        match line.state {
-                                            StepState::Doing => "⟳",
-                                            StepState::Ok => "✓",
-                                            StepState::Fail => "✕",
-                                        }
-                                    }
-                                    span { "{line.text}" }
-                                }
-                            }
-                        }
-                    }
+                    {progress_log(&log.read())}
 
                     div { class: "ob-actions",
                         button {
@@ -379,8 +363,8 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
 
                 if !vm.projects.is_empty() {
                     div { class: "ob-note",
-                        "已接入 {vm.projects.len()} 个项目。接入之后记得在配置屏点「规范铺底」,"
-                        "把管理体系写进这个仓。"
+                        "已接入 {vm.projects.len()} 个项目。接入会顺手把管理体系写进这个仓 ——"
+                        "建一张「规范铺底」的活、开一条分支、提一个 MR,停在评审中等你合。"
                     }
                 }
             }

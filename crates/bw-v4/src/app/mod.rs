@@ -156,6 +156,7 @@ impl App {
                 self.create_project(slug, intent, remote, workspace_path)
                     .await
             }
+            Command::RemoveProject { project_id } => self.remove_project(project_id).await,
             Command::EditProjectCard { project_id, intent } => {
                 self.edit_project_card(project_id, intent).await
             }

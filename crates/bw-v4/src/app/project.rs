@@ -83,11 +83,26 @@ impl App {
             },
         ));
 
-        Ok(vec![Event::ProjectCreated {
+        // 第 0 站的后半截:**接入完自动建那张一次性运作活③「规范铺底」**
+        // (母文档 §2 第 0 站)。它建分支、往仓里写全套规范骨架、开一个 MR,
+        // **停在评审中等人合** —— 不自动合、不自动完成,一条铁律都没松。
+        //
+        // 铺底没成**不推翻接入**:项目已经建好了、仓已经在本机了,这两件事是
+        // 真的。铺底失败(没登录、推不上去)如实报一行,人回头在配置屏点那颗
+        // 按钮重来一次就是了 —— 它按标题幂等,重跑不会多建一张活。
+        let mut events = vec![Event::ProjectCreated {
             id: row.id,
             slug,
             adopted,
-        }])
+        }];
+        match self.run_standard_bootstrap(row.id).await {
+            Ok(more) => events.extend(more),
+            Err(e) => self.step(ProgressLine::fail(
+                5,
+                format!("规范铺底没成:{e} —— 项目已经接进来了,回头在配置屏点「规范铺底」重来一次"),
+            )),
+        }
+        Ok(events)
     }
 
     /// 把仓弄到本机。接入这一步真正花时间的就是它。
@@ -187,6 +202,26 @@ impl App {
                 Err(AppError::Refused(why))
             }
         }
+    }
+
+    /// 把一个项目从工作台上移走。
+    ///
+    /// **只动库,不动仓**:仓里是真实的劳动成果,活自己的 worktree 也是 ——
+    /// 「我不想在工作台上看见它了」不构成删掉它们的授权。回执里如实报出仓
+    /// 还在哪儿,人真要删自己去删。
+    pub(super) async fn remove_project(&mut self, project_id: ProjectId) -> Result<Vec<Event>> {
+        let project = self
+            .store
+            .project(project_id)
+            .await?
+            .ok_or_else(|| AppError::NoSuchProject(project_id.uuid().to_string()))?;
+        let ws = self.workspace_of(project_id).await?;
+        let issues = self.store.delete_project(project_id).await?;
+        Ok(vec![Event::ProjectRemoved {
+            slug: project.slug,
+            issues,
+            workspace: ws.display().to_string(),
+        }])
     }
 
     pub(super) async fn edit_project_card(

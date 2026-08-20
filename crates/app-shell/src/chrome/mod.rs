@@ -60,6 +60,41 @@ pub fn icon(name: &str) -> Element {
     }
 }
 
+/// 长命令的「一步一句」回执,画出来。
+///
+/// **行由调用方自己收**(各屏一个信号,点按钮时清空),这里只管画 —— 谁在跑
+/// 长命令、什么时候该清屏,是那一屏自己的事;放到这里来猜只会猜错。行按步号
+/// 原地覆盖的规矩在收的那一侧,见 `bw_v4::app::ProgressLine::step`。
+pub fn progress_log(lines: &[bw_v4::app::ProgressLine]) -> Element {
+    use bw_v4::app::StepState;
+    if lines.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "prog-log",
+            for line in lines.iter() {
+                div {
+                    key: "{line.step}",
+                    class: "prog-log-row",
+                    span {
+                        class: match line.state {
+                            StepState::Doing => "prog-log-mark spinning",
+                            StepState::Ok => "prog-log-mark ok",
+                            StepState::Fail => "prog-log-mark fail",
+                        },
+                        match line.state {
+                            StepState::Doing => "⟳",
+                            StepState::Ok => "✓",
+                            StepState::Fail => "✕",
+                        }
+                    }
+                    span { "{line.text}" }
+                }
+            }
+        }
+    }
+}
+
 pub fn light_dot(signal: Option<Signal>, big: bool) -> Element {
     let cls = if big { "dot dot-lg" } else { "dot" };
     let color = theme::signal_color(signal);

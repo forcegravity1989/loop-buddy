@@ -12,9 +12,10 @@
  *      永远不可点,所以它 `pointer-events:none`、底色是墨黑。真壳这条位置
  *      放的是命令回执(可能是一整句失败原话),必须点得到 ✕、也不该是一坨
  *      黑块压在暖纸底色上。
- *   4. 「真壳补充」里另加了接入屏那格的三小节:两步走的步骤条(.ob-steps)、
- *      仓下拉(.repo-pop)、以及输入框内嵌的刷新小图标(.repo-field)——
- *      原型上「接入」屏是手填地址,没有这几样东西。
+ *   4. 「真壳补充」里另加了几小节,原型上没有对应的东西:接入屏两步走的
+ *      步骤条(.ob-steps)、仓下拉(.repo-pop)、输入框内嵌的刷新小图标
+ *      (.repo-field)、长命令的一步一句回执(.prog-log),以及项目卡右上角
+ *      「从工作台移走」的 ×(.pcard-x / .pcard-confirm / .btn-danger)。
  *
  * 除此之外一行没改。类名照搬,屏里直接用 class,不再写行内样式。
  */
@@ -521,13 +522,24 @@ select.select-multi{padding:3px;font-size:11.5px;border:1px solid var(--border-d
 .repo-refresh.spinning{animation:repo-spin .9s linear infinite;}
 @keyframes repo-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 
-/* 接入屏「完成接入」按下之后的一步一句回执。人点完那一下总得看见事情在动,
+/* 长命令的一步一句回执(接入、规范铺底)。人点完那一下总得看见事情在动,
    否则会以为没点上、然后猛点 —— 试点第一天用户提的。 */
-.ob-log{margin:14px 0 0;padding:10px 12px;background:var(--card-alt);
+.prog-log{margin:14px 0 0;padding:10px 12px;background:var(--card-alt);
   border:1px solid var(--border);border-radius:8px;font-size:12.5px;color:var(--ink-2);}
-.ob-log-row{display:flex;align-items:flex-start;gap:8px;padding:3px 0;line-height:1.5;}
-.ob-log-mark{flex:none;width:14px;text-align:center;line-height:1.5;}
-.ob-log-mark.ok{color:var(--green);}
-.ob-log-mark.fail{color:var(--red);}
-.ob-log-mark.spinning{color:var(--clay);display:inline-block;
+.prog-log-row{display:flex;align-items:flex-start;gap:8px;padding:3px 0;line-height:1.5;}
+.prog-log-mark{flex:none;width:14px;text-align:center;line-height:1.5;}
+.prog-log-mark.ok{color:var(--green);}
+.prog-log-mark.fail{color:var(--red);}
+.prog-log-mark.spinning{color:var(--clay);display:inline-block;
   animation:repo-spin .9s linear infinite;}
+
+/* 项目卡右上角的「从工作台移走」。高保真上有个 ×,当初没做(内核没有删除项目
+   这条命令);命令补上之后它回来了 —— 点一下先问,再点才真移走。 */
+.pcard-x{margin-left:8px;color:var(--ink-4);font-size:13px;line-height:1;
+  cursor:pointer;padding:2px 4px;border-radius:5px;}
+.pcard-x:hover{color:var(--alert-deep);background:#F4E4DC;}
+.pcard-confirm{margin-top:9px;padding:9px 10px;background:#F6E9E4;
+  border:1px solid var(--clay-dim);border-radius:7px;font-size:11.5px;
+  color:var(--ink-2);line-height:1.55;cursor:default;}
+.btn-danger{background:var(--alert-deep);border-color:var(--alert-deep);color:#FFF8F3;}
+.btn-danger:hover{background:var(--red);border-color:var(--red);}

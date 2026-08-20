@@ -613,6 +613,17 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                         ui.repo_stats = None;
                                         ui.repos = crate::vm::RepoPickerVm::default();
                                     }
+                                    // 项目被移走了:它要是正开着,得回项目墙 ——
+                                    // 留在一个已经不存在的项目上,整屏都是空的。
+                                    if events.iter().any(|e| {
+                                        matches!(e, bw_v4::command::Event::ProjectRemoved { .. })
+                                    }) {
+                                        ui.open = None;
+                                        ui.open_doc = None;
+                                        ui.kb_codegraph = None;
+                                        ui.kb_assets = None;
+                                        ui.repo_stats = None;
+                                    }
                                     // 改了工作区根目录:设置屏那一行要立刻显示
                                     // 新值,不能等下次重启。
                                     for e in &events {

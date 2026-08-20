@@ -156,4 +156,28 @@ impl V4Store {
         .await?;
         Ok(())
     }
+
+    /// 把一个项目从工作台上移走:项目行、它的活、它的会话身份,三张表一起删。
+    ///
+    /// **只动库,绝不动仓**。仓是正本,里面是真实的劳动成果 —— 「我不想在工作
+    /// 台上看见它了」不构成删掉一个仓的授权。活自己的那些 worktree 同理留着。
+    ///
+    /// 回删掉了几张活,给回执用 —— 人得知道自己刚才丢掉了多少账。
+    pub async fn delete_project(&self, id: ProjectId) -> Result<u64> {
+        let key = id.uuid().to_string();
+        let issues = sqlx::query("DELETE FROM issue WHERE project_id=?1")
+            .bind(&key)
+            .execute(self.pool())
+            .await?
+            .rows_affected();
+        sqlx::query("DELETE FROM claude_conversation WHERE project_id=?1")
+            .bind(&key)
+            .execute(self.pool())
+            .await?;
+        sqlx::query("DELETE FROM project WHERE id=?1")
+            .bind(&key)
+            .execute(self.pool())
+            .await?;
+        Ok(issues)
+    }
 }

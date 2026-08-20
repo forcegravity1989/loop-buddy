@@ -59,6 +59,9 @@ pub enum Command {
     // ── 规范铺底(运作活③)─────────────────────────────────
     /// 一次性运作活③:按探测结果决定要跑几步,A 刀只做第 1 步(写核心件)。
     RunStandardBootstrap { project_id: ProjectId },
+    /// 把一个项目从工作台上移走。**只动库,不动仓** —— 仓是正本,里面是真实
+    /// 的劳动成果。界面上要人点两下才发得出这条(第一下问「真移走?」)。
+    RemoveProject { project_id: ProjectId },
     /// 纯读:按「缺 / 过期 / 人改过 / 一致」四类对账,不建活不写仓。
     ReconcileStandard { project_id: ProjectId },
 
@@ -205,6 +208,13 @@ pub enum Event {
         project_id: ProjectId,
     },
     /// 规范铺底第 1 步真的把文件写进仓并提交了。`files` 是实际落盘的路径。
+    /// 项目从工作台上移走了。`issues` = 跟着一起删掉的活数,好让人知道
+    /// 自己刚才丢掉了多少账;仓和活自己的 worktree 都还在硬盘上。
+    ProjectRemoved {
+        slug: String,
+        issues: u64,
+        workspace: String,
+    },
     StandardBootstrapped {
         project_id: ProjectId,
         issue_id: IssueId,

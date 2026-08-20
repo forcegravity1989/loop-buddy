@@ -113,6 +113,13 @@ fn primary_note(events: &[Event]) -> Option<String> {
                 format!("项目 {slug} 已接入")
             }
         }
+        Event::ProjectRemoved {
+            slug,
+            issues,
+            workspace,
+        } => format!(
+            "{slug} 已从工作台移走(连同 {issues} 张活的账)。**仓一个字节都没动**,还在 {workspace}"
+        ),
         Event::ProjectCardEditPending { .. } => "名片改动已建成一张轻量活,等评审合入".into(),
         Event::ProjectChatChanged { .. } => "项目群配置已写进 .bw/project.toml".into(),
         Event::StandardBootstrapped {
