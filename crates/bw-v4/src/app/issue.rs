@@ -8,6 +8,7 @@
 //!   状态机只允许从「评审中」进 Done;结清那一下走的 SQL 自带
 //!   `WHERE settled_at IS NULL`,同一件活绝不结两次。
 
+use super::worktree;
 use super::{App, AppError, Result};
 use crate::command::Event;
 use crate::model::{Category, Issue, IssueId, IssueKind, IssueOrigin, IssueStatus, ProjectId};
@@ -125,6 +126,21 @@ impl App {
         }
 
         let ws = self.workspace_of(issue.project_id).await?;
+        // 有真实工作区就在**这张活自己的 worktree** 里干,和 PTY 那条路一样;
+        // 没有工作区就没什么可隔离的,下面走自我标注的替身。
+        let tree = if ws.is_dir() {
+            let t = worktree::provision(&ws, issue.number).await?;
+            self.store
+                .set_issue_remote(id, &t.branch, issue.pr_number, issue.remote_number)
+                .await?;
+            Some(t)
+        } else {
+            None
+        };
+        let run_dir = tree
+            .as_ref()
+            .map(|t| t.path.clone())
+            .unwrap_or_else(|| ws.clone());
         // 先推进行中 —— 界面上立刻看得出它开工了。
         if issue.status != IssueStatus::InProgress {
             self.store
@@ -134,9 +150,12 @@ impl App {
 
         let agent: &TuiAgentConfig = &CLAUDE;
         let prompt = format!("#{} {}\n\n{}", issue.number, issue.title, issue.body);
-        let workflow_body = super::bootstrap::workflow_body(&ws, &issue.workflow);
+        // 剧本先在干活那棵树里找,找不到再回主工作区找(有些仓把 `.claude/`
+        // 写进了 .gitignore,技能包进不了分支,只在主检出里)。
+        let workflow_body = super::bootstrap::workflow_body(&run_dir, &issue.workflow)
+            .or_else(|| super::bootstrap::workflow_body(&ws, &issue.workflow));
         let system_prompt = super::bootstrap::agent_system_prompt(&issue, workflow_body.as_deref());
-        let plan = build_startup_plan(agent, &prompt, &system_prompt, &ws)
+        let plan = build_startup_plan(agent, &prompt, &system_prompt, &run_dir)
             .map_err(|e| AppError::Exec(e.to_string()))?;
         let ctx = RunCtx {
             project: issue.project_id,
@@ -145,7 +164,7 @@ impl App {
 
         // 没有真实工作区的项目走自我标注的替身:产出带【mock】字样,不冒充
         // 真的干过活。有工作区但没开 PTY(指挥器、headless)时也走这条。
-        let out = if ws.is_dir() {
+        let out = if tree.is_some() {
             self.executor.run_skill(&plan, &ctx).await
         } else {
             bw_engine::MockInteractiveExecutor::new()
@@ -209,6 +228,12 @@ impl App {
         } else {
             false
         };
+        // 结清了就把这张活那棵 worktree 收掉 —— 活完了,那棵树没用了。
+        // **只在它干净的时候收**:里面还有没提交的改动就原样留着,「我点了
+        // 完成」不构成删掉别人劳动成果的授权。
+        if settled {
+            self.cleanup_issue_worktree(&issue).await;
+        }
         let mut events = vec![Event::IssueTransitioned { id, to, settled }];
         // 进评审 = 该人看一眼了,配了群就往群里说一声。
         if to == IssueStatus::InReview {
@@ -238,6 +263,18 @@ impl App {
         };
         self.store.set_issue_body(id, &body).await?;
         Ok(vec![Event::IssueBlocked { id }])
+    }
+
+    /// 收掉这张活的 worktree。收不掉(脏的、路径算不出来、项目没了)就什么
+    /// 都不做 —— 收尾失败不该把「这张活已经完成」这件事顶回去。
+    async fn cleanup_issue_worktree(&self, issue: &Issue) {
+        let Ok(ws) = self.workspace_of(issue.project_id).await else {
+            return;
+        };
+        let Some(tree) = bw_engine::workspace::issue_worktree_path(&ws, issue.number) else {
+            return;
+        };
+        worktree::remove_if_clean(&ws, &tree).await;
     }
 
     pub(crate) async fn issue_or_err(&self, id: IssueId) -> Result<Issue> {

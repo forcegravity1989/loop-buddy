@@ -87,7 +87,9 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
 }
 
 /// 等人合入的活。「合入并完成」先真的把 MR 合了,再把活推到完成 —— 合入没成
-/// 就整条不算数,活留在原地可以重试。
+/// 就整条不算数,活留在原地可以重试。库里没记 MR 号的,内核会拿这张活的分支
+/// 去远端现查一次(队友自己开的 MR 就这么找到);确实没有 MR 可合的(项目没
+/// 挂远端),只走「完成」那一步,事件里如实说没合。
 fn review_item(c: &CardItemVm, bridge: &Bridge, nav: PanelNav) -> Element {
     let (b_open, b_done, b_merge) = (bridge.clone(), bridge.clone(), bridge.clone());
     let id = c.id;

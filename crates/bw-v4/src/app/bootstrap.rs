@@ -1,13 +1,18 @@
 //! 规范铺底(运作活③)与规范对账。
 //!
-//! A 刀只做**第 1 步**:buddy 自己把核心件写进项目仓、复制预置技能包、记指纹,
-//! 然后提交。第 2 步「合并调整」与第 3 步「历史回填」要起 agent 会话,留给后
-//! 面的刀——这张活的标题会如实带上「· 含合并调整」「· 含历史回填」后缀,说明
-//! 探测到了什么,但那两步还没跑。
+//! 只做**第 1 步**:buddy 自己把核心件写进项目仓、复制预置技能包、记指纹,
+//! 在**这张活自己的 worktree 和分支上**提交,推上去,开一个 MR 等人合。第 2
+//! 步「合并调整」与第 3 步「历史回填」要起 agent 会话,还没做——探测到了什么
+//! 如实写进这张活的正文,但那两步没跑就是没跑。
+//!
+//! **不在主检出上动手**。写文件、提交、开分支全在
+//! [`worktree`](super::worktree) 供给的那棵树里发生,人自己的工作目录一个字节
+//! 都不会被碰;两张活同时在跑也不会撞在一起。
 
+use super::worktree;
 use super::{App, AppError, Result};
 use crate::command::Event;
-use crate::model::{Issue, IssueOrigin, ProjectId};
+use crate::model::{Issue, IssueOrigin, IssueStatus, ProjectId};
 use crate::repo::managed_file::{self, Reconcile};
 use crate::repo::project_file;
 use crate::standard;
@@ -71,14 +76,15 @@ impl App {
             },
             chat: super::project::chat_label(&file.chat),
         };
-        let report = boot::write_core_files(&ws, &vars)?;
+        // 这张活自己的一棵树、自己的一个分支。人的主检出不动。
+        let issue = self.issue_or_err(issue_id).await?;
+        let tree = worktree::provision(&ws, issue.number).await?;
+        let report = boot::write_core_files(&tree.path, &vars)?;
 
-        // 空仓例外(仓是 buddy 自己建的)直接提交当前分支;否则也提交在当前
-        // 分支上,开分支与 MR 是后面刀的事——这里如实回报提交没提交。
-        // 只提交这次真写下去的那些件。用户点铺底的时候工作区多半是脏的,
-        // 把他手上没写完的改动一起打包进「规范铺底」那个提交是不能接受的。
+        // 只提交这次真写下去的那些件,不用 `add -A`:这棵树是干净的检出,但
+        // 规矩就是规矩 —— 提交里出现的每一个文件都该是 buddy 自己写的。
         let outcome = crate::git::commit_paths(
-            &ws,
+            &tree.path,
             &report.written,
             &format!("docs(bw): 规范铺底 v{} · 核心件", standard::version()),
         )
@@ -86,10 +92,33 @@ impl App {
         .unwrap_or_default();
         let committed = outcome.committed;
 
+        // 仓的 .gitignore 拒收的件属于本机检出,不属于分支 —— 放一份到主工作
+        // 区,否则技能包只存在于这一张活的 worktree 里,下一张活开新树就读不到
+        // 剧本了。已经有同名文件就不覆盖。
+        let (mirrored, kept) = if tree.isolated {
+            worktree::mirror_ignored(&ws, &tree.path, &outcome.refused)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        // 推分支 + 开 MR。没挂远端、没隔出树、或者压根没提交出东西,就都不做
+        // ——如实记下为什么没有 MR,不摆一个空号。
+        let mr = self
+            .push_and_open_mr(&project, &tree, committed, &title_for_mr())
+            .await;
+
         // 跳过的件如实写进这张活的说明,评审的人不用猜为什么少了一份。
         // 注意是**从头拼一遍再整体覆盖**,不是往现有正文后面追加 —— 建活是按
         // 标题幂等的,重跑会拿到同一张活,追加就会把「跳过的件」滚成两份。
         let mut b = body;
+        b.push_str(&format!(
+            "\n\n干活的地方:`{}`\n分支:`{}`",
+            tree.path.display(),
+            tree.branch
+        ));
+        if !tree.isolated {
+            b.push_str("\n(这个工作区不是 git 仓,开不了 worktree,是就地写的)");
+        }
         if !report.skipped.is_empty() {
             b.push_str("\n\n跳过的件:\n");
             for (path, why) in &report.skipped {
@@ -99,20 +128,88 @@ impl App {
         if !outcome.refused.is_empty() {
             b.push_str(
                 "\n\n写下去了但**没进版本控制**的件(这个仓的 .gitignore 忽略了它们,\
-                 buddy 不用 -f 顶回去 —— 那是项目自己的决定):\n",
+                 buddy 不用 -f 顶回去 —— 那是项目自己的决定)。它们属于本机检出,\
+                 不属于分支,合 MR 不会带上:\n",
             );
+            // 一条路径只出现一次,后面跟它的下落 —— 三份互相重复的清单谁都不会看。
             for path in &outcome.refused {
-                b.push_str(&format!("- `{path}`\n"));
+                let disposition = if mirrored.contains(path) {
+                    "已放进你的工作目录"
+                } else if kept.contains(path) {
+                    "你的工作目录里已经有同名文件,没覆盖"
+                } else {
+                    "只在这张活的目录里"
+                };
+                b.push_str(&format!("- `{path}` —— {disposition}\n"));
             }
         }
+        b.push_str(&format!("\n\nMR:{}", mr.note));
         self.store.set_issue_body(issue_id, &b).await?;
+        self.store
+            .set_issue_remote(issue_id, &tree.branch, mr.number, issue.remote_number)
+            .await?;
 
-        Ok(vec![Event::StandardBootstrapped {
+        let mut events = vec![Event::StandardBootstrapped {
             project_id,
             issue_id,
             files: report.written,
             committed,
-        }])
+        }];
+        // 真提交出东西了才推「评审中」—— 该人看一眼了。什么都没写下去的时候
+        // 原地不动,不假装干过活。**最远只到评审中**,「完成」永远由人点。
+        if committed && issue.status.can_transition_to(IssueStatus::InProgress) {
+            events.extend(
+                self.transition_issue(issue_id, IssueStatus::InProgress)
+                    .await?,
+            );
+            events.extend(
+                self.transition_issue(issue_id, IssueStatus::InReview)
+                    .await?,
+            );
+        }
+        Ok(events)
+    }
+
+    /// 推分支 + 开 MR。**每一条不做的理由都说出来**,界面上不会出现一个来历
+    /// 不明的空 MR 号。
+    async fn push_and_open_mr(
+        &self,
+        project: &crate::model::Project,
+        tree: &worktree::IssueTree,
+        committed: bool,
+        title: &str,
+    ) -> MrOutcome {
+        if !committed {
+            return MrOutcome::none("这次没有新东西要提交,没开");
+        }
+        if !tree.isolated {
+            return MrOutcome::none("这个工作区不是 git 仓,没有分支可提");
+        }
+        if !project.has_remote() {
+            return MrOutcome::none("这个项目还没挂远端,分支只在本机(合的时候直接 merge 这个分支)");
+        }
+        if let Err(e) = crate::git::push_branch(&tree.path, &tree.branch).await {
+            return MrOutcome::none(&format!("推分支没成,原话:{e}"));
+        }
+        let remote = match bw_engine::remote::Remote::for_project(
+            &project.provider,
+            &project.remote_host,
+            &project.remote_path,
+        ) {
+            Ok(r) => r,
+            Err(e) => return MrOutcome::none(&format!("认不出远端类型:{e}")),
+        };
+        let body = "buddy 的「规范铺底」写下的核心件。合入之后这个项目就有管理体系的正本了。\n\n                    这些件全是 buddy 自己写的,没有起 agent。";
+        match remote
+            .create_mr_on_branch(&tree.path, &tree.branch, title, body)
+            .await
+        {
+            Ok(pr) => MrOutcome {
+                number: pr.number(),
+                note: format!("#{}", pr.number()),
+            },
+            Err(e) => MrOutcome::none(&format!("开 MR 没成,原话:{e}")),
+        }
     }
 
     /// 纯读的对账:缺 / 过期 / 人改过。不建活、不写仓。
@@ -157,6 +254,26 @@ impl App {
             human_edited,
         }])
     }
+}
+
+/// 开 MR 的结果。`number == 0` = 没有 MR,`note` 说明为什么 —— 两件事永远
+/// 一起走,不会出现「没号也没理由」。
+struct MrOutcome {
+    number: u32,
+    note: String,
+}
+
+impl MrOutcome {
+    fn none(why: &str) -> MrOutcome {
+        MrOutcome {
+            number: 0,
+            note: why.to_string(),
+        }
+    }
+}
+
+fn title_for_mr() -> String {
+    format!("规范铺底 v{} · 核心件", standard::version())
 }
 
 fn pending_steps(probe: &boot::BootstrapProbe) -> String {

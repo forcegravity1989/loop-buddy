@@ -147,6 +147,26 @@ pub async fn current_branch(workspace: &Path) -> Result<String, GitError> {
         .to_string())
 }
 
+/// 把分支推到 `origin` 并建立跟踪(`git push -u origin <branch>`)。
+///
+/// 推不上去就如实报错。**不吞**:推失败而后面照样去开 MR,开出来的会是一个
+/// 指向不存在分支的 MR,或者干脆报一句和真正原因无关的错。
+pub async fn push_branch(workspace: &Path, branch: &str) -> Result<(), GitError> {
+    git(workspace, &["push", "-u", "origin", branch]).await?;
+    Ok(())
+}
+
+/// 收掉一棵 worktree(`git worktree remove` + `prune`)。
+///
+/// **不带 `--force`**:带上它会连未提交的改动一起删。调用方
+/// ([`crate::app`] 的结清收尾)已经先确认过这棵树是干净的,真在这一步失败就
+/// 说明情况和刚才读到的不一样了 —— 那就该失败,不该硬删。
+pub async fn worktree_remove(main_workspace: &Path, tree: &str) -> Result<(), GitError> {
+    git(main_workspace, &["worktree", "remove", tree]).await?;
+    let _ = git(main_workspace, &["worktree", "prune"]).await;
+    Ok(())
+}
+
 /// 有没有未提交的改动。
 pub async fn is_dirty(workspace: &Path) -> Result<bool, GitError> {
     Ok(!git(workspace, &["status", "--porcelain"])
