@@ -84,7 +84,18 @@ impl App {
         let issue = self.issue_or_err(issue_id).await?;
         let tree = worktree::provision(&ws, issue.number).await?;
         self.step(ProgressLine::doing(5, "规范铺底:往那棵树里写规范骨架…"));
-        let report = boot::write_core_files(&tree.path, &vars)?;
+        let mut report = boot::write_core_files(&tree.path, &vars)?;
+
+        // **名片也得进这个 MR。** 接入那一步把 `.bw/project.toml` 写在人的主
+        // 检出里(得先有它,PROJECT.md 才渲染得出项目名),但铺底是在**这张活
+        // 自己的树**上提交的 —— 不把它复制过来,人的工作目录里就永远挂着一份
+        // 没提交的 `.bw/`,而仓里到今天都没有名片。「仓是正本、换台机器拉下来
+        // 就有」这句话就是从这里开始不成立的。
+        //
+        // 树没隔出来的时候(不是 git 仓、或者空仓)`tree.path` 就是主检出,
+        // 再写一遍是同一份内容;进 `written` 是为了让它被提交。
+        project_file::write(&tree.path, &file)?;
+        report.written.push(project_file::REL_PATH.to_string());
 
         // 只提交这次真写下去的那些件,不用 `add -A`:这棵树是干净的检出,但
         // 规矩就是规矩 —— 提交里出现的每一个文件都该是 buddy 自己写的。

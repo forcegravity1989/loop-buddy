@@ -16,6 +16,7 @@
 //! 5. 填了远端、目录不在 → 真 clone 下来,HEAD 能读回
 //! 6. 每一档接完都自动建了那张「规范铺底」的活,而且**它最远只到评审中**
 //! 7. 从工作台移走一个项目:库里干干净净,**仓一个字节都不动**
+//! 8. **成熟仓**(自己已经有 CLAUDE.md / AGENTS.md / README):铺底不许盖掉它们
 //!
 //! 第 3 档是这个例子最要紧的一条:V4 没有「删项目」这条命令,接入中途失败要是
 //! 在库里留了一行,那一行就永远赖在项目墙上了。
@@ -194,6 +195,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}(该是 false —— 自动建的活绝不自动完成)",
                 rows.iter()
                     .any(|i| i.status == bw_v4::model::IssueStatus::Done)
+            ),
+        );
+    }
+
+    // ── 8 · 成熟仓不许被盖 ──────────────────────────────────
+    // loop-buddy 自己就是这种仓:根目录有一份人写了很久的 CLAUDE.md。铺底
+    // 要往仓里写 AGENTS.md 和 CLAUDE.md,**盖掉就是事故**。
+    let mature = workspaces.join("mature");
+    std::fs::create_dir_all(&mature)?;
+    git(&mature, &["init", "-q"]).await;
+    std::fs::write(
+        &mature.join("CLAUDE.md"),
+        "# 人写了很久的 CLAUDE.md\n别动我\n",
+    )?;
+    std::fs::write(&mature.join("AGENTS.md"), "# 人写的 AGENTS.md\n也别动我\n")?;
+    std::fs::write(&mature.join("README.md"), "# 人写的 README\n")?;
+    git(&mature, &["add", "-A"]).await;
+    git(
+        &mature,
+        &[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ],
+    )
+    .await;
+    app.dispatch(Command::CreateProject {
+        slug: "mature".into(),
+        intent: intent("成熟仓"),
+        remote: RemoteRef::default(),
+        workspace_path: String::new(),
+    })
+    .await?;
+    drain("档8", &mut prog_rx);
+    for f in ["CLAUDE.md", "AGENTS.md", "README.md"] {
+        let body = std::fs::read_to_string(mature.join(f)).unwrap_or_default();
+        say(
+            &format!("档 8 · 主检出的 {f}"),
+            &format!(
+                "首行「{}」· 还是人写的那份={}",
+                body.lines().next().unwrap_or("(空)"),
+                body.contains("人写")
             ),
         );
     }
