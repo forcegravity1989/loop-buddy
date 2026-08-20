@@ -95,16 +95,21 @@ impl App {
         // 仓的 .gitignore 拒收的件属于本机检出,不属于分支 —— 放一份到主工作
         // 区,否则技能包只存在于这一张活的 worktree 里,下一张活开新树就读不到
         // 剧本了。已经有同名文件就不覆盖。
-        let (mirrored, kept) = if tree.isolated {
+        let mirrored = if tree.isolated {
             worktree::mirror_ignored(&ws, &tree.path, &outcome.refused)
         } else {
-            (Vec::new(), Vec::new())
+            Vec::new()
         };
 
         // 推分支 + 开 MR。没挂远端、没隔出树、或者压根没提交出东西,就都不做
         // ——如实记下为什么没有 MR,不摆一个空号。
         let mr = self
-            .push_and_open_mr(&project, &tree, committed, &title_for_mr())
+            .push_and_open_mr(
+                &project,
+                &tree,
+                committed,
+                &format!("规范铺底 v{} · 核心件", standard::version()),
+            )
             .await;
 
         // 跳过的件如实写进这张活的说明,评审的人不用猜为什么少了一份。
@@ -133,20 +138,35 @@ impl App {
             );
             // 一条路径只出现一次,后面跟它的下落 —— 三份互相重复的清单谁都不会看。
             for path in &outcome.refused {
-                let disposition = if mirrored.contains(path) {
-                    "已放进你的工作目录"
-                } else if kept.contains(path) {
-                    "你的工作目录里已经有同名文件,没覆盖"
-                } else {
-                    "只在这张活的目录里"
+                let disposition = match mirrored.iter().find(|(p, _)| p == path).map(|(_, m)| m) {
+                    Some(worktree::Mirrored::Copied) => "已放进你的工作目录".to_string(),
+                    Some(worktree::Mirrored::Kept) => {
+                        "你的工作目录里已经有同名文件,没覆盖".to_string()
+                    }
+                    Some(worktree::Mirrored::Failed(why)) => {
+                        format!("**没能放进你的工作目录**,原话:{why}")
+                    }
+                    None => "只在这张活的目录里".to_string(),
                 };
                 b.push_str(&format!("- `{path}` —— {disposition}\n"));
             }
         }
         b.push_str(&format!("\n\nMR:{}", mr.note));
+        b.push_str(
+            "\n\n**合入之前这些件只在这条分支上**,主检出里还没有 —— 所以在你合上它之前,\
+             定时(节律)、类别→工具的映射、规范对账都还读不到它们。",
+        );
         self.store.set_issue_body(issue_id, &b).await?;
+        // **已经记下的 MR 号不能被 0 冲掉**。重跑一次铺底,这次没有新东西要提交
+        // (幂等,拿到的是同一张活),`mr.number` 就是 0 —— 拿它去写库会把上一次
+        // 真开出来的那个号抹掉,活的正文和远端就对不上了。
+        let pr_number = if mr.number > 0 {
+            mr.number
+        } else {
+            issue.pr_number
+        };
         self.store
-            .set_issue_remote(issue_id, &tree.branch, mr.number, issue.remote_number)
+            .set_issue_remote(issue_id, &tree.branch, pr_number, issue.remote_number)
             .await?;
 
         let mut events = vec![Event::StandardBootstrapped {
@@ -199,7 +219,10 @@ impl App {
             Ok(r) => r,
             Err(e) => return MrOutcome::none(&format!("认不出远端类型:{e}")),
         };
-        let body = "buddy 的「规范铺底」写下的核心件。合入之后这个项目就有管理体系的正本了。\n\n                    这些件全是 buddy 自己写的,没有起 agent。";
+        let body = concat!(
+            "buddy 的「规范铺底」写下的核心件。合入之后这个项目就有管理体系的正本了。\n\n",
+            "这些件全是 buddy 自己写的,没有起 agent。"
+        );
         match remote
             .create_mr_on_branch(&tree.path, &tree.branch, title, body)
             .await
@@ -270,10 +293,6 @@ impl MrOutcome {
             note: why.to_string(),
         }
     }
-}
-
-fn title_for_mr() -> String {
-    format!("规范铺底 v{} · 核心件", standard::version())
 }
 
 fn pending_steps(probe: &boot::BootstrapProbe) -> String {

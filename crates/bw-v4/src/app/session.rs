@@ -124,10 +124,14 @@ impl App {
                 last_opened_at: 0,
             })
             .await?;
-        // 界面上这张活的分支从这里来。
-        self.store
-            .set_issue_remote(id, &tree.branch, issue.pr_number, issue.remote_number)
-            .await?;
+        // 界面上这张活的分支从这里来。**变了才写** —— 反复停止/重开时分支根本
+        // 没变,白写一条 UPDATE 还会把 `updated_at` 顶新,让这张活在「最近动过」
+        // 里排到前面,而它其实什么都没变。
+        if issue.branch != tree.branch {
+            self.store
+                .set_issue_remote(id, &tree.branch, issue.pr_number, issue.remote_number)
+                .await?;
+        }
 
         let prompt = format!("#{} {}\n\n{}", issue.number, issue.title, issue.body);
         // 剧本先在这棵树里找,找不到再回主工作区找 —— 有些仓(buddy 自己的就

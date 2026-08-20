@@ -130,9 +130,12 @@ impl App {
         // 没有工作区就没什么可隔离的,下面走自我标注的替身。
         let tree = if ws.is_dir() {
             let t = worktree::provision(&ws, issue.number).await?;
-            self.store
-                .set_issue_remote(id, &t.branch, issue.pr_number, issue.remote_number)
-                .await?;
+            // 变了才写,同 `run_issue_pty`:分支没变就别白顶一次 `updated_at`。
+            if issue.branch != t.branch {
+                self.store
+                    .set_issue_remote(id, &t.branch, issue.pr_number, issue.remote_number)
+                    .await?;
+            }
             Some(t)
         } else {
             None

@@ -81,20 +81,26 @@ pub(super) async fn remove_if_clean(main: &Path, tree: &Path) -> bool {
     true
 }
 
+/// 一件被仓拒收的件,最后去哪了。
+pub(super) enum Mirrored {
+    /// 放进主工作区了。
+    Copied,
+    /// 主工作区已经有同名文件,没覆盖。
+    Kept,
+    /// 想放但没放成,附上原话。**不吞** —— 吞掉的话活的正文会说得像一切正常。
+    Failed(String),
+}
+
 /// 把仓拒收的那几个件同步一份到主工作区。
 ///
-/// 只在主工作区**还没有**同名文件时才放 —— 绝不覆盖已经在那儿的东西。返回
-/// (放过去了的, 因为已存在而没放的),两串都由调用方如实写进活的说明。
-pub(super) fn mirror_ignored(
-    main: &Path,
-    tree: &Path,
-    rels: &[String],
-) -> (Vec<String>, Vec<String>) {
-    let (mut copied, mut kept) = (Vec::new(), Vec::new());
+/// 只在主工作区**还没有**同名文件时才放 —— 绝不覆盖已经在那儿的东西。回来的
+/// 是「路径 → 下落」的对照,由调用方如实写进活的说明。
+pub(super) fn mirror_ignored(main: &Path, tree: &Path, rels: &[String]) -> Vec<(String, Mirrored)> {
+    let mut out = Vec::new();
     for rel in rels {
         let dst = main.join(rel);
         if dst.exists() {
-            kept.push(rel.clone());
+            out.push((rel.clone(), Mirrored::Kept));
             continue;
         }
         let src = tree.join(rel);
@@ -102,13 +108,15 @@ pub(super) fn mirror_ignored(
             continue;
         }
         if let Some(parent) = dst.parent() {
-            if std::fs::create_dir_all(parent).is_err() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                out.push((rel.clone(), Mirrored::Failed(e.to_string())));
                 continue;
             }
         }
-        if std::fs::copy(&src, &dst).is_ok() {
-            copied.push(rel.clone());
+        match std::fs::copy(&src, &dst) {
+            Ok(_) => out.push((rel.clone(), Mirrored::Copied)),
+            Err(e) => out.push((rel.clone(), Mirrored::Failed(e.to_string()))),
         }
     }
-    (copied, kept)
+    out
 }
