@@ -20,14 +20,6 @@ pub(super) fn managed_paths(ws: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 技能包是哪来的:铺底时随 buddy 复制进来的(管账里有它的指纹)算「内置」,
-/// 其余算项目自有。**不猜**——文件不在管账里就是项目自己的。
-pub(super) fn skill_origin(managed: &[String], slug: &str) -> String {
-    let prefix = format!(".claude/skills/{slug}/");
-    let hit = managed.iter().any(|p| p.starts_with(&prefix));
-    if hit { "内置" } else { "项目自有" }.to_string()
-}
-
 /// 只读文件开头这么多字节。周文件的徽记就在 front matter 里,为了一行标记把
 /// 一份几十 KB 的周计划整篇读进内存不值 —— 老项目回填后这里有上百份。
 const HEAD_BYTES: usize = 512;
@@ -207,29 +199,7 @@ pub(super) async fn build_codegraph(ws: &Path) -> CodeGraphVm {
 /// 没有登记表可查(V4 库里只有四张表)。
 pub(super) async fn build_assets(store: &V4Store, id: ProjectId, ws: &Path) -> AssetsVm {
     let usage = store.workflow_usage(id).await.unwrap_or_default();
-    let managed = managed_paths(ws);
-    let mut skills: Vec<SkillVm> = std::fs::read_dir(ws.join(".claude/skills"))
-        .map(|d| {
-            d.flatten()
-                .filter(|e| e.path().join("SKILL.md").is_file())
-                .map(|e| {
-                    let slug = e.file_name().to_string_lossy().to_string();
-                    SkillVm {
-                        uses: usage
-                            .iter()
-                            .find(|(w, _)| *w == slug)
-                            .map(|(_, n)| *n)
-                            .unwrap_or(0),
-                        title: slug.clone(),
-                        origin: skill_origin(&managed, &slug),
-                        desc: super::vm_panels::skill_desc(&e.path().join("SKILL.md")),
-                        slug,
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    skills.sort_by(|a, b| b.uses.cmp(&a.uses).then(a.slug.cmp(&b.slug)));
+    let skills = super::vm_panels::skill_list(ws, &usage);
 
     let artifacts = bw_v4::git::artifacts(ws, 200)
         .await

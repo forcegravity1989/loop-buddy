@@ -48,13 +48,14 @@
 | **V3-cowelink-sidecar** | `docs/v3-prototype/cowelink-web-sidecar.md` | cowelink 长出本机网页旁路,buddy iframe 内嵌;不弹窗、不 HWND | 设计已记,未落地 |
 | **V3-use-fix** | `docs/v3-prototype/onboard-list-and-claude-resolve.md` | V3 实践使用:安装器/探测认 claude.cmd + 创建流拉 999/可搜索下拉 + 程序图标;纳入选分支不在本轮 | 本轮落地 |
 | **减负-1 … 减负-21** | `docs/LEFTOVERS.md`「当前开着」表 + 文末「减负重构收据」 | 2026-08-17/18 减负重构会话的滞后清单(冗余功能 / 结构债 / 已删收据),从 `docs/BACKLOG.md` 并入时沿用原序号;中文前缀,不与任何字母系列撞车 | 1、2 已做;其余按表内「阶段」列排 |
-| **V4-A…F**(刀号) | `docs/v4-prototype/design/12-build-plan.md` §1 | V4 开发的六刀:A 骨架+数据+主环 / B 运作活+会话屏 / C 回填+项目群+包 / D 九屏照高保真重排 / E 每张活一棵 worktree+铺底提 MR / F 提交并开 MR。A 刀内再分 A1 数据层 … A7 收尾,B 刀内再分 B1 运作剧本 … B8 收尾(逐步任务书已随刀跑完删除,考古去 git 历史)。**与 plan/06 的 A0–A5、plan/18 的 A1/A2/A4 无关** | A–E 已合入 main(A/B/C 在 PR #105,D/E 在 PR #106);F 在 PR 上等合 |
+| **V4-A…G**(刀号) | `docs/v4-prototype/design/12-build-plan.md` §1 | V4 开发的七刀:A 骨架+数据+主环 / B 运作活+会话屏 / C 回填+项目群+包 / D 九屏照高保真重排 / E 每张活一棵 worktree+铺底提 MR / F 提交并开 MR + 接入屏列真仓 / G 试点第一天:铺底收进 `.bw/`、技能不进用户仓、通知只留 MR。A 刀内再分 A1 数据层 … A7 收尾,B 刀内再分 B1 运作剧本 … B8 收尾(逐步任务书已随刀跑完删除,考古去 git 历史)。**与 plan/06 的 A0–A5、plan/18 的 A1/A2/A4 无关** | A–E 已合入 main(A/B/C 在 PR #105,D/E 在 PR #106);F+G 在 PR #108 上等人点合 |
 | **V4A-1…** | `docs/LEFTOVERS.md` | V4 A 刀留下的遗留条目(命令有了但界面没入口、只做了第 1 步之类) | 开着 |
 | **V4B-1…** | `docs/LEFTOVERS.md` | V4 B 刀留下的遗留条目(运作活的 agent 侧产出、旧技能文件并存、agent 只有两态之类) | 开着 |
 | **V4C-1…** | `docs/LEFTOVERS.md` | V4 C 刀留下的遗留条目(回填只做了第 1 层、代码图三样只做一样、群摘要没做之类) | 开着 |
 | **V4D-1…** | `docs/LEFTOVERS.md` | V4 D 刀(九屏照高保真重排)留下的遗留条目(远端来源的指标、要先改规范格式的字段、符号影响面与依赖图之类) | 开着 |
 | **V4E-1…** | `docs/LEFTOVERS.md` | V4 E 刀(每张活一棵 worktree + 规范铺底提 MR)留下的遗留条目(会话跑完不自动开 MR、脏 worktree 没人收、分支基线之类) | 开着 |
 | **V4F-1…** | `docs/LEFTOVERS.md` | V4 F 刀(提交并开 MR + 试点第一天的接入/设置修补)留下的遗留条目(只列自己账号下的仓、不替你 clone、库路径仍只读) | 开着 |
+| **V4G-1…** | `docs/LEFTOVERS.md` | V4 G 刀(试点第一天下半场:铺底的件全收进 `.bw/`、buddy 自带技能不进用户仓改走渐进式加载、通知只留「有 MR 等你合」一类)留下的遗留条目 | 开着 |
 | **V4-待拍-01–32** | `docs/v4-prototype/mvp-blueprint-draft.md` §11 | V4 MVP 全貌草案的决策项编号(两轮用户反馈 22 条 + 高保真期新增 23 + 2026-08-19 内部专家评审新增 24–28 + 2026-08-20 用户三轮回复新增 29–32:信息住哪盘点后库只剩四张表 / V4 不兼容老库 / WeLink 登录不归 buddy 管 / 预置技能包随 buddy 出厂并复制进项目仓);正文里写作「待拍-NN」 | 已定,随草案转作数 |
 | **V4-规范大类 1–8** | `docs/v4-prototype/standard-module-draft.md` §2 | 规范铺底模块的八个大类,**故意用数字不用字母**(A-H 会与本表 A/B/G 撞车);正文里写作「第 N 类」+ 名称 | 已定 |
 | **V4-加载五层** | `docs/v4-prototype/mvp-blueprint-draft.md` §2.6 | agent 会话里规范手册的渐进加载层次,**故意不编字母**(与 plan/03 的 L0–L6 派生链撞车),正文写「第 0–4 层」 | 已定 |

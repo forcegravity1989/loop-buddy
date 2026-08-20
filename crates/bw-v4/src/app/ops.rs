@@ -20,15 +20,15 @@ use crate::isoweek;
 use crate::model::{IssueId, IssueKind, IssueOrigin, IssueStatus, ProjectId};
 use crate::repo::issue_policy_file;
 
-/// 运作活①的 `workflow` 字段值,同时是它在 `.claude/skills/` 里的剧本名
-/// (`week-planning`)对应的中文名。两者的对应关系在
+/// 运作活①的 `workflow` 字段值,对应剧本 `week-planning`。两者的对应关系在
 /// `standard/06-defaults/ops/README.md` 那张表里。
 pub const OPS1_WORKFLOW: &str = "更新指标与周计划";
 pub const OPS2_WORKFLOW: &str = "资产盘点";
 pub const OPS3_WORKFLOW: &str = "规范铺底";
 
-/// 剧本名(项目仓 `.claude/skills/<slug>/SKILL.md`)。开工时按这个 slug 把正
-/// 文注入给 agent。
+/// 剧本名。开工时按这个 slug 在 **buddy 自己的技能目录**里找到那份
+/// `SKILL.md`,把**名字 + 一句话 + 路径**给 agent(正文它自己按需读,见
+/// [`crate::standard::skills`])。
 pub fn skill_slug(workflow: &str) -> Option<&'static str> {
     match workflow {
         OPS1_WORKFLOW => Some("week-planning"),

@@ -58,7 +58,7 @@ who_can_merge  = "repo_write"     # 不存角色,谁有仓权限谁能点
 require_pr_for = ["code", "docs", "prototype"]
 
 [cadence]
-ops1_trigger  = "manual"          # 运作活①:人触发,判据 = 当前周没有 docs/plan/ 文件
+ops1_trigger  = "manual"          # 运作活①:人触发,判据 = 当前周没有 .bw/plan/ 文件
 ops2_trigger  = "scheduled"
 ops2_schedule = "fri 20:00"       # 运作活②「资产盘点」:定时,默认周五晚,可改;
                                     # 判据 = 本周有没有这张活(查 issue,不查 cron 表)

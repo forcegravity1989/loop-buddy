@@ -119,8 +119,8 @@ crates/app-shell/
 |---|---|---|---|
 | 计划 | `ScheduleIssue{id, week_of: Option<String>}` | 排进(或移出)本周待办(设/清空 `week_of`),待拍-25「待办池⇄待办」的排进方向(设计期统一:06 篇把早期分开的 `ScheduleIssue`+`UnscheduleIssue` 合并成一条,本表据此回填) | 新 |
 | 计划 | `ReorderIssue` | 待办池/待办列内排先后,纯展示,不动状态机 | 新 |
-| 计划 | `CutRelease` | 「发版本」:选本周完成的活→填版本号→确认——建一张轻量活「发版本 vX」+分支提交 `docs/releases.md` 一行+MR(待拍-12;06 篇 §2.4 已定:`docs/releases.md` 新增一行与可选 tag 落在这张活「合入并完成」的那一刻,不在 `CutRelease` 命令本身返回时;`docs/releases.md` 是发版记录**唯一正本**,不建 `release` 表存副本——02 篇 §2.1/§2.5) | 新 |
-| 计划/总览 | `TogglePreview{id: Option<IssueId>}` | 合入前预览某活 worktree 里的 `.bw/metrics.toml`/`docs/plan/`(待拍-21,形态留 06 篇;设计期统一:06 篇把早期只能「开」的 `PreviewIssueWorktree` 改成能开能关的 `TogglePreview`,本表据此改名) | 新 |
+| 计划 | `CutRelease` | 「发版本」:选本周完成的活→填版本号→确认——建一张轻量活「发版本 vX」+分支提交 `.bw/releases.md` 一行+MR(待拍-12;06 篇 §2.4 已定:`.bw/releases.md` 新增一行与可选 tag 落在这张活「合入并完成」的那一刻,不在 `CutRelease` 命令本身返回时;`.bw/releases.md` 是发版记录**唯一正本**,不建 `release` 表存副本——02 篇 §2.1/§2.5) | 新 |
+| 计划/总览 | `TogglePreview{id: Option<IssueId>}` | 合入前预览某活 worktree 里的 `.bw/metrics.toml`/`.bw/plan/`(待拍-21,形态留 06 篇;设计期统一:06 篇把早期只能「开」的 `PreviewIssueWorktree` 改成能开能关的 `TogglePreview`,本表据此改名) | 新 |
 | 计划 | `SetCurrentVersion{version}` | 切在研版本,纯本机动作,不建活(06 篇新增,本表据此回填) | 新 |
 | 计划/总览 | `IssueScheduled` / `ReleaseCut`(Event) | 排期/发版真实发生的回执 | 新 |
 | 总览 | `SetProjectChat` | 编辑「项目群」配置,写 `.bw/project.toml` 的 `[chat]` 段 | 新 |
@@ -146,7 +146,7 @@ crates/app-shell/
 | 会话 | `ExpandTreeDir{issue_id, dir_path}` | 懒加载展开文件树某目录(05 篇新增,本表原缺,据此回填) | 新 |
 | 会话 | `RunIssue`/`CancelRun`/`AssignIssue`/`BlockIssue`/`TransitionIssue`/`MergeIssuePr`/`DistillSkillFromIssue`(既有)| 干活/评审/蒸馏语义不变;"按活类别选开工工具、分发到哪个 `adapters/` 模块"是新加的路由层,命令本身不变。**新增触发路径(06 篇 §2.3 定义,待拍-25 改)**:计划屏拖一张活到进行中/评审中/已完成/阻塞列,松手弹确认框,确认后发的就是这几条既有命令——拖拽不新增命令、不绕过 `can_transition_to`,只是给这几条命令多一条触发路径(另一条是详情面板按钮),两条路径最终调用同一套用例 | 沿用 |
 | 配置 | `CreateSkill`/`UpdateSkill`/`ImportSkillLibrary`(既有)| 写 `.claude/skills/**/SKILL.md` 技能文件(蒸馏、人手加、从技能库单独导入一个技能)——**不落库表**,"有没有这个技能"扫目录即得(02 篇 §2.6);字段增删留 04 篇 | 沿用,字段留口 |
-| 配置 | `ImportSkillPackage`(既有)| **取消**——预置技能包(mattpocock-skills / superpowers / buddy 自建运作 workflow)随 `RunStandardBootstrap`(运作活③规范铺底)一次性复制进项目仓 `.claude/skills/`(02 篇 §2.5/待拍-32),不需要单独的导入命令,更不需要登记表(`skill_package` 表取消) | 删除 |
+| 配置 | `ImportSkillPackage`(既有)| **取消**——buddy 自带的技能包(自建运作 workflow + 九篇方法论)住在 buddy 自己的资产目录,开工时按需给 agent 指路(02 篇 §2.5、04 篇 §2.7;**2026-08-20 改**:原方案是铺底时复制进项目仓 `.claude/skills/`,已推翻),不需要单独的导入命令,更不需要登记表(`skill_package` 表取消) | 删除 |
 | 配置 | `SetIssueWorkflow{id, workflow}` | 活详情面板换 workflow/单技能,写 `issue.workflow`(04 篇新增;字段名统一为 `workflow`——04 篇早期草案叫 `workflow_ref`,与 `issue.workflow` 列名对齐后本表据此回填) | 新 |
 | 配置 | `SaveToolMapping` | 配置屏第①段保存一行「类别→工具→workflow」映射(04 篇新增,本表据此回填) | 新 |
 | 配置 | `ProbeTool` | 手动探活一次(配置屏/项目墙"测一下"复用,04 篇新增,本表据此回填) | 新 |

@@ -19,9 +19,12 @@ use crate::standard;
 use crate::standard::bootstrap::{self as boot, BootstrapVars};
 
 impl App {
+    /// `all = false`(接入时自动跑的那次)只铺第 0 站要用的那几份;
+    /// `all = true`(人在配置屏点那颗按钮)把该有的规范件都补齐。
     pub(super) async fn run_standard_bootstrap(
         &mut self,
         project_id: ProjectId,
+        all: bool,
     ) -> Result<Vec<Event>> {
         let ws = self.workspace_of(project_id).await?;
         let project = self
@@ -84,7 +87,7 @@ impl App {
         let issue = self.issue_or_err(issue_id).await?;
         let tree = worktree::provision(&ws, issue.number).await?;
         self.step(ProgressLine::doing(5, "规范铺底:往那棵树里写规范骨架…"));
-        let mut report = boot::write_core_files(&tree.path, &vars)?;
+        let mut report = boot::write_core_files(&tree.path, &vars, all)?;
 
         // **名片也得进这个 MR。** 接入那一步把 `.bw/project.toml` 写在人的主
         // 检出里(得先有它,PROJECT.md 才渲染得出项目名),但铺底是在**这张活
@@ -248,22 +251,11 @@ impl App {
         let mut stale = Vec::new();
         let mut human_edited = Vec::new();
 
-        let targets: Vec<String> = standard::CORE_TEMPLATES
-            .iter()
-            .map(|t| t.target.to_string())
-            .chain(
-                standard::preset_skill_packages()
-                    .into_iter()
-                    .map(|(p, _)| p),
-            )
-            .chain(
-                standard::ops_workflow_packages()
-                    .into_iter()
-                    .map(|(p, _)| p),
-            )
-            .collect();
-
-        for target in targets {
+        // 只对账**铺进用户仓的规范件**。技能包不在这张表里 —— 它们住在
+        // buddy 自己的资产目录,不进用户的仓,自然也没有「人手改过没有」这
+        // 个问题(见 `standard::skills`)。
+        for t in standard::CORE_TEMPLATES {
+            let target = t.target.to_string();
             let disk = std::fs::read(ws.join(&target)).ok();
             match managed_file::reconcile(managed.entry(&target), disk.as_deref(), version) {
                 Reconcile::Missing => missing.push(target),
@@ -297,35 +289,98 @@ fn pending_steps(probe: &boot::BootstrapProbe) -> String {
     }
 }
 
-/// ▶开工 时注入给 agent 的系统提示词。
+/// ▶开工 时注入给 agent 的系统提示词。**渐进式加载**:提示词里只放索引,
+/// 正文让 agent 自己按需读。
 ///
-/// 两段:这张活是什么 + 两条铁律,然后是这张活挂的 workflow 剧本正文
-/// ([`workflow_body`] 从项目仓里读)。剧本读不到就如实少这一段,不编。
-pub(crate) fn agent_system_prompt(issue: &Issue, workflow_body: Option<&str>) -> String {
+/// 四段:身份与这张活 → 铁律 → 这个项目的规范索引(一句话 + 路径)→ 这张活
+/// 挂的那一份技能(名字 + 一句话 + 完整路径)。
+///
+/// **绝不整篇塞正文**。以前是把 `SKILL.md` 全文拼进来,长、贵、而且塞进去的
+/// 那份还得先复制进用户的仓才读得到。现在给路径,要不要读、读哪几段由 agent
+/// 自己定 —— 这和 buddy 自己的系统提示词(`docs/buddy/system-prompt.md`)是
+/// 同一套规矩。
+pub fn agent_system_prompt(
+    issue: &Issue,
+    workspace: &std::path::Path,
+    skill: Option<&SkillPointer>,
+) -> String {
     let mut prompt = base_prompt(issue);
-    if let Some(body) = workflow_body {
-        prompt.push_str("\n以下是这件活挂的 workflow 剧本正文,照它干:\n\n---\n\n");
-        prompt.push_str(body);
+
+    // ── 规范索引:只列**这个仓里真有**的那几份 ──────────────────
+    // 铺底还没跑的项目一份都没有,那就一份都不列。列一个不存在的路径,agent
+    // 读一次失败一次,比不列更糟。
+    let present: Vec<&standard::Template> = standard::CORE_TEMPLATES
+        .iter()
+        .filter(|t| workspace.join(t.target).exists())
+        .collect();
+    if !present.is_empty() {
+        prompt.push_str("\n这个项目的规范件(正文别猜,动到哪份就先读哪份;路径相对仓根):\n");
+        for t in present {
+            prompt.push_str(&format!("- `{}` —— {}\n", t.target, t.note));
+        }
+    }
+
+    // ── 这张活挂的那一份技能 ────────────────────────────────────
+    if let Some(s) = skill {
+        prompt.push_str(&format!(
+            "\n这件活挂的剧本是 `{}`:{}\n开工前读它:`{}`。它自己会说要不要再读别的,\
+             照它说的读,别把整个技能库翻一遍。\n",
+            s.name, s.desc, s.path,
+        ));
     }
     prompt
 }
 
-/// 这张活挂的 workflow 剧本正文。正本是**项目仓里**的
-/// `.claude/skills/<slug>/SKILL.md`——铺底时复制进去的那一份,不是 buddy 自己
-/// 安装目录里那一份。读不到就返回 `None`,调用方如实少注入一段。
-pub(crate) fn workflow_body(workspace: &std::path::Path, workflow: &str) -> Option<String> {
+/// 指给 agent 的一份技能:名字、一句话、**完整路径**。正文不在这里。
+pub struct SkillPointer {
+    pub name: String,
+    pub desc: String,
+    pub path: String,
+}
+
+/// 这张活挂的那一份技能在哪。文件不在硬盘上就返回 `None`,调用方如实少一段。
+///
+/// 找的是 **buddy 自己的技能目录**(`App::skills_dir`),不是用户的仓 ——
+/// 用户仓里从来就不该有 buddy 的技能副本。
+pub fn skill_pointer(skills_dir: &std::path::Path, workflow: &str) -> Option<SkillPointer> {
     let slug = super::ops::skill_slug(workflow)?;
-    std::fs::read_to_string(workspace.join(format!(".claude/skills/{slug}/SKILL.md"))).ok()
+    let pack = standard::skills::all()
+        .into_iter()
+        .find(|p| p.slug == slug)?;
+    let path = skills_dir.join(&pack.rel);
+    if !path.is_file() {
+        return None;
+    }
+    Some(SkillPointer {
+        name: pack.slug.to_string(),
+        desc: pack.desc.to_string(),
+        path: path.display().to_string(),
+    })
+}
+
+/// 把 buddy 的技能目录加进 CLI 的可读目录 —— 它在 agent 的工作目录外面。
+///
+/// 提示词里给的是绝对路径,不加这一句,CLI 那边读不读得到取决于它当天的权限
+/// 策略;显式声明一句,别赌。
+pub(crate) fn allow_skills_dir(plan: &mut bw_engine::LaunchPlan, dir: &std::path::Path) {
+    plan.args.push("--add-dir".to_string());
+    plan.args.push(dir.display().to_string());
 }
 
 fn base_prompt(issue: &Issue) -> String {
     format!(
-        "你在 Builders' Workbench 管理的项目仓里干一件活。\n\
+        "你是 Builders' Workbench(buddy)派出的 AI 队友,在一个真实项目仓里干一件活。\n\
          \n活:#{} {}\n类别:{}\n用的 workflow:{}\n\
-         \n先读仓根的 AGENTS.md,那是这个项目对 agent 的工作约定。\n\
-         \n两条不许破的规矩:\n\
+         \n活的标题和描述是这一轮的目标,不等于全部规则。先读项目现状再动手,\
+         报告不代替真实产出。\n\
+         \n几条不许破的规矩:\n\
          1. 你干完最远只能把活推到「评审中」,「完成」永远由人点。\n\
-         2. 指标读数只能来自真实采集,不许为了让灯变绿手工改数。\n",
+         2. 改动落在这张活自己的分支上,正常提交 + 提 MR;**合并永远是人**\
+         (`gh pr merge`、`codehub-cli mr merge` 以及任何等价的合并或直推主干\
+         动作一律不许执行)。提完把地址打屏,合入由人在 buddy 里点。\n\
+         3. 指标读数只能来自真实采集,没数据就是未知,不许为了让灯变绿手工改数。\n\
+         4. 干砸了如实停下说明,不假装流程前进。\n\
+         \n仓根的 `CLAUDE.md` 指向 `.bw/AGENTS.md`,那是这个项目对 agent 的工作约定。\n",
         issue.number,
         issue.title,
         issue.category.map(|c| c.label()).unwrap_or("—(没定类别)"),

@@ -7,7 +7,7 @@
 use super::{read_to_string, write_file, Result};
 use std::path::Path;
 
-pub const REL_PATH: &str = "docs/releases.md";
+pub const REL_PATH: &str = ".bw/releases.md";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReleaseRow {

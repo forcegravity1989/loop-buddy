@@ -199,18 +199,24 @@ impl App {
         }
 
         let prompt = format!("#{} {}\n\n{}", issue.number, issue.title, issue.body);
-        // 剧本先在这棵树里找,找不到再回主工作区找 —— 有些仓(buddy 自己的就
-        // 是)把 `.claude/` 写进了 .gitignore,技能包进不了分支,只在主检出里。
-        let workflow_body = super::bootstrap::workflow_body(&tree.path, &issue.workflow)
-            .or_else(|| super::bootstrap::workflow_body(&ws, &issue.workflow));
-        let system_prompt = super::bootstrap::agent_system_prompt(&issue, workflow_body.as_deref());
+        // 剧本在 buddy 自己的技能目录里,不在用户的仓里。系统提示词只拿到
+        // 名字 + 一句话 + 路径,正文让 agent 自己按需读。
+        let skills_dir = self.ensure_skill_assets();
+        let skill = skills_dir
+            .as_deref()
+            .and_then(|d| super::bootstrap::skill_pointer(d, &issue.workflow));
+        let system_prompt =
+            super::bootstrap::agent_system_prompt(&issue, &tree.path, skill.as_ref());
         // 有 `--resume` id 就精确接回那一次对话,不是模糊地接「最近一次」。
-        let plan = if conv.claude_session_id.is_empty() {
+        let mut plan = if conv.claude_session_id.is_empty() {
             build_startup_plan(&CLAUDE, &prompt, &system_prompt, &tree.path)
         } else {
             build_resume_plan(&CLAUDE, Some(&conv.claude_session_id), &tree.path)
         }
         .map_err(|e| AppError::Exec(e.to_string()))?;
+        if let Some(d) = &skills_dir {
+            super::bootstrap::allow_skills_dir(&mut plan, d);
+        }
 
         let meta = ConversationMeta {
             conversation_id: conv.id,

@@ -11,7 +11,6 @@ use bw_v4::V4Store;
 use std::path::Path;
 
 use super::vm_build::{card_item, probe_env, remote_label};
-use super::vm_kb::{managed_paths, skill_origin};
 
 /// 六列看板。
 ///
@@ -323,7 +322,6 @@ pub(super) async fn build_config(
     file: &project_file::ProjectFile,
 ) -> ConfigVm {
     let usage = store.workflow_usage(id).await.unwrap_or_default();
-    let managed = managed_paths(ws);
     let mappings = policy
         .map(|p| {
             p.mappings
@@ -345,42 +343,7 @@ pub(super) async fn build_config(
         })
         .unwrap_or_default();
 
-    // 技能清单扫目录得到 —— 没有登记表可查,目录就是唯一判据。
-    let mut skills: Vec<SkillVm> = std::fs::read_dir(ws.join(".claude/skills"))
-        .map(|d| {
-            d.flatten()
-                .filter(|e| e.path().join("SKILL.md").is_file())
-                .map(|e| {
-                    let slug = e.file_name().to_string_lossy().to_string();
-                    SkillVm {
-                        uses: usage
-                            .iter()
-                            .find(|(w, _)| *w == slug)
-                            .map(|(_, n)| *n)
-                            .unwrap_or(0),
-                        title: slug.clone(),
-                        origin: skill_origin(&managed, &slug),
-                        desc: skill_desc(&e.path().join("SKILL.md")),
-                        slug,
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    // 项目里没有目录、但活上挂了名字的 workflow(比如整包的 mattpocock-skills)
-    // 也如实列出来,用量是真的,只是包不在这个仓里。
-    for (w, n) in &usage {
-        if !skills.iter().any(|s| &s.slug == w) {
-            skills.push(SkillVm {
-                slug: w.clone(),
-                title: format!("{w}(包不在本仓 .claude/skills/)"),
-                uses: *n,
-                origin: "不在本仓".into(),
-                desc: String::new(),
-            });
-        }
-    }
-    skills.sort_by(|a, b| b.uses.cmp(&a.uses).then(a.slug.cmp(&b.slug)));
+    let skills = skill_list(ws, &usage);
 
     ConfigVm {
         mappings,
@@ -408,6 +371,71 @@ pub(super) async fn build_config(
 }
 
 /// SKILL.md 头里的 `description:`。**读不到就空着**,不替它写一句。
+/// 这个项目能用到的技能清单。配置屏和知识库资产页签用的是同一份 —— 原来两处
+/// 各扫一遍目录、各拼一遍 `SkillVm`,改一处忘一处。
+///
+/// 三个来源,`origin` 如实标出来自哪:
+///
+/// - **buddy 自带**:编在二进制里的十三份(九份方法论 + 四份运作剧本)。
+///   它们摊在 buddy 自己的资产目录,**不复制进用户的仓** —— 用户的
+///   `.gitignore` 怎么写不该由 buddy 决定(见 `bw_v4::standard::skills`)。
+/// - **项目自有**:这个仓自己的 `.claude/skills/`,扫目录得到。
+/// - **不在册**:活上挂了这个名字,两处都找不到包。用量是真的,包确实没有。
+pub(super) fn skill_list(ws: &Path, usage: &[(String, u32)]) -> Vec<SkillVm> {
+    let used = |slug: &str| {
+        usage
+            .iter()
+            .find(|(w, _)| w == slug)
+            .map(|(_, n)| *n)
+            .unwrap_or(0)
+    };
+
+    let mut skills: Vec<SkillVm> = bw_v4::standard::skills::all()
+        .into_iter()
+        .map(|p| SkillVm {
+            uses: used(p.slug),
+            title: p.slug.to_string(),
+            origin: "buddy 自带".into(),
+            desc: p.desc.to_string(),
+            slug: p.slug.to_string(),
+        })
+        .collect();
+
+    // 项目自己的技能包。同名的以项目那份为准 —— 仓里那份才是这个仓真正会用的。
+    if let Ok(dir) = std::fs::read_dir(ws.join(".claude/skills")) {
+        for e in dir
+            .flatten()
+            .filter(|e| e.path().join("SKILL.md").is_file())
+        {
+            let slug = e.file_name().to_string_lossy().to_string();
+            skills.retain(|s| s.slug != slug);
+            skills.push(SkillVm {
+                uses: used(&slug),
+                title: slug.clone(),
+                origin: "项目自有".into(),
+                desc: skill_desc(&e.path().join("SKILL.md")),
+                slug,
+            });
+        }
+    }
+
+    // 活上挂了名字、两处都没有包的,如实列出来,不假装它存在。
+    for (w, n) in usage {
+        if !skills.iter().any(|s| &s.slug == w) {
+            skills.push(SkillVm {
+                slug: w.clone(),
+                title: format!("{w}(找不到这个包)"),
+                uses: *n,
+                origin: "不在册".into(),
+                desc: String::new(),
+            });
+        }
+    }
+
+    skills.sort_by(|a, b| b.uses.cmp(&a.uses).then(a.slug.cmp(&b.slug)));
+    skills
+}
+
 pub(super) fn skill_desc(path: &Path) -> String {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return String::new();

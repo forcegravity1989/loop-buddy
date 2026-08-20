@@ -1,6 +1,6 @@
 //! 接入项目、改名片、配项目群。
 //!
-//! 名片四字段(名称 / 想做什么 / 最像的对标 / 北极星)的正本是 `PROJECT.md`
+//! 名片四字段(名称 / 想做什么 / 最像的对标 / 北极星)的正本是 `.bw/PROJECT.md`
 //! 与 `.bw/project.toml`,**不落库**——`project` 表只有定位与显示缓存。所以
 //! 改名片就是改仓文件,得走一张轻量活与一次 MR,不是直接 UPDATE 一行。
 
@@ -95,7 +95,7 @@ impl App {
             slug,
             adopted,
         }];
-        match self.run_standard_bootstrap(row.id).await {
+        match self.run_standard_bootstrap(row.id, false).await {
             Ok(more) => events.extend(more),
             Err(e) => self.step(ProgressLine::fail(
                 5,
@@ -249,7 +249,7 @@ impl App {
                 ("chat", &chat_label(&file.chat)),
             ],
         );
-        crate::repo::write_file(&ws, "PROJECT.md", &body)?;
+        crate::repo::write_file(&ws, standard::CHARTER_REL_PATH, &body)?;
 
         // 改仓的动作都走 MR:建一张轻量活背这次改动。
         let events = self
@@ -257,7 +257,7 @@ impl App {
                 project_id,
                 format!("编辑项目名片 · {}", intent.name),
                 "名片四字段改动:名称 / 想做什么 / 最像的对标 / 北极星。改的是 \
-                 PROJECT.md 与 .bw/project.toml 两份仓文件,等人评审合入。"
+                 .bw/PROJECT.md 与 .bw/project.toml 两份仓文件,等人评审合入。"
                     .into(),
                 None,
                 IssueKind::Light,

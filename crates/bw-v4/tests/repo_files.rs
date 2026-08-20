@@ -118,9 +118,9 @@ fn release_rows_parse_and_append_is_idempotent() {
 fn foreign_release_table_is_never_written_into() {
     // 老项目仓里已经有一份格式不同的发版记录 —— 列数与列名都不一样。
     let dir = tempdir("foreign-release");
-    std::fs::create_dir_all(dir.join("docs")).unwrap();
+    std::fs::create_dir_all(dir.join(".bw")).unwrap();
     let foreign = "# 版本登记\n\n| 版本号 | 出包日 | 阶段 | 这一版是什么 | 修了什么 |\n|---|---|---|---|---|\n| 0.3.0 | 2026-08-14 | V3 | 首个安装包 | — |\n";
-    std::fs::write(dir.join("docs/releases.md"), foreign).unwrap();
+    std::fs::write(dir.join(".bw/releases.md"), foreign).unwrap();
 
     let row = release_file::ReleaseRow {
         version: "v0.1".into(),
@@ -131,7 +131,7 @@ fn foreign_release_table_is_never_written_into() {
     };
     assert!(release_file::append_row(&dir, &row).unwrap());
 
-    let body = std::fs::read_to_string(dir.join("docs/releases.md")).unwrap();
+    let body = std::fs::read_to_string(dir.join(".bw/releases.md")).unwrap();
     assert!(
         body.contains("| 0.3.0 | 2026-08-14 | V3 | 首个安装包 | — |"),
         "人家原来那张表一个字都不该动"

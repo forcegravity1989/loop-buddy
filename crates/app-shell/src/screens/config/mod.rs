@@ -4,9 +4,11 @@
 //! 三条如实:
 //!
 //! 1. **「用过几次」是现算的** —— 扫活的 workflow 列聚合,没有战绩表可查。
-//! 2. **技能清单是扫目录得到的** —— 项目仓 `.claude/skills/` 里有就是有,
-//!    没有登记表。高保真把「workflow」和「skill」分成两张表,V4 里它们是
-//!    同一样东西(workflow = SOP 类技能包),所以合成一张,不假装有两套。
+//! 2. **技能清单没有登记表** —— buddy 自带的那十三份编在二进制里(摊在 buddy
+//!    自己的资产目录,不复制进用户的仓),项目自有的扫仓里 `.claude/skills/`
+//!    得到,同名以仓里那份为准。高保真把「workflow」和「skill」分成两张表,
+//!    V4 里它们是同一样东西(workflow = SOP 类技能包),所以合成一张,不假装
+//!    有两套。
 //! 3. **定时那张表没有「下次触发」列** —— 判据是「本周有没有这张活」,不查
 //!    任何定时表,所以那一列写的是判据本身。
 
@@ -139,11 +141,11 @@ fn skill_block(p: &ProjectVm) -> Element {
             div { class: "cfg-section-head",
                 h3 { "技能与 workflow" }
                 span { style: "font-size:11.5px;color:var(--ink-3);",
-                    "扫 .claude/skills/ 得到,共 {p.config.skills.len()} 个"
+                    "buddy 自带 + 本仓 .claude/skills/,共 {p.config.skills.len()} 个"
                 }
             }
             if p.config.skills.is_empty() {
-                div { class: "detail-empty", "这个仓的 .claude/skills/ 是空的,或者还没铺过规范件。" }
+                div { class: "detail-empty", "一个都没有 —— buddy 自带的那份没读出来,这不正常。" }
             } else {
                 div { class: "tbl-wrap",
                     table { class: "tbl",

@@ -22,8 +22,6 @@ pub struct BootstrapReport {
     pub written: Vec<String>,
     /// 跳过的路径 + 为什么跳。
     pub skipped: Vec<(String, String)>,
-    /// 复制进 `.claude/skills/` 的预置技能包路径。
-    pub skills: Vec<String>,
 }
 
 /// 渲染模板要用的变量。
@@ -39,10 +37,14 @@ pub struct BootstrapVars {
     pub chat: String,
 }
 
-/// 写核心件 + 复制预置技能包 + 记指纹。幂等:重跑一遍,已经一致的件原样跳过。
+/// 写规范件 + 记指纹。幂等:重跑一遍,已经一致的件原样跳过。
+///
+/// `all = false`(第 0 站接入)只铺 [`standard::LayAt::Adopt`] 那几份;
+/// `all = true`(人在配置屏点「规范铺底」)把该有的都补齐。
 pub fn write_core_files(
     workspace: &Path,
     vars: &BootstrapVars,
+    all: bool,
 ) -> Result<BootstrapReport, RepoFileError> {
     let version = standard::version();
     let mut managed = managed_file::read(workspace)?.unwrap_or_default();
@@ -61,6 +63,11 @@ pub fn write_core_files(
     ];
 
     for tmpl in standard::CORE_TEMPLATES {
+        // 第 0 站只铺人马上要用的那几份;其余等真的走到那一站,或者人在配置屏
+        // 点一次「规范铺底」补齐。
+        if !all && tmpl.lay_at != standard::LayAt::Adopt {
+            continue;
+        }
         let body = standard::render(tmpl.body, &vars_list);
         lay_one(
             workspace,
@@ -72,23 +79,18 @@ pub fn write_core_files(
         )?;
     }
 
-    // 预置技能包:Claude CLI 只在项目仓里找技能,不复制进来就读不到。
-    for (target, body) in standard::preset_skill_packages() {
-        let before = report.written.len();
-        lay_one(workspace, &target, body, version, &mut managed, &mut report)?;
-        if report.written.len() > before {
-            report.skills.push(target);
-        }
-    }
-
-    // 三张运作 workflow 的剧本,同理必须真复制进来。
-    for (target, body) in standard::ops_workflow_packages() {
-        let before = report.written.len();
-        lay_one(workspace, &target, body, version, &mut managed, &mut report)?;
-        if report.written.len() > before {
-            report.skills.push(target);
-        }
-    }
+    // **技能剧本不再复制进用户的仓。**
+    //
+    // 原来复制 13 份 SKILL.md 进去,是为了 buddy 自己等会儿再从那儿读一遍
+    // 正文塞进 `--append-system-prompt` —— 绕了一圈,而正本本来就编在 buddy
+    // 二进制里。代价还很实在:项目只要把 `.claude/` 写进 .gitignore(buddy
+    // 自己的仓就是),这 13 份就进不了版本控制,只活在某一台机器的检出里,
+    // 人根本说不清「bw 的资产到底是哪些」。
+    //
+    // 现在 buddy 把自带的剧本摊在自己的目录里,开工时按需给 agent 指路(见
+    // `app::bootstrap::agent_system_prompt`)。真想让**你自己**在这个仓里敲
+    // `claude` 时也能 `/skill-name`,那是另一件事,该做成「想要就铺一份」的
+    // 选项,不是默认往每个仓里塞。
 
     // 指纹清单最后写 —— 记的必须是刚落盘那一刻的内容。
     managed_file::write(workspace, &managed)?;

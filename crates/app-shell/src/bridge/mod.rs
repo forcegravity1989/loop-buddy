@@ -200,6 +200,16 @@ pub fn workspaces_root() -> PathBuf {
         .unwrap_or_else(|_| dirs_home().join(".builders-workbench").join("workspaces"))
 }
 
+/// buddy 自己的资产放哪(技能库摊在 `<这里>/skills/`)。**跟着库文件走,不跟
+/// 工作区走** —— 它是 buddy 自带的东西,和用户把仓放在哪没关系;工作区根目录
+/// 是可以随时改的,资产不该跟着搬家。
+pub fn asset_root() -> PathBuf {
+    PathBuf::from(db_path())
+        .parent()
+        .map(|d| d.join("assets"))
+        .unwrap_or_else(|| dirs_home().join(".builders-workbench").join("assets"))
+}
+
 fn dirs_home() -> PathBuf {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -405,6 +415,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     Arc::new(bw_engine::InteractiveCliExecutor::new()),
                 )
                 .with_pty()
+                .with_asset_root(asset_root())
                 .with_progress(prog_tx.clone());
 
                 let mut ui = vm_build::UiState {

@@ -104,7 +104,7 @@ pub enum Command {
         project_id: ProjectId,
         version: String,
     },
-    /// 发版本:给选中的活写版本号 + 往 `docs/releases.md` 追加一行。
+    /// 发版本:给选中的活写版本号 + 往 `.bw/releases.md` 追加一行。
     CutRelease {
         project_id: ProjectId,
         version: String,

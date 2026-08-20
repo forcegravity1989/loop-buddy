@@ -15,13 +15,13 @@ category: 运作
 ## 何时用
 
 只在运作活①被开工时用。判据由 buddy 在建活时把过:当前 ISO 周还没有
-`docs/plan/YYYY-Www.md` 才建得出这张活,所以你被开工时这份文件一定还不存在。
+`.bw/plan/YYYY-Www.md` 才建得出这张活,所以你被开工时这份文件一定还不存在。
 
 `.bw/metrics.toml` 不存在(项目刚接入,第一次跑)则第二步走**完整起草**而不是补齐。
 
 ## 第一步 · 复盘上周
 
-读上一周的 `docs/plan/YYYY-Www.md` 与 `docs/releases.md`。
+读上一周的 `.bw/plan/YYYY-Www.md` 与 `.bw/releases.md`。
 
 - 上周计划的活,哪些真做完了、哪些没动、哪些中途换了方向。
 - 上周有没有发版,发的是什么。
@@ -60,10 +60,10 @@ category: 运作
 写这三份:
 
 1. `.bw/metrics.toml`(第二步的改动)
-2. `docs/plan/YYYY-Www.md`(本周计划)
+2. `.bw/plan/YYYY-Www.md`(本周计划)
 3. `docs/metrics.md`(指标现状说明,仍是 Unknown 的要有诚实说明)
 
-`docs/plan/YYYY-Www.md` 除周目标、业务活清单外,必须有一段 **「本周指标读数」**:每个
+`.bw/plan/YYYY-Www.md` 除周目标、业务活清单外,必须有一段 **「本周指标读数」**:每个
 已绑定的引领/滞后指标各一行——数字 · 来源 · 采集时间。这一段的意义是,别人打开仓就
 能看到数,不用装 buddy、不用连库。
 

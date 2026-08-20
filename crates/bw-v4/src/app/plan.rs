@@ -204,7 +204,7 @@ impl App {
         Ok(vec![Event::CurrentVersionChanged { version }])
     }
 
-    /// 发版本:给选中的活写版本号,往 `docs/releases.md` 追加一行。
+    /// 发版本:给选中的活写版本号,往 `.bw/releases.md` 追加一行。
     /// 按版本号幂等 —— 已经有这一行就不写第二行。
     pub(super) async fn cut_release(
         &mut self,

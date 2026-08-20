@@ -104,7 +104,7 @@
 |---|---|---|
 | `adapters/terminal_pty/` | **已有**,`bw-engine::{pty_backend, terminal_manager}` 沿用,V4 只加前端复制 | `attach/input/resize/drain_events`(即 `TerminalManager` 已有四个方法) |
 | `adapters/claude_cli/` | **已有**,`bw-engine::interactive_cli` 沿用 | `build_startup_plan`、`build_resume_plan`、`run_skill_pty` |
-| `adapters/cursor_cli/` | **未落地,V4 新建**,依据 `docs/v3-prototype/cursor-agent-executor.md` | 对齐 claude_cli 三个函数形状(写 `AGENTS.md` 代替 `--append-system-prompt`、`create-chat`+`--resume`、复用同一 PTY 后端) |
+| `adapters/cursor_cli/` | **未落地,V4 新建**,依据 `docs/v3-prototype/cursor-agent-executor.md` | 对齐 claude_cli 三个函数形状(写 `.bw/AGENTS.md` 代替 `--append-system-prompt`、`create-chat`+`--resume`、复用同一 PTY 后端) |
 | `adapters/open_design/` | **已有**,`app-desktop::open_design::discover_web_url()` 沿用 | `discover_web_url() -> Option<String>` |
 | `adapters/agent_hooks/` | **已有,V4 增量**,`bw-app::hook_listener` | `bind`、`spawn`、`install_hooks_config`(今天只装 `SessionStart`+`Stop`,增量到四个事件,见 §3) |
 | `adapters/codegraph/` | **未建,留口**,待拍-22 | `symbols_for_file(path) -> Vec<SymbolRow>`,今天不实现,调用点先返回 `None` |

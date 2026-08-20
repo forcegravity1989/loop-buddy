@@ -26,10 +26,10 @@
 
 | 检查项 | 读回 | 预期 | 出处 | 铁律 |
 |---|---|---|---|---|
-| 两份周计划文件在仓里 | `ls <ws>/docs/plan/*.md`,逐个 `cat` 看 front matter,只数 `origin: human` 的(排除 `origin: backfill` 回填周——两者同目录同格式,不是靠文件名区分,02 篇 §2.5)| ≥2 个 `YYYY-Www.md`,含「周目标」「业务活」两节 | 06篇§5 | 只追加 |
+| 两份周计划文件在仓里 | `ls <ws>/.bw/plan/*.md`,逐个 `cat` 看 front matter,只数 `origin: human` 的(排除 `origin: backfill` 回填周——两者同目录同格式,不是靠文件名区分,02 篇 §2.5)| ≥2 个 `YYYY-Www.md`,含「周目标」「业务活」两节 | 06篇§5 | 只追加 |
 | 两轮运作活①在库 | `SELECT week_of,status FROM issue WHERE kind='ops' AND workflow='更新指标与周计划' ORDER BY week_of` | ≥2 行,week_of 不同,均 done 或 in_review | 09篇§5-3 | 人点完成 |
 | 两轮运作活②在库 | `SELECT week_of,status,origin FROM issue WHERE kind='ops' AND workflow='asset-audit'` | ≥2 行,origin='auto' | 09篇§5-4/6 | 到点真触发 |
-| 至少一次发版记录 | `tail <ws>/docs/releases.md`(看「来源」列=人发的行,这是**唯一正本**)+ `sqlite3 <db> "SELECT DISTINCT version FROM issue WHERE version!='';"` | 仓文件≥1 行「人发」;库里 `issue.version` 出现同一版本号,两者对应一致——**没有独立 `release` 表可查**(02 篇 §2.1/§2.5)| 06篇§5 | 绝不记两次 |
+| 至少一次发版记录 | `tail <ws>/.bw/releases.md`(看「来源」列=人发的行,这是**唯一正本**)+ `sqlite3 <db> "SELECT DISTINCT version FROM issue WHERE version!='';"` | 仓文件≥1 行「人发」;库里 `issue.version` 出现同一版本号,两者对应一致——**没有独立 `release` 表可查**(02 篇 §2.1/§2.5)| 06篇§5 | 绝不记两次 |
 
 以上读回命令均跑在真实仓上,有对应 `git log` 提交,不是口头声称。
 
@@ -44,7 +44,7 @@
 
 | 检查项 | 读回 | 预期 | 出处 |
 |---|---|---|---|
-| Claude CLI 开工,产物进仓+技能整包物化 | `BW_PANEL=session` 点▶开工;`git -C <worktree> log --oneline`;`ls <worktree>/.claude/skills/` | 分支有真实提交;挂的 workflow 整包出现,各带 `.bw-managed` | 05篇§5、04篇§5-2 |
+| Claude CLI 开工,产物进仓+技能按需指路 | `BW_PANEL=session` 点▶开工;`git -C <worktree> log --oneline`;`cargo run -p bw-v4 --example prompt_smoke -- <目录>` | 分支有真实提交;系统提示词里有挂的 workflow 的名字与完整路径、没有正文,各带 `.bw-managed` | 05篇§5、04篇§5-2 |
 | Open Design 开工一张原型活 | 会话屏中栏「Open Design」标签(探活成功前提下) | WebView 有内容非空白 | 05篇§4 |
 | Cursor 开工(装了才测) | 同上,tool='cursor' | 探活成功可开工;失败如实报错不悄悄退回 | 05篇§4、04篇§5-4 |
 | **干完的活交得出去(第 4 站 → 第 5 站)** | 会话屏点「提交并开 MR」;`git -C <worktree> log --oneline`;`git ls-remote <远端> bw/issue-<n>`;`sqlite3 <db> "SELECT status,branch,pr_number FROM issue WHERE number=<n>;"` | 分支真被推上远端;`status='in_review'`、`branch='bw/issue-<n>'`、开成了 MR 就有非 0 的 `pr_number`,没开成则 `pr_number` 不变且界面上写着原话 | 05篇§2.4/§3 |
@@ -76,8 +76,8 @@
 | 检查项 | 读回 | 预期 | 出处 |
 |---|---|---|---|
 | 探测正确判定有历史 | `SELECT title FROM issue WHERE kind='ops' AND workflow LIKE '%铺底%'` | 标题含「含历史回填」| 03篇§5-2 |
-| 按周数字可复算(贡献者数已取消产出,03 篇 §2.4:没界面读就不产) | 回填的 `docs/plan/YYYY-Www.md`(front matter `origin: backfill`,与本周文件同目录同格式,不是单独的 `history.md`——02 篇 §2.5)里「按周历史统计」表格 对照 `git log --merges`/`--numstat` 重算 | 一致;无标签仓如实写「未发现」| 03篇§5-3/§3.4,命令见样本 |
-| 版本时间线对回 tag、远端 issue 数对回远端 | `docs/releases.md` 里「来源」=回填的行(唯一正本,无 `release` 表)对照 `git tag -l --sort=creatordate`;`sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE origin='backfill';"` 对照 `gh issue list --state all \| wc -l` | 一一对应无 tag 则空;数字一致(codehub 侧未在真实环境验证,记「未取到」)| 02篇§5、03篇§5-4 |
+| 按周数字可复算(贡献者数已取消产出,03 篇 §2.4:没界面读就不产) | 回填的 `.bw/plan/YYYY-Www.md`(front matter `origin: backfill`,与本周文件同目录同格式,不是单独的 `history.md`——02 篇 §2.5)里「按周历史统计」表格 对照 `git log --merges`/`--numstat` 重算 | 一致;无标签仓如实写「未发现」| 03篇§5-3/§3.4,命令见样本 |
+| 版本时间线对回 tag、远端 issue 数对回远端 | `.bw/releases.md` 里「来源」=回填的行(唯一正本,无 `release` 表)对照 `git tag -l --sort=creatordate`;`sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE origin='backfill';"` 对照 `gh issue list --state all \| wc -l` | 一一对应无 tag 则空;数字一致(codehub 侧未在真实环境验证,记「未取到」)| 02篇§5、03篇§5-4 |
 | 回填不进量、不参与 health(铁律:回填不点灯)| `sqlite3 <db> "SELECT COUNT(*) FROM issue WHERE origin='backfill' AND week_of='<当前 ISO 周>';"`(回填的历史周不应冒充当前周);对比 02 篇 §2.6 health 三判据(本周有周目标且有真实 git 提交/本周或上周文件有指标读数/上周有合入或发版)——三判据只读当前周与仓最新状态,不读 `origin='backfill'` 的历史周文件(没有 `workflow_credit` 战绩表可查) | 计数 `0`;三判据均不受 backfill 行影响 | 02/03/08/09篇§5 |
 
 样本:buddy 自己的仓(03篇§5 已用过);试点时另找≥1 个真内部老仓重复验证,证明逻辑不是只对 buddy 仓调好的。
@@ -93,7 +93,7 @@
 #### 回填(§8-7)C 刀这一轮实际验到哪
 
 回填这条**验过一轮**,样本就是 buddy 自己的仓(`git clone --local` 出来的演示项目):
-生成 10 份 `origin: backfill` 的历史周文件 + 1 份人写的本周文件 = `docs/plan/` 下 11 份,与 `ls | wc -l` 一致。
+生成 10 份 `origin: backfill` 的历史周文件 + 1 份人写的本周文件 = `.bw/plan/` 下 11 份,与 `ls | wc -l` 一致。
 **没验到的两条,如实记下**:①「探测正确判定有历史」——铺底活的标题里没有「含历史回填」字样,
 今天回填是一条独立命令(`BackfillHistory`),不是铺底活标题的一部分;②远端 issue 计数——演示项目
 没有远端,`origin='backfill'` 的 issue 行数恒为 0(这一条本身也是"不该有"的正确结果,但不构成对远端
@@ -112,14 +112,14 @@ cargo run -p bw-app --example real_demo_v4 -- <db-path> <workspaces-root> [--pro
 | # | 步骤 | 怎么做 | 读回断言 | 幂等键 |
 |---|---|---|---|---|
 | 1 | 接入项目 | `CreateProject`(不配远端,避免依赖网关)+ 两卡四字段 | `SELECT name,north_star FROM project WHERE id='<pid>'` 非空 | 按项目名查重复 |
-| 2(含2a合并调整/2b历史回填)| 规范铺底③ | `RunStandardBootstrap`;工作区用 buddy 仓浅拷贝(见下);mock 执行器分别跑两个子技能,**2b 的 git 本地采集是真代码**不受 mock 影响 | `git log` 有提交;`.bw/managed.toml` 出现指纹;`AGENTS.md` 命中约定关键词;`history.md` 数字与直接跑 git 命令一致(见§8-7)| `.bw/standard.toml` 已存在则跳过;2b 每次重跑整段覆盖不追加重复段落 |
-| 3-4 | 开始本周①、确认建活 | `StartWeekPlanning`(mock 代替真实对话,产出固定草稿标【mock】)+ 指挥器代人确认(明写"脚本代人确认")| `test -f docs/plan/<周>.md` 且 front matter `week=<周>`(**唯一正本,不查库索引**——02 篇 §2.5 已取消 `week_plan` 表);`issue WHERE week_of='<周>' AND origin='agent_split'` 有行 | "当前周无文件"天然幂等,重跑返回 `WeekPlanAlreadyExists`;建活按标题幂等 |
+| 2(含2a合并调整/2b历史回填)| 规范铺底③ | `RunStandardBootstrap`;工作区用 buddy 仓浅拷贝(见下);mock 执行器分别跑两个子技能,**2b 的 git 本地采集是真代码**不受 mock 影响 | `git log` 有提交;`.bw/managed.toml` 出现指纹;`.bw/AGENTS.md` 命中约定关键词;`history.md` 数字与直接跑 git 命令一致(见§8-7)| `.bw/standard.toml` 已存在则跳过;2b 每次重跑整段覆盖不追加重复段落 |
+| 3-4 | 开始本周①、确认建活 | `StartWeekPlanning`(mock 代替真实对话,产出固定草稿标【mock】)+ 指挥器代人确认(明写"脚本代人确认")| `test -f .bw/plan/<周>.md` 且 front matter `week=<周>`(**唯一正本,不查库索引**——02 篇 §2.5 已取消 `week_plan` 表);`issue WHERE week_of='<周>' AND origin='agent_split'` 有行 | "当前周无文件"天然幂等,重跑返回 `WeekPlanAlreadyExists`;建活按标题幂等 |
 | 5-6 | 一张业务活▶开工、推评审中、完成 | `RunIssue`(未配工作区,天然落 MockInteractiveExecutor,标【mock】);未配远端不会真开 PR,指挥器代人推 InReview 再推 Done(同 `real_demo` 步骤④模式,明写),即既有"无PR→人点确认完成(人裁)"路径 | `issue.status`;`settled_at` 非空且只一次 | 按状态判断是否重跑,天然幂等 |
-| 7 | 发版本 | `CutRelease`(选步骤6完成的活,版本号取 current_version 或首次 v0.1)| 代人推完成后 `tail <ws>/docs/releases.md` 新增一行(**唯一正本,库里无 `release` 表可查**——02 篇 §2.1/§2.5)| 按版本号幂等 |
+| 7 | 发版本 | `CutRelease`(选步骤6完成的活,版本号取 current_version 或首次 v0.1)| 代人推完成后 `tail <ws>/.bw/releases.md` 新增一行(**唯一正本,库里无 `release` 表可查**——02 篇 §2.1/§2.5)| 按版本号幂等 |
 | 8-9 | 定时触发运作活②、项目群 mock outbox | 手动调 `tick_scheduler`(时钟设到 `ops2_schedule` 之后);`chat_provider='mock'`,步骤6/7各触发一次 `SyncNotifyToChat` | `sqlite3 <db> "SELECT status,origin FROM issue WHERE workflow='asset-audit';"`;mock `chat_group` 适配器调用记录(**不进库**——02 篇 §2.4 已取消 `chat_outbox` 表,指挥器自己打印/断言调用次数)| `origin='auto'` 且 `status` 非 Todo(证明真自动开工);`SyncNotifyToChat` 被调用两次(步骤6/7各一次),重复触发不做去重比对(02 篇 §2.4,重发是已知代价)|
 | 10 | evidence 导出 | 全部真实读回写一份 JSON,不手写数字 | `cat evidence-v4-<slug>.json` | 每次重跑覆盖同名文件 |
 
-**四条取舍**:①工作区用 buddy 仓浅拷贝(`git clone --local` 到临时目录)而非空仓——2b 要读真实 git 历史验证"防伪规则",数字可对照样本。②不真开 MR(CLAUDE.md 纪律3)——"开MR才能进评审中"的步骤退化成既有"无PR→人点确认完成(人裁)"路径并代人推进明写;真远端完整合入链路只手动验证一次,不进指挥器(见§4)。③重复跑不产生重复数据——项目按名字、Issue 按标题、周计划按文件是否已存在(`test -f docs/plan/<周>.md`)、发版按版本号(`docs/releases.md` 有没有这行)判断是否跳过;盘点之后 `workflow_credit`/`chat_outbox` 表已取消,没有数据库唯一约束可以兜底——`SyncNotifyToChat` 重复触发允许真的重发一条(02 篇 §2.4 知情代价),幂等只对项目/活/周计划/发版这几类文件与缓存成立,同 `real_demo` 幂等纪律。④evidence JSON 不手写数字,是§2.1 多条读回的现成来源。
+**四条取舍**:①工作区用 buddy 仓浅拷贝(`git clone --local` 到临时目录)而非空仓——2b 要读真实 git 历史验证"防伪规则",数字可对照样本。②不真开 MR(CLAUDE.md 纪律3)——"开MR才能进评审中"的步骤退化成既有"无PR→人点确认完成(人裁)"路径并代人推进明写;真远端完整合入链路只手动验证一次,不进指挥器(见§4)。③重复跑不产生重复数据——项目按名字、Issue 按标题、周计划按文件是否已存在(`test -f .bw/plan/<周>.md`)、发版按版本号(`.bw/releases.md` 有没有这行)判断是否跳过;盘点之后 `workflow_credit`/`chat_outbox` 表已取消,没有数据库唯一约束可以兜底——`SyncNotifyToChat` 重复触发允许真的重发一条(02 篇 §2.4 知情代价),幂等只对项目/活/周计划/发版这几类文件与缓存成立,同 `real_demo` 幂等纪律。④evidence JSON 不手写数字,是§2.1 多条读回的现成来源。
 
 ### 2.3 深链与截图
 
@@ -170,13 +170,13 @@ async fn export_evidence(store: &S, p: ProjectId, out: &Path); // 10
 
 **`docs/v4-prototype/e2e/` 目录(设想,**未建**;§5 给完整格式)**:`README.md` 指向本篇;`pilot-log-<项目slug>.md` 是 §2.4 试点日志;`01-architecture/`…`09-ops-workflows/` 按篇分类一条检查一个文件;`blueprint-s8/<1-8>-<slug>.md` 存§2.1 里无单篇出处的整体检查。
 
-**引用但不重复定义**(均已在01-09篇定义,这篇只是调用方):`RunStandardBootstrap`、`StartWeekPlanning`、`RunIssue`、`TransitionIssue`、`CutRelease`、`MergeAndComplete`、`SyncNotifyToChat`、`CreateAutopilotTask{auto_run}`;`docs/plan/*.md`(周计划正本)、`docs/releases.md`(发版正本)——**这两份是仓文件,不是库表**(`week_plan`/`release`/`chat_outbox`/`workflow_credit` 表盘点之后全部取消,见 02 篇 §2.1/§2.6)。
+**引用但不重复定义**(均已在01-09篇定义,这篇只是调用方):`RunStandardBootstrap`、`StartWeekPlanning`、`RunIssue`、`TransitionIssue`、`CutRelease`、`MergeAndComplete`、`SyncNotifyToChat`、`CreateAutopilotTask{auto_run}`;`.bw/plan/*.md`(周计划正本)、`.bw/releases.md`(发版正本)——**这两份是仓文件,不是库表**(`week_plan`/`release`/`chat_outbox`/`workflow_credit` 表盘点之后全部取消,见 02 篇 §2.1/§2.6)。
 
 ## 4 · 边界与失败
 
 **不做什么**:不真跑 `claude` 当门禁——`real_demo_v4` 全程 mock,真跑只在试点由人手动做(§2.4)。不依赖网关——指挥器不配真实远端,"开MR"步骤走既有诚实退化路径,WeLink 同理只手动验证一次。不做单元测试大坝——总表全是行为级 E2E,`app-shell` 与 `app-desktop` 同等不要求写 UI 单测。不假装 UI 测试——"界面看到了什么"一律要求深链+`[BW_OPEN]`+截图。不在这篇重新定义任何一篇的判据,有问题回对应那篇改;§8-7/8-8"真实环境"部分如实标注"未验证过"。
 
-**数据库在本机(握手清单 B2/待拍-29,§8-4 验收的前提说明)**:§8-4"第二台 buddy 纳入同一仓"验收的是**仓与远端 issue 的一致性**,不是库同步——库本身是**本机**的(SQLite,只做记账与推导,不是云服务),多人看同一个项目时,每人各自的库只含自己机器上发生过的运作(运行记录、战绩、本机采集/手填的观测值),两台机器的 health 灯可能因此不同(各自数据各自算),这不是 bug;项目仓内文件(`docs/plan/`、`docs/releases.md`、`.bw/*`)才是共享正本,§8-4 的"两台总览一致"验收的是**从同一份仓 + 远端 issue 能重算出一致的名片/指标定义/计划**,不是"两台库的原始数据一模一样"。**MVP 不做远端库、不做库同步**——运作活①把「本周指标读数」段(02 篇模板已加)写进周计划文件随 MR 进仓,是这条铁律下让"别人在仓里也能看到数"的唯一补丁,§2.1「§8-4」那一行的读回口径据此理解,不要误测成"两台库表内容逐行相等"。
+**数据库在本机(握手清单 B2/待拍-29,§8-4 验收的前提说明)**:§8-4"第二台 buddy 纳入同一仓"验收的是**仓与远端 issue 的一致性**,不是库同步——库本身是**本机**的(SQLite,只做记账与推导,不是云服务),多人看同一个项目时,每人各自的库只含自己机器上发生过的运作(运行记录、战绩、本机采集/手填的观测值),两台机器的 health 灯可能因此不同(各自数据各自算),这不是 bug;项目仓内文件(`.bw/plan/`、`.bw/releases.md`、`.bw/*`)才是共享正本,§8-4 的"两台总览一致"验收的是**从同一份仓 + 远端 issue 能重算出一致的名片/指标定义/计划**,不是"两台库的原始数据一模一样"。**MVP 不做远端库、不做库同步**——运作活①把「本周指标读数」段(02 篇模板已加)写进周计划文件随 MR 进仓,是这条铁律下让"别人在仓里也能看到数"的唯一补丁,§2.1「§8-4」那一行的读回口径据此理解,不要误测成"两台库表内容逐行相等"。
 
 **失败如实显示**:`real_demo_v4` 任一步失败都停在那一步、打印真实错误、非零退出码结束,不静默跳过——延续 `real_demo`"如实停在这里,不假装往前"的纪律。
 
