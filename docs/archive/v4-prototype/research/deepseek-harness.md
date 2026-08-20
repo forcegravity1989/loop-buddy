@@ -1,6 +1,8 @@
 # DeepSeek Harness(dsh)源码穿刺:给 BW V4「一张工作台缝合成熟组件」的参考
 
-> **30 秒导读**:这是对 GitHub 项目 `deepseek-ai/deepseek-harness`(简称 DSH,npm 包 `@deepseek-ai/dsh`)的源码级预研,不是转述 README。方法:`gh repo clone --depth 1` 拉真实源码(约 81M,157k+ star),逐包读 `docs/subsystems/*.md`(与源码逐行核对生成)、`docs/user/develop/*`、`packages/*/README.md`,并额外拉取 `nexu-io/open-design`(BW 已嵌入的原型工具)的 README 核实两者关系。**状态:预研,未拍板**——不改 BW 任何设计文档,只为 [mvp-blueprint-draft.md](../mvp-blueprint-draft.md) §3 第 4 站「开工工具」的选型提供依据。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md)。
+> ⚠️ **历史档案(2026-08-20 归档)**。这是 V4 设计期的一篇源码级预研,**结论已经采纳进设计与代码**,留档只为考古「当时看了什么才这么定」。现状以 `docs/v4-prototype/design/` 对应篇与 `crates/bw-v4`、`crates/app-shell` 的源码为准;还没干的活只认 `docs/LEFTOVERS.md`。
+
+> **30 秒导读**:这是对 GitHub 项目 `deepseek-ai/deepseek-harness`(简称 DSH,npm 包 `@deepseek-ai/dsh`)的源码级预研,不是转述 README。方法:`gh repo clone --depth 1` 拉真实源码(约 81M,157k+ star),逐包读 `docs/subsystems/*.md`(与源码逐行核对生成)、`docs/user/develop/*`、`packages/*/README.md`,并额外拉取 `nexu-io/open-design`(BW 已嵌入的原型工具)的 README 核实两者关系。**状态:预研,未拍板**——不改 BW 任何设计文档,只为 [mvp-blueprint-draft.md](../../../v4-prototype/mvp-blueprint-draft.md) §3 第 4 站「开工工具」的选型提供依据。看不懂的词查 [`../../../CONTEXT.md`](../../../../CONTEXT.md)。
 
 ---
 

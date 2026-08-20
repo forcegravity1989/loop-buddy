@@ -1,12 +1,12 @@
 # 04 · 开工工具与 workflow 怎么接
 
-> **30 秒导读**:这篇回答两件事——**开工工具怎么注册与分发**(终端类如 Claude CLI/Cursor,与本机网页内嵌类如 Open Design,怎么声明、探活、起、停),**workflow(SOP 类技能包)与单技能怎么识别、铺底/导入进项目仓、物化到活的 worktree、注入给开工工具**。母文档待拍-09/10/24/32 的落地稿。给下一步写代码的会话看,也给要往规范里贡献技能包的同事看。**现在作数,待用户复核,尚未开工写代码**。会话屏三栏怎么摆是 [05 篇](05-session-screen.md)的事,三张运作 workflow 的正文是 [09 篇](09-ops-workflows.md)的事。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。文内代码路径都是真读出来的,不是猜的。**2026-08-20 按用户第七轮盘点整块重写了 §2.4/2.6/2.8/2.9/2.10/2.11 与 §3/§5/§6 相关小节**:`skill_package`/`workflow_credit` 两张第六轮草案计划新建的表全部取消,技能/workflow 的登记与用量统计从"进库、记账"改成"扫 `.claude/skills/` 目录 + 从活的 `workflow` 属性现算"。
+> **30 秒导读**:这篇回答两件事——**开工工具怎么注册与分发**(终端类如 Claude CLI / Cursor,与本机网页内嵌类如 Open Design,怎么声明、探活、起、停),**workflow(SOP 类技能包)与单技能怎么识别、铺进项目仓、物化到活的 worktree、注入给开工工具**。「用了几次」一律现算(扫 `.claude/skills/` + 数活的 `workflow` 属性),不建任何战绩表。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 会话屏三栏怎么摆是 [05 篇](05-session-screen.md)的事,三张运作 workflow 的正文是 [09 篇](09-ops-workflows.md)的事。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ---
 
 ## 0 · 这篇管什么、不管什么
 
-**管**:母文档第 4 站「执行:每张活按类别选开工工具」的映射表、「agent 去哪了」段、待拍-09/10/24/32;[`../../standard-module-draft.md`](../../standard-module-draft.md) 第 5 类(`.bw/issue-policy.toml`)与第 6 类(默认件与鱼塘);预研 [`../../research/workflow-skill-packages.md`](../../research/workflow-skill-packages.md)、[`../../research/deepseek-harness.md`](../../research/deepseek-harness.md)。具体是:①`[[tool]]` 怎么声明一个开工工具、新增工具要改哪里;②▶开工按 `tool` 字段怎么路由到 [01 篇](01-architecture.md) 的 `adapters/*` 模块;③workflow/单技能怎么现场识别(判据 A/B/C/D)、怎么铺底/导入进项目仓、怎么物化到活的 worktree;④映射三列(`类别→工具→workflow`)怎么落文件(`.bw/issue-policy.toml` 本身不入库,02 篇 §2.6 已定);⑤「用过几次」怎么从(第六轮草案原计划的)战绩记账改成现算查询——第七轮盘点后连"战绩"这个概念本身都被取消,不只是换一个记账主体那么简单;⑥配置屏四段的数据来源;⑦相关命令/事件,只列名字。
+**管**:母文档第 4 站「执行:每张活按类别选开工工具」的映射表、「agent 去哪了」段、待拍-09/10/24/32;[`../../standard-module-draft.md`](../standard-module-draft.md) 第 5 类(`.bw/issue-policy.toml`)与第 6 类(默认件与鱼塘);预研 [`../../research/workflow-skill-packages.md`](../../archive/v4-prototype/research/workflow-skill-packages.md)、[`../../research/deepseek-harness.md`](../../archive/v4-prototype/research/deepseek-harness.md)。具体是:①`[[tool]]` 怎么声明一个开工工具、新增工具要改哪里;②▶开工按 `tool` 字段怎么路由到 [01 篇](01-architecture.md) 的 `adapters/*` 模块;③workflow/单技能怎么现场识别(判据 A/B/C/D)、怎么铺底/导入进项目仓、怎么物化到活的 worktree;④映射三列(`类别→工具→workflow`)怎么落文件(`.bw/issue-policy.toml` 本身不入库,02 篇 §2.6 已定);⑤「用过几次」怎么从(早期草案原计划的)战绩记账改成现算查询——盘点之后连"战绩"这个概念本身都被取消,不只是换一个记账主体那么简单;⑥配置屏四段的数据来源;⑦相关命令/事件,只列名字。
 
 **不管**:会话屏交互细节、终端标签页、代码结构侧栏(05 篇);运作 workflow 正文(09 篇);`issue-policy.toml` 之外的仓文件/库 schema 增量(02 篇);规范铺底流程与老项目历史回填(03 篇);codegraph 子命令(05 篇提,这篇只说它是 `adapters/codegraph` 模块,不是开工工具)。
 
@@ -14,13 +14,13 @@
 
 ## 1 · 用户看到什么、做什么
 
-**配置一次开工方式**:配置屏第①段「开工工具映射」是一张表——六行(原型/构建/优化/运维/运营推广/运作)三列(类别/工具/workflow)。铺底时已按规范默认值填好(原型→Open Design→原型设计 workflow;构建/优化/运维→Claude CLI→**mattpocock-skills**(第五轮用户拍板改的默认,superpowers 在下拉里可换);运营推广→Claude CLI→空,提示"从鱼塘挑";运作→Claude CLI→三张自建运作 workflow)——这几个 workflow 包本身也是在**同一次铺底**里被真实复制进项目仓 `.claude/skills/` 的(02 篇 §2.5、母文档待拍-32),不是只在这份映射表里点个名字就算数:Claude CLI 只在项目仓里找技能,映射表指到哪个名字,仓里就必须真有那个目录。想换(比如把某类改用 Cursor,或把默认 workflow 换回 superpowers),下拉选一下、保存。
+**配置一次开工方式**:配置屏第①段「开工工具映射」是一张表——六行(原型/构建/优化/运维/运营推广/运作)三列(类别/工具/workflow)。铺底时已按规范默认值填好(原型→Open Design→原型设计 workflow;构建/优化/运维→Claude CLI→**mattpocock-skills**(用户拍板改的默认,superpowers 在下拉里可换);运营推广→Claude CLI→空,提示"从鱼塘挑";运作→Claude CLI→三张自建运作 workflow)——这几个 workflow 包本身也是在**同一次铺底**里被真实复制进项目仓 `.claude/skills/` 的(02 篇 §2.5、母文档待拍-32),不是只在这份映射表里点个名字就算数:Claude CLI 只在项目仓里找技能,映射表指到哪个名字,仓里就必须真有那个目录。想换(比如把某类改用 Cursor,或把默认 workflow 换回 superpowers),下拉选一下、保存。
 
 **导入一个新 workflow 包**:第②段「workflow 表」右上「导入」,三选一(本机目录/git 仓地址/从另一个项目,§2.8)。buddy 探测这是不是一个「包」(判据 A/B,§2.6),是就把整个目录复制进项目仓 `.claude/skills/<name>/`(走一张轻量活 + MR,不写任何库表);不是包就退回单技能,复制进同一棵目录树。配置屏②段「workflow 表」这一行不是"导入"这个动作本身往哪张表插了一行——它是**下次渲染这个配置屏时重新扫一遍目录**现场长出来的。猜不出入口技能就显示"未标注";这项没有持久的人工覆盖入口(§2.6),每次都是现场猜。
 
 **给一张活换开工方式**:活详情面板「开工工具」「workflow」两个下拉,默认来自映射表,活上能单独换(比如这张活想只用 grillme 打磨需求,不走整套 superpowers)。
 
-**点▶开工**:终端类(Claude CLI/Cursor)→ buddy 把选中的 workflow(或单技能)整包写进这张活 worktree 的 `.claude/skills/`,起嵌入终端,agent 自己发现并读;本机网页内嵌类(Open Design)→ 探活成功就在会话屏嵌一个 iframe,失败就灰态"未装·怎么装"。**这一步不再触发任何记账**(第七轮改写,取代原来"活到评审中/完成那一刻战绩 +1"的设计,§2.9):配置屏「用过几次」是随时现查 `issue.workflow` 分组计数(02 篇 §2.3)得到的——只要这张活的 `workflow` 属性定下来就已经算在数里,不需要等它走到「评审中」或「完成」;也不再有"胜率"这一栏——"干没干成"改看远端 MR 合没合入,不由 buddy 自己判定。
+**点▶开工**:终端类(Claude CLI/Cursor)→ buddy 把选中的 workflow(或单技能)整包写进这张活 worktree 的 `.claude/skills/`,起嵌入终端,agent 自己发现并读;本机网页内嵌类(Open Design)→ 探活成功就在会话屏嵌一个 iframe,失败就灰态"未装·怎么装"。**这一步不再触发任何记账**(取代原来"活到评审中/完成那一刻战绩 +1"的设计,§2.9):配置屏「用过几次」是随时现查 `issue.workflow` 分组计数(02 篇 §2.3)得到的——只要这张活的 `workflow` 属性定下来就已经算在数里,不需要等它走到「评审中」或「完成」;也不再有"胜率"这一栏——"干没干成"改看远端 MR 合没合入,不由 buddy 自己判定。
 
 ---
 
@@ -78,7 +78,7 @@ capabilities = ["inject_skills"]   # 见 §2.7 开放问题
 
 `issue.workflow` 存**名字**,不是 uuid——这样活详情面板换 workflow 不用先查 id,`docs/plan/YYYY-Www.md` 里读到的就是可读名字,与周计划文件「业务活」表格的 `workflow` 列(02 篇 §2.5)天然对得上。
 
-**解析规则,V4 简化为单层扫描(第七轮改写)**:CONTEXT.md「就近优先 / Most specific wins」词条描述的是 V1-V3 时代「项目行遮蔽全局行」的两层数据库解析,建立在 `project_id` 可空的 `skill`/`skill_package` 表之上——V4 里这两张表都不建了(§2.6),workflow/技能只有一处:**这张活 worktree 的 `.claude/skills/**/SKILL.md`**(铺底复制进来的预置包、蒸馏产出、人手加的,全在同一棵目录树里,02 篇 §2.5),不再存在「本项目行 vs 全局行」这层可比较的东西。▶开工时按 `issue.workflow` 存的名字去匹配 `.claude/skills/` 下顶层目录名(整包)或某个 `<name>/SKILL.md` 所在目录名(单技能);两边都命中是仓里同名冲突,属于铺底/导入阶段就该拦住的问题(§2.8),不是解析时该处理的事;两边都不命中,如实跳过、不猜、不记账、不错记到别的目录上,活照常能开工(§4)。
+**解析规则,V4 简化为单层扫描**:CONTEXT.md「就近优先 / Most specific wins」词条描述的是 V1-V3 时代「项目行遮蔽全局行」的两层数据库解析,建立在 `project_id` 可空的 `skill`/`skill_package` 表之上——V4 里这两张表都不建了(§2.6),workflow/技能只有一处:**这张活 worktree 的 `.claude/skills/**/SKILL.md`**(铺底复制进来的预置包、蒸馏产出、人手加的,全在同一棵目录树里,02 篇 §2.5),不再存在「本项目行 vs 全局行」这层可比较的东西。▶开工时按 `issue.workflow` 存的名字去匹配 `.claude/skills/` 下顶层目录名(整包)或某个 `<name>/SKILL.md` 所在目录名(单技能);两边都命中是仓里同名冲突,属于铺底/导入阶段就该拦住的问题(§2.8),不是解析时该处理的事;两边都不命中,如实跳过、不猜、不记账、不错记到别的目录上,活照常能开工(§4)。
 
 ### 2.5 映射三列:`[[mapping]]`
 
@@ -87,13 +87,13 @@ capabilities = ["inject_skills"]   # 见 §2.7 开放问题
 | category | tool | workflow |
 |---|---|---|
 | prototype(原型) | open_design | 原型设计 |
-| build(构建) | claude_cli | **mattpocock-skills**(第五轮用户改定为默认;superpowers 可在活上换) |
+| build(构建) | claude_cli | **mattpocock-skills**(用户改定为默认;superpowers 可在活上换) |
 | optimize(优化) | claude_cli | mattpocock-skills(同构建默认;活上可换成 diagnosing-bugs/systematic-debugging 这类单技能起手) |
 | maintain(运维) | claude_cli | mattpocock-skills(同构建默认) |
 | growth(运营推广) | claude_cli | ""(无默认,活上从鱼塘挑) |
 | ops(运作) | claude_cli | ""(三张运作活各自指定,不共用一行) |
 
-**第五轮改动**:build/optimize/maintain 三个类别的默认 workflow 从 superpowers 改成 **mattpocock-skills**(用户拍板;两者都是完整开发工作流,superpowers 仍是下拉里的常规备选,不是被淘汰)。
+**用户拍板改动**:build/optimize/maintain 三个类别的默认 workflow 从 superpowers 改成 **mattpocock-skills**(用户拍板;两者都是完整开发工作流,superpowers 仍是下拉里的常规备选,不是被淘汰)。
 
 建活(既有 `Command::CreateIssue`)时按类别标签查这张表,填 `issue.tool`/`issue.workflow` 默认值,活上可再单独换。运作活①②③不查这张表,建活时由 buddy 直接指定固定 workflow 名。
 
@@ -101,7 +101,7 @@ capabilities = ["inject_skills"]   # 见 §2.7 开放问题
 
 **定义(采纳预研核实版,不变)**:**workflow = 一个技能容器**——满足判据 A(顶层有 `.claude-plugin/plugin.json`)或判据 B(`skills/` 下 ≥2 个独立 `<name>/SKILL.md`)之一,通常有一份「入口」技能(判据 C,弱判定,`disable-model-invocation: true` 且正文引用其他技能名)用正文散文把其余技能串成带分支的流程,**该用哪个 agent 由入口/沿途技能正文临时决定**(现场调用 Claude Code 内置 Agent/Task 工具,常见 `Explore`/`general-purpose`),**不是**包自带一份持久的 agent 人设文件——官方支持这个能力(插件根目录 `agents/`),但预研实读的两个真实包(mattpocock-skills 1.2.0、superpowers 6.1.1)都没用。**单技能**只做一件事,判据 D(没有 `agents/`)在两个真实样本上恒真但不构成有效判据,主要靠"不满足 A/B"判定。**采纳预研,不改动**:结构判据 A/B/D 自动可信;判据 C 只做弱判定。
 
-**不建登记表,判定现场做(第七轮改写,取代原「新建 `skill_package` 表」方案)**:预研当时的开放问题 1(要不要给"包"单独建表)已经被母文档 §6.3 更上一层的决定盖过——技能/workflow 整个"登记"这件事本身都不需要持久化。判据 A/B/C 每次要用(▶开工解析 `issue.workflow`、配置屏渲染②③段)都对 `.claude/skills/` 现场扫一遍现场判定,不缓存判定结果、不给"包"分配 id:
+**不建登记表,判定现场做(取代原「新建 `skill_package` 表」方案)**:预研当时的开放问题 1(要不要给"包"单独建表)已经被母文档 §6.3 更上一层的决定盖过——技能/workflow 整个"登记"这件事本身都不需要持久化。判据 A/B/C 每次要用(▶开工解析 `issue.workflow`、配置屏渲染②③段)都对 `.claude/skills/` 现场扫一遍现场判定,不缓存判定结果、不给"包"分配 id:
 
 - 扫 `.claude/skills/*/`,每个顶层目录各自套一次判据 A/B——命中就是一个 workflow(包),目录名即包名;没命中(该目录下只有一份 `SKILL.md`,没有子技能群)就是一个单技能。
 - 包内再套一层判据 C——找 `disable-model-invocation: true` 且正文提到其它技能名的那份 `SKILL.md`,猜作入口;猜不出就是"未标注",**不提供持久的人工覆盖**——`skill.is_entry` 列随 `skill` 表一起取消,这项从"可编辑登记"降级成"只读的现场猜测",呼应"没人取的不存":这份猜测结果本身没有第二处消费者,只在配置屏这一次渲染里用一次,不值得为它单独开一个可写的存储位置。
@@ -129,11 +129,11 @@ capabilities = ["inject_skills"]   # 见 §2.7 开放问题
 | git 仓地址 | `git clone` 到临时路径,复用「本机目录」的判断与落点,临时目录用完即删 | 同上 |
 | 从另一个项目 | 选另一个已纳入的项目,列出它仓里 `.claude/skills/` 下的目录(现场扫描它的仓,不查任何表),复制一份(不是引用)进当前项目仓 | 同上 |
 
-**只有项目级,没有"全局/个人"这个选项了(第七轮改写,取代原方案)**:V1-V3 时代"全局导入,不落项目仓、只落 buddy 本机表"的那条路径已经不存在——不是为了省事砍掉的,是它本来就没有存在的必要:Claude CLI 只在项目仓里找技能(02 篇 §2.5),不进项目仓的"导入"对▶开工毫无用处;原本撑着"全局/个人"这一层的 `skill`/`skill_package` 两张表也已经不建。三条路唯一的落点就是项目仓,导入这个动作本身走一张轻量活 + MR(与 §2.5 保存映射同一条"改仓一律走活+MR"的规矩)。
+**只有项目级,没有"全局/个人"这个选项了(取代原方案)**:V1-V3 时代"全局导入,不落项目仓、只落 buddy 本机表"的那条路径已经不存在——不是为了省事砍掉的,是它本来就没有存在的必要:Claude CLI 只在项目仓里找技能(02 篇 §2.5),不进项目仓的"导入"对▶开工毫无用处;原本撑着"全局/个人"这一层的 `skill`/`skill_package` 两张表也已经不建。三条路唯一的落点就是项目仓,导入这个动作本身走一张轻量活 + MR(与 §2.5 保存映射同一条"改仓一律走活+MR"的规矩)。
 
-**代价条款已经不成立**:预研原本建议的"资产在仓"原则本身没变,但当时权衡的代价——"全局/个人层进 buddy 本机表,别的 committer 看不到"——第七轮后不再存在:三条路都落项目仓,任何 committer clone 下来都能看到完整技能清单,配置屏导入弹窗不再需要提示这句取舍。
+**代价条款已经不成立**:预研原本建议的"资产在仓"原则本身没变,但当时权衡的代价——"全局/个人层进 buddy 本机表,别的 committer 看不到"——后不再存在:三条路都落项目仓,任何 committer clone 下来都能看到完整技能清单,配置屏导入弹窗不再需要提示这句取舍。
 
-### 2.9 workflow / 技能用了几次:现算,不记战绩(第七轮改写)
+### 2.9 workflow / 技能用了几次:现算,不记战绩
 
 母文档 §6.3 与 02 篇 §2.3 已经把这件事定了性——不只是"记账主体从 agent 换成 workflow"这么简单,是**整个"战绩"账本概念本身被取消**:"干没干成"不再由 buddy 自己判定和记账,看的是**远端 MR 合没合入**,这条判据造不了假。库里因此不需要 `workflow_credit` 表,也不需要 `outcome`/`settled_at` 这类结算事件,不需要在 Done 边或 run 失败两处挂一次记账动作。
 
@@ -161,7 +161,7 @@ GROUP BY workflow;
 
 1. **CLAUDE.md 既定原则**——「发现过时的实现路径,直接移除它」:V1-V3「队友」这套记账机制依附的聊天式旧引擎已经在 2026-08-18 那次减负里被拆掉了大半,`agent` 表撑的是一套已经不存在的执行模型,留着只读本身就是一条没人再写、迟早被遗忘的旧路径。
 2. **V4 的活不再"指派给队友",而是"配开工工具 + workflow"**——`issue.assignee`(AgentId 外键)同步失去语义,新库 `issue` 表定义里**不出现**这一列(与 02 篇 §2.3 一致)。
-3. **这是一次数据丢失决定**(存量 V1-V3 项目的队友战绩历史不迁移,不可逆)——但因为 V4 本身就是"不兼容老库、新壳用新库文件"(§2.7=02 篇 §2.7)这个更大决定,这条丢失只是它的自然结果,不是 04 篇另外单独做的一个取舍,已提请用户点头(00-handshake 第 2 条,与 02 篇 §2.3 同一处引用)。
+3. **这是一次数据丢失决定**(存量 V1-V3 项目的队友战绩历史不迁移,不可逆)——但因为 V4 本身就是"不兼容老库、新壳用新库文件"(§2.7=02 篇 §2.7)这个更大决定,这条丢失只是它的自然结果,不是 04 篇另外单独做的一个取舍,已提请用户点头(握手清单 第 2 条,与 02 篇 §2.3 同一处引用)。
 
 存量战绩要不要在切换前做一次性人可读导出,列进第 6 节开放问题 2,不在本篇拍板。
 
@@ -182,12 +182,12 @@ GROUP BY workflow;
 
 | 命令 | 一句话 | 标注 |
 |---|---|---|
-| `ImportSkillPackage{source_path,project_id}` | 单目录导入,套 §2.6 判据 A/B 现场判一次是包还是单技能,复制进项目仓 `.claude/skills/<name>/`;**不写任何库表**,走一张轻量活+MR | 沿用,改为纯文件操作(第七轮) |
-| `ImportSkillLibrary{root_path,project_id}` | 库根批量扫描,每个顶层目录各自套一次判据 A/B,全部复制进项目仓 `.claude/skills/`;**不写任何库表** | 沿用,改为纯文件操作(第七轮) |
+| `ImportSkillPackage{source_path,project_id}` | 单目录导入,套 §2.6 判据 A/B 现场判一次是包还是单技能,复制进项目仓 `.claude/skills/<name>/`;**不写任何库表**,走一张轻量活+MR | 沿用,改为纯文件操作 |
+| `ImportSkillLibrary{root_path,project_id}` | 库根批量扫描,每个顶层目录各自套一次判据 A/B,全部复制进项目仓 `.claude/skills/`;**不写任何库表** | 沿用,改为纯文件操作 |
 | `SetIssueWorkflow{id: IssueId, workflow: String}` | 活详情面板换 workflow/单技能,写 `issue.workflow`(字段名与 06 篇一致) | 新 |
 | `SaveToolMapping{project_id, category, tool, workflow}` | 配置屏第①段保存一行映射,写回 `[[mapping]]`(走活+MR 还是直接写,§6 开放问题;字段名统一为 `workflow`) | 新 |
 | `ProbeTool{name: String}` | 手动探活一次(配置屏/项目墙"测一下"复用) | 新 |
-| `MarkEntrySkill{skill_id, package_id}` | 退场(§2.6):没有 `skill`/`skill_package` 表就没有稳定 id 可指,入口技能改成每次现场用判据 C 猜,猜不出就是"未标注",不提供持久人工覆盖 | 删除(第七轮) |
+| `MarkEntrySkill{skill_id, package_id}` | 退场(§2.6):没有 `skill`/`skill_package` 表就没有稳定 id 可指,入口技能改成每次现场用判据 C 猜,猜不出就是"未标注",不提供持久人工覆盖 | 删除 |
 | `CreateAgent`/`UpdateAgent`/`ImportAgentDefinition` | 不建(§2.10) | 不存在 |
 
 ### 3.2 `Event` 增量
@@ -199,7 +199,7 @@ GROUP BY workflow;
 | `IssueWorkflowChanged{id}` | 某活的 workflow/工具真实改了 |
 | `ToolMappingSaved{category}` | 某一行映射真实保存完成 |
 
-**不再有 `WorkflowRunCredited` 事件**(第七轮取消,见 §2.9)——战绩不记账,没有"一次结算真实发生"这件事可广播。
+**不再有 `WorkflowRunCredited` 事件**(取消,见 §2.9)——战绩不记账,没有"一次结算真实发生"这件事可广播。
 
 ### 3.3 数据模型增量(与 02 篇分工:`issue` 表其余新列如 `week_of`/`version`/`kind`/`origin` 归 02 篇,推动指标归 `issue.metric_key` 单列(02 篇 §2.2,不是关联表),这里只交代 `tool`/`workflow` 两列 + 本篇涉及的表/列取舍)
 
@@ -224,7 +224,7 @@ agent 表 · agent_import.rs · CreateAgent/UpdateAgent/ImportAgentDefinition ·
 
 ## 4 · 边界与失败
 
-**不做的事**:不建 agent 名单(workflow 包自己决定用哪个内置子代理,"自带 agent 数"如实显示实测的 0)——**用户原话定性**:agent 暂不作为单体维护,小事单技能干,大事 workflow 带着自己的 agent 与脚本干(00-handshake 第 2 条);不做技能市场界面(鱼塘只在配置屏走 §2.8 导入,不做浏览/搜索 UI);不整体嵌 DSH(deepseek-harness 结论已定,只借三条接口判断;将来接 DSH 一类网页 agent 走新增一条 `web_embed` 声明,和接 Open Design 同一条路);不塞整包进系统提示词(§2.7 实测数字已堵死这条路);不建技能/workflow 用量或战绩登记表(§2.6/§2.9,现算)。**workflow 自己产的文档不额外管**(第五轮用户拍板,待拍-10 改):mattpocock-skills、superpowers 这类业界包物化进项目仓后,会往仓里写自己的东西(研究笔记、领域模型、决策记录……),这些内容与 buddy 规范的知识库天然有重叠——**MVP 不过度设计**,规范只约束 buddy 自己必需的基础限制(PROJECT.md/AGENTS.md、`.bw/*`、`docs/plan/`、`docs/releases.md`),workflow 自产的目录不管、不收编、不搬家;知识库「知识」页签把它们当普通仓内文档树展示;运作活②(资产盘点)盘点时只登记不整理;第一版试点实践后再看要不要收编。
+**不做的事**:不建 agent 名单(workflow 包自己决定用哪个内置子代理,"自带 agent 数"如实显示实测的 0)——**用户原话定性**:agent 暂不作为单体维护,小事单技能干,大事 workflow 带着自己的 agent 与脚本干(握手清单 第 2 条);不做技能市场界面(鱼塘只在配置屏走 §2.8 导入,不做浏览/搜索 UI);不整体嵌 DSH(deepseek-harness 结论已定,只借三条接口判断;将来接 DSH 一类网页 agent 走新增一条 `web_embed` 声明,和接 Open Design 同一条路);不塞整包进系统提示词(§2.7 实测数字已堵死这条路);不建技能/workflow 用量或战绩登记表(§2.6/§2.9,现算)。**workflow 自己产的文档不额外管**(用户拍板,待拍-10 改):mattpocock-skills、superpowers 这类业界包物化进项目仓后,会往仓里写自己的东西(研究笔记、领域模型、决策记录……),这些内容与 buddy 规范的知识库天然有重叠——**MVP 不过度设计**,规范只约束 buddy 自己必需的基础限制(PROJECT.md/AGENTS.md、`.bw/*`、`docs/plan/`、`docs/releases.md`),workflow 自产的目录不管、不收编、不搬家;知识库「知识」页签把它们当普通仓内文档树展示;运作活②(资产盘点)盘点时只登记不整理;第一版试点实践后再看要不要收编。
 
 **失败如实显示,不假装**:工具未装(探活失败)→ 灰态+"怎么装→",不隐藏该行;导入的目录/仓不满足判据 A/B → 如实按单技能导入并提示"看起来不是 workflow 包";`issue.workflow` 名字在 `.claude/skills/` 里解析不到 → 如实跳过、不猜、不错记,活照常能开工;Open Design 打开通用首页而非本活 worktree(§2.7 开放问题)→ 中栏标注"未定位到本活工作区(设计中)";Cursor 今天 `supported=false` → 下拉里仍出现,选中后▶开工如实报错"Phase 1 仅 Claude CLI",不从下拉里拿掉。
 

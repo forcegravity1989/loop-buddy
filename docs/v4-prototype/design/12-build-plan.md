@@ -1,130 +1,35 @@
-# 12 · 建法:三刀,一次挂连着做(含今晚任务书)
+# 12 · 建法与交付记录:V4 是分六刀建出来的
 
-> **30 秒导读**:这篇是 V4 从设计转开发的**执行件**:把 design/01–11 切成三刀(A 骨架与主环 / B 运作活与会话屏 / C 回填与项目群与包),**一次挂上连着做 A→B→C**,做到哪算哪、每刀独立 commit 与 PR、不停下来等人。§2 是任务书(范围 / 明确不做 / 建法顺序 / 逐条读回命令 / 默认假设 / 卡住预案),§5 是挂任务时直接粘贴的指令。给两种人看:挂任务的用户(看 §0、§2.4、§5),接任务的会话(全文)。**现状:2026-08-20 第七轮盘点后重写(库只剩四张表),用户点头即挂**;每刀做完按块重写本篇对应小节(不追加补丁)。
+> **30 秒导读**:这篇是 V4 从设计转开发的**交付记录**——六刀各自干了什么、代号怎么读、要看某件事的实况该去哪里。给两种人看:接着做 V4 的会话,以及被 `docs/code-schemes.md` 的代号索引指到这里的人。**现在还作数吗**:作数,但它只是一张索引——**任何「做到哪、怎么验」的细节都不在这里**,在下面 §3 指的那三个地方。原来那份逐步任务书(范围、默认假设、卡住预案、挂任务时粘贴的指令)在刀跑完之后已经没有读者,整块删掉了,要考古去 git 历史。
 
-## 0 · 总则(用户 2026-08-20 两轮回复定下的)
+## 1 · 六刀:代号与各自交付了什么
 
-1. **一次挂上连着做 A→B→C,不等人**;每刀做完各自 commit + 开 PR(不合),接着做下一刀;做不完就停在最后一个可编译可读回的状态,PR 正文写清做到哪。刀内可开子代理(不得用 Fable——见全局 `~/.claude/CLAUDE.md`,按难度 haiku / sonnet / opus)。
-2. **V4 不兼容老库**:新库文件(新壳默认 `workbench-v4.db`,与旧壳的 `workbench.db` 同目录不同名;`BW_DB` 可覆盖),`schema.sql` 按新设计写全,不写 V3→V4 迁移,开发期换 schema 删库重建;`add_column_if_missing` 守则从试点起再执行(待拍-30)。
-3. **存就是为了取**(第七轮盘点定死):**库只有四张表**——`project`(定位 + 项目墙显示缓存)/ `issue`(远端 issue 的本机缓存)/ `claude_conversation`(活 ↔ 会话 ↔ worktree ↔ 分支)/ `app_meta`。别的一律不建(母文档 §6.2/6.3 逐条列了为什么)。数字全部从 git / 远端 / 仓文件现算。
-4. **验证 = 指挥器 + sqlite 读回 + 深链 stderr**;不做 computer-use 点击巡航(用户次日自己点全旅程、给反馈);截图可选不强求。
-5. **控制代码量、模块规划先行**:一屏一目录、一个外部能力一个适配模块、单文件 1500 行阻断(守卫脚本),软目标单文件 ≤ 600 行;三刀合计新增 Rust 预算 **≤ 12,000 行**(超了先砍范围不砍守卫)。
-6. **文档按块重写**:每刀结束把 design/ 里与实际不符的小节整块删了按实况重写;「没干的」只记 `docs/LEFTOVERS.md`。
-7. **不被老项目干扰**:新壳按设计建,V3 只抄 token / 组件(01 篇 §2.5 清单),不迁就旧结构;旧壳 `app-desktop` 只保证继续编译,不改它。
-8. **门禁不变 + 两个新守卫**:`cargo fmt --check`、`clippy --workspace --exclude app-desktop --exclude app-shell -D warnings`、wasm32 两项、`guard-kernel-ui-free.sh`、`cargo check -p app-desktop`、`cargo check -p app-shell`、`cargo test --workspace --exclude app-desktop --exclude app-shell`、**`guard-no-cross-screen-import.sh`、`guard-file-lines.sh`**。每个 commit 前全过。
-9. **合不合**:每刀结束开 PR、门禁全绿、`/code-review` 过,**不自动合**;早上用户看。用户次日自己点全旅程给反馈,不要做 computer-use 点击巡航。
+一刀 = 一次连着做完、单独开 PR 的施工批次。代号在 `docs/code-schemes.md` 登记,正文里写作「A 刀」「B 刀」;刀内的小步写作 A1…A7、B1…B8。
 
-## 1 · 三刀总表
+| 刀 | 交付了什么 | 落在哪 |
+|---|---|---|
+| **A · 骨架 + 数据 + 主环** | 新库(只四张表)与仓文件解析;仓根 `standard/` 核心件与规范铺底第 1 步;新壳起来,项目墙 / 接入 / 设置 / 总览 / 计划(六列看板 + 拖拽)/ 配置六个入口能用;headless 指挥器走完一周主环。刀内小步 A1 数据层 · A2 规范核心件 · A3 命令增量 · A4 新壳六屏 · A5 守卫脚本 · A6 指挥器 · A7 收尾 | `crates/bw-v4`、`crates/app-shell`;PR #105 |
+| **B · 运作活 + 会话屏** | 三份运作 workflow 的 SKILL.md 正本、运作活①的真会话、周五晚定时自动建②并自动开工;会话屏三栏(内嵌终端 + 文件树 + 改动 diff);通知屏「合入并完成」。刀内小步 B1…B8 同理 | 同上;PR #105 |
+| **C · 回填 + 项目群 + 知识库 + 包** | 资产盘点的首次模式(把老仓的历史算成同格式的周计划文件与发版行)、项目群适配工厂(trait + mock/none,WeLink 留位)、知识库三页签、macOS 打包 | 同上;PR #105 |
+| **D · 九屏照高保真重排** | 高保真那张样式表整体搬进壳(`crates/app-shell/assets/hifi.css`),行内样式函数全退役;九个屏逐屏重排并补上壳里原本没渲染的功能位 | PR #106;完成记录见 [13-shell-hifi-gap.md](13-shell-hifi-gap.md) |
+| **E · 每张活一棵 worktree + 铺底提 MR** | ▶跑 与规范铺底都改成在这张活自己的 worktree(`<仓名>-issue-<号>`)和分支(`bw/issue-<号>`)上干;铺底会推分支、开 MR、把活停在「评审中」等人合 | 和 D 一起在 PR #106 |
+| **F · 提交并开 MR** | 补上第 4 站到第 5 站中间那一下:会话屏点一下,把这棵树里 agent 干出来的改动提交、推分支、开 MR、活进「评审中」。在这之前,干完的活没有任何办法变成别人看得见的东西 | PR 上等合;设计见 [05-session-screen.md](05-session-screen.md) §2.4 |
 
-| 刀 | 做什么 | 当晚读回什么 | 不做什么(留后刀) |
-|---|---|---|---|
-| **A 骨架 + 数据 + 主环** | 数据层(新库、`issue` 八列、三张小表)→ 仓根 `standard/` 核心件 + 铺底第 1 步(写模板,不起 agent)→ `crates/app-shell` 起壳:项目墙 / 接入两卡 / 设置 / 总览 / **计划(六列拖拽 + 确认弹窗)** / 配置(映射三列 + workflow 表)+ 会话 / 通知 / 知识库的真实数据最简列表 → 命令增量 → `real_demo_v4` 步骤 1–7、10 | 门禁全绿;`sqlite3` 读回新列;`docs/plan/2026-W34.md`、`docs/releases.md` 被真实写出;指挥器 evidence JSON;六入口深链 stderr `[BW_OPEN]` | 三张运作 workflow 的 SKILL.md 正本、内嵌终端、定时自动建②、项目群、历史回填、知识库代码图、Windows 包 |
-| **B 运作活 + 会话屏** | 运作 workflow 三份 SKILL.md(`standard/06-defaults/ops/`)+ 运作活①真会话(mock 执行器可跑)+ 定时周五晚自动建②自动开工 + 周计划文件「本周指标读数」段 + 会话屏(内嵌终端 + 文件树 + diff 页签,`terminal_xterm` 适配)+ 通知屏「合入并完成」+ `real_demo_v4` 步骤 8 | 同上 + 定时 tick 读回(`origin='auto'` 且状态非待办)+ 内嵌终端 `pty_smoke` | 项目群、历史回填、发版本之外的远端链路 |
-| **C 回填 + 项目群 + 知识库 + 包** | 资产盘点首次模式(证据层真代码 + agent 步骤;产出同格式历史周文件与历史版本行)+ `chat_group` 工厂(trait + mock / none,WeLink 函数留位)+ 通知同步(不做发送去重) + 知识库三页签(含 codegraph 大文件榜)+ `real_demo_v4` 步骤 9 + Windows 安装包 `0.4.0-v4` + 删旧壳判据核对 | 同上 + 老项目样例(buddy 自己的仓)回填数字对回 git | 试点期才做的:WeLink 真连、codehub 项目接入 |
+**A/B/C 在 PR #105,D 与 E 在 PR #106 —— 这五刀今天都已在 `main` 上;F 还在 PR 上等人点合。**
 
-## 2 · 任务书(切片 A 详;B / C 见 §3)
+## 2 · 建法上定死的几条(仍然管着后续改动)
 
-### 2.1 范围(按建法顺序,每小步一个 commit)
+1. **V4 不兼容老库**:新库文件 `workbench-v4.db`(旧壳仍开 `workbench.db`,同目录不同名,`BW_DB` 可覆盖),schema 从新写、不写 V3→V4 迁移。
+2. **存就是为了取**:库只有四张表(`project` / `issue` / `claude_conversation` / `app_meta`),别的一律不建;数字全部从 git、远端、仓文件现算。为什么这么砍,逐条理由在母文档 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) §6。
+3. **模块管控**:一屏一目录、一个外部能力一个适配模块;单文件 1500 行由 `scripts/guard-file-lines.sh` 阻断,软目标 600 行。
+4. **不动旧壳**:`app-desktop` 与旧的五个 crate 只保证继续编译,不为 V4 改它们;旧壳什么时候能删,判据在 [01-architecture.md](01-architecture.md) §2.11。
+5. **验证 = 指挥器 + `sqlite3` 读回 + 深链 stderr**,不做点击巡航。命令清单在 [10-e2e-acceptance.md](10-e2e-acceptance.md)。
+6. **文档按块重写**:发现设计与实况不符,整块删了按实况重写,不在旁边追加一段补丁。
 
-| 步 | 做什么 | 出处 | 读回 |
-|---|---|---|---|
-| A1 数据层 | `bw-store`:新库文件 `workbench-v4.db`(旧壳仍开 `workbench.db`,互不相扰);`schema.sql` **从零写全,只四张表**——`project`(id / slug / name 缓存 / 仓路径 / 远端地址 / 灯缓存 + 算出时间 / 排序 / 时间戳)、`issue`(id / project_id / 远端号 / 标题 / 状态 / 分支 / PR 号 + 缓存属性列 `week_of` `version` `tool` `workflow` `kind` `origin` `sort_order` `metric_key` / 时间戳)、`claude_conversation`(沿用今天的列)、`app_meta`;**其余 16 张一律不建**(母文档 §6.3);store 只留这四张表的读写方法,其它方法随表删 | 02 篇 / 母文档 §6.2 | `.tables` 只有四张;`PRAGMA table_info(issue)` 见缓存列 |
-| A2 仓根 `standard/` | 核心件模板:`PROJECT.md`、`AGENTS.md`(+ `CLAUDE.md` 一行 `@AGENTS.md`)、`.bw/project.toml`(含 `[chat]` 空位、`standard_version`、`current_version`)、`.bw/metrics.toml`、`.bw/issue-policy.toml`(`[[tool]]` 三个 + `[[mapping]]` 六行,构建 / 优化 / 运维默认 mattpocock-skills)、`.bw/standard.toml`、`.bw/managed.toml`、`docs/plan/`(README + 周文件模板,front matter `week` / `origin` + 「本周指标读数」段)、`docs/releases.md` 模板;**预置技能包**(buddy 自建运作 workflow + 业界包)放 `standard/06-defaults/skills/`,铺底时**复制进项目仓 `.claude/skills/`**;`include_str!` 进 `bw-app`;`RunStandardBootstrap` 第 1 步:建分支写模板 + 提交(空仓 / 自己的仓直接提交当前分支),记指纹进 `managed.toml` | 02 / 03 篇 | 跑完 `ls -R <ws>/<slug>/.bw docs`;`git log` 见提交 |
-| A3 命令增量(`bw-app`) | `ScheduleIssue{id,week_of:Option}` / `ReorderIssue{id,after}`(**落点 = 改 `docs/plan/YYYY-Www.md` 的活清单 + 刷新 `issue` 缓存行 + 可选打远端标签 `bw/week:*`)、`SaveToolMapping`(写 `issue-policy.toml`)、`EditProjectCard`(写 `PROJECT.md` + `.bw/project.toml`)、`SetProjectChat`(写 `[chat]`)、`StartWeekPlanning`(判据 = 本周文件不存在;**今晚 mock**:写 `docs/plan/YYYY-Www.md` 含指标读数段 + 产出固定草稿活标【mock】,人确认后建活 `origin=agent_split` + `week_of`)、`CutRelease`(追加 `docs/releases.md` 一段 + 给活写 `version`,走轻量活;未配远端时直接提交)、`ProbeTool`(claude / cursor / open_design / **welink-cli 留位返回 Unknown**)、`CreateIssue` 建活时按映射填 `tool` / `workflow`;`RunIssue` / `TransitionIssue` / `BlockIssue` 不改;**不做任何战绩记账**(第七轮取消);「用了几次」在配置屏按活的 `workflow` 属性现算;对应 `Event` | 01 篇 §2.6 / 03 / 06 / 04 篇 | 指挥器读回(下表) |
-| A4 新壳 `crates/app-shell` | `Cargo.toml`(members 加、default-members 不加;bin `bw-v4-dev`)、`main.rs`(wry 窗口;Windows `with_disable_drag_drop_handler(true)`)、`bridge/`(抄 kernel.rs 的独立 tokio 线程做法)、`theme/`(抄 V3 token + 原子样式)、`screens/`:**wall**(抄 V3 ProjectCard + 本机环境条「测一下」含 welink-cli 灰项)/ **onboard**(抄两卡,四字段意图卡)/ **settings**(工作区根目录、工具路径;无聊天登录)/ **overview**(一列横块,全部现算:名片 ← `PROJECT.md`,指标卡 ← `metrics.toml` + 现算 / 周计划文件读数段,health 三判据 ← 周计划文件 + git 提交 + git 合入 / `releases.md`(没数据 = Unknown 灰),本周进度 ← 周计划文件 + `issue` 缓存,发版记录 ← `releases.md`)/ **plan**(左栏扫 `docs/plan/` 出周列表 + 六列看板;**所有列可拖**:排期直接生效,状态动作确认弹窗,非法弹回;卡面无按钮;右侧详情面板放按钮组;新建活)/ **config**(映射三列可编辑;workflow / skill 表 = 扫项目仓 `.claude/skills/` + 从活的 `workflow` 属性现算「用过几次」;连接器段 = 显示 `.bw/project.toml` 里的远端 + 探活;定时段 = 显示 `issue-policy.toml` 节律)/ **session / notify / kb**:真实数据最简列表(按活列会话 ← `claude_conversation` · 评审中与待人处理 ← `issue` 缓存 · 仓内 `docs/` 文档树 + Markdown 渲染),不摆假数据;`adapters/`:`claude_cli`(只声明 + 探活)、`chat_group`(只放 trait 与 none;实现在 C 刀)各带 README 三段;深链 `BW_OPEN` / `BW_PANEL=overview|plan|session|notify|config|kb` / `BW_VIEW=onboard|settings` | 01 / 05 / 06 / 08 篇 | 六入口深链 stderr `[BW_OPEN]`;`cargo check -p app-shell` |
-| A5 守卫 + 脚本 | `scripts/guard-no-cross-screen-import.sh`、`scripts/guard-file-lines.sh`(1500 阻断,只查 app-shell);`scripts/point-bwdev-here.sh` 加可选参数拷 `bw-v4-dev`;`DEVELOPMENT.md` 加 app-shell 三条命令 | 01 篇 §3.3–3.4 | 两脚本退出码 0 |
-| A6 指挥器 | `crates/bw-app/examples/real_demo_v4.rs`:步骤 1 接入 → 2 铺底第 1 步(含复制预置技能包)→ 3–4 开始本周(mock)写周计划文件 + 代人确认建活 → 5–6 一张活 ▶跑(mock)→ 代人推评审中 → 代人点完成 → 7 发版本(写 `releases.md` + `issue.version`)→ 10 evidence JSON(数字全部真实读回,不硬编);幂等可重跑;工作区用 buddy 仓 `git clone --local` 到临时目录 | 10 篇 §2.2 | 见 §2.4 |
-| A7 收尾 | 门禁全绿 → `/code-review` → 修 → design/01/02/03/06 与实况不符的小节按块重写 → `docs/LEFTOVERS.md` 登记今晚没做的 → push → 开 PR(正文含「偏差」段)→ **不合** | 总则 6 / 9 | PR 链接 |
+## 3 · 要看细节去哪(这里不重复,三处说同一件事只会互相漂移)
 
-### 2.2 明确不做(今晚)
+- **做到哪 / 实况长什么样**:design 各篇的第 3 节「工程对照」,以及源码本身(`crates/bw-v4`、`crates/app-shell`)。
+- **还没做完的**:`docs/LEFTOVERS.md` 的 V4A-N / V4B-N / V4C-N / V4D-N / V4E-N 五组,那是唯一的欠账登记表。
+- **怎么验**:[10-e2e-acceptance.md](10-e2e-acceptance.md);开发命令另见仓根 `DEVELOPMENT.md`。
 
-内嵌终端与 `terminal_xterm`(B);三张运作 workflow SKILL.md 正本与真会话(B,今晚 ① 用 mock 草稿);定时自动建②(B);`chat_group` 实现与通知同步到群(C;不建发件箱表,不做发送去重);历史回填(C);知识库代码图 / 资产页签(C);Windows 打包(C);指南抽屉、问题上报图标、Web 留门、Cursor 真接法(只声明)、Open Design 嵌入(沿用 V3 探活,嵌入留 B)、**动旧库与旧壳**(`app-desktop` 与 `workbench.db` 原样不碰,V4 是全新库文件与全新壳)。
-
-### 2.3 默认假设(用户不反馈就这么做)
-
-- 基线分支:PR #104 若已合,从 `main` 开 `claude/v4-slice-a`;没合就从 `claude/v4-round4-expert-feedback` 开(设计件要在脚下)。
-- 本周 = ISO 2026-W34;指挥器项目名 `buddy-v4-demo`,工作区 = buddy 仓本地浅拷贝(不连远端、不真开 PR:代人推评审中 / 完成,evidence 明写「脚本代人」)。
-- 所有 ▶跑 走 mock 交互执行器(产出自标【mock】);不碰真 `claude`、不碰网关、不碰 WeLink。
-- 子代理分工:主线程做骨架与接缝(Cargo、bridge、`Command` / `Event` 签名、schema);子代理填屏(每屏一个,sonnet)、填指挥器(sonnet)、评审(opus);主线程合并、跑门禁、`/code-review`。
-- 看不准的细节按 design/ 对应篇的默认答案;design/ 与母文档冲突以母文档 §6 / §11 为准;再拿不准就按「简单 / 规范」的来并在 PR「偏差」段写明。
-
-### 2.4 次日早上的验收读回(用户照着跑;三刀做完后按实况整块重写)
-
-**改了三处,原来那版在这台机器上跑不通**:指挥器在 `bw-v4` 不在 `bw-app`;`app-shell` 不用从门禁里排除
-(它过 clippy);macOS 没有 `timeout` 这个命令,深链那条换成 `perl -e 'alarm N; exec @ARGV'`。
-
-```bash
-# 1 门禁(与 CI 一致 + 三个新守卫)
-cargo fmt --all --check && cargo clippy --workspace --exclude app-desktop -- -D warnings && cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features && cargo check -p ui --target wasm32-unknown-unknown && ./scripts/guard-kernel-ui-free.sh && cargo check -p app-desktop && cargo test --workspace --exclude app-desktop && ./scripts/guard-no-cross-screen-import.sh && ./scripts/guard-file-lines.sh && ./scripts/guard-screen-hooks.sh
-```
-
-```bash
-# 2 指挥器从空库跑两遍(第二遍不产生任何重复数据)
-rm -rf /tmp/bw-v4-demo.db /tmp/bw-v4-ws && cargo run -p bw-v4 --example real_demo_v4 -- /tmp/bw-v4-demo.db /tmp/bw-v4-ws && cargo run -p bw-v4 --example real_demo_v4 -- /tmp/bw-v4-demo.db /tmp/bw-v4-ws
-```
-
-```bash
-# 3 数据读回:库里只有四张表 / 活的周·来源·工具·workflow·版本 / 完成只结一次
-sqlite3 /tmp/bw-v4-demo.db ".tables" && sqlite3 -header /tmp/bw-v4-demo.db "SELECT number,title,status,week_of,origin,tool,workflow,version,settled_at IS NOT NULL AS settled FROM issue ORDER BY number;" && sqlite3 /tmp/bw-v4-demo.db "SELECT COUNT(*) AS 结清了几条 FROM issue WHERE settled_at IS NOT NULL;"
-```
-
-跑两遍之后该看到:恰好四张表;恰好 6 张活(编号 1-6,不多不少);结清恰好 1 条。
-
-```bash
-# 4 仓文件读回:周计划(含回填的历史周)、发版记录、规范件与指纹、复制进来的预置技能包
-ls /tmp/bw-v4-ws/buddy-v4-demo/docs/plan | wc -l && grep -lx "origin: backfill" /tmp/bw-v4-ws/buddy-v4-demo/docs/plan/*.md | wc -l && grep -c "^\[\[file\]\]" /tmp/bw-v4-ws/buddy-v4-demo/.bw/managed.toml && ls /tmp/bw-v4-ws/buddy-v4-demo/.claude/skills && cat /tmp/bw-v4-ws/buddy-v4-demo/docs/plan/$(date +%G-W%V).md
-```
-
-演示项目是 buddy 自己的仓 `git clone --local` 出来的,所以 `docs/plan/` 下有 11 个文件 ——
-**9 份回填的历史周(W25–W33)+ 1 份本周(W34,人写的)+ 1 份 README**;18 条铺底指纹、12 个技能包。
-(数回填那条要用 `grep -lx`:README 里讲的就是 `origin: backfill` 这个字段,不加 `-x` 会把它也数进去。)**发版记录里一条「回填」行都没有是对的** —— buddy 自己的仓没有 git 标签,
-无标签就诚实留空,绝不拿提交日期倒推版本号。
-
-```bash
-# 5 新壳六入口深链各起一次,stderr 见 [BW_OPEN] 且无 panic(会开窗,看一眼关掉)
-cargo build -p app-shell && for p in overview plan session notify config kb; do BW_DB=/tmp/bw-v4-demo.db BW_OPEN=buddy-v4-demo BW_PANEL=$p perl -e 'alarm 10; exec @ARGV' ./target/debug/bw-v4-dev 2>&1 | grep -m1 "\[BW_OPEN\]"; done
-```
-
-```bash
-# 5b 知识库三个页签的数字,拿终端命令当场对
-BW_KB_DUMP=1 BW_DB=/tmp/bw-v4-demo.db BW_OPEN=buddy-v4-demo BW_PANEL=kb perl -e 'alarm 20; exec @ARGV' ./target/debug/bw-v4-dev 2>&1 | grep BW_KB
-```
-
-```bash
-# 5c 内嵌终端的 PTY 后端(不碰 claude、不碰网关)
-cargo run -p bw-engine --example pty_smoke && cargo run -p bw-engine --example pty_smoke -- --teardown && cargo run -p bw-engine --example pty_smoke -- --abort
-```
-
-然后你自己开 `bw-v4-dev` 点全旅程(项目墙 → 接入 → 总览 → 计划拖四下 → 配置改映射 → 会话 → 通知 →
-知识库三页签 → 设置),把感受回我;这一步不归我。要打成 macOS 的 app 再点:
-`./scripts/bundle-desktop.sh v4` → `dist/BW-V4.app`。
-
-### 2.5 卡住预案
-
-- 编译 / 门禁卡住:先缩范围(砍 A4 的 session / notify / kb 列表、砍 A3 的 `CutRelease`),不留不编译的代码;每砍一项记 `docs/LEFTOVERS.md`。
-- 会话额度打穿:每小步已 commit;恢复后从 §2.1 表里没打勾的步继续;早上拿到的是「A 完整」或「A 到第 N 步」,PR 正文如实写到哪。
-- 设计与实况冲突:按母文档 §6 / §11 → 「简单 / 规范」→ 写进 PR「偏差」段,不回头改设计决定。
-- 任何需要用户拍板的事:不等、按默认做、写进偏差段。
-
-## 3 · 切片 B / C 任务书
-
-**接着 A 做,不停下来等人**。范围见 §1 总表;做每一刀之前先把 design/ 对应篇再读一遍(B:05 会话屏、09 运作活、04 workflow;C:03 回填、07 项目群、11 知识库、10 验收)。两刀的读回都在 §2.4 那五组之上加:B 加「定时到点后本周出现资产盘点活且 `origin='auto'`」与 `pty_smoke`;C 加「老项目样例回填出的历史周文件与历史版本行,数字对得回 git」。每刀结束照 A7 收尾(门禁 → `/code-review` → 文档按块重写 → PR 不合)。
-
-## 4 · 与代码的关系
-
-本篇本身不改 `crates/`;切片 A 开工的第一个 commit 就是 A1。
-
-**三刀都做完了(2026-08-19/20 一次挂上连着做),全在 PR #105,未合。** 每刀做到哪、偏差是什么,
-不在本篇重复写 —— 三个地方说了同一件事,只会互相漂移:
-
-- **做到哪**:各篇 design 的第 3 节(工程对照)已按实况整块重写,标着「A/B/C 刀落地后重写」。
-- **没做完的**:`docs/LEFTOVERS.md` 的 V4A-N / V4B-N / V4C-N 三组。
-- **偏差与怎么验**:PR #105 正文三段(做到哪 / 偏差 / 早上怎么验)。
-
-最大的一条偏差在这里点一句,免得看本篇的人漏掉:**V4 另开了 `crates/bw-v4` 与 `crates/app-shell`
-两个新 crate,没有在 `bw-app` / `bw-store` 上做加法**——库从二十张表缩到四张之后,旧内核的用例
-整片接不上。旧的五个 crate 一行没动,旧壳 `app-desktop` 照常编译。
-
-## 5 · 挂任务时粘贴的指令
-
-> 按 `docs/v4-prototype/design/12-build-plan.md` 开工:先读 §0 总则与 §2.3 默认假设,再按 §2.1 的 A1→A7 做完切片 A,**接着按 §1 总表继续做 B、C,不要停下来等我**。每小步一个 commit(标题人话),每刀结束跑门禁 + `/code-review` + 按块重写 design/ 里与实况不符的小节,然后 push 开 PR(正文含「做到哪 / 偏差 / 早上怎么验」三段)、**不要合**,接着做下一刀。设计依据 design/01–12;与母文档冲突以 `mvp-blueprint-draft.md` §6(信息住哪:库只有四张表)与 §11 为准。子代理一律不用 Fable(见 `~/.claude/CLAUDE.md`),按难度 haiku / sonnet / opus。验证只做 §2.4 那五组读回 + 门禁 + `/code-review`,**不做 computer-use 点击巡航**(用户次日自己点全旅程)。卡住按 §2.5 处理:能绕的绕并记进 `docs/LEFTOVERS.md`,绕不过就停在可编译可读回的状态,如实写进 PR。
+最大的一条偏差在这里点一句,免得只看本篇的人漏掉:**V4 另开了 `crates/bw-v4` 与 `crates/app-shell` 两个新 crate,没有在 `bw-app` / `bw-store` 上做加法**——库从二十张表缩到四张之后,旧内核的用例整片接不上。旧的五个 crate 一行没动,旧壳照常编译。

@@ -1,5 +1,7 @@
 # 穿刺笔记：colbymchenry/codegraph 源码研究(2026-08-18)
 
+> ⚠️ **历史档案(2026-08-20 归档)**。这是 V4 设计期的一篇源码级预研,**结论已经采纳进设计与代码**,留档只为考古「当时看了什么才这么定」。现状以 `docs/v4-prototype/design/` 对应篇与 `crates/bw-v4`、`crates/app-shell` 的源码为准;还没干的活只认 `docs/LEFTOVERS.md`。
+
 > **30 秒导读**:这是对开源项目 `colbymchenry/codegraph`(~67k star,npm 包 `@colbymchenry/codegraph`,"给 Claude Code / Cursor / Codex / OpenCode / Gemini / Antigravity 等 agent 用的预索引代码知识图,自动跟代码变化同步")的**源码级**穿刺笔记,给 BW V4 的会话屏右侧代码结构侧栏、运作活②「资产盘点与代码微重构」、agent 会话铺底三处设计做参考。**状态:预研,未拍板**,不是设计文档,不改代码。规则:只信真源码,不从 README 猜结论(README 部分数字确实核对过,标注来源)。**BW 仓库本来就在用 codegraph**——本文先读 BW 自己的接入现状(§2),再读 codegraph 源码本体(§1、§3-6)。codegraph 仓库克隆自 `https://github.com/colbymchenry/codegraph`(`git clone --depth 1`,commit `c6aaa20`,2026-08-07 快照;所有 codegraph 内部路径都是该仓库路径,不是 BW 仓库路径)。
 
 ---

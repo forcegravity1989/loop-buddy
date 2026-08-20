@@ -18,4 +18,5 @@
 | `superpowers/` | `docs/superpowers/plans/*` 与已被取代的 `specs/` | superpowers 技能产出的实施计划原件;结论已并入 `plan/13`/`15`/`16`/`20` 或 `docs/v1-prototype/`。仍作数的 spec 留在 `docs/superpowers/specs/` |
 | `design/` | 仓库根 `design/` | Rust 重写前的 HTML 交互原型稿(`.dc.html` + `support.js`)与设计评审截图,2026-07-15 冻结。用浏览器打开子目录里的 `.dc.html` 仍可渲染 |
 | `verification/` | 仓库根 `verification/` + `docs/*.png` | 2026-07 中旬「完整形态」与「WorkflowHub 25 轮自举」两批的演示报告、动图(约 14MB)与截图 |
+| `v4-prototype/` | `docs/v4-prototype/` 的规划期件 | V4 设计期的一次性材料:用户口述原文、二次握手问答、交叉复核记录、内部专家评审一页纸,以及结论已进设计与代码的五篇源码级预研。现状以 `docs/v4-prototype/`(现役五篇 + design/)与 `crates/bw-v4`、`crates/app-shell` 的源码为准 |
 | `scripts/` | `scripts/make_demo_video.py` | 生成上面那批演示动图的脚本;产物已归档,脚本随之归档 |

@@ -1,6 +1,6 @@
 # 05 · 会话屏
 
-> **30 秒导读**:这篇管 V4 会话屏——一件活怎么在这个屏里被 agent 真干起来、人怎么在这里陪着看。给三种人看:复核设计的用户、以后写代码的会话、以后接新开工工具(比如再接一个 CLI)的同事。**状态:B 刀已落地三栏主体(内嵌终端 / 文件树 / 改动 diff / git 状态 / MR 号),§3 已按真代码整块重写;Cursor 适配、内嵌 Open Design、蒸馏按钮、agent 四态 hook 都还没做,在 §3 末尾如实列着。** 设计事实源是 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(下称母文档),与它冲突时以母文档为准,本篇只是把母文档第 4 站落到模块、字段、命令的粒度。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)——本篇不新开代号系列。**2026-08-20 按用户第七轮盘点整块重写了 §2.5(蒸馏产出不再落库)、§3 会话线索表(`workflow_run` 已取消)与 §5 对应的读回命令。**
+> **30 秒导读**:这篇管 V4 会话屏——一件活怎么在这个屏里被 agent 真干起来、人怎么在这里陪着看。给接着做 V4 的会话、以后要再接一个开工工具的同事看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 三栏主体(内嵌终端 / 文件树 / 改动 diff / git 状态 / MR 号)已经能用;Cursor 适配、内嵌 Open Design、蒸馏按钮、agent 四态回报这四样还没做,在 §3 末尾如实列着。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ## 0 · 这篇管什么、不管什么
 
@@ -20,7 +20,7 @@
 
 **右边**是这个 worktree 的代码结构侧栏:一棵可展开收起的文件树(点文件即在中栏打开)、一份改动文件清单(点一行即开 diff)、一小块 git 状态(分支名、领先/落后主干几个提交)、开了 MR 就有一张 MR 卡(号码、状态、检查是否通过、「合入」按钮)。
 
-**顶部**一行是活标题、当前状态、四个动作:▶开工(未开工或已停下时可点)、■停止(中止不代表放弃,活留在原地能重跑)、推到评审(人手动前推,通常不需要,agent 干完自己会推)、蒸馏(把过程蒸成一篇技能,以后同类活自动用)。人点▶开工,buddy 按这张活配的开工工具(Claude CLI / Cursor / Open Design 三选一,规则见 04 篇)真的跑起来;终端类工具在中栏终端里看着 agent 敲命令、改文件、跑测试,网页内嵌类工具在 Open Design 标签里看着它画图。活推到评审中后,人点合入、点完成——那是第 5 站的事,本篇只到"活被推到评审中"为止。
+**顶部**一行是活标题、当前状态和动作条:▶开工(未开工或已停下时可点)、■停止(中止不代表放弃,活留在原地能重跑)、**提交并开 MR**(agent 干完之后由人点这一下,把这棵树里的改动提交、推分支、开 MR,活进评审中)、只推到评审(纯改状态,不碰仓)、蒸馏(把过程蒸成一篇技能,以后同类活自动用;还没做)。**没有任何东西会自动开 MR**——什么时候算干完由人说了算。人点▶开工,buddy 按这张活配的开工工具(Claude CLI / Cursor / Open Design 三选一,规则见 04 篇)真的跑起来;终端类工具在中栏终端里看着 agent 敲命令、改文件、跑测试,网页内嵌类工具在 Open Design 标签里看着它画图。活推到评审中后,人点合入、点完成——那是第 5 站的事,本篇只到"活被推到评审中"为止。
 
 ## 2 · 设计
 
@@ -53,9 +53,27 @@
 - **git 状态**:分支名、领先/落后主干几个提交、有没有未提交的改动——新函数,见 §3。
 - **MR 卡**:号码、状态(开着/已合入)、检查是否通过、一个「合入」按钮。合入按钮直接调已有的 `Command::MergeIssuePr`,不新造命令;"检查是否通过"今天没有对应查询函数(`github.rs` 现有的只有 `open_pr`/`merge_pr`/`issue_state`),如实记进 §3 的缺口。
 
-### 2.4 顶部一行:活标题 / 状态 / 四个动作 / agent 状态怎么回报
+### 2.4 顶部一行:活标题 / 状态 / 动作条 / agent 状态怎么回报
 
-四个按钮:▶开工 / ■停止 / 推到评审 / 蒸馏,前三个直接对应已有命令(`RunIssue` / `CancelRun` / `TransitionIssue`,见 §3)。本篇重点是"▶开工按工具怎么分发"和"agent 状态怎么真实回报"这两件事。
+动作条上是:▶开工 / ■停止 / **提交并开 MR** / 只推到评审 / 蒸馏。前四个对应已有命令
+(`RunIssue` / `CancelRun` / `SubmitIssueWork` / `TransitionIssue`,见 §3),蒸馏还没有命令、
+是灰的。本篇重点是"▶开工按工具怎么分发"、"干完了怎么交出去"和"agent 状态怎么真实回报"
+这三件事。
+
+**干完了怎么交出去(第 4 站到第 5 站那一下)**:agent 是在这张活自己的 worktree 里改的
+文件,那棵树和它的分支在别人那儿是看不见的。**「提交并开 MR」就是把它变成可评审的
+东西**:把树里的改动提交掉(agent 自己已经提交过的就跳过)→ 推分支 → 开 MR → 活进
+「评审中」。三条守则:
+
+- **由人点,而且最远只到「评审中」**。agent 什么时候算干完只有人知道;「完成」还是得
+  评审完之后再点一次(那条边在状态机上只有「评审中 → 完成」这一个入口)。
+- **没干出东西就如实弹回**。判据是这棵树比主检出多几个提交,不是"有没有文件动过";
+  0 个就直接拒绝,活留在原地,不留分支、不留 MR 号。
+- **每一条不做的理由都说出来**。没挂远端、推分支失败、开 MR 失败,都写进事件正文;
+  界面上绝不出现一个来历不明的空 MR 号,失败也不假装进了评审,可以重试。
+
+旁边那个「只推到评审」是**纯状态动作**,不碰仓——留给"改动不在这棵树里"或者"远端还
+没挂上"的情况。计划屏把卡拖到「评审中」也是同一件事,那个确认框里写明了。
 
 **▶开工的分发**:一张活的开工工具字段(`tool`:claude_cli / cursor / open_design,母文档 §6 已定义在 `issue` 表上)由 04 篇的工具映射决定默认值、人可在活上换。会话屏只认两类接法(母文档 §3 第 4 站已定,预研见 `deepseek-harness.md` §5 路线 C):
 - **终端类**(Claude CLI、Cursor):在 PTY 里起一条命令,注入 buddy 系统提示词 + 这件活的技能/workflow 正文(正文内容由 04 篇的注入规则决定,本篇只管这段文本最终被塞进 PTY 启动命令的哪个位置)。Claude CLI 已经是真代码(`interactive_cli.rs` 的 `build_startup_plan`);Cursor 今天是设计稿未落地,落地做法见 §3。
@@ -76,7 +94,7 @@
 
 ### 2.5 蒸馏
 
-顶部「蒸馏」是活的附属动作,不是新命令——直接复用已有的 `Command::DistillSkillFromIssue`。点一下起一次真实的交互式会话(和▶开工走同一套 `InteractiveExecutor`),agent 把这件活的过程整理成一篇技能草稿,人确认名字/描述/正文,直接产出到项目仓 `.claude/skills/`——**不再有落库这一步**:V1/V2 时代有一张 `skill` 表登记技能与来源活的关系,02 篇第七轮盘点后判定"没人取的不存",这张表连同它的 `source_issue_id` 列一起被取消(仓内 `.claude/skills/**/SKILL.md` 扫目录即得,见 02 篇 §2.5/§2.6)。「记着来源活」这件事因此挪进产出的文件本身——具体用哪个 frontmatter 字段名装来源活号,留给 [04-tools-and-workflows.md](04-tools-and-workflows.md)(技能包格式的地盘)定,05 只提出这条诉求。这条蒸馏链路本身(交互式会话产出草稿、人确认、写仓)V1/V2 已用真实数据跑通,V4 只是把入口从旧界面搬到会话屏顶部、去掉库这一步,别的机制不变。
+顶部「蒸馏」是活的附属动作,不是新命令——直接复用已有的 `Command::DistillSkillFromIssue`。点一下起一次真实的交互式会话(和▶开工走同一套 `InteractiveExecutor`),agent 把这件活的过程整理成一篇技能草稿,人确认名字/描述/正文,直接产出到项目仓 `.claude/skills/`——**不再有落库这一步**:V1/V2 时代有一张 `skill` 表登记技能与来源活的关系,02 篇盘点时判定"没人取的不存",这张表连同它的 `source_issue_id` 列一起被取消(仓内 `.claude/skills/**/SKILL.md` 扫目录即得,见 02 篇 §2.5/§2.6)。「记着来源活」这件事因此挪进产出的文件本身——具体用哪个 frontmatter 字段名装来源活号,留给 [04-tools-and-workflows.md](04-tools-and-workflows.md)(技能包格式的地盘)定,05 只提出这条诉求。这条蒸馏链路本身(交互式会话产出草稿、人确认、写仓)V1/V2 已用真实数据跑通,V4 只是把入口从旧界面搬到会话屏顶部、去掉库这一步,别的机制不变。
 
 ### 2.6 模块边界
 
@@ -93,9 +111,8 @@
 
 ## 3 · 工程对照
 
-> **B 刀落地后整节重写。** 原文写在「V4 摞在 `app-desktop` 上」这个前提上,而 V4 另开了
-> `crates/bw-v4` + `crates/app-shell`(01 篇 §2.6),原文点名的落点、命令名、函数名多数
-> 落空。下面是真代码,不是计划。
+> 下面写的是真代码,不是计划。落点在 V4 自己的两个 crate 里(`crates/bw-v4` + 
+> `crates/app-shell`,见 01 篇 §2.1),旧壳 `app-desktop` 一行没用到。
 
 **目录**:界面在 `crates/app-shell/src/screens/session/mod.rs`(三栏布局 + 顶部条,只管布局
 与状态);内嵌终端在 `crates/app-shell/src/adapters/terminal_xterm/`(xterm.js 资产、初始化
@@ -105,7 +122,7 @@
 
 **库**:只用 `claude_conversation` 一张表,存的是**身份**(`ConversationId` / `--resume` id /
 worktree 路径 / 分支名),`issue_id UNIQUE` 就是「一件活最多一个会话」这条规则本身。进程本
-身在内存的 `TerminalManager` 里,死了就没了,也不该存。`workflow_run` 表在 02 篇第七轮已取
+身在内存的 `TerminalManager` 里,死了就没了,也不该存。`workflow_run` 表在 02 篇已取
 消,所以本屏**不展示成败与耗时**——一轮跑成没成看远端 MR 合没合入,不查任何 `outcome` 列。
 
 **命令**(全部在 `crates/bw-v4/src/command.rs`,不是 `bw-app`):
@@ -114,11 +131,12 @@ worktree 路径 / 分支名),`issue_id UNIQUE` 就是「一件活最多一个会
 |---|---|
 | `RunIssue { id }` | ▶开工。工作区目录在就起内嵌终端跑真 claude;不在就退回阻塞那条路用自我标注的替身,产出带【mock】字样 |
 | `CancelRun { id }` | ■停止。**只关 PTY,状态原地不动**——停下来既不是失败也不是完成 |
-| `TransitionIssue { id, to }` | 推到评审。Done 那条边由 `bw_core` 的状态机守着,会话屏根本没有「完成」按钮 |
+| `SubmitIssueWork { id }` | 「提交并开 MR」。提交这棵树里的改动 → 推分支 → 开 MR → 推到评审中。这棵树比主检出没多出提交就如实弹回,状态不动;MR 没开成也照实说原因,不摆空号 |
+| `TransitionIssue { id, to }` | 只推到评审(纯状态动作)。Done 那条边由 `bw_core` 的状态机守着,会话屏根本没有「完成」按钮 |
 | `MergeAndSettle { id }` | 通知屏的「合入并完成」,不在本屏(见 07 篇) |
 | `TerminalInput { conversation_id, bytes }` / `TerminalResize { conversation_id, cols, rows }` | 键盘与尺寸 |
 
-原文提的 `OpenFileTab`/`OpenDiffTab`/`ExpandTreeDir` 三条**没有做成 `Command`**:它们不改任何
+`OpenFileTab`/`OpenDiffTab`/`ExpandTreeDir` 三样**没有做成 `Command`**:它们不改任何
 数据,是纯导航。做成命令会让「命令 = 会改变什么」这条线变模糊。实际走的是桥自己的
 `Req::{SelectSession, SessionTab, ToggleDir, OpenFile}`(`crates/app-shell/src/bridge/mod.rs`),
 只改壳这边的 `UiState`,一律不进库。
@@ -128,12 +146,12 @@ worktree 路径 / 分支名),`issue_id UNIQUE` 就是「一件活最多一个会
 的会出事:终端一秒能吐几百批字节,每批都重拼一次 ViewModel 会把界面拖垮;而且字节是一次性
 的流,进了 ViewModel 每次重渲染都会被重新写进终端一遍。
 
-**agent 状态:只有两态,而且都是真的。** 原文设想的四态(运行中/等你输入/空闲/已推评审)要
+**agent 状态:只有两态,而且都是真的。** 设计里的四态(运行中 / 等你输入 / 空闲 / 已推评审)要
 靠 claude 的 hook 回传 `Notification`/`PreToolUse`,**这一步没做**——`hook_listener` 那套增量
 留在 `docs/LEFTOVERS.md`。今天唯一真实的信号是 `TerminalManager::is_live`:进程在 = 运行中,
 不在 = 空闲。「等你输入」不显示,不猜。这和「没数据就是 Unknown、绝不假装绿」是同一条精神。
 
-**右栏四类数据全部现算**,函数在 `crates/bw-v4/src/git.rs`(不是原文说的 `bw-engine::workspace`):
+**右栏四类数据全部现算**,函数在 `crates/bw-v4/src/git.rs`:
 
 | 要什么 | 函数 | 说明 |
 |---|---|---|
@@ -142,8 +160,8 @@ worktree 路径 / 分支名),`issue_id UNIQUE` 就是「一件活最多一个会
 | 单文件 diff | `git::file_diff(ws, rel)` | 暂存 + 未暂存两段拼起来;没跟踪的文件退回全文并标一行,不给人看空白 |
 | 分支状态 | `git::ahead_behind(ws, "main")` | 问不出来返回 `None`,界面显示「—」,**不显示 0**(0 会被读成「和主干一样」) |
 
-**MR 卡**只有号码,没有「检查是否通过」那一列——`gh pr checks` 那个函数今天不存在,原文把它
-列成缺口,B 刀没补,仍是缺口(见 `docs/LEFTOVERS.md`)。
+**MR 卡**只有号码,没有「检查是否通过」那一列 —— 对应 `gh pr checks` 的函数今天不存在,
+是已知缺口(见 `docs/LEFTOVERS.md`)。
 
 **没做的三件**,如实列在这里而不是留在正文里当描述:Cursor 适配(`CURSOR` 常量仍
 `supported: false`)、内嵌 Open Design 页签、蒸馏按钮(`DistillSkillFromIssue` 在 V4 还没有对

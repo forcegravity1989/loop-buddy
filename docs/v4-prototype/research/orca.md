@@ -1,6 +1,6 @@
 # 穿刺笔记：stablyai/orca 源码研究(2026-08-18)
 
-> **30 秒导读**:这是对开源项目 `stablyai/orca`(~47k star,"多路并行 agent 的 IDE")的**源码级**穿刺笔记,给 BW(Rust/Dioxus/wry 单人构建者工作台)的会话屏/终端/侧边栏设计做参考。**状态:预研,未拍板**;结论已并入 [mvp-blueprint-draft.md](../mvp-blueprint-draft.md) 待拍-11(推荐「借模式,不整体嵌」)。子代理按真实源码写就,文件锚点指向 clone 下来的快照。**预研,未拍板,不是设计文档,不改代码**。规则:只信真源码,不从 README 猜。仓库克隆自 `https://github.com/stablyai/orca`(`git clone --depth 1`,取的是 2026-08-18 的 main 分支快照,commit 未固定,以内容为准)。BW 早年已有一份对 orca 更旧版本的笔记 `docs/v1-prototype/orca-terminal-session-reference.md`(那时代号 orca-main,还有独立 daemon 进程);本篇是**新快照**,架构已变(daemon 概念消失,见 §1)。所有引用路径都是 orca 仓库内路径,不是 BW 仓库路径。
+> **30 秒导读**:这是对开源项目 `stablyai/orca`("多路并行 agent 的 IDE")的**源码级**穿刺笔记,看它的终端内嵌、会话生命周期、右侧栏是怎么做的。**为什么还留着**:V4 的会话屏和两个适配模块(`crates/app-shell/src/adapters/terminal_xterm/`、`claude_cli/`)的 README 直接引它当接法依据,删了源码注释就断链。**怎么读**:结论「借模式,不整体嵌」已经采纳并落进代码,这里是当时看到的事实;要看今天怎么实现的,读 [`../design/05-session-screen.md`](../design/05-session-screen.md) 与那两个适配模块的源码。
 
 ---
 

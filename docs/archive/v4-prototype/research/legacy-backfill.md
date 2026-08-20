@@ -1,6 +1,8 @@
 # 老项目历史回填预研:老仓里有什么、能捞出什么、可信到什么程度(2026-08-19)
 
-> **30 秒导读**:这是一篇**预研**,不是设计文档,不改代码。背景:2026-08-19 内部专家评审提了一条期望——「老的项目进来,能根据老项目自己记录的千奇百怪的记录,完成 buddy 规范下的信息回填,总览能看到老项目之前的一些运作情况」,会议结论是「老项目捞回来是为了 MVP 出了之后组内所有项目就都纳入进来方便宣传」。这条已经写进设计事实源 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(第 0 站、§2.6、待拍-27,已定)和 [`../standard-module-draft.md`](../standard-module-draft.md)(第 3、7 类),但只定了「有这回事」,没定「老项目里到底有哪些记录、每种怎么捞、捞成什么样、可信度多少」——这篇补这个缺口,给后续详细设计 [`../design/03-standard-and-backfill.md`](../design/03-standard-and-backfill.md)、[`08-overview-derivation.md`](../design/08-overview-derivation.md)、[`09-ops-workflows.md`](../design/09-ops-workflows.md) 打底。**状态:预研,待用户复核,不阻塞其它工作**。回填(本文和母文档共用的词,还没进 `CONTEXT.md`):把老项目自己五花八门的历史记录(提交、标签、远端 issue……)转成 buddy 规范认得的文件和数据行,标清楚「这是补录的历史,不是 buddy 里真做的活」。方法:读 buddy 现有代码(`crates/bw-engine/src/git_log.rs`、`evidence.rs`、`codehub.rs`、`github.rs`)确认哪些已经能读、哪些还没有;在 buddy 自己的仓(`forcegravity1989/loop-buddy`)上真跑一遍 git 和 `gh` 命令验证,证据见姊妹文件 [`legacy-backfill-sample-buddy.md`](legacy-backfill-sample-buddy.md)。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号索引查 [`../../code-schemes.md`](../../code-schemes.md)(本文不新开任何代号)。
+> ⚠️ **历史档案(2026-08-20 归档)**。这是 V4 设计期的一篇源码级预研,**结论已经采纳进设计与代码**,留档只为考古「当时看了什么才这么定」。现状以 `docs/v4-prototype/design/` 对应篇与 `crates/bw-v4`、`crates/app-shell` 的源码为准;还没干的活只认 `docs/LEFTOVERS.md`。
+
+> **30 秒导读**:这是一篇**预研**,不是设计文档,不改代码。背景:2026-08-19 内部专家评审提了一条期望——「老的项目进来,能根据老项目自己记录的千奇百怪的记录,完成 buddy 规范下的信息回填,总览能看到老项目之前的一些运作情况」,会议结论是「老项目捞回来是为了 MVP 出了之后组内所有项目就都纳入进来方便宣传」。这条已经写进设计事实源 [`../mvp-blueprint-draft.md`](../../../v4-prototype/mvp-blueprint-draft.md)(第 0 站、§2.6、待拍-27,已定)和 [`../standard-module-draft.md`](../../../v4-prototype/standard-module-draft.md)(第 3、7 类),但只定了「有这回事」,没定「老项目里到底有哪些记录、每种怎么捞、捞成什么样、可信度多少」——这篇补这个缺口,给后续详细设计 [`../design/03-standard-and-backfill.md`](../../../v4-prototype/design/03-standard-and-backfill.md)、[`08-overview-derivation.md`](../../../v4-prototype/design/08-overview-derivation.md)、[`09-ops-workflows.md`](../../../v4-prototype/design/09-ops-workflows.md) 打底。**状态:预研,待用户复核,不阻塞其它工作**。回填(本文和母文档共用的词,还没进 `CONTEXT.md`):把老项目自己五花八门的历史记录(提交、标签、远端 issue……)转成 buddy 规范认得的文件和数据行,标清楚「这是补录的历史,不是 buddy 里真做的活」。方法:读 buddy 现有代码(`crates/bw-engine/src/git_log.rs`、`evidence.rs`、`codehub.rs`、`github.rs`)确认哪些已经能读、哪些还没有;在 buddy 自己的仓(`forcegravity1989/loop-buddy`)上真跑一遍 git 和 `gh` 命令验证,证据见姊妹文件 `legacy-backfill-sample-buddy.md`(原件已删,见 git 历史)。看不懂的词查 [`../../../CONTEXT.md`](../../../../CONTEXT.md);代号索引查 [`../../code-schemes.md`](../../../code-schemes.md)(本文不新开任何代号)。
 
 **一句话结论**:老项目里能捞的东西分三层可信度——git 本地历史(提交、合入记录、按周吞吐)和远端 issue/MR 列表这两类是**可复算的硬数据**,今天 buddy 只读了一小半(`git_log.rs`/`evidence.rs` 没有按日期分周、没有标签、没有合入记录识别;`github.rs`/`codehub.rs` 只有「未关闭 issue」,没有「已关闭」「已合并 MR」的列表读法,都要新增);README/CHANGELOG/docs 这类仓内文档要靠 agent 读文本才能提炼成一句话或一行版本记录,格式千奇百怪没有通用解析器;北极星、对标、「在研版本」起点这三样,任何历史记录都推不出来,必须人填。三条防线锁住诚实:**没有就留空,不拿 commit 日期硬造版本号**;**回填的东西全部带「回填」标记,单独一个 MR,人评审**;**回填的数据绝不流入健康信号灯**(唯一的例外——「上周有交付」——本来就是从 git 合入记录推的真实观测,和「回填历史」是两回事,不要混着理解)。在 buddy 自己仓上真跑一遍(615 次提交、0 个标签、50 个已合并 PR、44 个已关闭 issue,数字见样例文件)验证了这套判断,也真的踩到了「消息文字匹配漏掉 23 条手写合并提交」「批量关闭事件让周度指标失真」这两个如果不小心会做错的坑。
 
@@ -45,13 +47,13 @@
 
 ### 1.4 项目群历史(配了才有)
 
-「上周在讨论什么」这类信息只能从项目群历史里来,是「上周实际发生了什么」的参考,**不进仓、不进库**——另有一篇预研专门写这块([`chat-group.md`](chat-group.md)),本文不展开,只在这里点一句:老项目历史回填的四种原料(git、仓内文档、远端 issue/MR、项目群)里,群历史是唯一「配了才有、且不落地」的一种。
+「上周在讨论什么」这类信息只能从项目群历史里来,是「上周实际发生了什么」的参考,**不进仓、不进库**——另有一篇预研专门写这块([`chat-group.md`](../../../v4-prototype/research/chat-group.md)),本文不展开,只在这里点一句:老项目历史回填的四种原料(git、仓内文档、远端 issue/MR、项目群)里,群历史是唯一「配了才有、且不落地」的一种。
 
 ---
 
 ## 2 · 回填成什么:每个产物的字段与样例
 
-对齐 `standard-module-draft.md` 定义的规范骨架,回填不新造文件类型,只是把这些已经定好位置的文件/数据行填上「历史」内容,并且**每一处都带「回填」标记**。下面每个产物给字段定义 + 一段用 buddy 自己仓渲染出来的真实样例(完整版在 [`legacy-backfill-sample-buddy.md`](legacy-backfill-sample-buddy.md),这里摘要);buddy 自己的仓恰好是一个「没有 tag、没有 CHANGELOG」的老项目,所以下面能看到「有数据就填、没数据就诚实留空」两种情况都真实发生。
+对齐 `standard-module-draft.md` 定义的规范骨架,回填不新造文件类型,只是把这些已经定好位置的文件/数据行填上「历史」内容,并且**每一处都带「回填」标记**。下面每个产物给字段定义 + 一段用 buddy 自己仓渲染出来的真实样例(完整版在 `legacy-backfill-sample-buddy.md`(原件已删,见 git 历史),这里摘要);buddy 自己的仓恰好是一个「没有 tag、没有 CHANGELOG」的老项目,所以下面能看到「有数据就填、没数据就诚实留空」两种情况都真实发生。
 
 **a) `docs/releases.md` 历史段** —— 字段:版本号、日期、来源徽记(`回填自 tag` / `回填自 CHANGELOG` / `回填自远端 release`)、一句话说明(能摘到才填)。样例(buddy 仓无 tag/无 CHANGELOG,如实为空):
 ```markdown
@@ -100,7 +102,7 @@ origin=backfill  #81  术语治理 · 完成 ADR0001 遗留改名……     open
 
 ## 4 · 可信度与防伪
 
-1. **每个数字都能重算**:回填不接受「agent 说的」当数据来源,只接受「能用一条 git 或 `gh api` 命令重新跑出来」的数字。样例文件 [`legacy-backfill-sample-buddy.md`](legacy-backfill-sample-buddy.md) 把每一步用到的命令都写在文件里,就是为了证明这条(呼应 `CLAUDE.md`「核心纪律」第 1 条「报告不代答,读回为证」,回填只是把这条纪律用到「历史数据」这个新场景)。
+1. **每个数字都能重算**:回填不接受「agent 说的」当数据来源,只接受「能用一条 git 或 `gh api` 命令重新跑出来」的数字。样例文件 `legacy-backfill-sample-buddy.md`(原件已删,见 git 历史) 把每一步用到的命令都写在文件里,就是为了证明这条(呼应 `CLAUDE.md`「核心纪律」第 1 条「报告不代答,读回为证」,回填只是把这条纪律用到「历史数据」这个新场景)。
 2. **绝不发明数据**:git/远端/群里没有的东西就空着。buddy 自己的仓就是活样例——没有 tag、没有 CHANGELOG,§2(a)的版本时间线渲染出来就是「未发现可回填的版本记录」这句诚实的空,不会因为找不到 tag 就拿 commit 日期硬造一个版本号。
 3. **回填标记贯穿到底**:文档段落带「(回填)」角标(如 `docs/plan/history.md` 的标题本身和每行的来源尾注),库里 `issue.origin = backfill`。这个标记还有第二个作用——**支持幂等重跑**:重跑只覆盖上次回填生成、带标记的内容,不碰人后来手改过的部分,这和 `standard-module-draft.md` 第 2 类「AGENTS.md 升级时 buddy 只替换带标记的段」是同一套机制,详细设计可以直接复用,不必另发明一套。
 4. **不点灯**:总览「历史运作(回填)」块本身**不参与健康信号推导**——它只呈现,不判断好坏。唯一允许流入 health 灯的信号是第 1 站 health 规则的输入 (c)「上周有交付(合入或发版)」,但这条本来就是从**当前**的 git 合入记录实时推导的真实观测,和「回填一段历史给人看」是两件不同的事,不要因为两者都碰 git 合入记录就混为一谈——回填面向过去、只解释,health 面向现在、真实观测才能点灯。
@@ -109,7 +111,7 @@ origin=backfill  #81  术语治理 · 完成 ADR0001 遗留改名……     open
 
 ## 5 · 真跑一遍的证据
 
-在 buddy 自己的仓(`forcegravity1989/loop-buddy`)上按 §1、§2 的方法真跑了一遍,完整数字、命令、渲染样例见 [`legacy-backfill-sample-buddy.md`](legacy-backfill-sample-buddy.md)。三个最值得记住的发现已经写进 §1.1(用双亲结构而非文字匹配识别合入记录)、§1.2/§2(a)(没有 tag 的老项目版本时间线该诚实留空)、§2(d)(批量关闭事件会让「issue 关闭速率」这类周度指标失真,不能直接点灯)。
+在 buddy 自己的仓(`forcegravity1989/loop-buddy`)上按 §1、§2 的方法真跑了一遍,完整数字、命令、渲染样例见 `legacy-backfill-sample-buddy.md`(原件已删,见 git 历史)。三个最值得记住的发现已经写进 §1.1(用双亲结构而非文字匹配识别合入记录)、§1.2/§2(a)(没有 tag 的老项目版本时间线该诚实留空)、§2(d)(批量关闭事件会让「issue 关闭速率」这类周度指标失真,不能直接点灯)。
 
 ---
 

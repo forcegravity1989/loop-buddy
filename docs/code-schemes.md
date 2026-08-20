@@ -48,7 +48,7 @@
 | **V3-cowelink-sidecar** | `docs/v3-prototype/cowelink-web-sidecar.md` | cowelink 长出本机网页旁路,buddy iframe 内嵌;不弹窗、不 HWND | 设计已记,未落地 |
 | **V3-use-fix** | `docs/v3-prototype/onboard-list-and-claude-resolve.md` | V3 实践使用:安装器/探测认 claude.cmd + 创建流拉 999/可搜索下拉 + 程序图标;纳入选分支不在本轮 | 本轮落地 |
 | **减负-1 … 减负-21** | `docs/LEFTOVERS.md`「当前开着」表 + 文末「减负重构收据」 | 2026-08-17/18 减负重构会话的滞后清单(冗余功能 / 结构债 / 已删收据),从 `docs/BACKLOG.md` 并入时沿用原序号;中文前缀,不与任何字母系列撞车 | 1、2 已做;其余按表内「阶段」列排 |
-| **V4-A1–A7 / B1–B8 / C** | `docs/v4-prototype/design/12-build-plan.md` §1、§2.1 | V4 开发的三刀(A 骨架+数据+主环 / B 运作活+会话屏 / C 回填+项目群+包);A 刀内再分 A1 数据层 … A7 收尾,B 刀内再分 B1 运作剧本 … B8 收尾。**与 plan/06 的 A0–A5、plan/18 的 A1/A2/A4 无关** | A、B、C 三刀都已交付(都在 PR #105,未合) |
+| **V4-A…F**(刀号) | `docs/v4-prototype/design/12-build-plan.md` §1 | V4 开发的六刀:A 骨架+数据+主环 / B 运作活+会话屏 / C 回填+项目群+包 / D 九屏照高保真重排 / E 每张活一棵 worktree+铺底提 MR / F 提交并开 MR。A 刀内再分 A1 数据层 … A7 收尾,B 刀内再分 B1 运作剧本 … B8 收尾(逐步任务书已随刀跑完删除,考古去 git 历史)。**与 plan/06 的 A0–A5、plan/18 的 A1/A2/A4 无关** | A–E 已合入 main(A/B/C 在 PR #105,D/E 在 PR #106);F 在 PR 上等合 |
 | **V4A-1…** | `docs/LEFTOVERS.md` | V4 A 刀留下的遗留条目(命令有了但界面没入口、只做了第 1 步之类) | 开着 |
 | **V4B-1…** | `docs/LEFTOVERS.md` | V4 B 刀留下的遗留条目(运作活的 agent 侧产出、旧技能文件并存、agent 只有两态之类) | 开着 |
 | **V4C-1…** | `docs/LEFTOVERS.md` | V4 C 刀留下的遗留条目(回填只做了第 1 层、代码图三样只做一样、群摘要没做之类) | 开着 |

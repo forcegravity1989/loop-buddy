@@ -1,12 +1,12 @@
 # 01 · 新壳怎么搭
 
-> **30 秒导读**:这篇回答一个问题——**V4 新壳(六入口界面)落在哪个 crate、目录怎么分、模块怎么防止互相纠缠、命令/事件总线加什么、旧壳何时能删**。不讲某一屏具体长什么样(那是 02-10 篇的事)。**现在作数,待用户复核,尚未开工写代码**。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。全文数字来自真实读代码(`wc -l`/`grep`/`cargo tree`),不是猜的。**2026-08-20 按用户第七轮盘点重写了 §2.6 命令总表里技能/群通知/发版三类命令的落点表述(不再假设 `chat_outbox`/`skill_package`/`release`/`agent` 等已取消的表存在),并同步修正 §3.5 代码骨架与 §6 开放问题第 5 条。**
+> **30 秒导读**:这篇回答一个问题——**V4 的界面壳落在哪个 crate、目录怎么分、模块怎么防止互相纠缠、命令 / 事件总线长什么样、旧壳什么时候能删**。不讲某一屏具体长什么样(那是 02–11 篇的事)。给接着做 V4 的会话看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ---
 
 ## 0 · 这篇管什么、不管什么
 
-**管**:对应母文档 [`../../mvp-blueprint-draft.md`](../../mvp-blueprint-draft.md) §7「建法」、§5「信息架构」,待拍-11(借模式、模块管控)、17(新壳+旧内核)、18(减负线先合)、19(高保真=可点击 HTML)、24(开工工具三列、不维护 agent 名单)、26(项目群工厂)。具体是:新壳是新开 crate 还是塞进 `app-desktop`、叫什么、目录长什么样;「一屏一模块」「一个外部能力一个适配模块」靠什么机制钉住(不是靠自觉);`bw-app` 的 `Command`/`Event` 要新增哪些名字(只列名字+一句话);深链环境变量在六入口下怎么改;文件行数守卫;新壳与 `standard/` 的接缝(只管放哪/怎么进二进制/版本号从哪读);旧壳共存与删除判据。
+**管**:对应母文档 [`../../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) §7「建法」、§5「信息架构」,待拍-11(借模式、模块管控)、17(新壳+旧内核)、18(减负线先合)、19(高保真=可点击 HTML)、24(开工工具三列、不维护 agent 名单)、26(项目群工厂)。具体是:新壳是新开 crate 还是塞进 `app-desktop`、叫什么、目录长什么样;「一屏一模块」「一个外部能力一个适配模块」靠什么机制钉住(不是靠自觉);`bw-app` 的 `Command`/`Event` 要新增哪些名字(只列名字+一句话);深链环境变量在六入口下怎么改;文件行数守卫;新壳与 `standard/` 的接缝(只管放哪/怎么进二进制/版本号从哪读);旧壳共存与删除判据。
 
 **不管**:每屏具体交互与视觉规格(05-09 篇)、`.bw/*.toml` 与仓文件格式(02 篇)、规范铺底流程本身(03 篇)、开工工具怎么注册与 workflow 怎么注入(04 篇)、验收怎么跑(10 篇)。`standard/` 内部结构是 03 篇的事,这篇只钉外壳怎么读它。
 
@@ -24,7 +24,7 @@
 
 ### 2.1 V4 新开哪两个 crate
 
-**A 刀落地后重写。** 原文只讨论了新壳一个 crate,前提是内核继续用 `bw-store` + `bw-app`。真开工才发现这个前提不成立:第七轮盘点把本机库缩到四张表之后,`bw-store` 的二十张表与 `bw-app` 架在这些表上的用例整片接不上,改它等于把旧库拆了重装,还会连累仍在跑的 V3。于是 V4 开了**两个** crate:
+V4 开了**两个** crate。为什么不摞在旧内核上:本机库缩到四张表之后,`bw-store` 的二十张表与 `bw-app` 架在这些表上的用例整片接不上,改它等于把旧库拆了重装,还会连累仍在跑的 V3。
 
 - **`crates/bw-v4`(V4 内核)**:四张表的库 + 仓文件解析 + 现算推导 + 命令/事件总线 + 规范铺底。复用 `bw-core`(五阶段元数据、活的状态机、id)与 `bw-engine`(执行器、工作区、`.bw/metrics.toml` 解析),**不依赖 `bw-store` / `bw-app`**。它是第六个内核 crate,已经加进 `scripts/guard-kernel-ui-free.sh` 的稽查名单(该脚本原本管 `bw-core bw-engine bw-store bw-app ui` 五个)。
 - **`crates/app-shell`(V4 新壳)**:九屏 + theme + 桥。跟现有 `app-desktop` 同属"UI 相关、允许依赖 dioxus/wry"一层,不进稽查名单,继续用 `app-` 前缀一眼认出"这是壳"。
@@ -76,7 +76,7 @@ crates/app-shell/
 1. **每屏只有一个公开出口**:`screens/<name>/mod.rs` 只 `pub` 一个函数(签名见 §3),接收这一屏的 ViewModel + 往内核发命令的回调,返回 Dioxus `Element`。屏内部随便拆文件,但除这一个函数外目录下不再有第二个能被外部引用的 `pub` 项。
 2. **共享数据只能经一个共用的 ViewModel 模块**:`plan` 屏和 `overview` 屏都要展示"活的推动指标"时,这个 DTO 类型定义在共用模块里,两屏各自 `use crate::vm::...`,**永远不允许** `plan` 里出现 `use crate::screens::overview::...`——每层只能向下依赖,不能跨并列层互相 reach into。
 
-   **A 刀落地后改**:原文说这个共用模块是 `crates/ui`。真做的时候没有用它——`ui` 是 V3 的 crate,里面的 ViewModel 全部架在旧库的二十张表上,V4 一条也用不上,而这一刀说好了不动旧 crate。V4 的 ViewModel 因此就近放在新壳自己的 `crates/app-shell/src/vm.rs`,`crates/ui` 一行没改。等旧壳删掉、`ui` 跟着退场,这个模块要不要单独成 crate 再说 —— 现在多一个 crate 只是多一层没人用的间接。
+   **这个共用模块不是 `crates/ui`**:`ui` 是 V3 的 crate,里面的 ViewModel 全部架在旧库的二十张表上,V4 一条也用不上,而 V4 说好了不动旧 crate。V4 的 ViewModel 因此就近放在新壳自己的 `crates/app-shell/src/vm.rs`,`crates/ui` 一行没改。等旧壳删掉、`ui` 跟着退场,这块要不要单独成 crate 再说 —— 现在多一个 crate 只是多一层没人用的间接。
 3. **guard 脚本兜底**(§3 给完整脚本):新增 `scripts/guard-no-cross-screen-import.sh`,对 `crates/app-shell/src/screens/*/` 逐目录 grep `crate::screens::`,命中除自己以外的屏幕名就报错。和 `guard-kernel-ui-free.sh` 并列进门禁清单(建议,不改 CLAUDE.md,由用户后续拍板)。
 
 ### 2.4 「一个外部能力一个适配模块」
@@ -85,10 +85,10 @@ crates/app-shell/
 
 | 模块 | 借什么(已核实的判断,不是代码) | 出处 |
 |---|---|---|
-| `terminal_xterm` | xterm 6 原生选区 API + 选中即复制;暗色终端条只用这一块 | [orca.md](../../research/orca.md) §2(a);v3-ui-reference.md §4.9 |
+| `terminal_xterm` | xterm 6 原生选区 API + 选中即复制;暗色终端条只用这一块 | [orca.md](../research/orca.md) §2(a);v3-ui-reference.md §4.9 |
 | `claude_cli` | agent 状态判定改「CLI 官方 hooks/statusLine 主动上报」,不猜终端输出(BW 已有 hook 回收,对齐即可,不抄 Orca 的多 agent 归一化层) | orca.md §2(d)、§5(B) |
 | `cursor` | `docs/v3-prototype/cursor-agent-executor.md` 设计稿(未落地,V4 落) | 待拍-09 |
-| `open_design` | 沿用 `app-desktop/src/open_design.rs` 的"本机探活+WebView 内嵌 URL",已核实 Open Design 与 DSH 的关系不影响这条接法 | [deepseek-harness.md](../../research/deepseek-harness.md) §3、§5(B) |
+| `open_design` | 沿用 `app-desktop/src/open_design.rs` 的"本机探活+WebView 内嵌 URL",已核实 Open Design 与 DSH 的关系不影响这条接法 | [deepseek-harness.md](../../archive/v4-prototype/research/deepseek-harness.md) §3、§5(B) |
 | `codegraph` | 右侧代码结构侧栏首版只文件树+diff(待拍-22),`codegraph` 子进程调用留增量口子,不做符号级大纲 | 母文档「codegraph 怎么用」段;orca.md §3 |
 | `chat_group` | 工厂模式,核心两个函数——发一条消息到群 / 拉一段时间群历史;提供方今天两位:内部 WeLink(同事实现)、外部待定(先放「未配置」) | 待拍-26 |
 
@@ -96,14 +96,14 @@ crates/app-shell/
 
 ### 2.5 从 V3 抄什么(不推倒视觉与好组件)
 
-待拍-17/23 已定不推倒 V3 视觉。子代理已从真实源码抄出完整参照:[`../../hifi/v3-ui-reference.md`](../../hifi/v3-ui-reference.md)。要抄的清单(V3 代码改了以真代码为准重抄):
+待拍-17/23 已定不推倒 V3 视觉(「待拍-NN」= 母文档 §11 决策台账里的编号)。设计期曾把 V3 的结构与样式逐个组件抄成一份参照文档,新壳建成之后那份抄录已经作废——**今天的视觉正本是高保真原型 [`../hifi/index.html`](../hifi/index.html) 与从它整体搬过来的 `crates/app-shell/assets/hifi.css`**,要看 V3 原样就直接读 `crates/app-desktop/` 的源码。当初列的、确实抄过来的清单:
 
 1. **Token 与原子样式函数**(`theme::chip/card/dot/btn_primary/input/label`,来源 `crates/app-desktop/src/theme.rs`):暖纸底色 `#EFEBE2`、clay 主色 `#C5654A`、四级灰阶、三态信号色+Unknown 灰,直接照抄,不另起一套。
 2. **项目墙卡片**`ProjectCard` + 本机环境条 `LocalEnvBar` + 健康概览条 `HealthOverviewBar`(均 `wall.rs`)——进 `screens/wall/`。
 3. **指标卡两形态**`MetricCard`/`BizMetricCard` 与「已停用」折叠区(均 `op.rs`)——进 `screens/overview/`。
 4. **Issue 列表行与六列看板卡片**(`op.rs` 的 `IssuesPanel`,尤其按钮语义分层——同一按钮位置按状态互斥切换文案颜色,不堆砌常驻按钮)——进 `screens/plan/`。
 5. **嵌入终端面板** `TerminalWidget`(含暗色标题条与离屏保活写法)——进 `terminal_xterm` 适配模块,被 `screens/session/` 用。
-6. **Hub 列表行**(SkillHub/AgentHub 卡片网格与 `SkillFileBrowser` 双栏文件浏览器)——拆进 `screens/config/`(workflow/skill 清单区)与 `screens/kb/`(资产页签)。**这两个清单区不再有库表可查**——第七轮盘点后 `skill`/`skill_package` 等表全部取消,清单现扫 `.claude/skills/**/SKILL.md` 目录得到(02 篇 §2.6),"哪怕只有一个文件也套文件树外壳"这个模板决定原样保留。
+6. **Hub 列表行**(SkillHub/AgentHub 卡片网格与 `SkillFileBrowser` 双栏文件浏览器)——拆进 `screens/config/`(workflow/skill 清单区)与 `screens/kb/`(资产页签)。**这两个清单区不再有库表可查**——盘点之后 `skill`/`skill_package` 等表全部取消,清单现扫 `.claude/skills/**/SKILL.md` 目录得到(02 篇 §2.6),"哪怕只有一个文件也套文件树外壳"这个模板决定原样保留。
 7. **创建流两卡**(`create.rs` 全部,含 `RemoteProjectProbe` 探活三态)——进 `screens/onboard/`,待拍-01 的四字段意图卡在这基础上改字段,不改骨架。
 8. **`ActionsBanner` 后台动作条**——三态+阈值门槛(秒级完成不显示),新壳任何后台命令(建 MR、拉群历史、跑历史回填)都复用,建议放 `theme/` 或独立小模块共享,不是 `onboard` 专属。
 
@@ -111,11 +111,9 @@ crates/app-shell/
 
 ### 2.6 命令 / 事件总线增量
 
-**实况(A 刀落地后重写)**:这一节原本写的是「在 `bw-app` 那 65 个变体上做加法」。真做的时候发现加不上去——库缩到四张表之后,`bw-store` 的二十张表和 `bw-app` 的用例整片接不上,于是 V4 开了自己的 `crates/bw-v4`,`Command` / `Event` 是**全新的一对枚举**(`crates/bw-v4/src/command.rs`),和 `bw-app` 的那对没有继承关系,也不互相引用。旧 crate 一行没改,旧壳照常编译。
+`Command` / `Event` 是 `crates/bw-v4/src/command.rs` 里**全新的一对枚举**,和 `bw-app` 的那对没有继承关系、不互相引用(理由同 §2.1)。通路本身不变:UI 只发 `Command`、只收 `Event`,`bw-v4` 是唯一执行用例的地方(`crates/bw-v4/src/app/`)。
 
-不变的是通路本身:UI 只发 `Command`、只收 `Event`,`bw-v4` 是唯一执行用例的地方(`crates/bw-v4/src/app/`)。
-
-下表是**设计目标**,不是落地清单——A 刀只实到了其中 20 条(见表后一段),其余的随 B / C 刀补。实现细节留 04-09/02 篇;标「设计期统一」的地方是与各正主篇核对后的改法:
+下表是**设计目标全表**,不是落地清单——哪些还没接,见表后一段与 `docs/LEFTOVERS.md`。实现细节留 02、04–09 篇:
 
 | 屏 | 命令/事件 | 一句话 | 标注 |
 |---|---|---|---|
@@ -131,7 +129,7 @@ crates/app-shell/
 | 总览 | `ProjectCardEditPending`(Event) | 名片编辑的轻量活已建、MR 已开,总览横幅可以显示了(08 篇新增,本表据此回填) | 新 |
 | 总览 | `ProjectCardMerged`(Event) | 名片 MR 已合入,库缓存已同步,总览可以刷新显示新值了(08 篇新增,本表据此回填) | 新 |
 | 通知 | `MergeAndComplete` | 一键做完「合入」+「完成」——**内部仍两步**:先 `MergeIssuePr` 再走既有 `TransitionIssue` InReview→Done 记账路径,同一件活绝不记两次不因按钮合并而改变 | 新(组合既有命令,不新开记账路径)|
-| 通知 | `SyncNotifyToChat{issue_id, event_type}` | 评审中/已合入/发版且配了群时,直接调用 `chat_group` 适配器发送——**不写去重账本**,发送即完成(第七轮盘点:`chat_outbox` 表取消,"没人取的不存";重发一条能忍,是知情代价而非 bug,见 02 篇 §2.4;字段名以 07 篇为准) | 新 |
+| 通知 | `SyncNotifyToChat{issue_id, event_type}` | 评审中/已合入/发版且配了群时,直接调用 `chat_group` 适配器发送——**不写去重账本**,发送即完成(信息住哪那次盘点:`chat_outbox` 表取消,"没人取的不存";重发一条能忍,是知情代价而非 bug,见 02 篇 §2.4;字段名以 07 篇为准) | 新 |
 | 通知 | `FetchChatDigest{project_id, since, until}` | 拉一段时间群历史,生成本机摘要文件(不进仓不进库;设计期统一:字段以 07 篇为准,补上原缺的 `project_id`) | 新 |
 | 通知 | `MarkNotifySeen{project_id, at}` | 记「这个项目的事件流看到哪个时间点」,只影响视觉状态,不参与待处理徽章计数(07 篇新增,本表据此回填) | 新 |
 | 通知 | `NotifySyncedToChat`(Event) | 一条通知真实发到群了(或失败带原因) | 新 |
@@ -146,14 +144,14 @@ crates/app-shell/
 | 会话 | `OpenFileTab{issue_id, path}` | 右栏点文件→中栏打开只读代码视图(设计期统一:05 篇是会话屏正主,把早期的 `OpenFile{path}` 改名改签名,本表据此回填) | 新 |
 | 会话 | `OpenDiffTab{issue_id, path}` | 中栏打开该活改动文件的 diff(设计期统一:同上,05 篇把早期的 `ShowDiff` 改名改签名) | 新 |
 | 会话 | `ExpandTreeDir{issue_id, dir_path}` | 懒加载展开文件树某目录(05 篇新增,本表原缺,据此回填) | 新 |
-| 会话 | `RunIssue`/`CancelRun`/`AssignIssue`/`BlockIssue`/`TransitionIssue`/`MergeIssuePr`/`DistillSkillFromIssue`(既有)| 干活/评审/蒸馏语义不变;"按活类别选开工工具、分发到哪个 `adapters/` 模块"是新加的路由层,命令本身不变。**新增触发路径(第五轮,06 篇 §2.3 定义,待拍-25 改)**:计划屏拖一张活到进行中/评审中/已完成/阻塞列,松手弹确认框,确认后发的就是这几条既有命令——拖拽不新增命令、不绕过 `can_transition_to`,只是给这几条命令多一条触发路径(另一条是详情面板按钮),两条路径最终调用同一套用例 | 沿用 |
+| 会话 | `RunIssue`/`CancelRun`/`AssignIssue`/`BlockIssue`/`TransitionIssue`/`MergeIssuePr`/`DistillSkillFromIssue`(既有)| 干活/评审/蒸馏语义不变;"按活类别选开工工具、分发到哪个 `adapters/` 模块"是新加的路由层,命令本身不变。**新增触发路径(06 篇 §2.3 定义,待拍-25 改)**:计划屏拖一张活到进行中/评审中/已完成/阻塞列,松手弹确认框,确认后发的就是这几条既有命令——拖拽不新增命令、不绕过 `can_transition_to`,只是给这几条命令多一条触发路径(另一条是详情面板按钮),两条路径最终调用同一套用例 | 沿用 |
 | 配置 | `CreateSkill`/`UpdateSkill`/`ImportSkillLibrary`(既有)| 写 `.claude/skills/**/SKILL.md` 技能文件(蒸馏、人手加、从技能库单独导入一个技能)——**不落库表**,"有没有这个技能"扫目录即得(02 篇 §2.6);字段增删留 04 篇 | 沿用,字段留口 |
-| 配置 | `ImportSkillPackage`(既有)| **取消**——预置技能包(mattpocock-skills / superpowers / buddy 自建运作 workflow)随 `RunStandardBootstrap`(运作活③规范铺底)一次性复制进项目仓 `.claude/skills/`(02 篇 §2.5/待拍-32),不需要单独的导入命令,更不需要登记表(`skill_package` 表第七轮取消) | 删除 |
+| 配置 | `ImportSkillPackage`(既有)| **取消**——预置技能包(mattpocock-skills / superpowers / buddy 自建运作 workflow)随 `RunStandardBootstrap`(运作活③规范铺底)一次性复制进项目仓 `.claude/skills/`(02 篇 §2.5/待拍-32),不需要单独的导入命令,更不需要登记表(`skill_package` 表取消) | 删除 |
 | 配置 | `SetIssueWorkflow{id, workflow}` | 活详情面板换 workflow/单技能,写 `issue.workflow`(04 篇新增;字段名统一为 `workflow`——04 篇早期草案叫 `workflow_ref`,与 `issue.workflow` 列名对齐后本表据此回填) | 新 |
 | 配置 | `SaveToolMapping` | 配置屏第①段保存一行「类别→工具→workflow」映射(04 篇新增,本表据此回填) | 新 |
 | 配置 | `ProbeTool` | 手动探活一次(配置屏/项目墙"测一下"复用,04 篇新增,本表据此回填) | 新 |
 | 配置 | `MarkEntrySkill` | 人工补标"这是入口技能"(04 篇新增,本表据此回填) | 新 |
-| 配置 | `CreateAgent`/`UpdateAgent`/`ImportAgentDefinition`(既有)| 待拍-24 已定"不再单独维护 agent 名单,agent 随 workflow 包走"——配置屏不再有独立 agent 表,这三条**同一次迁移里硬删**(设计期统一:与 02/04 篇一致;V4 用的是**新的库文件**,`schema.sql` 从未定义过 `agent` 表——不是"删表",是"新库从未建过",效果同样是存量队友定义不迁移、不可逆,已提请用户点头,见 00-handshake 第 2 条) | 删除 |
+| 配置 | `CreateAgent`/`UpdateAgent`/`ImportAgentDefinition`(既有)| 待拍-24 已定"不再单独维护 agent 名单,agent 随 workflow 包走"——配置屏不再有独立 agent 表,这三条**同一次迁移里硬删**(设计期统一:与 02/04 篇一致;V4 用的是**新的库文件**,`schema.sql` 从未定义过 `agent` 表——不是"删表",是"新库从未建过",效果同样是存量队友定义不迁移、不可逆,已提请用户点头,见 握手清单 第 2 条) | 删除 |
 
 **A 刀真接了哪些**(`crates/bw-v4/src/command.rs`,20 条):`CreateProject` / `EditProjectCard` / `SetProjectChat` / `RunStandardBootstrap` / `ReconcileStandard` / `StartWeekPlanning` / `ConfirmWeekDraft` / `CreateIssue` / `ScheduleIssue` / `ReorderIssue` / `SetIssueWorkflow` / `SetCurrentVersion` / `CutRelease` / `RefreshIssueCacheFromPlan` / `RunIssue` / `TransitionIssue` / `BlockIssue` / `SaveToolMapping` / `ProbeTool` / `MarkNotifySeen`。签名与上表有两处出入:`EditProjectCard` 不含 `chat` 字段(项目群走独立的 `SetProjectChat`);`ConfirmWeekDraft` 是上表没有的一条 —— 「开始本周」返回的是草稿活标,人确认之后才真的建活,这一步需要自己的命令。
 
@@ -185,10 +183,10 @@ V4 改法:
 
 ### 2.9 与 `standard/` 的接缝
 
-内容与八大类是 [`../../standard-module-draft.md`](../../standard-module-draft.md) 的事,这里只钉三件:
+内容与八大类是 [`../../standard-module-draft.md`](../standard-module-draft.md) 的事,这里只钉三件:
 
 - **放哪**:仓根 `standard/`,和 `crates/`/`docs/` 平级(03 篇 §3 已定)。
-- **怎么进二进制**:今天 `docs/buddy/`、`docs/skills/` 都经 `crates/bw-core/src/buddy_assets.rs` 与 `bw_library.rs` 在编译期 `include_str!` 读进常量,零 IO、wasm32 可编译——`standard/` 照这个已验证的模式。**A 刀落地后改落点**:原文说新增 `crates/bw-core/src/standard_assets.rs`,实际放在 `crates/bw-v4/src/standard/mod.rs`。理由是 `bw-core` 里那些资产是 V3 也在用的,而 `standard/` 只有 V4 用;放进 `bw-v4` 既不动旧 crate,也让"往项目仓写规范文件"这个用例和它的素材待在一起。预置技能包是个例外:它复用 `bw_core::bw_library::bw_standard_skill_docs()` 已经编进去的那几篇,不再抄一份。
+- **怎么进二进制**:今天 `docs/buddy/`、`docs/skills/` 都经 `crates/bw-core/src/buddy_assets.rs` 与 `bw_library.rs` 在编译期 `include_str!` 读进常量,零 IO、wasm32 可编译——`standard/` 照这个已验证的模式。**A 刀落地后改落点**:规范素材放在 `crates/bw-v4/src/standard/mod.rs`,不放 `bw-core`。理由是 `bw-core` 里那些资产是 V3 也在用的,而 `standard/` 只有 V4 用;放进 `bw-v4` 既不动旧 crate,也让"往项目仓写规范文件"这个用例和它的素材待在一起。预置技能包是个例外:它复用 `bw_core::bw_library::bw_standard_skill_docs` 已经编进去的那几篇,不再抄一份。
 - **版本号从哪读**:仓根放纯文本 `standard/VERSION`(现在是 `4.0`),`include_str!` 读入 `trim()`,铺底/对账命令都读这一个常量(`bw_v4::standard::version()`)。**别和项目仓生成的 `.bw/standard.toml` 混**(03 篇「规范大类 8」)——后者记"某项目用的是哪版"(项目侧,随项目走),前者记"当前 buddy 二进制自带哪版"(buddy 侧,随发布走),数值常相等但含义不同,不合并成一个字段。
 
 ### 2.10 与旧壳共存
@@ -197,7 +195,7 @@ V4 改法:
 
 **computer-use 用的 `~/Applications/BWDev.app` 怎么办**:`scripts/point-bwdev-here.sh` 今天固定拷 `target/debug/builders-workbench` 进这个长期稳定的 bundle(同一次 computer-use 会话里现造的新 app 身份认不出来,复用已注册 bundle id 是唯一路径)。共存期建议验证新壳时复用同一 bundle,只换拷贝 `target/debug/bw-v4-dev`——给脚本加个可选参数,不新注册第二个 app bundle(会重踩"新身份认不出来"的坑)。**A 刀已经改了**:`./scripts/point-bwdev-here.sh v3|v4`,默认 `v3`;两个壳共用同一个 bundle 身份,同一时刻只能接一个,换壳再跑一次。
 
-### 2.11 删除旧壳的判据(C 刀落地后整块重写:逐条核对过,**今天一条都不满足,旧壳不能删**)
+### 2.11 删除旧壳的判据(逐条核对过,**今天一条都不满足,旧壳不能删**)
 
 把待拍-17"跑通后删旧壳"落成可核对的判据。C 刀收尾时逐条对了一遍实况:
 
@@ -257,7 +255,7 @@ tokio = { workspace = true }
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
 ```
 
-原文这里列的是 `bw-store` / `bw-app` / `ui` 三个依赖,那是"新壳架在旧内核上"的写法。实况是新壳只依赖 `bw-v4`(外加 `bw-core` / `bw-engine` 两个共用件),旧内核三个包一个都不进依赖树 —— 删旧壳那次因此只用在 `members` 去掉两行,不必先拆依赖。
+新壳只依赖 `bw-v4`(外加 `bw-core` / `bw-engine` 两个共用件),`bw-store` / `bw-app` / `ui` 三个旧包一个都不进依赖树 —— 删旧壳那次因此只用在 `members` 去掉两行,不必先拆依赖。
 
 ### 3.2 每屏唯一出口(A 刀实况)
 
@@ -268,11 +266,11 @@ pub fn view(p: &crate::vm::ProjectVm, bridge: &crate::bridge::Bridge) -> Element
 }
 ```
 
-和原文伪码的两处出入:①ViewModel 类型来自 `crate::vm`,不是 `ui` crate(见 §2.3);②发命令不走 `on_command` 回调,走一个可 clone 的 `Bridge` 句柄(`bridge.cmd(Command::…)`)—— 回调在 Dioxus 的事件闭包里要处处借用,句柄 clone 一份进闭包更顺手,通路语义没变:UI 只发命令、只收 ViewModel。
+两处值得点名:①ViewModel 类型来自 `crate::vm`,不是 `ui` crate(见 §2.3);②发命令不走 `on_command` 回调,走一个可 clone 的 `Bridge` 句柄(`bridge.cmd(Command::…)`)—— 回调在 Dioxus 的事件闭包里要处处借用,句柄 clone 一份进闭包更顺手,通路语义没变:UI 只发命令、只收 ViewModel。
 
 ### 3.3–3.4 两道守门脚本(已落地,正本在 `scripts/`)
 
-原文这里贴了两份建议全文。**A 刀已经把它们写进仓里**,以脚本本身为准,这里只记差异:
+两个脚本都已经在 `scripts/` 里,**以脚本本身为准**,这里只记它们和当初设想的差异:
 
 - **`scripts/guard-no-cross-screen-import.sh`**:逐个 `crates/app-shell/src/screens/<屏>/` 目录 grep `crate::screens::`,命中除自己以外的屏幕名就报错、退出码非零。和建议稿的唯一出入是错误提示里那句"共享数据请经 `ui` crate"改成了"经 ViewModel 或命令/事件绕一圈"(见 §2.3:V4 的 ViewModel 不在 `ui` crate)。
 - **`scripts/guard-file-lines.sh`**:1500 行硬上限(阻断)+ 600 行软目标(只提醒不阻断,建议稿没有这一档)。查 `crates/app-shell/src` 与 `crates/bw-v4/src` 两处,不只查新壳 —— 新内核同样是从零写的,同样该守规矩。目录不存在时退出码 0(方便在还没建 crate 的分支上跑门禁)。
@@ -283,7 +281,7 @@ pub fn view(p: &crate::vm::ProjectVm, bridge: &crate::bridge::Bridge) -> Element
 
 ### 3.5 `Command`/`Event`(A 刀实况:全新一对枚举)
 
-原文这里贴的是"在 `bw-app` 既有 65 个变体上并列新增"的伪码。实况是 `crates/bw-v4/src/command.rs` 里**全新的一对枚举**(为什么见 §2.1),`bw-app` 那对一行没动。A 刀真写进去的签名:
+`crates/bw-v4/src/command.rs` 里是**全新的一对枚举**(为什么见 §2.1),`bw-app` 那对一行没动。真写进去的签名:
 
 ```rust
 // crates/bw-v4/src/command.rs —— 只列 A 刀真接了实现的
@@ -314,7 +312,7 @@ pub enum Command {
 
 `Event` 同样是新枚举,20 个变体,一条命令对一到几条回执(`IssueCreated` / `IssueScheduled` / `IssueRan` / `IssueTransitioned{settled}` / `ReleaseCut{rows_written}` / `StandardBootstrapped{files,committed}` / `HealthDerived{signal}` 等)。回执里带的是**真发生了什么**,不是"命令收到了":比如 `ReleaseCut.rows_written` 为假就表示这个版本号已经在发版记录里、这次没写第二行。
 
-**表里有、A 刀没接的那批**见 §2.6 表后一段。`CreateAgent` / `UpdateAgent` / `ImportAgentDefinition` / `ImportSkillPackage` 四条"硬删"自然消失了 —— 新枚举里从来没有它们,不存在删的动作;V4 新库的 `schema.sql` 也从未定义过 `agent` 表,存量队友定义不迁移、不可逆(00-handshake 第 2 条已提请用户点头)。
+**表里有、A 刀没接的那批**见 §2.6 表后一段。`CreateAgent` / `UpdateAgent` / `ImportAgentDefinition` / `ImportSkillPackage` 四条"硬删"自然消失了 —— 新枚举里从来没有它们,不存在删的动作;V4 新库的 `schema.sql` 也从未定义过 `agent` 表,存量队友定义不迁移、不可逆(握手清单 第 2 条已提请用户点头)。
 
 ### 3.6 深链读取点(伪码,对照 `kernel.rs:526-566` 改写,细节见 2.7)
 
