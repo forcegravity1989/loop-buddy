@@ -469,6 +469,11 @@ async fn build_project(
     // 健康:三条判据当场从仓文件与 git 取,不读库里那两个缓存列。
     let inputs = bw_v4::app::collect_health_inputs(&ws, &current_week).await;
     let derived = bw_v4::derive::derive_project_health(&inputs);
+    // 算完顺手写回显示缓存。**项目墙只有这一个数据来源** —— 它要在不打开项目
+    // 的情况下列出 N 个项目的灯,不能每次启动扫 N 个仓。此前壳里没有一处写过
+    // 这两列,于是项目墙的灯永远是灰的,哪怕总览上算出来是黄的。写的是刚算出
+    // 来的那个值,不重算(重算要再起一遍 git 子进程)。
+    let _ = store.cache_project_health(id, &derived).await;
 
     let policy = read_or_warn(
         ".bw/issue-policy.toml",
