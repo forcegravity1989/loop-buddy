@@ -3,10 +3,11 @@
 //! 探不到就说探不到。**没接实现的工具返回「不知道」**,不报绿也不报红——项目墙
 //! 那条「测一下」上,灰项和红项是两件不同的事。
 
-use super::{App, Result};
+use super::{App, AppError, Result};
 use crate::command::{Event, ProbeResult};
 use crate::model::{category_key, Category, ProjectId};
 use crate::repo::issue_policy_file::{self, CategoryMapping};
+use crate::store::WORKSPACES_ROOT_KEY;
 
 impl App {
     pub(super) async fn save_tool_mapping(
@@ -34,6 +35,46 @@ impl App {
         }
         issue_policy_file::write(&ws, &file)?;
         Ok(vec![Event::ToolMappingSaved { category }])
+    }
+
+    /// 改工作区根目录。存 `app_meta`,进程内立刻生效。
+    ///
+    /// **已接入的项目一个都不动** —— 但这件事不是自动成立的:接入时没填仓路径的
+    /// 项目,库里那一列是空的,`workspace_of` 每次都拿**当下**的根目录现拼
+    /// (`<根目录>/<slug>`)。所以改根目录之前必须先把它们**钉死**:把各自当下
+    /// 算出来的绝对路径写回库里。不钉的话,改一下根目录,已有项目就集体指到一个
+    /// 空目录 —— 仓还在硬盘上,但 buddy 全看不见了(健康变灰、文件树全空)。
+    ///
+    /// 钉死是一次性的:钉完之后它们和「根目录」再没有关系。**不搬目录** —— 真要
+    /// 搬得先解决"仓里有没有没提交的改动、worktree 还开着没有",那是另一件事。
+    pub(super) async fn set_workspaces_root(&mut self, path: String) -> Result<Vec<Event>> {
+        let path = path.trim().to_string();
+        if path.is_empty() {
+            return Err(AppError::Refused("工作区根目录不能是空的".into()));
+        }
+        let p = std::path::PathBuf::from(&path);
+        if !p.is_absolute() {
+            return Err(AppError::Refused(format!(
+                "「{path}」不是绝对路径 —— 相对路径会跟着进程从哪儿启动而变,填全路径"
+            )));
+        }
+        // 建不出来就别存:存了等于把一个用不了的路径留给下一次接入。
+        std::fs::create_dir_all(&p)
+            .map_err(|e| AppError::Refused(format!("这个目录建不出来:{e}")))?;
+        // 先钉死,再换根目录 —— 顺序反了就钉不出老路径了。
+        let mut pinned = 0u32;
+        for project in self.store.projects().await? {
+            if project.workspace_path.trim().is_empty() {
+                let here = self.workspaces_root.join(&project.slug);
+                self.store
+                    .set_project_workspace_path(project.id, &here.display().to_string())
+                    .await?;
+                pinned += 1;
+            }
+        }
+        self.store.set_meta(WORKSPACES_ROOT_KEY, &path).await?;
+        self.workspaces_root = p;
+        Ok(vec![Event::WorkspacesRootChanged { path, pinned }])
     }
 
     pub(super) async fn probe_tool(&mut self, name: String) -> Result<Vec<Event>> {

@@ -1,12 +1,12 @@
 # 08 · 总览推导
 
-> **30 秒导读**:这篇讲总览屏一列七块,每块的每个数字从哪来、怎么算、没数据时显示什么;健康大灯的判定算法;项目名片(含「项目群」一行)怎么编辑。**总览一个数都不存**——指标定义读 `.bw/metrics.toml`,读数读 `docs/plan/`,发版记录读 `docs/releases.md`,其余现场算;没数据就是灰,不假装绿。给接着做 V4 的会话看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
+> **30 秒导读**:这篇讲总览屏一列七块,每块的每个数字从哪来、怎么算、没数据时显示什么;健康大灯的判定算法;项目名片(含「项目群」一行)怎么编辑。**总览一个数都不存**——指标定义读 `.bw/metrics.toml`,读数读 `.bw/plan/`,发版记录读 `.bw/releases.md`,其余现场算;没数据就是灰,不假装绿。给接着做 V4 的会话看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ## 0 · 这篇管什么、不管什么
 
 **管**:总览屏一列七个横块,每块字段的来源、刷新时机、空态文案、读回方式(对应母文档 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) §5「总览」行、第 1 站全部);health 大灯 + 状态词 + 三条理由的**可执行**推导算法(待拍-03);名片(含新增的「项目群」行)编辑走「轻量活 + MR」(§2.6、待拍-26);「预览:未合入」在总览的读取来源(待拍-21,切换机制留给 06 篇)。
 
-**不管**:计划屏看板逻辑、拖拽排期、周计划怎么引导出来(06 篇);规范铺底、合并调整、历史回填「怎么做」,本篇只消费产出(03 篇);项目群适配工厂的实现、WeLink 对接,本篇只说总览显示「配了 / 没配」(07 篇);会话屏、通知入口本身(05、07 篇);数据模型总账与迁移守卫写法,02 篇是正本,冲突以 02 篇为准。
+**不管**:计划屏看板逻辑、拖拽排期、周计划怎么引导出来(06 篇);规范铺底、历史回填「怎么做」,本篇只消费产出(03 篇);项目群适配工厂的实现、WeLink 对接,本篇只说总览显示「配了 / 没配」(07 篇);会话屏、通知入口本身(05、07 篇);数据模型总账与迁移守卫写法,02 篇是正本,冲突以 02 篇为准。
 
 ## 1 · 用户看到什么、做什么
 
@@ -14,9 +14,9 @@ Builder 在项目栏点进一个项目,默认落在总览。一列横块从上�
 
 总览本身几乎不可操作——按母文档「待人处理不在总览」的决定,合入 / 点完成这些动作在左栏「通知」入口,总览这一屏只有两处可点:①名片的「编辑」;②本周还没有计划时出现的「开始本周」横幅按钮。
 
-**编辑名片**:点「编辑」进入表单态,点「保存」不是直接写库——后台建一张轻量活(不起 agent 会话)、开分支写 `PROJECT.md` 与 `.bw/project.toml`、开 MR,横幅「修改已提 MR · 待合入」;人点「合入」→「点完成」才生效,合入前旧值原样显示,和「写仓一律走 MR」的全局规矩一致(母文档 §2.6 用户四问之(4))。
+**编辑名片**:点「编辑」进入表单态,点「保存」不是直接写库——后台建一张轻量活(不起 agent 会话)、开分支写 `.bw/PROJECT.md` 与 `.bw/project.toml`、开 MR,横幅「修改已提 MR · 待合入」;人点「合入」→「点完成」才生效,合入前旧值原样显示,和「写仓一律走 MR」的全局规矩一致(母文档 §2.6 用户四问之(4))。
 
-**没有周计划时**:当前周没有 `docs/plan/YYYY-Www.md`,顶部就有横幅「本周还没有计划 → 开始本周」;点了就建运作活①并跳到会话屏 ▶开工,和其它活走同一条命令路径,总览的按钮只是最顺手的入口,不是唯一入口。
+**没有周计划时**:当前周没有 `.bw/plan/YYYY-Www.md`,顶部就有横幅「本周还没有计划 → 开始本周」;点了就建运作活①并跳到会话屏 ▶开工,和其它活走同一条命令路径,总览的按钮只是最顺手的入口,不是唯一入口。
 
 ## 2 · 设计
 
@@ -28,13 +28,13 @@ Builder 在项目栏点进一个项目,默认落在总览。一列横块从上�
 
 | 序号 | 块名 | 点灯吗 | 主数据源 | 刷新时机 |
 |---|---|---|---|---|
-| ① | 项目信息 + health 面板 | health 灯是,名片本身不是 | 仓文件(`PROJECT.md`、`.bw/project.toml` 的 `[chat]` 段)+ 库(`project` 表既有列,仅作名称/想做什么/对标/北极星一句的显示缓存)+ 现算(health) | 每次打开总览现读 + 现算 |
+| ① | 项目信息 + health 面板 | health 灯是,名片本身不是 | 仓文件(`.bw/PROJECT.md`、`.bw/project.toml` 的 `[chat]` 段)+ 库(`project` 表既有列,仅作名称/想做什么/对标/北极星一句的显示缓存)+ 现算(health) | 每次打开总览现读 + 现算 |
 | ② | 北极星 | 是(自己一枚 Signal) | 仓文件(`.bw/metrics.toml` 定义)+ 现算(可重算读数)/ 仓文件(周计划文件「本周指标读数」段,不可重算读数) | 每次打开总览现读 + 现算 |
 | ③ | 滞后指标(≤3) | 是 | 同上 | 同上 |
 | ④ | 引领指标(≤3) | 是 | 同上 | 同上 |
 | ⑤ | 项目指标 · 代码仓级 | 否(只是现状数) | 现算(git 子进程 / codegraph) | 打开总览时现算,另有「立即采集」手动刷新 |
-| ⑥ | 本周计划进度 | 否 | 仓文件(`docs/plan/YYYY-Www.md`,正本)+ 库(`issue` 缓存表,离线快速渲染) | 每次打开总览现读 + 查缓存 |
-| ⑦ | 在研版本与发版记录 | 否 | 仓文件(`.bw/project.toml` 的 `current_version`、`docs/releases.md`)+ 库(`issue.version` 列,活挂哪个版本) | 每次打开总览现读 |
+| ⑥ | 本周计划进度 | 否 | 仓文件(`.bw/plan/YYYY-Www.md`,正本)+ 库(`issue` 缓存表,离线快速渲染) | 每次打开总览现读 + 查缓存 |
+| ⑦ | 在研版本与发版记录 | 否 | 仓文件(`.bw/project.toml` 的 `current_version`、`.bw/releases.md`)+ 库(`issue.version` 列,活挂哪个版本) | 每次打开总览现读 |
 
 ### 2.3 逐块设计
 
@@ -44,10 +44,10 @@ Builder 在项目栏点进一个项目,默认落在总览。一列横块从上�
 
 | 字段 | 来源 | 刷新时机 | 空态文案 |
 |---|---|---|---|
-| 名称 | 仓 `PROJECT.md` 标题行(库缓存 `project.name`) | 打开总览时读库缓存;`PROJECT.md` 合入后由铺底/编辑流程同步 | — (创建时必填,不会空) |
-| 想做什么 | `PROJECT.md`「你想做什么」段(库缓存 `project.descr`) | 同上 | 「(待填)」 |
-| 最像的对标 | `PROJECT.md`「定位与机会 - 对标」段(库缓存 `project.benchmark`) | 同上 | 「(待填)」 |
-| 三个月长成什么样(北极星一句) | `PROJECT.md`「北极星」段(库缓存 `project.north_star` / `project.ns_def`) | 同上 | 「(待填)」——接入时必填,理论不会空;老库迁移期间可能空 |
+| 名称 | 仓 `.bw/PROJECT.md` 标题行(库缓存 `project.name`) | 打开总览时读库缓存;`.bw/PROJECT.md` 合入后由铺底/编辑流程同步 | — (创建时必填,不会空) |
+| 想做什么 | `.bw/PROJECT.md`「你想做什么」段(库缓存 `project.descr`) | 同上 | 「(待填)」 |
+| 最像的对标 | `.bw/PROJECT.md`「定位与机会 - 对标」段(库缓存 `project.benchmark`) | 同上 | 「(待填)」 |
+| 三个月长成什么样(北极星一句) | `.bw/PROJECT.md`「北极星」段(库缓存 `project.north_star` / `project.ns_def`) | 同上 | 「(待填)」——接入时必填,理论不会空;老库迁移期间可能空 |
 | **项目群**(V4 新增) | 正本 `.bw/project.toml` 的 `[chat]` 段(**不入库**——02 篇 §2.1/§2.6 明确 `project` 表结构不新增列,不会有 `chat_provider`/`chat_group_id` 这两列) | 打开总览时现读现解析该文件;配置屏改群号后同样是改文件,下次读到新值 | 「未配 · 配置」一键跳配置屏;配了显示群名(取 provider 侧展示名,拿不到就显示群号本身)+「通知同步中」小字 |
 | health 大灯 + 状态词 + 三条理由 | 现算,见 §3.3 | **每次打开总览现算,不缓存** | 灰「无数据」+ 理由「还没有任何真实数据」 |
 
@@ -55,7 +55,7 @@ Builder 在项目栏点进一个项目,默认落在总览。一列横块从上�
 
 ```bash
 sqlite3 <db> "SELECT name, descr, benchmark, north_star FROM project WHERE id='<pid>';"
-cat <workspace>/PROJECT.md
+cat <workspace>/.bw/PROJECT.md
 cat <workspace>/.bw/project.toml   # 看 [chat] 段——这四个字段不在库里,只能这样核对
 ```
 
@@ -64,9 +64,9 @@ cat <workspace>/.bw/project.toml   # 看 [chat] 段——这四个字段不在�
 | 字段 | 来源 | 刷新时机 | 空态文案 |
 |---|---|---|---|
 | 目标 / 定义 | 仓文件 `.bw/metrics.toml` 的 `[north_star]` 段(`name`/`def`/`target`/`collect`,02 篇 §2.5) | 打开总览现读现解析 | 不会空(接入必填,03 篇铺底保证骨架存在) |
-| 现值 | 按 `collect.kind` 分两路:可重算的(如 git / 仓统计)每次打开总览现算;不可重算的(外部读数 / 手填)取当前周 `docs/plan/YYYY-Www.md`「本周指标读数」段里指标名匹配的那一行(02 篇 §2.5 样例) | 每次打开总览现算 / 现读 | 两路都拿不到 → 「—」+「无观测 · Unknown ≠ 绿」 |
+| 现值 | 按 `collect.kind` 分两路:可重算的(如 git / 仓统计)每次打开总览现算;不可重算的(外部读数 / 手填)取当前周 `.bw/plan/YYYY-Www.md`「本周指标读数」段里指标名匹配的那一行(02 篇 §2.5 样例) | 每次打开总览现算 / 现读 | 两路都拿不到 → 「—」+「无观测 · Unknown ≠ 绿」 |
 | 保鲜期 | 固定 `Cadence::Weekly`(V4 决定,见 3.3) | — | — |
-| 趋势(近 8 周) | 可重算指标:对过去 8 个 ISO 周窗口分别现算;不可重算指标:回扫过去 8 份 `docs/plan/YYYY-Www.md`「本周指标读数」段里同名指标那一行,没有的周留空 | 打开总览现算 / 现读(老仓可能慢,见 02 篇 §6 开放问题 4) | 全部拿不到 → 不画线 |
+| 趋势(近 8 周) | 可重算指标:对过去 8 个 ISO 周窗口分别现算;不可重算指标:回扫过去 8 份 `.bw/plan/YYYY-Www.md`「本周指标读数」段里同名指标那一行,没有的周留空 | 打开总览现算 / 现读(老仓可能慢,见 02 篇 §6 开放问题 4) | 全部拿不到 → 不画线 |
 | 本周哪些活在推它 | `issue` 缓存表 `week_of=本周 AND metric_key='<该指标标识>'` 的行(正本是周计划文件业务活清单「预期推动的指标」列,02 篇 §2.2/§2.5) | 每次打开总览现算 | 无 → 「本周没有活推动它」 |
 | 手填徽记 | 该指标当周读数那一行「来源」列写的是「手填」而不是可重算的现算方式 | 同上 | — |
 
@@ -76,7 +76,7 @@ cat <workspace>/.bw/project.toml   # 看 [chat] 段——这四个字段不在�
 
 ```bash
 cat <workspace>/.bw/metrics.toml            # 看 [north_star] 段
-cat <workspace>/docs/plan/<本周>.md          # 看「本周指标读数」段有没有这条指标当周的行
+cat <workspace>/.bw/plan/<本周>.md          # 看「本周指标读数」段有没有这条指标当周的行
 sqlite3 <db> "SELECT title FROM issue WHERE project_id='<pid>' AND week_of='<本周>' AND metric_key='<指标标识>';"
 ```
 
@@ -90,7 +90,7 @@ sqlite3 <db> "SELECT title FROM issue WHERE project_id='<pid>' AND week_of='<本
 
 ```bash
 cat <workspace>/.bw/metrics.toml       # 数 [[lagging]]/[[leading]] 条数
-cat <workspace>/docs/plan/<本周>.md    # 看有没有对应指标的读数行
+cat <workspace>/.bw/plan/<本周>.md    # 看有没有对应指标的读数行
 ```
 
 #### ⑤项目指标 · 代码仓级(不点灯)
@@ -109,14 +109,14 @@ git -C <workspace> rev-list --count HEAD; git -C <workspace> ls-files | wc -l
 
 | 字段 | 来源 | 刷新时机 | 空态 |
 |---|---|---|---|
-| 周目标一句 | 仓文件 `docs/plan/YYYY-Www.md`「## 周目标」段第一段非空文本(`week_plan_file.rs::extract_goal`,02 篇 §3.3);没有库内索引表,周列表靠扫 `docs/plan/` 目录得到(02 篇 §2.5) | 打开总览现读现解析 | 当前周文件不存在 → 「(未开始本周)」——此时①下方或本块顶部出现「开始本周」横幅 |
+| 周目标一句 | 仓文件 `.bw/plan/YYYY-Www.md`「## 周目标」段第一段非空文本(`week_plan_file.rs::extract_goal`,02 篇 §3.3);没有库内索引表,周列表靠扫 `.bw/plan/` 目录得到(02 篇 §2.5) | 打开总览现读现解析 | 当前周文件不存在 → 「(未开始本周)」——此时①下方或本块顶部出现「开始本周」横幅 |
 | 进度条(待办 / 进行中 / 评审中 / 完成 计数) | 库 `issue` 缓存表 `week_of=本周 AND kind='business'` 按 `status` 分组计数(02 篇 §2.2:这 9 列是缓存,正本是周计划文件业务活清单那张表;不一致时以文件为准,靠 `RefreshIssueCacheFromPlan` 命令追上,02 篇 §3.4) | 现算(查缓存表,不解析 Markdown) | 全 0 → 空进度条 |
 | 运作活①②③三个状态点 | 库 `issue` 缓存表 `week_of=本周 AND kind='ops'` 按 `workflow` 名归类,取各自 `status`(同上,缓存) | 同上 | 该运作活本周还没建 → 灰点「未建」 |
 
 读回:
 
 ```bash
-cat <workspace>/docs/plan/<本周>.md
+cat <workspace>/.bw/plan/<本周>.md
 sqlite3 <db> "SELECT status, count(*) FROM issue WHERE project_id='<pid>' AND week_of='<本周>' AND kind='business' GROUP BY status;"
 sqlite3 <db> "SELECT workflow, status FROM issue WHERE project_id='<pid>' AND week_of='<本周>' AND kind='ops';"
 ```
@@ -126,27 +126,27 @@ sqlite3 <db> "SELECT workflow, status FROM issue WHERE project_id='<pid>' AND we
 | 字段 | 来源 | 刷新时机 | 空态 |
 |---|---|---|---|
 | 在研版本 | 仓文件 `.bw/project.toml` 的 `current_version` 字段(**不入库**——02 篇 §2.1/§3.3 明确 `project` 表不新增这一列) | 打开总览现读现解析 | 新项目默认 `v0.1`(待拍-04),不会空 |
-| 发版记录(最近几行) | 仓文件 `docs/releases.md`(唯一正本,`release_file.rs` 解析,02 篇 §2.5/§3.3);「包含的活」列按号去 `issue` 缓存表查标题展开,活挂哪个版本另看 `issue.version` 列(02 篇 §2.2) | 打开总览现读现解析 | 无 → 「还没有发版记录」 |
+| 发版记录(最近几行) | 仓文件 `.bw/releases.md`(唯一正本,`release_file.rs` 解析,02 篇 §2.5/§3.3);「包含的活」列按号去 `issue` 缓存表查标题展开,活挂哪个版本另看 `issue.version` 列(02 篇 §2.2) | 打开总览现读现解析 | 无 → 「还没有发版记录」 |
 
 读回:
 
 ```bash
 cat <workspace>/.bw/project.toml   # 看 current_version
-cat <workspace>/docs/releases.md
+cat <workspace>/.bw/releases.md
 sqlite3 <db> "SELECT id, title, version FROM issue WHERE project_id='<pid>' AND version != '' ORDER BY updated_at DESC LIMIT 5;"
 ```
 
 #### 老项目的历史怎么显示——不单开块(改写,原第⑧块整块删除)
 
-老项目 = 铺底时探测到仓有历史(提交 / 标签 / 远端 issue·MR / CHANGELOG / 名片配了群 之一为真),运作活③「规范铺底」多跑一步「历史回填」(= 运作活②「资产盘点」workflow 的首次模式,03 篇)。**回填的产出不是一块新 UI,而是同格式的仓文件**:历史周文件(`docs/plan/YYYY-Www.md`,front matter `origin: backfill`)与 `docs/releases.md` 里标「回填 · git tag」的历史行。因此总览这边**不多一块**——历史发版行就混在⑦块的发版记录里(带「回填」小字区分),历史周在计划屏左栏单独成一个「历史周」分组(06 篇),两处都是既有渲染路径,不写老项目专用代码。**新项目什么都不缺,老项目也不留一个永远空着的坑。**
+老项目 = 铺底时探测到仓有历史(提交 / 标签 / 远端 issue·MR / CHANGELOG / 名片配了群 之一为真),运作活③「规范铺底」多跑一步「历史回填」(= 运作活②「资产盘点」workflow 的首次模式,03 篇)。**回填的产出不是一块新 UI,而是同格式的仓文件**:历史周文件(`.bw/plan/YYYY-Www.md`,front matter `origin: backfill`)与 `.bw/releases.md` 里标「回填 · git tag」的历史行。因此总览这边**不多一块**——历史发版行就混在⑦块的发版记录里(带「回填」小字区分),历史周在计划屏左栏单独成一个「历史周」分组(06 篇),两处都是既有渲染路径,不写老项目专用代码。**新项目什么都不缺,老项目也不留一个永远空着的坑。**
 
 **不点灯**——历史事实的陈列,不参与 health 推导(2.4 节判据只看接入之后的真实数据)。`origin='backfill'` 的 `issue` 行 `workflow` 列默认为空(这些是接入 buddy 之前就已关闭的历史活,从没真的用过哪个 workflow),天然不进 02 篇 §2.3 现算的「用了几次」统计——V4 不维护单独的战绩账本(母文档 §6.3,活干没干成看远端 MR 合没合入),这里不需要额外的过滤代码,是查询默认值结构性满足的。
 
 读回:
 
 ```bash
-grep -n "回填" <workspace>/docs/releases.md
-grep -rl "origin: backfill" <workspace>/docs/plan/
+grep -n "回填" <workspace>/.bw/releases.md
+grep -rl "origin: backfill" <workspace>/.bw/plan/
 sqlite3 <db> "SELECT count(*) FROM issue WHERE project_id='<pid>' AND origin='backfill';"
 ```
 
@@ -171,10 +171,10 @@ sqlite3 <db> "SELECT count(*) FROM issue WHERE project_id='<pid>' AND origin='ba
 | 块 | 消费的字段 / 文件(定义见 02 篇) |
 |---|---|
 | ①⑥⑦ | `issue` 表 8 个缓存列——`week_of` / `version` / `tool` / `kind` / `origin` / `workflow` / `sort_order` / `metric_key`(02 篇 §2.2/§3.1) |
-| ②③④ | `.bw/metrics.toml`(02 篇 §2.5)、`docs/plan/YYYY-Www.md`「本周指标读数」段(02 篇 §2.5) |
+| ②③④ | `.bw/metrics.toml`(02 篇 §2.5)、`.bw/plan/YYYY-Www.md`「本周指标读数」段(02 篇 §2.5) |
 | ①⑦ | `.bw/project.toml` 的 `[chat]` / `current_version` / `standard_version`(02 篇 §2.5/§3.3;**均不入库**) |
-| ⑥ | `docs/plan/YYYY-Www.md`「## 周目标」段与「业务活」表格(02 篇 §2.5/§3.3) |
-| ⑦ | `docs/releases.md`(02 篇 §2.5/§3.3;历史回填行混排其中) |
+| ⑥ | `.bw/plan/YYYY-Www.md`「## 周目标」段与「业务活」表格(02 篇 §2.5/§3.3) |
+| ⑦ | `.bw/releases.md`(02 篇 §2.5/§3.3;历史回填行混排其中) |
 | ⑦ | `issue` 缓存表 `origin='backfill'` 的行计数(只用于历史行的小字标注) |
 
 **本篇不再保留任何库增量表**:早期草案曾设想过的 `metric.role='north_star'` 一行、新建 `release`/`release_issue`/`week_plan` 三张表、`project` 新增 `standard_version`/`current_version`/`chat_provider`/`chat_group_id` 四列、新建 `chat_outbox` 表,**盘点之后全部取消**(02 篇 §2.1「其余 16 张……以及早期草案曾计划新建、后来取消的 3 张」)。本篇原来那版增量表已按此删除,不再保留。
@@ -202,7 +202,7 @@ pub async fn collect_health_inputs(workspace: &Path, week: &str) -> HealthInputs
     let committed_this_week = crate::git::has_commits_in_week(workspace, week).await.unwrap_or(false);
     let committed_last_week = crate::git::has_commits_in_week(workspace, &last_week).await.unwrap_or(false);
     let merged_last_week = crate::git::has_merges_in_week(workspace, &last_week).await.unwrap_or(false);
-    let released = /* docs/releases.md 上周有没有新增一行,02 篇 §2.5 的发版记录 */;
+    let released = /* .bw/releases.md 上周有没有新增一行,02 篇 §2.5 的发版记录 */;
 
     HealthInputs {
         has_week_goal: this_plan.as_ref().is_some_and(|p| p.has_goal()),
@@ -256,11 +256,11 @@ pub fn derive_project_health(inputs: &HealthInputs) -> DerivedHealth {
 
 | 场景 | 显示 |
 |---|---|
-| `PROJECT.md` 缺某一段(如没有「北极星」段) | 「章程不完整」+ 具体缺哪段(措辞沿用 `dispatch.rs` 「章程未补写(PROJECT.md 北极星段可能缺)」的风格) |
+| `.bw/PROJECT.md` 缺某一段(如没有「北极星」段) | 「章程不完整」+ 具体缺哪段(措辞沿用 `dispatch.rs` 「章程未补写(PROJECT.md 北极星段可能缺)」的风格) |
 | `.bw/project.toml` 解析失败(格式错、未知字段) | 名片区整体灰 + 「配置文件解析失败:{错误}」,不猜测、不用旧缓存顶上 |
 | `.bw/metrics.toml` 解析失败 | ②③④三块灰 + 同样的解析错误原文——结构性错误,不是内容问题,和 `docs/buddy/standards/metrics.md`「坏文件只报错不写库」一致 |
-| `docs/plan/YYYY-Www.md` 解析失败(结构错、「## 周目标」或「业务活」表格格式坏了) | ⑥块整体灰 + 「周计划文件解析失败:{错误}」,不假装进度是 0 |
-| `docs/releases.md` 解析失败 | ⑦块整体灰 + 同样报错,不用旧值顶上 |
+| `.bw/plan/YYYY-Www.md` 解析失败(结构错、「## 周目标」或「业务活」表格格式坏了) | ⑥块整体灰 + 「周计划文件解析失败:{错误}」,不假装进度是 0 |
+| `.bw/releases.md` 解析失败 | ⑦块整体灰 + 同样报错,不用旧值顶上 |
 | ⑤块 git 子进程失败(非 git 目录 / git 未安装) | 整块显示「无法读取仓统计:{git 原文错误}」,不是空白也不是假数据 |
 | 历史回填某类原料缺失(如无远端 issue 访问权限) | 那一行单独显示「—」+「该来源未取到」,不影响块内其它行——回填允许「原料没有就空着」 |
 | health 计算中途文件解析或 git 子进程失败 | 大灯直接灰 + 「health 计算失败:{错误}」,绝不吞掉错误凑一个颜色 |

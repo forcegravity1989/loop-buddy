@@ -12,7 +12,7 @@ use super::{read_to_string, write_file, Result};
 use crate::model::{category_key, Category, StageKind};
 use std::path::{Path, PathBuf};
 
-pub const DIR: &str = "docs/plan";
+pub const DIR: &str = ".bw/plan";
 
 pub fn rel_path(week: &str) -> String {
     format!("{DIR}/{week}.md")

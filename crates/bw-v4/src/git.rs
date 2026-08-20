@@ -6,7 +6,7 @@
 //! 每个数字都能用同一条 git 命令在终端里复算出来。
 
 use crate::isoweek;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +67,14 @@ fn week_range(week: &str) -> Result<(String, String), GitError> {
 /// 项目上本来就该是「没数据」。
 pub async fn is_repo(workspace: &Path) -> bool {
     git(workspace, &["rev-parse", "--git-dir"]).await.is_ok()
+}
+
+/// 这个仓有没有第一条提交。**刚 `git init` 或者刚建出来的空仓没有 HEAD**,
+/// 从它身上开分支会被 git 顶回来(`invalid reference`),所以要先问这一句。
+pub async fn has_head(workspace: &Path) -> bool {
+    git(workspace, &["rev-parse", "--verify", "HEAD"])
+        .await
+        .is_ok()
 }
 
 /// 某一周有没有真实提交。健康判据 (a) 的后半句。
@@ -141,10 +149,16 @@ pub async fn tags(workspace: &Path) -> Result<Vec<String>, GitError> {
 
 /// 当前分支名。
 pub async fn current_branch(workspace: &Path) -> Result<String, GitError> {
-    Ok(git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .await?
-        .trim()
-        .to_string())
+    // 一条提交都没有的仓,`rev-parse HEAD` 会失败 —— 但分支名是有的
+    // (`git init` 就定好了,main 还是 master),`symbolic-ref` 读得出来。
+    // 读不出名字就报「没有分支」,不要在这种时候编一个。
+    match git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"]).await {
+        Ok(s) => Ok(s.trim().to_string()),
+        Err(e) => match git(workspace, &["symbolic-ref", "--short", "HEAD"]).await {
+            Ok(s) => Ok(s.trim().to_string()),
+            Err(_) => Err(e),
+        },
+    }
 }
 
 /// 把分支推到 `origin` 并建立跟踪(`git push -u origin <branch>`)。
@@ -153,6 +167,52 @@ pub async fn current_branch(workspace: &Path) -> Result<String, GitError> {
 /// 指向不存在分支的 MR,或者干脆报一句和真正原因无关的错。
 pub async fn push_branch(workspace: &Path, branch: &str) -> Result<(), GitError> {
     git(workspace, &["push", "-u", "origin", branch]).await?;
+    Ok(())
+}
+
+/// 把这个检出快进到远端最新(`git fetch origin <当前分支>` +
+/// `git merge --ff-only FETCH_HEAD`),返回 HEAD 有没有真的往前挪。
+///
+/// **只快进,绝不制造 merge 提交**。这里改的是人自己的检出,岔开了就该停下来
+/// 报错让人自己处理,不能替他合。工作区脏、没挂远端、没网、本机主干和远端岔
+/// 开——每一种都如实报错,由调用方原话端到界面上,不吞。
+pub async fn pull_ff(workspace: &Path) -> Result<bool, GitError> {
+    let before = head_sha(workspace).await?;
+    let branch = current_branch(workspace).await?;
+    // `git fetch origin <branch>` 一定会写 `FETCH_HEAD`;`origin/<branch>` 这个
+    // 远端跟踪引用要不要跟着更新,取决于这个仓的 refspec 配置。所以下一步认
+    // `FETCH_HEAD`,不认 `origin/<branch>` —— 后者在个别配置下会是个旧值。
+    git(workspace, &["fetch", "origin", &branch]).await?;
+    git(workspace, &["merge", "--ff-only", "FETCH_HEAD"]).await?;
+    let after = head_sha(workspace).await?;
+    Ok(before != after)
+}
+
+/// 本机有没有这条分支。
+pub async fn branch_exists(workspace: &Path, branch: &str) -> bool {
+    git(
+        workspace,
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+    )
+    .await
+    .is_ok()
+}
+
+/// 收掉一条**已经合过**的本机分支。
+///
+/// 先试 `git branch -d`,让 git 自己确认它真的合过。远端按 squash 合的时候这
+/// 一步会被拒:squash 把一串提交压成主干上的一条新提交,原来那几条并不是主干
+/// 的祖先,git 看不出「合过」——而 buddy 这两个远端(GitHub / codehub)合 MR
+/// 走的都是 squash。所以这里会退到 `-D`。
+///
+/// **只准在读回确认远端真的合了之后调用**:那时候改动已经在远端主干上、分支
+/// 本身也推上去过,`-D` 删掉的是本机的一个指针,不是劳动成果。没合成的分支
+/// 绝不能拿它删。
+pub async fn delete_merged_branch(workspace: &Path, branch: &str) -> Result<(), GitError> {
+    if git(workspace, &["branch", "-d", branch]).await.is_ok() {
+        return Ok(());
+    }
+    git(workspace, &["branch", "-D", branch]).await?;
     Ok(())
 }
 
@@ -525,4 +585,79 @@ fn parse_issue_number(subject: &str) -> Option<u32> {
     let rest = subject.split_once('#')?.1;
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     digits.parse().ok()
+}
+
+/// 这个仓在浏览器里的根地址,比如 `https://github.com/owner/repo`。
+///
+/// **从 `origin` 的地址推**,不从库里的 `remote_host` 拼 —— codehub 的 host 存的
+/// 是区的别名(`green`/`open`/`yellow`),不是域名,拼不出能点的地址;而 `origin`
+/// 里躺着的是真域名。推不出来就返回 `None`,调用方**不给链接**,不编一个。
+///
+/// **不起子进程,直接读 `.git/config`** —— 这个值每重拼一次界面数据就要一次,
+/// 起一次 `git remote get-url` 是白花的几十毫秒。worktree 里的 `.git` 是个文件,
+/// 指向主仓那份 config,跟过去读。
+pub fn browse_base(workspace: &Path) -> Option<String> {
+    let dot_git = workspace.join(".git");
+    let config = if dot_git.is_dir() {
+        dot_git.join("config")
+    } else {
+        // `gitdir: /主仓/.git/worktrees/<名>` —— config 在 `/主仓/.git/config`。
+        let text = std::fs::read_to_string(&dot_git).ok()?;
+        let gitdir = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+        gitdir.parent()?.parent()?.join("config")
+    };
+    let text = std::fs::read_to_string(config).ok()?;
+    let mut in_origin = false;
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with('[') {
+            in_origin = l.replace(' ', "") == "[remote\"origin\"]";
+            continue;
+        }
+        if in_origin {
+            if let Some(url) = l.strip_prefix("url") {
+                if let Some(url) = url.trim_start().strip_prefix('=') {
+                    return normalize_browse(url.trim());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `git@host:路径.git` / `https://host/路径[.git]` / `ssh://git@host/路径` →
+/// `https://host/路径`。认不出的写法返回 `None`。
+fn normalize_browse(url: &str) -> Option<String> {
+    if url.is_empty() {
+        return None;
+    }
+    let rest = if let Some(r) = url.strip_prefix("ssh://git@") {
+        r.to_string()
+    } else if let Some(scp) = url.strip_prefix("git@") {
+        // `git@github.com:owner/repo.git` —— 冒号是 host 与路径的分界。
+        scp.replacen(':', "/", 1)
+    } else {
+        let r = url
+            .strip_prefix("https://")
+            .or(url.strip_prefix("http://"))?;
+        // `https://user@host/路径` 里那段凭据不该出现在给人点的链接里。
+        r.split_once('@').map(|(_, r)| r).unwrap_or(r).to_string()
+    };
+    let rest = rest.trim_end_matches('/').trim_end_matches(".git");
+    if !rest.contains('/') {
+        return None;
+    }
+    Some(format!("https://{rest}"))
+}
+
+/// 这个路径被 git 跟踪着没有。
+///
+/// 用 `ls-files`(跟踪着就打印路径,没跟踪就打印空)而不是 `--error-unmatch`:
+/// 后者「没跟踪」和「git 根本没跑起来」都是非零退出,分不开。**分不开的时候
+/// 返回 `Some(true)`** —— 这个判断的下游是删文件,拿不准就别删。
+pub async fn is_tracked(workspace: &Path, rel: &str) -> bool {
+    match git(workspace, &["ls-files", "--", rel]).await {
+        Ok(out) => !out.trim().is_empty(),
+        Err(_) => true,
+    }
 }

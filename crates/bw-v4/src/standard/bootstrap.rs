@@ -22,8 +22,6 @@ pub struct BootstrapReport {
     pub written: Vec<String>,
     /// 跳过的路径 + 为什么跳。
     pub skipped: Vec<(String, String)>,
-    /// 复制进 `.claude/skills/` 的预置技能包路径。
-    pub skills: Vec<String>,
 }
 
 /// 渲染模板要用的变量。
@@ -39,10 +37,14 @@ pub struct BootstrapVars {
     pub chat: String,
 }
 
-/// 写核心件 + 复制预置技能包 + 记指纹。幂等:重跑一遍,已经一致的件原样跳过。
+/// 写规范件 + 记指纹。幂等:重跑一遍,已经一致的件原样跳过。
+///
+/// `all = false`(第 0 站接入)只铺 [`standard::LayAt::Adopt`] 那几份;
+/// `all = true`(人在配置屏点「规范铺底」)把该有的都补齐。
 pub fn write_core_files(
     workspace: &Path,
     vars: &BootstrapVars,
+    all: bool,
 ) -> Result<BootstrapReport, RepoFileError> {
     let version = standard::version();
     let mut managed = managed_file::read(workspace)?.unwrap_or_default();
@@ -61,6 +63,11 @@ pub fn write_core_files(
     ];
 
     for tmpl in standard::CORE_TEMPLATES {
+        // 第 0 站只铺人马上要用的那几份;其余等真的走到那一站,或者人在配置屏
+        // 点一次「规范铺底」补齐。
+        if !all && tmpl.lay_at != standard::LayAt::Adopt {
+            continue;
+        }
         let body = standard::render(tmpl.body, &vars_list);
         lay_one(
             workspace,
@@ -72,23 +79,18 @@ pub fn write_core_files(
         )?;
     }
 
-    // 预置技能包:Claude CLI 只在项目仓里找技能,不复制进来就读不到。
-    for (target, body) in standard::preset_skill_packages() {
-        let before = report.written.len();
-        lay_one(workspace, &target, body, version, &mut managed, &mut report)?;
-        if report.written.len() > before {
-            report.skills.push(target);
-        }
-    }
-
-    // 三张运作 workflow 的剧本,同理必须真复制进来。
-    for (target, body) in standard::ops_workflow_packages() {
-        let before = report.written.len();
-        lay_one(workspace, &target, body, version, &mut managed, &mut report)?;
-        if report.written.len() > before {
-            report.skills.push(target);
-        }
-    }
+    // **技能剧本不再复制进用户的仓。**
+    //
+    // 原来复制 13 份 SKILL.md 进去,是为了 buddy 自己等会儿再从那儿读一遍
+    // 正文塞进 `--append-system-prompt` —— 绕了一圈,而正本本来就编在 buddy
+    // 二进制里。代价还很实在:项目只要把 `.claude/` 写进 .gitignore(buddy
+    // 自己的仓就是),这 13 份就进不了版本控制,只活在某一台机器的检出里,
+    // 人根本说不清「bw 的资产到底是哪些」。
+    //
+    // 现在 buddy 把自带的剧本摊在自己的目录里,开工时按需给 agent 指路(见
+    // `app::bootstrap::agent_system_prompt`)。真想让**你自己**在这个仓里敲
+    // `claude` 时也能 `/skill-name`,那是另一件事,该做成「想要就铺一份」的
+    // 选项,不是默认往每个仓里塞。
 
     // 指纹清单最后写 —— 记的必须是刚落盘那一刻的内容。
     managed_file::write(workspace, &managed)?;
@@ -152,9 +154,14 @@ fn lay_one(
 pub struct BootstrapProbe {
     /// 仓是 buddy 自己建的(根提交作者是 buddy)—— 直推,不走 MR。
     pub owned: bool,
-    /// 已有 README / CLAUDE.md / AGENTS.md —— 触发第 2 步「合并调整」。
-    pub has_agent_docs: bool,
-    /// 有历史(提交数 > 1、有标签、有 CHANGELOG)—— 触发第 3 步「历史回填」。
+    /// 仓根已经有 README / CLAUDE.md / AGENTS.md —— 这个仓自己已经有一套约定了。
+    ///
+    /// **这条不触发铺底的任何一步。** 铺底只铺 `.bw/`(buddy 自己的资产),
+    /// 仓根一个字不写。要不要给这个项目写一份开发手册,是资产盘点(运作活②)
+    /// 首次模式去问人的事 —— 那是在改人家的项目,得先问过。这条只是写进活的
+    /// 正文当证据,顺带给将来那次盘点当输入。
+    pub has_own_conventions: bool,
+    /// 有历史(提交数 > 1、有标签、有 CHANGELOG)—— 触发资产盘点首次模式(历史回填)。
     pub has_history: bool,
     /// 写进这张活说明里的证据句子。评审的人不用猜这张活为什么跑了这几步。
     pub reasons: Vec<String>,
@@ -182,7 +189,7 @@ pub async fn probe(workspace: &Path) -> BootstrapProbe {
         .iter()
         .any(|f| workspace.join(f).is_file());
 
-    p.has_agent_docs = ["README.md", "CLAUDE.md", "AGENTS.md"]
+    p.has_own_conventions = ["README.md", "CLAUDE.md", "AGENTS.md"]
         .iter()
         .any(|f| workspace.join(f).is_file());
     // 1 条提交 = buddy 自己那次 scaffold,不算历史。
@@ -190,9 +197,9 @@ pub async fn probe(workspace: &Path) -> BootstrapProbe {
 
     p.reasons.push(format!("仓有 {commits} 条提交"));
     p.reasons.push(format!("{} 个标签", tags.len()));
-    if p.has_agent_docs {
+    if p.has_own_conventions {
         p.reasons
-            .push("已发现 README / CLAUDE.md / AGENTS.md".into());
+            .push("仓根已有 README / CLAUDE.md / AGENTS.md(这个仓自己有约定,铺底不碰)".into());
     }
     if has_changelog {
         p.reasons.push("仓根有 CHANGELOG / RELEASES".into());
@@ -210,12 +217,9 @@ pub fn issue_title() -> String {
 
 /// 探测到需要跑哪几步 —— 这句话写进活的正文,不写进标题。
 pub fn planned_steps(probe: &BootstrapProbe) -> String {
-    let mut steps = vec!["写核心件"];
-    if probe.has_agent_docs {
-        steps.push("合并调整(仓里已有 AGENTS.md / CLAUDE.md)");
-    }
+    let mut steps = vec!["写核心件(全部落在 `.bw/` 下,仓根一个字不写)"];
     if probe.has_history {
-        steps.push("历史回填(这个仓已经有历史了)");
+        steps.push("资产盘点首次模式:历史回填(这个仓已经有历史了)");
     }
     steps.join("、")
 }

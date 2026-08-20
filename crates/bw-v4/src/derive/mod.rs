@@ -22,7 +22,7 @@ use crate::model::Signal;
 /// `docs/v4-prototype/design/08-overview-derivation.md` §2.4),不存任何中间值。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HealthInputs {
-    /// (a) 本周有周目标(`docs/plan/<本周>.md` 存在且「## 周目标」段非空)。
+    /// (a) 本周有周目标(`.bw/plan/<本周>.md` 存在且「## 周目标」段非空)。
     pub has_week_goal: bool,
     /// (a) 本周仓里有真实 git 提交。
     pub committed_this_week: bool,
@@ -36,7 +36,7 @@ pub struct HealthInputs {
     pub has_metric_reading: bool,
     /// 任何一条指标读数按 `.bw/metrics.toml` 的目标判下来是红。
     pub any_metric_red: bool,
-    /// (c) 上周有合入(`git log --merges`)或发版(`docs/releases.md` 新增行)。
+    /// (c) 上周有合入(`git log --merges`)或发版(`.bw/releases.md` 新增行)。
     pub delivered_last_week: bool,
 }
 

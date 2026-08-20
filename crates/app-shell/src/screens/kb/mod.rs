@@ -206,8 +206,8 @@ fn assets_tab(a: Option<&AssetsVm>, bridge: &Bridge) -> Element {
                 div { class: "detail-empty",
                     "点一下上面的「资产」页签就现扫一次。"
                     br {}
-                    "五个区块全部现算:扫 .claude/skills/、走 git log、解析 docs/releases.md。\
-                     没有登记表可查。"
+                    "五个区块全部现算:列 buddy 自带的技能 + 扫本仓 .claude/skills/、\
+                     走 git log、解析 .bw/releases.md。没有登记表可查。"
                 }
             }
         };
@@ -228,7 +228,8 @@ fn assets_tab(a: Option<&AssetsVm>, bridge: &Bridge) -> Element {
 
         div { class: "asset-sect-title", "技能与 workflow" }
         div { class: "cfg-readonly-note",
-            "扫仓里的 .claude/skills/**/SKILL.md。「用过几次」按活挂的 workflow 现算,\
+            "buddy 自带的十三份(摊在 buddy 自己的资产目录,不进你的仓)+ 本仓 \
+             .claude/skills/ 里自有的。「用过几次」按活挂的 workflow 现算,\
              没有胜率 —— V4 不留战绩账本。"
         }
         if a.skills.is_empty() {

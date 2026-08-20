@@ -1,5 +1,7 @@
 # V2 路线与初始信息录入
 
+> ⚠️ **历史档案(V2 初始路线与功能意向录入,2026-08-20 归档)**。记录的是 2026-08-10 用户口述的 V2 初始节奏与意向,已被更详细的设计篇取代:调度简化见仍属现役的 [`docs/v2-prototype/issue-dispatch-prompt-skill.md`](../../v2-prototype/issue-dispatch-prompt-skill.md);最简多人见仍属现役的 [`docs/v2-prototype/same-project-multiple-workbenches.md`](../../v2-prototype/same-project-multiple-workbenches.md)。产品现状以仓根 `CLAUDE.md` 为准。
+
 > **30 秒导读**:这是 V2 的**初始节奏与功能意向**录入(2026-08-10 用户口述落盘),给后续 `buddy-feature-dev` 会话当起点。**现在作数**;细节设计未齐前不假装已定 API/UI。V1 已合入 main——日常先稳住托管与问题收集,周四出 V1.x 修 bug/易用性并推广;V2 两条能力线另开设计再动手。
 
 ---

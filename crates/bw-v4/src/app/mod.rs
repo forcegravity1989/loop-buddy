@@ -24,13 +24,16 @@ mod health;
 mod issue;
 mod ops;
 mod plan;
+mod progress;
 mod project;
 mod session;
 mod tools;
 mod worktree;
 
+pub use bootstrap::{agent_system_prompt, skill_pointer, SkillPointer};
 pub use health::collect_health_inputs;
 pub use ops::{skill_slug, OPS1_WORKFLOW, OPS2_WORKFLOW, OPS3_WORKFLOW};
+pub use progress::{ProgressLine, StepState};
 
 use crate::command::{Command, Event};
 use crate::model::ProjectId;
@@ -78,6 +81,13 @@ pub struct App {
     pub(crate) terminal: TerminalManager,
     /// 桌面壳开、headless 不开。见 [`App::with_pty`]。
     pub(crate) pty_enabled: bool,
+    /// 长命令边做边报的口子。桌面壳接上,headless 不接。见
+    /// [`progress`](crate::app::progress) —— 只为让人看得见,不承担账目。
+    pub(crate) progress: Option<tokio::sync::broadcast::Sender<ProgressLine>>,
+    /// buddy 自己的资产目录 —— 技能库摊在这儿(`<asset_root>/skills/`)。
+    /// **不在任何一个用户项目的仓里**:用户的 `.gitignore` 怎么写不该由 buddy
+    /// 决定,而 buddy 自带的剧本每个项目都一样,没有复制 N 份的道理。
+    pub(crate) asset_root: PathBuf,
 }
 
 impl App {
@@ -86,12 +96,62 @@ impl App {
         workspaces_root: impl Into<PathBuf>,
         executor: Arc<dyn InteractiveExecutor>,
     ) -> Self {
+        let workspaces_root = workspaces_root.into();
         Self {
+            // 默认落在工作区根目录旁边的 `.bw-assets/`。桌面壳会用
+            // [`App::with_asset_root`] 换成库文件旁边那份;headless 例子就用
+            // 这个默认值,跑完随临时目录一起没。
+            asset_root: workspaces_root.join(".bw-assets"),
             store,
-            workspaces_root: workspaces_root.into(),
+            workspaces_root,
             executor,
             terminal: TerminalManager::new(),
             pty_enabled: false,
+            progress: None,
+        }
+    }
+
+    /// buddy 自己的资产放哪。**改工作区根目录不会跟着搬** —— 这里放的是
+    /// buddy 自带的东西,和用户把仓放在哪没关系。
+    pub fn with_asset_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.asset_root = root.into();
+        self
+    }
+
+    /// buddy 技能库摊在哪。开工前 [`App::ensure_skill_assets`] 保证它是齐的。
+    pub fn skills_dir(&self) -> PathBuf {
+        self.asset_root.join("skills")
+    }
+
+    /// 把 buddy 自带的技能摊到 [`App::skills_dir`],返回那个目录。
+    ///
+    /// 幂等:内容一致就不写。**写不下去不算开工失败** —— 调用方拿到 `None`
+    /// 就不给 agent 指技能这条路,如实少一段,不编一个路径出来。
+    pub fn ensure_skill_assets(&self) -> Option<PathBuf> {
+        let dir = self.skills_dir();
+        for pack in crate::standard::skills::all() {
+            let path = dir.join(&pack.rel);
+            if std::fs::read_to_string(&path).is_ok_and(|on_disk| on_disk == pack.raw) {
+                continue;
+            }
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).ok()?;
+            }
+            std::fs::write(&path, pack.raw).ok()?;
+        }
+        Some(dir)
+    }
+
+    /// 把「一步一句」的回执接出去。不接的话长命令照跑,只是没人看得见中间过程。
+    pub fn with_progress(mut self, tx: tokio::sync::broadcast::Sender<ProgressLine>) -> Self {
+        self.progress = Some(tx);
+        self
+    }
+
+    /// 报一步。**没人订就丢掉** —— 报不出去绝不影响命令本身。
+    pub(crate) fn step(&self, line: ProgressLine) {
+        if let Some(tx) = &self.progress {
+            let _ = tx.send(line);
         }
     }
 
@@ -111,11 +171,18 @@ impl App {
             .project(id)
             .await?
             .ok_or_else(|| AppError::NoSuchProject(id.uuid().to_string()))?;
-        Ok(if p.workspace_path.is_empty() {
-            self.workspaces_root.join(&p.slug)
+        Ok(self.workspace_at(&p.slug, &p.workspace_path))
+    }
+
+    /// 仓该落在哪:项目行里配了路径就用它,没配就是 `<工作区根目录>/<slug>`。
+    /// **接入的时候项目行还不存在**(要先把仓取下来才建行),所以这条规矩单
+    /// 独提出来一份,两处共用 —— 两边各写一遍就会走散。
+    pub(crate) fn workspace_at(&self, slug: &str, workspace_path: &str) -> PathBuf {
+        if workspace_path.trim().is_empty() {
+            self.workspaces_root.join(slug)
         } else {
-            PathBuf::from(&p.workspace_path)
-        })
+            PathBuf::from(workspace_path.trim())
+        }
     }
 
     /// 唯一的入口。
@@ -130,6 +197,8 @@ impl App {
                 self.create_project(slug, intent, remote, workspace_path)
                     .await
             }
+            Command::RemoveProject { project_id } => self.remove_project(project_id).await,
+            Command::ReopenSession { issue_id } => self.reopen_session(issue_id).await,
             Command::EditProjectCard { project_id, intent } => {
                 self.edit_project_card(project_id, intent).await
             }
@@ -143,7 +212,7 @@ impl App {
                     .await
             }
             Command::RunStandardBootstrap { project_id } => {
-                self.run_standard_bootstrap(project_id).await
+                self.run_standard_bootstrap(project_id, true).await
             }
             Command::ReconcileStandard { project_id } => self.reconcile_standard(project_id).await,
             Command::StartWeekPlanning { project_id, week } => {
@@ -186,6 +255,7 @@ impl App {
             }
             Command::RunIssue { id } => self.run_issue(id).await,
             Command::SubmitIssueWork { id } => self.submit_issue_work(id).await,
+            Command::SetWorkspacesRoot { path } => self.set_workspaces_root(path).await,
             Command::TransitionIssue { id, to } => self.transition_issue(id, to).await,
             Command::BlockIssue { id, reason } => self.block_issue(id, reason).await,
             Command::SaveToolMapping {

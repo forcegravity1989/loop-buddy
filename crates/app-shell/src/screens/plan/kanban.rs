@@ -15,6 +15,9 @@ pub struct PendingMove {
     pub title: String,
     pub from: IssueStatus,
     pub to: IssueStatus,
+    /// 这张活的 MR 号,`0` = 没有。确认框据此说清楚这一下到底会不会去合 MR ——
+    /// 拖进「已完成」发的是「合入并完成」,人得先知道要合的是哪一个。
+    pub pr_number: u32,
 }
 
 /// 每一列一句「什么样的活会在这一列」。照高保真的 KANBAN_COL_DEF。
@@ -122,6 +125,7 @@ fn column(
             title: card.title.clone(),
             from: card.status,
             to: target,
+            pr_number: card.pr_number,
         }));
     };
 
@@ -187,6 +191,15 @@ fn card_view(
                 }
                 if c.origin == "自动建" {
                     span { class: "chip chip-gray", "自动" }
+                }
+                // 没排周的活在每一周的视图里都露面(运作活按设计就不排周)。
+                // 不挂这个徽记的话,人会以为它属于正在看的这一周。
+                if c.week_of.is_empty() {
+                    span {
+                        class: "chip chip-gray",
+                        title: "这张活没排进任何一周,在哪一周看都能看到它",
+                        "未排周"
+                    }
                 }
                 span { style: "margin-left:auto;", title: "{c.status.label()}", {light_dot(sig, false)} }
             }

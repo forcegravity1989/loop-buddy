@@ -49,6 +49,8 @@ pub struct UiState {
     /// 会话屏选中哪个会话、开着哪个页签、展开了哪些目录、中栏开着哪个文件。
     /// 纯导航状态,一律不进库。
     pub session_open: Option<bw_v4::model::IssueId>,
+    /// 计划屏详情抽屉开着哪张活。纯导航状态,不进库。
+    pub selected_issue: Option<bw_v4::model::IssueId>,
     pub session_tab: crate::vm::SessionTab,
     pub expanded_dirs: Vec<String>,
     pub open_file: String,
@@ -64,6 +66,9 @@ pub struct UiState {
     pub repo_stats: Option<crate::vm::RepoStatsVm>,
     pub db_path: String,
     pub workspaces_root: String,
+    /// 接入屏那份仓列表的状态。**不进库** —— 它是「现在去平台问了一次」的结果,
+    /// 关掉接入屏就该忘掉。
+    pub repos: crate::vm::RepoPickerVm,
 }
 
 /// 深链按 slug 找,找不到再按显示名找。
@@ -110,6 +115,20 @@ fn primary_note(events: &[Event]) -> Option<String> {
                 format!("项目 {slug} 已接入")
             }
         }
+        Event::SessionReopened { live, .. } => {
+            if *live {
+                "这场会话本来就开着".into()
+            } else {
+                "把上次那场会话接回来了 —— 它不会自己动手,你说话它才动".into()
+            }
+        }
+        Event::ProjectRemoved {
+            slug,
+            issues,
+            workspace,
+        } => format!(
+            "{slug} 已从工作台移走(连同 {issues} 张活的账)。**仓一个字节都没动**,还在 {workspace}"
+        ),
         Event::ProjectCardEditPending { .. } => "名片改动已建成一张轻量活,等评审合入".into(),
         Event::ProjectChatChanged { .. } => "项目群配置已写进 .bw/project.toml".into(),
         Event::StandardBootstrapped {
@@ -136,6 +155,14 @@ fn primary_note(events: &[Event]) -> Option<String> {
         ),
         Event::WeekPlanStarted { week, .. } => format!("{week} 的周计划文件已写出,等你确认草稿"),
         Event::HistoryBackfilled { note, .. } => note.clone(),
+        Event::WorkspacesRootChanged { path, pinned } => {
+            let tail = if *pinned > 0 {
+                format!(",已接入的 {pinned} 个项目已就地钉在原位置、不会跟着搬")
+            } else {
+                ",已接入的项目都在原处".to_string()
+            };
+            format!("工作区根目录改成了 {path}{tail}")
+        }
         Event::IssueSubmitted {
             branch,
             commits,
@@ -152,10 +179,15 @@ fn primary_note(events: &[Event]) -> Option<String> {
             }
         }
         Event::IssueMerged {
-            pr_number, merged, ..
+            pr_number,
+            merged,
+            local_note,
+            ..
         } => {
             if *merged {
-                format!("MR #{pr_number} 已合入,活已完成")
+                // 本机收尾的下落必须跟着一起说 —— 拉没拉到最新决定了工作区里
+                // 那几份 `.bw/` 件读不读得到,人得当场知道。
+                format!("MR #{pr_number} 已合入,活已完成。{local_note}")
             } else {
                 "这张活没有可合的 MR,只标了完成".into()
             }
@@ -311,6 +343,7 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
         fatal: None,
         projects: cards,
         env: probe_env(),
+        repos: ui.repos.clone(),
         open,
         settings: SettingsVm {
             workspaces_root: ui.workspaces_root.clone(),
@@ -413,6 +446,8 @@ async fn build_project(
         .flatten()
         .and_then(|v| v.parse().ok());
     let sessions = build_sessions(app, id, &issues).await;
+    // 详情抽屉里那两条链接的前缀。读 `.git/config`,不起子进程。
+    let browse_base = bw_v4::git::browse_base(&ws).unwrap_or_default();
     let current_week = bw_v4::isoweek::current_week();
     let viewing_week = if ui.viewing_week.is_empty() {
         current_week.clone()
@@ -521,6 +556,8 @@ async fn build_project(
             .collect(),
         sessions: sessions.clone(),
         session_open: ui.session_open,
+        selected_issue: ui.selected_issue,
+        browse_base: browse_base.clone(),
         workbench: build_workbench(
             &sessions,
             &issues,
@@ -531,14 +568,11 @@ async fn build_project(
         )
         .await,
         notify: NotifyVm {
-            in_review: issues
+            // 评审中 **且真有 MR**。没 MR 的评审中活不是通知 —— 它在计划屏的
+            // 评审中那一列里,人在那儿点完成。
+            to_merge: issues
                 .iter()
-                .filter(|i| i.status == IssueStatus::InReview)
-                .map(card_item)
-                .collect(),
-            blocked: issues
-                .iter()
-                .filter(|i| i.status == IssueStatus::Blocked)
+                .filter(|i| i.status == IssueStatus::InReview && i.pr_number > 0)
                 .map(card_item)
                 .collect(),
             seen_at: notify_seen,
@@ -584,5 +618,9 @@ pub(super) fn card_item(i: &bw_v4::Issue) -> CardItemVm {
         metric_key: i.metric_key.clone(),
         settled: i.settled_at.is_some(),
         status: i.status,
+        pr_number: i.pr_number,
+        remote_number: i.remote_number,
+        branch: i.branch.clone(),
+        body: i.body.clone(),
     }
 }

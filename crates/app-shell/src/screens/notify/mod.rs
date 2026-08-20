@@ -1,17 +1,30 @@
-//! 项目内 · 通知。**结构照 `hifi/index.html` 的 `renderNotify` 排**:上半是
-//! 「待处理」——真的需要人动手的事;下半是「事件」——最近发生了什么。
+//! 项目内 · 通知。上半是「待处理」,下半是「事件」——最近发生了什么。
 //!
-//! 两条如实:
+//! **通知只有一类:有 MR 等你合入。** 试点第一天定的边界:通知就该是「有件事
+//! 非你不可、而且现在就能做」。「活阻塞了」「agent 停下来等你回话」这些是**状态**
+//! ——该在计划屏和会话屏上看见,不该也来占通知位;尤其「等你回话」那种,真要
+//! 提醒也该是系统级的弹窗,不是一个你得先点进来才看得到的列表。那些等实践清楚了
+//! 单独设计,现在**不摆冗余的位、不留冗余的代码**(阻塞那一段连同它的按钮已经
+//! 整段删掉,不是注释掉)。
 //!
-//! 1. **事件流没有事件表**。它是从四张表里现算的(活什么时候建的、什么时候
-//!    结清的、会话什么时候开的)。存不下来的事就不在流里,不补一条假的。
-//! 2. **不做已读未读的账本**。「看到哪个时间点」只是一个 key/value,不参与
+//! 三条如实:
+//!
+//! 1. **事件流没有事件表**。它是从四张表里现算的:活什么时候建的
+//!    (`issue.created_at`)、什么时候结清的(`issue.settled_at`)、会话什么
+//!    时候开的(`claude_conversation.created_at`)。存不下来的事(某一次运行
+//!    失败、某条群消息发没发出去)就不在流里,少一条,不补一条假的。
+//! 2. **只列最近 80 条**(上限在 `bridge::vm_derive::build_notify_events` 里)。
+//!    更早的事没有消失,是这条流没往下翻 —— 要查更早的直接查库。
+//! 3. **不做已读未读的账本**。「看到哪个时间点」只是一个 key/value,不参与
 //!    任何计数。
+//!
+//! 上面这三条是**给改这个文件的人看的**,不摆到界面上 —— 用户要的是「谁在
+//! 等我」,不是这条流怎么算出来的。
 
 use crate::bridge::{Bridge, Panel, PanelNav, Req};
 use crate::vm::{CardItemVm, ProjectVm};
 use bw_v4::command::Command;
-use bw_v4::model::{IssueId, IssueStatus};
+use bw_v4::model::IssueId;
 use dioxus::prelude::*;
 
 #[component]
@@ -22,7 +35,7 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
     let b_cfg = bridge.clone();
     let pid = p.id;
     let n = &p.notify;
-    let pending = n.in_review.len() + n.blocked.len();
+    let pending = n.to_merge.len();
     let chat_unset = p.card.chat == "未配";
     rsx! {
         section { style: "max-width:820px;",
@@ -52,16 +65,13 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
                 }
             }
 
-            div { class: "notify-sect-title", "待处理 · {pending}" }
+            div { class: "notify-sect-title", "等你合入 · {pending}" }
             div { class: "notify-list",
                 if pending == 0 {
-                    div { class: "drawer-empty", "待处理已清空" }
+                    div { class: "drawer-empty", "没有等你合入的 MR" }
                 }
-                for c in n.in_review.iter() {
+                for c in n.to_merge.iter() {
                     {review_item(c, bridge, nav)}
-                }
-                for c in n.blocked.iter() {
-                    {blocked_item(c, bridge, nav)}
                 }
             }
 
@@ -74,87 +84,37 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
                     {event_row(i, e, bridge, nav)}
                 }
             }
-            div { style: "font-size:10.5px;color:var(--ink-4);margin-top:10px;line-height:1.8;",
-                "事件流是从库里那四张表现算的:活什么时候建的、什么时候结清的、会话\
-                 什么时候开的。存不下来的事(某一次运行失败、某条群消息发没发出去)\
-                 不在这条流里 —— 少一条,不编一条。"
-                br {}
-                "只列最近 80 条。更早的事没有消失,是这条流没往下翻 —— 要查更早的\
-                 直接查库(issue 的 created_at / settled_at、claude_conversation 的 created_at)。"
-            }
         }
     }
 }
 
-/// 等人合入的活。「合入并完成」先真的把 MR 合了,再把活推到完成 —— 合入没成
-/// 就整条不算数,活留在原地可以重试。库里没记 MR 号的,内核会拿这张活的分支
-/// 去远端现查一次(队友自己开的 MR 就这么找到);确实没有 MR 可合的(项目没
-/// 挂远端),只走「完成」那一步,事件里如实说没合。
+/// 等人合入的活。**通知只负责把信息通知到位,一个决定都不在这儿下。**
+///
+/// 所以这一条上只有「去看这张活」一颗按钮:点它落到计划屏、并把这张活的详情抽
+/// 屉打开 —— 会话、MR 链接、远端 issue 链接、正文全在那儿,看完了在那边点完成
+/// (那一下才是真合)。这里原先还有一颗「合入并完成」,**已整段删掉**:它让人
+/// 不看就能合,和「先看,再决定」这条旅程是反的。
+///
+/// 原来这里跳的是会话屏,那张活要是从没起过会话(buddy 自己写的铺底活就是),
+/// 人点过去看到的是一片空白。
 fn review_item(c: &CardItemVm, bridge: &Bridge, nav: PanelNav) -> Element {
-    let (b_open, b_done, b_merge) = (bridge.clone(), bridge.clone(), bridge.clone());
+    let b_open = bridge.clone();
     let id = c.id;
     rsx! {
         div { key: "{c.id:?}", class: "drawer-item",
             div { class: "desc",
                 "#{c.number} {c.title}"
-                span { class: "chip", style: "margin-left:6px;", "评审中" }
+                span { class: "chip chip-clay", style: "margin-left:6px;", "MR #{c.pr_number}" }
                 span { class: "chip chip-gray", style: "margin-left:4px;", "{c.category}" }
             }
             div { class: "acts",
                 button {
                     class: "btn btn-sm btn-ghost",
                     onclick: move |_| {
-                        b_open.send(Req::SelectSession(Some(id)));
-                        nav.go(Panel::Session);
+                        b_open.send(Req::SelectIssue(Some(id)));
+                        nav.go(Panel::Plan);
                     },
-                    "打开"
-                }
-                button {
-                    class: "btn btn-sm",
-                    onclick: move |_| b_done.cmd(Command::TransitionIssue {
-                        id,
-                        to: IssueStatus::Done,
-                    }),
-                    "只标完成"
-                }
-                button {
-                    class: "btn btn-sm btn-primary",
-                    onclick: move |_| b_merge.cmd(Command::MergeAndSettle { id }),
-                    "合入并完成"
-                }
-            }
-        }
-    }
-}
-
-fn blocked_item(c: &CardItemVm, bridge: &Bridge, nav: PanelNav) -> Element {
-    let (b_open, b_back) = (bridge.clone(), bridge.clone());
-    let id = c.id;
-    rsx! {
-        div { key: "{c.id:?}", class: "drawer-item",
-            div { class: "desc",
-                "#{c.number} {c.title}"
-                span { class: "chip chip-red", style: "margin-left:6px;", "卡住了" }
-            }
-            div { style: "font-size:11px;color:var(--ink-3);margin-bottom:6px;",
-                "如实停在原地,可以重试。卡在哪写在活的说明里。"
-            }
-            div { class: "acts",
-                button {
-                    class: "btn btn-sm btn-ghost",
-                    onclick: move |_| {
-                        b_open.send(Req::SelectSession(Some(id)));
-                        nav.go(Panel::Session);
-                    },
-                    "打开"
-                }
-                button {
-                    class: "btn btn-sm",
-                    onclick: move |_| b_back.cmd(Command::TransitionIssue {
-                        id,
-                        to: IssueStatus::Todo,
-                    }),
-                    "解除阻塞 → 待办"
+                    "去看这张活"
                 }
             }
         }

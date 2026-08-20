@@ -59,6 +59,14 @@ pub enum Command {
     // ── 规范铺底(运作活③)─────────────────────────────────
     /// 一次性运作活③:按探测结果决定要跑几步,A 刀只做第 1 步(写核心件)。
     RunStandardBootstrap { project_id: ProjectId },
+    /// 把一个项目从工作台上移走。**只动库,不动仓** —— 仓是正本,里面是真实
+    /// 的劳动成果。界面上要人点两下才发得出这条(第一下问「真移走?」)。
+    RemoveProject { project_id: ProjectId },
+    /// 把这张活上次那场会话接回来看看(`claude --resume <id>`)。
+    ///
+    /// **不改活的状态、不发任何 prompt** —— 纯粹是「让我看看上次聊到哪了」。
+    /// 和 ▶开工 的区别就在这:▶开工 会把活推到「进行中」,这条不会。
+    ReopenSession { issue_id: IssueId },
     /// 纯读:按「缺 / 过期 / 人改过 / 一致」四类对账,不建活不写仓。
     ReconcileStandard { project_id: ProjectId },
 
@@ -96,7 +104,7 @@ pub enum Command {
         project_id: ProjectId,
         version: String,
     },
-    /// 发版本:给选中的活写版本号 + 往 `docs/releases.md` 追加一行。
+    /// 发版本:给选中的活写版本号 + 往 `.bw/releases.md` 追加一行。
     CutRelease {
         project_id: ProjectId,
         version: String,
@@ -132,6 +140,12 @@ pub enum Command {
     },
     /// 手动探活一次。项目墙「测一下」与配置屏共用。
     ProbeTool { name: String },
+    /// 改「工作区根目录」——新接入的项目默认落在哪。**只是本机设置**,存 `app_meta`,
+    /// 不进任何仓文件:换台机器仓拉下来还在原处,这个值本来就该各人各配。
+    ///
+    /// 只影响**之后**接入的项目:已接入的项目行里各自记着自己的仓路径,不会被这
+    /// 一改牵着走(不然改一下根目录,已有项目就集体找不到仓了)。
+    SetWorkspacesRoot { path: String },
 
     // ── 通知 ──────────────────────────────────────────────
     /// 记「这个项目的事件流看到哪个时间点」。只影响视觉状态,不参与待处理计数。
@@ -199,6 +213,18 @@ pub enum Event {
         project_id: ProjectId,
     },
     /// 规范铺底第 1 步真的把文件写进仓并提交了。`files` 是实际落盘的路径。
+    /// 项目从工作台上移走了。`issues` = 跟着一起删掉的活数,好让人知道
+    /// 自己刚才丢掉了多少账;仓和活自己的 worktree 都还在硬盘上。
+    ProjectRemoved {
+        slug: String,
+        issues: u64,
+        workspace: String,
+    },
+    /// 上次那场会话接回来了。`live` = 之前就开着、这次什么都没做。
+    SessionReopened {
+        issue_id: IssueId,
+        live: bool,
+    },
     StandardBootstrapped {
         project_id: ProjectId,
         issue_id: IssueId,
@@ -250,6 +276,12 @@ pub enum Event {
         pr_number: u32,
         note: String,
     },
+    /// 工作区根目录改好了。`pinned` = 有几个原本没填仓路径的老项目,被就地钉死在
+    /// 了老位置(它们一个都没搬,只是从此不再跟着根目录走)。
+    WorkspacesRootChanged {
+        path: String,
+        pinned: u32,
+    },
     IssueTransitioned {
         id: IssueId,
         to: IssueStatus,
@@ -284,8 +316,6 @@ pub enum Event {
         releases: Vec<String>,
         note: String,
     },
-    /// 合入并完成走完了。`merged=false` = 这张活本来就没有 MR 可合(本地项目
-    /// 或者还没开 PR),只走了「完成」那一步。
     /// 往项目群发了(或没发成)一条。**不落库**——通知行上那句「已发到群 ✓」
     /// 和事件流里那一条是同一个事件在两处的展示,只在当前这次运行里存在。
     ChatNotifySent {
@@ -296,10 +326,16 @@ pub enum Event {
         note: String,
     },
 
+    /// 合入并完成走完了。`merged=false` = 这张活本来就没有 MR 可合(本地项目
+    /// 或者还没开 PR),只走了「完成」那一步。
     IssueMerged {
         id: IssueId,
         pr_number: u32,
         merged: bool,
+        /// 合入之后在本机做的收尾:主检出有没有拉到最新、那条活分支有没有
+        /// 收掉。**拉不动就写拉不动、删不掉就写删不掉**,绝不假装做过了。
+        /// `merged=false` 时为空(没合过就没有收尾这回事)。
+        local_note: String,
     },
     /// ■停止按下去之后。`was_live=false` = 本来就没有活着的终端可停。
     RunCancelled {

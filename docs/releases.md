@@ -8,7 +8,7 @@
 
 | 版本号 | 出包日 | 阶段 | 这一版是什么 | 相对上一版多了 / 修了什么 |
 |---|---|---|---|---|
-| **0.3.0-v3** | 2026-08-14 首包；2026-08-17 起按 V3-use-fix 重出 | V3 修 bug / 推广 | 第一份给同事的 Windows 安装包（`BuildersWorkbench-Setup.exe`）+ 开发包 | **能力**：原型进度内嵌本机 Open Design（V3-OD-embed）。**修**：结束页正文、Windows 子系统、`WebView2Loader.dll`、藏 cmd 闪窗、唤醒环境变量带 `=` 被拒。**2026-08-17 起还要打进重出包**：安装器/探测认 `claude.cmd`、`.cmd` 开工走 `cmd.exe /c`、创建流拉 999 / 下拉画 30 / 可搜索、程序图标。设计：[`v3-prototype/onboard-list-and-claude-resolve.md`](v3-prototype/onboard-list-and-claude-resolve.md) |
+| **0.3.0-v3** | 2026-08-14 首包；2026-08-17 起按 V3-use-fix 重出 | V3 修 bug / 推广 | 第一份给同事的 Windows 安装包（`BuildersWorkbench-Setup.exe`）+ 开发包 | **能力**：原型进度内嵌本机 Open Design（V3-OD-embed）。**修**：结束页正文、Windows 子系统、`WebView2Loader.dll`、藏 cmd 闪窗、唤醒环境变量带 `=` 被拒。**2026-08-17 起还要打进重出包**：安装器/探测认 `claude.cmd`、`.cmd` 开工走 `cmd.exe /c`、创建流拉 999 / 下拉画 30 / 可搜索、程序图标。设计：[`archive/v3-prototype/onboard-list-and-claude-resolve.md`](archive/v3-prototype/onboard-list-and-claude-resolve.md)（已归档，本轮已落地） |
 
 重出包后把「出包日」改成实际编译日，不要另起一个没出过的号。
 

@@ -95,6 +95,21 @@ fn Root() -> Element {
         }
     });
 
+    // 打开了一个项目 → 顶层屏(接入 / 设置)让位。
+    //
+    // **顶层屏是外壳自己的一个信号,内核不知道它存在**:接入完内核把 `open`
+    // 设上了,项目其实已经在下面开好了,可人眼前还是那张接入卡 —— 看起来就像
+    // 「点了没跳转」。这个 effect 就是把这两边接起来的那根线。
+    let mut last_open = use_signal(|| None::<bw_v4::model::ProjectId>);
+    use_effect(move || {
+        let now = vm.read().open.as_ref().map(|p| p.id);
+        // 用 peek 读上一次的值:这里只是拿它比一比,不该因此再订阅一遍自己。
+        if now.is_some() && now != *last_open.peek() {
+            top_view.set(None);
+        }
+        last_open.set(now);
+    });
+
     let v = vm.read().clone();
 
     if let Some(fatal) = &v.fatal {
@@ -208,7 +223,7 @@ fn body(
                 screens::onboard::View { vm: v.clone(), bridge: bridge.clone(), close }
             },
             TopView::Settings => rsx! {
-                screens::settings::View { vm: v.clone(), close }
+                screens::settings::View { vm: v.clone(), bridge: bridge.clone(), close }
             },
         };
     }

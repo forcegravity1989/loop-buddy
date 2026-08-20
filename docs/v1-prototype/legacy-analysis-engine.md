@@ -127,7 +127,7 @@ pair.master.resize(Size::new(cols, rows))?;
 
 - `crates/bw-app/src/lib.rs:6283` —— `match bw_engine::codehub::clone_repo(&host, &path, &dir).await { ... }`，在 `CompleteCreation` 的 dispatch 内同步 `.await`。github 分支同构（L6217 `bw_engine::github::clone_repo(...).await`）。
 - `crates/app-desktop/src/kernel.rs:709-714` —— 桌面壳命令循环：`cmd = cmd_rx.recv() => { app.dispatch(cmd).await; vm_tx.send(...) }`。单线程、串行。`dispatch` 内的 `.await` 不返回，下一个 cmd 就卡在 `cmd_rx` 里出不来。
-- PF1（`piercing-fixes-1.md` 点④）修的是 cron 抢跑时序（clone 完成前 cron 不跑），**没动 clone 同步堵的根因**。
+- PF1（`docs/archive/v1-prototype/piercing-fixes-1.md` 点④,已归档)修的是 cron 抢跑时序(clone 完成前 cron 不跑),**没动 clone 同步堵的根因**。
 
 ### 根因
 

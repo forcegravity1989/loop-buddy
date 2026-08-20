@@ -1,5 +1,7 @@
 # V1 Issue 2 · 找指标/绑数据 交互式闭环 + 采集装置归位 — 开发事实源
 
+> ⚠️ **历史档案(V1 Issue 2「找指标/绑数据」交互式闭环开发事实源,2026-08-20 归档)**。记录的是交互式执行模型、采集装置归位的设计与开发过程,主体已落地;文中 §10.6/§10.7 记的终端会话诊断已被归正,归正版在仍属现役的 [`docs/v1-prototype/issue2-terminal-conversation-refactor.md`](../../v1-prototype/issue2-terminal-conversation-refactor.md),别照本文施工。遗留问题现状以 [`docs/LEFTOVERS.md`](../../LEFTOVERS.md) 为准;产品现状以仓根 `CLAUDE.md` 为准。
+
 > 走 (c):现有 buddy app 当底。本文是设计 + 开发唯一事实源(SubAgent 照此建)。5 步法:scope delta ✅(经多轮 grilling 重塑)→ 对齐原型(本文)→ 开发 → 验证 → 填指南。Issue 已提(Issue 2)。
 > ⚡ 遗留问题统一归拢于 `docs/v1-prototype/LEFTOVERS.md`(唯一完整清单,W1-1~4/W2-1~7/W3-1~9/V1-P1);本文各「遗留/未决/后续」条目(§6 偏差/未决、§10.5~10.7 等)为设计过程原文留存,读遗留以 LEFTOVERS 为准。
 >

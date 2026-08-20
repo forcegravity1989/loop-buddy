@@ -74,6 +74,71 @@ impl App {
         Ok(vec![Event::RunCancelled { id, was_live }])
     }
 
+    /// 把上次那场会话接回来看看。**不改活的状态,不发任何 prompt。**
+    ///
+    /// 为什么要单独一条命令、不复用 ▶开工:▶开工 会把活推到「进行中」。而人从
+    /// 通知点进来看一张**已经在评审中**的活时,要的是「让我看看 agent 都干了
+    /// 什么」,不是把这张活拽回上一格。`claude --resume <id>` 本身也确实什么都
+    /// 不做 —— 它不带 prompt、不带 `--append-system-prompt`,只是重新进入那场
+    /// 对话等人说话,既不花钱也不会动手。
+    ///
+    /// 这条是**从 V3 掉下来的行为**:V3 里「选中一张活」就等于接回它的会话
+    /// (`bw-app/src/terminal.rs` 有整套测试在守),V4 的 `SelectSession` 退化
+    /// 成了纯切视图,于是点进去是一片空白。
+    pub(super) async fn reopen_session(&mut self, id: IssueId) -> Result<Vec<Event>> {
+        if !self.pty_enabled {
+            return Err(AppError::Refused("这个进程没开内嵌终端,接不回会话".into()));
+        }
+        let Some(conv) = self.store.conversation_for_issue(id).await? else {
+            return Err(AppError::Refused(
+                "这张活还没有过会话 —— 点「▶开工」起一场".into(),
+            ));
+        };
+        // 已经开着就什么都不做。再 attach 一次会先把旧的整个进程组 kill 掉,
+        // 人跟 agent 谈到一半的上下文就没了。
+        if self.terminal.is_live(conv.id) {
+            return Ok(vec![Event::SessionReopened {
+                issue_id: id,
+                live: true,
+            }]);
+        }
+        let issue = self.issue_or_err(id).await?;
+        let ws = self.workspace_of(issue.project_id).await?;
+        if !ws.is_dir() {
+            return Err(AppError::NoWorkspace(issue.project_id.uuid().to_string()));
+        }
+        let tree = worktree::provision(&ws, issue.number).await?;
+        let plan = build_resume_plan(
+            &CLAUDE,
+            Some(conv.claude_session_id.as_str()).filter(|s| !s.is_empty()),
+            &tree.path,
+        )
+        .map_err(|e| AppError::Exec(e.to_string()))?;
+
+        let meta = ConversationMeta {
+            conversation_id: conv.id,
+            issue_id: id,
+            claude_session_id: conv.claude_session_id.clone(),
+            workspace_path: tree.path.clone(),
+            branch_name: tree.branch,
+        };
+        let (bytes_tx, input_rx) = self.terminal.attach(conv.id, meta, None);
+        let executor = self.executor.clone();
+        let ctx = RunCtx {
+            project: issue.project_id,
+            workflow: WorkflowId::nil(),
+        };
+        tokio::spawn(async move {
+            let _ = executor
+                .run_skill_pty(&plan, &ctx, bytes_tx, input_rx)
+                .await;
+        });
+        Ok(vec![Event::SessionReopened {
+            issue_id: id,
+            live: false,
+        }])
+    }
+
     /// ▶跑 的 PTY 分支。返回 `Ok(true)` 表示已经挂起来了,调用方到此为止。
     ///
     /// 和阻塞那条路最大的区别:**这里不等执行器返回**。子进程在后台跑,状态
@@ -92,10 +157,10 @@ impl App {
             return Ok(false);
         }
 
-        // 这张活的终端还开着就别重开。`attach` 第一件事是 close 掉同 id 的旧会
-        // 话(整个进程组被 kill),而 `--resume` 那条路今天走不通(见下),所以
-        // 重开一定是**从头一次新对话** —— 人跟 agent 谈到一半的上下文就这么没
-        // 了,还没有任何提示。顶栏「▶开工」和「■停止」是挨着放的,误点很容易。
+        // 这张活的终端还开着就别重开。`attach` 第一件事是 close 掉同 id 的旧
+        // 会话(整个进程组被 kill)—— 人跟 agent 谈到一半的上下文就这么没了,
+        // 还没有任何提示。顶栏「▶开工」和「■停止」是挨着放的,误点很容易。
+        // (光接回上次那场对话不必走这条路,那是 `reopen_session`。)
         if let Some(existing) = self.store.conversation_for_issue(id).await? {
             if self.terminal.is_live(existing.id) {
                 return Err(AppError::Refused(
@@ -134,18 +199,24 @@ impl App {
         }
 
         let prompt = format!("#{} {}\n\n{}", issue.number, issue.title, issue.body);
-        // 剧本先在这棵树里找,找不到再回主工作区找 —— 有些仓(buddy 自己的就
-        // 是)把 `.claude/` 写进了 .gitignore,技能包进不了分支,只在主检出里。
-        let workflow_body = super::bootstrap::workflow_body(&tree.path, &issue.workflow)
-            .or_else(|| super::bootstrap::workflow_body(&ws, &issue.workflow));
-        let system_prompt = super::bootstrap::agent_system_prompt(&issue, workflow_body.as_deref());
+        // 剧本在 buddy 自己的技能目录里,不在用户的仓里。系统提示词只拿到
+        // 名字 + 一句话 + 路径,正文让 agent 自己按需读。
+        let skills_dir = self.ensure_skill_assets();
+        let skill = skills_dir
+            .as_deref()
+            .and_then(|d| super::bootstrap::skill_pointer(d, &issue.workflow));
+        let system_prompt =
+            super::bootstrap::agent_system_prompt(&issue, &tree.path, skill.as_ref());
         // 有 `--resume` id 就精确接回那一次对话,不是模糊地接「最近一次」。
-        let plan = if conv.claude_session_id.is_empty() {
+        let mut plan = if conv.claude_session_id.is_empty() {
             build_startup_plan(&CLAUDE, &prompt, &system_prompt, &tree.path)
         } else {
             build_resume_plan(&CLAUDE, Some(&conv.claude_session_id), &tree.path)
         }
         .map_err(|e| AppError::Exec(e.to_string()))?;
+        if let Some(d) = &skills_dir {
+            super::bootstrap::allow_skills_dir(&mut plan, d);
+        }
 
         let meta = ConversationMeta {
             conversation_id: conv.id,

@@ -20,6 +20,9 @@ pub fn View(vm: Vm, bridge: Bridge, go_top: EventHandler<TopView>) -> Element {
     // 抽屉导航在这里取一次往下传。**不能在 env_item 里取** —— 那个函数在
     // `for` 循环里被调用,hook 进了循环就不再是每轮渲染同样的调用序列。
     let guide = use_context::<GuideNav>();
+    // 哪张卡正在问「真移走?」。**放在这里而不是每张卡里** —— 卡片是在 `for`
+    // 循环里画的,hook 进了循环就不再是每轮渲染同样的调用序列。
+    let asking = use_signal(|| None::<bw_v4::model::ProjectId>);
     rsx! {
         section {
             div { class: "wall-topline",
@@ -55,7 +58,7 @@ pub fn View(vm: Vm, bridge: Bridge, go_top: EventHandler<TopView>) -> Element {
             } else {
                 div { class: "wall-grid",
                     for p in vm.projects.iter() {
-                        {project_card(p, bridge)}
+                        {project_card(p, bridge, asking)}
                     }
                 }
             }
@@ -145,9 +148,19 @@ fn dot_of(ok: Option<bool>) -> Option<HealthSignal> {
     }
 }
 
-fn project_card(p: &ProjectCardVm, bridge: &Bridge) -> Element {
+/// 一张项目卡。右上角那个 × 是**从工作台移走**,不是删仓 —— 点一下先问一句,
+/// 再点「移走」才真发命令。高保真上那个 × 当初没做,理由是「内核没有删除项目
+/// 这条命令」;试点第一天用户当场问它去哪了,而且中途失败留下的半成品项目正是
+/// 靠它才收得掉。命令补上了,× 也就回来了。
+fn project_card(
+    p: &ProjectCardVm,
+    bridge: &Bridge,
+    mut asking: Signal<Option<bw_v4::model::ProjectId>>,
+) -> Element {
     let b = bridge.clone();
+    let b_del = bridge.clone();
     let id = p.id;
+    let confirming = *asking.read() == Some(id);
     let pct = (p.week_done * 100).checked_div(p.week_total).unwrap_or(0);
     let goal = if p.week_goal.trim().is_empty() {
         "本周目标:还没定".to_string()
@@ -181,6 +194,16 @@ fn project_card(p: &ProjectCardVm, bridge: &Bridge) -> Element {
                 }
                 span { style: "margin-left:auto;" }
                 {light_dot(p.signal, true)}
+                span {
+                    class: "pcard-x",
+                    title: "从工作台移走(不删仓)",
+                    onclick: move |e: MouseEvent| {
+                        // 卡片整张是「打开这个项目」,× 不能顺带把项目开了。
+                        e.stop_propagation();
+                        asking.set(if confirming { None } else { Some(id) });
+                    },
+                    "✕"
+                }
             }
             div { class: "pcard-name", "{p.name}" }
             div { class: "pcard-oneliner",
@@ -189,6 +212,38 @@ fn project_card(p: &ProjectCardVm, bridge: &Bridge) -> Element {
             div { class: "pcard-meta",
                 span { "{goal}" }
                 span { "{delivery}" }
+            }
+            if confirming {
+                div {
+                    class: "pcard-confirm",
+                    onclick: move |e: MouseEvent| e.stop_propagation(),
+                    div { style: "margin-bottom:6px;",
+                        "把「" strong { "{p.name}" } "」从工作台移走?"
+                        br {}
+                        "库里这个项目和它所有活的账会一起没,"
+                        strong { "仓不动" }
+                        " —— 硬盘上的代码一个字节都不碰。"
+                    }
+                    div { style: "display:flex;gap:8px;",
+                        button {
+                            class: "btn btn-sm",
+                            onclick: move |e: MouseEvent| {
+                                e.stop_propagation();
+                                asking.set(None);
+                            },
+                            "取消"
+                        }
+                        button {
+                            class: "btn btn-sm btn-danger",
+                            onclick: move |e: MouseEvent| {
+                                e.stop_propagation();
+                                asking.set(None);
+                                b_del.cmd(bw_v4::command::Command::RemoveProject { project_id: id });
+                            },
+                            "移走"
+                        }
+                    }
+                }
             }
             div { class: "pcard-bar",
                 div { class: "pcard-bar-fill", style: "width:{pct}%" }

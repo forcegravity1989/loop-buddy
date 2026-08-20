@@ -106,8 +106,17 @@ fn action_bar(open: Option<&SessionVm>, bridge: &Bridge) -> Element {
             button {
                 class: "btn btn-sm",
                 disabled: s.live,
+                // **标签跟着状态变**。对一张已经聊过的活,这颗按钮的真实语义是
+                // 「从头再开一场」,不是「接着上次聊」—— 接着上次聊是选中这张
+                // 活的时候自动发生的。叫「开工」的话,熟 claude CLI 的人会以为
+                // 它是 `--resume`,一点就把上次那段对话丢了。
+                title: if s.session_id.is_empty() {
+                    "起一场新的 agent 会话"
+                } else {
+                    "从头再开一场新对话。上次那场已经自动接回来了,想接着聊直接在终端里说话"
+                },
                 onclick: move |_| b_run.cmd(Command::RunIssue { id }),
-                "▶ 开工"
+                if s.session_id.is_empty() { "▶ 开工" } else { "▶ 重开一场" }
             }
             button {
                 class: "btn btn-sm",

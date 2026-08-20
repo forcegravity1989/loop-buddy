@@ -153,13 +153,18 @@ impl App {
 
         let agent: &TuiAgentConfig = &CLAUDE;
         let prompt = format!("#{} {}\n\n{}", issue.number, issue.title, issue.body);
-        // 剧本先在干活那棵树里找,找不到再回主工作区找(有些仓把 `.claude/`
-        // 写进了 .gitignore,技能包进不了分支,只在主检出里)。
-        let workflow_body = super::bootstrap::workflow_body(&run_dir, &issue.workflow)
-            .or_else(|| super::bootstrap::workflow_body(&ws, &issue.workflow));
-        let system_prompt = super::bootstrap::agent_system_prompt(&issue, workflow_body.as_deref());
-        let plan = build_startup_plan(agent, &prompt, &system_prompt, &run_dir)
+        // 剧本在 buddy 自己的技能目录里,不在用户的仓里(见
+        // `standard::skills`)。提示词只带路径,正文按需读。
+        let skills_dir = self.ensure_skill_assets();
+        let skill = skills_dir
+            .as_deref()
+            .and_then(|d| super::bootstrap::skill_pointer(d, &issue.workflow));
+        let system_prompt = super::bootstrap::agent_system_prompt(&issue, &run_dir, skill.as_ref());
+        let mut plan = build_startup_plan(agent, &prompt, &system_prompt, &run_dir)
             .map_err(|e| AppError::Exec(e.to_string()))?;
+        if let Some(d) = &skills_dir {
+            super::bootstrap::allow_skills_dir(&mut plan, d);
+        }
         let ctx = RunCtx {
             project: issue.project_id,
             workflow: WorkflowId::nil(),

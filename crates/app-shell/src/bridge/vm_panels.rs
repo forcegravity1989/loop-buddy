@@ -11,9 +11,19 @@ use bw_v4::V4Store;
 use std::path::Path;
 
 use super::vm_build::{card_item, probe_env, remote_label};
-use super::vm_kb::{managed_paths, skill_origin};
 
-/// 六列看板。待办池那一列装的是没排进任何一周的活,其余五列按状态分。
+/// 六列看板。
+///
+/// **两条维度别混**:待办池是「排没排周」,其余五列是「干到哪一步」。原来
+/// 待办池只看 `week_of` 空不空、不看状态,于是一张**已经干完在等评审、连 MR
+/// 都开好了**的活(运作活按设计就不排周)照样躺在待办池里,而看某一周时它又
+/// 因为周对不上从评审中消失 —— 试点第一天用户当场问「明明已经有 PR 了为什么
+/// 在待办池」。
+///
+/// 现在的规矩:**待办池只装还没动过的活**(没排周 + 状态还在待办池/待办);
+/// **动过的活一律按状态进列,不管排没排周** —— 没排周的在卡片上挂一个「未排周」
+/// 徽记,不藏起来也不假装它属于这一周。
+///
 /// `week` 传 `None` = 「全部活」视图,不按周过滤(左栏点「全部」时)。
 pub(super) fn build_board(
     issues: &[bw_v4::Issue],
@@ -30,18 +40,23 @@ pub(super) fn build_board(
         .map(|k| k.todo_label.clone())
         .unwrap_or_else(|| "待办 · 已排进本周,等开工".into());
 
+    // 没排周的活在任何一周的视图里都露面 —— 它不属于哪一周,但它是真事,
+    // 藏起来人就再也找不到它了(运作活就是这种)。
     let in_week = |i: &&bw_v4::Issue| match week {
         None => true,
-        Some(w) => i.week_of == w,
+        Some(w) => i.week_of == w || i.week_of.is_empty(),
     };
+    let untouched =
+        |i: &&bw_v4::Issue| matches!(i.status, IssueStatus::Backlog | IssueStatus::Todo);
     let columns = vec![
         ColumnVm {
             status: IssueStatus::Backlog,
             title: pool_label.clone(),
-            // 待办池按定义就是「没排进任何一周」,不按正在看的那一周过滤。
+            // 待办池按定义就是「没排进任何一周」,不按正在看的那一周过滤;
+            // 但**已经动过的活不在这里** —— 它们在自己的状态列里。
             cards: issues
                 .iter()
-                .filter(|i| i.week_of.is_empty())
+                .filter(|i| i.week_of.is_empty() && untouched(i))
                 .map(card_item)
                 .collect(),
         },
@@ -50,7 +65,7 @@ pub(super) fn build_board(
             title: todo_label.clone(),
             cards: issues
                 .iter()
-                .filter(|i| in_week(i) && i.status == IssueStatus::Todo)
+                .filter(|i| !i.week_of.is_empty() && in_week(i) && i.status == IssueStatus::Todo)
                 .map(card_item)
                 .collect(),
         },
@@ -307,7 +322,6 @@ pub(super) async fn build_config(
     file: &project_file::ProjectFile,
 ) -> ConfigVm {
     let usage = store.workflow_usage(id).await.unwrap_or_default();
-    let managed = managed_paths(ws);
     let mappings = policy
         .map(|p| {
             p.mappings
@@ -329,42 +343,7 @@ pub(super) async fn build_config(
         })
         .unwrap_or_default();
 
-    // 技能清单扫目录得到 —— 没有登记表可查,目录就是唯一判据。
-    let mut skills: Vec<SkillVm> = std::fs::read_dir(ws.join(".claude/skills"))
-        .map(|d| {
-            d.flatten()
-                .filter(|e| e.path().join("SKILL.md").is_file())
-                .map(|e| {
-                    let slug = e.file_name().to_string_lossy().to_string();
-                    SkillVm {
-                        uses: usage
-                            .iter()
-                            .find(|(w, _)| *w == slug)
-                            .map(|(_, n)| *n)
-                            .unwrap_or(0),
-                        title: slug.clone(),
-                        origin: skill_origin(&managed, &slug),
-                        desc: skill_desc(&e.path().join("SKILL.md")),
-                        slug,
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    // 项目里没有目录、但活上挂了名字的 workflow(比如整包的 mattpocock-skills)
-    // 也如实列出来,用量是真的,只是包不在这个仓里。
-    for (w, n) in &usage {
-        if !skills.iter().any(|s| &s.slug == w) {
-            skills.push(SkillVm {
-                slug: w.clone(),
-                title: format!("{w}(包不在本仓 .claude/skills/)"),
-                uses: *n,
-                origin: "不在本仓".into(),
-                desc: String::new(),
-            });
-        }
-    }
-    skills.sort_by(|a, b| b.uses.cmp(&a.uses).then(a.slug.cmp(&b.slug)));
+    let skills = skill_list(ws, &usage);
 
     ConfigVm {
         mappings,
@@ -392,6 +371,71 @@ pub(super) async fn build_config(
 }
 
 /// SKILL.md 头里的 `description:`。**读不到就空着**,不替它写一句。
+/// 这个项目能用到的技能清单。配置屏和知识库资产页签用的是同一份 —— 原来两处
+/// 各扫一遍目录、各拼一遍 `SkillVm`,改一处忘一处。
+///
+/// 三个来源,`origin` 如实标出来自哪:
+///
+/// - **buddy 自带**:编在二进制里的十三份(九份方法论 + 四份运作剧本)。
+///   它们摊在 buddy 自己的资产目录,**不复制进用户的仓** —— 用户的
+///   `.gitignore` 怎么写不该由 buddy 决定(见 `bw_v4::standard::skills`)。
+/// - **项目自有**:这个仓自己的 `.claude/skills/`,扫目录得到。
+/// - **不在册**:活上挂了这个名字,两处都找不到包。用量是真的,包确实没有。
+pub(super) fn skill_list(ws: &Path, usage: &[(String, u32)]) -> Vec<SkillVm> {
+    let used = |slug: &str| {
+        usage
+            .iter()
+            .find(|(w, _)| w == slug)
+            .map(|(_, n)| *n)
+            .unwrap_or(0)
+    };
+
+    let mut skills: Vec<SkillVm> = bw_v4::standard::skills::all()
+        .into_iter()
+        .map(|p| SkillVm {
+            uses: used(p.slug),
+            title: p.slug.to_string(),
+            origin: "buddy 自带".into(),
+            desc: p.desc.to_string(),
+            slug: p.slug.to_string(),
+        })
+        .collect();
+
+    // 项目自己的技能包。同名的以项目那份为准 —— 仓里那份才是这个仓真正会用的。
+    if let Ok(dir) = std::fs::read_dir(ws.join(".claude/skills")) {
+        for e in dir
+            .flatten()
+            .filter(|e| e.path().join("SKILL.md").is_file())
+        {
+            let slug = e.file_name().to_string_lossy().to_string();
+            skills.retain(|s| s.slug != slug);
+            skills.push(SkillVm {
+                uses: used(&slug),
+                title: slug.clone(),
+                origin: "项目自有".into(),
+                desc: skill_desc(&e.path().join("SKILL.md")),
+                slug,
+            });
+        }
+    }
+
+    // 活上挂了名字、两处都没有包的,如实列出来,不假装它存在。
+    for (w, n) in usage {
+        if !skills.iter().any(|s| &s.slug == w) {
+            skills.push(SkillVm {
+                slug: w.clone(),
+                title: format!("{w}(找不到这个包)"),
+                uses: *n,
+                origin: "不在册".into(),
+                desc: String::new(),
+            });
+        }
+    }
+
+    skills.sort_by(|a, b| b.uses.cmp(&a.uses).then(a.slug.cmp(&b.slug)));
+    skills
+}
+
 pub(super) fn skill_desc(path: &Path) -> String {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return String::new();

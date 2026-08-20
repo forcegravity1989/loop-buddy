@@ -23,11 +23,72 @@ pub struct Vm {
     /// 这是第几条回执。**同一句话第二次发生时序号也会变**,toast 才不会把它
     /// 当成「已经关过的那条」而静默吞掉。
     pub note_seq: u64,
+    /// 接入屏那份「我账号下的仓」列表 —— 现去平台问的,不是库里的。
+    pub repos: RepoPickerVm,
     /// 仓文件读不动或者解析炸了的实话。**不退回默认值假装文件不存在** ——
     /// `.bw/*.toml` 是 deny-unknown-fields 的,一个手误的键就让整份文件读不出
     /// 来,退回默认值的表现是「名片全是(待填)、配置屏说你还没铺过规范件」,
     /// 而真相是文件在、只是有一行写错了。
     pub warnings: Vec<String>,
+}
+
+/// 接入屏的仓选择器。**列不出来就说为什么**,不摆一张假列表 —— 高保真上那份
+/// `REPO_LIST` 是工厂造的,真壳里这些行必须来自 `gh repo list` / `codehub-cli`。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RepoPickerVm {
+    /// 正在问平台。界面上是「列着…」,不是空列表 —— 空列表会被读成「你没有仓」。
+    pub loading: bool,
+    /// 问过一次了没有。没问过 = 界面上是一个「列出我的仓」按钮,不是「一个都没有」。
+    pub asked: bool,
+    /// 问失败的原话(没装 gh、没登录、域名填错)。
+    pub error: Option<String>,
+    pub rows: Vec<RepoRowVm>,
+    /// 现在盯着哪个仓(点中的那一行,或者人手打进去的地址)。
+    pub picked: Option<String>,
+    /// 从那个仓的远端 `.bw/project.toml` 读回来的名片。
+    pub prefill: Option<RepoPrefillVm>,
+    /// 那一读的结局。**「没读到」和「没读成」必须分开** —— 网络断了、没登录、
+    /// 默认分支不叫 main,这些都会读不到,但它们**不等于**「这个仓没被接管过」。
+    /// 混成一句「还没被接管过」就是在瞎说,人照着填一遍反而会覆盖仓里的真名片。
+    pub probe: RepoProbe,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum RepoProbe {
+    /// 还没查过(人还没选仓,或者选完还没轮到)。
+    #[default]
+    NotAsked,
+    Loading,
+    /// 读到了 `.bw/project.toml` —— 这个仓被 buddy 接管过。
+    Adopted,
+    /// 平台明确回「没有这个文件」,而且**这个仓确实在**(另问了一次)——
+    /// 这个仓没被接管过。
+    Absent,
+    /// 这个地址根本找不到仓(敲错了、私有仓没权限、没登录)。仓都不在,
+    /// 「接管过没有」就无从谈起,更不能放人往下走去接一个不存在的仓。
+    NoRepo(String),
+    /// 压根没查成,原话在里面。**不是**「没被接管过」。
+    Failed(String),
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RepoRowVm {
+    /// `owner/repo`,直接就是要填进「远端地址」的那个值。
+    pub path: String,
+    pub private: bool,
+    pub description: String,
+    pub default_branch: String,
+    /// 平台给的最近推送时间原文(可能是空的)。
+    pub pushed_at: String,
+}
+
+/// 已经被 buddy 接管过的仓,名片直接回显,不用人再填一遍。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RepoPrefillVm {
+    pub name: String,
+    pub brief: String,
+    pub benchmark: String,
+    pub north_star: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -108,6 +169,11 @@ pub struct ProjectVm {
     pub sessions: Vec<SessionVm>,
     /// 会话屏选中的那一个(按活)。
     pub session_open: Option<IssueId>,
+    /// 计划屏右侧详情抽屉开着哪张活。通知点「去看这张活」也是设这个。
+    pub selected_issue: Option<IssueId>,
+    /// 这个仓在浏览器里的根地址(`https://host/命名空间/仓名`),从 `.git/config`
+    /// 的 origin 推出来。**推不出来就是空串** —— 那时候详情里不给链接,不编一个。
+    pub browse_base: String,
     pub workbench: WorkbenchVm,
     pub notify: NotifyVm,
     pub config: ConfigVm,
@@ -258,6 +324,14 @@ pub struct CardItemVm {
     pub metric_key: String,
     pub settled: bool,
     pub status: IssueStatus,
+    /// 远端 MR 号。0 = 还没开 MR。通知那一类的判据就是它 > 0。
+    pub pr_number: u32,
+    /// 远端 issue 号。0 = 这张活只在本机,没有对应的远端 issue。
+    pub remote_number: u32,
+    /// 这张活的分支。空 = 还没开过工。
+    pub branch: String,
+    /// 活的正文。详情抽屉里要看的就是它 —— 光有标题看不出这张活要干什么。
+    pub body: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -335,14 +409,18 @@ pub struct ChangedFileVm {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NotifyVm {
-    /// 评审中、等人合入的活。
-    pub in_review: Vec<CardItemVm>,
-    /// 阻塞的活。
-    pub blocked: Vec<CardItemVm>,
+    /// **通知只有一类:有 MR 等你合入。**
+    ///
+    /// 试点第一天定的边界:通知就该是「有件事非你不可、而且现在就能做」。
+    /// 「活阻塞了」「agent 停下来等你回话」这些是**状态**,该在计划屏和会话屏
+    /// 上看见,不该也来占通知位 —— 尤其「等你回话」那种,真要提醒也该是系统级
+    /// 的弹窗,不是一个你得先点进来才看得到的列表。那些等实践清楚了再单独设计,
+    /// 现在不摆冗余的位。
+    pub to_merge: Vec<CardItemVm>,
     pub seen_at: Option<i64>,
-    /// 还没看过的动静有几件。**和项目墙卡片上那个 ⚑ 是同一个定义**(评审中/
-    /// 阻塞里、更新时间晚于「读到这里」的);项目轨的红点用它,点过「读到
-    /// 这里」之后它会掉到 0,而不是永远亮着。
+    /// 还没看过的动静有几件。**和项目墙卡片上那个 ⚑ 是同一个定义**,也和上面
+    /// 那一类同口径:评审中、有 MR、更新时间晚于「读到这里」。点过「读到这里」
+    /// 之后它会掉到 0,而不是永远亮着。
     pub unread: u32,
     /// 事件流。**没有事件表** —— 这条流是从四张表里现算出来的:活什么时候建
     /// 的、什么时候结清的、会话什么时候开的。存不下来的事(比如某次运行失败)

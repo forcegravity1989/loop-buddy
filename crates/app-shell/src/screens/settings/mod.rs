@@ -6,18 +6,22 @@
 //! **没有登录**。V4 不管任何账号:远端凭证在系统钥匙串、群登录态由用户自己在
 //! 本机登好,buddy 只探活。
 //!
-//! **两个路径是只读的**:工作区根目录和库文件都由启动时的环境变量决定
-//! (`BW_WORKSPACES` / `BW_DB`),进程起来之后改它没有意义 —— 库连接已经建好、
-//! 已接入项目的路径已经按老根目录算过了。高保真上那个「更改…」按钮真做出来
-//! 会是一颗哑弹,所以这里给的是一句怎么改的实话,不是一个按不动的按钮。
+//! **工作区根目录可以在这里改**(存本机库的 `app_meta`,立刻生效):它只决定
+//! 「以后新接进来的项目默认落在哪」。已接入的项目各自记着自己的仓路径,一个都
+//! 不会被牵着走 —— 不然改一下根目录,已有项目就集体找不到仓了。
+//!
+//! **库文件仍然是只读的**:进程起来之后库连接已经建好,改它得重启,所以这里给
+//! 的是一句「启动前设哪个环境变量」的实话,不是一个按不动的按钮。
 
+use crate::bridge::Bridge;
 use crate::chrome::light_dot;
 use crate::vm::{ToolProbeVm, Vm};
+use bw_v4::command::Command;
 use bw_v4::Signal as HealthSignal;
 use dioxus::prelude::*;
 
 #[component]
-pub fn View(vm: Vm, close: EventHandler<MouseEvent>) -> Element {
+pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element {
     let vm = &vm;
     let s = &vm.settings;
     rsx! {
@@ -27,11 +31,7 @@ pub fn View(vm: Vm, close: EventHandler<MouseEvent>) -> Element {
                 button { class: "btn btn-ghost btn-sm", onclick: close, "← 项目墙" }
             }
             div { class: "settings-list",
-                {path_row(
-                    "工作区根目录",
-                    &s.workspaces_root,
-                    "新接入的项目默认落在这个目录下。改它:启动前设 BW_WORKSPACES。",
-                )}
+                root_row { value: s.workspaces_root.clone(), bridge: bridge.clone() }
                 {path_row(
                     "本机数据库",
                     &s.db_path,
@@ -45,6 +45,46 @@ pub fn View(vm: Vm, close: EventHandler<MouseEvent>) -> Element {
                 "这里没有登录 —— buddy 不管账号。远端凭证在系统钥匙串里,项目群的登录态由你自己在本机登好。"
                 br {}
                 "灰灯是「这项探活还没接」,不是「有问题」;红灯才是「本机路径里真的没找到」。"
+            }
+        }
+    }
+}
+
+/// 工作区根目录:可改。填全路径,存本机库,立刻生效。
+#[component]
+fn root_row(value: String, bridge: Bridge) -> Element {
+    // 输入框的初值取当前值;人改完点「保存」才发命令,边打字边存会把
+    // 「D:\\pro」这种打了一半的路径也建成目录。
+    let mut draft = use_signal(|| value.clone());
+    let shown = value.clone();
+    let b = bridge.clone();
+    rsx! {
+        div { class: "settings-row",
+            div { style: "flex:1;min-width:0;",
+                div { class: "k", "工作区根目录" }
+                div { style: "display:flex;gap:8px;align-items:center;margin-top:4px;",
+                    input {
+                        class: "input mono",
+                        style: "flex:1;min-width:0;",
+                        value: "{draft}",
+                        placeholder: "Windows 填 D:\\buddy\\workspaces,macOS 填 /Users/你/projects",
+                        oninput: move |e| draft.set(e.value()),
+                    }
+                    button {
+                        class: "btn btn-sm btn-primary",
+                        onclick: move |_| b.cmd(Command::SetWorkspacesRoot { path: draft.read().clone() }),
+                        "保存"
+                    }
+                }
+                div { style: "font-size:11px;color:var(--ink-4);margin-top:4px;",
+                    "新接入的项目默认落在这个目录下,填全路径。"
+                    br {}
+                    "改它"
+                    strong { "只影响以后新接进来的项目" }
+                    " —— 已接入的项目各自记着自己的仓路径,不会跟着搬,现在的值是 "
+                    span { class: "mono", "{shown}" }
+                    "。"
+                }
             }
         }
     }

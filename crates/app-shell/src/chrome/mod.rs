@@ -60,6 +60,41 @@ pub fn icon(name: &str) -> Element {
     }
 }
 
+/// 长命令的「一步一句」回执,画出来。
+///
+/// **行由调用方自己收**(各屏一个信号,点按钮时清空),这里只管画 —— 谁在跑
+/// 长命令、什么时候该清屏,是那一屏自己的事;放到这里来猜只会猜错。行按步号
+/// 原地覆盖的规矩在收的那一侧,见 `bw_v4::app::ProgressLine::step`。
+pub fn progress_log(lines: &[bw_v4::app::ProgressLine]) -> Element {
+    use bw_v4::app::StepState;
+    if lines.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "prog-log",
+            for line in lines.iter() {
+                div {
+                    key: "{line.step}",
+                    class: "prog-log-row",
+                    span {
+                        class: match line.state {
+                            StepState::Doing => "prog-log-mark spinning",
+                            StepState::Ok => "prog-log-mark ok",
+                            StepState::Fail => "prog-log-mark fail",
+                        },
+                        match line.state {
+                            StepState::Doing => "⟳",
+                            StepState::Ok => "✓",
+                            StepState::Fail => "✕",
+                        }
+                    }
+                    span { "{line.text}" }
+                }
+            }
+        }
+    }
+}
+
 pub fn light_dot(signal: Option<Signal>, big: bool) -> Element {
     let cls = if big { "dot dot-lg" } else { "dot" };
     let color = theme::signal_color(signal);
@@ -197,7 +232,7 @@ const CHAPTERS: [Chapter; 4] = [
     Chapter {
         id: "onboard",
         label: "接入项目",
-        body: "接入只问两件事:仓在哪、这个项目想做什么。规范铺底会在后台自动建分支、写核心件、提 MR,评审中合入即可,不用手填目录或分支。",
+        body: "接入分两步。第一步只问项目地址:光标点进那格就去列你账号下的仓,打字即检索、点一行即选中,也可以直接把 owner/repo 打进去;列不出来会把命令原话摆出来,不摆假列表。第二步是四个基础字段,顶上先告诉你这个仓被 buddy 接管过没有——接管过就把仓里的名片回显出来,你改哪格算哪格。注意「没查成」和「没被接管过」是两回事,前者多半是没登录或者这个仓的默认分支不叫 main,这时候别照着空格子填,填了会盖掉仓里真正的名片。点「完成接入」要十几秒,界面上一步一句地报:取仓(该 clone 就 clone)→ 库里落一行 → 写名片 → 自动建一张「规范铺底」的活(建分支、写规范骨架、提 MR,停在评审中等你合)→ 进这个项目。别猛点。接错了就用项目卡右上角的 ✕ 移走——它只把项目从工作台移出去,仓一个字节都不动。",
     },
     Chapter {
         id: "cycle",
@@ -207,7 +242,7 @@ const CHAPTERS: [Chapter; 4] = [
     Chapter {
         id: "faq",
         label: "常见问题",
-        body: "常见问题会随实际使用逐步收进这里。当前先看前三章;遇到没写清楚的地方,用下面的「问题上报」占位记一笔(还没接真实上报,点了不会发出去)。",
+        body: "点了没反应?接入和规范铺底都要十几秒,界面上会一步一句地报进度,报到哪就是做到哪,别猛点。想把一个项目从工作台移走,用项目卡右上角的 ✕——只动库不动仓。灯是灰的不是坏了:没数据就是灰,不会假装绿。更完整的流程见仓里的 docs/guide/v4-用户使用指南.md,它只写已经真走过一遍的站。遇到没写清楚的地方,用下面的「问题上报」占位记一笔(还没接真实上报,点了不会发出去)。",
     },
 ];
 
@@ -264,10 +299,30 @@ pub fn Toast(note: Option<String>, seq: u64) -> Element {
         div { class: "toast show",
             "{text}"
             span {
-                style: "margin-left:10px;cursor:pointer;opacity:.6;",
+                class: "toast-x",
+                style: "margin-left:auto;",
                 onclick: move |_| dismissed.set(seq),
                 "✕"
             }
         }
     }
+}
+
+/// 在系统默认浏览器里打开一个地址。
+///
+/// **只收 `https://` 开头的**:这个函数的入参最终来自仓里的 `origin`,那是文件
+/// 内容,不该被当成命令。挡在这里,`open` 就不会被喂进一个 `-a`、`file://` 或者
+/// 别的什么东西。打不开就静静算了 —— 为一个链接弹一句错不值。
+pub fn open_in_browser(url: &str) {
+    if !url.starts_with("https://") {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }

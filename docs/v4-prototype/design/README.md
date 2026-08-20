@@ -10,13 +10,13 @@
 |---|---|---|
 | 01 | [01-architecture.md](01-architecture.md) | 新壳怎么搭:两个新 crate、一屏一模块、一个外部能力一个适配模块、命令与事件总线、文件行数守卫、旧壳什么时候能删 |
 | 02 | [02-data-and-files.md](02-data-and-files.md) | 库只有四张表(`project` / `issue` / `claude_conversation` / `app_meta`)、仓里那几份文件的格式与完整样例、一样信息该住哪一层 |
-| 03 | [03-standard-and-backfill.md](03-standard-and-backfill.md) | 规范铺底三步(写核心件 → 合并调整 → 老项目历史回填)、对账、升级;回填的原料 / 产物 / 可信度 |
+| 03 | [03-standard-and-backfill.md](03-standard-and-backfill.md) | 规范铺底三步(写核心件 → 写开发手册 → 老项目历史回填)、对账、升级;回填的原料 / 产物 / 可信度 |
 | 04 | [04-tools-and-workflows.md](04-tools-and-workflows.md) | 开工工具注册与探活、workflow(SOP 类技能包)怎么识别与注入、「用了几次」怎么现算 |
 | 05 | [05-session-screen.md](05-session-screen.md) | 会话屏:按 worktree 分组的会话、内嵌终端、文件树 / diff / MR 卡、agent 状态回报 |
 | 06 | [06-plan-screen.md](06-plan-screen.md) | 计划屏:周视角 + 六列看板一个界面、拖拽规则、周头、发版本、预览未合入 |
 | 07 | [07-notify-and-chat-group.md](07-notify-and-chat-group.md) | 通知入口(待处理 / 事件流 / 「合入并完成」)+ 项目群适配工厂(发消息 / 拉历史两函数) |
 | 08 | [08-overview-derivation.md](08-overview-derivation.md) | 总览每块的数据来源与推导、健康大灯的判定规则、名片编辑 |
-| 09 | [09-ops-workflows.md](09-ops-workflows.md) | 三张运作活的剧本:①更新指标 + 制定本周计划 ②资产盘点(首次模式 = 老项目历史回填)③规范铺底的合并调整 |
+| 09 | [09-ops-workflows.md](09-ops-workflows.md) | 三张运作活的剧本:①更新指标 + 制定本周计划 ②资产盘点(首次模式 = 老项目历史回填)③规范铺底的写开发手册 |
 | 10 | [10-e2e-acceptance.md](10-e2e-acceptance.md) | 验收怎么做:检查项总表、headless 指挥器、深链、SQL 读回清单、试点两周计划 |
 | 11 | [11-knowledge-base.md](11-knowledge-base.md) | 知识库屏三页签(知识 / 代码图 / 资产)的数据来源与动作;规范对账条 |
 | 12 | [12-build-plan.md](12-build-plan.md) | 建法与交付记录:五刀各干了什么、代号怎么读、细节该去哪里查 |

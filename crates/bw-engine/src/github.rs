@@ -937,6 +937,13 @@ pub async fn fetch_project_toml(
     if !output.status.success() {
         let err = stderr_text(&output);
         let lower = err.to_lowercase();
+        // **分支不存在也是 404**,但它和「这个仓里没有这份文件」是两件事:
+        // 前者是「没查成」(多半是默认分支不叫 main),后者才是「没接管过」。
+        // 一起当成 Ok(None) 的话,一个默认分支叫 master 的仓会被报成
+        // 「还没被 buddy 接管过」,人照着填一遍就会盖掉仓里真正的名片。
+        if lower.contains("no commit found for the ref") {
+            return Err(GithubError::Command(err));
+        }
         if lower.contains("404") || lower.contains("not found") {
             return Ok(None);
         }

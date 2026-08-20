@@ -8,6 +8,10 @@ use crate::model::{Conversation, ConversationId, IssueId, ProjectId};
 use sqlx::Row;
 use uuid::Uuid;
 
+/// 「工作区根目录」这条本机设置的 key。**本机设置存这里,不进仓** —— 仓是给
+/// 所有人共用的正本,「我这台机器上项目放哪」只是我这台机器的事。
+pub const WORKSPACES_ROOT_KEY: &str = "workspaces_root";
+
 /// 通知屏「事件流看到哪个时间点」的 key 前缀。不为它开第五张表。
 pub fn notify_seen_key(project_id: ProjectId) -> String {
     format!("notify_seen:{}", project_id.uuid())

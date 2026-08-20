@@ -20,7 +20,7 @@
 
 **给一张活换开工方式**:活详情面板「开工工具」「workflow」两个下拉,默认来自映射表,活上能单独换(比如这张活想只用 grillme 打磨需求,不走整套 superpowers)。
 
-**点▶开工**:终端类(Claude CLI/Cursor)→ buddy 把选中的 workflow(或单技能)整包写进这张活 worktree 的 `.claude/skills/`,起嵌入终端,agent 自己发现并读;本机网页内嵌类(Open Design)→ 探活成功就在会话屏嵌一个 iframe,失败就灰态"未装·怎么装"。**这一步不再触发任何记账**(取代原来"活到评审中/完成那一刻战绩 +1"的设计,§2.9):配置屏「用过几次」是随时现查 `issue.workflow` 分组计数(02 篇 §2.3)得到的——只要这张活的 `workflow` 属性定下来就已经算在数里,不需要等它走到「评审中」或「完成」;也不再有"胜率"这一栏——"干没干成"改看远端 MR 合没合入,不由 buddy 自己判定。
+**点▶开工**:终端类(Claude CLI/Cursor)→ buddy 把这张活挂的那一份技能的名字、一句话、完整路径写进系统提示词(正文让 agent 按需读,§2.7),起嵌入终端;本机网页内嵌类(Open Design)→ 探活成功就在会话屏嵌一个 iframe,失败就灰态"未装·怎么装"。**这一步不再触发任何记账**(取代原来"活到评审中/完成那一刻战绩 +1"的设计,§2.9):配置屏「用过几次」是随时现查 `issue.workflow` 分组计数(02 篇 §2.3)得到的——只要这张活的 `workflow` 属性定下来就已经算在数里,不需要等它走到「评审中」或「完成」;也不再有"胜率"这一栏——"干没干成"改看远端 MR 合没合入,不由 buddy 自己判定。
 
 ---
 
@@ -69,14 +69,14 @@ capabilities = ["inject_skills"]   # 见 §2.7 开放问题
 
 1. 读 `issue.tool`;空则按类别标签查 `[[mapping]]`(§2.5)默认工具,写回。
 2. 按 `tool` 名字查 `[[tool]]` 拿到 `kind`。
-3. `terminal`(Claude CLI/Cursor):解析 `issue.workflow`(§2.4)→ 物化技能到 `<worktree>/.claude/skills/`(§2.7)→ 按工具名选 `TuiAgentConfig` → `build_startup_plan`(沿用,`interactive_cli.rs:219`)起 PTY 会话 → 出现在会话屏左列该 worktree 分组下。
+3. `terminal`(Claude CLI/Cursor):解析 `issue.workflow`(§2.4)→ 在 buddy 自己的技能目录里挑出这一份、把名字+一句话+路径写进系统提示词(§2.7)→ 按工具名选 `TuiAgentConfig` → `build_startup_plan`(沿用,`interactive_cli.rs:219`)+ `--add-dir <buddy 技能目录>` 起 PTY 会话 → 出现在会话屏左列该 worktree 分组下。
 4. `web_embed`(Open Design):按 socket 探活拿 URL,拿到就中栏开标签页 iframe(注入方式见 §2.7 开放问题),拿不到就灰态"未装·怎么装",活停在原地不算开工失败。
 
 停止:终端类走既有 `Command::CancelRun`(不变);网页内嵌类的"停"只是关掉标签页——它本来就不是 buddy 起的子进程,不产生运行记录(§4 再说明这条边界)。
 
 ### 2.4 `issue.tool` / `issue.workflow`:存名字,解析靠扫目录
 
-`issue.workflow` 存**名字**,不是 uuid——这样活详情面板换 workflow 不用先查 id,`docs/plan/YYYY-Www.md` 里读到的就是可读名字,与周计划文件「业务活」表格的 `workflow` 列(02 篇 §2.5)天然对得上。
+`issue.workflow` 存**名字**,不是 uuid——这样活详情面板换 workflow 不用先查 id,`.bw/plan/YYYY-Www.md` 里读到的就是可读名字,与周计划文件「业务活」表格的 `workflow` 列(02 篇 §2.5)天然对得上。
 
 **解析规则,V4 简化为单层扫描**:CONTEXT.md「就近优先 / Most specific wins」词条描述的是 V1-V3 时代「项目行遮蔽全局行」的两层数据库解析,建立在 `project_id` 可空的 `skill`/`skill_package` 表之上——V4 里这两张表都不建了(§2.6),workflow/技能只有一处:**这张活 worktree 的 `.claude/skills/**/SKILL.md`**(铺底复制进来的预置包、蒸馏产出、人手加的,全在同一棵目录树里,02 篇 §2.5),不再存在「本项目行 vs 全局行」这层可比较的东西。▶开工时按 `issue.workflow` 存的名字去匹配 `.claude/skills/` 下顶层目录名(整包)或某个 `<name>/SKILL.md` 所在目录名(单技能);两边都命中是仓里同名冲突,属于铺底/导入阶段就该拦住的问题(§2.8),不是解析时该处理的事;两边都不命中,如实跳过、不猜、不记账、不错记到别的目录上,活照常能开工(§4)。
 
@@ -109,17 +109,54 @@ capabilities = ["inject_skills"]   # 见 §2.7 开放问题
 
 这条设计与 02 篇 §2.3「技能/workflow 用了几次:现算,不建战绩表」同一个精神——判据 A/B/C 判出来的不是"账",是"结构事实",结构事实永远能从文件重新读出来,不需要另开一张表去缓存一个可以重新计算的结论。
 
-### 2.7 物化与注入
+### 2.7 技能怎么到 agent 手里(2026-08-20 试点第一天推翻重写)
 
-▶开工时,按 `workflow` 解析出的技能集合(整个包或单个技能)**整包一次性物化**到 `<worktree>/.claude/skills/`——CLI 原生发现路径,**不塞进系统提示词**。理由是实测数字已把这条路堵死:`--append-system-prompt` 单条注入护栏上限约 6000 字符,superpowers 单个技能正文实测均值 8732 字符(2026-08-05 实测,`skill_materialize.rs` 文档注释),一整包更不可能塞进一个字符串参数。
+**原来定的是「整包物化进 `<worktree>/.claude/skills/`」。试点第一天当场证明这条路
+走不通,已经改掉,这一节按新做法重写。**
 
-**沿用现有机制,补一层"保留包边界"**:今天 `skill_materialize::materialize_stage_skills` 已有整包物化的底子——SKILL.md + 支撑文件都能落盘,`.bw-managed` 标记(内容 `skill.id\nskill.rev`)防覆盖用户手写同名目录,冲突记进 `skipped_foreign`。V4 要补的是:按 §2.6 现场判定出的包顶层目录,一次性把整个目录物化进去,而不是像今天这样以单个技能为单位各管各的——判包、判入口都不需要先查一张表,扫一次目录当场就有结果。
+推翻它的是一次真实接入:buddy 自己的仓把 `.claude/` 写进了 `.gitignore`,铺底复制进去
+的十三份 `SKILL.md` **一个都没进第一个 MR**,而界面上还显示铺好了。用户仓怎么写
+`.gitignore` 不该由 buddy 决定;何况每个项目复制一份 buddy 自带的东西,本来就没有道理。
 
-**buddy 系统提示词(第 0 层)不受影响**:`--append-system-prompt` 仍承载衔接层(Bridge prompt)——产出格式契约与铁律,不再往里塞 workflow 整包正文。呼应母文档渐进加载五层:第 0 层系统提示词 → 第 1 层仓内 `AGENTS.md` → **第 2 层本活技能(就是本节说的物化这一步)** → 第 3 层规范件按需 → 第 4 层项目知识。
+**新做法,两句话**:
 
-**Cursor 侧对应机制(如实标注:未逐句核对)**:预研只做了一次网页文档摘要抓取,核实到 Cursor 支持从 git 仓库导入 `.mdc` 规则文件("Remote Rules"),但没找到 SKILL.md 风格的多文件包概念,包级语义大概率会丢。今天 `CURSOR.supported=false`,这条注入机制是**设计留白**,列进第 6 节开放问题 4。
+1. **buddy 自带的技能住在 buddy 自己的资产目录**(`<库文件所在目录>/assets/skills/`,
+   代码在 `crates/bw-v4/src/standard/skills.rs`)。开工前展开一次,内容一致就不写。
+   **不进任何用户仓**。
+2. **系统提示词里只给这张活挂的那一份技能的名字、一句话、完整路径**,正文让 agent
+   自己去读;同时把 buddy 的资产目录用 `--add-dir` 声明给 CLI,让它读得到。
 
-**Open Design 的注入**:今天嵌入的是通用首页(`op.rs:2041-2118` 的 `<iframe src="{src}/">`),URL 不带"打开哪个 worktree"的参数(2026-07 V3-OD-embed 的现状,当时只是看一眼原型进度)。V4 需要它打开这张活的 worktree,具体参数怎么带过去没核实过,列进第 6 节开放问题 3。
+这正是渐进式加载,和 buddy 自己的系统提示词(`docs/buddy/system-prompt.md`)一个套路:
+提示词里放索引,正文按需读。原来那条「注入护栏上限约 6000 字符,superpowers 单个技能
+正文实测均值 8732 字符」的实测数字仍然成立——它只是更不该往里塞整包正文的理由,不再是
+「所以必须复制进仓」的理由。
+
+**开工时那份系统提示词一共四段**(读回:`cargo run -p bw-v4 --example prompt_smoke -- <目录>`
+把整份打印出来):
+
+| 段 | 内容 | 从哪来 |
+|---|---|---|
+| 身份与这张活 | 你是谁、活号标题、类别、挂的 workflow | `issue` 行 |
+| 铁律 | 最远到「评审中」;合并永远是人;指标读数只能来自真实采集;干砸了如实停 | 固定文本 |
+| 规范索引 | `.bw/` 下**这个仓里真有**的那几份,一份一行「路径 —— 一句话」 | `CORE_TEMPLATES` 逐个 `exists()` |
+| 本活的剧本 | 名字 + frontmatter 那句 `description` + 完整路径 | buddy 资产目录 |
+
+规范索引**只列真存在的文件**:铺底还没跑的项目一条都不列。列一条不存在的路径,agent
+读一次失败一次,比不列更糟。
+
+**项目自有的技能还是在仓里**。蒸馏产出、人手加的、从别处导入的技能,正本仍是项目仓
+`.claude/skills/**/SKILL.md` —— 那是项目自己的资产,该进它自己的版本控制。配置屏与
+知识库把两个来源合成一张表,`origin` 列如实写「buddy 自带」还是「项目自有」;同名时以
+仓里那份为准。
+
+**Cursor 侧对应机制(如实标注:未逐句核对)**:预研只做了一次网页文档摘要抓取,核实到
+Cursor 支持从 git 仓库导入 `.mdc` 规则文件("Remote Rules"),但没找到 SKILL.md 风格的
+多文件包概念,包级语义大概率会丢。今天 `CURSOR.supported=false`,这条注入机制是**设计
+留白**,列进第 6 节开放问题 4。
+
+**Open Design 的注入**:今天嵌入的是通用首页(`op.rs:2041-2118` 的 `<iframe src="{src}/">`),
+URL 不带"打开哪个 worktree"的参数(2026-07 V3-OD-embed 的现状,当时只是看一眼原型进度)。
+V4 需要它打开这张活的 worktree,具体参数怎么带过去没核实过,列进第 6 节开放问题 3。
 
 ### 2.8 铺底/导入的三条路
 
@@ -129,9 +166,22 @@ capabilities = ["inject_skills"]   # 见 §2.7 开放问题
 | git 仓地址 | `git clone` 到临时路径,复用「本机目录」的判断与落点,临时目录用完即删 | 同上 |
 | 从另一个项目 | 选另一个已纳入的项目,列出它仓里 `.claude/skills/` 下的目录(现场扫描它的仓,不查任何表),复制一份(不是引用)进当前项目仓 | 同上 |
 
-**只有项目级,没有"全局/个人"这个选项了(取代原方案)**:V1-V3 时代"全局导入,不落项目仓、只落 buddy 本机表"的那条路径已经不存在——不是为了省事砍掉的,是它本来就没有存在的必要:Claude CLI 只在项目仓里找技能(02 篇 §2.5),不进项目仓的"导入"对▶开工毫无用处;原本撑着"全局/个人"这一层的 `skill`/`skill_package` 两张表也已经不建。三条路唯一的落点就是项目仓,导入这个动作本身走一张轻量活 + MR(与 §2.5 保存映射同一条"改仓一律走活+MR"的规矩)。
+**导入的落点是项目仓,只有项目级**:三条路都把技能复制进当前项目仓
+`.claude/skills/<name>/`,走一张轻量活 + MR(与 §2.5 保存映射同一条「改仓一律走活+MR」
+的规矩)。任何 committer clone 下来都能看到这个项目自己有哪些技能。
 
-**代价条款已经不成立**:预研原本建议的"资产在仓"原则本身没变,但当时权衡的代价——"全局/个人层进 buddy 本机表,别的 committer 看不到"——后不再存在:三条路都落项目仓,任何 committer clone 下来都能看到完整技能清单,配置屏导入弹窗不再需要提示这句取舍。
+**这和 §2.7 说的「buddy 自带的技能不进用户仓」不矛盾,两者是两批东西**:
+
+| | buddy 自带的十三份 | 项目自己导入/蒸馏的 |
+|---|---|---|
+| 正本在哪 | 编在 buddy 二进制里,展开到 buddy 的资产目录 | 项目仓 `.claude/skills/` |
+| 进不进用户的版本控制 | 不进 | 进,随 MR 可见 |
+| 每个项目一份吗 | 不,全局一份 | 是,各是各的 |
+| agent 怎么拿到 | 系统提示词给路径 + `--add-dir` | CLI 在仓里原生发现 |
+
+原来那条「Claude CLI 只在项目仓里找技能,所以不进项目仓的导入对▶开工毫无用处」的推理
+**已经不成立**:给绝对路径 + `--add-dir` 一样读得到,这是 §2.7 那次推翻的直接结果。
+它现在只对**项目自己的**技能成立——那些本来就该待在项目仓里。
 
 ### 2.9 workflow / 技能用了几次:现算,不记战绩
 
@@ -224,7 +274,7 @@ agent 表 · agent_import.rs · CreateAgent/UpdateAgent/ImportAgentDefinition ·
 
 ## 4 · 边界与失败
 
-**不做的事**:不建 agent 名单(workflow 包自己决定用哪个内置子代理,"自带 agent 数"如实显示实测的 0)——**用户原话定性**:agent 暂不作为单体维护,小事单技能干,大事 workflow 带着自己的 agent 与脚本干(握手清单 第 2 条);不做技能市场界面(鱼塘只在配置屏走 §2.8 导入,不做浏览/搜索 UI);不整体嵌 DSH(deepseek-harness 结论已定,只借三条接口判断;将来接 DSH 一类网页 agent 走新增一条 `web_embed` 声明,和接 Open Design 同一条路);不塞整包进系统提示词(§2.7 实测数字已堵死这条路);不建技能/workflow 用量或战绩登记表(§2.6/§2.9,现算)。**workflow 自己产的文档不额外管**(用户拍板,待拍-10 改):mattpocock-skills、superpowers 这类业界包物化进项目仓后,会往仓里写自己的东西(研究笔记、领域模型、决策记录……),这些内容与 buddy 规范的知识库天然有重叠——**MVP 不过度设计**,规范只约束 buddy 自己必需的基础限制(PROJECT.md/AGENTS.md、`.bw/*`、`docs/plan/`、`docs/releases.md`),workflow 自产的目录不管、不收编、不搬家;知识库「知识」页签把它们当普通仓内文档树展示;运作活②(资产盘点)盘点时只登记不整理;第一版试点实践后再看要不要收编。
+**不做的事**:不建 agent 名单(workflow 包自己决定用哪个内置子代理,"自带 agent 数"如实显示实测的 0)——**用户原话定性**:agent 暂不作为单体维护,小事单技能干,大事 workflow 带着自己的 agent 与脚本干(握手清单 第 2 条);不做技能市场界面(鱼塘只在配置屏走 §2.8 导入,不做浏览/搜索 UI);不整体嵌 DSH(deepseek-harness 结论已定,只借三条接口判断;将来接 DSH 一类网页 agent 走新增一条 `web_embed` 声明,和接 Open Design 同一条路);不塞整包进系统提示词(§2.7 实测数字已堵死这条路);不建技能/workflow 用量或战绩登记表(§2.6/§2.9,现算)。**workflow 自己产的文档不额外管**(用户拍板,待拍-10 改):mattpocock-skills、superpowers 这类业界包物化进项目仓后,会往仓里写自己的东西(研究笔记、领域模型、决策记录……),这些内容与 buddy 规范的知识库天然有重叠——**MVP 不过度设计**,规范只约束 buddy 自己必需的基础限制(`.bw/PROJECT.md`/`AGENTS.md`(仓根)、`.bw/*`、`.bw/plan/`、`.bw/releases.md`),workflow 自产的目录不管、不收编、不搬家;知识库「知识」页签把它们当普通仓内文档树展示;运作活②(资产盘点)盘点时只登记不整理;第一版试点实践后再看要不要收编。
 
 **失败如实显示,不假装**:工具未装(探活失败)→ 灰态+"怎么装→",不隐藏该行;导入的目录/仓不满足判据 A/B → 如实按单技能导入并提示"看起来不是 workflow 包";`issue.workflow` 名字在 `.claude/skills/` 里解析不到 → 如实跳过、不猜、不错记,活照常能开工;Open Design 打开通用首页而非本活 worktree(§2.7 开放问题)→ 中栏标注"未定位到本活工作区(设计中)";Cursor 今天 `supported=false` → 下拉里仍出现,选中后▶开工如实报错"Phase 1 仅 Claude CLI",不从下拉里拿掉。
 
@@ -234,11 +284,11 @@ agent 表 · agent_import.rs · CreateAgent/UpdateAgent/ImportAgentDefinition ·
 
 1. **导入 superpowers 后仓里出现整包,目录树核验**(取代原来查 `skill_package`/`skill` 两张表的验收——这两张表已经不存在,技能正本在仓不在库,验收也就从"查库"改成"看仓"):
    ```bash
-   ls <worktree>/.claude/skills/superpowers/
-   find <worktree>/.claude/skills/superpowers -name SKILL.md | wc -l
+   ls <buddy 资产目录>/skills/
+   find <buddy 资产目录>/skills -name SKILL.md | wc -l   # 该是 13
    ```
    预期:能看到 `.claude-plugin/plugin.json`(判据 A 命中)或 `skills/` 下多个技能目录(判据 B);`SKILL.md` 文件数应为 14(预研实读 superpowers 14 个技能)。mattpocock-skills 同理,预期 22 个 `SKILL.md`。
-2. **一次▶开工后 worktree 里 `.claude/skills/` 出现整包**(§2.7 物化机制,不受本次改动影响):深链 `BW_OPEN=<项目名> BW_PANEL=session` 后对一张挂 superpowers 的活点▶开工,`ls <worktree>/.claude/skills/` 应看到 14 个子目录,各带 `SKILL.md` 与 `.bw-managed` 标记。
+2. **开工时给 agent 的是索引不是正文**(§2.7):`cargo run -p bw-v4 --example prompt_smoke -- <目录>` 一次跑完打印完整的系统提示词 —— 13 份技能全落在 buddy 自己的资产目录、用户仓里没有 `.claude/skills/`、提示词里那条技能路径真是个文件、技能正文最长那行在提示词里找不到。
 3. **"用过几次"现算,建活即变、不等 Done**(取代原「Done 后战绩 +1」验收——战绩概念已取消,§2.9):
    ```sql
    -- 建一张挂 workflow='superpowers' 的业务活前后各查一次
@@ -254,13 +304,13 @@ agent 表 · agent_import.rs · CreateAgent/UpdateAgent/ImportAgentDefinition ·
 ## 6 · 开放问题
 
 1. **`.bw/issue-policy.toml` 改动怎么落盘**:母文档"写仓一律走活+MR"的规矩严格照办就该走轻量活(类比 `EditProjectCard`),但这份文件调参可能相当高频,每次都建活走 MR 会不会太重?本篇倾向"走活+MR",但交由用户按试点体感定,或退一步先直接写本机、下次运作活②的资产盘点里被动核对。
-2. **V1-V3 存量项目的队友战绩历史,要不要在切换到 V4 前做一次性人可读导出**:§2.10 的立场是接受不迁移、直接不建表,但这是不可逆操作——是否值得先跑一次导出脚本,把每个存量项目的战绩写成一段文字留个人可读的历史存根?落在哪份仓文件里也还没定(**不是** `docs/plan/history.md`——02 篇 §2.5 已明确没有这份单独文件,历史周与本周混在同一个 `docs/plan/` 目录里),需要另找地方或者干脆放弃导出。
+2. **V1-V3 存量项目的队友战绩历史,要不要在切换到 V4 前做一次性人可读导出**:§2.10 的立场是接受不迁移、直接不建表,但这是不可逆操作——是否值得先跑一次导出脚本,把每个存量项目的战绩写成一段文字留个人可读的历史存根?落在哪份仓文件里也还没定(**不是** `.bw/plan/history.md`——02 篇 §2.5 已明确没有这份单独文件,历史周与本周混在同一个 `.bw/plan/` 目录里),需要另找地方或者干脆放弃导出。
 3. **Open Design 怎么定位到具体活的 worktree**:今天嵌入的是通用首页,V4 需要活级路由,机制(URL query、还是走 socket 协议加新消息类型)没核实过,需要一次穿刺确认。
-4. **Cursor 侧 workflow/技能注入的真实机制**:§2.7 给的方案(AGENTS.md 承载衔接层,`.claude/skills/` 指望 Cursor 也能读到)是推断,不是穿刺验证过的事实,需要 Cursor 真正接通那天补一次真实穿刺。
+4. **Cursor 侧 workflow/技能注入的真实机制**:§2.7 给 claude 的那套(系统提示词给路径 + `--add-dir`)不一定适用 Cursor —— 它有没有等价的「加一个可读目录」开关没核实过,需要 Cursor 真正接通那天补一次真实穿刺。
 5. **判据 C(入口技能)猜不出时要不要给一个人工覆盖的落点**:现在的立场是"不提供"(§2.6,因为没有稳定 id 可挂);如果试点发现"未标注"太影响体验,需要另找一个持久化位置——比如约定 SKILL.md 自己的 front matter 加一个字段,而不是回头再为这一项小展示开一张表。
 
 ---
 
 ## 与代码的关系
 
-这篇不改 `crates/`。开工顺序建议:①`.bw/issue-policy.toml` 的 `[[tool]]`/`[[mapping]]` 解析器(`bw-app` 里的小模块,不需要新 crate);②`.claude/skills/` 现场扫描 + 判据 A/B/C 判定模块(取代原计划的 `skill_package`/`skill` 新表,§2.6);③`ImportSkillPackage`/`ImportSkillLibrary` 改成纯文件复制 + 现场判定,不再写库(§2.8);④`skill_materialize` 补"按包目录整体一次性物化"(§2.7);⑤配置屏②③段改成基于扫描结果现场渲染,不再查表(§2.11);⑥`agent` 表不建(含 `issue.assignee` 不出现,与 02 篇协调,§2.10)。第 5 节就是这条链路的验收清单。
+这篇不改 `crates/`。开工顺序建议:①`.bw/issue-policy.toml` 的 `[[tool]]`/`[[mapping]]` 解析器(`bw-app` 里的小模块,不需要新 crate);②`.claude/skills/` 现场扫描 + 判据 A/B/C 判定模块(取代原计划的 `skill_package`/`skill` 新表,§2.6);③`ImportSkillPackage`/`ImportSkillLibrary` 改成纯文件复制 + 现场判定,不再写库(§2.8);④buddy 自带技能的展开与指路(`standard::skills` + `App::ensure_skill_assets`,§2.7 —— **已落地**;原计划是给 `skill_materialize` 补「按包目录整体一次性物化」,那条路已推翻);⑤配置屏②③段改成基于扫描结果现场渲染,不再查表(§2.11);⑥`agent` 表不建(含 `issue.assignee` 不出现,与 02 篇协调,§2.10)。第 5 节就是这条链路的验收清单。
