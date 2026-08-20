@@ -154,9 +154,7 @@ fn primary_note(events: &[Event]) -> Option<String> {
             human_edited.len()
         ),
         Event::WeekPlanStarted {
-            week,
-            draft_titles,
-            ..
+            week, draft_titles, ..
         } => {
             if draft_titles.is_empty() {
                 // 真跑:文件由 agent 会话产出、走 MR,这里没有骨架也没有草稿。

@@ -5,7 +5,7 @@
 
 use crate::vm::*;
 use bw_v4::model::ProjectId;
-use bw_v4::repo::{managed_file, release_file};
+use bw_v4::repo::{managed_file, release_file, week_plan_file};
 use bw_v4::V4Store;
 use std::path::Path;
 

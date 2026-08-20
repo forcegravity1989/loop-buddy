@@ -76,8 +76,7 @@ impl App {
                 week: week.clone(),
                 origin: "human".into(),
                 goal: Some(
-                    "【mock】本周目标待人确认——这一行由流程演示写出,不是真实对话的结论。"
-                        .into(),
+                    "【mock】本周目标待人确认——这一行由流程演示写出,不是真实对话的结论。".into(),
                 ),
                 activities: Vec::new(),
                 readings,
