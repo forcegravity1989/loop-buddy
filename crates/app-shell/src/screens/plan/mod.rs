@@ -344,7 +344,10 @@ fn confirm_dialog(
                     }
                     if pm.to == IssueStatus::InReview {
                         br {}
-                        "拖过来**只改状态**,不会提交、不会推分支、不会开 MR。要让别人有东西可评审,                         去会话屏点「提交并开 MR」。"
+                        "拖过来"
+                        strong { "只改状态" }
+                        ",不会提交、不会推分支、不会开 MR。要让别人有东西可评审,\
+                         去会话屏点「提交并开 MR」。"
                     }
                 }
                 div { class: "modal-actions",

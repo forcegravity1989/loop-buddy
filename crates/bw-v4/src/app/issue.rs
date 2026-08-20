@@ -277,21 +277,24 @@ impl App {
         )
         .await;
 
-        // MR 号只在真开出来时才写,0 不许把上一次记下的号冲掉。
-        let pr_number = if mr.number > 0 {
+        // 库里:MR 号只在真开出来时才写,0 不许把上一次记下的号冲掉。
+        let kept = if mr.number > 0 {
             mr.number
         } else {
             issue.pr_number
         };
         self.store
-            .set_issue_remote(id, &tree.branch, pr_number, issue.remote_number)
+            .set_issue_remote(id, &tree.branch, kept, issue.remote_number)
             .await?;
 
+        // 事件里报的是**这一次**的结果,不是库里留着的那个号。这两个数不一样的
+        // 时候(上次开过 MR、这次没开成),报库里那个就等于说"MR 开出来了",
+        // 而实际上这次推上去的提交并没有进那个 MR。
         let mut events = vec![Event::IssueSubmitted {
             id,
             branch: tree.branch.clone(),
             commits,
-            pr_number,
+            pr_number: mr.number,
             note: mr.note,
         }];
         // 推「评审中」。阻塞态要先回「进行中」——状态机不许从阻塞直接进评审。

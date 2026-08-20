@@ -219,7 +219,14 @@ pub async fn commit_all(workspace: &Path, message: &str) -> Result<bool, GitErro
     if staged.trim().is_empty() {
         return Ok(false);
     }
-    git(workspace, &["commit", "-m", message]).await?;
+    // `--cleanup=whitespace` 不能省:提交信息第一行是 `#<活号> <标题>`,而人要是
+    // 把 `commit.cleanup` 设成了 `strip`/`scissors`,`#` 开头的行会被当注释整行
+    // 删掉 —— 信息被删空,commit 直接失败。显式定死就跟本机配置无关了。
+    git(
+        workspace,
+        &["commit", "--cleanup=whitespace", "-m", message],
+    )
+    .await?;
     Ok(true)
 }
 
