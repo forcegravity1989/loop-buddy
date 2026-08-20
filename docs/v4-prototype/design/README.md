@@ -17,6 +17,8 @@
 | 09 | [09-ops-workflows.md](09-ops-workflows.md) | 三张运作活的 workflow 剧本(SKILL.md 大纲、注入清单、与人的对话节点、产出、停在评审中):①更新指标 + 制定本周计划 ②资产盘点(第五轮改名,含首次模式 = 老项目历史回填,微重构改为只出建议活)③规范铺底 | workflow-skill-packages、legacy-backfill | 稿 |
 | 10 | [10-e2e-acceptance.md](10-e2e-acceptance.md) | 验收怎么做:E2E 指挥器(headless 走完一周)、深链、SQL 读回清单、试点两周计划、老项目与项目群两条新验收 | 全部 | 稿 |
 | 11 | [11-knowledge-base.md](11-knowledge-base.md) | 知识库屏三页签(知识 / 代码图 / 资产)的数据来源与动作;规范对账条 | codegraph | 稿 |
+| 12 | [12-build-plan.md](12-build-plan.md) | 三刀(A 骨架+主环 / B 运作活+会话屏 / C 回填+项目群+知识库)的施工总表、默认假设、验收读回、卡住怎么办 | — | 已执行 |
+| 13 | [13-shell-hifi-gap.md](13-shell-hifi-gap.md) | **桌面壳 vs 高保真的逐屏缺口表**:壳只继承了配色、没搬版式,列出每屏差的功能位与要补的 ViewModel 字段 + 施工顺序 | — | 待施工 |
 | — | [00-handshake.md](00-handshake.md) | **给用户的二次握手清单**:我替用户按默认答案做下去的 17 条判断,请逐条「默认 / 改」 | — | 待用户回 |
 | — | [REVIEW-2026-08-19.md](REVIEW-2026-08-19.md) | 子代理的只读交叉复核:命令 / 表名 / 文件格式 / 母文档冲突 / 写作纪律 / 漏项 + 九篇 44 条开放问题汇总(§7,每条带建议默认答案);前 10 条已按 00-handshake 的默认答案修进各篇 | — | 已处理 |
 
