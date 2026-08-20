@@ -265,6 +265,24 @@ impl App {
             ));
         }
 
+        // 合的是运作活①、而且主检出真的拉到了这次合入 —— 周计划文件这会儿才第
+        // 一次出现在主检出里,照着它对一次账:文件里列的业务活建成卡片、已有
+        // 的活把排期与工具刷到文件说的样子。**只在真拉到了才做**,否则读的还是
+        // 旧文件(或压根没有),对出来的账是假的。
+        let mut refreshed = Vec::new();
+        if merged && main_has_it && issue.workflow == OPS1_WORKFLOW && !issue.week_of.is_empty() {
+            let week = issue.week_of.clone();
+            match self.refresh_issue_cache(issue.project_id, week).await {
+                Ok(e) => refreshed = e,
+                // 对账没跑成不回滚已经发生的合入与结清 —— 如实记一句,人可以
+                // 在计划屏点「按文件刷新」重来一次。原话端出去,不吞。
+                Err(e) => notes.push(format!(
+                    "周计划对账没跑成(可在计划屏点「按文件刷新」重来):{}",
+                    one_line(&e.to_string())
+                )),
+            }
+        }
+
         let mut events = vec![Event::IssueMerged {
             id,
             pr_number,
@@ -274,6 +292,7 @@ impl App {
         // 合入这件事排在前面,界面上那句话说的才是人刚做的动作;结清事件跟在
         // 后面,读回时两条都在。
         events.extend(settled);
+        events.extend(refreshed);
         // 群通知排在最后:发不出去也不影响上面已经记完的账。
         if let Some(e) = self.chat_notify_issue(id, "merged").await {
             events.push(e);

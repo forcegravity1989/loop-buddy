@@ -266,8 +266,16 @@ fn primary_note(events: &[Event]) -> Option<String> {
         Event::CurrentVersionChanged { version } => format!("在研版本切到 {version}"),
         Event::ToolMappingSaved { category } => format!("「{}」的映射保存了", category.label()),
         Event::ToolProbed { name, result } => format!("{name} 探活:{result:?}"),
-        Event::IssueCacheRefreshed { week, updated } => {
-            format!("按 {week} 的周计划文件刷新了 {updated} 张活的缓存")
+        Event::IssueCacheRefreshed {
+            week,
+            updated,
+            created,
+        } => {
+            if *created > 0 {
+                format!("按 {week} 的周计划文件建了 {created} 张活、刷新了 {updated} 张活的缓存")
+            } else {
+                format!("按 {week} 的周计划文件刷新了 {updated} 张活的缓存")
+            }
         }
         Event::NotifySeenMarked { .. } => "通知已读到这里".into(),
         Event::HealthDerived { signal, .. } => format!("健康现算完成:{signal:?}"),

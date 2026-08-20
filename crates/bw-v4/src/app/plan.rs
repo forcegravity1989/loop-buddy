@@ -281,8 +281,14 @@ impl App {
 
     /// 用周计划文件覆盖库里的缓存列 —— **文件说了算**。
     ///
-    /// 幂等,而且只更新、不删除:缓存里有文件里没有的活,原样留着(那可能是
-    /// 刚建出来还没排进周计划的),只是不再被这次刷新碰。
+    /// 文件里有、库里还没有的活**照着建出来**:运作活①那场会话的产出就是这张
+    /// 表,人合入 MR 之后,这些活得真的出现在看板上,否则周计划定完了看板还是
+    /// 空的,人只能自己照着文件手敲一遍。建出来的活来源标 `agent_split`(它们
+    /// 确实是 agent 在会话里拆出来的),状态落在「待办」——**建活不等于开工,
+    /// 更不等于完成**,那两步照旧要人点。
+    ///
+    /// 幂等(按标题),而且只更新、不删除:缓存里有文件里没有的活,原样留着
+    /// (那可能是刚建出来还没排进周计划的),只是不再被这次刷新碰。
     pub(super) async fn refresh_issue_cache(
         &mut self,
         project_id: ProjectId,
@@ -290,23 +296,53 @@ impl App {
     ) -> Result<Vec<Event>> {
         let ws = self.workspace_of(project_id).await?;
         let Some(plan) = week_plan_file::read(&ws, &week)? else {
-            return Ok(vec![Event::IssueCacheRefreshed { week, updated: 0 }]);
+            return Ok(vec![Event::IssueCacheRefreshed {
+                week,
+                updated: 0,
+                created: 0,
+            }]);
         };
-        let issues = self.store.issues(project_id).await?;
-        let mut updated = 0;
+        let mut issues = self.store.issues(project_id).await?;
+        let (mut updated, mut created) = (0, 0);
         for row in &plan.activities {
-            let Some(issue) = issues.iter().find(|i| i.title == row.title) else {
+            if row.title.trim().is_empty() {
                 continue;
+            }
+            let existing = issues.iter().find(|i| i.title == row.title).map(|i| i.id);
+            let id = match existing {
+                Some(id) => id,
+                None => {
+                    self.create_issue(
+                        project_id,
+                        row.title.clone(),
+                        String::new(),
+                        row.category,
+                        IssueKind::Business,
+                        IssueOrigin::AgentSplit,
+                        week.clone(),
+                    )
+                    .await?;
+                    // 重读一次拿新建那张的 id —— 建活是按标题幂等的,这里按标题
+                    // 找回来就是它。
+                    issues = self.store.issues(project_id).await?;
+                    let Some(fresh) = issues.iter().find(|i| i.title == row.title) else {
+                        continue;
+                    };
+                    created += 1;
+                    fresh.id
+                }
             };
+            self.store.set_issue_week(id, &week, row.order).await?;
             self.store
-                .set_issue_week(issue.id, &week, row.order)
-                .await?;
-            self.store
-                .set_issue_dispatch(issue.id, &row.tool, &row.workflow, &row.metric_key)
+                .set_issue_dispatch(id, &row.tool, &row.workflow, &row.metric_key)
                 .await?;
             updated += 1;
         }
-        Ok(vec![Event::IssueCacheRefreshed { week, updated }])
+        Ok(vec![Event::IssueCacheRefreshed {
+            week,
+            updated,
+            created,
+        }])
     }
 
     /// 把库里这一周的活清单写回周计划文件的「业务活」表格。文件里别的段落

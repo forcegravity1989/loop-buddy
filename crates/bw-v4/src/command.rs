@@ -308,6 +308,8 @@ pub enum Event {
     IssueCacheRefreshed {
         week: String,
         updated: u32,
+        /// 文件里有、库里还没有,这次照着建出来的活数。
+        created: u32,
     },
     /// 回填跑完了。`weeks`/`releases` 是**真的写出去**的那些,不是"扫到的"。
     HistoryBackfilled {
