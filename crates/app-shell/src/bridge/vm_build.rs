@@ -229,6 +229,9 @@ fn primary_note(events: &[Event]) -> Option<String> {
             format!("定时到点:{week} 的「{workflow}」已自动建活并开工")
         }
         Event::WeekPlanAlreadyExists { week, .. } => format!("{week} 已经有周计划文件了,没有重写"),
+        Event::WeekPlanInProgress { week, status, .. } => {
+            format!("{week} 的运作活①还在路上({status})—— 去会话屏接着聊,周计划由那场会话产出")
+        }
         Event::IssueCreated { number, .. } => format!("建了一张活 #{number}"),
         Event::IssueScheduled { week_of, .. } => {
             if week_of.is_empty() {

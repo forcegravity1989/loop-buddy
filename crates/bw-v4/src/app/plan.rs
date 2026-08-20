@@ -24,6 +24,28 @@ impl App {
         if week_plan_file::exists(&ws, &week) {
             return Ok(vec![Event::WeekPlanAlreadyExists { project_id, week }]);
         }
+        // 真跑路径下文件要等 MR 合入才落地,上面那道锁这期间是开着的 —— 所以
+        // 还得按活再锁一道:本周的运作活①只要还没走到「完成」,就是还在路上,
+        // 平静挡住,不重复建、也不去动那场可能正开着的会话。
+        if let Some(open) = self
+            .store
+            .issues_in_week(project_id, &week)
+            .await?
+            .into_iter()
+            .filter(|i| {
+                i.kind == IssueKind::Ops
+                    && i.workflow == super::OPS1_WORKFLOW
+                    && i.status != IssueStatus::Done
+            })
+            .max_by_key(|i| i.number)
+        {
+            return Ok(vec![Event::WeekPlanInProgress {
+                project_id,
+                week,
+                issue_id: open.id,
+                status: open.status.label().to_string(),
+            }]);
+        }
 
         // 真跑与替身是两条路,文件的产出方不同,别混:
         //

@@ -250,6 +250,15 @@ pub enum Event {
         project_id: ProjectId,
         week: String,
     },
+    /// 本周那张运作活①还在路上(周计划文件要等它的 MR 合入才落地),这次什么
+    /// 都没做。**不是错误** —— 人再点一次「开始本周」该被平静地挡住,而不是
+    /// 收到一句「这张活现在是评审中,不是能开工的状态」。
+    WeekPlanInProgress {
+        project_id: ProjectId,
+        week: String,
+        issue_id: IssueId,
+        status: String,
+    },
     IssueCreated {
         id: IssueId,
         number: u32,
