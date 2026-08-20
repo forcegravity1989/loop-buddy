@@ -153,7 +153,18 @@ fn primary_note(events: &[Event]) -> Option<String> {
             stale.len(),
             human_edited.len()
         ),
-        Event::WeekPlanStarted { week, .. } => format!("{week} 的周计划文件已写出,等你确认草稿"),
+        Event::WeekPlanStarted {
+            week,
+            draft_titles,
+            ..
+        } => {
+            if draft_titles.is_empty() {
+                // 真跑:文件由 agent 会话产出、走 MR,这里没有骨架也没有草稿。
+                format!("运作活①已开工:{week} 的周计划由这场会话产出,提交走 MR,人合入后总览才亮")
+            } else {
+                format!("{week} 的周计划文件已写出(流程演示),等你确认草稿")
+            }
+        }
         Event::HistoryBackfilled { note, .. } => note.clone(),
         Event::WorkspacesRootChanged { path, pinned } => {
             let tail = if *pinned > 0 {

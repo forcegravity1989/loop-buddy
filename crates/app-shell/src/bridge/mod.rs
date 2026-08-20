@@ -360,12 +360,13 @@ async fn fetch_prefill(
     }
 }
 
-/// 从一批事件里挑出「开始本周」产出的草稿活标。
+/// 从一批事件里挑出「开始本周」产出的草稿活标。真跑路径没有草稿(周计划由
+/// agent 会话产出、走 MR),那时候不该弹「等你确认草稿」的卡。
 fn drafts_of(events: &[bw_v4::command::Event]) -> Option<(String, Vec<String>)> {
     events.iter().find_map(|e| match e {
         bw_v4::command::Event::WeekPlanStarted {
             week, draft_titles, ..
-        } => Some((week.clone(), draft_titles.clone())),
+        } if !draft_titles.is_empty() => Some((week.clone(), draft_titles.clone())),
         _ => None,
     })
 }

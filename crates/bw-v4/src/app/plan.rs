@@ -25,36 +25,50 @@ impl App {
             return Ok(vec![Event::WeekPlanAlreadyExists { project_id, week }]);
         }
 
-        let last_week = isoweek::previous_week(&week).unwrap_or_default();
-        let last_lines = last_week_lines(&ws, &last_week).await;
-        let readings = collect_readings(&ws, &week).await;
+        // 真跑与替身是两条路,文件的产出方不同,别混:
+        //
+        // - **真跑**(桌面壳开着内嵌终端 + 项目有真实工作区):这里**一个文件都
+        //   不写**。周计划文件由运作活①的 agent 会话在这张活自己的 worktree 里
+        //   产出、走 MR、人合入后才落进主检出 —— 仓是正本,合入才算数。要是这里
+        //   先往主检出写一份骨架,就会留下一个没进版本控制的同名文件:MR 合入后
+        //   `git pull` 会被它顶住,总览还一直显示骨架里的【mock】目标。
+        // - **替身**(headless 指挥器、或项目没配工作区):没有真会话可以产文件,
+        //   骨架 + 【mock】草稿就是这条路的全部产出,处处自我标注,不冒充真实
+        //   对话的结论。
+        let real_session = self.pty_enabled && ws.is_dir();
+        let draft_titles = if real_session {
+            Vec::new()
+        } else {
+            let last_week = isoweek::previous_week(&week).unwrap_or_default();
+            let last_lines = last_week_lines(&ws, &last_week).await;
+            let readings = collect_readings(&ws, &week).await;
 
-        // A 刀这一步是替身:真正的运作活①会起一次 agent 会话,和人一起复盘上
-        // 周、更新指标、聊出本周目标与活。这里产出的草稿活标自带【mock】字样,
-        // 绝不冒充真实对话的结论。
-        // 标题里必须带周号:建活是按标题幂等的,两周用同样的标题的话,第二周
-        // 确认草稿拿回的是上周那两张活的 id,一张新活都建不出来。
-        let draft_titles = vec![
-            format!("【mock】{week} 第一件业务活(草稿,等人确认)"),
-            format!("【mock】{week} 第二件业务活(草稿,等人确认)"),
-        ];
+            // 标题里必须带周号:建活是按标题幂等的,两周用同样的标题的话,第二周
+            // 确认草稿拿回的是上周那两张活的 id,一张新活都建不出来。
+            let titles = vec![
+                format!("【mock】{week} 第一件业务活(草稿,等人确认)"),
+                format!("【mock】{week} 第二件业务活(草稿,等人确认)"),
+            ];
 
-        let draft = WeekPlanDraft {
-            week: week.clone(),
-            origin: "human".into(),
-            goal: Some(
-                "【mock】本周目标待人确认——这一行由流程演示写出,不是真实对话的结论。".into(),
-            ),
-            activities: Vec::new(),
-            readings,
-            ops: vec![OpsRow {
-                title: format!("运作活①更新指标 + 制定本周计划 {week}"),
-                status: "进行中".into(),
-                note: "复盘上周、更新指标、引导出本周目标与活".into(),
-            }],
-            last_week_lines: last_lines,
+            let draft = WeekPlanDraft {
+                week: week.clone(),
+                origin: "human".into(),
+                goal: Some(
+                    "【mock】本周目标待人确认——这一行由流程演示写出,不是真实对话的结论。"
+                        .into(),
+                ),
+                activities: Vec::new(),
+                readings,
+                ops: vec![OpsRow {
+                    title: format!("运作活①更新指标 + 制定本周计划 {week}"),
+                    status: "进行中".into(),
+                    note: "复盘上周、更新指标、引导出本周目标与活".into(),
+                }],
+                last_week_lines: last_lines,
+            };
+            week_plan_file::write(&ws, &week, &week_plan_file::render(&draft))?;
+            titles
         };
-        week_plan_file::write(&ws, &week, &week_plan_file::render(&draft))?;
 
         // 真正干这件事的是一次 agent 会话:复盘上周、更新指标、和人聊出本周
         // 要干什么。buddy 只负责把活建出来、把骨架文件写下去,然后立刻开工
