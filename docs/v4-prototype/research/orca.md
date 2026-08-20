@@ -74,7 +74,7 @@ BW 是 Rust 内核 + Dioxus 0.7/wry WebView(WebView 本身能跑任意 JS,包括
 - 结论:**不推荐作为主路径**。只有当 BW 想给"本机已经装了 Orca 的重度用户"提供一个"甩给 Orca 处理"的逃生舱时才值得做一次性能验证,工作量集中在打通 CLI 调用+解析 `--json` 输出,量级：小(几天);但要接受"这活儿离开了 BW 的 UI"的产品代价,不建议作为常态路径。
 
 **(B)只借模式/组件,搬进 BW 自己的 WebView(推荐)**
-和 BW 早年对旧版 orca-main 的做法(`docs/v1-prototype/orca-terminal-session-reference.md`)一脉相承——只借架构思路,不借 TypeScript/Electron 代码。这次值得借的东西:
+和 BW 早年对旧版 orca-main 的做法(`docs/archive/v1-prototype/orca-terminal-session-reference.md`)一脉相承——只借架构思路,不借 TypeScript/Electron 代码。这次值得借的东西:
 
 - **多 agent 适配器的分类法**(不是代码,是设计模式):`src/shared/tui-agent-config.ts` 那张 `promptInjectionMode` 六分类(argv/flag-prompt/flag-prompt-interactive/flag-interactive/hermes-query/stdin-after-start)+ `draftPasteReadySignal` 竞态处理,可以直接套进 BW 的 `docs/v3-prototype/cursor-agent-executor.md` 里"以后接第二个 CLI 怎么配"的设计——目前那篇文档还没细分到这个粒度。
 - **恢复命令表**:`src/shared/agent-session-resume.ts:242-280` 印证了 BW 现有 `claude --resume <session_id>` 的设计方向没跑偏,以后加别的 CLI 时可以照抄这张表的形状(每个 agent 一行 resume argv)。

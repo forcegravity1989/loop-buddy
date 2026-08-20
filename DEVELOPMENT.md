@@ -138,7 +138,7 @@ cargo test --workspace --exclude app-desktop --exclude app-shell   # CI 也跑;�
 
 ## 创建流(概要)
 
-新项目走「仓从哪来 → 意图与确认」两卡向导(伙伴 V1 `docs/v1-prototype/issue1-onboard-simplify.md` 简化后的形态),快、能退、能续;创建落地时自动配好标配 Issue。拍板记录见 `plan/13`(GitHub 为正本:issue = GitHub issue、验收 = merge、`.bw/metrics.toml` 正本),术语见 `CONTEXT.md`「创建流」一节。早先「起草那一步永久用演示替身跑」的设计已随起草卡一起被 V1 砍掉,`RunDraftWorkflow` 命令 2026-08-17 删除。
+新项目走「仓从哪来 → 意图与确认」两卡向导(伙伴 V1 `docs/archive/v1-prototype/issue1-onboard-simplify.md` 简化后的形态),快、能退、能续;创建落地时自动配好标配 Issue。拍板记录见 `plan/13`(GitHub 为正本:issue = GitHub issue、验收 = merge、`.bw/metrics.toml` 正本),术语见 `CONTEXT.md`「创建流」一节。早先「起草那一步永久用演示替身跑」的设计已随起草卡一起被 V1 砍掉,`RunDraftWorkflow` 命令 2026-08-17 删除。
 
 ## 历史沿革(一段话)
 

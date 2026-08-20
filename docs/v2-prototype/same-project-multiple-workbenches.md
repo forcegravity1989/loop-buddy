@@ -2,7 +2,7 @@
 
 > **30 秒导读**:本文设计 V2 的第二项能力,给后续原型、开发与验收使用。**现在作数**:产品边界、信息归属、首到者/后来者纳管流程均已对齐;**Phase A(多人闭环)已实现**(`7a84e45`..`648ad48`,未 push);**Phase B(近 30 天历史观测)已实现**(与 Issue 3 折线配对:横轴为周结束日 MM-DD);**V2-②-I(仓平台 open Issue 单向读回重建本地行)已落地**。它不是团队协作设计;真正的多人协作与 Buddy 重构由另一个项目推导,本轮不提前实现。
 >
-> 初始意向见 [`roadmap.md`](roadmap.md) §2.2;产品命题见 [`../../plan/07-product-proposition.md`](../../plan/07-product-proposition.md);V2-①(调度逻辑简化)的设计见 [`issue-dispatch-prompt-skill.md`](issue-dispatch-prompt-skill.md)——两篇接口点见 §2.4。领域词以 [`../../CONTEXT.md`](../../CONTEXT.md) 为准。
+> 初始意向见 [`roadmap.md`](../archive/v2-prototype/roadmap.md)(已归档,史实)§2.2;产品命题见 [`../../plan/07-product-proposition.md`](../../plan/07-product-proposition.md);V2-①(调度逻辑简化)的设计见 [`issue-dispatch-prompt-skill.md`](issue-dispatch-prompt-skill.md)——两篇接口点见 §2.4。领域词以 [`../../CONTEXT.md`](../../CONTEXT.md) 为准。
 
 ---
 
@@ -42,7 +42,7 @@ Buddy 不记录现实中还有哪些人参与项目,也不把现实组织关系�
 - 群聊、收件箱和审批流;
 - Buddy 实例之间的成员关系。
 
-`roadmap.md` §2.2 原先列出的"多人身份与权限模型"不是本需求需要回答的问题。它来自把现实中的多人错误映射成 Buddy 内部成员,应当由本决定取代。
+`roadmap.md`(已归档:`docs/archive/v2-prototype/roadmap.md`)§2.2 原先列出的"多人身份与权限模型"不是本需求需要回答的问题。它来自把现实中的多人错误映射成 Buddy 内部成员,应当由本决定取代。
 
 ### 2.2 选择"共同事实共享,本地过程各算各的"
 

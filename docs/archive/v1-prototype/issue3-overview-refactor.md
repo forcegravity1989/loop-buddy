@@ -1,5 +1,7 @@
 # V1 Issue 3 · 总览页重构 — 开发事实源
 
+> ⚠️ **历史档案(V1 窗口三「总览页重构」开发事实源,2026-08-20 归档)**。记录的是 ProgressAll 总览重构的设计与开发过程,主体已落地;项目指标区的最终定型见同批归档的同目录 [`piercing-fixes-1.md`](piercing-fixes-1.md)。遗留问题现状以 [`docs/LEFTOVERS.md`](../../LEFTOVERS.md) 为准;产品现状以仓根 `CLAUDE.md` 为准。
+
 > 走 (c):现有 buddy app 当底。本文是设计 + 开发唯一事实源(SubAgent 照此建)。5 步法:scope delta ✅ → 对齐原型 ✅(HTML 高保真已对齐)→ 提 issue ✅(Issue 3)→ 开发 → 验证 → 填指南。
 > ⚡ 遗留问题统一归拢于 `docs/v1-prototype/LEFTOVERS.md`(唯一完整清单,W1-1~4/W2-1~7/W3-1~9/V1-P1);本文 §3 边界表及各「留窗口」条目为设计过程原文留存,读遗留以 LEFTOVERS 为准。
 >

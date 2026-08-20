@@ -1,5 +1,7 @@
 # V1 Issue 1 · 项目纳入简化 + connector 心智模型归位 — 开发事实源
 
+> ⚠️ **历史档案(V1 窗口一「项目纳入简化」开发事实源,2026-08-20 归档)**。记录的是 2026-08 上旬创建流简化(仓→意图两卡向导)与 connector 心智模型归位的设计与开发过程,主体已落地。本文各「遗留/未决/后续」条目是设计过程原文留存——遗留问题现状一律以 [`docs/LEFTOVERS.md`](../../LEFTOVERS.md) 为准;产品现状以仓根 `CLAUDE.md` 与 [`docs/v4-prototype/`](../../v4-prototype/)(V4 规划)为准。
+
 > 走 (c):现有 buddy app 当底简化。本文是 phase1+phase2 开发的唯一事实源(SubAgent 照此建)。
 > ⚡ 遗留问题统一归拢于 `docs/v1-prototype/LEFTOVERS.md`(唯一完整清单,W1-1~4/W2-1~7/W3-1~9/V1-P1);本文各「遗留/未决/后续」条目为设计过程原文留存,读遗留以 LEFTOVERS 为准。
 > 5 步法:scope delta ✅ → 对齐原型(本文)→ 开发 → 验证 → 填指南。Issue 已提(Issue 1)。

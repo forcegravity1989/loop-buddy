@@ -2,7 +2,7 @@
 
 > **30 秒导读**：这是一份 V2 的详细设计，给后续负责落地的助手 Agent、评审者和维护者看。**设计现在作数；V2-① 两轮已实现**（commit `4073ae2`..`8f35b6b`，未 push；行为层真 Claude E2E 仍可 defer 用户）。它解决两个现实问题：一是任意 Issue 开工时缺少统一的 buddy 处理约束；二是「找指标 / 绑数据」规范被绑在少数标配 Issue 的技能名称上，换一张 Issue 就可能丢失。本设计把运行上下文拆成两个互不依附的维度：**所有 Issue 必带的 buddy 系统提示词与规范手册**，以及**按活选择的 Skill 方法与协作流程**。
 >
-> 初始意向见 [`roadmap.md`](roadmap.md)；V1 终端收口史实见 [`../v1-prototype/issue2-all-issues-terminal-runs.md`](../v1-prototype/issue2-all-issues-terminal-runs.md)。看不懂的领域词查 [`../../CONTEXT.md`](../../CONTEXT.md)，产品铁律和验证纪律见 [`../../CLAUDE.md`](../../CLAUDE.md)。
+> 初始意向见 [`roadmap.md`](../archive/v2-prototype/roadmap.md)(已归档,史实)；V1 终端收口史实见 [`../v1-prototype/issue2-all-issues-terminal-runs.md`](../v1-prototype/issue2-all-issues-terminal-runs.md)。看不懂的领域词查 [`../../CONTEXT.md`](../../CONTEXT.md)，产品铁律和验证纪律见 [`../../CLAUDE.md`](../../CLAUDE.md)。
 
 ---
 

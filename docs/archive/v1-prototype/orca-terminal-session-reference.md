@@ -1,5 +1,7 @@
 # orca-main 终端会话架构参考(可借鉴机制 + buddy 取舍)
 
+> ⚠️ **历史档案(orca-main 终端会话架构参考,2026-08-20 归档)**。记录的是终端会话重构预研时借鉴 orca-main(一个 Electron 终端多会话项目)的机制摘要,该重构已落地。设计与落地事实源在仍属现役的 [`docs/v1-prototype/issue2-terminal-conversation-refactor.md`](../../v1-prototype/issue2-terminal-conversation-refactor.md),以该篇为准,本文只作参考对照。产品现状以仓根 `CLAUDE.md` 为准。
+
 > **30 秒导读**:这份是 orca-main(`D:\2026\code\orca-main`,Electron + React + node-pty + xterm.js)的终端多会话架构摘要,供 buddy 的终端会话重构(`issue2-terminal-conversation-refactor.md`)参考。**只记可借鉴机制 + 源码锚点 + buddy 为什么取舍不同**。orca 是高分开源项目,buddy 在「内嵌 claude cli 的多会话切换」上吸纳它的交互和技术模式;但 buddy 是 Rust/Dioxus 单人构建者工作台,不是 node/多 agent 工作台,代码不同栈,只借模式不借代码。现在作数,作为重构的参考对照。
 
 ---

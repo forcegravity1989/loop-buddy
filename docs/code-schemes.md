@@ -46,7 +46,7 @@
 | **V3-OD-embed** | `docs/v3-prototype/README.md` | 原型进度内嵌本机 Open Design 首页(管道发现 URL + iframe);提示词注入不在本轮 | 已随 v3 分支经 PR #99 合入 main(2026-08-13) |
 | **V3-cursor-cli** | `docs/v3-prototype/cursor-agent-executor.md` | Issue 调度接 Cursor Agent CLI(`agent`,非 `cursor.exe`);配置面=本机默认+智能体执行引擎 | 设计已记,未落地 |
 | **V3-cowelink-sidecar** | `docs/v3-prototype/cowelink-web-sidecar.md` | cowelink 长出本机网页旁路,buddy iframe 内嵌;不弹窗、不 HWND | 设计已记,未落地 |
-| **V3-use-fix** | `docs/v3-prototype/onboard-list-and-claude-resolve.md` | V3 实践使用:安装器/探测认 claude.cmd + 创建流拉 999/可搜索下拉 + 程序图标;纳入选分支不在本轮 | 本轮落地 |
+| **V3-use-fix** | `docs/archive/v3-prototype/onboard-list-and-claude-resolve.md`(已归档,2026-08-20) | V3 实践使用:安装器/探测认 claude.cmd + 创建流拉 999/可搜索下拉 + 程序图标;纳入选分支不在本轮 | 本轮落地 |
 | **减负-1 … 减负-21** | `docs/LEFTOVERS.md`「当前开着」表 + 文末「减负重构收据」 | 2026-08-17/18 减负重构会话的滞后清单(冗余功能 / 结构债 / 已删收据),从 `docs/BACKLOG.md` 并入时沿用原序号;中文前缀,不与任何字母系列撞车 | 1、2 已做;其余按表内「阶段」列排 |
 | **V4-A…G**(刀号) | `docs/v4-prototype/design/12-build-plan.md` §1 | V4 开发的七刀:A 骨架+数据+主环 / B 运作活+会话屏 / C 回填+项目群+包 / D 九屏照高保真重排 / E 每张活一棵 worktree+铺底提 MR / F 提交并开 MR + 接入屏列真仓 / G 试点第一天:铺底收进 `.bw/`、技能不进用户仓、通知只留 MR。A 刀内再分 A1 数据层 … A7 收尾,B 刀内再分 B1 运作剧本 … B8 收尾(逐步任务书已随刀跑完删除,考古去 git 历史)。**与 plan/06 的 A0–A5、plan/18 的 A1/A2/A4 无关** | A–E 已合入 main(A/B/C 在 PR #105,D/E 在 PR #106);F+G 在 PR #108 上等人点合 |
 | **V4A-1…** | `docs/LEFTOVERS.md` | V4 A 刀留下的遗留条目(命令有了但界面没入口、只做了第 1 步之类) | 开着 |

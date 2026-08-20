@@ -375,7 +375,7 @@ impl TerminalManager {
 | `TerminalWidget` + 全局 `window.__bw_term` | `crates/app-desktop/src/screens/op.rs` | 3332-3442 / 3158 |
 | `existing_issue_session` (stage,title) 硬凑 | `crates/app-desktop/src/screens/op.rs` | 613 |
 | hook listener | `crates/bw-app/src/hook_listener.rs` | — |
-| orca 可借鉴机制(对照) | `docs/v1-prototype/orca-terminal-session-reference.md` | — |
+| orca 可借鉴机制(对照) | `docs/archive/v1-prototype/orca-terminal-session-reference.md`(已归档,史实参考) | — |
 
 ---
 

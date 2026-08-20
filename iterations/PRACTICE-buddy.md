@@ -423,7 +423,7 @@ cargo run -p app-desktop   # 别直接跑 target/debug/builders-workbench.exe(Wi
 
 ### 4.16 V3 使用问题(2026-08-17)
 
-> 实践里撞到。指回步2 创建流 / 第一包安装器。设计见 [`docs/v3-prototype/onboard-list-and-claude-resolve.md`](../docs/v3-prototype/onboard-list-and-claude-resolve.md)(代号 V3-use-fix)。动手前提 issue。
+> 实践里撞到。指回步2 创建流 / 第一包安装器。设计见 [`docs/archive/v3-prototype/onboard-list-and-claude-resolve.md`](../docs/archive/v3-prototype/onboard-list-and-claude-resolve.md)(代号 V3-use-fix)。动手前提 issue。
 
 - **安装器只认一条死路径 `bin\claude.exe`**(指回 §1 前置 / 第一包):Inno 脚本原先只查 `%APPDATA%\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`。终端里 `claude` 能用(走 `%APPDATA%\npm\claude.cmd`)也不算。同事有主包目录、没有 `bin`,安装包直接中止。`bin\claude.exe` 是 npm `postinstall` 从可选包拷过来的,不是解压自带。
   - **没有 exe,Issue 还能跑吗**:终端能跑 ≠ buddy 能开工。V3 开工是 ConPTY,`CreateProcess` 直接打 `.cmd` 会不是合法 Win32 映像。只放行安装、不包 `cmd.exe /c`,点跑仍失败。

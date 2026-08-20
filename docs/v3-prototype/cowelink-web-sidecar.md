@@ -2,7 +2,7 @@
 
 > **30 秒导读**：这是预研后的设计记录，不是已实现规格。理念：**Builders 只有一张工作台，就是 buddy**；WeLink 会话处理是工作台里的一块，不是再弹一个 CoWeLink 窗口。**现在作数；代码未改。** 代号 **V3-cowelink-sidecar**。
 
-看不懂的词查 [`../../CONTEXT.md`](../../CONTEXT.md)。对照已落地的内嵌先例：[`open-design-embed-spike.md`](../v2-prototype/open-design-embed-spike.md) 与 V3 原型进度。
+看不懂的词查 [`../../CONTEXT.md`](../../CONTEXT.md)。对照已落地的内嵌先例：[`open-design-embed-spike.md`](../archive/v2-prototype/open-design-embed-spike.md)(已归档,史实)与 V3 原型进度。
 
 ---
 
