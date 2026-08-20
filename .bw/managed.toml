@@ -1,0 +1,92 @@
+# 铺底/升级时写:哪些文件是 buddy 管的、什么版本、铺下去那一刻的内容
+# 指纹。下次升级前先比对指纹:变了 = 人手改过,不覆盖只提示差异。
+
+[[file]]
+path        = "PROJECT.md"
+version     = "4.0"
+fingerprint = "sha256:3c9eec6e68ad6c90420327fb2b89b75ceced2ad72f1b48ecdd106619b93668bf"
+
+[[file]]
+path        = "docs/plan/README.md"
+version     = "4.0"
+fingerprint = "sha256:b2dd384d6323e175209d1094f32a6da283299cf19f130e852474003b36077e5f"
+
+[[file]]
+path        = "docs/design/README.md"
+version     = "4.0"
+fingerprint = "sha256:c26c26b893c1d637bb388bc4f9008a98aa89ac09a5986888786533f27d0f69f4"
+
+[[file]]
+path        = ".bw/issue-policy.toml"
+version     = "4.0"
+fingerprint = "sha256:9cab9d0a1e2f6f0430de546990706eb865069b5a972e53238a2fc0c24bdd6677"
+
+[[file]]
+path        = ".bw/standard.toml"
+version     = "4.0"
+fingerprint = "sha256:f9fa717cdbd90f73e3d34958821a3b820ecb8a15aee419a9219c34d8e1dca126"
+
+[[file]]
+path        = ".claude/skills/evidence-first/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:1def696697bdfe3bf60af12147c9d95c11de765d6622c1711ed213f73976294f"
+
+[[file]]
+path        = ".claude/skills/spec-to-tests/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:4b3f95ef7c59c57523693fa19be007a51ffc50414d67351d68200914d645ec67"
+
+[[file]]
+path        = ".claude/skills/baseline-before-touch/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:6a4adac5335317b469dbd48f914695e0177c1101236180f4969fc465d01179c5"
+
+[[file]]
+path        = ".claude/skills/fresh-eyes-funnel/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:80a0483f3b8e1f6769aa463b2e55ff02a837e20fc9be48751654a27300b9e43e"
+
+[[file]]
+path        = ".claude/skills/breaking-drill/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:13dbd0e70efec18df19e62721d2fe535158dfd19927e322d9cc32930be402ecd"
+
+[[file]]
+path        = ".claude/skills/competitive-analysis/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:fd1508a2316cbdd92b45202612e2e170741da77de592666263e29f90335d30f1"
+
+[[file]]
+path        = ".claude/skills/north-star-discovery/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:511aba8a3b94cee186afe009963d9314a44db379b615c4063caff99b20187286"
+
+[[file]]
+path        = ".claude/skills/metrics-binding/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:e65ac2815c1d7fba9e9c1089d06a5fd485f3a31ed2427500b436881dc79d47b5"
+
+[[file]]
+path        = ".claude/skills/metrics-render/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:149bd726fed96ae7b1967e4f4b5c074370eb0e91b7e16ee9e00720f2d9ba4c68"
+
+[[file]]
+path        = ".claude/skills/week-planning/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:dfe53aec7c7e10a24e5c7eb081118d52412e11225f956b8ee9d15401c092d3a1"
+
+[[file]]
+path        = ".claude/skills/week-planning/skills/metrics-refresh/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:c9657c0c8688f38b7ae1ae30d6d1c53f6a14a8c7ec0f1a7295e71f70a3ae1d8f"
+
+[[file]]
+path        = ".claude/skills/asset-audit/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:82154414b76c0992fffd0f8aaf7a29959ef29feb4166e7a30e915e35a35ca593"
+
+[[file]]
+path        = ".claude/skills/merge-adjust/SKILL.md"
+version     = "4.0"
+fingerprint = "sha256:9374770511e905e8fd26582b4a3b292cc1af4f2f599403cc9e19881e3f8a49bd"
