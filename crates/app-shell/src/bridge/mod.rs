@@ -5,6 +5,7 @@
 //! 命令失败就把失败的原话放进 `Vm::note`,不假装做成了。
 
 mod vm_build;
+mod vm_derive;
 mod vm_kb;
 mod vm_panels;
 
@@ -558,7 +559,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                     let back = tx_back.clone();
                                     tokio::spawn(async move {
                                         let _ = back.send(Req::RepoStatsComputed(
-                                            vm_panels::collect_repo_stats(&ws).await,
+                                            vm_derive::collect_repo_stats(&ws).await,
                                         ));
                                     });
                                 }

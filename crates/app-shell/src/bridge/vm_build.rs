@@ -11,10 +11,10 @@ use bw_v4::model::{IssueStatus, Project, ProjectId};
 use bw_v4::repo::{issue_policy_file, project_file, release_file, week_plan_file};
 use bw_v4::V4Store;
 
+use super::vm_derive::{build_card_mr, build_notify_events, build_ops, build_week_counts};
 use super::vm_kb::build_kb;
 use super::vm_panels::{
-    build_board, build_card_mr, build_config, build_metrics, build_notify_events, build_ops,
-    build_sessions, build_week_counts, build_weeks, build_workbench,
+    build_board, build_config, build_metrics, build_sessions, build_weeks, build_workbench,
 };
 
 /// 读一份仓文件:读不出来就把原话记进 `warnings`,再退回默认值。
