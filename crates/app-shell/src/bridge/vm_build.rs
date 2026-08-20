@@ -64,6 +64,9 @@ pub struct UiState {
     pub repo_stats: Option<crate::vm::RepoStatsVm>,
     pub db_path: String,
     pub workspaces_root: String,
+    /// 接入屏那份仓列表的状态。**不进库** —— 它是「现在去平台问了一次」的结果,
+    /// 关掉接入屏就该忘掉。
+    pub repos: crate::vm::RepoPickerVm,
 }
 
 /// 深链按 slug 找,找不到再按显示名找。
@@ -136,6 +139,14 @@ fn primary_note(events: &[Event]) -> Option<String> {
         ),
         Event::WeekPlanStarted { week, .. } => format!("{week} 的周计划文件已写出,等你确认草稿"),
         Event::HistoryBackfilled { note, .. } => note.clone(),
+        Event::WorkspacesRootChanged { path, pinned } => {
+            let tail = if *pinned > 0 {
+                format!(",已接入的 {pinned} 个项目已就地钉在原位置、不会跟着搬")
+            } else {
+                ",已接入的项目都在原处".to_string()
+            };
+            format!("工作区根目录改成了 {path}{tail}")
+        }
         Event::IssueSubmitted {
             branch,
             commits,
@@ -311,6 +322,7 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
         fatal: None,
         projects: cards,
         env: probe_env(),
+        repos: ui.repos.clone(),
         open,
         settings: SettingsVm {
             workspaces_root: ui.workspaces_root.clone(),

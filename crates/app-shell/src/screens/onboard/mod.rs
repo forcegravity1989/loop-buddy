@@ -1,9 +1,13 @@
 //! 顶层 · 接入项目。两张卡:先指到一个真实的仓,再说清「这是个什么项目」。
 //!
-//! 版式照 `docs/v4-prototype/hifi/index.html` 的 `renderOnboard`。**高保真上那份
-//! 仓列表是工厂造的假数据**(`REPO_LIST`),真壳里列不出来 —— 列远端的仓要调
-//! 平台接口,那条路还没接。所以「已有」那一格给的是一个能直接填的地址输入,
-//! 外加一句实话说明为什么没有列表可点。
+//! 版式照 `docs/v4-prototype/hifi/index.html` 的 `renderOnboard`。高保真上那份仓
+//! 列表是工厂造的假数据(`REPO_LIST`);这里列的是**真的** —— 点「列出我的仓」
+//! 现去问 `gh repo list` / `codehub-cli`(两个平台的能力 `bw-engine` 里本来就有,
+//! V3 就在用)。问不出来就把 CLI 的原话摆出来,绝不拿假数据顶上。
+//!
+//! **点一行仓会自动回显名片**:去读那个仓远端的 `.bw/project.toml`,读得到就说明
+//! 这个项目已经被 buddy 接管过(你自己接过、或者同事先接的),四个字段直接填好;
+//! 读不到就空着让人填。**人只要动手改过某一格,回显就不再盖它** —— 以人填的为准。
 //!
 //! 四个基础字段全部落仓文件(`PROJECT.md` 与 `.bw/project.toml`),库里只记路径
 //! 与显示用的名字 —— 名片的正本在仓里,换台机器拉下来就有。
@@ -14,6 +18,135 @@ use crate::vm::{ToolProbeVm, Vm};
 use bw_v4::command::{Command, ProjectIntent, RemoteRef};
 use bw_v4::Signal as HealthSignal;
 use dioxus::prelude::*;
+
+/// 「我账号下的仓」列表。**没点过就不去问** —— 每次开接入屏都自动起一次子进程
+/// 太吵,而且没装 gh 的人会天天看见一条红。点了才问,问不出来就摆原话。
+#[allow(clippy::too_many_arguments)]
+fn repo_picker(
+    vm: &Vm,
+    bridge: &Bridge,
+    github: bool,
+    host: String,
+    remote: Signal<String>,
+    workspace: Signal<String>,
+    root: String,
+) -> Element {
+    let r = &vm.repos;
+    let b = bridge.clone();
+    let (gh2, host2) = (github, host.clone());
+    rsx! {
+        div { class: "repolist",
+            div { style: "display:flex;align-items:center;gap:8px;margin-bottom:8px;",
+                button {
+                    class: "btn btn-sm",
+                    disabled: r.loading,
+                    onclick: move |_| b.send(crate::bridge::Req::ListRepos {
+                        github: gh2,
+                        host: host2.clone(),
+                    }),
+                    if r.loading { "列着…" } else if r.asked { "重列一次" } else { "列出我的仓" }
+                }
+                span { style: "font-size:11.5px;color:var(--ink-3);",
+                    if github { "现去问 gh repo list" } else { "现去问 codehub-cli" }
+                }
+            }
+            if let Some(e) = &r.error {
+                div { style: "font-size:11.5px;color:var(--ink-3);line-height:1.8;margin-top:6px;",
+                    "列不出来:{e}"
+                    br {}
+                    if github {
+                        "多半是没装 gh 或者没登录(gh auth login)。地址也可以直接填在下面那格。"
+                    } else {
+                        "多半是没装 codehub-cli、没登录,或者上面的域名填错了。"
+                    }
+                }
+            } else if r.loading {
+                div { style: "font-size:11.5px;color:var(--ink-3);line-height:1.8;margin-top:6px;", "正在问平台…" }
+            } else if r.asked && r.rows.is_empty() {
+                div { style: "font-size:11.5px;color:var(--ink-3);line-height:1.8;margin-top:6px;", "这个账号下一个仓都没列到。" }
+            } else {
+                for row in r.rows.iter() {
+                    {repo_line(row, r.picked.as_deref(), bridge, github, &host, remote, workspace, &root)}
+                }
+            }
+        }
+    }
+}
+
+/// 一行仓。点它 = 把地址填进下面那格 + 猜一个本机路径 + 去读它的名片。
+#[allow(clippy::too_many_arguments)]
+fn repo_line(
+    row: &crate::vm::RepoRowVm,
+    picked: Option<&str>,
+    bridge: &Bridge,
+    github: bool,
+    host: &str,
+    mut remote: Signal<String>,
+    mut workspace: Signal<String>,
+    root: &str,
+) -> Element {
+    let b = bridge.clone();
+    let (path, host2) = (row.path.clone(), host.to_string());
+    // 本机路径只是**猜**一个:工作区根目录 + 仓名。人可以改;这个目录还不存在
+    // 的话,接入时 buddy 会把它建出来(clone 得你自己先做)。
+    let guess = format!(
+        "{}/{}",
+        root.trim_end_matches('/'),
+        row.path.rsplit('/').next().unwrap_or("")
+    );
+    let is_picked = picked == Some(row.path.as_str());
+    rsx! {
+        div {
+            key: "{row.path}",
+            class: if is_picked { "repo-row sel" } else { "repo-row" },
+            onclick: move |_| {
+                remote.set(path.clone());
+                if workspace.read().trim().is_empty() {
+                    workspace.set(guess.clone());
+                }
+                b.send(crate::bridge::Req::PickRepo {
+                    github,
+                    host: host2.clone(),
+                    path: path.clone(),
+                });
+            },
+            div { style: "display:flex;align-items:center;gap:7px;min-width:0;",
+                span { class: "mono", "{row.path}" }
+                if row.private { span { class: "chip chip-outline", "私有" } }
+                if !row.default_branch.is_empty() {
+                    span { class: "chip chip-outline mono", "{row.default_branch}" }
+                }
+            }
+            if !row.description.is_empty() {
+                span {
+                    style: "font-size:11px;color:var(--ink-3);margin-left:10px;flex:1;min-width:0;\
+                            overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;",
+                    "{row.description}"
+                }
+            }
+        }
+    }
+}
+
+/// 人填了就用人填的,没填就用回显那份。**空白 = 没填**,不是「人特意清空了」——
+/// 接入屏这四格本来就没有「特意留空」的用法。
+fn pick(typed: &str, fallback: &str) -> String {
+    let t = typed.trim();
+    if t.is_empty() {
+        fallback.trim().to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+/// 输入框里该显示什么:同上,但保留人正在打的原样(不 trim,不然打空格就被吃掉)。
+fn shown(typed: &str, fallback: &str) -> String {
+    if typed.is_empty() {
+        fallback.to_string()
+    } else {
+        typed.to_string()
+    }
+}
 
 #[component]
 pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element {
@@ -33,13 +166,24 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
 
     let b = bridge.clone();
     let root = vm.settings.workspaces_root.clone();
+    let root2 = root.clone();
+    // 从远端仓读回来的名片。**人没动过的格子才用它** —— 见下面 `shown`。
+    let pf = vm.repos.prefill.clone().unwrap_or_default();
+    let (pf_name, pf_brief, pf_bench, pf_star) = (
+        pf.name.clone(),
+        pf.brief.clone(),
+        pf.benchmark.clone(),
+        pf.north_star.clone(),
+    );
     let submit = move |_| {
+        // 人填的优先,没填就用从远端仓回显的那份。
+        let eff_name = pick(&name.read(), &pf_name);
         let s = if slug.read().trim().is_empty() {
-            slugify(&name.read())
+            slugify(&eff_name)
         } else {
             slug.read().trim().to_string()
         };
-        if s.is_empty() || name.read().trim().is_empty() {
+        if s.is_empty() || eff_name.is_empty() {
             return;
         }
         let r = remote.read().trim().to_string();
@@ -47,10 +191,10 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
         b.cmd(Command::CreateProject {
             slug: s,
             intent: ProjectIntent {
-                name: name.read().trim().to_string(),
-                brief: brief.read().trim().to_string(),
-                benchmark: benchmark.read().trim().to_string(),
-                north_star: north_star.read().trim().to_string(),
+                name: eff_name,
+                brief: pick(&brief.read(), &pf_brief),
+                benchmark: pick(&benchmark.read(), &pf_bench),
+                north_star: pick(&north_star.read(), &pf_star),
             },
             remote: if r.is_empty() {
                 RemoteRef::default()
@@ -122,14 +266,7 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                             "仓里已经有 .bw/project.toml 就以它为准 —— 同事先接过这个项目的话,\
                              你填的名片字段只补空着的,一个字都不覆盖。"
                         }
-                        div { class: "repolist",
-                            div { style: "padding:14px 10px;border:1px dashed var(--border);border-radius:7px;\
-                                          font-size:11.5px;color:var(--ink-3);line-height:1.8;",
-                                "列不出你在远端有哪些仓 —— 那要调平台接口,这条路还没接。"
-                                br {}
-                                "先把地址填在下面那格,或者把本机已经 clone 好的路径填在上面。"
-                            }
-                        }
+                        {repo_picker(vm, bridge, *github.read(), host.read().clone(), remote, workspace, root2.clone())}
                     } else {
                         div { class: "formgrid2",
                             div { class: "formrow",
@@ -187,11 +324,24 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                 // ── 卡二:基础信息 ─────────────────────────
                 div { class: "card ob-card",
                     h3 { "基础信息" }
+                    if vm.repos.prefilling {
+                        div { style: "font-size:11.5px;color:var(--ink-3);line-height:1.8;margin-top:6px;", "正在读这个仓的名片…" }
+                    } else if vm.repos.prefill.is_some() {
+                        div { style: "font-size:11.5px;color:var(--ink-3);line-height:1.8;margin-top:6px;",
+                            "这个仓已经被 buddy 接管过,下面四格是从它的 .bw/project.toml 回显的。"
+                            br {}
+                            "直接改就行 —— 你改过的格子以你为准,接进来时也不会覆盖仓里已有的字。"
+                        }
+                    } else if vm.repos.picked.is_some() {
+                        div { style: "font-size:11.5px;color:var(--ink-3);line-height:1.8;margin-top:6px;",
+                            "这个仓还没被 buddy 接管过(远端读不到 .bw/project.toml),四格要你自己填。"
+                        }
+                    }
                     div { class: "formgrid2",
                         div { class: "formrow",
                             label { class: "label", "项目名称" }
                             input {
-                                class: "input", value: "{name}",
+                                class: "input", value: "{shown(&name.read(), &pf.name)}",
                                 placeholder: "例如 WorkflowHub",
                                 oninput: move |e| name.set(e.value()),
                             }
@@ -199,7 +349,7 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                         div { class: "formrow",
                             label { class: "label", "最像的对标" }
                             input {
-                                class: "input", value: "{benchmark}",
+                                class: "input", value: "{shown(&benchmark.read(), &pf.benchmark)}",
                                 placeholder: "Linear",
                                 oninput: move |e| benchmark.set(e.value()),
                             }
@@ -208,7 +358,7 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                     div { class: "formrow",
                         label { class: "label", "你想做什么" }
                         textarea {
-                            class: "textarea", value: "{brief}",
+                            class: "textarea", value: "{shown(&brief.read(), &pf.brief)}",
                             placeholder: "把 agent 会话里长出的工作流沉淀成可复用资产",
                             oninput: move |e| brief.set(e.value()),
                         }
@@ -216,7 +366,7 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                     div { class: "formrow",
                         label { class: "label", "三个月长成什么样(北极星)" }
                         textarea {
-                            class: "textarea", value: "{north_star}",
+                            class: "textarea", value: "{shown(&north_star.read(), &pf.north_star)}",
                             placeholder: "每月被标准工作流带完成的活数",
                             oninput: move |e| north_star.set(e.value()),
                         }

@@ -93,6 +93,29 @@ pub enum Req {
         project: ProjectId,
         stats: crate::vm::RepoStatsVm,
     },
+    /// 接入屏:去平台列一遍「我账号下的仓」。真调 `gh repo list` /
+    /// `codehub-cli`,列不出来就把原话摆出来,绝不造一份假列表。
+    ListRepos {
+        github: bool,
+        host: String,
+    },
+    /// 上面那一问的结果。**不是界面发的**,是派出去的任务问完发回来的。
+    ReposListed {
+        rows: Vec<crate::vm::RepoRowVm>,
+        error: Option<String>,
+    },
+    /// 接入屏:点了某一行仓 —— 去读那个仓远端的 `.bw/project.toml`,
+    /// 读得到就说明这个项目已经被 buddy 接管过,名片直接回显。
+    PickRepo {
+        github: bool,
+        host: String,
+        path: String,
+    },
+    /// 上面那一读的结果。`prefill = None` = 那个仓还没被接管过,四个字段要人填。
+    RepoPicked {
+        path: String,
+        prefill: Option<crate::vm::RepoPrefillVm>,
+    },
     /// 重新算一遍并推一份新的 ViewModel。
     Refresh,
 }
@@ -174,6 +197,76 @@ fn dirs_home() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// 去平台列「我账号下的仓」。**两个平台各自的 CLI 都已经有这个能力**
+/// (`github::list_repos` / `codehub::list_repos`,V3 就在用),这里只是把它接到
+/// 界面上。列不出来就把 CLI 的原话端回去 —— 多半是没装、没登录、或者 codehub
+/// 域名填错,这三件事人一看原话就知道该干嘛。
+async fn list_repos(github: bool, host: &str) -> (Vec<crate::vm::RepoRowVm>, Option<String>) {
+    const LIMIT: u32 = 100;
+    if github {
+        match bw_engine::github::list_repos(LIMIT).await {
+            Ok(rows) => (
+                rows.into_iter()
+                    .map(|r| crate::vm::RepoRowVm {
+                        path: format!("{}/{}", r.owner, r.repo),
+                        private: r.private,
+                        description: r.description,
+                        default_branch: r.default_branch,
+                        pushed_at: r.pushed_at,
+                    })
+                    .collect(),
+                None,
+            ),
+            Err(e) => (Vec::new(), Some(format!("{e}"))),
+        }
+    } else if host.trim().is_empty() {
+        (
+            Vec::new(),
+            Some("要先填 codehub 域名 —— buddy 不知道你们内部那台在哪".into()),
+        )
+    } else {
+        match bw_engine::codehub::list_repos(host.trim(), LIMIT).await {
+            Ok(rows) => (
+                rows.into_iter()
+                    .map(|r| crate::vm::RepoRowVm {
+                        path: r.path,
+                        // codehub 给的是 `visibility` 字符串,不是布尔;
+                        // 只有明写 private 才算私有,拿不准就不画那个锁。
+                        private: r.visibility.eq_ignore_ascii_case("private"),
+                        description: r.description,
+                        default_branch: r.default_branch,
+                        pushed_at: r.pushed_at,
+                    })
+                    .collect(),
+                None,
+            ),
+            Err(e) => (Vec::new(), Some(format!("{e}"))),
+        }
+    }
+}
+
+/// 读某个仓远端的 `.bw/project.toml`。读得到 = 这个项目已经被 buddy 接管过
+/// (你自己接过、或者同事先接的),名片四个字段直接回显,人不用再填一遍。
+/// 读不到就是 `None` —— **不猜、不拿仓描述冒充名片**。
+async fn fetch_prefill(github: bool, host: &str, path: &str) -> Option<crate::vm::RepoPrefillVm> {
+    let file = if github {
+        let (owner, repo) = path.split_once('/')?;
+        bw_engine::github::fetch_project_toml(owner, repo, "")
+            .await
+            .ok()?
+    } else {
+        bw_engine::codehub::fetch_project_toml(host.trim(), path, "")
+            .await
+            .ok()?
+    }?;
+    Some(crate::vm::RepoPrefillVm {
+        name: file.name,
+        brief: file.brief,
+        benchmark: file.benchmark,
+        north_star: file.opportunity,
+    })
+}
+
 /// 从一批事件里挑出「开始本周」产出的草稿活标。
 fn drafts_of(events: &[bw_v4::command::Event]) -> Option<(String, Vec<String>)> {
     events.iter().find_map(|e| match e {
@@ -216,7 +309,13 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         return;
                     }
                 };
-                let root = workspaces_root();
+                // 工作区根目录三级取值:**人在设置屏改过的最大**(存在库的
+                // `app_meta` 里),其次是 `BW_WORKSPACES`(开发期覆盖),最后
+                // 才是默认值。人改过就该一直算数,不然设置屏那个输入框是假的。
+                let root = match store.meta(bw_v4::store::WORKSPACES_ROOT_KEY).await {
+                    Ok(Some(saved)) if !saved.trim().is_empty() => PathBuf::from(saved.trim()),
+                    _ => workspaces_root(),
+                };
                 let _ = std::fs::create_dir_all(&root);
                 // 桌面壳里 ▶跑 起的是真的 claude,挂在内嵌终端里,人全程看得
                 // 见、随时能停。指挥器那条路仍然走自我标注的替身 —— 它没有界
@@ -246,6 +345,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     pending_drafts: None,
                     db_path: db.clone(),
                     workspaces_root: root.display().to_string(),
+                    repos: crate::vm::RepoPickerVm::default(),
                 };
 
                 // 深链:BW_OPEN=<slug 或项目名> 打开某个项目。
@@ -412,6 +512,17 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                     if confirming {
                                         ui.pending_drafts = None;
                                     }
+                                    // 改了工作区根目录:设置屏那一行要立刻显示
+                                    // 新值,不能等下次重启。
+                                    for e in &events {
+                                        if let bw_v4::command::Event::WorkspacesRootChanged {
+                                            path,
+                                            ..
+                                        } = e
+                                        {
+                                            ui.workspaces_root = path.clone();
+                                        }
+                                    }
                                 }
                                 // 失败就把失败的原话摆出来。壳不替内核圆场。
                                 Err(e) => ui.set_note(Some(format!("没做成:{e}"))),
@@ -541,7 +652,49 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                 ui.repo_stats = Some(stats);
                             }
                         }
-                        Req::Refresh => {}
+                        Req::ListRepos { github, host } => {
+                            ui.repos = crate::vm::RepoPickerVm {
+                                loading: true,
+                                asked: true,
+                                ..Default::default()
+                            };
+                            // 起子进程要几百毫秒到几秒,不能占着内核这条单线程
+                            // ——派出去,回来再发一条 Req。
+                            let back = tx_back.clone();
+                            tokio::spawn(async move {
+                                let (rows, error) = list_repos(github, &host).await;
+                                let _ = back.send(Req::ReposListed { rows, error });
+                            });
+                        }
+                        Req::ReposListed { rows, error } => {
+                            ui.repos.loading = false;
+                            ui.repos.rows = rows;
+                            ui.repos.error = error;
+                        }
+                        Req::PickRepo { github, host, path } => {
+                            ui.repos.picked = Some(path.clone());
+                            ui.repos.prefill = None;
+                            ui.repos.prefilling = true;
+                            let back = tx_back.clone();
+                            tokio::spawn(async move {
+                                let prefill = fetch_prefill(github, &host, &path).await;
+                                let _ = back.send(Req::RepoPicked { path, prefill });
+                            });
+                        }
+                        Req::RepoPicked { path, prefill } => {
+                            // 人可能在读的过程中又点了别的仓 —— 认准是不是当前
+                            // 这一个,不然回来的名片会盖到另一个仓上。
+                            if ui.repos.picked.as_deref() == Some(path.as_str()) {
+                                ui.repos.prefilling = false;
+                                ui.repos.prefill = prefill;
+                            }
+                        }
+                        Req::Refresh => {
+                            // 探活、仓文件、git 都是在拼 ViewModel 的时候现跑的,
+                            // 所以「刷新」本身不用干活 —— 但必须给一句回执,
+                            // 不然人分不清「刷过了没变化」和「这按钮是坏的」。
+                            ui.set_note(Some("重新读了一遍:仓文件、git、本机环境".into()));
+                        }
                     }
                     vm = vm_build::build(&app, &ui).await;
                     let _ = vm_tx.send(vm.clone());

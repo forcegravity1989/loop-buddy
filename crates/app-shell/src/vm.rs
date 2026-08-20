@@ -23,11 +23,52 @@ pub struct Vm {
     /// 这是第几条回执。**同一句话第二次发生时序号也会变**,toast 才不会把它
     /// 当成「已经关过的那条」而静默吞掉。
     pub note_seq: u64,
+    /// 接入屏那份「我账号下的仓」列表 —— 现去平台问的,不是库里的。
+    pub repos: RepoPickerVm,
     /// 仓文件读不动或者解析炸了的实话。**不退回默认值假装文件不存在** ——
     /// `.bw/*.toml` 是 deny-unknown-fields 的,一个手误的键就让整份文件读不出
     /// 来,退回默认值的表现是「名片全是(待填)、配置屏说你还没铺过规范件」,
     /// 而真相是文件在、只是有一行写错了。
     pub warnings: Vec<String>,
+}
+
+/// 接入屏的仓选择器。**列不出来就说为什么**,不摆一张假列表 —— 高保真上那份
+/// `REPO_LIST` 是工厂造的,真壳里这些行必须来自 `gh repo list` / `codehub-cli`。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RepoPickerVm {
+    /// 正在问平台。界面上是「列着…」,不是空列表 —— 空列表会被读成「你没有仓」。
+    pub loading: bool,
+    /// 问过一次了没有。没问过 = 界面上是一个「列出我的仓」按钮,不是「一个都没有」。
+    pub asked: bool,
+    /// 问失败的原话(没装 gh、没登录、域名填错)。
+    pub error: Option<String>,
+    pub rows: Vec<RepoRowVm>,
+    /// 点了某一行之后,从那个仓的远端 `.bw/project.toml` 读回来的名片。
+    /// `None` = 那个仓还没被 buddy 接管过,四个字段要人自己填。
+    pub picked: Option<String>,
+    pub prefill: Option<RepoPrefillVm>,
+    /// 正在读那个仓的名片。
+    pub prefilling: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RepoRowVm {
+    /// `owner/repo`,直接就是要填进「远端地址」的那个值。
+    pub path: String,
+    pub private: bool,
+    pub description: String,
+    pub default_branch: String,
+    /// 平台给的最近推送时间原文(可能是空的)。
+    pub pushed_at: String,
+}
+
+/// 已经被 buddy 接管过的仓,名片直接回显,不用人再填一遍。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RepoPrefillVm {
+    pub name: String,
+    pub brief: String,
+    pub benchmark: String,
+    pub north_star: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

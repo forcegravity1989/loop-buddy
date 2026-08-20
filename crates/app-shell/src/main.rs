@@ -208,7 +208,7 @@ fn body(
                 screens::onboard::View { vm: v.clone(), bridge: bridge.clone(), close }
             },
             TopView::Settings => rsx! {
-                screens::settings::View { vm: v.clone(), close }
+                screens::settings::View { vm: v.clone(), bridge: bridge.clone(), close }
             },
         };
     }

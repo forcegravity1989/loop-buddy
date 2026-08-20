@@ -70,6 +70,21 @@ impl V4Store {
         })
     }
 
+    /// 把某个项目的仓路径钉死成一个绝对路径。
+    ///
+    /// 只有一个调用方:改工作区根目录之前,把那些「没填过仓路径、一直靠根目录
+    /// 现拼」的老项目钉在原位。**`upsert_project` 干不了这件事** —— 它是「没有
+    /// 才插入,有了原样返回」,一个字段都不改。
+    pub async fn set_project_workspace_path(&self, id: ProjectId, path: &str) -> Result<()> {
+        sqlx::query("UPDATE project SET workspace_path = ?2, updated_at = ?3 WHERE id = ?1")
+            .bind(id.uuid().to_string())
+            .bind(path)
+            .bind(now_ts())
+            .execute(self.pool())
+            .await?;
+        Ok(())
+    }
+
     pub async fn project_by_slug(&self, slug: &str) -> Result<Option<Project>> {
         let sql = format!("SELECT {COLS} FROM project WHERE slug = ?1");
         let row = sqlx::query(&sql)

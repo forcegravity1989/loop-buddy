@@ -12,7 +12,7 @@ mod issue;
 mod meta;
 mod project;
 
-pub use meta::notify_seen_key;
+pub use meta::{notify_seen_key, WORKSPACES_ROOT_KEY};
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
