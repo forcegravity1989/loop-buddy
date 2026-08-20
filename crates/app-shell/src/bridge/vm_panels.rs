@@ -340,6 +340,7 @@ pub(super) async fn build_config(
                             .unwrap_or(0),
                         title: slug.clone(),
                         origin: skill_origin(&managed, &slug),
+                        desc: skill_desc(&e.path().join("SKILL.md")),
                         slug,
                     }
                 })
@@ -355,6 +356,7 @@ pub(super) async fn build_config(
                 title: format!("{w}(包不在本仓 .claude/skills/)"),
                 uses: *n,
                 origin: "不在本仓".into(),
+                desc: String::new(),
             });
         }
     }
@@ -376,8 +378,113 @@ pub(super) async fn build_config(
                 )
             })
             .unwrap_or_else(|| "—(.bw/issue-policy.toml 里没有节律段)".into()),
+        crons: build_crons(policy),
+        connectors: build_connectors(ws),
+        chat_provider: chat_provider(ws),
+        chat_group: chat_group(ws),
+        chat_events: chat_events(ws),
         chat: chat_label(ws),
     }
+}
+
+/// SKILL.md 头里的 `description:`。**读不到就空着**,不替它写一句。
+pub(super) fn skill_desc(path: &Path) -> String {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    raw.lines()
+        .take(20)
+        .find_map(|l| l.strip_prefix("description:"))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .unwrap_or_default()
+}
+
+/// 定时那张表。**没有定时表** —— 判据写在这里,让人知道它到底看什么。
+fn build_crons(policy: Option<&issue_policy_file::IssuePolicyFile>) -> Vec<CronVm> {
+    let Some(c) = policy.and_then(|p| p.cadence.clone()) else {
+        return Vec::new();
+    };
+    let word = |t: &str| match t {
+        "manual" => "人触发".to_string(),
+        "scheduled" => "到点自动建".to_string(),
+        "" => "—".to_string(),
+        other => other.to_string(),
+    };
+    vec![
+        CronVm {
+            name: "更新指标与制定本周计划".into(),
+            trigger: word(&c.ops1_trigger),
+            schedule: "—".into(),
+            rule: "当前周还没有周计划文件".into(),
+        },
+        CronVm {
+            name: "资产盘点".into(),
+            trigger: word(&c.ops2_trigger),
+            schedule: blank_dash(&c.ops2_schedule).to_string(),
+            rule: "本周还没有这张活(不查任何定时表)".into(),
+        },
+    ]
+}
+
+/// 连接器。`.bw/connectors.toml` 没有就是空的 —— 不摆一行「未配置」占位。
+fn build_connectors(ws: &Path) -> Vec<ConnectorVm> {
+    bw_engine::connectors_file::read(&ws.display().to_string())
+        .ok()
+        .flatten()
+        .map(|f| {
+            f.connectors
+                .into_iter()
+                .map(|c| ConnectorVm {
+                    kind: c.kind.as_str().to_string(),
+                    target: if c.script.is_empty() {
+                        c.command.clone()
+                    } else {
+                        c.script.clone()
+                    },
+                    name: c.name,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn chat_cfg(ws: &Path) -> Option<project_file::ChatConfig> {
+    project_file::read(ws).ok().flatten().and_then(|f| f.chat)
+}
+
+fn chat_provider(ws: &Path) -> String {
+    chat_cfg(ws)
+        .map(|c| c.provider)
+        .unwrap_or_else(|| "未配".into())
+}
+
+fn chat_group(ws: &Path) -> String {
+    chat_cfg(ws)
+        .map(|c| c.group_id)
+        .filter(|g| !g.is_empty())
+        .unwrap_or_else(|| "—".into())
+}
+
+/// 同步哪些事件。`notify` 没写 = 用默认三件;写成空列表 = 明确要求安静。
+fn chat_events(ws: &Path) -> Vec<(String, bool)> {
+    let on: Vec<String> = match chat_cfg(ws) {
+        None => return Vec::new(),
+        Some(c) => c.notify.unwrap_or_else(|| {
+            bw_v4::chat::DEFAULT_NOTIFY
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        }),
+    };
+    bw_v4::chat::DEFAULT_NOTIFY
+        .iter()
+        .map(|e| {
+            (
+                bw_v4::chat::event_label(e).to_string(),
+                on.iter().any(|x| x == e),
+            )
+        })
+        .collect()
 }
 
 /// 项目群一行话。没配就明说没配 —— 没配群不是错,是诚实状态。

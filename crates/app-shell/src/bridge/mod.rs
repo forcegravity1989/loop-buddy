@@ -346,6 +346,15 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         o.notify.blocked.len(),
                         o.config.skills.len(),
                     );
+                    eprintln!(
+                        "[BW_VM] 映射={} 连接器={} 定时={} 群={} 指标={}",
+                        o.config.mappings.len(),
+                        o.config.connectors.len(),
+                        o.config.crons.len(),
+                        o.config.chat_provider,
+                        o.metrics.lagging.len() + o.metrics.leading.len()
+                            + usize::from(o.metrics.north_star.is_some()),
+                    );
                 }
                 // BW_KB_DUMP=1:把知识库三个页签的数字打进 stderr,好让人拿
                 // `git ls-files` / `codegraph files -j` / `cat docs/releases.md`

@@ -220,6 +220,7 @@ pub(super) async fn build_assets(store: &V4Store, id: ProjectId, ws: &Path) -> A
                             .unwrap_or(0),
                         title: slug.clone(),
                         origin: skill_origin(&managed, &slug),
+                        desc: super::vm_panels::skill_desc(&e.path().join("SKILL.md")),
                         slug,
                     }
                 })

@@ -345,8 +345,16 @@ pub struct ConfigVm {
     pub skills: Vec<SkillVm>,
     pub tools: Vec<ToolProbeVm>,
     pub remote: String,
-    /// `.bw/issue-policy.toml` 的 `[cadence]` 段:定时节律。
+    /// `.bw/issue-policy.toml` 的 `[cadence]` 段:定时节律。原样一句话。
     pub cadence: String,
+    /// 节律拆成表格行:哪张运作活、怎么触发、判据是什么。
+    pub crons: Vec<CronVm>,
+    /// `.bw/connectors.toml` 里声明的连接器。文件没有就是空的。
+    pub connectors: Vec<ConnectorVm>,
+    /// 项目群三件:提供方 / 群号 / 同步哪些事件。仓是正本,这里只显示。
+    pub chat_provider: String,
+    pub chat_group: String,
+    pub chat_events: Vec<(String, bool)>,
     /// `.bw/project.toml` 的 `[chat]` 段:项目群。**仓是正本**,这里只显示;
     /// 改它走「编辑项目信息」那条轻量活 + MR,不在配置屏直接写仓。
     pub chat: String,
@@ -367,6 +375,30 @@ pub struct SkillVm {
     pub uses: u32,
     /// 「内置」(随 buddy 出厂、铺底时复制进来)/「项目自有」/「蒸馏」。
     pub origin: String,
+    /// SKILL.md 头里的 `description:`。读不到就空着,不替它写一句。
+    pub desc: String,
+}
+
+/// 定时那张表的一行。**没有定时表** —— 判据是「本周有没有这张活」,
+/// 所以这里没有「下次触发时间」那一列,有的是「判据」。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CronVm {
+    pub name: String,
+    /// `manual` / `scheduled`,翻成人话。
+    pub trigger: String,
+    /// 形如 `fri 20:00`;手动触发的就是「—」。
+    pub schedule: String,
+    /// 到底看什么才算「该跑了」。
+    pub rule: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConnectorVm {
+    pub name: String,
+    /// `script` / `command` 这类。
+    pub kind: String,
+    /// 具体跑什么。
+    pub target: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
