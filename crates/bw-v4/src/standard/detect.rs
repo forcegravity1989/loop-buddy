@@ -16,15 +16,18 @@ pub fn build_commands(workspace: &Path) -> String {
     let has = |rel: &str| workspace.join(rel).exists();
 
     if has("Cargo.toml") {
+        // 只写 cargo 一定有的两条。clippy / fmt 是工具链自带,但**这个仓认不认它们
+        // 算门禁**是 CI 说了算,不是这里能看出来的 —— 所以写成「另见 CI」而不是
+        // 直接列成必跑项。
         found.push(
             "**Rust / cargo**\n\n\
              ```bash\n\
              cargo build          # 建\n\
              cargo test           # 测\n\
-             cargo clippy --all-targets -- -D warnings   # 静态检查\n\
-             cargo fmt --all --check                      # 格式\n\
-             ```"
-            .into(),
+             ```\n\n\
+             (`cargo clippy` / `cargo fmt --check` 工具链自带,\
+             但这个仓把不把它们当门禁,以 CI 配置为准。)"
+                .into(),
         );
     }
     if has("package.json") {
@@ -48,11 +51,21 @@ pub fn build_commands(workspace: &Path) -> String {
     }
 
     // CI 配置是「这个项目认什么算过」的最硬证据,有就指出来。
+    // `.github/workflows` 建了个空目录不算 —— 空目录里没有任何一步可跑,
+    // 说它「门禁以 CI 为准」就是在指一个不存在的判据。
+    let has_ci = |rel: &str| {
+        let p = workspace.join(rel);
+        if p.is_dir() {
+            std::fs::read_dir(&p).is_ok_and(|mut d| d.any(|e| e.is_ok()))
+        } else {
+            p.is_file()
+        }
+    };
     for ci in [
         (".github/workflows", "GitHub Actions(`.github/workflows/`)"),
         (".gitlab-ci.yml", "GitLab CI(`.gitlab-ci.yml`)"),
     ] {
-        if has(ci.0) {
+        if has_ci(ci.0) {
             found.push(format!(
                 "**门禁以 CI 为准**:{} 里写的那几步就是「算不算过」的判据,\
                  提 MR 之前在本机跑一遍同样的命令。",

@@ -303,6 +303,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     );
 
+    // 空的 `.github/workflows/` 里没有任何一步可跑,说「门禁以 CI 为准」就是在
+    // 指一个不存在的判据 —— 这条要读回来,不然「不猜」只是一句口号。
+    let hollow = root.join("hollow-ci");
+    std::fs::create_dir_all(hollow.join(".github/workflows"))?;
+    std::fs::write(hollow.join("Cargo.toml"), "[package]\n")?;
+    let hollow_txt = bw_v4::standard::detect::build_commands(&hollow);
+    say(
+        "档 10 · 空的 .github/workflows 会不会被当成 CI",
+        &format!(
+            "认出 cargo={} · 说了「门禁以 CI 为准」={}(该是 true / false)",
+            hollow_txt.contains("cargo test"),
+            hollow_txt.contains("门禁以 CI 为准")
+        ),
+    );
+
     // ── 7 · 从工作台移走 ────────────────────────────────────
     // 项目卡右上角那个 ×。只动库,绝不动仓 —— 这条要能读回来,不然「移走」
     // 就成了「删掉我的代码」。
