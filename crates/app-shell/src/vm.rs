@@ -43,12 +43,32 @@ pub struct RepoPickerVm {
     /// 问失败的原话(没装 gh、没登录、域名填错)。
     pub error: Option<String>,
     pub rows: Vec<RepoRowVm>,
-    /// 点了某一行之后,从那个仓的远端 `.bw/project.toml` 读回来的名片。
-    /// `None` = 那个仓还没被 buddy 接管过,四个字段要人自己填。
+    /// 现在盯着哪个仓(点中的那一行,或者人手打进去的地址)。
     pub picked: Option<String>,
+    /// 从那个仓的远端 `.bw/project.toml` 读回来的名片。
     pub prefill: Option<RepoPrefillVm>,
-    /// 正在读那个仓的名片。
-    pub prefilling: bool,
+    /// 那一读的结局。**「没读到」和「没读成」必须分开** —— 网络断了、没登录、
+    /// 默认分支不叫 main,这些都会读不到,但它们**不等于**「这个仓没被接管过」。
+    /// 混成一句「还没被接管过」就是在瞎说,人照着填一遍反而会覆盖仓里的真名片。
+    pub probe: RepoProbe,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum RepoProbe {
+    /// 还没查过(人还没选仓,或者选完还没轮到)。
+    #[default]
+    NotAsked,
+    Loading,
+    /// 读到了 `.bw/project.toml` —— 这个仓被 buddy 接管过。
+    Adopted,
+    /// 平台明确回「没有这个文件」,而且**这个仓确实在**(另问了一次)——
+    /// 这个仓没被接管过。
+    Absent,
+    /// 这个地址根本找不到仓(敲错了、私有仓没权限、没登录)。仓都不在,
+    /// 「接管过没有」就无从谈起,更不能放人往下走去接一个不存在的仓。
+    NoRepo(String),
+    /// 压根没查成,原话在里面。**不是**「没被接管过」。
+    Failed(String),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

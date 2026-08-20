@@ -110,11 +110,17 @@ pub enum Req {
         github: bool,
         host: String,
         path: String,
+        /// 去哪个分支上找 `.bw/project.toml`。列表里那一行给的默认分支;人手打
+        /// 地址时是空的,那就交给引擎兜底(它会用 `main`)。**这一格要是错了,
+        /// 表现就是把一个接管过的仓报成「没接管过」** —— 默认分支不叫 main 的
+        /// 仓很常见。
+        git_ref: String,
     },
     /// 上面那一读的结果。`prefill = None` = 那个仓还没被接管过,四个字段要人填。
     RepoPicked {
         path: String,
         prefill: Option<crate::vm::RepoPrefillVm>,
+        probe: crate::vm::RepoProbe,
     },
     /// 重新算一遍并推一份新的 ViewModel。
     Refresh,
@@ -276,23 +282,61 @@ async fn list_repos(github: bool, host: &str) -> (Vec<crate::vm::RepoRowVm>, Opt
 /// 读某个仓远端的 `.bw/project.toml`。读得到 = 这个项目已经被 buddy 接管过
 /// (你自己接过、或者同事先接的),名片四个字段直接回显,人不用再填一遍。
 /// 读不到就是 `None` —— **不猜、不拿仓描述冒充名片**。
-async fn fetch_prefill(github: bool, host: &str, path: &str) -> Option<crate::vm::RepoPrefillVm> {
-    let file = if github {
-        let (owner, repo) = path.split_once('/')?;
-        bw_engine::github::fetch_project_toml(owner, repo, "")
-            .await
-            .ok()?
+async fn fetch_prefill(
+    github: bool,
+    host: &str,
+    path: &str,
+    git_ref: &str,
+) -> (Option<crate::vm::RepoPrefillVm>, crate::vm::RepoProbe) {
+    use crate::vm::RepoProbe;
+    let got = if github {
+        match path.split_once('/') {
+            Some((owner, repo)) => bw_engine::github::fetch_project_toml(owner, repo, git_ref)
+                .await
+                .map_err(|e| e.to_string()),
+            None => Err(format!("「{path}」不是 owner/repo 的样子,没法查")),
+        }
+    } else if host.trim().is_empty() {
+        Err("codehub 域名还没填,查不了".into())
     } else {
-        bw_engine::codehub::fetch_project_toml(host.trim(), path, "")
+        bw_engine::codehub::fetch_project_toml(host.trim(), path, git_ref)
             .await
-            .ok()?
-    }?;
-    Some(crate::vm::RepoPrefillVm {
-        name: file.name,
-        brief: file.brief,
-        benchmark: file.benchmark,
-        north_star: file.opportunity,
-    })
+            .map_err(|e| e.to_string())
+    };
+    match got {
+        // 平台说「没有这份文件」。但**仓根本不存在也是同一个 404** —— 地址
+        // 敲错一个字母就会得到「还没接管过,请填」,人填完才发现接的是个
+        // 不存在的仓。所以这一支要再问一次「这个仓在不在」,只有仓在、文件
+        // 不在,才是真的没接管过。走到这支的只有没接管过的仓,多一次调用
+        // 不落在常路上。
+        Ok(None) => {
+            let exists = if github {
+                bw_engine::github::probe_repo(path)
+                    .await
+                    .map_err(|e| e.to_string())
+            } else {
+                bw_engine::codehub::probe(host.trim(), path)
+                    .await
+                    .map_err(|e| e.to_string())
+            };
+            match exists {
+                Ok(_) => (None, RepoProbe::Absent),
+                Err(e) => (None, RepoProbe::NoRepo(e)),
+            }
+        }
+        Ok(Some(file)) => (
+            Some(crate::vm::RepoPrefillVm {
+                name: file.name,
+                brief: file.brief,
+                benchmark: file.benchmark,
+                north_star: file.opportunity,
+            }),
+            RepoProbe::Adopted,
+        ),
+        // 没登录、网断了、分支名不对、文件写坏了 —— 都是「没查成」,
+        // **不能**说成「没被接管过」。
+        Err(e) => (None, RepoProbe::Failed(e)),
+    }
 }
 
 /// 从一批事件里挑出「开始本周」产出的草稿活标。
@@ -702,22 +746,36 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             ui.repos.rows = rows;
                             ui.repos.error = error;
                         }
-                        Req::PickRepo { github, host, path } => {
+                        Req::PickRepo {
+                            github,
+                            host,
+                            path,
+                            git_ref,
+                        } => {
                             ui.repos.picked = Some(path.clone());
                             ui.repos.prefill = None;
-                            ui.repos.prefilling = true;
+                            ui.repos.probe = crate::vm::RepoProbe::Loading;
                             let back = tx_back.clone();
                             tokio::spawn(async move {
-                                let prefill = fetch_prefill(github, &host, &path).await;
-                                let _ = back.send(Req::RepoPicked { path, prefill });
+                                let (prefill, probe) =
+                                    fetch_prefill(github, &host, &path, &git_ref).await;
+                                let _ = back.send(Req::RepoPicked {
+                                    path,
+                                    prefill,
+                                    probe,
+                                });
                             });
                         }
-                        Req::RepoPicked { path, prefill } => {
+                        Req::RepoPicked {
+                            path,
+                            prefill,
+                            probe,
+                        } => {
                             // 人可能在读的过程中又点了别的仓 —— 认准是不是当前
                             // 这一个,不然回来的名片会盖到另一个仓上。
                             if ui.repos.picked.as_deref() == Some(path.as_str()) {
-                                ui.repos.prefilling = false;
                                 ui.repos.prefill = prefill;
+                                ui.repos.probe = probe;
                             }
                         }
                         Req::Refresh => {

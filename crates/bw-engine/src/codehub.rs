@@ -817,6 +817,13 @@ pub async fn fetch_project_toml(
     if !out.status.success() {
         let err = stderr_text(&out);
         let lower = err.to_lowercase();
+        // **分支找不到**和**这个仓里没有这份文件**是两件事,但两边都是 404。
+        // 前者是「没查成」(内部仓的默认分支常是 master,见 `create_mr_on_branch`
+        // 的注释),后者才是「这个仓还没被接管过」。混成一个 `Ok(None)`,人就会
+        // 看到「首来者,请填」然后一路盖掉仓里已有的名片。
+        if lower.contains("branch not found") || lower.contains("ref not found") {
+            return Err(CodehubError::Command(err));
+        }
         if lower.contains("404") || lower.contains("not found") || lower.contains("does not exist")
         {
             return Ok(None);

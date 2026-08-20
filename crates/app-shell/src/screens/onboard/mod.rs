@@ -18,7 +18,7 @@
 
 use crate::bridge::{Bridge, Req};
 use crate::chrome::light_dot;
-use crate::vm::{RepoRowVm, ToolProbeVm, Vm};
+use crate::vm::{RepoProbe, RepoRowVm, ToolProbeVm, Vm};
 use bw_v4::command::{Command, ProjectIntent, RemoteRef};
 use bw_v4::Signal as HealthSignal;
 use dioxus::prelude::*;
@@ -45,6 +45,8 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
     let mut host = use_signal(String::new);
 
     let b = bridge.clone();
+    let b_next = bridge.clone();
+    let vm_probed = vm.repos.picked.clone();
     let root = vm.settings.workspaces_root.clone();
     // 从远端仓读回来的名片。**人没动过的格子才用它** —— 见 `shown` / `pick`。
     let pf = vm.repos.prefill.clone().unwrap_or_default();
@@ -232,7 +234,23 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                             class: "btn btn-primary",
                             disabled: !can_next,
                             title: if can_next { "" } else { "先选一个仓,或者把本机仓路径填上" },
-                            onclick: move |_| step.set(2),
+                            onclick: move |_| {
+                                // 人可能压根没点列表、直接把地址打进去了 —— 那样
+                                // 「这个仓接管过没有」根本没查过。走到第二步之前
+                                // 补一次:盯着的地址和已经查过的那个不一样就查。
+                                let addr = remote.read().trim().to_string();
+                                let asked = vm_probed.clone();
+                                if !addr.is_empty() && asked.as_deref() != Some(addr.as_str()) {
+                                    b_next.send(Req::PickRepo {
+                                        github: *github.read(),
+                                        host: host.read().trim().to_string(),
+                                        path: addr,
+                                        // 手打的地址不知道默认分支,交给引擎兜底。
+                                        git_ref: String::new(),
+                                    });
+                                }
+                                step.set(2);
+                            },
                             "下一步:基础信息 →"
                         }
                     }
@@ -249,19 +267,7 @@ pub fn View(vm: Vm, bridge: Bridge, close: EventHandler<MouseEvent>) -> Element 
                                 if workspace.read().trim().is_empty() { "(按工作区根目录放)" } else { "{workspace}" }
                             }
                         }
-                        if vm.repos.prefilling {
-                            div { class: "ob-note", "正在读这个仓的名片…" }
-                        } else if vm.repos.prefill.is_some() {
-                            div { class: "ob-note",
-                                "这个仓已经被 buddy 接管过,下面四格是从它的 .bw/project.toml 回显的。"
-                                br {}
-                                "直接改就行 —— 你改过的格子以你为准,接进来时也不会覆盖仓里已有的字。"
-                            }
-                        } else if vm.repos.picked.is_some() {
-                            div { class: "ob-note",
-                                "这个仓还没被 buddy 接管过(远端读不到 .bw/project.toml),四格要你自己填。"
-                            }
-                        }
+                        {adopted_note(&vm.repos.probe)}
                         div { class: "formgrid2",
                             div { class: "formrow",
                                 label { class: "label", "项目名称" }
@@ -431,6 +437,9 @@ fn repo_option(
 ) -> Element {
     let b = bridge.clone();
     let (path, host2) = (row.path.clone(), host.to_string());
+    // 列表这一行知道它的默认分支,带上 —— 默认分支不叫 main 的仓不带就查不到,
+    // 结果会把一个接管过的仓报成「没接管过」。
+    let git_ref = row.default_branch.clone();
     // 本机路径只是**猜**一个:工作区根目录 + 仓名。人可以改。
     let guess = format!(
         "{}/{}",
@@ -447,7 +456,12 @@ fn repo_option(
                 if workspace.read().trim().is_empty() {
                     workspace.set(guess.clone());
                 }
-                b.send(Req::PickRepo { github, host: host2.clone(), path: path.clone() });
+                b.send(Req::PickRepo {
+                    github,
+                    host: host2.clone(),
+                    path: path.clone(),
+                    git_ref: git_ref.clone(),
+                });
             },
             div { style: "display:flex;align-items:center;gap:7px;min-width:0;",
                 span { class: "mono", "{row.path}" }
@@ -458,6 +472,59 @@ fn repo_option(
             }
             if !row.description.is_empty() {
                 div { class: "repo-opt-desc", "{row.description}" }
+            }
+        }
+    }
+}
+
+/// 「这个仓被 buddy 接管过没有」的几种结局,一句都不能混。
+///
+/// 判据是**去远端读 `.bw/project.toml` 读不读得到**(GitHub 走
+/// `gh api .../contents/.bw/project.toml`,codehub 走 codehub-cli)。读到 = 接管过。
+/// 麻烦在于**读不到有三种,平台回的都是 404**,得一层层剥开:
+///
+/// - 仓不在(地址敲错、私有仓没权限)→ 再问一次 `gh repo view` 就露馅 → 「找不到这个仓」
+/// - 分支不在(默认分支不叫 main)→ 平台正文里那句「No commit found for the ref」→ 「没查成」
+/// - 仓在、分支在、就是没这份文件 → 才是「没接管过」
+///
+/// 其余(没登录、网断了、文件写坏了)一律「没查成」。把任何一种说成「没接管过」,
+/// 人就会照着空格子填一遍,接进去反而盖掉仓里真正的名片。
+fn adopted_note(probe: &RepoProbe) -> Element {
+    rsx! {
+        div { class: "ob-note",
+            match probe {
+                RepoProbe::NotAsked => rsx! {
+                    "没查这个仓被 buddy 接管过没有 —— 上一步没选/没填远端地址。四格要你自己填。"
+                },
+                RepoProbe::Loading => rsx! { "正在读这个仓的 .bw/project.toml…" },
+                RepoProbe::Adopted => rsx! {
+                    "这个仓"
+                    strong { "已经被 buddy 接管过" }
+                    ",下面四格是从它远端的 .bw/project.toml 回显的。"
+                    br {}
+                    "直接改就行 —— 你改过的格子以你为准,接进来时也不会覆盖仓里已有的字。"
+                },
+                RepoProbe::Absent => rsx! {
+                    "这个仓"
+                    strong { "还没被 buddy 接管过" }
+                    "(平台明确回「没有 .bw/project.toml」),四格要你自己填。"
+                },
+                RepoProbe::NoRepo(e) => rsx! {
+                    strong { "这个地址上找不到仓" }
+                    " —— 原话:{e}"
+                    br {}
+                    "常见原因:地址敲错了、这是个私有仓而当前账号看不见、gh/codehub-cli 没登录。"
+                    br {}
+                    "先把地址改对再往下走 —— 接一个不存在的仓,后面每一步都会失败。"
+                },
+                RepoProbe::Failed(e) => rsx! {
+                    strong { "没查成,所以不知道这个仓接管过没有" }
+                    " —— 原话:{e}"
+                    br {}
+                    "常见原因:没登录、网不通、这个仓的默认分支不叫 main。"
+                    br {}
+                    "照样能接:仓里真有 .bw/project.toml 的话,接入时以仓里的为准,你填的只补空着的字段,一个字都不会被覆盖。"
+                },
             }
         }
     }
