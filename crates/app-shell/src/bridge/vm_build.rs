@@ -229,6 +229,39 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
         .unwrap_or_default();
         let week = bw_v4::isoweek::current_week();
         let in_week = store.issues_in_week(p.id, &week).await.unwrap_or_default();
+        // 未读 = 评审中/阻塞里、更新时间晚于「读到这里」那一下的。没点过通知屏
+        // 就是全部算未读。这个数是现算的,库里没有未读表。
+        let seen_at: i64 = store
+            .meta(&bw_v4::store::notify_seen_key(p.id))
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let unread = store
+            .issues(p.id)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|i| {
+                matches!(i.status, IssueStatus::InReview | IssueStatus::Blocked)
+                    && i.updated_at > seen_at
+            })
+            .count() as u32;
+        let week_goal = week_plan_file::read(&ws, &week)
+            .ok()
+            .flatten()
+            .filter(|pl| pl.has_goal())
+            .and_then(|pl| pl.goal)
+            .unwrap_or_default();
+        // 上次交付 = 发版记录最后一行。仓里没有那份表就留空,不拿最近一次
+        // commit 冒充「交付」——提交不是交付。
+        let last_delivery = release_file::read(&ws)
+            .ok()
+            .flatten()
+            .and_then(|rows| rows.last().cloned())
+            .map(|r| format!("{} {}", r.released_at, r.version))
+            .unwrap_or_default();
         cards.push(ProjectCardVm {
             id: p.id,
             slug: p.slug.clone(),
@@ -242,6 +275,11 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
                 .iter()
                 .filter(|i| i.status == IssueStatus::Done)
                 .count() as u32,
+            version: file.current_version.clone(),
+            week,
+            unread,
+            week_goal,
+            last_delivery,
         });
     }
 
@@ -278,11 +316,18 @@ pub(super) fn remote_label(p: &Project) -> String {
 pub(super) fn probe_env() -> Vec<ToolProbeVm> {
     // 探活与「要什么才能用」都问适配模块要,不在这里重写一遍 —— 加一个新的
     // 开工工具应该只是加一个适配模块目录,不改这个文件。
+    //
+    // 六项分成两类,**界面上分得清**:能在 `PATH` 里当场找出来的(claude /
+    // cursor-agent / codehub / gh)给 `Some(..)`,红绿都是真的;还没接实现的
+    // (Open Design 内嵌、welink-cli)给 `None` —— 灰,不是绿,也不是红。
     let claude = crate::adapters::claude_cli::detect();
+    let cursor = crate::adapters::on_path("cursor-agent");
+    let codehub = crate::adapters::on_path("codehub");
+    let gh = crate::adapters::on_path("gh");
     vec![
         ToolProbeVm {
             name: "claude_cli".into(),
-            label: "Claude CLI".into(),
+            label: "claude".into(),
             ok: Some(claude.is_some()),
             detail: claude.unwrap_or_else(|| {
                 format!(
@@ -293,19 +338,35 @@ pub(super) fn probe_env() -> Vec<ToolProbeVm> {
         },
         ToolProbeVm {
             name: "cursor".into(),
-            label: "Cursor".into(),
-            ok: None,
-            detail: "点「测一下」现探(探活要起子进程,不在开屏时做)".into(),
+            label: "cursor-agent".into(),
+            ok: Some(cursor.is_some()),
+            detail: cursor.unwrap_or_else(|| "本机路径里找不到 cursor-agent".into()),
+        },
+        ToolProbeVm {
+            name: "codehub".into(),
+            label: "codehub-cli".into(),
+            ok: Some(codehub.is_some()),
+            detail: codehub.unwrap_or_else(|| "本机路径里找不到 codehub".into()),
+        },
+        ToolProbeVm {
+            name: "gh".into(),
+            label: "GitHub CLI".into(),
+            ok: Some(gh.is_some()),
+            // 装没装能当场看出来;**登录没登录看不出来** —— 那要跑
+            // `gh auth status`,起子进程的事没接,就别拿「装了」冒充「登录了」。
+            detail: gh
+                .map(|p| format!("{p}(登录态没探,探它要起子进程)"))
+                .unwrap_or_else(|| "本机路径里找不到 gh".into()),
         },
         ToolProbeVm {
             name: "open_design".into(),
             label: "Open Design".into(),
             ok: None,
-            detail: "点「测一下」现探".into(),
+            detail: "内嵌还没接,探不出结果".into(),
         },
         ToolProbeVm {
             name: "welink_cli".into(),
-            label: "WeLink CLI".into(),
+            label: "welink-cli".into(),
             ok: None,
             detail: "还没接,探不出结果".into(),
         },

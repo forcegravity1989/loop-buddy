@@ -4,10 +4,13 @@
 //! 一份 [`Vm`] → 经 watch 通道推回来 → 界面重画。**壳自己绝不伪造成功事件**:
 //! 命令失败就把失败的原话放进 `Vm::note`,不假装做成了。
 
+mod nav;
 mod vm_build;
 mod vm_derive;
 mod vm_kb;
 mod vm_panels;
+
+pub use nav::{GuideNav, Panel, PanelNav, TopView};
 
 use crate::vm::Vm;
 use bw_v4::app::App;
@@ -18,82 +21,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
-
-/// 深链要跳到哪。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Panel {
-    #[default]
-    Overview,
-    Plan,
-    Session,
-    Notify,
-    Config,
-    Kb,
-}
-
-impl Panel {
-    pub fn parse(s: &str) -> Option<Panel> {
-        Some(match s {
-            "overview" => Panel::Overview,
-            "plan" => Panel::Plan,
-            "session" => Panel::Session,
-            "notify" => Panel::Notify,
-            "config" => Panel::Config,
-            "kb" => Panel::Kb,
-            _ => return None,
-        })
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Panel::Overview => "总览",
-            Panel::Plan => "计划",
-            Panel::Session => "会话",
-            Panel::Notify => "通知",
-            Panel::Config => "配置",
-            Panel::Kb => "知识库",
-        }
-    }
-
-    pub const ALL: [Panel; 6] = [
-        Panel::Overview,
-        Panel::Plan,
-        Panel::Session,
-        Panel::Notify,
-        Panel::Config,
-        Panel::Kb,
-    ];
-}
-
-/// 「跳到另一个入口」的口子。六入口之间切换是**纯本机导航**,不经内核 ——
-/// 所以它不是一条 `Req`,而是一个各屏都拿得到的信号。屏里想跳(总览的
-/// 「去计划 →」、通知里点一条跳会话)就 `use_context::<PanelNav>()`。
-#[derive(Clone, Copy)]
-pub struct PanelNav(pub dioxus::prelude::Signal<Panel>);
-
-impl PanelNav {
-    pub fn go(mut self, p: Panel) {
-        use dioxus::prelude::WritableExt;
-        self.0.set(p);
-    }
-}
-
-/// 顶层三屏里不依赖「打开某个项目」的那两个。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TopView {
-    Onboard,
-    Settings,
-}
-
-impl TopView {
-    pub fn parse(s: &str) -> Option<TopView> {
-        Some(match s {
-            "onboard" => TopView::Onboard,
-            "settings" => TopView::Settings,
-            _ => return None,
-        })
-    }
-}
 
 /// 启动时从环境变量读到的深链意图。
 #[derive(Clone, Debug, Default)]

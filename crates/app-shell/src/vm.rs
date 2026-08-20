@@ -47,6 +47,17 @@ pub struct ProjectCardVm {
     /// 本周排了几张活、完成了几张。
     pub week_total: u32,
     pub week_done: u32,
+    /// 在研版本(仓里 `.bw/project.toml` 写的)。没写就是空,不猜一个。
+    pub version: String,
+    /// 当前 ISO 周,卡片上那个周 chip 显示它。
+    pub week: String,
+    /// 还没看过的动静:评审中 + 阻塞里,更新时间晚于「读到这里」那一下的。
+    /// 通知屏点过之后这个数会掉下去。
+    pub unread: u32,
+    /// 本周目标,来自仓里的周计划文件。文件没有 / 目标还是占位符 = 空。
+    pub week_goal: String,
+    /// 上次交付:发版记录最后一行的日期与版本。仓里没有发版记录 = 空。
+    pub last_delivery: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]

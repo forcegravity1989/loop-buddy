@@ -213,14 +213,14 @@ const CHAPTERS: [Chapter; 4] = [
 
 #[component]
 pub fn GuideDrawer() -> Element {
-    let mut open = use_signal(|| false);
-    let mut chapter = use_signal(|| "env".to_string());
-    if !*open.read() {
+    // 开在哪一章由外壳级的共享信号说了算 —— 项目墙那条「怎么处理 →」要能把
+    // 抽屉直接翻到环境那一章。
+    let guide = use_context::<crate::bridge::GuideNav>();
+    let Some(cur_id) = *guide.0.read() else {
         return rsx! {
-            div { class: "guide-tab", onclick: move |_| open.set(true), "指南" }
+            div { class: "guide-tab", onclick: move |_| guide.open("env"), "指南" }
         };
-    }
-    let cur_id = chapter.read().clone();
+    };
     let cur = CHAPTERS
         .iter()
         .find(|c| c.id == cur_id)
@@ -229,14 +229,14 @@ pub fn GuideDrawer() -> Element {
         div { class: "guide-panel",
             div { class: "guide-panel-head",
                 h3 { style: "font-size:15px;margin:0;", "指南" }
-                button { class: "drawer-close", onclick: move |_| open.set(false), "✕" }
+                button { class: "drawer-close", onclick: move |_| guide.close(), "✕" }
             }
             div { class: "guide-chapters",
                 for c in CHAPTERS.iter() {
                     div {
                         key: "{c.id}",
                         class: if c.id == cur_id { "guide-chapter active" } else { "guide-chapter" },
-                        onclick: move |_| chapter.set(c.id.to_string()),
+                        onclick: move |_| guide.open(c.id),
                         "{c.label}"
                     }
                 }

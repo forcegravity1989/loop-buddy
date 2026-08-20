@@ -18,3 +18,16 @@
 pub mod claude_cli;
 pub mod codegraph;
 pub mod terminal_xterm;
+
+/// 在 `PATH` 里找一个可执行文件,找到就返回它的完整路径。
+///
+/// **只看文件在不在,不起子进程**——探活条是开屏就要出来的,起五个子进程去
+/// 问版本号会把启动拖住;而且「装没装」这个问题本身用不着跑它。跑得起来、
+/// 登录态对不对是另一个问题,探不了就如实说探不了,不拿「文件在」冒充「能用」。
+pub fn on_path(exe: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(exe))
+        .find(|p| p.is_file())
+        .map(|p| p.display().to_string())
+}
