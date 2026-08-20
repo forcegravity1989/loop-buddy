@@ -264,6 +264,17 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
 
                 let mut vm = vm_build::build(&app, &ui).await;
                 eprintln!("[BW_BOOT] projects={} db={db}", vm.projects.len());
+                // 环境条的探活结果也打出来 —— 它说「找不到 claude」的时候,人
+                // 得能在终端里拿 `which claude` 当场对。2026-08-20 就栽在这上面:
+                // 探活在 macOS 上恒返回「找不到」,而界面上没有任何办法核。
+                for t in &vm.env {
+                    let state = match t.ok {
+                        Some(true) => "有",
+                        Some(false) => "没有",
+                        None => "没探",
+                    };
+                    eprintln!("[BW_ENV] {} = {} · {}", t.label, state, t.detail);
+                }
                 // 打开了项目就把这一份 ViewModel 的关键计数打出来 —— 这些数
                 // 都能用 sqlite3 当场对(活数 / 会话数 / 事件数 / 周数),
                 // 比截图硬。

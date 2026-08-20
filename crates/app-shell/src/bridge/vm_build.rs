@@ -325,9 +325,9 @@ pub(super) fn probe_env() -> Vec<ToolProbeVm> {
     // cursor-agent / codehub / gh)给 `Some(..)`,红绿都是真的;还没接实现的
     // (Open Design 内嵌、welink-cli)给 `None` —— 灰,不是绿,也不是红。
     let claude = crate::adapters::claude_cli::detect();
-    let cursor = crate::adapters::on_path("cursor-agent");
-    let codehub = crate::adapters::on_path("codehub");
-    let gh = crate::adapters::on_path("gh");
+    let cursor = bw_engine::which_on_path("cursor-agent");
+    let codehub = bw_engine::which_on_path("codehub");
+    let gh = bw_engine::which_on_path("gh");
     vec![
         ToolProbeVm {
             name: "claude_cli".into(),
