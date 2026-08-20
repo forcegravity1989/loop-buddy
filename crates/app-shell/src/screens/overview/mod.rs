@@ -19,11 +19,17 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
     let editing = use_signal(|| false);
     let draft = use_signal(|| (String::new(), String::new(), String::new()));
 
-    let has_week = p.weeks.iter().any(|w| w.week == p.current_week);
     rsx! {
         section { class: "ov-stack", style: "max-width:1120px;",
-            if !has_week {
-                {start_banner(&p, &bridge)}
+            // 判据是**文件在不在**,不是周列表里有没有本周(本周永远在列表里)。
+            // 文件还没有、但运作活①已经在路上时,不再给「开始本周」按钮 ——
+            // 再点一次只会收到「终端还开着」的拒绝,给一条去会话屏的路才对。
+            if !p.week_file_exists {
+                if let Some(st) = p.ops1_status.clone() {
+                    {running_banner(st, nav)}
+                } else {
+                    {start_banner(&p, &bridge, nav)}
+                }
             }
             {card_and_health(&p, &bridge, editing, draft)}
             {north_star_block(&p)}
@@ -36,7 +42,7 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
     }
 }
 
-fn start_banner(p: &ProjectVm, bridge: &Bridge) -> Element {
+fn start_banner(p: &ProjectVm, bridge: &Bridge, nav: PanelNav) -> Element {
     let b = bridge.clone();
     let (pid, week) = (p.id, p.current_week.clone());
     rsx! {
@@ -44,11 +50,33 @@ fn start_banner(p: &ProjectVm, bridge: &Bridge) -> Element {
             span { "本周({p.current_week})还没有周计划文件" }
             button {
                 class: "btn btn-primary btn-sm",
-                onclick: move |_| b.cmd(Command::StartWeekPlanning {
-                    project_id: pid,
-                    week: week.clone(),
-                }),
+                onclick: move |_| {
+                    b.cmd(Command::StartWeekPlanning {
+                        project_id: pid,
+                        week: week.clone(),
+                    });
+                    // 剩下的在会话屏里发生(复盘上周 → 更新指标 → 聊出本周),
+                    // 人点完这一下就该看到那场会话,不是留在总览上猜。
+                    nav.go(Panel::Session);
+                },
                 "开始本周"
+            }
+        }
+    }
+}
+
+/// 运作活①已经在路上:文件要等会话里的 MR 合入才落地,这期间横幅只指路,
+/// 不再给「开始本周」按钮。
+fn running_banner(status: String, nav: PanelNav) -> Element {
+    rsx! {
+        div { class: "ov-banner",
+            span {
+                "运作活①(更新指标 + 制定本周计划)已开工 · {status}。本周文件由那场会话产出,合入 MR 后这里才亮。"
+            }
+            button {
+                class: "btn btn-sm",
+                onclick: move |_| nav.go(Panel::Session),
+                "去会话屏"
             }
         }
     }

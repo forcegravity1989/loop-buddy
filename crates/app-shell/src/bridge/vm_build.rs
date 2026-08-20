@@ -483,6 +483,45 @@ async fn build_project(
 
     // 本周计数在构造之前算好 —— `current_week` 会被 move 进结构体。
     let week_counts_now = build_week_counts(&issues, Some(current_week.as_str()));
+
+    // 周列表 = 扫 `.bw/plan/` 目录 ∪ 库里活排过的周(设计 06 §2.1 的并集),
+    // 且**本周永远在列表里**——空的本周才有地方触发「开始本周」,真跑路径下
+    // 文件要等 MR 合入才落地,列表不能因此没有本周。
+    let mut weeks = build_weeks(&ws);
+    for w in issues.iter().map(|i| i.week_of.as_str()) {
+        if !w.is_empty() && !weeks.iter().any(|x| x.week == w) {
+            weeks.push(WeekVm {
+                week: w.to_string(),
+                backfill: false,
+                goal: None,
+                activity_count: 0,
+            });
+        }
+    }
+    if !weeks.iter().any(|x| x.week == current_week) {
+        weeks.push(WeekVm {
+            week: current_week.clone(),
+            backfill: false,
+            goal: None,
+            activity_count: 0,
+        });
+    }
+    // 新的在前;没有未来周,所以本周自然排在最上面。
+    weeks.sort_by(|a, b| b.week.cmp(&a.week));
+
+    // 横幅判据:文件在不在(不看列表),以及本周运作活①走到哪了。已完成的
+    // 不算「在途」——文件若还是没有,人应该能再点一次「开始本周」。
+    let week_file_exists = week_plan_file::exists(&ws, &current_week);
+    let ops1_status = issues
+        .iter()
+        .filter(|i| {
+            i.kind == bw_v4::model::IssueKind::Ops
+                && i.workflow == bw_v4::app::OPS1_WORKFLOW
+                && i.week_of == current_week
+                && i.status != IssueStatus::Done
+        })
+        .max_by_key(|i| i.number)
+        .map(|i| i.status.label().to_string());
     Some(ProjectVm {
         id,
         slug: p.slug.clone(),
@@ -509,7 +548,9 @@ async fn build_project(
                 .collect(),
         },
         metrics: build_metrics(&ws, plan.as_ref(), &issues),
-        weeks: build_weeks(&ws),
+        week_file_exists,
+        ops1_status,
+        weeks,
         current_week,
         viewing_week: viewing_week.clone(),
         view_all: ui.view_all,

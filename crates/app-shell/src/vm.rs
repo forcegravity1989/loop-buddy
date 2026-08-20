@@ -142,7 +142,13 @@ pub struct ProjectVm {
     pub health: HealthVm,
     pub metrics: MetricsVm,
     pub current_week: String,
-    /// 计划屏左栏:扫 `docs/plan/` 得到的周列表(新的在前)。
+    /// 当前周的 `.bw/plan/YYYY-Www.md` 在不在。总览「开始本周」横幅的判据 ——
+    /// 不能拿 `weeks` 里有没有本周判(本周永远在列表里置顶,哪怕还没有文件)。
+    pub week_file_exists: bool,
+    /// 本周那张运作活①(更新指标 + 制定本周计划)走到哪了。`None` = 还没建
+    /// (或上一张已完成)。横幅靠它区分「还没开始」和「已开工、文件在 MR 路上」。
+    pub ops1_status: Option<String>,
+    /// 计划屏左栏:扫 `.bw/plan/` 目录 ∪ 库里活排过的周(新的在前,本周置顶)。
     pub weeks: Vec<WeekVm>,
     /// 正在看哪一周。
     pub viewing_week: String,
