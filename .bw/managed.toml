@@ -1,0 +1,17 @@
+# 铺底/升级时写:哪些文件是 buddy 管的、什么版本、铺下去那一刻的内容
+# 指纹。下次升级前先比对指纹:变了 = 人手改过,不覆盖只提示差异。
+
+[[file]]
+path        = ".bw/PROJECT.md"
+version     = "5.0"
+fingerprint = "sha256:5dee97500137632088b6e522d6bcd2fc539195a9a513884f9fc6491d8b937c1e"
+
+[[file]]
+path        = ".bw/AGENTS.md"
+version     = "5.0"
+fingerprint = "sha256:8a896b68e5fecdbad05b586953f8c905ff5bc993defc37248fb9cc1c324f775e"
+
+[[file]]
+path        = ".bw/standard.toml"
+version     = "5.0"
+fingerprint = "sha256:8dc51c5e1208598fb5e611f4e394ebc527d587afc24eaebc6401a88113ee88ab"
