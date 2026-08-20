@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = App::new(
         store,
         root.join("workspaces"),
-        Arc::new(bw_engine::MockInteractiveExecutor::default()),
+        Arc::new(bw_engine::MockInteractiveExecutor),
     )
     .with_asset_root(root.join("assets"));
 
@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // ── 3 · 铺几份进去,再看索引 ──────────────────────────────
-    let laid = [".bw/PROJECT.md", "AGENTS.md", "CLAUDE.md"];
+    let laid = [".bw/PROJECT.md", ".bw/standard.toml", ".bw/metrics.toml"];
     for rel in laid {
         let p = repo.join(rel);
         std::fs::create_dir_all(p.parent().unwrap())?;

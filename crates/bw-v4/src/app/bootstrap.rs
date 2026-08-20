@@ -1,9 +1,13 @@
 //! 规范铺底(运作活③)与规范对账。
 //!
 //! 只做**第 1 步**:buddy 自己把核心件写进项目仓、记指纹,在**这张活自己的
-//! worktree 和分支上**提交,推上去,开一个 MR 等人合。第 2 步「写开发手册」与
-//! 第 3 步「历史回填」要起 agent 会话,还没做——探测到了什么如实写进这张活的
-//! 正文,但那两步没跑就是没跑。
+//! worktree 和分支上**提交,推上去,开一个 MR 等人合。
+//!
+//! **就这一步,没有第二步。** 仓根一个字不写 —— `AGENTS.md` / `CLAUDE.md` 是
+//! 项目自己的文件,给它们写内容等于「建议改造人家的项目」,那要先读懂这个仓、
+//! 先问过人,归资产盘点(运作活②)首次模式的子技能 `project-handbook`。
+//! 历史回填也一样要起 agent 会话,同样还没做 —— 探测到了什么如实写进这张活的
+//! 正文,但没跑就是没跑。
 //!
 //! **技能不往用户仓里复制**(2026-08-20 改):buddy 自带那十三份摊在自己的资产
 //! 目录,开工时只把名字、一句话和完整路径写进系统提示词,正文让 agent 按需读。
@@ -39,7 +43,7 @@ impl App {
 
         let probe = boot::probe(&ws).await;
         // 幂等键是标题,所以标题**只能是「规范铺底 v<版本>」**,不能随探测结果
-        // 变。之前把「· 含写开发手册」拼进标题,而第一次铺底自己写了 CLAUDE.md、
+        // 变。之前把探测结果拼进标题,而第一次铺底自己写了几份件、
         // 提交之后第二次探测结论就变了 —— 标题跟着变,幂等失效,重跑多建一张
         // 活。探测到了什么写进正文,不写进标题。
         let title = boot::issue_title();
@@ -96,8 +100,6 @@ impl App {
             chat: super::project::chat_label(&file.chat),
             // 这两节从**主检出**探 —— 那才是这个仓完整的样子;活自己的 worktree
             // 这会儿还没建出来,而且就算建了内容也一样。
-            build_commands: standard::detect::build_commands(&ws),
-            layout: standard::detect::layout(&ws),
         };
         // 这张活自己的一棵树、自己的一个分支。人的主检出不动。
         let issue = self.issue_or_err(issue_id).await?;
@@ -319,14 +321,17 @@ async fn drop_untracked_twin(main: &std::path::Path, tree: &std::path::Path, rel
 
 fn pending_steps(probe: &boot::BootstrapProbe) -> String {
     let mut v = Vec::new();
-    if probe.has_agent_docs {
-        v.push("写开发手册(让 agent 读一遍仓,把 AGENTS.md 里「还没填」那几节填成真的)");
-    }
     if probe.has_history {
-        v.push("历史回填(把老项目的历史周与历史版本补成同格式的正常文件)");
+        v.push("资产盘点首次模式:历史回填(把老项目的历史周与历史版本补成同格式的正常文件)");
+    }
+    if probe.has_own_conventions {
+        v.push(
+            "资产盘点首次模式:提议给这个项目写一份开发手册(仓根 `AGENTS.md`)\
+             —— 那是在改你的项目,得先问过你才写,不在接项目这一步做",
+        );
     }
     if v.is_empty() {
-        "无 —— 这个仓既没有 agent 约定文件也没有历史,第 1 步就是全部".into()
+        "无 —— 这个仓没有历史,写核心件就是全部".into()
     } else {
         v.join(";")
     }

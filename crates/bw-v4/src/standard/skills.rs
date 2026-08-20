@@ -30,8 +30,8 @@ pub const METRICS_REFRESH_SKILL: &str = include_str!(
 );
 pub const ASSET_AUDIT_SKILL: &str =
     include_str!("../../../../standard/06-defaults/ops/asset-audit/SKILL.md");
-pub const MERGE_ADJUST_SKILL: &str = include_str!(
-    "../../../../standard/06-defaults/ops/standard-bootstrap-agent/merge-adjust/SKILL.md"
+pub const PROJECT_HANDBOOK_SKILL: &str = include_str!(
+    "../../../../standard/06-defaults/ops/asset-audit/skills/project-handbook/SKILL.md"
 );
 
 /// frontmatter 里那句 `description`。取不到就返回空串 —— 不编一句假的。
@@ -81,7 +81,11 @@ pub fn all() -> Vec<SkillPack> {
             METRICS_REFRESH_SKILL,
         ),
         ("asset-audit", "asset-audit/SKILL.md", ASSET_AUDIT_SKILL),
-        ("merge-adjust", "merge-adjust/SKILL.md", MERGE_ADJUST_SKILL),
+        (
+            "project-handbook",
+            "project-handbook/SKILL.md",
+            PROJECT_HANDBOOK_SKILL,
+        ),
     ] {
         v.push(SkillPack {
             slug,

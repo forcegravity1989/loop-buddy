@@ -278,43 +278,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     );
 
-    // ── 10 · 开发手册是**探出来的**,不是模板里编的 ──────────
-    // 仓根 AGENTS.md 是给这个项目自己的开发手册。buddy 第 1 步不起 agent,只写
-    // 读文件就能确定的部分:有 Cargo.toml 就写 cargo 那几条,顶层目录照实列。
-    // 这个仓的仓根本来就有人写的 AGENTS.md,所以 buddy 一个字都不该写 ——
-    // 补齐是第 2 步 agent 会话的活。用空仓那个项目验探测本身。
+    // ── 10 · 接项目时,仓根一个字都不写 ──────────────────────
+    // 这条是第 0 站的边界:buddy 只铺**自己的**资产,全在 `.bw/` 底下。仓根的
+    // `AGENTS.md` / `CLAUDE.md` 是这个项目自己的文件 —— 要不要给它写一份开发
+    // 手册,是资产盘点(运作活②)首次模式去问人的事,那是在改人家的项目。
+    // 接项目的时候 buddy 才刚 clone 完,既没读过这个仓,也没人问过人家愿不愿意。
+    for (label, ws) in [
+        ("成熟仓", mature.clone()),
+        ("空仓", workspaces.join("no-remote")),
+    ] {
+        // 分支上写了什么最能说明问题 —— 主检出可能本来就有人写的那几份。
+        let tree = ws
+            .parent()
+            .map(|p| {
+                p.join(format!(
+                    "{}-issue-1",
+                    ws.file_name().unwrap().to_string_lossy()
+                ))
+            })
+            .unwrap_or_else(|| ws.clone());
+        let look = if tree.is_dir() { tree } else { ws.clone() };
+        let listed = std::fs::read_dir(&look)
+            .map(|d| {
+                let mut v: Vec<String> = d
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .filter(|n| n.ends_with(".md") || n.ends_with(".toml"))
+                    .collect();
+                v.sort();
+                v
+            })
+            .unwrap_or_default();
+        say(
+            &format!("档 10 · {label}的仓根,铺底之后有哪些 .md/.toml"),
+            &format!(
+                "{listed:?} · 有 buddy 写的 AGENTS.md/CLAUDE.md={}(该是 false)",
+                ["AGENTS.md", "CLAUDE.md"].iter().any(|f| {
+                    std::fs::read_to_string(look.join(f))
+                        .map(|t| t.contains("bw:managed"))
+                        .unwrap_or(false)
+                })
+            ),
+        );
+    }
     say(
-        "档 10 · 成熟仓的仓根 AGENTS.md",
+        "档 10 · 成熟仓里人写的那三份",
         &format!(
-            "还是人写的那份={}(该是 true —— 已存在就一个字不覆盖)",
+            "AGENTS.md 还是人写的={} · CLAUDE.md 还是人写的={} · README 还是人写的={}",
             std::fs::read_to_string(mature.join("AGENTS.md"))
                 .unwrap_or_default()
+                .contains("人写的"),
+            std::fs::read_to_string(mature.join("CLAUDE.md"))
+                .unwrap_or_default()
+                .contains("人写"),
+            std::fs::read_to_string(mature.join("README.md"))
+                .unwrap_or_default()
                 .contains("人写的")
-        ),
-    );
-    let detected = bw_v4::standard::detect::build_commands(&mature);
-    say(
-        "档 10 · 从这个仓探出来的构建命令",
-        &format!(
-            "认出 cargo={} · 认出 CI={} · 编了一条命令={}",
-            detected.contains("cargo test"),
-            detected.contains("门禁以 CI 为准") || !mature.join(".github").exists(),
-            detected.contains("npm") || detected.contains("pytest")
-        ),
-    );
-
-    // 空的 `.github/workflows/` 里没有任何一步可跑,说「门禁以 CI 为准」就是在
-    // 指一个不存在的判据 —— 这条要读回来,不然「不猜」只是一句口号。
-    let hollow = root.join("hollow-ci");
-    std::fs::create_dir_all(hollow.join(".github/workflows"))?;
-    std::fs::write(hollow.join("Cargo.toml"), "[package]\n")?;
-    let hollow_txt = bw_v4::standard::detect::build_commands(&hollow);
-    say(
-        "档 10 · 空的 .github/workflows 会不会被当成 CI",
-        &format!(
-            "认出 cargo={} · 说了「门禁以 CI 为准」={}(该是 true / false)",
-            hollow_txt.contains("cargo test"),
-            hollow_txt.contains("门禁以 CI 为准")
         ),
     );
 

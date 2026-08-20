@@ -13,7 +13,6 @@
 //! 两个值常常相等,含义不同,不合并成一个字段。
 
 pub mod bootstrap;
-pub mod detect;
 pub mod skills;
 
 /// 一个规范件模板:属于哪个大类、渲染到项目仓的哪个路径、模板正文。
@@ -44,8 +43,6 @@ pub fn version() -> &'static str {
 pub const CHARTER_REL_PATH: &str = ".bw/PROJECT.md";
 
 pub const CHARTER_TMPL: &str = include_str!("../../../../standard/01-charter/PROJECT.md.tmpl");
-pub const AGENTS_TMPL: &str = include_str!("../../../../standard/02-agents/AGENTS.md.tmpl");
-pub const CLAUDE_TMPL: &str = include_str!("../../../../standard/02-agents/CLAUDE.md.tmpl");
 pub const PLAN_README: &str = include_str!("../../../../standard/03-docs/plan/README.md");
 pub const WEEK_TMPL: &str = include_str!("../../../../standard/03-docs/plan/WEEK.md.tmpl");
 pub const RELEASES_TMPL: &str = include_str!("../../../../standard/03-docs/releases.md.tmpl");
@@ -87,24 +84,6 @@ pub const CORE_TEMPLATES: &[Template] = &[
         body: CHARTER_TMPL,
         lay_at: LayAt::Adopt,
         note: "项目名片:这个项目是什么、对标谁、北极星是什么",
-    },
-    Template {
-        category: "agents",
-        // **仓根,不在 `.bw/` 里。** 这一份是**项目自己的**开发与维护手册,不是
-        // buddy 的资产 —— Claude Code / Cursor / Codex 都在仓根找它,塞进 `.bw/`
-        // 反而谁都读不到。buddy 只搭初稿、只维护里面那一小段带 `bw:managed`
-        // 标记的话;仓里已经有这份文件就一个字不写,交给规范铺底第 2 步去谈。
-        target: "AGENTS.md",
-        body: AGENTS_TMPL,
-        lay_at: LayAt::Adopt,
-        note: "这个项目自己的开发与维护手册:怎么建、怎么跑、怎么测、目录、规矩",
-    },
-    Template {
-        category: "agents",
-        target: "CLAUDE.md",
-        body: CLAUDE_TMPL,
-        lay_at: LayAt::Adopt,
-        note: "Claude Code 的自动发现入口,一行,指向仓根 AGENTS.md",
     },
     Template {
         category: "meta",

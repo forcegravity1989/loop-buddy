@@ -590,11 +590,12 @@ fn normalize_browse(url: &str) -> Option<String> {
     } else if let Some(scp) = url.strip_prefix("git@") {
         // `git@github.com:owner/repo.git` —— 冒号是 host 与路径的分界。
         scp.replacen(':', "/", 1)
-    } else if let Some(r) = url.strip_prefix("https://").or(url.strip_prefix("http://")) {
+    } else {
+        let r = url
+            .strip_prefix("https://")
+            .or(url.strip_prefix("http://"))?;
         // `https://user@host/路径` 里那段凭据不该出现在给人点的链接里。
         r.split_once('@').map(|(_, r)| r).unwrap_or(r).to_string()
-    } else {
-        return None;
     };
     let rest = rest.trim_end_matches('/').trim_end_matches(".git");
     if !rest.contains('/') {

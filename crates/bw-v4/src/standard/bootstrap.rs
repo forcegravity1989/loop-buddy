@@ -35,11 +35,6 @@ pub struct BootstrapVars {
     pub owner: String,
     pub current_version: String,
     pub chat: String,
-    /// 「怎么建、怎么跑、怎么测」那一节 —— 从仓里的构建文件探出来的。
-    /// 探不出来就是一句明说「还没填」,不猜一条命令写上去。
-    pub build_commands: String,
-    /// 「目录导览」那一节 —— 顶层目录列表,每个是干什么的留空待补。
-    pub layout: String,
 }
 
 /// 写规范件 + 记指纹。幂等:重跑一遍,已经一致的件原样跳过。
@@ -64,8 +59,6 @@ pub fn write_core_files(
         ("owner", &vars.owner),
         ("current_version", &vars.current_version),
         ("chat", &vars.chat),
-        ("build_commands", &vars.build_commands),
-        ("layout", &vars.layout),
         ("version", version),
     ];
 
@@ -161,10 +154,14 @@ fn lay_one(
 pub struct BootstrapProbe {
     /// 仓是 buddy 自己建的(根提交作者是 buddy)—— 直推,不走 MR。
     pub owned: bool,
-    /// 已有 README / CLAUDE.md / AGENTS.md —— 触发第 2 步「写开发手册」。
-    /// 仓里已经有这些的话,buddy 第 1 步会跳过不覆盖,补齐得靠 agent 会话。
-    pub has_agent_docs: bool,
-    /// 有历史(提交数 > 1、有标签、有 CHANGELOG)—— 触发第 3 步「历史回填」。
+    /// 仓根已经有 README / CLAUDE.md / AGENTS.md —— 这个仓自己已经有一套约定了。
+    ///
+    /// **这条不触发铺底的任何一步。** 铺底只铺 `.bw/`(buddy 自己的资产),
+    /// 仓根一个字不写。要不要给这个项目写一份开发手册,是资产盘点(运作活②)
+    /// 首次模式去问人的事 —— 那是在改人家的项目,得先问过。这条只是写进活的
+    /// 正文当证据,顺带给将来那次盘点当输入。
+    pub has_own_conventions: bool,
+    /// 有历史(提交数 > 1、有标签、有 CHANGELOG)—— 触发资产盘点首次模式(历史回填)。
     pub has_history: bool,
     /// 写进这张活说明里的证据句子。评审的人不用猜这张活为什么跑了这几步。
     pub reasons: Vec<String>,
@@ -192,7 +189,7 @@ pub async fn probe(workspace: &Path) -> BootstrapProbe {
         .iter()
         .any(|f| workspace.join(f).is_file());
 
-    p.has_agent_docs = ["README.md", "CLAUDE.md", "AGENTS.md"]
+    p.has_own_conventions = ["README.md", "CLAUDE.md", "AGENTS.md"]
         .iter()
         .any(|f| workspace.join(f).is_file());
     // 1 条提交 = buddy 自己那次 scaffold,不算历史。
@@ -200,9 +197,9 @@ pub async fn probe(workspace: &Path) -> BootstrapProbe {
 
     p.reasons.push(format!("仓有 {commits} 条提交"));
     p.reasons.push(format!("{} 个标签", tags.len()));
-    if p.has_agent_docs {
+    if p.has_own_conventions {
         p.reasons
-            .push("已发现 README / CLAUDE.md / AGENTS.md".into());
+            .push("仓根已有 README / CLAUDE.md / AGENTS.md(这个仓自己有约定,铺底不碰)".into());
     }
     if has_changelog {
         p.reasons.push("仓根有 CHANGELOG / RELEASES".into());
@@ -220,12 +217,9 @@ pub fn issue_title() -> String {
 
 /// 探测到需要跑哪几步 —— 这句话写进活的正文,不写进标题。
 pub fn planned_steps(probe: &BootstrapProbe) -> String {
-    let mut steps = vec!["写核心件"];
-    if probe.has_agent_docs {
-        steps.push("写开发手册(仓里已有 README / AGENTS.md / CLAUDE.md,第 1 步跳过没覆盖)");
-    }
+    let mut steps = vec!["写核心件(全部落在 `.bw/` 下,仓根一个字不写)"];
     if probe.has_history {
-        steps.push("历史回填(这个仓已经有历史了)");
+        steps.push("资产盘点首次模式:历史回填(这个仓已经有历史了)");
     }
     steps.join("、")
 }
