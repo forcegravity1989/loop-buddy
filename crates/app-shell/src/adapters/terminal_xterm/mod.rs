@@ -571,7 +571,7 @@ pub fn TerminalWidget(conversation_id: ConversationId, focused: bool, bridge: Br
                 button {
                     id: "{copy_btn_id}",
                     class: "copybtn",
-                    title: "复制选中的内容;没选中就复制整段。键盘 Cmd+C(或 Ctrl+Shift+C)只复制选中",
+                    title: "复制选中的内容;没选中就复制整段。键盘 Cmd+C(或 Ctrl+Shift+C)只复制选中。拖不出选区多半是 agent 的界面开了鼠标上报,按住 Option 再拖",
                     "复制"
                 }
             }
