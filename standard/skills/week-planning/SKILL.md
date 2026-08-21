@@ -32,7 +32,7 @@ category: 运作
 
 ## 第二步 · 更新指标
 
-调用子技能 `metrics-refresh`(见 `skills/metrics-refresh/SKILL.md`):补齐缺的引领/滞
+调用子技能 `metrics-refresh`(和本篇同级:`../metrics-refresh/SKILL.md`):补齐缺的引领/滞
 后指标、给绑不上的找最便宜的采集路径、必要时改 `.bw/connectors.toml`、跑一次采集。
 
 两条硬性约束,和整个产品的健康推导链是同一条:

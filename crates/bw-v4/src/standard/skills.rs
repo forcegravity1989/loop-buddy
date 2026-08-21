@@ -24,15 +24,27 @@ pub struct SkillPack {
 }
 
 pub const WEEK_PLANNING_SKILL: &str =
-    include_str!("../../../../standard/06-defaults/ops/week-planning/SKILL.md");
-pub const METRICS_REFRESH_SKILL: &str = include_str!(
-    "../../../../standard/06-defaults/ops/week-planning/skills/metrics-refresh/SKILL.md"
-);
+    include_str!("../../../../standard/skills/week-planning/SKILL.md");
+pub const METRICS_REFRESH_SKILL: &str =
+    include_str!("../../../../standard/skills/metrics-refresh/SKILL.md");
 pub const ASSET_AUDIT_SKILL: &str =
-    include_str!("../../../../standard/06-defaults/ops/asset-audit/SKILL.md");
-pub const PROJECT_HANDBOOK_SKILL: &str = include_str!(
-    "../../../../standard/06-defaults/ops/asset-audit/skills/project-handbook/SKILL.md"
-);
+    include_str!("../../../../standard/skills/asset-audit/SKILL.md");
+pub const PROJECT_HANDBOOK_SKILL: &str =
+    include_str!("../../../../standard/skills/project-handbook/SKILL.md");
+pub const EVIDENCE_FIRST_SKILL: &str =
+    include_str!("../../../../standard/skills/evidence-first/SKILL.md");
+pub const SPEC_TO_TESTS_SKILL: &str =
+    include_str!("../../../../standard/skills/spec-to-tests/SKILL.md");
+pub const BASELINE_BEFORE_TOUCH_SKILL: &str =
+    include_str!("../../../../standard/skills/baseline-before-touch/SKILL.md");
+pub const FRESH_EYES_FUNNEL_SKILL: &str =
+    include_str!("../../../../standard/skills/fresh-eyes-funnel/SKILL.md");
+pub const BREAKING_DRILL_SKILL: &str =
+    include_str!("../../../../standard/skills/breaking-drill/SKILL.md");
+pub const COMPETITIVE_ANALYSIS_SKILL: &str =
+    include_str!("../../../../standard/skills/competitive-analysis/SKILL.md");
+pub const METRICS_RENDER_SKILL: &str =
+    include_str!("../../../../standard/skills/metrics-render/SKILL.md");
 
 /// frontmatter 里那句 `description`。取不到就返回空串 —— 不编一句假的。
 ///
@@ -55,44 +67,37 @@ fn desc_of(raw: &'static str) -> &'static str {
     ""
 }
 
-/// buddy 自带的全部技能:九份方法论技能(正本 `docs/skills/`,经 `bw-core`
-/// 取用)+ 四份运作剧本(正本 `standard/06-defaults/`)。
+/// buddy 自带的全部技能 —— **一个正本目录,全部平级**:`standard/skills/<名字>/SKILL.md`,
+/// 十一份(七份方法论 + 四份运作剧本)。
+///
+/// 2026-08-21 收敛前是两个正本目录(`docs/skills/` 九份经 `bw-core` 取用 +
+/// `standard/06-defaults/` 四份),还用目录层级表达「谁调用谁」——但注入给
+/// agent 时是摊平的,层级只在源码树里存在。收敛之后:谁调用谁写在正文里
+/// (`week-planning` 第二步指名调 `metrics-refresh`),目录不再表达从属;
+/// `north-star-discovery` / `metrics-binding` 两份的内容已并入
+/// `metrics-refresh`,不进这份清单 —— `docs/skills/` 那两份原文件留给 V3,
+/// V4 不再读它们。
 pub fn all() -> Vec<SkillPack> {
-    let mut v: Vec<SkillPack> = bw_core::bw_library::bw_standard_skill_docs()
-        .into_iter()
-        .map(|d| SkillPack {
-            slug: d.slug,
-            rel: format!("{}/SKILL.md", d.slug),
-            desc: d.desc,
-            raw: d.raw,
-        })
-        .collect();
-    // 四份运作剧本。`metrics-refresh` 是 `week-planning` 第二步调用的子技能,
-    // 所以挂在它目录下面,不是平级的第二个技能。
-    for (slug, rel, raw) in [
-        (
-            "week-planning",
-            "week-planning/SKILL.md",
-            WEEK_PLANNING_SKILL,
-        ),
-        (
-            "metrics-refresh",
-            "week-planning/skills/metrics-refresh/SKILL.md",
-            METRICS_REFRESH_SKILL,
-        ),
-        ("asset-audit", "asset-audit/SKILL.md", ASSET_AUDIT_SKILL),
-        (
-            "project-handbook",
-            "project-handbook/SKILL.md",
-            PROJECT_HANDBOOK_SKILL,
-        ),
-    ] {
-        v.push(SkillPack {
+    const PACKS: [(&str, &str); 11] = [
+        ("week-planning", WEEK_PLANNING_SKILL),
+        ("metrics-refresh", METRICS_REFRESH_SKILL),
+        ("asset-audit", ASSET_AUDIT_SKILL),
+        ("project-handbook", PROJECT_HANDBOOK_SKILL),
+        ("evidence-first", EVIDENCE_FIRST_SKILL),
+        ("spec-to-tests", SPEC_TO_TESTS_SKILL),
+        ("baseline-before-touch", BASELINE_BEFORE_TOUCH_SKILL),
+        ("fresh-eyes-funnel", FRESH_EYES_FUNNEL_SKILL),
+        ("breaking-drill", BREAKING_DRILL_SKILL),
+        ("competitive-analysis", COMPETITIVE_ANALYSIS_SKILL),
+        ("metrics-render", METRICS_RENDER_SKILL),
+    ];
+    PACKS
+        .iter()
+        .map(|(slug, raw)| SkillPack {
             slug,
-            rel: rel.to_string(),
+            rel: format!("{slug}/SKILL.md"),
             desc: desc_of(raw),
             raw,
-        });
-    }
-    v
+        })
+        .collect()
 }

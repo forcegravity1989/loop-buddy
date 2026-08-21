@@ -21,7 +21,7 @@ use crate::model::{IssueId, IssueKind, IssueOrigin, IssueStatus, ProjectId};
 use crate::repo::issue_policy_file;
 
 /// 运作活①的 `workflow` 字段值,对应剧本 `week-planning`。两者的对应关系在
-/// `standard/06-defaults/ops/README.md` 那张表里。
+/// `standard/skills/README.md` 那张表里。
 pub const OPS1_WORKFLOW: &str = "更新指标与周计划";
 pub const OPS2_WORKFLOW: &str = "资产盘点";
 pub const OPS3_WORKFLOW: &str = "规范铺底";
@@ -44,7 +44,7 @@ pub fn skill_slug(workflow: &str) -> Option<&'static str> {
         OPS2_WORKFLOW => Some("asset-audit"),
         // 规范铺底**没有 agent 步骤**(2026-08-20:只铺 `.bw/`,仓根一个字不写),
         // 所以它没有剧本可挂。给这个项目写开发手册的那份剧本已经挪进资产盘点,
-        // 见 `standard/06-defaults/ops/asset-audit/skills/project-handbook/`。
+        // 见 `standard/skills/project-handbook/`。
         _ => None,
     }
 }

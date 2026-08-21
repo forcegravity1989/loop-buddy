@@ -1,14 +1,166 @@
-//! V4 的领域类型。
+//! V4 的领域类型。**2026-08-21 起不再从 `bw-core` 借任何东西** —— 身份、
+//! 信号、活的状态机、五类别,全部住在这里。逐字拷自 V3 内核里仍然作数的
+//! 定义(和 `v4-engine` 同一个「拷贝接管」逻辑:V3 那一整个目录最终要删,
+//! V4 不能有依赖指向那边),serde 形状一字未动,所以库里已有的行照读。
 //!
-//! 复用 `bw-core` 里仍然作数的东西:身份(`ProjectId`/`IssueId`/…)、
-//! `Signal`、活的状态机 `IssueStatus`(「完成」的唯一入边是「评审中」这条
-//! 铁律就锁在 `can_transition_to` 里)、`StageKind`(V4 里降级成活的类别
-//! 标签)。**不复用** `bw-core::model` 的 `Project`/`Issue` 实体——V4 的字段
-//! 集与 V3 不是同一件东西(名片、群、版本全部搬去了仓文件)。
+//! 「完成」的唯一入边是「评审中」这条铁律锁在 [`IssueStatus::can_transition_to`]
+//! 里 —— 那张转移表是**逐字拷贝**的,改它任何一条边都等于改产品铁律,先去
+//! 读 CLAUDE.md 的铁律表再动。
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-pub use bw_core::{ConversationId, IssueId, IssueStatus, ProjectId, Signal, StageKind};
+macro_rules! id_newtype {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(pub Uuid);
+
+        impl $name {
+            /// 包住一个已有的 UUID(比如从库里读回来的)。
+            pub const fn from_uuid(u: Uuid) -> Self {
+                Self(u)
+            }
+
+            /// 全零占位 id,测试与「不属于任何一个」的场合用。
+            pub const fn nil() -> Self {
+                Self(Uuid::nil())
+            }
+
+            pub const fn uuid(self) -> Uuid {
+                self.0
+            }
+
+            pub fn new() -> Self {
+                Self(Uuid::new_v4())
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
+}
+
+id_newtype!(
+    /// 项目的稳定身份。
+    ProjectId
+);
+id_newtype!(
+    /// 活的稳定身份。
+    IssueId
+);
+id_newtype!(
+    /// 一场 agent 会话的稳定身份(`claude_conversation` 表的主键)。
+    ConversationId
+);
+
+/// 健康信号。`Unknown` 是诚实的第四态 —— **没数据绝不默认成绿**。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Signal {
+    Green,
+    Amber,
+    Red,
+    Unknown,
+}
+
+/// 活的类别 —— V3 的五阶段在 V4 降级成的标签。类别决定默认开工工具与默认
+/// workflow(映射正本在 `.bw/issue-policy.toml` 的 `[[mapping]]` 段)。
+/// V4 只用到标签和全集;V3 那套阶段方法论元数据(角色、下一棒、DoD)不拷。
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub enum StageKind {
+    /// 原型
+    Prototype,
+    /// 构建
+    Build,
+    /// 优化
+    Optimize,
+    /// 运营推广
+    Growth,
+    /// 运维
+    Ops,
+}
+
+impl StageKind {
+    pub const ALL: [StageKind; 5] = [
+        StageKind::Prototype,
+        StageKind::Build,
+        StageKind::Optimize,
+        StageKind::Growth,
+        StageKind::Ops,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            StageKind::Prototype => "原型",
+            StageKind::Build => "构建",
+            StageKind::Optimize => "优化",
+            StageKind::Growth => "运营推广",
+            StageKind::Ops => "运维",
+        }
+    }
+}
+
+/// 活的状态。生命周期顺序;`Blocked` 是可恢复的旁路态,不是终点。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueStatus {
+    Backlog,
+    Todo,
+    InProgress,
+    InReview,
+    Done,
+    Blocked,
+    Cancelled,
+}
+
+impl IssueStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            IssueStatus::Backlog => "待办池",
+            IssueStatus::Todo => "待办",
+            IssueStatus::InProgress => "进行中",
+            IssueStatus::InReview => "评审中",
+            IssueStatus::Done => "已完成",
+            IssueStatus::Blocked => "阻塞",
+            IssueStatus::Cancelled => "已取消",
+        }
+    }
+
+    /// 状态机的**唯一**事实源 —— 每一处转移守卫都问这张表,谁都不许自己发明边。
+    /// 「完成」的唯一入边是「评审中」(`(InReview, Done)`),这条是产品铁律。
+    /// 逐字拷自 V3 内核,一条边没加没减。
+    pub fn can_transition_to(self, to: IssueStatus) -> bool {
+        use IssueStatus::*;
+        matches!(
+            (self, to),
+            (Backlog, Todo)
+                | (Backlog, InProgress)
+                | (Backlog, Cancelled)
+                | (Todo, InProgress)
+                | (Todo, Backlog)
+                | (Todo, Blocked)
+                | (Todo, Cancelled)
+                | (InProgress, InReview)
+                | (InProgress, Todo)
+                | (InProgress, Blocked)
+                | (InProgress, Cancelled)
+                | (InReview, Done)
+                | (InReview, InProgress)
+                | (InReview, Blocked)
+                | (InReview, Cancelled)
+                | (Blocked, Todo)
+                | (Blocked, InProgress)
+                | (Blocked, Cancelled)
+                | (Done, Todo)
+                | (Done, InProgress)
+        )
+    }
+}
 
 /// 活的三个种类。`Light`(轻量活)= 没有 agent 会话、只有 buddy 自己写仓 +
 /// 开 MR 的活,名片编辑与发版本用它。
