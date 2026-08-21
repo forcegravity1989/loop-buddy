@@ -566,32 +566,74 @@ pub async fn fetch_project_toml(
     ))
 }
 
-/// 某个时间窗口内**合入**的 PR 数。
+// ── 走势图要的两份远端流水 ──────────────────────────────
+//
+// 都是**一趟拉全、把原始时刻交给上层**,不在这里按周查、也不在这里算数。
+// 原先那条按周发搜索查询的路已经删掉,两个理由:
+//
+// 1. 画四周就要发四次、画八周就八次,而搜索接口本身不稳 —— 真机上撞到过
+//    `Get https://api.github.com/search/issues…: EOF`,四条线里断一条。
+// 2. 「issue 未处理数」这种存量值,本来就得拿全量流水才算得出「某周末还开着
+//    几张」,按周查根本查不出来。
+//
+// 一趟拉全之后,要几周就在上层分几个桶,采多少和画多少永远一致。
+
+/// 一趟能拉回来的最大条数。够不够由调用方自己判:**拿回来的条数正好等于它,
+/// 就说明可能被截断了**,那时候该如实说「没查全」,不是端出一个少算的数。
+pub const LIST_CAP: u32 = 1000;
+
+/// 已合并 PR 的合并时刻,新的在前。RFC3339 原文,**不在这一层解析时间** ——
+/// 底座只负责起进程、读 JSON,按周分桶是上层的事。
 ///
-/// 窗口由调用方给 —— 这就是「能采到今天的数,就能采到过去任意一周的数」那条
-/// 判据的落点:同一个函数换个窗口,过去第八周的值照样算得出来,不需要谁提前
-/// 把它存下来。
+/// 复算:`gh pr list -R <仓> --state merged --json mergedAt --limit 1000`
+pub async fn merged_pr_times(owner_repo: &str) -> Result<Vec<String>, GithubError> {
+    let rows: Vec<GhMergedPrJson> =
+        gh_list_json(owner_repo, &["pr", "list", "--state", "merged"], "mergedAt").await?;
+    Ok(rows.into_iter().filter_map(|r| r.merged_at).collect())
+}
+
+/// 每一张 issue 的建立时刻与关闭时刻(没关就是 `None`),新的在前。
+/// **不含 PR** —— `gh issue list` 本身就把 PR 排除在外。
 ///
-/// `since` / `until` 都是 `YYYY-MM-DD`,而且是**闭区间**(GitHub 的
-/// `merged:a..b` 含两端)。注意别直接把 ISO 周的左闭右开边界丢进来 —— 那会把
-/// 下周一那天的 PR 也算进这一周。
-pub async fn merged_pr_count(
+/// 复算:`gh issue list -R <仓> --state all --json createdAt,closedAt --limit 1000`
+pub async fn issue_times(owner_repo: &str) -> Result<Vec<(String, Option<String>)>, GithubError> {
+    let rows: Vec<GhIssueTimeJson> = gh_list_json(
+        owner_repo,
+        &["issue", "list", "--state", "all"],
+        "createdAt,closedAt",
+    )
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.created_at, r.closed_at))
+        .collect())
+}
+
+#[derive(serde::Deserialize)]
+struct GhMergedPrJson {
+    #[serde(rename = "mergedAt")]
+    merged_at: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct GhIssueTimeJson {
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "closedAt")]
+    closed_at: Option<String>,
+}
+
+/// `gh <子命令…> --repo <仓> --limit <上限> --json <字段>` 的公共壳。
+async fn gh_list_json<T: serde::de::DeserializeOwned>(
     owner_repo: &str,
-    since: &str,
-    until: &str,
-) -> Result<u32, GithubError> {
-    let q = format!("repo:{owner_repo} is:pr is:merged merged:{since}..{until}");
+    subcommand: &[&str],
+    fields: &str,
+) -> Result<Vec<T>, GithubError> {
+    let cap = LIST_CAP.to_string();
+    let mut args: Vec<&str> = subcommand.to_vec();
+    args.extend_from_slice(&["--repo", owner_repo, "--limit", &cap, "--json", fields]);
     let output = crate::win_cmd::tokio_cmd("gh")
-        .args([
-            "api",
-            "-X",
-            "GET",
-            "search/issues",
-            "-f",
-            &format!("q={q}"),
-            "--jq",
-            ".total_count",
-        ])
+        .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -601,9 +643,8 @@ pub async fn merged_pr_count(
     if !output.status.success() {
         return Err(GithubError::Command(stderr_text(&output)));
     }
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    text.parse::<u32>()
-        .map_err(|_| GithubError::Command(format!("无法解析 gh 计数输出:{text:?}")))
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| GithubError::Command(format!("无法解析 gh {} JSON:{e}", subcommand.join(" "))))
 }
 
 #[cfg(test)]

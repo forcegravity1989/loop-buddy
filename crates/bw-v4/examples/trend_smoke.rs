@@ -7,8 +7,8 @@
 //! 证明的是设计 14 篇里「A 类 · 可回溯」那条判据成立:**这些数一个都没存过**,
 //! 每次都是现问 git(和远端)算出来的,所以过去任意一周的值随时都能重算。
 //!
-//! 不碰本机库、不碰 claude。给了 `owner/repo` 才会连一次 GitHub 查合入的 PR
-//! 数;不给就只算 git 那两条,远端那列如实留空。
+//! 不碰本机库、不碰 claude。给了 `owner/repo` 才会连 GitHub 查合入的 PR 数与
+//! 未处理 issue 数;不给就只算 git 那一条,远端那两列如实留空。
 //!
 //! 每一行都附上自己复算的命令 —— 数字对不上就是代码错了,不是「大概差不多」。
 
@@ -67,26 +67,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t = trend::recent_weeks(&ws, &project, weeks).await;
 
     println!(
-        "{:<10} {:>8} {:>8} {:>10}",
-        "周", "提交", "合入", "合入的PR"
+        "{:<10} {:>8} {:>10} {:>14}",
+        "周", "提交", "合入的PR", "未处理issue"
     );
     for p in &t.points {
         // **没采到显示「—」,不显示 0** —— 0 是一个真实的数值,「没采到」不是。
         println!(
-            "{:<10} {:>8} {:>8} {:>10}",
+            "{:<10} {:>8} {:>10} {:>14}",
             p.week,
             dash(p.commits),
-            dash(p.merges),
-            dash(p.merged_prs)
+            dash(p.merged_prs),
+            dash(p.open_issues)
         );
     }
     if !t.git_note.is_empty() {
-        println!("\ngit 那两列:{}", t.git_note);
+        println!("\n提交那列:{}", t.git_note);
     }
     if !t.remote_note.is_empty() {
-        println!("\n远端那列:{}", t.remote_note);
+        println!("\n远端那两列:{}", t.remote_note);
     } else if remote.is_empty() {
-        println!("\n远端那列:没给 owner/repo,这次没问远端");
+        println!("\n远端那两列:没给 owner/repo,这次没问远端");
     }
 
     // **复算命令必须是代码真正在跑的那条。** 绝不能给 `--since/--until`:
@@ -103,13 +103,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             p.week,
             ws.display()
         );
-        println!(
-            "  {} 合入:同上,awk 条件加 && NF>=3(父提交 ≥ 2 即合入)",
-            p.week
-        );
         if !remote.is_empty() {
             println!(
-                "  {} 合入的PR:gh api -X GET search/issues -f q=\"repo:{} is:pr is:merged merged:<本周一带时区>..<周日 23:59:59 带时区>\" --jq .total_count",
+                "  {} 合入的PR:gh pr list -R {} --state merged --json mergedAt --limit 1000,数 mergedAt 落在 [{since}, {until}) 的条数",
+                p.week, remote
+            );
+            println!(
+                "  {} 未处理issue:gh issue list -R {} --state all --json createdAt,closedAt --limit 1000,数 createdAt < {until} 的减去 closedAt < {until} 的",
                 p.week, remote
             );
         }

@@ -362,13 +362,21 @@ fn trend_row(s: &crate::vm::RepoStatsVm) -> Element {
     };
     // 一张表定三条线,不是抄三遍 —— 抄三遍的话加第四条线时最省事的做法是复制
     // 前两条,而前两条恰好…… 现在三条都吃 `Option`,复制也不会把「采不到」写成 0。
+    //
+    // **PR 以远端为准,不再画本机的合并提交数**:同一件事两个口径摆在一起,
+    // 读的人分不清该信哪个(squash 合的 PR 本机没有合并提交,本机 `git pull`
+    // 产生的合并提交又不对应任何 PR)。合没合入看远端,那个造不了假。
     type Pick = fn(&crate::vm::TrendPointVm) -> Option<f64>;
     const LINES: [(&str, Pick, &str); 3] = [
         ("每周提交", |p| p.commits.map(|n| n as f64), "var(--clay)"),
-        ("每周合入", |p| p.merges.map(|n| n as f64), "var(--green)"),
         (
             "每周合入的 PR(远端)",
             |p| p.merged_prs.map(|n| n as f64),
+            "var(--green)",
+        ),
+        (
+            "未处理 issue(远端 · 周末存量)",
+            |p| p.open_issues.map(|n| n as f64),
             "var(--amber)",
         ),
     ];

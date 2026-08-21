@@ -303,10 +303,12 @@ pub struct RepoStatsVm {
 pub struct TrendPointVm {
     pub week: String,
     /// 三条线一律 `Option`:`None` = 没采到,**画的时候断开,不当 0 画**。
-    /// git 读不动(不是仓、没装 git)时前两条也会是 `None`。
+    /// git 读不动(不是仓、没装 git)时提交那条是 `None`;远端查不成时另外
+    /// 两条是 `None`。
     pub commits: Option<u32>,
-    pub merges: Option<u32>,
     pub merged_prs: Option<u32>,
+    /// 这一周周末那一刻还没关闭的 issue 数。**存量,不是流量。**
+    pub open_issues: Option<u32>,
 }
 
 /// 名片改动那张轻量活。名片是仓文件,改它一律走分支 + MR。
