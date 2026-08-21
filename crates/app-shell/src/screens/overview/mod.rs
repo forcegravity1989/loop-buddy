@@ -33,10 +33,13 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
             }
             {card_and_health(&p, &bridge, editing, draft)}
             {north_star_block(&p)}
+            // 本周计划进度紧跟北极星:第一眼要能看全「这项目是什么 · 顶层目标
+            // 是什么 · 这周在往那个目标上推什么」。滞后/引领两层是展开看的细节,
+            // 排在后面。
+            {week_block(&p, nav)}
             {metric_row_block("滞后性指标", &p.metrics.lagging, p.metrics.note.as_deref())}
             {metric_row_block("引领性指标", &p.metrics.leading, None)}
             {repo_block(&p, &bridge)}
-            {week_block(&p, nav)}
             {version_block(&p)}
         }
     }
