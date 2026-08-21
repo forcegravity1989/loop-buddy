@@ -5,7 +5,8 @@
 > - **这是什么**:一次纯代码级的核查报告。回答两个问题 —— buddy V4 对 codehub(公司内部的 GitLab 系代码平台)支持到什么程度、对内部 Windows 支持到什么程度。
 > - **给谁看**:准备拿真环境验证的人,以及接手修这些问题的下一个会话。
 > - **现在还作数吗**:作数。核查于 2026-08-21,基线是 main `5299334`。
-> - **一句话结论**:两块都是「代码写了、真环境一次都没验过」。核查中查出 **9 个真问题**,其中 3 个是「一到真环境必然出事」,不是理论风险。
+> - **一句话结论**:两块都是「代码写了、V4 这边真环境一次都没验过」。核查中查出 **9 个真问题**,其中 3 个是「一到真环境必然出事」,不是理论风险。
+> - **2026-08-21 补充(重要)**:V3 是**真的在内部跑着的**,所以 V3 的同一段代码就是**实战证据**。补比了一轮,结论有三处实质变化 —— 见 §0.1。最要紧的一条:**修 codehub 链接需要的那份「一手信息」,其实一直躺在本仓里**(V3 有一张区别名 → 域名的映射表,V4 拷贝时弄丢了)。
 > - **重要边界**:本机是 macOS,**没有装 codehub-cli,也没有 Windows 机器**。所以这份报告里**没有任何一条是实机验证过的**。凡是写「已验证」的,验的都是本机能验的东西(编译、代码可达性),会逐条注明验的到底是什么。
 
 本文里出现的代号,第一次出现时都会带一句人话解释。看不懂的领域词见仓根 `CONTEXT.md` 的词表。
@@ -20,8 +21,66 @@
 | 交叉编译 | `cargo check --target x86_64-pc-windows-gnu` | 见 §2.1 —— 只过了一部分 | 链接期、运行期一概不证明(`check` 不做链接,本机也没有 mingw 链接器) |
 | 连真 codehub | **没做** | — | 全部 |
 | 上 Windows 真机 | **没做** | — | 全部 |
+| **读 V3 的同一段代码** | 补比了一轮 | **V3 在内部真跑着** —— 同一段代码在 V3 里跑过,就是实战证据;V4 拷贝时丢了什么,也一比就知道 | V3 没走到的分支,照样没有证据 |
 
 「读回为证」这条纪律在这次核查里的落法:每个结论后面都跟着**文件行号**,拿着行号能自己翻回去核对。不能靠行号核对的,一律写成「待验证」,不写结论。
+
+### 0.1 拿 V3 当证据:同一段代码,V3 到底跑没跑过
+
+V4 的底座 `v4-engine` 是 2026-08-21 从 V3 的 `bw-engine` 拷来接管的。**V3 在内部真跑着**,所以对每一条发现,先问两个问题:**这段代码 V3 有没有?V3 真会走到它吗?**
+
+- 「V3 有、而且真会走到」→ 这条大概率**不是 bug**,是已经被实战磨过的写法。
+- 「V3 有、但从来走不到」→ V3 的实战**证明不了它**,发现依然成立。
+- 「V3 有、V4 弄丢了」→ 这是**拷贝时的回退**,最该修,而且**修法现成**。
+
+比完的结果:
+
+| 发现 | V3 里的同一段代码 | V3 真会走到吗 | 结论怎么变 |
+|---|---|---|---|
+| ① codehub 链接坏 | **V3 完全不这么做** —— 它按 provider 拼,并用一张区别名 → 域名的映射表(`bw-core/src/model.rs:1388`) | **会,而且是生产路径** | **变严重,但也变好修**:这是 V4 拷贝时的回退,不是未知难题。**修法在仓里现成** |
+| ② 探测名 `codehub` vs `codehub-cli` | V3 **压根没有这条环境条** | 走不到 | 不变。**V4 独有的新暴露面**,V3 的实战证明不了它 |
+| ③ 开 MR 目标分支兜底 `master` | 一字不差 | **会** | **降级**:这条在真 codehub 上跑过,没听说出事 |
+| ④ 读名片默认 ref 用 `main` | 一字不差(连那段「分支找不到 ≠ 没这份文件」的区分都一样) | **会** | **降级为待确认** —— 见下方问题清单 |
+| ⑤ github 合入无读回 | 一字不差 | **会,而且是生产路径** | **降级**:在真 GitHub 上跑了很久,没听说假「完成」 |
+| Windows · 找程序不试扩展名 | 一字不差 | **走不到** —— V3 只拿它找 `claude`,而且是最后兜底,Windows 上前面那两条 npm 路径已经命中 | 不变。**又一处 V4 独有的新暴露面** |
+| Windows · 起 claude 那条自相矛盾 | 一字不差 | **大概率走不到** —— V3 那边同样只在「没开内嵌终端(指挥器/headless)」时才走(`bw-app/src/issue_run.rs:836-851`) | 不变 |
+| Windows · 内嵌终端(ConPTY) | **一字不差,`diff` 无输出** | **是 V3 的生产路径** | **可能大幅降级** —— 取决于一个我答不了的问题,见下 |
+
+**最要紧的那条展开说 —— V4 把一张表弄丢了:**
+
+V3 拼 codehub 的 MR 链接是这样的(`app-desktop/src/screens/op/issues.rs:25-38`):
+
+```rust
+"codehub" => format!("https://{}/{path}/-/merge_requests/{n}",
+                     bw_core::codehub_alias_to_domain(host))
+```
+
+而那张映射表就在 `bw-core/src/model.rs:1388`,一共八行:
+
+```
+green  → codehub-g.huawei.com
+open   → open.codehub.huawei.com
+yellow → codehub-y.huawei.com
+其它   → 原样返回(已经是域名就直接用)
+```
+
+**所以我在初稿里写的「修它需要真环境的一手信息」是错的** —— 那份信息一直在仓里。V4 改成从 SSH 地址推,不但推错,而且是**主动放弃了一份已经跑通的映射**。`git.rs:708-710` 那句「codehub 的 host 存的是区的别名,拼不出能点的地址」也因此站不住:**V3 拼了两年就是这么拼的。**
+
+有一个约束要注意:**V4 不许依赖 `bw-core`**(V4 对 V3 六个 crate 零依赖是硬规矩)。所以修法不是 `use bw_core::…`,而是**在 V4 里自带一份同样的八行映射**。这符合 V4「领域类型自持」的既定做法。
+
+### 0.2 我答不了、要你确认的三个问题
+
+这三个问题的答案会直接改掉上面几条的结论,**我没有渠道知道**:
+
+1. **V3 在 Windows 上真的被用过吗?用的时候开内嵌终端了吗?**
+   —— 如果是,那么 `pty_backend.rs` 那 532 行(V3/V4 **一字不差**)就有真实的 Windows 里程,**减负-14 基本可以结**,§3.2 第 3–5 条也就从「必须验」降成「回归抽查」。如果 V3 只在 macOS 上用,那这条一点没变。
+2. **V3 接入 codehub 仓时,有人手打过仓地址吗?那个仓的默认分支是 `master` 吗?**
+   —— 这条能判定发现 ④ 是真摩擦还是纸上谈兵。V3 和 V4 这段代码一模一样,V3 没出事就说明大家都是从列表里点的。
+3. **V3 里 codehub 项目的 `remote_host` 字段,库里存的到底是 `open` 这种别名,还是完整域名?**
+   —— 两种 V3 都吃得下(映射表的兜底分支是原样返回)。但 V4 的接入屏**只会写别名**(`onboard/mod.rs:129-140`),所以 V4 补映射表时必须按别名来。你要是能 `sqlite3` 读一下 V3 真库,一句话就定了:
+   ```
+   sqlite3 <V3库> "SELECT provider, remote_host, remote_path FROM project WHERE provider='codehub';"
+   ```
 
 ---
 
@@ -83,7 +142,9 @@ origin  = ssh://git@szv-open.codehub.huawei.com:2222/z30026659/maas.git
 
 于是 `app-shell/src/screens/plan/detail.rs:52-67` 拼出来的 `.../-/merge_requests/<号>` 虽然形状对(GitLab 那一系确实在 `/-/` 底下),**地址整个是错的**。GitHub 侧不受影响:`gh` clone 出来的 origin 要么是 HTTPS、要么是 `git@github.com:owner/repo.git`,都没有端口,主机名也就是 github.com。
 
-`git.rs` 是另一个窗口正在动的文件,**本次只报不改**。
+**V3 怎么做的(实战证据)**:V3 根本不从 origin 推,而是按 provider 拼、用区别名查一张域名映射表(`app-desktop/src/screens/op/issues.rs:25-38` + `bw-core/src/model.rs:1388`)。**这是 V4 拷贝时的回退,不是新问题**,详见 §0.1。
+
+`git.rs` 是另一个窗口正在动的文件,**本次只报不改**。但要说清楚:**修它未必要动 `git.rs`** —— 照 V3 的做法,链接由界面按 provider 拼,`browse_base` 只管 github 那一侧就行。
 
 **② 探测找 `codehub`,实际调 `codehub-cli`**
 
@@ -106,13 +167,13 @@ origin  = ssh://git@szv-open.codehub.huawei.com:2222/z30026659/maas.git
 - 从列表里点一个仓 → `onboard/mod.rs:495` 把该行真实的 `default_branch` 传进去。**没问题**。
 - **手打仓地址** → `onboard/mod.rs:276` 传的是空串 → 退回 `main` → 一个默认分支是 `master` 的 codehub 仓会走进 `codehub.rs:410` 的「branch not found」分支 → 报 `Err`。
 
-好消息是这里**没有把「分支找不到」和「没这份文件」混成一件事**(两处注释都专门解释了为什么不能混),所以人看到的是一句「没查成」,不是假的「首来者,请填」—— 不会误导人去覆盖同事已经写好的名片。坏消息是接入体验会卡住,而且 codehub 的命中率比 github 高得多。
+**V3 那份一字不差**,连下面那段区分逻辑都一样,而 V3 在真 codehub 上用着 —— 所以这条更可能是「大家都从列表里点,没人手打」,而不是天天在炸(§0.2 问题 2 能定这件事)。好消息是这里**没有把「分支找不到」和「没这份文件」混成一件事**(两处注释都专门解释了为什么不能混),所以人看到的是一句「没查成」,不是假的「首来者,请填」—— 不会误导人去覆盖同事已经写好的名片。坏消息是接入体验会卡住,而且 codehub 的命中率比 github 高得多。
 
 **⑤ 合入后的复查,只有 codehub 做了**
 
 `codehub.rs:252-291` 有一段很硬的读回:因为 2026-07-31 实测发现 codehub-cli 合 MR 遇到权限不足时**会退出 0 但根本没合**,所以它复查一次 MR 状态,只有真变成 `merged` 才返回成功。
 
-`github.rs:379-400` 的 `merge_pr` **没有这一步**,只看退出码。而合入成功会直接让活结清成「完成」(`ops.rs:240-248`)。**「完成」永远由人点**这条铁律没破(是人点的合入),但「合没合成」这个事实在 github 侧是听 `gh` 一面之词的。是不是要给 github 补上同样的复查,牵动设计,列入待拍板。
+`github.rs:379-400` 的 `merge_pr` **没有这一步**,只看退出码(V3 那份**一字不差**,而且是 V3 的生产路径 —— 在真 GitHub 上跑了很久没听说假「完成」,所以这条的实际风险比纸面上低)。而合入成功会直接让活结清成「完成」(`ops.rs:240-248`)。**「完成」永远由人点**这条铁律没破(是人点的合入),但「合没合成」这个事实在 github 侧是听 `gh` 一面之词的。是不是要给 github 补上同样的复查,牵动设计,列入待拍板。
 
 ### 1.3 `Remote` 有几个方法从没被调过
 
@@ -204,8 +265,8 @@ cargo check --workspace --exclude app-desktop --target x86_64-pc-windows-gnu
 |---|---|---|---|---|
 | 1 | `v4-engine/src/win_cmd.rs:12-62` | 所有探测 / git / codehub-cli 的子进程都加 `CREATE_NO_WINDOW`(不闪黑窗);`.cmd`/`.bat` 不是可执行映像,改用 `cmd.exe /c` 托起 | 只交叉编译过(§2.1),**未真机** | 设计上是对的。风险在于**它被用在了不该用的地方**,见第 3 行 |
 | 2 | `win_cmd.rs:17-22` `is_windows_script` | 按扩展名认 `.cmd`/`.bat` | 有内联单测(`win_cmd.rs:65-78`),CI 在跑 | 低风险 |
-| 3 | `v4-engine/src/interactive_cli.rs:472-487` `run_skill` 的 Windows 分支 | **自相矛盾**,见下方展开 | **未真机** | **高**。交互式 claude 很可能拿不到终端,当场失败或静默挂住 |
-| 4 | `v4-engine/src/pty_backend.rs:100` 起 conpty-oxide 后端 | 内嵌终端(▶跑 的主路径)。起 ConPTY 会话、读写两条阻塞线程、`.cmd` 再包一层 `cmd.exe /c`、被中止时靠 Job 连坐杀进程树 | **未真机**,模块注释自己标注了 | 中高。ConPTY 那套句柄/EOF 逻辑真机才见真章;而且**验证工具本身在 Windows 上跑不了**,见第 6 行 |
+| 3 | `v4-engine/src/interactive_cli.rs:472-487` `run_skill` 的 Windows 分支 | **自相矛盾**,见下方展开 | **未真机**;V3 那份一字不差,但 V3 那边同样只在没开内嵌终端时才走,大概率也没被跑过 | **高**。交互式 claude 很可能拿不到终端,当场失败或静默挂住 |
+| 4 | `v4-engine/src/pty_backend.rs:100` 起 conpty-oxide 后端 | 内嵌终端(▶跑 的主路径)。起 ConPTY 会话、读写两条阻塞线程、`.cmd` 再包一层 `cmd.exe /c`、被中止时靠 Job 连坐杀进程树 | **和 V3 那份一字不差**(`diff` 无输出),而它是 V3 的生产路径 —— **V3 若在 Windows 上用过,这条就有真实里程**(§0.2 问题 1) | 中高。ConPTY 那套句柄/EOF 逻辑真机才见真章;而且**验证工具本身在 Windows 上跑不了**,见第 6 行 |
 | 5 | `app-shell/src/main.rs:41` 关掉 wry 的拖放处理器 | `with_disable_drag_drop_handler(true)`,不关的话计划屏六列拖不动 | **未真机** | 中。V4A-12 记的就是它,描述准确(§2.3) |
 | 6 | `v4-engine/examples/pty_smoke.rs:99-100` | **硬编码起 `bash`** | — | **中**。Windows 默认没有 `bash`,这个唯一的 PTY 读回工具在目标平台上开箱跑不了 |
 | 7 | `app-shell/src/chrome/mod.rs:325-327` 打开浏览器 | `cmd /C start "" <url>`,**没走 `win_cmd` 那层** | **未真机** | 低。会闪一下黑窗;链接已被限定必须 `https://` 开头(`chrome/mod.rs:319`),注入风险已挡 |
@@ -220,7 +281,11 @@ cargo check --workspace --exclude app-desktop --target x86_64-pc-windows-gnu
 
 ### 2.3 两条已登记欠账,今天还准不准
 
-**减负-14(内嵌终端的 Windows 后端只交叉编译核对过、没真机跑过)** —— **准,但覆盖不全,建议补一条。**
+**减负-14(内嵌终端的 Windows 后端只交叉编译核对过、没真机跑过)** —— **措辞准,但可能已经过时了。**
+
+先说新证据:V4 那份 `pty_backend.rs` 和 V3 那份 **`diff` 无输出、一字不差**,而它是 V3 内嵌终端的生产路径。**只要 V3 在 Windows 上被用过并开过内嵌终端,这条欠账就基本可以结** —— 那 532 行有真实里程,只是当初没人把它记下来。这个我答不了,列在 §0.2 问题 1。
+
+下面这条覆盖面的问题仍然成立:
 
 它记的是 V3 那份 `bw-engine/src/pty_backend.rs`。V4 有**自己的一份** `v4-engine/src/pty_backend.rs`(532 行,2026-08-21 拷贝接管)。两份都没真机跑过,但严格说这条欠账不覆盖 V4 那份。
 
@@ -241,7 +306,7 @@ cargo check --workspace --exclude app-desktop --target x86_64-pc-windows-gnu
 | claude 二进制解析 | `v4-engine/src/claude_bin.rs:31-47` | 候选顺序:显式指定 → `BW_CLAUDE_BIN` → `%APPDATA%\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe` → `%APPDATA%\npm\claude.cmd` → PATH 里的 `claude` | **没问题**。`.cmd` 起不起得来由 `win_cmd` / ConPTY 各自包 `cmd.exe /c` 兜住 |
 | `BW_SH_BIN` | — | **V4 里根本没有这个变量**。全仓只有 `bw-app`(V3)在用(`bw-app/src/lib.rs:1300`) | **问题不成立**。V4 不起 shell |
 | worktree 路径拼接 | `bw-v4/src/git.rs`、`v4-engine/src/workspace.rs` | 一路 `PathBuf::join`,没有硬编 `/` | **没问题** |
-| **PATH 里找程序** | `v4-engine/src/claude_bin.rs:15-22` | **有问题,见下** | **高风险** |
+| **PATH 里找程序** | `v4-engine/src/claude_bin.rs:15-22` | **有问题,见下** | **高风险**(V3 有同样的代码,但从来不拿它找 `gh`/`codehub`,所以 V3 的实战证明不了它) |
 
 **`which_on_path` 在 Windows 上会骗人:**
 
@@ -254,6 +319,8 @@ pub fn which_on_path(exe: &str) -> Option<String> {
 它**只按裸名字找,不试 Windows 的扩展名**。Windows 上这些程序落地叫 `gh.exe`、`cursor-agent.exe`、`codehub-cli.exe`,`dir.join("gh")` 永远找不到。
 
 后果落在项目墙那条环境条上(`vm_build.rs:397-399`):**cursor-agent、codehub、gh 三项在 Windows 上恒报红,哪怕装得好好的**。claude 那一项侥幸没事 —— 它走的是 `claude_binary_candidates`,里头那两条 `%APPDATA%\npm` 路径把标准安装兜住了。
+
+**为什么 V3 用了这么久没暴露**:V3 里 `which_on_path` **只被拿来找 `claude`,而且是候选链的最后一条兜底**(`bw-engine/src/claude_bin.rs:44`)—— Windows 上前面那两条 `%APPDATA%\npm` 路径早就命中了,根本轮不到它。V4 的环境条是**第一个**拿它去找 `gh` / `cursor-agent` / `codehub` 的地方。**所以 V3 的实战不能给这条背书,它是 V4 新开的暴露面。**
 
 这正是 `claude_bin.rs:25-30` 那段注释在 2026-08-20 修过的**同一类 bug 的镜像**。那次是 macOS 被 Windows 专属路径坑了,注释末尾那句话现在反过来打在自己身上:**假的红灯比没有灯更坏。**
 
@@ -298,7 +365,7 @@ pub fn which_on_path(exe: &str) -> Option<String> {
 | 2 | `codehub-cli project list --mine --limit 5 --json path_with_namespace,visibility,default_branch,last_activity_at,description` | 一个 JSON 数组,五个字段都在 | 字段名对不上 → `codehub.rs:467-476` 的解析结构要改 |
 | 3 | 记下第 2 步里某个仓的 `default_branch` | 是 `master` 还是 `main` | 是 `master` → §1.2 ④ 坐实,手打地址那条路会卡 |
 | 4 | `codehub-cli project view -p <仓> -H open --template '{{.ssh_url_to_repo}}'` | 一个 `ssh://...` 裸串 | 输出 `<no value>` 或空 → clone 会被 `codehub.rs:335-339` 挡下 |
-| 5 | **把第 4 步的输出和这个仓的网页地址并排比一比** | — | **主机名不同、或 SSH 串带端口 → §1.2 ① 坐实**。同时这一步会告诉你正确的网页主机怎么从 SSH 地址推出来,那正是修 `normalize_browse` 需要的信息 |
+| 5 | **把这个仓的网页地址,和 V3 那张映射表对一对**:`open` 该是 `open.codehub.huawei.com`、`green` 是 `codehub-g.huawei.com`、`yellow` 是 `codehub-y.huawei.com`(`bw-core/src/model.rs:1388`) | 映射表对得上 | 对不上 → 那张表本身过时了,修之前先更新它。**注意:这一步不再是「去发现规则」,规则已经在仓里,这一步只是复核** |
 | 6 | 在 buddy 里接入一个 codehub 仓(接入屏 → 选 codehub → 选区 → **从列表里点**一个仓) | 名片能预填或如实说「没接管过」;clone 成功 | 报「没查成」→ 回到第 3 步看默认分支 |
 | 7 | `sqlite3 <库> "SELECT provider, remote_host, remote_path FROM project WHERE slug='<slug>';"` | `codehub | open | <org>/<仓>` | `provider` 是空的 → 接入屏没写进去,查 `onboard/mod.rs:129-133` |
 | 8 | **换一条路再来一次:手打仓地址,不从列表点** | 同第 6 步 | 报「没查成」而列表那条路好使 → §1.2 ④ 坐实 |
@@ -337,6 +404,7 @@ pub fn which_on_path(exe: &str) -> Option<String> {
 
 | # | 问题 | 位置 | 怎么修 |
 |---|---|---|---|
+| **修-0** | **codehub 的 MR / issue 链接从 SSH 地址推,必然点不开** —— 而 V3 早有一张跑通的区别名 → 域名映射表,V4 拷贝时弄丢了 | 界面按 provider 拼(照 `app-desktop/src/screens/op/issues.rs:25-38`);映射表照抄 `bw-core/src/model.rs:1388` | **V4 不许依赖 `bw-core`**,所以是在 V4 里**自带一份同样的八行映射**,不是 `use bw_core::…`。改界面那一侧即可,**未必要动 `git.rs`**。初稿把这条列成「要拍板」,是因为我当时不知道映射表已经存在 —— **现在它是能当场修的第一条** |
 | 修-1 | `which_on_path` 不试 Windows 扩展名,导致三项探活在 Windows 上恒假红 | `v4-engine/src/claude_bin.rs:15-22` | 按 `PATHEXT`(或直接试 `.exe`/`.cmd`/`.bat`)逐个试一遍。**优先级最高**:界面骗人 |
 | 修-2 | 探测找 `codehub`,实际调 `codehub-cli` | `app-shell/src/bridge/vm_build.rs:398` | 改成找 `codehub-cli`。**先做 §3.1 第 1 条确认**,别盲改 |
 | 修-3 | `run_skill` 的 Windows 分支想要控制台窗口,却用了专门隐藏窗口的辅助函数 | `v4-engine/src/interactive_cli.rs:472-487` | 这条路不该走 `win_cmd::tokio_cmd`。要么直接用 `tokio::process::Command` 让控制台出来,要么改注释承认它就是没窗口 —— 但那样交互式 claude 拿不到 TTY,等于这条路在 Windows 上不成立,应当如实报错 |
@@ -353,7 +421,7 @@ pub fn which_on_path(exe: &str) -> Option<String> {
 
 | # | 事情 | 为什么要你定 |
 |---|---|---|
-| 拍-1 | **codehub 的 MR / issue 链接怎么修**(§1.2 ①) | 修改点在 `git.rs`(你划的禁区,另一个窗口在动)。而且从 SSH 地址推网页地址这件事**需要真环境的一手信息**才知道规则(§3.1 第 5 条能问出来)。可选路子:让 `browse_base` 认 provider、或在库里多存一个网页主机、或让 codehub 那侧从 `project view` 的 `web_url` 字段直接取。**第三条看起来最对**(一手数据,不猜),但要加一次远端调用 |
+| ~~拍-1~~ | ~~codehub 的 MR / issue 链接怎么修~~ | **撤销** —— 比过 V3 之后不用拍板了:V3 已有跑通的做法和映射表,照抄即可。**改列为 §4.1 修-0** |
 | 拍-2 | **接入阶段那 4 条路要不要收进 `Remote` 分发**(§1.1) | 探仓 / 列仓 / 读名片 / clone 全在分发体系之外,每个调用点各写各的 `if`。今天没错,但「加平台只改一处」这条承诺对它们不成立。收进去是重构,牵动 `bw-v4` 和 `app-shell` 两侧 |
 | 拍-3 | **github 的合入要不要补一次合入后复查**(§1.2 ⑤) | codehub 那侧因为踩过坑做了复查,github 没有。合入成功会直接结清成「完成」。要不要对齐,是产品可靠性的取舍 |
 | 拍-4 | **`issue_branch` 要不要挪出 `github` 模块**(§1.3 末) | 纯字符串拼接,和平台无关,两个平台共用,却住在 `github` 里、文档说是给 GitHub 用的。V4 有 7 处直接调它,挪窝是纯改名,但会碰到不少文件 |
@@ -376,14 +444,14 @@ pub fn which_on_path(exe: &str) -> Option<String> {
 ### 5.2 再往 `docs/LEFTOVERS.md`「当前开着」表加这几行
 
 ```
-| **兼容-1** | codehub 项目的 MR / issue 链接**必然点不开**:`browse_base` 从 SSH origin 推地址,推出来带 `:2222` 端口、且 SSH 主机名 ≠ 网页主机名(`codehub.rs:299-301` 自己写明两者不同) | 拿到真环境后(要先问出网页主机的推导规则) | `git.rs:746-767`;验证走 `codehub-windows-readiness.md` §3.1 第 5、11 条;修法三选一见该文 §4.2 拍-1 |
+| **兼容-1** | codehub 项目的 MR / issue 链接**必然点不开**:`browse_base` 从 SSH origin 推地址,带 `:2222` 端口且 SSH 主机名 ≠ 网页主机名。**根因是 V4 拷贝时弄丢了 V3 那张区别名 → 域名映射表** | **可当场修**(不需要真环境) | 坏的:`git.rs:746-767`;V3 跑通的写法:`app-desktop/src/screens/op/issues.rs:25-38` + `bw-core/src/model.rs:1388`;V4 要自带一份映射(不许依赖 `bw-core`) |
 | **兼容-2** | 环境条探测找的是 `codehub`,实际起的进程是 `codehub-cli`(8 处全是),可能导致装了也报红 | 有 codehub-cli 的机器上先确认 | `vm_build.rs:398` vs `codehub.rs:65/154/188`;验证走 §3.1 第 1 条 |
 | **兼容-3** | `which_on_path` 只按裸名字找,不试 Windows 扩展名 → Windows 上 gh / cursor-agent / codehub 三项探活恒假红 | **可当场修**(不需要 Windows 机器就能改对) | `claude_bin.rs:15-22`;同类 bug 的镜像见该文件 `:25-30` 注释(2026-08-20 修过 macOS 那一半) |
 | **兼容-4** | `run_skill` 的 Windows 分支自相矛盾:注释要控制台窗口,代码用的却是专门隐藏窗口的 `win_cmd::tokio_cmd`;GUI 父进程无控制台 → 交互式 claude 拿不到 TTY | **可当场修**(要拍板的是改注释还是改行为) | `interactive_cli.rs:467-487`;V4 真会走到,见 `issue.rs:175` |
 | **兼容-5** | `pty_smoke` 硬编 `bash`,Windows 上开箱跑不了 —— 而它是**唯一**不碰 claude、不碰网关就能验 PTY 后端的工具 | **可当场修**(五行) | `pty_smoke.rs:96-100`;减负-14 里那句「`bash -c` 换 `cmd /C echo pty-ok`」正是指这个 |
 | **兼容-6** | `v4-engine` 里从 `bw-engine` 拷来的死代码没清:`CodehubRepoRef`、`remote_matches`、`RemoteReconcile`/`RemoteReconcileError`(孤儿枚举,无人产出)、`list_open_issues` 一套、`PROJECT_INIT_BRANCH`;外加两处说谎的注释(不存在的「新建仓」函数、把 codehub host 说成域名) | **可当场删** | `codehub.rs:30/246-250`;`github.rs:118/131/137/195-260/271/610`;`remote.rs:40` |
 | **兼容-7** | `bw-v4` / `app-shell` 的 Windows 可编译性**今天无任何证据** —— 交叉编译被 `libsqlite3-sys` 缺 mingw-w64 挡在门外,只有 `v4-engine` 单独验过 | 装 mingw-w64 即可解(`brew install mingw-w64`) | 见该文 §2.1;验证走 §3.2 第 1 条 |
-| **兼容-8** | 减负-14 记的是 V3 那份 `bw-engine/src/pty_backend.rs`;V4 有**自己的一份** `v4-engine/src/pty_backend.rs`,同样没真机跑过,且模块注释引用的是另一个 crate 的验证证据 | 与减负-14 一起排 | `pty_backend.rs:104-105` |
+| **兼容-8** | **先确认再决定**:V4 那份 `pty_backend.rs` 与 V3 那份 **`diff` 无输出、一字不差**,而它是 V3 内嵌终端的生产路径 —— **V3 若在 Windows 上用过并开过内嵌终端,减负-14 基本可以结**,确认之前别当「没验过」重复排期。另有一处小的:模块注释引用的是另一个 crate 的验证证据 | **先问,再排** | `pty_backend.rs:104-105`;确认办法见报告 §0.2 问题 1 |
 | **兼容-9** | 接入阶段的 4 条远端调用(探仓/列仓/读名片/clone)绕开 `Remote` 分发,各自手写 provider 分支 —— 「加平台只改一处」这条设计承诺对它们不成立 | 待拍板(见该文 §4.2 拍-2) | `bridge/mod.rs:283/323/339`、`project.rs:167-168` |
 ```
 
@@ -391,8 +459,10 @@ pub fn which_on_path(exe: &str) -> Option<String> {
 
 ## 6 · 一句话总结
 
-**codehub**:七条能力全接通了、链路自洽,但**一次都没在真环境跑过**;代码级就能判定坏掉的有一条(MR 链接),存疑的有一条(探测名),行为不对称的有三处。
+**codehub**:七条能力全接通了、链路自洽,但 **V4 这边一次都没在真环境跑过**;代码级就能判定坏掉的有一条(MR 链接 —— 而且比过 V3 才知道,**根因是拷贝时弄丢了一张现成的映射表,修法在仓里**),存疑的有一条(探测名),行为不对称的有三处 —— 其中两处比过 V3 后**降级**了(V3 拿同样的代码在生产上跑着)。
 
-**Windows**:所有平台专属代码住的那个 crate 单独编得过,壳和内核**今天无证据**;有两处代码级就能判定会出事(探活假红、无内嵌终端时起 claude),而唯一能验 PTY 的工具在 Windows 上跑不了。
+**Windows**:所有平台专属代码住的那个 crate 单独编得过,壳和内核**今天无证据**;有两处代码级就能判定会出事(探活假红、无内嵌终端时起 claude)—— 这两处**都是 V4 新开的暴露面**,V3 有同样的代码但从来走不到,所以 V3 的实战给不了它们背书。内嵌终端那份则相反:**和 V3 一字不差**,可能早有真实里程,等你确认(§0.2 问题 1)。
 
-**这份报告没有验证过任何东西。**它把「一到真环境该按什么顺序验、看到什么算失败」写成了 §3 那两张表 —— 那才是它真正的用处。
+**这份报告没有实机验证过任何东西**,但它做了一件下一个窗口不必重做的事:**把每条发现拿去和真跑着的 V3 对了一遍**,分清了哪些是「V4 拷坏了」(修法现成)、哪些是「V4 新开的口子」(V3 证明不了)、哪些是「V3 扛过来了」(可以降级)。剩下三个问题我答不了,列在 §0.2,**你一句话就能定**。
+
+真环境验证清单在 §3 那两张表 —— 每条写清楚跑什么、期望看到什么、看到什么算失败。
