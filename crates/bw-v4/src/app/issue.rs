@@ -311,7 +311,7 @@ impl App {
         Ok(events)
     }
 
-    /// 状态转移。合法性由 `bw_core` 的状态机守——不合法就如实报错弹回,不悄悄
+    /// 状态转移。合法性由 `crate::model::IssueStatus::can_transition_to` 那张转移表守——不合法就如实报错弹回,不悄悄
     /// 换成一个合法的转移。
     pub(super) async fn transition_issue(
         &mut self,

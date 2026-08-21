@@ -9,7 +9,7 @@ members = [
     "crates/app-desktop",
     # V4:四表库 + 仓文件解析 + 现算推导 + 命令/事件总线。与 bw-store/bw-app
     # 并列而不是改它们——库从 20 张表砍到 4 张后两边接不上,旧 crate 一行不动
-    # 才能保住旧壳继续编译可跑。见 docs/v4-prototype/design/01-architecture.md。
+    # 才能保住旧壳继续编译可跑。见 docs/v4-prototype/design.md 第 12 章。
     "crates/bw-v4",
     # V4 新壳(六入口)。与 app-desktop 并列,同样不进 default-members ——
     # 日常 cargo check/test 不因为多一个 UI crate 变慢。删旧壳那次去掉

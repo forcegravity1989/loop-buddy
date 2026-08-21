@@ -24,7 +24,7 @@
 就是「不在册」,不做迁移。
 
 这套规范一共分八个大类(见
-[`docs/v4-prototype/design/03-standard-and-backfill.md`](../docs/v4-prototype/design/03-standard-and-backfill.md)
+[`docs/v4-prototype/design.md`](../docs/v4-prototype/design.md) 第 4 章「规范铺底」
 §2.7 的完整目录表),这个仓目前只落地了会被优先接入代码的那一部分——见下方
 文件表与「还没做的部分」。
 
@@ -70,6 +70,6 @@
 的清单与导入,`standard/pond/` 目录本身还不存在,不要假装它已经在。
 
 铺底流程与对账细节见
-[`docs/v4-prototype/design/03-standard-and-backfill.md`](../docs/v4-prototype/design/03-standard-and-backfill.md);
+[`docs/v4-prototype/design.md`](../docs/v4-prototype/design.md) 第 4 章「规范铺底」;
 文件格式的完整样例见
-[`docs/v4-prototype/design/02-data-and-files.md`](../docs/v4-prototype/design/02-data-and-files.md) §2.5。
+[`docs/v4-prototype/design.md`](../docs/v4-prototype/design.md) 第 3 章「数据与文件」。

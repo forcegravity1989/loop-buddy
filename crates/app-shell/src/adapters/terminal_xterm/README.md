@@ -6,7 +6,7 @@
   一个坑一个坑填出来的那一份。
 - `crates/bw-engine/src/pty_backend.rs` / `terminal_manager.rs` —— PTY 后端与按会话分
   的有界缓冲,原样沿用,一行没改。
-- Orca 的 `use-terminal-pane-lifecycle.ts`(见 `docs/v4-prototype/research/orca.md` §2a)
+- Orca 的 `use-terminal-pane-lifecycle.ts`(见 `docs/archive/v4-prototype/research/orca.md` §2a)
   —— 选区防抖 + 长度上限那一段的思路。
 
 ## 借了什么
