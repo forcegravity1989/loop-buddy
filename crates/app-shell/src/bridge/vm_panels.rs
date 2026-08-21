@@ -205,7 +205,12 @@ pub(super) fn build_metrics(
             .map(|r| {
                 r.points
                     .iter()
-                    .map(|p| (p.week.clone(), p.value.parse::<f64>().ok()))
+                    .map(|p| {
+                        (
+                            p.week.clone(),
+                            p.value.as_ref().and_then(|v| v.parse::<f64>().ok()),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default(),

@@ -87,7 +87,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cells: Vec<String> = r
             .points
             .iter()
-            .map(|p| format!("{}={}", p.week, p.value))
+            .map(|p| {
+                // **没采到显示「—」,不显示 0。**
+                format!(
+                    "{}={}",
+                    p.week,
+                    p.value.clone().unwrap_or_else(|| "—".into())
+                )
+            })
             .collect();
         println!("   {}", cells.join("  "));
         println!(

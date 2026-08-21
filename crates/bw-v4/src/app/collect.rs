@@ -26,10 +26,14 @@ const TIMEOUT: Duration = Duration::from_secs(90);
 
 /// 一周一个点。`value` **原样保留脚本给的东西** —— 数也好、`"87%"` 这种给人看的
 /// 字符串也好,要画走势时才解析,解析不出来的点跳过、不画、不猜。
+///
+/// **`None` = 这一周没采到,不是 0**。脚本少给几周时那几格留 `None`,走势图上
+/// 断开;**绝不把这几格从序列里删掉** —— 删掉会让图把剩下的点均匀铺开,看起来
+/// 像是连续的四周,读的人根本发现不了中间断过。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetricPoint {
     pub week: String,
-    pub value: String,
+    pub value: Option<String>,
 }
 
 /// 一条指标采完之后的样子。
@@ -38,9 +42,11 @@ pub struct MetricReadout {
     /// 指标名 —— `.bw/metrics.toml` 里没有单独的 id,名字就是键。
     pub name: String,
     pub class: MetricClass,
-    /// 近 N 周,旧的在前。手填与采集失败时是空的。
+    /// 近 N 周,旧的在前,**每一周都有一格**(没采到的那格是 `None`)。
+    /// 手填与整条采集失败时是空的。
     pub points: Vec<MetricPoint>,
-    /// 现值 = 最后一个点。**空 ≠ 0**。
+    /// 现值 = **最后那一周**的值。最后一周没采到就是 `None` —— 绝不拿上一周的
+    /// 数顶上当现值,那会把一个过期的数字标成「现在是多少」。
     pub current: Option<String>,
     /// 这次为什么没采到。空 = 采到了,或者压根不该采(手填)。**不吞错误。**
     pub error: String,
@@ -89,7 +95,7 @@ async fn collect_one(ws: &Path, def: &MetricDef, labels: &[String]) -> MetricRea
     }
     match run_script(ws, &def.collect.run, labels).await {
         Ok(points) => {
-            r.current = points.last().map(|p| p.value.clone());
+            r.current = points.last().and_then(|p| p.value.clone());
             r.points = points;
         }
         Err(e) => r.error = e,
@@ -172,19 +178,22 @@ async fn run_script(
         }
         return Err("采集脚本没给出任何数据点".into());
     }
-    // 按 buddy 要的周对齐:脚本多给的周丢掉,少给的周**留空**(断开,不补前值)。
+    // 按 buddy 要的周对齐:脚本多给的周丢掉,少给的周留 `None`(断开,不补前值)。
+    // **每一周都占一格** —— 缺的周如果直接不放进序列,走势图会把剩下的点均匀
+    // 铺开,四周看起来还是连续的四周,读的人发现不了中间断过。
     let mut points = Vec::with_capacity(labels.len());
     for w in labels {
-        if let Some(p) = parsed.points.iter().find(|p| p.week.trim() == w.as_str()) {
-            if let Some(v) = as_text(&p.value) {
-                points.push(MetricPoint {
-                    week: w.clone(),
-                    value: v,
-                });
-            }
-        }
+        let value = parsed
+            .points
+            .iter()
+            .find(|p| p.week.trim() == w.as_str())
+            .and_then(|p| as_text(&p.value));
+        points.push(MetricPoint {
+            week: w.clone(),
+            value,
+        });
     }
-    if points.is_empty() {
+    if points.iter().all(|p| p.value.is_none()) {
         return Err("采集脚本给的周号和 buddy 要的对不上(要的是 `2026-W34` 这种 ISO 周)".into());
     }
     Ok(points)

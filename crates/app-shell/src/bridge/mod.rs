@@ -656,6 +656,10 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                         })
                                     {
                                         ui.session_open = Some(*issue_id);
+                                        // 换了一张活,「喂了什么」那块必须跟着关
+                                        // —— 它是**上一张活**的提示词,留在屏幕上
+                                        // 会被读成这一张的。
+                                        ui.briefing = None;
                                         ui.expanded_dirs.clear();
                                         ui.open_file.clear();
                                     }
@@ -678,6 +682,12 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                         ui.kb_codegraph = None;
                                         ui.kb_assets = None;
                                         ui.repo_stats = None;
+                                        // 指标读数和「喂了什么」同理:留着就是
+                                        // 把上一个项目的数摆在这个项目的卡片上
+                                        // ——而且指标是**按名字**对上去的,
+                                        // 两个项目撞名就真会显示错的那个数。
+                                        ui.metrics = Vec::new();
+                                        ui.briefing = None;
                                         ui.repos = crate::vm::RepoPickerVm::default();
                                     }
                                     // 项目被移走了:它要是正开着,得回项目墙 ——
@@ -690,6 +700,12 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                         ui.kb_codegraph = None;
                                         ui.kb_assets = None;
                                         ui.repo_stats = None;
+                                        // 指标读数和「喂了什么」同理:留着就是
+                                        // 把上一个项目的数摆在这个项目的卡片上
+                                        // ——而且指标是**按名字**对上去的,
+                                        // 两个项目撞名就真会显示错的那个数。
+                                        ui.metrics = Vec::new();
+                                        ui.briefing = None;
                                     }
                                     // 改了工作区根目录:设置屏那一行要立刻显示
                                     // 新值,不能等下次重启。
@@ -722,6 +738,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             // 仓统计同理:留着就是把上一个项目的提交数摆在这个
                             // 项目的总览上。
                             ui.repo_stats = None;
+                            ui.metrics = Vec::new();
+                            ui.briefing = None;
                         }
                         Req::ViewWeek(w) => {
                             ui.viewing_week = w;
@@ -762,6 +780,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                 }
                             }
                             ui.session_open = id;
+                            // 同上:换活就关掉「喂了什么」,别把上一张的摆在这一张下面。
+                            ui.briefing = None;
                             // 换会话 = 换工作区,上一个会话展开的目录、开着的
                             // 文件在新工作区里多半不存在,一律清掉重来。
                             ui.expanded_dirs.clear();
