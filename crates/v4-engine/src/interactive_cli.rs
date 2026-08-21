@@ -150,19 +150,26 @@ pub struct LaunchPlan {
     pub submit_prompt: bool,
 }
 
-/// Host-injected vars that must not leak into a child `claude` (same list
-/// as [`crate::ClaudeCliExecutor`]). A GUI parent started from `cmd` also
-/// carries Windows hidden names (`=C:`, `=ExitCode`); those cannot be
-/// replayed through conpty-oxide / windows-spawn (`env` name must not
-/// contain `=`).
-const NESTED_EXEC_ENV: &[&str] = &[
+/// 宿主会话注入的变量,**按前缀剥,不按名字列**。
+///
+/// 从 buddy 自己被一个 Claude Code 会话启动时(开发期与试点期就是这样),宿主
+/// 会往环境里塞一大批 `CLAUDE…` 打头的变量。这里原本列了固定的四个名字,而实测
+/// 宿主注入了十几个 —— 漏掉的 `CLAUDE_CODE_MESSAGING_SOCKET` /
+/// `CLAUDE_CODE_MESSAGING_TOKEN` / `CLAUDE_CODE_HOST_SESSION_ID` 足以让子
+/// `claude` **接回宿主会话、读到宿主的对话内容**(2026-08-21 实测:只剥四个时,
+/// 子进程复述了父进程正在跑的脚本原文;补齐这三个之后干净)。
+///
+/// 按名字列的做法保证会随宿主加变量而再次腐烂,所以改成前缀:凡是 `CLAUDE`
+/// 打头的一律不进子进程 —— 它们都是**父会话的身份**,对子进程只有害处。
+/// 真实用户从 Finder 双击启动 buddy 时,这一族一个都不存在,剥了也不损失什么。
+const HOST_ENV_PREFIX: &str = "CLAUDE";
+
+/// 人自己配的厂商端点。默认剥(宿主的凭据同样不该漏进子进程),但试点后门
+/// [`keep_anthropic_env`] 开着时豁免。
+const VENDOR_ENV: &[&str] = &[
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_MODEL",
-    "CLAUDECODE",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_CODE_CHILD_SESSION",
-    "CLAUDE_CODE_ENTRYPOINT",
 ];
 
 fn is_spawnable_env_key(key: &str) -> bool {
@@ -171,9 +178,9 @@ fn is_spawnable_env_key(key: &str) -> bool {
 
 /// **试点期的临时后门,用完删** —— 登记在 `docs/LEFTOVERS.md` 的「试点-9」。
 ///
-/// 设了 `BW_KEEP_ANTHROPIC_ENV`(任意非空值)就**不剥** [`NESTED_EXEC_ENV`] 里
-/// 那三个 `ANTHROPIC_*`,把人自己配的厂商端点原样透传给子 `claude`;那四个
-/// `CLAUDE_CODE_*` 照剥不误(它们是宿主会话的身份,漏进子进程一定串台)。
+/// 设了 `BW_KEEP_ANTHROPIC_ENV`(任意非空值)就**不剥** [`VENDOR_ENV`] 那三个,
+/// 把人自己配的厂商端点原样透传给子 `claude`;`CLAUDE…` 那一族照剥不误
+/// (它们是宿主会话的身份,漏进子进程一定串台,见 [`HOST_ENV_PREFIX`])。
 ///
 /// **它存在的唯一理由**:本机 `claude` 的登录过期、人一时不方便重登,想先拿
 /// 另一个厂商的端点把旅程跑起来。buddy 的正常姿态是**不管**机器上的 `claude`
@@ -183,12 +190,12 @@ fn keep_anthropic_env() -> bool {
     std::env::var_os("BW_KEEP_ANTHROPIC_ENV").is_some_and(|v| !v.is_empty())
 }
 
-/// 这个名字这一次要不要剥。后门开着时那三个 `ANTHROPIC_*` 豁免,其余照旧。
+/// 这个名字这一次要不要剥。宿主那一族永远剥;厂商那三个默认剥、后门开着时豁免。
 fn is_stripped(key: &str) -> bool {
-    let keep = keep_anthropic_env();
-    NESTED_EXEC_ENV.iter().any(|banned| {
-        key.eq_ignore_ascii_case(banned) && !(keep && banned.starts_with("ANTHROPIC_"))
-    })
+    if key.to_ascii_uppercase().starts_with(HOST_ENV_PREFIX) {
+        return true;
+    }
+    !keep_anthropic_env() && VENDOR_ENV.iter().any(|v| key.eq_ignore_ascii_case(v))
 }
 
 fn child_env_from_process() -> HashMap<String, String> {
@@ -198,10 +205,12 @@ fn child_env_from_process() -> HashMap<String, String> {
         .collect()
 }
 
+/// 剥的是**本进程环境里真实存在的**那些名字 —— 前缀规则没法凭空枚举,只能照着
+/// 父进程的环境逐个过。子命令的环境是从本进程继承来的,所以这个来源是对的。
 pub(crate) fn apply_child_env(cmd: &mut impl EnvSink) {
-    for var in NESTED_EXEC_ENV {
-        if is_stripped(var) {
-            cmd.remove_env(var);
+    for key in std::env::vars().map(|(k, _)| k) {
+        if is_spawnable_env_key(&key) && is_stripped(&key) {
+            cmd.remove_env(&key);
         }
     }
 }
