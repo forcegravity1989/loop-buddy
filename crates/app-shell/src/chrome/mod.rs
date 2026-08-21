@@ -321,8 +321,11 @@ pub fn open_in_browser(url: &str) {
     }
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
+    // Windows 上开浏览器要经 `cmd /C start`,而这个壳是 GUI 进程 —— 直接
+    // `Command::new("cmd")` 会闪一下黑窗。走底座那层就带上 `CREATE_NO_WINDOW`,
+    // 和 git / codehub-cli 那些子进程同一个规矩。
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
+    let _ = v4_engine::win_cmd::std_cmd("cmd")
         .args(["/C", "start", "", url])
         .spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
