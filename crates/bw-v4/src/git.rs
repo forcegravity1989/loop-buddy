@@ -42,7 +42,7 @@ async fn git(workspace: &Path, args: &[&str]) -> Result<String, GitError> {
     if workspace.as_os_str().is_empty() {
         return Err(GitError::NotConfigured);
     }
-    let out = bw_engine::tokio_cmd("git")
+    let out = v4_engine::tokio_cmd("git")
         .arg("-C")
         .arg(workspace)
         .args(args)
@@ -56,11 +56,6 @@ async fn git(workspace: &Path, args: &[&str]) -> Result<String, GitError> {
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
-}
-
-fn week_range(week: &str) -> Result<(String, String), GitError> {
-    let (start, end) = isoweek::week_bounds(week).ok_or_else(|| GitError::BadWeek(week.into()))?;
-    Ok((start.to_string(), end.to_string()))
 }
 
 /// 这个目录是不是一个 git 仓。不是就返回 false,不报错——很多判据在没有仓的
@@ -87,46 +82,66 @@ pub async fn has_merges_in_week(workspace: &Path, week: &str) -> Result<bool, Gi
     Ok(week_stats(workspace, week).await?.merges > 0)
 }
 
+/// 一周的窗口,换算成本机时区的 unix 秒:`[周一 00:00, 下周一 00:00)`。
+fn week_window(week: &str) -> Result<(i64, i64), GitError> {
+    let (start, end) = isoweek::week_bounds(week).ok_or_else(|| GitError::BadWeek(week.into()))?;
+    let at = |d: time::Date| {
+        d.with_hms(0, 0, 0)
+            .expect("00:00:00 一定合法")
+            .assume_offset(isoweek::local_offset())
+            .unix_timestamp()
+    };
+    Ok((at(start), at(end)))
+}
+
+/// 这一周的提交、合入、动得最多的目录。
+///
+/// **不用 `git log --since/--until` 截窗口**,而是把提交时间全取回来自己按
+/// 时间戳过滤。两个理由都是 2026-08-21 实测撞出来的,不是洁癖:
+///
+/// 1. **`--until=<下周一>` 会把下周一那一整天算进来。** git 用 approxidate 解析
+///    这类不带时刻的日期,实测 `--until=2026-08-03` 连当天 11:26 的提交都收 ——
+///    于是每一周都多算了下一周第一天,健康判据「本周有没有提交」和走势图一起偏。
+/// 2. **`--since` 会提前停止遍历。** 提交时间不严格单调(rebase、cherry-pick、
+///    机器时钟)时 git 会漏掉一批,同一条命令换个起点、隔几分钟跑,结果能从
+///    78 变成 83。走势图上的数**必须**是每次算都一样的。
+///
+/// 代价是全量遍历一次提交列表:这个仓 744 条提交约 14 毫秒,可以接受;真到了
+/// 万级提交还嫌慢,再考虑加缓存,而不是换回一个会算错的窗口。
 pub async fn week_stats(workspace: &Path, week: &str) -> Result<WeekStats, GitError> {
-    let (since, until) = week_range(week)?;
-    let commits = git(
-        workspace,
-        &[
-            "log",
-            &format!("--since={since}"),
-            &format!("--until={until}"),
-            "--pretty=format:%H",
-        ],
-    )
-    .await?;
-    let merges = git(
-        workspace,
-        &[
-            "log",
-            "--merges",
-            &format!("--since={since}"),
-            &format!("--until={until}"),
-            "--pretty=format:%H",
-        ],
-    )
-    .await?;
-    let numstat = git(
-        workspace,
-        &[
-            "log",
-            &format!("--since={since}"),
-            &format!("--until={until}"),
-            "--numstat",
-            "--pretty=format:",
-        ],
-    )
-    .await
-    .unwrap_or_default();
+    let (since, until) = week_window(week)?;
+    let in_week = |ts: &str| {
+        ts.trim()
+            .parse::<i64>()
+            .is_ok_and(|t| t >= since && t < until)
+    };
+
+    let commits = git(workspace, &["log", "--pretty=format:%ct"]).await?;
+    let merges = git(workspace, &["log", "--merges", "--pretty=format:%ct"]).await?;
+
+    // 目录榜要把每条提交的时间和它的 numstat 绑在一起 —— 用一个不会出现在
+    // 路径里的前缀把提交行标出来,再在流里按周切。
+    let numstat = git(workspace, &["log", "--numstat", "--pretty=format:\x01%ct"])
+        .await
+        .unwrap_or_default();
+    let mut kept = String::new();
+    let mut take = false;
+    for line in numstat.lines() {
+        match line.strip_prefix('\x01') {
+            Some(ts) => take = in_week(ts),
+            None if take => {
+                kept.push_str(line);
+                kept.push('\n');
+            }
+            None => {}
+        }
+    }
+
     Ok(WeekStats {
         week: week.to_string(),
-        commits: nonempty_lines(&commits),
-        merges: nonempty_lines(&merges),
-        top_dirs: top_dirs(&numstat, 3),
+        commits: commits.lines().filter(|l| in_week(l)).count() as u32,
+        merges: merges.lines().filter(|l| in_week(l)).count() as u32,
+        top_dirs: top_dirs(&kept, 3),
     })
 }
 
@@ -330,10 +345,6 @@ pub async fn root_commit_author(workspace: &Path) -> Result<String, GitError> {
         .await?
         .trim()
         .to_string())
-}
-
-fn nonempty_lines(s: &str) -> u32 {
-    s.lines().filter(|l| !l.trim().is_empty()).count() as u32
 }
 
 fn top_dirs(numstat: &str, n: usize) -> Vec<String> {
