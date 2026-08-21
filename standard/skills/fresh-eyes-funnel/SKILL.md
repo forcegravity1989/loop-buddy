@@ -25,7 +25,7 @@ category: 运营推广
 
 ## 在 Claude CLI 会话里如何协作
 
-你在一段可见的 Claude 会话里完成本阶段工作,需要多角色时自己调 SubAgent,buddy 不再逐阶段脚本驱动。
+你在一段可见的 Claude 会话里完成这件活,需要多个视角时自己调 SubAgent。
 
 **主 Agent 负责什么**:推进漏斗诊断 → 实验设计 → 上线改动 → 放大或废弃全链;产出落为 docs/funnel.md、docs/growth-experiment.md、docs/growth-verdict.md 和真实改动。
 

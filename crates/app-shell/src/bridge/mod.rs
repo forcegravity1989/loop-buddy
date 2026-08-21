@@ -89,6 +89,16 @@ pub enum Req {
     },
     /// 总览那块「项目指标 · 代码仓级」:现采一次。
     CollectRepoStats,
+    /// 总览:点「采一次指标」。把 `.bw/metrics.toml` 里可回溯的那几条真的跑
+    /// 一遍(起脚本、传时间窗、读标准输出的 JSON)。**不在打开总览时自动跑**
+    /// —— 一次要起好几个子进程,不该在每次进项目、每次重绘时发生。
+    CollectMetrics,
+    /// 上面那一采的结果。**不是界面发的**,是派出去的任务算完发回来的。
+    MetricsCollected {
+        project: ProjectId,
+        readouts: Vec<bw_v4::app::collect::MetricReadout>,
+        error: Option<String>,
+    },
     /// 上面那一采的结果。**不是界面发的**,是派出去的那个任务算完发回来的。
     /// 带着「这是给哪个项目采的」——采一次要几百毫秒,人完全来得及在这期间
     /// 切走,不认项目就会把上一个项目的提交数摆在新项目的总览上。
@@ -443,6 +453,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     kb_codegraph: None,
                     kb_assets: None,
                     repo_stats: None,
+                    metrics: Vec::new(),
                     viewing_week: bw_v4::isoweek::current_week(),
                     view_all: false,
                     open_doc: None,
@@ -847,6 +858,48 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         Req::RepoStatsComputed { project, stats } => {
                             if ui.open == Some(project) {
                                 ui.repo_stats = Some(stats);
+                            }
+                        }
+                        Req::CollectMetrics => {
+                            // 和上面那一采同一个做法:派出去跑,不在这条循环里
+                            // await —— 它要起好几个采集脚本(每个还可能连远端),
+                            // 在这里等就把内核这条单线程连同终端的节拍一起按住。
+                            if let Some(pid) = ui.open {
+                                // 没有工作区就采不了 —— **如实说一句,别让人以为
+                                // 按钮坏了**(和上面那一采同一条教训)。
+                                match app.workspace_of(pid).await {
+                                    Ok(ws) => {
+                                        let back = tx_back.clone();
+                                        tokio::spawn(async move {
+                                            let (readouts, error) =
+                                                match bw_v4::app::collect::collect_all(&ws, 4).await
+                                                {
+                                                    Ok(r) => (r, None),
+                                                    Err(e) => (Vec::new(), Some(e)),
+                                                };
+                                            let _ = back.send(Req::MetricsCollected {
+                                                project: pid,
+                                                readouts,
+                                                error,
+                                            });
+                                        });
+                                    }
+                                    Err(e) => ui.set_note(Some(format!("采不了指标:{e}"))),
+                                }
+                            }
+                        }
+                        // 采的时候是哪个项目,回来时还得是哪个项目 —— 不是就
+                        // 整份丢掉,宁可让人再点一次,也不摆错项目的数。
+                        Req::MetricsCollected {
+                            project,
+                            readouts,
+                            error,
+                        } => {
+                            if ui.open == Some(project) {
+                                ui.metrics = readouts;
+                                if let Some(e) = error {
+                                    ui.set_note(Some(format!("采不了指标:{e}")));
+                                }
                             }
                         }
                         Req::ListRepos { github, host } => {

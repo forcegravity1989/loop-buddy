@@ -25,7 +25,7 @@ category: 构建
 
 ## 在 Claude CLI 会话里如何协作
 
-你在一段可见的 Claude 会话里完成本阶段工作,需要多角色时自己调 SubAgent,buddy 不再逐阶段脚本驱动。
+你在一段可见的 Claude 会话里完成这件活,需要多个视角时自己调 SubAgent。
 
 **主 Agent 负责什么**:推进规格 → 任务分解 → 实现 → 评审合入全链;产出落为 docs/SPEC.md(含编号验收标准 AC-1/AC-2…)、docs/TASKS.md、docs/REVIEW.md 和真实代码。
 

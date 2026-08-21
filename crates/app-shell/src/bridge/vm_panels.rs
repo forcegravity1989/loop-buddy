@@ -141,12 +141,25 @@ pub(super) fn build_metrics(
     ws: &Path,
     plan: Option<&week_plan_file::WeekPlan>,
     issues: &[bw_v4::Issue],
+    collected: &[bw_v4::app::collect::MetricReadout],
 ) -> MetricsVm {
-    let Ok(Some(m)) = bw_v4::repo::metrics_file::read(ws) else {
-        return MetricsVm {
-            note: Some("这个项目还没有 .bw/metrics.toml,指标是空的(不是 0)".into()),
-            ..Default::default()
-        };
+    // **「还没有」和「读不动」是两件事,不能混成一句「没有指标」。**
+    // 混了会让人以为文件不存在、去写一份新的,而实际上仓里躺着一份格式不对
+    // 的正本(比如 V3 的旧格式),写新的只会又叠一层。
+    let m = match bw_v4::repo::metrics_file::read(ws) {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            return MetricsVm {
+                note: Some("这个项目还没有 .bw/metrics.toml,指标是空的(不是 0)".into()),
+                ..Default::default()
+            }
+        }
+        Err(e) => {
+            return MetricsVm {
+                error: Some(e.to_string()),
+                ..Default::default()
+            }
+        }
     };
     // 精确按名字对,不用 contains:指标名互为前缀时会认错,空名字会命中第一条。
     let reading_of = |name: &str| -> Option<&week_plan_file::MetricReading> {
@@ -166,13 +179,19 @@ pub(super) fn build_metrics(
     // `issue.metric_key` 存的因此是指标的名字。
     // `target` / `def` / 采集方式来自指标定义文件;读数来自周计划文件。两边
     // 各是各的正本,这里只是拼到同一张卡上。
-    let mk = |name: &str, def: &str, target: &str, manual: bool| MetricCardVm {
+    // 采到的现值与走势来自「采一次指标」那一下(`ui.metrics`),不在这里跑
+    // ——起脚本要几百毫秒到几秒,每重拼一次 ViewModel 都跑一遍会把界面按住。
+    let readout_of = |name: &str| collected.iter().find(|r| r.name.trim() == name.trim());
+    let mk = |name: &str,
+              def: &str,
+              target: &str,
+              plan: &bw_v4::repo::metrics_file::CollectPlan| MetricCardVm {
         id: name.to_string(),
         name: name.to_string(),
         reading: reading_of(name).map(|r| r.value.clone()),
         target: target.to_string(),
         def: def.to_string(),
-        manual,
+        manual: plan.is_manual(),
         source: reading_of(name)
             .map(|r| r.source.clone())
             .unwrap_or_default(),
@@ -180,24 +199,38 @@ pub(super) fn build_metrics(
             .map(|r| r.collected_at.clone())
             .unwrap_or_default(),
         driving: driving_of(name),
+        class: class_label(plan.class()).to_string(),
+        collected: readout_of(name).and_then(|r| r.current.clone()),
+        trend: readout_of(name)
+            .map(|r| {
+                r.points
+                    .iter()
+                    .map(|p| (p.week.clone(), p.value.parse::<f64>().ok()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        collect_error: readout_of(name)
+            .map(|r| r.error.clone())
+            .unwrap_or_default(),
     };
 
     MetricsVm {
+        error: None,
         // 北极星没有 target 字段 —— 它的目标就是它自己那句定义。
         // 北极星可以缺席:刚接入、还没定指标的项目就是这样。**不摆空卡。**
         north_star: m
             .north_star
             .as_ref()
-            .map(|n| mk(&n.name, &n.def, "", n.collect.is_manual())),
+            .map(|n| mk(&n.name, &n.def, "", &n.collect)),
         lagging: m
             .lagging
             .iter()
-            .map(|d| mk(&d.name, &d.def, &d.target, d.collect.is_manual()))
+            .map(|d| mk(&d.name, &d.def, &d.target, &d.collect))
             .collect(),
         leading: m
             .leading
             .iter()
-            .map(|d| mk(&d.name, &d.def, &d.target, d.collect.is_manual()))
+            .map(|d| mk(&d.name, &d.def, &d.target, &d.collect))
             .collect(),
         note: None,
     }
@@ -540,5 +573,16 @@ fn blank_dash(s: &str) -> &str {
         "—"
     } else {
         s
+    }
+}
+
+/// A/B/C 三类的人话标签。**这三个词是给人看的正本** —— 代码里那个枚举叫什么
+/// 不重要,界面上永远说「可回溯 / 不可回溯 / 手填」。
+fn class_label(c: bw_v4::repo::metrics_file::MetricClass) -> &'static str {
+    use bw_v4::repo::metrics_file::MetricClass as C;
+    match c {
+        C::Retro => "可回溯",
+        C::PointInTime => "不可回溯",
+        C::Manual => "手填",
     }
 }

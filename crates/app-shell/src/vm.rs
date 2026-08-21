@@ -223,8 +223,12 @@ pub struct MetricsVm {
     pub north_star: Option<MetricCardVm>,
     pub lagging: Vec<MetricCardVm>,
     pub leading: Vec<MetricCardVm>,
-    /// 读不到 `.bw/metrics.toml` 时的实话。
+    /// 读不到 `.bw/metrics.toml` 时的实话(还没有这份文件 —— 正常状态)。
     pub note: Option<String>,
+    /// 有这份文件、但**读不动**时的原话(格式错、旧格式)。和 `note` 分开:
+    /// 前者是「还没定出来」,后者是「定了但我读不了」,**两件事不能混成一句
+    /// 「没有指标」**,那会让人以为文件不存在,去写一份新的。
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -243,6 +247,15 @@ pub struct MetricCardVm {
     pub collected_at: String,
     /// 本周哪些活在推它。
     pub driving: Vec<String>,
+    /// 这条属于哪一类:可回溯 / 不可回溯 / 手填。**空 = 还没读到定义。**
+    pub class: String,
+    /// 上一次「采一次指标」真采到的现值。**`None` ≠ 0** —— 没采过、没采到、
+    /// 手填,都是 `None`。
+    pub collected: Option<String>,
+    /// 近四周走势,旧的在前。采不到的点是 `None`,画的时候断开,不补前值。
+    pub trend: Vec<(String, Option<f64>)>,
+    /// 这次为什么没采到。空 = 采到了,或者压根不该采。**不吞错误。**
+    pub collect_error: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -20,6 +20,8 @@
 mod backfill;
 mod bootstrap;
 mod chat_notify;
+/// 指标采集:起脚本、传时间窗、读标准输出的 JSON。壳那边「立即采集」直接调它。
+pub mod collect;
 mod health;
 mod issue;
 mod ops;

@@ -64,6 +64,9 @@ pub struct UiState {
     /// 总览那块「项目指标 · 代码仓级」上一次采到的数。同理:采一次要起好几个
     /// git 子进程,只在人点「立即采集」那一刻跑。
     pub repo_stats: Option<crate::vm::RepoStatsVm>,
+    /// 上一次「采一次指标」采到的东西。同理:起脚本要几百毫秒到几秒,只在人
+    /// 点那一下才跑。**空 = 还没采过**,不是「采到的是 0」。
+    pub metrics: Vec<bw_v4::app::collect::MetricReadout>,
     pub db_path: String,
     pub workspaces_root: String,
     /// 接入屏那份仓列表的状态。**不进库** —— 它是「现在去平台问了一次」的结果,
@@ -572,7 +575,7 @@ async fn build_project(
                 .map(|r| (r.ok, r.text.clone()))
                 .collect(),
         },
-        metrics: build_metrics(&ws, plan.as_ref(), &issues),
+        metrics: build_metrics(&ws, plan.as_ref(), &issues, &ui.metrics),
         week_file_exists,
         ops1_status,
         weeks,

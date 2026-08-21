@@ -24,7 +24,7 @@ category: 优化
 
 ## 在 Claude CLI 会话里如何协作
 
-你在一段可见的 Claude 会话里完成本阶段工作,需要多角色时自己调 SubAgent,buddy 不再逐阶段脚本驱动。
+你在一段可见的 Claude 会话里完成这件活,需要多个视角时自己调 SubAgent。
 
 **主 Agent 负责什么**:推进基线测量 → 瓶颈定位 → 优化/删减 → 回归验证全链;产出落为 docs/baseline.md、docs/bottlenecks.md、docs/regression.md 和真实代码改动。
 

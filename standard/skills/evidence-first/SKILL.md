@@ -25,7 +25,7 @@ category: 原型
 
 ## 在 Claude CLI 会话里如何协作
 
-你在一段可见的 Claude 会话里完成本阶段工作,需要多角色时自己调 SubAgent,buddy 不再逐阶段脚本驱动。
+你在一段可见的 Claude 会话里完成这件活,需要多个视角时自己调 SubAgent。
 
 **主 Agent 负责什么**:推进证据 → 洞察 → 假设 → 原型 → 验证全链;每步产出落为工作区真实文件(docs/evidence.md、docs/insights.md、docs/hypothesis.md、docs/validation.md),不只在对话里说。
 

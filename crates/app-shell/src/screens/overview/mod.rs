@@ -32,7 +32,7 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
                 }
             }
             {card_and_health(&p, &bridge, editing, draft)}
-            {north_star_block(&p)}
+            {north_star_block(&p, &bridge)}
             // 本周计划进度紧跟北极星:第一眼要能看全「这项目是什么 · 顶层目标
             // 是什么 · 这周在往那个目标上推什么」。滞后/引领两层是展开看的细节,
             // 排在后面。
@@ -247,13 +247,28 @@ fn card_mr_banner(p: &ProjectVm, bridge: &Bridge) -> Element {
 
 // ── ②③④ 指标 ────────────────────────────────────────
 
-fn north_star_block(p: &ProjectVm) -> Element {
+fn north_star_block(p: &ProjectVm, bridge: &Bridge) -> Element {
+    let b = bridge.clone();
     rsx! {
         div { class: "card ov-block",
-            div { class: "ov-block-title", "北极星" }
-            match p.metrics.north_star.as_ref() {
-                Some(m) => metric_card(m, true),
-                None => rsx! { div { class: "detail-empty", "还没定北极星。" } },
+            div { class: "repo-metric-head",
+                div { class: "ov-block-title", "北极星" }
+                // 一颗按钮采三层。**不在打开总览时自动跑** —— 一次要起好几个
+                // 采集脚本(还可能各自连远端),不该在每次进项目、每次重绘时发生。
+                button {
+                    class: "btn btn-sm",
+                    onclick: move |_| b.send(Req::CollectMetrics),
+                    "↻ 采一次指标"
+                }
+            }
+            // 读不动和还没有是两件事:读不动就整块灰 + 原话,**不猜、不用旧值顶上**。
+            if let Some(e) = p.metrics.error.as_ref() {
+                div { class: "detail-empty", style: "color:var(--alert-deep);", "指标文件读不了:{e}" }
+            } else {
+                match p.metrics.north_star.as_ref() {
+                    Some(m) => metric_card(m, true),
+                    None => rsx! { div { class: "detail-empty", "还没定北极星。" } },
+                }
             }
         }
     }
@@ -292,7 +307,10 @@ fn metric_card(m: &MetricCardVm, big: bool) -> Element {
     } else {
         format!("目标 {}", m.target)
     };
-    let Some(reading) = m.reading.as_ref() else {
+    // **现算出来的值优先于周计划里那份快照** —— 快照是「上周抄下来的」,
+    // 现算的是「刚刚跑脚本采到的」。两个都没有才走灰卡。
+    let shown = m.collected.as_ref().or(m.reading.as_ref());
+    let Some(reading) = shown else {
         let cls = if big {
             "mcard gray north"
         } else {
@@ -310,7 +328,12 @@ fn metric_card(m: &MetricCardVm, big: bool) -> Element {
                     span { class: "{value_cls}", style: "color:var(--ink-4);", "—" }
                     span { class: "mcard-target", "{target}" }
                 }
-                div { class: "mcard-sub", "无观测 · Unknown ≠ 绿(本周与上周的周计划文件里都没有这条读数)" }
+                if m.collect_error.is_empty() {
+                    div { class: "mcard-sub", "无观测 · Unknown ≠ 绿(还没采到过这条读数)" }
+                } else {
+                    // **没采到就说没采到,并且把原话端出来** —— 不写 0。
+                    div { class: "mcard-sub", style: "color:var(--alert-deep);", "{m.collect_error}" }
+                }
             }
         };
     };
@@ -327,14 +350,30 @@ fn metric_card(m: &MetricCardVm, big: bool) -> Element {
                 span { class: "{name_cls}", "{m.name}" }
                 if m.manual {
                     span { class: "chip badge-manual", "手填" }
+                } else if !m.class.is_empty() {
+                    span { class: "chip", "{m.class}" }
                 }
             }
             div { class: "mcard-value-row",
                 span { class: "{value_cls}", "{reading}" }
                 span { class: "mcard-target", "{target}" }
             }
-            if !m.source.is_empty() || !m.collected_at.is_empty() {
+            if !m.collect_error.is_empty() {
+                div { class: "mcard-sub", style: "color:var(--alert-deep);", "{m.collect_error}" }
+            } else if !m.source.is_empty() || !m.collected_at.is_empty() {
                 div { class: "mcard-sub", "来源 {m.source} · 采于 {m.collected_at}" }
+            }
+            // 走势只在真采到过序列时画。**采不到的点断开,不补前值** ——
+            // 补了就分不出「没变」和「没数」。
+            if m.trend.len() > 1 {
+                {crate::chrome::sparkline::trend_chart(&crate::chrome::sparkline::Series {
+                    label: String::new(),
+                    points: m.trend.iter().map(|(w, v)| (
+                        w.split_once("-W").map_or(w.clone(), |(_, n)| format!("W{n}")),
+                        *v,
+                    )).collect(),
+                    color: "var(--clay)",
+                })}
             }
             if !m.driving.is_empty() {
                 div { class: "mcard-driven",

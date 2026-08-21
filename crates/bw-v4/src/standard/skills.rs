@@ -43,8 +43,6 @@ pub const BREAKING_DRILL_SKILL: &str =
     include_str!("../../../../standard/skills/breaking-drill/SKILL.md");
 pub const COMPETITIVE_ANALYSIS_SKILL: &str =
     include_str!("../../../../standard/skills/competitive-analysis/SKILL.md");
-pub const METRICS_RENDER_SKILL: &str =
-    include_str!("../../../../standard/skills/metrics-render/SKILL.md");
 
 /// frontmatter 里那句 `description`。取不到就返回空串 —— 不编一句假的。
 ///
@@ -68,7 +66,7 @@ fn desc_of(raw: &'static str) -> &'static str {
 }
 
 /// buddy 自带的全部技能 —— **一个正本目录,全部平级**:`standard/skills/<名字>/SKILL.md`,
-/// 十一份(七份方法论 + 四份运作剧本)。
+/// 十份(六份方法论 + 四份运作剧本)。
 ///
 /// 2026-08-21 收敛前是两个正本目录(`docs/skills/` 九份经 `bw-core` 取用 +
 /// `standard/06-defaults/` 四份),还用目录层级表达「谁调用谁」——但注入给
@@ -77,8 +75,14 @@ fn desc_of(raw: &'static str) -> &'static str {
 /// `north-star-discovery` / `metrics-binding` 两份的内容已并入
 /// `metrics-refresh`,不进这份清单 —— `docs/skills/` 那两份原文件留给 V3,
 /// V4 不再读它们。
+///
+/// **`metrics-render` 2026-08-21 整份删掉**(11 → 10):它每一步都踩在 V4 不存在
+/// 的东西上 —— 渲染器是 buddy 仓里的一个 V3 例子(用户项目里根本跑不了)、数字
+/// 取自 SQLite 的 `metric` / `observation` 两张表(V4 库只有四张,这两张都没有)、
+/// 徽记规则用的是已退场的五种采集方式、还引用了两份已删技能。而 V4 的指标呈现
+/// 本来就在总览屏里现算。**留着它只会让 agent 照一份读不通的说明去干活。**
 pub fn all() -> Vec<SkillPack> {
-    const PACKS: [(&str, &str); 11] = [
+    const PACKS: [(&str, &str); 10] = [
         ("week-planning", WEEK_PLANNING_SKILL),
         ("metrics-refresh", METRICS_REFRESH_SKILL),
         ("asset-audit", ASSET_AUDIT_SKILL),
@@ -89,7 +93,6 @@ pub fn all() -> Vec<SkillPack> {
         ("fresh-eyes-funnel", FRESH_EYES_FUNNEL_SKILL),
         ("breaking-drill", BREAKING_DRILL_SKILL),
         ("competitive-analysis", COMPETITIVE_ANALYSIS_SKILL),
-        ("metrics-render", METRICS_RENDER_SKILL),
     ];
     PACKS
         .iter()
