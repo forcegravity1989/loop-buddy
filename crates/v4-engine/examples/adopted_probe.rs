@@ -1,7 +1,7 @@
 //! `adopted_probe` —— 「这个仓被 buddy 接管过没有」这一问的读回证据。
 //!
 //! ```bash
-//! cargo run -p bw-engine --example adopted_probe -- <owner/repo> [分支]
+//! cargo run -p v4-engine --example adopted_probe -- <owner/repo> [分支]
 //! ```
 //!
 //! 接入屏点「下一步」时问的就是这一句:去远端取 `.bw/project.toml`。
@@ -20,7 +20,7 @@
 fn main() {
     let mut args = std::env::args().skip(1);
     let Some(slug) = args.next() else {
-        eprintln!("用法:cargo run -p bw-engine --example adopted_probe -- <owner/repo> [分支]");
+        eprintln!("用法:cargo run -p v4-engine --example adopted_probe -- <owner/repo> [分支]");
         std::process::exit(2);
     };
     let git_ref = args.next().unwrap_or_default();

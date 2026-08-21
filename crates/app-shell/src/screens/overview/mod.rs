@@ -360,38 +360,30 @@ fn trend_row(s: &crate::vm::RepoStatsVm) -> Element {
             .split_once("-W")
             .map_or(p.week.clone(), |(_, w)| format!("W{w}"))
     };
-    let commits = Series {
-        label: "每周提交".into(),
-        points: s
-            .trend
-            .iter()
-            .map(|p| (x(p), Some(p.commits as f64)))
-            .collect(),
-        color: "var(--clay)",
-    };
-    let merges = Series {
-        label: "每周合入".into(),
-        points: s
-            .trend
-            .iter()
-            .map(|p| (x(p), Some(p.merges as f64)))
-            .collect(),
-        color: "var(--green)",
-    };
-    let prs = Series {
-        label: "每周合入的 PR(远端)".into(),
-        points: s
-            .trend
-            .iter()
-            .map(|p| (x(p), p.merged_prs.map(|n| n as f64)))
-            .collect(),
-        color: "var(--amber)",
-    };
+    // 一张表定三条线,不是抄三遍 —— 抄三遍的话加第四条线时最省事的做法是复制
+    // 前两条,而前两条恰好…… 现在三条都吃 `Option`,复制也不会把「采不到」写成 0。
+    type Pick = fn(&crate::vm::TrendPointVm) -> Option<f64>;
+    const LINES: [(&str, Pick, &str); 3] = [
+        ("每周提交", |p| p.commits.map(|n| n as f64), "var(--clay)"),
+        ("每周合入", |p| p.merges.map(|n| n as f64), "var(--green)"),
+        (
+            "每周合入的 PR(远端)",
+            |p| p.merged_prs.map(|n| n as f64),
+            "var(--amber)",
+        ),
+    ];
     rsx! {
         div { class: "trend-row",
-            {trend_chart(&commits)}
-            {trend_chart(&merges)}
-            {trend_chart(&prs)}
+            for (label, pick, color) in LINES {
+                {trend_chart(&Series {
+                    label: label.into(),
+                    points: s.trend.iter().map(|p| (x(p), pick(p))).collect(),
+                    color,
+                })}
+            }
+        }
+        if !s.git_note.is_empty() {
+            div { class: "cfg-readonly-note", "{s.git_note}" }
         }
         if !s.trend_note.is_empty() {
             div { class: "cfg-readonly-note", "{s.trend_note}" }

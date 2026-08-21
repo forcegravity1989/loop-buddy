@@ -291,6 +291,8 @@ pub struct RepoStatsVm {
     /// 近四周走势,**旧的在前**。全部现算 —— 能采今天就能采过去任意一周,
     /// 所以新接入的项目第一天就有走势,不用先攒几周。
     pub trend: Vec<TrendPointVm>,
+    /// git 那两条线为什么是空的。空字符串 = 没有话要说。
+    pub git_note: String,
     /// 远端那条线为什么是空的。空字符串 = 没有话要说。
     pub trend_note: String,
     pub error: String,
@@ -300,9 +302,10 @@ pub struct RepoStatsVm {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrendPointVm {
     pub week: String,
-    pub commits: u32,
-    pub merges: u32,
-    /// 远端合入的 PR 数。`None` = 没采到,**画的时候断开,不当 0 画**。
+    /// 三条线一律 `Option`:`None` = 没采到,**画的时候断开,不当 0 画**。
+    /// git 读不动(不是仓、没装 git)时前两条也会是 `None`。
+    pub commits: Option<u32>,
+    pub merges: Option<u32>,
     pub merged_prs: Option<u32>,
 }
 

@@ -1,10 +1,12 @@
-//! 项目内 · 配置。**结构照 `hifi/index.html` 的 `renderConfig` 排**:开工工具
-//! 映射 / 技能与 workflow / 连接器 + 项目群 / 定时,四大块,都是真表格。
+//! 项目内 · 配置。开工工具映射 / 技能与 workflow / 项目群 + 工具探活 / 定时,
+//! 四大块,都是真表格。(高保真里还有一张「连接器」表,2026-08-21 按指标采集
+//! 的新设计整块退场 —— V4 没有任何采集在消费 `.bw/connectors.toml`,显示一个
+//! 没人用的东西比不显示更糟。)
 //!
 //! 三条如实:
 //!
 //! 1. **「用过几次」是现算的** —— 扫活的 workflow 列聚合,没有战绩表可查。
-//! 2. **技能清单没有登记表** —— buddy 自带的那十三份编在二进制里(摊在 buddy
+//! 2. **技能清单没有登记表** —— buddy 自带的十一份编在二进制里(摊在 buddy
 //!    自己的资产目录,不复制进用户的仓),项目自有的扫仓里 `.claude/skills/`
 //!    得到,同名以仓里那份为准。高保真把「workflow」和「skill」分成两张表,
 //!    V4 里它们是同一样东西(workflow = SOP 类技能包),所以合成一张,不假装
@@ -25,7 +27,10 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
         section { style: "max-width:1120px;",
             {mapping_block(p, bridge)}
             {skill_block(p)}
-            {cron_block(p)}
+            div { class: "cfg-pair",
+                {chat_probe_block(p, bridge)}
+                {cron_block(p)}
+            }
             StandardBlock { p: p.clone(), bridge: bridge.clone() }
         }
     }
@@ -191,7 +196,79 @@ fn desc_or_dash(d: &str) -> String {
     }
 }
 
-// ── ③ 连接器 + 项目群 ───────────────────────────────
+// ── ③ 项目群 + 开工工具探活 ─────────────────────────
+//
+// 2026-08-21 删「连接器」表时把同一个函数里搭车的这两段误删过一次(评审抓的:
+// ProbeTool 命令从此没有任何界面入口,项目群配置在界面上再也验证不了)。现在
+// 它们是独立的一块,和连接器再无瓜葛。
+
+fn chat_probe_block(p: &ProjectVm, bridge: &Bridge) -> Element {
+    let c = &p.config;
+    rsx! {
+        div { class: "cfg-section",
+            div { class: "cfg-section-head", h3 { "项目群" } }
+            div { style: "display:flex;flex-direction:column;gap:7px;font-size:12.2px;",
+                div {
+                    "提供方 "
+                    span {
+                        class: if c.chat_provider == "未配" { "chip chip-gray" } else { "chip chip-clay" },
+                        "{c.chat_provider}"
+                    }
+                }
+                div { "群号 " span { class: "mono", "{c.chat_group}" } }
+                div {
+                    "同步哪些通知 "
+                    if c.chat_events.is_empty() {
+                        span { style: "color:var(--ink-3);", "—(没配群)" }
+                    }
+                    for (label, on) in c.chat_events.iter() {
+                        span { key: "{label}", style: "display:inline-flex;align-items:center;gap:5px;margin-right:12px;font-size:11.3px;",
+                            span { class: if *on { "tglswitch on" } else { "tglswitch" }, span { class: "knob" } }
+                            "{label}"
+                        }
+                    }
+                }
+            }
+            div { class: "cfg-readonly-note",
+                "发出去就算完:不记账、不去重、失败不自动重发 —— 极小概率下同一件事会\
+                 重推一条,这是已经认了的代价。"
+                strong { "仓是正本" }
+                ",改群号或改勾选走「编辑项目信息」那条活 + MR,不在这里直接写仓。"
+            }
+
+            div { style: "border-top:1px dashed var(--border);margin-top:12px;padding-top:12px;",
+                div { style: "font-size:11.5px;color:var(--ink-3);margin-bottom:8px;",
+                    "开工工具探活 · 远端仓 {c.remote}"
+                }
+                div { style: "display:flex;gap:8px;flex-wrap:wrap;",
+                    for t in c.tools.iter() {
+                        {probe_chip(&t.name, &t.label, t.ok, &t.detail, bridge)}
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn probe_chip(name: &str, label: &str, ok: Option<bool>, detail: &str, bridge: &Bridge) -> Element {
+    let b = bridge.clone();
+    let n = name.to_string();
+    let color = match ok {
+        Some(true) => "var(--green)",
+        Some(false) => "var(--red)",
+        None => "var(--gray)",
+    };
+    rsx! {
+        button {
+            key: "{name}",
+            class: "btn btn-sm",
+            title: "{detail}",
+            onclick: move |_| b.cmd(Command::ProbeTool { name: n.clone() }),
+            span { class: "dot", style: "background:{color};margin-right:6px;" }
+            "{label} · 测一下"
+        }
+    }
+}
 
 // ── ④ 定时 ──────────────────────────────────────────
 

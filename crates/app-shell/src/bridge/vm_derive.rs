@@ -107,7 +107,10 @@ pub(super) fn build_card_mr(issues: &[bw_v4::Issue]) -> Option<CardMrVm> {
 /// 高保真那张网格上还有几项是远端来的(合入的 PR、远端 issue、开放 PR),
 /// 那要走 GitHub / codehub 的接口,今天还没接 —— 与其编几个数,不如只列采得
 /// 到的,并在界面上说清楚少了哪几项(见 `docs/LEFTOVERS.md`)。
-pub(super) async fn collect_repo_stats(ws: &Path, project: &bw_v4::model::Project) -> RepoStatsVm {
+pub(super) async fn collect_repo_stats(
+    ws: &Path,
+    project: Option<&bw_v4::model::Project>,
+) -> RepoStatsVm {
     let e = match v4_engine::evidence::collect(&ws.display().to_string()).await {
         Ok(e) => e,
         Err(err) => {
@@ -141,8 +144,16 @@ pub(super) async fn collect_repo_stats(ws: &Path, project: &bw_v4::model::Projec
     if let Ok(tags) = bw_v4::git::tags(ws).await {
         items.push((tags.len().to_string(), "打过的标签".into(), "git".into()));
     }
-    // 近四周走势。**现算** —— 四周就问四次,不需要谁提前把历史存下来。
-    let trend = bw_v4::trend::recent_weeks(ws, project, 4).await;
+    // 近四周走势。**现算** —— git 那两条一趟遍历出齐,远端那条各周并发。
+    // 项目行读不出来时只算 git 那两条,远端如实留空,不整块不采。
+    let trend = match project {
+        Some(p) => bw_v4::trend::recent_weeks(ws, p, 4).await,
+        None => {
+            let mut t = bw_v4::trend::recent_weeks_git_only(ws, 4).await;
+            t.remote_note = "这个项目的库内记录读不出来,远端那条线这次没采".into();
+            t
+        }
+    };
     RepoStatsVm {
         items,
         trend: trend
@@ -155,6 +166,7 @@ pub(super) async fn collect_repo_stats(ws: &Path, project: &bw_v4::model::Projec
                 merged_prs: p.merged_prs,
             })
             .collect(),
+        git_note: trend.git_note,
         trend_note: trend.remote_note,
         error: String::new(),
     }

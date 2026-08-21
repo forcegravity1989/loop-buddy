@@ -36,18 +36,18 @@ mod terminal_manager;
 pub mod win_cmd;
 pub mod workspace;
 
-pub use win_cmd::{std_cmd, tokio_cmd};
-
+// 根上只 re-export **真的被 `use v4_engine::{…}` 引到**的名字。其余类型仍然
+// 可达(模块本身是 pub 的,如 `v4_engine::github::GithubError`),但不在根上再
+// 列一遍 —— 这份清单是「底座对外承诺了什么」的说明书,混进一半死名字之后,
+// 想改 `evidence` 的返回形状得先把十来个名字挨个 grep 一遍才敢下手,正是这次
+// 拷贝想省掉的那笔账(评审抓的)。
 pub use claude_bin::{resolve_claude_binary, which_on_path};
-pub use codehub::{CodehubError, CodehubRepoRef, CodehubRepoSummary};
-pub use evidence::{EvidenceError, WorkspaceEvidence, WorkspaceFile};
-pub use github::{GithubError, GithubRepoRef, GithubRepoSummary};
 pub use interactive_cli::{
     build_resume_plan, build_startup_plan, InteractiveCliExecutor, InteractiveExecutor, LaunchPlan,
-    MockInteractiveExecutor, PtyInput, TuiAgentConfig, CLAUDE,
+    MockInteractiveExecutor, TuiAgentConfig, CLAUDE,
 };
 pub use terminal_manager::{ConversationMeta, TerminalManager};
-pub use workspace::{provision_issue_worktree, ProvisionError};
+pub use win_cmd::tokio_cmd;
 
 /// 一次运行的上下文。
 ///

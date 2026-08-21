@@ -6,9 +6,9 @@
 //! 这是主环在 macOS 上能跑的前提。不碰 `claude`,不碰网关,可随时重跑。
 //!
 //! ```bash
-//! cargo run -p bw-engine --example pty_smoke              # 起 bash 读回 pty-ok
-//! cargo run -p bw-engine --example pty_smoke -- --teardown # 收尾:丢输入端 → 杀整个进程组
-//! cargo run -p bw-engine --example pty_smoke -- --abort    # 中止:abort() 丢弃 future → 子进程也得死
+//! cargo run -p v4-engine --example pty_smoke              # 起 bash 读回 pty-ok
+//! cargo run -p v4-engine --example pty_smoke -- --teardown # 收尾:丢输入端 → 杀整个进程组
+//! cargo run -p v4-engine --example pty_smoke -- --abort    # 中止:abort() 丢弃 future → 子进程也得死
 //! ```
 //!
 //! `--teardown` 场景模拟「用户关掉运行、App 丢掉输入端」:子进程是

@@ -25,23 +25,19 @@ pub async fn collect_health_inputs(workspace: &Path, week: &str) -> HealthInputs
     // 「这个仓 git 读得动吗」单独问一次:读不动的时候「零提交」说明不了任何
     // 事,不能拿去判红(新接入的项目第一眼看到红灯,是在编)。
     let git_readable = crate::git::is_repo(workspace).await;
-    let committed_this_week = crate::git::has_commits_in_week(workspace, week)
+    // 本周 + 上周的计数**一趟遍历出齐**。这一段在每次重拼界面数据的路上,
+    // 第一版逐周各查一遍(每查还带一次没人用的 numstat),10 个 git 子进程
+    // 把内核单线程按住约 2 秒 —— 评审抓的,现在是 1 个子进程约 25 毫秒。
+    let mut wanted = vec![week.to_string()];
+    if !last_week.is_empty() {
+        wanted.push(last_week.clone());
+    }
+    let counts = crate::git::week_counts_many(workspace, &wanted)
         .await
-        .unwrap_or(false);
-    let committed_last_week = if last_week.is_empty() {
-        false
-    } else {
-        crate::git::has_commits_in_week(workspace, &last_week)
-            .await
-            .unwrap_or(false)
-    };
-    let merged_last_week = if last_week.is_empty() {
-        false
-    } else {
-        crate::git::has_merges_in_week(workspace, &last_week)
-            .await
-            .unwrap_or(false)
-    };
+        .unwrap_or_default();
+    let committed_this_week = counts.get(week).is_some_and(|c| c.commits > 0);
+    let committed_last_week = counts.get(&last_week).is_some_and(|c| c.commits > 0);
+    let merged_last_week = counts.get(&last_week).is_some_and(|c| c.merges > 0);
     // 上周发过版也算交付。发版记录的正本是仓文件,不查库。
     let released = crate::repo::release_file::read(workspace)
         .ok()

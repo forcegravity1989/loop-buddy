@@ -64,35 +64,6 @@ impl Remote {
         }
     }
 
-    /// `gh repo view` (github) / `codehub-cli project view` (codehub, P3).
-    /// Read-only. Returns a one-line human detail (name · visibility · pushed).
-    pub async fn probe(&self) -> Result<String, RemoteError> {
-        match self {
-            Remote::Github(r) => Ok(github::probe_repo(r).await?),
-            Remote::Codehub { host, path } => Ok(codehub::probe(host, path).await?),
-        }
-    }
-
-    /// `gh issue create` (github) / `codehub-cli issue create` (codehub, P3).
-    /// Returns the issue number the remote minted (`gh`'s / codehub's `iid`).
-    pub async fn create_issue(&self, title: &str, body: &str) -> Result<u32, RemoteError> {
-        match self {
-            Remote::Github(r) => Ok(github::create_issue(r, title, body).await?),
-            Remote::Codehub { host, path } => {
-                Ok(codehub::create_issue(host, path, title, body).await?)
-            }
-        }
-    }
-
-    /// V2-②-I: list open issues on the remote — read-only. Never creates.
-    /// Used to rebuild local issue rows for later-comers / out-of-band opens.
-    pub async fn list_open_issues(&self) -> Result<Vec<github::RemoteOpenIssue>, RemoteError> {
-        match self {
-            Remote::Github(r) => Ok(github::list_open_issues(r).await?),
-            Remote::Codehub { host, path } => Ok(codehub::list_open_issues(host, path).await?),
-        }
-    }
-
     /// 在**已经推上去的分支**上开 PR/MR —— 和 [`Self::create_mr`] 的区别是:
     /// 这里不替调用方 `git add -A` 提交,分支上有什么就提什么;正文也由调用方
     /// 给,**不自动挂 `Closes #<n>`**。
@@ -133,29 +104,6 @@ impl Remote {
         match self {
             Remote::Github(r) => Ok(github::merge_pr(r, pr_number).await?),
             Remote::Codehub { host, path } => Ok(codehub::merge_mr(host, path, pr_number).await?),
-        }
-    }
-
-    /// V2-② Phase A (§7): open a PR/MR for `.bw/project.toml` on the
-    /// `bw/project-init` branch — the first Buddy to adopt an existing repo
-    /// writes the project intent as a config PR (not an Issue PR). Buddy then
-    /// auto-merges via [`merge_mr`]. Parallels [`create_mr`] but without an
-    /// issue number (project.toml is a config file, not an Issue). Github
-    /// delegates to [`github::open_project_init_pr`]; codehub to
-    /// [`codehub::create_project_init_mr`]. **Never merges** — the caller
-    /// (bw-app's creation flow) auto-merges on success, or surfaces a tip on
-    /// failure. This is the one exception to "issue PR never auto-merges":
-    /// project.toml is configuration, not an Issue (§7,不破「Done 永不自动」).
-    pub async fn create_project_init_mr(
-        &self,
-        workspace: &Path,
-        title: &str,
-    ) -> Result<github::PrOpened, RemoteError> {
-        match self {
-            Remote::Github(_) => Ok(github::open_project_init_pr(workspace, title).await?),
-            Remote::Codehub { host, path } => {
-                Ok(codehub::create_project_init_mr(host, path, workspace, title).await?)
-            }
         }
     }
 

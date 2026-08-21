@@ -955,48 +955,6 @@ pub async fn fetch_project_toml(
         .map_err(|e| GithubError::Command(e.to_string()))
 }
 
-/// C7 · 采集器: run one `kind = "github"` metric query as a real count.
-/// Expands BW placeholders against `remote` (`owner/repo`) + `today`, then asks
-/// 某个时间窗口内**合入**的 PR 数。
-///
-/// 窗口由调用方给 —— 这就是「能采到今天的数,就能采到过去任意一周的数」那条
-/// 判据的落点:同一个函数换个窗口,过去第八周的值照样算得出来,不需要谁提前
-/// 把它存下来。
-///
-/// `since` / `until` 都是 `YYYY-MM-DD`,而且是**闭区间**(GitHub 的
-/// `merged:a..b` 含两端)。注意别直接把 ISO 周的左闭右开边界丢进来 —— 那会把
-/// 下周一那天的 PR 也算进这一周。
-pub async fn merged_pr_count(
-    owner_repo: &str,
-    since: &str,
-    until: &str,
-) -> Result<u32, GithubError> {
-    let q = format!("repo:{owner_repo} is:pr is:merged merged:{since}..{until}");
-    let output = crate::win_cmd::tokio_cmd("gh")
-        .args([
-            "api",
-            "-X",
-            "GET",
-            "search/issues",
-            "-f",
-            &format!("q={q}"),
-            "--jq",
-            ".total_count",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(spawn_err)?;
-    if !output.status.success() {
-        return Err(GithubError::Command(stderr_text(&output)));
-    }
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    text.parse::<u32>()
-        .map_err(|_| GithubError::Command(format!("无法解析 gh 计数输出:{text:?}")))
-}
-
 /// GitHub's search API for the total number of matches via `gh`. Uses the
 /// `search/issues` endpoint — it covers both issues and PRs (a query's own
 /// `is:pr` / `is:issue` narrows it); releases and other facets are out of v1

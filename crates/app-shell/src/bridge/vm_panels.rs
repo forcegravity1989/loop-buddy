@@ -373,7 +373,7 @@ pub(super) async fn build_config(
 ///
 /// 三个来源,`origin` 如实标出来自哪:
 ///
-/// - **buddy 自带**:编在二进制里的十三份(九份方法论 + 四份运作剧本)。
+/// - **buddy 自带**:编在二进制里的十一份(七份方法论 + 四份运作剧本)。
 ///   它们摊在 buddy 自己的资产目录,**不复制进用户的仓** —— 用户的
 ///   `.gitignore` 怎么写不该由 buddy 决定(见 `bw_v4::standard::skills`)。
 /// - **项目自有**:这个仓自己的 `.claude/skills/`,扫目录得到。

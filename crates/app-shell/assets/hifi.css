@@ -179,6 +179,12 @@ h1,h2,h3,h4{font-family:var(--serif);font-weight:700;margin:0 0 8px;}
 .ov-row .mcard{flex:1;min-width:200px;}
 .repo-metric-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
 .repo-metric-head h3{font-family:var(--serif);font-size:15px;margin:0;}
+/* 知识库「仓统计」那块仍是卡片网格(总览那块 2026-08-21 改成了下面的一行小字
+   + 走势图)。删总览样式时把这四条一起删过,kb 屏整块裸奔 —— 评审抓的。 */
+.repo-metric-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;}
+.repo-metric-item{background:#fff;border:1px solid var(--border);border-radius:8px;padding:9px 11px;}
+.repo-metric-item .v{font-family:var(--mono);font-weight:700;font-size:16px;}
+.repo-metric-item .k{font-size:10.3px;color:var(--ink-3);margin-top:2px;}
 .repo-metric-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-2);line-height:1.9;}
 .repo-metric-line b{font-weight:700;color:var(--ink);}
 .repo-metric-line .sep{color:var(--ink-4);}

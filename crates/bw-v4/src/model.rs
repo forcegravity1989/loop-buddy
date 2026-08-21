@@ -72,6 +72,11 @@ pub enum Signal {
 /// workflow(映射正本在 `.bw/issue-policy.toml` 的 `[[mapping]]` 段)。
 /// V4 只用到标签和全集;V3 那套阶段方法论元数据(角色、下一棒、DoD)不拷。
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+// 拷贝时漏过一次(评审抓的)。少了它,serde 名字从 `build` 变成 `Build`,
+// 而本文件下方 `category_key` 的注释正说「文件里写 build 就是 Build」——
+// 今天手写的那对转换兜住了,但只要有人照注释改走 serde 就会写出大写值,
+// 和库里已有的小写行混在同一列。
+#[serde(rename_all = "snake_case")]
 pub enum StageKind {
     /// 原型
     Prototype,

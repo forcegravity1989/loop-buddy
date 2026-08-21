@@ -823,15 +823,22 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                 // 走势那条要问远端「这一周合入了几个 PR」,所以
                                 // 得把项目一起带上(远端地址在它身上)。取不到
                                 // 项目就只能不采 —— 不拿一个空壳项目去问远端。
+                                // 项目行读不出来**不能静默什么都不做** —— 人点了
+                                // 按钮却毫无反应,只会以为按钮坏了(评审抓的)。
+                                // git 那几项本来就不需要项目行,照采;只有远端那条
+                                // 线缺了地址,如实说一句。
                                 let proj = app.store().project(pid).await.ok().flatten();
-                                if let (Ok(ws), Some(proj)) = (app.workspace_of(pid).await, proj) {
-                                    let back = tx_back.clone();
-                                    tokio::spawn(async move {
-                                        let _ = back.send(Req::RepoStatsComputed {
-                                            project: pid,
-                                            stats: vm_derive::collect_repo_stats(&ws, &proj).await,
+                                match app.workspace_of(pid).await {
+                                    Ok(ws) => {
+                                        let back = tx_back.clone();
+                                        tokio::spawn(async move {
+                                            let _ = back.send(Req::RepoStatsComputed {
+                                                project: pid,
+                                                stats: vm_derive::collect_repo_stats(&ws, proj.as_ref()).await,
+                                            });
                                         });
-                                    });
+                                    }
+                                    Err(e) => ui.set_note(Some(format!("采不了:{e}"))),
                                 }
                             }
                         }

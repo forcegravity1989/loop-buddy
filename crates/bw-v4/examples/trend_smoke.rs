@@ -16,6 +16,11 @@ use bw_v4::model::{Project, ProjectId};
 use bw_v4::{isoweek, trend};
 use std::path::PathBuf;
 
+/// 没采到显示「—」,不显示 0。
+fn dash(v: Option<u32>) -> String {
+    v.map(|n| n.to_string()).unwrap_or_else(|| "—".into())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 起任何线程之前先把本机时区定住 —— 周是按本机时区算的。
@@ -66,50 +71,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "周", "提交", "合入", "合入的PR"
     );
     for p in &t.points {
+        // **没采到显示「—」,不显示 0** —— 0 是一个真实的数值,「没采到」不是。
         println!(
             "{:<10} {:>8} {:>8} {:>10}",
             p.week,
-            p.commits,
-            p.merges,
-            // **没采到显示「—」,不显示 0** —— 0 是一个真实的数值,「没采到」不是。
-            p.merged_prs
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "—".into())
+            dash(p.commits),
+            dash(p.merges),
+            dash(p.merged_prs)
         );
+    }
+    if !t.git_note.is_empty() {
+        println!("\ngit 那两列:{}", t.git_note);
     }
     if !t.remote_note.is_empty() {
         println!("\n远端那列:{}", t.remote_note);
-    } else if !t.remote_attempted {
+    } else if remote.is_empty() {
         println!("\n远端那列:没给 owner/repo,这次没问远端");
     }
 
-    // 复算命令用 `rev-list --count`,**不要用 `log --pretty=format:%H | wc -l`**
-    // —— `format:%H` 最后一行不带换行符,`wc -l` 每次都少数一条。真踩过:
-    // 手工复算出来的数比代码少 1,差点当成代码的 off-by-one 去改。
+    // **复算命令必须是代码真正在跑的那条。** 绝不能给 `--since/--until`:
+    // 那正是被修掉的错误窗口(多算下周一一整天,而且 `--since` 会提前停止
+    // 遍历),照它复算出来的数和上面这张表对不上,读的人会以为代码错了、
+    // 回头把已经修对的窗口改回去。
     println!("\n自己复算(每一行都该对得上):");
     for p in &t.points {
-        let Some((mon, next_mon)) = isoweek::week_bounds(&p.week) else {
+        let Ok((since, until)) = bw_v4::git::week_window(&p.week) else {
             continue;
         };
-        let sun = next_mon - time::Duration::days(1);
         println!(
-            "  {} 提交:git -C {} rev-list --count HEAD --since={} --until={}",
+            "  {} 提交:git -C {} log --pretty=format:'%ct %P' | awk -v s={since} -v u={until} '$1>=s && $1<u' | wc -l",
             p.week,
-            ws.display(),
-            mon,
-            next_mon
+            ws.display()
         );
         println!(
-            "  {} 合入:git -C {} rev-list --count --merges HEAD --since={} --until={}",
-            p.week,
-            ws.display(),
-            mon,
-            next_mon
+            "  {} 合入:同上,awk 条件加 && NF>=3(父提交 ≥ 2 即合入)",
+            p.week
         );
         if !remote.is_empty() {
             println!(
-                "  {} 合入的PR:gh api -X GET search/issues -f q=\"repo:{} is:pr is:merged merged:{}..{}\" --jq .total_count",
-                p.week, remote, mon, sun
+                "  {} 合入的PR:gh api -X GET search/issues -f q=\"repo:{} is:pr is:merged merged:<本周一带时区>..<周日 23:59:59 带时区>\" --jq .total_count",
+                p.week, remote
             );
         }
     }

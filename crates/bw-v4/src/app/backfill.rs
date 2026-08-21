@@ -81,25 +81,30 @@ impl App {
             chain.drain(..skipped_old);
         }
 
+        // 先筛出真要补的周,再**一趟遍历**把所有周的读数出齐。第一版是逐周调
+        // `week_stats`(每周三条全量 git log),104 周就是 312 次全史遍历、一分
+        // 多钟同步冻住界面 —— 评审抓的;这 104 周的数据本来就在同一次 git log
+        // 的输出里。
+        let candidates: Vec<String> = chain
+            .into_iter()
+            .filter(|this| {
+                // 那一周之后才建的仓 / 未来的周,week_bounds 解不出来就跳过;
+                // 已经有文件的不碰 —— 那可能是人自己写的。
+                isoweek::week_start(this).is_some_and(|d| d <= today)
+                    && !week_plan_file::exists(&ws, this)
+            })
+            .collect();
+        // git 读不动不能当成「这些周没提交」—— 那是把失败伪装成「没发生」。
+        // 一趟查询失败 = 所有候选周都读不动,如实记数,最后说出来。
+        let (all_stats, unreadable) = match crate::git::week_stats_many(&ws, &candidates).await {
+            Ok(m) => (m, 0usize),
+            Err(_) => (Default::default(), candidates.len()),
+        };
+
         let mut weeks = Vec::new();
-        let mut unreadable = 0usize;
-        for this in chain {
-            // 那一周之后才建的仓 / 未来的周,week_bounds 解不出来就跳过。
-            if isoweek::week_start(&this).is_none_or(|d| d > today) {
+        for this in candidates {
+            let Some(stats) = all_stats.get(&this).cloned() else {
                 continue;
-            }
-            // 已经有文件了就不碰 —— 那可能是人自己写的。
-            if week_plan_file::exists(&ws, &this) {
-                continue;
-            }
-            // git 读不动这一周不能当成「这周没提交」—— 那是把失败伪装成
-            // 「没发生」。单独记一笔,最后如实说出来。
-            let stats = match crate::git::week_stats(&ws, &this).await {
-                Ok(s) => s,
-                Err(_) => {
-                    unreadable += 1;
-                    continue;
-                }
             };
             // 那一周什么都没发生,就不要给它凭空造一份文件。
             if stats.commits == 0 {
@@ -129,9 +134,15 @@ impl App {
                         stats.commits, stats.merges
                     ),
                 }],
-                last_week_lines: vec![format!(
-                    "复算命令:git log --since=<{this} 周一> --until=<下周一> --pretty=format:%H | wc -l"
-                )],
+                // 复算命令带真实的 unix 秒窗口。**不要写 --since/--until** ——
+                // 那条命令多算一天还会漏算(见 git.rs::week_counts_many 的文档),
+                // 写进正本就是把人引向一条对不上数的复算路。
+                last_week_lines: {
+                    let (s, u) = crate::git::week_window(&this).unwrap_or((0, 0));
+                    vec![format!(
+                        "复算:git log --pretty=format:'%ct %P' | awk -v s={s} -v u={u} '$1>=s && $1<u' | wc -l(合入再加条件 NF>=3)"
+                    )]
+                },
             };
             week_plan_file::write(&ws, &this, &week_plan_file::render(&draft))?;
             weeks.push(this);
