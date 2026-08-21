@@ -114,7 +114,7 @@ app-shell   V4 新壳(bin 名 bw-v4-dev):六入口 + 三顶层屏,一屏一模�
 `workbench-v4.db`,schema 从新写、**不写迁移**(老库不兼容)。V4 的核心变化是「**仓是正本**」——
 库只放定位与显示缓存,健康、指标读数、周列表、用过几次、文件树、diff 全部**现算**,一张索引表都
 没有。删旧壳的判据见 `docs/v4-prototype/design.md` §12.6(逐条核对过,今天一条都
-不满足,所以旧壳还在)。V4 没做完的部分只认 `docs/LEFTOVERS.md` 的 V4A–V4G 七组与「试点-N」系列。
+不满足,所以旧壳还在)。V4 没做完的部分只认 `docs/LEFTOVERS.md` —— 它按验收八条分组,只记「离 MVP 做完还差什么」,做完的史实与有意的留白都不在里面。
 
 数据流:UI 只发 `Command`、收 `Event`;`bw-app` 执行用例 → store 写入数据库 → `recompute_signals` 重算 → 事件流回 UI。**唯一的干活入口是 Issue 的 ▶跑**(`Command::RunIssue`):项目配了真实工作区就在 issue 自己的 git worktree 里起交互式 `claude`(内嵌终端 PTY),没配就落到 MockInteractiveExecutor(产出自我标注为演示);每次运行都写一行 `workflow_run`(开工/结清/成败/耗时/前后 git head)绑到这张 Issue。
 

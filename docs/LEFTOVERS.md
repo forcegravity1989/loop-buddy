@@ -1,537 +1,91 @@
-# 遗留清单（全产品，唯一）
+# 遗留清单 · MVP 还差什么
 
-> **30 秒导读**：还没干完的活只认这一份。给排期和接手的人看。**现在作数**。当前：V3 修 bug（这些可以排）、V4 在规划。文档边界见 [`doc-boundaries.md`](doc-boundaries.md)；版本出包见 [`releases.md`](releases.md)。
+> **30 秒导读**:这份清单只回答一个问题——**离「V4 的 MVP 做完了」还差什么**。标尺是 [`v4-prototype/design.md`](v4-prototype/design.md) §13.1 的整体验收八条,下面每一条都写明「不做它,八条里哪一条过不去」。给排期和接手的人看。**现在作数**(2026-08-21 重写)。
 >
-> 旧路径 `docs/v1-prototype/LEFTOVERS.md` 已改成指针。PRACTICE §4 只记当周发现，消化后迁到这里或关掉。
+> **这里只记还差的,不记做过的。** 做完的事去 `git log` 和 [`archive/`](archive/) 找,清单不养第二份历史。
 >
-> 下方「史实条目」从 V1 清单原样迁入，已关闭的也留着，不抹过程。新开条目加在「当前开着」表，不要只写进 PRACTICE。
+> **V3 的欠账不在这里。** 当前节奏是一心 V4,V3 不再投入、连 bug 也不修、原样并存等删;它的欠账随它一起等删,不单独记。
+>
+> **有意的留白也不在这里。** 「按不动的留位一律灰态、写明为什么」是设计规矩(`design.md` §12.5),不是欠账;哪些功能有意不做,写在设计篇对应章节里。
+>
+> 文档边界见 [`doc-boundaries.md`](doc-boundaries.md);版本出包见 [`releases.md`](releases.md)。
 
-## 当前开着（按现在能不能排）
+## MVP 还差什么(13 处)
 
-| ID | 一句话 | 阶段 | 处置 |
+### 差在「跑完两个完整周循环」(§13.1 条 1)
+
+| # | 差什么 | 为什么过不去 | 落点 |
 |---|---|---|---|
-| **V3-cursor-cli** | Issue 开工接 Cursor Agent CLI（本机默认 + 智能体执行引擎） | V3 可排 | 设计已记 [`v3-prototype/cursor-agent-executor.md`](v3-prototype/cursor-agent-executor.md)，未落地 |
-| **V3-cowelink-sidecar** | cowelink 长出本机网页旁路，buddy iframe 内嵌 | V3 可排 | 设计已记 [`v3-prototype/cowelink-web-sidecar.md`](v3-prototype/cowelink-web-sidecar.md)，未落地 |
-| **W1-2** | 纳入时 codehub clone 仍同步堵命令循环，Intent 提交后 UI 可能卡 | V3 可排 | 采集时序已缓解，根因未解。见下方史实 |
-| **W3-1** | 北极星无独立 metric 行，灯恒灰 | V3 可排 | 总览诚实灰卡，采数链未接 |
-| **W3-2** | `CollectKind` 仍是 5 种，未收到 script/manual | V3 可排 | UI 已标 legacy |
-| **W3-9** | 删项目是否清 buddy 自建工作区目录 | V3 可排 | 2026-08 后代码侧可能已补，收口时读回再关 |
-| **W2-1 ②③** | 重启后终端整块消失无提示；离开面板可能丢 PTY 字节 | V3 可排 | ① 已修 |
-| **P1** | 窄窗嵌入终端 ANSI 错乱、底栏双 prompt | V3 可排 | |
-| **P3 / P3b** | 单例 PTY 不能回看历史；Done 后无只读 resume 入口 | V3 可排 | |
-| **P7** | 创建未见章程/标准：静默失败还是 owned 判定 | V3 可排 | 未复现 |
-| **P9** | ~~`connectors.toml` 的 `schedule` 不建独立 cron~~ **原文写错了(2026-08-21 读回更正)** | V3 可排 | 原文说这个字段「只解析不接调度」。实况:`crates/bw-engine/src/connectors_file.rs` 的 `ConnectorDef` **根本没有 `schedule` 这个字段**(只有 `name`/`kind`/`script`/`command`/`output`),而且 `ConnectorDef` 与 `ConnectorsFile` 两个结构体都开了 `deny_unknown_fields` —— 谁真按老文档往 `.bw/connectors.toml` 里写一行 `schedule`,**整份文件当场解析失败**,不是被忽略。要留这条条目的话,真问题是「按连接器分别排班」这个能力从来没有过;而按 [`v4-prototype/design/14-metrics-collection.md`](archive/v4-prototype/design/14-metrics-collection.md) §3.3,V4 连「连接器」这一层都不要了 —— 见 **试点-3** |
-| **P11** | ~~Done 后阶段区退回空 Chat~~；会话卡永远「进行中」 | V3 可排 | ① 已随聊天视图整体删除而消失（2026-08-18 `d9ed28b`，Chat 视图不存在了）；② 仍开着，与 **减负-18** 同根（`session` 表只剩壳） |
-| **收拢工作区** | 后来者主目录落后远端，采集跑旧脚本；要独立「↻ 收拢」且 pull 失败必须报错 | V3 可排 | PRACTICE §4.15，未落地 |
-| **列仓 999 以外** | 创建流已拉 999、下拉画 30；再多要翻页/远端搜索 | V3 可排 | V3-use-fix 明确本轮不做 |
-| **V1-P1** | ~~macOS 交互式终端不可用~~ | ✅ 已修（2026-08-17 `748e514`） | PTY 后端抽成 `bw-engine/src/pty_backend.rs`：Windows conpty-oxide、macOS/Linux portable-pty；macOS 读回 `cargo run -p bw-engine --example pty_smoke`（三种模式）。Windows 分支仍只交叉编译核对、未真机（见 **减负-14**） |
-| **W1-4** | 四份组件标准内容打磨 | 低 | 模板已落 |
-| **W2-4 / W2-5** | 指南 m6 等校准；Hub 四组件完整规范 | 低 | |
-| **W2-7** | 诊断 spike 源文件是否清干净 | 低 | 待核实 |
-| **手填观测** | 手填指标不跨 buddy、不进仓 | 已知边界 | 指南如实说「本机过程数据」 |
-| **多版本线** | 同一项目多条在跑的版本线 | **V4 规划，不进 V3** | PRACTICE §4.16；先设计总览那盏灯怎么诚实 |
-| **减负-3** | 技能/队友批量导入无界面（只有三个 headless 例子 `import_skill_library` / `import_skill_package` / `import_ecc_agents`） | 低（新功能，非减负） | 要么 Hub 加「从目录导入」，要么明确「导入永远是命令行动作」（DEVELOPMENT.md 已写） |
-| **减负-4** | ConnectorHub / KnowledgeHub 只是登记单，无实际同步/读者 | V4 一并处理（Hub 屏 V4 重做） | 收进 Settings 一节 / KnowledgeHub 下线；连接器登记被创建流探针用到，别单删屏幕 |
-| **减负-5** | Routine 面板并入 Progress（同源观测流） | V4 一并处理（面板 V4 重做） | Progress 底部加「最近观测」折叠区，删 `Panel::Routine` |
-| **减负-6** | Artifact + Version 面板合并成一个「工作区」面板 | V4 一并处理 | 上半 git log、下半产物 |
-| **减负-7** | ProgressAll 继续减法（按 issue3「关口收件箱」思路） | V4 一并处理 | 不新增卡片 |
-| **减负-8** | `e2e/flows/core/02-issue-run-to-review.toml` 考卷按旧引擎写，未在内嵌终端路径重跑 | 低 | 用 `BW_FLOW` 在 mock 交互执行器上重跑五张考卷，过时的重写 |
-| **减负-9** | `bw-app/src/dispatch.rs` 的 3,000+ 行 `match` 仍是一个函数 | 结构债，随手做 | 每个 `Command::X =>` 臂提成 `fn handle_x`，逐臂一 commit |
-| **减负-10** | `bw-store/src/sqlite.rs` 3,800+ 行单文件 | 结构债 | 按表族拆 `sqlite/{schema,project,issue,skill,agent,workflow,cron,connector,observation,ledger}.rs`；同表列清单先抽 `const COLS_*` |
-| **减负-11** | `app-desktop/src/screens/op.rs` 六个面板仍在一个文件 | 结构债 / V4 一并 | 每面板一文件 |
-| **减负-12** | 字体未打包（依赖系统中文字体） | 低 | 打包 Noto Serif/Sans SC + JetBrains Mono，或 README 明写依赖系统字体 |
-| **减负-13** | `hook_listener::uninstall_hooks_config` 未接线（退出/卸载不清 `~/.claude/settings.json` 里的 hook） | 低 | 桌面壳退出钩子调一次，或 Settings 加「移除 hook」 |
-| **减负-14** | 内嵌终端 **Windows 后端未真机验证**（`pty_backend.rs::windows` 从原函数体搬入 + 2026-08-18 合入 main V3 的四处改动，只经 `cargo check --target x86_64-pc-windows-gnu`） | **V3 可排（有 Windows 机就跑）** | `cargo run -p bw-engine --example pty_smoke`（`bash -c` 换 `cmd /C echo pty-ok`）；PR #102 描述如实标注 |
-| **减负-15** | 内嵌终端首启 2000ms 后自动发 `\r` 是启发式，不是就绪侦测 | 低 | 侦测 TUI 就绪信号再发 |
-| **减负-16** | 内联单元测试的定位（约 2,000 行随 CI 跑；不要求写、改到就维护、不建回归大坝） | 已定，提醒 | CLAUDE.md 已如实表述 |
-| **减负-17** | PTY 运行的 `completed` 太粗：子进程退出（EOF 或读错误）一律 `completed: true`，退出码不看 | V3 可排 | `wait()` 退出码带回 `SkillOutput`（非零 → `completed: false`）；读错误与 EOF 分开记 |
-| **减负-18** | `session` 表只剩壳（正文 `message` 已删）：左栏「阶段记录」仍按 `SessionId` 索引、`RunIssue{session,id}` / `workflow_run.session_id` 带一个几乎无意义的会话 id | V4 一并处理（左栏 V4 重做） | 左栏改按 Issue / `claude_conversation` 索引；`RunIssue` 去 `session` 参数；`workflow_run.session_id` 停写；`session` 表 DROP（老库迁移）。P11 ② 同根 |
-| **减负-19** | `WorkflowSpec.phases` / `phase_prompts` / `LoopConfig` 只剩展示用途；`stage_workflow_with_playbook` 每次 ▶跑 仍渲染整套 `phase_prompts`（无人读）；`PhaseMeta.reject_to_phase`、`LoopConfig.retries/max_iter` 无消费者；Hub 卡「运行战绩」按 `workflow_run.workflow_id` 统计，而 Issue 运行的 spec id 每次新造，永远对不上 | V4 一并处理（Workflow 库 V4 不带） | `WorkflowSpec` 收成「名字 + 目标 + 阶段名 + 技能引用」；`rendered_phase_prompts` 删；老库列保留 |
-| **减负-20** | 项目级 `allow_commands` 是死旋钮（只被已删的一次性执行器消费；交互式恒 `--dangerously-skip-permissions`） | V3 可排 | 删 UI 开关 + `Command::SetWorkspace.allow_commands` + `ProjectRow.allow_commands`；列删除走 `drop_column_if_present` |
-| **减负-21** | ~~bw-store 内联测试 `sync_connectors_file_empty_is_noop` 偶发失败（`tempdb_path()` 进程 id + 纳秒撞名）~~ | ✅ 已修（2026-08-19，V4 A 刀顺手） | 五处临时目录/库名的时间戳换成进程内原子自增（`bw-store/sqlite.rs`、`bw-engine` 的 connectors_file / project_file / interactive_cli、`bw-app/hook_listener.rs`）。同根的还有 `bw-engine` 那几个 `connectors_file::tests`，一并修了；连跑八轮门禁不再抖 |
-
-| **V4A-1** | 名片改不了:`EditProjectCard` / `SetProjectChat` 两条命令内核里有,总览的名片块上没有编辑入口 | V4 可排 | 名片块加编辑态;改动走轻量活等评审(命令已经是这个语义) |
-| **V4A-2** | 看板只能跨列拖,同一列内拖动排序没接(`ReorderIssue` 命令内核里有,界面没调用) | V4 可排 | 卡片之间加落点;`sort_order` 取前后中点,已实现 |
-| **V4A-3** | 活的详情面板改不了 workflow(`SetIssueWorkflow` 命令内核里有,界面没调用) | V4 可排 | 详情面板加一个下拉,选项就是配置屏那张技能表(buddy 自带 + 项目自有) |
-| **V4A-4** | 资产盘点(运作活②)的 agent 侧还没起过会话。**C 刀把历史回填的确定性那半做了**(直接算 git 写文件,见 V4C-1),agent 那半仍未做 | 试点期 | 剧本 `asset-audit` 和它带的子技能 `project-handbook` 都已在 buddy 的资产目录里,缺的是「铺底探测到有历史之后自动起一次会话」那段编排。**规范铺底自己已经没有 agent 步骤了**(2026-08-20 傍晚:铺底只铺 `.bw/`,仓根不碰,设计见 已归档 design/03 §2.3) |
-| **V4A-5** | 健康三判据里「指标见红」这一条恒为不成立 —— 周计划文件里的读数还没和 `.bw/metrics.toml` 的 target 比过 | V4 可排 | 接上 target 的迷你 DSL(`≥5` `≤24h` 这类)比较;在此之前灯只可能是绿/黄/灰,不会因为指标变红 |
-| **V4A-6** | 业界包(mattpocock-skills / superpowers)还没进 `standard/06-defaults/`,而 `.bw/issue-policy.toml` 的三列映射里已经写着这些名字当默认 workflow —— buddy 自带的十三份和项目仓 `.claude/skills/` 两处都找不到对应目录,配置屏如实标「不在册」。**三张运作 workflow 已由 B 刀补齐** | C 刀 / 试点期 | 「随出厂还是本机库」这个问题已被 V4A-15b 顺带回答:随出厂、住 buddy 自己的资产目录。剩下的是把这两个包真收进 `standard/06-defaults/` |
-| ~~**V4A-7**~~ | ~~所有 ▶跑 都走自我标注的替身执行器~~ **B 刀做完**:桌面壳挂真 `claude`(内嵌终端);工作区目录不存在的项目仍退回替身,产出带【mock】 | ✅ B 刀 | |
-| ~~**V4A-8**~~ | ~~会话屏只如实列了会话记录~~ **B 刀做完**:三栏(会话列表 / 终端·文件·diff 三页签 / 文件树·改动·git·MR) | ✅ B 刀 | agent 只有「运行中/空闲」两态,见 V4B-3 |
-| ~~**V4A-9**~~ | ~~通知屏没有「合入并完成」按钮~~ **B 刀做完**:先真合 MR 再推完成,合入失败整条失败 | ✅ B 刀 | 2026-08-20 试点又把这颗按钮从通知屏**整段删掉**了(用户拍板:通知只通知,不在那儿下决定)。那条命令没删,挪到了计划屏 —— 拖进「已完成」和详情抽屉的「✓ 点完成」发的都是它 |
-| ~~**V4A-10**~~ | ~~知识库只有仓内 `docs/` 文档树~~ **C 刀做完**:三页签(知识 / 代码图 / 资产),知识树改成按规范几大类找固定路径 | ✅ C 刀 | 代码图只做了大文件榜,见 V4C-3 |
-| **V4A-11** | 远端一条没接:活是本机建的,`remote_number` 恒空;发版、排期都不打远端标签 | C 刀及以后 | `.bw/project.toml` 里的远端地址目前只用来显示与探活 |
-| **V4A-12** | Windows 安装包 `0.4.0-v4` 没打;新壳只在 macOS 上跑过。**C 刀查清了为什么打不了**:`BuildersWorkbench-Setup.exe` 的 Inno `.iss` 脚本**不在这个仓里**(当初在 Windows 机器上单独维护),这台 mac 上出不了这一包 | 试点期(要 Windows 机器) | C 刀把 macOS 那条补齐了:`./scripts/bundle-desktop.sh v4` → `dist/BW-V4.app`(版本号 `0.4.0-v4`)。拖拽在 Windows 上要 `with_disable_drag_drop_handler(true)`,代码里已经这么写,未真机验证 |
-| **V4A-13** | 旧壳 `app-desktop` 与旧库 `workbench.db` 原样留着。**C 刀逐条核对过删除判据**(已归档 design/01 §2.11 已整块重写):四条**一条都不满足**,今天不能删 | 试点期之后 | 差得最远的是母文档 §8 那八条整体验收(两个真实周循环、真跑 claude、第二台 buddy、Windows 包、项目群真连) |
-| **V4A-14** | `welink-cli` 探活恒为「还没接实现」(灰,不是红) | 试点期 | 留位是有意的:没接的东西显示灰,不显示红也不显示绿 |
-
-
-| **V4A-15** | **写仓不走分支与 MR**。2026-08-20 做掉了一半:**规范铺底**和**▶跑**现在都在这张活自己的 worktree(`<仓名>-issue-<号>`)与分支(`bw/issue-<号>`)上干活,铺底还会推分支、开 MR、把活推到「评审中」等人合。**还没走这条路的**:改名片、发版本、拖卡片回写周计划 —— 这三个仍然直接改主工作区的文件,不建活、不开分支、不开 MR | V4 可排(结构性) | 已归档 design/03 §2.2/§2.5 已按实况整块重写;06 §2.4 描述的发版与排期仍是直写,那两处的实况标注不变 |
-| ~~**V4A-15b**~~ | ~~项目仓把 `.claude/` 写进 `.gitignore` 时,铺进去的预置技能包进不了版本控制~~ **2026-08-20 拍板并做掉**:buddy 自带的技能**不再复制进用户仓**,住在 buddy 自己的资产目录(`<库文件所在目录>/assets/skills/`),开工时只把这张活挂的那一份的名字+一句话+完整路径写进系统提示词,正文让 agent 按需读 | ✅ 已定 | 三条路里选了第三条的变体。已归档 design/04 §2.7 已整块重写;读回 `cargo run -p bw-v4 --example prompt_smoke -- <目录>` |
-| ~~**V4A-16**~~ | ~~`claude_conversation` 表永远是空的~~ **B 刀做完**:▶跑 走 PTY 那条路时真写会话行 | ✅ B 刀 | 指挥器(替身路径)仍然不写这张表 —— 没起过真会话就不该有会话行,见 V4B-4 |
-| **V4A-17** | 同一件事有两份会漂移的定义:周计划文件的格式在 `standard/03-docs/plan/WEEK.md.tmpl` 和 `week_plan_file::render` 各写了一遍(模板编进了二进制但没人读);`.bw/releases.md` 的默认正文同理 | 结构债,随手做 | 让 render 读模板,或者把模板删掉只留一份 |
-| **V4A-18** | 内核线程里任何一处 panic 都会让线程静默死掉:界面停在最后一份 ViewModel 上,之后发出去的命令石沉大海,而且没有任何提示 | V4 可排 | 在内核循环外面裹一层 `catch_unwind`,把死因送进「起不来」那块红字 |
-| **V4B-1** | 运作活②的 agent 侧产出没法读回:盘点报告落地、微重构只出建议不改代码这两条,要真 agent 会话才验得了,B 刀跑的是替身 | 试点期 | 剧本(`asset-audit/SKILL.md`)里 DoD 与常见坑都写死了,缺的是真跑一次 |
-| **V4B-2** | `north-star-discovery` / `metrics-binding` 两份旧技能仍在 `docs/skills/`,并被 `bw_core::bw_library` 编进 V3 二进制 —— **对 V4 已不成立**(V4 的技能清单 2026-08-21 收敛成 `standard/skills/` 11 份平铺,不含这两份,也不再读 `docs/skills/`,见 **试点-2**);**对 V3 仍成立** | V3 不再投入,等删 | 当初判「顺手删」是错的:这两个名字散在约 30 个文件里(排除 `docs/archive/`),其中 V3 创建流那条「标配 Issue 三件套」链上就有 11 处(`bw-core/src/{standards,bw_library,stage_catalog,model}.rs`、`bw-app/src/project_sync.rs` 等),动它就是动 V3 的创建流。按「一心 V4」的节奏,跟着 V3 一起删 |
-| **V4B-3** | 会话屏 agent 状态只有「运行中 / 空闲」两态。设计里的四态(加「等你输入」「已推评审」)要靠 claude 的 hook 回传 `Notification` / `PreToolUse`,`hook_listener` 那套增量没做 | V4 可排 | 现在只显示进程在不在 —— 唯一真实的信号。不猜,不显示第三态 |
-| **V4B-4** | 指挥器(替身执行器路径)不写 `claude_conversation` 行,所以拿指挥器生成的库开会话屏,左列是空的 | 有意如此 | 没起过真会话就不该有会话行。要看会话屏得用真工作区点一次 ▶跑 |
-| **V4B-5** | MR 卡只有号码,没有「检查是否通过」那一列 —— `gh pr checks` 对应的函数今天不存在 | C 刀及以后 | 已归档 design/05 §3 已把它列成缺口 |
-| **V4B-6** | 会话屏的三件没做:Cursor 适配(`CURSOR` 常量仍 `supported: false`)、内嵌 Open Design 页签、蒸馏按钮(V4 还没有 `DistillSkillFromIssue` 对应命令) | C 刀及以后 | |
-| **V4B-7** | ~~定时只对当前打开着的项目跑~~ **2026-08-21 拍板推翻**:定时要定时跑 —— 对**所有**纳管项目到点就干(资产盘点、指标采集、手填提醒活都是),唯一的闸是项目级开关(存本机、默认开)。见 [`design/14-metrics-collection.md`](archive/v4-prototype/design/14-metrics-collection.md) §2.8 | 随指标采集那一批落地(**试点-7**) | 原来的顾虑(一打开撞见一片自己没点过的活)由「自动建的活来源标 auto、通知只提示不推进」承接,不再靠不跑来躲 |
-| **V4C-1** | 历史回填只做了**三层流水线的第 1 层**(buddy 自己算 git 写文件)。第 2 层(agent 读文本补 PROJECT.md 草稿、解析 CHANGELOG、列指标候选)与第 3 层(人评审 MR)都没做 | 试点期 | 已归档 design/03 §2.4 已整块重写成实况。第 2 层要起真 agent 会话,剧本在 `asset-audit/SKILL.md` 里 |
-| **V4C-2** | 回填**不算这三样**:作者分布、按周一级目录 Top3、远端 issue 与 MR 明细 | 需要时再做 | 前两样今天没有界面读(没人读的不算);第三样要连远端,和 V4A-11 同一条线 |
-| **V4C-3** | 代码图三样只做了大文件榜。**符号搜索**与**模块依赖概览**(`codegraph explore`)没做 | V4 可排 | 后者连有没有稳定的结构化输出都没核实过(已归档 design/11 §6 开放问题 1),不猜一个解析格式 |
-| **V4C-4** | 群摘要没做:`FetchChatDigest` 这条命令不存在,运作活①拿不到上周群消息当参考 | 试点期 | `ChatGroup::fetch_history` 的接口与 mock 实现都在,缺的是「拉一段、按天分组写成本机文件、注入给运作活①」那段 |
-| **V4C-5** | 项目群只能在仓文件里改:`SetProjectChat` 命令内核里有,配置屏只显示不编辑 | V4 可排 | 设计上它要走「编辑项目信息」那条轻量活 + MR,而那条链路本身卡在 V4A-15(写仓不走分支与 MR) |
-| **V4C-6** | 会话回放不存:切走一个**已经跑完**的会话再切回来,终端是空的 | V4 可排 | 只挂「进程还活着」或「正被选中」的会话,是为了不让一堆死会话各留一条 30ms 轮询。要留回放得把 PTY 字节落盘,那是另一件事 |
-| **V4C-7** | `[BW_CHAT_SENT]` 只验到了「评审中」这一类与「重复会真的重复」。合入与发版两类的触发点接上了,但演示项目没挂远端,没真走到过 | 接上远端之后 | 触发点在 `MergeAndSettle` / `CutRelease` 末尾,读回办法同 §8-8 |
-| **V4D-1** | 代码仓级指标缺远端的**开放 PR 数、远端 issue 数**。~~合入的 PR 数~~ **已接**(2026-08-21):总览⑤块那三条近四周走势里,「每周合入的 PR」真连 GitHub(`bw_engine::github::merged_pr_count`);codehub 那边今天没有「按周窗口查 MR」的命令,那条线如实留空、不猜参数 | 接上远端之后 | 和 V4A-11 同一条线。今天不编,只列采得到的 |
-| **V4D-2** | 指标卡缺五个字段:保鲜期、观测说明、本周目标、达成与否、**趋势**(`MetricCardVm` 里连这一栏都没有,业务指标卡上不画线)。**要先改 `.bw/metrics.toml` 的格式**,不是界面的事 | V4 可排(先改规范) | 高保真上前四项都有;`bw_engine::metrics_file` 今天没有这几栏。格式怎么改已经有正本了:[`design/14-metrics-collection.md`](archive/v4-prototype/design/14-metrics-collection.md) §2.6,和 **试点-7** 一起做 |
-| **V4D-3** | 项目名片缺「负责人」一栏,同理要先给 `.bw/project.toml` 加字段 | V4 可排(先改规范) | |
-| **V4D-4** | 配置屏的 workflow 与 skill 两张表**没有导入与启用开关**;蒸馏(`DistillSkillFromIssue`)在 V4 里还不存在 | V4 可排 | 界面上是灰态留位,鼠标停上去写明为什么按不动 |
-| **V4D-5** | 计划屏「预览 · 未合入」开关是灰的:要先能读远端未合入的改动 | 接上远端之后 | |
-| **V4D-6** | 知识库的**符号影响面搜索**与 **crate 依赖图**没做。依赖图另有一层:高保真那张 SVG 是照 buddy 自己的仓画死的,换个项目就是假的,得先有数据源 | V4 可排 | 符号搜索同 V4C-3 |
-| **V4D-7** | 接入屏列不出**远端有哪些仓**,「新建」也不会替人在平台上开仓。界面上给的是一句实话 + 能直接填的地址框,不摆假列表 | 接上远端之后 | |
-| **V4D-8** | 没有「删除项目」这条命令,所以项目卡上不放 × | 需要时再做 | 高保真上那个 × 删的是演示数据 |
-| **V4D-9** | 配置屏定时表里两张运作活的**名字写死在界面层**(`vm_panels::build_crons`),只有触发方式和时间表来自 `.bw/issue-policy.toml`。项目改了这两张活的标题,表里照旧显示出厂名字 | V4 可排(先改规范) | 名字该和触发方式一样从策略/规范文件里取;那份文件今天没有这一栏。`/code-review` 报的,如实记下不掩盖 |
-| **V4D-10** | 周进度条四段用整除算宽度,和可能差 1%(3 张活时 33+33+33=99) | 需要时再做 | 纯视觉,数字本身是准的 |
-| **V4F-1** | 接入屏列仓只列**你自己账号下的**仓(`gh repo list` 的默认口径),组织下的仓、别人共享给你的仓列不出来 | V4 可排 | `gh repo list <org>` 加个参数就行,缺的是界面上「换个 owner 看」这一格 |
-| **V4F-2** | 点仓行猜的本机路径是「工作区根目录 + 仓名」,**那个目录不存在时 buddy 不会替你 clone** | V4 可排 | `github::clone_repo` / `codehub::clone_repo` 都是现成的,缺的是界面上问一句「要我 clone 吗」 |
-| **V4F-3** | 库文件路径仍然只读(只能启动前设 `BW_DB`) | 先这样,不排 | 进程起来后库连接已经建好,改它必须重启;工作区根目录没这个问题,所以那个已经能改了 |
-| **V4E-1** | ▶跑 跑完**不会自动开 MR**。人得去会话屏点一下「提交并开 MR」 | 先这样,不排 | 手点那条路已经通了(`Command::SubmitIssueWork`,会话屏主按钮)。剩下的只是「自动」:交互式会话什么时候算跑完,V4 今天没有判据,而且「什么时候算干完」本来就该人说了算 —— 这条从缺口降成一个有意为之的设计 |
-| **V4E-2** | 活结清时 worktree **脏就不收**,原样留在磁盘上;界面上没有地方能看见"还剩哪几棵树"、也没有一键收尾 | V4 可排 | 干净才收是故意的(见 `app/worktree.rs`);缺的是让人看得见这些树。`git worktree list` 现在是唯一的查法 |
-| **V4E-3** | worktree 从**主检出当前所在的分支**开出来,不是从默认分支。人自己停在一条实验分支上时,新活的分支会带着那条分支的改动 | 需要时再做 | 复用的是 V3 的 `provision_issue_worktree`,V3 也是这个行为。要改就得先想清楚"以谁为基线"这件事该谁定 |
-| **V4E-4** | 仓的 `.gitignore` 拒收的件镜像进主工作区时,**主工作区已有同名文件就不覆盖**,所以规范升级不会更新那一份 | V4 可排 | 和 V4A-15 的对账/升级是同一条线;今天在活的正文里如实写明"没覆盖" |
-| **V4E-5** | 铺底之后、MR 合入之前,**主检出上还没有那些规范件**,所以定时(节律)、类别→工具映射、规范对账这三处都读不到,界面上会显示"没配节律""规范全缺" | V4 可排 | 「仓是正本、合入才算数」的必然结果,不是 bug;缺的是界面上一句提示。今天只在铺底那张活的正文里写了一句 |
-| **V4G-1** | buddy 还不会给纳管的项目写开发手册(仓根 `AGENTS.md`:怎么建、怎么跑、怎么测、目录导览、项目特有的规矩)。接项目这一步**有意不写**,仓根一个字不碰 | 试点期 | 这件事归资产盘点首次模式的子技能 `project-handbook`:真读一遍仓 → 把读出来的摊给人看 → **问人要不要** → 点头才写 → MR 评审。给别人的项目加规范是在改人家的项目,得先问过,不是接项目那一刻能干的(已归档 design/03 §2.3 记了两次推翻的经过)。卡在 V4A-4 同一处:那次会话还没起过 |
-| **V4G-2** | 通知**只剩「有 MR 等你合」一类**。会话跑完停下但没开 MR、agent 在等人回话这两类不再进通知屏 | 有人接手时再做 | 用户拍板:等人回话那种更该是系统级弹窗,不该混在通知列表里;这一块整体留给专人设计,现在少做不假做 |
-| **V4G-3** | 规范版本从 4.0 跳到 5.0(落点全进 `.bw/`),**不写迁移**。用 4.0 铺过的项目仓里那些老落点(仓根 `PROJECT.md`、`docs/plan/`、`docs/releases.md`)在 5.0 眼里就是「不在册」,既不读也不删 | 有人踩到再说 | 试点期只有一个真实项目,重接一次比写迁移便宜。真要迁,是一张活,不是一段兼容代码 |
-| **V4G-4** | 用 ✕ 移走一个项目、再把同一个仓接进来,**会接着用上一次留下的分支**(`bw/issue-1` 已经存在就原样复用),新的铺底提交叠在旧的上面,MR 里两套东西都出现 | V4 可排 | 移走只动库不动仓,是有意的(仓是你的);但「重接」这条路该发现仓里已经有 `bw/issue-<号>` 并当场说清楚:接着用、还是换个号。今天两句都没有,悄悄接着用 |
-| **V4G-5** | 拖进「已完成」的确认框按**库里记的 MR 号**说话:库里是 0 就说「这张活没有 MR」。可内核真去合的时候还会拿这条分支去远端问一次(队友自己 `gh pr create` 开的 MR 就这么找到),于是可能出现「说了不合、其实合了一个」 | V4 可排 | 说少了不说多了,方向是安全的。要说准得在弹框之前打一次远端 —— 那是一次网络往返,拖一下卡片就打一次远端,值不值得先想清楚 |
-| ~~**试点-1**~~ | ~~V4 只依赖自己那套,不再碰 `bw-core`~~ **2026-08-21 全部做完**:新起 `crates/v4-engine`(从 `bw-engine` 拷过来接管,5,783 → 4,356 行);领域类型(身份、`Signal`、活的状态机、五类别)逐字拷进 `crates/bw-v4/src/model.rs` 自持;技能库随 **试点-2** 一起搬走。读回:`cargo tree -p bw-v4` 与 `-p app-shell` 里 V3 crate 计数为 **0** | ✅ 已断干净 | 为什么是拷贝不是改 `bw-engine`:V3 那一整个目录最终要整体删掉,而 `bw-engine` 自己依赖 `bw-core`,「只复用 bw-engine」会把 `bw-core` 顺着传递进 V4;改 `bw-engine` 又会动到还在跑的 V3。拷一份两边都不牵连。底座里的 id 一律换成裸 `uuid::Uuid`(语义类型留给上层);那段拼中文业务提示词的 `build_project_context_block` 直接没拷过来(**试点-6** 因此对 V4 不再成立,对 V3 仍然成立)。转移表是逐字拷贝的 —— 「完成的唯一入边是评审中」这条铁律一条边没动。经过见 [`design.md`](v4-prototype/design.md) 第 12 章 |
-| ~~**试点-2**~~ | ~~技能有两个并列正本目录、且用目录层级表达从属~~ **2026-08-21 做完**:收敛成 `standard/skills/<名字>/SKILL.md` **一个平铺目录、11 份**(七份方法论 + 四份运作剧本),谁调用谁写在正文里,目录不再表达任何结构 | ✅ 已收敛 | 两份僵尸(`north-star-discovery`/`metrics-binding`,内容早并进 `metrics-refresh`)**没有**收进 V4 的清单;`docs/skills/` 下的原文件原样留给 V3 用(V3 创建流那条「标配 Issue 三件套」链上有 11 处引用,动它就是动 V3),V4 不再读那个目录 —— 见 **V4B-2**。读回 `cargo run -p bw-v4 --example prompt_smoke -- <目录>`:编入 11 份、落盘 11 份、路径已是平铺新位置 |
-| ~~**试点-3**~~ | ~~配置屏的连接器表是孤儿~~ **2026-08-21 做掉**:那张表、`ConnectorVm`、随之变死的 `probe_chip` 一并删除;`app-shell` 不再读 `.bw/connectors.toml` | ✅ 已删 | 按 [`design/14-metrics-collection.md`](archive/v4-prototype/design/14-metrics-collection.md) §3.3,V4 不要「连接器」这个中间概念 —— 一条指标直接指向一个脚本。`.bw/connectors.toml` 在 V4 眼里就是「不在册」,既不读也不删 |
-| **试点-4** | **`MockInteractiveExecutor` 会往任何工作区写一份 V3 语义的 `.bw/metrics.toml` 占位文件**,**V4 跑替身也会中招** | V4 可排 | `crates/bw-engine/src/interactive_cli.rs` 的 `write_mock_metrics_toml`,`run_skill` 与 `run_skill_pty` 两条路都调它。写的是 `schema_version = 1` + `collect = { kind = "manual", query = "" }` —— 恰好是 14 篇 §2.6 定义为「旧格式,应当报错」的那种。V4 走到替身的路有两条:项目没有真实工作区时(`crates/bw-v4/src/app/issue.rs`),以及六个 `examples/*_smoke.rs` 指挥器。后果是替身跑一次就在人的仓里留下一份**内容是假的、格式是过期的**指标正本,而界面会把它当正本读(和 2026-08-21 铺底那次撞见的「别人的 metrics.toml」是同一类事故)。**替身不该替人写正本**;真要留痕就写进活的正文 |
-| **试点-5** | `bw-engine` 里两条零调用者死链,共 9 个符号。**V4 侧已随 `v4-engine` 的拷贝一并去掉**,`bw-engine` 那份仍在(V3 还在用这个 crate) | 结构债,随手做(V3 侧) | ①`Remote::collect_count` 系 5 项 ②`Remote::create_mr` / `open_pr` 系 4 项。**一处教训**:体检把 `github::adopt_existing_pr` 也判成死代码,实际它有第二个调用方,编译器当场抓出来 —— grep 出来的「零调用者」删之前一定要过一次编译器。现网在用的 `create_mr_on_branch` / `open_mr_for_branch` / `merged_pr_count` 别误删 |
-| **试点-6** | **`bw-engine` 的业务语义泄漏**:它本该只管「起进程、给工作区、跑 git」,现在却懂业务 | 结构债 | 两处:①`interactive_cli.rs::build_project_context_block` 直接拼中文业务提示词(「## 本次项目上下文」「对标对象」「北极星」……),而且吃 `bw_core::playbook::PlaybookCtx` —— 这是 **试点-1** 那条依赖里最难拆的一处;②`workspace.rs::commit_initial` 给新工作区写 `.gitignore` 时**写死 `/target`**,等于假设被托管的项目是 Rust 项目。buddy 要管别人的仓,这个假设不成立 |
-| **试点-7** | **指标采集整套还没接**:V4 今天一条采集都没有,指标读数的唯一来源是运作活①的 agent 手抄进周计划文件的那几行 | V4 可排(设计已成稿) | 设计正本是 [`design/14-metrics-collection.md`](archive/v4-prototype/design/14-metrics-collection.md)(2026-08-21 定稿):判据按「历史还能不能重新算出来」分 A/B/C 三类、采集方式收成脚本 / 手填两种、窗口由 buddy 传给脚本、只认 stdout 的 JSON、读数落 `.bw/metrics/readings.jsonl` 并离开周计划文件、`metrics.toml` 的 `schema_version` 跳到 2 且不写迁移。要落的模块清单在该篇 §3.2。和 **V4A-5**(指标见红那条判据恒不成立)、**V4D-2**(指标卡缺字段)是同一批 |
-| **试点-8** | **`.bw/standard.toml` 的 `enabled` 是个死字段**:模板里写着 `enabled = ["charter", "agents", "docs-core", "metrics", "issue-policy", "defaults-core", "cadence"]`,解析器(`repo/standard_file.rs`)也读它,但**铺底 `write_core_files` 根本不拿它做过滤** —— 铺不铺只看每份模板自己标的 `LayAt`。而且这七个名字里 `agents` / `defaults-core` / `cadence` 三个在二进制里没有任何对应模板 | 低(先如实标注) | 要么让铺底真按 `enabled` 过滤,要么把这一行降级成注释性说明(现状就是说明)。[`design/03-standard-and-backfill.md`](archive/v4-prototype/design/03-standard-and-backfill.md) §2.2 已按实况改写,先不假装它是开关 |
+| ① | **周计划、发版记录、名片改动只落在主工作区的文件上,不建分支、不开 MR、也不推远端**。三处都是直接写文件:开始本周、拖卡片回写、发版本 | 条 1 要的是这些东西「**都在仓里**」,而它们只在这台机器的工作树上。顺带条 4(第二台 buddy 从同一份仓重算出一致的计划)也过不去 | `bw-v4/src/app/plan.rs`、`app/project.rs::edit_project_card` |
+| ② | **定时只对当前打开着的项目跑**。2026-08-21 已拍板推翻:定时要对所有纳管项目到点就干,闸是项目级开关(存本机、默认开) | 条 1 要「两轮运作活①②」,而运作活②(资产盘点)是定时触发的——buddy 没打开那个项目就不会到点 | `bw-v4/src/command.rs::TickScheduler`(今天带 `project_id` 参数) |
 
-| **试点-9** | **`BW_KEEP_ANTHROPIC_ENV` 是试点期的临时后门,跑通就删**:设了它(任意非空值),起子 `claude` 时就不剥 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL` 三个环境变量,把人自己配的厂商端点原样透传;那四个 `CLAUDE_CODE_*` 照剥。**背景**:本机 `claude` 的登录过期、人一时不方便重登,想先换一个厂商的端点把第 1-3 站跑起来 | 试点期(用完删) | **这不是产品功能**,不进设置屏、不写进仓、界面上一个字都不提。用户拍板过 buddy 不该去感知机器上 `claude` 怎么鉴权 —— 那是 CLI 自己该保证的事,buddy 只负责起进程(设计正本 §7.9「claude 未装 / 探不到 → 终端里直接看到原始报错」就是这条)。所以剥离清单本身**没改语义**,只多了一个显式的临时豁免开关。落点 `crates/v4-engine/src/interactive_cli.rs::is_stripped` |
+### 差在「灯不是灰的、每个数字都能核对」(§13.1 条 2)
 
+| # | 差什么 | 为什么过不去 | 落点 |
+|---|---|---|---|
+| ③ | **指标采集整套没接**。今天一条采集都没有,读数的唯一来源是运作活①的 agent 手抄进周计划文件的那几行。连带两件:健康三判据里「指标见红」那条恒为不成立(`any_metric_red` 是写死的 false);指标卡缺保鲜期、观测说明、达成与否、趋势四栏,要先改 `.bw/metrics.toml` 的格式 | 条 2 要「灯的每条理由、每个数字都能用 `sqlite3` 或打开仓文件核对出来」——三条判据里有一条是假的,数也是人抄的 | 设计已定稿:[`archive/v4-prototype/design/14-metrics-collection.md`](archive/v4-prototype/design/14-metrics-collection.md),要落的模块清单在 §3.2。落点 `bw-v4/src/app/health.rs`、`repo/metrics_file` |
+| ④ | **替身执行器会往人的仓里写一份假的 `.bw/metrics.toml`**:格式是旧的(设计上应当报错的那种)、内容是编的,而界面会把它当正本读 | 条 2 要「打开仓文件核对得出来」,而正本已经被污染 | `v4-engine/src/interactive_cli.rs::write_mock_metrics_toml`(`run_skill` 与 `run_skill_pty` 两条路都调)。**替身不该替人写正本**,要留痕就写进活的正文 |
 
-已关闭、已接受的条目仍在下方史实里，表里不重复。**减负-N** 系列是 2026-08-17/18 减负重构会话从 `docs/BACKLOG.md` 并入的（该文件已删，序号沿用；1、2 两条已做，收据在下方「减负重构收据」）。**V4A-N** / **V4B-N** / **V4C-N** / **V4D-N** / **V4E-N** / **V4F-N** / **V4G-N** 系列分别是 V4 A 刀(骨架 + 数据 + 主环)、B 刀(运作活 + 会话屏)、C 刀(回填 + 项目群 + 知识库 + 包)、D 刀(九屏照高保真重排)、E 刀(每张活一棵 worktree + 铺底提 MR)、F 刀(接入屏列真仓)、G 刀(试点第一天:铺底收进 `.bw/`、技能不进用户仓、通知只留 MR)交付时如实登记的没做完的部分,代号已进 `code-schemes.md`。**试点-N** 是 2026-08-21 那次「试点第 1-3 站 + V4 文档整理」复核出来的欠账,不属于任何一刀,中文前缀、不与字母系列撞车,同样已登记。
+### 差在「两种开工工具各跑通一张活」(§13.1 条 3)
 
-### 归正（迁入时）
+| # | 差什么 | 为什么过不去 | 落点 |
+|---|---|---|---|
+| ⑤ | **开工只会起 claude**。活上记着用哪个工具(库里存的是 claude_cli / cursor / open_design 三选一,配置屏也让人选),但开工那一步根本不读这个字段,四处全是写死的 claude。内嵌 Open Design 页签也没做 | 条 3 明写「**至少一张活用 Open Design 开工**、至少一张用 Claude CLI 开工」 | `bw-v4/src/app/session.rs`(三处)、`app/issue.rs`(一处)。**在接上之前,配置屏那个下拉该按 §12.5 的规矩变灰并写明原因**,不该让人选了不算数 |
 
-- **W2-6 多人协作**：原文写「V1 不接，留 V1+」。V2-② 已落地「同一仓、多台 buddy 分别纳管」，不是成员/群聊。这条不再当开着的缺口；完整团队协作仍不在产品范围内（反命题）。
-- **V2 · 阶段默认 Skill / 系统提示词**：已记入 V2 队列后，V2-① 已实现。开着的只剩「五大板块默认 skill 是否够用」这类打磨，不再当作「完全没做」。
+### 差在「第二台 buddy 纳入同一仓」(§13.1 条 4)
 
----
+这一条没有单独的缺口:它整个压在第 1 处上——**周计划不进仓,第二台机器就重算不出同一份计划**。仓不在本机时 buddy 不替人 clone,那是难用、不是走不通(人自己 clone 一下就接着走),不记在这里。
 
-## 史实条目（从 `docs/v1-prototype/LEFTOVERS.md` 迁入）
+### 差在「Windows 上装得上、跑得起」(§13.1 条 5)
 
-下面从原 V1 清单一字不改接上，便于对当时窗口号。新状态以文首「当前开着」表为准。
+| # | 差什么 | 为什么过不去 | 落点 |
+|---|---|---|---|
+| ⑥ | **Windows 安装包出不了,而且内嵌终端的 Windows 后端没在真机上跑过**。打包脚本当初在 Windows 机器上单独维护,不在这个仓里;终端后端只做过交叉编译核对 | 条 5 要「安装包在同事机器上装得上、跑得起」——包出不来,出来了也没人验证过干活入口能不能用 | 要一台 Windows 机器。macOS 那条路是通的(`./scripts/bundle-desktop.sh v4`)。真机上跑 `cargo run -p v4-engine --example pty_smoke`(把 `bash -c` 换成 `cmd /C echo pty-ok`) |
 
-## W1-1 · 创建时 buddy 自动写并 push 用户项目仓提交
+### 差在「老项目回填对得回 git」(§13.1 条 7)
 
-**产生窗口**：W1 纳入项目（`docs/v1-prototype/issue1-onboard-simplify.md`）
+| # | 差什么 | 为什么过不去 | 落点 |
+|---|---|---|---|
+| ⑦ | **资产盘点(运作活②)的 agent 那半从来没起过会话**。今天只做了确定性的那一层(buddy 自己算 git 写文件);要 agent 干的三件——读文本补名片草稿、解析变更日志、列指标候选——都没做,人评审 MR 那一层也没有。给项目写开发手册(仓根 `AGENTS.md`)是这张活的子技能,同样卡在这里 | 条 1 要「两轮运作活①②」,条 7 要老项目接入后历史数字对得回 git。剧本(`asset-audit/SKILL.md`)里 DoD 和常见坑都写死了,缺的是**真跑一次** | 编排「铺底探测到有历史 → 自动起一次会话」那一段 |
 
-**现象**：`CreateProject` / `CompleteCreation` 在用户项目的 owned workspace 自动 `commit_file` 写两类文件，并在 `CompleteCreation` 末 `push_head` 推远端：
-- `PROJECT.md` 章程（`docs(bw): 项目章程 · 开篇` + `… · 完成创建`，两次提交）——`crates/bw-app/src/lib.rs` `write_charter`
-- `.claude/standards/{agent,skill,workflow,cron}-standards.md` 四份组件标准（`docs(bw): 模板能力 · 组件标准文件`）——`write_component_standards`
+### 差在「项目群」(§13.1 条 8)
 
-buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 push 到用户项目远端 main。
+| # | 差什么 | 为什么过不去 | 落点 |
+|---|---|---|---|
+| ⑧ | **WeLink 群还没接上**。发消息那一层今天是一句「待内部同事实现」 | 条 8 整条都压在这上面 | `bw-v4/src/chat/welink.rs` |
+| ⑨ | **群摘要没做**:拉一段群消息、按天分组写成本机文件、注入给运作活①,这条链一段都没有 | 条 8 后半:「**定计划那次会话里能看到 agent 引用了上周群摘要**」 | 接口与假群实现都在(`ChatGroup::fetch_history`),缺的是那条命令和注入 |
+| ⑩ | **群通知只验到了「评审中」这一类**。合入、发版两类的触发点接上了,但演示项目没挂远端,没真走到过 | 条 8 前半:「一次评审中 / 一次合入 / 一次发版**各在群里收到一条**」 | 触发点在 `MergeAndSettle` / `CutRelease` 末尾。要接上远端才验得了 |
 
-**未决点**：
-1. **必要性 / 健壮性**——buddy 动用户项目 git 历史是否必须？章程 + 组件标准该自动写进仓，还是该由用户主动生成 / opt-in？`docs(bw):` 提交约定是否撞用户项目自有的 commit 规范（用户项目可能有自己的 conventional-commits / 签名要求）？
-2. **worktree 感知**——buddy 在自己的 workspace clone 提交并 push；用户若在项目的独立 worktree 工作，需 `git pull` 才能感知这些自动提交，存在同步感知缺口（用户不知道 buddy 往 main 推过东西）。
-3. **PR 独立性**——三件套（竞品分析 / 找指标 / 绑数据）各产 PR；charter + standards 已在 base（main）上，PR 从该 base 分支基本不碍独立性。但 buddy `push_head` 与用户 worktree 并行 push 同一 main 可能产生分叉 / 冲突 / 强推风险。
+### 差在「读回证据」(§13.1 条 6)
 
-**处置**：✅ 已修（2026-08-07）。用户决议：仓库是 buddy 建的、建之初推初始规范没问题，**保留自动写章程+组件标准+本地 commit+push main（不走 PR）**，不加 opt-out 勾选。只补「报告不代答」缺口：三处 `let _ =` 静默吞失败（CreateProject 章程/标准 + CompleteCreation 章程）改成失败 toast；push 成功的「已推送」toast 原本就有。失败不再静默。
+| # | 差什么 | 为什么过不去 | 落点 |
+|---|---|---|---|
+| ⑪ | **每个模块的读回跑过,但证据没有落成文件进仓**。今天是跑完就散在会话里 | 条 6:「每个模块至少一条读回记录(深链 + SQL + 截图)」。这也是删旧壳四条判据里的第一条(`design.md` §12.6) | 一站验收完顺手落一份,不必等到最后 |
 
-**事实源**：`crates/bw-app/src/lib.rs`（`write_charter` L7829 / `write_component_standards` L7855 / `push_head` 调用 L5522）。
+### 不属八条,但必须留
 
----
+这一节是上面那条判据的两个例外,**例外只有这两条**,加第三条之前先想清楚为什么。
 
-## W1-2 · codehub clone 同步堵命令循环 → Intent 提交后 UI 冻死
-
-**产生窗口**：W1 纳入项目（`issue1-onboard-simplify.md` §6 bug①）。
-
-**现象**：`CreateProject`/`CompleteCreation` 里 codehub `git clone` 同步执行，堵住 buddy 单线程命令循环，Intent 卡提交后 UI 卡死。PF1 穿刺批次（`piercing-fixes-1.md` 点④）修了 cron 抢跑时序（clone 完成前 cron 不跑、`CompleteCreation` 即采一次），缓解了「采集抢在 clone 完成前」的竞态，但 **clone 同步堵命令循环的根因未解**。
-
-**未决点**：clone 是否该改异步/后台执行释放命令循环？
-
-**处置**：留后续。PF1 已缓解时序竞态，根因未解。
-
-**事实源**：`docs/v1-prototype/issue1-onboard-simplify.md` §6 bug①、`docs/v1-prototype/piercing-fixes-1.md` 点④。
-
----
-
-## W1-3 · op_stage.routine_schedule/stage_done 留列，signal 过期降级未读它
-
-**产生窗口**：W1 纳入项目（`issue1-onboard-simplify.md` §6）。
-
-**现象**：`op_stage` 表的 `routine_schedule` / `stage_done` 两列 W1 求同存异留了下来；signal 过期降级本想读这列，但改法未做（碰派生链）。
-
-**未决点**：signal 过期降级是否读 `routine_schedule`？
-
-**处置**：✅ 已实质解决，2026-08-07 关闭。读代码确认 `recompute_signals`（`sqlite.rs:1329-1338`）已读 `op_stage.routine_schedule` 解析成 `Cadence` → `measure.rs:70` staleness → `eval.rs:48-53` `stale && Green → Amber`，过期降级链路已完整接通。原记「改法未做」标记错。`stage_done` 列从未加进 schema，不用清。
-
-**事实源**：`docs/v1-prototype/issue1-onboard-simplify.md` §6。
-
----
-
-## W1-4 · 组件标准内容打磨（依赖项）
-
-**产生窗口**：W1 纳入项目（`issue1-onboard-simplify.md` §6）。
-
-**现象**：`write_component_standards` 写四份组件标准（agent/skill/workflow/cron），内容质量打磨是依赖事项。
-
-**未决点**：四份 standards 的内容打磨。
-
-**处置**：留写入（模板已落），内容后续打磨。
-
-**事实源**：`crates/bw-app/src/lib.rs`（`write_component_standards`）、`docs/v1-prototype/issue1-onboard-simplify.md` §6。
-
----
-
-## W3 · 总览重构窗口遗留
-
-**产生窗口**：W3 总览重构（`docs/v1-prototype/issue3-overview-refactor.md`）。v2 总览（ProgressAll）已落地（dev `b166929`），以下问题冒出但不在 W3 解，按窗口边界留给对应窗口或后续。
-
-### W3-1 · 北極星采不到（无 metric 行）
-
-**现象**：北極星指标在 v1 上没有 `metric` 行——采集配置落在 `project` 列（`north_star_collect_kind` / `north_star_query`），挂不上 `observation`，signal 恒 `Unknown`。W3 总览如实渲染灰卡（折线空 + delta「—」+ 底注「Unknown≠绿」），不越界建采数。
-
-**未决点**：北極星该建独立 `metric` 行（role=leading，挂 `north_star` 标记）+ 接 script connector 采数，还是沿用 project 列配置补挂观测链？
-
-**处置**：留窗口二 / 采数。W3 只 UI forward-correct，不动 schema 与采集链。
-
-**事实源**：`crates/bw-app/src/lib.rs:3143`（北極星 collect 落 project 列）、`crates/app-desktop/src/screens/op.rs`（BizMetricCard 灰卡分支）。
-
-### W3-2 · collect_kind 枚举收 5→2 + inline arm 改 script
-
-**现象**：`CollectKind` 枚举现 5 kind（Github / Connector / Bw / Script / Manual，`bw-engine/src/metrics_file.rs:40`）。W2 Phase3 申明收成 2 kind（script / manual），代码未收。W3 只在 UI 层 forward-correct：`collect_label` 把 github/codehub/bw/connector 标「legacy·迁 script」，script→script、manual→manual，不动枚举。
-
-**未决点**：枚举收口 + inline arm 改 script 的迁移落在 W2 Phase3，需同步改采数链与 metrics_file 解析；绑数据 skill + `.bw/scripts/` 正规化同归窗口二/采数。
-
-**处置**：W2 Phase3 / 采数账。W3 只 UI forward-correct，不碰 `bw-engine`。
-
-**事实源**：`crates/ui/src/vm.rs`（collect_label · forward-correct）、`crates/bw-engine/src/metrics_file.rs:40`（CollectKind 枚举 · 待 W2 收）。
-
-### W3-3 · ↻同步指标文件按钮退场
-
-**现象**：v2 总览保留「↻ 同步指标文件」按钮（`op.rs` ProgressAll 业务指标区头）。HTML 原型显退场，W2 Phase3 也申明退场——按窗口边界 W3 不删 W2 申明的活。
-
-**未决点**：W2 Phase3 采数链正规化后，<code>SyncMetricsFile</code> 由 PR merge auto-fire 兜底，手动按钮不再需要即可退场。
-
-**处置**：✅ 已决（2026-08-06 review）。**按钮保留，不退场**。此前两份文档互指对方负责、谁都没删，实况是：`76c7d0e`（W2 Phase3 review-fixup）确实删过，`a2b914c`（W3 总览重构）又加回，今天仍在。这次把口径钉死为保留——merge auto-fire 覆盖不了「人手改了 `.bw/metrics.toml` 但还没走 PR」的补采场景，手动补一刀有真实用途。W2 设计文档 §3.2/§4 Phase3/§5 三处「已退场」申明同步纠偏。
-
-**事实源**：`crates/app-desktop/src/screens/op.rs`（v2 业务指标区 ↻ 按钮）、`docs/v1-prototype/issue3-overview-refactor.md §3`（W2/W3 边界表）。
-
-### W3-4 · 白名单撞名 edge case
-
-**现象**：项目指标 vs 业务指标用 `is_intrinsic_metric` 名字白名单分流（命中 = 层 B 项目指标条，未命中 = 层 A 业务指标卡）。若用户手建指标名字撞 W1 seed 名（「阶段完成 Issue 数」/「开放 Issue 数」/「已合入 MR 数」），会被误判为 intrinsic。
-
-**未决点**：名字撞库低风险但存在。根治需给 metric 表加 intrinsic 布尔字段（或 source 字段区分 buddy-seed vs user-defined），动 schema。
-
-**处置**：V1 接受。后续可加 `intrinsic` 字段根治（新 seed 指标需同步白名单）。
-
-**事实源**：`crates/ui/src/vm.rs`（is_intrinsic_metric · 名字集合）、`docs/v1-prototype/issue3-overview-refactor.md §2`（白名单设计）。
-
-### W3-5 · wall HealthOverviewBar 非逐字移植 op HealthOverviewCard
-
-**现象**：v1 总览的 `HealthOverviewCard`（`op.rs:307-349`，per-project 跨阶段信号 + 点击跳 stage）被移到 `wall.rs` 成 `HealthOverviewBar`。但 wall 无 `OpVm`，改成<strong>跨项目信号分布</strong>（green/amber/red/unknown 计数，green 隐身折成计数，非 green 出声），不是逐字移植。per-project 跨阶段细节留在 ProgressAll 的阶段轴（每 stage 一个信号点）。
-
-**未决点**：wall 跨项目概览 vs op per-project 细节的分工是否最终形态？wall 是否需要点击下钻到某项目的阶段？
-
-**处置**：W3 接受当前形态（wall 跨项目分布 + op 阶段轴细节）。下钻交互待后续。
-
-**事实源**：`crates/app-desktop/src/screens/wall.rs`（HealthOverviewBar）、`crates/app-desktop/src/screens/op.rs`（StageAxis · per-stage 信号点）。
-
-### W3-6 · stats trio 从总览显示拿掉
-
-**现象**：v1 总览有 stats trio（工作流累计 / 定时任务运行中 / 优化中待验收，`op.rs` 原 ProgressAll）。v2 拿掉显示（总览聚焦指标，不堆工程计数）。数据留 `OpVm.stats` 不删（`kernel.rs`），后续可回。
-
-**未决点**：stats 是否该在别处（如 workflow panel）显示？还是退场？
-
-**处置**：W3 从总览拿掉显示，数据留 VM 不删，后续窗口可回。
-
-**事实源**：`crates/app-desktop/src/kernel.rs`（OpVm.stats · 保留）、`crates/app-desktop/src/screens/op.rs`（v2 ProgressAll · 无 stats）。
-
-### W3-7 · W2 Phase2b 嵌入终端 merge 时与 W3 总览 op.rs 共存
-
-**现象**：W2 Phase2b 嵌入终端（xterm / hook / resume）在 W2 分支已成，v1 基线无。W3 总览重构改了 `op.rs` ProgressAll。三窗口合入时，W2 的嵌入终端改动与 W3 的 op.rs v2 布局需共存。
-
-**未决点**：merge 时 op.rs 是否冲突？嵌入终端挂在哪个 panel / 区段？
-
-**处置**：✅ 已解（2026-08-06）。W2 分支上 op.rs 已同时带着嵌入终端（`TerminalWidget`/`WorkflowStage`）与 W3 的 v2 `ProgressAll` 布局，两者是同一文件里不同区段（Center 的 `match (op.panel, stage)` 分支），未见结构冲突。嵌入终端挂在 `Panel::Workflow` 分支下的 `WorkflowStage`；`ProgressAll` 是 `Panel::Progress` 分支——各自独立。
-
-**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md`（Phase 2b · 嵌入终端 · §9/§10 stdin 修复）、`crates/app-desktop/src/screens/op.rs`（`Center` 组件的 panel 分支）。
-
-### W3-8 · weekly delta carry-forward 伪"没变"（review Low）
-
-**现象**：`weekly_spark` 先做 carry-forward（空周继承上个已知值，保折线连续无空缺），`weekly_delta` 再读末两桶算 delta。当某指标本周无新观测但 8 周窗内有旧数据时，末周桶被 carry-forward 填满 → delta 算成 `0.0`，渲染"→ 0.0 / vs 上周"——读着像"没变"，实为"本周没采"。
-
-**未决点**：delta 该不该在"末周桶是 carry-forward 而非真观测"时显「—」（无数据）而非 `0.0`？需 `weekly_spark` 多返回一个"末周桶有无真观测"标志。
-
-**处置**：W3 不解（review 判 Low + 缓解已在：buddy 情况行的 `metrics_stale` 计数标"N 个指标本周未记·建议复盘" + 北極星卡 collection_chain 显"cron 未跑"——信息在，只是不在 delta 数字本身）。后续增强。
-
-**事实源**：`crates/ui/src/vm.rs`（`weekly_spark` carry-forward / `weekly_delta`）、`crates/app-desktop/src/screens/op.rs`（buddy 情况行 `metrics_stale`）。
-
----
-
-## W3-9 · DeleteProject 不清磁盘 workspace clone —— 删项目后磁盘残留
-
-**产生窗口**：W3 总览重构窗口后、用户穿刺准备期（删 omhwcc 重加）实地撞出。
-
-**现象**：`Command::DeleteProject` → `store.delete_project` 只清 DB 行（issue/artifact/connector/cron_task/metric/op_stage/session/handoff/observation/message/skill_file/workflow_version 等全表，清理本身近期已补强，见 `6dce307`），**不删 `workspaces_root` 下该项目的 clone 目录**。物证：用户实际库 `%APPDATA%\BuildersWorkbench\workspaces` 下残留 3 个 omhwcc 孤儿 clone（`aa-c3a908ab` / `ohmycc-739ee884` / `proj-f442abd9`，remote 均 `ssh://git@szv-open.codehub.huawei.com:2222/innersource/AI-Coding_G/omhwcc.git`，DB project 表已无对应行）。全代码库唯一 `remove_dir_all` 是 `workspace.rs:293` 的兄弟目录清理，与删项目无关。
-
-**未决点**：删除是否连带删 workspace clone？边界：用户可能手动把 `workspace_path` 指到自有目录（不该删，如 `/d/2026/code/omhwcc` 是用户自己的工作副本，非 buddy 建的）；只有 buddy 自动建的（`workspaces_root` 下 `<slug>-<uuid6>`）才该删。删目录不可逆，需谨慎（用户可能想保留产物取证）。
-
-**处置**：穿刺后转 issue。重加同仓前，孤儿目录人工清掉。产品指南 U2 **不**写此说明（2026-08-06 决议：进本 LEFTOVERS，不进用户指南）。
-
-**事实源**：`crates/bw-app/src/lib.rs:8458`（DeleteProject handler）、`crates/bw-store/src/sqlite.rs:624`（delete_project）、`crates/app-desktop/src/kernel.rs:483`（workspaces_root）。
-
----
-
-## W2-1 · 嵌入终端离开面板期间可能丢字节；buddy 重启后黑窗口整块消失(无提示)
-
-**产生窗口**：W2 找指标/绑数据 stdin bug 修复棒次（`docs/v1-prototype/issue2-metrics-interactive-loop.md` §10.6/§10.7），用户实测导航 + 重启两个场景冒出。
-
-**现象**：
-1. 同一次 buddy 运行中，切到别的面板再切回工作流，终端曾显示为空——**这部分已修**（§10.6①：`TERM_INIT_JS` 的旧 guard 只判断"存在即返回"，不会把 xterm 的渲染 DOM 搬到 Dioxus 重建出的新 `div` 上；改成"存在就搬家 + 重绑 div 级监听器，`onData` 不重绑"）。
-2. buddy 重启后再进工作流，终端整块（连黑框都）消失——这是`pty_active`(`state.pty_input_tx.is_some()`) 纯内存状态在进程重启后天然为 false 的诚实表现，**不是本次要修的 bug**，但用户体验上没有任何"会话已断开，点▶跑可恢复"的提示,略生硬。
-3. 即便①修好后，如果用户离开工作流面板的时间跨过多个 100ms 采集批次，中间批次的 PTY 输出可能被静默丢弃——PTY 字节走 `watch::channel<Vec<u8>>`(单槽、非队列)从内核线程送到 UI，`TerminalWidget` 卸载时没人 `.changed().await`,内核线程仍按 100ms 一批覆盖发送，只有卸载期间的*最后一批*会被下次挂载时的新 receiver 捞到。
-
-**未决点**：
-- ②要不要在 UI 上加"会话已断开(buddy 重启)，点▶跑用 `--resume` 接回"的提示,而不是让黑框默默消失？
-- ③要不要把单槽 `watch` 换成有界队列/服务端整段 scrollback 缓冲,彻底堵死导航期间丢字节的窗口？这块工作量较大(涉及 kernel.rs 的 pty 分发结构),本次 bugfix 没做。
-
-**处置**：①已修（见 issue2-metrics-interactive-loop.md §10.6，含 Node harness 验证）。②③留后续窗口评估，不在 W2 本棒动。
-
-**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §10.6/§10.7、`crates/app-desktop/src/screens/op.rs`（`TERM_INIT_JS`/`TerminalWidget`）、`crates/app-desktop/src/kernel.rs`（`pty_bytes` watch channel）。
-
----
-
-## W2-2 · Issue 板重复点「▶ 跑」堆积重复「阶段记录」卡 —— 已修，历史脏数据未清
-
-**产生窗口**：W2 找指标/绑数据 stdin bug 修复棒次，用户实测冒出（`docs/v1-prototype/issue2-metrics-interactive-loop.md` §10.5）。
-
-**现象**：同一个 issue（如「找指标」）每点一次「▶ 跑」，工作流「阶段记录」轨就多一张同名卡片，用户删不掉，内容看起来是同一个（空）会话。根因是「▶ 跑」onclick 每次都铸新 `SessionId` 再 `StartSession`，跟 `run_issue_interactive` 真正用来判断 resume 的 `claude_session_id` 完全无关——UI 侧堆积纯粹是重复插入的空壳。
-
-**未决点**：本次按 `(stage_kind, title)` 去重复用既有 session id 解决了"以后不再堆积"，但**历史已经堆积出来的重复卡片没有批量清理路径**（没有 `DeleteSession` 命令）。
-
-**处置**：新增去重（`existing_issue_session()`，op.rs）已修"以后"；"过去"的脏数据不补（没有 `DeleteSession`，加会涉及 store 新方法 + UI 按钮，本次不擅自扩范围）。用户下一步计划重建 cowelink 项目验证，删项目会带走它名下所有会话记录，不需要额外清理动作；如果后续在存量项目上还是想清理，需要单独排 `DeleteSession` 这个功能。
-
-**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §10.5、`crates/app-desktop/src/screens/op.rs`（`existing_issue_session`）。
-
----
-
-## W2-3 · 交互式无 per-token 预算封顶（显式偏差，已接受）
-
-**产生窗口**：W2 交互式引擎（`issue2-metrics-interactive-loop.md` §2.5 R1）。
-
-**现象**：`--max-budget-usd` 只配合 `--print`，交互式 PTY 路径（`run_skill_pty`）没有 per-token 硬 cap，也**不靠超时兜底**——只在会话 EOF / App 丢输入端 / 用户取消时收尾，无 wall-clock deadline。对 `CLAUDE.md`「单次花费封顶」是显式偏差。
-
-**未决点**：交互式是否要补封顶机制？
-
-**处置**：已接受（2026-08-06 review）。封顶是防后台 runaway 的，后台 one-shot 轨（`ClaudeCliExecutor`）照旧 `--max-budget-usd 0.5` + `ATTEMPT_TIMEOUT_SECS`，一行没动。待后续评估是否给交互式补。
-
-**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §2.5、`crates/bw-engine/src/interactive_cli.rs`（`run_skill_pty` 无 deadline）。
-
----
-
-## W2-4 · Phase 5 guide 校准 partial（m6 + u3/u4 待补）
-
-**产生窗口**：W2 交互式引擎（`issue2-metrics-interactive-loop.md` §4 Phase 5、§2.6 #6）。
-
-**现象**：Phase 5 guide 校准只 partial——m4/m5 已改（Phase 1 实态），**m6**（指标采集链 + 表/字段 + script kind「计划中」→「已接」校准）未动，**u3/u4** 阶段屏（交互式用户旅程）待补，信号色 token 对齐 plan/00 §6 未做。
-
-**未决点**：m6 + u3/u4 + 信号色 token 对齐。
-
-**处置**：留 Phase 5 / 后续窗口。altitude 用系统×CRUD。
-
-**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §4 Phase 5、§2.6 #6。
-
----
-
-## W2-5 · Hub 四组件完整规范未定（最简规范已定）
-
-**产生窗口**：W2 交互式引擎（`issue2-metrics-interactive-loop.md` §3.2、§6 遗留②）。
-
-**现象**：Phase 3 只定了最简规范（`.bw/scripts/` 目录约定 + `.bw/connectors.toml` 清单格式 + sync 感知规则）。Hub 四大组件（skill/connector/agent/cron）的**完整规范**未定。
-
-**未决点**：四组件完整规范。
-
-**处置**：留遗留单独定。
-
-**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §3.2、§6 遗留②。
-
----
-
-## W2-6 · 多人协作（多 PC）= V1+ 特性
-
-**产生窗口**：W2 交互式引擎（`issue2-metrics-interactive-loop.md` §6 遗留①）。
-
-**现象**：完整多人协作（多 PC 并行工作）是 V1+ 特性，V1 不接。
-
-**未决点**：协作模型。
-
-**处置**：V1 不接，留 V1+。
-
-**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §6 遗留①。
-
----
-
-## W2-7 · §9.7 诊断 spike 清理待核实
-
-**产生窗口**：W2 交互式引擎（`issue2-metrics-interactive-loop.md` §9.7、§8）。
-
-**现象**：§9.7 列了开发阶段清理项——删 `crates/bw-engine/examples/` 下诊断 spike 源文件（pty_spike/conpty_direct/conpty_test/conpty_oxide_test/conpty_oxide_claude）、删 `[target.'cfg(windows)'.dev-dependencies]` 的 conpty/conpty-oxide/winapi、删 `interactive_cli.rs` 的 `[pty-diag]` 诊断日志、删 pty-diag.log。§8 述两处**预研 spike 文档目录**已删（`3d7b6ca`），但 examples/ 下**源文件清理是否做完未核实**。
-
-**未决点**：examples/ 诊断 spike 源文件 + dev-deps + 诊断日志是否已清干净？
-
-**处置**：待核实。本棒未核。
-
-**事实源**：`docs/v1-prototype/issue2-metrics-interactive-loop.md` §9.7、§8。
-
----
-
-## V1-P1 · macOS 上交互式跑不了（V1 实际是 Windows-only）
-
-**产生窗口**：W2 交互式引擎（`docs/v1-prototype/issue2-metrics-interactive-loop.md` §9 PTY），2026-08-06 整体 review 时点出、用户要求先记为遗留。
-
-**现象**：`CLAUDE.md` 顶上写的是「macOS+Windows」，但 V1 的交互式两件套（找指标 / 绑数据）在 macOS 上**跑不成**：
-
-- 嵌入终端那条真路径 `InteractiveCliExecutor::run_skill_pty` 整个函数挂着 `#[cfg(windows)]`，PTY 后端是 Windows 专有的 `conpty-oxide`。非 Windows 上这个方法不存在，走 trait 默认实现 → `Err("PTY not supported by this executor (use run_skill instead)")`。
-- **桌面壳上没有回落**：`app-desktop/src/kernel.rs` 建 App 时无条件 `.with_pty()`，`run_issue_interactive` 只在 `pty_enabled == false` 时才走 `run_skill`。所以 macOS 上点「▶跑(交互)」= 这个 run 立刻以那句**英文报错**结算失败，用户看不懂也没得跑。引擎侧注释写的「caller falls back to run_skill」只对 `pty_enabled=false` 的 headless/example 路径成立，**对桌面不成立**。
-- 那条 `run_skill` 回落路径本身在 macOS 上也不体面：`osascript` 叫 Terminal.app 开窗口，`osascript` 进程叫完就退、拿不到 claude 句柄，代码于是 `sleep(self.timeout)` 睡满 1 小时再**宣告 `completed = true`** —— 谁都没验证过 claude 退没退，这是**谎报完成**，违反「读回为证」。
-- `portable-pty` 目前只作为非 Windows 的 keepalive 依赖挂在 `bw-engine/Cargo.toml` 里，**没有接**任何代码路径。
-
-（注：`CLAUDE.md` 记的「computer-use 在 macOS 上 screenshot 能用、click/key 永久受阻」是**验证侧**的另一回事，与本条运行侧的问题不是一件事，别混谈。）
-
-**未决点**：
-1. 给 `run_skill_pty` 补一个 Unix PTY 后端（`portable-pty` 已在依赖里，或换 `pty-process`/`nix`），让 macOS 也走嵌入终端 —— 这是让 macOS 真正可用的唯一正路。
-2. 在补后端之前，`run_skill` 那条路径的「睡满超时 → completed = true」语义要改：它现在会**谎报完成**，违反「读回为证」。至少该标成未验证完成，或干脆在非 Windows 上如实拒绝启动交互式，而不是假装跑完。
-3. 桌面壳那句英文 `Err` 直接怼到用户脸上，没有人话映射（对比 codehub 那套错误映射）。补后端前至少该说人话：「本机（macOS）暂不支持嵌入式交互终端，V1 仅 Windows」。
-
-**处置**：V1 不解。**V1 的实际目标平台按落成情况是 Windows-only**，文档不要再宣称 macOS 上交互式可用；转 issue 时按「macOS 交互式 PTY 后端」单独排一件，连带处理上面第 2、3 点。
-
-**2026-08-17 更新（减负重构会话，`docs/superpowers/specs/2026-08-17-debt-reduction-refactor-design.md` §2.4，commit `748e514`）**：✅ 未决点 1 已解——PTY 平台分叉抽成 `crates/bw-engine/src/pty_backend.rs`（Windows 仍 conpty-oxide；macOS/Linux 用 portable-pty，收尾按进程组杀），`run_skill_pty` 在所有平台都有实现。读回证据：`cargo run -p bw-engine --example pty_smoke`（起 `bash -c 'echo pty-ok'` 读回字节）、`-- --teardown`（丢输入端后 5s 内返回、`nohup` 孙进程被连坐）、`-- --abort`（`abort()` 丢弃 future 后子进程照样收割）在 macOS 上通过。未决点 2（`run_skill` 的 macOS 分支）此前已改成如实报 `completed = false`；未决点 3（错误人话映射）随 PTY 后端落地后不再是 macOS 的主路径问题。真跑 `claude` 仍受信任对话框/网关影响，不作为门禁。Windows 分支未真机验证 → **减负-14**。
-
-**事实源**：`crates/bw-engine/src/interactive_cli.rs`（`run_skill_pty` 的 `#[cfg(windows)]` L686、trait 默认实现「PTY not supported」L517、macOS `osascript` 分支 L608、`wait_child` 超时宣告 completed L809）、`crates/bw-app/src/lib.rs`（`run_issue_interactive` 按 `pty_enabled` 二选一 L5225）、`crates/app-desktop/src/kernel.rs:573`（无条件 `.with_pty()`）、`crates/bw-engine/Cargo.toml`（`portable-pty` non-Windows keepalive）。
-
----
-
-## 索引 · 穿刺修复批次 1（cowelink W1 穿刺 7 条反馈）
-
-**产生窗口**：V1 三窗口合入后、用户用 cowelink 做 W1 穿刺实地冒出。**本批次修**（见 `docs/v1-prototype/piercing-fixes-1.md`）。
-
-7 条：① GitHub/CodeHub 新建仓 UI 不一致 ③a cron 卡看不明白 ③b 连接器卡分不清 ④ 总览看不到仓指标（采集时序竞态）⑤ yellow 报错（host 黄区 + toast 不自动清）⑥ 指南 U2 去两个已知坑 + 加竞品分析章节 ⑦ 指南 U2 加创建后截图位。
-
-**与 LEFTOVERS 的交叉**：
-- 点 ④ 的「UI 冻死」callout 与 W1-1 无直接重叠（W1-1 是 buddy 自动 push 用户仓，点 ④ 是 cron 抢跑时序），但点 ⑥ 删的「UI 冻死」callout 是 issue1 §6 bug① 的 UI 表现——**本批次只删指南 callout（点 4 时序修复缓解 cron 抢跑，但 clone 同步堵单线程的根因 issue1 bug① 未解，留 issue1 §6）**。
-- 点 ⑤ yellow 未登录标注与 issue1 §6「yellow 未登录」一致，本批次落地的是**标注**：host 选择器三个 alias 都可点，chip 上挂 tooltip、下方常驻一行「green/open 已登录可直用；yellow 需先在本机 `codehub-cli -H yellow auth login`」，选中未登录的 yellow 时靠 CLI 调用失败回人话报错。**没有做灰置**——buddy 不探测 `codehub-cli` 的登录态，探不到就不能替用户判定「没登录」，灰置会在人其实已登录时挡住路（事实源：`crates/app-desktop/src/screens/create.rs` `CodehubHostPicker`）。
-
-**事实源**：`docs/v1-prototype/piercing-fixes-1.md`（设计事实源，未改代码）。
-
----
-
-## 索引 · V1 产品化任务 A 收口（cowelink 验证 P1–P13，2026-08-06）
-
-**产生窗口**：`.claude/cowelink-verify-2026-08-06.md`（不提交、事实源）记录的 W2/W3 真实实践问题台账 P1–P13，本窗按「高痛/契约硬错优先」分诊后动代码。**尚未 commit**（工作树改动，等用户明确要求再提交）。
-
-### 已修（本窗，✅）
-
-| ID | 一句话 | 落地方式 |
+| # | 差什么 | 为什么留 |
 |---|---|---|
-| **P4** | 网页合 MR 后点「已完成」不同步指标/连接器 | 把 `MergeIssuePr` 尾部的 pull+`SyncMetrics`+`SyncConnectors` 挪进 `TransitionIssue` 的 `newly_done` 记账块，两个入口（merge 内部 dispatch / 网页手点已完成）共用一条路径，不重复跑 |
-| **P5** | connectors.toml 错键静默吞空 + 脚本只 print 不写 output + Windows 找不到 python | `ConnectorsFile`/`ConnectorDef` 加 `deny_unknown_fields`（错键直接报错，含回归测试）；衔接层 system prompt + `connectors-toml-format.md` + `metrics-binding/SKILL.md` 三处加"只读 output 文件、不看 stdout"硬提示；`script_interpreter_candidates` 给 Windows 加 `py` 候选 |
-| **P10** | 总览业务卡（`BizMetricCard`）没有手填框 | `collect_kind=="manual"` 时卡内嵌入既有 `RecordInline`（复用组件）；北极星若命中同名 `metric` 行走同一路径自动生效，无 `metric` 行的灰卡（W3-1 缺口）不动 |
-| **P12** | 所有 `kind=="script"` 连接器副标题硬编码「采集 Issue/MR」 | `connector_kind_label` 按 name/config 派生：仓统计脚本保留原文案，其余从 config 挖脚本文件名生成专属标签 |
-| **P13** | cron 卡副标题「采集代码仓指标」误导（业务脚本也被这条 Daily 调度，但名字看不出来） | 只改前缀措辞为中性的「本项目全部 script 指标(...)· 每日」，**不做**按 `connectors.toml schedule` 拆独立 cron（用户明确留待后续） |
-| **P2** | Issue 详情弹窗「▶ 跑」不知道看板已在跑；交互式活运行史恒空时显示「还没有运行」（假话） | 弹窗复用看板卡片同一段 `is_running`/`same_project_busy`/`run_label` 判断（传 `active_run`+`project_id`）；`IssueDetailVm` 加 `is_interactive`（读 `issue.interactive_started`），运行史为空且是交互式活时换成「过程在下方嵌入终端/会话里」的诚实文案 |
-
-验证：六步门禁 + `cargo test --workspace --exclude app-desktop`（35 测试）全绿；未跑 sqlite/深链读回（本窗改动多是纯前端文案/组件复用/同步路径合并，无新 schema，读回价值有限，留給下一棒需要时再核）。
-
-### 核实结论（不算修复）
-
-**P7 · 创建未见 PROJECT.md / standards**：读代码确认路径存在——`write_charter`/`write_component_standards`（`lib.rs:9573`/`9599`）只在 `is_owned_workspace(dir)` 为真（工作区 `.git` 存在且根提交作者可读）时才写，且是 best-effort（`let _ = …`，失败被静默吞掉，不阻断创建流、也不提示用户）。**未复现**，不确认验证日志里"未见"是因为路径条件不满足（如目标仓判定成 bound 而非 owned）还是真的静默失败。若要根治静默失败这半个缺口，需要把 `let _ =` 改成至少记一条日志/toast，而不是假装成功——这条不在本窗改，留给下一棒决定要不要做。
-
-### 转移 / 新增条目（本窗不修，非 top 优先级 + 需要设计判断）
-
-**P1 · 窄窗嵌入终端 ANSI 错乱、底栏双 prompt**：xterm 在窄容器下的 `Fit`/列宽重算与 ANSI 转义重绘冲突，本窗未查——工作量在 xterm.js `fit addon` 与容器尺寸监听那层，不是一次性小改。留后续窗口专项处理（截图见验证日志 §2.1）。事实源：`crates/app-desktop/src/screens/op.rs`（`TerminalWidget`）。
-
-**P3 · 单例 PTY 无法回看历史会话**：app 级只有一路活跃 PTY（`kernel.rs` pty watch），切到某个 issue 的历史会话卡时，看到的仍是当前 live 终端的内容，不能"只看"旧会话的 scrollback。需要 per-session scrollback 缓冲或明确的"live 在 #N，你正在看的是历史只读快照"提示，属于 W2-1 提到的"单槽 watch channel"架构限制的延伸，非本窗小改能解。事实源：`crates/app-desktop/src/kernel.rs`（pty watch）、`crates/app-desktop/src/screens/op.rs`（`WorkflowStage`）。
-
-**P3b · Done 后交互式活无 `--resume` 入口**：`runnable` 判断只覆盖 backlog/todo/in_progress（`op.rs`），Done/InReview 状态下即便设计允许 `--resume`（`prepare_issue_run resume=true`），看板上也没有"打开会话/resume"的可点入口。需要在 runnable 之外单独给交互式 Done/InReview 活加一个不改变状态机、只读打开会话的按钮。事实源：`crates/app-desktop/src/screens/op.rs`（`runnable`）、`crates/bw-app/src/lib.rs`（`prepare_issue_run`）。
-
-**P6 · Done toast「N 个产物版本」文案吓人**：`scan_and_register_artifacts` 对 owned workspace 做全量 tracked 文件快照登记，一次 Done 常报出几十上百个"新增产物版本"，用户第一反应是"是不是哪里跑飞了"。这是设计如实行为（整仓快照，不是 bug），本窗不改代码，留给任务 B 产品指南写清楚"这是整仓快照，不代表改了这么多文件"。
-
-**P9 · cron 不随 `connectors.toml` 的 `schedule` 字段增减独立定时器**：设计上"一条 Daily `CollectMetrics` 覆盖项目下全部 `kind=script` 连接器"（见 §9 代码事实：`lib.rs` tick→`collect_project_metrics`→按 `kind==script && project_id` 过滤，`~3979-3993`），`connectors.toml` 里写的 `schedule` 字段目前**只是文档性的，buddy 不读它建 cron 行**。是否要接线（按 schedule 建/更新独立 cron）还是保持"一条 Daily 全覆盖"的现状只需把面板文案说清楚（P13 已解决一半），是产品未决点，本窗不擅自接线。事实源：`crates/bw-app/src/lib.rs`（`collect_project_metrics`）、`crates/bw-engine/src/connectors_file.rs`（`schedule` 字段仅解析不接调度）。
-
-**P11 · Issue Done 后阶段记录区变回旧 Chat + 会话卡「进行中」不消失**：两个独立现象——① PTY 结束后 `pty_active=false`，工作流面板退回旧的 Chat 发送框（交互式活不写 `message`，所以是空壳），视觉上像"退步"；② `session.status=Active` 插入后没有任何路径把它翻成 Done，与 issue 本身是否 Done 完全脱钩，导致早已完成的活在会话列表里永远显示"进行中"。需要 session 状态跟随 issue 状态或显式归档动作，属于状态机层面的改动，本窗不擅自扩。事实源：`crates/app-desktop/src/screens/op.rs`（`WorkflowStage` Chat 回退分支）、`session` 表（`status` 字段无 Done 写入路径）。
-
-**P8**：不新增条目——已是 `W3-1`（北极星无 `metric` 行 · 灰卡）的既有决议，采数窗口另议，本窗未碰。
+| ⑫ | **内核线程一处 panic 就静默死掉**:界面停在最后一帧,之后发出去的命令石沉大海,没有任何提示 | 八条里没有一条点名它——留着是因为它一旦发生,**八条里任何一条都变得没法验**:人以为内核在正常跑,其实已经死了。修法是内核循环外裹一层 `catch_unwind`,把死因送进「起不来」那块红字,十来行的事,该直接做掉而不是长期挂账 |
+| ⑬ | **`BW_KEEP_ANTHROPIC_ENV` 是试点期的临时后门,跑通就删**。设了它(任意非空值),起子 claude 时就不剥 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL` 三个环境变量,把人自己配的厂商端点原样透传。背景:本机 claude 登录过期、一时不方便重登,想先换个端点把前几站跑起来 | **这不是产品功能**:不进设置屏、不写进仓、界面上一个字都不提。用户拍板过 buddy 不该去感知机器上 claude 怎么鉴权,那是 CLI 自己该保证的事。落点 `v4-engine/src/interactive_cli.rs::is_stripped` |
 
 ---
 
-## V2 · 阶段默认 Skill / 系统提示词与规范手册（2026-08-10 拍板延期）
+## 不在这份清单里的三类东西
 
-**产生**：用户实测构建阶段无技能测试 issue ▶跑 进嵌入终端后，claude cli 里可见注入几乎只有 issue 标题+描述，没有构建板块 AI 小队 / 方法循环怎么干活。
+写在这里是为了防止下一个接手的人把它们又加回来。
 
-**根因（已分析，见会话；设计事实源 `issue2-all-issues-terminal-runs.md`）**：V1-TermClose 把 issue 从「buddy 脚本调度阶段循环」改成「prompt 驱动」；`stage_workflow_with_playbook` 的 `phase_prompts`（构建师规格→任务→实现→评审）**故意不再进** interactive 系统提示词；多 agent 能力约定落在「技能方法论讲清 SubAgent 调度」。无 `standard_skill` 时 `fetch_skill_body` 为空 → 没有载体承载小队流程；m4 已诚实留口「默认系统提示词 / 默认 skill = 后续催熟」。
+1. **V3 的欠账**。Cursor 执行器、cowelink 网页旁路、旧壳那六个面板的结构债、`connectors.toml` 那一串、V3 时代 W/P/减负 三个系列的窗口号叙事——一条都不记。V3 不再投入、等删,给要删的代码还债没有意义。删旧壳的判据见 `design.md` §12.6。**源码注释里还会出现 `减负-N` / `W-N` / `P-N` 这些 V3 时代的代号**,它们指向的条目随这次瘦身删掉了;要考古,去 `git log` 里翻这个文件 2026-08-21 之前的版本。
+2. **已经做完的**。哪一刀做了什么、哪个 bug 哪天修的,`git log` 和 [`archive/`](archive/) 里都有。这里不留收据段落、不留带删除线的行。
+3. **有意的留白**。灰态留位(蒸馏按钮、MR 检查列、预览未合入)、只显示真态的 agent 状态、通知只留「有 MR 等你合」、不给会话存回放、worktree 干净才收、规范版本不写迁移——这些都是想清楚并接受了的取舍,正本写在 `design.md` 对应章节的正文里,不是待办。
 
-**用户拍板的 V2 统一概念（本窗不开发）**：
+## 往这份清单里加东西之前
 
-1. **维护好 buddy 系统提示词 + 一帮规范手册**（大提示词；按场景渐进加载文档——例如指标类额外加载 metrics/connectors 契约，才能被 buddy 托管对）。
-2. **搞好有价值的 skill + 五大板块默认 skill**——选了某板块 = 装载该板块默认 skill；agent 小队调度本身就是 skill（认可「装载 skill」路线，而不是把旧 phase-loop 脚本调度搬回 issue）。
+先回答一句:**不做它,`design.md` §13.1 那八条里哪一条过不去?**
 
-**处置**：✅ 记入 V2 整改队列，**本窗不改代码**。落地时走 `buddy-feature-dev`，设计归档到 [`docs/v2-prototype/`](v2-prototype/README.md)(初始节奏与意向见 [`roadmap.md`](archive/v2-prototype/roadmap.md),2026-08-20 已归档)，勿再堆进已发版的 V1 窗口号叙事。
+- 答得上来(引得出原文)→ 加进上面的表,写清落点。
+- 答不上来 → 它不是 MVP 欠账。要么去 `design.md` 对应章节加一句「已知留白」,要么就是随手能做的小事,直接做掉,不必立账。
 
-**事实源**：`docs/v1-prototype/issue2-all-issues-terminal-runs.md`（prompt 模型 + 多 agent 转 prompt）；`crates/bw-app/src/lib.rs` `run_issue_interactive` / `prepare_issue_run`（`spec.prompt`/`phase_prompts` 不再服务 issue）；`docs/guide/buddy-guide.html` m4「默认系统提示词 / 默认 skill」留口。
-
----
-
-## V2 · 手填观测不跨 Buddy / 不进仓（多人过程缺口）
-
-**产生**：V2-② cowelink E2E（后来者纳管 + 绑数据）。北极星「累计总用户数」、滞后「周安装用户数」等 `collect=manual` 指标在本机总览手填后有数；其它机器上的 Buddy 读不到这些 observation。
-
-**机制**：观测落本机 SQLite（过程信息）；Buddy 之间不同步库。手填不会写回 `.bw/metrics.toml`，也不会推远端。仓里正本只声明「这是 manual」，不承载数值。与「产品信息在仓、过程信息在本地」一致——但多人各自纳管时，非脚本采集的数等于「只在原始 Builder 那台机器上」。
-
-**产品判断（本轮）**：可接受为已知边界。理想态是指标尽量 script 自动采；manual 仅过渡。若将来要共享手填值，需另设计仓内正本或共享源（本轮不做）。
-
-**处置**：记遗留。不改 schema；指南/验收如实说「手填 = 本机过程数据」。
-
-**事实源**：`docs/v2-prototype/same-project-multiple-workbenches.md` §3（正本在仓 / 过程在本地）；cowelink 读回 `observation.source_kind=manual`。
-
----
-
-## Bug · 提 MR 后看板迟迟不进评审中 + merge 无忙态（cowelink 找指标 E2E）
-
-**产生**：V1 实践 · cowelink 找指标真 E2E（会话已停、MR 已开，看板约两分钟才变评审中；合入成功但点击后数秒无反馈）。
-
-**根因（已修）**：
-1. InReview 兜底轮询固定 5 分钟；Stop hook 若在 MR 尚不可见时查空，下一轮要等满 5 分钟。
-2. 半套刷新：`tick_scheduler` 里 poll 已改库并 toast，但桌面壳只在「本轮有 cron 触发」时重建 Vm → 看板状态可长期陈旧。
-3. `MergeIssuePr` 按钮无本地 busy；Vm 在命令返回后才刷新，等待远端 merge 的几秒里像没点上。
-
-**处置**：✅ 已修。有候选时约 15s 轮询 + `scheduler_ui_dirty` 强制重建 Vm；merge 点击即禁用并 toast「正在合入…」，完成/失败后再恢复；二次合入 Done 短电路提示。`SessionEnd` hook 仍未接（设计 md 已记），短周期轮询覆盖「会话关了但最后一次 Stop 没查到」场景。
-
-**事实源**：`crates/bw-app/src/lib.rs`（`poll_interactive_inreview` / `INREVIEW_POLL_*` / `MergeIssuePr`）；`crates/app-desktop/src/kernel.rs`（tick Vm rebuild）；`crates/app-desktop/src/screens/op.rs`（merge busy）；指南 `buddy-guide.html`「触发查 MR」。
-
----
-
-## 减负重构收据（2026-08-17/18，从 `docs/BACKLOG.md` 并入；找不到东西时先看这里）
-
-设计稿与两轮执行实录：`docs/superpowers/specs/2026-08-17-debt-reduction-refactor-design.md`（§5 第一轮、§6 第二轮、§6.4 评审）。分支 `claude/debt-reduction-refactor-2026-08-17`（PR #102，一个 PR 覆盖两轮）。
-
-**✅ 减负-1 · 旧聊天式执行引擎退役**（2026-08-18 六片：`0f4428f` 定时任务收敛 → `d9ed28b` 桌面旧视图 → `d2b4cbf` real_demo 重写 → `5fdbcce` bw-app 引擎胶水 → `26805f8` bw-engine 执行器 + bw-core 契约/分析层 → `ea7800d` store message 表；`788b80c` 记账修正；`531b042` 评审跟进）。删掉的：`crates/bw-app/src/workflow_engine.rs`、`crates/bw-engine/src/{mock,contract,unsupported_cli}.rs`、`bw_engine::{Engine,Executor,PhaseNode,PhaseOutput,RunEvent,RunSummary,ClaudeCliExecutor,allowed_tools_arg,build_prompt}`、`bw_core::model::{Verdict,PhaseOutcome,verdict_contract_suffix,parse_phase_outcome,workflow_parse_contract_suffix,parse_workflow_phases,Author,WorkflowRunAnalytics,WorkflowVersion,CronEffectiveness}`、`crates/bw-core/src/analysis.rs`；命令 `RunWorkflow/RunHubWorkflow/RunStagePlaybook/ParseWorkflowContent/SendSessionMessage/PromoteWorkflow/LoadCronEffectiveness`、事件 `RunStarted/WorkflowProgress/WorkflowDone/SessionMessageAdded/OptimizationCycleReported/CronEffectivenessChanged`（`WorkflowFailed` 改名 `RunFailed`）；`CronMode::{RunWorkflow,RunSkill,RunPrompt}`（老库行迁 `create_issue`）；桌面 `Chat/RunOutputs/RunBanner/PhaseTrack` 视图、`ChatVm/MsgVm/RunVm/CronEffectivenessVm`、WorkflowHub「⚡ 临时任务」/「确认导入(运行)」/「解析为流程图」/「N 次复用」、CronHub「▶ 立即执行」与详情「真实有效性」面板；`ClaudeCliConfig` 的 `max_budget_usd/default_mode/commands_mode` 与 `PermissionMode`（设置页三个不起作用的旋钮）、`BW_CLAUDE_MAX_BUDGET_USD`；Store 方法 `append_message/session_messages/promote_workflow/record_workflow_use/refresh_workflow_template_phases/delete_workflow_spec/list_workflow_runs/list_all_workflow_runs/workflow_analytics/list_workflow_versions/get_app_meta/set_app_meta/cron_effectiveness`；`message` 表（老库 `DROP TABLE IF EXISTS`）；`crates/bw-app/examples/seed_demo.rs`；`scripts/supervise-real-demo.sh`。**留下的**：`session` 表（减负-18）、`WorkflowSpec.phases/LoopConfig` 数据（减负-19）。**现在唯一的干活入口是 Issue ▶跑**（`Command::RunIssue`），每次运行写一行 `workflow_run`。
-
-**✅ 减负-2 · Autopilot 建活有界面了**（`0f4428f`）：CronHub 表单两型「到点建活（不自动跑）」/「到点采集指标」，派发 `CreateAutopilotTask`。
-
-**顺手修的真 bug**：队友战绩一件活记两次（`788b80c`）→ 失败在结算记败、胜在人点完成记胜；再收紧为只记「被指派且真跑过」的队友（`531b042`，此前从没跑过的活被人点完成也会给阶段角色队友记胜）；开工后早退的运行行必结成失败，不留永远「运行中」的行。**产品口径变化待用户过目**：CLAUDE.md 反命题「单次花费封顶」改为「全程可见、可中止，花费由用户把握」（交互式会话按设计不设预算、恒 `--dangerously-skip-permissions`；W2-3 那条「已接受的偏差」因此更彻底了）。
-
-**第一轮删掉的**（2026-08-17，git 历史可找回 `git log --diff-filter=D --summary`）：死代码 `bw_engine::github::checkout_issue_branch`、`Command::SyncProjectFile/RefreshIssues/RunDraftWorkflow/UpdateWeekPlan/RefreshHubs/AnnotateWeeklyReview/MigrateLegacyShellsIfNeeded` 及 handler、`Event::WeeklyReviewAnnotated/LegacyShellsMigrated`、`weekly_review` 表、`bw_core::model::drafting_workflow`；一次性存量迁移 `legacy_migration.rs` 全链；`crates/bw-app/examples/` 41 → 12（保留清单见 `DEVELOPMENT.md`）；`crates/app-web/` 占位；文档没删只搬 `docs/archive/`（规则见其 README）。
+一份长清单本身就是问题:**它会让人以为 MVP 还很远,而实际上差的只有这十几处。**
