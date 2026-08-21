@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(
         store.clone(),
         old_root.clone(),
-        Arc::new(bw_engine::MockInteractiveExecutor::default()),
+        Arc::new(v4_engine::MockInteractiveExecutor::default()),
     );
 
     let intent = |n: &str| ProjectIntent {

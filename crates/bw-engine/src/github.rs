@@ -955,8 +955,6 @@ pub async fn fetch_project_toml(
         .map_err(|e| GithubError::Command(e.to_string()))
 }
 
-/// C7 · 采集器: run one `kind = "github"` metric query as a real count.
-/// Expands BW placeholders against `remote` (`owner/repo`) + `today`, then asks
 /// GitHub's search API for the total number of matches via `gh`. Uses the
 /// `search/issues` endpoint — it covers both issues and PRs (a query's own
 /// `is:pr` / `is:issue` narrows it); releases and other facets are out of v1

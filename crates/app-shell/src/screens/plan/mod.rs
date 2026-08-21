@@ -108,7 +108,7 @@ fn week_rail(p: &ProjectVm, bridge: &Bridge) -> Element {
         }
         if p.weeks.is_empty() {
             div { class: "detail-empty",
-                "docs/plan/ 里还没有周计划文件。周列表是扫这个目录得到的,没有索引表。"
+                ".bw/plan/ 里还没有周计划文件。周列表是扫这个目录 ∪ 活排过的周得到的,没有索引表。"
             }
         }
         for w in current.iter() {
@@ -214,7 +214,7 @@ fn toolbar(p: &ProjectVm, bridge: &Bridge) -> Element {
                         "新建活"
                     }
                     // 高保真上这里还有一颗「预览 · 未合入」开关:看活自己的
-                    // worktree 里那份还没合入的 .bw/metrics.toml 与 docs/plan/。
+                    // worktree 里那份还没合入的 .bw/metrics.toml 与 .bw/plan/。
                     // 还没接,做成明确的灰态,点不动 —— 不放一个点了没反应的开关。
                     label { class: "switch", title: "还没接:要去读活自己 worktree 里未合入的仓文件",
                         input { r#type: "checkbox", disabled: true }
@@ -242,9 +242,9 @@ fn week_head(p: &ProjectVm) -> Element {
             div { style: "width:{c.pct(c.blocked)}%;background:var(--red);" }
             div { style: "width:{c.pct(c.todo)}%;background:#E4DDC8;" }
         }
-        if !p.ops.is_empty() {
+        if !p.board_ops.is_empty() {
             div { class: "ops-chip-row",
-                for o in p.ops.iter() {
+                for o in p.board_ops.iter() {
                     span { key: "{o.title}", class: "chip chip-outline", title: "{o.note}",
                         "{o.title} · {o.status}"
                     }

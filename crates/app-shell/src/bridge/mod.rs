@@ -259,7 +259,7 @@ fn refresh_note(vm: &Vm) -> String {
 async fn list_repos(github: bool, host: &str) -> (Vec<crate::vm::RepoRowVm>, Option<String>) {
     const LIMIT: u32 = 100;
     if github {
-        match bw_engine::github::list_repos(LIMIT).await {
+        match v4_engine::github::list_repos(LIMIT).await {
             Ok(rows) => (
                 rows.into_iter()
                     .map(|r| crate::vm::RepoRowVm {
@@ -280,7 +280,7 @@ async fn list_repos(github: bool, host: &str) -> (Vec<crate::vm::RepoRowVm>, Opt
             Some("没选区 —— codehub 要 -H green/open/yellow 之一".into()),
         )
     } else {
-        match bw_engine::codehub::list_repos(host.trim(), LIMIT).await {
+        match v4_engine::codehub::list_repos(host.trim(), LIMIT).await {
             Ok(rows) => (
                 rows.into_iter()
                     .map(|r| crate::vm::RepoRowVm {
@@ -312,7 +312,7 @@ async fn fetch_prefill(
     use crate::vm::RepoProbe;
     let got = if github {
         match path.split_once('/') {
-            Some((owner, repo)) => bw_engine::github::fetch_project_toml(owner, repo, git_ref)
+            Some((owner, repo)) => v4_engine::github::fetch_project_toml(owner, repo, git_ref)
                 .await
                 .map_err(|e| e.to_string()),
             None => Err(format!("「{path}」不是 owner/repo 的样子,没法查")),
@@ -320,7 +320,7 @@ async fn fetch_prefill(
     } else if host.trim().is_empty() {
         Err("codehub 域名还没填,查不了".into())
     } else {
-        bw_engine::codehub::fetch_project_toml(host.trim(), path, git_ref)
+        v4_engine::codehub::fetch_project_toml(host.trim(), path, git_ref)
             .await
             .map_err(|e| e.to_string())
     };
@@ -332,11 +332,11 @@ async fn fetch_prefill(
         // 不落在常路上。
         Ok(None) => {
             let exists = if github {
-                bw_engine::github::probe_repo(path)
+                v4_engine::github::probe_repo(path)
                     .await
                     .map_err(|e| e.to_string())
             } else {
-                bw_engine::codehub::probe(host.trim(), path)
+                v4_engine::codehub::probe(host.trim(), path)
                     .await
                     .map_err(|e| e.to_string())
             };
@@ -345,27 +345,34 @@ async fn fetch_prefill(
                 Err(e) => (None, RepoProbe::NoRepo(e)),
             }
         }
-        Ok(Some(file)) => (
-            Some(crate::vm::RepoPrefillVm {
-                name: file.name,
-                brief: file.brief,
-                benchmark: file.benchmark,
-                north_star: file.opportunity,
-            }),
-            RepoProbe::Adopted,
-        ),
+        // 底座只负责把远端那份文件的**原文**取回来,解析是这一层的事 ——
+        // 它不认识业务文件格式。解析不了说明那份文件坏了或不是名片,
+        // 那是「没查成」,**不是**「没被接管过」。
+        Ok(Some(raw)) => match bw_v4::repo::project_file::parse(&raw) {
+            Ok(file) => (
+                Some(crate::vm::RepoPrefillVm {
+                    name: file.name,
+                    brief: file.brief,
+                    benchmark: file.benchmark,
+                    north_star: file.opportunity,
+                }),
+                RepoProbe::Adopted,
+            ),
+            Err(e) => (None, RepoProbe::Failed(e.to_string())),
+        },
         // 没登录、网断了、分支名不对、文件写坏了 —— 都是「没查成」,
         // **不能**说成「没被接管过」。
         Err(e) => (None, RepoProbe::Failed(e)),
     }
 }
 
-/// 从一批事件里挑出「开始本周」产出的草稿活标。
+/// 从一批事件里挑出「开始本周」产出的草稿活标。真跑路径没有草稿(周计划由
+/// agent 会话产出、走 MR),那时候不该弹「等你确认草稿」的卡。
 fn drafts_of(events: &[bw_v4::command::Event]) -> Option<(String, Vec<String>)> {
     events.iter().find_map(|e| match e {
         bw_v4::command::Event::WeekPlanStarted {
             week, draft_titles, ..
-        } => Some((week.clone(), draft_titles.clone())),
+        } if !draft_titles.is_empty() => Some((week.clone(), draft_titles.clone())),
         _ => None,
     })
 }
@@ -419,7 +426,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                 let mut app = App::new(
                     store.clone(),
                     root.clone(),
-                    Arc::new(bw_engine::InteractiveCliExecutor::new()),
+                    Arc::new(v4_engine::InteractiveCliExecutor::new()),
                 )
                 .with_pty()
                 .with_asset_root(asset_root())
@@ -505,9 +512,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         eprintln!("[BW_VM] 最新事件 {} · {}", e.time, e.text);
                     }
                     eprintln!(
-                        "[BW_VM] 映射={} 连接器={} 定时={} 群={} 指标={} 未读={}",
+                        "[BW_VM] 映射={} 定时={} 群={} 指标={} 未读={}",
                         o.config.mappings.len(),
-                        o.config.connectors.len(),
                         o.config.crons.len(),
                         o.config.chat_provider,
                         o.metrics.lagging.len()
@@ -517,7 +523,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     );
                 }
                 // BW_KB_DUMP=1:把知识库三个页签的数字打进 stderr,好让人拿
-                // `git ls-files` / `codegraph files -j` / `cat docs/releases.md`
+                // `git ls-files` / `codegraph files -j` / `cat .bw/releases.md`
                 // 当场对。截图对不了数,这个能。
                 if std::env::var("BW_KB_DUMP").is_ok_and(|v| v != "0") {
                     if let Some(pid) = ui.open {
@@ -589,7 +595,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     };
                     // 终端的键盘与尺寸**不重拼 ViewModel**。重拼一次要跑十来个
                     // git 子进程(健康三判据 + 改动文件 + 领先落后)、扫一遍
-                    // docs/plan/、解析四个 toml —— 而人打字时每 30ms 就来一条。
+                    // .bw/plan/、解析四个 toml —— 而人打字时每 30ms 就来一条。
                     // 全串在内核这条单线程上,终端会明显卡顿,pty 那一跳也排不
                     // 上队。这两条命令本来也不改任何会显示的东西。
                     if let Req::Cmd(
@@ -609,6 +615,26 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                     // 点确认才真的建活。
                                     if let Some((week, titles)) = drafts_of(&events) {
                                         ui.pending_drafts = Some((week, titles));
+                                    }
+                                    // 「开始本周」起了一场会话,就把它选中 ——
+                                    // 总览那颗按钮会把人带到会话屏,落地时该正
+                                    // 好停在这场会话上,而不是让人自己在左列里
+                                    // 找哪一条是刚才那下点出来的。
+                                    if let Some(bw_v4::command::Event::WeekPlanStarted {
+                                        issue_id,
+                                        ..
+                                    }) = events
+                                        .iter()
+                                        .find(|e| {
+                                            matches!(
+                                                e,
+                                                bw_v4::command::Event::WeekPlanStarted { .. }
+                                            )
+                                        })
+                                    {
+                                        ui.session_open = Some(*issue_id);
+                                        ui.expanded_dirs.clear();
+                                        ui.open_file.clear();
                                     }
                                     if confirming {
                                         ui.pending_drafts = None;
@@ -794,14 +820,25 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             // 循环里 await —— 它要起好几个 git 子进程,在这里等
                             // 就把内核这条单线程连同终端的 60ms 节拍一起按住。
                             if let Some(pid) = ui.open {
-                                if let Ok(ws) = app.workspace_of(pid).await {
-                                    let back = tx_back.clone();
-                                    tokio::spawn(async move {
-                                        let _ = back.send(Req::RepoStatsComputed {
-                                            project: pid,
-                                            stats: vm_derive::collect_repo_stats(&ws).await,
+                                // 走势那条要问远端「这一周合入了几个 PR」,所以
+                                // 得把项目一起带上(远端地址在它身上)。取不到
+                                // 项目就只能不采 —— 不拿一个空壳项目去问远端。
+                                // 项目行读不出来**不能静默什么都不做** —— 人点了
+                                // 按钮却毫无反应,只会以为按钮坏了(评审抓的)。
+                                // git 那几项本来就不需要项目行,照采;只有远端那条
+                                // 线缺了地址,如实说一句。
+                                let proj = app.store().project(pid).await.ok().flatten();
+                                match app.workspace_of(pid).await {
+                                    Ok(ws) => {
+                                        let back = tx_back.clone();
+                                        tokio::spawn(async move {
+                                            let _ = back.send(Req::RepoStatsComputed {
+                                                project: pid,
+                                                stats: vm_derive::collect_repo_stats(&ws, proj.as_ref()).await,
+                                            });
                                         });
-                                    });
+                                    }
+                                    Err(e) => ui.set_note(Some(format!("采不了:{e}"))),
                                 }
                             }
                         }

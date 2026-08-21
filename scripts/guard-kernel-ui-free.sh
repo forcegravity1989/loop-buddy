@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CARGO="${CARGO:-cargo}"
-KERNEL=(bw-core bw-engine bw-store bw-app ui bw-v4)
+KERNEL=(bw-core bw-engine bw-store bw-app ui bw-v4 v4-engine)
 FORBIDDEN='dioxus|tauri|wry|leptos|dioxus-desktop'
 
 fail=0

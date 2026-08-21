@@ -1,6 +1,6 @@
 # 05 · 会话屏
 
-> **30 秒导读**:这篇管 V4 会话屏——一件活怎么在这个屏里被 agent 真干起来、人怎么在这里陪着看。给接着做 V4 的会话、以后要再接一个开工工具的同事看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 三栏主体(内嵌终端 / 文件树 / 改动 diff / git 状态 / MR 号)已经能用;Cursor 适配、内嵌 Open Design、蒸馏按钮、agent 四态回报这四样还没做,在 §3 末尾如实列着。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
+> **30 秒导读**:这篇管 V4 会话屏——一件活怎么在这个屏里被 agent 真干起来、人怎么在这里陪着看。给接着做 V4 的会话、以后要再接一个开工工具的同事看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组。 三栏主体(内嵌终端 / 文件树 / 改动 diff / git 状态 / MR 号)已经能用;Cursor 适配、内嵌 Open Design、蒸馏按钮、agent 四态回报这四样还没做,在 §3 末尾如实列着。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ## 0 · 这篇管什么、不管什么
 

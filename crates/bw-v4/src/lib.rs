@@ -8,22 +8,10 @@
 //! 库、自己的仓文件解析器、自己的推导与命令总线。旧的五个 crate 一行不动,
 //! 旧壳 `app-desktop` 继续编译、继续可跑。
 //!
-//! **复用的是**:`bw-core` 的身份类型、`Signal`、活的状态机
-//! (`can_transition_to` —— 「完成」的唯一入边是「评审中」这条铁律就锁在
-//! 那里)、五阶段元数据(V4 降级成活的类别标签);`bw-engine` 的交互式执行器、
-//! 工作区/worktree 供给、git 读数、`.bw/metrics.toml` 解析。
-//!
-//! # 分层
-//!
-//! - [`model`] —— V4 的领域类型(零 IO)。
-//! - [`store`] —— 四张表的哑存储,不做业务判断。
-//! - [`repo`] —— 仓文件解析与写入。**仓是正本**,这一层是读正本的唯一入口。
-//! - [`git`] / [`isoweek`] —— 现算的两个输入源:git 与 ISO 周换算。
-//! - [`chat`] —— 项目群适配工厂:trait + 按提供方名字造实现,认哪家只在一处。
-//! - [`derive`] —— 健康三判据的现算,带密封类型。
-//! - [`standard`] —— 规范件模板正本,编译期打进二进制。
-//! - [`command`] —— 界面只发 `Command`、只收 `Event` 的那两个枚举。
-//! - [`app`] —— 编排:所有用例与守卫都在这一层。
+//! **不依赖任何 V3 crate**(2026-08-21 起,`cargo tree` 读回为 0):领域类型
+//! (身份、`Signal`、活的状态机、五类别)自持在 [`model`];干活的能力走
+//! `v4-engine`(执行器、worktree、git、远端),那是从 `bw-engine` 拷过来接管
+//! 的一份,不是复用。
 
 #![forbid(unsafe_code)]
 
@@ -37,6 +25,7 @@ pub mod model;
 pub mod repo;
 pub mod standard;
 pub mod store;
+pub mod trend;
 
 pub use command::{Command, Event};
 pub use model::{Issue, IssueKind, IssueOrigin, IssueStatus, Project, Signal};

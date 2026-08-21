@@ -1,6 +1,6 @@
 # 02 · 数据与文件:库里剩什么表、仓里的文件长什么样、信息住哪一层
 
-> **30 秒导读**:这篇管三件事——SQLite 库里到底有哪几张表(列级定义)、项目代码仓里有哪些 buddy 要读要写的文件(每个给完整样例)、以及一样东西该住在「仓 / 本机文件 / 现算」三层里的哪一层。**一句话结论:仓是正本,库只有四张表(`project` / `issue` / `claude_conversation` / `app_meta`),别的数字全部现算。** 给接着做 V4 的会话看,也给要往项目仓里加文件的人看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 与母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) §6「信息住哪」)冲突时以母文档为准。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
+> **30 秒导读**:这篇管三件事——SQLite 库里到底有哪几张表(列级定义)、项目代码仓里有哪些 buddy 要读要写的文件(每个给完整样例)、以及一样东西该住在「仓 / 本机文件 / 现算」三层里的哪一层。**一句话结论:仓是正本,库只有四张表(`project` / `issue` / `claude_conversation` / `app_meta`),别的数字全部现算。** 给接着做 V4 的会话看,也给要往项目仓里加文件的人看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组。 与母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) §6「信息住哪」)冲突时以母文档为准。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ## 0 · 这篇管什么、不管什么
 
@@ -35,7 +35,7 @@
 
 | 表 | 原来干什么 | 数据现在去哪 | 详见 |
 |---|---|---|---|
-| `observation` | 指标数据点 | 可重算的(周合入数、提交数、目录变动)每次现算;不可重算的(外部读数、手填)写进周计划文件「本周指标读数」段 | §2.5/§2.6 |
+| `observation` | 指标数据点 | 可重算的(周合入数、提交数、目录变动)每次现算;不可重算的(外部读数、手填)按 [14 篇](14-metrics-collection.md) §2.5 追加进 `.bw/metrics/readings.jsonl`。**落点改过**:原先写进周计划文件「本周指标读数」段,那一段现在降级成快照,不再是读数正本 | §2.5/§2.6 |
 | `metric` | 指标定义 | 定义在 `.bw/metrics.toml`;读数见上一行 | §2.5 |
 | `workflow_run` | 每次 ▶跑 的开工/结清/成败/耗时/前后 git head | 干没干成看**远端 MR 合没合入**;会话线索由 `claude_conversation` 一张表接住 | §2.3/§4 |
 | `artifact` | 产物登记 | `git log --name-only` 就是产物登记 | §2.6 |
@@ -103,7 +103,7 @@ GROUP BY workflow;
 
 ### 2.5 仓文件格式与完整样例
 
-样例项目用 buddy 自己仓里已经在跑的真实项目 **WorkflowHub**(`.bw/metrics.toml` 真实内容见 [`/.bw/metrics.toml`](../../../.bw/metrics.toml));没有真实数据的地方标「演示」。
+样例项目用 buddy 自己仓里已经在跑的真实项目 **WorkflowHub**(它那份指标正本的真实内容见 [`docs/metrics/workflowhub/metrics.toml`](../../metrics/workflowhub/metrics.toml)——2026-08-21 从仓根 `.bw/` 移到那里,因为它是 WorkflowHub 的指标、不是 loop-buddy 自己的;**本仓根目录今天没有 `.bw/metrics.toml`**);没有真实数据的地方标「演示」。
 
 #### `.bw/project.toml`(现有五字段 + `[chat]` + `standard_version`/`current_version`)
 
@@ -377,9 +377,15 @@ Linear(工作流/看板的产品体验对标,不是功能照抄)
 - 项目群:WorkflowHub 日常群(WeLink;群号见 `.bw/project.toml` 的 `[chat]` 段,登录态在本机设置)
 ```
 
-#### `.bw/metrics.toml` —— 不变,只引用
+#### `.bw/metrics.toml` —— 格式正本已移交 [14 篇](14-metrics-collection.md) §2.6
 
-指标正本格式不动,沿用 `docs/buddy/standards/metrics.md` 已有规范(北极星恰好 1 个、`[[lagging]]`/`[[leading]]` 各 0..N、每条必带 `collect`)。真实样例见本仓 [`/.bw/metrics.toml`](../../../.bw/metrics.toml)(WorkflowHub 项目的指标正本,工作区就是 BW 仓自己)。`issue.metric_key` 存的就是这份文件里某条指标的 `id` 字段值——库里没有 `metric` 表,这一列是指向仓文件的一根字符串引用,展示时现读现解析 `.bw/metrics.toml` 拿名称与口径。
+**本篇不再定义这份文件的格式。** 原来这里写的是「格式不动,沿用 `docs/buddy/standards/metrics.md` 已有规范」,那句话已被 14 篇 §2.6 取代:`schema_version` 从 1 跳到 2、采集方式从五种收成两种(脚本 / 手填)、新增 `window` 字段(表达「这条指标的历史现在还能不能重新算出来」)、`query` 换成 `run`,而且**不写迁移**。结构上不变的只有一条:北极星恰好 1 个、`[[lagging]]` / `[[leading]]` 各 0..N。
+
+这是设计,还没落地:今天读这份文件的仍是 V3 的解析器 `bw_engine::metrics_file`(老格式、五种采集方式),新解析器该落在 `crates/bw-v4/src/repo/metrics_file.rs`,进度只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md)。
+
+老格式的真实样例见 [`docs/metrics/workflowhub/metrics.toml`](../../metrics/workflowhub/metrics.toml)(WorkflowHub 项目的指标正本,2026-08-21 从仓根 `.bw/` 移到那里)。**别拿它当「能采到数」的例子**:那五条写的采集方式是 `bw`,而这种采集方式从来没有实现过。
+
+`issue.metric_key` 存的是**指标的名字**,不是什么 id ——`.bw/metrics.toml` 里的指标没有单独的 `id` 字段(`docs/buddy/standards/metrics.md` 原话:「文件没有 id 概念」),代码里也是按名字精确匹配(`crates/app-shell/src/bridge/vm_panels.rs`)。库里没有 `metric` 表,这一列是指向仓文件的一根字符串引用,展示时现读现解析拿名称与口径。指标改名会让历史读数对不上,这条风险记在 [08 篇](08-overview-derivation.md) §6 开放问题 4。
 
 #### 技能与 workflow 住哪(2026-08-20 试点第一天改过,以这一段为准)
 
@@ -423,7 +429,7 @@ SKILL.md 的格式见 [`plan/16-skill-spec`](../../../plan/16-skill-standard-spe
 | `.bw/issue-policy.toml` | 开工工具清单、类别→工具→workflow 映射、节律、看板列定义 | 配置屏 | 配置屏、▶开工、定时判据 |
 | `.bw/standard.toml` + `.bw/managed.toml` | 规范清单与版本;托管件指纹 | 铺底、对账 | 资产盘点 |
 | 仓根 `AGENTS.md`(+ `CLAUDE.md` 一行导入) | **这个项目自己的**开发手册。**铺底不写这份**(2026-08-20,03 篇 §2.3):写它等于建议改造人家的项目,归资产盘点首次模式去问人,人点头才写 | 资产盘点首次模式的子技能 `project-handbook`(还没起过会话)| 项目自己的 AI 工具读(Claude Code / Cursor / Codex) |
-| `.bw/plan/YYYY-Www.md` | 本周目标、活清单(含顺序/类别/工具/workflow/指标)、本周指标读数、盘点尾段;回填的历史周同格式 | 运作活①②、回填、拖拽排期 | 计划屏、总览、知识库 |
+| `.bw/plan/YYYY-Www.md` | 本周目标、活清单(含顺序/类别/工具/workflow/指标)、本周指标读数**快照**([14 篇](14-metrics-collection.md) §2.5:读数正本已移到 `.bw/metrics/readings.jsonl`,这一段只是抄一份给不装 buddy 的人看)、盘点尾段;回填的历史周同格式 | 运作活①②、回填、拖拽排期 | 计划屏、总览、知识库 |
 | `.bw/releases.md` | 版本→包含的活;回填的历史版本同格式 | 发版本、回填 | 总览发版记录 |
 | `.claude/skills/**/SKILL.md` | **项目自有**技能:蒸馏产出、人手加、导入的。buddy 自带的那十三份**不在这里**(在 buddy 自己的资产目录,§2.5) | 蒸馏、导入、人手加 | 配置屏、知识库;▶开工时 agent 在仓里原生发现 |
 | 代码、文档、产物 | 项目本体 | agent / 人 | 知识库、会话屏文件树;**不另建产物登记表**,`git log --name-only` 就是登记 |

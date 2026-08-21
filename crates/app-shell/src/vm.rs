@@ -142,7 +142,13 @@ pub struct ProjectVm {
     pub health: HealthVm,
     pub metrics: MetricsVm,
     pub current_week: String,
-    /// 计划屏左栏:扫 `docs/plan/` 得到的周列表(新的在前)。
+    /// 当前周的 `.bw/plan/YYYY-Www.md` 在不在。总览「开始本周」横幅的判据 ——
+    /// 不能拿 `weeks` 里有没有本周判(本周永远在列表里置顶,哪怕还没有文件)。
+    pub week_file_exists: bool,
+    /// 本周那张运作活①(更新指标 + 制定本周计划)走到哪了。`None` = 还没建
+    /// (或上一张已完成)。横幅靠它区分「还没开始」和「已开工、文件在 MR 路上」。
+    pub ops1_status: Option<String>,
+    /// 计划屏左栏:扫 `.bw/plan/` 目录 ∪ 库里活排过的周(新的在前,本周置顶)。
     pub weeks: Vec<WeekVm>,
     /// 正在看哪一周。
     pub viewing_week: String,
@@ -155,8 +161,11 @@ pub struct ProjectVm {
     /// 计划屏正在看的那个看板的五段计数(看某一周就是那一周,点了「全部」就是
     /// 全部)。它跟着左栏走,所以**不能拿去当「本周」**。
     pub board_counts: WeekCountsVm,
-    /// 本周计划文件「本周运作」那张表的行 —— 三张运作活各自走到哪了。
+    /// **当前周**的运作活①②③状态点(查活缓存现算)。总览那块用它。
     pub ops: Vec<OpsChipVm>,
+    /// 计划屏正在看的那一周的运作活状态点。跟着左栏走,**不能拿去当「本周」**
+    /// —— 和 `board_counts` 同一个理由。
+    pub board_ops: Vec<OpsChipVm>,
     /// 代码仓级指标。**现算很贵(要起好几个 git 子进程),所以按需**:
     /// `None` = 还没采过,界面显示一颗「立即采集」。
     pub repo_stats: Option<RepoStatsVm>,
@@ -277,9 +286,27 @@ pub struct OpsChipVm {
 /// 代码仓级指标。每一项都带「这个数从哪来」——采不到就整块给出原话,不填 0。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RepoStatsVm {
-    /// `(数值, 这个数是什么, 从哪采的)`。
+    /// `(数值, 这个数是什么, 从哪采的)`。压成一行小字,不再是一格格的卡片。
     pub items: Vec<(String, String, String)>,
+    /// 近四周走势,**旧的在前**。全部现算 —— 能采今天就能采过去任意一周,
+    /// 所以新接入的项目第一天就有走势,不用先攒几周。
+    pub trend: Vec<TrendPointVm>,
+    /// git 那两条线为什么是空的。空字符串 = 没有话要说。
+    pub git_note: String,
+    /// 远端那条线为什么是空的。空字符串 = 没有话要说。
+    pub trend_note: String,
     pub error: String,
+}
+
+/// 走势上的一个点 = 一周。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TrendPointVm {
+    pub week: String,
+    /// 三条线一律 `Option`:`None` = 没采到,**画的时候断开,不当 0 画**。
+    /// git 读不动(不是仓、没装 git)时前两条也会是 `None`。
+    pub commits: Option<u32>,
+    pub merges: Option<u32>,
+    pub merged_prs: Option<u32>,
 }
 
 /// 名片改动那张轻量活。名片是仓文件,改它一律走分支 + MR。
@@ -451,8 +478,6 @@ pub struct ConfigVm {
     pub cadence: String,
     /// 节律拆成表格行:哪张运作活、怎么触发、判据是什么。
     pub crons: Vec<CronVm>,
-    /// `.bw/connectors.toml` 里声明的连接器。文件没有就是空的。
-    pub connectors: Vec<ConnectorVm>,
     /// 项目群三件:提供方 / 群号 / 同步哪些事件。仓是正本,这里只显示。
     pub chat_provider: String,
     pub chat_group: String,
@@ -492,15 +517,6 @@ pub struct CronVm {
     pub schedule: String,
     /// 到底看什么才算「该跑了」。
     pub rule: String,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ConnectorVm {
-    pub name: String,
-    /// `script` / `command` 这类。
-    pub kind: String,
-    /// 具体跑什么。
-    pub target: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

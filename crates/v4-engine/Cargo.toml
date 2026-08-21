@@ -1,0 +1,32 @@
+[package]
+name = "v4-engine"
+description = "V4 的能力底座:交互式 claude 执行器 + PTY 内嵌终端 + worktree 供给 + git 读数 + GitHub/codehub 远端。无 UI、无 SQL、无业务语义。"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# **不依赖 bw-core**,这正是这个 crate 存在的理由(见 lib.rs 头部)。
+# id 一律走裸 uuid,语义类型留给上层。
+uuid = { workspace = true, features = ["v4"] }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# MockInteractiveExecutor 的模拟延时用 tokio::time;真执行器起 `claude` 子进程
+# 用 tokio::process。底座是原生运行时 crate,不进 wasm32 那组。
+tokio = { workspace = true, features = ["process", "fs"] }
+
+# 内嵌终端的 PTY(`pty_backend.rs`)。Windows 用 conpty-oxide(portable-pty
+# 0.9.0 的 ConPTY 实现读不到子进程 stdout);macOS/Linux 用 portable-pty,配
+# `nix` 做进程组收尾(安全封装的 killpg —— 这个 crate 禁 unsafe)。
+[target.'cfg(windows)'.dependencies]
+conpty-oxide = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+portable-pty = "0.9"
+nix = { version = "0.28", features = ["signal"] }
+
+[dev-dependencies]
+tokio = { workspace = true }

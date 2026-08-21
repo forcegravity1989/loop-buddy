@@ -113,6 +113,13 @@ pub enum Command {
     },
     /// 用周计划文件覆盖 `issue` 的缓存列 —— 文件说了算。幂等。
     RefreshIssueCacheFromPlan { project_id: ProjectId, week: String },
+    /// 把项目工作区的主检出快进到远端最新。
+    ///
+    /// **为什么需要人手点这一下**:buddy 只在「合入并完成」某张活的时候自动拉
+    /// 一次。人在 GitHub / codehub 网页上直接合了 MR,buddy 完全不知道 —— 工作
+    /// 区就一直停在旧提交,合进去的 `.bw/` 那些件在本机根本不存在,而界面还照
+    /// 常显示旧内容。以前没有任何入口能补这一下。
+    PullWorkspace { project_id: ProjectId },
 
     // ── 干活 ──────────────────────────────────────────────
     /// 唯一的干活入口。跑完最远只到「评审中」。
@@ -250,6 +257,15 @@ pub enum Event {
         project_id: ProjectId,
         week: String,
     },
+    /// 本周那张运作活①还在路上(周计划文件要等它的 MR 合入才落地),这次什么
+    /// 都没做。**不是错误** —— 人再点一次「开始本周」该被平静地挡住,而不是
+    /// 收到一句「这张活现在是评审中,不是能开工的状态」。
+    WeekPlanInProgress {
+        project_id: ProjectId,
+        week: String,
+        issue_id: IssueId,
+        status: String,
+    },
     IssueCreated {
         id: IssueId,
         number: u32,
@@ -298,6 +314,12 @@ pub enum Event {
     CurrentVersionChanged {
         version: String,
     },
+    /// 拉工作区的结果。`moved` = 主检出真的往前走了;`note` 是给人看的一句话,
+    /// 拉不动时装的是 git 的原话(压成一行),**不吞**。
+    WorkspacePulled {
+        moved: bool,
+        note: String,
+    },
     ToolMappingSaved {
         category: Category,
     },
@@ -308,6 +330,8 @@ pub enum Event {
     IssueCacheRefreshed {
         week: String,
         updated: u32,
+        /// 文件里有、库里还没有,这次照着建出来的活数。
+        created: u32,
     },
     /// 回填跑完了。`weeks`/`releases` 是**真的写出去**的那些,不是"扫到的"。
     HistoryBackfilled {

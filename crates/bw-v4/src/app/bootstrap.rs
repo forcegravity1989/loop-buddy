@@ -9,7 +9,7 @@
 //! 历史回填也一样要起 agent 会话,同样还没做 —— 探测到了什么如实写进这张活的
 //! 正文,但没跑就是没跑。
 //!
-//! **技能不往用户仓里复制**(2026-08-20 改):buddy 自带那十三份摊在自己的资产
+//! **技能不往用户仓里复制**(2026-08-20 改):buddy 自带那十一份摊在自己的资产
 //! 目录,开工时只把名字、一句话和完整路径写进系统提示词,正文让 agent 按需读。
 //!
 //! **不在主检出上动手**。写文件、提交、开分支全在
@@ -171,9 +171,22 @@ impl App {
                 b.push_str(&format!("- `{path}`:{why}\n"));
             }
         }
+        // 仓里已经有、但不是 buddy 铺的件。**必须显眼地说一声** —— 界面会把它们
+        // 当正本读,而它们的来路 buddy 一无所知。
+        if !report.preexisting.is_empty() {
+            b.push_str(
+                "\n\n⚠️ 仓里本来就有这几份件,不是 buddy 铺的,这次也没碰它们 —— \
+                 但界面会把它们当正本读(指标卡、健康判据都从这里来)。\
+                 请确认它们确实属于这个项目、格式也还作数;不作数就先删掉,\
+                 走到那一站时 buddy 会铺一份干净的:\n",
+            );
+            for path in &report.preexisting {
+                b.push_str(&format!("- `{path}`\n"));
+            }
+        }
         if !outcome.refused.is_empty() {
             b.push_str(
-                "\n\n写下去了但**没进版本控制**的件(这个仓的 .gitignore 忽略了它们,\
+                "\n\n写下去了但没进版本控制的件(这个仓的 .gitignore 忽略了它们,\
                  buddy 不用 -f 顶回去 —— 那是项目自己的决定)。它们属于本机检出,\
                  不属于分支,合 MR 不会带上:\n",
             );
@@ -185,7 +198,7 @@ impl App {
                         "你的工作目录里已经有同名文件,没覆盖".to_string()
                     }
                     Some(worktree::Mirrored::Failed(why)) => {
-                        format!("**没能放进你的工作目录**,原话:{why}")
+                        format!("没能放进你的工作目录,原话:{why}")
                     }
                     None => "只在这张活的目录里".to_string(),
                 };
@@ -194,7 +207,7 @@ impl App {
         }
         b.push_str(&format!("\n\nMR:{}", mr.note));
         b.push_str(
-            "\n\n**合入之前这些件只在这条分支上**,主检出里还没有 —— 所以在你合上它之前,\
+            "\n\n合入之前这些件只在这条分支上,主检出里还没有 —— 所以在你合上它之前,\
              定时(节律)、类别→工具的映射、规范对账都还读不到它们。",
         );
         self.store.set_issue_body(issue_id, &b).await?;
@@ -233,7 +246,7 @@ impl App {
             ProgressLine::ok(
                 5,
                 format!(
-                    "规范铺底:写了 {} 个规范件到 {},但**没提交**(这个工作区不是 git 仓或者提交被拒)· MR:{}",
+                    "规范铺底:写了 {} 个规范件到 {},但没提交(这个工作区不是 git 仓或者提交被拒)· MR:{}",
                     report.written.len(),
                     tree.path.display(),
                     mr.note
@@ -410,7 +423,7 @@ pub fn skill_pointer(skills_dir: &std::path::Path, workflow: &str) -> Option<Ski
 ///
 /// 提示词里给的是绝对路径,不加这一句,CLI 那边读不读得到取决于它当天的权限
 /// 策略;显式声明一句,别赌。
-pub(crate) fn allow_skills_dir(plan: &mut bw_engine::LaunchPlan, dir: &std::path::Path) {
+pub(crate) fn allow_skills_dir(plan: &mut v4_engine::LaunchPlan, dir: &std::path::Path) {
     plan.args.push("--add-dir".to_string());
     plan.args.push(dir.display().to_string());
 }

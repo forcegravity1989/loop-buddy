@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(
         store.clone(),
         &ws_root,
-        Arc::new(bw_engine::MockInteractiveExecutor::new()),
+        Arc::new(v4_engine::MockInteractiveExecutor::new()),
     );
 
     let week = isoweek::current_week();
@@ -378,8 +378,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tail = bw_v4::git::commit_paths(
         &workspace,
         &[
-            "docs/plan".to_string(),
-            "docs/releases.md".to_string(),
+            bw_v4::repo::week_plan_file::DIR.to_string(),
+            bw_v4::repo::release_file::REL_PATH.to_string(),
             ".bw".to_string(),
         ],
         "docs(bw): 本周计划与发版记录(指挥器)",
@@ -473,8 +473,8 @@ async fn build_evidence(
         })
         .collect();
 
-    let plan_path = workspace.join(format!("docs/plan/{week}.md"));
-    let releases_path = workspace.join("docs/releases.md");
+    let plan_path = workspace.join(bw_v4::repo::week_plan_file::rel_path(week));
+    let releases_path = workspace.join(bw_v4::repo::release_file::REL_PATH);
 
     let v = serde_json::json!({
         "说明": "每个数字都是从真实库与真实仓文件读回来的,没有一个是硬编码。\

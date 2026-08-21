@@ -16,13 +16,12 @@ use super::worktree;
 use super::{App, AppError, Result};
 use crate::command::Event;
 use crate::model::{ConversationId, IssueId, IssueStatus};
-use bw_core::WorkflowId;
-use bw_engine::interactive_cli::PtyInput;
-use bw_engine::{build_resume_plan, build_startup_plan, ConversationMeta, RunCtx, CLAUDE};
+use v4_engine::interactive_cli::PtyInput;
+use v4_engine::{build_resume_plan, build_startup_plan, ConversationMeta, RunCtx, CLAUDE};
 
 impl App {
     /// 桌面壳开 PTY。开了之后 ▶跑 不再阻塞等执行器返回,而是把子进程挂进
-    /// [`bw_engine::TerminalManager`],字节流交给会话屏渲染。
+    /// [`v4_engine::TerminalManager`],字节流交给会话屏渲染。
     pub fn with_pty(mut self) -> Self {
         self.pty_enabled = true;
         self
@@ -30,12 +29,18 @@ impl App {
 
     /// 内嵌终端这一跳:把各会话缓冲里的字节取出来,交给界面按会话 id 路由。
     pub fn drain_pty_events(&mut self) -> Vec<(ConversationId, Vec<u8>)> {
-        self.terminal.drain_events()
+        // 底座按裸 UUID 路由,出了这一层就包回语义类型 —— 转换只发生在这儿,
+        // 上面的用例代码永远只见 `ConversationId`。
+        self.terminal
+            .drain_events()
+            .into_iter()
+            .map(|(id, bytes)| (ConversationId::from_uuid(id), bytes))
+            .collect()
     }
 
     /// 这个会话的 PTY 还活着没有。左列「运行中 / 空闲」两态里的那一半靠它。
     pub fn pty_live(&self, id: ConversationId) -> bool {
-        self.terminal.is_live(id)
+        self.terminal.is_live(id.uuid())
     }
 
     pub(super) async fn terminal_input(
@@ -43,7 +48,8 @@ impl App {
         conversation_id: ConversationId,
         bytes: Vec<u8>,
     ) -> Result<Vec<Event>> {
-        self.terminal.input(conversation_id, PtyInput::Bytes(bytes));
+        self.terminal
+            .input(conversation_id.uuid(), PtyInput::Bytes(bytes));
         Ok(vec![])
     }
 
@@ -54,7 +60,7 @@ impl App {
         rows: u16,
     ) -> Result<Vec<Event>> {
         self.terminal.note_fit_size(cols, rows);
-        self.terminal.resize(conversation_id, cols, rows);
+        self.terminal.resize(conversation_id.uuid(), cols, rows);
         Ok(vec![])
     }
 
@@ -69,8 +75,8 @@ impl App {
                 was_live: false,
             }]);
         };
-        let was_live = self.terminal.is_live(conv.id);
-        self.terminal.close(conv.id);
+        let was_live = self.terminal.is_live(conv.id.uuid());
+        self.terminal.close(conv.id.uuid());
         Ok(vec![Event::RunCancelled { id, was_live }])
     }
 
@@ -96,7 +102,7 @@ impl App {
         };
         // 已经开着就什么都不做。再 attach 一次会先把旧的整个进程组 kill 掉,
         // 人跟 agent 谈到一半的上下文就没了。
-        if self.terminal.is_live(conv.id) {
+        if self.terminal.is_live(conv.id.uuid()) {
             return Ok(vec![Event::SessionReopened {
                 issue_id: id,
                 live: true,
@@ -116,17 +122,17 @@ impl App {
         .map_err(|e| AppError::Exec(e.to_string()))?;
 
         let meta = ConversationMeta {
-            conversation_id: conv.id,
-            issue_id: id,
+            conversation_id: conv.id.uuid(),
+            issue_id: id.uuid(),
             claude_session_id: conv.claude_session_id.clone(),
             workspace_path: tree.path.clone(),
             branch_name: tree.branch,
         };
-        let (bytes_tx, input_rx) = self.terminal.attach(conv.id, meta, None);
+        let (bytes_tx, input_rx) = self.terminal.attach(conv.id.uuid(), meta, None);
         let executor = self.executor.clone();
         let ctx = RunCtx {
-            project: issue.project_id,
-            workflow: WorkflowId::nil(),
+            project: issue.project_id.uuid(),
+            workflow: uuid::Uuid::nil(),
         };
         tokio::spawn(async move {
             let _ = executor
@@ -162,7 +168,7 @@ impl App {
         // 还没有任何提示。顶栏「▶开工」和「■停止」是挨着放的,误点很容易。
         // (光接回上次那场对话不必走这条路,那是 `reopen_session`。)
         if let Some(existing) = self.store.conversation_for_issue(id).await? {
-            if self.terminal.is_live(existing.id) {
+            if self.terminal.is_live(existing.id.uuid()) {
                 return Err(AppError::Refused(
                     "这张活的终端还开着。要重开先点「■ 停止」——重开是从头一次新对话,不是接着刚才那段聊。"
                         .into(),
@@ -219,18 +225,18 @@ impl App {
         }
 
         let meta = ConversationMeta {
-            conversation_id: conv.id,
-            issue_id: id,
+            conversation_id: conv.id.uuid(),
+            issue_id: id.uuid(),
             claude_session_id: conv.claude_session_id.clone(),
             workspace_path: tree.path.clone(),
             branch_name: tree.branch,
         };
-        let (bytes_tx, input_rx) = self.terminal.attach(conv.id, meta, None);
+        let (bytes_tx, input_rx) = self.terminal.attach(conv.id.uuid(), meta, None);
 
         let executor = self.executor.clone();
         let ctx = RunCtx {
-            project: issue.project_id,
-            workflow: WorkflowId::nil(),
+            project: issue.project_id.uuid(),
+            workflow: uuid::Uuid::nil(),
         };
         tokio::spawn(async move {
             // 跑完的结果不在这里落库:PTY 会话的收尾(提交、开 PR、推「评审

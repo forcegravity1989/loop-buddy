@@ -25,7 +25,7 @@
 
 | 路径 | 是什么 | 谁在维护 |
 |---|---|---|
-| [`v1-prototype/`](v1-prototype/) → [`v2-prototype/`](v2-prototype/) → [`v3-prototype/`](v3-prototype/) | **当前迭代线**:V1 产品化(纳入项目简化 / 交互式指标环 / 内嵌终端 / 总览重构)→ V2(调度统一 / 最简多人)→ V3(原型进度页内嵌 Open Design)。**2026-08-20 归档整理**:三个目录里已落地、且没有被现役文档引用为当前权威的 8 篇设计事实源搬去了 [`archive/v1-prototype/`](archive/v1-prototype/)/[`v2-prototype/`](archive/v2-prototype/)/[`v3-prototype/`](archive/v3-prototype/)(按篇判断,不按目录整批搬);每个目录自带 README 与逐文件状态表,现在只列仍留在现役目录的篇章。**V4 见 [`v4-prototype/`](v4-prototype/)**——母文档 + 13 篇详细设计 + 高保真原型;代码已分五刀建完合进 main(内核 `crates/bw-v4` + 新壳 `crates/app-shell`,与 V3 旧壳并存),试点未跑。遗留清单已升格到 `docs/LEFTOVERS.md`(下一行),`v1-prototype/LEFTOVERS.md` 只剩指针 | 伙伴会话(V1/V2/V3/V4 分支已全部合入 main) |
+| [`v1-prototype/`](v1-prototype/) → [`v2-prototype/`](v2-prototype/) → [`v3-prototype/`](v3-prototype/) | **当前迭代线**:V1 产品化(纳入项目简化 / 交互式指标环 / 内嵌终端 / 总览重构)→ V2(调度统一 / 最简多人)→ V3(原型进度页内嵌 Open Design)。**2026-08-20 归档整理**:三个目录里已落地、且没有被现役文档引用为当前权威的 8 篇设计事实源搬去了 [`archive/v1-prototype/`](archive/v1-prototype/)/[`v2-prototype/`](archive/v2-prototype/)/[`v3-prototype/`](archive/v3-prototype/)(按篇判断,不按目录整批搬);每个目录自带 README 与逐文件状态表,现在只列仍留在现役目录的篇章。**V4 见 [`v4-prototype/`](v4-prototype/)**——母文档 + 14 篇详细设计 + 高保真原型;代码已分七刀(A–G)建完合进 main(内核 `crates/bw-v4` + 新壳 `crates/app-shell`,与 V3 旧壳并存),试点在跑第 1-3 站。遗留清单已升格到 `docs/LEFTOVERS.md`(下一行),`v1-prototype/LEFTOVERS.md` 只剩指针 | 伙伴会话(V1/V2/V3/V4 分支已全部合入 main) |
 | [`LEFTOVERS.md`](LEFTOVERS.md) | 还没干的活的**唯一**清单(全产品;含减负重构并入的「减负-N」冗余功能/结构债条目与已删收据) | main 2026-08-17 升格为全产品清单;原 `BACKLOG.md` 已并入删除 |
 | [`doc-boundaries.md`](doc-boundaries.md) | 文档边界:什么写到哪、不写到哪 | 现在作数 |
 | [`releases.md`](releases.md) | 版本登记:出包与运作 | 现在作数 |
@@ -33,7 +33,7 @@
 | [`adr/0001-ubiquitous-language.md`](adr/0001-ubiquitous-language.md) | 确立 `CONTEXT.md` 为领域语言规范的决定 + 改名台账 | 改术语时更新 |
 | [`superpowers/specs/`](superpowers/specs/) | 仍作数的设计稿三篇:2026-07-22 GitHub 主体化入门(plan/13 引用)、2026-08-05 技能五角色归类(`bw-core/src/stage_catalog.rs` 引用)、2026-08-17 减负重构(本次) | 过时即搬 `archive/superpowers/` |
 | [`guide/`](guide/) | 给同事用的产品指南,**只写已实践**:[`v4-用户使用指南.md`](guide/v4-用户使用指南.md)(V4 新壳一站一站的流程,跟着伴飞长,没走到的站写明没走到)+ V1 期留下的指南 HTML 原型与 `填写规范.md` | V4 指南:伴飞中,每走完一站补一站 |
-| [`metrics/workflowhub/metrics-rationale.md`](metrics/workflowhub/metrics-rationale.md) | 本仓自己作为「项目」时的指标推导记录,配根目录 `.bw/metrics.toml` | 指标变动时 |
+| [`metrics/workflowhub/`](metrics/workflowhub/) | **WorkflowHub 这个项目**的指标正本 [`metrics.toml`](metrics/workflowhub/metrics.toml) + 推导记录 [`metrics-rationale.md`](metrics/workflowhub/metrics-rationale.md)。正本 2026-08-21 从仓根 `.bw/` 移来:它装的是 WorkflowHub 的五条指标,不是 loop-buddy 自己的,留在 `.bw/` 会被 V4 当成本仓的指标读出来 | 指标变动时 |
 | [`examples/metrics.toml.sample`](examples/metrics.toml.sample) | `.bw/metrics.toml` 可复制样例 | 格式变动时 |
 
 ### 2. 运行时资产(被 `include_str!` 编进二进制——**改它就是改产品行为**,不是改文档)

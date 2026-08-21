@@ -1,6 +1,6 @@
 # 03 · 规范铺底怎么跑:铺 `.bw/`、老项目回填、对账、升级
 
-> **30 秒导读**:这篇管运作活③「规范铺底」——项目接入时自动出现的一次性活——具体怎么跑:第 1 步 buddy 自己写模板核心件(**全落在 `.bw/` 下,仓根一个字不写**),**第 2 步已经取消**(见 §2.3:给别人的仓写开发手册是「建议改造你的项目」,归资产盘点去问人)、第 3 步(有历史的仓才有)把老项目自己的历史记录回填成 buddy 认得的文件;外加铺完之后的日常动作:对账、升级、`standard/` 正本怎么让同事贡献。**历史回填不是这里养的一个独立技能**,它是运作活②「资产盘点」的首次模式(同一个 `asset-audit` 包,`mode=first` 全量、`mode=weekly` 增量),剧本归 [09-ops-workflows.md](09-ops-workflows.md) 管,本篇只管「探测到历史该不该跑、原料与产物长什么样、怎么防伪」。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 给三种人看:接着做 V4 的会话、往 `standard/` 提 PR 的同事、要核对铺底行为的人。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
+> **30 秒导读**:这篇管运作活③「规范铺底」——项目接入时自动出现的一次性活——具体怎么跑:第 1 步 buddy 自己写模板核心件(**全落在 `.bw/` 下,仓根一个字不写**),**第 2 步已经取消**(见 §2.3:给别人的仓写开发手册是「建议改造你的项目」,归资产盘点去问人)、第 3 步(有历史的仓才有)把老项目自己的历史记录回填成 buddy 认得的文件;外加铺完之后的日常动作:对账、升级、`standard/` 正本怎么让同事贡献。**历史回填不是这里养的一个独立技能**,它是运作活②「资产盘点」的首次模式(同一个 `asset-audit` 包,`mode=first` 全量、`mode=weekly` 增量),剧本归 [09-ops-workflows.md](09-ops-workflows.md) 管,本篇只管「探测到历史该不该跑、原料与产物长什么样、怎么防伪」。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组。 给三种人看:接着做 V4 的会话、往 `standard/` 提 PR 的同事、要核对铺底行为的人。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ---
 
@@ -45,18 +45,19 @@
 
 同步主机代码逻辑,不经交互式执行器,和今天 `write_charter`/`write_component_standards` 同一技术形状,范围从「章程+四份组件标准文件」扩到规范全部核心件,并套一层分支/MR:
 
-1. 读 `.bw/standard.toml` 的 `enabled` 清单(新仓没有就取二进制默认核心清单:`charter, agents, docs-core, metrics, issue-policy, defaults-core, cadence`,同 02 篇 §2.8 样例)。
-2. 按清单逐类从 `standard_assets` 取模板渲染到目标路径:
-   - 第 1 类章程 → `.bw/PROJECT.md`(复用现成 `charter_md()`,填两卡内容,不是静态模板——从第一天起就"有数据");
+1. **按二进制里那张模板表铺,不按清单挑。** `.bw/standard.toml` 里确实写着一行 `enabled = ["charter", "agents", "docs-core", …]`(模板见 `standard/08-meta/standard.toml.tmpl`),但**今天没有任何代码拿它做过滤**——`write_core_files` 直接遍历 `standard::CORE_TEMPLATES`,只按每份模板自己标的「哪一站铺」(`LayAt::Adopt` = 第 0 站接入就铺,`LayAt::OnFirstUse` = 走到那一站或人在配置屏点一次「规范铺底」才铺)决定写不写。那一行 `enabled` 今天是给人看的说明,不是开关;它列的 `agents` / `defaults-core` / `cadence` 三个大类在二进制里也没有对应模板。
+2. 二进制里今天**一共只有七份模板**(`crates/bw-v4/src/standard/mod.rs` 的 `CORE_TEMPLATES`),逐份渲染到目标路径。**只有前两份是第 0 站接入就铺的**,其余五份都标了「走到那一站才铺」:
+   - 第 1 类章程 → `.bw/PROJECT.md`(**第 0 站就铺**;复用现成 `charter_md()`,填两卡内容,不是静态模板——从第一天起就"有数据");
    - 第 2 类 → **不写**(2026-08-20 取消,§2.3):仓根 `AGENTS.md` / `CLAUDE.md` 是项目自己的文件,归资产盘点去问人;模板已从仓里删除;
-   - 第 3 类 → `.bw/releases.md`(空表头)、`.bw/design/README.md`(约定说明);`.bw/plan/YYYY-Www.md` 不在这一步写,那是运作活①第一次跑才有的东西;
-   - 第 4 类 → `.bw/metrics.toml`/`.bw/connectors.toml`/`.bw/collect_stats.*`/`docs/metrics.md`:创建流已写过的不重写内容,只登记指纹;没有的写空骨架;
-   - 第 5 类 → `.bw/issue-policy.toml`(02 篇 §2.8 给的默认三列映射 + review/cadence/kanban 四段);
+   - 第 3 类 → `.bw/plan/README.md`、`.bw/releases.md`(空表头)、`.bw/design/README.md`(约定说明),三份都是**走到那一站才铺**;`.bw/plan/YYYY-Www.md` 任何时候都不在这一步写,那是运作活①第一次跑才有的东西;
+   - 第 4 类 → **只有 `.bw/metrics.toml` 一份**,走到第 2 站(更新指标 + 制定本周计划)才铺。原来这里还列着 `.bw/connectors.toml` / `.bw/collect_stats.*` / `docs/metrics.md` 三份,**二进制里从来没有过这三份模板**,写在这儿是设计期的想当然;而且按 [14 篇](14-metrics-collection.md) §3.3,`.bw/connectors.toml` 这个概念 V4 整个不要——一条指标直接指向一个脚本,不经「连接器」这一层。指标正本的新格式见 14 篇 §2.6;
+   - 第 5 类 → `.bw/issue-policy.toml`(默认三列映射 + review/cadence/kanban 四段),走到第 2 站排期 / 第 4 站按类别选开工工具才铺;
    - 第 6 类 → **不复制任何技能进项目仓**(2026-08-20 试点第一天推翻,原方案是「复制预置技能包进 `.claude/skills/`」)。buddy 自带的十三份(九篇方法论 + 四份运作剧本)住在 buddy 自己的资产目录,开工时只把这张活挂的那一份的名字、一句话、完整路径写进系统提示词,正文让 agent 按需读——理由与新机制见 [04 篇](04-tools-and-workflows.md) §2.7。当时撑着旧方案的那句「Claude CLI 只在项目仓里找技能,不复制进来就读不到」**已被证伪**:给绝对路径 + `--add-dir` 一样读得到。业界包(mattpocock-skills、superpowers)仍未接入,`.bw/issue-policy.toml` 的 `workflow` 列写着它们的名字是设计目标,配置屏如实标「不在册」,见 `docs/LEFTOVERS.md`;
-   - 第 8 类 → 最后写 `.bw/standard.toml`(`version = STANDARD_VERSION`)与 `.bw/managed.toml`。
+   - 第 8 类 → `.bw/standard.toml`(`version = STANDARD_VERSION`,**第 0 站就铺**——没有它对不了账)与 `.bw/managed.toml`(指纹清单,整轮**最后**写,见下一条)。
 3. 每写一个文件同时往 `.bw/managed.toml` 追加一条(`path`+`version`+`fingerprint`,算法见 2.6);这份清单**最后写**,保证记的指纹是刚落盘那一刻的真实内容。
 4. 人手改过不覆盖:只在**目标路径不存在**或**存在但指纹与记录一致**时才写;两者都不满足就跳过,在 Issue 说明追加一行「`XXX.md` 已存在且非 buddy 管理,跳过」——和第 2 步"不覆盖已有 AGENTS.md"是同一精神在不同文件上的应用。
-5. **落盘方式(2026-08-20 重写,已实现)。** 不再看是不是空仓例外——两种情况走同一段代码:先给这张活开一棵自己的 git worktree(主仓的兄弟目录 `<仓名>-issue-<号>`,分支 `bw/issue-<号>`,供给复用 `bw_engine::workspace::provision_issue_worktree`,和 V3 同一份实现),核心件写进这棵树,`commit_paths` 只 add 这次真写下去的路径(不用 `add -A`,免得把人手上没写完的改动一起打包),提交信息 `docs(bw): 规范铺底 v{版本} · 核心件`。**人的主检出一个字节都不碰**,两张活同时在跑也不会撞在一起。工作区不是 git 仓时开不了 worktree,就地写,并在活的正文里如实标出来。
+5. **这一站不铺的件,也要看一眼**(2026-08-21 加):标了「走到那一站才铺」的件,如果仓里**已经躺着一份、而且不在 buddy 的指纹清单里**,就记进 `BootstrapReport.preexisting`,在活的正文里单开一段说清楚——不覆盖、不删除、不猜它对不对,只保证人知道它在那儿。加这一条是因为试点第一天真撞上过:项目仓里躺着一份**另一个项目**的 `.bw/metrics.toml`,铺底原来在循环里直接 `continue`、连它在不在都没看,人以为铺完了,而总览的指标卡读的是别人的指标。界面会把这些文件**当正本读**(指标卡、走势、健康判据都从那里来),所以不能装看不见。
+6. **落盘方式(2026-08-20 重写,已实现)。** 不再看是不是空仓例外——两种情况走同一段代码:先给这张活开一棵自己的 git worktree(主仓的兄弟目录 `<仓名>-issue-<号>`,分支 `bw/issue-<号>`,供给复用 `bw_engine::workspace::provision_issue_worktree`,和 V3 同一份实现),核心件写进这棵树,`commit_paths` 只 add 这次真写下去的路径(不用 `add -A`,免得把人手上没写完的改动一起打包),提交信息 `docs(bw): 规范铺底 v{版本} · 核心件`。**人的主检出一个字节都不碰**,两张活同时在跑也不会撞在一起。工作区不是 git 仓时开不了 worktree,就地写,并在活的正文里如实标出来。
 
 跑完:真提交出东西了就推分支、开 MR、把活推到「评审中」等人合(§2.5);挂着远端才有 MR,没挂远端就只有一条本机分支,活照样进「评审中」,人自己 merge 那条分支再点完成。需要第 2/3 步 → 这两步还没实现(见「## 2·设计」开头的范围说明),设计上是紧接着自动触发一次交互式运行、**同一棵 worktree** 继续跑,但目前只把「还没跑的步骤」写进活的说明,不会真的继续跑下去。
 
@@ -259,6 +260,7 @@ standard/
 pub struct BootstrapReport {
     pub written: Vec<String>,            // 真的写进去的路径
     pub skipped: Vec<(String, String)>,  // 跳过的路径 + 为什么跳
+    pub preexisting: Vec<String>,        // 这一站本来不铺、但仓里已经有一份且不归 buddy 管(§2.2 第 5 条)
     // 原来这里还有一行 `skills: Vec<String>`(复制进 .claude/skills/ 的预置包路径)。
     // 技能不再进用户仓,这个字段已删,不留空字段占位。
 }

@@ -21,7 +21,7 @@ use crate::model::{IssueId, IssueKind, IssueOrigin, IssueStatus, ProjectId};
 use crate::repo::issue_policy_file;
 
 /// 运作活①的 `workflow` 字段值,对应剧本 `week-planning`。两者的对应关系在
-/// `standard/06-defaults/ops/README.md` 那张表里。
+/// `standard/skills/README.md` 那张表里。
 pub const OPS1_WORKFLOW: &str = "更新指标与周计划";
 pub const OPS2_WORKFLOW: &str = "资产盘点";
 pub const OPS3_WORKFLOW: &str = "规范铺底";
@@ -29,13 +29,22 @@ pub const OPS3_WORKFLOW: &str = "规范铺底";
 /// 剧本名。开工时按这个 slug 在 **buddy 自己的技能目录**里找到那份
 /// `SKILL.md`,把**名字 + 一句话 + 路径**给 agent(正文它自己按需读,见
 /// [`crate::standard::skills`])。
+/// 运作活①这一周那张活的标题。**它同时是建活的幂等键和「本周开没开过工」
+/// 的判据** —— 两者必须是同一个东西:按 `week_of` 查的话,人把这张卡从本周拖
+/// 回待办池,判据就落空了,而建活按标题去重又拿回同一张活,于是「开始本周」
+/// 会对一张已经在评审中的活重新开工,弹一句「不是能开工的状态」。定时那条路
+/// 早踩过同一个坑(见 [`App::tick_scheduler`]),这里不重踩。
+pub fn ops1_title(week: &str) -> String {
+    format!("更新指标 + 制定本周计划 {week}")
+}
+
 pub fn skill_slug(workflow: &str) -> Option<&'static str> {
     match workflow {
         OPS1_WORKFLOW => Some("week-planning"),
         OPS2_WORKFLOW => Some("asset-audit"),
         // 规范铺底**没有 agent 步骤**(2026-08-20:只铺 `.bw/`,仓根一个字不写),
         // 所以它没有剧本可挂。给这个项目写开发手册的那份剧本已经挪进资产盘点,
-        // 见 `standard/06-defaults/ops/asset-audit/skills/project-handbook/`。
+        // 见 `standard/skills/project-handbook/`。
         _ => None,
     }
 }
@@ -202,7 +211,7 @@ impl App {
         // 点「合入并完成」就是拿 `gh` 去打一个 gh 根本不认识的仓。
         let remote = if project.has_remote() {
             Some(
-                bw_engine::remote::Remote::for_project(
+                v4_engine::remote::Remote::for_project(
                     &project.provider,
                     &project.remote_host,
                     &project.remote_path,
@@ -261,8 +270,26 @@ impl App {
         } else if merged {
             notes.push(format!(
                 "本机分支 {} 先留着:主检出没拉动,它是本机唯一还够得着这次合入的地方",
-                bw_engine::github::issue_branch(issue.number)
+                v4_engine::github::issue_branch(issue.number)
             ));
+        }
+
+        // 合的是运作活①、而且主检出真的拉到了这次合入 —— 周计划文件这会儿才第
+        // 一次出现在主检出里,照着它对一次账:文件里列的业务活建成卡片、已有
+        // 的活把排期与工具刷到文件说的样子。**只在真拉到了才做**,否则读的还是
+        // 旧文件(或压根没有),对出来的账是假的。
+        let mut refreshed = Vec::new();
+        if merged && main_has_it && issue.workflow == OPS1_WORKFLOW && !issue.week_of.is_empty() {
+            let week = issue.week_of.clone();
+            match self.refresh_issue_cache(issue.project_id, week).await {
+                Ok(e) => refreshed = e,
+                // 对账没跑成不回滚已经发生的合入与结清 —— 如实记一句,人可以
+                // 在计划屏点「按文件刷新」重来一次。原话端出去,不吞。
+                Err(e) => notes.push(format!(
+                    "周计划对账没跑成(可在计划屏点「按文件刷新」重来):{}",
+                    one_line(&e.to_string())
+                )),
+            }
         }
 
         let mut events = vec![Event::IssueMerged {
@@ -274,6 +301,7 @@ impl App {
         // 合入这件事排在前面,界面上那句话说的才是人刚做的动作;结清事件跟在
         // 后面,读回时两条都在。
         events.extend(settled);
+        events.extend(refreshed);
         // 群通知排在最后:发不出去也不影响上面已经记完的账。
         if let Some(e) = self.chat_notify_issue(id, "merged").await {
             events.push(e);
@@ -319,7 +347,7 @@ impl App {
     /// 上记的是主分支名(不是 git 仓、或者还没有第一条提交的空仓),照着它删就
     /// 是拿主分支开刀 —— 认死名字,不认那个字段说什么。
     async fn drop_issue_branch(&self, issue: &crate::model::Issue) -> String {
-        let branch = bw_engine::github::issue_branch(issue.number);
+        let branch = v4_engine::github::issue_branch(issue.number);
         if issue.branch != branch {
             return "没有单独的活分支要收(这张活的改动不在 bw/issue- 分支上)".into();
         }
@@ -343,6 +371,6 @@ impl App {
 
 /// 把 git 的多行原话压成一行。**压行不是删字** —— 一个字都不省,只是让它能塞
 /// 进界面上那一条回执。
-fn one_line(s: &str) -> String {
+pub(super) fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }

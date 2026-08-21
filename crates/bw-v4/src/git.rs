@@ -21,8 +21,10 @@ pub enum GitError {
     BadWeek(String),
 }
 
-/// 一周的 git 读数。**每个字段旁边的注释就是真跑的那条命令** —— 界面上的
-/// 每个数字都要能在终端一字不差地复算出来,这是纪律不是修辞。
+/// 一周的 git 读数。**复算命令写在 [`week_counts_many`] 的文档里** —— 界面上
+/// 的每个数字都要能在终端复算出来,这是纪律不是修辞。注意复算**不要**用
+/// `git log --since/--until`:那正是 2026-08-21 修掉的错误窗口(多算一天、
+/// 还会漏算),用它复算出来的数和界面对不上是命令的错,不是界面的错。
 ///
 /// 特别地:这里跑的是当前分支,**不带 `--all`**。带上 `--all` 会把
 /// remote-tracking 分支和别的 worktree 的提交都算进「本周有没有真实提交」,
@@ -30,19 +32,27 @@ pub enum GitError {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WeekStats {
     pub week: String,
-    /// `git log --since=<周一> --until=<下周一> --oneline | wc -l`
+    /// 提交时间落在 `[周一 00:00, 下周一 00:00)`(本机时区)的提交数。
     pub commits: u32,
-    /// `git log --merges --since=… --until=… --oneline | wc -l`
+    /// 同窗口内父提交 ≥ 2 的提交数(合入)。
     pub merges: u32,
     /// `git log --numstat` 按目录聚合后的前三名。
     pub top_dirs: Vec<String>,
+}
+
+/// 一周的轻量计数:提交数、合入数。健康判据和走势图只要这两个数 ——
+/// **不要为它们付 numstat 的钱**(那是 [`week_stats_many`] 的事,贵一个量级)。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WeekCounts {
+    pub commits: u32,
+    pub merges: u32,
 }
 
 async fn git(workspace: &Path, args: &[&str]) -> Result<String, GitError> {
     if workspace.as_os_str().is_empty() {
         return Err(GitError::NotConfigured);
     }
-    let out = bw_engine::tokio_cmd("git")
+    let out = v4_engine::tokio_cmd("git")
         .arg("-C")
         .arg(workspace)
         .args(args)
@@ -56,11 +66,6 @@ async fn git(workspace: &Path, args: &[&str]) -> Result<String, GitError> {
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
-}
-
-fn week_range(week: &str) -> Result<(String, String), GitError> {
-    let (start, end) = isoweek::week_bounds(week).ok_or_else(|| GitError::BadWeek(week.into()))?;
-    Ok((start.to_string(), end.to_string()))
 }
 
 /// 这个目录是不是一个 git 仓。不是就返回 false,不报错——很多判据在没有仓的
@@ -77,57 +82,189 @@ pub async fn has_head(workspace: &Path) -> bool {
         .is_ok()
 }
 
-/// 某一周有没有真实提交。健康判据 (a) 的后半句。
-pub async fn has_commits_in_week(workspace: &Path, week: &str) -> Result<bool, GitError> {
-    Ok(week_stats(workspace, week).await?.commits > 0)
+/// 一周的窗口,换算成本机时区的 unix 秒:`[周一 00:00, 下周一 00:00)`。
+pub fn week_window(week: &str) -> Result<(i64, i64), GitError> {
+    let (start, end) = isoweek::week_bounds(week).ok_or_else(|| GitError::BadWeek(week.into()))?;
+    let at = |d: time::Date| {
+        d.with_hms(0, 0, 0)
+            .expect("00:00:00 一定合法")
+            .assume_offset(isoweek::local_offset())
+            .unix_timestamp()
+    };
+    Ok((at(start), at(end)))
 }
 
-/// 某一周有没有合入。健康判据 (c) 的前半句。
-pub async fn has_merges_in_week(workspace: &Path, week: &str) -> Result<bool, GitError> {
-    Ok(week_stats(workspace, week).await?.merges > 0)
+/// 多个周的提交/合入计数,**一趟遍历全部出齐**。
+///
+/// **不用 `git log --since/--until` 截窗口**,而是把提交时间全取回来自己按
+/// 时间戳过滤。两个理由都是 2026-08-21 实测撞出来的,不是洁癖:
+///
+/// 1. **`--until=<下周一>` 会把下周一那一整天算进来。** git 用 approxidate 解析
+///    这类不带时刻的日期,实测 `--until=2026-08-03` 连当天 11:26 的提交都收 ——
+///    于是每一周都多算了下一周第一天,健康判据「本周有没有提交」和走势图一起偏。
+/// 2. **`--since` 会提前停止遍历。** 提交时间不严格单调(rebase、cherry-pick、
+///    机器时钟)时 git 会漏掉一批,同一条命令换个起点、隔几分钟跑,结果能从
+///    78 变成 83。走势图上的数**必须**是每次算都一样的。
+///
+/// 全量遍历一次的代价:这个仓 751 条提交,`--pretty=format:'%ct %P'` 实测约
+/// 25 毫秒 —— **要几周都是这一趟**,健康判两周、走势看八周、回填补一百周,
+/// 都不再把遍历次数乘上去(第一版就是这么乘出 2 秒卡顿和 75 秒冻屏的,评审
+/// 抓的)。
+///
+/// 复算(`<since>`/`<until>` 用 [`week_window`] 的 unix 秒;合入 = 父提交 ≥ 2,
+/// 即行内字段 ≥ 3 个):
+///
+/// ```bash
+/// git -C <仓> log --pretty=format:'%ct %P' | awk -v s=<since> -v u=<until> '$1>=s && $1<u' | wc -l
+/// git -C <仓> log --pretty=format:'%ct %P' | awk -v s=<since> -v u=<until> '$1>=s && $1<u && NF>=3' | wc -l
+/// ```
+pub async fn week_counts_many(
+    workspace: &Path,
+    weeks: &[String],
+) -> Result<std::collections::HashMap<String, WeekCounts>, GitError> {
+    let mut windows = Vec::with_capacity(weeks.len());
+    for w in weeks {
+        windows.push((w.clone(), week_window(w)?));
+    }
+    // 每行:`<unix 秒> <父提交…>`。父提交 ≥ 2 = 合入。
+    let out = git(workspace, &["log", "--pretty=format:%ct %P"]).await?;
+    let mut map: std::collections::HashMap<String, WeekCounts> = weeks
+        .iter()
+        .map(|w| (w.clone(), WeekCounts::default()))
+        .collect();
+    for line in out.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(ts) = fields.next().and_then(|t| t.parse::<i64>().ok()) else {
+            continue;
+        };
+        let parents = fields.count();
+        for (w, (since, until)) in &windows {
+            if ts >= *since && ts < *until {
+                let c = map.get_mut(w).expect("map 由同一份 weeks 建出");
+                c.commits += 1;
+                if parents >= 2 {
+                    c.merges += 1;
+                }
+                break;
+            }
+        }
+    }
+    Ok(map)
 }
 
+/// 多个周的完整读数(计数 + 目录榜),**一趟 numstat 遍历全部出齐**。
+///
+/// 和 [`week_counts_many`] 的分工:那边只要计数、便宜(轻一个量级);这边要
+/// 目录榜,得付一次全量 `--numstat` 的钱(本仓实测约 0.7 秒、174KB 输出)——
+/// 所以**只给真要目录榜的调用方用**(回填、周计划的「上周完成情况」),健康
+/// 判据和走势图别走这条。
+pub async fn week_stats_many(
+    workspace: &Path,
+    weeks: &[String],
+) -> Result<std::collections::HashMap<String, WeekStats>, GitError> {
+    let mut windows = Vec::with_capacity(weeks.len());
+    for w in weeks {
+        windows.push((w.clone(), week_window(w)?));
+    }
+    // `\x01` 是提交行的标记(git 自己在 pretty 里也这么用;numstat 对含控制
+    // 字符的路径会 C-quote,所以路径伪造不出这个前缀)。每条提交行:
+    // `\x01<unix 秒> <父提交…>`,后面跟着它的 numstat 行。
+    let out = git(
+        workspace,
+        &["log", "--numstat", "--pretty=format:\x01%ct %P"],
+    )
+    .await?;
+
+    let mut counts: std::collections::HashMap<String, WeekCounts> =
+        std::collections::HashMap::new();
+    let mut dirs: std::collections::HashMap<String, std::collections::HashMap<String, u32>> =
+        std::collections::HashMap::new();
+    // 当前提交落在哪个周的桶里;不在任何桶就丢。
+    let mut bucket: Option<String> = None;
+    for line in out.lines() {
+        if let Some(head) = line.strip_prefix('\x01') {
+            bucket = None;
+            let mut fields = head.split_whitespace();
+            let Some(ts) = fields.next().and_then(|t| t.parse::<i64>().ok()) else {
+                continue;
+            };
+            let parents = fields.count();
+            for (w, (since, until)) in &windows {
+                if ts >= *since && ts < *until {
+                    let c = counts.entry(w.clone()).or_default();
+                    c.commits += 1;
+                    if parents >= 2 {
+                        c.merges += 1;
+                    }
+                    bucket = Some(w.clone());
+                    break;
+                }
+            }
+        } else if let Some(week) = &bucket {
+            let Some(path) = line.split('\t').nth(2) else {
+                continue;
+            };
+            let dir = match numstat_path(path).rsplit_once('/') {
+                Some((d, _)) => d.to_string(),
+                None => ".".to_string(),
+            };
+            *dirs
+                .entry(week.clone())
+                .or_default()
+                .entry(dir)
+                .or_default() += 1;
+        }
+    }
+
+    let mut map = std::collections::HashMap::new();
+    for w in weeks {
+        let c = counts.get(w).copied().unwrap_or_default();
+        let top = dirs
+            .remove(w)
+            .map(|m| {
+                let mut v: Vec<(String, u32)> = m.into_iter().collect();
+                v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                v.into_iter().take(3).map(|(d, _)| d).collect()
+            })
+            .unwrap_or_default();
+        map.insert(
+            w.clone(),
+            WeekStats {
+                week: w.clone(),
+                commits: c.commits,
+                merges: c.merges,
+                top_dirs: top,
+            },
+        );
+    }
+    Ok(map)
+}
+
+/// 这一周的提交、合入、动得最多的目录。单周场景的便捷入口;要多周就用
+/// [`week_stats_many`],别在循环里逐周调这个。
 pub async fn week_stats(workspace: &Path, week: &str) -> Result<WeekStats, GitError> {
-    let (since, until) = week_range(week)?;
-    let commits = git(
-        workspace,
-        &[
-            "log",
-            &format!("--since={since}"),
-            &format!("--until={until}"),
-            "--pretty=format:%H",
-        ],
-    )
-    .await?;
-    let merges = git(
-        workspace,
-        &[
-            "log",
-            "--merges",
-            &format!("--since={since}"),
-            &format!("--until={until}"),
-            "--pretty=format:%H",
-        ],
-    )
-    .await?;
-    let numstat = git(
-        workspace,
-        &[
-            "log",
-            &format!("--since={since}"),
-            &format!("--until={until}"),
-            "--numstat",
-            "--pretty=format:",
-        ],
-    )
-    .await
-    .unwrap_or_default();
-    Ok(WeekStats {
-        week: week.to_string(),
-        commits: nonempty_lines(&commits),
-        merges: nonempty_lines(&merges),
-        top_dirs: top_dirs(&numstat, 3),
-    })
+    let weeks = vec![week.to_string()];
+    let mut map = week_stats_many(workspace, &weeks).await?;
+    Ok(map.remove(week).unwrap_or_default())
+}
+
+/// numstat 的路径列对**改名**输出的是紧凑合并形式(`a/{old => new}/f.rs` 或
+/// `old.rs => new.rs`),直接当路径用会切出根本不存在的目录(评审抓的:本仓
+/// 那批目录搬迁提交就能复现)。这里取**新路径**那一侧 —— 改动落点在新位置。
+fn numstat_path(raw: &str) -> String {
+    if let (Some(l), Some(r)) = (raw.find('{'), raw.find('}')) {
+        if l < r {
+            if let Some((_, new)) = raw[l + 1..r].split_once(" => ") {
+                let joined = format!("{}{}{}", &raw[..l], new, &raw[r + 1..]);
+                // `{old => }` 两侧的斜杠会撞在一起,收掉。
+                return joined.replace("//", "/");
+            }
+        }
+    }
+    if let Some((_, new)) = raw.split_once(" => ") {
+        return new.to_string();
+    }
+    raw.to_string()
 }
 
 /// 仓里一共多少条提交。铺底探测「这是不是个有历史的仓」用它。
@@ -330,27 +467,6 @@ pub async fn root_commit_author(workspace: &Path) -> Result<String, GitError> {
         .await?
         .trim()
         .to_string())
-}
-
-fn nonempty_lines(s: &str) -> u32 {
-    s.lines().filter(|l| !l.trim().is_empty()).count() as u32
-}
-
-fn top_dirs(numstat: &str, n: usize) -> Vec<String> {
-    let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    for line in numstat.lines() {
-        let Some(path) = line.split('\t').nth(2) else {
-            continue;
-        };
-        let dir = match path.rsplit_once('/') {
-            Some((d, _)) => d.to_string(),
-            None => ".".to_string(),
-        };
-        *counts.entry(dir).or_default() += 1;
-    }
-    let mut v: Vec<(String, u32)> = counts.into_iter().collect();
-    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    v.into_iter().take(n).map(|(d, _)| d).collect()
 }
 
 /// 一个改动文件:`git status --porcelain` 的一行。

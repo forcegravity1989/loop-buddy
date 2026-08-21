@@ -86,7 +86,7 @@ impl App {
 async fn probe(name: &str) -> ProbeResult {
     match name {
         // Claude CLI 沿用既有的候选路径探测(Windows 上要认 `claude.cmd`)。
-        "claude_cli" => match bw_engine::resolve_claude_binary(None) {
+        "claude_cli" => match v4_engine::resolve_claude_binary(None) {
             Some(p) => ProbeResult::Found(p),
             None => ProbeResult::Missing("本机路径里找不到 claude".into()),
         },
@@ -105,7 +105,7 @@ async fn probe(name: &str) -> ProbeResult {
 }
 
 async fn version_of(bin: &str, args: &[&str]) -> Option<String> {
-    let out = bw_engine::tokio_cmd(bin)
+    let out = v4_engine::tokio_cmd(bin)
         .args(args)
         .stdin(std::process::Stdio::null())
         .output()

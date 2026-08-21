@@ -3,7 +3,7 @@
 //!
 //! 每一块的数字都是现算的:名片来自 `PROJECT.md` / `.bw/project.toml`,健康来
 //! 自仓文件与 git 的三条判据,指标定义来自 `.bw/metrics.toml`、读数来自周计划
-//! 文件的「本周指标读数」段,发版记录来自 `docs/releases.md`。**没有读数就说
+//! 文件的「本周指标读数」段,发版记录来自 `.bw/releases.md`。**没有读数就说
 //! 无数据,不显示 0**。
 
 use crate::bridge::{Bridge, Panel, PanelNav, Req};
@@ -19,24 +19,33 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
     let editing = use_signal(|| false);
     let draft = use_signal(|| (String::new(), String::new(), String::new()));
 
-    let has_week = p.weeks.iter().any(|w| w.week == p.current_week);
     rsx! {
         section { class: "ov-stack", style: "max-width:1120px;",
-            if !has_week {
-                {start_banner(&p, &bridge)}
+            // 判据是**文件在不在**,不是周列表里有没有本周(本周永远在列表里)。
+            // 文件还没有、但运作活①已经在路上时,不再给「开始本周」按钮 ——
+            // 再点一次只会收到「终端还开着」的拒绝,给一条去会话屏的路才对。
+            if !p.week_file_exists {
+                if let Some(st) = p.ops1_status.clone() {
+                    {running_banner(st, nav)}
+                } else {
+                    {start_banner(&p, &bridge, nav)}
+                }
             }
             {card_and_health(&p, &bridge, editing, draft)}
             {north_star_block(&p)}
+            // 本周计划进度紧跟北极星:第一眼要能看全「这项目是什么 · 顶层目标
+            // 是什么 · 这周在往那个目标上推什么」。滞后/引领两层是展开看的细节,
+            // 排在后面。
+            {week_block(&p, nav)}
             {metric_row_block("滞后性指标", &p.metrics.lagging, p.metrics.note.as_deref())}
             {metric_row_block("引领性指标", &p.metrics.leading, None)}
             {repo_block(&p, &bridge)}
-            {week_block(&p, nav)}
             {version_block(&p)}
         }
     }
 }
 
-fn start_banner(p: &ProjectVm, bridge: &Bridge) -> Element {
+fn start_banner(p: &ProjectVm, bridge: &Bridge, nav: PanelNav) -> Element {
     let b = bridge.clone();
     let (pid, week) = (p.id, p.current_week.clone());
     rsx! {
@@ -44,11 +53,33 @@ fn start_banner(p: &ProjectVm, bridge: &Bridge) -> Element {
             span { "本周({p.current_week})还没有周计划文件" }
             button {
                 class: "btn btn-primary btn-sm",
-                onclick: move |_| b.cmd(Command::StartWeekPlanning {
-                    project_id: pid,
-                    week: week.clone(),
-                }),
+                onclick: move |_| {
+                    b.cmd(Command::StartWeekPlanning {
+                        project_id: pid,
+                        week: week.clone(),
+                    });
+                    // 剩下的在会话屏里发生(复盘上周 → 更新指标 → 聊出本周),
+                    // 人点完这一下就该看到那场会话,不是留在总览上猜。
+                    nav.go(Panel::Session);
+                },
                 "开始本周"
+            }
+        }
+    }
+}
+
+/// 运作活①已经在路上:文件要等会话里的 MR 合入才落地,这期间横幅只指路,
+/// 不再给「开始本周」按钮。
+fn running_banner(status: String, nav: PanelNav) -> Element {
+    rsx! {
+        div { class: "ov-banner",
+            span {
+                "运作活①(更新指标 + 制定本周计划)已开工 · {status}。本周文件由那场会话产出,合入 MR 后这里才亮。"
+            }
+            button {
+                class: "btn btn-sm",
+                onclick: move |_| nav.go(Panel::Session),
+                "去会话屏"
             }
         }
     }
@@ -65,6 +96,7 @@ fn card_and_health(
     let c = &p.card;
     let is_editing = *editing.read();
     let b_edit = bridge.clone();
+    let b_pull = bridge.clone();
     let pid = p.id;
     let name = p.name.clone();
 
@@ -138,7 +170,16 @@ fn card_and_health(
                     div { class: "charter-meta",
                         span { class: "mono", "{c.remote}" }
                         span { "规范 v{c.standard_version}" }
-                        span { style: "margin-left:auto;",
+                        span { style: "margin-left:auto;display:flex;gap:6px;",
+                            // 人在网页上直接合了 MR 时,buddy 是不知道的 ——
+                            // 工作区会一直停在旧提交,而界面照常显示旧内容。
+                            // 这颗按钮是补那一下的唯一入口。
+                            button {
+                                class: "btn btn-sm",
+                                title: "把工作区的主检出快进到远端最新(git pull --ff-only)",
+                                onclick: move |_| b_pull.cmd(Command::PullWorkspace { project_id: pid }),
+                                "↻ 拉到最新"
+                            }
                             button { class: "btn btn-sm", onclick: start_edit, "编辑" }
                         }
                     }
@@ -306,6 +347,50 @@ fn metric_card(m: &MetricCardVm, big: bool) -> Element {
     }
 }
 
+/// 近四周三条走势。**每个点都是现算的** —— 能采到今天的数就能采到过去任意
+/// 一周的,所以第一次采集就有完整四周,不用先攒。
+fn trend_row(s: &crate::vm::RepoStatsVm) -> Element {
+    use crate::chrome::sparkline::{trend_chart, Series};
+    if s.trend.is_empty() {
+        return rsx! {};
+    }
+    // `2026-W34` → `W34`,四个点的小图放不下全称。
+    let x = |p: &crate::vm::TrendPointVm| {
+        p.week
+            .split_once("-W")
+            .map_or(p.week.clone(), |(_, w)| format!("W{w}"))
+    };
+    // 一张表定三条线,不是抄三遍 —— 抄三遍的话加第四条线时最省事的做法是复制
+    // 前两条,而前两条恰好…… 现在三条都吃 `Option`,复制也不会把「采不到」写成 0。
+    type Pick = fn(&crate::vm::TrendPointVm) -> Option<f64>;
+    const LINES: [(&str, Pick, &str); 3] = [
+        ("每周提交", |p| p.commits.map(|n| n as f64), "var(--clay)"),
+        ("每周合入", |p| p.merges.map(|n| n as f64), "var(--green)"),
+        (
+            "每周合入的 PR(远端)",
+            |p| p.merged_prs.map(|n| n as f64),
+            "var(--amber)",
+        ),
+    ];
+    rsx! {
+        div { class: "trend-row",
+            for (label, pick, color) in LINES {
+                {trend_chart(&Series {
+                    label: label.into(),
+                    points: s.trend.iter().map(|p| (x(p), pick(p))).collect(),
+                    color,
+                })}
+            }
+        }
+        if !s.git_note.is_empty() {
+            div { class: "cfg-readonly-note", "{s.git_note}" }
+        }
+        if !s.trend_note.is_empty() {
+            div { class: "cfg-readonly-note", "{s.trend_note}" }
+        }
+    }
+}
+
 // ── ⑤ 项目指标 · 代码仓级 ────────────────────────────
 
 fn repo_block(p: &ProjectVm, bridge: &Bridge) -> Element {
@@ -331,21 +416,24 @@ fn repo_block(p: &ProjectVm, bridge: &Bridge) -> Element {
                     div { class: "detail-empty", style: "color:var(--alert-deep);", "{s.error}" }
                 },
                 Some(s) => rsx! {
-                    div { class: "repo-metric-grid",
-                        for (v, k, src) in s.items.iter() {
-                            div { key: "{k}", class: "repo-metric-item",
-                                div { class: "v mono", "{v}" }
-                                div { class: "k",
-                                    "{k}"
-                                    span { class: "chip chip-gray", style: "margin-left:4px;", "{src}" }
+                    // 静态那几个数压成一行小字 —— 它们是「此刻的存量」,没有走势
+                    // 可言,不值得一人占一张卡片。
+                    div { class: "repo-metric-line",
+                        // 分隔点包在同一个带 key 的节点里 —— Dioxus 只认块里
+                        // 第一个节点上的 key,拆成两个平级节点会被判 deprecated。
+                        for (i, (v, k, _)) in s.items.iter().enumerate() {
+                            span { key: "{k}",
+                                if i > 0 {
+                                    span { class: "sep", "·" }
                                 }
+                                "{k} "
+                                b { class: "mono", "{v}" }
                             }
                         }
+                        span { class: "sep", "·" }
+                        span { class: "chip chip-gray", "全部来自 git" }
                     }
-                    div { class: "cfg-readonly-note",
-                        "远端那几项(合入的 MR、远端 issue、开着的 MR)要走 GitHub / codehub 的接口,\
-                         还没接 —— 少列几项,不编几个数。"
-                    }
+                    {trend_row(s)}
                 },
             }
         }
@@ -419,7 +507,7 @@ fn version_block(p: &ProjectVm) -> Element {
             }
             if p.releases.is_empty() {
                 div { class: "detail-empty",
-                    "还没有发过版。docs/releases.md 是这份记录的唯一正本,库里不存副本。"
+                    "还没有发过版。.bw/releases.md 是这份记录的唯一正本,库里不存副本。"
                 }
             }
             for r in p.releases.iter() {

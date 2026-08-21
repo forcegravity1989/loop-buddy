@@ -24,37 +24,68 @@ impl App {
         if week_plan_file::exists(&ws, &week) {
             return Ok(vec![Event::WeekPlanAlreadyExists { project_id, week }]);
         }
+        // 真跑路径下文件要等 MR 合入才落地,上面那道锁这期间是开着的 —— 所以
+        // 还得按活再锁一道:本周的运作活①只要还没走到「完成」,就是还在路上,
+        // 平静挡住,不重复建、也不去动那场可能正开着的会话。
+        //
+        // **按标题查,不按 `week_of` 查**:按周查的话,人把这张卡拖回待办池就
+        // 查不到了,而下面建活按标题去重又拿回同一张活,等于对一张评审中的活
+        // 重新开工(见 [`super::ops::ops1_title`])。
+        let title = super::ops1_title(&week);
+        if let Some(open) = self.store.issue_by_title(project_id, &title).await? {
+            if open.status != IssueStatus::Done {
+                return Ok(vec![Event::WeekPlanInProgress {
+                    project_id,
+                    week,
+                    issue_id: open.id,
+                    status: open.status.label().to_string(),
+                }]);
+            }
+        }
 
-        let last_week = isoweek::previous_week(&week).unwrap_or_default();
-        let last_lines = last_week_lines(&ws, &last_week).await;
-        let readings = collect_readings(&ws, &week).await;
+        // 真跑与替身是两条路,文件的产出方不同,别混:
+        //
+        // - **真跑**(桌面壳开着内嵌终端 + 项目有真实工作区):这里**一个文件都
+        //   不写**。周计划文件由运作活①的 agent 会话在这张活自己的 worktree 里
+        //   产出、走 MR、人合入后才落进主检出 —— 仓是正本,合入才算数。要是这里
+        //   先往主检出写一份骨架,就会留下一个没进版本控制的同名文件:MR 合入后
+        //   `git pull` 会被它顶住,总览还一直显示骨架里的【mock】目标。
+        // - **替身**(headless 指挥器、或项目没配工作区):没有真会话可以产文件,
+        //   骨架 + 【mock】草稿就是这条路的全部产出,处处自我标注,不冒充真实
+        //   对话的结论。
+        let real_session = self.pty_enabled && ws.is_dir();
+        let draft_titles = if real_session {
+            Vec::new()
+        } else {
+            let last_week = isoweek::previous_week(&week).unwrap_or_default();
+            let last_lines = last_week_lines(&ws, &last_week).await;
+            let readings = collect_readings(&ws, &week).await;
 
-        // A 刀这一步是替身:真正的运作活①会起一次 agent 会话,和人一起复盘上
-        // 周、更新指标、聊出本周目标与活。这里产出的草稿活标自带【mock】字样,
-        // 绝不冒充真实对话的结论。
-        // 标题里必须带周号:建活是按标题幂等的,两周用同样的标题的话,第二周
-        // 确认草稿拿回的是上周那两张活的 id,一张新活都建不出来。
-        let draft_titles = vec![
-            format!("【mock】{week} 第一件业务活(草稿,等人确认)"),
-            format!("【mock】{week} 第二件业务活(草稿,等人确认)"),
-        ];
+            // 标题里必须带周号:建活是按标题幂等的,两周用同样的标题的话,第二周
+            // 确认草稿拿回的是上周那两张活的 id,一张新活都建不出来。
+            let titles = vec![
+                format!("【mock】{week} 第一件业务活(草稿,等人确认)"),
+                format!("【mock】{week} 第二件业务活(草稿,等人确认)"),
+            ];
 
-        let draft = WeekPlanDraft {
-            week: week.clone(),
-            origin: "human".into(),
-            goal: Some(
-                "【mock】本周目标待人确认——这一行由流程演示写出,不是真实对话的结论。".into(),
-            ),
-            activities: Vec::new(),
-            readings,
-            ops: vec![OpsRow {
-                title: format!("运作活①更新指标 + 制定本周计划 {week}"),
-                status: "进行中".into(),
-                note: "复盘上周、更新指标、引导出本周目标与活".into(),
-            }],
-            last_week_lines: last_lines,
+            let draft = WeekPlanDraft {
+                week: week.clone(),
+                origin: "human".into(),
+                goal: Some(
+                    "【mock】本周目标待人确认——这一行由流程演示写出,不是真实对话的结论。".into(),
+                ),
+                activities: Vec::new(),
+                readings,
+                ops: vec![OpsRow {
+                    title: format!("运作活①更新指标 + 制定本周计划 {week}"),
+                    status: "进行中".into(),
+                    note: "复盘上周、更新指标、引导出本周目标与活".into(),
+                }],
+                last_week_lines: last_lines,
+            };
+            week_plan_file::write(&ws, &week, &week_plan_file::render(&draft))?;
+            titles
         };
-        week_plan_file::write(&ws, &week, &week_plan_file::render(&draft))?;
 
         // 真正干这件事的是一次 agent 会话:复盘上周、更新指标、和人聊出本周
         // 要干什么。buddy 只负责把活建出来、把骨架文件写下去,然后立刻开工
@@ -62,7 +93,7 @@ impl App {
         let (issue_id, _, mut events) = self
             .create_ops_issue(
                 project_id,
-                format!("更新指标 + 制定本周计划 {week}"),
+                title,
                 "复盘上周、补齐 .bw/metrics.toml、和人交流出本周目标与业务活草稿。\n\n草稿没经人确认之前不许建活、不许落文件。"
                     .into(),
                 super::OPS1_WORKFLOW,
@@ -192,6 +223,30 @@ impl App {
         Ok(vec![Event::IssueReordered { id }])
     }
 
+    /// 「↻ 拉到最新」:把主检出快进到远端。
+    ///
+    /// 只做 `--ff-only` 这一种拉法 —— 会 merge 会 rebase 的拉法可能产生冲突,
+    /// 而这颗按钮是在人的**主工作区**上动手,不该有任何需要人去解冲突的后果。
+    /// 拉不动就如实说拉不动,**绝不假装拉过了**。
+    pub(super) async fn pull_workspace(&mut self, project_id: ProjectId) -> Result<Vec<Event>> {
+        let ws = self.workspace_of(project_id).await?;
+        if !ws.is_dir() {
+            return Err(AppError::NoWorkspace(project_id.uuid().to_string()));
+        }
+        let (moved, note) = match crate::git::pull_ff(&ws).await {
+            Ok(true) => (true, "工作区已拉到最新".to_string()),
+            Ok(false) => (false, "工作区本来就是最新的".to_string()),
+            Err(e) => (
+                false,
+                format!(
+                    "没拉动(自己去仓里 git pull 看看):{}",
+                    super::ops::one_line(&e.to_string())
+                ),
+            ),
+        };
+        Ok(vec![Event::WorkspacePulled { moved, note }])
+    }
+
     pub(super) async fn set_current_version(
         &mut self,
         project_id: ProjectId,
@@ -267,8 +322,14 @@ impl App {
 
     /// 用周计划文件覆盖库里的缓存列 —— **文件说了算**。
     ///
-    /// 幂等,而且只更新、不删除:缓存里有文件里没有的活,原样留着(那可能是
-    /// 刚建出来还没排进周计划的),只是不再被这次刷新碰。
+    /// 文件里有、库里还没有的活**照着建出来**:运作活①那场会话的产出就是这张
+    /// 表,人合入 MR 之后,这些活得真的出现在看板上,否则周计划定完了看板还是
+    /// 空的,人只能自己照着文件手敲一遍。建出来的活来源标 `agent_split`(它们
+    /// 确实是 agent 在会话里拆出来的),状态落在「待办」——**建活不等于开工,
+    /// 更不等于完成**,那两步照旧要人点。
+    ///
+    /// 幂等(按标题),而且只更新、不删除:缓存里有文件里没有的活,原样留着
+    /// (那可能是刚建出来还没排进周计划的),只是不再被这次刷新碰。
     pub(super) async fn refresh_issue_cache(
         &mut self,
         project_id: ProjectId,
@@ -276,23 +337,53 @@ impl App {
     ) -> Result<Vec<Event>> {
         let ws = self.workspace_of(project_id).await?;
         let Some(plan) = week_plan_file::read(&ws, &week)? else {
-            return Ok(vec![Event::IssueCacheRefreshed { week, updated: 0 }]);
+            return Ok(vec![Event::IssueCacheRefreshed {
+                week,
+                updated: 0,
+                created: 0,
+            }]);
         };
-        let issues = self.store.issues(project_id).await?;
-        let mut updated = 0;
+        let mut issues = self.store.issues(project_id).await?;
+        let (mut updated, mut created) = (0, 0);
         for row in &plan.activities {
-            let Some(issue) = issues.iter().find(|i| i.title == row.title) else {
+            if row.title.trim().is_empty() {
                 continue;
+            }
+            let existing = issues.iter().find(|i| i.title == row.title).map(|i| i.id);
+            let id = match existing {
+                Some(id) => id,
+                None => {
+                    self.create_issue(
+                        project_id,
+                        row.title.clone(),
+                        String::new(),
+                        row.category,
+                        IssueKind::Business,
+                        IssueOrigin::AgentSplit,
+                        week.clone(),
+                    )
+                    .await?;
+                    // 重读一次拿新建那张的 id —— 建活是按标题幂等的,这里按标题
+                    // 找回来就是它。
+                    issues = self.store.issues(project_id).await?;
+                    let Some(fresh) = issues.iter().find(|i| i.title == row.title) else {
+                        continue;
+                    };
+                    created += 1;
+                    fresh.id
+                }
             };
+            self.store.set_issue_week(id, &week, row.order).await?;
             self.store
-                .set_issue_week(issue.id, &week, row.order)
-                .await?;
-            self.store
-                .set_issue_dispatch(issue.id, &row.tool, &row.workflow, &row.metric_key)
+                .set_issue_dispatch(id, &row.tool, &row.workflow, &row.metric_key)
                 .await?;
             updated += 1;
         }
-        Ok(vec![Event::IssueCacheRefreshed { week, updated }])
+        Ok(vec![Event::IssueCacheRefreshed {
+            week,
+            updated,
+            created,
+        }])
     }
 
     /// 把库里这一周的活清单写回周计划文件的「业务活」表格。文件里别的段落

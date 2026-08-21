@@ -15,6 +15,9 @@ members = [
     # 日常 cargo check/test 不因为多一个 UI crate 变慢。删旧壳那次去掉
     # app-desktop 那一行即可。
     "crates/app-shell",
+    # V4 的能力底座:2026-08-21 从 bw-engine 拷过来接管的(不是复用)。V3 那
+    # 一整个目录最终会被整体删掉,所以 V4 不能有任何一条依赖指向那边。
+    "crates/v4-engine",
 ]
 # `default-members` = the headless kernel + shared UI selector. Routine
 # `cargo test` / `cargo check` therefore stay UI-free and fast — they never
@@ -32,6 +35,12 @@ default-members = [
     "crates/bw-app",
     "crates/ui",
     "crates/bw-v4",
+    # V4 的能力底座。**必须在这里** —— CI 跑的是裸 `cargo test`(只覆盖
+    # default-members),漏了它,从 bw-engine 拷来的那 13 个测试(含「合并永远
+    # 是人:gh pr merge 必须在 --disallowedTools 里」这条铁律的守卫)在 CI 里
+    # 一次都不跑;等 V3 目录被删,bw-engine 那份同名测试也消失,这个洞就再没有
+    # 任何一层网。评审抓的。
+    "crates/v4-engine",
 ]
 
 [workspace.package]
@@ -72,6 +81,7 @@ bw-engine = { path = "crates/bw-engine" }
 bw-store = { path = "crates/bw-store" }
 bw-app = { path = "crates/bw-app" }
 bw-v4 = { path = "crates/bw-v4" }
+v4-engine = { path = "crates/v4-engine" }
 app-shell = { path = "crates/app-shell" }
 ui = { path = "crates/ui" }
 

@@ -277,7 +277,7 @@ fn assets_tab(a: Option<&AssetsVm>, bridge: &Bridge) -> Element {
 
         div { class: "asset-sect-title", "发版记录" }
         div { class: "cfg-readonly-note",
-            "解析 docs/releases.md —— 那份文件是唯一正本,库里没有版本表。"
+            "解析 .bw/releases.md —— 那份文件是唯一正本,库里没有版本表。"
         }
         if a.releases.is_empty() {
             div { class: "detail-empty", "暂无发版记录" }

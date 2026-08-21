@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(
         store.clone(),
         workspaces.clone(),
-        Arc::new(bw_engine::MockInteractiveExecutor::default()),
+        Arc::new(v4_engine::MockInteractiveExecutor::default()),
     )
     .with_progress(prog_tx);
 

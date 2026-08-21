@@ -153,7 +153,16 @@ fn primary_note(events: &[Event]) -> Option<String> {
             stale.len(),
             human_edited.len()
         ),
-        Event::WeekPlanStarted { week, .. } => format!("{week} 的周计划文件已写出,等你确认草稿"),
+        Event::WeekPlanStarted {
+            week, draft_titles, ..
+        } => {
+            if draft_titles.is_empty() {
+                // 真跑:文件由 agent 会话产出、走 MR,这里没有骨架也没有草稿。
+                format!("运作活①已开工:{week} 的周计划由这场会话产出,提交走 MR,人合入后总览才亮")
+            } else {
+                format!("{week} 的周计划文件已写出(流程演示),等你确认草稿")
+            }
+        }
         Event::HistoryBackfilled { note, .. } => note.clone(),
         Event::WorkspacesRootChanged { path, pinned } => {
             let tail = if *pinned > 0 {
@@ -218,6 +227,9 @@ fn primary_note(events: &[Event]) -> Option<String> {
             format!("定时到点:{week} 的「{workflow}」已自动建活并开工")
         }
         Event::WeekPlanAlreadyExists { week, .. } => format!("{week} 已经有周计划文件了,没有重写"),
+        Event::WeekPlanInProgress { week, status, .. } => {
+            format!("{week} 的运作活①还在路上({status})—— 去会话屏接着聊,周计划由那场会话产出")
+        }
         Event::IssueCreated { number, .. } => format!("建了一张活 #{number}"),
         Event::IssueScheduled { week_of, .. } => {
             if week_of.is_empty() {
@@ -227,6 +239,7 @@ fn primary_note(events: &[Event]) -> Option<String> {
             }
         }
         Event::IssueReordered { .. } => "顺序改好了".into(),
+        Event::WorkspacePulled { note, .. } => note.clone(),
         Event::IssueRan { ok, summary, .. } => {
             if *ok {
                 format!("跑完了,推到「评审中」。执行器原话:{summary}")
@@ -255,8 +268,16 @@ fn primary_note(events: &[Event]) -> Option<String> {
         Event::CurrentVersionChanged { version } => format!("在研版本切到 {version}"),
         Event::ToolMappingSaved { category } => format!("「{}」的映射保存了", category.label()),
         Event::ToolProbed { name, result } => format!("{name} 探活:{result:?}"),
-        Event::IssueCacheRefreshed { week, updated } => {
-            format!("按 {week} 的周计划文件刷新了 {updated} 张活的缓存")
+        Event::IssueCacheRefreshed {
+            week,
+            updated,
+            created,
+        } => {
+            if *created > 0 {
+                format!("按 {week} 的周计划文件建了 {created} 张活、刷新了 {updated} 张活的缓存")
+            } else {
+                format!("按 {week} 的周计划文件刷新了 {updated} 张活的缓存")
+            }
         }
         Event::NotifySeenMarked { .. } => "通知已读到这里".into(),
         Event::HealthDerived { signal, .. } => format!("健康现算完成:{signal:?}"),
@@ -348,7 +369,7 @@ pub async fn build(app: &App, ui: &UiState) -> Vm {
         settings: SettingsVm {
             workspaces_root: ui.workspaces_root.clone(),
             db_path: ui.db_path.clone(),
-            claude_binary: bw_engine::resolve_claude_binary(None),
+            claude_binary: v4_engine::resolve_claude_binary(None),
         },
         note: ui.note.clone(),
         note_seq: ui.note_seq,
@@ -373,9 +394,9 @@ pub(super) fn probe_env() -> Vec<ToolProbeVm> {
     // cursor-agent / codehub / gh)给 `Some(..)`,红绿都是真的;还没接实现的
     // (Open Design 内嵌、welink-cli)给 `None` —— 灰,不是绿,也不是红。
     let claude = crate::adapters::claude_cli::detect();
-    let cursor = bw_engine::which_on_path("cursor-agent");
-    let codehub = bw_engine::which_on_path("codehub");
-    let gh = bw_engine::which_on_path("gh");
+    let cursor = v4_engine::which_on_path("cursor-agent");
+    let codehub = v4_engine::which_on_path("codehub");
+    let gh = v4_engine::which_on_path("gh");
     vec![
         ToolProbeVm {
             name: "claude_cli".into(),
@@ -458,6 +479,17 @@ async fn build_project(
     // 健康:三条判据当场从仓文件与 git 取,不读库里那两个缓存列。
     let inputs = bw_v4::app::collect_health_inputs(&ws, &current_week).await;
     let derived = bw_v4::derive::derive_project_health(&inputs);
+    // 算完顺手写回显示缓存。**项目墙只有这一个数据来源** —— 它要在不打开项目
+    // 的情况下列出 N 个项目的灯,不能每次启动扫 N 个仓。此前壳里没有一处写过
+    // 这两列,于是项目墙的灯永远是灰的,哪怕总览上算出来是黄的。写的是刚算出
+    // 来的那个值,不重算(重算要再起一遍 git 子进程)。
+    //
+    // **只在灯真变了的时候写**:这个函数每重拼一次 ViewModel 就跑一次(人打字
+    // 时每 30ms 一次),而这条 UPDATE 顺带会把项目的 `updated_at` 顶新 —— 每次
+    // 都写等于让「这个项目最近动过」永远是刚刚,那是假的。
+    if p.signal != Some(derived.signal()) || p.weekly_signal != Some(derived.weekly_signal()) {
+        let _ = store.cache_project_health(id, &derived).await;
+    }
 
     let policy = read_or_warn(
         ".bw/issue-policy.toml",
@@ -465,13 +497,50 @@ async fn build_project(
         warnings,
     );
     let plan = read_or_warn(
-        &format!("docs/plan/{viewing_week}.md"),
+        &format!("{}/{viewing_week}.md", week_plan_file::DIR),
         week_plan_file::read(&ws, &viewing_week),
         warnings,
     );
 
-    // 本周计数在构造之前算好 —— `current_week` 会被 move 进结构体。
+    // 本周计数与本周运作点在构造之前算好 —— `current_week` 会被 move 进结构体。
     let week_counts_now = build_week_counts(&issues, Some(current_week.as_str()));
+    let ops_now = build_ops(&issues, current_week.as_str());
+
+    // 周列表 = 扫 `.bw/plan/` 目录 ∪ 库里活排过的周(设计 06 §2.1 的并集),
+    // 且**本周永远在列表里**——空的本周才有地方触发「开始本周」,真跑路径下
+    // 文件要等 MR 合入才落地,列表不能因此没有本周。
+    let mut weeks = build_weeks(&ws);
+    for w in issues.iter().map(|i| i.week_of.as_str()) {
+        if !w.is_empty() && !weeks.iter().any(|x| x.week == w) {
+            weeks.push(WeekVm {
+                week: w.to_string(),
+                backfill: false,
+                goal: None,
+                activity_count: 0,
+            });
+        }
+    }
+    if !weeks.iter().any(|x| x.week == current_week) {
+        weeks.push(WeekVm {
+            week: current_week.clone(),
+            backfill: false,
+            goal: None,
+            activity_count: 0,
+        });
+    }
+    // 新的在前;没有未来周,所以本周自然排在最上面。
+    weeks.sort_by(|a, b| b.week.cmp(&a.week));
+
+    // 横幅判据:文件在不在(不看列表),以及本周运作活①走到哪了。已完成的
+    // 不算「在途」——文件若还是没有,人应该能再点一次「开始本周」。
+    let week_file_exists = week_plan_file::exists(&ws, &current_week);
+    // 按**标题**找那张活,和内核的幂等键一致 —— 按 `week_of` 找的话,卡片被
+    // 拖回待办池之后横幅会重新给出「开始本周」,而点下去内核只会平静挡住。
+    let ops1_title = bw_v4::app::ops1_title(&current_week);
+    let ops1_status = issues
+        .iter()
+        .find(|i| i.title == ops1_title && i.status != IssueStatus::Done)
+        .map(|i| i.status.label().to_string());
     Some(ProjectVm {
         id,
         slug: p.slug.clone(),
@@ -498,7 +567,9 @@ async fn build_project(
                 .collect(),
         },
         metrics: build_metrics(&ws, plan.as_ref(), &issues),
-        weeks: build_weeks(&ws),
+        week_file_exists,
+        ops1_status,
+        weeks,
         current_week,
         viewing_week: viewing_week.clone(),
         view_all: ui.view_all,
@@ -524,7 +595,8 @@ async fn build_project(
                 Some(viewing_week.as_str())
             },
         ),
-        ops: build_ops(plan.as_ref()),
+        ops: ops_now,
+        board_ops: build_ops(&issues, viewing_week.as_str()),
         // 采不采由界面点 —— 现算一次要起好几个 git 子进程,不能每次重拼
         // ViewModel 都跑一遍(人打字时每 30ms 就重拼一次)。
         repo_stats: ui.repo_stats.clone(),
