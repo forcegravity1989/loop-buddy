@@ -169,20 +169,40 @@ fn is_spawnable_env_key(key: &str) -> bool {
     !key.is_empty() && !key.contains('=') && !key.contains('\0')
 }
 
+/// **试点期的临时后门,用完删** —— 登记在 `docs/LEFTOVERS.md` 的「试点-9」。
+///
+/// 设了 `BW_KEEP_ANTHROPIC_ENV`(任意非空值)就**不剥** [`NESTED_EXEC_ENV`] 里
+/// 那三个 `ANTHROPIC_*`,把人自己配的厂商端点原样透传给子 `claude`;那四个
+/// `CLAUDE_CODE_*` 照剥不误(它们是宿主会话的身份,漏进子进程一定串台)。
+///
+/// **它存在的唯一理由**:本机 `claude` 的登录过期、人一时不方便重登,想先拿
+/// 另一个厂商的端点把旅程跑起来。buddy 的正常姿态是**不管**机器上的 `claude`
+/// 怎么鉴权 —— 那是 CLI 自己该保证的事,buddy 只负责起进程。所以这不是一个
+/// 产品功能,不进设置屏、不写进仓、不做界面提示。
+fn keep_anthropic_env() -> bool {
+    std::env::var_os("BW_KEEP_ANTHROPIC_ENV").is_some_and(|v| !v.is_empty())
+}
+
+/// 这个名字这一次要不要剥。后门开着时那三个 `ANTHROPIC_*` 豁免,其余照旧。
+fn is_stripped(key: &str) -> bool {
+    let keep = keep_anthropic_env();
+    NESTED_EXEC_ENV.iter().any(|banned| {
+        key.eq_ignore_ascii_case(banned) && !(keep && banned.starts_with("ANTHROPIC_"))
+    })
+}
+
 fn child_env_from_process() -> HashMap<String, String> {
     std::env::vars()
         .filter(|(k, _)| is_spawnable_env_key(k))
-        .filter(|(k, _)| {
-            !NESTED_EXEC_ENV
-                .iter()
-                .any(|banned| k.eq_ignore_ascii_case(banned))
-        })
+        .filter(|(k, _)| !is_stripped(k))
         .collect()
 }
 
 pub(crate) fn apply_child_env(cmd: &mut impl EnvSink) {
     for var in NESTED_EXEC_ENV {
-        cmd.remove_env(var);
+        if is_stripped(var) {
+            cmd.remove_env(var);
+        }
     }
 }
 
