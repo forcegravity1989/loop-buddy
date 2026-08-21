@@ -13,7 +13,7 @@ use super::{App, AppError, Result};
 use crate::command::Event;
 use crate::model::{Category, Issue, IssueId, IssueKind, IssueOrigin, IssueStatus, ProjectId};
 use crate::repo::issue_policy_file;
-use v4_engine::{build_startup_plan, InteractiveExecutor, RunCtx, TuiAgentConfig, CLAUDE};
+use v4_engine::{build_startup_plan, InteractiveExecutor, RunCtx, TuiAgentConfig};
 
 impl App {
     #[allow(clippy::too_many_arguments)]
@@ -150,7 +150,8 @@ impl App {
                 .await?;
         }
 
-        let agent: &TuiAgentConfig = &CLAUDE;
+        // 照活上记的工具走 —— 不许悄悄换(见 `tools::agent_for`)。
+        let agent: &TuiAgentConfig = super::tools::agent_for(&issue.tool)?;
         let prompt = format!("#{} {}\n\n{}", issue.number, issue.title, issue.body);
         // 剧本在 buddy 自己的技能目录里,不在用户的仓里(见
         // `standard::skills`)。提示词只带路径,正文按需读。

@@ -17,7 +17,7 @@ use super::{App, AppError, Result};
 use crate::command::Event;
 use crate::model::{ConversationId, IssueId, IssueStatus};
 use v4_engine::interactive_cli::PtyInput;
-use v4_engine::{build_resume_plan, build_startup_plan, ConversationMeta, RunCtx, CLAUDE};
+use v4_engine::{build_resume_plan, build_startup_plan, ConversationMeta, RunCtx};
 
 impl App {
     /// 桌面壳开 PTY。开了之后 ▶跑 不再阻塞等执行器返回,而是把子进程挂进
@@ -114,8 +114,10 @@ impl App {
             return Err(AppError::NoWorkspace(issue.project_id.uuid().to_string()));
         }
         let tree = worktree::provision(&ws, issue.number).await?;
+        // 照活上记的工具走 —— 不许悄悄换(见 `tools::agent_for`)。
+        let agent = super::tools::agent_for(&issue.tool)?;
         let plan = build_resume_plan(
-            &CLAUDE,
+            agent,
             Some(conv.claude_session_id.as_str()).filter(|s| !s.is_empty()),
             &tree.path,
         )
@@ -214,10 +216,11 @@ impl App {
         let system_prompt =
             super::bootstrap::agent_system_prompt(&issue, &tree.path, skill.as_ref());
         // 有 `--resume` id 就精确接回那一次对话,不是模糊地接「最近一次」。
+        let agent = super::tools::agent_for(&issue.tool)?;
         let mut plan = if conv.claude_session_id.is_empty() {
-            build_startup_plan(&CLAUDE, &prompt, &system_prompt, &tree.path)
+            build_startup_plan(agent, &prompt, &system_prompt, &tree.path)
         } else {
-            build_resume_plan(&CLAUDE, Some(&conv.claude_session_id), &tree.path)
+            build_resume_plan(agent, Some(&conv.claude_session_id), &tree.path)
         }
         .map_err(|e| AppError::Exec(e.to_string()))?;
         if let Some(d) = &skills_dir {
