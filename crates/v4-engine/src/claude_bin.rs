@@ -12,12 +12,62 @@ use std::path::{Path, PathBuf};
 /// **只看文件在不在,不起子进程** —— 探活条是开屏就要出来的,起几个子进程去
 /// 问版本号会把启动拖住;而且「装没装」这个问题本身用不着跑它。跑得起来、
 /// 登录态对不对是另一个问题,探不了就说探不了,不拿「文件在」冒充「能用」。
+///
+/// **Windows 上要按 `PATHEXT` 接扩展名**(2026-08-21 修):那边的程序落在盘上
+/// 叫 `gh.exe`、`codehub-cli.exe`、`claude.cmd`,只按裸名字 `dir.join("gh")`
+/// 永远找不到。这条以前只被拿来找 `claude`,而且是候选链最后一条兜底 ——
+/// Windows 上前面那两条 npm 路径早命中了,轮不到它,所以一直没暴露;新壳的
+/// 环境条是第一个拿它去找 gh / cursor-agent / codehub-cli 的地方,不修就是
+/// 三盏恒亮的假红灯。**假的红灯比没有灯更坏。**
 pub fn which_on_path(exe: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(exe))
-        .find(|p| p.is_file())
-        .map(|p| p.display().to_string())
+    let names = exe_file_names(exe);
+    for dir in std::env::split_paths(&path) {
+        for name in &names {
+            let cand = dir.join(name);
+            if cand.is_file() {
+                return Some(cand.display().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 一个命令名在本平台上可能的文件名,按查找顺序。
+///
+/// Windows:`PATHEXT` 里的每个扩展名各接一遍,**接了扩展名的排在裸名字前面**
+/// —— `CreateProcess` 认的是带扩展名那个,先撞上一个没有扩展名的同名文件再把
+/// 它的路径交出去,下游 spawn 会失败。已经带着 `PATHEXT` 里某个扩展名的(比如
+/// 显式传进来的 `claude.exe`)照原样找,不再往后接第二遍。
+#[cfg(windows)]
+fn exe_file_names(exe: &str) -> Vec<String> {
+    let raw = std::env::var("PATHEXT").unwrap_or_default();
+    let raw = if raw.trim().is_empty() {
+        ".COM;.EXE;.BAT;.CMD".to_string()
+    } else {
+        raw
+    };
+    let exts: Vec<&str> = raw
+        .split(';')
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .collect();
+    let upper = exe.to_ascii_uppercase();
+    if exts
+        .iter()
+        .any(|e| upper.len() > e.len() && upper.ends_with(&e.to_ascii_uppercase()))
+    {
+        return vec![exe.to_string()];
+    }
+    let mut names: Vec<String> = exts.iter().map(|e| format!("{exe}{e}")).collect();
+    names.push(exe.to_string());
+    names
+}
+
+/// macOS / Linux:可执行位就是可执行位,没有扩展名这回事。
+#[cfg(not(windows))]
+fn exe_file_names(exe: &str) -> Vec<String> {
+    vec![exe.to_string()]
 }
 
 /// Candidate paths in installer/app order. First existing file wins.

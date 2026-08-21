@@ -6,22 +6,17 @@
 //! One skill = one interactive session (§2.3) — no phase splitting, no
 //! adversarial loop.
 //!
-//! Phase 1 scope: spawn a system terminal running the launch plan +
-//! best-effort completion detection (wait on the process with a wall-clock
-//! timeout). No PTY/xterm embedding, no session.jsonl parsing (§2.5 砍了
-//! 对话摘要 collector) — the terminal scrollback + session.jsonl itself is
-//! the record. buddy only keeps file-level evidence (HEAD diff, artifacts,
-//! status) via the existing `issue_run_tail` / `finalize_run` path.
+//! 不解析 `session.jsonl`(§2.5 砍了对话摘要 collector)—— 终端回滚区加
+//! `session.jsonl` 本身就是记录。干没干成看仓里的真状态(git、MR),不看这里。
 //!
-//! The [`InteractiveExecutor`] trait is the seam Phase 2 widened (PTY/xterm/
-//! hook). `run_skill_pty` (the desktop shell's path on every platform) delegates
-//! to [`crate::pty_backend`]; `run_skill` (plain OS terminal spawn) remains for
-//! headless callers with `pty_enabled == false`.
+//! **V4 只有内嵌终端这一条路**:[`InteractiveCliExecutor`] 干活全走
+//! `run_skill_pty` → [`crate::pty_backend`],所有平台一样。它的 `run_skill`
+//! (从 V3 拷来的那条「起一个系统终端窗口」的老路)已经如实退场,只剩一句错误
+//! —— 拆掉它的原委见 [`InteractiveCliExecutor`] 的说明。真正还在用 `run_skill`
+//! 的只有自我标注的 [`MockInteractiveExecutor`](headless 指挥器走它)。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-#[cfg(not(target_os = "macos"))]
-use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -427,52 +422,42 @@ pub trait InteractiveExecutor: Send + Sync {
         bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
         input_rx: mpsc::UnboundedReceiver<PtyInput>,
     ) -> Result<SkillOutput, ExecError> {
-        // Default: PTY not supported. The caller falls back to run_skill.
+        // 默认:这个执行器不支持内嵌终端(自我标注的替身就是这种)。如实
+        // 报错,**不静默退化**成别的跑法 —— 走不走这条路由调用方的
+        // `pty_enabled` 决定,不由这里偷偷改道。
         let _ = (plan, ctx, bytes_tx, input_rx);
-        Err(ExecError::Failed(
-            "PTY not supported by this executor (use run_skill instead)".into(),
-        ))
+        Err(ExecError::Failed("这个执行器没有内嵌终端(PTY)实现".into()))
     }
 }
 
-// ─── InteractiveCliExecutor (Phase 1 (c) real spawn) ──────────────────
+// ─── InteractiveCliExecutor(真跑 claude 的那个执行器) ─────────────────
 
-/// Phase 1 (c) interactive executor: spawns a system terminal running
-/// the launch plan and waits for the process to exit (with a wall-clock
-/// timeout backstop).
+/// 真执行器:把 claude 起在**内嵌终端**里(伪终端,见 [`crate::pty_backend`]),
+/// 字节流交给会话屏渲染,人全程看得见、随时能停。
 ///
-/// NOT PTY/xterm (Phase 2). The terminal is a real OS terminal window —
-/// the user sees and interacts with the agent directly. stdin/stdout/
-/// stderr are inherited from the OS (the terminal provides the TTY), not
-/// piped — the terminal scrollback is the record (§2.5).
+/// **它只实现 `run_skill_pty` 一条路。** 从 V3 拷过来的时候还带着另一条:
+/// `run_skill` —— 起一个系统终端窗口、等它退出。那条路在 V4 里从第一天起就没
+/// 有调用方(新壳建 App 时一律 `with_pty()`,`run_issue` 于是先走 PTY 分支;
+/// 工作区不在时退回的那条又用的是自我标注的替身),而且它的 Windows 分支自相
+/// 矛盾:注释说「从 GUI 程序起控制台进程会新开一个控制台窗口,用户能看见
+/// agent」,代码用的却是 [`crate::win_cmd::tokio_cmd`] —— 那个辅助函数专门就是
+/// 来按掉窗口的(`CREATE_NO_WINDOW`)。真跑起来会是:窗口不出现,stdio 继承自
+/// 没有控制台的 GUI 父进程,交互式 claude 拿不到任何终端,然后当场报错或者静默
+/// 挂到一小时的墙钟超时。
 ///
-/// Completion detection (deviation from design's session.jsonl mtime
-/// polling — see commit note): wait on the spawned process to exit. On
-/// Windows, spawning a console process from a GUI app (Dioxus/wry) creates
-/// a new console window automatically. On macOS, `osascript` opens Terminal
-/// — the `osascript` process itself exits immediately, so we rely on the
-/// wall-clock timeout exclusively. On Linux, spawn directly (may not open
-/// a terminal window — best-effort, not a primary platform).
+/// 所以 2026-08-21 把那条路整段删了,而不是二选一去修它 —— 两个修法(让控制台
+/// 真出来 / 承认没有窗口并如实报错)都要先在 Windows 真机上把行为摸清楚,而这
+/// 条路根本没人走。`run_skill` 现在只返回一句如实的错误。
 pub struct InteractiveCliExecutor {
     /// Override the claude binary path (e.g. from `BW_CLAUDE_BIN`).
     /// `None` → use `LaunchPlan.binary` (which is `TuiAgentConfig.launch_cmd`).
     claude_binary: Option<String>,
-    /// Wall-clock timeout for the whole session. The user is interacting
-    /// in real time, so this is generous. On timeout we declare
-    /// `completed = true` (the user may still be working — we can't block
-    /// the run forever, and the worktree's git state is the real evidence).
-    /// Only the Windows/Linux `run_skill` branches wait on the child; the
-    /// macOS branch (osascript) cannot, so the field is compiled out there.
-    #[cfg(not(target_os = "macos"))]
-    timeout: Duration,
 }
 
 impl InteractiveCliExecutor {
     pub fn new() -> Self {
         Self {
             claude_binary: None,
-            #[cfg(not(target_os = "macos"))]
-            timeout: Duration::from_secs(60 * 60), // 1 hour
         }
     }
 
@@ -491,84 +476,21 @@ impl Default for InteractiveCliExecutor {
 
 #[async_trait]
 impl InteractiveExecutor for InteractiveCliExecutor {
-    async fn run_skill(&self, plan: &LaunchPlan, _ctx: &RunCtx) -> Result<SkillOutput, ExecError> {
-        let binary = self.claude_binary.as_deref().unwrap_or(&plan.binary);
-        // Build the spawn command. On Windows, spawning a console process
-        // from a GUI app creates a new console window (the user sees the
-        // agent). On macOS, we use osascript to open Terminal (the osascript
-        // process exits immediately, so we rely on the timeout). On Linux,
-        // spawn directly (best-effort — may not open a terminal window).
-        #[cfg(target_os = "windows")]
-        {
-            let mut cmd = crate::win_cmd::tokio_cmd(binary);
-            cmd.args(&plan.args);
-            apply_child_env(&mut cmd);
-            cmd.current_dir(&plan.cwd);
-            cmd.kill_on_drop(true);
-            // Inherit stdin/stdout/stderr — the console window provides the
-            // TTY for interactive use. Not piping means we can't capture
-            // output, but §2.5 砍了对话摘要 collector: the scrollback is
-            // the record, buddy doesn't parse it.
-            let child = cmd.spawn().map_err(|e| {
-                ExecError::Failed(format!("failed to spawn interactive terminal: {e}"))
-            })?;
-            return self.await_child(child).await;
-        }
-        #[cfg(target_os = "macos")]
-        {
-            // macOS: osascript opens Terminal and runs the command. The
-            // osascript process exits immediately (it just tells Terminal
-            // to open) — we can't wait on the claude process itself. Fall
-            // back to the wall-clock timeout.
-            let cwd = plan.cwd.display().to_string();
-            let mut cmd_line = format!("cd '{cwd}' && {binary}");
-            for a in &plan.args {
-                cmd_line.push(' ');
-                cmd_line.push_str(&shell_quote(a));
-            }
-            let script = format!("tell application \"Terminal\" to do script \"{cmd_line}\"");
-            let mut cmd = crate::win_cmd::tokio_cmd("osascript");
-            cmd.arg("-e").arg(&script);
-            cmd.kill_on_drop(true);
-            let _child = cmd.spawn().map_err(|e| {
-                ExecError::Failed(format!("failed to spawn Terminal (osascript): {e}"))
-            })?;
-            // Can't wait on the claude process — osascript returns immediately
-            // after telling Terminal to open. Sleeping to timeout then claiming
-            // `completed = true` would be a false-success (违反「读回为证」).
-            // Stay honest: report not-completed so the issue stays InProgress
-            // (never auto-Done) and the human verifies in Terminal instead.
-            return Ok(SkillOutput {
-                completed: false,
-                summary: "未验证：osascript 启动 Terminal 后拿不到 claude 句柄，无法等待其退出。请在 Terminal 里确认会话结束后手动推进，buddy 不替你判定完成。".to_string(),
-            });
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            // Linux/other: spawn directly. May not open a terminal window
-            // (would need xterm/gnome-terminal wrapper) — best-effort.
-            let mut cmd = crate::win_cmd::tokio_cmd(binary);
-            cmd.args(&plan.args);
-            apply_child_env(&mut cmd);
-            cmd.current_dir(&plan.cwd);
-            cmd.kill_on_drop(true);
-            let child = cmd.spawn().map_err(|e| {
-                ExecError::Failed(format!("failed to spawn interactive terminal: {e}"))
-            })?;
-            return self.await_child(child).await;
-        }
+    /// 已退场。真执行器只走内嵌终端(`run_skill_pty`)—— 详见
+    /// [`InteractiveCliExecutor`] 的说明。不静默退化成别的行为,如实报错。
+    async fn run_skill(&self, _plan: &LaunchPlan, _ctx: &RunCtx) -> Result<SkillOutput, ExecError> {
+        Err(ExecError::Failed(
+            "真执行器只在内嵌终端里起 claude(run_skill_pty);起系统终端窗口那条路已经删了".into(),
+        ))
     }
 
+    /// 同 [`Self::run_skill`],已退场。接回上一场对话走的是
+    /// `build_resume_plan` + `run_skill_pty`,不经这里。
     async fn run_skill_resume(
         &self,
         plan: &LaunchPlan,
         ctx: &RunCtx,
     ) -> Result<SkillOutput, ExecError> {
-        // Resume uses the same spawn logic as the first run — the LaunchPlan
-        // carries the resume args (`--resume <session_id>` or `--continue`
-        // fallback, instead of the startup plan's `--append-system-prompt
-        // <bridge> <skill_body>`). The process spawn, terminal window, and
-        // wall-clock timeout are identical.
         self.run_skill(plan, ctx).await
     }
 
@@ -594,49 +516,6 @@ impl InteractiveExecutor for InteractiveCliExecutor {
             .run(binary, plan, bytes_tx, input_rx)
             .await
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-impl InteractiveCliExecutor {
-    /// Wait for a spawned child process to exit, with a wall-clock timeout.
-    /// On normal exit → `completed = true`. On timeout → `completed = true`
-    /// (the user may still be working — the worktree's git state is the
-    /// real evidence, not the process's exit code).
-    async fn await_child(
-        &self,
-        mut child: tokio::process::Child,
-    ) -> Result<SkillOutput, ExecError> {
-        match tokio::time::timeout(self.timeout, child.wait()).await {
-            Ok(Ok(_status)) => Ok(SkillOutput {
-                completed: true,
-                summary: String::new(),
-            }),
-            Ok(Err(e)) => Err(ExecError::Failed(format!(
-                "interactive terminal error: {e}"
-            ))),
-            Err(_) => {
-                // Timeout — declare completed. The worktree's git state
-                // is the real evidence. On Windows/Linux the spawned child
-                // (terminal+claude) is killed here via `kill_on_drop` when
-                // `child` drops on return; on macOS `osascript` already
-                // returned immediately and the Terminal app is independent
-                // (not a child), so it stays open — only the wall-clock
-                // deadline fires.
-                Ok(SkillOutput {
-                    completed: true,
-                    summary: "(wall-clock timeout)".to_string(),
-                })
-            }
-        }
-    }
-}
-
-/// Single-quote a shell argument for osascript (naive but sufficient for
-/// file paths and flag values — not a security boundary, the args are
-/// buddy-internal, not user-controlled).
-#[cfg(target_os = "macos")]
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 // ─── MockInteractiveExecutor (for tests / no-claude environments) ──────

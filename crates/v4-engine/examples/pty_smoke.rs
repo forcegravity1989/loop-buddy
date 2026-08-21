@@ -1,5 +1,6 @@
 //! PTY 烟测:不开界面,直接走 `InteractiveCliExecutor::run_skill_pty`(桌面壳
-//! ▶跑 用的同一条路径),在当前平台的 PTY 后端里起 `bash -c 'echo pty-ok'`,
+//! ▶跑 用的同一条路径),在当前平台的 PTY 后端里起一个最小的 shell 命令
+//! (macOS/Linux 是 `bash -c 'echo pty-ok'`,Windows 是 `cmd /C echo pty-ok`),
 //! 读回字节,核对里面确实有 `pty-ok`。
 //!
 //! 用途:证明「内嵌终端在这台机器上能真起子进程、真读到输出、真收尾」——
@@ -21,10 +22,17 @@
 //! 根本不会执行。断言 3s 内顶层与孙进程都没了(靠 `ChildGuard` 的 `Drop`)。
 //! 2026-08-17 评审抓出的真 bug:改前 macOS 上中止一次就漏一个孤儿 `claude`。
 //!
-//! 退出码:0 = 通过;1 = 没读到 / 后端报错 / 收尾超时或孙进程残留。stderr
-//! 打 `[PTY_SMOKE]` 行,方便脚本抓。
+//! **`--teardown` 与 `--abort` 只在 macOS/Linux 上有实现**:它们靠 `nohup` 造一
+//! 个脱离出去的孙进程、靠 `pgrep` 读回残留,Windows 上这两样都没有对应写法,还
+//! 没搬过去。在 Windows 上跑这两个开关会如实说一句「没实现」并以 2 退出 ——
+//! **不拿一个空跑冒充通过**。基本场景(不带开关)两个平台都能跑。
+//!
+//! 退出码:0 = 通过;1 = 没读到 / 后端报错 / 收尾超时或孙进程残留;
+//! 2 = 这个场景在本平台还没实现。stderr 打 `[PTY_SMOKE]` 行,方便脚本抓。
 
 use std::collections::HashMap;
+// 这两个只被收尾 / 中止那两个场景用,而它们只有 macOS/Linux 有实现。
+#[cfg(not(windows))]
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
@@ -43,7 +51,7 @@ async fn main() {
         abort_scenario().await;
         return;
     }
-    let plan = bash_plan("echo pty-ok");
+    let plan = shell_plan("echo pty-ok");
     let ctx = nil_ctx();
 
     let (bytes_tx, mut bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -90,14 +98,21 @@ async fn main() {
     }
 }
 
-/// 起 `bash -c <script>` 的启动计划。与 `build_startup_plan` 同款:整份环境
-/// 快照当子进程环境(这里不需要剥嵌套会话变量——跑的是 bash,不是 claude);
-/// 不是 claude 首启,不需要自动按 Enter。
-fn bash_plan(script: &str) -> LaunchPlan {
+/// 把一段 shell 命令包成启动计划。与 `build_startup_plan` 同款:整份环境快照当
+/// 子进程环境(这里不需要剥嵌套会话变量——跑的是 shell,不是 claude);不是
+/// claude 首启,不需要自动按 Enter。
+///
+/// **按平台选 shell**:Windows 默认没有 `bash`,写死它等于这个工具在 Windows 上
+/// 开箱就跑不了 —— 而它是不碰 claude、不碰网关就能验 PTY 后端的唯一手段。
+fn shell_plan(script: &str) -> LaunchPlan {
+    #[cfg(windows)]
+    let (binary, args) = ("cmd", vec!["/C".to_string(), script.to_string()]);
+    #[cfg(not(windows))]
+    let (binary, args) = ("bash", vec!["-c".to_string(), script.to_string()]);
     let env: HashMap<String, String> = std::env::vars().collect();
     LaunchPlan {
-        binary: "bash".to_string(),
-        args: vec!["-c".to_string(), script.to_string()],
+        binary: binary.to_string(),
+        args,
         env,
         cwd: std::env::current_dir().expect("cwd"),
         submit_prompt: false,
@@ -112,12 +127,38 @@ fn nil_ctx() -> RunCtx {
     }
 }
 
+// ─────────── 收尾 / 中止两个场景:只有 macOS/Linux 有实现 ───────────
+//
+// 它们靠 `nohup` 造一个脱离父进程的孙进程、靠 `pgrep -f <标记>` 读回残留 ——
+// Windows 上这两样都没有对应写法,还没搬过去。**不拿一个空跑冒充通过**:如实
+// 说一句就以 2 退出,既不算通过也不算失败。
+
+#[cfg(windows)]
+async fn teardown_scenario() {
+    unimplemented_on_windows("--teardown");
+}
+
+#[cfg(windows)]
+async fn abort_scenario() {
+    unimplemented_on_windows("--abort");
+}
+
+#[cfg(windows)]
+fn unimplemented_on_windows(flag: &str) -> ! {
+    eprintln!(
+        "[PTY_SMOKE] UNIMPLEMENTED — {flag} 靠 nohup 造孙进程、靠 pgrep 读回残留,Windows 上还没有对应写法。基本场景(不带开关)照常可跑。"
+    );
+    std::process::exit(2);
+}
+
+#[cfg(not(windows))]
 /// 「顶层 + 一个 nohup 脱离出去的孙进程」都睡在一个独一无二的时长上,事后
 /// 用 `pgrep -f <marker>` 读回有没有残留(读回为证,不信返回值)。
 fn marked_sleep_script(marker: &str) -> String {
     format!("nohup {marker} >/dev/null 2>&1 & {marker}")
 }
 
+#[cfg(not(windows))]
 fn survivors_of(marker: &str) -> String {
     std::process::Command::new("pgrep")
         .arg("-f")
@@ -127,11 +168,12 @@ fn survivors_of(marker: &str) -> String {
         .unwrap_or_default()
 }
 
+#[cfg(not(windows))]
 /// 收尾场景:子进程还活着时 App 丢掉输入端 → 后端必须按进程组把子孙一起
 /// 杀掉并及时返回。
 async fn teardown_scenario() {
     let marker = format!("sleep 30.{}", std::process::id());
-    let plan = bash_plan(&marked_sleep_script(&marker));
+    let plan = shell_plan(&marked_sleep_script(&marker));
     let ctx = nil_ctx();
     let (bytes_tx, mut bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (input_tx, input_rx) = mpsc::unbounded_channel::<PtyInput>();
@@ -175,12 +217,13 @@ async fn teardown_scenario() {
     }
 }
 
+#[cfg(not(windows))]
 /// 中止场景:和 bw-app `cancel_run` 一模一样地 `abort()` 掉跑着后端的任务。
 /// 输入端故意一直握着——要证明的是「future 被丢弃」这一件事就足以收尾,
 /// 不靠输入端关闭那条正常路径。
 async fn abort_scenario() {
     let marker = format!("sleep 31.{}", std::process::id());
-    let plan = bash_plan(&marked_sleep_script(&marker));
+    let plan = shell_plan(&marked_sleep_script(&marker));
     let (bytes_tx, mut bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (input_tx, input_rx) = mpsc::unbounded_channel::<PtyInput>();
 

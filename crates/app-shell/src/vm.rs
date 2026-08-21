@@ -180,9 +180,13 @@ pub struct ProjectVm {
     pub session_open: Option<IssueId>,
     /// 计划屏右侧详情抽屉开着哪张活。通知点「去看这张活」也是设这个。
     pub selected_issue: Option<IssueId>,
-    /// 这个仓在浏览器里的根地址(`https://host/命名空间/仓名`),从 `.git/config`
-    /// 的 origin 推出来。**推不出来就是空串** —— 那时候详情里不给链接,不编一个。
-    pub browse_base: String,
+    /// MR / PR 网页地址的前缀,后面直接拼号码(`.../pull/` 或 codehub 的
+    /// `.../-/merge_requests/`)。**按 provider 拼**,不是从 `.git/config` 的
+    /// origin 推 —— codehub clone 走 SSH,origin 里是 SSH 主机加端口,拿它当
+    /// 网址点不开。没挂远端就是空串,那时候详情里不给链接,不编一个。
+    pub mr_url_prefix: String,
+    /// 远端 issue 网页地址的前缀,规矩同 [`Self::mr_url_prefix`]。
+    pub issue_url_prefix: String,
     pub workbench: WorkbenchVm,
     pub notify: NotifyVm,
     pub config: ConfigVm,
