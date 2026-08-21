@@ -178,6 +178,9 @@ pub struct ProjectVm {
     pub sessions: Vec<SessionVm>,
     /// 会话屏选中的那一个(按活)。
     pub session_open: Option<IssueId>,
+    /// 会话屏「看看喂了什么」面板的内容。`None` = 面板关着。**这是开工时真会
+    /// 送给 agent 的那份系统提示词**,和真开工算的是同一份,不是示意。
+    pub briefing: Option<String>,
     /// 计划屏右侧详情抽屉开着哪张活。通知点「去看这张活」也是设这个。
     pub selected_issue: Option<IssueId>,
     /// MR / PR 网页地址的前缀,后面直接拼号码(`.../pull/` 或 codehub 的

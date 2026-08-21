@@ -41,6 +41,21 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
         }
         div { class: "sess-col sess-midhead",
             {action_bar(open, bridge)}
+            if let Some(text) = p.briefing.as_ref() {
+                div { class: "card",
+                    style: "margin:8px 12px;padding:12px;max-height:320px;overflow:auto;",
+                    div { style: "font-size:12px;color:var(--ink-3);margin-bottom:6px;",
+                        "开工时真会喂给 agent 的系统提示词。"
+                        strong { "技能正文不在里面" }
+                        " —— 只给名字、一句话和绝对路径,让它按需自己去读(渐进加载)。"
+                    }
+                    pre {
+                        style: "white-space:pre-wrap;word-break:break-word;font-size:12px;\
+                                line-height:1.7;margin:0;font-family:var(--mono);",
+                        "{text}"
+                    }
+                }
+            }
             {tabs(p, bridge)}
         }
         {mid_body(p)}
@@ -90,7 +105,8 @@ fn action_bar(open: Option<&SessionVm>, bridge: &Bridge) -> Element {
             }
         };
     };
-    let (b_run, b_stop, b_review, b_submit) = (
+    let (b_run, b_stop, b_review, b_submit, b_brief) = (
+        bridge.clone(),
         bridge.clone(),
         bridge.clone(),
         bridge.clone(),
@@ -139,6 +155,16 @@ fn action_bar(open: Option<&SessionVm>, bridge: &Bridge) -> Element {
                     to: bw_v4::model::IssueStatus::InReview,
                 }),
                 "只推到评审"
+            }
+            // 提示词是经 --append-system-prompt 送进去的,**终端里一个字都
+            // 看不见**。agent 跑偏时第一步就该看它到底被告知了什么,所以给一个
+            // 口子。再点一次收起。
+            button {
+                class: "btn btn-sm",
+                title: "看这张活开工时真会喂给 agent 的那份系统提示词(身份 · 铁律 · 规范索引 · 挂的剧本)。\
+                        终端里看不见它,因为它是当参数送进去的。",
+                onclick: move |_| b_brief.send(Req::ShowBriefing { issue: id }),
+                "看看喂了什么"
             }
             // 高保真上这里还有「蒸馏」与「在 Cursor 中打开」。前者 V4 还没有
             // 这条命令,后者要按活的开工工具决定露不露 —— 都还没接,做成灰态。

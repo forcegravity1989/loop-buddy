@@ -157,6 +157,23 @@ impl App {
         }
     }
 
+    /// 这张活开工时会喂给 agent 的那份系统提示词。**只读、纯算**,不起进程、
+    /// 不改任何状态 —— 和真开工走的是同一个函数,所以它显示什么,agent 收到的
+    /// 就是什么。
+    ///
+    /// 为什么要有这个口子:提示词是经 `--append-system-prompt` 送进去的,
+    /// **终端里一个字都看不见**。试点第一天用户就问「我看没有技能路径」——
+    /// 路径其实一直在,只是没有任何地方能看到它。agent 跑偏时,第一步就该是
+    /// 看它到底被告知了什么。
+    pub async fn agent_briefing(&self, id: crate::model::IssueId) -> Result<String> {
+        let issue = self.issue_or_err(id).await?;
+        let ws = self.workspace_of(issue.project_id).await?;
+        let skill = self
+            .ensure_skill_assets()
+            .and_then(|d| bootstrap::skill_pointer(&d, &issue.workflow));
+        Ok(bootstrap::agent_system_prompt(&issue, &ws, skill.as_ref()))
+    }
+
     pub fn store(&self) -> &V4Store {
         &self.store
     }

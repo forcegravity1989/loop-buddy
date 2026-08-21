@@ -93,6 +93,11 @@ pub enum Req {
     /// 一遍(起脚本、传时间窗、读标准输出的 JSON)。**不在打开总览时自动跑**
     /// —— 一次要起好几个子进程,不该在每次进项目、每次重绘时发生。
     CollectMetrics,
+    /// 会话屏:「看看喂了什么」—— 把这张活开工时那份系统提示词原样算一遍。
+    /// **纯读**,和真开工走的是同一个函数,所以显示什么、agent 收到的就是什么。
+    ShowBriefing {
+        issue: bw_v4::model::IssueId,
+    },
     /// 上面那一采的结果。**不是界面发的**,是派出去的任务算完发回来的。
     MetricsCollected {
         project: ProjectId,
@@ -460,6 +465,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     kb_assets: None,
                     repo_stats: None,
                     metrics: Vec::new(),
+                    briefing: None,
                     viewing_week: bw_v4::isoweek::current_week(),
                     view_all: false,
                     open_doc: None,
@@ -864,6 +870,20 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         Req::RepoStatsComputed { project, stats } => {
                             if ui.open == Some(project) {
                                 ui.repo_stats = Some(stats);
+                            }
+                        }
+                        Req::ShowBriefing { issue } => {
+                            // 已经开着就再点一次关掉 —— 一颗按钮两个方向,
+                            // 不额外加一颗「收起」。
+                            if ui.briefing.is_some() {
+                                ui.briefing = None;
+                            } else {
+                                match app.agent_briefing(issue).await {
+                                    Ok(t) => ui.briefing = Some(t),
+                                    // 算不出来就把原话摆出来,**不显示一份空的**
+                                    // —— 空面板会被读成「什么都没喂」。
+                                    Err(e) => ui.briefing = Some(format!("算不出来:{e}")),
+                                }
                             }
                         }
                         Req::CollectMetrics => {

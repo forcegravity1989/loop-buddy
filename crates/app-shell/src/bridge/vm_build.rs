@@ -67,6 +67,8 @@ pub struct UiState {
     /// 上一次「采一次指标」采到的东西。同理:起脚本要几百毫秒到几秒,只在人
     /// 点那一下才跑。**空 = 还没采过**,不是「采到的是 0」。
     pub metrics: Vec<bw_v4::app::collect::MetricReadout>,
+    /// 会话屏那块「这次开工喂了什么」。`None` = 面板关着。
+    pub briefing: Option<String>,
     pub db_path: String,
     pub workspaces_root: String,
     /// 接入屏那份仓列表的状态。**不进库** —— 它是「现在去平台问了一次」的结果,
@@ -637,6 +639,7 @@ async fn build_project(
             .collect(),
         sessions: sessions.clone(),
         session_open: ui.session_open,
+        briefing: ui.briefing.clone(),
         selected_issue: ui.selected_issue,
         mr_url_prefix,
         issue_url_prefix,
