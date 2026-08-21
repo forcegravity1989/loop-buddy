@@ -371,6 +371,6 @@ impl App {
 
 /// 把 git 的多行原话压成一行。**压行不是删字** —— 一个字都不省,只是让它能塞
 /// 进界面上那一条回执。
-fn one_line(s: &str) -> String {
+pub(super) fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }

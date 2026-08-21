@@ -239,6 +239,7 @@ fn primary_note(events: &[Event]) -> Option<String> {
             }
         }
         Event::IssueReordered { .. } => "顺序改好了".into(),
+        Event::WorkspacePulled { note, .. } => note.clone(),
         Event::IssueRan { ok, summary, .. } => {
             if *ok {
                 format!("跑完了,推到「评审中」。执行器原话:{summary}")

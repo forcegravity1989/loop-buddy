@@ -223,6 +223,30 @@ impl App {
         Ok(vec![Event::IssueReordered { id }])
     }
 
+    /// 「↻ 拉到最新」:把主检出快进到远端。
+    ///
+    /// 只做 `--ff-only` 这一种拉法 —— 会 merge 会 rebase 的拉法可能产生冲突,
+    /// 而这颗按钮是在人的**主工作区**上动手,不该有任何需要人去解冲突的后果。
+    /// 拉不动就如实说拉不动,**绝不假装拉过了**。
+    pub(super) async fn pull_workspace(&mut self, project_id: ProjectId) -> Result<Vec<Event>> {
+        let ws = self.workspace_of(project_id).await?;
+        if !ws.is_dir() {
+            return Err(AppError::NoWorkspace(project_id.uuid().to_string()));
+        }
+        let (moved, note) = match crate::git::pull_ff(&ws).await {
+            Ok(true) => (true, "工作区已拉到最新".to_string()),
+            Ok(false) => (false, "工作区本来就是最新的".to_string()),
+            Err(e) => (
+                false,
+                format!(
+                    "没拉动(自己去仓里 git pull 看看):{}",
+                    super::ops::one_line(&e.to_string())
+                ),
+            ),
+        };
+        Ok(vec![Event::WorkspacePulled { moved, note }])
+    }
+
     pub(super) async fn set_current_version(
         &mut self,
         project_id: ProjectId,

@@ -271,6 +271,7 @@ impl App {
             Command::MarkNotifySeen { project_id, at } => {
                 self.mark_notify_seen(project_id, at).await
             }
+            Command::PullWorkspace { project_id } => self.pull_workspace(project_id).await,
             Command::TickScheduler { project_id } => self.tick_scheduler(project_id).await,
             Command::MergeAndSettle { id } => self.merge_and_settle(id).await,
             Command::SyncNotifyToChat {

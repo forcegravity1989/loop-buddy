@@ -96,6 +96,7 @@ fn card_and_health(
     let c = &p.card;
     let is_editing = *editing.read();
     let b_edit = bridge.clone();
+    let b_pull = bridge.clone();
     let pid = p.id;
     let name = p.name.clone();
 
@@ -169,7 +170,16 @@ fn card_and_health(
                     div { class: "charter-meta",
                         span { class: "mono", "{c.remote}" }
                         span { "规范 v{c.standard_version}" }
-                        span { style: "margin-left:auto;",
+                        span { style: "margin-left:auto;display:flex;gap:6px;",
+                            // 人在网页上直接合了 MR 时,buddy 是不知道的 ——
+                            // 工作区会一直停在旧提交,而界面照常显示旧内容。
+                            // 这颗按钮是补那一下的唯一入口。
+                            button {
+                                class: "btn btn-sm",
+                                title: "把工作区的主检出快进到远端最新(git pull --ff-only)",
+                                onclick: move |_| b_pull.cmd(Command::PullWorkspace { project_id: pid }),
+                                "↻ 拉到最新"
+                            }
                             button { class: "btn btn-sm", onclick: start_edit, "编辑" }
                         }
                     }
