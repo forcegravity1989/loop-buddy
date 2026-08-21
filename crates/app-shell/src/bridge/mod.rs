@@ -89,6 +89,21 @@ pub enum Req {
     },
     /// 总览那块「项目指标 · 代码仓级」:现采一次。
     CollectRepoStats,
+    /// 总览:点「采一次指标」。把 `.bw/metrics.toml` 里可回溯的那几条真的跑
+    /// 一遍(起脚本、传时间窗、读标准输出的 JSON)。**不在打开总览时自动跑**
+    /// —— 一次要起好几个子进程,不该在每次进项目、每次重绘时发生。
+    CollectMetrics,
+    /// 会话屏:「看看喂了什么」—— 把这张活开工时那份系统提示词原样算一遍。
+    /// **纯读**,和真开工走的是同一个函数,所以显示什么、agent 收到的就是什么。
+    ShowBriefing {
+        issue: bw_v4::model::IssueId,
+    },
+    /// 上面那一采的结果。**不是界面发的**,是派出去的任务算完发回来的。
+    MetricsCollected {
+        project: ProjectId,
+        readouts: Vec<bw_v4::app::collect::MetricReadout>,
+        error: Option<String>,
+    },
     /// 上面那一采的结果。**不是界面发的**,是派出去的那个任务算完发回来的。
     /// 带着「这是给哪个项目采的」——采一次要几百毫秒,人完全来得及在这期间
     /// 切走,不认项目就会把上一个项目的提交数摆在新项目的总览上。
@@ -395,6 +410,12 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
     std::thread::Builder::new()
         .name("bw-v4-kernel".into())
         .spawn(move || {
+            // 内核这条线程一处 panic 就整条死掉,而界面那头只会停在最后一份
+            // ViewModel 上 —— 之后发出去的命令石沉大海,**没有任何提示**。
+            // 人以为 buddy 还在正常跑,其实早就没人接活了。裹一层,把死因送进
+            // 「起不来」那块红字:**宁可显眼地坏掉,也不要安静地坏掉。**
+            let vm_tx_panic = vm_tx.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -443,6 +464,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     kb_codegraph: None,
                     kb_assets: None,
                     repo_stats: None,
+                    metrics: Vec::new(),
+                    briefing: None,
                     viewing_week: bw_v4::isoweek::current_week(),
                     view_all: false,
                     open_doc: None,
@@ -633,6 +656,10 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                         })
                                     {
                                         ui.session_open = Some(*issue_id);
+                                        // 换了一张活,「喂了什么」那块必须跟着关
+                                        // —— 它是**上一张活**的提示词,留在屏幕上
+                                        // 会被读成这一张的。
+                                        ui.briefing = None;
                                         ui.expanded_dirs.clear();
                                         ui.open_file.clear();
                                     }
@@ -655,6 +682,12 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                         ui.kb_codegraph = None;
                                         ui.kb_assets = None;
                                         ui.repo_stats = None;
+                                        // 指标读数和「喂了什么」同理:留着就是
+                                        // 把上一个项目的数摆在这个项目的卡片上
+                                        // ——而且指标是**按名字**对上去的,
+                                        // 两个项目撞名就真会显示错的那个数。
+                                        ui.metrics = Vec::new();
+                                        ui.briefing = None;
                                         ui.repos = crate::vm::RepoPickerVm::default();
                                     }
                                     // 项目被移走了:它要是正开着,得回项目墙 ——
@@ -667,6 +700,12 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                         ui.kb_codegraph = None;
                                         ui.kb_assets = None;
                                         ui.repo_stats = None;
+                                        // 指标读数和「喂了什么」同理:留着就是
+                                        // 把上一个项目的数摆在这个项目的卡片上
+                                        // ——而且指标是**按名字**对上去的,
+                                        // 两个项目撞名就真会显示错的那个数。
+                                        ui.metrics = Vec::new();
+                                        ui.briefing = None;
                                     }
                                     // 改了工作区根目录:设置屏那一行要立刻显示
                                     // 新值,不能等下次重启。
@@ -699,6 +738,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             // 仓统计同理:留着就是把上一个项目的提交数摆在这个
                             // 项目的总览上。
                             ui.repo_stats = None;
+                            ui.metrics = Vec::new();
+                            ui.briefing = None;
                         }
                         Req::ViewWeek(w) => {
                             ui.viewing_week = w;
@@ -739,6 +780,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                 }
                             }
                             ui.session_open = id;
+                            // 同上:换活就关掉「喂了什么」,别把上一张的摆在这一张下面。
+                            ui.briefing = None;
                             // 换会话 = 换工作区,上一个会话展开的目录、开着的
                             // 文件在新工作区里多半不存在,一律清掉重来。
                             ui.expanded_dirs.clear();
@@ -849,6 +892,62 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                                 ui.repo_stats = Some(stats);
                             }
                         }
+                        Req::ShowBriefing { issue } => {
+                            // 已经开着就再点一次关掉 —— 一颗按钮两个方向,
+                            // 不额外加一颗「收起」。
+                            if ui.briefing.is_some() {
+                                ui.briefing = None;
+                            } else {
+                                match app.agent_briefing(issue).await {
+                                    Ok(t) => ui.briefing = Some(t),
+                                    // 算不出来就把原话摆出来,**不显示一份空的**
+                                    // —— 空面板会被读成「什么都没喂」。
+                                    Err(e) => ui.briefing = Some(format!("算不出来:{e}")),
+                                }
+                            }
+                        }
+                        Req::CollectMetrics => {
+                            // 和上面那一采同一个做法:派出去跑,不在这条循环里
+                            // await —— 它要起好几个采集脚本(每个还可能连远端),
+                            // 在这里等就把内核这条单线程连同终端的节拍一起按住。
+                            if let Some(pid) = ui.open {
+                                // 没有工作区就采不了 —— **如实说一句,别让人以为
+                                // 按钮坏了**(和上面那一采同一条教训)。
+                                match app.workspace_of(pid).await {
+                                    Ok(ws) => {
+                                        let back = tx_back.clone();
+                                        tokio::spawn(async move {
+                                            let (readouts, error) =
+                                                match bw_v4::app::collect::collect_all(&ws, 4).await
+                                                {
+                                                    Ok(r) => (r, None),
+                                                    Err(e) => (Vec::new(), Some(e)),
+                                                };
+                                            let _ = back.send(Req::MetricsCollected {
+                                                project: pid,
+                                                readouts,
+                                                error,
+                                            });
+                                        });
+                                    }
+                                    Err(e) => ui.set_note(Some(format!("采不了指标:{e}"))),
+                                }
+                            }
+                        }
+                        // 采的时候是哪个项目,回来时还得是哪个项目 —— 不是就
+                        // 整份丢掉,宁可让人再点一次,也不摆错项目的数。
+                        Req::MetricsCollected {
+                            project,
+                            readouts,
+                            error,
+                        } => {
+                            if ui.open == Some(project) {
+                                ui.metrics = readouts;
+                                if let Some(e) = error {
+                                    ui.set_note(Some(format!("采不了指标:{e}")));
+                                }
+                            }
+                        }
                         Req::ListRepos { github, host } => {
                             ui.repos = crate::vm::RepoPickerVm {
                                 loading: true,
@@ -920,6 +1019,22 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     let _ = vm_tx.send(vm.clone());
                 }
             });
+            }));
+            if let Err(e) = result {
+                // panic 的负载通常是 &str 或 String,取不出来就如实说取不出来,
+                // 不编一个原因。
+                let why = e
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| e.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "(panic 没带可读的原因)".into());
+                let _ = vm_tx_panic.send(Vm {
+                    fatal: Some(format!(
+                        "内核线程崩了,已经没人处理命令了 —— 请重启 buddy。\n死因:{why}"
+                    )),
+                    ..Default::default()
+                });
+            }
         })
         .expect("内核线程起不来");
 

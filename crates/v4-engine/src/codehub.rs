@@ -22,17 +22,6 @@ pub enum CodehubError {
     Parse(String),
 }
 
-/// A freshly-minted codehub repo's identity (the parity of
-/// [`crate::github::GithubRepoRef`]). `path` = `path_with_namespace`
-/// (e.g. `z30026659/my-service`); `host` = the API host alias
-/// (`open`/`green`/`yellow`); `visibility` = `private`/`public`/`internal`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CodehubRepoRef {
-    pub host: String,
-    pub path: String,
-    pub visibility: String,
-}
-
 /// One row of `codehub-cli project list --mine` — the parity of
 /// [`crate::github::GithubRepoSummary`] for the「接入已有仓」picker. `path`
 /// = `path_with_namespace`; `pushed_at` is populated from codehub's
@@ -356,12 +345,15 @@ pub async fn clone_repo(host: &str, path: &str, dest: &Path) -> Result<(), Codeh
     Ok(())
 }
 
-// ─────────────── V1 · 新建仓 + 列仓 (对仗 github.rs create_repo/list_repos) ───────────────
+// ─────────────────────────────── 列仓 ───────────────────────────────
 //
-// `codehub-cli project create --name <name> --visibility <vis> --namespace-id <nsid>`
-// + `project list --mine` — the codehub parity of `gh repo create`/`gh repo list`.
-// Both are stateless shell-outs with `tokio::process`, same as every other fn in
-// this module. Token goes via keyring (`auth login`), not passed here.
+// `codehub-cli project list --mine` —— 接入屏「接入已有仓」那张列表的数据源,
+// 对仗 `github::list_repos`(`gh repo list`)。无状态 shell-out,和本模块其余
+// 函数一样;token 走 keyring(`auth login`),不从这里传。
+//
+// **「新建仓」两个平台都没有**:V4 的接入只有「接入已有仓」这一条路,建仓在
+// 平台网页上做。原来这里写着一段 `project create --namespace-id …` 的说明,
+// 而那个函数从来没被拷过来 —— 已删,不留一段指着空气的注释。
 
 /// V2-② Intent UX (§6.2): fetch `.bw/project.toml` from the remote without
 /// cloning. Used by the creation flow after the user picks「接入已有仓」so

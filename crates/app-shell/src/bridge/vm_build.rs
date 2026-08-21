@@ -64,6 +64,11 @@ pub struct UiState {
     /// 总览那块「项目指标 · 代码仓级」上一次采到的数。同理:采一次要起好几个
     /// git 子进程,只在人点「立即采集」那一刻跑。
     pub repo_stats: Option<crate::vm::RepoStatsVm>,
+    /// 上一次「采一次指标」采到的东西。同理:起脚本要几百毫秒到几秒,只在人
+    /// 点那一下才跑。**空 = 还没采过**,不是「采到的是 0」。
+    pub metrics: Vec<bw_v4::app::collect::MetricReadout>,
+    /// 会话屏那块「这次开工喂了什么」。`None` = 面板关着。
+    pub briefing: Option<String>,
     pub db_path: String,
     pub workspaces_root: String,
     /// 接入屏那份仓列表的状态。**不进库** —— 它是「现在去平台问了一次」的结果,
@@ -391,11 +396,15 @@ pub(super) fn probe_env() -> Vec<ToolProbeVm> {
     // 开工工具应该只是加一个适配模块目录,不改这个文件。
     //
     // 六项分成两类,**界面上分得清**:能在 `PATH` 里当场找出来的(claude /
-    // cursor-agent / codehub / gh)给 `Some(..)`,红绿都是真的;还没接实现的
+    // cursor-agent / codehub-cli / gh)给 `Some(..)`,红绿都是真的;还没接实现的
     // (Open Design 内嵌、welink-cli)给 `None` —— 灰,不是绿,也不是红。
     let claude = crate::adapters::claude_cli::detect();
     let cursor = v4_engine::which_on_path("cursor-agent");
-    let codehub = v4_engine::which_on_path("codehub");
+    // **探的名字必须和真起的进程一模一样**:`codehub.rs` 里 8 处 shell-out 全是
+    // `codehub-cli`。探 `codehub`、起 `codehub-cli`,两边对不上时这一格给的答案
+    // 就是错的 —— 装了报红,或者更糟:机器上恰好有个叫 `codehub` 的别名,这格
+    // 报绿而真正要起的 `codehub-cli` 根本不在。
+    let codehub = v4_engine::which_on_path("codehub-cli");
     let gh = v4_engine::which_on_path("gh");
     vec![
         ToolProbeVm {
@@ -419,7 +428,7 @@ pub(super) fn probe_env() -> Vec<ToolProbeVm> {
             name: "codehub".into(),
             label: "codehub-cli".into(),
             ok: Some(codehub.is_some()),
-            detail: codehub.unwrap_or_else(|| "本机路径里找不到 codehub".into()),
+            detail: codehub.unwrap_or_else(|| "本机路径里找不到 codehub-cli".into()),
         },
         ToolProbeVm {
             name: "gh".into(),
@@ -467,8 +476,10 @@ async fn build_project(
         .flatten()
         .and_then(|v| v.parse().ok());
     let sessions = build_sessions(app, id, &issues).await;
-    // 详情抽屉里那两条链接的前缀。读 `.git/config`,不起子进程。
-    let browse_base = bw_v4::git::browse_base(&ws).unwrap_or_default();
+    // 详情抽屉里那两条链接的前缀。**按 provider 拼**(库里那三个远端字段),
+    // 不从 `origin` 推 —— codehub clone 走 SSH,origin 里是 SSH 主机加端口。
+    let mr_url_prefix = p.mr_url_prefix();
+    let issue_url_prefix = p.issue_url_prefix();
     let current_week = bw_v4::isoweek::current_week();
     let viewing_week = if ui.viewing_week.is_empty() {
         current_week.clone()
@@ -566,7 +577,7 @@ async fn build_project(
                 .map(|r| (r.ok, r.text.clone()))
                 .collect(),
         },
-        metrics: build_metrics(&ws, plan.as_ref(), &issues),
+        metrics: build_metrics(&ws, plan.as_ref(), &issues, &ui.metrics),
         week_file_exists,
         ops1_status,
         weeks,
@@ -628,8 +639,10 @@ async fn build_project(
             .collect(),
         sessions: sessions.clone(),
         session_open: ui.session_open,
+        briefing: ui.briefing.clone(),
         selected_issue: ui.selected_issue,
-        browse_base: browse_base.clone(),
+        mr_url_prefix,
+        issue_url_prefix,
         workbench: build_workbench(
             &sessions,
             &issues,

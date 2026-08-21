@@ -263,6 +263,70 @@ impl Project {
     pub fn has_remote(&self) -> bool {
         !self.remote_path.is_empty()
     }
+
+    /// 这个仓在浏览器里的根地址,比如 `https://github.com/owner/repo`。
+    ///
+    /// **按 provider 拼,不从 `origin` 推**。codehub 是局域网平台,buddy clone
+    /// 走 SSH(`v4_engine::codehub::clone_repo`:HTTPS 经代理被拦),于是
+    /// `origin` 长这样:`ssh://git@szv-open.codehub.huawei.com:2222/组/仓.git`
+    /// —— 主机是 SSH 主机、后面还挂着 SSH 端口,拿它当网址必然点不开。真正的
+    /// 网页地址只能由「区别名 → 域名」这张表加上 `remote_path` 拼出来。
+    ///
+    /// 认不出的 provider 返回空串:调用方不给链接,不编一个。
+    pub fn browse_base(&self) -> String {
+        if !self.has_remote() {
+            return String::new();
+        }
+        let path = self.remote_path.trim().trim_matches('/');
+        match self.provider.trim() {
+            // 空 provider = 存量行,底座也当 github(`Remote::for_project`)。
+            "github" | "" => format!("https://github.com/{path}"),
+            "codehub" => format!(
+                "https://{}/{path}",
+                codehub_alias_to_domain(&self.remote_host)
+            ),
+            _ => String::new(),
+        }
+    }
+
+    /// MR / PR 网页地址的前缀,后面直接拼号码。没挂远端 → 空串。
+    ///
+    /// codehub 是 GitLab 那一系,MR 与 issue 都在 `/-/` 底下;GitHub 的 PR
+    /// 在 `/pull/`。
+    pub fn mr_url_prefix(&self) -> String {
+        match self.browse_base() {
+            b if b.is_empty() => b,
+            b if self.provider.trim() == "codehub" => format!("{b}/-/merge_requests/"),
+            b => format!("{b}/pull/"),
+        }
+    }
+
+    /// 远端 issue 网页地址的前缀,后面直接拼号码。没挂远端 → 空串。
+    pub fn issue_url_prefix(&self) -> String {
+        match self.browse_base() {
+            b if b.is_empty() => b,
+            b if self.provider.trim() == "codehub" => format!("{b}/-/issues/"),
+            b => format!("{b}/issues/"),
+        }
+    }
+}
+
+/// codehub 的**区别名** → 网页域名。
+///
+/// 库里 `remote_host` 存的是 `codehub-cli -H` 收的那个别名(接入屏那三个区:
+/// `green` / `open` / `yellow`),**不是域名** —— 直接拿它拼网址会得到一个打不
+/// 开的地址。已经是完整域名的值原样返回。
+///
+/// **V4 自带一份**,不 `use bw_core::codehub_alias_to_domain`:同一张表,但 V4
+/// 对 V3 那六个 crate 零依赖是硬规矩(设计正本 §12.1),所以照抄一份。表变了
+/// 两处都要改 —— 这是零依赖那条规矩明码标价的代价。
+pub fn codehub_alias_to_domain(alias: &str) -> &str {
+    match alias.trim() {
+        "green" => "codehub-g.huawei.com",
+        "open" => "open.codehub.huawei.com",
+        "yellow" => "codehub-y.huawei.com",
+        other => other,
+    }
 }
 
 /// 活:远端 issue 的本机缓存 + 九个扩展列(正本在周计划文件)。

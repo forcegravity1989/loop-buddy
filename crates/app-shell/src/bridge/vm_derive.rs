@@ -162,8 +162,8 @@ pub(super) async fn collect_repo_stats(
             .map(|p| crate::vm::TrendPointVm {
                 week: p.week.clone(),
                 commits: p.commits,
-                merges: p.merges,
                 merged_prs: p.merged_prs,
+                open_issues: p.open_issues,
             })
             .collect(),
         git_note: trend.git_note,

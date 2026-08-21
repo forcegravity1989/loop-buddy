@@ -7,6 +7,9 @@ node_modules/
 
 # Rust
 /target/
+# 不带斜杠的这一条专治软链:worktree 里常把 target 软链到主仓那份复用编译缓存,
+# 而 `/target/` 带斜杠只匹配目录,软链会漏进版本控制(2026-08-21 真漏过一次)。
+/target
 **/*.rs.bk
 # dx (Dioxus CLI) build output
 /dist/

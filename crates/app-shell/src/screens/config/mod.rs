@@ -107,9 +107,22 @@ fn MappingRow(m: MappingVm, pid: bw_v4::model::ProjectId, bridge: Bridge) -> Ele
                     value: "{tool}",
                     onchange: move |e| tool.set(e.value()),
                     option { value: "Claude CLI", "Claude CLI" }
-                    option { value: "Cursor", "Cursor" }
-                    option { value: "Open Design", "Open Design" }
+                    // 这两个今天起不起来:Cursor 在底座里 supported=false,
+                    // Open Design 是本机网页内嵌类、内嵌还没接。**按 §12.5 的
+                    // 规矩,按不动的留位一律灰态并写明为什么** —— 选得中却跑
+                    // 不起来,比选不中更坏。
+                    option { value: "Cursor", disabled: true, "Cursor(还没接,选了开不了工)" }
+                    option {
+                        value: "Open Design",
+                        disabled: true,
+                        "Open Design(内嵌还没接,选了开不了工)"
+                    }
                     option { value: "—", "—(未定)" }
+                }
+                div { class: "cfg-readonly-note",
+                    "开工会照这一列记的工具走,"
+                    strong { "不会悄悄拿 Claude CLI 顶上" }
+                    " —— 配了起不来的工具,▶开工 会当场如实报错。"
                 }
             }
             td {

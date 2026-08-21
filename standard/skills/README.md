@@ -19,15 +19,16 @@
 
 规范铺底(运作活③)**没有剧本** —— 它没有 agent 步骤,buddy 自己把核心件写进 `.bw/`。
 
-## 七份方法论技能(按活的类别注入)
+## 六份方法论技能(按活的类别注入)
 
 `evidence-first`(原型)· `spec-to-tests`(构建)· `baseline-before-touch`(优化)·
-`fresh-eyes-funnel`(运营推广)· `breaking-drill`(运维)· `competitive-analysis` ·
-`metrics-render`。
+`fresh-eyes-funnel`(运营推广)· `breaking-drill`(运维)· `competitive-analysis`。
 
-**两份没有收进来**:`north-star-discovery` 与 `metrics-binding` 的内容已并入
-`metrics-refresh`,V4 的清单里不再有它们;`docs/skills/` 下的原文件留给 V3 用,
-V4 不读那个目录。
+**三份没有收进来**:`north-star-discovery` 与 `metrics-binding` 的内容已并入
+`metrics-refresh`;`metrics-render` 2026-08-21 整份删掉——它每一步都踩在 V4 不存在
+的东西上(V3 的渲染器例子、库里那两张 V4 没有的表、已退场的五种采集方式),而
+V4 的指标呈现本来就在总览屏里现算。`docs/skills/` 下的原文件留给 V3 用,V4 不读
+那个目录。
 
 ## 版本
 

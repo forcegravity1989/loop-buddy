@@ -6,22 +6,17 @@
 //! One skill = one interactive session (§2.3) — no phase splitting, no
 //! adversarial loop.
 //!
-//! Phase 1 scope: spawn a system terminal running the launch plan +
-//! best-effort completion detection (wait on the process with a wall-clock
-//! timeout). No PTY/xterm embedding, no session.jsonl parsing (§2.5 砍了
-//! 对话摘要 collector) — the terminal scrollback + session.jsonl itself is
-//! the record. buddy only keeps file-level evidence (HEAD diff, artifacts,
-//! status) via the existing `issue_run_tail` / `finalize_run` path.
+//! 不解析 `session.jsonl`(§2.5 砍了对话摘要 collector)—— 终端回滚区加
+//! `session.jsonl` 本身就是记录。干没干成看仓里的真状态(git、MR),不看这里。
 //!
-//! The [`InteractiveExecutor`] trait is the seam Phase 2 widened (PTY/xterm/
-//! hook). `run_skill_pty` (the desktop shell's path on every platform) delegates
-//! to [`crate::pty_backend`]; `run_skill` (plain OS terminal spawn) remains for
-//! headless callers with `pty_enabled == false`.
+//! **V4 只有内嵌终端这一条路**:[`InteractiveCliExecutor`] 干活全走
+//! `run_skill_pty` → [`crate::pty_backend`],所有平台一样。它的 `run_skill`
+//! (从 V3 拷来的那条「起一个系统终端窗口」的老路)已经如实退场,只剩一句错误
+//! —— 拆掉它的原委见 [`InteractiveCliExecutor`] 的说明。真正还在用 `run_skill`
+//! 的只有自我标注的 [`MockInteractiveExecutor`](headless 指挥器走它)。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-#[cfg(not(target_os = "macos"))]
-use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -150,39 +145,68 @@ pub struct LaunchPlan {
     pub submit_prompt: bool,
 }
 
-/// Host-injected vars that must not leak into a child `claude` (same list
-/// as [`crate::ClaudeCliExecutor`]). A GUI parent started from `cmd` also
-/// carries Windows hidden names (`=C:`, `=ExitCode`); those cannot be
-/// replayed through conpty-oxide / windows-spawn (`env` name must not
-/// contain `=`).
-const NESTED_EXEC_ENV: &[&str] = &[
+/// 宿主会话注入的变量,**按前缀剥,不按名字列**。
+///
+/// 从 buddy 自己被一个 Claude Code 会话启动时(开发期与试点期就是这样),宿主
+/// 会往环境里塞一大批 `CLAUDE…` 打头的变量。这里原本列了固定的四个名字,而实测
+/// 宿主注入了十几个 —— 漏掉的 `CLAUDE_CODE_MESSAGING_SOCKET` /
+/// `CLAUDE_CODE_MESSAGING_TOKEN` / `CLAUDE_CODE_HOST_SESSION_ID` 足以让子
+/// `claude` **接回宿主会话、读到宿主的对话内容**(2026-08-21 实测:只剥四个时,
+/// 子进程复述了父进程正在跑的脚本原文;补齐这三个之后干净)。
+///
+/// 按名字列的做法保证会随宿主加变量而再次腐烂,所以改成前缀:凡是 `CLAUDE`
+/// 打头的一律不进子进程 —— 它们都是**父会话的身份**,对子进程只有害处。
+/// 真实用户从 Finder 双击启动 buddy 时,这一族一个都不存在,剥了也不损失什么。
+const HOST_ENV_PREFIX: &str = "CLAUDE";
+
+/// 人自己配的厂商端点。默认剥(宿主的凭据同样不该漏进子进程),但试点后门
+/// [`keep_anthropic_env`] 开着时豁免。
+const VENDOR_ENV: &[&str] = &[
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_MODEL",
-    "CLAUDECODE",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_CODE_CHILD_SESSION",
-    "CLAUDE_CODE_ENTRYPOINT",
 ];
 
 fn is_spawnable_env_key(key: &str) -> bool {
     !key.is_empty() && !key.contains('=') && !key.contains('\0')
 }
 
+/// **试点期的临时后门,用完删** —— 登记在 `docs/LEFTOVERS.md` 的「试点-9」。
+///
+/// 设了 `BW_KEEP_ANTHROPIC_ENV`(任意非空值)就**不剥** [`VENDOR_ENV`] 那三个,
+/// 把人自己配的厂商端点原样透传给子 `claude`;`CLAUDE…` 那一族照剥不误
+/// (它们是宿主会话的身份,漏进子进程一定串台,见 [`HOST_ENV_PREFIX`])。
+///
+/// **它存在的唯一理由**:本机 `claude` 的登录过期、人一时不方便重登,想先拿
+/// 另一个厂商的端点把旅程跑起来。buddy 的正常姿态是**不管**机器上的 `claude`
+/// 怎么鉴权 —— 那是 CLI 自己该保证的事,buddy 只负责起进程。所以这不是一个
+/// 产品功能,不进设置屏、不写进仓、不做界面提示。
+fn keep_anthropic_env() -> bool {
+    std::env::var_os("BW_KEEP_ANTHROPIC_ENV").is_some_and(|v| !v.is_empty())
+}
+
+/// 这个名字这一次要不要剥。宿主那一族永远剥;厂商那三个默认剥、后门开着时豁免。
+fn is_stripped(key: &str) -> bool {
+    if key.to_ascii_uppercase().starts_with(HOST_ENV_PREFIX) {
+        return true;
+    }
+    !keep_anthropic_env() && VENDOR_ENV.iter().any(|v| key.eq_ignore_ascii_case(v))
+}
+
 fn child_env_from_process() -> HashMap<String, String> {
     std::env::vars()
         .filter(|(k, _)| is_spawnable_env_key(k))
-        .filter(|(k, _)| {
-            !NESTED_EXEC_ENV
-                .iter()
-                .any(|banned| k.eq_ignore_ascii_case(banned))
-        })
+        .filter(|(k, _)| !is_stripped(k))
         .collect()
 }
 
+/// 剥的是**本进程环境里真实存在的**那些名字 —— 前缀规则没法凭空枚举,只能照着
+/// 父进程的环境逐个过。子命令的环境是从本进程继承来的,所以这个来源是对的。
 pub(crate) fn apply_child_env(cmd: &mut impl EnvSink) {
-    for var in NESTED_EXEC_ENV {
-        cmd.remove_env(var);
+    for key in std::env::vars().map(|(k, _)| k) {
+        if is_spawnable_env_key(&key) && is_stripped(&key) {
+            cmd.remove_env(&key);
+        }
     }
 }
 
@@ -398,52 +422,42 @@ pub trait InteractiveExecutor: Send + Sync {
         bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
         input_rx: mpsc::UnboundedReceiver<PtyInput>,
     ) -> Result<SkillOutput, ExecError> {
-        // Default: PTY not supported. The caller falls back to run_skill.
+        // 默认:这个执行器不支持内嵌终端(自我标注的替身就是这种)。如实
+        // 报错,**不静默退化**成别的跑法 —— 走不走这条路由调用方的
+        // `pty_enabled` 决定,不由这里偷偷改道。
         let _ = (plan, ctx, bytes_tx, input_rx);
-        Err(ExecError::Failed(
-            "PTY not supported by this executor (use run_skill instead)".into(),
-        ))
+        Err(ExecError::Failed("这个执行器没有内嵌终端(PTY)实现".into()))
     }
 }
 
-// ─── InteractiveCliExecutor (Phase 1 (c) real spawn) ──────────────────
+// ─── InteractiveCliExecutor(真跑 claude 的那个执行器) ─────────────────
 
-/// Phase 1 (c) interactive executor: spawns a system terminal running
-/// the launch plan and waits for the process to exit (with a wall-clock
-/// timeout backstop).
+/// 真执行器:把 claude 起在**内嵌终端**里(伪终端,见 [`crate::pty_backend`]),
+/// 字节流交给会话屏渲染,人全程看得见、随时能停。
 ///
-/// NOT PTY/xterm (Phase 2). The terminal is a real OS terminal window —
-/// the user sees and interacts with the agent directly. stdin/stdout/
-/// stderr are inherited from the OS (the terminal provides the TTY), not
-/// piped — the terminal scrollback is the record (§2.5).
+/// **它只实现 `run_skill_pty` 一条路。** 从 V3 拷过来的时候还带着另一条:
+/// `run_skill` —— 起一个系统终端窗口、等它退出。那条路在 V4 里从第一天起就没
+/// 有调用方(新壳建 App 时一律 `with_pty()`,`run_issue` 于是先走 PTY 分支;
+/// 工作区不在时退回的那条又用的是自我标注的替身),而且它的 Windows 分支自相
+/// 矛盾:注释说「从 GUI 程序起控制台进程会新开一个控制台窗口,用户能看见
+/// agent」,代码用的却是 [`crate::win_cmd::tokio_cmd`] —— 那个辅助函数专门就是
+/// 来按掉窗口的(`CREATE_NO_WINDOW`)。真跑起来会是:窗口不出现,stdio 继承自
+/// 没有控制台的 GUI 父进程,交互式 claude 拿不到任何终端,然后当场报错或者静默
+/// 挂到一小时的墙钟超时。
 ///
-/// Completion detection (deviation from design's session.jsonl mtime
-/// polling — see commit note): wait on the spawned process to exit. On
-/// Windows, spawning a console process from a GUI app (Dioxus/wry) creates
-/// a new console window automatically. On macOS, `osascript` opens Terminal
-/// — the `osascript` process itself exits immediately, so we rely on the
-/// wall-clock timeout exclusively. On Linux, spawn directly (may not open
-/// a terminal window — best-effort, not a primary platform).
+/// 所以 2026-08-21 把那条路整段删了,而不是二选一去修它 —— 两个修法(让控制台
+/// 真出来 / 承认没有窗口并如实报错)都要先在 Windows 真机上把行为摸清楚,而这
+/// 条路根本没人走。`run_skill` 现在只返回一句如实的错误。
 pub struct InteractiveCliExecutor {
     /// Override the claude binary path (e.g. from `BW_CLAUDE_BIN`).
     /// `None` → use `LaunchPlan.binary` (which is `TuiAgentConfig.launch_cmd`).
     claude_binary: Option<String>,
-    /// Wall-clock timeout for the whole session. The user is interacting
-    /// in real time, so this is generous. On timeout we declare
-    /// `completed = true` (the user may still be working — we can't block
-    /// the run forever, and the worktree's git state is the real evidence).
-    /// Only the Windows/Linux `run_skill` branches wait on the child; the
-    /// macOS branch (osascript) cannot, so the field is compiled out there.
-    #[cfg(not(target_os = "macos"))]
-    timeout: Duration,
 }
 
 impl InteractiveCliExecutor {
     pub fn new() -> Self {
         Self {
             claude_binary: None,
-            #[cfg(not(target_os = "macos"))]
-            timeout: Duration::from_secs(60 * 60), // 1 hour
         }
     }
 
@@ -462,84 +476,21 @@ impl Default for InteractiveCliExecutor {
 
 #[async_trait]
 impl InteractiveExecutor for InteractiveCliExecutor {
-    async fn run_skill(&self, plan: &LaunchPlan, _ctx: &RunCtx) -> Result<SkillOutput, ExecError> {
-        let binary = self.claude_binary.as_deref().unwrap_or(&plan.binary);
-        // Build the spawn command. On Windows, spawning a console process
-        // from a GUI app creates a new console window (the user sees the
-        // agent). On macOS, we use osascript to open Terminal (the osascript
-        // process exits immediately, so we rely on the timeout). On Linux,
-        // spawn directly (best-effort — may not open a terminal window).
-        #[cfg(target_os = "windows")]
-        {
-            let mut cmd = crate::win_cmd::tokio_cmd(binary);
-            cmd.args(&plan.args);
-            apply_child_env(&mut cmd);
-            cmd.current_dir(&plan.cwd);
-            cmd.kill_on_drop(true);
-            // Inherit stdin/stdout/stderr — the console window provides the
-            // TTY for interactive use. Not piping means we can't capture
-            // output, but §2.5 砍了对话摘要 collector: the scrollback is
-            // the record, buddy doesn't parse it.
-            let child = cmd.spawn().map_err(|e| {
-                ExecError::Failed(format!("failed to spawn interactive terminal: {e}"))
-            })?;
-            return self.await_child(child).await;
-        }
-        #[cfg(target_os = "macos")]
-        {
-            // macOS: osascript opens Terminal and runs the command. The
-            // osascript process exits immediately (it just tells Terminal
-            // to open) — we can't wait on the claude process itself. Fall
-            // back to the wall-clock timeout.
-            let cwd = plan.cwd.display().to_string();
-            let mut cmd_line = format!("cd '{cwd}' && {binary}");
-            for a in &plan.args {
-                cmd_line.push(' ');
-                cmd_line.push_str(&shell_quote(a));
-            }
-            let script = format!("tell application \"Terminal\" to do script \"{cmd_line}\"");
-            let mut cmd = crate::win_cmd::tokio_cmd("osascript");
-            cmd.arg("-e").arg(&script);
-            cmd.kill_on_drop(true);
-            let _child = cmd.spawn().map_err(|e| {
-                ExecError::Failed(format!("failed to spawn Terminal (osascript): {e}"))
-            })?;
-            // Can't wait on the claude process — osascript returns immediately
-            // after telling Terminal to open. Sleeping to timeout then claiming
-            // `completed = true` would be a false-success (违反「读回为证」).
-            // Stay honest: report not-completed so the issue stays InProgress
-            // (never auto-Done) and the human verifies in Terminal instead.
-            return Ok(SkillOutput {
-                completed: false,
-                summary: "未验证：osascript 启动 Terminal 后拿不到 claude 句柄，无法等待其退出。请在 Terminal 里确认会话结束后手动推进，buddy 不替你判定完成。".to_string(),
-            });
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            // Linux/other: spawn directly. May not open a terminal window
-            // (would need xterm/gnome-terminal wrapper) — best-effort.
-            let mut cmd = crate::win_cmd::tokio_cmd(binary);
-            cmd.args(&plan.args);
-            apply_child_env(&mut cmd);
-            cmd.current_dir(&plan.cwd);
-            cmd.kill_on_drop(true);
-            let child = cmd.spawn().map_err(|e| {
-                ExecError::Failed(format!("failed to spawn interactive terminal: {e}"))
-            })?;
-            return self.await_child(child).await;
-        }
+    /// 已退场。真执行器只走内嵌终端(`run_skill_pty`)—— 详见
+    /// [`InteractiveCliExecutor`] 的说明。不静默退化成别的行为,如实报错。
+    async fn run_skill(&self, _plan: &LaunchPlan, _ctx: &RunCtx) -> Result<SkillOutput, ExecError> {
+        Err(ExecError::Failed(
+            "真执行器只在内嵌终端里起 claude(run_skill_pty);起系统终端窗口那条路已经删了".into(),
+        ))
     }
 
+    /// 同 [`Self::run_skill`],已退场。接回上一场对话走的是
+    /// `build_resume_plan` + `run_skill_pty`,不经这里。
     async fn run_skill_resume(
         &self,
         plan: &LaunchPlan,
         ctx: &RunCtx,
     ) -> Result<SkillOutput, ExecError> {
-        // Resume uses the same spawn logic as the first run — the LaunchPlan
-        // carries the resume args (`--resume <session_id>` or `--continue`
-        // fallback, instead of the startup plan's `--append-system-prompt
-        // <bridge> <skill_body>`). The process spawn, terminal window, and
-        // wall-clock timeout are identical.
         self.run_skill(plan, ctx).await
     }
 
@@ -567,49 +518,6 @@ impl InteractiveExecutor for InteractiveCliExecutor {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-impl InteractiveCliExecutor {
-    /// Wait for a spawned child process to exit, with a wall-clock timeout.
-    /// On normal exit → `completed = true`. On timeout → `completed = true`
-    /// (the user may still be working — the worktree's git state is the
-    /// real evidence, not the process's exit code).
-    async fn await_child(
-        &self,
-        mut child: tokio::process::Child,
-    ) -> Result<SkillOutput, ExecError> {
-        match tokio::time::timeout(self.timeout, child.wait()).await {
-            Ok(Ok(_status)) => Ok(SkillOutput {
-                completed: true,
-                summary: String::new(),
-            }),
-            Ok(Err(e)) => Err(ExecError::Failed(format!(
-                "interactive terminal error: {e}"
-            ))),
-            Err(_) => {
-                // Timeout — declare completed. The worktree's git state
-                // is the real evidence. On Windows/Linux the spawned child
-                // (terminal+claude) is killed here via `kill_on_drop` when
-                // `child` drops on return; on macOS `osascript` already
-                // returned immediately and the Terminal app is independent
-                // (not a child), so it stays open — only the wall-clock
-                // deadline fires.
-                Ok(SkillOutput {
-                    completed: true,
-                    summary: "(wall-clock timeout)".to_string(),
-                })
-            }
-        }
-    }
-}
-
-/// Single-quote a shell argument for osascript (naive but sufficient for
-/// file paths and flag values — not a security boundary, the args are
-/// buddy-internal, not user-controlled).
-#[cfg(target_os = "macos")]
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 // ─── MockInteractiveExecutor (for tests / no-claude environments) ──────
 
 /// Mock interactive executor — never spawns a real terminal. Returns a
@@ -633,12 +541,7 @@ impl MockInteractiveExecutor {
 
 #[async_trait]
 impl InteractiveExecutor for MockInteractiveExecutor {
-    async fn run_skill(&self, plan: &LaunchPlan, _ctx: &RunCtx) -> Result<SkillOutput, ExecError> {
-        // Best-effort: write a placeholder metrics.toml so downstream
-        // (SyncMetricsFile) has something to sync. Errors here are
-        // non-fatal — the mock's primary job is to return a labeled output.
-        let _ = write_mock_metrics_toml(&plan.cwd);
-
+    async fn run_skill(&self, _plan: &LaunchPlan, _ctx: &RunCtx) -> Result<SkillOutput, ExecError> {
         Ok(SkillOutput {
             completed: true,
             summary: "【mock】交互式技能会话完成(流程演示,未真 spawn claude)".to_string(),
@@ -663,13 +566,11 @@ impl InteractiveExecutor for MockInteractiveExecutor {
     /// spawns a real PTY — self-labeled, never pretends to be real execution.
     async fn run_skill_pty(
         &self,
-        plan: &LaunchPlan,
+        _plan: &LaunchPlan,
         _ctx: &RunCtx,
         bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
         mut input_rx: mpsc::UnboundedReceiver<PtyInput>,
     ) -> Result<SkillOutput, ExecError> {
-        let _ = write_mock_metrics_toml(&plan.cwd);
-
         // Send mock output so the UI has something to render in tests.
         let _ = bytes_tx.send(
             "【mock】pty output (no real claude spawned)\r\n"
@@ -687,34 +588,11 @@ impl InteractiveExecutor for MockInteractiveExecutor {
     }
 }
 
-/// Write a placeholder `.bw/metrics.toml` to `cwd` (best-effort, non-fatal).
-/// Uses blocking `std::fs` — the mock's file write is a test/demo convenience,
-/// not a hot path; `tokio::fs` would need the `fs` feature (not enabled in
-/// bw-engine's tokio dep, and Phase 1 adds no new features).
-fn write_mock_metrics_toml(cwd: &Path) -> std::io::Result<()> {
-    // No workspace (empty cwd) → nothing to write. Without this guard a mock
-    // run for a workspace-less project writes `.bw/metrics.toml` into
-    // whatever the process cwd happens to be (seen: `crates/bw-app/` during
-    // `cargo test`).
-    if cwd.as_os_str().is_empty() {
-        return Ok(());
-    }
-    let bw_dir = cwd.join(".bw");
-    std::fs::create_dir_all(&bw_dir)?;
-    let metrics_path = bw_dir.join("metrics.toml");
-    let placeholder = "# 【mock】placeholder metrics.toml — written by MockInteractiveExecutor\n\
-                       # Replace with real metrics after a real interactive session.\n\
-                       schema_version = 1\n\n\
-                       [north_star]\n\
-                       name = \"【mock】北极星(占位)\"\n\
-                       def  = \"【mock】定义占位 — 真实交互式会话后替换\"\n\
-                       collect = { kind = \"manual\", query = \"\" }\n";
-    // Don't overwrite a real file — only write if it doesn't exist.
-    if !metrics_path.exists() {
-        std::fs::write(&metrics_path, placeholder)?;
-    }
-    Ok(())
-}
+// **替身不写任何仓文件。** 它以前会往 `.bw/metrics.toml` 写一份占位的指标正本
+// (还是 `schema_version = 1` 的旧格式),于是替身跑一次就在人的仓里留下一份
+// 内容是假的、格式是过期的正本,而界面会把它**当正本读**。替身存在的唯一目的
+// 是廉价验证管线本身,**绝不冒充真实执行、更不该替人写正本** —— 要留痕就写进
+// 活的正文里。2026-08-21 整段删除。
 
 // ─── Tests ─────────────────────────────────────────────────────────────
 
@@ -785,16 +663,12 @@ mod tests {
         let output = mock.run_skill(&plan, &ctx).await.unwrap();
         assert!(output.completed);
         assert!(output.summary.contains("【mock】"));
-        // Placeholder metrics.toml was written
-        let metrics_path = tmp.join(".bw").join("metrics.toml");
+        // **替身跑完之后,人的仓里不该多出任何东西。** 它以前会写一份占位的
+        // `.bw/metrics.toml`,现在这条断言反过来守着「一个字都不写」。
         assert!(
-            metrics_path.exists(),
-            "placeholder metrics.toml should exist"
+            !tmp.join(".bw").exists(),
+            "替身不该往仓里写任何文件,更不该写指标正本"
         );
-        let content = std::fs::read_to_string(&metrics_path).unwrap();
-        assert!(content.contains("【mock】"));
-        assert!(content.contains("schema_version = 1"));
-        assert!(content.contains("[north_star]"));
     }
 
     #[test]
@@ -858,36 +732,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_executor_resume_returns_completed_no_placeholder_write() {
+    async fn mock_executor_never_writes_into_the_repo() {
+        // 续接那一路同样一个字都不写。**替身的唯一职责是返回一段自我标注的
+        // 输出**,不是替人在仓里留东西。
         let tmp = tempfile_dir();
-        // Simulate a first run that wrote the placeholder.
-        let skill_body = "# 找指标\n\nskill body";
-        let bridge = "bridge prompt";
-        let startup_plan = build_startup_plan(&CLAUDE, skill_body, bridge, &tmp).unwrap();
         let ctx = RunCtx {
             project: uuid::Uuid::nil(),
             workflow: uuid::Uuid::nil(),
         };
         let mock = MockInteractiveExecutor::new();
-        let _ = mock.run_skill(&startup_plan, &ctx).await.unwrap();
-        let metrics_path = tmp.join(".bw").join("metrics.toml");
-        let mtime_before = std::fs::metadata(&metrics_path)
-            .expect("placeholder exists from first run")
-            .modified()
-            .unwrap();
-
-        // Resume: should NOT rewrite the placeholder (it already exists).
         let resume_plan = build_resume_plan(&CLAUDE, Some("session-id-123"), &tmp).unwrap();
         let output = mock.run_skill_resume(&resume_plan, &ctx).await.unwrap();
         assert!(output.completed);
         assert!(output.summary.contains("【mock】"));
-        assert!(output.summary.contains("resume"));
-        // The placeholder file was NOT rewritten (mtime unchanged).
-        let mtime_after = std::fs::metadata(&metrics_path)
-            .expect("placeholder still exists")
-            .modified()
-            .unwrap();
-        assert_eq!(mtime_before, mtime_after);
+        assert!(!tmp.join(".bw").exists(), "续接那一路也不许往仓里写");
     }
 
     /// Create a temp directory for test isolation.

@@ -2,8 +2,12 @@
 //!
 //! 从 `crates/app-desktop/src/screens/op/terminal_widget.rs` 整块搬过来,只换
 //! 了两处接线:字节从 [`crate::bridge::Bridge`] 的 pty 通道来,键盘与尺寸经
-//! [`crate::bridge::Req::Cmd`] 发回内核。渲染逻辑一行没改 —— 那部分是 V3 试
-//! 用期一个坑一个坑填出来的,见本目录 README。
+//! [`crate::bridge::Req::Cmd`] 发回内核。渲染那部分是 V3 试用期一个坑一个坑
+//! 填出来的,除了下面这一件之外一行没改,见本目录 README。
+//!
+//! 搬过来之后自己加的一件:**复制/粘贴在终端里自己接管**(设计 md §7.1 要求
+//! 「内容和真终端一样能选中复制」)。原因见 [`TERM_PRE_HANDLER_JS`] 里那段
+//! 注释 —— 这个壳没有 macOS 原生菜单,Cmd+C 到不了网页。
 //!
 //! 借了什么、没借什么见 `README.md`。
 
@@ -79,6 +83,141 @@ window.__bw_term_refocus = function(id) {
     requestAnimationFrame(function() { requestAnimationFrame(go); });
     return true;
 };
+
+// ── 剪贴板:终端自己接管,不靠宿主的原生菜单 ──────────────────────────
+// macOS 上 Cmd+C 走的是这条链:应用的「编辑」菜单里那一项带 ⌘C 快捷键 →
+// 系统把 copy: 动作沿响应链发给 WebView → WebView 给网页发一个 copy 事件 →
+// xterm 自己挂在 term.element 上的 copy 监听器把选区文字塞进剪贴板。
+// 这个壳没有装原生菜单,链在第一步就断了 —— 选中是好的,复制永远出不来。
+// 装菜单是全应用范围的改动,而且 Windows 上根本用不着,所以改成在终端自己
+// 身上认按键、自己写剪贴板。粘贴同理(Cmd+V 也到不了网页)。
+window.__bw_term_status = function(id, text) {
+    try { console.log('[BW] 终端剪贴板 ' + id + ':' + text); } catch (e) {}
+    var el = document.getElementById('__bw_term_status_' + id);
+    if (!el) return;
+    el.textContent = text;
+    if (el.__bw_clear) clearTimeout(el.__bw_clear);
+    el.__bw_clear = setTimeout(function() {
+        if (el.textContent === text) el.textContent = '';
+    }, 4000);
+};
+// 先走 navigator.clipboard.writeText。这个壳的页面地址是 dioxus://index.html,
+// WebKit 不把自定义协议当安全上下文,navigator.clipboard 很可能压根不存在;
+// 那时退到临时 textarea + execCommand('copy') —— 它只要求一次用户手势,不要
+// 求安全上下文。两条都不成就如实报失败,绝不假装复制成功了。
+window.__bw_clip_write = function(text) {
+    var viaTextarea = function() {
+        var active = document.activeElement;
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0;';
+        document.body.appendChild(ta);
+        var ok = false;
+        try {
+            ta.select();
+            ta.setSelectionRange(0, text.length);
+            ok = document.execCommand('copy');
+        } catch (e) { ok = false; }
+        try { document.body.removeChild(ta); } catch (e) {}
+        try { if (active && active.focus) active.focus(); } catch (e) {}
+        return ok;
+    };
+    return new Promise(function(resolve, reject) {
+        var fallback = function() {
+            if (viaTextarea()) resolve();
+            else reject(new Error('这个窗口不让网页写剪贴板'));
+        };
+        var nav = window.navigator;
+        if (nav && nav.clipboard && nav.clipboard.writeText) {
+            nav.clipboard.writeText(text).then(function() { resolve(); }, fallback);
+            return;
+        }
+        fallback();
+    });
+};
+// allow_whole=true 是标题栏「复制」按钮走的:没选中就把整段(含回滚)拿走。
+// 键盘那条永远只复制选中 —— 跟真终端一样。
+window.__bw_term_copy = function(id, allow_whole) {
+    var sess = window.__bw_term_sessions && window.__bw_term_sessions[id];
+    if (!sess || !sess.term) return;
+    var term = sess.term;
+    var refocus = function() { try { term.focus(); } catch (e) {} };
+    var text = '';
+    try { text = term.getSelection() || ''; } catch (e) { text = ''; }
+    var what = '选中';
+    if (!text && allow_whole) {
+        what = '整段';
+        try {
+            var buf = term.buffer.active;
+            var lines = [];
+            for (var i = 0; i < buf.length; i++) {
+                var line = buf.getLine(i);
+                lines.push(line ? line.translateToString(true) : '');
+            }
+            text = lines.join('\n').replace(/\s+$/, '');
+        } catch (e) { text = ''; }
+    }
+    if (!text) {
+        window.__bw_term_status(id, '没有可复制的内容');
+        refocus();
+        return;
+    }
+    var n = text.length;
+    window.__bw_clip_write(text).then(function() {
+        window.__bw_term_status(id, '已复制' + what + ' ' + n + ' 字');
+        refocus();
+    }, function(e) {
+        window.__bw_term_status(id, '复制失败:' + ((e && e.message) || '未知原因'));
+        refocus();
+    });
+};
+// 粘贴只有 navigator.clipboard.readText 一条路:execCommand('paste') 在
+// WebKit 里对网页是禁用的,不存在第二条。读不到就如实说读不到。
+// 文字交给 term.paste() 而不是直接推给 PTY —— 它负责括号粘贴模式的包裹和
+// 换行归一,自己拼会把多行粘贴变成一串回车。
+window.__bw_term_paste = function(id) {
+    var sess = window.__bw_term_sessions && window.__bw_term_sessions[id];
+    if (!sess || !sess.term) return;
+    var nav = window.navigator;
+    if (!(nav && nav.clipboard && nav.clipboard.readText)) {
+        window.__bw_term_status(id, '粘贴用不了:这个窗口不让网页读剪贴板');
+        return;
+    }
+    nav.clipboard.readText().then(function(text) {
+        if (!text) {
+            window.__bw_term_status(id, '剪贴板是空的');
+            return;
+        }
+        try {
+            sess.term.paste(text);
+        } catch (e) {
+            window.__bw_term_status(id, '粘贴失败:' + ((e && e.message) || '未知原因'));
+            return;
+        }
+        window.__bw_term_status(id, '已粘贴 ' + text.length + ' 字');
+    }, function(e) {
+        window.__bw_term_status(id, '粘贴失败:' + ((e && e.message) || '拿不到剪贴板'));
+    });
+};
+// 标题栏「复制」按钮的点击**必须在 JS 里当场处理完**:走 Rust 的 onclick 再
+// document::eval 回来是一整趟异步 IPC,等 JS 真跑起来时浏览器认的那一下「用户
+// 手势」早过期了,execCommand('copy') 会被直接拒掉。
+// 用事件委托挂在 document 上挂一次,按钮被重新渲染也不会变成哑巴。
+if (!window.__bw_term_click_bound) {
+    window.__bw_term_click_bound = true;
+    document.addEventListener('click', function(e) {
+        var prefix = '__bw_term_copybtn_';
+        var node = e.target;
+        while (node && node !== document) {
+            if (node.id && node.id.indexOf(prefix) === 0) {
+                window.__bw_term_copy(node.id.slice(prefix.length), true);
+                return;
+            }
+            node = node.parentNode;
+        }
+    });
+}
 "#;
 
 /// Build the per-conversation init IIFE. `id` is the conversation uuid
@@ -106,7 +245,25 @@ return (async function(id) {{
         Home: '\x1b[H', End: '\x1b[F',
         PageUp: '\x1b[5~', PageDown: '\x1b[6~',
     }};
+    // 复制/粘贴的组合键。两套都认,不去嗅平台:macOS 是 Cmd+C / Cmd+V,
+    // Windows·Linux 终端的惯例是 Ctrl+Shift+C / Ctrl+Shift+V。
+    //
+    // **不带 Shift 的 Ctrl+C 一定不在这里面** —— 那是「中断正在跑的命令」,
+    // 是终端最基本的能力,任何时候都原样送到 PTY 去,不管有没有选中。
+    var isCopyChord = function(e) {{
+        if (e.key !== 'c' && e.key !== 'C') return false;
+        if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) return true;
+        return e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
+    }};
+    var isPasteChord = function(e) {{
+        if (e.key !== 'v' && e.key !== 'V') return false;
+        if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) return true;
+        return e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
+    }};
     var keyBytes = function(e) {{
+        // Cmd(macOS)/ Super 组合从来不是终端输入。以前这里会漏到最后一行,
+        // 把 Cmd+C 当成普通的 'c' 推给 PTY,还顺手 preventDefault 掉。
+        if (e.metaKey) return null;
         if (e.ctrlKey && e.key.length === 1) {{
             var c = e.key.toLowerCase().charCodeAt(0);
             if (c >= CTRL_A && c < CTRL_A + 26) return String.fromCharCode(c - CTRL_A + 1);
@@ -125,6 +282,30 @@ return (async function(id) {{
         }};
         div.addEventListener('click', focusTerm);
         focusTerm();
+        // 捕获阶段挂在外层 div 上,先于 xterm 挂在内层 textarea 上的那个
+        // keydown 跑。只有真吃下这个键时才 stopPropagation —— 捕获阶段停掉
+        // 之后,目标阶段和冒泡阶段(包括本 div 上那个把按键推给 PTY 的
+        // 监听器)都不会再跑。重挂时 Dioxus 给的是新 div,标记防重复注册。
+        if (!div.__bw_clip_wired) {{
+            div.__bw_clip_wired = true;
+            div.addEventListener('keydown', function(e) {{
+                if (isCopyChord(e)) {{
+                    var has = false;
+                    try {{ has = !!(sess.term && sess.term.hasSelection()); }} catch (x) {{}}
+                    // 没选中就完全不碰这个键,让它按原路走完。
+                    if (!has) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (window.__bw_term_copy) window.__bw_term_copy(id, false);
+                    return;
+                }}
+                if (isPasteChord(e)) {{
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (window.__bw_term_paste) window.__bw_term_paste(id);
+                }}
+            }}, true);
+        }}
         div.addEventListener('keydown', function(e) {{
             if (textarea && e.target === textarea) return;
             var data = keyBytes(e);
@@ -244,6 +425,12 @@ pub fn TerminalWidget(conversation_id: ConversationId, focused: bool, bridge: Br
     let k = bridge;
     let cid_str = conversation_id.uuid().to_string();
     let div_id = format!("__bw_terminal_{cid_str}");
+    // 剪贴板那条回执写在这个 span 里(JS 直接改 textContent):复制成功说复制
+    // 了多少字,失败说为什么失败 —— 不静默,也不假装成功。
+    let status_id = format!("__bw_term_status_{cid_str}");
+    // 「复制」按钮**故意不挂 Rust 的 onclick**,点击由 JS 侧按 id 认领。理由见
+    // `TERM_PRE_HANDLER_JS` 末尾那段:绕一趟 IPC 回来,用户手势就过期了。
+    let copy_btn_id = format!("__bw_term_copybtn_{cid_str}");
 
     use_future(move || {
         let k = k.clone();
@@ -378,8 +565,15 @@ pub fn TerminalWidget(conversation_id: ConversationId, focused: bool, bridge: Br
             style: "padding:0;",
             div { class: "term-titlebar",
                 span { "● 内嵌终端" }
-                span { class: "spacer" }
                 span { style: "opacity:.5;", "claude 交互式会话" }
+                span { class: "spacer" }
+                span { id: "{status_id}", style: "opacity:.75;" }
+                button {
+                    id: "{copy_btn_id}",
+                    class: "copybtn",
+                    title: "复制选中的内容;没选中就复制整段。键盘 Cmd+C(或 Ctrl+Shift+C)只复制选中。拖不出选区多半是 agent 的界面开了鼠标上报,按住 Option 再拖",
+                    "复制"
+                }
             }
             div {
                 id: "{div_id}",

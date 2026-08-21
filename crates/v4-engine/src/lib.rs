@@ -44,7 +44,7 @@ pub mod workspace;
 pub use claude_bin::{resolve_claude_binary, which_on_path};
 pub use interactive_cli::{
     build_resume_plan, build_startup_plan, InteractiveCliExecutor, InteractiveExecutor, LaunchPlan,
-    MockInteractiveExecutor, TuiAgentConfig, CLAUDE,
+    MockInteractiveExecutor, TuiAgentConfig, CLAUDE, CURSOR,
 };
 pub use terminal_manager::{ConversationMeta, TerminalManager};
 pub use win_cmd::tokio_cmd;

@@ -20,9 +20,9 @@
 //! (`interactive_cli::apply_child_env`,与系统终端那条 tokio `Command` 路径同一
 //! 张清单):不整份 `env_clear()` 再回放 `LaunchPlan.env`——V3 在 Windows 真机
 //! 踩到 windows-spawn 拒绝 `=C:` 这类隐藏环境名(2026-08 main `3410401`),
-//! 回放整张表反而起不来;只 `env_remove` 被禁的几个名字,`ANTHROPIC_AUTH_TOKEN`
-//! /`CLAUDECODE` 等就漏不回去,其余原样继承。`plan.env` 仍是那份快照,供测试与
-//! 读回核对,不再由后端回放。
+//! 回放整张表反而起不来;只 `env_remove` 被禁的那些名字(`CLAUDE…` 打头的一族
+//! 加上厂商那三个),其余原样继承。`plan.env` 仍是那份快照,供测试与读回核对,
+//! 不再由后端回放。
 //!
 //! **写线程**:往 PTY 主端写键盘字节是同步阻塞的 fd 写(portable-pty 与
 //! conpty-oxide 都不开非阻塞),而这个 `run` future 被 bw-app `tokio::spawn`
@@ -101,9 +101,13 @@ pub mod windows {
     //! Windows PTY 后端:conpty-oxide(portable-pty 0.9.0 的 ConPTY 实现不
     //! 把子进程 stdout 送到读端,见 docs/v1-prototype/issue2-metrics-interactive-loop.md §9)。
     //!
-    //! **如实标注**:本仓开发机是 macOS,这份实现只经
-    //! `cargo check --target x86_64-pc-windows-gnu -p bw-engine` 交叉编译检查,
-    //! 搬迁后未在 Windows 真机跑过。
+    //! **如实标注**:本仓开发机是 macOS,**这份文件自己没在 Windows 真机上跑
+    //! 过**,只经 `cargo check --target x86_64-pc-windows-gnu -p v4-engine` 交叉
+    //! 编译检查(2026-08-21 复核通过;此前这里写的是 `-p bw-engine`,那是另一
+    //! 个 crate 的证据,标错了)。
+    //!
+    //! 能借的证据:这份与 V3 的 `bw-engine/src/pty_backend.rs` **逐字相同**
+    //! (`diff` 无输出,2026-08-21 核过),所以那份跑出来的里程对这份成立。
     //!
     //! 中途丢弃(`abort`)时的收尾靠 conpty-oxide 自己:`Command::spawn()`
     //! 返回的是托管会话,其 `Child` 一律 kill-on-drop 且 Job 带

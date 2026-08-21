@@ -37,7 +37,10 @@ pub enum Remote {
     /// never takes a host param, so the stored `remote_host="github.com"` is
     /// carried for symmetry/Enterprise-future but unused by every github call.
     Github(String),
-    /// `host` (green/yellow/inner-source domain) + `path` (`"org/repo"`).
+    /// `host` = 区的**别名**(`green` / `open`(内源) / `yellow`),就是
+    /// `codehub-cli -H` 收的那个值,**不是域名** —— 拿它直接拼网页地址会得到一
+    /// 个打不开的链接,要先过 `bw_v4::model::codehub_alias_to_domain` 那张表。
+    /// `path` 是 `"org/repo"`。
     /// Stateless today: every method re-passes `host`/`path` to the matching
     /// `codehub::xxx` shell-out (P3 wired all three arms). A future stateful
     /// `CodehubClient { host, path }` holding a resolved `project_id` would

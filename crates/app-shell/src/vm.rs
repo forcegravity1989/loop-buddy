@@ -178,11 +178,18 @@ pub struct ProjectVm {
     pub sessions: Vec<SessionVm>,
     /// 会话屏选中的那一个(按活)。
     pub session_open: Option<IssueId>,
+    /// 会话屏「看看喂了什么」面板的内容。`None` = 面板关着。**这是开工时真会
+    /// 送给 agent 的那份系统提示词**,和真开工算的是同一份,不是示意。
+    pub briefing: Option<String>,
     /// 计划屏右侧详情抽屉开着哪张活。通知点「去看这张活」也是设这个。
     pub selected_issue: Option<IssueId>,
-    /// 这个仓在浏览器里的根地址(`https://host/命名空间/仓名`),从 `.git/config`
-    /// 的 origin 推出来。**推不出来就是空串** —— 那时候详情里不给链接,不编一个。
-    pub browse_base: String,
+    /// MR / PR 网页地址的前缀,后面直接拼号码(`.../pull/` 或 codehub 的
+    /// `.../-/merge_requests/`)。**按 provider 拼**,不是从 `.git/config` 的
+    /// origin 推 —— codehub clone 走 SSH,origin 里是 SSH 主机加端口,拿它当
+    /// 网址点不开。没挂远端就是空串,那时候详情里不给链接,不编一个。
+    pub mr_url_prefix: String,
+    /// 远端 issue 网页地址的前缀,规矩同 [`Self::mr_url_prefix`]。
+    pub issue_url_prefix: String,
     pub workbench: WorkbenchVm,
     pub notify: NotifyVm,
     pub config: ConfigVm,
@@ -219,8 +226,12 @@ pub struct MetricsVm {
     pub north_star: Option<MetricCardVm>,
     pub lagging: Vec<MetricCardVm>,
     pub leading: Vec<MetricCardVm>,
-    /// 读不到 `.bw/metrics.toml` 时的实话。
+    /// 读不到 `.bw/metrics.toml` 时的实话(还没有这份文件 —— 正常状态)。
     pub note: Option<String>,
+    /// 有这份文件、但**读不动**时的原话(格式错、旧格式)。和 `note` 分开:
+    /// 前者是「还没定出来」,后者是「定了但我读不了」,**两件事不能混成一句
+    /// 「没有指标」**,那会让人以为文件不存在,去写一份新的。
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -239,6 +250,15 @@ pub struct MetricCardVm {
     pub collected_at: String,
     /// 本周哪些活在推它。
     pub driving: Vec<String>,
+    /// 这条属于哪一类:可回溯 / 不可回溯 / 手填。**空 = 还没读到定义。**
+    pub class: String,
+    /// 上一次「采一次指标」真采到的现值。**`None` ≠ 0** —— 没采过、没采到、
+    /// 手填,都是 `None`。
+    pub collected: Option<String>,
+    /// 近四周走势,旧的在前。采不到的点是 `None`,画的时候断开,不补前值。
+    pub trend: Vec<(String, Option<f64>)>,
+    /// 这次为什么没采到。空 = 采到了,或者压根不该采。**不吞错误。**
+    pub collect_error: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -303,10 +323,12 @@ pub struct RepoStatsVm {
 pub struct TrendPointVm {
     pub week: String,
     /// 三条线一律 `Option`:`None` = 没采到,**画的时候断开,不当 0 画**。
-    /// git 读不动(不是仓、没装 git)时前两条也会是 `None`。
+    /// git 读不动(不是仓、没装 git)时提交那条是 `None`;远端查不成时另外
+    /// 两条是 `None`。
     pub commits: Option<u32>,
-    pub merges: Option<u32>,
     pub merged_prs: Option<u32>,
+    /// 这一周周末那一刻还没关闭的 issue 数。**存量,不是流量。**
+    pub open_issues: Option<u32>,
 }
 
 /// 名片改动那张轻量活。名片是仓文件,改它一律走分支 + MR。

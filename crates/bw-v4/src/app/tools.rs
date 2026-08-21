@@ -83,6 +83,36 @@ impl App {
     }
 }
 
+/// 活上记着的开工工具 → 真正要起的那个 CLI。
+///
+/// **开工必须照活上记的工具走,不许悄悄换。** 设计正本 §7.9 把这条写死了:
+/// 「选了 Cursor 但探活失败 → 开工前置校验直接拒绝报错,**不悄悄退回 Claude
+/// CLI** —— 静默换工具会让人以为在用一个工具、实际在用另一个」。这个函数在
+/// 2026-08-21 之前不存在,四处开工点全是写死的 `&CLAUDE`,于是人在配置屏选了
+/// 别的工具、卡面也挂着那个标签,跑起来的却始终是 claude —— 正是那条规矩要
+/// 防的事,而且方向是最坏的那个(默默顶上,不报错)。
+///
+/// 空值按 Claude CLI 算:活是 buddy 自己建的、还没配过映射时就是空的,
+/// 这是默认不是「未知」。
+pub fn agent_for(tool: &str) -> Result<&'static v4_engine::TuiAgentConfig> {
+    match tool.trim() {
+        "" | "claude_cli" => Ok(&v4_engine::CLAUDE),
+        // 探活失败与「压根没接」由 `build_startup_plan` 按 `supported` 如实拒。
+        "cursor" => Ok(&v4_engine::CURSOR),
+        // 本机网页内嵌类,根本不是起一个终端子进程 —— 拿终端那条路去起它,
+        // 起出来的一定不是人要的东西,所以这里直接拒,不往下走。
+        "open_design" => Err(AppError::Exec(
+            "这张活配的开工工具是 Open Design,而内嵌 Open Design 还没接上。\
+             要用 Claude CLI 干这张活,先在活详情里把开工工具改掉。"
+                .into(),
+        )),
+        other => Err(AppError::Exec(format!(
+            "活上记着的开工工具是「{other}」,buddy 不认识它 —— 不猜、不拿别的工具顶上。\
+             去配置屏的「类别 → 开工工具」里改掉,或者在活详情里改这一张。"
+        ))),
+    }
+}
+
 async fn probe(name: &str) -> ProbeResult {
     match name {
         // Claude CLI 沿用既有的候选路径探测(Windows 上要认 `claude.cmd`)。

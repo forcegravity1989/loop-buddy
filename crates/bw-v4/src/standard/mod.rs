@@ -52,6 +52,18 @@ pub const ISSUE_POLICY_TMPL: &str =
     include_str!("../../../../standard/05-issue-policy/issue-policy.toml.tmpl");
 pub const STANDARD_TMPL: &str = include_str!("../../../../standard/08-meta/standard.toml.tmpl");
 
+// ── 现成的采集脚本 ────────────────────────────────────────────
+//
+// **脚本铺一次就归项目,buddy 之后再也不覆盖。** 改窗口、改口径、换数据源,
+// 项目自己改 —— 脚本本身就是「这个数怎么来的」的文档,不该由 buddy 每次采集
+// 前无条件盖掉(V3 就是那么干的,项目改过的采法被静默抹掉)。
+//
+// 只铺通用的这三份。**业务采集脚本 buddy 不代写**,那是项目自己的事。
+pub const SCRIPT_GIT_COMMITS: &str = include_str!("../../../../standard/06-scripts/git-commits.py");
+pub const SCRIPT_MERGED_PRS: &str =
+    include_str!("../../../../standard/06-scripts/github-merged-prs.py");
+pub const SCRIPT_STARS: &str = include_str!("../../../../standard/06-scripts/github-stars.py");
+
 /// 一份规范件**在哪一站落地**。
 ///
 /// 试点第一天定的:接入那一下只铺人马上要用的,其余的等你第一次真的走到那一站
@@ -107,6 +119,27 @@ pub const CORE_TEMPLATES: &[Template] = &[
         // 第 2 站排期、第 4 站按类别选开工工具才用到。
         lay_at: LayAt::OnFirstUse,
         note: "活的分类 → 用什么工具开工、挂哪份剧本",
+    },
+    Template {
+        category: "metrics",
+        target: ".bw/scripts/git-commits.py",
+        body: SCRIPT_GIT_COMMITS,
+        lay_at: LayAt::OnFirstUse,
+        note: "现成采集脚本:每周提交数(可回溯)",
+    },
+    Template {
+        category: "metrics",
+        target: ".bw/scripts/github-merged-prs.py",
+        body: SCRIPT_MERGED_PRS,
+        lay_at: LayAt::OnFirstUse,
+        note: "现成采集脚本:每周合入的 PR 数(可回溯)",
+    },
+    Template {
+        category: "metrics",
+        target: ".bw/scripts/github-stars.py",
+        body: SCRIPT_STARS,
+        lay_at: LayAt::OnFirstUse,
+        note: "现成采集脚本:GitHub star 数(可回溯 —— 按 starred_at 倒推)",
     },
     Template {
         category: "docs-core",

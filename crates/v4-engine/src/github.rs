@@ -111,42 +111,6 @@ pub async fn origin_remote_url(workspace: &Path) -> Result<Option<String>, Githu
     Ok(if url.is_empty() { None } else { Some(url) })
 }
 
-/// 一个已存在的 `origin` URL 是否已经指向 `owner/repo`?兼容 `gh repo
-/// create/clone` 常写的 SSH(`git@github.com:owner/repo.git`)与 HTTPS
-/// (`https://github.com/owner/repo[.git]`)两种写法,归一化后比较,免得
-/// 同一个仓因协议不同被误判成「不符」。
-pub fn remote_matches(url: &str, owner: &str, repo: &str) -> bool {
-    let normalized = url
-        .trim()
-        .trim_end_matches(".git")
-        .replace("git@github.com:", "github.com/")
-        .replace("ssh://git@github.com/", "github.com/")
-        .replace("https://github.com/", "github.com/")
-        .replace("http://github.com/", "github.com/");
-    normalized.eq_ignore_ascii_case(&format!("github.com/{owner}/{repo}"))
-}
-
-/// 结果:接线时给本地工作区新加了 `origin`,还是它本来就已经指对了仓。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RemoteReconcile {
-    Added,
-    AlreadyMatched,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RemoteReconcileError {
-    /// 工作区已有 `origin`,但指向别的仓——**绝不覆盖**用户的 git 配置,
-    /// 如实报错让人自己决定。
-    #[error("工作区已有 origin({existing}),与目标仓 {owner}/{repo} 不符,拒绝覆盖")]
-    Mismatch {
-        existing: String,
-        owner: String,
-        repo: String,
-    },
-    #[error(transparent)]
-    Github(#[from] GithubError),
-}
-
 /// Clone an already-existing GitHub repo the user picked into `dest`.
 pub async fn clone_repo(
     owner: &str,
@@ -189,64 +153,6 @@ pub async fn clone_repo(
     })
 }
 
-/// One open issue on the remote (V2-②-I read-back). `number` is the platform
-/// issue id (`gh` number / codehub `iid`); `body` may be empty.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RemoteOpenIssue {
-    pub number: u32,
-    pub title: String,
-    pub body: String,
-}
-
-/// V2-②-I: `gh issue list --state open --json number,title,body` — read-only.
-/// Never creates. Cap 200 (gh default max per call); enough for Buddy boards.
-pub async fn list_open_issues(owner_repo: &str) -> Result<Vec<RemoteOpenIssue>, GithubError> {
-    let output = crate::win_cmd::tokio_cmd("gh")
-        .args([
-            "issue",
-            "list",
-            "--repo",
-            owner_repo,
-            "--state",
-            "open",
-            "--limit",
-            "200",
-            "--json",
-            "number,title,body",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(spawn_err)?;
-    if !output.status.success() {
-        return Err(GithubError::Command(stderr_text(&output)));
-    }
-    parse_gh_open_issues(&output.stdout)
-}
-
-#[derive(serde::Deserialize)]
-struct GhIssueJson {
-    number: u32,
-    title: String,
-    #[serde(default)]
-    body: String,
-}
-
-fn parse_gh_open_issues(bytes: &[u8]) -> Result<Vec<RemoteOpenIssue>, GithubError> {
-    let rows: Vec<GhIssueJson> = serde_json::from_slice(bytes)
-        .map_err(|e| GithubError::Command(format!("无法解析 gh issue list JSON:{e}")))?;
-    Ok(rows
-        .into_iter()
-        .map(|r| RemoteOpenIssue {
-            number: r.number,
-            title: r.title,
-            body: r.body,
-        })
-        .collect())
-}
-
 // ─────────────────────── C5 · PR 验收环 (plan/13 D3) ───────────────────────
 //
 // 三件套 + 收尾:提 PR / 查 PR 状态 / merge PR,外加 merge 后的 issue 补关。
@@ -262,13 +168,6 @@ fn parse_gh_open_issues(bytes: &[u8]) -> Result<Vec<RemoteOpenIssue>, GithubErro
 pub fn issue_branch(github_number: u32) -> String {
     format!("bw/issue-{github_number}")
 }
-
-/// The branch `.bw/project.toml` rides on when the first Buddy to adopt an
-/// existing repo writes it via PR (§7) — `bw/project-init`. There is no issue
-/// number (project.toml is a config file, not an Issue), so this branch is
-/// named after the action, not an issue. One deterministic branch so a retry
-/// re-uses the same branch (and the same PR).
-pub const PROJECT_INIT_BRANCH: &str = "bw/project-init";
 
 /// P7-7A: distinguishes a brand-new PR from one `open_pr` merely *adopted*
 /// because the executor already opened it itself (executors are allowed
@@ -566,32 +465,74 @@ pub async fn fetch_project_toml(
     ))
 }
 
-/// 某个时间窗口内**合入**的 PR 数。
+// ── 走势图要的两份远端流水 ──────────────────────────────
+//
+// 都是**一趟拉全、把原始时刻交给上层**,不在这里按周查、也不在这里算数。
+// 原先那条按周发搜索查询的路已经删掉,两个理由:
+//
+// 1. 画四周就要发四次、画八周就八次,而搜索接口本身不稳 —— 真机上撞到过
+//    `Get https://api.github.com/search/issues…: EOF`,四条线里断一条。
+// 2. 「issue 未处理数」这种存量值,本来就得拿全量流水才算得出「某周末还开着
+//    几张」,按周查根本查不出来。
+//
+// 一趟拉全之后,要几周就在上层分几个桶,采多少和画多少永远一致。
+
+/// 一趟能拉回来的最大条数。够不够由调用方自己判:**拿回来的条数正好等于它,
+/// 就说明可能被截断了**,那时候该如实说「没查全」,不是端出一个少算的数。
+pub const LIST_CAP: u32 = 1000;
+
+/// 已合并 PR 的合并时刻,新的在前。RFC3339 原文,**不在这一层解析时间** ——
+/// 底座只负责起进程、读 JSON,按周分桶是上层的事。
 ///
-/// 窗口由调用方给 —— 这就是「能采到今天的数,就能采到过去任意一周的数」那条
-/// 判据的落点:同一个函数换个窗口,过去第八周的值照样算得出来,不需要谁提前
-/// 把它存下来。
+/// 复算:`gh pr list -R <仓> --state merged --json mergedAt --limit 1000`
+pub async fn merged_pr_times(owner_repo: &str) -> Result<Vec<String>, GithubError> {
+    let rows: Vec<GhMergedPrJson> =
+        gh_list_json(owner_repo, &["pr", "list", "--state", "merged"], "mergedAt").await?;
+    Ok(rows.into_iter().filter_map(|r| r.merged_at).collect())
+}
+
+/// 每一张 issue 的建立时刻与关闭时刻(没关就是 `None`),新的在前。
+/// **不含 PR** —— `gh issue list` 本身就把 PR 排除在外。
 ///
-/// `since` / `until` 都是 `YYYY-MM-DD`,而且是**闭区间**(GitHub 的
-/// `merged:a..b` 含两端)。注意别直接把 ISO 周的左闭右开边界丢进来 —— 那会把
-/// 下周一那天的 PR 也算进这一周。
-pub async fn merged_pr_count(
+/// 复算:`gh issue list -R <仓> --state all --json createdAt,closedAt --limit 1000`
+pub async fn issue_times(owner_repo: &str) -> Result<Vec<(String, Option<String>)>, GithubError> {
+    let rows: Vec<GhIssueTimeJson> = gh_list_json(
+        owner_repo,
+        &["issue", "list", "--state", "all"],
+        "createdAt,closedAt",
+    )
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.created_at, r.closed_at))
+        .collect())
+}
+
+#[derive(serde::Deserialize)]
+struct GhMergedPrJson {
+    #[serde(rename = "mergedAt")]
+    merged_at: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct GhIssueTimeJson {
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "closedAt")]
+    closed_at: Option<String>,
+}
+
+/// `gh <子命令…> --repo <仓> --limit <上限> --json <字段>` 的公共壳。
+async fn gh_list_json<T: serde::de::DeserializeOwned>(
     owner_repo: &str,
-    since: &str,
-    until: &str,
-) -> Result<u32, GithubError> {
-    let q = format!("repo:{owner_repo} is:pr is:merged merged:{since}..{until}");
+    subcommand: &[&str],
+    fields: &str,
+) -> Result<Vec<T>, GithubError> {
+    let cap = LIST_CAP.to_string();
+    let mut args: Vec<&str> = subcommand.to_vec();
+    args.extend_from_slice(&["--repo", owner_repo, "--limit", &cap, "--json", fields]);
     let output = crate::win_cmd::tokio_cmd("gh")
-        .args([
-            "api",
-            "-X",
-            "GET",
-            "search/issues",
-            "-f",
-            &format!("q={q}"),
-            "--jq",
-            ".total_count",
-        ])
+        .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -601,25 +542,6 @@ pub async fn merged_pr_count(
     if !output.status.success() {
         return Err(GithubError::Command(stderr_text(&output)));
     }
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    text.parse::<u32>()
-        .map_err(|_| GithubError::Command(format!("无法解析 gh 计数输出:{text:?}")))
-}
-
-#[cfg(test)]
-mod list_open_issues_parse_tests {
-    use super::*;
-
-    #[test]
-    fn parses_gh_issue_list_json() {
-        let raw = r#"[
-          {"number":3,"title":"find-metrics","body":"skill note"},
-          {"number":7,"title":"manual","body":""}
-        ]"#;
-        let got = parse_gh_open_issues(raw.as_bytes()).expect("parse");
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[0].number, 3);
-        assert_eq!(got[0].title, "find-metrics");
-        assert_eq!(got[1].body, "");
-    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| GithubError::Command(format!("无法解析 gh {} JSON:{e}", subcommand.join(" "))))
 }
