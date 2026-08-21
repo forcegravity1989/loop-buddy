@@ -405,6 +405,12 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
     std::thread::Builder::new()
         .name("bw-v4-kernel".into())
         .spawn(move || {
+            // 内核这条线程一处 panic 就整条死掉,而界面那头只会停在最后一份
+            // ViewModel 上 —— 之后发出去的命令石沉大海,**没有任何提示**。
+            // 人以为 buddy 还在正常跑,其实早就没人接活了。裹一层,把死因送进
+            // 「起不来」那块红字:**宁可显眼地坏掉,也不要安静地坏掉。**
+            let vm_tx_panic = vm_tx.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -973,6 +979,22 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                     let _ = vm_tx.send(vm.clone());
                 }
             });
+            }));
+            if let Err(e) = result {
+                // panic 的负载通常是 &str 或 String,取不出来就如实说取不出来,
+                // 不编一个原因。
+                let why = e
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| e.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "(panic 没带可读的原因)".into());
+                let _ = vm_tx_panic.send(Vm {
+                    fatal: Some(format!(
+                        "内核线程崩了,已经没人处理命令了 —— 请重启 buddy。\n死因:{why}"
+                    )),
+                    ..Default::default()
+                });
+            }
         })
         .expect("内核线程起不来");
 
