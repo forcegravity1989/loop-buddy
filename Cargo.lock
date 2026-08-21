@@ -72,7 +72,6 @@ name = "app-shell"
 version = "0.0.0"
 dependencies = [
  "bw-core",
- "bw-engine",
  "bw-v4",
  "dioxus",
  "pulldown-cmark",
@@ -80,6 +79,7 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+ "v4-engine",
 ]
 
 [[package]]
@@ -345,7 +345,6 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bw-core",
- "bw-engine",
  "serde",
  "serde_json",
  "sha2",
@@ -355,6 +354,7 @@ dependencies = [
  "tokio",
  "toml 0.8.2",
  "uuid",
+ "v4-engine",
 ]
 
 [[package]]
@@ -5144,6 +5144,21 @@ dependencies = [
  "js-sys",
  "serde_core",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "v4-engine"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "conpty-oxide",
+ "nix",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
