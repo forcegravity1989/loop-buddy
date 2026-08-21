@@ -171,6 +171,19 @@ impl App {
                 b.push_str(&format!("- `{path}`:{why}\n"));
             }
         }
+        // 仓里已经有、但不是 buddy 铺的件。**必须显眼地说一声** —— 界面会把它们
+        // 当正本读,而它们的来路 buddy 一无所知。
+        if !report.preexisting.is_empty() {
+            b.push_str(
+                "\n\n⚠️ 仓里本来就有这几份件,不是 buddy 铺的,这次也没碰它们 —— \
+                 但**界面会把它们当正本读**(指标卡、健康判据都从这里来)。\
+                 请确认它们确实属于这个项目、格式也还作数;不作数就先删掉,\
+                 走到那一站时 buddy 会铺一份干净的:\n",
+            );
+            for path in &report.preexisting {
+                b.push_str(&format!("- `{path}`\n"));
+            }
+        }
         if !outcome.refused.is_empty() {
             b.push_str(
                 "\n\n写下去了但**没进版本控制**的件(这个仓的 .gitignore 忽略了它们,\

@@ -22,6 +22,15 @@ pub struct BootstrapReport {
     pub written: Vec<String>,
     /// 跳过的路径 + 为什么跳。
     pub skipped: Vec<(String, String)>,
+    /// **这一站本来就不铺**(要用到那一站才铺),可仓里已经有一份了,而且不是
+    /// buddy 铺的。
+    ///
+    /// 为什么必须单独报一声:界面会把这份文件**当正本读**(指标卡、走势、健康
+    /// 判据都从它来),可它来路不明 —— 可能是上一代 buddy 留下的、可能是别的
+    /// 项目的、也可能格式早就过期了。第 0 站试点真撞上过:项目仓里躺着一份
+    /// 另一个项目的 `.bw/metrics.toml`,铺底连看都没看它一眼,人以为铺完了,
+    /// 而总览上显示的是别人的指标。
+    pub preexisting: Vec<String>,
 }
 
 /// 渲染模板要用的变量。
@@ -66,6 +75,11 @@ pub fn write_core_files(
         // 第 0 站只铺人马上要用的那几份;其余等真的走到那一站,或者人在配置屏
         // 点一次「规范铺底」补齐。
         if !all && tmpl.lay_at != standard::LayAt::Adopt {
+            // **不铺不等于不看。** 仓里已经躺着一份、而且不是 buddy 管的,就得
+            // 报一声:界面等会儿会把它当正本读(见 `preexisting` 字段的说明)。
+            if workspace.join(tmpl.target).exists() && managed.entry(tmpl.target).is_none() {
+                report.preexisting.push(tmpl.target.to_string());
+            }
             continue;
         }
         let body = standard::render(tmpl.body, &vars_list);
