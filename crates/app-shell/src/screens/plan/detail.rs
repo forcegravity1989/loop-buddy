@@ -46,25 +46,13 @@ pub fn DetailPanel(
     // 先快照出来:`c` 是借来的,闭包要活到点击那一刻。
     let title = c.title.clone();
     let pr = c.pr_number;
-    // 链接只在**真推得出地址**时才有。`browse_base` 是从 `.git/config` 的 origin
-    // 推的,没有 origin(本机仓)就是空串,那时候只显示号码、不给链接。
-    let base = p.browse_base.trim().trim_end_matches('/');
-    let is_gh = base.contains("github.com");
-    let mr_url = (!base.is_empty() && c.pr_number > 0).then(|| {
-        if is_gh {
-            format!("{base}/pull/{}", c.pr_number)
-        } else {
-            // codehub 是 GitLab 那一系,MR 与 issue 都在 `/-/` 底下。
-            format!("{base}/-/merge_requests/{}", c.pr_number)
-        }
-    });
-    let issue_url = (!base.is_empty() && c.remote_number > 0).then(|| {
-        if is_gh {
-            format!("{base}/issues/{}", c.remote_number)
-        } else {
-            format!("{base}/-/issues/{}", c.remote_number)
-        }
-    });
+    // 链接只在**真拼得出地址**时才有。两个前缀由内核按 provider 拼好(github
+    // 与 codehub 的路径形状不同),这里只管接上号码;没挂远端就是空串,那时候
+    // 只显示号码、不给链接。
+    let mr_url = (!p.mr_url_prefix.is_empty() && c.pr_number > 0)
+        .then(|| format!("{}{}", p.mr_url_prefix, c.pr_number));
+    let issue_url = (!p.issue_url_prefix.is_empty() && c.remote_number > 0)
+        .then(|| format!("{}{}", p.issue_url_prefix, c.remote_number));
     rsx! {
         div { class: "plan-detail",
             div { class: "plan-detail-head",
@@ -192,7 +180,7 @@ fn link_row(k: &str, number: u32, url: Option<&str>, none_hint: &str) -> Element
                 }
             } else {
                 span {
-                    title: "这个仓的 origin 推不出能点的地址(本机仓,或者地址写法认不出来)",
+                    title: "这个项目没挂远端(或者 provider 认不出来),拼不出能点的地址",
                     "#{number}(没有可点的地址)"
                 }
             }

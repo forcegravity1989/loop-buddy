@@ -467,8 +467,10 @@ async fn build_project(
         .flatten()
         .and_then(|v| v.parse().ok());
     let sessions = build_sessions(app, id, &issues).await;
-    // 详情抽屉里那两条链接的前缀。读 `.git/config`,不起子进程。
-    let browse_base = bw_v4::git::browse_base(&ws).unwrap_or_default();
+    // 详情抽屉里那两条链接的前缀。**按 provider 拼**(库里那三个远端字段),
+    // 不从 `origin` 推 —— codehub clone 走 SSH,origin 里是 SSH 主机加端口。
+    let mr_url_prefix = p.mr_url_prefix();
+    let issue_url_prefix = p.issue_url_prefix();
     let current_week = bw_v4::isoweek::current_week();
     let viewing_week = if ui.viewing_week.is_empty() {
         current_week.clone()
@@ -629,7 +631,8 @@ async fn build_project(
         sessions: sessions.clone(),
         session_open: ui.session_open,
         selected_issue: ui.selected_issue,
-        browse_base: browse_base.clone(),
+        mr_url_prefix,
+        issue_url_prefix,
         workbench: build_workbench(
             &sessions,
             &issues,
