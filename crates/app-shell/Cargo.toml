@@ -15,7 +15,7 @@ path = "src/main.rs"
 # 与旧壳同一个 hard-pin(=0.7.9)。desktop feature = wry WebView。
 dioxus = { workspace = true, features = ["desktop"] }
 bw-core = { workspace = true, features = ["idgen"] }
-bw-engine = { workspace = true }
+v4-engine = { workspace = true }
 bw-v4 = { workspace = true }
 tokio = { workspace = true }
 time = { workspace = true, features = ["std"] }

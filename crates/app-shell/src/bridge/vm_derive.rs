@@ -108,7 +108,7 @@ pub(super) fn build_card_mr(issues: &[bw_v4::Issue]) -> Option<CardMrVm> {
 /// 那要走 GitHub / codehub 的接口,今天还没接 —— 与其编几个数,不如只列采得
 /// 到的,并在界面上说清楚少了哪几项(见 `docs/LEFTOVERS.md`)。
 pub(super) async fn collect_repo_stats(ws: &Path, project: &bw_v4::model::Project) -> RepoStatsVm {
-    let e = match bw_engine::evidence::collect(&ws.display().to_string()).await {
+    let e = match v4_engine::evidence::collect(&ws.display().to_string()).await {
         Ok(e) => e,
         Err(err) => {
             return RepoStatsVm {

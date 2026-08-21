@@ -259,7 +259,7 @@ fn refresh_note(vm: &Vm) -> String {
 async fn list_repos(github: bool, host: &str) -> (Vec<crate::vm::RepoRowVm>, Option<String>) {
     const LIMIT: u32 = 100;
     if github {
-        match bw_engine::github::list_repos(LIMIT).await {
+        match v4_engine::github::list_repos(LIMIT).await {
             Ok(rows) => (
                 rows.into_iter()
                     .map(|r| crate::vm::RepoRowVm {
@@ -280,7 +280,7 @@ async fn list_repos(github: bool, host: &str) -> (Vec<crate::vm::RepoRowVm>, Opt
             Some("没选区 —— codehub 要 -H green/open/yellow 之一".into()),
         )
     } else {
-        match bw_engine::codehub::list_repos(host.trim(), LIMIT).await {
+        match v4_engine::codehub::list_repos(host.trim(), LIMIT).await {
             Ok(rows) => (
                 rows.into_iter()
                     .map(|r| crate::vm::RepoRowVm {
@@ -312,7 +312,7 @@ async fn fetch_prefill(
     use crate::vm::RepoProbe;
     let got = if github {
         match path.split_once('/') {
-            Some((owner, repo)) => bw_engine::github::fetch_project_toml(owner, repo, git_ref)
+            Some((owner, repo)) => v4_engine::github::fetch_project_toml(owner, repo, git_ref)
                 .await
                 .map_err(|e| e.to_string()),
             None => Err(format!("「{path}」不是 owner/repo 的样子,没法查")),
@@ -320,7 +320,7 @@ async fn fetch_prefill(
     } else if host.trim().is_empty() {
         Err("codehub 域名还没填,查不了".into())
     } else {
-        bw_engine::codehub::fetch_project_toml(host.trim(), path, git_ref)
+        v4_engine::codehub::fetch_project_toml(host.trim(), path, git_ref)
             .await
             .map_err(|e| e.to_string())
     };
@@ -332,11 +332,11 @@ async fn fetch_prefill(
         // 不落在常路上。
         Ok(None) => {
             let exists = if github {
-                bw_engine::github::probe_repo(path)
+                v4_engine::github::probe_repo(path)
                     .await
                     .map_err(|e| e.to_string())
             } else {
-                bw_engine::codehub::probe(host.trim(), path)
+                v4_engine::codehub::probe(host.trim(), path)
                     .await
                     .map_err(|e| e.to_string())
             };
@@ -345,15 +345,21 @@ async fn fetch_prefill(
                 Err(e) => (None, RepoProbe::NoRepo(e)),
             }
         }
-        Ok(Some(file)) => (
-            Some(crate::vm::RepoPrefillVm {
-                name: file.name,
-                brief: file.brief,
-                benchmark: file.benchmark,
-                north_star: file.opportunity,
-            }),
-            RepoProbe::Adopted,
-        ),
+        // 底座只负责把远端那份文件的**原文**取回来,解析是这一层的事 ——
+        // 它不认识业务文件格式。解析不了说明那份文件坏了或不是名片,
+        // 那是「没查成」,**不是**「没被接管过」。
+        Ok(Some(raw)) => match bw_v4::repo::project_file::parse(&raw) {
+            Ok(file) => (
+                Some(crate::vm::RepoPrefillVm {
+                    name: file.name,
+                    brief: file.brief,
+                    benchmark: file.benchmark,
+                    north_star: file.opportunity,
+                }),
+                RepoProbe::Adopted,
+            ),
+            Err(e) => (None, RepoProbe::Failed(e.to_string())),
+        },
         // 没登录、网断了、分支名不对、文件写坏了 —— 都是「没查成」,
         // **不能**说成「没被接管过」。
         Err(e) => (None, RepoProbe::Failed(e)),
@@ -420,7 +426,7 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                 let mut app = App::new(
                     store.clone(),
                     root.clone(),
-                    Arc::new(bw_engine::InteractiveCliExecutor::new()),
+                    Arc::new(v4_engine::InteractiveCliExecutor::new()),
                 )
                 .with_pty()
                 .with_asset_root(asset_root())
@@ -506,9 +512,8 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                         eprintln!("[BW_VM] 最新事件 {} · {}", e.time, e.text);
                     }
                     eprintln!(
-                        "[BW_VM] 映射={} 连接器={} 定时={} 群={} 指标={} 未读={}",
+                        "[BW_VM] 映射={} 定时={} 群={} 指标={} 未读={}",
                         o.config.mappings.len(),
-                        o.config.connectors.len(),
                         o.config.crons.len(),
                         o.config.chat_provider,
                         o.metrics.lagging.len()

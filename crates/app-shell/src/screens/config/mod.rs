@@ -25,10 +25,7 @@ pub fn View(p: ProjectVm, bridge: Bridge) -> Element {
         section { style: "max-width:1120px;",
             {mapping_block(p, bridge)}
             {skill_block(p)}
-            div { class: "cfg-pair",
-                {connector_block(p, bridge)}
-                {cron_block(p)}
-            }
+            {cron_block(p)}
             StandardBlock { p: p.clone(), bridge: bridge.clone() }
         }
     }
@@ -195,96 +192,6 @@ fn desc_or_dash(d: &str) -> String {
 }
 
 // ── ③ 连接器 + 项目群 ───────────────────────────────
-
-fn connector_block(p: &ProjectVm, bridge: &Bridge) -> Element {
-    let c = &p.config;
-    rsx! {
-        div { class: "cfg-section",
-            div { class: "cfg-section-head", h3 { "连接器" } }
-            if c.connectors.is_empty() {
-                div { class: "detail-empty", "这个仓没有 .bw/connectors.toml。" }
-            } else {
-                div { class: "tbl-wrap",
-                    table { class: "tbl",
-                        thead { tr { th { "连接器" } th { "种类" } th { "跑什么" } } }
-                        tbody {
-                            for x in c.connectors.iter() {
-                                tr { key: "{x.name}",
-                                    td { "{x.name}" }
-                                    td { span { class: "chip chip-gray", "{x.kind}" } }
-                                    td { class: "mono", style: "font-size:10.6px;", "{x.target}" }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            div { style: "border-top:1px dashed var(--border);margin-top:12px;padding-top:12px;font-size:12.2px;",
-                div { style: "font-weight:600;margin-bottom:7px;", "项目群" }
-                div { style: "display:flex;flex-direction:column;gap:7px;",
-                    div {
-                        "提供方 "
-                        span {
-                            class: if c.chat_provider == "未配" { "chip chip-gray" } else { "chip chip-clay" },
-                            "{c.chat_provider}"
-                        }
-                    }
-                    div { "群号 " span { class: "mono", "{c.chat_group}" } }
-                    div {
-                        "同步哪些通知 "
-                        if c.chat_events.is_empty() {
-                            span { style: "color:var(--ink-3);", "—(没配群)" }
-                        }
-                        for (label, on) in c.chat_events.iter() {
-                            span { key: "{label}", style: "display:inline-flex;align-items:center;gap:5px;margin-right:12px;font-size:11.3px;",
-                                span { class: if *on { "tglswitch on" } else { "tglswitch" }, span { class: "knob" } }
-                                "{label}"
-                            }
-                        }
-                    }
-                }
-                div { class: "cfg-readonly-note",
-                    "发出去就算完:不记账、不去重、失败不自动重发 —— 极小概率下同一件事会\
-                     重推一条,这是已经认了的代价。"
-                    strong { "仓是正本" }
-                    ",改群号或改勾选走「编辑项目信息」那条活 + MR,不在这里直接写仓。"
-                }
-            }
-
-            div { style: "border-top:1px dashed var(--border);margin-top:12px;padding-top:12px;",
-                div { style: "font-size:11.5px;color:var(--ink-3);margin-bottom:8px;",
-                    "开工工具探活 · 远端仓 {c.remote}"
-                }
-                div { style: "display:flex;gap:8px;flex-wrap:wrap;",
-                    for t in c.tools.iter() {
-                        {probe_chip(&t.name, &t.label, t.ok, &t.detail, bridge)}
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn probe_chip(name: &str, label: &str, ok: Option<bool>, detail: &str, bridge: &Bridge) -> Element {
-    let b = bridge.clone();
-    let n = name.to_string();
-    let color = match ok {
-        Some(true) => "var(--green)",
-        Some(false) => "var(--red)",
-        None => "var(--gray)",
-    };
-    rsx! {
-        button {
-            key: "{name}",
-            class: "btn btn-sm",
-            title: "{detail}",
-            onclick: move |_| b.cmd(Command::ProbeTool { name: n.clone() }),
-            span { class: "dot", style: "background:{color};margin-right:6px;" }
-            "{label} · 测一下"
-        }
-    }
-}
 
 // ── ④ 定时 ──────────────────────────────────────────
 

@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(
         store.clone(),
         &ws_root,
-        Arc::new(bw_engine::MockInteractiveExecutor::new()),
+        Arc::new(v4_engine::MockInteractiveExecutor::new()),
     );
 
     let week = isoweek::current_week();

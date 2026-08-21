@@ -1,6 +1,6 @@
 //! `.bw/project.toml` —— 项目意图与配置的正本。
 //!
-//! V3 的解析器(`bw_engine::project_file`)只认五个意图字段。V4 多三样:
+//! V3 的解析器(`v4_engine::project_file`)只认五个意图字段。V4 多三样:
 //! `[chat]` 项目群、`standard_version`(项目用的是哪版规范)、
 //! `current_version`(在研版本)。这三样**都不入库**——总览、计划屏每次要显示
 //! 就现读现解析这份文件。V4 自己写一份解析器而不是改 V3 那份,是为了让旧壳

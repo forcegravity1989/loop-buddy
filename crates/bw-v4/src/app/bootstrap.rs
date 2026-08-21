@@ -423,7 +423,7 @@ pub fn skill_pointer(skills_dir: &std::path::Path, workflow: &str) -> Option<Ski
 ///
 /// 提示词里给的是绝对路径,不加这一句,CLI 那边读不读得到取决于它当天的权限
 /// 策略;显式声明一句,别赌。
-pub(crate) fn allow_skills_dir(plan: &mut bw_engine::LaunchPlan, dir: &std::path::Path) {
+pub(crate) fn allow_skills_dir(plan: &mut v4_engine::LaunchPlan, dir: &std::path::Path) {
     plan.args.push("--add-dir".to_string());
     plan.args.push(dir.display().to_string());
 }

@@ -6,7 +6,7 @@
 //! 的目录和自己的分支上,主检出永远不动。
 //!
 //! 供给这一步**复用 bw-engine 的
-//! [`provision_issue_worktree`](bw_engine::workspace::provision_issue_worktree)**
+//! [`provision_issue_worktree`](v4_engine::workspace::provision_issue_worktree)**
 //! ——和 V3 用的是同一份实现,一个字都没改:在主仓的**兄弟目录**
 //! `<主仓名>-issue-<号>` 里开一棵,分支 `bw/issue-<号>`,已经存在就原样接着用
 //! (重跑幂等)。
@@ -66,12 +66,12 @@ pub(super) async fn provision(main: &Path, number: u32) -> Result<IssueTree> {
             isolated: false,
         });
     }
-    let path = bw_engine::workspace::provision_issue_worktree(main, number)
+    let path = v4_engine::workspace::provision_issue_worktree(main, number)
         .await
         .map_err(|e| AppError::Exec(format!("给第 {number} 号活开 worktree 没成:{e}")))?;
     Ok(IssueTree {
         path,
-        branch: bw_engine::github::issue_branch(number),
+        branch: v4_engine::github::issue_branch(number),
         isolated: true,
     })
 }
@@ -183,7 +183,7 @@ pub(super) async fn push_and_open_mr(
     if let Err(e) = crate::git::push_branch(&tree.path, &tree.branch).await {
         return MrOutcome::none(&format!("推分支没成,原话:{e}"));
     }
-    let remote = match bw_engine::remote::Remote::for_project(
+    let remote = match v4_engine::remote::Remote::for_project(
         &project.provider,
         &project.remote_host,
         &project.remote_path,

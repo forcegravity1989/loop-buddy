@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(
         store.clone(),
         &root,
-        Arc::new(bw_engine::MockInteractiveExecutor::new()),
+        Arc::new(v4_engine::MockInteractiveExecutor::new()),
     );
 
     // provider=github + 一个假 owner/repo:开 MR 那一步会走 `gh`。
@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     say("步骤 1 · ▶跑", &format!("{ran:?}"));
 
     let tree =
-        bw_engine::workspace::issue_worktree_path(&ws, number).expect("算不出 worktree 路径");
+        v4_engine::workspace::issue_worktree_path(&ws, number).expect("算不出 worktree 路径");
     say(
         "步骤 2 · worktree",
         &format!(
@@ -184,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // ── 读回:远端 bare 仓上真有这条分支和这个提交吗 ──────────
-    let branch = bw_engine::github::issue_branch(number);
+    let branch = v4_engine::github::issue_branch(number);
     say(
         "步骤 5 · 远端读回",
         &out(&bare, &["log", "--oneline", "-1", &branch]).unwrap_or_else(|e| format!("读不到:{e}")),

@@ -475,8 +475,6 @@ pub struct ConfigVm {
     pub cadence: String,
     /// 节律拆成表格行:哪张运作活、怎么触发、判据是什么。
     pub crons: Vec<CronVm>,
-    /// `.bw/connectors.toml` 里声明的连接器。文件没有就是空的。
-    pub connectors: Vec<ConnectorVm>,
     /// 项目群三件:提供方 / 群号 / 同步哪些事件。仓是正本,这里只显示。
     pub chat_provider: String,
     pub chat_group: String,
@@ -516,15 +514,6 @@ pub struct CronVm {
     pub schedule: String,
     /// 到底看什么才算「该跑了」。
     pub rule: String,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ConnectorVm {
-    pub name: String,
-    /// `script` / `command` 这类。
-    pub kind: String,
-    /// 具体跑什么。
-    pub target: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -117,7 +117,7 @@ impl App {
     async fn fetch_repo(&self, ws: &std::path::Path, remote: &RemoteRef) -> Result<()> {
         let shown = ws.display().to_string();
         if ws.join(".git").exists() {
-            let origin = bw_engine::github::origin_remote_url(ws)
+            let origin = v4_engine::github::origin_remote_url(ws)
                 .await
                 .ok()
                 .flatten()
@@ -165,12 +165,12 @@ impl App {
         }
         let _ = std::fs::remove_dir(ws); // 空目录才删得掉,正合适
         let got = if remote.provider == "codehub" {
-            bw_engine::codehub::clone_repo(&remote.host, &remote.path, ws)
+            v4_engine::codehub::clone_repo(&remote.host, &remote.path, ws)
                 .await
                 .map_err(|e| e.to_string())
         } else {
             match remote.path.split_once('/') {
-                Some((owner, repo)) => bw_engine::github::clone_repo(owner, repo, ws)
+                Some((owner, repo)) => v4_engine::github::clone_repo(owner, repo, ws)
                     .await
                     .map(|_| ())
                     .map_err(|e| e.to_string()),

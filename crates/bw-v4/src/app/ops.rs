@@ -211,7 +211,7 @@ impl App {
         // 点「合入并完成」就是拿 `gh` 去打一个 gh 根本不认识的仓。
         let remote = if project.has_remote() {
             Some(
-                bw_engine::remote::Remote::for_project(
+                v4_engine::remote::Remote::for_project(
                     &project.provider,
                     &project.remote_host,
                     &project.remote_path,
@@ -270,7 +270,7 @@ impl App {
         } else if merged {
             notes.push(format!(
                 "本机分支 {} 先留着:主检出没拉动,它是本机唯一还够得着这次合入的地方",
-                bw_engine::github::issue_branch(issue.number)
+                v4_engine::github::issue_branch(issue.number)
             ));
         }
 
@@ -347,7 +347,7 @@ impl App {
     /// 上记的是主分支名(不是 git 仓、或者还没有第一条提交的空仓),照着它删就
     /// 是拿主分支开刀 —— 认死名字,不认那个字段说什么。
     async fn drop_issue_branch(&self, issue: &crate::model::Issue) -> String {
-        let branch = bw_engine::github::issue_branch(issue.number);
+        let branch = v4_engine::github::issue_branch(issue.number);
         if issue.branch != branch {
             return "没有单独的活分支要收(这张活的改动不在 bw/issue- 分支上)".into();
         }

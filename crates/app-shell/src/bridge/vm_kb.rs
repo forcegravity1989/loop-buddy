@@ -239,7 +239,7 @@ pub(super) async fn build_assets(store: &V4Store, id: ProjectId, ws: &Path) -> A
         })
         .collect();
 
-    let (repo_stats, error) = match bw_engine::evidence::collect(&ws.display().to_string()).await {
+    let (repo_stats, error) = match v4_engine::evidence::collect(&ws.display().to_string()).await {
         Ok(e) => (
             vec![
                 ("提交数".to_string(), e.commit_count.to_string()),

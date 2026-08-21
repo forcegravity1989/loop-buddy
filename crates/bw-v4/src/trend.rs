@@ -121,7 +121,7 @@ async fn merged_prs_of(owner_repo: &str, week: &str) -> Result<u32, String> {
     let (monday, next_monday) =
         isoweek::week_bounds(week).ok_or_else(|| format!("认不出周号 {week}"))?;
     let sunday = next_monday - Duration::days(1);
-    bw_engine::github::merged_pr_count(owner_repo, &monday.to_string(), &sunday.to_string())
+    v4_engine::github::merged_pr_count(owner_repo, &monday.to_string(), &sunday.to_string())
         .await
         .map_err(|e| format!("远端合入数没查成:{e}"))
 }

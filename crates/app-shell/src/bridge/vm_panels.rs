@@ -142,7 +142,7 @@ pub(super) fn build_metrics(
     plan: Option<&week_plan_file::WeekPlan>,
     issues: &[bw_v4::Issue],
 ) -> MetricsVm {
-    let Ok(Some(m)) = bw_engine::metrics_file::read(&ws.display().to_string()) else {
+    let Ok(Some(m)) = bw_v4::repo::metrics_file::read(ws) else {
         return MetricsVm {
             note: Some("这个项目还没有 .bw/metrics.toml,指标是空的(不是 0)".into()),
             ..Default::default()
@@ -181,25 +181,23 @@ pub(super) fn build_metrics(
             .unwrap_or_default(),
         driving: driving_of(name),
     };
-    let is_manual =
-        |k: bw_engine::metrics_file::CollectKind| k == bw_engine::metrics_file::CollectKind::Manual;
+
     MetricsVm {
         // 北极星没有 target 字段 —— 它的目标就是它自己那句定义。
-        north_star: Some(mk(
-            &m.north_star.name,
-            &m.north_star.def,
-            "",
-            is_manual(m.north_star.collect.kind),
-        )),
+        // 北极星可以缺席:刚接入、还没定指标的项目就是这样。**不摆空卡。**
+        north_star: m
+            .north_star
+            .as_ref()
+            .map(|n| mk(&n.name, &n.def, "", n.collect.is_manual())),
         lagging: m
             .lagging
             .iter()
-            .map(|d| mk(&d.name, &d.def, &d.target, is_manual(d.collect.kind)))
+            .map(|d| mk(&d.name, &d.def, &d.target, d.collect.is_manual()))
             .collect(),
         leading: m
             .leading
             .iter()
-            .map(|d| mk(&d.name, &d.def, &d.target, is_manual(d.collect.kind)))
+            .map(|d| mk(&d.name, &d.def, &d.target, d.collect.is_manual()))
             .collect(),
         note: None,
     }
@@ -362,7 +360,6 @@ pub(super) async fn build_config(
             })
             .unwrap_or_else(|| "—(.bw/issue-policy.toml 里没有节律段)".into()),
         crons: build_crons(policy),
-        connectors: build_connectors(ws),
         chat_provider: chat_provider(file.chat.as_ref()),
         chat_group: chat_group(file.chat.as_ref()),
         chat_events: chat_events(file.chat.as_ref()),
@@ -472,28 +469,6 @@ fn build_crons(policy: Option<&issue_policy_file::IssuePolicyFile>) -> Vec<CronV
             rule: "本周还没有这张活(不查任何定时表)".into(),
         },
     ]
-}
-
-/// 连接器。`.bw/connectors.toml` 没有就是空的 —— 不摆一行「未配置」占位。
-fn build_connectors(ws: &Path) -> Vec<ConnectorVm> {
-    bw_engine::connectors_file::read(&ws.display().to_string())
-        .ok()
-        .flatten()
-        .map(|f| {
-            f.connectors
-                .into_iter()
-                .map(|c| ConnectorVm {
-                    kind: c.kind.as_str().to_string(),
-                    target: if c.script.is_empty() {
-                        c.command.clone()
-                    } else {
-                        c.script.clone()
-                    },
-                    name: c.name,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn chat_provider(chat: Option<&project_file::ChatConfig>) -> String {

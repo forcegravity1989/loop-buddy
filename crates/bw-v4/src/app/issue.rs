@@ -13,8 +13,7 @@ use super::{App, AppError, Result};
 use crate::command::Event;
 use crate::model::{Category, Issue, IssueId, IssueKind, IssueOrigin, IssueStatus, ProjectId};
 use crate::repo::issue_policy_file;
-use bw_core::WorkflowId;
-use bw_engine::{build_startup_plan, InteractiveExecutor, RunCtx, TuiAgentConfig, CLAUDE};
+use v4_engine::{build_startup_plan, InteractiveExecutor, RunCtx, TuiAgentConfig, CLAUDE};
 
 impl App {
     #[allow(clippy::too_many_arguments)]
@@ -166,8 +165,8 @@ impl App {
             super::bootstrap::allow_skills_dir(&mut plan, d);
         }
         let ctx = RunCtx {
-            project: issue.project_id,
-            workflow: WorkflowId::nil(),
+            project: issue.project_id.uuid(),
+            workflow: uuid::Uuid::nil(),
         };
 
         // 没有真实工作区的项目走自我标注的替身:产出带【mock】字样,不冒充
@@ -175,7 +174,7 @@ impl App {
         let out = if tree.is_some() {
             self.executor.run_skill(&plan, &ctx).await
         } else {
-            bw_engine::MockInteractiveExecutor::new()
+            v4_engine::MockInteractiveExecutor::new()
                 .run_skill(&plan, &ctx)
                 .await
         };
@@ -383,7 +382,7 @@ impl App {
         let Ok(ws) = self.workspace_of(issue.project_id).await else {
             return;
         };
-        let Some(tree) = bw_engine::workspace::issue_worktree_path(&ws, issue.number) else {
+        let Some(tree) = v4_engine::workspace::issue_worktree_path(&ws, issue.number) else {
             return;
         };
         worktree::remove_if_clean(&ws, &tree).await;

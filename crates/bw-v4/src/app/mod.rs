@@ -39,9 +39,9 @@ use crate::command::{Command, Event};
 use crate::model::ProjectId;
 use crate::repo::RepoFileError;
 use crate::store::{StoreError, V4Store};
-use bw_engine::{InteractiveExecutor, TerminalManager};
 use std::path::PathBuf;
 use std::sync::Arc;
+use v4_engine::{InteractiveExecutor, TerminalManager};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -74,7 +74,7 @@ pub struct App {
     /// 工作区根目录。项目没单独配路径时,仓就在 `<root>/<slug>`。
     pub(crate) workspaces_root: PathBuf,
     /// 干活入口的后端。没配真实工作区的项目用自我标注的替身
-    /// ([`bw_engine::MockInteractiveExecutor`]),产出带【mock】字样。
+    /// ([`v4_engine::MockInteractiveExecutor`]),产出带【mock】字样。
     pub(crate) executor: Arc<dyn InteractiveExecutor>,
     /// 活着的 PTY 会话。纯内存,进程死了就没了 —— 会话的**身份**在
     /// `claude_conversation` 表里,那才是重启后接得回来的东西。

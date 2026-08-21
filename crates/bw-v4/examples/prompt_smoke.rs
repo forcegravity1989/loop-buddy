@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = App::new(
         store,
         root.join("workspaces"),
-        Arc::new(bw_engine::MockInteractiveExecutor),
+        Arc::new(v4_engine::MockInteractiveExecutor),
     )
     .with_asset_root(root.join("assets"));
 

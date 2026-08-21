@@ -19,5 +19,5 @@ pub const CAPABILITIES: &[&str] = &["注入技能", "恢复会话", "hooks 回�
 
 /// 本机探到没探到。探不到就返回 `None`,不猜一个路径出来。
 pub fn detect() -> Option<String> {
-    bw_engine::resolve_claude_binary(None)
+    v4_engine::resolve_claude_binary(None)
 }

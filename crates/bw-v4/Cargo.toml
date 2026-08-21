@@ -13,7 +13,7 @@ rust-version.workspace = true
 # V3 不同(见 docs/v4-prototype/design/02-data-and-files.md §2.1)。
 bw-core = { workspace = true, features = ["idgen"] }
 # 干活入口:交互式执行器 + 工作区/worktree 供给 + git 读数,全部沿用。
-bw-engine = { workspace = true }
+v4-engine = { workspace = true }
 
 sqlx = { workspace = true }
 # process/fs:起 git 子进程与读写仓文件;net:Open Design 的本机端口探活。
