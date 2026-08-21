@@ -541,12 +541,7 @@ impl MockInteractiveExecutor {
 
 #[async_trait]
 impl InteractiveExecutor for MockInteractiveExecutor {
-    async fn run_skill(&self, plan: &LaunchPlan, _ctx: &RunCtx) -> Result<SkillOutput, ExecError> {
-        // Best-effort: write a placeholder metrics.toml so downstream
-        // (SyncMetricsFile) has something to sync. Errors here are
-        // non-fatal — the mock's primary job is to return a labeled output.
-        let _ = write_mock_metrics_toml(&plan.cwd);
-
+    async fn run_skill(&self, _plan: &LaunchPlan, _ctx: &RunCtx) -> Result<SkillOutput, ExecError> {
         Ok(SkillOutput {
             completed: true,
             summary: "【mock】交互式技能会话完成(流程演示,未真 spawn claude)".to_string(),
@@ -571,13 +566,11 @@ impl InteractiveExecutor for MockInteractiveExecutor {
     /// spawns a real PTY — self-labeled, never pretends to be real execution.
     async fn run_skill_pty(
         &self,
-        plan: &LaunchPlan,
+        _plan: &LaunchPlan,
         _ctx: &RunCtx,
         bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
         mut input_rx: mpsc::UnboundedReceiver<PtyInput>,
     ) -> Result<SkillOutput, ExecError> {
-        let _ = write_mock_metrics_toml(&plan.cwd);
-
         // Send mock output so the UI has something to render in tests.
         let _ = bytes_tx.send(
             "【mock】pty output (no real claude spawned)\r\n"
@@ -595,34 +588,11 @@ impl InteractiveExecutor for MockInteractiveExecutor {
     }
 }
 
-/// Write a placeholder `.bw/metrics.toml` to `cwd` (best-effort, non-fatal).
-/// Uses blocking `std::fs` — the mock's file write is a test/demo convenience,
-/// not a hot path; `tokio::fs` would need the `fs` feature (not enabled in
-/// bw-engine's tokio dep, and Phase 1 adds no new features).
-fn write_mock_metrics_toml(cwd: &Path) -> std::io::Result<()> {
-    // No workspace (empty cwd) → nothing to write. Without this guard a mock
-    // run for a workspace-less project writes `.bw/metrics.toml` into
-    // whatever the process cwd happens to be (seen: `crates/bw-app/` during
-    // `cargo test`).
-    if cwd.as_os_str().is_empty() {
-        return Ok(());
-    }
-    let bw_dir = cwd.join(".bw");
-    std::fs::create_dir_all(&bw_dir)?;
-    let metrics_path = bw_dir.join("metrics.toml");
-    let placeholder = "# 【mock】placeholder metrics.toml — written by MockInteractiveExecutor\n\
-                       # Replace with real metrics after a real interactive session.\n\
-                       schema_version = 1\n\n\
-                       [north_star]\n\
-                       name = \"【mock】北极星(占位)\"\n\
-                       def  = \"【mock】定义占位 — 真实交互式会话后替换\"\n\
-                       collect = { kind = \"manual\", query = \"\" }\n";
-    // Don't overwrite a real file — only write if it doesn't exist.
-    if !metrics_path.exists() {
-        std::fs::write(&metrics_path, placeholder)?;
-    }
-    Ok(())
-}
+// **替身不写任何仓文件。** 它以前会往 `.bw/metrics.toml` 写一份占位的指标正本
+// (还是 `schema_version = 1` 的旧格式),于是替身跑一次就在人的仓里留下一份
+// 内容是假的、格式是过期的正本,而界面会把它**当正本读**。替身存在的唯一目的
+// 是廉价验证管线本身,**绝不冒充真实执行、更不该替人写正本** —— 要留痕就写进
+// 活的正文里。2026-08-21 整段删除。
 
 // ─── Tests ─────────────────────────────────────────────────────────────
 
@@ -693,16 +663,12 @@ mod tests {
         let output = mock.run_skill(&plan, &ctx).await.unwrap();
         assert!(output.completed);
         assert!(output.summary.contains("【mock】"));
-        // Placeholder metrics.toml was written
-        let metrics_path = tmp.join(".bw").join("metrics.toml");
+        // **替身跑完之后,人的仓里不该多出任何东西。** 它以前会写一份占位的
+        // `.bw/metrics.toml`,现在这条断言反过来守着「一个字都不写」。
         assert!(
-            metrics_path.exists(),
-            "placeholder metrics.toml should exist"
+            !tmp.join(".bw").exists(),
+            "替身不该往仓里写任何文件,更不该写指标正本"
         );
-        let content = std::fs::read_to_string(&metrics_path).unwrap();
-        assert!(content.contains("【mock】"));
-        assert!(content.contains("schema_version = 1"));
-        assert!(content.contains("[north_star]"));
     }
 
     #[test]
@@ -766,36 +732,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_executor_resume_returns_completed_no_placeholder_write() {
+    async fn mock_executor_never_writes_into_the_repo() {
+        // 续接那一路同样一个字都不写。**替身的唯一职责是返回一段自我标注的
+        // 输出**,不是替人在仓里留东西。
         let tmp = tempfile_dir();
-        // Simulate a first run that wrote the placeholder.
-        let skill_body = "# 找指标\n\nskill body";
-        let bridge = "bridge prompt";
-        let startup_plan = build_startup_plan(&CLAUDE, skill_body, bridge, &tmp).unwrap();
         let ctx = RunCtx {
             project: uuid::Uuid::nil(),
             workflow: uuid::Uuid::nil(),
         };
         let mock = MockInteractiveExecutor::new();
-        let _ = mock.run_skill(&startup_plan, &ctx).await.unwrap();
-        let metrics_path = tmp.join(".bw").join("metrics.toml");
-        let mtime_before = std::fs::metadata(&metrics_path)
-            .expect("placeholder exists from first run")
-            .modified()
-            .unwrap();
-
-        // Resume: should NOT rewrite the placeholder (it already exists).
         let resume_plan = build_resume_plan(&CLAUDE, Some("session-id-123"), &tmp).unwrap();
         let output = mock.run_skill_resume(&resume_plan, &ctx).await.unwrap();
         assert!(output.completed);
         assert!(output.summary.contains("【mock】"));
-        assert!(output.summary.contains("resume"));
-        // The placeholder file was NOT rewritten (mtime unchanged).
-        let mtime_after = std::fs::metadata(&metrics_path)
-            .expect("placeholder still exists")
-            .modified()
-            .unwrap();
-        assert_eq!(mtime_before, mtime_after);
+        assert!(!tmp.join(".bw").exists(), "续接那一路也不许往仓里写");
     }
 
     /// Create a temp directory for test isolation.
