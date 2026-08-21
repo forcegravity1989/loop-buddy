@@ -286,9 +286,24 @@ pub struct OpsChipVm {
 /// 代码仓级指标。每一项都带「这个数从哪来」——采不到就整块给出原话,不填 0。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RepoStatsVm {
-    /// `(数值, 这个数是什么, 从哪采的)`。
+    /// `(数值, 这个数是什么, 从哪采的)`。压成一行小字,不再是一格格的卡片。
     pub items: Vec<(String, String, String)>,
+    /// 近四周走势,**旧的在前**。全部现算 —— 能采今天就能采过去任意一周,
+    /// 所以新接入的项目第一天就有走势,不用先攒几周。
+    pub trend: Vec<TrendPointVm>,
+    /// 远端那条线为什么是空的。空字符串 = 没有话要说。
+    pub trend_note: String,
     pub error: String,
+}
+
+/// 走势上的一个点 = 一周。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TrendPointVm {
+    pub week: String,
+    pub commits: u32,
+    pub merges: u32,
+    /// 远端合入的 PR 数。`None` = 没采到,**画的时候断开,不当 0 画**。
+    pub merged_prs: Option<u32>,
 }
 
 /// 名片改动那张轻量活。名片是仓文件,改它一律走分支 + MR。

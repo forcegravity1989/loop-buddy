@@ -815,12 +815,16 @@ pub fn spawn(deep_link: DeepLink) -> Bridge {
                             // 循环里 await —— 它要起好几个 git 子进程,在这里等
                             // 就把内核这条单线程连同终端的 60ms 节拍一起按住。
                             if let Some(pid) = ui.open {
-                                if let Ok(ws) = app.workspace_of(pid).await {
+                                // 走势那条要问远端「这一周合入了几个 PR」,所以
+                                // 得把项目一起带上(远端地址在它身上)。取不到
+                                // 项目就只能不采 —— 不拿一个空壳项目去问远端。
+                                let proj = app.store().project(pid).await.ok().flatten();
+                                if let (Ok(ws), Some(proj)) = (app.workspace_of(pid).await, proj) {
                                     let back = tx_back.clone();
                                     tokio::spawn(async move {
                                         let _ = back.send(Req::RepoStatsComputed {
                                             project: pid,
-                                            stats: vm_derive::collect_repo_stats(&ws).await,
+                                            stats: vm_derive::collect_repo_stats(&ws, &proj).await,
                                         });
                                     });
                                 }

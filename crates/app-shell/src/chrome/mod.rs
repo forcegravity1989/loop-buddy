@@ -13,6 +13,8 @@
 //! - 原型的 toast 2.6 秒自动消失。真壳这条位置放的是命令回执(建活成功、
 //!   铺底失败的原话),自动消失等于把失败信息藏起来 —— 改成点 ✕ 才关。
 
+pub mod sparkline;
+
 use crate::bridge::{Bridge, Panel, Req, TopView};
 use crate::theme;
 use bw_v4::model::Signal;

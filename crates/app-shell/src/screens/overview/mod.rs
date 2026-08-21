@@ -337,6 +337,58 @@ fn metric_card(m: &MetricCardVm, big: bool) -> Element {
     }
 }
 
+/// 近四周三条走势。**每个点都是现算的** —— 能采到今天的数就能采到过去任意
+/// 一周的,所以第一次采集就有完整四周,不用先攒。
+fn trend_row(s: &crate::vm::RepoStatsVm) -> Element {
+    use crate::chrome::sparkline::{trend_chart, Series};
+    if s.trend.is_empty() {
+        return rsx! {};
+    }
+    // `2026-W34` → `W34`,四个点的小图放不下全称。
+    let x = |p: &crate::vm::TrendPointVm| {
+        p.week
+            .split_once("-W")
+            .map_or(p.week.clone(), |(_, w)| format!("W{w}"))
+    };
+    let commits = Series {
+        label: "每周提交".into(),
+        points: s
+            .trend
+            .iter()
+            .map(|p| (x(p), Some(p.commits as f64)))
+            .collect(),
+        color: "var(--clay)",
+    };
+    let merges = Series {
+        label: "每周合入".into(),
+        points: s
+            .trend
+            .iter()
+            .map(|p| (x(p), Some(p.merges as f64)))
+            .collect(),
+        color: "var(--green)",
+    };
+    let prs = Series {
+        label: "每周合入的 PR(远端)".into(),
+        points: s
+            .trend
+            .iter()
+            .map(|p| (x(p), p.merged_prs.map(|n| n as f64)))
+            .collect(),
+        color: "var(--amber)",
+    };
+    rsx! {
+        div { class: "trend-row",
+            {trend_chart(&commits)}
+            {trend_chart(&merges)}
+            {trend_chart(&prs)}
+        }
+        if !s.trend_note.is_empty() {
+            div { class: "cfg-readonly-note", "{s.trend_note}" }
+        }
+    }
+}
+
 // ── ⑤ 项目指标 · 代码仓级 ────────────────────────────
 
 fn repo_block(p: &ProjectVm, bridge: &Bridge) -> Element {
@@ -362,21 +414,24 @@ fn repo_block(p: &ProjectVm, bridge: &Bridge) -> Element {
                     div { class: "detail-empty", style: "color:var(--alert-deep);", "{s.error}" }
                 },
                 Some(s) => rsx! {
-                    div { class: "repo-metric-grid",
-                        for (v, k, src) in s.items.iter() {
-                            div { key: "{k}", class: "repo-metric-item",
-                                div { class: "v mono", "{v}" }
-                                div { class: "k",
-                                    "{k}"
-                                    span { class: "chip chip-gray", style: "margin-left:4px;", "{src}" }
+                    // 静态那几个数压成一行小字 —— 它们是「此刻的存量」,没有走势
+                    // 可言,不值得一人占一张卡片。
+                    div { class: "repo-metric-line",
+                        // 分隔点包在同一个带 key 的节点里 —— Dioxus 只认块里
+                        // 第一个节点上的 key,拆成两个平级节点会被判 deprecated。
+                        for (i, (v, k, _)) in s.items.iter().enumerate() {
+                            span { key: "{k}",
+                                if i > 0 {
+                                    span { class: "sep", "·" }
                                 }
+                                "{k} "
+                                b { class: "mono", "{v}" }
                             }
                         }
+                        span { class: "sep", "·" }
+                        span { class: "chip chip-gray", "全部来自 git" }
                     }
-                    div { class: "cfg-readonly-note",
-                        "远端那几项(合入的 MR、远端 issue、开着的 MR)要走 GitHub / codehub 的接口,\
-                         还没接 —— 少列几项,不编几个数。"
-                    }
+                    {trend_row(s)}
                 },
             }
         }
