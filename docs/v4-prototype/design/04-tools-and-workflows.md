@@ -1,6 +1,6 @@
 # 04 · 开工工具与 workflow 怎么接
 
-> **30 秒导读**:这篇回答两件事——**开工工具怎么注册与分发**(终端类如 Claude CLI / Cursor,与本机网页内嵌类如 Open Design,怎么声明、探活、起、停),**workflow(SOP 类技能包)与单技能怎么识别、铺进项目仓、物化到活的 worktree、注入给开工工具**。「用了几次」一律现算(扫 `.claude/skills/` + 数活的 `workflow` 属性),不建任何战绩表。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 会话屏三栏怎么摆是 [05 篇](05-session-screen.md)的事,三张运作 workflow 的正文是 [09 篇](09-ops-workflows.md)的事。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
+> **30 秒导读**:这篇回答两件事——**开工工具怎么注册与分发**(终端类如 Claude CLI / Cursor,与本机网页内嵌类如 Open Design,怎么声明、探活、起、停),**workflow(SOP 类技能包)与单技能怎么识别、铺进项目仓、物化到活的 worktree、注入给开工工具**。「用了几次」一律现算(扫 `.claude/skills/` + 数活的 `workflow` 属性),不建任何战绩表。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组。 会话屏三栏怎么摆是 [05 篇](05-session-screen.md)的事,三张运作 workflow 的正文是 [09 篇](09-ops-workflows.md)的事。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ---
 
@@ -222,7 +222,7 @@ GROUP BY workflow;
 | ①开工工具映射 | 类别→工具→workflow 三列表 | `.bw/issue-policy.toml` 的 `[[mapping]]`(§2.5),保存走 `SaveToolMapping` |
 | ②workflow 表 | 名称/入口/自带 agent 数/用过几次(**不再有"胜率"列**) | 现场扫描 `<worktree>/.claude/skills/`,按 §2.6 判据 A/B/C 分类出的包目录;"用过几次"按 02 篇 §2.3 的 SQL 从 `issue.workflow` 现算,不缓存;"自带 agent 数"现数该目录 `agents/*` 文件数 |
 | ③skill 表 | 单技能名称/用过几次 | 同一次扫描里没有命中判据 A/B 的顶层技能目录 |
-| ④连接器+定时 | codehub/GitHub/项目群 + 定时任务 | 连接器地址在 `.bw/project.toml`,连不连得通是即时探活、不存结果(02 篇 §2.1/§2.6,`connector` 表已取消);定时只有一档(资产盘点,周五晚,写在 `.bw/issue-policy.toml` 的 `[cadence]` 段,判据现查本周有没有这张活,`cron_task` 表已取消);项目群一行见 [07 篇](07-notify-and-chat-group.md),配置读 `.bw/project.toml` 的 `[chat]` 段(02 篇 §2.4/§2.6),不做发送去重(`chat_outbox` 表已取消) |
+| ④连接器+定时 | codehub/GitHub/项目群 + 定时任务 | 连接器地址在 `.bw/project.toml`,连不连得通是即时探活、不存结果(02 篇 §2.1/§2.6,`connector` 表已取消);定时只有一档(资产盘点,周五晚,写在 `.bw/issue-policy.toml` 的 `[cadence]` 段,判据现查本周有没有这张活,`cron_task` 表已取消);项目群一行见 [07 篇](07-notify-and-chat-group.md),配置读 `.bw/project.toml` 的 `[chat]` 段(02 篇 §2.4/§2.6),不做发送去重(`chat_outbox` 表已取消)。**这块里还有一张「连接器」表是孤儿**:它读 `.bw/connectors.toml` 摆出来给人看,而 V4 没有任何采集在消费它(采集按 [14 篇](14-metrics-collection.md) 只认脚本 / 手填两种,不经「连接器」这一层)。这张表要删,记在 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) |
 
 ---
 

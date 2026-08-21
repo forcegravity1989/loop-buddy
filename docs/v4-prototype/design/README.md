@@ -1,6 +1,6 @@
 # V4 MVP 详细设计:目录与读法
 
-> **30 秒导读**:这个目录把母文档 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(V4 的全貌与决策台账)里的每一站、每一屏、每一条规矩,落到「模块怎么分、数据怎么存、文件长什么样、命令叫什么、失败怎么显示、怎么读回核对」的粒度。给两种人看:**接着做 V4 的会话**(照着改代码)、**同事**(接 WeLink 群适配、往 `standard/` 贡献件)。**现在还作数吗**:作数,而且**代码已经照着建出来了**——`crates/bw-v4`(V4 内核)与 `crates/app-shell`(V4 新壳)都在 `main` 上,各篇第 3 节「工程对照」写的是真代码。**还没做完的部分不在这里找,只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组**。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
+> **30 秒导读**:这个目录把母文档 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(V4 的全貌与决策台账)里的每一站、每一屏、每一条规矩,落到「模块怎么分、数据怎么存、文件长什么样、命令叫什么、失败怎么显示、怎么读回核对」的粒度。给两种人看:**接着做 V4 的会话**(照着改代码)、**同事**(接 WeLink 群适配、往 `standard/` 贡献件)。**现在还作数吗**:作数,而且**代码已经照着建出来了**——`crates/bw-v4`(V4 内核)与 `crates/app-shell`(V4 新壳)都在 `main` 上,各篇第 3 节「工程对照」写的是真代码。**还没做完的部分不在这里找,只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组**。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 正文里偶尔提到的「握手清单」「交叉复核」是设计期两份已归档的问答与复核记录,在 [`../../archive/v4-prototype/`](../../archive/v4-prototype/) 下;决策本身的正本是母文档 §11 的「待拍-NN」台账。
 
@@ -19,8 +19,9 @@
 | 09 | [09-ops-workflows.md](09-ops-workflows.md) | 三张运作活的剧本:①更新指标 + 制定本周计划 ②资产盘点(首次模式 = 老项目历史回填)③规范铺底的写开发手册 |
 | 10 | [10-e2e-acceptance.md](10-e2e-acceptance.md) | 验收怎么做:检查项总表、headless 指挥器、深链、SQL 读回清单、试点两周计划 |
 | 11 | [11-knowledge-base.md](11-knowledge-base.md) | 知识库屏三页签(知识 / 代码图 / 资产)的数据来源与动作;规范对账条 |
-| 12 | [12-build-plan.md](12-build-plan.md) | 建法与交付记录:五刀各干了什么、代号怎么读、细节该去哪里查 |
+| 12 | [12-build-plan.md](12-build-plan.md) | 建法与交付记录:七刀各干了什么、代号怎么读、细节该去哪里查 |
 | 13 | [13-shell-hifi-gap.md](13-shell-hifi-gap.md) | 桌面壳照高保真重排的完成记录:补上了哪些功能位、哪几处故意没照抄、还差什么 |
+| 14 | [14-metrics-collection.md](14-metrics-collection.md) | **指标采集与读数**(2026-08-21 新增):一条指标的数字从哪来、存不存、存哪;`.bw/metrics.toml` 的新格式;采集脚本的输入输出;读数文件。**是设计,还没落地**;指标这块与其它篇冲突时以本篇为准 |
 
 还在用的两篇预研在 [`../research/`](../research/):[orca](../research/orca.md)(终端内嵌与右侧栏,源码注释里引它)、[chat-group](../research/chat-group.md)(项目群接口,WeLink 还没实现,是给同事的对接底稿)。其余预研结论已进设计与代码,归档在 [`../../archive/v4-prototype/research/`](../../archive/v4-prototype/research/)。
 

@@ -1,6 +1,6 @@
 # 01 · 新壳怎么搭
 
-> **30 秒导读**:这篇回答一个问题——**V4 的界面壳落在哪个 crate、目录怎么分、模块怎么防止互相纠缠、命令 / 事件总线长什么样、旧壳什么时候能删**。不讲某一屏具体长什么样(那是 02–11 篇的事)。给接着做 V4 的会话看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4E 五组。 看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
+> **30 秒导读**:这篇回答一个问题——**V4 的界面壳落在哪个 crate、目录怎么分、模块怎么防止互相纠缠、命令 / 事件总线长什么样、旧壳什么时候能删**。不讲某一屏具体长什么样(那是 02–11 篇的事)。给接着做 V4 的会话看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组。 看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ---
 
@@ -26,7 +26,16 @@
 
 V4 开了**两个** crate。为什么不摞在旧内核上:本机库缩到四张表之后,`bw-store` 的二十张表与 `bw-app` 架在这些表上的用例整片接不上,改它等于把旧库拆了重装,还会连累仍在跑的 V3。
 
-- **`crates/bw-v4`(V4 内核)**:四张表的库 + 仓文件解析 + 现算推导 + 命令/事件总线 + 规范铺底。复用 `bw-core`(五阶段元数据、活的状态机、id)与 `bw-engine`(执行器、工作区、`.bw/metrics.toml` 解析),**不依赖 `bw-store` / `bw-app`**。它是第六个内核 crate,已经加进 `scripts/guard-kernel-ui-free.sh` 的稽查名单(该脚本原本管 `bw-core bw-engine bw-store bw-app ui` 五个)。
+- **`crates/bw-v4`(V4 内核)**:四张表的库 + 仓文件解析 + 现算推导 + 命令/事件总线 + 规范铺底。依赖 `crates/v4-engine`(见下),**不依赖 `bw-store` / `bw-app` / `ui`**。它是内核 crate,在 `scripts/guard-kernel-ui-free.sh` 的稽查名单里。
+
+  **`crates/v4-engine`(V4 的能力底座)**:2026-08-21 从 `bw-engine` **拷过来接管**的,不是复用。交互式 `claude` 执行器、PTY 内嵌终端、worktree 供给、git 读数、GitHub / codehub 两个远端。
+
+  为什么是拷贝而不是复用:用户拍板「V3 那一整个目录最终会被整体删掉」,所以 V4 不能有任何一条依赖指向那边 —— 包括「只依赖 `bw-engine`」这种看起来很轻的耦合,因为**它自己还依赖 `bw-core`**(`RunCtx` 与 `ConversationMeta` 的四个 id 字段、`build_project_context_block` 吃的 `PlaybookCtx`、一处测试常量),V4 会顺着传递过去。改 `bw-engine` 又会动到还在跑的 V3。拷一份接管两边都不牵连,V3 那份原样留着伺候 V3 直到它被删。
+
+  拷过来同时做了三件减法,5,783 行 → 4,356 行:①**断 `bw-core`** —— 底座只认裸 `uuid::Uuid`,它本来就不该知道一个 id 背后是「活」还是「会话」,语义类型留给上层,进出各转一次;②**删只有 V3 用的出口** —— 三份仓文件解析器(V4 的 `repo/` 下有自己的一套)、`git log` 读数、`claude` 配置结构,以及那个拼中文业务提示词、还吃 `PlaybookCtx` 的 `build_project_context_block`(业务语义不该住在底座里);③**删两条零调用死链**,连带去掉 `time` 依赖。
+
+  **`bw-v4` 对 `bw-core` 还剩两处没断**:`StageKind`(五阶段元数据)和 `bw_library`(编进二进制的那九份方法论技能)。后者正是 V4 配置屏里那两份僵尸技能的来路。这两处怎么搬,连同技能目录理平,是下一件活,记在 [`../../LEFTOVERS.md`](../../LEFTOVERS.md)。
+
 - **`crates/app-shell`(V4 新壳)**:九屏 + theme + 桥。跟现有 `app-desktop` 同属"UI 相关、允许依赖 dioxus/wry"一层,不进稽查名单,继续用 `app-` 前缀一眼认出"这是壳"。
 
 用"shell"不用"desktop":这次真正变的是分层方式(六入口+一屏一模块+适配模块化),不是出新平台;叫 `app-v4` 会把版本号焊进一个要长期活下去的名字里,不合"不为向后兼容留旧路径"——旧壳删除后这个 crate 自然是唯一桌面壳,不必再改名。`bw-v4` 这个名字里的版本号同理,删旧内核那次一并改。
@@ -255,7 +264,7 @@ tokio = { workspace = true }
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
 ```
 
-新壳只依赖 `bw-v4`(外加 `bw-core` / `bw-engine` 两个共用件),`bw-store` / `bw-app` / `ui` 三个旧包一个都不进依赖树 —— 删旧壳那次因此只用在 `members` 去掉两行,不必先拆依赖。
+新壳只依赖 `bw-v4` 与 `v4-engine`,`bw-core` / `bw-store` / `bw-app` / `ui` / `bw-engine` 五个旧包**一个都不进依赖树**(2026-08-21 起,见 §2.1)—— 删旧壳那次因此只用在 `members` 去掉几行,不必先拆依赖。
 
 ### 3.2 每屏唯一出口(A 刀实况)
 

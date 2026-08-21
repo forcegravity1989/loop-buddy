@@ -20,7 +20,7 @@
 | **P1** | 窄窗嵌入终端 ANSI 错乱、底栏双 prompt | V3 可排 | |
 | **P3 / P3b** | 单例 PTY 不能回看历史；Done 后无只读 resume 入口 | V3 可排 | |
 | **P7** | 创建未见章程/标准：静默失败还是 owned 判定 | V3 可排 | 未复现 |
-| **P9** | `connectors.toml` 的 `schedule` 不建独立 cron | V3 可排 | 一条 Daily 覆盖全部 script，字段只是文档 |
+| **P9** | ~~`connectors.toml` 的 `schedule` 不建独立 cron~~ **原文写错了(2026-08-21 读回更正)** | V3 可排 | 原文说这个字段「只解析不接调度」。实况:`crates/bw-engine/src/connectors_file.rs` 的 `ConnectorDef` **根本没有 `schedule` 这个字段**(只有 `name`/`kind`/`script`/`command`/`output`),而且 `ConnectorDef` 与 `ConnectorsFile` 两个结构体都开了 `deny_unknown_fields` —— 谁真按老文档往 `.bw/connectors.toml` 里写一行 `schedule`,**整份文件当场解析失败**,不是被忽略。要留这条条目的话,真问题是「按连接器分别排班」这个能力从来没有过;而按 [`v4-prototype/design/14-metrics-collection.md`](v4-prototype/design/14-metrics-collection.md) §3.3,V4 连「连接器」这一层都不要了 —— 见 **试点-3** |
 | **P11** | ~~Done 后阶段区退回空 Chat~~；会话卡永远「进行中」 | V3 可排 | ① 已随聊天视图整体删除而消失（2026-08-18 `d9ed28b`，Chat 视图不存在了）；② 仍开着，与 **减负-18** 同根（`session` 表只剩壳） |
 | **收拢工作区** | 后来者主目录落后远端，采集跑旧脚本；要独立「↻ 收拢」且 pull 失败必须报错 | V3 可排 | PRACTICE §4.15，未落地 |
 | **列仓 999 以外** | 创建流已拉 999、下拉画 30；再多要翻页/远端搜索 | V3 可排 | V3-use-fix 明确本轮不做 |
@@ -72,7 +72,7 @@
 | **V4A-17** | 同一件事有两份会漂移的定义:周计划文件的格式在 `standard/03-docs/plan/WEEK.md.tmpl` 和 `week_plan_file::render` 各写了一遍(模板编进了二进制但没人读);`.bw/releases.md` 的默认正文同理 | 结构债,随手做 | 让 render 读模板,或者把模板删掉只留一份 |
 | **V4A-18** | 内核线程里任何一处 panic 都会让线程静默死掉:界面停在最后一份 ViewModel 上,之后发出去的命令石沉大海,而且没有任何提示 | V4 可排 | 在内核循环外面裹一层 `catch_unwind`,把死因送进「起不来」那块红字 |
 | **V4B-1** | 运作活②的 agent 侧产出没法读回:盘点报告落地、微重构只出建议不改代码这两条,要真 agent 会话才验得了,B 刀跑的是替身 | 试点期 | 剧本(`asset-audit/SKILL.md`)里 DoD 与常见坑都写死了,缺的是真跑一次 |
-| **V4B-2** | `north-star-discovery` / `metrics-binding` 两份旧技能**和合并后的 `metrics-refresh` 并存**:内容已经合并进 `standard/06-defaults/ops/week-planning/skills/metrics-refresh/SKILL.md`,但旧的两份文件还在 `docs/skills/`、仍被 `bw_core::bw_library` 编进二进制、仍出现在技能清单里(13 份里有这 2 份) | V4 可排(结构债) | 违反「不为向后兼容留旧路径」。删旧文件 + 从 `bw_library` 摘掉两个常量,一次改完 |
+| **V4B-2** | `north-star-discovery` / `metrics-binding` 两份旧技能**和合并后的 `metrics-refresh` 并存**:内容已经合并进 `standard/06-defaults/ops/week-planning/skills/metrics-refresh/SKILL.md`,但旧的两份文件还在 `docs/skills/`、仍被 `bw_core::bw_library::bw_standard_skill_docs()` 编进二进制、仍出现在技能清单里(13 份里有这 2 份) | V4 可排(结构债) | 违反「不为向后兼容留旧路径」。删旧文件 + 从 `bw_library` 摘掉两个常量,一次改完。**不是顺手能删的**:2026-08-21 全仓复核,这两个名字散在约 30 个文件里(排除 `docs/archive/`),其中 V3 创建流那条「标配 Issue 三件套」链上就有 11 处(`bw-core/src/{standards,bw_library,stage_catalog,model}.rs`、`bw-app/src/project_sync.rs` 等),动它就是动 V3 的创建流。目录布局的问题见 **试点-2** |
 | **V4B-3** | 会话屏 agent 状态只有「运行中 / 空闲」两态。设计里的四态(加「等你输入」「已推评审」)要靠 claude 的 hook 回传 `Notification` / `PreToolUse`,`hook_listener` 那套增量没做 | V4 可排 | 现在只显示进程在不在 —— 唯一真实的信号。不猜,不显示第三态 |
 | **V4B-4** | 指挥器(替身执行器路径)不写 `claude_conversation` 行,所以拿指挥器生成的库开会话屏,左列是空的 | 有意如此 | 没起过真会话就不该有会话行。要看会话屏得用真工作区点一次 ▶跑 |
 | **V4B-5** | MR 卡只有号码,没有「检查是否通过」那一列 —— `gh pr checks` 对应的函数今天不存在 | C 刀及以后 | design/05 §3 已把它列成缺口 |
@@ -85,8 +85,8 @@
 | **V4C-5** | 项目群只能在仓文件里改:`SetProjectChat` 命令内核里有,配置屏只显示不编辑 | V4 可排 | 设计上它要走「编辑项目信息」那条轻量活 + MR,而那条链路本身卡在 V4A-15(写仓不走分支与 MR) |
 | **V4C-6** | 会话回放不存:切走一个**已经跑完**的会话再切回来,终端是空的 | V4 可排 | 只挂「进程还活着」或「正被选中」的会话,是为了不让一堆死会话各留一条 30ms 轮询。要留回放得把 PTY 字节落盘,那是另一件事 |
 | **V4C-7** | `[BW_CHAT_SENT]` 只验到了「评审中」这一类与「重复会真的重复」。合入与发版两类的触发点接上了,但演示项目没挂远端,没真走到过 | 接上远端之后 | 触发点在 `MergeAndSettle` / `CutRelease` 末尾,读回办法同 §8-8 |
-| **V4D-1** | 代码仓级指标缺**远端那几项**:合入的 PR 数、开放 PR 数、远端 issue 数。总览与知识库上只列采得到的 git 项 | 接上远端之后 | 和 V4A-11 同一条线。今天不编,只列采得到的 |
-| **V4D-2** | 指标卡缺四个字段:保鲜期、观测说明、本周目标、达成与否。**要先改 `.bw/metrics.toml` 的格式**,不是界面的事 | V4 可排(先改规范) | 高保真上这四项都有;`bw_engine::metrics_file` 今天没有这几栏 |
+| **V4D-1** | 代码仓级指标缺远端的**开放 PR 数、远端 issue 数**。~~合入的 PR 数~~ **已接**(2026-08-21):总览⑤块那三条近四周走势里,「每周合入的 PR」真连 GitHub(`bw_engine::github::merged_pr_count`);codehub 那边今天没有「按周窗口查 MR」的命令,那条线如实留空、不猜参数 | 接上远端之后 | 和 V4A-11 同一条线。今天不编,只列采得到的 |
+| **V4D-2** | 指标卡缺五个字段:保鲜期、观测说明、本周目标、达成与否、**趋势**(`MetricCardVm` 里连这一栏都没有,业务指标卡上不画线)。**要先改 `.bw/metrics.toml` 的格式**,不是界面的事 | V4 可排(先改规范) | 高保真上前四项都有;`bw_engine::metrics_file` 今天没有这几栏。格式怎么改已经有正本了:[`design/14-metrics-collection.md`](v4-prototype/design/14-metrics-collection.md) §2.6,和 **试点-7** 一起做 |
 | **V4D-3** | 项目名片缺「负责人」一栏,同理要先给 `.bw/project.toml` 加字段 | V4 可排(先改规范) | |
 | **V4D-4** | 配置屏的 workflow 与 skill 两张表**没有导入与启用开关**;蒸馏(`DistillSkillFromIssue`)在 V4 里还不存在 | V4 可排 | 界面上是灰态留位,鼠标停上去写明为什么按不动 |
 | **V4D-5** | 计划屏「预览 · 未合入」开关是灰的:要先能读远端未合入的改动 | 接上远端之后 | |
@@ -108,9 +108,17 @@
 | **V4G-3** | 规范版本从 4.0 跳到 5.0(落点全进 `.bw/`),**不写迁移**。用 4.0 铺过的项目仓里那些老落点(仓根 `PROJECT.md`、`docs/plan/`、`docs/releases.md`)在 5.0 眼里就是「不在册」,既不读也不删 | 有人踩到再说 | 试点期只有一个真实项目,重接一次比写迁移便宜。真要迁,是一张活,不是一段兼容代码 |
 | **V4G-4** | 用 ✕ 移走一个项目、再把同一个仓接进来,**会接着用上一次留下的分支**(`bw/issue-1` 已经存在就原样复用),新的铺底提交叠在旧的上面,MR 里两套东西都出现 | V4 可排 | 移走只动库不动仓,是有意的(仓是你的);但「重接」这条路该发现仓里已经有 `bw/issue-<号>` 并当场说清楚:接着用、还是换个号。今天两句都没有,悄悄接着用 |
 | **V4G-5** | 拖进「已完成」的确认框按**库里记的 MR 号**说话:库里是 0 就说「这张活没有 MR」。可内核真去合的时候还会拿这条分支去远端问一次(队友自己 `gh pr create` 开的 MR 就这么找到),于是可能出现「说了不合、其实合了一个」 | V4 可排 | 说少了不说多了,方向是安全的。要说准得在弹框之前打一次远端 —— 那是一次网络往返,拖一下卡片就打一次远端,值不值得先想清楚 |
+| **试点-1** | V4 只依赖自己那套,不再碰 `bw-core` —— **2026-08-21 做掉了大半**:新起 `crates/v4-engine`(从 `bw-engine` 拷过来接管,5,783 → 4,356 行),`bw-v4` 与 `app-shell` 都已切过去,两边的 `bw-engine` / `bw-core` 依赖全部退场。**还剩两处**:`bw-v4` 仍用 `bw_core::StageKind`(五阶段元数据)与 `bw_core::bw_library`(编进二进制的九份方法论技能) | V4 可排(剩下两处) | 为什么是拷贝不是改 `bw-engine`:V3 那一整个目录最终要整体删掉,而 `bw-engine` 自己依赖 `bw-core`,「只复用 bw-engine」会把 `bw-core` 顺着传递进 V4;改 `bw-engine` 又会动到还在跑的 V3。拷一份两边都不牵连。底座里的 id 一律换成裸 `uuid::Uuid`(语义类型留给上层),那段拼中文业务提示词的 `build_project_context_block` 直接没拷过来(**试点-6** 因此对 V4 不再成立,对 V3 仍然成立)。剩下的 `bw_library` 那处和技能目录理平(**试点-2**)是同一件活 —— 技能是内容资产,不该住在内核 crate 里。经过见 [`design/01-architecture.md`](v4-prototype/design/01-architecture.md) §2.1 |
+| **试点-2** | buddy 自带的技能有**两个并列的正本目录**,而且**用目录层级表达从属关系** | V4 可排(结构债) | 两个正本:`docs/skills/`(9 篇方法论技能,经 `bw-core/src/bw_library.rs` 编进二进制)与 `standard/06-defaults/`(4 份运作剧本,经 `crates/bw-v4/src/standard/skills.rs` 编进二进制)。层级表达从属:`metrics-refresh` 放在 `week-planning/skills/` 下面表示「它是 week-planning 第二步调的子技能」。**顺带发现一处不一致**:`project-handbook` 源码里同样嵌在 `asset-audit/skills/` 下,但部署路径被拉平成同级的 `project-handbook/SKILL.md`,和 `metrics-refresh` 的处理方式不一样(`skills.rs`)。理平这件事和删两份僵尸(**V4B-2**)是同一次改动 |
+| ~~**试点-3**~~ | ~~配置屏的连接器表是孤儿~~ **2026-08-21 做掉**:那张表、`ConnectorVm`、随之变死的 `probe_chip` 一并删除;`app-shell` 不再读 `.bw/connectors.toml` | ✅ 已删 | 按 [`design/14-metrics-collection.md`](v4-prototype/design/14-metrics-collection.md) §3.3,V4 不要「连接器」这个中间概念 —— 一条指标直接指向一个脚本。`.bw/connectors.toml` 在 V4 眼里就是「不在册」,既不读也不删 |
+| **试点-4** | **`MockInteractiveExecutor` 会往任何工作区写一份 V3 语义的 `.bw/metrics.toml` 占位文件**,**V4 跑替身也会中招** | V4 可排 | `crates/bw-engine/src/interactive_cli.rs` 的 `write_mock_metrics_toml`,`run_skill` 与 `run_skill_pty` 两条路都调它。写的是 `schema_version = 1` + `collect = { kind = "manual", query = "" }` —— 恰好是 14 篇 §2.6 定义为「旧格式,应当报错」的那种。V4 走到替身的路有两条:项目没有真实工作区时(`crates/bw-v4/src/app/issue.rs`),以及六个 `examples/*_smoke.rs` 指挥器。后果是替身跑一次就在人的仓里留下一份**内容是假的、格式是过期的**指标正本,而界面会把它当正本读(和 2026-08-21 铺底那次撞见的「别人的 metrics.toml」是同一类事故)。**替身不该替人写正本**;真要留痕就写进活的正文 |
+| **试点-5** | `bw-engine` 里两条零调用者死链,共 9 个符号。**V4 侧已随 `v4-engine` 的拷贝一并去掉**,`bw-engine` 那份仍在(V3 还在用这个 crate) | 结构债,随手做(V3 侧) | ①`Remote::collect_count` 系 5 项 ②`Remote::create_mr` / `open_pr` 系 4 项。**一处教训**:体检把 `github::adopt_existing_pr` 也判成死代码,实际它有第二个调用方,编译器当场抓出来 —— grep 出来的「零调用者」删之前一定要过一次编译器。现网在用的 `create_mr_on_branch` / `open_mr_for_branch` / `merged_pr_count` 别误删 |
+| **试点-6** | **`bw-engine` 的业务语义泄漏**:它本该只管「起进程、给工作区、跑 git」,现在却懂业务 | 结构债 | 两处:①`interactive_cli.rs::build_project_context_block` 直接拼中文业务提示词(「## 本次项目上下文」「对标对象」「北极星」……),而且吃 `bw_core::playbook::PlaybookCtx` —— 这是 **试点-1** 那条依赖里最难拆的一处;②`workspace.rs::commit_initial` 给新工作区写 `.gitignore` 时**写死 `/target`**,等于假设被托管的项目是 Rust 项目。buddy 要管别人的仓,这个假设不成立 |
+| **试点-7** | **指标采集整套还没接**:V4 今天一条采集都没有,指标读数的唯一来源是运作活①的 agent 手抄进周计划文件的那几行 | V4 可排(设计已成稿) | 设计正本是 [`design/14-metrics-collection.md`](v4-prototype/design/14-metrics-collection.md)(2026-08-21 定稿):判据按「历史还能不能重新算出来」分 A/B/C 三类、采集方式收成脚本 / 手填两种、窗口由 buddy 传给脚本、只认 stdout 的 JSON、读数落 `.bw/metrics/readings.jsonl` 并离开周计划文件、`metrics.toml` 的 `schema_version` 跳到 2 且不写迁移。要落的模块清单在该篇 §3.2。和 **V4A-5**(指标见红那条判据恒不成立)、**V4D-2**(指标卡缺字段)是同一批 |
+| **试点-8** | **`.bw/standard.toml` 的 `enabled` 是个死字段**:模板里写着 `enabled = ["charter", "agents", "docs-core", "metrics", "issue-policy", "defaults-core", "cadence"]`,解析器(`repo/standard_file.rs`)也读它,但**铺底 `write_core_files` 根本不拿它做过滤** —— 铺不铺只看每份模板自己标的 `LayAt`。而且这七个名字里 `agents` / `defaults-core` / `cadence` 三个在二进制里没有任何对应模板 | 低(先如实标注) | 要么让铺底真按 `enabled` 过滤,要么把这一行降级成注释性说明(现状就是说明)。[`design/03-standard-and-backfill.md`](v4-prototype/design/03-standard-and-backfill.md) §2.2 已按实况改写,先不假装它是开关 |
 
 
-已关闭、已接受的条目仍在下方史实里，表里不重复。**减负-N** 系列是 2026-08-17/18 减负重构会话从 `docs/BACKLOG.md` 并入的（该文件已删，序号沿用；1、2 两条已做，收据在下方「减负重构收据」）。**V4A-N** / **V4B-N** / **V4C-N** / **V4D-N** / **V4E-N** / **V4F-N** / **V4G-N** 系列分别是 V4 A 刀(骨架 + 数据 + 主环)、B 刀(运作活 + 会话屏)、C 刀(回填 + 项目群 + 知识库 + 包)、D 刀(九屏照高保真重排)、E 刀(每张活一棵 worktree + 铺底提 MR)、F 刀(接入屏列真仓)、G 刀(试点第一天:铺底收进 `.bw/`、技能不进用户仓、通知只留 MR)交付时如实登记的没做完的部分,代号已进 `code-schemes.md`。
+已关闭、已接受的条目仍在下方史实里，表里不重复。**减负-N** 系列是 2026-08-17/18 减负重构会话从 `docs/BACKLOG.md` 并入的（该文件已删，序号沿用；1、2 两条已做，收据在下方「减负重构收据」）。**V4A-N** / **V4B-N** / **V4C-N** / **V4D-N** / **V4E-N** / **V4F-N** / **V4G-N** 系列分别是 V4 A 刀(骨架 + 数据 + 主环)、B 刀(运作活 + 会话屏)、C 刀(回填 + 项目群 + 知识库 + 包)、D 刀(九屏照高保真重排)、E 刀(每张活一棵 worktree + 铺底提 MR)、F 刀(接入屏列真仓)、G 刀(试点第一天:铺底收进 `.bw/`、技能不进用户仓、通知只留 MR)交付时如实登记的没做完的部分,代号已进 `code-schemes.md`。**试点-N** 是 2026-08-21 那次「试点第 1-3 站 + V4 文档整理」复核出来的欠账,不属于任何一刀,中文前缀、不与字母系列撞车,同样已登记。
 
 ### 归正（迁入时）
 
@@ -479,7 +487,7 @@ buddy 在自己 workspace_path（`BW_WORKSPACES` 下的 clone）里提交，再 
 1. **维护好 buddy 系统提示词 + 一帮规范手册**（大提示词；按场景渐进加载文档——例如指标类额外加载 metrics/connectors 契约，才能被 buddy 托管对）。
 2. **搞好有价值的 skill + 五大板块默认 skill**——选了某板块 = 装载该板块默认 skill；agent 小队调度本身就是 skill（认可「装载 skill」路线，而不是把旧 phase-loop 脚本调度搬回 issue）。
 
-**处置**：✅ 记入 V2 整改队列，**本窗不改代码**。落地时走 `buddy-feature-dev`，设计归档到 [`docs/v2-prototype/`](../v2-prototype/README.md)(初始节奏与意向见 [`roadmap.md`](../v2-prototype/roadmap.md))，勿再堆进已发版的 V1 窗口号叙事。
+**处置**：✅ 记入 V2 整改队列，**本窗不改代码**。落地时走 `buddy-feature-dev`，设计归档到 [`docs/v2-prototype/`](v2-prototype/README.md)(初始节奏与意向见 [`roadmap.md`](archive/v2-prototype/roadmap.md),2026-08-20 已归档)，勿再堆进已发版的 V1 窗口号叙事。
 
 **事实源**：`docs/v1-prototype/issue2-all-issues-terminal-runs.md`（prompt 模型 + 多 agent 转 prompt）；`crates/bw-app/src/lib.rs` `run_issue_interactive` / `prepare_issue_run`（`spec.prompt`/`phase_prompts` 不再服务 issue）；`docs/guide/buddy-guide.html` m4「默认系统提示词 / 默认 skill」留口。
 

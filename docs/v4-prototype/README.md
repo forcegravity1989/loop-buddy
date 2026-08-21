@@ -1,6 +1,6 @@
 # docs/v4-prototype/ · V4
 
-> **30 秒导读**:V4 的入口。V4 是 buddy 的 MVP 版本——**仓是正本、库只留四张表、健康与指标全部现算**,界面收成六个入口。**现在到哪一步了**:设计已定稿,代码分五刀建完并合进 `main`(V4 内核 `crates/bw-v4` + 新壳 `crates/app-shell`,与 V3 的旧壳并存、互不依赖),第六刀「提交并开 MR」(把第 4 站干完的活推成一条可评审的分支)在 PR 上等合;**试点还没跑**。还没干的活只认 [`../LEFTOVERS.md`](../LEFTOVERS.md) 的 V4A–V4E 五组;出包与版本号见 [`../releases.md`](../releases.md);文档写哪见 [`../doc-boundaries.md`](../doc-boundaries.md)。看不懂的词查 [`../../CONTEXT.md`](../../CONTEXT.md),代号查 [`../code-schemes.md`](../code-schemes.md)。
+> **30 秒导读**:V4 的入口。V4 是 buddy 的 MVP 版本——**仓是正本、库只留四张表、健康与指标全部现算**,界面收成六个入口。**现在到哪一步了**:设计已定稿,代码分七刀(A–G)建完并合进 `main`(V4 内核 `crates/bw-v4` + 新壳 `crates/app-shell`,与 V3 的旧壳并存、互不依赖);**试点在跑第 1-3 站**,一边跑一边改。还没干的活只认 [`../LEFTOVERS.md`](../LEFTOVERS.md) 的 V4A–V4G 七组;出包与版本号见 [`../releases.md`](../releases.md);文档写哪见 [`../doc-boundaries.md`](../doc-boundaries.md)。看不懂的词查 [`../../CONTEXT.md`](../../CONTEXT.md),代号查 [`../code-schemes.md`](../code-schemes.md)。
 
 ## 这里有什么
 
